@@ -662,7 +662,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/pr_review_submit` | script | [OP-1-4] PRのレビューをConsoleから受け付ける |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
-| `f/factory/investigate_isolation_probe` | script | [OP-2-11] 調査のClaudeの隔離を観測 |
+| `f/factory/investigate_isolation_probe` | script | [OP-2-11] 調査のClaudeの隔離を、読み出しと探索で観測 |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
 | `f/factory/hold_release` | script | [OP-2-4] 保留を解除 |

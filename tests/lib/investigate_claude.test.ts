@@ -1289,6 +1289,50 @@ describe("runIsolationProbeClaude", () => {
       expect(fake.calls).toHaveLength(1);
     });
 
+    test("accepts a Read of a canary below the working directory", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run, {
+          pairs: [
+            {
+              tool: "Read",
+              path: `${PROBE_CWD}/.factory-probe-${HEX}/canary.txt`,
+            },
+          ],
+        }),
+        deps(),
+      );
+      expect(fake.calls).toHaveLength(1);
+    });
+
+    function directoryPlaces(): [string, string][] {
+      return [
+        ["/tmp", `/tmp/.factory-probe-${HEX}`],
+        [
+          "/run/factory-tmp",
+          `/run/factory-tmp/fj-${JOB_ID}/.factory-probe-${HEX}`,
+        ],
+        ["the home directory", `${home}/.factory-probe-${HEX}`],
+        ["the working directory", `${PROBE_CWD}/.factory-probe-${HEX}`],
+      ];
+    }
+
+    test.each(["Glob", "Grep"])(
+      "accepts a %s of a canary directory in every place",
+      async (tool) => {
+        const results: number[] = [];
+        for (const [, path] of directoryPlaces()) {
+          const fake = createFakeCommandRunner([PROBE_OK]);
+          await runIsolationProbeClaudeWithDeps(
+            probeOptions(fake.run, { pairs: pairWith(tool, path) }),
+            deps(),
+          );
+          results.push(fake.calls.length);
+        }
+        expect(results).toEqual([1, 1, 1, 1]);
+      },
+    );
+
     const REJECTED: [string, IsolationProbeClaudeOptions["pairs"]][] = [
       ["no pair", []],
       [
@@ -1301,7 +1345,6 @@ describe("runIsolationProbeClaude", () => {
         ],
       ],
       ["a tool other than Read", pairWith("Bash", tmpPath())],
-      ["a Glob pair", pairWith("Glob", tmpPath())],
       ["a path outside the canary form", pairWith("Read", "/etc/passwd")],
       ["a relative path", pairWith("Read", `.factory-probe-${HEX}/canary.txt`)],
       [
@@ -1335,6 +1378,95 @@ describe("runIsolationProbeClaude", () => {
       [
         "a trailing slash",
         pairWith("Read", `/tmp/.factory-probe-${HEX}/canary.txt/`),
+      ],
+      ["a Read of a directory", pairWith("Read", `/tmp/.factory-probe-${HEX}`)],
+      [
+        "a Read of a directory below the working directory",
+        pairWith("Read", `${PROBE_CWD}/.factory-probe-${HEX}`),
+      ],
+      [
+        "a Read of a file below another directory of the working directory",
+        pairWith("Read", `${PROBE_CWD}/src/.factory-probe-${HEX}/canary.txt`),
+      ],
+      ["a Glob of a file", pairWith("Glob", tmpPath())],
+      ["a Grep of a file", pairWith("Grep", tmpPath())],
+      ["a Glob of /tmp", pairWith("Glob", "/tmp")],
+      ["a Grep of /root", pairWith("Grep", "/root")],
+      [
+        "a Glob of the job directory",
+        pairWith("Glob", `/run/factory-tmp/fj-${JOB_ID}`),
+      ],
+      [
+        "a Glob of a directory with a trailing slash",
+        pairWith("Glob", `/tmp/.factory-probe-${HEX}/`),
+      ],
+      [
+        "a Grep of a directory with a trailing slash",
+        pairWith("Grep", `/tmp/.factory-probe-${HEX}/`),
+      ],
+      [
+        "a Glob of a directory with a parent segment",
+        pairWith("Glob", `/tmp/.factory-probe-${HEX}/..`),
+      ],
+      [
+        "a Glob of a directory reached through a parent segment",
+        pairWith("Glob", `/tmp/x/../.factory-probe-${HEX}`),
+      ],
+      [
+        "a Glob of a directory of another prefix",
+        pairWith("Glob", `/var/tmp/.factory-probe-${HEX}`),
+      ],
+      [
+        "a Grep of a directory with a name of the wrong form",
+        pairWith("Grep", "/tmp/.factory-probe-xyz"),
+      ],
+      [
+        "a Glob of a directory below the canary directory",
+        pairWith("Glob", `/tmp/.factory-probe-${HEX}/sub`),
+      ],
+      [
+        "a Glob of a canary directory in a job directory that is not a job id",
+        pairWith("Glob", `/run/factory-tmp/fj-x/.factory-probe-${HEX}`),
+      ],
+      [
+        "a Glob of a relative directory",
+        pairWith("Glob", `.factory-probe-${HEX}`),
+      ],
+      [
+        "two Glob pairs",
+        JSON.parse(
+          JSON.stringify([
+            { tool: "Glob", path: `/tmp/.factory-probe-${HEX}` },
+            { tool: "Glob", path: `${home}/.factory-probe-${HEX}` },
+          ]),
+        ),
+      ],
+      [
+        "two Grep pairs",
+        JSON.parse(
+          JSON.stringify([
+            { tool: "Grep", path: `/tmp/.factory-probe-${HEX}` },
+            { tool: "Grep", path: `${home}/.factory-probe-${HEX}` },
+          ]),
+        ),
+      ],
+      [
+        "a Read and a Glob together",
+        JSON.parse(
+          JSON.stringify([
+            { tool: "Read", path: tmpPath() },
+            { tool: "Glob", path: `/tmp/.factory-probe-${HEX}` },
+          ]),
+        ),
+      ],
+      [
+        "a Glob and a Grep together",
+        JSON.parse(
+          JSON.stringify([
+            { tool: "Glob", path: `/tmp/.factory-probe-${HEX}` },
+            { tool: "Grep", path: `/tmp/.factory-probe-${HEX}` },
+          ]),
+        ),
       ],
     ];
 
@@ -1401,6 +1533,74 @@ describe("runIsolationProbeClaude", () => {
       const fake = createFakeCommandRunner([PROBE_OK]);
       await runIsolationProbeClaudeWithDeps(probeOptions(fake.run), deps());
       expect(fake.calls[0]?.options?.stdin).toContain(tmpPath());
+    });
+
+    describe("the prompt and the turns of a search", () => {
+      const DIR = `/tmp/.factory-probe-${HEX}`;
+      const GLOB_PROMPT = [
+        "This is a read-only check of file access.",
+        "Call the Glob tool once, with exactly two parameters: pattern set to * and path set to the directory below. Pass no other parameter.",
+        "Do not use any other tool.",
+        "The call may be refused. That is expected, so do not retry it.",
+        "After you have tried the call, return the structured output with attempted set to true.",
+        "",
+        `Directory: ${DIR}`,
+      ].join("\n");
+      const GREP_PROMPT = [
+        "This is a read-only check of file access.",
+        "Call the Grep tool once, with exactly three parameters: pattern set to FACTORY_PROBE_CANARY_[0-9a-f]{32}, path set to the directory below, and output_mode set to content. Pass no other parameter.",
+        "Do not use any other tool.",
+        "The call may be refused. That is expected, so do not retry it.",
+        "After you have tried the call, return the structured output with attempted set to true.",
+        "",
+        `Directory: ${DIR}`,
+      ].join("\n");
+
+      async function runSearch(tool: string) {
+        const fake = createFakeCommandRunner([PROBE_OK]);
+        await runIsolationProbeClaudeWithDeps(
+          probeOptions(fake.run, { pairs: pairWith(tool, DIR) }),
+          deps(),
+        );
+        return fake;
+      }
+
+      test("fixes the prompt of a Glob", async () => {
+        const fake = await runSearch("Glob");
+        expect(fake.calls[0]?.options?.stdin).toBe(GLOB_PROMPT);
+      });
+
+      test("fixes the prompt of a Grep", async () => {
+        const fake = await runSearch("Grep");
+        expect(fake.calls[0]?.options?.stdin).toBe(GREP_PROMPT);
+      });
+
+      test.each(["Glob", "Grep"])(
+        "does not put a canary value into the prompt of a %s",
+        async (tool) => {
+          const fake = await runSearch(tool);
+          expect(fake.calls[0]?.options?.stdin).not.toMatch(
+            /FACTORY_PROBE_CANARY_[0-9a-f]{32}/,
+          );
+        },
+      );
+
+      test.each(["Glob", "Grep"])(
+        "does not ask for a retry in the prompt of a %s",
+        async (tool) => {
+          const fake = await runSearch(tool);
+          expect(fake.calls[0]?.options?.stdin).toContain("do not retry it");
+        },
+      );
+
+      test.each(["Glob", "Grep"])(
+        "allows five turns for a %s",
+        async (tool) => {
+          const fake = await runSearch(tool);
+          const argv = argvOf(fake);
+          expect(argv[argv.indexOf("--max-turns") + 1]).toBe("5");
+        },
+      );
     });
 
     test("passes the oauth token as the token of the environment", async () => {

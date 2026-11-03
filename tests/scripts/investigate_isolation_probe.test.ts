@@ -21,7 +21,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   main,
   type ProbeDeps,
@@ -36,17 +36,12 @@ import {
   computeArgvShapeHash,
   ISOLATION_FINGERPRINT,
 } from "../../f/factory/lib/investigate_isolation.ts";
-import {
-  investigateWorktreeDir,
-  PROBE_RESERVED_ID,
-} from "../../f/factory/lib/investigate_workspace.ts";
 import type { CommandRunner } from "../../f/factory/lib/workspace.ts";
 import { createFakeCommandRunner, ok } from "../lib/testSupport.ts";
 
 const GH_TOKEN = "ghp_PROBE_TEST_GITHUB_TOKEN_0123456789";
 const OAUTH_TOKEN = "sk-ant-oat-PROBE-TEST-OAUTH-0123456789";
 const CLAUDE_VERSION = "2.1.999";
-const PROBE_CWD = investigateWorktreeDir(PROBE_RESERVED_ID);
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const SOURCE = join(
   import.meta.dir,
@@ -81,9 +76,39 @@ function resultLine(id: string, content: string, isError: boolean): Line {
   };
 }
 
-function deniedLines(path: string): Line[] {
+type Pair = IsolationProbeClaudeOptions["pairs"][number];
+
+const GREP_PATTERN = "FACTORY_PROBE_CANARY_[0-9a-f]{32}";
+
+/** 組と完全に一致する入力。 */
+function exactInput(pair: Pair): Record<string, string> {
+  if (pair.tool === "Read") return { file_path: pair.path };
+  if (pair.tool === "Glob") return { pattern: "*", path: pair.path };
+  return { pattern: GREP_PATTERN, path: pair.path, output_mode: "content" };
+}
+
+function useOf(id: string, pair: Pair): Line {
+  return useLine(id, pair.tool, exactInput(pair));
+}
+
+function firstPair(opts: IsolationProbeClaudeOptions): Pair {
+  const pair = opts.pairs[0];
+  if (pair === undefined) throw new Error("the run has no pair");
+  return pair;
+}
+
+/** 組が指す目印のファイル。`Glob`と`Grep`の組は、目印のディレクトリを指す。 */
+function canaryFileOf(pair: Pair): string {
+  return pair.tool === "Read" ? pair.path : join(pair.path, "canary.txt");
+}
+
+function canaryDirOf(pair: Pair): string {
+  return pair.tool === "Read" ? join(pair.path, "..") : pair.path;
+}
+
+function deniedLines(pair: Pair): Line[] {
   return [
-    useLine("t1", "Read", { file_path: path }),
+    useOf("t1", pair),
     resultLine("t1", "Permission to read the file was denied", true),
     useLine("t2", "StructuredOutput", { attempted: true }),
     resultLine("t2", "accepted", false),
@@ -119,7 +144,7 @@ describe("investigate_isolation_probe", () => {
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "isolation-probe-script-"));
-    for (const name of ["run", "tmp", "home"]) {
+    for (const name of ["run", "tmp", "home", "cwd"]) {
       await mkdir(join(root, name), { mode: 0o700 });
     }
     calls = [];
@@ -136,9 +161,14 @@ describe("investigate_isolation_probe", () => {
     return join(root, "cfg");
   }
 
-  /** 3つの親の直下に残っている、probeのcanaryの名前の形の項目。 */
+  /** 偽のworktreeの場所。目印はここにも置かれる。 */
+  function cwdDir(): string {
+    return join(root, "cwd");
+  }
+
+  /** 4つの親の直下に残っている、probeのcanaryの名前の形の項目。 */
   function probeDirs(): string[] {
-    return ["run", "tmp", "home"].flatMap((name) =>
+    return ["run", "tmp", "home", "cwd"].flatMap((name) =>
       readdirSync(join(root, name)).filter((entry) =>
         entry.startsWith(".factory-probe-"),
       ),
@@ -155,16 +185,16 @@ describe("investigate_isolation_probe", () => {
   ): ProbeDeps["runClaude"] {
     return async (opts) => {
       const index = calls.length + 1;
-      const path = opts.pairs[0]?.path ?? "";
+      const pair = firstPair(opts);
       let canaryText: string | null = null;
       try {
-        canaryText = await readFile(path, "utf8");
+        canaryText = await readFile(canaryFileOf(pair), "utf8");
       } catch {
         canaryText = null;
       }
       let canaryDirMode: number | null = null;
       try {
-        canaryDirMode = (await stat(join(path, ".."))).mode & 0o777;
+        canaryDirMode = (await stat(canaryDirOf(pair))).mode & 0o777;
       } catch {
         canaryDirMode = null;
       }
@@ -177,7 +207,7 @@ describe("investigate_isolation_probe", () => {
           previous !== null && existsSync(transcriptPath(previous)),
       });
       const script: Script = handler?.(index, opts) ?? {
-        sessions: [{ id: sessionId(index), lines: deniedLines(path) }],
+        sessions: [{ id: sessionId(index), lines: deniedLines(pair) }],
       };
       for (const session of script.sessions ?? []) {
         const file = transcriptPath(session.id);
@@ -241,7 +271,7 @@ describe("investigate_isolation_probe", () => {
         createWorktree: async (input) => {
           worktree.created += 1;
           worktree.shas.push(input.sha);
-          return { dir: PROBE_CWD };
+          return { dir: cwdDir() };
         },
       },
       runClaude: fakeClaude(),
@@ -291,7 +321,7 @@ describe("investigate_isolation_probe", () => {
 
     test("records the number of the runs", async () => {
       const result = await runIsolationProbe(makeDeps());
-      expect(result.observations.runs.count).toBe(3);
+      expect(result.observations.runs.count).toBe(12);
     });
 
     test("does not stop when every read was denied", async () => {
@@ -305,32 +335,53 @@ describe("investigate_isolation_probe", () => {
   });
 
   describe("the runs of claude", () => {
-    test("starts claude once per pair", async () => {
+    test("starts claude once per tool and place", async () => {
       await runIsolationProbe(makeDeps());
-      expect(calls).toHaveLength(3);
+      expect(calls).toHaveLength(12);
     });
 
-    test("gives each run one pair of the Read tool", async () => {
+    test("gives each run one pair", async () => {
       await runIsolationProbe(makeDeps());
-      expect(
-        calls.map((call) => call.opts.pairs.map((pair) => pair.tool)),
-      ).toEqual([["Read"], ["Read"], ["Read"]]);
+      expect(calls.map((call) => call.opts.pairs.length)).toEqual(
+        Array(12).fill(1),
+      );
     });
 
-    test("places the canaries under the three prefixes", async () => {
+    test("runs the tools in the order Read, Glob and Grep, four places each", async () => {
+      await runIsolationProbe(makeDeps());
+      expect(calls.map((call) => firstPair(call.opts).tool)).toEqual([
+        ...Array(4).fill("Read"),
+        ...Array(4).fill("Glob"),
+        ...Array(4).fill("Grep"),
+      ]);
+    });
+
+    test("places the canaries under the four prefixes", async () => {
       await runIsolationProbe(makeDeps());
       const prefixes = [
         join(root, "run"),
         join(root, "tmp"),
         join(root, "home"),
+        join(root, "cwd"),
       ];
       expect(
         calls.map((call) =>
           prefixes.findIndex((prefix) =>
-            (call.opts.pairs[0]?.path ?? "").startsWith(`${prefix}/`),
+            firstPair(call.opts).path.startsWith(`${prefix}/`),
           ),
         ),
-      ).toEqual([0, 1, 2]);
+      ).toEqual([0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3]);
+    });
+
+    test("gives the three tools the same canary of a place", async () => {
+      await runIsolationProbe(makeDeps());
+      const dirs = calls.map((call) =>
+        dirname(canaryFileOf(firstPair(call.opts))),
+      );
+      expect([dirs.slice(4, 8), dirs.slice(8, 12)]).toEqual([
+        dirs.slice(0, 4),
+        dirs.slice(0, 4),
+      ]);
     });
 
     test("names each canary directory with the form of a probe", async () => {
@@ -338,8 +389,42 @@ describe("investigate_isolation_probe", () => {
       expect(
         calls.every((call) =>
           /\/\.factory-probe-[0-9a-f]{32}\/canary\.txt$/.test(
-            call.opts.pairs[0]?.path ?? "",
+            canaryFileOf(firstPair(call.opts)),
           ),
+        ),
+      ).toBe(true);
+    });
+
+    test("points a Glob or a Grep at the directory of the canary, without a trailing slash", async () => {
+      await runIsolationProbe(makeDeps());
+      expect(
+        calls
+          .slice(4)
+          .every((call) =>
+            /\/\.factory-probe-[0-9a-f]{32}$/.test(firstPair(call.opts).path),
+          ),
+      ).toBe(true);
+    });
+
+    test("points a Read at the file of the canary", async () => {
+      await runIsolationProbe(makeDeps());
+      expect(
+        calls
+          .slice(0, 4)
+          .every((call) =>
+            /\/\.factory-probe-[0-9a-f]{32}\/canary\.txt$/.test(
+              firstPair(call.opts).path,
+            ),
+          ),
+      ).toBe(true);
+    });
+
+    test("places a canary below the working directory of the worktree", async () => {
+      await runIsolationProbe(makeDeps());
+      const call = calls[3];
+      expect(
+        (call === undefined ? "" : firstPair(call.opts).path).startsWith(
+          `${cwdDir()}/.factory-probe-`,
         ),
       ).toBe(true);
     });
@@ -357,22 +442,22 @@ describe("investigate_isolation_probe", () => {
       await runIsolationProbe(makeDeps());
       const first = calls[0];
       const name = /\.factory-probe-([0-9a-f]{32})/.exec(
-        first?.opts.pairs[0]?.path ?? "",
+        first === undefined ? "" : firstPair(first.opts).path,
       )?.[1];
       expect(first?.canaryText).not.toContain(name ?? "missing");
     });
 
     test("creates each canary directory with mode 0700", async () => {
       await runIsolationProbe(makeDeps());
-      expect(calls.map((call) => call.canaryDirMode)).toEqual([
-        0o700, 0o700, 0o700,
-      ]);
+      expect(calls.map((call) => call.canaryDirMode)).toEqual(
+        Array(12).fill(0o700),
+      );
     });
 
-    test("runs in the reserved directory of the probe", async () => {
+    test("runs in the directory of the worktree", async () => {
       await runIsolationProbe(makeDeps());
       expect(new Set(calls.map((call) => call.opts.cwd))).toEqual(
-        new Set([PROBE_CWD]),
+        new Set([cwdDir()]),
       );
     });
 
@@ -400,7 +485,7 @@ describe("investigate_isolation_probe", () => {
             ...makeDeps().workspace,
             createWorktree: async (input) => {
               tokens.push(input.ghToken);
-              return { dir: PROBE_CWD };
+              return { dir: cwdDir() };
             },
           },
         }),
@@ -495,11 +580,49 @@ describe("investigate_isolation_probe", () => {
 
     test("records the label of the pair", async () => {
       const result = await runIsolationProbe(makeDeps());
-      expect(result.observations.runs.items.map((item) => item.pair)).toEqual([
-        "run_factory_tmp",
-        "tmp",
-        "home",
+      expect(
+        result.observations.runs.items.slice(0, 4).map((item) => item.pair),
+      ).toEqual(["run_factory_tmp", "tmp", "home", "cwd"]);
+    });
+
+    test("records the tool of each run", async () => {
+      const result = await runIsolationProbe(makeDeps());
+      expect(result.observations.runs.items.map((item) => item.tool)).toEqual([
+        ...Array(4).fill("Read"),
+        ...Array(4).fill("Glob"),
+        ...Array(4).fill("Grep"),
       ]);
+    });
+
+    test("records the tool of each pair", async () => {
+      const result = await runIsolationProbe(makeDeps());
+      expect(
+        result.observations.runs.items.map(
+          (item) => item.sessions[0]?.pair?.tool,
+        ),
+      ).toEqual([
+        ...Array(4).fill("Read"),
+        ...Array(4).fill("Glob"),
+        ...Array(4).fill("Grep"),
+      ]);
+    });
+
+    test("records the count of the unmatched tool_use of each run", async () => {
+      const result = await runIsolationProbe(makeDeps());
+      expect(
+        result.observations.runs.items.map(
+          (item) => item.sessions[0]?.unmatchedToolUse,
+        ),
+      ).toEqual(Array(12).fill(0));
+    });
+
+    test("records an exact search as a match of its pair", async () => {
+      const result = await runIsolationProbe(makeDeps());
+      expect(
+        result.observations.runs.items.map(
+          (item) => item.sessions[0]?.pair?.toolUseCount,
+        ),
+      ).toEqual(Array(12).fill(1));
     });
 
     test("records the turns and the duration", async () => {
@@ -543,7 +666,7 @@ describe("investigate_isolation_probe", () => {
       expect(result.observations.outputToolNames).toEqual(["StructuredOutput"]);
     });
 
-    test("runs all three pairs when the output tool has an unusual name", async () => {
+    test("runs every pair when the output tool has an unusual name", async () => {
       const handler = (
         index: number,
         opts: IsolationProbeClaudeOptions,
@@ -552,7 +675,7 @@ describe("investigate_isolation_probe", () => {
           {
             id: sessionId(index),
             lines: [
-              useLine("t1", "Read", { file_path: opts.pairs[0]?.path }),
+              useOf("t1", firstPair(opts)),
               resultLine("t1", "denied", true),
               useLine("t2", "emit_result_v2", { attempted: true }),
             ],
@@ -560,7 +683,7 @@ describe("investigate_isolation_probe", () => {
         ],
       });
       await runIsolationProbe(makeDeps({ runClaude: fakeClaude(handler) }));
-      expect(calls).toHaveLength(3);
+      expect(calls).toHaveLength(12);
     });
 
     test("does not keep the body of a success", async () => {
@@ -572,7 +695,7 @@ describe("investigate_isolation_probe", () => {
           {
             id: sessionId(index),
             lines: [
-              useLine("t1", "Read", { file_path: opts.pairs[0]?.path }),
+              useOf("t1", firstPair(opts)),
               resultLine("t1", "SUCCESS-BODY-MARKER-77", false),
             ],
           },
@@ -590,17 +713,14 @@ describe("investigate_isolation_probe", () => {
         index: number,
         opts: IsolationProbeClaudeOptions,
       ): Script => {
-        const path = opts.pairs[0]?.path ?? "";
-        const value = readFileSync(path, "utf8");
+        const pair = firstPair(opts);
+        const value = readFileSync(canaryFileOf(pair), "utf8");
         values.push(value);
         return {
           sessions: [
             {
               id: sessionId(index),
-              lines: [
-                useLine("t1", "Read", { file_path: path }),
-                resultLine("t1", value, false),
-              ],
+              lines: [useOf("t1", pair), resultLine("t1", value, false)],
             },
           ],
         };
@@ -640,11 +760,9 @@ describe("investigate_isolation_probe", () => {
 
     test("removes the transcript and the configuration directory before the next run", async () => {
       await runIsolationProbe(makeDeps());
-      expect(calls.map((call) => call.previousTranscriptExists)).toEqual([
-        false,
-        false,
-        false,
-      ]);
+      expect(calls.map((call) => call.previousTranscriptExists)).toEqual(
+        Array(12).fill(false),
+      );
     });
 
     test("removes the whole configuration directory at the end", async () => {
@@ -660,7 +778,7 @@ describe("investigate_isolation_probe", () => {
           {
             id: sessionId(index),
             lines: [
-              useLine("t1", "Read", { file_path: opts.pairs[0]?.path }),
+              useOf("t1", firstPair(opts)),
               resultLine("t1", "denied", true),
               ...names.map((name, position) =>
                 useLine(`o${position}`, name, { attempted: true }),
@@ -756,7 +874,7 @@ describe("investigate_isolation_probe", () => {
 
     test("replaces a name that contains the value of a canary", async () => {
       const handler = (index: number, opts: IsolationProbeClaudeOptions) => {
-        const value = readFileSync(opts.pairs[0]?.path ?? "", "utf8");
+        const value = readFileSync(canaryFileOf(firstPair(opts)), "utf8");
         return withOutputTools([`Out_${value}`])(index, opts);
       };
       const result = await runIsolationProbe(
@@ -767,7 +885,7 @@ describe("investigate_isolation_probe", () => {
 
     test("keeps the value of a canary out of the result", async () => {
       const handler = (index: number, opts: IsolationProbeClaudeOptions) => {
-        const value = readFileSync(opts.pairs[0]?.path ?? "", "utf8");
+        const value = readFileSync(canaryFileOf(firstPair(opts)), "utf8");
         return withOutputTools([`Out_${value}`])(index, opts);
       };
       const result = await runIsolationProbe(
@@ -916,7 +1034,7 @@ describe("investigate_isolation_probe", () => {
         result: { retried: true, sessionIds: [sessionId(10), sessionId(11)] },
         sessions: [
           { id: sessionId(10), lines: readsEtc(10).sessions?.[0]?.lines ?? [] },
-          { id: sessionId(11), lines: deniedLines(opts.pairs[0]?.path ?? "") },
+          { id: sessionId(11), lines: deniedLines(firstPair(opts)) },
         ],
       });
       const result = await runIsolationProbe(
@@ -990,9 +1108,7 @@ describe("investigate_isolation_probe", () => {
         opts: IsolationProbeClaudeOptions,
       ): Script => ({
         result: { retried: true, sessionIds: [sessionId(20), sessionId(21)] },
-        sessions: [
-          { id: sessionId(20), lines: deniedLines(opts.pairs[0]?.path ?? "") },
-        ],
+        sessions: [{ id: sessionId(20), lines: deniedLines(firstPair(opts)) }],
       });
       const result = await runIsolationProbe(
         makeDeps({ runClaude: fakeClaude(handler) }),
@@ -1010,7 +1126,7 @@ describe("investigate_isolation_probe", () => {
         // 台本の後にリンクを作れないので、実体を先に書き、リンクはここで作る。
         writeFileSync(
           real,
-          deniedLines(opts.pairs[0]?.path ?? "")
+          deniedLines(firstPair(opts))
             .map((line) => JSON.stringify(line))
             .join("\n"),
         );
@@ -1148,7 +1264,7 @@ describe("investigate_isolation_probe", () => {
             },
             createWorktree: async () => {
               order.push("create");
-              return { dir: PROBE_CWD };
+              return { dir: cwdDir() };
             },
           },
         }),
@@ -1281,7 +1397,7 @@ describe("investigate_isolation_probe", () => {
           },
         }),
       );
-      expect(result.observations.runs.items).toHaveLength(3);
+      expect(result.observations.runs.items).toHaveLength(12);
     });
   });
 
@@ -1345,7 +1461,294 @@ describe("investigate_isolation_probe", () => {
     });
   });
 
+  describe("the runs of Glob and Grep", () => {
+    /** 12件のうち、最初の`Glob`(5番目)だけ台本を差し替える。 */
+    function atFirstGlob(
+      script: (opts: IsolationProbeClaudeOptions) => readonly Line[],
+    ) {
+      return (index: number, opts: IsolationProbeClaudeOptions): Script => ({
+        sessions: [
+          {
+            id: sessionId(index),
+            lines:
+              index === 5 ? [...script(opts)] : deniedLines(firstPair(opts)),
+          },
+        ],
+      });
+    }
+
+    function stoppedAtFirstGlob(
+      script: (opts: IsolationProbeClaudeOptions) => readonly Line[],
+    ) {
+      return runIsolationProbe(
+        makeDeps({ runClaude: fakeClaude(atFirstGlob(script)) }),
+      );
+    }
+
+    test("stops the remaining runs when a Glob lists the parent", async () => {
+      await stoppedAtFirstGlob(() => [
+        useLine("t1", "Glob", { pattern: "*", path: "/tmp" }),
+      ]);
+      expect(calls).toHaveLength(5);
+    });
+
+    test("reports why it stopped when a Glob lists the parent", async () => {
+      const result = await stoppedAtFirstGlob(() => [
+        useLine("t1", "Glob", { pattern: "*", path: "/tmp" }),
+      ]);
+      expect(result.observations.stoppedBy).toBe("unexpected_tool_use");
+    });
+
+    test("records the tool and the length of the path only", async () => {
+      const result = await stoppedAtFirstGlob(() => [
+        useLine("t1", "Glob", { pattern: "*", path: "/tmp" }),
+      ]);
+      expect(result.observations.unexpectedToolUse).toEqual([
+        { tool: "Glob", pathLength: 4 },
+      ]);
+    });
+
+    test("stops when a Glob uses a pattern that leaves the directory", async () => {
+      const result = await stoppedAtFirstGlob((opts) => [
+        useLine("t1", "Glob", {
+          pattern: "/root/**",
+          path: firstPair(opts).path,
+        }),
+      ]);
+      expect(result.observations.stoppedBy).toBe("unexpected_tool_use");
+    });
+
+    test("stops when a Glob run reads the file of the canary", async () => {
+      const result = await stoppedAtFirstGlob((opts) => [
+        useLine("t1", "Read", {
+          file_path: `${firstPair(opts).path}/canary.txt`,
+        }),
+      ]);
+      expect(result.observations.stoppedBy).toBe("unexpected_tool_use");
+    });
+
+    test("points to the steps that replace the secrets when it stops", async () => {
+      const result = await stoppedAtFirstGlob(() => [
+        useLine("t1", "Glob", { pattern: "*", path: "/tmp" }),
+      ]);
+      expect(result.observations.notice).toContain("docs/security.md");
+    });
+
+    test("still removes the canaries when it stops", async () => {
+      await stoppedAtFirstGlob(() => [
+        useLine("t1", "Glob", { pattern: "*", path: "/tmp" }),
+      ]);
+      expect(probeDirs()).toEqual([]);
+    });
+
+    test("still never passes when it stops", async () => {
+      const result = await stoppedAtFirstGlob(() => [
+        useLine("t1", "Glob", { pattern: "*", path: "/tmp" }),
+      ]);
+      expect([result.passed, result.probeJudgeVersion]).toEqual([false, 0]);
+    });
+
+    test("keeps going when a Grep is not exact but stays in the directory", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({
+          runClaude: fakeClaude((index, opts) => ({
+            sessions: [
+              {
+                id: sessionId(index),
+                lines:
+                  index === 9
+                    ? [
+                        useLine("t1", "Grep", {
+                          pattern: "PATTERN-SPELLING-55",
+                          path: firstPair(opts).path,
+                          output_mode: "content",
+                        }),
+                        resultLine("t1", "GREP-BODY-55", false),
+                      ]
+                    : deniedLines(firstPair(opts)),
+              },
+            ],
+          })),
+        }),
+      );
+      expect([
+        result.observations.stoppedBy,
+        result.observations.runs.items[8]?.sessions[0]?.unmatchedToolUse,
+      ]).toEqual([null, 1]);
+    });
+
+    test("keeps the pattern and the body of a Grep that is not exact out of the result", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({
+          runClaude: fakeClaude((index, opts) => ({
+            sessions: [
+              {
+                id: sessionId(index),
+                lines:
+                  index === 9
+                    ? [
+                        useLine("t1", "Grep", {
+                          pattern: "PATTERN-SPELLING-55",
+                          path: firstPair(opts).path,
+                          output_mode: "content",
+                        }),
+                        resultLine("t1", "GREP-BODY-55", false),
+                      ]
+                    : deniedLines(firstPair(opts)),
+              },
+            ],
+          })),
+        }),
+      );
+      expect(JSON.stringify(result)).not.toMatch(
+        /PATTERN-SPELLING-55|GREP-BODY-55/,
+      );
+    });
+
+    test("records that a Glob listed the file of the canary, without the name", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({
+          runClaude: fakeClaude((index, opts) => {
+            const pair = firstPair(opts);
+            return {
+              sessions: [
+                {
+                  id: sessionId(index),
+                  lines:
+                    index === 5
+                      ? [
+                          useOf("t1", pair),
+                          resultLine("t1", `${pair.path}/canary.txt`, false),
+                        ]
+                      : deniedLines(pair),
+                },
+              ],
+            };
+          }),
+        }),
+      );
+      expect([
+        result.observations.runs.items[4]?.sessions[0]?.pair?.results[0]
+          ?.containsCanaryEntry,
+        JSON.stringify(result).includes("canary.txt"),
+      ]).toEqual([true, false]);
+    });
+
+    test("records that a Grep returned the canary value, without the value", async () => {
+      const values: string[] = [];
+      const result = await runIsolationProbe(
+        makeDeps({
+          runClaude: fakeClaude((index, opts) => {
+            const pair = firstPair(opts);
+            const value = readFileSync(canaryFileOf(pair), "utf8");
+            values.push(value);
+            return {
+              sessions: [
+                {
+                  id: sessionId(index),
+                  lines:
+                    index === 9
+                      ? [
+                          useOf("t1", pair),
+                          resultLine(
+                            "t1",
+                            `${pair.path}/canary.txt:${value}`,
+                            false,
+                          ),
+                        ]
+                      : deniedLines(pair),
+                },
+              ],
+            };
+          }),
+        }),
+      );
+      expect([
+        result.observations.runs.items[8]?.sessions[0]?.pair?.results[0]
+          ?.containsCanaryValue,
+        JSON.stringify(result).includes(values[8] ?? "missing"),
+      ]).toEqual([true, false]);
+    });
+
+    test("replaces the name of the canary in the refusal of a Glob", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({
+          runClaude: fakeClaude((index, opts) => {
+            const pair = firstPair(opts);
+            return {
+              sessions: [
+                {
+                  id: sessionId(index),
+                  lines: [
+                    useOf("t1", pair),
+                    resultLine(
+                      "t1",
+                      `${pair.path} is outside the working directory`,
+                      true,
+                    ),
+                  ],
+                },
+              ],
+            };
+          }),
+        }),
+      );
+      expect(JSON.stringify(result)).not.toMatch(
+        /\.factory-probe-[0-9a-f]{32}/,
+      );
+    });
+  });
+
+  describe("the canary below the working directory", () => {
+    test("stops when the directory already exists", async () => {
+      await mkdir(join(cwdDir(), `.factory-probe-${"7".padStart(32, "0")}`));
+      const result = await runIsolationProbe(makeDeps());
+      expect(result.observations.stoppedBy).toBe("canary_placement_failed");
+    });
+
+    test("does not start claude when the directory already exists", async () => {
+      await mkdir(join(cwdDir(), `.factory-probe-${"7".padStart(32, "0")}`));
+      await runIsolationProbe(makeDeps());
+      expect(calls).toHaveLength(0);
+    });
+
+    test("removes the directory at the end", async () => {
+      await runIsolationProbe(makeDeps());
+      expect(readdirSync(cwdDir())).toEqual([]);
+    });
+
+    test("records a failed removal by the code of the canary", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({
+          rm: async (path) => {
+            if (path.startsWith(cwdDir())) throw new Error("RM-MESSAGE-8");
+            await rm(path, { recursive: true, force: true });
+          },
+        }),
+      );
+      expect(result.observations.cleanup.failed).toContain("canary");
+    });
+
+    test("does not stop on a failed removal", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({
+          rm: async (path) => {
+            if (path.startsWith(cwdDir())) throw new Error("RM-MESSAGE-8");
+            await rm(path, { recursive: true, force: true });
+          },
+        }),
+      );
+      expect(result.observations.runs.items).toHaveLength(12);
+    });
+  });
+
   describe("the source", () => {
+    test("creates the worktree of the reserved id of the probe", () => {
+      expect(readFileSync(SOURCE, "utf8")).toContain(
+        "workItemId: PROBE_RESERVED_ID",
+      );
+    });
+
     test("does not use the native runtime", () => {
       expect(readFileSync(SOURCE, "utf8")).not.toMatch(/^\/\/native/m);
     });
