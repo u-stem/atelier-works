@@ -191,18 +191,26 @@ export const EXPIRED_MESSAGE = "期限を過ぎているため、承認も却下
 export const FULL_CHECK_MESSAGE =
   "本文が長いため、GitHubで全文を確かめるまで承認できません。";
 
-/** プレビューを表示中に承認を止める理由。対象名を入れる。 */
-export function previewBlockedReason(_target: string): string {
-  return "";
+/**
+ * プレビューを表示している間に、承認を止める理由。`target`は止めている対象の名前。
+ * プレビューは生のHTML(コメントを含む)などを描かないので、表示したまま承認させない。
+ * 画面が`mode === "preview"`のときだけ、この文を承認を止める理由に渡す。
+ */
+export function previewBlockedReason(target: string): string {
+  return `${target}をプレビューで表示中は承認できません。原文に切り替えて確かめてください。`;
 }
 
-/** プレビューを選んだ承認で、原文を確かめたかを問うチェックの文。 */
-export function previewCheckMessage(_target: string): string {
-  return "";
+/**
+ * プレビューを一度でも表示した承認に出す、原文を確かめたかを問うチェックの文。
+ * 切り詰めの確認(`FULL_CHECK_MESSAGE`)とは別のチェックで、GitHubは指さない。
+ * 読んだことは保証しない自己申告である。
+ */
+export function previewCheckMessage(target: string): string {
+  return `${target}のプレビューを表示しました。プレビューは、生のHTML(コメントを含む)、リンク参照定義、画像を描かず、見えない文字を置き換えずに描くことがあります。原文で確かめました`;
 }
 
 /** プレビューの確認が済んでいないときに、承認を止める理由。 */
-export const PREVIEW_CHECK_PROBLEM = "";
+export const PREVIEW_CHECK_PROBLEM = "原文で確かめるまで承認できません。";
 
 type DecisionSurface = "decide" | "expired" | "redo_issue" | "waiting" | "none";
 
@@ -240,6 +248,7 @@ export function waitingMessage(kind: string): string {
 
 /**
  * 承認を送ってよいかの確認。送れない理由の文を返し、送ってよければ`null`。
+ * 判定の順は、止める理由、期限、切り詰めの確認、プレビューの確認である。
  * 承認の確認ダイアログで「承認する」を押した時点にも、同じ確認をやり直す。
  * ダイアログを開いている間に、期限を過ぎたり、前提が変わったりするためである。
  */
@@ -250,8 +259,9 @@ export function approveGateProblem(input: {
   readonly blockedReason: string | null;
   readonly fullCheckRequired: boolean;
   readonly fullChecked: boolean;
-  readonly previewCheckRequired?: boolean;
-  readonly previewChecked?: boolean;
+  /** プレビューを選んだ承認で、原文を確かめるチェックを求めるか。切り詰めの確認とは別である。 */
+  readonly previewCheckRequired: boolean;
+  readonly previewChecked: boolean;
 }): string | null {
   if (input.blockedReason !== null) {
     return input.blockedReason;
@@ -261,6 +271,9 @@ export function approveGateProblem(input: {
   }
   if (input.fullCheckRequired && !input.fullChecked) {
     return FULL_CHECK_MESSAGE;
+  }
+  if (input.previewCheckRequired && !input.previewChecked) {
+    return PREVIEW_CHECK_PROBLEM;
   }
   return null;
 }
