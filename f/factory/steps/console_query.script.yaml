@@ -21,7 +21,7 @@ schema:
       default: null
     draft_id:
       type: number
-      description: ''
+      description: view が design_doc のとき、取得する設計書の id(省略時は最新)。渡して正の整数でなければ空を返す。
       default: null
     limit:
       type: number
@@ -33,6 +33,7 @@ schema:
         / approval_stats(承認統計) / lead_time(リードタイム) / failures(失敗一覧) /
         notices(未解決の通知。重要度と解決可否つき) / reviews(PRレビュー) / fix_rounds(PR修正) /
         requirements_index(要件定義の一覧) / requirements_doc(要件定義書1件の全文) /
+        design_doc(設計書1件の全文。本文は秘密値をマスク済み) /
         approval_design_doc(設計の承認依頼が指す設計書。承認後の実装が受け取る文字そのもの) /
         audit_index(監査の一覧) / audit_doc(監査1件の全文) / deployments(反映の履歴と含まれるPR) /
         summary(要対応の件数と一覧。1つのオブジェクトを返す) /
@@ -43,8 +44,8 @@ schema:
       originalType: string
     work_item_id:
       type: number
-      description: view が requirements_doc / audit_doc / work_item_detail のとき必須。対象の
-        work_item_id。
+      description: view が requirements_doc / design_doc / audit_doc / work_item_detail
+        のとき必須。対象の work_item_id。
       default: null
   required:
     - view
