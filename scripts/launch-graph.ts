@@ -3,6 +3,7 @@
 // 表が実物と合っているかは、tests/scripts/launch-graph.test.tsが確かめる。
 
 import type { ApprovalRequestKind } from "../f/factory/lib/types.ts";
+import type { Evidence } from "./launch-evidence.ts";
 
 /** 辺の種類。scriptがコードで起動するか、人がコードを介さずに起動するか。 */
 export type LaunchKind = "script" | "human";
@@ -148,6 +149,99 @@ export const REWORK_LAUNCH_EDGES: readonly ReworkEdge[] = [
   { from: "steps/pr_fix_finish", to: "pipeline" },
   { from: "steps/implement_finish", to: "design" },
   { from: "steps/pr_fix_finish", to: "design" },
+];
+
+/** PRを介した関係の向き。前進は次の段へ、戻りは前のflowへ戻る。 */
+export type PrRelationDirection = "forward" | "return";
+
+/**
+ * PRを介して続く1本の関係。flowの起動の辺ではなく、PRのラベルやCIの結果を定期ジョブが見て起動するものである。
+ * - `from`: `f/factory`からの相対パスで拡張子の無いscript名。flowのステップのscriptでなければならない。
+ * - `to`: 続くflowの名前。
+ * - `trigger`: 経由の短い説明。表のソースとテストだけで使い、画面のデータには出さない。
+ * - `evidence`: 関係の根拠になるソースの文字列。1つ目は`from`のscript自身にする。
+ */
+export type PrRelationEdge = {
+  readonly from: string;
+  readonly to: string;
+  readonly direction: PrRelationDirection;
+  readonly trigger: string;
+  readonly evidence: readonly Evidence[];
+};
+
+/**
+ * PRを介した関係の表。`LAUNCH_EDGES`には混ぜない(コードがflowを起動する辺ではないため)。
+ * `evidence`は、ソースのコード(コメントを除く)にちょうど1か所で現れる式で、契約テストが照合する。
+ * 照合が落ちたら、表か文字列を直す。
+ */
+export const PR_RELATION_EDGES: readonly PrRelationEdge[] = [
+  {
+    from: "steps/implement_finish",
+    to: "pr_review",
+    direction: "forward",
+    trigger:
+      "implement_finish labels the PR for review and poll_prs starts pr_review",
+    evidence: [
+      { file: "steps/implement_finish.ts", includes: "[config.review_label]" },
+      {
+        file: "lib/poll_support.ts",
+        includes: '{ kind: "trigger_review", reason: "label"',
+      },
+    ],
+  },
+  {
+    from: "steps/pr_review_post",
+    to: "pr_fix",
+    direction: "forward",
+    trigger:
+      "pr_review_post records the review, then a person labels the PR or the CI watch starts pr_fix",
+    evidence: [
+      {
+        file: "steps/pr_review_post.ts",
+        includes: "await insertReview(record);",
+      },
+      { file: "lib/pr_ci_fix_claim.ts", includes: 'hold("not_reviewed")' },
+      {
+        file: "lib/poll_support.ts",
+        includes: '{ kind: "trigger_fix", removeLabel: true }',
+      },
+    ],
+  },
+  {
+    from: "steps/dependabot_finish",
+    to: "pr_fix",
+    direction: "forward",
+    trigger:
+      "dependabot_finish asks a person to label the PR, and poll_prs starts pr_fix",
+    evidence: [
+      {
+        file: "steps/dependabot_finish.ts",
+        includes: "fixByHumanNextAction(run.fixLabel)",
+      },
+      {
+        file: "lib/poll_support.ts",
+        includes: '{ kind: "trigger_fix", removeLabel: true }',
+      },
+    ],
+  },
+  {
+    from: "steps/pr_fix_finish",
+    to: "pr_review",
+    direction: "return",
+    trigger:
+      "after a CI fix pr_fix_finish leaves the head unrecorded, and poll_prs sees the new head and starts pr_review",
+    evidence: [
+      {
+        file: "steps/pr_fix_finish.ts",
+        includes: "await runPostPushBookkeeping(ciRound, {",
+      },
+      { file: "lib/ci_fix_round.ts", includes: "if (ciRound) return;" },
+      {
+        file: "lib/poll_support.ts",
+        includes: "candidate.lastKnownHeadSha !== candidate.headSha",
+      },
+    ],
+  },
 ];
 
 /**

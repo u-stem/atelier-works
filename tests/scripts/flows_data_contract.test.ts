@@ -24,6 +24,7 @@ import {
   APPROVAL_OUTCOMES,
   APPROVAL_STEPS,
   LAUNCH_EDGES,
+  PR_RELATION_EDGES,
   REWORK_LAUNCH_EDGES,
   SCRIPT_CALLERS,
   UNWIRED_LAUNCH_EDGES,
@@ -157,15 +158,17 @@ describe("the exits and the launch edges", () => {
     ).filter(
       (edge) =>
         !data.flows.some((flow) =>
-          flow.exits.some((exit) => {
-            const script = stepScript(flow, exit.step);
-            const handler = APPROVAL_STEPS[script];
-            return (
-              exit.flow === edge.to &&
-              (script === edge.from ||
-                (handler !== undefined && handlerOf(handler) === edge.from))
-            );
-          }),
+          flow.exits
+            .filter((exit) => exit.via !== "pr" && exit.via !== "pr_return")
+            .some((exit) => {
+              const script = stepScript(flow, exit.step);
+              const handler = APPROVAL_STEPS[script];
+              return (
+                exit.flow === edge.to &&
+                (script === edge.from ||
+                  (handler !== undefined && handlerOf(handler) === edge.from))
+              );
+            }),
         ),
     );
 
@@ -538,7 +541,12 @@ describe("the forward launch edges", () => {
     forward.set(
       flow.name,
       flow.exits
-        .filter((exit) => exit.via === "launch" || exit.via === "approve")
+        .filter(
+          (exit) =>
+            exit.via === "launch" ||
+            exit.via === "approve" ||
+            exit.via === "pr",
+        )
         .filter((exit) => exit.flow !== flow.name)
         .map((exit) => exit.flow),
     );
@@ -563,13 +571,108 @@ describe("the forward launch edges", () => {
     }).not.toThrow();
   });
 
-  test("keep every schedule within four columns counting the schedule itself", () => {
+  test("fit within six columns counting the origin", () => {
     const tooDeep = data.schedules.filter(
       (schedule) =>
-        1 + Math.max(0, ...schedule.flows.map((flow) => longest(flow, []))) > 4,
+        1 + Math.max(0, ...schedule.flows.map((flow) => longest(flow, []))) > 6,
     );
 
     expect(tooDeep.map((schedule) => schedule.name)).toEqual([]);
+  });
+
+  test("reach six columns from poll_issues", () => {
+    const flows = data.schedules.find(
+      (schedule) => schedule.name === "poll_issues",
+    )?.flows;
+
+    expect(
+      1 + Math.max(0, ...(flows ?? []).map((flow) => longest(flow, []))),
+    ).toBe(6);
+  });
+});
+
+describe("the PR relation exits", () => {
+  /** `from`のscriptをステップに持つflowとステップ。 */
+  function owners(from: string): { flow: FlowDefinition; step: string }[] {
+    return data.flows.flatMap((flow) =>
+      flow.steps
+        .filter((step) => relative(step.scriptPath) === from)
+        .map((step) => ({ flow, step: step.id })),
+    );
+  }
+
+  const viaOf = (direction: string): string =>
+    direction === "forward" ? "pr" : "pr_return";
+
+  test("match the table", () => {
+    const drawn = data.flows
+      .flatMap((flow) =>
+        flow.exits
+          .filter((exit) => exit.via === "pr" || exit.via === "pr_return")
+          .map((exit) => {
+            const step = flow.steps.find((item) => item.id === exit.step);
+            return `${relative(step?.scriptPath ?? "")} -> ${exit.flow} ${exit.via}`;
+          }),
+      )
+      .sort();
+    const listed = PR_RELATION_EDGES.flatMap((edge) =>
+      owners(edge.from).map(
+        () => `${edge.from} -> ${edge.to} ${viaOf(edge.direction)}`,
+      ),
+    ).sort();
+
+    expect(drawn).toEqual(listed);
+  });
+
+  test("name the entry of the flow each edge leads to", () => {
+    const missing = PR_RELATION_EDGES.flatMap((edge) =>
+      owners(edge.from)
+        .filter(
+          ({ flow }) =>
+            !flowOf(data, edge.to).entries.some(
+              (entry) =>
+                entry.kind === "flow" &&
+                entry.flow === flow.name &&
+                entry.via === viaOf(edge.direction),
+            ),
+        )
+        .map(({ flow }) => `${flow.name} -> ${edge.to}`),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  test("are not counted as launch exits", () => {
+    const repeated = data.flows.flatMap((flow) =>
+      flow.exits
+        .filter((exit) => exit.via === "pr" || exit.via === "pr_return")
+        .filter((exit) =>
+          flow.exits.some(
+            (other) =>
+              other.via !== exit.via &&
+              other.step === exit.step &&
+              other.flow === exit.flow,
+          ),
+        ),
+    );
+
+    expect(repeated).toEqual([]);
+  });
+
+  test("keep the return edge out of the forward edges", () => {
+    const returns = PR_RELATION_EDGES.filter(
+      (edge) => edge.direction === "return",
+    ).map((edge) => `${edge.from} -> ${edge.to}`);
+
+    expect(returns).toEqual(["steps/pr_fix_finish -> pr_review"]);
+  });
+
+  test("draw the return edge as pr_return and never as pr", () => {
+    const exits = flowOf(data, "pr_fix").exits.filter(
+      (exit) => exit.flow === "pr_review",
+    );
+
+    expect(exits.map((exit) => exit.via)).toEqual(["pr_return"]);
   });
 });
 

@@ -42,9 +42,69 @@ function countOf(html: string, word: string): number {
   return html.split(word).length - 1;
 }
 
+/** 起点が起動するflowの名前。描画から独立に、データの`schedules[].flows`から重複を除いて作る。 */
+function launchedBy(name: string): string[] {
+  const schedule = FLOWS_DATA?.schedules.find((item) => item.name === name);
+  return schedule === undefined ? [] : [...new Set(schedule.flows)];
+}
+
+/** 一覧の、起点のカードの出口の行の文字。出口の一覧が無ければ空にする。 */
+function originExitsOf(html: string, name: string): string {
+  const match = new RegExp(
+    `<ul[^>]*aria-label="${name}の出口"[^>]*>(.*?)</ul>`,
+  ).exec(html);
+  return match === null ? "" : plain(match[1] ?? "");
+}
+
+const SCHEDULES_WITH_FLOWS = (FLOWS_DATA?.schedules ?? [])
+  .map((schedule) => schedule.name)
+  .filter((name) => launchedBy(name).length > 0);
+
+/**
+ * 起点から前進の辺(起動、承認、PR経由)でたどれるflowの出口に、PR経由があるか。
+ * 描画から独立に、データの`schedules`と`flows[].exits`から作る。
+ */
+function hasPrExit(name: string): boolean {
+  const seen = new Set<string>();
+  const queue = [...launchedBy(name)];
+  while (queue.length > 0) {
+    const flowName = queue.pop();
+    if (flowName === undefined || seen.has(flowName)) continue;
+    seen.add(flowName);
+    const flow = FLOWS_DATA?.flows.find((item) => item.name === flowName);
+    for (const exit of flow?.exits ?? []) {
+      if (exit.via === "pr") return true;
+      if (exit.via === "launch" || exit.via === "approve") {
+        queue.push(exit.flow);
+      }
+    }
+  }
+  return false;
+}
+
+const ALL_SCHEDULES = (FLOWS_DATA?.schedules ?? []).map(
+  (schedule) => schedule.name,
+);
+const SCHEDULES_WITH_PR_EXIT = ALL_SCHEDULES.filter(hasPrExit);
+const SCHEDULES_WITHOUT_PR_EXIT = ALL_SCHEDULES.filter(
+  (name) => !hasPrExit(name),
+);
+
 const FIT = 1200;
 const SCROLL = 900;
 const LIST = 500;
+
+/** PRを介した線を持たない図の凡例。 */
+const LEGEND =
+  "実線は起動の流れです。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
+
+/** PRを介した出口を持つ一覧に添える、PR経由の行の説明。 */
+const LIST_PR_NOTE =
+  "PR経由の行は、定期ジョブがPRのラベルやCIの結果を見て起動する関係で、人のラベルを含みます。";
+
+/** PRを介した線を持つ図の凡例。 */
+const LEGEND_WITH_PR =
+  "実線は起動の流れ、破線はPRを介した関係です。破線は、定期ジョブがPRのラベルやCIの結果を見て起動する関係で、人のラベルを含みます。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
 
 describe("OriginDiagramView: the diagram", () => {
   test("is a labeled group named after the schedule", () => {
@@ -54,11 +114,41 @@ describe("OriginDiagramView: the diagram", () => {
   });
 
   test("draws a line for each forward edge", () => {
-    expect(countOf(render("poll_issues"), "<polyline")).toBe(4);
+    expect(countOf(render("poll_issues"), "<polyline")).toBe(6);
   });
 
-  test("puts the word on each approval line", () => {
+  test("keeps the approval word for each approval line", () => {
     expect(countOf(render("poll_issues"), ">承認<")).toBe(3);
+  });
+
+  test("draws a dashed line with the word for a PR relation", () => {
+    expect(
+      render("self_update").match(
+        /<polyline[^>]*stroke-dasharray="[^"]+"[^>]*>/g,
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("puts the word on each PR line", () => {
+    expect(countOf(render("poll_issues"), ">PR経由<")).toBe(2);
+  });
+
+  test("draws the line of a launch and an approval without a dash", () => {
+    expect(
+      render("poll_issues").match(/<polyline(?![^>]*stroke-dasharray)[^>]*>/g),
+    ).toHaveLength(4);
+  });
+
+  test("puts no PR word on a diagram without a PR relation", () => {
+    expect(render("audit_kickoff")).not.toContain(">PR経由<");
+  });
+
+  test("puts no PR word on the diagram that only notes the return", () => {
+    expect(render("watch_pr_ci")).not.toContain(">PR経由<");
+  });
+
+  test("notes the return to pr_review under pr_fix", () => {
+    expect(plain(render("watch_pr_ci"))).toContain("CI修正後の戻り: pr_review");
   });
 
   test("puts no word on the line that launches a flow", () => {
@@ -69,8 +159,8 @@ describe("OriginDiagramView: the diagram", () => {
     expect(plain(render("self_update"))).toContain("差し戻し: design");
   });
 
-  test("draws only the lines of the origin for self_update", () => {
-    expect(countOf(render("self_update"), "<polyline")).toBe(2);
+  test("draws the two lines of the origin and the two PR lines for self_update", () => {
+    expect(countOf(render("self_update"), "<polyline")).toBe(4);
   });
 
   test("writes the rework that remakes the same flow", () => {
@@ -90,6 +180,24 @@ describe("OriginDiagramView: the diagram", () => {
   test("explains the lines in one legend", () => {
     expect(countOf(plain(render("poll_issues")), "実線")).toBe(1);
   });
+
+  test("uses the legend with the dashed line for a diagram that has a PR line", () => {
+    expect(plain(render("poll_issues"))).toContain(LEGEND_WITH_PR);
+  });
+
+  test.each(["audit_kickoff", "watch_pr_ci"])(
+    "keeps the legend without the dashed line for %s",
+    (name) => {
+      expect(plain(render(name))).toContain(LEGEND);
+    },
+  );
+
+  test.each(["audit_kickoff", "watch_pr_ci"])(
+    "does not mention the dashed line in the diagram of %s",
+    (name) => {
+      expect(plain(render(name))).not.toContain("破線");
+    },
+  );
 
   test("writes the schedule in the origin box", () => {
     expect(plain(render("poll_prs"))).toContain("スケジュール");
@@ -305,8 +413,14 @@ describe("OriginDiagramView: the run of the origin box", () => {
 
 describe("OriginDiagramView: the presentation by width", () => {
   test("draws the diagram as it is when it fits", () => {
-    expect(render("poll_issues", { width: FIT })).not.toContain(
+    expect(render("self_update", { width: FIT })).not.toContain(
       'role="region"',
+    );
+  });
+
+  test("puts the diagram of poll_issues in a scrollable region even in the widest body", () => {
+    expect(render("poll_issues", { width: FIT })).toContain(
+      "横にスクロールできます",
     );
   });
 
@@ -331,7 +445,13 @@ describe("OriginDiagramView: the presentation by width", () => {
   });
 
   test("groups the list by column", () => {
-    expect(plain(render("poll_issues", { width: LIST }))).toContain("3段目");
+    expect(plain(render("poll_issues", { width: LIST }))).toContain("5段目");
+  });
+
+  test("writes the PR relation as an exit in the list", () => {
+    expect(plain(render("poll_issues", { width: LIST }))).toContain(
+      "PR経由: pr_review",
+    );
   });
 
   test("writes the exits of each flow in the list", () => {
@@ -339,6 +459,28 @@ describe("OriginDiagramView: the presentation by width", () => {
       "差し戻し: design",
     );
   });
+
+  test.each(["self_update", "poll_prs"])(
+    "lists the launch of pr_fix from the origin of %s, which skips a column",
+    (name) => {
+      expect(originExitsOf(render(name, { width: LIST }), name)).toContain(
+        "次に起動: pr_fix",
+      );
+    },
+  );
+
+  test.each(SCHEDULES_WITH_FLOWS)(
+    "lists every line from the origin of %s in the list",
+    (name) => {
+      const html = render(name, { width: LIST });
+
+      expect(
+        launchedBy(name).filter(
+          (flow) => !originExitsOf(html, name).includes(`次に起動: ${flow}`),
+        ),
+      ).toEqual([]);
+    },
+  );
 
   test("writes the launch that a line draws in the diagram as an exit in the list", () => {
     expect(plain(render("poll_issues", { width: LIST }))).toContain(
@@ -379,6 +521,26 @@ describe("OriginDiagramView: the presentation by width", () => {
 
   test("does not explain the lines in the list, which draws none", () => {
     expect(plain(render("poll_issues", { width: LIST }))).not.toContain("実線");
+  });
+
+  test.each(SCHEDULES_WITH_PR_EXIT)(
+    "explains the PR rows in the list of %s, which has a PR relation",
+    (name) => {
+      expect(plain(render(name, { width: LIST }))).toContain(LIST_PR_NOTE);
+    },
+  );
+
+  test.each(SCHEDULES_WITHOUT_PR_EXIT)(
+    "does not explain the PR rows in the list of %s, which has no PR relation",
+    (name) => {
+      expect(plain(render(name, { width: LIST }))).not.toContain(
+        "PR経由の行は",
+      );
+    },
+  );
+
+  test("does not explain the PR rows in the diagram, which has the legend", () => {
+    expect(plain(render("poll_prs"))).not.toContain("PR経由の行は");
   });
 
   test("still says a flow may not start in the list", () => {

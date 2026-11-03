@@ -11,12 +11,13 @@ import { Disclosure } from "../../components/Disclosure.tsx";
 import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Card, cardVariants } from "../../components/ui/card.tsx";
 import { cn } from "../../lib/cn.ts";
-import { CONDITIONAL_EDGES_NOTE } from "../../lib/flowDiagram.ts";
+import { CONDITIONAL_EDGES_NOTE, exitWord } from "../../lib/flowDiagram.ts";
 import { graphPresentation, wrapLines } from "../../lib/flowGraphFit.ts";
 import { flowDiagramPath } from "../../lib/flowsData.ts";
 import {
   footNotes,
   layoutOriginGraph,
+  NOTE_EM,
   type OriginEdgeLayout,
   type OriginFlowNode,
   type OriginGraphModel,
@@ -34,7 +35,20 @@ const EMPTY_TEXT = "この定期ジョブはflowを起動しません。";
 const LEGEND_TEXT =
   "実線は起動の流れです。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
 
-const APPROVE_WORD = "承認";
+/**
+ * PRを介した関係の意味。凡例と、凡例を出さない狭い幅の一覧が同じ句を使う。
+ * PRのラベルを見て起動するのは、起点とは限らない別の定期ジョブなので、起点を限る語は入れない。
+ */
+const PR_RELATION_MEANING = "定期ジョブがPRのラベルやCIの結果を見て起動する";
+
+/** PRを介した線を持つ図の凡例。破線の意味は、この図の中で決める。 */
+const LEGEND_WITH_PR_TEXT = `実線は起動の流れ、破線はPRを介した関係です。破線は、${PR_RELATION_MEANING}関係で、人のラベルを含みます。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。`;
+
+/** PR経由の線を持つ図の一覧に添える文。一覧には凡例が出ないので、PR経由の行の意味をここで伝える。 */
+const LIST_PR_TEXT = `PR経由の行は、${PR_RELATION_MEANING}関係で、人のラベルを含みます。`;
+
+/** PRを介した線の破線の模様。 */
+const PR_DASH = "6 4";
 
 /** 箱の左右の余白(px)。 */
 const PAD_X = 10;
@@ -42,7 +56,6 @@ const PAD_X = 10;
 const NAME_EM = 13;
 const DESCRIPTION_EM = 16;
 const STEP_TEXT_EM = 14;
-const NOTE_EM = 16;
 const ORIGIN_TEXT_EM = 14;
 
 const LINK_CLASS =
@@ -460,8 +473,9 @@ function EdgeView({
         strokeWidth={1.5}
         strokeLinejoin="round"
         markerEnd={`url(#${markerId})`}
+        {...(item.edge.via === "pr" ? { strokeDasharray: PR_DASH } : {})}
       />
-      {item.label === null ? null : (
+      {item.label === null || item.word === null ? null : (
         <text
           x={item.label.x}
           y={item.label.y}
@@ -469,7 +483,7 @@ function EdgeView({
           className="fill-foreground stroke-card text-[11px] font-semibold [paint-order:stroke]"
           strokeWidth={4}
         >
-          {APPROVE_WORD}
+          {safeText(item.word)}
         </text>
       )}
     </>
@@ -690,7 +704,7 @@ function ListFlow({
 /**
  * 図が読めない狭い幅の代わりの一覧。起点の箱、段ごとのflowの順に並べる。
  * 開閉は、図と共有する集合の値で決め、開閉の変化を呼び出し側へ返す。幅が変わって図と一覧が入れ替わっても、開閉が保たれる。
- * 出口の行は、図の線と注記の代わりに、各flowの下に並べる。
+ * 出口の行は、図の線と注記の代わりに、起点のカードと各flowの下に並べる。
  */
 function OriginList({
   model,
@@ -707,6 +721,8 @@ function OriginList({
     { length: Math.max(0, model.columns - 1) },
     (_, index) => index + 1,
   );
+  // 段を飛ぶ起動も含め、起点が起動するflowをすべて並べる。1段目のflowの並びだけでは、段を飛ぶ起動が落ちる。
+  const { launched } = model;
   return (
     <div className="flex flex-col gap-3">
       <Card padding="compact" className="flex flex-col gap-1 text-small">
@@ -715,6 +731,16 @@ function OriginList({
           {safeText(model.origin.name)}
         </p>
         <RunRows run={run} />
+        {launched.length === 0 ? null : (
+          <ul
+            aria-label={`${safeText(model.origin.name)}の出口`}
+            className="flex flex-col gap-0.5 text-muted-foreground"
+          >
+            {launched.map((flow) => (
+              <li key={flow}>{safeText(`${exitWord("launch")}: ${flow}`)}</li>
+            ))}
+          </ul>
+        )}
       </Card>
       {columns.map((column) => (
         <section
@@ -766,6 +792,7 @@ export function OriginDiagramView({
     return <EmptyNote>{EMPTY_TEXT}</EmptyNote>;
   }
   const presentation = graphPresentation(width, layout.width);
+  const hasPrLine = model.edges.some((edge) => edge.via === "pr");
   const svg = (
     <OriginSvg layout={layout} model={model} run={run} onToggle={onToggle} />
   );
@@ -784,8 +811,14 @@ export function OriginDiagramView({
       ) : (
         <ScrollFrame label={label}>{svg}</ScrollFrame>
       )}
-      {presentation === "list" ? null : (
-        <p className="text-small text-muted-foreground">{LEGEND_TEXT}</p>
+      {presentation === "list" ? (
+        hasPrLine ? (
+          <p className="text-small text-muted-foreground">{LIST_PR_TEXT}</p>
+        ) : null
+      ) : (
+        <p className="text-small text-muted-foreground">
+          {hasPrLine ? LEGEND_WITH_PR_TEXT : LEGEND_TEXT}
+        </p>
       )}
       {model.conditional ? (
         <p className="text-small text-muted-foreground">

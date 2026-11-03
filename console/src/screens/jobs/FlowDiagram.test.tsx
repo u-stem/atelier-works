@@ -162,6 +162,33 @@ describe("FlowDiagramFrame: the exits", () => {
     expect(plain(render("pipeline"))).toContain("implementの差し戻し");
   });
 
+  test("writes the PR relation exit of pr_review", () => {
+    expect(plain(render("pr_review"))).toContain("PR経由: pr_fix");
+  });
+
+  test("writes the return exit of pr_fix after the CI fix", () => {
+    expect(plain(render("pr_fix"))).toContain("CI修正後の戻り: pr_review");
+  });
+
+  test("links the PR relation exit to the diagram of the next flow", () => {
+    expect(render("pr_review")).toContain('href="/jobs/flows/pr_fix"');
+  });
+
+  test("names the link of the return exit by its words", () => {
+    expect(render("pr_fix")).toContain(
+      'aria-label="CI修正後の戻り: pr_reviewの図を開く"',
+    );
+  });
+
+  test.each([
+    ["pr_fix", "pr_reviewからPR経由"],
+    ["pr_fix", "dependabotからPR経由"],
+    ["pr_review", "implementからPR経由"],
+    ["pr_review", "pr_fixからCI修正後の戻り"],
+  ])("writes the entry of %s from the PR relation: %s", (name, text) => {
+    expect(plain(render(name))).toContain(text);
+  });
+
   test("says nothing about an entry of design that is not started yet", () => {
     expect(render("design")).not.toContain("まだ起動されません");
   });
@@ -386,6 +413,36 @@ describe("FlowDiagramFrame: the narrow presentation", () => {
   test("groups the entries that come from the step of another flow in one item", () => {
     expect(plain(render("pipeline", { presentation: "list" }))).toContain(
       "他のflowのステップ: manual_intake",
+    );
+  });
+
+  test("groups the entries that lead in through a pull request in one item", () => {
+    expect(plain(render("pr_fix", { presentation: "list" }))).toContain(
+      "PRを介して続く元のflow: dependabot、pr_review",
+    );
+  });
+
+  test("groups the entries that return after a CI fix in one item", () => {
+    expect(plain(render("pr_review", { presentation: "list" }))).toContain(
+      "CI修正後に戻る元のflow: pr_fix",
+    );
+  });
+
+  test("links the flows of the PR group to their diagrams", () => {
+    expect(render("pr_fix", { presentation: "list" })).toContain(
+      'href="/jobs/flows/dependabot"',
+    );
+  });
+
+  test("lists the PR relation exit with the step it comes from", () => {
+    expect(plain(render("pr_review", { presentation: "list" }))).toContain(
+      "pr_review_postから PR経由: pr_fix",
+    );
+  });
+
+  test("lists the return exit with the step it comes from", () => {
+    expect(plain(render("pr_fix", { presentation: "list" }))).toContain(
+      "pr_fix_finishから CI修正後の戻り: pr_review",
     );
   });
 

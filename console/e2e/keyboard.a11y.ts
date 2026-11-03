@@ -191,7 +191,10 @@ const WALKED_PATHS: readonly string[] = [
   "jobs/origins/poll_prs",
   "jobs/origins/poll_issues",
   "jobs/origins/poll_dependabot",
+  "jobs/origins/self_update",
   "jobs/flows/implement",
+  "jobs/flows/pr_review",
+  "jobs/flows/pr_fix",
 ];
 
 test.describe("tab walk", () => {

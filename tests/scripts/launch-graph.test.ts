@@ -9,11 +9,13 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { findMissingEvidence } from "../../scripts/launch-evidence.ts";
 import {
   describeOrigin,
   HUMAN_ENTRY_SCRIPTS,
   HUMAN_OPERATIONS,
   LAUNCH_EDGES,
+  PR_RELATION_EDGES,
   REWORK_LAUNCH_EDGES,
   UNWIRED_LAUNCH_EDGES,
 } from "../../scripts/launch-graph.ts";
@@ -360,5 +362,86 @@ describe("describeOrigin", () => {
     expect(edge === undefined ? "" : describeOrigin(edge)).toBe(
       "`retry_work_item`(Consoleの再実行)",
     );
+  });
+});
+
+/** `f/factory`の下のソースを返す。無ければundefined。 */
+function readFactorySource(file: string): string | undefined {
+  const path = join(FACTORY_DIR, file);
+  return existsSync(path) ? readFileSync(path, "utf8") : undefined;
+}
+
+describe("the PR relation edges", () => {
+  test("have every piece of evidence in the code of its source", () => {
+    expect(findMissingEvidence(PR_RELATION_EDGES, readFactorySource)).toEqual(
+      [],
+    );
+  });
+
+  test("start the evidence at the source of the from script", () => {
+    const wrong = PR_RELATION_EDGES.filter(
+      (edge) => edge.evidence[0]?.file !== `${edge.from}.ts`,
+    ).map((edge) => `${edge.from} -> ${edge.to}`);
+
+    expect(wrong).toEqual([]);
+  });
+
+  test("start at a step of a flow", () => {
+    const flowYaml = [
+      ...new Bun.Glob("*__flow/flow.yaml").scanSync(FACTORY_DIR),
+    ]
+      .map((path) => readFileSync(join(FACTORY_DIR, path), "utf8"))
+      .join("\n");
+
+    const unknown = PR_RELATION_EDGES.filter(
+      (edge) => !flowYaml.includes(`path: f/factory/${edge.from}\n`),
+    ).map((edge) => edge.from);
+
+    expect(unknown).toEqual([]);
+  });
+
+  test("end at an existing flow", () => {
+    const flows = new Set(flowNames());
+
+    const unknown = PR_RELATION_EDGES.map((edge) => edge.to).filter(
+      (to) => !flows.has(to),
+    );
+
+    expect(unknown).toEqual([]);
+  });
+
+  test("have no duplicate", () => {
+    const keys = PR_RELATION_EDGES.map((edge) => `${edge.from} -> ${edge.to}`);
+
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  test("never repeat a launch edge", () => {
+    const repeated = PR_RELATION_EDGES.filter((edge) =>
+      LAUNCH_EDGES.some(
+        (other) => other.from === edge.from && other.to === edge.to,
+      ),
+    ).map((edge) => `${edge.from} -> ${edge.to}`);
+
+    expect(repeated).toEqual([]);
+  });
+
+  test("have at least one piece of evidence for each edge", () => {
+    expect(
+      PR_RELATION_EDGES.filter((edge) => edge.evidence.length === 0),
+    ).toEqual([]);
+  });
+
+  test("list the four relations through a pull request", () => {
+    expect(
+      PR_RELATION_EDGES.map(
+        (edge) => `${edge.from} -> ${edge.to} (${edge.direction})`,
+      ),
+    ).toEqual([
+      "steps/implement_finish -> pr_review (forward)",
+      "steps/pr_review_post -> pr_fix (forward)",
+      "steps/dependabot_finish -> pr_fix (forward)",
+      "steps/pr_fix_finish -> pr_review (return)",
+    ]);
   });
 });

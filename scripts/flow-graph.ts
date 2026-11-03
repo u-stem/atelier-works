@@ -13,6 +13,7 @@ import type {
 import type {
   ApprovalOutcome,
   LaunchEdge,
+  PrRelationEdge,
   ReworkEdge,
 } from "./launch-graph.ts";
 
@@ -84,6 +85,11 @@ export type FlowsInput = {
   readonly reworkEdges: readonly ReworkEdge[];
   /** flowを起動するscriptを呼ぶscript(呼ばれるscript → 呼ぶscript)。 */
   readonly scriptCallers: Readonly<Record<string, string>>;
+  /** PRを介して続く関係。 */
+  readonly prRelationEdges: readonly Pick<
+    PrRelationEdge,
+    "from" | "to" | "direction"
+  >[];
 };
 
 const ENTRY_ORDER: Readonly<Record<FlowEntry["kind"], number>> = {
@@ -98,6 +104,14 @@ const VIA_ORDER: Readonly<Record<ExitVia, number>> = {
   approve: 1,
   reject: 2,
   rework: 3,
+  pr: 4,
+  pr_return: 5,
+};
+
+/** PRを介した関係の向きに対応する、出口と入口の経路。 */
+const PR_VIA: Readonly<Record<PrRelationEdge["direction"], ExitVia>> = {
+  forward: "pr",
+  return: "pr_return",
 };
 
 function entryKey(entry: FlowEntry): string {
@@ -146,8 +160,11 @@ function own<T>(
  *   スケジュールも人の操作も持たないscriptは、呼ぶscriptがあればそれを添える
  * - 出口は、ステップが起動する他のflowとする。承認のステップには、承認の処理が起動するflowを、承認と却下に分けてつける。
  *   差し戻しのときだけ起動する辺は、通常の起動と分ける
+ * - PRを介した関係は、辺の`from`のscriptをステップに持つflowとステップの出口と、`to`のflowの入口にする。
+ *   向きが前進なら`pr`、戻りなら`pr_return`にする
  * - `unwiredEdges`の辺は、入口にも出口にも描かず、起動先のflowの`unwiredEntries`に分ける
  * 起動の辺が存在しないflowを指していれば、例外を投げる。
+ * PRを介した関係が存在しないflowを指すか、どのflowのステップでもないscriptから始まれば、例外を投げる。
  * 承認の処理の辺が`approvalOutcomes`に無ければ、例外を投げる。
  */
 export function buildFlowsData(input: FlowsInput): FlowsData {
@@ -200,6 +217,39 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
       }
     }
   }
+  for (const edge of input.prRelationEdges) {
+    if (!flowNames.has(edge.to)) {
+      throw new Error(`PR relation edge targets an unknown flow: ${edge.to}`);
+    }
+    if ((owners.get(edge.from) ?? []).length === 0) {
+      throw new Error(
+        `PR relation edge starts at a script no flow runs: ${edge.from}`,
+      );
+    }
+  }
+
+  const sortEntries = (list: readonly FlowEntry[]): FlowEntry[] => {
+    const unique = new Map(list.map((entry) => [JSON.stringify(entry), entry]));
+    return [...unique.values()].sort(
+      (a, b) =>
+        ENTRY_ORDER[a.kind] - ENTRY_ORDER[b.kind] ||
+        compareText(entryKey(a), entryKey(b)),
+    );
+  };
+
+  /** PRを介した関係で、flowに続く入口。続く元は、辺の`from`のscriptをステップに持つflowである。 */
+  const prEntriesOf = (flow: string): FlowEntry[] =>
+    input.prRelationEdges
+      .filter((edge) => edge.to === flow)
+      .flatMap((edge) =>
+        (owners.get(edge.from) ?? []).map(
+          (owner): FlowEntry => ({
+            kind: "flow",
+            flow: owner.flow,
+            via: PR_VIA[edge.direction],
+          }),
+        ),
+      );
 
   const entriesOf = (
     flow: string,
@@ -266,17 +316,22 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
         }
       }
     }
-    return [...entries.values()].sort(
-      (a, b) =>
-        ENTRY_ORDER[a.kind] - ENTRY_ORDER[b.kind] ||
-        compareText(entryKey(a), entryKey(b)),
-    );
+    return sortEntries([...entries.values()]);
   };
 
   const exitsOf = (flow: FlowDefinitionInput): FlowExit[] => {
     const exits: FlowExit[] = [];
     for (const step of flow.steps) {
       const script = relativeToFactory(step.path);
+      for (const edge of input.prRelationEdges) {
+        if (edge.from === script) {
+          exits.push({
+            flow: edge.to,
+            step: step.id,
+            via: PR_VIA[edge.direction],
+          });
+        }
+      }
       if (Object.hasOwn(input.approvalSteps, script)) {
         for (const link of approvalLinks) {
           if (link.wired && link.flow === flow.name && link.step === step.id) {
@@ -304,7 +359,10 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
   const unwiredLinks = approvalLinks.filter((link) => !link.wired);
   const flows: FlowDefinition[] = input.flows
     .map((flow) => {
-      const entries = entriesOf(flow.name, wired, wiredLinks, true);
+      const entries = sortEntries([
+        ...entriesOf(flow.name, wired, wiredLinks, true),
+        ...prEntriesOf(flow.name),
+      ]);
       const wiredKeys = new Set(entries.map((entry) => JSON.stringify(entry)));
       return {
         name: flow.name,

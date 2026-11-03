@@ -1,4 +1,4 @@
-// 起動の図の組み立て。定期ジョブから前進の辺(起動と承認)でたどれるflowを段に並べ、箱と線の座標を決める純関数。
+// 起動の図の組み立て。定期ジョブから前進の辺(起動、承認、PR経由)でたどれるflowを段に並べ、箱と線の座標を決める純関数。
 // 語は`screens/jobs/OriginDiagram.tsx`が表示する。
 
 import type { SchedulesSnapshotView } from "../api/jobsQueries.ts";
@@ -38,7 +38,7 @@ export type OriginFlowNode = {
 export type OriginEdge = {
   readonly from: string | null;
   readonly to: string;
-  readonly via: "launch" | "approve";
+  readonly via: ForwardVia;
   /** 出口がつくステップのid。起点の箱からの辺は`null`。 */
   readonly step: string | null;
   /** 結ぶ段の差。2以上なら、間の段の箱の下を回して描く。 */
@@ -54,7 +54,10 @@ export type OriginGraphModel = {
   readonly edges: readonly OriginEdge[];
   /** 起点の箱を含む段の数。 */
   readonly columns: number;
-  /** 承認の線か、戻りの注記があり、設定や試行の上限で起動しないことがある。 */
+  /**
+   * 承認の線か、差し戻しと却下の注記があり、設定や試行の上限で起動しないことがある。
+   * PRを介した関係は、起動しない理由が人のラベルとCIの結果なので数えない。
+   */
   readonly conditional: boolean;
 };
 
@@ -69,9 +72,19 @@ const ERROR_MARK = "エラーあり";
 /** そのflow自身へ戻る出口に書く文。 */
 const SELF_TEXT = "やり直し";
 
-function isForwardVia(via: ExitVia): via is "launch" | "approve" {
-  return via === "launch" || via === "approve";
+/** 線で描く前進の辺の経路。 */
+type ForwardVia = "launch" | "approve" | "pr";
+
+function isForwardVia(via: ExitVia): via is ForwardVia {
+  return via === "launch" || via === "approve" || via === "pr";
 }
+
+/** 線に添える語。起動の線には添えない。 */
+const EDGE_WORDS: Readonly<Record<ForwardVia, string | null>> = {
+  launch: null,
+  approve: "承認",
+  pr: "PR経由",
+};
 
 function unique<T>(items: readonly T[]): T[] {
   return [...new Set(items)];
@@ -116,10 +129,10 @@ function edgeKey(flow: FlowDefinition, exit: FlowExit): string {
 
 /**
  * 起動の図を組み立てる。`scheduleName`のscheduleが無ければ`null`にする。
- * - 描くflowは、起点から前進の辺(起動と承認)でたどれるものに限る。差し戻しと却下の先でしか届かないflowは描かない。
+ * - 描くflowは、起点から前進の辺(起動、承認、PR経由)でたどれるものに限る。差し戻しと却下の先でしか届かないflowは描かない。
  * - 段は、前進の辺だけを使った、起点からの最長の経路で決める。
  * - 前進の辺が循環していても止まる。循環を閉じる辺は線にせず、注記にする。
- * - 戻りは線にせず、足の注記にする。そのflow自身へ戻る出口は「やり直し」と書く。
+ * - 戻り(差し戻し、却下、CI修正後の戻り)は線にせず、足の注記にする。そのflow自身へ戻る出口は「やり直し」と書く。
  */
 export function originGraphModel(
   data: FlowsData,
@@ -218,7 +231,10 @@ export function originGraphModel(
     edges,
     columns: nodes.reduce((max, node) => Math.max(max, node.column), 0) + 1,
     conditional: nodes.some((node) =>
-      node.exits.some((exit) => !exit.drawn || exit.via === "approve"),
+      node.exits.some(
+        (exit) =>
+          exit.via === "approve" || (!exit.drawn && exit.via !== "pr_return"),
+      ),
     ),
   };
 }
@@ -237,6 +253,8 @@ export function initialExpanded(model: OriginGraphModel): ReadonlySet<string> {
   return only !== undefined && rest.length === 0 ? new Set([only]) : new Set();
 }
 
+/** 足の注記を1行に収める文字数(em)。 */
+export const NOTE_EM = 16;
 export const ORIGIN_WIDTH = 180;
 export const ORIGIN_HEIGHT = 128;
 export const NODE_WIDTH = 200;
@@ -290,7 +308,9 @@ export type OriginNodeLayout = Box & {
 export type OriginEdgeLayout = {
   readonly edge: OriginEdge;
   readonly points: readonly Point[];
-  /** 語「承認」を置く位置。承認の線だけが持つ。 */
+  /** 線に添える語。承認の線と、PRを介した線だけが持つ。 */
+  readonly word: string | null;
+  /** `word`を置く位置。`word`が`null`なら`null`。 */
   readonly label: Point | null;
 };
 
@@ -406,15 +426,17 @@ export function layoutOriginGraph(
       x: target.x,
       y: target.y + target.headerHeight / 2,
     };
-    const word = edge.via === "approve";
+    const word = EDGE_WORDS[edge.via];
     if (edge.span <= 1) {
       return [
         {
           edge,
           points: [start, end],
-          label: word
-            ? { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 - 4 }
-            : null,
+          word,
+          label:
+            word === null
+              ? null
+              : { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 - 4 },
         },
       ];
     }
@@ -431,6 +453,7 @@ export function layoutOriginGraph(
     return [
       {
         edge,
+        word,
         points: [
           start,
           { x: out, y: start.y },
@@ -439,7 +462,7 @@ export function layoutOriginGraph(
           { x: into, y: arrival.y },
           arrival,
         ],
-        label: word ? { x: (out + into) / 2, y: lane - 4 } : null,
+        label: word === null ? null : { x: (out + into) / 2, y: lane - 4 },
       },
     ];
   });
