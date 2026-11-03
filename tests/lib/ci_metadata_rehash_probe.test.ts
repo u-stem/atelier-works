@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
 import { rehashRoundProbe } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import type { CommandRunner } from "../../f/factory/lib/workspace.ts";
 import { ghApiOk, ok } from "./testSupport.ts";
+
+const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
+const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
 
 const SHA = "a".repeat(40);
 const REF = "factory/issue-3-wi-7";
@@ -10,7 +14,24 @@ type World = {
   prState: string;
   prHeadSha: string;
   jobs: readonly Record<string, unknown>[];
+  log: string;
 };
+
+const INTEGRITY_LOG = [
+  `${FIRST_TEST_FILE}:`,
+  `(fail) ${FIRST_TEST_NAME} [1.20ms]`,
+  " 10 pass",
+  " 1 fail",
+].join("\n");
+
+const MIXED_LOG = [
+  `${FIRST_TEST_FILE}:`,
+  `(fail) ${FIRST_TEST_NAME} [1.20ms]`,
+  "tests/lib/other.test.ts:",
+  "(fail) other > fails [1.20ms]",
+  " 10 pass",
+  " 2 fail",
+].join("\n");
 
 function rawPr(world: World) {
   return {
@@ -66,6 +87,7 @@ function job(name: string, conclusion: string, id: number) {
 function githubOf(world: World): CommandRunner {
   return async (argv) => {
     const text = argv.join(" ");
+    if (text.includes("/logs")) return ghApiOk(world.log);
     if (text.includes("/jobs")) return ghApiOk({ jobs: world.jobs });
     if (text.includes("actions/runs?")) {
       return ghApiOk({ workflow_runs: [RUN] });
@@ -92,6 +114,7 @@ function world(over: Partial<World> = {}): World {
     prState: "open",
     prHeadSha: SHA,
     jobs: [job("metadata", "failure", 1)],
+    log: "##[error]lint failed in a.ts",
     ...over,
   };
 }
@@ -115,6 +138,44 @@ describe("rehashRoundProbe", () => {
     expect(await probe(world({ jobs: [job("check", "failure", 2)] }))).toBe(
       false,
     );
+  });
+
+  test("is true when only the check job failed, on the lock integrity test alone", async () => {
+    expect(
+      await probe(
+        world({ jobs: [job("check", "failure", 2)], log: INTEGRITY_LOG }),
+      ),
+    ).toBe(true);
+  });
+
+  test("is true when the metadata job and an integrity-only check job failed", async () => {
+    expect(
+      await probe(
+        world({
+          jobs: [job("metadata", "failure", 1), job("check", "failure", 2)],
+          log: INTEGRITY_LOG,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("is false when the check job failed another test too", async () => {
+    expect(
+      await probe(
+        world({ jobs: [job("check", "failure", 2)], log: MIXED_LOG }),
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when the check job failed on a lint error", async () => {
+    expect(
+      await probe(
+        world({
+          jobs: [job("check", "failure", 2)],
+          log: "##[error]lint failed in a.ts",
+        }),
+      ),
+    ).toBe(false);
   });
 
   test("is false when the head of the pull request moved", async () => {

@@ -1,5 +1,5 @@
-summary: '[LIB] metadataジョブの失敗をhashの再計算で直す'
-description: 内部ライブラリです。直接実行するものではありません。metadataジョブだけが落ちたCI回を、Claudeを起動せずにwmill-lock.yamlのhashの再計算で直します。
+summary: '[LIB] lockのhashの失敗を、hashの再計算で直す'
+description: 内部ライブラリです。直接実行するものではありません。metadataジョブだけが落ちたCI回と、checkジョブがロックの整合のテストだけで落ちたCI回を、Claudeを起動せずにwmill-lock.yamlのhashの再計算で直します。
 lock: '!inline f/factory/lib/ci_metadata_rehash.script.lock'
 kind: script
 schema:

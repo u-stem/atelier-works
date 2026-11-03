@@ -134,8 +134,12 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 一方、次のものは、このリストに入れない。
  * 例外を開くコールバックの本体(`steps/pr_fix_verify.ts`と`steps/pr_fix_finish.ts`)と、
  * 変更の形を判定する`isLockOnlyChange`と、それを呼ぶ`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、
- * 回の分類を読む`readCiFailure`(いずれも`lib/ci_fix_round.ts`)、失敗したジョブを分類する`classifyCiFailure`(`lib/ci_fix_classify.ts`)である。
+ * 回の分類を読む`readCiFailure`と、ログを読んで整合のテストだけの失敗かを答える`isLockIntegrityOnlyFailure`(いずれも`lib/ci_fix_round.ts`)、
+ * 失敗したジョブを分類する`classifyCiFailure`(`lib/ci_fix_classify.ts`)である。
+ * 起動の判断の`decideFixClaim`(`lib/pr_ci_fix_claim.ts`)で、整合のテストだけの失敗を`metadata_only`に切り替える分岐(`upgradeToRehash`)も入れない。
  * `classifyCiFailure`の結果が、`metadata`だけが落ちた回(`metadata_only`)を決め、起動の判断の免除(予算とマーカーの確認)を決める。
+ * ロックの整合のテストだけが落ちた回は、`readCiFailure`が、ログを読み、`isLockIntegrityOnlyLog`(`lib/ci_fix_classify.ts`)で決める。
+ * その判定に使う`LOCK_INTEGRITY_TESTS`と`LOCK_INTEGRITY_ANCHOR`も、同じ理由で入れない。範囲を広げる変更は、人のレビューで差分を確かめて止める。
  * 再計算が読むgitの動き方を決める、`lib/workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)も入れない。
  * ほかのCI回の部品と同じく、日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
  * これらを書き換えて例外の条件を緩める変更は、マージ前の人のレビューで差分を確かめて止める。

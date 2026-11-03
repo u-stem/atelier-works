@@ -49,6 +49,7 @@ import {
   type PullRequest,
   parseGitHubRepoUrl,
   type Viewer,
+  type WorkflowJobLogResult,
   type WorkflowRunJob,
   WorkflowRunsIncompleteError,
 } from "./github.ts";
@@ -56,9 +57,10 @@ import type { Logger } from "./log.ts";
 import { shortSha, type WorkflowRun } from "./main_ci_support.ts";
 import { type LabelerPolicy, labelerPolicyFor } from "./poll_support.ts";
 import {
-  classifyHeadFailure,
   decideFixClaim,
   type FixClaimReaders,
+  readHeadFailure,
+  readLockIntegrityOnly,
   type WorkerEnvHoldReason,
   type WorkerEnvProblem,
 } from "./pr_ci_fix_claim.ts";
@@ -375,6 +377,12 @@ export type PrCiClaimDeps = {
     runId: number,
     headSha: string,
   ) => Promise<readonly WorkflowRunJob[]>;
+  /** ジョブのログを読む。失敗したジョブが1つのとき、ロックの整合のテストだけの失敗かを決めるために使う。 */
+  readonly getJobLog: (
+    owner: string,
+    repo: string,
+    jobId: number,
+  ) => Promise<WorkflowJobLogResult>;
   /**
    * 検査を動かすworkerの環境が前提を満たさない問題。満たすとき、検査コマンドが無いときは`null`。
    * 実行の中で1回だけ読む。
@@ -2598,6 +2606,8 @@ function claimReaders(
 ): FixClaimReaders {
   const { deps } = context;
   const repo = repoKey(ref);
+  // `classify`が読んだ、`metadata`以外で失敗したジョブ。`lockIntegrityOnly`がログを読むジョブである。
+  let failedJobs: readonly WorkflowRunJob[] = [];
   return {
     hasActiveFix: () =>
       claim.hasActiveFix(names.owner, names.repo, row.pr_number),
@@ -2609,6 +2619,7 @@ function claimReaders(
     readCommits: () => claim.listCommits(row.owner, row.repo, row.pr_number),
     hasSkillMarker: () => readSkillMarker(context, claim),
     classify: async (pr) => {
+      failedJobs = [];
       if (pr.baseRepoId === null) return "unreadable";
       const found = await deps.listRuns(
         row.owner,
@@ -2617,10 +2628,17 @@ function claimReaders(
         pr.headRef,
         { baseRepoId: pr.baseRepoId, prNumber: row.pr_number },
       );
-      return classifyHeadFailure(found.runs, (runId) =>
+      const head = await readHeadFailure(found.runs, (runId) =>
         claim.listJobs(row.owner, row.repo, runId, row.head_sha),
       );
+      failedJobs = head.jobs;
+      return head.kind;
     },
+    lockIntegrityOnly: () =>
+      readLockIntegrityOnly(
+        (jobId) => claim.getJobLog(row.owner, row.repo, jobId),
+        failedJobs,
+      ),
     workerEnv: () => readWorkerEnv(context, claim),
     budgetExceeded: () => readFactOnce(context, "budget", claim.budgetExceeded),
     mainCiFailed: () =>

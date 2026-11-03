@@ -4,7 +4,11 @@
 // 事実はすべて`FixClaimReaders`で渡し、必要になるまで読まない。テストで差し替える。
 
 import { isBranchHeldForFixRounds } from "./branch_hold.ts";
-import { classifyFailedRuns } from "./ci_fix_round.ts";
+import {
+  type CiGatherDeps,
+  classifyFailedRuns,
+  isLockIntegrityOnlyFailure,
+} from "./ci_fix_round.ts";
 import type {
   PrCommitMessages,
   PullRequest,
@@ -19,6 +23,8 @@ import { generatedByTrailer } from "./workspace.ts";
  * 起動前の分類の結果。
  * `fixable`は、Claudeが直すジョブだけが失敗している。
  * `metadata_only`は、`metadata`だけが失敗している。Claudeを起動せず、hashの再計算で直す。
+ * `fixable`のうち、失敗したジョブが1つで、そのログがロックの整合のテストだけの失敗を示す回も、
+ * 同じ再計算で直せる。ログは高くつくので、`FixClaimReaders.lockIntegrityOnly`が、保留の直前にだけ確かめる。
  * Claudeが直すジョブと`metadata`が同時に失敗しているときも`fixable`である。Claudeが先にそのジョブを直し、
  * `metadata`は、次の回で`metadata_only`になったときに再計算で直す。
  */
@@ -31,20 +37,48 @@ export type HeadFailureClass =
   /** 実行を読むのに要る値(ベースのリポジトリのID)が無く、分類できない。 */
   | "unreadable";
 
+/** 分類の結果と、`metadata`以外で失敗したジョブ。ジョブは、分類が`fixable`のときだけ入る。 */
+export type HeadFailure = {
+  readonly kind: HeadFailureClass;
+  readonly jobs: readonly WorkflowRunJob[];
+};
+
 /**
- * そのheadの実行から、失敗したジョブの種類を分類する。
+ * そのheadの実行から、失敗したジョブの種類を分類する。ログは読まない。
  * CI回の収集(`gatherCiFailureInput`)と同じ関数(`classifyFailedRuns`)で、同じ範囲の実行とジョブを読む。
  */
+export async function readHeadFailure(
+  runs: readonly WorkflowRun[],
+  listJobs: (runId: number) => Promise<readonly WorkflowRunJob[]>,
+): Promise<HeadFailure> {
+  const { verdict } = await classifyFailedRuns(runs, listJobs);
+  if (verdict === null) return { kind: "no_failure", jobs: [] };
+  if (verdict.kind === "fixable" && verdict.jobs.length === 0) {
+    return { kind: "metadata_only", jobs: [] };
+  }
+  return {
+    kind: verdict.kind,
+    jobs: verdict.kind === "fixable" ? verdict.jobs : [],
+  };
+}
+
+/** `readHeadFailure`の分類だけを返す。 */
 export async function classifyHeadFailure(
   runs: readonly WorkflowRun[],
   listJobs: (runId: number) => Promise<readonly WorkflowRunJob[]>,
 ): Promise<HeadFailureClass> {
-  const { verdict } = await classifyFailedRuns(runs, listJobs);
-  if (verdict === null) return "no_failure";
-  if (verdict.kind === "fixable" && verdict.jobs.length === 0) {
-    return "metadata_only";
-  }
-  return verdict.kind;
+  return (await readHeadFailure(runs, listJobs)).kind;
+}
+
+/**
+ * 失敗したジョブが1つで、そのログがロックの整合のテストだけの失敗を示すか。
+ * ログを読めないときは`false`で、読み取りのrate limitだけは、そのまま投げる。
+ */
+export function readLockIntegrityOnly(
+  getLog: CiGatherDeps["getLog"],
+  jobs: readonly WorkflowRunJob[],
+): Promise<boolean> {
+  return isLockIntegrityOnlyFailure(getLog, jobs);
 }
 
 /**
@@ -121,6 +155,11 @@ export type FixClaimReaders = {
   readonly hasSkillMarker: () => Promise<boolean>;
   readonly classify: (pr: PullRequest) => Promise<HeadFailureClass>;
   /**
+   * `classify`が`fixable`を返した失敗が、ロックの整合のテストだけの失敗か。ジョブのログを読むので高くつく。
+   * 判定は、スキルのマーカーか予算で保留する直前にだけ呼ぶ。1つの行で最大1回しか読まない。
+   */
+  readonly lockIntegrityOnly: () => Promise<boolean>;
+  /**
    * 検査を動かすworkerの環境が前提を満たさない保留の理由。満たすとき、検査コマンドが無いときは`null`。
    * 読み取りに費用がかかるので、安い判定を通った後に、判定がここに届いたときだけ読む。
    */
@@ -185,6 +224,8 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  * 4. commitがすべてFactoryのものでなければ`not_factory_head`で保留する。
  * 5. 失敗したジョブを分類する。`metadata_only`でなければ、スキルがマーカーを持たないとき`marker_missing`で保留する。
  *    `metadata_only`はClaudeを使わないので、この確認を飛ばす。
+ *    `fixable`で失敗したジョブが1つのときは、保留の直前に、そのログを読む(`lockIntegrityOnly`、1つの行で最大1回)。
+ *    ロックの整合のテストだけの失敗なら、`metadata_only`に切り替えて保留しない。
  *    マーカーの確認の後に、直せない種類は`unfixable_job`、失敗でない結論は`other_conclusion`で保留し、
  *    失敗したジョブが無ければskipする。
  * 6. 時間設定が修正・検証ステップのtimeoutに収まらなければ`config_misfit`で保留する。準備のステップが同じ理由で止めるので、
@@ -193,7 +234,8 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  * 7. 予算を使い切っていれば`budget_exceeded`、mainが赤ければ`main_ci_failed`、
  *    ラウンドの数が上限に達しているか、行の起動の回数が上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数に
  *    達していれば`rounds_exhausted`で保留する。後者は、フローが起動しないまま起動し直し続けるのを止める。
- *    日次の予算は、`metadata`だけが失敗しているときには確かめない。Claudeを起動せず、費用がかからないためである。
+ *    日次の予算は、`metadata`だけが失敗しているときと、整合のテストだけの失敗のときには確かめない。Claudeを起動せず、費用がかからないためである。
+ *    整合のテストだけの失敗かは、予算を使い切っていた場合に限り、保留の直前にログを読んで決める(5と同じ読み取り)。
  *    Claudeが直すジョブも落ちているときは、予算を確かめる。使い切っていれば保留し、行は巡回のたびに読み直すだけで、ラウンドを消費しない。
  * 8. 検査を動かすworkerの環境が前提を満たさなければ、イメージが古いとき`worker_image_stale`、
  *    稼働中のworkerが安全でないとき`worker_runtime_unsafe`で保留する。
@@ -224,9 +266,24 @@ export async function decideFixClaim(
     return hold("not_factory_head");
   }
 
-  const failure = await readers.classify(pr);
+  let failure = await readers.classify(pr);
+  // 整合のテストだけの失敗は、`metadata_only`と同じに、Claudeを使わず再計算で直す。
+  // ログは、保留の直前にだけ読み、1つの行で1回に限る。
+  let lockChecked = false;
+  const upgradeToRehash = async (): Promise<boolean> => {
+    if (failure === "metadata_only") return true;
+    if (failure !== "fixable" || lockChecked) return false;
+    lockChecked = true;
+    if (!(await readers.lockIntegrityOnly())) return false;
+    failure = "metadata_only";
+    return true;
+  };
   // `metadata_only`の回はClaudeを使わないので、スキルのマーカーを確かめない。
-  if (failure !== "metadata_only" && !(await readers.hasSkillMarker())) {
+  if (
+    failure !== "metadata_only" &&
+    !(await readers.hasSkillMarker()) &&
+    !(await upgradeToRehash())
+  ) {
     return hold("marker_missing");
   }
   if (failure === "unfixable_job") return hold("unfixable_job");
@@ -235,7 +292,11 @@ export async function decideFixClaim(
   if (failure === "unreadable") return { kind: "skip", why: "unreadable" };
 
   if (input.configMisfit !== null) return hold("config_misfit");
-  if (failure !== "metadata_only" && (await readers.budgetExceeded())) {
+  if (
+    failure !== "metadata_only" &&
+    (await readers.budgetExceeded()) &&
+    !(await upgradeToRehash())
+  ) {
     return hold("budget_exceeded");
   }
   if (await readers.mainCiFailed()) return hold("main_ci_failed");

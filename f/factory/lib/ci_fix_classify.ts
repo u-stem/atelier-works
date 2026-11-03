@@ -1,8 +1,140 @@
 // CIの失敗が、CI回のClaudeにソースを編集させて直せる種類かを、ジョブの名前と結論から決める純関数。
 // ジョブ名は外部由来の文字列なので、判定には正規化した名前を使い、表示には無害化して長さを制限した名前を使う。
 // 判断できないものは「直せない」側に倒す。
+// テストのログが、ロックの整合のテストだけの失敗かを決める純関数(`isLockIntegrityOnlyLog`)も置く。
 
-import { sanitizeExternalName } from "./ci_log_support.ts";
+import { cleanLogText, sanitizeExternalName } from "./ci_log_support.ts";
+
+/** ロックの整合を調べるテスト1件。`file`はbunのログのファイルの見出し(`<パス>:`)に現れるパスで、`name`は`<describe> > <test>`である。 */
+export type LockIntegrityTest = {
+  readonly file: string;
+  readonly name: string;
+};
+
+const HASH_TEST = "tests/lib/metadata_hash.test.ts";
+const GIT_PORTS_TEST = "tests/lib/metadata_git_ports.test.ts";
+const PRECHECK_REPO_TEST = "tests/lib/metadata_precheck_repo.test.ts";
+const PRECHECK_REPO_SUITE =
+  "planMetadataRehash on the files of this repository";
+
+/**
+ * ロックが古いことを直接示すテスト。全項目のhashを、ファイルの内容から求めたhashと比べる。
+ * 残りの10件は、リポジトリの成長や、hashの計算そのものの変更でも単独で落ちる。
+ * そのため、このテストが落ちていない回は、再計算では直せるとみなさない。
+ */
+export const LOCK_INTEGRITY_ANCHOR: LockIntegrityTest = {
+  file: HASH_TEST,
+  name: "the repository's wmill-lock.yaml > has a computed hash equal to every entry the files determine",
+};
+
+/**
+ * `wmill-lock.yaml`のhashが古いときに落ちるテスト。
+ * リポジトリのロックをそのまま基準にするため、ロックが古いと、これらがまとめて落ちる。
+ * 落ちたテストがこれらだけで、`LOCK_INTEGRITY_ANCHOR`を含む回は、ソースを直さずhashを再計算すれば直る。
+ * 名前が変わると、その1件を含む回は従来の経路に戻る。
+ * 名前とファイルが合うことは、テストで固定している。
+ */
+export const LOCK_INTEGRITY_TESTS: readonly LockIntegrityTest[] = [
+  LOCK_INTEGRITY_ANCHOR,
+  {
+    file: HASH_TEST,
+    name: "a perturbed repository > patches exactly one line of the lock for a changed script",
+  },
+  {
+    file: HASH_TEST,
+    name: "a perturbed repository > leaves the lock untouched when nothing changed",
+  },
+  {
+    file: GIT_PORTS_TEST,
+    name: "createGitPrecheckPorts with planMetadataRehash on this repository > plans no change for a head that equals the base tip",
+  },
+  ...[
+    "accepts a head that equals the base tip",
+    "recomputes only the library that gained a line",
+    "recomputes only the script whose body gained a line",
+    "returns a lock that parseWmillLock reads for a changed library",
+    "keeps the number of lines of wmill-lock.yaml",
+    "finishes within the ceiling of visits and resolutions",
+    "needs at most nine tenths of the ceiling of visits and resolutions",
+  ].map((title) => ({
+    file: PRECHECK_REPO_TEST,
+    name: `${PRECHECK_REPO_SUITE} > ${title}`,
+  })),
+];
+
+// 並列で実行したCIのログでは、見出しが`##[group]<パス>:`の形で、ファイルごとに`##[endgroup]`で閉じる。
+const TEST_FILE_HEADER = /^(?:##\[group\])?([^\s:]+\.test\.[cm]?[jt]sx?):$/;
+const GROUP_END = "##[endgroup]";
+// `cleanLogText`が、大きなログの中間を捨てた位置に入れる目印。捨てた範囲の見出しは分からない。
+const LOG_OMITTED = "[... log middle omitted ...]";
+const FAIL_SUFFIX = /\s\[[\d.]+m?s\]$/;
+const FAIL_SUMMARY = /^(\d+) fail$/;
+const ERROR_SUMMARY = /^(\d+) errors?$/;
+const FAIL_PREFIX = "(fail) ";
+
+/**
+ * CIのテストのログが、ロックの整合を調べるテストだけの失敗を示すか。
+ * 次をすべて満たすときだけ`true`にする。判断できないものは`false`で、従来の経路に戻す。
+ * - ログが上限で切られていない。
+ * - `(fail)`の行がある。すべて、`LOCK_INTEGRITY_TESTS`のどれかと合う。
+ *   落ちたテストに、`LOCK_INTEGRITY_ANCHOR`が含まれる。ほかの10件は、ロックが古い以外の原因でも単独で落ちるためである。ファイルの見出しが分かるときは、ファイルと名前の組で、分からないときは名前で合わせる。
+ * - 集計の`N fail`の行が1つあり、`N`が`(fail)`の行の数(重複を除く)と等しい。
+ * - 集計の`N error`の行が無いか、`N`が0である。
+ * ログは外部由来の文字列なので、ここでは成否の判断にだけ使い、どこにも残さない。
+ */
+export function isLockIntegrityOnlyLog(
+  rawLog: string,
+  truncated: boolean,
+): boolean {
+  if (truncated) return false;
+  let file: string | null = null;
+  const failedFileByName = new Map<string, string | null>();
+  const declared: number[] = [];
+  for (const line of cleanLogText(rawLog).split("\n")) {
+    const text = line.trim();
+    if (text === GROUP_END || text === LOG_OMITTED) {
+      file = null;
+      continue;
+    }
+    const header = TEST_FILE_HEADER.exec(text);
+    if (header !== null) {
+      file = header[1] ?? null;
+      continue;
+    }
+    if (text.startsWith(FAIL_PREFIX)) {
+      const name = text.slice(FAIL_PREFIX.length).replace(FAIL_SUFFIX, "");
+      if (!failedFileByName.has(name)) failedFileByName.set(name, file);
+      continue;
+    }
+    const summary = FAIL_SUMMARY.exec(text);
+    if (summary !== null) {
+      declared.push(Number(summary[1]));
+      continue;
+    }
+    const errors = ERROR_SUMMARY.exec(text);
+    if (errors !== null && Number(errors[1]) > 0) return false;
+  }
+  if (failedFileByName.size === 0) return false;
+  if (declared.length !== 1 || declared[0] !== failedFileByName.size) {
+    return false;
+  }
+  const anchorFailed = [...failedFileByName].some(
+    ([name, failedFile]) =>
+      name === LOCK_INTEGRITY_ANCHOR.name &&
+      (failedFile === null || failedFile === LOCK_INTEGRITY_ANCHOR.file),
+  );
+  if (!anchorFailed) return false;
+  for (const [name, failedFile] of failedFileByName) {
+    // ファイルが分からない失敗は、名前だけで照合する。
+    // 大きなログは中間が省かれ、並列の実行の末尾の一覧には、ファイルの見出しが無い。
+    const known = LOCK_INTEGRITY_TESTS.some(
+      (test) =>
+        test.name === name && (failedFile === null || failedFile === test.file),
+    );
+    if (!known) return false;
+  }
+  return true;
+}
 
 /** `sanitizeRunName`が、空の名前に代わりに返す文字列。 */
 const UNNAMED_DISPLAY_NAME = "(unnamed)";

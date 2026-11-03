@@ -85,6 +85,7 @@ import {
   getPr,
   getPrWithoutWait,
   getViewer,
+  getWorkflowJobLog,
   listOpenPullRequestsWithoutWait,
   listPrCommitMessages,
   listPrHeadWorkflowRuns,
@@ -202,6 +203,8 @@ export function buildClaimDeps(
     },
     listJobs: (owner, repo, runId, headSha) =>
       listWorkflowRunJobs(client, owner, repo, runId, headSha),
+    getJobLog: (owner, repo, jobId) =>
+      getWorkflowJobLog(client, owner, repo, jobId),
     budgetExceeded: async () => (await dailyBudgetStatus(config)).exceeded,
     mainCiFailed: (owner, repo) => isLatestMainCiRunFailed(owner, repo),
     countRounds: (owner, repo, prNumber) =>

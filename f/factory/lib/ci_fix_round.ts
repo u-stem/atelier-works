@@ -5,7 +5,11 @@
 // `steps/`は読み込まない。lib同士の依存を一方向に保つため、`steps/`の型は構造的な型で受ける。
 
 import { lstat, readFile } from "node:fs/promises";
-import { type CiFailureClass, classifyCiFailure } from "./ci_fix_classify.ts";
+import {
+  type CiFailureClass,
+  classifyCiFailure,
+  isLockIntegrityOnlyLog,
+} from "./ci_fix_classify.ts";
 import {
   type CiFixChange,
   checkCiFixChanges,
@@ -26,6 +30,7 @@ import type { RunClaudeFailureReason } from "./claude.ts";
 import type { PrCiCheck } from "./db.ts";
 import {
   type GhClient,
+  GitHubRateLimitError,
   getPr,
   getPrFiles,
   getWorkflowJobLog,
@@ -501,19 +506,55 @@ export type CiFailureRead =
       readonly kind: "fixable";
       /** ジョブを読んだ失敗の実行。古い順に最大`CI_ROUND_MAX_RUNS`件。 */
       readonly runs: readonly WorkflowRun[];
-      /** `metadata`以外で失敗したジョブ。`metadata`だけが失敗したときは空である。 */
+      /**
+       * `metadata`以外で失敗したジョブ。
+       * `metadata`だけが失敗したときと、`metadata`以外の失敗がロックの整合のテストだけのときは、空である。
+       */
       readonly jobs: readonly WorkflowRunJob[];
-      /** `metadata`ジョブが失敗した。`wmill-lock.yaml`のhashの再計算で直す。 */
+      /**
+       * 再計算で直す失敗がある。`metadata`ジョブが失敗した場合と、
+       * 失敗したジョブが1つで、そのログがロックの整合のテストだけの失敗を示す場合である。
+       * `wmill-lock.yaml`のhashの再計算で直す。
+       */
       readonly metadataFailed: boolean;
     }
   | { readonly kind: "blocked"; readonly reason: string };
 
 /**
- * PRの状態を確かめ、そのheadの失敗を分類する。ログは読まない。
+ * 失敗したジョブが1つだけのとき、そのログを読み、ロックの整合のテストだけの失敗かを答える。
+ * ログを読めないとき(権限、保存期間、上限による省略)は、`false`を返し、従来の経路に任せる。
+ * 読み取りのレート制限は、再試行で解けるので、そのまま投げる。
+ * ほかの読み取りの失敗は、`failOnReadError`が偽なら`false`にし、真ならそのまま投げる。
+ * 起動の判断は保留へ倒せるので偽にする。修正のステップは、起動の判断と食い違わないよう、真にしてflowの再試行に任せる。
+ */
+export async function isLockIntegrityOnlyFailure(
+  getLog: CiGatherDeps["getLog"],
+  jobs: readonly WorkflowRunJob[],
+  failOnReadError = false,
+): Promise<boolean> {
+  const [only] = jobs;
+  if (jobs.length !== 1 || only === undefined) return false;
+  try {
+    const log = await getLog(only.id);
+    return (
+      log.kind === "ok" &&
+      isLockIntegrityOnlyLog(log.log.reveal(), log.truncated)
+    );
+  } catch (error) {
+    if (error instanceof GitHubRateLimitError || failOnReadError) throw error;
+    return false;
+  }
+}
+
+/**
+ * PRの状態を確かめ、そのheadの失敗を分類する。
  * 次の順に確かめ、満たさなければ、直せないものとして`blocked`を返す。
  * 1. PRが開いていて、headが直す失敗のheadのままである。
  * 2. そのheadの実行のうち、workflowごとの最新で失敗したものがある。
  * 3. 失敗したジョブが、Factoryが自動で直せる種類である(`classifyCiFailure`)。
+ * ログは、`metadata`以外で失敗したジョブが1つのときだけ読む。
+ * そのログがロックの整合のテストだけの失敗を示すときは、`metadata`ジョブの失敗と同じ再計算の回として返す。
+ * ほかのテストやlint、型検査の失敗が混ざるとき、ログを読めないとき、失敗の原因を決められないときは、分類を変えない。
  */
 export async function readCiFailure(
   deps: CiGatherDeps,
@@ -541,6 +582,9 @@ export async function readCiFailure(
   }
   if (verdict.kind === "no_failure") {
     return blocked("no failed job in the failed runs");
+  }
+  if (await isLockIntegrityOnlyFailure(deps.getLog, verdict.jobs, true)) {
+    return { kind: "fixable", runs, jobs: [], metadataFailed: true };
   }
   return {
     kind: "fixable",
@@ -615,9 +659,21 @@ export async function gatherCiFailureInput(
   target: CiGatherTarget,
   extraJobs: readonly CiLogJobInput[] = [],
 ): Promise<CiGatherOutcome> {
-  const failure = await readCiFailure(deps, target);
+  // 整合の判定で読んだログを、収集でもう一度読まないよう、ジョブごとに読み取りを使い回す。
+  const reads = new Map<number, ReturnType<CiGatherDeps["getLog"]>>();
+  const memoized: CiGatherDeps = {
+    ...deps,
+    getLog: (jobId) => {
+      const cached = reads.get(jobId);
+      if (cached !== undefined) return cached;
+      const read = deps.getLog(jobId);
+      reads.set(jobId, read);
+      return read;
+    },
+  };
+  const failure = await readCiFailure(memoized, target);
   if (failure.kind === "blocked") return failure;
-  return gatherCiLogs(deps, target, failure, extraJobs);
+  return gatherCiLogs(memoized, target, failure, extraJobs);
 }
 
 /**

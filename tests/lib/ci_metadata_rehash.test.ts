@@ -11,7 +11,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CiFailureRead } from "../../f/factory/lib/ci_fix_round.ts";
+import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
+import {
+  type CiFailureRead,
+  type CiGatherDeps,
+  readCiFailure,
+} from "../../f/factory/lib/ci_fix_round.ts";
+import { VolatileCiLog } from "../../f/factory/lib/ci_log_support.ts";
 import {
   bytesEqual,
   CI_ROUND_REHASH_STALE_REASON,
@@ -39,6 +45,9 @@ import {
 } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import type { BytesRunner } from "../../f/factory/lib/metadata_git_ports.ts";
 import type { PlanResult } from "../../f/factory/lib/metadata_precheck.ts";
+
+const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
+const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
 
 const ENC = new TextEncoder();
 
@@ -313,6 +322,142 @@ describe("runMetadataRound when the lock is already up to date", () => {
         writeLock: async () => {},
       }),
     ).rejects.toThrow("fetch failed");
+  });
+});
+
+describe("runMetadataRound for a check job that failed only the lock integrity test", () => {
+  const SHA = "a".repeat(40);
+  const TARGET = { owner: "acme", repo: "widgets", prNumber: 12, headSha: SHA };
+  const INTEGRITY_LOG = [
+    `${FIRST_TEST_FILE}:`,
+    `(fail) ${FIRST_TEST_NAME} [1.20ms]`,
+    " 10 pass",
+    " 1 fail",
+  ].join("\n");
+  const MIXED_LOG = [
+    `${FIRST_TEST_FILE}:`,
+    `(fail) ${FIRST_TEST_NAME} [1.20ms]`,
+    "tests/lib/other.test.ts:",
+    "(fail) other > fails [1.20ms]",
+    " 10 pass",
+    " 2 fail",
+  ].join("\n");
+
+  function gather(log: string): CiGatherDeps {
+    return {
+      readPr: async () => ({
+        state: "open",
+        headSha: SHA,
+        headRef: "feature",
+        baseRepoId: 77,
+      }),
+      listRuns: async () => [
+        {
+          id: 500,
+          name: "CI",
+          headSha: SHA,
+          status: "completed",
+          conclusion: "failure",
+          createdAt: new Date("2026-10-13T00:00:00Z"),
+          htmlUrl: "https://github.com/acme/widgets/actions/runs/500",
+          workflowId: 1,
+          event: "pull_request",
+        },
+      ],
+      listJobs: async () => [
+        {
+          id: 700,
+          runId: 500,
+          headSha: SHA,
+          name: "check",
+          status: "completed",
+          conclusion: "failure",
+          steps: [],
+        },
+      ],
+      getLog: async () => ({
+        kind: "ok",
+        log: VolatileCiLog.of(log),
+        truncated: false,
+      }),
+      listPrFiles: async () => [],
+      scan: async () => ({ ok: true, output: "" }),
+    };
+  }
+
+  function round(log: string, plan: PlanResult) {
+    const probe: Probe = { writes: [], plans: 0, rehashes: 0 };
+    const roundDeps: Parameters<typeof runMetadataRound>[0] = {
+      readFailure: () => readCiFailure(gather(log), TARGET),
+      rehash: async () => {
+        probe.rehashes += 1;
+        return rehashMetadataLock({
+          plan: async () => plan,
+          writeLock: async (text) => {
+            probe.writes.push(text);
+          },
+        });
+      },
+    };
+    return { probe, roundDeps };
+  }
+
+  test("rewrites the lock without Claude", async () => {
+    const { roundDeps } = round(INTEGRITY_LOG, OK_PLAN);
+    expect(await runMetadataRound(roundDeps)).toEqual({ kind: "rewritten" });
+  });
+
+  test("writes the lock of the plan", async () => {
+    const { roundDeps, probe } = round(INTEGRITY_LOG, OK_PLAN);
+    await runMetadataRound(roundDeps);
+    expect(probe.writes).toEqual(["new lock\n"]);
+  });
+
+  test("blocks with the up-to-date reason when the rehash changes nothing", async () => {
+    const { roundDeps } = round(INTEGRITY_LOG, {
+      ok: true,
+      newLock: "same\n",
+      changedKeys: [],
+    });
+    expect(await runMetadataRound(roundDeps)).toEqual({
+      kind: "manual",
+      reason: metadataManualReason("lock_up_to_date"),
+    });
+  });
+
+  test("blocks with the kind of the precheck when it fails", async () => {
+    const { roundDeps } = round(INTEGRITY_LOG, {
+      ok: false,
+      reason: "dependency_changed",
+    });
+    expect(await runMetadataRound(roundDeps)).toEqual({
+      kind: "manual",
+      reason: metadataManualReason("dependency_changed"),
+    });
+  });
+
+  test("leaves a mixed failure to Claude without recomputing", async () => {
+    const { roundDeps, probe } = round(MIXED_LOG, OK_PLAN);
+    expect(await runMetadataRound(roundDeps)).toBeNull();
+    expect(probe.rehashes).toBe(0);
+  });
+
+  test("leaves an unreadable log to Claude without recomputing", async () => {
+    const probe: Probe = { writes: [], plans: 0, rehashes: 0 };
+    const base = gather(INTEGRITY_LOG);
+    const result = await runMetadataRound({
+      readFailure: () =>
+        readCiFailure(
+          { ...base, getLog: async () => ({ kind: "log_unavailable" }) },
+          TARGET,
+        ),
+      rehash: async () => {
+        probe.rehashes += 1;
+        return { kind: "rewritten" };
+      },
+    });
+    expect(result).toBeNull();
+    expect(probe.rehashes).toBe(0);
   });
 });
 

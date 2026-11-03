@@ -31,12 +31,12 @@ CIのログはリポジトリへ書ける人が決める外部入力である。
 | --- | --- |
 | `lib/github.ts` | ジョブの一覧とログ本文の取得。IDと応答の照合 |
 | `lib/ci_log_support.ts` | ログの整形と絞り込み。秘密値の検査。揮発する値の型。Claudeの出力文字列の検査 |
-| `lib/ci_fix_classify.ts` | 失敗が、自動で直せる種類かの分類。`metadata`の失敗は、hashの再計算の経路として分ける |
+| `lib/ci_fix_classify.ts` | 失敗が、自動で直せる種類かの分類。`metadata`の失敗は、hashの再計算の経路として分ける。テストのログが、ロックの整合のテストだけの失敗かの判定(`isLockIntegrityOnlyLog`) |
 | `lib/ci_fix_prompt.ts` | CI回のプロンプトと出力のJSON schema |
 | `lib/ci_fix_paths.ts` | Claudeが加えた変更の許可リスト方式の検査 |
 | `lib/ci_fix_pr_base.ts` | PRの基点(baseブランチの先端と、先端とPRのheadのmerge-base)を求める。求められなければ`null`を返す |
 | `lib/ci_fix_round.ts` | 上の部品をつなぐ流れ。PRの状態の確認と分類(`readCiFailure`)、ログから抜粋まで(`gatherCiLogs`)、変更の入力の組み立て、通常の回との違いの判断。`wmill-lock.yaml`だけの変更の形の判定(`isLockOnlyChange`) |
-| `lib/ci_metadata_rehash.ts` | `metadata`だけが落ちた回の再計算の流れ。書き込み、独立した照合(`confirmRehash`)、pushの直前の再確認、固定の理由 |
+| `lib/ci_metadata_rehash.ts` | `metadata`だけが落ちた回と、整合のテストだけが落ちた回の再計算の流れ。書き込み、独立した照合(`confirmRehash`)、pushの直前の再確認、固定の理由 |
 | `lib/metadata_git_ports.ts` | 事前検査が読むポートのgitの実装。baseの先端のcommitの取り込み |
 | `lib/workspace.ts` | 文字列をgitleaksで検査する実行(`runGitleaksOnText`)と、2つのツリーの差分の検査(`runGitleaksOnTreeDiff`)。競合回のgit操作(`mergeBaseIntoWorktree`、`pushMergeCommit`、`listBothSidesChangedPaths`と、検査の入力を読む関数) |
 | `lib/conflict_fix_round.ts` | 競合回の判定と固定の理由。準備の確認(`evaluateConflictRoundPrepareGuard`)とmergeの結果の振り分け(`planConflictPrepare`)。mergeした結果のツリーの検査(`evaluateMergedTree`)と、Claudeの解消の検査(`checkConflictResolution`) |
@@ -217,21 +217,64 @@ commitする変更が無いときの理由は、返信を投稿したとは書�
 
 ### metadataジョブの失敗を直す経路
 
-`metadata`ジョブだけが落ちたCI回は、Claudeを起動せず、`wmill-lock.yaml`のhashの再計算で直す(決定的な経路)。
+次のどちらかのCI回は、Claudeを起動せず、`wmill-lock.yaml`のhashの再計算で直す(決定的な経路)。
+この2つを、再計算の回と呼ぶ。
+
+- `metadata`ジョブだけが落ちた回。
+- `check`などのテストのジョブが、ロックの整合のテストだけで落ちた回。ロックの整合のテストは、`wmill-lock.yaml`が古いと落ちる。
+  全項目のhashを比べるテストのほか、リポジトリのロックをそのまま基準にするテストも落ちる。これらは`LOCK_INTEGRITY_TESTS`に、ファイルとテスト名の組で列挙している。
+
 修正のステップは、日次予算の検査より前に、この経路を試す。費用がかからないためである。
-`metadata`だけが落ちた行は、Claudeを使わないので、起動の判断(claim)も、factory-fixスキルのマーカーを確かめない。
+再計算の回は、Claudeを使わないので、起動の判断(claim)も、factory-fixスキルのマーカーを確かめない。
 修正のステップのマーカーの確認は、この経路より後ろにあるので、この経路はマーカーの確認を経由しない。
 
-`check`などの直せる失敗と`metadata`が同時に落ちたときは、再計算せず、Claudeが先に`check`などを直す。
+テストのジョブが再計算の回に入る条件は、次のすべてを満たすことである(`readCiFailure`)。
+どれか1つでも満たさないときや、判断できないときは、従来の経路(Claudeの回)に戻す。
+
+- `metadata`以外で失敗したジョブが、1つだけである。
+- そのジョブのログを読め、上限で切られていない。
+- ログのテストの失敗が、ロックの整合のテスト(`LOCK_INTEGRITY_TESTS`の11件)だけである。
+  11件は、`tests/lib/`の`metadata_hash.test.ts`、`metadata_git_ports.test.ts`、`metadata_precheck_repo.test.ts`にある。
+  bunの`(fail)`の行が、すべてこのどれかと合うことを確かめる。
+  ファイルの見出しが分かる行は、ファイルと名前の組で合わせる。
+  大きなログは中間が省かれ、並列の実行の末尾の一覧には見出しが無いので、分からない行は名前で合わせる。
+  あわせて、集計の失敗の数が`(fail)`の行の数と等しく、集計にエラーが無いことを確かめる(`isLockIntegrityOnlyLog`)。
+  落ちたテストに、全項目のhashを比べるテスト(`LOCK_INTEGRITY_ANCHOR`)が含まれることも確かめる。
+  ほかの10件は、ロックが古い以外の原因でも単独で落ちるためである。
+
+ログが読めない場合は、権限が無い場合と、保存期間が過ぎた場合である。
+読み取りに失敗したときの扱いは、使う場面で違う。
+修正のステップと、検証と完了の読み直しでは、例外にして投げ、flowの再試行に任せる。起動の判断との食い違いを避けるためである。
+起動の判断では、読み取りの失敗を読めない場合と同じに扱う。ただし、読み取りのrate limitだけは、再試行で解けるので、例外にして投げる。
+ログは、判断にだけ使う。作業項目の理由にも、通知にも、プロンプトにも載せない。
+
+整合のテストに、ほかのテスト、lint、型検査の失敗が混ざる回は、Claudeの回である。
+`mise run check`は、lint、型検査、テストの順に実行し、最初の失敗で止まる。
+そのため、テストの失敗が出ているログは、lintと型検査が通ったことを示す。
+
+`metadata`ジョブが失敗し、同時に整合のテストだけが落ちた回も、再計算の回である。
+`metadata`ジョブと、それ以外の直せる失敗(整合のテスト以外の失敗)が同時に落ちたときは、再計算せず、Claudeが先にそれらを直す。
 Claudeが`f/`のscriptを直すと、hashが再び古くなる。
 先に再計算すると、その後にもう一度再計算が要り、`pr_ci_fix_max_rounds`(既定2)を使い切って`rounds_exhausted`になる。
-Claudeを先にすれば、1回目でClaudeが直し、次のCIで`metadata`だけが落ちて、2回目に再計算で直る。
+Claudeを先にすれば、1回目でClaudeが直す。
+次のCIでは再計算で直す失敗だけが落ち、2回目に再計算で直る。
 混在の回は、通常の`fixable`と同じに、日次予算で保留する。
 予算を使い切った日に、混在の行を予算の免除でclaimすると、巡回のたびにラウンドを消費するためである。
 保留した行は、巡回のたびに読み直すだけで、ラウンドを消費しない。
 
+claimは、ジョブの名前で分類する(`readHeadFailure`)。ログは、分類では読まない。
+`metadata`以外で失敗したジョブが1つの`fixable`の行は、保留の直前に、そのログを読む(`readLockIntegrityOnly`)。
+読むのは、factory-fixスキルのマーカーが無いときか、日次予算を使い切っているときに限る。
+ロックの整合のテストだけの失敗なら、`metadata`だけが落ちた行と同じ扱いにして、保留しない。
+Claudeを使わず、費用がかからないためである。予算を使い切った日でも、再計算で直る。
+予算とマーカーに問題が無い行は、ログを読まずに起動する。修正のステップが、ログを読んで再計算の回かを決める。
+ログの読み取りは、1つの行で最大1回である。
+ログを読めないとき(権限、保存期間、読み取りの失敗)は、通常の失敗のままで、保留する。
+読み取りのrate limitだけは、再試行で解けるので、そのまま投げる。
+修正のステップは、読み取りの失敗も投げる(上の節にある)。
+
 1. `readCiFailure`で、PRが開いていて、headが失敗のheadのままであることと、失敗の分類を確かめる。
-   `metadata`だけが落ちているのでなければ、通常の流れに進む。
+   再計算の回でなければ、通常の流れに進む。
 2. GitHubのAPIでPRのbaseブランチ名とその今の先端のshaを読み、そのcommitをローカルに取り込む(`fetchCommit`)。
    事前検査は、baseの先端の木を読むためである。
    取り込みはshaを指定し、取り込み先を指定しない。
@@ -299,11 +342,12 @@ Claudeの回と再計算の回は、同じ上限を分け合う。
 - 再計算が、再試行しても直らない理由で失敗した(`stop`)。保護パスの違反にはせず、固定の理由を返す。
   一時的な失敗は、この3つに入れず、例外を投げる。
 
-`stop`にするのは、再計算の回(`metadata`だけが落ちた回)に限る。
-Claudeの回で`wmill-lock.yaml`だけが変わったときに、「metadataジョブの失敗を直せない」と案内しないためである。
+`stop`にするのは、再計算の回(`metadata`だけが落ちた回と、整合のテストだけが落ちた回)に限る。
+Claudeの回で`wmill-lock.yaml`だけが変わったときに、「ロックの失敗を直せない」と案内しないためである。
 Claudeの回では、`deny`にして、保護パスの違反として拒否する。
 回の種類は、検証と完了のステップが、PRのheadのCIの実行から読み直して決める(`rehashRoundProbe`)。
 修正のステップの出力を信用しないためである。読み直すのは、固定の理由で直せないとわかったときだけである。
+失敗したジョブが1つのときは、読み直しで、そのジョブのログも読む。
 
 - 検証のステップは、この形が確かめられたとき、検査コマンドを実行しない。
   hashだけを書き換えた変更は、検査コマンドが確かめるコードを含まず、対象リポジトリのコードを実行する危険だけが残るためである。
@@ -519,7 +563,7 @@ stepの戻り値に混ざると、黙って記録されず、そのstepが失敗
 
 | 結果 | 条件 |
 | --- | --- |
-| `fixable` | 失敗したジョブがすべて、Factoryが自動で直せる種類。`metadata`以外で失敗したジョブ(`jobs`)と、`metadata`の失敗の有無(`metadataFailed`)を返す |
+| `fixable` | 失敗したジョブがすべて、Factoryが自動で直せる種類。`metadata`以外で失敗したジョブ(`jobs`)と、`metadata`の失敗の有無(`metadataFailed`)を返す。ログの読み取り(`readCiFailure`)が、整合のテストだけの失敗と判断した回は、`jobs`が空で`metadataFailed`が真になる |
 | `unfixable_job` | 名前が空で、種類を決められない失敗がある |
 | `other_conclusion` | `failure`以外の結論。`cancelled`、`timed_out`、`startup_failure`、`action_required`、`stale`、`unknown` |
 | `no_failure` | 失敗したジョブが無い |
@@ -528,7 +572,18 @@ stepの戻り値に混ざると、黙って記録されず、そのstepが失敗
 CI回のClaudeには、シェルもロックファイルを書く権限も無いためである。
 `metadata`だけが失敗したときは、`jobs`が空の`fixable`になる。ログは読まず、Claudeも起動しない。
 `check`などと同時に失敗したときは、`jobs`に`check`などだけが入り、`metadataFailed`が真になる。
-この混在の回は、Claudeが先に`check`などを直し、再計算は、`metadata`だけが落ちた回に行う。
+この混在の回は、Claudeが先に`check`などを直し、再計算は、再計算で直す失敗だけが落ちた回に行う。
+`classifyCiFailure`は、ジョブの名前と結論だけを見る純関数で、ログを読まない。
+`check`などの失敗が、ロックの整合のテストだけかは、`readCiFailure`が、失敗したジョブが1つのときに限りログを読んで決める(`isLockIntegrityOnlyLog`)。
+整合のテストだけと決めたときは、`metadata`だけが失敗したときと同じ形(`jobs`が空で`metadataFailed`が真)で返す。
+決められないときは、分類を変えない。
+次のいずれかである。
+
+- ログを読めない
+- ログが上限で切れている
+- ほかのテストの失敗が混ざる
+- ログの形を読み取れない
+
 名前は正規化(互換文字を畳み、小文字にする)して比べる。
 複数のジョブが当たるときは、`unfixable_job`、`other_conclusion`、`fixable`の順に優先する。
 直せない失敗が混ざったまま一部だけを直しても、CIは通らないためである。
@@ -1139,7 +1194,7 @@ hashの再計算をCI回のflowへ配線する仕様は、次のとおりであ�
 流れは[metadataジョブの失敗を直す経路](#metadataジョブの失敗を直す経路)に書く。
 
 - artifactを経由しない再計算を、artifactの適用の代わりに、先に試す。
-  `metadata`ジョブが落ちたCI回は、修正のステップがまず再計算を試す。
+  `metadata`ジョブが落ちたCI回と、整合のテストだけが落ちたCI回は、修正のステップがまず再計算を試す。
   再計算は`schema`を書かないので、`main`の引数が変わるPRは、事前検査が人の手に回す。
 - ポートの実装は、`metadata_git_ports.ts`にある。
   木の一覧は`git ls-tree`、ファイルは`git cat-file blob`、祖先の判定は`git merge-base --is-ancestor`である。
@@ -1226,6 +1281,12 @@ hashの再計算をCI回のflowへ配線する仕様は、次のとおりであ�
   再確認の基準は、`merge-base(baseの先端, head)`ではなくbaseの先端なので、mainが進むほど人の手に回る頻度が増える。
 - 直せる失敗と`metadata`が同時に落ちた回では、Claudeを起動する前に事前検査を試さない。
   Claudeが`f/`を触るかは、起動の前には決められないためである。
+  整合のテストに、ほかのテストの失敗が混ざる回も同じである。
+- 整合のテストの判定は、bunのログの形(`(fail)`の行、ファイルの見出し、`N fail`の集計)に依存する。
+  CIの並列の実行では、見出しは`##[group]<パス>:`の形である。
+  形が変わると、判定は偽になり、従来の経路に戻る。
+  見出しの無い行は名前だけで照合するので、別のファイルに同じ名前のテストがあると区別できない。
+  テストの名前を変えたときも同じで、`tests/lib/ci_fix_classify.test.ts`が、名前がテストのファイルに残ることを確かめる。
 - `lock_up_to_date`で止めた回の、失敗したジョブを自動では再実行しない。
   Windmillの起動やログインで落ちた実行のやり直しには、ActionsのPATの書き込み権限が要るためである。
 

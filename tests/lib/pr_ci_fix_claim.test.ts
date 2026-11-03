@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
+import { VolatileCiLog } from "../../f/factory/lib/ci_log_support.ts";
 import type {
   PrCommitMessages,
   PullRequest,
+  WorkflowJobLogResult,
 } from "../../f/factory/lib/github.ts";
 import type { WorkflowRun } from "../../f/factory/lib/main_ci_support.ts";
 import {
@@ -11,6 +14,8 @@ import {
   type FixClaimReaders,
   hasFactoryTrailer,
   LAUNCH_FAILURE_ALLOWANCE,
+  readHeadFailure,
+  readLockIntegrityOnly,
   type WorkerEnvHoldReason,
 } from "../../f/factory/lib/pr_ci_fix_claim.ts";
 import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
@@ -58,6 +63,8 @@ type Setup = {
   readonly hasSkillMarker?: boolean;
   readonly classification?: Awaited<ReturnType<FixClaimReaders["classify"]>>;
   readonly budgetExceeded?: boolean;
+  /** `lockIntegrityOnly`の結果。省略は、整合のテストだけの失敗ではないこと。 */
+  readonly lockIntegrityOnly?: boolean;
   readonly mainCiFailed?: boolean;
   readonly rounds?: number;
   /** 検査を動かすworkerの環境が前提を満たさない保留の理由。満たすときは省く。 */
@@ -94,6 +101,7 @@ function readers(setup: Setup = {}): {
         events.push("classify");
         return setup.classification ?? "fixable";
       },
+      lockIntegrityOnly: track("lock_log", setup.lockIntegrityOnly ?? false),
       budgetExceeded: track("budget", setup.budgetExceeded ?? false),
       mainCiFailed: track("main_ci", setup.mainCiFailed ?? false),
       countRounds: track("rounds", setup.rounds ?? 0),
@@ -340,6 +348,64 @@ describe("decideFixClaim", () => {
     const { decision, events } = decide({ classification: "metadata_only" });
     await decision;
     expect(events.includes("budget")).toBe(false);
+  });
+
+  test("claims a lock-integrity-only failure even when the daily budget is used up", async () => {
+    const { decision } = decide({
+      budgetExceeded: true,
+      lockIntegrityOnly: true,
+    });
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("claims a lock-integrity-only failure even when the skill marker is missing", async () => {
+    const { decision } = decide({
+      hasSkillMarker: false,
+      lockIntegrityOnly: true,
+    });
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("holds a failure of another test when the daily budget is used up", async () => {
+    const { decision } = decide({
+      budgetExceeded: true,
+      lockIntegrityOnly: false,
+    });
+    expect(await decision).toEqual({ kind: "hold", reason: "budget_exceeded" });
+  });
+
+  test("does not read the log while the daily budget and the skill marker allow the launch", async () => {
+    const { decision, events } = decide({ lockIntegrityOnly: true });
+    await decision;
+    expect(events.includes("lock_log")).toBe(false);
+  });
+
+  test("reads the log at most once for a row held by both the marker and the budget", async () => {
+    const { decision, events } = decide({
+      hasSkillMarker: false,
+      budgetExceeded: true,
+      lockIntegrityOnly: false,
+    });
+    await decision;
+    expect(events.filter((name) => name === "lock_log").length).toBe(1);
+  });
+
+  test("does not read the log of a metadata-only failure", async () => {
+    const { decision, events } = decide({
+      classification: "metadata_only",
+      budgetExceeded: true,
+    });
+    await decision;
+    expect(events.includes("lock_log")).toBe(false);
+  });
+
+  test("does not read the log of an unfixable failure", async () => {
+    const { decision, events } = decide({
+      classification: "unfixable_job",
+      hasSkillMarker: false,
+    });
+    await decision;
+    expect(events.includes("lock_log")).toBe(false);
   });
 
   test("holds a mixed failure when the daily budget is used up", async () => {
@@ -696,6 +762,94 @@ function job(name: string, conclusion: string | null, runId = 7) {
     steps: [],
   };
 }
+
+describe("readHeadFailure", () => {
+  test("returns the failed jobs next to a fixable class", async () => {
+    const head = await readHeadFailure([run()], async () => [
+      job("check", "failure"),
+    ]);
+    expect({ kind: head.kind, names: head.jobs.map((j) => j.name) }).toEqual({
+      kind: "fixable",
+      names: ["check"],
+    });
+  });
+
+  test("returns no jobs for a metadata-only failure", async () => {
+    const head = await readHeadFailure([run()], async () => [
+      job("metadata", "failure"),
+    ]);
+    expect({ kind: head.kind, jobs: head.jobs }).toEqual({
+      kind: "metadata_only",
+      jobs: [],
+    });
+  });
+
+  test("returns no jobs for an unfixable failure", async () => {
+    const head = await readHeadFailure([run()], async () => [
+      job("", "failure"),
+    ]);
+    expect(head.jobs).toEqual([]);
+  });
+});
+
+describe("readLockIntegrityOnly", () => {
+  const first = LOCK_INTEGRITY_TESTS[0];
+  const integrityLog = [
+    `${first?.file ?? ""}:`,
+    `(fail) ${first?.name ?? ""} [1.00ms]`,
+    " 1 fail",
+  ].join("\n");
+  const otherLog = [
+    "tests/lib/other.test.ts:",
+    "(fail) other > fails [1.00ms]",
+    " 1 fail",
+  ].join("\n");
+  const logOf = (text: string) => async (): Promise<WorkflowJobLogResult> => ({
+    kind: "ok",
+    log: VolatileCiLog.of(text),
+    truncated: false,
+  });
+
+  test("is true for a check job that failed only the lock integrity tests", async () => {
+    expect(
+      await readLockIntegrityOnly(logOf(integrityLog), [
+        job("check", "failure"),
+      ]),
+    ).toBe(true);
+  });
+
+  test("is false for a check job that failed another test", async () => {
+    expect(
+      await readLockIntegrityOnly(logOf(otherLog), [job("check", "failure")]),
+    ).toBe(false);
+  });
+
+  test("is false when the log is unavailable", async () => {
+    expect(
+      await readLockIntegrityOnly(
+        async () => ({ kind: "log_unavailable" }),
+        [job("check", "failure")],
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when reading the log fails", async () => {
+    expect(
+      await readLockIntegrityOnly(async () => {
+        throw new Error("HTTP 500");
+      }, [job("check", "failure")]),
+    ).toBe(false);
+  });
+
+  test("does not read the log of two failed jobs", async () => {
+    let reads = 0;
+    await readLockIntegrityOnly(async () => {
+      reads += 1;
+      return { kind: "log_unavailable" };
+    }, [job("check", "failure"), job("lint", "failure")]);
+    expect(reads).toBe(0);
+  });
+});
 
 describe("classifyHeadFailure", () => {
   test("reports no failure when no run failed", async () => {

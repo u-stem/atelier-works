@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
 import {
   CI_FIX_SKILL_MARKER,
   CI_ROUND_MAX_RUNS,
@@ -25,6 +26,7 @@ import {
   isCiRound,
   localCheckJobs,
   nothingToCommitReason,
+  readCiFailure,
   removeIgnoredFilesIfPointerIntact,
   requireCiRoundHeadSha,
   runCiFixApply,
@@ -35,12 +37,16 @@ import {
   VolatileCiLog,
   VolatileCiPrompt,
 } from "../../f/factory/lib/ci_log_support.ts";
-import type {
-  WorkflowJobLogResult,
-  WorkflowRunJob,
+import {
+  GitHubRateLimitError,
+  type WorkflowJobLogResult,
+  type WorkflowRunJob,
 } from "../../f/factory/lib/github.ts";
 import type { WorkflowRun } from "../../f/factory/lib/main_ci_support.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
+
+const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
+const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
 
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
@@ -442,7 +448,208 @@ describe("classifyFailedRuns", () => {
   });
 });
 
+const INTEGRITY_TEST_NAME = FIRST_TEST_NAME;
+
+function bunFailureLog(failures: readonly [file: string, name: string][]) {
+  const lines: string[] = [];
+  for (const [file, name] of failures) {
+    lines.push(`${file}:`, `(fail) ${name} [1.20ms]`);
+  }
+  lines.push(" 10 pass", ` ${failures.length} fail`);
+  return lines.join("\n");
+}
+
+const INTEGRITY_LOG = bunFailureLog([[FIRST_TEST_FILE, INTEGRITY_TEST_NAME]]);
+
+describe("readCiFailure", () => {
+  test("treats a check job that failed only the lock integrity test as a rehash round", async () => {
+    const { deps } = gatherDeps({ getLog: async () => okLog(INTEGRITY_LOG) });
+    const result = await readCiFailure(deps, TARGET);
+    expect(
+      result.kind === "fixable"
+        ? { jobs: result.jobs, metadataFailed: result.metadataFailed }
+        : null,
+    ).toEqual({ jobs: [], metadataFailed: true });
+  });
+
+  test("keeps the failed run in the rehash round", async () => {
+    const { deps } = gatherDeps({ getLog: async () => okLog(INTEGRITY_LOG) });
+    const result = await readCiFailure(deps, TARGET);
+    expect(
+      result.kind === "fixable" ? result.runs.map((entry) => entry.id) : null,
+    ).toEqual([500]);
+  });
+
+  test("reads the log of the only failed job", async () => {
+    const { deps, calls } = gatherDeps({
+      getLog: async (jobId) => {
+        calls.logs.push(jobId);
+        return okLog(INTEGRITY_LOG);
+      },
+    });
+    await readCiFailure(deps, TARGET);
+    expect(calls.logs).toEqual([700]);
+  });
+
+  test("treats a metadata failure next to an integrity-only check failure as a rehash round", async () => {
+    const { deps } = gatherDeps({
+      listJobs: async () => [
+        job({ id: 1, name: "metadata" }),
+        job({ id: 2, name: "check" }),
+      ],
+      getLog: async () => okLog(INTEGRITY_LOG),
+    });
+    const result = await readCiFailure(deps, TARGET);
+    expect(
+      result.kind === "fixable"
+        ? { jobs: result.jobs, metadataFailed: result.metadataFailed }
+        : null,
+    ).toEqual({ jobs: [], metadataFailed: true });
+  });
+
+  test("keeps the check job when another test failed with the integrity test", async () => {
+    const { deps } = gatherDeps({
+      getLog: async () =>
+        okLog(
+          bunFailureLog([
+            [FIRST_TEST_FILE, INTEGRITY_TEST_NAME],
+            ["tests/lib/other.test.ts", "other > fails"],
+          ]),
+        ),
+    });
+    const result = await readCiFailure(deps, TARGET);
+    expect(
+      result.kind === "fixable"
+        ? { jobs: result.jobs.length, metadataFailed: result.metadataFailed }
+        : null,
+    ).toEqual({ jobs: 1, metadataFailed: false });
+  });
+
+  test("keeps the check job when the log shows a lint failure", async () => {
+    const { deps } = gatherDeps();
+    const result = await readCiFailure(deps, TARGET);
+    expect(result.kind === "fixable" ? result.jobs.length : null).toBe(1);
+  });
+
+  test("keeps the check job when the log was truncated", async () => {
+    const { deps } = gatherDeps({
+      getLog: async () => ({
+        kind: "ok",
+        log: VolatileCiLog.of(INTEGRITY_LOG),
+        truncated: true,
+      }),
+    });
+    const result = await readCiFailure(deps, TARGET);
+    expect(result.kind === "fixable" ? result.metadataFailed : null).toBe(
+      false,
+    );
+  });
+
+  test("keeps the check job when the token cannot read the log", async () => {
+    const { deps } = gatherDeps({
+      getLog: async () => ({ kind: "forbidden" }),
+    });
+    const result = await readCiFailure(deps, TARGET);
+    expect(result.kind === "fixable" ? result.jobs.length : null).toBe(1);
+  });
+
+  test("keeps the check job when the log is no longer available", async () => {
+    const { deps } = gatherDeps({
+      getLog: async () => ({ kind: "log_unavailable" }),
+    });
+    const result = await readCiFailure(deps, TARGET);
+    expect(result.kind === "fixable" ? result.jobs.length : null).toBe(1);
+  });
+
+  test("throws when reading the log fails, so the flow retries", async () => {
+    const { deps } = gatherDeps({
+      getLog: async () => {
+        throw new Error("GET workflow job log failed with HTTP 500");
+      },
+    });
+    await expect(readCiFailure(deps, TARGET)).rejects.toThrow("HTTP 500");
+  });
+
+  test("reads the log of a failed check job once when the gather follows the read", async () => {
+    let reads = 0;
+    const { deps } = gatherDeps({
+      getLog: async () => {
+        reads += 1;
+        return okLog("##[error]lint failed in a.ts");
+      },
+    });
+    await gatherCiFailureInput(deps, TARGET);
+    expect(reads).toBe(1);
+  });
+
+  test("passes on a rate limit while reading the log", async () => {
+    const { deps } = gatherDeps({
+      getLog: async () => {
+        throw new GitHubRateLimitError("GET logs", 1000, true);
+      },
+    });
+    await expect(readCiFailure(deps, TARGET)).rejects.toBeInstanceOf(
+      GitHubRateLimitError,
+    );
+  });
+
+  test("does not read a log when two jobs failed", async () => {
+    const { deps, calls } = gatherDeps({
+      listJobs: async () => [
+        job({ id: 1, name: "check" }),
+        job({ id: 2, name: "test-db" }),
+      ],
+      getLog: async (jobId) => {
+        calls.logs.push(jobId);
+        return okLog(INTEGRITY_LOG);
+      },
+    });
+    await readCiFailure(deps, TARGET);
+    expect(calls.logs).toEqual([]);
+  });
+
+  test("does not read a log when only the metadata job failed", async () => {
+    const { deps, calls } = gatherDeps({
+      listJobs: async () => [job({ name: "metadata" })],
+    });
+    await readCiFailure(deps, TARGET);
+    expect(calls.logs).toEqual([]);
+  });
+
+  test("keeps the metadata-only classification", async () => {
+    const { deps } = gatherDeps({
+      listJobs: async () => [job({ name: "metadata" })],
+    });
+    const result = await readCiFailure(deps, TARGET);
+    expect(
+      result.kind === "fixable"
+        ? { jobs: result.jobs, metadataFailed: result.metadataFailed }
+        : null,
+    ).toEqual({ jobs: [], metadataFailed: true });
+  });
+
+  test("blocks a closed pull request before reading a log", async () => {
+    const { deps, calls } = gatherDeps({
+      readPr: async () => ({
+        state: "closed",
+        headSha: SHA,
+        headRef: "feature",
+        baseRepoId: 77,
+      }),
+    });
+    await readCiFailure(deps, TARGET);
+    expect(calls.logs).toEqual([]);
+  });
+});
+
 describe("gatherCiFailureInput", () => {
+  test("blocks an integrity-only check failure without a job to read", async () => {
+    const { deps } = gatherDeps({ getLog: async () => okLog(INTEGRITY_LOG) });
+    expect(blockedReason(await gatherCiFailureInput(deps, TARGET))).toBe(
+      "ci round: no failed job to read the log of",
+    );
+  });
+
   test("returns the sanitized excerpt of the failed job", async () => {
     const { deps } = gatherDeps();
     const outcome = await gatherCiFailureInput(deps, TARGET);

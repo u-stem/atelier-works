@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
+import { VolatileCiLog } from "../../f/factory/lib/ci_log_support.ts";
 import type {
   ClaimPrCiCheckInput,
   NewPrCiCheck,
@@ -2943,6 +2945,8 @@ type ClaimSetup = {
   readonly commits?: PrCommitMessages;
   readonly marker?: boolean;
   readonly jobs?: WorkflowRunJob[];
+  /** 失敗したジョブのログ。省略は、ログを読めないこと。 */
+  readonly jobLog?: string;
   readonly budgetExceeded?: boolean;
   readonly mainCiFailed?: boolean;
   readonly rounds?: number;
@@ -3069,6 +3073,12 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
     listJobs: async () => {
       count("jobs");
       return setup.jobs ?? [workflowJob("check", "failure")];
+    },
+    getJobLog: async () => {
+      count("job_log");
+      return setup.jobLog === undefined
+        ? { kind: "log_unavailable" }
+        : { kind: "ok", log: VolatileCiLog.of(setup.jobLog), truncated: false };
     },
     budgetExceeded: async () => {
       count("budget");
@@ -3822,6 +3832,50 @@ describe("holding a row", () => {
     const c = claimHarness({
       budgetExceeded: true,
       candidates: [candidateRow({ fix_hold_reason: "main_ci_failed" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "budget_exceeded" }]);
+  });
+
+  test("claims a failure of only the lock integrity tests even when the daily budget is used up", async () => {
+    const first = LOCK_INTEGRITY_TESTS[0];
+    const c = claimHarness({
+      budgetExceeded: true,
+      jobLog: [
+        `${first?.file ?? ""}:`,
+        `(fail) ${first?.name ?? ""} [1.00ms]`,
+        " 1 fail",
+      ].join("\n"),
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect({
+      claims: c.claims.length,
+      logReads: c.reads.job_log ?? 0,
+    }).toEqual({
+      claims: 1,
+      logReads: 1,
+    });
+  });
+
+  test("does not read the job log while the daily budget and the skill marker allow the launch", async () => {
+    const c = claimHarness({
+      jobLog: "(fail) other > fails [1.00ms]\n 1 fail",
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.reads.job_log ?? 0).toBe(0);
+  });
+
+  test("holds a failure with another failed test as budget_exceeded when the daily budget is used up", async () => {
+    const c = claimHarness({
+      budgetExceeded: true,
+      jobLog: [
+        "tests/lib/other.test.ts:",
+        "(fail) other > fails [1.00ms]",
+        " 1 fail",
+      ].join("\n"),
     });
     const h = harness(claimSetup(c));
     await runPrCiWatch(h.deps);
