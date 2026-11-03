@@ -461,6 +461,18 @@ describe("the rework exits", () => {
     expect(plain).toEqual([]);
   });
 
+  test("a step that starts design without a rework edge reports no design gap", () => {
+    const plain = LAUNCH_EDGES.filter(
+      (edge) =>
+        edge.kind === "script" &&
+        edge.from.startsWith("steps/") &&
+        edge.to === "design" &&
+        !REWORK_LAUNCH_EDGES.some((other) => other.from === edge.from),
+    ).filter((edge) => sourceOf(edge.from).includes("design_gap"));
+
+    expect(plain).toEqual([]);
+  });
+
   test("the data draws each rework edge as a rework exit", () => {
     const missing = REWORK_LAUNCH_EDGES.filter(
       (edge) =>
