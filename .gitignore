@@ -32,3 +32,6 @@ console/test-results/
 
 # Playwright MCPがリポジトリ直下に作る作業ディレクトリ
 .playwright-mcp/
+
+# bun test --coverageが作るlcov。検査が読むので、コミットしない
+coverage/
