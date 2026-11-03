@@ -178,6 +178,15 @@ describe("the result of a started flow", () => {
 });
 
 describe("the notice of a submit", () => {
+  test.each([
+    { kind: "refused", message: "断りの文" },
+    { kind: "failed", message: "失敗の文" },
+    { kind: "unknown", message: "不明の文" },
+    { kind: "submitted", flowJobId: JOB, auditFailed: true },
+  ] as const)("announces %j as an alert", (attempt) => {
+    expect(notice(attempt)).toContain('role="alert"');
+  });
+
   test("draws the fixed sentence of a refusal", () => {
     expect(notice({ kind: "refused", message: "断りの文" })).toContain(
       "断りの文",

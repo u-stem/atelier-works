@@ -129,6 +129,11 @@ export type ClaudeRunResult = {
    * スキーマに適合する。
    */
   readonly structuredOutput: unknown;
+  /**
+   * 標準出力のJSONのトップレベルのキーを、昇順に並べたもの。`parseClaudeJson`が必ず付ける。
+   * 実行の結果を手で組むテストが、この項目を持たなくてもよいよう、省略できる型にしている。
+   */
+  readonly topLevelKeys?: readonly string[];
 };
 
 type RawClaudeUsage = {
@@ -266,6 +271,7 @@ export function parseClaudeJson(stdout: string): ClaudeRunResult {
     },
     modelUsage: parseModelUsage(Reflect.get(parsed, "modelUsage")),
     structuredOutput: parsed.structured_output,
+    topLevelKeys: Object.keys(parsed).sort(),
   };
 }
 

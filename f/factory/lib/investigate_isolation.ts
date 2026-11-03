@@ -12,6 +12,7 @@ import {
   buildReadDenySettings,
   READ_DENY_BASE_PATHS,
 } from "./claude_read_deny.ts";
+import type { ProbeObservations } from "./investigate_isolation_observe.ts";
 import type { CommandRunner } from "./workspace.ts";
 
 /** 隔離に効くClaudeの引数。呼び出し側は変えられない。 */
@@ -84,6 +85,20 @@ export type ProbeResult = {
   readonly probeJudgeVersion: number;
   readonly pairs: readonly ProbePair[];
   readonly availability?: "full" | "degraded";
+};
+
+/**
+ * 観測だけを行う測定のジョブ結果。`ProbeResult`とは別の型で、`pairs`を持たない。
+ * `passed`は常に`false`、`probeJudgeVersion`は常に0で、関門は必ず閉じたままになる。
+ */
+export type ProbeObservationResult = {
+  readonly observationOnly: true;
+  readonly passed: false;
+  readonly claudeVersion: string;
+  readonly isolationFingerprint: string;
+  readonly argvShapeHash: string;
+  readonly probeJudgeVersion: 0;
+  readonly observations: ProbeObservations;
 };
 
 /** `buildIsolatedRunOptions`に渡す、呼び出しごとに変わる値。隔離に効く項目は含めない。 */

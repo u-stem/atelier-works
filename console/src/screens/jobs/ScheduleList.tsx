@@ -16,6 +16,7 @@ import {
   FLOWS_DATA,
   type FlowsData,
   flowDiagramPath,
+  originDiagramPath,
   scheduleFlowsOf,
 } from "../../lib/flowsData.ts";
 import {
@@ -55,8 +56,9 @@ const FLOW_LINK_CLASS =
   "rounded-sm font-medium text-primary underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
- * scheduleの1行の説明と、起動するflowの図へのリンク。
+ * scheduleの1行の説明と、起動するflowの名前と、起動の図へのリンク。
  * データに無いscheduleは、何も出さない。flowを起動しないscheduleは、説明だけを出す。
+ * flowの名前は文字で並べ、図へのリンクは1つにする。flowごとの図へは、起動の図から移る。
  * 行全体はリンクにしない。止める操作と入れ子にならず、キーボードの順序を保つためである。
  */
 function ScheduleFlows({
@@ -68,24 +70,25 @@ function ScheduleFlows({
 }) {
   const info = scheduleFlowsOf(flows, path);
   if (info === null) return null;
-  const links = info.flows.flatMap((name) => {
-    const to = flowDiagramPath(name, flows);
-    return to === null ? [] : [{ name, to }];
-  });
+  const names = info.flows.filter(
+    (name) => flowDiagramPath(name, flows) !== null,
+  );
+  const to = originDiagramPath(info.name, flows);
   return (
     <>
       <p className="text-small break-words">{safeText(info.summary)}</p>
-      {links.length === 0 ? null : (
+      {names.length === 0 || to === null ? null : (
         <p className="flex flex-wrap items-center gap-x-2 text-small">
-          <span className="text-muted-foreground">flowの図:</span>
-          {links.map((link, index) => (
-            <span key={link.name}>
-              {index === 0 ? "" : "/ "}
-              <Link to={link.to} state={BACK} className={FLOW_LINK_CLASS}>
-                {safeText(link.name)}
-              </Link>
-            </span>
-          ))}
+          <span className="text-muted-foreground">起動するflow:</span>
+          <span>{names.map((name) => safeText(name)).join(" / ")}</span>
+          <Link
+            to={to}
+            state={BACK}
+            aria-label={`${safeText(info.name)}の起動の図を開く`}
+            className={FLOW_LINK_CLASS}
+          >
+            起動の図を開く
+          </Link>
         </p>
       )}
     </>

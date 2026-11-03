@@ -6,6 +6,7 @@ import {
   itemRequirementsCrumbs,
   itemsBackState,
   jobDetailCrumbs,
+  originDiagramCrumbs,
   parseItemsBack,
 } from "./breadcrumbs.ts";
 
@@ -155,6 +156,22 @@ describe("flowDiagramCrumbs", () => {
     expect(flowDiagramCrumbs("pr_fix", "/jobs?tab=schedules")).toEqual([
       { label: "ジョブ", to: "/jobs?tab=schedules" },
       { label: "pr_fixの図" },
+    ]);
+  });
+});
+
+describe("originDiagramCrumbs", () => {
+  test("goes back to the job list", () => {
+    expect(originDiagramCrumbs("poll_prs", null)).toEqual([
+      { label: "ジョブ", to: "/jobs" },
+      { label: "poll_prsの起動の図" },
+    ]);
+  });
+
+  test("goes back to the tab it came from", () => {
+    expect(originDiagramCrumbs("self_update", "/jobs?tab=schedules")).toEqual([
+      { label: "ジョブ", to: "/jobs?tab=schedules" },
+      { label: "self_updateの起動の図" },
     ]);
   });
 });

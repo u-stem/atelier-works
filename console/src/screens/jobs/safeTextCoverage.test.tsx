@@ -13,11 +13,14 @@ import {
   type JobDetailView,
   type JobSummaryView,
   jobDetailQueryKey,
+  type SchedulesSnapshotView,
   type ScheduleViewData,
+  schedulesQueryKey,
 } from "../../api/jobsQueries.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
 import { flowDiagramModel } from "../../lib/flowDiagram.ts";
 import type { FlowDefinition, FlowsData } from "../../lib/flowsData.ts";
+import { originGraphModel } from "../../lib/originGraph.ts";
 import { ItemFlowProgressView } from "../items/detail/ItemFlowProgress.tsx";
 import { ConfigList } from "../system/ConfigSection.tsx";
 import { FlowDiagramFrame } from "./FlowDiagram.tsx";
@@ -31,6 +34,8 @@ import {
 } from "./JobDetailParts.tsx";
 import { JobDetailScreen } from "./JobDetailScreen.tsx";
 import { JobList, JobStateBadge } from "./JobRows.tsx";
+import { OriginDiagramView } from "./OriginDiagram.tsx";
+import { OriginScreenView } from "./OriginScreen.tsx";
 import { ScheduleList } from "./ScheduleList.tsx";
 
 /**
@@ -176,6 +181,84 @@ const SCHEDULE_FLOWS: FlowsData = {
 };
 
 const FLOWS: FlowsData = { flows: [FLOW], schedules: [] };
+
+/**
+ * 起動の図の材料。名前は安全な形にし、そのほかの文字列にすべて`BAD`を入れる。
+ * `pipeline`は承認で`design`を起動し、却下で自分に戻る。`design`は`pipeline`へ差し戻す。
+ */
+const ORIGIN_FLOWS: FlowsData = {
+  flows: [
+    {
+      ...FLOW,
+      entries: [],
+      exits: [
+        { flow: "design", step: BAD, via: "approve" },
+        { flow: "pipeline", step: BAD, via: "reject" },
+      ],
+    },
+    {
+      ...FLOW,
+      name: "design",
+      entries: [],
+      exits: [{ flow: "pipeline", step: BAD, via: "rework" }],
+    },
+  ],
+  schedules: [
+    { name: "single_schedule", summary: BAD, flows: ["pipeline"] },
+    { name: "double_schedule", summary: BAD, flows: ["pipeline", "design"] },
+    { name: "empty_schedule", summary: BAD, flows: [] },
+  ],
+};
+
+/** 起点の箱が読む、scheduleの取得の結果。文字列の項目のすべてに`BAD`を入れる。 */
+const ORIGIN_SNAPSHOT: SchedulesSnapshotView = {
+  schedules: ["single_schedule", "double_schedule", "empty_schedule"].map(
+    (name) => ({
+      ...SCHEDULE,
+      path: `f/factory/${name}`,
+      script_path: `f/factory/${name}`,
+      paused_until: "2099-10-26T05:00:00.000Z",
+    }),
+  ),
+  missing_in_workspace: [BAD],
+  truncated: false,
+};
+
+const EVERY_FLOW_OPEN: ReadonlySet<string> = new Set(["pipeline", "design"]);
+
+function originModelOf(name: string) {
+  const model = originGraphModel(ORIGIN_FLOWS, name);
+  if (model === null) throw new Error(`no schedule ${name}`);
+  return model;
+}
+
+/** 起動の図のすべての文字列に`BAD`を入れ、すべてのflowを開いて描く。 */
+function originDiagram(width: number): ReactElement {
+  return (
+    <OriginDiagramView
+      model={originModelOf("double_schedule")}
+      run={{ kind: "ready", lastRun: "failure", marks: [BAD] }}
+      width={width}
+      expanded={EVERY_FLOW_OPEN}
+      onToggle={() => {}}
+    />
+  );
+}
+
+/** 起動の図の画面。キャッシュにscheduleの取得の結果があるので、起点の箱の材料も描く。 */
+function originScreen(
+  name: string,
+  data: FlowsData | null,
+  width = 1200,
+): ReactElement {
+  const client = new QueryClient();
+  client.setQueryData(schedulesQueryKey, ORIGIN_SNAPSHOT);
+  return (
+    <QueryClientProvider client={client}>
+      <OriginScreenView name={name} data={data} back={null} width={width} />
+    </QueryClientProvider>
+  );
+}
 
 /** 定義のステップと、定義に無いステップの両方に、見えない文字を入れたジョブのステップ。 */
 const FLOW_STEPS = [
@@ -390,6 +473,39 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
       />
     ),
   ],
+  ["the origin diagram with every flow open", () => originDiagram(1200)],
+  [
+    "the origin diagram in the scroll frame with every flow open",
+    () => originDiagram(900),
+  ],
+  [
+    "the origin diagram in the list with every flow open",
+    () => originDiagram(500),
+  ],
+  [
+    "the origin screen of a schedule that launches one flow",
+    () => originScreen("single_schedule", ORIGIN_FLOWS),
+  ],
+  [
+    "the origin screen of a schedule that launches one flow in the list",
+    () => originScreen("single_schedule", ORIGIN_FLOWS, 500),
+  ],
+  [
+    "the origin screen of a schedule that launches two flows",
+    () => originScreen("double_schedule", ORIGIN_FLOWS),
+  ],
+  [
+    "the origin screen of a schedule that launches no flow",
+    () => originScreen("empty_schedule", ORIGIN_FLOWS),
+  ],
+  [
+    "the origin screen of a schedule that is not found",
+    () => originScreen(BAD, ORIGIN_FLOWS),
+  ],
+  [
+    "the origin screen whose data is unreadable",
+    () => originScreen("single_schedule", null),
+  ],
   [
     "the config",
     () => (
@@ -460,7 +576,9 @@ describe("the description of a schedule in the coverage", () => {
     const found = CASES.find(
       ([label]) => label === "the schedules with a description from the data",
     );
-    expect(found === undefined ? "" : render(found[1]())).toContain("flowの図");
+    expect(found === undefined ? "" : render(found[1]())).toContain(
+      "起動の図を開く",
+    );
   });
 });
 
@@ -498,5 +616,80 @@ describe("the flow diagram in the coverage", () => {
 describe("the detail screen in the coverage", () => {
   test("draws the overview, so the check does not pass on an empty screen", () => {
     expect(render(detailScreen())).toContain("概要");
+  });
+});
+
+describe("the origin diagram in the coverage", () => {
+  const draw = (name: string): string => {
+    const found = CASES.find(([label]) => label === name);
+    return found === undefined ? "" : render(found[1]());
+  };
+
+  test("draws the link of an open flow, so the check does not pass on an empty block", () => {
+    expect(draw("the origin diagram with every flow open")).toContain(
+      "flowの図",
+    );
+  });
+
+  test("draws the steps of an open flow in the scroll frame", () => {
+    expect(
+      draw("the origin diagram in the scroll frame with every flow open"),
+    ).toContain("flowの図");
+  });
+
+  test("draws the ordered list of the steps of an open flow in the list", () => {
+    expect(
+      draw("the origin diagram in the list with every flow open"),
+    ).toContain("<ol");
+  });
+
+  test("draws the mark of the origin box, so the check reaches it", () => {
+    expect(draw("the origin diagram with every flow open")).toContain(
+      "失敗・取消",
+    );
+  });
+
+  test("opens the only flow of a schedule by default", () => {
+    expect(
+      draw("the origin screen of a schedule that launches one flow"),
+    ).toContain("flowの図");
+  });
+
+  test("opens the only flow of a schedule by default in the list", () => {
+    expect(
+      draw(
+        "the origin screen of a schedule that launches one flow in the list",
+      ),
+    ).toContain("<ol");
+  });
+
+  test("closes the flows of a schedule that launches two", () => {
+    expect(
+      draw("the origin screen of a schedule that launches two flows"),
+    ).not.toContain("flowの図");
+  });
+
+  test("draws the origin box from the cached schedules", () => {
+    expect(
+      draw("the origin screen of a schedule that launches one flow"),
+    ).toContain("一時停止中");
+  });
+
+  test("says that a schedule launches no flow", () => {
+    expect(
+      draw("the origin screen of a schedule that launches no flow"),
+    ).toContain("flowを起動しません");
+  });
+
+  test("says that the schedule was not found", () => {
+    expect(draw("the origin screen of a schedule that is not found")).toContain(
+      "見つかりません",
+    );
+  });
+
+  test("says that the data could not be read", () => {
+    expect(draw("the origin screen whose data is unreadable")).toContain(
+      "読み込めませんでした",
+    );
   });
 });

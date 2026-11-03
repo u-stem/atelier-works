@@ -9,6 +9,7 @@ import {
   CONFIG_NORMAL,
   HOLDS_SNAPSHOT,
   INTAKE_SNAPSHOT_NORMAL,
+  INTAKE_TARGETS,
   JOB,
   JOB_DETAIL_NORMAL,
   jobList,
@@ -72,10 +73,11 @@ function queryReply(view: unknown, mode: Mode): Reply | null {
       return pick(mode, [REQUIREMENTS_DOC_NORMAL], []);
     case "approval_design_doc":
       return pick(mode, [APPROVAL_DESIGN_DOC_NORMAL], []);
+    case "intake_targets":
+      return pick(mode, INTAKE_TARGETS, []);
     case "inbox":
     case "deployments":
     case "notices":
-    case "intake_targets":
     case "audit_index":
     case "agent_cost_daily":
     case "approval_stats":

@@ -9,15 +9,16 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
+          "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 aria-disabled:hover:bg-primary",
         destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90 aria-disabled:hover:bg-destructive",
         outline:
-          "border border-border bg-card hover:bg-accent hover:text-accent-foreground",
+          "border border-border bg-card hover:bg-accent hover:text-accent-foreground aria-disabled:hover:bg-card aria-disabled:hover:text-current",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-accent hover:text-accent-foreground",
-        link: "text-primary underline-offset-4 hover:underline",
+          "bg-secondary text-secondary-foreground hover:bg-secondary/80 aria-disabled:hover:bg-secondary",
+        ghost:
+          "hover:bg-accent hover:text-accent-foreground aria-disabled:hover:bg-transparent aria-disabled:hover:text-current",
+        link: "text-primary underline-offset-4 hover:underline aria-disabled:hover:no-underline",
       },
       size: {
         default: "h-9 px-4 py-2",

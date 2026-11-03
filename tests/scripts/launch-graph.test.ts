@@ -322,9 +322,16 @@ describe("describeOrigin", () => {
     });
   });
 
-  test("does not list the return of pr_fix_finish to the design flow as a rework edge", () => {
-    expect(REWORK_LAUNCH_EDGES).not.toContainEqual({
+  test("lists the return of pr_fix_finish to the design flow as a rework edge", () => {
+    expect(REWORK_LAUNCH_EDGES).toContainEqual({
       from: "steps/pr_fix_finish",
+      to: "design",
+    });
+  });
+
+  test("lists the return of implement_finish to the design flow as a rework edge", () => {
+    expect(REWORK_LAUNCH_EDGES).toContainEqual({
+      from: "steps/implement_finish",
       to: "design",
     });
   });
