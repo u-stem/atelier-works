@@ -338,14 +338,18 @@ const components: Components = {
       <table className="w-full border-collapse text-small">{children}</table>
     </section>
   ),
+  // 縞とヘッダーは、文字色の半透明の重ね塗りにする。下地(ページの背景、Card)の色が違っても、
+  // 縞は下地と輝度比で1.05以上、ヘッダーは縞と1.05以上離れる。`bg-muted`は下地によって差が1.02〜1.06に落ちる。
   tbody: ({ children }) => (
-    <tbody className="[&>tr:nth-child(even)]:bg-muted/40">{children}</tbody>
+    <tbody className="[&>tr:nth-child(even)]:bg-foreground/[0.03]">
+      {children}
+    </tbody>
   ),
   th: ({ children }) => (
     <th
       className={cn(
         TABLE_CELL_CLASS,
-        "border border-border bg-muted text-left align-top font-semibold",
+        "border border-border bg-foreground/[0.08] text-left align-top font-semibold",
       )}
     >
       {children}
