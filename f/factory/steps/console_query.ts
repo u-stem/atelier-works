@@ -2587,7 +2587,7 @@ export async function runConsoleQuery(
   attempt: number | null = null,
   readFile: ReadTextFile = readTextFile,
   approvalRequestId: number | null = null,
-  designDraftId: number | undefined = undefined,
+  designDraftId: number | null | undefined = undefined,
 ): Promise<ConsoleQueryRow[]> {
   const since = sinceIso(days, new Date());
 

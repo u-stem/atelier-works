@@ -37,8 +37,9 @@ const DRAFT_ROW: SqlRow = {
  * 実際のSQLの絞り込みと並べ替え(新しい設計書が先、1行だけ)を、束縛の値で真似る。
  * 束縛の順は、作業項目の番号、設計書の番号(無ければnull)である。
  */
-function selectingSql(rows: SqlRow[]): SqlClient {
-  return (_strings, ...values) => {
+function selectingSql(rows: SqlRow[], statements: string[] = []): SqlClient {
+  return (strings, ...values) => {
+    statements.push(strings.join("?"));
     const [workItemId, draftId] = values;
     const picked = rows
       .filter((row) => Number(row.work_item_id) === Number(workItemId))
@@ -73,13 +74,17 @@ function diskWith(files: Record<string, string>): ReadLog {
 
 async function designDoc(
   rows: SqlRow[],
-  options: { draftId?: number; disk?: ReadLog } = {},
+  options: {
+    draftId?: number | null;
+    disk?: ReadLog;
+    statements?: string[];
+  } = {},
 ) {
   return await runConsoleQuery(
     "design_doc",
     200,
     30,
-    selectingSql(rows),
+    selectingSql(rows, options.statements),
     7,
     null,
     (options.disk ?? diskWith({})).read,
@@ -94,6 +99,17 @@ describe("design_doc", () => {
       { ...DRAFT_ROW, id: "21" },
       { ...DRAFT_ROW, id: "22" },
     ]);
+    expect(rows).toMatchObject([{ id: 22 }]);
+  });
+
+  test("returns the latest draft for a null draft_id", async () => {
+    const rows = await designDoc(
+      [
+        { ...DRAFT_ROW, id: "21" },
+        { ...DRAFT_ROW, id: "22" },
+      ],
+      { draftId: null },
+    );
     expect(rows).toMatchObject([{ id: 22 }]);
   });
 
@@ -242,6 +258,36 @@ describe("design_doc", () => {
       expect(rows).toEqual([]);
     });
   }
+
+  test("selects the work item with a bigint cast", async () => {
+    const statements: string[] = [];
+    await designDoc([DRAFT_ROW], { statements });
+    expect(statements[0]).toContain("dd.work_item_id = ?::bigint");
+  });
+
+  test("treats a null draft_id as absent with a bigint cast", async () => {
+    const statements: string[] = [];
+    await designDoc([DRAFT_ROW], { statements });
+    expect(statements[0]).toContain("?::bigint IS NULL");
+  });
+
+  test("looks up the approval request of the same work item", async () => {
+    const statements: string[] = [];
+    await designDoc([DRAFT_ROW], { statements });
+    expect(statements[0]).toContain("a.work_item_id = dd.work_item_id");
+  });
+
+  test("decides the newest of a pair by the doc dir", async () => {
+    const statements: string[] = [];
+    await designDoc([DRAFT_ROW], { statements });
+    expect(statements[0]).toContain("newer.doc_dir = dd.doc_dir");
+  });
+
+  test("compares newer drafts by id", async () => {
+    const statements: string[] = [];
+    await designDoc([DRAFT_ROW], { statements });
+    expect(statements[0]).toContain("newer.id > dd.id");
+  });
 
   test("requires a work_item_id", async () => {
     await expect(
