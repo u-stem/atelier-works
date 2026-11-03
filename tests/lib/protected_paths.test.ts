@@ -249,6 +249,16 @@ describe("matchesForbiddenPath", () => {
     expect(matchesForbiddenPath("scripts/ci-scope.ts")).toBe(true);
   });
 
+  test("matches scripts/check-coverage.ts", () => {
+    expect(matchesForbiddenPath("scripts/check-coverage.ts")).toBe(true);
+  });
+
+  test("matches tests/scripts/check_coverage.test.ts", () => {
+    expect(matchesForbiddenPath("tests/scripts/check_coverage.test.ts")).toBe(
+      true,
+    );
+  });
+
   test("matches console/scripts/asset-name.ts", () => {
     expect(matchesForbiddenPath("console/scripts/asset-name.ts")).toBe(true);
   });
@@ -367,6 +377,18 @@ describe("matchesImplementProtectedPath", () => {
 
   test("matches scripts/ci-scope.ts", () => {
     expect(matchesImplementProtectedPath("scripts/ci-scope.ts")).toBe(true);
+  });
+
+  test("matches scripts/check-coverage.ts", () => {
+    expect(matchesImplementProtectedPath("scripts/check-coverage.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matches tests/scripts/check_coverage.test.ts", () => {
+    expect(
+      matchesImplementProtectedPath("tests/scripts/check_coverage.test.ts"),
+    ).toBe(true);
   });
 
   test("matches files under console/public/", () => {
