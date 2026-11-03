@@ -82,7 +82,7 @@ export const REQUIREMENTS_ROW: RequirementsIndexRow = {
 };
 
 export const SUMMARY_NORMAL: ConsoleSummary = {
-  counts: { approvals: 2, failures: 1, notices: 1 },
+  counts: { approvals: 3, failures: 1, notices: 1 },
   approvals: [
     {
       approval_request_id: 3,
@@ -122,6 +122,25 @@ export const SUMMARY_NORMAL: ConsoleSummary = {
       proposal_title: null,
       created_issue_number: null,
       origin: null,
+    },
+    {
+      approval_request_id: 4,
+      kind: "issue_proposal",
+      status: "pending",
+      work_item_id: 1,
+      owner: "o",
+      repo: "r",
+      title: "example item",
+      issue_number: null,
+      issue_url: null,
+      pr_number: 12,
+      requested_at: STAMP,
+      expires_at: null,
+      draft_attempt: null,
+      summary: null,
+      proposal_title: "example proposal",
+      created_issue_number: null,
+      origin: "pr_fix",
     },
   ],
   failures: [
@@ -348,6 +367,23 @@ export const APPROVAL_DESIGN_DOC_NORMAL = {
   approval_status: "pending",
 };
 
+/**
+ * 承認画面の本文に使うMarkdown。表と、プレビューが描かないHTMLのコメントを含む。
+ * 取り込み時点のIssueと提案の本文が、同じ形で、原文とプレビューの違いを検査できるようにする。
+ */
+const APPROVAL_BODY_MARKDOWN = [
+  "## 概要",
+  "",
+  "| ID | 内容 |",
+  "| --- | --- |",
+  "| A-1 | 表の1行目 |",
+  "| A-2 | 表の2行目 |",
+  "",
+  "<!-- 承認者に見せたくないHTMLのコメント -->",
+  "",
+  "本文の終わりです。",
+].join("\n");
+
 export const INTAKE_SNAPSHOT_NORMAL = {
   work_item_id: 1,
   owner: "o",
@@ -355,11 +391,24 @@ export const INTAKE_SNAPSHOT_NORMAL = {
   issue_number: 1,
   issue_url: "https://github.com/o/r/issues/1",
   title: "example item",
-  body: "body",
+  body: APPROVAL_BODY_MARKDOWN,
   body_truncated: false,
   body_tail_html_comments: 0,
   body_tail_hidden_chars: 0,
   refreshed: false,
+};
+
+/** Issue提案の承認画面が読む、提案の本文。 */
+export const INBOX_PROPOSAL = {
+  approval_request_id: 4,
+  kind: "issue_proposal",
+  proposal_title: "example proposal",
+  proposal_body: APPROVAL_BODY_MARKDOWN,
+  pr_number: 12,
+  claimed_by: "worker",
+  origin: "pr_fix",
+  period_label: null,
+  factory_label_available: false,
 };
 
 export const HOLDS_SNAPSHOT = {

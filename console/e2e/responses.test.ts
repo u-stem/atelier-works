@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { isApprovalDesignDocRows } from "../src/api/guards/approvalDesignDoc.ts";
 import { isDesignDocRows } from "../src/api/guards/design.ts";
 import { isHoldsSnapshot } from "../src/api/guards/holds.ts";
+import { isInboxRows } from "../src/api/guards/inboxProposals.ts";
 import { isIntakeSnapshotRows } from "../src/api/guards/intakeSnapshot.ts";
 import { isIntakeTargets } from "../src/api/guards/intakeTargets.ts";
 import { isPipelineRows } from "../src/api/guards/pipeline.ts";
@@ -44,6 +45,7 @@ const CASES: readonly Case[] = [
     guard: isRequirementsIndexRows,
   },
   { script: QUERY, args: { view: "system_status" }, guard: isSystemStatus },
+  { script: QUERY, args: { view: "inbox" }, guard: isInboxRows },
   {
     script: QUERY,
     args: { view: "intake_snapshot" },

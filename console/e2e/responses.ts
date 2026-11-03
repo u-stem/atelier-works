@@ -9,6 +9,7 @@ import {
   CONFIG_NORMAL,
   DESIGN_DOC_NORMAL,
   HOLDS_SNAPSHOT,
+  INBOX_PROPOSAL,
   INTAKE_SNAPSHOT_NORMAL,
   INTAKE_TARGETS,
   JOB,
@@ -79,6 +80,7 @@ function queryReply(view: unknown, mode: Mode): Reply | null {
     case "intake_targets":
       return pick(mode, INTAKE_TARGETS, []);
     case "inbox":
+      return pick(mode, [INBOX_PROPOSAL], []);
     case "deployments":
     case "notices":
     case "audit_index":

@@ -39,6 +39,7 @@ const SCREEN_PATHS: readonly string[] = [
   "",
   "?approval=1",
   "?approval=3",
+  "?approval=4",
   "?failure=2",
   "?notice=1",
   "items",
@@ -69,6 +70,15 @@ const TEXT_MODE_PATHS: readonly string[] = [
   "items/7/requirements",
   "?approval=1",
   "items/7/design",
+];
+
+/**
+ * 原文を既定にし、プレビューを選んで検査する承認画面の経路。
+ * `group`は、プレビューの選択肢を含む切り替えの名前。画面にはほかの切り替えもあるので、名前で絞る。
+ */
+const PREVIEW_PATHS: readonly { path: string; group: string }[] = [
+  { path: "?approval=1", group: "取り込み時点のIssueの表示の形式" },
+  { path: "?approval=4", group: "提案の本文の表示の形式" },
 ];
 
 /** 見出しを1つずつ開いて検査する、起動の図の経路。開いたときだけ描かれる要素を検査するため。 */
@@ -301,6 +311,27 @@ for (const theme of THEMES) {
         const choice = page.getByRole("button", { name: "Markdownの文字" });
         await choice.click();
         await expect(choice).toHaveAttribute("aria-pressed", "true");
+
+        expect(await auditOf(page)).toEqual(clean(theme));
+      });
+    }
+  });
+
+  // 承認画面のプレビューは、原文が既定の画面で選んだときだけ描かれる。本文がある状態(normal)だけで検査する。
+  // プレビューを選ぶと、原文の確認のチェックも出るので、それも検査に含まれる。
+  test.describe(`preview of an approval (${theme})`, () => {
+    test.use({ theme, mode: "normal" });
+    for (const { path, group } of PREVIEW_PATHS) {
+      test(`/console/${path} has no violations in the preview`, async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        const choice = page
+          .getByRole("group", { name: group })
+          .getByRole("button", { name: "プレビュー" });
+        await choice.click();
+        await expect(choice).toHaveAttribute("aria-pressed", "true");
+        await expect(page.locator("[data-preview]")).toBeVisible();
 
         expect(await auditOf(page)).toEqual(clean(theme));
       });
