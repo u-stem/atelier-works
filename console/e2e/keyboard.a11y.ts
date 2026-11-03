@@ -1170,6 +1170,20 @@ test.describe("approval body preview by keyboard", () => {
         await expect(approve(page)).toBeDisabled();
       });
 
+      test("keeps the check of the source through the preview", async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        await choose(page, group, "プレビュー");
+        await choose(page, group, "原文");
+        await page.getByLabel(new RegExp(`^${check}`)).check();
+        await choose(page, group, "プレビュー");
+
+        await choose(page, group, "原文");
+
+        await expect(approve(page)).toBeEnabled();
+      });
+
       test("keeps the rejection reason as it was", async ({ page }) => {
         await openScreen(page, path);
         const field = page.getByLabel(/^却下の理由/);
