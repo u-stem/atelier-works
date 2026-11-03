@@ -257,6 +257,15 @@ export const SCREENS: readonly Screen[] = [
           })),
       },
       {
+        // `origins`もジョブのidと取り違えないよう、`jobs/:id`より前に置く。名前を省くと一覧へ戻す。
+        path: "jobs/origins/:name?",
+        title: "起動の図",
+        lazy: () =>
+          import("../screens/jobs/OriginScreen.tsx").then((module) => ({
+            Component: module.OriginScreen,
+          })),
+      },
+      {
         path: "jobs/:id",
         trail: "breadcrumb",
         title: "ジョブの詳細",

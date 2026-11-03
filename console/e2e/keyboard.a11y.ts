@@ -188,6 +188,10 @@ const WALKED_PATHS: readonly string[] = [
   "jobs",
   "jobs?tab=history",
   "jobs?tab=schedules",
+  "jobs/origins/poll_prs",
+  "jobs/origins/poll_issues",
+  "jobs/origins/poll_dependabot",
+  "jobs/flows/implement",
 ];
 
 test.describe("tab walk", () => {
@@ -701,6 +705,159 @@ test.describe("PR review form by keyboard", () => {
         page.getByRole("button", { name: "レビューを投入する" }),
       ).toBeFocused();
     });
+  });
+});
+
+/** 起動の図の見出しのボタン。名前は「<flow名>のステップ」。 */
+function flowHeading(page: Page, flow: string) {
+  return page.getByRole("button", { name: `${flow}のステップ`, exact: true });
+}
+
+/** Tabを押して、`target`にフォーカスを移す。上限までに届かなければ、届いていないまま返す。 */
+async function tabTo(
+  page: Page,
+  target: ReturnType<Page["getByRole"]>,
+): Promise<void> {
+  for (let count = 0; count < MAX_TABS; count += 1) {
+    await page.keyboard.press("Tab");
+    const focused = await target.evaluate(
+      (element) => element === document.activeElement,
+    );
+    if (focused) return;
+  }
+}
+
+test.describe("origin diagram", () => {
+  test.beforeEach(async ({ page }) => {
+    await openScreen(page, "jobs/origins/poll_prs");
+    await tabTo(page, flowHeading(page, "pr_fix"));
+  });
+
+  test("reaches a heading by Tab", async ({ page }) => {
+    await expect(flowHeading(page, "pr_fix")).toBeFocused();
+  });
+
+  test("starts with the flow closed", async ({ page }) => {
+    await expect(flowHeading(page, "pr_fix")).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  test("opens the flow on Enter", async ({ page }) => {
+    await page.keyboard.press("Enter");
+
+    await expect(flowHeading(page, "pr_fix")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
+  test("keeps the focus on the heading after Enter", async ({ page }) => {
+    await page.keyboard.press("Enter");
+
+    await expect(flowHeading(page, "pr_fix")).toBeFocused();
+  });
+
+  test("shows the steps of the flow after Enter", async ({ page }) => {
+    await page.keyboard.press("Enter");
+
+    await expect(page.getByText("pr_fix_collect")).toBeVisible();
+  });
+
+  test("closes the flow on a second Enter", async ({ page }) => {
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+
+    await expect(flowHeading(page, "pr_fix")).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  test("does not open the flow while Space is held down", async ({ page }) => {
+    await page.keyboard.down("Space");
+
+    await expect(flowHeading(page, "pr_fix")).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  test("opens the flow when Space is released", async ({ page }) => {
+    await page.keyboard.down("Space");
+    await page.keyboard.up("Space");
+
+    await expect(flowHeading(page, "pr_fix")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
+  test("keeps the focus on the heading after Space", async ({ page }) => {
+    await page.keyboard.press("Space");
+
+    await expect(flowHeading(page, "pr_fix")).toBeFocused();
+  });
+
+  test("does not scroll the page by Space", async ({ page }) => {
+    const before = await page.evaluate(() => window.scrollY);
+    await page.keyboard.press("Space");
+
+    expect(await page.evaluate(() => window.scrollY)).toBe(before);
+  });
+
+  test("moves the focus from the open heading to the link to the diagram of the flow", async ({
+    page,
+  }) => {
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Tab");
+
+    await expect(
+      page.getByRole("link", { name: "flowの図: pr_fix" }),
+    ).toBeFocused();
+  });
+
+  test("opens the diagram of the flow from that link without closing the heading", async ({
+    page,
+  }) => {
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Enter");
+
+    await expect(page).toHaveURL(/\/console\/jobs\/flows\/pr_fix$/);
+  });
+
+  test("keeps the open flows when the width falls below the list width", async ({
+    page,
+  }) => {
+    await page.keyboard.press("Enter");
+    await page.setViewportSize({ width: 500, height: 800 });
+
+    await expect(page.locator("details[open] > summary")).toHaveCount(1);
+  });
+
+  test("keeps the open flows when the width returns to the diagram width", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 500, height: 800 });
+    await page.locator("details > summary").first().click();
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    await expect(
+      page.getByRole("button", { name: /のステップ$/ }).first(),
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+test.describe("origin diagram of a schedule that launches one flow", () => {
+  test("starts with the only flow open", async ({ page }) => {
+    await openScreen(page, "jobs/origins/poll_issues");
+
+    await expect(flowHeading(page, "pipeline")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 });
 

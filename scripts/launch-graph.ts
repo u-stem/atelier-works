@@ -130,18 +130,24 @@ export const APPROVAL_OUTCOMES: Readonly<
  */
 export const UNWIRED_LAUNCH_EDGES: readonly LaunchEdge[] = [];
 
-/** 要件定義の不足(requirements_gap)を見つけたときだけ、pipelineへ差し戻す辺。 */
+/**
+ * 前のflowへ差し戻す辺。要件定義の不足(requirements_gap)ならpipelineへ、設計の不足(design_gap)ならdesignへ戻す。
+ */
 export type ReworkEdge = { readonly from: string; readonly to: string };
 
 /**
  * 差し戻しのときだけ起動する辺。通常の起動と分けて描く。
  * 差し戻しは試行の上限までで、上限を超えると起動せず、人の対応待ちにする。
- * 契約テストが、ステップのソースの`requirements_gap`と照合する。
+ * 設計の不足でdesignへ戻す辺も載せる。載せないと、designからimplementへの承認の辺と合わせて前進の辺が循環し、
+ * 起動の図が段(列)を決められない。
+ * 契約テストが、行き先に応じて、ステップのソースの`requirements_gap`か`design_gap`と照合する。
  */
 export const REWORK_LAUNCH_EDGES: readonly ReworkEdge[] = [
   { from: "steps/design_generate", to: "pipeline" },
   { from: "steps/implement_finish", to: "pipeline" },
   { from: "steps/pr_fix_finish", to: "pipeline" },
+  { from: "steps/implement_finish", to: "design" },
+  { from: "steps/pr_fix_finish", to: "design" },
 ];
 
 /**

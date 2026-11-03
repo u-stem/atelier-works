@@ -226,12 +226,12 @@ describe("jobs entrance", () => {
     expect(SCREENS.find((screen) => screen.id === "jobs")?.path).toBe("/jobs");
   });
 
-  test("has the flow diagram before the job detail as its child routes", () => {
+  test("has the flow diagram and the origin diagram before the job detail as its child routes", () => {
     expect(
       SCREENS.find((screen) => screen.id === "jobs")?.children.map(
         (child) => child.path,
       ),
-    ).toEqual(["jobs/flows/:name?", "jobs/:id"]);
+    ).toEqual(["jobs/flows/:name?", "jobs/origins/:name?", "jobs/:id"]);
   });
 
   test("prefetches only the active jobs, never the history or the schedules", () => {

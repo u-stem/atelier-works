@@ -101,7 +101,7 @@
         {
           "kind": "flow",
           "flow": "implement",
-          "via": "launch"
+          "via": "rework"
         },
         {
           "kind": "flow",
@@ -111,7 +111,7 @@
         {
           "kind": "flow",
           "flow": "pr_fix",
-          "via": "launch"
+          "via": "rework"
         }
       ],
       "unwiredEntries": [],
@@ -199,7 +199,7 @@
         {
           "flow": "design",
           "step": "implement_finish",
-          "via": "launch"
+          "via": "rework"
         },
         {
           "flow": "pipeline",
@@ -397,7 +397,7 @@
         {
           "flow": "design",
           "step": "pr_fix_finish",
-          "via": "launch"
+          "via": "rework"
         },
         {
           "flow": "pipeline",

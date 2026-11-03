@@ -3,9 +3,12 @@ import flowsJson from "../generated/flows.json";
 import {
   FLOWS_DATA,
   findFlow,
+  findSchedule,
   flowDiagramPath,
   flowHistoryPath,
   flowRouteState,
+  originDiagramPath,
+  originRouteState,
   parseFlowsData,
   scheduleFlowsOf,
 } from "./flowsData.ts";
@@ -424,5 +427,91 @@ describe("flowHistoryPath", () => {
     expect(flowHistoryPath("pipeline")).toBe(
       "/jobs?tab=history&script=f%2Ffactory%2Fpipeline",
     );
+  });
+});
+
+describe("findSchedule", () => {
+  const data = parseFlowsData(valid());
+
+  test("finds a schedule by its name", () => {
+    expect(findSchedule(data, "poll_prs")?.summary).toBe("PRを巡回");
+  });
+
+  test("returns null for a name that is not in the data", () => {
+    expect(findSchedule(data, "missing")).toBeNull();
+  });
+
+  test("returns null for an inherited key of an object", () => {
+    expect(findSchedule(data, "constructor")).toBeNull();
+  });
+
+  test("returns null when there is no data", () => {
+    expect(findSchedule(null, "poll_prs")).toBeNull();
+  });
+});
+
+describe("originDiagramPath", () => {
+  const data = parseFlowsData(valid());
+
+  test("returns the path of a known schedule", () => {
+    expect(originDiagramPath("poll_prs", data)).toBe("/jobs/origins/poll_prs");
+  });
+
+  test("returns the path of a schedule that launches no flow", () => {
+    expect(originDiagramPath("cleanup_db", data)).toBe(
+      "/jobs/origins/cleanup_db",
+    );
+  });
+
+  test("returns null for a schedule that is not in the data", () => {
+    expect(originDiagramPath("missing", data)).toBeNull();
+  });
+
+  test.each(["", "a/b", "..", "Poll_prs"])(
+    "returns null for the unsafe name %p",
+    (name) => {
+      expect(originDiagramPath(name, data)).toBeNull();
+    },
+  );
+
+  test("returns null when there is no data", () => {
+    expect(originDiagramPath("poll_prs", null)).toBeNull();
+  });
+});
+
+describe("originRouteState", () => {
+  const data = parseFlowsData(valid());
+
+  test("redirects to the list when the route has no name", () => {
+    expect(originRouteState(undefined, data)).toEqual({ kind: "redirect" });
+  });
+
+  test("redirects to the list when the route has no name and no data", () => {
+    expect(originRouteState(undefined, null)).toEqual({ kind: "redirect" });
+  });
+
+  test("says the data is unreadable when there is a name but no data", () => {
+    expect(originRouteState("poll_prs", null)).toEqual({ kind: "unreadable" });
+  });
+
+  test("says not found for a name that is not in the data", () => {
+    expect(originRouteState("missing", data)).toEqual({ kind: "not_found" });
+  });
+
+  test.each(["", "../x", "constructor", "Poll_prs"])(
+    "says not found for the unsafe name %p",
+    (name) => {
+      expect(originRouteState(name, data)).toEqual({ kind: "not_found" });
+    },
+  );
+
+  test("gives the schedule that it found", () => {
+    const state = originRouteState("poll_prs", data);
+
+    expect(state.kind === "found" ? state.schedule.name : "").toBe("poll_prs");
+  });
+
+  test("finds a schedule that launches no flow", () => {
+    expect(originRouteState("cleanup_db", data).kind).toBe("found");
   });
 });

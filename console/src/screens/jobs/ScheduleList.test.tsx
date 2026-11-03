@@ -99,17 +99,59 @@ describe("ScheduleList: the description and the diagrams", () => {
     );
   });
 
-  test("links a schedule to the diagram of each flow it launches", () => {
-    const html = render(freshQuery(snapshot([schedule()])));
-
-    expect([
-      html.includes('href="/jobs/flows/pr_fix"'),
-      html.includes('href="/jobs/flows/pr_review"'),
-    ]).toEqual([true, true]);
+  test("links a schedule to its origin diagram", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).toContain(
+      'href="/jobs/origins/poll_prs"',
+    );
   });
 
-  test("labels the links with flowの図", () => {
-    expect(render(freshQuery(snapshot([schedule()])))).toContain("flowの図");
+  test("gives the link one name that includes the schedule", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).toContain(
+      'aria-label="poll_prsの起動の図を開く"',
+    );
+  });
+
+  test("words the link as the origin diagram", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).toContain(
+      "起動の図を開く",
+    );
+  });
+
+  test("labels the flows that a schedule launches", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).toContain(
+      "起動するflow:",
+    );
+  });
+
+  test("does not label the row as the diagram of a flow", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).not.toContain(
+      "flowの図:",
+    );
+  });
+
+  test("writes the names of the flows a schedule launches", () => {
+    const html = render(freshQuery(snapshot([schedule()])));
+
+    expect([html.includes("pr_fix"), html.includes("pr_review")]).toEqual([
+      true,
+      true,
+    ]);
+  });
+
+  test("does not link a flow name to the diagram of the flow", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).not.toContain(
+      "/jobs/flows/",
+    );
+  });
+
+  test("puts one origin link on a row, not one link per flow", () => {
+    expect(
+      (
+        render(freshQuery(snapshot([schedule()]))).match(
+          /href="\/jobs\/origins\//g,
+        ) ?? []
+      ).length,
+    ).toBe(1);
   });
 
   test("shows the description of a schedule that launches no flow, without a link", () => {
@@ -124,10 +166,11 @@ describe("ScheduleList: the description and the diagrams", () => {
       ),
     );
 
-    expect([html.includes("DBを掃除"), html.includes("flowの図")]).toEqual([
-      true,
-      false,
-    ]);
+    expect([
+      html.includes("DBを掃除"),
+      html.includes("起動の図を開く"),
+      html.includes("起動するflow"),
+    ]).toEqual([true, false, false]);
   });
 
   test("shows the flows that a script called by the schedule starts", () => {
@@ -142,7 +185,7 @@ describe("ScheduleList: the description and the diagrams", () => {
           ]),
         ),
       ),
-    ).toContain('href="/jobs/flows/implement"');
+    ).toContain('href="/jobs/origins/self_update"');
   });
 
   test("shows nothing of the data for a schedule that the data does not know", () => {
@@ -150,7 +193,7 @@ describe("ScheduleList: the description and the diagrams", () => {
       freshQuery(snapshot([schedule({ path: "f/factory/unknown_schedule" })])),
     );
 
-    expect(html).not.toContain("flowの図");
+    expect(html).not.toContain("起動の図を開く");
   });
 
   test("does not make the whole row a link", () => {
@@ -168,7 +211,7 @@ describe("ScheduleList: the description and the diagrams", () => {
   test("gives the links the keyboard ring", () => {
     const html = render(freshQuery(snapshot([schedule()])));
     const links = (
-      html.match(/<a [^>]*href="\/jobs\/flows\/[^>]*>/g) ?? []
+      html.match(/<a [^>]*href="\/jobs\/origins\/[^>]*>/g) ?? []
     ).filter((tag) => !tag.includes("focus-visible"));
 
     expect(links).toEqual([]);
@@ -374,7 +417,7 @@ describe("ScheduleList pause and runs", () => {
             schedule({ recent_runs: [run(1), run(2), run(3), run(4)] }),
           ]),
         ),
-      ).match(/href="\/jobs\/(?!flows\/)/g),
+      ).match(/href="\/jobs\/(?!flows\/|origins\/)/g),
     ).toHaveLength(3);
   });
 });
