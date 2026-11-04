@@ -101,6 +101,25 @@ function listFiles(dir: string): string[] {
     .filter((path) => statSync(join(ROOT, path)).isFile());
 }
 
+type ConfigFile = { path: string; meta: Record<string, unknown> };
+
+// `.claude/skills/*/SKILL.md`と`.claude/agents/*.md`のfrontmatterを集める。
+// `SKILL.md`の無いフォルダは飛ばす。
+function skillAndAgentFrontmatters(): ConfigFile[] {
+  const skillFiles = readdirSync(join(ROOT, ".claude/skills"))
+    .map((dir) => join(".claude/skills", dir, "SKILL.md"))
+    .filter((path) => existsSync(join(ROOT, path)));
+  const agentFiles = readdirSync(AGENTS_DIR)
+    .filter((file) => file.endsWith(".md"))
+    .map((file) => join(".claude/agents", file));
+  return [...skillFiles, ...agentFiles].map((path) => {
+    const text = readFileSync(join(ROOT, path), "utf8");
+    const block = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? "";
+    const parsed: unknown = Bun.YAML.parse(block);
+    return { path, meta: isRecord(parsed) ? parsed : {} };
+  });
+}
+
 describe(".claude/agents", () => {
   test("defines exactly the expected agents", () => {
     expect(readdirSync(AGENTS_DIR).sort()).toEqual(
@@ -269,6 +288,43 @@ describe("repository-owned Claude config", () => {
       FORBIDDEN.test(readFileSync(join(ROOT, path), "utf8")),
     );
     expect(offenders).toEqual([]);
+  });
+
+  // 同梱のyomiyasuは、frontmatterとsettingsにフックを登録しない。
+  // `allowed-tools`はスクリプトの実行を確認なしで許し、
+  // `hooks`はツールの実行と返答の終了を止める判定を返すためである。
+  test("reads a name from every skill and agent frontmatter", () => {
+    const files = skillAndAgentFrontmatters();
+
+    const unnamed = files.filter(
+      ({ meta }) => typeof meta.name !== "string" || meta.name === "",
+    );
+    expect(unnamed.map(({ path }) => path)).toEqual([]);
+    expect(files.map(({ path }) => path)).toContain(
+      ".claude/skills/yomiyasu/SKILL.md",
+    );
+  });
+
+  test("declares no allowed-tools in any skill or agent frontmatter", () => {
+    const offenders = skillAndAgentFrontmatters().filter(({ meta }) =>
+      Object.hasOwn(meta, "allowed-tools"),
+    );
+
+    expect(offenders.map(({ path }) => path)).toEqual([]);
+  });
+
+  test("declares no hooks in any skill or agent frontmatter", () => {
+    const offenders = skillAndAgentFrontmatters().filter(({ meta }) =>
+      Object.hasOwn(meta, "hooks"),
+    );
+
+    expect(offenders.map(({ path }) => path)).toEqual([]);
+  });
+
+  test("does not mention yomiyasu in settings", () => {
+    const settings = readFileSync(join(ROOT, ".claude/settings.json"), "utf8");
+
+    expect(settings).not.toContain("yomiyasu");
   });
 
   test("ships the review-loop skill", () => {

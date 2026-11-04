@@ -132,6 +132,30 @@ Claudeが生成する文章(要件定義書、監査レポートと改善提案�
 - 前置き、言い訳、締めのあいさつを書かない。
 - 絵文字を使わない。
 
+### yomiyasuでの推敲
+
+`yomiyasu`スキルの検査は、ルートの`.yomiyasu-words/allow.txt`の語を見直しの候補から外す。
+足す語は、2つ以上の文書で同じ意味の技術用語として使っているもの、または定着した言い回しに限る。
+警告を消すためだけには足さない。
+1行に1語で書く。
+
+原文の写しと最終稿は、worktreeの外(セッションのscratchpadなど)に置く。
+worktreeに置くと未追跡のファイルが残り、コミットに入ったり、片付けを止めたりするためである。
+
+検査の記録は、原文と最終稿の写しを含めて、gitの最上位の`.yomiyasu/`に入る。
+中の`.gitignore`で、記録はコミットに入らない。
+`--state-dir`は指定しない。
+既存のフォルダに向けると`.gitignore`が置かれず、写しが`git status`に出るためである。
+`.yomiyasu/`には、yomiyasuのスクリプト以外は書かない。
+`.yomiyasu`は、`.git/info/exclude`にもユーザーの除外の設定にも足さない。
+足すと、中に`.gitignore`の無い`.yomiyasu/`まで、片付けが消す側に入るためである。
+
+最上位の`.yomiyasu/`は、再生成できる成果物ではなく、消してよい検査の記録である。
+`mise run worktree:prune -- --apply`は、`.yomiyasu/`が残ったworktreeも、ほかの条件を満たせば消す。
+`mise run worktree:new`かWorktreeCreateフックでworktreeを作った後の自動の片付けも、確認なしで同じように消す。
+記録が消えるので、残したい原文と最終稿は、検査の後に`.yomiyasu/exports/`と`.yomiyasu/inputs/`から写しておく。
+写す先はworktreeの外で、worktreeが片付けの対象となる前に済ませる。
+
 ## エージェント向けの文書
 
 AGENTS.mdとスキル、subagentの定義はClaudeが読む。Claudeは書かれていることをすべて今のルールとして扱うので、人向けの文書より短く書く。
