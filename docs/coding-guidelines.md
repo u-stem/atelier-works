@@ -94,7 +94,7 @@ if (!isClaudeResult(parsed)) {
 
 変更は、次の順で進める。
 superpowersが使えない環境では、同じ流れ(計画、実装、別のsubagentによるレビュー1回、修正)を手で行う。
-各段のレビューは1回にする。
+各段のレビューは、新しいレビュアーを1回起動し、修正の後は範囲を絞った再レビューだけにする。
 レビュアーの人数とラウンドを増やしても検出率は上がらず、過剰な修正と文書の肥大を招くためである。
 
 1. 計画は`superpowers:brainstorming`で要件を固め、`superpowers:writing-plans`で書く。
@@ -114,9 +114,10 @@ superpowersが使えない環境では、同じ流れ(計画、実装、別のsu
    - 保護パス(`f/factory/lib/protected_paths.ts`の一覧に当たるファイル)を変えた
    - 新しい`*.sh`を足した
    - 検査を緩めうる`scripts/lint-*.ts`か`scripts/check-*.ts`を変えた
-   - `protected_paths.ts`の注記が人のレビューに任せると書いたファイルを変えた。
-     対象は`ci_fix_paths.ts`、`pr_fix_verify.ts`、`pr_fix_finish.ts`、`ci_fix_classify.ts`である。
-     `workspace.ts`の`FIXED_GIT_CONFIG`も当たる
+   - `protected_paths.ts`の注記が「人のレビューで差分を確かめて止める」と書いた関数や定数を変えた。
+     注記の一覧が正本である。
+     `pr_fix_verify.ts`、`pr_fix_finish.ts`、`ci_fix_round.ts`、`ci_fix_classify.ts`、`pr_ci_fix_claim.ts`が当たる。
+     `workspace.ts`のgitの固定設定も当たる
 4. `mise run check`が通り、`git status --short`が空であることを確かめてからpushする。
 5. PR本文は`pr-body`スキルに従って書く。
 
@@ -125,7 +126,7 @@ superpowersが使えない環境では、同じ流れ(計画、実装、別のsu
 外部の挙動(git、gh、mise、Windmill、OS、外部サービス)に依存する前提は、実装の前に5分以内の読み取りで確かめる。
 前提が誤っていると、その上に積んだ実装とレビューが無駄になるためである。
 
-- 使い捨てのworktreeでは、外へ書き込むコマンドを実行しない。
+- 前提の検証では、外へ書き込むコマンドを実行しない。
   `git push`と、本番のFactoryへ書き込む`mise run`のタスクが当たる。
   タスクは`push`、`push:prune`、`up`、`deploy`、`migrate`、`hold:place`、`hold:release`、`freeze:place`、`freeze:release`、`freeze:reset`、`console:rollback`、`console:unpin`である。
   本物のworktreeを消す`worktree:prune -- --apply`も当たる。

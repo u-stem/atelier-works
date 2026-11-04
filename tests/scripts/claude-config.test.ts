@@ -28,6 +28,15 @@ function listFiles(dir: string): string[] {
     .filter((path) => statSync(join(ROOT, path)).isFile());
 }
 
+// gitが追跡するファイルだけを数える。ローカルに残した未追跡のファイルで検査を落とさないため。
+function trackedFiles(dir: string): string[] {
+  const result = Bun.spawnSync(["git", "ls-files", "--", dir], { cwd: ROOT });
+  return result.stdout
+    .toString()
+    .split("\n")
+    .filter((line) => line !== "");
+}
+
 type ConfigFile = { path: string; meta: Record<string, unknown> };
 
 // `.claude/skills/*/SKILL.md`のfrontmatterを集める。
@@ -97,12 +106,12 @@ describe("repository-owned Claude config", () => {
   });
 
   test("does not ship the review-loop skill", () => {
-    expect(listFiles(".claude/skills/review-loop")).toEqual([]);
+    expect(trackedFiles(".claude/skills/review-loop")).toEqual([]);
   });
 });
 
 describe(".claude/agents", () => {
   test("has no repository-owned agent definitions", () => {
-    expect(listFiles(".claude/agents")).toEqual([]);
+    expect(trackedFiles(".claude/agents")).toEqual([]);
   });
 });
