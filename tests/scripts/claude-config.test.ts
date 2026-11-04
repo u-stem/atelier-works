@@ -97,12 +97,12 @@ describe("repository-owned Claude config", () => {
   });
 
   test("does not ship the review-loop skill", () => {
-    expect(existsSync(join(ROOT, ".claude/skills/review-loop"))).toBe(false);
+    expect(listFiles(".claude/skills/review-loop")).toEqual([]);
   });
 });
 
 describe(".claude/agents", () => {
   test("has no repository-owned agent definitions", () => {
-    expect(existsSync(join(ROOT, ".claude/agents"))).toBe(false);
+    expect(listFiles(".claude/agents")).toEqual([]);
   });
 });

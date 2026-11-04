@@ -7,7 +7,8 @@ Consoleの画面に、表示を足すか残すかを決める原則を定める�
 運用者はConsoleを毎日開く。
 判断につながらない表示は、毎日読み飛ばす行になり、読むべき行を埋める。
 そのため、表示は足す前に要るかを確かめ、要らないものを削る。
-レビューでは、この原則を観点としてレビュアーに渡す。機械検査は`tests/scripts/console_display_contract.test.ts`が行う。
+レビューでは、この原則を観点としてレビュアーに渡す。
+機械検査は`tests/scripts/console_display_contract.test.ts`が行う。
 
 ## 表示の要素ごとに問うこと
 

@@ -101,17 +101,22 @@ superpowersが使えない環境では、同じ流れ(計画、実装、別のsu
    計画と仕様は`docs/superpowers/`に書かれるが、gitで無視しているのでコミットしない。
    設計文書をリポジトリに残さないためで、スキルがコミットを求める手順は飛ばし、`git add -f`は使わない。
 2. 実装は`superpowers:subagent-driven-development`で進める。
+   worktreeは`mise run worktree:new`で作り、スキルの`using-git-worktrees`は使わない。
    タスクごとに新しいimplementerとtask reviewerを起動する。
    テストは`superpowers:test-driven-development`で先に書く。
    親は、implementerへの依頼の制約に「テストを足すコミットを実装のコミットより前に作る」を書き、task reviewerにコミットの順序を確かめさせる。
    スキルの最後にあるブランチ全体のレビューは起動せず、手順3の`/code-review high`で代える。
    ブランチ全体を見る関門を1つにするためである。
+   台帳(`.superpowers/sdd/<計画名>/progress.md`)に残した保留の指摘は、手順3の前に親が直すか、PR本文の「確認して欲しい点」に書く。
 3. PRの前に`/code-review high`を1回通し、指摘はコードで確かめてから直す。
    `/code-review high`の指摘は、検証段を通っていないためである。
    次のどれかに当たるときは、`/security-review`も通す。
    - 保護パス(`f/factory/lib/protected_paths.ts`の一覧に当たるファイル)を変えた
    - 新しい`*.sh`を足した
    - 検査を緩めうる`scripts/lint-*.ts`か`scripts/check-*.ts`を変えた
+   - `protected_paths.ts`の注記が人のレビューに任せると書いたファイルを変えた。
+     対象は`ci_fix_paths.ts`、`pr_fix_verify.ts`、`pr_fix_finish.ts`、`ci_fix_classify.ts`である。
+     `workspace.ts`の`FIXED_GIT_CONFIG`も当たる
 4. `mise run check`が通り、`git status --short`が空であることを確かめてからpushする。
 5. PR本文は`pr-body`スキルに従って書く。
 
@@ -121,8 +126,11 @@ superpowersが使えない環境では、同じ流れ(計画、実装、別のsu
 前提が誤っていると、その上に積んだ実装とレビューが無駄になるためである。
 
 - 使い捨てのworktreeでは、外へ書き込むコマンドを実行しない。
-  `git push`と、本番へ反映する`mise run`のタスク(`push`、`push:prune`、`up`、`deploy`、`migrate`、`pull`、`console:rollback`、`console:unpin`、`worktree:prune -- --apply`)が当たる。
-- `gh`と`wmill`は、読み取りのサブコマンド(`view`、`list`、`get`、`--dry-run`)だけを使う。
+  `git push`と、本番のFactoryへ書き込む`mise run`のタスクが当たる。
+  タスクは`push`、`push:prune`、`up`、`deploy`、`migrate`、`hold:place`、`hold:release`、`freeze:place`、`freeze:release`、`freeze:reset`、`console:rollback`、`console:unpin`である。
+  本物のworktreeを消す`worktree:prune -- --apply`も当たる。
+- 前提の検証では、`gh`と`wmill`は読み取りのサブコマンド(`view`、`list`、`get`、`--dry-run`)だけを使う。
+  PRとIssueの作成は検証ではないので、この制限に当たらない。
 - 書き込みが要る検証は、一時ディレクトリに`git init`した使い捨てのリポジトリで行う。
 
 ## TDD

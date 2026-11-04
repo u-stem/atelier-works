@@ -21,7 +21,7 @@ description: 本リポジトリ(atelier-works)の開発環境をセットアッ�
 2. TDD(Red、Green、Refactor)で実装する。対象の外のファイルには触れない。
 3. `mise run check`が通ることを、実装の完了の条件にする。
 
-レビューと修正の進め方は、AGENTS.mdの「変更は、次の流れで進める」に従う。
+レビューと修正の進め方は、[コーディング規約](../../../docs/coding-guidelines.md)の「開発の流れ」に従う。
 
 ## コミットとPR
 

@@ -4,7 +4,10 @@
 
 ## 前提
 
-開発の流れはClaude Codeのプラグインsuperpowersに依存する。`/plugin`から入れる。
+開発の流れはClaude Codeのプラグインsuperpowersに依存する。
+`/plugin marketplace add obra/superpowers-marketplace`でmarketplaceを足す。
+次に`/plugin install superpowers@superpowers-marketplace`で入れる。
+流れは6.3.0で確かめた。プラグインの版は固定できないので、更新で流れが変わったときは[コーディング規約](coding-guidelines.md)の「開発の流れ」を直す。
 無い環境では、AGENTS.mdの流れを手で行う。
 
 ホストに要るのは、Docker(Docker DesktopかOrbStack)とmiseだけである。node、bun、gh、windmill-cliなどほかのツールは、`mise run setup`の中の`mise install`で入る。
@@ -506,7 +509,8 @@ mise run worktree:prune -- --apply
 `--apply`は、対話セッションで乾燥実行の一覧を確かめてから付ける。
 クラウドやheadlessのように確認できない実行では、乾燥実行の結果を報告して終える。
 一覧に自分のものでないworktreeがあれば、他のセッションが使っていないことを確かめる。
-`--force`、`git branch -D`、`rm -rf`は使わない。未マージのコミットとコミットしていない変更を失わないため。
+`--force`、`git branch -D`、`rm -rf`は使わない。
+未マージのコミットとコミットしていない変更を失わないため。
 `git worktree remove`を強制せずに使うので、変更やコミットは失われない。
 リモートのブランチには触れない。
 マージ時にGitHubが消す設定のためである。
