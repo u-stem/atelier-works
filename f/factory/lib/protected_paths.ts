@@ -280,7 +280,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 調査の入口も守る。登録、準備、生成、投稿の4つのstep(`steps/investigate_*.ts`)、本文の無害化と秘密値の検査を持つ支援のlib(`lib/investigate_flow.ts`)、
  * それぞれの`.script.yaml`、6つの固定のテスト(`tests/scripts/investigate_{register,prepare,generate,post,flow}.test.ts`、`tests/lib/investigate_flow.test.ts`)、
  * テストが共有する部品(`tests/lib/investigateTestSupport.ts`)である。フロー(`investigate__flow/`)は前方一致で守る。
- * 調査の設定の再確認、排他の確認、関門、掃除、起動の順序は生成のstepにあり、無害化と秘密値の検査は投稿のstepと支援のlibにある。
+ * 調査の設定の再確認、排他の確認、関門、掃除、起動の順序は生成のstepにある。
+ * 無害化と秘密値の検査は生成のstepと支援のlibにあり、投稿の直前の再検査は投稿のstepにある。
  * 書き換えられると、止めたはずの調査が動いたり、隔離の測定に合格していない隔離でClaudeが起動したり、
  * 調査の出力に紛れた秘密値が、検査を通らずにIssueへ投稿されたりする。
  * 一方、`lib/db.ts`の調査の関数と`on_error_flow.ts`の調査の分岐は守らない。日常的に直すファイルの中にあり、述語と分岐をテストが固定するためである。

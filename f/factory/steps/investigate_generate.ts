@@ -14,6 +14,7 @@
 // 8. 構造化出力から本文を作る(`prepareInvestigateComment`)。生の出力の検査、マスク、無害化、マスク、切り詰め、最終の検査の順に行う。
 // 9. 成否にかかわらず、作業ツリーを消す。
 // 次のstepに渡すのは、最終の本文か、本文を作れなかった理由の符号だけである。
+// 本文を作れなかったときは、このstepが調査を`needs_human`にして通知し、投稿のstepを飛ばす。
 // 生の構造化出力は、結果にも引数にもログにも例外にも載せない。
 // Windmillは、引数の`$var:`や`$res:`で始まる文字列を、実行者の権限で解決するので、生の出力を引数で渡さない。
 // 関門の証拠は、同じプロセスの中でしか使えないので、関門の呼び出しと起動は、このstepに置く。
@@ -54,6 +55,7 @@ import {
   isInvestigateOutput,
   isProbeJobActive,
   prepareInvestigateComment,
+  withheldEscalation,
 } from "../lib/investigate_flow.ts";
 import {
   checkIsolationProof,
@@ -257,7 +259,7 @@ export async function runInvestigateGenerate(
         await deps.escalate(item, claudeFailedEscalation(result.reason));
         return skipped("claude_failed");
       }
-      return await buildHandover(deps, item.id, result.structuredOutput);
+      return await buildHandover(deps, item, result.structuredOutput);
     } finally {
       await settle(deps, () => systemPrompt.cleanup(), "system prompt");
     }
@@ -269,10 +271,12 @@ export async function runInvestigateGenerate(
 /**
  * 構造化出力から、次のstepに渡す本文か符号を作る。
  * 秘密値を読めないときは、本文を作らず`scan_failed`にする。例外の中身は、記録に残さない。
+ * 本文を作れなかったときは、投稿のstepに頼らず、ここで調査を`needs_human`にして通知し、投稿のstepを飛ばす。
+ * 投稿のstepの手前の確認で止まる経路でも、検出が通知されずに落ちないようにするためである。
  */
 async function buildHandover(
   deps: InvestigateGenerateDeps,
-  workItemId: number,
+  item: WorkItem,
   output: InvestigateOutput,
 ): Promise<InvestigateGenerateResult> {
   let secrets: readonly string[];
@@ -280,14 +284,16 @@ async function buildHandover(
     secrets = await deps.readSecrets();
   } catch {
     deps.log.warn("investigate_generate: secrets unreadable, withholding");
-    return withheldResult("scan_failed");
+    return await withheldResult(deps, item, "scan_failed");
   }
   const prepared = await prepareInvestigateComment(output, {
-    workItemId,
+    workItemId: item.id,
     secrets,
     scan: deps.scan,
   });
-  if (prepared.kind === "withheld") return withheldResult(prepared.reason);
+  if (prepared.kind === "withheld") {
+    return await withheldResult(deps, item, prepared.reason);
+  }
   return {
     skip: false,
     reason: null,
@@ -296,8 +302,18 @@ async function buildHandover(
   };
 }
 
-function withheldResult(code: InvestigateWithheld): InvestigateGenerateResult {
-  return { skip: false, reason: null, comment_body: null, withheld: code };
+async function withheldResult(
+  deps: InvestigateGenerateDeps,
+  item: WorkItem,
+  code: InvestigateWithheld,
+): Promise<InvestigateGenerateResult> {
+  await deps.escalate(item, withheldEscalation(code));
+  return {
+    skip: true,
+    reason: `withheld:${code}`,
+    comment_body: null,
+    withheld: code,
+  };
 }
 
 /** 関門の判定だけを確かめる。閉じていれば、人に回して、飛ばす結果を返す。開いていれば`null`。 */

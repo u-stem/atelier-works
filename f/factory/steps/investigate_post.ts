@@ -7,10 +7,11 @@
 // 生の出力は受け取らない。本文を作るのは生成のstepで、このstepは本文を作り直さない。
 //
 // 順序は固定する。
-// 1. 調査の設定を読み直す。偽なら調査を`cancelled`にして止める。
-// 2. 行がこの実行のリースを持つ稼働中の調査であることと、受け取った値の形を確かめる。
-// 3. 投稿先のIssueを読み直す。見つからない、閉じている、PRである、リポジトリが違うときは、投稿せずに`cancelled`にする。
-// 4. 符号を受け取っていたら、投稿せずに`needs_human`にする。
+// 1. 行がこの実行のリースを持つ稼働中の調査であることと、受け取った値の形を確かめる。
+// 2. 符号を受け取っていたら、投稿せずに`needs_human`にする。設定やIssueの確認より前に置き、検出の通知が確認の失敗で落ちないようにする。
+//    通常は生成のstepが先に`needs_human`にして、このstepを飛ばす。行が既に動いていれば、手順1で何もせずに終える。
+// 3. 調査の設定を読み直す。偽なら調査を`cancelled`にして止める。
+// 4. 投稿先のIssueを読み直す。見つからない、閉じている、PRである、リポジトリが違うときは、投稿せずに`cancelled`にする。
 // 5. 本文にgitleaksをもう一度掛ける。検出か検査の失敗なら、投稿せずに`needs_human`にする。
 // 6. コメントを投稿する。目印で冪等であり、既に自分のアカウントの目印つきコメントがあれば、投稿せずにそのIDを使う。
 // 7. 稼働中の調査を、投稿の済んだ状態(`investigated`)に比較交換で進める。
@@ -163,11 +164,6 @@ export async function runInvestigatePost(
   input: InvestigatePostInput,
   deps: InvestigatePostDeps,
 ): Promise<InvestigatePostResult> {
-  if (!deps.readEnabled()) {
-    await deps.cancel("investigation disabled");
-    return result("cancelled");
-  }
-
   const item = await deps.getWorkItem(input.workItemId);
   if (item === null) {
     throw new Error(
@@ -182,6 +178,15 @@ export async function runInvestigatePost(
     return result("skipped");
   }
   const handover = readHandover(input, item.id);
+  if ("withheld" in handover) {
+    await deps.escalate(item, withheldEscalation(handover.withheld));
+    return result("withheld");
+  }
+
+  if (!deps.readEnabled()) {
+    await deps.cancel("investigation disabled");
+    return result("cancelled");
+  }
   if (item.issue_number === null) {
     throw new Error(
       `investigate_post: work item ${String(item.id)} has no issue number`,
@@ -200,11 +205,6 @@ export async function runInvestigatePost(
   if (note !== null) {
     await deps.cancel(note);
     return result("cancelled");
-  }
-
-  if ("withheld" in handover) {
-    await deps.escalate(item, withheldEscalation(handover.withheld));
-    return result("withheld");
   }
 
   const verdict = await scanBody(deps, handover.body);
