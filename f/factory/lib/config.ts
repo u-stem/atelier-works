@@ -67,6 +67,7 @@ type DefaultableField =
   | "worktree_ttl_days"
   | "retention_work_items_days"
   | "retention_logs_days"
+  | "backup_keep_generations"
   | "factory_branch"
   | "windmill_public_url"
   | "review_label"
@@ -135,6 +136,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   // 後者は独立したログ(`job_failures`、`deployments`、解決済みの`notices`)に使う。
   retention_work_items_days: 90,
   retention_logs_days: 30,
+  // `backup.ts`が残すバックアップの世代の数。
+  backup_keep_generations: 7,
   factory_branch: "main",
   windmill_public_url: "http://127.0.0.1:8080",
   review_label: "factory:review",
@@ -920,6 +923,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "retention_logs_days",
       DEFAULTS.retention_logs_days,
+    ),
+    backup_keep_generations: positiveIntegerField(
+      raw,
+      "backup_keep_generations",
+      DEFAULTS.backup_keep_generations,
     ),
     factory_repo: requiredStringField(raw, "factory_repo"),
     ...(factoryRepoId === undefined ? {} : { factory_repo_id: factoryRepoId }),

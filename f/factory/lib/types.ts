@@ -1772,6 +1772,11 @@ export type FactoryConfig = {
    * `cleanup_db.ts`がwork_itemsとは独立に削除するまで残す日数。
    */
   retention_logs_days: number;
+  /**
+   * 夜間のバックアップ(`backup.ts`)が残す世代の数。
+   * 新しい世代を書いた後、新しい方からこの数を残し、古い世代を消す。
+   */
+  backup_keep_generations: number;
   factory_repo: string;
   /**
    * `factory_repo`のGitHubリポジトリの数値ID(正の整数)。
