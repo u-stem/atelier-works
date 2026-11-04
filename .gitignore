@@ -35,3 +35,5 @@ console/test-results/
 
 # bun test --coverageが作るlcov。検査が読むので、コミットしない
 coverage/
+
+.superpowers/
