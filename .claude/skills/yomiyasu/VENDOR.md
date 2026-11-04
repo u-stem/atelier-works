@@ -10,7 +10,7 @@
   Claude Codeのフックとして、どこにも登録しない。
   登録しない対象は、`.claude/settings.json`、`.claude/settings.local.json`、ユーザーの設定、スキルとsubagentのfrontmatterの`hooks`である。
   登録すると、返答の終了(Stop)を続けさせる判定と、BashとMCPのツールの実行(PreToolUse)を確認(`ask`)か拒否(`deny`)にする判定が返りうる。
-  どちらも働くのは、原稿を登録した実行の間だけである。
+  どちらも働くのは、原稿を登録してから、登録を終えるかセッションが終わるまでである。
   原稿は、`/yomiyasu`か`yomiyasu_check.py start`で登録する。
   `--print-config`の出力は端末ごとの絶対パスを含む。
   貼る先がgitignore済みのローカルの設定やユーザーの設定になりやすく、レビューを通らない。
