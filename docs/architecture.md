@@ -286,6 +286,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `audit_reports` | 監査1回のレポート。作業項目と1対1に対応する |
 | `cleanup_runs` | DBの掃除1回ごとの削除件数 |
 | `console_actions` | Consoleから行った操作の記録。操作者、操作の名前、対象、変えたキーと値、結果、時刻を持つ。保持は90日。改ざんに耐えない([セキュリティ](security.md#操作の記録)) |
+| `deploy_approvals` | 保護パスに触れた変更の反映の、HEADのコミットごとの承認。反映する範囲で止めたファイル、依頼の時刻、判断(承認か却下)と判断した人を持つ。判断の対象は、最後に成功した反映より後の、最も新しい行だけで、行は消さずに残す。読み書きは`lib/deploy_approvals`だけが行う |
 | `drawio_viewer_observations` | draw.ioのリリースのタグごとに、最初に見たcommitと時刻。ビューアの固定を上げる処理が、14日の待ちを数えるのに使う |
 | `main_ci_runs` | 既定ブランチのコミットごとのCIの判定結果。作業項目とは独立した読み取り専用の記録で、判定を待つ行と判定済みの行を持つ |
 | `pr_ci_checks` | FactoryのPRのheadごとのCIの判定結果。設定`pr_ci_watch_human_prs`が`true`のときは、許可された人が作ったPRの行も持つ。作業項目とは独立した記録で、判定を待つ行と判定済みの行を持つ。作業項目のIDは、外部キーを持たず値だけで参照する。人のPRの行は、作業項目のIDが空である。CIの失敗を直す作業項目の結果待ちの状態(`fixing`)と、直す作業項目へのIDなどの列を持つ。直す作業項目の起動は`watch_pr_ci`が行う([PRのCI監視の内部仕様](internals/pr-ci.md)) |
@@ -590,6 +591,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/holds` | script | [LIB] 共通の保留の表の読み書き |
 | `f/factory/lib/types` | script | [LIB] 共通型 |
 | `f/factory/lib/self_update_pull_requests` | script | [LIB] 反映に含まれるPRの解析 |
+| `f/factory/lib/deploy_approvals` | script | [LIB] 反映の承認の読み書き |
 | `f/factory/lib/gh_collect_read` | script | [LIB] 収集の記録を読む側の判定 |
 | `f/factory/lib/intake_refresh` | script | [LIB] 取り込み内容の更新と記録 |
 | `f/factory/lib/pr_ci_fix_claim` | script | [LIB] 失敗した行を直してよいかの判断 |
