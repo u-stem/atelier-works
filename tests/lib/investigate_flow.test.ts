@@ -733,11 +733,16 @@ describe("withheldEscalation", () => {
     );
   });
 
-  test("sends a person of a detection to the generate job, the transcript and the rotation", () => {
+  test("sends a person of a detection to the rotation and then to a new request", () => {
     const action = withheldEscalation("secret_detected").nextAction;
-    expect(action).toContain("生成stepのジョブとtranscript");
     expect(action).toContain("秘密の入れ替え");
-    expect(action).toContain("投入し直");
+    expect(action).toContain("依頼文を変えて投入し直");
+  });
+
+  test("does not send a person of a detection to a job or a transcript that is gone", () => {
+    const action = withheldEscalation("secret_detected").nextAction;
+    expect(action).not.toContain("transcript");
+    expect(action).not.toContain("ジョブ");
   });
 
   test("tells a person to change the request after a failed scan", () => {

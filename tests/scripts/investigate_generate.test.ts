@@ -14,6 +14,7 @@ import {
   INVESTIGATE_SCHEMA,
   type InvestigateOutput,
   isInvestigateOutput,
+  withheldEscalation,
 } from "../../f/factory/lib/investigate_flow.ts";
 import {
   ISOLATION_GATE_CODES,
@@ -307,18 +308,47 @@ describe("runInvestigateGenerate", () => {
       expect(f.scanned[1]).toBe(result.comment_body ?? "");
     });
 
-    test("hands over a code and no body when the raw output has a secret", async () => {
+    test("skips the post step and hands over a code and no body when the raw output has a secret", async () => {
       const f = fake({
         launch: async () => RAW_RESULT,
         scans: [{ ok: false, output: "- rule" }],
       });
       const result = await runInvestigateGenerate(INPUT, f.deps);
       expect(result).toEqual({
-        skip: false,
-        reason: null,
+        skip: true,
+        reason: "withheld:secret_detected",
         comment_body: null,
         withheld: "secret_detected",
       });
+    });
+
+    test("sends the investigation to a person itself when the raw output has a secret", async () => {
+      const f = fake({
+        launch: async () => RAW_RESULT,
+        scans: [{ ok: false, output: "- rule" }],
+      });
+      await runInvestigateGenerate(INPUT, f.deps);
+      expect(f.escalations).toEqual([withheldEscalation("secret_detected")]);
+    });
+
+    test("does not send a person of an ordinary success", async () => {
+      const f = fake({ launch: async () => RAW_RESULT });
+      await runInvestigateGenerate(INPUT, f.deps);
+      expect(f.escalations).toEqual([]);
+    });
+
+    test("hands over a body that opens with the role tag even when a field looks like a variable reference", async () => {
+      const f = fake({
+        launch: async () => ({
+          ...SUCCESS,
+          structuredOutput: {
+            ...OUTPUT,
+            summary: "$var:f/factory/github_token",
+          },
+        }),
+      });
+      const result = await runInvestigateGenerate(INPUT, f.deps);
+      expect(result.comment_body?.startsWith(INVESTIGATE_ROLE_TAG)).toBe(true);
     });
 
     test("hands over a code and no body when the scan fails", async () => {
@@ -329,6 +359,8 @@ describe("runInvestigateGenerate", () => {
       const result = await runInvestigateGenerate(INPUT, f.deps);
       expect(result.withheld).toBe("scan_failed");
       expect(result.comment_body).toBeNull();
+      expect(result.skip).toBe(true);
+      expect(f.escalations).toEqual([withheldEscalation("scan_failed")]);
     });
 
     test("withholds the body when the secrets cannot be read", async () => {
@@ -336,6 +368,7 @@ describe("runInvestigateGenerate", () => {
       const result = await runInvestigateGenerate(INPUT, f.deps);
       expect(result.withheld).toBe("scan_failed");
       expect(result.comment_body).toBeNull();
+      expect(f.escalations).toEqual([withheldEscalation("scan_failed")]);
     });
 
     test("does not scan when the secrets cannot be read", async () => {

@@ -118,8 +118,8 @@ describe("runInvestigatePost", () => {
       const f = fake();
       await runInvestigatePost(INPUT, f.deps);
       expect(f.calls).toEqual([
-        "enabled",
         "item",
+        "enabled",
         "issue",
         "scan",
         "post",
@@ -184,7 +184,7 @@ describe("runInvestigatePost", () => {
       const f = fake({ enabled: false });
       const result = await runInvestigatePost(INPUT, f.deps);
       expect(result).toEqual({ outcome: "cancelled", comment_id: null });
-      expect(f.calls).toEqual(["enabled", "cancel"]);
+      expect(f.calls).toEqual(["item", "enabled", "cancel"]);
     });
   });
 
@@ -193,7 +193,17 @@ describe("runInvestigatePost", () => {
       const f = fake({ item: investigationItem({ flow_job_id: "another" }) });
       const result = await runInvestigatePost(INPUT, f.deps);
       expect(result).toEqual({ outcome: "skipped", comment_id: null });
-      expect(f.calls).toEqual(["enabled", "item"]);
+      expect(f.calls).toEqual(["item"]);
+    });
+
+    test("does nothing for a row that the generate step already sent to a person", async () => {
+      const f = fake({ item: investigationItem({ status: "needs_human" }) });
+      const result = await runInvestigatePost(
+        { ...INPUT, commentBody: null, withheld: "secret_detected" },
+        f.deps,
+      );
+      expect(result).toEqual({ outcome: "skipped", comment_id: null });
+      expect(f.escalations).toEqual([]);
     });
 
     test("throws when the work item does not exist", async () => {
@@ -300,14 +310,32 @@ describe("runInvestigatePost", () => {
       },
     );
 
-    test("still checks the place to post before it escalates", async () => {
+    test("notifies a detection even when the issue is closed", async () => {
       const f = fake({ issue: async () => issue({ state: "closed" }) });
       const result = await runInvestigatePost(
         { ...INPUT, commentBody: null, withheld: "secret_detected" },
         f.deps,
       );
-      expect(result.outcome).toBe("cancelled");
-      expect(f.escalations).toEqual([]);
+      expect(result.outcome).toBe("withheld");
+      expect(f.escalations).toEqual([withheldEscalation("secret_detected")]);
+    });
+
+    test("notifies a detection even when the setting is off", async () => {
+      const f = fake({ enabled: false });
+      await runInvestigatePost(
+        { ...INPUT, commentBody: null, withheld: "secret_detected" },
+        f.deps,
+      );
+      expect(f.escalations).toEqual([withheldEscalation("secret_detected")]);
+    });
+
+    test("does not read the issue for a code", async () => {
+      const f = fake();
+      await runInvestigatePost(
+        { ...INPUT, commentBody: null, withheld: "scan_failed" },
+        f.deps,
+      );
+      expect(f.calls).not.toContain("issue");
     });
   });
 
