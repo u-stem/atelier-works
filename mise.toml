@@ -156,6 +156,14 @@ description = "Release a hold (usage: -- <id>)"
 run = "bun ./scripts/hold.ts release"
 raw = true
 
+[tasks."backup:export"]
+description = "Copy the newest nightly backup generation from the worker to a host directory (usage: -- <directory>)"
+run = "scripts/backup-export.sh"
+
+[tasks."backup:restore"]
+description = "Restore a backup generation into the throwaway compose project factory-restore and print row counts (usage: -- <generation directory>)"
+run = "scripts/backup-restore.sh"
+
 [tasks.pull]
 description = "Pull remote Windmill state into the sync root"
 run = "wmill sync pull"
