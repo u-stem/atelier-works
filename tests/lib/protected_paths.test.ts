@@ -1499,6 +1499,7 @@ describe("dependency-free lib locks", () => {
     "check_runner",
     "approval_gate",
     "protected_paths",
+    "deploy_approvals",
     "self_update_support",
   ].map((name) => `f/factory/lib/${name}`);
   const LOCKS = LIBS.map((base) => `${base}.script.lock`);
@@ -2262,5 +2263,32 @@ describe("safety boundary files", () => {
     expect(await Bun.file(yamlPath).text()).toContain(
       `lock: '!inline ${lockPath}'`,
     );
+  });
+});
+
+// 保護パスに触れた変更の反映を、人の承認まで止める仕組み(承認の表、表の部品、判定、配線、Consoleの判断)は、
+// 書き換えられると、承認を経ずに保護パスの変更が反映される。
+// 保護の外の部品で判定を緩められないよう、判定の経路のファイルを完全一致で守る。
+describe("deploy approval gate files", () => {
+  const PATHS = [
+    "migrations/datatable/main/20261105100000_deploy_approvals.up.sql",
+    "migrations/datatable/main/20261105100000_deploy_approvals.down.sql",
+    "f/factory/lib/deploy_approvals.ts",
+    "f/factory/lib/deploy_approvals.script.yaml",
+    "tests/lib/deploy_approvals.test.ts",
+    "tests/scripts/deploy_approvals_wiring.test.ts",
+    "scripts/test-db-deploy-approvals.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
   });
 });
