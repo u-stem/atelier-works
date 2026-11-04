@@ -34,6 +34,7 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
       "infra/console_fetcher/",
       "f/factory/dependabot__flow/",
       "f/factory/pr_review_intake__flow/",
+      "f/factory/investigate__flow/",
       "f/factory/investigate_isolation_probe.",
       "scripts/host_apply/",
       "infra/worker/",
@@ -721,6 +722,61 @@ describe("investigate isolation files", () => {
 
   test("does not protect lib/config.ts, which changes often", () => {
     expect(matchesForbiddenPath("f/factory/lib/config.ts")).toBe(false);
+  });
+});
+
+// 調査の入口(登録、準備、生成、投稿のstepとそのフロー)は、書き換えられると、設定の再確認や排他の確認を外したり、
+// 関門を通らずにClaudeを起動したり、秘密値の検査を通らずにIssueへ投稿したりできる。
+// stepと支援のlibは完全一致で、フロー(`investigate__flow/`)は前方一致で守る。
+describe("investigate entry files", () => {
+  const FLOW_PREFIX = "f/factory/investigate__flow/";
+
+  test("FORBIDDEN_PATH_PREFIXES lists the flow directory", () => {
+    expect(FORBIDDEN_PATH_PREFIXES).toContain(FLOW_PREFIX);
+  });
+
+  test("IMPLEMENT_PROTECTED_PATH_PREFIXES lists the flow directory", () => {
+    expect(IMPLEMENT_PROTECTED_PATH_PREFIXES).toContain(FLOW_PREFIX);
+  });
+
+  test("matchesForbiddenPath matches the flow definition", () => {
+    expect(matchesForbiddenPath(`${FLOW_PREFIX}flow.yaml`)).toBe(true);
+  });
+
+  const PATHS = [
+    "f/factory/steps/investigate_register.ts",
+    "f/factory/steps/investigate_register.script.yaml",
+    "f/factory/steps/investigate_prepare.ts",
+    "f/factory/steps/investigate_prepare.script.yaml",
+    "f/factory/steps/investigate_generate.ts",
+    "f/factory/steps/investigate_generate.script.yaml",
+    "f/factory/steps/investigate_post.ts",
+    "f/factory/steps/investigate_post.script.yaml",
+    "f/factory/lib/investigate_flow.ts",
+    "f/factory/lib/investigate_flow.script.yaml",
+    "tests/lib/investigate_flow.test.ts",
+    "tests/lib/investigateTestSupport.ts",
+    "tests/scripts/investigate_register.test.ts",
+    "tests/scripts/investigate_prepare.test.ts",
+    "tests/scripts/investigate_generate.test.ts",
+    "tests/scripts/investigate_post.test.ts",
+    "tests/scripts/investigate_flow.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("does not protect lib/db.ts, which many flows change", () => {
+    expect(matchesForbiddenPath("f/factory/lib/db.ts")).toBe(false);
   });
 });
 

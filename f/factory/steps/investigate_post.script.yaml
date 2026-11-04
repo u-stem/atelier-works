@@ -1,0 +1,24 @@
+summary: '[OP-1-5/4] 最終の本文に秘密値の検査をもう一度掛けて、Issueへ投稿'
+description: 調査のフローの4番目のステップです。投稿先のIssueを確かめ、受け取った最終の本文に秘密値の検査をもう一度掛け、通ったときだけIssueにコメントします。検出または検査の失敗では、投稿せずに人に回します。
+lock: '!inline f/factory/steps/investigate_post.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    comment_body:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    withheld:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - work_item_id

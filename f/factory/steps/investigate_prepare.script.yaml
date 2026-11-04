@@ -1,0 +1,14 @@
+summary: '[OP-1-5/2] 設定、予算、時間を確かめ、調べるコミットを決める'
+description: 調査のフローの2番目のステップです。調査の設定を読み直し、日次の予算と時間の設定を確かめ、調べるリポジトリの既定のブランチの先頭のコミットを決めます。
+lock: '!inline f/factory/steps/investigate_prepare.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - work_item_id

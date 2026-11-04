@@ -476,7 +476,7 @@ Issueの新しいサイクルの作業項目を挿入すると、同じIssueの�
 | 要対応の一覧の「より新しい行」 | 同じIssueで`id`が大きい`investigate`の行があれば、古い行を除く。ownerとrepoは、稼働中の一意インデックスと同じく、小文字にして比べる |
 | 再実行(`retry_work_item`) | 再開せず断る。依頼を新規投入し直す |
 | workerを作り直す前の確認 | `investigating`を実行中の状態として数える |
-| 作業ツリーの掃除 | 調査の作業項目は、今は作業ツリーを作らない。作る変更で、持ち主と掃除の対象に足す |
+| 作業ツリーの掃除 | 作業ツリーは`/workspaces`の外の調査の置き場にあり、`cleanup_workspaces`の対象にも持ち主にも入れない。置き場は、生成のstepが、起動の前に自分以外の項目をすべて消し、起動の後にも消す |
 
 照合の分岐が`WorkItemKind`の全値を扱うことは、`tests/scripts/work_item_kind_coverage.test.ts`が確かめる。
 種別を足すと、このテストの表が型エラーになるので、対象の番号の置き場を決めてから進める。
@@ -492,15 +492,37 @@ ownerとrepoは小文字にして比べる。
 稼働中の調査が既にあるときは、例外にせず、挿入しないで`null`を返す。
 挿入文の`ON CONFLICT (kind) WHERE ...`の述語は、索引の述語と一致させる。
 `cycle`は、同じ文の中で、そのIssueの既存の行(種別を問わない)の最大に1を足して決める。
-`flow_job_id`は必須の文字列で、登録は、行の作成と同時に、フローのルートジョブのIDを記録する。
-調査のフローの失敗処理(`on_error_flow`)は、このIDが一致する行だけを`failed`にし、記録のない行は照合が孤児として扱うためである。
-依頼文は`body`に保存し、以後の調査はIssueの本文を読み直さない。
-稼働中の調査があるかの確認は、`hasInvestigatingWorkItem`で読む。
+`flow_job_id`は必須の文字列で、登録のstep(`steps/investigate_register.ts`)は、行の作成と同時に、フローのルートジョブのIDを記録する。
+依頼文は`body`に保存し、以後のstepはIssueの本文を読み直さない。
+稼働中の調査があるかの確認は、`hasInvestigatingWorkItem`と`listInvestigatingWorkItemIds`で読む。
+後者は最大2件を返し、生成のstepが、自分の他に稼働中の調査が無いことを行そのもので確かめるために使う。
 
-登録を呼ぶ側の前提は次の2点である。入口を足す変更で満たす。
+登録のstepは、挿入の結果が`null`のときだけでなく、一意制約の違反(PostgreSQLのコード23505)も、断りの符号`investigation_in_progress`に写す。
+同じ文の中で決めた`cycle`が、別の登録と衝突しうるためである。
 
-- 登録の結果が`null`のときだけでなく、一意制約の違反(PostgreSQLのコード23505)も、`investigation_in_progress`の断りに写す。同じ文の中で決めた`cycle`が、別の登録と衝突しうるためである。
-- 調査のフローの失敗処理には、`work_item_id`が届かない。行を作る前にも失敗しうるためである。失敗処理は、ルートジョブのIDが`flow_job_id`と一致する行を引く。この引き方は`on_error_flow`にまだ無い。
+#### 調査のフローの状態の動き
+
+調査のフローの4つのstepは、登録の後、自分のルートジョブのIDが行の`flow_job_id`と一致し、行が`investigating`であるときだけ動く(リース)。
+状態の変更は、すべて、この`flow_job_id`を条件にした比較交換で行う。
+別の実行が先に動かしたときは、何も書かない。
+
+| 動き | 条件 | 書くstep |
+| --- | --- | --- |
+| `investigating`から`investigated` | 結果をIssueに投稿した、または投稿済みだった | 投稿 |
+| `investigating`から`needs_human` | 隔離の関門が閉じた、予算や時間の設定が足りない、ほかの調査や測定が動いている、Claudeの実行が失敗した、結果から秘密値を検出した、または秘密値を検査できなかった | 準備、生成、投稿 |
+| `investigating`から`cancelled` | 調査の設定が偽になった、または投稿先のIssueが無い、閉じている、PRである、別のリポジトリである | 準備、生成、投稿 |
+| `investigating`から`failed` | stepが例外で落ちた | 失敗処理 |
+
+`needs_human`にした理由は、状態の注記に英語の符号で残り、Discordの通知に日本語の理由と次の操作が載る。
+Claudeの出力と標準エラーの本文は、注記と通知のどちらにも載せない。
+
+調査のフローの入力には`work_item_id`が無い。
+行を作る前にも失敗しうるためである。
+失敗処理(`on_error_flow`)は、`path`が調査のフローで`work_item_id`が無いとき、行を引く。
+引き方は、ルートジョブのIDを小文字にして、`getInvestigateWorkItemByFlowJobId`に渡すことである。
+引いた後の照合は、ほかのフローと同じである。
+行が`investigate`の`investigating`で、`flow_job_id`がルートジョブのIDと一致するときだけ、`failed`にする。
+行が見つからないときは、`job_failures`に作業項目なしで記録し、通知する。
 
 #### migrationを戻すとき
 

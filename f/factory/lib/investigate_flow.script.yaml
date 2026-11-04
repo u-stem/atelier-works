@@ -1,0 +1,9 @@
+summary: '[LIB] 調査のフローの出力の形と本文の組み立て'
+description: 内部ライブラリです。直接実行するものではありません。調査の出力の形、プロンプト、投稿する本文の無害化と秘密値の検査、人に回すときの理由を持つ共通処理です。
+lock: '!inline f/factory/lib/investigate_flow.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

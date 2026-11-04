@@ -142,8 +142,9 @@ async function removeStaleWorktreesForRepo(
   for (const item of items) {
     try {
       let targetDirs: string[] = [];
-      // investigateの作業項目は、今は作業ツリーを作らない。
-      // 作る変更で、持ち主と掃除の対象に足す。
+      // investigateの作業項目の作業ツリーは、`/workspaces`の外の調査の置き場(`INVESTIGATE_ROOT`)にある。
+      // 作成と後始末は調査の生成のstepが行い、残りは次の調査の掃除(`purgeInvestigateRoot`)が消す。
+      // この掃除は置き場を見ないので、掃除の対象にしない。
       if (item.kind === "issue") {
         targetDirs = issueWorktreePaths(owner, repo, item, worktrees);
       } else if (item.kind === "pr_fix" && item.pr_number !== null) {
@@ -317,8 +318,8 @@ async function activeWorktreeHolders(
   const holders: WorktreeHolder[] = [];
   const unresolved: WorkItem[] = [];
   for (const item of await listActive()) {
-    // investigateの作業項目は、今は作業ツリーを作らない。
-    // 作る変更で、持ち主と掃除の対象に足す。
+    // investigateの作業項目の作業ツリーは、`/workspaces`の外の調査の置き場にあり、この掃除が消さない。
+    // そのため、持ち主にも足さない。
     if (item.kind === "issue") {
       holders.push({
         owner: item.owner,

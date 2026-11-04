@@ -278,10 +278,11 @@ describe("the list of flows that can be canceled", () => {
     expect(without).toEqual([]);
   });
 
-  test("excludes the two intakes, which hold no work item", () => {
+  test("excludes the two intakes and the investigation, whose input is no work item", () => {
     expect(Object.keys(NOT_CANCELABLE_FLOW_PATHS)).toEqual([
       "f/factory/manual_intake",
       "f/factory/pr_review_intake",
+      "f/factory/investigate",
     ]);
   });
 

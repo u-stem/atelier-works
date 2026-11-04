@@ -36,6 +36,7 @@ import {
   findFixRoundKindToReview,
   findOrphanFixingPrCiChecks,
   finishGhCollectRun,
+  getInvestigateWorkItemByFlowJobId,
   getLatestPrCiCheck,
   getMainCiStateBySha,
   getNoticeById,
@@ -95,6 +96,7 @@ import {
   listGhDetailRows,
   listGhRepoStaleSnapshot,
   listGhRepos,
+  listInvestigatingWorkItemIds,
   listMainCiRunsBySha,
   listNoCiPrCiChecksToRecheck,
   listPendingMainCiRuns,
@@ -12279,6 +12281,20 @@ check(
     sql,
   )) === null,
 );
+check(
+  "investigate singleton: the id list holds the running investigation",
+  JSON.stringify(await listInvestigatingWorkItemIds(sql)) ===
+    JSON.stringify([investigateFirst]),
+);
+check(
+  "investigate by flow job id: the row is found by the recorded flow job id",
+  (await getInvestigateWorkItemByFlowJobId("qdb-investigate-job", sql))?.id ===
+    investigateFirst,
+);
+check(
+  "investigate by flow job id: an unknown flow job id finds nothing",
+  (await getInvestigateWorkItemByFlowJobId("qdb-unknown-job", sql)) === null,
+);
 execPsql(
   target,
   `UPDATE factory.work_items SET status = 'investigated' WHERE id = ${String(investigateFirst)}`,
@@ -12286,6 +12302,10 @@ execPsql(
 check(
   "investigate singleton: the read finds nothing once the investigation finished",
   (await hasInvestigatingWorkItem(sql)) === false,
+);
+check(
+  "investigate singleton: the id list is empty once the investigation finished",
+  (await listInvestigatingWorkItemIds(sql)).length === 0,
 );
 check(
   "investigate singleton: an insert after the investigation finished returns the id",

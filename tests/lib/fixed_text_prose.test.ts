@@ -30,7 +30,7 @@ const EXCLUDED_FILES = new Set(["f/factory/lib/prompts.ts"]);
  * 英語の語の区切りとしてスペースが要る。文体の指示は`commit_message_style.test.ts`が文面を固定する。
  */
 const EXCLUDED_LINE_PATTERN =
-  /自動レビュー\]|自動返信\]|今すぐ監査 in the Console|polite です・ます form|plain だ・である form/;
+  /自動レビュー\]|自動返信\]|自動調査\]|今すぐ監査 in the Console|polite です・ます form|plain だ・である form/;
 
 const STRING_LITERAL_PATTERN =
   /"(?:[^"\\\n]|\\.)*"|`(?:[^`\\\n]|\\.)*`|'(?:[^'\\\n]|\\.)*'/g;

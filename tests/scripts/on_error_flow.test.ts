@@ -151,12 +151,15 @@ type FakeFailureWorld = {
   readonly webhookUrl?: string;
   /** 同じPRに置き換えた行か並走する行があるか。 */
   readonly superseded?: boolean;
+  /** ルートジョブIDで引いた調査の作業項目。引数の順に、見つからなければ`null`。 */
+  readonly byFlowJobId?: () => Promise<WorkItem | null>;
 };
 
 function fakeFailureDeps(world: FakeFailureWorld = {}) {
   const statusCalls: StatusCall[] = [];
   const failures: FailureRecord[] = [];
   const events: NotifyEvent[] = [];
+  const lookups: string[] = [];
   const silent: Logger = { info: () => {}, warn: () => {}, error: () => {} };
   const deps: FlowFailureDeps = {
     getWorkItem: async () =>
@@ -169,6 +172,10 @@ function fakeFailureDeps(world: FakeFailureWorld = {}) {
       return world.updateStatus === undefined ? true : world.updateStatus();
     },
     hasSupersedingPrReview: async () => world.superseded ?? false,
+    findInvestigationByFlowJobId: async (flowJobId) => {
+      lookups.push(flowJobId);
+      return world.byFlowJobId === undefined ? null : world.byFlowJobId();
+    },
     readInstanceName: world.instanceName ?? (async () => "test-instance"),
     readWebhookUrl: async () => world.webhookUrl ?? "https://discord.example/x",
     notify: async (_url, event) => {
@@ -176,7 +183,7 @@ function fakeFailureDeps(world: FakeFailureWorld = {}) {
     },
     log: silent,
   };
-  return { deps, statusCalls, failures, events };
+  return { deps, statusCalls, failures, events, lookups };
 }
 
 function failureInput(
@@ -667,6 +674,130 @@ describe("handleFlowFailure for the investigate flow", () => {
     const fake = fakeFailureDeps({ item: investigateItem() });
     await handleFlowFailure(fake.deps, investigateInput());
     expect(jobFailed(fake.events)?.pr).toBeUndefined();
+  });
+});
+
+// 調査のフローの入力には作業項目のIDが無い。失敗の処理は、ルートジョブIDで調査の行を引く。
+describe("handleFlowFailure for an investigation that has no work item id in the flow input", () => {
+  function investigateItem(overrides: Partial<WorkItem> = {}): WorkItem {
+    return workItem({
+      kind: "investigate",
+      source: "manual",
+      issue_number: 5,
+      pr_number: null,
+      status: "investigating",
+      ...overrides,
+    });
+  }
+
+  function noIdInput(overrides: Partial<FlowFailureInput> = {}) {
+    return failureInput({
+      path: INVESTIGATE_FLOW_PATH,
+      workItemId: undefined,
+      error: { message: "investigate failed", step_id: "investigate_generate" },
+      ...overrides,
+    });
+  }
+
+  test("looks the row up by the root job id", async () => {
+    const fake = fakeFailureDeps({
+      byFlowJobId: async () => investigateItem(),
+    });
+    await handleFlowFailure(fake.deps, noIdInput());
+    expect(fake.lookups).toEqual([ROOT_JOB]);
+  });
+
+  test("looks the row up by the root job id in lower case", async () => {
+    const fake = fakeFailureDeps({
+      byFlowJobId: async () => investigateItem(),
+    });
+    await handleFlowFailure(
+      fake.deps,
+      noIdInput({ rootJobId: ROOT_JOB.toUpperCase() }),
+    );
+    expect(fake.lookups).toEqual([ROOT_JOB]);
+  });
+
+  test("marks the found investigation failed under this run's lease", async () => {
+    const fake = fakeFailureDeps({
+      byFlowJobId: async () => investigateItem(),
+    });
+    await handleFlowFailure(fake.deps, noIdInput());
+    expect(fake.statusCalls).toEqual([
+      {
+        id: 7,
+        from: "investigating",
+        to: "failed",
+        flowJobId: ROOT_JOB,
+        note: "investigate failed",
+      },
+    ]);
+  });
+
+  test("records the failure against the found row", async () => {
+    const fake = fakeFailureDeps({
+      byFlowJobId: async () => investigateItem(),
+    });
+    await handleFlowFailure(fake.deps, noIdInput());
+    expect(fake.failures.map((record) => record.work_item_id)).toEqual([7]);
+  });
+
+  test("does not mark a found row whose lease belongs to another run", async () => {
+    const fake = fakeFailureDeps({
+      byFlowJobId: async () => investigateItem({ flow_job_id: "another-job" }),
+    });
+    await handleFlowFailure(fake.deps, noIdInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("does not mark a found row that is no longer investigating", async () => {
+    const fake = fakeFailureDeps({
+      byFlowJobId: async () => investigateItem({ status: "needs_human" }),
+    });
+    await handleFlowFailure(fake.deps, noIdInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("records the failure without a work item when no row has the root job id", async () => {
+    const fake = fakeFailureDeps({ byFlowJobId: async () => null });
+    await handleFlowFailure(fake.deps, noIdInput());
+    expect(fake.failures.map((record) => record.work_item_id)).toEqual([null]);
+  });
+
+  test("still records and notifies when the lookup fails", async () => {
+    const fake = fakeFailureDeps({
+      byFlowJobId: async () => {
+        throw new Error("database is down");
+      },
+    });
+    await handleFlowFailure(fake.deps, noIdInput());
+    expect(fake.failures).toHaveLength(1);
+    expect(jobFailed(fake.events)?.flow_path).toBe(INVESTIGATE_FLOW_PATH);
+  });
+
+  test("does not look the row up when the root job id is unavailable", async () => {
+    const fake = fakeFailureDeps({
+      byFlowJobId: async () => investigateItem(),
+    });
+    await handleFlowFailure(fake.deps, noIdInput({ rootJobId: null }));
+    expect(fake.lookups).toEqual([]);
+  });
+
+  test("does not look a row up for the investigate flow when the input carries an id", async () => {
+    const fake = fakeFailureDeps({ item: investigateItem() });
+    await handleFlowFailure(fake.deps, noIdInput({ workItemId: 7 }));
+    expect(fake.lookups).toEqual([]);
+  });
+
+  test("does not look a row up for another flow", async () => {
+    const fake = fakeFailureDeps({
+      byFlowJobId: async () => investigateItem(),
+    });
+    await handleFlowFailure(
+      fake.deps,
+      noIdInput({ path: "f/factory/implement" }),
+    );
+    expect(fake.lookups).toEqual([]);
   });
 });
 
