@@ -41,6 +41,6 @@ CREATE TABLE factory.deploy_approvals (
 CREATE INDEX deploy_approvals_requested_at_idx ON factory.deploy_approvals (requested_at);
 
 COMMENT ON TABLE factory.deploy_approvals IS
-    '保護パスに触れた変更の反映の、HEADのshaごとの承認。self_updateはapprovedの行の版だけを反映する。判断の対象は、最後に成功した反映より後の、最も新しい行だけである。';
+    '保護パスに触れた変更の反映の、HEADのshaごとの承認。保護パスの変更を含む反映は、approvedの行の版だけを反映する。判断の対象は、最後に成功した反映より後の、最も新しい行だけである。';
 
 END;

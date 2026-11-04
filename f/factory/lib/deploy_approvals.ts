@@ -141,12 +141,20 @@ function parseRow(row: DeployApprovalSqlRow): DeployApproval {
   };
 }
 
+/**
+ * 例外が、表が無いことを表すかを返す。
+ * SQLSTATEの`42P01`、エラーの文、API errorの`body`のどれかで判定する。
+ * datatableが返す形をすべて確かめていないので、3通りを受け付ける。
+ */
 function isMissingTable(err: unknown): boolean {
   if (typeof err === "object" && err !== null && "code" in err) {
     if (err.code === UNDEFINED_TABLE_CODE) return true;
   }
   const message = err instanceof Error ? err.message : String(err);
-  return message.includes(TABLE_MISSING_MESSAGE);
+  if (message.includes(TABLE_MISSING_MESSAGE)) return true;
+  if (typeof err !== "object" || err === null) return false;
+  const body: unknown = Reflect.get(err, "body");
+  return typeof body === "string" && body.includes(TABLE_MISSING_MESSAGE);
 }
 
 /** 文を実行して行を返す。表が無いときは、migrationの未反映と分かる文にして投げる。 */

@@ -3,6 +3,7 @@
 // 過ぎた終端状態の作業項目(と、それを`ON DELETE CASCADE`で参照する表の行)と、
 // `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
 // 解決済みのnotice・判定済みの`main_ci_runs`・`pr_ci_checks`・`worker_samples`で、作業項目とは別々に掃除する。
+// `deployments`は、最後に成功した反映の行を、古くても削除しない(反映の承認の判定がその時刻を基準にするため)。
 // 判定を待つ`main_ci_runs`の行、判定を待つか修正中の`pr_ci_checks`の行、各リポジトリの最新の`main_ci_runs`の行は、古くても削除しない。
 // 各PRの最新の`pr_ci_checks`の行は、保持期間の4倍まで残す。
 // 競合から離れた`pr_conflict_checks`の行も、保持期間で削除する(競合したままの行は残す)。件数はログだけに残す。
