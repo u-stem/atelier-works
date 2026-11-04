@@ -3,8 +3,11 @@
 // 判断する主体は人で、操作者はジョブのWindmill実行文脈から導く(`deriveApprover`)。導けないときは何も記録せずに断る。
 // 判断は承認の表の部品(`decideDeployApproval`)だけが書く。判断できるのは、最後に成功した反映より後の、最も新しい承認待ちの版だけである。
 // 操作の記録(`factory.console_actions`)は、判断の前に`attempted`の行を入れ、後で結果を更新する。行を入れられなければ、判断せずに断る。
-// 判断を書けたら、その版の承認を待つ通知を解決し、判断を情報の通知に残す。どちらに失敗しても判断は取り消さない。
+// 判断を書けたら、承認のときだけ、その版の承認を待つ通知を解決する。判断は情報の通知に残す。どちらに失敗しても判断は取り消さない。
 // 承認した版は、次の`self_update`(2分ごと)が反映する。却下した版は、mainへ戻すPRがマージされるまで反映されない。
+// 却下では要対応の通知を残す。却下した版は承認待ちの一覧に出ず、版の食い違いの通知も抑止されるので、
+// 通知を解決すると、反映が止まったままなのに要対応が消える。戻すPRの反映(`deployed_sha`が進む)か、
+// 新しい版の依頼が、既存の経路で通知を解決する。
 //
 // Console用workerで動くので、どのsecret変数も読まず、Discordにも送らない。
 
@@ -64,7 +67,7 @@ export type DeployDecideDeps = {
     decision: DeployApprovalDecision,
     decidedBy: string,
   ) => Promise<boolean>;
-  /** 版`sha`の承認を待つ通知を解決する。 */
+  /** 版`sha`の承認を待つ通知を解決する。承認のときだけ呼ぶ。 */
   readonly resolveRequiredNotice: (
     sha: string,
     resolvedBy: string,
@@ -146,12 +149,15 @@ export async function decideDeployRecorded(
   if (!recorded.ok) return refuse("audit_unavailable");
   if (!recorded.value) return refuse("not_pending");
 
-  try {
-    await deps.resolveRequiredNotice(sha, operator);
-  } catch {
-    deps.warn("console_deploy_decide: could not resolve the required notice", {
-      sha,
-    });
+  if (decision === "approved") {
+    try {
+      await deps.resolveRequiredNotice(sha, operator);
+    } catch {
+      deps.warn(
+        "console_deploy_decide: could not resolve the required notice",
+        { sha },
+      );
+    }
   }
   let notice: "recorded" | "failed" = "recorded";
   try {

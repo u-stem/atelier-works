@@ -1,4 +1,4 @@
-// console_holdsの応答の型と型ガード。
+// console_holdsの応答の型と型ガード。反映の承認待ちも含む。
 // 型は`f/factory/lib/console_holds_support.ts`の`HoldsSnapshot`に合わせる。
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_holds_contract.test.ts`が落ちる。
@@ -48,9 +48,22 @@ export type FreezesRead =
     }
   | { readonly ok: false; readonly reason: string };
 
+export type DeployApprovalRowView = {
+  readonly sha: string;
+  readonly protected_paths: readonly string[];
+  readonly protected_path_count: number;
+  readonly requested_at: string;
+};
+
+export type DeployApprovalsRead =
+  | { readonly ok: true; readonly pending: readonly DeployApprovalRowView[] }
+  | { readonly ok: false; readonly reason: string };
+
 export type HoldsSnapshot = {
   readonly holds: HoldsRead;
   readonly freezes: FreezesRead;
+  /** 反映の承認待ち。承認待ちを返さない旧版のbackendの間は欠ける。 */
+  readonly deploy_approvals?: DeployApprovalsRead;
 };
 
 // scopeとholder_kindと失敗のkindは表示にしか使わないので文字列で受け、日本語への変換(`labels.ts`)で
@@ -113,9 +126,41 @@ function isFreezesRead(value: unknown): value is FreezesRead {
     : isString(value.reason);
 }
 
-/** `value`がconsole_holdsの結果の形か。保留と凍結は別々の源なので、どちらの失敗も正しい形として受ける。 */
+function isDeployApprovalRowView(
+  value: unknown,
+): value is DeployApprovalRowView {
+  return (
+    isRecord(value) &&
+    isString(value.sha) &&
+    isArrayOf(isString)(value.protected_paths) &&
+    isPositiveInteger(value.protected_path_count) &&
+    isIsoTimestamp(value.requested_at)
+  );
+}
+
+const isDeployApprovalRows: Guard<DeployApprovalRowView[]> = isArrayOf(
+  isDeployApprovalRowView,
+);
+
+function isDeployApprovalsRead(value: unknown): value is DeployApprovalsRead {
+  if (!isRecord(value) || !isBoolean(value.ok)) {
+    return false;
+  }
+  return value.ok
+    ? isDeployApprovalRows(value.pending)
+    : isString(value.reason);
+}
+
+/**
+ * `value`がconsole_holdsの結果の形か。保留、凍結、承認待ちは別々の源なので、どの失敗も正しい形として受ける。
+ * 承認待ちは、旧版のbackendが返さない間も一覧の全体が消えないよう、欠けていてもよい。
+ */
 export function isHoldsSnapshot(value: unknown): value is HoldsSnapshot {
   return (
-    isRecord(value) && isHoldsRead(value.holds) && isFreezesRead(value.freezes)
+    isRecord(value) &&
+    isHoldsRead(value.holds) &&
+    isFreezesRead(value.freezes) &&
+    (value.deploy_approvals === undefined ||
+      isDeployApprovalsRead(value.deploy_approvals))
   );
 }

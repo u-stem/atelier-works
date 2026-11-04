@@ -486,7 +486,7 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 | 名前 | 用途 | 型付きの関数 |
 | --- | --- | --- |
 | `console_query` | 読み取り | `fetchSummary`など(`queries.ts`) |
-| `console_holds` | 有効な保留と凍結の読み取り | `fetchHolds`(`holdsQueries.ts`) |
+| `console_holds` | 有効な保留と凍結と、反映の承認待ちの読み取り | `fetchHolds`(`holdsQueries.ts`) |
 | `console_jobs` | ジョブの一覧と詳細の読み取り | `fetchActiveJobs`、`fetchJobHistory`、`fetchJobDetail`(`jobsQueries.ts`) |
 | `console_schedules` | scheduleの状態の読み取り | `fetchSchedules`(`jobsQueries.ts`) |
 | `console_config` | 設定の全項目の読み取り | `fetchConfig`(`jobsQueries.ts`) |
