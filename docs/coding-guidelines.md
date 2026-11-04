@@ -90,15 +90,50 @@ if (!isClaudeResult(parsed)) {
 `@{upstream}`、`FETCH_HEAD`、`git rev-parse refs/heads/<x>`の読み取りは対象外である。
 例外を認める仕組みは設けていない。
 
+## 開発の流れ
+
+変更は、次の順で進める。
+superpowersが使えない環境では、同じ流れ(計画、実装、別のsubagentによるレビュー1回、修正)を手で行う。
+各段のレビューは1回にする。
+レビュアーの人数とラウンドを増やしても検出率は上がらず、過剰な修正と文書の肥大を招くためである。
+
+1. 計画は`superpowers:brainstorming`で要件を固め、`superpowers:writing-plans`で書く。
+   計画と仕様は`docs/superpowers/`に書かれるが、gitで無視しているのでコミットしない。
+   設計文書をリポジトリに残さないためで、スキルがコミットを求める手順は飛ばし、`git add -f`は使わない。
+2. 実装は`superpowers:subagent-driven-development`で進める。
+   タスクごとに新しいimplementerとtask reviewerを起動する。
+   テストは`superpowers:test-driven-development`で先に書く。
+   親は、implementerへの依頼の制約に「テストを足すコミットを実装のコミットより前に作る」を書き、task reviewerにコミットの順序を確かめさせる。
+   スキルの最後にあるブランチ全体のレビューは起動せず、手順3の`/code-review high`で代える。
+   ブランチ全体を見る関門を1つにするためである。
+3. PRの前に`/code-review high`を1回通し、指摘はコードで確かめてから直す。
+   `/code-review high`の指摘は、検証段を通っていないためである。
+   次のどれかに当たるときは、`/security-review`も通す。
+   - 保護パス(`f/factory/lib/protected_paths.ts`の一覧に当たるファイル)を変えた
+   - 新しい`*.sh`を足した
+   - 検査を緩めうる`scripts/lint-*.ts`か`scripts/check-*.ts`を変えた
+4. `mise run check`が通り、`git status --short`が空であることを確かめてからpushする。
+5. PR本文は`pr-body`スキルに従って書く。
+
+## 前提の検証
+
+外部の挙動(git、gh、mise、Windmill、OS、外部サービス)に依存する前提は、実装の前に5分以内の読み取りで確かめる。
+前提が誤っていると、その上に積んだ実装とレビューが無駄になるためである。
+
+- 使い捨てのworktreeでは、外へ書き込むコマンドを実行しない。
+  `git push`と、本番へ反映する`mise run`のタスク(`push`、`push:prune`、`up`、`deploy`、`migrate`、`pull`、`console:rollback`、`console:unpin`、`worktree:prune -- --apply`)が当たる。
+- `gh`と`wmill`は、読み取りのサブコマンド(`view`、`list`、`get`、`--dry-run`)だけを使う。
+- 書き込みが要る検証は、一時ディレクトリに`git init`した使い捨てのリポジトリで行う。
+
 ## TDD
 
 - 新機能はテストから、バグ修正は再現テストから、リファクタはテストが緑の状態から始める(Red → Green → Refactor)。
 - テストを足すコミットは、実装のコミットより前に作り、実装の前にテストが失敗した出力を残す。
   何も確かめていないテストが通ることを防ぐためである。
   手順は`superpowers:test-driven-development`に従う。
-  守られているかは、subagent-driven-developmentのtask reviewerが、implementerの報告のRED/GREENの記録とコミットの順序で確かめる。
-- 外部の挙動(git、gh、mise、Windmill、OS、外部サービスの出力や状態)に依存する前提は、実装の前に実機で小さく確かめる。
-  前提の検証はAGENTS.mdの規則に従う。
+  守られているかは、親が依頼の制約に書いた順序を、task reviewerがimplementerの報告のRED/GREENの記録とコミットの順序で確かめる。
+- 外部の挙動に依存する前提は、実装の前に実機で小さく確かめる。
+  確かめ方は「前提の検証」にある。
 - テストの書き方は[テストの基準](testing-guidelines.md#テストの書き方)に従う。
 - 外部プロセス起動や`fetch`は引数として注入し、テストではダミー実装に差し替える(実プロセス・実HTTPを叩くテストは書かない)。
 - ただし、判定がgit自身の出力の形(パスの引用、未追跡ディレクトリのまとめ方、pathspecの解釈など)で決まるときは、一時ディレクトリに作ったリポジトリで実際のgitを実行するテストを書いてよい。`HOME`を一時ディレクトリに向けるなどして利用者の設定を読ませず、終わったらディレクトリを消す(`runCommand`で`echo`を実行するテストや、実際のflockを使うテストと同じ扱い)。
@@ -211,10 +246,11 @@ Generated-By: Software Factory (<instance_name>)
 | モデル | 用途 |
 | --- | --- |
 | Sonnet | 既定。実装、タスクごとのレビュー、文書の追従 |
-| Opus | 計画、ブランチ全体の最終レビュー、原因が分からないバグ、Sonnetで2回失敗した課題 |
+| Opus | 計画、原因が分からないバグ、Sonnetで2回失敗した課題 |
 | Fable | 最難関の課題だけ。Factoryの既定には入れない |
 
-`/code-review`は親のセッションのモデルで動き、指摘を検証段で落とすので、モデルを上げない。
+`/code-review high`は親のセッションのモデルで動き、モデルを上げない。
+指摘は検証段を通っていないので、コードで確かめてから直す。
 
 `.claude/settings.json`の`model`は`opusplan`にしている。計画モードだけがOpusで、実装はSonnetで動く。
 Opusで行う作業は、Agentツールの`model`に`opus`を指定したsubagentに任せる。

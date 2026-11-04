@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "../..");
-const OWNED_DIRS = [".claude/skills/hold"];
+const OWNED_DIRS = [".claude/skills/hold", ".claude/skills/pr-body"];
 
 // 外部の設定リポジトリの名前は、このテスト自身が検出されないよう、部品から組み立てる。
 const FORBIDDEN = new RegExp(
