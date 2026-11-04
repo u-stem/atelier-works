@@ -96,6 +96,7 @@ if (!isClaudeResult(parsed)) {
 - テストを足すコミットは、実装のコミットより前に作り、実装の前にテストが失敗した出力を残す。
   何も確かめていないテストが通ることを防ぐためである。
   手順は`superpowers:test-driven-development`に従う。
+  守られているかは、subagent-driven-developmentのtask reviewerが、implementerの報告のRED/GREENの記録とコミットの順序で確かめる。
 - 外部の挙動(git、gh、mise、Windmill、OS、外部サービスの出力や状態)に依存する前提は、実装の前に実機で小さく確かめる。
   前提の検証はAGENTS.mdの規則に従う。
 - テストの書き方は[テストの基準](testing-guidelines.md#テストの書き方)に従う。
@@ -209,8 +210,10 @@ Generated-By: Software Factory (<instance_name>)
 | モデル | 用途 |
 | --- | --- |
 | Sonnet | 既定。実装、タスクごとのレビュー、文書の追従 |
-| Opus | 計画、ブランチ全体の最終レビュー、`/code-review`、原因が分からないバグ、Sonnetで2回失敗した課題 |
+| Opus | 計画、ブランチ全体の最終レビュー、原因が分からないバグ、Sonnetで2回失敗した課題 |
 | Fable | 最難関の課題だけ。Factoryの既定には入れない |
+
+`/code-review`は親のセッションのモデルで動き、指摘を検証段で落とすので、モデルを上げない。
 
 `.claude/settings.json`の`model`は`opusplan`にしている。計画モードだけがOpusで、実装はSonnetで動く。
 Opusで行う作業は、Agentツールの`model`に`opus`を指定したsubagentに任せる。

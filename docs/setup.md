@@ -4,6 +4,9 @@
 
 ## 前提
 
+開発の流れはClaude Codeのプラグインsuperpowersに依存する。`/plugin`から入れる。
+無い環境では、AGENTS.mdの流れを手で行う。
+
 ホストに要るのは、Docker(Docker DesktopかOrbStack)とmiseだけである。node、bun、gh、windmill-cliなどほかのツールは、`mise run setup`の中の`mise install`で入る。
 テストを動かすホストのgitと、workerのgitは、2.44以上が要る([実装フローの仕様](internals/implement.md)を参照)。
 
@@ -428,7 +431,7 @@ OSやrootの有無で、動くテストが分かれるためである。
 下限を割ったときは、失敗の出力が示す未実行の行が多いファイルにテストを足す。
 `main`で割ったときも同じである。下限の定数は、割った原因を直すまで下げない。
 下限を上げるときは、`mise run test`の実測を見て、`scripts/check-coverage.ts`の`COVERAGE_FLOOR_PERCENT`を実測より低い値に変える。
-この変更は保護パスの変更なので、implementのPRでは「確認して欲しい点」の`保護パスを変更: <path>`の行に載るので、人がレビューする。
+この変更は保護パスの変更なので、人が書くPRでは「保護パスの変更」の節に、implementのPRでは「確認して欲しい点」の`保護パスを変更: <path>`の行に載り、人がレビューする。
 計算と限界は[テストの基準](testing-guidelines.md)に書く。
 
 ## Claude Codeのフック
@@ -501,6 +504,7 @@ mise run worktree:prune -- --apply
 2つ目が実際に消す。
 `.claude/settings.json`が許可するのは乾燥実行だけである。
 `--apply`は、対話セッションで乾燥実行の一覧を確かめてから付ける。
+クラウドやheadlessのように確認できない実行では、乾燥実行の結果を報告して終える。
 一覧に自分のものでないworktreeがあれば、他のセッションが使っていないことを確かめる。
 `--force`、`git branch -D`、`rm -rf`は使わない。未マージのコミットとコミットしていない変更を失わないため。
 `git worktree remove`を強制せずに使うので、変更やコミットは失われない。
