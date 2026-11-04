@@ -7,7 +7,13 @@ const OWNED_DIRS = [".claude/skills/hold"];
 
 // 外部の設定リポジトリの名前は、このテスト自身が検出されないよう、部品から組み立てる。
 const FORBIDDEN = new RegExp(
-  ["/Users/", "/home/[a-z]", "~/ws/", ["claude", "system"].join("-")].join("|"),
+  [
+    "/Users/",
+    "/home/[a-z]",
+    "~/ws/",
+    ["claude", "system"].join("-"),
+    "superpowers",
+  ].join("|"),
 );
 
 function isRecord(value: unknown): value is Record<string, unknown> {
