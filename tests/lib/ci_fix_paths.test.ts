@@ -972,6 +972,19 @@ describe("files of the conflict round", () => {
   });
 });
 
+// mainの自動反映は、保護パスに触れた変更を人の承認まで止める。CI回のClaudeには書き換えさせない。
+describe("files of the self update", () => {
+  test.each([
+    "f/factory/self_update.ts",
+    "f/factory/self_update.script.yaml",
+    "f/factory/self_update.script.lock",
+    "f/factory/self_update.schedule.yaml",
+    "f/factory/self_update.helpers.ts",
+  ])("denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+});
+
 describe("files of the implement gate", () => {
   test.each([
     "f/factory/lib/approval_gate.ts",

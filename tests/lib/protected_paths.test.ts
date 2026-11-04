@@ -716,10 +716,6 @@ describe("investigate isolation files", () => {
     expect(matchesImplementProtectedPath(path)).toBe(true);
   });
 
-  test("does not protect lib/claude.ts, whose diff stays small and which other flows change", () => {
-    expect(matchesForbiddenPath("f/factory/lib/claude.ts")).toBe(false);
-  });
-
   test("does not protect lib/config.ts, which changes often", () => {
     expect(matchesForbiddenPath("f/factory/lib/config.ts")).toBe(false);
   });
@@ -1499,6 +1495,10 @@ describe("dependency-free lib locks", () => {
     "ci_metadata_rehash",
     "holds",
     "console_holds_support",
+    "check_sandbox",
+    "check_runner",
+    "approval_gate",
+    "protected_paths",
   ].map((name) => `f/factory/lib/${name}`);
   const LOCKS = LIBS.map((base) => `${base}.script.lock`);
 
@@ -2187,5 +2187,74 @@ describe("merge guard files", () => {
 describe("mise.toml", () => {
   test("is a protected path, which holds the hold tasks", () => {
     expect(matchesForbiddenPath("mise.toml")).toBe(true);
+  });
+});
+
+// Factoryの安全策を担うコード(headless Claudeの起動、検査コマンドの隔離と実行、実装の関門の判定、
+// 保護パスの一覧、mainの自動反映)は、書き換えられると、安全策が人の目を通らずに外れる。
+// ファイルを移さずに守るので、保護が完全一致の一覧から来ていることを確かめる。
+describe("safety boundary files", () => {
+  const PATHS = [
+    "f/factory/lib/claude.ts",
+    "f/factory/lib/claude.script.yaml",
+    "f/factory/lib/check_sandbox.ts",
+    "f/factory/lib/check_sandbox.script.yaml",
+    "f/factory/lib/check_runner.ts",
+    "f/factory/lib/check_runner.script.yaml",
+    "f/factory/lib/approval_gate.ts",
+    "f/factory/lib/approval_gate.script.yaml",
+    "f/factory/lib/protected_paths.ts",
+    "f/factory/lib/protected_paths.script.yaml",
+    "f/factory/self_update.ts",
+    "f/factory/self_update.script.yaml",
+  ];
+  // windmill-clientを含むlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるので守らない。
+  const CLIENT_LOCKS = [
+    "f/factory/lib/claude.script.lock",
+    "f/factory/self_update.script.lock",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test.each(CLIENT_LOCKS)(
+    "matchesForbiddenPath does not match the lock %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(false);
+    },
+  );
+
+  test.each(CLIENT_LOCKS)(
+    "matchesImplementProtectedPath does not match the lock %s",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(false);
+    },
+  );
+
+  test.each(CLIENT_LOCKS)("the CI round still denies the lock %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+
+  test.each(CLIENT_LOCKS)("%s pins windmill-client", async (path) => {
+    expect(await Bun.file(path).text()).toContain('"windmill-client"');
+  });
+
+  test("lib/claude.script.yaml points at the lib's own lock", async () => {
+    expect(await Bun.file("f/factory/lib/claude.script.yaml").text()).toContain(
+      "lock: '!inline f/factory/lib/claude.script.lock'",
+    );
   });
 });
