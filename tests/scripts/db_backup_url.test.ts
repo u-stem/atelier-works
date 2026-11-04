@@ -63,6 +63,14 @@ describe("db_backup_url in bootstrap.sh", () => {
     expect(run("s3cret").status).toBe(0);
   });
 
+  test("exits non-zero when DB_PASSWORD is empty", () => {
+    expect(run("").status).not.toBe(0);
+  });
+
+  test("prints no URL when DB_PASSWORD is empty", () => {
+    expect(run("").stdout).toBe("");
+  });
+
   test("stores the URL in f/factory/db_backup_url", () => {
     expect(readFileSync(BOOTSTRAP, "utf8")).toContain(
       'upsert_variable "f/factory/db_backup_url" "${db_backup_url_value}"',

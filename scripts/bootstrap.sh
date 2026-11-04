@@ -134,6 +134,7 @@ esac
 : "${WM_HTTP_PORT:?run via 'mise run bootstrap' (mise.toml [env] sets this)}"
 : "${WM_ADMIN_EMAIL:?run via 'mise run bootstrap'; set with: mise set -E local WM_ADMIN_EMAIL=...}"
 : "${WM_ADMIN_PASSWORD:?run via 'mise run bootstrap'; set it as described in docs/setup.md (the section on injecting secrets)}"
+: "${DB_PASSWORD:?run via 'mise run bootstrap' (mise.local.toml sets this; the nightly backup URL is built from it)}"
 
 # --- 手順0: 弱い・既定の管理者パスワードでは実行を拒む ----------------------
 if [ "${WM_ADMIN_PASSWORD}" = "changeme" ] || [ "${#WM_ADMIN_PASSWORD}" -lt 12 ]; then
@@ -724,7 +725,8 @@ read_token_map_json() {
 # 値はjqの引数に載せず、環境変数で渡す。
 db_backup_url() {
   local encoded
-  encoded="$(WM_TMP_DB_PASSWORD="${DB_PASSWORD}" jq -rn 'env.WM_TMP_DB_PASSWORD | @uri')"
+  [ -n "${DB_PASSWORD:-}" ] || return 1
+  encoded="$(WM_TMP_DB_PASSWORD="${DB_PASSWORD}" jq -rn 'env.WM_TMP_DB_PASSWORD | @uri')" || return 1
   printf 'postgres://postgres:%s@db/postgres' "${encoded}"
 }
 

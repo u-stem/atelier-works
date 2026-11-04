@@ -36,8 +36,13 @@ tags = ["windmill", "atelier-works"]
 # - `wmill-lock.yaml`はワークスペースのscriptの内容ハッシュを持つ。
 #   モジュール名`discord`の隣のハッシュが、組み込みの`discord-api-token`ルールに当たる。
 # - テストは、マスク処理の固定値として明らかに偽物のwebhook URLを使う。
-# - workerのイメージは、PostgreSQLの公開の署名鍵のsha256を固定する。
-#   公開の値の検証用ハッシュが、`generic-api-key`に当たる。
-[allowlist]
+[[allowlists]]
+description = "wmill-lock.yaml content hashes"
 paths = ['''^wmill-lock\.yaml$''']
-regexes = ['''0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76''']
+
+# workerのイメージは、PostgreSQLの公開の署名鍵のsha256を固定する。
+# 公開の値の検証用ハッシュが`generic-api-key`に当たるので、このルールの、このハッシュと完全に一致する検出だけを除く。
+[[allowlists]]
+description = "PGDG signing key sha256 pinned in the worker image"
+targetRules = ["generic-api-key"]
+regexes = ['''^0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76$''']
