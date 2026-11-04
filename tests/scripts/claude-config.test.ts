@@ -31,6 +31,9 @@ function listFiles(dir: string): string[] {
 // gitが追跡するファイルだけを数える。ローカルに残した未追跡のファイルで検査を落とさないため。
 function trackedFiles(dir: string): string[] {
   const result = Bun.spawnSync(["git", "ls-files", "--", dir], { cwd: ROOT });
+  if (result.exitCode !== 0) {
+    throw new Error(`git ls-files failed: ${result.stderr.toString()}`);
+  }
   return result.stdout
     .toString()
     .split("\n")

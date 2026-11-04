@@ -7,8 +7,9 @@
 開発の流れはClaude Codeのプラグインsuperpowersに依存する。
 `/plugin marketplace add obra/superpowers-marketplace`でmarketplaceを足す。
 次に`/plugin install superpowers@superpowers-marketplace`で入れる。
-流れは6.3.0で確かめた。プラグインの版は固定できないので、更新で流れが変わったときは[コーディング規約](coding-guidelines.md)の「開発の流れ」を直す。
-無い環境では、同じ「開発の流れ」を手で行う。
+流れは6.3.0で確かめた。
+プラグインの版は固定できないので、更新で流れが変わったときは[コーディング規約](coding-guidelines.md)の「開発の流れ」を直す。
+無い環境では、[コーディング規約](coding-guidelines.md)の「開発の流れ」を手で行う。
 
 ホストに要るのは、Docker(Docker DesktopかOrbStack)とmiseだけである。node、bun、gh、windmill-cliなどほかのツールは、`mise run setup`の中の`mise install`で入る。
 テストを動かすホストのgitと、workerのgitは、2.44以上が要る([実装フローの仕様](internals/implement.md)を参照)。
