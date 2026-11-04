@@ -48,7 +48,7 @@ const WRAPPERS = [
 // 例外は`wmill.JobService.`で、Console用workerの確認(`watchConsoleWorker`)が
 // 自前の上限(`CONSOLE_WORKER_CHECK_TIMEOUT_MS`)で区切る。
 const UNBOUNDED_CALL =
-  /\bwmill\.(?!JobService\.)[A-Za-z]+(?:\.[A-Za-z]+)*\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(|\blistUnresolvedNoticesByKind\(|\bresolveNoticeIfUnresolved\(|\breadHostAppliedSha\(|\blistGhCollectFreshness\(|\blistGhRepoStaleSnapshot\(|\bresolveUnresolvedNoticesByPrefix\(/g;
+  /\bwmill\.(?!JobService\.)[A-Za-z]+(?:\.[A-Za-z]+)*\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(|\blistUnresolvedNoticesByKind\(|\bresolveNoticeIfUnresolved\(|\breadHostAppliedSha\(|\blistGhCollectFreshness\(|\blistGhRepoStaleSnapshot\(|\bresolveUnresolvedNoticesByPrefix\(|\bfindDeployApproval\(|\brequestDeployApproval\(/g;
 /** 区切りの呼び出しの開きから、その中の呼び出しまでの、最も長い距離。 */
 const WRAPPER_REACH = 700;
 
@@ -140,6 +140,8 @@ describe("self_update timeout", () => {
     const hostCommit = count(source, /isCommitInClone\(\s*runCommand,/g);
     const hostAncestor = count(source, /isAncestorSha\(\s*runCommand,/g);
     const hostContent = count(source, /listDifferingPaths\(\s*runCommand,/g);
+    // 保護パスの判定の差分は、ローカルのオブジェクトを比べるだけなので、ローカルのgitとして1回数える。
+    const gateDiff = count(source, /listChangedEntries\(\s*runCommand,/g);
     const passed = count(source, /\(\s*runCommand,/g);
 
     expect({
@@ -150,9 +152,16 @@ describe("self_update timeout", () => {
         single,
       localCommands:
         hostCommit +
+        gateDiff +
         (HOST_ACTION_RECONCILE_LIMIT + 1) * (hostAncestor + hostContent),
     }).toEqual({
-      passed: miseCompare + single + hostCommit + hostAncestor + hostContent,
+      passed:
+        miseCompare +
+        single +
+        hostCommit +
+        hostAncestor +
+        hostContent +
+        gateDiff,
       commands: SELF_UPDATE_GIT_COMMAND_COUNT,
       localCommands: SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT,
     });
@@ -179,6 +188,12 @@ describe("self_update timeout", () => {
         .slice(start, source.indexOf(";", start))
         .match(/DESIGN_NOTICE_CHECK_TIMEOUT_MS/g)?.length,
     ).toBe(1);
+  });
+
+  test("counts the gate diff as one local git command", async () => {
+    const source = await selfUpdateSource();
+
+    expect(count(source, /listChangedEntries\(\s*runCommand,/g)).toBe(1);
   });
 
   test("the freeze phase count matches the call sites", async () => {

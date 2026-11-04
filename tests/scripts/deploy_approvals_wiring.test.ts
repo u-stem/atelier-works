@@ -21,7 +21,7 @@ const TABLE_REFERENCE =
 
 /** 書く関数ごとの、名前を持ってよい`f/`のファイル。モジュール自身は走査から外す。 */
 const WRITERS: Readonly<Record<string, readonly string[]>> = {
-  requestDeployApproval: [],
+  requestDeployApproval: ["f/factory/self_update.ts"],
   decideDeployApproval: [],
 };
 

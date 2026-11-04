@@ -12,6 +12,7 @@ import {
   isAncestorSha,
   isCommitInClone,
   listAllPaths,
+  listChangedEntries,
   listDifferingPaths,
   readSelfCloneBranch,
   readSelfCloneHeadSha,
@@ -413,6 +414,69 @@ describe("isCommitInClone", () => {
     await isCommitInClone(fake.run, DIR, A);
     expect(fake.calls[0]?.options?.timeoutMs).toBe(
       SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+    );
+  });
+});
+
+describe("listChangedEntries", () => {
+  const OLD = "a".repeat(40);
+  const NEW = "b".repeat(40);
+
+  test("asks git for the name and the status without renames", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    await listChangedEntries(run, "/repo", OLD, NEW);
+    expect(calls[0]?.argv.slice(-5)).toEqual([
+      "diff",
+      "--name-status",
+      "--no-renames",
+      "-z",
+      `${OLD}..${NEW}`,
+    ]);
+  });
+
+  test("bounds the local git with the local timeout", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    await listChangedEntries(run, "/repo", OLD, NEW);
+    expect(calls[0]?.options?.timeoutMs).toBe(SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS);
+  });
+
+  test("parses the entries", async () => {
+    const { run } = createFakeCommandRunner([
+      ok("A\0tools/run.sh\0M\0f/factory/self_update.ts\0"),
+    ]);
+    expect(await listChangedEntries(run, "/repo", OLD, NEW)).toEqual([
+      { path: "tools/run.sh", status: "added" },
+      { path: "f/factory/self_update.ts", status: "modified" },
+    ]);
+  });
+
+  test("throws when git fails", async () => {
+    const { run } = createFakeCommandRunner([fail("bad revision")]);
+    await expect(listChangedEntries(run, "/repo", OLD, NEW)).rejects.toThrow(
+      /git diff --name-status failed/,
+    );
+  });
+
+  test("throws when git times out", async () => {
+    const { run } = createFakeCommandRunner([timeout()]);
+    await expect(listChangedEntries(run, "/repo", OLD, NEW)).rejects.toThrow(
+      /timed out/,
+    );
+  });
+
+  test("throws when the output was abandoned", async () => {
+    const { run } = createFakeCommandRunner([
+      { ...ok("M\0a.ts\0"), outputAbandoned: true },
+    ]);
+    await expect(listChangedEntries(run, "/repo", OLD, NEW)).rejects.toThrow(
+      /abandoned/,
+    );
+  });
+
+  test("refuses a sha that is not a sha", async () => {
+    const { run } = createFakeCommandRunner([]);
+    await expect(listChangedEntries(run, "/repo", "main", NEW)).rejects.toThrow(
+      /invalid git SHA/,
     );
   });
 });

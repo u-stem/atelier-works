@@ -99,6 +99,7 @@ import {
   PERIODIC_WORKER_CHECK_TIMEOUT_MS,
   periodicQueueQuery,
 } from "./lib/periodic_worker.ts";
+import type { ChangedPath } from "./lib/protected_paths.ts";
 import {
   MERGED_PULL_REQUESTS_LOG_FORMAT,
   parseMergedPullRequests,
@@ -423,6 +424,16 @@ export async function listDifferingPaths(
     throw new Error(`too many differing paths between ${from} and ${to}`);
   }
   return parseNulSeparatedPaths(result.stdout);
+}
+
+/** テスト先行のための仮の実装。実装のコミットで置き換える。 */
+export async function listChangedEntries(
+  _run: CommandRunner,
+  _dir: string,
+  _oldSha: string,
+  _newSha: string,
+): Promise<ChangedPath[]> {
+  return [];
 }
 
 /**

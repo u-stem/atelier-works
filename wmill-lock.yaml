@@ -195,7 +195,7 @@ locks:
   f/factory/pr_review_submit: 4927355ebb6ec18d5ddb0fdc8f1bf784b6a050f1be8dd83a89dc9936c4a7a237
   f/factory/retry_work_item: 1ba50eaa155e060cb28d6a95b34ecc5f9884ef4665efe3f878da4d78fe683e0d
   f/factory/sample_worker_load: c9f49cba2f86ab2406e37baf04fc2aae3077aa4e432bd154164e534b80227cd1
-  f/factory/self_update: d5da784cee9c7f86d3dcf93c9b3218a126a50077a446a0d38b8e75fe8126716a
+  f/factory/self_update: 60270e7ecc6aff201d38e5e206bc29d8d8164ab3d00e9944b902508a35573deb
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 61fc1f70dac94d87d68292ba8d5aaa6df99e608826fdb63909a8c20718700898
   f/factory/steps/console_query: 2e5e9b4632acd8ce2a055fe9304bd7b874d453de20f3bb8159f45e2dbcd1bd52

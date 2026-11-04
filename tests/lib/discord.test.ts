@@ -141,6 +141,33 @@ describe("buildEmbed host_action_required", () => {
   });
 });
 
+describe("buildEmbed deploy_approval_required", () => {
+  const event: NotifyEvent = {
+    kind: "deploy_approval_required",
+    instance_name: "local",
+    cause: "反映を待つ版: abc。保護パスのファイルが2件あります",
+    next_action: "Consoleで承認する",
+    url: "https://factory.example/console/?notice=41",
+  };
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe(event.cause);
+  });
+
+  test("links to the notice in the Console", () => {
+    expect(buildEmbed(event).url).toBe(
+      "https://factory.example/console/?notice=41",
+    );
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "Consoleで承認する",
+    });
+  });
+});
+
 describe("buildEmbed job_failed", () => {
   test("shows the next action as a field when the event has one", () => {
     expect(

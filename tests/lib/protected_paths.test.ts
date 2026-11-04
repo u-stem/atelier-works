@@ -2282,6 +2282,7 @@ describe("deploy approval gate files", () => {
     "f/factory/lib/deploy_gate.ts",
     "f/factory/lib/deploy_gate.script.yaml",
     "tests/lib/deploy_gate.test.ts",
+    "tests/scripts/self_update_deploy_gate.test.ts",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {

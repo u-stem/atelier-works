@@ -106,10 +106,18 @@ describe("parseNameStatus", () => {
     ["M", "modified"],
     ["D", "deleted"],
     ["T", "typechange"],
-    ["U", "unknown"],
   ] as const)("reads the status %s as %s", (letter, status) => {
     expect(parseNameStatus(`${letter}\0a.ts\0`)[0]?.status).toBe(status);
   });
+
+  test.each(["U", "X", "R100", "C75", "", "MM"])(
+    "throws on the status %p that --no-renames never prints",
+    (letter) => {
+      expect(() => parseNameStatus(`${letter}\0a.ts\0`)).toThrow(
+        /unexpected status/,
+      );
+    },
+  );
 
   test("keeps a path with a newline in it", () => {
     expect(parseNameStatus("A\0a\nb.sh\0")[0]?.path).toBe("a\nb.sh");
