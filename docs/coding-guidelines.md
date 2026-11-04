@@ -90,15 +90,64 @@ if (!isClaudeResult(parsed)) {
 `@{upstream}`、`FETCH_HEAD`、`git rev-parse refs/heads/<x>`の読み取りは対象外である。
 例外を認める仕組みは設けていない。
 
+## 開発の流れ
+
+変更は、次の順で進める。
+superpowersが使えない環境では、同じ流れ(計画、実装、別のsubagentによるレビュー1回、修正)を手で行う。
+各段のレビューは、新しいレビュアーを1回起動し、修正の後は範囲を絞った再レビューだけにする。
+レビュアーの人数とラウンドを増やしても検出率は上がらず、過剰な修正と文書の肥大を招くためである。
+
+1. 計画は`superpowers:brainstorming`で要件を固め、`superpowers:writing-plans`で書く。
+   計画と仕様は`docs/superpowers/`に書かれるが、gitで無視しているのでコミットしない。
+   設計文書をリポジトリに残さないためで、スキルがコミットを求める手順は飛ばし、`git add -f`は使わない。
+2. 実装は`superpowers:subagent-driven-development`で進める。
+   worktreeは`mise run worktree:new`で作り、スキルの`using-git-worktrees`は使わない。
+   タスクごとに新しいimplementerとtask reviewerを起動する。
+   テストは`superpowers:test-driven-development`で先に書く。
+   親は、implementerへの依頼の制約に「テストを足すコミットを実装のコミットより前に作る」を書き、task reviewerにコミットの順序を確かめさせる。
+   スキルの最後にあるブランチ全体のレビューは起動せず、手順3の`/code-review high`で代える。
+   ブランチ全体を見る関門を1つにするためである。
+   台帳(`.superpowers/sdd/<計画名>/progress.md`)に残した保留の指摘は、手順3の前に親が直すか、PR本文の「確認して欲しい点」に書く。
+3. PRの前に`/code-review high`を1回通し、指摘はコードで確かめてから直す。
+   `/code-review high`の指摘は、検証段を通っていないためである。
+   次のどれかに当たるときは、`/security-review`も通す。
+   - 保護パス(`f/factory/lib/protected_paths.ts`の一覧に当たるファイル)を変えた
+   - 新しい`*.sh`を足した
+   - 検査を緩めうる`scripts/lint-*.ts`か`scripts/check-*.ts`を変えた
+   - `protected_paths.ts`の注記が「人のレビューで差分を確かめて止める」と書いた関数や定数を変えた。
+     注記の一覧が正本である。
+     `pr_fix_verify.ts`、`pr_fix_finish.ts`、`ci_fix_round.ts`、`ci_fix_classify.ts`、`pr_ci_fix_claim.ts`が当たる。
+     `workspace.ts`のgitの固定設定も当たる。
+   - migrationに`DROP`、`DELETE`、`TRUNCATE`、既存の値を変える`UPDATE`を含めた
+   - 権限、sandbox、トークンの範囲、秘密値の扱いを足すか変えた
+   - ファイル、ブランチ、worktree、プロセスを消す処理を足すか変えた
+   - ファイルを問わず、禁止、止める基準、確認の省略の範囲を緩める文言を足すか変えた。
+     AGENTS.mdの禁止事項と、`docs/security.md`の残るリスクを含む。
+4. `mise run check`が通り、`git status --short`が空であることを確かめてからpushする。
+5. PR本文は`pr-body`スキルに従って書く。
+
+## 前提の検証
+
+外部の挙動(git、gh、mise、Windmill、OS、外部サービス)に依存する前提は、実装の前に5分以内の読み取りで確かめる。
+前提が誤っていると、その上に積んだ実装とレビューが無駄になるためである。
+
+- 前提の検証では、外へ書き込むコマンドを実行しない。
+  `git push`と、本番のFactoryへ書き込む`mise run`のタスクが当たる。
+  タスクは`push`、`push:prune`、`up`、`deploy`、`migrate`、`hold:place`、`hold:release`、`freeze:place`、`freeze:release`、`freeze:reset`、`console:rollback`、`console:unpin`である。
+  本物のworktreeを消す`worktree:prune -- --apply`も当たる。
+- 前提の検証では、`gh`と`wmill`は読み取りのサブコマンド(`view`、`list`、`get`、`--dry-run`)だけを使う。
+  PRとIssueの作成は検証ではないので、この制限に当たらない。
+- 書き込みが要る検証は、一時ディレクトリに`git init`した使い捨てのリポジトリで行う。
+
 ## TDD
 
 - 新機能はテストから、バグ修正は再現テストから、リファクタはテストが緑の状態から始める(Red → Green → Refactor)。
 - テストを足すコミットは、実装のコミットより前に作り、実装の前にテストが失敗した出力を残す。
   何も確かめていないテストが通ることを防ぐためである。
-  守られているかは、code-reviewerが、コミットの順序と失敗の出力で確かめる。
-  手順は[review-loopスキル](../.claude/skills/review-loop/SKILL.md)の「テスト先行の確認」にある。
-- 外部の挙動(git、gh、mise、Windmill、OS、外部サービスの出力や状態)に依存する前提は、実装の前に実機で小さく確かめる。
-  手順は[review-loopスキル](../.claude/skills/review-loop/SKILL.md)の「前提の検証」にある。
+  手順は`superpowers:test-driven-development`に従う。
+  守られているかは、親が依頼の制約に書いた順序を、task reviewerがimplementerの報告のRED/GREENの記録とコミットの順序で確かめる。
+- 外部の挙動に依存する前提は、実装の前に実機で小さく確かめる。
+  確かめ方は「前提の検証」にある。
 - テストの書き方は[テストの基準](testing-guidelines.md#テストの書き方)に従う。
 - 外部プロセス起動や`fetch`は引数として注入し、テストではダミー実装に差し替える(実プロセス・実HTTPを叩くテストは書かない)。
 - ただし、判定がgit自身の出力の形(パスの引用、未追跡ディレクトリのまとめ方、pathspecの解釈など)で決まるときは、一時ディレクトリに作ったリポジトリで実際のgitを実行するテストを書いてよい。`HOME`を一時ディレクトリに向けるなどして利用者の設定を読ませず、終わったらディレクトリを消す(`runCommand`で`echo`を実行するテストや、実際のflockを使うテストと同じ扱い)。
@@ -178,6 +227,7 @@ bunは依存のinstall scriptを既定では実行しないが、既定の信頼
 ## PRとコミット
 
 PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。
+節ごとに何を書くかと、推敲から作成までの手順は、`pr-body`スキルにある。
 
 人がClaude Codeで作るコミットには、`Co-Authored-By: Claude <noreply@anthropic.com>`のトレーラーを付ける。
 モデル名を間に入れてもよく、キー名の大文字小文字は区別しない。
@@ -207,23 +257,19 @@ Generated-By: Software Factory (<instance_name>)
 このリポジトリでClaudeを使うときも、Factoryの工程も、同じ方針でモデルを選ぶ。
 間違えたときにやり直しが高くつく作業は上位のモデルに任せ、安く直せる作業は既定のモデルで済ませる。
 
-| モデル | 使う場面 |
+| モデル | 用途 |
 | --- | --- |
-| Sonnet | 既定。実装、review-loopのcode-reviewer、文書の追従 |
-| Opus | 設計の判断、原因が分からないバグ、大きな計画とレビュー、Sonnetで2回失敗した課題 |
-| Fable | 最難関の課題だけ。subagentの定義やFactoryの既定には入れない |
+| Sonnet | 既定。実装、タスクごとのレビュー、文書の追従 |
+| Opus | 計画、原因が分からないバグ、Sonnetで2回失敗した課題 |
+| Fable | 最難関の課題だけ。Factoryの既定には入れない |
 
-review-loopでimplementerをOpusで起動し直す条件は、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)が定める。
+`/code-review high`は親のセッションのモデルで動き、モデルを上げない。
+指摘は検証段を通っていないので、コードで確かめてから直す。
 
 `.claude/settings.json`の`model`は`opusplan`にしている。計画モードだけがOpusで、実装はSonnetで動く。
-`/model opus`は人が打つコマンドで、Claudeの親のセッションは自分で切り替えられない。
-review-loopの親が指摘の判定を覆すときや、`[Q]`に答えるときのように、重い判断をする場面では、次のように分ける。
+Opusで行う作業は、Agentツールの`model`に`opus`を指定したsubagentに任せる。
 人が見ているセッションでは、人が`/model opus`に切り替える。
-クラウドやheadlessでは、重い判断の材料をOpusのsubagent(triage、devil-advocate)に出させる。
-subagentのモデルは、各定義の`model`で決める。
-implementer、code-reviewer、doc-writerはSonnetで動く。
-design-reviewer、requirements-reviewer、security-auditor、devil-advocate、triageはOpusで動く。
-Opusで起動できないときの扱いは、review-loopスキルにある。
+`/model`は人が打つコマンドで、Claudeの親のセッションは自分で切り替えられないため。
 
 Factoryも同じ方針で、`f/factory/factory_config`の`model`(既定はSonnet)と`heavy_model`(既定はOpus)を使い分ける。
 実装とPR修正は、同じ作業でSonnetが続けて2回失敗したら、`heavy_model`で動く。

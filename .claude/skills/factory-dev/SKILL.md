@@ -1,6 +1,6 @@
 ---
 name: factory-dev
-description: 本リポジトリ(atelier-works)の開発環境をセットアップし、miseタスクで起動・検証・デプロイするときに使う。実装・レビュー・修正のループを回す際にも参照する。
+description: 本リポジトリ(atelier-works)の開発環境をセットアップし、miseタスクで起動・検証・デプロイするときに使う。実装とレビューの進め方を確かめるときにも参照する。
 ---
 
 # このリポジトリの開発手順(factory-dev)
@@ -15,20 +15,19 @@ description: 本リポジトリ(atelier-works)の開発環境をセットアッ�
 - 秘密値は人が投入する。Claudeは`mise.local.toml.example`の更新までを行う。値が要るときは、[セットアップ](../../../docs/setup.md)の「秘密値を投入する」のコマンドを示し、止まらずに先へ進む。
 - `docker compose`は`.env`を読まない。`mise run`を通して実行する。
 
-## 実装、レビュー、修正のループ
-
-このリポジトリの変更は、計画の確定、実装、レビュー、修正、再レビューのループで進める。
+## 実装とレビューの進め方
 
 1. 対象のファイルと受入条件を決めてから実装を始める。
 2. TDD(Red、Green、Refactor)で実装する。対象の外のファイルには触れない。
 3. `mise run check`が通ることを、実装の完了の条件にする。
-4. レビューと修正は、[review-loopスキル](../review-loop/SKILL.md)の手順で回す。人数、ラウンドの上限、設計レビューの要否は、変更の種類で決まる。
+
+レビューと修正の進め方は、[コーディング規約](../../../docs/coding-guidelines.md)の「開発の流れ」に従う。
 
 ## コミットとPR
 
 - コミットメッセージは`<type>: <日本語の説明>`の形にする(例: `feat: Issueを拾うpoll_issuesのスケジュールを追加`)。typeの一覧は[コーディング規約](../../../docs/coding-guidelines.md)にある。
 - コードの変更に伴う文書とスキルの更新は、同じコミットに含める。
-- PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。Windmillへの反映(マージ後に`self_update`が反映するか、次の`mise run up`で反映されるか)を必ず書く。
+- PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従い、書き方は`pr-body`スキルに従う。Windmillへの反映(マージ後に`self_update`が反映するか、次の`mise run up`で反映されるか)を必ず書く。
 
 ## E2Eで確かめる
 
