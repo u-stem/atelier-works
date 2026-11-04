@@ -98,7 +98,7 @@ function Row({
 
 /**
  * 保護パスの変更の反映の承認待ち。承認待ちが無いときは何も描かない(保留と凍結の空の旨は、隣の一覧が出す)。
- * 読めないときは、承認待ちなしとは書かず、反映が止まったままである旨と理由を出す。
+ * 読めないときは、承認待ちなしとは書かず、反映が止まったままである旨と理由を出す。承認の注記は承認待ちがあるときだけ出す。
  * 版とパスはリポジトリ由来の文字列なので、文字としてだけ描く(リンクにしない)。
  */
 export function DeployApprovalsPanel({
@@ -121,9 +121,11 @@ export function DeployApprovalsPanel({
         <h3 className="text-body font-semibold">
           {DEPLOY_APPROVALS_TEXT.cardTitle}
         </h3>
-        <p className="text-small text-muted-foreground">
-          {DEPLOY_APPROVALS_TEXT.cardNote}
-        </p>
+        {view.kind === "pending" ? (
+          <p className="text-small text-muted-foreground">
+            {DEPLOY_APPROVALS_TEXT.cardNote}
+          </p>
+        ) : null}
       </div>
       {view.kind === "failed" ? (
         <Card

@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { DEPLOY_APPROVALS_TEXT, hiddenPathsText } from "../../lib/labels.ts";
 import type { DeployDecisionRequest } from "./DeployApprovalsPanel.tsx";
@@ -24,10 +25,12 @@ export function DeployDecideDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const effectId = useId();
   return (
     <ConfirmDialog
       open={request !== null}
       title={titleOf(request)}
+      {...(request === null ? {} : { describedBy: effectId })}
       confirmLabel={
         request?.decision === "reject"
           ? DEPLOY_APPROVALS_TEXT.confirmReject
@@ -73,7 +76,7 @@ export function DeployDecideDialog({
               </dd>
             </div>
           </dl>
-          <p className="text-body">
+          <p id={effectId} className="text-body">
             {request.decision === "approve"
               ? DEPLOY_APPROVALS_TEXT.approveEffect
               : DEPLOY_APPROVALS_TEXT.rejectEffect}
