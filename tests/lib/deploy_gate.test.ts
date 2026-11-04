@@ -422,26 +422,53 @@ describe("runDeployApprovalGate", () => {
     expect(recorded.events).toEqual([]);
   });
 
-  test("raises no notice when another run created the request first", async () => {
+  test("still raises the notice when another run created the request first", async () => {
     const { deps: gate, recorded } = deps({
       requestApproval: () => Promise.resolve(false),
     });
     await runDeployApprovalGate(SHA, gate);
-    expect(recorded.notices).toEqual([]);
+    expect(recorded.notices).toHaveLength(1);
   });
 
-  test("raises no notice while the request waits", async () => {
+  test("raises the notice while the request waits and no notice is open", async () => {
     const { deps: gate, recorded } = deps({
       findApproval: () => Promise.resolve(approval(null)),
     });
     await runDeployApprovalGate(SHA, gate);
-    expect({
-      requested: recorded.requested,
-      notices: recorded.notices,
-    }).toEqual({
-      requested: [],
-      notices: [],
+    expect(recorded.notices).toHaveLength(1);
+  });
+
+  test("raises the notice while a rejected request holds and no notice is open", async () => {
+    const { deps: gate, recorded } = deps({
+      findApproval: () => Promise.resolve(approval("rejected")),
     });
+    await runDeployApprovalGate(SHA, gate);
+    expect(recorded.notices).toHaveLength(1);
+  });
+
+  test("does not create the request again while the request waits", async () => {
+    const { deps: gate, recorded } = deps({
+      findApproval: () => Promise.resolve(approval(null)),
+    });
+    await runDeployApprovalGate(SHA, gate);
+    expect(recorded.requested).toEqual([]);
+  });
+
+  test("does not notify Discord on a later hold when the notice is already open", async () => {
+    const { deps: gate, recorded } = deps({
+      findApproval: () => Promise.resolve(approval(null)),
+      addNotice: () => Promise.resolve(null),
+    });
+    await runDeployApprovalGate(SHA, gate);
+    expect(recorded.events).toEqual([]);
+  });
+
+  test("leaves the notices alone on a later hold, so the open notice of the same sha stays", async () => {
+    const { deps: gate, recorded } = deps({
+      findApproval: () => Promise.resolve(approval(null)),
+    });
+    await runDeployApprovalGate(SHA, gate);
+    expect(recorded.superseded).toBe(0);
   });
 
   test("holds even when the notice cannot be recorded", async () => {

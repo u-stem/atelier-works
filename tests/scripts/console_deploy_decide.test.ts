@@ -99,6 +99,20 @@ describe("decideDeployRecorded refusals", () => {
     expect(seen.decided).toEqual([]);
   });
 
+  test("refuses with audit_unavailable when the operator name is over 100 characters", async () => {
+    const { deps: d } = deps({ deriveApprover: () => "a".repeat(101) });
+    expect(await decideDeployRecorded(SHA, "approve", d, RECORDING)).toEqual({
+      refused: true,
+      reason: "audit_unavailable",
+    });
+  });
+
+  test("does not decide when the operator name is over 100 characters", async () => {
+    const { deps: d, seen } = deps({ deriveApprover: () => "a".repeat(101) });
+    await decideDeployRecorded(SHA, "approve", d, RECORDING);
+    expect(seen.decided).toEqual([]);
+  });
+
   test("refuses with not_pending when the request is not pending", async () => {
     const { deps: d } = deps({ decide: () => Promise.resolve(false) });
     expect(await decideDeployRecorded(SHA, "approve", d, RECORDING)).toEqual({
