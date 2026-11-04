@@ -27,6 +27,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   implement_needs_human: "info",
   dependabot_merge_held: "info",
   hold_released: "info",
+  deploy_approval_decided: "info",
   approval_comment_failed: "action",
   intake_refreshed: "action",
   implement_launch_failed: "action",
@@ -40,6 +41,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   owner_id_mismatch: "action",
   factory_repo_id_mismatch: "action",
   host_action_required: "action",
+  deploy_approval_required: "action",
   cleanup_db_failed: "action",
   cleanup_worktree_busy: "action",
   check_slot_skipped: "action",
@@ -81,12 +83,15 @@ export const INFO_NOTICE_KINDS: readonly string[] = Object.entries(
  * 安全策が外れていることが見えなくなるため。
  * `design_enabled_ignored`は「要対応」で、設定を直すと自己更新だけが解決する。
  * 画面から消せると、設定が直らないまま通知だけが消えるため。
+ * `deploy_approval_required`は「要対応」で、Consoleの承認か却下、または反映の成功だけが解決する。
+ * 画面から消せると、反映が止まったまま要対応の一覧から消えるため。
  */
 export const UNRESOLVABLE_NOTICE_KINDS: readonly string[] = [
   "unsandboxed_check_commands",
   "labeler_denied",
   "fix_feedback_association_excluded",
   "design_enabled_ignored",
+  "deploy_approval_required",
 ];
 
 /**

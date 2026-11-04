@@ -302,6 +302,9 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * `lib/deploy_approvals.script.lock`は、依存の無いlibのlockと同じ扱いで守らない。
  * 判定(`lib/deploy_gate.ts`)とその`.script.yaml`、単体テスト(`tests/lib/deploy_gate.test.ts`)も守る。判定のimportの連鎖は、すべて保護パスに入れる。
  * 判定を`self_update`に組み込む位置を固定するテスト(`tests/scripts/self_update_deploy_gate.test.ts`)も守る。
+ * Consoleから反映を承認・却下するscript(`console_deploy_decide.ts`)と、その`.script.yaml`、テストも守る。
+ * 書き換えられると、承認待ちでない版や、操作者の分からない判断が、承認として記録される。
+ * `console_deploy_decide.script.lock`は、`windmill-client`を含みうるので守らない。
  * 判定が止めるのは、判定のコード自体の改変である。判定の入力(gitの実行と承認の行のDB接続)は、守らないモジュールから来る。
  * 守ると、全機能が使うモジュールを直すほぼすべてのPRが承認待ちになる。守っても、反映済みのscriptはDBに書けるので、承認の行を直接作る経路は閉じない。
  * この部分は、人のレビューとDBの権限に頼る。
@@ -611,6 +614,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/deploy_gate.script.yaml",
   "tests/lib/deploy_gate.test.ts",
   "tests/scripts/self_update_deploy_gate.test.ts",
+  "f/factory/console_deploy_decide.ts",
+  "f/factory/console_deploy_decide.script.yaml",
+  "tests/scripts/console_deploy_decide.test.ts",
 ];
 
 /**

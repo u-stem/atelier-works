@@ -65,6 +65,8 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["owner_id_mismatch", "オーナーの照合の失敗"],
   ["factory_repo_id_mismatch", "Factory自身のリポジトリの照合の失敗"],
   ["host_action_required", "ホスト側の作業"],
+  ["deploy_approval_required", "保護パスの変更の反映の承認待ち"],
+  ["deploy_approval_decided", "反映の承認の判断"],
   ["cleanup_db_failed", "データベースの掃除の失敗"],
   ["cleanup_worktree_busy", "作業ディレクトリの使用中"],
   ["check_slot_skipped", "検査の枠の飛ばし"],
