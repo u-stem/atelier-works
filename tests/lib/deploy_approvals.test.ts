@@ -149,6 +149,17 @@ describe("findDeployApproval", () => {
     );
   });
 
+  test("tells that the migration is missing when the API error body names the table", async () => {
+    const { sql } = fakeSql([
+      Object.assign(new Error("request failed"), {
+        body: 'error: relation "factory.deploy_approvals" does not exist',
+      }),
+    ]);
+    await expect(findDeployApproval(SHA, sql)).rejects.toThrow(
+      /mise run migrate/,
+    );
+  });
+
   test("tells that the migration is missing when the table does not exist", async () => {
     const { sql } = fakeSql([Object.assign(new Error("x"), { code: "42P01" })]);
     await expect(findDeployApproval(SHA, sql)).rejects.toThrow(

@@ -5,6 +5,7 @@
 //
 // 使い方: COMPOSE_FILE=<compose> SCRATCH_DB=<db> bun run scripts/test-db-deploy-approvals.ts
 
+import { deleteDeploymentsBefore } from "../f/factory/lib/db.ts";
 import {
   decideDeployApproval,
   findDeployApproval,
@@ -180,6 +181,57 @@ check(
 // 後の検査に行を残さない。
 execPsql(target, `DELETE FROM factory.deployments WHERE sha_to = '${SHA_E}'`);
 execPsql(target, "DELETE FROM factory.deploy_approvals");
+
+// ---------------------------------------------------------------------------
+// 掃除が、最後に成功した反映の行を残すこと
+// ---------------------------------------------------------------------------
+
+/** 他の検査の行が混ざらないよう、表を空にしてから、期限前の行を入れる。 */
+function seedDeployments(rows: readonly (readonly [string, string, string])[]) {
+  execPsql(target, "DELETE FROM factory.deployments");
+  for (const [sha, result, ago] of rows) {
+    execPsql(
+      target,
+      `INSERT INTO factory.deployments (sha_to, result, occurred_at) VALUES ('${sha}', '${result}', now() - interval '${ago}')`,
+    );
+  }
+}
+
+async function remainingDeployments(): Promise<string> {
+  const rows = await sql`
+    SELECT sha_to FROM factory.deployments ORDER BY occurred_at
+  `.fetch();
+  return rows.map((row) => String(row.sha_to)).join(",");
+}
+
+const SHA_OLD_SUCCESS = "1".repeat(40);
+const SHA_NEW_SUCCESS = "2".repeat(40);
+const SHA_FAILURE = "3".repeat(40);
+const cleanupCutoff = new Date(Date.now() - 60 * 60 * 1000);
+
+seedDeployments([
+  [SHA_OLD_SUCCESS, "success", "5 days"],
+  [SHA_NEW_SUCCESS, "success", "3 days"],
+  [SHA_FAILURE, "failure", "1 day"],
+]);
+const deletedWithSuccess = await deleteDeploymentsBefore(cleanupCutoff, sql);
+const remainingWithSuccess = await remainingDeployments();
+check(
+  "deleteDeploymentsBefore keeps only the newest successful deployment before the cutoff",
+  remainingWithSuccess === SHA_NEW_SUCCESS && deletedWithSuccess === 2,
+  { remaining: remainingWithSuccess, deleted: deletedWithSuccess },
+);
+
+seedDeployments([[SHA_FAILURE, "failure", "1 day"]]);
+const deletedWithoutSuccess = await deleteDeploymentsBefore(cleanupCutoff, sql);
+const remainingWithoutSuccess = await remainingDeployments();
+check(
+  "deleteDeploymentsBefore deletes every row before the cutoff when no deployment succeeded",
+  remainingWithoutSuccess === "" && deletedWithoutSuccess === 1,
+  { remaining: remainingWithoutSuccess, deleted: deletedWithoutSuccess },
+);
+
+execPsql(target, "DELETE FROM factory.deployments");
 
 if (failures.length > 0) {
   console.error(
