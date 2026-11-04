@@ -28,8 +28,9 @@ const NAME_STATUS: ReadonlyMap<string, ChangedPathStatus> = new Map([
 
 /**
  * `git diff --name-status --no-renames -z`の出力を、変更の一覧にする。
- * 出力は「状態、NUL、パス、NUL」の繰り返しである。知らない状態は`unknown`にする(パスの判定はそのまま効く)。
- * 欄の数が奇数か、パスが空なら、読み違いを避けるため例外を投げる。
+ * 出力は「状態、NUL、パス、NUL」の繰り返しである。
+ * 欄の数が奇数か、パスが空か、状態が`A`、`M`、`D`、`T`のどれでもないなら、読み違いを避けるため例外を投げる。
+ * `--no-renames`を付け忘れると、改名の行は状態の後にパスが2つ続き、組がずれて保護パスへの改名を見落とすためである。
  */
 export function parseNameStatus(output: string): ChangedPath[] {
   if (output === "") return [];
@@ -49,7 +50,13 @@ export function parseNameStatus(output: string): ChangedPath[] {
         "deploy gate: git diff --name-status output has an empty path",
       );
     }
-    entries.push({ path, status: NAME_STATUS.get(letter) ?? "unknown" });
+    const status = NAME_STATUS.get(letter);
+    if (status === undefined) {
+      throw new Error(
+        `deploy gate: git diff --name-status output has an unexpected status: ${JSON.stringify(letter)}`,
+      );
+    }
+    entries.push({ path, status });
   }
   return entries;
 }

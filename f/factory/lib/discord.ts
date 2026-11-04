@@ -184,6 +184,17 @@ export type NotifyEvent =
       next_action: string;
     }
   | {
+      /** 保護パスの変更を含む反映が、人の承認を待っていること。 */
+      kind: "deploy_approval_required";
+      instance_name: string;
+      /** 待っている版と、保護パスの変更の件数。 */
+      cause: string;
+      /** 運用者がまず行う操作の1文。 */
+      next_action: string;
+      /** Consoleでこのnoticeを選んだ要対応のURL(`buildNoticeConsoleUrl`)。 */
+      url: string;
+    }
+  | {
       kind: "console_worker_missing";
       instance_name: string;
       /** Console用のworkerがtag `console`のジョブを受けていないこと。 */
@@ -552,6 +563,16 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         title: "ホスト側の作業が必要です",
         description: event.cause,
         url: null,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+        ],
+      };
+    case "deploy_approval_required":
+      return {
+        title: "保護パスの変更の反映が承認を待っています",
+        description: event.cause,
+        url: event.url,
         fields: [
           { name: "次の操作", value: event.next_action },
           instanceField(event.instance_name),

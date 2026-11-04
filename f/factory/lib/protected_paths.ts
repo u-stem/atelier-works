@@ -301,6 +301,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 実DBの検査(`scripts/test-db-deploy-approvals.ts`)である。書き換えられると、承認の無い版が承認済みとして読まれ、保護パスの変更が人の確認なしに反映される。
  * `lib/deploy_approvals.script.lock`は、依存の無いlibのlockと同じ扱いで守らない。
  * 判定(`lib/deploy_gate.ts`)とその`.script.yaml`、単体テスト(`tests/lib/deploy_gate.test.ts`)も守る。判定のimportの連鎖は、すべて保護パスに入れる。
+ * 判定を`self_update`に組み込む位置を固定するテスト(`tests/scripts/self_update_deploy_gate.test.ts`)も守る。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -606,6 +607,7 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/deploy_gate.ts",
   "f/factory/lib/deploy_gate.script.yaml",
   "tests/lib/deploy_gate.test.ts",
+  "tests/scripts/self_update_deploy_gate.test.ts",
 ];
 
 /**
