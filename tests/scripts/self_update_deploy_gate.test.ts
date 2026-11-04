@@ -74,10 +74,17 @@ describe("self_update deploy approval gate", () => {
     );
   });
 
-  test("resolves the approval notices after recording a successful deployment", async () => {
+  test("resolves the approval notices after advancing the deployed sha", async () => {
     const text = await selfUpdateSource();
-    expect(at(text, "await recordSuccessDeployment(")).toBeLessThan(
+    expect(at(text, "await advanceDeployedSha(")).toBeLessThan(
       at(text, '"resolve deploy approval notices"'),
+    );
+  });
+
+  test("resolves the approval notices before recording a successful deployment", async () => {
+    const text = await selfUpdateSource();
+    expect(at(text, '"resolve deploy approval notices"')).toBeLessThan(
+      at(text, "await recordSuccessDeployment("),
     );
   });
 

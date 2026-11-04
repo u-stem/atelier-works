@@ -362,6 +362,13 @@ async function resolveNoticesBeforeDeployment(
   }
 }
 
+/** スタブ。実装は次のコミットで書く。 */
+export async function anyDeployHold(
+  _checks: readonly (() => Promise<boolean>)[],
+): Promise<boolean> {
+  return false;
+}
+
 /**
  * 有効なdeployの保留があるか。保留中は`self_update`が反映を見送るので、食い違いは異常ではない。
  * 読めないときは、反映の停止を見逃さないよう、保留が無いものとして通知する側に倒す。

@@ -104,3 +104,22 @@ describe("the migration that creates the table", () => {
     expect(matchesImplementProtectedPath(path)).toBe(true);
   });
 });
+
+describe("poll_issues", () => {
+  test("treats a deploy held for an approval as a held deploy", async () => {
+    const source = await Bun.file("f/factory/poll_issues.ts").text();
+    expect(source).toMatch(
+      /isDeployHeld: \(\) =>\s*anyDeployHold\(\[[\s\S]*?isDeployHeldForApproval\(defaultSqlClient\)/,
+    );
+  });
+
+  test("bounds the read of the approvals", async () => {
+    const source = await Bun.file("f/factory/poll_issues.ts").text();
+    const at = source.indexOf("isDeployHeldForApproval(");
+    expect(
+      at >= 0 &&
+        source.lastIndexOf("withCallTimeout(", at) >
+          source.indexOf("isDeployHeld:"),
+    ).toBe(true);
+  });
+});
