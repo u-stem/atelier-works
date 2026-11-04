@@ -666,8 +666,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/investigate` | flow | [OP-1-5] 調査(実装せずに調べて、結果をIssueのコメントで返す) |
 | `f/factory/steps/investigate_register` | script | [OP-1-5/1] 対象と依頼文を確かめて調査を登録 |
 | `f/factory/steps/investigate_prepare` | script | [OP-1-5/2] 設定、予算、時間を確かめ、調べるコミットを決める |
-| `f/factory/steps/investigate_generate` | script | [OP-1-5/3] 隔離を確かめ、読み出し専用のClaudeで調査 |
-| `f/factory/steps/investigate_post` | script | [OP-1-5/4] 結果を無害化し、秘密値を検査して、Issueへ投稿 |
+| `f/factory/steps/investigate_generate` | script | [OP-1-5/3] 隔離を確かめ、読み出し専用のClaudeで調査して本文を作る |
+| `f/factory/steps/investigate_post` | script | [OP-1-5/4] 最終の本文に秘密値の検査をもう一度掛けて、Issueへ投稿 |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
 | `f/factory/investigate_isolation_probe` | script | [OP-2-11] 調査のClaudeの隔離を、読み出しと探索で測定して判定 |
@@ -1043,10 +1043,10 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 
 1. 登録: 入力、設定、リポジトリの許可、Issue、隔離の測定、稼働中の調査を確かめて、作業項目を作る。
 2. 準備: 設定の読み直し、予算と時間の確認をして、調べるコミットを決める。
-3. 生成: 隔離の関門を確かめて、読み出し専用のClaudeで調べる。
-4. 投稿: 結果を無害化し、秘密値を検査して、Issueへ投稿する。
+3. 生成: 隔離の関門を確かめて、読み出し専用のClaudeで調べ、結果から投稿する本文を作る。
+4. 投稿: 本文に秘密値の検査をもう一度掛けて、Issueへ投稿する。
 
-手順は[運用](operations.md#調査を実行する)に、隔離と投稿の前の検査は[セキュリティ](security.md#調査の入口)に、状態の動きは[作業項目の状態とリース](internals/work-items.md#調査の作業項目)に書く。
+手順は[運用](operations.md#調査を実行する)に、隔離と本文の検査は[セキュリティ](security.md#調査の入口)に、状態の動きは[作業項目の状態とリース](internals/work-items.md#調査の作業項目)に書く。
 
 ## 未実装の機能
 

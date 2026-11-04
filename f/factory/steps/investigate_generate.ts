@@ -1,5 +1,5 @@
 // f/factory/investigateフローの4ステップ中3番目(生成)。
-// 調査のClaudeを起動して、構造化出力を返す。調査のClaudeを起動する、本番で唯一の場所である。
+// 調査のClaudeを起動して、Issueに投稿する最終の本文を作る。調査のClaudeを起動する、本番で唯一の場所である。
 // 保護パスに置く。順序を入れ替えたり確認を外したりすると、止めたはずの調査や、隔離の測定に合格していない隔離で、
 // Claudeが秘密を持つworkerで動くため。
 //
@@ -11,7 +11,11 @@
 // 5. 作業ツリーを作り、指示と設定の項目を無効にする。
 // 6. 起動の直前に、設定を読み直し、関門をもう一度呼ぶ。手順1や3の後で設定か隔離が変わっていたら、起動しない。
 // 7. 調査のClaudeを起動する。実行の記録は残す。
-// 8. 成否にかかわらず、作業ツリーを消す。
+// 8. 構造化出力から本文を作る(`prepareInvestigateComment`)。生の出力の検査、マスク、無害化、マスク、切り詰め、最終の検査の順に行う。
+// 9. 成否にかかわらず、作業ツリーを消す。
+// 次のstepに渡すのは、最終の本文か、本文を作れなかった理由の符号だけである。
+// 生の構造化出力は、結果にも引数にもログにも例外にも載せない。
+// Windmillは、引数の`$var:`や`$res:`で始まる文字列を、実行者の権限で解決するので、生の出力を引数で渡さない。
 // 関門の証拠は、同じプロセスの中でしか使えないので、関門の呼び出しと起動は、このstepに置く。
 //
 // 調査のClaudeの起動は、隔離を固定する包み関数だけを使い、`lib/claude.ts`の実行関数は直接呼ばない。
@@ -20,6 +24,8 @@
 // このファイルでは、importと、依存の初期値として渡す箇所の2回だけ名指しする。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
+import { ciTextScanner } from "../lib/ci_fix_round.ts";
+import type { CiTextScanner } from "../lib/ci_log_support.ts";
 import { buildSystemPrompt } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
@@ -29,6 +35,7 @@ import {
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
+import { parseTokenVariable } from "../lib/gh_collect_support.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import {
   type InvestigateClaudeOptions,
@@ -42,9 +49,11 @@ import {
   holdsInvestigateLease,
   INVESTIGATE_SCHEMA,
   type InvestigateOutput,
+  type InvestigateWithheld,
   investigatePrompt,
   isInvestigateOutput,
   isProbeJobActive,
+  prepareInvestigateComment,
 } from "../lib/investigate_flow.ts";
 import {
   checkIsolationProof,
@@ -63,8 +72,10 @@ import { type CommandRunner, runCommand } from "../lib/workspace.ts";
 export type InvestigateGenerateResult = {
   readonly skip: boolean;
   readonly reason: string | null;
-  /** 調査の構造化出力。信頼できない入力の影響を受けた自由文なので、投稿のstepが無害化と秘密値の検査をする。 */
-  readonly output: InvestigateOutput | null;
+  /** Issueに投稿する最終の本文。目印は付いていない。作れなかったときは`null`。 */
+  readonly comment_body: string | null;
+  /** 本文を作れなかった理由の符号。作れたときは`null`。 */
+  readonly withheld: InvestigateWithheld | null;
 };
 
 export type InvestigateGenerateInput = {
@@ -104,6 +115,13 @@ export type InvestigateGenerateDeps = {
     readonly cleanup: () => Promise<void>;
   }>;
   readonly readOauthToken: () => Promise<string>;
+  /**
+   * このstepが読む秘密値と、このstepのトークン。本文の完全一致のマスクに使う。
+   * 読めないときは例外を投げる。そのときは本文を作らない。
+   */
+  readonly readSecrets: () => Promise<readonly string[]>;
+  /** 本文に掛ける秘密値の検査。 */
+  readonly scan: CiTextScanner;
   /** 調査のClaudeを起動する。 */
   readonly launch: (
     opts: InvestigateClaudeOptions<InvestigateOutput>,
@@ -122,7 +140,7 @@ export type InvestigateGenerateDeps = {
 };
 
 function skipped(reason: string): InvestigateGenerateResult {
-  return { skip: true, reason, output: null };
+  return { skip: true, reason, comment_body: null, withheld: null };
 }
 
 const OTHER_INVESTIGATION: EscalationSpec = {
@@ -239,13 +257,47 @@ export async function runInvestigateGenerate(
         await deps.escalate(item, claudeFailedEscalation(result.reason));
         return skipped("claude_failed");
       }
-      return { skip: false, reason: null, output: result.structuredOutput };
+      return await buildHandover(deps, item.id, result.structuredOutput);
     } finally {
       await settle(deps, () => systemPrompt.cleanup(), "system prompt");
     }
   } finally {
     await settle(deps, () => deps.removeWorktree(), "worktree");
   }
+}
+
+/**
+ * 構造化出力から、次のstepに渡す本文か符号を作る。
+ * 秘密値を読めないときは、本文を作らず`scan_failed`にする。例外の中身は、記録に残さない。
+ */
+async function buildHandover(
+  deps: InvestigateGenerateDeps,
+  workItemId: number,
+  output: InvestigateOutput,
+): Promise<InvestigateGenerateResult> {
+  let secrets: readonly string[];
+  try {
+    secrets = await deps.readSecrets();
+  } catch {
+    deps.log.warn("investigate_generate: secrets unreadable, withholding");
+    return withheldResult("scan_failed");
+  }
+  const prepared = await prepareInvestigateComment(output, {
+    workItemId,
+    secrets,
+    scan: deps.scan,
+  });
+  if (prepared.kind === "withheld") return withheldResult(prepared.reason);
+  return {
+    skip: false,
+    reason: null,
+    comment_body: prepared.body,
+    withheld: null,
+  };
+}
+
+function withheldResult(code: InvestigateWithheld): InvestigateGenerateResult {
+  return { skip: false, reason: null, comment_body: null, withheld: code };
 }
 
 /** 関門の判定だけを確かめる。閉じていれば、人に回して、飛ばす結果を返す。開いていれば`null`。 */
@@ -287,6 +339,33 @@ async function settle(
       error: maskSecrets(String(err)),
     });
   }
+}
+
+/**
+ * このstepが読む秘密値を集める。完全一致のマスクに使う。空の値は含めない。
+ * `github_read_tokens`の形が誤っているときは、どの値が秘密か分からないので例外を投げる。
+ */
+async function readSecretValues(): Promise<readonly string[]> {
+  const [oauth, github, windmill, discord, readTokens] = await Promise.all([
+    wmill.getVariable("f/factory/claude_oauth_token"),
+    wmill.getVariable("f/factory/github_token"),
+    wmill.getVariable("f/factory/wmill_token"),
+    wmill.getVariable("f/factory/discord_webhook_url"),
+    wmill.getVariable("f/factory/github_read_tokens"),
+  ]);
+  const parsed = parseTokenVariable(readTokens);
+  if (parsed.kind === "invalid") {
+    throw new Error("investigate_generate: github_read_tokens is malformed");
+  }
+  const tokens = parsed.kind === "ok" ? [...parsed.tokens.values()] : [];
+  return [
+    oauth,
+    github,
+    windmill,
+    discord,
+    ...tokens,
+    process.env.WM_TOKEN ?? "",
+  ].filter((value) => value !== "");
 }
 
 export async function main(
@@ -364,6 +443,8 @@ export async function main(
           factoryCloneDir: factory_clone_dir,
         }),
       readOauthToken: () => wmill.getVariable("f/factory/claude_oauth_token"),
+      readSecrets: readSecretValues,
+      scan: ciTextScanner(runCommand),
       launch: runInvestigateClaude,
       removeWorktree: async () => {
         await purgeInvestigateRoot(workspaceOptions);

@@ -39,7 +39,7 @@ value:
         type: static
         value: 1800
     - id: investigate_generate
-      summary: '[OP-1-5/3] 隔離を確かめ、読み出し専用のClaudeで調査'
+      summary: '[OP-1-5/3] 隔離を確かめ、読み出し専用のClaudeで調査して本文を作る'
       value:
         type: script
         input_transforms:
@@ -64,13 +64,16 @@ value:
         type: static
         value: 7200
     - id: investigate_post
-      summary: '[OP-1-5/4] 結果を無害化し、秘密値を検査して、Issueへ投稿'
+      summary: '[OP-1-5/4] 最終の本文に秘密値の検査をもう一度掛けて、Issueへ投稿'
       value:
         type: script
         input_transforms:
-          output:
+          comment_body:
             type: javascript
-            expr: results.investigate_generate?.output ?? null
+            expr: results.investigate_generate?.comment_body ?? null
+          withheld:
+            type: javascript
+            expr: results.investigate_generate?.withheld ?? null
           work_item_id:
             type: javascript
             expr: results.investigate_register.work_item_id

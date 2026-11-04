@@ -8,7 +8,8 @@
 //    1回目は、欄の切り詰めが値を割る前に消すため。2回目は、無害化で見えない文字が消えてつながった値を消すため。
 // 3. 組み立てて長さに収め、最終の本文にgitleaksをもう一度掛ける。
 // 完全一致のマスクとgitleaksは、どちらも第2層である。形が秘密値でない本文や、値を変えて書かれた秘密値は消せない。
-// 最後に投稿を止める守りは、最終の本文のgitleaks検査である。
+// 組み立ては生成のstepが行い、次のstepに渡すのは最終の本文か理由の符号だけである。
+// 投稿のstepは、投稿の直前に、受け取った本文にgitleaksをもう一度掛ける。これが最後に投稿を止める守りである。
 // この検査の経路(`lib/ci_fix_round.ts`、`lib/workspace.ts`、`lib/log.ts`、`lib/github.ts`)は保護パスの外にあり、
 // 緩められても、保護されたテストは、偽の検査器を差し込むので落ちない。
 
@@ -169,7 +170,7 @@ export type InvestigateCommentResult =
   | { readonly kind: "ok"; readonly body: string }
   | {
       readonly kind: "withheld";
-      readonly reason: "secret_detected" | "scan_failed";
+      readonly reason: InvestigateWithheld;
     };
 
 export type InvestigateCommentDeps = {
@@ -283,27 +284,52 @@ export async function prepareInvestigateComment(
   return { kind: "ok", body };
 }
 
-/** 本文を作れなかった理由の符号。生成のstepが次のstepに渡す。 */
+/**
+ * 本文を作れなかった理由の符号。生成のstepが次のstepに渡す。
+ * 検出された値の断片は、符号にも載せない。
+ */
 export type InvestigateWithheld = "secret_detected" | "scan_failed";
 
-/** 実装は次のコミットで行う。 */
-export function isWithheldCode(_value: unknown): _value is InvestigateWithheld {
-  return false;
+export function isWithheldCode(value: unknown): value is InvestigateWithheld {
+  return value === "secret_detected" || value === "scan_failed";
 }
 
-/** 実装は次のコミットで行う。 */
+/**
+ * 投稿してよい本文の形か。役割のタグで始まり、目印を足しても上限に収まる。
+ * 生成のstepが渡す値はこの形だけなので、`$var:`や`$res:`で始まる文字列は通さない。
+ */
 export function isPostableCommentBody(
-  _body: unknown,
-  _workItemId: number,
-): _body is string {
-  return false;
+  body: unknown,
+  workItemId: number,
+): body is string {
+  if (typeof body !== "string" || !body.startsWith(INVESTIGATE_ROLE_TAG)) {
+    return false;
+  }
+  const room =
+    INVESTIGATE_COMMENT_MAX_CHARS -
+    withMarker(INVESTIGATE_MARKER_KIND, workItemId, "").length;
+  return body.length <= room;
 }
 
-/** 実装は次のコミットで行う。 */
+/** 本文を投稿しないときの、状態の注記(英語)と、通知の理由と次の操作(日本語)。検出された値は含まない。 */
 export function withheldEscalation(
-  _reason: InvestigateWithheld,
+  reason: InvestigateWithheld,
 ): EscalationSpec {
-  return { note: "", reason: "", nextAction: "" };
+  if (reason === "secret_detected") {
+    return {
+      note: "result withheld: secret detected",
+      reason:
+        "調査の結果に秘密値の形の文字列が含まれていたため、投稿しませんでした。",
+      nextAction:
+        "生成stepのジョブとtranscriptで検出対象を確かめ、workerの秘密値なら秘密の入れ替えの手順を行い、それから投入し直してください。",
+    };
+  }
+  return {
+    note: "result withheld: secret scan failed",
+    reason: "調査の結果の秘密値の検査ができなかったため、投稿しませんでした。",
+    nextAction:
+      "検査(gitleaks)が動くことと、変数の形を確かめ、依頼文を変えて投入し直してください。",
+  };
 }
 
 // ---------------------------------------------------------------------------

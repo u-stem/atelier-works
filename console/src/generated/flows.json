@@ -238,13 +238,13 @@
         },
         {
           "id": "investigate_generate",
-          "summary": "隔離を確かめ、読み出し専用のClaudeで調査",
+          "summary": "隔離を確かめ、読み出し専用のClaudeで調査して本文を作る",
           "scriptPath": "f/factory/steps/investigate_generate",
           "conditional": true
         },
         {
           "id": "investigate_post",
-          "summary": "結果を無害化し、秘密値を検査して、Issueへ投稿",
+          "summary": "最終の本文に秘密値の検査をもう一度掛けて、Issueへ投稿",
           "scriptPath": "f/factory/steps/investigate_post",
           "conditional": true
         }
