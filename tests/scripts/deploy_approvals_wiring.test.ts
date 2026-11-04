@@ -123,3 +123,11 @@ describe("poll_issues", () => {
     ).toBe(true);
   });
 });
+
+describe("console_holds", () => {
+  test("reads the pending approvals through the module", async () => {
+    expect(await Bun.file("f/factory/console_holds.ts").text()).toContain(
+      "listPendingDeployApprovals(defaultSqlClient)",
+    );
+  });
+});

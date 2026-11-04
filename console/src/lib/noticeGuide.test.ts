@@ -498,4 +498,10 @@ describe("deploy approval guides", () => {
       "自動で解決",
     );
   });
+
+  test("tells that a rejection keeps the notice until the revert is deployed", () => {
+    expect(noticeGuide("deploy_approval_required").note).toContain(
+      "却下すると通知は残り",
+    );
+  });
 });

@@ -1483,6 +1483,16 @@ describe("what the scripts return", () => {
       }),
     ).toBe(false);
   });
+
+  test("a deploy refusal with an unknown reason fails the guard", () => {
+    expect(isDeployDecideResult({ refused: true, reason: "unknown" })).toBe(
+      false,
+    );
+  });
+
+  test("a deploy refusal without a reason fails the guard", () => {
+    expect(isDeployDecideResult({ refused: true })).toBe(false);
+  });
 });
 
 // 型の食い違いは、実行より前に型検査で落ちる。

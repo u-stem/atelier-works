@@ -140,10 +140,16 @@ describe("decideDeployRecorded decisions", () => {
     });
   });
 
-  test("resolves the notice of the sha as the operator", async () => {
+  test("resolves the required notice of the sha as the operator on an approval", async () => {
     const { deps: d, seen } = deps();
     await decideDeployRecorded(SHA, "approve", d, RECORDING);
     expect(seen.resolved).toEqual([{ sha: SHA, resolvedBy: "operator" }]);
+  });
+
+  test("does not resolve the required notice on a rejection", async () => {
+    const { deps: d, seen } = deps();
+    await decideDeployRecorded(SHA, "reject", d, RECORDING);
+    expect(seen.resolved).toEqual([]);
   });
 
   test("leaves an info notice of the decision", async () => {

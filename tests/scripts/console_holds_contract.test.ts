@@ -17,6 +17,7 @@ import {
 } from "../../f/factory/console_holds.ts";
 import type * as support from "../../f/factory/lib/console_holds_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
+import type { DeployApproval } from "../../f/factory/lib/deploy_approvals.ts";
 import { serializeFreezeState } from "../../f/factory/lib/freezes.ts";
 import {
   HOLD_SCOPES,
@@ -78,9 +79,20 @@ const VARIABLE = serializeFreezeState({
   ],
 });
 
+const SHA = "0123456789abcdef0123456789abcdef01234567";
+const PENDING: DeployApproval = {
+  sha: SHA,
+  protected_paths: ["f/factory/self_update.ts"],
+  requested_at: "2026-10-24T02:00:00.000Z",
+  decided_at: null,
+  decision: null,
+  decided_by: null,
+};
+
 function depsFor(
   holds: SqlRow[] | Error,
   variable: string | null,
+  approvals: readonly DeployApproval[] | Error = [],
 ): HoldsSnapshotDeps {
   return {
     listHolds: () => listActiveHolds({}, sqlReturning(holds)),
@@ -89,6 +101,10 @@ function depsFor(
       writeVariable: async () => {},
       now: () => NOW,
     },
+    listPendingDeployApprovals: () =>
+      approvals instanceof Error
+        ? Promise.reject(approvals)
+        : Promise.resolve(approvals),
   };
 }
 
@@ -140,10 +156,66 @@ describe("what console_holds returns", () => {
     );
   });
 
+  test("a snapshot with a pending approval passes the guard", async () => {
+    const snapshot = await loadHoldsSnapshot(depsFor([], null, [PENDING]));
+    expect(consoleHolds.isHoldsSnapshot(await snapshotOver(snapshot))).toBe(
+      true,
+    );
+  });
+
+  test("a snapshot whose approvals cannot be read passes the guard", async () => {
+    const snapshot = await loadHoldsSnapshot(
+      depsFor([], null, new Error("db down")),
+    );
+    expect(consoleHolds.isHoldsSnapshot(await snapshotOver(snapshot))).toBe(
+      true,
+    );
+  });
+
+  test("an unreadable approvals source does not hide the holds", async () => {
+    const snapshot = await loadHoldsSnapshot(
+      depsFor([holdRow("merge", 1, "session")], null, new Error("db down")),
+    );
+    expect(snapshot.holds.ok).toBe(true);
+  });
+
+  test("returns the pending approval", async () => {
+    const snapshot = await loadHoldsSnapshot(depsFor([], null, [PENDING]));
+    expect(snapshot.deploy_approvals).toEqual({
+      ok: true,
+      pending: [
+        {
+          sha: SHA,
+          protected_paths: ["f/factory/self_update.ts"],
+          protected_path_count: 1,
+          requested_at: "2026-10-24T02:00:00.000Z",
+        },
+      ],
+    });
+  });
+
+  test("clips the paths of a large approval and keeps the count", async () => {
+    const many = Array.from(
+      { length: 60 },
+      (_unused, index) => `infra/f${String(index)}`,
+    );
+    const snapshot = await loadHoldsSnapshot(
+      depsFor([], null, [{ ...PENDING, protected_paths: many }]),
+    );
+    const pending = snapshot.deploy_approvals.ok
+      ? snapshot.deploy_approvals.pending[0]
+      : undefined;
+    expect({
+      shown: pending?.protected_paths.length,
+      count: pending?.protected_path_count,
+    }).toEqual({ shown: 50, count: 60 });
+  });
+
   test("the backend snapshot fits the console type", () => {
     const backend: support.HoldsSnapshot = {
       holds: { ok: true, rows: [] },
       freezes: { ok: true, schedule: [], deploy: [] },
+      deploy_approvals: { ok: true, pending: [] },
     };
     const consoleSide: consoleHolds.HoldsSnapshot = backend;
     expect(consoleHolds.isHoldsSnapshot(consoleSide)).toBe(true);
