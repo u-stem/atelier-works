@@ -74,6 +74,8 @@ export const RERUNNABLE_SCHEDULES: readonly RerunTarget[] = [
 export const NOT_RERUNNABLE_SCHEDULES: Readonly<Record<string, string>> = {
   "f/factory/audit_kickoff":
     "週1回の監査の起動。Consoleに監査の起動の操作がある",
+  "f/factory/backup":
+    "控えを取り直す。1時間まで動き、Consoleから重ねて動かしてよいかを確かめていない",
   "f/factory/cleanup_db": "古い行を削除する。冪等性を確かめていない",
   "f/factory/cleanup_workspaces":
     "作業領域を削除する。実行中の作業と干渉しうる",
