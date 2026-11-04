@@ -9,8 +9,9 @@
 - フックの扱い: `scripts/yomiyasu_hook.py`は取り込み元のまま同梱する。
   Claude Codeのフックとして、どこにも登録しない。
   登録しない対象は、`.claude/settings.json`、`.claude/settings.local.json`、ユーザーの設定、スキルとsubagentのfrontmatterの`hooks`である。
-  登録すると、返答の終了(Stop)と、BashとMCPのツールの実行(PreToolUse)を止める判定が返りうる。
-  PreToolUseを止めるのは、`/yomiyasu`で原稿を登録した実行の間である。
+  登録すると、返答の終了(Stop)を続けさせる判定と、BashとMCPのツールの実行(PreToolUse)を確認(`ask`)か拒否(`deny`)にする判定が返りうる。
+  どちらも働くのは、原稿を登録した実行の間だけである。
+  原稿は、`/yomiyasu`か`yomiyasu_check.py start`で登録する。
   `--print-config`の出力は端末ごとの絶対パスを含む。
   貼る先がgitignore済みのローカルの設定やユーザーの設定になりやすく、レビューを通らない。
   保護パスのレビューが効くのは、`.claude/settings.json`とfrontmatterに登録するときだけである。

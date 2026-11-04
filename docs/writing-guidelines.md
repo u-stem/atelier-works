@@ -151,8 +151,10 @@ worktreeに置くと未追跡のファイルが残り、コミットに入った
 足すと、中に`.gitignore`の無い`.yomiyasu/`まで、片付けが消す側に入るためである。
 
 最上位の`.yomiyasu/`は、再生成できる成果物ではなく、消してよい検査の記録である。
-`mise run worktree:prune`は、`.yomiyasu/`が残ったworktreeも、ほかの条件を満たせば消す。
-記録が消えるので、原文と最終稿は、先にworktreeの外へ写しておく。
+`mise run worktree:prune -- --apply`は、`.yomiyasu/`が残ったworktreeも、ほかの条件を満たせば消す。
+`mise run worktree:new`の後の自動の片付けも、確認なしで同じように消す。
+記録が消えるので、残したい原文と最終稿は、検査の後に写しておく。
+写す先はworktreeの外で、worktreeが片付けの対象となる前に済ませる。
 
 ## エージェント向けの文書
 

@@ -512,9 +512,12 @@ mise run worktree:prune -- --apply
 - 変更も未追跡のファイルも無い。
 - 無視されたファイルが、再生成できる次の6つと、消してよい検査の記録だけである。
   再生成できるものは、`node_modules`、`.wmill`のシンボリックリンク、`console/dist/`、`console/.cache/`、`__pycache__/`、`.DS_Store`である。
-  消してよい検査の記録は、最上位の`.yomiyasu/`の下で、`git status --ignored`が末尾に`/`の無い1行で示すファイルである。
+  消してよい検査の記録は、最上位の`.yomiyasu/`の下で、`!! .yomiyasu/<パス>`の1行で示されるファイルである。
+  判定に使うコマンドは`git status --porcelain --ignored --untracked-files=all`である。
+  `--untracked-files=all`を付けるので、無視されたフォルダはまとまらず、ファイルごとに1行で出る。
   gitが無視と示すかだけで決め、無視の元(中の`.gitignore`や除外の設定)は問わない。
   `.yomiyasu/`の下に入れ子のリポジトリがあると、gitは`/`で終わる1行で示すので、残す。
+  引用符付きで出るパスも残す。
   それ以外(`*.local.*`、`.claude/settings.local.json`など)は、削除で黙って消えるので、`ignored files`として残す。
 - 直近120分以内に更新したファイルが無い。
 - cwdをその中に持つプロセスが無い。

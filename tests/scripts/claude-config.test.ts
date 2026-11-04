@@ -291,7 +291,8 @@ describe("repository-owned Claude config", () => {
   });
 
   // 同梱のyomiyasuは、frontmatterとsettingsにフックを登録しない。
-  // 取り込みで行が戻ると、検査の記録がworktreeに溜まり、許可の確認も省かれる。
+  // `allowed-tools`はスクリプトの実行を確認なしで許し、
+  // `hooks`はツールの実行と返答の終了を止める判定を返すためである。
   test("reads a name from every skill and agent frontmatter", () => {
     const files = skillAndAgentFrontmatters();
 

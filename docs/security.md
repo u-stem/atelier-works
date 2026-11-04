@@ -596,6 +596,8 @@ worktreeを作るフックと、既存のブランチを使う経路(worktreeの
   認めないもの(bareのリポジトリ、指す先の無いgitfile)は消える。
 - `.yomiyasu`を`.git/info/exclude`やユーザーの除外の設定に足すと、中に`.gitignore`の無い`.yomiyasu/`も消える側に移る。
   足さない。
+- 既定の場所で`yomiyasu_check.py`を実行すると、`.gitignore`の無い既存の`.yomiyasu/`にも`.gitignore`(`*`)が足される。
+  中のファイルは`??`から`!!`に変わり、`dirty`で残っていたものが消える側に移る。
 - メインのcheckoutの`.yomiyasu/`は片付けの範囲外で、写しが溜まる。
   コミットには入らない。
 
