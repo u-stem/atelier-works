@@ -1,0 +1,32 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/investigate_generate.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    _factory_clone_dir:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _repo_dir:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - _work_item_id
+    - _repo_dir
+    - _sha
+    - _factory_clone_dir

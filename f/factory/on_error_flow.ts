@@ -175,6 +175,10 @@ export type FlowFailureDeps = {
   readonly recordFailure: (record: FailureRecord) => Promise<unknown>;
   /** 同じPRに、置き換えた行か並走する行がPRレビューの他にあるか。 */
   readonly hasSupersedingPrReview: (id: number) => Promise<boolean>;
+  /** 調査のフローの入力には作業項目のIDが無いので、ルートジョブIDで調査の行を引く。 */
+  readonly findInvestigationByFlowJobId?: (
+    flowJobId: string,
+  ) => Promise<WorkItem | null>;
   readonly updateStatusIfLeaseHolder: (
     id: number,
     from: WorkItemStatus,

@@ -1,0 +1,14 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/investigate_prepare.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    _work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - _work_item_id

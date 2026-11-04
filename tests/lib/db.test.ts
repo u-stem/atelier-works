@@ -32,6 +32,7 @@ import {
   findOrphanFixingPrCiChecks,
   getApprovalRequest,
   getDesignDraft,
+  getInvestigateWorkItemByFlowJobId,
   getIssueProposal,
   getLatestDeployment,
   getLatestPrCiCheck,
@@ -102,6 +103,7 @@ import {
   listFailedPrCiChecks,
   listFixingPrCiChecks,
   listImplementRounds,
+  listInvestigatingWorkItemIds,
   listMainCiRunsBySha,
   listNoCiPrCiChecksToRecheck,
   listPendingIssueProposals,
@@ -4042,6 +4044,77 @@ describe("hasInvestigatingWorkItem", () => {
   test("does not write", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await hasInvestigatingWorkItem(sql);
+    expect(calls[0]?.text).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/);
+  });
+});
+
+describe("listInvestigatingWorkItemIds", () => {
+  test("returns the ids of the running investigations as numbers", async () => {
+    const { sql } = createFakeSqlClient([[{ id: "3" }, { id: 9 }]]);
+    expect(await listInvestigatingWorkItemIds(sql)).toEqual([3, 9]);
+  });
+
+  test("returns an empty list when none is running", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await listInvestigatingWorkItemIds(sql)).toEqual([]);
+  });
+
+  test("reads only the investigate kind in the investigating status", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listInvestigatingWorkItemIds(sql);
+    expect(calls[0]?.text).toContain(
+      "kind = 'investigate' AND status = 'investigating'",
+    );
+  });
+
+  test("reads two rows at most, which is enough to see a second one", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listInvestigatingWorkItemIds(sql);
+    expect(calls[0]?.text).toContain("LIMIT 2");
+  });
+
+  test("does not write", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listInvestigatingWorkItemIds(sql);
+    expect(calls[0]?.text).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/);
+  });
+});
+
+describe("getInvestigateWorkItemByFlowJobId", () => {
+  test("parses the row into a WorkItem", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, kind: "investigate", flow_job_id: "job-1" }],
+    ]);
+    const item = await getInvestigateWorkItemByFlowJobId("job-1", sql);
+    expect(item).toMatchObject({ kind: "investigate", flow_job_id: "job-1" });
+  });
+
+  test("returns null when no row has the flow job id", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getInvestigateWorkItemByFlowJobId("job-1", sql)).toBeNull();
+  });
+
+  test("reads only the investigate kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getInvestigateWorkItemByFlowJobId("job-1", sql);
+    expect(calls[0]?.text).toContain("kind = 'investigate'");
+  });
+
+  test("compares the flow job id as text", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getInvestigateWorkItemByFlowJobId("job-1", sql);
+    expect(calls[0]?.text).toContain("flow_job_id =");
+  });
+
+  test("passes the flow job id as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getInvestigateWorkItemByFlowJobId("job-1", sql);
+    expect(calls[0]?.values).toContain("job-1");
+  });
+
+  test("does not write", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getInvestigateWorkItemByFlowJobId("job-1", sql);
     expect(calls[0]?.text).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/);
   });
 });

@@ -6466,6 +6466,21 @@ export async function hasInvestigatingWorkItem(
   return rows.length > 0;
 }
 
+/** 実装は次のコミットで行う。 */
+export async function listInvestigatingWorkItemIds(
+  _sql: SqlClient = defaultSqlClient,
+): Promise<number[]> {
+  return [];
+}
+
+/** 実装は次のコミットで行う。 */
+export async function getInvestigateWorkItemByFlowJobId(
+  _flowJobId: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem | null> {
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // implement_rounds(`migrations/datatable/main/20260928120000_implement.up.sql`)
 // ---------------------------------------------------------------------------

@@ -1,0 +1,9 @@
+summary: '[OP-1-4] 調査(実装せずに調べて、結果をIssueのコメントで返す)'
+description: 実装は次のコミットで行う。
+value:
+  modules: []
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

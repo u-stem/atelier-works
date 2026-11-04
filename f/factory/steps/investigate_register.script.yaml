@@ -1,0 +1,32 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/investigate_register.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    _issue_number:
+      type: number
+      description: ''
+      default: null
+    _owner:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _repo:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _request:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - _owner
+    - _repo
+    - _issue_number
+    - _request

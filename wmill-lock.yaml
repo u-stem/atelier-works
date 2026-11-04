@@ -31,6 +31,7 @@ locks:
   f/factory/freeze_release: 1f0e0ac82a0c1b30afcabd15c7ba337a91971ef1f16614bc00de4e7a67e4667b
   f/factory/hold_release: cc2424cc77d630c89d77153b159ddd206ed34cb1af1050b1274bfdd36d27a5be
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+  f/factory/investigate__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/investigate_isolation_probe: 27c772f81ec471e20f3dd406eba18e1c5a2fe12406e64f2ad1a48de91588a841
   f/factory/lib/approval_gate: 85a483e12195bc9246b8b506f411762f4d6e18cb5d665f4c9769a085c759c625
   f/factory/lib/approval_support: 64164c1da6c48c9a9c5c5d25dfc4cccba945af743d2855513153ef5913aa1d34
@@ -69,7 +70,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 98ef3087ac821a587800abc79cdbde75f1f37bdd1cfea25830e8c7743bf23176
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
-  f/factory/lib/db: c8814d62600ab7ec9198608001713889207b2d27869f716af299d7a8b44936c7
+  f/factory/lib/db: 97666abc2e1ab56ae15fffd6075ff6255f015ac0b95e71414b2ab700fe7f9fe5
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905
@@ -109,6 +110,7 @@ locks:
   f/factory/lib/implement_support: ac9f435958239ad503dc1178a441d2b5033e676d0a1bc455e5b068467f43a426
   f/factory/lib/intake_refresh: 10bf958e6d3a3a18d0b3e867f271b7974b66aad6e621bf193f735a30c6e88cf3
   f/factory/lib/investigate_claude: 667691e33b0c557e9e0bc068507121f033b5322a115322222e39bfe60b77be46
+  f/factory/lib/investigate_flow: 9aef01fbb6b60a0cc5004895ce1c2b5ca0986adcbdb452cd0d33fa101f82f946
   f/factory/lib/investigate_gate: 9f8b58b5448bd0f759278c1cdbb1d75dd7b007d4e4f1a5617397e88b853385a2
   f/factory/lib/investigate_isolation: f6e215abeb940124baab069cb3cadbe1f27ef67e935866c86e0732718927b2d7
   f/factory/lib/investigate_isolation_gate: ab78b0efd4cc28cb455704114ae7a67cdadbe60c21db19d9c99af97dab959262
@@ -180,7 +182,7 @@ locks:
   f/factory/manual_intake_submit: c2133a5f5a279d4ecbdd326e982f26cc8b2356f02e3274f9a77b7f0198b42e3c
   f/factory/notice_resolve: 3794cae7243a5e3efa50091313272a61aae6d8c6930e3a2060d4e8b8c48067ac
   f/factory/notify_daily_summary: 6134c361a6c04bcb9b0892a467b34b0c70cce568d6f6dd2f7956cfb9013e045a
-  f/factory/on_error_flow: 75edc9eded337e15ead872d611862a7b4896ed8bfaa2698692cadbddd956168c
+  f/factory/on_error_flow: 55606876c5995dc32ba52e48959fe8b4da48d88ff3889158b09225d4eba5f47e
   f/factory/pipeline__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/poll_dependabot: 5fc165c01f8ce38bbac2c5d2e9a4a1a9f4b371a43de8eeb6aea82b0b314c3668
   f/factory/poll_issues: c7a865769fa37d68cab206ba56fb9ec40a88c186f483e5a40dfd9ffe2329e435
@@ -206,6 +208,10 @@ locks:
   f/factory/steps/implement_generate: ba05e28ce48be7e632412109814437538559e42a915a60e1254e9680e5cabed7
   f/factory/steps/implement_prepare: 3e5501b35141a900247069f034645fe47444db9797a77da658d3ad61392cf262
   f/factory/steps/implement_verify: f052f0212c14748287ebb6cce13d1bdb18f19b6d5fae8a15ac3d2c21e482aa7a
+  f/factory/steps/investigate_generate: 2abde364fc51f232a55a8041b87d55c65f2588154f9178d5b627f2e55941fff7
+  f/factory/steps/investigate_post: 72f37e44bb9507b77be9b4854ad9c2390059e2aea906f767beaa9b62a0472046
+  f/factory/steps/investigate_prepare: 07d4dfd2e696303cbd9b0d3d2ba1c6db5c152beadee39c4444f28781af08ed26
+  f/factory/steps/investigate_register: c3f1bbcb45e02089c254a9cc4eb9143286e3341450107cd634c89148eb95b0c7
   f/factory/steps/issue_proposal_apply: 488e69aac157ef1c624a932198c4e10d5a664b01d5b66c69da70baa546923f13
   f/factory/steps/manual_intake_create_issue: 549cb45d168af72f520c643768b2a81d8164117ad4e56e2848b1b09e9b97b0ee
   f/factory/steps/manual_intake_register: 2dbf8911f1dd146760c7e923f990b1828adc1b3bdde7a6bf81bb2632d2da3c05

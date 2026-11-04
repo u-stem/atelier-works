@@ -38,11 +38,16 @@ const INVESTIGATE_ENABLED_TOKEN = /(?<![\w$])investigate_enabled(?![\w$])/g;
  * `investigate_enabled`が出てよい本番のファイルと、出る数。
  * 型の宣言(`lib/types.ts`)は、変換で消える。
  * `lib/config.ts`の2つは、リソースの値を門へ渡す読みと、門の結果の導出のキーである。
+ * 調査の4つのstep(登録、準備、生成、投稿)は、それぞれ1回、設定の値を読んで、止めるか進めるかを決める。
  * 入口や実行のscriptが設定の値を読む呼び出しを足すときは、この表を同じ変更で直す。
  * 呼び出しの側で`{ ...config, investigate_enabled: ... }`と上書きする迂回は、ここで数が増えて見つかる。
  */
 const ALLOWED_TOKENS: Readonly<Record<string, number>> = {
   "lib/config.ts": 2,
+  "steps/investigate_generate.ts": 1,
+  "steps/investigate_post.ts": 1,
+  "steps/investigate_prepare.ts": 1,
+  "steps/investigate_register.ts": 1,
 };
 
 function scanCounts(pattern: RegExp): Record<string, number> {

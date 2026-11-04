@@ -601,15 +601,18 @@ describe("the entry that takes injected dependencies", () => {
   });
 });
 
-// 公開の関門`checkIsolationProof`は、定義元の他のどの本番のファイルも参照しない。
+// 公開の関門`checkIsolationProof`は、定義元と、調査の生成のstepの他のどの本番のファイルも参照しない。
 // 参照が増えると、調査の入口が`investigate_enabled`を通らずに、合格の証拠を作れる。
-// 入口を繋ぐ変更は、この許可(定義元だけ)を直すので、必ず保護パスに触れる。
+// 生成のstepは、設定の再確認と排他の確認の後でだけ呼ぶ。その順序は、`tests/scripts/investigate_generate.test.ts`が固定する。
+// 入口を繋ぐ変更は、この許可を直すので、必ず保護パスに触れる。
 // 文字列の照合は`Bun.Transpiler`でコメントを落としてから行う。
 // 追えない形がある。識別子を連結や別名で組み立てる参照は数えられない。
 describe("the public gate", () => {
   const F_DIR = join(import.meta.dir, "../../f");
   const transpiler = new Bun.Transpiler({ loader: "ts" });
   const DEFINING_FILE = "factory/lib/investigate_isolation_gate.ts";
+  /** 関門を呼んでよい本番のファイル。 */
+  const ALLOWED_CALLERS = ["factory/steps/investigate_generate.ts"];
   const ENTRY = /(?<![\w$])checkIsolationProof(?![\w$])/g;
 
   function countIn(code: string): number {
@@ -629,15 +632,19 @@ describe("the public gate", () => {
       .sort();
   }
 
-  test("is named by no production file other than the one that defines it", () => {
+  test("is named by no production file other than the one that defines it and the generate step", () => {
     const found = productionSources().filter(
       (path) => path !== DEFINING_FILE && countInFile(path) > 0,
     );
-    expect(found).toEqual([]);
+    expect(found).toEqual(ALLOWED_CALLERS);
   });
 
   test("is named in the defining file by its definition only", () => {
     expect(countInFile(DEFINING_FILE)).toBe(1);
+  });
+
+  test("is named in the generate step by its import and by the one place that hands it over", () => {
+    expect(countInFile("factory/steps/investigate_generate.ts")).toBe(2);
   });
 
   test("counts an import and a call in a new script", () => {
