@@ -6849,10 +6849,175 @@ Consoleのシステムの**設定**タブから、factory_configの許可した�
 
 ## バックアップ
 
-Windmillのデータ(ワークスペースの設定、Data Table、ジョブの履歴など)は、すべて`db_data`というDockerのvolume(Postgres)にある。バックアップの対象はこのvolumeである。
+夜間のバックアップ(`f/factory/backup`)が、毎日02:30(JST)に、失うと戻せない状態を控える。
+控えは、defaultのworkerの名前付きvolume`factory_backups`(`/var/lib/factory-backups`)に置く。
+作業領域の掃除(03:00)とDBの掃除(03:30)より前に動くので、掃除の前の状態が残る。
 
 > [!WARNING]
-> `mise exec -- docker compose -f infra/docker-compose.yml down -v`は、`db_data`を含むすべてのvolumeを消す。消したデータは戻せない。
+> `mise exec -- docker compose -f infra/docker-compose.yml down -v`は、`db_data`と`factory_backups`を含むすべてのvolumeを消す。
+> 消したデータは戻せない。
+> 控えを残したいときは、先に[ホストに写す](#ホストに写す)の手順で写す。
+
+### 控えるもの
+
+| ファイル | 中身 | 取り方 |
+| --- | --- | --- |
+| `cluster.sql` | Postgresの全データベース(`windmill`、`datatable_db`)とロール | `pg_dumpall` |
+| `factory_state.tar` | `factory_state`のvolume。要件定義書、設計書、監査の記録、反映済みのshaを含む | `tar`。`claude/`、`gh/`、`check-slots/`は除く |
+| `factory_config.json` | `f/factory/factory_config`の値。変数とresourceへの参照は`<redacted>`に置き換える | Windmillの補間しない読み取り |
+| `manifest.json` | 取った時刻、各ファイルのバイト数、`f/factory/deployed_sha`の値 | scriptが書く |
+
+`claude/`と`gh/`は、人がworkerに入って使うときのログインの記録である。
+ジョブは使わないので、戻した後に要るのは、手で使うときのログインのやり直しだけである。
+`check-slots/`は検査の枠の記録で、戻すと存在しない実行の記録が残るため除く。
+控えに含まれる秘密と置き場の権限は、[セキュリティ](security.md#バックアップの控え)にある。
+
+### 保存先と世代
+
+世代は`/var/lib/factory-backups/<時刻>/`に置く。
+時刻はUTCの`YYYYMMDDTHHMMSSZ`である。
+書きかけの世代は`.partial-<時刻>/`に置き、すべて書き終えてから`<時刻>/`に改名する。
+途中で止まった世代は`.partial-`のまま残り、次の実行が消す。
+
+新しい世代を書いた後、新しい方から`backup_keep_generations`(既定7)の世代を残し、古い世代を消す。
+数は[保持期間](#保持期間)の表にある。
+控えの大きさは監視しない。
+増え方は、`manifest.json`のバイト数で人が見る。
+
+世代の一覧は次のコマンドで見る。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker ls -l /var/lib/factory-backups
+```
+
+### 失敗したとき
+
+失敗すると、scriptは要対応の通知(`backup_failed`)を残し、ジョブを失敗にする。
+本文に、失敗した段階と原因が載る。
+ジョブの失敗は、scheduleの失敗の検出(`detect_schedule_failures`)がDiscordに知らせる。
+成功したときは通知しない。
+
+| 段階 | よくある原因 | 確かめること |
+| --- | --- | --- |
+| `prepare` | `f/factory/db_backup_url`が無いか、URLの形でない | `mise run bootstrap`を実行したか |
+| `pg_dumpall` | workerのイメージに`pg_dumpall`が無い。DBに接続できない | 更新の後に`mise run up`を実行したか。`db`が動いているか |
+| `tar` | `factory_state`を読めない | ジョブのログのtarのエラー |
+| `config`、`manifest`、`finalize` | 置き場に書けない。ディスクが足りない | ホストのディスクの空き |
+| `prune` | 古い世代を消せない | ジョブのログ。新しい世代は書けている |
+
+原因を直したら、Windmillの画面で`f/factory/backup`を実行して取り直す。
+取り直しが成功したら、Consoleで通知を解決する。
+通知は自動では解決されない。
+
+### ホストに写す
+
+最新の世代を、ホストのディレクトリに写す。
+保存先には、既にあるディレクトリを渡す。
+
+```bash
+mise run backup:export -- <保存先>
+```
+
+世代は`<保存先>/<時刻>/`に写り、写した先のパスが出る。
+写した世代は、所有者だけが読める権限になる。
+別の媒体やホストに移すのは人が行う。
+控えはDBの全体を含むので、移した先もホストの権限で守る。
+
+### 使い捨ての環境に戻す
+
+世代を使い捨てのcomposeのプロジェクト`factory-restore`に戻して、戻せることを確かめる。
+本番のプロジェクト`infra`のvolumeには触れない。
+プロジェクトの名前が違うので、volumeの名前は`factory-restore_*`になる。
+
+```bash
+mise run backup:restore -- <世代のディレクトリ>
+```
+
+ディレクトリには`cluster.sql`と`factory_state.tar`が要る。
+`backup:restore`は次の順に動く。
+
+1. `db`だけを起動し、TCPで受け付けるまで待つ。
+2. イメージが作った空の`windmill`のデータベースを消す。
+3. `cluster.sql`を`psql`で流し、最初のエラーで止める。
+4. `factory_state.tar`を、同じプロジェクトの`factory_state`に展開する。
+5. `factory.work_items`と`factory.notices`の行数と、`requirements/`のファイル数を出す。
+
+手順3では、`CREATE ROLE postgres;`の1行だけを除いて流す。
+`pg_dumpall`は接続したsuperuserのロールにも`CREATE ROLE`を出し、戻し先には同じロールが既にあるためである。
+
+終わりに、使い捨てのプロジェクトを消すコマンドが出る。
+確かめ終えたら、人が実行する。
+
+```bash
+mise exec -- docker compose -p factory-restore -f infra/docker-compose.yml down -v
+```
+
+前の実行の`db`が残っているときは、`backup:restore`は何もせずに止まる。
+上のコマンドで消してから、実行し直す。
+
+### 本番に戻す
+
+本番のvolumeへ戻す操作は、自動にしていない。
+戻すかどうかと、いつ戻すかは人が判断する。
+
+> [!WARNING]
+> 次の手順は、本番の`db_data`を消して作り直す。
+> 消したデータは戻せない。
+> 先に[使い捨ての環境に戻す](#使い捨ての環境に戻す)の手順で、使う世代が戻せることを確かめる。
+
+1. 使う世代をホストに置く。volumeが残っているときは、[ホストに写す](#ホストに写す)の手順で写す。
+2. スタックを止める。
+
+   ```bash
+   mise run down
+   ```
+
+3. `db_data`のvolumeを消す。
+
+   ```bash
+   docker volume rm infra_db_data
+   ```
+
+4. `db`だけを起動し、TCPで受け付けるまで待つ。次のコマンドが`accepting connections`を出せば受け付けている。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml up -d --wait db
+   mise exec -- docker compose -f infra/docker-compose.yml exec -T db pg_isready -h 127.0.0.1 -U postgres
+   ```
+
+5. 空の`windmill`を消し、`cluster.sql`を流す。`<世代のディレクトリ>`は手順1のパスにする。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres -c 'DROP DATABASE windmill'
+   grep -v -x -F 'CREATE ROLE postgres;' <世代のディレクトリ>/cluster.sql | mise exec -- docker compose -f infra/docker-compose.yml exec -T db psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres
+   ```
+
+6. `factory_state`に展開する。volumeが残っているときは、同じ名前のファイルを上書きする。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml run --rm --no-deps -T --entrypoint tar factory_state_init --no-same-owner -xf - -C /var/lib/factory < <世代のディレクトリ>/factory_state.tar
+   ```
+
+7. スタックを起動する。
+
+   ```bash
+   mise run up
+   ```
+
+8. `factory_state`のvolumeも失っていたときは、人がworkerに入って使う`claude`と`gh`のログインをやり直す。
+
+### リハーサルの記録
+
+ホストで取った`pg_dumpall`と`factory_state`のtarを、`mise run backup:restore`で使い捨ての環境に戻した結果である。
+
+| 項目 | 結果 |
+| --- | --- |
+| 戻した控え | 未記入 |
+| `cluster.sql`の流し込み | 未記入 |
+| `factory.work_items`の行数(本番、戻した先) | 未記入 |
+| `factory.notices`の行数(本番、戻した先) | 未記入 |
+| `requirements/`のファイル数(本番、戻した先) | 未記入 |
+| かかった時間 | 未記入 |
 
 ## 保持期間
 

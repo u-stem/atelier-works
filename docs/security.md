@@ -760,6 +760,7 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 - `f/factory/wmill_token`
 - `f/factory/discord_webhook_url`
 - `f/factory/github_read_tokens`
+- `f/factory/db_backup_url`
 
 scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
 親プロセスが`fetch`で使う秘密値は、次の4か所である。
@@ -1240,6 +1241,50 @@ uidの切り替えに使う`setpriv`と、枠のロックに使う`flock`も入�
 イメージのビルドは、検査の実行と同じ引数の`setpriv`で、すべてのユーザーについて、uid、ケーパビリティの上限が空であること、`no_new_privs`を確かめる。
 `kill`、`getfacl`、`setfacl`があることも確かめる。
 使い方は[検査コマンドの権限](#検査コマンドの権限)に書く。
+
+## バックアップの控え
+
+夜間のバックアップ(`f/factory/backup`)は、Postgresのクラスタ全体と`factory_state`を控える。
+手順は[運用](operations.md#バックアップ)にある。
+
+### 控えに含まれる秘密
+
+`cluster.sql`は、Windmillのデータベースの全体を含む。
+Windmillの秘密の変数は暗号化されて入っているが、復号の鍵も同じデータベースにある。
+そのため、控えを読める者は、Windmillのすべての秘密を読めるものとして扱う。
+ロールのパスワードのハッシュも含む。
+
+`factory_state.tar`は、`claude/`、`gh/`、`check-slots/`を除く。
+`claude/`と`gh/`は、人がworkerに入って使うときのログインの記録で、控えに秘密を増やさないため除く。
+`factory_config.json`は、変数とresourceへの参照を`<redacted>`に置き換える。
+値はWindmillの補間しない読み取り(`ResourceService.getResourceValue`)で読むので、参照の先の秘密は解決されない。
+
+### 置き場の権限
+
+名前付きvolume`factory_backups`は、defaultのworker(`windmill_worker`)だけに`/var/lib/factory-backups`としてマウントする。
+Console用workerと定期ジョブ用workerには付けない。
+置き場と各世代のディレクトリは、rootの所有で0700にする。
+検査コマンドを動かす非特権のユーザーに、控えを読ませないためである。
+イメージのビルドが置き場を0700で作り、scriptも実行のたびに0700へ直す。
+既にあるvolumeには、イメージのモードが写らないためである。
+
+`mise run backup:export`は、写した世代を所有者だけが読める権限にする。
+写した先と、そこから移した媒体は、ホストの権限で守る。
+
+### 接続URL
+
+`f/factory/db_backup_url`は、composeのPostgresのsuperuser(`postgres`)の接続URLである。
+`pg_dumpall`はロールの一覧(`pg_authid`)を読むので、読み取り専用のロールでは足りない。
+`mise run bootstrap`が`mise.local.toml`の`DB_PASSWORD`から組み立てて入れる。
+パスワードは百分率符号化し、jqの引数に載せない。
+scriptはURLを読み解き、接続の情報を環境変数(`PGPASSWORD`など)で`pg_dumpall`に渡す。
+引数に載せると、`/proc/<pid>/cmdline`から検査用のユーザーにも読めるためである。
+
+### 控えの残るリスク
+
+- `db_backup_url`は秘密の変数で、ワークスペースのどのscriptも読める。defaultのworkerのジョブはrootで動き、workerの環境変数`DATABASE_URL`からも同じ接続先に届くので、新しい経路ではない。
+- 調査のClaudeの読み出しの拒否の一覧(`READ_DENY_BASE_PATHS`)は、`/var/lib/factory-backups`を含まない。一覧の`/var/lib/factory`は区切りの`/`まで一致を見るので、この置き場は塞がれない。
+- 控えは暗号化しない。控えの容量も監視しない。
 
 ## Console用workerの境界
 
@@ -2530,6 +2575,7 @@ tag`periodic`を付けたのは、次の5本である。
 | `poll_issues`、`poll_prs`、`watch_pr_ci`、`watch_pr_conflicts`、`watch_main_ci` | `gh`、`git`、`github_token`を使う。`watch_pr_ci`は検査用イメージの確認も行う | defaultに残す |
 | `cleanup_workspaces`、`self_update` | `factory_workspaces`、self clone、`git`、`gh`を使う。`self_update`は`wmill_token`も読む | defaultに残す |
 | `cleanup_db` | `factory_state`の`requirements`ディレクトリを消す | defaultに残す |
+| `backup` | `factory_state`と`factory_backups`のvolume、`pg_dumpall`と`tar`のサブプロセス、`db_backup_url`を使う | defaultに残す |
 | `sample_worker_load` | cgroupのファイルを読む | defaultに残す |
 | `notify_daily_summary` | DB、Windmillの状態、Discordだけを使う。読むsecretは`discord_webhook_url`だけである | `periodic`を付ける |
 | `auto_retry_pr_review` | DB、WindmillのAPI、Discordだけを使う。読むsecretは`discord_webhook_url`だけである | `periodic`を付ける |

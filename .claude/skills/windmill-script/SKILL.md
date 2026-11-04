@@ -32,7 +32,9 @@ scriptからは相対importで読み込む(例: `import { runClaude } from "./li
 
 ## シークレットの扱い
 
-- シークレットは`f/factory/*.variable.yaml`として定義し、`is_secret: true`にする。対象は`claude_oauth_token` / `github_token` / `wmill_token` / `discord_webhook_url` / `github_read_tokens`の5つである。
+- シークレットは`f/factory/*.variable.yaml`として定義し、`is_secret: true`にする。
+  対象は`claude_oauth_token` / `github_token` / `wmill_token`、
+  `discord_webhook_url` / `github_read_tokens` / `db_backup_url`の6つである。
 - 値はコミットせず、リポジトリ内では空のままにする。
 - scriptからは、`wmill.getVariable("f/factory/github_token")`のように取得する。
 - 取得した値は、子プロセスの環境変数(例: `GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`)としてだけ渡す。
