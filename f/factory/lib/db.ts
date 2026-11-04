@@ -4905,6 +4905,9 @@ export async function deleteJobFailuresBefore(
 /**
  * `occurred_at`が`olderThan`より前の`factory.deployments`の行を削除し、行数を返す。
  * このテーブルは`work_items`への外部キーを持たない。
+ * 最後に成功した反映の行(`occurred_at`が最大で、同時刻なら`id`が最大)は、期限を過ぎても残す。
+ * 反映の承認の判定が、その行の時刻を基準にするため。
+ * 成功の行が1つも無いときは、副問い合わせがNULLになり、期限前の行をすべて削除する。
  */
 export async function deleteDeploymentsBefore(
   olderThan: Date,
@@ -4913,6 +4916,7 @@ export async function deleteDeploymentsBefore(
   const rows = await sql`
     DELETE FROM factory.deployments
     WHERE occurred_at <= ${olderThan.toISOString()}::timestamptz
+      AND id IS DISTINCT FROM (SELECT id FROM factory.deployments WHERE result = 'success' ORDER BY occurred_at DESC, id DESC LIMIT 1)
     RETURNING id
   `.fetch();
   return rows.length;

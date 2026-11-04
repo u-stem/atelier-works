@@ -1148,6 +1148,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
   失敗して提案を保留に戻した後も、印は期限まで残る。期限を過ぎて走り続けた呼び出しが失敗して戻すとき、印を取り直した別の呼び出しがIssueを作っている最中でも、次の承認と重ならないようにするためである。
   印に持ち主の識別子は無い。期限を超える処理と取り直した処理は、理論上は重なりうる。
 - `main`へのマージは、承認0件のPRで済む。PRの必須チェックは通る必要があるが、人のレビューは強制されない。FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開))。そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
+  保護パスの反映の承認は、Consoleの配信物(`console/`)を止めない([反映の承認](#反映の承認))。
 - CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
 - `ci.yml`の`console-a11y`ジョブが使うPlaywrightのブラウザは、ハッシュで照合しない。HTTPSで公式の取得元(`cdn.playwright.dev`、予備に`playwright.download.prss.microsoft.com`)から取る。取得元かその通信が侵害されると、改ざんされたブラウザが動く。
   受け入れる理由は、このジョブが`contents: read`の権限だけを持ち、秘密値と配信物を扱わず、PRの実行だけで動くためである。
@@ -1892,7 +1893,7 @@ PRレビューの投入の記録に入れるのは、`owner`、`repo`、`pr_numb
 保護パスの目的は、PRの自動修正と実装が、人のレビューを経ずに書き換えるのを止めることである。
 この表に記録する書き込みのscriptは、記録の順序を持つので保護パスに入れる。
 書き換えられると、記録なしで同じ操作ができ、記録が誰の操作も表さなくなるためである。
-対象は、次の10本である。
+対象は、次の11本である。
 
 - 取消の`console_job_cancel`
 - 定期ジョブの再実行の`console_job_rerun`
@@ -1904,6 +1905,7 @@ PRレビューの投入の記録に入れるのは、`owner`、`repo`、`pr_numb
 - PRレビューの投入の`pr_review_submit`
 - 保留の解除の`hold_release`
 - 凍結とdeployの保留の解除の`freeze_release`
+- 保護パスの変更の反映の承認と却下の`console_deploy_decide`
 
 `approval_decide`、`notice_resolve`、`audit_kickoff`は、この表に記録しない。
 記録の順序を持たないので、この理由では保護パスに入れていない。
@@ -2908,6 +2910,7 @@ modeだけの変更も、ヘッダーの`old mode`と`new mode`の行で見え�
   - `HEAD`が、承認する版そのものになりうる。`--applied`と`HEAD`を揃える案は、人が先に`git pull`した場合の拒否を招くので採らない。
   - `mise activate`を使うシェルでは、`mise.local.toml`の`[env]`が環境に入りうる。gitの子プロセスの環境は固定するので、実害は小さい。
 - 承認の表示を作るコードの変更は、`origin/main`へのマージ時の人のレビューにだけ守られる。mainは承認0件でマージできる。
+  Windmillへの反映の承認は、ホストの実行役のコードを止めない([反映の承認](#反映の承認))。
 - 許可した日本語の文字の中にある同形異字は、検出しない。ASCIIの記号に似る`一`、`ー`、`〜`は、許可した文字なので通る。
 - `origin/main`のrefは、人が`git fetch`で更新する。古い参照は拒否側に倒れる。偽の参照は、表示した先端のshaをGitHubと照合して見分ける。
 - 適用済みのshaは人が入力する。実際の適用済みと一致しない記録は`plan`が使わない。
@@ -3597,11 +3600,17 @@ mainは承認0件でマージでき、管理者は失敗したチェックを無
 保護パスだけでは、実行役の変更を人が確かめる関門にならない。
 
 - mainは承認0件でマージできる。管理者は、失敗したチェックを無視してPR経由でマージできる。人のレビューをGitHubは強制しない。
+  ただし、保護パスに触れた変更は、マージの後、人がConsoleで承認するまでWindmillへ反映されない([反映の承認](#反映の承認))。
 - PR修正は保護パスの変更で止まるが、実装フローは止めない。保護パスに触れても、記録してPR本文に明記するだけである。
 
 人に通す関門は、保護パスではなく、実行役の承認である。
 保護パスの役割は補助である。
 PR修正の自動修正がこれらを書き換えるのを止め、実装のPR本文へ明記させる。
+
+mainへの反映は、保護パスで止まる。
+`self_update`は、前回の反映からの変更を確かめる。
+Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)かmigrationがあると、人がConsoleで承認するまで反映しない([反映の承認](#反映の承認))。
+止めるのはWindmillへの反映で、ホストの実行役の反映ではない。実行役の関門は、引き続き実行役の承認である。
 
 副作用として、`infra/docker-compose.yml`、`scripts/doctor.sh`、`scripts/bootstrap.sh`を変えるPR修正は、保護パスで止まって人の対応待ちになる。
 実装フローは、保護パスに触れたラウンドで検査コマンドを実行しない([保護パスの記録](internals/implement.md#保護パスの記録))。
@@ -3728,6 +3737,44 @@ PRレビュー(`pr_review`)は、依存の宣言か取得を変えるPRに、サ
 レビューのClaudeはレジストリを読めず、依存もインストールしない。
 そのため、dependabotの自動マージの対象でないPRでは、版の公開日、メンテナの交代、リポジトリの移管、依存の中身のinstall時のスクリプトを人が確かめる。
 dependabotの更新を自動でマージする前は、関門と影響調査がこれらを見る([dependabotの更新の自動マージ](#dependabotの更新の自動マージ))。
+
+## 反映の承認
+
+保護パスに触れた変更の反映は、HEADの版ごとに、人がConsoleで承認するまで止まる。
+仕様は[反映の承認の内部仕様](internals/deploy-approvals.md)にある。
+判定、承認の表の部品、Consoleの判断のscript、判定の組み込みを固定するテストは、保護パスに入れる。
+判定のimportの連鎖は、すべて保護パスに入れる。
+Consoleの判断のscript(`console_deploy_decide`)は、ローカルのClaudeのセッションから呼べないよう、拒否フックの一覧に入れる。
+
+関門が止めるのは、関門のコード自体と、保護パスの改変である。
+関門の入力は守らない。
+入力は、gitの差分を取る`lib/workspace.ts`の`runCommand`と、承認の行を読む`lib/db.ts`の`defaultSqlClient`である。
+`lib/db.ts`は全機能が触るので、守るとほぼすべてのPRが承認待ちになる。
+守っても、反映済みのどのscriptもDBに書けるので、承認の行を直接作る経路は閉じない。
+ここは人のレビューとDBの権限に頼る。
+
+残るリスクは次のとおりである。
+
+- `self_update`の配線が使う保護の外の部品を書き換えて、判定を外す変更は、保護パスに触れないまま反映される。
+  部品は、`lib/workspace.ts`の子プロセスの起動と、`lib/db.ts`の接続と通知である。
+  配線の位置は保護されたテストが固定するが、部品の中身は固定しない。
+  PRの人のレビューが守る。
+- Windmillのscriptは同じdatatableの接続を持つ。
+  保護の外の新しいscriptが承認の表へ承認の行を書く変更は、保護パスに触れないまま反映される。
+  その後にそのscriptが動くと、承認を偽れる。
+  参照の検出(`tests/scripts/deploy_approvals_wiring.test.ts`)は、名前の連結や動的SQLを見つけられない。
+- Consoleの配信物(`console/`)は、`console_fetcher`がCIの後に取り込むので、この承認を通らない。
+  保護パスに当たるConsoleのファイルの変更も、マージの後に配信される。
+- 承認する人は、Consoleにログインできる人なら誰でもよい。承認者の区別はしない。
+- 判定の範囲は、`self_update`が本番へ反映するファイル(`f/`と`migrations/`の下、`wmill.yaml`)に絞る。
+  範囲の外の保護パス(`infra/`、`.github/`、`.claude/`、`scripts/`、lockfile、設定)の変更は、この承認を通らない。
+  `infra/`はホストで人が`mise run up`するまで効かず、`.github/`はCIにしか効かない。
+  `.claude/`のスキルと`scripts/`はローカルのセッションと人の道具で、`self_update`が反映しない。
+  直近のmainの60件のマージでは28件が止まる。
+  止まった間は、範囲の外の変更も反映されない。
+- 要対応の通知は、止めるたびに残し、重複はしない。
+  書き込みに失敗しても、次の回が残す。
+  Consoleの「反映の承認待ち」の一覧が受け皿で、通知が無くても承認できる。
 
 ## 自己更新の打ち切り
 
@@ -6196,9 +6243,9 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
 
 残るリスクは次のとおりである。
 
-- `approval_gate.ts`、`implement_prepare.ts`、`auto_retry_stale_image.ts`、`self_update.ts`は保護パスではない。
+- `implement_prepare.ts`と`auto_retry_stale_image.ts`は保護パスではない。`approval_gate.ts`と`self_update.ts`は保護パスで、変更は人の承認を経て反映される。
   保護テストが固定するのは、表を呼ぶ字面と、表の宣言と取り込みの位置である。
-  呼び出しの結果を条件にどう組み込むかは固定しないので、この範囲はPRの人のレビューが守る。
+  呼び出しの結果を条件にどう組み込むかは固定しないので、この範囲はPRの人のレビューと、保護パスの反映の承認が守る。
 - 比較交換が失敗した作業項目は、`picked`のまま、照合が失敗に移すまでの猶予の間、残る。
   その間、同じIssueに稼働中の作業項目があり、再投入は挿入に断られる。
 - 目印の探索は、区切りの行を足す前に作ったIssueを、作成済みと信じない。
@@ -6789,7 +6836,7 @@ symlinkはたどらずリンク自体を消し、`.git`を持たない項目や�
 `runInvestigateClaude`を通る起動は、隔離の測定に合格した証拠が無ければ起動しない。
 `runInvestigateClaude`と`runInvestigateClaudeWithDeps`は、最初に証拠を検査する。
 作業ディレクトリの検査より前なので、証拠が無いときは、ほかの検査にも進まない。
-`runClaude`を直接呼ぶ経路は、保護の外の`lib/claude.ts`にあり、この証拠では塞がない。
+`runClaude`を直接呼ぶ経路は`lib/claude.ts`にあり、この証拠では塞がない。`lib/claude.ts`は保護パスで、変更は人の承認を経て反映される。
 調査の4つのstepと支援のlib(`lib/investigate_flow.ts`)が`runClaude`を名指ししないことは、保護されたテストが固定する。
 テストは`tests/scripts/investigate_flow.test.ts`である。
 
@@ -7472,12 +7519,12 @@ sha256の表は人が更新できるので、表の更新だけでは緩めて�
 `lib/workspace.ts`は保護しない。
 置き場の作成が使うロックのパスの関数を公開する差分だけを、このために入れている。
 
-`lib/claude.ts`は保護しない。
-ほかのフローも日常的に直し、調査のための差分が小さいためである。
+`lib/claude.ts`は保護する。
+headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す環境変数)を決め、書き換えられると、調査に限らずすべてのフローの隔離が外れるためである。
 差分は、設定の書き出しを呼ぶ数行、`buildClaudeArgv`と`buildClaudeEnv`のexport、標準出力のトップレベルのキーを返す1項目に限る。
 `runClaude`が起動の前に設定を書くこと、起動の呼び出しの引数と環境と実行の条件は、保護されたテスト(`tests/lib/investigate_claude.test.ts`)が丸ごと固定する。
 `lib/claude.ts`がargvや環境を変えると、起動の形のハッシュが変わり、関門が閉じる。
-保護の外の変更が隔離を黙って変えても、測り直すまでClaudeは起動しない。
+変更が隔離を黙って変えても、測り直すまでClaudeは起動しない。
 
 ### 残るリスク
 
@@ -7511,10 +7558,8 @@ sha256の表は人が更新できるので、表の更新だけでは緩めて�
   この偽造できる主体は、デプロイできる者であり、デプロイ済みのコード全体と同じ信頼の範囲に含める。
   scriptのハッシュの照合は入れない。受け入れる。
 - 測定の実行の経路に、保護されていないモジュールが入っている。
-  対象は次の4つである。
-  `lib/claude.ts`(`runClaude`)、`lib/log.ts`(`maskSecrets`)、`lib/types.ts`、`lib/db.ts`(`hasInvestigatingWorkItem`)。
-  `lib/claude.ts`を保護しない理由は、argvが変われば関門が閉じることである。
-  この理由は、測定が正直に測ることを前提にしている。
+  対象は次の3つである。
+  `lib/log.ts`(`maskSecrets`)、`lib/types.ts`、`lib/db.ts`(`hasInvestigatingWorkItem`)。
   `lib/db.ts`は日常的に直すので保護しない。
   稼働中の調査を読むSQLの全文と戻り値の式は、保護されたテスト(`tests/scripts/investigate_singleton_migration.test.ts`)が固定する。
   `lib/db.ts`の他の部分や、`defaultSqlClient`の差し替えは、固定しない。
@@ -7555,7 +7600,7 @@ sha256の表は人が更新できるので、表の更新だけでは緩めて�
   見える範囲が違うと、閉じる理由が`proof_unreadable`か`proof_missing`になる。
 - ジョブの記録の保持期間(約30日)が切れると、測定のジョブが見えなくなり、関門が閉じる。閉じるのは安全な側である。
 - 関門が塞ぐのは、`runInvestigateClaude`を通る起動だけである。
-  `runClaude`を直接呼ぶ経路は、保護の外の`lib/claude.ts`にあり、この証拠では塞がない。
+  `runClaude`を直接呼ぶ経路は`lib/claude.ts`にあり、この証拠では塞がない。`lib/claude.ts`は保護パスで、変更は人の承認を経て反映される。
   調査の4つのstepと支援のlibが`runClaude`を名指ししないことは、保護されたテストが固定する。
   別のファイルから名指しする経路は、このテストでは見つからないので、PRのレビューで見る。
 - 証拠の参照元の走査は、識別子を連結や別名で組み立てる動的な参照を数えられない。
@@ -7611,7 +7656,7 @@ sha256の表は人が更新できるので、表の更新だけでは緩めて�
   `lib/ci_fix_round.ts`の`ciTextScanner`、`lib/workspace.ts`の`runGitleaksOnText`と`runGitleaksStdin`がある。
   `lib/log.ts`の`SECRET_PATTERNS`、`lib/github.ts`の`commentIssue`と`withMarker`もある。
   `lib/gh_collect_support.ts`の`parseTokenVariable`は、マスクする読み取りトークンの集め方を決める。
-  ほかのフローも日常的に直すファイルなので、`lib/claude.ts`と同じ理由で保護しない。
+  ほかのフローも日常的に直すファイルなので、保護しない。
   保護されたテストは、検査器を偽物に差し替えて順序と分岐を確かめるので、この5つのファイルが緩められても落ちない。
   検査と目印の付け方の変更は、PRのレビューで見る。
   そのため、検査が出力の秘密値を止めることは、保証でなく、第2層の守りとして扱う。
@@ -7821,7 +7866,8 @@ PATの持ち主がrulesetを迂回できる管理者だと、マージのAPIが�
 一覧は[保護パスの変更を止める](#保護パスの変更を止める)にある。
 共有のモジュールは守らない。
 対象は、`lib/`の`dependabot_*`以外のモジュールと`steps/pr_workflow_support.ts`である。
-たとえば`lib/github.ts`、`lib/db.ts`、`lib/workspace.ts`、`lib/check_sandbox.ts`が含まれる。
+たとえば`lib/github.ts`、`lib/db.ts`、`lib/workspace.ts`が含まれる。
+`lib/check_sandbox.ts`は、安全策を担うコードとして保護パスに入れている。
 ほかのフローも使い、守るとそれらの変更をすべて止めてしまうためである。
 これらを書き換えてdependabotの判断を変える変更は、PRのレビューで差分を確かめて止める。
 

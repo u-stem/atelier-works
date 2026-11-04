@@ -39,6 +39,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `schedule_detector_stale` | scheduleの失敗の検出器が止まっています | `default_worker_watch`(5分ごと) | scheduleの失敗を拾う検出器(`detect_schedule_failures`)が25分以上成功していないこと、または検出器のscheduleが無効になっていることを検知し、通知を新しく残した。ホストのスリープ明けと、検出器のscheduleの反映の直後は残さない |
 | `default_worker_missing` | defaultのworkerがジョブを受けていません | `default_worker_watch`(5分ごと) | defaultのworkerが受けるtagのジョブが予定時刻から10分以上待たされていて、defaultで動いているジョブが1つも無いことを、60秒おいた読み直しでも確かめ、通知を新しく残した。長いジョブが枠を埋めて待たせているだけでは残さない |
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
+| `deploy_approval_required` | 保護パスの変更の反映が承認を待っています | `self_update`(2分ごと) | 前回の反映からの変更に、Windmillへ反映する保護パスのファイルかmigrationがあり、HEADの版の承認の依頼を新しく作り、通知を新しく残した |
 | `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
 | `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 集計の対象の日の、実行回数、コスト、失敗、要件定義の承認・却下の件数、DBの掃除の件数、workerの負荷、`gated`のときの投稿しなかったレビューの期間と件数 |
 | `audit_completed` | 監査レポートができました | `audit_generate` | 改善提案が1件以上ある監査レポートを保存した |
@@ -102,6 +103,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `github_collect_stale` | Consoleの通知 | 説明に閾値と最後の成功と最新の実行の原因(リポジトリ単位の古さでは、記録が古いリポジトリの数と理由別の内訳。収集の無効では、止まっている設定と、設定を戻すか`repo_allowlist`に並べる操作)、「次の操作」、所有者 |
 | `default_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `host_action_required` | なし | 説明に反映した版と変わったパス、「次の操作」 |
+| `deploy_approval_required` | Consoleの通知 | 説明に待っている版と保護パスのファイルの件数、「次の操作」 |
 | `main_ci_failed` | 失敗した実行 | 説明にコミットの先頭7文字、「次の操作」、リポジトリ |
 | `daily_summary` | なし | 説明に実行件数と費用、失敗、承認、却下、DB掃除、workerの負荷、`gated`のときだけ「レビューの投稿」 |
 | `audit_completed` | Consoleの監査のページ | 「次の操作」、`work_item_id` |
@@ -264,6 +266,8 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `deployed_sha_mismatch` | `poll_issues` | `f/factory/deployed_sha`、原因の候補 |
 | `design_enabled_ignored` | `self_update` | `design_enabled`が`true`でも、`design_enabled_since`が無いか日時として読めないため`false`として読んでいること、`design_enabled_since`を書くか`false`に戻す操作 |
 | `host_action_required` | `self_update`、`implement_verify`、`pr_fix_verify`、`watch_pr_ci` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパスかイメージに足りないもの、`mise run up`を実行する手順 |
+| `deploy_approval_required` | `self_update` | 待っている版(40桁)、保護パスのファイルの件数、Consoleで承認か却下をする手順 |
+| `deploy_approval_decided` | `console_deploy_decide` | 判断した版、判断、操作者 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
 | `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
@@ -431,7 +435,7 @@ mergeから反映までの通常の見込みは17分である。
 `poll_issues`の5分は、食い違いを最初に見た時刻から数えるための見積もりとする。
 猶予の30分は、この17分に余裕を持たせて決めている。
 17分は実測の上限ではない。
-自己更新の1回の実行は、最悪で約52分(ジョブの上限は3100秒)かかる。
+自己更新の1回の実行は、最悪で約55分(ジョブの上限は3300秒)かかる。
 ロックの待ち(最大5分)と、ネットワークを使うgitが加わるためである。
 このため、正常な反映でも30分を超えうる。
 このほかに、defaultの枠が埋まっていると、実行の開始前に待たされる。

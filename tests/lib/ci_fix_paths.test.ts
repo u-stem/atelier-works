@@ -812,8 +812,6 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "実装フローの終了処理の共有モジュール。実装フローの修正が日常的に触れる",
   "f/factory/lib/factory_clone.ts":
     "Factory自身のcloneを用意する共有モジュール。ほかのフローが日常的に使う",
-  "f/factory/lib/self_update_support.ts":
-    "自己更新の判定と整形の純粋関数。self_updateの修正が日常的に触れる",
   "f/factory/lib/job_ids.ts": "WindmillのジョブIDの形の検査。依存が無く小さい",
   "f/factory/lib/prose_check.ts":
     "文書の文章の検査。文書の規則を直す変更が日常的に触れる",
@@ -835,6 +833,16 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "設計の承認の反映の純関数と固定の注記(設計の上限を数える注記)の共有モジュール。pr_fix_finishが読む。設計工程の修正が日常的に触れ、反映はマージ後で、レビューが受け皿になる。拒否すると、このファイルに触れるPRの競合回が止まる",
   "f/factory/lib/profile_upgrade.ts":
     "進め方を通常に戻したことをIssueに伝えるコメントの本文と、投稿の判定。投稿する関数は呼び出し側が注入し、通信を持たない。pr_fixの完了が親の差し戻しの後に読む。実装の修正が日常的に触れ、反映はマージ後で、レビューが受け皿になる",
+  "f/factory/lib/approval_support.ts":
+    "承認依頼の期限と判定の共有の純粋関数。承認の種類を足す変更が日常的に触れる。self_updateはnoticeのConsoleのURLの組み立てにだけ使い、反映の止め方の判断には使わない。反映はマージの後で、レビューが受け皿になる",
+  "f/factory/lib/auto_retry.ts":
+    "止まった作業項目の自動再開の共有モジュール。再開の修正が日常的に触れる。self_updateは再開の呼び出しにだけ使い、反映の止め方の判断には使わない。反映はマージの後で、レビューが受け皿になる",
+  "f/factory/lib/console_worker.ts":
+    "Console用workerの受け付けの確認。確認の修正が日常的に触れる。self_updateは確認を呼ぶだけで、反映の止め方の判断には使わない。反映はマージの後で、レビューが受け皿になる",
+  "f/factory/lib/periodic_worker.ts":
+    "定期ジョブ用workerの受け付けの確認。確認の修正が日常的に触れる。self_updateは確認を呼ぶだけで、反映の止め方の判断には使わない。反映はマージの後で、レビューが受け皿になる",
+  "f/factory/lib/self_update_pull_requests.ts":
+    "self cloneのコミットログから反映に含まれるPRを読む純粋な解析。通信を持たない。反映の記録の修正が日常的に触れ、止め方の判断には使わない。改変されると、deploymentsのPRの記録が欠けうるが、反映の可否には影響しない。反映はマージの後で、レビューが受け皿になる",
   "f/factory/lib/design_template.ts":
     "設計書テンプレートの固定値と、設計へ戻す遷移の注記の定数の共有モジュール。pr_fix_finishが読む。設計工程の修正が日常的に触れ、反映はマージ後で、レビューが受け皿になる。拒否すると、このファイルに触れるPRの競合回が止まる",
 };
@@ -967,6 +975,22 @@ describe("files of the conflict round", () => {
     "f/factory/lib/conflict_fix_round.ts",
     "f/factory/lib/workspace.ts",
     "f/factory/lib/ci_fix_paths.ts",
+  ])("denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+});
+
+// mainの自動反映は、deployの保留と凍結を守ってmainを反映する。CI回のClaudeには書き換えさせない。
+describe("files of the self update", () => {
+  test.each([
+    "f/factory/self_update.ts",
+    "f/factory/self_update.script.yaml",
+    "f/factory/self_update.script.lock",
+    "f/factory/self_update.schedule.yaml",
+    "f/factory/self_update.helpers.ts",
+    "f/factory/lib/self_update_support.ts",
+    "f/factory/lib/self_update_support.script.yaml",
+    "f/factory/lib/self_update_support.script.lock",
   ])("denies %s", (path) => {
     expect(isDeniedPath(path)).toBe(true);
   });

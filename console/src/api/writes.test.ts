@@ -5,6 +5,7 @@ import {
   CONSOLE_DECISION_NOTE,
   cancelJob,
   decideApproval,
+  decideDeploy,
   kickoffAudit,
   MAX_REASON_LENGTH,
   placeHold,
@@ -515,6 +516,52 @@ describe("releaseFreeze", () => {
   test("fails with invalid_response when the result has the wrong shape", async () => {
     const { fetchFn } = respondWith({ ok: true, status: "released" });
     expect(await failureOf(releaseFreeze("0a1b2c3d", { fetchFn }))).toEqual({
+      kind: "invalid_response",
+    });
+  });
+});
+
+describe("decideDeploy", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const DECIDED = {
+    refused: false,
+    sha: SHA,
+    decision: "approved",
+    notice: "recorded",
+    action_audit: "recorded",
+  } as const;
+
+  test("calls console_deploy_decide with the sha and the decision only", async () => {
+    const { fetchFn, calls } = respondWith(DECIDED);
+    await decideDeploy({ sha: SHA, decision: "approve" }, { fetchFn });
+    expect(calls[0]).toEqual({
+      url: "/api/w/factory/jobs/run_wait_result/p/f/factory/console_deploy_decide",
+      body: { sha: SHA, decision: "approve" },
+    });
+  });
+
+  test("returns the parsed result", async () => {
+    const { fetchFn } = respondWith(DECIDED);
+    expect(
+      await decideDeploy({ sha: SHA, decision: "approve" }, { fetchFn }),
+    ).toEqual(DECIDED);
+  });
+
+  test("returns a refusal as a result", async () => {
+    const refusal = { refused: true, reason: "not_pending" } as const;
+    const { fetchFn } = respondWith(refusal);
+    expect(
+      await decideDeploy({ sha: SHA, decision: "reject" }, { fetchFn }),
+    ).toEqual(refusal);
+  });
+
+  test("fails with invalid_response when the result has the wrong shape", async () => {
+    const { fetchFn } = respondWith({ refused: false, sha: SHA });
+    expect(
+      await failureOf(
+        decideDeploy({ sha: SHA, decision: "approve" }, { fetchFn }),
+      ),
+    ).toEqual({
       kind: "invalid_response",
     });
   });

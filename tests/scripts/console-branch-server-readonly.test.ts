@@ -1,6 +1,6 @@
 // 検証用サーバーが既定で中継する5つのscriptが、読み取りだけであることを固定する。
 // 入口のファイルだけでなく、相対importで辿れる範囲を調べる。
-// 共有の部品(`lib/db.ts`、`lib/holds.ts`、`lib/freeze_apply.ts`)には書き込みの関数が同居するので、
+// 共有の部品(`lib/db.ts`、`lib/holds.ts`、`lib/freeze_apply.ts`、`lib/deploy_approvals.ts`)には書き込みの関数が同居するので、
 // 本文の正規表現ではなく、5つが取り込む名前と、呼ぶ関数の本文で確かめる。
 
 import { describe, expect, test } from "bun:test";
@@ -18,6 +18,7 @@ const MIXED_LIBS = [
   "f/factory/lib/db.ts",
   "f/factory/lib/holds.ts",
   "f/factory/lib/freeze_apply.ts",
+  "f/factory/lib/deploy_approvals.ts",
 ];
 
 // 相対importの行き先と、取り込む名前。
@@ -127,6 +128,14 @@ describe("the read-only scripts", () => {
     ]);
   });
 
+  test("import only read functions from the deploy approvals library", () => {
+    expect(
+      [
+        ...(CLOSURE.imported.get("f/factory/lib/deploy_approvals.ts") ?? []),
+      ].sort(),
+    ).toEqual(["DeployApproval", "listPendingDeployApprovals"]);
+  });
+
   test("import only the port builder from the freeze library", () => {
     expect(
       [...(CLOSURE.imported.get("f/factory/lib/freeze_apply.ts") ?? [])].sort(),
@@ -147,6 +156,13 @@ describe("the read-only scripts", () => {
   test("call a holds function that only reads", async () => {
     const holds = await textOf("f/factory/lib/holds.ts");
     const body = functionBody(holds, "listActiveHolds");
+
+    expect(body !== "" && !WRITE.test(body)).toBe(true);
+  });
+
+  test("call a deploy approvals function that only reads", async () => {
+    const approvals = await textOf("f/factory/lib/deploy_approvals.ts");
+    const body = functionBody(approvals, "listPendingDeployApprovals");
 
     expect(body !== "" && !WRITE.test(body)).toBe(true);
   });

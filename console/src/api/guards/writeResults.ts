@@ -1,6 +1,6 @@
 // 書き込みのscriptの戻りの型と型ガード。
 // 型は`f/factory/approval_decide.ts`、`retry_work_item.ts`、`audit_kickoff.ts`、
-// `manual_intake_submit.ts`、`pr_review_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscript、定期ジョブを再実行するscript、設定を変更するscript、保留と凍結を置くscript、scheduleを止めるscriptの戻りに合わせる。
+// `manual_intake_submit.ts`、`pr_review_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscript、定期ジョブを再実行するscript、設定を変更するscript、保留と凍結を置くscript、scheduleを止めるscript、反映を承認・却下するscriptの戻りに合わせる。
 // 操作の記録を書けたかを示す`action_audit`は、記録を足した書き込みの戻りが持つ。
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_write_contract.test.ts`が落ちる。
@@ -705,5 +705,55 @@ export function isPrReviewRegisterResult(
     value.status === "started" &&
     isPositiveInteger(value.work_item_id) &&
     isString(value.flow_job_id)
+  );
+}
+
+/** 反映の判断を断った理由。`f/factory/console_deploy_decide.ts`の同じ名前の定数と同じ並びで、契約テストが突き合わせる。 */
+export const DEPLOY_DECIDE_REFUSAL_REASONS = [
+  "invalid_sha",
+  "invalid_decision",
+  "not_pending",
+  "actor_unknown",
+  "audit_unavailable",
+] as const;
+export type DeployDecideRefusalReason =
+  (typeof DEPLOY_DECIDE_REFUSAL_REASONS)[number];
+
+/** 反映の判断の結果。`notice`は判断の情報の通知を残せたか。 */
+export type DeployDecideResult =
+  | { readonly refused: true; readonly reason: DeployDecideRefusalReason }
+  | {
+      readonly refused: false;
+      readonly sha: string;
+      readonly decision: "approved" | "rejected";
+      readonly notice: "recorded" | "failed";
+      readonly action_audit: ActionAudit;
+    };
+
+const isDeployDecideRefusalReason: Guard<DeployDecideRefusalReason> = isOneOf(
+  DEPLOY_DECIDE_REFUSAL_REASONS,
+);
+const isDeployDecision: Guard<"approved" | "rejected"> = isOneOf([
+  "approved",
+  "rejected",
+]);
+const isNoticeAudit: Guard<"recorded" | "failed"> = isOneOf([
+  "recorded",
+  "failed",
+]);
+
+export function isDeployDecideResult(
+  value: unknown,
+): value is DeployDecideResult {
+  if (!isRecord(value)) return false;
+  if (value.refused === true) {
+    return isDeployDecideRefusalReason(value.reason);
+  }
+  return (
+    value.refused === false &&
+    isString(value.sha) &&
+    isDeployDecision(value.decision) &&
+    isNoticeAudit(value.notice) &&
+    isActionAudit(value.action_audit)
   );
 }

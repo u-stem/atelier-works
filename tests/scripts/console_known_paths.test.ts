@@ -38,6 +38,7 @@ describe("the generated known paths", () => {
   test("withhold the release scripts and the job write scripts", () => {
     expect([...WITHHELD].sort()).toEqual([
       "f/factory/console_config_update",
+      "f/factory/console_deploy_decide",
       "f/factory/console_hold_place",
       "f/factory/console_job_cancel",
       "f/factory/console_job_rerun",

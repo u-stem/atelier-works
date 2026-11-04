@@ -1,0 +1,24 @@
+summary: '[OP-2-12] 保護パスの変更の反映を承認・却下'
+description: Factory
+  Consoleから、保護パスの変更を含む反映を、最新の承認待ちの版に限って承認か却下します。判断する人は実行したユーザーから決まり、操作の記録を残せないときは判断しません。承認した版は次の自己更新が反映し、却下した版はmainへ戻すPRがマージされるまで反映されません。
+lock: '!inline f/factory/console_deploy_decide.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    decision:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - sha
+    - decision
+tag: console
+timeout: 30

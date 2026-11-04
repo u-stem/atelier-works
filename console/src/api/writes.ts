@@ -15,12 +15,14 @@ import {
   type ApprovalDecideResult,
   type AuditKickoffResult,
   type ConfigUpdateResult,
+  type DeployDecideResult,
   type FreezeReleaseResult,
   type HoldPlaceResult,
   type HoldReleaseResult,
   isApprovalDecideResult,
   isAuditKickoffResult,
   isConfigUpdateResult,
+  isDeployDecideResult,
   isFreezeReleaseResult,
   isHoldPlaceResult,
   isHoldReleaseResult,
@@ -348,6 +350,28 @@ export function stopSchedule(
     "console_schedule_stop",
     { schedule_path: schedulePath },
     isScheduleStopResult,
+    options,
+  );
+}
+
+/** 反映を判断する入力。判断する人は引数に取らない。scriptがジョブの実行文脈から導く。 */
+export type DeployDecideInput = {
+  readonly sha: string;
+  readonly decision: "approve" | "reject";
+};
+
+/**
+ * 保護パスの変更を含む反映を、最新の承認待ちの版に限って承認か却下する。
+ * 承認待ちでない版や、操作の記録を残せないときは、理由つきの断りで返る。断りは失敗ではなく結果である。
+ */
+export function decideDeploy(
+  input: DeployDecideInput,
+  options: RunScriptOptions = {},
+): Promise<DeployDecideResult> {
+  return callWrite(
+    "console_deploy_decide",
+    { sha: input.sha, decision: input.decision },
+    isDeployDecideResult,
     options,
   );
 }

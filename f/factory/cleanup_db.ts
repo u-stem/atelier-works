@@ -3,6 +3,7 @@
 // 過ぎた終端状態の作業項目(と、それを`ON DELETE CASCADE`で参照する表の行)と、
 // `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
 // 解決済みのnotice・判定済みの`main_ci_runs`・`pr_ci_checks`・`worker_samples`で、作業項目とは別々に掃除する。
+// `deployments`は、最後に成功した反映の行を、古くても削除しない(反映の承認の判定がその時刻を基準にするため)。
 // 判定を待つ`main_ci_runs`の行、判定を待つか修正中の`pr_ci_checks`の行、各リポジトリの最新の`main_ci_runs`の行は、古くても削除しない。
 // 各PRの最新の`pr_ci_checks`の行は、保持期間の4倍まで残す。
 // 競合から離れた`pr_conflict_checks`の行も、保持期間で削除する(競合したままの行は残す)。件数はログだけに残す。
@@ -348,8 +349,9 @@ async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
 /**
  * 保持期間を過ぎた未解決の`info`の通知を、削除せず解決済みにする。
  * `info`の通知はConsoleの一覧から7日で外れ、誰も解決しないので、溜まり続けないようにここで解決済みにする。
- * 解決できない種類の通知(`UNRESOLVABLE_NOTICE_KINDS`)は、`design_enabled_ignored`(`action`)を除いて`info`なので、この対象に入る。
- * `design_enabled_ignored`は`action`なのでこの対象に入らず、設定が直ると自己更新が解決する。
+ * 解決できない種類の通知(`UNRESOLVABLE_NOTICE_KINDS`)は、`design_enabled_ignored`と`deploy_approval_required`(どちらも`action`)を除いて`info`なので、この対象に入る。
+ * この2つは`action`なのでこの対象に入らない。
+ * `design_enabled_ignored`は設定が直ると自己更新が解決し、`deploy_approval_required`は判断か反映の成功が解決する。
  * 痕跡を解決済みの履歴に残し、その後は`cleanupNotices`が通常の保持期間で消す。
  * `cleanupNotices`とは別に呼び、片方が失敗してももう片方の件数を捨てない。
  */

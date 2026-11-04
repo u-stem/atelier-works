@@ -3,11 +3,16 @@ import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { type ReleaseNotice, STALE_LIST_NOTICE } from "../lib/writeNotices.ts";
 import { ApiFailure } from "./errors.ts";
 import type {
+  DeployDecideResult,
   FreezeReleaseResult,
   HoldReleaseResult,
 } from "./guards/writeResults.ts";
 import { holdsQueryKey } from "./holdsQueries.ts";
-import { freezeReleaseConfig, holdReleaseConfig } from "./releaseConfig.ts";
+import {
+  deployDecideConfig,
+  freezeReleaseConfig,
+  holdReleaseConfig,
+} from "./releaseConfig.ts";
 import { systemStatusQueryKey } from "./systemQueries.ts";
 import { createWriteLocks } from "./writeLocks.ts";
 import { createWriteRunner } from "./writeRunner.ts";
@@ -210,5 +215,57 @@ describe("freezeReleaseConfig", () => {
     );
     await runner("0a1b2c3d");
     expect(notices.map((notice) => notice.tone)).toEqual(["warning"]);
+  });
+});
+
+describe("deployDecideConfig", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const DECIDED: DeployDecideResult = {
+    refused: false,
+    sha: SHA,
+    decision: "approved",
+    notice: "recorded",
+    action_audit: "recorded",
+  };
+
+  function setupDecide(
+    run: (input: {
+      sha: string;
+      decision: "approve" | "reject";
+    }) => Promise<DeployDecideResult>,
+  ) {
+    const queryClient = new QueryClient();
+    const locks = createWriteLocks();
+    const notices: ReleaseNotice[] = [];
+    const config = deployDecideConfig({
+      run,
+      onNotice: (notice) => {
+        notices.push(notice);
+      },
+    });
+    const runner = createWriteRunner({ ...config, queryClient, locks });
+    return { queryClient, notices, runner, config };
+  }
+
+  test("locks the approval and the rejection of a sha under one key", () => {
+    const { config } = setupDecide(() => Promise.resolve(DECIDED));
+    expect(config.keyOf({ sha: SHA, decision: "reject" })).toBe(
+      `deploy:${SHA}`,
+    );
+  });
+
+  test("reads the holds again after the decision", async () => {
+    const { runner, queryClient } = setupDecide(() => Promise.resolve(DECIDED));
+    const holds = watch(queryClient, holdsQueryKey);
+    await Promise.resolve();
+    const before = holds.fetched();
+    await runner({ sha: SHA, decision: "approve" });
+    expect(holds.fetched()).toBe(before + 1);
+  });
+
+  test("announces the approval", async () => {
+    const { runner, notices } = setupDecide(() => Promise.resolve(DECIDED));
+    await runner({ sha: SHA, decision: "approve" });
+    expect(notices[0]?.tone).toBe("success");
   });
 });

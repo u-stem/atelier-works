@@ -1,7 +1,8 @@
-// Consoleの保留と凍結の画面が使う、表示用の整形と解除の共通部品。
+// Consoleの保留と凍結の画面が使う、表示用の整形と解除の共通部品。反映の承認待ちの整形も持つ。
 // 信頼できない文字列を無害化して切り詰め、読めない源の失敗を値で表し、解除の通知の文を作る。
 // 保留のモジュールからは型だけを読み込み、凍結の変数は読むだけで書かない。
 
+import type { DeployApproval } from "./deploy_approvals.ts";
 import type { FreezePorts } from "./freeze_apply.ts";
 import {
   activeDeployFreezes,
@@ -70,9 +71,27 @@ export type FreezesReadView =
     }
   | { readonly ok: false; readonly reason: string };
 
+/** 1件の承認待ちに返す保護パスの数の上限。残りは件数だけを返す。 */
+export const PROTECTED_PATHS_DISPLAY_MAX = 50;
+
+/** 承認待ちの反映の1件。パスはリポジトリのファイル名で、画面が文字としてだけ描く。 */
+export type DeployApprovalView = {
+  readonly sha: string;
+  readonly protected_paths: readonly string[];
+  /** 保護パスの全件数。`protected_paths`は先頭の`PROTECTED_PATHS_DISPLAY_MAX`件まで。 */
+  readonly protected_path_count: number;
+  readonly requested_at: string;
+};
+
+/** 承認待ちの読み取り。読めないことを「承認待ちなし」と取り違えないよう、失敗を値で返す。 */
+export type DeployApprovalsReadView =
+  | { readonly ok: true; readonly pending: readonly DeployApprovalView[] }
+  | { readonly ok: false; readonly reason: string };
+
 export type HoldsSnapshot = {
   readonly holds: HoldsReadView;
   readonly freezes: FreezesReadView;
+  readonly deploy_approvals: DeployApprovalsReadView;
 };
 
 /** 解除の通知を残せたか。残せなくても解除は取り消さない。 */
@@ -186,6 +205,26 @@ export function freezesReadView(
     ok: true,
     schedule: activeFreezes(state.value, now).map(freezeView),
     deploy: activeDeployFreezes(state.value, now).map(deployFreezeView),
+  };
+}
+
+/** 承認待ちの読み取りを、画面に返す形にする。パスは数と長さを切り詰める。 */
+export function deployApprovalsReadView(
+  read: Outcome<readonly DeployApproval[]>,
+): DeployApprovalsReadView {
+  if (!read.ok) {
+    return { ok: false, reason: clipDisplay(read.reason, FAILURE_DISPLAY_MAX) };
+  }
+  return {
+    ok: true,
+    pending: read.value.map((approval) => ({
+      sha: approval.sha,
+      protected_paths: approval.protected_paths
+        .slice(0, PROTECTED_PATHS_DISPLAY_MAX)
+        .map((path) => clipDisplay(path, TARGET_DISPLAY_MAX)),
+      protected_path_count: approval.protected_paths.length,
+      requested_at: approval.requested_at,
+    })),
   };
 }
 

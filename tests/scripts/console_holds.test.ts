@@ -99,7 +99,11 @@ function setup(
     now: () => NOW,
   };
   return {
-    deps: { listHolds: () => listActiveHolds({}, fakeSql(holds)), ports },
+    deps: {
+      listHolds: () => listActiveHolds({}, fakeSql(holds)),
+      ports,
+      listPendingDeployApprovals: async () => [],
+    },
     writes,
   };
 }

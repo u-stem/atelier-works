@@ -196,11 +196,11 @@ describe("self_update gh collect freshness check", () => {
     expect(GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT).toBe(8);
   });
 
-  test("counts thirty-six bounded calls in total", () => {
-    expect(SELF_UPDATE_BOUNDED_CALL_COUNT).toBe(36);
+  test("counts forty-two bounded calls in total", () => {
+    expect(SELF_UPDATE_BOUNDED_CALL_COUNT).toBe(42);
   });
 
-  test("the worst case is 3091.2 seconds", () => {
-    expect(SELF_UPDATE_WORST_CASE_MS).toBe(3_091_200);
+  test("the worst case is 3294.2 seconds", () => {
+    expect(SELF_UPDATE_WORST_CASE_MS).toBe(3_294_200);
   });
 });

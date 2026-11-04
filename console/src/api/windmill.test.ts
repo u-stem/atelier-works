@@ -52,6 +52,7 @@ describe("SCRIPT_PATHS", () => {
       "console_config_update",
       "console_hold_place",
       "console_schedule_stop",
+      "console_deploy_decide",
     ]);
   });
 
@@ -75,6 +76,7 @@ describe("SCRIPT_PATHS", () => {
       console_config_update: "f/factory/console_config_update",
       console_hold_place: "f/factory/console_hold_place",
       console_schedule_stop: "f/factory/console_schedule_stop",
+      console_deploy_decide: "f/factory/console_deploy_decide",
     });
   });
 });

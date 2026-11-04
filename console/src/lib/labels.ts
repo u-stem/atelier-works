@@ -65,6 +65,8 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["owner_id_mismatch", "オーナーの照合の失敗"],
   ["factory_repo_id_mismatch", "Factory自身のリポジトリの照合の失敗"],
   ["host_action_required", "ホスト側の作業"],
+  ["deploy_approval_required", "保護パスの変更の反映の承認待ち"],
+  ["deploy_approval_decided", "反映の承認の判断"],
   ["cleanup_db_failed", "データベースの掃除の失敗"],
   ["cleanup_worktree_busy", "作業ディレクトリの使用中"],
   ["check_slot_skipped", "検査の枠の飛ばし"],
@@ -221,7 +223,7 @@ export function holderKindLabel(kind: string): string {
 export const HOLDS_TEXT = {
   sectionTitle: "保留と凍結",
   sectionDescription:
-    "Factoryのマージと反映を、期限つきで止めている保留と凍結です。置くことも、解除することもできます。",
+    "Factoryのマージと反映を止めている保留と凍結と、保護パスの変更の反映の承認待ちです。保留と凍結は、置くことも、解除することもできます。",
   holdsCardTitle: "保留",
   holdsCardNote: "マージを止める保留の一覧です。",
   freezesCardTitle: "凍結とdeployの保留",
@@ -250,6 +252,36 @@ export const HOLDS_TEXT = {
   holderField: "置いた主体",
   expiryField: "期限",
 } as const;
+
+/** 保護パスの変更の反映の承認待ちの文言。 */
+export const DEPLOY_APPROVALS_TEXT = {
+  cardTitle: "反映の承認待ち",
+  cardNote:
+    "前回の反映からの変更に、Windmillへ反映する保護パスのファイルかmigrationがあり、自己更新が反映を止めている版です。承認すると、次の自己更新(2分以内)が反映します。",
+  badge: "承認待ち",
+  requestedField: "止めた時刻",
+  pathsField: "保護パスの変更",
+  approve: "承認",
+  reject: "却下",
+  deciding: "記録中",
+  approveTitle: "この版の反映を承認しますか",
+  rejectTitle: "この版の反映を却下しますか",
+  confirmApprove: "承認する",
+  confirmReject: "却下する",
+  shaField: "版",
+  approveEffect:
+    "承認すると、次の自己更新(2分以内)が、この版までの変更をまとめて反映します。承認は取り消せません。",
+  rejectEffect:
+    "却下しても、反映は止まったままです。mainへ戻すPRをマージすると、次の反映で止まりが解けます。",
+  readFailedTitle: "反映の承認待ちを読めませんでした",
+  readFailedDetail:
+    "読めない間も、保護パスの変更を含む反映は止まったままです。",
+} as const;
+
+/** 一覧から外した保護パスの件数の文。 */
+export function hiddenPathsText(count: number): string {
+  return `ほか${String(count)}件`;
+}
 
 /** 解除の効果の文。置いた主体と関係なく、行の種類で決まる。 */
 export const HOLD_EFFECT_TEXT = {

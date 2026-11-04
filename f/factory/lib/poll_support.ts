@@ -314,7 +314,7 @@ export type DeployedShaCheckDeps = {
    * 時刻はどちらもDBの`now()`で決まる。成功の記録が無ければ何も解決しない。
    */
   readonly resolveNotices: (deployedSha: string) => Promise<number>;
-  /** 有効なdeployの保留があるか。読めないときは例外を投げる。 */
+  /** 有効なdeployの保留か、保護パスの変更の承認待ちがあるか。読めないときは例外を投げる。 */
   readonly isDeployHeld: () => Promise<boolean>;
   readonly nowMs: () => number;
   readonly log: Logger;
@@ -360,6 +360,25 @@ async function resolveNoticesBeforeDeployment(
       error: errorText(err),
     });
   }
+}
+
+/**
+ * 反映を止めている理由のどれかが有効かを返す。どれかが真なら、ほかが読めなくても真を返す。
+ * 真が無く、読めなかったものがあれば、最初の失敗を投げる。呼び出し側は、止まっていないものとして通知する側に倒す。
+ * 理由は、deployの保留と、保護パスの変更の承認待ちである。
+ */
+export async function anyDeployHold(
+  checks: readonly (() => Promise<boolean>)[],
+): Promise<boolean> {
+  const results = await Promise.allSettled(checks.map((check) => check()));
+  if (results.some((result) => result.status === "fulfilled" && result.value)) {
+    return true;
+  }
+  const failed = results.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failed[0] !== undefined) throw failed[0].reason;
+  return false;
 }
 
 /**
