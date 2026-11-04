@@ -118,6 +118,9 @@ superpowersが使えない環境では、同じ流れ(計画、実装、別のsu
      注記の一覧が正本である。
      `pr_fix_verify.ts`、`pr_fix_finish.ts`、`ci_fix_round.ts`、`ci_fix_classify.ts`、`pr_ci_fix_claim.ts`が当たる。
      `workspace.ts`のgitの固定設定も当たる。
+   - migrationに`DROP`、`DELETE`、`TRUNCATE`、既存の値を変える`UPDATE`を含めた
+   - 権限、sandbox、トークンの範囲、秘密値の扱いを足すか変えた
+   - ファイル、ブランチ、worktree、プロセスを消す処理を足すか変えた
 4. `mise run check`が通り、`git status --short`が空であることを確かめてからpushする。
 5. PR本文は`pr-body`スキルに従って書く。
 
