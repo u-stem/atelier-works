@@ -165,7 +165,7 @@ const CI_DENIED_DIRECTORIES: readonly string[] = [
  * GitHubの収集(宛先を固定したGraphQLの通信の`gh_graphql`、照合と`gone`の判定の`gh_collect`で始まる部品、それを呼ぶ`collect_github`)、
  * 自動で再開してよい止まった理由の一覧(`auto_retry_reasons`)、
  * 実装の関門の承認の判定(`approval_gate`)、要件定義の基準値の照合(`doc_tree_hash`)、モデル出力の整形(`model_text`)、
- * 保護パスに触れた変更を承認まで止めるmainの自動反映(`self_update`)、
+ * deployの保留と凍結を守ってmainを反映する自動反映(`self_update`)と、その反映の判断の本体(`self_update_support`)、
  * 検査の前提が古いときの理由(`check_sandbox_reasons`)、GitHubの呼び出しの失敗の型(`github_errors`)である。
  * 一覧は、CI回と競合回の回復が「待たずに保留なしで外す回」を決め、競合回の数え方が「数えない回」を決める。
  * 広い接頭辞を足されると、競合回の上限が効かなくなる。
@@ -202,6 +202,7 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/pr_fix_launch.",
   "f/factory/lib/pr_fix_design.",
   "f/factory/lib/branch_hold.",
+  "f/factory/lib/self_update_support.",
   "f/factory/lib/main_ci_",
   "f/factory/lib/metadata_",
   "f/factory/watch_pr_ci.",

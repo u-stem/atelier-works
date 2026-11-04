@@ -291,10 +291,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * Factoryの安全策を担うコードも守る。headless Claudeの起動(`lib/claude.ts`。Bashの禁止、設定の出どころ、渡す環境変数)、
  * 検査コマンドの隔離(`lib/check_sandbox.ts`)と実行(`lib/check_runner.ts`)、実装の関門の判定(`lib/approval_gate.ts`)、
  * この一覧そのもの(`lib/protected_paths.ts`)、mainの自動反映(`self_update.ts`)と、それぞれの`.script.yaml`である。
+ * 反映の判断の本体(ブランチの照合、wmillの環境と引数、反映の可否)は`lib/self_update_support.ts`にあり、`self_update.ts`はそれをつなぐだけなので、これも守る。
  * 書き換えられると、Claudeの隔離、検査の隔離、承認の関門、保護の範囲、反映の止め方が、人の確認なしに外れる。
  * ファイルは移さない。`lib/claude.ts`のパスは調査の隔離の測定が固定し、`self_update`のパスはscheduleとConsoleと凍結が固定するためである。
  * `lib/claude.script.lock`と`self_update.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
- * ほかの4つのlibのlockは、依存の無いlibのlockと同じ扱いで守らない。
+ * ほかの5つのlibのlockは、依存の無いlibのlockと同じ扱いで守らない。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -588,6 +589,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/protected_paths.script.yaml",
   "f/factory/self_update.ts",
   "f/factory/self_update.script.yaml",
+  "f/factory/lib/self_update_support.ts",
+  "f/factory/lib/self_update_support.script.yaml",
 ];
 
 /**
