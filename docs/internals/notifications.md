@@ -265,7 +265,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `design_enabled_ignored` | `self_update` | `design_enabled`が`true`でも、`design_enabled_since`が無いか日時として読めないため`false`として読んでいること、`design_enabled_since`を書くか`false`に戻す操作 |
 | `host_action_required` | `self_update`、`implement_verify`、`pr_fix_verify`、`watch_pr_ci` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパスかイメージに足りないもの、`mise run up`を実行する手順 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
-| `backup_failed` | `backup` | 失敗した段階と原因。原因は秘密値を伏せ、末尾の500文字までにする |
+| `backup_failed` | `backup` | 失敗した段階と、ジョブのログを見る案内。原因の本文は、秘密値を伏せてジョブのログにだけ残す |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
 | `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
 | `workspace_disk_usage` | `cleanup_workspaces` | 作業領域のディスク使用量(MiB) |
