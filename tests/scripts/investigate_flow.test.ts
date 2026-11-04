@@ -97,6 +97,22 @@ describe("the modules of the investigate flow", () => {
   });
 });
 
+describe("what the post step takes from the earlier steps", () => {
+  const transforms = field(field(modules()[3], "value"), "input_transforms");
+  const keys = Object.keys(isRecord(transforms) ? transforms : {}).sort();
+
+  test("are the body, the code and the work item id", () => {
+    expect(keys).toEqual(["comment_body", "withheld", "work_item_id"]);
+  });
+
+  test("never include the raw output of the generate step", () => {
+    const exprs = keys.map((key) =>
+      String(field(field(transforms, key), "expr")),
+    );
+    expect(exprs.some((expr) => expr.includes(".output"))).toBe(false);
+  });
+});
+
 describe("the failure module of the investigate flow", () => {
   const failure = field(field(FLOW, "value"), "failure_module");
   const transforms = field(field(failure, "value"), "input_transforms");
@@ -215,10 +231,12 @@ describe("the modules that the generate step imports", () => {
 
   test("are the fixed set", () => {
     expect(imports).toEqual([
+      "../lib/ci_fix_round.ts",
       "../lib/claude.ts",
       "../lib/config.ts",
       "../lib/db.ts",
       "../lib/discord.ts",
+      "../lib/gh_collect_support.ts",
       "../lib/implement_launch_support.ts",
       "../lib/investigate_claude.ts",
       "../lib/investigate_flow.ts",

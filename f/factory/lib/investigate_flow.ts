@@ -283,6 +283,29 @@ export async function prepareInvestigateComment(
   return { kind: "ok", body };
 }
 
+/** 本文を作れなかった理由の符号。生成のstepが次のstepに渡す。 */
+export type InvestigateWithheld = "secret_detected" | "scan_failed";
+
+/** 実装は次のコミットで行う。 */
+export function isWithheldCode(_value: unknown): _value is InvestigateWithheld {
+  return false;
+}
+
+/** 実装は次のコミットで行う。 */
+export function isPostableCommentBody(
+  _body: unknown,
+  _workItemId: number,
+): _body is string {
+  return false;
+}
+
+/** 実装は次のコミットで行う。 */
+export function withheldEscalation(
+  _reason: InvestigateWithheld,
+): EscalationSpec {
+  return { note: "", reason: "", nextAction: "" };
+}
+
 // ---------------------------------------------------------------------------
 // 時間の収まり
 // ---------------------------------------------------------------------------

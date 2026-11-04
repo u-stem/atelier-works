@@ -10,6 +10,7 @@ import type {
 import type { EscalationSpec } from "../../f/factory/lib/investigate_flow.ts";
 import {
   gateClosedEscalation,
+  INVESTIGATE_ROLE_TAG,
   INVESTIGATE_SCHEMA,
   type InvestigateOutput,
   isInvestigateOutput,
@@ -71,8 +72,14 @@ const SUCCESS: InvestigateClaudeResult<InvestigateOutput> = {
   agentRunId: 1,
 };
 
+type ScanResult = { readonly ok: boolean; readonly output: string };
+
 type World = {
   readonly enabled?: boolean;
+  /** 秘密値の検査器の結果を、呼ばれた順に返す。尽きたら異常なし。 */
+  readonly scans?: readonly (ScanResult | Error)[];
+  readonly secrets?: readonly string[];
+  readonly secretsFail?: boolean;
   /** 設定を読むたびに順に返す値。尽きたら最後の値を返す。 */
   readonly enabledReads?: readonly boolean[];
   readonly item?: WorkItem | null;
@@ -91,6 +98,8 @@ function fake(world: World = {}) {
   const escalations: EscalationSpec[] = [];
   const launched: InvestigateClaudeOptions<InvestigateOutput>[] = [];
   const proofsGiven: Proof[] = [];
+  const scanned: string[] = [];
+  const logged: string[] = [];
   let proofCall = 0;
   let enabledCall = 0;
   const deps: InvestigateGenerateDeps = {
@@ -165,6 +174,21 @@ function fake(world: World = {}) {
       launched.push(opts);
       return world.launch === undefined ? SUCCESS : world.launch();
     },
+    readSecrets: async () => {
+      calls.push("secrets");
+      if (world.secretsFail === true) throw new Error("unreadable");
+      return world.secrets ?? [];
+    },
+    scan: async (text) => {
+      calls.push("scan");
+      scanned.push(text);
+      const next = world.scans?.[scanned.length - 1] ?? {
+        ok: true,
+        output: "",
+      };
+      if (next instanceof Error) throw next;
+      return next;
+    },
     removeWorktree: async () => {
       calls.push("remove");
       if (world.remove !== undefined) await world.remove();
@@ -177,9 +201,19 @@ function fake(world: World = {}) {
       maxBudgetUsd: 5,
       timeoutMs: 1_800_000,
     },
-    log: { info: () => {}, warn: () => {}, error: () => {} },
+    log: {
+      info: (message, fields) => {
+        logged.push(JSON.stringify([message, fields]));
+      },
+      warn: (message, fields) => {
+        logged.push(JSON.stringify([message, fields]));
+      },
+      error: (message, fields) => {
+        logged.push(JSON.stringify([message, fields]));
+      },
+    },
   };
-  return { deps, calls, escalations, launched, proofsGiven };
+  return { deps, calls, escalations, launched, proofsGiven, scanned, logged };
 }
 
 describe("runInvestigateGenerate", () => {
@@ -201,15 +235,20 @@ describe("runInvestigateGenerate", () => {
         "enabled",
         "proof",
         "launch",
+        "secrets",
+        "scan",
+        "scan",
         "cleanup",
         "remove",
       ]);
     });
 
-    test("returns the structured output of a success", async () => {
+    test("returns the final body of a success, and no withheld code", async () => {
       const f = fake();
       const result = await runInvestigateGenerate(INPUT, f.deps);
-      expect(result).toEqual({ skip: false, reason: null, output: OUTPUT });
+      expect(result.skip).toBe(false);
+      expect(result.withheld).toBeNull();
+      expect(result.comment_body?.startsWith(INVESTIGATE_ROLE_TAG)).toBe(true);
     });
   });
 
@@ -217,8 +256,98 @@ describe("runInvestigateGenerate", () => {
     test("cancels the investigation and stops when the setting is off", async () => {
       const f = fake({ enabled: false });
       const result = await runInvestigateGenerate(INPUT, f.deps);
-      expect(result).toEqual({ skip: true, reason: "disabled", output: null });
+      expect(result).toEqual({
+        skip: true,
+        reason: "disabled",
+        comment_body: null,
+        withheld: null,
+      });
       expect(f.calls).toEqual(["enabled", "cancel"]);
+    });
+  });
+
+  describe("what the step hands to the next step", () => {
+    const RAW: InvestigateOutput = {
+      summary: "ping @someone <!-- hidden --> topsecretvalue",
+      findings: [{ title: "Raw title", detail: "Raw detail" }],
+      open_questions: ["Raw question?"],
+    };
+    const RAW_RESULT: InvestigateClaudeResult<InvestigateOutput> = {
+      ...SUCCESS,
+      structuredOutput: RAW,
+    };
+
+    test("holds only the skip flag, the reason, the body and the withheld code", async () => {
+      const f = fake({ launch: async () => RAW_RESULT });
+      const result = await runInvestigateGenerate(INPUT, f.deps);
+      expect(Object.keys(result).sort()).toEqual([
+        "comment_body",
+        "reason",
+        "skip",
+        "withheld",
+      ]);
+    });
+
+    test("does not hand over the raw output, only the sanitized and masked body", async () => {
+      const f = fake({
+        launch: async () => RAW_RESULT,
+        secrets: ["topsecretvalue"],
+      });
+      const result = await runInvestigateGenerate(INPUT, f.deps);
+      const body = result.comment_body ?? "";
+      expect(body).not.toContain("<!--");
+      expect(body).not.toContain("topsecretvalue");
+      expect(JSON.stringify(result)).not.toContain("open_questions");
+    });
+
+    test("scans the raw output first and the final body last", async () => {
+      const f = fake({ launch: async () => RAW_RESULT });
+      const result = await runInvestigateGenerate(INPUT, f.deps);
+      expect(f.scanned[0]).toContain("<!-- hidden -->");
+      expect(f.scanned[1]).toBe(result.comment_body ?? "");
+    });
+
+    test("hands over a code and no body when the raw output has a secret", async () => {
+      const f = fake({
+        launch: async () => RAW_RESULT,
+        scans: [{ ok: false, output: "- rule" }],
+      });
+      const result = await runInvestigateGenerate(INPUT, f.deps);
+      expect(result).toEqual({
+        skip: false,
+        reason: null,
+        comment_body: null,
+        withheld: "secret_detected",
+      });
+    });
+
+    test("hands over a code and no body when the scan fails", async () => {
+      const f = fake({
+        launch: async () => RAW_RESULT,
+        scans: [new Error("gitleaks timed out")],
+      });
+      const result = await runInvestigateGenerate(INPUT, f.deps);
+      expect(result.withheld).toBe("scan_failed");
+      expect(result.comment_body).toBeNull();
+    });
+
+    test("withholds the body when the secrets cannot be read", async () => {
+      const f = fake({ launch: async () => RAW_RESULT, secretsFail: true });
+      const result = await runInvestigateGenerate(INPUT, f.deps);
+      expect(result.withheld).toBe("scan_failed");
+      expect(result.comment_body).toBeNull();
+    });
+
+    test("does not scan when the secrets cannot be read", async () => {
+      const f = fake({ launch: async () => RAW_RESULT, secretsFail: true });
+      await runInvestigateGenerate(INPUT, f.deps);
+      expect(f.scanned).toEqual([]);
+    });
+
+    test("writes no text of the raw output to the log", async () => {
+      const f = fake({ launch: async () => RAW_RESULT });
+      await runInvestigateGenerate(INPUT, f.deps);
+      expect(f.logged.join("\n")).not.toContain("Raw detail");
     });
   });
 
@@ -226,7 +355,12 @@ describe("runInvestigateGenerate", () => {
     test("cancels the investigation and does not start when the setting turned off meanwhile", async () => {
       const f = fake({ enabledReads: [true, false] });
       const result = await runInvestigateGenerate(INPUT, f.deps);
-      expect(result).toEqual({ skip: true, reason: "disabled", output: null });
+      expect(result).toEqual({
+        skip: true,
+        reason: "disabled",
+        comment_body: null,
+        withheld: null,
+      });
       expect(f.calls).toContain("cancel");
       expect(f.calls).not.toContain("launch");
     });
@@ -430,7 +564,8 @@ describe("runInvestigateGenerate", () => {
       expect(result).toEqual({
         skip: true,
         reason: "claude_failed",
-        output: null,
+        comment_body: null,
+        withheld: null,
       });
       expect(f.escalations[0]?.note).toBe("claude run failed: timeout");
     });

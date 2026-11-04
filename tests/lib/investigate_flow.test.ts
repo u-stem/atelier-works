@@ -18,8 +18,11 @@ import {
   investigatePrompt,
   investigateTimeoutMisfit,
   isInvestigateOutput,
+  isPostableCommentBody,
   isProbeJobActive,
+  isWithheldCode,
   prepareInvestigateComment,
+  withheldEscalation,
 } from "../../f/factory/lib/investigate_flow.ts";
 import { PROBE_SCRIPT_PATH } from "../../f/factory/lib/investigate_isolation.ts";
 import { ISOLATION_GATE_CODES } from "../../f/factory/lib/investigate_isolation_gate.ts";
@@ -672,4 +675,81 @@ describe("isProbeJobActive", () => {
       isProbeJobActive({ workspace: "main", listQueue: async () => ({}) }),
     ).rejects.toThrow("could not confirm");
   });
+});
+
+describe("isWithheldCode", () => {
+  test.each(["secret_detected", "scan_failed"])("accepts %s", (code) => {
+    expect(isWithheldCode(code)).toBe(true);
+  });
+
+  test.each([
+    ["another code", "other"],
+    ["null", null],
+    ["a number", 1],
+  ])("rejects %s", (_name, value) => {
+    expect(isWithheldCode(value)).toBe(false);
+  });
+});
+
+describe("isPostableCommentBody", () => {
+  test("accepts a body that opens with the role tag", () => {
+    expect(isPostableCommentBody(`${INVESTIGATE_ROLE_TAG}\n\nbody`, 7)).toBe(
+      true,
+    );
+  });
+
+  test("rejects a body that does not open with the role tag", () => {
+    expect(isPostableCommentBody("$var:f/factory/github_token", 7)).toBe(false);
+  });
+
+  test("rejects a body that is not a string", () => {
+    expect(isPostableCommentBody(null, 7)).toBe(false);
+  });
+
+  test("rejects a body that is too long once the marker is added", () => {
+    const body = `${INVESTIGATE_ROLE_TAG}${"a".repeat(INVESTIGATE_COMMENT_MAX_CHARS)}`;
+    expect(isPostableCommentBody(body, 7)).toBe(false);
+  });
+
+  test("accepts a body that fills the limit with the marker", () => {
+    const room =
+      INVESTIGATE_COMMENT_MAX_CHARS -
+      withMarker(INVESTIGATE_MARKER_KIND, 7, "").length;
+    const body = `${INVESTIGATE_ROLE_TAG}${"a".repeat(room - INVESTIGATE_ROLE_TAG.length)}`;
+    expect(isPostableCommentBody(body, 7)).toBe(true);
+  });
+});
+
+describe("withheldEscalation", () => {
+  test("names a detection in the note", () => {
+    expect(withheldEscalation("secret_detected").note).toBe(
+      "result withheld: secret detected",
+    );
+  });
+
+  test("names a failed scan in the note", () => {
+    expect(withheldEscalation("scan_failed").note).toBe(
+      "result withheld: secret scan failed",
+    );
+  });
+
+  test("sends a person of a detection to the generate job, the transcript and the rotation", () => {
+    const action = withheldEscalation("secret_detected").nextAction;
+    expect(action).toContain("生成stepのジョブとtranscript");
+    expect(action).toContain("秘密の入れ替え");
+    expect(action).toContain("投入し直");
+  });
+
+  test("tells a person to change the request after a failed scan", () => {
+    expect(withheldEscalation("scan_failed").nextAction).toContain(
+      "依頼文を変えて投入し直",
+    );
+  });
+
+  test.each(["secret_detected", "scan_failed"] as const)(
+    "does not say that the output was discarded (%s)",
+    (code) => {
+      expect(withheldEscalation(code).reason).not.toContain("捨て");
+    },
+  );
 });

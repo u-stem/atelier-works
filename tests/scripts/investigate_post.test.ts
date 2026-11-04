@@ -1,5 +1,6 @@
 // 調査の投稿のstep(`steps/investigate_post.ts`)の手順を固定する。
-// 保護パスに置く。投稿の前の無害化と秘密値の検査、投稿先の確認、冪等性を緩める変更が、このテストを書き換えて通らないようにするため。
+// 保護パスに置く。投稿の前の秘密値の検査、投稿先の確認、冪等性を緩める変更が、このテストを書き換えて通らないようにするため。
+// 投稿のstepが受けるのは、生成のstepが作った最終の本文か、本文を作れなかった理由の符号だけである。
 
 import { describe, expect, test } from "bun:test";
 import type { Issue } from "../../f/factory/lib/github.ts";
@@ -7,7 +8,7 @@ import { GitHubHttpError } from "../../f/factory/lib/github_errors.ts";
 import {
   type EscalationSpec,
   INVESTIGATE_ROLE_TAG,
-  type InvestigateOutput,
+  withheldEscalation,
 } from "../../f/factory/lib/investigate_flow.ts";
 import type { WorkItem } from "../../f/factory/lib/types.ts";
 import {
@@ -19,12 +20,12 @@ import {
   investigationItem,
 } from "../lib/investigateTestSupport.ts";
 
-const INPUT_BASE = { workItemId: 7, rootJobId: INVESTIGATE_ROOT_JOB };
-
-const OUTPUT: InvestigateOutput = {
-  summary: "The build is slow because of the cache.",
-  findings: [{ title: "Cache miss", detail: "The cache key changes." }],
-  open_questions: [],
+const BODY = `${INVESTIGATE_ROLE_TAG}\n\nThe build is slow because of the cache.`;
+const INPUT = {
+  workItemId: 7,
+  rootJobId: INVESTIGATE_ROOT_JOB,
+  commentBody: BODY,
+  withheld: null,
 };
 
 function issue(overrides: Partial<Issue> = {}): Issue {
@@ -53,7 +54,6 @@ type World = {
   readonly enabled?: boolean;
   readonly item?: WorkItem | null;
   readonly issue?: () => Promise<Issue>;
-  readonly secrets?: readonly string[];
   readonly scans?: readonly (ScanResult | Error)[];
   readonly post?: { id: number; created: boolean };
   readonly marked?: boolean;
@@ -77,10 +77,6 @@ function fake(world: World = {}) {
     getIssue: async () => {
       calls.push("issue");
       return world.issue === undefined ? issue() : world.issue();
-    },
-    readSecrets: async () => {
-      calls.push("secrets");
-      return world.secrets ?? [];
     },
     scan: async (text) => {
       calls.push("scan");
@@ -120,13 +116,11 @@ describe("runInvestigatePost", () => {
   describe("the order of the steps", () => {
     test("reads the setting, the row and the issue, then scans, posts and closes the investigation", async () => {
       const f = fake();
-      await runInvestigatePost({ ...INPUT_BASE, output: OUTPUT }, f.deps);
+      await runInvestigatePost(INPUT, f.deps);
       expect(f.calls).toEqual([
         "enabled",
         "item",
         "issue",
-        "secrets",
-        "scan",
         "scan",
         "post",
         "mark",
@@ -135,37 +129,60 @@ describe("runInvestigatePost", () => {
 
     test("returns the id of the comment that it posted", async () => {
       const f = fake();
-      const result = await runInvestigatePost(
-        { ...INPUT_BASE, output: OUTPUT },
-        f.deps,
-      );
+      const result = await runInvestigatePost(INPUT, f.deps);
       expect(result).toEqual({ outcome: "posted", comment_id: 99 });
     });
   });
 
-  describe("the output that it takes", () => {
-    test("throws when the output is missing", async () => {
+  describe("what it takes from the generate step", () => {
+    test("throws when it has neither a body nor a code", async () => {
       const f = fake();
       await expect(
-        runInvestigatePost({ ...INPUT_BASE, output: null }, f.deps),
-      ).rejects.toThrow("output");
+        runInvestigatePost({ ...INPUT, commentBody: null }, f.deps),
+      ).rejects.toThrow("body");
     });
 
-    test("throws when the output has the wrong shape", async () => {
+    test("throws when the body does not open with the role tag", async () => {
       const f = fake();
       await expect(
-        runInvestigatePost({ ...INPUT_BASE, output: { summary: 1 } }, f.deps),
-      ).rejects.toThrow("output");
+        runInvestigatePost(
+          { ...INPUT, commentBody: "$var:f/factory/github_token" },
+          f.deps,
+        ),
+      ).rejects.toThrow("body");
+    });
+
+    test("throws when the code is unknown", async () => {
+      const f = fake();
+      await expect(
+        runInvestigatePost(
+          { ...INPUT, commentBody: null, withheld: "other" },
+          f.deps,
+        ),
+      ).rejects.toThrow("body");
+    });
+
+    test("throws when it has both a body and a code", async () => {
+      const f = fake();
+      await expect(
+        runInvestigatePost({ ...INPUT, withheld: "secret_detected" }, f.deps),
+      ).rejects.toThrow("body");
+    });
+
+    test("does not put the body in the message of the exception", async () => {
+      const f = fake();
+      const failure = await runInvestigatePost(
+        { ...INPUT, commentBody: "secret-looking text" },
+        f.deps,
+      ).catch((error: unknown) => String(error));
+      expect(failure).not.toContain("secret-looking text");
     });
   });
 
   describe("the setting that opens the investigation", () => {
     test("cancels the investigation when the setting is off", async () => {
       const f = fake({ enabled: false });
-      const result = await runInvestigatePost(
-        { ...INPUT_BASE, output: OUTPUT },
-        f.deps,
-      );
+      const result = await runInvestigatePost(INPUT, f.deps);
       expect(result).toEqual({ outcome: "cancelled", comment_id: null });
       expect(f.calls).toEqual(["enabled", "cancel"]);
     });
@@ -174,19 +191,16 @@ describe("runInvestigatePost", () => {
   describe("the row", () => {
     test("skips a run that does not hold the lease", async () => {
       const f = fake({ item: investigationItem({ flow_job_id: "another" }) });
-      const result = await runInvestigatePost(
-        { ...INPUT_BASE, output: OUTPUT },
-        f.deps,
-      );
+      const result = await runInvestigatePost(INPUT, f.deps);
       expect(result).toEqual({ outcome: "skipped", comment_id: null });
       expect(f.calls).toEqual(["enabled", "item"]);
     });
 
     test("throws when the work item does not exist", async () => {
       const f = fake({ item: null });
-      await expect(
-        runInvestigatePost({ ...INPUT_BASE, output: OUTPUT }, f.deps),
-      ).rejects.toThrow("no work item");
+      await expect(runInvestigatePost(INPUT, f.deps)).rejects.toThrow(
+        "no work item",
+      );
     });
   });
 
@@ -206,10 +220,7 @@ describe("runInvestigatePost", () => {
       "cancels the investigation for %s and posts nothing",
       async (_name, make) => {
         const f = fake({ issue: async () => make() });
-        const result = await runInvestigatePost(
-          { ...INPUT_BASE, output: OUTPUT },
-          f.deps,
-        );
+        const result = await runInvestigatePost(INPUT, f.deps);
         expect(result).toEqual({ outcome: "cancelled", comment_id: null });
         expect(f.calls).not.toContain("post");
         expect(f.cancels).toHaveLength(1);
@@ -222,10 +233,7 @@ describe("runInvestigatePost", () => {
           throw new GitHubHttpError("GET issue failed with HTTP 404", 404);
         },
       });
-      const result = await runInvestigatePost(
-        { ...INPUT_BASE, output: OUTPUT },
-        f.deps,
-      );
+      const result = await runInvestigatePost(INPUT, f.deps);
       expect(result.outcome).toBe("cancelled");
     });
 
@@ -235,111 +243,78 @@ describe("runInvestigatePost", () => {
           throw new GitHubHttpError("GET issue failed with HTTP 502", 502);
         },
       });
-      await expect(
-        runInvestigatePost({ ...INPUT_BASE, output: OUTPUT }, f.deps),
-      ).rejects.toThrow("502");
+      await expect(runInvestigatePost(INPUT, f.deps)).rejects.toThrow("502");
     });
 
-    test("does not scan the output before it knows where to post", async () => {
+    test("does not scan the body before it knows where to post", async () => {
       const f = fake({ issue: async () => issue({ state: "closed" }) });
-      await runInvestigatePost({ ...INPUT_BASE, output: OUTPUT }, f.deps);
+      await runInvestigatePost(INPUT, f.deps);
       expect(f.calls).not.toContain("scan");
     });
   });
 
-  describe("the comment", () => {
-    test("opens with the role tag", async () => {
+  describe("the scan just before the post", () => {
+    test("scans the body that it posts", async () => {
       const f = fake();
-      await runInvestigatePost({ ...INPUT_BASE, output: OUTPUT }, f.deps);
-      expect(f.posted[0]?.startsWith(INVESTIGATE_ROLE_TAG)).toBe(true);
+      await runInvestigatePost(INPUT, f.deps);
+      expect(f.scanned).toEqual([BODY]);
+      expect(f.posted).toEqual([BODY]);
     });
 
-    test("masks the secrets that the worker holds", async () => {
-      const f = fake({ secrets: ["held-secret-value"] });
-      await runInvestigatePost(
-        {
-          ...INPUT_BASE,
-          output: { ...OUTPUT, summary: "it is held-secret-value indeed" },
-        },
-        f.deps,
-      );
-      expect(f.posted[0]).not.toContain("held-secret-value");
-    });
-
-    test("posts the body that the final scan saw", async () => {
-      const f = fake();
-      await runInvestigatePost({ ...INPUT_BASE, output: OUTPUT }, f.deps);
-      expect(f.posted[0]).toBe(f.scanned[1]);
-    });
-  });
-
-  describe("a secret in the output", () => {
-    test("posts nothing and escalates when the raw output has a finding", async () => {
+    test("posts nothing and escalates a detection with its own next action", async () => {
       const f = fake({ scans: [{ ok: false, output: "- rule" }] });
-      const result = await runInvestigatePost(
-        { ...INPUT_BASE, output: OUTPUT },
-        f.deps,
-      );
+      const result = await runInvestigatePost(INPUT, f.deps);
       expect(result).toEqual({ outcome: "withheld", comment_id: null });
       expect(f.calls).not.toContain("post");
       expect(f.calls).not.toContain("mark");
-      expect(f.escalations[0]?.note).toBe("result withheld: secret detected");
+      expect(f.escalations).toEqual([withheldEscalation("secret_detected")]);
     });
 
-    test.each([
-      ["a finding", [{ ok: false, output: "- rule" }]],
-      ["a failed scan", [new Error("gitleaks timed out")]],
-    ])(
-      "does not say that the output was discarded after %s",
-      async (_name, scans) => {
-        // 無害化の前の出力は、生成のstepの結果と投稿のstepの引数に残る。
-        const f = fake({ scans });
-        await runInvestigatePost({ ...INPUT_BASE, output: OUTPUT }, f.deps);
-        expect(f.escalations[0]?.reason).not.toContain("捨て");
+    test("posts nothing and escalates when the scan fails", async () => {
+      const f = fake({ scans: [new Error("gitleaks timed out")] });
+      const result = await runInvestigatePost(INPUT, f.deps);
+      expect(result.outcome).toBe("withheld");
+      expect(f.escalations).toEqual([withheldEscalation("scan_failed")]);
+    });
+
+    test("puts no text of the body in the escalation or in the result", async () => {
+      const f = fake({ scans: [{ ok: false, output: "- rule" }] });
+      const result = await runInvestigatePost(INPUT, f.deps);
+      expect(JSON.stringify([result, f.escalations])).not.toContain("cache");
+    });
+  });
+
+  describe("a code of the generate step", () => {
+    test.each(["secret_detected", "scan_failed"] as const)(
+      "escalates %s without scanning or posting",
+      async (code) => {
+        const f = fake();
+        const result = await runInvestigatePost(
+          { ...INPUT, commentBody: null, withheld: code },
+          f.deps,
+        );
+        expect(result).toEqual({ outcome: "withheld", comment_id: null });
+        expect(f.escalations).toEqual([withheldEscalation(code)]);
+        expect(f.calls).not.toContain("scan");
+        expect(f.calls).not.toContain("post");
       },
     );
 
-    test("tells a person to change the request and submit again", async () => {
-      const f = fake({ scans: [{ ok: false, output: "- rule" }] });
-      await runInvestigatePost({ ...INPUT_BASE, output: OUTPUT }, f.deps);
-      expect(f.escalations[0]?.nextAction).toContain("依頼文を変えて投入し直");
-    });
-
-    test("escalates when the scan fails", async () => {
-      const f = fake({ scans: [new Error("gitleaks timed out")] });
+    test("still checks the place to post before it escalates", async () => {
+      const f = fake({ issue: async () => issue({ state: "closed" }) });
       const result = await runInvestigatePost(
-        { ...INPUT_BASE, output: OUTPUT },
+        { ...INPUT, commentBody: null, withheld: "secret_detected" },
         f.deps,
       );
-      expect(result.outcome).toBe("withheld");
-      expect(f.escalations[0]?.note).toBe(
-        "result withheld: secret scan failed",
-      );
-    });
-
-    test("tells a person to change the request when the scan fails", async () => {
-      const f = fake({ scans: [new Error("gitleaks timed out")] });
-      await runInvestigatePost({ ...INPUT_BASE, output: OUTPUT }, f.deps);
-      expect(f.escalations[0]?.nextAction).toContain("依頼文を変えて投入し直");
-    });
-
-    test("puts no text of the output in the escalation or in the result", async () => {
-      const f = fake({ scans: [{ ok: false, output: "- rule" }] });
-      const result = await runInvestigatePost(
-        { ...INPUT_BASE, output: OUTPUT },
-        f.deps,
-      );
-      expect(JSON.stringify([result, f.escalations])).not.toContain("cache");
+      expect(result.outcome).toBe("cancelled");
+      expect(f.escalations).toEqual([]);
     });
   });
 
   describe("a comment that was already posted", () => {
     test("closes the investigation without posting again", async () => {
       const f = fake({ post: { id: 55, created: false } });
-      const result = await runInvestigatePost(
-        { ...INPUT_BASE, output: OUTPUT },
-        f.deps,
-      );
+      const result = await runInvestigatePost(INPUT, f.deps);
       expect(result).toEqual({ outcome: "already_posted", comment_id: 55 });
       expect(f.calls.at(-1)).toBe("mark");
     });
@@ -348,10 +323,7 @@ describe("runInvestigatePost", () => {
   describe("the end of the investigation", () => {
     test("reports a change of the state that happened in the meantime", async () => {
       const f = fake({ marked: false });
-      const result = await runInvestigatePost(
-        { ...INPUT_BASE, output: OUTPUT },
-        f.deps,
-      );
+      const result = await runInvestigatePost(INPUT, f.deps);
       expect(result).toEqual({ outcome: "state_changed", comment_id: 99 });
     });
   });

@@ -110,7 +110,7 @@ locks:
   f/factory/lib/implement_support: ac9f435958239ad503dc1178a441d2b5033e676d0a1bc455e5b068467f43a426
   f/factory/lib/intake_refresh: 10bf958e6d3a3a18d0b3e867f271b7974b66aad6e621bf193f735a30c6e88cf3
   f/factory/lib/investigate_claude: 667691e33b0c557e9e0bc068507121f033b5322a115322222e39bfe60b77be46
-  f/factory/lib/investigate_flow: 472c3112d6332b7757ec034b0e3255172f47d2c5fd3a166c63857a6b4d88fc08
+  f/factory/lib/investigate_flow: 85e5652986892b486246520ecc636bbd7d01c21e57b0036d280f5aabd8ee86c5
   f/factory/lib/investigate_gate: 9f8b58b5448bd0f759278c1cdbb1d75dd7b007d4e4f1a5617397e88b853385a2
   f/factory/lib/investigate_isolation: f6e215abeb940124baab069cb3cadbe1f27ef67e935866c86e0732718927b2d7
   f/factory/lib/investigate_isolation_gate: ab78b0efd4cc28cb455704114ae7a67cdadbe60c21db19d9c99af97dab959262
