@@ -7014,12 +7014,12 @@ mise exec -- docker compose -p factory-restore -f infra/docker-compose.yml down 
 
 | 項目 | 結果 |
 | --- | --- |
-| 戻した控え | 未記入 |
-| `cluster.sql`の流し込み | 未記入 |
-| `factory.work_items`の行数(本番、戻した先) | 未記入 |
-| `factory.notices`の行数(本番、戻した先) | 未記入 |
-| `requirements/`のファイル数(本番、戻した先) | 未記入 |
-| かかった時間 | 未記入 |
+| 戻した控え | 本番のクラスタの`pg_dumpall`(2.1GB)と、`factory_state`のtar(215KB) |
+| `cluster.sql`の流し込み | `ON_ERROR_STOP`で止まらずに最後まで流れた |
+| `factory.work_items`の行数(本番、戻した先) | 169、168(控えを取った後に本番で1件増えた) |
+| `factory.notices`の行数(本番、戻した先) | 141、141 |
+| `requirements/`のファイル数(本番、戻した先) | 21、21 |
+| かかった時間 | 約1分(`db`の起動から件数の表示まで) |
 
 ## 保持期間
 
