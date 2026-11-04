@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[SYS-12] バックアップを取る'
+description: 毎日2:30(Asia/Tokyo)に実行します。Postgresのクラスタ全体をpg_dumpallで、factory_stateのvolumeをtarで、factory_configを参照を伏せたJSONで、/var/lib/factory-backupsの新しい世代に控えます。新しい方からbackup_keep_generations(既定7)の世代を残し、古い世代を消します。失敗すると要対応の通知(backup_failed)を残し、ジョブを失敗にします。
 lock: '!inline f/factory/backup.script.lock'
 kind: script
 schema:
@@ -7,3 +7,4 @@ schema:
   type: object
   properties: {}
   required: []
+timeout: 3600

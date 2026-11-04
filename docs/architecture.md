@@ -725,6 +725,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/auto_retry_pr_review` | script | [SYS-10] GitHubの一時的な失敗で止まったPRレビューを再開 |
 | `f/factory/sample_worker_load` | script | [SYS-10] workerの負荷を記録 |
 | `f/factory/collect_github` | script | [SYS-11] GitHubのリポジトリの状態を集める |
+| `f/factory/backup` | script | [SYS-12] バックアップを取る |
 | `f/factory/cleanup_workspaces` | script | [SYS-2] 作業領域を掃除 |
 | `f/factory/notify_daily_summary` | script | [SYS-3] 日次サマリ通知 |
 | `f/factory/on_error_flow` | script | [SYS-4] フロー失敗ハンドラ |
