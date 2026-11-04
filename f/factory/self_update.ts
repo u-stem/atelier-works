@@ -557,9 +557,10 @@ type DeployedShaAdvance = {
 
 /**
  * `deployed_sha`を更新し、そのあとで変更パスを列挙して分類する。
- * 更新を先に行うのは、`deployed_sha`が clone に無い値などの誤った値のとき、列挙が失敗し続けて
- * 同じ範囲のpushとmigrationと失敗の記録が2分ごとに繰り返されるのを、1回の失敗で`HEAD`に進めて止めるため。
- * 更新できたら`onUpdated`を呼ぶ。更新の後に列挙が失敗すると、host actionの通知と`changed_paths`が欠ける。
+ * 更新を先に行うのは、更新の後の列挙が失敗してhost actionの通知と`changed_paths`が欠けても、
+ * 同じ範囲のpushとmigrationが繰り返されないため。
+ * `deployed_sha`がcloneに無い値のときは、関門の列挙が先に失敗して反映しない(fail closed)。復旧は人が`deployed_sha`をHEADに合わせる。
+ * 更新できたら`onUpdated`を呼ぶ。
  */
 export async function advanceDeployedSha(deps: {
   readonly setSha: () => Promise<void>;
@@ -1227,6 +1228,8 @@ async function updateSelf(
   // 凍結の保留の後、トークンの取得と、失敗の行を足す`try`より前に判定する。止めた回は失敗の行を足さず、`deployed_sha`も進めない。
   // 判定できない回(差分や承認の表を読めない)は例外でジョブを失敗させ、反映しない。
   // 追従だけの回は版が変わらないので判定しない。初回(`deployed_sha`が空)は全ファイルが差分になるので判定しない。
+  // 判定はコミットの範囲を見るが、pushはcloneの作業ツリーを反映する。
+  // cloneを使うジョブは単一実行のdefault workerで動き(`no_flow_overlap`)、判定とpushの間にHEADが動かないので、両者は同じ内容を指す。
   if (!reconcileOnly && deployedSha.length > 0) {
     const gate = await runDeployApprovalGate(currentSha, {
       listChanges: () =>
@@ -1386,6 +1389,22 @@ async function updateSelf(
         ),
     });
 
+    // 反映が済んだので、承認を待つ通知を解決する。承認して反映した回と、保護パスの変更が戻されて判定を通らずに反映した回の両方である。
+    // 成功の記録が失敗しても通知が残らないよう、記録の前に行う。反映は済んでいるので、解決の失敗は警告だけにする。
+    try {
+      await withCallTimeout("resolve deploy approval notices", () =>
+        resolveUnresolvedNoticesByPrefix(
+          DEPLOY_APPROVAL_NOTICE_KIND,
+          DEPLOY_APPROVAL_NOTICE_PREFIX,
+          DEPLOY_APPROVAL_RESOLVER,
+        ),
+      );
+    } catch (err) {
+      log.warn("deploy approval notices could not be resolved", {
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+
     // PRの一覧は表示のための付随情報なので、取れなくても反映の成功を失敗にしない。
     let pullRequests: DeploymentPullRequest[] = [];
     try {
@@ -1422,22 +1441,6 @@ async function updateSelf(
         });
       },
     );
-
-    // 反映が済んだので、承認を待つ通知を解決する。承認して反映した回と、保護パスの変更が戻されて判定を通らずに反映した回の両方である。
-    // 反映は済んでいるので、解決の失敗は警告だけにする。
-    try {
-      await withCallTimeout("resolve deploy approval notices", () =>
-        resolveUnresolvedNoticesByPrefix(
-          DEPLOY_APPROVAL_NOTICE_KIND,
-          DEPLOY_APPROVAL_NOTICE_PREFIX,
-          DEPLOY_APPROVAL_RESOLVER,
-        ),
-      );
-    } catch (err) {
-      log.warn("deploy approval notices could not be resolved", {
-        error: maskSecrets(err instanceof Error ? err.message : String(err)),
-      });
-    }
 
     if (classification.needs_host_action) {
       // `infra/`と`mise.toml`の変更はworkerの中からは反映できず、人が

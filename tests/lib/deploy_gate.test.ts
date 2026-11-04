@@ -111,7 +111,7 @@ describe("parseNameStatus", () => {
   });
 
   test.each(["U", "X", "R100", "C75", "", "MM"])(
-    "throws on the status %p that --no-renames never prints",
+    "throws on the status %p, which is not A, M, D or T",
     (letter) => {
       expect(() => parseNameStatus(`${letter}\0a.ts\0`)).toThrow(
         /unexpected status/,
