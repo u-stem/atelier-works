@@ -35,3 +35,7 @@ console/test-results/
 
 # bun test --coverageが作るlcov。検査が読むので、コミットしない
 coverage/
+
+# superpowersが書く台帳と計画と仕様。設計文書をリポジトリに残さないので、コミットしない
+.superpowers/
+docs/superpowers/

@@ -4,6 +4,13 @@
 
 ## 前提
 
+開発の流れはClaude Codeのプラグインsuperpowersに依存する。
+`/plugin marketplace add obra/superpowers-marketplace`でmarketplaceを足す。
+次に`/plugin install superpowers@superpowers-marketplace`で入れる。
+流れは6.3.0で確かめた。
+プラグインの版は固定できないので、更新で流れが変わったときは[コーディング規約](coding-guidelines.md)の「開発の流れ」を直す。
+無い環境では、[コーディング規約](coding-guidelines.md)の「開発の流れ」を手で行う。
+
 ホストに要るのは、Docker(Docker DesktopかOrbStack)とmiseだけである。node、bun、gh、windmill-cliなどほかのツールは、`mise run setup`の中の`mise install`で入る。
 テストを動かすホストのgitと、workerのgitは、2.44以上が要る([実装フローの仕様](internals/implement.md)を参照)。
 
@@ -180,7 +187,7 @@ mise run instance:tags
 pre-pushは、全体の`mise run check`を実行しない。
 CIの`check`ジョブと`check-docs`ジョブが同じ検査を動かし、管理者の迂回を使わない限り、`main`の必須チェックとしてマージの前に止めるためである。
 必須チェックと迂回は[セキュリティ](security.md#mainの保護とリポジトリの公開)に書く。
-クラウドやheadlessの実行は、CIを待たずに壊れた変更を見つけるため、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)に従い、pushの前に`mise run check`を実行する。
+クラウドやheadlessの実行は、CIを待たずに壊れた変更を見つけるため、pushの前に`mise run check`を実行する。
 
 メタデータの作り直しと検査は、ローカルのWindmillに接続する。`mise run up`でスタックを起動しておく。手で実行するときは`mise run metadata`と`mise run metadata:check`を使う。
 
@@ -428,7 +435,7 @@ OSやrootの有無で、動くテストが分かれるためである。
 下限を割ったときは、失敗の出力が示す未実行の行が多いファイルにテストを足す。
 `main`で割ったときも同じである。下限の定数は、割った原因を直すまで下げない。
 下限を上げるときは、`mise run test`の実測を見て、`scripts/check-coverage.ts`の`COVERAGE_FLOOR_PERCENT`を実測より低い値に変える。
-この変更は保護パスの変更なので、implementのPRでは「確認して欲しい点」の`保護パスを変更: <path>`の行に載るので、人がレビューする。
+この変更は保護パスの変更なので、人が書くPRでは「保護パスの変更」の節に、implementのPRでは「確認して欲しい点」の`保護パスを変更: <path>`の行に載り、人がレビューする。
 計算と限界は[テストの基準](testing-guidelines.md)に書く。
 
 ## Claude Codeのフック
@@ -500,7 +507,11 @@ mise run worktree:prune -- --apply
 1つ目は乾燥実行で、消すものと残すものを理由つきで一覧にする。
 2つ目が実際に消す。
 `.claude/settings.json`が許可するのは乾燥実行だけである。
-`--apply`の扱いは、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)の「終わった作業ツリーの片付け」にある。
+`--apply`は、対話セッションで乾燥実行の一覧を確かめてから付ける。
+クラウドやheadlessのように確認できない実行では、乾燥実行の結果を報告して終える。
+一覧に自分のものでないworktreeがあれば、他のセッションが使っていないことを確かめる。
+`--force`、`git branch -D`、`rm -rf`は使わない。
+未マージのコミットとコミットしていない変更を失わないため。
 `git worktree remove`を強制せずに使うので、変更やコミットは失われない。
 リモートのブランチには触れない。
 マージ時にGitHubが消す設定のためである。
