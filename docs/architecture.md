@@ -785,7 +785,8 @@ IDの食い違い、リポジトリが無い(404)、URLを読めない場合は�
 1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
 2. 反映が要る回と、凍結が終わった後の追従の回で、deployの保留が有効なら、3から6を見送る。`deployed_sha`は進めず、保留が切れた最初の回が同じ範囲を反映する([凍結とdeployの保留の内部仕様](internals/freezes.md))。
 3. 反映が要る回で、`deployed_sha`が空でなければ、`deployed_sha..HEAD`の変更を確かめる。
-   migrationか、`f/`の下と`wmill.yaml`の保護パスのファイルがあれば、HEADの版が承認されるまで4から6を見送る(`wmill-lock.yaml`と`*.script.lock`は除く)。
+   migrationか、`f/`の下と`wmill.yaml`の保護パスのファイルか新しい`*.sh`があれば、HEADの版が承認されるまで4から6を見送る。
+   `wmill-lock.yaml`と`*.script.lock`は除く。
    見送る回は、要対応の通知とDiscordで知らせ、`deployed_sha`を進めない([反映の承認の内部仕様](internals/deploy-approvals.md))。
 4. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
    凍結中のスケジュールはpushから除く。

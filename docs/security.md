@@ -3757,17 +3757,24 @@ Consoleの判断のscript(`console_deploy_decide`)は、ローカルのClaudeの
 残るリスクは次のとおりである。
 
 - `self_update`の配線が使う保護の外の部品を書き換えて、判定を外す変更は、保護パスに触れないまま反映される。
-  部品は、`lib/workspace.ts`の子プロセスの起動、`lib/db.ts`の接続と通知、`lib/self_update_support.ts`の時間の区切りである。
-  配線の位置は保護されたテストが固定するが、部品の中身は固定しない。PRの人のレビューが守る。
-- Windmillのscriptは同じdatatableの接続を持つ。保護の外の新しいscriptが承認の表へ承認の行を書く変更は、保護パスに触れないまま反映され、その後に動くと承認を偽れる。
+  部品は、`lib/workspace.ts`の子プロセスの起動と、`lib/db.ts`の接続と通知である。
+  配線の位置は保護されたテストが固定するが、部品の中身は固定しない。
+  PRの人のレビューが守る。
+- Windmillのscriptは同じdatatableの接続を持つ。
+  保護の外の新しいscriptが承認の表へ承認の行を書く変更は、保護パスに触れないまま反映される。
+  その後にそのscriptが動くと、承認を偽れる。
   参照の検出(`tests/scripts/deploy_approvals_wiring.test.ts`)は、名前の連結や動的SQLを見つけられない。
-- Consoleの配信物(`console/`)は、`console_fetcher`がCIの後に取り込むので、この承認を通らない。保護パスに当たるConsoleのファイルの変更も、マージの後に配信される。
+- Consoleの配信物(`console/`)は、`console_fetcher`がCIの後に取り込むので、この承認を通らない。
+  保護パスに当たるConsoleのファイルの変更も、マージの後に配信される。
 - 承認する人は、Consoleにログインできる人なら誰でもよい。承認者の区別はしない。
 - 判定の範囲は、`self_update`が本番へ反映するファイル(`f/`と`migrations/`の下、`wmill.yaml`)に絞る。
   範囲の外の保護パス(`infra/`、`.github/`、`.claude/`、`scripts/`、lockfile、設定)の変更は、この承認を通らない。
-  `infra/`はホストで人が`mise run up`するまで効かず、`.github/`はCIにしか効かず、`.claude/`のスキルと`scripts/`はローカルのセッションと人の道具で、`self_update`が反映しないためである。
-  直近のmainの60件のマージでは25件が止まる。止まった間は、範囲の外の変更も反映されない。
-- 要対応の通知は、依頼の行を作った回に1回だけ残し、書き込みに失敗しても再送しない。
+  `infra/`はホストで人が`mise run up`するまで効かず、`.github/`はCIにしか効かない。
+  `.claude/`のスキルと`scripts/`はローカルのセッションと人の道具で、`self_update`が反映しない。
+  直近のmainの60件のマージでは28件が止まる。
+  止まった間は、範囲の外の変更も反映されない。
+- 要対応の通知は、依頼の行を作った回に1回だけ残す。
+  書き込みに失敗しても再送しない。
   Consoleの「反映の承認待ち」の一覧が受け皿で、通知が無くても承認できる。
 
 ## 自己更新の打ち切り

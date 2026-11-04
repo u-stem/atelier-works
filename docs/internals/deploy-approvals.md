@@ -22,15 +22,20 @@ mainは承認0件でマージでき、`self_update`が2分ごとに反映する�
 見つけたら、人がConsoleで承認するまで反映しない。
 止めるのは`self_update`が反映するファイルだけで、範囲は「判定の流れ」の2にある。
 
-- 承認はHEADの版ごとに行う。mainが進んだら、新しい版で承認し直す。
-- 止めた状態は期限で解けない。却下したときは、mainへ戻すPRが要る。
-- 初回の反映(`deployed_sha`が空)は止めない。全ファイルが差分になるためである。
+- 承認はHEADの版ごとに行う。
+  mainが進んだら、新しい版で承認し直す。
+- 止めた状態は期限で解けない。
+  却下したときは、mainへ戻すPRが要る。
+- 初回の反映(`deployed_sha`が空)は止めない。
+  全ファイルが差分になるためである。
 
 ## 承認の表
 
 承認は`factory.deploy_approvals`に置く。
-`factory.holds`は使わない。止めるためだけの表で、許可に使わない決まりのためである。
-`factory.approval_requests`も使わない。作業項目が必須のためである。
+`factory.holds`は使わない。
+止めるためだけの表で、許可に使わない決まりのためである。
+`factory.approval_requests`も使わない。
+作業項目が必須のためである。
 
 | 列 | 意味 |
 | --- | --- |
@@ -59,11 +64,15 @@ mainは承認0件でマージでき、`self_update`が2分ごとに反映する�
 
 1. `git diff --name-status --no-renames -z <deployed_sha>..<HEAD>`で、反映する範囲の変更を読む。
 2. 変更のうち、反映を止めるものを選ぶ。削除も数える。無ければ反映を続ける。
-   - 範囲は、`self_update`が本番へ反映するファイル(`f/`と`migrations/`の下、`wmill.yaml`)で、`wmill-lock.yaml`と`*.script.lock`を除く。
-   - `migrations/`の下は保護パスかどうかによらず止める。`self_update`が自動で適用し、表を消すような操作も書けるためである。
-   - `f/`の下と`wmill.yaml`は`matchesImplementProtectedPath`に当たるものと、新しい`*.sh`だけを止める。
-   - 範囲の外の保護パスは止めない。止めても安全策にならず、反映を止めるだけになるためである。
-     `infra/`は人が`mise run up`を実行するまで効かず、`.github/`はCIにしか効かず、`.claude/`と`scripts/`とlockfileと設定は`self_update`が反映しない。
+   - 範囲は、`self_update`が本番へ反映するファイルである。
+     `f/`と`migrations/`の下と`wmill.yaml`で、`wmill-lock.yaml`と`*.script.lock`を除く。
+   - `migrations/`の下は保護パスかどうかによらず止める。
+     `self_update`が自動で適用し、表を消すような操作も書けるためである。
+   - `f/`の下と`wmill.yaml`は、`matchesImplementProtectedPath`に当たるものと、新しい`*.sh`だけを止める。
+   - 範囲の外の保護パスは止めない。
+     止めても安全策にならず、反映を止めるだけになるためである。
+     `infra/`は人が`mise run up`を実行するまで効かず、`.github/`はCIにしか効かない。
+     `.claude/`と`scripts/`とlockfileと設定は`self_update`が反映しない。
 3. HEADの版の依頼を読む。承認されていれば、反映を続ける。
 4. 依頼が無ければ、次の順に進める。
    1. 依頼を作る。
@@ -71,7 +80,8 @@ mainは承認0件でマージでき、`self_update`が2分ごとに反映する�
    3. 要対応の通知`deploy_approval_required`を残す。
    4. 通知を新しく残したときだけ、Discordに送る。
 5. 依頼が判断待ちか却下なら、通知を重ねない。
-6. 承認されていなければ、`held`(理由`protected_paths_approval`)で戻る。`deployed_sha`を進めず、失敗の行も足さない。
+6. 承認されていなければ、`held`(理由`protected_paths_approval`)で戻る。
+   `deployed_sha`を進めず、失敗の行も足さない。
 
 差分と依頼を読めない回、依頼を書けない回は、例外でジョブを失敗させ、反映しない。
 通知とDiscordの失敗では止め方を変えない。
