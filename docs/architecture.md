@@ -387,7 +387,7 @@ Consoleの一覧と集計は次のviewを読む。
 | --- | --- | --- |
 | `manual_intake` | `manual_intake_submit`(Consoleの新規投入)、人がフォームから実行 | 手動投入フォーム(Issueを作成して工程に乗せる) |
 | `pr_review_intake` | `pr_review_submit`(ConsoleのPRレビューの投入)、人がフォームから実行 | PRレビューの投入フォーム(PRを確かめてレビューを始める) |
-| `investigate` | なし | 調査(実装せずに調べて、結果をIssueのコメントで返す) |
+| `investigate` | 人がフォームから実行 | 調査(実装せずに調べて、結果をIssueのコメントで返す) |
 | `pipeline` | `design_apply`(Consoleの承認と却下)、`design_generate`、`implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
 | `design` | `design_apply`(Consoleの承認と却下)、`implement_finish`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 設計書の生成と承認 |
 | `pr_review` | `auto_retry_pr_review`、`poll_prs`、`pr_review_intake_register`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |

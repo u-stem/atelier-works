@@ -249,7 +249,12 @@
           "conditional": true
         }
       ],
-      "entries": [],
+      "entries": [
+        {
+          "kind": "human",
+          "label": "人がフォームから実行"
+        }
+      ],
       "unwiredEntries": [],
       "exits": []
     },

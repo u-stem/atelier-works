@@ -58,6 +58,7 @@ export const LAUNCH_EDGES: readonly LaunchEdge[] = [
   { from: "steps/pr_fix_finish", to: "design", kind: "script" },
   { from: "form", to: "manual_intake", kind: "human" },
   { from: "form", to: "pr_review_intake", kind: "human" },
+  { from: "form", to: "investigate", kind: "human" },
 ];
 
 /** コードを介さず、人がflowを起動する操作と、その表示名。 */

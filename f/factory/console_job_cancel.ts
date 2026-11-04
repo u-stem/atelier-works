@@ -58,6 +58,8 @@ export const NOT_CANCELABLE_FLOW_PATHS: Readonly<Record<string, string>> = {
     "作業項目を持たない。途中で止めると、Issueだけが作られて工程に乗らないことがある",
   "f/factory/pr_review_intake":
     "作業項目を持たない。途中で止めると、flow_job_idの無いreviewingの行が残ることがある",
+  "f/factory/investigate":
+    "入力に作業項目のIDが無い。中止の処理は、調査の行を引かないので、止めた調査がinvestigatingのまま残る",
 };
 
 /**
