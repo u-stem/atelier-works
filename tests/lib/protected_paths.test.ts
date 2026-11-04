@@ -1499,6 +1499,7 @@ describe("dependency-free lib locks", () => {
     "check_runner",
     "approval_gate",
     "protected_paths",
+    "self_update_support",
   ].map((name) => `f/factory/lib/${name}`);
   const LOCKS = LIBS.map((base) => `${base}.script.lock`);
 
@@ -2207,6 +2208,8 @@ describe("safety boundary files", () => {
     "f/factory/lib/protected_paths.script.yaml",
     "f/factory/self_update.ts",
     "f/factory/self_update.script.yaml",
+    "f/factory/lib/self_update_support.ts",
+    "f/factory/lib/self_update_support.script.yaml",
   ];
   // windmill-clientを含むlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるので守らない。
   const CLIENT_LOCKS = [
@@ -2252,9 +2255,12 @@ describe("safety boundary files", () => {
     expect(await Bun.file(path).text()).toContain('"windmill-client"');
   });
 
-  test("lib/claude.script.yaml points at the lib's own lock", async () => {
-    expect(await Bun.file("f/factory/lib/claude.script.yaml").text()).toContain(
-      "lock: '!inline f/factory/lib/claude.script.lock'",
+  test.each([
+    ["f/factory/lib/claude.script.yaml", "f/factory/lib/claude.script.lock"],
+    ["f/factory/self_update.script.yaml", "f/factory/self_update.script.lock"],
+  ])("%s points at its own lock", async (yamlPath, lockPath) => {
+    expect(await Bun.file(yamlPath).text()).toContain(
+      `lock: '!inline ${lockPath}'`,
     );
   });
 });

@@ -812,8 +812,6 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "実装フローの終了処理の共有モジュール。実装フローの修正が日常的に触れる",
   "f/factory/lib/factory_clone.ts":
     "Factory自身のcloneを用意する共有モジュール。ほかのフローが日常的に使う",
-  "f/factory/lib/self_update_support.ts":
-    "自己更新の判定と整形の純粋関数。self_updateの修正が日常的に触れる",
   "f/factory/lib/job_ids.ts": "WindmillのジョブIDの形の検査。依存が無く小さい",
   "f/factory/lib/prose_check.ts":
     "文書の文章の検査。文書の規則を直す変更が日常的に触れる",
@@ -982,7 +980,7 @@ describe("files of the conflict round", () => {
   });
 });
 
-// mainの自動反映は、保護パスに触れた変更を人の承認まで止める。CI回のClaudeには書き換えさせない。
+// mainの自動反映は、deployの保留と凍結を守ってmainを反映する。CI回のClaudeには書き換えさせない。
 describe("files of the self update", () => {
   test.each([
     "f/factory/self_update.ts",
@@ -990,6 +988,9 @@ describe("files of the self update", () => {
     "f/factory/self_update.script.lock",
     "f/factory/self_update.schedule.yaml",
     "f/factory/self_update.helpers.ts",
+    "f/factory/lib/self_update_support.ts",
+    "f/factory/lib/self_update_support.script.yaml",
+    "f/factory/lib/self_update_support.script.lock",
   ])("denies %s", (path) => {
     expect(isDeniedPath(path)).toBe(true);
   });
