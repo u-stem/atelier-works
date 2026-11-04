@@ -121,6 +121,8 @@ superpowersが使えない環境では、同じ流れ(計画、実装、別のsu
    - migrationに`DROP`、`DELETE`、`TRUNCATE`、既存の値を変える`UPDATE`を含めた
    - 権限、sandbox、トークンの範囲、秘密値の扱いを足すか変えた
    - ファイル、ブランチ、worktree、プロセスを消す処理を足すか変えた
+   - ファイルを問わず、禁止、止める基準、確認の省略の範囲を緩める文言を足すか変えた。
+     AGENTS.mdの禁止事項と、`docs/security.md`の残るリスクを含む。
 4. `mise run check`が通り、`git status --short`が空であることを確かめてからpushする。
 5. PR本文は`pr-body`スキルに従って書く。
 
