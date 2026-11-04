@@ -55,8 +55,12 @@ function Row({
           {DEPLOY_APPROVALS_TEXT.pathsField}
         </p>
         <ul className="flex list-disc flex-col gap-0.5 pl-5">
-          {item.paths.map((path) => (
-            <li key={path} dir="ltr" className={`text-small break-all ${BIDI}`}>
+          {item.paths.map((path, index) => (
+            <li
+              key={`${String(index)}:${path}`}
+              dir="ltr"
+              className={`text-small break-all ${BIDI}`}
+            >
               {path}
             </li>
           ))}

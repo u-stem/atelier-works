@@ -207,20 +207,26 @@ function errorText(err: unknown): string {
 }
 
 /**
- * 新しく作った依頼の通知を残す。古い版の通知を先に解決し、新しい通知を残し、新しく残したときだけDiscordに送る。
+ * 止めた回の要対応の通知を残す。新しく残したときだけDiscordに送る。
+ * 同じ版の未解決の通知があれば、`addNotice`が重ねない。
+ * 古い版の通知の解決(`supersede`)は、依頼の行を作った回だけに行う。
+ * 解決は版を区別せずに前方一致で当たるので、続く回で行うと、同じ版の通知を毎回解決して作り直し、Discordに送り続けるためである。
  * どれが失敗しても、反映は止めたままにする(警告のログだけ残す)。
  */
 async function raiseNotice(
   sha: string,
   pathCount: number,
+  supersede: boolean,
   deps: DeployGateDeps,
 ): Promise<void> {
-  try {
-    await deps.supersedeNotices();
-  } catch (err) {
-    deps.log.warn("older deploy approval notices could not be resolved", {
-      error: errorText(err),
-    });
+  if (supersede) {
+    try {
+      await deps.supersedeNotices();
+    } catch (err) {
+      deps.log.warn("older deploy approval notices could not be resolved", {
+        error: errorText(err),
+      });
+    }
   }
   const built = buildDeployApprovalNotice(sha, pathCount);
   let noticeId: number | null;
@@ -251,7 +257,8 @@ async function raiseNotice(
 }
 
 /**
- * 版`sha`への反映を続けるか止めるかを決め、止めるときは依頼と通知を残す。
+ * 版`sha`への反映を続けるか止めるかを決め、止めるときは、依頼が無ければ作り、要対応の通知を残す。
+ * 通知は止めるたびに残す。依頼を作った回に書き込みが失敗しても、次の回が残すためである。
  * 変更の一覧、依頼の読み取り、依頼の作成が失敗したら例外を投げる(判定できない回は反映しない)。
  * 通知の失敗は例外にしない。
  */
@@ -270,9 +277,9 @@ export async function runDeployApprovalGate(
     });
     return { kind: "proceed", protectedPaths };
   }
-  if (verdict.request && (await deps.requestApproval(sha, protectedPaths))) {
-    await raiseNotice(sha, protectedPaths.length, deps);
-  }
+  const created =
+    verdict.request && (await deps.requestApproval(sha, protectedPaths));
+  await raiseNotice(sha, protectedPaths.length, created, deps);
   deps.log.info(
     "protected path changes need an approval, deferring the deployment",
     {

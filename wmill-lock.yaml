@@ -79,7 +79,7 @@ locks:
   f/factory/lib/dependabot_registry: 3bd1e2db9f439df63be90c0d5457a0eee2368b2bc3a69515370c52353f26f975
   f/factory/lib/dependabot_support: b7cbeacf38d732f94c5676fb66295cbc21c26def4fc2adf44286e7a63c9264da
   f/factory/lib/deploy_approvals: 0a43a94f08925a6b6039f1e95fbd12c06cdc3f46cf7a8c2c6f6e06168d5005ac
-  f/factory/lib/deploy_gate: 77195f4e6b0712e995142e02f46edb851a3fac188f819a688a543462600804eb
+  f/factory/lib/deploy_gate: 879dab77c4e82ddacf506646c210de9b43464d91c4473626957403ed936bc791
   f/factory/lib/design_apply_support: ad7611c5659ce77e9378008e504baa4f21b9295cf97d1fb22230ef27dba119bf
   f/factory/lib/design_doc: 39e65ecf8d275747851dc4c37e554886830c8ed6cfff7ac65ba161162aa12aef
   f/factory/lib/design_gate: 1a54855ba538bca04749af4b6bb428a50e286592fe942785315d616ab06f5682
@@ -144,7 +144,7 @@ locks:
   f/factory/lib/periodic_worker: 5babda25b9b699d5d66fac8fe4ab312645b72a686040e0816264004be145e378
   f/factory/lib/pipeline_lease: 3d7b420f8be61c0921f89cc5e81d8b45eca4ebf6643b608c846c1fac28db3921
   f/factory/lib/poll_source: 7eeea6ab24974ab76fcb6b10ae84b09fb79a0e4515ae2ba76f20896a09e895ec
-  f/factory/lib/poll_support: c7ce1506d62381c1b78c05e9048d6267bf29c31836b9e67fd09230a4d6e4e3e4
+  f/factory/lib/poll_support: 7b751f427bd7c407152fde3ee4d4526baf495147440797bd0ed317e8acd85bde
   f/factory/lib/pr_ci_fix_claim: 9cbdce95e9bc533a78e7ae3cdc4d1cca4bf5c85a6d1f1f91169599dce18ba167
   f/factory/lib/pr_ci_fix_recovery: 09dac8905b094bd2e07b1ce79ad8d6888f5b78df2893093713c25544ad76e980
   f/factory/lib/pr_ci_human_support: 2157ef0625e623c028617b316415c4739d3b50be99ce77a64bf76a5c410ea94a

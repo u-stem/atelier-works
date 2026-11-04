@@ -60,9 +60,9 @@ export function DeployDecideDialog({
               </dt>
               <dd className="min-w-0 text-body">
                 <ul className="flex flex-col gap-0.5">
-                  {request.item.paths.map((path) => (
+                  {request.item.paths.map((path, index) => (
                     <li
-                      key={path}
+                      key={`${String(index)}:${path}`}
                       dir="ltr"
                       className="break-all [unicode-bidi:isolate]"
                     >

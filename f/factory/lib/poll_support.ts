@@ -374,10 +374,10 @@ export async function anyDeployHold(
   if (results.some((result) => result.status === "fulfilled" && result.value)) {
     return true;
   }
-  const failed = results.find((result) => result.status === "rejected");
-  if (failed !== undefined && failed.status === "rejected") {
-    throw failed.reason;
-  }
+  const failed = results.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failed[0] !== undefined) throw failed[0].reason;
   return false;
 }
 
