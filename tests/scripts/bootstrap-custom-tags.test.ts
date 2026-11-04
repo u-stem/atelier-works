@@ -418,6 +418,7 @@ describe("bootstrap.sh custom-tags argument", () => {
         WM_HTTP_PORT: String(server.port),
         WM_ADMIN_EMAIL: "admin@example.com",
         WM_ADMIN_PASSWORD: "a-strong-password-123",
+        DB_PASSWORD: "test-db-password",
       },
       stdout: "pipe",
       stderr: "pipe",

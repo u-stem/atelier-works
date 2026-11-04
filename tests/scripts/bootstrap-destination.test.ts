@@ -153,6 +153,7 @@ describe("bootstrap.sh destination", () => {
           HOME: tmp,
           WM_ADMIN_EMAIL: "admin@example.com",
           WM_ADMIN_PASSWORD: PASSWORD,
+          DB_PASSWORD: "test-db-password",
           // mise.tomlは両方を設定する。指定が無ければ、WM_HTTP_PORTと同じ宛先にする。
           ...(env.WM_HTTP_PORT === undefined
             ? {}
