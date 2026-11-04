@@ -15,6 +15,7 @@ import {
   type ApprovalDecideResult,
   type AuditKickoffResult,
   type ConfigUpdateResult,
+  type DeployDecideResult,
   type FreezeReleaseResult,
   type HoldPlaceResult,
   type HoldReleaseResult,
@@ -350,4 +351,17 @@ export function stopSchedule(
     isScheduleStopResult,
     options,
   );
+}
+
+/** 反映を判断する入力。判断する人は引数に取らない。 */
+export type DeployDecideInput = {
+  readonly sha: string;
+  readonly decision: "approve" | "reject";
+};
+
+export function decideDeploy(
+  _input: DeployDecideInput,
+  _options: RunScriptOptions = {},
+): Promise<DeployDecideResult> {
+  return Promise.resolve({ refused: true, reason: "invalid_sha" });
 }

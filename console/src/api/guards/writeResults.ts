@@ -689,6 +689,34 @@ export type PrReviewRegisterResult =
 const isPrReviewRegisterRefusalReason: Guard<PrReviewRegisterRefusalReason> =
   isOneOf(PR_REVIEW_REGISTER_REFUSAL_REASONS);
 
+/** 反映の判断を断った理由。 */
+export const DEPLOY_DECIDE_REFUSAL_REASONS = [
+  "invalid_sha",
+  "invalid_decision",
+  "not_pending",
+  "actor_unknown",
+  "audit_unavailable",
+] as const;
+export type DeployDecideRefusalReason =
+  (typeof DEPLOY_DECIDE_REFUSAL_REASONS)[number];
+
+/** 反映の判断の結果。 */
+export type DeployDecideResult =
+  | { readonly refused: true; readonly reason: DeployDecideRefusalReason }
+  | {
+      readonly refused: false;
+      readonly sha: string;
+      readonly decision: "approved" | "rejected";
+      readonly notice: "recorded" | "failed";
+      readonly action_audit: ActionAudit;
+    };
+
+export function isDeployDecideResult(
+  _value: unknown,
+): _value is DeployDecideResult {
+  return false;
+}
+
 /**
  * 登録のステップのジョブの結果。4bの画面が、投入したフローのジョブの結果を読むときに使う。
  */

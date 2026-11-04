@@ -479,3 +479,23 @@ describe("noticeGuide", () => {
     expect(GENERIC_NOTICE_GUIDE.action).toContain("本文");
   });
 });
+
+describe("deploy approval guides", () => {
+  test("tells how to approve a held deployment", () => {
+    expect(noticeGuide("deploy_approval_required").action).toContain(
+      "反映の承認待ち",
+    );
+  });
+
+  test("tells how to undo after a rejection", () => {
+    expect(noticeGuide("deploy_approval_required").action).toContain(
+      "mainへ戻すPR",
+    );
+  });
+
+  test("tells that a decision resolves the notice", () => {
+    expect(noticeGuide("deploy_approval_required").note).toContain(
+      "自動で解決",
+    );
+  });
+});

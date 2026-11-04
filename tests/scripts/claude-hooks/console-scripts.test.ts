@@ -52,6 +52,7 @@ describe("the classification of the console scripts", () => {
       "approval_decide",
       "audit_kickoff",
       "console_config_update",
+      "console_deploy_decide",
       "console_hold_place",
       "console_job_cancel",
       "console_job_rerun",

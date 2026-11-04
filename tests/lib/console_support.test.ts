@@ -176,6 +176,7 @@ describe("INFO_NOTICE_KINDS", () => {
 describe("UNRESOLVABLE_NOTICE_KINDS", () => {
   test("contains the security-related kinds and the ignored design setting", () => {
     expect([...UNRESOLVABLE_NOTICE_KINDS].sort()).toEqual([
+      "deploy_approval_required",
       "design_enabled_ignored",
       "fix_feedback_association_excluded",
       "labeler_denied",
@@ -183,12 +184,26 @@ describe("UNRESOLVABLE_NOTICE_KINDS", () => {
     ]);
   });
 
-  test("leaves only the self-resolved design setting outside the info kinds", () => {
+  test("leaves only the self-resolved kinds outside the info kinds", () => {
     expect(
       UNRESOLVABLE_NOTICE_KINDS.filter(
         (kind) => !INFO_NOTICE_KINDS.includes(kind),
-      ),
-    ).toEqual(["design_enabled_ignored"]);
+      ).sort(),
+    ).toEqual(["deploy_approval_required", "design_enabled_ignored"]);
+  });
+});
+
+describe("deploy approval notices", () => {
+  test("deploy_approval_required needs an action", () => {
+    expect(NOTICE_SEVERITY.deploy_approval_required).toBe("action");
+  });
+
+  test("deploy_approval_decided is information", () => {
+    expect(NOTICE_SEVERITY.deploy_approval_decided).toBe("info");
+  });
+
+  test("the Console cannot resolve deploy_approval_required, which only a decision or a deployment resolves", () => {
+    expect(isNoticeResolvable("deploy_approval_required")).toBe(false);
   });
 });
 

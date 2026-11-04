@@ -2217,6 +2217,7 @@ describe("safety boundary files", () => {
   const CLIENT_LOCKS = [
     "f/factory/lib/claude.script.lock",
     "f/factory/self_update.script.lock",
+    "f/factory/console_deploy_decide.script.lock",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
@@ -2283,6 +2284,9 @@ describe("deploy approval gate files", () => {
     "f/factory/lib/deploy_gate.script.yaml",
     "tests/lib/deploy_gate.test.ts",
     "tests/scripts/self_update_deploy_gate.test.ts",
+    "f/factory/console_deploy_decide.ts",
+    "f/factory/console_deploy_decide.script.yaml",
+    "tests/scripts/console_deploy_decide.test.ts",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {

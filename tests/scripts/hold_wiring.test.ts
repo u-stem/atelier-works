@@ -1692,7 +1692,7 @@ describe("the names of the console write scripts that only their own files name"
     return new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(text);
   }
 
-  test("are the two release scripts, the job cancel script, the rerun script, the config update script, the place script and the stop script", () => {
+  test("are the two release scripts, the job cancel script, the rerun script, the config update script, the place script, the stop script and the deploy decide script", () => {
     expect([...WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES]).toEqual([
       "hold_release",
       "freeze_release",
@@ -1701,6 +1701,7 @@ describe("the names of the console write scripts that only their own files name"
       "console_config_update",
       "console_hold_place",
       "console_schedule_stop",
+      "console_deploy_decide",
     ]);
   });
 

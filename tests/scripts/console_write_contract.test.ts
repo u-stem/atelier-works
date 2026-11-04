@@ -12,6 +12,8 @@ import {
   type AuditSkipReason,
   CONFIG_UPDATE_REFUSAL_REASONS,
   type ConfigUpdateResult,
+  DEPLOY_DECIDE_REFUSAL_REASONS,
+  type DeployDecideResult,
   type FreezeReleaseResult,
   HOLD_PLACE_REFUSAL_REASONS,
   type HoldPlaceResult,
@@ -19,6 +21,7 @@ import {
   isApprovalDecideResult,
   isAuditKickoffResult,
   isConfigUpdateResult,
+  isDeployDecideResult,
   isFreezeReleaseResult,
   isHoldPlaceResult,
   isHoldReleaseResult,
@@ -59,6 +62,7 @@ import { buildIntakeInput } from "../../console/src/lib/manualIntake.ts";
 import * as approvalScript from "../../f/factory/approval_decide.ts";
 import type * as auditKickoff from "../../f/factory/audit_kickoff.ts";
 import * as configUpdate from "../../f/factory/console_config_update.ts";
+import * as deployDecide from "../../f/factory/console_deploy_decide.ts";
 import * as holdPlace from "../../f/factory/console_hold_place.ts";
 import * as jobCancel from "../../f/factory/console_job_cancel.ts";
 import * as jobRerun from "../../f/factory/console_job_rerun.ts";
@@ -69,6 +73,7 @@ import {
   type AuditKickoffSkip,
   decideAuditKickoff,
 } from "../../f/factory/lib/audit_support.ts";
+import type { ActionSqlClient } from "../../f/factory/lib/console_actions.ts";
 import type { HoldRow, Outcome } from "../../f/factory/lib/holds.ts";
 import * as manualIntakeSupport from "../../f/factory/lib/manual_intake_support.ts";
 import type { Notice } from "../../f/factory/lib/types.ts";
@@ -91,7 +96,8 @@ type WriteScript =
   | "console_job_rerun"
   | "console_config_update"
   | "console_hold_place"
-  | "console_schedule_stop";
+  | "console_schedule_stop"
+  | "console_deploy_decide";
 
 const WRITE_SCRIPTS: WriteScript[] = [
   "approval_decide",
@@ -107,6 +113,7 @@ const WRITE_SCRIPTS: WriteScript[] = [
   "console_config_update",
   "console_hold_place",
   "console_schedule_stop",
+  "console_deploy_decide",
 ];
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -282,10 +289,15 @@ const WRAPPER_CALLS: Readonly<
     ),
   console_schedule_stop: (fetchFn) =>
     consoleWrites.stopSchedule("f/factory/collect_github", { fetchFn }),
+  console_deploy_decide: (fetchFn) =>
+    consoleWrites.decideDeploy(
+      { sha: "0123456789abcdef0123456789abcdef01234567", decision: "approve" },
+      { fetchFn },
+    ),
 };
 
 describe("allowlist", () => {
-  test("holds the five read scripts and the thirteen write scripts", () => {
+  test("holds the five read scripts and the fourteen write scripts", () => {
     expect(Object.keys(SCRIPT_PATHS).sort()).toEqual(
       [
         "console_query",
@@ -556,6 +568,11 @@ describe("what the typed calls send", () => {
   test("audit_kickoff runs as a manual run without force", async () => {
     const sent = await sentBy(WRAPPER_CALLS.audit_kickoff);
     expect(sent.body).toMatchObject({ force: false, source: "manual" });
+  });
+
+  test("console_deploy_decide has no input that names the decider", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.console_deploy_decide);
+    expect([...properties].sort()).toEqual(["decision", "sha"]);
   });
 });
 
@@ -1419,6 +1436,53 @@ describe("what the scripts return", () => {
     };
     expect(isAuditKickoffResult(started)).toBe(true);
   });
+
+  const DEPLOY_RECORDING: ActionSqlClient = () => ({
+    fetch: () => Promise.resolve([{ id: 1 }]),
+    execute: () => Promise.resolve(),
+  });
+
+  function deployDeps(decided: boolean): deployDecide.DeployDecideDeps {
+    return {
+      deriveApprover: () => "operator",
+      decide: () => Promise.resolve(decided),
+      resolveRequiredNotice: () => Promise.resolve(1),
+      addNotice: () => Promise.resolve(1),
+      warn: () => undefined,
+    };
+  }
+
+  test("console_deploy_decide's result for a decision passes the guard", async () => {
+    const result = await deployDecide.decideDeployRecorded(
+      "0123456789abcdef0123456789abcdef01234567",
+      "approve",
+      deployDeps(true),
+      DEPLOY_RECORDING,
+    );
+    expect(isDeployDecideResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("console_deploy_decide's refusal passes the guard", async () => {
+    const result = await deployDecide.decideDeployRecorded(
+      "0123456789abcdef0123456789abcdef01234567",
+      "approve",
+      deployDeps(false),
+      DEPLOY_RECORDING,
+    );
+    expect(isDeployDecideResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("a deploy decision with an unknown decision fails the guard", () => {
+    expect(
+      isDeployDecideResult({
+        refused: false,
+        sha: "0123456789abcdef0123456789abcdef01234567",
+        decision: "maybe",
+        notice: "recorded",
+        action_audit: "recorded",
+      }),
+    ).toBe(false);
+  });
 });
 
 // 型の食い違いは、実行より前に型検査で落ちる。
@@ -1536,6 +1600,18 @@ describe("types", () => {
     const consoleSide: RetryWorkItemResult = backend;
     expect(isRetryWorkItemResult(consoleSide)).toBe(true);
   });
+
+  test("the console deploy decide result is the backend result", () => {
+    const equal: Equal<DeployDecideResult, deployDecide.DeployDecideResult> =
+      true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console deploy decide refusal reasons are the backend ones", () => {
+    expect([...DEPLOY_DECIDE_REFUSAL_REASONS]).toEqual([
+      ...deployDecide.DEPLOY_DECIDE_REFUSAL_REASONS,
+    ]);
+  });
 });
 
 async function consoleSourcesOutsideApi(): Promise<string[]> {
@@ -1622,7 +1698,7 @@ describe("api boundary", () => {
 // 画面や部品に名前が出ると、許可リストを通らない呼び出しの足場になる。
 describe("console release script names", () => {
   const NAME =
-    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release|pr_review_submit|console_job_cancel|console_job_rerun|console_config_update|console_hold_place|console_schedule_stop)(?![A-Za-z0-9_])/;
+    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release|pr_review_submit|console_job_cancel|console_job_rerun|console_config_update|console_hold_place|console_schedule_stop|console_deploy_decide)(?![A-Za-z0-9_])/;
   const MAY_NAME_THEM = [
     "console/src/api/windmill.ts",
     "console/src/api/writes.ts",
