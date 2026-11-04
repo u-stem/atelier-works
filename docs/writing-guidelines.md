@@ -2,7 +2,7 @@
 
 このリポジトリの文書と、コードに書く定型文の書き方を定める。対象は次の2つである。
 
-- リポジトリの文書: README、AGENTS.md、`docs/`、自作のスキル、subagentの定義、各ディレクトリのREADME
+- リポジトリの文書: README、AGENTS.md、`docs/`、自作のスキル、各ディレクトリのREADME
 - コードに書く定型文: Issueへのコメント、Discordの通知、Consoleのnotice、通知の理由と次の操作
 
 Claudeが生成する文章(要件定義書、監査レポートと改善提案、PR本文、レビューの指摘、修正の返信、Issue化の提案、コミットメッセージ)の書き方は、[factory-writingスキル](../.claude/skills/factory-writing/SKILL.md)が定める。
@@ -158,7 +158,7 @@ worktreeに置くと未追跡のファイルが残り、コミットに入った
 
 ## エージェント向けの文書
 
-AGENTS.mdとスキル、subagentの定義はClaudeが読む。Claudeは書かれていることをすべて今のルールとして扱うので、人向けの文書より短く書く。
+AGENTS.mdとスキルはClaudeが読む。Claudeは書かれていることをすべて今のルールとして扱うので、人向けの文書より短く書く。
 
 - AGENTS.mdは毎回読み込まれる。1つのルールを1〜2行で書き、詳しい説明は`docs/`へのリンクにする。
 - スキルの`description`には、いつ使うかと、誰が参照するかを書く。

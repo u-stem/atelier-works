@@ -1,6 +1,6 @@
 ---
 name: factory-dev
-description: 本リポジトリ(atelier-works)の開発環境をセットアップし、miseタスクで起動・検証・デプロイするときに使う。実装・レビュー・修正のループを回す際にも参照する。
+description: 本リポジトリ(atelier-works)の開発環境をセットアップし、miseタスクで起動・検証・デプロイするときに使う。実装とレビューの進め方を確かめるときにも参照する。
 ---
 
 # このリポジトリの開発手順(factory-dev)

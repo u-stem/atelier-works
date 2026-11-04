@@ -95,7 +95,7 @@ if (!isClaudeResult(parsed)) {
 - 新機能はテストから、バグ修正は再現テストから、リファクタはテストが緑の状態から始める(Red → Green → Refactor)。
 - テストを足すコミットは、実装のコミットより前に作り、実装の前にテストが失敗した出力を残す。
   何も確かめていないテストが通ることを防ぐためである。
-  テスト先行は`superpowers:test-driven-development`に従い、テストを足すコミットを実装のコミットより前に作る。
+  手順は`superpowers:test-driven-development`に従う。
 - 外部の挙動(git、gh、mise、Windmill、OS、外部サービスの出力や状態)に依存する前提は、実装の前に実機で小さく確かめる。
   前提の検証はAGENTS.mdの規則に従う。
 - テストの書き方は[テストの基準](testing-guidelines.md#テストの書き方)に従う。
@@ -210,10 +210,12 @@ Generated-By: Software Factory (<instance_name>)
 | --- | --- |
 | Sonnet | 既定。実装、タスクごとのレビュー、文書の追従 |
 | Opus | 計画、ブランチ全体の最終レビュー、`/code-review`、原因が分からないバグ、Sonnetで2回失敗した課題 |
-| Fable | 最難関の課題だけ。subagentの定義やFactoryの既定には入れない |
+| Fable | 最難関の課題だけ。Factoryの既定には入れない |
 
 `.claude/settings.json`の`model`は`opusplan`にしている。計画モードだけがOpusで、実装はSonnetで動く。
-`/model opus`は人が打つコマンドで、Claudeの親のセッションは自分で切り替えられない。
+Opusで行う作業は、Agentツールの`model`に`opus`を指定したsubagentに任せる。
+人が見ているセッションでは、人が`/model opus`に切り替える。
+`/model`は人が打つコマンドで、Claudeの親のセッションは自分で切り替えられないため。
 
 Factoryも同じ方針で、`f/factory/factory_config`の`model`(既定はSonnet)と`heavy_model`(既定はOpus)を使い分ける。
 実装とPR修正は、同じ作業でSonnetが続けて2回失敗したら、`heavy_model`で動く。

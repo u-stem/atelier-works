@@ -543,10 +543,9 @@ hashは`.script.lock`の中身を含まない。
 
 ### 開発セッションのsubagent
 
-`.claude/agents/`のsubagentは、開発のセッションで使うものである。
-headless Claudeのフローは、プロジェクト設定を読み込まないので、これらを使わない。
-レビュー役のsubagentは`Bash`を持つので、読み取り専用であることは指示で守らせる。
-pushは親のセッションだけが、運用者の確認を経て行う。
+開発のセッションでは、superpowersのsubagentと組み込みの`/code-review`を使う。
+これらはheadlessのフローからは使われない。
+pushは親のセッションだけが行い、subagentはpushしない。
 
 worktreeを作るフックと、既存のブランチを使う経路(worktreeの再利用、既存ブランチの取り付け)は、ローカルのブランチを自分のものとして信頼する前提である。
 そのブランチの`bunfig.toml`、`mise.toml`、lefthookのフックが動くのは、手でcheckoutしたときと同じ信頼によるためである。
@@ -6761,7 +6760,7 @@ symlinkはたどらずリンク自体を消し、`.git`を持たない項目や�
 | 名前 | Claude Codeが読むもの |
 | --- | --- |
 | `CLAUDE.md`、`CLAUDE.local.md` | 指示と、`@`による他のファイルの取り込み |
-| `.claude` | 設定、コマンド、スキル、subagentの定義 |
+| `.claude` | 設定、コマンド、スキル |
 | `.mcp.json` | MCPサーバーの定義 |
 | `.claude.json` | 設定 |
 
