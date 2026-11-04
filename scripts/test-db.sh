@@ -1484,6 +1484,12 @@ COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
   bun run "${REPO_ROOT}/scripts/test-db-console-actions.ts" \
   || die "the console actions checks failed against the real PostgreSQL"
 
+# 反映の承認の表の制約と、`lib/deploy_approvals.ts`が組み立てるSQL文を、本物のPostgreSQLで確かめる。
+log "running the deploy approvals checks against '${SCRATCH_DB}'"
+COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
+  bun run "${REPO_ROOT}/scripts/test-db-deploy-approvals.ts" \
+  || die "the deploy approvals checks failed against the real PostgreSQL"
+
 verify_investigate_singleton_rollback
 verify_investigate_rollback
 verify_design_stage_rollback

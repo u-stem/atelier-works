@@ -296,6 +296,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * ファイルは移さない。`lib/claude.ts`のパスは調査の隔離の測定が固定し、`self_update`のパスはscheduleとConsoleと凍結が固定するためである。
  * `lib/claude.script.lock`と`self_update.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
  * ほかの5つのlibのlockは、依存の無いlibのlockと同じ扱いで守らない。
+ * 保護パスに触れた変更の反映を人の承認まで止める仕組みも守る。承認の表を作るmigration2本、表の唯一の読み書き(`lib/deploy_approvals.ts`)と
+ * その`.script.yaml`、表の部品の単体テストと参照の検出(`tests/lib/deploy_approvals.test.ts`、`tests/scripts/deploy_approvals_wiring.test.ts`)、
+ * 実DBの検査(`scripts/test-db-deploy-approvals.ts`)である。書き換えられると、承認の無い版が承認済みとして読まれ、保護パスの変更が人の確認なしに反映される。
+ * `lib/deploy_approvals.script.lock`は、依存の無いlibのlockと同じ扱いで守らない。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -591,6 +595,13 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/self_update.script.yaml",
   "f/factory/lib/self_update_support.ts",
   "f/factory/lib/self_update_support.script.yaml",
+  "migrations/datatable/main/20261105100000_deploy_approvals.up.sql",
+  "migrations/datatable/main/20261105100000_deploy_approvals.down.sql",
+  "f/factory/lib/deploy_approvals.ts",
+  "f/factory/lib/deploy_approvals.script.yaml",
+  "tests/lib/deploy_approvals.test.ts",
+  "tests/scripts/deploy_approvals_wiring.test.ts",
+  "scripts/test-db-deploy-approvals.ts",
 ];
 
 /**

@@ -77,6 +77,7 @@ locks:
   f/factory/lib/dependabot_prompt: 690349a6bb1dc98f56af9f9ce4eae4f91148729bb1fd7c51407395b64c062314
   f/factory/lib/dependabot_registry: 3bd1e2db9f439df63be90c0d5457a0eee2368b2bc3a69515370c52353f26f975
   f/factory/lib/dependabot_support: b7cbeacf38d732f94c5676fb66295cbc21c26def4fc2adf44286e7a63c9264da
+  f/factory/lib/deploy_approvals: ceb6e33ce63b7b17ff3c1ad3ffc9291cc35ae53bb113b5c9e284d8a04557c176
   f/factory/lib/design_apply_support: ad7611c5659ce77e9378008e504baa4f21b9295cf97d1fb22230ef27dba119bf
   f/factory/lib/design_doc: 39e65ecf8d275747851dc4c37e554886830c8ed6cfff7ac65ba161162aa12aef
   f/factory/lib/design_gate: 1a54855ba538bca04749af4b6bb428a50e286592fe942785315d616ab06f5682
@@ -162,7 +163,7 @@ locks:
   f/factory/lib/profile_upgrade: 25c6854e8bfef10f6042c3db54442adefc1062d836398a44b2f0feec27979d6c
   f/factory/lib/prompts: 1a87b663780e1f2fa5ea8199e5f32594749a0e77d882e69321dc72f8aaf77e5f
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: 705c5c82b1cdfcf85420e6b35d213d316fed45dfbc82016699d2de2d741d8a24
+  f/factory/lib/protected_paths: 267d3623d9cb1cb24f6979d6c9b8067b1523d38c21af394af85d186e7591fe7b
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
   f/factory/lib/requirements_doc: c175acfaa2af360877513464eb2204289018739f267ab983ad991a5939242d62
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955
