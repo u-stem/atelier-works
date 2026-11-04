@@ -178,6 +178,7 @@ bunは依存のinstall scriptを既定では実行しないが、既定の信頼
 ## PRとコミット
 
 PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。
+節ごとに何を書くかと、推敲から作成までの手順は、`pr-body`スキルにある。
 
 人がClaude Codeで作るコミットには、`Co-Authored-By: Claude <noreply@anthropic.com>`のトレーラーを付ける。
 モデル名を間に入れてもよく、キー名の大文字小文字は区別しない。

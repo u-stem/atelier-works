@@ -25,7 +25,7 @@ import { runDocsGen } from "./docs-gen.ts";
 
 /** 自作のスキル。これ以外の`.claude/skills/`は`wmill`の管理スキルか取り込んだもの。 */
 const OWN_SKILL_PATTERN =
-  /^\.claude\/skills\/(factory-[a-z-]+|windmill-script|drawio-diagram|hold)\//;
+  /^\.claude\/skills\/(factory-[a-z-]+|windmill-script|drawio-diagram|hold|pr-body)\//;
 
 const EXCLUDED_PREFIXES = [".agents/", "tests/fixtures/"];
 

@@ -19,6 +19,7 @@
   2. 実装は`superpowers:subagent-driven-development`で進める。タスクごとに新しいimplementerとtask reviewerを起動する。テストは`superpowers:test-driven-development`で先に書く。
   3. PRの前に`/code-review high`を1回通し、指摘はコードで確かめてから直す。保護パス(`f/factory/lib/protected_paths.ts`の一覧に当たるファイル)を変えたときは、`/security-review`も通す。
   4. `mise run check`が通り、`git status --short`が空であることを確かめてからpushする。
+  5. PR本文は`pr-body`スキルに従って書く。節の並びはPRテンプレート、文体は`factory-writing`、推敲は`yomiyasu`である。
   superpowersが使えない環境では、同じ流れ(計画、実装、別のsubagentによるレビュー1回、修正)を手で行う。
   レビュアーの人数とラウンドを増やしても検出率は上がらず、過剰な修正と文書の肥大を招くため。
 - 1つの変更は、入口から結果までの縦の筋を1つにする。配線されない土台だけのPRを作らない。土台だけのPRは、価値が出る前のレビューを払い、配線のたびの再レビューが要るため。

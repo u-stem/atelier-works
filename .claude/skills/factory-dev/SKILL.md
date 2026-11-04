@@ -27,7 +27,7 @@ description: 本リポジトリ(atelier-works)の開発環境をセットアッ�
 
 - コミットメッセージは`<type>: <日本語の説明>`の形にする(例: `feat: Issueを拾うpoll_issuesのスケジュールを追加`)。typeの一覧は[コーディング規約](../../../docs/coding-guidelines.md)にある。
 - コードの変更に伴う文書とスキルの更新は、同じコミットに含める。
-- PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。Windmillへの反映(マージ後に`self_update`が反映するか、次の`mise run up`で反映されるか)を必ず書く。
+- PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従い、書き方は`pr-body`スキルに従う。Windmillへの反映(マージ後に`self_update`が反映するか、次の`mise run up`で反映されるか)を必ず書く。
 
 ## E2Eで確かめる
 
