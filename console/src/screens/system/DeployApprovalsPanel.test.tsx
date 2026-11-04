@@ -66,6 +66,16 @@ describe("DeployApprovalsPanel", () => {
     expect(render(PENDING, true).match(/disabled=""/g)?.length).toBe(2);
   });
 
+  test("explains the effect of an approval while approvals wait", () => {
+    expect(render(PENDING)).toContain("承認すると、次の自己更新");
+  });
+
+  test("omits the approval note when the approvals cannot be read", () => {
+    expect(render({ kind: "failed", reason: "db down" })).not.toContain(
+      "承認すると、次の自己更新",
+    );
+  });
+
   test("alerts when the approvals cannot be read", () => {
     expect(render({ kind: "failed", reason: "db down" })).toContain(
       'role="alert"',

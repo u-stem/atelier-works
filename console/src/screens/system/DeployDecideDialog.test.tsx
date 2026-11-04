@@ -43,6 +43,12 @@ describe("DeployDecideDialog", () => {
     );
   });
 
+  test("points the dialog at the paragraph that explains the effect", () => {
+    const html = render({ item: ITEM, decision: "approve" });
+    const describedBy = /aria-describedby="([^"]+)"/.exec(html)?.[1] ?? "";
+    expect(html).toMatch(new RegExp(`<p[^>]* id="${describedBy}"`));
+  });
+
   test("asks nothing when no decision is chosen", () => {
     expect(render(null)).not.toContain("しますか");
   });
