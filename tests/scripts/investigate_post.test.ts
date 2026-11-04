@@ -286,6 +286,19 @@ describe("runInvestigatePost", () => {
       expect(f.escalations[0]?.note).toBe("result withheld: secret detected");
     });
 
+    test.each([
+      ["a finding", [{ ok: false, output: "- rule" }]],
+      ["a failed scan", [new Error("gitleaks timed out")]],
+    ])(
+      "does not say that the output was discarded after %s",
+      async (_name, scans) => {
+        // 無害化の前の出力は、生成のstepの結果と投稿のstepの引数に残る。
+        const f = fake({ scans });
+        await runInvestigatePost({ ...INPUT_BASE, output: OUTPUT }, f.deps);
+        expect(f.escalations[0]?.reason).not.toContain("捨て");
+      },
+    );
+
     test("tells a person to change the request and submit again", async () => {
       const f = fake({ scans: [{ ok: false, output: "- rule" }] });
       await runInvestigatePost({ ...INPUT_BASE, output: OUTPUT }, f.deps);

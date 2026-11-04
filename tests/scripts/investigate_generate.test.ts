@@ -73,6 +73,8 @@ const SUCCESS: InvestigateClaudeResult<InvestigateOutput> = {
 
 type World = {
   readonly enabled?: boolean;
+  /** 設定を読むたびに順に返す値。尽きたら最後の値を返す。 */
+  readonly enabledReads?: readonly boolean[];
   readonly item?: WorkItem | null;
   readonly ids?: number[];
   readonly probeActive?: boolean;
@@ -90,9 +92,16 @@ function fake(world: World = {}) {
   const launched: InvestigateClaudeOptions<InvestigateOutput>[] = [];
   const proofsGiven: Proof[] = [];
   let proofCall = 0;
+  let enabledCall = 0;
   const deps: InvestigateGenerateDeps = {
     readEnabled: async () => {
       calls.push("enabled");
+      const reads = world.enabledReads;
+      if (reads !== undefined) {
+        const value = reads[Math.min(enabledCall, reads.length - 1)];
+        enabledCall += 1;
+        return value ?? true;
+      }
       return world.enabled ?? true;
     },
     cancel: async () => {
@@ -189,6 +198,7 @@ describe("runInvestigateGenerate", () => {
         "disable",
         "prompt",
         "oauth",
+        "enabled",
         "proof",
         "launch",
         "cleanup",
@@ -209,6 +219,28 @@ describe("runInvestigateGenerate", () => {
       const result = await runInvestigateGenerate(INPUT, f.deps);
       expect(result).toEqual({ skip: true, reason: "disabled", output: null });
       expect(f.calls).toEqual(["enabled", "cancel"]);
+    });
+  });
+
+  describe("the setting read again just before the start", () => {
+    test("cancels the investigation and does not start when the setting turned off meanwhile", async () => {
+      const f = fake({ enabledReads: [true, false] });
+      const result = await runInvestigateGenerate(INPUT, f.deps);
+      expect(result).toEqual({ skip: true, reason: "disabled", output: null });
+      expect(f.calls).toContain("cancel");
+      expect(f.calls).not.toContain("launch");
+    });
+
+    test("does not ask the gate again once the setting turned off", async () => {
+      const f = fake({ enabledReads: [true, false] });
+      await runInvestigateGenerate(INPUT, f.deps);
+      expect(f.calls.filter((call) => call === "proof")).toHaveLength(1);
+    });
+
+    test("removes the worktree and the prompt file when the setting turned off", async () => {
+      const f = fake({ enabledReads: [true, false] });
+      await runInvestigateGenerate(INPUT, f.deps);
+      expect(f.calls.slice(-2)).toEqual(["cleanup", "remove"]);
     });
   });
 

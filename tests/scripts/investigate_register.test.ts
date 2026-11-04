@@ -70,7 +70,10 @@ function fake(world: World = {}) {
       calls.push("issue");
       return world.issue === undefined ? issue() : world.issue();
     },
-    viewerLogin: "operator",
+    getViewerLogin: async () => {
+      calls.push("viewer");
+      return "operator";
+    },
     isProbeActive: async () => {
       calls.push("probe");
       return world.probeActive ?? false;
@@ -86,14 +89,15 @@ function fake(world: World = {}) {
 
 describe("registerInvestigation", () => {
   describe("the order of the checks", () => {
-    test("checks the allowance, the owner, the setting, the issue and the probe before it inserts", async () => {
+    test("checks the setting first, then the allowance, the owner, the issue, the viewer and the probe, before it inserts", async () => {
       const f = fake();
       await registerInvestigation(INPUT, f.deps);
       expect(f.calls).toEqual([
+        "enabled",
         "allowed",
         "owner",
-        "enabled",
         "issue",
+        "viewer",
         "probe",
         "insert",
       ]);
@@ -153,7 +157,7 @@ describe("registerInvestigation", () => {
     test("does not check the owner id of a repository that is not allowed", async () => {
       const f = fake({ allowed: false });
       await registerInvestigation(INPUT, f.deps);
-      expect(f.calls).toEqual(["allowed"]);
+      expect(f.calls).toEqual(["enabled", "allowed"]);
     });
 
     test("refuses an owner whose id does not match", async () => {
@@ -166,10 +170,10 @@ describe("registerInvestigation", () => {
       });
     });
 
-    test("does not read the setting after the owner is refused", async () => {
+    test("does not read the issue after the owner is refused", async () => {
       const f = fake({ ownerGate: { ok: false, reason: "owner id mismatch" } });
       await registerInvestigation(INPUT, f.deps);
-      expect(f.calls).toEqual(["allowed", "owner"]);
+      expect(f.calls).toEqual(["enabled", "allowed", "owner"]);
     });
   });
 
@@ -190,10 +194,10 @@ describe("registerInvestigation", () => {
       expect(f.inserted).toEqual([]);
     });
 
-    test("does not read the issue when the setting is off", async () => {
+    test("touches nothing outside when the setting is off", async () => {
       const f = fake({ enabled: false });
       await registerInvestigation(INPUT, f.deps);
-      expect(f.calls).not.toContain("issue");
+      expect(f.calls).toEqual(["enabled"]);
     });
   });
 

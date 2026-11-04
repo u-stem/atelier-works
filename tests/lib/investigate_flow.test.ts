@@ -281,6 +281,23 @@ describe("prepareInvestigateComment", () => {
       expect(texts[1]).not.toContain("plainsecret");
     });
 
+    test("leaves no piece of a value that the cut of a long field would split", async () => {
+      // 値が欄の切り詰めの境目をまたぐと、切った後の断片は完全一致で消せない。切る前に消す。
+      const secret = "SECRETVALUE0123456789";
+      const { scan, texts } = recordingScanner();
+      const result = await prepareInvestigateComment(
+        {
+          summary: `${"a ".repeat(1990)}${secret} tail`,
+          findings: [],
+          open_questions: [],
+        },
+        { workItemId: 7, secrets: [secret], scan },
+      );
+      const body = result.kind === "ok" ? result.body : "";
+      expect(body).not.toContain("SECRETVAL");
+      expect(texts[1]).not.toContain("SECRETVAL");
+    });
+
     test("masks a token of a known form even when it is not in the exact values", async () => {
       const { scan } = recordingScanner();
       const result = await prepareInvestigateComment(
