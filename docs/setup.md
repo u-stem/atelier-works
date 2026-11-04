@@ -633,7 +633,7 @@ WORKTREE_AUTO_PRUNE=0 mise run worktree:new -- <type>/<name>
 夜間のバックアップは、workerのイメージの`pg_dumpall`と、秘密の変数`f/factory/db_backup_url`を使う。
 初めて起動するときは、[起動する](#起動する)の`mise run up`と`mise run bootstrap`が両方を用意する。
 
-既に動いているインスタンスでは、バックアップを含む版を取り込んだ後に、ホストのcheckoutで次の2つを実行する。
+既に動いているインスタンスでは、バックアップを含む版を取り込んだ後に、ホストのcheckoutで次の2つを実行し、その後に隔離を測る。
 実行するまで、毎晩のバックアップは`backup_failed`の通知を残して失敗する。
 
 1. workerのイメージを作り直し、volume`factory_backups`を付ける。
@@ -647,6 +647,8 @@ WORKTREE_AUTO_PRUNE=0 mise run worktree:new -- <type>/<name>
    ```bash
    mise run bootstrap
    ```
+
+3. 更新を反映した後に、隔離の測定を1回実行する。読み出しの拒否の一覧が変わって隔離の指紋が変わり、測定が通るまで調査の工程は閉じたままのためである。手順は[運用](operations.md#隔離の測定を実行する)にある。
 
 動作は、Windmillの画面で`f/factory/backup`を実行して確かめる。
 控えの扱いは[運用](operations.md#バックアップ)にある。

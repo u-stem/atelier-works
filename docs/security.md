@@ -1246,6 +1246,7 @@ uidの切り替えに使う`setpriv`と、枠のロックに使う`flock`も入�
 
 夜間のバックアップ(`f/factory/backup`)は、Postgresのクラスタ全体と`factory_state`を控える。
 手順は[運用](operations.md#バックアップ)にある。
+調査のClaudeの読み出しの拒否の一覧(`READ_DENY_BASE_PATHS`)は、`/var/lib/factory-backups`を含む。
 
 ### 控えに含まれる秘密
 
@@ -1283,7 +1284,6 @@ scriptはURLを読み解き、接続の情報を環境変数(`PGPASSWORD`など)
 ### 控えの残るリスク
 
 - `db_backup_url`は秘密の変数で、ワークスペースのどのscriptも読める。defaultのworkerのジョブはrootで動き、workerの環境変数`DATABASE_URL`からも同じ接続先に届くので、新しい経路ではない。
-- 調査のClaudeの読み出しの拒否の一覧(`READ_DENY_BASE_PATHS`)は、`/var/lib/factory-backups`を含まない。一覧の`/var/lib/factory`は区切りの`/`まで一致を見るので、この置き場は塞がれない。
 - 控えは暗号化しない。控えの容量も監視しない。
 
 ## Console用workerの境界
