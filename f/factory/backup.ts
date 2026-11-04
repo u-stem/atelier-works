@@ -15,7 +15,9 @@ import {
   buildManifest,
   commandEnv,
   describeCommandFailure,
+  failureDetailTail,
   generationName,
+  keepGenerationsOf,
   parsePgConnection,
   partialName,
   pgDumpallArgv,
@@ -25,11 +27,11 @@ import {
   selectStalePartials,
   stateTarArgv,
 } from "./lib/backup_support.ts";
-import { loadConfig } from "./lib/config.ts";
 import { addNoticeUnlessUnresolved } from "./lib/db.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import type { NoticeRecord } from "./lib/types.ts";
 import {
+  type CommandResult,
   type CommandRunner,
   makeDir,
   readDirEntries,
@@ -46,6 +48,11 @@ const CONFIG_PATH = "f/factory/factory_config";
 export const BACKUP_COMMAND_TIMEOUT_MS = 30 * 60_000;
 /** 外部コマンドの出力を保持する上限。控えはファイルに書くので、出力は失敗の理由だけである。 */
 const COMMAND_OUTPUT_MAX_BYTES = 64 * 1024;
+/**
+ * GNUの`tar`が、読んでいる間にファイルが変わったか消えたときに返す終了コード。
+ * アーカイブは書けているので失敗にせず、警告をログに残す。2以上は失敗にする。
+ */
+const TAR_WARNING_EXIT_CODE = 1;
 /** 置き場と世代のディレクトリのモード。控えはDBの全体を含むので、検査用のユーザーに読ませない。 */
 const PRIVATE_DIR_MODE = 0o700;
 
@@ -63,9 +70,8 @@ export type BackupIo = {
   readonly rename: (from: string, to: string) => Promise<void>;
   readonly removePath: (path: string) => Promise<void>;
   readonly getVariable: (path: string) => Promise<string>;
-  /** 補間しない`factory_config`の値。 */
+  /** 補間しない`factory_config`の値。控えに書き、残す世代の数もここから読む。 */
   readonly getRawConfig: () => Promise<unknown>;
-  readonly getKeepGenerations: () => Promise<number>;
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
   readonly log: Logger;
 };
@@ -91,7 +97,7 @@ export class BackupError extends Error {
 /**
  * 1つの世代を書き、数を超えた古い世代を消す。
  * 書きかけの世代は`.partial-<時刻>`に置き、全部を書き終えてから`<時刻>`に改名する。
- * 失敗したら書きかけを消し、`backup_failed`の通知を残して`BackupError`を投げる。
+ * 失敗したら書きかけを消し、原因をログに残し、段階だけを載せた`backup_failed`の通知を残して`BackupError`を投げる。
  */
 export async function runBackup(io: BackupIo): Promise<BackupResult> {
   const startedAt = io.now();
@@ -124,14 +130,21 @@ export async function runBackup(io: BackupIo): Promise<BackupResult> {
     );
 
     stage = "tar";
-    await runChecked(
+    const tar = await runChecked(
       io,
       stateTarArgv(`${partialDir}/${BACKUP_FILES.stateTar}`),
       commandEnv(io.path),
+      [TAR_WARNING_EXIT_CODE],
     );
+    if (tar.exitCode === TAR_WARNING_EXIT_CODE) {
+      io.log.warn("backup: tar saw files change while it read them", {
+        stderr: failureDetailTail(maskSecrets(tar.stderr, secrets)),
+      });
+    }
 
     stage = "config";
-    const config = redactReferences(await io.getRawConfig());
+    const rawConfig = await io.getRawConfig();
+    const config = redactReferences(rawConfig);
     await io.writeTextFile(
       `${partialDir}/${BACKUP_FILES.config}`,
       `${JSON.stringify(config, null, 2)}\n`,
@@ -161,7 +174,9 @@ export async function runBackup(io: BackupIo): Promise<BackupResult> {
     await io.rename(partialDir, `${BACKUP_ROOT}/${generation}`);
 
     stage = "prune";
-    const keep = await io.getKeepGenerations();
+    // `config`の段階で読んだ値から、`backup_keep_generations`だけを検証して使う。
+    // 控えを書き終えた後に、関係のない項目の誤りでジョブを失敗にしないため。
+    const keep = keepGenerationsOf(rawConfig);
     const deleted = selectGenerationsToDelete(
       await io.listDir(BACKUP_ROOT),
       keep,
@@ -181,20 +196,28 @@ export async function runBackup(io: BackupIo): Promise<BackupResult> {
   }
 }
 
-/** コマンドを実行し、0以外で終わるかタイムアウトしたら例外を投げる。 */
+/**
+ * コマンドを実行して結果を返す。
+ * タイムアウトしたときと、0と`tolerated`以外の終了コードで終わったときは例外を投げる。
+ */
 async function runChecked(
   io: BackupIo,
   argv: readonly string[],
   env: Record<string, string>,
-): Promise<void> {
+  tolerated: readonly number[] = [],
+): Promise<CommandResult> {
   const result = await io.run(argv, {
     env,
     timeoutMs: BACKUP_COMMAND_TIMEOUT_MS,
     maxOutputBytes: COMMAND_OUTPUT_MAX_BYTES,
   });
-  if (result.exitCode !== 0 || result.timedOut) {
+  if (
+    result.timedOut ||
+    (result.exitCode !== 0 && !tolerated.includes(result.exitCode))
+  ) {
     throw new Error(describeCommandFailure(result));
   }
+  return result;
 }
 
 /** 反映済みの版を読む。読めないときと空のときは`null`にし、控えは止めない。 */
@@ -217,7 +240,7 @@ async function reportFailure(
   partialDir: string,
   detail: string,
 ): Promise<void> {
-  io.log.error("backup: failed", { stage, error: detail });
+  io.log.error("backup: failed", { stage, error: failureDetailTail(detail) });
   try {
     await io.removePath(partialDir);
   } catch (err) {
@@ -229,7 +252,7 @@ async function reportFailure(
   try {
     await io.addNotice({
       kind: "backup_failed",
-      message: backupFailureMessage(stage, detail),
+      message: backupFailureMessage(stage),
     });
   } catch (err) {
     io.log.error("backup: could not record the backup_failed notice", {
@@ -255,9 +278,6 @@ export async function main(): Promise<BackupResult> {
     // 補間する`getResource`は`$var:`を秘密の値に解決するので、補間しない読み取りを使う。
     getRawConfig: () =>
       wmill.ResourceService.getResourceValue({ workspace, path: CONFIG_PATH }),
-    getKeepGenerations: async () =>
-      (await loadConfig(() => wmill.getResource(CONFIG_PATH)))
-        .backup_keep_generations,
     addNotice: (record) => addNoticeUnlessUnresolved(record),
     log: logger("backup"),
   });

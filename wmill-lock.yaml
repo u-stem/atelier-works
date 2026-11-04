@@ -10,7 +10,7 @@ locks:
   f/factory/audit_kickoff: 71c7133b44557fd85a106161794abc5964175f23695993577b209827b95d5757
   f/factory/auto_retry_pr_review: c6108817e2ef3dec835aa0a9b1c3e259e95aa07018f9781c05c119de9facc4f4
   f/factory/auto_retry_stale_image: 856fc35302eda37d94011fffdca74b3e5631aff039c9b27aa488ec6bcddc0b80
-  f/factory/backup: 41a22eddc3ccb16fe8553c3f184602266a3e7f71820e19fb5617716ff9719452
+  f/factory/backup: 30bf6668b77cedac4be2561d4684f0434fba756d8d1f73f32417932e6ea87cc5
   f/factory/cleanup_db: 030fa55a3b720183acaccdc52309d96f14f14646ed439a327b3de4a94a6d2785
   f/factory/cleanup_workspaces: 49f793b93cede81b32aee130393d887c928d50b6fdf37ae042ea6ebcb9945008
   f/factory/collect_github: 150e44bca16d65aec9a05b899337db653f12622632d3c3b56f50bae83877f81d
@@ -43,7 +43,7 @@ locks:
   f/factory/lib/audit_support: 7e3a1a0e9b438c651812eee365575dbcba2c789388dec74458106c39b3a0d032
   f/factory/lib/auto_retry: 30fed509925b8e447034c3979d0198a7cbd402a68565546bf2db5b94bcba21cc
   f/factory/lib/auto_retry_reasons: e2d2fd0db790d66913db9449b203d937d93464ae93f1cc790721fd51771dabdc
-  f/factory/lib/backup_support: 1ca05623d24ec6142fead95846c3043ff74f36de46f76f26ced7b7fb65fcd8e7
+  f/factory/lib/backup_support: f4379f36e1a89a6f4dc9a700ca1a051237ee6acba44a009f0052db1ffa128cb5
   f/factory/lib/branch_hold: 0f2fb8cd95dd575a8b868a2087222690dc25dab0ed16b5e3b21510c4a4a0dbbb
   f/factory/lib/check_runner: b1f2652b764026ea58cb864cd5d9eba08c776daf3113d8491754e3edd8c81ab7
   f/factory/lib/check_sandbox: a0723a0bfa811613eaa3c720efc5ce5547bb9d2144ed88e214a10ded685e3696
@@ -60,7 +60,7 @@ locks:
   f/factory/lib/claude_read_deny: 344937384ac71e6635c10abd0edaa98c6d26b77fd9ce4fac8177e39b6d2add3b
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea
   f/factory/lib/cleanup_support: 3b97f5ee699012babd490ff9a070aa573aeabb45577923723b55760b12af1545
-  f/factory/lib/config: 8b1d83bc3a8ed684778ce2320802f9598c368bf0d151593791f5b5f2db1e821d
+  f/factory/lib/config: b0ab6c7fdc953cd04b635413bccbafbae54cb3f577d0befc00dcacbbb886d63c
   f/factory/lib/conflict_fix_apply: 73deb37f4bde7db94d3e03292daba0602cbc0bc72738f8352683add161e9a3bb
   f/factory/lib/conflict_fix_prompt: 5213e3c137bac55c2d77741241d8cc4193547984baf6af59d8ef1887c7aaa23f
   f/factory/lib/conflict_fix_round: 6c870cbb4ae69eca8106d227ab1bd8ba16457740da07e713820478141f3cb5c6

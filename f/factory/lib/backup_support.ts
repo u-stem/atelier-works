@@ -1,8 +1,9 @@
 // 夜間のバックアップ(`f/factory/backup`)の判断の部分。
 // 世代の名前と消す世代の選別、`factory_config`の参照の伏せ字、接続URLの解釈、
-// `pg_dumpall`と`tar`の引数と環境変数、manifestと通知の本文を決める。
+// `pg_dumpall`と`tar`の引数と環境変数、残す世代の数、manifestと通知の本文を決める。
 // 入出力を持たないので、偽物なしでテストできる。
 
+import { positiveIntegerField } from "./config.ts";
 import { isRecord } from "./types.ts";
 
 /**
@@ -85,8 +86,10 @@ export type CommandFailure = {
 const GENERATION_NAME = /^\d{8}T\d{6}Z$/;
 /** 参照を探す入れ子の深さの上限。超える値は中を見切れないので、丸ごと置き換える。 */
 const REDACT_DEPTH_MAX = 32;
-/** 通知の本文に載せる原因の文字数の上限。末尾を残す。コマンドのエラーは最後の行に原因が出るため。 */
+/** ログに載せる原因の文字数の上限。末尾を残す。コマンドのエラーは最後の行に原因が出るため。 */
 const FAILURE_DETAIL_MAX_CHARS = 500;
+/** 残す世代の数の既定。`factory_config`の`backup_keep_generations`の既定と同じ値にする。 */
+const DEFAULT_KEEP_GENERATIONS = 7;
 /** libpqの接続のタイムアウト(秒)。DBが応答しないとき、コマンドの30分を待たずに失敗させる。 */
 const PG_CONNECT_TIMEOUT_SEC = "30";
 
@@ -159,6 +162,7 @@ export function redactReferences(value: unknown, depth = 0): unknown {
 /**
  * `postgres://<user>:<password>@<host>[:<port>]/<database>`の形のURLを読む。
  * userinfoとデータベース名の百分率符号化を戻す。形に合わないときと、符号化が壊れているときは`null`を返す。
+ * `?sslmode=`などの問い合わせ文字列があるときも`null`を返す。黙って捨てると、書いた接続の設定と違う接続になるため。
  */
 export function parsePgConnection(url: string): PgConnection | null {
   let parsed: URL;
@@ -172,6 +176,7 @@ export function parsePgConnection(url: string): PgConnection | null {
   }
   const database = parsed.pathname.replace(/^\//, "");
   if (
+    parsed.search !== "" ||
     parsed.hostname === "" ||
     parsed.username === "" ||
     database === "" ||
@@ -236,6 +241,22 @@ export function stateTarArgv(outputFile: string): string[] {
   ];
 }
 
+/**
+ * 補間していない`factory_config`の値から、残す世代の数(`backup_keep_generations`)を読む。
+ * 他の項目は検証しない。控えを書き終えた後に、関係のない項目の誤りでジョブを失敗にしないためである。
+ * 値が無ければ既定の数を返し、正の整数でないときと、設定がオブジェクトでないときは例外を投げる。
+ */
+export function keepGenerationsOf(rawConfig: unknown): number {
+  if (!isRecord(rawConfig)) {
+    throw new Error("factory_config is not an object");
+  }
+  return positiveIntegerField(
+    rawConfig,
+    "backup_keep_generations",
+    DEFAULT_KEEP_GENERATIONS,
+  );
+}
+
 /** 世代の`manifest.json`の中身を作る。 */
 export function buildManifest(input: {
   readonly generation: string;
@@ -261,19 +282,20 @@ export function describeCommandFailure(result: CommandFailure): string {
 }
 
 /**
- * `backup_failed`の通知の本文。段階と、原因の末尾を載せる。
- * 時刻は載せない。同じ原因が続く間、未解決の通知を1件にまとめるためである。
+ * 失敗の原因の末尾を、上限の文字数まで返す。ログに載せる長さをそろえる。
  * `detail`は、呼び出し側が秘密値を伏せてから渡す。
  */
-export function backupFailureMessage(
-  stage: BackupStage,
-  detail: string,
-): string {
+export function failureDetailTail(detail: string): string {
   const trimmed = detail.trim();
-  const tail =
-    trimmed.length > FAILURE_DETAIL_MAX_CHARS
-      ? trimmed.slice(-FAILURE_DETAIL_MAX_CHARS)
-      : trimmed;
-  const head = `夜間のバックアップが失敗しました。段階: ${stage}。`;
-  return tail === "" ? head : `${head}原因: ${tail}`;
+  return trimmed.length > FAILURE_DETAIL_MAX_CHARS
+    ? trimmed.slice(-FAILURE_DETAIL_MAX_CHARS)
+    : trimmed;
+}
+
+/**
+ * `backup_failed`の通知の本文。失敗した段階だけを載せ、原因はジョブのログに残す。
+ * 段階ごとに同じ文にする。同じ段階の失敗が続く間、`addNoticeUnlessUnresolved`が未解決の通知を1件にまとめるためである。
+ */
+export function backupFailureMessage(stage: BackupStage): string {
+  return `夜間のバックアップが${stage}の段階で失敗しました。原因はf/factory/backupのジョブのログにあります。次の操作: docs/operations.mdの「バックアップ」の段階ごとの表で原因を確かめて直し、Windmillの画面でf/factory/backupを実行して取り直してください。取り直しが成功したら、この通知を解決してください`;
 }

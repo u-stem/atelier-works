@@ -4406,7 +4406,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `deployed_sha_mismatch` | 自己更新が反映した版(`f/factory/deployed_sha`)が、self cloneのHEADに30分を超えて追いついていない。mergeの直後に反映を待つ間は通知しない。本文に、直近の反映の記録から読んだ原因の候補が付く。Windmillのdefaultのworkerが埋まって自己更新が待たされたときや、自己更新の実行が長引いて次の回が飛ばされたときは、反映が遅れただけでも通知されうる | 自己更新のジョブのログを確かめる。自己更新が反映に成功すると、その記録より前に作られたnoticeを、`poll_issues`が自動で解決する。人が解決しても、反映が止まっている限り、次の`poll_issues`で再び残る。本文が名指しする版が今の`f/factory/deployed_sha`と違い、自己更新が成功しているときは、反映と判定が重なって残ったnoticeなので、人が解決してよい。人が`f/factory/deployed_sha`を今のHEADへ手で書き換えて版を一致させたときや、自己更新が変数を更新した後に失敗して成功の行が作られなかったときも、止まっていた版を名指しするnoticeは自動では解決されないので、人が解決してよい([通知](internals/notifications.md)) |
 | `host_action_required` | 自己更新が反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。本文に、反映した版と変わったパスが載る。ホストで作業するまで、新しい構成は動かない。実装、PR修正、作業領域の掃除、CIの失敗を直す回の監視が、workerのイメージが古くて検査コマンドを実行できないと分かったときにも残す。そのときは本文に、イメージの満たさない前提(足りない道具、枠のユーザー、ベースのイメージが開いたままのパス)が載る。検査コマンドのある作業項目は、その間進まない([f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)) | ホスト側のcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。`mise run up`は、Caddyを再起動したうえで、そのcheckoutのHEADをworkerへ渡す。自己更新(2分ごと)が、通知の版がそのHEADと同じか祖先なら、または`infra/`と`mise.toml`の内容がそのHEADと同じなら、通知を自動で解決する。HEADを書けなかったとき(警告が出る)と、このスクリプトを持たない版から`mise run deploy`で取り込む最初の1回(`mise run deploy`はpullの前のタスク定義で動く)は、自動では解決されない。`mise run up`が済んでいれば人が解決してよい([ホスト側で反映するもの](#ホスト側で反映するもの))。イメージが古くて止まった作業項目は、通知が自動で解決されると自動で再開する。本文に反映した版が載らない通知は自動では解決されず再開もしないので、人が解決し、止まった作業項目を`retry_work_item`で再実行する |
 | `cleanup_db_failed` | 保持期間を過ぎたレコードの削除に失敗した | 内容を確かめる。次の日の掃除でやり直す |
-| `backup_failed` | 夜間のバックアップ(毎日02:30)が失敗した。本文に、失敗した段階と原因が載る。その日の世代は作られない。ジョブの失敗は、scheduleの失敗としてDiscordにも届く | [バックアップ](#バックアップ)の段階ごとの表で原因を確かめて直し、Windmillの画面で`f/factory/backup`を実行して取り直す。自動では解決されないので、取り直しが成功したら人が解決する |
+| `backup_failed` | 夜間のバックアップ(毎日02:30)が失敗した。本文に失敗した段階が載り、原因はジョブのログに出る。その日の世代は作られない。ジョブの失敗は、scheduleの失敗としてDiscordにも届く | [バックアップ](#バックアップ)の段階ごとの表で原因を確かめて直し、Windmillの画面で`f/factory/backup`を実行して取り直す。自動では解決されないので、取り直しが成功したら人が解決する |
 | `cleanup_worktrees_skipped` | 動いているPRの修正のブランチを確かめられず、そのリポジトリの作業領域の掃除を見送った | 次の日の掃除を待つ |
 | `cleanup_worktree_busy` | 終端の作業項目のworktreeを、使用中として消さなかった。原因は、残ったプロセスが使っていることか、検査用のユーザーからrootに戻せないことである。作業項目のID、worktreeのパス、理由が載る | 理由がプロセスなら、載ったプロセスを止める。rootに戻せないなら、[検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で片付ける。対処しない限り毎日の掃除で記録しようとするが、同じ本文の未解決のnoticeがあるあいだは新しく作らない。同じ通知が1件残り続ける |
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量。未解決は1件だけで、掃除のたびに本文と作成時刻が最新の測定に更新される。解決した後の掃除で、新しく1件作られる | 増え続けていないか見る |
@@ -6893,17 +6893,20 @@ mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker 
 ### 失敗したとき
 
 失敗すると、scriptは要対応の通知(`backup_failed`)を残し、ジョブを失敗にする。
-本文に、失敗した段階と原因が載る。
+本文には失敗した段階だけが載り、原因はジョブのログに出る。
+本文が段階ごとに同じなので、同じ段階の失敗が続く間、未解決の通知は1件にまとまる。
 ジョブの失敗は、scheduleの失敗の検出(`detect_schedule_failures`)がDiscordに知らせる。
 成功したときは通知しない。
+`tar`が、読んでいる間にファイルが変わったか消えたと報告したとき(終了コード1)は、失敗にしない。
+アーカイブは書けているので、ジョブのログに警告を出して先へ進む。
 
 | 段階 | よくある原因 | 確かめること |
 | --- | --- | --- |
-| `prepare` | `f/factory/db_backup_url`が無いか、URLの形でない | `mise run bootstrap`を実行したか |
+| `prepare` | `f/factory/db_backup_url`が無いか、URLの形でない。URLに`?sslmode=`などの問い合わせ文字列がある | `mise run bootstrap`を実行したか |
 | `pg_dumpall` | workerのイメージに`pg_dumpall`が無い。DBに接続できない | 更新の後に`mise run up`を実行したか。`db`が動いているか |
-| `tar` | `factory_state`を読めない | ジョブのログのtarのエラー |
+| `tar` | `factory_state`を読めない。tarが終了コード2以上で終わった | ジョブのログのtarのエラー |
 | `config`、`manifest`、`finalize` | 置き場に書けない。ディスクが足りない | ホストのディスクの空き |
-| `prune` | 古い世代を消せない | ジョブのログ。新しい世代は書けている |
+| `prune` | 古い世代を消せない。`backup_keep_generations`が正の整数でない | ジョブのログ。新しい世代は書けている |
 
 原因を直したら、Windmillの画面で`f/factory/backup`を実行して取り直す。
 取り直しが成功したら、Consoleで通知を解決する。
@@ -6994,19 +6997,32 @@ mise exec -- docker compose -p factory-restore -f infra/docker-compose.yml down 
    grep -v -x -F 'CREATE ROLE postgres;' <世代のディレクトリ>/cluster.sql | mise exec -- docker compose -f infra/docker-compose.yml exec -T db psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres
    ```
 
-6. `factory_state`に展開する。volumeが残っているときは、同じ名前のファイルを上書きする。
+6. superuserのパスワードを、今の`DB_PASSWORD`に合わせ直す。
+   `cluster.sql`は、控えを取ったときの`postgres`のパスワードを戻すためである。
+   その後に`DB_PASSWORD`を変えていると、次の`mise run up`が接続できない。
+   `<DB_PASSWORD>`は、`mise.local.toml`の`DB_PASSWORD`と同じ値に置き換える。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml run --rm --no-deps -T --entrypoint tar factory_state_init --no-same-owner -xf - -C /var/lib/factory < <世代のディレクトリ>/factory_state.tar
+   mise exec -- docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -c "ALTER ROLE postgres PASSWORD '<DB_PASSWORD>'"
    ```
 
-7. スタックを起動する。
+   このコマンドはパスワードをシェルの履歴に残す。
+   残したくないときは、`-T`を外して`psql -U postgres`を対話で開き、`\password postgres`で入れる。
+
+7. `factory_state`に展開する。volumeが残っているときは、同じ名前のファイルを上書きする。
+   `--pull missing`は、サービスの`pull_policy: always`を引き継がず、レジストリに問い合わせないために付ける。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml run --pull missing --rm --no-deps -T --entrypoint tar factory_state_init --no-same-owner -xf - -C /var/lib/factory < <世代のディレクトリ>/factory_state.tar
+   ```
+
+8. スタックを起動する。
 
    ```bash
    mise run up
    ```
 
-8. `factory_state`のvolumeも失っていたときは、人がworkerに入って使う`claude`と`gh`のログインをやり直す。
+9. `factory_state`のvolumeも失っていたときは、人がworkerに入って使う`claude`と`gh`のログインをやり直す。
 
 ### リハーサルの記録
 

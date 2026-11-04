@@ -209,7 +209,13 @@ describe("backup-restore.sh", () => {
 
   test("extracts the archive into factory_state without changing owners", () => {
     expect(run([gen]).calls).toContain(
-      `${PREFIX} run --rm --no-deps -T --entrypoint tar factory_state_init --no-same-owner -xf - -C /var/lib/factory`,
+      `${PREFIX} run --pull missing --rm --no-deps -T --entrypoint tar factory_state_init --no-same-owner -xf - -C /var/lib/factory`,
+    );
+  });
+
+  test("counts the requirements files without pulling the image", () => {
+    expect(run([gen]).calls).toContain(
+      `${PREFIX} run --pull missing --rm --no-deps -T --entrypoint find factory_state_init /var/lib/factory/requirements -type f`,
     );
   });
 

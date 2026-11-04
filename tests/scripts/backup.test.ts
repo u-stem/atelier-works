@@ -26,6 +26,12 @@ const SIZES: Readonly<Record<string, number>> = {
   "factory_state.tar": 2000,
   "factory_config.json": 300,
 };
+const RAW_CONFIG = {
+  owners: [],
+  discord: "$var:f/factory/discord_webhook_url",
+  backup_keep_generations: 2,
+};
+const TAR_CHANGED = "tar: ./requirements/a.md: file changed as we read it";
 const OK: CommandResult = {
   stdout: "",
   stderr: "",
@@ -45,6 +51,7 @@ type Calls = {
   readonly renamed: (readonly [string, string])[];
   readonly chmodded: (readonly [string, number])[];
   readonly notices: NoticeRecord[];
+  readonly logs: string[];
 };
 
 type Options = {
@@ -52,7 +59,11 @@ type Options = {
   readonly entries?: readonly string[];
   /** 失敗させるコマンドの名前(argv[0]の最後の要素)。 */
   readonly failing?: "pg_dumpall" | "tar";
+  /** 失敗させるコマンドの終了コード。既定は2。 */
+  readonly exitCode?: number;
   readonly stderr?: string;
+  /** 補間しない`factory_config`の値。既定は`RAW_CONFIG`。 */
+  readonly rawConfig?: unknown;
   readonly url?: string;
   /** `null`なら読み取りが例外になる。 */
   readonly deployedSha?: string | null;
@@ -72,6 +83,7 @@ function setup(options: Options): { io: BackupIo; calls: Calls } {
     renamed: [],
     chmodded: [],
     notices: [],
+    logs: [],
   };
   const names = new Set(options.entries ?? []);
   const io: BackupIo = {
@@ -81,7 +93,11 @@ function setup(options: Options): { io: BackupIo; calls: Calls } {
       calls.commands.push({ argv, options: runOptions });
       const failed = basename(argv[0] ?? "") === options.failing;
       return failed
-        ? { ...OK, exitCode: 1, stderr: options.stderr ?? "connection refused" }
+        ? {
+            ...OK,
+            exitCode: options.exitCode ?? 2,
+            stderr: options.stderr ?? "connection refused",
+          }
         : OK;
     },
     listDir: async () => [...names],
@@ -109,17 +125,14 @@ function setup(options: Options): { io: BackupIo; calls: Calls } {
       if (options.deployedSha === null) throw new Error("variable not found");
       return options.deployedSha ?? SHA;
     },
-    getRawConfig: async () => ({
-      owners: [],
-      discord: "$var:f/factory/discord_webhook_url",
-    }),
-    getKeepGenerations: async () => 2,
+    getRawConfig: async () =>
+      "rawConfig" in options ? options.rawConfig : RAW_CONFIG,
     addNotice: async (record) => {
       if (options.noticeFails === true) throw new Error("database is down");
       calls.notices.push(record);
       return 1;
     },
-    log: logger("test", { sink: () => undefined }),
+    log: logger("test", { sink: (line) => calls.logs.push(line) }),
   };
   return { io, calls };
 }
@@ -145,6 +158,13 @@ function argvOf(outcome: Outcome, index: number): readonly string[] {
 
 function writtenJson(outcome: Outcome, name: string): unknown {
   return JSON.parse(outcome.calls.written.get(`${PARTIAL}/${name}`) ?? "null");
+}
+
+// 指定した水準のログ行を、改行でつないで返す。
+function logged(outcome: Outcome, level: "warn" | "error"): string {
+  return outcome.calls.logs
+    .filter((line) => line.includes(`"level":"${level}"`))
+    .join("\n");
 }
 
 function stageOf(error: unknown): string | null {
@@ -200,6 +220,7 @@ describe("runBackup on success", () => {
     expect(writtenJson(await backup(), "factory_config.json")).toEqual({
       owners: [],
       discord: "<redacted>",
+      backup_keep_generations: 2,
     });
   });
 
@@ -262,6 +283,22 @@ describe("runBackup on success", () => {
     expect(outcome.calls.removed).toContain(`${ROOT}/20261101T173000Z`);
   });
 
+  test("keeps seven generations when backup_keep_generations is absent", async () => {
+    const outcome = await backup({
+      rawConfig: {},
+      entries: [
+        "20261027T173000Z",
+        "20261028T173000Z",
+        "20261029T173000Z",
+        "20261030T173000Z",
+        "20261031T173000Z",
+        "20261101T173000Z",
+        "20261102T173000Z",
+      ],
+    });
+    expect(outcome.result?.deleted).toEqual(["20261027T173000Z"]);
+  });
+
   test("leaves no notice", async () => {
     expect((await backup()).calls.notices).toEqual([]);
   });
@@ -283,11 +320,39 @@ describe("runBackup when pg_dumpall fails", () => {
     expect(outcome.calls.notices.map((n) => n.kind)).toEqual(["backup_failed"]);
   });
 
-  test("puts the stage and the cause into the notice", async () => {
+  test("puts only the stage into the notice", async () => {
     const outcome = await backup({ failing: "pg_dumpall" });
     expect(outcome.calls.notices[0]?.message).toBe(
-      backupFailureMessage("pg_dumpall", "exited with 1: connection refused"),
+      backupFailureMessage("pg_dumpall"),
     );
+  });
+
+  test("keeps the error output out of the notice", async () => {
+    const outcome = await backup({ failing: "pg_dumpall" });
+    expect(outcome.calls.notices[0]?.message).not.toContain(
+      "connection refused",
+    );
+  });
+
+  test("logs the error output", async () => {
+    const outcome = await backup({ failing: "pg_dumpall" });
+    expect(logged(outcome, "error")).toContain(
+      "exited with 2: connection refused",
+    );
+  });
+
+  test("keeps the password out of the log", async () => {
+    const outcome = await backup({
+      failing: "pg_dumpall",
+      stderr: `password ${PASSWORD} was rejected`,
+    });
+    expect(outcome.calls.logs.join("\n")).not.toContain(PASSWORD);
+  });
+
+  test("fails the job even when pg_dumpall exits with 1", async () => {
+    expect(
+      stageOf((await backup({ failing: "pg_dumpall", exitCode: 1 })).error),
+    ).toBe("pg_dumpall");
   });
 
   test("keeps the password out of the notice", async () => {
@@ -326,8 +391,55 @@ describe("runBackup when pg_dumpall fails", () => {
 });
 
 describe("runBackup when tar fails", () => {
-  test("fails the job at the tar stage", async () => {
-    expect(stageOf((await backup({ failing: "tar" })).error)).toBe("tar");
+  test("fails the job at the tar stage when tar exits with 2", async () => {
+    expect(stageOf((await backup({ failing: "tar", exitCode: 2 })).error)).toBe(
+      "tar",
+    );
+  });
+});
+
+describe("runBackup when tar sees files change while it reads them", () => {
+  test("still writes the generation", async () => {
+    const outcome = await backup({
+      failing: "tar",
+      exitCode: 1,
+      stderr: TAR_CHANGED,
+    });
+    expect(outcome.result?.generation).toBe(GENERATION);
+  });
+
+  test("logs a warning with the tar output", async () => {
+    const outcome = await backup({
+      failing: "tar",
+      exitCode: 1,
+      stderr: TAR_CHANGED,
+    });
+    expect(logged(outcome, "warn")).toContain("file changed as we read it");
+  });
+});
+
+describe("runBackup with an unrelated invalid field in factory_config", () => {
+  test("still writes the generation", async () => {
+    const outcome = await backup({
+      rawConfig: { ...RAW_CONFIG, max_turns: "many" },
+    });
+    expect(outcome.result?.generation).toBe(GENERATION);
+  });
+});
+
+describe("runBackup with an invalid backup_keep_generations", () => {
+  test("fails the job at the prune stage", async () => {
+    const outcome = await backup({
+      rawConfig: { ...RAW_CONFIG, backup_keep_generations: 0 },
+    });
+    expect(stageOf(outcome.error)).toBe("prune");
+  });
+
+  test("keeps the generation it wrote", async () => {
+    const outcome = await backup({
+      rawConfig: { ...RAW_CONFIG, backup_keep_generations: 0 },
+    });
+    expect(outcome.calls.renamed).toEqual([[PARTIAL, `${ROOT}/${GENERATION}`]]);
   });
 });
 

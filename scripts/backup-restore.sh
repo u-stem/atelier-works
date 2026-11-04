@@ -69,8 +69,9 @@ grep -v -x -F "${SKIP_LINE}" "${gen_dir}/cluster.sql" \
 
 # `factory_state_init`はケーパビリティをすべて落としているので、所有者だけが読めるホストのファイルを
 # bindで読めない。アーカイブは標準入力で渡す。所有者はコンテナのrootにそろえる。
+# サービスの`pull_policy: always`を引き継がないよう`--pull missing`を付け、レジストリに問い合わせない。
 log "extracting factory_state.tar"
-compose run --rm --no-deps -T --entrypoint tar factory_state_init \
+compose run --pull missing --rm --no-deps -T --entrypoint tar factory_state_init \
   --no-same-owner -xf - -C /var/lib/factory <"${gen_dir}/factory_state.tar"
 
 count_rows() {
@@ -79,7 +80,7 @@ count_rows() {
 }
 work_items="$(count_rows factory.work_items)"
 notices="$(count_rows factory.notices)"
-requirements="$(compose run --rm --no-deps -T --entrypoint find factory_state_init \
+requirements="$(compose run --pull missing --rm --no-deps -T --entrypoint find factory_state_init \
   /var/lib/factory/requirements -type f | wc -l | tr -d ' ')"
 
 printf 'factory.work_items rows: %s\n' "${work_items}"

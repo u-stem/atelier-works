@@ -1285,6 +1285,10 @@ scriptはURLを読み解き、接続の情報を環境変数(`PGPASSWORD`など)
 
 - `db_backup_url`は秘密の変数で、ワークスペースのどのscriptも読める。defaultのworkerのジョブはrootで動き、workerの環境変数`DATABASE_URL`からも同じ接続先に届くので、新しい経路ではない。
 - 控えは暗号化しない。控えの容量も監視しない。
+- `mise run backup:restore`は、クラスタ全体の複製を、使い捨てのプロジェクトの`factory-restore_*`のvolumeに残す。
+  複製は、Windmillの秘密を復号する鍵を含む。
+  `db`は`restart: unless-stopped`で動き続け、人が最後に出る`down -v`のコマンドを実行するまで残る。
+  残っていることを追う仕組みはない。
 
 ## Console用workerの境界
 

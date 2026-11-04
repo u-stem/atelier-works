@@ -5,8 +5,10 @@ import {
   buildManifest,
   commandEnv,
   describeCommandFailure,
+  failureDetailTail,
   generationName,
   isGenerationName,
+  keepGenerationsOf,
   PG_DUMPALL_BIN,
   parsePgConnection,
   partialName,
@@ -177,6 +179,7 @@ describe("parsePgConnection", () => {
     ["postgres://u:p@db/"],
     ["postgres://u:p@db/a/b"],
     ["postgres://u:%E0%A4%A@db/postgres"],
+    ["postgres://u:p@db/postgres?sslmode=require"],
   ])("returns null for %s", (url) => {
     expect(parsePgConnection(url)).toBeNull();
   });
@@ -272,20 +275,52 @@ describe("describeCommandFailure", () => {
   });
 });
 
+describe("keepGenerationsOf", () => {
+  test("reads backup_keep_generations", () => {
+    expect(keepGenerationsOf({ backup_keep_generations: 3 })).toBe(3);
+  });
+
+  test("defaults to seven generations", () => {
+    expect(keepGenerationsOf({})).toBe(7);
+  });
+
+  test("ignores an invalid unrelated field", () => {
+    expect(
+      keepGenerationsOf({ backup_keep_generations: 3, max_turns: "many" }),
+    ).toBe(3);
+  });
+
+  test("rejects a backup_keep_generations that is not a positive integer", () => {
+    expect(() => keepGenerationsOf({ backup_keep_generations: 0 })).toThrow(
+      "backup_keep_generations",
+    );
+  });
+
+  test("rejects a config that is not an object", () => {
+    expect(() => keepGenerationsOf("config")).toThrow(
+      "factory_config is not an object",
+    );
+  });
+});
+
+describe("failureDetailTail", () => {
+  test("keeps the end of a long detail", () => {
+    expect(failureDetailTail(`${"a".repeat(600)}END`)).toBe(
+      `${"a".repeat(497)}END`,
+    );
+  });
+
+  test("returns a short detail without its surrounding whitespace", () => {
+    expect(failureDetailTail("  exited with 2\n")).toBe("exited with 2");
+  });
+});
+
 describe("backupFailureMessage", () => {
   test("names the stage", () => {
-    expect(backupFailureMessage("tar", "exited with 2")).toContain("tar");
+    expect(backupFailureMessage("tar")).toContain("tarの段階で失敗しました");
   });
 
-  test("keeps the end of a long detail", () => {
-    expect(
-      backupFailureMessage("pg_dumpall", `${"a".repeat(600)}END`),
-    ).toContain(`${"a".repeat(497)}END`);
-  });
-
-  test("keeps no more than 500 characters of the detail", () => {
-    expect(
-      backupFailureMessage("pg_dumpall", `${"a".repeat(600)}END`),
-    ).not.toContain("a".repeat(498));
+  test("points to the job log for the cause", () => {
+    expect(backupFailureMessage("tar")).toContain("ジョブのログ");
   });
 });

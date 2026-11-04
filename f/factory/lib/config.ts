@@ -378,7 +378,7 @@ function optionalPositiveIntegerField(
 /**
  * `raw[field]`を返す。値が無ければ`fallback`を返し、正の整数でなければ例外を投げる。
  */
-function positiveIntegerField(
+export function positiveIntegerField(
   raw: Record<string, unknown>,
   field: string,
   fallback: number,
