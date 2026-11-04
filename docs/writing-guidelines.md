@@ -135,7 +135,7 @@ Claudeが生成する文章(要件定義書、監査レポートと改善提案�
 ### yomiyasuでの推敲
 
 `yomiyasu`スキルの検査は、ルートの`.yomiyasu-words/allow.txt`の語を見直しの候補から外す。
-足す語は、2つ以上の文書で同じ意味の技術用語として使っているものに限る。
+足す語は、2つ以上の文書で同じ意味の技術用語として使っているもの、または定着した言い回しに限る。
 警告を消すためだけには足さない。
 1行に1語で書く。
 
@@ -147,8 +147,14 @@ worktreeに置くと未追跡のファイルが残り、コミットに入った
 `--state-dir`は指定しない。
 既存のフォルダに向けると`.gitignore`が置かれず、写しが`git status`に出るためである。
 `.yomiyasu/`には、yomiyasuのスクリプト以外は書かない。
+`.yomiyasu`は、`.git/info/exclude`にもユーザーの除外の設定にも足さない。
+足すと、中に`.gitignore`の無い`.yomiyasu/`まで、片付けが消す側に入るためである。
 
-`.yomiyasu/`が残ったworktreeは、`mise run worktree:prune`では`ignored files`として残る。
+最上位の`.yomiyasu/`は、再生成できる成果物ではなく、消してよい検査の記録である。
+`mise run worktree:prune -- --apply`は、`.yomiyasu/`が残ったworktreeも、ほかの条件を満たせば消す。
+`mise run worktree:new`かWorktreeCreateフックでworktreeを作った後の自動の片付けも、確認なしで同じように消す。
+記録が消えるので、残したい原文と最終稿は、検査の後に`.yomiyasu/exports/`と`.yomiyasu/inputs/`から写しておく。
+写す先はworktreeの外で、worktreeが片付けの対象となる前に済ませる。
 
 ## エージェント向けの文書
 

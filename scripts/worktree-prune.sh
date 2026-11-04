@@ -26,8 +26,9 @@
 #   - HEADがブランチを指している(detachedは残す)。
 #   - 作業ツリーに変更も未追跡のファイルも無い。
 #   - 無視されたファイルが、再生成できるもの(node_modules、`.wmill`のリンク、`console/dist/`、
-#     `console/.cache/`、`__pycache__/`、`.DS_Store`)以外に無い。`git worktree remove`は無視された
-#     ファイルを黙って消すので、秘密値のローカルファイルなどを守るために残す(`ignored files`)。
+#     `console/.cache/`、`__pycache__/`、`.DS_Store`)と、消してよい検査の記録(最上位の
+#     `.yomiyasu/`の下で、`/`で終わらない1行で出るもの)以外に無い。`git worktree remove`は
+#     無視されたファイルを黙って消すので、秘密値のローカルファイルなどを守るために残す(`ignored files`)。
 #   - 使用中に見えない。使用中のworktreeはロックされるとは限らないため、ロックに頼らず、次の2つで調べる。
 #       `recent`: node_modulesと`.git`を除くファイルが、直近N分(既定120)以内に更新されている。
 #       `in use`: いずれかのプロセスのcwdがその中にある(`lsof`で調べる)。
@@ -572,6 +573,9 @@ resume_signals() {
 # 変更と未追跡のファイルは`dirty`、再生成できるもの以外の無視されたファイルは
 # `ignored files`として残す。再生成できるものは、node_modules、`.wmill`のリンク、
 # `console/dist/`、`console/.cache/`、`__pycache__/`、`.DS_Store`である。
+# 再生成できるものに加え、最上位の`.yomiyasu/`の下で`!! .yomiyasu/<パス>`と出る
+# 検査の記録も消してよい。無視の元(中の`.gitignore`、除外の設定)は問わない。
+# `/`で終わる1行(入れ子のリポジトリ)と、`.yomiyasu`そのものがリポジトリの行は残す。
 # `.wmill`は実体のディレクトリを許さない。ログインの情報が入りうるため。
 # 利用者の`status.showUntrackedFiles=no`で未追跡のファイルが隠れないよう、明示する。
 # 最初の検査と、削除の直前の再検査の両方が、この関数を通る。
@@ -586,6 +590,10 @@ check_blockers() {
   while IFS= read -r status_line; do
     case "$status_line" in
       "") ;;
+      # 最上位の`.yomiyasu/`の下の検査の記録。`/`で終わる行は、gitが入れ子のリポジトリと
+      # 認めたものなので残す。既存の許可より前に置き、入れ子の`node_modules/`などを通さない。
+      "!! .yomiyasu/" | "!! .yomiyasu/"*/) ignored=1 ;;
+      "!! .yomiyasu/"*) ;;
       "!! node_modules/"* | "!! "*"/node_modules/"*) ;;
       "!! .wmill") ;;
       "!! console/dist/"* | "!! console/.cache/"*) ;;
