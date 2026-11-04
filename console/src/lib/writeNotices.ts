@@ -9,6 +9,7 @@ import type {
   AuditSkipReason,
   ConfigUpdateRefusalReason,
   ConfigUpdateResult,
+  DeployDecideResult,
   FreezeReleaseResult,
   HoldPlaceRefusalReason,
   HoldPlaceResult,
@@ -241,6 +242,12 @@ export function describeFreezeReleaseResult(
       );
     }
   }
+}
+
+export function describeDeployDecideResult(
+  _result: DeployDecideResult,
+): WriteNotice {
+  return { tone: "info", message: "" };
 }
 
 const JOB_CANCEL_REFUSALS: Readonly<Record<JobCancelRefusalReason, string>> = {

@@ -10,6 +10,7 @@ import {
   STALE_LIST_NOTICE,
 } from "../lib/writeNotices.ts";
 import type {
+  DeployDecideResult,
   FreezeReleaseResult,
   HoldReleaseResult,
 } from "./guards/writeResults.ts";
@@ -17,7 +18,11 @@ import { holdsQueryKey } from "./holdsQueries.ts";
 import { systemStatusQueryKey } from "./systemQueries.ts";
 import { writeTargetKey } from "./writeLocks.ts";
 import type { WriteRunnerConfig } from "./writeRunner.ts";
-import { releaseFreeze, releaseHold } from "./writes.ts";
+import {
+  type DeployDecideInput,
+  releaseFreeze,
+  releaseHold,
+} from "./writes.ts";
 
 type ReleaseDeps<TInput, TResult> = {
   /** 結果と、一覧を読み直せなかったことを画面に残す。 */
@@ -41,6 +46,18 @@ export function holdReleaseConfig(
     onStale: () => {
       deps.onNotice(STALE_LIST_NOTICE);
     },
+  };
+}
+
+export function deployDecideConfig(
+  _deps: ReleaseDeps<DeployDecideInput, DeployDecideResult>,
+): WriteRunnerConfig<DeployDecideInput, DeployDecideResult> {
+  return {
+    keyOf: () => "",
+    run: () => Promise.resolve({ refused: true, reason: "not_pending" }),
+    invalidates: [],
+    onOutcome: () => undefined,
+    onStale: () => undefined,
   };
 }
 
