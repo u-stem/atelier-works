@@ -24,6 +24,8 @@ const CLUSTER = [
   "",
 ].join("\n");
 const ARCHIVE = "tar-bytes";
+const VOLUME_LS =
+  "volume ls -q --filter label=com.docker.compose.project=factory-restore";
 const DROP = `${PREFIX} exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres -c DROP DATABASE windmill`;
 const RESTORE = `${PREFIX} exec -T db psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres`;
 
@@ -43,9 +45,9 @@ afterEach(() => {
 });
 
 // 偽のdockerをPATHの先頭に置く。呼ばれるたびに引数を1行で残す。
-// `ps`には`leftover`を返し、行数の問い合わせとfindには決まった値を返し、
+// `ps`には`leftover`を、`volume ls`には`volumes`を返し、行数の問い合わせとfindには決まった値を返し、
 // tarとpsqlの標準入力はファイルに残す。
-function installDocker(leftover: string): void {
+function installDocker(leftover: string, volumes: string): void {
   const path = join(bin, "docker");
   writeFileSync(
     path,
@@ -54,13 +56,14 @@ function installDocker(leftover: string): void {
       `printf '%s\\n' "$*" >> '${join(bin, "calls")}'`,
       'case "$*" in',
       `  *" ps -a -q db") printf '%s' '${leftover}' ;;`,
+      `  "volume ls "*) printf '%s' '${volumes}' ;;`,
       '  *" pg_isready "*) exit 0 ;;',
       '  *"DROP DATABASE"*) : ;;',
       '  *"factory.work_items"*) echo 12 ;;',
       '  *"factory.notices"*) echo 3 ;;',
       `  *"--entrypoint find "*) printf '%s\\n' /var/lib/factory/requirements/a.md /var/lib/factory/requirements/b.md ;;`,
       `  *"--entrypoint tar "*) cat > '${join(bin, "tar-stdin")}' ;;`,
-      `  *" psql "*) cat > '${join(bin, "psql-stdin")}' ;;`,
+      `  *" psql "*) cat > '${join(bin, "psql-stdin")}'; echo set_config ;;`,
       "esac",
       "exit 0",
       "",
@@ -86,8 +89,8 @@ type Run = {
   readonly tarStdin: string;
 };
 
-function run(args: readonly string[], leftover = ""): Run {
-  installDocker(leftover);
+function run(args: readonly string[], leftover = "", volumes = ""): Run {
+  installDocker(leftover, volumes);
   const result = Bun.spawnSync([BASH, SCRIPT, ...args], {
     env: { PATH: `${bin}:/usr/bin:/bin` },
   });
@@ -137,11 +140,40 @@ describe("backup-restore.sh with a leftover throwaway project", () => {
   });
 });
 
+describe("backup-restore.sh with leftover volumes only", () => {
+  test("refuses to restore before starting anything", () => {
+    expect(
+      run([gen], "", "factory-restore_db_data").calls.filter((line) =>
+        line.includes(" up "),
+      ),
+    ).toEqual([]);
+  });
+
+  test("exits non-zero", () => {
+    expect(run([gen], "", "factory-restore_db_data").exitCode).not.toBe(0);
+  });
+});
+
 describe("backup-restore.sh", () => {
   test("runs every compose call in the throwaway project", () => {
     expect(
-      run([gen]).calls.filter((line) => !line.startsWith(`${PREFIX} `)),
+      run([gen]).calls.filter(
+        (line) => line !== VOLUME_LS && !line.startsWith(`${PREFIX} `),
+      ),
     ).toEqual([]);
+  });
+
+  test("checks for leftover volumes before starting the db", () => {
+    const calls = run([gen]).calls;
+    const check = calls.indexOf(VOLUME_LS);
+    expect([
+      check > -1,
+      check < calls.indexOf(`${PREFIX} up -d --wait db`),
+    ]).toEqual([true, true]);
+  });
+
+  test("keeps psql result tables off stdout", () => {
+    expect(run([gen]).stdout).not.toContain("set_config");
   });
 
   test("starts only the db service and waits until it is healthy", () => {

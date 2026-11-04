@@ -357,7 +357,7 @@ describe("the backup script definition", () => {
     expect("tag" in (await yamlOf("f/factory/backup.script.yaml"))).toBe(false);
   });
 
-  test("times out after an hour, past the two thirty-minute commands", async () => {
-    expect((await yamlOf("f/factory/backup.script.yaml")).timeout).toBe(3600);
+  test("leaves headroom past the two thirty-minute commands", async () => {
+    expect((await yamlOf("f/factory/backup.script.yaml")).timeout).toBe(3900);
   });
 });

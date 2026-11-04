@@ -38,8 +38,11 @@ compose() {
 }
 
 # 前の実行の残りに流し直すと、既にある行で止まるか、混ざった結果を数えるため、残りがあれば止まる。
+# コンテナが消えてもvolumeだけが残ることがあるので、volumeも調べる。
 [ -z "$(compose ps -a -q db)" ] \
   || die "the throwaway project ${PROJECT} already has a db container; remove it with: ${CLEANUP_COMMAND}"
+[ -z "$(docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}")" ] \
+  || die "the throwaway project ${PROJECT} already has volumes; remove them with: ${CLEANUP_COMMAND}"
 
 log "starting db in the throwaway project ${PROJECT}"
 compose up -d --wait db
@@ -62,7 +65,7 @@ compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres -c 'DROP D
 
 log "restoring cluster.sql"
 grep -v -x -F "${SKIP_LINE}" "${gen_dir}/cluster.sql" \
-  | compose exec -T db psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres
+  | compose exec -T db psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres >/dev/null
 
 # `factory_state_init`はケーパビリティをすべて落としているので、所有者だけが読めるホストのファイルを
 # bindで読めない。アーカイブは標準入力で渡す。所有者はコンテナのrootにそろえる。

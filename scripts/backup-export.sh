@@ -35,6 +35,7 @@ latest="$(printf '%s\n' "${names}" | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort | tai
 [ ! -e "${dest}/${latest}" ] || die "already exists: ${dest}/${latest}"
 
 log "copying ${latest} to ${dest}"
-compose cp "windmill_worker:${BACKUP_ROOT}/${latest}" "${dest}/${latest}"
+# 標準出力は写し先の1行だけにするので、composeの出力は標準エラーに回す。
+compose cp "windmill_worker:${BACKUP_ROOT}/${latest}" "${dest}/${latest}" >&2
 chmod -R go-rwx "${dest}/${latest}"
 printf '%s\n' "${dest}/${latest}"

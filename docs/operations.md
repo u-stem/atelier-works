@@ -6972,7 +6972,9 @@ mise exec -- docker compose -p factory-restore -f infra/docker-compose.yml down 
    mise run down
    ```
 
-3. `db_data`のvolumeを消す。
+3. `cluster.sql`と`factory_state.tar`がホストにあることを確かめてから、次へ進む。
+   `db_data`のvolumeを消す。
+   `infra`はcomposeのプロジェクト名で、composeのファイルに`name`がないので、ディレクトリの名前になる。
 
    ```bash
    docker volume rm infra_db_data

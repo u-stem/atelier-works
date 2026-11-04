@@ -7,4 +7,4 @@ schema:
   type: object
   properties: {}
   required: []
-timeout: 3600
+timeout: 3900
