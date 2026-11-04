@@ -1,0 +1,9 @@
+summary: '[LIB] 保護パスの変更の反映の判定'
+description: 内部ライブラリです。直接実行するものではありません。反映する範囲に保護パスの変更があるとき、人の承認があるまで反映を止める判定と、承認を求める通知の文を扱います。
+lock: '!inline f/factory/lib/deploy_gate.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
