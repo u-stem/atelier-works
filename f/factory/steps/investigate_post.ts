@@ -88,14 +88,13 @@ export type InvestigatePostDeps = {
 const SECRET_DETECTED: EscalationSpec = {
   note: "result withheld: secret detected",
   reason:
-    "調査の結果に秘密値の形の文字列が含まれていたため、結果を捨てて、投稿しませんでした。",
+    "調査の結果に秘密値の形の文字列が含まれていたため、投稿しませんでした。",
   nextAction: "依頼文を変えて投入し直してください。",
 };
 
 const SCAN_FAILED: EscalationSpec = {
   note: "result withheld: secret scan failed",
-  reason:
-    "調査の結果の秘密値の検査ができなかったため、結果を捨てて、投稿しませんでした。",
+  reason: "調査の結果の秘密値の検査ができなかったため、投稿しませんでした。",
   nextAction:
     "検査(gitleaks)が動くことを確かめ、依頼文を変えて投入し直してください。",
 };

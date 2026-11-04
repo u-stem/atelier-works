@@ -4,11 +4,14 @@
 //
 // 本文の組み立ては、次の順序で固定する。
 // 1. 生の出力にgitleaksを掛ける。検出か検査の失敗なら、本文を作らずに止める。
-// 2. 欄ごとに無害化し、worker保有の秘密値を完全一致で消す。
+// 2. 欄ごとに、完全一致のマスク、無害化、完全一致のマスクの順に掛ける。
+//    1回目は、欄の切り詰めが値を割る前に消すため。2回目は、無害化で見えない文字が消えてつながった値を消すため。
 // 3. 組み立てて長さに収め、最終の本文にgitleaksをもう一度掛ける。
-// 完全一致のマスクは第2層であり、保証ではない。形が秘密値でない本文や、値を変えて書かれた秘密値は消せない。
-// 保証は、生の出力と最終の本文の両方にgitleaksを掛けて、検出したら投稿しないことにある。
-//
+// 完全一致のマスクとgitleaksは、どちらも第2層である。形が秘密値でない本文や、値を変えて書かれた秘密値は消せない。
+// 最後に投稿を止める守りは、最終の本文のgitleaks検査である。
+// この検査の経路(`lib/ci_fix_round.ts`、`lib/workspace.ts`、`lib/log.ts`、`lib/github.ts`)は保護パスの外にあり、
+// 緩められても、保護されたテストは、偽の検査器を差し込むので落ちない。
+
 // 止めるときの理由と次の操作は、出力の本文を含まない固定の文にする。
 
 import type { ListQueueData } from "windmill-client@1.817.0";
@@ -249,7 +252,7 @@ function cutTo(text: string, maxChars: number): string {
 }
 
 /**
- * 調査の出力から、Issueに投稿する本文を作る。順序は、生の出力の検査、無害化、完全一致のマスク、組み立てと切り詰め、最終の本文の検査である。
+ * 調査の出力から、Issueに投稿する本文を作る。順序は、生の出力の検査、完全一致のマスク、無害化、完全一致のマスク、組み立てと切り詰め、最終の本文の検査である。
  * 検出か検査の失敗なら、本文を返さず、理由の符号だけを返す。出力の文は結果に載せない。
  * 本文は、投稿のときに付く目印を足しても`INVESTIGATE_COMMENT_MAX_CHARS`に収まる。
  */
@@ -261,7 +264,10 @@ export async function prepareInvestigateComment(
   if (rawOutcome !== "clean") return withheld(rawOutcome);
 
   const clean = (text: string, maxChars: number): string =>
-    maskSecrets(sanitizeUntrustedProse(text, maxChars), deps.secrets);
+    maskSecrets(
+      sanitizeUntrustedProse(maskSecrets(text, deps.secrets), maxChars),
+      deps.secrets,
+    );
   const full = renderBody(output, clean);
 
   const room =

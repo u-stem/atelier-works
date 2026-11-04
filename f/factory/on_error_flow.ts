@@ -178,7 +178,7 @@ export type FlowFailureDeps = {
   /** 同じPRに、置き換えた行か並走する行がPRレビューの他にあるか。 */
   readonly hasSupersedingPrReview: (id: number) => Promise<boolean>;
   /** 調査のフローの入力には作業項目のIDが無いので、ルートジョブIDで調査の行を引く。 */
-  readonly findInvestigationByFlowJobId?: (
+  readonly findInvestigationByFlowJobId: (
     flowJobId: string,
   ) => Promise<WorkItem | null>;
   readonly updateStatusIfLeaseHolder: (
@@ -244,11 +244,7 @@ export async function handleFlowFailure(
         ),
       });
     }
-  } else if (
-    path === INVESTIGATE_FLOW_PATH &&
-    input.rootJobId !== null &&
-    deps.findInvestigationByFlowJobId !== undefined
-  ) {
+  } else if (path === INVESTIGATE_FLOW_PATH && input.rootJobId !== null) {
     // 調査のフローの入力には作業項目のIDが無い。登録のstepが記録したルートジョブのIDで行を引く。
     try {
       item = await deps.findInvestigationByFlowJobId(

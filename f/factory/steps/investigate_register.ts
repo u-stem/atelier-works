@@ -4,8 +4,8 @@
 // Issueは、依頼文の出どころではなく、返信の宛先としてだけ使う。
 // 保護パスに置く。確認の順序や断りを緩めると、許可していないリポジトリや第三者のIssueの調査が通るため。
 //
-// 確認の順は、入力の形、リポジトリの許可とオーナーのID、調査の設定、Issue、隔離の測定、挿入である。
-// 設定が偽のときは、行を作らずに断る。Issueは、開いていて、PRでなく、作者が運用者のPATのアカウントであるものに限る。
+// 確認の順は、入力の形、調査の設定、リポジトリの許可とオーナーのID、Issue、隔離の測定、挿入である。
+// 設定が偽のときは、GitHubにもsecret変数にも触れず、行も作らずに断る。Issueは、開いていて、PRでなく、作者が運用者のPATのアカウントであるものに限る。
 // 第三者が書いたIssueの本文は、依頼文になる経路を持たないが、返信を受けるIssueとして選ぶことも断る。
 // 隔離の測定のジョブが待ちか実行中のときは断る。測定は調査のworktreeの置き場を空にするため。
 // 稼働中の調査が既にあるときは断る。調査は置き場の自分以外の項目を消すため、並行させない。
@@ -97,8 +97,8 @@ export type InvestigateRegisterDeps = {
     repo: string,
     number: number,
   ) => Promise<Issue>;
-  /** 運用者のPATのアカウントのログイン名。 */
-  readonly viewerLogin: string;
+  /** 運用者のPATのアカウントのログイン名。設定とリポジトリの確認を通った後に、1回だけ呼ぶ。 */
+  readonly getViewerLogin: () => Promise<string>;
   /** 隔離の測定のジョブが待ちか実行中か。 */
   readonly isProbeActive: () => Promise<boolean>;
   /** 稼働中の調査が無ければ挿入してIDを返し、あれば`null`を返す。 */
@@ -179,13 +179,13 @@ export async function registerInvestigation(
   const request = validRequest(input);
   if (request === null) return refused("invalid_input");
 
+  if (!deps.isEnabled()) return refused("investigation_disabled");
+
   if (!deps.isRepoAllowed(input.owner, input.repo)) {
     return refused("repo_not_allowed");
   }
   const ownerGate = await deps.verifyRepoOwner(input.owner, input.repo);
   if (!ownerGate.ok) return refused("owner_mismatch");
-
-  if (!deps.isEnabled()) return refused("investigation_disabled");
 
   let issue: Issue;
   try {
@@ -198,7 +198,8 @@ export async function registerInvestigation(
   if (!isSameRepository(repository, input)) return refused("repo_mismatch");
   if (issue.state !== "open") return refused("issue_closed");
   if (issue.isPullRequest) return refused("issue_is_pull_request");
-  if (!isOwnPost(issue.authorLogin, deps.viewerLogin)) {
+  const viewerLogin = await deps.getViewerLogin();
+  if (!isOwnPost(issue.authorLogin, viewerLogin)) {
     return refused("issue_author_not_operator");
   }
 
@@ -213,7 +214,7 @@ export async function registerInvestigation(
       issue_url: issue.htmlUrl,
       title: issue.title,
       body: request,
-      claimed_by: deps.viewerLogin,
+      claimed_by: viewerLogin,
       flow_job_id: input.flowJobId,
     });
   } catch (err) {
@@ -243,9 +244,14 @@ export async function main(
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
-  const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
-  const viewer = await getViewer(client);
+  // 設定が偽のときにsecret変数を読まないよう、トークンは使うときに初めて読む。
+  let clientPromise: Promise<GhClient> | undefined;
+  const client = (): Promise<GhClient> => {
+    clientPromise ??= wmill
+      .getVariable("f/factory/github_token")
+      .then((ghToken) => ({ run: runCommand, ghToken }));
+    return clientPromise;
+  };
   const workspace = wmillDefault.getWorkspace();
 
   const result = await registerInvestigation(
@@ -254,16 +260,18 @@ export async function main(
       isRepoAllowed: (candidateOwner, candidateRepo) =>
         isRepoAllowed(config, candidateOwner, candidateRepo),
       verifyRepoOwner: (candidateOwner, candidateRepo) =>
-        verifyRepoOwnerId(
-          config,
-          candidateOwner,
-          candidateRepo,
-          repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+        client().then((ghClient) =>
+          verifyRepoOwnerId(
+            config,
+            candidateOwner,
+            candidateRepo,
+            repoOwnerGateDeps(ghClient, addNoticeUnlessUnresolved),
+          ),
         ),
       isEnabled: () => config.investigate_enabled,
-      getIssue: (issueOwner, issueRepo, number) =>
-        getIssue(client, issueOwner, issueRepo, number),
-      viewerLogin: viewer.login,
+      getIssue: async (issueOwner, issueRepo, number) =>
+        getIssue(await client(), issueOwner, issueRepo, number),
+      getViewerLogin: async () => (await getViewer(await client())).login,
       isProbeActive: () =>
         isProbeJobActive({
           workspace,

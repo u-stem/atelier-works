@@ -9,7 +9,7 @@
 // 3. 隔離の関門を呼ぶ。閉じていれば、置き場にも作業ツリーにも触れず、`needs_human`にして止める。
 // 4. 置き場の自分以外の項目をすべて消す。調査は互いの作業ツリーを消すので、手順2で並行を断っている。
 // 5. 作業ツリーを作り、指示と設定の項目を無効にする。
-// 6. 起動の直前に、関門をもう一度呼ぶ。手順3の後で隔離が変わっていたら、起動しない。
+// 6. 起動の直前に、設定を読み直し、関門をもう一度呼ぶ。手順1や3の後で設定か隔離が変わっていたら、起動しない。
 // 7. 調査のClaudeを起動する。実行の記録は残す。
 // 8. 成否にかかわらず、作業ツリーを消す。
 // 関門の証拠は、同じプロセスの中でしか使えないので、関門の呼び出しと起動は、このstepに置く。
@@ -204,6 +204,11 @@ export async function runInvestigateGenerate(
     const systemPrompt = await deps.buildSystemPrompt();
     try {
       const oauthToken = await deps.readOauthToken();
+      // 起動の直前に、設定ももう一度読む。掃除と作業ツリーの作成の間に止められたら、起動しない。
+      if (!(await deps.readEnabled())) {
+        await deps.cancel();
+        return skipped("disabled");
+      }
       const proof = await checkProofOrClose(deps, item);
       if ("closed" in proof) return proof.closed;
       const result = await deps.launch({
