@@ -1,19 +1,19 @@
-summary: ''
-description: ''
+summary: '[OP-1-5/4] 結果を無害化し、秘密値を検査して、Issueへ投稿'
+description: 調査のフローの4番目のステップです。投稿先のIssueを確かめ、結果を無害化して秘密値を検査し、通ったときだけIssueにコメントします。検出または検査の失敗では、結果を捨てて人に回します。
 lock: '!inline f/factory/steps/investigate_post.script.lock'
 kind: script
 schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    _output:
+    output:
       type: object
       description: ''
       default: null
       format: resource-record
-    _work_item_id:
+    work_item_id:
       type: number
       description: ''
       default: null
   required:
-    - _work_item_id
+    - work_item_id

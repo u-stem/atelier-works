@@ -1,32 +1,32 @@
-summary: ''
-description: ''
+summary: '[OP-1-5/3] 隔離を確かめ、読み出し専用のClaudeで調査'
+description: 調査のフローの3番目のステップです。設定、排他、隔離の関門を確かめてから、置き場を掃除して作業ツリーを作り、読み出し専用のClaudeで調べます。関門が閉じているときは、起動せずに人に回します。
 lock: '!inline f/factory/steps/investigate_generate.script.lock'
 kind: script
 schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    _factory_clone_dir:
+    factory_clone_dir:
       type: string
       description: ''
       default: null
       originalType: string
-    _repo_dir:
+    repo_dir:
       type: string
       description: ''
       default: null
       originalType: string
-    _sha:
+    sha:
       type: string
       description: ''
       default: null
       originalType: string
-    _work_item_id:
+    work_item_id:
       type: number
       description: ''
       default: null
   required:
-    - _work_item_id
-    - _repo_dir
-    - _sha
-    - _factory_clone_dir
+    - work_item_id
+    - repo_dir
+    - sha
+    - factory_clone_dir

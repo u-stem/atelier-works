@@ -1,32 +1,32 @@
-summary: ''
-description: ''
+summary: '[OP-1-5/1] 対象と依頼文を確かめて調査を登録'
+description: 調査のフローの1番目のステップです。入力の形、リポジトリの許可、調査の設定、対象のIssue、隔離の測定のジョブ、稼働中の調査を確かめ、通れば調査の作業項目を登録します。断るときは行を作らず、理由の符号を返します。
 lock: '!inline f/factory/steps/investigate_register.script.lock'
 kind: script
 schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    _issue_number:
+    issue_number:
       type: number
       description: ''
       default: null
-    _owner:
+    owner:
       type: string
       description: ''
       default: null
       originalType: string
-    _repo:
+    repo:
       type: string
       description: ''
       default: null
       originalType: string
-    _request:
+    request:
       type: string
       description: ''
       default: null
       originalType: string
   required:
-    - _owner
-    - _repo
-    - _issue_number
-    - _request
+    - owner
+    - repo
+    - issue_number
+    - request

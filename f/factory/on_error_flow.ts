@@ -9,6 +9,7 @@
 // 受け取るが、渡さないフローもあるので省略できる。
 // `path`がpipeline、設計、調査のいずれかのときは、`flow_job_id`がこの実行のルートジョブIDと一致するときだけ`failed`にする(`shouldMarkFailed`)。
 // 調査のフローは、稼働中(`investigating`)の調査の作業項目だけを`failed`にする。
+// 調査のフローの入力には`work_item_id`が無いので、調査のときは、ルートジョブIDで行を引く。
 //
 // `pipeline_generate`の失敗も、自分で終了処理をせずここに集める。
 // `retry_work_item`が行う状態やラベルの管理と干渉しないため。
@@ -28,6 +29,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
+  getInvestigateWorkItemByFlowJobId,
   getWorkItem,
   hasSupersedingPrReview,
   recordFailure,
@@ -242,9 +244,28 @@ export async function handleFlowFailure(
         ),
       });
     }
+  } else if (
+    path === INVESTIGATE_FLOW_PATH &&
+    input.rootJobId !== null &&
+    deps.findInvestigationByFlowJobId !== undefined
+  ) {
+    // 調査のフローの入力には作業項目のIDが無い。登録のstepが記録したルートジョブのIDで行を引く。
+    try {
+      item = await deps.findInvestigationByFlowJobId(
+        input.rootJobId.toLowerCase(),
+      );
+    } catch (fetchErr) {
+      log.error("failed to fetch the investigation by its flow job id", {
+        root_job_id: input.rootJobId,
+        error: maskSecrets(
+          fetchErr instanceof Error ? fetchErr.message : String(fetchErr),
+        ),
+      });
+    }
   }
 
-  const workItemRef = failureWorkItemRef(item, work_item_id);
+  const requestedId = work_item_id ?? item?.id;
+  const workItemRef = failureWorkItemRef(item, requestedId);
   const recordedError =
     work_item_id !== undefined && workItemRef === null
       ? `${message} (work_item_id ${work_item_id}: no matching row)`
@@ -402,6 +423,8 @@ export async function main(
   await handleFlowFailure(
     {
       getWorkItem: (id) => getWorkItem(id),
+      findInvestigationByFlowJobId: (flowJobId) =>
+        getInvestigateWorkItemByFlowJobId(flowJobId),
       hasSupersedingPrReview: (id) => hasSupersedingPrReview(id),
       recordFailure: (record) => recordFailure(record),
       updateStatusIfLeaseHolder: (id, from, to, flowJobId, note) =>

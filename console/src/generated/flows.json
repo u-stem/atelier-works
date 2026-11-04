@@ -220,6 +220,40 @@
       ]
     },
     {
+      "name": "investigate",
+      "summary": "調査(実装せずに調べて、結果をIssueのコメントで返す)",
+      "description": "依頼文に沿って、リポジトリを実装せずに調べ、結果を依頼したIssueのコメントで返します。手動で実行します。対象のIssueは、開いていて、作者が運用者のPATのアカウントであるものに限ります。登録のstepが、調査の設定、稼働中の調査、隔離の測定のジョブを確かめ、断るときは行を作りません。生成のstepは、隔離の測定に合格しているときだけ、読み出し専用のClaudeを起動します。結果は、無害化と秘密値の検査を通ったときだけ投稿されます。失敗はIssueには書かず、DiscordとConsoleで知らせます。",
+      "steps": [
+        {
+          "id": "investigate_register",
+          "summary": "対象と依頼文を確かめて調査を登録",
+          "scriptPath": "f/factory/steps/investigate_register",
+          "conditional": false
+        },
+        {
+          "id": "investigate_prepare",
+          "summary": "設定、予算、時間を確かめ、調べるコミットを決める",
+          "scriptPath": "f/factory/steps/investigate_prepare",
+          "conditional": true
+        },
+        {
+          "id": "investigate_generate",
+          "summary": "隔離を確かめ、読み出し専用のClaudeで調査",
+          "scriptPath": "f/factory/steps/investigate_generate",
+          "conditional": true
+        },
+        {
+          "id": "investigate_post",
+          "summary": "結果を無害化し、秘密値を検査して、Issueへ投稿",
+          "scriptPath": "f/factory/steps/investigate_post",
+          "conditional": true
+        }
+      ],
+      "entries": [],
+      "unwiredEntries": [],
+      "exits": []
+    },
+    {
       "name": "manual_intake",
       "summary": "手動投入フォーム(Issueを作成して工程に乗せる)",
       "description": "手動でタスクを投入するためのフォームです。入力内容をもとにGitHub Issueを作成します。通常の進め方は、担当を確定して要件定義の生成を開始します。承認を省く進め方は、ラベルなしでIssueを作り、承認の行を作らずに実装を開始します。",

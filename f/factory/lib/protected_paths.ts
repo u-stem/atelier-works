@@ -29,6 +29,7 @@ export type ChangedPath = {
  * 検証をすり抜けた内容が運用者のブラウザに配信される。
  * `f/factory/dependabot__flow/`も含める。dependabotの更新を自動でマージするフローで、
  * `flow.yaml`に加えて、フローに埋め込むモジュールも書き換えられると、許可していない更新をマージできる。
+ * `f/factory/investigate__flow/`も含める。調査の入口のフローで、`flow.yaml`にinline scriptを混ぜられると、関門を通らずにClaudeを起動できる。
  * `f/factory/investigate_isolation_probe.`も含める。調査のClaudeの隔離の測定のscriptで、関門はこのscriptの完了ジョブの結果を信頼する。
  * 拡張子を問わない前方一致にして、`.ts`、`.script.yaml`、`.script.lock`、`.schedule.yaml`をまとめて塞ぐ。
  * 書き換えられると、隔離に合格していない測定が合格の結果を返せる。測定のscriptに隣り合う名前も、先に押さえる。
@@ -54,6 +55,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   "infra/console_fetcher/",
   "f/factory/dependabot__flow/",
   "f/factory/pr_review_intake__flow/",
+  "f/factory/investigate__flow/",
   "f/factory/investigate_isolation_probe.",
   "scripts/host_apply/",
   "infra/worker/",
@@ -275,6 +277,14 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 稼働中の調査を全体で1件にする部分一意インデックスのmigration2本と、それを固定するテスト(`tests/scripts/investigate_singleton_migration.test.ts`)も守る。
  * 調査は置き場の自分以外の項目をすべて消すので、索引が外れると、調査が並行して互いのworktreeを消し合う。
  * 登録の挿入文(`lib/db.ts`)は守らない。日常的に直すファイルの中にあり、述語の一致をこのテストが固定するためである。
+ * 調査の入口も守る。登録、準備、生成、投稿の4つのstep(`steps/investigate_*.ts`)、本文の無害化と秘密値の検査を持つ支援のlib(`lib/investigate_flow.ts`)、
+ * それぞれの`.script.yaml`、6つの固定のテスト(`tests/scripts/investigate_{register,prepare,generate,post,flow}.test.ts`、`tests/lib/investigate_flow.test.ts`)、
+ * テストが共有する部品(`tests/lib/investigateTestSupport.ts`)である。フロー(`investigate__flow/`)は前方一致で守る。
+ * 調査の設定の再確認、排他の確認、関門、掃除、起動の順序は生成のstepにあり、無害化と秘密値の検査は投稿のstepと支援のlibにある。
+ * 書き換えられると、止めたはずの調査が動いたり、隔離の測定に合格していない隔離でClaudeが起動したり、
+ * 調査の出力に紛れた秘密値が、検査を通らずにIssueへ投稿されたりする。
+ * 一方、`lib/db.ts`の調査の関数と`on_error_flow.ts`の調査の分岐は守らない。日常的に直すファイルの中にあり、述語と分岐をテストが固定するためである。
+ * 5つの`.script.lock`は守らない。`windmill-client`を含みうるlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
  * 全体のカバレッジの下限を縛る検査(`scripts/check-coverage.ts`)とそのテスト(`tests/scripts/check_coverage.test.ts`)も守る。
  * 下限の定数と対象の定義がこの1か所にあり、書き換えられると、カバレッジが下がっても検査を通せる。
  */
@@ -416,6 +426,23 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/investigate_isolation_judge.script.yaml",
   "tests/lib/investigate_isolation_judge.test.ts",
   "tests/scripts/investigate_isolation_probe.test.ts",
+  "f/factory/steps/investigate_register.ts",
+  "f/factory/steps/investigate_register.script.yaml",
+  "f/factory/steps/investigate_prepare.ts",
+  "f/factory/steps/investigate_prepare.script.yaml",
+  "f/factory/steps/investigate_generate.ts",
+  "f/factory/steps/investigate_generate.script.yaml",
+  "f/factory/steps/investigate_post.ts",
+  "f/factory/steps/investigate_post.script.yaml",
+  "f/factory/lib/investigate_flow.ts",
+  "f/factory/lib/investigate_flow.script.yaml",
+  "tests/lib/investigate_flow.test.ts",
+  "tests/lib/investigateTestSupport.ts",
+  "tests/scripts/investigate_register.test.ts",
+  "tests/scripts/investigate_prepare.test.ts",
+  "tests/scripts/investigate_generate.test.ts",
+  "tests/scripts/investigate_post.test.ts",
+  "tests/scripts/investigate_flow.test.ts",
   "scripts/test-db-holds.ts",
   "scripts/hold.ts",
   "scripts/hold_psql.ts",

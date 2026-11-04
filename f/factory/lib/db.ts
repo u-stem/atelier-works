@@ -6466,19 +6466,40 @@ export async function hasInvestigatingWorkItem(
   return rows.length > 0;
 }
 
-/** 実装は次のコミットで行う。 */
+/**
+ * 稼働中(`investigating`)の調査のIDを、最大2件返す。読み取りだけを行う。
+ * 部分一意インデックスで1件までのはずだが、調査のClaudeを起動する前に、自分の他にいないことを行そのもので確かめる。
+ * 2件あれば、他にいると分かる。
+ */
 export async function listInvestigatingWorkItemIds(
-  _sql: SqlClient = defaultSqlClient,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<number[]> {
-  return [];
+  const rows = await sql`
+    SELECT id FROM factory.work_items
+    WHERE kind = 'investigate' AND status = 'investigating'
+    ORDER BY id
+    LIMIT 2
+  `.fetch();
+  return rows.map((row) => parseId(row.id, "id"));
 }
 
-/** 実装は次のコミットで行う。 */
+/**
+ * フローのルートジョブのIDが`flowJobId`の、調査の作業項目を返す。無ければ`null`。読み取りだけを行う。
+ * 調査のフローの入力には作業項目のIDが無いので、失敗の処理がこれで行を引く。
+ * 登録のstepが、挿入と同時にルートジョブのIDを記録する。
+ */
 export async function getInvestigateWorkItemByFlowJobId(
-  _flowJobId: string,
-  _sql: SqlClient = defaultSqlClient,
+  flowJobId: string,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<WorkItem | null> {
-  return null;
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE kind = 'investigate' AND flow_job_id = ${flowJobId}::text
+    ORDER BY id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toWorkItem(row);
 }
 
 // ---------------------------------------------------------------------------

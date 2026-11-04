@@ -387,6 +387,7 @@ Consoleの一覧と集計は次のviewを読む。
 | --- | --- | --- |
 | `manual_intake` | `manual_intake_submit`(Consoleの新規投入)、人がフォームから実行 | 手動投入フォーム(Issueを作成して工程に乗せる) |
 | `pr_review_intake` | `pr_review_submit`(ConsoleのPRレビューの投入)、人がフォームから実行 | PRレビューの投入フォーム(PRを確かめてレビューを始める) |
+| `investigate` | なし | 調査(実装せずに調べて、結果をIssueのコメントで返す) |
 | `pipeline` | `design_apply`(Consoleの承認と却下)、`design_generate`、`implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
 | `design` | `design_apply`(Consoleの承認と却下)、`implement_finish`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 設計書の生成と承認 |
 | `pr_review` | `auto_retry_pr_review`、`poll_prs`、`pr_review_intake_register`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
@@ -642,6 +643,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/investigate_isolation` | script | [LIB] 調査のClaudeの隔離の定数 |
 | `f/factory/lib/investigate_claude` | script | [LIB] 調査のClaudeを隔離して起動する |
 | `f/factory/lib/investigate_workspace` | script | [LIB] 調査のworktreeの置き場 |
+| `f/factory/lib/investigate_flow` | script | [LIB] 調査のフローの出力の形と本文の組み立て |
 | `f/factory/lib/investigate_gate` | script | [LIB] 調査の入口を開ける門 |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/lib/profile_upgrade` | script | [LIB] 進め方を通常に戻したことのIssueへのコメント |
@@ -661,6 +663,11 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/pr_review_intake` | flow | [OP-1-3] PRレビューの投入フォーム(PRを確かめてレビューを始める) |
 | `f/factory/steps/pr_review_intake_register` | script | [OP-1-3/1] PRを確かめてレビューを登録 |
 | `f/factory/pr_review_submit` | script | [OP-1-4] PRのレビューをConsoleから受け付ける |
+| `f/factory/investigate` | flow | [OP-1-5] 調査(実装せずに調べて、結果をIssueのコメントで返す) |
+| `f/factory/steps/investigate_register` | script | [OP-1-5/1] 対象と依頼文を確かめて調査を登録 |
+| `f/factory/steps/investigate_prepare` | script | [OP-1-5/2] 設定、予算、時間を確かめ、調べるコミットを決める |
+| `f/factory/steps/investigate_generate` | script | [OP-1-5/3] 隔離を確かめ、読み出し専用のClaudeで調査 |
+| `f/factory/steps/investigate_post` | script | [OP-1-5/4] 結果を無害化し、秘密値を検査して、Issueへ投稿 |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
 | `f/factory/investigate_isolation_probe` | script | [OP-2-11] 調査のClaudeの隔離を、読み出しと探索で測定して判定 |
@@ -1027,11 +1034,25 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 
 `audit`フローは、証跡をまとめた資料(証跡パック)を作り、headless Claudeに監査レポートと改善提案を書かせる。提案は人が承認したものだけが、Factory自身のリポジトリ(`factory_repo`)にIssueとして起票される。起動の条件、期間、検査は[監査の内部仕様](internals/audit.md)に書く。
 
+## 調査
+
+調査(`investigate`)は、実装せずにリポジトリを調べて、結果を依頼したIssueのコメントで返す。
+`investigate`フローは、運用者がWindmillから直接実行する。入口を開ける設定`investigate_enabled`の既定は偽である。
+
+フローは4つのstepで進む。
+
+1. 登録: 入力、リポジトリの許可、設定、Issue、隔離の測定、稼働中の調査を確かめて、作業項目を作る。
+2. 準備: 設定の読み直し、予算と時間の確認をして、調べるコミットを決める。
+3. 生成: 隔離の関門を確かめて、読み出し専用のClaudeで調べる。
+4. 投稿: 結果を無害化し、秘密値を検査して、Issueへ投稿する。
+
+手順は[運用](operations.md#調査を実行する)に、隔離と投稿の前の検査は[セキュリティ](security.md#調査の入口)に、状態の動きは[作業項目の状態とリース](internals/work-items.md#調査の作業項目)に書く。
+
 ## 未実装の機能
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
-- 調査(`investigate`)の作業項目を作る入口と、調べて答えを返す実行。種別、状態、一意インデックス、照合の分岐、Consoleの表示と、Claudeの隔離の起動、合格の証拠と関門、入口を開ける設定の門、worktreeの置き場だけがある([調査の隔離](security.md#調査の隔離))
+- 調査(`investigate`)の、新規投入の入口、Consoleの投入フォームと表示と取り消し、置き場の定期的な掃除、孤児の扱いの拡張、隔離の測定の定期実行。Windmillから直接実行するフロー`f/factory/investigate`だけがある([調査を実行する](operations.md#調査を実行する)、[調査の隔離](security.md#調査の隔離))
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。
