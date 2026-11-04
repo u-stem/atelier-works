@@ -1,8 +1,9 @@
-// 保留と凍結の解除を、書き込みの共通の流れ(`writeRunner.ts`)に載せる設定。
+// 保留と凍結の解除と、反映の判断を、書き込みの共通の流れ(`writeRunner.ts`)に載せる設定。
 // 対象ごとにロックし、解除の後は、保留と凍結の取得と、解除の通知が出るシステムの状態を読み直す。
 // 結果の知らせは`onNotice`に渡す。
 
 import {
+  describeDeployDecideResult,
   describeFreezeReleaseResult,
   describeHoldReleaseResult,
   type ReleaseNotice,
@@ -20,6 +21,7 @@ import { writeTargetKey } from "./writeLocks.ts";
 import type { WriteRunnerConfig } from "./writeRunner.ts";
 import {
   type DeployDecideInput,
+  decideDeploy,
   releaseFreeze,
   releaseHold,
 } from "./writes.ts";
@@ -49,18 +51,6 @@ export function holdReleaseConfig(
   };
 }
 
-export function deployDecideConfig(
-  _deps: ReleaseDeps<DeployDecideInput, DeployDecideResult>,
-): WriteRunnerConfig<DeployDecideInput, DeployDecideResult> {
-  return {
-    keyOf: () => "",
-    run: () => Promise.resolve({ refused: true, reason: "not_pending" }),
-    invalidates: [],
-    onOutcome: () => undefined,
-    onStale: () => undefined,
-  };
-}
-
 export function freezeReleaseConfig(
   deps: ReleaseDeps<string, FreezeReleaseResult>,
 ): WriteRunnerConfig<string, FreezeReleaseResult> {
@@ -70,6 +60,23 @@ export function freezeReleaseConfig(
     invalidates: INVALIDATES,
     onOutcome: (outcome) => {
       deps.onNotice(releaseNotice(outcome, describeFreezeReleaseResult));
+    },
+    onStale: () => {
+      deps.onNotice(STALE_LIST_NOTICE);
+    },
+  };
+}
+
+/** 反映の判断。承認と却下は同じ版のキーでロックし、判断の後は保留と凍結の取得を読み直す。 */
+export function deployDecideConfig(
+  deps: ReleaseDeps<DeployDecideInput, DeployDecideResult>,
+): WriteRunnerConfig<DeployDecideInput, DeployDecideResult> {
+  return {
+    keyOf: (input) => writeTargetKey("deploy", input.sha),
+    run: deps.run ?? ((input) => decideDeploy(input)),
+    invalidates: INVALIDATES,
+    onOutcome: (outcome) => {
+      deps.onNotice(releaseNotice(outcome, describeDeployDecideResult));
     },
     onStale: () => {
       deps.onNotice(STALE_LIST_NOTICE);

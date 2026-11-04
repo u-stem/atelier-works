@@ -244,10 +244,53 @@ export function describeFreezeReleaseResult(
   }
 }
 
+const DEPLOY_DECIDE_REFUSAL_NOTICES: Readonly<
+  Record<Extract<DeployDecideResult, { refused: true }>["reason"], WriteNotice>
+> = {
+  invalid_sha: {
+    tone: "warning",
+    message: "送った版が正しくありません。一覧を読み直してください。",
+  },
+  invalid_decision: {
+    tone: "warning",
+    message: "送った判断が正しくありません。一覧を読み直してください。",
+  },
+  not_pending: {
+    tone: "info",
+    message:
+      "この版はもう承認待ちではありません(判断済みか、新しい版の承認待ちに替わりました)。一覧を読み直してください。",
+  },
+  actor_unknown: {
+    tone: "warning",
+    message:
+      "操作者を確かめられないため、判断を記録しませんでした。ログインし直してください。",
+  },
+  audit_unavailable: {
+    tone: "warning",
+    message:
+      "操作の記録を残せないため、判断を記録しませんでした。時間をおいてやり直してください。",
+  },
+};
+
+/** 反映の判断の結果の知らせ。承認では反映の時期を、却下では戻し方を伝える。 */
 export function describeDeployDecideResult(
-  _result: DeployDecideResult,
+  result: DeployDecideResult,
 ): WriteNotice {
-  return { tone: "info", message: "" };
+  if (result.refused) {
+    return DEPLOY_DECIDE_REFUSAL_NOTICES[result.reason];
+  }
+  const message =
+    result.decision === "approved"
+      ? "反映を承認しました。次の自己更新(2分以内)が反映します。"
+      : "反映を却下しました。mainへ戻すPRをマージするまで、反映は止まったままです。";
+  const notice: WriteNotice =
+    result.notice === "failed"
+      ? {
+          tone: "warning",
+          message: `${message}ただし、判断の記録(通知)を残せませんでした。誰が判断したかは、ジョブの記録で確かめてください。`,
+        }
+      : { tone: "success", message };
+  return noteActionAudit(notice, result.action_audit);
 }
 
 const JOB_CANCEL_REFUSALS: Readonly<Record<JobCancelRefusalReason, string>> = {
