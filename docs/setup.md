@@ -180,7 +180,7 @@ mise run instance:tags
 pre-pushは、全体の`mise run check`を実行しない。
 CIの`check`ジョブと`check-docs`ジョブが同じ検査を動かし、管理者の迂回を使わない限り、`main`の必須チェックとしてマージの前に止めるためである。
 必須チェックと迂回は[セキュリティ](security.md#mainの保護とリポジトリの公開)に書く。
-クラウドやheadlessの実行は、CIを待たずに壊れた変更を見つけるため、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)に従い、pushの前に`mise run check`を実行する。
+クラウドやheadlessの実行は、CIを待たずに壊れた変更を見つけるため、pushの前に`mise run check`を実行する。
 
 メタデータの作り直しと検査は、ローカルのWindmillに接続する。`mise run up`でスタックを起動しておく。手で実行するときは`mise run metadata`と`mise run metadata:check`を使う。
 
@@ -500,7 +500,10 @@ mise run worktree:prune -- --apply
 1つ目は乾燥実行で、消すものと残すものを理由つきで一覧にする。
 2つ目が実際に消す。
 `.claude/settings.json`が許可するのは乾燥実行だけである。
-`--apply`の扱いは、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)の「終わった作業ツリーの片付け」にある。
+`--apply`は、対話セッションで乾燥実行の一覧を確かめてから付ける。
+一覧に自分のものでないworktreeがあれば、他のセッションが使っていないことを確かめる。
+`--force`、`git branch -D`、`rm -rf`は使わない。未マージのコミットとコミットしていない変更を失わないため。
+リモートのブランチは、マージ時にGitHubが消すので、手で消さない。
 `git worktree remove`を強制せずに使うので、変更やコミットは失われない。
 リモートのブランチには触れない。
 マージ時にGitHubが消す設定のためである。
