@@ -21,6 +21,25 @@ import {
 // 別名にするとこの`as`を誤検知する。
 import * as prWorkflowSupport from "../../f/factory/steps/pr_workflow_support.ts";
 
+/** `entry`が実行時に読み込むリポジトリ内のファイルを、importの連鎖でたどる。動的なimportも辿る。 */
+function importClosure(entry: string): string[] {
+  const seen = new Set<string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const current = queue.pop();
+    if (current === undefined || seen.has(current)) continue;
+    seen.add(current);
+    const source = readFileSync(current, "utf8");
+    for (const match of source.matchAll(
+      /(?:from\s+|import\s*\(?\s*)"(\.[^"]+)"/g,
+    )) {
+      const next = normalize(join(dirname(current), match[1] ?? ""));
+      if (existsSync(next)) queue.push(next);
+    }
+  }
+  return [...seen].sort();
+}
+
 describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
   test("widens .github/workflows/ to .github/ and adds the hook, package-manager and devcontainer dirs", () => {
     expect(IMPLEMENT_PROTECTED_PATH_PREFIXES).toEqual([
@@ -1500,6 +1519,7 @@ describe("dependency-free lib locks", () => {
     "approval_gate",
     "protected_paths",
     "deploy_approvals",
+    "deploy_gate",
     "self_update_support",
   ].map((name) => `f/factory/lib/${name}`);
   const LOCKS = LIBS.map((base) => `${base}.script.lock`);
@@ -2100,25 +2120,6 @@ describe("files that the hold command imports", () => {
     "f/factory/lib/freeze_apply.ts",
   ];
 
-  /** `entry`が実行時に読み込むリポジトリ内のファイルを、importの連鎖でたどる。動的なimportも辿る。 */
-  function importClosure(entry: string): string[] {
-    const seen = new Set<string>();
-    const queue = [entry];
-    while (queue.length > 0) {
-      const current = queue.pop();
-      if (current === undefined || seen.has(current)) continue;
-      seen.add(current);
-      const source = readFileSync(current, "utf8");
-      for (const match of source.matchAll(
-        /(?:from\s+|import\s*\(?\s*)"(\.[^"]+)"/g,
-      )) {
-        const next = normalize(join(dirname(current), match[1] ?? ""));
-        if (existsSync(next)) queue.push(next);
-      }
-    }
-    return [...seen].sort();
-  }
-
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
     expect(FORBIDDEN_EXACT_PATHS).toContain(path);
   });
@@ -2278,6 +2279,9 @@ describe("deploy approval gate files", () => {
     "tests/lib/deploy_approvals.test.ts",
     "tests/scripts/deploy_approvals_wiring.test.ts",
     "scripts/test-db-deploy-approvals.ts",
+    "f/factory/lib/deploy_gate.ts",
+    "f/factory/lib/deploy_gate.script.yaml",
+    "tests/lib/deploy_gate.test.ts",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
@@ -2290,5 +2294,19 @@ describe("deploy approval gate files", () => {
 
   test.each(PATHS)("%s exists", async (path) => {
     expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test("finds the files that lib/deploy_gate.ts imports, so that the check below is not empty", () => {
+    expect(importClosure("f/factory/lib/deploy_gate.ts")).toContain(
+      "f/factory/lib/deploy_approvals.ts",
+    );
+  });
+
+  test("every file that lib/deploy_gate.ts imports is a protected path", () => {
+    expect(
+      importClosure("f/factory/lib/deploy_gate.ts").filter(
+        (path) => !matchesImplementProtectedPath(path),
+      ),
+    ).toEqual([]);
   });
 });
