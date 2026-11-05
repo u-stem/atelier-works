@@ -6629,6 +6629,7 @@ export async function countImplementFailedRounds(
  */
 export async function countPrFixFailures(
   workItemId: number,
+  _nonModelErrorPrefixes: readonly string[],
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   const rows = await sql`

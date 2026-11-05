@@ -3692,6 +3692,7 @@ describe("countImplementFailedRounds", () => {
 });
 
 describe("countPrFixFailures", () => {
+  const PREFIXES = ["limit prefix,", "stopped prefix"];
   const ZERO = {
     fix_round: 1,
     blocked_rounds: 0,
@@ -3710,62 +3711,74 @@ describe("countPrFixFailures", () => {
         },
       ],
     ]);
-    expect(await countPrFixFailures(1, sql)).toBe(5);
+    expect(await countPrFixFailures(1, PREFIXES, sql)).toBe(5);
   });
 
   test("leaves out the rounds that fix a CI failure", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
-    await countPrFixFailures(1, sql);
+    await countPrFixFailures(1, PREFIXES, sql);
     expect(calls[0]?.text).toContain("AND wi.ci_check_id IS NULL");
   });
 
   test("leaves out the rounds that fix a merge conflict", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
-    await countPrFixFailures(1, sql);
+    await countPrFixFailures(1, PREFIXES, sql);
     expect(calls[0]?.text).toContain("AND wi.conflict_check_id IS NULL");
   });
 
   test("counts only blocked rounds in which Claude ran", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
-    await countPrFixFailures(1, sql);
+    await countPrFixFailures(1, PREFIXES, sql);
     expect(calls[0]?.text).toContain("ar.stage = 'pr_fix'");
   });
 
   test("counts verify retries once per work item", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
-    await countPrFixFailures(1, sql);
+    await countPrFixFailures(1, PREFIXES, sql);
     expect(calls[0]?.text).toContain("GROUP BY ar.work_item_id");
   });
 
   test("counts failed runs by the error column of both Claude stages", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
-    await countPrFixFailures(1, sql);
+    await countPrFixFailures(1, PREFIXES, sql);
     expect(calls[0]?.text).toContain(
       "ar.stage IN ('pr_fix', 'pr_fix_verify_retry')",
     );
   });
 
+  test("leaves out the failed runs whose error starts with a prefix that is not a model failure", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, PREFIXES, sql);
+    expect(calls[0]?.text).toContain("starts_with(ar.error, np.prefix)");
+  });
+
+  test("passes the prefixes that are not model failures as a text array", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, PREFIXES, sql);
+    expect(calls[0]?.values).toContainEqual(PREFIXES);
+  });
+
   test("counts every failed run instead of one per work item and stage", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
-    await countPrFixFailures(1, sql);
+    await countPrFixFailures(1, PREFIXES, sql);
     expect(calls[0]?.text).not.toContain("SELECT DISTINCT");
   });
 
   test("leaves out a failed run only when a blocked round comes after it", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
-    await countPrFixFailures(1, sql);
+    await countPrFixFailures(1, PREFIXES, sql);
     expect(calls[0]?.text).toContain("fr.created_at >= ar.created_at");
   });
 
   test("leaves out a failed run only when no other run comes before the blocked round", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
-    await countPrFixFailures(1, sql);
+    await countPrFixFailures(1, PREFIXES, sql);
     expect(calls[0]?.text).toContain("later.created_at <= fr.created_at");
   });
 
   test("leaves out the discarded first attempt of an output retry", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
-    await countPrFixFailures(1, sql);
+    await countPrFixFailures(1, PREFIXES, sql);
     expect(calls[0]?.text).toContain(
       "next_run.created_at <= ar.created_at + interval '10 seconds'",
     );
@@ -3773,13 +3786,13 @@ describe("countPrFixFailures", () => {
 
   test("counts only the failures after the latest round that did not end blocked", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
-    await countPrFixFailures(1, sql);
+    await countPrFixFailures(1, PREFIXES, sql);
     expect(calls[0]?.text).toContain("fr.outcome <> 'blocked'");
   });
 
   test("compares the time of every failure with the latest success", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
-    await countPrFixFailures(1, sql);
+    await countPrFixFailures(1, PREFIXES, sql);
     expect(calls[0]?.text).toContain(
       "> COALESCE((SELECT at FROM last_success), '-infinity'::timestamptz)",
     );
@@ -3787,29 +3800,29 @@ describe("countPrFixFailures", () => {
 
   test("raises the count to the rounds before this one when they exceed it", async () => {
     const { sql } = createFakeSqlClient([[{ ...ZERO, fix_round: 3 }]]);
-    expect(await countPrFixFailures(1, sql)).toBe(2);
+    expect(await countPrFixFailures(1, PREFIXES, sql)).toBe(2);
   });
 
   test("keeps the failure count when it exceeds the rounds before this one", async () => {
     const { sql } = createFakeSqlClient([
       [{ ...ZERO, fix_round: 2, failed_runs: 4 }],
     ]);
-    expect(await countPrFixFailures(1, sql)).toBe(4);
+    expect(await countPrFixFailures(1, PREFIXES, sql)).toBe(4);
   });
 
   test("does not count the first round as a prior round", async () => {
     const { sql } = createFakeSqlClient([[{ ...ZERO, fix_round: 1 }]]);
-    expect(await countPrFixFailures(1, sql)).toBe(0);
+    expect(await countPrFixFailures(1, PREFIXES, sql)).toBe(0);
   });
 
   test("treats a missing round number as no prior round", async () => {
     const { sql } = createFakeSqlClient([[{ ...ZERO, fix_round: null }]]);
-    expect(await countPrFixFailures(1, sql)).toBe(0);
+    expect(await countPrFixFailures(1, PREFIXES, sql)).toBe(0);
   });
 
   test("returns 0 when no row is returned", async () => {
     const { sql } = createFakeSqlClient([[]]);
-    expect(await countPrFixFailures(1, sql)).toBe(0);
+    expect(await countPrFixFailures(1, PREFIXES, sql)).toBe(0);
   });
 });
 

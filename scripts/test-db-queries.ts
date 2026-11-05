@@ -4,6 +4,7 @@
 //
 // 使い方: COMPOSE_FILE=<compose> SCRATCH_DB=<db> bun run scripts/test-db-queries.ts
 
+import { NON_MODEL_FAILURE_ERROR_PREFIXES } from "../f/factory/lib/claude.ts";
 import {
   APPROVAL_REDISPATCH_NOTE_PREFIX,
   INFO_NOTICE_KINDS,
@@ -1167,7 +1168,78 @@ for (const [workItemId, round] of [
   );
 }
 
+const NON_MODEL_PREFIXES = NON_MODEL_FAILURE_ERROR_PREFIXES;
+// 使用上限と全停止で止まった実行は、モデルを強くしても防げないので、昇格の失敗に数えない。
+// 数える失敗(timeoutと、使用上限でない`is_error`)と混ぜて、除くのは前者だけであることも確かめる。
+const usageLimitOnly = await prFixItem(103);
+const stoppedMidRun = await prFixItem(104);
+const stoppedBeforeStart = await prFixItem(105);
+const claudeErrorCounted = await prFixItem(106);
+const reasonLookalike = await prFixItem(107);
+const environmentMixed = await prFixItem(108);
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
+    runRow(
+      usageLimitOnly,
+      "pr_fix",
+      900,
+      `${NON_MODEL_PREFIXES[0] ?? ""} subtype=success): limit`,
+    ),
+    runRow(
+      stoppedMidRun,
+      "pr_fix",
+      900,
+      `${NON_MODEL_PREFIXES[2] ?? ""} (cost_usd is the --max-budget-usd cap)`,
+    ),
+    runRow(stoppedBeforeStart, "pr_fix", 900, NON_MODEL_PREFIXES[1] ?? ""),
+    runRow(
+      claudeErrorCounted,
+      "pr_fix",
+      900,
+      "claude reported an error (reason=claude_error, subtype=error_max_turns): turns",
+    ),
+    runRow(
+      reasonLookalike,
+      "pr_fix",
+      900,
+      "claude reported an error (reason=usageXlimit, subtype=success): x",
+    ),
+    runRow(environmentMixed, "pr_fix", 900, "timeout"),
+    runRow(
+      environmentMixed,
+      "pr_fix",
+      700,
+      `${NON_MODEL_PREFIXES[0] ?? ""} subtype=success): limit`,
+    ),
+    runRow(
+      environmentMixed,
+      "pr_fix",
+      500,
+      `${NON_MODEL_PREFIXES[2] ?? ""} (cost_usd is the --max-budget-usd cap)`,
+    ),
+  ].join(", ")}`,
+);
+
 const prFixExpectations: readonly (readonly [string, number, number])[] = [
+  ["a usage limit run is not counted", usageLimitOnly, 0],
+  ["a run stopped in the middle is not counted", stoppedMidRun, 0],
+  [
+    "a run that the stop kept from starting is not counted",
+    stoppedBeforeStart,
+    0,
+  ],
+  ["an error of another reason is counted", claudeErrorCounted, 1],
+  [
+    "an error that only looks like the usage limit is counted",
+    reasonLookalike,
+    1,
+  ],
+  [
+    "only the failures that are not environmental are counted",
+    environmentMixed,
+    1,
+  ],
   ["blocked rounds and verify retries of the same PR are counted", fixB, 2],
   ["another PR is counted separately", fixOtherPr, 1],
   ["every failed apply of flow retries is counted", applyTimeouts, 3],
@@ -1211,7 +1283,7 @@ const prFixExpectations: readonly (readonly [string, number, number])[] = [
   ],
 ];
 for (const [name, workItemId, expected] of prFixExpectations) {
-  const actual = await countPrFixFailures(workItemId, sql);
+  const actual = await countPrFixFailures(workItemId, NON_MODEL_PREFIXES, sql);
   check(`countPrFixFailures: ${name}`, actual === expected, actual);
 }
 
@@ -1254,11 +1326,11 @@ execPsql(
 );
 check(
   "countPrFixFailures: the failures of a round that fixes a CI failure are not counted",
-  (await countPrFixFailures(reviewRoundItem, sql)) === 0,
+  (await countPrFixFailures(reviewRoundItem, NON_MODEL_PREFIXES, sql)) === 0,
 );
 check(
   "countPrFixFailures: a round that fixes a CI failure counts nothing for itself either",
-  (await countPrFixFailures(ciRoundItem, sql)) === 0,
+  (await countPrFixFailures(ciRoundItem, NON_MODEL_PREFIXES, sql)) === 0,
 );
 
 // 競合を直すラウンド(conflict_check_id を持つ作業項目)の失敗も、同じPRの指摘の対応の失敗に数えない。
@@ -1301,11 +1373,11 @@ execPsql(
 );
 check(
   "countPrFixFailures: the failures of a round that fixes a merge conflict are not counted",
-  (await countPrFixFailures(reviewRoundItem111, sql)) === 0,
+  (await countPrFixFailures(reviewRoundItem111, NON_MODEL_PREFIXES, sql)) === 0,
 );
 check(
   "countPrFixFailures: a round that fixes a merge conflict counts nothing for itself either",
-  (await countPrFixFailures(conflictFailRound, sql)) === 0,
+  (await countPrFixFailures(conflictFailRound, NON_MODEL_PREFIXES, sql)) === 0,
 );
 
 // ---------------------------------------------------------------------------

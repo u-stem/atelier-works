@@ -64,12 +64,12 @@ describe("model assignment", () => {
       [
         "steps/pr_fix_apply.ts",
         "countPrFixFailures(",
-        /const sonnetFailures = await countPrFixFailures\(\w+\);[\s\S]*modelFor\(config, "pr_fix", sonnetFailures\)/,
+        /const sonnetFailures = await countPrFixFailures\(\s*[\w.]+,\s*NON_MODEL_FAILURE_ERROR_PREFIXES,?\s*\);[\s\S]*modelFor\(config, "pr_fix", sonnetFailures\)/,
       ],
       [
         "steps/pr_fix_verify.ts",
         "countPrFixFailures(",
-        /const sonnetFailures = await countPrFixFailures\(\w+\);[\s\S]*prFixRetryModel\(config, sonnetFailures\)/,
+        /const sonnetFailures = await countPrFixFailures\(\s*[\w.]+,\s*NON_MODEL_FAILURE_ERROR_PREFIXES,?\s*\);[\s\S]*prFixRetryModel\(config, sonnetFailures\)/,
       ],
       [
         "steps/implement_generate.ts",

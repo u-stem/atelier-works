@@ -50,6 +50,7 @@ import {
   buildSystemPrompt,
   type DailyBudgetStatus,
   dailyBudgetStatus,
+  NON_MODEL_FAILURE_ERROR_PREFIXES,
   type RunClaudeFailureReason,
   runClaude,
 } from "../lib/claude.ts";
@@ -1086,7 +1087,10 @@ export async function main(
           factoryCloneDir: factory_clone_dir,
         });
         try {
-          const sonnetFailures = await countPrFixFailures(work_item_id);
+          const sonnetFailures = await countPrFixFailures(
+            work_item_id,
+            NON_MODEL_FAILURE_ERROR_PREFIXES,
+          );
           const retryResult = await runClaude({
             run: lockedRun,
             workItemId: work_item_id,
@@ -1205,7 +1209,10 @@ async function runCiRetry(input: CiRetryInput): Promise<CiFixApplyResult> {
         factoryCloneDir: input.factoryCloneDir,
       });
       try {
-        const sonnetFailures = await countPrFixFailures(input.workItemId);
+        const sonnetFailures = await countPrFixFailures(
+          input.workItemId,
+          NON_MODEL_FAILURE_ERROR_PREFIXES,
+        );
         const run = await runClaude({
           run: input.lockedRun,
           workItemId: input.workItemId,

@@ -77,7 +77,7 @@ locks:
   f/factory/lib/console_support: 0bf5550eaf29de2b68e5b07d5367af5d747a99a28eb91db94fe47a8786fee332
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
   f/factory/lib/credential_expiry: e259f06242b27308e1eb3838457a9fcb91dd5642d1d1b70321a6f33e732e2c1c
-  f/factory/lib/db: 02c1c6b84204476d112cf7352f95188966e7bc01dae55709ead62d7ab15574c6
+  f/factory/lib/db: 86d5dcfc6a92c7d01046a562b085acaac115dc30e9c52eff9a4a3e8038c46e36
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905
@@ -232,11 +232,11 @@ locks:
   f/factory/steps/pipeline_generate: 0d8cec1b14f735c4afddb74a1573860a994295e013c34cb314c7716eea540113
   f/factory/steps/pipeline_prepare: 2fce173e13f4f049ae07595e86307c8bb178afb9399ff4acbdb6b9bae8e48f5b
   f/factory/steps/pipeline_request_approval: 88bd1e6f549cc625287c0dfbb26d0c09d47c13634b5f266e292794babff9c19c
-  f/factory/steps/pr_fix_apply: aeccf49b4bb47b9e73a077a2cca2342a31539850a0aab59c2aea212277193700
+  f/factory/steps/pr_fix_apply: 2be0aa478b2b1395841fdd43c7ca36bbbaf5cfe29bcb260e4f4d5dba22cd04eb
   f/factory/steps/pr_fix_collect: b9723400e73863da7ca8bcc831bd84de95514e8c54393929ee508e20a5513f92
   f/factory/steps/pr_fix_finish: 9058b1175cf744e71841cf81e4973b4fc1b8f1e4cc1ff5f3f85047bcddbe5ca3
   f/factory/steps/pr_fix_prepare: 1e208e16691427c92c9b77a8b6a4f54673a11dc0ecfb80a80cec8ad572d6f0a1
-  f/factory/steps/pr_fix_verify: 00d997d1b0cc2f107d7d1d1237b93fa2ecbf4367abb967e33332dd9e72ac8bab
+  f/factory/steps/pr_fix_verify: d0d215e1e6d82098383838197640987c0db34152768ea86de9c802309d0d68fe
   f/factory/steps/pr_review_generate: be024a43103957e9b83e3994660392d47ac2b5e91452e3ad53e31117dbc6b9c6
   f/factory/steps/pr_review_intake_register: c0f6a2a2a00548ac17bf2ddb1c40f103f3ad4f693ab17500afdd592e023ff655
   f/factory/steps/pr_review_post: b2ea0351363d6a1e95fc4f021f4f35fd3970db46fc5f8cd0aed86c2c3830ee98
