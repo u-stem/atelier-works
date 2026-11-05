@@ -1725,7 +1725,7 @@ describe("runClaude failure kinds and costs", () => {
     expect(result.agentRun.cost_usd).toBeNull();
   });
 
-  test("classifies error_max_budget_usd as budget_exceeded", async () => {
+  test("classifies error_max_budget_usd as run_budget_exceeded", async () => {
     const fake = createFakeCommandRunner([
       isErrorResult({ subtype: "error_max_budget_usd" }),
     ]);
@@ -1733,11 +1733,11 @@ describe("runClaude failure kinds and costs", () => {
     const result = await runClaude(baseOptions(fake.run));
 
     expect(result.outcome === "failure" ? result.reason : null).toBe(
-      "budget_exceeded",
+      "run_budget_exceeded",
     );
   });
 
-  test("records total_cost_usd for a budget_exceeded failure", async () => {
+  test("records total_cost_usd for a run_budget_exceeded failure", async () => {
     const fake = createFakeCommandRunner([
       isErrorResult({ subtype: "error_max_budget_usd", total_cost_usd: 1.02 }),
     ]);
@@ -1747,7 +1747,7 @@ describe("runClaude failure kinds and costs", () => {
     expect(result.agentRun.cost_usd).toBe(1.02);
   });
 
-  test("classifies the real budget output with exit code 1 as budget_exceeded", async () => {
+  test("classifies the real budget output with exit code 1 as run_budget_exceeded", async () => {
     const fake = createFakeCommandRunner([
       isErrorResult({
         subtype: "error_max_budget_usd",
@@ -1758,7 +1758,7 @@ describe("runClaude failure kinds and costs", () => {
     const result = await runClaude(baseOptions(fake.run));
 
     expect(result.outcome === "failure" ? result.reason : null).toBe(
-      "budget_exceeded",
+      "run_budget_exceeded",
     );
   });
 
@@ -1927,6 +1927,175 @@ describe("runClaude failure kinds and costs", () => {
     );
   });
 
+  test("records maxBudgetUsd for the highest exit code of a signal", async () => {
+    const fake = createFakeCommandRunner([fail("", 192)]);
+
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      maxBudgetUsd: 3,
+    });
+
+    expect(result.agentRun.cost_usd).toBe(3);
+  });
+
+  test.each([193, 255])(
+    "records no cost for the exit code %p, which no signal gives",
+    async (exitCode) => {
+      const fake = createFakeCommandRunner([fail("boom", exitCode)]);
+
+      const result = await runClaude(baseOptions(fake.run));
+
+      expect(result.agentRun.cost_usd).toBeNull();
+    },
+  );
+
+  test.each([193, 255])(
+    "does not say a signal ended the run of the exit code %p",
+    async (exitCode) => {
+      const fake = createFakeCommandRunner([fail("boom", exitCode)]);
+
+      const result = await runClaude(baseOptions(fake.run));
+
+      expect(result.agentRun.error).toBe("boom");
+    },
+  );
+
+  test("keeps the usage of a readable result that is not an error after a non-zero exit", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout(),
+        stderr: "boom",
+        exitCode: 1,
+        timedOut: false,
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 20,
+      cache_read_tokens: 5,
+      num_turns: 2,
+      duration_ms: 4567,
+      session_id: "sess-1",
+    });
+  });
+
+  test("keeps the model usage of a readable result that is not an error after a non-zero exit", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({
+          modelUsage: {
+            "claude-haiku-5": {
+              inputTokens: 1,
+              outputTokens: 2,
+              cacheReadInputTokens: 3,
+              cacheCreationInputTokens: 4,
+              costUSD: 0.01,
+            },
+          },
+        }),
+        stderr: "boom",
+        exitCode: 1,
+        timedOut: false,
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.model_usage.map((entry) => entry.model)).toEqual([
+      "claude-haiku-5",
+    ]);
+  });
+
+  test("records the cost of a JSON that is not a readable result after a non-zero exit", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: JSON.stringify({ total_cost_usd: 0.42 }),
+        stderr: "boom",
+        exitCode: 1,
+        timedOut: false,
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.cost_usd).toBe(0.42);
+  });
+
+  test("records the cost of a JSON that is not a readable result after a successful exit", async () => {
+    const unreadable = {
+      stdout: JSON.stringify({ total_cost_usd: 0.42 }),
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+    };
+    const fake = createFakeCommandRunner([unreadable, unreadable]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.cost_usd).toBe(0.42);
+  });
+
+  test("records the written cost of a run that a signal ended", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: JSON.stringify({ total_cost_usd: 0.42 }),
+        stderr: "",
+        exitCode: 137,
+        timedOut: false,
+      },
+    ]);
+
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      maxBudgetUsd: 3,
+    });
+
+    expect(result.agentRun.cost_usd).toBe(0.42);
+  });
+
+  test("does not say the cost is the cap when a signal ended a run with a written cost", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: JSON.stringify({ total_cost_usd: 0.42 }),
+        stderr: "",
+        exitCode: 137,
+        timedOut: false,
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.error).toBe(
+      "claude -p was ended by a signal (exit code 137)",
+    );
+  });
+
+  test("records the written cost of a timed-out run", async () => {
+    const fake = createFakeCommandRunner([
+      { ...timeout(), stdout: JSON.stringify({ total_cost_usd: 0.42 }) },
+    ]);
+
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      maxBudgetUsd: 3,
+    });
+
+    expect(result.agentRun.cost_usd).toBe(0.42);
+  });
+
+  test("does not say the cost is the cap when a timed-out run wrote its cost", async () => {
+    const fake = createFakeCommandRunner([
+      { ...timeout(), stdout: JSON.stringify({ total_cost_usd: 0.42 }) },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.error).toBe("claude -p timed out after 60000ms");
+  });
+
   test("records no cost for a non-zero exit that ends at once without a result", async () => {
     const fake = createFakeCommandRunner([fail("authentication failed", 1)]);
 
@@ -2006,7 +2175,7 @@ describe("runClaude failure kinds and costs", () => {
     );
   });
 
-  test("does not retry a budget_exceeded failure", async () => {
+  test("does not retry a run_budget_exceeded failure", async () => {
     const fake = createFakeCommandRunner([
       isErrorResult({ subtype: "error_max_budget_usd" }),
     ]);
@@ -2032,6 +2201,24 @@ describe("runClaude failure kinds and costs", () => {
     "Your usage allocation has been disabled by your admin",
     "Your group's usage limit is set to $0",
     "Fable 5 requires usage credits",
+    "You've hit your usage limit",
+    "You've hit your session limit · resets 3pm",
+    "You've hit your Opus limit",
+    "You've hit your Sonnet limit",
+    "You've hit your Fable limit",
+    "You've hit your usage credit limit",
+    "You've hit your fast limit",
+    "You've hit your monthly limit — raise it below, or it resets next month.",
+    "You've hit your monthly spend limit.",
+    "You've hit your org's monthly spend limit",
+    "You've hit your individual spend limit",
+    "You've hit your channel's monthly spend limit.",
+    "You've hit your channel's monthly usage limit",
+    "You've hit your team's shared budget. /model to switch models.",
+    "You've hit your team's shared budget. Switch to another model to continue.",
+    "You've reached your Fable limit",
+    "You're out of usage credits. /model to switch models.",
+    "You're out of extra usage",
   ])("classifies the message %p as usage_limit", async (message) => {
     const fake = createFakeCommandRunner([isErrorResult({ result: message })]);
 
@@ -2111,6 +2298,9 @@ describe("runClaude failure kinds and costs", () => {
     "Error: GitHub said: You've reached your API rate limit for this token.",
     'The log says "You\'ve hit your limit" at the end.',
     "Running this prompt against the whole repository at once requires usage credits",
+    "You've hit your first obstacle in the build",
+    "You've reached your destination",
+    "You've hit your",
   ])("keeps the message %p as claude_error", async (message) => {
     const fake = createFakeCommandRunner([isErrorResult({ result: message })]);
 

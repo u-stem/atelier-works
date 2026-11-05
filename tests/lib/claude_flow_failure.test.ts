@@ -207,7 +207,7 @@ describe("recordClaudeRuns usage limit notice", () => {
 
   test.each<RunClaudeFailureReason>([
     "timeout",
-    "budget_exceeded",
+    "run_budget_exceeded",
     "claude_error",
     "non_zero_exit",
   ])("adds no notice for %s", async (reason) => {

@@ -35,7 +35,7 @@ function item(
 /** 同じ入力で繰り返しても同じ失敗になるか、人が止めた、Claudeの実行の失敗の種類。 */
 const NON_RETRYABLE_CLAUDE_FAILURES = [
   "timeout",
-  "budget_exceeded",
+  "run_budget_exceeded",
   "usage_limit",
   "stopped",
 ] as const;

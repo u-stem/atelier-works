@@ -14,7 +14,7 @@ const MESSAGE = "pipeline_generate: runClaude failed (timeout): detail";
 describe("isFlowRetryable", () => {
   const table: [RunClaudeFailureReason, boolean][] = [
     ["timeout", false],
-    ["budget_exceeded", false],
+    ["run_budget_exceeded", false],
     ["usage_limit", false],
     ["stopped", false],
     ["claude_error", true],
@@ -35,7 +35,7 @@ describe("flowFailureMessage", () => {
 
   test.each<RunClaudeFailureReason>([
     "timeout",
-    "budget_exceeded",
+    "run_budget_exceeded",
     "usage_limit",
     "stopped",
   ])("puts the marker at the head for %s", (reason) => {
