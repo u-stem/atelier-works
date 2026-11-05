@@ -2215,6 +2215,7 @@ describe("safety boundary files", () => {
     "f/factory/lib/claude_flow_failure.script.yaml",
     "f/factory/lib/flow_retry_marker.ts",
     "f/factory/lib/flow_retry_marker.script.yaml",
+    "tests/scripts/claude_flow_retry.test.ts",
     "f/factory/lib/stop_all.ts",
     "f/factory/lib/stop_all.script.yaml",
     "f/factory/lib/stop_check.ts",
