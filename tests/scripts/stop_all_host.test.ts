@@ -14,10 +14,17 @@ import {
 const OK: ExecResult = { exitCode: 0, stdout: "", stderr: "" };
 /** `wmill script run -s`が出す、scriptが断らなかったときの結果。 */
 const DONE_OUTPUT = JSON.stringify({ refused: false }, null, 2);
+/**
+ * `PS_ARGV`の出力。implementとpr_fixのClaudeは`flock`の下で動き、グループの先頭は`flock`である。
+ * pid 101と102のClaudeは、`flock`(pid 100)のグループに属する。
+ */
 const PS = [
-  "    PID ELAPSED COMMAND",
-  "    101     300 /usr/local/bin/claude -p --output-format json",
-  "    202      10 bun run job.ts",
+  "   PGID     PID COMMAND",
+  "    100     100 /usr/bin/flock /workspaces/.locks/acme.lock claude -p --output-format json",
+  "    100     101 /usr/local/bin/claude -p --output-format json",
+  "    100     102 /usr/local/bin/claude -p --resume",
+  "    202     202 bun run job.ts",
+  "    301     301 /usr/local/bin/claude -p --output-format json",
 ].join("\n");
 
 type Recorded = {
@@ -239,10 +246,16 @@ describe("runStop place", () => {
     ]);
   });
 
+  test("lists the group of each worker process before its pid", async () => {
+    const { calls, deps } = record();
+    await runStop(PLACE, deps);
+    expect(calls).toContain("exec ps -eo pgid,pid,args");
+  });
+
   test("terminates the group of each leftover claude", async () => {
     const { calls, deps } = record();
     await runStop(PLACE, deps);
-    expect(calls).toContain("exec /usr/bin/kill -s TERM -- -101");
+    expect(calls).toContain("exec /usr/bin/kill -s TERM -- -100");
   });
 
   test("leaves a process that is not claude alone", async () => {
@@ -251,23 +264,44 @@ describe("runStop place", () => {
     expect(calls.some((call) => call.includes("-202"))).toBe(false);
   });
 
+  test("does not take the pid of a claude under flock for its group", async () => {
+    const { calls, deps } = record();
+    await runStop(PLACE, deps);
+    expect(calls.some((call) => call.includes("-101"))).toBe(false);
+  });
+
+  test("terminates a group shared by two claude processes once", async () => {
+    const { calls, deps } = record();
+    await runStop(PLACE, deps);
+    expect(
+      calls.filter((call) => call === "exec /usr/bin/kill -s TERM -- -100")
+        .length,
+    ).toBe(1);
+  });
+
+  test("terminates the group of a claude that leads its own group", async () => {
+    const { calls, deps } = record();
+    await runStop(PLACE, deps);
+    expect(calls).toContain("exec /usr/bin/kill -s TERM -- -301");
+  });
+
   test("kills a group that survives the grace period", async () => {
     const { calls, deps } = record({ psAfterGrace: PS });
     await runStop(PLACE, deps);
-    expect(calls).toContain("exec /usr/bin/kill -s KILL -- -101");
+    expect(calls).toContain("exec /usr/bin/kill -s KILL -- -100");
   });
 
   test("kills the group even when its leader ended in the grace period", async () => {
     const { calls, deps } = record({ psAfterGrace: "" });
     await runStop(PLACE, deps);
-    expect(calls).toContain("exec /usr/bin/kill -s KILL -- -101");
+    expect(calls).toContain("exec /usr/bin/kill -s KILL -- -100");
   });
 
   test("kills the groups after the grace period", async () => {
     const { calls, deps } = record();
     await runStop(PLACE, deps);
     expect(calls.indexOf("sleep 5000")).toBeLessThan(
-      calls.indexOf("exec /usr/bin/kill -s KILL -- -101"),
+      calls.indexOf("exec /usr/bin/kill -s KILL -- -100"),
     );
   });
 
@@ -292,7 +326,7 @@ describe("runStop place", () => {
   test("still kills the leftovers when the stop script fails", async () => {
     const { calls, deps } = record({ scriptExit: 1 });
     await runStop(PLACE, deps);
-    expect(calls).toContain("exec /usr/bin/kill -s TERM -- -101");
+    expect(calls).toContain("exec /usr/bin/kill -s TERM -- -100");
   });
 
   test("returns 1 when the stop script fails", async () => {
@@ -394,7 +428,7 @@ describe("runStop kill_only", () => {
   test("kills the leftover claude", async () => {
     const { calls, deps } = record();
     await runStop({ kind: "kill_only" }, deps);
-    expect(calls).toContain("exec /usr/bin/kill -s TERM -- -101");
+    expect(calls).toContain("exec /usr/bin/kill -s TERM -- -100");
   });
 });
 
