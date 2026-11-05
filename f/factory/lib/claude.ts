@@ -130,6 +130,11 @@ export type ClaudeRunResult = {
    */
   readonly structuredOutput: unknown;
   /**
+   * 結果の`api_error_status`。APIのエラーで終わったときのHTTPの状態コードで、無いときと整数でないときはnull。
+   * 実行の結果を手で組むテストが、この項目を持たなくてもよいよう、省略できる型にしている。
+   */
+  readonly apiErrorStatus?: number | null;
+  /**
    * 標準出力のJSONのトップレベルのキーを、昇順に並べたもの。`parseClaudeJson`が必ず付ける。
    * 実行の結果を手で組むテストが、この項目を持たなくてもよいよう、省略できる型にしている。
    */
@@ -239,6 +244,11 @@ function isRawClaudeJson(value: unknown): value is RawClaudeJson {
   return isRawClaudeUsage(record.usage);
 }
 
+/** `api_error_status`を整数として読む。無いときと、整数でないときはnullを返す。 */
+function parseApiErrorStatus(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
+}
+
 /**
  * `claude -p --output-format json`の標準出力を解析し、型を絞り込む。
  * JSONとして不正なときと、想定外の形のときは例外を投げる。
@@ -270,6 +280,9 @@ export function parseClaudeJson(stdout: string): ClaudeRunResult {
       cacheCreationInputTokens: parsed.usage.cache_creation_input_tokens,
     },
     modelUsage: parseModelUsage(Reflect.get(parsed, "modelUsage")),
+    apiErrorStatus: parseApiErrorStatus(
+      Reflect.get(parsed, "api_error_status"),
+    ),
     structuredOutput: parsed.structured_output,
     topLevelKeys: Object.keys(parsed).sort(),
   };
@@ -383,12 +396,19 @@ export type RunClaudeOptions<T> = {
   readonly runAs?: { readonly uid: number; readonly gid: number };
 };
 
+/**
+ * `runClaude`の失敗の種類。
+ * `budget_exceeded`は`--max-budget-usd`の超過、`usage_limit`はサブスクリプションの使用上限で、
+ * どちらも結果のJSONが`is_error: true`のときに分ける。それ以外の`is_error`は`claude_error`になる。
+ */
 export type RunClaudeFailureReason =
   | "non_zero_exit"
   | "timeout"
   | "invalid_json"
   | "invalid_structured_output"
-  | "claude_error";
+  | "claude_error"
+  | "budget_exceeded"
+  | "usage_limit";
 
 /**
  * `runClaude`の結果。`agentRun`は最後の試行の記録で、再試行したときは捨てた最初の試行の記録が
@@ -596,6 +616,30 @@ function failureDetail(text: string): string {
   return escapeReasonSeparator(maskSecrets(text));
 }
 
+/**
+ * 使用上限(サブスクリプションの上限)に当たったときの、結果の本文の形。
+ * 形はClaude Codeの文書に無く、実機で確かめていないので、判定の材料を失敗の詳細に残す。
+ */
+const USAGE_LIMIT_PATTERN = /You've hit your .* limit/i;
+
+/** 使用上限で返るとみなす`api_error_status`。 */
+const USAGE_LIMIT_API_STATUS = 429;
+
+/**
+ * `is_error: true`の結果を、失敗の種類に分ける。
+ * `--max-budget-usd`の超過は`budget_exceeded`、使用上限は`usage_limit`、それ以外は`claude_error`にする。
+ */
+function errorReasonFor(parsed: ClaudeRunResult): RunClaudeFailureReason {
+  if (parsed.subtype === "error_max_budget_usd") return "budget_exceeded";
+  if (
+    USAGE_LIMIT_PATTERN.test(parsed.resultText) ||
+    parsed.apiErrorStatus === USAGE_LIMIT_API_STATUS
+  ) {
+    return "usage_limit";
+  }
+  return "claude_error";
+}
+
 async function attemptClaude<T>(
   opts: RunClaudeOptions<T>,
   promptText: string,
@@ -618,7 +662,9 @@ async function attemptClaude<T>(
     return {
       outcome: "failure",
       reason: "timeout",
-      agentRun: { ...baseAgentRun, error: detail },
+      // 打ち切った実行の費用は結果のJSONに無い。費用は`--max-budget-usd`の上限までなので、
+      // 上限の値を記録し、日次予算に少なく数えないようにする。
+      agentRun: { ...baseAgentRun, cost_usd: opts.maxBudgetUsd, error: detail },
       detail,
     };
   }
@@ -661,12 +707,15 @@ async function attemptClaude<T>(
   };
 
   if (parsed.isError) {
+    const status = parsed.apiErrorStatus ?? null;
+    const statusPart =
+      status === null ? "" : `, api_error_status=${String(status)}`;
     const detail = failureDetail(
-      `claude reported an error (subtype=${parsed.subtype}): ${parsed.resultText.slice(0, 500)}`,
+      `claude reported an error (subtype=${parsed.subtype}${statusPart}): ${parsed.resultText.slice(0, 500)}`,
     );
     return {
       outcome: "failure",
-      reason: "claude_error",
+      reason: errorReasonFor(parsed),
       agentRun: { ...enrichedAgentRun, error: detail },
       detail,
     };
