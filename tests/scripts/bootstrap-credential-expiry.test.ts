@@ -39,9 +39,7 @@ describe("bootstrap.sh and the credential expiry", () => {
 
 describe("bootstrap.sh and a host script that fails", () => {
   test("runs the host script in a condition so a crash does not abort", () => {
-    expect(source).toContain(
-      'if credential_expiry_json="$(credential_expiry_run',
-    );
+    expect(source).toContain('credential_expiry_json="$(credential_expiry_run');
   });
 
   test("accepts only a JSON object from the host script", () => {
@@ -56,7 +54,7 @@ describe("bootstrap.sh and a host script that fails", () => {
 
   test("writes the record only when the host script succeeded", () => {
     const start = source.indexOf(
-      'if credential_expiry_json="$(credential_expiry_run',
+      'credential_expiry_json="$(credential_expiry_run',
     );
     const write = source.indexOf(
       'upsert_variable "f/factory/credential_expiry"',
@@ -70,6 +68,33 @@ describe("bootstrap.sh and a host script that fails", () => {
       // biome-ignore lint/suspicious/noTemplateCurlyInString: bootstrap.shのシェルの展開と照合する文字列である
       'credential_status="$(api_get "/w/${WORKSPACE}/variables/get/f/factory/credential_expiry" || true)"',
     );
+  });
+});
+
+describe("bootstrap.sh and a previous record that cannot be read", () => {
+  test("keeps the previous record when the read status is neither 200 nor 404", () => {
+    expect(source).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: bootstrap.shのシェルの展開と照合する文字列である
+      'if [ "${credential_status}" != "200" ] && [ "${credential_status}" != "404" ]; then',
+    );
+  });
+
+  test("warns with the read status", () => {
+    expect(source).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: bootstrap.shのシェルの展開と照合する文字列である
+      "could not read the previous credential expiry (status ${credential_status}); keeping the previous record",
+    );
+  });
+
+  test("checks the read status before collecting the record", () => {
+    const check = source.indexOf(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: bootstrap.shのシェルの展開と照合する文字列である
+      'if [ "${credential_status}" != "200" ] && [ "${credential_status}" != "404" ]; then',
+    );
+    const collect = source.indexOf(
+      'elif credential_expiry_json="$(credential_expiry_run',
+    );
+    expect([check >= 0, check < collect]).toEqual([true, true]);
   });
 });
 
