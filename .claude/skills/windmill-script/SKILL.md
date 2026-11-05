@@ -34,12 +34,13 @@ scriptからは相対importで読み込む(例: `import { runClaude } from "./li
 
 - シークレットは`f/factory/*.variable.yaml`として定義し、`is_secret: true`にする。
   対象は`claude_oauth_token` / `github_token` / `wmill_token`、
-  `discord_webhook_url` / `github_read_tokens` / `db_backup_url`の6つである。
+  `discord_webhook_url` / `github_read_tokens` / `db_backup_url` / `heartbeat_url`の7つである。
 - 値はコミットせず、リポジトリ内では空のままにする。
 - scriptからは、`wmill.getVariable("f/factory/github_token")`のように取得する。
 - 取得した値は、子プロセスの環境変数(例: `GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`)としてだけ渡す。
 - 例外は、[セキュリティ](../../../docs/security.md)の「親プロセスが`fetch`で使う秘密値」に挙げた箇所だけである。
   `github_read_tokens`を使うのは`collect_github`(`lib/gh_graphql.ts`)だけで、宛先を`https://api.github.com/graphql`に固定した`fetch`の`Authorization`ヘッダで渡す。
+  `heartbeat_url`を使うのは`detect_schedule_failures`(`lib/heartbeat.ts`)だけで、`fetch`の宛先のURLそのものにする。`https:`以外は叩かず、リダイレクトは追わない。
   例外を足すときは、同じ変更で`docs/security.md`と本スキルの両方を直す。
 - シークレットは、コマンドラインの引数、URL、ログ出力、DBのカラムのどれにも絶対に書かない。
 - エラーメッセージに含まれうる箇所は、`f/factory/lib/log.ts`のマスク関数(`maskSecrets`)を通して事前にマスクする。
@@ -145,7 +146,7 @@ nullになりうる非textの列には、明示のキャストを必ず付ける
 - `timezone`は`Asia/Tokyo`にする。cronはWindmillの6フィールド形式(秒から始まる)で書く。
 - Consoleが呼ぶscriptにだけ、`.script.yaml`に`tag: console`を付ける。
   Console用worker(ワーカーグループ`console`)がこのtagを受ける。
-  対象は次の20本である。
+  対象は次の22本である。
   - `steps/console_query`
   - `approval_decide`
   - `retry_work_item`
@@ -166,13 +167,15 @@ nullになりうる非textの列には、明示のキャストを必ず付ける
   - `console_hold_place`
   - `console_schedule_stop`
   - `console_deploy_decide`
+  - `console_stop_all`
+  - `console_stop_all_release`
 
   長いClaudeのジョブがdefaultのworkerの枠を埋めても、Consoleを止めないためである。
   ほかのscriptには付けない。
   付けると、defaultのworkerは受けないので、仕事がqueueに溜まる。
 - `tag: console`を付けたscriptには、`timeout`(秒)も付ける。
   Console用workerの枠は1つしかなく、DBのロック待ちなどで1件止まると、ほかのジョブが待つためである。
-  20本の値は`tests/scripts/console_script_tags.test.ts`が固定する。
+  22本の値は`tests/scripts/console_script_tags.test.ts`が固定する。
   `wmill generate-metadata`は`tag`と`timeout`を消さない。
 - 多重実行の防止にadvisory lockは使わない。各`*.schedule.yaml`に`no_flow_overlap: true`を設定し、前回の実行中はスキップさせる。
 - 複数のインスタンスを同時に運用する場合の排他は、Windmill側ではなくGitHub側のclaimで行う。

@@ -98,18 +98,19 @@ deployの保留を置いた後は、置く前に始まった`self_update`の回�
 ## しないこと
 
 - subagentは、保留を置かず、解除もしない。主セッションに報告して終える。
-- Consoleの書き込みのscript14本を、`wmill script run`や`curl`などで呼ばない。
-  14本は次のとおりである。
+- Consoleの書き込みのscript16本を、`wmill script run`や`curl`などで呼ばない。
+  16本は次のとおりである。
   - `approval_decide`、`retry_work_item`、`audit_kickoff`、`manual_intake_submit`
   - `pr_review_submit`、`notice_resolve`、`hold_release`、`freeze_release`、`console_job_cancel`
   - `console_job_rerun`、`console_config_update`
   - `console_hold_place`、`console_schedule_stop`、`console_deploy_decide`
-- 14本の拒否は、フックが主セッションにも行う。運用者がConsoleの確認のダイアログを通す操作を、セッションが直接呼ぶと、その確認を通らないためである。
+  - `console_stop_all`、`console_stop_all_release`
+- 16本の拒否は、フックが主セッションにも行う。運用者がConsoleの確認のダイアログを通す操作を、セッションが直接呼ぶと、その確認を通らないためである。
   解除の2本は、さらに端末での人の確認を通らずに、他の主体の保留を外す。
-- 拒否は、14本のどれかの名前と、`bun`、`wmill`、`curl`などの語が、同じコマンドに並ぶと起きる。
+- 拒否は、16本のどれかの名前と、`bun`、`wmill`、`curl`などの語が、同じコマンドに並ぶと起きる。
   コミットメッセージやPR本文を、ヒアドキュメントや`-m`で渡すコマンドも同じである。
   メッセージやPR本文のファイルはWriteツールで書き、名前を並べない。
-- 主セッションは、`wmill script preview`で14本を確かめられない。
+- 主セッションは、`wmill script preview`で16本を確かめられない。
 - 凍結の変数を`wmill variable`で書かない。名前を含むコマンドは、読むだけでも拒否するので、ソースはReadツールか`git show`で読む。
 - 解除は、人がConsoleの画面で行う。
 - 保留で止められたマージを、別の経路(GitHubのWeb UI、MCP、APIの別の呼び出し)で通さない。

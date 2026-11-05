@@ -103,6 +103,7 @@ function setup(
       listHolds: () => listActiveHolds({}, fakeSql(holds)),
       ports,
       listPendingDeployApprovals: async () => [],
+      stopAll: { readVariable: async () => null },
     },
     writes,
   };

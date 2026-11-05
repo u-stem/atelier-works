@@ -1,0 +1,12 @@
+summary: '[OP-2-14] 全停止を解除'
+description: Factory
+  Consoleから、全停止を解除します。全停止の変数f/factory/stop_allを空に戻し、リポジトリの定義で有効なscheduleを有効に戻します。有効な凍結があるscheduleは戻しません。凍結を読めなければ何も変えません。factory_configの*_enabledは戻さないので、人が1つずつ有効にします。置かれていなければ何もしません。操作の前に記録を残し、残せなければ何も変えません。
+lock: '!inline f/factory/console_stop_all_release.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
+tag: console
+timeout: 60

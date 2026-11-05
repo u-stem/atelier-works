@@ -4309,6 +4309,8 @@ Factoryは、人の行動が要るものだけをDiscordに送る。通知の仕
 | mainのCIの失敗(`main_ci_failed`) | 対象リポジトリのmainのコミットで、CIが失敗した。通知を新しく残したときに届く | [mainのCIを監視する](#mainのciを監視する) |
 | 日次サマリー(`daily_summary`) | 集計の対象の日のコスト、件数、失敗、DBの掃除の件数、workerの負荷、`gated`のときの投稿しなかったレビューの件数 | 異常が無いか見る。負荷の見方は[日次のまとめでの見方](#日次のまとめでの見方)に、止まった日の出し直しは[日次のまとめの追い付き](#日次のまとめの追い付き)にある |
 | 監査レポート(`audit_completed`) | 監査で改善提案が1件以上できた | Consoleの**要対応**で提案を承認か却下する |
+| 資格情報の期限(`credential_expiring`) | 資格情報の期限まで`credential_warn_days`日以内か、期限を過ぎている。通知を新しく残したときだけ届く | [資格情報の期限の通知](#資格情報の期限の通知) |
+| 全停止(`stop_all_active`) | Factoryが全停止している。置いた後に1回だけ届く | [全停止を解除する](#全停止を解除する) |
 
 GitHubのPATが失効していると、Issueの取得のスケジュール(`poll_issues`)がジョブ失敗として通知される。PATを再発行する手順は[秘密をローテーションする](#秘密をローテーションする)にある。
 
@@ -4380,6 +4382,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 - `dependabot_merge_held`
 - `hold_released`
 - `deploy_approval_decided`
+- `stop_all_released`
 
 | 種類 | 意味 | 人がすること |
 | --- | --- | --- |
@@ -4439,6 +4442,9 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `hold_released` | 人が、保留、スケジュールの凍結、deployの保留を、Consoleのシステムの画面から解除した。本文に、解除した対象、操作者、時刻(JST、秒まで)が載る。「情報」で、保留の`reason`と`holder`は載せない。凍結の行は解除した主体を残さないので、この通知が操作者の記録になる。期限切れの行を片付けたときと、解除済みの行への呼び出しでは残さない。Discordには届かない | 心当たりのある解除なら、何もしない。心当たりが無いなら、操作者の名前を確かめ、止めていた対象を置き直すかを判断する |
 | `doc_hash_column_missing` | 要件定義の下書きの基準値の列(`requirement_drafts.doc_hash`)が無いまま、基準値なしで下書きを保存した。列を足すmigrationより先に、コードが反映されたときに残る。この下書きは、承認の後の書き換えを検出できない。本文は固定で、未解決は1件にまとまる | 列を足すmigrationは、自己更新が自動で反映する。デプロイの記録で、反映が成功していることを確かめる。失敗しているときは、自己更新のジョブのログで原因を確かめる。書き換えから守りたい要件定義は作り直す。列が足されても、通知は自動では解決されない。基準値なしで保存された承認済みの要件定義が残ること自体が、書き換えからの守りの欠落であり、列が足されたことだけでは消えないためである。人が、その要件定義の扱いを確かめ終えてから解決する |
 | `design_enabled_ignored` | 設定の`design_enabled`が`true`だが、`design_enabled_since`が無いか日時として読めないため、`false`として読んでいる。設計工程は動かない。設定タブの**設計工程**の行には、効いている値の「無効」が出る(設定が参照で書かれているときは「判定できない」)。自己更新が設定を読むたびに残し、本文は固定で、未解決は1件にまとまる | 設計工程を有効にするなら、[設計工程を有効にする](#設計工程を有効にする)の確認を済ませてから、`factory_config`に`design_enabled_since`を書く。有効にしないなら、`design_enabled`を`false`に戻す。どちらでも、自己更新(2分ごと)がこの通知を自動で解決する。Consoleからは解決できない |
+| `credential_expiring` | 資格情報(Windmillのトークン、Claude CodeのOAuthトークン、GitHubのPAT、読み取り専用のPAT、interaction-limits)の期限が、`credential_warn_days`日(既定30日)より近いか、過ぎている。本文に資格情報と期限の日付(JST)が載り、残り日数は載らない。Discordにも届く | [秘密をローテーションする](#秘密をローテーションする)の手順で更新し、`mise run bootstrap`を実行する。期限が先に延びると、次の日次のまとめ(毎日09:00)が自動で解決する |
+| `stop_all_active` | Factoryが全停止している。Claudeと検査の実行、Issueの取り込み、自己更新と、見張りと片付けを除くリポジトリのscheduleが止まっている。置いた直後の1回だけDiscordにも届き、時刻、操作者、理由はDiscordとシステムの画面に出る | 原因を確かめ、[全停止を解除する](#全停止を解除する)の手順で解除する。解除すると、5分以内に検出器が自動で解決する。Consoleからは解決できない |
+| `stop_all_released` | 全停止が解除された。止めたscheduleは有効に戻ったが、`factory_config`の`*_enabled`は止めたままである。「情報」で、Discordには届かない | 使う機能を、1つずつ有効にする |
 
 ### Console用のworkerの検知を確かめる
 
@@ -4661,6 +4667,8 @@ workerが居ても、ジョブを受けられない状態のときにも立つ�
   失敗の検出(`detect_schedule_failures`)は、定期ジョブ用のworkerで動くので、defaultのworkerのジョブが一斉に失敗しても鳴る([scheduleの失敗の検出](#scheduleの失敗の検出))。
 - 確認できない状態が続く。`unknown`は警告ログだけで、通知にしない。ジョブログの警告を見ないと気づけない。
 - 定期ジョブ用のworkerとdefaultのworkerが両方止まる。Windmillのserver、DB、docker、ホストの共通の障害も同じである。互いの監視は、片方だけが止まるときに働く。
+  この状態は、外部の死活監視が拾う。
+  検出器が5分ごとに叩くURLが途絶えると、監視のサービスが知らせる([セットアップ](setup.md#外部の死活監視を設定する))。
 - 長いジョブ(最長6時間)がdefaultの枠を埋めている間は、`self_update`が待たされ、定期ジョブ用のworkerの確認が走らない。その間に定期ジョブ用のworkerが止まっても、気づけない。
 
 次の点に注意する。
@@ -5407,13 +5415,16 @@ Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
   どちらも、定期ジョブ用のworkerで動く。
   定期ジョブ用のworkerが止まった状態は、`self_update`の`periodic_worker_missing`が拾う。
 - Windmillのserver、DB、docker、ホストの共通の障害。
+  この障害は、外部の死活監視が拾う([セットアップ](setup.md#外部の死活監視を設定する))。
+  検出器が成功した回だけURLを叩くので、検出器が例外で終わり続ける状態も拾う。
 - 失敗が起きてから、最大5分より前の通知。
 - ジョブ履歴に残らない失敗。履歴から消えたジョブは読めない。
 - ジョブの一覧を、検出器と`default_worker_watch`の両方が読めない状態。
   たとえばscheduleの`permissioned_as`の主体からAPIの権限が外れたときに起きる。
   検出器は例外で終わり続け、成功が無いので、記録と通知が残らない。
   心拍の確認は、一覧を読めないので判定せず、警告のログだけを残す。
-  この状態は、Windmillのジョブ履歴を人が見て気づく。
+  この状態は、外部の死活監視が拾う。
+  外部の死活監視を設定していなければ、Windmillのジョブ履歴を人が見て気づく。
 
 #### 確かめ方
 
@@ -5471,13 +5482,13 @@ Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
 
 ### 自己更新の打ち切りを確かめる
 
-`self_update`のジョブには、全体の上限(3300秒)がある。
+`self_update`のジョブには、全体の上限(3400秒)がある。
 値の内訳は[アーキテクチャ](architecture.md)の「自己更新」に書く。
 通常は、各コマンドの上限と、区切った呼び出し(1回30秒)の上限で先に終わる。
 全体の上限は、それでも止まったときの最後の砦である。
 
 上限で打ち切られた回は、最後に行うConsole用のworker、定期ジョブ用のworker、収集の鮮度の確認が走らない。
-打ち切られるまでの最大約55分は、2分ごとの次の約27回が飛ばされる。
+打ち切られるまでの最大約57分は、2分ごとの次の約28回が飛ばされる。
 この間は、自己更新の反映と、Console用と定期ジョブ用のworkerの停止の検知と、収集の停止の検知が止まる。
 
 気づく経路は、検出器(`detect_schedule_failures`)である([scheduleの失敗の検出](#scheduleの失敗の検出))。
@@ -5514,9 +5525,9 @@ Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
 手順は次のとおりである。
 
 1. `self_update`の上限が反映されていることを確かめる。
-   `wmill script get f/factory/self_update`の出力で、`timeout`が3300であることを見る。
-   3300秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
-   `job_default_timeout`は21600秒以上にする決まりなので、3300秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
+   `wmill script get f/factory/self_update`の出力で、`timeout`が3400であることを見る。
+   3400秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
+   `job_default_timeout`は21600秒以上にする決まりなので、3400秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
 2. `f/factory/_probe_timeout`というscriptを作る。
    子プロセスを起動せず、60秒待つだけにする。
    設定の`timeout`は10秒にする。
@@ -6286,6 +6297,11 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 
 `f/factory/deployed_sha`変数も同期の対象外である。自己更新が書き込む実行時の状態だからである。`bootstrap`は初回だけ空の値で作り、既にあれば値を変えない。値を戻したいときは、Windmillの画面で直接編集する。
 
+`f/factory/stop_all`と`f/factory/credential_expiry`も同期の対象外である。
+`stop_all`は全停止の状態で、Consoleと`mise run stop`が書く。
+`credential_expiry`は資格情報の期限の記録で、`mise run bootstrap`が書く。
+同期すると、無関係なpushで全停止が外れたり、記録が消えたりする。
+
 ### リポジトリから消したものをWindmillから消す
 
 リポジトリから消したscriptやappは、`mise run push`ではWindmillに残る。
@@ -6727,7 +6743,7 @@ deployの保留を置くことと、凍結の解除も同じである。
 主セッションか人に頼む。
 一覧(`mise run hold:list`、`mise run freeze:list`)と、スケジュールの凍結を置くことは、subagentも使える。
 Consoleの書き込みscriptの名前を含むコマンドは、実行系の包み方やglobを問わず、フックが拒否する。
-対象は、`scripts/claude-hooks/console-scripts.ts`の`CONSOLE_WRITE_SCRIPTS`が挙げる書き込みの14本である。
+対象は、`scripts/claude-hooks/console-scripts.ts`の`CONSOLE_WRITE_SCRIPTS`が挙げる書き込みの16本である。
 ソースを読むときは、Readツールか`git show`を使う。
 subagentだけでなく、主セッションを含むすべてのClaudeのセッションが対象である。
 解除と、Consoleからの置く操作と止める操作は、人がConsoleの画面で行う。
@@ -6848,6 +6864,138 @@ Windmillの画面で、スケジュールを有効に戻す。
 `mise run hold:list`は、有効なスケジュールの凍結とdeployの保留の件数も表示する。
 スケジュールを止めている凍結とdeployの保留は、`mise run freeze:list`で確かめる([凍結とdeployの保留の内部仕様](internals/freezes.md)の「運用手順」)。
 
+## 全停止する
+
+Factoryが暴走したとき、1つの操作でFactory全体を止める。
+止めた状態は、Windmillの秘密でない変数`f/factory/stop_all`に置く。
+変数は同期の対象外で、置いた時刻、操作者、理由を持つ。
+入口は、Consoleと、ホストの`mise run stop`の2つである。
+どちらも、Windmillの同じscriptで全停止を置く。
+仕組みと残るリスクは、[セキュリティ](security.md#全停止)にある。
+
+### 全停止の間に起きること
+
+全停止は、次のことを行う。
+
+- `factory_config`の`true`の`*_enabled`を、すべて`false`にする。
+- リポジトリのscheduleを無効にする。
+  次の見張りと片付けの4本は、動かし続ける。
+  - `detect_schedule_failures`(失敗の検出、全停止の通知、外部の死活監視)
+  - `default_worker_watch`(defaultのworkerの停止の検知)
+  - `notify_daily_summary`(日次のまとめと、資格情報の期限の確認)
+  - `cleanup_workspaces`(作業ディレクトリの片付け)
+- 実行中のClaudeと検査は、15秒ごとに変数を読み、置かれていればプロセスグループごと止まる。
+- 5分以内に、検出器が要対応の通知(`stop_all_active`)を残し、Discordへ1回だけ送る。
+  時刻、操作者、理由は、Discordの通知とConsoleのシステムの画面に出る。
+
+実行中のジョブは、Consoleからは中止しない。
+中止すると、ジョブのプロセスと一緒に、子プロセスを止める監視が消えるためである。
+
+止めた実装フローの作業項目は、人の対応待ち(`needs_human`)で終わる。
+解除の後に、[失敗した作業を再実行する](#失敗した作業を再実行する)の手順で再実行する。
+
+自己更新(`self_update`)とIssueの取り込み(`poll_issues`)は、次のように見送る。
+手動で動かしても同じである。
+
+- 自己更新は、self cloneの更新も、Windmillへの反映もしない。
+  止めた後に入ったマージで、Factoryが動き直さないためである。
+  解除の後の最初の回が、見送った範囲をそのまま反映する。
+- 取り込みは、新しいIssueを取らない。
+  進行中の作業項目の照合と、承認待ちの期限切れの扱いは続ける。
+- 承認か却下が決まった依頼の処理先は、起動し直さない。
+  起動し直された処理先が、次の工程やIssueの作成を始めるためである。
+  起動し直しの記録を書かないので、再起動の回数は使い切らない。
+- 版の食い違いの通知(`deployed_sha_mismatch`)は出さない。
+  反映の見送り中に食い違いが出ても、異常ではないためである。
+
+変数を読めない回や、読みが5秒の時間切れになった回も、止まっていないと確かめられないので、同じように見送る。
+
+ホストの`mise run push`と`mise run deploy`も、全停止の間は断る。
+pushが、止めたscheduleを定義の`enabled: true`で有効に戻すためである。
+解除してから実行する。
+`mise run up`は、pushもscheduleの復帰もしないので、全停止の間は警告だけで通す。
+解除の前でも、コンテナを作り直す復旧ができるようにするためである。
+変数を読めないときも、`mise run up`は警告を出して通し、pushは断る。
+止まっているスタックを`mise run up`で起こせるようにするためである。
+
+### Consoleから全停止する
+
+1. システムの画面の「保留と凍結」の節の先頭にある**全停止**を押す。
+2. 確認のダイアログに理由を書き、**全停止する**を押す。
+   理由は200文字までで、改行などの制御文字は使えない。
+3. 結果のトーストを読む。
+   止められなかったscheduleがあれば、Windmillの画面で無効にする。
+   すでに全停止中のときは、設定とscheduleを止め直す。
+4. 15秒ほど待ち、Consoleのジョブの画面で、実行中のジョブが終わることを確かめる。
+   プロセスが残ったときは、ホストで`mise run stop -- --kill-only`を実行する。
+
+### ホストから全停止する
+
+Consoleを開けないときは、ホストの端末で次を実行する。
+
+```bash
+mise run stop -- --reason "<理由>"
+```
+
+端末で`yes`を入力して確かめると、Consoleと同じscriptで全停止を置く。
+そのあと30秒待ち、実行中のジョブを中止し、workerに残ったClaudeと検査のプロセスを止める。
+30秒は、実行中のClaudeと検査が、自分で変数を読んで止まるまでの間である。
+内訳は、監視の間隔15秒、変数の読み取りの上限5秒、SIGTERMの後の猶予5秒に、余裕を足したものである。
+端末(TTY)を持たない実行(subagentや背景のセッション)は断る。
+環境変数`CLAUDECODE`があるときも、確認の前に断る。
+
+Windmillが落ちていて変数を置けないときは、残ったプロセスを止めるだけにする。
+
+```bash
+mise run stop -- --kill-only
+```
+
+この場合、全停止の変数は置かれない。
+Windmillが戻ったら、`mise run stop -- --reason "<理由>"`を実行し直す。
+
+### 全停止を解除する
+
+原因を取り除いてから解除する。
+Consoleでは、全停止の区画の**解除**を押し、確認のダイアログで**解除する**を押す。
+ホストでは、端末で`mise run stop:release`を実行し、`yes`を入力して確かめる。
+
+解除は、変数を空に戻し、リポジトリの定義で有効なscheduleを、凍結のあるものを除いて有効に戻す。
+全停止の前に凍結を通さずに止めていたscheduleも、有効に戻る。
+凍結を通さない停止は自己更新の反映でも戻るので、残したい停止は凍結で置く。
+凍結のあるscheduleは戻さない。
+凍結が終わると、自己更新が戻す。
+凍結を読めないときは、解除を断る。
+
+`factory_config`の`*_enabled`は戻らない。
+Windmillの画面で`f/factory/factory_config`を開き、使う機能を1つずつ`true`にする。
+5分以内に、検出器が情報の通知(`stop_all_released`)を残してから、`stop_all_active`を解決する。
+
+### 全停止の変数を読めないとき
+
+変数が壊れているときは、止まっている扱いにする。
+システムの画面には「全停止中」と、変数が壊れていることが出る。
+解除すると、変数が空に戻る。
+
+変数を読めないときは、実行中のClaudeと検査を止めない。
+変数を読むAPIの障害で、動いている実行を壊さないためである。
+読み取りが返らないときは、約1分たつと読み取りを見切って読み直す。
+その間にConsoleから置いた全停止は、最長で約1分遅れて届く。
+自己更新と取り込みは、止まっていないと確かめられないので見送る。
+急いで止めるときは、ホストで`mise run stop -- --kill-only`を実行する。
+
+### 全停止の実機の確認の記録
+
+未実施。
+反映の後に、次の順で確かめ、日付と結果を書く。
+
+| 確かめること | 期待 | 結果 |
+| --- | --- | --- |
+| Consoleから全停止する | `*_enabled`が`false`になり、4本を除くscheduleが無効になる | 未実施 |
+| 実行中の実装フロー | 15秒以内にClaudeが止まり、作業項目が人の対応待ちになる | 未実施 |
+| 通知 | 5分以内に`stop_all_active`が残り、Discordに1回届く | 未実施 |
+| `mise run stop -- --kill-only` | workerにClaudeと検査のプロセスが残らない | 未実施 |
+| 解除する | scheduleが戻り、5分以内に`stop_all_released`が残る | 未実施 |
+
 ## 設定を止める向きに変える
 
 Consoleのシステムの**設定**タブから、factory_configの許可した項目を、止める向きか下げる向きにだけ変えられる。
@@ -6907,6 +7055,39 @@ Consoleのシステムの**設定**タブから、factory_configの許可した�
 2. 新しい値を`mise.local.toml`に投入する。コマンドは[セットアップ](setup.md)にある。
 3. `mise run bootstrap`を実行し直す。`bootstrap.sh`は冪等で、既存のWindmillの変数を新しい値で上書きする。
 4. `CONSOLE_GITHUB_TOKEN`は、`bootstrap`ではなく`mise run up`で反映する。`console_fetcher`のコンテナが新しい値で作り直される。
+
+### 資格情報の期限の通知
+
+日次のまとめ(毎日09:00)が、資格情報の期限を確かめる。
+期限まで`credential_warn_days`日以内か、期限を過ぎていると、要対応の通知(`credential_expiring`)を残す。
+`credential_warn_days`は`factory_config`の設定で、既定は30日、範囲は1〜365日である。
+期限は、`mise run bootstrap`がホストで集め、秘密でない変数`f/factory/credential_expiry`に置く。
+
+| 資格情報 | 期限の元 |
+| --- | --- |
+| Windmillのトークン(`wmill_token`) | `bootstrap`が発行した日から180日 |
+| Claude CodeのOAuthトークン | 値が変わった後の最初の`bootstrap`の日から、`CLAUDE_OAUTH_TOKEN_DAYS`日(既定365日) |
+| GitHubのPAT(`GITHUB_TOKEN`) | GitHubの応答ヘッダー`github-authentication-token-expiration` |
+| 読み取り専用のPAT(`GITHUB_READ_TOKEN_<OWNER>`) | 同じ応答ヘッダー |
+| interaction-limits | `INTERACTION_LIMITS_REPO`の設定。読めなければ`INTERACTION_LIMITS_EXPIRES_AT` |
+
+環境変数の意味は[セットアップ](setup.md#資格情報を用意する)にある。
+Claude CodeのOAuthトークンは、値の指紋を記録に残し、指紋が変わったときだけ発行日を数え直す。
+同じトークンのまま`bootstrap`を実行し直しても、発行日は変わらず、期限は延びない。
+`CLAUDE_OAUTH_TOKEN_DAYS`を直したときは、次の`bootstrap`で、前回の発行日にその日数を足して期限を計算し直す。
+期限の無いPATは記録しないので、通知も出ない。
+通信の失敗や200以外の応答でPATの期限を読めなかったときは、前回の記録の同じ項目を保ち、`bootstrap`の標準エラーに警告を出す。
+読めなかっただけの期限を記録から外すと、日次のまとめが期限の通知を解決するためである。
+前回の記録の読み取りが、200でも404でもない応答か接続の失敗になったときは、記録を作り直さず、前回の記録を残して警告を出す。
+作り直すと、OAuthトークンの発行日が今日に戻り、読み取り専用のPATの項目も消えるためである。
+
+通知は、資格情報ごとに1件で、本文に期限の日付(JST)が載る。
+通知を残すと、Discordにも1回届く。
+
+資格情報を更新したら、`mise run bootstrap`を実行する。
+期限が先に延びると、次の日次のまとめが通知を解決する。
+interaction-limitsは、GitHubの設定画面で延ばす。
+期限をAPIで読めずに`INTERACTION_LIMITS_EXPIRES_AT`を使っているときは、延ばした後に、`mise.local.toml`のその値を書き直す。
 
 ## バックアップ
 

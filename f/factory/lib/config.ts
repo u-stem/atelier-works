@@ -113,6 +113,7 @@ type DefaultableField =
   | "gh_collect_enabled"
   | "gh_collect_detail_enabled"
   | "worker_alert_memory_ratio"
+  | "credential_warn_days"
   | "check_commands_by_repo";
 
 /**
@@ -204,6 +205,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   gh_collect_detail_enabled: false,
   // メモリは上限の8割を既定にする。根拠と見直し方は`docs/operations.md`の「閾値の通知」にある。
   worker_alert_memory_ratio: 0.8,
+  // 資格情報の期限の通知は、期限の30日前から出す。
+  credential_warn_days: 30,
   check_commands_by_repo: {},
 };
 
@@ -471,6 +474,9 @@ const PR_CONFLICT_FIX_MAX_ROUNDS_PER_PR_RANGE = { min: 2, max: 10 } as const;
 
 /** `pr_conflict_fix_notify_grace_min`の範囲(分)。0は猶予なしを表す。 */
 const PR_CONFLICT_FIX_NOTIFY_GRACE_RANGE = { min: 0, max: 1440 } as const;
+
+/** `credential_warn_days`の範囲(日)。 */
+const CREDENTIAL_WARN_DAYS_RANGE = { min: 1, max: 365 } as const;
 
 /**
  * `max_design_attempts`の範囲。現在の要件定義の試行で、設計を却下できる回数(反映できた却下の数)の上限である。
@@ -1097,6 +1103,12 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "worker_alert_memory_ratio",
       DEFAULTS.worker_alert_memory_ratio,
+    ),
+    credential_warn_days: integerInRangeField(
+      raw,
+      "credential_warn_days",
+      DEFAULTS.credential_warn_days,
+      CREDENTIAL_WARN_DAYS_RANGE,
     ),
     check_commands_by_repo: checkCommandsByRepoField(
       raw,

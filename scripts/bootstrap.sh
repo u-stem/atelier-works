@@ -72,16 +72,20 @@
 #      `PERSISTENT_TOKEN`に書き換え、以降の`wmill`の呼び出しが
 #      絞ったトークンを使うようにする。
 #   6. `wmill datatable create`を実行する(`main`のdatatableが既にあれば飛ばす)。
-#   7. 6つの秘密の変数(`claude_oauth_token`・`github_token`・`wmill_token`・
-#      `discord_webhook_url`・`github_read_tokens`・`db_backup_url`)を変数のAPIで作成・更新する。
+#   7. 7つの秘密の変数(`claude_oauth_token`・`github_token`・`wmill_token`・
+#      `discord_webhook_url`・`github_read_tokens`・`db_backup_url`・`heartbeat_url`)を変数のAPIで作成・更新する。
 #      `wmill_token`には`PERSISTENT_TOKEN`を入れる。`claude_oauth_token`・
 #      `github_token`・`discord_webhook_url`は`CLAUDE_CODE_OAUTH_TOKEN`・
 #      `GITHUB_TOKEN`・`DISCORD_WEBHOOK_URL`から取り、空でもよい
 #      (後で人が`mise set -E local`かWindmill UIで入れる)。
+#      `heartbeat_url`は`HEARTBEAT_URL`から取り、空でもよい(空なら検出器は死活監視を叩かない)。
 #      `github_read_tokens`には、所有者ごとの読み取り専用のトークンの環境変数
 #      `GITHUB_READ_TOKEN_<OWNER>`から`read_token_map_json`が組んだJSONの対応表を入れる。
 #      1つも無ければ空の値で入れる。全員分を外すときは、環境変数を消して実行し直す。
 #      `db_backup_url`には、`DB_PASSWORD`から組み立てたcomposeのPostgresのsuperuserの接続URLを入れる。
+#      続けて、秘密でない変数`f/factory/credential_expiry`に、資格情報の期限を記録する
+#      (`scripts/credential_expiry.ts`。前回の記録を読んで、指紋が変わらないOAuthトークンの発行日を保つ)。
+#      集める処理が失敗したら、警告を出して前回の記録を残し、手順8に進む。
 #   8. 古いトークンを入れ替える。`/users/tokens/list`と`/users/tokens/delete`は
 #      アカウント全体の操作なので、セッションのトークンで行う
 #      (`PERSISTENT_TOKEN`ではtoken/listが401になることを確認済み)。
@@ -148,7 +152,8 @@ fi
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
-for optional in GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN DISCORD_WEBHOOK_URL; do
+HEARTBEAT_URL="${HEARTBEAT_URL:-}"
+for optional in GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN DISCORD_WEBHOOK_URL HEARTBEAT_URL; do
   if [ "${MODE}" = "full" ] && [ -z "${!optional}" ]; then
     log "note: ${optional} is not set; the matching variable will be created empty"
   fi
@@ -349,8 +354,8 @@ persistent_token_body() {
 
 variable_create_body() {
   # $1 = パス、$2 = 値、$3 = 説明、$4 = is_secret("true"か"false"。既定は"true")。
-  # 呼び出し箇所はどれも秘密を作り、手順12の`deployed_sha`だけが秘密でない
-  # 例外として"false"を渡す。
+  # 呼び出し箇所はどれも秘密を作り、手順12の`deployed_sha`と手順7の続きの
+  # `credential_expiry`だけが、秘密でない例外として"false"を渡す。
   local is_secret="${4:-true}"
   WM_TMP_PATH="$1" WM_TMP_VALUE="$2" WM_TMP_DESC="$3" WM_TMP_IS_SECRET="${is_secret}" bun_eval '
     const path = process.env.WM_TMP_PATH ?? "";
@@ -362,11 +367,13 @@ variable_create_body() {
 }
 
 variable_update_body() {
-  # $1 = 値、$2 = 説明
-  WM_TMP_VALUE="$1" WM_TMP_DESC="$2" bun_eval '
+  # $1 = 値、$2 = 説明、$3 = is_secret("true"か"false"。既定は"true")。
+  local is_secret="${3:-true}"
+  WM_TMP_VALUE="$1" WM_TMP_DESC="$2" WM_TMP_IS_SECRET="${is_secret}" bun_eval '
     const value = process.env.WM_TMP_VALUE ?? "";
     const description = process.env.WM_TMP_DESC ?? "";
-    process.stdout.write(JSON.stringify({ value, is_secret: true, description }));
+    const is_secret = process.env.WM_TMP_IS_SECRET === "true";
+    process.stdout.write(JSON.stringify({ value, is_secret, description }));
   '
 }
 
@@ -731,14 +738,15 @@ db_backup_url() {
 }
 
 upsert_variable() {
-  local path="$1" value="$2" description="$3" status
-  status="$(variable_create_body "${path}" "${value}" "${description}" | api_post "/w/${WORKSPACE}/variables/create")"
+  # $4 = is_secret("true"か"false"。既定は"true")。作成と更新の両方に同じ値を渡す。
+  local path="$1" value="$2" description="$3" is_secret="${4:-true}" status
+  status="$(variable_create_body "${path}" "${value}" "${description}" "${is_secret}" | api_post "/w/${WORKSPACE}/variables/create")"
   if [ "${status}" = "201" ]; then
     log "variable ${path} created"
     return 0
   fi
   log "variable ${path} create returned ${status} (likely already exists); updating instead"
-  status="$(variable_update_body "${value}" "${description}" | api_post "/w/${WORKSPACE}/variables/update/${path}")"
+  status="$(variable_update_body "${value}" "${description}" "${is_secret}" | api_post "/w/${WORKSPACE}/variables/update/${path}")"
   [ "${status}" = "200" ] || die "failed to create or update variable ${path} (update status ${status})"
   log "variable ${path} updated"
 }
@@ -751,12 +759,53 @@ upsert_variable "f/factory/wmill_token" "${PERSISTENT_TOKEN}" \
   "Workspace-scoped Windmill API token (180-day expiry) used by self_update to sync push / migrate from the worker."
 upsert_variable "f/factory/discord_webhook_url" "${DISCORD_WEBHOOK_URL}" \
   "Discord incoming webhook URL used for pipeline notifications."
+upsert_variable "f/factory/heartbeat_url" "${HEARTBEAT_URL}" \
+  "External dead-man's switch URL (https only) that detect_schedule_failures pings after each successful run; empty disables it."
 github_read_tokens_json="$(read_token_map_json)"
 upsert_variable "f/factory/github_read_tokens" "${github_read_tokens_json}" \
   "Per-owner read-only GitHub PATs as a JSON map (lowercase owner login to token), built from GITHUB_READ_TOKEN_<OWNER> and read by collect_github on the periodic worker."
 db_backup_url_value="$(db_backup_url)"
 upsert_variable "f/factory/db_backup_url" "${db_backup_url_value}" \
   "Superuser URL of the compose Postgres, built from DB_PASSWORD; the nightly backup reads it to run pg_dumpall."
+
+# --- 手順7の続き: 資格情報の期限を、秘密でない変数に記録する ------------------
+# 前回の記録を読み、Claude CodeのOAuthトークンの指紋が変わったときだけ発行日を今日にする。
+# GitHubのPATの期限は`GET /user`の応答ヘッダーから読む。トークンは環境変数で渡し、引数に載せない。
+# 日次のまとめが、この記録を毎日読み、期限の30日前から要対応の通知を残す。
+# 期限の記録は補助なので、集める処理が失敗しても止まらない。手順8のトークンの入れ替えに進めなくなるのを避けるため、
+# 警告を出して前回の記録を残し、先へ進む。
+
+# $1 = 前回の記録、$2 = 所有者ごとの読み取り専用トークンの対応表(JSON)。
+# 子に渡す環境をここで明示して輸出する。呼び出しは`$(...)`のサブシェルの中で動くので、
+# 輸出は親のシェルに残らない(`read_token_map_json`の`GITHUB_READ_TOKEN_*`と同じ)。
+credential_expiry_run() {
+  export CREDENTIAL_EXPIRY_PREVIOUS="$1"
+  export CREDENTIAL_READ_TOKENS="$2"
+  export CREDENTIAL_WMILL_TOKEN_ISSUED=1
+  export GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+  export INTERACTION_LIMITS_REPO="${INTERACTION_LIMITS_REPO:-}"
+  export INTERACTION_LIMITS_EXPIRES_AT="${INTERACTION_LIMITS_EXPIRES_AT:-}"
+  export CLAUDE_OAUTH_TOKEN_DAYS="${CLAUDE_OAUTH_TOKEN_DAYS:-}"
+  run_in_repo bun ./scripts/credential_expiry.ts
+}
+
+credential_expiry_previous=""
+credential_status="$(api_get "/w/${WORKSPACE}/variables/get/f/factory/credential_expiry" || true)"
+if [ "${credential_status}" = "200" ]; then
+  credential_expiry_previous="$(jq -r '.value // ""' "${RESP_FILE}" || true)"
+fi
+# 前回の記録は200(あり)か404(まだ無い)のときだけ集める。それ以外(401、5xx、接続の失敗)は、
+# 前回を空として作り直すと、OAuthトークンの発行日が今日に戻って期限が延び、読めなかった読み取り専用PATの項目も消えるため、
+# 前回の記録を残す。
+if [ "${credential_status}" != "200" ] && [ "${credential_status}" != "404" ]; then
+  log "warning: could not read the previous credential expiry (status ${credential_status}); keeping the previous record"
+elif credential_expiry_json="$(credential_expiry_run "${credential_expiry_previous}" "${github_read_tokens_json}")" &&
+  printf '%s' "${credential_expiry_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  upsert_variable "f/factory/credential_expiry" "${credential_expiry_json}" \
+    "Credential expiry record written by mise run bootstrap; notify_daily_summary warns credential_warn_days before each expiry." "false"
+else
+  log "warning: could not collect the credential expiry; keeping the previous record"
+fi
 
 # --- 手順8: 古いfactory-bootstrapのトークンを入れ替える ---------------------
 # `/users/tokens/list`と`/users/tokens/delete`はアカウント全体の操作
@@ -843,7 +892,7 @@ fi
 
 # --- 手順12: インスタンス固有のdeployed_sha変数(無ければ作る) -------------
 # syncの対象外(`wmill.yaml`の`excludes`のこのパスのコメントを参照)。
-# 秘密でないこの変数には`self_update`が実行時に書き込む。手順7の6つの秘密は
+# 秘密でないこの変数には`self_update`が実行時に書き込む。手順7の7つの秘密は
 # 実行し直すたびに上書きしてよいが、これは一度だけ作り、後の実行で空に
 # 戻してはならない。空に戻すと`self_update`が毎回再デプロイが要ると判断し、
 # ホストで進行中の`mise run deploy`と競合する。

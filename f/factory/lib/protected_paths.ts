@@ -295,7 +295,23 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 書き換えられると、Claudeの隔離、検査の隔離、承認の関門、保護の範囲、反映の止め方が、人の確認なしに外れる。
  * ファイルは移さない。`lib/claude.ts`のパスは調査の隔離の測定が固定し、`self_update`のパスはscheduleとConsoleと凍結が固定するためである。
  * `lib/claude.script.lock`と`self_update.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
- * ほかの5つのlibのlockは、依存の無いlibのlockと同じ扱いで守らない。
+ * ほかの4つのlibのlockは、依存の無いlibのlockと同じ扱いで守らない。
+ * 全停止の部品も守る。実行中のClaudeと検査を止める監視(`lib/stop_check.ts`)と、全停止の判定(`lib/stop_all.ts`)と、それぞれの`.script.yaml`である。
+ * 書き換えられると、全停止が置かれても実行中のClaudeと検査が止まらなくなる。
+ * `lib/stop_check.script.lock`と`lib/stop_all.script.lock`と`lib/check_runner.script.lock`は、`windmill-client`を含むので守らない。
+ * Consoleから全停止を置く・解除するscript(`console_stop_all.ts`、`console_stop_all_release.ts`)と、その`.script.yaml`も守る。
+ * 3つの固定のテスト(`tests/lib/stop_all.test.ts`、`tests/scripts/console_stop_all.test.ts`、`tests/scripts/console_stop_all_release.test.ts`)と、
+ * 変数のパスを名指しできるファイルを限る配線のテスト(`tests/scripts/stop_all_wiring.test.ts`)も守る。
+ * 書き換えられると、全停止が置かれても設定やscheduleが止まらなくなるか、Consoleの確認と記録を経ずに解除でき、凍結中のscheduleが動き出す。
+ * 2つの`.script.lock`は、`windmill-client`を含むので守らない。
+ * 全停止のホストのCLI(`scripts/stop_all.ts`、`mise run stop`の入口)と、資格情報の期限の記録を組み立てる
+ * `scripts/credential_expiry.ts`(`bootstrap.sh`が秘密値を環境に持たせて起動する)、その部品`lib/credential_expiry.ts`と`.script.yaml`も守る。
+ * どれも、ホストのユーザーの権限と秘密値のある環境で動くため、書き換えられると任意の処理が秘密値の近くで動く。
+ * `lib/credential_expiry.script.lock`は守らない。依存の無いlibのlockと同じ扱いである。
+ * これらが読む`lib/log.ts`と`lib/types.ts`、`lib/cleanup_support.ts`は、多くのscriptが使う日常的に直す部品なので守らない。
+ * 全停止の通知を変数に合わせる`lib/stop_all_notice.ts`と、ランナーの`lib/workspace.ts`は守らない。
+ * 通知は止める働きを持たず、ランナーはほかのフローが日常的に直すファイルだからである。
+ * 監視を呼ぶ`lib/claude.ts`、`lib/check_runner.ts`と、関門を持つ`self_update.ts`は、安全策を担うコードとして守っている。
  * 保護パスに触れた変更の反映を人の承認まで止める仕組みも守る。承認の表を作るmigration2本、表の唯一の読み書き(`lib/deploy_approvals.ts`)と
  * その`.script.yaml`、表の部品の単体テストと参照の検出(`tests/lib/deploy_approvals.test.ts`、`tests/scripts/deploy_approvals_wiring.test.ts`)、
  * 実DBの検査(`scripts/test-db-deploy-approvals.ts`)である。書き換えられると、承認の無い版が承認済みとして読まれ、保護パスの変更が人の確認なしに反映される。
@@ -603,6 +619,22 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/self_update.script.yaml",
   "f/factory/lib/self_update_support.ts",
   "f/factory/lib/self_update_support.script.yaml",
+  "f/factory/lib/stop_check.ts",
+  "f/factory/lib/stop_check.script.yaml",
+  "f/factory/lib/stop_all.ts",
+  "f/factory/lib/stop_all.script.yaml",
+  "f/factory/console_stop_all.ts",
+  "f/factory/console_stop_all.script.yaml",
+  "f/factory/console_stop_all_release.ts",
+  "f/factory/console_stop_all_release.script.yaml",
+  "tests/lib/stop_all.test.ts",
+  "tests/scripts/console_stop_all.test.ts",
+  "tests/scripts/console_stop_all_release.test.ts",
+  "tests/scripts/stop_all_wiring.test.ts",
+  "scripts/stop_all.ts",
+  "scripts/credential_expiry.ts",
+  "f/factory/lib/credential_expiry.ts",
+  "f/factory/lib/credential_expiry.script.yaml",
   "migrations/datatable/main/20261105100000_deploy_approvals.up.sql",
   "migrations/datatable/main/20261105100000_deploy_approvals.down.sql",
   "f/factory/lib/deploy_approvals.ts",

@@ -28,6 +28,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   dependabot_merge_held: "info",
   hold_released: "info",
   deploy_approval_decided: "info",
+  stop_all_released: "info",
   approval_comment_failed: "action",
   intake_refreshed: "action",
   implement_launch_failed: "action",
@@ -71,6 +72,8 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   dependabot_merge_hold_unreadable: "action",
   doc_hash_column_missing: "action",
   design_enabled_ignored: "action",
+  credential_expiring: "action",
+  stop_all_active: "action",
 };
 
 /** 重要度が`info`の種類。「要対応」の一覧には出さず、システム画面に7日だけ出す。 */
@@ -86,6 +89,8 @@ export const INFO_NOTICE_KINDS: readonly string[] = Object.entries(
  * 画面から消せると、設定が直らないまま通知だけが消えるため。
  * `deploy_approval_required`は「要対応」で、Consoleの承認か却下、または反映の成功だけが解決する。
  * 画面から消せると、反映が止まったまま要対応の一覧から消えるため。
+ * `stop_all_active`は、全停止を解除すると検出器だけが解決する。
+ * 画面から消せると、止まったままなのに、5分後に同じ通知とDiscordの知らせが出直すため。
  */
 export const UNRESOLVABLE_NOTICE_KINDS: readonly string[] = [
   "unsandboxed_check_commands",
@@ -93,6 +98,7 @@ export const UNRESOLVABLE_NOTICE_KINDS: readonly string[] = [
   "fix_feedback_association_excluded",
   "design_enabled_ignored",
   "deploy_approval_required",
+  "stop_all_active",
 ];
 
 /**

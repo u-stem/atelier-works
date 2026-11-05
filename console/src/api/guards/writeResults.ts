@@ -1,12 +1,13 @@
 // 書き込みのscriptの戻りの型と型ガード。
 // 型は`f/factory/approval_decide.ts`、`retry_work_item.ts`、`audit_kickoff.ts`、
-// `manual_intake_submit.ts`、`pr_review_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscript、定期ジョブを再実行するscript、設定を変更するscript、保留と凍結を置くscript、scheduleを止めるscript、反映を承認・却下するscriptの戻りに合わせる。
+// `manual_intake_submit.ts`、`pr_review_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscript、定期ジョブを再実行するscript、設定を変更するscript、保留と凍結を置くscript、scheduleを止めるscript、反映を承認・却下するscript、全停止を置くscriptと解除するscriptの戻りに合わせる。
 // 操作の記録を書けたかを示す`action_audit`は、記録を足した書き込みの戻りが持つ。
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_write_contract.test.ts`が落ちる。
 
 import {
   type Guard,
+  isArrayOf,
   isBoolean,
   isIsoTimestamp,
   isNullableIsoTimestamp,
@@ -754,6 +755,123 @@ export function isDeployDecideResult(
     isString(value.sha) &&
     isDeployDecision(value.decision) &&
     isNoticeAudit(value.notice) &&
+    isActionAudit(value.action_audit)
+  );
+}
+
+/**
+ * 全停止を置けなかった理由。`f/factory/console_stop_all.ts`の`STOP_ALL_REFUSAL_REASONS`と
+ * 同じ並びで、契約テストが突き合わせる。
+ */
+export const STOP_ALL_REFUSAL_REASONS = [
+  "invalid_reason",
+  "state_unreadable",
+  "actor_unknown",
+  "audit_unavailable",
+] as const;
+
+export type StopAllRefusalReason = (typeof STOP_ALL_REFUSAL_REASONS)[number];
+
+export type StopAllConfigOutcome =
+  | "written"
+  | "unchanged"
+  | "has_reference"
+  | "failed";
+
+export type StopAllResult =
+  | { readonly refused: true; readonly reason: StopAllRefusalReason }
+  | {
+      readonly refused: false;
+      readonly placed: boolean;
+      readonly placed_at: string;
+      readonly config: StopAllConfigOutcome;
+      readonly disabled_flags: readonly string[];
+      readonly schedules_disabled: readonly string[];
+      readonly schedules_failed: readonly string[];
+      readonly action_audit: ActionAudit;
+    };
+
+const isStopAllRefusalReason: Guard<StopAllRefusalReason> = isOneOf(
+  STOP_ALL_REFUSAL_REASONS,
+);
+
+const isStopAllConfigOutcome: Guard<StopAllConfigOutcome> = isOneOf([
+  "written",
+  "unchanged",
+  "has_reference",
+  "failed",
+]);
+
+const isStrings: Guard<string[]> = isArrayOf(isString);
+
+export function isStopAllResult(value: unknown): value is StopAllResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.refused === true) {
+    return isStopAllRefusalReason(value.reason);
+  }
+  return (
+    value.refused === false &&
+    isBoolean(value.placed) &&
+    isIsoTimestamp(value.placed_at) &&
+    isStopAllConfigOutcome(value.config) &&
+    isStrings(value.disabled_flags) &&
+    isStrings(value.schedules_disabled) &&
+    isStrings(value.schedules_failed) &&
+    isActionAudit(value.action_audit)
+  );
+}
+
+/**
+ * 全停止を解除できなかった理由。`f/factory/console_stop_all_release.ts`の
+ * `STOP_ALL_RELEASE_REFUSAL_REASONS`と同じ並びで、契約テストが突き合わせる。
+ */
+export const STOP_ALL_RELEASE_REFUSAL_REASONS = [
+  "state_unreadable",
+  "freezes_unreadable",
+  "actor_unknown",
+  "audit_unavailable",
+] as const;
+
+export type StopAllReleaseRefusalReason =
+  (typeof STOP_ALL_RELEASE_REFUSAL_REASONS)[number];
+
+export type StopAllReleaseResult =
+  | { readonly refused: true; readonly reason: StopAllReleaseRefusalReason }
+  | { readonly refused: false; readonly released: false }
+  | {
+      readonly refused: false;
+      readonly released: true;
+      readonly schedules_enabled: readonly string[];
+      readonly schedules_skipped: readonly string[];
+      readonly schedules_failed: readonly string[];
+      readonly action_audit: ActionAudit;
+    };
+
+const isStopAllReleaseRefusalReason: Guard<StopAllReleaseRefusalReason> =
+  isOneOf(STOP_ALL_RELEASE_REFUSAL_REASONS);
+
+export function isStopAllReleaseResult(
+  value: unknown,
+): value is StopAllReleaseResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.refused === true) {
+    return isStopAllReleaseRefusalReason(value.reason);
+  }
+  if (value.refused !== false) {
+    return false;
+  }
+  if (value.released === false) {
+    return true;
+  }
+  return (
+    value.released === true &&
+    isStrings(value.schedules_enabled) &&
+    isStrings(value.schedules_skipped) &&
+    isStrings(value.schedules_failed) &&
     isActionAudit(value.action_audit)
   );
 }

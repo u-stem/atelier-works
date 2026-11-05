@@ -33,6 +33,8 @@ import {
   isPrReviewSubmitResult,
   isRetryWorkItemResult,
   isScheduleStopResult,
+  isStopAllReleaseResult,
+  isStopAllResult,
   JOB_CANCEL_REFUSAL_REASONS,
   JOB_RERUN_REFUSAL_REASONS,
   type JobCancelResult,
@@ -50,6 +52,10 @@ import {
   type RetryWorkItemResult,
   SCHEDULE_STOP_REFUSAL_REASONS,
   type ScheduleStopResult,
+  STOP_ALL_REFUSAL_REASONS,
+  STOP_ALL_RELEASE_REFUSAL_REASONS,
+  type StopAllReleaseResult,
+  type StopAllResult,
 } from "../../console/src/api/guards/writeResults.ts";
 import {
   type FetchLike,
@@ -67,6 +73,8 @@ import * as holdPlace from "../../f/factory/console_hold_place.ts";
 import * as jobCancel from "../../f/factory/console_job_cancel.ts";
 import * as jobRerun from "../../f/factory/console_job_rerun.ts";
 import * as scheduleStop from "../../f/factory/console_schedule_stop.ts";
+import * as stopAllScript from "../../f/factory/console_stop_all.ts";
+import * as stopAllRelease from "../../f/factory/console_stop_all_release.ts";
 import * as freezeRelease from "../../f/factory/freeze_release.ts";
 import * as holdRelease from "../../f/factory/hold_release.ts";
 import {
@@ -97,7 +105,9 @@ type WriteScript =
   | "console_config_update"
   | "console_hold_place"
   | "console_schedule_stop"
-  | "console_deploy_decide";
+  | "console_deploy_decide"
+  | "console_stop_all"
+  | "console_stop_all_release";
 
 const WRITE_SCRIPTS: WriteScript[] = [
   "approval_decide",
@@ -114,6 +124,8 @@ const WRITE_SCRIPTS: WriteScript[] = [
   "console_hold_place",
   "console_schedule_stop",
   "console_deploy_decide",
+  "console_stop_all",
+  "console_stop_all_release",
 ];
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -184,6 +196,26 @@ function stopBase() {
     freeze_expires_at: "2026-10-27T05:00:00.000Z",
     verified: true,
     freeze_held: true,
+  };
+}
+function stopAllBase() {
+  return {
+    refused: false,
+    placed: true,
+    placed_at: "2026-11-05T03:00:00.000Z",
+    config: "written",
+    disabled_flags: ["implement_enabled"],
+    schedules_disabled: ["f/factory/poll_issues"],
+    schedules_failed: [],
+  };
+}
+function stopAllReleaseBase() {
+  return {
+    refused: false,
+    released: true,
+    schedules_enabled: ["f/factory/poll_issues"],
+    schedules_skipped: [],
+    schedules_failed: [],
   };
 }
 function configBase() {
@@ -294,10 +326,14 @@ const WRAPPER_CALLS: Readonly<
       { sha: "0123456789abcdef0123456789abcdef01234567", decision: "approve" },
       { fetchFn },
     ),
+  console_stop_all: (fetchFn) =>
+    consoleWrites.stopAll("a runaway loop", { fetchFn }),
+  console_stop_all_release: (fetchFn) =>
+    consoleWrites.releaseStopAll({ fetchFn }),
 };
 
 describe("allowlist", () => {
-  test("holds the five read scripts and the fourteen write scripts", () => {
+  test("holds the five read scripts and the sixteen write scripts", () => {
     expect(Object.keys(SCRIPT_PATHS).sort()).toEqual(
       [
         "console_query",
@@ -469,6 +505,23 @@ describe("what the typed calls send", () => {
   test("console_schedule_stop requires the schedule", async () => {
     const { required } = await schemaOf(SCRIPT_PATHS.console_schedule_stop);
     expect(required).toEqual(["schedule_path"]);
+  });
+
+  test("console_stop_all takes only the reason", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.console_stop_all);
+    expect([...properties]).toEqual(["reason"]);
+  });
+
+  test("console_stop_all requires the reason", async () => {
+    const { required } = await schemaOf(SCRIPT_PATHS.console_stop_all);
+    expect([...required]).toEqual(["reason"]);
+  });
+
+  test("console_stop_all_release takes no input", async () => {
+    const { properties } = await schemaOf(
+      SCRIPT_PATHS.console_stop_all_release,
+    );
+    expect([...properties]).toEqual([]);
   });
 
   test("console_holds takes no input", async () => {
@@ -1209,6 +1262,70 @@ describe("what the scripts return", () => {
     ]);
   });
 
+  test("the console stop-all refusal reasons are the backend ones", () => {
+    expect([...STOP_ALL_REFUSAL_REASONS]).toEqual([
+      ...stopAllScript.STOP_ALL_REFUSAL_REASONS,
+    ]);
+  });
+
+  test("the console stop-all release refusal reasons are the backend ones", () => {
+    expect([...STOP_ALL_RELEASE_REFUSAL_REASONS]).toEqual([
+      ...stopAllRelease.STOP_ALL_RELEASE_REFUSAL_REASONS,
+    ]);
+  });
+
+  test.each([...stopAllScript.STOP_ALL_REFUSAL_REASONS])(
+    "the stop-all refusal %s passes the guard",
+    (reason) => {
+      expect(isStopAllResult({ refused: true, reason })).toBe(true);
+    },
+  );
+
+  test("a real stop-all passes the guard", async () => {
+    const result = await stopAllScript.stopAllFromConsole("r", {
+      now: () => new Date("2026-11-05T03:00:00.000Z"),
+      deriveActor: () => "operator",
+      stopAll: { readVariable: async () => null },
+      writeStopAll: async () => {},
+      readConfig: async () => ({ implement_enabled: true }),
+      writeConfig: async () => {},
+      setScheduleEnabled: async () => {},
+      sql: () => ({
+        fetch: () => Promise.resolve([{ id: 5 }]),
+        execute: () => Promise.resolve(),
+      }),
+    });
+    expect(isStopAllResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("a real stop-all release passes the guard", async () => {
+    const result = await stopAllRelease.releaseStopAllFromConsole({
+      now: () => new Date("2026-11-05T03:00:00.000Z"),
+      deriveActor: () => "operator",
+      stopAll: {
+        readVariable: async () =>
+          JSON.stringify({
+            placed_at: "2026-11-05T02:00:00.000Z",
+            placed_by: "operator",
+            reason: "r",
+          }),
+      },
+      clearStopAll: async () => {},
+      freeze: {
+        now: () => new Date("2026-11-05T03:00:00.000Z"),
+        readVariable: async () => null,
+      },
+      setScheduleEnabled: async () => {},
+      sql: () => ({
+        fetch: () => Promise.resolve([{ id: 5 }]),
+        execute: () => Promise.resolve(),
+      }),
+    });
+    expect(isStopAllReleaseResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
+
   function placePorts(): holdPlace.PlacePorts {
     let variable = JSON.stringify({ version: 1, freezes: [] });
     return {
@@ -1402,6 +1519,8 @@ describe("what the scripts return", () => {
     ["console_config_update", isConfigUpdateResult, configBase()],
     ["console_hold_place", isHoldPlaceResult, placeBase()],
     ["console_schedule_stop", isScheduleStopResult, stopBase()],
+    ["console_stop_all", isStopAllResult, stopAllBase()],
+    ["console_stop_all_release", isStopAllReleaseResult, stopAllReleaseBase()],
   ] as const)(
     "%s's result with a failed action audit passes the guard",
     (_name, guard, base) => {
@@ -1420,6 +1539,8 @@ describe("what the scripts return", () => {
     ["console_config_update", isConfigUpdateResult, configBase()],
     ["console_hold_place", isHoldPlaceResult, placeBase()],
     ["console_schedule_stop", isScheduleStopResult, stopBase()],
+    ["console_stop_all", isStopAllResult, stopAllBase()],
+    ["console_stop_all_release", isStopAllReleaseResult, stopAllReleaseBase()],
   ] as const)(
     "%s's result with an action audit it does not know fails the guard",
     (_name, guard, base) => {
@@ -1601,6 +1722,19 @@ describe("types", () => {
     expect(equal).toBe(true);
   });
 
+  test("the console stop-all result is the backend result", () => {
+    const equal: Equal<StopAllResult, stopAllScript.StopAllResult> = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console stop-all release result is the backend result", () => {
+    const equal: Equal<
+      StopAllReleaseResult,
+      stopAllRelease.StopAllReleaseResult
+    > = true;
+    expect(equal).toBe(true);
+  });
+
   test("a backend retry result is a console retry result", () => {
     const backend: retryScript.RetryWorkItemResult = retryScript.retryResult(
       "implementing",
@@ -1708,7 +1842,7 @@ describe("api boundary", () => {
 // 画面や部品に名前が出ると、許可リストを通らない呼び出しの足場になる。
 describe("console release script names", () => {
   const NAME =
-    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release|pr_review_submit|console_job_cancel|console_job_rerun|console_config_update|console_hold_place|console_schedule_stop|console_deploy_decide)(?![A-Za-z0-9_])/;
+    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release|pr_review_submit|console_job_cancel|console_job_rerun|console_config_update|console_hold_place|console_schedule_stop|console_stop_all|console_stop_all_release|console_deploy_decide)(?![A-Za-z0-9_])/;
   const MAY_NAME_THEM = [
     "console/src/api/windmill.ts",
     "console/src/api/writes.ts",

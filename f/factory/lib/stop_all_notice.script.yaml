@@ -1,0 +1,9 @@
+summary: '[LIB] 全停止の通知を変数に合わせる'
+description: 内部ライブラリです。直接実行するものではありません。全停止の変数を読んで、要対応の通知とDiscordへの知らせを残し、解除で通知を解決して情報の通知を残す関数です。
+lock: '!inline f/factory/lib/stop_all_notice.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

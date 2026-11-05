@@ -82,6 +82,12 @@ export function approvalApplyStalledReason(attempts: number): string {
 
 export type SweepDeps = {
   readonly now: () => Date;
+  /**
+   * 真なら、決まった依頼の処理先を起動し直さない。全停止の間である。
+   * 処理先は次の工程やIssueの作成を始めるためで、起動し直しの記録も書かないので、回数を使い切らない。
+   * 期限切れの扱いは変えない。指定が無ければ起動し直す。
+   */
+  readonly redispatchHeld?: boolean;
   /** 状態が`statuses`のどれかである`issue`の作業項目。 */
   readonly listWorkItemsByStatuses: (
     statuses: readonly WorkItemStatus[],
@@ -237,6 +243,7 @@ async function sweepWorkItem(
   }
 
   if (latest.status !== "approved" && latest.status !== "rejected") return;
+  if (deps.redispatchHeld === true) return;
   const decidedAt = latest.decided_at;
   if (
     decidedAt !== null &&

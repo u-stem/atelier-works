@@ -41,6 +41,8 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
 | `deploy_approval_required` | 保護パスの変更の反映が承認を待っています | `self_update`(2分ごと) | 前回の反映からの変更に、Windmillへ反映する保護パスのファイルかmigrationがあり、HEADの版の承認の依頼を新しく作り、通知を新しく残した |
 | `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
+| `credential_expiring` | 資格情報の期限が近づいています | `notify_daily_summary`(毎日09:00) | 資格情報の期限が`credential_warn_days`日より近いことを検知し、通知を新しく残した |
+| `stop_all_active` | Factoryを全停止しています | `detect_schedule_failures`(5分ごと) | 全停止の変数が置かれたことを検知し、通知を新しく残した |
 | `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 集計の対象の日の、実行回数、コスト、失敗、要件定義の承認・却下の件数、DBの掃除の件数、workerの負荷、`gated`のときの投稿しなかったレビューの期間と件数 |
 | `audit_completed` | 監査レポートができました | `audit_generate` | 改善提案が1件以上ある監査レポートを保存した |
 | `pr_opened` | PR作成 / PR更新 | `implement_finish` | 実装フローがPRを作成か更新した |
@@ -100,6 +102,8 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `periodic_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `schedule_detector_stale` | なし | 説明に原因、「次の操作」 |
+| `credential_expiring` | なし | 説明に資格情報と期限の日付、「次の操作」 |
+| `stop_all_active` | なし | 説明に置いた時刻(JST)、操作者、理由、「次の操作」 |
 | `github_collect_stale` | Consoleの通知 | 説明に閾値と最後の成功と最新の実行の原因(リポジトリ単位の古さでは、記録が古いリポジトリの数と理由別の内訳。収集の無効では、止まっている設定と、設定を戻すか`repo_allowlist`に並べる操作)、「次の操作」、所有者 |
 | `default_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `host_action_required` | なし | 説明に反映した版と変わったパス、「次の操作」 |
@@ -281,6 +285,9 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_conflict` | `watch_pr_conflicts` | `<owner>/<repo>#<PR番号>:`で始まる固定文、自動で直さなかった理由(あるときだけ)、次の操作、PRのリンク |
 | `worker_load_high` | `sample_worker_load` | 原因(メモリの割合、OOMの増加)、閾値、システムの画面のリンク、次の操作 |
 | `review_gated_prolonged` | `notify_daily_summary` | 投稿しない状態が続く日数、作業項目の画面のリンク、次の操作 |
+| `credential_expiring` | `notify_daily_summary` | `<資格情報>の期限が<YYYY-MM-DD>に切れる。`で始まる固定の文と、次の操作。残り日数は載せない。期限が先に延びた資格情報と、記録から消えた資格情報の通知は、本文の一致で解決する。記録の項目が壊れた資格情報の通知は、解決しない |
+| `stop_all_active` | `detect_schedule_failures` | 全停止中であることと、解除の操作を述べる固定の文。時刻、操作者、理由は載せない(システムの画面に出す)。解除で検出器が解決し、Consoleからは解決できない |
+| `stop_all_released` | `detect_schedule_failures` | 全停止の解除と、`*_enabled`を1つずつ有効にする操作を述べる固定の文。Discordには通知しない |
 | `dependabot_merge_held` | `poll_dependabot` | 一覧と解除の操作。取得の1周ごとに1件にまとめ、PRの数は載せない |
 | `dependabot_merge_hold_unreadable` | `poll_dependabot` | 保留を読めない原因の種類と、最初に確かめること。PRの数は載せない。保留を読めた周回で自動で解決する。壊れた行と想定外の失敗は、本文の先頭にリポジトリを置き、そのリポジトリを読めた周回で解決する |
 | `hold_released` | `hold_release`、`freeze_release` | 解除した対象(種類、対象、id)、操作者、時刻(JST、秒まで)。保留の`reason`と`holder`は載せない。解除済みの行と、期限切れの行の片付けでは残さない。Discordには通知しない |
@@ -436,7 +443,7 @@ mergeから反映までの通常の見込みは17分である。
 `poll_issues`の5分は、食い違いを最初に見た時刻から数えるための見積もりとする。
 猶予の30分は、この17分に余裕を持たせて決めている。
 17分は実測の上限ではない。
-自己更新の1回の実行は、最悪で約55分(ジョブの上限は3300秒)かかる。
+自己更新の1回の実行は、最悪で約57分(ジョブの上限は3400秒)かかる。
 ロックの待ち(最大5分)と、ネットワークを使うgitが加わるためである。
 このため、正常な反映でも30分を超えうる。
 このほかに、defaultの枠が埋まっていると、実行の開始前に待たされる。

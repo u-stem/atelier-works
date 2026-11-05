@@ -697,6 +697,11 @@ describe("the copies of the known shapes", () => {
     ["https://discord.com/api/webhooks/", "123456", "/", "abcdef_ghij"].join(
       "",
     ),
+    ["https://hc-ping.com/", "0f1e2d3c-4b5a"].join(""),
+    ["https://kuma.example.com/api/push/", "AbCdEf123"].join(""),
+    ["https://cronitor.link/p/", "abc123def", "/", "factory-heartbeat"].join(
+      "",
+    ),
   ];
 
   test("has a sample for every pattern of log.ts", () => {

@@ -53,6 +53,8 @@ describe("SCRIPT_PATHS", () => {
       "console_hold_place",
       "console_schedule_stop",
       "console_deploy_decide",
+      "console_stop_all",
+      "console_stop_all_release",
     ]);
   });
 
@@ -77,6 +79,8 @@ describe("SCRIPT_PATHS", () => {
       console_hold_place: "f/factory/console_hold_place",
       console_schedule_stop: "f/factory/console_schedule_stop",
       console_deploy_decide: "f/factory/console_deploy_decide",
+      console_stop_all: "f/factory/console_stop_all",
+      console_stop_all_release: "f/factory/console_stop_all_release",
     });
   });
 });
@@ -100,6 +104,8 @@ describe("isScriptName", () => {
     "console_config_update",
     "console_hold_place",
     "console_schedule_stop",
+    "console_stop_all",
+    "console_stop_all_release",
   ])("accepts the allowed name %s", (name) => {
     expect(isScriptName(name)).toBe(true);
   });

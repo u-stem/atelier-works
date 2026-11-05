@@ -37,6 +37,8 @@ export const CONSOLE_WRITE_SCRIPTS: readonly string[] = [
   "console_hold_place",
   "console_schedule_stop",
   "console_deploy_decide",
+  "console_stop_all",
+  "console_stop_all_release",
 ];
 
 /**
@@ -54,4 +56,6 @@ export const WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES: readonly string[] = [
   "console_hold_place",
   "console_schedule_stop",
   "console_deploy_decide",
+  "console_stop_all",
+  "console_stop_all_release",
 ];

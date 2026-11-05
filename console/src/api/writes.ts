@@ -33,6 +33,8 @@ import {
   isPrReviewSubmitResult,
   isRetryWorkItemResult,
   isScheduleStopResult,
+  isStopAllReleaseResult,
+  isStopAllResult,
   type JobCancelResult,
   type JobRerunResult,
   type ManualIntakeSubmitResult,
@@ -40,6 +42,8 @@ import {
   type PrReviewSubmitResult,
   type RetryWorkItemResult,
   type ScheduleStopResult,
+  type StopAllReleaseResult,
+  type StopAllResult,
 } from "./guards/writeResults.ts";
 import {
   type RunScriptOptions,
@@ -372,6 +376,29 @@ export function decideDeploy(
     "console_deploy_decide",
     { sha: input.sha, decision: input.decision },
     isDeployDecideResult,
+    options,
+  );
+}
+
+/**
+ * Factory全体を止める(全停止)。理由は1文字以上200文字以内で、scriptが確かめ直す。操作者は引数に取らない。
+ * 理由が使えない、状態を読めない、記録を残せないときは、何も変えずに理由つきの断りで返る。断りは失敗ではなく結果である。
+ */
+export function stopAll(
+  reason: string,
+  options: RunScriptOptions = {},
+): Promise<StopAllResult> {
+  return callWrite("console_stop_all", { reason }, isStopAllResult, options);
+}
+
+/** 全停止を解除する。置かれていなければ、何も変えずに`released: false`で返る。`*_enabled`は戻らない。 */
+export function releaseStopAll(
+  options: RunScriptOptions = {},
+): Promise<StopAllReleaseResult> {
+  return callWrite(
+    "console_stop_all_release",
+    {},
+    isStopAllReleaseResult,
     options,
   );
 }

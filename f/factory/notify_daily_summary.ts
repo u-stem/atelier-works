@@ -4,20 +4,28 @@
 // Discordに`daily_summary`のembedを投稿する。
 // 対象は、最後に要約を出した日の翌日から前日まで。
 // ホストのスリープなどで予定が飛んだ日も、次の実行で古い順に出す。
+// 毎回、まとめの前に資格情報の期限を確かめ、期限の`credential_warn_days`日前を切ったものを要対応の通知にする。
 
-import * as wmill from "windmill-client@1.817.0";
+import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { buildItemsConsoleUrl } from "./lib/approval_support.ts";
 import type { CleanupCounts } from "./lib/cleanup_db_support.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
+  CREDENTIAL_EXPIRING_NOTICE_KIND,
+  CREDENTIAL_EXPIRING_RESOLVER,
+  checkCredentialExpiry,
+} from "./lib/credential_expiry.ts";
+import {
   addNoticeUnlessUnresolved,
   listUnresolvedNoticesByKind,
+  resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
 } from "./lib/db.ts";
 import {
   type NotifyBestEffortResult,
   notifyBestEffort,
 } from "./lib/discord.ts";
+import { readVariableOrNull } from "./lib/freezes.ts";
 import {
   buildGatedReviewReport,
   GATED_REVIEW_NOTICE_MESSAGE_PREFIX,
@@ -25,6 +33,7 @@ import {
   isGatedProlonged,
 } from "./lib/gated_review_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import { withCallTimeout } from "./lib/self_update_support.ts";
 import {
   type DayRange,
   getAgentRunSummary,
@@ -346,6 +355,39 @@ export async function main(): Promise<CatchupResult> {
     wmill.getResource("f/factory/factory_config"),
   );
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
+
+  // 日次のまとめが届かない日があっても、資格情報の期限の確認は行うので、先に済ませる。失敗しても例外を投げない。
+  await checkCredentialExpiry({
+    now: () => new Date(),
+    warnDays: config.credential_warn_days,
+    // 上限の無い読み取りが固まっても、日次のまとめを止めない。時間切れは失敗として握りつぶされ、警告のログに残る。
+    readRecord: () =>
+      withCallTimeout("read credential_expiry", () => {
+        const workspace = wmillDefault.getWorkspace();
+        return readVariableOrNull(
+          () => wmill.getVariable("f/factory/credential_expiry"),
+          () =>
+            wmill.VariableService.existsVariable({
+              workspace,
+              path: "f/factory/credential_expiry",
+            }),
+        );
+      }),
+    listUnresolved: () =>
+      withCallTimeout("list credential_expiring notices", () =>
+        listUnresolvedNoticesByKind(CREDENTIAL_EXPIRING_NOTICE_KIND),
+      ),
+    addNotice: (record) => addNoticeUnlessUnresolved(record),
+    resolveByMessage: (message) =>
+      resolveUnresolvedNoticesByMessage(
+        CREDENTIAL_EXPIRING_NOTICE_KIND,
+        message,
+        CREDENTIAL_EXPIRING_RESOLVER,
+      ),
+    notify: (event) => notifyBestEffort(webhookUrl, event, log),
+    instanceName: config.instance_name,
+    log,
+  });
 
   // 日次のまとめが届かない日があっても、投稿しない状態の確認は行うので、先に済ませる。
   await syncGatedNotice(

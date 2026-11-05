@@ -698,6 +698,25 @@ describe("sweepApprovals: a decision that the handler did not apply", () => {
     expect(h.calls).toEqual(["record_redispatch:7", "redispatch:design:41"]);
   });
 
+  test("does not start the handler again while the restart is held", async () => {
+    const h = harness({
+      items: [DESIGN_ITEM],
+      latest: { "7:design": decided("approved", 6) },
+    });
+    await sweepApprovals({ ...h.deps, redispatchHeld: true });
+    expect(h.calls).toEqual([]);
+  });
+
+  test("still expires a pending request while the restart is held", async () => {
+    const h = harness({
+      items: [DESIGN_ITEM],
+      latest: { "7:design": latest() },
+      expiredPending: [request(41, "design", 7)],
+    });
+    await sweepApprovals({ ...h.deps, redispatchHeld: true });
+    expect(h.calls).toContain("move:7:awaiting_design_approval>expired");
+  });
+
   test("starts the handler of a rejected requirements request again", async () => {
     const h = harness({
       items: [REQUIREMENTS_ITEM],

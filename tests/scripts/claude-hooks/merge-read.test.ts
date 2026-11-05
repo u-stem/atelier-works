@@ -712,6 +712,12 @@ describe("the mask of the standard error", () => {
       "a Discord webhook URL",
       `https://discord.com/api/webhooks/123456789/${"c".repeat(40)}`,
     ],
+    ["a Healthchecks.io ping URL", "https://hc-ping.com/0f1e2d3c-4b5a"],
+    ["an Uptime Kuma push URL", "https://kuma.example.com/api/push/AbCdEf123"],
+    [
+      "a Cronitor telemetry URL",
+      "https://cronitor.link/p/abc123def/factory-heartbeat",
+    ],
   ])("hides %s", async (_name, secret) => {
     expect(await maskedStderr(secret)).toBe("failed with *** here\n");
   });

@@ -9,6 +9,7 @@ import { isInboxRows } from "../src/api/guards/inboxProposals.ts";
 import { isIntakeSnapshotRows } from "../src/api/guards/intakeSnapshot.ts";
 import { isIntakeTargets } from "../src/api/guards/intakeTargets.ts";
 import { isPipelineRows } from "../src/api/guards/pipeline.ts";
+import { isRecord } from "../src/api/guards/primitives.ts";
 import {
   isRequirementsDocRows,
   isRequirementsIndexRows,
@@ -110,6 +111,16 @@ describe("the replies of the browser checks pass the guards of the console", () 
     const reply = replyFor(JOBS, { view: "detail" }, "normal");
 
     expect(reply !== null && isJobDetail(reply.body)).toBe(true);
+  });
+});
+
+describe("the holds reply", () => {
+  test("carries the stop-all state, so that the accessibility scan reaches its panel", () => {
+    const reply = replyFor("f/factory/console_holds", {}, "normal");
+
+    expect(isRecord(reply?.body) ? reply.body.stop_all : undefined).toEqual({
+      kind: "clear",
+    });
   });
 });
 

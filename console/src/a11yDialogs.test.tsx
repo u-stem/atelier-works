@@ -34,6 +34,10 @@ import { KickoffConfirmDialog } from "./screens/reports/KickoffConfirmDialog.tsx
 import { ConfigChangeDialog } from "./screens/system/ConfigChangeDialog.tsx";
 import { HoldPlaceDialog } from "./screens/system/HoldPlaceDialog.tsx";
 import { HoldReleaseDialog } from "./screens/system/HoldReleaseDialog.tsx";
+import {
+  StopAllDialog,
+  StopAllReleaseDialog,
+} from "./screens/system/StopAllDialog.tsx";
 
 const NOW = Date.parse("2026-10-24T03:00:00.000Z");
 const T0 = "2026-10-24T02:00:00.000Z";
@@ -251,6 +255,22 @@ const CASES: readonly (readonly [string, Draw])[] = [
         onCancel={NOOP}
       />
     ),
+  ],
+  [
+    "the stop-all dialog",
+    () => (
+      <StopAllDialog
+        open
+        reason="a runaway loop"
+        onReasonChange={NOOP}
+        onConfirm={NOOP}
+        onCancel={NOOP}
+      />
+    ),
+  ],
+  [
+    "the stop-all release dialog",
+    () => <StopAllReleaseDialog open onConfirm={NOOP} onCancel={NOOP} />,
   ],
   [
     "the shared confirm dialog with a destructive confirmation",

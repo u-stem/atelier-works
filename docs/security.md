@@ -760,9 +760,10 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 - `f/factory/discord_webhook_url`
 - `f/factory/github_read_tokens`
 - `f/factory/db_backup_url`
+- `f/factory/heartbeat_url`
 
 scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
-親プロセスが`fetch`で使う秘密値は、次の4か所である。
+親プロセスが`fetch`で使う秘密値は、次の5か所である。
 
 - Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。使うのは、取り消された作業項目を再開するときの対象の状態の確認と、Issueの要件定義を作り直す再実行のときの取り込み内容の更新(現在のIssueの題名と本文の取得)である。宛先は`https://api.github.com`に固定し、リダイレクトは辿らない。境界は[Console用workerの境界](#console用workerの境界)に書く。
 - Console用のworkerで動く`approval_decide`は、要件定義の承認の前に現在のIssueを読むため、同じ形で`github_token`を使う。10秒の締め切りを付け、エラーの文とログにトークンとIssueの内容を含めない。
@@ -773,6 +774,10 @@ scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変�
   GraphQLのエラーの文は、残さない。
   拒否された項目として、許可表の`type`と、問い合わせの文に現れる語だけの項目名を、1回10件までログに残す。
   語の表は自前の問い合わせの文から作るので、エラーの側に何が来ても、トークンの形の文字列はログに入らない。
+- 検出器の`detect_schedule_failures`は、外部の死活監視の`heartbeat_url`を`fetch`の宛先にする。
+  `https`のURLだけを叩き、リダイレクトは辿らず、10秒の締め切りを付ける。
+  URLそのものが秘密なので、ログには伏せた形だけを残す。
+  漏れたときの影響は、偽の生存の報告で、止まったことに気づくのが遅れることに限られる。
 
 エラーメッセージと失敗の記録(`job_failures`)には、マスク処理を通してから値を入れる。マスクの関数はテストで検証する。
 
@@ -788,6 +793,7 @@ scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変�
 - `DISCORD_WEBHOOK_URL`
 - `CONSOLE_GITHUB_TOKEN`
 - `GITHUB_READ_TOKEN_<OWNER>`(所有者ごとに1つ。`<OWNER>`は所有者のloginを大文字にして、`-`を`_`にした名前)
+- `HEARTBEAT_URL`(任意。外部の死活監視のURL)
 
 値は人が投入する。投入のコマンドは[セットアップ](setup.md)にある。Claudeが更新するのは、値の無いテンプレートである`mise.local.toml.example`までにする。投入が必要になったら、Claudeは実行するコマンドを示し、待たずにほかの作業を続ける。
 
@@ -800,6 +806,24 @@ scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変�
 ### Windmill APIトークンの期限
 
 workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限定した有効期限180日のAPIトークンである。`mise run bootstrap`を実行するたびに新しいトークンを発行し、古いトークンを失効させる。これがトークンのローテーションの手段になる。期限が切れると、`self_update`のスケジュールが失敗する。
+
+### 資格情報の期限の記録
+
+`mise run bootstrap`は、資格情報の期限を、秘密でない変数`f/factory/credential_expiry`に記録する。
+記録は、日次のまとめが期限を確かめるための入力で、手順は[運用](operations.md#資格情報の期限の通知)にある。
+記録に入るのは期限の日時だけで、トークンの値は入らない。
+例外はClaude CodeのOAuthトークンで、値の変更を見分けるため、SHA-256の先頭16桁の指紋を記録する。
+`bootstrap`はWindmillのsecret変数を読み戻さないので、前回と同じ値かどうかは、記録に残した指紋でしか比べられないためである。
+16桁は64ビットで、トークンの値を戻すには足りない。
+
+記録を組み立てる次の3つは、ホストのユーザーの権限と秘密値のある環境で動くので、保護パスにある。
+`bootstrap`が、秘密値を環境に持たせて起動するためである。
+
+- `scripts/credential_expiry.ts`
+- `f/factory/lib/credential_expiry.ts`
+- `f/factory/lib/credential_expiry.script.yaml`
+
+これらが読む`lib/log.ts`と`lib/types.ts`は、多くのscriptが使う部品なので守らない。
 
 ## 資格情報の取得
 
@@ -2450,7 +2474,7 @@ superadminでない主体は、許可されたtagしか使えない。
 次のことは、この境界では守れない。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
-- secret変数の`claude_oauth_token`、`github_token`、`discord_webhook_url`、`github_read_tokens`を読める。
+- secret変数の`claude_oauth_token`、`github_token`、`discord_webhook_url`、`github_read_tokens`、`heartbeat_url`を読める。
   どのscriptが読むかを制限する仕組みは、契約テストの許可だけである。
 - このworkerで動かすのは、上の基準で選んだ定期ジョブの想定である。
   リポジトリに入る変更のうち、テストが走査できる形は、契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が止める。
@@ -2491,7 +2515,11 @@ superadminでない主体は、許可されたtagしか使えない。
 - `notify_daily_summary`
 - `auto_retry_pr_review`
 - `default_worker_watch`
-- `detect_schedule_failures`
+
+`detect_schedule_failures`が読めるのは、`discord_webhook_url`と`heartbeat_url`だけである。
+`heartbeat_url`を許可するのは、ホストやDockerごと止まったことを、外部の監視のサービスに気づかせるためである。
+検出器は5分ごとに動き、成功した回の最後にURLを叩く。
+叩くのが途絶えると、監視のサービスが止まったと知らせる。
 
 `collect_github`が読めるのは、`github_read_tokens`だけである。
 `claude_oauth_token`、`github_token`、`wmill_token`は、このworkerに届かせない。
@@ -2586,7 +2614,7 @@ tag`periodic`を付けたのは、次の5本である。
 | `auto_retry_pr_review` | DB、WindmillのAPI、Discordだけを使う。読むsecretは`discord_webhook_url`だけである | `periodic`を付ける |
 | `collect_github` | DB、Windmillのresource、宛先を固定したGitHubのGraphQLだけを使う。読むsecretは`github_read_tokens`だけである | `periodic`を付ける |
 | `default_worker_watch` | DB、Windmillのqueueとジョブ履歴とschedule、Discordだけを使う。読むsecretは`discord_webhook_url`だけである。defaultのworkerが止まると動かないので、defaultには置けない | `periodic`を付ける |
-| `detect_schedule_failures` | DB、Windmillのジョブ履歴、Discordだけを使う。読むsecretは`discord_webhook_url`だけである。失敗の記録とnoticeをDBに書く。defaultのworkerで動かすと、長いジョブが枠を塞ぐ間、検知が止まるので置けない | `periodic`を付ける |
+| `detect_schedule_failures` | DB、Windmillのジョブ履歴、Discord、外部の死活監視だけを使う。読むsecretは`discord_webhook_url`と`heartbeat_url`だけである。失敗の記録とnoticeをDBに書き、外部の死活監視のURLを叩く。defaultのworkerで動かすと、長いジョブが枠を塞ぐ間、検知が止まるので置けない | `periodic`を付ける |
 
 `github_token`を読む定期ジョブは、`gh`の道具に依存するため、tag`periodic`を付けられるものが無い。
 `notify_daily_summary`と`auto_retry_pr_review`は、ファイル、サブプロセス、`claude`、`gh`のモジュールをimportでたどらない。
@@ -4204,6 +4232,48 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 - 止め方が、凍結とdeployの保留(変数)と、保留(表)に分かれる。
   範囲が違うので、同じ対象に二重にはならない。
   確かめる手順は[運用](operations.md)に書く。
+
+## 全停止
+
+全停止は、Factory全体を1つの操作で止める仕組みである。
+手順は[運用](operations.md#全停止する)にある。
+止める働きは、Windmillの秘密でない変数`f/factory/stop_all`と、それを読む各所にある。
+
+- 変数を書くのは、Consoleの2つのscript(全停止と解除)と、それを`wmill script run`で呼ぶ`mise run stop`だけである。
+  2つのscriptは、操作者を導き、操作の記録を残せないときは何も変えずに断る。
+- 2つのscriptはConsole用のworkerで動き、どのsecret変数も読まない。
+  Console用workerの境界の走査は、読む変数のパスを`freezes`と`stop_all`の2つに限る。
+  通知とDiscordへの送信は、定期ジョブ用のworkerで動く検出器が、変数を読んで行う。
+- `factory_config`は、`*_enabled`を`true`から`false`へ変えるだけで、有効にする向きには変えない。
+  解除しても`*_enabled`は戻らないので、解除の操作だけでは、止めた機能は動き出さない。
+- 実行中のClaudeと検査は、ランナーが15秒ごとに変数を読み、置かれていればプロセスグループごと止める。
+  変数を読めないときは止めない。
+  変数を読むAPIの障害で、動いている実行を壊さないためである。
+  その受け皿は、ホストの`mise run stop -- --kill-only`である。
+- 自己更新と取り込みは、変数を読めないときも見送る。
+  止まっていないと確かめられないまま、Factoryを動かし直さないためである。
+- `mise run stop`は、端末で`yes`を入力して確かめる。
+  端末を持たないsubagentと背景のセッションは、確認を通せない。
+  `scripts/stop_all.ts`は、環境変数`CLAUDECODE`があるときも、確認の前に断る。
+  Claude Codeのフックが`mise run stop`、`mise run stop:release`、`scripts/stop_all.ts`の呼び出しと、変数への直接の書き込みを止めるので、環境変数は二重の守りである。
+  `CLAUDE_CODE_ENTRYPOINT`は、Claudeのセッションの印にしない。
+- workerの中のプロセスは、`docker compose exec`で止める。
+  Claudeはプロセスグループごと、検査は枠のuidごとに止める。
+  workerの本体が属するグループには送らず、そのグループのClaudeはpidごとに止める。
+  `detached`で起動しないClaudeが、workerと同じグループに入りうるためである。
+- 2つのscript、変数の解析、実行中の監視と、それを固定するテストは、保護パスにある(`f/factory/lib/protected_paths.ts`)。
+- ホストのCLI`scripts/stop_all.ts`は、ホストのユーザーの権限で動くので、保護パスにある。
+  CLIが読む`lib/cleanup_support.ts`と`lib/types.ts`は、日常的に直す部品なので守らない。
+
+次のことは、この仕組みでは守れない。
+
+- Windmillの画面で変数を直接書き換えられる者は、Consoleの確認と記録を経ずに全停止を外せる。
+  外しても`*_enabled`は戻らない。
+  検出器が全停止を見つけた後に外されたときは、検出器が5分以内に`stop_all_released`を残すので気づける。
+  置いてから検出器の次の回までに外されたときは、どちらの通知も残らない。
+  変数を直接外す操作はConsoleのscriptを通らないので、Consoleの操作の記録(`console_actions`)にも残らない。
+- 全停止を置く前に始まったジョブの、Windmillのフローの再試行は止められない。
+  再試行されたClaudeは、起動の前に変数を読んで断る。
 
 ## Claude Codeの拒否ルール
 

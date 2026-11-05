@@ -57,6 +57,8 @@ describe("the classification of the console scripts", () => {
       "console_job_cancel",
       "console_job_rerun",
       "console_schedule_stop",
+      "console_stop_all",
+      "console_stop_all_release",
       "freeze_release",
       "hold_release",
       "manual_intake_submit",
@@ -140,6 +142,8 @@ describe("bash-guard denies running a Console write script", () => {
     "console_config_update",
     "console_hold_place",
     "console_schedule_stop",
+    "console_stop_all",
+    "console_stop_all_release",
   ])("denies running %s through xargs", async (name) => {
     expect(
       await decide(`echo f/factory/${name} | xargs wmill script run`),
@@ -151,6 +155,8 @@ describe("bash-guard denies running a Console write script", () => {
     "console_config_update",
     "console_hold_place",
     "console_schedule_stop",
+    "console_stop_all",
+    "console_stop_all_release",
   ])("names %s in the reason", async (name) => {
     expect(await denyReason(`wmill script run f/factory/${name}`)).toContain(
       name,
@@ -222,6 +228,8 @@ describe("bash-guard allows work near the Console write scripts", () => {
     "console_config_updated",
     "console_hold_placement",
     "console_schedule_stopped",
+    "console_stop_all_now",
+    "console_stop_all_release_now",
   ])("does not take the longer name %s", async (name) => {
     expect(await decide(`wmill script run f/factory/${name}`)).toBe("allow");
   });

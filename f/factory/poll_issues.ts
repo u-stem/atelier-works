@@ -113,6 +113,14 @@ import {
   runDeployedShaCheck,
 } from "./lib/poll_support.ts";
 import { withCallTimeout } from "./lib/self_update_support.ts";
+import {
+  holdsGate,
+  readStopAll,
+  STOP_ALL_CHECK_TIMEOUT_MS,
+  type StopAllStatus,
+  sdkStopAllReadIo,
+  unlessStopped,
+} from "./lib/stop_all.ts";
 import { postSupersededComments } from "./lib/supersede_support.ts";
 import {
   type FactoryConfig,
@@ -206,6 +214,23 @@ async function recordFailureSafe(
   }
 }
 
+/**
+ * 全停止の変数を読む。読み取りは`STOP_ALL_CHECK_TIMEOUT_MS`で区切り、時間切れは読めなかったものとして返す。
+ * 読めない回は止まっていないと確かめられないので、呼び出し側は関門を閉じる。
+ */
+function readStopAllBounded(): Promise<StopAllStatus> {
+  return withCallTimeout(
+    "read stop-all",
+    () => readStopAll(sdkStopAllReadIo()),
+    STOP_ALL_CHECK_TIMEOUT_MS,
+  ).catch(
+    (): StopAllStatus => ({
+      kind: "unreadable",
+      reason: "the stop-all read timed out",
+    }),
+  );
+}
+
 /** 版の食い違いを通知する前に、deployの保留と承認待ちを読む呼び出しそれぞれの上限(ミリ秒)。 */
 const DEPLOY_FREEZE_READ_TIMEOUT_MS = 10_000;
 
@@ -217,7 +242,7 @@ const DEPLOYED_SHA_RESOLVER = "poll_issues";
  * 食い違いが猶予を超えて続くときだけnoticeを記録する。
  * 食い違いを最初に見た時刻は、このscheduleのWindmillのstateに保存する。
  * 毎回、今の`deployed_sha`への反映の成功の記録より前のnoticeを解決済みにする。判定は`runDeployedShaCheck`にある。
- * 有効なdeployの保留か、保護パスの変更の承認待ちがあるあいだは、`self_update`が反映を見送るので、通知せず待つ。
+ * 有効なdeployの保留か、保護パスの変更の承認待ちか、全停止があるあいだは、`self_update`が反映を見送るので、通知せず待つ。
  * noticeを残すだけでジョブは失敗させない。
  * 変数が無い・空のときは、まだ比べる対象が無いとみなす。
  */
@@ -253,7 +278,7 @@ async function checkDeployedSha(
           sha,
           DEPLOYED_SHA_RESOLVER,
         ),
-      // deployの保留と、保護パスの変更の承認待ちは、どちらも`self_update`が反映を見送るので、食い違いは異常ではない。
+      // deployの保留と、保護パスの変更の承認待ちと、全停止は、どれも`self_update`が反映を見送るので、食い違いは異常ではない。
       isDeployHeld: () =>
         anyDeployHold([
           async () => {
@@ -278,6 +303,7 @@ async function checkDeployedSha(
               () => isDeployHeldForApproval(defaultSqlClient),
               DEPLOY_FREEZE_READ_TIMEOUT_MS,
             ),
+          async () => holdsGate(await readStopAllBounded()),
         ]),
       nowMs: () => Date.now(),
       log,
@@ -1348,15 +1374,18 @@ async function claimAndStart(
 // 承認待ちの走査。承認待ちの作業項目を最新の承認依頼と照合し、期限切れを片付け、
 // 決定済みなのに反映されなかった依頼の処理先を起動し直す。判断は`lib/approval_sweep.ts`にあり、
 // ここは本番の入出力をつなぐだけである。
+// 全停止の関門が閉じている間は、処理先の起動し直しだけを飛ばす。
 // ---------------------------------------------------------------------------
 
 async function sweepPendingApprovals(
   config: FactoryConfig,
   discordWebhookUrl: string,
   log: Logger,
+  stop: StopAllStatus,
 ): Promise<number> {
   return sweepApprovals({
     now: () => new Date(),
+    redispatchHeld: holdsGate(stop),
     listWorkItemsByStatuses: (statuses) => listWorkItemsByStatuses(statuses),
     getWorkItem: (id) => getWorkItem(id),
     latestApprovalRequest: (workItemId, kind) =>
@@ -1493,7 +1522,19 @@ export async function main(): Promise<{
     },
   );
   const labelerPolicy = labelerPolicyFor(viewer.login, config);
-  const decisions = decideIssueActions(candidates, labelerPolicy);
+  // 全停止の間は、新しいIssueを取らない。止まっていないと確かめられない回も取らない。
+  // 取る直前に読むので、候補を集めている間に置かれた全停止にも従う。
+  // 進行中の作業項目の照合と、承認待ちの期限切れの扱いは、新しい作業を始めないので続ける。
+  // 決まった依頼の処理先の起動し直しは、次の工程やIssueの作成を始めるので、掃除に関門を渡して飛ばす。
+  const stop = await readStopAllBounded();
+  if (holdsGate(stop)) {
+    log.info("the stop-all is in place or unreadable, claiming no issue", {
+      state: stop.kind,
+    });
+  }
+  const decisions = unlessStopped(stop, () =>
+    decideIssueActions(candidates, labelerPolicy),
+  );
 
   // 所有を判断できなかったIssueの通知は、`processIssueDecisions`がループを抜けるときに送る。
   const processed = await processIssueDecisions(
@@ -1551,7 +1592,12 @@ export async function main(): Promise<{
     },
   );
 
-  const expired = await sweepPendingApprovals(config, discordWebhookUrl, log);
+  const expired = await sweepPendingApprovals(
+    config,
+    discordWebhookUrl,
+    log,
+    stop,
+  );
 
   return {
     claimed,
