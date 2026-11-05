@@ -33,6 +33,7 @@ import {
   isGatedProlonged,
 } from "./lib/gated_review_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import { withCallTimeout } from "./lib/self_update_support.ts";
 import {
   type DayRange,
   getAgentRunSummary,
@@ -359,19 +360,23 @@ export async function main(): Promise<CatchupResult> {
   await checkCredentialExpiry({
     now: () => new Date(),
     warnDays: config.credential_warn_days,
-    readRecord: () => {
-      const workspace = wmillDefault.getWorkspace();
-      return readVariableOrNull(
-        () => wmill.getVariable("f/factory/credential_expiry"),
-        () =>
-          wmill.VariableService.existsVariable({
-            workspace,
-            path: "f/factory/credential_expiry",
-          }),
-      );
-    },
+    // 上限の無い読み取りが固まっても、日次のまとめを止めない。時間切れは失敗として握りつぶされ、警告のログに残る。
+    readRecord: () =>
+      withCallTimeout("read credential_expiry", () => {
+        const workspace = wmillDefault.getWorkspace();
+        return readVariableOrNull(
+          () => wmill.getVariable("f/factory/credential_expiry"),
+          () =>
+            wmill.VariableService.existsVariable({
+              workspace,
+              path: "f/factory/credential_expiry",
+            }),
+        );
+      }),
     listUnresolved: () =>
-      listUnresolvedNoticesByKind(CREDENTIAL_EXPIRING_NOTICE_KIND),
+      withCallTimeout("list credential_expiring notices", () =>
+        listUnresolvedNoticesByKind(CREDENTIAL_EXPIRING_NOTICE_KIND),
+      ),
     addNotice: (record) => addNoticeUnlessUnresolved(record),
     resolveByMessage: (message) =>
       resolveUnresolvedNoticesByMessage(

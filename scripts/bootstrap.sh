@@ -83,6 +83,9 @@
 #      `GITHUB_READ_TOKEN_<OWNER>`から`read_token_map_json`が組んだJSONの対応表を入れる。
 #      1つも無ければ空の値で入れる。全員分を外すときは、環境変数を消して実行し直す。
 #      `db_backup_url`には、`DB_PASSWORD`から組み立てたcomposeのPostgresのsuperuserの接続URLを入れる。
+#      続けて、秘密でない変数`f/factory/credential_expiry`に、資格情報の期限を記録する
+#      (`scripts/credential_expiry.ts`。前回の記録を読んで、変わらないOAuthトークンの発行日を保つ。
+#      変わったかは、`claude_oauth_token`を書き換える前に、現在の値を`wmill variable get`で読んで比べる)。
 #   8. 古いトークンを入れ替える。`/users/tokens/list`と`/users/tokens/delete`は
 #      アカウント全体の操作なので、セッションのトークンで行う
 #      (`PERSISTENT_TOKEN`ではtoken/listが401になることを確認済み)。
@@ -351,8 +354,8 @@ persistent_token_body() {
 
 variable_create_body() {
   # $1 = パス、$2 = 値、$3 = 説明、$4 = is_secret("true"か"false"。既定は"true")。
-  # 呼び出し箇所はどれも秘密を作り、手順12の`deployed_sha`だけが秘密でない
-  # 例外として"false"を渡す。
+  # 呼び出し箇所はどれも秘密を作り、手順12の`deployed_sha`と手順7の続きの
+  # `credential_expiry`だけが、秘密でない例外として"false"を渡す。
   local is_secret="${4:-true}"
   WM_TMP_PATH="$1" WM_TMP_VALUE="$2" WM_TMP_DESC="$3" WM_TMP_IS_SECRET="${is_secret}" bun_eval '
     const path = process.env.WM_TMP_PATH ?? "";
@@ -364,11 +367,13 @@ variable_create_body() {
 }
 
 variable_update_body() {
-  # $1 = 値、$2 = 説明
-  WM_TMP_VALUE="$1" WM_TMP_DESC="$2" bun_eval '
+  # $1 = 値、$2 = 説明、$3 = is_secret("true"か"false"。既定は"true")。
+  local is_secret="${3:-true}"
+  WM_TMP_VALUE="$1" WM_TMP_DESC="$2" WM_TMP_IS_SECRET="${is_secret}" bun_eval '
     const value = process.env.WM_TMP_VALUE ?? "";
     const description = process.env.WM_TMP_DESC ?? "";
-    process.stdout.write(JSON.stringify({ value, is_secret: true, description }));
+    const is_secret = process.env.WM_TMP_IS_SECRET === "true";
+    process.stdout.write(JSON.stringify({ value, is_secret, description }));
   '
 }
 
@@ -733,18 +738,32 @@ db_backup_url() {
 }
 
 upsert_variable() {
-  local path="$1" value="$2" description="$3" status
-  status="$(variable_create_body "${path}" "${value}" "${description}" | api_post "/w/${WORKSPACE}/variables/create")"
+  # $4 = is_secret("true"か"false"。既定は"true")。作成と更新の両方に同じ値を渡す。
+  local path="$1" value="$2" description="$3" is_secret="${4:-true}" status
+  status="$(variable_create_body "${path}" "${value}" "${description}" "${is_secret}" | api_post "/w/${WORKSPACE}/variables/create")"
   if [ "${status}" = "201" ]; then
     log "variable ${path} created"
     return 0
   fi
   log "variable ${path} create returned ${status} (likely already exists); updating instead"
-  status="$(variable_update_body "${value}" "${description}" | api_post "/w/${WORKSPACE}/variables/update/${path}")"
+  status="$(variable_update_body "${value}" "${description}" "${is_secret}" | api_post "/w/${WORKSPACE}/variables/update/${path}")"
   [ "${status}" = "200" ] || die "failed to create or update variable ${path} (update status ${status})"
   log "variable ${path} updated"
 }
 
+# Claude CodeのOAuthトークンが、Windmillの変数にある値から変わったかを、変数を書き換える前に比べる。
+# 結果は手順7の続きの`scripts/credential_expiry.ts`が、発行日を保つか今日にするかの決定に使う。
+# 読めないとき(変数が無い、CLIが失敗する)は空のままにし、記録の指紋で比べさせる。値は表示しない。
+claude_token_changed=""
+if claude_variable_json="$(run_wmill variable get f/factory/claude_oauth_token --json 2>/dev/null)" &&
+  claude_previous_token="$(printf '%s' "${claude_variable_json}" | jq -r '.value // ""' 2>/dev/null)"; then
+  if [ "${claude_previous_token}" = "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
+    claude_token_changed=0
+  else
+    claude_token_changed=1
+  fi
+fi
+unset claude_variable_json claude_previous_token
 upsert_variable "f/factory/claude_oauth_token" "${CLAUDE_CODE_OAUTH_TOKEN}" \
   "Claude Code long-lived OAuth token, passed to worker subprocesses as an env var."
 upsert_variable "f/factory/github_token" "${GITHUB_TOKEN}" \
@@ -761,6 +780,20 @@ upsert_variable "f/factory/github_read_tokens" "${github_read_tokens_json}" \
 db_backup_url_value="$(db_backup_url)"
 upsert_variable "f/factory/db_backup_url" "${db_backup_url_value}" \
   "Superuser URL of the compose Postgres, built from DB_PASSWORD; the nightly backup reads it to run pg_dumpall."
+
+# --- 手順7の続き: 資格情報の期限を、秘密でない変数に記録する ------------------
+# 前回の記録を読み、Claude CodeのOAuthトークンの値が変わったときだけ発行日を今日にする。
+# 変わったかは、上で変数を書き換える前に比べた結果(`claude_token_changed`)で決め、比べられなければ指紋で比べる。
+# GitHubのPATの期限は`GET /user`の応答ヘッダーから読む。トークンは環境変数で渡し、引数に載せない。
+# 日次のまとめが、この記録を毎日読み、期限の30日前から要対応の通知を残す。
+credential_expiry_previous=""
+credential_status="$(api_get "/w/${WORKSPACE}/variables/get/f/factory/credential_expiry")"
+if [ "${credential_status}" = "200" ]; then
+  credential_expiry_previous="$(jq -r '.value // ""' "${RESP_FILE}")"
+fi
+credential_expiry_json="$(CREDENTIAL_EXPIRY_PREVIOUS="${credential_expiry_previous}" CREDENTIAL_READ_TOKENS="${github_read_tokens_json}" CREDENTIAL_CLAUDE_TOKEN_CHANGED="${claude_token_changed}" CREDENTIAL_WMILL_TOKEN_ISSUED=1 run_in_repo bun ./scripts/credential_expiry.ts)"
+upsert_variable "f/factory/credential_expiry" "${credential_expiry_json}" \
+  "Credential expiry record written by mise run bootstrap; notify_daily_summary warns credential_warn_days before each expiry." "false"
 
 # --- 手順8: 古いfactory-bootstrapのトークンを入れ替える ---------------------
 # `/users/tokens/list`と`/users/tokens/delete`はアカウント全体の操作

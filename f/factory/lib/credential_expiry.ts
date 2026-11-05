@@ -290,25 +290,94 @@ export async function checkCredentialExpiry(
 // 記録の組み立て(ホストの`scripts/credential_expiry.ts`が使う)
 // ---------------------------------------------------------------------------
 
+const HEADER_TIME = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) (UTC|[+-]\d{4})$/;
+
+/**
+ * GitHubの応答ヘッダー`github-authentication-token-expiration`(`2026-12-01 07:22:17 UTC`の形)を、ISOの時刻にする。
+ * ヘッダーが無いか読めなければ`null`を返す。期限の無いトークンは、ヘッダーを返さない。
+ */
+export function tokenExpirationFromHeader(
+  value: string | undefined,
+): string | null {
+  if (value === undefined) return null;
+  const match = HEADER_TIME.exec(value.trim());
+  if (match === null) return null;
+  const [, date, time, zone] = match;
+  if (date === undefined || time === undefined || zone === undefined) {
+    return null;
+  }
+  const offset = zone === "UTC" ? "Z" : `${zone.slice(0, 3)}:${zone.slice(3)}`;
+  const at = Date.parse(`${date}T${time}${offset}`);
+  return Number.isFinite(at) ? new Date(at).toISOString() : null;
+}
+
 export type CredentialRecordInput = {
+  /** 前回の記録。無ければ空。 */
   readonly previous: CredentialExpiryRecord;
+  /** この回のbootstrapが、Windmillのトークンを発行したか。 */
   readonly wmillTokenIssued: boolean;
+  /** Claude CodeのOAuthトークンの指紋。トークンが空なら`null`。 */
   readonly claudeFingerprint: string | null;
   readonly claudeTokenDays: number;
   readonly githubTokenExpiresAt: string | null;
+  /** 所有者ごとの読み取り専用のトークンの期限。期限が分からなければ`null`。 */
   readonly readTokenExpiresAt: Readonly<Record<string, string | null>>;
   readonly interactionLimitsExpiresAt: string | null;
 };
 
-export function tokenExpirationFromHeader(
-  _value: string | undefined,
-): string | null {
-  return null;
+function addDays(now: Date, days: number): string {
+  return new Date(now.getTime() + days * DAY_MS).toISOString();
 }
 
+/** OAuthトークンの期間。指紋が前回と一致すれば前回の記録を保ち、違えば今日から数える。 */
+function claudeWindowFor(
+  input: CredentialRecordInput,
+  now: Date,
+): ClaudeWindow | undefined {
+  if (input.claudeFingerprint === null) return undefined;
+  const before = input.previous.claude_oauth_token;
+  if (before !== undefined && before.fingerprint === input.claudeFingerprint) {
+    return before;
+  }
+  return {
+    issued_at: now.toISOString(),
+    expires_at: addDays(now, input.claudeTokenDays),
+    fingerprint: input.claudeFingerprint,
+  };
+}
+
+/**
+ * 変数に書く記録を作る。
+ * Windmillのトークンは、bootstrapが発行した回だけ今日を発行日にする。
+ * Claude CodeのOAuthトークンは、指紋が前回と変わったときだけ今日を発行日にし、変わらなければ前回の記録を保つ。
+ * 期限の分からないGitHubのトークンは記録しない(期限不明として知らせない)。
+ */
 export function buildCredentialExpiryRecord(
-  _input: CredentialRecordInput,
-  _now: Date,
+  input: CredentialRecordInput,
+  now: Date,
 ): CredentialExpiryRecord {
-  return {};
+  const wmillToken: IssuedWindow | undefined = input.wmillTokenIssued
+    ? {
+        issued_at: now.toISOString(),
+        expires_at: addDays(now, WMILL_TOKEN_LIFETIME_DAYS),
+      }
+    : input.previous.wmill_token;
+  const claude = claudeWindowFor(input, now);
+  const reads: Record<string, ExpiryOnly> = {};
+  for (const [owner, at] of Object.entries(input.readTokenExpiresAt)) {
+    if (at !== null) reads[owner] = { expires_at: at };
+  }
+  return {
+    ...(wmillToken === undefined ? {} : { wmill_token: wmillToken }),
+    ...(claude === undefined ? {} : { claude_oauth_token: claude }),
+    ...(input.githubTokenExpiresAt === null
+      ? {}
+      : { github_token: { expires_at: input.githubTokenExpiresAt } }),
+    ...(Object.keys(reads).length === 0 ? {} : { github_read_tokens: reads }),
+    ...(input.interactionLimitsExpiresAt === null
+      ? {}
+      : {
+          interaction_limits: { expires_at: input.interactionLimitsExpiresAt },
+        }),
+  };
 }

@@ -46,6 +46,7 @@ value:
   retention_work_items_days: 90
   retention_logs_days: 30
   backup_keep_generations: 7
+  credential_warn_days: 30
   factory_repo: https://github.com/<owner>/atelier-works
   factory_branch: main
   instance_name: local
