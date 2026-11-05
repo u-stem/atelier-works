@@ -1,6 +1,6 @@
 // 全停止の要対応の通知を、変数`f/factory/stop_all`に合わせる。scheduleの失敗の検出器が、5分ごとに成功の経路の最後で呼ぶ。
 // 止まっていて未解決の通知が無ければ、通知を残し、Discordに知らせる。
-// 止まっていなくて未解決の通知があれば、解決し、解除の情報の通知を残す。
+// 止まっていなくて未解決の通知があれば、解除の情報の通知を残してから、未解決の通知を解決する。
 // 置く操作と解除する操作は、Console用workerとホストの端末で動き、Discordの送り先を読めないので、知らせはここで出す。
 // 通知の本文は固定の文にする。時刻、操作者、理由はConsoleのシステムの画面に出し、Discordの知らせにだけ添える。
 
@@ -92,11 +92,13 @@ export async function syncStopAllNotice(
   const open = (await deps.listUnresolved()).length > 0;
   if (status.kind === "clear") {
     if (!open) return "none";
-    await deps.resolveActive();
+    // 解除の情報を先に残す。残せずに先に解決すると、次の回は未解決の通知が無く`none`になり、情報が二度と残らない。
+    // 解決に失敗して次の回にやり直しても、`addNotice`は未解決の同じ通知を重ねない。
     await deps.addNotice({
       kind: STOP_ALL_RELEASED_NOTICE_KIND,
       message: STOP_ALL_RELEASED_MESSAGE,
     });
+    await deps.resolveActive();
     return "released";
   }
   if (open) return "kept";

@@ -6968,7 +6968,7 @@ Consoleでは、全停止の区画の**解除**を押し、確認のダイアロ
 
 `factory_config`の`*_enabled`は戻らない。
 Windmillの画面で`f/factory/factory_config`を開き、使う機能を1つずつ`true`にする。
-5分以内に、検出器が`stop_all_active`を解決し、情報の通知(`stop_all_released`)を残す。
+5分以内に、検出器が情報の通知(`stop_all_released`)を残してから、`stop_all_active`を解決する。
 
 ### 全停止の変数を読めないとき
 
