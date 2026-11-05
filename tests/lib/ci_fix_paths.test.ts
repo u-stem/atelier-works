@@ -1091,6 +1091,48 @@ describe("files of the branch hold", () => {
   });
 });
 
+describe("files of the Claude failure stop", () => {
+  test.each([
+    "f/factory/lib/claude_flow_failure.ts",
+    "f/factory/lib/claude_flow_failure.script.yaml",
+    "f/factory/lib/claude_flow_failure.script.lock",
+  ])("denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+
+  test("names the module in the doc of the denied list", async () => {
+    const source = await Bun.file(
+      join(REPO_ROOT, "f/factory/lib/ci_fix_paths.ts"),
+    ).text();
+    const doc = source.slice(
+      0,
+      source.indexOf("const CI_DENIED_NAME_PREFIXES"),
+    );
+    expect(doc.includes("`claude_flow_failure`")).toBe(true);
+  });
+});
+
+describe("files of the failure handler", () => {
+  test.each([
+    "f/factory/on_error_flow.ts",
+    "f/factory/on_error_flow.script.yaml",
+    "f/factory/on_error_flow.script.lock",
+  ])("denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+
+  test("names the module in the doc of the denied list", async () => {
+    const source = await Bun.file(
+      join(REPO_ROOT, "f/factory/lib/ci_fix_paths.ts"),
+    ).text();
+    const doc = source.slice(
+      0,
+      source.indexOf("const CI_DENIED_NAME_PREFIXES"),
+    );
+    expect(doc.includes("`on_error_flow`")).toBe(true);
+  });
+});
+
 describe("countMeaningfulLines", () => {
   test("counts a line of code", () => {
     expect(countMeaningfulLines(["expect(a).toBe(1);"])).toBe(1);
