@@ -73,7 +73,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 412f69fd94586bdf3ef5783e1cd79b9b24a08a8cbbf5123e013d1497d43af20e
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
-  f/factory/lib/credential_expiry: 07322fafcd1e984aad6b74437a4303effdc8e930dc67f60add2fa4b90718f4f6
+  f/factory/lib/credential_expiry: 2417cb33940d7d5352153badc1cfc5fe1038ade1e0a936662679a7900862a21e
   f/factory/lib/db: 02c1c6b84204476d112cf7352f95188966e7bc01dae55709ead62d7ab15574c6
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b

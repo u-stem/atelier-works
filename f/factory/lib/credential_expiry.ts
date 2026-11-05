@@ -285,3 +285,30 @@ export async function checkCredentialExpiry(
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// 記録の組み立て(ホストの`scripts/credential_expiry.ts`が使う)
+// ---------------------------------------------------------------------------
+
+export type CredentialRecordInput = {
+  readonly previous: CredentialExpiryRecord;
+  readonly wmillTokenIssued: boolean;
+  readonly claudeFingerprint: string | null;
+  readonly claudeTokenDays: number;
+  readonly githubTokenExpiresAt: string | null;
+  readonly readTokenExpiresAt: Readonly<Record<string, string | null>>;
+  readonly interactionLimitsExpiresAt: string | null;
+};
+
+export function tokenExpirationFromHeader(
+  _value: string | undefined,
+): string | null {
+  return null;
+}
+
+export function buildCredentialExpiryRecord(
+  _input: CredentialRecordInput,
+  _now: Date,
+): CredentialExpiryRecord {
+  return {};
+}

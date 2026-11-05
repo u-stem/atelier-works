@@ -22,6 +22,14 @@ describe("the daily summary and the credential expiry", () => {
     expect(mainBody).toContain("warnDays: config.credential_warn_days");
   });
 
+  test("bounds the record read and the notice list with withCallTimeout", () => {
+    const call = mainBody.slice(
+      mainBody.indexOf("checkCredentialExpiry("),
+      mainBody.indexOf("runDailySummary("),
+    );
+    expect(call.match(/withCallTimeout\(/g)?.length).toBe(2);
+  });
+
   test("treats the notice as one that needs a person", () => {
     expect(NOTICE_SEVERITY.credential_expiring).toBe("action");
   });
