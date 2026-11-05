@@ -414,11 +414,23 @@ describe("parseClaudeJson error results without a result", () => {
     expect(result.resultText).toBe("one");
   });
 
-  test("uses a result that is not empty over errors", () => {
+  test("joins a result that is not empty and errors with a newline", () => {
     const stdout = withoutResult({
       is_error: true,
       result: "text",
-      errors: ["one"],
+      errors: ["one", "two"],
+    });
+
+    const result = parseClaudeJson(stdout);
+
+    expect(result.resultText).toBe("text\none\ntwo");
+  });
+
+  test("keeps only the result when errors is empty", () => {
+    const stdout = withoutResult({
+      is_error: true,
+      result: "text",
+      errors: [],
     });
 
     const result = parseClaudeJson(stdout);
