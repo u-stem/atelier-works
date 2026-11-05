@@ -227,6 +227,14 @@ export type NotifyEvent =
       next_action: string;
     }
   | {
+      kind: "stop_all_active";
+      instance_name: string;
+      /** 置いた時刻(JST)、操作者、理由。 */
+      cause: string;
+      /** 運用者がまず行う操作の1文。 */
+      next_action: string;
+    }
+  | {
       kind: "github_collect_stale";
       instance_name: string;
       /** 収集が成功していない所有者(小文字)。 */
@@ -619,6 +627,16 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
     case "credential_expiring":
       return {
         title: "資格情報の期限が近づいています",
+        description: event.cause,
+        url: null,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+        ],
+      };
+    case "stop_all_active":
+      return {
+        title: "Factoryを全停止しています",
         description: event.cause,
         url: null,
         fields: [

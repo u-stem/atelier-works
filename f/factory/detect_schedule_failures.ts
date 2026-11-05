@@ -4,6 +4,8 @@
 // tag `periodic`のworkerで動かす。defaultのworkerで動かすと、長いジョブ(implementは最長6時間)が枠を塞ぐ間、失敗の検知が止まるため。
 // 読むsecretは、通知先の`discord_webhook_url`と、外部の死活監視の`heartbeat_url`だけである。
 // 検出が成功した回の最後に、外部の死活監視を叩く(`afterDetection`)。叩かれなくなると、外のサービスが知らせる。
+// 外部の死活監視を叩く前に、全停止の要対応の通知を、変数`f/factory/stop_all`に合わせる(`syncStopAllNotice`)。
+// 全停止を置く操作はDiscordの送り先を読めないので、知らせはこのscriptが出す。
 // 検出器が止まったことは、`default_worker_watch`が、このscriptの成功した実行の完了時刻から見つける。
 // tag periodicを付けたscriptの境界は`tests/scripts/periodic_script_boundary.test.ts`が固定する。
 
@@ -14,9 +16,11 @@ import {
   addNoticeUnlessUnresolved,
   getLatestScheduleFailure,
   listRecordedScheduleFailureJobIds,
+  listUnresolvedNoticesByKind,
   recordFailure,
+  resolveUnresolvedNoticesByMessage,
 } from "./lib/db.ts";
-import { type NotifyEvent, notify } from "./lib/discord.ts";
+import { type NotifyEvent, notify, notifyBestEffort } from "./lib/discord.ts";
 import { readVariableOrNull } from "./lib/freezes.ts";
 import { type HeartbeatResult, pingHeartbeat } from "./lib/heartbeat.ts";
 import type { JobIds } from "./lib/job_ids.ts";
@@ -27,6 +31,13 @@ import {
   type ScheduleFailureDetectDeps,
   type ScheduleFailureDetectResult,
 } from "./lib/schedule_failure_detect.ts";
+import { readStopAll, sdkStopAllReadIo } from "./lib/stop_all.ts";
+import {
+  STOP_ALL_ACTIVE_MESSAGE,
+  STOP_ALL_ACTIVE_NOTICE_KIND,
+  STOP_ALL_NOTICE_RESOLVER,
+  syncStopAllNotice,
+} from "./lib/stop_all_notice.ts";
 import type { FailureRecord, NoticeRecord } from "./lib/types.ts";
 
 /** 配線が使う入出力。テストでは偽物に差し替える。 */
@@ -87,19 +98,29 @@ export function buildDetectDeps(
 
 /** 検出が成功した後の処理の入出力。テストでは偽物に差し替える。 */
 export type AfterDetectionIo = {
+  /** 全停止の通知を変数に合わせる。 */
+  readonly syncStopAllNotice: () => Promise<unknown>;
   /** 死活監視のURL。変数が無いと確かめられたときだけ`null`を返す。 */
   readonly getHeartbeatUrl: () => Promise<string | null>;
   readonly pingHeartbeat: (url: string) => Promise<HeartbeatResult>;
 };
 
 /**
- * 検出が成功した後に、外部の死活監視を叩く。検出が例外で終わった回は呼ばれないので、叩かれない。
+ * 検出が成功した後に、全停止の通知を変数に合わせ、外部の死活監視を叩く。
+ * 検出が例外で終わった回は呼ばれないので、叩かれない。
  * 失敗は警告のログだけにし、検出の結果に影響させない。URLはログに載せない。
  */
 export async function afterDetection(
   io: AfterDetectionIo,
   log: Logger,
 ): Promise<void> {
+  try {
+    await io.syncStopAllNotice();
+  } catch (err) {
+    log.warn("could not sync the stop-all notice", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
   let url: string | null;
   try {
     url = await io.getHeartbeatUrl();
@@ -150,6 +171,32 @@ export async function main(): Promise<ScheduleFailureDetectResult> {
   );
   await afterDetection(
     {
+      syncStopAllNotice: () =>
+        syncStopAllNotice({
+          read: () => readStopAll(sdkStopAllReadIo()),
+          listUnresolved: () =>
+            listUnresolvedNoticesByKind(STOP_ALL_ACTIVE_NOTICE_KIND),
+          addNotice: (record) => addNoticeUnlessUnresolved(record),
+          resolveActive: () =>
+            resolveUnresolvedNoticesByMessage(
+              STOP_ALL_ACTIVE_NOTICE_KIND,
+              STOP_ALL_ACTIVE_MESSAGE,
+              STOP_ALL_NOTICE_RESOLVER,
+            ),
+          notify: async (event: NotifyEvent) =>
+            notifyBestEffort(
+              await wmill.getVariable("f/factory/discord_webhook_url"),
+              event,
+              log,
+            ),
+          instanceName: async () =>
+            (
+              await loadConfig(() =>
+                wmill.getResource("f/factory/factory_config"),
+              )
+            ).instance_name,
+          log,
+        }),
       getHeartbeatUrl: () =>
         readVariableOrNull(
           () => wmill.getVariable("f/factory/heartbeat_url"),

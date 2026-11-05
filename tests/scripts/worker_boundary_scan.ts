@@ -417,30 +417,37 @@ const MEMBER_ACCESS = /^\s*\.\s*([A-Za-z_$][\w$]*)/;
  * 読み取りの呼び出しが本文を受け取る形は、固定したパス以外を読ませる抜け道になりうる。
  */
 const BOUND_PATH_CALLS: Readonly<
-  Record<string, { readonly path: string; readonly requestBody: boolean }>
+  Record<
+    string,
+    { readonly paths: readonly string[]; readonly requestBody: boolean }
+  >
 > = {
   "ResourceService.getResourceValue": {
-    path: "f/factory/factory_config",
+    paths: ["f/factory/factory_config"],
     requestBody: false,
   },
   "ResourceService.updateResourceValue": {
-    path: "f/factory/factory_config",
+    paths: ["f/factory/factory_config"],
     requestBody: true,
   },
-  // 凍結の変数が無いときの有無の確認。他の変数の有無は読ませない。
+  // 凍結の変数と全停止の変数が無いときの有無の確認。他の変数の有無は読ませない。
   "VariableService.existsVariable": {
-    path: "f/factory/freezes",
+    paths: ["f/factory/freezes", "f/factory/stop_all"],
     requestBody: false,
   },
 };
 
 /**
- * パスをリテラルに固定する変数の呼び出し。凍結の変数だけを読み書きしてよい。
+ * パスをリテラルに固定する変数の呼び出し。凍結の変数と全停止の変数だけを読み書きしてよい。
+ * どのscriptがどちらを書くかは、script別の許可表とレビューで決める。
  * `setVariable`は変数が無いときに作るので、秘密の変数として作らないよう、3番目の引数を`false`に固定する。
  * 名前の出現はすべて`name(`の呼び出しでなければならない。別名、`.call`、`.bind`、`.apply`、
  * 引数への受け渡しは、パスの固定をすり抜けるので禁じる。
  */
-const BOUND_VARIABLE_PATH = "f/factory/freezes";
+const BOUND_VARIABLE_PATHS: readonly string[] = [
+  "f/factory/freezes",
+  "f/factory/stop_all",
+];
 const BOUND_VARIABLE_CALLS = ["getVariable", "setVariable"] as const;
 
 /** `text`の`index`にある引用符で始まる文字列の、次の位置。閉じていなければ`undefined`。 */
@@ -572,7 +579,7 @@ function withoutTrailingBlank(parts: string[]): string[] {
  */
 function boundArgumentsProblem(
   args: string | undefined,
-  path: string,
+  paths: readonly string[],
   allowRequestBody: boolean,
 ): string | undefined {
   const argumentList = args === undefined ? undefined : splitTopLevel(args);
@@ -592,7 +599,9 @@ function boundArgumentsProblem(
     const property = raw.trim();
     if (property === "workspace") {
       seen.workspace += 1;
-    } else if (property === `path: ${JSON.stringify(path)}`) {
+    } else if (
+      paths.some((path) => property === `path: ${JSON.stringify(path)}`)
+    ) {
       seen.path += 1;
     } else if (allowRequestBody && /^requestBody\s*:/.test(property)) {
       seen.requestBody += 1;
@@ -690,9 +699,12 @@ export function sdkFindings(source: string): SdkFindings {
     for (const match of code.matchAll(opening)) {
       const args = callArguments(code, match.index + match[0].length - 1);
       if (
-        boundArgumentsProblem(args, bound.path, bound.requestBody) !== undefined
+        boundArgumentsProblem(args, bound.paths, bound.requestBody) !==
+        undefined
       ) {
-        problems.push(`${call} is not bound to the literal ${bound.path}`);
+        problems.push(
+          `${call} is not bound to a literal of ${bound.paths.join(" or ")}`,
+        );
       }
     }
   }
@@ -709,11 +721,15 @@ export function sdkFindings(source: string): SdkFindings {
     for (const match of code.matchAll(opening)) {
       const args = callArguments(code, match.index + match[0].length - 1);
       const parts = args === undefined ? undefined : splitTopLevel(args);
-      if (parts?.[0]?.trim() !== JSON.stringify(BOUND_VARIABLE_PATH)) {
+      const first = parts?.[0]?.trim();
+      if (
+        first === undefined ||
+        !BOUND_VARIABLE_PATHS.some((path) => first === JSON.stringify(path))
+      ) {
         problems.push(
-          `${name} is not bound to the literal ${BOUND_VARIABLE_PATH}`,
+          `${name} is not bound to a literal of ${BOUND_VARIABLE_PATHS.join(" or ")}`,
         );
-      } else if (name === "setVariable" && parts[2]?.trim() !== "false") {
+      } else if (name === "setVariable" && parts?.[2]?.trim() !== "false") {
         problems.push("setVariable may not create a secret variable");
       }
     }

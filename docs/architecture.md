@@ -355,7 +355,7 @@ Consoleの一覧と集計は次のviewを読む。
 | `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。概要には、いま進めているflowのジョブのidも含む。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知、defaultのworkerの直近24時間の負荷 |
 
-次の20本のscriptは、tag `console`を付け、Console用のworkerで動かす。
+次の22本のscriptは、tag `console`を付け、Console用のworkerで動かす。
 
 - `console_query`
 - `approval_decide`
@@ -377,6 +377,8 @@ Consoleの一覧と集計は次のviewを読む。
 - `console_hold_place`
 - `console_schedule_stop`
 - `console_deploy_decide`
+- `console_stop_all`
+- `console_stop_all_release`
 
 どれも、Claudeの長いジョブがdefaultのworkerの枠を埋めても、Consoleを止めないためである。
 
@@ -433,7 +435,7 @@ Consoleの一覧と集計は次のviewを読む。
 | collect_github | `0 1-59/5 * * * *` | `f/factory/collect_github` | 5分ごとに実行します。設定のownersの所有者ごとに、読み取り専用のトークンでリポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数を集めて、DBに書きます。設定のgh_collect_detail_enabledがtrueのときは、続けてPRとIssueの詳細も集めて書きます。設定のgh_collect_enabledがfalseの間は、トークンを読まず、何も書きません。毎日9時0分の日次サマリ通知と重ならないよう、毎時1分から5分おきに実行します。 |
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
 | default_worker_watch | `45 4-59/5 * * * *` | `f/factory/default_worker_watch` | 5分ごとに実行します。defaultのqueueに予定時刻から10分以上待つジョブがあり、defaultで動いているジョブが1つも無いときだけ、defaultのworkerが止まっているとして通知を残し、Discordにも知らせます。長いClaudeのジョブが枠を塞いでいるだけのときは知らせません。待ちが解けると通知を自動で解決します。 |
-| detect_schedule_failures | `20 3-59/5 * * * *` | `f/factory/detect_schedule_failures` | 5分ごとに実行します。scheduleが起こしたジョブの失敗をジョブ履歴から拾って記録し、連続した失敗の初回とエラー文が変わったときはDiscordに知らせ、直近3回の実行が続けて失敗していれば要対応の通知を残します。このWindmillではscheduleの失敗時の呼び出し(on_failure)が働かないため、失敗を拾う入口はこのscheduleだけです。止まると、defaultのworkerの停止を見張る確認が通知を残します。成功した回の最後に、外部の死活監視のURL(heartbeat_url)を叩きます。 |
+| detect_schedule_failures | `20 3-59/5 * * * *` | `f/factory/detect_schedule_failures` | 5分ごとに実行します。scheduleが起こしたジョブの失敗をジョブ履歴から拾って記録し、連続した失敗の初回とエラー文が変わったときはDiscordに知らせ、直近3回の実行が続けて失敗していれば要対応の通知を残します。このWindmillではscheduleの失敗時の呼び出し(on_failure)が働かないため、失敗を拾う入口はこのscheduleだけです。止まると、defaultのworkerの停止を見張る確認が通知を残します。成功した回の最後に、全停止の変数(stop_all)を読んで要対応の通知を合わせ、置かれた直後はDiscordにも知らせます。成功した回の最後に、外部の死活監視のURL(heartbeat_url)を叩きます。 |
 | drawio_viewer_bump | `0 0 10 * * 1` | `f/factory/drawio_viewer_bump` | 毎週月曜の10:00に実行します。draw.ioの公式のリリースを確かめ、公開から14日以上たった最新の版に固定(`console/drawio-viewer.json`)を上げるPRを作ります。メジャー版が変わるPRは、題名に[major]を付け、本文の先頭で人の確認を求めます。PRには自動レビューのラベルを付けます。未完了の更新のPRがあるあいだと、同じ版のPRを作った後は、何もしません。ビューアの大きさが2割を超えて変わる版と、取得物がGitHubの記録と一致しない版は上げず、お知らせに残します。 |
 | notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。`review_post_mode`が`gated`のときは、レビューの投稿欄を足し、投稿しない状態が3日以上続けばConsoleの要対応にnoticeを追加し、投稿するモードに戻れば解決します。予定が飛んだ日があれば、最後に出した日の翌日から古い順に、最大7日分まで出します。まとめの前に、資格情報の期限の記録(credential_expiry)を読み、期限のcredential_warn_days日前を切ったものを要対応の通知にしてDiscordにも知らせます。 |
 | poll_dependabot | `0 */10 * * * *` | `f/factory/poll_dependabot` | 10分ごとに実行します。設定のdependabot_enabledが無効なら何もしません。有効なら、dependabotが開いた、mainをbaseにする、draftでないPRを探し、自動でマージする条件をフローと同じ検査で確かめます。条件を満たしたPRだけ、依存の更新PRの検査と自動マージのフローを起動します。待つ間は何も作らず、待ちが長引いたPRや条件を満たさないPRは、人の対応待ちにして1回だけ通知します。同じPRにレビューか修正の処理が動いている間と、同じheadを処理した後は、選びません。 |
@@ -594,6 +596,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/deploy_gate` | script | [LIB] 保護パスの変更の反映の判定 |
 | `f/factory/lib/stop_all` | script | [LIB] 全停止の状態の解析と判定 |
 | `f/factory/lib/stop_check` | script | [LIB] 全停止の監視 |
+| `f/factory/lib/stop_all_notice` | script | [LIB] 全停止の通知を変数に合わせる |
 | `f/factory/lib/holds` | script | [LIB] 共通の保留の表の読み書き |
 | `f/factory/lib/types` | script | [LIB] 共通型 |
 | `f/factory/lib/self_update_pull_requests` | script | [LIB] 反映に含まれるPRの解析 |
@@ -682,6 +685,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
 | `f/factory/investigate_isolation_probe` | script | [OP-2-11] 調査のClaudeの隔離を、読み出しと探索で測定して判定 |
 | `f/factory/console_deploy_decide` | script | [OP-2-12] 保護パスの変更の反映を承認・却下 |
+| `f/factory/console_stop_all` | script | [OP-2-13] Factoryを全停止 |
+| `f/factory/console_stop_all_release` | script | [OP-2-14] 全停止を解除 |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
 | `f/factory/hold_release` | script | [OP-2-4] 保留を解除 |

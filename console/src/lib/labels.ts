@@ -99,6 +99,8 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["doc_hash_column_missing", "要件定義の基準値の列の欠落"],
   ["design_enabled_ignored", "設計工程の有効化の無視"],
   ["credential_expiring", "資格情報の期限の接近"],
+  ["stop_all_active", "全停止中"],
+  ["stop_all_released", "全停止の解除"],
 ]);
 
 /** 作業項目の状態の日本語。表に無い状態は`UNKNOWN_STATUS_LABEL`にする。 */
