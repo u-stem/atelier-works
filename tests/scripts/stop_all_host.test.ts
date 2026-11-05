@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { killAllArgv } from "../../f/factory/lib/check_sandbox.ts";
 import {
   type ExecResult,
   parseStopArgs,
@@ -17,7 +18,11 @@ const PS = [
   "    202      10 bun run job.ts",
 ].join("\n");
 
-type Recorded = { readonly calls: string[]; readonly deps: StopDeps };
+type Recorded = {
+  readonly calls: string[];
+  readonly printed: string[];
+  readonly deps: StopDeps;
+};
 
 function record(
   options: {
@@ -25,11 +30,14 @@ function record(
     readonly scriptExit?: number;
     readonly jobs?: readonly string[];
     readonly psAfterGrace?: string;
+    readonly env?: Readonly<Record<string, string | undefined>>;
   } = {},
 ): Recorded {
   const calls: string[] = [];
+  const printed: string[] = [];
   let psCount = 0;
   const deps: StopDeps = {
+    env: options.env ?? {},
     confirm: async () => options.confirmed ?? true,
     runScript: async (path, args) => {
       calls.push(`script ${path} ${JSON.stringify(args)}`);
@@ -57,10 +65,12 @@ function record(
     sleep: async (ms) => {
       calls.push(`sleep ${String(ms)}`);
     },
-    print: () => undefined,
+    print: (line) => {
+      printed.push(line);
+    },
     checkUids: [10001, 10002],
   };
-  return { calls, deps };
+  return { calls, printed, deps };
 }
 
 const PLACE: StopCommand = { kind: "place", reason: "a runaway loop" };
@@ -126,6 +136,63 @@ describe("signalGroupArgv", () => {
       "-101",
     ]);
   });
+
+  test("refuses pid 1", () => {
+    expect(() => signalGroupArgv("KILL", 1)).toThrow();
+  });
+
+  test("refuses pid 0", () => {
+    expect(() => signalGroupArgv("KILL", 0)).toThrow();
+  });
+
+  test("refuses a negative pid", () => {
+    expect(() => signalGroupArgv("KILL", -5)).toThrow();
+  });
+
+  test("refuses a pid that is not an integer", () => {
+    expect(() => signalGroupArgv("KILL", 1.5)).toThrow();
+  });
+});
+
+describe("runStop inside a Claude session", () => {
+  const SESSION = { CLAUDECODE: "1" };
+
+  test("refuses place and changes nothing", async () => {
+    const { calls, deps } = record({ env: SESSION });
+    await runStop(PLACE, deps);
+    expect(calls).toEqual([]);
+  });
+
+  test("returns 1 for place", async () => {
+    const { deps } = record({ env: SESSION });
+    expect(await runStop(PLACE, deps)).toBe(1);
+  });
+
+  test("refuses kill_only and changes nothing", async () => {
+    const { calls, deps } = record({ env: SESSION });
+    await runStop({ kind: "kill_only" }, deps);
+    expect(calls).toEqual([]);
+  });
+
+  test("refuses release and changes nothing", async () => {
+    const { calls, deps } = record({ env: SESSION });
+    await runStop({ kind: "release" }, deps);
+    expect(calls).toEqual([]);
+  });
+
+  test("says that stop and release are human-only operations", async () => {
+    const { printed, deps } = record({ env: SESSION });
+    await runStop(PLACE, deps);
+    expect(printed).toContain(
+      "mise run stop and mise run stop:release are human-only operations; run them in your own terminal, not from a Claude session",
+    );
+  });
+
+  test("does not refuse when CLAUDECODE is empty", async () => {
+    const { calls, deps } = record({ env: { CLAUDECODE: "" } });
+    await runStop({ kind: "release" }, deps);
+    expect(calls).toEqual([`script ${RELEASE_SCRIPT} {}`]);
+  });
 });
 
 describe("runStop place", () => {
@@ -183,16 +250,36 @@ describe("runStop place", () => {
     expect(calls).toContain("exec /usr/bin/kill -s KILL -- -101");
   });
 
-  test("does not kill a group that ended in the grace period", async () => {
+  test("kills the group even when its leader ended in the grace period", async () => {
     const { calls, deps } = record({ psAfterGrace: "" });
     await runStop(PLACE, deps);
-    expect(calls).not.toContain("exec /usr/bin/kill -s KILL -- -101");
+    expect(calls).toContain("exec /usr/bin/kill -s KILL -- -101");
+  });
+
+  test("kills the groups after the grace period", async () => {
+    const { calls, deps } = record();
+    await runStop(PLACE, deps);
+    expect(calls.indexOf("sleep 5000")).toBeLessThan(
+      calls.indexOf("exec /usr/bin/kill -s KILL -- -101"),
+    );
   });
 
   test("kills the processes of every check user", async () => {
     const { calls, deps } = record();
     await runStop(PLACE, deps);
     expect(calls.filter((call) => call.includes("--reuid=")).length).toBe(2);
+  });
+
+  test("kills the check user with the exact kill-all argv", async () => {
+    const { calls, deps } = record();
+    await runStop(PLACE, deps);
+    expect(calls).toContain(`exec ${killAllArgv(10001).join(" ")}`);
+  });
+
+  test("kills the second check user with the exact kill-all argv", async () => {
+    const { calls, deps } = record();
+    await runStop(PLACE, deps);
+    expect(calls).toContain(`exec ${killAllArgv(10002).join(" ")}`);
   });
 
   test("still kills the leftovers when the stop script fails", async () => {
@@ -206,6 +293,20 @@ describe("runStop place", () => {
     expect(await runStop(PLACE, deps)).toBe(1);
   });
 
+  test("ends with a warning that the stop-all was not placed", async () => {
+    const { printed, deps } = record({ scriptExit: 1 });
+    await runStop(PLACE, deps);
+    expect(printed.at(-1)).toBe(
+      "WARNING: the stop-all was NOT placed. The schedules and the *_enabled settings are still active; fix Windmill and run mise run stop again.",
+    );
+  });
+
+  test("does not warn when the stop script succeeds", async () => {
+    const { printed, deps } = record();
+    await runStop(PLACE, deps);
+    expect(printed.some((line) => line.startsWith("WARNING"))).toBe(false);
+  });
+
   test("returns 0 when every step succeeds", async () => {
     const { deps } = record();
     expect(await runStop(PLACE, deps)).toBe(0);
@@ -213,6 +314,17 @@ describe("runStop place", () => {
 });
 
 describe("runStop kill_only", () => {
+  test("does nothing when not confirmed", async () => {
+    const { calls, deps } = record({ confirmed: false });
+    await runStop({ kind: "kill_only" }, deps);
+    expect(calls).toEqual([]);
+  });
+
+  test("returns 1 when not confirmed", async () => {
+    const { deps } = record({ confirmed: false });
+    expect(await runStop({ kind: "kill_only" }, deps)).toBe(1);
+  });
+
   test("does not touch Windmill", async () => {
     const { calls, deps } = record();
     await runStop({ kind: "kill_only" }, deps);
