@@ -1369,7 +1369,8 @@ timeoutで打ち切った実行は、上限の値を費用として記録し、�
 
 使用上限の応答の形はClaude Codeの文書に無く、実機でも確かめていない。
 判定の文面は、workerのClaude Codeのバイナリの文字列から取った。
-結果の本文か`errors`が次の文面のどれかを含めば、使用上限とする。
+結果の本文か`errors`のどれかの行が次の文面で始まれば、使用上限とする。
+行頭の`API Error:`の前置きは無視する。
 大文字と小文字は区別しない。
 
 - `You've hit your`
@@ -1381,7 +1382,7 @@ timeoutで打ち切った実行は、上限の値を費用として記録し、�
 - `Your seat type doesn't include extra usage`
 - `Your usage allocation has been disabled`
 - `Your group's usage limit is set to $0`
-- `requires usage credits`
+- 40字までの主語に続く`requires usage credits`
 
 `api_error_status`の429だけでは使用上限にしない。
 一時的なレート制限は、Windmillの再試行で回復するためである。
