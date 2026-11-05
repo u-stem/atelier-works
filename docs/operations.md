@@ -1357,13 +1357,24 @@ flowは失敗のまま終わる。
 
 使用上限のときは、要対応の通知`claude_usage_limit`も残る。
 使用上限はアカウント全体に効くので、この通知は上の4つに限らず、Claudeを呼ぶどのflowでも残る。
+通知の本文には、当たったflowのパスが入り、どのflowを再実行するかの手がかりになる。
+古い通知が未解決の間は、同じflowのパスの新しい通知を足さない。
 
 timeoutで打ち切った実行は、上限の値を費用として記録し、日次予算に数える。
 上限は`max_budget_usd_per_run`で、実装のフローでは`implement_max_budget_usd_per_run`である。
 打ち切った実行の費用は結果に無いので、上限の値で数える。
 そのため、timeoutが続いた日は、日次予算に早く達する。
-起動した後に全停止で止めた実行も、同じ扱いで上限の値を費用として記録する。
-起動しなかった実行の費用は記録しない。
+起動した後にシグナルで終わった実行も、結果を読めなければ、同じ扱いで上限の値を記録する。
+終了コードが0以外でも、結果を読めれば、その実費を記録する。
+起動の直後に終わる失敗(認証の失敗など)は、日次予算を使い切らないよう、費用を記録しない。
+起動しなかった実行の費用も記録しない。
+
+全停止で止めた実行は、止める前に結果を書き終えていれば、その実費を記録する。
+結果を読めなければ、上限の値を記録する。
+そのため、全停止の後は、日次予算に早く達しうる。
+達したときは、JSTの翌0時まで待つか、`daily_budget_usd`を上げる。
+`daily_budget_usd`は、Windmillの画面で`f/factory/factory_config`を開いて書く。
+Consoleからは上げられない([設定を止める向きに変える](#設定を止める向きに変える))。
 
 上限が戻ってから、Consoleの**要対応**で失敗の行を選んで再実行する。
 監査は再実行できないので、**レポート**の**今すぐ監査**で起動し直す。
@@ -1398,8 +1409,10 @@ timeoutで打ち切った実行は、上限の値を費用として記録し、�
    mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT created_at, stage, error FROM factory.agent_runs WHERE error ~* 'limit|usage|hit your|reached your' ORDER BY created_at DESC LIMIT 5"
    ```
 
-2. `error`の`subtype=`と`api_error_status=`と、その後の本文を見る。
-3. 使用上限の失敗が`claude_error`か`non_zero_exit`として記録されていたら、判定が漏れている。
+2. `error`の`reason=`、`subtype=`、`api_error_status=`、その後の本文を見る。
+   `reason=`は、`usage_limit`、`budget_exceeded`、`claude_error`のどれかである。
+3. 使用上限の失敗が`reason=claude_error`で記録されていたら、判定が漏れている。
+   結果を読めなかった失敗(`error`が`claude reported an error`で始まらない記録)に使用上限の文があるときも、同じである。
    本文と終了の形をIssueに書き、`f/factory/lib/claude.ts`の判定を直す。
 4. 判定が正しければ、Consoleで`claude_usage_limit`を解決する。
 
@@ -7036,6 +7049,12 @@ Consoleでは、全停止の区画の**解除**を押し、確認のダイアロ
 `factory_config`の`*_enabled`は戻らない。
 Windmillの画面で`f/factory/factory_config`を開き、使う機能を1つずつ`true`にする。
 5分以内に、検出器が情報の通知(`stop_all_released`)を残してから、`stop_all_active`を解決する。
+
+全停止で止めた実行の作業項目は、失敗のまま残り、自動では再実行されない。
+解除の後に、Consoleの**要対応**で失敗の行を選び、**再実行**を押す。
+監査は再実行できないので、**レポート**の**今すぐ監査**で起動し直す。
+全停止の後は、日次予算に早く達しうる。
+達したときの対応は、[Claudeの実行が上限で失敗したとき](#claudeの実行が上限で失敗したとき)に書く。
 
 ### 全停止の変数を読めないとき
 
