@@ -1913,6 +1913,21 @@ describe("runClaude failure kinds and costs", () => {
     );
   });
 
+  test("classifies a usage limit only in errors beside a result as usage_limit", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({
+        result: "The task stopped.",
+        errors: ["You've hit your limit"],
+      }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "usage_limit",
+    );
+  });
+
   test("classifies a usage limit on a later line of errors as usage_limit", async () => {
     const fake = createFakeCommandRunner([
       isErrorResult({ errors: ["first", "You've hit your limit"] }),
@@ -1987,7 +2002,11 @@ describe("runClaude failure kinds and costs", () => {
 
   test("adds api_error_status to the detail", async () => {
     const fake = createFakeCommandRunner([
-      isErrorResult({ result: "rate limited", api_error_status: 429 }),
+      isErrorResult({
+        result: "rate limited",
+        errors: [],
+        api_error_status: 429,
+      }),
     ]);
 
     const result = await runClaude(baseOptions(fake.run));
