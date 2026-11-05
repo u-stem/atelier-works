@@ -28,6 +28,10 @@ import {
   runClaude,
   type SystemPromptFile,
 } from "../lib/claude.ts";
+import {
+  type FlowFailedResult,
+  settleClaudeFailure,
+} from "../lib/claude_flow_failure.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
   countPendingIssueProposals,
@@ -69,9 +73,10 @@ import {
   withRepoLock,
   writeTextFile,
 } from "../lib/workspace.ts";
+import { claudeFlowFailureDeps } from "../on_error_flow.ts";
 
 /** 監査のflowのパス。flow.yamlの`failure_module`が渡す値と同じにする。 */
-export const AUDIT_FLOW_PATH = "";
+export const AUDIT_FLOW_PATH = "f/factory/audit";
 
 export type AuditOutput = { summary: string; proposals: AuditProposal[] };
 
@@ -348,6 +353,8 @@ async function finishAudit(input: {
  *
  * 失敗は例外を投げるだけで、終端の遷移はしない。
  * `pipeline_generate.ts`と同じく、フローの`failure_module`(`on_error_flow`)が受け持つ。
+ * ただし、Claudeの実行のtimeout、予算の超過、使用上限では例外を投げない。
+ * `settleClaudeFailure`が終端の処理をして`outcome: "failed"`を返し、flow.yamlの`stop_after_if`がflowを止める。
  * 生成後の検証の失敗も例外を投げるだけでよい。
  * Windmillのステップ再試行がスクリプト全体をやり直し、再開の経路は
  * レポートの行が実際にあるときだけClaudeを飛ばすので、Claudeが再び動く。
@@ -380,7 +387,7 @@ export async function main(
   evidence_markdown: string,
   metrics: Record<string, unknown>,
   factory_clone_dir: string,
-): Promise<AuditGenerateResult> {
+): Promise<AuditGenerateResult | FlowFailedResult> {
   const log = logger("audit_generate");
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
@@ -520,11 +527,17 @@ export async function main(
     await recordClaudeRuns(result, recordAgentRun);
 
     if (result.outcome === "failure") {
-      throw new Error(
-        maskSecrets(
+      return await settleClaudeFailure(claudeFlowFailureDeps(log), {
+        reason: result.reason,
+        detail: result.detail,
+        message: maskSecrets(
           `audit_generate: runClaude failed (${result.reason}): ${result.detail}`,
         ),
-      );
+        stepId: "audit_generate",
+        workItemId: work_item_id,
+        path: AUDIT_FLOW_PATH,
+        env: process.env,
+      });
     }
 
     const entries = await readDirEntries(docDir);

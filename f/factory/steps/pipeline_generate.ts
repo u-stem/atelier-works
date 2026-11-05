@@ -10,6 +10,10 @@ import {
   recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
+import {
+  type FlowFailedResult,
+  settleClaudeFailure,
+} from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   getWorkItem,
@@ -27,6 +31,7 @@ import { logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
 import {
   holdsPipelineLease,
+  PIPELINE_FLOW_PATH,
   PIPELINE_LEASE_LOST_REASON,
 } from "../lib/pipeline_lease.ts";
 import { REQUIREMENTS_SCHEMA, requirementsPrompt } from "../lib/prompts.ts";
@@ -53,6 +58,7 @@ import {
   removePath,
   runCommand,
 } from "../lib/workspace.ts";
+import { claudeFlowFailureDeps } from "../on_error_flow.ts";
 import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
 
 /**
@@ -147,7 +153,8 @@ export function buildGenerateFailureMessage(issues: readonly string[]): string {
 export type PipelineGenerateResult =
   | { readonly outcome: "success" }
   | { readonly outcome: "budget_exceeded" }
-  | { readonly outcome: "lease_lost" };
+  | { readonly outcome: "lease_lost" }
+  | FlowFailedResult;
 
 /**
  * 生成の失敗を、秘密情報をマスクした例外として投げる。
@@ -164,12 +171,19 @@ export type PipelineGenerateResult =
  * また、ここで通知すると`on_error_flow`の通知と同じ失敗を二重に知らせることになる。
  * そのため終端の処理(状態、通知)はすべて、Windmillの再試行を
  * 使い切った後にだけ動く`on_error_flow`の`failure_module`に任せる。
- * Claudeの実行の失敗も、生成後の検証の失敗も、ここを通って同じく再試行される。
+ * 生成後の検証の失敗と、再試行で直りうるClaudeの実行の失敗は、この文の例外で再試行される。
  * 日次予算の超過は例外を投げずに返すので、再試行の対象にならない。
+ * Claudeの実行のtimeout、予算の超過、使用上限も再試行で直らないので、
+ * `settleClaudeFailure`が例外を投げずに終端の処理をして返す。
  */
 function failGeneration(reason: string, detail: string): never {
-  throw new Error(
-    maskSecrets(`pipeline_generate: runClaude failed (${reason}): ${detail}`),
+  throw new Error(generationFailureMessage(reason, detail));
+}
+
+/** 生成の失敗の文。秘密情報をマスクする。 */
+function generationFailureMessage(reason: string, detail: string): string {
+  return maskSecrets(
+    `pipeline_generate: runClaude failed (${reason}): ${detail}`,
   );
 }
 
@@ -348,6 +362,8 @@ export async function snapshotDocDir(
  * 一致しなければ通知せずに"lease_lost"を返す。
  * 作業項目かIssue番号が無いとき、Claudeの実行か生成物の検証が失敗したときは
  * 例外を投げる。Claudeを動かしたときは、成否に関わらず`agent_runs`を記録する。
+ * ただし、Claudeの実行のtimeout、予算の超過、使用上限では例外を投げない。
+ * 作業項目を失敗にして`outcome: "failed"`を返し、flow.yamlの`stop_after_if`がflowを止める。
  *
  * doc dir(`buildRequirementsDocDir`)を空にしてからテンプレートを
  * `requirements.md`として複製し、そこをClaudeの`cwd`にする。
@@ -504,7 +520,15 @@ export async function main(
     await recordClaudeRuns(result, recordAgentRun);
 
     if (result.outcome === "failure") {
-      failGeneration(result.reason, result.detail);
+      return await settleClaudeFailure(claudeFlowFailureDeps(log), {
+        reason: result.reason,
+        detail: result.detail,
+        message: generationFailureMessage(result.reason, result.detail),
+        stepId: "generate",
+        workItemId: work_item_id,
+        path: PIPELINE_FLOW_PATH,
+        env: process.env,
+      });
     }
 
     const entries = await readDirEntries(docDir);

@@ -200,7 +200,7 @@ locks:
   f/factory/retry_work_item: 1ba50eaa155e060cb28d6a95b34ecc5f9884ef4665efe3f878da4d78fe683e0d
   f/factory/sample_worker_load: c9f49cba2f86ab2406e37baf04fc2aae3077aa4e432bd154164e534b80227cd1
   f/factory/self_update: 08ec0324a386db2874a59e683630012e468b490c665109e3161a5b878cd5d172
-  f/factory/steps/audit_generate: e4506dc0ff27b54a0e9ef1a301277c99f59e3c740080edaba96df5b6678d8c3f
+  f/factory/steps/audit_generate: b9a15dc4e5edc431f3991b42c0825504e48b368ac0c399dd4983369456457ce6
   f/factory/steps/audit_prepare: 61fc1f70dac94d87d68292ba8d5aaa6df99e608826fdb63909a8c20718700898
   f/factory/steps/console_query: 2e5e9b4632acd8ce2a055fe9304bd7b874d453de20f3bb8159f45e2dbcd1bd52
   f/factory/steps/dependabot_assess: 15c82461f3f283e89e953107be209c1b77e85311033966261245dbb0cfd9c7f6
@@ -221,7 +221,7 @@ locks:
   f/factory/steps/issue_proposal_apply: 488e69aac157ef1c624a932198c4e10d5a664b01d5b66c69da70baa546923f13
   f/factory/steps/manual_intake_create_issue: 549cb45d168af72f520c643768b2a81d8164117ad4e56e2848b1b09e9b97b0ee
   f/factory/steps/manual_intake_register: 2dbf8911f1dd146760c7e923f990b1828adc1b3bdde7a6bf81bb2632d2da3c05
-  f/factory/steps/pipeline_generate: 980dd3223c34609f5c2780586743d4f2d64c903b6a0d973a7809eba2ed34c855
+  f/factory/steps/pipeline_generate: 1c458e9084d601153a6f6d8839356b63d1d3696dab6c38551c4b149561e718a5
   f/factory/steps/pipeline_prepare: 2fce173e13f4f049ae07595e86307c8bb178afb9399ff4acbdb6b9bae8e48f5b
   f/factory/steps/pipeline_request_approval: 88bd1e6f549cc625287c0dfbb26d0c09d47c13634b5f266e292794babff9c19c
   f/factory/steps/pr_fix_apply: 55f101944ecaad2c0b89c45bdbf6a3b11c3efaaf14606ca3452b75c6a61d481b
