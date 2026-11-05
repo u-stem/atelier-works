@@ -2,7 +2,8 @@
 // このWindmillではscheduleの`on_failure`が呼ばれないので、失敗の入口はこのscriptだけである。
 // 判定と記録は`./lib/schedule_failure_detect.ts`にあり、このファイルは入出力をつなぐだけ。
 // tag `periodic`のworkerで動かす。defaultのworkerで動かすと、長いジョブ(implementは最長6時間)が枠を塞ぐ間、失敗の検知が止まるため。
-// 読むsecretは通知先の`discord_webhook_url`だけである。
+// 読むsecretは、通知先の`discord_webhook_url`と、外部の死活監視の`heartbeat_url`だけである。
+// 検出が成功した回の最後に、外部の死活監視を叩く(`afterDetection`)。叩かれなくなると、外のサービスが知らせる。
 // 検出器が止まったことは、`default_worker_watch`が、このscriptの成功した実行の完了時刻から見つける。
 // tag periodicを付けたscriptの境界は`tests/scripts/periodic_script_boundary.test.ts`が固定する。
 
@@ -16,9 +17,10 @@ import {
   recordFailure,
 } from "./lib/db.ts";
 import { type NotifyEvent, notify } from "./lib/discord.ts";
-import type { HeartbeatResult } from "./lib/heartbeat.ts";
+import { readVariableOrNull } from "./lib/freezes.ts";
+import { type HeartbeatResult, pingHeartbeat } from "./lib/heartbeat.ts";
 import type { JobIds } from "./lib/job_ids.ts";
-import { type Logger, logger } from "./lib/log.ts";
+import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import type { PreviousScheduleFailure } from "./lib/schedule_failing.ts";
 import {
   detectScheduleFailures,
@@ -85,19 +87,42 @@ export function buildDetectDeps(
 
 /** 検出が成功した後の処理の入出力。テストでは偽物に差し替える。 */
 export type AfterDetectionIo = {
+  /** 死活監視のURL。変数が無いと確かめられたときだけ`null`を返す。 */
   readonly getHeartbeatUrl: () => Promise<string | null>;
   readonly pingHeartbeat: (url: string) => Promise<HeartbeatResult>;
 };
 
+/**
+ * 検出が成功した後に、外部の死活監視を叩く。検出が例外で終わった回は呼ばれないので、叩かれない。
+ * 失敗は警告のログだけにし、検出の結果に影響させない。URLはログに載せない。
+ */
 export async function afterDetection(
-  _io: AfterDetectionIo,
-  _log: Logger,
-): Promise<void> {}
+  io: AfterDetectionIo,
+  log: Logger,
+): Promise<void> {
+  let url: string | null;
+  try {
+    url = await io.getHeartbeatUrl();
+  } catch (err) {
+    log.warn("could not read the heartbeat url", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return;
+  }
+  if (url === null) return;
+  const result = await io.pingHeartbeat(url);
+  if (result.kind === "rejected" || result.kind === "failed") {
+    log.warn("heartbeat ping failed", {
+      kind: result.kind,
+      reason: result.reason,
+    });
+  }
+}
 
 export async function main(): Promise<ScheduleFailureDetectResult> {
   const log = logger("detect_schedule_failures");
   const workspace = wmillDefault.getWorkspace();
-  return await detectScheduleFailures(
+  const result = await detectScheduleFailures(
     buildDetectDeps(
       {
         workspace,
@@ -123,4 +148,20 @@ export async function main(): Promise<ScheduleFailureDetectResult> {
       log,
     ),
   );
+  await afterDetection(
+    {
+      getHeartbeatUrl: () =>
+        readVariableOrNull(
+          () => wmill.getVariable("f/factory/heartbeat_url"),
+          () =>
+            wmill.VariableService.existsVariable({
+              workspace,
+              path: "f/factory/heartbeat_url",
+            }),
+        ),
+      pingHeartbeat: (url) => pingHeartbeat(url, fetch),
+    },
+    log,
+  );
+  return result;
 }

@@ -25,6 +25,11 @@ CLAUDE_CODE_OAUTH_TOKEN = ""
 # 通知先のDiscordのWebhook URL。
 DISCORD_WEBHOOK_URL = ""
 
+# 外部の死活監視サービス(Healthchecks.io、Uptime Kumaのpush、Cronitorなど)の、叩かれなくなったら知らせるURL。
+# httpsだけを受け付ける。空なら叩かない。作り方は docs/setup.md の「外部の死活監視を設定する」にある。
+#   IFS= read -rs 'v?HEARTBEAT_URL: ' && printf '%s' "$v" | mise set -E local --stdin HEARTBEAT_URL; unset v
+HEARTBEAT_URL = ""
+
 # Console の成果物(CI の artifact)を取り込む console_fetcher 専用の
 # fine-grained personal access token。このリポジトリだけを対象にする。
 # GITHUB_TOKEN(Factory の広い権限の PAT)は流用せず、console_fetcher の

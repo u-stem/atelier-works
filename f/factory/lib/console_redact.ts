@@ -38,6 +38,9 @@ const KNOWN_SHAPES: readonly RegExp[] = [
   /gh[oprsu]_[A-Za-z0-9]{20,}/g,
   /sk-ant-[A-Za-z0-9_-]{10,}/g,
   /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+/g,
+  /https:\/\/hc-ping\.com\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*/g,
+  /https?:\/\/[^\s/]+\/api\/push\/[A-Za-z0-9]+/g,
+  /https:\/\/cronitor\.link\/p\/[A-Za-z0-9]+(?:\/[A-Za-z0-9_-]+)*/g,
 ];
 
 function maskKnownShapes(text: string): string {

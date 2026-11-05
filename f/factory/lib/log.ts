@@ -5,7 +5,7 @@
 /**
  * 値を教わらなくても形式だけで判別できる秘密情報の正規表現。
  * 公開された形式を持つトークン(GitHubのPAT、Claude CodeのOAuthトークン、
- * DiscordのWebhook URL)はこれで常にマスクする。
+ * DiscordのWebhook URL、外部の死活監視のURL)はこれで常にマスクする。
  * Windmill APIトークンのように形式が公開されていないトークンは、
  * 完全一致でマスクするため`secrets`で明示的に渡す必要がある。
  */
@@ -20,6 +20,10 @@ export const SECRET_PATTERNS: readonly RegExp[] = [
   /sk-ant-[A-Za-z0-9_-]{10,}/g,
   // DiscordのWebhook URL。`/webhooks/`以降がすべて秘密情報にあたる。
   /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+/g,
+  // 外部の死活監視のURL。パスの後半がトークンにあたる。Healthchecks.io、Uptime Kumaのpush、Cronitorの形。
+  /https:\/\/hc-ping\.com\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*/g,
+  /https?:\/\/[^\s/]+\/api\/push\/[A-Za-z0-9]+/g,
+  /https:\/\/cronitor\.link\/p\/[A-Za-z0-9]+(?:\/[A-Za-z0-9_-]+)*/g,
 ];
 
 /**

@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 外部の死活監視のURLを叩く'
+description: 内部ライブラリです。直接実行するものではありません。外部の死活監視サービスのURLをhttpsのGETで叩き、結果を返す関数です。
 lock: '!inline f/factory/lib/heartbeat.script.lock'
 kind: script
 schema:

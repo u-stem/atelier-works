@@ -72,12 +72,13 @@
 #      `PERSISTENT_TOKEN`に書き換え、以降の`wmill`の呼び出しが
 #      絞ったトークンを使うようにする。
 #   6. `wmill datatable create`を実行する(`main`のdatatableが既にあれば飛ばす)。
-#   7. 6つの秘密の変数(`claude_oauth_token`・`github_token`・`wmill_token`・
-#      `discord_webhook_url`・`github_read_tokens`・`db_backup_url`)を変数のAPIで作成・更新する。
+#   7. 7つの秘密の変数(`claude_oauth_token`・`github_token`・`wmill_token`・
+#      `discord_webhook_url`・`github_read_tokens`・`db_backup_url`・`heartbeat_url`)を変数のAPIで作成・更新する。
 #      `wmill_token`には`PERSISTENT_TOKEN`を入れる。`claude_oauth_token`・
 #      `github_token`・`discord_webhook_url`は`CLAUDE_CODE_OAUTH_TOKEN`・
 #      `GITHUB_TOKEN`・`DISCORD_WEBHOOK_URL`から取り、空でもよい
 #      (後で人が`mise set -E local`かWindmill UIで入れる)。
+#      `heartbeat_url`は`HEARTBEAT_URL`から取り、空でもよい(空なら検出器は死活監視を叩かない)。
 #      `github_read_tokens`には、所有者ごとの読み取り専用のトークンの環境変数
 #      `GITHUB_READ_TOKEN_<OWNER>`から`read_token_map_json`が組んだJSONの対応表を入れる。
 #      1つも無ければ空の値で入れる。全員分を外すときは、環境変数を消して実行し直す。
@@ -148,7 +149,8 @@ fi
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
-for optional in GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN DISCORD_WEBHOOK_URL; do
+HEARTBEAT_URL="${HEARTBEAT_URL:-}"
+for optional in GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN DISCORD_WEBHOOK_URL HEARTBEAT_URL; do
   if [ "${MODE}" = "full" ] && [ -z "${!optional}" ]; then
     log "note: ${optional} is not set; the matching variable will be created empty"
   fi
@@ -751,6 +753,8 @@ upsert_variable "f/factory/wmill_token" "${PERSISTENT_TOKEN}" \
   "Workspace-scoped Windmill API token (180-day expiry) used by self_update to sync push / migrate from the worker."
 upsert_variable "f/factory/discord_webhook_url" "${DISCORD_WEBHOOK_URL}" \
   "Discord incoming webhook URL used for pipeline notifications."
+upsert_variable "f/factory/heartbeat_url" "${HEARTBEAT_URL}" \
+  "External dead-man's switch URL (https only) that detect_schedule_failures pings after each successful run; empty disables it."
 github_read_tokens_json="$(read_token_map_json)"
 upsert_variable "f/factory/github_read_tokens" "${github_read_tokens_json}" \
   "Per-owner read-only GitHub PATs as a JSON map (lowercase owner login to token), built from GITHUB_READ_TOKEN_<OWNER> and read by collect_github on the periodic worker."
@@ -843,7 +847,7 @@ fi
 
 # --- 手順12: インスタンス固有のdeployed_sha変数(無ければ作る) -------------
 # syncの対象外(`wmill.yaml`の`excludes`のこのパスのコメントを参照)。
-# 秘密でないこの変数には`self_update`が実行時に書き込む。手順7の6つの秘密は
+# 秘密でないこの変数には`self_update`が実行時に書き込む。手順7の7つの秘密は
 # 実行し直すたびに上書きしてよいが、これは一度だけ作り、後の実行で空に
 # 戻してはならない。空に戻すと`self_update`が毎回再デプロイが要ると判断し、
 # ホストで進行中の`mise run deploy`と競合する。

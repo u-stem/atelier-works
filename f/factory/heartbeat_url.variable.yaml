@@ -1,0 +1,4 @@
+value: ""
+is_secret: true
+description: >-
+  外部の死活監視サービスの、叩かれなくなったら知らせるURLです。httpsだけを受け付けます。空なら叩きません。ここで値を設定するか、mise.local.tomlのHEARTBEAT_URLに入れてmise run bootstrapを実行してください。
