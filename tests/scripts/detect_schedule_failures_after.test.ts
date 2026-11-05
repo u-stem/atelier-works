@@ -13,25 +13,34 @@ type Setup = {
   readonly io: AfterDetectionIo;
   readonly pinged: string[];
   readonly lines: string[];
+  readonly order: string[];
 };
 
 function setup(
   url: string | null | Error,
   result: HeartbeatResult = { kind: "sent" },
+  syncError?: Error,
 ): Setup {
   const pinged: string[] = [];
   const lines: string[] = [];
+  const order: string[] = [];
   const io: AfterDetectionIo = {
+    syncStopAllNotice: async () => {
+      order.push("sync");
+      if (syncError !== undefined) throw syncError;
+      return "none";
+    },
     getHeartbeatUrl: async () => {
       if (url instanceof Error) throw url;
       return url;
     },
     pingHeartbeat: async (target) => {
+      order.push("ping");
       pinged.push(target);
       return result;
     },
   };
-  return { io, pinged, lines };
+  return { io, pinged, lines, order };
 }
 
 function capture(lines: string[]) {
@@ -81,6 +90,22 @@ describe("afterDetection", () => {
     await afterDetection(io, capture(lines));
     expect(lines).toEqual([]);
   });
+
+  test("syncs the stop-all notice before it pings", async () => {
+    const { io, order, lines } = setup(URL_TEXT);
+    await afterDetection(io, capture(lines));
+    expect(order).toEqual(["sync", "ping"]);
+  });
+
+  test("still pings when the stop-all notice cannot be synced", async () => {
+    const { io, pinged, lines } = setup(
+      URL_TEXT,
+      { kind: "sent" },
+      new Error("db down"),
+    );
+    await afterDetection(io, capture(lines));
+    expect(pinged).toEqual([URL_TEXT]);
+  });
 });
 
 describe("the wiring of the detector", () => {
@@ -95,5 +120,9 @@ describe("the wiring of the detector", () => {
 
   test("reads the heartbeat url by its literal path", () => {
     expect(mainBody).toContain('wmill.getVariable("f/factory/heartbeat_url")');
+  });
+
+  test("reads the stop-all state for the notice", () => {
+    expect(mainBody).toContain("syncStopAllNotice(");
   });
 });

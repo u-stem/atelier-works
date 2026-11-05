@@ -2360,3 +2360,88 @@ describe("bash-guard allows work near the Console release scripts", () => {
     expect(await decide(command, { subagent: true })).toBe("allow");
   });
 });
+
+// 全停止は、Factory全体を止める。置く操作と解除する操作は、端末の確認を通る人の操作である。
+// CLIが`CLAUDECODE`で断るだけでは環境変数の除去で迂回できるので、フックでも主セッションを含むすべてのセッションで止める。
+describe("bash-guard denies placing and releasing the stop-all", () => {
+  const COMMANDS = [
+    "bun scripts/stop_all.ts place --reason x",
+    "bun ./scripts/stop_all.ts release",
+    "bun run scripts/stop_all.ts place --kill-only",
+    "bun scripts/stop_all place --reason x",
+    "bun /Users/someone/ws/atelier-works/scripts/stop_all.ts release",
+    "node scripts/stop_all.ts release",
+    "bunx tsx scripts/stop_all.ts release",
+    "./scripts/stop_all.ts release",
+    "mise exec -- bun scripts/stop_all.ts release",
+    "sh -c 'bun scripts/stop_all.ts release'",
+    "bun scripts/stop_al?.ts release",
+    "mise run stop -- --reason x",
+    "mise run stop:release",
+    "mise r stop -- --reason x",
+    "mise stop -- --reason x",
+    "mise stop:release",
+    "mise tasks run stop:release",
+    "mise -C /repo run stop:release",
+    "mise run stop:rel*",
+    "wmill variable add '{}' f/factory/stop_all",
+    "wmill variable push stop_all.variable.yaml f/factory/stop_all",
+    "wmill variable add '{}' f/factory/stop_al?",
+    "mise exec -- wmill variable add '{}' f/factory/stop_all",
+    `curl -X POST http://localhost:8000/api/w/factory/variables/update/f/factory/stop_all -d '{}'`,
+    `curl -X POST http://localhost:8000/api/w/factory/variables/create -d '{"path":"f/factory/stop_all"}'`,
+    `curl -X POST http://localhost:8000/api/w/factory/variables/delete/f/factory/stop_all`,
+  ];
+
+  test.each(COMMANDS)("denies %s in the main session", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each(COMMANDS)("denies %s in a subagent", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("the reason for the CLI names the task that a person runs", async () => {
+    expect(await denyReason("mise run stop -- --reason x")).toContain(
+      "mise run stop:release",
+    );
+  });
+
+  test("the reason for the CLI says that a person confirms in a terminal", async () => {
+    expect(await denyReason("bun scripts/stop_all.ts place")).toContain(
+      "terminal",
+    );
+  });
+
+  test("the reason for a variable write names the variable", async () => {
+    expect(
+      await denyReason("wmill variable add '{}' f/factory/stop_all"),
+    ).toContain("f/factory/stop_all");
+  });
+});
+
+describe("bash-guard allows work near the stop-all", () => {
+  test.each([
+    "bun test tests/scripts/stop_all.test.ts",
+    "bun test tests/lib/stop_all.test.ts",
+    "bun test scripts/stop_all.ts",
+    "bunx biome check scripts/stop_all.ts",
+    "bun run scripts/lint-no-type-assertions.ts scripts/stop_all.ts",
+    "git add scripts/stop_all.ts f/factory/lib/stop_all.ts",
+    "git diff -- scripts/stop_all.ts",
+    "git commit -m 'feat: mise run stop を足す'",
+    "cat scripts/stop_all.ts",
+    "rg stop_all scripts",
+    "wmill variable get f/factory/stop_all",
+    "wmill variable add '{}' f/factory/other",
+    "curl http://localhost:8000/api/w/factory/variables/get_value/f/factory/stop_all",
+    "mise run check",
+    "mise run test -- tests/scripts/stop_all.test.ts",
+    "mise run lint -- stop",
+    "mise run stop-check",
+    "mise tasks ls",
+    "mise tasks info stop",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
