@@ -36,9 +36,13 @@ export function flowFailureMessage(
     : `${NO_FLOW_RETRY_MARKER} ${message}`;
 }
 
-/** 例外の文の先頭のタグを外す。 */
-export function withoutFlowRetryMarker(_message: string): string {
-  return "";
+/**
+ * 文の先頭のタグを外す。先頭に無いタグは外さない。
+ * 例外の文はそのまま作業項目の注記になるので、注記の先頭で失敗を見分ける処理は、タグを外してから比べる。
+ */
+export function withoutFlowRetryMarker(message: string): string {
+  const prefix = `${NO_FLOW_RETRY_MARKER} `;
+  return message.startsWith(prefix) ? message.slice(prefix.length) : message;
 }
 
 /** 使用上限の通知を残すための操作と環境。 */
