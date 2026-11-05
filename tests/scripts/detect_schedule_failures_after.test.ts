@@ -6,6 +6,7 @@ import {
 } from "../../f/factory/detect_schedule_failures.ts";
 import type { HeartbeatResult } from "../../f/factory/lib/heartbeat.ts";
 import { logger } from "../../f/factory/lib/log.ts";
+import { withCallTimeout } from "../../f/factory/lib/self_update_support.ts";
 
 const URL_TEXT = "https://hc-ping.com/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b";
 
@@ -63,6 +64,23 @@ describe("afterDetection", () => {
   test("does not throw when the url cannot be read", async () => {
     const { io, lines } = setup(new Error("api down"));
     await expect(afterDetection(io, capture(lines))).resolves.toBeUndefined();
+  });
+
+  test("skips the ping when the url read times out", async () => {
+    const { io, pinged, lines } = setup(URL_TEXT);
+    await afterDetection(
+      {
+        ...io,
+        getHeartbeatUrl: () =>
+          withCallTimeout(
+            "read heartbeat url",
+            () => new Promise<never>(() => {}),
+            5,
+          ),
+      },
+      capture(lines),
+    );
+    expect(pinged).toEqual([]);
   });
 
   test("warns when the ping fails", async () => {
@@ -132,8 +150,18 @@ describe("the wiring of the detector", () => {
     );
   });
 
-  test("gives the notice sync twenty seconds", () => {
-    expect(source).toContain("STOP_ALL_NOTICE_SYNC_TIMEOUT_MS = 20_000");
+  test("gives the notice sync ten seconds", () => {
+    expect(source).toContain("STOP_ALL_NOTICE_SYNC_TIMEOUT_MS = 10_000");
+  });
+
+  test("bounds the heartbeat url read with a call timeout", () => {
+    expect(mainBody).toMatch(
+      /getHeartbeatUrl:\s*\(\)\s*=>\s*withCallTimeout\(\s*"read heartbeat url",\s*\(\)\s*=>\s*readVariableOrNull\(/,
+    );
+  });
+
+  test("gives the heartbeat url read five seconds", () => {
+    expect(source).toContain("HEARTBEAT_URL_READ_TIMEOUT_MS = 5_000");
   });
 
   test("resolves the open notices by kind", () => {
