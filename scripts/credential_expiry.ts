@@ -8,14 +8,11 @@
 // 入力の環境変数:
 //   CREDENTIAL_EXPIRY_PREVIOUS         前回の記録(JSON)。無ければ空
 //   CREDENTIAL_WMILL_TOKEN_ISSUED      この回にWindmillのトークンを発行したなら1
-//   CREDENTIAL_CLAUDE_TOKEN_CHANGED    Claude CodeのOAuthトークンが、Windmillの変数の値から変わったなら1、変わらないなら0。
-//                                      bootstrapが変数を書き換える前に読んで比べる。比べられなければ空にし、指紋で比べる
 //   CREDENTIAL_READ_TOKENS             所有者からトークンへの対応表(JSON)。bootstrapの`read_token_map_json`が作る
 //   GITHUB_TOKEN、CLAUDE_CODE_OAUTH_TOKEN、CLAUDE_OAUTH_TOKEN_DAYS、INTERACTION_LIMITS_REPO、INTERACTION_LIMITS_EXPIRES_AT
 
 import {
   buildCredentialExpiryRecord,
-  type CredentialExpiryRecord,
   DEFAULT_CLAUDE_OAUTH_TOKEN_DAYS,
   parseCredentialExpiry,
   tokenExpirationFromHeader,
@@ -143,49 +140,32 @@ export function sha256Fingerprint(token: string): string {
 
 export type CollectEnv = Readonly<Record<string, string | undefined>>;
 
-/**
- * 記録の組み立てに渡す、OAuthトークンの指紋と前回の記録を決める。
- * bootstrapが変数の値で比べた結果が「変わらない」なら、前回の指紋をそのまま使って期間を保つ。
- * 「変わった」なら、前回の期間を捨てて今日から数える。比べられなかったときは、指紋の一致で決める。
- */
-function claudeBasis(
-  token: string,
-  previous: CredentialExpiryRecord,
-  changed: string | undefined,
-): { fingerprint: string | null; previous: CredentialExpiryRecord } {
-  if (token === "") return { fingerprint: null, previous };
-  const before = previous.claude_oauth_token;
-  if (changed === "0" && before !== undefined) {
-    return { fingerprint: before.fingerprint, previous };
-  }
-  if (changed === "1") {
-    const { claude_oauth_token: _dropped, ...rest } = previous;
-    return { fingerprint: sha256Fingerprint(token), previous: rest };
-  }
-  return { fingerprint: sha256Fingerprint(token), previous };
-}
-
 /** 環境変数とGitHubの応答から、変数に書くJSONを作る。 */
 export async function collectCredentialExpiry(
   env: CollectEnv,
   fetchImpl: GitHubFetch,
   now: Date,
 ): Promise<string> {
-  const parsedPrevious = parseCredentialExpiry(
+  const previous = parseCredentialExpiry(
     env.CREDENTIAL_EXPIRY_PREVIOUS ?? null,
   ).record;
   const githubToken = env.GITHUB_TOKEN ?? "";
+  // 同じトークンを複数の所有者が使っても、GitHubへ問い合わせるのは1度にする。
+  const asked = new Map<string, string | null>();
+  const expiryOf = async (token: string): Promise<string | null> => {
+    const known = asked.get(token);
+    if (known !== undefined) return known;
+    const at = await tokenExpiresAt(token, fetchImpl);
+    asked.set(token, at);
+    return at;
+  };
   const readTokenExpiresAt: Record<string, string | null> = {};
   for (const [owner, token] of Object.entries(
     readTokenMap(env.CREDENTIAL_READ_TOKENS),
   )) {
-    readTokenExpiresAt[owner] = await tokenExpiresAt(token, fetchImpl);
+    readTokenExpiresAt[owner] = await expiryOf(token);
   }
-  const claude = claudeBasis(
-    env.CLAUDE_CODE_OAUTH_TOKEN ?? "",
-    parsedPrevious,
-    env.CREDENTIAL_CLAUDE_TOKEN_CHANGED,
-  );
+  const claudeToken = env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
   const fromApi = await interactionLimitsExpiresAt(
     env.INTERACTION_LIMITS_REPO ?? "",
     githubToken,
@@ -193,14 +173,15 @@ export async function collectCredentialExpiry(
   );
   const record = buildCredentialExpiryRecord(
     {
-      previous: claude.previous,
+      previous,
       wmillTokenIssued: env.CREDENTIAL_WMILL_TOKEN_ISSUED === "1",
-      claudeFingerprint: claude.fingerprint,
+      claudeFingerprint:
+        claudeToken === "" ? null : sha256Fingerprint(claudeToken),
       claudeTokenDays: parseDays(
         env.CLAUDE_OAUTH_TOKEN_DAYS,
         DEFAULT_CLAUDE_OAUTH_TOKEN_DAYS,
       ),
-      githubTokenExpiresAt: await tokenExpiresAt(githubToken, fetchImpl),
+      githubTokenExpiresAt: await expiryOf(githubToken),
       readTokenExpiresAt,
       interactionLimitsExpiresAt:
         fromApi ?? configuredExpiresAt(env.INTERACTION_LIMITS_EXPIRES_AT),

@@ -84,8 +84,8 @@
 #      1つも無ければ空の値で入れる。全員分を外すときは、環境変数を消して実行し直す。
 #      `db_backup_url`には、`DB_PASSWORD`から組み立てたcomposeのPostgresのsuperuserの接続URLを入れる。
 #      続けて、秘密でない変数`f/factory/credential_expiry`に、資格情報の期限を記録する
-#      (`scripts/credential_expiry.ts`。前回の記録を読んで、変わらないOAuthトークンの発行日を保つ。
-#      変わったかは、`claude_oauth_token`を書き換える前に、現在の値を`wmill variable get`で読んで比べる)。
+#      (`scripts/credential_expiry.ts`。前回の記録を読んで、指紋が変わらないOAuthトークンの発行日を保つ)。
+#      集める処理が失敗したら、警告を出して前回の記録を残し、手順8に進む。
 #   8. 古いトークンを入れ替える。`/users/tokens/list`と`/users/tokens/delete`は
 #      アカウント全体の操作なので、セッションのトークンで行う
 #      (`PERSISTENT_TOKEN`ではtoken/listが401になることを確認済み)。
@@ -751,19 +751,6 @@ upsert_variable() {
   log "variable ${path} updated"
 }
 
-# Claude CodeのOAuthトークンが、Windmillの変数にある値から変わったかを、変数を書き換える前に比べる。
-# 結果は手順7の続きの`scripts/credential_expiry.ts`が、発行日を保つか今日にするかの決定に使う。
-# 読めないとき(変数が無い、CLIが失敗する)は空のままにし、記録の指紋で比べさせる。値は表示しない。
-claude_token_changed=""
-if claude_variable_json="$(run_wmill variable get f/factory/claude_oauth_token --json 2>/dev/null)" &&
-  claude_previous_token="$(printf '%s' "${claude_variable_json}" | jq -r '.value // ""' 2>/dev/null)"; then
-  if [ "${claude_previous_token}" = "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
-    claude_token_changed=0
-  else
-    claude_token_changed=1
-  fi
-fi
-unset claude_variable_json claude_previous_token
 upsert_variable "f/factory/claude_oauth_token" "${CLAUDE_CODE_OAUTH_TOKEN}" \
   "Claude Code long-lived OAuth token, passed to worker subprocesses as an env var."
 upsert_variable "f/factory/github_token" "${GITHUB_TOKEN}" \
@@ -782,18 +769,38 @@ upsert_variable "f/factory/db_backup_url" "${db_backup_url_value}" \
   "Superuser URL of the compose Postgres, built from DB_PASSWORD; the nightly backup reads it to run pg_dumpall."
 
 # --- 手順7の続き: 資格情報の期限を、秘密でない変数に記録する ------------------
-# 前回の記録を読み、Claude CodeのOAuthトークンの値が変わったときだけ発行日を今日にする。
-# 変わったかは、上で変数を書き換える前に比べた結果(`claude_token_changed`)で決め、比べられなければ指紋で比べる。
+# 前回の記録を読み、Claude CodeのOAuthトークンの指紋が変わったときだけ発行日を今日にする。
 # GitHubのPATの期限は`GET /user`の応答ヘッダーから読む。トークンは環境変数で渡し、引数に載せない。
 # 日次のまとめが、この記録を毎日読み、期限の30日前から要対応の通知を残す。
+# 期限の記録は補助なので、集める処理が失敗しても止まらない。手順8のトークンの入れ替えに進めなくなるのを避けるため、
+# 警告を出して前回の記録を残し、先へ進む。
+
+# $1 = 前回の記録、$2 = 所有者ごとの読み取り専用トークンの対応表(JSON)。
+# 子に渡す環境をここで明示して輸出する。呼び出しは`$(...)`のサブシェルの中で動くので、
+# 輸出は親のシェルに残らない(`read_token_map_json`の`GITHUB_READ_TOKEN_*`と同じ)。
+credential_expiry_run() {
+  export CREDENTIAL_EXPIRY_PREVIOUS="$1"
+  export CREDENTIAL_READ_TOKENS="$2"
+  export CREDENTIAL_WMILL_TOKEN_ISSUED=1
+  export GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+  export INTERACTION_LIMITS_REPO="${INTERACTION_LIMITS_REPO:-}"
+  export INTERACTION_LIMITS_EXPIRES_AT="${INTERACTION_LIMITS_EXPIRES_AT:-}"
+  export CLAUDE_OAUTH_TOKEN_DAYS="${CLAUDE_OAUTH_TOKEN_DAYS:-}"
+  run_in_repo bun ./scripts/credential_expiry.ts
+}
+
 credential_expiry_previous=""
-credential_status="$(api_get "/w/${WORKSPACE}/variables/get/f/factory/credential_expiry")"
+credential_status="$(api_get "/w/${WORKSPACE}/variables/get/f/factory/credential_expiry" || true)"
 if [ "${credential_status}" = "200" ]; then
-  credential_expiry_previous="$(jq -r '.value // ""' "${RESP_FILE}")"
+  credential_expiry_previous="$(jq -r '.value // ""' "${RESP_FILE}" || true)"
 fi
-credential_expiry_json="$(CREDENTIAL_EXPIRY_PREVIOUS="${credential_expiry_previous}" CREDENTIAL_READ_TOKENS="${github_read_tokens_json}" CREDENTIAL_CLAUDE_TOKEN_CHANGED="${claude_token_changed}" CREDENTIAL_WMILL_TOKEN_ISSUED=1 run_in_repo bun ./scripts/credential_expiry.ts)"
-upsert_variable "f/factory/credential_expiry" "${credential_expiry_json}" \
-  "Credential expiry record written by mise run bootstrap; notify_daily_summary warns credential_warn_days before each expiry." "false"
+if credential_expiry_json="$(credential_expiry_run "${credential_expiry_previous}" "${github_read_tokens_json}")" &&
+  printf '%s' "${credential_expiry_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  upsert_variable "f/factory/credential_expiry" "${credential_expiry_json}" \
+    "Credential expiry record written by mise run bootstrap; notify_daily_summary warns credential_warn_days before each expiry." "false"
+else
+  log "warning: could not collect the credential expiry; keeping the previous record"
+fi
 
 # --- 手順8: 古いfactory-bootstrapのトークンを入れ替える ---------------------
 # `/users/tokens/list`と`/users/tokens/delete`はアカウント全体の操作
