@@ -1798,6 +1798,15 @@ describe("runClaude failure kinds and costs", () => {
     "You've reached your Fable limit.",
     "You're out of usage credits",
     "you've hit your limit",
+    "Your org is out of usage · add funds to continue",
+    "Your org is out of usage · contact your admin",
+    "You're out of extra usage",
+    "Your seat type doesn't include usage credits",
+    "Your seat type doesn't include usage",
+    "Your seat type doesn't include extra usage",
+    "Your usage allocation has been disabled by your admin",
+    "Your group's usage limit is set to $0",
+    "Fable 5 requires usage credits",
   ])("classifies the message %p as usage_limit", async (message) => {
     const fake = createFakeCommandRunner([isErrorResult({ result: message })]);
 
