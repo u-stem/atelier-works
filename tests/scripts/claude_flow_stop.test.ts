@@ -25,7 +25,8 @@ function moduleBlock(flow: string, id: string): string {
   if (start === -1) throw new Error(`module ${id} not found in flow.yaml`);
   const rest = flow.slice(start + 1);
   const next = rest.search(/\n\s+- id: |\n {2}failure_module:/);
-  return next === -1 ? rest : rest.slice(0, next);
+  // 最後の行の改行も範囲に含める。
+  return next === -1 ? rest : rest.slice(0, next + 1);
 }
 
 /** `failure_module`から後ろのテキスト。 */
