@@ -1375,7 +1375,8 @@ Windmillのジョブの結果とログには、例外の文の先頭の`[no-flow
    ```
 
 2. ステップのジョブを次のコマンドで探す。
-   ステップのパスは`f/factory/steps/dependabot_assess`のように、ステージに対応する。
+   ステージ`dependabot_assess`のステップは`f/factory/steps/dependabot_assess`である。
+   ステージ`investigate`のステップは`f/factory/steps/investigate_generate`である。
 
    ```bash
    mise exec -- wmill job list --all --script-path <ステップのパス> --limit 10
