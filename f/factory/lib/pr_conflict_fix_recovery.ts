@@ -9,7 +9,6 @@ import {
   CONFLICT_TEMPORARY_STOP_NOTES,
   conflictRoundReason,
 } from "./conflict_fix_round.ts";
-import { withoutFlowRetryMarker } from "./flow_retry_marker.ts";
 import {
   BUDGET_REASON,
   DRAFT_OR_AUTO_MERGE_REASONS,
@@ -105,7 +104,7 @@ function isTerminal(status: WorkItemStatus): boolean {
  *   一時の停止のうち、Claudeを動かす前の停止(`CONFLICT_UNCOUNTED_STOP_NOTES`)も、回数に数えない。
  *   pushの直前にheadが動いた停止は、Claudeを動かした後なので回数に数え、`pr_conflict_fix_max_rounds`が止める。
  * - `failed`は、フローを起動する前に失敗した(ジョブIDが無い)なら、保留なしで結びを外す。
- *   フローが起動した後の`failed`は、再試行を止めるタグを除いた注記がClaudeの実行の失敗の先頭(`CONFLICT_CLAUDE_FAILED_NOTE_PREFIX`)で始まるなら、
+ *   フローが起動した後の`failed`は、注記がClaudeの実行の失敗の先頭(`CONFLICT_CLAUDE_FAILED_NOTE_PREFIX`)で始まるなら、
  *   `fix_stopped`で保留する。Claudeの費用を使った失敗を、同じ入力で繰り返さないためである。
  *   それ以外は、理由を写せれば写し、写せなければ保留なしで結びを外す。
  *   例外で終わった回は、`getDefaultBranch`や`git fetch`の通信の失敗のように、待てば解けるものを区別できないためである。
@@ -148,8 +147,7 @@ function decideRecoveryByState(
   }
   if (item.status === "failed" && item.launched) {
     const note = item.note;
-    const unmarked = note === null ? null : withoutFlowRetryMarker(note);
-    if (unmarked?.startsWith(CONFLICT_CLAUDE_FAILED_NOTE_PREFIX)) {
+    if (note?.startsWith(CONFLICT_CLAUDE_FAILED_NOTE_PREFIX)) {
       return { kind: "release", hold: "fix_stopped" };
     }
     return {

@@ -35,7 +35,8 @@ export function flowFailureMessage(
 
 /**
  * 文の先頭のタグを外す。先頭に無いタグは外さない。
- * 例外の文はそのまま作業項目の注記になるので、注記の先頭で失敗を見分ける処理は、タグを外してから比べる。
+ * flowの失敗の処理(`on_error_flow`)が、記録と注記と通知に使う前に呼ぶ。
+ * そのため、作業項目の注記にタグは入らない。
  */
 export function withoutFlowRetryMarker(message: string): string {
   const prefix = `${NO_FLOW_RETRY_MARKER} `;

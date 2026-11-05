@@ -1173,7 +1173,7 @@ PRレビューの生成とPR修正の修正のステップには、Windmillの�
 - このときステップは例外の文の先頭に`[no-flow-retry]`を付けて投げる。
   `retry_if`の式がこのタグを見て偽になるので、flowは失敗のまま`failure_module`へ進む。
   終端の処理は`failure_module`(`on_error_flow`)が行い、後続のステップは走らない。
-  タグは作業項目の注記と`job_failed`の本文にも残る。
+  `on_error_flow`が最初にタグを外すので、タグは作業項目の注記と`job_failed`の本文に出ない。
 - それ以外のClaudeの失敗(0以外の終了コード、不正な出力、ほかのエラー)では、タグを付けないので再試行が走る。
   `api_error_status`が429の一時的なレート制限も、ここに入る。
   GitHubやgitの失敗でも、再試行が走る。

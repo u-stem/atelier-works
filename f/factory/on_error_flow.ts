@@ -37,6 +37,7 @@ import {
 } from "./lib/db.ts";
 import { DEPENDABOT_FLOW_PATH } from "./lib/dependabot_flow_support.ts";
 import { type NotifyEvent, notify } from "./lib/discord.ts";
+import { withoutFlowRetryMarker } from "./lib/flow_retry_marker.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   DESIGN_FLOW_PATH,
@@ -220,7 +221,11 @@ export async function handleFlowFailure(
 ): Promise<void> {
   const { log } = deps;
   const { workItemId: work_item_id, path } = input;
-  const message = maskSecrets(errorMessage(input.error));
+  // 再試行を止めるタグは、flowの`retry_if`のための印で、ここに来た時点で役目を終えている。
+  // 記録、作業項目の注記、通知のどれにも出さないよう、最初に1回だけ外す。
+  const message = maskSecrets(
+    withoutFlowRetryMarker(errorMessage(input.error)),
+  );
   const resolvedPath = path ?? "unknown";
   const resolvedJobId =
     input.jobId ?? input.rootJobId ?? input.currentJobId ?? "unknown";
