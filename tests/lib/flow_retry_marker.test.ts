@@ -86,7 +86,15 @@ describe("the dependencies of the marker", () => {
     expect(lock).not.toContain("windmill-client");
   });
 
-  test("lets the conflict recovery read the marker from this lib", async () => {
+  test("lets the failure handler of the flows take the marker off with this lib", async () => {
+    const source = await Bun.file(
+      new URL("../../f/factory/on_error_flow.ts", import.meta.url),
+    ).text();
+
+    expect(source).toContain('from "./lib/flow_retry_marker.ts"');
+  });
+
+  test("keeps the conflict recovery from handling the marker, which the failure handler takes off", async () => {
     const source = await Bun.file(
       new URL(
         "../../f/factory/lib/pr_conflict_fix_recovery.ts",
@@ -94,7 +102,7 @@ describe("the dependencies of the marker", () => {
       ),
     ).text();
 
-    expect(source).toContain('from "./flow_retry_marker.ts"');
+    expect(source).not.toContain("withoutFlowRetryMarker");
   });
 
   test("keeps the conflict recovery away from the library that writes notices", async () => {

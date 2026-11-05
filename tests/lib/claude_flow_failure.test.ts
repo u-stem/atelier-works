@@ -158,34 +158,46 @@ describe("recordClaudeRuns usage limit notice", () => {
     expect(notices[0]?.kind).toBe("claude_usage_limit");
   });
 
-  test("puts only the fixed words and the flow path in the notice", async () => {
+  test("puts only the fixed words in the notice", async () => {
     const { deps, notices } = fakeNotices({});
 
     await recordClaudeRuns(failureOf("usage_limit"), async () => 1, deps);
 
-    expect(notices[0]?.message).toBe(
-      "Claudeの使用上限に当たりました(f/factory/pipeline)",
-    );
+    expect(notices[0]?.message).toBe("Claudeの使用上限に当たりました");
   });
 
-  test("uses the job path when the job is not a flow step", async () => {
-    const { deps, notices } = fakeNotices({
+  test("gives every flow the same words, so that one limit leaves one notice", async () => {
+    const pipeline = fakeNotices({
+      env: { WM_FLOW_PATH: "f/factory/pipeline" },
+    });
+    const prFix = fakeNotices({ env: { WM_FLOW_PATH: "f/factory/pr_fix" } });
+
+    await recordClaudeRuns(
+      failureOf("usage_limit"),
+      async () => 1,
+      pipeline.deps,
+    );
+    await recordClaudeRuns(failureOf("usage_limit"), async () => 1, prFix.deps);
+
+    expect(prFix.notices[0]?.message).toBe(pipeline.notices[0]?.message);
+  });
+
+  test("logs the job path when the job is not a flow step", async () => {
+    const { deps, infos } = fakeNotices({
       env: { WM_FLOW_PATH: "", WM_JOB_PATH: "f/factory/steps/x" },
     });
 
     await recordClaudeRuns(failureOf("usage_limit"), async () => 1, deps);
 
-    expect(notices[0]?.message).toBe(
-      "Claudeの使用上限に当たりました(f/factory/steps/x)",
-    );
+    expect(infos[0]?.path).toBe("f/factory/steps/x");
   });
 
-  test("uses unknown when neither the flow path nor the job path is set", async () => {
-    const { deps, notices } = fakeNotices({ env: {} });
+  test("logs unknown when neither the flow path nor the job path is set", async () => {
+    const { deps, infos } = fakeNotices({ env: {} });
 
     await recordClaudeRuns(failureOf("usage_limit"), async () => 1, deps);
 
-    expect(notices[0]?.message).toBe("Claudeの使用上限に当たりました(unknown)");
+    expect(infos[0]?.path).toBe("unknown");
   });
 
   test("logs only the reason, the path, and the job id", async () => {

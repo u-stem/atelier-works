@@ -210,6 +210,41 @@ function jobFailed(
   return undefined;
 }
 
+describe("handleFlowFailure with the marker that stops the flow retry", () => {
+  const MARKED = {
+    error: { message: "[no-flow-retry] step: failed", step_id: "generate" },
+  };
+
+  test("takes the marker off the note of the work item", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput(MARKED));
+    expect(fake.statusCalls[0]?.note).toBe("step: failed");
+  });
+
+  test("takes the marker off the recorded failure", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput(MARKED));
+    expect(fake.failures[0]?.error).toBe("step: failed");
+  });
+
+  test("takes the marker off the job_failed notification", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput(MARKED));
+    expect(jobFailed(fake.events)?.error).toBe("step: failed");
+  });
+
+  test("keeps the marker that is not at the head of the message", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(
+      fake.deps,
+      failureInput({
+        error: { message: "step: [no-flow-retry] failed", step_id: "generate" },
+      }),
+    );
+    expect(fake.failures[0]?.error).toBe("step: [no-flow-retry] failed");
+  });
+});
+
 describe("handleFlowFailure for the dependabot flow", () => {
   test("marks a picked work item failed under this run's lease", async () => {
     const fake = fakeFailureDeps();

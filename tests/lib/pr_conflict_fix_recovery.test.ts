@@ -5,7 +5,6 @@ import {
   CONFLICT_ROUND_DETAILS,
   conflictRoundReason,
 } from "../../f/factory/lib/conflict_fix_round.ts";
-import { flowFailureMessage } from "../../f/factory/lib/flow_retry_marker.ts";
 import {
   type ConflictFixItemSources,
   type ConflictFixItemState,
@@ -341,27 +340,6 @@ describe("decideConflictFixRecovery", () => {
       expect(
         decideConflictFixRecovery(
           item("failed", { note: conflictClaudeFailedMessage(reason) }),
-        ),
-      ).toEqual({ kind: "release", hold: "fix_stopped" });
-    },
-  );
-
-  test.each([
-    "timeout",
-    "run_budget_exceeded",
-    "usage_limit",
-    "stopped",
-  ] as const)(
-    "holds fix_stopped for a failed work item whose note carries the no-retry marker for %s",
-    (reason) => {
-      expect(
-        decideConflictFixRecovery(
-          item("failed", {
-            note: flowFailureMessage(
-              reason,
-              conflictClaudeFailedMessage(reason),
-            ),
-          }),
         ),
       ).toEqual({ kind: "release", hold: "fix_stopped" });
     },
