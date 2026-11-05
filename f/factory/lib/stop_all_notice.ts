@@ -6,6 +6,7 @@
 
 import type { NotifyEvent } from "./discord.ts";
 import { type Logger, maskSecrets } from "./log.ts";
+import { withCallTimeout } from "./self_update_support.ts";
 import { STOP_ALL_REASON_MAX, type StopAllStatus } from "./stop_all.ts";
 import type { NoticeRecord } from "./types.ts";
 
@@ -30,10 +31,21 @@ export type StopAllNoticeDeps = {
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
   /** 未解決の全停止の通知を、本文によらず種類で解決し、解決した数を返す。 */
   readonly resolveActive: () => Promise<number>;
-  readonly notify: (event: NotifyEvent) => Promise<unknown>;
+  /** Discordの送り先。 */
+  readonly readWebhookUrl: () => Promise<string>;
   readonly instanceName: () => Promise<string>;
+  readonly notify: (webhookUrl: string, event: NotifyEvent) => Promise<unknown>;
   readonly log: Logger;
+  /** Discordへの知らせの、内側の上限(ミリ秒)。省略すると既定の値を使う。テストで短くする。 */
+  readonly callTimeoutMs?: { readonly read: number; readonly send: number };
 };
+
+/**
+ * Discordへの知らせの、内側の上限(ミリ秒)。送り先の読み取りと設定の読み取りは各3秒、送信は5秒である。
+ * 1つの段が詰まっても、その段だけを諦めて`placed`を返す。
+ * 通知を残した後に呼び出し側の上限で切られると、結果を返せず、検出器の後の処理の時間も食うためである。
+ */
+const NOTIFY_TIMEOUTS_MS = { read: 3_000, send: 5_000 } as const;
 
 export type StopAllNoticeOutcome =
   | "placed"
@@ -93,15 +105,31 @@ export async function syncStopAllNotice(
     message: STOP_ALL_ACTIVE_MESSAGE,
   });
   if (id !== null) {
-    // 通知は残してあるので、Discordへの知らせが失敗しても、置いた結果は変えない。
+    // 通知は残してあるので、Discordへの知らせが失敗しても時間切れでも、置いた結果は変えない。
     // 送り先の変数や設定を読めなくても、検出器の後の処理を止めないためである。
+    const timeouts = deps.callTimeoutMs ?? NOTIFY_TIMEOUTS_MS;
     try {
-      await deps.notify({
-        kind: "stop_all_active",
-        instance_name: await deps.instanceName(),
-        cause: stopAllCause(status),
-        next_action: STOP_ALL_NEXT_ACTION,
-      });
+      const webhookUrl = await withCallTimeout(
+        "read discord webhook url",
+        deps.readWebhookUrl,
+        timeouts.read,
+      );
+      const instanceName = await withCallTimeout(
+        "load factory_config",
+        deps.instanceName,
+        timeouts.read,
+      );
+      await withCallTimeout(
+        "notify discord",
+        () =>
+          deps.notify(webhookUrl, {
+            kind: "stop_all_active",
+            instance_name: instanceName,
+            cause: stopAllCause(status),
+            next_action: STOP_ALL_NEXT_ACTION,
+          }),
+        timeouts.send,
+      );
     } catch (err) {
       deps.log.warn("could not tell Discord about the stop-all", {
         error: maskSecrets(err instanceof Error ? err.message : String(err)),

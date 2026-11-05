@@ -198,12 +198,10 @@ export async function main(): Promise<ScheduleFailureDetectResult> {
                   "",
                   STOP_ALL_NOTICE_RESOLVER,
                 ),
-              notify: async (event: NotifyEvent) =>
-                notifyBestEffort(
-                  await wmill.getVariable("f/factory/discord_webhook_url"),
-                  event,
-                  log,
-                ),
+              readWebhookUrl: () =>
+                wmill.getVariable("f/factory/discord_webhook_url"),
+              notify: (webhookUrl: string, event: NotifyEvent) =>
+                notifyBestEffort(webhookUrl, event, log),
               instanceName: async () =>
                 (
                   await loadConfig(() =>
