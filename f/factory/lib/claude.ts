@@ -212,8 +212,8 @@ type RawClaudeJson = {
   readonly subtype: string;
   readonly is_error: boolean;
   /** 本文。`--max-budget-usd`の超過の結果には無く、`errors`に文が入る。 */
-  readonly result?: string;
-  readonly errors?: readonly string[];
+  readonly result?: string | null;
+  readonly errors?: unknown;
   readonly session_id: string;
   readonly total_cost_usd: number;
   readonly num_turns: number;
@@ -226,6 +226,30 @@ function isStringArray(value: unknown): value is readonly string[] {
   return (
     Array.isArray(value) && value.every((item) => typeof item === "string")
   );
+}
+
+/**
+ * `result`が読める形かを返す。文字列でなくてよいのは、`is_error`が真で、`result`が無いか`null`で、`errors`があるときだけである。
+ */
+function hasReadableResult(
+  isError: boolean,
+  result: unknown,
+  errors: unknown,
+): boolean {
+  if (typeof result === "string") return true;
+  return (
+    isError &&
+    (result === undefined || result === null) &&
+    isStringArray(errors)
+  );
+}
+
+/** 結果の本文を返す。`result`が空でない文字列のときだけ使い、それ以外は`errors`を改行でつなぐ。 */
+function resultTextOf(parsed: RawClaudeJson): string {
+  if (typeof parsed.result === "string" && parsed.result !== "") {
+    return parsed.result;
+  }
+  return isStringArray(parsed.errors) ? parsed.errors.join("\n") : "";
 }
 
 function isRawClaudeJson(value: unknown): value is RawClaudeJson {
@@ -245,11 +269,7 @@ function isRawClaudeJson(value: unknown): value is RawClaudeJson {
   if (typeof record.type !== "string") return false;
   if (typeof record.subtype !== "string") return false;
   if (typeof record.is_error !== "boolean") return false;
-  // `result`が無くてよいのは、`is_error`が真で`errors`があるときだけである。
-  if (
-    typeof record.result !== "string" &&
-    !(record.is_error && isStringArray(record.errors))
-  ) {
+  if (!hasReadableResult(record.is_error, record.result, record.errors)) {
     return false;
   }
   if (typeof record.session_id !== "string") return false;
@@ -283,7 +303,7 @@ export function parseClaudeJson(stdout: string): ClaudeRunResult {
     type: parsed.type,
     subtype: parsed.subtype,
     isError: parsed.is_error,
-    resultText: parsed.result ?? (parsed.errors ?? []).join("\n"),
+    resultText: resultTextOf(parsed),
     sessionId: parsed.session_id,
     totalCostUsd: parsed.total_cost_usd,
     numTurns: parsed.num_turns,
