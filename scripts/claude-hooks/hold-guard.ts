@@ -28,6 +28,9 @@
 // 全停止のCLI(`scripts/stop_all.ts`)の実行と、`mise run stop`、`mise run stop:release`は、
 // 主セッションを含むすべてのセッションで拒否する(`findStopAllCall`)。
 // CLIは`CLAUDECODE`があれば断るが、環境変数を外せば迂回できるので、ここでも止める。
+// 全停止の入口は、プログラムの種類を問わず、どの語(`script -c`などのコマンド文字列の中も含む)に現れても拒否する。
+// `script`、`unbuffer`、`caffeinate`のような前置きの後ろでも止める。
+// 読み取りのプログラム(`NON_EXECUTING_PROGRAMS`)と検査の道具は、入口の名前が語にあっても通す。
 //
 // 拒否を既定にする。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
@@ -64,6 +67,7 @@
 // - 変数や文字列の連結で組んだパス、動的なimport、`docker compose exec db psql`に渡す語を組み立てて書く形。
 // - 呼び出し側が前置きとして外さない、コマンドを起動するプログラム(`find -exec`、`watch`、`parallel`、`ssh`、
 //   `/usr/bin/time`、`caffeinate`、`script`、`strace`など)の後ろに書いた実行系。
+//   全停止の入口(`findStopAllCall`)は、この形も止める。保留と凍結の判定は、この形を止めない。
 // - 実行系以外のプログラムが文字列として受け取るコード(`python -c`、`perl -e`、`ruby -e`、`awk`の`system()`など)。
 // - subagentが新しいファイルを書いて実行する形。
 // Bashとdockerを持つ主体は、psqlで保留を直接書ける。ここで止めるのは、誤操作と、拒否を知らない呼び出しである。
@@ -71,8 +75,10 @@
 import { CONSOLE_WRITE_SCRIPTS } from "./console-scripts.ts";
 import {
   baseName,
+  parseCommandLine,
   scanMiseGlobalOptions,
   shellArguments,
+  stripWrappers,
   type Word,
 } from "./shell-words.ts";
 
@@ -1278,10 +1284,76 @@ function miseStopAllCall(
   );
 }
 
+/** 全停止の変数のパス(`f/factory/stop_all`)。CLIのファイル名とは別のものである。 */
+const STOP_ALL_VARIABLE_PATH = /(?:^|[^A-Za-z0-9_])f\/factory\/stop_/;
+
+/** コマンド文字列を入れ子に読む深さの上限。深すぎる入力で処理が止まらないようにする。 */
+const STOP_ALL_MAX_DEPTH = 4;
+
+/** 空白を含む語が、中に全停止の入口を実行する形を持つか。読めない文字列は、字面で判定する。 */
+function textStopAllCall(
+  word: Word,
+  inputs: () => readonly string[] | null,
+  depth: number,
+): boolean {
+  const parsed =
+    depth >= STOP_ALL_MAX_DEPTH ? null : parseCommandLine(word.text);
+  if (parsed === null || !parsed.ok) return pointsAtStopAllCode(word);
+  return parsed.commands.some((command) => {
+    const inner = stripWrappers(command.words).words;
+    return inner.length > 0 && stopAllCallAt(inner, inputs, depth + 1);
+  });
+}
+
+/** 語が全停止のCLIを指すか、空白を含む語なら中のコマンドが全停止の入口を実行する形なら真。 */
+function wordStopAllCall(
+  word: Word,
+  inputs: () => readonly string[] | null,
+  depth: number,
+): boolean {
+  if (/\s/.test(word.text)) return textStopAllCall(word, inputs, depth);
+  // 全停止の変数のパスは、読み取りの引数にも現れる。書き込みは変数の判定(`findConsoleReleaseCall`)が止める。
+  return pointsAtStopAllCode(word) && !STOP_ALL_VARIABLE_PATH.test(word.text);
+}
+
+function stopAllCallAt(
+  words: readonly Word[],
+  inputs: () => readonly string[] | null,
+  depth: number,
+): boolean {
+  const program = baseName(words[0]?.text ?? "");
+  if (program === "mise") return miseStopAllCall(words, inputs);
+  if (RUNNERS.has(program)) return runnerStopAllCall(words.slice(1), inputs);
+  if (readerKind(program, words) !== null || INSPECTION_TOOLS.has(program)) {
+    return false;
+  }
+  // `script`や`caffeinate`のような前置きの後ろに`mise`か実行系が続く形は、その位置から判定する。
+  const launcherAt = words.findIndex((word, index) => {
+    const name = baseName(word.text);
+    return index > 0 && (name === "mise" || RUNNERS.has(name));
+  });
+  if (launcherAt === -1) {
+    return words.some((word) => wordStopAllCall(word, inputs, depth));
+  }
+  if (
+    words
+      .slice(0, launcherAt)
+      .some((word) => wordStopAllCall(word, inputs, depth))
+  ) {
+    return true;
+  }
+  const rest = words.slice(launcherAt);
+  return baseName(rest[0]?.text ?? "") === "mise"
+    ? miseStopAllCall(rest, inputs)
+    : runnerStopAllCall(rest.slice(1), inputs);
+}
+
 /**
  * 単純コマンドが、全停止を置く・解除する操作なら真を返す。
  * 全停止のCLI(`scripts/stop_all.ts`)の実行と、`mise run stop`、`mise run stop:release`である。
  * CLIは`CLAUDECODE`があれば断るが、環境変数を外せば迂回できるので、すべてのセッションでここでも止める。
+ * プログラムの種類は問わない。`script`、`unbuffer`、`caffeinate`のような前置きの後ろの語と、
+ * `script -c`のようなコマンド文字列の中も、同じ規則で見る。
  * 検査の道具(`bun test`、`biome`など)の引数と、読み取りのプログラム(`cat`、`git`、`rg`など)は、実行ではないので通す。
  * ベストエフォートの規則で、変数や連結で組み立てた名前と、別名の呼び出しは止めない。
  */
@@ -1289,9 +1361,5 @@ export function findStopAllCall(
   words: readonly Word[],
   inputs: () => readonly string[] | null,
 ): boolean {
-  const program = baseName(words[0]?.text ?? "");
-  if (program === "mise") return miseStopAllCall(words, inputs);
-  if (RUNNERS.has(program)) return runnerStopAllCall(words.slice(1), inputs);
-  const first = words[0];
-  return first !== undefined && pointsAtStopAllCode(first);
+  return stopAllCallAt(words, inputs, 0);
 }

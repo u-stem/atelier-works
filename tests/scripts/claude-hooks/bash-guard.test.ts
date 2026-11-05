@@ -2437,6 +2437,8 @@ describe("bash-guard allows work near the stop-all", () => {
     "git diff -- scripts/stop_all.ts",
     "git commit -m 'feat: mise run stop を足す'",
     "cat scripts/stop_all.ts",
+    "caffeinate bun test tests/scripts/stop_all.test.ts",
+    `script -qc "cat scripts/stop_all.ts" /dev/null`,
     "rg stop_all scripts",
     "wmill variable get f/factory/stop_all",
     "wmill variable add '{}' f/factory/other",
