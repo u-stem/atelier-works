@@ -64,9 +64,10 @@ describe("tokenExpiresAt", () => {
     const fetchImpl = github({
       "https://api.github.com/user": expiring("2027-01-01 00:00:00 UTC"),
     });
-    expect(await tokenExpiresAt(TOKEN, fetchImpl)).toBe(
-      "2027-01-01T00:00:00.000Z",
-    );
+    expect(await tokenExpiresAt(TOKEN, fetchImpl)).toEqual({
+      kind: "expires",
+      at: "2027-01-01T00:00:00.000Z",
+    });
   });
 
   test("sends the token in the authorization header", async () => {
@@ -77,15 +78,48 @@ describe("tokenExpiresAt", () => {
     );
   });
 
-  test("returns null for a token without an expiry", async () => {
+  test("returns none for a token without an expiry", async () => {
     const fetchImpl = github({
       "https://api.github.com/user": new Response("{}", { status: 200 }),
     });
-    expect(await tokenExpiresAt(TOKEN, fetchImpl)).toBeNull();
+    expect(await tokenExpiresAt(TOKEN, fetchImpl)).toEqual({ kind: "none" });
   });
 
-  test("returns null when GitHub refuses the token", async () => {
-    expect(await tokenExpiresAt(TOKEN, github({}))).toBeNull();
+  test("returns unknown when GitHub refuses the token", async () => {
+    expect(await tokenExpiresAt(TOKEN, github({}))).toEqual({
+      kind: "unknown",
+    });
+  });
+
+  test("returns unknown when GitHub answers with a server error", async () => {
+    const fetchImpl = github({
+      "https://api.github.com/user": new Response(null, { status: 503 }),
+    });
+    expect(await tokenExpiresAt(TOKEN, fetchImpl)).toEqual({
+      kind: "unknown",
+    });
+  });
+
+  test("returns unknown when the request throws", async () => {
+    const fetchImpl: GitHubFetch = async () => {
+      throw new Error("network failure");
+    };
+    expect(await tokenExpiresAt(TOKEN, fetchImpl)).toEqual({
+      kind: "unknown",
+    });
+  });
+
+  test("returns unknown when the expiry header cannot be read", async () => {
+    const fetchImpl = github({
+      "https://api.github.com/user": expiring("tomorrow"),
+    });
+    expect(await tokenExpiresAt(TOKEN, fetchImpl)).toEqual({
+      kind: "unknown",
+    });
+  });
+
+  test("returns none for an empty token", async () => {
+    expect(await tokenExpiresAt("", github({}))).toEqual({ kind: "none" });
   });
 
   test("does not call GitHub for an empty token", async () => {
@@ -282,5 +316,127 @@ describe("collectCredentialExpiry", () => {
     expect(JSON.parse(text).claude_oauth_token).toEqual(
       JSON.parse(previous).claude_oauth_token,
     );
+  });
+});
+
+describe("collectCredentialExpiry when the expiry of a token cannot be read", () => {
+  const previousTokens = JSON.stringify({
+    github_token: { expires_at: "2026-12-01T00:00:00.000Z" },
+    github_read_tokens: { acme: { expires_at: "2026-12-02T00:00:00.000Z" } },
+  });
+  const unavailable: GitHubFetch = async () =>
+    new Response(null, { status: 503 });
+  const noExpiry: GitHubFetch = async () => new Response("{}", { status: 200 });
+
+  test("keeps the previous entry of github_token", async () => {
+    const text = await collectCredentialExpiry(
+      { GITHUB_TOKEN: TOKEN, CREDENTIAL_EXPIRY_PREVIOUS: previousTokens },
+      unavailable,
+      NOW,
+      () => {},
+    );
+    expect(JSON.parse(text).github_token).toEqual({
+      expires_at: "2026-12-01T00:00:00.000Z",
+    });
+  });
+
+  test("keeps the previous entry of the same owner of github_read_tokens", async () => {
+    const text = await collectCredentialExpiry(
+      {
+        CREDENTIAL_READ_TOKENS: JSON.stringify({ acme: READ_TOKEN }),
+        CREDENTIAL_EXPIRY_PREVIOUS: previousTokens,
+      },
+      unavailable,
+      NOW,
+      () => {},
+    );
+    expect(JSON.parse(text).github_read_tokens).toEqual({
+      acme: { expires_at: "2026-12-02T00:00:00.000Z" },
+    });
+  });
+
+  test("omits github_token when there is no previous entry", async () => {
+    const text = await collectCredentialExpiry(
+      { GITHUB_TOKEN: TOKEN },
+      unavailable,
+      NOW,
+      () => {},
+    );
+    expect(JSON.parse(text).github_token).toBeUndefined();
+  });
+
+  test("omits an owner that has no previous entry", async () => {
+    const text = await collectCredentialExpiry(
+      {
+        CREDENTIAL_READ_TOKENS: JSON.stringify({ octo: READ_TOKEN }),
+        CREDENTIAL_EXPIRY_PREVIOUS: previousTokens,
+      },
+      unavailable,
+      NOW,
+      () => {},
+    );
+    expect(JSON.parse(text).github_read_tokens).toBeUndefined();
+  });
+
+  test("warns about github_token", async () => {
+    const warnings: string[] = [];
+    await collectCredentialExpiry(
+      { GITHUB_TOKEN: TOKEN },
+      unavailable,
+      NOW,
+      (line) => warnings.push(line),
+    );
+    expect(warnings).toEqual([
+      "credential_expiry: could not read the expiry of github_token; keeping the previous record",
+    ]);
+  });
+
+  test("warns about the owner of github_read_tokens", async () => {
+    const warnings: string[] = [];
+    await collectCredentialExpiry(
+      { CREDENTIAL_READ_TOKENS: JSON.stringify({ acme: READ_TOKEN }) },
+      unavailable,
+      NOW,
+      (line) => warnings.push(line),
+    );
+    expect(warnings).toEqual([
+      "credential_expiry: could not read the expiry of github_read_tokens.acme; keeping the previous record",
+    ]);
+  });
+
+  test("writes the warning to the standard error by default", async () => {
+    const original = process.stderr.write;
+    const written: string[] = [];
+    process.stderr.write = (chunk: string | Uint8Array): boolean => {
+      written.push(String(chunk));
+      return true;
+    };
+    try {
+      await collectCredentialExpiry({ GITHUB_TOKEN: TOKEN }, unavailable, NOW);
+    } finally {
+      process.stderr.write = original;
+    }
+    expect(written.join("")).toContain("could not read the expiry");
+  });
+
+  test("does not warn for a token without an expiry", async () => {
+    const warnings: string[] = [];
+    await collectCredentialExpiry(
+      { GITHUB_TOKEN: TOKEN, CREDENTIAL_EXPIRY_PREVIOUS: previousTokens },
+      noExpiry,
+      NOW,
+      (line) => warnings.push(line),
+    );
+    expect(warnings).toEqual([]);
+  });
+
+  test("drops the previous entry of a token without an expiry", async () => {
+    const text = await collectCredentialExpiry(
+      { GITHUB_TOKEN: TOKEN, CREDENTIAL_EXPIRY_PREVIOUS: previousTokens },
+      noExpiry,
+      NOW,
+      () => {},
+    );
+    expect(JSON.parse(text).github_token).toBeUndefined();
   });
 });
