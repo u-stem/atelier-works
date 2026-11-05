@@ -10,6 +10,7 @@ import {
   filesWithUnfollowableImports,
   GITHUB_READ_TOKENS,
   GITHUB_TOKEN,
+  HEARTBEAT_URL,
   hasInputReference,
   mentions,
   mentionsTag,
@@ -64,6 +65,7 @@ const PERIODIC_SCRIPTS: readonly string[] = [
  * discord_webhook_urlは通知の送り先として要る。漏れたときの影響は、通知の偽装と停止に限られる。
  * github_read_tokensは、collect_githubだけが読む。所有者ごとの読み取り専用のトークンの対応表で、
  * 通信先は`https://api.github.com/graphql`に固定したクライアントだけである。
+ * heartbeat_urlは、detect_schedule_failuresだけが読む。外部の死活監視を叩くURLで、漏れたときの影響は、死活の偽装と停止に限られる。
  * このworkerは、固定のレビュー済みscriptだけを動かす。
  * github_tokenは、対象のscriptが読まないので許可しない。使わない許可は残さない。
  * 別のscriptの許可を借りて読めるようにしないため、scriptごとに分ける。
@@ -73,7 +75,7 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   "f/factory/auto_retry_pr_review": [DISCORD_WEBHOOK_URL],
   "f/factory/collect_github": [GITHUB_READ_TOKENS],
   "f/factory/default_worker_watch": [DISCORD_WEBHOOK_URL],
-  "f/factory/detect_schedule_failures": [DISCORD_WEBHOOK_URL],
+  "f/factory/detect_schedule_failures": [DISCORD_WEBHOOK_URL, HEARTBEAT_URL],
 };
 
 /**
@@ -477,6 +479,7 @@ describe("periodic scripts", () => {
       expect.arrayContaining([
         GITHUB_TOKEN,
         GITHUB_READ_TOKENS,
+        HEARTBEAT_URL,
         "f/factory/claude_oauth_token",
         "f/factory/wmill_token",
       ]),
@@ -527,6 +530,12 @@ describe("periodic scripts", () => {
         ALLOWED["f/factory/collect_github"] ?? [],
       ),
     ).toEqual([DISCORD_WEBHOOK_URL]);
+  });
+
+  test("only the detector reads the heartbeat url", () => {
+    expect(
+      PERIODIC_SCRIPTS.filter((path) => mentions(path, HEARTBEAT_URL)),
+    ).toEqual(["f/factory/detect_schedule_failures"]);
   });
 });
 

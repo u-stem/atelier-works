@@ -16,6 +16,7 @@ import {
   recordFailure,
 } from "./lib/db.ts";
 import { type NotifyEvent, notify } from "./lib/discord.ts";
+import type { HeartbeatResult } from "./lib/heartbeat.ts";
 import type { JobIds } from "./lib/job_ids.ts";
 import { type Logger, logger } from "./lib/log.ts";
 import type { PreviousScheduleFailure } from "./lib/schedule_failing.ts";
@@ -81,6 +82,17 @@ export function buildDetectDeps(
     log,
   };
 }
+
+/** 検出が成功した後の処理の入出力。テストでは偽物に差し替える。 */
+export type AfterDetectionIo = {
+  readonly getHeartbeatUrl: () => Promise<string | null>;
+  readonly pingHeartbeat: (url: string) => Promise<HeartbeatResult>;
+};
+
+export async function afterDetection(
+  _io: AfterDetectionIo,
+  _log: Logger,
+): Promise<void> {}
 
 export async function main(): Promise<ScheduleFailureDetectResult> {
   const log = logger("detect_schedule_failures");

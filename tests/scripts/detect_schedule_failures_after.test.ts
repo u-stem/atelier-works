@@ -1,0 +1,99 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import {
+  type AfterDetectionIo,
+  afterDetection,
+} from "../../f/factory/detect_schedule_failures.ts";
+import type { HeartbeatResult } from "../../f/factory/lib/heartbeat.ts";
+import { logger } from "../../f/factory/lib/log.ts";
+
+const URL_TEXT = "https://hc-ping.com/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b";
+
+type Setup = {
+  readonly io: AfterDetectionIo;
+  readonly pinged: string[];
+  readonly lines: string[];
+};
+
+function setup(
+  url: string | null | Error,
+  result: HeartbeatResult = { kind: "sent" },
+): Setup {
+  const pinged: string[] = [];
+  const lines: string[] = [];
+  const io: AfterDetectionIo = {
+    getHeartbeatUrl: async () => {
+      if (url instanceof Error) throw url;
+      return url;
+    },
+    pingHeartbeat: async (target) => {
+      pinged.push(target);
+      return result;
+    },
+  };
+  return { io, pinged, lines };
+}
+
+function capture(lines: string[]) {
+  return logger("test", { sink: (line) => lines.push(line) });
+}
+
+describe("afterDetection", () => {
+  test("pings the heartbeat url", async () => {
+    const { io, pinged, lines } = setup(URL_TEXT);
+    await afterDetection(io, capture(lines));
+    expect(pinged).toEqual([URL_TEXT]);
+  });
+
+  test("does nothing when the heartbeat variable is missing", async () => {
+    const { io, pinged, lines } = setup(null);
+    await afterDetection(io, capture(lines));
+    expect(pinged).toEqual([]);
+  });
+
+  test("does not throw when the url cannot be read", async () => {
+    const { io, lines } = setup(new Error("api down"));
+    await expect(afterDetection(io, capture(lines))).resolves.toBeUndefined();
+  });
+
+  test("warns when the ping fails", async () => {
+    const { io, lines } = setup(URL_TEXT, {
+      kind: "failed",
+      reason: "HTTP 500",
+    });
+    await afterDetection(io, capture(lines));
+    expect(lines.some((line) => line.includes("heartbeat ping failed"))).toBe(
+      true,
+    );
+  });
+
+  test("keeps the url out of the warning", async () => {
+    const { io, lines } = setup(URL_TEXT, {
+      kind: "failed",
+      reason: "HTTP 500",
+    });
+    await afterDetection(io, capture(lines));
+    expect(lines.join("\n")).not.toContain("0f1e2d3c");
+  });
+
+  test("does not warn when the ping is sent", async () => {
+    const { io, lines } = setup(URL_TEXT);
+    await afterDetection(io, capture(lines));
+    expect(lines).toEqual([]);
+  });
+});
+
+describe("the wiring of the detector", () => {
+  const source = readFileSync("f/factory/detect_schedule_failures.ts", "utf8");
+  const mainBody = source.slice(source.indexOf("export async function main"));
+
+  test("runs the after-detection work after the detection succeeds", () => {
+    expect(mainBody.indexOf("detectScheduleFailures(")).toBeLessThan(
+      mainBody.indexOf("afterDetection("),
+    );
+  });
+
+  test("reads the heartbeat url by its literal path", () => {
+    expect(mainBody).toContain('wmill.getVariable("f/factory/heartbeat_url")');
+  });
+});

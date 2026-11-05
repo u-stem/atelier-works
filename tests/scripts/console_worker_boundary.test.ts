@@ -11,6 +11,7 @@ import {
   escapeHatches,
   filesWithToolDependencies,
   GITHUB_TOKEN,
+  HEARTBEAT_URL,
   mentions,
   nonLiteralVariableReads,
   relative,
@@ -1238,6 +1239,10 @@ describe("console worker boundary", () => {
 
   test.each(READS_NO_SECRET)("%s does not read discord_webhook_url", (path) => {
     expect(mentions(path, DISCORD_WEBHOOK_URL)).toBe(false);
+  });
+
+  test.each(READS_NO_SECRET)("%s does not read heartbeat_url", (path) => {
+    expect(mentions(path, HEARTBEAT_URL)).toBe(false);
   });
 
   test.each(READS_NO_SECRET)("%s reads no secret variable", async (path) => {
