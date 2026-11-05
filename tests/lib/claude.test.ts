@@ -1648,7 +1648,7 @@ describe("runClaude failure details", () => {
     expect(result).toMatchObject({
       outcome: "failure",
       detail:
-        "claude reported an error (subtype=success): x, implement time settings do not fit the flow step timeout: y",
+        "claude reported an error (reason=claude_error, subtype=success): x, implement time settings do not fit the flow step timeout: y",
     });
   });
 
@@ -1786,8 +1786,175 @@ describe("runClaude failure kinds and costs", () => {
     const result = await runClaude(baseOptions(fake.run));
 
     expect(result.outcome === "failure" ? result.detail : "").toBe(
-      "claude reported an error (subtype=error_max_budget_usd): Reached maximum budget ($0.00001)",
+      "claude reported an error (reason=budget_exceeded, subtype=error_max_budget_usd): Reached maximum budget ($0.00001)",
     );
+  });
+
+  test("records the reason of a usage limit in the detail", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ result: "You've hit your limit", errors: [] }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.detail : "").toBe(
+      "claude reported an error (reason=usage_limit, subtype=error_during_execution): You've hit your limit",
+    );
+  });
+
+  test("adds the tail of stderr to the detail when a failed run has no result text", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        ...isErrorResult({ result: "", errors: [] }),
+        stderr: "authentication failed",
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.detail : "").toBe(
+      "claude reported an error (reason=claude_error, subtype=error_during_execution): (no result text) stderr: authentication failed",
+    );
+  });
+
+  test("keeps only the last 2000 characters of stderr in the detail", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        ...isErrorResult({ result: "", errors: [] }),
+        stderr: `${"a".repeat(2500)}END`,
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.detail : "").toBe(
+      `claude reported an error (reason=claude_error, subtype=error_during_execution): (no result text) stderr: ${"a".repeat(1997)}END`,
+    );
+  });
+
+  test("does not add stderr to the detail when the failed run has a result text", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        ...isErrorResult({ result: "rate limited", errors: [] }),
+        stderr: "noise",
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.detail : "").toBe(
+      "claude reported an error (reason=claude_error, subtype=error_during_execution): rate limited",
+    );
+  });
+
+  test("does not add stderr to the detail when the exit code is 0", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        ...isErrorResult({ result: "", errors: [] }),
+        exitCode: 0,
+        stderr: "noise",
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.detail : "").toBe(
+      "claude reported an error (reason=claude_error, subtype=error_during_execution): ",
+    );
+  });
+
+  test("records total_cost_usd when a non-zero exit has a readable result that is not an error", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({ total_cost_usd: 0.42 }),
+        stderr: "boom",
+        exitCode: 1,
+        timedOut: false,
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.cost_usd).toBe(0.42);
+  });
+
+  test("does not say the cost is the cap when it comes from the result of a non-zero exit", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({ total_cost_usd: 0.42 }),
+        stderr: "boom",
+        exitCode: 1,
+        timedOut: false,
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.error).toBe("boom");
+  });
+
+  test.each([137, 143])(
+    "records maxBudgetUsd for a run that a signal ended with exit code %p",
+    async (exitCode) => {
+      const fake = createFakeCommandRunner([fail("", exitCode)]);
+
+      const result = await runClaude({
+        ...baseOptions(fake.run),
+        maxBudgetUsd: 3,
+      });
+
+      expect(result.agentRun.cost_usd).toBe(3);
+    },
+  );
+
+  test("says in the error of a run that a signal ended that the cost is the cap", async () => {
+    const fake = createFakeCommandRunner([fail("Killed", 137)]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.error).toBe(
+      "claude -p was ended by a signal (exit code 137): Killed (cost_usd is the --max-budget-usd cap)",
+    );
+  });
+
+  test("keeps non_zero_exit as the reason of a run that a signal ended", async () => {
+    const fake = createFakeCommandRunner([fail("", 137)]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "non_zero_exit",
+    );
+  });
+
+  test("records no cost for a non-zero exit that ends at once without a result", async () => {
+    const fake = createFakeCommandRunner([fail("authentication failed", 1)]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.cost_usd).toBeNull();
+  });
+
+  test("records no cost for the exit code 128", async () => {
+    const fake = createFakeCommandRunner([fail("fatal", 128)]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.cost_usd).toBeNull();
+  });
+
+  test("records no cost for an invalid JSON of a successful exit", async () => {
+    const invalid = {
+      stdout: "not json",
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+    };
+    const fake = createFakeCommandRunner([invalid, invalid]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.cost_usd).toBeNull();
   });
 
   test("keeps non_zero_exit when the stdout of a failed run is not JSON", async () => {
@@ -2012,7 +2179,7 @@ describe("runClaude failure kinds and costs", () => {
     const result = await runClaude(baseOptions(fake.run));
 
     expect(result.outcome === "failure" ? result.detail : "").toBe(
-      "claude reported an error (subtype=error_during_execution, api_error_status=429): rate limited",
+      "claude reported an error (reason=claude_error, subtype=error_during_execution, api_error_status=429): rate limited",
     );
   });
 });
