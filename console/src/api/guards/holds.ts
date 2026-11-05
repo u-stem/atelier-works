@@ -59,6 +59,17 @@ export type DeployApprovalsRead =
   | { readonly ok: true; readonly pending: readonly DeployApprovalRowView[] }
   | { readonly ok: false; readonly reason: string };
 
+export type StopAllRead =
+  | { readonly kind: "clear" }
+  | {
+      readonly kind: "active";
+      readonly placed_at: string;
+      readonly placed_by: string;
+      readonly reason: string;
+    }
+  | { readonly kind: "corrupt"; readonly reason: string }
+  | { readonly kind: "unreadable"; readonly reason: string };
+
 export type HoldsSnapshot = {
   readonly holds: HoldsRead;
   readonly freezes: FreezesRead;

@@ -23,6 +23,8 @@ import type {
   RetryWorkItemResult,
   ScheduleStopRefusalReason,
   ScheduleStopResult,
+  StopAllReleaseResult,
+  StopAllResult,
 } from "../api/guards/writeResults.ts";
 import {
   STOP_MIN_REMAINING_MINUTES,
@@ -553,4 +555,14 @@ export function releaseNotice<T>(
     return { tone: "error", message: outcome.message };
   }
   return describe(outcome.result);
+}
+
+export function describeStopAllResult(_result: StopAllResult): WriteNotice {
+  return { tone: "info", message: "" };
+}
+
+export function describeStopAllReleaseResult(
+  _result: StopAllReleaseResult,
+): WriteNotice {
+  return { tone: "info", message: "" };
 }

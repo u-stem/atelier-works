@@ -105,6 +105,7 @@ function depsFor(
       approvals instanceof Error
         ? Promise.reject(approvals)
         : Promise.resolve(approvals),
+    stopAll: { readVariable: async () => null },
   };
 }
 
@@ -216,6 +217,7 @@ describe("what console_holds returns", () => {
       holds: { ok: true, rows: [] },
       freezes: { ok: true, schedule: [], deploy: [] },
       deploy_approvals: { ok: true, pending: [] },
+      stop_all: { kind: "clear" },
     };
     const consoleSide: consoleHolds.HoldsSnapshot = backend;
     expect(consoleHolds.isHoldsSnapshot(consoleSide)).toBe(true);

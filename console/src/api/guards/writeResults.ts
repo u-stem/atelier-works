@@ -757,3 +757,60 @@ export function isDeployDecideResult(
     isActionAudit(value.action_audit)
   );
 }
+
+export const STOP_ALL_REFUSAL_REASONS = [] as const;
+
+export type StopAllRefusalReason =
+  | "invalid_reason"
+  | "state_unreadable"
+  | "actor_unknown"
+  | "audit_unavailable";
+
+export type StopAllConfigOutcome =
+  | "written"
+  | "unchanged"
+  | "has_reference"
+  | "failed";
+
+export type StopAllResult =
+  | { readonly refused: true; readonly reason: StopAllRefusalReason }
+  | {
+      readonly refused: false;
+      readonly placed: boolean;
+      readonly placed_at: string;
+      readonly config: StopAllConfigOutcome;
+      readonly disabled_flags: readonly string[];
+      readonly schedules_disabled: readonly string[];
+      readonly schedules_failed: readonly string[];
+      readonly action_audit: ActionAudit;
+    };
+
+export function isStopAllResult(_value: unknown): _value is StopAllResult {
+  return false;
+}
+
+export const STOP_ALL_RELEASE_REFUSAL_REASONS = [] as const;
+
+export type StopAllReleaseRefusalReason =
+  | "state_unreadable"
+  | "freezes_unreadable"
+  | "actor_unknown"
+  | "audit_unavailable";
+
+export type StopAllReleaseResult =
+  | { readonly refused: true; readonly reason: StopAllReleaseRefusalReason }
+  | { readonly refused: false; readonly released: false }
+  | {
+      readonly refused: false;
+      readonly released: true;
+      readonly schedules_enabled: readonly string[];
+      readonly schedules_skipped: readonly string[];
+      readonly schedules_failed: readonly string[];
+      readonly action_audit: ActionAudit;
+    };
+
+export function isStopAllReleaseResult(
+  _value: unknown,
+): _value is StopAllReleaseResult {
+  return false;
+}

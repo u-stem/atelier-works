@@ -40,6 +40,8 @@ import {
   type PrReviewSubmitResult,
   type RetryWorkItemResult,
   type ScheduleStopResult,
+  type StopAllReleaseResult,
+  type StopAllResult,
 } from "./guards/writeResults.ts";
 import {
   type RunScriptOptions,
@@ -374,4 +376,17 @@ export function decideDeploy(
     isDeployDecideResult,
     options,
   );
+}
+
+export function stopAll(
+  _reason: string,
+  _options: RunScriptOptions = {},
+): Promise<StopAllResult> {
+  return Promise.resolve({ refused: true, reason: "invalid_reason" });
+}
+
+export function releaseStopAll(
+  _options: RunScriptOptions = {},
+): Promise<StopAllReleaseResult> {
+  return Promise.resolve({ refused: true, reason: "state_unreadable" });
 }
