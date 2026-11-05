@@ -618,6 +618,12 @@ export const CLAUDE_STOPPED_BEFORE_START_DETAIL =
 export const CLAUDE_STOPPED_DETAIL =
   "claude -p stopped: the factory is stopped (f/factory/stop_all)";
 
+/**
+ * 費用を結果のJSONから取れず、`--max-budget-usd`の値を記録した実行の`error`に足す注記。
+ * 打ち切った実行の費用は結果に無い。費用は上限までなので、上限の値で日次予算に少なく数えないようにする。
+ */
+const COST_IS_CAP_NOTE = "(cost_usd is the --max-budget-usd cap)";
+
 /** この実行の全停止の確認。指定が無ければ既定の確認を使う。 */
 function stopCheckOf<T>(opts: RunClaudeOptions<T>): StopCheck {
   return opts.stopCheck ?? defaultStopCheck();
@@ -782,7 +788,11 @@ async function attemptClaude<T>(
     return {
       outcome: "failure",
       reason: "stopped",
-      agentRun: { ...baseAgentRun, error: detail },
+      agentRun: {
+        ...baseAgentRun,
+        cost_usd: opts.maxBudgetUsd,
+        error: `${detail} ${COST_IS_CAP_NOTE}`,
+      },
       detail,
     };
   }
@@ -792,12 +802,10 @@ async function attemptClaude<T>(
     return {
       outcome: "failure",
       reason: "timeout",
-      // 打ち切った実行の費用は結果のJSONに無い。費用は`--max-budget-usd`の上限までなので、
-      // 上限の値を記録し、日次予算に少なく数えないようにする。
       agentRun: {
         ...baseAgentRun,
         cost_usd: opts.maxBudgetUsd,
-        error: `${detail} (cost_usd is the --max-budget-usd cap)`,
+        error: `${detail} ${COST_IS_CAP_NOTE}`,
       },
       detail,
     };
