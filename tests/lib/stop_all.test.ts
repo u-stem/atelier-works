@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
+  checkStopAllReason,
+  STOP_ALL_REASON_MAX_LENGTH,
+} from "../../console/src/lib/stopAll.ts";
+import {
   buildStopAllState,
   holdsGate,
   isStopAllReason,
   parseStopAllValue,
   readStopAll,
   STOP_ALL_KEPT_SCHEDULES,
+  STOP_ALL_REASON_MAX,
   type StopAllStatus,
   schedulesToRestart,
   schedulesToStop,
@@ -179,6 +184,28 @@ describe("isStopAllReason", () => {
 
   test("refuses a reason with a line break", () => {
     expect(isStopAllReason("a\nb")).toBe(false);
+  });
+});
+
+// Consoleはf/を読み込めない(バンドルに`windmill-client`が入る)ため、理由の検査を写しで持つ。
+// 写しが食い違わないことを、ここで確かめる。Consoleは長さをUTF-16で数えるので、比べるのはASCIIの長さだけである。
+describe("the Console copy of the reason check", () => {
+  test("has the limit of the script", () => {
+    expect(STOP_ALL_REASON_MAX_LENGTH).toBe(STOP_ALL_REASON_MAX);
+  });
+
+  test.each([
+    ["a plain reason", "a runaway loop"],
+    ["a blank reason", "   "],
+    ["a reason at the limit", "a".repeat(200)],
+    ["a reason over the limit", "a".repeat(201)],
+    ["a line break", "a\nb"],
+    ["a tab", "a\tb"],
+    ["a direction mark", "a‎b"],
+    ["a line separator", "a b"],
+    ["a paragraph separator", "a b"],
+  ])("agrees with the script on %s", (_name, reason) => {
+    expect(checkStopAllReason(reason) === null).toBe(isStopAllReason(reason));
   });
 });
 
