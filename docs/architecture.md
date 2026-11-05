@@ -594,6 +594,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/deploy_gate` | script | [LIB] 保護パスの変更の反映の判定 |
 | `f/factory/lib/holds` | script | [LIB] 共通の保留の表の読み書き |
 | `f/factory/lib/types` | script | [LIB] 共通型 |
+| `f/factory/lib/claude_flow_failure` | script | [LIB] 再試行しないClaudeの失敗の終端 |
 | `f/factory/lib/self_update_pull_requests` | script | [LIB] 反映に含まれるPRの解析 |
 | `f/factory/lib/deploy_approvals` | script | [LIB] 反映の承認の読み書き |
 | `f/factory/lib/gh_collect_read` | script | [LIB] 収集の記録を読む側の判定 |

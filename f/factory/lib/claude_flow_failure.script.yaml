@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 再試行しないClaudeの失敗の終端'
+description: 内部ライブラリです。直接実行するものではありません。timeout、予算の超過、使用上限のClaudeの失敗を、stepが例外を投げずに終端にして返します。
 lock: '!inline f/factory/lib/claude_flow_failure.script.lock'
 kind: script
 schema:
