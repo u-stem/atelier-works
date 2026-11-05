@@ -1,5 +1,6 @@
 // Claudeの実行の失敗のうち、flowの再試行で直らないものを見分け、再試行を止めるタグを扱う。
 // timeout、`--max-budget-usd`の超過、使用上限は、すぐ再試行しても同じ失敗になり、費用だけがかかる。
+// 全停止で止めた実行は、人が止めた実行なので、解除の直後に再試行で動き出してはならない。
 // stepは例外の文の先頭にタグを付け、flow.yamlの`retry_if`がタグを見て再試行を止める。
 // 例外のままなので、flowは失敗で終わり、終端の処理は`failure_module`が行う。
 // 回復の判定のような純粋関数がDBやWindmillのクライアントへ依存を広げないよう、定数と文字列の処理だけを切り出している。
@@ -11,6 +12,7 @@ export const NON_RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
   "timeout",
   "budget_exceeded",
   "usage_limit",
+  "stopped",
 ];
 
 /** `reason`の失敗を、Windmillのflowの再試行に任せてよいかを返す。 */

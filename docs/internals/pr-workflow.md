@@ -1164,9 +1164,11 @@ PRレビューの生成とPR修正の修正のステップには、Windmillの�
 
 - Claudeの実行が次の3つで失敗したときは、再試行は走らない。
   すぐ再試行しても同じ失敗になり、費用だけがかかるためである。
+  全停止では、人が止めた実行を解除の直後に動かさないためである。
   - `claude_timeout_sec`での打ち切り(`timeout`)
   - `--max-budget-usd`の超過(`budget_exceeded`)
   - サブスクリプションの使用上限(`usage_limit`)
+  - 全停止(`stopped`)
 - このときステップは例外の文の先頭に`[no-flow-retry]`を付けて投げる。
   `retry_if`の式がこのタグを見て偽になるので、flowは失敗のまま`failure_module`へ進む。
   終端の処理は`failure_module`(`on_error_flow`)が行い、後続のステップは走らない。
