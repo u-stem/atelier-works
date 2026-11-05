@@ -12,6 +12,7 @@
 // scriptが断った結果(`refused`)と、読めない結果は、置けなかった・解除できなかったものとして非0で終える。
 // 監視が消えた後に残ったプロセスは、`docker compose exec`でworkerの中から止める。
 // Claudeは、属するプロセスグループごと止める。implementとpr_fixのClaudeは`flock`の下で動き、グループの先頭は`flock`である。
+// worker本体が属するグループには送らない。`detached`で起動しないClaudeが、workerと同じグループに入るためである。そのClaudeはpid単位で止める。
 // 検査のプロセスは、枠のuidとして全部止める。
 //
 // どの操作も、端末(TTY)で`yes`を入力して確かめる。環境変数`CLAUDECODE`があるときは、確認の前に断る。
@@ -60,6 +61,68 @@ export function claudeGroupIds(psOutput: string): number[] {
   );
 }
 
+type PsRow = {
+  readonly pgid: number;
+  readonly pid: number;
+  readonly args: string;
+};
+
+/** `PS_ARGV`の出力のデータ行(`<pgid> <pid> <args...>`)を読む。ヘッダー行など、先頭が2つの数値でない行は捨てる。 */
+function parsePsRows(psOutput: string): PsRow[] {
+  const rows: PsRow[] = [];
+  for (const line of psOutput.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+    if (match === null) continue;
+    const [, pgid, pid, args] = match;
+    if (pgid === undefined || pid === undefined || args === undefined) continue;
+    rows.push({ pgid: Number(pgid), pid: Number(pid), args });
+  }
+  return rows;
+}
+
+/** worker本体(`windmill`)の行か。argsの先頭の語のbasenameで見分ける。`docker-init -- windmill`の行は含まない。 */
+function isWorkerRow(row: PsRow): boolean {
+  const command = row.args.split(/\s+/)[0] ?? "";
+  return command.split("/").at(-1) === "windmill";
+}
+
+/** Claudeの起動の行か。判定は`selectOrphanClaudePids`と同じものを使う。 */
+function isClaudeRow(row: PsRow): boolean {
+  return selectOrphanClaudePids(`${row.pid} 0 ${row.args}`, -1).length > 0;
+}
+
+/**
+ * workerの中のClaudeを止める対象。
+ * `groups`はグループごと止めるもの、`skippedGroups`はworker本体が属するので送らないグループ、
+ * `pids`は`skippedGroups`に属するClaudeで、1つずつ止めるものである。
+ * `detached`で起動しないClaudeは、workerと同じグループに入る。グループごと止めると、workerも止まる。
+ */
+export type ClaudeStopPlan = {
+  readonly groups: readonly number[];
+  readonly skippedGroups: readonly number[];
+  readonly pids: readonly number[];
+};
+
+export function planClaudeStops(psOutput: string): ClaudeStopPlan {
+  const rows = parsePsRows(psOutput);
+  const workerGroups = new Set(rows.filter(isWorkerRow).map((row) => row.pgid));
+  const claudeGroups = claudeGroupIds(psOutput);
+  const pids = rows
+    .filter(
+      (row) =>
+        isClaudeRow(row) &&
+        workerGroups.has(row.pgid) &&
+        Number.isInteger(row.pid) &&
+        row.pid > 1,
+    )
+    .map((row) => row.pid);
+  return {
+    groups: claudeGroups.filter((pgid) => !workerGroups.has(pgid)),
+    skippedGroups: claudeGroups.filter((pgid) => workerGroups.has(pgid)),
+    pids: [...new Set(pids)],
+  };
+}
+
 export type StopCommand =
   | { readonly kind: "place"; readonly reason: string }
   | { readonly kind: "kill_only" }
@@ -95,6 +158,8 @@ export type StopDeps = {
   readonly workerExec: (argv: readonly string[]) => Promise<ExecResult>;
   readonly sleep: (ms: number) => Promise<void>;
   readonly print: (line: string) => void;
+  /** 警告を標準エラーに出す。 */
+  readonly warn: (line: string) => void;
   /** 検査の枠のuid。 */
   readonly checkUids: readonly number[];
 };
@@ -136,6 +201,14 @@ export function signalGroupArgv(
     throw new Error(`refusing to signal the group of pid ${String(pid)}`);
   }
   return [KILL_PATH, "-s", signal, "--", `-${String(pid)}`];
+}
+
+/** `pid`のプロセス1つにシグナルを送るargv。負の番号を使わないので、グループには届かない。 */
+export function signalPidArgv(signal: "TERM" | "KILL", pid: number): string[] {
+  if (!Number.isInteger(pid) || pid <= 1) {
+    throw new Error(`refusing to signal pid ${String(pid)}`);
+  }
+  return [KILL_PATH, "-s", signal, "--", String(pid)];
 }
 
 const SESSION_REFUSAL =
@@ -212,24 +285,29 @@ async function killLeftovers(deps: StopDeps): Promise<number> {
     );
     return 1;
   }
-  const groups = claudeGroupIds(listed.stdout);
-  for (const pgid of groups) {
-    await deps.workerExec(signalGroupArgv("TERM", pgid));
+  const { groups, skippedGroups, pids } = planClaudeStops(listed.stdout);
+  for (const pgid of skippedGroups) {
+    deps.warn(
+      `WARNING: skipped process group ${String(pgid)} because the worker itself belongs to it; stopping the claude processes in it one by one`,
+    );
   }
-  if (groups.length > 0) {
+  const signals = (signal: "TERM" | "KILL"): string[][] => [
+    ...groups.map((pgid) => signalGroupArgv(signal, pgid)),
+    ...pids.map((pid) => signalPidArgv(signal, pid)),
+  ];
+  for (const argv of signals("TERM")) await deps.workerExec(argv);
+  if (groups.length + pids.length > 0) {
     await deps.sleep(KILL_GRACE_MS);
     // 先頭が終わっても、グループの子が残ることがある。先頭の有無で選ばず、見つけたグループすべてに送る。
-    // グループが既に無ければ`kill`は失敗するが、止めるものが無いだけなので数えない。
-    for (const pgid of groups) {
-      await deps.workerExec(signalGroupArgv("KILL", pgid));
-    }
+    // グループやpidが既に無ければ`kill`は失敗するが、止めるものが無いだけなので数えない。
+    for (const argv of signals("KILL")) await deps.workerExec(argv);
   }
   // 枠のプロセスが無いuidでは`kill`が失敗するが、止めるものが無いだけなので数えない。
   for (const uid of deps.checkUids) {
     await deps.workerExec(killAllArgv(uid));
   }
   deps.print(
-    `stopped ${String(groups.length)} claude process group(s) and the processes of ${String(deps.checkUids.length)} check user(s)`,
+    `stopped ${String(groups.length)} claude process group(s), ${String(pids.length)} claude process(es) outside them, and the processes of ${String(deps.checkUids.length)} check user(s)`,
   );
   return 0;
 }
@@ -421,6 +499,9 @@ async function main(): Promise<number> {
     sleep: (ms) => Bun.sleep(ms),
     print: (line) => {
       if (line !== "") console.log(line);
+    },
+    warn: (line) => {
+      console.error(line);
     },
     checkUids: checkUids(),
   });

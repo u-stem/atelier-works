@@ -4259,6 +4259,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   `CLAUDE_CODE_ENTRYPOINT`は、Claudeのセッションの印にしない。
 - workerの中のプロセスは、`docker compose exec`で止める。
   Claudeはプロセスグループごと、検査は枠のuidごとに止める。
+  workerの本体が属するグループには送らず、そのグループのClaudeはpidごとに止める。
+  `detached`で起動しないClaudeが、workerと同じグループに入りうるためである。
 - 2つのscript、変数の解析、実行中の監視と、それを固定するテストは、保護パスにある(`f/factory/lib/protected_paths.ts`)。
 - ホストのCLI`scripts/stop_all.ts`は、ホストのユーザーの権限で動くので、保護パスにある。
   CLIが読む`lib/cleanup_support.ts`と`lib/types.ts`は、日常的に直す部品なので守らない。
