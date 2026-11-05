@@ -618,13 +618,15 @@ describe("runCommand check", () => {
   test("passes with a warning when the variable cannot be read", async () => {
     const h = harness({ readError: new Error("down") });
 
-    expect(await runCommand({ kind: "check" }, h.deps)).toBe(0);
+    expect(
+      await runCommand({ kind: "check", refuseStopAll: false }, h.deps),
+    ).toBe(0);
   });
 
   test("prints the warning when the variable cannot be read", async () => {
     const h = harness({ readError: new Error("down") });
 
-    await runCommand({ kind: "check" }, h.deps);
+    await runCommand({ kind: "check", refuseStopAll: false }, h.deps);
 
     expect(h.lines.join("\n")).toContain("could not read");
   });
@@ -632,7 +634,9 @@ describe("runCommand check", () => {
   test("fails when the variable is corrupt", async () => {
     const h = harness({ initial: "{" });
 
-    expect(await runCommand({ kind: "check" }, h.deps)).toBe(1);
+    expect(
+      await runCommand({ kind: "check", refuseStopAll: false }, h.deps),
+    ).toBe(1);
   });
 });
 
@@ -841,6 +845,24 @@ describe("parseArgs with a scope", () => {
     });
   });
 
+  test("parses check without refusing the stop-all", () => {
+    expect(parseArgs(["check"])).toEqual({
+      ok: true,
+      value: { kind: "check", refuseStopAll: false },
+    });
+  });
+
+  test("parses check that refuses while the stop-all is placed", () => {
+    expect(parseArgs(["check", "--refuse-stop-all"])).toEqual({
+      ok: true,
+      value: { kind: "check", refuseStopAll: true },
+    });
+  });
+
+  test("rejects an unknown argument for check", () => {
+    expect(parseArgs(["check", "--refuse"]).ok).toBe(false);
+  });
+
   test("rejects an argument for migrate", () => {
     expect(parseArgs(["migrate", "--dry-run"]).ok).toBe(false);
   });
@@ -1039,13 +1061,15 @@ describe("runCommand check with deploy freezes", () => {
   test("fails while a deploy freeze is active", async () => {
     const h = harness({ initial: withDeploy(deployRow()) });
 
-    expect(await runCommand({ kind: "check" }, h.deps)).toBe(1);
+    expect(
+      await runCommand({ kind: "check", refuseStopAll: false }, h.deps),
+    ).toBe(1);
   });
 
   test("shows the active deploy freeze", async () => {
     const h = harness({ initial: withDeploy(deployRow()) });
 
-    await runCommand({ kind: "check" }, h.deps);
+    await runCommand({ kind: "check", refuseStopAll: false }, h.deps);
 
     expect(h.lines.join("\n")).toContain("d0a1b2c3");
   });
@@ -1053,19 +1077,23 @@ describe("runCommand check with deploy freezes", () => {
   test("passes once the deploy freeze has expired", async () => {
     const h = harness({ initial: withDeploy(EXPIRED_ROW) });
 
-    expect(await runCommand({ kind: "check" }, h.deps)).toBe(0);
+    expect(
+      await runCommand({ kind: "check", refuseStopAll: false }, h.deps),
+    ).toBe(0);
   });
 
   test("passes with a warning when the read does not answer in time", async () => {
     const h = harness({ hangRead: true });
 
-    expect(await runCommand({ kind: "check" }, h.deps)).toBe(0);
+    expect(
+      await runCommand({ kind: "check", refuseStopAll: false }, h.deps),
+    ).toBe(0);
   });
 
   test("says the read timed out", async () => {
     const h = harness({ hangRead: true });
 
-    await runCommand({ kind: "check" }, h.deps);
+    await runCommand({ kind: "check", refuseStopAll: false }, h.deps);
 
     expect(h.lines.join("\n")).toContain("timed out");
   });
@@ -1440,27 +1468,47 @@ describe("runCommand check while the factory is stopped", () => {
   test("fails while the stop-all is placed", async () => {
     const h = harness({ stopAll: STOPPED });
 
-    expect(await runCommand({ kind: "check" }, h.deps)).toBe(1);
+    expect(
+      await runCommand({ kind: "check", refuseStopAll: true }, h.deps),
+    ).toBe(1);
   });
 
   test("tells to release the stop-all", async () => {
     const h = harness({ stopAll: STOPPED });
 
-    await runCommand({ kind: "check" }, h.deps);
+    await runCommand({ kind: "check", refuseStopAll: true }, h.deps);
 
     expect(h.lines.join("\n")).toContain("mise run stop:release");
+  });
+
+  test("passes while the stop-all is placed when the check does not refuse it", async () => {
+    const h = harness({ stopAll: STOPPED });
+
+    expect(
+      await runCommand({ kind: "check", refuseStopAll: false }, h.deps),
+    ).toBe(0);
+  });
+
+  test("warns about the placed stop-all when the check does not refuse it", async () => {
+    const h = harness({ stopAll: STOPPED });
+
+    await runCommand({ kind: "check", refuseStopAll: false }, h.deps);
+
+    expect(h.lines.join("\n")).toContain("warning: the stop-all is in effect");
   });
 
   test("passes with a warning when the stop-all variable cannot be read", async () => {
     const h = harness({ stopAll: new Error("down") });
 
-    expect(await runCommand({ kind: "check" }, h.deps)).toBe(0);
+    expect(
+      await runCommand({ kind: "check", refuseStopAll: true }, h.deps),
+    ).toBe(0);
   });
 
   test("warns when the stop-all variable cannot be read", async () => {
     const h = harness({ stopAll: new Error("down") });
 
-    await runCommand({ kind: "check" }, h.deps);
+    await runCommand({ kind: "check", refuseStopAll: true }, h.deps);
 
     expect(h.lines.join("\n")).toContain("could not read the stop-all");
   });
@@ -1468,6 +1516,8 @@ describe("runCommand check while the factory is stopped", () => {
   test("passes with a warning when the stop-all read does not answer", async () => {
     const h = harness({ stopAll: "hang" });
 
-    expect(await runCommand({ kind: "check" }, h.deps)).toBe(0);
+    expect(
+      await runCommand({ kind: "check", refuseStopAll: true }, h.deps),
+    ).toBe(0);
   });
 });
