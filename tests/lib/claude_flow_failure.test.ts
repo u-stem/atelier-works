@@ -10,6 +10,7 @@ import {
   isFlowRetryable,
   NO_FLOW_RETRY_MARKER,
   recordClaudeRuns,
+  withoutFlowRetryMarker,
 } from "../../f/factory/lib/claude_flow_failure.ts";
 import type { LogFields, Logger } from "../../f/factory/lib/log.ts";
 import type {
@@ -110,6 +111,24 @@ describe("flowFailureMessage", () => {
     "invalid_structured_output",
   ])("keeps the message as it is for %s", (reason) => {
     expect(flowFailureMessage(reason, MESSAGE)).toBe(MESSAGE);
+  });
+});
+
+describe("withoutFlowRetryMarker", () => {
+  test("removes the marker that flowFailureMessage put at the head", () => {
+    const message = flowFailureMessage("timeout", MESSAGE);
+
+    expect(withoutFlowRetryMarker(message)).toBe(MESSAGE);
+  });
+
+  test("keeps a message without the marker", () => {
+    expect(withoutFlowRetryMarker(MESSAGE)).toBe(MESSAGE);
+  });
+
+  test("keeps a marker that is not at the head", () => {
+    const message = `step: ${NO_FLOW_RETRY_MARKER} ${MESSAGE}`;
+
+    expect(withoutFlowRetryMarker(message)).toBe(message);
   });
 });
 

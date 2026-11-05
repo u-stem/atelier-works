@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
+import { flowFailureMessage } from "../../f/factory/lib/claude_flow_failure.ts";
 import { conflictClaudeFailedMessage } from "../../f/factory/lib/conflict_fix_apply.ts";
 import {
   CONFLICT_ROUND_DETAILS,
@@ -340,6 +341,22 @@ describe("decideConflictFixRecovery", () => {
       expect(
         decideConflictFixRecovery(
           item("failed", { note: conflictClaudeFailedMessage(reason) }),
+        ),
+      ).toEqual({ kind: "release", hold: "fix_stopped" });
+    },
+  );
+
+  test.each(["timeout", "budget_exceeded", "usage_limit"] as const)(
+    "holds fix_stopped for a failed work item whose note carries the no-retry marker for %s",
+    (reason) => {
+      expect(
+        decideConflictFixRecovery(
+          item("failed", {
+            note: flowFailureMessage(
+              reason,
+              conflictClaudeFailedMessage(reason),
+            ),
+          }),
         ),
       ).toEqual({ kind: "release", hold: "fix_stopped" });
     },

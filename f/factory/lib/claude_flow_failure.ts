@@ -36,6 +36,11 @@ export function flowFailureMessage(
     : `${NO_FLOW_RETRY_MARKER} ${message}`;
 }
 
+/** 例外の文の先頭のタグを外す。 */
+export function withoutFlowRetryMarker(_message: string): string {
+  return "";
+}
+
 /** 使用上限の通知を残すための操作と環境。 */
 export type UsageLimitNoticeDeps = {
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
