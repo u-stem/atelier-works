@@ -159,3 +159,33 @@ describe("auditRegisterIssues", () => {
     expect(issues.some((issue) => issue.startsWith("report.md: "))).toBe(true);
   });
 });
+
+// `main()`はWindmillとDBを直接使うので、Claudeの失敗の配線はソースの文字列で確かめる。
+describe("claude failure wiring in the audit step", () => {
+  async function flatSource(): Promise<string> {
+    const text = await Bun.file(
+      new URL("../../f/factory/steps/audit_generate.ts", import.meta.url),
+    ).text();
+    return text.replace(/\s+/g, " ");
+  }
+
+  test("settles the Claude failure with the dependencies of on_error_flow", async () => {
+    expect(await flatSource()).toContain(
+      "return await settleClaudeFailure(claudeFlowFailureDeps(log), {",
+    );
+  });
+
+  test("settles the failure as the audit_generate module", async () => {
+    expect(await flatSource()).toContain('stepId: "audit_generate",');
+  });
+
+  test("settles the failure with the path of the audit flow", async () => {
+    expect(await flatSource()).toContain("path: AUDIT_FLOW_PATH,");
+  });
+
+  test("does not throw the Claude failure directly", async () => {
+    expect(await flatSource()).not.toContain(
+      "throw new Error( maskSecrets( `audit_generate: runClaude failed",
+    );
+  });
+});

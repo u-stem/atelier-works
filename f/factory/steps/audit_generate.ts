@@ -70,6 +70,9 @@ import {
   writeTextFile,
 } from "../lib/workspace.ts";
 
+/** 監査のflowのパス。flow.yamlの`failure_module`が渡す値と同じにする。 */
+export const AUDIT_FLOW_PATH = "";
+
 export type AuditOutput = { summary: string; proposals: AuditProposal[] };
 
 export function isAuditOutput(value: unknown): value is AuditOutput {
