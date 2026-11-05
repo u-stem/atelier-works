@@ -31,7 +31,7 @@ LOG_MAX_SIZE = "20m"
 LOG_MAX_FILE = "10"
 
 [tasks.up]
-description = "Start the local Windmill stack (refuses while a deploy freeze is active)"
+description = "Start the local Windmill stack (refuses while a deploy freeze is active; only warns while the stop-all is active)"
 run = """
 set -e
 scripts/check-docker-version.sh
@@ -91,10 +91,10 @@ lefthook install
 """
 
 [tasks.deploy]
-description = "Update checkout, rebuild, restart, push, and migrate (refuses while a deploy freeze is active)"
+description = "Update checkout, rebuild, restart, push, and migrate (refuses while a deploy freeze or the stop-all is active)"
 run = """
 set -e
-bun ./scripts/freeze.ts check
+bun ./scripts/freeze.ts check --refuse-stop-all
 git pull --ff-only
 scripts/check-docker-version.sh
 docker compose -f infra/docker-compose.yml pull

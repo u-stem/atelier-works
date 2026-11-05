@@ -6,7 +6,8 @@
 // 反映で有効に戻されることを防ぐ。
 // deployの保留は、反映全体(push、migration、`self_update`の反映)を期限つきで待たせる。
 // 状態はどちらもWindmillの変数`f/factory/freezes`に置く。
-// 全停止(変数`f/factory/stop_all`)が置かれている間は、`check`とpushを断る。
+// 全停止(変数`f/factory/stop_all`)が置かれている間は、pushと、`check --refuse-stop-all`を断る。
+// `check`だけのときは警告で通す(pushもscheduleの復帰もしない`up`が使う)。
 // 全停止はscheduleを無効にするだけなので、pushがscheduleの定義で有効に戻してしまうためである。
 //
 // 使い方(`mise run`のタスクから呼ぶ):
@@ -14,7 +15,7 @@
 //   freeze.ts place --scope deploy --minutes <n> --reason <text>
 //   freeze.ts list
 //   freeze.ts release <id>
-//   freeze.ts check          有効な凍結を表示する。全停止かdeployの保留があれば1を返す。読めないときは警告だけで通す
+//   freeze.ts check [--refuse-stop-all]   有効な凍結を表示する。deployの保留があれば1を返す。--refuse-stop-allを付けると全停止でも1を返し、付けないと警告だけで通す。読めないときは警告だけで通す
 //   freeze.ts push [--prune] [--dry-run]   除外を付けて`wmill sync push`を実行する。全停止かdeployの保留があるか、読めなければ拒否する
 //   freeze.ts migrate        `wmill datatable migrate up`を実行する。deployの保留があるか、読めなければ拒否する
 //   freeze.ts apply          1回の読み取りで、pushに続けてmigrateを実行する
@@ -85,7 +86,7 @@ export type Command =
   | { readonly kind: "apply" }
   | { readonly kind: "list" }
   | { readonly kind: "release"; readonly id: string }
-  | { readonly kind: "check" }
+  | { readonly kind: "check"; readonly refuseStopAll: boolean }
   | { readonly kind: "reset" }
   | {
       readonly kind: "push";
@@ -101,8 +102,15 @@ function fail<T>(reason: string): Outcome<T> {
 export function parseArgs(argv: readonly string[]): Outcome<Command> {
   const [name, ...rest] = argv;
   switch (name) {
+    case "check": {
+      let refuseStopAll = false;
+      for (const arg of rest) {
+        if (arg === "--refuse-stop-all") refuseStopAll = true;
+        else return fail(`unknown argument for check: ${arg}`);
+      }
+      return { ok: true, value: { kind: "check", refuseStopAll } };
+    }
     case "list":
-    case "check":
     case "reset":
     case "migrate":
     case "apply":
@@ -395,7 +403,7 @@ export async function runCommand(
     case "list":
       return await runList(deps);
     case "check":
-      return await runCheck(deps);
+      return await runCheck(command.refuseStopAll, deps);
     case "push":
       return await runPush(command, actor, deps);
     case "reset":
@@ -647,10 +655,11 @@ async function stopAllRefusal(
 }
 
 /**
- * 全停止が置かれていれば断る。読めないときと、応答が上限を超えたときは警告だけで通す。
+ * 全停止が置かれていれば、`refuse`が真のときは断り、偽のときは警告だけで通す。
+ * 読めないときと、応答が上限を超えたときは、`refuse`によらず警告だけで通す。
  * 凍結の読み取りと同じく、`deploy`と`up`が止まっているスタックを起こせるようにするためである。後段のpushは、読めないと止める。
  */
-async function checkStopAll(deps: CliDeps): Promise<number> {
+async function checkStopAll(refuse: boolean, deps: CliDeps): Promise<number> {
   const { readStopAll } = await loadStopAll();
   const read = await within(readStopAll(deps.stopAll), deps.checkReadTimeoutMs);
   const status: StopAllStatus =
@@ -666,22 +675,31 @@ async function checkStopAll(deps: CliDeps): Promise<number> {
     );
     return 0;
   }
-  if (status.kind !== "clear") {
+  if (status.kind === "clear") return 0;
+  if (!refuse) {
     deps.print(
-      `refused: ${describeStopAll(status)}; release it with mise run stop:release first`,
+      `warning: ${describeStopAll(status)}; the push will refuse to run until it is released with mise run stop:release`,
     );
-    return 1;
+    return 0;
   }
-  return 0;
+  deps.print(
+    `refused: ${describeStopAll(status)}; release it with mise run stop:release first`,
+  );
+  return 1;
 }
 
 /**
- * 全停止が置かれていれば断る。続けて、有効なスケジュールの凍結とdeployの保留を表示し、deployの保留があれば1を返す。
+ * `refuseStopAll`が真のとき、全停止が置かれていれば断る。偽のときは警告だけで通す。
+ * 全停止の中でもコンテナを作り直せるように、pushもscheduleの復帰もしない`up`は偽で呼ぶ。
+ * 続けて、有効なスケジュールの凍結とdeployの保留を表示し、deployの保留があれば1を返す。
  * 読めないときと、応答が上限を超えたときは警告だけで通す(`deploy`と`up`が、止まっているスタックを
  * 起こせるように)。後段のpushとmigrateは、読めないと止める。
  */
-async function runCheck(deps: CliDeps): Promise<number> {
-  if ((await checkStopAll(deps)) !== 0) return 1;
+async function runCheck(
+  refuseStopAll: boolean,
+  deps: CliDeps,
+): Promise<number> {
+  if ((await checkStopAll(refuseStopAll, deps)) !== 0) return 1;
   let raw: string | null;
   try {
     const read = await within(

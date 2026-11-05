@@ -6912,9 +6912,10 @@ Factoryが暴走したとき、1つの操作でFactory全体を止める。
 
 ホストの`mise run push`と`mise run deploy`も、全停止の間は断る。
 pushが、止めたscheduleを定義の`enabled: true`で有効に戻すためである。
-`mise run up`も同じ反映の前の確認を通るので断る。
 解除してから実行する。
-変数を読めないときは、`mise run up`は警告を出して通し、pushは断る。
+`mise run up`は、pushもscheduleの復帰もしないので、全停止の間は警告だけで通す。
+解除の前でも、コンテナを作り直す復旧ができるようにするためである。
+変数を読めないときも、`mise run up`は警告を出して通し、pushは断る。
 止まっているスタックを`mise run up`で起こせるようにするためである。
 
 ### Consoleから全停止する
