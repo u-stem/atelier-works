@@ -11,7 +11,8 @@
 // その後にジョブを中止する。先に中止すると、ジョブのプロセスと一緒に、子プロセスを止める監視が消えるためである。
 // scriptが断った結果(`refused`)と、読めない結果は、置けなかった・解除できなかったものとして非0で終える。
 // 監視が消えた後に残ったプロセスは、`docker compose exec`でworkerの中から止める。
-// Claudeは自分のプロセスグループの先頭なので、グループごと止める。検査のプロセスは、枠のuidとして全部止める。
+// Claudeは、属するプロセスグループごと止める。implementとpr_fixのClaudeは`flock`の下で動き、グループの先頭は`flock`である。
+// 検査のプロセスは、枠のuidとして全部止める。
 //
 // どの操作も、端末(TTY)で`yes`を入力して確かめる。環境変数`CLAUDECODE`があるときは、確認の前に断る。
 // subagentと背景のセッションは端末を持たないので、確認も通らない。
@@ -40,7 +41,21 @@ export const KILL_GRACE_MS = 5_000;
 const REASON_MAX = 200;
 const CONTROL_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 
-export const PS_ARGV = ["ps", "-eo", "pid,etimes,args"] as const;
+/** workerのプロセスの一覧。グループの番号を先頭の列に置く(`claudeGroupIds`が読む形)。 */
+export const PS_ARGV = ["ps", "-eo", "pgid,pid,args"] as const;
+
+/**
+ * `PS_ARGV`の出力から、Claudeが属するプロセスグループの番号を、重複を除いて返す。
+ * `selectOrphanClaudePids`は、行の先頭の列を番号、2列目を経過時間として読み、Claudeの行の先頭の列を返す。
+ * 先頭にpgidを、2列目にpidを並べ、経過時間の絞り込みを-1で外すと、Claudeの行のpgidが返る。
+ * 全停止では、起動した直後のClaudeも止めるため、経過時間で絞らない。
+ * 0と1は、自分のグループやinitを指すので除く。
+ */
+export function claudeGroupIds(psOutput: string): number[] {
+  return [...new Set(selectOrphanClaudePids(psOutput, -1))].filter(
+    (pgid) => Number.isInteger(pgid) && pgid > 1,
+  );
+}
 
 export type StopCommand =
   | { readonly kind: "place"; readonly reason: string }
@@ -201,19 +216,16 @@ async function killLeftovers(deps: StopDeps): Promise<number> {
     );
     return 1;
   }
-  // 経過時間で絞らない(-1)。全停止では、起動した直後のClaudeも止める。
-  const groups = selectOrphanClaudePids(listed.stdout, -1).filter(
-    (pid) => Number.isInteger(pid) && pid > 1,
-  );
-  for (const pid of groups) {
-    await deps.workerExec(signalGroupArgv("TERM", pid));
+  const groups = claudeGroupIds(listed.stdout);
+  for (const pgid of groups) {
+    await deps.workerExec(signalGroupArgv("TERM", pgid));
   }
   if (groups.length > 0) {
     await deps.sleep(KILL_GRACE_MS);
     // 先頭が終わっても、グループの子が残ることがある。先頭の有無で選ばず、見つけたグループすべてに送る。
     // グループが既に無ければ`kill`は失敗するが、止めるものが無いだけなので数えない。
-    for (const pid of groups) {
-      await deps.workerExec(signalGroupArgv("KILL", pid));
+    for (const pgid of groups) {
+      await deps.workerExec(signalGroupArgv("KILL", pgid));
     }
   }
   // 枠のプロセスが無いuidでは`kill`が失敗するが、止めるものが無いだけなので数えない。
