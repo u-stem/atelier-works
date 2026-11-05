@@ -70,6 +70,10 @@ const CONTROL_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const RFC3339 =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
+/**
+ * `types.ts`の`isRecord`と同じ判定。`types.ts`を読み込まずに、ここで持つ。
+ * 全停止を置くscriptと解除するscriptは、保護パスのファイルだけを読み込むと決めてあり、`types.ts`は保護パスでないためである。
+ */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

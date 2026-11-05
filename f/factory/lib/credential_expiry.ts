@@ -6,7 +6,7 @@
 
 import type { NotifyEvent } from "./discord.ts";
 import { type Logger, maskSecrets } from "./log.ts";
-import type { NoticeRecord } from "./types.ts";
+import { isRecord, type NoticeRecord } from "./types.ts";
 
 export const CREDENTIAL_EXPIRY_VARIABLE_PATH = "f/factory/credential_expiry";
 export const CREDENTIAL_EXPIRING_NOTICE_KIND = "credential_expiring";
@@ -52,10 +52,6 @@ export type CredentialDeadline = {
   readonly label: string;
   readonly expiresAt: Date;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isTime(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
