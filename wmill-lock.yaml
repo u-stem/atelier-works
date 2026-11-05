@@ -58,7 +58,7 @@ locks:
   f/factory/lib/ci_metadata_rehash: fe02965a116e2f2767808f1265c8efb646ea60c8531b85c710576a32b5bb7309
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 6e366e41df98546b3a46b8c017e811e87fa15761b899d9ef0244ec7afc8daebc
-  f/factory/lib/claude_flow_failure: 89e31d55d3e64cdaf4b2e5a4ab016b40b8aefe39dbce627f5870860c57bb43be
+  f/factory/lib/claude_flow_failure: d24b1df9c02b5bd7cfa4aade0d2fd8006a2877f37b5d0bba0d16b8fde81e51f6
   f/factory/lib/claude_read_deny: 344937384ac71e6635c10abd0edaa98c6d26b77fd9ce4fac8177e39b6d2add3b
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea
   f/factory/lib/cleanup_support: 3b97f5ee699012babd490ff9a070aa573aeabb45577923723b55760b12af1545
@@ -188,7 +188,7 @@ locks:
   f/factory/manual_intake_submit: c2133a5f5a279d4ecbdd326e982f26cc8b2356f02e3274f9a77b7f0198b42e3c
   f/factory/notice_resolve: 3794cae7243a5e3efa50091313272a61aae6d8c6930e3a2060d4e8b8c48067ac
   f/factory/notify_daily_summary: 6134c361a6c04bcb9b0892a467b34b0c70cce568d6f6dd2f7956cfb9013e045a
-  f/factory/on_error_flow: d8c7d371e5a1e9cb89bf2c2d870aad3b486ad4e4a959c2f10fbd6a020d806bcd
+  f/factory/on_error_flow: ca7dfabb6568d7662723cccde95d4a5e6d85cad0efcefed76da1e22bae74425b
   f/factory/pipeline__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/poll_dependabot: 5fc165c01f8ce38bbac2c5d2e9a4a1a9f4b371a43de8eeb6aea82b0b314c3668
   f/factory/poll_issues: 47cddcea02cf3d3070ea98dd0e6431bc6f5a1da6a859271fd00f577a379e0d5c
