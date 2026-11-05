@@ -1181,6 +1181,7 @@ const DETERMINISTIC_HOLDS = [
   "fix_stopped",
   "rounds_exhausted",
   "not_factory_head",
+  "claude_run_failed",
 ] as const;
 
 const TEMPORARY_HOLDS = [
@@ -1422,6 +1423,22 @@ describe("prCiFixHoldInfo", () => {
 
   test("leaves the discord message of a stopped fix to the fix flow", () => {
     expect(prCiFixHoldInfo("fix_stopped").discord).toBe(false);
+  });
+
+  test("leaves the discord message of a failed Claude run to the failure of the flow", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").discord).toBe(false);
+  });
+
+  test("names the procedure that releases the hold of a failed Claude run", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").nextAction).toContain(
+      "Claudeの失敗で保留したCIの直しを起動し直す",
+    );
+  });
+
+  test("names the procedure in the stop notice of a failed Claude run", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").stopAction).toContain(
+      "Claudeの失敗で保留したCIの直しを起動し直す",
+    );
   });
 
   test("sends the discord message when the time settings do not fit", () => {
