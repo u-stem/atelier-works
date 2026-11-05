@@ -167,13 +167,14 @@ const CI_DENIED_DIRECTORIES: readonly string[] = [
  * 実装の関門の承認の判定(`approval_gate`)、要件定義の基準値の照合(`doc_tree_hash`)、モデル出力の整形(`model_text`)、
  * deployの保留と凍結を守ってmainを反映する自動反映(`self_update`)と、その反映の判断の本体(`self_update_support`)、
  * 検査の前提が古いときの理由(`check_sandbox_reasons`)、GitHubの呼び出しの失敗の型(`github_errors`)、
- * 再試行しないClaudeの失敗を決める判定と実行の記録(`claude_flow_failure`)である。
+ * 再試行しないClaudeの失敗を決める判定(`flow_retry_marker`)、Claudeの実行の記録(`claude_flow_failure`)である。
  * 一覧は、CI回と競合回の回復が「待たずに保留なしで外す回」を決め、競合回の数え方が「数えない回」を決める。
  * 広い接頭辞を足されると、競合回の上限が効かなくなる。
  */
 const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/claude.",
   "f/factory/lib/claude_flow_failure.",
+  "f/factory/lib/flow_retry_marker.",
   "f/factory/lib/protected_paths.",
   "f/factory/lib/log.",
   "f/factory/lib/workspace.",

@@ -31,10 +31,7 @@ import {
   dailyBudgetStatus,
   runClaude,
 } from "../lib/claude.ts";
-import {
-  flowFailureMessage,
-  recordClaudeRuns,
-} from "../lib/claude_flow_failure.ts";
+import { recordClaudeRuns } from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   CONFLICT_CLEAN_MERGE_RESULT,
@@ -49,6 +46,7 @@ import {
 } from "../lib/conflict_fix_prompt.ts";
 import { CONFLICT_MERGE_NOT_RECORDED_REASON } from "../lib/conflict_fix_round.ts";
 import { countPrFixFailures, latestDraft, recordAgentRun } from "../lib/db.ts";
+import { flowFailureMessage } from "../lib/flow_retry_marker.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";

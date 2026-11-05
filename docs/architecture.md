@@ -514,7 +514,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/ci_fix_round` | script | [LIB] CI回のpr_fixの共通部品 |
 | `f/factory/lib/ci_fix_prompt` | script | [LIB] CI回のプロンプト |
 | `f/factory/lib/ci_fix_paths` | script | [LIB] CI回の変更ファイルの検査 |
-| `f/factory/lib/claude_flow_failure` | script | [LIB] Claudeの失敗の判定と実行の記録 |
+| `f/factory/lib/claude_flow_failure` | script | [LIB] Claudeの実行の記録と使用上限の通知 |
 | `f/factory/lib/console_holds_support` | script | [LIB] Consoleの保留と凍結の画面の整形と解除の共通部品 |
 | `f/factory/lib/console_status` | script | [LIB] Consoleの取り込みの状態 |
 | `f/factory/lib/console_actions` | script | [LIB] Consoleの操作の記録 |
@@ -535,6 +535,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/drawio` | script | [LIB] draw.io図の生成 |
 | `f/factory/lib/factory_clone` | script | [LIB] Factory自身のcloneの用意 |
 | `f/factory/lib/factory_repo_gate` | script | [LIB] Factory自身のリポジトリの照合 |
+| `f/factory/lib/flow_retry_marker` | script | [LIB] flowの再試行を止めるタグ |
 | `f/factory/lib/gated_review_support` | script | [LIB] gatedでレビューを投稿しない状態の判定とnoticeの文面 |
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |

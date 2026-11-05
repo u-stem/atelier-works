@@ -3,13 +3,13 @@
 // I/Oは持たない。読み取りと更新は呼び出し側が行う。
 
 import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry_reasons.ts";
-import { withoutFlowRetryMarker } from "./claude_flow_failure.ts";
 import {
   CONFLICT_CLAUDE_FAILED_NOTE_PREFIX,
   CONFLICT_ROUND_DETAILS,
   CONFLICT_TEMPORARY_STOP_NOTES,
   conflictRoundReason,
 } from "./conflict_fix_round.ts";
+import { withoutFlowRetryMarker } from "./flow_retry_marker.ts";
 import {
   BUDGET_REASON,
   DRAFT_OR_AUTO_MERGE_REASONS,

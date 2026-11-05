@@ -10,10 +10,7 @@ import {
   type RunClaudeFailureReason,
   runClaude,
 } from "../lib/claude.ts";
-import {
-  flowFailureMessage,
-  recordClaudeRuns,
-} from "../lib/claude_flow_failure.ts";
+import { recordClaudeRuns } from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   getWorkItem,
@@ -26,6 +23,7 @@ import { notifyBestEffort } from "../lib/discord.ts";
 import { hashDirectoryTree, realDirectoryIo } from "../lib/doc_tree_hash.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
+import { flowFailureMessage } from "../lib/flow_retry_marker.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";

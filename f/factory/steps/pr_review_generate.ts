@@ -11,10 +11,7 @@ import {
   dailyBudgetStatus,
   runClaude,
 } from "../lib/claude.ts";
-import {
-  flowFailureMessage,
-  recordClaudeRuns,
-} from "../lib/claude_flow_failure.ts";
+import { recordClaudeRuns } from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   findFixRoundKindToReview,
@@ -23,6 +20,7 @@ import {
   updateStatusIfCurrent,
 } from "../lib/db.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
+import { flowFailureMessage } from "../lib/flow_retry_marker.ts";
 import {
   type GhClient,
   getPr,
