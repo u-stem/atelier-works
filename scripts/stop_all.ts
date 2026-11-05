@@ -9,6 +9,7 @@
 //
 // 20秒待つのは、実行中のClaudeと検査が、自分で変数を読んで止まるまでの間である(確認は15秒ごと)。
 // その後にジョブを中止する。先に中止すると、ジョブのプロセスと一緒に、子プロセスを止める監視が消えるためである。
+// scriptが断った結果(`refused`)と、読めない結果は、置けなかった・解除できなかったものとして非0で終える。
 // 監視が消えた後に残ったプロセスは、`docker compose exec`でworkerの中から止める。
 // Claudeは自分のプロセスグループの先頭なので、グループごと止める。検査のプロセスは、枠のuidとして全部止める。
 //
@@ -24,6 +25,7 @@ import {
   parsePoolSize,
 } from "../f/factory/lib/check_sandbox.ts";
 import { selectOrphanClaudePids } from "../f/factory/lib/cleanup_support.ts";
+import { isRecord } from "../f/factory/lib/types.ts";
 import { parseRunningJobs, runningJobsSql } from "./check-idle.ts";
 
 /** 全停止を置くWindmillのscript。Consoleの全停止の操作と同じものを呼ぶ。 */
@@ -137,6 +139,47 @@ const KILL_MESSAGE =
 const RELEASE_MESSAGE =
   "This releases the stop-all and enables the repository schedules again. The *_enabled settings stay off; turn them on one by one.";
 
+/**
+ * `wmill script run -s`の標準出力から読んだ、scriptの結果。
+ * scriptは断るときも正常に終わるので、終了コードだけでは置けたかどうかが分からない。
+ */
+export type ScriptOutcome =
+  | { readonly kind: "done" }
+  | { readonly kind: "refused"; readonly reason: string }
+  | { readonly kind: "unreadable" };
+
+/** scriptの結果のJSONを読む。`refused`が真偽値でない結果は、読めないものとして扱う。 */
+export function readScriptOutcome(stdout: string): ScriptOutcome {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return { kind: "unreadable" };
+  }
+  if (!isRecord(parsed)) return { kind: "unreadable" };
+  if (parsed.refused === false) return { kind: "done" };
+  if (parsed.refused === true && typeof parsed.reason === "string") {
+    return { kind: "refused", reason: parsed.reason };
+  }
+  return { kind: "unreadable" };
+}
+
+/** 置けなかったか解除できなかった理由。成功していれば`null`を返す。 */
+function scriptFailure(result: ExecResult): string | null {
+  if (result.exitCode !== 0) {
+    return `the script failed (exit ${String(result.exitCode)}): ${result.stderr.trim()}`;
+  }
+  const outcome = readScriptOutcome(result.stdout);
+  switch (outcome.kind) {
+    case "done":
+      return null;
+    case "refused":
+      return `the script refused (${outcome.reason})`;
+    case "unreadable":
+      return "the result of the script could not be read";
+  }
+}
+
 /** 端末で確かめるときに見せる文。 */
 function confirmationOf(command: StopCommand): string {
   switch (command.kind) {
@@ -219,8 +262,9 @@ export async function runStop(
   if (command.kind === "release") {
     const released = await deps.runScript(RELEASE_SCRIPT, {});
     deps.print(released.stdout.trim());
-    if (released.exitCode !== 0) {
-      deps.print(`could not release the stop-all: ${released.stderr.trim()}`);
+    const failure = scriptFailure(released);
+    if (failure !== null) {
+      deps.print(`could not release the stop-all: ${failure}`);
       return 1;
     }
     return 0;
@@ -232,9 +276,11 @@ export async function runStop(
       reason: command.reason,
     });
     deps.print(placed.stdout.trim());
-    if (placed.exitCode !== 0) {
+    const failure = scriptFailure(placed);
+    // 置けなくても、ジョブの中止とプロセスの停止は続ける。Windmillで止められないときの受け皿だからである。
+    if (failure !== null) {
       deps.print(
-        `could not place the stop-all through Windmill: ${placed.stderr.trim()}. Continuing with the process kill.`,
+        `could not place the stop-all through Windmill: ${failure}. Continuing with the process kill.`,
       );
       failures += 1;
       notPlaced = true;
