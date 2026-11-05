@@ -3725,19 +3725,19 @@ check(
 // ラウンドの数: 直近のpassedの行より後の、CIの回だけを数える。
 check(
   "rounds: a round that was claimed is counted",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 1,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, [], sql)) === 1,
 );
 check(
   "rounds: the owner and repo are found by any case",
-  (await countPrCiFixRounds("QFIX", "APP", 507, sql)) === 1,
+  (await countPrCiFixRounds("QFIX", "APP", 507, [], sql)) === 1,
 );
 check(
   "rounds: a pull request without a round counts zero",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 502, sql)) === 0,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 502, [], sql)) === 0,
 );
 check(
   "rounds: a pr_fix that does not fix a CI failure is not counted",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 505, sql)) === 1,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 505, [], sql)) === 1,
 );
 execPsql(
   target,
@@ -3765,7 +3765,7 @@ check(
 );
 check(
   "rounds: the second round of the pull request is counted",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 2,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, [], sql)) === 2,
 );
 execPsql(
   target,
@@ -3777,13 +3777,13 @@ execPsql(
 );
 check(
   "rounds: a passed row after the rounds starts the count again",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 0,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, [], sql)) === 0,
 );
 const fixAfterPass = await failedFixRow(501, FIX_SHA_2);
 check(
   "rounds: a failure after the passed row is counted from one",
   typeof (await fixClaim(fixAfterPass.id, FIX_SHA_2)) === "number" &&
-    (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 1,
+    (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, [], sql)) === 1,
 );
 
 // 戻す相手を作業項目で絞れる。
@@ -4178,7 +4178,7 @@ check(
 );
 check(
   "claim to recovery: a work item that failed before its flow started is not counted as a round",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 601, sql)) === 0,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 601, [], sql)) === 0,
 );
 execPsql(
   target,
@@ -4186,11 +4186,79 @@ execPsql(
 );
 check(
   "claim to recovery: a work item that failed after its flow started is counted toward the limit",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 601, sql)) === 1,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 601, [], sql)) === 1,
 );
 check(
   "claim to recovery: the attempts of the row keep counting the failed launch",
   Number((await fixRowOf(claimPlain.id))?.fix_attempts) === 1,
+);
+
+// 待てば解ける失敗(使用上限と全停止)で終わった回は、直す回数の上限にも、行の起動の回数にも数えない。
+const WAIT_NOTE = "pr_fix_apply: ci round: claude run failed (usage_limit)";
+const waitedRow = await failedFixRow(611, FIX_SHA_1);
+const waitedItem = await fixClaim(waitedRow.id, FIX_SHA_1);
+if (waitedItem === null) throw new Error("the waited row was not claimed");
+await updateStatus(waitedItem, "failed", WAIT_NOTE, sql);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = '0192d4a0-7b1c-7e2a-9f3d-1a2b3c4d5e6f' WHERE id = ${String(waitedItem)}`,
+);
+check(
+  "wait: a round that ended on a note that waits is not counted",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 611, [WAIT_NOTE], sql)) === 0,
+  await countPrCiFixRounds(FIX.owner, FIX.repo, 611, [WAIT_NOTE], sql),
+);
+check(
+  "wait: a round on another note is counted",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 611, ["other"], sql)) === 1,
+  await countPrCiFixRounds(FIX.owner, FIX.repo, 611, ["other"], sql),
+);
+await releaseFixingPrCiCheck(
+  waitedRow.id,
+  { holdReason: "claude_usage_limit", refundAttempt: true },
+  sql,
+);
+check(
+  "wait: giving the attempt back returns the attempts of the row to what they were",
+  Number((await fixRowOf(waitedRow.id))?.fix_attempts) === 0,
+  await fixRowOf(waitedRow.id),
+);
+check(
+  "wait: the release writes the hold reason",
+  (await fixRowOf(waitedRow.id))?.fix_hold_reason === "claude_usage_limit",
+  await fixRowOf(waitedRow.id),
+);
+
+// 使用上限の後に同じ作業項目が動き直して終わった回は、最後の状態で決まる。
+const waitedThenBlockedRow = await failedFixRow(612, FIX_SHA_1);
+const waitedThenBlocked = await fixClaim(waitedThenBlockedRow.id, FIX_SHA_1);
+if (waitedThenBlocked === null) throw new Error("the row was not claimed");
+await updateStatus(waitedThenBlocked, "failed", WAIT_NOTE, sql);
+await updateStatus(waitedThenBlocked, "fixing", "qfix restart", sql);
+await updateStatus(waitedThenBlocked, "failed", "other failure", sql);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = '0192d4a0-7b1c-7e2a-9f3d-1a2b3c4d5e6f' WHERE id = ${String(waitedThenBlocked)}`,
+);
+check(
+  "wait: the note of the last transition into the status decides",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 612, [WAIT_NOTE], sql)) === 1,
+  await countPrCiFixRounds(FIX.owner, FIX.repo, 612, [WAIT_NOTE], sql),
+);
+
+// 下限を割らない。回復が同じ行を二重に戻しても、回数は負にならない。
+const floorRow = await failedFixRow(613, FIX_SHA_1);
+const floorItem = await fixClaim(floorRow.id, FIX_SHA_1);
+if (floorItem === null) throw new Error("the row was not claimed");
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET fix_attempts = 0 WHERE id = ${String(floorRow.id)}`,
+);
+await releaseFixingPrCiCheck(floorRow.id, { refundAttempt: true }, sql);
+check(
+  "wait: giving the attempt back does not go below zero",
+  Number((await fixRowOf(floorRow.id))?.fix_attempts) === 0,
+  await fixRowOf(floorRow.id),
 );
 
 // 現headのレビュー: pr_reviewの作業項目に、そのheadのレビューの行があるかを、大文字小文字を問わず調べる。

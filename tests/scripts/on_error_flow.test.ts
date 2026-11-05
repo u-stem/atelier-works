@@ -9,8 +9,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_reasons.ts";
+import { ciClaudeFailedNote } from "../../f/factory/lib/ci_fix_round.ts";
+import type { RunClaudeFailureReason } from "../../f/factory/lib/claude.ts";
 import { DEPENDABOT_FLOW_PATH } from "../../f/factory/lib/dependabot_flow_support.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
+import { flowFailureMessage } from "../../f/factory/lib/flow_retry_marker.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   DESIGN_FLOW_PATH,
@@ -29,6 +32,7 @@ import {
 import { nextActionFor } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const IMPLEMENT = "f/factory/implement";
+const PR_FIX_FLOW = "f/factory/pr_fix";
 const PIPELINE = "f/factory/pipeline";
 
 describe("shouldMarkFailed", () => {
@@ -242,6 +246,73 @@ describe("handleFlowFailure with the marker that stops the flow retry", () => {
       }),
     );
     expect(fake.failures[0]?.error).toBe("step: [no-flow-retry] failed");
+  });
+});
+
+describe("handleFlowFailure for a CI round that the watch starts again", () => {
+  const CI_ITEM = workItem({
+    kind: "pr_fix",
+    status: "fixing",
+    ci_check_id: 3,
+    pr_number: 12,
+  });
+  const input = (reason: RunClaudeFailureReason) =>
+    failureInput({
+      path: PR_FIX_FLOW,
+      error: {
+        message: flowFailureMessage(reason, ciClaudeFailedNote(reason)),
+        step_id: "pr_fix_apply",
+      },
+    });
+
+  test.each(["usage_limit", "stopped"] as const)(
+    "does not send job_failed for %s, because the watch starts the round again",
+    async (reason) => {
+      const fake = fakeFailureDeps({ item: CI_ITEM });
+      await handleFlowFailure(fake.deps, input(reason));
+      expect(jobFailed(fake.events)).toBeUndefined();
+    },
+  );
+
+  test.each(["usage_limit", "stopped"] as const)(
+    "still marks the work item failed for %s",
+    async (reason) => {
+      const fake = fakeFailureDeps({ item: CI_ITEM });
+      await handleFlowFailure(fake.deps, input(reason));
+      expect(fake.statusCalls[0]?.note).toBe(ciClaudeFailedNote(reason));
+    },
+  );
+
+  test.each(["usage_limit", "stopped"] as const)(
+    "still records the failure for %s",
+    async (reason) => {
+      const fake = fakeFailureDeps({ item: CI_ITEM });
+      await handleFlowFailure(fake.deps, input(reason));
+      expect(fake.failures).toHaveLength(1);
+    },
+  );
+
+  test("sends job_failed when the run was replaced, because the watch does not read this failure", async () => {
+    const fake = fakeFailureDeps({
+      item: CI_ITEM,
+      updateStatus: async () => false,
+    });
+    await handleFlowFailure(fake.deps, input("usage_limit"));
+    expect(jobFailed(fake.events)).toBeDefined();
+  });
+
+  test("sends job_failed for a timeout, which stays on hold", async () => {
+    const fake = fakeFailureDeps({ item: CI_ITEM });
+    await handleFlowFailure(fake.deps, input("timeout"));
+    expect(jobFailed(fake.events)).toBeDefined();
+  });
+
+  test("sends job_failed for the same text from a work item that is not a CI round", async () => {
+    const fake = fakeFailureDeps({
+      item: workItem({ kind: "pr_fix", status: "fixing", ci_check_id: null }),
+    });
+    await handleFlowFailure(fake.deps, input("usage_limit"));
+    expect(jobFailed(fake.events)).toBeDefined();
   });
 });
 

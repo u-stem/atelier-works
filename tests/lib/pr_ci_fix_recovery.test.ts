@@ -2,11 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
 import {
   CI_ROUND_DETAILS,
+  ciClaudeFailedNote,
   ciClaudeFailureText,
   ciRoundReason,
 } from "../../f/factory/lib/ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "../../f/factory/lib/ci_metadata_rehash.ts";
+import { NON_RETRYABLE_REASONS } from "../../f/factory/lib/flow_retry_marker.ts";
 import {
+  CI_CLAUDE_WAIT_NOTES,
   decideFixingRecovery,
   type FixItemState,
   holdReasonForStoppedItem,
@@ -32,18 +35,18 @@ function item(
   };
 }
 
-/** 同じ入力で繰り返しても同じ失敗になるか、人が止めた、Claudeの実行の失敗の種類。 */
-const NON_RETRYABLE_CLAUDE_FAILURES = [
-  "timeout",
-  "run_budget_exceeded",
-  "usage_limit",
-  "stopped",
+/** 失敗の種類と、その種類で止まった行の保留の理由。`NON_RETRYABLE_REASONS`のすべてを持つ。 */
+const CLAUDE_FAILURE_HOLDS = [
+  ["timeout", "claude_run_failed"],
+  ["run_budget_exceeded", "claude_run_failed"],
+  ["usage_limit", "claude_usage_limit"],
+  ["stopped", "claude_stopped"],
 ] as const;
 
 describe("the CI round whose Claude run failed in a way that repeats", () => {
-  test.each(NON_RETRYABLE_CLAUDE_FAILURES)(
-    "holds a failed work item whose apply step failed with %s",
-    (reason) => {
+  test.each(CLAUDE_FAILURE_HOLDS)(
+    "holds a failed work item whose apply step failed with %s as %s",
+    (reason, hold) => {
       expect(
         decideFixingRecovery(
           item("failed", {
@@ -51,21 +54,38 @@ describe("the CI round whose Claude run failed in a way that repeats", () => {
           }),
           NOW,
         ),
-      ).toEqual({ kind: "release", hold: "claude_run_failed" });
+      ).toEqual({ kind: "release", hold });
     },
   );
 
-  test.each(NON_RETRYABLE_CLAUDE_FAILURES)(
-    "holds a blocked work item whose verify step failed with %s",
-    (reason) => {
+  test.each(CLAUDE_FAILURE_HOLDS)(
+    "holds a blocked work item whose verify step failed with %s as %s",
+    (reason, hold) => {
       expect(
         decideFixingRecovery(
           item("blocked", { note: ciClaudeFailureText(reason) }),
           NOW,
         ),
-      ).toEqual({ kind: "release", hold: "claude_run_failed" });
+      ).toEqual({ kind: "release", hold });
     },
   );
+
+  test("maps every failure that the flow does not retry", () => {
+    expect(CLAUDE_FAILURE_HOLDS.map(([reason]) => reason)).toEqual([
+      ...NON_RETRYABLE_REASONS,
+    ]);
+  });
+
+  test("lists both notes of the usage limit and the stop as the ones that wait", () => {
+    expect([...CI_CLAUDE_WAIT_NOTES].sort()).toEqual(
+      (["usage_limit", "stopped"] as const)
+        .flatMap((reason) => [
+          ciClaudeFailureText(reason),
+          ciClaudeFailedNote(reason),
+        ])
+        .sort(),
+    );
+  });
 
   test.each([
     "not_started",

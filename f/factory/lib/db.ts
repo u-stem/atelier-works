@@ -6023,6 +6023,7 @@ export async function countPrCiFixRounds(
   owner: string,
   repo: string,
   prNumber: number,
+  _exemptNotes: readonly string[],
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   assertPrCiTarget(owner, repo, prNumber);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
+import { ciClaudeFailedNote } from "../../f/factory/lib/ci_fix_round.ts";
 import { VolatileCiLog } from "../../f/factory/lib/ci_log_support.ts";
 import type {
   ClaimPrCiCheckInput,
@@ -2491,6 +2492,64 @@ function fixingSetup(
   };
 }
 
+describe("recovery of a fixing row after a Claude failure that the row waits out", () => {
+  const noteOf = (reason: "usage_limit" | "stopped" | "timeout") =>
+    ciClaudeFailedNote(reason);
+
+  test.each([
+    ["usage_limit", "claude_usage_limit"],
+    ["stopped", "claude_stopped"],
+  ] as const)("holds the row on %s as %s", async (reason, hold) => {
+    const h = harness(fixingSetup(fixItem("failed", { note: noteOf(reason) })));
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.options.holdReason)).toEqual([hold]);
+  });
+
+  test.each(["usage_limit", "stopped"] as const)(
+    "gives the attempt back after %s, so that waiting does not use it up",
+    async (reason) => {
+      const h = harness(
+        fixingSetup(fixItem("failed", { note: noteOf(reason) })),
+      );
+      await runPrCiWatch(h.deps);
+      expect(h.released.map((entry) => entry.options.refundAttempt)).toEqual([
+        true,
+      ]);
+    },
+  );
+
+  test.each(["usage_limit", "stopped"] as const)(
+    "keeps the notified reason after %s, whose hold is temporary",
+    async (reason) => {
+      const h = harness(
+        fixingSetup(fixItem("failed", { note: noteOf(reason) })),
+      );
+      await runPrCiWatch(h.deps);
+      expect(h.released.map((entry) => entry.options.resetNotified)).toEqual([
+        undefined,
+      ]);
+    },
+  );
+
+  test("keeps the attempt after a timeout, which stays on hold", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed", { note: noteOf("timeout") })),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.options.refundAttempt)).toEqual([
+      undefined,
+    ]);
+  });
+
+  test("keeps the attempt of a work item that failed for another reason", async () => {
+    const h = harness(fixingSetup(fixItem("failed")));
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.options.refundAttempt)).toEqual([
+      undefined,
+    ]);
+  });
+});
+
 describe("recovery of a fixing row", () => {
   test("returns the row to failed when the work item failed", async () => {
     const h = harness(fixingSetup(fixItem("failed")));
@@ -2956,6 +3015,8 @@ type ClaimSetup = {
   readonly workerEnvProblem?: WorkerEnvProblem | null;
   /** 環境の確認が例外を投げる。 */
   readonly workerEnvError?: Error;
+  /** 全停止が解除されたと確かめられないか。 */
+  readonly stopHeld?: boolean;
   readonly claimResults?: (number | null)[];
   readonly launchFails?: boolean;
   /** フローは起動したが、ジョブIDを作業項目に記録できなかった。 */
@@ -3083,6 +3144,10 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
     budgetExceeded: async () => {
       count("budget");
       return setup.budgetExceeded ?? false;
+    },
+    stopHeld: async () => {
+      count("stop_held");
+      return setup.stopHeld ?? false;
     },
     mainCiFailed: async () => {
       count("main_ci");
@@ -3739,6 +3804,82 @@ describe("the claim limits", () => {
     const h = harness({ ...threePrs(), override: { claim: c.deps } });
     await runPrCiWatch(h.deps);
     expect(c.reads.main_ci).toBe(1);
+  });
+});
+
+describe("a row on hold for the usage limit or the stop", () => {
+  test("is not claimed before the interval has passed", async () => {
+    const c = claimHarness({
+      candidates: [
+        candidateRow({
+          fix_hold_reason: "claude_usage_limit",
+          updated_at: minutesBefore(29),
+        }),
+      ],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("keeps its hold without writing it again before the interval has passed", async () => {
+    const c = claimHarness({
+      candidates: [
+        candidateRow({
+          fix_hold_reason: "claude_usage_limit",
+          updated_at: minutesBefore(29),
+        }),
+      ],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([]);
+  });
+
+  test("is claimed when the interval has passed", async () => {
+    const c = claimHarness({
+      candidates: [
+        candidateRow({
+          fix_hold_reason: "claude_usage_limit",
+          updated_at: minutesBefore(30),
+        }),
+      ],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: null }]);
+  });
+
+  test("is not claimed while the stop is held", async () => {
+    const c = claimHarness({
+      stopHeld: true,
+      candidates: [candidateRow({ fix_hold_reason: "claude_stopped" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("is claimed after the release of the stop", async () => {
+    const c = claimHarness({
+      candidates: [candidateRow({ fix_hold_reason: "claude_stopped" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toHaveLength(1);
+  });
+
+  test("reads the stop once in a run", async () => {
+    const c = claimHarness({
+      stopHeld: true,
+      candidates: [
+        candidateRow({ id: 5, fix_hold_reason: "claude_stopped" }),
+        candidateRow({ id: 6, fix_hold_reason: "claude_stopped" }),
+      ],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.reads.stop_held).toBe(1);
   });
 });
 

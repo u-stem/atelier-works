@@ -9022,25 +9022,31 @@ describe("claimPrCiCheckForFix", () => {
 });
 
 describe("countPrCiFixRounds", () => {
+  test("passes the notes of the rounds that are not counted", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrCiFixRounds("acme", "widgets", 12, ["note"], sql);
+    expect(calls[0]?.values).toContainEqual(["note"]);
+  });
+
   test("returns the number of rounds", async () => {
     const { sql } = createFakeSqlClient([[{ rounds: "2" }]]);
-    expect(await countPrCiFixRounds("Acme", "Widgets", 12, sql)).toBe(2);
+    expect(await countPrCiFixRounds("Acme", "Widgets", 12, [], sql)).toBe(2);
   });
 
   test("returns 0 when no row is returned", async () => {
     const { sql } = createFakeSqlClient([[]]);
-    expect(await countPrCiFixRounds("acme", "widgets", 12, sql)).toBe(0);
+    expect(await countPrCiFixRounds("acme", "widgets", 12, [], sql)).toBe(0);
   });
 
   test("counts only the work items that fix a CI failure", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrCiFixRounds("acme", "widgets", 12, sql);
+    await countPrCiFixRounds("acme", "widgets", 12, [], sql);
     expect(calls[0]?.text).toContain("wi.ci_check_id IS NOT NULL");
   });
 
   test("counts only the rounds after the latest passed row", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrCiFixRounds("acme", "widgets", 12, sql);
+    await countPrCiFixRounds("acme", "widgets", 12, [], sql);
     expect(calls[0]?.text).toMatch(
       /wi\.created_at > COALESCE\([\s\S]*p\.state = 'passed'/,
     );
@@ -9048,7 +9054,7 @@ describe("countPrCiFixRounds", () => {
 
   test("does not count a work item that failed before its flow started", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrCiFixRounds("acme", "widgets", 12, sql);
+    await countPrCiFixRounds("acme", "widgets", 12, [], sql);
     expect(calls[0]?.text).toContain(
       "AND NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)",
     );
@@ -9056,13 +9062,15 @@ describe("countPrCiFixRounds", () => {
 
   test("lowercases the owner and repo", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrCiFixRounds("Acme", "Widgets", 12, sql);
+    await countPrCiFixRounds("Acme", "Widgets", 12, [], sql);
     expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
   });
 
   test("rejects an invalid pull request number, without querying", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrCiFixRounds("acme", "widgets", 0, sql).catch(() => undefined);
+    await countPrCiFixRounds("acme", "widgets", 0, [], sql).catch(
+      () => undefined,
+    );
     expect(calls).toHaveLength(0);
   });
 });

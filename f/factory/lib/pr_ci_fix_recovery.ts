@@ -94,6 +94,8 @@ export function holdReasonForStoppedItem(
   return null;
 }
 
+export const CI_CLAUDE_WAIT_NOTES: readonly string[] = [];
+
 export type FixingRecovery =
   /** 何もしない。作業項目が動いているか、待つ時間が残っている。 */
   | { readonly kind: "keep" }

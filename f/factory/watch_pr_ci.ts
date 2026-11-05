@@ -208,7 +208,7 @@ export function buildClaimDeps(
     budgetExceeded: async () => (await dailyBudgetStatus(config)).exceeded,
     mainCiFailed: (owner, repo) => isLatestMainCiRunFailed(owner, repo),
     countRounds: (owner, repo, prNumber) =>
-      countPrCiFixRounds(owner, repo, prNumber),
+      countPrCiFixRounds(owner, repo, prNumber, []),
     setHold: (id, reason, expected, resetNotified) =>
       setPrCiFixHold(id, reason, { expected, resetNotified }),
     claim: (input) => claimPrCiCheckForFix(input),

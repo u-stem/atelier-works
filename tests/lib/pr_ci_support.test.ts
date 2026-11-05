@@ -5,6 +5,7 @@ import {
   SETTLE_MIN_AGE_MS,
   type WorkflowRun,
 } from "../../f/factory/lib/main_ci_support.ts";
+import { HOLD_PROLONGED_AFTER_MS } from "../../f/factory/lib/pr_ci_notify.ts";
 import {
   CONFIG_MISFIT_KIND,
   canTransitionPrCi,
@@ -1194,6 +1195,8 @@ const TEMPORARY_HOLDS = [
   "config_misfit",
   "worker_image_stale",
   "worker_runtime_unsafe",
+  "claude_usage_limit",
+  "claude_stopped",
 ] as const;
 
 describe("PR_CI_FIX_HOLD_REASONS", () => {
@@ -1425,8 +1428,44 @@ describe("prCiFixHoldInfo", () => {
     expect(prCiFixHoldInfo("fix_stopped").discord).toBe(false);
   });
 
-  test("leaves the discord message of a failed Claude run to the failure of the flow", () => {
-    expect(prCiFixHoldInfo("claude_run_failed").discord).toBe(false);
+  test("sends the discord message of a failed Claude run, which names the pull request", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").discord).toBe(true);
+  });
+
+  test("does not name the usage limit among the failures that stay on hold", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").nextAction).not.toContain(
+      "使用上限",
+    );
+  });
+
+  test("does not name the stop among the failures that stay on hold", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").nextAction).not.toContain(
+      "全停止",
+    );
+  });
+
+  test("says when the row on the usage limit starts again", () => {
+    expect(prCiFixHoldInfo("claude_usage_limit").nextAction).toContain(
+      `${String(HOLD_PROLONGED_AFTER_MS / 60_000)}分ごと`,
+    );
+  });
+
+  test("says in the stop notice when the row on the usage limit starts again", () => {
+    expect(prCiFixHoldInfo("claude_usage_limit").stopAction).toContain(
+      `${String(HOLD_PROLONGED_AFTER_MS / 60_000)}分ごと`,
+    );
+  });
+
+  test("says that the release of the stop starts the row again", () => {
+    expect(prCiFixHoldInfo("claude_stopped").nextAction).toContain(
+      "全停止を解除すると",
+    );
+  });
+
+  test("says in the stop notice that the release of the stop starts the row again", () => {
+    expect(prCiFixHoldInfo("claude_stopped").stopAction).toContain(
+      "全停止を解除すると",
+    );
   });
 
   test("names the procedure that releases the hold of a failed Claude run", () => {
