@@ -42,9 +42,14 @@ import type { FailureRecord, NoticeRecord } from "./lib/types.ts";
 
 /**
  * 全停止の通知の同期の上限(ミリ秒)。DBの書き込みと、Discordの送信を含む。
- * 超えても検出の結果は変えず、死活監視は叩く。scriptの`timeout`(60秒)の中で、残りの処理に時間を残すための値である。
+ * 超えても検出の結果は変えず、死活監視は叩く。
+ * 検出の後の処理は、この10秒、URLの読み取りの5秒、死活監視の10秒で、最長25秒である。
+ * scriptの`timeout`(60秒)の中で、検出そのものに時間を残すための値である。
  */
-const STOP_ALL_NOTICE_SYNC_TIMEOUT_MS = 20_000;
+const STOP_ALL_NOTICE_SYNC_TIMEOUT_MS = 10_000;
+
+/** 死活監視のURLを読む上限(ミリ秒)。超えたら、その回は叩かずに警告のログを残す。 */
+const HEARTBEAT_URL_READ_TIMEOUT_MS = 5_000;
 
 /** 配線が使う入出力。テストでは偽物に差し替える。 */
 export type DetectScheduleFailuresIo = {
@@ -210,13 +215,18 @@ export async function main(): Promise<ScheduleFailureDetectResult> {
           STOP_ALL_NOTICE_SYNC_TIMEOUT_MS,
         ),
       getHeartbeatUrl: () =>
-        readVariableOrNull(
-          () => wmill.getVariable("f/factory/heartbeat_url"),
+        withCallTimeout(
+          "read heartbeat url",
           () =>
-            wmill.VariableService.existsVariable({
-              workspace,
-              path: "f/factory/heartbeat_url",
-            }),
+            readVariableOrNull(
+              () => wmill.getVariable("f/factory/heartbeat_url"),
+              () =>
+                wmill.VariableService.existsVariable({
+                  workspace,
+                  path: "f/factory/heartbeat_url",
+                }),
+            ),
+          HEARTBEAT_URL_READ_TIMEOUT_MS,
         ),
       pingHeartbeat: (url) => pingHeartbeat(url, fetch),
     },
