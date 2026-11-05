@@ -538,6 +538,10 @@ type ClaudeAttemptResult<T> =
 export const CLAUDE_NOT_STARTED_DETAIL =
   "claude -p not started: no time left before the deadline";
 
+// テストを先に足すための仮の値。次のコミットで本実装に置き換える。
+export const CLAUDE_STOPPED_BEFORE_START_DETAIL = "stub";
+export const CLAUDE_STOPPED_DETAIL = "stub";
+
 /** この試行のタイムアウト(ms)を返す。deadlineAtがあれば残り時間で頭打ちにする。 */
 function attemptTimeoutMs<T>(opts: RunClaudeOptions<T>): number {
   if (opts.deadlineAt === undefined) return opts.timeoutMs;

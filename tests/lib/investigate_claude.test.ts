@@ -462,6 +462,7 @@ describe("runInvestigateClaude", () => {
         env: expectedEnv(),
         stdin: "investigate this",
         timeoutMs: 60_000,
+        stopSignal: expect.any(AbortSignal),
       });
     });
 
@@ -473,6 +474,7 @@ describe("runInvestigateClaude", () => {
         env: expectedEnv(),
         stdin: expect.stringContaining("investigate this"),
         timeoutMs: 60_000,
+        stopSignal: expect.any(AbortSignal),
       });
     });
 

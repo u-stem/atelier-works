@@ -33,6 +33,9 @@ export type CheckCommandResult = {
 
 const CHECK_OUTPUT_TAIL_CHARS = 2000;
 
+// テストを先に足すための仮の値。次のコミットで本実装に置き換える。
+export const CHECK_STOPPED_NOTE = "";
+
 /** `checkUnrunnableReason`が返す理由の先頭。回復の処理が、理由の先頭一致で保留に写す。 */
 export const CHECK_UNRUNNABLE_REASON_PREFIX = "check command could not run: ";
 
