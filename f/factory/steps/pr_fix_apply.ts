@@ -29,10 +29,12 @@ import {
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
-  recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
-import { flowFailureMessage } from "../lib/claude_flow_failure.ts";
+import {
+  flowFailureMessage,
+  recordClaudeRuns,
+} from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   CONFLICT_CLEAN_MERGE_RESULT,

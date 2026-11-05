@@ -24,11 +24,13 @@ import {
 } from "../lib/audit_support.ts";
 import {
   buildSystemPrompt,
-  recordClaudeRuns,
   runClaude,
   type SystemPromptFile,
 } from "../lib/claude.ts";
-import { flowFailureMessage } from "../lib/claude_flow_failure.ts";
+import {
+  flowFailureMessage,
+  recordClaudeRuns,
+} from "../lib/claude_flow_failure.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
   countPendingIssueProposals,

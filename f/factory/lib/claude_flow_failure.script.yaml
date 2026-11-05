@@ -1,5 +1,5 @@
-summary: '[LIB] 再試行しないClaudeの失敗の判定'
-description: 内部ライブラリです。直接実行するものではありません。timeout、予算の超過、使用上限のClaudeの失敗に、flowの再試行を止めるタグを付けます。
+summary: '[LIB] Claudeの失敗の判定と実行の記録'
+description: 内部ライブラリです。直接実行するものではありません。timeout、予算の超過、使用上限のClaudeの失敗に、flowの再試行を止めるタグを付けます。実行の記録と、使用上限の通知も行います。
 lock: '!inline f/factory/lib/claude_flow_failure.script.lock'
 kind: script
 schema:

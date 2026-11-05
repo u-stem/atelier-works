@@ -51,9 +51,9 @@ import {
   type DailyBudgetStatus,
   dailyBudgetStatus,
   type RunClaudeFailureReason,
-  recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
+import { recordClaudeRuns } from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   CONFLICT_MERGE_NOT_RECORDED_REASON,

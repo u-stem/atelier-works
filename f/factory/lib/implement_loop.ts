@@ -8,11 +8,8 @@ import { access, cp, lstat, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { firstUnrunnableCheckReason } from "./check_runner.ts";
 import { CheckEnvironmentError } from "./check_sandbox.ts";
-import {
-  type RunClaudeOptions,
-  type RunClaudeResult,
-  recordClaudeRuns,
-} from "./claude.ts";
+import type { RunClaudeOptions, RunClaudeResult } from "./claude.ts";
+import { recordClaudeRuns } from "./claude_flow_failure.ts";
 import {
   checkDocTreeHash,
   copyDirectoryTreeWithHash,

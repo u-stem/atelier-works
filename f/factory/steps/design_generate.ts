@@ -17,9 +17,9 @@ import {
   dailyBudgetStatus,
   type RunClaudeOptions,
   type RunClaudeResult,
-  recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
+import { recordClaudeRuns } from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   getRequirementDraft,
