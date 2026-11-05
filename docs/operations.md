@@ -1369,8 +1369,20 @@ timeoutで打ち切った実行は、上限の値を費用として記録し、�
 
 使用上限の応答の形はClaude Codeの文書に無く、実機でも確かめていない。
 判定の文面は、workerのClaude Codeのバイナリの文字列から取った。
-結果の本文か`errors`が、`You've hit your`、`You've reached your`、`You're out of usage credits`のどれかを含めば、使用上限とする。
+結果の本文か`errors`が次の文面のどれかを含めば、使用上限とする。
 大文字と小文字は区別しない。
+
+- `You've hit your`
+- `You've reached your`
+- `You're out of usage credits`
+- `You're out of extra usage`
+- `Your org is out of usage`
+- `Your seat type doesn't include usage`
+- `Your seat type doesn't include extra usage`
+- `Your usage allocation has been disabled`
+- `Your group's usage limit is set to $0`
+- `requires usage credits`
+
 `api_error_status`の429だけでは使用上限にしない。
 一時的なレート制限は、Windmillの再試行で回復するためである。
 `claude_usage_limit`が初めて出たときと、使用上限に当たったのに出なかったときは、次の手順で確かめる。
@@ -1378,7 +1390,7 @@ timeoutで打ち切った実行は、上限の値を費用として記録し、�
 1. 次のコマンドで、上限の文を含む直近の失敗の記録を読む。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT created_at, stage, error FROM factory.agent_runs WHERE error ~* 'limit|usage credits|hit your|reached your' ORDER BY created_at DESC LIMIT 5"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT created_at, stage, error FROM factory.agent_runs WHERE error ~* 'limit|usage|hit your|reached your' ORDER BY created_at DESC LIMIT 5"
    ```
 
 2. `error`の`subtype=`と`api_error_status=`と、その後の本文を見る。

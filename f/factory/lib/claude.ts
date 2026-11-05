@@ -634,11 +634,11 @@ function failureDetail(text: string): string {
 
 /**
  * 使用上限(サブスクリプションの上限)に当たったときの、結果の本文の形。
- * 文面はworkerのClaude Codeのバイナリの文字列から取った。Claude Codeの文書には無い。
+ * 文面はworkerのClaude Codeのバイナリが上限の文として持つ一覧から取った。Claude Codeの文書には無い。
  * 実際の上限の応答は確かめていないので、判定の材料を失敗の詳細に残す。
  */
 const USAGE_LIMIT_PATTERN =
-  /You've hit your|You've reached your|You're out of usage credits/i;
+  /You've hit your|You've reached your|You're out of (?:usage credits|extra usage)|Your org is out of usage|Your seat type doesn't include (?:extra )?usage|Your usage allocation has been disabled|Your group's usage limit is set to \$0|requires usage credits/i;
 
 /**
  * `is_error: true`の結果を、失敗の種類に分ける。
