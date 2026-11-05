@@ -26,15 +26,31 @@ type Calls = {
   readonly added: NoticeRecord[];
   readonly resolved: number[];
   readonly sent: NotifyEvent[];
+  readonly urls: string[];
   readonly lines: string[];
 };
+
+const WEBHOOK = "https://discord.example/api/webhooks/1/token";
+
+/** 時間切れのテストで待たないよう、内側の上限を短くする。 */
+const SHORT_TIMEOUTS = { read: 5, send: 5 };
+
+function never<T>(): Promise<T> {
+  return new Promise<T>(() => {});
+}
 
 function setup(
   status: StopAllStatus,
   open: boolean,
   inserted: number | null = 1,
 ): { deps: StopAllNoticeDeps; calls: Calls } {
-  const calls: Calls = { added: [], resolved: [], sent: [], lines: [] };
+  const calls: Calls = {
+    added: [],
+    resolved: [],
+    sent: [],
+    urls: [],
+    lines: [],
+  };
   return {
     calls,
     deps: {
@@ -49,11 +65,14 @@ function setup(
         calls.resolved.push(1);
         return 1;
       },
-      notify: async (event) => {
+      readWebhookUrl: async () => WEBHOOK,
+      notify: async (url, event) => {
+        calls.urls.push(url);
         calls.sent.push(event);
       },
       instanceName: async () => "local",
       log: logger("test", { sink: (line) => calls.lines.push(line) }),
+      callTimeoutMs: SHORT_TIMEOUTS,
     },
   };
 }
@@ -71,6 +90,47 @@ describe("syncStopAllNotice", () => {
     const { deps, calls } = setup(ACTIVE, false);
     await syncStopAllNotice(deps);
     expect(calls.sent[0]?.kind).toBe("stop_all_active");
+  });
+
+  test("sends to the webhook url it reads", async () => {
+    const { deps, calls } = setup(ACTIVE, false);
+    await syncStopAllNotice(deps);
+    expect(calls.urls).toEqual([WEBHOOK]);
+  });
+
+  test("still reports placed when the webhook url read hangs", async () => {
+    const { deps } = setup(ACTIVE, false);
+    const outcome = await syncStopAllNotice({
+      ...deps,
+      readWebhookUrl: () => never(),
+    });
+    expect(outcome).toBe("placed");
+  });
+
+  test("still reports placed when the instance name read hangs", async () => {
+    const { deps } = setup(ACTIVE, false);
+    const outcome = await syncStopAllNotice({
+      ...deps,
+      instanceName: () => never(),
+    });
+    expect(outcome).toBe("placed");
+  });
+
+  test("still reports placed when the Discord send hangs", async () => {
+    const { deps } = setup(ACTIVE, false);
+    const outcome = await syncStopAllNotice({
+      ...deps,
+      notify: () => never(),
+    });
+    expect(outcome).toBe("placed");
+  });
+
+  test("warns when the Discord send hangs", async () => {
+    const { deps, calls } = setup(ACTIVE, false);
+    await syncStopAllNotice({ ...deps, notify: () => never() });
+    expect(calls.lines.join("\n")).toContain(
+      "could not tell Discord about the stop-all",
+    );
   });
 
   test("does not tell Discord when another run added the notice first", async () => {
