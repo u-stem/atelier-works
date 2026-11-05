@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
-import { flowFailureMessage } from "../../f/factory/lib/claude_flow_failure.ts";
 import { conflictClaudeFailedMessage } from "../../f/factory/lib/conflict_fix_apply.ts";
 import {
   CONFLICT_ROUND_DETAILS,
   conflictRoundReason,
 } from "../../f/factory/lib/conflict_fix_round.ts";
+import { flowFailureMessage } from "../../f/factory/lib/flow_retry_marker.ts";
 import {
   type ConflictFixItemSources,
   type ConflictFixItemState,

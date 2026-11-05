@@ -9,7 +9,7 @@ import { join } from "node:path";
 import {
   flowFailureMessage,
   NO_FLOW_RETRY_MARKER,
-} from "../../f/factory/lib/claude_flow_failure.ts";
+} from "../../f/factory/lib/flow_retry_marker.ts";
 
 function field(value: unknown, key: string): unknown {
   return typeof value === "object" && value !== null

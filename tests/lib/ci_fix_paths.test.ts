@@ -1096,6 +1096,9 @@ describe("files of the Claude failure stop", () => {
     "f/factory/lib/claude_flow_failure.ts",
     "f/factory/lib/claude_flow_failure.script.yaml",
     "f/factory/lib/claude_flow_failure.script.lock",
+    "f/factory/lib/flow_retry_marker.ts",
+    "f/factory/lib/flow_retry_marker.script.yaml",
+    "f/factory/lib/flow_retry_marker.script.lock",
   ])("denies %s", (path) => {
     expect(isDeniedPath(path)).toBe(true);
   });
@@ -1109,6 +1112,17 @@ describe("files of the Claude failure stop", () => {
       source.indexOf("const CI_DENIED_NAME_PREFIXES"),
     );
     expect(doc.includes("`claude_flow_failure`")).toBe(true);
+  });
+
+  test("names the marker module in the doc of the denied list", async () => {
+    const source = await Bun.file(
+      join(REPO_ROOT, "f/factory/lib/ci_fix_paths.ts"),
+    ).text();
+    const doc = source.slice(
+      0,
+      source.indexOf("const CI_DENIED_NAME_PREFIXES"),
+    );
+    expect(doc.includes("`flow_retry_marker`")).toBe(true);
   });
 });
 
