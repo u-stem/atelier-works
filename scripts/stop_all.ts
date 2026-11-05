@@ -12,7 +12,8 @@
 // 監視が消えた後に残ったプロセスは、`docker compose exec`でworkerの中から止める。
 // Claudeは自分のプロセスグループの先頭なので、グループごと止める。検査のプロセスは、枠のuidとして全部止める。
 //
-// どの操作も、端末(TTY)で`yes`を入力して確かめる。subagentと背景のセッションは端末を持たないので実行できない。
+// どの操作も、端末(TTY)で`yes`を入力して確かめる。環境変数`CLAUDECODE`があるときは、確認の前に断る。
+// subagentと背景のセッションは端末を持たないので、確認も通らない。
 // 迂回のための環境変数は設けない。
 
 import { resolve } from "node:path";
@@ -59,6 +60,8 @@ export type JobList =
   | { readonly ok: false; readonly reason: string };
 
 export type StopDeps = {
+  /** 呼び出し元の環境変数。Claudeのセッションからの実行を断るために読む。 */
+  readonly env: Readonly<Record<string, string | undefined>>;
   readonly confirm: (message: string) => Promise<boolean>;
   /** `wmill script run`で、Windmillのscriptを実行する。 */
   readonly runScript: (
@@ -115,8 +118,17 @@ export function signalGroupArgv(
   signal: "TERM" | "KILL",
   pid: number,
 ): string[] {
+  // pid 0と1と負の値は、自分のグループやinitを指す。グループ全体への送信が広がるので拒否する。
+  if (!Number.isInteger(pid) || pid <= 1) {
+    throw new Error(`refusing to signal the group of pid ${String(pid)}`);
+  }
   return [KILL_PATH, "-s", signal, "--", `-${String(pid)}`];
 }
+
+const SESSION_REFUSAL =
+  "mise run stop and mise run stop:release are human-only operations; run them in your own terminal, not from a Claude session";
+const NOT_PLACED_WARNING =
+  "WARNING: the stop-all was NOT placed. The schedules and the *_enabled settings are still active; fix Windmill and run mise run stop again.";
 
 const PLACE_MESSAGE =
   "This stops the whole Factory: it places the stop-all, turns off every *_enabled setting, disables the repository schedules, cancels the running jobs after 20 seconds, and kills the claude and check processes left in the worker.";
@@ -147,20 +159,17 @@ async function killLeftovers(deps: StopDeps): Promise<number> {
     return 1;
   }
   // 経過時間で絞らない(-1)。全停止では、起動した直後のClaudeも止める。
-  const groups = selectOrphanClaudePids(listed.stdout, -1);
+  const groups = selectOrphanClaudePids(listed.stdout, -1).filter(
+    (pid) => Number.isInteger(pid) && pid > 1,
+  );
   for (const pid of groups) {
     await deps.workerExec(signalGroupArgv("TERM", pid));
   }
   if (groups.length > 0) {
     await deps.sleep(KILL_GRACE_MS);
-    const again = await deps.workerExec(PS_ARGV);
-    const left =
-      again.exitCode === 0
-        ? selectOrphanClaudePids(again.stdout, -1).filter((pid) =>
-            groups.includes(pid),
-          )
-        : groups;
-    for (const pid of left) {
+    // 先頭が終わっても、グループの子が残ることがある。先頭の有無で選ばず、見つけたグループすべてに送る。
+    // グループが既に無ければ`kill`は失敗するが、止めるものが無いだけなので数えない。
+    for (const pid of groups) {
       await deps.workerExec(signalGroupArgv("KILL", pid));
     }
   }
@@ -198,6 +207,11 @@ export async function runStop(
   command: StopCommand,
   deps: StopDeps,
 ): Promise<number> {
+  // Claudeのセッションは端末を持たないが、確認の前に明示して断る。
+  if ((deps.env.CLAUDECODE ?? "") !== "") {
+    deps.print(SESSION_REFUSAL);
+    return 1;
+  }
   if (!(await deps.confirm(confirmationOf(command)))) {
     deps.print("not confirmed; nothing was changed");
     return 1;
@@ -212,6 +226,7 @@ export async function runStop(
     return 0;
   }
   let failures = 0;
+  let notPlaced = false;
   if (command.kind === "place") {
     const placed = await deps.runScript(STOP_SCRIPT, {
       reason: command.reason,
@@ -222,6 +237,7 @@ export async function runStop(
         `could not place the stop-all through Windmill: ${placed.stderr.trim()}. Continuing with the process kill.`,
       );
       failures += 1;
+      notPlaced = true;
     }
     deps.print(
       `waiting ${String(SETTLE_WAIT_MS / 1000)}s for the running claude and checks to stop by themselves`,
@@ -230,6 +246,7 @@ export async function runStop(
     failures += await cancelRunningJobs(deps);
   }
   failures += await killLeftovers(deps);
+  if (notPlaced) deps.print(NOT_PLACED_WARNING);
   return failures === 0 ? 0 : 1;
 }
 
@@ -331,6 +348,7 @@ async function main(): Promise<number> {
     return 2;
   }
   return await runStop(command.value, {
+    env: process.env,
     confirm: confirmOnTerminal,
     runScript: (path, args) =>
       capture([
