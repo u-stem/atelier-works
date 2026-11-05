@@ -26,6 +26,7 @@ import {
   type AgentRunRecord,
   capToDeadline,
   type FactoryConfig,
+  isStringArray,
   type ModelUsageEntry,
   type RunClaudeFailureReason,
 } from "./types.ts";
@@ -229,12 +230,6 @@ type RawClaudeJson = {
   readonly usage: RawClaudeUsage;
   readonly structured_output: unknown;
 };
-
-function isStringArray(value: unknown): value is readonly string[] {
-  return (
-    Array.isArray(value) && value.every((item) => typeof item === "string")
-  );
-}
 
 /**
  * `result`が読める形かを返す。文字列でなくてよいのは、`is_error`が真で、`result`が無いか`null`で、`errors`があるときだけである。
@@ -700,18 +695,20 @@ function failureDetail(text: string): string {
  * 実際の上限の応答は確かめていないので、判定の材料を失敗の詳細に残す。
  * 行頭に固定する。ほかのサービスのエラーの引用やモデルの文の中の同じ語句で`usage_limit`にすると、再試行を失うためである。
  * 実際の応答の形が未確認なので、`API Error: `の前置きは許す。
+ * `You've hit your`と`You've reached your`は、バイナリでは続く語が変わる文の先頭である。
+ * 上限の文は`limit`か`team's shared budget`を同じ行に持つので、その行だけを受ける。
  * `requires usage credits`の主語はモデル名で変わるので、短い主語に続く形だけを受ける。
  */
 const USAGE_LIMIT_PATTERN =
-  /^(?:API Error: )?(?:You've hit your|You've reached your|You're out of (?:usage credits|extra usage)|Your org is out of usage|Your seat type doesn't include (?:extra )?usage|Your usage allocation has been disabled|Your group's usage limit is set to \$0|[^·\n]{1,40} requires usage credits)/im;
+  /^(?:API Error: )?(?:You've (?:hit|reached) your[^\n]*(?:limit|team's shared budget)|You're out of (?:usage credits|extra usage)|Your org is out of usage|Your seat type doesn't include (?:extra )?usage|Your usage allocation has been disabled|Your group's usage limit is set to \$0|[^·\n]{1,40} requires usage credits)/im;
 
 /**
  * `is_error: true`の結果を、失敗の種類に分ける。
- * `--max-budget-usd`の超過は`budget_exceeded`、使用上限は`usage_limit`、それ以外は`claude_error`にする。
+ * `--max-budget-usd`の超過は`run_budget_exceeded`、使用上限は`usage_limit`、それ以外は`claude_error`にする。
  * `api_error_status`の429だけでは使用上限にしない。一時的なレート制限は、Windmillの再試行で回復するためである。
  */
 function errorReasonFor(parsed: ClaudeRunResult): RunClaudeFailureReason {
-  if (parsed.subtype === "error_max_budget_usd") return "budget_exceeded";
+  if (parsed.subtype === "error_max_budget_usd") return "run_budget_exceeded";
   if (USAGE_LIMIT_PATTERN.test(parsed.resultText)) return "usage_limit";
   return "claude_error";
 }
@@ -770,15 +767,16 @@ function errorResultFailure(
  * 終了コードがシグナルで終わったことを示すかを返す。
  * `Bun.spawn`の`exited`は、シグナルで終わったプロセスに128にシグナル番号を足した値を返す
  * (SIGTERMは143、SIGKILLは137)。128そのものはシグナルでない。
+ * シグナルの番号は64までなので、192を超える値(255など)はプログラムが選んだ終了コードである。
  */
 function endedBySignal(exitCode: number): boolean {
-  return exitCode > 128;
+  return exitCode > 128 && exitCode <= 192;
 }
 
 /**
  * 標準出力のJSONの`total_cost_usd`を返す。読めないとき(JSONでないとき、途中で切れたとき、
  * 値が有限で0以上の数でないとき)はnullを返す。
- * 全停止で止めた実行は、止める直前に結果を書き終えていることがある。その実費を捨てずに数えるために、
+ * 止めた実行と失敗した実行は、結果を書き終えていることがある。その実費を捨てずに数えるために、
  * 結果の形の全体は問わず、費用の項目だけを読む。
  */
 function totalCostUsdOf(stdout: string): number | null {
@@ -793,6 +791,26 @@ function totalCostUsdOf(stdout: string): number | null {
   return typeof cost === "number" && Number.isFinite(cost) && cost >= 0
     ? cost
     : null;
+}
+
+/**
+ * 打ち切られた実行の記録を返す。標準出力に費用があればその値、無ければ上限の値を費用にする。
+ * 打ち切った実行の費用は結果に無いことが多く、上限の値で日次予算に少なく数えないようにする。
+ */
+function interruptedAgentRun<T>(
+  opts: RunClaudeOptions<T>,
+  base: AgentRunRecord,
+  stdout: string,
+  detail: string,
+): AgentRunRecord {
+  const writtenCost = totalCostUsdOf(stdout);
+  return writtenCost === null
+    ? {
+        ...base,
+        cost_usd: opts.maxBudgetUsd,
+        error: `${detail} ${COST_IS_CAP_NOTE}`,
+      }
+    : { ...base, cost_usd: writtenCost, error: detail };
 }
 
 /** 標準出力を結果として読む。読めなければnullを返す。 */
@@ -835,17 +853,9 @@ async function attemptClaude<T>(
   // 費用だけは、結果を書き終えていれば読む。
   if (watch.stopped() || commandResult.stopped === true) {
     const detail = failureDetail(CLAUDE_STOPPED_DETAIL);
-    // 結果を書き終えた直後に止めた実行は、その実費を記録する。読めないときだけ、上限の値で数える。
-    const writtenCost = totalCostUsdOf(commandResult.stdout);
     return failedAttempt(
       "stopped",
-      writtenCost === null
-        ? {
-            ...baseAgentRun,
-            cost_usd: opts.maxBudgetUsd,
-            error: `${detail} ${COST_IS_CAP_NOTE}`,
-          }
-        : { ...baseAgentRun, cost_usd: writtenCost, error: detail },
+      interruptedAgentRun(opts, baseAgentRun, commandResult.stdout, detail),
       detail,
     );
   }
@@ -854,11 +864,7 @@ async function attemptClaude<T>(
     const detail = failureDetail(`claude -p timed out after ${timeoutMs}ms`);
     return failedAttempt(
       "timeout",
-      {
-        ...baseAgentRun,
-        cost_usd: opts.maxBudgetUsd,
-        error: `${detail} ${COST_IS_CAP_NOTE}`,
-      },
+      interruptedAgentRun(opts, baseAgentRun, commandResult.stdout, detail),
       detail,
     );
   }
@@ -873,21 +879,17 @@ async function attemptClaude<T>(
         commandResult.stderr,
       );
     }
-    const stderrTail = commandResult.stderr.slice(-2000);
-    // 結果を書き終えた後に0以外で終わった実行は、その実費を記録する。
+    const stderrTail = commandResult.stderr.slice(-STDERR_TAIL_CHARS);
+    // 結果を書き終えた後に0以外で終わった実行は、その実費と使用量を記録する。
     if (errorResult !== null) {
       const detail = failureDetail(stderrTail);
       return failedAttempt(
         "non_zero_exit",
-        {
-          ...baseAgentRun,
-          cost_usd: errorResult.totalCostUsd,
-          error: detail,
-        },
+        { ...agentRunFromResult(baseAgentRun, errorResult), error: detail },
         detail,
       );
     }
-    // シグナルで終わった実行は、費用が分からない。上限の値で数える。
+    // シグナルで終わった実行は、費用を書いていなければ分からない。上限の値で数える。
     // 認証の失敗のように起動の直後に終わる失敗には上限を使わない。日次予算を使い切るため。
     if (endedBySignal(commandResult.exitCode)) {
       const detail = failureDetail(
@@ -895,18 +897,18 @@ async function attemptClaude<T>(
       );
       return failedAttempt(
         "non_zero_exit",
-        {
-          ...baseAgentRun,
-          cost_usd: opts.maxBudgetUsd,
-          error: `${detail} ${COST_IS_CAP_NOTE}`,
-        },
+        interruptedAgentRun(opts, baseAgentRun, commandResult.stdout, detail),
         detail,
       );
     }
     const detail = failureDetail(stderrTail);
     return failedAttempt(
       "non_zero_exit",
-      { ...baseAgentRun, error: detail },
+      {
+        ...baseAgentRun,
+        cost_usd: totalCostUsdOf(commandResult.stdout),
+        error: detail,
+      },
       detail,
     );
   }
@@ -920,7 +922,11 @@ async function attemptClaude<T>(
     );
     return failedAttempt(
       "invalid_json",
-      { ...baseAgentRun, error: detail },
+      {
+        ...baseAgentRun,
+        cost_usd: totalCostUsdOf(commandResult.stdout),
+        error: detail,
+      },
       detail,
     );
   }

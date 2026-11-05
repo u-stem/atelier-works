@@ -605,7 +605,7 @@ export type ModelUsageEntry = {
 
 /**
  * `runClaude`の失敗の種類。
- * `budget_exceeded`は`--max-budget-usd`の超過、`usage_limit`はサブスクリプションの使用上限で、
+ * `run_budget_exceeded`は`--max-budget-usd`の超過、`usage_limit`はサブスクリプションの使用上限で、
  * どちらも結果のJSONが`is_error: true`のときに分ける。それ以外の`is_error`は`claude_error`になる。
  * 終了コードが0以外でも、標準出力が`is_error: true`の結果なら、この分け方にする。
  */
@@ -615,7 +615,7 @@ export type RunClaudeFailureReason =
   | "invalid_json"
   | "invalid_structured_output"
   | "claude_error"
-  | "budget_exceeded"
+  | "run_budget_exceeded"
   | "usage_limit"
   | "stopped";
 

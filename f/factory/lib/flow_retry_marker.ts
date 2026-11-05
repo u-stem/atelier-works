@@ -10,7 +10,7 @@ import type { RunClaudeFailureReason } from "./claude.ts";
 /** flowの再試行で直らない失敗の種類。 */
 export const NON_RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
   "timeout",
-  "budget_exceeded",
+  "run_budget_exceeded",
   "usage_limit",
   "stopped",
 ];

@@ -1344,7 +1344,7 @@ PRレビューの生成、PR修正の修正、要件定義の生成、監査の�
 上限は次の3つである。
 
 - `claude_timeout_sec`での打ち切り(`timeout`)
-- `max_budget_usd_per_run`の超過(`budget_exceeded`)
+- `max_budget_usd_per_run`の超過(`run_budget_exceeded`)
 - サブスクリプションの使用上限(`usage_limit`)
 
 すぐ再試行しても同じ失敗になり、費用だけがかかるためである。
@@ -1360,17 +1360,17 @@ flowは失敗のまま終わる。
 通知の本文には、当たったflowのパスが入り、どのflowを再実行するかの手がかりになる。
 古い通知が未解決の間は、同じflowのパスの新しい通知を足さない。
 
-timeoutで打ち切った実行は、上限の値を費用として記録し、日次予算に数える。
+timeoutで打ち切った実行は、標準出力に費用があればその値を、無ければ上限の値を記録し、日次予算に数える。
 上限は`max_budget_usd_per_run`で、実装のフローでは`implement_max_budget_usd_per_run`である。
-打ち切った実行の費用は結果に無いので、上限の値で数える。
+打ち切った実行の費用は結果に無いことが多いので、上限の値で少なく数えないようにする。
 そのため、timeoutが続いた日は、日次予算に早く達する。
-起動した後にシグナルで終わった実行も、結果を読めなければ、同じ扱いで上限の値を記録する。
-終了コードが0以外でも、結果を読めれば、その実費を記録する。
+起動した後にシグナルで終わった実行(終了コードが129から192)も、同じ順で記録する。
+終了コードが0以外でも、結果を読めれば、その実費と使用量を記録する。
+結果の形でなくても、標準出力のJSONに費用があれば、その値を記録する。
 起動の直後に終わる失敗(認証の失敗など)は、日次予算を使い切らないよう、費用を記録しない。
 起動しなかった実行の費用も記録しない。
 
-全停止で止めた実行は、止める前に結果を書き終えていれば、その実費を記録する。
-結果を読めなければ、上限の値を記録する。
+全停止で止めた実行も、標準出力に費用があればその値を、無ければ上限の値を記録する。
 そのため、全停止の後は、日次予算に早く達しうる。
 達したときは、JSTの翌0時まで待つか、`daily_budget_usd`を上げる。
 `daily_budget_usd`は、Windmillの画面で`f/factory/factory_config`を開いて書く。
@@ -1388,8 +1388,7 @@ Consoleからは上げられない([設定を止める向きに変える](#設�
 行頭の`API Error:`の前置きは無視する。
 大文字と小文字は区別しない。
 
-- `You've hit your`
-- `You've reached your`
+- `You've hit your`か`You've reached your`で、同じ行に`limit`か`team's shared budget`があるもの
 - `You're out of usage credits`
 - `You're out of extra usage`
 - `Your org is out of usage`
@@ -1410,7 +1409,7 @@ Consoleからは上げられない([設定を止める向きに変える](#設�
    ```
 
 2. `failure_reason`と、`error`の`subtype=`、`api_error_status=`、その後の本文を見る。
-   `is_error`の結果の`failure_reason`は、`usage_limit`、`budget_exceeded`、`claude_error`のどれかである。
+   `is_error`の結果の`failure_reason`は、`usage_limit`、`run_budget_exceeded`、`claude_error`のどれかである。
 3. 使用上限の失敗の`failure_reason`が`claude_error`なら、判定が漏れている。
    `failure_reason`が`non_zero_exit`か`invalid_json`の失敗に使用上限の文があるときも、同じである。
    本文と終了の形をIssueに書き、`f/factory/lib/claude.ts`の判定を直す。
@@ -2833,7 +2832,7 @@ PATの権限の不足とは限らないので、表の候補の404と403は、�
 | 種類 | 原因の解き方 |
 | --- | --- |
 | `timeout` | 直す範囲が大きすぎないかをログで確かめ、必要なら`claude_timeout_sec`を上げる |
-| `budget_exceeded` | 直す範囲が大きすぎないかをログで確かめ、必要なら`max_budget_usd_per_run`を上げる |
+| `run_budget_exceeded` | 直す範囲が大きすぎないかをログで確かめ、必要なら`max_budget_usd_per_run`を上げる |
 | `usage_limit` | 使用上限が戻るのを待つ |
 | `stopped` | 全停止を解除する |
 
