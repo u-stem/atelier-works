@@ -35,6 +35,9 @@ excludes:
   # あることを確かめてから、凍結中のスケジュールを足した和を`--excludes`で渡す。
   # 3つが欠けると、反映しない。
   - "f/factory/freezes.variable.yaml"
+  # 全停止の状態。Consoleの全停止の操作と`mise run stop`が、実行時にこの秘密でない変数へ書く。
+  # syncすると、無関係なpushで全停止が消える。変数が無いか空なら、止まっていない。
+  - "f/factory/stop_all.variable.yaml"
 
 # --- syncする対象 -----------------------------------------------------
 # "skip"の項目の既定はfalse(syncする)、"include"の項目の既定はfalse(syncしない)

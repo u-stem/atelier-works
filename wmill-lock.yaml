@@ -176,7 +176,7 @@ locks:
   f/factory/lib/schedule_failure_scan: 75af17ce22ab9ed41b7ba4abaecf54d991f5d192ba3dc3bbfc24a00702c62cb7
   f/factory/lib/self_update_pull_requests: b21a5d10d4d5900d7bebaad33b711e71d50461ff3747fd59c54dca63426674d0
   f/factory/lib/self_update_support: a98f74af2080996ec7191a8126563f4012795a4e39bdeb750401c1cfcb16c816
-  f/factory/lib/stop_all: 06903577f13b8c53ed3c962d928e9a383a817a127cffb5cd2cdcde0a1f3253c1
+  f/factory/lib/stop_all: 6f5ccc424fe8a711373f1ae8ed49fc5591d988ee7adb8b5b73b6cd3c4bc0c6e7
   f/factory/lib/summary_support: f04c8bd8ca44a82c8b53a7799cf65b22f9b1fe13b1f33271e71586e460d53029
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
   f/factory/lib/types: f148a8548df769185b43a80384851d3c005b4e80bde3552b5b61c026b410a436
