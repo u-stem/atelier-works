@@ -175,7 +175,36 @@ describe("runClaude while the factory is stopped", () => {
     const result = await runClaude(
       options(recorder.run, sequence(false, true), 5),
     );
-    expect(result.agentRun.error).toBe(CLAUDE_STOPPED_DETAIL);
+    expect(result.agentRun.error).toBe(
+      `${CLAUDE_STOPPED_DETAIL} (cost_usd is the --max-budget-usd cap)`,
+    );
+  });
+
+  test("records maxBudgetUsd as the cost of a run stopped after it started", async () => {
+    const recorder = untilStopped();
+    const opts = options(recorder.run, sequence(false, true), 5);
+
+    const result = await runClaude(opts);
+
+    expect(result.agentRun.cost_usd).toBe(opts.maxBudgetUsd);
+  });
+
+  test("records no cost when the factory is stopped before the start", async () => {
+    const recorder = answering([]);
+
+    const result = await runClaude(options(recorder.run, sequence(true)));
+
+    expect(result.agentRun.cost_usd).toBeNull();
+  });
+
+  test("records no cost for the retry that the stop kept from starting", async () => {
+    const recorder = answering([NOT_JSON, SUCCESS]);
+
+    const result = await runClaude(
+      options(recorder.run, sequence(false, true)),
+    );
+
+    expect(result.agentRun.cost_usd).toBeNull();
   });
 
   test("does not retry a stopped run", async () => {
