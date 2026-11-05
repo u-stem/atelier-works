@@ -6603,7 +6603,11 @@ export async function countImplementFailedRounds(
  *   失敗した行に`error`を書く。適用の実行の失敗は例外で終わってラウンドの記録を残さず、flowの再試行と`on_error_flow`は
  *   `fix_rounds`を書かないので、上の2つでは数えられない。検査の再実行の失敗は例外にならず、`blocked`のラウンドを残す。
  *   flowの再試行や`retry_work_item`で同じ作業項目の実行が何度失敗しても、1行ずつ数える。
- *   ただし次の2つは数えない。
+ *   ただし次の3つは数えない。
+ *   - `error`が`nonModelErrorPrefixes`のどれかで始まる実行。呼び出し側は、使用上限と全停止で止めた実行の
+ *     `error`の先頭(`claude.ts`の`NON_MODEL_FAILURE_ERROR_PREFIXES`)を渡す。
+ *     どちらもモデルを強くしても防げないので、昇格を早めない。前方一致は`starts_with`で行い、
+ *     `LIKE`のワイルドカード(`_`)で別の種類の記録に当たらないようにする。
  *   - `blocked`のラウンドの直前の実行(その実行とラウンドの間に、同じ作業項目の実行が無い)。
  *     検査の再実行の失敗や`.git`の書き換えでラウンドが`blocked`になったときで、
  *     その失敗は`blocked`のラウンドで数え済みである。それより前の失敗と、
@@ -6629,7 +6633,7 @@ export async function countImplementFailedRounds(
  */
 export async function countPrFixFailures(
   workItemId: number,
-  _nonModelErrorPrefixes: readonly string[],
+  nonModelErrorPrefixes: readonly string[],
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   const rows = await sql`
@@ -6681,6 +6685,10 @@ export async function countPrFixFailures(
           AND ar.stage IN ('pr_fix', 'pr_fix_verify_retry')
           AND ar.error IS NOT NULL
           AND ar.created_at > COALESCE((SELECT at FROM last_success), '-infinity'::timestamptz)
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest(${[...nonModelErrorPrefixes]}::text[]) AS np(prefix)
+            WHERE starts_with(ar.error, np.prefix)
+          )
           AND NOT EXISTS (
             SELECT 1 FROM factory.fix_rounds fr
             WHERE fr.work_item_id = ar.work_item_id
