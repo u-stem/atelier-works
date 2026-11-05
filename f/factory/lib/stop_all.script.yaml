@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 全停止の状態の解析と判定'
+description: 内部ライブラリです。直接実行するものではありません。全停止の変数の解析、停止の判定、止めるscheduleの選び方を行う関数です。
 lock: '!inline f/factory/lib/stop_all.script.lock'
 kind: script
 schema:
