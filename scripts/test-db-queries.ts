@@ -1252,6 +1252,21 @@ const verifyRetryStopped = await prFixItem(132);
 const verifyRetryMixed = await prFixItem(133);
 // 修正の実行が使用上限で終わり、`.git`の書き換えでblockedのラウンドを残した。
 const applyLimitBlocked = await prFixItem(134);
+// IDの順が時刻の順になるよう、古い実行から入れる。
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
+    runRow(
+      reasonLookalike,
+      "pr_fix",
+      900,
+      "claude reported an error (reason=usage_limit, subtype=success): x",
+    ),
+    runRow(verifyRetryUsageLimit, "pr_fix", 900, null),
+    runRow(verifyRetryStopped, "pr_fix", 900, null),
+    runRow(verifyRetryMixed, "pr_fix", 900, null),
+  ].join(", ")}`,
+);
 execPsql(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, failure_reason, created_at) VALUES ${[
@@ -1271,20 +1286,6 @@ execPsql(
     reasonRunRow(verifyRetryMixed, "pr_fix_verify_retry", 800, "claude_error"),
     reasonRunRow(verifyRetryMixed, "pr_fix_verify_retry", 500, "usage_limit"),
     reasonRunRow(applyLimitBlocked, "pr_fix", 900, "usage_limit"),
-  ].join(", ")}`,
-);
-execPsql(
-  target,
-  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
-    runRow(
-      reasonLookalike,
-      "pr_fix",
-      900,
-      "claude reported an error (reason=usage_limit, subtype=success): x",
-    ),
-    runRow(verifyRetryUsageLimit, "pr_fix", 900, null),
-    runRow(verifyRetryStopped, "pr_fix", 900, null),
-    runRow(verifyRetryMixed, "pr_fix", 900, null),
   ].join(", ")}`,
 );
 execPsql(

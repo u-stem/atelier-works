@@ -27,6 +27,7 @@ import {
   capToDeadline,
   type FactoryConfig,
   type ModelUsageEntry,
+  type RunClaudeFailureReason,
 } from "./types.ts";
 import type { CommandResult, CommandRunner } from "./workspace.ts";
 
@@ -451,21 +452,7 @@ export type RunClaudeOptions<T> = {
   readonly runAs?: { readonly uid: number; readonly gid: number };
 };
 
-/**
- * `runClaude`の失敗の種類。
- * `budget_exceeded`は`--max-budget-usd`の超過、`usage_limit`はサブスクリプションの使用上限で、
- * どちらも結果のJSONが`is_error: true`のときに分ける。それ以外の`is_error`は`claude_error`になる。
- * 終了コードが0以外でも、標準出力が`is_error: true`の結果なら、この分け方にする。
- */
-export type RunClaudeFailureReason =
-  | "non_zero_exit"
-  | "timeout"
-  | "invalid_json"
-  | "invalid_structured_output"
-  | "claude_error"
-  | "budget_exceeded"
-  | "usage_limit"
-  | "stopped";
+export type { RunClaudeFailureReason };
 
 /**
  * `runClaude`の結果。`agentRun`は最後の試行の記録で、再試行したときは捨てた最初の試行の記録が
@@ -679,7 +666,22 @@ function baseAgentRunFor<T>(
     session_id: null,
     exit_code: exitCode,
     error: null,
+    failure_reason: null,
     model_usage: [],
+  };
+}
+
+/** 失敗の試行の結果を返す。実行の記録にも失敗の種類を入れる。 */
+function failedAttempt(
+  reason: RunClaudeFailureReason,
+  agentRun: AgentRunRecord,
+  detail: string,
+): Extract<ClaudeAttemptResult<never>, { outcome: "failure" }> {
+  return {
+    outcome: "failure",
+    reason,
+    agentRun: { ...agentRun, failure_reason: reason },
+    detail,
   };
 }
 
@@ -732,24 +734,6 @@ function agentRunFromResult(
   };
 }
 
-/**
- * `is_error: true`の結果の失敗の詳細の先頭。失敗の種類(`reason=`)を含み、`agent_runs.error`にも入る。
- * `countPrFixFailures`などが、種類で記録を見分けるのに使う。
- */
-function errorResultDetailPrefix(reason: RunClaudeFailureReason): string {
-  return `claude reported an error (reason=${reason},`;
-}
-
-/**
- * Claudeの実行ではなく、環境の事情で止まった失敗の記録の`error`の先頭の一覧。
- * 使用上限と全停止は、モデルを強くしても防げない。モデルの昇格の失敗に数えないために使う。
- */
-export const NON_MODEL_FAILURE_ERROR_PREFIXES: readonly string[] = [
-  errorResultDetailPrefix("usage_limit"),
-  CLAUDE_STOPPED_BEFORE_START_DETAIL,
-  CLAUDE_STOPPED_DETAIL,
-];
-
 /** 結果の本文が空のとき、失敗の詳細に残すstderrの末尾の字数。 */
 const STDERR_TAIL_CHARS = 2000;
 
@@ -773,14 +757,13 @@ function errorResultFailure(
       ? `(no result text) stderr: ${stderrTail}`
       : parsed.resultText.slice(0, 500);
   const detail = failureDetail(
-    `${errorResultDetailPrefix(reason)} subtype=${parsed.subtype}${statusPart}): ${body}`,
+    `claude reported an error (subtype=${parsed.subtype}${statusPart}): ${body}`,
   );
-  return {
-    outcome: "failure",
+  return failedAttempt(
     reason,
-    agentRun: { ...agentRunFromResult(base, parsed), error: detail },
+    { ...agentRunFromResult(base, parsed), error: detail },
     detail,
-  };
+  );
 }
 
 /**
@@ -854,33 +837,30 @@ async function attemptClaude<T>(
     const detail = failureDetail(CLAUDE_STOPPED_DETAIL);
     // 結果を書き終えた直後に止めた実行は、その実費を記録する。読めないときだけ、上限の値で数える。
     const writtenCost = totalCostUsdOf(commandResult.stdout);
-    return {
-      outcome: "failure",
-      reason: "stopped",
-      agentRun:
-        writtenCost === null
-          ? {
-              ...baseAgentRun,
-              cost_usd: opts.maxBudgetUsd,
-              error: `${detail} ${COST_IS_CAP_NOTE}`,
-            }
-          : { ...baseAgentRun, cost_usd: writtenCost, error: detail },
+    return failedAttempt(
+      "stopped",
+      writtenCost === null
+        ? {
+            ...baseAgentRun,
+            cost_usd: opts.maxBudgetUsd,
+            error: `${detail} ${COST_IS_CAP_NOTE}`,
+          }
+        : { ...baseAgentRun, cost_usd: writtenCost, error: detail },
       detail,
-    };
+    );
   }
 
   if (commandResult.timedOut) {
     const detail = failureDetail(`claude -p timed out after ${timeoutMs}ms`);
-    return {
-      outcome: "failure",
-      reason: "timeout",
-      agentRun: {
+    return failedAttempt(
+      "timeout",
+      {
         ...baseAgentRun,
         cost_usd: opts.maxBudgetUsd,
         error: `${detail} ${COST_IS_CAP_NOTE}`,
       },
       detail,
-    };
+    );
   }
 
   if (commandResult.exitCode !== 0) {
@@ -897,16 +877,15 @@ async function attemptClaude<T>(
     // 結果を書き終えた後に0以外で終わった実行は、その実費を記録する。
     if (errorResult !== null) {
       const detail = failureDetail(stderrTail);
-      return {
-        outcome: "failure",
-        reason: "non_zero_exit",
-        agentRun: {
+      return failedAttempt(
+        "non_zero_exit",
+        {
           ...baseAgentRun,
           cost_usd: errorResult.totalCostUsd,
           error: detail,
         },
         detail,
-      };
+      );
     }
     // シグナルで終わった実行は、費用が分からない。上限の値で数える。
     // 認証の失敗のように起動の直後に終わる失敗には上限を使わない。日次予算を使い切るため。
@@ -914,24 +893,22 @@ async function attemptClaude<T>(
       const detail = failureDetail(
         `claude -p was ended by a signal (exit code ${String(commandResult.exitCode)})${stderrTail === "" ? "" : `: ${stderrTail}`}`,
       );
-      return {
-        outcome: "failure",
-        reason: "non_zero_exit",
-        agentRun: {
+      return failedAttempt(
+        "non_zero_exit",
+        {
           ...baseAgentRun,
           cost_usd: opts.maxBudgetUsd,
           error: `${detail} ${COST_IS_CAP_NOTE}`,
         },
         detail,
-      };
+      );
     }
     const detail = failureDetail(stderrTail);
-    return {
-      outcome: "failure",
-      reason: "non_zero_exit",
-      agentRun: { ...baseAgentRun, error: detail },
+    return failedAttempt(
+      "non_zero_exit",
+      { ...baseAgentRun, error: detail },
       detail,
-    };
+    );
   }
 
   let parsed: ClaudeRunResult;
@@ -941,12 +918,11 @@ async function attemptClaude<T>(
     const detail = failureDetail(
       err instanceof Error ? err.message : String(err),
     );
-    return {
-      outcome: "failure",
-      reason: "invalid_json",
-      agentRun: { ...baseAgentRun, error: detail },
+    return failedAttempt(
+      "invalid_json",
+      { ...baseAgentRun, error: detail },
       detail,
-    };
+    );
   }
 
   if (parsed.isError) return errorResultFailure(baseAgentRun, parsed);
@@ -957,12 +933,11 @@ async function attemptClaude<T>(
     const detail = failureDetail(
       `structured_output does not match the expected schema: ${JSON.stringify(parsed.structuredOutput).slice(0, 500)}`,
     );
-    return {
-      outcome: "failure",
-      reason: "invalid_structured_output",
-      agentRun: { ...enrichedAgentRun, error: detail },
+    return failedAttempt(
+      "invalid_structured_output",
+      { ...enrichedAgentRun, error: detail },
       detail,
-    };
+    );
   }
 
   return {
@@ -1010,26 +985,25 @@ export async function runClaude<T>(
   }
   if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
     return {
-      outcome: "failure",
-      reason: "timeout",
-      agentRun: {
-        ...baseAgentRunFor(opts, null),
-        error: CLAUDE_NOT_STARTED_DETAIL,
-      },
-      detail: CLAUDE_NOT_STARTED_DETAIL,
+      ...failedAttempt(
+        "timeout",
+        { ...baseAgentRunFor(opts, null), error: CLAUDE_NOT_STARTED_DETAIL },
+        CLAUDE_NOT_STARTED_DETAIL,
+      ),
       retried: false,
     };
   }
   // 全停止の間は起動しない。flowのstepの再試行で呼び直されたときも、ここで起動せずに終わる。
   if (await checkStop(stopCheckOf(opts))) {
     return {
-      outcome: "failure",
-      reason: "stopped",
-      agentRun: {
-        ...baseAgentRunFor(opts, null),
-        error: CLAUDE_STOPPED_BEFORE_START_DETAIL,
-      },
-      detail: CLAUDE_STOPPED_BEFORE_START_DETAIL,
+      ...failedAttempt(
+        "stopped",
+        {
+          ...baseAgentRunFor(opts, null),
+          error: CLAUDE_STOPPED_BEFORE_START_DETAIL,
+        },
+        CLAUDE_STOPPED_BEFORE_START_DETAIL,
+      ),
       retried: false,
     };
   }
@@ -1052,14 +1026,12 @@ export async function runClaude<T>(
     if (decision.stopped) {
       // 1回目の実行には費用がかかっているので、捨てた実行として残す。
       return {
-        outcome: "failure",
-        reason: "stopped",
-        agentRun: {
-          ...baseAgentRunFor(opts, null),
-          error: CLAUDE_STOPPED_DETAIL,
-        },
+        ...failedAttempt(
+          "stopped",
+          { ...baseAgentRunFor(opts, null), error: CLAUDE_STOPPED_DETAIL },
+          CLAUDE_STOPPED_DETAIL,
+        ),
         discardedAgentRun: first.agentRun,
-        detail: CLAUDE_STOPPED_DETAIL,
         retried: false,
       };
     }

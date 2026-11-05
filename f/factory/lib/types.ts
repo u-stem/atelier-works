@@ -603,6 +603,31 @@ export type ModelUsageEntry = {
   cost_usd: number;
 };
 
+/**
+ * `runClaude`の失敗の種類。
+ * `budget_exceeded`は`--max-budget-usd`の超過、`usage_limit`はサブスクリプションの使用上限で、
+ * どちらも結果のJSONが`is_error: true`のときに分ける。それ以外の`is_error`は`claude_error`になる。
+ * 終了コードが0以外でも、標準出力が`is_error: true`の結果なら、この分け方にする。
+ */
+export type RunClaudeFailureReason =
+  | "non_zero_exit"
+  | "timeout"
+  | "invalid_json"
+  | "invalid_structured_output"
+  | "claude_error"
+  | "budget_exceeded"
+  | "usage_limit"
+  | "stopped";
+
+/**
+ * Claudeの実行ではなく環境の事情で止まった失敗の種類。
+ * 使用上限と全停止は、モデルを強くしても防げないので、モデルの昇格の失敗に数えない。
+ */
+export const NON_MODEL_FAILURE_REASONS: readonly RunClaudeFailureReason[] = [
+  "usage_limit",
+  "stopped",
+];
+
 /** `db.recordAgentRun`に渡す、`factory.agent_runs`の1行。 */
 export type AgentRunRecord = {
   work_item_id: number;
@@ -619,6 +644,8 @@ export type AgentRunRecord = {
   session_id: string | null;
   exit_code: number | null;
   error: string | null;
+  /** 失敗の種類。成功した実行はnullである。 */
+  failure_reason: RunClaudeFailureReason | null;
   /**
    * 実際に使われたモデルごとの内訳。`model`は`--model`に渡した値で、別のモデルが使われても変わらない。
    * Claudeが結果を返さなかった実行と、`modelUsage`を持たない結果では空になる。

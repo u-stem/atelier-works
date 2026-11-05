@@ -160,6 +160,7 @@ const AGENT_RUN: AgentRunRecord = {
   session_id: "s",
   exit_code: 0,
   error: null,
+  failure_reason: null,
   model_usage: [],
 };
 const RAW: ClaudeRunResult = {

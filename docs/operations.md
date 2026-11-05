@@ -1406,13 +1406,13 @@ Consoleからは上げられない([設定を止める向きに変える](#設�
 1. 次のコマンドで、上限の文を含む直近の失敗の記録を読む。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT created_at, stage, error FROM factory.agent_runs WHERE error ~* 'limit|usage|hit your|reached your' ORDER BY created_at DESC LIMIT 5"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT created_at, stage, failure_reason, error FROM factory.agent_runs WHERE failure_reason = 'usage_limit' OR error ~* 'limit|usage|hit your|reached your' ORDER BY created_at DESC LIMIT 5"
    ```
 
-2. `error`の`reason=`、`subtype=`、`api_error_status=`、その後の本文を見る。
-   `reason=`は、`usage_limit`、`budget_exceeded`、`claude_error`のどれかである。
-3. 使用上限の失敗が`reason=claude_error`で記録されていたら、判定が漏れている。
-   結果を読めなかった失敗(`error`が`claude reported an error`で始まらない記録)に使用上限の文があるときも、同じである。
+2. `failure_reason`と、`error`の`subtype=`、`api_error_status=`、その後の本文を見る。
+   `is_error`の結果の`failure_reason`は、`usage_limit`、`budget_exceeded`、`claude_error`のどれかである。
+3. 使用上限の失敗の`failure_reason`が`claude_error`なら、判定が漏れている。
+   `failure_reason`が`non_zero_exit`か`invalid_json`の失敗に使用上限の文があるときも、同じである。
    本文と終了の形をIssueに書き、`f/factory/lib/claude.ts`の判定を直す。
 4. 判定が正しければ、Consoleで`claude_usage_limit`を解決する。
 
@@ -4300,6 +4300,10 @@ ORDER BY m.model;
 - Claudeが動いたのに修正をpushせず`blocked`で終えたラウンド
 - 検査が通らず再実行したラウンド
 - Claudeの実行そのものの失敗(ターン上限、予算上限、タイムアウト、不正な出力)
+
+使用上限か全停止で終わった実行(`agent_runs.failure_reason`が`usage_limit`か`stopped`)は、この3つのどれにも数えない。
+モデルを強くしても防げないためである。
+実装のラウンドの数え方でも、同じ実行のラウンドを数えない。
 
 新しい指摘でラベルを付け直しただけのラウンドは数えない。
 Claudeが動かなかったラウンドも数えないが、同じ作業項目で前にClaudeが動いていれば数える。

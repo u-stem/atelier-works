@@ -31,6 +31,7 @@ function runRecord(costUsd: number | null): AgentRunRecord {
     exit_code: 0,
     model_usage: [],
     error: null,
+    failure_reason: null,
   };
 }
 

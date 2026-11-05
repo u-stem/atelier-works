@@ -111,6 +111,7 @@ import {
   isStoredRefName,
   isString,
   type LatestDeployment,
+  NON_MODEL_FAILURE_REASONS,
   type Notice,
   type NoticeRecord,
   type RequirementDraft,
@@ -2253,25 +2254,26 @@ export function toRequirementDraft(row: SqlRow): RequirementDraft {
 // agent_runs
 // ---------------------------------------------------------------------------
 
-const MODEL_USAGE_COLUMN_PATTERN =
-  /column "model_usage" of relation "agent_runs" does not exist/;
+const AGENT_RUN_NEW_COLUMN_PATTERN =
+  /column "(?:model_usage|failure_reason)" of relation "agent_runs" does not exist/;
 
 /**
- * 例外が、`agent_runs.model_usage`の列が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * 例外が、`agent_runs`の新しい列(`model_usage`、`failure_reason`)が無いことによるもの(PostgreSQLのundefined_column)かを返す。
  * 判定は`isMissingJobLinkColumnError`と同じく、エラーコード42703か、列と表の名前を含む文のどちらかで行う。
  */
-export function isMissingModelUsageColumnError(err: unknown): boolean {
+export function isMissingAgentRunColumnError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (Reflect.get(err, "code") === "42703") return true;
-  if (MODEL_USAGE_COLUMN_PATTERN.test(err.message)) return true;
+  if (AGENT_RUN_NEW_COLUMN_PATTERN.test(err.message)) return true;
   const body: unknown = Reflect.get(err, "body");
-  return typeof body === "string" && MODEL_USAGE_COLUMN_PATTERN.test(body);
+  return typeof body === "string" && AGENT_RUN_NEW_COLUMN_PATTERN.test(body);
 }
 
 /**
  * `factory.agent_runs`に行を挿入し、そのIDを返す。
- * モデル別の内訳の列を足すmigrationより先に、この関数を含むコードが反映されると、列が無いエラーになる。
- * そのときだけ、内訳を含まない文で記録し直す。費用の記録が消えると、日次の予算の集計が狂うためである。
+ * 反映(`wmill sync push`)はmigration(`wmill datatable migrate up`)より先に走るので、
+ * モデル別の内訳や失敗の種類の列を足すmigrationより先に、この関数を含むコードが動くと、列が無いエラーになる。
+ * そのときだけ、新しい列を含まない文で記録し直す。費用の記録が消えると、日次の予算の集計が狂うためである。
  * ほかのエラーは投げる。
  */
 export async function recordAgentRun(
@@ -2283,13 +2285,13 @@ export async function recordAgentRun(
     INSERT INTO factory.agent_runs (
       work_item_id, stage, attempt, model, claude_version, input_tokens,
       output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
-      session_id, exit_code, error, model_usage
+      session_id, exit_code, error, failure_reason, model_usage
     ) VALUES (
       ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
       ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
       ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
       ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error},
-      ${JSON.stringify(record.model_usage)}::jsonb
+      ${record.failure_reason}::text, ${JSON.stringify(record.model_usage)}::jsonb
     )
     RETURNING id
   `;
@@ -2297,9 +2299,9 @@ export async function recordAgentRun(
   try {
     row = await fetchOneRow(statement, "recordAgentRun");
   } catch (err) {
-    if (!isMissingModelUsageColumnError(err)) throw err;
+    if (!isMissingAgentRunColumnError(err)) throw err;
     log.warn(
-      "agent_runs.model_usage is missing; recorded the run without the per-model usage (the datatable migration has not run yet)",
+      "a newer column of agent_runs is missing; recorded the run without the per-model usage and the failure reason (the datatable migration has not run yet)",
       { stage: record.stage },
     );
     const legacy = sql`
@@ -6554,19 +6556,26 @@ export async function insertImplementRound(
  * ラウンドは記録してから次のラウンドを始めるので、修正ラウンドの直前の失敗も含む。
  * 試行(`attempt`)が増えると数え直す。却下や要件の不足で要件定義からやり直した実装は、
  * 前の要件定義の失敗を引き継がない。
+ * Claudeの実行が使用上限か全停止で終わったラウンドは、数えず、連続も途切れさせない(`NON_MODEL_FAILURE_REASONS`)。
+ * モデルを強くしても防げないためである。
+ * 失敗の種類は`to_jsonb`で読む。列を足すmigrationより先にこの文が動いても列が無いエラーにせず、種類の無い実行として数える。
+ * モデルの選択の前に呼ぶので、列が無いエラーにすると、反映とmigrationの間のすべての実行が止まるためである。
  */
 export async function countImplementFailedRounds(
   workItemId: number,
   attempt: number,
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
+  const nonModelReasons: string[] = [...NON_MODEL_FAILURE_REASONS];
   const rows = await sql`
     SELECT COUNT(*) AS failed_rounds
-    FROM factory.implement_rounds
-    WHERE work_item_id = ${workItemId}::bigint
-      AND attempt = ${attempt}::integer
-      AND outcome IN ('check_failed', 'stalled', 'error')
-      AND round > COALESCE(
+    FROM factory.implement_rounds ir
+    LEFT JOIN factory.agent_runs ar ON ar.id = ir.agent_run_id
+    WHERE ir.work_item_id = ${workItemId}::bigint
+      AND ir.attempt = ${attempt}::integer
+      AND ir.outcome IN ('check_failed', 'stalled', 'error')
+      AND COALESCE(to_jsonb(ar) ->> 'failure_reason', '') <> ALL(${nonModelReasons}::text[])
+      AND ir.round > COALESCE(
         (
           SELECT MAX(round)
           FROM factory.implement_rounds
@@ -6595,19 +6604,19 @@ export async function countImplementFailedRounds(
  * 基盤の障害で数えた失敗は、次に成功したラウンドの後には残らない。
  * - Claudeが動いた(`agent_runs`にstageが`pr_fix`の行がある)のに、修正をpushせず
  *   `blocked`で終えたラウンド。`fix_rounds`の行を数える。
+ *   ただし、ラウンドの直前の実行が使用上限か全停止で終わったものは数えない。
  * - 検査が通らず、検査の失敗を添えて再実行した(stageが`pr_fix_verify_retry`の行がある)作業項目。
  *   不正な出力の再試行で同じstageの行が増えるので、作業項目ごとに1回と数える。
  *   時刻は、その作業項目で最初の再実行の行で見る。
+ *   使用上限か全停止で終わった再実行の行は見ない。
  * - Claudeの実行そのものが失敗した(`agent_runs.error`が入っている)行。`runClaude`は、
  *   タイムアウト、0以外の終了コード、`is_error`、ターンや予算の上限、不正な出力のどれでも
  *   失敗した行に`error`を書く。適用の実行の失敗は例外で終わってラウンドの記録を残さず、flowの再試行と`on_error_flow`は
  *   `fix_rounds`を書かないので、上の2つでは数えられない。検査の再実行の失敗は例外にならず、`blocked`のラウンドを残す。
  *   flowの再試行や`retry_work_item`で同じ作業項目の実行が何度失敗しても、1行ずつ数える。
  *   ただし次の3つは数えない。
- *   - `error`が`nonModelErrorPrefixes`のどれかで始まる実行。呼び出し側は、使用上限と全停止で止めた実行の
- *     `error`の先頭(`claude.ts`の`NON_MODEL_FAILURE_ERROR_PREFIXES`)を渡す。
- *     どちらもモデルを強くしても防げないので、昇格を早めない。前方一致は`starts_with`で行い、
- *     `LIKE`のワイルドカード(`_`)で別の種類の記録に当たらないようにする。
+ *   - 使用上限か全停止で終わった実行(`NON_MODEL_FAILURE_REASONS`)。
+ *     どちらもモデルを強くしても防げないので、昇格を早めない。
  *   - `blocked`のラウンドの直前の実行(その実行とラウンドの間に、同じ作業項目の実行が無い)。
  *     検査の再実行の失敗や`.git`の書き換えでラウンドが`blocked`になったときで、
  *     その失敗は`blocked`のラウンドで数え済みである。それより前の失敗と、
@@ -6630,12 +6639,14 @@ export async function countImplementFailedRounds(
  * `heavy_model`への昇格を進める。Sonnetが毎回pushして`done`で終え、同じ指摘が
  * 続く場合は、失敗の記録が無いためである。基盤の障害は`fix_round`を進めないので、
  * 下限は障害で上がらない。
+ *
+ * 失敗の種類は`to_jsonb`で読む。理由は`countImplementFailedRounds`と同じである。
  */
 export async function countPrFixFailures(
   workItemId: number,
-  nonModelErrorPrefixes: readonly string[],
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
+  const nonModelReasons: string[] = [...NON_MODEL_FAILURE_REASONS];
   const rows = await sql`
     WITH same_pr AS (
       SELECT wi.id
@@ -6666,6 +6677,18 @@ export async function countPrFixFailures(
             SELECT 1 FROM factory.agent_runs ar
             WHERE ar.work_item_id = fr.work_item_id AND ar.stage = 'pr_fix'
           )
+          AND NOT COALESCE(
+            (
+              SELECT to_jsonb(last_run) ->> 'failure_reason' = ANY(${nonModelReasons}::text[])
+              FROM factory.agent_runs last_run
+              WHERE last_run.work_item_id = fr.work_item_id
+                AND last_run.stage IN ('pr_fix', 'pr_fix_verify_retry')
+                AND last_run.created_at <= fr.created_at
+              ORDER BY last_run.created_at DESC, last_run.id DESC
+              LIMIT 1
+            ),
+            false
+          )
       ) AS blocked_rounds,
       (
         SELECT COUNT(*)
@@ -6674,6 +6697,7 @@ export async function countPrFixFailures(
           FROM factory.agent_runs ar
           WHERE ar.work_item_id IN (SELECT id FROM same_pr)
             AND ar.stage = 'pr_fix_verify_retry'
+            AND COALESCE(to_jsonb(ar) ->> 'failure_reason', '') <> ALL(${nonModelReasons}::text[])
           GROUP BY ar.work_item_id
           HAVING MIN(ar.created_at) > COALESCE((SELECT at FROM last_success), '-infinity'::timestamptz)
         ) retried
@@ -6685,10 +6709,7 @@ export async function countPrFixFailures(
           AND ar.stage IN ('pr_fix', 'pr_fix_verify_retry')
           AND ar.error IS NOT NULL
           AND ar.created_at > COALESCE((SELECT at FROM last_success), '-infinity'::timestamptz)
-          AND NOT EXISTS (
-            SELECT 1 FROM unnest(${[...nonModelErrorPrefixes]}::text[]) AS np(prefix)
-            WHERE starts_with(ar.error, np.prefix)
-          )
+          AND COALESCE(to_jsonb(ar) ->> 'failure_reason', '') <> ALL(${nonModelReasons}::text[])
           AND NOT EXISTS (
             SELECT 1 FROM factory.fix_rounds fr
             WHERE fr.work_item_id = ar.work_item_id

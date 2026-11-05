@@ -62,6 +62,7 @@ const AGENT_RUN: AgentRunRecord = {
   session_id: "session",
   exit_code: 0,
   error: null,
+  failure_reason: null,
   model_usage: [],
 };
 

@@ -29,7 +29,6 @@ import {
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
-  NON_MODEL_FAILURE_ERROR_PREFIXES,
   runClaude,
 } from "../lib/claude.ts";
 import { recordClaudeRuns } from "../lib/claude_flow_failure.ts";
@@ -289,10 +288,7 @@ export async function main(
   });
 
   try {
-    const sonnetFailures = await countPrFixFailures(
-      work_item_id,
-      NON_MODEL_FAILURE_ERROR_PREFIXES,
-    );
+    const sonnetFailures = await countPrFixFailures(work_item_id);
     const result = await runClaude({
       run: withWorktreeProcessLock(runCommand, worktreeLockFor(worktree_dir), {
         kind: "pr_fix",
@@ -426,10 +422,7 @@ async function applyConflictRound(
           factoryCloneDir: round.factoryCloneDir,
         });
         try {
-          const sonnetFailures = await countPrFixFailures(
-            round.workItemId,
-            NON_MODEL_FAILURE_ERROR_PREFIXES,
-          );
+          const sonnetFailures = await countPrFixFailures(round.workItemId);
           const run = await runClaude({
             run: withWorktreeProcessLock(
               runCommand,
@@ -630,10 +623,7 @@ async function applyCiRound(
         factoryCloneDir: input.factoryCloneDir,
       });
       try {
-        const sonnetFailures = await countPrFixFailures(
-          input.workItemId,
-          NON_MODEL_FAILURE_ERROR_PREFIXES,
-        );
+        const sonnetFailures = await countPrFixFailures(input.workItemId);
         const run = await runClaude({
           run: withWorktreeProcessLock(
             runCommand,
