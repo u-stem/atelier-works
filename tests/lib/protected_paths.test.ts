@@ -2223,6 +2223,10 @@ describe("safety boundary files", () => {
     "tests/scripts/console_stop_all.test.ts",
     "tests/scripts/console_stop_all_release.test.ts",
     "tests/scripts/stop_all_wiring.test.ts",
+    "scripts/stop_all.ts",
+    "scripts/credential_expiry.ts",
+    "f/factory/lib/credential_expiry.ts",
+    "f/factory/lib/credential_expiry.script.yaml",
   ];
   // windmill-clientを含むlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるので守らない。
   const CLIENT_LOCKS = [
