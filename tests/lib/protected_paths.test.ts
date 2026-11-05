@@ -2212,6 +2212,10 @@ describe("safety boundary files", () => {
     "f/factory/self_update.script.yaml",
     "f/factory/lib/self_update_support.ts",
     "f/factory/lib/self_update_support.script.yaml",
+    "f/factory/lib/claude_flow_failure.ts",
+    "f/factory/lib/claude_flow_failure.script.yaml",
+    "f/factory/lib/flow_retry_marker.ts",
+    "f/factory/lib/flow_retry_marker.script.yaml",
   ];
   // windmill-clientを含むlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるので守らない。
   const CLIENT_LOCKS = [
@@ -2249,6 +2253,13 @@ describe("safety boundary files", () => {
       expect(matchesImplementProtectedPath(path)).toBe(false);
     },
   );
+
+  test.each([
+    "f/factory/lib/claude_flow_failure.script.lock",
+    "f/factory/lib/flow_retry_marker.script.lock",
+  ])("does not protect the lock %s of the cost and retry libs", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
 
   test.each(CLIENT_LOCKS)("the CI round still denies the lock %s", (path) => {
     expect(isDeniedPath(path)).toBe(true);
