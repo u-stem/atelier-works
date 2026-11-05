@@ -23,7 +23,9 @@ const defaultUsageLimitNoticeDeps = (): UsageLimitNoticeDeps => ({
 /**
  * 使用上限の失敗なら、要対応の通知`claude_usage_limit`を残す。
  * 使用上限はアカウント全体に効くので、どのflowの失敗でも同じように残す。
- * 本文は固定の文とflowのパスだけにする。本文の一致で未解決の通知を重ねないので、解除の時刻を含む`detail`はログに出す。
+ * 本文は固定の文とflowのパスだけにする。本文の一致で未解決の通知を重ねるのを防ぐためである。
+ * `detail`はログにも出さない。CI回と競合回のClaudeの文は、秘密の走査を通っていないためである。
+ * 解除の時刻を含む`detail`は、`agent_runs.error`に記録される。
  * 残せなくても例外にしない。Claudeの失敗の例外を上書きしないためである。
  */
 async function addUsageLimitNotice<T>(
@@ -33,10 +35,9 @@ async function addUsageLimitNotice<T>(
   if (result.outcome !== "failure" || result.reason !== "usage_limit") return;
   const path = deps.env.WM_FLOW_PATH || deps.env.WM_JOB_PATH || "unknown";
   deps.log.info("claude usage limit reached", {
-    work_item_id: result.agentRun.work_item_id,
+    reason: result.reason,
     path,
     job_id: deps.env.WM_ROOT_FLOW_JOB_ID || deps.env.WM_JOB_ID || null,
-    detail: result.detail,
   });
   try {
     await deps.addNotice({
