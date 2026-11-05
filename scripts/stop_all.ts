@@ -1,5 +1,43 @@
-export const STOP_SCRIPT = "";
-export const RELEASE_SCRIPT = "";
+#!/usr/bin/env bun
+// 全停止の、人の端末用のCLI。
+//
+// 使い方(`mise run`のタスクから呼ぶ):
+//   stop_all.ts place --reason <text>   Consoleと同じWindmillのscriptで全停止を置き、20秒待ち、
+//                                       実行中のジョブを中止し、workerに残ったClaudeと検査のプロセスを止める
+//   stop_all.ts place --kill-only       Windmillが落ちているとき。workerに残ったプロセスを止めるだけ
+//   stop_all.ts release                 Consoleと同じWindmillのscriptで全停止を解除する
+//
+// 20秒待つのは、実行中のClaudeと検査が、自分で変数を読んで止まるまでの間である(確認は15秒ごと)。
+// その後にジョブを中止する。先に中止すると、ジョブのプロセスと一緒に、子プロセスを止める監視が消えるためである。
+// 監視が消えた後に残ったプロセスは、`docker compose exec`でworkerの中から止める。
+// Claudeは自分のプロセスグループの先頭なので、グループごと止める。検査のプロセスは、枠のuidとして全部止める。
+//
+// どの操作も、端末(TTY)で`yes`を入力して確かめる。subagentと背景のセッションは端末を持たないので実行できない。
+// 迂回のための環境変数は設けない。
+
+import { resolve } from "node:path";
+import {
+  KILL_PATH,
+  killAllArgv,
+  parseCheckUid,
+  parsePoolSize,
+} from "../f/factory/lib/check_sandbox.ts";
+import { selectOrphanClaudePids } from "../f/factory/lib/cleanup_support.ts";
+import { parseRunningJobs, runningJobsSql } from "./check-idle.ts";
+
+/** 全停止を置くWindmillのscript。Consoleの全停止の操作と同じものを呼ぶ。 */
+export const STOP_SCRIPT = "f/factory/console_stop_all";
+/** 全停止を解除するWindmillのscript。 */
+export const RELEASE_SCRIPT = "f/factory/console_stop_all_release";
+/** 実行中のClaudeと検査が自分で止まるまで待つ時間(ミリ秒)。監視の間隔15秒に余裕を足す。 */
+export const SETTLE_WAIT_MS = 20_000;
+/** グループにSIGTERMを送ってから、残ったものにSIGKILLを送るまでの猶予(ミリ秒)。 */
+export const KILL_GRACE_MS = 5_000;
+/** Consoleのscriptが同じ上限で確かめ直す、理由の長さの上限(コードポイント)。 */
+const REASON_MAX = 200;
+const CONTROL_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+export const PS_ARGV = ["ps", "-eo", "pid,etimes,args"] as const;
 
 export type StopCommand =
   | { readonly kind: "place"; readonly reason: string }
@@ -22,32 +60,300 @@ export type JobList =
 
 export type StopDeps = {
   readonly confirm: (message: string) => Promise<boolean>;
+  /** `wmill script run`で、Windmillのscriptを実行する。 */
   readonly runScript: (
     path: string,
     args: Readonly<Record<string, string>>,
   ) => Promise<ExecResult>;
+  /** defaultのworkerで実行中のジョブ。 */
   readonly listRunningJobs: () => Promise<JobList>;
   readonly cancelJob: (id: string) => Promise<ExecResult>;
+  /** defaultのworkerのコンテナの中で、コマンドを実行する。 */
   readonly workerExec: (argv: readonly string[]) => Promise<ExecResult>;
   readonly sleep: (ms: number) => Promise<void>;
   readonly print: (line: string) => void;
+  /** 検査の枠のuid。 */
   readonly checkUids: readonly number[];
 };
 
-export function parseStopArgs(_argv: readonly string[]): StopParse {
-  return { ok: false, reason: "" };
+const USAGE =
+  "usage: stop_all.ts place --reason <text> | place --kill-only | release";
+
+function isReason(text: string): boolean {
+  return (
+    text.trim().length > 0 &&
+    [...text].length <= REASON_MAX &&
+    !CONTROL_CHARS.test(text)
+  );
 }
 
+export function parseStopArgs(argv: readonly string[]): StopParse {
+  const [command, ...rest] = argv;
+  if (command === "release") {
+    return rest.length === 0
+      ? { ok: true, value: { kind: "release" } }
+      : { ok: false, reason: "release takes no arguments" };
+  }
+  if (command !== "place") return { ok: false, reason: USAGE };
+  if (rest.length === 1 && rest[0] === "--kill-only") {
+    return { ok: true, value: { kind: "kill_only" } };
+  }
+  if (rest.length === 2 && rest[0] === "--reason") {
+    const reason = rest[1] ?? "";
+    return isReason(reason)
+      ? { ok: true, value: { kind: "place", reason } }
+      : {
+          ok: false,
+          reason: `the reason must be 1 to ${String(REASON_MAX)} characters without control characters`,
+        };
+  }
+  return { ok: false, reason: USAGE };
+}
+
+/** `pid`のプロセスグループ全体にシグナルを送るargv。procps-ngの`kill`は、負の番号を`--`の後に置く。 */
 export function signalGroupArgv(
-  _signal: "TERM" | "KILL",
-  _pid: number,
+  signal: "TERM" | "KILL",
+  pid: number,
 ): string[] {
-  return [];
+  return [KILL_PATH, "-s", signal, "--", `-${String(pid)}`];
 }
 
+const PLACE_MESSAGE =
+  "This stops the whole Factory: it places the stop-all, turns off every *_enabled setting, disables the repository schedules, cancels the running jobs after 20 seconds, and kills the claude and check processes left in the worker.";
+const KILL_MESSAGE =
+  "This kills the claude processes and the check processes left in the worker container, without touching Windmill.";
+const RELEASE_MESSAGE =
+  "This releases the stop-all and enables the repository schedules again. The *_enabled settings stay off; turn them on one by one.";
+
+/** 端末で確かめるときに見せる文。 */
+function confirmationOf(command: StopCommand): string {
+  switch (command.kind) {
+    case "place":
+      return PLACE_MESSAGE;
+    case "kill_only":
+      return KILL_MESSAGE;
+    case "release":
+      return RELEASE_MESSAGE;
+  }
+}
+
+/** workerに残ったClaudeのグループと、検査の枠のプロセスを止める。止められなかった段の数を返す。 */
+async function killLeftovers(deps: StopDeps): Promise<number> {
+  const listed = await deps.workerExec(PS_ARGV);
+  if (listed.exitCode !== 0) {
+    deps.print(
+      `could not list the worker processes (exit ${String(listed.exitCode)}): ${listed.stderr.trim()}`,
+    );
+    return 1;
+  }
+  // 経過時間で絞らない(-1)。全停止では、起動した直後のClaudeも止める。
+  const groups = selectOrphanClaudePids(listed.stdout, -1);
+  for (const pid of groups) {
+    await deps.workerExec(signalGroupArgv("TERM", pid));
+  }
+  if (groups.length > 0) {
+    await deps.sleep(KILL_GRACE_MS);
+    const again = await deps.workerExec(PS_ARGV);
+    const left =
+      again.exitCode === 0
+        ? selectOrphanClaudePids(again.stdout, -1).filter((pid) =>
+            groups.includes(pid),
+          )
+        : groups;
+    for (const pid of left) {
+      await deps.workerExec(signalGroupArgv("KILL", pid));
+    }
+  }
+  // 枠のプロセスが無いuidでは`kill`が失敗するが、止めるものが無いだけなので数えない。
+  for (const uid of deps.checkUids) {
+    await deps.workerExec(killAllArgv(uid));
+  }
+  deps.print(
+    `stopped ${String(groups.length)} claude process group(s) and the processes of ${String(deps.checkUids.length)} check user(s)`,
+  );
+  return 0;
+}
+
+async function cancelRunningJobs(deps: StopDeps): Promise<number> {
+  const jobs = await deps.listRunningJobs();
+  if (!jobs.ok) {
+    deps.print(`could not list the running jobs: ${jobs.reason}`);
+    return 1;
+  }
+  let failures = 0;
+  for (const id of jobs.ids) {
+    const cancelled = await deps.cancelJob(id);
+    if (cancelled.exitCode === 0) {
+      deps.print(`cancelled job ${id}`);
+    } else {
+      deps.print(`could not cancel job ${id}: ${cancelled.stderr.trim()}`);
+      failures += 1;
+    }
+  }
+  return failures === 0 ? 0 : 1;
+}
+
+/** コマンドを実行し、終了コードを返す。どれかの段が失敗すれば1を返すが、残りの段は続ける。 */
 export async function runStop(
-  _command: StopCommand,
-  _deps: StopDeps,
+  command: StopCommand,
+  deps: StopDeps,
 ): Promise<number> {
-  return 2;
+  if (!(await deps.confirm(confirmationOf(command)))) {
+    deps.print("not confirmed; nothing was changed");
+    return 1;
+  }
+  if (command.kind === "release") {
+    const released = await deps.runScript(RELEASE_SCRIPT, {});
+    deps.print(released.stdout.trim());
+    if (released.exitCode !== 0) {
+      deps.print(`could not release the stop-all: ${released.stderr.trim()}`);
+      return 1;
+    }
+    return 0;
+  }
+  let failures = 0;
+  if (command.kind === "place") {
+    const placed = await deps.runScript(STOP_SCRIPT, {
+      reason: command.reason,
+    });
+    deps.print(placed.stdout.trim());
+    if (placed.exitCode !== 0) {
+      deps.print(
+        `could not place the stop-all through Windmill: ${placed.stderr.trim()}. Continuing with the process kill.`,
+      );
+      failures += 1;
+    }
+    deps.print(
+      `waiting ${String(SETTLE_WAIT_MS / 1000)}s for the running claude and checks to stop by themselves`,
+    );
+    await deps.sleep(SETTLE_WAIT_MS);
+    failures += await cancelRunningJobs(deps);
+  }
+  failures += await killLeftovers(deps);
+  return failures === 0 ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// 実際の入出力
+// ---------------------------------------------------------------------------
+
+const ROOT = resolve(import.meta.dir, "..");
+const COMPOSE_FILE = resolve(ROOT, "infra/docker-compose.yml");
+/** 1回のコマンドを待つ上限(ミリ秒)。Console用workerが止まっていても、端末を止めたままにしない。 */
+const COMMAND_TIMEOUT_MS = 120_000;
+
+/** 起動した子プロセス。端末で中断されたときに、孤児として残さず終了時に止める。 */
+const liveChildren = new Set<ReturnType<typeof Bun.spawn>>();
+
+process.on("exit", () => {
+  for (const child of liveChildren) child.kill();
+});
+
+async function capture(argv: readonly string[]): Promise<ExecResult> {
+  const child = Bun.spawn([...argv], {
+    cwd: ROOT,
+    stdout: "pipe",
+    stderr: "pipe",
+    stdin: "ignore",
+    timeout: COMMAND_TIMEOUT_MS,
+  });
+  liveChildren.add(child);
+  child.exited.finally(() => liveChildren.delete(child));
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
+function compose(service: string, argv: readonly string[]): string[] {
+  return [
+    "docker",
+    "compose",
+    "-f",
+    COMPOSE_FILE,
+    "exec",
+    "-T",
+    service,
+    ...argv,
+  ];
+}
+
+async function listRunningJobs(): Promise<JobList> {
+  const result = await capture([
+    "docker",
+    "compose",
+    "-f",
+    COMPOSE_FILE,
+    "exec",
+    "-T",
+    "-e",
+    "PGOPTIONS=-c default_transaction_read_only=on",
+    "db",
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    "windmill",
+    "-X",
+    "-A",
+    "-t",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    runningJobsSql(),
+  ]);
+  if (result.exitCode !== 0) {
+    return { ok: false, reason: result.stderr.trim() };
+  }
+  const reading = parseRunningJobs(result.stdout);
+  if (!reading.ok) return { ok: false, reason: reading.reason };
+  return { ok: true, ids: reading.rows.map((row) => row.id) };
+}
+
+function checkUids(): number[] {
+  const first = parseCheckUid(process.env.FACTORY_CHECK_UID);
+  const size = parsePoolSize(process.env.FACTORY_CHECK_POOL_SIZE);
+  return Array.from({ length: size }, (_unused, index) => first + index);
+}
+
+async function confirmOnTerminal(message: string): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+  console.log(message);
+  return prompt("Type yes to continue:") === "yes";
+}
+
+async function main(): Promise<number> {
+  const command = parseStopArgs(process.argv.slice(2));
+  if (!command.ok) {
+    console.error(command.reason);
+    return 2;
+  }
+  return await runStop(command.value, {
+    confirm: confirmOnTerminal,
+    runScript: (path, args) =>
+      capture([
+        "wmill",
+        "script",
+        "run",
+        path,
+        "-d",
+        JSON.stringify(args),
+        "-s",
+      ]),
+    listRunningJobs,
+    cancelJob: (id) =>
+      capture(["wmill", "job", "cancel", id, "--reason", "stop_all"]),
+    workerExec: (argv) => capture(compose("windmill_worker", argv)),
+    sleep: (ms) => Bun.sleep(ms),
+    print: (line) => {
+      if (line !== "") console.log(line);
+    },
+    checkUids: checkUids(),
+  });
+}
+
+if (import.meta.main) {
+  process.exit(await main());
 }

@@ -156,6 +156,16 @@ description = "Release a hold (usage: -- <id>)"
 run = "bun ./scripts/hold.ts release"
 raw = true
 
+[tasks.stop]
+description = "Stop the whole Factory: place the stop-all, cancel the running jobs, and kill the leftover claude and check processes (usage: -- --reason <text>, or -- --kill-only when Windmill is down)"
+run = "bun ./scripts/stop_all.ts place"
+raw = true
+
+[tasks."stop:release"]
+description = "Release the stop-all and enable the repository schedules again (the *_enabled settings stay off)"
+run = "bun ./scripts/stop_all.ts release"
+raw = true
+
 [tasks."backup:export"]
 description = "Copy the newest nightly backup generation from the worker to a host directory (usage: -- <directory>)"
 run = "scripts/backup-export.sh"
