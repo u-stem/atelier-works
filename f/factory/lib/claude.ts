@@ -732,23 +732,64 @@ function agentRunFromResult(
   };
 }
 
-/** `is_error: true`の結果を、種類を分けた失敗にする。 */
+/**
+ * `is_error: true`の結果の失敗の詳細の先頭。失敗の種類(`reason=`)を含み、`agent_runs.error`にも入る。
+ * `countPrFixFailures`などが、種類で記録を見分けるのに使う。
+ */
+function errorResultDetailPrefix(reason: RunClaudeFailureReason): string {
+  return `claude reported an error (reason=${reason},`;
+}
+
+/**
+ * Claudeの実行ではなく、環境の事情で止まった失敗の記録の`error`の先頭の一覧。
+ * 使用上限と全停止は、モデルを強くしても防げない。モデルの昇格の失敗に数えないために使う。
+ */
+export const NON_MODEL_FAILURE_ERROR_PREFIXES: readonly string[] = [
+  errorResultDetailPrefix("usage_limit"),
+  CLAUDE_STOPPED_BEFORE_START_DETAIL,
+  CLAUDE_STOPPED_DETAIL,
+];
+
+/** 結果の本文が空のとき、失敗の詳細に残すstderrの末尾の字数。 */
+const STDERR_TAIL_CHARS = 2000;
+
+/**
+ * `is_error: true`の結果を、種類を分けた失敗にする。
+ * `stderr`は、終了コードが0以外の実行で渡す。結果の本文が空のときだけ、末尾を詳細に残す。
+ * 本文があるときは、本文が原因を示すので残さない。
+ */
 function errorResultFailure(
   base: AgentRunRecord,
   parsed: ClaudeRunResult,
+  stderr?: string,
 ): Extract<ClaudeAttemptResult<never>, { outcome: "failure" }> {
+  const reason = errorReasonFor(parsed);
   const status = parsed.apiErrorStatus ?? null;
   const statusPart =
     status === null ? "" : `, api_error_status=${String(status)}`;
+  const stderrTail = (stderr ?? "").slice(-STDERR_TAIL_CHARS);
+  const body =
+    parsed.resultText === "" && stderrTail !== ""
+      ? `(no result text) stderr: ${stderrTail}`
+      : parsed.resultText.slice(0, 500);
   const detail = failureDetail(
-    `claude reported an error (subtype=${parsed.subtype}${statusPart}): ${parsed.resultText.slice(0, 500)}`,
+    `${errorResultDetailPrefix(reason)} subtype=${parsed.subtype}${statusPart}): ${body}`,
   );
   return {
     outcome: "failure",
-    reason: errorReasonFor(parsed),
+    reason,
     agentRun: { ...agentRunFromResult(base, parsed), error: detail },
     detail,
   };
+}
+
+/**
+ * 終了コードがシグナルで終わったことを示すかを返す。
+ * `Bun.spawn`の`exited`は、シグナルで終わったプロセスに128にシグナル番号を足した値を返す
+ * (SIGTERMは143、SIGKILLは137)。128そのものはシグナルでない。
+ */
+function endedBySignal(exitCode: number): boolean {
+  return exitCode > 128;
 }
 
 /**
@@ -846,9 +887,45 @@ async function attemptClaude<T>(
     // `--max-budget-usd`の超過は終了コード1で、標準出力に結果のJSONを書く。種類と費用はそこから取る。
     const errorResult = parseClaudeJsonOrNull(commandResult.stdout);
     if (errorResult?.isError === true) {
-      return errorResultFailure(baseAgentRun, errorResult);
+      return errorResultFailure(
+        baseAgentRun,
+        errorResult,
+        commandResult.stderr,
+      );
     }
-    const detail = failureDetail(commandResult.stderr.slice(-2000));
+    const stderrTail = commandResult.stderr.slice(-2000);
+    // 結果を書き終えた後に0以外で終わった実行は、その実費を記録する。
+    if (errorResult !== null) {
+      const detail = failureDetail(stderrTail);
+      return {
+        outcome: "failure",
+        reason: "non_zero_exit",
+        agentRun: {
+          ...baseAgentRun,
+          cost_usd: errorResult.totalCostUsd,
+          error: detail,
+        },
+        detail,
+      };
+    }
+    // シグナルで終わった実行は、費用が分からない。上限の値で数える。
+    // 認証の失敗のように起動の直後に終わる失敗には上限を使わない。日次予算を使い切るため。
+    if (endedBySignal(commandResult.exitCode)) {
+      const detail = failureDetail(
+        `claude -p was ended by a signal (exit code ${String(commandResult.exitCode)})${stderrTail === "" ? "" : `: ${stderrTail}`}`,
+      );
+      return {
+        outcome: "failure",
+        reason: "non_zero_exit",
+        agentRun: {
+          ...baseAgentRun,
+          cost_usd: opts.maxBudgetUsd,
+          error: `${detail} ${COST_IS_CAP_NOTE}`,
+        },
+        detail,
+      };
+    }
+    const detail = failureDetail(stderrTail);
     return {
       outcome: "failure",
       reason: "non_zero_exit",
