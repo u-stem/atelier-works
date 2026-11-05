@@ -54,6 +54,43 @@ describe("describeStopAllResult", () => {
     ).toContain("すでに全停止中");
   });
 
+  test("says it stopped the settings and the schedules again when both worked", () => {
+    expect(
+      describeStopAllResult({ ...PLACED, placed: false }).message,
+    ).toStartWith("すでに全停止中です。設定とスケジュールを止め直しました。");
+  });
+
+  test("says only the schedules were stopped again when the settings have a reference", () => {
+    expect(
+      describeStopAllResult({
+        ...PLACED,
+        placed: false,
+        config: "has_reference",
+      }).message,
+    ).toStartWith("すでに全停止中です。スケジュールを止め直しました。");
+  });
+
+  test("says only the settings were stopped again when a schedule failed", () => {
+    expect(
+      describeStopAllResult({
+        ...PLACED,
+        placed: false,
+        schedules_failed: ["f/factory/poll_prs"],
+      }).message,
+    ).toStartWith("すでに全停止中です。設定を止め直しました。");
+  });
+
+  test("does not say it stopped anything again when both failed", () => {
+    expect(
+      describeStopAllResult({
+        ...PLACED,
+        placed: false,
+        config: "failed",
+        schedules_failed: ["f/factory/poll_prs"],
+      }).message,
+    ).not.toContain("止め直しました");
+  });
+
   test("explains a refusal", () => {
     expect(
       describeStopAllResult({ refused: true, reason: "state_unreadable" })
