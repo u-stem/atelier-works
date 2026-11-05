@@ -229,10 +229,10 @@ describe("runStop place", () => {
     );
   });
 
-  test("waits 20 seconds before it lists the running jobs", async () => {
+  test("waits 30 seconds before it lists the running jobs", async () => {
     const { calls, deps } = record();
     await runStop(PLACE, deps);
-    expect(calls.indexOf("sleep 20000")).toBeLessThan(
+    expect(calls.indexOf("sleep 30000")).toBeLessThan(
       calls.indexOf("list jobs"),
     );
   });

@@ -2,12 +2,12 @@
 // 全停止の、人の端末用のCLI。
 //
 // 使い方(`mise run`のタスクから呼ぶ):
-//   stop_all.ts place --reason <text>   Consoleと同じWindmillのscriptで全停止を置き、20秒待ち、
+//   stop_all.ts place --reason <text>   Consoleと同じWindmillのscriptで全停止を置き、30秒待ち、
 //                                       実行中のジョブを中止し、workerに残ったClaudeと検査のプロセスを止める
 //   stop_all.ts place --kill-only       Windmillが落ちているとき。workerに残ったプロセスを止めるだけ
 //   stop_all.ts release                 Consoleと同じWindmillのscriptで全停止を解除する
 //
-// 20秒待つのは、実行中のClaudeと検査が、自分で変数を読んで止まるまでの間である(確認は15秒ごと)。
+// 30秒待つのは、実行中のClaudeと検査が、自分で変数を読んで止まるまでの間である(確認は15秒ごと、読み取りは5秒まで、SIGTERMの猶予は5秒)。
 // その後にジョブを中止する。先に中止すると、ジョブのプロセスと一緒に、子プロセスを止める監視が消えるためである。
 // scriptが断った結果(`refused`)と、読めない結果は、置けなかった・解除できなかったものとして非0で終える。
 // 監視が消えた後に残ったプロセスは、`docker compose exec`でworkerの中から止める。
@@ -37,8 +37,11 @@ import { parseRunningJobs, runningJobsSql } from "./check-idle.ts";
 export const STOP_SCRIPT = "f/factory/console_stop_all";
 /** 全停止を解除するWindmillのscript。 */
 export const RELEASE_SCRIPT = "f/factory/console_stop_all_release";
-/** 実行中のClaudeと検査が自分で止まるまで待つ時間(ミリ秒)。監視の間隔15秒に余裕を足す。 */
-export const SETTLE_WAIT_MS = 20_000;
+/**
+ * 実行中のClaudeと検査が自分で止まるまで待つ時間(ミリ秒)。
+ * 監視の間隔15秒、変数の読み取りの上限5秒、SIGTERMの後の猶予5秒の和に、余裕を足す。
+ */
+export const SETTLE_WAIT_MS = 30_000;
 /** グループにSIGTERMを送ってから、残ったものにSIGKILLを送るまでの猶予(ミリ秒)。 */
 export const KILL_GRACE_MS = 5_000;
 /** workerのプロセスの一覧。グループの番号を先頭の列に置く(`claudeGroupIds`が読む形)。 */
@@ -141,7 +144,7 @@ const NOT_PLACED_WARNING =
   "WARNING: the stop-all was NOT placed. The schedules and the *_enabled settings are still active; fix Windmill and run mise run stop again.";
 
 const PLACE_MESSAGE =
-  "This stops the whole Factory: it places the stop-all, turns off every *_enabled setting, disables the repository schedules, cancels the running jobs after 20 seconds, and kills the claude and check processes left in the worker.";
+  "This stops the whole Factory: it places the stop-all, turns off every *_enabled setting, disables the repository schedules, cancels the running jobs after 30 seconds, and kills the claude and check processes left in the worker.";
 const KILL_MESSAGE =
   "This kills the claude processes and the check processes left in the worker container, without touching Windmill.";
 const RELEASE_MESSAGE =
