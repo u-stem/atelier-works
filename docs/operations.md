@@ -1352,13 +1352,41 @@ PRレビューの生成、PR修正の修正、要件定義の生成、監査の�
 解除の直後に動かさないためである。
 flowは失敗のまま終わる。
 作業項目は失敗になり、Discordに`job_failed`が届く。
+使用上限か全停止で失敗したCIを直す回には、`job_failed`を送らない。
+監視が同じ行を起動し直すので、使用上限が続く間に同じ通知を重ねないためである。
 それ以外のClaudeの失敗では、Windmillが再試行する。
+
+Windmillのジョブの結果とログには、例外の文の先頭の`[no-flow-retry]`が残る。
+このタグはflowの再試行を止める印で、失敗の原因ではない。
+タグの後ろの文が失敗の内容である。
+作業項目の注記と`job_failed`の本文では、`on_error_flow`がタグを外す。
 
 使用上限のときは、要対応の通知`claude_usage_limit`も残る。
 使用上限はアカウント全体に効くので、この通知は上の4つに限らず、Claudeを呼ぶどのflowでも残る。
 本文は固定の文なので、未解決の間は新しい通知を足さず、1回の上限で通知は1件になる。
-どの実行を動かし直すかは、**要対応**の失敗の行で分かる。
-当たったflowのパスは、そのジョブのログに残る。
+例外で終わるflowは**要対応**に失敗の行を残すので、動かし直す実行はその行で分かる。
+例外を投げないflow(`dependabot_assess`と`investigate_generate`)は、失敗の行を残さない。
+どちらのflowでも、当たった実行は次の手順で調べられる。
+
+1. 次のコマンドで、使用上限で終わった実行のステージと作業項目を読む。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT created_at, stage, work_item_id FROM factory.agent_runs WHERE failure_reason = 'usage_limit' ORDER BY created_at DESC LIMIT 20"
+   ```
+
+2. ステップのジョブを次のコマンドで探す。
+   ステップのパスは`f/factory/steps/dependabot_assess`のように、ステージに対応する。
+
+   ```bash
+   mise exec -- wmill job list --all --script-path <ステップのパス> --limit 10
+   ```
+
+3. 次のコマンドでログを読み、`claude usage limit reached`の行を探す。
+   行の`path`がflowのパスで、`job_id`がそのflowのジョブのIDである。
+
+   ```bash
+   mise exec -- wmill job logs <ジョブのID>
+   ```
 
 timeoutで打ち切った実行は、標準出力に費用があればその値を、無ければ上限の値を記録し、日次予算に数える。
 上限は`max_budget_usd_per_run`で、実装のフローでは`implement_max_budget_usd_per_run`である。
@@ -1369,6 +1397,8 @@ timeoutで打ち切った実行は、標準出力に費用があればその値�
 結果の形でなくても、標準出力のJSONに費用があれば、その値を記録する。
 起動の直後に終わる失敗(認証の失敗など)は、日次予算を使い切らないよう、費用を記録しない。
 起動しなかった実行の費用も記録しない。
+実装のフローの期限が残っていなくて起動しなかった実行は、失敗の種類を`not_started`で記録する。
+起動していないので、モデルの昇格の失敗に数えない。
 
 全停止で止めた実行も、標準出力に費用があればその値を、無ければ上限の値を記録する。
 そのため、全停止の後は、日次予算に早く達しうる。
@@ -1384,7 +1414,8 @@ Consoleからは上げられない([設定を止める向きに変える](#設�
 - 調査は再実行できないので、同じ依頼を投入し直す。
 - dependabotの更新は再実行できないので、PRを人が確かめ、手でマージするか閉じる。
   新しいコミットが積まれると、自動で再び対象になる。
-- CIを直す回は行を保留する([Claudeの失敗で保留したCIの修正を起動し直す](#claudeの失敗で保留したciの修正を起動し直す))。
+- CIを直す回は行を保留する。
+  使用上限と全停止の行は、監視が自動で起動し直す([Claudeの失敗で保留したCIの修正を起動し直す](#claudeの失敗で保留したciの修正を起動し直す))。
 - 競合を直す回は行を`fix_stopped`で保留する。
   人が競合を解消するか、PRにpushする。
 
@@ -2736,6 +2767,7 @@ PATの権限の不足とは限らないので、表の候補の404と403は、�
 - 直す回数の上限に達した。
 - 一時的な理由での見送りが続いた。`not_reviewed`と`last_fix_unsettled`は`claude_timeout_sec`の2倍、ほかの理由は30分たったときである。
 - 起動されず、見送りの理由も付かないまま、失敗してから2時間たった。
+- 直す作業のClaudeの実行がtimeoutか実行ごとの予算の超過で失敗した。
 
 通知の本文には、見送りの理由と、その理由ごとの次の操作が載る。
 直す作業が人の判断待ちで止まったときは、止めたフローがDiscordに通知する。そのため、`pr_ci_failed`はConsoleにだけ残る。
@@ -2833,24 +2865,35 @@ PATの権限の不足とは限らないので、表の候補の404と403は、�
 
 ### Claudeの失敗で保留したCIの修正を起動し直す
 
-直す作業のClaudeの実行が次の4つで失敗すると、監視は行を保留`claude_run_failed`にして、同じheadでは起動し直さない。
-同じ失敗を繰り返すと、費用と`pr_ci_fix_max_rounds`の回数を使い切るためである。
-全停止は、人が止めた実行を解除の直後に動かさないためである。
+直す作業のClaudeの実行が次の4つで失敗すると、監視は行を保留する。
+待てば解ける2つは、監視が自動で起動し直すので、人の操作は要らない。
 
-| 種類 | 原因の解き方 |
-| --- | --- |
-| `timeout` | 直す範囲が大きすぎないかをログで確かめ、必要なら`claude_timeout_sec`を上げる |
-| `run_budget_exceeded` | 直す範囲が大きすぎないかをログで確かめ、必要なら`max_budget_usd_per_run`を上げる |
-| `usage_limit` | 使用上限が戻るのを待つ |
-| `stopped` | 全停止を解除する |
+| 種類 | 保留の理由 | 起動し直す時機 | 原因の解き方 |
+| --- | --- | --- | --- |
+| `usage_limit` | `claude_usage_limit` | 30分ごとに起動し直す | 使用上限が戻るのを待つ |
+| `stopped` | `claude_stopped` | 全停止を解除した後の巡回 | 全停止を解除する |
+| `timeout` | `claude_run_failed` | 同じheadでは起動し直さない | 直す範囲が大きすぎないかをログで確かめ、必要なら`claude_timeout_sec`を上げる |
+| `run_budget_exceeded` | `claude_run_failed` | 同じheadでは起動し直さない | 直す範囲が大きすぎないかをログで確かめ、必要なら`max_budget_usd_per_run`を上げる |
 
+使用上限と全停止で終わった回は、`pr_ci_fix_max_rounds`の回数に数えない。
+待つ間に回数を使い切ると、上限が戻っても直せないためである。
+起動し直してまた使用上限に当たると、同じ保留に戻り、さらに30分待つ。
+全停止の変数を読めないときは、解除を確かめられないので、起動し直さない。
+
+`timeout`と`run_budget_exceeded`は同じheadで繰り返しても同じ失敗になり、費用と回数を使い切る。
 手順は次のとおりである。
 
-1. 作業項目の理由の`claude run failed (<種類>)`で、種類を確かめる。
-2. 表に従って原因を解く。
-3. 人が直してPRにpushすると、新しいheadが新しい行になり、保留は引き継がない。
-4. 同じheadで自動の修正を動かし直すときは、次のコマンドで保留を外す。
-   行のIDは[失敗の自動修正を有効にする](#失敗の自動修正を有効にする)の読み取りのコマンドで確かめる。
+1. 行のIDは[失敗の自動修正を有効にする](#失敗の自動修正を有効にする)の読み取りのコマンドで確かめる。
+2. 次のコマンドで、行を直した作業項目と、止めた理由を読む。
+   理由の`claude run failed (<種類>)`で、種類を確かめる。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT wi.id, wi.status, (SELECT e.note FROM factory.work_item_events e WHERE e.work_item_id = wi.id AND e.to_status = wi.status ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1) AS note FROM factory.work_items wi WHERE wi.ci_check_id = <行のID> ORDER BY wi.created_at DESC LIMIT 1"
+   ```
+
+3. 表に従って原因を解く。
+4. 人が直してPRにpushすると、新しいheadが新しい行になり、保留は引き継がない。
+5. 同じheadで自動の修正を動かし直すときは、次のコマンドで保留を外す。
 
    ```bash
    mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "UPDATE factory.pr_ci_checks SET fix_hold_reason = NULL, notified_reason = NULL, updated_at = now() WHERE id = <行のID> AND state = 'failed' AND fix_hold_reason = 'claude_run_failed'"
@@ -4341,7 +4384,10 @@ ORDER BY m.model;
 
 使用上限か全停止で終わった実行(`agent_runs.failure_reason`が`usage_limit`か`stopped`)は、この3つのどれにも数えない。
 モデルを強くしても防げないためである。
-実装のラウンドの数え方でも、同じ実行のラウンドを数えない。
+不正な出力の再試行で捨てた試行があるときは、最後の試行の種類で判定する。
+その実行の後に再実行し、Claudeを起動せずに`blocked`で止まったラウンドは、そのラウンドの実行が無いので数える。
+実装のラウンドの数え方でも、同じ実行の`error`のラウンドと、期限で起動しなかった実行(`not_started`)の`error`のラウンドを数えない。
+`.git`ポインタの書き換えで記録した`check_failed`のラウンドは、実行の種類にかかわらず数える。
 
 新しい指摘でラベルを付け直しただけのラウンドは数えない。
 Claudeが動かなかったラウンドも数えないが、同じ作業項目で前にClaudeが動いていれば数える。

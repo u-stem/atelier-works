@@ -1105,7 +1105,8 @@ CIの失敗を直す作業項目(`ci_check_id`を持つもの)と、競合を直
   - Claudeが動いて`blocked`で終えた`fix_rounds`の行
   - 検査の再実行(`pr_fix_verify_retry`)をした作業項目
   - `agent_runs.error`がある失敗した実行の行
-  - どれも、使用上限か全停止で終わった実行(`agent_runs.failure_reason`が`usage_limit`か`stopped`)を数えない
+  - どれも、使用上限か全停止で終わった実行(`agent_runs.failure_reason`が`usage_limit`か`stopped`)を数えない。
+    `blocked`の行はその行の実行(間に再実行の無い直前の実行)の種類で、検査の再実行は最後の試行の種類で判定する
 - 作業項目の`fix_round`から1を引いた値。毎回`done`で終えても再レビューが続くと、失敗の記録が残らないためである。
 
 除く条件と数の理由は、[運用](../operations.md)の「モデルを使い分ける」にある。

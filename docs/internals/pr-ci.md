@@ -248,7 +248,7 @@ ownerとrepoは、行との照合では小文字で比べる。
 
 ## 保留の理由の語彙
 
-`fix_hold_reason`に書く値は、`lib/pr_ci_support.ts`の`PR_CI_FIX_HOLD_REASONS`の14個に限る。
+`fix_hold_reason`に書く値は`lib/pr_ci_support.ts`の`PR_CI_FIX_HOLD_REASONS`の値に限る。
 DBの検査は長さだけなので、書く側をこの型で縛る。
 値ごとの性質と、人が次にすることの固定文は`prCiFixHoldInfo`が返す。
 固定文は2種類ある。
@@ -267,7 +267,7 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 | `fix_stopped` | 決定的 | 直す作業項目が、pushしないまま人の判断待ちで止まった |
 | `rounds_exhausted` | 決定的 | 直す回数の上限に達した |
 | `not_factory_head` | 決定的 | 最後のpushがFactoryのものでない |
-| `claude_run_failed` | 決定的 | 直す作業のClaudeの実行が、timeout、実行ごとの予算の超過、使用上限、全停止のどれかで失敗した。外す手順は[運用](../operations.md#claudeの失敗で保留したciの修正を起動し直す)にある |
+| `claude_run_failed` | 決定的 | 直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗した。外す手順は[運用](../operations.md#claudeの失敗で保留したciの修正を起動し直す)にある |
 | `marker_missing` | 一時的 | Factoryのクローンのスキルが、CIの失敗を直す節を持たない。スキルが入れば外れる |
 | `main_ci_failed` | 一時的 | mainのCIが赤い |
 | `budget_exceeded` | 一時的 | 日次の予算を使い切った |
@@ -277,13 +277,18 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 | `config_misfit` | 一時的 | 時間設定(`claude_timeout_sec`と検査コマンドの数)が、修正・検証ステップのtimeoutに収まらない。設定を直せば、次の巡回でpushなしに外れる |
 | `worker_image_stale` | 一時的 | 検査を動かすworkerのイメージが古い。イメージを作り直せば、次の巡回でpushなしに外れる |
 | `worker_runtime_unsafe` | 一時的 | 稼働中のworkerに、誰でも書き込めるパスがあるか、それを確かめられない。パスを閉じるか、コンテナを作り直せば、次の巡回でpushなしに外れる |
+| `claude_usage_limit` | 一時的 | 直す作業のClaudeの実行が使用上限で失敗した。30分ごとに起動し直し、また当たれば同じ保留に戻る。回数を使わない([判断](#判断)) |
+| `claude_stopped` | 一時的 | 直す作業のClaudeの実行を全停止で止めた。全停止を解除した後の巡回で起動し直す。回数を使わない([判断](#判断)) |
 
 noticeを出す時機は、決定的な理由なら保留した時点、一時的な理由なら保留が続いたときである。
 一時的な保留は、解ければ何も知らせずに済むためである。
 保留が続いたと見なす時間は、`not_reviewed`と`last_fix_unsettled`では`claude_timeout_sec`の2倍、ほかの一時的な理由では30分になる。
 自動レビューや直す作業項目が走っている間は、この2つが長く続いても異常でないためである。
 Discordも送るかは理由ごとに決める。`fix_stopped`は、止めた`pr_fix_finish`がすでに送っているので、noticeだけにする。
-`claude_run_failed`も、止めたフローの通知(`job_failed`か`pr_fix_finish`)がすでに届いているので、noticeだけにする。
+`claude_run_failed`はDiscordにも送る。先に届く`job_failed`には、PRのリンクと次の操作が無いためである。
+検証のステップで止まった回は、`pr_fix_finish`の通知と2件になる。
+`claude_usage_limit`の行は、30分たつと同じ巡回の起動が先に動かすので、通常はnoticeを出さない。
+起動に進めなかった行だけが、次の起動までの間に通知される。
 通知の手順は[保留した失敗の通知](#保留した失敗の通知)に書く。
 
 ## 回復
@@ -311,7 +316,8 @@ Discordも送るかは理由ごとに決める。`fix_stopped`は、止めた`pr
 | イメージが古い理由(自動の再開の対象の理由)で`blocked`になった | 止まってから24時間は戻さない。24時間後に保留なしで戻す。保留の理由ではなく、人がイメージを作り直す猶予である |
 | それ以外の`blocked` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ、保留なしで`failed`に戻す。起動し直す回数は、直す回数の上限が止める |
 | `needs_human` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ`fix_stopped`にする |
-| `failed`で、注記がClaudeの実行の失敗(timeout、実行ごとの予算の超過、使用上限、全停止)の固定文である | `claude_run_failed`で保留して`failed`に戻す。保留なしで戻すと、次の巡回で同じ失敗を繰り返し、費用と回数の上限を使い切るためである |
+| `failed`で、注記がtimeoutか実行ごとの予算の超過の固定文である | `claude_run_failed`で保留して`failed`に戻す。保留なしで戻すと、次の巡回で同じ失敗を繰り返し、費用と回数の上限を使い切るためである |
+| `failed`か`blocked`で、注記が使用上限か全停止の固定文である | `claude_usage_limit`か`claude_stopped`で保留して`failed`に戻し、行の起動の回数(`fix_attempts`)を1回返す。待てば解けるので、起動の判断が起動し直す |
 | 存在しない、または上の行に当たらない終端の状態(ほかの`failed`、`cancelled`、`expired`、`reviewed`、`approved`、`rejected`など) | 保留なしで`failed`に戻す |
 
 24時間待つのは、待たずに戻すと、同じ理由で止まる回を重ねて、直す回数の上限を使い切るためである。
@@ -353,7 +359,9 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
 | トークンがログを読めない、ログが取得できない | `log_unavailable` |
 | 日次予算の超過 | `budget_exceeded` |
 | PRがドラフトか、auto-mergeが有効 | `pr_draft_or_auto_merge` |
-| Claudeの実行がtimeout、実行ごとの予算の超過、使用上限、全停止で失敗した | `claude_run_failed` |
+| Claudeの実行がtimeoutか実行ごとの予算の超過で失敗した | `claude_run_failed` |
+| Claudeの実行が使用上限で失敗した | `claude_usage_limit` |
+| Claudeの実行を全停止で止めた | `claude_stopped` |
 
 保留なしで戻した行は、直す作業を起動し直せる。
 直す回数の上限(`pr_ci_fix_max_rounds`)が、起動し直しの歯止めになる。
@@ -383,7 +391,17 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
 
 ### 判断
 
-判断は`decideFixClaim`が行う。次の順に確かめ、最初に当たったもので止める。
+判断は`decideFixClaim`が行う。
+
+最初に、待っている行を見る。
+保留が`claude_usage_limit`の行は、保留を書いてから30分たつまで、同じ保留のままにする。
+巡回の間隔で起動し直すと、上限が戻るまで作業項目とflowを作り続けるためである。
+30分は一時的な保留を知らせるまでの時間と同じにする。
+長くすると、起動し直す前に保留の通知が出て、操作が要らないのに人を呼ぶためである。
+保留が`claude_stopped`の行は、全停止の変数が空と確かめられるまで、同じ保留のままにする。
+全停止の変数は1回の実行で1回だけ読み、読めなければ解除されていないものとして扱う。
+どちらもPRとジョブを読まず、回数も数えない。ほかの理由へ書き換えないので、待っている間に起動することは無い。
+待ち終えた行は次の順に確かめ、最初に当たったもので止める。
 作業項目の状態を先に読み、PRを後で読む。読んでいる間に作業項目がpushすると、先に読んだPRのheadは古くなるためである。
 
 1. 通知した理由が`ci_other_conclusion`なら、`other_conclusion`で保留する。
@@ -421,7 +439,9 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
    数えるのは、ジョブIDが記録された作業項目である。`failed`で`flow_job_id`が空の作業項目は数えない。
    これには、フローの起動に失敗した回のほかに、ジョブIDが記録されないまま回復や失敗の処理が`failed`にした回も含む。
    Claudeを走らせていない回で、直す機会を使い切らないためである。
+   使用上限か全停止の固定文で`failed`か`blocked`に移った回も数えない(`CI_CLAUDE_WAIT_NOTES`)。待つ間に回数を使い切らないためである。
    ただし、行の起動の回数(`fix_attempts`)が`pr_ci_fix_max_rounds`に3を足した数に達したときも、`rounds_exhausted`で保留する。数えない回が続いても、起動し直し続けないための歯止めである。
+   使用上限と全停止の回は、回復がこの回数も1回返すので、この歯止めに近づかない。
 11. 検査コマンド(`allowed_check_commands`)があるときだけ、検査を動かすworkerの環境を`checkImageProblemsFromEnv()`で確かめる。
    イメージが古ければ`worker_image_stale`、稼働中のworkerが安全でなければ`worker_runtime_unsafe`で保留する。
    準備のステップも同じ確認で止めるので、時間設定と同じ作りで起動の前に確かめる。
