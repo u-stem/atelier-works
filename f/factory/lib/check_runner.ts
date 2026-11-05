@@ -14,6 +14,13 @@ import {
   type EscapingSymlinksReport,
 } from "./check_sandbox.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
+import {
+  checkStop,
+  defaultStopCheck,
+  STOP_CHECK_INTERVAL_MS,
+  type StopCheck,
+  watchStop,
+} from "./stop_check.ts";
 import type { CommandRunner } from "./workspace.ts";
 
 export type CheckCommandResult = {
@@ -29,12 +36,33 @@ export type CheckCommandResult = {
    * プロンプトに載せる抜粋は引き続き`outputTail`を使う。
    */
   readonly output: string;
+  /** 全停止で実行しなかったか、実行中に止めた。止めていなければ付かない。 */
+  readonly stopped?: boolean;
 };
 
 const CHECK_OUTPUT_TAIL_CHARS = 2000;
 
-// テストを先に足すための仮の値。次のコミットで本実装に置き換える。
-export const CHECK_STOPPED_NOTE = "";
+/** 全停止で止めた検査コマンドの出力。 */
+export const CHECK_STOPPED_NOTE =
+  "the check command was stopped because the factory is stopped (f/factory/stop_all)";
+
+/** 全停止の確認の指定。省略すると、既定の確認(`defaultStopCheck`)を15秒ごとに呼ぶ。 */
+export type CheckStopOptions = {
+  readonly check?: StopCheck;
+  readonly intervalMs?: number;
+};
+
+function stoppedResult(command: string): CheckCommandResult {
+  return {
+    command,
+    ok: false,
+    exitCode: 1,
+    timedOut: false,
+    outputTail: CHECK_STOPPED_NOTE,
+    output: CHECK_STOPPED_NOTE,
+    stopped: true,
+  };
+}
 
 /** `checkUnrunnableReason`が返す理由の先頭。回復の処理が、理由の先頭一致で保留に写す。 */
 export const CHECK_UNRUNNABLE_REASON_PREFIX = "check command could not run: ";
@@ -275,6 +303,7 @@ function escapingSymlinksResult(
  * 運用者が書く設定(`factory_config`)だから。
  * 出力の読み取りを打ち切ったコマンド(`outputAbandoned`)は、終了コードに関わらず失敗にする。
  * 別セッションへ抜けたプロセスがworkerに残ったことを検査結果に出すためである。
+ * 全停止が置かれていれば、次のコマンドを起動せず、実行中のコマンドはグループごと止める。止めたコマンドは`stopped`の失敗として結果に足し、残りは実行しない。
  */
 export async function runAllowedCheckCommands(
   run: CommandRunner,
@@ -284,6 +313,7 @@ export async function runAllowedCheckCommands(
   createHomeDir: CreateCheckHomeDir = defaultCreateCheckHomeDir,
   path: string = CHECK_COMMAND_PATH,
   sandbox: CheckSandbox | null = null,
+  stop: CheckStopOptions = {},
 ): Promise<CheckCommandResult[]> {
   const homeDir = await createHomeDir({ worktreeDir: cwd });
   const dirs = { worktreeDir: cwd, homeDir: homeDir.path };
@@ -294,31 +324,52 @@ export async function runAllowedCheckCommands(
       if (sandbox !== null) await sandbox.prepare(dirs);
       const env = checkEnv({ path, home: homeDir.path, worktreeDir: cwd });
 
-      for (const command of commands) {
-        const argv = command
-          .trim()
-          .split(/\s+/)
-          .filter((token) => token.length > 0);
-        if (argv.length === 0) continue;
-        const result = await run(sandbox === null ? argv : sandbox.wrap(argv), {
-          cwd,
-          env,
-          timeoutMs,
-          maxOutputBytes: CHECK_COMMAND_MAX_OUTPUT_BYTES,
-        });
-        if (sandbox !== null) await sandbox.settle();
-        const masked = maskSecrets(`${result.stdout}\n${result.stderr}`.trim());
-        results.push({
-          command,
-          ok:
-            !result.timedOut &&
-            result.exitCode === 0 &&
-            result.outputAbandoned !== true,
-          exitCode: result.exitCode,
-          timedOut: result.timedOut,
-          outputTail: masked.slice(-CHECK_OUTPUT_TAIL_CHARS),
-          output: masked,
-        });
+      const check = stop.check ?? defaultStopCheck();
+      const watch = watchStop(check, stop.intervalMs ?? STOP_CHECK_INTERVAL_MS);
+      try {
+        for (const command of commands) {
+          const argv = command
+            .trim()
+            .split(/\s+/)
+            .filter((token) => token.length > 0);
+          if (argv.length === 0) continue;
+          // 全停止の間は、次のコマンドを起動しない。
+          if (watch.stopped() || (await checkStop(check))) {
+            results.push(stoppedResult(command));
+            break;
+          }
+          const result = await run(
+            sandbox === null ? argv : sandbox.wrap(argv),
+            {
+              cwd,
+              env,
+              timeoutMs,
+              maxOutputBytes: CHECK_COMMAND_MAX_OUTPUT_BYTES,
+              stopSignal: watch.signal,
+            },
+          );
+          if (sandbox !== null) await sandbox.settle();
+          if (watch.stopped() || result.stopped === true) {
+            results.push(stoppedResult(command));
+            break;
+          }
+          const masked = maskSecrets(
+            `${result.stdout}\n${result.stderr}`.trim(),
+          );
+          results.push({
+            command,
+            ok:
+              !result.timedOut &&
+              result.exitCode === 0 &&
+              result.outputAbandoned !== true,
+            exitCode: result.exitCode,
+            timedOut: result.timedOut,
+            outputTail: masked.slice(-CHECK_OUTPUT_TAIL_CHARS),
+            output: masked,
+          });
+        }
+      } finally {
+        watch.dispose();
       }
     } finally {
       if (sandbox !== null) {

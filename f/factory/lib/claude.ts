@@ -16,12 +16,19 @@ import { defaultSqlClient, type SqlClient, sumAgentCostSince } from "./db.ts";
 import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import {
+  checkStop,
+  defaultStopCheck,
+  STOP_CHECK_INTERVAL_MS,
+  type StopCheck,
+  watchStop,
+} from "./stop_check.ts";
+import {
   type AgentRunRecord,
   capToDeadline,
   type FactoryConfig,
   type ModelUsageEntry,
 } from "./types.ts";
-import type { CommandRunner } from "./workspace.ts";
+import type { CommandResult, CommandRunner } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
 // buildSystemPrompt: スキルのSKILL.mdを連結して一時ファイルに書く
@@ -377,6 +384,14 @@ export type RunClaudeOptions<T> = {
    */
   readonly reviewRetryNote?: string;
   /**
+   * 全停止の確認。既定は、ジョブの中なら変数`f/factory/stop_all`を読む確認(`defaultStopCheck`)である。
+   * 起動の前と再試行の前に確かめ、実行中は`stopCheckIntervalMs`ごとに確かめる。
+   * 止まっていれば起動せず、実行中ならプロセスグループを止め、`stopped`の失敗で終わる。読めないときは止めない。
+   */
+  readonly stopCheck?: StopCheck;
+  /** 実行中の確認の間隔(ミリ秒)。既定は15秒。 */
+  readonly stopCheckIntervalMs?: number;
+  /**
    * 将来、workerをroot以外で実行する方式のために予約している。
    * 今は使わず、workerの現在のユーザーで起動する。
    */
@@ -388,7 +403,8 @@ export type RunClaudeFailureReason =
   | "timeout"
   | "invalid_json"
   | "invalid_structured_output"
-  | "claude_error";
+  | "claude_error"
+  | "stopped";
 
 /**
  * `runClaude`の結果。`agentRun`は最後の試行の記録で、再試行したときは捨てた最初の試行の記録が
@@ -538,9 +554,18 @@ type ClaudeAttemptResult<T> =
 export const CLAUDE_NOT_STARTED_DETAIL =
   "claude -p not started: no time left before the deadline";
 
-// テストを先に足すための仮の値。次のコミットで本実装に置き換える。
-export const CLAUDE_STOPPED_BEFORE_START_DETAIL = "stub";
-export const CLAUDE_STOPPED_DETAIL = "stub";
+/** 全停止が置かれていたためClaudeを起動しなかったときの詳細。 */
+export const CLAUDE_STOPPED_BEFORE_START_DETAIL =
+  "claude -p not started: the factory is stopped (f/factory/stop_all)";
+
+/** 実行中に全停止が置かれ、Claudeを止めたときの詳細。 */
+export const CLAUDE_STOPPED_DETAIL =
+  "claude -p stopped: the factory is stopped (f/factory/stop_all)";
+
+/** この実行の全停止の確認。指定が無ければ既定の確認を使う。 */
+function stopCheckOf<T>(opts: RunClaudeOptions<T>): StopCheck {
+  return opts.stopCheck ?? defaultStopCheck();
+}
 
 /** この試行のタイムアウト(ms)を返す。deadlineAtがあれば残り時間で頭打ちにする。 */
 function attemptTimeoutMs<T>(opts: RunClaudeOptions<T>): number {
@@ -608,14 +633,35 @@ async function attemptClaude<T>(
   const argv = buildClaudeArgv(opts);
   const timeoutMs = attemptTimeoutMs(opts);
 
-  const commandResult = await opts.run(argv, {
-    cwd: opts.cwd,
-    env,
-    stdin: promptText,
-    timeoutMs,
-  });
+  const watch = watchStop(
+    stopCheckOf(opts),
+    opts.stopCheckIntervalMs ?? STOP_CHECK_INTERVAL_MS,
+  );
+  let commandResult: CommandResult;
+  try {
+    commandResult = await opts.run(argv, {
+      cwd: opts.cwd,
+      env,
+      stdin: promptText,
+      timeoutMs,
+      stopSignal: watch.signal,
+    });
+  } finally {
+    watch.dispose();
+  }
 
   const baseAgentRun = baseAgentRunFor(opts, commandResult.exitCode);
+
+  // 全停止で止めた実行は、出力を読まずに失敗にする。止めた後の出力は途中までで、解析しても意味が無いためである。
+  if (watch.stopped() || commandResult.stopped === true) {
+    const detail = failureDetail(CLAUDE_STOPPED_DETAIL);
+    return {
+      outcome: "failure",
+      reason: "stopped",
+      agentRun: { ...baseAgentRun, error: detail },
+      detail,
+    };
+  }
 
   if (commandResult.timedOut) {
     const detail = failureDetail(`claude -p timed out after ${timeoutMs}ms`);
@@ -715,6 +761,7 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
  * `deadlineAt`を過ぎていれば起動せずにtimeoutの失敗を返し、過ぎた後は再試行しない。
  * `beforeRetry`がfalseを返したとき、例外を投げたときも再試行せず、最初の失敗を返す。
  * 例外を投げたときは、秘密を伏せたメッセージを最初の失敗の`detail`に足す。
+ * 全停止(`stopCheck`)が置かれていれば起動せず、実行中なら止めて、どちらも`stopped`で返し、再試行しない。
  */
 export async function runClaude<T>(
   opts: RunClaudeOptions<T>,
@@ -738,6 +785,19 @@ export async function runClaude<T>(
         error: CLAUDE_NOT_STARTED_DETAIL,
       },
       detail: CLAUDE_NOT_STARTED_DETAIL,
+      retried: false,
+    };
+  }
+  // 全停止の間は起動しない。flowのstepの再試行で呼び直されたときも、ここで起動せずに終わる。
+  if (await checkStop(stopCheckOf(opts))) {
+    return {
+      outcome: "failure",
+      reason: "stopped",
+      agentRun: {
+        ...baseAgentRunFor(opts, null),
+        error: CLAUDE_STOPPED_BEFORE_START_DETAIL,
+      },
+      detail: CLAUDE_STOPPED_BEFORE_START_DETAIL,
       retried: false,
     };
   }
@@ -836,6 +896,9 @@ async function retryDecision<T>(
   opts: RunClaudeOptions<T>,
 ): Promise<RetryDecision> {
   if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
+    return { allowed: false, checkError: null };
+  }
+  if (await checkStop(stopCheckOf(opts))) {
     return { allowed: false, checkError: null };
   }
   if (opts.beforeRetry === undefined) return { allowed: true };
