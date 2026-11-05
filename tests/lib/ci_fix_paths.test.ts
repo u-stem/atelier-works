@@ -843,6 +843,8 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "定期ジョブ用workerの受け付けの確認。確認の修正が日常的に触れる。self_updateは確認を呼ぶだけで、反映の止め方の判断には使わない。反映はマージの後で、レビューが受け皿になる",
   "f/factory/lib/self_update_pull_requests.ts":
     "self cloneのコミットログから反映に含まれるPRを読む純粋な解析。通信を持たない。反映の記録の修正が日常的に触れ、止め方の判断には使わない。改変されると、deploymentsのPRの記録が欠けうるが、反映の可否には影響しない。反映はマージの後で、レビューが受け皿になる",
+  "f/factory/lib/pr_review_retry.ts":
+    "一時的なGitHubの失敗で止まったPRレビューの自動再開の共有モジュール。on_error_flowは通知を送るかの判定(decideTransientFailureAction)にだけ使い、終端の処理には使わない。PRレビューの修正が日常的に触れる。判定の誤りは通知の有無に限られ、反映はマージ後で、レビューが受け皿になる",
   "f/factory/lib/design_template.ts":
     "設計書テンプレートの固定値と、設計へ戻す遷移の注記の定数の共有モジュール。pr_fix_finishが読む。設計工程の修正が日常的に触れ、反映はマージ後で、レビューが受け皿になる。拒否すると、このファイルに触れるPRの競合回が止まる",
 };

@@ -677,8 +677,9 @@ gitは呼ばない。
   - `f/factory/lib/`の`pr_fix_launch`、`pr_fix_design`、`branch_hold`
   - `f/factory/lib/`の`metadata_`
   - `f/factory/lib/`の`approval_gate`、`doc_tree_hash`、`model_text`
+  - `f/factory/lib/`の`claude_flow_failure`
   - `f/factory/steps/`の`pr_fix_`と`pr_workflow_support`
-  - `f/factory/`の`watch_pr_ci`、`watch_pr_conflicts`、`watch_main_ci`
+  - `f/factory/`の`watch_pr_ci`、`watch_pr_conflicts`、`watch_main_ci`、`on_error_flow`
 
 CI回のClaudeがこれらを書き換えると、自分を止める検査を弱められるためである。
 無視ファイルとテストの実行を変えるファイルは、`tests/`の配下の新規ファイルでも拒否する。
@@ -692,6 +693,8 @@ CI回のClaudeがこれらを書き換えると、自分を止める検査を弱
 受け入れたのは、ほかのフローが日常的に直す共有モジュールで、拒否すると正当な修正を止めるものである。
 `db`、`discord`、`poll_support`、`implement_*`、`factory_clone`、`self_update_support`がこれにあたる。
 `job_ids`、`prose_check`、`console_support`もこれにあたる。
+`pr_review_retry`もこれにあたる。
+`on_error_flow`が、一時的な失敗の通知を送るかの判定に読むためである。
 `steps/requirements_apply`、`design_apply_support`、`design_template`もこれにあたる。
 `pr_fix_finish`が、設計へ戻す起動の手順と、遷移の注記の定数を読むためである。
 これらは設計工程の修正が日常的に触れる。反映はマージ後で、レビューが受け皿になる。
