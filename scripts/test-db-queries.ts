@@ -80,6 +80,7 @@ import {
   latestDesignDraft,
   latestDesignEntryEvent,
   latestMainCiRunCreatedAt,
+  latestPostedPrReviewHeadSha,
   latestPrWorkItem,
   latestRequirementsApproval,
   latestStatusEvent,
@@ -4362,6 +4363,22 @@ check(
 check(
   "review for head: a review of another pull request is not a match",
   (await hasPrReviewForHead("qfix", "app", 607, FIX_SHA_1, sql)) === false,
+);
+check(
+  "latestPostedPrReviewHeadSha: does not read a review that was not posted",
+  (await latestPostedPrReviewHeadSha("qfix", "app", 606, sql)) === null,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, summary, posted_review_id) VALUES (${String(reviewItem)}, '${FIX_SHA_2}', 'comment', 'qfix', '9001')`,
+);
+check(
+  "latestPostedPrReviewHeadSha: reads the posted review of the pull request",
+  (await latestPostedPrReviewHeadSha("qfix", "app", 606, sql)) === FIX_SHA_2,
+);
+check(
+  "latestPostedPrReviewHeadSha: returns null for a pull request without a review",
+  (await latestPostedPrReviewHeadSha("qfix", "app", 607, sql)) === null,
 );
 
 // 通知を保留した失敗: 失敗で、まだ通知していない行だけを、更新の古い順に返す。

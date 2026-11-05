@@ -697,6 +697,27 @@ export type ReviewFinding = {
 export type ReviewVerdict = "approve" | "comment" | "request_changes";
 
 /**
+ * レビューが読む差分の範囲。生成のステップが、前回の投稿とheadから決める。
+ * `first`と`full`はPR全体、`delta`は前回のcommitからheadまで、
+ * `threads_only`は新しい差分なしで既存のスレッドに答える。
+ */
+export type ReviewScope =
+  | { readonly kind: "first" }
+  | {
+      readonly kind: "full";
+      readonly reason:
+        | "prior_unreadable"
+        | "conflict_round"
+        | "requested_again";
+    }
+  | {
+      readonly kind: "delta";
+      readonly fromSha: string;
+      readonly hasMerge: boolean;
+    }
+  | { readonly kind: "threads_only"; readonly fromSha: string };
+
+/**
  * 投稿したレビューの結果。Discordの通知とConsoleのレビュー行が、同じ基準で状態を出す。
  * `changes_requested`は、修正必須の指摘が未解決の状態である。
  * `reviewed`は、修正必須の指摘が無く、人の承認を待つ状態である。

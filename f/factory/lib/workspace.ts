@@ -5156,3 +5156,20 @@ export async function listBothSidesChangedPaths(opts: {
     headToResult: [...fromHead.keys()],
   };
 }
+
+export type ReviewDelta = {
+  readonly diff: string;
+  readonly hasMerge: boolean;
+};
+
+export async function readReviewDelta(_options: {
+  readonly run: CommandRunner;
+  readonly dir: string;
+  readonly fromSha: string;
+  readonly headSha: string;
+  readonly paths: readonly string[];
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<ReviewDelta | null> {
+  return null;
+}

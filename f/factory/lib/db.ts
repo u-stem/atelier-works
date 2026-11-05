@@ -2993,6 +2993,15 @@ export async function hasPrReviewForHead(
   return rows.length > 0;
 }
 
+export async function latestPostedPrReviewHeadSha(
+  _owner: string,
+  _repo: string,
+  _prNumber: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<string | null> {
+  return "";
+}
+
 // ---------------------------------------------------------------------------
 // fix_rounds
 // ---------------------------------------------------------------------------

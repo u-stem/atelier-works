@@ -233,6 +233,7 @@ describe("reviewPrompt requirements wiring", () => {
       requirements: FAKE_REQUIREMENTS,
       threads: [],
       omittedThreadCount: 0,
+      scope: { kind: "first" },
       fixRound: null,
       binaryFiles: [],
     });
@@ -247,6 +248,7 @@ describe("reviewPrompt requirements wiring", () => {
       requirements: null,
       threads: [],
       omittedThreadCount: 0,
+      scope: { kind: "first" },
       fixRound: null,
       binaryFiles: [],
     });
@@ -404,5 +406,25 @@ describe("claude failure wiring in the generate step", () => {
 
   test("does not settle the failure in the step", async () => {
     expect(await flatSource()).not.toContain("settleClaudeFailure");
+  });
+});
+
+describe("review scope wiring in the generate step", () => {
+  const SOURCE = Bun.file(
+    new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),
+  ).text();
+
+  test("passes the decided scope to the prompt", async () => {
+    expect(await SOURCE).toContain("    scope,\n");
+  });
+
+  test("sets the turn limit from the scope", async () => {
+    expect(await SOURCE).toContain(
+      "maxTurns: reviewMaxTurns(scope, config.max_turns)",
+    );
+  });
+
+  test("keeps at most 50 findings", async () => {
+    expect(await SOURCE).toContain("const MAX_FINDINGS = 50;");
   });
 });

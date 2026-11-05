@@ -88,6 +88,7 @@ import {
   latestDraft,
   latestFixRound,
   latestMainCiRunCreatedAt,
+  latestPostedPrReviewHeadSha,
   latestPrWorkItem,
   latestRequirementsApproval,
   latestStatusEvent,
@@ -10783,5 +10784,31 @@ describe("restartTransientPrReview against the active pr_review index", () => {
     await expect(
       restartTransientPrReview(params, sql, NO_JOBS),
     ).rejects.toThrow("db down");
+  });
+});
+
+describe("latestPostedPrReviewHeadSha", () => {
+  test("returns the head of the newest posted review", async () => {
+    const { sql } = createFakeSqlClient([[{ head_sha: "a".repeat(40) }]]);
+    const sha = await latestPostedPrReviewHeadSha("octo-owner", "app", 7, sql);
+    expect(sha).toBe("a".repeat(40));
+  });
+
+  test("returns null without a posted review", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const sha = await latestPostedPrReviewHeadSha("octo-owner", "app", 7, sql);
+    expect(sha).toBeNull();
+  });
+
+  test("reads only posted reviews", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPostedPrReviewHeadSha("octo-owner", "app", 7, sql);
+    expect(calls[0]?.text).toContain("posted_review_id IS NOT NULL");
+  });
+
+  test("reads only pr_review work items", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPostedPrReviewHeadSha("octo-owner", "app", 7, sql);
+    expect(calls[0]?.text).toContain("w.kind = 'pr_review'");
   });
 });

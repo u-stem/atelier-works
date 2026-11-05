@@ -3,6 +3,9 @@
 import { describe, expect, test } from "bun:test";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
 import {
+  decideReviewScope,
+  needsReviewDelta,
+  reviewMaxTurns,
   reviewThreadsForPrompt,
   threadResponseKind,
 } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -248,5 +251,127 @@ describe("reviewThreadsForPrompt", () => {
     );
     const result = reviewThreadsForPrompt(resolved, VIEWER, isAllowed);
     expect(result.omitted).toBe(60 - result.threads.length);
+  });
+});
+
+const HEAD = "b".repeat(40);
+const PRIOR = "a".repeat(40);
+
+function scopeOf(
+  overrides: Partial<Parameters<typeof decideReviewScope>[0]> = {},
+) {
+  return decideReviewScope({
+    prior: { kind: "found", sha: PRIOR },
+    headSha: HEAD,
+    fixRound: null,
+    pendingSkipCount: 0,
+    delta: { hasMerge: false },
+    ...overrides,
+  });
+}
+
+describe("decideReviewScope", () => {
+  test("reviews the whole PR when no review was posted", () => {
+    expect(scopeOf({ prior: { kind: "none" } })).toEqual({ kind: "first" });
+  });
+
+  test("reads the whole PR when the lookup failed", () => {
+    expect(scopeOf({ prior: { kind: "unreadable" } })).toEqual({
+      kind: "full",
+      reason: "prior_unreadable",
+    });
+  });
+
+  test("reads the whole PR when the prior commit is not readable", () => {
+    expect(scopeOf({ delta: null })).toEqual({
+      kind: "full",
+      reason: "prior_unreadable",
+    });
+  });
+
+  test("reads the whole PR for a conflict round", () => {
+    expect(scopeOf({ fixRound: "conflict" })).toEqual({
+      kind: "full",
+      reason: "conflict_round",
+    });
+  });
+
+  test("reads the whole PR when a person asked again on the same head", () => {
+    expect(scopeOf({ prior: { kind: "found", sha: HEAD } })).toEqual({
+      kind: "full",
+      reason: "requested_again",
+    });
+  });
+
+  test("only answers threads when a skip waits on the same head", () => {
+    expect(
+      scopeOf({ prior: { kind: "found", sha: HEAD }, pendingSkipCount: 1 }),
+    ).toEqual({ kind: "threads_only", fromSha: HEAD });
+  });
+
+  test("reads the changes since the prior review", () => {
+    expect(scopeOf()).toEqual({
+      kind: "delta",
+      fromSha: PRIOR,
+      hasMerge: false,
+    });
+  });
+
+  test("keeps the merge flag of the range", () => {
+    expect(scopeOf({ delta: { hasMerge: true } })).toEqual({
+      kind: "delta",
+      fromSha: PRIOR,
+      hasMerge: true,
+    });
+  });
+
+  test("reads the changes for a CI round", () => {
+    expect(scopeOf({ fixRound: "ci" }).kind).toBe("delta");
+  });
+});
+
+describe("needsReviewDelta", () => {
+  test("reads the delta when a different commit was reviewed", () => {
+    expect(needsReviewDelta({ kind: "found", sha: PRIOR }, HEAD, null)).toBe(
+      true,
+    );
+  });
+
+  test("does not read it for the same head", () => {
+    expect(needsReviewDelta({ kind: "found", sha: HEAD }, HEAD, null)).toBe(
+      false,
+    );
+  });
+
+  test("does not read it for a conflict round", () => {
+    expect(
+      needsReviewDelta({ kind: "found", sha: PRIOR }, HEAD, "conflict"),
+    ).toBe(false);
+  });
+
+  test("does not read it without a prior review", () => {
+    expect(needsReviewDelta({ kind: "none" }, HEAD, null)).toBe(false);
+  });
+});
+
+describe("reviewMaxTurns", () => {
+  test("raises the limit for the first review", () => {
+    expect(reviewMaxTurns({ kind: "first" }, 40)).toBe(80);
+  });
+
+  test("raises the limit for a full re-review", () => {
+    expect(
+      reviewMaxTurns({ kind: "full", reason: "requested_again" }, 40),
+    ).toBe(80);
+  });
+
+  test("keeps a larger configured limit", () => {
+    expect(reviewMaxTurns({ kind: "first" }, 120)).toBe(120);
+  });
+
+  test("keeps the configured limit for a delta review", () => {
+    expect(
+      reviewMaxTurns({ kind: "delta", fromSha: PRIOR, hasMerge: false }, 40),
+    ).toBe(40);
   });
 });

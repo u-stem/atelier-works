@@ -51,6 +51,7 @@ import {
   isOwnPost,
   LABELED_ISSUES_MAX_PAGES,
   LabelerCheckLimitError,
+  limitReviewDiff,
   listBranchRules,
   listIssueComments,
   listLabeledOpenIssues,
@@ -97,6 +98,20 @@ import {
   ok,
   timeout,
 } from "./testSupport.ts";
+
+describe("limitReviewDiff", () => {
+  test("cuts the text to the line limit", () => {
+    expect(limitReviewDiff("a\nb\nc", 2).diff).toBe("a\nb");
+  });
+
+  test("reports the cut", () => {
+    expect(limitReviewDiff("a\nb\nc", 2).truncated).toBe(true);
+  });
+
+  test("reveals a control character", () => {
+    expect(limitReviewDiff("a\u001bb", 10).diff).toContain("<U+001B>");
+  });
+});
 
 describe("withMarker / hasMarker", () => {
   test("withMarker appends a factory marker with kind and work item id", () => {

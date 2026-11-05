@@ -226,6 +226,7 @@ export async function main(
     requirements,
     threads: promptThreads.threads,
     omittedThreadCount: promptThreads.omitted,
+    scope: { kind: "first" },
     fixRound,
     binaryFiles,
   });

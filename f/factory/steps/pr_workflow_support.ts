@@ -94,6 +94,7 @@ import {
   type ReviewFindingKind,
   type ReviewOutcome,
   type ReviewRecord,
+  type ReviewScope,
   type ReviewSeverity,
   type ReviewVerdict,
   type WorkItem,
@@ -5871,4 +5872,36 @@ export function selectListedBinaryFiles(
   const changed = new Set(changedFiles);
   const listed = binaryFiles.filter((path) => changed.has(path));
   return { listed, unlistedCount: binaryFiles.length - listed.length };
+}
+
+export type PriorReviewSha =
+  | { readonly kind: "none" }
+  | { readonly kind: "unreadable" }
+  | { readonly kind: "found"; readonly sha: string };
+
+export const PR_REVIEW_FULL_MAX_TURNS = 80;
+
+export function needsReviewDelta(
+  _prior: PriorReviewSha,
+  _headSha: string,
+  _fixRound: "ci" | "conflict" | null,
+): boolean {
+  return false;
+}
+
+export function decideReviewScope(_input: {
+  readonly prior: PriorReviewSha;
+  readonly headSha: string;
+  readonly fixRound: "ci" | "conflict" | null;
+  readonly pendingSkipCount: number;
+  readonly delta: { readonly hasMerge: boolean } | null;
+}): ReviewScope {
+  return { kind: "first" };
+}
+
+export function reviewMaxTurns(
+  _scope: ReviewScope,
+  _configured: number,
+): number {
+  return 0;
 }

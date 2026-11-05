@@ -8,6 +8,7 @@ import {
   isString,
   isStringArray,
   type RequirementDraft,
+  type ReviewScope,
 } from "./types.ts";
 
 export type UuidGenerator = () => string;
@@ -439,6 +440,8 @@ export type ReviewPromptInput = {
    * 指示は囲みの外の固定の文で、パスの一覧だけを囲みに入れる。
    */
   binaryFiles: readonly string[];
+  /** 渡した差分の範囲。範囲ごとに、報告の仕方を固定の文で頼む。 */
+  scope: ReviewScope;
 };
 
 /**

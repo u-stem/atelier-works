@@ -2816,6 +2816,14 @@ export async function getPrDiff(
   };
 }
 
+export function limitReviewDiff(
+  _rawBody: string,
+  _maxLines: number,
+  _maxChars: number = PR_DIFF_MAX_CHARS,
+): PrDiff {
+  return { diff: "", truncated: false, totalLines: 0, binaryFiles: [] };
+}
+
 export type PrFile = {
   readonly filename: string;
   readonly status: string;
