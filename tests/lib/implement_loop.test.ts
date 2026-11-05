@@ -1370,6 +1370,13 @@ const FAILED: ImplementClaudeRound = {
   agent_run_id: 9,
   cost_usd: 0,
 };
+const NOT_STARTED: ImplementClaudeRound = {
+  kind: "claude_failed",
+  reason: "not_started",
+  detail: "not started",
+  agent_run_id: 9,
+  cost_usd: 0,
+};
 const FAILED_EXIT: ImplementClaudeRound = {
   kind: "claude_failed",
   reason: "non_zero_exit",
@@ -2555,6 +2562,14 @@ describe("runImplementVerifyLoop", () => {
       (await run(harness(), loopInput(FAILED, { deadlineAt: 0 }))).reason,
     ).toBe(
       `claude run failed (timeout): timed out; ${deadlinePassedReason(1)}`,
+    );
+  });
+
+  test("notes the deadline on a Claude run that the deadline kept from starting", async () => {
+    expect(
+      (await run(harness(), loopInput(NOT_STARTED, { deadlineAt: 0 }))).reason,
+    ).toBe(
+      `claude run failed (not_started): not started; ${deadlinePassedReason(1)}`,
     );
   });
 

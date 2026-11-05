@@ -1355,14 +1355,37 @@ describe("runClaude", () => {
     expect(fake.calls).toHaveLength(0);
   });
 
-  test("reports a timeout when Claude was not started", async () => {
+  test("reports not_started when the deadline left no time to start Claude", async () => {
     const fake = createFakeCommandRunner([]);
     const result = await runClaude({
       ...baseOptions(fake.run),
       deadlineAt: 1_000,
       now: () => 2_000,
     });
-    expect(result.outcome === "failure" ? result.reason : null).toBe("timeout");
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "not_started",
+    );
+  });
+
+  test("records not_started as the failure reason of the run", async () => {
+    const fake = createFakeCommandRunner([]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      deadlineAt: 1_000,
+      now: () => 2_000,
+    });
+    expect(result.agentRun.failure_reason).toBe("not_started");
+  });
+
+  test("records no cost for a run that was not started", async () => {
+    const fake = createFakeCommandRunner([]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      deadlineAt: 1_000,
+      now: () => 2_000,
+      maxBudgetUsd: 3,
+    });
+    expect(result.agentRun.cost_usd).toBeNull();
   });
 
   test("records why Claude was not started", async () => {
@@ -2084,6 +2107,63 @@ describe("runClaude failure kinds and costs", () => {
     });
 
     expect(result.agentRun.cost_usd).toBe(0.42);
+  });
+
+  test("keeps the tokens of a timed-out run that wrote a readable result", async () => {
+    const fake = createFakeCommandRunner([
+      { ...timeout(), stdout: claudeJsonStdout() },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 20,
+      cache_read_tokens: 5,
+      num_turns: 2,
+      session_id: "sess-1",
+    });
+  });
+
+  test("keeps the model usage of a timed-out run that wrote a readable result", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        ...timeout(),
+        stdout: claudeJsonStdout({
+          modelUsage: {
+            "claude-haiku-5": {
+              inputTokens: 1,
+              outputTokens: 2,
+              cacheReadInputTokens: 3,
+              cacheCreationInputTokens: 4,
+              costUSD: 0.01,
+            },
+          },
+        }),
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.model_usage.map((entry) => entry.model)).toEqual([
+      "claude-haiku-5",
+    ]);
+  });
+
+  test("keeps the tokens of a stopped run that wrote a readable result", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout(),
+        stderr: "",
+        exitCode: 143,
+        timedOut: false,
+        stopped: true,
+      },
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.input_tokens).toBe(10);
   });
 
   test("does not say the cost is the cap when a timed-out run wrote its cost", async () => {

@@ -617,7 +617,8 @@ export type RunClaudeFailureReason =
   | "claude_error"
   | "run_budget_exceeded"
   | "usage_limit"
-  | "stopped";
+  | "stopped"
+  | "not_started";
 
 /**
  * Claudeの実行ではなく環境の事情で止まった失敗の種類。

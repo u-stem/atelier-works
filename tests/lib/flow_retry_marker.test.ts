@@ -17,6 +17,7 @@ describe("isFlowRetryable", () => {
     ["run_budget_exceeded", false],
     ["usage_limit", false],
     ["stopped", false],
+    ["not_started", true],
     ["claude_error", true],
     ["non_zero_exit", true],
     ["invalid_json", true],

@@ -67,7 +67,12 @@ describe("the CI round whose Claude run failed in a way that repeats", () => {
     },
   );
 
-  test.each(["claude_error", "non_zero_exit", "invalid_json"] as const)(
+  test.each([
+    "not_started",
+    "claude_error",
+    "non_zero_exit",
+    "invalid_json",
+  ] as const)(
     "releases a failed work item without a hold when the failure is %s",
     (reason) => {
       expect(
