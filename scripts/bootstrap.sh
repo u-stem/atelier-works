@@ -794,7 +794,12 @@ credential_status="$(api_get "/w/${WORKSPACE}/variables/get/f/factory/credential
 if [ "${credential_status}" = "200" ]; then
   credential_expiry_previous="$(jq -r '.value // ""' "${RESP_FILE}" || true)"
 fi
-if credential_expiry_json="$(credential_expiry_run "${credential_expiry_previous}" "${github_read_tokens_json}")" &&
+# 前回の記録は200(あり)か404(まだ無い)のときだけ集める。それ以外(401、5xx、接続の失敗)は、
+# 前回を空として作り直すと、OAuthトークンの発行日が今日に戻って期限が延び、読めなかった読み取り専用PATの項目も消えるため、
+# 前回の記録を残す。
+if [ "${credential_status}" != "200" ] && [ "${credential_status}" != "404" ]; then
+  log "warning: could not read the previous credential expiry (status ${credential_status}); keeping the previous record"
+elif credential_expiry_json="$(credential_expiry_run "${credential_expiry_previous}" "${github_read_tokens_json}")" &&
   printf '%s' "${credential_expiry_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
   upsert_variable "f/factory/credential_expiry" "${credential_expiry_json}" \
     "Credential expiry record written by mise run bootstrap; notify_daily_summary warns credential_warn_days before each expiry." "false"
