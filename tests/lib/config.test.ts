@@ -1909,3 +1909,64 @@ describe("implementCheckCommandsFor", () => {
     );
   });
 });
+
+describe("backup_keep_generations", () => {
+  test("defaults to seven for a resource without it", () => {
+    expect(parseFactoryConfig(LEGACY_RAW_CONFIG).backup_keep_generations).toBe(
+      7,
+    );
+  });
+
+  test("passes through an explicit value", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      backup_keep_generations: 3,
+    });
+    expect(config.backup_keep_generations).toBe(3);
+  });
+
+  test("throws when it is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, backup_keep_generations: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when it is not an integer", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, backup_keep_generations: 1.5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when it is a string", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, backup_keep_generations: "7" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("backup_keep_generations in the resource type", () => {
+  const yaml = readFileSync(
+    join(import.meta.dir, "../../c_factory_config.resource-type.yaml"),
+    "utf8",
+  );
+  const types = readFileSync(join(import.meta.dir, "../../rt.d.ts"), "utf8");
+  const template = readFileSync(
+    join(import.meta.dir, "../../templates/factory_config.resource.yaml"),
+    "utf8",
+  );
+
+  test("orders backup_keep_generations", () => {
+    expect(yaml).toMatch(/^ {4}- backup_keep_generations$/m);
+  });
+
+  test("declares an integer of at least 1 with the default 7", () => {
+    expect(yaml).toMatch(
+      /^ {4}backup_keep_generations:\n {6}type: integer\n {6}minimum: 1\n {6}description: >-\n.*\n {6}default: 7$/m,
+    );
+  });
+
+  test("declares it in the generated resource types", () => {
+    expect(types).toContain("backup_keep_generations: number,");
+  });
+
+  test("sets the default in the template", () => {
+    expect(template).toMatch(/^ {2}backup_keep_generations: 7$/m);
+  });
+});

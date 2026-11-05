@@ -144,6 +144,8 @@ services:
       - worker_logs:/tmp/windmill/logs
       - factory_workspaces:/workspaces
       - factory_state:/var/lib/factory
+      # 夜間のバックアップ(`f/factory/backup`)の置き場。控えはDBの全体を含むので、defaultのworkerだけに付ける。
+      - factory_backups:/var/lib/factory-backups
     logging: *default-logging
 
   ## "native"のジョブ専用のworker。nativeのジョブはプロセス内で動き、
@@ -408,6 +410,7 @@ volumes:
   factory_workspaces: null
   factory_state: null
   factory_console: null
+  factory_backups: null
 
 networks:
   # console_fetcherだけの外向きのnetwork。他のサービスは既定のnetwork(default)にいるので、

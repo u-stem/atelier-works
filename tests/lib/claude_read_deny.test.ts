@@ -39,6 +39,7 @@ describe("READ_DENY_BASE_PATHS", () => {
       "/var/run",
       "/var/lock",
       "/var/lib/factory",
+      "/var/lib/factory-backups",
       "/root",
       "/tmp",
       "/var/tmp",
@@ -88,7 +89,7 @@ describe("readDenyRules", () => {
   });
 
   test("gives two rules for every path of the full list", () => {
-    expect(readDenyRules(buildReadDenyPaths("/home/worker"))).toHaveLength(30);
+    expect(readDenyRules(buildReadDenyPaths("/home/worker"))).toHaveLength(32);
   });
 
   test.each([

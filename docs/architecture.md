@@ -427,6 +427,7 @@ Consoleの一覧と集計は次のviewを読む。
 | --- | --- | --- | --- |
 | audit_kickoff | `0 30 9 * * 1` | `f/factory/audit_kickoff` | 毎週月曜09:30(Asia/Tokyo)に実行します。前回の監査レポート以降の運用記録(失敗・却下・要人手・コスト・通知・デプロイ)に行動につながる記録があれば、監査の作業項目を作成して監査フローを起動します。記録が無い場合、別の監査が実行中の場合、日次予算を超過している場合は何もしません。 |
 | auto_retry_pr_review | `30 2-59/5 * * * *` | `f/factory/auto_retry_pr_review` | 5分ごとに実行します。GitHubの5xxや通信断で失敗したPRレビューを、失敗から再開の回数に応じた待ち(5分、15分、45分)が過ぎていれば同じ作業項目のまま再開します。ラベルは付け直さず、再開は同じ作業項目につき3回までです。 |
+| backup | `0 30 2 * * *` | `f/factory/backup` | 毎日2:30(Asia/Tokyo)に実行します。Postgresのクラスタ全体、factory_stateのvolume、参照を伏せたfactory_configを、/var/lib/factory-backupsの新しい世代に控えます。作業領域の掃除(3:00)とDBの掃除(3:30)の前に動き、掃除の前の状態を残します。新しい方からbackup_keep_generations(既定7)の世代を残し、古い世代を消します。失敗すると要対応の通知(backup_failed)を残し、ジョブを失敗にします。成功したときは通知しません。 |
 | cleanup_db | `0 30 3 * * *` | `f/factory/cleanup_db` | 毎日3:30に実行します。終端状態(承認済み・却下・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル・PR作成済み・監査完了)になった作業項目を既定90日(`factory_config`の`retention_work_items_days`で変更可)で削除し、あわせて要件定義ドラフトや承認依頼などの関連データも削除します。失敗記録・デプロイ記録・解決済みのお知らせは既定30日(`retention_logs_days`)で個別に削除します。古い「情報」の未解決のお知らせは、削除せず同じ期間で解決済みにします。判定済みのmainのCIの記録も同じ期間(`retention_logs_days`)で削除し、判定を待つ記録と、各リポジトリの最新の記録は削除しません。PRのCIの記録も同じ期間で削除します。判定を待つ記録と失敗を直している記録は削除せず、各PRの最新の記録は保持期間の4倍まで残します。workerの負荷の記録も同じ期間で削除します。 |
 | cleanup_workspaces | `0 0 3 * * *` | `f/factory/cleanup_workspaces` | 毎日3:00に実行します。処理が終わった作業用ディレクトリや、動かなくなった処理の後始末を行い、保存領域の使用量を記録します。 |
 | collect_github | `0 1-59/5 * * * *` | `f/factory/collect_github` | 5分ごとに実行します。設定のownersの所有者ごとに、読み取り専用のトークンでリポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数を集めて、DBに書きます。設定のgh_collect_detail_enabledがtrueのときは、続けてPRとIssueの詳細も集めて書きます。設定のgh_collect_enabledがfalseの間は、トークンを読まず、何も書きません。毎日9時0分の日次サマリ通知と重ならないよう、毎時1分から5分おきに実行します。 |
@@ -571,6 +572,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/console_redact` | script | [LIB] ジョブのログと結果の伏せ字 |
 | `f/factory/lib/freezes` | script | [LIB] スケジュールの凍結の純粋ロジック |
 | `f/factory/lib/freeze_apply` | script | [LIB] スケジュールの凍結の読み込みと追従 |
+| `f/factory/lib/backup_support` | script | [LIB] バックアップの純粋ロジック |
 | `f/factory/lib/branch_hold` | script | [LIB] ブランチを引き継ぐ状態の判定 |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
@@ -731,6 +733,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/auto_retry_pr_review` | script | [SYS-10] GitHubの一時的な失敗で止まったPRレビューを再開 |
 | `f/factory/sample_worker_load` | script | [SYS-10] workerの負荷を記録 |
 | `f/factory/collect_github` | script | [SYS-11] GitHubのリポジトリの状態を集める |
+| `f/factory/backup` | script | [SYS-12] バックアップを取る |
 | `f/factory/cleanup_workspaces` | script | [SYS-2] 作業領域を掃除 |
 | `f/factory/notify_daily_summary` | script | [SYS-3] 日次サマリ通知 |
 | `f/factory/on_error_flow` | script | [SYS-4] フロー失敗ハンドラ |

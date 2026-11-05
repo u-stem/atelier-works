@@ -1,0 +1,4 @@
+value: ""
+is_secret: true
+description: >-
+  夜間のバックアップがpg_dumpallで接続する、composeのPostgresのsuperuserの接続URLです。mise run bootstrapがDB_PASSWORDから組み立てて入れます。

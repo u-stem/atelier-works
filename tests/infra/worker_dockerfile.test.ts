@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  BACKUP_ROOT,
+  PG_DUMPALL_BIN,
+} from "../../f/factory/lib/backup_support.ts";
+import {
   BASE_IMAGE_OPEN_PATHS,
   SHARED_TMP_DIRS,
 } from "../../f/factory/lib/check_sandbox.ts";
@@ -228,5 +232,43 @@ describe("infra/worker/Dockerfile check user", () => {
 
   test("does not switch the image to a non-root USER", () => {
     expect(startingWith("USER")).toEqual([]);
+  });
+});
+
+describe("infra/worker/Dockerfile backup client", () => {
+  const pgdg = (): string =>
+    startingWith("RUN").find((line) => line.includes("apt.postgresql.org")) ??
+    "";
+
+  test("adds the PGDG repository for Debian trixie", () => {
+    expect(pgdg()).toContain(
+      "https://apt.postgresql.org/pub/repos/apt trixie-pgdg main",
+    );
+  });
+
+  test("installs postgresql-client-18 to match the postgres:18 server", () => {
+    expect(pgdg()).toMatch(/\spostgresql-client-18\b/);
+  });
+
+  test("pins the sha256 of the PGDG signing key", () => {
+    expect(startingWith("ARG")).toContain(
+      "ARG PGDG_KEY_SHA256=0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76",
+    );
+  });
+
+  test("checks the downloaded signing key against the pinned sha256", () => {
+    expect(pgdg()).toContain("| sha256sum -c -");
+  });
+
+  test("checks at build time that pg_dumpall runs from the path the backup uses", () => {
+    expect(pgdg()).toContain(`${PG_DUMPALL_BIN} --version`);
+  });
+});
+
+describe("infra/worker/Dockerfile backup root", () => {
+  test("creates the backup root as 0700 at the path the code expects", () => {
+    expect(startingWith("RUN")).toContain(
+      `RUN mkdir -p -m 0700 ${BACKUP_ROOT}`,
+    );
   });
 });
