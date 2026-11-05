@@ -211,7 +211,9 @@ type RawClaudeJson = {
   readonly type: string;
   readonly subtype: string;
   readonly is_error: boolean;
-  readonly result: string;
+  /** 本文。`--max-budget-usd`の超過の結果には無く、`errors`に文が入る。 */
+  readonly result?: string;
+  readonly errors?: readonly string[];
   readonly session_id: string;
   readonly total_cost_usd: number;
   readonly num_turns: number;
@@ -220,6 +222,12 @@ type RawClaudeJson = {
   readonly structured_output: unknown;
 };
 
+function isStringArray(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
 function isRawClaudeJson(value: unknown): value is RawClaudeJson {
   if (typeof value !== "object" || value === null) return false;
   const record = value as {
@@ -227,6 +235,7 @@ function isRawClaudeJson(value: unknown): value is RawClaudeJson {
     subtype: unknown;
     is_error: unknown;
     result: unknown;
+    errors: unknown;
     session_id: unknown;
     total_cost_usd: unknown;
     num_turns: unknown;
@@ -236,7 +245,13 @@ function isRawClaudeJson(value: unknown): value is RawClaudeJson {
   if (typeof record.type !== "string") return false;
   if (typeof record.subtype !== "string") return false;
   if (typeof record.is_error !== "boolean") return false;
-  if (typeof record.result !== "string") return false;
+  // `result`が無くてよいのは、`is_error`が真で`errors`があるときだけである。
+  if (
+    typeof record.result !== "string" &&
+    !(record.is_error && isStringArray(record.errors))
+  ) {
+    return false;
+  }
   if (typeof record.session_id !== "string") return false;
   if (typeof record.total_cost_usd !== "number") return false;
   if (typeof record.num_turns !== "number") return false;
@@ -268,7 +283,7 @@ export function parseClaudeJson(stdout: string): ClaudeRunResult {
     type: parsed.type,
     subtype: parsed.subtype,
     isError: parsed.is_error,
-    resultText: parsed.result,
+    resultText: parsed.result ?? (parsed.errors ?? []).join("\n"),
     sessionId: parsed.session_id,
     totalCostUsd: parsed.total_cost_usd,
     numTurns: parsed.num_turns,
@@ -400,6 +415,7 @@ export type RunClaudeOptions<T> = {
  * `runClaude`の失敗の種類。
  * `budget_exceeded`は`--max-budget-usd`の超過、`usage_limit`はサブスクリプションの使用上限で、
  * どちらも結果のJSONが`is_error: true`のときに分ける。それ以外の`is_error`は`claude_error`になる。
+ * 終了コードが0以外でも、標準出力が`is_error: true`の結果なら、この分け方にする。
  */
 export type RunClaudeFailureReason =
   | "non_zero_exit"
@@ -618,26 +634,67 @@ function failureDetail(text: string): string {
 
 /**
  * 使用上限(サブスクリプションの上限)に当たったときの、結果の本文の形。
- * 形はClaude Codeの文書に無く、実機で確かめていないので、判定の材料を失敗の詳細に残す。
+ * 文面はworkerのClaude Codeのバイナリの文字列から取った。Claude Codeの文書には無い。
+ * 実際の上限の応答は確かめていないので、判定の材料を失敗の詳細に残す。
  */
-const USAGE_LIMIT_PATTERN = /You've hit your .* limit/i;
-
-/** 使用上限で返るとみなす`api_error_status`。 */
-const USAGE_LIMIT_API_STATUS = 429;
+const USAGE_LIMIT_PATTERN =
+  /You've hit your|You've reached your|You're out of usage credits/i;
 
 /**
  * `is_error: true`の結果を、失敗の種類に分ける。
  * `--max-budget-usd`の超過は`budget_exceeded`、使用上限は`usage_limit`、それ以外は`claude_error`にする。
+ * `api_error_status`の429だけでは使用上限にしない。一時的なレート制限は、Windmillの再試行で回復するためである。
  */
 function errorReasonFor(parsed: ClaudeRunResult): RunClaudeFailureReason {
   if (parsed.subtype === "error_max_budget_usd") return "budget_exceeded";
-  if (
-    USAGE_LIMIT_PATTERN.test(parsed.resultText) ||
-    parsed.apiErrorStatus === USAGE_LIMIT_API_STATUS
-  ) {
-    return "usage_limit";
-  }
+  if (USAGE_LIMIT_PATTERN.test(parsed.resultText)) return "usage_limit";
   return "claude_error";
+}
+
+/** 結果のJSONを読めた試行の記録を返す。 */
+function agentRunFromResult(
+  base: AgentRunRecord,
+  parsed: ClaudeRunResult,
+): AgentRunRecord {
+  return {
+    ...base,
+    input_tokens: parsed.usage.inputTokens,
+    output_tokens: parsed.usage.outputTokens,
+    cache_read_tokens: parsed.usage.cacheReadInputTokens,
+    cost_usd: parsed.totalCostUsd,
+    num_turns: parsed.numTurns,
+    duration_ms: parsed.durationMs,
+    session_id: parsed.sessionId,
+    model_usage: parsed.modelUsage,
+  };
+}
+
+/** `is_error: true`の結果を、種類を分けた失敗にする。 */
+function errorResultFailure(
+  base: AgentRunRecord,
+  parsed: ClaudeRunResult,
+): Extract<ClaudeAttemptResult<never>, { outcome: "failure" }> {
+  const status = parsed.apiErrorStatus ?? null;
+  const statusPart =
+    status === null ? "" : `, api_error_status=${String(status)}`;
+  const detail = failureDetail(
+    `claude reported an error (subtype=${parsed.subtype}${statusPart}): ${parsed.resultText.slice(0, 500)}`,
+  );
+  return {
+    outcome: "failure",
+    reason: errorReasonFor(parsed),
+    agentRun: { ...agentRunFromResult(base, parsed), error: detail },
+    detail,
+  };
+}
+
+/** 標準出力を結果として読む。読めなければnullを返す。 */
+function parseClaudeJsonOrNull(stdout: string): ClaudeRunResult | null {
+  try {
+    return parseClaudeJson(stdout);
+  } catch {
+    return null;
+  }
 }
 
 async function attemptClaude<T>(
@@ -664,12 +721,21 @@ async function attemptClaude<T>(
       reason: "timeout",
       // 打ち切った実行の費用は結果のJSONに無い。費用は`--max-budget-usd`の上限までなので、
       // 上限の値を記録し、日次予算に少なく数えないようにする。
-      agentRun: { ...baseAgentRun, cost_usd: opts.maxBudgetUsd, error: detail },
+      agentRun: {
+        ...baseAgentRun,
+        cost_usd: opts.maxBudgetUsd,
+        error: `${detail} (cost_usd is the --max-budget-usd cap)`,
+      },
       detail,
     };
   }
 
   if (commandResult.exitCode !== 0) {
+    // `--max-budget-usd`の超過は終了コード1で、標準出力に結果のJSONを書く。種類と費用はそこから取る。
+    const errorResult = parseClaudeJsonOrNull(commandResult.stdout);
+    if (errorResult?.isError === true) {
+      return errorResultFailure(baseAgentRun, errorResult);
+    }
     const detail = failureDetail(commandResult.stderr.slice(-2000));
     return {
       outcome: "failure",
@@ -694,32 +760,9 @@ async function attemptClaude<T>(
     };
   }
 
-  const enrichedAgentRun: AgentRunRecord = {
-    ...baseAgentRun,
-    input_tokens: parsed.usage.inputTokens,
-    output_tokens: parsed.usage.outputTokens,
-    cache_read_tokens: parsed.usage.cacheReadInputTokens,
-    cost_usd: parsed.totalCostUsd,
-    num_turns: parsed.numTurns,
-    duration_ms: parsed.durationMs,
-    session_id: parsed.sessionId,
-    model_usage: parsed.modelUsage,
-  };
+  if (parsed.isError) return errorResultFailure(baseAgentRun, parsed);
 
-  if (parsed.isError) {
-    const status = parsed.apiErrorStatus ?? null;
-    const statusPart =
-      status === null ? "" : `, api_error_status=${String(status)}`;
-    const detail = failureDetail(
-      `claude reported an error (subtype=${parsed.subtype}${statusPart}): ${parsed.resultText.slice(0, 500)}`,
-    );
-    return {
-      outcome: "failure",
-      reason: errorReasonFor(parsed),
-      agentRun: { ...enrichedAgentRun, error: detail },
-      detail,
-    };
-  }
+  const enrichedAgentRun = agentRunFromResult(baseAgentRun, parsed);
 
   if (!opts.isStructuredOutput(parsed.structuredOutput)) {
     const detail = failureDetail(
