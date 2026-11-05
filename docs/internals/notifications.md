@@ -76,6 +76,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | 処理 | 送るとき |
 | --- | --- |
 | `on_error_flow` | フロー(pipeline、design、implement、pr_review、pr_fix、manual_intake、dependabotなど)が失敗した。設定を読めないときも、インスタンス名を`unknown`にして送る。GitHubの一時的な失敗で止まったPRレビューは、作業項目を`failed`にでき、再開の巡回の対象になるときだけ送らない。`failed`にできなかったときと、同じPRに置き換えた行か並走する行があるときは、巡回が拾わないので`job_failed`を送る |
+| `pipeline_generate`、`pr_review_generate`、`pr_fix_apply`、`audit_generate` | Claudeの実行がtimeout、`--max-budget-usd`の超過、使用上限で失敗した。flowの再試行では直らないので、ステップが例外を投げずに、`on_error_flow`と同じ処理(`handleFlowFailure`)で記録し、作業項目を失敗にして送る |
 | `detect_schedule_failures` | スケジュールのジョブが失敗した。検出器が失敗をジョブ履歴から拾い、記録した後に送る。失敗の発生から通知まで、最大5分遅れる。同じスケジュールの連続した失敗の初回と、前回の失敗からエラー文が変わったときだけ送る。1回の実行で拾った同じscriptの失敗が複数あっても、最新の失敗の内容で1回に収める。以降の同じ失敗は、下の`schedule_failing`に任せる。直前の実行(飛ばされた回と人が取り消した回を除く)が成功なら初回である。失敗なら、その実行のジョブIDを持つ`job_failures`の最新の行(`step`がNULL)のエラー文と比べる。ジョブ履歴、その記録、直前の実行のどれかを読めないときや、記録が別の実行のものなら、送る側に倒す。`schedule_failing`のnoticeを新しく残したときは、Discordにも`job_failed`を送り直す。初回の通知が届かなかった連続を、Discordで見落とさないためである。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗して、ここで拾われる。直近3回の実行(飛ばされた回と人が取り消した回を除き、ジョブの上限で打ち切られた回は、`canceled_by`が`timeout`の取り消しとみなして失敗に数える。この値は実機で未確認である)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
 | `poll_issues`の点検 | 閉じたIssue・PRや孤児のジョブを見つけ、作業項目を取り消しか失敗にした。dependabotの作業項目を、PRが閉じたことで終えたときは送らない。マージされていればマージ済みとして記録し、マージされずに閉じたのはdependabotが置き換えたPRを自分で閉じた場合で、どちらも人の行動が要らないためである |
 | `requirements_apply`、`design_apply` | 承認の反映の処理が例外で終わった。却下の後の作り直しを起動できなかったときも含む |

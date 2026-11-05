@@ -302,6 +302,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 `work_items`の列は種別によって使うものが違う。実装ブランチ(`branch`)と作成したPRのURL(`pr_url`)はIssueの作業項目だけが持ち、PR番号(`pr_number`)はPRの作業項目だけが持つ。PR番号をIssueの作業項目に入れないのは、PRの作業項目の束ね方がこの列で決まるためである。実装ブランチの名前は`factory/issue-<N>-wi-<id>`である。
 
 `agent_runs`には、Claudeの不正な出力を再試行したときに捨てた最初の試行も、同じattemptの別の行として記録する。費用が分かるときは、その費用も日次予算の集計とコストの分析に含める。出力がJSONとして読めないときは費用が分からない。
+アプリ側のtimeoutで打ち切った実行は、費用が結果に無いので、`--max-budget-usd`の値を費用として記録する。
 
 `implement_rounds`の主な列は次のとおり。行は作業項目の削除にあわせて消える。
 
