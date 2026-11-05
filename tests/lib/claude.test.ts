@@ -353,6 +353,40 @@ describe("parseClaudeJson", () => {
   });
 });
 
+describe("parseClaudeJson api_error_status", () => {
+  test("reads an integer api_error_status", () => {
+    const stdout = claudeJsonStdout({ api_error_status: 429 });
+
+    const result = parseClaudeJson(stdout);
+
+    expect(result.apiErrorStatus).toBe(429);
+  });
+
+  test("returns null when api_error_status is absent", () => {
+    const stdout = claudeJsonStdout();
+
+    const result = parseClaudeJson(stdout);
+
+    expect(result.apiErrorStatus).toBeNull();
+  });
+
+  test("returns null when api_error_status is null", () => {
+    const stdout = claudeJsonStdout({ api_error_status: null });
+
+    const result = parseClaudeJson(stdout);
+
+    expect(result.apiErrorStatus).toBeNull();
+  });
+
+  test("returns null when api_error_status is not an integer", () => {
+    const stdout = claudeJsonStdout({ api_error_status: "429" });
+
+    const result = parseClaudeJson(stdout);
+
+    expect(result.apiErrorStatus).toBeNull();
+  });
+});
+
 type OkPayload = { readonly ok: boolean };
 
 function isOkPayload(value: unknown): value is OkPayload {
@@ -1599,6 +1633,149 @@ describe("runClaude failure details", () => {
       detail:
         'structured_output does not match the expected schema: {"wrong":"x, implement time settings do not fit the flow step timeout: y"}',
     });
+  });
+});
+
+/** `is_error: true`で終わった`claude -p`の実行の結果。 */
+function isErrorResult(
+  overrides: Record<string, unknown>,
+): ReturnType<typeof timeout> {
+  return {
+    stdout: claudeJsonStdout({
+      is_error: true,
+      subtype: "error_during_execution",
+      ...overrides,
+    }),
+    stderr: "",
+    exitCode: 0,
+    timedOut: false,
+  };
+}
+
+describe("runClaude failure kinds and costs", () => {
+  test("records maxBudgetUsd as the cost of a timed-out run", async () => {
+    const fake = createFakeCommandRunner([timeout()]);
+
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      maxBudgetUsd: 5,
+    });
+
+    expect(result.agentRun.cost_usd).toBe(5);
+  });
+
+  test("records no cost when the deadline stops Claude before it starts", async () => {
+    const fake = createFakeCommandRunner([]);
+
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      deadlineAt: 1_000,
+      now: () => 2_000,
+    });
+
+    expect(result.agentRun.cost_usd).toBeNull();
+  });
+
+  test("classifies error_max_budget_usd as budget_exceeded", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ subtype: "error_max_budget_usd" }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "budget_exceeded",
+    );
+  });
+
+  test("records total_cost_usd for a budget_exceeded failure", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ subtype: "error_max_budget_usd", total_cost_usd: 1.02 }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.agentRun.cost_usd).toBe(1.02);
+  });
+
+  test("does not retry a budget_exceeded failure", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ subtype: "error_max_budget_usd" }),
+    ]);
+
+    await runClaude(baseOptions(fake.run));
+
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("classifies a usage limit message as usage_limit", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ result: "You've hit your usage limit · resets 3pm" }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "usage_limit",
+    );
+  });
+
+  test("classifies a usage limit message regardless of letter case", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ result: "you've hit your weekly limit" }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "usage_limit",
+    );
+  });
+
+  test("classifies api_error_status 429 as usage_limit", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ result: "rate limited", api_error_status: 429 }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "usage_limit",
+    );
+  });
+
+  test("does not retry a usage_limit failure", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ result: "You've hit your usage limit" }),
+    ]);
+
+    await runClaude(baseOptions(fake.run));
+
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("keeps another api_error_status as claude_error", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ result: "overloaded", api_error_status: 529 }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "claude_error",
+    );
+  });
+
+  test("adds api_error_status to the detail", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ result: "rate limited", api_error_status: 429 }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.detail : "").toBe(
+      "claude reported an error (subtype=error_during_execution, api_error_status=429): rate limited",
+    );
   });
 });
 
