@@ -59,6 +59,12 @@ describe("self_update timeout", () => {
     );
   });
 
+  test("the job timeout leaves a minute of margin over the worst case", async () => {
+    expect(await jobTimeoutMs()).toBeGreaterThanOrEqual(
+      SELF_UPDATE_WORST_CASE_MS + 60_000,
+    );
+  });
+
   test("every SDK, DB and notification call sits inside a bounded call", async () => {
     const source = await selfUpdateSource();
     const outside: string[] = [];
@@ -101,11 +107,14 @@ describe("self_update timeout", () => {
     const freezePhases = count(source, /withCallTimeout\(\s*"freeze /g);
     // 通知の処理は、全体を1つの上限で包み、区切った呼び出しの数に数えない(最悪の長さに上限を1回足す)。
     const designNotice = count(source, /withCallTimeout\(\s*"design notice /g);
+    // 全停止の確認は、自前の上限で包み、区切った呼び出しの数に数えない(最悪の長さに上限を1回足す)。
+    const stopCheck = count(source, /withCallTimeout\(\s*"stop check"/g);
     const sites =
       count(source, /withCallTimeout\(/g) -
       notify -
       freezePhases -
-      designNotice +
+      designNotice -
+      stopCheck +
       (HOST_ACTION_RECONCILE_LIMIT - 1) * resolveSites +
       2 * count(source, /readDeployedSha\(/g) +
       2 * count(source, /setDeployedSha\(/g) +
