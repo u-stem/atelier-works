@@ -4,7 +4,6 @@
 //
 // 使い方: COMPOSE_FILE=<compose> SCRATCH_DB=<db> bun run scripts/test-db-queries.ts
 
-import { NON_MODEL_FAILURE_ERROR_PREFIXES } from "../f/factory/lib/claude.ts";
 import {
   APPROVAL_REDISPATCH_NOTE_PREFIX,
   INFO_NOTICE_KINDS,
@@ -975,6 +974,67 @@ check(
   await countImplementFailedRounds(implementRecovered, 1, sql),
 );
 
+// 使用上限と全停止で止まったラウンドは数えず、連続も途切れさせない。
+// `implementLimitOnly`は止まったラウンドだけ、`implementLimitBetween`は失敗の間に使用上限のラウンドが入る。
+// `implementClaudeError`は、実行の記録がほかの種類の失敗なので数える。
+const implementLimitOnly = await issueWorkItem(
+  962,
+  1,
+  "implementing",
+  "qdb-implement-limit-only",
+);
+const implementLimitBetween = await issueWorkItem(
+  963,
+  1,
+  "implementing",
+  "qdb-implement-limit-between",
+);
+const implementClaudeError = await issueWorkItem(
+  964,
+  1,
+  "implementing",
+  "qdb-implement-claude-error",
+);
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, failure_reason) VALUES ${[
+    `(${String(implementLimitOnly)}, 'implement', 1, 'm', 'failed', 'usage_limit')`,
+    `(${String(implementLimitOnly)}, 'implement', 1, 'm', 'failed', 'stopped')`,
+    `(${String(implementLimitBetween)}, 'implement', 1, 'm', 'failed', 'usage_limit')`,
+    `(${String(implementClaudeError)}, 'implement', 1, 'm', 'failed', 'claude_error')`,
+  ].join(", ")}`,
+);
+/** 作業項目の、失敗の種類が`reason`の実行の行のIDを選ぶ副問い合わせを返す。 */
+function runIdOf(workItemId: number, reason: string): string {
+  return `(SELECT id FROM factory.agent_runs WHERE work_item_id = ${String(workItemId)} AND failure_reason = '${reason}')`;
+}
+execPsql(
+  target,
+  `INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome, agent_run_id) VALUES ${[
+    `(${String(implementLimitOnly)}, 1, 1, 'implement', 'error', ${runIdOf(implementLimitOnly, "usage_limit")})`,
+    `(${String(implementLimitOnly)}, 1, 2, 'fix', 'error', ${runIdOf(implementLimitOnly, "stopped")})`,
+    `(${String(implementLimitBetween)}, 1, 1, 'implement', 'check_failed', NULL)`,
+    `(${String(implementLimitBetween)}, 1, 2, 'fix', 'error', ${runIdOf(implementLimitBetween, "usage_limit")})`,
+    `(${String(implementLimitBetween)}, 1, 3, 'fix', 'stalled', NULL)`,
+    `(${String(implementClaudeError)}, 1, 1, 'implement', 'error', ${runIdOf(implementClaudeError, "claude_error")})`,
+  ].join(", ")}`,
+);
+check(
+  "countImplementFailedRounds: rounds on the usage limit or a stop are not counted",
+  (await countImplementFailedRounds(implementLimitOnly, 1, sql)) === 0,
+  await countImplementFailedRounds(implementLimitOnly, 1, sql),
+);
+check(
+  "countImplementFailedRounds: a round on the usage limit does not break the streak",
+  (await countImplementFailedRounds(implementLimitBetween, 1, sql)) === 2,
+  await countImplementFailedRounds(implementLimitBetween, 1, sql),
+);
+check(
+  "countImplementFailedRounds: a round on another failure of Claude is counted",
+  (await countImplementFailedRounds(implementClaudeError, 1, sql)) === 1,
+  await countImplementFailedRounds(implementClaudeError, 1, sql),
+);
+
 async function prFixItem(pr: number): Promise<number> {
   return insertWorkItem(
     {
@@ -1168,70 +1228,82 @@ for (const [workItemId, round] of [
   );
 }
 
-const NON_MODEL_PREFIXES = NON_MODEL_FAILURE_ERROR_PREFIXES;
+/** 失敗の種類を持つ`agent_runs`の1行のVALUESを返す。 */
+function reasonRunRow(
+  workItemId: number,
+  stage: "pr_fix" | "pr_fix_verify_retry",
+  ago: number,
+  reason: string,
+): string {
+  return `(${String(workItemId)}, '${stage}', 1, 'm', 'failed', '${reason}', ${secondsAgo(ago)})`;
+}
+
 // 使用上限と全停止で止まった実行は、モデルを強くしても防げないので、昇格の失敗に数えない。
 // 数える失敗(timeoutと、使用上限でない`is_error`)と混ぜて、除くのは前者だけであることも確かめる。
 const usageLimitOnly = await prFixItem(103);
 const stoppedMidRun = await prFixItem(104);
-const stoppedBeforeStart = await prFixItem(105);
 const claudeErrorCounted = await prFixItem(106);
 const reasonLookalike = await prFixItem(107);
 const environmentMixed = await prFixItem(108);
+// 検査の再実行(`pr_fix_verify_retry`)が使用上限か全停止で終わり、blockedのラウンドを残した。
+const verifyRetryUsageLimit = await prFixItem(131);
+const verifyRetryStopped = await prFixItem(132);
+// 検査の再実行が別の理由で失敗してblockedになり、やり直しの再実行が使用上限で終わった(前の2回だけを数える)。
+const verifyRetryMixed = await prFixItem(133);
+// 修正の実行が使用上限で終わり、`.git`の書き換えでblockedのラウンドを残した。
+const applyLimitBlocked = await prFixItem(134);
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, failure_reason, created_at) VALUES ${[
+    reasonRunRow(usageLimitOnly, "pr_fix", 900, "usage_limit"),
+    reasonRunRow(stoppedMidRun, "pr_fix", 900, "stopped"),
+    reasonRunRow(claudeErrorCounted, "pr_fix", 900, "claude_error"),
+    reasonRunRow(environmentMixed, "pr_fix", 900, "timeout"),
+    reasonRunRow(environmentMixed, "pr_fix", 700, "usage_limit"),
+    reasonRunRow(environmentMixed, "pr_fix", 500, "stopped"),
+    reasonRunRow(
+      verifyRetryUsageLimit,
+      "pr_fix_verify_retry",
+      800,
+      "usage_limit",
+    ),
+    reasonRunRow(verifyRetryStopped, "pr_fix_verify_retry", 800, "stopped"),
+    reasonRunRow(verifyRetryMixed, "pr_fix_verify_retry", 800, "claude_error"),
+    reasonRunRow(verifyRetryMixed, "pr_fix_verify_retry", 500, "usage_limit"),
+    reasonRunRow(applyLimitBlocked, "pr_fix", 900, "usage_limit"),
+  ].join(", ")}`,
+);
 execPsql(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
     runRow(
-      usageLimitOnly,
-      "pr_fix",
-      900,
-      `${NON_MODEL_PREFIXES[0] ?? ""} subtype=success): limit`,
-    ),
-    runRow(
-      stoppedMidRun,
-      "pr_fix",
-      900,
-      `${NON_MODEL_PREFIXES[2] ?? ""} (cost_usd is the --max-budget-usd cap)`,
-    ),
-    runRow(stoppedBeforeStart, "pr_fix", 900, NON_MODEL_PREFIXES[1] ?? ""),
-    runRow(
-      claudeErrorCounted,
-      "pr_fix",
-      900,
-      "claude reported an error (reason=claude_error, subtype=error_max_turns): turns",
-    ),
-    runRow(
       reasonLookalike,
       "pr_fix",
       900,
-      "claude reported an error (reason=usageXlimit, subtype=success): x",
+      "claude reported an error (reason=usage_limit, subtype=success): x",
     ),
-    runRow(environmentMixed, "pr_fix", 900, "timeout"),
-    runRow(
-      environmentMixed,
-      "pr_fix",
-      700,
-      `${NON_MODEL_PREFIXES[0] ?? ""} subtype=success): limit`,
-    ),
-    runRow(
-      environmentMixed,
-      "pr_fix",
-      500,
-      `${NON_MODEL_PREFIXES[2] ?? ""} (cost_usd is the --max-budget-usd cap)`,
-    ),
+    runRow(verifyRetryUsageLimit, "pr_fix", 900, null),
+    runRow(verifyRetryStopped, "pr_fix", 900, null),
+    runRow(verifyRetryMixed, "pr_fix", 900, null),
+  ].join(", ")}`,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, created_at) VALUES ${[
+    roundRow(verifyRetryUsageLimit, "blocked", 790),
+    roundRow(verifyRetryStopped, "blocked", 790),
+    roundRow(verifyRetryMixed, "blocked", 790),
+    roundRow(verifyRetryMixed, "blocked", 490),
+    roundRow(applyLimitBlocked, "blocked", 890),
   ].join(", ")}`,
 );
 
 const prFixExpectations: readonly (readonly [string, number, number])[] = [
   ["a usage limit run is not counted", usageLimitOnly, 0],
-  ["a run stopped in the middle is not counted", stoppedMidRun, 0],
-  [
-    "a run that the stop kept from starting is not counted",
-    stoppedBeforeStart,
-    0,
-  ],
+  ["a stopped run is not counted", stoppedMidRun, 0],
   ["an error of another reason is counted", claudeErrorCounted, 1],
   [
-    "an error that only looks like the usage limit is counted",
+    "an error whose text only looks like the usage limit is counted",
     reasonLookalike,
     1,
   ],
@@ -1239,6 +1311,22 @@ const prFixExpectations: readonly (readonly [string, number, number])[] = [
     "only the failures that are not environmental are counted",
     environmentMixed,
     1,
+  ],
+  [
+    "a verify retry that ended on the usage limit counts nothing",
+    verifyRetryUsageLimit,
+    0,
+  ],
+  ["a verify retry that was stopped counts nothing", verifyRetryStopped, 0],
+  [
+    "a verify retry on the usage limit does not count beside an earlier failed one",
+    verifyRetryMixed,
+    2,
+  ],
+  [
+    "a blocked round right after a run on the usage limit is not counted",
+    applyLimitBlocked,
+    0,
   ],
   ["blocked rounds and verify retries of the same PR are counted", fixB, 2],
   ["another PR is counted separately", fixOtherPr, 1],
@@ -1283,7 +1371,7 @@ const prFixExpectations: readonly (readonly [string, number, number])[] = [
   ],
 ];
 for (const [name, workItemId, expected] of prFixExpectations) {
-  const actual = await countPrFixFailures(workItemId, NON_MODEL_PREFIXES, sql);
+  const actual = await countPrFixFailures(workItemId, sql);
   check(`countPrFixFailures: ${name}`, actual === expected, actual);
 }
 
@@ -1326,11 +1414,11 @@ execPsql(
 );
 check(
   "countPrFixFailures: the failures of a round that fixes a CI failure are not counted",
-  (await countPrFixFailures(reviewRoundItem, NON_MODEL_PREFIXES, sql)) === 0,
+  (await countPrFixFailures(reviewRoundItem, sql)) === 0,
 );
 check(
   "countPrFixFailures: a round that fixes a CI failure counts nothing for itself either",
-  (await countPrFixFailures(ciRoundItem, NON_MODEL_PREFIXES, sql)) === 0,
+  (await countPrFixFailures(ciRoundItem, sql)) === 0,
 );
 
 // 競合を直すラウンド(conflict_check_id を持つ作業項目)の失敗も、同じPRの指摘の対応の失敗に数えない。
@@ -1373,11 +1461,11 @@ execPsql(
 );
 check(
   "countPrFixFailures: the failures of a round that fixes a merge conflict are not counted",
-  (await countPrFixFailures(reviewRoundItem111, NON_MODEL_PREFIXES, sql)) === 0,
+  (await countPrFixFailures(reviewRoundItem111, sql)) === 0,
 );
 check(
   "countPrFixFailures: a round that fixes a merge conflict counts nothing for itself either",
-  (await countPrFixFailures(conflictFailRound, NON_MODEL_PREFIXES, sql)) === 0,
+  (await countPrFixFailures(conflictFailRound, sql)) === 0,
 );
 
 // ---------------------------------------------------------------------------

@@ -162,6 +162,28 @@ describe("runClaude while the factory is stopped", () => {
     expect(recorder.seen[0]?.stopSignal instanceof AbortSignal).toBe(true);
   });
 
+  test("records stopped as the failure reason when the factory is already stopped", async () => {
+    const recorder = answering([]);
+    const result = await runClaude(options(recorder.run, sequence(true)));
+    expect(result.agentRun.failure_reason).toBe("stopped");
+  });
+
+  test("records stopped as the failure reason of a claude stopped while running", async () => {
+    const recorder = untilStopped();
+    const result = await runClaude(
+      options(recorder.run, sequence(false, true), 5),
+    );
+    expect(result.agentRun.failure_reason).toBe("stopped");
+  });
+
+  test("records stopped as the failure reason when the factory is stopped before the retry", async () => {
+    const recorder = answering([NOT_JSON, SUCCESS]);
+    const result = await runClaude(
+      options(recorder.run, sequence(false, true)),
+    );
+    expect(result.agentRun.failure_reason).toBe("stopped");
+  });
+
   test("stops a running claude when the check turns true", async () => {
     const recorder = untilStopped();
     const result = await runClaude(

@@ -102,7 +102,7 @@ describe("recordClaudeRuns", () => {
 
 describe("recordClaudeRuns usage limit notice", () => {
   const DETAIL =
-    "claude reported an error (reason=usage_limit, subtype=success): You've hit your limit · resets 3pm";
+    "claude reported an error (subtype=success): You've hit your limit · resets 3pm";
 
   function failureOf(
     reason: RunClaudeFailureReason,
