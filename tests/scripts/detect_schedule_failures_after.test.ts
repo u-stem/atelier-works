@@ -150,7 +150,7 @@ describe("the wiring of the detector", () => {
     );
   });
 
-  test("gives the notice sync ten seconds", () => {
+  test("gives the notice sync fifteen seconds", () => {
     expect(source).toContain("STOP_ALL_NOTICE_SYNC_TIMEOUT_MS = 15_000");
   });
 
