@@ -504,4 +504,14 @@ describe("deploy approval guides", () => {
       "却下すると通知は残り",
     );
   });
+
+  test("explains the Claude usage limit", () => {
+    expect(noticeGuide("claude_usage_limit")).not.toBe(GENERIC_NOTICE_GUIDE);
+  });
+
+  test("tells to rerun after the Claude usage limit resets", () => {
+    expect(noticeGuide("claude_usage_limit").action).toContain(
+      "上限が戻ってから",
+    );
+  });
 });

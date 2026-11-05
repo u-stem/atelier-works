@@ -59,6 +59,10 @@ describe("noticeSeverity", () => {
     expect(NOTICE_SEVERITY.github_collect_stale).toBe("action");
   });
 
+  test("lists a Claude usage limit as a known action kind", () => {
+    expect(NOTICE_SEVERITY.claude_usage_limit).toBe("action");
+  });
+
   test("lists a stale schedule detector as a known action kind", () => {
     expect(NOTICE_SEVERITY.schedule_detector_stale).toBe("action");
   });
@@ -258,6 +262,10 @@ describe("operations.md notice table", () => {
 
   test("documents design_enabled_ignored", async () => {
     expect(await documentedNoticeKinds()).toContain("design_enabled_ignored");
+  });
+
+  test("documents claude_usage_limit", async () => {
+    expect(await documentedNoticeKinds()).toContain("claude_usage_limit");
   });
 
   test("documents no kind that NOTICE_SEVERITY lacks", async () => {
