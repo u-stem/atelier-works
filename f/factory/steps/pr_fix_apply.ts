@@ -29,14 +29,10 @@ import {
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
-  type RunClaudeFailureReason,
   recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
-import {
-  type FlowFailedResult,
-  settleClaudeFailure,
-} from "../lib/claude_flow_failure.ts";
+import { flowFailureMessage } from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   CONFLICT_CLEAN_MERGE_RESULT,
@@ -52,13 +48,12 @@ import {
 import { CONFLICT_MERGE_NOT_RECORDED_REASON } from "../lib/conflict_fix_round.ts";
 import { countPrFixFailures, latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
-import { logger, maskSecrets } from "../lib/log.ts";
+import { logger } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
 import {
   fixDesignDepsFromDb,
   loadParentDesignForFix,
 } from "../lib/pr_fix_design.ts";
-import { PR_FIX_FLOW_PATH } from "../lib/pr_fix_launch.ts";
 import {
   lockJobIdFromEnv,
   withWorktreeProcessLock,
@@ -76,7 +71,6 @@ import {
   runCommand,
   worktreeGitPointerMatches,
 } from "../lib/workspace.ts";
-import { claudeFlowFailureDeps } from "../on_error_flow.ts";
 import {
   type CollectedComment,
   type CollectedReview,
@@ -111,8 +105,6 @@ export type PrFixApplyResult = {
  * 準備ステップの結果に`worktree_git_pointer`が無いときも、Claudeを起動せず"blocked"を返す。
  * 不正な出力への再試行の前にも`.git`を確かめ、一致しなければ再試行しない。
  * Claudeの実行が失敗したときは例外を投げる。
- * ただし、timeout、予算の超過、使用上限では例外を投げず、作業項目を失敗にして`outcome: "failed"`を返す。
- * flow.yamlの`stop_after_if`がflowを止める(`settleFixClaudeFailure`)。
  * CIの失敗を直す回(`ci_check_id`が非NULL)は、指摘ではなく失敗したジョブのログから直す(`applyCiRound`)。
  * マージの競合を直す回(`conflict_check_id`が非NULL)は、準備のステップがmergeした競合ファイルだけを直す(`applyConflictRound`)。
  * 競合ファイルが無い回(GitHubは競合と判定したが、ローカルではきれいにmergeできた)は、Claudeを起動せず、日次予算も見ずに"done"を返す。
@@ -135,7 +127,7 @@ export async function main(
   conflict_check_id: number | null = null,
   base_sha: string | null = null,
   conflicted_paths: string[] | null = null,
-): Promise<PrFixApplyResult | FlowFailedResult> {
+): Promise<PrFixApplyResult> {
   const log = logger("pr_fix_apply");
 
   // Claudeは起動時にcwdでgitを実行しうるので、起動の前に`.git`を準備ステップの記録と比べる。
@@ -351,11 +343,11 @@ export async function main(
           commit_body: null,
         };
       }
-      return await settleFixClaudeFailure(
-        work_item_id,
-        result.reason,
-        result.detail,
-        `pr_fix_apply: claude run failed (${result.reason}): ${result.detail}`,
+      throw new Error(
+        flowFailureMessage(
+          result.reason,
+          `pr_fix_apply: claude run failed (${result.reason}): ${result.detail}`,
+        ),
       );
     }
 
@@ -415,7 +407,7 @@ type ConflictRoundApplyInput = {
  */
 async function applyConflictRound(
   round: ConflictRoundApplyInput,
-): Promise<PrFixApplyResult | FlowFailedResult> {
+): Promise<PrFixApplyResult> {
   const { config } = round;
   const result = await runConflictFixApply(
     {
@@ -487,13 +479,12 @@ async function applyConflictRound(
     if (afterFailureReason !== null) {
       return blockedResult(afterFailureReason);
     }
-    // 実行の詳細は、秘密値の検査を通っていないので、例外の文と結果に入れない。
-    const message = conflictClaudeFailedMessage(result.reason);
-    return await settleFixClaudeFailure(
-      round.workItemId,
-      result.reason,
-      message,
-      message,
+    // 実行の詳細は、秘密値の検査を通っていないので、例外の文に入れない。
+    throw new Error(
+      flowFailureMessage(
+        result.reason,
+        conflictClaudeFailedMessage(result.reason),
+      ),
     );
   }
   return conflictApplyResult(result);
@@ -508,31 +499,6 @@ function blockedResult(reason: string): PrFixApplyResult {
     commit_subject: null,
     commit_body: null,
   };
-}
-
-/**
- * Claudeの実行の失敗を、flowの再試行で直りうるものは`message`の例外にし、
- * 直らないもの(timeout、予算の超過、使用上限)は作業項目を失敗にして`outcome: "failed"`を返す。
- * レビュー、競合、CIの3つの回が、同じmoduleの失敗として同じ扱いにする。
- */
-async function settleFixClaudeFailure(
-  workItemId: number,
-  reason: RunClaudeFailureReason,
-  detail: string,
-  message: string,
-): Promise<FlowFailedResult> {
-  return await settleClaudeFailure(
-    claudeFlowFailureDeps(logger("pr_fix_apply")),
-    {
-      reason,
-      detail,
-      message: maskSecrets(message),
-      stepId: "pr_fix_apply",
-      workItemId,
-      path: PR_FIX_FLOW_PATH,
-      env: process.env,
-    },
-  );
 }
 
 type MetadataRoundInput = {
@@ -605,7 +571,7 @@ type CiRoundApplyInput = {
  */
 async function applyCiRound(
   input: CiRoundApplyInput,
-): Promise<PrFixApplyResult | FlowFailedResult> {
+): Promise<PrFixApplyResult> {
   const { client, owner, repo, headSha, config } = input;
   const target = {
     owner,
@@ -712,13 +678,12 @@ async function applyCiRound(
     if (afterFailureReason !== null) {
       return blockedResult(afterFailureReason);
     }
-    // 実行の詳細は、秘密値の検査を通っていないので、例外の文と結果に入れない。
-    const message = `pr_fix_apply: ${ciClaudeFailureText(result.reason)}`;
-    return await settleFixClaudeFailure(
-      input.workItemId,
-      result.reason,
-      message,
-      message,
+    // 実行の詳細は、秘密値の検査を通っていないので、例外の文に入れない。
+    throw new Error(
+      flowFailureMessage(
+        result.reason,
+        `pr_fix_apply: ${ciClaudeFailureText(result.reason)}`,
+      ),
     );
   }
   return {

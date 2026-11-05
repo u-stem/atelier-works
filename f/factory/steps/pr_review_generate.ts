@@ -12,10 +12,7 @@ import {
   recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
-import {
-  type FlowFailedResult,
-  settleClaudeFailure,
-} from "../lib/claude_flow_failure.ts";
+import { flowFailureMessage } from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   findFixRoundKindToReview,
@@ -32,13 +29,11 @@ import {
   getViewer,
   listReviewThreads,
 } from "../lib/github.ts";
-import { logger, maskSecrets } from "../lib/log.ts";
+import { logger } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
-import { PR_REVIEW_FLOW_PATH } from "../lib/pr_review_retry.ts";
 import { REVIEW_SCHEMA, reviewPrompt } from "../lib/prompts.ts";
 import type { ReviewFinding, ReviewVerdict } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
-import { claudeFlowFailureDeps } from "../on_error_flow.ts";
 import {
   buildReviewDiffText,
   describeReason,
@@ -88,7 +83,7 @@ export async function main(
   factory_clone_dir: string,
   parent_work_item_id: number | null,
   attempt: number,
-): Promise<PrReviewGenerateResult | FlowFailedResult> {
+): Promise<PrReviewGenerateResult> {
   if (skip) {
     return SKIPPED_RESULT;
   }
@@ -255,18 +250,12 @@ export async function main(
     await recordClaudeRuns(result, recordAgentRun);
 
     if (result.outcome !== "success") {
-      // timeout、予算の超過、使用上限は、例外にせず終端にして返す。flowの再試行で直らないため。
-      return await settleClaudeFailure(claudeFlowFailureDeps(log), {
-        reason: result.reason,
-        detail: result.detail,
-        message: maskSecrets(
+      throw new Error(
+        flowFailureMessage(
+          result.reason,
           `pr_review_generate: claude run failed (${result.reason}): ${result.detail}`,
         ),
-        stepId: "pr_review_generate",
-        workItemId: work_item_id,
-        path: PR_REVIEW_FLOW_PATH,
-        env: process.env,
-      });
+      );
     }
 
     const output = result.structuredOutput;

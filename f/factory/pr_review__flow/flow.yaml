@@ -55,11 +55,10 @@ value:
         constant:
           attempts: 2
           seconds: 60
+        retry_if:
+          expr: '!String(error?.message ?? "").startsWith("[no-flow-retry]")'
       skip_if:
         expr: results.pr_review_prepare.skip === true
-      stop_after_if:
-        expr: result?.outcome === "failed"
-        skip_if_stopped: false
       timeout:
         type: static
         value: 7200

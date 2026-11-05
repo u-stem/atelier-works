@@ -37,11 +37,10 @@ value:
         constant:
           attempts: 2
           seconds: 60
+        retry_if:
+          expr: '!String(error?.message ?? "").startsWith("[no-flow-retry]")'
       skip_if:
         expr: results.prepare.skip === true
-      stop_after_if:
-        expr: result?.outcome === "failed"
-        skip_if_stopped: false
     - id: request_approval
       summary: '[SF-2-1/3] 承認依頼'
       value:

@@ -25,14 +25,10 @@
 // dependabotの作業項目は`retry_work_item`が再開しないためである。
 // GitHubの一時的な失敗で止まったpr_reviewは、`auto_retry_pr_review`が再開し、使い切った後の通知も送る。
 // 作業項目を`failed`にでき、巡回の対象になるときだけ、ここで`job_failed`を送らない。
-// Claudeの実行が再試行で直らない失敗(timeout、予算の超過、使用上限)で止まったstepは、
-// 例外を投げずに`claudeFlowFailureDeps`で同じ`handleFlowFailure`を呼び、自分で終端にする。
 
 import * as wmill from "windmill-client@1.817.0";
-import type { NonRetryableFailureDeps } from "./lib/claude_flow_failure.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
-  addNoticeUnlessUnresolved,
   getInvestigateWorkItemByFlowJobId,
   getWorkItem,
   hasSupersedingPrReview,
@@ -414,53 +410,37 @@ export async function handleFlowFailure(
   }
 }
 
-/** `failure_module`と、Claudeの再試行しない失敗を終端にするstepが使う、本物の外部の操作。 */
-export function defaultFlowFailureDeps(): FlowFailureDeps {
-  return {
-    getWorkItem: (id) => getWorkItem(id),
-    findInvestigationByFlowJobId: (flowJobId) =>
-      getInvestigateWorkItemByFlowJobId(flowJobId),
-    hasSupersedingPrReview: (id) => hasSupersedingPrReview(id),
-    recordFailure: (record) => recordFailure(record),
-    updateStatusIfLeaseHolder: (id, from, to, flowJobId, note) =>
-      updateStatusIfLeaseHolder(id, from, to, flowJobId, note),
-    readInstanceName: async () =>
-      (await loadConfig(() => wmill.getResource("f/factory/factory_config")))
-        .instance_name,
-    readWebhookUrl: () => wmill.getVariable("f/factory/discord_webhook_url"),
-    notify: async (webhookUrl, event) => {
-      await notify(webhookUrl, event);
-    },
-    log: logger("on_error_flow"),
-  };
-}
-
-/**
- * Claudeの再試行しない失敗を、stepが自分で終端にするときの外部の操作。
- * 終端の処理は、`failure_module`と同じく`handleFlowFailure`を本物の操作で呼ぶ。
- * 通知は、未解決の同じ本文があれば重ねない`addNoticeUnlessUnresolved`で残す。
- */
-export function claudeFlowFailureDeps(log: Logger): NonRetryableFailureDeps {
-  return {
-    handleFlowFailure: (input) =>
-      handleFlowFailure(defaultFlowFailureDeps(), input),
-    addNotice: (record) => addNoticeUnlessUnresolved(record),
-    log,
-  };
-}
-
 export async function main(
   error: unknown,
   work_item_id?: number,
   path?: string,
   job_id?: string,
 ): Promise<void> {
-  await handleFlowFailure(defaultFlowFailureDeps(), {
-    error,
-    workItemId: work_item_id,
-    path,
-    jobId: job_id,
-    rootJobId: process.env.WM_ROOT_FLOW_JOB_ID ?? null,
-    currentJobId: process.env.WM_JOB_ID ?? null,
-  });
+  await handleFlowFailure(
+    {
+      getWorkItem: (id) => getWorkItem(id),
+      findInvestigationByFlowJobId: (flowJobId) =>
+        getInvestigateWorkItemByFlowJobId(flowJobId),
+      hasSupersedingPrReview: (id) => hasSupersedingPrReview(id),
+      recordFailure: (record) => recordFailure(record),
+      updateStatusIfLeaseHolder: (id, from, to, flowJobId, note) =>
+        updateStatusIfLeaseHolder(id, from, to, flowJobId, note),
+      readInstanceName: async () =>
+        (await loadConfig(() => wmill.getResource("f/factory/factory_config")))
+          .instance_name,
+      readWebhookUrl: () => wmill.getVariable("f/factory/discord_webhook_url"),
+      notify: async (webhookUrl, event) => {
+        await notify(webhookUrl, event);
+      },
+      log: logger("on_error_flow"),
+    },
+    {
+      error,
+      workItemId: work_item_id,
+      path,
+      jobId: job_id,
+      rootJobId: process.env.WM_ROOT_FLOW_JOB_ID ?? null,
+      currentJobId: process.env.WM_JOB_ID ?? null,
+    },
+  );
 }
