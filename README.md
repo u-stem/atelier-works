@@ -84,6 +84,8 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run hold:list` | 保留の一覧と、有効なスケジュールの凍結とdeployの保留の件数を表示する |
 | `mise run hold:place` | 自動マージを止める保留を置く。`-- --scope merge --target <owner>/<repo> --minutes <n> --reason <text>`を渡す |
 | `mise run hold:release` | 保留を解除する。`-- <id>`を渡す |
+| `mise run backup:export` | 夜間のバックアップの最新の世代を、workerからホストの`<保存先>/<世代>/`に写す。`-- <保存先>`を渡す。別の媒体に移すのは人が行う([バックアップ](docs/operations.md#バックアップ)) |
+| `mise run backup:restore` | バックアップの世代を、使い捨てのcomposeのプロジェクト`factory-restore`に戻し、行数とファイル数を出す。`-- <世代のディレクトリ>`を渡す。本番のvolumeには触れない |
 | `mise run pull` | `wmill sync pull`で、Windmillの状態をローカルに取り込む |
 | `mise run migrate` | `wmill datatable migrate up`で、Data Tableのmigrationを適用する。deployの保留が有効なあいだは止まる |
 | `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |

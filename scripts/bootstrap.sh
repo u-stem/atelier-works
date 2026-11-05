@@ -72,8 +72,8 @@
 #      `PERSISTENT_TOKEN`に書き換え、以降の`wmill`の呼び出しが
 #      絞ったトークンを使うようにする。
 #   6. `wmill datatable create`を実行する(`main`のdatatableが既にあれば飛ばす)。
-#   7. 5つの秘密の変数(`claude_oauth_token`・`github_token`・`wmill_token`・
-#      `discord_webhook_url`・`github_read_tokens`)を変数のAPIで作成・更新する。
+#   7. 6つの秘密の変数(`claude_oauth_token`・`github_token`・`wmill_token`・
+#      `discord_webhook_url`・`github_read_tokens`・`db_backup_url`)を変数のAPIで作成・更新する。
 #      `wmill_token`には`PERSISTENT_TOKEN`を入れる。`claude_oauth_token`・
 #      `github_token`・`discord_webhook_url`は`CLAUDE_CODE_OAUTH_TOKEN`・
 #      `GITHUB_TOKEN`・`DISCORD_WEBHOOK_URL`から取り、空でもよい
@@ -81,6 +81,7 @@
 #      `github_read_tokens`には、所有者ごとの読み取り専用のトークンの環境変数
 #      `GITHUB_READ_TOKEN_<OWNER>`から`read_token_map_json`が組んだJSONの対応表を入れる。
 #      1つも無ければ空の値で入れる。全員分を外すときは、環境変数を消して実行し直す。
+#      `db_backup_url`には、`DB_PASSWORD`から組み立てたcomposeのPostgresのsuperuserの接続URLを入れる。
 #   8. 古いトークンを入れ替える。`/users/tokens/list`と`/users/tokens/delete`は
 #      アカウント全体の操作なので、セッションのトークンで行う
 #      (`PERSISTENT_TOKEN`ではtoken/listが401になることを確認済み)。
@@ -133,6 +134,7 @@ esac
 : "${WM_HTTP_PORT:?run via 'mise run bootstrap' (mise.toml [env] sets this)}"
 : "${WM_ADMIN_EMAIL:?run via 'mise run bootstrap'; set with: mise set -E local WM_ADMIN_EMAIL=...}"
 : "${WM_ADMIN_PASSWORD:?run via 'mise run bootstrap'; set it as described in docs/setup.md (the section on injecting secrets)}"
+: "${DB_PASSWORD:?run via 'mise run bootstrap' (mise.local.toml sets this; the nightly backup URL is built from it)}"
 
 # --- 手順0: 弱い・既定の管理者パスワードでは実行を拒む ----------------------
 if [ "${WM_ADMIN_PASSWORD}" = "changeme" ] || [ "${#WM_ADMIN_PASSWORD}" -lt 12 ]; then
@@ -717,6 +719,17 @@ read_token_map_json() {
   jq -n -c --args '$ARGS.positional as $p | [range(0; $p | length; 2) as $i | {key: $p[$i], value: env[$p[$i + 1]]}] | from_entries' "${args[@]}"
 }
 
+# composeのPostgresのsuperuserの接続URLを、`DB_PASSWORD`から組み立てて標準出力に出す。
+# 夜間のバックアップが`pg_dumpall`の接続に使う(`f/factory/db_backup_url`)。
+# パスワードはURLのuserinfoに入るので、jqの`@uri`で百分率符号化する。`@`、`:`、`/`を含んでもURLが壊れないため。
+# 値はjqの引数に載せず、環境変数で渡す。
+db_backup_url() {
+  local encoded
+  [ -n "${DB_PASSWORD:-}" ] || return 1
+  encoded="$(WM_TMP_DB_PASSWORD="${DB_PASSWORD}" jq -rn 'env.WM_TMP_DB_PASSWORD | @uri')" || return 1
+  printf 'postgres://postgres:%s@db/postgres' "${encoded}"
+}
+
 upsert_variable() {
   local path="$1" value="$2" description="$3" status
   status="$(variable_create_body "${path}" "${value}" "${description}" | api_post "/w/${WORKSPACE}/variables/create")"
@@ -741,6 +754,9 @@ upsert_variable "f/factory/discord_webhook_url" "${DISCORD_WEBHOOK_URL}" \
 github_read_tokens_json="$(read_token_map_json)"
 upsert_variable "f/factory/github_read_tokens" "${github_read_tokens_json}" \
   "Per-owner read-only GitHub PATs as a JSON map (lowercase owner login to token), built from GITHUB_READ_TOKEN_<OWNER> and read by collect_github on the periodic worker."
+db_backup_url_value="$(db_backup_url)"
+upsert_variable "f/factory/db_backup_url" "${db_backup_url_value}" \
+  "Superuser URL of the compose Postgres, built from DB_PASSWORD; the nightly backup reads it to run pg_dumpall."
 
 # --- 手順8: 古いfactory-bootstrapのトークンを入れ替える ---------------------
 # `/users/tokens/list`と`/users/tokens/delete`はアカウント全体の操作
@@ -827,7 +843,7 @@ fi
 
 # --- 手順12: インスタンス固有のdeployed_sha変数(無ければ作る) -------------
 # syncの対象外(`wmill.yaml`の`excludes`のこのパスのコメントを参照)。
-# 秘密でないこの変数には`self_update`が実行時に書き込む。手順7の5つの秘密は
+# 秘密でないこの変数には`self_update`が実行時に書き込む。手順7の6つの秘密は
 # 実行し直すたびに上書きしてよいが、これは一度だけ作り、後の実行で空に
 # 戻してはならない。空に戻すと`self_update`が毎回再デプロイが要ると判断し、
 # ホストで進行中の`mise run deploy`と競合する。

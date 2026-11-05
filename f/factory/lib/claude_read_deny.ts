@@ -26,6 +26,7 @@ export class ReadDenyError extends Error {
  * 一覧で塞ぐ。
  * `/dev/shm`(誰でも書ける共有メモリ)と、`/run`の別名の`/var/run`、`/var/lock`も塞ぐ。
  * 綴りを変えるだけで、塞いだ場所に届かせないためである。
+ * バックアップの置き場(`/var/lib/factory-backups`)も塞ぐ。控えのダンプがデータベースの全体を含むためである。
  * 別名と`/dev/fd`、`/dev/stdin`は、一覧に載せるだけで、塞げているかを測っていない。
  */
 export const READ_DENY_BASE_PATHS: readonly string[] = [
@@ -37,6 +38,7 @@ export const READ_DENY_BASE_PATHS: readonly string[] = [
   "/var/run",
   "/var/lock",
   "/var/lib/factory",
+  "/var/lib/factory-backups",
   "/root",
   "/tmp",
   "/var/tmp",

@@ -577,6 +577,11 @@
       "flows": ["pr_review"]
     },
     {
+      "name": "backup",
+      "summary": "バックアップを取る",
+      "flows": []
+    },
+    {
       "name": "cleanup_db",
       "summary": "DBを掃除",
       "flows": []

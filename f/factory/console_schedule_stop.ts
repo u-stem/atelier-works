@@ -82,6 +82,7 @@ export const STOPPABLE_SCHEDULES: readonly string[] = [
 export const NOT_STOPPABLE_SCHEDULES: Readonly<Record<string, string>> = {
   "f/factory/audit_kickoff":
     "週1回の監査の起動。止める必要が無く、起動はConsoleの操作で行える",
+  "f/factory/backup": "夜間のバックアップ。1日1回で、止めると控えが古くなる",
   "f/factory/cleanup_db": "古い行を削除する。止めると表が育ち続ける",
   "f/factory/cleanup_workspaces":
     "作業領域を掃除する。止めると、止まらないClaudeのプロセスが残る",

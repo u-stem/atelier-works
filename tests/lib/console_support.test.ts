@@ -63,6 +63,10 @@ describe("noticeSeverity", () => {
     expect(NOTICE_SEVERITY.schedule_detector_stale).toBe("action");
   });
 
+  test("lists a failed backup as a known action kind", () => {
+    expect(NOTICE_SEVERITY.backup_failed).toBe("action");
+  });
+
   test("treats a merge conflict of a pull request as action", () => {
     expect(noticeSeverity("pr_conflict")).toBe("action");
   });

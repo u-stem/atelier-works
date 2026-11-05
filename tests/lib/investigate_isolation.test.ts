@@ -227,7 +227,7 @@ describe("ISOLATION_FINGERPRINT", () => {
 
   test("keeps the value it had before the constants moved", () => {
     expect(ISOLATION_FINGERPRINT).toBe(
-      "131397caa8b7a15699bc0d9e67b034a69dc04d235b18bb0e7d4b392dcab98d85",
+      "7de0320254175148f5f0bf00dda725612d11052ba3489404d2f60f29a76a9db1",
     );
   });
 });

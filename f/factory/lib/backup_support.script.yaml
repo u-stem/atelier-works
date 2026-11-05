@@ -1,0 +1,9 @@
+summary: '[LIB] バックアップの純粋ロジック'
+description: 内部ライブラリです。直接実行するものではありません。夜間のバックアップが使う、世代の名前と選別、設定の参照の伏せ字、接続URLの解釈、外部コマンドの引数、manifestと通知の本文を持ちます。
+lock: '!inline f/factory/lib/backup_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

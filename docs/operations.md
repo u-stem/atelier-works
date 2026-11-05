@@ -4410,6 +4410,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `deploy_approval_required` | 自己更新が、前回の反映からの変更に、Windmillへ反映する保護パスのファイルかmigrationを見つけ、人の承認まで反映を止めた。本文に、待っている版と、止めたファイルの件数が載る。`infra/`、`.github/`、`.claude/`、`scripts/`、lockfileの変更では出ない。保留は期限で解けない | [保護パスの変更の反映を承認する](#保護パスの変更の反映を承認する)に従い、Consoleのシステムの画面の「反映の承認待ち」で承認か却下をする。承認、新しい版への置き換え、反映の成功で自動で解決する。却下するとこの通知は残り、mainへ戻すPRの反映で解決される。Consoleから解決することはできない |
 | `deploy_approval_decided` | 保護パスの変更を含む反映を、人がConsoleで承認か却下した。本文に版と操作者が載る | なし。却下したときは、mainへ戻すPRをマージするまで反映は止まる |
 | `cleanup_db_failed` | 保持期間を過ぎたレコードの削除に失敗した | 内容を確かめる。次の日の掃除でやり直す |
+| `backup_failed` | 夜間のバックアップ(毎日02:30)が失敗した。本文に失敗した段階が載り、原因はジョブのログに出る。その日の世代は作られない。ジョブの失敗は、scheduleの失敗としてDiscordにも届く | [バックアップ](#バックアップ)の段階ごとの表で原因を確かめて直し、Windmillの画面で`f/factory/backup`を実行して取り直す。自動では解決されないので、取り直しが成功したら人が解決する |
 | `cleanup_worktrees_skipped` | 動いているPRの修正のブランチを確かめられず、そのリポジトリの作業領域の掃除を見送った | 次の日の掃除を待つ |
 | `cleanup_worktree_busy` | 終端の作業項目のworktreeを、使用中として消さなかった。原因は、残ったプロセスが使っていることか、検査用のユーザーからrootに戻せないことである。作業項目のID、worktreeのパス、理由が載る | 理由がプロセスなら、載ったプロセスを止める。rootに戻せないなら、[検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で片付ける。対処しない限り毎日の掃除で記録しようとするが、同じ本文の未解決のnoticeがあるあいだは新しく作らない。同じ通知が1件残り続ける |
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量。未解決は1件だけで、掃除のたびに本文と作成時刻が最新の測定に更新される。解決した後の掃除で、新しく1件作られる | 増え続けていないか見る |
@@ -6909,14 +6910,199 @@ Consoleのシステムの**設定**タブから、factory_configの許可した�
 
 ## バックアップ
 
-Windmillのデータ(ワークスペースの設定、Data Table、ジョブの履歴など)は、すべて`db_data`というDockerのvolume(Postgres)にある。バックアップの対象はこのvolumeである。
+夜間のバックアップ(`f/factory/backup`)が、毎日02:30(JST)に、失うと戻せない状態を控える。
+控えは、defaultのworkerの名前付きvolume`factory_backups`(`/var/lib/factory-backups`)に置く。
+作業領域の掃除(03:00)とDBの掃除(03:30)より前に動くので、掃除の前の状態が残る。
 
 > [!WARNING]
-> `mise exec -- docker compose -f infra/docker-compose.yml down -v`は、`db_data`を含むすべてのvolumeを消す。消したデータは戻せない。
+> `mise exec -- docker compose -f infra/docker-compose.yml down -v`は、`db_data`と`factory_backups`を含むすべてのvolumeを消す。
+> 消したデータは戻せない。
+> 控えを残したいときは、先に[ホストに写す](#ホストに写す)の手順で写す。
+
+### 控えるもの
+
+| ファイル | 中身 | 取り方 |
+| --- | --- | --- |
+| `cluster.sql` | Postgresの全データベース(`windmill`、`datatable_db`)とロール | `pg_dumpall` |
+| `factory_state.tar` | `factory_state`のvolume。要件定義書、設計書、監査の記録、反映済みのshaを含む | `tar`。`claude/`、`gh/`、`check-slots/`は除く |
+| `factory_config.json` | `f/factory/factory_config`の値。変数とresourceへの参照は`<redacted>`に置き換える | Windmillの補間しない読み取り |
+| `manifest.json` | 取った時刻、各ファイルのバイト数、`f/factory/deployed_sha`の値 | scriptが書く |
+
+`claude/`と`gh/`は、人がworkerに入って使うときのログインの記録である。
+ジョブは使わないので、戻した後に要るのは、手で使うときのログインのやり直しだけである。
+`check-slots/`は検査の枠の記録で、戻すと存在しない実行の記録が残るため除く。
+控えに含まれる秘密と置き場の権限は、[セキュリティ](security.md#バックアップの控え)にある。
+
+### 保存先と世代
+
+世代は`/var/lib/factory-backups/<時刻>/`に置く。
+時刻はUTCの`YYYYMMDDTHHMMSSZ`である。
+書きかけの世代は`.partial-<時刻>/`に置き、すべて書き終えてから`<時刻>/`に改名する。
+途中で止まった世代は`.partial-`のまま残り、次の実行が消す。
+
+新しい世代を書いた後、新しい方から`backup_keep_generations`(既定7)の世代を残し、古い世代を消す。
+数は[保持期間](#保持期間)の表にある。
+控えの大きさは監視しない。
+増え方は、`manifest.json`のバイト数で人が見る。
+
+世代の一覧は次のコマンドで見る。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker ls -l /var/lib/factory-backups
+```
+
+### 失敗したとき
+
+失敗すると、scriptは要対応の通知(`backup_failed`)を残し、ジョブを失敗にする。
+本文には失敗した段階だけが載り、原因はジョブのログに出る。
+本文が段階ごとに同じなので、同じ段階の失敗が続く間、未解決の通知は1件にまとまる。
+ジョブの失敗は、scheduleの失敗の検出(`detect_schedule_failures`)がDiscordに知らせる。
+成功したときは通知しない。
+`tar`が、読んでいる間にファイルが変わったか消えたと報告したとき(終了コード1)は、失敗にしない。
+アーカイブは書けているので、ジョブのログに警告を出して先へ進む。
+
+| 段階 | よくある原因 | 確かめること |
+| --- | --- | --- |
+| `prepare` | `f/factory/db_backup_url`が無いか、URLの形でない。URLに`?sslmode=`などの問い合わせ文字列がある | `mise run bootstrap`を実行したか |
+| `pg_dumpall` | workerのイメージに`pg_dumpall`が無い。DBに接続できない | 更新の後に`mise run up`を実行したか。`db`が動いているか |
+| `tar` | `factory_state`を読めない。tarが終了コード2以上で終わった | ジョブのログのtarのエラー |
+| `config`、`manifest`、`finalize` | 置き場に書けない。ディスクが足りない | ホストのディスクの空き |
+| `prune` | 古い世代を消せない。`backup_keep_generations`が正の整数でない | ジョブのログ。新しい世代は書けている |
+
+原因を直したら、Windmillの画面で`f/factory/backup`を実行して取り直す。
+取り直しが成功したら、Consoleで通知を解決する。
+通知は自動では解決されない。
+
+### ホストに写す
+
+最新の世代を、ホストのディレクトリに写す。
+保存先には、既にあるディレクトリを渡す。
+
+```bash
+mise run backup:export -- <保存先>
+```
+
+世代は`<保存先>/<時刻>/`に写り、写した先のパスが出る。
+写した世代は、所有者だけが読める権限になる。
+別の媒体やホストに移すのは人が行う。
+控えはDBの全体を含むので、移した先もホストの権限で守る。
+
+### 使い捨ての環境に戻す
+
+世代を使い捨てのcomposeのプロジェクト`factory-restore`に戻して、戻せることを確かめる。
+本番のプロジェクト`infra`のvolumeには触れない。
+プロジェクトの名前が違うので、volumeの名前は`factory-restore_*`になる。
+
+```bash
+mise run backup:restore -- <世代のディレクトリ>
+```
+
+ディレクトリには`cluster.sql`と`factory_state.tar`が要る。
+`backup:restore`は次の順に動く。
+
+1. `db`だけを起動し、TCPで受け付けるまで待つ。
+2. イメージが作った空の`windmill`のデータベースを消す。
+3. `cluster.sql`を`psql`で流し、最初のエラーで止める。
+4. `factory_state.tar`を、同じプロジェクトの`factory_state`に展開する。
+5. `factory.work_items`と`factory.notices`の行数と、`requirements/`のファイル数を出す。
+
+手順3では、`CREATE ROLE postgres;`の1行だけを除いて流す。
+`pg_dumpall`は接続したsuperuserのロールにも`CREATE ROLE`を出し、戻し先には同じロールが既にあるためである。
+
+終わりに、使い捨てのプロジェクトを消すコマンドが出る。
+確かめ終えたら、人が実行する。
+
+```bash
+mise exec -- docker compose -p factory-restore -f infra/docker-compose.yml down -v
+```
+
+前の実行の`db`が残っているときは、`backup:restore`は何もせずに止まる。
+上のコマンドで消してから、実行し直す。
+
+### 本番に戻す
+
+本番のvolumeへ戻す操作は、自動にしていない。
+戻すかどうかと、いつ戻すかは人が判断する。
+
+> [!WARNING]
+> 次の手順は、本番の`db_data`を消して作り直す。
+> 消したデータは戻せない。
+> 先に[使い捨ての環境に戻す](#使い捨ての環境に戻す)の手順で、使う世代が戻せることを確かめる。
+
+1. 使う世代をホストに置く。volumeが残っているときは、[ホストに写す](#ホストに写す)の手順で写す。
+2. スタックを止める。
+
+   ```bash
+   mise run down
+   ```
+
+3. `cluster.sql`と`factory_state.tar`がホストにあることを確かめてから、次へ進む。
+   `db_data`のvolumeを消す。
+   `infra`はcomposeのプロジェクト名で、composeのファイルに`name`がないので、ディレクトリの名前になる。
+
+   ```bash
+   docker volume rm infra_db_data
+   ```
+
+4. `db`だけを起動し、TCPで受け付けるまで待つ。次のコマンドが`accepting connections`を出せば受け付けている。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml up -d --wait db
+   mise exec -- docker compose -f infra/docker-compose.yml exec -T db pg_isready -h 127.0.0.1 -U postgres
+   ```
+
+5. 空の`windmill`を消し、`cluster.sql`を流す。`<世代のディレクトリ>`は手順1のパスにする。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres -c 'DROP DATABASE windmill'
+   grep -v -x -F 'CREATE ROLE postgres;' <世代のディレクトリ>/cluster.sql | mise exec -- docker compose -f infra/docker-compose.yml exec -T db psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres
+   ```
+
+6. superuserのパスワードを、今の`DB_PASSWORD`に合わせ直す。
+   `cluster.sql`は、控えを取ったときの`postgres`のパスワードを戻すためである。
+   その後に`DB_PASSWORD`を変えていると、次の`mise run up`が接続できない。
+   `<DB_PASSWORD>`は、`mise.local.toml`の`DB_PASSWORD`と同じ値に置き換える。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -c "ALTER ROLE postgres PASSWORD '<DB_PASSWORD>'"
+   ```
+
+   このコマンドはパスワードをシェルの履歴に残す。
+   残したくないときは、`-T`を外して`psql -U postgres`を対話で開き、`\password postgres`で入れる。
+
+7. `factory_state`に展開する。volumeが残っているときは、同じ名前のファイルを上書きする。
+   `--pull missing`は、サービスの`pull_policy: always`を引き継がず、レジストリに問い合わせないために付ける。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml run --pull missing --rm --no-deps -T --entrypoint tar factory_state_init --no-same-owner -xf - -C /var/lib/factory < <世代のディレクトリ>/factory_state.tar
+   ```
+
+8. スタックを起動する。
+
+   ```bash
+   mise run up
+   ```
+
+9. `factory_state`のvolumeも失っていたときは、人がworkerに入って使う`claude`と`gh`のログインをやり直す。
+
+### リハーサルの記録
+
+ホストで取った`pg_dumpall`と`factory_state`のtarを、`mise run backup:restore`で使い捨ての環境に戻した結果である。
+
+| 項目 | 結果 |
+| --- | --- |
+| 戻した控え | 本番のクラスタの`pg_dumpall`(2.1GB)と、`factory_state`のtar(215KB) |
+| `cluster.sql`の流し込み | `ON_ERROR_STOP`で止まらずに最後まで流れた |
+| `factory.work_items`の行数(本番、戻した先) | 169、168(控えを取った後に本番で1件増えた) |
+| `factory.notices`の行数(本番、戻した先) | 141、141 |
+| `requirements/`のファイル数(本番、戻した先) | 21、21 |
+| かかった時間 | 約1分(`db`の起動から件数の表示まで) |
 
 ## 保持期間
 
-DBの掃除のスケジュール(`cleanup_db`、毎日03:30)が、保持期間を過ぎたレコードを消す。日数はどちらも`f/factory/factory_config`で変えられる。
+DBの掃除のスケジュール(`cleanup_db`、毎日03:30)が、保持期間を過ぎたレコードを消す。
+バックアップの世代は、夜間のバックアップ(`backup`、毎日02:30)が、新しい世代を書いた後に数で消す。
+日数と世代の数は、どれも`f/factory/factory_config`で変えられる。
 
 | 対象 | 保持期間 | 設定 |
 | --- | --- | --- |
@@ -6927,6 +7113,7 @@ DBの掃除のスケジュール(`cleanup_db`、毎日03:30)が、保持期間�
 | 判定済みのPRのCIの記録(最後の更新から数える。判定を待つ記録と失敗を直している記録は消さない。各PRの最新の記録は、保持期間の4倍まで残す) | 30日(各PRの最新の記録は120日) | `retention_logs_days` |
 | workerの負荷の記録(測った時刻から数える) | 30日 | `retention_logs_days` |
 | 手動投入の冪等キー(予約した時刻から数える) | 90日 | `retention_work_items_days` |
+| バックアップの世代(新しい方から数える) | 7世代 | `backup_keep_generations` |
 
 workerの負荷の記録(`worker_samples`)は、測った時刻(`sampled_at`)から30日を過ぎた行をすべて消す。
 1日に720行が増えるので、掃除が毎日動いていれば、行数は約2.2万行で頭打ちになる。

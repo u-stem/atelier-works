@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BACKUP_ROOT } from "../../f/factory/lib/backup_support.ts";
 import { CHECK_NPROC_LIMIT } from "../../f/factory/lib/check_sandbox.ts";
 import { DEFAULT_WORKER_SLOTS } from "../../f/factory/lib/worker_load_support.ts";
 
@@ -955,5 +956,38 @@ describe("infra/docker-compose.yml prune label", () => {
     );
 
     expect(unlabeled).toEqual([]);
+  });
+});
+
+// 控えはDBの全体を含むので、置き場はdefaultのworkerだけに付ける。
+describe("infra/docker-compose.yml factory_backups", () => {
+  test("declares factory_backups as a top-level volume", () => {
+    const volumes = compose().volumes;
+
+    expect(isRecord(volumes) && "factory_backups" in volumes).toBe(true);
+  });
+
+  test("mounts factory_backups writable on the default worker at the backup root", () => {
+    expect(mountsOf(service("windmill_worker"), "factory_backups")).toEqual([
+      {
+        source: "factory_backups",
+        target: BACKUP_ROOT,
+        readOnly: false,
+        subpath: undefined,
+      },
+    ]);
+  });
+
+  test("mounts factory_backups on no other service", () => {
+    const services = compose().services;
+    const names = isRecord(services) ? Object.keys(services) : [];
+
+    expect(
+      names.filter(
+        (name) =>
+          name !== "windmill_worker" &&
+          mountsOf(service(name), "factory_backups").length > 0,
+      ),
+    ).toEqual([]);
   });
 });

@@ -266,6 +266,13 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
   [
+    "backup_failed",
+    guide(
+      "夜間のバックアップが失敗しました。本文に、失敗した段階と原因が載ります。この日の控えは作られていません。",
+      "運用の文書の「バックアップ」の表で原因を確かめて直し、Windmillでf/factory/backupを実行して取り直してください。取り直しが成功したら、この通知を解決してください。",
+    ),
+  ],
+  [
     "cleanup_worktree_busy",
     guide(
       "終端の作業項目のworktreeを、使用中として消しませんでした。残ったプロセスが使っているか、検査用のユーザーからrootに戻せないためです。",

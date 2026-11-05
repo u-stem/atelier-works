@@ -41,6 +41,22 @@ RUN apt-get update \
         util-linux \
     && rm -rf /var/lib/apt/lists/*
 
+# `f/factory/backup`がクラスタ全体を控える`pg_dumpall`。サーバー(`postgres:18`)と同じメジャー版を、
+# PostgreSQLの公式のaptリポジトリ(PGDG)から入れる。Debianの版のクライアントは、メジャー版がサーバーと合わない。
+# 署名の鍵は、取得した内容のsha256を固定して確かめる。鍵が差し替わったときに、黙って信用せずビルドを止めるため。
+# scriptは`/usr/lib/postgresql/18/bin/pg_dumpall`を絶対パスで呼ぶので、そのパスで起動できることを確かめる。
+ARG PGDG_KEY_SHA256=0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76
+RUN set -eux; \
+    install -d -m 0755 /etc/apt/keyrings; \
+    curl -fsSL -o /etc/apt/keyrings/postgresql.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc; \
+    echo "${PGDG_KEY_SHA256}  /etc/apt/keyrings/postgresql.asc" | sha256sum -c -; \
+    echo "deb [signed-by=/etc/apt/keyrings/postgresql.asc] https://apt.postgresql.org/pub/repos/apt trixie-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends postgresql-client-18; \
+    rm -rf /var/lib/apt/lists/*; \
+    /usr/lib/postgresql/18/bin/pg_dumpall --version
+
 # 検査コマンドを実行するための非特権ユーザー`factory-check-0`、`factory-check-1`、…。
 # 並行して動く検査が同じuidを共有しないよう、実行ごとに空いている1つを使う。
 # uidを固定するのは、worktreeの所有者や`setpriv`の引数がuidで決まり、再ビルドで
@@ -64,6 +80,12 @@ RUN chmod -R go-w /usr/src/app /tmp/.cache
 # `f/factory/lib/investigate_workspace.ts`が使うたびに所有者とモードを確かめ、実行時には作らない。
 # コンテナの中のディレクトリなので、再作成で空に戻ってよい。
 RUN mkdir -p -m 0700 /var/lib/factory-investigate
+
+# 夜間のバックアップの置き場(名前付きvolume`factory_backups`のマウント先)。rootの所有で0700にする。
+# 控えはDBの全体を含むので、検査用のユーザーに読ませないため。
+# 空のvolumeを初めてマウントするとき、Dockerはこのディレクトリの所有者とモードをvolumeに写す。
+# 既にあるvolumeには写らないので、`f/factory/backup`も実行のたびに0700へ直す。
+RUN mkdir -p -m 0700 /var/lib/factory-backups
 
 # gh CLI: 公式のリリースのtarball(アーキテクチャ別)から入れ、リリースの
 # `checksums.txt`で検証する。壊れた・改ざんされたダウンロードを黙って入れず、
