@@ -125,4 +125,24 @@ describe("the wiring of the detector", () => {
   test("reads the stop-all state for the notice", () => {
     expect(mainBody).toContain("syncStopAllNotice(");
   });
+
+  test("bounds the stop-all notice sync with a call timeout", () => {
+    expect(mainBody).toMatch(
+      /withCallTimeout\(\s*"sync stop-all notice",\s*\(\)\s*=>\s*syncStopAllNotice\(/,
+    );
+  });
+
+  test("gives the notice sync twenty seconds", () => {
+    expect(source).toContain("STOP_ALL_NOTICE_SYNC_TIMEOUT_MS = 20_000");
+  });
+
+  test("resolves the open notices by kind", () => {
+    expect(mainBody).toMatch(
+      /resolveUnresolvedNoticesByPrefix\(\s*STOP_ALL_ACTIVE_NOTICE_KIND,\s*"",/,
+    );
+  });
+
+  test("does not tie the resolution to the text of the notice", () => {
+    expect(mainBody).not.toContain("STOP_ALL_ACTIVE_MESSAGE");
+  });
 });

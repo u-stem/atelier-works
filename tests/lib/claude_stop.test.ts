@@ -192,6 +192,32 @@ describe("runClaude while the factory is stopped", () => {
     expect(recorder.seen.length).toBe(1);
   });
 
+  test("returns stopped when the factory is stopped before the retry", async () => {
+    const recorder = answering([NOT_JSON, SUCCESS]);
+    const result = await runClaude(
+      options(recorder.run, sequence(false, true)),
+    );
+    expect(result.outcome === "failure" ? result.reason : null).toBe("stopped");
+  });
+
+  test("says the factory is stopped when it stops before the retry", async () => {
+    const recorder = answering([NOT_JSON, SUCCESS]);
+    const result = await runClaude(
+      options(recorder.run, sequence(false, true)),
+    );
+    expect(result.outcome === "failure" ? result.detail : "").toBe(
+      CLAUDE_STOPPED_DETAIL,
+    );
+  });
+
+  test("keeps the first run as a discarded run when it stops before the retry", async () => {
+    const recorder = answering([NOT_JSON, SUCCESS]);
+    const result = await runClaude(
+      options(recorder.run, sequence(false, true)),
+    );
+    expect(result.discardedAgentRun?.exit_code).toBe(0);
+  });
+
   test("keeps going when the check throws", async () => {
     const recorder = answering([SUCCESS]);
     const result = await runClaude(

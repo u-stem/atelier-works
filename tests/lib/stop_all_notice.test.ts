@@ -79,6 +79,41 @@ describe("syncStopAllNotice", () => {
     expect(calls.sent).toEqual([]);
   });
 
+  test("still reports placed when the Discord notification fails", async () => {
+    const { deps } = setup(ACTIVE, false);
+    const outcome = await syncStopAllNotice({
+      ...deps,
+      notify: async () => {
+        throw new Error("webhook variable unreadable");
+      },
+    });
+    expect(outcome).toBe("placed");
+  });
+
+  test("still reports placed when the instance name cannot be read", async () => {
+    const { deps } = setup(ACTIVE, false);
+    const outcome = await syncStopAllNotice({
+      ...deps,
+      instanceName: async () => {
+        throw new Error("config unreadable");
+      },
+    });
+    expect(outcome).toBe("placed");
+  });
+
+  test("warns when the Discord notification fails", async () => {
+    const { deps, calls } = setup(ACTIVE, false);
+    await syncStopAllNotice({
+      ...deps,
+      notify: async () => {
+        throw new Error("webhook variable unreadable");
+      },
+    });
+    expect(calls.lines.join("\n")).toContain(
+      "could not tell Discord about the stop-all",
+    );
+  });
+
   test("keeps an open notice while the stop is placed", async () => {
     const { deps } = setup(ACTIVE, true);
     expect(await syncStopAllNotice(deps)).toBe("kept");

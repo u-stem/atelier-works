@@ -88,6 +88,19 @@ describe("pingHeartbeat", () => {
     );
   });
 
+  test("keeps the normalized url out of the reason of a network failure", async () => {
+    // 大文字のホストと既定のポートは、URLの正規化で表記が変わる。
+    const result = await pingHeartbeat(
+      "https://Monitor.Example.com:443/ping-token-xyz",
+      async (url) => {
+        throw new Error(`could not connect to ${url}`);
+      },
+    );
+    expect(result.kind === "failed" ? result.reason : "").not.toContain(
+      "ping-token-xyz",
+    );
+  });
+
   test("reports a request that does not finish in time", async () => {
     const hanging: HeartbeatFetch = (_url, init) =>
       new Promise((_resolve, reject) => {

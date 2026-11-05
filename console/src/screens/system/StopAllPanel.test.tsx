@@ -51,6 +51,12 @@ describe("StopAllPanel", () => {
     );
   });
 
+  test("points to the host entry when the state cannot be read", () => {
+    expect(render({ kind: "unreadable", reason: "api down" })).toContain(
+      "mise run stop:release",
+    );
+  });
+
   test("draws nothing for an older backend", () => {
     expect(render(undefined)).toBe("");
   });

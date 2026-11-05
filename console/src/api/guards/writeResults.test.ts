@@ -16,6 +16,8 @@ import {
   isPrReviewSubmitResult,
   isRetryWorkItemResult,
   isScheduleStopResult,
+  isStopAllReleaseResult,
+  isStopAllResult,
   JOB_CANCEL_REFUSAL_REASONS,
   JOB_RERUN_REFUSAL_REASONS,
   MANUAL_INTAKE_REFUSAL_REASONS,
@@ -873,5 +875,51 @@ describe("isScheduleStopResult", () => {
 
   test("rejects a value that is not an object", () => {
     expect(isScheduleStopResult("stopped")).toBe(false);
+  });
+});
+
+describe("isStopAllResult", () => {
+  const PLACED = {
+    refused: false,
+    placed: true,
+    placed_at: "2026-11-05T03:00:00.000Z",
+    config: "written",
+    disabled_flags: [],
+    schedules_disabled: [],
+    schedules_failed: [],
+    action_audit: "recorded",
+  };
+
+  test("accepts a placed stop", () => {
+    expect(isStopAllResult(PLACED)).toBe(true);
+  });
+
+  test("rejects a refusal it does not know", () => {
+    expect(isStopAllResult({ refused: true, reason: "because" })).toBe(false);
+  });
+
+  test("rejects a placed stop without the time it was placed", () => {
+    const { placed_at: _omitted, ...without } = PLACED;
+    expect(isStopAllResult(without)).toBe(false);
+  });
+});
+
+describe("isStopAllReleaseResult", () => {
+  const RELEASED = {
+    refused: false,
+    released: true,
+    schedules_enabled: [],
+    schedules_skipped: [],
+    schedules_failed: [],
+    action_audit: "recorded",
+  };
+
+  test("accepts a release", () => {
+    expect(isStopAllReleaseResult(RELEASED)).toBe(true);
+  });
+
+  test("rejects a release without the schedules it enabled", () => {
+    const { schedules_enabled: _omitted, ...without } = RELEASED;
+    expect(isStopAllReleaseResult(without)).toBe(false);
   });
 });

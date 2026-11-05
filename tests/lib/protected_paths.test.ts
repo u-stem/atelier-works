@@ -2215,6 +2215,14 @@ describe("safety boundary files", () => {
     "f/factory/lib/stop_all.script.yaml",
     "f/factory/lib/stop_check.ts",
     "f/factory/lib/stop_check.script.yaml",
+    "f/factory/console_stop_all.ts",
+    "f/factory/console_stop_all.script.yaml",
+    "f/factory/console_stop_all_release.ts",
+    "f/factory/console_stop_all_release.script.yaml",
+    "tests/lib/stop_all.test.ts",
+    "tests/scripts/console_stop_all.test.ts",
+    "tests/scripts/console_stop_all_release.test.ts",
+    "tests/scripts/stop_all_wiring.test.ts",
   ];
   // windmill-clientを含むlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるので守らない。
   const CLIENT_LOCKS = [
@@ -2224,6 +2232,8 @@ describe("safety boundary files", () => {
     "f/factory/lib/stop_check.script.lock",
     "f/factory/self_update.script.lock",
     "f/factory/console_deploy_decide.script.lock",
+    "f/factory/console_stop_all.script.lock",
+    "f/factory/console_stop_all_release.script.lock",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
@@ -2283,6 +2293,14 @@ describe("safety boundary files", () => {
       "f/factory/lib/stop_check.script.lock",
     ],
     ["f/factory/self_update.script.yaml", "f/factory/self_update.script.lock"],
+    [
+      "f/factory/console_stop_all.script.yaml",
+      "f/factory/console_stop_all.script.lock",
+    ],
+    [
+      "f/factory/console_stop_all_release.script.yaml",
+      "f/factory/console_stop_all_release.script.lock",
+    ],
   ])("%s points at its own lock", async (yamlPath, lockPath) => {
     expect(await Bun.file(yamlPath).text()).toContain(
       `lock: '!inline ${lockPath}'`,
