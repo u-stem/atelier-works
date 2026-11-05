@@ -43,10 +43,11 @@ import type { FailureRecord, NoticeRecord } from "./lib/types.ts";
 /**
  * 全停止の通知の同期の上限(ミリ秒)。DBの書き込みと、Discordの送信を含む。
  * 超えても検出の結果は変えず、死活監視は叩く。
- * 検出の後の処理は、この10秒、URLの読み取りの5秒、死活監視の10秒で、最長25秒である。
+ * 内側の各段の上限(3秒、3秒、5秒)の合計より長くし、DBの読み書きの分を残す。
+ * 検出の後の処理は、この15秒、URLの読み取りの5秒、死活監視の10秒で、最長30秒である。
  * scriptの`timeout`(60秒)の中で、検出そのものに時間を残すための値である。
  */
-const STOP_ALL_NOTICE_SYNC_TIMEOUT_MS = 10_000;
+const STOP_ALL_NOTICE_SYNC_TIMEOUT_MS = 15_000;
 
 /** 死活監視のURLを読む上限(ミリ秒)。超えたら、その回は叩かずに警告のログを残す。 */
 const HEARTBEAT_URL_READ_TIMEOUT_MS = 5_000;

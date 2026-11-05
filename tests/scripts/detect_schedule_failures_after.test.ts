@@ -151,7 +151,7 @@ describe("the wiring of the detector", () => {
   });
 
   test("gives the notice sync ten seconds", () => {
-    expect(source).toContain("STOP_ALL_NOTICE_SYNC_TIMEOUT_MS = 10_000");
+    expect(source).toContain("STOP_ALL_NOTICE_SYNC_TIMEOUT_MS = 15_000");
   });
 
   test("bounds the heartbeat url read with a call timeout", () => {
