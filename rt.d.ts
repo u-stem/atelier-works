@@ -65,6 +65,7 @@ declare namespace RT {
     gh_collect_enabled: boolean,
     gh_collect_detail_enabled: boolean,
     worker_alert_memory_ratio: number,
+    credential_warn_days: number,
     check_commands_by_repo: object
   }
 }

@@ -84,6 +84,16 @@ describe("mise.toml push tasks", () => {
     expect(taskBody("up")).toContain("scripts/freeze.ts check");
   });
 
+  test("up does not refuse the stop-all", () => {
+    expect(taskBody("up")).not.toContain("--refuse-stop-all");
+  });
+
+  test("deploy refuses the stop-all in its check", () => {
+    expect(taskBody("deploy")).toContain(
+      "scripts/freeze.ts check --refuse-stop-all",
+    );
+  });
+
   test("no task runs the migration without the wrapper", () => {
     const commands = MISE.split("\n").filter(
       (line) => !line.trimStart().startsWith("#"),

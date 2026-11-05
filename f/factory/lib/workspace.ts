@@ -60,6 +60,8 @@ export type CommandResult = {
   readonly timedOut: boolean;
   /** 終了とプロセスグループの停止の後も出力パイプが閉じず、読み取りを打ち切った。別セッションへ抜けたプロセスが握っている場合に起き、そのプロセスは止められていない。打ち切っていなければ付かない。 */
   readonly outputAbandoned?: boolean;
+  /** `stopSignal`で止めた。止めていなければ付かない。 */
+  readonly stopped?: boolean;
 };
 
 export type CommandRunOptions = {
@@ -75,6 +77,12 @@ export type CommandRunOptions = {
    * 指定しなければすべて保持する。
    */
   readonly maxOutputBytes?: number;
+  /**
+   * 中断されたら、タイムアウトと同じくグループにSIGTERMを送り、`killGraceMs`後にSIGKILLを送る。
+   * 全停止で、実行中のコマンドを止めるために使う。起動の前に中断されていれば、起動の直後に止める。
+   * 止めた結果には`stopped`が付き、`timedOut`は偽のままである。
+   */
+  readonly stopSignal?: AbortSignal;
 };
 
 export type CommandRunner = (
@@ -395,6 +403,7 @@ function spawnProcess(argv: readonly string[], runOptions: CommandRunOptions) {
  * 先頭プロセスが終わったら、正常終了でもグループに残ったプロセスを止める(`reapProcessGroup`)。
  * 出力が`outputDrainMs`待っても閉じなければ読み取りを打ち切り、`outputAbandoned`を付ける。
  * 別セッションへ抜けたプロセスにはグループへのkillが届かず、パイプを握ったままだと読み取りもtimeoutも終わらないためである。
+ * `stopSignal`が中断されたら、タイムアウトと同じ手順でグループを止め、結果に`stopped`を付ける。
  */
 export function createBunCommandRunner(
   options: BunCommandRunnerOptions = {},
@@ -428,6 +437,23 @@ export function createBunCommandRunner(
       }, killGraceMs);
     }, timeoutMs);
 
+    let stopped = false;
+    let stopKillTimer: ReturnType<typeof setTimeout> | undefined;
+    const stop = (): void => {
+      if (stopped) return;
+      stopped = true;
+      killProcessGroup(proc.pid, "SIGTERM");
+      stopKillTimer = setTimeout(() => {
+        killProcessGroup(proc.pid, "SIGKILL");
+      }, killGraceMs);
+    };
+    const stopSignal = runOptions.stopSignal;
+    if (stopSignal?.aborted === true) {
+      stop();
+    } else {
+      stopSignal?.addEventListener("abort", stop, { once: true });
+    }
+
     const abort = new AbortController();
     const readOutput = (stream: ReadableStream<Uint8Array>): Promise<string> =>
       runOptions.maxOutputBytes === undefined
@@ -443,18 +469,22 @@ export function createBunCommandRunner(
     const exitCode = await proc.exited;
     clearTimeout(timer);
     if (killTimer !== undefined) clearTimeout(killTimer);
+    stopSignal?.removeEventListener("abort", stop);
+    if (stopKillTimer !== undefined) clearTimeout(stopKillTimer);
     await reapProcessGroup(proc.pid, killGraceMs);
     const drained = await settlesWithin(outputs, outputDrainMs);
     if (!drained) abort.abort();
     const [stdout, stderr] = await outputs;
 
-    if (drained) return { stdout, stderr, exitCode, timedOut };
+    const stoppedField = stopped ? { stopped: true } : {};
+    if (drained) return { stdout, stderr, exitCode, timedOut, ...stoppedField };
     return {
       stdout,
       stderr: `${stderr}${OUTPUT_ABANDONED_NOTE}`,
       exitCode,
       timedOut,
       outputAbandoned: true,
+      ...stoppedField,
     };
   };
 }

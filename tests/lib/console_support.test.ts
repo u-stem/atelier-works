@@ -163,7 +163,7 @@ describe("INFO_NOTICE_KINDS", () => {
     );
   });
 
-  test("contains the thirteen kinds that need no action", () => {
+  test("contains the fourteen kinds that need no action", () => {
     expect([...INFO_NOTICE_KINDS].sort()).toEqual([
       "approval_notify_failed",
       "claim_race_lost",
@@ -175,6 +175,7 @@ describe("INFO_NOTICE_KINDS", () => {
       "hold_released",
       "implement_needs_human",
       "labeler_denied",
+      "stop_all_released",
       "supersede_failed",
       "unsandboxed_check_commands",
       "workspace_disk_usage",
@@ -183,12 +184,13 @@ describe("INFO_NOTICE_KINDS", () => {
 });
 
 describe("UNRESOLVABLE_NOTICE_KINDS", () => {
-  test("contains the security-related kinds and the ignored design setting", () => {
+  test("contains the security-related kinds and the ignored design setting, and the stop-all", () => {
     expect([...UNRESOLVABLE_NOTICE_KINDS].sort()).toEqual([
       "deploy_approval_required",
       "design_enabled_ignored",
       "fix_feedback_association_excluded",
       "labeler_denied",
+      "stop_all_active",
       "unsandboxed_check_commands",
     ]);
   });
@@ -198,7 +200,11 @@ describe("UNRESOLVABLE_NOTICE_KINDS", () => {
       UNRESOLVABLE_NOTICE_KINDS.filter(
         (kind) => !INFO_NOTICE_KINDS.includes(kind),
       ).sort(),
-    ).toEqual(["deploy_approval_required", "design_enabled_ignored"]);
+    ).toEqual([
+      "deploy_approval_required",
+      "design_enabled_ignored",
+      "stop_all_active",
+    ]);
   });
 });
 

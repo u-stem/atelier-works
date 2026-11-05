@@ -11,6 +11,7 @@ import {
   escapeHatches,
   filesWithToolDependencies,
   GITHUB_TOKEN,
+  HEARTBEAT_URL,
   mentions,
   nonLiteralVariableReads,
   relative,
@@ -33,10 +34,11 @@ import {
 // - その2つも、github_token以外のsecret変数は読まない。
 // - audit_kickoff、notice_resolve、manual_intake_submit、pr_review_submit、console_holds、hold_release、freeze_release、
 //   console_jobs、console_schedules、console_config、console_job_cancel、console_job_rerun、console_config_update、
-//   console_hold_place、console_schedule_stop、console_deploy_decideは、どのsecret変数も読まない。
+//   console_hold_place、console_schedule_stop、console_deploy_decide、console_stop_all、console_stop_all_releaseは、
+//   どのsecret変数も読まない。
 //   Consoleから押せる操作に、外向きの資格情報を持たせないためである。
 // - console_jobs、console_schedules、console_config、console_job_cancel、console_job_rerun、console_config_update、
-//   console_hold_place、console_schedule_stopの8本は、SDKの呼び出しも許可表に絞る。
+//   console_hold_place、console_schedule_stop、console_stop_all、console_stop_all_releaseの10本は、SDKの呼び出しも許可表に絞る。
 //   `<X>Service.<method>`と`wmill.<member>`の使用を、importでたどれるファイルの和に当て、
 //   別名、名前付きimport、fetch、WM_TOKEN、深いパスのimportを禁じる。走査は`worker_boundary_scan.ts`の`sdkFindings`にある。
 //
@@ -80,6 +82,8 @@ const READS_NO_SECRET = [
   "f/factory/console_hold_place",
   "f/factory/console_schedule_stop",
   "f/factory/console_deploy_decide",
+  "f/factory/console_stop_all",
+  "f/factory/console_stop_all_release",
 ];
 
 /**
@@ -149,6 +153,25 @@ const SDK_ALLOWED: Readonly<Record<string, SdkAllowance>> = {
     ],
     members: ["getWorkspace", "datatable", "getVariable"],
   },
+  // 全停止は、全停止の変数を読んで書き、factory_configの生の値を読んで書き戻し、scheduleを無効にする。
+  // 変数のパスと、変数を秘密として作らないことは、走査が固定する。
+  "f/factory/console_stop_all": {
+    services: [
+      "ResourceService.getResourceValue",
+      "ResourceService.updateResourceValue",
+      "ScheduleService.setScheduleEnabled",
+      "VariableService.existsVariable",
+    ],
+    members: ["getWorkspace", "datatable", "getVariable", "setVariable"],
+  },
+  // 解除は、全停止の変数と凍結の変数を読み、全停止の変数を空に戻し、scheduleを有効に戻す。
+  "f/factory/console_stop_all_release": {
+    services: [
+      "ScheduleService.setScheduleEnabled",
+      "VariableService.existsVariable",
+    ],
+    members: ["getWorkspace", "datatable", "getVariable", "setVariable"],
+  },
 };
 
 /**
@@ -166,6 +189,8 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
     "getResourceValueの1回の呼び出し。引数をリテラルのf/factory/factory_configに固定することは、sdkFindingsが確かめる",
   "f/factory/console_config_update.ts":
     "getResourceValueの1回の呼び出し。引数をリテラルのf/factory/factory_configに固定することは、sdkFindingsが確かめる",
+  "f/factory/console_stop_all.ts":
+    "getResourceValueの1回の呼び出し。引数をリテラルのf/factory/factory_configに固定することは、sdkFindingsが確かめる",
 };
 
 /**
@@ -180,6 +205,8 @@ const ENV_ALLOWED: Readonly<Record<string, readonly string[]>> = {
   "f/factory/console_config_update.ts": ["WM_USERNAME", "WM_EMAIL"],
   "f/factory/console_hold_place.ts": ["WM_USERNAME", "WM_EMAIL"],
   "f/factory/console_schedule_stop.ts": ["WM_USERNAME", "WM_EMAIL"],
+  "f/factory/console_stop_all.ts": ["WM_USERNAME", "WM_EMAIL"],
+  "f/factory/console_stop_all_release.ts": ["WM_USERNAME", "WM_EMAIL"],
 };
 
 /**
@@ -680,6 +707,21 @@ describe("the SDK use scan", () => {
     expect(
       sdkFindings(
         `${JOB}await wmill.VariableService.existsVariable({ workspace, path: ${FREEZES} });`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("accepts getVariable with the literal stop-all path", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.getVariable("f/factory/stop_all");`)
+        .problems,
+    ).toEqual([]);
+  });
+
+  test("accepts the existence check of the stop-all variable", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.VariableService.existsVariable({ workspace, path: "f/factory/stop_all" });`,
       ).problems,
     ).toEqual([]);
   });
@@ -1240,6 +1282,10 @@ describe("console worker boundary", () => {
     expect(mentions(path, DISCORD_WEBHOOK_URL)).toBe(false);
   });
 
+  test.each(READS_NO_SECRET)("%s does not read heartbeat_url", (path) => {
+    expect(mentions(path, HEARTBEAT_URL)).toBe(false);
+  });
+
   test.each(READS_NO_SECRET)("%s reads no secret variable", async (path) => {
     const secrets = await secretVariablePaths();
     expect(secrets.filter((secret) => mentions(path, secret))).toEqual([]);
@@ -1429,6 +1475,26 @@ describe("the scripts restricted to an SDK allowance", () => {
     );
   });
 
+  test("the stop-all script disables schedules and never enables one", () => {
+    const source = readFileSync("f/factory/console_stop_all.ts", "utf8");
+    expect(codeOf(source)).not.toMatch(
+      /enabled:\s*true|setScheduleEnabled\([^)]*true/,
+    );
+  });
+
+  test("the stop-all release script never disables a schedule", () => {
+    const source = readFileSync(
+      "f/factory/console_stop_all_release.ts",
+      "utf8",
+    );
+    expect(codeOf(source)).not.toMatch(/setScheduleEnabled\([^)]*false/);
+  });
+
+  test("the only read of the stop-all script that the name scan cannot explain is its fixed getResourceValue", () => {
+    const source = readFileSync("f/factory/console_stop_all.ts", "utf8");
+    expect(nonLiteralVariableReads(source)).toEqual(["1 unexplained"]);
+  });
+
   test("the only read of the config script that the name scan cannot explain is its fixed getResourceValue", () => {
     const source = readFileSync("f/factory/console_config.ts", "utf8");
     expect(nonLiteralVariableReads(source)).toEqual(["1 unexplained"]);
@@ -1527,6 +1593,8 @@ describe("the SQL that the console scripts reach", () => {
     "f/factory/console_config_update.ts",
     "f/factory/console_hold_place.ts",
     "f/factory/console_schedule_stop.ts",
+    "f/factory/console_stop_all.ts",
+    "f/factory/console_stop_all_release.ts",
   ])("%s has no SQL of its own", (file) => {
     expect(
       templatesOf(file).filter((text) => /\bfactory\./.test(text)),

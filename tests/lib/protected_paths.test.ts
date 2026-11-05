@@ -1515,7 +1515,6 @@ describe("dependency-free lib locks", () => {
     "holds",
     "console_holds_support",
     "check_sandbox",
-    "check_runner",
     "approval_gate",
     "protected_paths",
     "deploy_approvals",
@@ -2216,12 +2215,33 @@ describe("safety boundary files", () => {
     "f/factory/lib/claude_flow_failure.script.yaml",
     "f/factory/lib/flow_retry_marker.ts",
     "f/factory/lib/flow_retry_marker.script.yaml",
+    "f/factory/lib/stop_all.ts",
+    "f/factory/lib/stop_all.script.yaml",
+    "f/factory/lib/stop_check.ts",
+    "f/factory/lib/stop_check.script.yaml",
+    "f/factory/console_stop_all.ts",
+    "f/factory/console_stop_all.script.yaml",
+    "f/factory/console_stop_all_release.ts",
+    "f/factory/console_stop_all_release.script.yaml",
+    "tests/lib/stop_all.test.ts",
+    "tests/scripts/console_stop_all.test.ts",
+    "tests/scripts/console_stop_all_release.test.ts",
+    "tests/scripts/stop_all_wiring.test.ts",
+    "scripts/stop_all.ts",
+    "scripts/credential_expiry.ts",
+    "f/factory/lib/credential_expiry.ts",
+    "f/factory/lib/credential_expiry.script.yaml",
   ];
   // windmill-clientを含むlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるので守らない。
   const CLIENT_LOCKS = [
     "f/factory/lib/claude.script.lock",
+    "f/factory/lib/check_runner.script.lock",
+    "f/factory/lib/stop_all.script.lock",
+    "f/factory/lib/stop_check.script.lock",
     "f/factory/self_update.script.lock",
     "f/factory/console_deploy_decide.script.lock",
+    "f/factory/console_stop_all.script.lock",
+    "f/factory/console_stop_all_release.script.lock",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
@@ -2238,6 +2258,10 @@ describe("safety boundary files", () => {
 
   test.each(PATHS)("%s exists", async (path) => {
     expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test.each(PATHS)("the CI round denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
   });
 
   test.each(CLIENT_LOCKS)(
@@ -2271,7 +2295,27 @@ describe("safety boundary files", () => {
 
   test.each([
     ["f/factory/lib/claude.script.yaml", "f/factory/lib/claude.script.lock"],
+    [
+      "f/factory/lib/check_runner.script.yaml",
+      "f/factory/lib/check_runner.script.lock",
+    ],
+    [
+      "f/factory/lib/stop_all.script.yaml",
+      "f/factory/lib/stop_all.script.lock",
+    ],
+    [
+      "f/factory/lib/stop_check.script.yaml",
+      "f/factory/lib/stop_check.script.lock",
+    ],
     ["f/factory/self_update.script.yaml", "f/factory/self_update.script.lock"],
+    [
+      "f/factory/console_stop_all.script.yaml",
+      "f/factory/console_stop_all.script.lock",
+    ],
+    [
+      "f/factory/console_stop_all_release.script.yaml",
+      "f/factory/console_stop_all_release.script.lock",
+    ],
   ])("%s points at its own lock", async (yamlPath, lockPath) => {
     expect(await Bun.file(yamlPath).text()).toContain(
       `lock: '!inline ${lockPath}'`,

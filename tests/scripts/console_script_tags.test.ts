@@ -27,6 +27,8 @@ const CONSOLE_SCRIPTS: Readonly<Record<string, number>> = {
   "f/factory/console_hold_place": 30,
   "f/factory/console_schedule_stop": 30,
   "f/factory/console_deploy_decide": 30,
+  "f/factory/console_stop_all": 60,
+  "f/factory/console_stop_all_release": 60,
 };
 
 async function scriptYaml(path: string): Promise<string> {

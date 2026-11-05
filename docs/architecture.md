@@ -46,6 +46,7 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 tag`periodic`を付けるのは、ファイル、独自イメージの道具、cgroupのどれにも依存しない定期ジョブである。
 読むsecret変数は、scriptごとに決める。
 通知を送る定期ジョブが`discord_webhook_url`を、収集の`collect_github`が`github_read_tokens`を読む。
+検出器(`detect_schedule_failures`)は、外部の死活監視に生存を報告するため、`heartbeat_url`も読む。
 `claude_oauth_token`、`github_token`、`wmill_token`は届かせない。
 依存するジョブは、defaultのworkerで動かす。
 tag`periodic`のジョブが13分以上待つと、defaultのworkerで動く`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
@@ -356,7 +357,7 @@ Consoleの一覧と集計は次のviewを読む。
 | `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。概要には、いま進めているflowのジョブのidも含む。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知、defaultのworkerの直近24時間の負荷 |
 
-次の20本のscriptは、tag `console`を付け、Console用のworkerで動かす。
+次の22本のscriptは、tag `console`を付け、Console用のworkerで動かす。
 
 - `console_query`
 - `approval_decide`
@@ -378,6 +379,8 @@ Consoleの一覧と集計は次のviewを読む。
 - `console_hold_place`
 - `console_schedule_stop`
 - `console_deploy_decide`
+- `console_stop_all`
+- `console_stop_all_release`
 
 どれも、Claudeの長いジョブがdefaultのworkerの枠を埋めても、Consoleを止めないためである。
 
@@ -434,9 +437,9 @@ Consoleの一覧と集計は次のviewを読む。
 | collect_github | `0 1-59/5 * * * *` | `f/factory/collect_github` | 5分ごとに実行します。設定のownersの所有者ごとに、読み取り専用のトークンでリポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数を集めて、DBに書きます。設定のgh_collect_detail_enabledがtrueのときは、続けてPRとIssueの詳細も集めて書きます。設定のgh_collect_enabledがfalseの間は、トークンを読まず、何も書きません。毎日9時0分の日次サマリ通知と重ならないよう、毎時1分から5分おきに実行します。 |
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
 | default_worker_watch | `45 4-59/5 * * * *` | `f/factory/default_worker_watch` | 5分ごとに実行します。defaultのqueueに予定時刻から10分以上待つジョブがあり、defaultで動いているジョブが1つも無いときだけ、defaultのworkerが止まっているとして通知を残し、Discordにも知らせます。長いClaudeのジョブが枠を塞いでいるだけのときは知らせません。待ちが解けると通知を自動で解決します。 |
-| detect_schedule_failures | `20 3-59/5 * * * *` | `f/factory/detect_schedule_failures` | 5分ごとに実行します。scheduleが起こしたジョブの失敗をジョブ履歴から拾って記録し、連続した失敗の初回とエラー文が変わったときはDiscordに知らせ、直近3回の実行が続けて失敗していれば要対応の通知を残します。このWindmillではscheduleの失敗時の呼び出し(on_failure)が働かないため、失敗を拾う入口はこのscheduleだけです。止まると、defaultのworkerの停止を見張る確認が通知を残します。 |
+| detect_schedule_failures | `20 3-59/5 * * * *` | `f/factory/detect_schedule_failures` | 5分ごとに実行します。scheduleが起こしたジョブの失敗をジョブ履歴から拾って記録し、連続した失敗の初回とエラー文が変わったときはDiscordに知らせ、直近3回の実行が続けて失敗していれば要対応の通知を残します。このWindmillではscheduleの失敗時の呼び出し(on_failure)が働かないため、失敗を拾う入口はこのscheduleだけです。止まると、defaultのworkerの停止を見張る確認が通知を残します。成功した回の最後に、全停止の変数(stop_all)を読んで要対応の通知を合わせ、置かれた直後はDiscordにも知らせます。成功した回の最後に、外部の死活監視のURL(heartbeat_url)を叩きます。 |
 | drawio_viewer_bump | `0 0 10 * * 1` | `f/factory/drawio_viewer_bump` | 毎週月曜の10:00に実行します。draw.ioの公式のリリースを確かめ、公開から14日以上たった最新の版に固定(`console/drawio-viewer.json`)を上げるPRを作ります。メジャー版が変わるPRは、題名に[major]を付け、本文の先頭で人の確認を求めます。PRには自動レビューのラベルを付けます。未完了の更新のPRがあるあいだと、同じ版のPRを作った後は、何もしません。ビューアの大きさが2割を超えて変わる版と、取得物がGitHubの記録と一致しない版は上げず、お知らせに残します。 |
-| notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。`review_post_mode`が`gated`のときは、レビューの投稿欄を足し、投稿しない状態が3日以上続けばConsoleの要対応にnoticeを追加し、投稿するモードに戻れば解決します。予定が飛んだ日があれば、最後に出した日の翌日から古い順に、最大7日分まで出します。 |
+| notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。`review_post_mode`が`gated`のときは、レビューの投稿欄を足し、投稿しない状態が3日以上続けばConsoleの要対応にnoticeを追加し、投稿するモードに戻れば解決します。予定が飛んだ日があれば、最後に出した日の翌日から古い順に、最大7日分まで出します。まとめの前に、資格情報の期限の記録(credential_expiry)を読み、期限のcredential_warn_days日前を切ったものを要対応の通知にしてDiscordにも知らせます。 |
 | poll_dependabot | `0 */10 * * * *` | `f/factory/poll_dependabot` | 10分ごとに実行します。設定のdependabot_enabledが無効なら何もしません。有効なら、dependabotが開いた、mainをbaseにする、draftでないPRを探し、自動でマージする条件をフローと同じ検査で確かめます。条件を満たしたPRだけ、依存の更新PRの検査と自動マージのフローを起動します。待つ間は何も作らず、待ちが長引いたPRや条件を満たさないPRは、人の対応待ちにして1回だけ通知します。同じPRにレビューか修正の処理が動いている間と、同じheadを処理した後は、選びません。 |
 | poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを収集の表から見つけ、表を使えない明示リポジトリはRESTの一覧で読んで、担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
 | poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。PRは収集の表から見つけ、表を使えない明示リポジトリはRESTの一覧で読みます。作業項目の後始末はIssueの巡回処理側で行います。 |
@@ -595,12 +598,16 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |
 | `f/factory/lib/deploy_gate` | script | [LIB] 保護パスの変更の反映の判定 |
+| `f/factory/lib/stop_all` | script | [LIB] 全停止の状態の解析と判定 |
+| `f/factory/lib/stop_check` | script | [LIB] 全停止の監視 |
+| `f/factory/lib/stop_all_notice` | script | [LIB] 全停止の通知を変数に合わせる |
 | `f/factory/lib/holds` | script | [LIB] 共通の保留の表の読み書き |
 | `f/factory/lib/types` | script | [LIB] 共通型 |
 | `f/factory/lib/self_update_pull_requests` | script | [LIB] 反映に含まれるPRの解析 |
 | `f/factory/lib/deploy_approvals` | script | [LIB] 反映の承認の読み書き |
 | `f/factory/lib/gh_collect_read` | script | [LIB] 収集の記録を読む側の判定 |
 | `f/factory/lib/intake_refresh` | script | [LIB] 取り込み内容の更新と記録 |
+| `f/factory/lib/heartbeat` | script | [LIB] 外部の死活監視のURLを叩く |
 | `f/factory/lib/pr_ci_fix_claim` | script | [LIB] 失敗した行を直してよいかの判断 |
 | `f/factory/lib/pr_ci_notify` | script | [LIB] 失敗の通知を出す時機の判断 |
 | `f/factory/lib/pr_ci_fix_recovery` | script | [LIB] 失敗を直した行の回復 |
@@ -654,6 +661,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/investigate_workspace` | script | [LIB] 調査のworktreeの置き場 |
 | `f/factory/lib/investigate_flow` | script | [LIB] 調査のフローの出力の形と本文の組み立て |
 | `f/factory/lib/investigate_gate` | script | [LIB] 調査の入口を開ける門 |
+| `f/factory/lib/credential_expiry` | script | [LIB] 資格情報の期限の確認 |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/lib/profile_upgrade` | script | [LIB] 進め方を通常に戻したことのIssueへのコメント |
 | `f/factory/lib/investigate_isolation_judge` | script | [LIB] 隔離の合否を決める判定 |
@@ -681,6 +689,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
 | `f/factory/investigate_isolation_probe` | script | [OP-2-11] 調査のClaudeの隔離を、読み出しと探索で測定して判定 |
 | `f/factory/console_deploy_decide` | script | [OP-2-12] 保護パスの変更の反映を承認・却下 |
+| `f/factory/console_stop_all` | script | [OP-2-13] Factoryを全停止 |
+| `f/factory/console_stop_all_release` | script | [OP-2-14] 全停止を解除 |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
 | `f/factory/hold_release` | script | [OP-2-4] 保留を解除 |
@@ -834,7 +844,7 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 CIの失敗を直す回は再開しない。
 反映した時点でそうなっていれば、通知を出さない。
 
-ジョブ全体には上限(`timeout`)を3300秒で置く。
+ジョブ全体には上限(`timeout`)を3400秒で置く。
 この上限はWindmillが外から打ち切る最後の砦で、通常は内側の上限で先に終わる。
 子プロセスは別のプロセスグループで起動し、その上限はworkerの中のタイマーなので、子の実行中に外から打ち切られると子が残りうるためである([セキュリティ](security.md)の「自己更新の打ち切り」)。
 変数の取得と更新、stateの読み書き、データベースの記録は個別の上限が無いので、1回30秒で区切り、超えたら例外にする。
@@ -859,9 +869,9 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 これらはジョブの失敗(`job_failed`と`schedule_failing`)になるだけである。
 
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
-`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3300秒は切り詰められない。
+`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3400秒は切り詰められない。
 
-3300秒は、全部が最悪のときの長さ3294.2秒に余裕を足した値である。
+3400秒は、全部が最悪のときの長さ3299.2秒に、約100秒の余裕を足した値である。
 コマンドの上限には、停止の上乗せ13秒を足す。
 時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
 
@@ -878,6 +888,7 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 | 凍結の読む段と書く段 | 2 | 10秒 | なし | 20秒 |
 | 収集の鮮度の確認 | 1 | 30秒 | なし | 30秒 |
 | 設計の有効化の通知の処理 | 1 | 5秒 | なし | 5秒 |
+| 全停止の確認 | 1 | 5秒 | なし | 5秒 |
 
 gitの11回は、cloneの更新で5回、HEADとブランチの確認で2回、変更パスの列挙で1回、反映に含まれるPRの列挙で1回、`mise.toml`の比較で最大2回である。
 PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒)で区切る。`withCallTimeout`で区切るのはWindmillのSDKとDBの呼び出しである。
@@ -885,6 +896,8 @@ PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒
 各段は1つの上限10秒で包み、区切った呼び出しの回数には数えない。
 設計の有効化の通知の処理も、更新の前に全体を1つの上限5秒で包み、区切った呼び出しの回数には数えない。
 失敗しても時間切れでも、警告だけを残して更新へ進む。
+全停止の確認は、更新の先頭で1つの上限5秒で包み、区切った呼び出しの回数には数えない。
+止まっている回と、止まっていないと確かめられない回(変数を読めない、5秒の時間切れ)は、self cloneの更新と反映をせずに見送る。
 deployの保留の判定は読み取りの段の中で済ませるので、段は増えず、見送る回は`wmill`のCLIを呼ばない。
 ローカルのgitの10回は、保護パスの判定の差分の1回と、ホストの印の確認の9回である。
 ホストの印の確認は、コミットの有無で1回、祖先の確認と内容の比較でそれぞれ最大4回である。
@@ -908,9 +921,9 @@ Console用のworkerの確認では、stateの読みと書き、noticeの挿入�
 収集の鮮度の確認で区切るのは、stateの読みと書き、収集の記録の読み、リポジトリ単位の古さの読みである。
 加えて、未解決のnoticeの一覧、noticeの挿入、noticeの解決、通知先の取得を区切る。
 これで8か所になる。
-この8か所も箇所の数として数え、確認全体の30秒も足すと、同じ処理を二重に数えて合計は3534.2秒になる。
-確認全体の30秒を足さずに8か所だけを数えても、合計は3504.2秒になる。
-どちらも3300秒を超えるので、ジョブの`timeout`を上げる必要が出る。
+この8か所も箇所の数として数え、確認全体の30秒も足すと、同じ処理を二重に数えて合計は3539.2秒になる。
+確認全体の30秒を足さずに8か所だけを数えても、合計は3509.2秒になる。
+どちらも3400秒を超えるので、ジョブの`timeout`を上げる必要が出る。
 `timeout`は子プロセスが残るのを防ぐ最後の打ち切りなので、延ばさない。
 そこで、次の2つが成り立つときだけ、8か所を確認全体の30秒に含めて数える。
 
@@ -945,8 +958,8 @@ Console用のworkerの確認も、受けていない通知は上限の10秒の�
 ジョブの上限で打ち切られた回の扱いは次のとおりである。
 
 - 最後に行うConsole用のworker、定期ジョブ用のworker、収集の鮮度の確認が走らず、`deployments`にも記録が残らない。
-- 打ち切られるまでの最大約55分、実行が終わらない。
-  2分ごとの次の約25回は多重実行の防止で飛ばされる。
+- 打ち切られるまでの最大約57分、実行が終わらない。
+  2分ごとの次の約28回は多重実行の防止で飛ばされる。
   この間は、自己更新の反映と、3つの確認が止まる。
 - 検出器が、打ち切られた回をジョブ履歴で`canceled_by`が`timeout`の取り消しとみなして失敗に数え、最大5分遅れてDiscordの`job_failed`で知らせる。
   3回続くと要対応の`schedule_failing`に残す。

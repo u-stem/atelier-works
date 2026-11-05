@@ -138,6 +138,13 @@ import {
   truncateOutput,
   withCallTimeout,
 } from "./lib/self_update_support.ts";
+import {
+  holdsGate,
+  readStopAll,
+  STOP_ALL_CHECK_TIMEOUT_MS,
+  type StopAllStatus,
+  sdkStopAllReadIo,
+} from "./lib/stop_all.ts";
 import { assertSha, type DeploymentPullRequest } from "./lib/types.ts";
 import {
   assertOutputComplete,
@@ -801,6 +808,7 @@ const boundedFetch: FetchLike = (url, init) =>
  * - 凍結の段(読む段と書く段。各段を`FREEZE_PHASE_TIMEOUT_MS`の1つの上限で包み、区切った呼び出しの回数には数えない)
  * - 収集の鮮度の確認(全体の上限を1回。中の区切った呼び出しは、区切った呼び出しの回数から除く)
  * - 設計の有効化の通知の処理(全体の上限を1回。中の呼び出しは、`withCallTimeout`の1つの区切りに包み、区切った呼び出しの回数には数えない)
+ * - 全停止の確認(`STOP_ALL_CHECK_TIMEOUT_MS`の1つの上限で包み、区切った呼び出しの回数には数えない)
  * 区切りの時間切れの後に、中断されずに残る背景の処理は数えない。
  */
 export const SELF_UPDATE_WORST_CASE_MS =
@@ -819,7 +827,8 @@ export const SELF_UPDATE_WORST_CASE_MS =
   CONSOLE_WORKER_CHECK_TIMEOUT_MS +
   PERIODIC_WORKER_CHECK_TIMEOUT_MS +
   GH_COLLECT_FRESHNESS_CHECK_TIMEOUT_MS +
-  DESIGN_NOTICE_CHECK_TIMEOUT_MS;
+  DESIGN_NOTICE_CHECK_TIMEOUT_MS +
+  STOP_ALL_CHECK_TIMEOUT_MS;
 
 // ---------------------------------------------------------------------------
 // main
@@ -832,12 +841,20 @@ export type SelfUpdateResult =
       readonly outcome: "held";
       readonly reason: "deploy_freeze" | "protected_paths_approval";
     }
+  | { readonly outcome: "held"; readonly reason: "stop_all" }
   | {
       readonly outcome: "updated";
       readonly sha_from: string | null;
       readonly sha_to: string;
       readonly needs_host_action: boolean;
     };
+
+/**
+ * 全停止で見送った回の結果。
+ * 戻り値をその場で返す形に書かないのは、`freeze_wiring.test.ts`の`heldBlock`が、
+ * 見送りの戻りの最初の出現までを凍結の見送りの本文として切り出すためである。
+ */
+const STOP_ALL_HELD: SelfUpdateResult = { outcome: "held", reason: "stop_all" };
 
 type FactoryConfig = Awaited<ReturnType<typeof loadConfig>>;
 
@@ -1080,6 +1097,27 @@ async function updateSelf(
     job_id: process.env.WM_JOB_ID ?? "unknown",
     ...describeTriggerEnv(process.env),
   });
+
+  // 全停止の間は、self cloneの更新も反映もしない。止めた後に入ったマージで、Factoryが動き直さないためである。
+  // 止まっていないと確かめられない回(読めない、時間切れ)も見送り、次の回に読み直す。
+  // `deployed_sha`を進めないので、解除の後の最初の回が、見送った範囲をそのまま反映する。
+  // 読み取りは例外を投げないので、`catch`に来るのは時間切れだけである。
+  const stop = await withCallTimeout(
+    "stop check",
+    () => readStopAll(sdkStopAllReadIo()),
+    STOP_ALL_CHECK_TIMEOUT_MS,
+  ).catch(
+    (): StopAllStatus => ({
+      kind: "unreadable",
+      reason: "the stop-all check timed out",
+    }),
+  );
+  if (holdsGate(stop)) {
+    log.info("the stop-all is in place or unreadable, deferring the update", {
+      state: stop.kind,
+    });
+    return STOP_ALL_HELD;
+  }
 
   const ghToken = await withCallTimeout("getVariable github_token", () =>
     wmill.getVariable("f/factory/github_token"),

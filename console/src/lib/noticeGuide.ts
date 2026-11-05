@@ -539,6 +539,38 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       },
     ),
   ],
+  [
+    "credential_expiring",
+    guide(
+      "資格情報の期限が、設定のcredential_warn_days日(既定30日)より近いか、過ぎています。本文に、資格情報と期限の日付(JST)が載ります。",
+      "docs/operations.mdの「秘密をローテーションする」の手順で資格情報を更新し、ホストでmise run bootstrapを実行してください。interaction-limitsは、GitHubの設定画面で延ばしてから、mise.local.tomlのINTERACTION_LIMITS_EXPIRES_ATを書き直します。",
+      {
+        commands: ["mise run bootstrap"],
+        note: "期限が先に延びると、次の日次のまとめ(毎日09:00)がこの通知を自動で解決します。",
+      },
+    ),
+  ],
+  [
+    "stop_all_active",
+    guide(
+      "Factoryが全停止しています。Claudeと検査の実行、Issueの取り込み、自己更新と、見張りと片付けを除くリポジトリのscheduleが止まっています。",
+      "原因を確かめてから、システムの画面の「保留と凍結」の全停止の区画で解除してください。ホストの端末では、mise run stop:releaseで解除できます。",
+      {
+        commands: ["mise run stop:release"],
+        note: "解除すると、5分以内に自動で解決されます。Consoleからは解決できません。factory_configの*_enabledは解除しても戻らないので、使う機能を1つずつ有効にします。",
+      },
+    ),
+  ],
+  [
+    "stop_all_released",
+    guide(
+      "全停止が解除されました。止めたscheduleは有効に戻りましたが、factory_configの*_enabledは止めたままです。",
+      "使う機能を、設定の手順に従って1つずつ有効にしてください。",
+      {
+        note: "通知は情報なので、システム画面に7日だけ出ます。",
+      },
+    ),
+  ],
 ]);
 
 /** `kind`の説明。表に無い種類は`GENERIC_NOTICE_GUIDE`を返す。 */

@@ -21,8 +21,16 @@
 // `wmill`が解除scriptを実行せずに読む・配る副コマンド(`script get`、`job list`、`script push`など)は通す。
 // パイプの上流の語にある名前は、`xargs`が受ける読み取りのプログラムと、`wmill`と、実行するプログラムに当てる。
 // `wmill jobs push`は、待ち行列のファイルからジョブを積み、名前が語に現れないので、名前なしで拒否する。
-// 凍結の変数`f/factory/freezes`は、`variable add/push`の語と、変数を書くURLの経路に、そのパスが当たるときに拒否する。
+// 凍結の変数`f/factory/freezes`と全停止の変数`f/factory/stop_all`は、`variable add/push`の語と、
+// 変数を書くURLの経路に、そのパスが当たるときに拒否する。
 // 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。
+//
+// 全停止のCLI(`scripts/stop_all.ts`)の実行と、`mise run stop`、`mise run stop:release`は、
+// 主セッションを含むすべてのセッションで拒否する(`findStopAllCall`)。
+// CLIは`CLAUDECODE`があれば断るが、環境変数を外せば迂回できるので、ここでも止める。
+// 全停止の入口は、プログラムの種類を問わず、どの語(`script -c`などのコマンド文字列の中も含む)に現れても拒否する。
+// `script`、`unbuffer`、`caffeinate`のような前置きの後ろでも止める。
+// 読み取りのプログラム(`NON_EXECUTING_PROGRAMS`)と検査の道具は、入口の名前が語にあっても通す。
 //
 // 拒否を既定にする。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
@@ -59,6 +67,7 @@
 // - 変数や文字列の連結で組んだパス、動的なimport、`docker compose exec db psql`に渡す語を組み立てて書く形。
 // - 呼び出し側が前置きとして外さない、コマンドを起動するプログラム(`find -exec`、`watch`、`parallel`、`ssh`、
 //   `/usr/bin/time`、`caffeinate`、`script`、`strace`など)の後ろに書いた実行系。
+//   全停止の入口(`findStopAllCall`)は、この形も止める。保留と凍結の判定は、この形を止めない。
 // - 実行系以外のプログラムが文字列として受け取るコード(`python -c`、`perl -e`、`ruby -e`、`awk`の`system()`など)。
 // - subagentが新しいファイルを書いて実行する形。
 // Bashとdockerを持つ主体は、psqlで保留を直接書ける。ここで止めるのは、誤操作と、拒否を知らない呼び出しである。
@@ -66,8 +75,10 @@
 import { CONSOLE_WRITE_SCRIPTS } from "./console-scripts.ts";
 import {
   baseName,
+  parseCommandLine,
   scanMiseGlobalOptions,
   shellArguments,
+  stripWrappers,
   type Word,
 } from "./shell-words.ts";
 
@@ -720,9 +731,15 @@ const RELEASE_FILE_NAMES: readonly string[] = CONSOLE_WRITE_SCRIPTS.flatMap(
   (name) => [name, `${name}.ts`, `${name}.script.yaml`, `${name}.script.lock`],
 );
 
-/** 凍結の変数のパス。スラッシュはパーセント符号化でも数える。 */
-const FREEZE_VARIABLE_PATH =
-  /f(?:\/|%2[Ff])factory(?:\/|%2[Ff])freezes(?![A-Za-z0-9_])/;
+/** 書き込みを拒む変数。凍結の変数と全停止の変数である。globが当たるかを見る対象でもある。 */
+const GUARDED_VARIABLES: readonly string[] = [
+  "f/factory/freezes",
+  "f/factory/stop_all",
+];
+
+/** 書き込みを拒む変数のパス。スラッシュはパーセント符号化でも数える。 */
+const GUARDED_VARIABLE_PATH =
+  /f(?:\/|%2[Ff])factory(?:\/|%2[Ff])(?:freezes|stop_all)(?![A-Za-z0-9_])/;
 
 /** 変数を書くURLの経路。読み取り(`get_value`など)は数えない。 */
 const VARIABLE_WRITE_URL =
@@ -942,17 +959,17 @@ function mentionsRelease(text: string): boolean {
   );
 }
 
-/** 文字列が、凍結の変数のパスか、それに当たりうるglobを含むなら真。 */
-function mentionsFreezeVariable(text: string): boolean {
+/** 文字列が、書き込みを拒む変数のパスか、それに当たりうるglobを含むなら真。 */
+function mentionsGuardedVariable(text: string): boolean {
   return releaseForms(text).some(
     (form) =>
-      FREEZE_VARIABLE_PATH.test(form) ||
+      GUARDED_VARIABLE_PATH.test(form) ||
       patternTokens(form).some((token) => {
         const tail = token.split("/").slice(-3).join("/");
         return (
           GLOB_CHARACTERS.test(tail) &&
           aimsAtName(tail) &&
-          globMatches(tail, "f/factory/freezes")
+          GUARDED_VARIABLES.some((variable) => globMatches(tail, variable))
         );
       }),
   );
@@ -993,13 +1010,13 @@ function hasExecutionToken(text: string): boolean {
   });
 }
 
-/** 語に、変数を書く副コマンドと凍結の変数のパスがそろっているなら真。 */
-function writesFreezeVariable(words: readonly Word[]): boolean {
+/** 語に、変数を書く副コマンドと、書き込みを拒む変数のパスがそろっているなら真。 */
+function writesGuardedVariable(words: readonly Word[]): boolean {
   const texts = words.map((word) => word.text);
   return (
     texts.includes("variable") &&
     texts.some((text) => VARIABLE_WRITE_WORDS.has(text)) &&
-    anyWord(words, mentionsFreezeVariable)
+    anyWord(words, mentionsGuardedVariable)
   );
 }
 
@@ -1173,7 +1190,7 @@ export function findConsoleReleaseCall(
       : null;
   }
   if (program === "wmill") {
-    if (writesFreezeVariable(words)) return "variable";
+    if (writesGuardedVariable(words)) return "variable";
     const args = words.slice(1);
     const positional = wmillPositional(args);
     if (pushesJobs(positional)) return "script";
@@ -1194,12 +1211,155 @@ export function findConsoleReleaseCall(
       : null;
   }
   if (named || anyWord(context.upstream, mentionsRelease)) return "script";
-  if (writesFreezeVariable(words)) return "variable";
+  if (writesGuardedVariable(words)) return "variable";
   const writesUrl =
     anyWord(words, mentionsVariableWriteUrl) ||
     literal.some(mentionsVariableWriteUrl);
-  const namesFreeze =
-    anyWord(words, mentionsFreezeVariable) ||
-    literal.some(mentionsFreezeVariable);
-  return writesUrl && namesFreeze ? "variable" : null;
+  const namesGuarded =
+    anyWord(words, mentionsGuardedVariable) ||
+    literal.some(mentionsGuardedVariable);
+  return writesUrl && namesGuarded ? "variable" : null;
+}
+
+/**
+ * 全停止のCLIを指すパスの末尾。保留のコードと同じ区切りの直後の`stop_all`で、拡張子は省略できる。
+ * `stop_all.test.ts`、`stop_all_excludes.ts`のような別のファイルには当たらない。
+ */
+const STOP_ALL_MENTION =
+  /(?:^|[/'"\s(=])stop_all(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
+
+/** 全停止のCLIのファイル名。globが当たるかを見る対象である。 */
+const STOP_ALL_FILE_NAMES: readonly string[] = ["stop_all", "stop_all.ts"];
+
+/** 全停止を置く・解除するmiseのタスク。 */
+const STOP_ALL_TASKS: readonly string[] = ["stop", "stop:release"];
+
+/** 語が全停止のCLIを指すか、引用符の外のglobが全停止のCLIの名前に当たりうるなら真。ディレクトリは問わない。 */
+function pointsAtStopAllCode(word: Word): boolean {
+  const all = spellings(word);
+  if (all.some((text) => STOP_ALL_MENTION.test(text))) return true;
+  if (!word.glob) return false;
+  return all.some((text) => {
+    const file = text.slice(text.lastIndexOf("/") + 1);
+    return STOP_ALL_FILE_NAMES.some((name) => globMatches(file, name, true));
+  });
+}
+
+/** 実行系の引数が、全停止のCLIを実行する形なら真。検査の道具が最初のオペランドなら、実行ではないので通す。 */
+function runnerStopAllCall(
+  args: readonly Word[],
+  inputs: () => readonly string[] | null,
+): boolean {
+  const inInput =
+    inputs()?.some((text) => STOP_ALL_MENTION.test(text)) ?? false;
+  if (inInput) return true;
+  return args.some(pointsAtStopAllCode) && !startsWithInspectionTool(args);
+}
+
+/** `mise`のコマンド行が、全停止を置く・解除するタスクを走らせる形なら真。 */
+function miseStopAllCall(
+  words: readonly Word[],
+  inputs: () => readonly string[] | null,
+): boolean {
+  const scan = scanMiseGlobalOptions(words, 1);
+  const args = words.slice(scan.next);
+  const subcommand = args[0];
+  if (subcommand === undefined) return false;
+  const execAt = args.findIndex(
+    (word) => word.text === "exec" || word.text === "x",
+  );
+  if (execAt !== -1 && runnerStopAllCall(args.slice(execAt + 1), inputs)) {
+    return true;
+  }
+  // `mise tasks`は、`run`が付かない限りタスクの一覧や情報を出すだけである。
+  const listsOnly =
+    MISE_TASKS_WORDS.has(subcommand.text) &&
+    !args.some((word) => MISE_RUNNING_WORDS.has(word.text));
+  if (listsOnly) return false;
+  // `--`より後ろはタスクへの引数なので、タスクの名前としては見ない。
+  const dashAt = args.findIndex((word) => word.text === "--");
+  const taskWords = dashAt === -1 ? args : args.slice(0, dashAt);
+  return taskWords.some((word) =>
+    STOP_ALL_TASKS.some((task) => namesTask(word, task)),
+  );
+}
+
+/** 全停止の変数のパス(`f/factory/stop_all`)。CLIのファイル名とは別のものである。 */
+const STOP_ALL_VARIABLE_PATH = /(?:^|[^A-Za-z0-9_])f\/factory\/stop_/;
+
+/** コマンド文字列を入れ子に読む深さの上限。深すぎる入力で処理が止まらないようにする。 */
+const STOP_ALL_MAX_DEPTH = 4;
+
+/** 空白を含む語が、中に全停止の入口を実行する形を持つか。読めない文字列は、字面で判定する。 */
+function textStopAllCall(
+  word: Word,
+  inputs: () => readonly string[] | null,
+  depth: number,
+): boolean {
+  const parsed =
+    depth >= STOP_ALL_MAX_DEPTH ? null : parseCommandLine(word.text);
+  if (parsed === null || !parsed.ok) return pointsAtStopAllCode(word);
+  return parsed.commands.some((command) => {
+    const inner = stripWrappers(command.words).words;
+    return inner.length > 0 && stopAllCallAt(inner, inputs, depth + 1);
+  });
+}
+
+/** 語が全停止のCLIを指すか、空白を含む語なら中のコマンドが全停止の入口を実行する形なら真。 */
+function wordStopAllCall(
+  word: Word,
+  inputs: () => readonly string[] | null,
+  depth: number,
+): boolean {
+  if (/\s/.test(word.text)) return textStopAllCall(word, inputs, depth);
+  // 全停止の変数のパスは、読み取りの引数にも現れる。書き込みは変数の判定(`findConsoleReleaseCall`)が止める。
+  return pointsAtStopAllCode(word) && !STOP_ALL_VARIABLE_PATH.test(word.text);
+}
+
+function stopAllCallAt(
+  words: readonly Word[],
+  inputs: () => readonly string[] | null,
+  depth: number,
+): boolean {
+  const program = baseName(words[0]?.text ?? "");
+  if (program === "mise") return miseStopAllCall(words, inputs);
+  if (RUNNERS.has(program)) return runnerStopAllCall(words.slice(1), inputs);
+  if (readerKind(program, words) !== null || INSPECTION_TOOLS.has(program)) {
+    return false;
+  }
+  // `script`や`caffeinate`のような前置きの後ろに`mise`か実行系が続く形は、その位置から判定する。
+  const launcherAt = words.findIndex((word, index) => {
+    const name = baseName(word.text);
+    return index > 0 && (name === "mise" || RUNNERS.has(name));
+  });
+  if (launcherAt === -1) {
+    return words.some((word) => wordStopAllCall(word, inputs, depth));
+  }
+  if (
+    words
+      .slice(0, launcherAt)
+      .some((word) => wordStopAllCall(word, inputs, depth))
+  ) {
+    return true;
+  }
+  const rest = words.slice(launcherAt);
+  return baseName(rest[0]?.text ?? "") === "mise"
+    ? miseStopAllCall(rest, inputs)
+    : runnerStopAllCall(rest.slice(1), inputs);
+}
+
+/**
+ * 単純コマンドが、全停止を置く・解除する操作なら真を返す。
+ * 全停止のCLI(`scripts/stop_all.ts`)の実行と、`mise run stop`、`mise run stop:release`である。
+ * CLIは`CLAUDECODE`があれば断るが、環境変数を外せば迂回できるので、すべてのセッションでここでも止める。
+ * プログラムの種類は問わない。`script`、`unbuffer`、`caffeinate`のような前置きの後ろの語と、
+ * `script -c`のようなコマンド文字列の中も、同じ規則で見る。
+ * 検査の道具(`bun test`、`biome`など)の引数と、読み取りのプログラム(`cat`、`git`、`rg`など)は、実行ではないので通す。
+ * ベストエフォートの規則で、変数や連結で組み立てた名前と、別名の呼び出しは止めない。
+ */
+export function findStopAllCall(
+  words: readonly Word[],
+  inputs: () => readonly string[] | null,
+): boolean {
+  return stopAllCallAt(words, inputs, 0);
 }

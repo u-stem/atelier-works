@@ -99,6 +99,9 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["doc_hash_column_missing", "要件定義の基準値の列の欠落"],
   ["design_enabled_ignored", "設計工程の有効化の無視"],
   ["claude_usage_limit", "Claudeの使用上限"],
+  ["credential_expiring", "資格情報の期限の接近"],
+  ["stop_all_active", "全停止中"],
+  ["stop_all_released", "全停止の解除"],
 ]);
 
 /** 作業項目の状態の日本語。表に無い状態は`UNKNOWN_STATUS_LABEL`にする。 */
@@ -225,7 +228,7 @@ export function holderKindLabel(kind: string): string {
 export const HOLDS_TEXT = {
   sectionTitle: "保留と凍結",
   sectionDescription:
-    "Factoryのマージと反映を止めている保留と凍結と、保護パスの変更の反映の承認待ちです。保留と凍結は、置くことも、解除することもできます。",
+    "Factoryの全停止と、マージと反映を期限つきで止めている保留と凍結と、保護パスの変更の反映の承認待ちです。全停止と保留と凍結は、置くことも、解除することもできます。",
   holdsCardTitle: "保留",
   holdsCardNote: "マージを止める保留の一覧です。",
   freezesCardTitle: "凍結とdeployの保留",
@@ -253,6 +256,28 @@ export const HOLDS_TEXT = {
   reasonField: "理由",
   holderField: "置いた主体",
   expiryField: "期限",
+} as const;
+
+/** 全停止の区画と確認のダイアログの文言。 */
+export const STOP_ALL_TEXT = {
+  stop: "全停止",
+  release: "解除",
+  working: "実行中",
+  clearNote:
+    "Factory全体を止めるときに使います。実行中のClaudeと検査も止まります。",
+  activeTitle: "全停止中",
+  placedAtField: "置いた時刻",
+  placedByField: "操作者",
+  corruptNote:
+    "全停止の変数が壊れているため、止まっている扱いです。解除すると空に戻ります。",
+  unreadable: "全停止の状態を読めません",
+  unreadableHostNote:
+    "読めない間は、ホストの端末で、mise run stopで止め、mise run stop:releaseで解除できます。",
+  stopDialogTitle: "Factoryを全停止しますか",
+  releaseDialogTitle: "全停止を解除しますか",
+  confirmStop: "全停止する",
+  confirmRelease: "解除する",
+  reasonLabel: "理由",
 } as const;
 
 /** 保護パスの変更の反映の承認待ちの文言。 */

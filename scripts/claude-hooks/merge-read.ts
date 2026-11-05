@@ -78,7 +78,7 @@ const AUTO_INSTALL_SETTINGS: readonly string[] = [
 ];
 
 /**
- * 形式だけで見分けられる秘密値(GitHubとAnthropicのトークン、DiscordのWebhook URL)。
+ * 形式だけで見分けられる秘密値(GitHubとAnthropicのトークン、DiscordのWebhook URL、外部の死活監視のURL)。
  * 子の標準エラーは拒否の文言に載りうるので、載せる前に伏せる。
  */
 const TOKEN_PATTERNS: readonly RegExp[] = [
@@ -87,6 +87,9 @@ const TOKEN_PATTERNS: readonly RegExp[] = [
   /sk-ant-oat[A-Za-z0-9_-]{10,}/g,
   /sk-ant-[A-Za-z0-9_-]{10,}/g,
   /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+/g,
+  /https:\/\/hc-ping\.com\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*/g,
+  /https?:\/\/[^\s/]+\/api\/push\/[A-Za-z0-9]+/g,
+  /https:\/\/cronitor\.link\/p\/[A-Za-z0-9]+(?:\/[A-Za-z0-9_-]+)*/g,
 ];
 
 /** 名前に`PASSWORD`、`TOKEN`、`SECRET`、`KEY`を含む代入(`=`と`:`、空白、引用符つきの値を含む)。値を伏せる。 */

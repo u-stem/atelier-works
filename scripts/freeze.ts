@@ -6,14 +6,17 @@
 // 反映で有効に戻されることを防ぐ。
 // deployの保留は、反映全体(push、migration、`self_update`の反映)を期限つきで待たせる。
 // 状態はどちらもWindmillの変数`f/factory/freezes`に置く。
+// 全停止(変数`f/factory/stop_all`)が置かれている間は、pushと、`check --refuse-stop-all`を断る。
+// `check`だけのときは警告で通す(pushもscheduleの復帰もしない`up`が使う)。
+// 全停止はscheduleを無効にするだけなので、pushがscheduleの定義で有効に戻してしまうためである。
 //
 // 使い方(`mise run`のタスクから呼ぶ):
 //   freeze.ts place --target f/factory/<name> --minutes <n> --reason <text>
 //   freeze.ts place --scope deploy --minutes <n> --reason <text>
 //   freeze.ts list
 //   freeze.ts release <id>
-//   freeze.ts check          有効な凍結を表示する。deployの保留があれば1を返す。読めないときは警告だけで通す
-//   freeze.ts push [--prune] [--dry-run]   除外を付けて`wmill sync push`を実行する。deployの保留があれば拒否する
+//   freeze.ts check [--refuse-stop-all]   有効な凍結を表示する。deployの保留があれば1を返す。--refuse-stop-allを付けると全停止でも1を返し、付けないと警告だけで通す。読めないときは警告だけで通す
+//   freeze.ts push [--prune] [--dry-run]   除外を付けて`wmill sync push`を実行する。全停止かdeployの保留があるか、読めなければ拒否する
 //   freeze.ts migrate        `wmill datatable migrate up`を実行する。deployの保留があるか、読めなければ拒否する
 //   freeze.ts apply          1回の読み取りで、pushに続けてmigrateを実行する
 //   freeze.ts reset          壊れた変数を空に戻す(人の端末の確認が要る)
@@ -53,6 +56,19 @@ import {
   serializeFreezeState,
   sessionHolderFromBranch,
 } from "../f/factory/lib/freezes.ts";
+import type {
+  StopAllReadIo,
+  StopAllStatus,
+} from "../f/factory/lib/stop_all.ts";
+
+/**
+ * 全停止のlibを、全停止を読むときに初めて読み込む。
+ * `lib/stop_all.ts`は`windmill-client`を読み込み、nodeでは解決できない。
+ * nodeで動くマージのフック(`claude-hooks/merge-read.ts`)が、このファイルの`wmillCliPorts`を読み込むためである。
+ */
+function loadStopAll() {
+  return import("../f/factory/lib/stop_all.ts");
+}
 
 export type Command =
   | {
@@ -70,7 +86,7 @@ export type Command =
   | { readonly kind: "apply" }
   | { readonly kind: "list" }
   | { readonly kind: "release"; readonly id: string }
-  | { readonly kind: "check" }
+  | { readonly kind: "check"; readonly refuseStopAll: boolean }
   | { readonly kind: "reset" }
   | {
       readonly kind: "push";
@@ -86,8 +102,15 @@ function fail<T>(reason: string): Outcome<T> {
 export function parseArgs(argv: readonly string[]): Outcome<Command> {
   const [name, ...rest] = argv;
   switch (name) {
+    case "check": {
+      let refuseStopAll = false;
+      for (const arg of rest) {
+        if (arg === "--refuse-stop-all") refuseStopAll = true;
+        else return fail(`unknown argument for check: ${arg}`);
+      }
+      return { ok: true, value: { kind: "check", refuseStopAll } };
+    }
     case "list":
-    case "check":
     case "reset":
     case "migrate":
     case "apply":
@@ -213,47 +236,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * `wmill`のCLIで変数を読み書きする入出力。変数の有無は一覧で確かめ、
- * 一覧に無いと確かめられたときだけ「無い」とする。それ以外の失敗は読み取りの失敗にする。
+ * `wmill`のCLIで`path`の変数を読む。変数の有無は一覧で確かめ、
+ * 一覧に無いと確かめられたときだけ`null`を返す。それ以外の失敗は例外にする。
  */
+async function readVariableWithCli(
+  capture: (argv: readonly string[]) => Promise<CaptureResult>,
+  path: string,
+): Promise<string | null> {
+  const got = await capture(["wmill", "variable", "get", path, "--json"]);
+  if (got.exitCode === 0) {
+    const detail: unknown = JSON.parse(got.stdout);
+    if (!isRecord(detail) || typeof detail.value !== "string") {
+      throw new Error("wmill variable get returned no string value");
+    }
+    return detail.value;
+  }
+  // 読めなかった。変数が無いと一覧で確かめられたときだけ「無い」とし、ほかは読み取りの失敗にする。
+  const list = await capture(["wmill", "variable", "list", "--json"]);
+  if (list.exitCode !== 0) {
+    throw new Error("wmill variable get and list failed");
+  }
+  const items: unknown = JSON.parse(list.stdout);
+  if (!Array.isArray(items)) {
+    throw new Error("wmill variable list returned an unexpected shape");
+  }
+  if (items.length >= LIST_PAGE_LIMIT) {
+    throw new Error("wmill variable list may be cut at the page size");
+  }
+  const found = items.some((item) => isRecord(item) && item.path === path);
+  if (found) throw new Error("wmill variable get failed");
+  return null;
+}
+
+/** `wmill`のCLIで凍結の変数を読み書きする入出力。 */
 export function wmillCliPorts(
   capture: (argv: readonly string[]) => Promise<CaptureResult>,
   now: () => Date,
 ): FreezePorts {
   return {
-    readVariable: async () => {
-      const got = await capture([
-        "wmill",
-        "variable",
-        "get",
-        FREEZE_VARIABLE_PATH,
-        "--json",
-      ]);
-      if (got.exitCode === 0) {
-        const detail: unknown = JSON.parse(got.stdout);
-        if (!isRecord(detail) || typeof detail.value !== "string") {
-          throw new Error("wmill variable get returned no string value");
-        }
-        return detail.value;
-      }
-      // 読めなかった。変数が無いと一覧で確かめられたときだけ「無い」とし、ほかは読み取りの失敗にする。
-      const list = await capture(["wmill", "variable", "list", "--json"]);
-      if (list.exitCode !== 0) {
-        throw new Error("wmill variable get and list failed");
-      }
-      const items: unknown = JSON.parse(list.stdout);
-      if (!Array.isArray(items)) {
-        throw new Error("wmill variable list returned an unexpected shape");
-      }
-      if (items.length >= LIST_PAGE_LIMIT) {
-        throw new Error("wmill variable list may be cut at the page size");
-      }
-      const found = items.some(
-        (item) => isRecord(item) && item.path === FREEZE_VARIABLE_PATH,
-      );
-      if (found) throw new Error("wmill variable get failed");
-      return null;
-    },
+    readVariable: () => readVariableWithCli(capture, FREEZE_VARIABLE_PATH),
     writeVariable: async (text) => {
       const added = await capture([
         "wmill",
@@ -272,8 +293,23 @@ export function wmillCliPorts(
   };
 }
 
+/** `wmill`のCLIで全停止の変数を読む入出力。書き込みは持たない。置くのと解除するのは`mise run stop`である。 */
+export function wmillCliStopAllReadIo(
+  capture: (argv: readonly string[]) => Promise<CaptureResult>,
+): StopAllReadIo {
+  return {
+    readVariable: async () =>
+      readVariableWithCli(
+        capture,
+        (await loadStopAll()).STOP_ALL_VARIABLE_PATH,
+      ),
+  };
+}
+
 export type CliDeps = {
   readonly ports: FreezePorts;
+  /** 全停止の変数の読み取り。 */
+  readonly stopAll: StopAllReadIo;
   readonly loadInputs: () => Promise<Outcome<FreezeInputs>>;
   readonly runPush: (argv: readonly string[]) => Promise<number>;
   readonly branch: () => Promise<string>;
@@ -367,7 +403,7 @@ export async function runCommand(
     case "list":
       return await runList(deps);
     case "check":
-      return await runCheck(deps);
+      return await runCheck(command.refuseStopAll, deps);
     case "push":
       return await runPush(command, actor, deps);
     case "reset":
@@ -587,11 +623,83 @@ async function within<T>(
 }
 
 /**
- * 有効なスケジュールの凍結とdeployの保留を表示し、deployの保留があれば1を返す。
+ * 拒否の文に載せる、全停止の状態。置かれていれば置いた時刻(JST)を示す。
+ * 理由と操作者は載せない。deployの保留の拒否の文(`describeHold`)と同じく、拒否の文に人が書いた文字を載せないためである。
+ */
+function describeStopAll(
+  status: Extract<StopAllStatus, { readonly kind: "active" | "corrupt" }>,
+): string {
+  switch (status.kind) {
+    case "active":
+      return `the stop-all is in effect (placed at ${formatJst(new Date(status.state.placed_at))})`;
+    case "corrupt":
+      return `the stop-all variable is malformed (${status.reason}), so the factory counts as stopped`;
+  }
+}
+
+/**
+ * 全停止が置かれているか、置かれていないと確かめられなければ、`action`を断る文を返す。
+ * 全停止はscheduleを無効にするだけなので、pushが定義の`enabled: true`で有効に戻してしまうためである。
+ */
+async function stopAllRefusal(
+  deps: CliDeps,
+  action: string,
+): Promise<string | null> {
+  const { readStopAll } = await loadStopAll();
+  const status = await readStopAll(deps.stopAll);
+  if (status.kind === "clear") return null;
+  if (status.kind === "unreadable") {
+    return `refused to ${action}: ${status.reason}; the stop-all must be confirmed clear before a ${action}`;
+  }
+  return `refused to ${action}: ${describeStopAll(status)}; release it with mise run stop:release, then ${action} again`;
+}
+
+/**
+ * 全停止が置かれていれば、`refuse`が真のときは断り、偽のときは警告だけで通す。
+ * 読めないときと、応答が上限を超えたときは、`refuse`によらず警告だけで通す。
+ * 凍結の読み取りと同じく、`deploy`と`up`が止まっているスタックを起こせるようにするためである。後段のpushは、読めないと止める。
+ */
+async function checkStopAll(refuse: boolean, deps: CliDeps): Promise<number> {
+  const { readStopAll } = await loadStopAll();
+  const read = await within(readStopAll(deps.stopAll), deps.checkReadTimeoutMs);
+  const status: StopAllStatus =
+    read === "timeout"
+      ? {
+          kind: "unreadable",
+          reason: `could not read the stop-all variable (timed out after ${deps.checkReadTimeoutMs} ms)`,
+        }
+      : read.done;
+  if (status.kind === "unreadable") {
+    deps.print(
+      `warning: ${status.reason}; the push will refuse to run until it is readable`,
+    );
+    return 0;
+  }
+  if (status.kind === "clear") return 0;
+  if (!refuse) {
+    deps.print(
+      `warning: ${describeStopAll(status)}; the push will refuse to run until it is released with mise run stop:release`,
+    );
+    return 0;
+  }
+  deps.print(
+    `refused: ${describeStopAll(status)}; release it with mise run stop:release first`,
+  );
+  return 1;
+}
+
+/**
+ * `refuseStopAll`が真のとき、全停止が置かれていれば断る。偽のときは警告だけで通す。
+ * 全停止の中でもコンテナを作り直せるように、pushもscheduleの復帰もしない`up`は偽で呼ぶ。
+ * 続けて、有効なスケジュールの凍結とdeployの保留を表示し、deployの保留があれば1を返す。
  * 読めないときと、応答が上限を超えたときは警告だけで通す(`deploy`と`up`が、止まっているスタックを
  * 起こせるように)。後段のpushとmigrateは、読めないと止める。
  */
-async function runCheck(deps: CliDeps): Promise<number> {
+async function runCheck(
+  refuseStopAll: boolean,
+  deps: CliDeps,
+): Promise<number> {
+  if ((await checkStopAll(refuseStopAll, deps)) !== 0) return 1;
   let raw: string | null;
   try {
     const read = await within(
@@ -645,7 +753,8 @@ function describeHold(held: FrozenPushPlan["deployFreezes"]): string {
 }
 
 /**
- * 変数を1回読み、pushの除外とdeployの保留を求める。`checkHold`が真でdeployの保留があれば拒否する。
+ * 変数を1回読み、pushの除外とdeployの保留を求める。
+ * `checkHold`が真で、全停止が置かれているか読めないとき、またはdeployの保留があれば拒否する。
  * 拒否や失敗のときは理由を表示してnullを返す。
  */
 async function planPush(
@@ -653,6 +762,13 @@ async function planPush(
   action: string,
   checkHold: boolean,
 ): Promise<FrozenPushPlan | null> {
+  if (checkHold) {
+    const refusal = await stopAllRefusal(deps, action);
+    if (refusal !== null) {
+      deps.print(refusal);
+      return null;
+    }
+  }
   const inputs = await deps.loadInputs();
   if (!inputs.ok) {
     deps.print(`refused to ${action}: ${inputs.reason}`);
@@ -833,6 +949,7 @@ async function main(): Promise<number> {
       (argv) => capture(argv, root),
       () => new Date(),
     ),
+    stopAll: wmillCliStopAllReadIo((argv) => capture(argv, root)),
     loadInputs: () => loadFreezeInputs(root),
     runPush: (argv) => runInherited(argv, root),
     runMigrate: (argv) => runInherited(argv, root),

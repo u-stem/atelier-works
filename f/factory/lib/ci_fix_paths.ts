@@ -180,6 +180,8 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/workspace.",
   "f/factory/lib/check_sandbox.",
   "f/factory/lib/check_runner.",
+  "f/factory/lib/stop_check.",
+  "f/factory/lib/stop_all.",
   "f/factory/lib/prompts.",
   "f/factory/lib/github.",
   "f/factory/lib/types.",

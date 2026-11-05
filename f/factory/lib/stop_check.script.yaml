@@ -1,0 +1,9 @@
+summary: '[LIB] 全停止の監視'
+description: 内部ライブラリです。直接実行するものではありません。全停止の変数を一定の間隔で読み、実行中のClaudeと検査を止める合図を出します。
+lock: '!inline f/factory/lib/stop_check.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

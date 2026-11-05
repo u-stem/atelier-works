@@ -23,6 +23,10 @@ import type {
   RetryWorkItemResult,
   ScheduleStopRefusalReason,
   ScheduleStopResult,
+  StopAllRefusalReason,
+  StopAllReleaseRefusalReason,
+  StopAllReleaseResult,
+  StopAllResult,
 } from "../api/guards/writeResults.ts";
 import {
   STOP_MIN_REMAINING_MINUTES,
@@ -539,6 +543,111 @@ export function describeScheduleStopResult(
     {
       tone: "success",
       message: `スケジュールを止めました。凍結が終わる${formatShortAbsoluteIso(result.freeze_expires_at)}以降の自己更新の追従で、有効に戻ります。`,
+    },
+    result.action_audit,
+  );
+}
+
+const STOP_ALL_REFUSALS: Readonly<Record<StopAllRefusalReason, string>> = {
+  invalid_reason:
+    "理由は1文字以上200文字以内で、改行を含めずに書いてください。何も変えていません。",
+  state_unreadable:
+    "全停止の状態を読めません。何も変えていません。急ぐときは、ホストでmise run stopを実行してください。",
+  actor_unknown: "操作者を確かめられませんでした。何も変えていません。",
+  audit_unavailable:
+    "操作の記録を残せませんでした。何も変えていません。急ぐときは、ホストでmise run stopを実行してください。",
+};
+
+/**
+ * すでに全停止中だったときの先頭の文。止め直せた段だけを「止め直しました」と言う。
+ * 止められなかった段は、後ろの問題の文が伝える。
+ */
+function restoppedHead(
+  result: Extract<StopAllResult, { refused: false }>,
+): string {
+  const config = result.config === "written" || result.config === "unchanged";
+  const schedules = result.schedules_failed.length === 0;
+  if (config && schedules) {
+    return "すでに全停止中です。設定とスケジュールを止め直しました。";
+  }
+  if (config) return "すでに全停止中です。設定を止め直しました。";
+  if (schedules) return "すでに全停止中です。スケジュールを止め直しました。";
+  return "すでに全停止中です。";
+}
+
+/** 全停止の結果。止めきれなかった段があれば、警告にして確かめる場所を示す。 */
+export function describeStopAllResult(result: StopAllResult): WriteNotice {
+  if (result.refused) {
+    return { tone: "info", message: STOP_ALL_REFUSALS[result.reason] };
+  }
+  const head = result.placed ? "全停止しました。" : restoppedHead(result);
+  const problems: string[] = [];
+  if (result.config === "has_reference") {
+    problems.push(
+      "設定に変数かresourceへの参照があるため、*_enabledは変えていません。CLIで止めてください。",
+    );
+  }
+  if (result.config === "failed") {
+    problems.push(
+      "設定の*_enabledを止められませんでした。Windmillでfactory_configを確かめてください。",
+    );
+  }
+  if (result.schedules_failed.length > 0) {
+    problems.push(
+      `止められなかったスケジュールが${String(result.schedules_failed.length)}本あります。Windmillで確かめてください。`,
+    );
+  }
+  if (problems.length > 0) {
+    return noteActionAudit(
+      { tone: "warning", message: `${head}${problems.join("")}` },
+      result.action_audit,
+    );
+  }
+  return noteActionAudit(
+    {
+      tone: "success",
+      message: `${head}実行中のClaudeと検査は、15秒以内に止まります。`,
+    },
+    result.action_audit,
+  );
+}
+
+const STOP_ALL_RELEASE_REFUSALS: Readonly<
+  Record<StopAllReleaseRefusalReason, string>
+> = {
+  state_unreadable: "全停止の状態を読めません。何も変えていません。",
+  freezes_unreadable:
+    "凍結を読めず、有効に戻してよいスケジュールが分からないため、解除していません。",
+  actor_unknown: "操作者を確かめられませんでした。何も変えていません。",
+  audit_unavailable:
+    "操作の記録を残せませんでした。何も変えていません。急ぐときは、ホストでmise run stop:releaseを実行してください。",
+};
+
+/** 全停止の解除の結果。`*_enabled`が戻らないことを、毎回伝える。 */
+export function describeStopAllReleaseResult(
+  result: StopAllReleaseResult,
+): WriteNotice {
+  if (result.refused) {
+    return { tone: "info", message: STOP_ALL_RELEASE_REFUSALS[result.reason] };
+  }
+  if (!result.released) {
+    return { tone: "info", message: "全停止は置かれていません。" };
+  }
+  const notes: string[] = [];
+  if (result.schedules_skipped.length > 0) {
+    notes.push(
+      `凍結のあるスケジュールを${String(result.schedules_skipped.length)}本、無効のまま残しました。凍結が終わると、自己更新が戻します。`,
+    );
+  }
+  if (result.schedules_failed.length > 0) {
+    notes.push(
+      `有効に戻せなかったスケジュールが${String(result.schedules_failed.length)}本あります。Windmillで確かめてください。`,
+    );
+  }
+  return noteActionAudit(
+    {
+      tone: result.schedules_failed.length > 0 ? "warning" : "success",
+      message: `全停止を解除しました。factory_configの*_enabledは止めたままなので、使う機能を1つずつ有効にしてください。${notes.join("")}`,
     },
     result.action_audit,
   );

@@ -59,11 +59,27 @@ export type DeployApprovalsRead =
   | { readonly ok: true; readonly pending: readonly DeployApprovalRowView[] }
   | { readonly ok: false; readonly reason: string };
 
+/**
+ * 全停止の状態。型は`f/factory/lib/console_holds_support.ts`の`StopAllView`に合わせる。
+ * 状態を返さない古いbackendの間は欠けるので、`HoldsSnapshot`では省略できる欄にする。
+ */
+export type StopAllRead =
+  | { readonly kind: "clear" }
+  | {
+      readonly kind: "active";
+      readonly placed_at: string;
+      readonly placed_by: string;
+      readonly reason: string;
+    }
+  | { readonly kind: "corrupt"; readonly reason: string }
+  | { readonly kind: "unreadable"; readonly reason: string };
+
 export type HoldsSnapshot = {
   readonly holds: HoldsRead;
   readonly freezes: FreezesRead;
   /** 反映の承認待ち。承認待ちを返さない旧版のbackendの間は欠ける。 */
   readonly deploy_approvals?: DeployApprovalsRead;
+  readonly stop_all?: StopAllRead;
 };
 
 // scopeとholder_kindと失敗のkindは表示にしか使わないので文字列で受け、日本語への変換(`labels.ts`)で
@@ -151,9 +167,30 @@ function isDeployApprovalsRead(value: unknown): value is DeployApprovalsRead {
     : isString(value.reason);
 }
 
+function isStopAllRead(value: unknown): value is StopAllRead {
+  if (!isRecord(value)) {
+    return false;
+  }
+  switch (value.kind) {
+    case "clear":
+      return true;
+    case "active":
+      return (
+        isIsoTimestamp(value.placed_at) &&
+        isString(value.placed_by) &&
+        isString(value.reason)
+      );
+    case "corrupt":
+    case "unreadable":
+      return isString(value.reason);
+    default:
+      return false;
+  }
+}
+
 /**
  * `value`がconsole_holdsの結果の形か。保留、凍結、承認待ちは別々の源なので、どの失敗も正しい形として受ける。
- * 承認待ちは、旧版のbackendが返さない間も一覧の全体が消えないよう、欠けていてもよい。
+ * 承認待ちと全停止の状態は、旧版のbackendが返さない間も一覧の全体が消えないよう、欠けていてもよい。
  */
 export function isHoldsSnapshot(value: unknown): value is HoldsSnapshot {
   return (
@@ -161,6 +198,7 @@ export function isHoldsSnapshot(value: unknown): value is HoldsSnapshot {
     isHoldsRead(value.holds) &&
     isFreezesRead(value.freezes) &&
     (value.deploy_approvals === undefined ||
-      isDeployApprovalsRead(value.deploy_approvals))
+      isDeployApprovalsRead(value.deploy_approvals)) &&
+    (value.stop_all === undefined || isStopAllRead(value.stop_all))
   );
 }
