@@ -169,6 +169,7 @@ export type PipelineGenerateResult =
  * Claudeの実行の失敗も、生成後の検証の失敗も、ここを通って同じく再試行される。
  * ただし、Claudeの実行のtimeout、予算の超過、使用上限は再試行で直らないので、
  * 文の先頭のタグ(`flowFailureMessage`)を`retry_if`が読み、再試行せずに`failure_module`へ進む。
+ * 全停止で止めた実行(`stopped`)も同じ扱いにする。解除の直後に、再試行で動き出させないためである。
  * 日次予算の超過は例外を投げずに返すので、再試行の対象にならない。
  */
 function failGeneration(reason: RunClaudeFailureReason, detail: string): never {
