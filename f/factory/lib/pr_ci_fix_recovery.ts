@@ -4,8 +4,14 @@
 
 import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry_reasons.ts";
 import { CHECK_UNRUNNABLE_REASON_PREFIX } from "./check_runner.ts";
-import { CI_ROUND_DETAILS, ciRoundReason } from "./ci_fix_round.ts";
+import {
+  CI_ROUND_DETAILS,
+  ciClaudeFailedNote,
+  ciClaudeFailureText,
+  ciRoundReason,
+} from "./ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "./ci_metadata_rehash.ts";
+import { NON_RETRYABLE_REASONS } from "./flow_retry_marker.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
 import { TERMINAL_WORK_ITEM_STATUSES, type WorkItemStatus } from "./types.ts";
 
@@ -35,6 +41,17 @@ export const DRAFT_OR_AUTO_MERGE_REASONS: readonly string[] = [
   "pull request is a draft",
   "pull request has auto-merge enabled",
 ];
+
+/**
+ * Claudeの実行の失敗のうち、同じheadで繰り返さないものの注記。
+ * 修正のステップの例外の文と、検証のステップの止める理由の両方である。
+ * 固定の文で、Claudeの出力は入らない。
+ */
+const CLAUDE_RUN_FAILED_NOTES: readonly string[] =
+  NON_RETRYABLE_REASONS.flatMap((reason) => [
+    ciClaudeFailureText(reason),
+    ciClaudeFailedNote(reason),
+  ]);
 
 /**
  * 止めた理由を、保留の理由に写す。写せなければ`null`を返す。
@@ -73,6 +90,7 @@ export function holdReasonForStoppedItem(
   }
   // 検査コマンドの実行ファイルを起動できない環境の問題は、同じheadで起動し直しても変わらない。
   if (note.startsWith(CHECK_UNRUNNABLE_REASON_PREFIX)) return "fix_stopped";
+  if (CLAUDE_RUN_FAILED_NOTES.includes(note)) return "claude_run_failed";
   return null;
 }
 
@@ -96,7 +114,9 @@ function isTerminal(status: WorkItemStatus): boolean {
  * - 動いている作業項目(終端でない)は、そのままにする。
  * - pushした作業項目(`rereview_requested`か、pushしたcommitの記録がある)は、`pushed`にする。
  *   行のheadの読み遅れで、古いheadの行を`failed`に戻して直し直すことを防ぐためである。
- * - 存在しない作業項目と、`failed`や`cancelled`などの終わり方をした作業項目は、保留なしで戻す。
+ * - `failed`のうち、Claudeの実行がtimeout、予算の超過、使用上限、全停止で失敗したものは、`claude_run_failed`で保留して戻す。
+ *   保留なしで戻すと、次の巡回で同じ失敗を繰り返し、費用と回数の上限を使い切るためである。
+ * - 存在しない作業項目と、ほかの`failed`や`cancelled`などの終わり方をした作業項目は、保留なしで戻す。
  *   `pr_fix`が`cancelled`になるのはPRが閉じたときだけで、設定から外れたリポジトリを除き、閉じたPRは戻す前のheadの読み取りが拾うためである。
  * - `blocked`は、理由を保留の理由に写せればその理由で保留する。写せなければ、保留なしで戻す。
  *   起動し直す回数は、回数の上限(`pr_ci_fix_max_rounds`)が止める。
@@ -131,6 +151,13 @@ export function decideFixingRecovery(
         : { kind: "release", hold: null };
     }
     return { kind: "release", hold: holdReasonForStoppedItem(item.note) };
+  }
+  if (
+    item.status === "failed" &&
+    item.note !== null &&
+    CLAUDE_RUN_FAILED_NOTES.includes(item.note)
+  ) {
+    return { kind: "release", hold: "claude_run_failed" };
   }
   return { kind: "release", hold: null };
 }

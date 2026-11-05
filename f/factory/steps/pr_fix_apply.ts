@@ -13,7 +13,7 @@ import {
   buildCiGatherDeps,
   CI_FIX_ALLOWED_TOOLS,
   CI_FIX_TOOLS,
-  ciClaudeFailureText,
+  ciClaudeFailedNote,
   ciTextScanner,
   gatherCiFailureInput,
   readCiFailure,
@@ -680,10 +680,7 @@ async function applyCiRound(
     }
     // 実行の詳細は、秘密値の検査を通っていないので、例外の文に入れない。
     throw new Error(
-      flowFailureMessage(
-        result.reason,
-        `pr_fix_apply: ${ciClaudeFailureText(result.reason)}`,
-      ),
+      flowFailureMessage(result.reason, ciClaudeFailedNote(result.reason)),
     );
   }
   return {

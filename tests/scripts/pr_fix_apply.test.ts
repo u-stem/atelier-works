@@ -537,7 +537,7 @@ describe("claude failure wiring in the apply step", () => {
 
   test("throws the failure of the CI round through flowFailureMessage", async () => {
     expect(await stepSource("pr_fix_apply.ts")).toContain(
-      "throw new Error( flowFailureMessage( result.reason, `pr_fix_apply: ${ciClaudeFailureText(result.reason)}`, ), );",
+      "throw new Error( flowFailureMessage(result.reason, ciClaudeFailedNote(result.reason)), );",
     );
   });
 

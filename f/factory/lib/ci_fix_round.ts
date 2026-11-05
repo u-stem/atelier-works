@@ -757,6 +757,14 @@ export function ciClaudeFailureText(reason: RunClaudeFailureReason): string {
   return `${REASON_PREFIX}: claude run failed (${reason})`;
 }
 
+/**
+ * 修正のステップがClaudeの実行の失敗で投げる例外の文。
+ * 例外の文がそのまま作業項目の注記になるので、回復はこの文への完全一致で、繰り返さない失敗を見分ける。
+ */
+export function ciClaudeFailedNote(reason: RunClaudeFailureReason): string {
+  return `pr_fix_apply: ${ciClaudeFailureText(reason)}`;
+}
+
 export type CiFixApplyDeps = {
   /** Factoryのcloneにある、factory-fixスキルの本文。 */
   readonly readSkillText: () => Promise<string>;

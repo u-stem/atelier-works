@@ -267,6 +267,7 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 | `fix_stopped` | 決定的 | 直す作業項目が、pushしないまま人の判断待ちで止まった |
 | `rounds_exhausted` | 決定的 | 直す回数の上限に達した |
 | `not_factory_head` | 決定的 | 最後のpushがFactoryのものでない |
+| `claude_run_failed` | 決定的 | 直す作業のClaudeの実行が、timeout、実行ごとの予算の超過、使用上限、全停止のどれかで失敗した。外す手順は[運用](../operations.md#claudeの失敗で保留したciの直しを起動し直す)にある |
 | `marker_missing` | 一時的 | Factoryのクローンのスキルが、CIの失敗を直す節を持たない。スキルが入れば外れる |
 | `main_ci_failed` | 一時的 | mainのCIが赤い |
 | `budget_exceeded` | 一時的 | 日次の予算を使い切った |
@@ -282,6 +283,7 @@ noticeを出す時機は、決定的な理由なら保留した時点、一時�
 保留が続いたと見なす時間は、`not_reviewed`と`last_fix_unsettled`では`claude_timeout_sec`の2倍、ほかの一時的な理由では30分になる。
 自動レビューや直す作業項目が走っている間は、この2つが長く続いても異常でないためである。
 Discordも送るかは理由ごとに決める。`fix_stopped`は、止めた`pr_fix_finish`がすでに送っているので、noticeだけにする。
+`claude_run_failed`も、止めたフローの通知(`job_failed`か`pr_fix_finish`)がすでに届いているので、noticeだけにする。
 通知の手順は[保留した失敗の通知](#保留した失敗の通知)に書く。
 
 ## 回復
@@ -309,7 +311,8 @@ Discordも送るかは理由ごとに決める。`fix_stopped`は、止めた`pr
 | イメージが古い理由(自動の再開の対象の理由)で`blocked`になった | 止まってから24時間は戻さない。24時間後に保留なしで戻す。保留の理由ではなく、人がイメージを作り直す猶予である |
 | それ以外の`blocked` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ、保留なしで`failed`に戻す。起動し直す回数は、直す回数の上限が止める |
 | `needs_human` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ`fix_stopped`にする |
-| 存在しない、または上の行に当たらない終端の状態(`failed`、`cancelled`、`expired`、`reviewed`、`approved`、`rejected`など) | 保留なしで`failed`に戻す |
+| `failed`で、注記がClaudeの実行の失敗(timeout、実行ごとの予算の超過、使用上限、全停止)の固定文である | `claude_run_failed`で保留して`failed`に戻す。保留なしで戻すと、次の巡回で同じ失敗を繰り返し、費用と回数の上限を使い切るためである |
+| 存在しない、または上の行に当たらない終端の状態(ほかの`failed`、`cancelled`、`expired`、`reviewed`、`approved`、`rejected`など) | 保留なしで`failed`に戻す |
 
 24時間待つのは、待たずに戻すと、同じ理由で止まる回を重ねて、直す回数の上限を使い切るためである。
 CIの回は自動の再開の対象外なので、この間に作業項目が再開されることはない。
@@ -350,6 +353,7 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
 | トークンがログを読めない、ログが取得できない | `log_unavailable` |
 | 日次予算の超過 | `budget_exceeded` |
 | PRがドラフトか、auto-mergeが有効 | `pr_draft_or_auto_merge` |
+| Claudeの実行がtimeout、実行ごとの予算の超過、使用上限、全停止で失敗した | `claude_run_failed` |
 
 保留なしで戻した行は、直す作業を起動し直せる。
 直す回数の上限(`pr_ci_fix_max_rounds`)が、起動し直しの歯止めになる。

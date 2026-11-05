@@ -2812,6 +2812,7 @@ PATの権限の不足とは限らないので、表の候補の404と403は、�
 
    理由ごとの意味は[保留の理由の語彙](internals/pr-ci.md#保留の理由の語彙)の表にある。
    一時的な理由は条件が解ければ自動で外れる。決定的な理由は人が対処する。
+   理由が`claude_run_failed`の行は、[Claudeの失敗で保留したCIの直しを起動し直す](#claudeの失敗で保留したciの直しを起動し直す)の手順で扱う。
    ジョブIDの未記録でフローを取り消した回が起きたときは、Discordの通知(`job_failed`)が増えるかを見る。取り消したフローで失敗時の通知が動くかは、確かめていない。
 6. 結果に問題が無ければ、`pr_ci_fix_max_rounds`と`daily_budget_usd`を戻す。
 
@@ -2822,6 +2823,36 @@ PATの権限の不足とは限らないので、表の候補の404と403は、�
 - 1つのPRだけを止めるには、PRをドラフトにする。ドラフトのPRは起動せず、動いている作業項目も、準備かpushの直前でドラフトを見て止まる。
 
 直す作業項目が`cancelled`になるのは、PRが閉じたときだけである。閉じたPRの行は、`superseded`になる。
+
+### Claudeの失敗で保留したCIの直しを起動し直す
+
+直す作業のClaudeの実行が次の4つで失敗すると、監視は行を保留`claude_run_failed`にして、同じheadでは起動し直さない。
+同じ失敗を繰り返すと、費用と`pr_ci_fix_max_rounds`の回数を使い切るためである。
+全停止は、人が止めた実行を解除の直後に動かさないためである。
+
+| 種類 | 原因の解き方 |
+| --- | --- |
+| `timeout` | 直す範囲が大きすぎないかをログで確かめ、必要なら`claude_timeout_sec`を上げる |
+| `budget_exceeded` | 直す範囲が大きすぎないかをログで確かめ、必要なら`max_budget_usd_per_run`を上げる |
+| `usage_limit` | 使用上限が戻るのを待つ |
+| `stopped` | 全停止を解除する |
+
+手順は次のとおりである。
+
+1. 作業項目の理由の`claude run failed (<種類>)`で、種類を確かめる。
+2. 表に従って原因を解く。
+3. 人が直してPRにpushすると、新しいheadが新しい行になり、保留は引き継がない。
+4. 同じheadで自動の修正を動かし直すときは、次のコマンドで保留を外す。
+   行のIDは、[失敗の自動修正を有効にする](#失敗の自動修正を有効にする)の読み取りのコマンドで確かめる。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "UPDATE factory.pr_ci_checks SET fix_hold_reason = NULL, notified_reason = NULL, updated_at = now() WHERE id = <行のID> AND state = 'failed' AND fix_hold_reason = 'claude_run_failed'"
+   ```
+
+   次の巡回が、起動するかを判断し直す。
+   直す回数の上限に達していれば、`rounds_exhausted`で保留する。
+
+CIの回は`retry_work_item`が再開を断るので、Consoleの**再実行**では動かし直せない。
 
 ## PRの競合を検知する
 

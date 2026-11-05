@@ -506,6 +506,8 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  *   止めた理由が語彙に写せない`blocked`は含めない。起動し直す回数は、回数の上限が止める。
  * - `rounds_exhausted`: 直す回数の上限に達した。
  * - `not_factory_head`: 最後のpushがFactoryのものでない。
+ * - `claude_run_failed`: 直す作業のClaudeの実行が、timeout、実行ごとの予算の超過、使用上限、全停止のどれかで失敗した。
+ *   同じheadで起動し直しても同じ失敗になり、費用と回数だけを使う。全停止は、人が止めた実行を解除の直後に動かさない。
  *
  * 一時的な理由は、解ければ外してよい理由である。
  * - `marker_missing`: Factoryのクローンのスキルが、CIの失敗を直す節を持たない。
@@ -531,6 +533,7 @@ export const PR_CI_FIX_HOLD_REASONS = [
   "fix_stopped",
   "rounds_exhausted",
   "not_factory_head",
+  "claude_run_failed",
   "main_ci_failed",
   "budget_exceeded",
   "not_reviewed",
@@ -623,6 +626,14 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
       "最後のpushがFactoryのものでないので、自動では直さない。人が直してPRにpushする",
     stopAction:
       "最後のpushがFactoryのものでないので、自動では直しません。人が直してPRにpushしてください",
+  },
+  claude_run_failed: {
+    temporary: false,
+    discord: false,
+    nextAction:
+      "直す作業のClaudeの実行が、timeout、実行ごとの予算の超過、使用上限、全停止のどれかで失敗した。同じheadでは起動し直さない。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの直しを起動し直す」に従う",
+    stopAction:
+      "直す作業のClaudeの実行が、timeout、実行ごとの予算の超過、使用上限、全停止のどれかで失敗しました。同じheadでは起動し直しません。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの直しを起動し直す」に従ってください",
   },
   marker_missing: {
     temporary: true,
