@@ -1,5 +1,5 @@
 summary: '[LIB] flowの再試行を止めるタグ'
-description: 内部ライブラリです。直接実行するものではありません。timeout、予算の超過、使用上限のClaudeの失敗に、flowの再試行を止めるタグを付け、外します。
+description: 内部ライブラリです。直接実行するものではありません。timeout、実行ごとの予算の超過、使用上限、全停止のClaudeの失敗に、flowの再試行を止めるタグを付け、外します。
 lock: '!inline f/factory/lib/flow_retry_marker.script.lock'
 kind: script
 schema:

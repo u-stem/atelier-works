@@ -631,9 +631,9 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     temporary: false,
     discord: false,
     nextAction:
-      "直す作業のClaudeの実行が、timeout、実行ごとの予算の超過、使用上限、全停止のどれかで失敗した。同じheadでは起動し直さない。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの直しを起動し直す」に従う",
+      "直す作業のClaudeの実行が、timeout、実行ごとの予算の超過、使用上限、全停止のどれかで失敗した。同じheadでは起動し直さない。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの修正を起動し直す」に従う",
     stopAction:
-      "直す作業のClaudeの実行が、timeout、実行ごとの予算の超過、使用上限、全停止のどれかで失敗しました。同じheadでは起動し直しません。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの直しを起動し直す」に従ってください",
+      "直す作業のClaudeの実行が、timeout、実行ごとの予算の超過、使用上限、全停止のどれかで失敗しました。同じheadでは起動し直しません。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの修正を起動し直す」に従ってください",
   },
   marker_missing: {
     temporary: true,

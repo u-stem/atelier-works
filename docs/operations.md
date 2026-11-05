@@ -1384,8 +1384,8 @@ Consoleからは上げられない([設定を止める向きに変える](#設�
 - 調査は再実行できないので、同じ依頼を投入し直す。
 - dependabotの更新は再実行できないので、PRを人が確かめ、手でマージするか閉じる。
   新しいコミットが積まれると、自動で再び対象になる。
-- CIを直す回は、行を保留する([Claudeの失敗で保留したCIの直しを起動し直す](#claudeの失敗で保留したciの直しを起動し直す))。
-- 競合を直す回は、行を`fix_stopped`で保留する。
+- CIを直す回は行を保留する([Claudeの失敗で保留したCIの修正を起動し直す](#claudeの失敗で保留したciの修正を起動し直す))。
+- 競合を直す回は行を`fix_stopped`で保留する。
   人が競合を解消するか、PRにpushする。
 
 #### 使用上限の判定を確かめる
@@ -1417,7 +1417,7 @@ Consoleからは上げられない([設定を止める向きに変える](#設�
    ```
 
 2. `failure_reason`と、`error`の`subtype=`、`api_error_status=`、その後の本文を見る。
-   `is_error`の結果の`failure_reason`は、`usage_limit`、`run_budget_exceeded`、`claude_error`のどれかである。
+   `is_error`の結果の`failure_reason`は`usage_limit`、`run_budget_exceeded`、`claude_error`のどれかである。
 3. 使用上限の失敗の`failure_reason`が`claude_error`なら、判定が漏れている。
    `failure_reason`が`non_zero_exit`か`invalid_json`の失敗に使用上限の文があるときも、同じである。
    本文と終了の形をIssueに書き、`f/factory/lib/claude.ts`の判定を直す。
@@ -2819,7 +2819,7 @@ PATの権限の不足とは限らないので、表の候補の404と403は、�
 
    理由ごとの意味は[保留の理由の語彙](internals/pr-ci.md#保留の理由の語彙)の表にある。
    一時的な理由は条件が解ければ自動で外れる。決定的な理由は人が対処する。
-   理由が`claude_run_failed`の行は、[Claudeの失敗で保留したCIの直しを起動し直す](#claudeの失敗で保留したciの直しを起動し直す)の手順で扱う。
+   理由が`claude_run_failed`の行は、[Claudeの失敗で保留したCIの修正を起動し直す](#claudeの失敗で保留したciの修正を起動し直す)の手順で扱う。
    ジョブIDの未記録でフローを取り消した回が起きたときは、Discordの通知(`job_failed`)が増えるかを見る。取り消したフローで失敗時の通知が動くかは、確かめていない。
 6. 結果に問題が無ければ、`pr_ci_fix_max_rounds`と`daily_budget_usd`を戻す。
 
@@ -2831,7 +2831,7 @@ PATの権限の不足とは限らないので、表の候補の404と403は、�
 
 直す作業項目が`cancelled`になるのは、PRが閉じたときだけである。閉じたPRの行は、`superseded`になる。
 
-### Claudeの失敗で保留したCIの直しを起動し直す
+### Claudeの失敗で保留したCIの修正を起動し直す
 
 直す作業のClaudeの実行が次の4つで失敗すると、監視は行を保留`claude_run_failed`にして、同じheadでは起動し直さない。
 同じ失敗を繰り返すと、費用と`pr_ci_fix_max_rounds`の回数を使い切るためである。
@@ -2850,13 +2850,13 @@ PATの権限の不足とは限らないので、表の候補の404と403は、�
 2. 表に従って原因を解く。
 3. 人が直してPRにpushすると、新しいheadが新しい行になり、保留は引き継がない。
 4. 同じheadで自動の修正を動かし直すときは、次のコマンドで保留を外す。
-   行のIDは、[失敗の自動修正を有効にする](#失敗の自動修正を有効にする)の読み取りのコマンドで確かめる。
+   行のIDは[失敗の自動修正を有効にする](#失敗の自動修正を有効にする)の読み取りのコマンドで確かめる。
 
    ```bash
    mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "UPDATE factory.pr_ci_checks SET fix_hold_reason = NULL, notified_reason = NULL, updated_at = now() WHERE id = <行のID> AND state = 'failed' AND fix_hold_reason = 'claude_run_failed'"
    ```
 
-   次の巡回が、起動するかを判断し直す。
+   次の巡回が起動するかを判断し直す。
    直す回数の上限に達していれば、`rounds_exhausted`で保留する。
 
 CIの回は`retry_work_item`が再開を断るので、Consoleの**再実行**では動かし直せない。
@@ -4563,7 +4563,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `hold_released` | 人が、保留、スケジュールの凍結、deployの保留を、Consoleのシステムの画面から解除した。本文に、解除した対象、操作者、時刻(JST、秒まで)が載る。「情報」で、保留の`reason`と`holder`は載せない。凍結の行は解除した主体を残さないので、この通知が操作者の記録になる。期限切れの行を片付けたときと、解除済みの行への呼び出しでは残さない。Discordには届かない | 心当たりのある解除なら、何もしない。心当たりが無いなら、操作者の名前を確かめ、止めていた対象を置き直すかを判断する |
 | `doc_hash_column_missing` | 要件定義の下書きの基準値の列(`requirement_drafts.doc_hash`)が無いまま、基準値なしで下書きを保存した。列を足すmigrationより先に、コードが反映されたときに残る。この下書きは、承認の後の書き換えを検出できない。本文は固定で、未解決は1件にまとまる | 列を足すmigrationは、自己更新が自動で反映する。デプロイの記録で、反映が成功していることを確かめる。失敗しているときは、自己更新のジョブのログで原因を確かめる。書き換えから守りたい要件定義は作り直す。列が足されても、通知は自動では解決されない。基準値なしで保存された承認済みの要件定義が残ること自体が、書き換えからの守りの欠落であり、列が足されたことだけでは消えないためである。人が、その要件定義の扱いを確かめ終えてから解決する |
 | `design_enabled_ignored` | 設定の`design_enabled`が`true`だが、`design_enabled_since`が無いか日時として読めないため、`false`として読んでいる。設計工程は動かない。設定タブの**設計工程**の行には、効いている値の「無効」が出る(設定が参照で書かれているときは「判定できない」)。自己更新が設定を読むたびに残し、本文は固定で、未解決は1件にまとまる | 設計工程を有効にするなら、[設計工程を有効にする](#設計工程を有効にする)の確認を済ませてから、`factory_config`に`design_enabled_since`を書く。有効にしないなら、`design_enabled`を`false`に戻す。どちらでも、自己更新(2分ごと)がこの通知を自動で解決する。Consoleからは解決できない |
-| `claude_usage_limit` | Claudeの実行が、サブスクリプションの使用上限に当たって失敗した。Claudeを呼ぶどのflowでも残る。本文は固定の文だけで、解除の時刻を含む失敗の詳細は`agent_runs`の`error`に、flowのパスはそのジョブのログにある。未解決の間は通知を重ねない。Discordへの通知は、そのflowの失敗の通知に任せる | 上限が戻ってから、[Claudeの実行が上限で失敗したとき](#claudeの実行が上限で失敗したとき)の経路で動かし直す。初めて出たときは、[使用上限の判定を確かめる](#使用上限の判定を確かめる)の手順で判定を確かめる。対応したら人が解決する |
+| `claude_usage_limit` | Claudeの実行がサブスクリプションの使用上限に当たって失敗した。Claudeを呼ぶどのflowでも残る。本文は固定の文だけで、解除の時刻を含む失敗の詳細は`agent_runs`の`error`に、flowのパスはそのジョブのログにある。未解決の間は通知を重ねない。Discordへの通知は、そのflowの失敗の通知に任せる | 上限が戻ってから、[Claudeの実行が上限で失敗したとき](#claudeの実行が上限で失敗したとき)の経路で動かし直す。初めて出たときは、[使用上限の判定を確かめる](#使用上限の判定を確かめる)の手順で判定を確かめる。対応したら人が解決する |
 | `credential_expiring` | 資格情報(Windmillのトークン、Claude CodeのOAuthトークン、GitHubのPAT、読み取り専用のPAT、interaction-limits)の期限が、`credential_warn_days`日(既定30日)より近いか、過ぎている。本文に資格情報と期限の日付(JST)が載り、残り日数は載らない。Discordにも届く | [秘密をローテーションする](#秘密をローテーションする)の手順で更新し、`mise run bootstrap`を実行する。期限が先に延びると、次の日次のまとめ(毎日09:00)が自動で解決する |
 | `stop_all_active` | Factoryが全停止している。Claudeと検査の実行、Issueの取り込み、自己更新と、見張りと片付けを除くリポジトリのscheduleが止まっている。置いた直後の1回だけDiscordにも届き、時刻、操作者、理由はDiscordとシステムの画面に出る | 原因を確かめ、[全停止を解除する](#全停止を解除する)の手順で解除する。解除すると、5分以内に検出器が自動で解決する。Consoleからは解決できない |
 | `stop_all_released` | 全停止が解除された。止めたscheduleは有効に戻ったが、`factory_config`の`*_enabled`は止めたままである。「情報」で、Discordには届かない | 使う機能を、1つずつ有効にする |

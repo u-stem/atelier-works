@@ -1431,13 +1431,13 @@ describe("prCiFixHoldInfo", () => {
 
   test("names the procedure that releases the hold of a failed Claude run", () => {
     expect(prCiFixHoldInfo("claude_run_failed").nextAction).toContain(
-      "Claudeの失敗で保留したCIの直しを起動し直す",
+      "Claudeの失敗で保留したCIの修正を起動し直す",
     );
   });
 
   test("names the procedure in the stop notice of a failed Claude run", () => {
     expect(prCiFixHoldInfo("claude_run_failed").stopAction).toContain(
-      "Claudeの失敗で保留したCIの直しを起動し直す",
+      "Claudeの失敗で保留したCIの修正を起動し直す",
     );
   });
 

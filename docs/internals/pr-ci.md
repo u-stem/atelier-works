@@ -267,7 +267,7 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 | `fix_stopped` | 決定的 | 直す作業項目が、pushしないまま人の判断待ちで止まった |
 | `rounds_exhausted` | 決定的 | 直す回数の上限に達した |
 | `not_factory_head` | 決定的 | 最後のpushがFactoryのものでない |
-| `claude_run_failed` | 決定的 | 直す作業のClaudeの実行が、timeout、実行ごとの予算の超過、使用上限、全停止のどれかで失敗した。外す手順は[運用](../operations.md#claudeの失敗で保留したciの直しを起動し直す)にある |
+| `claude_run_failed` | 決定的 | 直す作業のClaudeの実行が、timeout、実行ごとの予算の超過、使用上限、全停止のどれかで失敗した。外す手順は[運用](../operations.md#claudeの失敗で保留したciの修正を起動し直す)にある |
 | `marker_missing` | 一時的 | Factoryのクローンのスキルが、CIの失敗を直す節を持たない。スキルが入れば外れる |
 | `main_ci_failed` | 一時的 | mainのCIが赤い |
 | `budget_exceeded` | 一時的 | 日次の予算を使い切った |
