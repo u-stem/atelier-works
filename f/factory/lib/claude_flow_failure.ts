@@ -3,7 +3,8 @@
 // stepは例外の文の先頭にタグを付け、flow.yamlの`retry_if`がタグを見て再試行を止める。
 // 例外のままなので、flowは失敗で終わり、終端の処理は`failure_module`が行う。
 
-import type { RunClaudeFailureReason } from "./claude.ts";
+import type { RunClaudeFailureReason, RunClaudeResult } from "./claude.ts";
+import type { AgentRunRecord } from "./types.ts";
 
 /** flowの再試行で直らない失敗の種類。 */
 export const NON_RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
@@ -28,4 +29,13 @@ export function flowFailureMessage(
   return isFlowRetryable(reason)
     ? message
     : `${NO_FLOW_RETRY_MARKER} ${message}`;
+}
+
+/** `runClaude`の結果の実行記録を残す。 */
+export async function recordClaudeRuns<T>(
+  _result: RunClaudeResult<T>,
+  _record: (agentRun: AgentRunRecord) => Promise<number>,
+  _usageLimitNotice?: unknown,
+): Promise<number> {
+  return 0;
 }

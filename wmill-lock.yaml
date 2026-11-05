@@ -58,7 +58,7 @@ locks:
   f/factory/lib/ci_metadata_rehash: fe02965a116e2f2767808f1265c8efb646ea60c8531b85c710576a32b5bb7309
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: f2dda81b2f5dd33eb88af1ca56743a9821f08605a7b75f4c184d3238a57aea40
-  f/factory/lib/claude_flow_failure: 17cc7a138b09be7c9cdb1548badc1cbc70b2bba6706bb1fadfcbb0586e22c309
+  f/factory/lib/claude_flow_failure: 85e75e24d03f288a27c059549f04c3084197b36d1b3f4c7f420d420874fc2d39
   f/factory/lib/claude_read_deny: 344937384ac71e6635c10abd0edaa98c6d26b77fd9ce4fac8177e39b6d2add3b
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea
   f/factory/lib/cleanup_support: 3b97f5ee699012babd490ff9a070aa573aeabb45577923723b55760b12af1545
