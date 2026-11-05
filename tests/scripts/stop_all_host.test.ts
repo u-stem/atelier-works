@@ -27,9 +27,22 @@ const PS = [
   "    301     301 /usr/local/bin/claude -p --output-format json",
 ].join("\n");
 
+/**
+ * workerの本体(`windmill`、pid 6)と同じグループ6に、起動の形が`detached`でないClaude(pid 450)が属する出力。
+ * `docker-init`は`init: true`が置くpid 1で、args先頭の語は`windmill`でない。
+ */
+const PS_WITH_WORKER_GROUP = [
+  "   PGID     PID COMMAND",
+  "      1       1 /sbin/docker-init -- windmill",
+  "      6       6 windmill",
+  "      6     450 /usr/local/bin/claude -p --output-format json",
+  "    301     301 /usr/local/bin/claude -p --output-format json",
+].join("\n");
+
 type Recorded = {
   readonly calls: string[];
   readonly printed: string[];
+  readonly warned: string[];
   readonly deps: StopDeps;
 };
 
@@ -39,12 +52,14 @@ function record(
     readonly scriptExit?: number;
     readonly scriptStdout?: string;
     readonly jobs?: readonly string[];
+    readonly ps?: string;
     readonly psAfterGrace?: string;
     readonly env?: Readonly<Record<string, string | undefined>>;
   } = {},
 ): Recorded {
   const calls: string[] = [];
   const printed: string[] = [];
+  const warned: string[] = [];
   let psCount = 0;
   const deps: StopDeps = {
     env: options.env ?? {},
@@ -71,7 +86,8 @@ function record(
         psCount += 1;
         return {
           ...OK,
-          stdout: psCount === 1 ? PS : (options.psAfterGrace ?? ""),
+          stdout:
+            psCount === 1 ? (options.ps ?? PS) : (options.psAfterGrace ?? ""),
         };
       }
       return OK;
@@ -82,9 +98,12 @@ function record(
     print: (line) => {
       printed.push(line);
     },
+    warn: (line) => {
+      warned.push(line);
+    },
     checkUids: [10001, 10002],
   };
-  return { calls, printed, deps };
+  return { calls, printed, warned, deps };
 }
 
 const PLACE: StopCommand = { kind: "place", reason: "a runaway loop" };
@@ -351,6 +370,57 @@ describe("runStop place", () => {
   test("returns 0 when every step succeeds", async () => {
     const { deps } = record();
     expect(await runStop(PLACE, deps)).toBe(0);
+  });
+});
+
+describe("runStop place when a claude shares the group of the worker", () => {
+  test("does not terminate the group of the worker", async () => {
+    const { calls, deps } = record({ ps: PS_WITH_WORKER_GROUP });
+    await runStop(PLACE, deps);
+    expect(calls).not.toContain("exec /usr/bin/kill -s TERM -- -6");
+  });
+
+  test("does not kill the group of the worker", async () => {
+    const { calls, deps } = record({
+      ps: PS_WITH_WORKER_GROUP,
+      psAfterGrace: PS_WITH_WORKER_GROUP,
+    });
+    await runStop(PLACE, deps);
+    expect(calls).not.toContain("exec /usr/bin/kill -s KILL -- -6");
+  });
+
+  test("warns on stderr that the group of the worker was skipped", async () => {
+    const { warned, deps } = record({ ps: PS_WITH_WORKER_GROUP });
+    await runStop(PLACE, deps);
+    expect(warned).toEqual([
+      "WARNING: skipped process group 6 because the worker itself belongs to it; stopping the claude processes in it one by one",
+    ]);
+  });
+
+  test("terminates that claude by its pid", async () => {
+    const { calls, deps } = record({ ps: PS_WITH_WORKER_GROUP });
+    await runStop(PLACE, deps);
+    expect(calls).toContain("exec /usr/bin/kill -s TERM -- 450");
+  });
+
+  test("kills that claude by its pid after the grace period", async () => {
+    const { calls, deps } = record({ ps: PS_WITH_WORKER_GROUP });
+    await runStop(PLACE, deps);
+    expect(calls.indexOf("sleep 5000")).toBeLessThan(
+      calls.indexOf("exec /usr/bin/kill -s KILL -- 450"),
+    );
+  });
+
+  test("still terminates the group of a claude that leads its own group", async () => {
+    const { calls, deps } = record({ ps: PS_WITH_WORKER_GROUP });
+    await runStop(PLACE, deps);
+    expect(calls).toContain("exec /usr/bin/kill -s TERM -- -301");
+  });
+
+  test("does not warn when no claude shares the group of the worker", async () => {
+    const { warned, deps } = record();
+    await runStop(PLACE, deps);
+    expect(warned).toEqual([]);
   });
 });
 
