@@ -50,6 +50,21 @@ Consoleを取りに行くリポジトリは、`mise.toml`の`[env]`の`CONSOLE_G
 loginに`_`を含む所有者(EMUのアカウント)は、収集が扱わない。
 `mise run doctor`が、該当する所有者の名前を警告する。
 
+外部の死活監視を使うときは、監視のサービスのURLを`HEARTBEAT_URL`として投入する。
+作り方は[外部の死活監視を設定する](#外部の死活監視を設定する)にある。
+入れなくても、`bootstrap`は完了し、死活監視だけが動かない。
+
+資格情報の期限の記録には、次の秘密でない値を`mise.local.toml`の`[env]`に書ける。
+どれも任意で、`mise.local.toml.example`に同じキーの行がある。
+`bootstrap`が読んで、期限を変数`f/factory/credential_expiry`に記録する。
+記録の見方と通知は[運用](operations.md#資格情報の期限の通知)にある。
+
+| キー | 意味 |
+| --- | --- |
+| `CLAUDE_OAUTH_TOKEN_DAYS` | Claude CodeのOAuthトークンの有効日数。1〜3650の整数で、空か範囲外なら365日にする。`claude setup-token`の表示に合わせる |
+| `INTERACTION_LIMITS_REPO` | interaction-limitsの期限をAPIで読むリポジトリ(`owner/repo`)。`GITHUB_TOKEN`に権限が無ければ読めず、次の日付を使う |
+| `INTERACTION_LIMITS_EXPIRES_AT` | APIで読めないときのinteraction-limitsの期限。`YYYY-MM-DD`で書き、JSTの0時として読む。設定画面で延ばしたら書き直す |
+
 ## 秘密値を投入する
 
 秘密値は人が投入する。
@@ -628,6 +643,29 @@ WORKTREE_AUTO_PRUNE=0 mise run worktree:new -- <type>/<name>
 - `gh`がすべての候補で使えない
 
 手動の`--apply`は、自動の片付けと別に使える。
+
+## 外部の死活監視を設定する
+
+ホスト、Docker、Windmillがまとめて止まると、Factoryの中の見張りも止まり、通知が出ない。
+これに気づくため、Factoryの外の監視のサービスに、5分ごとの生存の報告を送る。
+送るのは検出器(`detect_schedule_failures`)で、成功した回の最後にURLを1回叩く。
+
+1. 監視のサービスで、決まった間隔の報告を待つ監視を作る。
+   Healthchecks.io、Uptime KumaのPushの監視、Cronitorが使える。
+2. 間隔を5分に、猶予を10分ほどにする。
+   検出器の待ちや時間切れで、報告が数分遅れることもあるためである。
+3. 監視のURL(`https://`で始まるもの)を、[秘密値を投入する](#秘密値を投入する)の手順で`HEARTBEAT_URL`に入れる。
+4. `mise run bootstrap`を実行する。
+   URLは、Windmillのsecret変数`f/factory/heartbeat_url`に入る。
+5. 10分ほど待ち、監視のサービスに報告が届いていることを確かめる。
+6. 監視のサービスで、報告が途絶えたときの知らせの先を設定する。
+   FactoryのDiscordとは別の経路にする。
+   同じ経路だと、Factoryごと止まったときに、知らせも届かないためである。
+
+URLは秘密として扱う。
+知っている者は、偽の生存の報告を送れるためである。
+止めるときは、`HEARTBEAT_URL`を空にして`mise run bootstrap`を実行する。
+全停止の間も検出器は動くので、報告は続く。
 
 ## 自己更新の設定
 

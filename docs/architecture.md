@@ -46,6 +46,7 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 tag`periodic`を付けるのは、ファイル、独自イメージの道具、cgroupのどれにも依存しない定期ジョブである。
 読むsecret変数は、scriptごとに決める。
 通知を送る定期ジョブが`discord_webhook_url`を、収集の`collect_github`が`github_read_tokens`を読む。
+検出器(`detect_schedule_failures`)は、外部の死活監視に生存を報告するため、`heartbeat_url`も読む。
 `claude_oauth_token`、`github_token`、`wmill_token`は届かせない。
 依存するジョブは、defaultのworkerで動かす。
 tag`periodic`のジョブが13分以上待つと、defaultのworkerで動く`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
