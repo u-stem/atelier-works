@@ -285,7 +285,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_conflict` | `watch_pr_conflicts` | `<owner>/<repo>#<PR番号>:`で始まる固定文、自動で直さなかった理由(あるときだけ)、次の操作、PRのリンク |
 | `worker_load_high` | `sample_worker_load` | 原因(メモリの割合、OOMの増加)、閾値、システムの画面のリンク、次の操作 |
 | `review_gated_prolonged` | `notify_daily_summary` | 投稿しない状態が続く日数、作業項目の画面のリンク、次の操作 |
-| `credential_expiring` | `notify_daily_summary` | `<資格情報>の期限が<YYYY-MM-DD>に切れる。`で始まる固定の文と、次の操作。残り日数は載せない。期限が先に延びた資格情報と、記録から消えた資格情報の通知は、本文の一致で解決する |
+| `credential_expiring` | `notify_daily_summary` | `<資格情報>の期限が<YYYY-MM-DD>に切れる。`で始まる固定の文と、次の操作。残り日数は載せない。期限が先に延びた資格情報と、記録から消えた資格情報の通知は、本文の一致で解決する。記録の項目が壊れた資格情報の通知は、解決しない |
 | `stop_all_active` | `detect_schedule_failures` | 全停止中であることと、解除の操作を述べる固定の文。時刻、操作者、理由は載せない(システムの画面に出す)。解除で検出器が解決し、Consoleからは解決できない |
 | `stop_all_released` | `detect_schedule_failures` | 全停止の解除と、`*_enabled`を1つずつ有効にする操作を述べる固定の文。Discordには通知しない |
 | `dependabot_merge_held` | `poll_dependabot` | 一覧と解除の操作。取得の1周ごとに1件にまとめ、PRの数は載せない |

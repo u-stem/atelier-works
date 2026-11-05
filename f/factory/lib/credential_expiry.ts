@@ -3,6 +3,7 @@
 // 日次のまとめ(`notify_daily_summary`)が毎日読み、期限の`credential_warn_days`日前を切った資格情報ごとに通知を残す。
 // 本文に残り日数を入れない。本文の一致で重複を除くので、日ごとに本文が変わると、通知が毎日増えるためである。
 // 期限が先に延びた資格情報と、記録から消えた資格情報の通知は、本文の一致で解決する。
+// 記録の項目が壊れている資格情報の通知は、解決しない。
 
 import type { NotifyEvent } from "./discord.ts";
 import { type Logger, maskSecrets } from "./log.ts";
@@ -44,6 +45,11 @@ export type CredentialExpiryParse = {
   readonly record: CredentialExpiryRecord;
   /** 読めなかった項目。項目ごとに1件。 */
   readonly problems: readonly string[];
+  /**
+   * 壊れた項目の通知の、本文の接頭辞。この接頭辞で始まる未解決の通知は解決しない。
+   * 壊れた項目は記録から落ちるので、期限が延びたものと見分けられず、解決すると翌日に同じ通知が出直すためである。
+   */
+  readonly kept: readonly string[];
   /** 記録の全体が読めない。真のときは、既存の通知を解決しない。 */
   readonly unreadable: boolean;
 };
@@ -51,6 +57,32 @@ export type CredentialExpiryParse = {
 export type CredentialDeadline = {
   readonly label: string;
   readonly expiresAt: Date;
+};
+
+/** 記録の項目ごとの、通知の本文の先頭に入る名前。 */
+const LABELS = {
+  wmill_token: "Windmillのトークン(wmill_token)",
+  claude_oauth_token: "Claude CodeのOAuthトークン(claude_oauth_token)",
+  github_token: "GitHubのPAT(github_token)",
+  interaction_limits: "GitHubのinteraction-limits",
+} as const;
+
+/** 読み取り専用のトークンの名前の、所有者より前の部分。 */
+const READ_TOKEN_LABEL_HEAD = "読み取り専用のGitHubのPAT(github_read_tokens、";
+
+function readTokenLabel(owner: string): string {
+  return `${READ_TOKEN_LABEL_HEAD}${owner})`;
+}
+
+/** 名前が`label`の資格情報の通知の、本文の接頭辞。 */
+function noticePrefix(label: string): string {
+  return `${label}の期限が`;
+}
+
+/** 解析で見つけた壊れた項目。 */
+type Damage = {
+  readonly problems: string[];
+  readonly kept: string[];
 };
 
 function isTime(value: unknown): value is string {
@@ -78,32 +110,48 @@ function claudeWindow(value: unknown): ClaudeWindow | null {
     : null;
 }
 
-/** 項目を読み、無ければ`undefined`、壊れていれば問題を足して`undefined`を返す。 */
+/**
+ * 項目を読み、無ければ`undefined`、壊れていれば問題と残す通知の接頭辞を足して`undefined`を返す。
+ * `keep`は、壊れたときに解決しない通知の接頭辞である。
+ */
 function entry<T>(
   raw: Record<string, unknown>,
   key: string,
   read: (value: unknown) => T | null,
-  problems: string[],
+  keep: string,
+  damage: Damage,
 ): T | undefined {
   if (raw[key] === undefined) return undefined;
   const value = read(raw[key]);
   if (value === null) {
-    problems.push(`${key} is malformed`);
+    damage.problems.push(`${key} is malformed`);
+    damage.kept.push(keep);
     return undefined;
   }
   return value;
 }
 
+/**
+ * 所有者ごとの読み取り専用のトークンを読む。
+ * 期限の壊れた所有者は、その所有者の通知を残す。所有者の名前が壊れたものは、通知が作られないので残すものは無い。
+ */
 function readTokens(
   value: unknown,
-  problems: string[],
+  damage: Damage,
 ): Record<string, ExpiryOnly> | null {
   if (!isRecord(value)) return null;
   const tokens: Record<string, ExpiryOnly> = {};
   for (const [owner, raw] of Object.entries(value)) {
+    if (!OWNER_PATTERN.test(owner)) {
+      damage.problems.push("github_read_tokens has a malformed owner");
+      continue;
+    }
     const expiry = expiryOnly(raw);
-    if (!OWNER_PATTERN.test(owner) || expiry === null) {
-      problems.push("github_read_tokens has a malformed owner");
+    if (expiry === null) {
+      damage.problems.push(
+        `github_read_tokens has a malformed entry for ${owner}`,
+      );
+      damage.kept.push(noticePrefix(readTokenLabel(owner)));
       continue;
     }
     tokens[owner] = expiry;
@@ -111,12 +159,12 @@ function readTokens(
   return tokens;
 }
 
-/** 変数の値を解析する。壊れた項目は落とし、`problems`に残す。 */
+/** 変数の値を解析する。壊れた項目は落とし、`problems`と`kept`に残す。 */
 export function parseCredentialExpiry(
   raw: string | null,
 ): CredentialExpiryParse {
   if (raw === null || raw.trim() === "") {
-    return { record: {}, problems: [], unreadable: false };
+    return { record: {}, problems: [], kept: [], unreadable: false };
   }
   let parsed: unknown;
   try {
@@ -125,6 +173,7 @@ export function parseCredentialExpiry(
     return {
       record: {},
       problems: ["the record is not JSON"],
+      kept: [],
       unreadable: true,
     };
   }
@@ -132,20 +181,47 @@ export function parseCredentialExpiry(
     return {
       record: {},
       problems: ["the record is not an object"],
+      kept: [],
       unreadable: true,
     };
   }
-  const problems: string[] = [];
-  const wmillToken = entry(parsed, "wmill_token", issuedWindow, problems);
-  const claude = entry(parsed, "claude_oauth_token", claudeWindow, problems);
-  const github = entry(parsed, "github_token", expiryOnly, problems);
+  const damage: Damage = { problems: [], kept: [] };
+  const wmillToken = entry(
+    parsed,
+    "wmill_token",
+    issuedWindow,
+    noticePrefix(LABELS.wmill_token),
+    damage,
+  );
+  const claude = entry(
+    parsed,
+    "claude_oauth_token",
+    claudeWindow,
+    noticePrefix(LABELS.claude_oauth_token),
+    damage,
+  );
+  const github = entry(
+    parsed,
+    "github_token",
+    expiryOnly,
+    noticePrefix(LABELS.github_token),
+    damage,
+  );
+  // 全体が壊れていれば、どの所有者のものか分からないので、読み取り専用のトークンの通知をすべて残す。
   const reads = entry(
     parsed,
     "github_read_tokens",
-    (value) => readTokens(value, problems),
-    problems,
+    (value) => readTokens(value, damage),
+    READ_TOKEN_LABEL_HEAD,
+    damage,
   );
-  const limits = entry(parsed, "interaction_limits", expiryOnly, problems);
+  const limits = entry(
+    parsed,
+    "interaction_limits",
+    expiryOnly,
+    noticePrefix(LABELS.interaction_limits),
+    damage,
+  );
   return {
     record: {
       ...(wmillToken === undefined ? {} : { wmill_token: wmillToken }),
@@ -154,7 +230,8 @@ export function parseCredentialExpiry(
       ...(reads === undefined ? {} : { github_read_tokens: reads }),
       ...(limits === undefined ? {} : { interaction_limits: limits }),
     },
-    problems,
+    problems: damage.problems,
+    kept: damage.kept,
     unreadable: false,
   };
 }
@@ -169,18 +246,15 @@ export function credentialDeadlines(
       deadlines.push({ label, expiresAt: new Date(expiry.expires_at) });
     }
   };
-  push("Windmillのトークン(wmill_token)", record.wmill_token);
-  push(
-    "Claude CodeのOAuthトークン(claude_oauth_token)",
-    record.claude_oauth_token,
-  );
-  push("GitHubのPAT(github_token)", record.github_token);
+  push(LABELS.wmill_token, record.wmill_token);
+  push(LABELS.claude_oauth_token, record.claude_oauth_token);
+  push(LABELS.github_token, record.github_token);
   for (const [owner, expiry] of Object.entries(
     record.github_read_tokens ?? {},
   )) {
-    push(`読み取り専用のGitHubのPAT(github_read_tokens、${owner})`, expiry);
+    push(readTokenLabel(owner), expiry);
   }
-  push("GitHubのinteraction-limits", record.interaction_limits);
+  push(LABELS.interaction_limits, record.interaction_limits);
   return deadlines;
 }
 
@@ -194,7 +268,7 @@ export function jstDateLabel(at: Date): string {
 
 /** 通知の本文。残り日数を含めない。 */
 export function credentialNoticeMessage(deadline: CredentialDeadline): string {
-  return `${deadline.label}の期限が${jstDateLabel(deadline.expiresAt)}に切れる。次の操作: ${CREDENTIAL_NEXT_ACTION}`;
+  return `${noticePrefix(deadline.label)}${jstDateLabel(deadline.expiresAt)}に切れる。次の操作: ${CREDENTIAL_NEXT_ACTION}`;
 }
 
 /** 期限まで`warnDays`日以内か、期限を過ぎているか。 */
@@ -242,7 +316,10 @@ async function runCheck(
   const wanted = new Set(expiring.map(credentialNoticeMessage));
   let resolved = 0;
   for (const notice of await deps.listUnresolved()) {
-    if (!wanted.has(notice.message)) {
+    const kept = parsed.kept.some((prefix) =>
+      notice.message.startsWith(prefix),
+    );
+    if (!wanted.has(notice.message) && !kept) {
       resolved += await deps.resolveByMessage(notice.message);
     }
   }

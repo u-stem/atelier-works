@@ -232,6 +232,7 @@ describe("collectCredentialExpiry", () => {
         interaction_limits: { expires_at: "2027-02-01T00:00:00.000Z" },
       },
       problems: [],
+      kept: [],
       unreadable: false,
     });
   });
