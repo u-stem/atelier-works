@@ -227,7 +227,7 @@ export function holderKindLabel(kind: string): string {
 export const HOLDS_TEXT = {
   sectionTitle: "保留と凍結",
   sectionDescription:
-    "Factoryの全停止と、マージと反映を期限つきで止めている保留と凍結です。置くことも、解除することもできます。",
+    "Factoryの全停止と、マージと反映を期限つきで止めている保留と凍結と、保護パスの変更の反映の承認待ちです。全停止と保留と凍結は、置くことも、解除することもできます。",
   holdsCardTitle: "保留",
   holdsCardNote: "マージを止める保留の一覧です。",
   freezesCardTitle: "凍結とdeployの保留",
