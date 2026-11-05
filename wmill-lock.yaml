@@ -59,7 +59,7 @@ locks:
   f/factory/lib/ci_log_support: 82bfb98e03c1afb71b08c3b95d72fd95d8016f853373268b5c3fbbdd416d8a9e
   f/factory/lib/ci_metadata_rehash: fe02965a116e2f2767808f1265c8efb646ea60c8531b85c710576a32b5bb7309
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
-  f/factory/lib/claude: 0eae553ba2afb53e2a966f415027fc70887a68264527d5ab16e2df07d5596b11
+  f/factory/lib/claude: 4d43441668daf97503289b4b74132044f9ea0d75ca39aedd68718adc2c216dc8
   f/factory/lib/claude_flow_failure: 88a61cfd047f2487741ccf25b192327ba1dde2c3a6a7e7b76326659ad336c2f4
   f/factory/lib/claude_read_deny: 344937384ac71e6635c10abd0edaa98c6d26b77fd9ce4fac8177e39b6d2add3b
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea

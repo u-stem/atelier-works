@@ -251,12 +251,17 @@ function hasReadableResult(
   );
 }
 
-/** 結果の本文を返す。`result`が空でない文字列のときだけ使い、それ以外は`errors`を改行でつなぐ。 */
+/**
+ * 結果の本文を返す。空でない`result`と`errors`の各要素を、この順に改行でつなぐ。
+ * 使用上限の文は`errors`にだけ入ることがあり、`result`だけを見ると判定を外すため、両方を残す。
+ */
 function resultTextOf(parsed: RawClaudeJson): string {
+  const lines: string[] = [];
   if (typeof parsed.result === "string" && parsed.result !== "") {
-    return parsed.result;
+    lines.push(parsed.result);
   }
-  return isStringArray(parsed.errors) ? parsed.errors.join("\n") : "";
+  if (isStringArray(parsed.errors)) lines.push(...parsed.errors);
+  return lines.join("\n");
 }
 
 function isRawClaudeJson(value: unknown): value is RawClaudeJson {
