@@ -201,6 +201,45 @@ describe("syncStopAllNotice", () => {
     ]);
   });
 
+  test("leaves the released notice before it resolves the open notice", async () => {
+    const { deps } = setup({ kind: "clear" }, true);
+    const order: string[] = [];
+    await syncStopAllNotice({
+      ...deps,
+      addNotice: async () => {
+        order.push("addNotice");
+        return 1;
+      },
+      resolveActive: async () => {
+        order.push("resolveActive");
+        return 1;
+      },
+    });
+    expect(order).toEqual(["addNotice", "resolveActive"]);
+  });
+
+  test("keeps the open notice when leaving the released notice fails", async () => {
+    const { deps, calls } = setup({ kind: "clear" }, true);
+    await syncStopAllNotice({
+      ...deps,
+      addNotice: async () => {
+        throw new Error("database unavailable");
+      },
+    }).catch(() => undefined);
+    expect(calls.resolved).toEqual([]);
+  });
+
+  test("propagates the failure when leaving the released notice fails", async () => {
+    const { deps } = setup({ kind: "clear" }, true);
+    const run = syncStopAllNotice({
+      ...deps,
+      addNotice: async () => {
+        throw new Error("database unavailable");
+      },
+    });
+    await expect(run).rejects.toThrow("database unavailable");
+  });
+
   test("does nothing while no stop is placed and no notice is open", async () => {
     const { deps } = setup({ kind: "clear" }, false);
     expect(await syncStopAllNotice(deps)).toBe("none");
