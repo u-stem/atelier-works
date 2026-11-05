@@ -54,6 +54,66 @@ describe("stopCheckFrom", () => {
   });
 });
 
+describe("stopCheckFrom after a read that timed out", () => {
+  // 1回目の読み取りだけが応答せず、`release`で終わる。2回目以降は全停止が置かれた値を返す。
+  function hangingFirstRead() {
+    let reads = 0;
+    let release: (value: string | null) => void = () => {};
+    const io = {
+      readVariable: () => {
+        reads += 1;
+        if (reads > 1) return Promise.resolve<string | null>(PLACED);
+        return new Promise<string | null>((resolve) => {
+          release = resolve;
+        });
+      },
+    };
+    return {
+      io,
+      reads: () => reads,
+      release: (v: string | null) => release(v),
+    };
+  }
+
+  test("does not start another read while the timed out read is still pending", async () => {
+    const fake = hangingFirstRead();
+    const check = stopCheckFrom(fake.io, 10);
+    await check();
+    await check();
+    expect(fake.reads()).toBe(1);
+  });
+
+  test("answers not stopped while the timed out read is still pending", async () => {
+    const fake = hangingFirstRead();
+    const check = stopCheckFrom(fake.io, 10);
+    await check();
+    expect(await check()).toBe(false);
+  });
+
+  test("reads again once the timed out read has finished", async () => {
+    const fake = hangingFirstRead();
+    const check = stopCheckFrom(fake.io, 10);
+    await check();
+    fake.release("");
+    await Bun.sleep(5);
+    await check();
+    expect(fake.reads()).toBe(2);
+  });
+
+  test("reads again after a read that failed", async () => {
+    let reads = 0;
+    const check = stopCheckFrom({
+      readVariable: async () => {
+        reads += 1;
+        throw new Error("api down");
+      },
+    });
+    await check();
+    await check();
+    expect(reads).toBe(2);
+  });
+});
+
 describe("checkStop", () => {
   test("treats a check that throws as not stopped", async () => {
     expect(
