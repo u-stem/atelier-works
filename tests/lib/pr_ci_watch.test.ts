@@ -301,6 +301,7 @@ type Harness = {
       readonly fixWorkItemId?: number | undefined;
       readonly withoutFixWorkItem?: boolean | undefined;
       readonly resetNotified?: boolean | undefined;
+      readonly refundAttempt?: boolean | undefined;
     };
   }[];
   readonly fixItemReads: number[];

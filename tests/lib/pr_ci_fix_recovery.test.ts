@@ -71,9 +71,10 @@ describe("the CI round whose Claude run failed in a way that repeats", () => {
   );
 
   test("maps every failure that the flow does not retry", () => {
-    expect(CLAUDE_FAILURE_HOLDS.map(([reason]) => reason)).toEqual([
-      ...NON_RETRYABLE_REASONS,
-    ]);
+    const mapped: readonly string[] = CLAUDE_FAILURE_HOLDS.map(
+      ([reason]) => reason,
+    );
+    expect(mapped).toEqual([...NON_RETRYABLE_REASONS]);
   });
 
   test("lists both notes of the usage limit and the stop as the ones that wait", () => {

@@ -95,7 +95,10 @@ import {
 import { recordCheckEnvironmentNotice } from "./lib/host_action.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
-import { readFixItemState } from "./lib/pr_ci_fix_recovery.ts";
+import {
+  CI_CLAUDE_WAIT_NOTES,
+  readFixItemState,
+} from "./lib/pr_ci_fix_recovery.ts";
 import type { PrCiNotifyPolicy } from "./lib/pr_ci_notify.ts";
 import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "./lib/pr_ci_support.ts";
 import {
@@ -111,6 +114,14 @@ import {
   TRACKED_PR_LIMIT,
 } from "./lib/pr_ci_watch.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
+import { withCallTimeout } from "./lib/self_update_support.ts";
+import {
+  holdsGate,
+  readStopAll,
+  STOP_ALL_CHECK_TIMEOUT_MS,
+  type StopAllStatus,
+  sdkStopAllReadIo,
+} from "./lib/stop_all.ts";
 import type { FactoryConfig } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 import { ciRoundTimeoutMisfit } from "./steps/pr_workflow_support.ts";
@@ -206,9 +217,10 @@ export function buildClaimDeps(
     getJobLog: (owner, repo, jobId) =>
       getWorkflowJobLog(client, owner, repo, jobId),
     budgetExceeded: async () => (await dailyBudgetStatus(config)).exceeded,
+    stopHeld: async () => holdsGate(await readStopAllBounded()),
     mainCiFailed: (owner, repo) => isLatestMainCiRunFailed(owner, repo),
     countRounds: (owner, repo, prNumber) =>
-      countPrCiFixRounds(owner, repo, prNumber, []),
+      countPrCiFixRounds(owner, repo, prNumber, CI_CLAUDE_WAIT_NOTES),
     setHold: (id, reason, expected, resetNotified) =>
       setPrCiFixHold(id, reason, { expected, resetNotified }),
     claim: (input) => claimPrCiCheckForFix(input),
@@ -247,6 +259,23 @@ async function recordFailureSafe(
       error: maskSecrets(String(recordErr)),
     });
   }
+}
+
+/**
+ * 全停止の変数を読む。読み取りは`STOP_ALL_CHECK_TIMEOUT_MS`で区切り、時間切れは読めなかったものとして返す。
+ * 読めない回は解除されたと確かめられないので、全停止で止まった行を起動しない。
+ */
+function readStopAllBounded(): Promise<StopAllStatus> {
+  return withCallTimeout(
+    "read stop-all",
+    () => readStopAll(sdkStopAllReadIo()),
+    STOP_ALL_CHECK_TIMEOUT_MS,
+  ).catch(
+    (): StopAllStatus => ({
+      kind: "unreadable",
+      reason: "the stop-all read timed out",
+    }),
+  );
 }
 
 /**

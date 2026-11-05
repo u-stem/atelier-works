@@ -6017,18 +6017,22 @@ export async function claimPrCiCheckForFix(
  * フローの起動に失敗した回のほか、ジョブIDが記録されないまま回復や失敗の処理が`failed`にした回も含む。
  * Claudeを走らせていない回で、直す機会を使い切らないためである。
  * 数えない回が続く行は、行の`fix_attempts`の上限(`pr_ci_fix_max_rounds`に3を足した数)が止める。
+ * `exemptNotes`のどれかの注記で`failed`か`blocked`に移って終わった回も数えない。
+ * 使用上限と全停止の回で、待って起動し直す間に上限へ近づかないためである。行の`fix_attempts`も、回復が1回返す。
+ * 注記は、今の状態へ移った最新の遷移のものを読む。回復が保留の理由を決める注記と同じである。
  * ownerとrepoは小文字で照合する。
  */
 export async function countPrCiFixRounds(
   owner: string,
   repo: string,
   prNumber: number,
-  _exemptNotes: readonly string[],
+  exemptNotes: readonly string[],
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   assertPrCiTarget(owner, repo, prNumber);
   const lowerOwner = owner.toLowerCase();
   const lowerRepo = repo.toLowerCase();
+  const notes: string[] = [...exemptNotes];
   const rows = await sql`
     SELECT COUNT(*) AS rounds
     FROM factory.work_items AS wi
@@ -6036,6 +6040,18 @@ export async function countPrCiFixRounds(
       AND lower(wi.owner) = ${lowerOwner} AND lower(wi.repo) = ${lowerRepo}
       AND wi.pr_number = ${prNumber}::integer
       AND NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)
+      AND NOT (
+        wi.status IN ('failed', 'blocked')
+        AND COALESCE(
+          (
+            SELECT e.note FROM factory.work_item_events AS e
+            WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+            ORDER BY e.occurred_at DESC, e.id DESC
+            LIMIT 1
+          ) = ANY(${notes}::text[]),
+          false
+        )
+      )
       AND wi.created_at > COALESCE(
         (
           SELECT MAX(p.updated_at) FROM factory.pr_ci_checks AS p
@@ -6117,13 +6133,18 @@ export type ReleaseFixingPrCiCheckOptions = {
    * 渡した保留の理由が決定的かは、呼び出し側が判断する。
    */
   readonly resetNotified?: boolean;
+  /**
+   * `true`なら、起動の回数(`fix_attempts`)を1回返す。0より小さくはしない。
+   * 使用上限か全停止で終わった回を待って起動し直すときに、待つ間に起動の回数の上限へ近づかないためである。
+   */
+  readonly refundAttempt?: boolean;
 };
 
 /**
  * `fixing`の行を`failed`に戻し、いま直している作業項目(`fix_work_item_id`)を空にする。
  * この呼び出しで戻したら`true`を返す。条件は`state = 'fixing'`なので、別の実行が先に移した行は
  * 書き換えず、`false`を返す。同じ呼び出しを繰り返しても結果は変わらない。
- * `fix_attempts`は減らさない。
+ * `fix_attempts`は、`refundAttempt`が`true`のときだけ減らす。
  * `holdReason`が空か64字を超えるときと、`fixWorkItemId`と`withoutFixWorkItem`を同時に渡したときは、
  * DBに触れずに例外を投げる。
  */
@@ -6146,10 +6167,12 @@ export async function releaseFixingPrCiCheck(
   const fixWorkItemId = options.fixWorkItemId ?? null;
   const withoutFixWorkItem = options.withoutFixWorkItem === true;
   const resetNotified = options.resetNotified === true;
+  const refundAttempt = options.refundAttempt === true;
   const rows = await sql`
     UPDATE factory.pr_ci_checks
     SET state = 'failed',
         fix_work_item_id = NULL,
+        fix_attempts = CASE WHEN ${refundAttempt}::boolean THEN GREATEST(fix_attempts - 1, 0) ELSE fix_attempts END,
         fix_hold_reason = COALESCE(${holdReason}::text, fix_hold_reason),
         notified_reason = CASE WHEN ${resetNotified}::boolean THEN NULL ELSE notified_reason END,
         updated_at = now()

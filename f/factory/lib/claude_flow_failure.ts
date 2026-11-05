@@ -24,7 +24,7 @@ const defaultUsageLimitNoticeDeps = (): UsageLimitNoticeDeps => ({
  * 使用上限の失敗なら、要対応の通知`claude_usage_limit`を残す。
  * 使用上限はアカウント全体に効くので、どのflowの失敗でも同じように残す。
  * 本文は固定の文だけにする。本文の一致で未解決の通知を重ねないので、1回の上限で通知が1件になるためである。
- * flowのパスはログに残す。再実行の対象は、Consoleの要対応の失敗の行で分かる。
+ * 当たったflowは、このログの`path`と`job_id`で調べる。例外を投げないflowは要対応の失敗の行を残さないためである。
  * `detail`はログにも出さない。CI回と競合回のClaudeの文は、秘密の走査を通っていないためである。
  * 解除の時刻を含む`detail`は、`agent_runs.error`に記録される。
  * 残せなくても例外にしない。Claudeの失敗の例外を上書きしないためである。
