@@ -402,7 +402,11 @@ function addDays(now: Date, days: number): string {
   return new Date(now.getTime() + days * DAY_MS).toISOString();
 }
 
-/** OAuthトークンの期間。指紋が前回と一致すれば前回の記録を保ち、違えば今日から数える。 */
+/**
+ * OAuthトークンの期間。指紋が前回と一致すれば前回の発行日を保ち、違えば今日を発行日にする。
+ * 期限は発行日に今の日数を足して決めるので、日数を直すと次の回から反映される。
+ * 発行日が日付として読めない前回の記録は、そのまま返す。
+ */
 function claudeWindowFor(
   input: CredentialRecordInput,
   now: Date,
@@ -410,7 +414,12 @@ function claudeWindowFor(
   if (input.claudeFingerprint === null) return undefined;
   const before = input.previous.claude_oauth_token;
   if (before !== undefined && before.fingerprint === input.claudeFingerprint) {
-    return before;
+    const issued = new Date(before.issued_at);
+    if (Number.isNaN(issued.getTime())) return before;
+    return {
+      ...before,
+      expires_at: addDays(issued, input.claudeTokenDays),
+    };
   }
   return {
     issued_at: now.toISOString(),
@@ -422,7 +431,7 @@ function claudeWindowFor(
 /**
  * 変数に書く記録を作る。
  * Windmillのトークンは、bootstrapが発行した回だけ今日を発行日にする。
- * Claude CodeのOAuthトークンは、指紋が前回と変わったときだけ今日を発行日にし、変わらなければ前回の記録を保つ。
+ * Claude CodeのOAuthトークンは、指紋が前回と変わったときだけ今日を発行日にし、変わらなければ前回の発行日を保って期限を今の日数で計算し直す。
  * 期限の分からないGitHubのトークンは記録しない(期限不明として知らせない)。
  */
 export function buildCredentialExpiryRecord(

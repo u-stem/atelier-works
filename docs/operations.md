@@ -7070,8 +7070,9 @@ Consoleのシステムの**設定**タブから、factory_configの許可した�
 | interaction-limits | `INTERACTION_LIMITS_REPO`の設定。読めなければ`INTERACTION_LIMITS_EXPIRES_AT` |
 
 環境変数の意味は[セットアップ](setup.md#資格情報を用意する)にある。
-Claude CodeのOAuthトークンは、値の指紋を記録に残し、指紋が変わったときだけ数え直す。
-同じトークンのまま`bootstrap`を実行し直しても、期限は延びない。
+Claude CodeのOAuthトークンは、値の指紋を記録に残し、指紋が変わったときだけ発行日を数え直す。
+同じトークンのまま`bootstrap`を実行し直しても、発行日は変わらず、期限は延びない。
+`CLAUDE_OAUTH_TOKEN_DAYS`を直したときは、次の`bootstrap`で、前回の発行日にその日数を足して期限を計算し直す。
 期限の無いPATは記録しないので、通知も出ない。
 通信の失敗や200以外の応答でPATの期限を読めなかったときは、前回の記録の同じ項目を保ち、`bootstrap`の標準エラーに警告を出す。
 読めなかっただけの期限を記録から外すと、日次のまとめが期限の通知を解決するためである。
