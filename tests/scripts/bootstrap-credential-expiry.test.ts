@@ -12,7 +12,7 @@ describe("bootstrap.sh and the credential expiry", () => {
   test("passes the read token map through the environment", () => {
     expect(source).toContain(
       // biome-ignore lint/suspicious/noTemplateCurlyInString: bootstrap.shのシェルの展開と照合する文字列である
-      'CREDENTIAL_READ_TOKENS="${github_read_tokens_json}"',
+      '"${credential_expiry_previous}" "${github_read_tokens_json}"',
     );
   });
 
@@ -28,25 +28,72 @@ describe("bootstrap.sh and the credential expiry", () => {
     );
   });
 
-  test("reads the current OAuth token with the wmill CLI", () => {
+  test("does not read the OAuth token back through the wmill CLI", () => {
+    expect(source).not.toContain("variable get f/factory/claude_oauth_token");
+  });
+
+  test("does not pass an OAuth change flag to the host script", () => {
+    expect(source).not.toContain("CREDENTIAL_CLAUDE_TOKEN_CHANGED");
+  });
+});
+
+describe("bootstrap.sh and a host script that fails", () => {
+  test("runs the host script in a condition so a crash does not abort", () => {
     expect(source).toContain(
-      "run_wmill variable get f/factory/claude_oauth_token --json",
+      'if credential_expiry_json="$(credential_expiry_run',
     );
   });
 
-  test("reads the current OAuth token before bootstrap overwrites it", () => {
-    expect(
-      source.indexOf("run_wmill variable get f/factory/claude_oauth_token"),
-    ).toBeLessThan(
-      source.indexOf('upsert_variable "f/factory/claude_oauth_token"'),
+  test("accepts only a JSON object from the host script", () => {
+    expect(source).toContain(`jq -e 'type == "object"'`);
+  });
+
+  test("keeps the previous record when the host script fails", () => {
+    expect(source).toContain(
+      "could not collect the credential expiry; keeping the previous record",
     );
   });
 
-  test("passes whether the OAuth token changed through the environment", () => {
+  test("writes the record only when the host script succeeded", () => {
+    const start = source.indexOf(
+      'if credential_expiry_json="$(credential_expiry_run',
+    );
+    const write = source.indexOf(
+      'upsert_variable "f/factory/credential_expiry"',
+    );
+    const warning = source.indexOf("could not collect the credential expiry");
+    expect([start < write, write < warning]).toEqual([true, true]);
+  });
+
+  test("reads the previous record without aborting on a failed request", () => {
     expect(source).toContain(
       // biome-ignore lint/suspicious/noTemplateCurlyInString: bootstrap.shのシェルの展開と照合する文字列である
-      'CREDENTIAL_CLAUDE_TOKEN_CHANGED="${claude_token_changed}"',
+      'credential_status="$(api_get "/w/${WORKSPACE}/variables/get/f/factory/credential_expiry" || true)"',
     );
+  });
+});
+
+describe("bootstrap.sh and the environment of the host script", () => {
+  const body =
+    /credential_expiry_run\(\) \{[\s\S]*?\n\}/.exec(source)?.[0] ?? "";
+
+  test.each([
+    'export CREDENTIAL_EXPIRY_PREVIOUS="$1"',
+    'export CREDENTIAL_READ_TOKENS="$2"',
+    "export CREDENTIAL_WMILL_TOKEN_ISSUED=1",
+    "export GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: bootstrap.shのシェルの展開と照合する文字列である
+    'export INTERACTION_LIMITS_REPO="${INTERACTION_LIMITS_REPO:-}"',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: bootstrap.shのシェルの展開と照合する文字列である
+    'export INTERACTION_LIMITS_EXPIRES_AT="${INTERACTION_LIMITS_EXPIRES_AT:-}"',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: bootstrap.shのシェルの展開と照合する文字列である
+    'export CLAUDE_OAUTH_TOKEN_DAYS="${CLAUDE_OAUTH_TOKEN_DAYS:-}"',
+  ])("has the line: %s", (line) => {
+    expect(body).toContain(line);
+  });
+
+  test("calls the function in a command substitution so the exports stay in it", () => {
+    expect(source).toContain('$(credential_expiry_run "');
   });
 });
 

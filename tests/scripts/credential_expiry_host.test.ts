@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { parseCredentialExpiry } from "../../f/factory/lib/credential_expiry.ts";
 import {
   collectCredentialExpiry,
   configuredExpiresAt,
@@ -12,6 +13,7 @@ import {
 
 const NOW = new Date("2026-11-05T00:00:00.000Z");
 const TOKEN = "github_pat_TESTVALUE0123456789abcdef";
+const READ_TOKEN = "github_pat_READVALUE0123456789abcdef";
 const OAUTH_TOKEN = "sk-ant-oat01-value";
 
 type Seen = { readonly url: string; readonly init: RequestInit };
@@ -31,6 +33,20 @@ function expiring(at: string): Response {
     status: 200,
     headers: { "github-authentication-token-expiration": at },
   });
+}
+
+/** 呼ばれるたびに新しい応答を返す。`/user`は期限のヘッダー付き、interaction-limitsは期限付き。 */
+function freshGithub(seen: Seen[] = []): GitHubFetch {
+  return async (url, init) => {
+    seen.push({ url, init });
+    if (url === "https://api.github.com/user") {
+      return expiring("2027-01-01 00:00:00 UTC");
+    }
+    if (url.endsWith("/interaction-limits")) {
+      return Response.json({ expires_at: "2027-02-01T00:00:00Z" });
+    }
+    return new Response(null, { status: 404 });
+  };
 }
 
 function previousWindow(fingerprint: string): string {
@@ -172,30 +188,11 @@ describe("collectCredentialExpiry", () => {
     });
   });
 
-  test("keeps the window of an OAuth token that bootstrap found unchanged", async () => {
-    const previous = previousWindow("recorded-by-another-hash");
+  test("starts the window today for an OAuth token whose fingerprint changed", async () => {
     const text = await collectCredentialExpiry(
       {
         CLAUDE_CODE_OAUTH_TOKEN: OAUTH_TOKEN,
-        CREDENTIAL_EXPIRY_PREVIOUS: previous,
-        CREDENTIAL_CLAUDE_TOKEN_CHANGED: "0",
-      },
-      github({}),
-      NOW,
-    );
-    expect(JSON.parse(text).claude_oauth_token).toEqual(
-      JSON.parse(previous).claude_oauth_token,
-    );
-  });
-
-  test("starts the window today for an OAuth token that bootstrap found changed", async () => {
-    const text = await collectCredentialExpiry(
-      {
-        CLAUDE_CODE_OAUTH_TOKEN: OAUTH_TOKEN,
-        CREDENTIAL_EXPIRY_PREVIOUS: previousWindow(
-          sha256Fingerprint(OAUTH_TOKEN),
-        ),
-        CREDENTIAL_CLAUDE_TOKEN_CHANGED: "1",
+        CREDENTIAL_EXPIRY_PREVIOUS: previousWindow("old"),
       },
       github({}),
       NOW,
@@ -205,7 +202,73 @@ describe("collectCredentialExpiry", () => {
     );
   });
 
-  test("compares fingerprints when bootstrap could not compare the OAuth token", async () => {
+  test("writes a record that the daily check reads without a problem", async () => {
+    const text = await collectCredentialExpiry(
+      {
+        GITHUB_TOKEN: TOKEN,
+        CLAUDE_CODE_OAUTH_TOKEN: OAUTH_TOKEN,
+        CREDENTIAL_WMILL_TOKEN_ISSUED: "1",
+        CREDENTIAL_READ_TOKENS: JSON.stringify({ acme: READ_TOKEN }),
+        INTERACTION_LIMITS_REPO: "acme/factory",
+      },
+      freshGithub(),
+      NOW,
+    );
+    expect(parseCredentialExpiry(text)).toEqual({
+      record: {
+        wmill_token: {
+          issued_at: "2026-11-05T00:00:00.000Z",
+          expires_at: "2027-05-04T00:00:00.000Z",
+        },
+        claude_oauth_token: {
+          issued_at: "2026-11-05T00:00:00.000Z",
+          expires_at: "2027-11-05T00:00:00.000Z",
+          fingerprint: sha256Fingerprint(OAUTH_TOKEN),
+        },
+        github_token: { expires_at: "2027-01-01T00:00:00.000Z" },
+        github_read_tokens: {
+          acme: { expires_at: "2027-01-01T00:00:00.000Z" },
+        },
+        interaction_limits: { expires_at: "2027-02-01T00:00:00.000Z" },
+      },
+      problems: [],
+      unreadable: false,
+    });
+  });
+
+  test("asks GitHub once for a token that several owners share", async () => {
+    const seen: Seen[] = [];
+    await collectCredentialExpiry(
+      {
+        CREDENTIAL_READ_TOKENS: JSON.stringify({
+          acme: READ_TOKEN,
+          octo: READ_TOKEN,
+        }),
+      },
+      freshGithub(seen),
+      NOW,
+    );
+    expect(seen.length).toBe(1);
+  });
+
+  test("records the expiry of every owner that shares a token", async () => {
+    const text = await collectCredentialExpiry(
+      {
+        CREDENTIAL_READ_TOKENS: JSON.stringify({
+          acme: READ_TOKEN,
+          octo: READ_TOKEN,
+        }),
+      },
+      freshGithub(),
+      NOW,
+    );
+    expect(Object.keys(JSON.parse(text).github_read_tokens)).toEqual([
+      "acme",
+      "octo",
+    ]);
+  });
+
+  test("keeps the window of an OAuth token whose fingerprint is unchanged", async () => {
     const previous = previousWindow(sha256Fingerprint(OAUTH_TOKEN));
     const text = await collectCredentialExpiry(
       {
