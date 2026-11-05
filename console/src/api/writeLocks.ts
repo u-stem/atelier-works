@@ -27,6 +27,9 @@ export const MANUAL_INTAKE_WRITE_KEY = "manual_intake";
  */
 export const PR_REVIEW_WRITE_KEY = "pr_review";
 
+/** 全停止と解除は対象を持たないので、キーを1つに固定する。置く操作と解除を、同時に送らせないためである。 */
+export const STOP_ALL_WRITE_KEY = "stop_all";
+
 /**
  * 対象の種類とIDから、ロックのキーを作る。承認の承認と却下は同じキーで止める。
  * 凍結のIDは文字列で、保留のIDは数値である。

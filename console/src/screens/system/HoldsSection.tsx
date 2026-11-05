@@ -17,6 +17,8 @@ import { DeployDecideDialog } from "./DeployDecideDialog.tsx";
 import { HoldPlaceButton, HoldPlaceDialog } from "./HoldPlaceDialog.tsx";
 import { HoldReleaseDialog } from "./HoldReleaseDialog.tsx";
 import { HoldsPanel } from "./HoldsPanel.tsx";
+import { StopAllDialog, StopAllReleaseDialog } from "./StopAllDialog.tsx";
+import { StopAllPanel } from "./StopAllPanel.tsx";
 import { SystemSection } from "./SystemSection.tsx";
 import { initialPlaceForm, usePlaceHold } from "./usePlacement.ts";
 import {
@@ -24,6 +26,7 @@ import {
   useReleaseFreeze,
   useReleaseHold,
 } from "./useRelease.ts";
+import { useReleaseStopAll, useStopAll } from "./useStopAll.ts";
 
 function otherDeployCountOf(
   data: HoldsSnapshot | undefined,
@@ -41,10 +44,10 @@ function otherDeployCountOf(
 }
 
 /**
- * システムの画面の「保留と凍結」の節。有効な保留と凍結を出し、人が確認のうえで置き、解除できる。
+ * システムの画面の「保留と凍結」の節。全停止の区画、有効な保留と凍結を出し、人が確認のうえで置き、解除できる。
  * 置く操作と解除は確認のダイアログを通し、解除は実行中に同じ行を押せなくする。
  * scheduleを止める操作はジョブの画面のスケジュールのタブにあり、この節は凍結を置くところまでを持つ。
- * 保護パスの変更の反映の承認待ちも、この節の先頭に出し、確認のダイアログを通して承認か却下を記録する。
+ * 全停止の区画は、この節の先頭に出す。次に、保護パスの変更の反映の承認待ちを出し、確認のダイアログを通して承認か却下を記録する。
  * 認可はWindmillのログインとフォルダの権限に任せ、この画面は操作者の名前を送らない。
  */
 export function HoldsSection({
@@ -58,6 +61,12 @@ export function HoldsSection({
   const decideDeploy = useDecideDeploy();
   const [decision, setDecision] = useState<DeployDecisionRequest | null>(null);
   const [chosen, setChosen] = useState<HoldItem | null>(null);
+  const stopAll = useStopAll();
+  const releaseStopAll = useReleaseStopAll();
+  const [stopDialog, setStopDialog] = useState<"stop" | "release" | null>(null);
+  const [stopReason, setStopReason] = useState("");
+  // 置く操作と解除は同じキーでロックするので、どちらで確かめても同じ答えになる。
+  const stopLocked = stopAll.isLocked(stopReason);
 
   const confirmDecision = (): void => {
     if (decision === null) {
@@ -97,6 +106,39 @@ export function HoldsSection({
     >
       {(data, now) => (
         <>
+          <StopAllPanel
+            view={data.stop_all}
+            locked={stopLocked}
+            onRequestStop={() => {
+              setStopReason("");
+              setStopDialog("stop");
+            }}
+            onRequestRelease={() => {
+              setStopDialog("release");
+            }}
+          />
+          <StopAllDialog
+            open={stopDialog === "stop"}
+            reason={stopReason}
+            onReasonChange={setStopReason}
+            onConfirm={() => {
+              stopAll.submit(stopReason);
+              setStopDialog(null);
+            }}
+            onCancel={() => {
+              setStopDialog(null);
+            }}
+          />
+          <StopAllReleaseDialog
+            open={stopDialog === "release"}
+            onConfirm={() => {
+              releaseStopAll.submit(null);
+              setStopDialog(null);
+            }}
+            onCancel={() => {
+              setStopDialog(null);
+            }}
+          />
           <DeployApprovalsPanel
             view={deployApprovalsView(data)}
             now={now}

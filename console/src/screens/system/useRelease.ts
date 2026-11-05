@@ -8,7 +8,8 @@ import {
 } from "../../api/releaseConfig.ts";
 import type { ReleaseNotice } from "../../lib/writeNotices.ts";
 
-function announce(notice: ReleaseNotice): void {
+/** 結果の知らせをトーストで出す。保留と凍結の解除と、全停止の操作が共有する。 */
+export function announce(notice: ReleaseNotice): void {
   switch (notice.tone) {
     case "success":
       toast.success(notice.message);

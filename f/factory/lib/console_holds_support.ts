@@ -21,6 +21,7 @@ import type {
   HoldRow,
   HoldScope,
 } from "./holds.ts";
+import type { StopAllStatus } from "./stop_all.ts";
 import type { NoticeRecord } from "./types.ts";
 
 /** 画面に返す文字数の上限(コードポイント)。画面が同じ無害化をやり直すので、ここで先に落とす。 */
@@ -88,10 +89,26 @@ export type DeployApprovalsReadView =
   | { readonly ok: true; readonly pending: readonly DeployApprovalView[] }
   | { readonly ok: false; readonly reason: string };
 
+/**
+ * 全停止の状態。読めない、壊れているときも、止まっていないと取り違えさせないよう、種類を保って返す。
+ * 理由と操作者は、ほかの欄と同じく無害化して切り詰める。
+ */
+export type StopAllView =
+  | { readonly kind: "clear" }
+  | {
+      readonly kind: "active";
+      readonly placed_at: string;
+      readonly placed_by: string;
+      readonly reason: string;
+    }
+  | { readonly kind: "corrupt"; readonly reason: string }
+  | { readonly kind: "unreadable"; readonly reason: string };
+
 export type HoldsSnapshot = {
   readonly holds: HoldsReadView;
   readonly freezes: FreezesReadView;
   readonly deploy_approvals: DeployApprovalsReadView;
+  readonly stop_all: StopAllView;
 };
 
 /** 解除の通知を残せたか。残せなくても解除は取り消さない。 */
@@ -206,6 +223,31 @@ export function freezesReadView(
     schedule: activeFreezes(state.value, now).map(freezeView),
     deploy: activeDeployFreezes(state.value, now).map(deployFreezeView),
   };
+}
+
+/** 全停止の状態を、画面に返す形にする。時刻はZで終わる形にそろえる。 */
+export function stopAllReadView(status: StopAllStatus): StopAllView {
+  switch (status.kind) {
+    case "clear":
+      return { kind: "clear" };
+    case "active":
+      return {
+        kind: "active",
+        placed_at: new Date(status.state.placed_at).toISOString(),
+        placed_by: clipDisplay(status.state.placed_by, HOLDER_DISPLAY_MAX),
+        reason: clipDisplay(status.state.reason, REASON_DISPLAY_MAX),
+      };
+    case "corrupt":
+      return {
+        kind: "corrupt",
+        reason: clipDisplay(status.reason, FAILURE_DISPLAY_MAX),
+      };
+    case "unreadable":
+      return {
+        kind: "unreadable",
+        reason: clipDisplay(status.reason, FAILURE_DISPLAY_MAX),
+      };
+  }
 }
 
 /** 承認待ちの読み取りを、画面に返す形にする。パスは数と長さを切り詰める。 */
