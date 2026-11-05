@@ -1515,7 +1515,6 @@ describe("dependency-free lib locks", () => {
     "holds",
     "console_holds_support",
     "check_sandbox",
-    "check_runner",
     "approval_gate",
     "protected_paths",
     "deploy_approvals",
@@ -2212,10 +2211,17 @@ describe("safety boundary files", () => {
     "f/factory/self_update.script.yaml",
     "f/factory/lib/self_update_support.ts",
     "f/factory/lib/self_update_support.script.yaml",
+    "f/factory/lib/stop_all.ts",
+    "f/factory/lib/stop_all.script.yaml",
+    "f/factory/lib/stop_check.ts",
+    "f/factory/lib/stop_check.script.yaml",
   ];
   // windmill-clientを含むlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるので守らない。
   const CLIENT_LOCKS = [
     "f/factory/lib/claude.script.lock",
+    "f/factory/lib/check_runner.script.lock",
+    "f/factory/lib/stop_all.script.lock",
+    "f/factory/lib/stop_check.script.lock",
     "f/factory/self_update.script.lock",
     "f/factory/console_deploy_decide.script.lock",
   ];
@@ -2234,6 +2240,10 @@ describe("safety boundary files", () => {
 
   test.each(PATHS)("%s exists", async (path) => {
     expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test.each(PATHS)("the CI round denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
   });
 
   test.each(CLIENT_LOCKS)(
@@ -2260,6 +2270,18 @@ describe("safety boundary files", () => {
 
   test.each([
     ["f/factory/lib/claude.script.yaml", "f/factory/lib/claude.script.lock"],
+    [
+      "f/factory/lib/check_runner.script.yaml",
+      "f/factory/lib/check_runner.script.lock",
+    ],
+    [
+      "f/factory/lib/stop_all.script.yaml",
+      "f/factory/lib/stop_all.script.lock",
+    ],
+    [
+      "f/factory/lib/stop_check.script.yaml",
+      "f/factory/lib/stop_check.script.lock",
+    ],
     ["f/factory/self_update.script.yaml", "f/factory/self_update.script.lock"],
   ])("%s points at its own lock", async (yamlPath, lockPath) => {
     expect(await Bun.file(yamlPath).text()).toContain(
