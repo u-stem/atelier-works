@@ -547,8 +547,8 @@ describe("the checks on scripts that stay on the default worker", () => {
     );
   });
 
-  test("flags the claude dependency behind poll_issues", () => {
-    expect(filesWithToolDependencies(["f/factory/poll_issues"])).toContain(
+  test("flags the claude dependency behind watch_pr_ci", () => {
+    expect(filesWithToolDependencies(["f/factory/watch_pr_ci"])).toContain(
       "f/factory/lib/claude.ts",
     );
   });

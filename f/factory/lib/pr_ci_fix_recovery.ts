@@ -4,8 +4,14 @@
 
 import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry_reasons.ts";
 import { CHECK_UNRUNNABLE_REASON_PREFIX } from "./check_runner.ts";
-import { CI_ROUND_DETAILS, ciRoundReason } from "./ci_fix_round.ts";
+import {
+  CI_ROUND_DETAILS,
+  ciClaudeFailedNote,
+  ciClaudeFailureText,
+  ciRoundReason,
+} from "./ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "./ci_metadata_rehash.ts";
+import type { RunClaudeFailureReason } from "./claude.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
 import { TERMINAL_WORK_ITEM_STATUSES, type WorkItemStatus } from "./types.ts";
 
@@ -34,6 +40,42 @@ export const BUDGET_REASON = /^daily budget exceeded \(\$[\d.]+ >= \$[\d.]+\)$/;
 export const DRAFT_OR_AUTO_MERGE_REASONS: readonly string[] = [
   "pull request is a draft",
   "pull request has auto-merge enabled",
+];
+
+/** 修正のステップの例外の文と、検証のステップの止める理由。固定の文で、Claudeの出力は入らない。 */
+function ciClaudeFailureNotes(reason: RunClaudeFailureReason): string[] {
+  return [ciClaudeFailureText(reason), ciClaudeFailedNote(reason)];
+}
+
+/**
+ * Claudeの実行の失敗のうち、そのままでは起動し直さないものの注記と、写す保留の理由。
+ * timeoutと予算の超過は、同じheadで繰り返しても同じ失敗になるので、決定的な保留にする。
+ * 使用上限と全停止は、待てば解けるので、一時的な保留にする。
+ */
+const CLAUDE_FAILURE_HOLDS: ReadonlyMap<string, PrCiFixHoldReason> = new Map(
+  (
+    [
+      ["timeout", "claude_run_failed"],
+      ["run_budget_exceeded", "claude_run_failed"],
+      ["usage_limit", "claude_usage_limit"],
+      ["stopped", "claude_stopped"],
+    ] as const
+  ).flatMap(([reason, hold]) =>
+    ciClaudeFailureNotes(reason).map((note): [string, PrCiFixHoldReason] => [
+      note,
+      hold,
+    ]),
+  ),
+);
+
+/**
+ * 待てば解ける失敗(使用上限と全停止)で終わった回の注記。
+ * この注記で終わった回は、直す回数の上限に数えない(`countPrCiFixRounds`)。
+ * flowの失敗の処理は、この注記の失敗に`job_failed`を送らない。監視が起動し直すためである。
+ */
+export const CI_CLAUDE_WAIT_NOTES: readonly string[] = [
+  ...ciClaudeFailureNotes("usage_limit"),
+  ...ciClaudeFailureNotes("stopped"),
 ];
 
 /**
@@ -73,7 +115,15 @@ export function holdReasonForStoppedItem(
   }
   // 検査コマンドの実行ファイルを起動できない環境の問題は、同じheadで起動し直しても変わらない。
   if (note.startsWith(CHECK_UNRUNNABLE_REASON_PREFIX)) return "fix_stopped";
-  return null;
+  return CLAUDE_FAILURE_HOLDS.get(note) ?? null;
+}
+
+/**
+ * 注記が、待てば解ける失敗の固定文か。
+ * この注記で止まったCI回は、監視が行を保留して起動し直すので、完了のステップは人を呼ぶ通知を送らない。
+ */
+export function isCiClaudeWaitNote(note: string | null): boolean {
+  return note !== null && CI_CLAUDE_WAIT_NOTES.includes(note);
 }
 
 export type FixingRecovery =
@@ -96,7 +146,10 @@ function isTerminal(status: WorkItemStatus): boolean {
  * - 動いている作業項目(終端でない)は、そのままにする。
  * - pushした作業項目(`rereview_requested`か、pushしたcommitの記録がある)は、`pushed`にする。
  *   行のheadの読み遅れで、古いheadの行を`failed`に戻して直し直すことを防ぐためである。
- * - 存在しない作業項目と、`failed`や`cancelled`などの終わり方をした作業項目は、保留なしで戻す。
+ * - `failed`のうち、Claudeの実行がtimeoutか予算の超過で失敗したものは、`claude_run_failed`で保留して戻す。
+ *   保留なしで戻すと、次の巡回で同じ失敗を繰り返し、費用と回数の上限を使い切るためである。
+ *   使用上限は`claude_usage_limit`、全停止は`claude_stopped`で保留して戻す。待てば解けるので、起動の判断が起動し直す。
+ * - 存在しない作業項目と、ほかの`failed`や`cancelled`などの終わり方をした作業項目は、保留なしで戻す。
  *   `pr_fix`が`cancelled`になるのはPRが閉じたときだけで、設定から外れたリポジトリを除き、閉じたPRは戻す前のheadの読み取りが拾うためである。
  * - `blocked`は、理由を保留の理由に写せればその理由で保留する。写せなければ、保留なしで戻す。
  *   起動し直す回数は、回数の上限(`pr_ci_fix_max_rounds`)が止める。
@@ -131,6 +184,12 @@ export function decideFixingRecovery(
         : { kind: "release", hold: null };
     }
     return { kind: "release", hold: holdReasonForStoppedItem(item.note) };
+  }
+  if (item.status === "failed" && item.note !== null) {
+    return {
+      kind: "release",
+      hold: CLAUDE_FAILURE_HOLDS.get(item.note) ?? null,
+    };
   }
   return { kind: "release", hold: null };
 }

@@ -147,7 +147,7 @@ function decideRecoveryByState(
   }
   if (item.status === "failed" && item.launched) {
     const note = item.note;
-    if (note !== null && note.startsWith(CONFLICT_CLAUDE_FAILED_NOTE_PREFIX)) {
+    if (note?.startsWith(CONFLICT_CLAUDE_FAILED_NOTE_PREFIX)) {
       return { kind: "release", hold: "fix_stopped" };
     }
     return {

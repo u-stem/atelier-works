@@ -15,6 +15,7 @@ import type {
   WorkflowRunJob,
 } from "./github.ts";
 import type { WorkflowRun } from "./main_ci_support.ts";
+import { HOLD_PROLONGED_AFTER_MS } from "./pr_ci_notify.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
 import type { WorkItemStatus } from "./types.ts";
 import { generatedByTrailer } from "./workspace.ts";
@@ -125,6 +126,20 @@ export function allCommitsFromFactory(
  */
 export const LAUNCH_FAILURE_ALLOWANCE = 3;
 
+/**
+ * 使用上限で止まった行を起動し直すまでの時間。一時的な保留を知らせるまでの時間と同じにする。
+ * 巡回の間隔(5分)で起動し直すと、上限が戻るまで作業項目とflowを作り続けるためである。
+ * 長くすると、起動し直す前に保留の通知が出て、人の操作が要らないことで人を呼ぶ。
+ */
+export const USAGE_LIMIT_RESUME_AFTER_MS = HOLD_PROLONGED_AFTER_MS;
+
+/**
+ * 使用上限で止まった行を、起動し直すのをやめるまでの時間。行のheadを最初に見た時刻から測る。
+ * 週単位の上限が戻るのを待てる長さで、それを過ぎたら待っても解けないとみなすためである。
+ * 席の種類や判定の誤りで解けない上限で、作業項目とflowを作り続けない。
+ */
+export const USAGE_LIMIT_GIVE_UP_AFTER_MS = 8 * 24 * 60 * 60_000;
+
 /** 検査を動かすworkerの環境が前提を満たさないことを表す保留の理由。 */
 export type WorkerEnvHoldReason = Extract<
   PrCiFixHoldReason,
@@ -170,6 +185,8 @@ export type FixClaimReaders = {
   readonly mainCiFailed: () => Promise<boolean>;
   /** 直近に通ったheadより後の、CIの失敗を直したラウンドの数。 */
   readonly countRounds: () => Promise<number>;
+  /** 全停止が置かれているか、解除されたと確かめられないか。全停止で止まった行だけが読む。 */
+  readonly stopHeld: () => Promise<boolean>;
 };
 
 export type FixClaimInput = {
@@ -179,7 +196,14 @@ export type FixClaimInput = {
     readonly notified_reason: string | null;
     /** 行を起動した回数。起動の失敗で戻った回も数える。 */
     readonly fix_attempts: number;
+    /** 今の保留の理由。 */
+    readonly fix_hold_reason: string | null;
+    /** 最後に更新した時刻。保留の理由を書いた時刻を兼ね、読み直しでは進まない。 */
+    readonly updated_at: Date;
+    /** 行のheadを最初に見た時刻。headが進むと新しい行になるので、測り直しになる。 */
+    readonly first_seen_at: Date;
   };
+  readonly now: Date;
   readonly instanceName: string;
   /** 1つのPRで起動できるラウンドの上限(`pr_ci_fix_max_rounds`)。 */
   readonly maxRounds: number;
@@ -212,6 +236,13 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
 
 /**
  * 失敗の行を起動してよいかを決める。次の順に確かめ、最初に当たったものを返す。
+ * 0. 使用上限で止まった行(`claude_usage_limit`)は、行のheadを最初に見てから`USAGE_LIMIT_GIVE_UP_AFTER_MS`たっていれば、
+ *    `claude_run_failed`で保留する。起動し直すのをやめ、人に知らせる。全停止で止まった行には上限が無い。全停止の間は起動しないためである。
+ *    そうでなければ、`USAGE_LIMIT_RESUME_AFTER_MS`の間、同じ保留のままにする。
+ *    全停止で止まった行(`claude_stopped`)は、全停止が解除されるまで同じ保留のままにする。
+ *    どちらも最初に確かめる。ほかの理由に書き換えると、解けた後に待たずに起動するためである。
+ *    PRとジョブを読まず、回数も数えない。待つ間に行のheadが動いたときは、判定の処理が`superseded`にする。
+ *    待ち終えた行は、次の項目から判断を続ける。
  * 1. 失敗が`failure`でなく、取り消しなどで終わった行は、`other_conclusion`で保留する。
  * 2. 作業項目の状態を読む。直す作業項目が動いていれば`last_fix_unsettled`、
  *    行のheadのレビューが無ければ`not_reviewed`で保留する。
@@ -247,6 +278,18 @@ export async function decideFixClaim(
   input: FixClaimInput,
 ): Promise<FixClaimDecision> {
   const { row, readers } = input;
+  if (row.fix_hold_reason === "claude_usage_limit") {
+    const now = input.now.getTime();
+    if (now - row.first_seen_at.getTime() >= USAGE_LIMIT_GIVE_UP_AFTER_MS) {
+      return hold("claude_run_failed");
+    }
+    if (now - row.updated_at.getTime() < USAGE_LIMIT_RESUME_AFTER_MS) {
+      return hold("claude_usage_limit");
+    }
+  }
+  if (row.fix_hold_reason === "claude_stopped" && (await readers.stopHeld())) {
+    return hold("claude_stopped");
+  }
   if (row.notified_reason === "ci_other_conclusion") {
     return hold("other_conclusion");
   }

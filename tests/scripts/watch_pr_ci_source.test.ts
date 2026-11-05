@@ -85,6 +85,20 @@ describe("watch_pr_ci: the use of the table in the human discovery", () => {
   });
 });
 
+describe("watch_pr_ci: the wiring of the rows that wait", () => {
+  test("does not count the rounds that ended on a note that waits", async () => {
+    const source = await read("f/factory/watch_pr_ci.ts");
+    expect(source).toContain(
+      "countPrCiFixRounds(owner, repo, prNumber, CI_CLAUDE_WAIT_NOTES)",
+    );
+  });
+
+  test("closes the gate when the stop cannot be confirmed as released", async () => {
+    const source = await read("f/factory/watch_pr_ci.ts");
+    expect(source).toMatch(/stopHeld:[\s\S]*holdsGate\(/);
+  });
+});
+
 describe("watch_pr_ci: the wiring of the human discovery", () => {
   test("decides the use of the table from the settings", async () => {
     const source = await read("f/factory/watch_pr_ci.ts");

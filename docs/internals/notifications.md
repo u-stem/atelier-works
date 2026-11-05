@@ -61,7 +61,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `implement_finish` | 実装フローが人の対応待ちで止まった |
 | `pr_review_generate` | レビューの生成を止めた |
 | `auto_retry_pr_review` | GitHubの一時的な失敗で止まったPRレビューが、再開の待ちに猶予の30分を足しても再開されないまま残った。または、自動の再開を3回行っても直らなかった。フローを起動できなかった再開も、再開の遷移で1回に数えて失敗に戻すので、使い切れば同じ通知になる。そのときの次の操作は、Windmillでフローを起動できる状態の確認になる。対象のPRにリンクし(リポジトリ名が不正な行はリンクを省く)、理由と`retry_work_item`を作業項目のIDで実行する次の操作を載せる。届いたときだけ記録し、届くまで巡回の間隔の5分ごとに送り直す |
-| `pr_fix_finish` | 修正が人の対応待ちで止まった。Issue化の提案がある |
+| `pr_fix_finish` | 修正が人の対応待ちで止まった。Issue化の提案がある。CIを直す回が使用上限か全停止で止まったときは送らない。監視が起動し直すためである |
 | `watch_pr_ci` | Factoryが作ったPRのCIが失敗し、通知を新しく残した(理由は`ci_failure`か`ci_other_conclusion`) |
 | `poll_dependabot` | dependabotのPRを人に回すと決めた。待ちが上限を超えた、収集かゲートが止めた、リポジトリの照合に落ちた、フローの起動に失敗した、などである。作業項目を作った直後に人の対応待ちにして、1回だけ送る |
 | `dependabot_prepare`、`dependabot_finish` | dependabotのフローが、自動でマージできないと判断して人に回した。影響の所見を投稿し、修正のラベルを人に付けてもらうときと、試運転でマージ可と判定したときも送る |
@@ -77,7 +77,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 
 | 処理 | 送るとき |
 | --- | --- |
-| `on_error_flow` | フロー(pipeline、design、implement、pr_review、pr_fix、manual_intake、dependabotなど)が失敗した。設定を読めないときも、インスタンス名を`unknown`にして送る。GitHubの一時的な失敗で止まったPRレビューは、作業項目を`failed`にでき、再開の巡回の対象になるときだけ送らない。`failed`にできなかったときと、同じPRに置き換えた行か並走する行があるときは、巡回が拾わないので`job_failed`を送る |
+| `on_error_flow` | フロー(pipeline、design、implement、pr_review、pr_fix、manual_intake、dependabotなど)が失敗した。設定を読めないときも、インスタンス名を`unknown`にして送る。使用上限か全停止で失敗したCIを直す回は、作業項目を`failed`にできたときは送らない。監視が起動し直すためである。GitHubの一時的な失敗で止まったPRレビューは、作業項目を`failed`にでき、再開の巡回の対象になるときだけ送らない。`failed`にできなかったときと、同じPRに置き換えた行か並走する行があるときは、巡回が拾わないので`job_failed`を送る |
 | `detect_schedule_failures` | スケジュールのジョブが失敗した。検出器が失敗をジョブ履歴から拾い、記録した後に送る。失敗の発生から通知まで、最大5分遅れる。同じスケジュールの連続した失敗の初回と、前回の失敗からエラー文が変わったときだけ送る。1回の実行で拾った同じscriptの失敗が複数あっても、最新の失敗の内容で1回に収める。以降の同じ失敗は、下の`schedule_failing`に任せる。直前の実行(飛ばされた回と人が取り消した回を除く)が成功なら初回である。失敗なら、その実行のジョブIDを持つ`job_failures`の最新の行(`step`がNULL)のエラー文と比べる。ジョブ履歴、その記録、直前の実行のどれかを読めないときや、記録が別の実行のものなら、送る側に倒す。`schedule_failing`のnoticeを新しく残したときは、Discordにも`job_failed`を送り直す。初回の通知が届かなかった連続を、Discordで見落とさないためである。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗して、ここで拾われる。直近3回の実行(飛ばされた回と人が取り消した回を除き、ジョブの上限で打ち切られた回は、`canceled_by`が`timeout`の取り消しとみなして失敗に数える。この値は実機で未確認である)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
 | `poll_issues`の点検 | 閉じたIssue・PRや孤児のジョブを見つけ、作業項目を取り消しか失敗にした。dependabotの作業項目を、PRが閉じたことで終えたときは送らない。マージされていればマージ済みとして記録し、マージされずに閉じたのはdependabotが置き換えたPRを自分で閉じた場合で、どちらも人の行動が要らないためである |
 | `requirements_apply`、`design_apply` | 承認の反映の処理が例外で終わった。却下の後の作り直しを起動できなかったときも含む |
@@ -313,7 +313,8 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 保留が続いたと知らせた後で決定的な保留へ変わると、2件目が残る。本文は違う([PRのCI監視の仕様](pr-ci.md)の既知の限界)。
 Discordには、noticeを新しく残したときに、種類`needs_human`で通知する。リンクはPRのページで、説明に理由コード、「次の操作」を載せる。
 自動で直す対象の失敗は、確定した時点では残さず、直せるかが決まってから残す。本文には自動修正の保留の理由を足し、「次の操作」はその理由の固定文にする。リンクはPRのページになる。
-直す作業が止まった保留(`fix_stopped`)は、止めたフローがDiscordに通知しているので、noticeだけを残す。
+直す作業が人の判断待ちで止まった保留(`fix_stopped`)は、止めたフローがDiscordに通知しているので、noticeだけを残す。
+Claudeの実行が失敗した保留(`claude_run_failed`)は、Discordにも送る。先に届く`job_failed`には、PRのリンクと次の操作が無いためである。
 本文は固定文で、workflowの名前、結論、ログは載せない。外部の文字列は、`pr_ci_checks`の`summary`列にだけ残す。
 同じheadの再実行が通ったとき、新しいheadが通ったとき、PRが閉じたときに、`watch_pr_ci`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
 `pr_ci_check_denied`は、PRか実行を読めないリポジトリごとに1件残し、Discordには通知しない。読めるようになると、同じ方法で解決する。
@@ -599,6 +600,23 @@ PRのトリガーラベルの取得に成功したときは、`poll_prs`が、�
 `pr_trigger_label_left_removed`は、ラベルが外れたままのPRを検出した場所で、PRごとにすぐ残す。
 Discordの通知が届かなくても、Consoleから該当のPRを確かめられる。
 記録に失敗しても、警告のログを残すだけで、Discordの通知は送る。この種類は、人がConsoleから解決できる。
+
+`claude_usage_limit`は、Claudeの実行が使用上限で失敗したときに、実行の記録の処理(`recordClaudeRuns`)が残す。
+使用上限はアカウント全体に効くので、Claudeを呼ぶどのflowでも残す。
+本文は固定の文`Claudeの使用上限に当たりました`だけである。
+本文の一致で重複を抑えるので、未解決の間は通知を重ねず、1回の上限で通知は1件になる。
+flowのパスはログに残す。
+例外で終わるflowの再実行の対象は、**要対応**の失敗の行で分かる。
+例外を投げないflow(`dependabot_assess`と`investigate_generate`)は失敗の行を残さないので、ログの`path`と`job_id`で調べる。手順は[運用](../operations.md#claudeの実行が上限で失敗したとき)にある。
+失敗の詳細は解除の時刻を含むので、本文に載せない。
+失敗の詳細はログにも出さず、`agent_runs`の`error`で確かめる。
+CI回と競合回のClaudeの文は、秘密の走査を通っていないためである。
+記録に失敗しても、エラーのログを残すだけで処理を続ける。
+Claudeの失敗の例外を上書きしないためである。
+Discordへの通知は、そのflowの失敗の通知に任せる。
+ただし、使用上限で失敗したCIを直す回には、`job_failed`も`pr_fix_finish`の`needs_human`も送らない。監視が起動し直すので、上限が続く間に同じ通知を重ねないためである。
+そのheadを見つけてから8日たっても戻らない行は、保留が`claude_run_failed`に移り、`pr_ci_failed`のnoticeとDiscordで知らせる。
+この種類は、人がConsoleから解決できる。
 
 解決済みのnoticeは、解決してから`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。解決の時刻(`resolved_at`)が無い行は、作成の時刻から数える。
 重要度が「情報」の未解決のnoticeは、作成から同じ期間を過ぎると、削除せず解決済みへ変える(`resolved_by`は`cleanup_db`)。

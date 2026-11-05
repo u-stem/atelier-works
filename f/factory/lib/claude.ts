@@ -26,7 +26,9 @@ import {
   type AgentRunRecord,
   capToDeadline,
   type FactoryConfig,
+  isStringArray,
   type ModelUsageEntry,
+  type RunClaudeFailureReason,
 } from "./types.ts";
 import type { CommandResult, CommandRunner } from "./workspace.ts";
 
@@ -137,6 +139,11 @@ export type ClaudeRunResult = {
    */
   readonly structuredOutput: unknown;
   /**
+   * 結果の`api_error_status`。APIのエラーで終わったときのHTTPの状態コードで、無いときと整数でないときはnull。
+   * 実行の結果を手で組むテストが、この項目を持たなくてもよいよう、省略できる型にしている。
+   */
+  readonly apiErrorStatus?: number | null;
+  /**
    * 標準出力のJSONのトップレベルのキーを、昇順に並べたもの。`parseClaudeJson`が必ず付ける。
    * 実行の結果を手で組むテストが、この項目を持たなくてもよいよう、省略できる型にしている。
    */
@@ -213,7 +220,9 @@ type RawClaudeJson = {
   readonly type: string;
   readonly subtype: string;
   readonly is_error: boolean;
-  readonly result: string;
+  /** 本文。`--max-budget-usd`の超過の結果には無く、`errors`に文が入る。 */
+  readonly result?: string | null;
+  readonly errors?: unknown;
   readonly session_id: string;
   readonly total_cost_usd: number;
   readonly num_turns: number;
@@ -222,6 +231,35 @@ type RawClaudeJson = {
   readonly structured_output: unknown;
 };
 
+/**
+ * `result`が読める形かを返す。文字列でなくてよいのは、`is_error`が真で、`result`が無いか`null`で、`errors`があるときだけである。
+ */
+function hasReadableResult(
+  isError: boolean,
+  result: unknown,
+  errors: unknown,
+): boolean {
+  if (typeof result === "string") return true;
+  return (
+    isError &&
+    (result === undefined || result === null) &&
+    isStringArray(errors)
+  );
+}
+
+/**
+ * 結果の本文を返す。空でない`result`と`errors`の各要素を、この順に改行でつなぐ。
+ * 使用上限の文は`errors`にだけ入ることがあり、`result`だけを見ると判定を外すため、両方を残す。
+ */
+function resultTextOf(parsed: RawClaudeJson): string {
+  const lines: string[] = [];
+  if (typeof parsed.result === "string" && parsed.result !== "") {
+    lines.push(parsed.result);
+  }
+  if (isStringArray(parsed.errors)) lines.push(...parsed.errors);
+  return lines.join("\n");
+}
+
 function isRawClaudeJson(value: unknown): value is RawClaudeJson {
   if (typeof value !== "object" || value === null) return false;
   const record = value as {
@@ -229,6 +267,7 @@ function isRawClaudeJson(value: unknown): value is RawClaudeJson {
     subtype: unknown;
     is_error: unknown;
     result: unknown;
+    errors: unknown;
     session_id: unknown;
     total_cost_usd: unknown;
     num_turns: unknown;
@@ -238,12 +277,19 @@ function isRawClaudeJson(value: unknown): value is RawClaudeJson {
   if (typeof record.type !== "string") return false;
   if (typeof record.subtype !== "string") return false;
   if (typeof record.is_error !== "boolean") return false;
-  if (typeof record.result !== "string") return false;
+  if (!hasReadableResult(record.is_error, record.result, record.errors)) {
+    return false;
+  }
   if (typeof record.session_id !== "string") return false;
   if (typeof record.total_cost_usd !== "number") return false;
   if (typeof record.num_turns !== "number") return false;
   if (typeof record.duration_ms !== "number") return false;
   return isRawClaudeUsage(record.usage);
+}
+
+/** `api_error_status`を整数として読む。無いときと、整数でないときはnullを返す。 */
+function parseApiErrorStatus(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
 }
 
 /**
@@ -265,7 +311,7 @@ export function parseClaudeJson(stdout: string): ClaudeRunResult {
     type: parsed.type,
     subtype: parsed.subtype,
     isError: parsed.is_error,
-    resultText: parsed.result,
+    resultText: resultTextOf(parsed),
     sessionId: parsed.session_id,
     totalCostUsd: parsed.total_cost_usd,
     numTurns: parsed.num_turns,
@@ -277,6 +323,9 @@ export function parseClaudeJson(stdout: string): ClaudeRunResult {
       cacheCreationInputTokens: parsed.usage.cache_creation_input_tokens,
     },
     modelUsage: parseModelUsage(Reflect.get(parsed, "modelUsage")),
+    apiErrorStatus: parseApiErrorStatus(
+      Reflect.get(parsed, "api_error_status"),
+    ),
     structuredOutput: parsed.structured_output,
     topLevelKeys: Object.keys(parsed).sort(),
   };
@@ -398,13 +447,7 @@ export type RunClaudeOptions<T> = {
   readonly runAs?: { readonly uid: number; readonly gid: number };
 };
 
-export type RunClaudeFailureReason =
-  | "non_zero_exit"
-  | "timeout"
-  | "invalid_json"
-  | "invalid_structured_output"
-  | "claude_error"
-  | "stopped";
+export type { RunClaudeFailureReason };
 
 /**
  * `runClaude`の結果。`agentRun`は最後の試行の記録で、再試行したときは捨てた最初の試行の記録が
@@ -550,7 +593,7 @@ type ClaudeAttemptResult<T> =
       readonly detail: string;
     };
 
-/** 期限が残っていなかったためClaudeを起動しなかったときの詳細。 */
+/** 期限が残っていなかったためClaudeを起動しなかったとき(`not_started`)の詳細。 */
 export const CLAUDE_NOT_STARTED_DETAIL =
   "claude -p not started: no time left before the deadline";
 
@@ -561,6 +604,12 @@ export const CLAUDE_STOPPED_BEFORE_START_DETAIL =
 /** 実行中に全停止が置かれ、Claudeを止めたときの詳細。 */
 export const CLAUDE_STOPPED_DETAIL =
   "claude -p stopped: the factory is stopped (f/factory/stop_all)";
+
+/**
+ * 費用を結果のJSONから取れず、`--max-budget-usd`の値を記録した実行の`error`に足す注記。
+ * 打ち切った実行の費用は結果に無い。費用は上限までなので、上限の値で日次予算に少なく数えないようにする。
+ */
+const COST_IS_CAP_NOTE = "(cost_usd is the --max-budget-usd cap)";
 
 /** この実行の全停止の確認。指定が無ければ既定の確認を使う。 */
 function stopCheckOf<T>(opts: RunClaudeOptions<T>): StopCheck {
@@ -612,7 +661,22 @@ function baseAgentRunFor<T>(
     session_id: null,
     exit_code: exitCode,
     error: null,
+    failure_reason: null,
     model_usage: [],
+  };
+}
+
+/** 失敗の試行の結果を返す。実行の記録にも失敗の種類を入れる。 */
+function failedAttempt(
+  reason: RunClaudeFailureReason,
+  agentRun: AgentRunRecord,
+  detail: string,
+): Extract<ClaudeAttemptResult<never>, { outcome: "failure" }> {
+  return {
+    outcome: "failure",
+    reason,
+    agentRun: { ...agentRun, failure_reason: reason },
+    detail,
   };
 }
 
@@ -623,6 +687,145 @@ function baseAgentRunFor<T>(
  */
 function failureDetail(text: string): string {
   return escapeReasonSeparator(maskSecrets(text));
+}
+
+/**
+ * 使用上限(サブスクリプションの上限)に当たったときの、結果の本文の形。
+ * 文面はworkerのClaude Codeのバイナリが上限の文として持つ一覧から取った。Claude Codeの文書には無い。
+ * 実際の上限の応答は確かめていないので、判定の材料を失敗の詳細に残す。
+ * 行頭に固定する。ほかのサービスのエラーの引用やモデルの文の中の同じ語句で`usage_limit`にすると、再試行を失うためである。
+ * 実際の応答の形が未確認なので、`API Error: `の前置きは許す。
+ * `You've hit your`と`You've reached your`は、バイナリでは続く語が変わる文の先頭である。
+ * 上限の文は`limit`か`team's shared budget`を同じ行に持つので、その行だけを受ける。
+ * `requires usage credits`の主語はモデル名で変わるので、短い主語に続く形だけを受ける。
+ */
+const USAGE_LIMIT_PATTERN =
+  /^(?:API Error: )?(?:You've (?:hit|reached) your[^\n]*(?:limit|team's shared budget)|You're out of (?:usage credits|extra usage)|Your org is out of usage|Your seat type doesn't include (?:extra )?usage|Your usage allocation has been disabled|Your group's usage limit is set to \$0|[^·\n]{1,40} requires usage credits)/im;
+
+/**
+ * `is_error: true`の結果を、失敗の種類に分ける。
+ * `--max-budget-usd`の超過は`run_budget_exceeded`、使用上限は`usage_limit`、それ以外は`claude_error`にする。
+ * `api_error_status`の429だけでは使用上限にしない。一時的なレート制限は、Windmillの再試行で回復するためである。
+ */
+function errorReasonFor(parsed: ClaudeRunResult): RunClaudeFailureReason {
+  if (parsed.subtype === "error_max_budget_usd") return "run_budget_exceeded";
+  if (USAGE_LIMIT_PATTERN.test(parsed.resultText)) return "usage_limit";
+  return "claude_error";
+}
+
+/** 結果のJSONを読めた試行の記録を返す。 */
+function agentRunFromResult(
+  base: AgentRunRecord,
+  parsed: ClaudeRunResult,
+): AgentRunRecord {
+  return {
+    ...base,
+    input_tokens: parsed.usage.inputTokens,
+    output_tokens: parsed.usage.outputTokens,
+    cache_read_tokens: parsed.usage.cacheReadInputTokens,
+    cost_usd: parsed.totalCostUsd,
+    num_turns: parsed.numTurns,
+    duration_ms: parsed.durationMs,
+    session_id: parsed.sessionId,
+    model_usage: parsed.modelUsage,
+  };
+}
+
+/** 結果の本文が空のとき、失敗の詳細に残すstderrの末尾の字数。 */
+const STDERR_TAIL_CHARS = 2000;
+
+/**
+ * `is_error: true`の結果を、種類を分けた失敗にする。
+ * `stderr`は、終了コードが0以外の実行で渡す。結果の本文が空のときだけ、末尾を詳細に残す。
+ * 本文があるときは、本文が原因を示すので残さない。
+ */
+function errorResultFailure(
+  base: AgentRunRecord,
+  parsed: ClaudeRunResult,
+  stderr?: string,
+): Extract<ClaudeAttemptResult<never>, { outcome: "failure" }> {
+  const reason = errorReasonFor(parsed);
+  const status = parsed.apiErrorStatus ?? null;
+  const statusPart =
+    status === null ? "" : `, api_error_status=${String(status)}`;
+  const stderrTail = (stderr ?? "").slice(-STDERR_TAIL_CHARS);
+  const body =
+    parsed.resultText === "" && stderrTail !== ""
+      ? `(no result text) stderr: ${stderrTail}`
+      : parsed.resultText.slice(0, 500);
+  const detail = failureDetail(
+    `claude reported an error (subtype=${parsed.subtype}${statusPart}): ${body}`,
+  );
+  return failedAttempt(
+    reason,
+    { ...agentRunFromResult(base, parsed), error: detail },
+    detail,
+  );
+}
+
+/**
+ * 終了コードがシグナルで終わったことを示すかを返す。
+ * `Bun.spawn`の`exited`は、シグナルで終わったプロセスに128にシグナル番号を足した値を返す
+ * (SIGTERMは143、SIGKILLは137)。128そのものはシグナルでない。
+ * シグナルの番号は64までなので、192を超える値(255など)はプログラムが選んだ終了コードである。
+ */
+function endedBySignal(exitCode: number): boolean {
+  return exitCode > 128 && exitCode <= 192;
+}
+
+/**
+ * 標準出力のJSONの`total_cost_usd`を返す。読めないとき(JSONでないとき、途中で切れたとき、
+ * 値が有限で0以上の数でないとき)はnullを返す。
+ * 止めた実行と失敗した実行は、結果を書き終えていることがある。その実費を捨てずに数えるために、
+ * 結果の形の全体は問わず、費用の項目だけを読む。
+ */
+function totalCostUsdOf(stdout: string): number | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const cost: unknown = Reflect.get(parsed, "total_cost_usd");
+  return typeof cost === "number" && Number.isFinite(cost) && cost >= 0
+    ? cost
+    : null;
+}
+
+/**
+ * 打ち切られた実行の記録を返す。
+ * 結果を書き終えていれば、費用、トークン数、`model_usage`をその結果から取る。
+ * 結果として読めなければ、標準出力の費用、それも無ければ上限の値を費用にする。
+ * 打ち切った実行の費用は結果に無いことが多く、上限の値で日次予算に少なく数えないようにする。
+ */
+function interruptedAgentRun<T>(
+  opts: RunClaudeOptions<T>,
+  base: AgentRunRecord,
+  stdout: string,
+  detail: string,
+): AgentRunRecord {
+  const result = parseClaudeJsonOrNull(stdout);
+  if (result !== null) {
+    return { ...agentRunFromResult(base, result), error: detail };
+  }
+  const writtenCost = totalCostUsdOf(stdout);
+  return writtenCost === null
+    ? {
+        ...base,
+        cost_usd: opts.maxBudgetUsd,
+        error: `${detail} ${COST_IS_CAP_NOTE}`,
+      }
+    : { ...base, cost_usd: writtenCost, error: detail };
+}
+
+/** 標準出力を結果として読む。読めなければnullを返す。 */
+function parseClaudeJsonOrNull(stdout: string): ClaudeRunResult | null {
+  try {
+    return parseClaudeJson(stdout);
+  } catch {
+    return null;
+  }
 }
 
 async function attemptClaude<T>(
@@ -652,35 +855,68 @@ async function attemptClaude<T>(
 
   const baseAgentRun = baseAgentRunFor(opts, commandResult.exitCode);
 
-  // 全停止で止めた実行は、出力を読まずに失敗にする。止めた後の出力は途中までで、解析しても意味が無いためである。
+  // 全停止で止めた実行は、出力を解析せずに失敗にする。止めた後の出力は途中までで、解析しても意味が無いためである。
+  // 費用だけは、結果を書き終えていれば読む。
   if (watch.stopped() || commandResult.stopped === true) {
     const detail = failureDetail(CLAUDE_STOPPED_DETAIL);
-    return {
-      outcome: "failure",
-      reason: "stopped",
-      agentRun: { ...baseAgentRun, error: detail },
+    return failedAttempt(
+      "stopped",
+      interruptedAgentRun(opts, baseAgentRun, commandResult.stdout, detail),
       detail,
-    };
+    );
   }
 
   if (commandResult.timedOut) {
     const detail = failureDetail(`claude -p timed out after ${timeoutMs}ms`);
-    return {
-      outcome: "failure",
-      reason: "timeout",
-      agentRun: { ...baseAgentRun, error: detail },
+    return failedAttempt(
+      "timeout",
+      interruptedAgentRun(opts, baseAgentRun, commandResult.stdout, detail),
       detail,
-    };
+    );
   }
 
   if (commandResult.exitCode !== 0) {
-    const detail = failureDetail(commandResult.stderr.slice(-2000));
-    return {
-      outcome: "failure",
-      reason: "non_zero_exit",
-      agentRun: { ...baseAgentRun, error: detail },
+    // `--max-budget-usd`の超過は終了コード1で、標準出力に結果のJSONを書く。種類と費用はそこから取る。
+    const errorResult = parseClaudeJsonOrNull(commandResult.stdout);
+    if (errorResult?.isError === true) {
+      return errorResultFailure(
+        baseAgentRun,
+        errorResult,
+        commandResult.stderr,
+      );
+    }
+    const stderrTail = commandResult.stderr.slice(-STDERR_TAIL_CHARS);
+    // 結果を書き終えた後に0以外で終わった実行は、その実費と使用量を記録する。
+    if (errorResult !== null) {
+      const detail = failureDetail(stderrTail);
+      return failedAttempt(
+        "non_zero_exit",
+        { ...agentRunFromResult(baseAgentRun, errorResult), error: detail },
+        detail,
+      );
+    }
+    // シグナルで終わった実行は、費用を書いていなければ分からない。上限の値で数える。
+    // 認証の失敗のように起動の直後に終わる失敗には上限を使わない。日次予算を使い切るため。
+    if (endedBySignal(commandResult.exitCode)) {
+      const detail = failureDetail(
+        `claude -p was ended by a signal (exit code ${String(commandResult.exitCode)})${stderrTail === "" ? "" : `: ${stderrTail}`}`,
+      );
+      return failedAttempt(
+        "non_zero_exit",
+        interruptedAgentRun(opts, baseAgentRun, commandResult.stdout, detail),
+        detail,
+      );
+    }
+    const detail = failureDetail(stderrTail);
+    return failedAttempt(
+      "non_zero_exit",
+      {
+        ...baseAgentRun,
+        cost_usd: totalCostUsdOf(commandResult.stdout),
+        error: detail,
+      },
       detail,
-    };
+    );
   }
 
   let parsed: ClaudeRunResult;
@@ -690,48 +926,30 @@ async function attemptClaude<T>(
     const detail = failureDetail(
       err instanceof Error ? err.message : String(err),
     );
-    return {
-      outcome: "failure",
-      reason: "invalid_json",
-      agentRun: { ...baseAgentRun, error: detail },
+    return failedAttempt(
+      "invalid_json",
+      {
+        ...baseAgentRun,
+        cost_usd: totalCostUsdOf(commandResult.stdout),
+        error: detail,
+      },
       detail,
-    };
-  }
-
-  const enrichedAgentRun: AgentRunRecord = {
-    ...baseAgentRun,
-    input_tokens: parsed.usage.inputTokens,
-    output_tokens: parsed.usage.outputTokens,
-    cache_read_tokens: parsed.usage.cacheReadInputTokens,
-    cost_usd: parsed.totalCostUsd,
-    num_turns: parsed.numTurns,
-    duration_ms: parsed.durationMs,
-    session_id: parsed.sessionId,
-    model_usage: parsed.modelUsage,
-  };
-
-  if (parsed.isError) {
-    const detail = failureDetail(
-      `claude reported an error (subtype=${parsed.subtype}): ${parsed.resultText.slice(0, 500)}`,
     );
-    return {
-      outcome: "failure",
-      reason: "claude_error",
-      agentRun: { ...enrichedAgentRun, error: detail },
-      detail,
-    };
   }
+
+  if (parsed.isError) return errorResultFailure(baseAgentRun, parsed);
+
+  const enrichedAgentRun = agentRunFromResult(baseAgentRun, parsed);
 
   if (!opts.isStructuredOutput(parsed.structuredOutput)) {
     const detail = failureDetail(
       `structured_output does not match the expected schema: ${JSON.stringify(parsed.structuredOutput).slice(0, 500)}`,
     );
-    return {
-      outcome: "failure",
-      reason: "invalid_structured_output",
-      agentRun: { ...enrichedAgentRun, error: detail },
+    return failedAttempt(
+      "invalid_structured_output",
+      { ...enrichedAgentRun, error: detail },
       detail,
-    };
+    );
   }
 
   return {
@@ -758,7 +976,7 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
  * Claudeの実行の失敗は例外にせず、`outcome: "failure"`と`reason`・`detail`で返す。
  * 再試行したかは成功・失敗とも`retried`で示し、`agentRun`には最後の試行の記録が入る。
  * 再試行したときは、最初の試行の記録(費用を含む)を`discardedAgentRun`で返す。
- * `deadlineAt`を過ぎていれば起動せずにtimeoutの失敗を返し、過ぎた後は再試行しない。
+ * `deadlineAt`を過ぎていれば起動せずに`not_started`の失敗を返す。費用は記録しない。過ぎた後は再試行しない。
  * `beforeRetry`がfalseを返したとき、例外を投げたときも再試行せず、最初の失敗を返す。
  * 例外を投げたときは、秘密を伏せたメッセージを最初の失敗の`detail`に足す。
  * 全停止(`stopCheck`)が置かれていれば起動せず、実行中なら止めて、どちらも`stopped`で返し、再試行しない。
@@ -779,26 +997,25 @@ export async function runClaude<T>(
   }
   if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
     return {
-      outcome: "failure",
-      reason: "timeout",
-      agentRun: {
-        ...baseAgentRunFor(opts, null),
-        error: CLAUDE_NOT_STARTED_DETAIL,
-      },
-      detail: CLAUDE_NOT_STARTED_DETAIL,
+      ...failedAttempt(
+        "not_started",
+        { ...baseAgentRunFor(opts, null), error: CLAUDE_NOT_STARTED_DETAIL },
+        CLAUDE_NOT_STARTED_DETAIL,
+      ),
       retried: false,
     };
   }
   // 全停止の間は起動しない。flowのstepの再試行で呼び直されたときも、ここで起動せずに終わる。
   if (await checkStop(stopCheckOf(opts))) {
     return {
-      outcome: "failure",
-      reason: "stopped",
-      agentRun: {
-        ...baseAgentRunFor(opts, null),
-        error: CLAUDE_STOPPED_BEFORE_START_DETAIL,
-      },
-      detail: CLAUDE_STOPPED_BEFORE_START_DETAIL,
+      ...failedAttempt(
+        "stopped",
+        {
+          ...baseAgentRunFor(opts, null),
+          error: CLAUDE_STOPPED_BEFORE_START_DETAIL,
+        },
+        CLAUDE_STOPPED_BEFORE_START_DETAIL,
+      ),
       retried: false,
     };
   }
@@ -821,14 +1038,12 @@ export async function runClaude<T>(
     if (decision.stopped) {
       // 1回目の実行には費用がかかっているので、捨てた実行として残す。
       return {
-        outcome: "failure",
-        reason: "stopped",
-        agentRun: {
-          ...baseAgentRunFor(opts, null),
-          error: CLAUDE_STOPPED_DETAIL,
-        },
+        ...failedAttempt(
+          "stopped",
+          { ...baseAgentRunFor(opts, null), error: CLAUDE_STOPPED_DETAIL },
+          CLAUDE_STOPPED_DETAIL,
+        ),
         discardedAgentRun: first.agentRun,
-        detail: CLAUDE_STOPPED_DETAIL,
         retried: false,
       };
     }
@@ -935,22 +1150,6 @@ async function retryDecision<T>(
       ),
     };
   }
-}
-
-/**
- * `runClaude`の結果の実行記録を`record`で記録し、最後の試行の行のIDを返す。
- * 再試行したときは、捨てた最初の試行を先に記録する。
- * 最初の試行の費用も`agent_runs`と日次予算の集計に載せるため、
- * `result.agentRun`だけを記録せず、結果の記録は必ずこの関数を通す。
- */
-export async function recordClaudeRuns<T>(
-  result: RunClaudeResult<T>,
-  record: (agentRun: AgentRunRecord) => Promise<number>,
-): Promise<number> {
-  if (result.discardedAgentRun !== undefined) {
-    await record(result.discardedAgentRun);
-  }
-  return record(result.agentRun);
 }
 
 // ---------------------------------------------------------------------------

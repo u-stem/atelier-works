@@ -16,13 +16,22 @@ import {
   LAUNCH_FAILURE_ALLOWANCE,
   readHeadFailure,
   readLockIntegrityOnly,
+  USAGE_LIMIT_GIVE_UP_AFTER_MS,
+  USAGE_LIMIT_RESUME_AFTER_MS,
   type WorkerEnvHoldReason,
 } from "../../f/factory/lib/pr_ci_fix_claim.ts";
+import { HOLD_PROLONGED_AFTER_MS } from "../../f/factory/lib/pr_ci_notify.ts";
 import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
 
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
 const TRAILER = "Generated-By: Software Factory (local)";
+const NOW = new Date("2026-11-06T12:00:00Z");
+
+/** `ms`ミリ秒前の時刻。 */
+function msBefore(ms: number): Date {
+  return new Date(NOW.getTime() - ms);
+}
 
 function pr(overrides: Partial<PullRequest> = {}): PullRequest {
   return {
@@ -69,6 +78,8 @@ type Setup = {
   readonly rounds?: number;
   /** 検査を動かすworkerの環境が前提を満たさない保留の理由。満たすときは省く。 */
   readonly workerEnv?: WorkerEnvHoldReason | null;
+  /** 全停止が解除されたと確かめられないか。 */
+  readonly stopHeld?: boolean;
 };
 
 function readers(setup: Setup = {}): {
@@ -106,6 +117,7 @@ function readers(setup: Setup = {}): {
       mainCiFailed: track("main_ci", setup.mainCiFailed ?? false),
       countRounds: track("rounds", setup.rounds ?? 0),
       workerEnv: track("worker_env", setup.workerEnv ?? null),
+      stopHeld: track("stop_held", setup.stopHeld ?? false),
     },
   };
 }
@@ -116,6 +128,9 @@ function decide(
     head_sha?: string;
     notified_reason?: string | null;
     fix_attempts?: number;
+    fix_hold_reason?: string | null;
+    updated_at?: Date;
+    first_seen_at?: Date;
   } = {},
   maxRounds = 2,
   configMisfit: string | null = null,
@@ -127,7 +142,11 @@ function decide(
       notified_reason:
         row.notified_reason === undefined ? "ci_failure" : row.notified_reason,
       fix_attempts: row.fix_attempts ?? 0,
+      fix_hold_reason: row.fix_hold_reason ?? null,
+      updated_at: row.updated_at ?? NOW,
+      first_seen_at: row.first_seen_at ?? NOW,
     },
+    now: NOW,
     instanceName: "local",
     maxRounds,
     configMisfit,
@@ -135,6 +154,179 @@ function decide(
   });
   return { decision, events: built.events };
 }
+
+describe("decideFixClaim: a row that waits for the usage limit", () => {
+  const WAITING = {
+    fix_hold_reason: "claude_usage_limit",
+    updated_at: msBefore(USAGE_LIMIT_RESUME_AFTER_MS - 1),
+  };
+
+  test("keeps the hold until the interval has passed", async () => {
+    const { decision } = decide({}, WAITING);
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "claude_usage_limit",
+    });
+  });
+
+  test("reads nothing while it waits", async () => {
+    const { decision, events } = decide({}, WAITING);
+    await decision;
+    expect(events).toEqual([]);
+  });
+
+  test("does not use up the rounds while it waits", async () => {
+    const { decision } = decide({ rounds: 2 }, WAITING);
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "claude_usage_limit",
+    });
+  });
+
+  test("starts again when the interval has passed", async () => {
+    const { decision } = decide(
+      {},
+      {
+        fix_hold_reason: "claude_usage_limit",
+        updated_at: msBefore(USAGE_LIMIT_RESUME_AFTER_MS),
+      },
+    );
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("uses the interval after which a temporary hold is notified", () => {
+    expect(USAGE_LIMIT_RESUME_AFTER_MS).toBe(HOLD_PROLONGED_AFTER_MS);
+  });
+
+  test("does not read the stop", async () => {
+    const { decision, events } = decide({}, WAITING);
+    await decision;
+    expect(events).not.toContain("stop_held");
+  });
+});
+
+describe("decideFixClaim: the time limit of a row on the usage limit", () => {
+  const LONG = {
+    fix_hold_reason: "claude_usage_limit",
+    first_seen_at: msBefore(USAGE_LIMIT_GIVE_UP_AFTER_MS),
+    updated_at: msBefore(USAGE_LIMIT_RESUME_AFTER_MS),
+  };
+
+  test("is eight days", () => {
+    expect(USAGE_LIMIT_GIVE_UP_AFTER_MS).toBe(8 * 24 * 60 * 60_000);
+  });
+
+  test("gives up when the head has been seen for the limit", async () => {
+    const { decision } = decide({}, LONG);
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "claude_run_failed",
+    });
+  });
+
+  test("gives up before the wait of the interval", async () => {
+    const { decision } = decide({}, { ...LONG, updated_at: NOW });
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "claude_run_failed",
+    });
+  });
+
+  test("reads nothing when it gives up", async () => {
+    const { decision, events } = decide({}, LONG);
+    await decision;
+    expect(events).toEqual([]);
+  });
+
+  test("starts again just before the limit", async () => {
+    const { decision } = decide(
+      {},
+      { ...LONG, first_seen_at: msBefore(USAGE_LIMIT_GIVE_UP_AFTER_MS - 1) },
+    );
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("measures a new head from its own first sight", async () => {
+    const { decision } = decide(
+      {},
+      {
+        fix_hold_reason: "claude_usage_limit",
+        first_seen_at: NOW,
+        updated_at: NOW,
+      },
+    );
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "claude_usage_limit",
+    });
+  });
+
+  test("does not give up on a row without the hold of the usage limit", async () => {
+    const { decision } = decide(
+      {},
+      { first_seen_at: msBefore(USAGE_LIMIT_GIVE_UP_AFTER_MS) },
+    );
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("has no limit on a row that waits for the stop", async () => {
+    const { decision } = decide(
+      { stopHeld: true },
+      {
+        fix_hold_reason: "claude_stopped",
+        first_seen_at: msBefore(USAGE_LIMIT_GIVE_UP_AFTER_MS),
+      },
+    );
+    expect(await decision).toEqual({ kind: "hold", reason: "claude_stopped" });
+  });
+});
+
+describe("decideFixClaim: a row that waits for the release of the stop", () => {
+  const STOPPED = {
+    fix_hold_reason: "claude_stopped",
+    updated_at: msBefore(24 * 60 * 60_000),
+  };
+
+  test("keeps the hold while the stop is held", async () => {
+    const { decision } = decide({ stopHeld: true }, STOPPED);
+    expect(await decision).toEqual({ kind: "hold", reason: "claude_stopped" });
+  });
+
+  test("reads only the stop while the stop is held", async () => {
+    const { decision, events } = decide({ stopHeld: true }, STOPPED);
+    await decision;
+    expect(events).toEqual(["stop_held"]);
+  });
+
+  test("starts again when the stop is released", async () => {
+    const { decision } = decide({ stopHeld: false }, STOPPED);
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("starts again right after the release, without a time to wait", async () => {
+    const { decision } = decide(
+      { stopHeld: false },
+      { fix_hold_reason: "claude_stopped", updated_at: NOW },
+    );
+    expect((await decision).kind).toBe("claim");
+  });
+});
+
+describe("decideFixClaim: a row with another hold", () => {
+  test("does not read the stop", async () => {
+    const { decision, events } = decide(
+      {},
+      { fix_hold_reason: "main_ci_failed" },
+    );
+    await decision;
+    expect(events).not.toContain("stop_held");
+  });
+
+  test("does not wait for the interval of the usage limit", async () => {
+    const { decision } = decide({}, { fix_hold_reason: "main_ci_failed" });
+    expect((await decision).kind).toBe("claim");
+  });
+});
 
 describe("decideFixClaim", () => {
   test("claims when every condition holds", async () => {

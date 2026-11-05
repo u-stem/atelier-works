@@ -2,13 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
 import {
   CI_ROUND_DETAILS,
+  ciClaudeFailedNote,
+  ciClaudeFailureText,
   ciRoundReason,
 } from "../../f/factory/lib/ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "../../f/factory/lib/ci_metadata_rehash.ts";
+import { NON_RETRYABLE_REASONS } from "../../f/factory/lib/flow_retry_marker.ts";
 import {
+  CI_CLAUDE_WAIT_NOTES,
   decideFixingRecovery,
   type FixItemState,
   holdReasonForStoppedItem,
+  isCiClaudeWaitNote,
   readFixItemState,
   STALE_IMAGE_WAIT_MS,
 } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
@@ -30,6 +35,132 @@ function item(
     ...overrides,
   };
 }
+
+/** 失敗の種類と、その種類で止まった行の保留の理由。`NON_RETRYABLE_REASONS`のすべてを持つ。 */
+const CLAUDE_FAILURE_HOLDS = [
+  ["timeout", "claude_run_failed"],
+  ["run_budget_exceeded", "claude_run_failed"],
+  ["usage_limit", "claude_usage_limit"],
+  ["stopped", "claude_stopped"],
+] as const;
+
+describe("the CI round whose Claude run failed in a way that repeats", () => {
+  test.each(CLAUDE_FAILURE_HOLDS)(
+    "holds a failed work item whose apply step failed with %s as %s",
+    (reason, hold) => {
+      expect(
+        decideFixingRecovery(
+          item("failed", {
+            note: `pr_fix_apply: ${ciClaudeFailureText(reason)}`,
+          }),
+          NOW,
+        ),
+      ).toEqual({ kind: "release", hold });
+    },
+  );
+
+  test.each(CLAUDE_FAILURE_HOLDS)(
+    "holds a needs_human work item whose verify step failed with %s as %s",
+    (reason, hold) => {
+      expect(
+        decideFixingRecovery(
+          item("needs_human", { note: ciClaudeFailureText(reason) }),
+          NOW,
+        ),
+      ).toEqual({ kind: "release", hold });
+    },
+  );
+
+  test.each(CLAUDE_FAILURE_HOLDS)(
+    "holds a blocked work item with the note of %s as %s",
+    (reason, hold) => {
+      expect(
+        decideFixingRecovery(
+          item("blocked", { note: ciClaudeFailureText(reason) }),
+          NOW,
+        ),
+      ).toEqual({ kind: "release", hold });
+    },
+  );
+
+  test.each(["usage_limit", "stopped"] as const)(
+    "tells that the note of the verify step on %s waits",
+    (reason) => {
+      expect(isCiClaudeWaitNote(ciClaudeFailureText(reason))).toBe(true);
+    },
+  );
+
+  test.each(["timeout", "run_budget_exceeded", "claude_error"] as const)(
+    "tells that the note of the verify step on %s does not wait",
+    (reason) => {
+      expect(isCiClaudeWaitNote(ciClaudeFailureText(reason))).toBe(false);
+    },
+  );
+
+  test("tells that no note does not wait", () => {
+    expect(isCiClaudeWaitNote(null)).toBe(false);
+  });
+
+  test("maps every failure that the flow does not retry", () => {
+    const mapped: readonly string[] = CLAUDE_FAILURE_HOLDS.map(
+      ([reason]) => reason,
+    );
+    expect(mapped).toEqual([...NON_RETRYABLE_REASONS]);
+  });
+
+  test("lists both notes of the usage limit and the stop as the ones that wait", () => {
+    expect([...CI_CLAUDE_WAIT_NOTES].sort()).toEqual(
+      (["usage_limit", "stopped"] as const)
+        .flatMap((reason) => [
+          ciClaudeFailureText(reason),
+          ciClaudeFailedNote(reason),
+        ])
+        .sort(),
+    );
+  });
+
+  test.each([
+    "not_started",
+    "claude_error",
+    "non_zero_exit",
+    "invalid_json",
+  ] as const)(
+    "releases a failed work item without a hold when the failure is %s",
+    (reason) => {
+      expect(
+        decideFixingRecovery(
+          item("failed", {
+            note: `pr_fix_apply: ${ciClaudeFailureText(reason)}`,
+          }),
+          NOW,
+        ),
+      ).toEqual({ kind: "release", hold: null });
+    },
+  );
+
+  test("releases a failed work item without a hold when the text follows other words", () => {
+    expect(
+      decideFixingRecovery(
+        item("failed", {
+          note: `x pr_fix_apply: ${ciClaudeFailureText("timeout")}`,
+        }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("treats a failed work item that pushed commits as pushed", () => {
+    expect(
+      decideFixingRecovery(
+        item("failed", {
+          note: `pr_fix_apply: ${ciClaudeFailureText("timeout")}`,
+          pushed: true,
+        }),
+        NOW,
+      ),
+    ).toEqual({ kind: "pushed" });
+  });
+});
 
 describe("holdReasonForStoppedItem", () => {
   test("maps a check command that could not run to a stop, so that the row is not started again", () => {

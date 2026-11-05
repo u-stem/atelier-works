@@ -7,9 +7,10 @@ import * as wmill from "windmill-client@1.817.0";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
-  recordClaudeRuns,
+  type RunClaudeFailureReason,
   runClaude,
 } from "../lib/claude.ts";
+import { recordClaudeRuns } from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   getWorkItem,
@@ -22,6 +23,7 @@ import { notifyBestEffort } from "../lib/discord.ts";
 import { hashDirectoryTree, realDirectoryIo } from "../lib/doc_tree_hash.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
+import { flowFailureMessage } from "../lib/flow_retry_marker.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
@@ -165,11 +167,17 @@ export type PipelineGenerateResult =
  * そのため終端の処理(状態、通知)はすべて、Windmillの再試行を
  * 使い切った後にだけ動く`on_error_flow`の`failure_module`に任せる。
  * Claudeの実行の失敗も、生成後の検証の失敗も、ここを通って同じく再試行される。
+ * ただし、Claudeの実行のtimeout、予算の超過、使用上限は再試行で直らないので、
+ * 文の先頭のタグ(`flowFailureMessage`)を`retry_if`が読み、再試行せずに`failure_module`へ進む。
+ * 全停止で止めた実行(`stopped`)も同じ扱いにする。解除の直後に、再試行で動き出させないためである。
  * 日次予算の超過は例外を投げずに返すので、再試行の対象にならない。
  */
-function failGeneration(reason: string, detail: string): never {
+function failGeneration(reason: RunClaudeFailureReason, detail: string): never {
   throw new Error(
-    maskSecrets(`pipeline_generate: runClaude failed (${reason}): ${detail}`),
+    flowFailureMessage(
+      reason,
+      maskSecrets(`pipeline_generate: runClaude failed (${reason}): ${detail}`),
+    ),
   );
 }
 

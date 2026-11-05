@@ -72,6 +72,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   dependabot_merge_hold_unreadable: "action",
   doc_hash_column_missing: "action",
   design_enabled_ignored: "action",
+  claude_usage_limit: "action",
   credential_expiring: "action",
   stop_all_active: "action",
 };

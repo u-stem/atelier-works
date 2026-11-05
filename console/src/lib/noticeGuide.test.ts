@@ -504,4 +504,52 @@ describe("deploy approval guides", () => {
       "却下すると通知は残り",
     );
   });
+
+  test("explains the Claude usage limit", () => {
+    expect(noticeGuide("claude_usage_limit")).not.toBe(GENERIC_NOTICE_GUIDE);
+  });
+
+  test("tells to rerun after the Claude usage limit resets", () => {
+    expect(noticeGuide("claude_usage_limit").action).toContain(
+      "上限が戻ってから",
+    );
+  });
+
+  test("tells to start the audit again from the audit button after the Claude usage limit resets", () => {
+    expect(noticeGuide("claude_usage_limit").action).toContain("今すぐ監査");
+  });
+
+  test("does not tell to wait for the next audit after the Claude usage limit", () => {
+    expect(noticeGuide("claude_usage_limit").action).not.toContain("次の週次");
+  });
+
+  test("says that any flow that runs Claude leaves the Claude usage limit notice", () => {
+    expect(noticeGuide("claude_usage_limit").meaning).toContain("どのflowでも");
+  });
+
+  test("does not point to a flow path in the Claude usage limit notice", () => {
+    expect(noticeGuide("claude_usage_limit").meaning).not.toContain("パス");
+  });
+
+  test("does not speak of a flow path in the note of the Claude usage limit", () => {
+    expect(noticeGuide("claude_usage_limit").note).not.toContain("パス");
+  });
+
+  test("tells to submit an investigation again after the Claude usage limit", () => {
+    expect(noticeGuide("claude_usage_limit").action).toContain(
+      "調査は、同じ依頼を投入し直します",
+    );
+  });
+
+  test("tells that a dependabot update cannot be rerun after the Claude usage limit", () => {
+    expect(noticeGuide("claude_usage_limit").action).toContain(
+      "dependabotの更新は再実行できない",
+    );
+  });
+
+  test("tells to follow the notice of the PR for a round that fixes CI or a conflict", () => {
+    expect(noticeGuide("claude_usage_limit").action).toContain(
+      "CIや競合を直す回は再実行できない",
+    );
+  });
 });

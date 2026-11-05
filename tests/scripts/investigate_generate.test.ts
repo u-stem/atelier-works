@@ -62,6 +62,7 @@ const AGENT_RUN: AgentRunRecord = {
   session_id: "session",
   exit_code: 0,
   error: null,
+  failure_reason: null,
   model_usage: [],
 };
 
@@ -602,6 +603,24 @@ describe("runInvestigateGenerate", () => {
       });
       expect(f.escalations[0]?.note).toBe("claude run failed: timeout");
     });
+
+    test("tells to change the request after a failure of the run", async () => {
+      const f = fake({ launch: async () => FAILURE });
+      await runInvestigateGenerate(INPUT, f.deps);
+      expect(f.escalations[0]?.nextAction).toContain("依頼文を変えて");
+    });
+
+    test.each([
+      ["usage_limit", "使用上限が戻ってから、同じ依頼を投入し直してください。"],
+      ["stopped", "全停止を解除してから、同じ依頼を投入し直してください。"],
+    ] as const)(
+      "does not tell to change the request after %s",
+      async (reason, action) => {
+        const f = fake({ launch: async () => ({ ...FAILURE, reason }) });
+        await runInvestigateGenerate(INPUT, f.deps);
+        expect(f.escalations[0]?.nextAction).toBe(action);
+      },
+    );
 
     test("puts no detail of the failure in the escalation", async () => {
       const f = fake({ launch: async () => FAILURE });

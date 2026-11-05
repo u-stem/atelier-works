@@ -2211,6 +2211,11 @@ describe("safety boundary files", () => {
     "f/factory/self_update.script.yaml",
     "f/factory/lib/self_update_support.ts",
     "f/factory/lib/self_update_support.script.yaml",
+    "f/factory/lib/claude_flow_failure.ts",
+    "f/factory/lib/claude_flow_failure.script.yaml",
+    "f/factory/lib/flow_retry_marker.ts",
+    "f/factory/lib/flow_retry_marker.script.yaml",
+    "tests/scripts/claude_flow_retry.test.ts",
     "f/factory/lib/stop_all.ts",
     "f/factory/lib/stop_all.script.yaml",
     "f/factory/lib/stop_check.ts",
@@ -2273,6 +2278,13 @@ describe("safety boundary files", () => {
       expect(matchesImplementProtectedPath(path)).toBe(false);
     },
   );
+
+  test.each([
+    "f/factory/lib/claude_flow_failure.script.lock",
+    "f/factory/lib/flow_retry_marker.script.lock",
+  ])("does not protect the lock %s of the cost and retry libs", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
 
   test.each(CLIENT_LOCKS)("the CI round still denies the lock %s", (path) => {
     expect(isDeniedPath(path)).toBe(true);

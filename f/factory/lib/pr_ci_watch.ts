@@ -90,6 +90,7 @@ import {
   decidePrCiFailed,
   decidePrCiPending,
   type FactoryWorkItemRef,
+  isClaudeWaitHold,
   isFactoryPrBranch,
   PR_CI_FAILED_KIND,
   type PrCiFixHoldReason,
@@ -389,6 +390,8 @@ export type PrCiClaimDeps = {
    */
   readonly workerEnvProblem: () => Promise<WorkerEnvProblem | null>;
   readonly budgetExceeded: () => Promise<boolean>;
+  /** 全停止が置かれているか、解除されたと確かめられないか。実行の中で1回だけ読む。 */
+  readonly stopHeld: () => Promise<boolean>;
   readonly mainCiFailed: (owner: string, repo: string) => Promise<boolean>;
   readonly countRounds: (
     owner: string,
@@ -538,6 +541,7 @@ export type PrCiWatchDeps = {
       readonly fixWorkItemId?: number;
       readonly withoutFixWorkItem?: boolean;
       readonly resetNotified?: boolean;
+      readonly refundAttempt?: boolean;
     },
   ) => Promise<boolean>;
   /** 条件付きの更新。この呼び出しで移したら`true`。 */
@@ -1698,6 +1702,9 @@ async function recoverRow(context: Context, row: PrCiCheck): Promise<void> {
     ...(decision.hold !== null && isDeterministicHold(decision.hold)
       ? { resetNotified: true }
       : {}),
+    ...(decision.hold !== null && isClaudeWaitHold(decision.hold)
+      ? { refundAttempt: true }
+      : {}),
     ...(row.fix_work_item_id === null
       ? { withoutFixWorkItem: true }
       : { fixWorkItemId: row.fix_work_item_id }),
@@ -2641,6 +2648,7 @@ function claimReaders(
       ),
     workerEnv: () => readWorkerEnv(context, claim),
     budgetExceeded: () => readFactOnce(context, "budget", claim.budgetExceeded),
+    stopHeld: () => readFactOnce(context, "stop_held", claim.stopHeld),
     mainCiFailed: () =>
       readFactOnce(context, `main_ci:${repo}`, () =>
         claim.mainCiFailed(row.owner, row.repo),
@@ -2704,6 +2712,7 @@ async function claimRow(
   const decision = await decideFixClaim({
     row,
     instanceName: deps.instanceName,
+    now: context.now,
     maxRounds: claim.maxRounds,
     configMisfit: claim.configMisfit,
     readers: claimReaders(context, claim, row, ref, names, snapshot.headRef),

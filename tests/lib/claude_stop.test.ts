@@ -162,6 +162,28 @@ describe("runClaude while the factory is stopped", () => {
     expect(recorder.seen[0]?.stopSignal instanceof AbortSignal).toBe(true);
   });
 
+  test("records stopped as the failure reason when the factory is already stopped", async () => {
+    const recorder = answering([]);
+    const result = await runClaude(options(recorder.run, sequence(true)));
+    expect(result.agentRun.failure_reason).toBe("stopped");
+  });
+
+  test("records stopped as the failure reason of a claude stopped while running", async () => {
+    const recorder = untilStopped();
+    const result = await runClaude(
+      options(recorder.run, sequence(false, true), 5),
+    );
+    expect(result.agentRun.failure_reason).toBe("stopped");
+  });
+
+  test("records stopped as the failure reason when the factory is stopped before the retry", async () => {
+    const recorder = answering([NOT_JSON, SUCCESS]);
+    const result = await runClaude(
+      options(recorder.run, sequence(false, true)),
+    );
+    expect(result.agentRun.failure_reason).toBe("stopped");
+  });
+
   test("stops a running claude when the check turns true", async () => {
     const recorder = untilStopped();
     const result = await runClaude(
@@ -175,7 +197,90 @@ describe("runClaude while the factory is stopped", () => {
     const result = await runClaude(
       options(recorder.run, sequence(false, true), 5),
     );
+    expect(result.agentRun.error).toBe(
+      `${CLAUDE_STOPPED_DETAIL} (cost_usd is the --max-budget-usd cap)`,
+    );
+  });
+
+  test("records maxBudgetUsd as the cost of a run stopped after it started", async () => {
+    const recorder = untilStopped();
+    const opts = options(recorder.run, sequence(false, true), 5);
+
+    const result = await runClaude(opts);
+
+    expect(result.agentRun.cost_usd).toBe(opts.maxBudgetUsd);
+  });
+
+  test("records total_cost_usd of the result that a stopped run had already written", async () => {
+    const recorder = answering([{ ...SUCCESS, exitCode: 143, stopped: true }]);
+
+    const result = await runClaude(
+      options(recorder.run, sequence(false, false)),
+    );
+
+    expect(result.agentRun.cost_usd).toBe(0.01);
+  });
+
+  test("does not say the cost is the cap when it comes from the result", async () => {
+    const recorder = answering([{ ...SUCCESS, exitCode: 143, stopped: true }]);
+
+    const result = await runClaude(
+      options(recorder.run, sequence(false, false)),
+    );
+
     expect(result.agentRun.error).toBe(CLAUDE_STOPPED_DETAIL);
+  });
+
+  test("records maxBudgetUsd when the stdout of a stopped run has no cost", async () => {
+    const recorder = answering([
+      {
+        stdout: JSON.stringify({ type: "result" }),
+        stderr: "",
+        exitCode: 143,
+        timedOut: false,
+        stopped: true,
+      },
+    ]);
+    const opts = options(recorder.run, sequence(false, false));
+
+    const result = await runClaude(opts);
+
+    expect(result.agentRun.cost_usd).toBe(opts.maxBudgetUsd);
+  });
+
+  test("records maxBudgetUsd when the stdout of a stopped run is cut off", async () => {
+    const recorder = answering([
+      {
+        stdout: '{"type":"result","total_cost_usd":0.0',
+        stderr: "",
+        exitCode: 143,
+        timedOut: false,
+        stopped: true,
+      },
+    ]);
+    const opts = options(recorder.run, sequence(false, false));
+
+    const result = await runClaude(opts);
+
+    expect(result.agentRun.cost_usd).toBe(opts.maxBudgetUsd);
+  });
+
+  test("records no cost when the factory is stopped before the start", async () => {
+    const recorder = answering([]);
+
+    const result = await runClaude(options(recorder.run, sequence(true)));
+
+    expect(result.agentRun.cost_usd).toBeNull();
+  });
+
+  test("records no cost for the retry that the stop kept from starting", async () => {
+    const recorder = answering([NOT_JSON, SUCCESS]);
+
+    const result = await runClaude(
+      options(recorder.run, sequence(false, true)),
+    );
+
+    expect(result.agentRun.cost_usd).toBeNull();
   });
 
   test("does not retry a stopped run", async () => {

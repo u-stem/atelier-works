@@ -13,7 +13,7 @@ import {
   buildCiGatherDeps,
   CI_FIX_ALLOWED_TOOLS,
   CI_FIX_TOOLS,
-  ciClaudeFailureText,
+  ciClaudeFailedNote,
   ciTextScanner,
   gatherCiFailureInput,
   readCiFailure,
@@ -29,9 +29,9 @@ import {
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
-  recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
+import { recordClaudeRuns } from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   CONFLICT_CLEAN_MERGE_RESULT,
@@ -46,6 +46,7 @@ import {
 } from "../lib/conflict_fix_prompt.ts";
 import { CONFLICT_MERGE_NOT_RECORDED_REASON } from "../lib/conflict_fix_round.ts";
 import { countPrFixFailures, latestDraft, recordAgentRun } from "../lib/db.ts";
+import { flowFailureMessage } from "../lib/flow_retry_marker.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
@@ -343,7 +344,10 @@ export async function main(
         };
       }
       throw new Error(
-        `pr_fix_apply: claude run failed (${result.reason}): ${result.detail}`,
+        flowFailureMessage(
+          result.reason,
+          `pr_fix_apply: claude run failed (${result.reason}): ${result.detail}`,
+        ),
       );
     }
 
@@ -476,7 +480,12 @@ async function applyConflictRound(
       return blockedResult(afterFailureReason);
     }
     // 実行の詳細は、秘密値の検査を通っていないので、例外の文に入れない。
-    throw new Error(conflictClaudeFailedMessage(result.reason));
+    throw new Error(
+      flowFailureMessage(
+        result.reason,
+        conflictClaudeFailedMessage(result.reason),
+      ),
+    );
   }
   return conflictApplyResult(result);
 }
@@ -670,7 +679,9 @@ async function applyCiRound(
       return blockedResult(afterFailureReason);
     }
     // 実行の詳細は、秘密値の検査を通っていないので、例外の文に入れない。
-    throw new Error(`pr_fix_apply: ${ciClaudeFailureText(result.reason)}`);
+    throw new Error(
+      flowFailureMessage(result.reason, ciClaudeFailedNote(result.reason)),
+    );
   }
   return {
     outcome: result.outcome,

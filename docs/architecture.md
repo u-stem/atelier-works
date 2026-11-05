@@ -276,7 +276,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `design_drafts` | 設計の下書き。要件定義の下書きに結び付き、本文、図の参照、未確定事項、ファイルの置き場所、読んだコミットを持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ。設計の承認依頼(`design`)は、設計工程が有効なときだけ作られる |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
-| `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード。実際に使われたモデルごとの内訳(`model_usage`)も持つ |
+| `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード。実際に使われたモデルごとの内訳(`model_usage`)と、失敗の種類(`failure_reason`)も持つ |
 | `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
 | `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)、失敗の理由(`error`)も持つ。DBの掃除は、最後に成功した反映の行を、期限を過ぎても残す。反映の承認の判定が、その時刻を基準にするためである |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
@@ -303,6 +303,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 `work_items`の列は種別によって使うものが違う。実装ブランチ(`branch`)と作成したPRのURL(`pr_url`)はIssueの作業項目だけが持ち、PR番号(`pr_number`)はPRの作業項目だけが持つ。PR番号をIssueの作業項目に入れないのは、PRの作業項目の束ね方がこの列で決まるためである。実装ブランチの名前は`factory/issue-<N>-wi-<id>`である。
 
 `agent_runs`には、Claudeの不正な出力を再試行したときに捨てた最初の試行も、同じattemptの別の行として記録する。費用が分かるときは、その費用も日次予算の集計とコストの分析に含める。出力がJSONとして読めないときは費用が分からない。
+アプリ側のtimeoutで打ち切った実行、シグナルで終わった実行、全停止で止めた実行は、標準出力に費用があればその値を、無ければ`--max-budget-usd`の値を費用として記録する。
 
 `implement_rounds`の主な列は次のとおり。行は作業項目の削除にあわせて消える。
 
@@ -516,6 +517,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/ci_fix_round` | script | [LIB] CI回のpr_fixの共通部品 |
 | `f/factory/lib/ci_fix_prompt` | script | [LIB] CI回のプロンプト |
 | `f/factory/lib/ci_fix_paths` | script | [LIB] CI回の変更ファイルの検査 |
+| `f/factory/lib/claude_flow_failure` | script | [LIB] Claudeの実行の記録と使用上限の通知 |
 | `f/factory/lib/console_holds_support` | script | [LIB] Consoleの保留と凍結の画面の整形と解除の共通部品 |
 | `f/factory/lib/console_status` | script | [LIB] Consoleの取り込みの状態 |
 | `f/factory/lib/console_actions` | script | [LIB] Consoleの操作の記録 |
@@ -536,6 +538,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/drawio` | script | [LIB] draw.io図の生成 |
 | `f/factory/lib/factory_clone` | script | [LIB] Factory自身のcloneの用意 |
 | `f/factory/lib/factory_repo_gate` | script | [LIB] Factory自身のリポジトリの照合 |
+| `f/factory/lib/flow_retry_marker` | script | [LIB] flowの再試行を止めるタグ |
 | `f/factory/lib/gated_review_support` | script | [LIB] gatedでレビューを投稿しない状態の判定とnoticeの文面 |
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |

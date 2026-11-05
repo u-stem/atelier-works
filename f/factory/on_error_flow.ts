@@ -25,6 +25,7 @@
 // dependabotの作業項目は`retry_work_item`が再開しないためである。
 // GitHubの一時的な失敗で止まったpr_reviewは、`auto_retry_pr_review`が再開し、使い切った後の通知も送る。
 // 作業項目を`failed`にでき、巡回の対象になるときだけ、ここで`job_failed`を送らない。
+// 使用上限か全停止で失敗したCIの修正も、監視が同じ行を起動し直すので、`job_failed`を送らない。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
@@ -37,12 +38,14 @@ import {
 } from "./lib/db.ts";
 import { DEPENDABOT_FLOW_PATH } from "./lib/dependabot_flow_support.ts";
 import { type NotifyEvent, notify } from "./lib/discord.ts";
+import { withoutFlowRetryMarker } from "./lib/flow_retry_marker.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   DESIGN_FLOW_PATH,
   INVESTIGATE_FLOW_PATH,
   PIPELINE_FLOW_PATH,
 } from "./lib/pipeline_lease.ts";
+import { CI_CLAUDE_WAIT_NOTES } from "./lib/pr_ci_fix_recovery.ts";
 import {
   decideTransientFailureAction,
   isTransientPrReviewFailure,
@@ -220,7 +223,11 @@ export async function handleFlowFailure(
 ): Promise<void> {
   const { log } = deps;
   const { workItemId: work_item_id, path } = input;
-  const message = maskSecrets(errorMessage(input.error));
+  // 再試行を止めるタグは、flowの`retry_if`のための印で、ここに来た時点で役目を終えている。
+  // 記録、作業項目の注記、通知のどれにも出さないよう、最初に1回だけ外す。
+  const message = maskSecrets(
+    withoutFlowRetryMarker(errorMessage(input.error)),
+  );
   const resolvedPath = path ?? "unknown";
   const resolvedJobId =
     input.jobId ?? input.rootJobId ?? input.currentJobId ?? "unknown";
@@ -345,6 +352,20 @@ export async function handleFlowFailure(
         configErr instanceof Error ? configErr.message : String(configErr),
       ),
     });
+  }
+
+  // 使用上限か全停止で失敗したCIの修正は、監視が行を保留し、待ってから起動し直す。
+  // 使用上限が続く間、起動し直すたびに同じ通知を送らない。上限は`claude_usage_limit`の通知が、全停止は全停止の通知が知らせる。
+  if (
+    item !== null &&
+    markedFailed &&
+    item.ci_check_id !== null &&
+    CI_CLAUDE_WAIT_NOTES.includes(message)
+  ) {
+    log.info("claude failure of a CI round; the watch starts it again", {
+      work_item_id,
+    });
+    return;
   }
 
   // GitHubの一時的な失敗で止まったPRレビューは、`auto_retry_pr_review`が再開する。

@@ -2439,11 +2439,38 @@ describe("recordAgentRun", () => {
         session_id: "sess-1",
         exit_code: 0,
         error: null,
+        failure_reason: null,
         model_usage: [],
       },
       sql,
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.agent_runs");
+  });
+
+  test("passes the failure reason of the run", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await recordAgentRun(
+      {
+        work_item_id: 1,
+        stage: "implement",
+        attempt: 1,
+        model: "claude-sonnet-5-5",
+        claude_version: null,
+        input_tokens: null,
+        output_tokens: null,
+        cache_read_tokens: null,
+        cost_usd: null,
+        num_turns: null,
+        duration_ms: null,
+        session_id: null,
+        exit_code: 1,
+        error: "limit",
+        failure_reason: "usage_limit",
+        model_usage: [],
+      },
+      sql,
+    );
+    expect(calls[0]?.values).toContain("usage_limit");
   });
 
   test("passes model_usage as a jsonb array of the per-model breakdown", async () => {
@@ -2472,6 +2499,7 @@ describe("recordAgentRun", () => {
         session_id: null,
         exit_code: 0,
         error: null,
+        failure_reason: null,
         model_usage: [entry],
       },
       sql,
@@ -2497,6 +2525,7 @@ describe("recordAgentRun", () => {
         session_id: null,
         exit_code: null,
         error: "timed out",
+        failure_reason: null,
         model_usage: [],
       },
       sql,
@@ -2507,7 +2536,7 @@ describe("recordAgentRun", () => {
   });
 });
 
-describe("recordAgentRun before the model_usage migration", () => {
+describe("recordAgentRun before the migrations of its newer columns", () => {
   const RUN = {
     work_item_id: 1,
     stage: "implement",
@@ -2523,6 +2552,7 @@ describe("recordAgentRun before the model_usage migration", () => {
     session_id: "s",
     exit_code: 0,
     error: null,
+    failure_reason: null,
     model_usage: [],
   };
 
@@ -2557,6 +2587,16 @@ describe("recordAgentRun before the model_usage migration", () => {
       Object.assign(new Error("undefined column"), { code: "42703" }),
     );
     expect(await recordAgentRun(RUN, sql, SILENT_LOG)).toBe(21);
+  });
+
+  test("records the run without failure_reason when that column is missing", async () => {
+    const { sql, texts } = missingColumnThenOk(
+      new Error(
+        'column "failure_reason" of relation "agent_runs" does not exist',
+      ),
+    );
+    await recordAgentRun(RUN, sql, SILENT_LOG);
+    expect(texts[1]).not.toContain("failure_reason");
   });
 
   test("rethrows a failure other than a missing model_usage column", async () => {
@@ -3676,13 +3716,39 @@ describe("countImplementFailedRounds", () => {
   test("compares the round numbers to find the failures after the latest success", async () => {
     const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
     await countImplementFailedRounds(1, 2, sql);
-    expect(calls[0]?.text).toContain("AND round > COALESCE(");
+    expect(calls[0]?.text).toContain("AND ir.round > COALESCE(");
   });
 
   test("filters by the attempt", async () => {
     const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
     await countImplementFailedRounds(1, 2, sql);
     expect(calls[0]?.text).toContain("attempt = ");
+  });
+
+  test("finds the run of each round by its agent_run_id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
+    await countImplementFailedRounds(1, 2, sql);
+    expect(calls[0]?.text).toContain(
+      "LEFT JOIN factory.agent_runs ar ON ar.id = ir.agent_run_id",
+    );
+  });
+
+  test("leaves out the rounds by the failure reason of their run", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
+    await countImplementFailedRounds(1, 2, sql);
+    expect(calls[0]?.text).toContain(
+      "COALESCE(to_jsonb(ar) ->> 'failure_reason', '') <> ALL(",
+    );
+  });
+
+  test("leaves out the usage limit, the stop and the run not started, and nothing else", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
+    await countImplementFailedRounds(1, 2, sql);
+    expect(calls[0]?.values).toContainEqual([
+      "usage_limit",
+      "stopped",
+      "not_started",
+    ]);
   });
 
   test("returns 0 when no row is returned", async () => {
@@ -3743,6 +3809,38 @@ describe("countPrFixFailures", () => {
     expect(calls[0]?.text).toContain(
       "ar.stage IN ('pr_fix', 'pr_fix_verify_retry')",
     );
+  });
+
+  test("leaves out the failed runs by their failure reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain(
+      "COALESCE(to_jsonb(ar) ->> 'failure_reason', '') <> ALL(",
+    );
+  });
+
+  test("leaves out a blocked round by the failure reason of the run before it", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain(
+      "to_jsonb(last_run) ->> 'failure_reason' = ANY(",
+    );
+  });
+
+  test("leaves out the usage limit, the stop and the run not started, and nothing else", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.values).toContainEqual([
+      "usage_limit",
+      "stopped",
+      "not_started",
+    ]);
+  });
+
+  test("does not name the column, so that it still runs before the migration", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).not.toContain("ar.failure_reason");
   });
 
   test("counts every failed run instead of one per work item and stage", async () => {
@@ -8924,25 +9022,31 @@ describe("claimPrCiCheckForFix", () => {
 });
 
 describe("countPrCiFixRounds", () => {
+  test("passes the notes of the rounds that are not counted", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrCiFixRounds("acme", "widgets", 12, ["note"], sql);
+    expect(calls[0]?.values).toContainEqual(["note"]);
+  });
+
   test("returns the number of rounds", async () => {
     const { sql } = createFakeSqlClient([[{ rounds: "2" }]]);
-    expect(await countPrCiFixRounds("Acme", "Widgets", 12, sql)).toBe(2);
+    expect(await countPrCiFixRounds("Acme", "Widgets", 12, [], sql)).toBe(2);
   });
 
   test("returns 0 when no row is returned", async () => {
     const { sql } = createFakeSqlClient([[]]);
-    expect(await countPrCiFixRounds("acme", "widgets", 12, sql)).toBe(0);
+    expect(await countPrCiFixRounds("acme", "widgets", 12, [], sql)).toBe(0);
   });
 
   test("counts only the work items that fix a CI failure", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrCiFixRounds("acme", "widgets", 12, sql);
+    await countPrCiFixRounds("acme", "widgets", 12, [], sql);
     expect(calls[0]?.text).toContain("wi.ci_check_id IS NOT NULL");
   });
 
   test("counts only the rounds after the latest passed row", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrCiFixRounds("acme", "widgets", 12, sql);
+    await countPrCiFixRounds("acme", "widgets", 12, [], sql);
     expect(calls[0]?.text).toMatch(
       /wi\.created_at > COALESCE\([\s\S]*p\.state = 'passed'/,
     );
@@ -8950,7 +9054,7 @@ describe("countPrCiFixRounds", () => {
 
   test("does not count a work item that failed before its flow started", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrCiFixRounds("acme", "widgets", 12, sql);
+    await countPrCiFixRounds("acme", "widgets", 12, [], sql);
     expect(calls[0]?.text).toContain(
       "AND NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)",
     );
@@ -8958,13 +9062,15 @@ describe("countPrCiFixRounds", () => {
 
   test("lowercases the owner and repo", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrCiFixRounds("Acme", "Widgets", 12, sql);
+    await countPrCiFixRounds("Acme", "Widgets", 12, [], sql);
     expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
   });
 
   test("rejects an invalid pull request number, without querying", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrCiFixRounds("acme", "widgets", 0, sql).catch(() => undefined);
+    await countPrCiFixRounds("acme", "widgets", 0, [], sql).catch(
+      () => undefined,
+    );
     expect(calls).toHaveLength(0);
   });
 });

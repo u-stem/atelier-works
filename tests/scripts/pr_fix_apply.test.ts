@@ -521,3 +521,29 @@ describe("the wiring of the design in pr_fix_apply", () => {
     ).toBe(1);
   });
 });
+
+describe("claude failure wiring in the apply step", () => {
+  test("throws the failure of the review round through flowFailureMessage", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toContain(
+      "throw new Error( flowFailureMessage( result.reason, `pr_fix_apply: claude run failed",
+    );
+  });
+
+  test("throws the failure of the conflict round through flowFailureMessage", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toContain(
+      "throw new Error( flowFailureMessage( result.reason, conflictClaudeFailedMessage(result.reason), ), );",
+    );
+  });
+
+  test("throws the failure of the CI round through flowFailureMessage", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toContain(
+      "throw new Error( flowFailureMessage(result.reason, ciClaudeFailedNote(result.reason)), );",
+    );
+  });
+
+  test("does not settle the failure in the step", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).not.toContain(
+      "settleFixClaudeFailure",
+    );
+  });
+});

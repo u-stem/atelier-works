@@ -155,7 +155,12 @@ Claudeの出力は、記録の前に型ガードで検査する。
 
 ## 生成
 
-`audit_generate`は、作業項目が`auditing`のときだけ動く。失敗すると、Windmillが60秒おいて2回まで再試行する(`attempts: 2`)。
+`audit_generate`は、作業項目が`auditing`のときだけ動く。
+失敗すると、Windmillが60秒おいて2回まで再試行する(`attempts: 2`)。
+ただし、Claudeの実行がtimeout、`--max-budget-usd`の超過、使用上限、全停止で失敗したときは、再試行しない。
+ステップが例外の文の先頭に`[no-flow-retry]`を付け、`flow.yaml`の`retry_if`がこのタグを見て再試行を止める。
+flowは失敗で終わり、`failure_module`(`on_error_flow`)が作業項目を失敗にして通知する。
+監査の作業項目は再実行できないので、その期間は次の週次の監査か、**今すぐ監査**で取り込む。
 
 作業用のディレクトリは`/var/lib/factory/audits/wi-<id>`で、`evidence.md`とテンプレートの複製の`report.md`を置く。Claudeは`report.md`を`Edit`で埋める。
 

@@ -733,3 +733,17 @@ describe("the flow of a conflict round", () => {
     );
   });
 });
+
+describe("the finish step of a CI round that waits", () => {
+  test("sends no needs_human for a note that waits, after the status moved", async () => {
+    const text = await source("pr_fix_finish.ts");
+    const moved = text.indexOf("    if (!moved) return;\n");
+    const skip = text.indexOf(
+      "    if (ciRound && isCiClaudeWaitNote(statusNote)) return;\n",
+    );
+    const notify = text.indexOf(
+      "    await notifyBestEffort(webhookUrl, event, log);\n",
+    );
+    expect(moved >= 0 && moved < skip && skip < notify).toBe(true);
+  });
+});

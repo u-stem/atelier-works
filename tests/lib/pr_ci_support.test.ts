@@ -5,6 +5,8 @@ import {
   SETTLE_MIN_AGE_MS,
   type WorkflowRun,
 } from "../../f/factory/lib/main_ci_support.ts";
+import { USAGE_LIMIT_GIVE_UP_AFTER_MS } from "../../f/factory/lib/pr_ci_fix_claim.ts";
+import { HOLD_PROLONGED_AFTER_MS } from "../../f/factory/lib/pr_ci_notify.ts";
 import {
   CONFIG_MISFIT_KIND,
   canTransitionPrCi,
@@ -1181,6 +1183,7 @@ const DETERMINISTIC_HOLDS = [
   "fix_stopped",
   "rounds_exhausted",
   "not_factory_head",
+  "claude_run_failed",
 ] as const;
 
 const TEMPORARY_HOLDS = [
@@ -1193,6 +1196,8 @@ const TEMPORARY_HOLDS = [
   "config_misfit",
   "worker_image_stale",
   "worker_runtime_unsafe",
+  "claude_usage_limit",
+  "claude_stopped",
 ] as const;
 
 describe("PR_CI_FIX_HOLD_REASONS", () => {
@@ -1422,6 +1427,76 @@ describe("prCiFixHoldInfo", () => {
 
   test("leaves the discord message of a stopped fix to the fix flow", () => {
     expect(prCiFixHoldInfo("fix_stopped").discord).toBe(false);
+  });
+
+  test("sends the discord message of a failed Claude run, which names the pull request", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").discord).toBe(true);
+  });
+
+  test("names the usage limit that did not come back among the failures that stay on hold", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").nextAction).toContain(
+      "戻らなかった使用上限",
+    );
+  });
+
+  test("names the usage limit that did not come back in the stop notice", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").stopAction).toContain(
+      "戻らなかった使用上限",
+    );
+  });
+
+  test("says when the row on the usage limit stops starting again", () => {
+    expect(prCiFixHoldInfo("claude_usage_limit").nextAction).toContain(
+      `${String(USAGE_LIMIT_GIVE_UP_AFTER_MS / (24 * 60 * 60_000))}日`,
+    );
+  });
+
+  test("says in the stop notice when the row on the usage limit stops starting again", () => {
+    expect(prCiFixHoldInfo("claude_usage_limit").stopAction).toContain(
+      `${String(USAGE_LIMIT_GIVE_UP_AFTER_MS / (24 * 60 * 60_000))}日`,
+    );
+  });
+
+  test("does not name the stop among the failures that stay on hold", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").nextAction).not.toContain(
+      "全停止",
+    );
+  });
+
+  test("says when the row on the usage limit starts again", () => {
+    expect(prCiFixHoldInfo("claude_usage_limit").nextAction).toContain(
+      `${String(HOLD_PROLONGED_AFTER_MS / 60_000)}分ごと`,
+    );
+  });
+
+  test("says in the stop notice when the row on the usage limit starts again", () => {
+    expect(prCiFixHoldInfo("claude_usage_limit").stopAction).toContain(
+      `${String(HOLD_PROLONGED_AFTER_MS / 60_000)}分ごと`,
+    );
+  });
+
+  test("says that the release of the stop starts the row again", () => {
+    expect(prCiFixHoldInfo("claude_stopped").nextAction).toContain(
+      "全停止を解除すると",
+    );
+  });
+
+  test("says in the stop notice that the release of the stop starts the row again", () => {
+    expect(prCiFixHoldInfo("claude_stopped").stopAction).toContain(
+      "全停止を解除すると",
+    );
+  });
+
+  test("names the procedure that releases the hold of a failed Claude run", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").nextAction).toContain(
+      "Claudeの失敗で保留したCIの修正を起動し直す",
+    );
+  });
+
+  test("names the procedure in the stop notice of a failed Claude run", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").stopAction).toContain(
+      "Claudeの失敗で保留したCIの修正を起動し直す",
+    );
   });
 
   test("sends the discord message when the time settings do not fit", () => {

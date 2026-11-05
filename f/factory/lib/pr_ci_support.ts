@@ -506,6 +506,9 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  *   止めた理由が語彙に写せない`blocked`は含めない。起動し直す回数は、回数の上限が止める。
  * - `rounds_exhausted`: 直す回数の上限に達した。
  * - `not_factory_head`: 最後のpushがFactoryのものでない。
+ * - `claude_run_failed`: 直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗した。
+ *   同じheadで起動し直しても同じ失敗になり、費用と回数だけを使う。
+ *   `claude_usage_limit`の行が、時間の上限まで待っても戻らなかったときも、この理由に移る。
  *
  * 一時的な理由は、解ければ外してよい理由である。
  * - `marker_missing`: Factoryのクローンのスキルが、CIの失敗を直す節を持たない。
@@ -521,6 +524,12 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  *   準備のステップが同じ理由で止めるので、起動の前に確かめて保留する。ラウンドを使わない。直せば、次の巡回でpushなしに外れる。
  * - `worker_runtime_unsafe`: 稼働中のworkerに誰でも書き込めるパスがあるか、確かめられない。パスを閉じるか、コンテナを作り直せば直る。
  *   イメージを作り直す必要は無い。保留の扱いは`worker_image_stale`と同じである。
+ * - `claude_usage_limit`: 直す作業のClaudeの実行が使用上限で失敗した。待てば戻るので、時間の間隔を空けて起動し直す。
+ *   行の起動の回数を返し(`refundAttempt`)、回数の上限に数えない(`countPrCiFixRounds`)ので、待つ間に回数を使わない。
+ *   起動し直してまた上限に当たると、同じ保留に戻る。
+ *   行のheadを最初に見てから8日たつと、`claude_run_failed`に移り、起動し直すのをやめる。
+ * - `claude_stopped`: 直す作業のClaudeの実行を全停止で止めた。全停止が解除されるまで起動し直さない。
+ *   回数の扱いは`claude_usage_limit`と同じである。
  */
 export const PR_CI_FIX_HOLD_REASONS = [
   "unfixable_job",
@@ -531,6 +540,7 @@ export const PR_CI_FIX_HOLD_REASONS = [
   "fix_stopped",
   "rounds_exhausted",
   "not_factory_head",
+  "claude_run_failed",
   "main_ci_failed",
   "budget_exceeded",
   "not_reviewed",
@@ -539,6 +549,8 @@ export const PR_CI_FIX_HOLD_REASONS = [
   "config_misfit",
   "worker_image_stale",
   "worker_runtime_unsafe",
+  "claude_usage_limit",
+  "claude_stopped",
 ] as const;
 
 export type PrCiFixHoldReason = (typeof PR_CI_FIX_HOLD_REASONS)[number];
@@ -624,6 +636,14 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     stopAction:
       "最後のpushがFactoryのものでないので、自動では直しません。人が直してPRにpushしてください",
   },
+  claude_run_failed: {
+    temporary: false,
+    discord: true,
+    nextAction:
+      "直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗したか、待っても戻らなかった使用上限で止まった。同じheadでは起動し直さない。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの修正を起動し直す」に従う",
+    stopAction:
+      "直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗したか、待っても戻らなかった使用上限で止まりました。同じheadでは起動し直しません。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの修正を起動し直す」に従ってください",
+  },
   marker_missing: {
     temporary: true,
     discord: true,
@@ -692,6 +712,22 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     stopAction:
       "稼働中のworkerに、誰でも書き込めるパスがあるか、確かめられない状態です。Consoleの要対応に通知があれば確かめてください。無ければ、監視のジョブのログにある、列挙できなかった理由を確かめてください。パスがあればchmod o-wで閉じるか、workerのコンテナを作り直してください。パスを列挙できなかっただけなら、次の巡回で自動で外れます。イメージの作り直しは要りません。直ると、Factoryが次の巡回で自動で起動し直します",
   },
+  claude_usage_limit: {
+    temporary: true,
+    discord: true,
+    nextAction:
+      "直す作業のClaudeが使用上限に当たった。使用上限が戻るまで、30分ごとに自動で起動し直す。直す回数の上限は使わない。人の操作は要らない。このheadを見つけてから8日たっても戻らなければ、起動し直すのをやめて知らせる",
+    stopAction:
+      "直す作業のClaudeが使用上限に当たりました。使用上限が戻るまで、Factoryが30分ごとに自動で起動し直します。直す回数の上限は使いません。操作は要りません。このheadを見つけてから8日たっても戻らなければ、起動し直すのをやめて知らせます",
+  },
+  claude_stopped: {
+    temporary: true,
+    discord: true,
+    nextAction:
+      "直す作業のClaudeを全停止で止めた。全停止を解除すると、次の巡回で自動で起動し直す。直す回数の上限は使わない",
+    stopAction:
+      "直す作業のClaudeを全停止で止めました。全停止を解除すると、Factoryが次の巡回で自動で起動し直します。直す回数の上限は使いません",
+  },
 };
 
 /**
@@ -702,6 +738,14 @@ export const PR_CI_FIX_TEMPORARY_HOLD_REASONS: readonly PrCiFixHoldReason[] =
   PR_CI_FIX_HOLD_REASONS.filter(
     (reason) => PR_CI_FIX_HOLD_INFO[reason].temporary,
   );
+
+/**
+ * Claudeの失敗で止まった回を、待ってから起動し直す保留か。
+ * この保留に写った回は、行の起動の回数を返し、直す回数の上限にも数えない。
+ */
+export function isClaudeWaitHold(reason: PrCiFixHoldReason): boolean {
+  return reason === "claude_usage_limit" || reason === "claude_stopped";
+}
 
 /** 保留の理由の性質と、人が次にすることの固定文(常体の`nextAction`と敬体の`stopAction`)。 */
 export function prCiFixHoldInfo(reason: PrCiFixHoldReason): PrCiFixHoldInfo {

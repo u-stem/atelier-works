@@ -9,9 +9,9 @@ import { fixRoundOrNull } from "../lib/ci_fix_round.ts";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
-  recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
+import { recordClaudeRuns } from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   findFixRoundKindToReview,
@@ -20,6 +20,7 @@ import {
   updateStatusIfCurrent,
 } from "../lib/db.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
+import { flowFailureMessage } from "../lib/flow_retry_marker.ts";
 import {
   type GhClient,
   getPr,
@@ -250,7 +251,10 @@ export async function main(
 
     if (result.outcome !== "success") {
       throw new Error(
-        `pr_review_generate: claude run failed (${result.reason}): ${result.detail}`,
+        flowFailureMessage(
+          result.reason,
+          `pr_review_generate: claude run failed (${result.reason}): ${result.detail}`,
+        ),
       );
     }
 

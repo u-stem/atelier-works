@@ -12,10 +12,10 @@ import {
   dailyBudgetStatus,
   type RunClaudeOptions,
   type RunClaudeResult,
-  recordClaudeRuns,
   runClaude,
   type SystemPromptFile,
 } from "../lib/claude.ts";
+import { recordClaudeRuns } from "../lib/claude_flow_failure.ts";
 import { loadConfig } from "../lib/config.ts";
 import { recordAgentRun } from "../lib/db.ts";
 import {

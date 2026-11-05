@@ -974,6 +974,95 @@ check(
   await countImplementFailedRounds(implementRecovered, 1, sql),
 );
 
+// 使用上限と全停止で止まったラウンドは数えず、連続も途切れさせない。
+// `implementLimitOnly`は止まったラウンドだけ、`implementLimitBetween`は失敗の間に使用上限のラウンドが入る。
+// `implementClaudeError`は、実行の記録がほかの種類の失敗なので数える。
+const implementLimitOnly = await issueWorkItem(
+  962,
+  1,
+  "implementing",
+  "qdb-implement-limit-only",
+);
+const implementLimitBetween = await issueWorkItem(
+  963,
+  1,
+  "implementing",
+  "qdb-implement-limit-between",
+);
+const implementClaudeError = await issueWorkItem(
+  964,
+  1,
+  "implementing",
+  "qdb-implement-claude-error",
+);
+// 修正の実行が使用上限で終わり、`.git`の書き換えでラウンドが`check_failed`になった。
+const implementPointerAfterLimit = await issueWorkItem(
+  965,
+  1,
+  "implementing",
+  "qdb-implement-pointer-after-limit",
+);
+// 期限が残っていなかったのでClaudeを起動しなかった。
+const implementNotStarted = await issueWorkItem(
+  966,
+  1,
+  "implementing",
+  "qdb-implement-not-started",
+);
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, failure_reason) VALUES ${[
+    `(${String(implementLimitOnly)}, 'implement', 1, 'm', 'failed', 'usage_limit')`,
+    `(${String(implementLimitOnly)}, 'implement', 1, 'm', 'failed', 'stopped')`,
+    `(${String(implementLimitBetween)}, 'implement', 1, 'm', 'failed', 'usage_limit')`,
+    `(${String(implementClaudeError)}, 'implement', 1, 'm', 'failed', 'claude_error')`,
+    `(${String(implementPointerAfterLimit)}, 'implement', 1, 'm', 'failed', 'usage_limit')`,
+    `(${String(implementNotStarted)}, 'implement', 1, 'm', 'not started', 'not_started')`,
+  ].join(", ")}`,
+);
+/** 作業項目の、失敗の種類が`reason`の実行の行のIDを選ぶ副問い合わせを返す。 */
+function runIdOf(workItemId: number, reason: string): string {
+  return `(SELECT id FROM factory.agent_runs WHERE work_item_id = ${String(workItemId)} AND failure_reason = '${reason}')`;
+}
+execPsql(
+  target,
+  `INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome, agent_run_id) VALUES ${[
+    `(${String(implementLimitOnly)}, 1, 1, 'implement', 'error', ${runIdOf(implementLimitOnly, "usage_limit")})`,
+    `(${String(implementLimitOnly)}, 1, 2, 'fix', 'error', ${runIdOf(implementLimitOnly, "stopped")})`,
+    `(${String(implementLimitBetween)}, 1, 1, 'implement', 'check_failed', NULL)`,
+    `(${String(implementLimitBetween)}, 1, 2, 'fix', 'error', ${runIdOf(implementLimitBetween, "usage_limit")})`,
+    `(${String(implementLimitBetween)}, 1, 3, 'fix', 'stalled', NULL)`,
+    `(${String(implementClaudeError)}, 1, 1, 'implement', 'error', ${runIdOf(implementClaudeError, "claude_error")})`,
+    `(${String(implementPointerAfterLimit)}, 1, 1, 'implement', 'check_failed', ${runIdOf(implementPointerAfterLimit, "usage_limit")})`,
+    `(${String(implementNotStarted)}, 1, 1, 'implement', 'error', ${runIdOf(implementNotStarted, "not_started")})`,
+  ].join(", ")}`,
+);
+check(
+  "countImplementFailedRounds: rounds on the usage limit or a stop are not counted",
+  (await countImplementFailedRounds(implementLimitOnly, 1, sql)) === 0,
+  await countImplementFailedRounds(implementLimitOnly, 1, sql),
+);
+check(
+  "countImplementFailedRounds: a round on the usage limit does not break the streak",
+  (await countImplementFailedRounds(implementLimitBetween, 1, sql)) === 2,
+  await countImplementFailedRounds(implementLimitBetween, 1, sql),
+);
+check(
+  "countImplementFailedRounds: a round on another failure of Claude is counted",
+  (await countImplementFailedRounds(implementClaudeError, 1, sql)) === 1,
+  await countImplementFailedRounds(implementClaudeError, 1, sql),
+);
+check(
+  "countImplementFailedRounds: a check_failed round that rewrote .git is counted after a run on the usage limit",
+  (await countImplementFailedRounds(implementPointerAfterLimit, 1, sql)) === 1,
+  await countImplementFailedRounds(implementPointerAfterLimit, 1, sql),
+);
+check(
+  "countImplementFailedRounds: a round whose run was not started is not counted",
+  (await countImplementFailedRounds(implementNotStarted, 1, sql)) === 0,
+  await countImplementFailedRounds(implementNotStarted, 1, sql),
+);
+
 async function prFixItem(pr: number): Promise<number> {
   return insertWorkItem(
     {
@@ -1167,7 +1256,162 @@ for (const [workItemId, round] of [
   );
 }
 
+/** 失敗の種類を持つ`agent_runs`の1行のVALUESを返す。 */
+function reasonRunRow(
+  workItemId: number,
+  stage: "pr_fix" | "pr_fix_verify_retry",
+  ago: number,
+  reason: string,
+): string {
+  return `(${String(workItemId)}, '${stage}', 1, 'm', 'failed', '${reason}', ${secondsAgo(ago)})`;
+}
+
+// 使用上限と全停止で止まった実行は、モデルを強くしても防げないので、昇格の失敗に数えない。
+// 数える失敗(timeoutと、使用上限でない`is_error`)と混ぜて、除くのは前者だけであることも確かめる。
+const usageLimitOnly = await prFixItem(103);
+const stoppedMidRun = await prFixItem(104);
+const claudeErrorCounted = await prFixItem(106);
+const reasonLookalike = await prFixItem(107);
+const environmentMixed = await prFixItem(108);
+// 検査の再実行(`pr_fix_verify_retry`)が使用上限か全停止で終わり、blockedのラウンドを残した。
+const verifyRetryUsageLimit = await prFixItem(131);
+const verifyRetryStopped = await prFixItem(132);
+// 検査の再実行が別の理由で失敗してblockedになり、やり直しの再実行が使用上限で終わった(前の2回だけを数える)。
+const verifyRetryMixed = await prFixItem(133);
+// 修正の実行が使用上限で終わり、`.git`の書き換えでblockedのラウンドを残した。
+const applyLimitBlocked = await prFixItem(134);
+// 修正の実行が使用上限で失敗した後、再実行がClaudeを起動せずにblockedで止まった。
+const restartBlockedAfterLimit = await prFixItem(135);
+// 検査の再実行が不正な出力で再試行し、最後の試行が使用上限で終わった。
+const verifyRetryDiscardedThenLimit = await prFixItem(136);
+// 検査の再実行が不正な出力で再試行し、最後の試行が別の理由で失敗した。
+const verifyRetryDiscardedThenError = await prFixItem(137);
+// IDの順が時刻の順になるよう、古い実行から入れる。
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
+    runRow(
+      reasonLookalike,
+      "pr_fix",
+      900,
+      "claude reported an error (reason=usage_limit, subtype=success): x",
+    ),
+    runRow(verifyRetryUsageLimit, "pr_fix", 900, null),
+    runRow(verifyRetryStopped, "pr_fix", 900, null),
+    runRow(verifyRetryMixed, "pr_fix", 900, null),
+    runRow(verifyRetryDiscardedThenLimit, "pr_fix", 900, null),
+    runRow(verifyRetryDiscardedThenError, "pr_fix", 900, null),
+  ].join(", ")}`,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, failure_reason, created_at) VALUES ${[
+    reasonRunRow(usageLimitOnly, "pr_fix", 900, "usage_limit"),
+    reasonRunRow(stoppedMidRun, "pr_fix", 900, "stopped"),
+    reasonRunRow(claudeErrorCounted, "pr_fix", 900, "claude_error"),
+    reasonRunRow(environmentMixed, "pr_fix", 900, "timeout"),
+    reasonRunRow(environmentMixed, "pr_fix", 700, "usage_limit"),
+    reasonRunRow(environmentMixed, "pr_fix", 500, "stopped"),
+    reasonRunRow(
+      verifyRetryUsageLimit,
+      "pr_fix_verify_retry",
+      800,
+      "usage_limit",
+    ),
+    reasonRunRow(verifyRetryStopped, "pr_fix_verify_retry", 800, "stopped"),
+    reasonRunRow(verifyRetryMixed, "pr_fix_verify_retry", 800, "claude_error"),
+    reasonRunRow(verifyRetryMixed, "pr_fix_verify_retry", 500, "usage_limit"),
+    reasonRunRow(applyLimitBlocked, "pr_fix", 900, "usage_limit"),
+    reasonRunRow(restartBlockedAfterLimit, "pr_fix", 900, "usage_limit"),
+    reasonRunRow(
+      verifyRetryDiscardedThenLimit,
+      "pr_fix_verify_retry",
+      800,
+      "invalid_json",
+    ),
+    reasonRunRow(
+      verifyRetryDiscardedThenLimit,
+      "pr_fix_verify_retry",
+      795,
+      "usage_limit",
+    ),
+    reasonRunRow(
+      verifyRetryDiscardedThenError,
+      "pr_fix_verify_retry",
+      800,
+      "invalid_json",
+    ),
+    reasonRunRow(
+      verifyRetryDiscardedThenError,
+      "pr_fix_verify_retry",
+      795,
+      "claude_error",
+    ),
+  ].join(", ")}`,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at) VALUES (${String(restartBlockedAfterLimit)}, 'failed', 'fixing', 'qdb restart', ${secondsAgo(800)})`,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, created_at) VALUES ${[
+    roundRow(verifyRetryUsageLimit, "blocked", 790),
+    roundRow(verifyRetryStopped, "blocked", 790),
+    roundRow(verifyRetryMixed, "blocked", 790),
+    roundRow(verifyRetryMixed, "blocked", 490),
+    roundRow(applyLimitBlocked, "blocked", 890),
+    roundRow(restartBlockedAfterLimit, "blocked", 790),
+    roundRow(verifyRetryDiscardedThenLimit, "blocked", 790),
+    roundRow(verifyRetryDiscardedThenError, "blocked", 790),
+  ].join(", ")}`,
+);
+
 const prFixExpectations: readonly (readonly [string, number, number])[] = [
+  ["a usage limit run is not counted", usageLimitOnly, 0],
+  ["a stopped run is not counted", stoppedMidRun, 0],
+  ["an error of another reason is counted", claudeErrorCounted, 1],
+  [
+    "an error whose text only looks like the usage limit is counted",
+    reasonLookalike,
+    1,
+  ],
+  [
+    "only the failures that are not environmental are counted",
+    environmentMixed,
+    1,
+  ],
+  [
+    "a verify retry that ended on the usage limit counts nothing",
+    verifyRetryUsageLimit,
+    0,
+  ],
+  ["a verify retry that was stopped counts nothing", verifyRetryStopped, 0],
+  [
+    "a verify retry on the usage limit does not count beside an earlier failed one",
+    verifyRetryMixed,
+    2,
+  ],
+  [
+    "a blocked round right after a run on the usage limit is not counted",
+    applyLimitBlocked,
+    0,
+  ],
+  [
+    "a blocked round of a restart that started no Claude is counted after a run on the usage limit",
+    restartBlockedAfterLimit,
+    1,
+  ],
+  [
+    "a verify retry whose last attempt ended on the usage limit counts nothing",
+    verifyRetryDiscardedThenLimit,
+    0,
+  ],
+  [
+    "a verify retry whose last attempt failed for another reason is counted",
+    verifyRetryDiscardedThenError,
+    2,
+  ],
   ["blocked rounds and verify retries of the same PR are counted", fixB, 2],
   ["another PR is counted separately", fixOtherPr, 1],
   ["every failed apply of flow retries is counted", applyTimeouts, 3],
@@ -3481,19 +3725,19 @@ check(
 // ラウンドの数: 直近のpassedの行より後の、CIの回だけを数える。
 check(
   "rounds: a round that was claimed is counted",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 1,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, [], sql)) === 1,
 );
 check(
   "rounds: the owner and repo are found by any case",
-  (await countPrCiFixRounds("QFIX", "APP", 507, sql)) === 1,
+  (await countPrCiFixRounds("QFIX", "APP", 507, [], sql)) === 1,
 );
 check(
   "rounds: a pull request without a round counts zero",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 502, sql)) === 0,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 502, [], sql)) === 0,
 );
 check(
   "rounds: a pr_fix that does not fix a CI failure is not counted",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 505, sql)) === 1,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 505, [], sql)) === 1,
 );
 execPsql(
   target,
@@ -3521,7 +3765,7 @@ check(
 );
 check(
   "rounds: the second round of the pull request is counted",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 2,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, [], sql)) === 2,
 );
 execPsql(
   target,
@@ -3533,13 +3777,13 @@ execPsql(
 );
 check(
   "rounds: a passed row after the rounds starts the count again",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 0,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, [], sql)) === 0,
 );
 const fixAfterPass = await failedFixRow(501, FIX_SHA_2);
 check(
   "rounds: a failure after the passed row is counted from one",
   typeof (await fixClaim(fixAfterPass.id, FIX_SHA_2)) === "number" &&
-    (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 1,
+    (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, [], sql)) === 1,
 );
 
 // 戻す相手を作業項目で絞れる。
@@ -3934,7 +4178,7 @@ check(
 );
 check(
   "claim to recovery: a work item that failed before its flow started is not counted as a round",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 601, sql)) === 0,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 601, [], sql)) === 0,
 );
 execPsql(
   target,
@@ -3942,11 +4186,141 @@ execPsql(
 );
 check(
   "claim to recovery: a work item that failed after its flow started is counted toward the limit",
-  (await countPrCiFixRounds(FIX.owner, FIX.repo, 601, sql)) === 1,
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 601, [], sql)) === 1,
 );
 check(
   "claim to recovery: the attempts of the row keep counting the failed launch",
   Number((await fixRowOf(claimPlain.id))?.fix_attempts) === 1,
+);
+
+// 待てば解ける失敗(使用上限と全停止)で終わった回は、直す回数の上限にも、行の起動の回数にも数えない。
+const WAIT_NOTE = "pr_fix_apply: ci round: claude run failed (usage_limit)";
+const waitedRow = await failedFixRow(611, FIX_SHA_1);
+const waitedItem = await fixClaim(waitedRow.id, FIX_SHA_1);
+if (waitedItem === null) throw new Error("the waited row was not claimed");
+await updateStatus(waitedItem, "failed", WAIT_NOTE, sql);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = '0192d4a0-7b1c-7e2a-9f3d-1a2b3c4d5e6f' WHERE id = ${String(waitedItem)}`,
+);
+check(
+  "wait: a round that ended on a note that waits is not counted",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 611, [WAIT_NOTE], sql)) === 0,
+  await countPrCiFixRounds(FIX.owner, FIX.repo, 611, [WAIT_NOTE], sql),
+);
+check(
+  "wait: a round on another note is counted",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 611, ["other"], sql)) === 1,
+  await countPrCiFixRounds(FIX.owner, FIX.repo, 611, ["other"], sql),
+);
+await releaseFixingPrCiCheck(
+  waitedRow.id,
+  { holdReason: "claude_usage_limit", refundAttempt: true },
+  sql,
+);
+check(
+  "wait: giving the attempt back returns the attempts of the row to what they were",
+  Number((await fixRowOf(waitedRow.id))?.fix_attempts) === 0,
+  await fixRowOf(waitedRow.id),
+);
+check(
+  "wait: the release writes the hold reason",
+  (await fixRowOf(waitedRow.id))?.fix_hold_reason === "claude_usage_limit",
+  await fixRowOf(waitedRow.id),
+);
+
+// 使用上限の後に同じ作業項目が動き直して終わった回は、最後の状態で決まる。
+const waitedThenBlockedRow = await failedFixRow(612, FIX_SHA_1);
+const waitedThenBlocked = await fixClaim(waitedThenBlockedRow.id, FIX_SHA_1);
+if (waitedThenBlocked === null) throw new Error("the row was not claimed");
+await updateStatus(waitedThenBlocked, "failed", WAIT_NOTE, sql);
+await updateStatus(waitedThenBlocked, "fixing", "qfix restart", sql);
+await updateStatus(waitedThenBlocked, "failed", "other failure", sql);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = '0192d4a0-7b1c-7e2a-9f3d-1a2b3c4d5e6f' WHERE id = ${String(waitedThenBlocked)}`,
+);
+check(
+  "wait: the note of the last transition into the status decides",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 612, [WAIT_NOTE], sql)) === 1,
+  await countPrCiFixRounds(FIX.owner, FIX.repo, 612, [WAIT_NOTE], sql),
+);
+
+// 検証のステップで使用上限に当たった回は、`pr_fix_finish`が`needs_human`で終える。これも数えない。
+const WAIT_VERIFY_NOTE = "ci round: claude run failed (usage_limit)";
+const waitedVerifyRow = await failedFixRow(614, FIX_SHA_1);
+const waitedVerifyItem = await fixClaim(waitedVerifyRow.id, FIX_SHA_1);
+if (waitedVerifyItem === null) throw new Error("the row was not claimed");
+await updateStatus(waitedVerifyItem, "needs_human", WAIT_VERIFY_NOTE, sql);
+check(
+  "wait: a needs_human round on a note that waits is not counted",
+  (await countPrCiFixRounds(
+    FIX.owner,
+    FIX.repo,
+    614,
+    [WAIT_VERIFY_NOTE],
+    sql,
+  )) === 0,
+  await countPrCiFixRounds(FIX.owner, FIX.repo, 614, [WAIT_VERIFY_NOTE], sql),
+);
+check(
+  "wait: a needs_human round on another note is counted",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 614, ["other"], sql)) === 1,
+  await countPrCiFixRounds(FIX.owner, FIX.repo, 614, ["other"], sql),
+);
+
+// 使用上限の保留の時間の上限は`first_seen_at`から測る。headが進むと新しい行になり、測り直しになる。
+const givenUpOldHead = await failedFixRow(615, FIX_SHA_1);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '9 days', fix_hold_reason = 'claude_usage_limit' WHERE id = ${String(givenUpOldHead.id)}`,
+);
+const givenUpNewHead = await failedFixRow(615, FIX_SHA_2);
+check(
+  "give up: the row of a new head starts its time again",
+  Date.now() - givenUpNewHead.first_seen_at.getTime() < 60 * 60_000,
+  givenUpNewHead,
+);
+check(
+  "give up: the row of a new head has no hold",
+  givenUpNewHead.fix_hold_reason === null,
+  givenUpNewHead,
+);
+await transitionPrCiCheck(
+  givenUpOldHead.id,
+  "failed",
+  { state: "superseded" },
+  sql,
+);
+await transitionPrCiCheck(
+  givenUpOldHead.id,
+  "superseded",
+  { state: "pending", reopen: true },
+  sql,
+);
+const givenUpReopened = await fixRowOf(givenUpOldHead.id);
+check(
+  "give up: a head that came back starts its time again",
+  givenUpReopened !== null &&
+    givenUpReopened !== undefined &&
+    Date.now() - new Date(String(givenUpReopened.first_seen_at)).getTime() <
+      60 * 60_000,
+  givenUpReopened,
+);
+
+// 下限を割らない。回復が同じ行を二重に戻しても、回数は負にならない。
+const floorRow = await failedFixRow(613, FIX_SHA_1);
+const floorItem = await fixClaim(floorRow.id, FIX_SHA_1);
+if (floorItem === null) throw new Error("the row was not claimed");
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET fix_attempts = 0 WHERE id = ${String(floorRow.id)}`,
+);
+await releaseFixingPrCiCheck(floorRow.id, { refundAttempt: true }, sql);
+check(
+  "wait: giving the attempt back does not go below zero",
+  Number((await fixRowOf(floorRow.id))?.fix_attempts) === 0,
+  await fixRowOf(floorRow.id),
 );
 
 // 現headのレビュー: pr_reviewの作業項目に、そのheadのレビューの行があるかを、大文字小文字を問わず調べる。

@@ -27,7 +27,10 @@
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { ciTextScanner } from "../lib/ci_fix_round.ts";
 import type { CiTextScanner } from "../lib/ci_log_support.ts";
-import { buildSystemPrompt } from "../lib/claude.ts";
+import {
+  buildSystemPrompt,
+  type RunClaudeFailureReason,
+} from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   getWorkItem,
@@ -157,13 +160,25 @@ const PROBE_RUNNING: EscalationSpec = {
   nextAction: "測定が終わってから、依頼を投入し直してください。",
 };
 
+/** 失敗の種類ごとの次の操作。使用上限と全停止は依頼文の問題でないので、依頼文を変える案内にしない。 */
+function claudeFailedNextAction(reason: RunClaudeFailureReason): string {
+  if (reason === "usage_limit") {
+    return "使用上限が戻ってから、同じ依頼を投入し直してください。";
+  }
+  if (reason === "stopped") {
+    return "全停止を解除してから、同じ依頼を投入し直してください。";
+  }
+  return "ジョブのログで失敗の理由の符号を確かめ、依頼文を変えて投入し直してください。";
+}
+
 /** 起動の失敗は、理由の符号だけを載せる。Claudeの出力や標準エラーの断片を載せない。 */
-function claudeFailedEscalation(reason: string): EscalationSpec {
+function claudeFailedEscalation(
+  reason: RunClaudeFailureReason,
+): EscalationSpec {
   return {
     note: `claude run failed: ${reason}`,
     reason: `調査のClaudeの実行が失敗しました(${reason})。`,
-    nextAction:
-      "ジョブのログで失敗の理由の符号を確かめ、依頼文を変えて投入し直してください。",
+    nextAction: claudeFailedNextAction(reason),
   };
 }
 

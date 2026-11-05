@@ -371,3 +371,29 @@ describe("the wiring of pipeline_generate main", () => {
     );
   });
 });
+
+// `main()`はWindmillとDBを直接使うので、Claudeの失敗の配線はソースの文字列で確かめる。
+describe("claude failure wiring in the generate step", () => {
+  async function flatSource(): Promise<string> {
+    const text = await Bun.file(
+      new URL("../../f/factory/steps/pipeline_generate.ts", import.meta.url),
+    ).text();
+    return text.replace(/\s+/g, " ");
+  }
+
+  test("throws the generation failure through flowFailureMessage", async () => {
+    expect(await flatSource()).toContain(
+      "throw new Error( flowFailureMessage( reason, maskSecrets(`pipeline_generate: runClaude failed",
+    );
+  });
+
+  test("hands the Claude failure to failGeneration", async () => {
+    expect(await flatSource()).toContain(
+      "failGeneration(result.reason, result.detail)",
+    );
+  });
+
+  test("does not settle the failure in the step", async () => {
+    expect(await flatSource()).not.toContain("settleClaudeFailure");
+  });
+});

@@ -96,6 +96,8 @@ value:
         constant:
           attempts: 2
           seconds: 60
+        retry_if:
+          expr: '!String(error?.message ?? "").startsWith("[no-flow-retry]")'
       skip_if:
         expr: results.pr_fix_prepare.outcome !== "proceed" ||
           results.pr_fix_collect?.outcome !== "proceed"

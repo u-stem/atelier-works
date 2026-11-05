@@ -132,6 +132,10 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("names the Claude usage limit", () => {
+    expect(noticeKindLabel("claude_usage_limit")).toBe("Claudeの使用上限");
+  });
+
   test("names the stopped schedule detector", () => {
     expect(noticeKindLabel("schedule_detector_stale")).toBe(
       "scheduleの失敗の検出器の停止",

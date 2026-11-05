@@ -15,9 +15,9 @@ import { join, posix } from "node:path";
 import {
   type RunClaudeFailureReason,
   type RunClaudeResult,
-  recordClaudeRuns,
   runClaude,
 } from "./claude.ts";
+import { recordClaudeRuns } from "./claude_flow_failure.ts";
 import {
   assertCwdOutsideDeny,
   type ReadDenyContext,

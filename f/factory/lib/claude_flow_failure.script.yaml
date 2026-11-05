@@ -1,0 +1,9 @@
+summary: '[LIB] Claudeの実行の記録と使用上限の通知'
+description: 内部ライブラリです。直接実行するものではありません。runClaudeの結果の実行の記録と、使用上限の通知を行います。
+lock: '!inline f/factory/lib/claude_flow_failure.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

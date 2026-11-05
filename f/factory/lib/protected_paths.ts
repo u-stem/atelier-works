@@ -312,6 +312,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 全停止の通知を変数に合わせる`lib/stop_all_notice.ts`と、ランナーの`lib/workspace.ts`は守らない。
  * 通知は止める働きを持たず、ランナーはほかのフローが日常的に直すファイルだからである。
  * 監視を呼ぶ`lib/claude.ts`、`lib/check_runner.ts`と、関門を持つ`self_update.ts`は、安全策を担うコードとして守っている。
+ * Claudeの実行の費用の記録(`lib/claude_flow_failure.ts`)と、flowの再試行の判定(`lib/flow_retry_marker.ts`)と、それぞれの`.script.yaml`も守る。
+ * 書き換えられると、費用が日次予算に数えられなくなり、費用だけがかかる再試行が走る。
+ * 再試行の判定を各flowへ配線する`retry_if`のテスト(`tests/scripts/claude_flow_retry.test.ts`)も守る。
+ * flowの定義(`*__flow/flow.yaml`)は日常的に直すので守らない。`retry_if`を消すと、保護されたこのテストが落ちるので、検査を通せず、人の承認に回る。
+ * 2つのlibのlockは、上のlibのlockと同じ扱いで守らない。
  * 保護パスに触れた変更の反映を人の承認まで止める仕組みも守る。承認の表を作るmigration2本、表の唯一の読み書き(`lib/deploy_approvals.ts`)と
  * その`.script.yaml`、表の部品の単体テストと参照の検出(`tests/lib/deploy_approvals.test.ts`、`tests/scripts/deploy_approvals_wiring.test.ts`)、
  * 実DBの検査(`scripts/test-db-deploy-approvals.ts`)である。書き換えられると、承認の無い版が承認済みとして読まれ、保護パスの変更が人の確認なしに反映される。
@@ -607,6 +612,11 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/scripts/host_apply_compose_tables.test.ts",
   "f/factory/lib/claude.ts",
   "f/factory/lib/claude.script.yaml",
+  "f/factory/lib/claude_flow_failure.ts",
+  "f/factory/lib/claude_flow_failure.script.yaml",
+  "f/factory/lib/flow_retry_marker.ts",
+  "f/factory/lib/flow_retry_marker.script.yaml",
+  "tests/scripts/claude_flow_retry.test.ts",
   "f/factory/lib/check_sandbox.ts",
   "f/factory/lib/check_sandbox.script.yaml",
   "f/factory/lib/check_runner.ts",

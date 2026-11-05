@@ -91,6 +91,7 @@ import { GITLEAKS_TIMEOUT_MS } from "../lib/implement_loop.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { runCommandBytes } from "../lib/metadata_git_ports.ts";
 import { limitGapReport } from "../lib/model_text.ts";
+import { isCiClaudeWaitNote } from "../lib/pr_ci_fix_recovery.ts";
 import {
   defaultLockReleaseDeps,
   ensureWorktreeLockFree,
@@ -497,6 +498,9 @@ export async function main(
     // 競合回の失敗は、競合の監視(`watch_pr_conflicts`)が行の保留の理由を付けて通知する。
     // ここでも通知すると、同じ競合について人に2回届く。
     if (conflictRound) return;
+    // 使用上限か全停止で止まったCI回は、監視が行を保留して起動し直すので、人を呼ばない。
+    // `on_error_flow`が`job_failed`を送らないのと同じ理由である。
+    if (ciRound && isCiClaudeWaitNote(statusNote)) return;
     // トリガーの`fix_label`は`poll_prs.ts`が着手時に消費済みなので、外すラベルは無い。
     // 運用上の知らせ(失敗、needs_human、blocked、requirements_gap)はPRに投稿しない。
     // PRに載せるのは一次レビューとレビューコメントへの返信だけにするため。

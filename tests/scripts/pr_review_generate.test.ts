@@ -379,3 +379,22 @@ describe("review threads wiring in the generate step", () => {
     ).toBe(1);
   });
 });
+
+describe("claude failure wiring in the generate step", () => {
+  async function flatSource(): Promise<string> {
+    const text = await Bun.file(
+      new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),
+    ).text();
+    return text.replace(/\s+/g, " ");
+  }
+
+  test("throws the Claude failure through flowFailureMessage", async () => {
+    expect(await flatSource()).toContain(
+      "throw new Error( flowFailureMessage( result.reason, `pr_review_generate: claude run failed",
+    );
+  });
+
+  test("does not settle the failure in the step", async () => {
+    expect(await flatSource()).not.toContain("settleClaudeFailure");
+  });
+});
