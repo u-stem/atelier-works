@@ -325,6 +325,9 @@ export async function runAllowedCheckCommands(
       const env = checkEnv({ path, home: homeDir.path, worktreeDir: cwd });
 
       const check = stop.check ?? defaultStopCheck();
+      // 変数はループの前に1回だけ読み、その後はループ全体にかけた1つの監視で見る。
+      // コマンドごとに読むと、読み取りの待ち(最長5秒)がコマンドの数だけ重なるためである。
+      const stoppedBefore = await checkStop(check);
       const watch = watchStop(check, stop.intervalMs ?? STOP_CHECK_INTERVAL_MS);
       try {
         for (const command of commands) {
@@ -334,7 +337,7 @@ export async function runAllowedCheckCommands(
             .filter((token) => token.length > 0);
           if (argv.length === 0) continue;
           // 全停止の間は、次のコマンドを起動しない。
-          if (watch.stopped() || (await checkStop(check))) {
+          if (stoppedBefore || watch.stopped()) {
             results.push(stoppedResult(command));
             break;
           }
