@@ -55,12 +55,19 @@ import {
   serializeFreezeState,
   sessionHolderFromBranch,
 } from "../f/factory/lib/freezes.ts";
-import {
-  readStopAll,
-  STOP_ALL_VARIABLE_PATH,
-  type StopAllReadIo,
-  type StopAllStatus,
+import type {
+  StopAllReadIo,
+  StopAllStatus,
 } from "../f/factory/lib/stop_all.ts";
+
+/**
+ * 全停止のlibを、全停止を読むときに初めて読み込む。
+ * `lib/stop_all.ts`は`windmill-client`を読み込み、nodeでは解決できない。
+ * nodeで動くマージのフック(`claude-hooks/merge-read.ts`)が、このファイルの`wmillCliPorts`を読み込むためである。
+ */
+function loadStopAll() {
+  return import("../f/factory/lib/stop_all.ts");
+}
 
 export type Command =
   | {
@@ -283,7 +290,11 @@ export function wmillCliStopAllReadIo(
   capture: (argv: readonly string[]) => Promise<CaptureResult>,
 ): StopAllReadIo {
   return {
-    readVariable: () => readVariableWithCli(capture, STOP_ALL_VARIABLE_PATH),
+    readVariable: async () =>
+      readVariableWithCli(
+        capture,
+        (await loadStopAll()).STOP_ALL_VARIABLE_PATH,
+      ),
   };
 }
 
@@ -626,6 +637,7 @@ async function stopAllRefusal(
   deps: CliDeps,
   action: string,
 ): Promise<string | null> {
+  const { readStopAll } = await loadStopAll();
   const status = await readStopAll(deps.stopAll);
   if (status.kind === "clear") return null;
   if (status.kind === "unreadable") {
@@ -639,6 +651,7 @@ async function stopAllRefusal(
  * 凍結の読み取りと同じく、`deploy`と`up`が止まっているスタックを起こせるようにするためである。後段のpushは、読めないと止める。
  */
 async function checkStopAll(deps: CliDeps): Promise<number> {
+  const { readStopAll } = await loadStopAll();
   const read = await within(readStopAll(deps.stopAll), deps.checkReadTimeoutMs);
   const status: StopAllStatus =
     read === "timeout"
