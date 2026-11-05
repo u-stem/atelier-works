@@ -1348,9 +1348,13 @@ PRレビューの生成、PR修正の修正、要件定義の生成、監査の�
 - サブスクリプションの使用上限(`usage_limit`)
 
 すぐ再試行しても同じ失敗になり、費用だけがかかるためである。
+flowは失敗のまま終わる。
 作業項目は失敗になり、Discordに`job_failed`が届く。
-使用上限のときは、要対応の通知`claude_usage_limit`も残る。
+注記と通知の本文の先頭に付く`[no-flow-retry]`は、再試行を止めたことの印である。
 それ以外のClaudeの失敗では、Windmillが再試行する。
+
+使用上限のときは、要対応の通知`claude_usage_limit`も残る。
+使用上限はアカウント全体に効くので、この通知は上の4つに限らず、Claudeを呼ぶどのflowでも残る。
 
 timeoutで打ち切った実行は、上限の値を費用として記録し、日次予算に数える。
 上限は`max_budget_usd_per_run`で、実装のフローでは`implement_max_budget_usd_per_run`である。
@@ -1358,19 +1362,23 @@ timeoutで打ち切った実行は、上限の値を費用として記録し、�
 そのため、timeoutが続いた日は、日次予算に早く達する。
 
 上限が戻ってから、Consoleの**要対応**で失敗の行を選んで再実行する。
-監査は再実行できないので、次の週次の監査か、**レポート**の**今すぐ監査**で取り込む。
+監査は再実行できないので、**レポート**の**今すぐ監査**で起動し直す。
+起動し直さなくても、次の週次の監査が失敗した期間を取り込む。
 
 #### 使用上限の判定を確かめる
 
 使用上限の応答の形はClaude Codeの文書に無く、実機でも確かめていない。
-判定は、結果の本文が`You've hit your ... limit`の形か、`api_error_status`が429かで行う。
-本文の形は大文字と小文字を区別しない。
+判定の文面は、workerのClaude Codeのバイナリの文字列から取った。
+結果の本文か`errors`が、`You've hit your`、`You've reached your`、`You're out of usage credits`のどれかを含めば、使用上限とする。
+大文字と小文字は区別しない。
+`api_error_status`の429だけでは使用上限にしない。
+一時的なレート制限は、Windmillの再試行で回復するためである。
 `claude_usage_limit`が初めて出たときと、使用上限に当たったのに出なかったときは、次の手順で確かめる。
 
 1. 次のコマンドで、上限の文を含む直近の失敗の記録を読む。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT created_at, stage, error FROM factory.agent_runs WHERE error ILIKE '%limit%' ORDER BY created_at DESC LIMIT 5"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT created_at, stage, error FROM factory.agent_runs WHERE error ~* 'limit|usage credits|hit your|reached your' ORDER BY created_at DESC LIMIT 5"
    ```
 
 2. `error`の`subtype=`と`api_error_status=`と、その後の本文を見る。
@@ -4480,7 +4488,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `hold_released` | 人が、保留、スケジュールの凍結、deployの保留を、Consoleのシステムの画面から解除した。本文に、解除した対象、操作者、時刻(JST、秒まで)が載る。「情報」で、保留の`reason`と`holder`は載せない。凍結の行は解除した主体を残さないので、この通知が操作者の記録になる。期限切れの行を片付けたときと、解除済みの行への呼び出しでは残さない。Discordには届かない | 心当たりのある解除なら、何もしない。心当たりが無いなら、操作者の名前を確かめ、止めていた対象を置き直すかを判断する |
 | `doc_hash_column_missing` | 要件定義の下書きの基準値の列(`requirement_drafts.doc_hash`)が無いまま、基準値なしで下書きを保存した。列を足すmigrationより先に、コードが反映されたときに残る。この下書きは、承認の後の書き換えを検出できない。本文は固定で、未解決は1件にまとまる | 列を足すmigrationは、自己更新が自動で反映する。デプロイの記録で、反映が成功していることを確かめる。失敗しているときは、自己更新のジョブのログで原因を確かめる。書き換えから守りたい要件定義は作り直す。列が足されても、通知は自動では解決されない。基準値なしで保存された承認済みの要件定義が残ること自体が、書き換えからの守りの欠落であり、列が足されたことだけでは消えないためである。人が、その要件定義の扱いを確かめ終えてから解決する |
 | `design_enabled_ignored` | 設定の`design_enabled`が`true`だが、`design_enabled_since`が無いか日時として読めないため、`false`として読んでいる。設計工程は動かない。設定タブの**設計工程**の行には、効いている値の「無効」が出る(設定が参照で書かれているときは「判定できない」)。自己更新が設定を読むたびに残し、本文は固定で、未解決は1件にまとまる | 設計工程を有効にするなら、[設計工程を有効にする](#設計工程を有効にする)の確認を済ませてから、`factory_config`に`design_enabled_since`を書く。有効にしないなら、`design_enabled`を`false`に戻す。どちらでも、自己更新(2分ごと)がこの通知を自動で解決する。Consoleからは解決できない |
-| `claude_usage_limit` | PRレビューの生成、PR修正の修正、要件定義の生成、監査の生成のClaudeが、サブスクリプションの使用上限に当たって失敗した。作業項目は失敗になり、flowの再試行はしない。本文に失敗の詳細の先頭とflowのパスが載る。未解決の間は同じflowのパスの通知を重ねない。Discordには`job_failed`が届く | 上限が戻ってから、Consoleの**要対応**の失敗で**再実行**を押す。監査は再実行できないので、次の週次の監査を待つ。初めて出たときは、[使用上限の判定を確かめる](#使用上限の判定を確かめる)の手順で判定を確かめる。対応したら人が解決する |
+| `claude_usage_limit` | Claudeの実行が、サブスクリプションの使用上限に当たって失敗した。Claudeを呼ぶどのflowでも残る。本文は固定の文とflowのパスだけで、解除の時刻を含む失敗の詳細はジョブのログにある。未解決の間は同じflowのパスの通知を重ねない。Discordへの通知は、そのflowの失敗の通知に任せる | 上限が戻ってから、Consoleの**要対応**の失敗で**再実行**を押す。監査は**レポート**の**今すぐ監査**で起動し直す。初めて出たときは、[使用上限の判定を確かめる](#使用上限の判定を確かめる)の手順で判定を確かめる。対応したら人が解決する |
 
 ### Console用のworkerの検知を確かめる
 
