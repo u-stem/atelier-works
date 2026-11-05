@@ -189,6 +189,60 @@ describe("runClaude while the factory is stopped", () => {
     expect(result.agentRun.cost_usd).toBe(opts.maxBudgetUsd);
   });
 
+  test("records total_cost_usd of the result that a stopped run had already written", async () => {
+    const recorder = answering([{ ...SUCCESS, exitCode: 143, stopped: true }]);
+
+    const result = await runClaude(
+      options(recorder.run, sequence(false, false)),
+    );
+
+    expect(result.agentRun.cost_usd).toBe(0.01);
+  });
+
+  test("does not say the cost is the cap when it comes from the result", async () => {
+    const recorder = answering([{ ...SUCCESS, exitCode: 143, stopped: true }]);
+
+    const result = await runClaude(
+      options(recorder.run, sequence(false, false)),
+    );
+
+    expect(result.agentRun.error).toBe(CLAUDE_STOPPED_DETAIL);
+  });
+
+  test("records maxBudgetUsd when the stdout of a stopped run has no cost", async () => {
+    const recorder = answering([
+      {
+        stdout: JSON.stringify({ type: "result" }),
+        stderr: "",
+        exitCode: 143,
+        timedOut: false,
+        stopped: true,
+      },
+    ]);
+    const opts = options(recorder.run, sequence(false, false));
+
+    const result = await runClaude(opts);
+
+    expect(result.agentRun.cost_usd).toBe(opts.maxBudgetUsd);
+  });
+
+  test("records maxBudgetUsd when the stdout of a stopped run is cut off", async () => {
+    const recorder = answering([
+      {
+        stdout: '{"type":"result","total_cost_usd":0.0',
+        stderr: "",
+        exitCode: 143,
+        timedOut: false,
+        stopped: true,
+      },
+    ]);
+    const opts = options(recorder.run, sequence(false, false));
+
+    const result = await runClaude(opts);
+
+    expect(result.agentRun.cost_usd).toBe(opts.maxBudgetUsd);
+  });
+
   test("records no cost when the factory is stopped before the start", async () => {
     const recorder = answering([]);
 
