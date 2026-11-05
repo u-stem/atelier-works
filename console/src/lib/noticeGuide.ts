@@ -529,6 +529,17 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       },
     ),
   ],
+  [
+    "credential_expiring",
+    guide(
+      "資格情報の期限が、設定のcredential_warn_days日(既定30日)より近いか、過ぎています。本文に、資格情報と期限の日付(JST)が載ります。",
+      "docs/operations.mdの「秘密をローテーションする」の手順で資格情報を更新し、ホストでmise run bootstrapを実行してください。interaction-limitsは、GitHubの設定画面で延ばしてから、mise.local.tomlのINTERACTION_LIMITS_EXPIRES_ATを書き直します。",
+      {
+        commands: ["mise run bootstrap"],
+        note: "期限が先に延びると、次の日次のまとめ(毎日09:00)がこの通知を自動で解決します。",
+      },
+    ),
+  ],
 ]);
 
 /** `kind`の説明。表に無い種類は`GENERIC_NOTICE_GUIDE`を返す。 */

@@ -1978,6 +1978,11 @@ export type FactoryConfig = {
    */
   worker_alert_memory_ratio: number;
   /**
+   * 資格情報の期限の何日前から、要対応の通知`credential_expiring`を残すか。1以上365以下の整数。既定は30。
+   * 日次のまとめ(`notify_daily_summary`)が読む。
+   */
+  credential_warn_days: number;
+  /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の
    * `implementCheckCommandsFor`)。エントリの無いリポジトリでは

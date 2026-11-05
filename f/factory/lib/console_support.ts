@@ -71,6 +71,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   dependabot_merge_hold_unreadable: "action",
   doc_hash_column_missing: "action",
   design_enabled_ignored: "action",
+  credential_expiring: "action",
 };
 
 /** 重要度が`info`の種類。「要対応」の一覧には出さず、システム画面に7日だけ出す。 */

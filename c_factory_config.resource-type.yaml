@@ -71,6 +71,7 @@ schema:
     - gh_collect_enabled
     - gh_collect_detail_enabled
     - worker_alert_memory_ratio
+    - credential_warn_days
     - check_commands_by_repo
   properties:
     allowed_check_commands:
@@ -399,6 +400,13 @@ schema:
       description: >-
         defaultのworkerのメモリの通知を出す割合です。最新の記録でanonのメモリが上限のこの割合以上になると、通知します。0を超え1以下の数にします。
       default: 0.8
+    credential_warn_days:
+      type: integer
+      minimum: 1
+      maximum: 365
+      description: >-
+        資格情報(Windmillのトークン、Claude CodeのOAuthトークン、GitHubのPAT、interaction-limits)の期限の何日前から、要対応の通知を残すかです。日次のまとめ(毎日09:00)が確かめます。1以上365以下の整数にします。
+      default: 30
     pr_ci_watch_enabled:
       type: boolean
       description: >-
