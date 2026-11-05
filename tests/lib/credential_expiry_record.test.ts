@@ -80,6 +80,24 @@ describe("buildCredentialExpiryRecord", () => {
     ).toEqual(previous.claude_oauth_token);
   });
 
+  test("keeps the issue date of an unchanged OAuth token when the lifetime changes", () => {
+    const previous = {
+      claude_oauth_token: {
+        issued_at: "2026-01-01T00:00:00.000Z",
+        expires_at: "2027-01-01T00:00:00.000Z",
+        fingerprint: "abc123",
+      },
+    };
+    expect(
+      buildCredentialExpiryRecord(input({ previous, claudeTokenDays: 30 }), NOW)
+        .claude_oauth_token,
+    ).toEqual({
+      issued_at: "2026-01-01T00:00:00.000Z",
+      expires_at: "2026-01-31T00:00:00.000Z",
+      fingerprint: "abc123",
+    });
+  });
+
   test("starts a changed OAuth token today", () => {
     const previous = {
       claude_oauth_token: {
