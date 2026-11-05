@@ -1,15 +1,24 @@
 // Claudeを動かすmoduleの、Windmillの再試行の条件のテスト。
-// timeout、予算の超過、使用上限では、stepが例外の文の先頭にタグを付ける。
+// timeout、実行ごとの予算の超過、使用上限、全停止では、stepが例外の文の先頭にタグを付ける。
 // `retry_if`の式が偽になるので再試行は走らず、flowは失敗のまま`failure_module`へ進む。
 // `retry:`の`constant`の書式は`pr_flows.test.ts`の正規表現も読む。
+// 対象は手で並べず、すべてのflow.yamlから、再試行を持ちClaudeを動かすmoduleを探す。
+// flowを足したときに`retry_if`を付け忘れても、ここで落ちるようにするためである。
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import {
   flowFailureMessage,
   NO_FLOW_RETRY_MARKER,
 } from "../../f/factory/lib/flow_retry_marker.ts";
+
+const REPO_ROOT = join(import.meta.dir, "../..");
+const FACTORY_DIR = join(REPO_ROOT, "f/factory");
+const CLAUDE_LIB = join(FACTORY_DIR, "lib/claude.ts");
+const FLOW_DIR_SUFFIX = "__flow";
+
+const transpiler = new Bun.Transpiler({ loader: "ts" });
 
 function field(value: unknown, key: string): unknown {
   return typeof value === "object" && value !== null
@@ -17,34 +26,54 @@ function field(value: unknown, key: string): unknown {
     : undefined;
 }
 
-/** flow.yamlを解析して、`id`のmoduleを返す。無ければ例外を投げる。 */
-function moduleOf(flow: string, id: string): unknown {
-  const parsed: unknown = Bun.YAML.parse(
-    readFileSync(
-      join(import.meta.dir, `../../f/factory/${flow}__flow/flow.yaml`),
-      "utf8",
-    ),
-  );
-  const modules = field(field(parsed, "value"), "modules");
-  const found = Array.isArray(modules)
-    ? modules.find((item: unknown) => field(item, "id") === id)
-    : undefined;
-  if (found === undefined) throw new Error(`module ${id} not found in ${flow}`);
-  return found;
+/** `value`の中のmoduleを、branchやループの入れ子と`failure_module`も含めて、すべて返す。 */
+function modulesIn(value: unknown): unknown[] {
+  if (typeof value !== "object" || value === null) return [];
+  const nested = Object.values(value).flatMap(modulesIn);
+  const isModule =
+    typeof field(value, "id") === "string" &&
+    field(value, "value") !== undefined;
+  return isModule ? [value, ...nested] : nested;
 }
 
-/** moduleの`retry.retry_if.expr`を返す。 */
-function retryIfExpr(flow: string, id: string): unknown {
-  return field(field(field(moduleOf(flow, id), "retry"), "retry_if"), "expr");
+/** `file`が、相対importをたどって`lib/claude.ts`に届くかを返す。型だけのimportはたどらない。 */
+function reachesClaude(file: string, seen: Set<string>): boolean {
+  if (file === CLAUDE_LIB) return true;
+  if (seen.has(file)) return false;
+  seen.add(file);
+  return transpiler
+    .scanImports(readFileSync(file, "utf8"))
+    .filter((entry) => entry.path.startsWith("."))
+    .some((entry) => reachesClaude(resolve(dirname(file), entry.path), seen));
 }
 
-/** flowの名前と、Claudeを動かすmoduleの`id`。 */
-const CLAUDE_MODULES: [string, string][] = [
-  ["pipeline", "generate"],
-  ["audit", "audit_generate"],
-  ["pr_review", "pr_review_generate"],
-  ["pr_fix", "pr_fix_apply"],
-];
+/** moduleが呼ぶscriptのファイルを返す。パスで呼ばないmoduleはnullを返す。 */
+function scriptFileOf(module: unknown): string | null {
+  const path = field(field(module, "value"), "path");
+  return typeof path === "string" ? join(REPO_ROOT, `${path}.ts`) : null;
+}
+
+type FlowModule = { readonly flow: string; readonly module: unknown };
+
+/** すべてのflowの、再試行を持つmodule。 */
+const RETRYING_MODULES: FlowModule[] = readdirSync(FACTORY_DIR)
+  .filter((name) => name.endsWith(FLOW_DIR_SUFFIX))
+  .flatMap((dir) => {
+    const parsed: unknown = Bun.YAML.parse(
+      readFileSync(join(FACTORY_DIR, dir, "flow.yaml"), "utf8"),
+    );
+    const flow = dir.slice(0, -FLOW_DIR_SUFFIX.length);
+    return modulesIn(parsed).map((module) => ({ flow, module }));
+  })
+  .filter(({ module }) => field(module, "retry") !== undefined);
+
+/** 再試行を持ち、Claudeを動かすmodule。`[flowの名前, moduleのid, module]`の形にする。 */
+const CLAUDE_MODULES: [string, unknown, unknown][] = RETRYING_MODULES.filter(
+  ({ module }) => {
+    const file = scriptFileOf(module);
+    return file !== null && reachesClaude(file, new Set());
+  },
+).map(({ flow, module }) => [flow, field(module, "id"), module]);
 
 const RETRY_IF_EXPR =
   '!String(error?.message ?? "").startsWith("[no-flow-retry]")';
@@ -55,22 +84,51 @@ function evaluateRetryIf(error: unknown): unknown {
   return evaluate(error);
 }
 
-describe("the retry of the Claude modules", () => {
-  test.each(CLAUDE_MODULES)("the %s flow gates the retry of %s", (flow, id) => {
-    expect(retryIfExpr(flow, id)).toBe(RETRY_IF_EXPR);
+describe("the scan of the flows", () => {
+  test.each([
+    ["pipeline", "generate"],
+    ["audit", "audit_generate"],
+    ["pr_review", "pr_review_generate"],
+    ["pr_fix", "pr_fix_apply"],
+  ])("finds the Claude module of the %s flow", (flow, id) => {
+    expect(CLAUDE_MODULES.map(([name, found]) => [name, found])).toContainEqual(
+      [flow, id],
+    );
   });
 
-  test.each(CLAUDE_MODULES)("the %s flow keeps the retry of %s", (flow, id) => {
-    expect(field(field(moduleOf(flow, id), "retry"), "constant")).toEqual({
-      attempts: 2,
-      seconds: 60,
-    });
+  test("does not take a type-only import for a run of Claude", () => {
+    expect(
+      transpiler
+        .scanImports('import type { A } from "./claude.ts";')
+        .map((entry) => entry.path),
+    ).toEqual([]);
   });
+});
+
+describe("the retry of the Claude modules", () => {
+  test.each(CLAUDE_MODULES)(
+    "the %s flow gates the retry of %s",
+    (_f, _i, m) => {
+      expect(field(field(m, "retry"), "retry_if")).toEqual({
+        expr: RETRY_IF_EXPR,
+      });
+    },
+  );
+
+  test.each(CLAUDE_MODULES)(
+    "the %s flow keeps the retry of %s",
+    (_f, _i, m) => {
+      expect(field(field(m, "retry"), "constant")).toEqual({
+        attempts: 2,
+        seconds: 60,
+      });
+    },
+  );
 
   test.each(CLAUDE_MODULES)(
     "the %s flow does not stop after %s by its result",
-    (flow, id) => {
-      expect(field(moduleOf(flow, id), "stop_after_if")).toBeUndefined();
+    (_f, _i, m) => {
+      expect(field(m, "stop_after_if")).toBeUndefined();
     },
   );
 });
