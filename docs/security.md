@@ -51,6 +51,8 @@ headless Claudeの起動には、次のフラグと環境変数で防御を足�
 再試行を止めるタグは、ステップが固定の文の前に付ける。
 Claudeの出力は固定の文より後ろに入るので、出力の文字列でタグは付かない。
 費用の記録(`lib/claude_flow_failure.ts`)と再試行の判定(`lib/flow_retry_marker.ts`)は、保護パスである。
+各flowの`retry_if`が判定を使うことを確かめるテスト(`tests/scripts/claude_flow_retry.test.ts`)も保護パスである。
+flowの定義は日常的に直すので守らず、`retry_if`が消えると、保護されたテストが落ちて検査を通らない。
 書き換えられると、費用が日次予算に数えられなくなり、費用だけがかかる再試行が走るためである。
 
 PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リポジトリのworktreeに書き込み、その変更をpushする。
