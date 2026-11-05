@@ -53,6 +53,7 @@ import {
   serializeFreezeState,
   sessionHolderFromBranch,
 } from "../f/factory/lib/freezes.ts";
+import type { StopAllReadIo } from "../f/factory/lib/stop_all.ts";
 
 export type Command =
   | {
@@ -272,8 +273,16 @@ export function wmillCliPorts(
   };
 }
 
+export function wmillCliStopAllReadIo(
+  _capture: (argv: readonly string[]) => Promise<CaptureResult>,
+): StopAllReadIo {
+  return { readVariable: async () => null };
+}
+
 export type CliDeps = {
   readonly ports: FreezePorts;
+  /** 全停止の変数の読み取り。 */
+  readonly stopAll: StopAllReadIo;
   readonly loadInputs: () => Promise<Outcome<FreezeInputs>>;
   readonly runPush: (argv: readonly string[]) => Promise<number>;
   readonly branch: () => Promise<string>;
@@ -833,6 +842,7 @@ async function main(): Promise<number> {
       (argv) => capture(argv, root),
       () => new Date(),
     ),
+    stopAll: wmillCliStopAllReadIo((argv) => capture(argv, root)),
     loadInputs: () => loadFreezeInputs(root),
     runPush: (argv) => runInherited(argv, root),
     runMigrate: (argv) => runInherited(argv, root),

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { FREEZE_REQUIRED_EXCLUDES } from "../../f/factory/lib/freezes.ts";
 import {
+  STOP_ALL_VARIABLE_PATH,
+  serializeStopAll,
+} from "../../f/factory/lib/stop_all.ts";
+import {
   buildPushArgv,
   type CaptureResult,
   type CliDeps,
@@ -9,9 +13,16 @@ import {
   parseArgs,
   runCommand,
   wmillCliPorts,
+  wmillCliStopAllReadIo,
 } from "../../scripts/freeze.ts";
 
 const NOW = new Date("2026-10-18T00:00:00.000Z");
+/** 置かれた全停止の変数の値。 */
+const STOPPED = serializeStopAll({
+  placed_at: "2026-10-18T00:00:00.000Z",
+  placed_by: "operator",
+  reason: "a runaway loop",
+});
 const HOUR = 60 * 60 * 1000;
 const TARGET = "f/factory/collect_github";
 
@@ -35,6 +46,8 @@ function harness(options: {
   inputsError?: string;
   pushExit?: number;
   migrateExit?: number;
+  /** 全停止の変数の値。省略すると置かれていない。`Error`は読み取りの失敗、`hang`は応答しない読み取り。 */
+  stopAll?: string | null | Error | "hang";
 }): Harness {
   let stored: string | null = options.initial ?? null;
   const lines: string[] = [];
@@ -55,6 +68,14 @@ function harness(options: {
         stored = text;
       },
       now: () => NOW,
+    },
+    stopAll: {
+      readVariable: async () => {
+        const value = options.stopAll ?? null;
+        if (value === "hang") return await new Promise<never>(() => {});
+        if (value instanceof Error) throw value;
+        return value;
+      },
     },
     loadInputs: async () =>
       options.inputsError === undefined
@@ -1292,5 +1313,161 @@ describe("runCommand reset with deploy freezes", () => {
     await runCommand({ kind: "reset" }, h.deps);
 
     expect(h.lines.join("\n")).toContain("deploy");
+  });
+});
+
+describe("wmillCliStopAllReadIo", () => {
+  test("reads the stop-all variable by its path", async () => {
+    const log: string[] = [];
+    const io = wmillCliStopAllReadIo(async (argv) => {
+      log.push(argv.join(" "));
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({ value: STOPPED }),
+        stderr: "",
+      };
+    });
+
+    await io.readVariable();
+
+    expect(log).toEqual([
+      `wmill variable get ${STOP_ALL_VARIABLE_PATH} --json`,
+    ]);
+  });
+
+  test("returns the value of the variable", async () => {
+    const io = wmillCliStopAllReadIo(async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({ value: STOPPED }),
+      stderr: "",
+    }));
+
+    expect(await io.readVariable()).toBe(STOPPED);
+  });
+
+  test("throws when the read fails but the listing has the variable", async () => {
+    const io = wmillCliStopAllReadIo(async (argv) =>
+      argv[2] === "list"
+        ? {
+            exitCode: 0,
+            stdout: JSON.stringify([{ path: STOP_ALL_VARIABLE_PATH }]),
+            stderr: "",
+          }
+        : { exitCode: 1, stdout: "", stderr: "down" },
+    );
+
+    await expect(io.readVariable()).rejects.toThrow();
+  });
+});
+
+describe("runCommand push while the factory is stopped", () => {
+  const PUSH: Command = { kind: "push", prune: false, dryRun: false };
+
+  test("does not push while the stop-all is placed", async () => {
+    const h = harness({ stopAll: STOPPED });
+
+    await runCommand(PUSH, h.deps);
+
+    expect(h.pushes).toEqual([]);
+  });
+
+  test("returns 1 while the stop-all is placed", async () => {
+    const h = harness({ stopAll: STOPPED });
+
+    expect(await runCommand(PUSH, h.deps)).toBe(1);
+  });
+
+  test("tells to release the stop-all before the push", async () => {
+    const h = harness({ stopAll: STOPPED });
+
+    await runCommand(PUSH, h.deps);
+
+    expect(h.lines.join("\n")).toContain("mise run stop:release");
+  });
+
+  test("does not push when the stop-all variable is malformed", async () => {
+    const h = harness({ stopAll: "{" });
+
+    await runCommand(PUSH, h.deps);
+
+    expect(h.pushes).toEqual([]);
+  });
+
+  test("does not push when the stop-all variable cannot be read", async () => {
+    const h = harness({ stopAll: new Error("down") });
+
+    await runCommand(PUSH, h.deps);
+
+    expect(h.pushes).toEqual([]);
+  });
+
+  test("still runs a dry run while the stop-all is placed", async () => {
+    const h = harness({ stopAll: STOPPED });
+
+    await runCommand({ kind: "push", prune: false, dryRun: true }, h.deps);
+
+    expect(h.pushes.length).toBe(1);
+  });
+
+  test("pushes once the stop-all is released", async () => {
+    const h = harness({ stopAll: "" });
+
+    await runCommand(PUSH, h.deps);
+
+    expect(h.pushes.length).toBe(1);
+  });
+});
+
+describe("runCommand apply while the factory is stopped", () => {
+  test("does not push while the stop-all is placed", async () => {
+    const h = harness({ stopAll: STOPPED });
+
+    await runCommand({ kind: "apply" }, h.deps);
+
+    expect(h.pushes).toEqual([]);
+  });
+
+  test("does not migrate while the stop-all is placed", async () => {
+    const h = harness({ stopAll: STOPPED });
+
+    await runCommand({ kind: "apply" }, h.deps);
+
+    expect(h.migrations).toEqual([]);
+  });
+});
+
+describe("runCommand check while the factory is stopped", () => {
+  test("fails while the stop-all is placed", async () => {
+    const h = harness({ stopAll: STOPPED });
+
+    expect(await runCommand({ kind: "check" }, h.deps)).toBe(1);
+  });
+
+  test("tells to release the stop-all", async () => {
+    const h = harness({ stopAll: STOPPED });
+
+    await runCommand({ kind: "check" }, h.deps);
+
+    expect(h.lines.join("\n")).toContain("mise run stop:release");
+  });
+
+  test("passes with a warning when the stop-all variable cannot be read", async () => {
+    const h = harness({ stopAll: new Error("down") });
+
+    expect(await runCommand({ kind: "check" }, h.deps)).toBe(0);
+  });
+
+  test("warns when the stop-all variable cannot be read", async () => {
+    const h = harness({ stopAll: new Error("down") });
+
+    await runCommand({ kind: "check" }, h.deps);
+
+    expect(h.lines.join("\n")).toContain("could not read the stop-all");
+  });
+
+  test("passes with a warning when the stop-all read does not answer", async () => {
+    const h = harness({ stopAll: "hang" });
+
+    expect(await runCommand({ kind: "check" }, h.deps)).toBe(0);
   });
 });
