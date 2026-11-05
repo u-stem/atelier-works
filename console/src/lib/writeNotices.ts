@@ -558,14 +558,29 @@ const STOP_ALL_REFUSALS: Readonly<Record<StopAllRefusalReason, string>> = {
     "操作の記録を残せませんでした。何も変えていません。急ぐときは、ホストでmise run stopを実行してください。",
 };
 
+/**
+ * すでに全停止中だったときの先頭の文。止め直せた段だけを「止め直しました」と言う。
+ * 止められなかった段は、後ろの問題の文が伝える。
+ */
+function restoppedHead(
+  result: Extract<StopAllResult, { refused: false }>,
+): string {
+  const config = result.config === "written" || result.config === "unchanged";
+  const schedules = result.schedules_failed.length === 0;
+  if (config && schedules) {
+    return "すでに全停止中です。設定とスケジュールを止め直しました。";
+  }
+  if (config) return "すでに全停止中です。設定を止め直しました。";
+  if (schedules) return "すでに全停止中です。スケジュールを止め直しました。";
+  return "すでに全停止中です。";
+}
+
 /** 全停止の結果。止めきれなかった段があれば、警告にして確かめる場所を示す。 */
 export function describeStopAllResult(result: StopAllResult): WriteNotice {
   if (result.refused) {
     return { tone: "info", message: STOP_ALL_REFUSALS[result.reason] };
   }
-  const head = result.placed
-    ? "全停止しました。"
-    : "すでに全停止中です。設定とスケジュールを止め直しました。";
+  const head = result.placed ? "全停止しました。" : restoppedHead(result);
   const problems: string[] = [];
   if (result.config === "has_reference") {
     problems.push(
