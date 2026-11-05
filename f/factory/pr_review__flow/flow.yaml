@@ -57,6 +57,9 @@ value:
           seconds: 60
       skip_if:
         expr: results.pr_review_prepare.skip === true
+      stop_after_if:
+        expr: result?.outcome === "failed"
+        skip_if_stopped: false
       timeout:
         type: static
         value: 7200
