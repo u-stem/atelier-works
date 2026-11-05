@@ -14,6 +14,9 @@ import {
 /** 実行中の確認の間隔(ミリ秒)。 */
 export const STOP_CHECK_INTERVAL_MS = 15_000;
 
+/** 残っている読み取りを見切るまでの時間(ミリ秒)。 */
+export const STALE_READ_MS = 60_000;
+
 /** 全停止が置かれているかを答える。 */
 export type StopCheck = () => Promise<boolean>;
 

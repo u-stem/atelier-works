@@ -3,6 +3,7 @@ import {
   checkStop,
   defaultStopCheck,
   NEVER_STOPPED,
+  STALE_READ_MS,
   stopCheckFrom,
   watchStop,
 } from "../../f/factory/lib/stop_check.ts";
@@ -111,6 +112,71 @@ describe("stopCheckFrom after a read that timed out", () => {
     await check();
     await check();
     expect(reads).toBe(2);
+  });
+});
+
+describe("stopCheckFrom with a read that never returns", () => {
+  // 1回目と2回目の読み取りは応答せず、`release`で終わる。3回目以降は全停止が置かれた値を返す。
+  function hangingReads(hung: number) {
+    const releases: Array<(value: string | null) => void> = [];
+    let reads = 0;
+    const io = {
+      readVariable: () => {
+        reads += 1;
+        if (reads > hung) return Promise.resolve<string | null>(PLACED);
+        return new Promise<string | null>((resolve) => {
+          releases.push(resolve);
+        });
+      },
+    };
+    return {
+      io,
+      reads: () => reads,
+      release: (i: number) => releases[i]?.(""),
+    };
+  }
+
+  function clock() {
+    let t = 1_000_000;
+    return {
+      now: () => t,
+      advance: (ms: number) => {
+        t += ms;
+      },
+    };
+  }
+
+  test("does not read while the pending read is younger than the stale limit", async () => {
+    const fake = hangingReads(1);
+    const time = clock();
+    const check = stopCheckFrom(fake.io, 10, time.now);
+    await check();
+    time.advance(STALE_READ_MS - 1);
+    await check();
+    expect(fake.reads()).toBe(1);
+  });
+
+  test("reads again and stops once the pending read is as old as the stale limit", async () => {
+    const fake = hangingReads(1);
+    const time = clock();
+    const check = stopCheckFrom(fake.io, 10, time.now);
+    await check();
+    time.advance(STALE_READ_MS);
+    expect(await check()).toBe(true);
+  });
+
+  test("does not read again when an abandoned read finishes while the new read is pending", async () => {
+    const fake = hangingReads(2);
+    const time = clock();
+    const check = stopCheckFrom(fake.io, 10, time.now);
+    await check();
+    time.advance(STALE_READ_MS);
+    await check();
+    const readsWhileNewReadPending = fake.reads();
+    fake.release(0);
+    await Bun.sleep(5);
+    await check();
+    expect([readsWhileNewReadPending, fake.reads()]).toEqual([2, 2]);
   });
 });
 
