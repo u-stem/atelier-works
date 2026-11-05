@@ -346,7 +346,7 @@ describe("decideConflictFixRecovery", () => {
     },
   );
 
-  test.each(["timeout", "budget_exceeded", "usage_limit"] as const)(
+  test.each(["timeout", "budget_exceeded", "usage_limit", "stopped"] as const)(
     "holds fix_stopped for a failed work item whose note carries the no-retry marker for %s",
     (reason) => {
       expect(

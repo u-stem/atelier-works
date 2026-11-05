@@ -16,6 +16,7 @@ describe("isFlowRetryable", () => {
     ["timeout", false],
     ["budget_exceeded", false],
     ["usage_limit", false],
+    ["stopped", false],
     ["claude_error", true],
     ["non_zero_exit", true],
     ["invalid_json", true],
@@ -36,6 +37,7 @@ describe("flowFailureMessage", () => {
     "timeout",
     "budget_exceeded",
     "usage_limit",
+    "stopped",
   ])("puts the marker at the head for %s", (reason) => {
     expect(flowFailureMessage(reason, MESSAGE)).toBe(
       `[no-flow-retry] ${MESSAGE}`,
@@ -70,17 +72,39 @@ describe("withoutFlowRetryMarker", () => {
   });
 });
 
-// lockは、importで届く外部の依存の記録である。回復の判定は純粋関数なので、DBのクライアントに届かせない。
-describe("the dependencies of the conflict recovery", () => {
-  test.each([
-    "flow_retry_marker",
-    "pr_conflict_fix_recovery",
-    "pr_conflict_watch",
-  ])("keeps %s away from windmill-client", async (name) => {
+// タグの処理は、importで届く外部の依存を持たない。
+// 回復の判定を、DBへ書き込む`claude_flow_failure`へ依存させないため、タグの処理はここから読ませる。
+describe("the dependencies of the marker", () => {
+  test("keeps the lib away from windmill-client", async () => {
     const lock = await Bun.file(
-      new URL(`../../f/factory/lib/${name}.script.lock`, import.meta.url),
+      new URL(
+        "../../f/factory/lib/flow_retry_marker.script.lock",
+        import.meta.url,
+      ),
     ).text();
 
     expect(lock).not.toContain("windmill-client");
+  });
+
+  test("lets the conflict recovery read the marker from this lib", async () => {
+    const source = await Bun.file(
+      new URL(
+        "../../f/factory/lib/pr_conflict_fix_recovery.ts",
+        import.meta.url,
+      ),
+    ).text();
+
+    expect(source).toContain('from "./flow_retry_marker.ts"');
+  });
+
+  test("keeps the conflict recovery away from the library that writes notices", async () => {
+    const source = await Bun.file(
+      new URL(
+        "../../f/factory/lib/pr_conflict_fix_recovery.ts",
+        import.meta.url,
+      ),
+    ).text();
+
+    expect(source).not.toContain("claude_flow_failure");
   });
 });
