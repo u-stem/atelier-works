@@ -77,7 +77,7 @@ locks:
   f/factory/lib/console_support: 0bf5550eaf29de2b68e5b07d5367af5d747a99a28eb91db94fe47a8786fee332
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
   f/factory/lib/credential_expiry: e259f06242b27308e1eb3838457a9fcb91dd5642d1d1b70321a6f33e732e2c1c
-  f/factory/lib/db: 449bf6c41474ec379369a012f0e2ad63e231552e63cf84f8e269df63979c4eaa
+  f/factory/lib/db: 274f0c84f6df7fed6675949c452d75376e179d05c7ec04403d9ec79df8fe3151
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905
@@ -153,11 +153,11 @@ locks:
   f/factory/lib/pipeline_lease: 3d7b420f8be61c0921f89cc5e81d8b45eca4ebf6643b608c846c1fac28db3921
   f/factory/lib/poll_source: 7eeea6ab24974ab76fcb6b10ae84b09fb79a0e4515ae2ba76f20896a09e895ec
   f/factory/lib/poll_support: 7b751f427bd7c407152fde3ee4d4526baf495147440797bd0ed317e8acd85bde
-  f/factory/lib/pr_ci_fix_claim: 7cc86eb4cd6838895273c19a1094b90a9a8a27f20f056560be012d2c40519375
-  f/factory/lib/pr_ci_fix_recovery: 790aa6952b580fa721ba0fb68b162a982e61535d71cbaf39b91ed8945c7214ac
+  f/factory/lib/pr_ci_fix_claim: 01b12e71fdba84b2d604343532f2bff15efa05b523a8d2a0302cecfc8afacb66
+  f/factory/lib/pr_ci_fix_recovery: 3e9c477a2347f86fe0846782d3ca8ad85f07665c301aa6a8eef922b0c346a1c4
   f/factory/lib/pr_ci_human_support: 2157ef0625e623c028617b316415c4739d3b50be99ce77a64bf76a5c410ea94a
   f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
-  f/factory/lib/pr_ci_support: 796dcb360fcb3ac1263c7b412a15d384da3eabfae9cae89f0d1ed2590b071668
+  f/factory/lib/pr_ci_support: 9e0185d4df61cfb8b2c12cf4670cdb7a1fb09cfa82dbb584d305eff00af7066a
   f/factory/lib/pr_ci_watch: 2326f3db0411409b97b29c997530abe8c26aab71b253bf9c5016b6510a1e2fc6
   f/factory/lib/pr_conflict_fix_claim: b9ea776aa6d2ec94ff626f63af7d642732ac77648b3a68cb0c4c2880144c4c05
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
@@ -234,7 +234,7 @@ locks:
   f/factory/steps/pipeline_request_approval: 88bd1e6f549cc625287c0dfbb26d0c09d47c13634b5f266e292794babff9c19c
   f/factory/steps/pr_fix_apply: 5a8e4a10e5ed4429236b68ce502ed9677480546c4ef0ea15b99bd327553d1397
   f/factory/steps/pr_fix_collect: b9723400e73863da7ca8bcc831bd84de95514e8c54393929ee508e20a5513f92
-  f/factory/steps/pr_fix_finish: 9058b1175cf744e71841cf81e4973b4fc1b8f1e4cc1ff5f3f85047bcddbe5ca3
+  f/factory/steps/pr_fix_finish: 33f677d97471a842d9b3597ff1262822bb32f9c611193523acd2c3962097b88e
   f/factory/steps/pr_fix_prepare: 1e208e16691427c92c9b77a8b6a4f54673a11dc0ecfb80a80cec8ad572d6f0a1
   f/factory/steps/pr_fix_verify: 00d997d1b0cc2f107d7d1d1237b93fa2ecbf4367abb967e33332dd9e72ac8bab
   f/factory/steps/pr_review_generate: be024a43103957e9b83e3994660392d47ac2b5e91452e3ad53e31117dbc6b9c6

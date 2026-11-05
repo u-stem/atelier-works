@@ -118,8 +118,12 @@ export function holdReasonForStoppedItem(
   return CLAUDE_FAILURE_HOLDS.get(note) ?? null;
 }
 
-export function isCiClaudeWaitNote(_note: string | null): boolean {
-  return false;
+/**
+ * 注記が、待てば解ける失敗の固定文か。
+ * この注記で止まったCI回は、監視が行を保留して起動し直すので、完了のステップは人を呼ぶ通知を送らない。
+ */
+export function isCiClaudeWaitNote(note: string | null): boolean {
+  return note !== null && CI_CLAUDE_WAIT_NOTES.includes(note);
 }
 
 export type FixingRecovery =

@@ -6017,7 +6017,8 @@ export async function claimPrCiCheckForFix(
  * フローの起動に失敗した回のほか、ジョブIDが記録されないまま回復や失敗の処理が`failed`にした回も含む。
  * Claudeを走らせていない回で、直す機会を使い切らないためである。
  * 数えない回が続く行は、行の`fix_attempts`の上限(`pr_ci_fix_max_rounds`に3を足した数)が止める。
- * `exemptNotes`のどれかの注記で`failed`か`blocked`に移って終わった回も数えない。
+ * `exemptNotes`のどれかの注記で`failed`、`blocked`、`needs_human`のどれかに移って終わった回も数えない。
+ * 修正のステップの失敗は`failed`で、検証のステップの失敗は`pr_fix_finish`が`needs_human`で終える。
  * 使用上限と全停止の回で、待って起動し直す間に上限へ近づかないためである。行の`fix_attempts`も、回復が1回返す。
  * 注記は、今の状態へ移った最新の遷移のものを読む。回復が保留の理由を決める注記と同じである。
  * ownerとrepoは小文字で照合する。
@@ -6041,7 +6042,7 @@ export async function countPrCiFixRounds(
       AND wi.pr_number = ${prNumber}::integer
       AND NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)
       AND NOT (
-        wi.status IN ('failed', 'blocked')
+        wi.status IN ('failed', 'blocked', 'needs_human')
         AND COALESCE(
           (
             SELECT e.note FROM factory.work_item_events AS e

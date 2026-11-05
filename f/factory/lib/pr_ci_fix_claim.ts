@@ -133,7 +133,12 @@ export const LAUNCH_FAILURE_ALLOWANCE = 3;
  */
 export const USAGE_LIMIT_RESUME_AFTER_MS = HOLD_PROLONGED_AFTER_MS;
 
-export const USAGE_LIMIT_GIVE_UP_AFTER_MS = 0;
+/**
+ * 使用上限で止まった行を、起動し直すのをやめるまでの時間。行のheadを最初に見た時刻から測る。
+ * 週単位の上限が戻るのを待てる長さで、それを過ぎたら待っても解けないとみなすためである。
+ * 席の種類や判定の誤りで解けない上限で、作業項目とflowを作り続けない。
+ */
+export const USAGE_LIMIT_GIVE_UP_AFTER_MS = 8 * 24 * 60 * 60_000;
 
 /** 検査を動かすworkerの環境が前提を満たさないことを表す保留の理由。 */
 export type WorkerEnvHoldReason = Extract<
@@ -195,6 +200,8 @@ export type FixClaimInput = {
     readonly fix_hold_reason: string | null;
     /** 最後に更新した時刻。保留の理由を書いた時刻を兼ね、読み直しでは進まない。 */
     readonly updated_at: Date;
+    /** 行のheadを最初に見た時刻。headが進むと新しい行になるので、測り直しになる。 */
+    readonly first_seen_at: Date;
   };
   readonly now: Date;
   readonly instanceName: string;
@@ -229,7 +236,9 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
 
 /**
  * 失敗の行を起動してよいかを決める。次の順に確かめ、最初に当たったものを返す。
- * 0. 使用上限で止まった行(`claude_usage_limit`)は、`USAGE_LIMIT_RESUME_AFTER_MS`の間、同じ保留のままにする。
+ * 0. 使用上限で止まった行(`claude_usage_limit`)は、行のheadを最初に見てから`USAGE_LIMIT_GIVE_UP_AFTER_MS`たっていれば、
+ *    `claude_run_failed`で保留する。起動し直すのをやめ、人に知らせる。全停止で止まった行には上限が無い。全停止の間は起動しないためである。
+ *    そうでなければ、`USAGE_LIMIT_RESUME_AFTER_MS`の間、同じ保留のままにする。
  *    全停止で止まった行(`claude_stopped`)は、全停止が解除されるまで同じ保留のままにする。
  *    どちらも最初に確かめる。ほかの理由に書き換えると、解けた後に待たずに起動するためである。
  *    PRとジョブを読まず、回数も数えない。待つ間に行のheadが動いたときは、判定の処理が`superseded`にする。
@@ -269,11 +278,14 @@ export async function decideFixClaim(
   input: FixClaimInput,
 ): Promise<FixClaimDecision> {
   const { row, readers } = input;
-  if (
-    row.fix_hold_reason === "claude_usage_limit" &&
-    input.now.getTime() - row.updated_at.getTime() < USAGE_LIMIT_RESUME_AFTER_MS
-  ) {
-    return hold("claude_usage_limit");
+  if (row.fix_hold_reason === "claude_usage_limit") {
+    const now = input.now.getTime();
+    if (now - row.first_seen_at.getTime() >= USAGE_LIMIT_GIVE_UP_AFTER_MS) {
+      return hold("claude_run_failed");
+    }
+    if (now - row.updated_at.getTime() < USAGE_LIMIT_RESUME_AFTER_MS) {
+      return hold("claude_usage_limit");
+    }
   }
   if (row.fix_hold_reason === "claude_stopped" && (await readers.stopHeld())) {
     return hold("claude_stopped");

@@ -508,6 +508,7 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `not_factory_head`: 最後のpushがFactoryのものでない。
  * - `claude_run_failed`: 直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗した。
  *   同じheadで起動し直しても同じ失敗になり、費用と回数だけを使う。
+ *   `claude_usage_limit`の行が、時間の上限まで待っても戻らなかったときも、この理由に移る。
  *
  * 一時的な理由は、解ければ外してよい理由である。
  * - `marker_missing`: Factoryのクローンのスキルが、CIの失敗を直す節を持たない。
@@ -526,6 +527,7 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `claude_usage_limit`: 直す作業のClaudeの実行が使用上限で失敗した。待てば戻るので、時間の間隔を空けて起動し直す。
  *   行の起動の回数を返し(`refundAttempt`)、回数の上限に数えない(`countPrCiFixRounds`)ので、待つ間に回数を使わない。
  *   起動し直してまた上限に当たると、同じ保留に戻る。
+ *   行のheadを最初に見てから8日たつと、`claude_run_failed`に移り、起動し直すのをやめる。
  * - `claude_stopped`: 直す作業のClaudeの実行を全停止で止めた。全停止が解除されるまで起動し直さない。
  *   回数の扱いは`claude_usage_limit`と同じである。
  */
@@ -638,9 +640,9 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     temporary: false,
     discord: true,
     nextAction:
-      "直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗した。同じheadでは起動し直さない。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの修正を起動し直す」に従う",
+      "直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗したか、待っても戻らなかった使用上限で止まった。同じheadでは起動し直さない。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの修正を起動し直す」に従う",
     stopAction:
-      "直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗しました。同じheadでは起動し直しません。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの修正を起動し直す」に従ってください",
+      "直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗したか、待っても戻らなかった使用上限で止まりました。同じheadでは起動し直しません。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの修正を起動し直す」に従ってください",
   },
   marker_missing: {
     temporary: true,
@@ -714,9 +716,9 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     temporary: true,
     discord: true,
     nextAction:
-      "直す作業のClaudeが使用上限に当たった。使用上限が戻るまで、30分ごとに自動で起動し直す。直す回数の上限は使わない。人の操作は要らない",
+      "直す作業のClaudeが使用上限に当たった。使用上限が戻るまで、30分ごとに自動で起動し直す。直す回数の上限は使わない。人の操作は要らない。このheadを見つけてから8日たっても戻らなければ、起動し直すのをやめて知らせる",
     stopAction:
-      "直す作業のClaudeが使用上限に当たりました。使用上限が戻るまで、Factoryが30分ごとに自動で起動し直します。直す回数の上限は使いません。操作は要りません",
+      "直す作業のClaudeが使用上限に当たりました。使用上限が戻るまで、Factoryが30分ごとに自動で起動し直します。直す回数の上限は使いません。操作は要りません。このheadを見つけてから8日たっても戻らなければ、起動し直すのをやめて知らせます",
   },
   claude_stopped: {
     temporary: true,
