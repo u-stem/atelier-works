@@ -4,6 +4,7 @@
 // GitHubのPATの期限は、`GET /user`の応答ヘッダー`github-authentication-token-expiration`から読む。
 // interaction-limitsは、`GET /repos/{owner}/{repo}/interaction-limits`を試し、読めなければ`INTERACTION_LIMITS_EXPIRES_AT`を使う。
 // トークンは環境変数で受け取り、引数にもログにも載せない。出力にもトークンを入れない(OAuthトークンは指紋だけ)。
+// GitHubのトークンの期限を読めなかったとき(通信の失敗、200以外の応答)は、前回の記録の同じ項目を保ち、標準エラーに警告を出す。
 //
 // 入力の環境変数:
 //   CREDENTIAL_EXPIRY_PREVIOUS         前回の記録(JSON)。無ければ空
@@ -44,22 +45,34 @@ function githubInit(token: string): RequestInit {
   };
 }
 
-/** トークンの期限を読む。読めないとき、期限の無いトークンでは`null`を返す。 */
+/**
+ * トークンの期限の読み取り結果。
+ * `none`は期限の無いトークン、`unknown`は通信の失敗などで読めなかったことを表す。
+ * 二つを分けるのは、読めなかっただけの資格情報を、記録から外して通知の解決に進ませないためである。
+ */
+export type TokenExpiry =
+  | { readonly kind: "expires"; readonly at: string }
+  | { readonly kind: "none" }
+  | { readonly kind: "unknown" };
+
+/** トークンの期限を読む。期限の無いトークンと、空のトークンは`none`を返す。 */
 export async function tokenExpiresAt(
   token: string,
   fetchImpl: GitHubFetch,
-): Promise<string | null> {
-  if (token === "") return null;
+): Promise<TokenExpiry> {
+  if (token === "") return { kind: "none" };
   try {
     const response = await fetchImpl(`${GITHUB_API}/user`, githubInit(token));
     await response.body?.cancel().catch(() => {});
-    if (response.status !== 200) return null;
-    return tokenExpirationFromHeader(
-      response.headers.get("github-authentication-token-expiration") ??
-        undefined,
+    if (response.status !== 200) return { kind: "unknown" };
+    const header = response.headers.get(
+      "github-authentication-token-expiration",
     );
+    if (header === null) return { kind: "none" };
+    const at = tokenExpirationFromHeader(header);
+    return at === null ? { kind: "unknown" } : { kind: "expires", at };
   } catch {
-    return null;
+    return { kind: "unknown" };
   }
 }
 
@@ -140,30 +153,56 @@ export function sha256Fingerprint(token: string): string {
 
 export type CollectEnv = Readonly<Record<string, string | undefined>>;
 
-/** 環境変数とGitHubの応答から、変数に書くJSONを作る。 */
+function warnOnStderr(line: string): void {
+  process.stderr.write(`${line}\n`);
+}
+
+/**
+ * 環境変数とGitHubの応答から、変数に書くJSONを作る。
+ * 期限を読めなかったGitHubのトークンは、前回の記録の同じ項目を保ち、`warn`で知らせる。
+ * 前回の記録に無ければ項目を省く。
+ */
 export async function collectCredentialExpiry(
   env: CollectEnv,
   fetchImpl: GitHubFetch,
   now: Date,
+  warn: (line: string) => void = warnOnStderr,
 ): Promise<string> {
   const previous = parseCredentialExpiry(
     env.CREDENTIAL_EXPIRY_PREVIOUS ?? null,
   ).record;
   const githubToken = env.GITHUB_TOKEN ?? "";
   // 同じトークンを複数の所有者が使っても、GitHubへ問い合わせるのは1度にする。
-  const asked = new Map<string, string | null>();
-  const expiryOf = async (token: string): Promise<string | null> => {
+  const asked = new Map<string, TokenExpiry>();
+  const expiryOf = async (token: string): Promise<TokenExpiry> => {
     const known = asked.get(token);
     if (known !== undefined) return known;
-    const at = await tokenExpiresAt(token, fetchImpl);
-    asked.set(token, at);
-    return at;
+    const expiry = await tokenExpiresAt(token, fetchImpl);
+    asked.set(token, expiry);
+    return expiry;
+  };
+  // 読めなかったときは、前回の項目の期限を使う。無ければ`null`で、項目は省かれる。
+  const resolve = (
+    expiry: TokenExpiry,
+    name: string,
+    before: string | undefined,
+  ): string | null => {
+    if (expiry.kind === "expires") return expiry.at;
+    if (expiry.kind === "none") return null;
+    warn(
+      `credential_expiry: could not read the expiry of ${name}; keeping the previous record`,
+    );
+    return before ?? null;
   };
   const readTokenExpiresAt: Record<string, string | null> = {};
   for (const [owner, token] of Object.entries(
     readTokenMap(env.CREDENTIAL_READ_TOKENS),
   )) {
-    readTokenExpiresAt[owner] = await expiryOf(token);
+    readTokenExpiresAt[owner] = resolve(
+      await expiryOf(token),
+      `github_read_tokens.${owner}`,
+      previous.github_read_tokens?.[owner]?.expires_at,
+    );
   }
   const claudeToken = env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
   const fromApi = await interactionLimitsExpiresAt(
@@ -181,7 +220,11 @@ export async function collectCredentialExpiry(
         env.CLAUDE_OAUTH_TOKEN_DAYS,
         DEFAULT_CLAUDE_OAUTH_TOKEN_DAYS,
       ),
-      githubTokenExpiresAt: await expiryOf(githubToken),
+      githubTokenExpiresAt: resolve(
+        await expiryOf(githubToken),
+        "github_token",
+        previous.github_token?.expires_at,
+      ),
       readTokenExpiresAt,
       interactionLimitsExpiresAt:
         fromApi ?? configuredExpiresAt(env.INTERACTION_LIMITS_EXPIRES_AT),
