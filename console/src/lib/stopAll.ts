@@ -1,5 +1,6 @@
 // 全停止の確認のダイアログが使う、理由の検査と、効果の説明の文。
 // 理由の上限はscriptと同じ200で、画面はUTF-16の長さで数える(scriptのコードポイントの数え方より厳しい)。
+// Consoleはf/を読み込めないので、scriptの検査を写して持つ。写しが食い違わないことは`tests/lib/stop_all.test.ts`が確かめる。
 
 export const STOP_ALL_REASON_MAX_LENGTH = 200;
 

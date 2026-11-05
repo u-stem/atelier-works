@@ -26,6 +26,10 @@ import {
   parsePoolSize,
 } from "../f/factory/lib/check_sandbox.ts";
 import { selectOrphanClaudePids } from "../f/factory/lib/cleanup_support.ts";
+import {
+  isStopAllReason,
+  STOP_ALL_REASON_MAX,
+} from "../f/factory/lib/stop_all.ts";
 import { isRecord } from "../f/factory/lib/types.ts";
 import { parseRunningJobs, runningJobsSql } from "./check-idle.ts";
 
@@ -37,10 +41,6 @@ export const RELEASE_SCRIPT = "f/factory/console_stop_all_release";
 export const SETTLE_WAIT_MS = 20_000;
 /** グループにSIGTERMを送ってから、残ったものにSIGKILLを送るまでの猶予(ミリ秒)。 */
 export const KILL_GRACE_MS = 5_000;
-/** Consoleのscriptが同じ上限で確かめ直す、理由の長さの上限(コードポイント)。 */
-const REASON_MAX = 200;
-const CONTROL_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
-
 /** workerのプロセスの一覧。グループの番号を先頭の列に置く(`claudeGroupIds`が読む形)。 */
 export const PS_ARGV = ["ps", "-eo", "pgid,pid,args"] as const;
 
@@ -99,14 +99,6 @@ export type StopDeps = {
 const USAGE =
   "usage: stop_all.ts place --reason <text> | place --kill-only | release";
 
-function isReason(text: string): boolean {
-  return (
-    text.trim().length > 0 &&
-    [...text].length <= REASON_MAX &&
-    !CONTROL_CHARS.test(text)
-  );
-}
-
 export function parseStopArgs(argv: readonly string[]): StopParse {
   const [command, ...rest] = argv;
   if (command === "release") {
@@ -120,11 +112,12 @@ export function parseStopArgs(argv: readonly string[]): StopParse {
   }
   if (rest.length === 2 && rest[0] === "--reason") {
     const reason = rest[1] ?? "";
-    return isReason(reason)
+    // Consoleのscriptも同じ検査で確かめ直す。
+    return isStopAllReason(reason)
       ? { ok: true, value: { kind: "place", reason } }
       : {
           ok: false,
-          reason: `the reason must be 1 to ${String(REASON_MAX)} characters without control characters`,
+          reason: `the reason must be 1 to ${String(STOP_ALL_REASON_MAX)} characters without control characters`,
         };
   }
   return { ok: false, reason: USAGE };
