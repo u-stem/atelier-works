@@ -181,6 +181,10 @@ const SOON_MESSAGE = credentialNoticeMessage({
   label: "GitHubのPAT(github_token)",
   expiresAt: new Date(SOON),
 });
+const ACME_SOON_MESSAGE = credentialNoticeMessage({
+  label: "読み取り専用のGitHubのPAT(github_read_tokens、acme)",
+  expiresAt: new Date(SOON),
+});
 
 describe("checkCredentialExpiry", () => {
   test("adds a notice for a credential that expires soon", async () => {
@@ -227,6 +231,40 @@ describe("checkCredentialExpiry", () => {
     const { deps: d, calls } = deps("{not json", [SOON_MESSAGE]);
     await checkCredentialExpiry(d);
     expect(calls.resolved).toEqual([]);
+  });
+
+  test("keeps the notice of a credential whose entry is malformed", async () => {
+    const { deps: d, calls } = deps({ github_token: { expires_at: "soon" } }, [
+      SOON_MESSAGE,
+    ]);
+    await checkCredentialExpiry(d);
+    expect(calls.resolved).toEqual([]);
+  });
+
+  test("keeps the notice of a read token whose entry is malformed", async () => {
+    const { deps: d, calls } = deps(
+      { github_read_tokens: { acme: { expires_at: "soon" } } },
+      [ACME_SOON_MESSAGE],
+    );
+    await checkCredentialExpiry(d);
+    expect(calls.resolved).toEqual([]);
+  });
+
+  test("keeps every read token notice when the read tokens are malformed", async () => {
+    const { deps: d, calls } = deps({ github_read_tokens: "broken" }, [
+      ACME_SOON_MESSAGE,
+    ]);
+    await checkCredentialExpiry(d);
+    expect(calls.resolved).toEqual([]);
+  });
+
+  test("still resolves a renewed credential next to a malformed entry", async () => {
+    const { deps: d, calls } = deps(
+      { github_token: { expires_at: LATER }, wmill_token: "broken" },
+      [SOON_MESSAGE],
+    );
+    await checkCredentialExpiry(d);
+    expect(calls.resolved).toEqual([SOON_MESSAGE]);
   });
 
   test("returns null instead of throwing when the notices cannot be read", async () => {
