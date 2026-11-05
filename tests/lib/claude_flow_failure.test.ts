@@ -187,12 +187,21 @@ describe("recordClaudeRuns usage limit notice", () => {
     expect(notices[0]?.message).toBe("Claudeの使用上限に当たりました(unknown)");
   });
 
-  test("logs the detail that the notice leaves out", async () => {
-    const { deps, infos } = fakeNotices({});
+  test("logs only the reason, the path, and the job id", async () => {
+    const { deps, infos } = fakeNotices({
+      env: {
+        WM_FLOW_PATH: "f/factory/pipeline",
+        WM_ROOT_FLOW_JOB_ID: "root-job",
+      },
+    });
 
     await recordClaudeRuns(failureOf("usage_limit"), async () => 1, deps);
 
-    expect(infos[0]?.detail).toBe(DETAIL);
+    expect(infos[0]).toEqual({
+      reason: "usage_limit",
+      path: "f/factory/pipeline",
+      job_id: "root-job",
+    });
   });
 
   test.each<RunClaudeFailureReason>([
