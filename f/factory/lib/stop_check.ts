@@ -20,12 +20,24 @@ export type StopCheck = () => Promise<boolean>;
 /** 常に止めない確認。ジョブの外で使う。 */
 export const NEVER_STOPPED: StopCheck = async () => false;
 
-/** 変数を読む確認を作る。読み取りを`timeoutMs`で区切り、時間切れは止めない扱いにする。 */
+/**
+ * 変数を読む確認を作る。読み取りを`timeoutMs`で区切り、時間切れは止めない扱いにする。
+ * 時間切れになった読み取りは止められずに残る。
+ * 残っている間は、新しい読み取りを始めず止めない扱いにする。応答しないAPIに読み取りを積み重ねないためである。
+ */
 export function stopCheckFrom(
   io: StopAllReadIo,
   timeoutMs: number = STOP_ALL_CHECK_TIMEOUT_MS,
 ): StopCheck {
+  let pending: Promise<boolean> | undefined;
   return async () => {
+    if (pending !== undefined) return false;
+    const read = readStopAll(io).then(stopsRuns);
+    pending = read;
+    const clear = () => {
+      if (pending === read) pending = undefined;
+    };
+    read.then(clear, clear);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<boolean>((resolve) => {
       timer = setTimeout(() => {
@@ -33,7 +45,7 @@ export function stopCheckFrom(
       }, timeoutMs);
     });
     try {
-      return await Promise.race([readStopAll(io).then(stopsRuns), expired]);
+      return await Promise.race([read, expired]);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
@@ -42,6 +54,8 @@ export function stopCheckFrom(
 
 /**
  * 既定の確認。Windmillのジョブの中(`WM_WORKSPACE`がある)なら変数を読む確認を、外なら常に止めない確認を返す。
+ * 読み取りは`STOP_ALL_CHECK_TIMEOUT_MS`で区切る。時間切れの読み取りが終わるまでは、次の読み取りを始めない。
+ * 監視の間隔(`STOP_CHECK_INTERVAL_MS`)ごとの呼び出しは、その間は止めない扱いで返る。
  */
 export function defaultStopCheck(
   workspace: string | undefined = process.env.WM_WORKSPACE,
@@ -70,7 +84,8 @@ export type StopWatch = {
 
 /**
  * `intervalMs`ごとに`check`を呼び、真が返ったら`signal`を中断する。
- * 前の確認が終わっていなければ、次の回は飛ばす。確認が重なって変数を読み続けないためである。
+ * 前の確認が返っていなければ、次の回は飛ばす。確認が重ならないようにするためである。
+ * 確認が時間切れで返った後に残る読み取りは、確認の側(`stopCheckFrom`)が重ねない。
  */
 export function watchStop(
   check: StopCheck,
