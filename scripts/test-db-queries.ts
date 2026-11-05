@@ -995,6 +995,20 @@ const implementClaudeError = await issueWorkItem(
   "implementing",
   "qdb-implement-claude-error",
 );
+// 修正の実行が使用上限で終わり、`.git`の書き換えでラウンドが`check_failed`になった。
+const implementPointerAfterLimit = await issueWorkItem(
+  965,
+  1,
+  "implementing",
+  "qdb-implement-pointer-after-limit",
+);
+// 期限が残っていなかったのでClaudeを起動しなかった。
+const implementNotStarted = await issueWorkItem(
+  966,
+  1,
+  "implementing",
+  "qdb-implement-not-started",
+);
 execPsql(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, failure_reason) VALUES ${[
@@ -1002,6 +1016,8 @@ execPsql(
     `(${String(implementLimitOnly)}, 'implement', 1, 'm', 'failed', 'stopped')`,
     `(${String(implementLimitBetween)}, 'implement', 1, 'm', 'failed', 'usage_limit')`,
     `(${String(implementClaudeError)}, 'implement', 1, 'm', 'failed', 'claude_error')`,
+    `(${String(implementPointerAfterLimit)}, 'implement', 1, 'm', 'failed', 'usage_limit')`,
+    `(${String(implementNotStarted)}, 'implement', 1, 'm', 'not started', 'not_started')`,
   ].join(", ")}`,
 );
 /** 作業項目の、失敗の種類が`reason`の実行の行のIDを選ぶ副問い合わせを返す。 */
@@ -1017,6 +1033,8 @@ execPsql(
     `(${String(implementLimitBetween)}, 1, 2, 'fix', 'error', ${runIdOf(implementLimitBetween, "usage_limit")})`,
     `(${String(implementLimitBetween)}, 1, 3, 'fix', 'stalled', NULL)`,
     `(${String(implementClaudeError)}, 1, 1, 'implement', 'error', ${runIdOf(implementClaudeError, "claude_error")})`,
+    `(${String(implementPointerAfterLimit)}, 1, 1, 'implement', 'check_failed', ${runIdOf(implementPointerAfterLimit, "usage_limit")})`,
+    `(${String(implementNotStarted)}, 1, 1, 'implement', 'error', ${runIdOf(implementNotStarted, "not_started")})`,
   ].join(", ")}`,
 );
 check(
@@ -1033,6 +1051,16 @@ check(
   "countImplementFailedRounds: a round on another failure of Claude is counted",
   (await countImplementFailedRounds(implementClaudeError, 1, sql)) === 1,
   await countImplementFailedRounds(implementClaudeError, 1, sql),
+);
+check(
+  "countImplementFailedRounds: a check_failed round that rewrote .git is counted after a run on the usage limit",
+  (await countImplementFailedRounds(implementPointerAfterLimit, 1, sql)) === 1,
+  await countImplementFailedRounds(implementPointerAfterLimit, 1, sql),
+);
+check(
+  "countImplementFailedRounds: a round whose run was not started is not counted",
+  (await countImplementFailedRounds(implementNotStarted, 1, sql)) === 0,
+  await countImplementFailedRounds(implementNotStarted, 1, sql),
 );
 
 async function prFixItem(pr: number): Promise<number> {
@@ -1252,6 +1280,12 @@ const verifyRetryStopped = await prFixItem(132);
 const verifyRetryMixed = await prFixItem(133);
 // 修正の実行が使用上限で終わり、`.git`の書き換えでblockedのラウンドを残した。
 const applyLimitBlocked = await prFixItem(134);
+// 修正の実行が使用上限で失敗した後、再実行がClaudeを起動せずにblockedで止まった。
+const restartBlockedAfterLimit = await prFixItem(135);
+// 検査の再実行が不正な出力で再試行し、最後の試行が使用上限で終わった。
+const verifyRetryDiscardedThenLimit = await prFixItem(136);
+// 検査の再実行が不正な出力で再試行し、最後の試行が別の理由で失敗した。
+const verifyRetryDiscardedThenError = await prFixItem(137);
 // IDの順が時刻の順になるよう、古い実行から入れる。
 execPsql(
   target,
@@ -1265,6 +1299,8 @@ execPsql(
     runRow(verifyRetryUsageLimit, "pr_fix", 900, null),
     runRow(verifyRetryStopped, "pr_fix", 900, null),
     runRow(verifyRetryMixed, "pr_fix", 900, null),
+    runRow(verifyRetryDiscardedThenLimit, "pr_fix", 900, null),
+    runRow(verifyRetryDiscardedThenError, "pr_fix", 900, null),
   ].join(", ")}`,
 );
 execPsql(
@@ -1286,7 +1322,36 @@ execPsql(
     reasonRunRow(verifyRetryMixed, "pr_fix_verify_retry", 800, "claude_error"),
     reasonRunRow(verifyRetryMixed, "pr_fix_verify_retry", 500, "usage_limit"),
     reasonRunRow(applyLimitBlocked, "pr_fix", 900, "usage_limit"),
+    reasonRunRow(restartBlockedAfterLimit, "pr_fix", 900, "usage_limit"),
+    reasonRunRow(
+      verifyRetryDiscardedThenLimit,
+      "pr_fix_verify_retry",
+      800,
+      "invalid_json",
+    ),
+    reasonRunRow(
+      verifyRetryDiscardedThenLimit,
+      "pr_fix_verify_retry",
+      795,
+      "usage_limit",
+    ),
+    reasonRunRow(
+      verifyRetryDiscardedThenError,
+      "pr_fix_verify_retry",
+      800,
+      "invalid_json",
+    ),
+    reasonRunRow(
+      verifyRetryDiscardedThenError,
+      "pr_fix_verify_retry",
+      795,
+      "claude_error",
+    ),
   ].join(", ")}`,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at) VALUES (${String(restartBlockedAfterLimit)}, 'failed', 'fixing', 'qdb restart', ${secondsAgo(800)})`,
 );
 execPsql(
   target,
@@ -1296,6 +1361,9 @@ execPsql(
     roundRow(verifyRetryMixed, "blocked", 790),
     roundRow(verifyRetryMixed, "blocked", 490),
     roundRow(applyLimitBlocked, "blocked", 890),
+    roundRow(restartBlockedAfterLimit, "blocked", 790),
+    roundRow(verifyRetryDiscardedThenLimit, "blocked", 790),
+    roundRow(verifyRetryDiscardedThenError, "blocked", 790),
   ].join(", ")}`,
 );
 
@@ -1328,6 +1396,21 @@ const prFixExpectations: readonly (readonly [string, number, number])[] = [
     "a blocked round right after a run on the usage limit is not counted",
     applyLimitBlocked,
     0,
+  ],
+  [
+    "a blocked round of a restart that started no Claude is counted after a run on the usage limit",
+    restartBlockedAfterLimit,
+    1,
+  ],
+  [
+    "a verify retry whose last attempt ended on the usage limit counts nothing",
+    verifyRetryDiscardedThenLimit,
+    0,
+  ],
+  [
+    "a verify retry whose last attempt failed for another reason is counted",
+    verifyRetryDiscardedThenError,
+    2,
   ],
   ["blocked rounds and verify retries of the same PR are counted", fixB, 2],
   ["another PR is counted separately", fixOtherPr, 1],

@@ -3741,10 +3741,14 @@ describe("countImplementFailedRounds", () => {
     );
   });
 
-  test("leaves out the usage limit and the stop, and nothing else", async () => {
+  test("leaves out the usage limit, the stop and the run not started, and nothing else", async () => {
     const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
     await countImplementFailedRounds(1, 2, sql);
-    expect(calls[0]?.values).toContainEqual(["usage_limit", "stopped"]);
+    expect(calls[0]?.values).toContainEqual([
+      "usage_limit",
+      "stopped",
+      "not_started",
+    ]);
   });
 
   test("returns 0 when no row is returned", async () => {
@@ -3823,10 +3827,14 @@ describe("countPrFixFailures", () => {
     );
   });
 
-  test("leaves out the usage limit and the stop, and nothing else", async () => {
+  test("leaves out the usage limit, the stop and the run not started, and nothing else", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
     await countPrFixFailures(1, sql);
-    expect(calls[0]?.values).toContainEqual(["usage_limit", "stopped"]);
+    expect(calls[0]?.values).toContainEqual([
+      "usage_limit",
+      "stopped",
+      "not_started",
+    ]);
   });
 
   test("does not name the column, so that it still runs before the migration", async () => {
