@@ -6556,8 +6556,9 @@ export async function insertImplementRound(
  * ラウンドは記録してから次のラウンドを始めるので、修正ラウンドの直前の失敗も含む。
  * 試行(`attempt`)が増えると数え直す。却下や要件の不足で要件定義からやり直した実装は、
  * 前の要件定義の失敗を引き継がない。
- * Claudeの実行が使用上限か全停止で終わったラウンドは、数えず、連続も途切れさせない(`NON_MODEL_FAILURE_REASONS`)。
+ * Claudeの実行が使用上限か全停止で終わった`error`のラウンドは、数えず、連続も途切れさせない(`NON_MODEL_FAILURE_REASONS`)。
  * モデルを強くしても防げないためである。
+ * 除くのは`error`のラウンドだけである。`.git`ポインタの書き換えは、実行の失敗の種類にかかわらず`check_failed`で記録され、モデルの失敗として数える。
  * 失敗の種類は`to_jsonb`で読む。列を足すmigrationより先にこの文が動いても列が無いエラーにせず、種類の無い実行として数える。
  * モデルの選択の前に呼ぶので、列が無いエラーにすると、反映とmigrationの間のすべての実行が止まるためである。
  */
@@ -6574,7 +6575,10 @@ export async function countImplementFailedRounds(
     WHERE ir.work_item_id = ${workItemId}::bigint
       AND ir.attempt = ${attempt}::integer
       AND ir.outcome IN ('check_failed', 'stalled', 'error')
-      AND COALESCE(to_jsonb(ar) ->> 'failure_reason', '') <> ALL(${nonModelReasons}::text[])
+      AND (
+        ir.outcome <> 'error'
+        OR COALESCE(to_jsonb(ar) ->> 'failure_reason', '') <> ALL(${nonModelReasons}::text[])
+      )
       AND ir.round > COALESCE(
         (
           SELECT MAX(round)
@@ -6604,11 +6608,14 @@ export async function countImplementFailedRounds(
  * 基盤の障害で数えた失敗は、次に成功したラウンドの後には残らない。
  * - Claudeが動いた(`agent_runs`にstageが`pr_fix`の行がある)のに、修正をpushせず
  *   `blocked`で終えたラウンド。`fix_rounds`の行を数える。
- *   ただし、ラウンドの直前の実行が使用上限か全停止で終わったものは数えない。
+ *   ただし、そのラウンドの実行が使用上限か全停止で終わったものは数えない。
+ *   そのラウンドの実行とは、ラウンドの直前の実行で、その実行とラウンドの間に`fixing`への遷移(再実行)が無いものである。
+ *   再実行がClaudeを起動せずに止まったラウンドには、そのラウンドの実行が無いので、前の実行の種類を引き継がずに数える。
  * - 検査が通らず、検査の失敗を添えて再実行した(stageが`pr_fix_verify_retry`の行がある)作業項目。
  *   不正な出力の再試行で同じstageの行が増えるので、作業項目ごとに1回と数える。
  *   時刻は、その作業項目で最初の再実行の行で見る。
- *   使用上限か全停止で終わった再実行の行は見ない。
+ *   種類は最後の試行の行で見る。不正な出力の再試行で捨てた行(下の10秒の判定と同じ)は見ない。
+ *   使用上限か全停止で終わった試行の行も見ない。
  * - Claudeの実行そのものが失敗した(`agent_runs.error`が入っている)行。`runClaude`は、
  *   タイムアウト、0以外の終了コード、`is_error`、ターンや予算の上限、不正な出力のどれでも
  *   失敗した行に`error`を書く。適用の実行の失敗は例外で終わってラウンドの記録を残さず、flowの再試行と`on_error_flow`は
@@ -6684,6 +6691,13 @@ export async function countPrFixFailures(
               WHERE last_run.work_item_id = fr.work_item_id
                 AND last_run.stage IN ('pr_fix', 'pr_fix_verify_retry')
                 AND last_run.created_at <= fr.created_at
+                AND NOT EXISTS (
+                  SELECT 1 FROM factory.work_item_events restart
+                  WHERE restart.work_item_id = fr.work_item_id
+                    AND restart.to_status = 'fixing'
+                    AND restart.occurred_at > last_run.created_at
+                    AND restart.occurred_at <= fr.created_at
+                )
               ORDER BY last_run.created_at DESC, last_run.id DESC
               LIMIT 1
             ),
@@ -6698,6 +6712,14 @@ export async function countPrFixFailures(
           WHERE ar.work_item_id IN (SELECT id FROM same_pr)
             AND ar.stage = 'pr_fix_verify_retry'
             AND COALESCE(to_jsonb(ar) ->> 'failure_reason', '') <> ALL(${nonModelReasons}::text[])
+            AND NOT EXISTS (
+              SELECT 1 FROM factory.agent_runs next_run
+              WHERE next_run.work_item_id = ar.work_item_id
+                AND next_run.stage = ar.stage
+                AND next_run.attempt = ar.attempt
+                AND next_run.id > ar.id
+                AND next_run.created_at <= ar.created_at + interval '10 seconds'
+            )
           GROUP BY ar.work_item_id
           HAVING MIN(ar.created_at) > COALESCE((SELECT at FROM last_success), '-infinity'::timestamptz)
         ) retried
