@@ -388,23 +388,13 @@ describe("claude failure wiring in the generate step", () => {
     return text.replace(/\s+/g, " ");
   }
 
-  test("settles the Claude failure with the dependencies of on_error_flow", async () => {
+  test("throws the Claude failure through flowFailureMessage", async () => {
     expect(await flatSource()).toContain(
-      "return await settleClaudeFailure(claudeFlowFailureDeps(log), {",
+      "throw new Error( flowFailureMessage( result.reason, `pr_review_generate: claude run failed",
     );
   });
 
-  test("settles the failure as the pr_review_generate module", async () => {
-    expect(await flatSource()).toContain('stepId: "pr_review_generate",');
-  });
-
-  test("settles the failure with the path of the pr_review flow", async () => {
-    expect(await flatSource()).toContain("path: PR_REVIEW_FLOW_PATH,");
-  });
-
-  test("does not throw the Claude failure directly", async () => {
-    expect(await flatSource()).not.toContain(
-      "throw new Error( `pr_review_generate: claude run failed",
-    );
+  test("does not settle the failure in the step", async () => {
+    expect(await flatSource()).not.toContain("settleClaudeFailure");
   });
 });

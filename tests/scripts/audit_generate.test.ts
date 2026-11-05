@@ -169,23 +169,13 @@ describe("claude failure wiring in the audit step", () => {
     return text.replace(/\s+/g, " ");
   }
 
-  test("settles the Claude failure with the dependencies of on_error_flow", async () => {
+  test("throws the Claude failure through flowFailureMessage", async () => {
     expect(await flatSource()).toContain(
-      "return await settleClaudeFailure(claudeFlowFailureDeps(log), {",
+      "throw new Error( flowFailureMessage( result.reason, maskSecrets( `audit_generate: runClaude failed",
     );
   });
 
-  test("settles the failure as the audit_generate module", async () => {
-    expect(await flatSource()).toContain('stepId: "audit_generate",');
-  });
-
-  test("settles the failure with the path of the audit flow", async () => {
-    expect(await flatSource()).toContain("path: AUDIT_FLOW_PATH,");
-  });
-
-  test("does not throw the Claude failure directly", async () => {
-    expect(await flatSource()).not.toContain(
-      "throw new Error( maskSecrets( `audit_generate: runClaude failed",
-    );
+  test("does not settle the failure in the step", async () => {
+    expect(await flatSource()).not.toContain("settleClaudeFailure");
   });
 });

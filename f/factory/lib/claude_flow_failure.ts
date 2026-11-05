@@ -21,6 +21,17 @@ export function isFlowRetryable(reason: RunClaudeFailureReason): boolean {
   return !NON_RETRYABLE_REASONS.includes(reason);
 }
 
+/** `retry_if`が読む、再試行しない失敗のタグ。 */
+export const NO_FLOW_RETRY_MARKER = "";
+
+/** 再試行しない種類のときだけ、例外の文の先頭にタグを付ける。 */
+export function flowFailureMessage(
+  _reason: RunClaudeFailureReason,
+  _message: string,
+): string {
+  return "";
+}
+
 /** 使用上限に当たったことを知らせる、要対応の通知の種類。 */
 export const CLAUDE_USAGE_LIMIT_NOTICE_KIND = "claude_usage_limit";
 

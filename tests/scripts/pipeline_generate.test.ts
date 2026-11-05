@@ -381,29 +381,19 @@ describe("claude failure wiring in the generate step", () => {
     return text.replace(/\s+/g, " ");
   }
 
-  test("settles the Claude failure with the dependencies of on_error_flow", async () => {
+  test("throws the generation failure through flowFailureMessage", async () => {
     expect(await flatSource()).toContain(
-      "return await settleClaudeFailure(claudeFlowFailureDeps(log), {",
+      "throw new Error( flowFailureMessage( reason, maskSecrets(`pipeline_generate: runClaude failed",
     );
   });
 
-  test("settles the failure as the generate module", async () => {
-    expect(await flatSource()).toContain('stepId: "generate",');
-  });
-
-  test("settles the failure with the path of the pipeline flow", async () => {
-    expect(await flatSource()).toContain("path: PIPELINE_FLOW_PATH,");
-  });
-
-  test("keeps the words of the thrown failure", async () => {
+  test("hands the Claude failure to failGeneration", async () => {
     expect(await flatSource()).toContain(
-      "message: generationFailureMessage(result.reason, result.detail),",
-    );
-  });
-
-  test("does not throw the Claude failure directly", async () => {
-    expect(await flatSource()).not.toContain(
       "failGeneration(result.reason, result.detail)",
     );
+  });
+
+  test("does not settle the failure in the step", async () => {
+    expect(await flatSource()).not.toContain("settleClaudeFailure");
   });
 });

@@ -820,31 +820,3 @@ describe("failureNextAction for the design flow", () => {
     expect(failureNextAction("f/factory/implement", LOCK_HELD)).toBeUndefined();
   });
 });
-
-// `main()`と`claudeFlowFailureDeps`はWindmillとDBを直接使うので、配線はソースの文字列で確かめる。
-describe("flow failure dependencies wiring", () => {
-  async function flatSource(): Promise<string> {
-    const text = await Bun.file(
-      new URL("../../f/factory/on_error_flow.ts", import.meta.url),
-    ).text();
-    return text.replace(/\s+/g, " ");
-  }
-
-  test("main terminates with the default dependencies", async () => {
-    expect(await flatSource()).toContain(
-      "await handleFlowFailure(defaultFlowFailureDeps(), {",
-    );
-  });
-
-  test("the Claude failure dependencies terminate with the default dependencies", async () => {
-    expect(await flatSource()).toContain(
-      "handleFlowFailure(defaultFlowFailureDeps(), input)",
-    );
-  });
-
-  test("the Claude failure dependencies add notices without duplicates", async () => {
-    expect(await flatSource()).toContain(
-      "addNotice: (record) => addNoticeUnlessUnresolved(record)",
-    );
-  });
-});
