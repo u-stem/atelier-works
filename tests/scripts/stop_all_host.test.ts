@@ -12,6 +12,8 @@ import {
 } from "../../scripts/stop_all.ts";
 
 const OK: ExecResult = { exitCode: 0, stdout: "", stderr: "" };
+/** `wmill script run -s`が出す、scriptが断らなかったときの結果。 */
+const DONE_OUTPUT = JSON.stringify({ refused: false }, null, 2);
 const PS = [
   "    PID ELAPSED COMMAND",
   "    101     300 /usr/local/bin/claude -p --output-format json",
@@ -28,6 +30,7 @@ function record(
   options: {
     readonly confirmed?: boolean;
     readonly scriptExit?: number;
+    readonly scriptStdout?: string;
     readonly jobs?: readonly string[];
     readonly psAfterGrace?: string;
     readonly env?: Readonly<Record<string, string | undefined>>;
@@ -41,7 +44,11 @@ function record(
     confirm: async () => options.confirmed ?? true,
     runScript: async (path, args) => {
       calls.push(`script ${path} ${JSON.stringify(args)}`);
-      return { ...OK, exitCode: options.scriptExit ?? 0 };
+      return {
+        ...OK,
+        exitCode: options.scriptExit ?? 0,
+        stdout: options.scriptStdout ?? DONE_OUTPUT,
+      };
     },
     listRunningJobs: async () => {
       calls.push("list jobs");
@@ -313,6 +320,55 @@ describe("runStop place", () => {
   });
 });
 
+describe("runStop place when the stop script refuses", () => {
+  const REFUSED = JSON.stringify({
+    refused: true,
+    reason: "audit_unavailable",
+  });
+
+  test("returns 1", async () => {
+    const { deps } = record({ scriptStdout: REFUSED });
+    expect(await runStop(PLACE, deps)).toBe(1);
+  });
+
+  test("ends with a warning that the stop-all was not placed", async () => {
+    const { printed, deps } = record({ scriptStdout: REFUSED });
+    await runStop(PLACE, deps);
+    expect(printed.at(-1)).toStartWith("WARNING: the stop-all was NOT placed.");
+  });
+
+  test("shows the reason of the refusal", async () => {
+    const { printed, deps } = record({ scriptStdout: REFUSED });
+    await runStop(PLACE, deps);
+    expect(printed.some((line) => line.includes("audit_unavailable"))).toBe(
+      true,
+    );
+  });
+
+  test("still cancels the running jobs", async () => {
+    const { calls, deps } = record({ scriptStdout: REFUSED, jobs: ["j1"] });
+    await runStop(PLACE, deps);
+    expect(calls).toContain("cancel j1");
+  });
+
+  test("still kills the leftovers", async () => {
+    const { calls, deps } = record({ scriptStdout: REFUSED });
+    await runStop(PLACE, deps);
+    expect(calls.some((call) => call.includes("-s TERM"))).toBe(true);
+  });
+
+  test("returns 1 when the result is not JSON", async () => {
+    const { deps } = record({ scriptStdout: "Job failed" });
+    expect(await runStop(PLACE, deps)).toBe(1);
+  });
+
+  test("warns that the stop-all was not placed when the result is not JSON", async () => {
+    const { printed, deps } = record({ scriptStdout: "" });
+    await runStop(PLACE, deps);
+    expect(printed.at(-1)).toStartWith("WARNING: the stop-all was NOT placed.");
+  });
+});
+
 describe("runStop kill_only", () => {
   test("does nothing when not confirmed", async () => {
     const { calls, deps } = record({ confirmed: false });
@@ -353,5 +409,36 @@ describe("runStop release", () => {
     const { calls, deps } = record({ confirmed: false });
     await runStop({ kind: "release" }, deps);
     expect(calls).toEqual([]);
+  });
+
+  test("returns 0 when the release script releases", async () => {
+    const { deps } = record();
+    expect(await runStop({ kind: "release" }, deps)).toBe(0);
+  });
+
+  test("returns 1 when the release script refuses", async () => {
+    const { deps } = record({
+      scriptStdout: JSON.stringify({
+        refused: true,
+        reason: "freezes_unreadable",
+      }),
+    });
+    expect(await runStop({ kind: "release" }, deps)).toBe(1);
+  });
+
+  test("shows the reason of a refused release", async () => {
+    const { printed, deps } = record({
+      scriptStdout: JSON.stringify({
+        refused: true,
+        reason: "freezes_unreadable",
+      }),
+    });
+    await runStop({ kind: "release" }, deps);
+    expect(printed.at(-1)).toContain("freezes_unreadable");
+  });
+
+  test("returns 1 when the result of the release is not JSON", async () => {
+    const { deps } = record({ scriptStdout: "" });
+    expect(await runStop({ kind: "release" }, deps)).toBe(1);
   });
 });
