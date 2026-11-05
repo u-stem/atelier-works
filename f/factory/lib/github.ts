@@ -3972,7 +3972,7 @@ export type ReviewThread = {
   /**
    * スレッドが付いているファイルのパスと、現在の差分上の行。
    * 再レビューで未解決の指摘の内容だけでなく場所もClaudeに伝えるため、
-   * `pr_workflow_support.ts`の`openFindingsForPrompt`が使う。
+   * `pr_workflow_support.ts`の`reviewThreadsForPrompt`が使う。
    * `line`はGitHubの`PullRequestReviewThread.line`で、スレッドの位置が
    * 差分から外れると(コメントした行がその後また変わったなど)`null`になる。
    * `ReviewFinding`の`line`がnullを取りうるのと同じである。
@@ -4000,6 +4000,24 @@ export type ReviewThread = {
    * `matchReviewThreadForComment`が対応づけられるようにする。
    */
   readonly allCommentIds: number[];
+  /** 最後のコメントの書き手のGitHub id。取得できなければ`null`。 */
+  readonly lastCommentAuthorId: number | null;
+  /**
+   * スレッド内のコメントの書き手と本文(先頭の`REVIEW_THREAD_COMMENTS_LIMIT`件まで)。
+   * 再レビューに、返信まで含めたスレッドの全体を渡すために使う。
+   */
+  readonly comments: readonly ReviewThreadComment[];
+};
+
+/** `listReviewThreads`が読むスレッドのコメントの件数の上限。 */
+export const REVIEW_THREAD_COMMENTS_LIMIT = 50;
+
+export type ReviewThreadComment = {
+  readonly databaseId: number | null;
+  /** 書き手が削除されたアカウントなどで読めないときは空文字列。 */
+  readonly authorLogin: string;
+  readonly authorId: number | null;
+  readonly body: string;
 };
 
 type ReviewThreadsPageInfo = {
@@ -4097,7 +4115,10 @@ function isReviewThreadNodePayload(
 }
 
 type ReviewThreadCommentPayload = {
-  readonly author: { readonly login: string } | null;
+  readonly author: {
+    readonly login: string;
+    readonly databaseId?: number;
+  } | null;
   readonly body: string;
   readonly databaseId?: number | null;
 };
@@ -4138,6 +4159,18 @@ function isReviewThreadDatabaseIdNodePayload(
 /** `listReviewThreads`が辿るページ数の上限(1ページ100件なので1000件まで)。 */
 export const REVIEW_THREADS_MAX_PAGES = 10;
 
+/** `allComments`の1件を読む。本文が無い行(idだけの古い形)は`null`にする。 */
+function parseThreadComment(raw: unknown): ReviewThreadComment | null {
+  if (!isRecord(raw) || typeof raw.body !== "string") return null;
+  const author = isRecord(raw.author) ? raw.author : null;
+  return {
+    databaseId: typeof raw.databaseId === "number" ? raw.databaseId : null,
+    authorLogin: typeof author?.login === "string" ? author.login : "",
+    authorId: typeof author?.databaseId === "number" ? author.databaseId : null,
+    body: raw.body,
+  };
+}
+
 /**
  * 1ページ分のノードを、`ReviewThread`に変換する。
  * 形が合わないノードは、黙って捨てずに例外を投げる。
@@ -4175,6 +4208,13 @@ function parseReviewThreadNode(
     lastCommentBody: lastComment.body,
     firstCommentDatabaseId: firstComment.databaseId ?? null,
     allCommentIds,
+    lastCommentAuthorId:
+      typeof lastComment.author?.databaseId === "number"
+        ? lastComment.author.databaseId
+        : null,
+    comments: rawNode.allComments.nodes
+      .map(parseThreadComment)
+      .filter((comment): comment is ReviewThreadComment => comment !== null),
   };
 }
 
@@ -4184,12 +4224,15 @@ function parseReviewThreadNode(
  * スレッドごとに次のものを返す。
  * - 解決済みかどうか
  * - 差分上の位置(`path` / `line`)。`pr_workflow_support.ts`の
- *   `openFindingsForPrompt`が使う。
+ *   `reviewThreadsForPrompt`が使う。
  * - 最初のコメントの作成者・本文・REST id(`databaseId`)
- * - 最後のコメントの作成者・本文(別名`lastComments`)。
+ * - 最後のコメントの作成者(loginとid)・本文(別名`lastComments`)。
  *   `pr_workflow_support.ts`の`selectThreadsToResolve`が、まだ解決していない
  *   Factory自身の`pr_review`のスレッドのうち、最後の発言もFactoryのものを
  *   探すのに使う(スレッドに人の返信が残っていれば自動で解決してはならない)。
+ *   `threadResponseKind`は、最後の書き手が許可された人かの判定に使う。
+ * - コメントの作成者(loginとid)・本文(`comments`)。
+ *   先頭の`REVIEW_THREAD_COMMENTS_LIMIT`件までで、`reviewThreadsForPrompt`が使う。
  * - コメントのREST id(別名`allComments`、先頭の50件のidだけ)。
  *   `matchReviewThreadForComment`が使う。`FixReply.review_comment_id`
  *   (REST id)を(path, line)で対応づけると、後のコミットで差分の行番号が
@@ -4231,13 +4274,15 @@ export async function listReviewThreads(
               }
               lastComments: comments(last: 1) {
                 nodes {
-                  author { login }
+                  author { login ... on User { databaseId } }
                   body
                 }
               }
-              allComments: comments(first: 50) {
+              allComments: comments(first: ${String(REVIEW_THREAD_COMMENTS_LIMIT)}) {
                 nodes {
                   databaseId
+                  body
+                  author { login ... on User { databaseId } }
                 }
               }
             }

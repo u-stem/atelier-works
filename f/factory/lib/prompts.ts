@@ -564,6 +564,28 @@ export function reviewPrompt(
     );
   }
 
+  if (input.threads.length > 0) {
+    sections.push(
+      "",
+      "The threads below are the existing review threads on this PR: open and",
+      "resolved, started by the factory or by a person, with their replies.",
+      "`author` is `factory` for this account, `allowed_person` for a person the",
+      "operator allows, and `other` for anyone else.",
+      "Do not report a finding that is substantially the same as any of these threads, open or resolved.",
+      "A resolved thread has already been decided. Only report something new or changed since.",
+      ...(input.omittedThreadCount > 0
+        ? [
+            `${String(input.omittedThreadCount)} older threads were left out to keep this prompt small.`,
+          ]
+        : []),
+      dataFence(
+        nonce,
+        "existing review threads",
+        JSON.stringify(input.threads, null, 2),
+      ),
+    );
+  }
+
   sections.push(
     "",
     "For each finding, set `kind` to align with `severity` (kept for",

@@ -31,6 +31,7 @@ import {
 } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
+import { isAllowedLabeler, labelerPolicyFor } from "../lib/poll_support.ts";
 import { REVIEW_SCHEMA, reviewPrompt } from "../lib/prompts.ts";
 import type { ReviewFinding, ReviewVerdict } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
@@ -42,6 +43,7 @@ import {
   nextActionFor,
   prReviewTimeoutMisfit,
   reviewOutputProseIssues,
+  reviewThreadsForPrompt,
   selectListedBinaryFiles,
 } from "./pr_workflow_support.ts";
 
@@ -185,6 +187,17 @@ export async function main(
       ? null
       : await latestDraft(parent_work_item_id);
 
+  // `threadResponseKind`が、許可された人の返信を見分けるのに使う。
+  const labelerPolicy = labelerPolicyFor(viewer.login, config);
+  const isAllowedReplier = (login: string, id: number | null): boolean =>
+    isAllowedLabeler(login, labelerPolicy, id);
+  // 再レビューで、同じ指摘を出し直させず、見送りの返信を読ませるために渡す。
+  const promptThreads = reviewThreadsForPrompt(
+    reviewThreads,
+    viewer.login,
+    isAllowedReplier,
+  );
+
   // レビューするcommitが、CI回か競合回のpushしたcommitなら、その差分を重点的に見るようプロンプトに加える。
   // 値はDBから決めた回の種類だけで、PRの内容からは決めない。
   // 問い合わせに失敗しても通常のレビューは止めない。nullに倒して警告を残す。
@@ -211,8 +224,8 @@ export async function main(
     diff: buildReviewDiffText(prDiff),
     changedFiles: prFiles,
     requirements,
-    threads: [],
-    omittedThreadCount: 0,
+    threads: promptThreads.threads,
+    omittedThreadCount: promptThreads.omitted,
     fixRound,
     binaryFiles,
   });

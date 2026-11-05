@@ -43,6 +43,7 @@ import {
   getDefaultBranch,
   isOwnPost,
   type PrReview,
+  REVIEW_THREAD_COMMENTS_LIMIT,
   type ReviewThread,
   withMarker,
 } from "../lib/github.ts";
@@ -57,7 +58,10 @@ import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
 import { holdReasonForStoppedItem } from "../lib/pr_ci_fix_recovery.ts";
 import { prCiFixHoldInfo } from "../lib/pr_ci_support.ts";
 import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
-import type { PromptReviewThread } from "../lib/prompts.ts";
+import type {
+  PromptReviewThread,
+  PromptThreadComment,
+} from "../lib/prompts.ts";
 import {
   ASCII_BOUNDARY_CLASS,
   COMMIT_MESSAGE_RULES,
@@ -935,6 +939,7 @@ export function countOpenMustThreads(
   }).length;
 }
 
+/** スレッドの書き手が、答えの対象にしてよい人かを返す。`poll_support.ts`の`isAllowedLabeler`を渡す。 */
 export type ThreadAuthorPredicate = (
   login: string,
   id: number | null,
@@ -942,27 +947,166 @@ export type ThreadAuthorPredicate = (
 
 export type ThreadResponseKind = "skip" | "addressable";
 
-export function threadResponseKind(
-  _thread: ReviewThread,
-  _viewer: string,
-  _isAllowed: ThreadAuthorPredicate,
-): ThreadResponseKind | null {
-  return null;
+const SKIP_REPLY_LINE = "対応: 見送り";
+const COMMIT_REPLY_LINE = /^対応: `?[0-9a-f]{7,40}`?$/;
+const HTML_COMMENT_LINE = /^<!--.*-->$/;
+
+/** プロンプトに載せるコメント1件の文字数の上限。超えた分は「…」にする。 */
+const THREAD_COMMENT_MAX_CHARS = 2000;
+/** プロンプトに載せるスレッド全体の文字数の上限。スレッドが多いPRでプロンプトが膨らまないようにする。 */
+const THREADS_PROMPT_MAX_CHARS = 100_000;
+
+/** 本文の、空行と目印を除いた最後の行を返す。 */
+function lastContentLine(body: string): string {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = (lines[index] ?? "").trim();
+    if (line !== "" && !HTML_COMMENT_LINE.test(line)) return line;
+  }
+  return "";
 }
 
+/** スレッドが、Factory自身の`pr_review`の指摘で始まるかを返す。 */
+function isFactoryFindingThread(thread: ReviewThread, viewer: string): boolean {
+  return (
+    isOwnPost(thread.firstCommentAuthorLogin, viewer) &&
+    thread.firstCommentBody.startsWith(ROLE_TAGS.pr_review)
+  );
+}
+
+/**
+ * 再レビューが答えるスレッドの種類を返す。答えないスレッドは`null`にする。
+ * 対象は、Factoryが始めた未解決の指摘のスレッドに限る。
+ * `skip`は、viewerか許可された人の、最後の行が`対応: 見送り`の返信である。
+ * 許可されていない人の見送りで指摘を閉じられないよう、書き手を確かめる。
+ * `addressable`は、返信の無い指摘か、viewerか許可された人の`対応: <sha>`である。
+ * `pr_fix`の`対応: <sha>`は`selectThreadsToResolve`が解決するので除く。
+ */
+export function threadResponseKind(
+  thread: ReviewThread,
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+): ThreadResponseKind | null {
+  if (thread.isResolved) return null;
+  if (thread.firstCommentDatabaseId === null) return null;
+  if (!isFactoryFindingThread(thread, viewer)) return null;
+  if (thread.comments.length === 1) return "addressable";
+  if (!isAllowed(thread.lastCommentAuthorLogin, thread.lastCommentAuthorId)) {
+    return null;
+  }
+  const line = lastContentLine(thread.lastCommentBody);
+  if (line === SKIP_REPLY_LINE) return "skip";
+  return COMMIT_REPLY_LINE.test(line) &&
+    !isFixedFixReply(thread.lastCommentBody)
+    ? "addressable"
+    : null;
+}
+
+function threadCommentAuthor(
+  login: string,
+  id: number | null,
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+): PromptThreadComment["author"] {
+  if (isOwnPost(login, viewer)) return "factory";
+  return isAllowed(login, id) ? "allowed_person" : "other";
+}
+
+function promptCommentBody(body: string): string {
+  const stripped = stripRoleTagLine(body);
+  const chars = Array.from(stripped);
+  return chars.length > THREAD_COMMENT_MAX_CHARS
+    ? `${chars.slice(0, THREAD_COMMENT_MAX_CHARS).join("")}…`
+    : stripped;
+}
+
+function toPromptThread(
+  thread: ReviewThread,
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+): PromptReviewThread {
+  const comments = thread.comments.map(
+    (comment): PromptThreadComment => ({
+      author: threadCommentAuthor(
+        comment.authorLogin,
+        comment.authorId,
+        viewer,
+        isAllowed,
+      ),
+      body: promptCommentBody(comment.body),
+    }),
+  );
+  // 読むコメントの上限を超えたスレッドでは、答える根拠の最後のコメントが一覧から漏れるので足す。
+  if (thread.comments.length >= REVIEW_THREAD_COMMENTS_LIMIT) {
+    comments.push({
+      author: threadCommentAuthor(
+        thread.lastCommentAuthorLogin,
+        thread.lastCommentAuthorId,
+        viewer,
+        isAllowed,
+      ),
+      body: promptCommentBody(thread.lastCommentBody),
+    });
+  }
+  return {
+    thread_id: thread.firstCommentDatabaseId,
+    path: thread.path,
+    line: thread.line,
+    status: thread.isResolved ? "resolved" : "open",
+    started_by: isFactoryFindingThread(thread, viewer) ? "factory" : "person",
+    response_kind: threadResponseKind(thread, viewer, isAllowed),
+    comments,
+  };
+}
+
+/** 文字数の上限を超えたときに残す順番。答えるスレッド、開いているスレッド、解決済みの順である。 */
+function promptThreadRank(thread: PromptReviewThread): number {
+  if (thread.response_kind !== null) return 0;
+  return thread.status === "open" ? 1 : 2;
+}
+
+/**
+ * 既存のスレッドを、`reviewPrompt`の入力に変換する。
+ * 解決済みのスレッド、人が始めたスレッド、返信をすべて含める。
+ * 書き手はログインでなく役割で示す。
+ * 文字数の上限を超えたら、解決済みの古いものから落とし、落とした件数を返す。
+ */
 export function reviewThreadsForPrompt(
-  _threads: readonly ReviewThread[],
-  _viewer: string,
-  _isAllowed: ThreadAuthorPredicate,
+  threads: readonly ReviewThread[],
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
 ): { threads: PromptReviewThread[]; omitted: number } {
-  return { threads: [], omitted: 0 };
+  const items = threads.map((thread) =>
+    toPromptThread(thread, viewer, isAllowed),
+  );
+  const order = items
+    .map((_, index) => index)
+    .sort((left, right) => {
+      const leftItem = items[left];
+      const rightItem = items[right];
+      if (leftItem === undefined || rightItem === undefined) return 0;
+      const rank = promptThreadRank(leftItem) - promptThreadRank(rightItem);
+      return rank !== 0 ? rank : right - left;
+    });
+  const kept = new Set<number>();
+  let used = 0;
+  for (const index of order) {
+    const size = JSON.stringify(items[index]).length;
+    if (used + size > THREADS_PROMPT_MAX_CHARS) continue;
+    used += size;
+    kept.add(index);
+  }
+  return {
+    threads: items.filter((_, index) => kept.has(index)),
+    omitted: items.length - kept.size,
+  };
 }
 
 /**
  * Factoryの投稿の本文から、1行目にある`pr_review`の役割タグの行を取り除く(あれば)。
  * Claudeに指摘の中身だけを見せるため、`reviewThreadsForPrompt`が使う。
  */
-export function stripRoleTagLine(body: string): string {
+function stripRoleTagLine(body: string): string {
   const newlineIndex = body.indexOf("\n");
   if (newlineIndex === -1) return body;
   if (body.slice(0, newlineIndex) !== ROLE_TAGS.pr_review) return body;
