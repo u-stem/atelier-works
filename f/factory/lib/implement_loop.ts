@@ -1264,9 +1264,11 @@ export async function runImplementVerifyLoop(
 
     if (current.kind === "claude_failed") {
       const failure = `claude run failed (${current.reason}): ${current.detail}`;
-      // 期限で切られた実行も検査を経ていないので、出口はclaude_errorのまま(途中経過をpushしない)にし、理由にだけ期限を添える。
+      // 期限で切られた実行と、期限で起動しなかった実行も検査を経ていないので、
+      // 出口はclaude_errorのまま(途中経過をpushしない)にし、理由にだけ期限を添える。
       const reason =
-        current.reason === "timeout" && deps.now() >= input.deadlineAt
+        (current.reason === "timeout" || current.reason === "not_started") &&
+        deps.now() >= input.deadlineAt
           ? `${failure}; ${deadlinePassedReason(round)}`
           : failure;
       await deps.recordRound({

@@ -608,6 +608,7 @@ export type ModelUsageEntry = {
  * `run_budget_exceeded`は`--max-budget-usd`の超過、`usage_limit`はサブスクリプションの使用上限で、
  * どちらも結果のJSONが`is_error: true`のときに分ける。それ以外の`is_error`は`claude_error`になる。
  * 終了コードが0以外でも、標準出力が`is_error: true`の結果なら、この分け方にする。
+ * `not_started`は、期限が残っていなかったので起動しなかった実行で、費用を記録しない。
  */
 export type RunClaudeFailureReason =
   | "non_zero_exit"
@@ -622,11 +623,12 @@ export type RunClaudeFailureReason =
 
 /**
  * Claudeの実行ではなく環境の事情で止まった失敗の種類。
- * 使用上限と全停止は、モデルを強くしても防げないので、モデルの昇格の失敗に数えない。
+ * 使用上限、全停止、期限切れで起動しなかった実行は、モデルを強くしても防げないので、モデルの昇格の失敗に数えない。
  */
 export const NON_MODEL_FAILURE_REASONS: readonly RunClaudeFailureReason[] = [
   "usage_limit",
   "stopped",
+  "not_started",
 ];
 
 /** `db.recordAgentRun`に渡す、`factory.agent_runs`の1行。 */

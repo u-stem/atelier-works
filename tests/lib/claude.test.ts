@@ -2501,18 +2501,6 @@ describe("runClaude failure reason of the run record", () => {
     expect(result.agentRun.failure_reason).toBeNull();
   });
 
-  test("records timeout as the failure reason when the deadline has passed before the start", async () => {
-    const fake = createFakeCommandRunner([]);
-
-    const result = await runClaude({
-      ...baseOptions(fake.run),
-      deadlineAt: 1,
-      now: () => 2,
-    });
-
-    expect(result.agentRun.failure_reason).toBe("timeout");
-  });
-
   test("does not write the reason into the text of the error", async () => {
     const fake = createFakeCommandRunner([
       isErrorResult({ result: "You've hit your limit" }),

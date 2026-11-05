@@ -593,7 +593,7 @@ type ClaudeAttemptResult<T> =
       readonly detail: string;
     };
 
-/** 期限が残っていなかったためClaudeを起動しなかったときの詳細。 */
+/** 期限が残っていなかったためClaudeを起動しなかったとき(`not_started`)の詳細。 */
 export const CLAUDE_NOT_STARTED_DETAIL =
   "claude -p not started: no time left before the deadline";
 
@@ -794,7 +794,9 @@ function totalCostUsdOf(stdout: string): number | null {
 }
 
 /**
- * 打ち切られた実行の記録を返す。標準出力に費用があればその値、無ければ上限の値を費用にする。
+ * 打ち切られた実行の記録を返す。
+ * 結果を書き終えていれば、費用、トークン数、`model_usage`をその結果から取る。
+ * 結果として読めなければ、標準出力の費用、それも無ければ上限の値を費用にする。
  * 打ち切った実行の費用は結果に無いことが多く、上限の値で日次予算に少なく数えないようにする。
  */
 function interruptedAgentRun<T>(
@@ -803,6 +805,10 @@ function interruptedAgentRun<T>(
   stdout: string,
   detail: string,
 ): AgentRunRecord {
+  const result = parseClaudeJsonOrNull(stdout);
+  if (result !== null) {
+    return { ...agentRunFromResult(base, result), error: detail };
+  }
   const writtenCost = totalCostUsdOf(stdout);
   return writtenCost === null
     ? {
@@ -970,7 +976,7 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
  * Claudeの実行の失敗は例外にせず、`outcome: "failure"`と`reason`・`detail`で返す。
  * 再試行したかは成功・失敗とも`retried`で示し、`agentRun`には最後の試行の記録が入る。
  * 再試行したときは、最初の試行の記録(費用を含む)を`discardedAgentRun`で返す。
- * `deadlineAt`を過ぎていれば起動せずにtimeoutの失敗を返し、過ぎた後は再試行しない。
+ * `deadlineAt`を過ぎていれば起動せずに`not_started`の失敗を返す。費用は記録しない。過ぎた後は再試行しない。
  * `beforeRetry`がfalseを返したとき、例外を投げたときも再試行せず、最初の失敗を返す。
  * 例外を投げたときは、秘密を伏せたメッセージを最初の失敗の`detail`に足す。
  * 全停止(`stopCheck`)が置かれていれば起動せず、実行中なら止めて、どちらも`stopped`で返し、再試行しない。
@@ -992,7 +998,7 @@ export async function runClaude<T>(
   if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
     return {
       ...failedAttempt(
-        "timeout",
+        "not_started",
         { ...baseAgentRunFor(opts, null), error: CLAUDE_NOT_STARTED_DETAIL },
         CLAUDE_NOT_STARTED_DETAIL,
       ),
