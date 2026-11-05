@@ -270,6 +270,8 @@ export const STOP_ALL_TEXT = {
   corruptNote:
     "全停止の変数が壊れているため、止まっている扱いです。解除すると空に戻ります。",
   unreadable: "全停止の状態を読めません",
+  unreadableHostNote:
+    "読めない間は、ホストの端末で、mise run stopで止め、mise run stop:releaseで解除できます。",
   stopDialogTitle: "Factoryを全停止しますか",
   releaseDialogTitle: "全停止を解除しますか",
   confirmStop: "全停止する",

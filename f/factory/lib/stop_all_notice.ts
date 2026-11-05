@@ -28,7 +28,7 @@ export type StopAllNoticeDeps = {
     readonly { readonly message: string }[]
   >;
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
-  /** 未解決の全停止の通知を解決し、解決した数を返す。 */
+  /** 未解決の全停止の通知を、本文によらず種類で解決し、解決した数を返す。 */
   readonly resolveActive: () => Promise<number>;
   readonly notify: (event: NotifyEvent) => Promise<unknown>;
   readonly instanceName: () => Promise<string>;
@@ -93,12 +93,20 @@ export async function syncStopAllNotice(
     message: STOP_ALL_ACTIVE_MESSAGE,
   });
   if (id !== null) {
-    await deps.notify({
-      kind: "stop_all_active",
-      instance_name: await deps.instanceName(),
-      cause: stopAllCause(status),
-      next_action: STOP_ALL_NEXT_ACTION,
-    });
+    // 通知は残してあるので、Discordへの知らせが失敗しても、置いた結果は変えない。
+    // 送り先の変数や設定を読めなくても、検出器の後の処理を止めないためである。
+    try {
+      await deps.notify({
+        kind: "stop_all_active",
+        instance_name: await deps.instanceName(),
+        cause: stopAllCause(status),
+        next_action: STOP_ALL_NEXT_ACTION,
+      });
+    } catch (err) {
+      deps.log.warn("could not tell Discord about the stop-all", {
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
   }
   return "placed";
 }

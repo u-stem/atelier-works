@@ -28,10 +28,10 @@ function isTimeout(err: unknown): boolean {
   );
 }
 
-/** 失敗の理由。URLを伏せる。 */
-function failureReason(err: unknown, url: string): string {
+/** 失敗の理由。入力のURLと、正規化で表記が変わったURLの両方を伏せる。 */
+function failureReason(err: unknown, urls: readonly string[]): string {
   if (isTimeout(err)) return "timed out";
-  return maskSecrets(err instanceof Error ? err.message : String(err), [url]);
+  return maskSecrets(err instanceof Error ? err.message : String(err), urls);
 }
 
 /**
@@ -62,7 +62,10 @@ export async function pingHeartbeat(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    return { kind: "failed", reason: failureReason(err, trimmed) };
+    return {
+      kind: "failed",
+      reason: failureReason(err, [trimmed, parsed.href]),
+    };
   }
   await response.body?.cancel().catch(() => {});
   if (response.status >= 200 && response.status < 300) return { kind: "sent" };

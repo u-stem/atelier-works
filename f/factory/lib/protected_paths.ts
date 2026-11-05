@@ -300,7 +300,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 書き換えられると、全停止が置かれても実行中のClaudeと検査が止まらなくなる。
  * `lib/stop_check.script.lock`と`lib/stop_all.script.lock`と`lib/check_runner.script.lock`は、`windmill-client`を含むので守らない。
  * Consoleから全停止を置く・解除するscript(`console_stop_all.ts`、`console_stop_all_release.ts`)と、その`.script.yaml`も守る。
- * 3つの固定のテスト(`tests/lib/stop_all.test.ts`、`tests/scripts/console_stop_all.test.ts`、`tests/scripts/console_stop_all_release.test.ts`)も守る。
+ * 3つの固定のテスト(`tests/lib/stop_all.test.ts`、`tests/scripts/console_stop_all.test.ts`、`tests/scripts/console_stop_all_release.test.ts`)と、
+ * 変数のパスを名指しできるファイルを限る配線のテスト(`tests/scripts/stop_all_wiring.test.ts`)も守る。
  * 書き換えられると、全停止が置かれても設定やscheduleが止まらなくなるか、Consoleの確認と記録を経ずに解除でき、凍結中のscheduleが動き出す。
  * 2つの`.script.lock`は、`windmill-client`を含むので守らない。
  * 全停止の通知を変数に合わせる`lib/stop_all_notice.ts`と、ランナーの`lib/workspace.ts`は守らない。
@@ -624,6 +625,7 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/lib/stop_all.test.ts",
   "tests/scripts/console_stop_all.test.ts",
   "tests/scripts/console_stop_all_release.test.ts",
+  "tests/scripts/stop_all_wiring.test.ts",
   "migrations/datatable/main/20261105100000_deploy_approvals.up.sql",
   "migrations/datatable/main/20261105100000_deploy_approvals.down.sql",
   "f/factory/lib/deploy_approvals.ts",

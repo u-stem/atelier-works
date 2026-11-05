@@ -18,7 +18,7 @@ import {
   listRecordedScheduleFailureJobIds,
   listUnresolvedNoticesByKind,
   recordFailure,
-  resolveUnresolvedNoticesByMessage,
+  resolveUnresolvedNoticesByPrefix,
 } from "./lib/db.ts";
 import { type NotifyEvent, notify, notifyBestEffort } from "./lib/discord.ts";
 import { readVariableOrNull } from "./lib/freezes.ts";
@@ -31,14 +31,20 @@ import {
   type ScheduleFailureDetectDeps,
   type ScheduleFailureDetectResult,
 } from "./lib/schedule_failure_detect.ts";
+import { withCallTimeout } from "./lib/self_update_support.ts";
 import { readStopAll, sdkStopAllReadIo } from "./lib/stop_all.ts";
 import {
-  STOP_ALL_ACTIVE_MESSAGE,
   STOP_ALL_ACTIVE_NOTICE_KIND,
   STOP_ALL_NOTICE_RESOLVER,
   syncStopAllNotice,
 } from "./lib/stop_all_notice.ts";
 import type { FailureRecord, NoticeRecord } from "./lib/types.ts";
+
+/**
+ * 全停止の通知の同期の上限(ミリ秒)。DBの書き込みと、Discordの送信を含む。
+ * 超えても検出の結果は変えず、死活監視は叩く。scriptの`timeout`(60秒)の中で、残りの処理に時間を残すための値である。
+ */
+const STOP_ALL_NOTICE_SYNC_TIMEOUT_MS = 20_000;
 
 /** 配線が使う入出力。テストでは偽物に差し替える。 */
 export type DetectScheduleFailuresIo = {
@@ -172,31 +178,37 @@ export async function main(): Promise<ScheduleFailureDetectResult> {
   await afterDetection(
     {
       syncStopAllNotice: () =>
-        syncStopAllNotice({
-          read: () => readStopAll(sdkStopAllReadIo()),
-          listUnresolved: () =>
-            listUnresolvedNoticesByKind(STOP_ALL_ACTIVE_NOTICE_KIND),
-          addNotice: (record) => addNoticeUnlessUnresolved(record),
-          resolveActive: () =>
-            resolveUnresolvedNoticesByMessage(
-              STOP_ALL_ACTIVE_NOTICE_KIND,
-              STOP_ALL_ACTIVE_MESSAGE,
-              STOP_ALL_NOTICE_RESOLVER,
-            ),
-          notify: async (event: NotifyEvent) =>
-            notifyBestEffort(
-              await wmill.getVariable("f/factory/discord_webhook_url"),
-              event,
+        withCallTimeout(
+          "sync stop-all notice",
+          () =>
+            syncStopAllNotice({
+              read: () => readStopAll(sdkStopAllReadIo()),
+              listUnresolved: () =>
+                listUnresolvedNoticesByKind(STOP_ALL_ACTIVE_NOTICE_KIND),
+              addNotice: (record) => addNoticeUnlessUnresolved(record),
+              // 空の接頭辞は、本文によらず、この種類の未解決をすべて解決する。
+              resolveActive: () =>
+                resolveUnresolvedNoticesByPrefix(
+                  STOP_ALL_ACTIVE_NOTICE_KIND,
+                  "",
+                  STOP_ALL_NOTICE_RESOLVER,
+                ),
+              notify: async (event: NotifyEvent) =>
+                notifyBestEffort(
+                  await wmill.getVariable("f/factory/discord_webhook_url"),
+                  event,
+                  log,
+                ),
+              instanceName: async () =>
+                (
+                  await loadConfig(() =>
+                    wmill.getResource("f/factory/factory_config"),
+                  )
+                ).instance_name,
               log,
-            ),
-          instanceName: async () =>
-            (
-              await loadConfig(() =>
-                wmill.getResource("f/factory/factory_config"),
-              )
-            ).instance_name,
-          log,
-        }),
+            }),
+          STOP_ALL_NOTICE_SYNC_TIMEOUT_MS,
+        ),
       getHeartbeatUrl: () =>
         readVariableOrNull(
           () => wmill.getVariable("f/factory/heartbeat_url"),

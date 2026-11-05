@@ -485,6 +485,7 @@ export const INBOX_PROPOSAL = {
 export const HOLDS_SNAPSHOT = {
   holds: { ok: true, rows: [] },
   freezes: { ok: true, schedule: [], deploy: [] },
+  stop_all: { kind: "clear" },
 };
 
 export const SCHEDULES_EMPTY: SchedulesSnapshotView = {

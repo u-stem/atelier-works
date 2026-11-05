@@ -131,9 +131,14 @@ export function StopAllPanel({
       );
     case "unreadable":
       return (
-        <p className="text-small text-warning">
-          {`${STOP_ALL_TEXT.unreadable}: ${safeText(view.reason)}`}
-        </p>
+        <div className="flex flex-col gap-1">
+          <p className="text-small text-warning">
+            {`${STOP_ALL_TEXT.unreadable}: ${safeText(view.reason)}`}
+          </p>
+          <p className="text-small text-subtle">
+            {STOP_ALL_TEXT.unreadableHostNote}
+          </p>
+        </div>
       );
   }
 }
