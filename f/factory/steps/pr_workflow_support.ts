@@ -57,6 +57,7 @@ import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
 import { holdReasonForStoppedItem } from "../lib/pr_ci_fix_recovery.ts";
 import { prCiFixHoldInfo } from "../lib/pr_ci_support.ts";
 import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
+import type { PromptReviewThread } from "../lib/prompts.ts";
 import {
   ASCII_BOUNDARY_CLASS,
   COMMIT_MESSAGE_RULES,
@@ -934,47 +935,34 @@ export function countOpenMustThreads(
   }).length;
 }
 
-export type OpenFindingForPrompt = {
-  readonly path: string;
-  readonly line: number | null;
-  readonly body: string;
-};
+export type ThreadAuthorPredicate = (
+  login: string,
+  id: number | null,
+) => boolean;
 
-/**
- * このPRにあるFactory自身の未解決の`pr_review`の指摘を、
- * `reviewPrompt`の`openFindings`の入力に変換する。
- * 再レビューで、未解決の指摘と実質的に同じ指摘を重ねて投稿させないために、
- * `pr_review_generate.ts`がこれらをすべてClaudeに渡す。
- * Factoryの投稿かどうかは`selectThreadsToResolve`と同じく判定する
- * (loginが大文字小文字を区別せず一致し、最初のコメントが`pr_review`の役割タグで始まる)。
- * ただし`mode`や最後のコメントの状態には関係しない。
- * ここで気にするのは指摘自体が未解決かどうかで、その後に誰が返信したかではない。
- * `body`からは役割タグの行を取り除く。Factoryの投稿の付け方をClaudeが知る必要は無いため。
- * 最初のレビューではスレッドがまだ無いので空になる。
- */
-export function openFindingsForPrompt(
-  threads: readonly ReviewThread[],
-  viewer: string,
-): OpenFindingForPrompt[] {
-  const viewerLower = viewer.toLowerCase();
-  return threads
-    .filter((thread) => !thread.isResolved)
-    .filter(
-      (thread) => thread.firstCommentAuthorLogin.toLowerCase() === viewerLower,
-    )
-    .filter((thread) => thread.firstCommentBody.startsWith(ROLE_TAGS.pr_review))
-    .map((thread) => ({
-      path: thread.path,
-      line: thread.line,
-      body: stripRoleTagLine(thread.firstCommentBody),
-    }));
+export type ThreadResponseKind = "skip" | "addressable";
+
+export function threadResponseKind(
+  _thread: ReviewThread,
+  _viewer: string,
+  _isAllowed: ThreadAuthorPredicate,
+): ThreadResponseKind | null {
+  return null;
+}
+
+export function reviewThreadsForPrompt(
+  _threads: readonly ReviewThread[],
+  _viewer: string,
+  _isAllowed: ThreadAuthorPredicate,
+): { threads: PromptReviewThread[]; omitted: number } {
+  return { threads: [], omitted: 0 };
 }
 
 /**
  * Factoryの投稿の本文から、1行目にある`pr_review`の役割タグの行を取り除く(あれば)。
- * Claudeに指摘の中身だけを見せるため、`openFindingsForPrompt`が使う。
+ * Claudeに指摘の中身だけを見せるため、`reviewThreadsForPrompt`が使う。
  */
-function stripRoleTagLine(body: string): string {
+export function stripRoleTagLine(body: string): string {
   const newlineIndex = body.indexOf("\n");
   if (newlineIndex === -1) return body;
   if (body.slice(0, newlineIndex) !== ROLE_TAGS.pr_review) return body;

@@ -231,7 +231,8 @@ describe("reviewPrompt requirements wiring", () => {
       diff: "diff --git a b",
       changedFiles: ["a.ts"],
       requirements: FAKE_REQUIREMENTS,
-      openFindings: [],
+      threads: [],
+      omittedThreadCount: 0,
       fixRound: null,
       binaryFiles: [],
     });
@@ -244,7 +245,8 @@ describe("reviewPrompt requirements wiring", () => {
       diff: "diff --git a b",
       changedFiles: ["a.ts"],
       requirements: null,
-      openFindings: [],
+      threads: [],
+      omittedThreadCount: 0,
       fixRound: null,
       binaryFiles: [],
     });
@@ -368,6 +370,12 @@ describe("review threads wiring in the generate step", () => {
 
   test("calls the thread listing nowhere else", async () => {
     expect(count(await SOURCE, "listReviewThreads(")).toBe(1);
+  });
+
+  test("passes every thread to the prompt through the shared conversion", async () => {
+    expect(
+      count(await SOURCE, "reviewThreadsForPrompt(\n    reviewThreads,"),
+    ).toBe(1);
   });
 
   test("leaves a warning when the thread listing fails", async () => {

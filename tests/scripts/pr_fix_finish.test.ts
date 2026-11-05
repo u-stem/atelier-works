@@ -450,6 +450,8 @@ describe("listReviewThreadsBestEffort", () => {
     lastCommentBody: "[MUST] fix this",
     firstCommentDatabaseId: 11,
     allCommentIds: [11],
+    comments: [],
+    lastCommentAuthorId: null,
   };
 
   test("returns the loaded threads", async () => {

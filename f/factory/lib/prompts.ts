@@ -386,14 +386,25 @@ export type PromptPr = {
   base_ref: string;
 };
 
+/** スレッドのコメント1件。書き手はログインでなく役割で示す。 */
+export type PromptThreadComment = {
+  author: "factory" | "allowed_person" | "other";
+  body: string;
+};
+
 /**
- * このPRに対するFactory自身の`pr_review`の指摘のうち、未解決のもの1件。
- * `pr_workflow_support.ts`の`openFindingsForPrompt`が`listReviewThreads`から作る。
+ * このPRの既存のレビューのスレッド1件。
+ * `pr_workflow_support.ts`の`reviewThreadsForPrompt`が`listReviewThreads`から作る。
+ * `response_kind`は、再レビューが答えるスレッドの種類で、答えないスレッドは`null`にする。
  */
-export type PromptOpenFinding = {
+export type PromptReviewThread = {
+  thread_id: number | null;
   path: string;
   line: number | null;
-  body: string;
+  status: "open" | "resolved";
+  started_by: "factory" | "person";
+  response_kind: "skip" | "addressable" | null;
+  comments: PromptThreadComment[];
 };
 
 export type ReviewPromptInput = {
@@ -408,11 +419,13 @@ export type ReviewPromptInput = {
   /** 承認済みの要件定義。Factory自身が作ったPRをレビューするときだけ渡す。 */
   requirements: RequirementDraft | null;
   /**
-   * このPRの以前のレビューでFactory自身が出し、まだ解決していない指摘。
-   * 再レビューで、未解決の指摘と実質的に同じ指摘を出し直さないために渡す。
+   * このPRの既存のスレッド。解決済み、人が始めたもの、返信を含む。
+   * 再レビューで、既存のスレッドと実質的に同じ指摘を出し直さないために渡す。
    * PRの初回のレビューでは空。
    */
-  openFindings: PromptOpenFinding[];
+  threads: PromptReviewThread[];
+  /** 文字数の上限で`threads`から落とした件数。 */
+  omittedThreadCount: number;
   /**
    * 直近のコミットを書いた回の種類。DBから決めた値だけを渡す。
    * "ci"はCIの失敗を直す回、"conflict"はマージの競合を解く回で、どちらでもなければnull。
@@ -548,28 +561,6 @@ export function reviewPrompt(
       "  comment (biome-ignore, @ts-ignore, @ts-expect-error, eslint-disable) was added.",
       "- Check that the round added nothing unrelated to resolving the conflict",
       "  (for example, new behavior, network access, or reading environment variables).",
-    );
-  }
-
-  if (input.openFindings.length > 0) {
-    const openFindingsText = input.openFindings
-      .map((finding) => {
-        const location =
-          finding.line === null
-            ? finding.path
-            : `${finding.path}:${String(finding.line)}`;
-        return `- ${location}: ${finding.body}`;
-      })
-      .join("\n\n");
-    sections.push(
-      "",
-      "The findings below are still open from the factory's own most recent",
-      "review of this PR (each one's own comment thread on GitHub is still",
-      "unresolved). Do not report a new finding that is substantially the",
-      "same as one of these — only report something new or changed since.",
-      "If the diff now fully addresses one of these, say nothing about it (a",
-      "separate process resolves its thread).",
-      dataFence(nonce, "open findings from a prior review", openFindingsText),
     );
   }
 

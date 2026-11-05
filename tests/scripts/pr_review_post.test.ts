@@ -820,6 +820,8 @@ describe("selectThreadsToResolve", () => {
       lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
       firstCommentDatabaseId: 1,
       allCommentIds: [1],
+      comments: [],
+      lastCommentAuthorId: null,
       ...overrides,
     };
   }
@@ -978,6 +980,8 @@ describe("countOpenMustThreads", () => {
       lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
       firstCommentDatabaseId: 1,
       allCommentIds: [1],
+      comments: [],
+      lastCommentAuthorId: null,
       ...overrides,
     };
   }

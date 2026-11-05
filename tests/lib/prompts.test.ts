@@ -16,6 +16,7 @@ import {
   implementFixPrompt,
   implementPrompt,
   isDesignOutput,
+  type PromptReviewThread,
   REQUIREMENTS_SCHEMA,
   REVIEW_SCHEMA,
   requirementsPrompt,
@@ -241,7 +242,8 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: ["a.ts"],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -258,7 +260,8 @@ describe("reviewPrompt", () => {
         diff: "+a<U+001B>b",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -276,7 +279,8 @@ describe("reviewPrompt", () => {
         diff: "+x",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -292,7 +296,8 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: ["a.ts", "b.ts"],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -308,7 +313,8 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -324,7 +330,8 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -340,7 +347,8 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: ["UNIQUE_PATH_MARKER.ts"],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -358,7 +366,8 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -378,7 +387,8 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -396,7 +406,8 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -412,7 +423,8 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -429,7 +441,8 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
         fixRound: null,
         binaryFiles: [],
       },
@@ -439,40 +452,60 @@ describe("reviewPrompt", () => {
     expect(prompt).toContain("human");
   });
 
-  // 再レビューでは、未解決の指摘と実質的に同じ指摘を再投稿しない。
-  test("renders the open findings section when openFindings is non-empty", () => {
-    const prompt = reviewPrompt(
-      {
-        pr: PR,
-        diff: "+const x = 1;",
-        changedFiles: [],
-        requirements: null,
-        openFindings: [{ path: "a.ts", line: 10, body: "null check missing" }],
-        fixRound: null,
-        binaryFiles: [],
-      },
-      FIXED_UUID,
-    );
-    expect(prompt).toContain(
-      "<<<DATA-test-nonce (open findings from a prior review)",
-    );
-    expect(prompt).toContain("null check missing");
-  });
+  describe("threads", () => {
+    const OPEN_THREAD: PromptReviewThread = {
+      thread_id: 501,
+      path: "a.ts",
+      line: 10,
+      status: "open",
+      started_by: "factory",
+      response_kind: "addressable",
+      comments: [{ author: "factory", body: "null check missing" }],
+    };
+    const baseInput = {
+      pr: PR,
+      diff: "+const x = 1;",
+      changedFiles: [],
+      requirements: null,
+      threads: [],
+      omittedThreadCount: 0,
+      fixRound: null,
+      binaryFiles: [],
+    };
 
-  test("omits the open findings section when openFindings is empty", () => {
-    const prompt = reviewPrompt(
-      {
-        pr: PR,
-        diff: "+const x = 1;",
-        changedFiles: [],
-        requirements: null,
-        openFindings: [],
-        fixRound: null,
-        binaryFiles: [],
-      },
-      FIXED_UUID,
-    );
-    expect(prompt).not.toContain("open findings from a prior review");
+    test("renders the existing threads", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("null check missing");
+    });
+
+    test("tells the review not to repeat open or resolved threads", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "Do not report a finding that is substantially the same as any of these threads, open or resolved.",
+      );
+    });
+
+    test("omits the threads section when there is no thread", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("existing review threads");
+    });
+
+    test("says how many threads were left out", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 3 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("3 older threads were left out");
+    });
   });
 
   describe("fixRound", () => {
@@ -483,7 +516,8 @@ describe("reviewPrompt", () => {
           diff: "+const x = 1;",
           changedFiles: ["a.ts"],
           requirements: null,
-          openFindings: [],
+          threads: [],
+          omittedThreadCount: 0,
           fixRound,
           binaryFiles: [],
         },
@@ -598,7 +632,8 @@ describe("reviewPrompt", () => {
           diff: "+const x = 1;",
           changedFiles: ["a.ts"],
           requirements: null,
-          openFindings: [],
+          threads: [],
+          omittedThreadCount: 0,
           fixRound: null,
           binaryFiles,
         },

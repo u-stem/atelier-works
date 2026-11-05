@@ -40,7 +40,6 @@ import {
   isReviewClaudeOutput,
   listReviewThreadsBestEffort,
   nextActionFor,
-  openFindingsForPrompt,
   prReviewTimeoutMisfit,
   reviewOutputProseIssues,
   selectListedBinaryFiles,
@@ -186,10 +185,6 @@ export async function main(
       ? null
       : await latestDraft(parent_work_item_id);
 
-  // 再レビューで、未解決の指摘と実質的に同じ指摘を重ねて投稿させないために渡す。
-  // 最初のレビューではスレッドがまだ無いので空になる。
-  const openFindings = openFindingsForPrompt(reviewThreads, viewer.login);
-
   // レビューするcommitが、CI回か競合回のpushしたcommitなら、その差分を重点的に見るようプロンプトに加える。
   // 値はDBから決めた回の種類だけで、PRの内容からは決めない。
   // 問い合わせに失敗しても通常のレビューは止めない。nullに倒して警告を残す。
@@ -216,7 +211,8 @@ export async function main(
     diff: buildReviewDiffText(prDiff),
     changedFiles: prFiles,
     requirements,
-    openFindings,
+    threads: [],
+    omittedThreadCount: 0,
     fixRound,
     binaryFiles,
   });

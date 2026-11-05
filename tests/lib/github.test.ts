@@ -5832,6 +5832,7 @@ function reviewThreadNode(overrides: {
   readonly firstComment: unknown;
   readonly lastComment?: unknown;
   readonly allCommentDatabaseIds?: readonly (number | null)[];
+  readonly allComments?: unknown[];
 }): unknown {
   return {
     id: overrides.id,
@@ -5841,9 +5842,11 @@ function reviewThreadNode(overrides: {
     firstComments: { nodes: [overrides.firstComment] },
     lastComments: { nodes: [overrides.lastComment ?? overrides.firstComment] },
     allComments: {
-      nodes: (overrides.allCommentDatabaseIds ?? []).map((databaseId) => ({
-        databaseId,
-      })),
+      nodes:
+        overrides.allComments ??
+        (overrides.allCommentDatabaseIds ?? []).map((databaseId) => ({
+          databaseId,
+        })),
     },
   };
 }
@@ -5917,6 +5920,8 @@ describe("listReviewThreads", () => {
         lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
         firstCommentDatabaseId: null,
         allCommentIds: [],
+        comments: [],
+        lastCommentAuthorId: null,
       },
     ]);
   });
@@ -5948,6 +5953,83 @@ describe("listReviewThreads", () => {
       firstCommentDatabaseId: 501,
       allCommentIds: [501, 502],
     });
+  });
+
+  test("parses every comment's author, id, and body", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: { author: { login: VIEWER }, body: "finding" },
+            allComments: [
+              {
+                databaseId: 501,
+                body: "finding",
+                author: { login: VIEWER, databaseId: 9 },
+              },
+            ],
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]?.comments).toEqual([
+      { databaseId: 501, authorLogin: VIEWER, authorId: 9, body: "finding" },
+    ]);
+  });
+
+  test("parses the last comment's author id", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: { author: { login: VIEWER }, body: "finding" },
+            lastComment: {
+              author: { login: "alice", databaseId: 7 },
+              body: "reply",
+            },
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]?.lastCommentAuthorId).toBe(7);
+  });
+
+  test("keeps a deleted author's comment with an empty login", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: { author: { login: VIEWER }, body: "finding" },
+            allComments: [{ databaseId: 502, body: "gone", author: null }],
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]?.comments[0]?.authorLogin).toBe("");
   });
 
   test("drops a null databaseId from allCommentIds", async () => {
