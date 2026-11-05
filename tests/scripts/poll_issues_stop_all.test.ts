@@ -55,7 +55,9 @@ describe("poll_issues stop-all gate", () => {
   test("reads the stop-all through the bounded reader in one place of main", async () => {
     const text = await source();
 
-    expect(text.match(/await readStopAllBounded\(\)/g)?.length).toBe(1);
+    expect(
+      text.match(/const stop = await readStopAllBounded\(\)/g)?.length,
+    ).toBe(1);
   });
 
   test("holds the restart of decided approvals while the gate is closed", async () => {
