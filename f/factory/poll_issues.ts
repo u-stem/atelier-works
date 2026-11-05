@@ -27,6 +27,7 @@ import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
   countApprovalRedispatches,
+  defaultSqlClient,
   expireApprovalRequestIfPending,
   getLatestDeployment,
   getWorkItem,
@@ -49,6 +50,7 @@ import {
   updateStatusIfLatestApproval,
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
+import { isDeployHeldForApproval } from "./lib/deploy_approvals.ts";
 import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
 import { openFactoryClone } from "./lib/factory_clone.ts";
 import {
@@ -81,6 +83,7 @@ import {
 } from "./lib/poll_source.ts";
 import {
   actionableCancelNote,
+  anyDeployHold,
   type ClosedTargetInfo,
   confirmLabeler,
   decideCloser,
@@ -203,7 +206,7 @@ async function recordFailureSafe(
   }
 }
 
-/** 版の食い違いを通知する前に、deployの保留を読む呼び出しの上限(ミリ秒)。 */
+/** 版の食い違いを通知する前に、deployの保留と承認待ちを読む呼び出しそれぞれの上限(ミリ秒)。 */
 const DEPLOY_FREEZE_READ_TIMEOUT_MS = 10_000;
 
 /** `deployed_sha_mismatch`のnoticeを、反映が追いついたとして解決するときの`resolved_by`。 */
@@ -214,7 +217,7 @@ const DEPLOYED_SHA_RESOLVER = "poll_issues";
  * 食い違いが猶予を超えて続くときだけnoticeを記録する。
  * 食い違いを最初に見た時刻は、このscheduleのWindmillのstateに保存する。
  * 毎回、今の`deployed_sha`への反映の成功の記録より前のnoticeを解決済みにする。判定は`runDeployedShaCheck`にある。
- * 有効なdeployの保留があるあいだは、`self_update`が反映を見送るので、通知せず待つ。
+ * 有効なdeployの保留か、保護パスの変更の承認待ちがあるあいだは、`self_update`が反映を見送るので、通知せず待つ。
  * noticeを残すだけでジョブは失敗させない。
  * 変数が無い・空のときは、まだ比べる対象が無いとみなす。
  */
@@ -250,22 +253,32 @@ async function checkDeployedSha(
           sha,
           DEPLOYED_SHA_RESOLVER,
         ),
-      isDeployHeld: async () => {
-        const read = await withCallTimeout(
-          "read deploy freezes",
+      // deployの保留と、保護パスの変更の承認待ちは、どちらも`self_update`が反映を見送るので、食い違いは異常ではない。
+      isDeployHeld: () =>
+        anyDeployHold([
+          async () => {
+            const read = await withCallTimeout(
+              "read deploy freezes",
+              () =>
+                readActiveDeployFreezes(
+                  sdkFreezePorts(
+                    wmill,
+                    process.env.WM_WORKSPACE ?? "",
+                    () => new Date(),
+                  ),
+                ),
+              DEPLOY_FREEZE_READ_TIMEOUT_MS,
+            );
+            if (!read.ok) throw new Error(read.reason);
+            return shouldHoldDeploy({ deployFreezes: read.value });
+          },
           () =>
-            readActiveDeployFreezes(
-              sdkFreezePorts(
-                wmill,
-                process.env.WM_WORKSPACE ?? "",
-                () => new Date(),
-              ),
+            withCallTimeout(
+              "read deploy approvals",
+              () => isDeployHeldForApproval(defaultSqlClient),
+              DEPLOY_FREEZE_READ_TIMEOUT_MS,
             ),
-          DEPLOY_FREEZE_READ_TIMEOUT_MS,
-        );
-        if (!read.ok) throw new Error(read.reason);
-        return shouldHoldDeploy({ deployFreezes: read.value });
-      },
+        ]),
       nowMs: () => Date.now(),
       log,
     });

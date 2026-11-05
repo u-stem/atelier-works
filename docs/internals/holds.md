@@ -175,7 +175,7 @@ psqlで送るときも、`-c`に2つの文を渡すと1つのトランザクシ�
 人は、Consoleのシステムの画面の「保留と凍結」から、確認のダイアログを通して解除できる([Consoleの仕様](console.md)の「保留と凍結」)。
 `f/factory/hold_release`が保留を、`f/factory/freeze_release`が凍結とdeployの保留([凍結とdeployの保留の内部仕様](freezes.md))を解除する。
 どちらもtag`console`のscriptで、Console用のworkerで動く。
-読み取りは`f/factory/console_holds`が行い、保留の表と凍結の変数を別々に読む。
+読み取りは`f/factory/console_holds`が行い、保留の表と凍結の変数と、反映の承認待ちを別々に読む。
 置く操作は、`f/factory/console_hold_place`が持つ(次の「Consoleからの置く操作」)。
 
 `hold_release`は、次の順で解除する。

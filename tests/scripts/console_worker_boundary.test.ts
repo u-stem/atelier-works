@@ -33,7 +33,7 @@ import {
 // - その2つも、github_token以外のsecret変数は読まない。
 // - audit_kickoff、notice_resolve、manual_intake_submit、pr_review_submit、console_holds、hold_release、freeze_release、
 //   console_jobs、console_schedules、console_config、console_job_cancel、console_job_rerun、console_config_update、
-//   console_hold_place、console_schedule_stopは、どのsecret変数も読まない。
+//   console_hold_place、console_schedule_stop、console_deploy_decideは、どのsecret変数も読まない。
 //   Consoleから押せる操作に、外向きの資格情報を持たせないためである。
 // - console_jobs、console_schedules、console_config、console_job_cancel、console_job_rerun、console_config_update、
 //   console_hold_place、console_schedule_stopの8本は、SDKの呼び出しも許可表に絞る。
@@ -79,6 +79,7 @@ const READS_NO_SECRET = [
   "f/factory/console_config_update",
   "f/factory/console_hold_place",
   "f/factory/console_schedule_stop",
+  "f/factory/console_deploy_decide",
 ];
 
 /**

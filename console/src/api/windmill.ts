@@ -13,6 +13,7 @@ import { classifyRunResponse, type RunResult } from "./errors.ts";
  * 書き込みは持たない。ジョブを中止する`console_job_cancel`は、作業項目のフローの実行中か待ちのジョブを1件止める。
  * `console_job_rerun`は、失敗した定期ジョブを1件、scheduleの引数で再実行する。
  * `console_config_update`は、設定の許可した項目を1つ、止める向きか下げる向きにだけ変える。
+ * `console_deploy_decide`は、保護パスの変更を含む反映の、最新の承認待ちの版を1件、承認か却下する。
  */
 export const SCRIPT_PATHS = {
   console_query: "f/factory/steps/console_query",
@@ -33,6 +34,7 @@ export const SCRIPT_PATHS = {
   console_config_update: "f/factory/console_config_update",
   console_hold_place: "f/factory/console_hold_place",
   console_schedule_stop: "f/factory/console_schedule_stop",
+  console_deploy_decide: "f/factory/console_deploy_decide",
 } as const;
 
 export type ScriptName = keyof typeof SCRIPT_PATHS;

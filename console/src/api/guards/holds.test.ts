@@ -196,3 +196,50 @@ describe("isHoldsSnapshot rejects", () => {
     expect(isHoldsSnapshot(withFreezes({ ok: false }))).toBe(false);
   });
 });
+
+describe("isHoldsSnapshot and the deploy approvals", () => {
+  const BASE = {
+    holds: { ok: true, rows: [] },
+    freezes: { ok: true, schedule: [], deploy: [] },
+  };
+  const PENDING = {
+    sha: "0123456789abcdef0123456789abcdef01234567",
+    protected_paths: ["f/factory/self_update.ts"],
+    protected_path_count: 1,
+    requested_at: "2026-10-24T02:00:00.000Z",
+  };
+
+  test("accepts a snapshot from a backend that does not send the approvals yet", () => {
+    expect(isHoldsSnapshot(BASE)).toBe(true);
+  });
+
+  test("accepts a pending approval", () => {
+    expect(
+      isHoldsSnapshot({
+        ...BASE,
+        deploy_approvals: { ok: true, pending: [PENDING] },
+      }),
+    ).toBe(true);
+  });
+
+  test("accepts an approvals source that could not be read", () => {
+    expect(
+      isHoldsSnapshot({
+        ...BASE,
+        deploy_approvals: { ok: false, reason: "db down" },
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a pending approval without paths", () => {
+    expect(
+      isHoldsSnapshot({
+        ...BASE,
+        deploy_approvals: {
+          ok: true,
+          pending: [{ ...PENDING, protected_paths: "x" }],
+        },
+      }),
+    ).toBe(false);
+  });
+});

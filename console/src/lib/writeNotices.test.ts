@@ -7,6 +7,7 @@ import {
   describeApprovalResult,
   describeAuditResult,
   describeConfigUpdateResult,
+  describeDeployDecideResult,
   describeFreezeReleaseResult,
   describeHoldPlaceResult,
   describeHoldReleaseResult,
@@ -950,5 +951,62 @@ describe("describeScheduleStopResult", () => {
         ready_at: null,
       }).message,
     ).toContain(`${String(STOP_MIN_REMAINING_MINUTES)}分`);
+  });
+});
+
+describe("describeDeployDecideResult", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+
+  test("tells that an approval deploys on the next self update", () => {
+    expect(
+      describeDeployDecideResult({
+        refused: false,
+        sha: SHA,
+        decision: "approved",
+        notice: "recorded",
+        action_audit: "recorded",
+      }).message,
+    ).toContain("2分以内");
+  });
+
+  test("tells that a rejection keeps the deploy stopped", () => {
+    expect(
+      describeDeployDecideResult({
+        refused: false,
+        sha: SHA,
+        decision: "rejected",
+        notice: "recorded",
+        action_audit: "recorded",
+      }).message,
+    ).toContain("mainへ戻すPR");
+  });
+
+  test("warns when the decision notice could not be recorded", () => {
+    expect(
+      describeDeployDecideResult({
+        refused: false,
+        sha: SHA,
+        decision: "approved",
+        notice: "failed",
+        action_audit: "recorded",
+      }).tone,
+    ).toBe("warning");
+  });
+
+  test("tells that a request that is not pending was not decided", () => {
+    expect(
+      describeDeployDecideResult({ refused: true, reason: "not_pending" }),
+    ).toEqual({
+      tone: "info",
+      message:
+        "この版はもう承認待ちではありません(判断済みか、新しい版の承認待ちに替わりました)。一覧を読み直してください。",
+    });
+  });
+
+  test("warns when the attempt could not be recorded", () => {
+    expect(
+      describeDeployDecideResult({ refused: true, reason: "audit_unavailable" })
+        .tone,
+    ).toBe("warning");
   });
 });

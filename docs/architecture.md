@@ -277,7 +277,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
 | `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード。実際に使われたモデルごとの内訳(`model_usage`)も持つ |
 | `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
-| `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)、失敗の理由(`error`)も持つ |
+| `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)、失敗の理由(`error`)も持つ。DBの掃除は、最後に成功した反映の行を、期限を過ぎても残す。反映の承認の判定が、その時刻を基準にするためである |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
 | `reviews` | pr_reviewの実行1回ごとの判定、修正必須の指摘の有無(`result`)、総評、指摘、投稿したレビューのID |
 | `fix_rounds` | pr_fixの実行1回ごとの結果、返信、コミット |
@@ -286,6 +286,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `audit_reports` | 監査1回のレポート。作業項目と1対1に対応する |
 | `cleanup_runs` | DBの掃除1回ごとの削除件数 |
 | `console_actions` | Consoleから行った操作の記録。操作者、操作の名前、対象、変えたキーと値、結果、時刻を持つ。保持は90日。改ざんに耐えない([セキュリティ](security.md#操作の記録)) |
+| `deploy_approvals` | 保護パスに触れた変更の反映の、HEADのコミットごとの承認。反映する範囲で止めたファイル、依頼の時刻、判断(承認か却下)と判断した人を持つ。判断の対象は、最後に成功した反映より後の、最も新しい行だけで、行は消さずに残す。読み書きは`lib/deploy_approvals`だけが行う([反映の承認の内部仕様](internals/deploy-approvals.md)) |
 | `drawio_viewer_observations` | draw.ioのリリースのタグごとに、最初に見たcommitと時刻。ビューアの固定を上げる処理が、14日の待ちを数えるのに使う |
 | `main_ci_runs` | 既定ブランチのコミットごとのCIの判定結果。作業項目とは独立した読み取り専用の記録で、判定を待つ行と判定済みの行を持つ |
 | `pr_ci_checks` | FactoryのPRのheadごとのCIの判定結果。設定`pr_ci_watch_human_prs`が`true`のときは、許可された人が作ったPRの行も持つ。作業項目とは独立した記録で、判定を待つ行と判定済みの行を持つ。作業項目のIDは、外部キーを持たず値だけで参照する。人のPRの行は、作業項目のIDが空である。CIの失敗を直す作業項目の結果待ちの状態(`fixing`)と、直す作業項目へのIDなどの列を持つ。直す作業項目の起動は`watch_pr_ci`が行う([PRのCI監視の内部仕様](internals/pr-ci.md)) |
@@ -354,7 +355,7 @@ Consoleの一覧と集計は次のviewを読む。
 | `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。概要には、いま進めているflowのジョブのidも含む。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知、defaultのworkerの直近24時間の負荷 |
 
-次の19本のscriptは、tag `console`を付け、Console用のworkerで動かす。
+次の20本のscriptは、tag `console`を付け、Console用のworkerで動かす。
 
 - `console_query`
 - `approval_decide`
@@ -375,6 +376,7 @@ Consoleの一覧と集計は次のviewを読む。
 - `console_config_update`
 - `console_hold_place`
 - `console_schedule_stop`
+- `console_deploy_decide`
 
 どれも、Claudeの長いジョブがdefaultのworkerの枠を埋めても、Consoleを止めないためである。
 
@@ -589,9 +591,11 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/profile` | script | [LIB] 作業項目の進め方ごとの承認の要否 |
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |
+| `f/factory/lib/deploy_gate` | script | [LIB] 保護パスの変更の反映の判定 |
 | `f/factory/lib/holds` | script | [LIB] 共通の保留の表の読み書き |
 | `f/factory/lib/types` | script | [LIB] 共通型 |
 | `f/factory/lib/self_update_pull_requests` | script | [LIB] 反映に含まれるPRの解析 |
+| `f/factory/lib/deploy_approvals` | script | [LIB] 反映の承認の読み書き |
 | `f/factory/lib/gh_collect_read` | script | [LIB] 収集の記録を読む側の判定 |
 | `f/factory/lib/intake_refresh` | script | [LIB] 取り込み内容の更新と記録 |
 | `f/factory/lib/pr_ci_fix_claim` | script | [LIB] 失敗した行を直してよいかの判断 |
@@ -673,6 +677,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
 | `f/factory/investigate_isolation_probe` | script | [OP-2-11] 調査のClaudeの隔離を、読み出しと探索で測定して判定 |
+| `f/factory/console_deploy_decide` | script | [OP-2-12] 保護パスの変更の反映を承認・却下 |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
 | `f/factory/hold_release` | script | [OP-2-4] 保留を解除 |
@@ -781,12 +786,16 @@ IDの食い違い、リポジトリが無い(404)、URLを読めない場合は�
 設定と限界は[運用](operations.md)の「Factory自身のリポジトリの数値IDを固定する」に書く。
 
 1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
-2. 反映が要る回と、凍結が終わった後の追従の回で、deployの保留が有効なら、3から5を見送る。`deployed_sha`は進めず、保留が切れた最初の回が同じ範囲を反映する([凍結とdeployの保留の内部仕様](internals/freezes.md))。
-3. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
+2. 反映が要る回と、凍結が終わった後の追従の回で、deployの保留が有効なら、3から6を見送る。`deployed_sha`は進めず、保留が切れた最初の回が同じ範囲を反映する([凍結とdeployの保留の内部仕様](internals/freezes.md))。
+3. 反映が要る回で、`deployed_sha`が空でなければ、`deployed_sha..HEAD`の変更を確かめる。
+   migrationか、`f/`の下と`wmill.yaml`の保護パスのファイルか新しい`*.sh`があれば、HEADの版が承認されるまで4から6を見送る。
+   `wmill-lock.yaml`と`*.script.lock`は除く。
+   見送る回は、要対応の通知とDiscordで知らせ、`deployed_sha`を進めない([反映の承認の内部仕様](internals/deploy-approvals.md))。
+4. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
    凍結中のスケジュールはpushから除く。
    凍結が終わった回は、shaが変わらなくても、このpushだけをやり直す。
-4. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
-5. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
+5. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
+6. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
 
 毎回のログ(`self_update started`)には、起動の種類(`trigger`)を出す。
 Windmillのジョブの環境変数に`WM_SCHEDULE_PATH`があれば`schedule`、無ければ`manual`とする。
@@ -822,7 +831,7 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 CIの失敗を直す回は再開しない。
 反映した時点でそうなっていれば、通知を出さない。
 
-ジョブ全体には上限(`timeout`)を3100秒で置く。
+ジョブ全体には上限(`timeout`)を3300秒で置く。
 この上限はWindmillが外から打ち切る最後の砦で、通常は内側の上限で先に終わる。
 子プロセスは別のプロセスグループで起動し、その上限はworkerの中のタイマーなので、子の実行中に外から打ち切られると子が残りうるためである([セキュリティ](security.md)の「自己更新の打ち切り」)。
 変数の取得と更新、stateの読み書き、データベースの記録は個別の上限が無いので、1回30秒で区切り、超えたら例外にする。
@@ -847,9 +856,9 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 これらはジョブの失敗(`job_failed`と`schedule_failing`)になるだけである。
 
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
-`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3100秒は切り詰められない。
+`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3300秒は切り詰められない。
 
-3100秒は、全部が最悪のときの長さ3091.2秒に余裕を足した値である。
+3300秒は、全部が最悪のときの長さ3294.2秒に余裕を足した値である。
 コマンドの上限には、停止の上乗せ13秒を足す。
 時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
 
@@ -857,9 +866,9 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 | --- | --- | --- | --- | --- |
 | self cloneのロック待ち | 1 | 300秒 | 確かめる間隔0.2秒 | 300.2秒 |
 | git | 11 | 60秒 | 13秒 | 803秒 |
-| ホストの印を確かめるローカルのgit | 9 | 10秒 | 13秒 | 207秒 |
+| ローカルのgit(保護パスの判定の差分とホストの印の確認) | 10 | 10秒 | 13秒 | 230秒 |
 | `wmill sync push`、`wmill datatable migrate up` | 2 | 300秒 | 13秒 | 626秒 |
-| 区切った呼び出し(収集の鮮度の確認の中を除く) | 28 | 30秒 | なし | 840秒 |
+| 区切った呼び出し(収集の鮮度の確認の中を除く) | 34 | 30秒 | なし | 1020秒 |
 | Discordへの通知 | 2 | 120秒 | なし | 240秒 |
 | Console用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
 | 定期ジョブ用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
@@ -874,15 +883,17 @@ PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒
 設計の有効化の通知の処理も、更新の前に全体を1つの上限5秒で包み、区切った呼び出しの回数には数えない。
 失敗しても時間切れでも、警告だけを残して更新へ進む。
 deployの保留の判定は読み取りの段の中で済ませるので、段は増えず、見送る回は`wmill`のCLIを呼ばない。
-ローカルのgitの9回は、ホストの印の確認である。
-コミットの有無で1回、祖先の確認と内容の比較でそれぞれ最大4回である。
-どちらも、通知の解決で上限の3件まで、この回の通知の判断で1回である。
+ローカルのgitの10回は、保護パスの判定の差分の1回と、ホストの印の確認の9回である。
+ホストの印の確認は、コミットの有無で1回、祖先の確認と内容の比較でそれぞれ最大4回である。
+祖先の確認と内容の比較は、どちらも、通知の解決で上限の3件まで、この回の通知の判断で1回である。
 ローカルのgitは、オブジェクトを参照するだけで、ネットワークとワークツリーに触れないので、上限を10秒にする。
 `mise.toml`の比較は時間切れでも失敗として続くので、最大回数まで走りうる。
-区切った呼び出しは35か所ある。
-収集の鮮度の確認の中の7か所は、確認全体の上限30秒に含めて数えるので、残りの28回が次のように分かれる。
+区切った呼び出しは42か所ある。
+収集の鮮度の確認の中の8か所は、確認全体の上限30秒に含めて数えるので、残りの34回が次のように分かれる。
 設定の取得が1回、リポジトリIDの照合が3回、更新が8回である。
 Console用のworkerの確認が4回、定期ジョブ用のworkerの確認が3回、ホスト側の作業の通知が9回である。
+保護パスの変更の承認が6回である。
+依頼の読み取り、依頼の作成、古い通知の解決、noticeの挿入、通知先の取得、反映の後の通知の解決である。
 リポジトリIDの照合の3回は、IDの取得、失敗の記録、noticeの挿入である。
 更新の8回は、3つの変数の取得と、`deployed_sha`の読み取りが失敗したときの存在の確認である。
 残りは、`deployed_sha`の更新、更新が時間切れになったときの読み直し、成功の記録、失敗の記録である。
@@ -891,12 +902,14 @@ Console用のworkerの確認が4回、定期ジョブ用のworkerの確認が3�
 Console用のworkerの確認では、stateの読みと書き、noticeの挿入、通知先の取得を区切る。
 定期ジョブ用のworkerの確認では、noticeの挿入、noticeの解決、通知先の取得を区切る。
 ホスト側の作業の通知の9回は、印の読み取り、未解決の通知の一覧、通知の解決(上限の3件まで)、noticeの挿入、通知先の取得、止まった作業項目の再開の候補の確認、再開の起動である。
-収集の鮮度の確認では、stateの読みと書き、収集の記録の読み、未解決のnoticeの一覧、noticeの挿入、noticeの解決、通知先の取得の7か所を区切る。
-この7か所も箇所の数として数え、確認全体の30秒も足すと、同じ処理を二重に数えて合計は3281.2秒になる。
-確認全体の30秒を足さずに7か所だけを数えても、合計は3251.2秒になる。
-どちらも3100秒を超えるので、ジョブの`timeout`を上げる必要が出る。
+収集の鮮度の確認で区切るのは、stateの読みと書き、収集の記録の読み、リポジトリ単位の古さの読みである。
+加えて、未解決のnoticeの一覧、noticeの挿入、noticeの解決、通知先の取得を区切る。
+これで8か所になる。
+この8か所も箇所の数として数え、確認全体の30秒も足すと、同じ処理を二重に数えて合計は3534.2秒になる。
+確認全体の30秒を足さずに8か所だけを数えても、合計は3504.2秒になる。
+どちらも3300秒を超えるので、ジョブの`timeout`を上げる必要が出る。
 `timeout`は子プロセスが残るのを防ぐ最後の打ち切りなので、延ばさない。
-そこで、次の2つが成り立つときだけ、7か所を確認全体の30秒に含めて数える。
+そこで、次の2つが成り立つときだけ、8か所を確認全体の30秒に含めて数える。
 
 - 確認の呼び出しが`finally`の最後の文である。呼び出し元が30秒で戻った後に、背景の処理の後ろで待たされる呼び出しも、背景の処理と競合する後続の処理も無い。
 - 確認が子プロセスを起動しない。背景の処理が子プロセスを持たなければ、`timeout`で打ち切られても残るものが無い。
@@ -904,6 +917,7 @@ Console用のworkerの確認では、stateの読みと書き、noticeの挿入�
 確認の呼び出しは30秒で戻るが、中の処理は中断されず、背景で続きうる。
 この背景の処理は、ほかの時間切れの後の処理と同じく、合計に含めない。
 Discordへの通知の2回は、ホスト側の作業の通知と、Console用のworkerを確認できない状態が続いたときの通知である。
+承認の通知とホスト側の作業の通知は、同じ回には一方しか通らないので、2回のまま数える。
 定期ジョブ用のworkerの確認と収集の鮮度の確認は、通知を確認ごとの上限(10秒、30秒)の中で送る。
 Console用のworkerの確認も、受けていない通知は上限の10秒の中で送る。
 確認できない状態が続いたときの通知は、上限の外で送り、通知1回の上限で区切る。
@@ -914,7 +928,7 @@ Console用のworkerの確認も、受けていない通知は上限の10秒の�
 
 収集の鮮度の確認は、`tests/scripts/self_update_gh_collect_freshness.test.ts`が次の3点を確かめる。
 
-- 確認の中で区切った呼び出しが7か所であること。
+- 確認の中で区切った呼び出しが8か所であること。
 - 確認の呼び出しが`finally`の最後の文であること。
 - 確認が子プロセスを起動しないこと。
 
@@ -928,7 +942,7 @@ Console用のworkerの確認も、受けていない通知は上限の10秒の�
 ジョブの上限で打ち切られた回の扱いは次のとおりである。
 
 - 最後に行うConsole用のworker、定期ジョブ用のworker、収集の鮮度の確認が走らず、`deployments`にも記録が残らない。
-- 打ち切られるまでの最大約52分、実行が終わらない。
+- 打ち切られるまでの最大約55分、実行が終わらない。
   2分ごとの次の約25回は多重実行の防止で飛ばされる。
   この間は、自己更新の反映と、3つの確認が止まる。
 - 検出器が、打ち切られた回をジョブ履歴で`canceled_by`が`timeout`の取り消しとみなして失敗に数え、最大5分遅れてDiscordの`job_failed`で知らせる。

@@ -430,7 +430,7 @@ routerの基準は`/console`で、Caddyが`/console/`の下のパスに`index.ht
 | `/console/jobs/flows/:name` | flowの図 | 入口、ステップ、出口を並べた、flow1つの図。名前を省くと一覧へ戻す |
 | `/console/jobs/origins/:name` | 起動の図 | 定期ジョブ1つから、前進の辺でたどれるflowを段に並べた図。flowを開くと中のステップが出る。名前を省くと一覧へ戻す |
 | `/console/jobs/:id` | ジョブの詳細 | 状態、引数、結果、ログ、フローのステップ、失敗の保存済みの原因 |
-| `/console/system` | システム | 要約の帯と4つのタブ(状態、失敗と通知、履歴、設定)。保留と凍結(解除できる)、反映の状態、workerの負荷、監査の失敗、作業項目に紐づかない失敗、情報の通知、更新履歴、解決済みの通知、設定の閲覧 |
+| `/console/system` | システム | 要約の帯と4つのタブ(状態、失敗と通知、履歴、設定)。保留と凍結(解除できる)、反映の承認待ち(承認と却下ができる)、反映の状態、workerの負荷、監査の失敗、作業項目に紐づかない失敗、情報の通知、更新履歴、解決済みの通知、設定の閲覧 |
 
 どの経路にも当たらないパスは、「ページが見つかりません」の画面で受ける。
 経路の番号は、正の整数の文字列だけを受け付ける。
@@ -486,7 +486,7 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 | 名前 | 用途 | 型付きの関数 |
 | --- | --- | --- |
 | `console_query` | 読み取り | `fetchSummary`など(`queries.ts`) |
-| `console_holds` | 有効な保留と凍結の読み取り | `fetchHolds`(`holdsQueries.ts`) |
+| `console_holds` | 有効な保留と凍結と、反映の承認待ちの読み取り | `fetchHolds`(`holdsQueries.ts`) |
 | `console_jobs` | ジョブの一覧と詳細の読み取り | `fetchActiveJobs`、`fetchJobHistory`、`fetchJobDetail`(`jobsQueries.ts`) |
 | `console_schedules` | scheduleの状態の読み取り | `fetchSchedules`(`jobsQueries.ts`) |
 | `console_config` | 設定の全項目の読み取り | `fetchConfig`(`jobsQueries.ts`) |
@@ -503,6 +503,7 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 | `console_config_update` | 設定の1項目を、無効にする向きか下げる向きに変更 | `updateConfig` |
 | `console_hold_place` | 保留か凍結の設置 | `placeHold` |
 | `console_schedule_stop` | scheduleの無効化 | `stopSchedule` |
+| `console_deploy_decide` | 保護パスの変更の反映の承認か却下 | `decideDeploy` |
 
 保留や凍結を置くscriptは`console_hold_place`の1本で、置ける種類と期限の上限を固定する。
 スケジュールを止める`console_schedule_stop`は、止めてよいスケジュールの表を持つ。
@@ -720,7 +721,7 @@ Issueに由来する文字は、`displayableIssueText`(`src/lib/intakeText.ts`)�
 - 各scriptの戻りが、型ガードを通ること
 - `src/api/`の外が、`windmill.ts`をimportせず、`run_wait_result`の経路を直に書かず、`fetch`、`XMLHttpRequest`、`sendBeacon`も使わないこと。例外は、版の確認の`useReleaseWatch.ts`だけである。`fetch`を別名に代入してから呼ぶ形は見ない
 - `runScript`と`SCRIPT_PATHS`が、`windmill.ts`の外へ再エクスポートされないこと
-- 書き込みのscriptの名前が、許可リストと型付きの書き込みの関数と戻りの型ガードのファイルにだけ出ること。対象は、`console-scripts.ts`の`WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES`が挙げる7本である。画面や部品が名前を持つと、許可リストを通らない呼び出しの足場になる
+- 書き込みのscriptの名前が、許可リストと型付きの書き込みの関数と戻りの型ガードのファイルにだけ出ること。対象は、`console-scripts.ts`の`WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES`が挙げる8本である。画面や部品が名前を持つと、許可リストを通らない呼び出しの足場になる
 - 操作の記録を足した書き込みの戻りが、記録の成否(`action_audit`)を型ガードに通すこと。知らない値は通らない
 - 置くscriptの期限の上限と、止めるscriptの止めてよいスケジュールの表と待ちの分数が、画面の定数(`holdPlace.ts`)と一致すること。突き合わせは`tests/scripts/console_hold_place.test.ts`と`console_schedule_stop.test.ts`にある
 - 許可リストで、名前に`place`を含むものが、`console_hold_place`の1つだけであること
@@ -1386,7 +1387,8 @@ workerは1台で直列に処理するので、入口1つの先読みは、その
 システムの状態は、画面を開くときの取り直しを`staleTime`(30秒)に任せる。
 通知の解決は、一覧、未解決の通知、システムの状態を読み直す(`NOTICE_RESOLVE_INVALIDATES`)。
 保留と凍結の解除も、システムの状態を読み直す。
-システムの状態を変える書き込みはこの2つで、どちらも読み直すので、開くたびの取り直しは要らない。
+反映の承認と却下は、保留と凍結の取得を読み直す。
+システムの状態を変える書き込みはこの3つで、いずれも読み直すので、開くたびの取り直しは要らない。
 開くたびに取り直すと、先読みの直後に取り直して、先読みが無駄になる。
 システムの状態は、Factory側の変化(新しい通知や反映)を、`staleTime`の間は画面に反映しない。
 更新のボタンで取り直せる。
@@ -2492,7 +2494,7 @@ Markdownの文字は、HTMLのコメントとリンク参照定義も文字で�
 
 この画面は、Software Factory自身の状態を、先頭の要約の帯と、4つのタブに分けた節で出す。
 結論は帯で読み、根拠はタブの節で読む。
-書き込みは保留と凍結の設置と解除だけで、ほかの節は読むだけである。
+書き込みは、保留と凍結の設置と解除、反映の承認と却下だけで、ほかの節は読むだけである。
 通知の解決は、要対応の画面の詳細で行う。
 
 更新のボタンと最終更新は、画面の見出しに1組だけ置く。
@@ -2639,6 +2641,13 @@ workerが動いているかも、この帯では判定しない。止まった�
 保留は期限で終わるので、画面が見えている間は`summary`と同じ120秒ごとに取り直す。見出しの更新も、この取得を取り直す。
 型は`src/api/guards/holds.ts`の型ガードで確かめる。形がずれると、節は`invalid_response`の失敗を出す。
 backendの型との一致は、`tests/scripts/console_holds_contract.test.ts`が確かめる。
+
+節の先頭に、保護パスの変更の反映の承認待ちを出す。
+行には、版、保護パス(50件まで。超えた分は件数だけ)、止めた時刻、承認と却下のボタンを出す。
+承認待ちが無いときは出さない。
+読めないときは、承認待ちなしとは書かず、反映が止まったままである旨と理由を出す。
+承認と却下は、確認のダイアログを通して、`console_deploy_decide`が記録する。
+承認待ちの読み取りは`console_holds`の取得に含め、版とパスは文字としてだけ描く([反映の承認の内部仕様](deploy-approvals.md))。
 
 保留と凍結の両方が読めて、有効な行が1つも無いときは、2つのカードを1行にたたむ。「有効な保留と凍結はありません」と、置き方の案内を出す。
 どちらかが読めなかったときと、どちらかに行があるときは、次の2つのカードを出す。
@@ -2797,7 +2806,7 @@ ConsoleがWindmillを呼ぶのは、読み取りのscriptを実行するPOSTと�
 - 呼ぶ関数(`fetchDeploymentRows`、`sumAgentCostSince`、`listActiveHolds`、`readFreezeState`)の本文に、書き込みが無い。
 - `console_holds`は、凍結の変数の書き込みの口(`writeVariable`)を組み立てるが、読む経路は`readVariable`だけを呼ぶ。
 
-`console_holds`は、保留と凍結を読むだけで、解除は別のscriptが行う。
+`console_holds`は、保留、凍結、反映の承認待ちを読むだけで、解除、承認、却下は別のscriptが行う。
 
 要求は、次の検査も通る。
 

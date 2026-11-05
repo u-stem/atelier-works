@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { HoldsSnapshot } from "../../api/guards/holds.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
+import { deployApprovalsView } from "../../lib/deployApprovalsView.ts";
 import {
   deployFreezeItems,
   type HoldItem,
@@ -8,12 +9,21 @@ import {
   type ReleaseTarget,
 } from "../../lib/holdsView.ts";
 import { HOLDS_TEXT } from "../../lib/labels.ts";
+import {
+  DeployApprovalsPanel,
+  type DeployDecisionRequest,
+} from "./DeployApprovalsPanel.tsx";
+import { DeployDecideDialog } from "./DeployDecideDialog.tsx";
 import { HoldPlaceButton, HoldPlaceDialog } from "./HoldPlaceDialog.tsx";
 import { HoldReleaseDialog } from "./HoldReleaseDialog.tsx";
 import { HoldsPanel } from "./HoldsPanel.tsx";
 import { SystemSection } from "./SystemSection.tsx";
 import { initialPlaceForm, usePlaceHold } from "./usePlacement.ts";
-import { useReleaseFreeze, useReleaseHold } from "./useRelease.ts";
+import {
+  useDecideDeploy,
+  useReleaseFreeze,
+  useReleaseHold,
+} from "./useRelease.ts";
 
 function otherDeployCountOf(
   data: HoldsSnapshot | undefined,
@@ -34,6 +44,7 @@ function otherDeployCountOf(
  * システムの画面の「保留と凍結」の節。有効な保留と凍結を出し、人が確認のうえで置き、解除できる。
  * 置く操作と解除は確認のダイアログを通し、解除は実行中に同じ行を押せなくする。
  * scheduleを止める操作はジョブの画面のスケジュールのタブにあり、この節は凍結を置くところまでを持つ。
+ * 保護パスの変更の反映の承認待ちも、この節の先頭に出し、確認のダイアログを通して承認か却下を記録する。
  * 認可はWindmillのログインとフォルダの権限に任せ、この画面は操作者の名前を送らない。
  */
 export function HoldsSection({
@@ -44,7 +55,20 @@ export function HoldsSection({
   const releaseHold = useReleaseHold();
   const releaseFreeze = useReleaseFreeze();
   const place = usePlaceHold();
+  const decideDeploy = useDecideDeploy();
+  const [decision, setDecision] = useState<DeployDecisionRequest | null>(null);
   const [chosen, setChosen] = useState<HoldItem | null>(null);
+
+  const confirmDecision = (): void => {
+    if (decision === null) {
+      return;
+    }
+    decideDeploy.submit({
+      sha: decision.item.sha,
+      decision: decision.decision,
+    });
+    setDecision(null);
+  };
 
   const isLocked = (target: ReleaseTarget): boolean =>
     target.kind === "hold"
@@ -73,6 +97,21 @@ export function HoldsSection({
     >
       {(data, now) => (
         <>
+          <DeployApprovalsPanel
+            view={deployApprovalsView(data)}
+            now={now}
+            isLocked={(sha) =>
+              decideDeploy.isLocked({ sha, decision: "approve" })
+            }
+            onRequest={setDecision}
+          />
+          <DeployDecideDialog
+            request={decision}
+            onConfirm={confirmDecision}
+            onCancel={() => {
+              setDecision(null);
+            }}
+          />
           <div>
             <HoldPlaceButton
               onClick={() => {

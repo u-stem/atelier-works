@@ -21,6 +21,25 @@ import {
 // 別名にするとこの`as`を誤検知する。
 import * as prWorkflowSupport from "../../f/factory/steps/pr_workflow_support.ts";
 
+/** `entry`が実行時に読み込むリポジトリ内のファイルを、importの連鎖でたどる。動的なimportも辿る。 */
+function importClosure(entry: string): string[] {
+  const seen = new Set<string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const current = queue.pop();
+    if (current === undefined || seen.has(current)) continue;
+    seen.add(current);
+    const source = readFileSync(current, "utf8");
+    for (const match of source.matchAll(
+      /(?:from\s+|import\s*\(?\s*)"(\.[^"]+)"/g,
+    )) {
+      const next = normalize(join(dirname(current), match[1] ?? ""));
+      if (existsSync(next)) queue.push(next);
+    }
+  }
+  return [...seen].sort();
+}
+
 describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
   test("widens .github/workflows/ to .github/ and adds the hook, package-manager and devcontainer dirs", () => {
     expect(IMPLEMENT_PROTECTED_PATH_PREFIXES).toEqual([
@@ -714,10 +733,6 @@ describe("investigate isolation files", () => {
 
   test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
     expect(matchesImplementProtectedPath(path)).toBe(true);
-  });
-
-  test("does not protect lib/claude.ts, whose diff stays small and which other flows change", () => {
-    expect(matchesForbiddenPath("f/factory/lib/claude.ts")).toBe(false);
   });
 
   test("does not protect lib/config.ts, which changes often", () => {
@@ -1499,6 +1514,13 @@ describe("dependency-free lib locks", () => {
     "ci_metadata_rehash",
     "holds",
     "console_holds_support",
+    "check_sandbox",
+    "check_runner",
+    "approval_gate",
+    "protected_paths",
+    "deploy_approvals",
+    "deploy_gate",
+    "self_update_support",
   ].map((name) => `f/factory/lib/${name}`);
   const LOCKS = LIBS.map((base) => `${base}.script.lock`);
 
@@ -2098,25 +2120,6 @@ describe("files that the hold command imports", () => {
     "f/factory/lib/freeze_apply.ts",
   ];
 
-  /** `entry`が実行時に読み込むリポジトリ内のファイルを、importの連鎖でたどる。動的なimportも辿る。 */
-  function importClosure(entry: string): string[] {
-    const seen = new Set<string>();
-    const queue = [entry];
-    while (queue.length > 0) {
-      const current = queue.pop();
-      if (current === undefined || seen.has(current)) continue;
-      seen.add(current);
-      const source = readFileSync(current, "utf8");
-      for (const match of source.matchAll(
-        /(?:from\s+|import\s*\(?\s*)"(\.[^"]+)"/g,
-      )) {
-        const next = normalize(join(dirname(current), match[1] ?? ""));
-        if (existsSync(next)) queue.push(next);
-      }
-    }
-    return [...seen].sort();
-  }
-
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
     expect(FORBIDDEN_EXACT_PATHS).toContain(path);
   });
@@ -2187,5 +2190,128 @@ describe("merge guard files", () => {
 describe("mise.toml", () => {
   test("is a protected path, which holds the hold tasks", () => {
     expect(matchesForbiddenPath("mise.toml")).toBe(true);
+  });
+});
+
+// Factoryの安全策を担うコード(headless Claudeの起動、検査コマンドの隔離と実行、実装の関門の判定、
+// 保護パスの一覧、mainの自動反映)は、書き換えられると、安全策が人の目を通らずに外れる。
+// ファイルを移さずに守るので、保護が完全一致の一覧から来ていることを確かめる。
+describe("safety boundary files", () => {
+  const PATHS = [
+    "f/factory/lib/claude.ts",
+    "f/factory/lib/claude.script.yaml",
+    "f/factory/lib/check_sandbox.ts",
+    "f/factory/lib/check_sandbox.script.yaml",
+    "f/factory/lib/check_runner.ts",
+    "f/factory/lib/check_runner.script.yaml",
+    "f/factory/lib/approval_gate.ts",
+    "f/factory/lib/approval_gate.script.yaml",
+    "f/factory/lib/protected_paths.ts",
+    "f/factory/lib/protected_paths.script.yaml",
+    "f/factory/self_update.ts",
+    "f/factory/self_update.script.yaml",
+    "f/factory/lib/self_update_support.ts",
+    "f/factory/lib/self_update_support.script.yaml",
+  ];
+  // windmill-clientを含むlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるので守らない。
+  const CLIENT_LOCKS = [
+    "f/factory/lib/claude.script.lock",
+    "f/factory/self_update.script.lock",
+    "f/factory/console_deploy_decide.script.lock",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test.each(CLIENT_LOCKS)(
+    "matchesForbiddenPath does not match the lock %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(false);
+    },
+  );
+
+  test.each(CLIENT_LOCKS)(
+    "matchesImplementProtectedPath does not match the lock %s",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(false);
+    },
+  );
+
+  test.each(CLIENT_LOCKS)("the CI round still denies the lock %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+
+  test.each(CLIENT_LOCKS)("%s pins windmill-client", async (path) => {
+    expect(await Bun.file(path).text()).toContain('"windmill-client"');
+  });
+
+  test.each([
+    ["f/factory/lib/claude.script.yaml", "f/factory/lib/claude.script.lock"],
+    ["f/factory/self_update.script.yaml", "f/factory/self_update.script.lock"],
+  ])("%s points at its own lock", async (yamlPath, lockPath) => {
+    expect(await Bun.file(yamlPath).text()).toContain(
+      `lock: '!inline ${lockPath}'`,
+    );
+  });
+});
+
+// 保護パスに触れた変更の反映を、人の承認まで止める仕組み(承認の表、表の部品、判定、配線、Consoleの判断)は、
+// 書き換えられると、承認を経ずに保護パスの変更が反映される。
+// 保護の外の部品で判定を緩められないよう、判定の経路のファイルを完全一致で守る。
+describe("deploy approval gate files", () => {
+  const PATHS = [
+    "migrations/datatable/main/20261105100000_deploy_approvals.up.sql",
+    "migrations/datatable/main/20261105100000_deploy_approvals.down.sql",
+    "f/factory/lib/deploy_approvals.ts",
+    "f/factory/lib/deploy_approvals.script.yaml",
+    "tests/lib/deploy_approvals.test.ts",
+    "tests/scripts/deploy_approvals_wiring.test.ts",
+    "scripts/test-db-deploy-approvals.ts",
+    "f/factory/lib/deploy_gate.ts",
+    "f/factory/lib/deploy_gate.script.yaml",
+    "tests/lib/deploy_gate.test.ts",
+    "tests/scripts/self_update_deploy_gate.test.ts",
+    "f/factory/console_deploy_decide.ts",
+    "f/factory/console_deploy_decide.script.yaml",
+    "tests/scripts/console_deploy_decide.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test("finds the files that lib/deploy_gate.ts imports, so that the check below is not empty", () => {
+    expect(importClosure("f/factory/lib/deploy_gate.ts")).toContain(
+      "f/factory/lib/deploy_approvals.ts",
+    );
+  });
+
+  test("every file that lib/deploy_gate.ts imports is a protected path", () => {
+    expect(
+      importClosure("f/factory/lib/deploy_gate.ts").filter(
+        (path) => !matchesImplementProtectedPath(path),
+      ),
+    ).toEqual([]);
   });
 });

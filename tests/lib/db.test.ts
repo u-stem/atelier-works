@@ -5141,6 +5141,14 @@ describe("deleteDeploymentsBefore", () => {
     expect(calls[0]?.text).toContain("DELETE FROM factory.deployments");
     expect(count).toBe(1);
   });
+
+  test("keeps the newest successful deployment whatever its age", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteDeploymentsBefore(NOW, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "id IS DISTINCT FROM (SELECT id FROM factory.deployments WHERE result = 'success' ORDER BY occurred_at DESC, id DESC LIMIT 1)",
+    );
+  });
 });
 
 describe("deleteResolvedNoticesBefore", () => {

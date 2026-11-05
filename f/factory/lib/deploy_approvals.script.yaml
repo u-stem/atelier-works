@@ -1,0 +1,9 @@
+summary: '[LIB] 反映の承認の読み書き'
+description: 内部ライブラリです。直接実行するものではありません。保護パスに触れた変更の反映について、HEADの版ごとの承認の依頼と判断を読み書きします。
+lock: '!inline f/factory/lib/deploy_approvals.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

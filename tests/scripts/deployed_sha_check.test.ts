@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import {
+  anyDeployHold,
   DEPLOYED_SHA_GRACE_MS,
   DEPLOYED_SHA_STATE_KEY,
   type DeployedShaCheckDeps,
@@ -772,5 +773,43 @@ describe("runDeployedShaCheck with a deploy freeze", () => {
       setState: () => Promise.reject(new Error("write failed")),
     });
     expect(await runDeployedShaCheck(h.deps)).toBe("waiting");
+  });
+});
+
+describe("anyDeployHold", () => {
+  test("returns true when one check holds", async () => {
+    expect(
+      await anyDeployHold([
+        () => Promise.resolve(false),
+        () => Promise.resolve(true),
+      ]),
+    ).toBe(true);
+  });
+
+  test("returns false when no check holds", async () => {
+    expect(
+      await anyDeployHold([
+        () => Promise.resolve(false),
+        () => Promise.resolve(false),
+      ]),
+    ).toBe(false);
+  });
+
+  test("returns true when one check holds and another cannot be read", async () => {
+    expect(
+      await anyDeployHold([
+        () => Promise.reject(new Error("freeze unreadable")),
+        () => Promise.resolve(true),
+      ]),
+    ).toBe(true);
+  });
+
+  test("throws when nothing holds and a check cannot be read", async () => {
+    await expect(
+      anyDeployHold([
+        () => Promise.resolve(false),
+        () => Promise.reject(new Error("approvals unreadable")),
+      ]),
+    ).rejects.toThrow(/approvals unreadable/);
   });
 });

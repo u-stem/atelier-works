@@ -25,10 +25,7 @@ import { runDocsGen } from "./docs-gen.ts";
 
 /** 自作のスキル。これ以外の`.claude/skills/`は`wmill`の管理スキルか取り込んだもの。 */
 const OWN_SKILL_PATTERN =
-  /^\.claude\/skills\/(factory-[a-z-]+|windmill-script|drawio-diagram|review-loop|hold)\//;
-
-/** 自作のsubagentの定義。 */
-const OWN_AGENT_PATTERN = /^\.claude\/agents\/[^/]+\.md$/;
+  /^\.claude\/skills\/(factory-[a-z-]+|windmill-script|drawio-diagram|hold|pr-body)\//;
 
 const EXCLUDED_PREFIXES = [".agents/", "tests/fixtures/"];
 
@@ -51,9 +48,7 @@ export function isTargetDoc(path: string): boolean {
   }
   if (TEMPLATE_PATTERN.test(normalized)) return false;
   if (normalized.startsWith(".claude/")) {
-    return (
-      OWN_SKILL_PATTERN.test(normalized) || OWN_AGENT_PATTERN.test(normalized)
-    );
+    return OWN_SKILL_PATTERN.test(normalized);
   }
   return true;
 }

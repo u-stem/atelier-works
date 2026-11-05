@@ -271,8 +271,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 書き換えられると、調査のClaudeがworkerの秘密に届いたり、出力の本文が記録に残ったり、調査の入口が人の確認なしに開いたり、
  * 置き場の差し替えやsymlinkを含むリポジトリのworktreeが読まれたり、測定に合格していない隔離でClaudeが起動したり、
  * 観測の結果に読み出した本文や秘密が載ったり、隔離を破った測定が合格として記録されたりする。
- * 一方、`lib/claude.ts`は守らない。ほかのフローも日常的に直し、調査のための差分は、設定の書き出しを呼ぶ数行に限るためである。
- * 隔離の引数と一覧は包み関数と専用のモジュールにあり、起動の呼び出し(argv、環境、実行の条件、起動の時点の設定)も、保護されたテストが固定する。
+ * `lib/claude.ts`も守る(下の「安全策を担うコード」)。隔離の引数と一覧は包み関数と専用のモジュールにあり、
+ * 起動の呼び出し(argv、環境、実行の条件、起動の時点の設定)は、保護されたテストが固定する。
  * 3つの`.script.lock`は守らない。`windmill-client`を含みうるlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
  * 稼働中の調査を全体で1件にする部分一意インデックスのmigration2本と、それを固定するテスト(`tests/scripts/investigate_singleton_migration.test.ts`)も守る。
  * 調査は置き場の自分以外の項目をすべて消すので、索引が外れると、調査が並行して互いのworktreeを消し合う。
@@ -288,6 +288,26 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 5つの`.script.lock`は守らない。`windmill-client`を含みうるlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
  * 全体のカバレッジの下限を縛る検査(`scripts/check-coverage.ts`)とそのテスト(`tests/scripts/check_coverage.test.ts`)も守る。
  * 下限の定数と対象の定義がこの1か所にあり、書き換えられると、カバレッジが下がっても検査を通せる。
+ * Factoryの安全策を担うコードも守る。headless Claudeの起動(`lib/claude.ts`。Bashの禁止、設定の出どころ、渡す環境変数)、
+ * 検査コマンドの隔離(`lib/check_sandbox.ts`)と実行(`lib/check_runner.ts`)、実装の関門の判定(`lib/approval_gate.ts`)、
+ * この一覧そのもの(`lib/protected_paths.ts`)、mainの自動反映(`self_update.ts`)と、それぞれの`.script.yaml`である。
+ * 反映の判断の本体(ブランチの照合、wmillの環境と引数、反映の可否)は`lib/self_update_support.ts`にあり、`self_update.ts`はそれをつなぐだけなので、これも守る。
+ * 書き換えられると、Claudeの隔離、検査の隔離、承認の関門、保護の範囲、反映の止め方が、人の確認なしに外れる。
+ * ファイルは移さない。`lib/claude.ts`のパスは調査の隔離の測定が固定し、`self_update`のパスはscheduleとConsoleと凍結が固定するためである。
+ * `lib/claude.script.lock`と`self_update.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
+ * ほかの5つのlibのlockは、依存の無いlibのlockと同じ扱いで守らない。
+ * 保護パスに触れた変更の反映を人の承認まで止める仕組みも守る。承認の表を作るmigration2本、表の唯一の読み書き(`lib/deploy_approvals.ts`)と
+ * その`.script.yaml`、表の部品の単体テストと参照の検出(`tests/lib/deploy_approvals.test.ts`、`tests/scripts/deploy_approvals_wiring.test.ts`)、
+ * 実DBの検査(`scripts/test-db-deploy-approvals.ts`)である。書き換えられると、承認の無い版が承認済みとして読まれ、保護パスの変更が人の確認なしに反映される。
+ * `lib/deploy_approvals.script.lock`は、依存の無いlibのlockと同じ扱いで守らない。
+ * 判定(`lib/deploy_gate.ts`)とその`.script.yaml`、単体テスト(`tests/lib/deploy_gate.test.ts`)も守る。判定のimportの連鎖は、すべて保護パスに入れる。
+ * 判定を`self_update`に組み込む位置を固定するテスト(`tests/scripts/self_update_deploy_gate.test.ts`)も守る。
+ * Consoleから反映を承認・却下するscript(`console_deploy_decide.ts`)と、その`.script.yaml`、テストも守る。
+ * 書き換えられると、承認待ちでない版や、操作者の分からない判断が、承認として記録される。
+ * `console_deploy_decide.script.lock`は、`windmill-client`を含みうるので守らない。
+ * 判定が止めるのは、判定のコード自体の改変である。判定の入力(gitの実行と承認の行のDB接続)は、守らないモジュールから来る。
+ * 守ると、全機能が使うモジュールを直すほぼすべてのPRが承認待ちになる。守っても、反映済みのscriptはDBに書けるので、承認の行を直接作る経路は閉じない。
+ * この部分は、人のレビューとDBの権限に頼る。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -569,6 +589,34 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/scripts/host_apply_run_fetch.test.ts",
   "tests/scripts/host_apply_host_probe.test.ts",
   "tests/scripts/host_apply_compose_tables.test.ts",
+  "f/factory/lib/claude.ts",
+  "f/factory/lib/claude.script.yaml",
+  "f/factory/lib/check_sandbox.ts",
+  "f/factory/lib/check_sandbox.script.yaml",
+  "f/factory/lib/check_runner.ts",
+  "f/factory/lib/check_runner.script.yaml",
+  "f/factory/lib/approval_gate.ts",
+  "f/factory/lib/approval_gate.script.yaml",
+  "f/factory/lib/protected_paths.ts",
+  "f/factory/lib/protected_paths.script.yaml",
+  "f/factory/self_update.ts",
+  "f/factory/self_update.script.yaml",
+  "f/factory/lib/self_update_support.ts",
+  "f/factory/lib/self_update_support.script.yaml",
+  "migrations/datatable/main/20261105100000_deploy_approvals.up.sql",
+  "migrations/datatable/main/20261105100000_deploy_approvals.down.sql",
+  "f/factory/lib/deploy_approvals.ts",
+  "f/factory/lib/deploy_approvals.script.yaml",
+  "tests/lib/deploy_approvals.test.ts",
+  "tests/scripts/deploy_approvals_wiring.test.ts",
+  "scripts/test-db-deploy-approvals.ts",
+  "f/factory/lib/deploy_gate.ts",
+  "f/factory/lib/deploy_gate.script.yaml",
+  "tests/lib/deploy_gate.test.ts",
+  "tests/scripts/self_update_deploy_gate.test.ts",
+  "f/factory/console_deploy_decide.ts",
+  "f/factory/console_deploy_decide.script.yaml",
+  "tests/scripts/console_deploy_decide.test.ts",
 ];
 
 /**

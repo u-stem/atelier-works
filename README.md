@@ -118,7 +118,6 @@ atelier-works/
   lefthook.yml                     # pre-commit、commit-msg、pre-pushのフック
   console/                         # Factory Console(Vite + React)。CIが組み立て、console_fetcherが取り込む
   c_factory_config.resource-type.yaml / rt.d.ts   # factory_configのresource typeと生成した型
-  .claude/agents/                  # Claude Codeのsubagentの定義
   .claude/skills/                  # Claude Codeの自作スキルと、wmillが生成した管理スキル
   .agents/skills/                  # wmillが生成した共有のエージェントスキル
   .github/                         # CI、Issueのテンプレート、PRのテンプレート
@@ -153,6 +152,7 @@ atelier-works/
 | [GitHubの収集の内部仕様](docs/internals/github-collect.md) | 所有者ごとのリポジトリの状態の収集、照合、記録の意味 |
 | [凍結とdeployの保留の内部仕様](docs/internals/freezes.md) | 反映からスケジュールを外す凍結のデータ、除外、追従、運用手順、失敗時の回復 |
 | [保留の内部仕様](docs/internals/holds.md) | 対象を進めないことを期限つきで伝える保留の表、有効の条件、置く操作、読む処理、CLI、ローカルのセッションのフック、subagentの拒否 |
+| [反映の承認の内部仕様](docs/internals/deploy-approvals.md) | 保護パスに触れた変更の反映を、HEADの版ごとに人の承認まで止める表、判定の流れ、通知、Console |
 | [CIの失敗を直す部品の仕様](docs/internals/ci-fix.md) | CIのログの取得、整形、検査、変更するファイルの検査と、CI回の流れ |
 | [PRのCI監視の仕様](docs/internals/pr-ci.md) | PRのCIの判定、通知、失敗を直す作業項目の起動 |
 | [Consoleの仕様](docs/internals/console.md) | Consoleのアプリの構成と、成果物を配信する仕組み |

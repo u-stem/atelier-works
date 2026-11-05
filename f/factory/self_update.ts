@@ -11,6 +11,9 @@
 // ホストが`mise run up`の最後に書く印を毎回読み、反映が済んだ通知は解決する。
 // 解決は、反映の判断と記録の後に行う(反映が不要な回でも行う)。解決が遅れても反映を遅らせないため。
 //
+// 保護パスに触れた変更は、人がConsoleで承認するまで反映しない。判定は`./lib/deploy_gate.ts`にあり、
+// このファイルは、凍結の保留の直後に、範囲の差分と承認の表の読み書きと通知を渡して呼ぶだけ。
+//
 // ジョブ全体の上限(`self_update.script.yaml`の`timeout`)は、`SELF_UPDATE_WORST_CASE_MS`以上にする。
 // 内訳と、打ち切られた回の扱いは`docs/architecture.md`の「自己更新」にある。
 // 上限の無い呼び出しは`withCallTimeout`で区切り、通常は内側の上限で先に終わらせる。
@@ -40,6 +43,7 @@ import {
 } from "./lib/console_worker.ts";
 import {
   addNoticeUnlessUnresolved,
+  defaultSqlClient,
   hasUnfinishedPrRun,
   latestDesignApproval,
   latestRequirementsApproval,
@@ -52,6 +56,13 @@ import {
   resolveNoticeIfUnresolved,
   resolveUnresolvedNoticesByPrefix,
 } from "./lib/db.ts";
+import {
+  DEPLOY_APPROVAL_NOTICE_KIND,
+  DEPLOY_APPROVAL_NOTICE_PREFIX,
+  findDeployApproval,
+  requestDeployApproval,
+} from "./lib/deploy_approvals.ts";
+import { parseNameStatus, runDeployApprovalGate } from "./lib/deploy_gate.ts";
 import {
   DISCORD_RETRY_MAX_WAIT_MS,
   type FetchLike,
@@ -99,6 +110,7 @@ import {
   PERIODIC_WORKER_CHECK_TIMEOUT_MS,
   periodicQueueQuery,
 } from "./lib/periodic_worker.ts";
+import type { ChangedPath } from "./lib/protected_paths.ts";
 import {
   MERGED_PULL_REQUESTS_LOG_FORMAT,
   parseMergedPullRequests,
@@ -426,6 +438,51 @@ export async function listDifferingPaths(
 }
 
 /**
+ * self cloneの2つのコミットの間で変わったファイルと、変わり方を返す
+ * (`git diff --name-status --no-renames -z oldSha..newSha`)。保護パスの判定(`lib/deploy_gate.ts`)に使う。
+ * 新しい`*.sh`を見分けるため、`--name-only`ではなく`--name-status`で読む。
+ * 改名を検出しない理由と、shaを`--`で区切らない理由は`diffPaths`と同じ。
+ * ローカルのオブジェクトを比べるだけなので、上限は`SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS`にする。
+ * 失敗、時間切れ、出力の読み取りの打ち切りでは例外を投げる。判定できない回は反映しない。
+ */
+export async function listChangedEntries(
+  run: CommandRunner,
+  dir: string,
+  oldSha: string,
+  newSha: string,
+): Promise<ChangedPath[]> {
+  assertSha(oldSha);
+  assertSha(newSha);
+  const result = await run(
+    [
+      ...GIT_BASE_ARGV,
+      "diff",
+      "--name-status",
+      "--no-renames",
+      "-z",
+      `${oldSha}..${newSha}`,
+    ],
+    {
+      cwd: dir,
+      env: selfCloneGitEnv(),
+      timeoutMs: SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+    },
+  );
+  if (result.timedOut) {
+    throw new Error(`git diff --name-status timed out in ${dir}`);
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(
+      maskSecrets(
+        `git diff --name-status failed in ${dir}: ${result.stderr.trim()}`,
+      ),
+    );
+  }
+  assertOutputComplete(`git diff --name-status in ${dir}`, result);
+  return parseNameStatus(result.stdout);
+}
+
+/**
  * `<dir>/wmill.yaml`が無ければ例外を投げる。
  * 実際のworkerで、syncのルートでないディレクトリからCLIを実行し、
  * `wmill sync push`が"No wmill.yaml found."と表示しつつ"0 changes"で
@@ -500,9 +557,10 @@ type DeployedShaAdvance = {
 
 /**
  * `deployed_sha`を更新し、そのあとで変更パスを列挙して分類する。
- * 更新を先に行うのは、`deployed_sha`が clone に無い値などの誤った値のとき、列挙が失敗し続けて
- * 同じ範囲のpushとmigrationと失敗の記録が2分ごとに繰り返されるのを、1回の失敗で`HEAD`に進めて止めるため。
- * 更新できたら`onUpdated`を呼ぶ。更新の後に列挙が失敗すると、host actionの通知と`changed_paths`が欠ける。
+ * 更新を先に行うのは、更新の後の列挙が失敗してhost actionの通知と`changed_paths`が欠けても、
+ * 同じ範囲のpushとmigrationが繰り返されないため。
+ * `deployed_sha`がcloneに無い値のときは、関門の列挙が先に失敗して反映しない(fail closed)。復旧は人が`deployed_sha`をHEADに合わせる。
+ * 更新できたら`onUpdated`を呼ぶ。
  */
 export async function advanceDeployedSha(deps: {
   readonly setSha: () => Promise<void>;
@@ -657,11 +715,12 @@ export const SELF_UPDATE_GIT_COMMAND_COUNT =
 
 /**
  * 1回の実行で走る、ローカルだけのgit(上限は`SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS`)の最大回数。
+ * 保護パスの判定の差分で1回。
  * ホストの印の確認は、コミットの有無で1回、祖先の確認と内容の比較でそれぞれ最大`HOST_ACTION_RECONCILE_LIMIT + 1`回
  * (通知の解決で上限の数まで、この回の通知の判断で1回)。
  */
 export const SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT =
-  1 + 2 * (HOST_ACTION_RECONCILE_LIMIT + 1);
+  1 + 1 + 2 * (HOST_ACTION_RECONCILE_LIMIT + 1);
 
 /** 1回の実行で走る`wmill sync push`と`wmill datatable migrate up`の回数。 */
 export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
@@ -698,6 +757,8 @@ export const GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT = 8;
  * - 止まった作業項目の再開の候補の確認(候補の一覧と要件の承認の読み)と起動: 2
  * - `factory_repo_id`の照合: リポジトリIDの取得、失敗の記録、noticeの挿入: 3
  *   (`gh api`の子プロセスは`DEFAULT_TIMEOUT_MS`が上限だが、ここで先に区切る)
+ * - 保護パスの変更の承認: 依頼の読み取り、依頼の作成、古い通知の解決、noticeの挿入、通知先の取得、
+ *   反映の後の通知の解決: 6
  * - finally(収集の鮮度の確認): `GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT`
  *   (最悪の長さでは、この箇所を除いて確認全体の上限を数える)
  */
@@ -708,6 +769,7 @@ export const SELF_UPDATE_BOUNDED_CALL_COUNT =
   HOST_ACTION_RECONCILE_LIMIT +
   2 +
   3 +
+  6 +
   GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT;
 
 /**
@@ -733,7 +795,7 @@ const boundedFetch: FetchLike = (url, init) =>
  * - cloneのロック待ち(最大の待ちと、確かめる間隔1回)
  * - コマンド: 上限に、停止の上乗せ(`RUNNER_MAX_STOP_OVERHEAD_MS`)を足した時間の、回数分
  * - 区切った呼び出し: 上限の回数分
- * - 通知: ホスト側の作業の通知とfinallyの通知の2回
+ * - 通知: ホスト側の作業の通知か反映の承認の通知(承認で止めた回はpushの前に戻るので、同じ回には一方しか通らない)と、finallyの通知の2回
  * - Console用workerの確認
  * - 定期ジョブ用workerの確認
  * - 凍結の段(読む段と書く段。各段を`FREEZE_PHASE_TIMEOUT_MS`の1つの上限で包み、区切った呼び出しの回数には数えない)
@@ -766,7 +828,10 @@ export const SELF_UPDATE_WORST_CASE_MS =
 export type SelfUpdateResult =
   | { readonly outcome: "unchanged" }
   | { readonly outcome: "skipped"; readonly reason: "factory_repo_id" }
-  | { readonly outcome: "held"; readonly reason: "deploy_freeze" }
+  | {
+      readonly outcome: "held";
+      readonly reason: "deploy_freeze" | "protected_paths_approval";
+    }
   | {
       readonly outcome: "updated";
       readonly sha_from: string | null;
@@ -778,6 +843,9 @@ type FactoryConfig = Awaited<ReturnType<typeof loadConfig>>;
 
 /** 定期ジョブ用workerの不在の通知を、待ちが解けて自動で解決するときの、解決者の名前。 */
 const PERIODIC_WORKER_NOTICE_RESOLVER = "self_update";
+
+/** 反映の承認を待つ通知を、置き換えや反映の後に自動で解決するときの、解決者の名前。 */
+const DEPLOY_APPROVAL_RESOLVER = "self_update";
 
 /** 収集の鮮度のnoticeを、回復や設定の変更で自動で解決するときの、解決者の名前。 */
 const GH_COLLECT_NOTICE_RESOLVER = "self_update";
@@ -1156,6 +1224,66 @@ async function updateSelf(
     return { outcome: "held", reason: "deploy_freeze" };
   }
 
+  // 保護パスに触れた変更は、人が承認するまで反映しない(`lib/deploy_gate.ts`)。
+  // 凍結の保留の後、トークンの取得と、失敗の行を足す`try`より前に判定する。止めた回は失敗の行を足さず、`deployed_sha`も進めない。
+  // 判定できない回(差分や承認の表を読めない)は例外でジョブを失敗させ、反映しない。
+  // 追従だけの回は版が変わらないので判定しない。初回(`deployed_sha`が空)は全ファイルが差分になるので判定しない。
+  // 判定はコミットの範囲を見るが、pushはcloneの作業ツリーを反映する。
+  // cloneを使うジョブは単一実行のdefault workerで動き(`no_flow_overlap`)、判定とpushの間にHEADが動かないので、両者は同じ内容を指す。
+  if (!reconcileOnly && deployedSha.length > 0) {
+    const gate = await runDeployApprovalGate(currentSha, {
+      listChanges: () =>
+        listChangedEntries(
+          runCommand,
+          factoryClone.dir,
+          deployedSha,
+          currentSha,
+        ),
+      findApproval: (sha) =>
+        withCallTimeout("find deploy approval", () =>
+          findDeployApproval(sha, defaultSqlClient),
+        ),
+      requestApproval: (sha, paths) =>
+        withCallTimeout("request deploy approval", () =>
+          requestDeployApproval(sha, paths, defaultSqlClient),
+        ),
+      supersedeNotices: () =>
+        withCallTimeout("supersede deploy approval notices", () =>
+          resolveUnresolvedNoticesByPrefix(
+            DEPLOY_APPROVAL_NOTICE_KIND,
+            DEPLOY_APPROVAL_NOTICE_PREFIX,
+            DEPLOY_APPROVAL_RESOLVER,
+          ),
+        ),
+      addNotice: (record) =>
+        withCallTimeout("addNotice deploy approval", () =>
+          addNoticeUnlessUnresolved(record),
+        ),
+      notify: async (event) => {
+        const webhookUrl = await withCallTimeout(
+          "getVariable webhook deploy approval",
+          () => wmill.getVariable("f/factory/discord_webhook_url"),
+        );
+        return await withCallTimeout(
+          "notify",
+          () =>
+            notifyBestEffort(webhookUrl, event, log, {
+              fetch: boundedFetch,
+            }),
+          SELF_UPDATE_NOTIFY_TIMEOUT_MS,
+        );
+      },
+      noticeUrl: (noticeId) =>
+        buildNoticeConsoleUrl(config.windmill_public_url, noticeId),
+      instanceName: config.instance_name,
+      log,
+    });
+    if (gate.kind === "hold") {
+      await resolveHostActionNotices();
+      return { outcome: "held", reason: "protected_paths_approval" };
+    }
+  }
+
   log.info(
     reconcileOnly
       ? "schedule freezes ended, pushing again"
@@ -1260,6 +1388,22 @@ async function updateSelf(
           currentSha,
         ),
     });
+
+    // 反映が済んだので、承認を待つ通知を解決する。承認して反映した回と、保護パスの変更が戻されて判定を通らずに反映した回の両方である。
+    // 成功の記録が失敗しても通知が残らないよう、記録の前に行う。反映は済んでいるので、解決の失敗は警告だけにする。
+    try {
+      await withCallTimeout("resolve deploy approval notices", () =>
+        resolveUnresolvedNoticesByPrefix(
+          DEPLOY_APPROVAL_NOTICE_KIND,
+          DEPLOY_APPROVAL_NOTICE_PREFIX,
+          DEPLOY_APPROVAL_RESOLVER,
+        ),
+      );
+    } catch (err) {
+      log.warn("deploy approval notices could not be resolved", {
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
 
     // PRの一覧は表示のための付随情報なので、取れなくても反映の成功を失敗にしない。
     let pullRequests: DeploymentPullRequest[] = [];
