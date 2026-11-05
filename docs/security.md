@@ -816,6 +816,15 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 `bootstrap`はWindmillのsecret変数を読み戻さないので、前回と同じ値かどうかは、記録に残した指紋でしか比べられないためである。
 16桁は64ビットで、トークンの値を戻すには足りない。
 
+記録を組み立てる次の3つは、ホストのユーザーの権限と秘密値のある環境で動くので、保護パスにある。
+`bootstrap`が、秘密値を環境に持たせて起動するためである。
+
+- `scripts/credential_expiry.ts`
+- `f/factory/lib/credential_expiry.ts`
+- `f/factory/lib/credential_expiry.script.yaml`
+
+これらが読む`lib/log.ts`と`lib/types.ts`は、多くのscriptが使う部品なので守らない。
+
 ## 資格情報の取得
 
 `DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`は自分で決める。次の5つは外部のサービスから取得する。取得した値の投入は[セットアップ](setup.md)の手順で行う。
@@ -4251,6 +4260,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 - workerの中のプロセスは、`docker compose exec`で止める。
   Claudeはプロセスグループごと、検査は枠のuidごとに止める。
 - 2つのscript、変数の解析、実行中の監視と、それを固定するテストは、保護パスにある(`f/factory/lib/protected_paths.ts`)。
+- ホストのCLI`scripts/stop_all.ts`は、ホストのユーザーの権限で動くので、保護パスにある。
+  CLIが読む`lib/cleanup_support.ts`と`lib/types.ts`は、日常的に直す部品なので守らない。
 
 次のことは、この仕組みでは守れない。
 
