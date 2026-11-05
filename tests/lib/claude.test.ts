@@ -390,6 +390,52 @@ describe("parseClaudeJson error results without a result", () => {
     expect(() => parseClaudeJson(stdout)).toThrow();
   });
 
+  test("joins errors when the result is empty", () => {
+    const stdout = withoutResult({
+      is_error: true,
+      result: "",
+      errors: ["one", "two"],
+    });
+
+    const result = parseClaudeJson(stdout);
+
+    expect(result.resultText).toBe("one\ntwo");
+  });
+
+  test("joins errors when the result is null", () => {
+    const stdout = withoutResult({
+      is_error: true,
+      result: null,
+      errors: ["one"],
+    });
+
+    const result = parseClaudeJson(stdout);
+
+    expect(result.resultText).toBe("one");
+  });
+
+  test("uses a result that is not empty over errors", () => {
+    const stdout = withoutResult({
+      is_error: true,
+      result: "text",
+      errors: ["one"],
+    });
+
+    const result = parseClaudeJson(stdout);
+
+    expect(result.resultText).toBe("text");
+  });
+
+  test("throws when an error result has a result of another type with errors", () => {
+    const stdout = withoutResult({
+      is_error: true,
+      result: 1,
+      errors: ["one"],
+    });
+
+    expect(() => parseClaudeJson(stdout)).toThrow();
+  });
+
   test("throws when errors has an element that is not a string", () => {
     const stdout = withoutResult({ is_error: true, errors: ["one", 2] });
 
@@ -1814,6 +1860,32 @@ describe("runClaude failure kinds and costs", () => {
 
     expect(result.outcome === "failure" ? result.reason : null).toBe(
       "usage_limit",
+    );
+  });
+
+  test("classifies a usage limit in errors with an empty result as usage_limit", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ result: "", errors: ["You've hit your limit"] }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "usage_limit",
+    );
+  });
+
+  test("treats a result of another type with errors as invalid_json", async () => {
+    const malformed = {
+      ...isErrorResult({ result: 1, errors: ["You've hit your limit"] }),
+      exitCode: 0,
+    };
+    const fake = createFakeCommandRunner([malformed, malformed]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "invalid_json",
     );
   });
 
