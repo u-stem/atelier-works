@@ -521,3 +521,49 @@ describe("the wiring of the design in pr_fix_apply", () => {
     ).toBe(1);
   });
 });
+
+describe("claude failure wiring in the apply step", () => {
+  test("settles the failures of the review, conflict, and CI rounds", async () => {
+    expect(
+      (await stepSource("pr_fix_apply.ts")).split(
+        "await settleFixClaudeFailure(",
+      ).length - 1,
+    ).toBe(3);
+  });
+
+  test("settles the failure with the dependencies of on_error_flow", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toContain(
+      'claudeFlowFailureDeps(logger("pr_fix_apply"))',
+    );
+  });
+
+  test("settles the failure as the pr_fix_apply module", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toContain(
+      'stepId: "pr_fix_apply",',
+    );
+  });
+
+  test("settles the failure with the path of the pr_fix flow", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toContain(
+      "path: PR_FIX_FLOW_PATH,",
+    );
+  });
+
+  test("does not throw the failure of the review round", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).not.toContain(
+      "throw new Error( `pr_fix_apply: claude run failed",
+    );
+  });
+
+  test("does not throw the failure of the conflict round", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).not.toContain(
+      "throw new Error(conflictClaudeFailedMessage(",
+    );
+  });
+
+  test("does not throw the failure of the CI round", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).not.toContain(
+      "throw new Error(`pr_fix_apply: ${ciClaudeFailureText(",
+    );
+  });
+});

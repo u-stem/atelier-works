@@ -7,6 +7,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PIPELINE_FLOW_PATH } from "../../f/factory/lib/pipeline_lease.ts";
+import { PR_FIX_FLOW_PATH } from "../../f/factory/lib/pr_fix_launch.ts";
+import { PR_REVIEW_FLOW_PATH } from "../../f/factory/lib/pr_review_retry.ts";
 import { AUDIT_FLOW_PATH } from "../../f/factory/steps/audit_generate.ts";
 
 function readFlow(name: string): string {
@@ -44,6 +46,8 @@ const RETRY_CONSTANT =
 const CLAUDE_MODULES: [string, string, string][] = [
   ["pipeline", "generate", PIPELINE_FLOW_PATH],
   ["audit", "audit_generate", AUDIT_FLOW_PATH],
+  ["pr_review", "pr_review_generate", PR_REVIEW_FLOW_PATH],
+  ["pr_fix", "pr_fix_apply", PR_FIX_FLOW_PATH],
 ];
 
 describe("Claude modules stop the flow on a failed outcome", () => {
