@@ -113,6 +113,12 @@ import {
   runDeployedShaCheck,
 } from "./lib/poll_support.ts";
 import { withCallTimeout } from "./lib/self_update_support.ts";
+import {
+  holdsGate,
+  readStopAll,
+  sdkStopAllReadIo,
+  unlessStopped,
+} from "./lib/stop_all.ts";
 import { postSupersededComments } from "./lib/supersede_support.ts";
 import {
   type FactoryConfig,
@@ -1493,7 +1499,18 @@ export async function main(): Promise<{
     },
   );
   const labelerPolicy = labelerPolicyFor(viewer.login, config);
-  const decisions = decideIssueActions(candidates, labelerPolicy);
+  // 全停止の間は、新しいIssueを取らない。止まっていないと確かめられない回も取らない。
+  // 取る直前に読むので、候補を集めている間に置かれた全停止にも従う。
+  // 進行中の作業項目の照合と、承認待ちの期限切れの整理は、新しい作業を始めないので続ける。
+  const stop = await readStopAll(sdkStopAllReadIo());
+  if (holdsGate(stop)) {
+    log.info("the stop-all is in place or unreadable, claiming no issue", {
+      state: stop.kind,
+    });
+  }
+  const decisions = unlessStopped(stop, () =>
+    decideIssueActions(candidates, labelerPolicy),
+  );
 
   // 所有を判断できなかったIssueの通知は、`processIssueDecisions`がループを抜けるときに送る。
   const processed = await processIssueDecisions(

@@ -171,7 +171,7 @@ locks:
   f/factory/lib/profile_upgrade: 25c6854e8bfef10f6042c3db54442adefc1062d836398a44b2f0feec27979d6c
   f/factory/lib/prompts: 1a87b663780e1f2fa5ea8199e5f32594749a0e77d882e69321dc72f8aaf77e5f
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: bab5fbced78bb412de16b679e9414eef57b8f43ed05397342f926d398022395c
+  f/factory/lib/protected_paths: 5d51a490d283c0af2e906a20d8b5c840aa0ce60a9bf03118aaef3479c2f43099
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
   f/factory/lib/requirements_doc: c175acfaa2af360877513464eb2204289018739f267ab983ad991a5939242d62
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955
@@ -197,7 +197,7 @@ locks:
   f/factory/on_error_flow: d8c7d371e5a1e9cb89bf2c2d870aad3b486ad4e4a959c2f10fbd6a020d806bcd
   f/factory/pipeline__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/poll_dependabot: 5fc165c01f8ce38bbac2c5d2e9a4a1a9f4b371a43de8eeb6aea82b0b314c3668
-  f/factory/poll_issues: 47cddcea02cf3d3070ea98dd0e6431bc6f5a1da6a859271fd00f577a379e0d5c
+  f/factory/poll_issues: c9d8d0c5421275bbff08c77f89d08fd849237b01b02b4dcadcb26093f62f54c0
   f/factory/poll_prs: 93715626024360def9c09c50128ffc830ee65e3e287b23a7e26cf73ac81adfa1
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -205,7 +205,7 @@ locks:
   f/factory/pr_review_submit: 4927355ebb6ec18d5ddb0fdc8f1bf784b6a050f1be8dd83a89dc9936c4a7a237
   f/factory/retry_work_item: 1ba50eaa155e060cb28d6a95b34ecc5f9884ef4665efe3f878da4d78fe683e0d
   f/factory/sample_worker_load: c9f49cba2f86ab2406e37baf04fc2aae3077aa4e432bd154164e534b80227cd1
-  f/factory/self_update: 08ec0324a386db2874a59e683630012e468b490c665109e3161a5b878cd5d172
+  f/factory/self_update: f05f5a1caea8861315a159c8bdc5f95f60274a79d0584f93adf5fd7d8b5e8441
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 61fc1f70dac94d87d68292ba8d5aaa6df99e608826fdb63909a8c20718700898
   f/factory/steps/console_query: 2e5e9b4632acd8ce2a055fe9304bd7b874d453de20f3bb8159f45e2dbcd1bd52
