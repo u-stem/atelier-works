@@ -751,6 +751,26 @@ function errorResultFailure(
   };
 }
 
+/**
+ * 標準出力のJSONの`total_cost_usd`を返す。読めないとき(JSONでないとき、途中で切れたとき、
+ * 値が有限で0以上の数でないとき)はnullを返す。
+ * 全停止で止めた実行は、止める直前に結果を書き終えていることがある。その実費を捨てずに数えるために、
+ * 結果の形の全体は問わず、費用の項目だけを読む。
+ */
+function totalCostUsdOf(stdout: string): number | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const cost: unknown = Reflect.get(parsed, "total_cost_usd");
+  return typeof cost === "number" && Number.isFinite(cost) && cost >= 0
+    ? cost
+    : null;
+}
+
 /** 標準出力を結果として読む。読めなければnullを返す。 */
 function parseClaudeJsonOrNull(stdout: string): ClaudeRunResult | null {
   try {
@@ -787,17 +807,23 @@ async function attemptClaude<T>(
 
   const baseAgentRun = baseAgentRunFor(opts, commandResult.exitCode);
 
-  // 全停止で止めた実行は、出力を読まずに失敗にする。止めた後の出力は途中までで、解析しても意味が無いためである。
+  // 全停止で止めた実行は、出力を解析せずに失敗にする。止めた後の出力は途中までで、解析しても意味が無いためである。
+  // 費用だけは、結果を書き終えていれば読む。
   if (watch.stopped() || commandResult.stopped === true) {
     const detail = failureDetail(CLAUDE_STOPPED_DETAIL);
+    // 結果を書き終えた直後に止めた実行は、その実費を記録する。読めないときだけ、上限の値で数える。
+    const writtenCost = totalCostUsdOf(commandResult.stdout);
     return {
       outcome: "failure",
       reason: "stopped",
-      agentRun: {
-        ...baseAgentRun,
-        cost_usd: opts.maxBudgetUsd,
-        error: `${detail} ${COST_IS_CAP_NOTE}`,
-      },
+      agentRun:
+        writtenCost === null
+          ? {
+              ...baseAgentRun,
+              cost_usd: opts.maxBudgetUsd,
+              error: `${detail} ${COST_IS_CAP_NOTE}`,
+            }
+          : { ...baseAgentRun, cost_usd: writtenCost, error: detail },
       detail,
     };
   }
