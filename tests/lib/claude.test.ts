@@ -1817,6 +1817,44 @@ describe("runClaude failure kinds and costs", () => {
     );
   });
 
+  test("classifies a usage limit after the API Error prefix as usage_limit", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ result: "API Error: You've hit your limit" }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "usage_limit",
+    );
+  });
+
+  test("classifies a usage limit on a later line of errors as usage_limit", async () => {
+    const fake = createFakeCommandRunner([
+      isErrorResult({ errors: ["first", "You've hit your limit"] }),
+    ]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "usage_limit",
+    );
+  });
+
+  test.each([
+    "Error: GitHub said: You've reached your API rate limit for this token.",
+    'The log says "You\'ve hit your limit" at the end.',
+    "Running this prompt against the whole repository at once requires usage credits",
+  ])("keeps the message %p as claude_error", async (message) => {
+    const fake = createFakeCommandRunner([isErrorResult({ result: message })]);
+
+    const result = await runClaude(baseOptions(fake.run));
+
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "claude_error",
+    );
+  });
+
   test("classifies a usage limit in errors as usage_limit", async () => {
     const fake = createFakeCommandRunner([
       isErrorResult({ errors: ["You've hit your limit"] }),
