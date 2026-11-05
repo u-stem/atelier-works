@@ -131,6 +131,50 @@ describe("runAllowedCheckCommands while the factory is stopped", () => {
     expect(events).toContain("release");
   });
 
+  test("reads the stop-all once for several commands", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    let reads = 0;
+    await runAllowedCheckCommands(
+      fake.run,
+      "/work",
+      ["a", "b", "c"],
+      1000,
+      home,
+      CHECK_COMMAND_PATH,
+      null,
+      {
+        check: async () => {
+          reads += 1;
+          return false;
+        },
+      },
+    );
+    expect(reads).toBe(1);
+  });
+
+  test("does not run the next command once the watch sees the stop", async () => {
+    let stopNow = false;
+    const fake = createFakeCommandRunner([ok(), ok()]);
+    const run: typeof fake.run = async (argv, options) => {
+      const result = await fake.run(argv, options);
+      // 1つ目のコマンドの間に全停止が置かれ、監視が見つけるまで待つ。
+      stopNow = true;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return result;
+    };
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["a", "b"],
+      1000,
+      home,
+      CHECK_COMMAND_PATH,
+      null,
+      { check: async () => stopNow, intervalMs: 5 },
+    );
+    expect(fake.calls.length).toBe(1);
+  });
+
   test("runs every command while the factory is not stopped", async () => {
     const { fake, results } = runWith([ok(), ok()], ["a", "b"], false);
     await results;
