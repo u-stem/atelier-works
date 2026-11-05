@@ -514,4 +514,16 @@ describe("deploy approval guides", () => {
       "上限が戻ってから",
     );
   });
+
+  test("tells to start the audit again from the audit button after the Claude usage limit resets", () => {
+    expect(noticeGuide("claude_usage_limit").action).toContain("今すぐ監査");
+  });
+
+  test("does not tell to wait for the next audit after the Claude usage limit", () => {
+    expect(noticeGuide("claude_usage_limit").action).not.toContain("次の週次");
+  });
+
+  test("says that any flow that runs Claude leaves the Claude usage limit notice", () => {
+    expect(noticeGuide("claude_usage_limit").meaning).toContain("どのflowでも");
+  });
 });
