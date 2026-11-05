@@ -3,7 +3,10 @@
 // タグの文字列だけを見るテストでは、注記の形が変わったときに回復の判定が外れることを検出できないためである。
 
 import { describe, expect, test } from "bun:test";
-import { ciClaudeFailedNote } from "../../f/factory/lib/ci_fix_round.ts";
+import {
+  ciClaudeFailedNote,
+  ciClaudeFailureText,
+} from "../../f/factory/lib/ci_fix_round.ts";
 import type { RunClaudeFailureReason } from "../../f/factory/lib/claude.ts";
 import { conflictClaudeFailedMessage } from "../../f/factory/lib/conflict_fix_apply.ts";
 import {
@@ -18,6 +21,7 @@ import {
 import { decideConflictFixRecovery } from "../../f/factory/lib/pr_conflict_fix_recovery.ts";
 import type { WorkItem } from "../../f/factory/lib/types.ts";
 import { handleFlowFailure } from "../../f/factory/on_error_flow.ts";
+import { decideFixFinishAction } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const NOW = new Date("2026-11-06T12:00:00Z");
 const ROOT_JOB = "0192d4a0-7b1c-7e2a-9f3d-1a2b3c4d5e6f";
@@ -159,6 +163,31 @@ describe("the failure of a CI round, from the exception of the step to the recov
       { ...prFixItem(), ci_check_id: 3 },
     );
     expect(note).toBe(ciClaudeFailedNote("usage_limit"));
+  });
+});
+
+describe("the failure of the verify step of a CI round, from the finish step to the recovery", () => {
+  test("ends a blocked verify step as needs_human", () => {
+    expect(decideFixFinishAction("blocked", false).kind).toBe("needs_human");
+  });
+
+  test.each([
+    ["timeout", "claude_run_failed"],
+    ["run_budget_exceeded", "claude_run_failed"],
+    ["usage_limit", "claude_usage_limit"],
+    ["stopped", "claude_stopped"],
+  ] as const)("holds the row on %s as %s", (reason, hold) => {
+    expect(
+      decideFixingRecovery(
+        {
+          status: "needs_human",
+          updatedAt: NOW,
+          note: ciClaudeFailureText(reason),
+          pushed: false,
+        },
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold });
   });
 });
 

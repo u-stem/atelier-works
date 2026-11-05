@@ -118,6 +118,10 @@ export function holdReasonForStoppedItem(
   return CLAUDE_FAILURE_HOLDS.get(note) ?? null;
 }
 
+export function isCiClaudeWaitNote(_note: string | null): boolean {
+  return false;
+}
+
 export type FixingRecovery =
   /** 何もしない。作業項目が動いているか、待つ時間が残っている。 */
   | { readonly kind: "keep" }

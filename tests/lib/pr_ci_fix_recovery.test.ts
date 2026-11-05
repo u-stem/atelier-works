@@ -13,6 +13,7 @@ import {
   decideFixingRecovery,
   type FixItemState,
   holdReasonForStoppedItem,
+  isCiClaudeWaitNote,
   readFixItemState,
   STALE_IMAGE_WAIT_MS,
 } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
@@ -59,7 +60,19 @@ describe("the CI round whose Claude run failed in a way that repeats", () => {
   );
 
   test.each(CLAUDE_FAILURE_HOLDS)(
-    "holds a blocked work item whose verify step failed with %s as %s",
+    "holds a needs_human work item whose verify step failed with %s as %s",
+    (reason, hold) => {
+      expect(
+        decideFixingRecovery(
+          item("needs_human", { note: ciClaudeFailureText(reason) }),
+          NOW,
+        ),
+      ).toEqual({ kind: "release", hold });
+    },
+  );
+
+  test.each(CLAUDE_FAILURE_HOLDS)(
+    "holds a blocked work item with the note of %s as %s",
     (reason, hold) => {
       expect(
         decideFixingRecovery(
@@ -69,6 +82,24 @@ describe("the CI round whose Claude run failed in a way that repeats", () => {
       ).toEqual({ kind: "release", hold });
     },
   );
+
+  test.each(["usage_limit", "stopped"] as const)(
+    "tells that the note of the verify step on %s waits",
+    (reason) => {
+      expect(isCiClaudeWaitNote(ciClaudeFailureText(reason))).toBe(true);
+    },
+  );
+
+  test.each(["timeout", "run_budget_exceeded", "claude_error"] as const)(
+    "tells that the note of the verify step on %s does not wait",
+    (reason) => {
+      expect(isCiClaudeWaitNote(ciClaudeFailureText(reason))).toBe(false);
+    },
+  );
+
+  test("tells that no note does not wait", () => {
+    expect(isCiClaudeWaitNote(null)).toBe(false);
+  });
 
   test("maps every failure that the flow does not retry", () => {
     const mapped: readonly string[] = CLAUDE_FAILURE_HOLDS.map(

@@ -5,6 +5,7 @@ import {
   SETTLE_MIN_AGE_MS,
   type WorkflowRun,
 } from "../../f/factory/lib/main_ci_support.ts";
+import { USAGE_LIMIT_GIVE_UP_AFTER_MS } from "../../f/factory/lib/pr_ci_fix_claim.ts";
 import { HOLD_PROLONGED_AFTER_MS } from "../../f/factory/lib/pr_ci_notify.ts";
 import {
   CONFIG_MISFIT_KIND,
@@ -1432,9 +1433,27 @@ describe("prCiFixHoldInfo", () => {
     expect(prCiFixHoldInfo("claude_run_failed").discord).toBe(true);
   });
 
-  test("does not name the usage limit among the failures that stay on hold", () => {
-    expect(prCiFixHoldInfo("claude_run_failed").nextAction).not.toContain(
-      "使用上限",
+  test("names the usage limit that did not come back among the failures that stay on hold", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").nextAction).toContain(
+      "戻らなかった使用上限",
+    );
+  });
+
+  test("names the usage limit that did not come back in the stop notice", () => {
+    expect(prCiFixHoldInfo("claude_run_failed").stopAction).toContain(
+      "戻らなかった使用上限",
+    );
+  });
+
+  test("says when the row on the usage limit stops starting again", () => {
+    expect(prCiFixHoldInfo("claude_usage_limit").nextAction).toContain(
+      `${String(USAGE_LIMIT_GIVE_UP_AFTER_MS / (24 * 60 * 60_000))}日`,
+    );
+  });
+
+  test("says in the stop notice when the row on the usage limit stops starting again", () => {
+    expect(prCiFixHoldInfo("claude_usage_limit").stopAction).toContain(
+      `${String(USAGE_LIMIT_GIVE_UP_AFTER_MS / (24 * 60 * 60_000))}日`,
     );
   });
 

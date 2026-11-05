@@ -4246,6 +4246,68 @@ check(
   await countPrCiFixRounds(FIX.owner, FIX.repo, 612, [WAIT_NOTE], sql),
 );
 
+// 検証のステップで使用上限に当たった回は、`pr_fix_finish`が`needs_human`で終える。これも数えない。
+const WAIT_VERIFY_NOTE = "ci round: claude run failed (usage_limit)";
+const waitedVerifyRow = await failedFixRow(614, FIX_SHA_1);
+const waitedVerifyItem = await fixClaim(waitedVerifyRow.id, FIX_SHA_1);
+if (waitedVerifyItem === null) throw new Error("the row was not claimed");
+await updateStatus(waitedVerifyItem, "needs_human", WAIT_VERIFY_NOTE, sql);
+check(
+  "wait: a needs_human round on a note that waits is not counted",
+  (await countPrCiFixRounds(
+    FIX.owner,
+    FIX.repo,
+    614,
+    [WAIT_VERIFY_NOTE],
+    sql,
+  )) === 0,
+  await countPrCiFixRounds(FIX.owner, FIX.repo, 614, [WAIT_VERIFY_NOTE], sql),
+);
+check(
+  "wait: a needs_human round on another note is counted",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 614, ["other"], sql)) === 1,
+  await countPrCiFixRounds(FIX.owner, FIX.repo, 614, ["other"], sql),
+);
+
+// 使用上限の保留の時間の上限は`first_seen_at`から測る。headが進むと新しい行になり、測り直しになる。
+const givenUpOldHead = await failedFixRow(615, FIX_SHA_1);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '9 days', fix_hold_reason = 'claude_usage_limit' WHERE id = ${String(givenUpOldHead.id)}`,
+);
+const givenUpNewHead = await failedFixRow(615, FIX_SHA_2);
+check(
+  "give up: the row of a new head starts its time again",
+  Date.now() - givenUpNewHead.first_seen_at.getTime() < 60 * 60_000,
+  givenUpNewHead,
+);
+check(
+  "give up: the row of a new head has no hold",
+  givenUpNewHead.fix_hold_reason === null,
+  givenUpNewHead,
+);
+await transitionPrCiCheck(
+  givenUpOldHead.id,
+  "failed",
+  { state: "superseded" },
+  sql,
+);
+await transitionPrCiCheck(
+  givenUpOldHead.id,
+  "superseded",
+  { state: "pending", reopen: true },
+  sql,
+);
+const givenUpReopened = await fixRowOf(givenUpOldHead.id);
+check(
+  "give up: a head that came back starts its time again",
+  givenUpReopened !== null &&
+    givenUpReopened !== undefined &&
+    Date.now() - new Date(String(givenUpReopened.first_seen_at)).getTime() <
+      60 * 60_000,
+  givenUpReopened,
+);
+
 // 下限を割らない。回復が同じ行を二重に戻しても、回数は負にならない。
 const floorRow = await failedFixRow(613, FIX_SHA_1);
 const floorItem = await fixClaim(floorRow.id, FIX_SHA_1);

@@ -153,8 +153,8 @@ locks:
   f/factory/lib/pipeline_lease: 3d7b420f8be61c0921f89cc5e81d8b45eca4ebf6643b608c846c1fac28db3921
   f/factory/lib/poll_source: 7eeea6ab24974ab76fcb6b10ae84b09fb79a0e4515ae2ba76f20896a09e895ec
   f/factory/lib/poll_support: 7b751f427bd7c407152fde3ee4d4526baf495147440797bd0ed317e8acd85bde
-  f/factory/lib/pr_ci_fix_claim: 003be211190a7eb30b941d7f0d0d33d9c3ae6840b1eb5c2497415005701d7786
-  f/factory/lib/pr_ci_fix_recovery: 589cab32d676de8f14bebb822e25e830aa0b76ab99ee64c928a255acad915454
+  f/factory/lib/pr_ci_fix_claim: 7cc86eb4cd6838895273c19a1094b90a9a8a27f20f056560be012d2c40519375
+  f/factory/lib/pr_ci_fix_recovery: 790aa6952b580fa721ba0fb68b162a982e61535d71cbaf39b91ed8945c7214ac
   f/factory/lib/pr_ci_human_support: 2157ef0625e623c028617b316415c4739d3b50be99ce77a64bf76a5c410ea94a
   f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
   f/factory/lib/pr_ci_support: 796dcb360fcb3ac1263c7b412a15d384da3eabfae9cae89f0d1ed2590b071668

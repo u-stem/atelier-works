@@ -33,6 +33,7 @@ import {
 } from "../../f/factory/lib/main_ci_support.ts";
 import { labelerPolicyFor } from "../../f/factory/lib/poll_support.ts";
 import type { WorkerEnvProblem } from "../../f/factory/lib/pr_ci_fix_claim.ts";
+import { USAGE_LIMIT_GIVE_UP_AFTER_MS } from "../../f/factory/lib/pr_ci_fix_claim.ts";
 import type { FixItemState } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
 import {
   HOLD_PROLONGED_AFTER_MS,
@@ -3851,6 +3852,36 @@ describe("a row on hold for the usage limit or the stop", () => {
     expect(c.holds).toEqual([{ id: 5, reason: null }]);
   });
 
+  test("moves to claude_run_failed when the head has been seen for the limit", async () => {
+    const c = claimHarness({
+      candidates: [
+        candidateRow({
+          fix_hold_reason: "claude_usage_limit",
+          first_seen_at: new Date(NOW.getTime() - USAGE_LIMIT_GIVE_UP_AFTER_MS),
+          updated_at: minutesBefore(1),
+        }),
+      ],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "claude_run_failed" }]);
+  });
+
+  test("clears the notified reason when it moves to claude_run_failed, so that the next notice goes out", async () => {
+    const c = claimHarness({
+      candidates: [
+        candidateRow({
+          fix_hold_reason: "claude_usage_limit",
+          first_seen_at: new Date(NOW.getTime() - USAGE_LIMIT_GIVE_UP_AFTER_MS),
+          updated_at: minutesBefore(1),
+        }),
+      ],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holdResets).toEqual([true]);
+  });
+
   test("is not claimed while the stop is held", async () => {
     const c = claimHarness({
       stopHeld: true,
@@ -4355,6 +4386,23 @@ describe("notifying a deferred failure", () => {
         reason: "ci_failure(自動修正の保留: rounds_exhausted)",
         target: { kind: "pr", number: 12 },
         next_action: prCiFixHoldInfo("rounds_exhausted").nextAction,
+      },
+    ]);
+  });
+
+  test("sends the pull request and the next action for a row that moved to claude_run_failed", async () => {
+    const h = harness(deferredSetup({ fix_hold_reason: "claude_run_failed" }));
+    await runPrCiWatch(h.deps);
+    expect(h.discord).toEqual([
+      {
+        kind: "needs_human",
+        instance_name: "local",
+        owner: "acme",
+        repo: "widgets",
+        url: PR_PAGE,
+        reason: "ci_failure(自動修正の保留: claude_run_failed)",
+        target: { kind: "pr", number: 12 },
+        next_action: prCiFixHoldInfo("claude_run_failed").nextAction,
       },
     ]);
   });

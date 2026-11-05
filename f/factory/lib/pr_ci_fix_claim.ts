@@ -133,6 +133,8 @@ export const LAUNCH_FAILURE_ALLOWANCE = 3;
  */
 export const USAGE_LIMIT_RESUME_AFTER_MS = HOLD_PROLONGED_AFTER_MS;
 
+export const USAGE_LIMIT_GIVE_UP_AFTER_MS = 0;
+
 /** 検査を動かすworkerの環境が前提を満たさないことを表す保留の理由。 */
 export type WorkerEnvHoldReason = Extract<
   PrCiFixHoldReason,
