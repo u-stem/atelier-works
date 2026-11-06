@@ -180,11 +180,11 @@ describe("Sidebar edge toggle", () => {
 
   test("shows the toggle always on a device that cannot hover", () => {
     expect(render()).toMatch(
-      /<button[^>]*aria-label="メニューの開閉"[^>]*class="[^"]*pointer-coarse:opacity-100/,
+      /<button[^>]*aria-label="メニューの開閉"[^>]*class="[^"]*\[@media\(hover:none\)\]:opacity-100/,
     );
   });
 
-  test("lights the edge line only when the toggle can be seen by keyboard focus", () => {
+  test("lights the edge line from the keyboard focus of the toggle", () => {
     expect(render()).toContain("group-has-[:focus-visible]/edge:opacity-60");
   });
 
