@@ -305,6 +305,36 @@ describe("threadResponseKind", () => {
     ).toBe("addressable");
   });
 
+  test("treats a commit reply without backticks as addressable", () => {
+    expect(
+      threadResponseKind(
+        thread(replied("alice", "直しました。\n\n対応: abc1234")),
+        VIEWER,
+        isAllowed,
+      ),
+    ).toBe("addressable");
+  });
+
+  test("does not answer a commit reply with only an opening backtick", () => {
+    expect(
+      threadResponseKind(
+        thread(replied("alice", "直しました。\n\n対応: `abc1234")),
+        VIEWER,
+        isAllowed,
+      ),
+    ).toBeNull();
+  });
+
+  test("does not answer a commit reply with only a closing backtick", () => {
+    expect(
+      threadResponseKind(
+        thread(replied("alice", "直しました。\n\n対応: abc1234`")),
+        VIEWER,
+        isAllowed,
+      ),
+    ).toBeNull();
+  });
+
   test("leaves a pr_fix commit reply to the automatic resolving", () => {
     expect(
       threadResponseKind(
