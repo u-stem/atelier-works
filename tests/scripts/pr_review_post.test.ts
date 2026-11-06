@@ -1076,6 +1076,101 @@ describe("a thread the re-review objected to", () => {
   });
 });
 
+// 反論は「見送りを了承しない」という答えなので、了承されるまでマージを止める。
+// 最後の行は`対応: 見送り`でなくなるため、反論の目印で見分ける。
+describe("an IMO thread the re-review objected to", () => {
+  const objectionBody = renderThreadReply(
+    {
+      thread_id: 1,
+      decision: "skip_rejected",
+      body: "見送りは認められません。",
+    },
+    9,
+  );
+  const imoFinding = "[pr_review 自動レビュー] @alice\n[IMO] consider";
+  const isAllowed = (login: string): boolean => login === "factory-bot";
+
+  function objectedImo(overrides: Partial<ReviewThread> = {}): ReviewThread {
+    return {
+      id: "thread-1",
+      isResolved: false,
+      path: "a.ts",
+      line: 10,
+      firstCommentAuthorLogin: "factory-bot",
+      firstCommentBody: imoFinding,
+      lastCommentAuthorLogin: "factory-bot",
+      lastCommentBody: objectionBody,
+      firstCommentDatabaseId: 1,
+      allCommentIds: [1, 2],
+      comments: [
+        {
+          databaseId: 1,
+          authorLogin: "factory-bot",
+          authorId: null,
+          body: imoFinding,
+        },
+        {
+          databaseId: 2,
+          authorLogin: "factory-bot",
+          authorId: null,
+          body: objectionBody,
+        },
+      ],
+      lastCommentAuthorId: null,
+      ...overrides,
+    };
+  }
+
+  test("counts as a blocking thread", () => {
+    expect(
+      countBlockingThreads([objectedImo()], "factory-bot", isAllowed, []),
+    ).toBe(1);
+  });
+
+  test("does not count once the thread is resolved this round", () => {
+    expect(
+      countBlockingThreads([objectedImo()], "factory-bot", isAllowed, [
+        "thread-1",
+      ]),
+    ).toBe(0);
+  });
+
+  test("does not count an objection a person pasted", () => {
+    expect(
+      countBlockingThreads(
+        [objectedImo({ lastCommentAuthorLogin: "mallory" })],
+        "factory-bot",
+        isAllowed,
+        [],
+      ),
+    ).toBe(0);
+  });
+
+  test("does not count a thread whose only comment carries an objection marker", () => {
+    expect(
+      countBlockingThreads(
+        [
+          objectedImo({
+            firstCommentBody: objectionBody,
+            lastCommentBody: objectionBody,
+            comments: [
+              {
+                databaseId: 1,
+                authorLogin: "factory-bot",
+                authorId: null,
+                body: objectionBody,
+              },
+            ],
+          }),
+        ],
+        "factory-bot",
+        isAllowed,
+        [],
+      ),
+    ).toBe(0);
+  });
+});
+
 describe("countOpenThreads", () => {
   function open(overrides: Partial<ReviewThread> = {}): ReviewThread {
     return {
@@ -2222,6 +2317,36 @@ describe("posting a review once per sha", () => {
         const fake = createFakeCommandRunner([
           ghApiOk([humanReview(1)]),
           objectedThreads(),
+          ghApiOk({ id: 99 }),
+        ]);
+        const result = await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput(),
+          SILENT,
+        );
+        expect(result.blockingThreadCount).toBe(1);
+      });
+    });
+
+    describe("when an objected IMO thread remains and the re-review has no new findings", () => {
+      test("reports the thread as blocking", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([humanReview(1)]),
+          threadsResponse([
+            skipThreadNode(
+              "PRRT_1",
+              501,
+              "IMO",
+              renderThreadReply(
+                {
+                  thread_id: 501,
+                  decision: "skip_rejected",
+                  body: "見送りは認められません。",
+                },
+                9,
+              ),
+            ),
+          ]),
           ghApiOk({ id: 99 }),
         ]);
         const result = await publishReview(
