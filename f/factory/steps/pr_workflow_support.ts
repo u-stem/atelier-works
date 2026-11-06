@@ -6167,6 +6167,14 @@ export function decideReviewScope(
   return { kind: "delta", fromSha: prior.sha, hasMerge: input.delta.hasMerge };
 }
 
+export function settleReviewFindings(
+  output: { readonly summary: string; readonly findings: ReviewFinding[] },
+  _scope: ReviewScope,
+  _maxFindings: number,
+): { summary: string; findings: ReviewFinding[] } {
+  return { summary: "", findings: output.findings };
+}
+
 /** スコープに合う`maxTurns`を返す。 */
 export function reviewMaxTurns(scope: ReviewScope, configured: number): number {
   return scope.kind === "first" || scope.kind === "full"

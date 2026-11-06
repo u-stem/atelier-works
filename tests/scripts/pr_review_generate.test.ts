@@ -450,9 +450,7 @@ describe("review scope wiring in the generate step", () => {
   });
 
   test("sets the turn limit from the scope", async () => {
-    expect(await SOURCE).toContain(
-      "maxTurns: reviewMaxTurns(scope, config.max_turns)",
-    );
+    expect(await SOURCE).toContain("maxTurns: reviewMaxTurns(scope, config)");
   });
 
   test("logs why a review reads the whole PR", async () => {
@@ -461,7 +459,19 @@ describe("review scope wiring in the generate step", () => {
     );
   });
 
-  test("keeps at most 50 findings", async () => {
-    expect(await SOURCE).toContain("const MAX_FINDINGS = 50;");
+  test("settles the findings with the shared limit", async () => {
+    expect(await SOURCE).toContain(
+      "settleReviewFindings(output, scope, REVIEW_MAX_FINDINGS)",
+    );
+  });
+
+  test("gives the prompt only the binary files of a delta", async () => {
+    expect(await SOURCE).toContain(
+      "selectListedBinaryFiles(deltaDiff.binaryFiles, prFiles).listed",
+    );
+  });
+
+  test("keeps the binary files of the whole PR for the summary", async () => {
+    expect(await SOURCE).toContain("binary_files: binaryFiles,");
   });
 });

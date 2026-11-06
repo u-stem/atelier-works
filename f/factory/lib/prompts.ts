@@ -476,6 +476,8 @@ function binaryFilesSection(
   ];
 }
 
+export const REVIEW_MAX_FINDINGS = 0;
+
 /** PR全体を読むレビューに頼む固定文。後のレビューは後のcommitだけを見るので、ここで出し切らせる。 */
 const REPORT_EVERYTHING_LINES: readonly string[] = [
   "Report everything in this one pass. A later review only looks at later",

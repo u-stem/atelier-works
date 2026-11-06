@@ -14,6 +14,7 @@ import {
   reviewMaxTurns,
   reviewThreadsForPrompt,
   selectThreadResponses,
+  settleReviewFindings,
   threadResponseKind,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
@@ -619,24 +620,140 @@ describe("hasBodyOnlyMustFinding", () => {
 });
 
 describe("reviewMaxTurns", () => {
-  test("raises the limit for the first review", () => {
-    expect(reviewMaxTurns({ kind: "first" }, 40)).toBe(80);
+  const CONFIG = { max_turns: 40, pr_review_full_max_turns: 70 };
+
+  test("uses the whole-PR limit for the first review", () => {
+    expect(reviewMaxTurns({ kind: "first" }, CONFIG)).toBe(70);
   });
 
-  test("raises the limit for a full re-review", () => {
+  test("uses the whole-PR limit for a full re-review", () => {
     expect(
-      reviewMaxTurns({ kind: "full", reason: "requested_again" }, 40),
-    ).toBe(80);
+      reviewMaxTurns({ kind: "full", reason: "requested_again" }, CONFIG),
+    ).toBe(70);
   });
 
-  test("keeps a larger configured limit", () => {
-    expect(reviewMaxTurns({ kind: "first" }, 120)).toBe(120);
-  });
-
-  test("keeps the configured limit for a delta review", () => {
+  test("does not raise the whole-PR limit to the usual limit", () => {
     expect(
-      reviewMaxTurns({ kind: "delta", fromSha: PRIOR, hasMerge: false }, 40),
+      reviewMaxTurns(
+        { kind: "first" },
+        { max_turns: 120, pr_review_full_max_turns: 70 },
+      ),
+    ).toBe(70);
+  });
+
+  test("keeps the usual limit for a delta review", () => {
+    expect(
+      reviewMaxTurns(
+        { kind: "delta", fromSha: PRIOR, hasMerge: false },
+        CONFIG,
+      ),
     ).toBe(40);
+  });
+
+  test("keeps the usual limit for a threads-only review", () => {
+    expect(
+      reviewMaxTurns({ kind: "threads_only", fromSha: PRIOR }, CONFIG),
+    ).toBe(40);
+  });
+});
+
+describe("settleReviewFindings", () => {
+  function severe(
+    severity: ReviewFinding["severity"],
+    message = "m",
+  ): ReviewFinding {
+    return {
+      path: "a.ts",
+      line: 1,
+      end_line: null,
+      severity,
+      kind: "imo",
+      message,
+      suggestion: null,
+      suggested_code: null,
+    };
+  }
+  const FIRST = { kind: "first" } as const;
+
+  test("orders the findings from the most severe", () => {
+    const { findings } = settleReviewFindings(
+      {
+        summary: "s",
+        findings: [
+          severe("nit"),
+          severe("minor"),
+          severe("blocker"),
+          severe("major"),
+        ],
+      },
+      FIRST,
+      50,
+    );
+    expect(findings.map((finding) => finding.severity)).toEqual([
+      "blocker",
+      "major",
+      "minor",
+      "nit",
+    ]);
+  });
+
+  test("keeps the order of findings with the same severity", () => {
+    const { findings } = settleReviewFindings(
+      { summary: "s", findings: [severe("nit", "a"), severe("nit", "b")] },
+      FIRST,
+      50,
+    );
+    expect(findings.map((finding) => finding.message)).toEqual(["a", "b"]);
+  });
+
+  test("drops the least severe findings over the limit", () => {
+    const { findings } = settleReviewFindings(
+      { summary: "s", findings: [severe("nit"), severe("blocker")] },
+      FIRST,
+      1,
+    );
+    expect(findings.map((finding) => finding.severity)).toEqual(["blocker"]);
+  });
+
+  test("notes the number of dropped findings in the summary", () => {
+    const { summary } = settleReviewFindings(
+      {
+        summary: "s",
+        findings: [severe("nit"), severe("nit"), severe("blocker")],
+      },
+      FIRST,
+      1,
+    );
+    expect(summary).toBe(
+      "s\n\n(上限の1件を超えたため、重要度の低い指摘を2件省略しました。)",
+    );
+  });
+
+  test("leaves the summary alone within the limit", () => {
+    const { summary } = settleReviewFindings(
+      { summary: "s", findings: [severe("nit")] },
+      FIRST,
+      1,
+    );
+    expect(summary).toBe("s");
+  });
+
+  test("drops every finding of a threads-only review", () => {
+    const { findings } = settleReviewFindings(
+      { summary: "s", findings: [severe("blocker")] },
+      { kind: "threads_only", fromSha: PRIOR },
+      50,
+    );
+    expect(findings).toEqual([]);
+  });
+
+  test("adds no note for the findings of a threads-only review", () => {
+    const { summary } = settleReviewFindings(
+      { summary: "s", findings: [severe("blocker"), severe("nit")] },
+      { kind: "threads_only", fromSha: PRIOR },
+      1,
+    );
+    expect(summary).toBe("s");
   });
 });
 

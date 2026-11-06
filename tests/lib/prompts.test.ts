@@ -18,6 +18,7 @@ import {
   isDesignOutput,
   type PromptReviewThread,
   REQUIREMENTS_SCHEMA,
+  REVIEW_MAX_FINDINGS,
   REVIEW_SCHEMA,
   type ReviewPromptInput,
   requirementsPrompt,
@@ -495,13 +496,41 @@ describe("reviewPrompt", () => {
       expect(prompt).toContain("null check missing");
     });
 
-    test("tells the review not to repeat open or resolved threads", () => {
+    test("tells the review not to repeat a thread the factory started", () => {
       const prompt = reviewPrompt(
         { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
         FIXED_UUID,
       );
       expect(prompt).toContain(
-        "Do not report a finding that is substantially the same as any of these threads, open or resolved.",
+        "Do not report a finding that is substantially the same as a thread with `started_by` `factory`, open or resolved.",
+      );
+    });
+
+    test("does not tell the review to leave out what a person's thread mentions", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("any of these threads");
+    });
+
+    test("treats a thread a person started as context only", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "A thread with `started_by` `person` is context only. Never leave out a finding because of it.",
+      );
+    });
+
+    test("asks to report again a problem the diff brings back", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "If the diff brings back the same problem as a resolved thread, report it.",
       );
     });
 
@@ -640,6 +669,52 @@ describe("reviewPrompt", () => {
         FIXED_UUID,
       );
       expect(prompt).toContain("report no new finding");
+    });
+
+    test("leaves the binary files out of a threads-only review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          binaryFiles: ["a.png"],
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("(binary files)");
+    });
+
+    test("leaves the CI round section out of a threads-only review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          fixRound: "ci",
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("factory's CI-fix round");
+    });
+
+    test("leaves the conflict round section out of a threads-only review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          fixRound: "conflict",
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("merge-conflict round");
+    });
+
+    test("states the limit on findings", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, scope: { kind: "first" } },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        `Report at most ${String(REVIEW_MAX_FINDINGS)} findings, the most important first`,
+      );
     });
   });
 
@@ -1776,6 +1851,12 @@ describe("factory-implementation SKILL.md ⇔ IMPLEMENT_SCHEMA", () => {
   async function readSkillText(): Promise<string> {
     return Bun.file(SKILL_PATH).text();
   }
+});
+
+describe("REVIEW_MAX_FINDINGS", () => {
+  test("is 50", () => {
+    expect(REVIEW_MAX_FINDINGS).toBe(50);
+  });
 });
 
 describe("BINARY_LIST_MAX_FILES", () => {
