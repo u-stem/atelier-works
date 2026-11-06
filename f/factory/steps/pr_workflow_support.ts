@@ -3408,6 +3408,7 @@ export type PrFixFinishBumpKind =
   | "push_missing_commit_message"
   | "push_head_changed"
   | "push_nothing_to_commit"
+  | "skip_only_replied"
   | "push_success";
 
 /**
@@ -3943,6 +3944,28 @@ export function selectProposeIssueReplies(
   replies: readonly FixReply[],
 ): FixReply[] {
   return replies.filter((reply) => reply.decision === "propose_issue");
+}
+
+export type NothingToCommitEnd = "issue_proposal" | "skip_only" | "needs_human";
+
+/** 見送りの返信の後に、作業項目に残す補足。 */
+export const SKIP_ONLY_ROUND_NOTE = "";
+
+/** 見送りの再レビューのラベルを付けられなかったときの理由。 */
+export const SKIP_REREVIEW_LABEL_FAILED_REASON = "";
+
+export function decideNothingToCommitEnd(
+  _replies: readonly FixReply[],
+  _ciRound: boolean,
+): NothingToCommitEnd {
+  return "needs_human";
+}
+
+export function needsSkipRereviewLabel(
+  _replies: readonly FixReply[],
+  _ciRound: boolean,
+): boolean {
+  return false;
 }
 
 /**

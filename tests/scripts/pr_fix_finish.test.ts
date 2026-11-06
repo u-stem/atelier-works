@@ -27,13 +27,18 @@ import {
   buildReplyPostFailedNotice,
   claudeBlockedReason,
   decideFixFinishAction,
+  decideNothingToCommitEnd,
   deriveFallbackReviewers,
+  describeReason,
   evaluateRerouteGuard,
   listReviewThreadsBestEffort,
+  needsSkipRereviewLabel,
+  nextActionFor,
   type PrFixPushGateDeps,
   type PrFixSecretScanDeps,
   prFixPushGateReason,
   renderFixReply,
+  SKIP_REREVIEW_LABEL_FAILED_REASON,
   scanPrFixBeforeCommit,
   shouldAdvanceWatermarks,
   stopBeforeCommitTerminal,
@@ -812,5 +817,128 @@ describe("requestRereview", () => {
       outcome: "failed",
       error: "request failed with ***",
     });
+  });
+});
+
+function replyOf(decision: FixReply["decision"]): FixReply {
+  return {
+    review_comment_id: 1,
+    decision,
+    body: "理由",
+    issue_proposal:
+      decision === "propose_issue" ? { title: "t", body: "b" } : null,
+  };
+}
+
+describe("decideNothingToCommitEnd", () => {
+  test("waits for the re-review when every reply is skipped", () => {
+    expect(decideNothingToCommitEnd([replyOf("skipped")], false)).toBe(
+      "skip_only",
+    );
+  });
+
+  test("keeps the proposal flow when a reply proposes an issue", () => {
+    expect(
+      decideNothingToCommitEnd(
+        [replyOf("skipped"), replyOf("propose_issue")],
+        false,
+      ),
+    ).toBe("issue_proposal");
+  });
+
+  test("asks a person when a fixed reply committed nothing", () => {
+    expect(
+      decideNothingToCommitEnd([replyOf("skipped"), replyOf("fixed")], false),
+    ).toBe("needs_human");
+  });
+
+  test("asks a person when there is no reply", () => {
+    expect(decideNothingToCommitEnd([], false)).toBe("needs_human");
+  });
+
+  test("asks a person for a CI round", () => {
+    expect(decideNothingToCommitEnd([replyOf("skipped")], true)).toBe(
+      "needs_human",
+    );
+  });
+});
+
+describe("needsSkipRereviewLabel", () => {
+  test("adds the label when a pushed round also skipped a finding", () => {
+    expect(
+      needsSkipRereviewLabel([replyOf("fixed"), replyOf("skipped")], false),
+    ).toBe(true);
+  });
+
+  test("does not add it without a skipped reply", () => {
+    expect(needsSkipRereviewLabel([replyOf("fixed")], false)).toBe(false);
+  });
+
+  test("does not add it while an issue proposal waits", () => {
+    expect(
+      needsSkipRereviewLabel(
+        [replyOf("skipped"), replyOf("propose_issue")],
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not add it for a CI round", () => {
+    expect(needsSkipRereviewLabel([replyOf("skipped")], true)).toBe(false);
+  });
+});
+
+describe("the skip-only round's watermarks", () => {
+  test("advances watermarks once the replies are posted", () => {
+    expect(shouldAdvanceWatermarks("skip_only_replied")).toBe(true);
+  });
+});
+
+describe("the review label failure reason", () => {
+  test("translates the reason for notifications", () => {
+    expect(describeReason(SKIP_REREVIEW_LABEL_FAILED_REASON)).toBe(
+      "見送りの再レビューを依頼するラベルを付けられませんでした",
+    );
+  });
+
+  test("asks to add the label", () => {
+    expect(nextActionFor(SKIP_REREVIEW_LABEL_FAILED_REASON)).toBe(
+      "PRに`factory:review`を付けてください",
+    );
+  });
+});
+
+describe("skip wiring in the finish step", () => {
+  const SOURCE = Bun.file(
+    new URL("../../f/factory/steps/pr_fix_finish.ts", import.meta.url),
+  ).text();
+
+  test("adds the review label from the config", async () => {
+    expect(await SOURCE).toContain(
+      "addLabels(client, owner, repo, pr_number, [config.review_label])",
+    );
+  });
+
+  test("checks the repository owner before adding the label", async () => {
+    const source = await SOURCE;
+    const body = source.slice(
+      source.indexOf("async function requestSkipRereview"),
+    );
+    expect(body.indexOf("repoOwnerStopReason(")).toBeLessThan(
+      body.indexOf("addLabels(client"),
+    );
+  });
+
+  test("records a skip-only round as done", async () => {
+    expect(await SOURCE).toContain(
+      'outcome: nothingToCommitEnd === "skip_only" ? "done" : "blocked"',
+    );
+  });
+
+  test("advances the watermarks before adding the label in a skip-only round", async () => {
+    const source = await SOURCE;
+    expect(
+      source.indexOf('shouldAdvanceWatermarks("skip_only_replied")'),
+    ).toBeLessThan(source.indexOf("await requestSkipRereview()"));
   });
 });
