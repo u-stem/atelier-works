@@ -1039,7 +1039,7 @@ export type ThreadAuthorPredicate = (
 export type ThreadResponseKind = "skip" | "addressable";
 
 const SKIP_REPLY_LINE = "対応: 見送り";
-const COMMIT_REPLY_LINE = /^対応: `?[0-9a-f]{7,40}`?$/;
+const COMMIT_REPLY_LINE = /^対応: (?:`[0-9a-f]{7,40}`|[0-9a-f]{7,40})$/;
 const HTML_COMMENT_LINE = /^<!--.*-->$/;
 
 /** プロンプトに載せるコメント1件の文字数の上限。超えた分は「…」にする。 */
