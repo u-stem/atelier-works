@@ -160,6 +160,12 @@ describe("Sidebar when collapsed", () => {
     );
   });
 
+  test("names the edge toggle as the one that expands the menu", () => {
+    expect(asideOf(renderCollapsed())).toMatch(
+      /<button[^>]*aria-label="メニューの開閉"[^>]*title="メニューを広げる"/,
+    );
+  });
+
   test("reports the collapsed state on the edge toggle", () => {
     expect(asideOf(renderCollapsed())).toMatch(
       /<button[^>]*aria-expanded="false"[^>]*aria-label="メニューの開閉"/,
@@ -187,6 +193,22 @@ describe("Sidebar edge toggle", () => {
   test("shows the toggle at once when the keyboard focuses it", () => {
     expect(render()).toMatch(
       /<button[^>]*aria-label="メニューの開閉"[^>]*class="[^"]*focus-visible:transition-none/,
+    );
+  });
+
+  test("places the toggle at the height the pointer set, centered in the edge by default", () => {
+    expect(render()).toMatch(
+      /<button[^>]*aria-label="メニューの開閉"[^>]*class="[^"]*top-\[clamp\(1rem,var\(--edge-y,50%\),/,
+    );
+  });
+
+  test("clamps the toggle to the inside of the edge in the style", () => {
+    expect(render()).toContain("calc(100%_-_1rem))]");
+  });
+
+  test("names the toggle for the mouse with the title, not a tooltip", () => {
+    expect(render()).toMatch(
+      /<button[^>]*aria-label="メニューの開閉"[^>]*title="メニューをたたむ"/,
     );
   });
 

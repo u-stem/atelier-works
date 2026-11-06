@@ -74,3 +74,28 @@ export function navLinkClass(collapsed: boolean): string {
     collapsed && "justify-center px-0",
   );
 }
+
+/**
+ * 縁のつまみが、ポインタの動きを追うかを返す。
+ * タッチは、指が縁の上を動いてもスクロールが始まるだけで、位置を決める操作ではないので追わない。
+ */
+export function edgeToggleFollows(pointerType: string): boolean {
+  return pointerType !== "touch";
+}
+
+/** 縁のつまみが、縁の上下の端から離れる距離(px)。つまみの半分の大きさに余白を足した値である。 */
+export const EDGE_TOGGLE_MARGIN = 16;
+
+/**
+ * 縁のつまみの縦の位置(縁の上端からの距離、px)を返す。
+ * ポインタの高さ(`pointerY`)に合わせ、縁の上端(`top`)と高さ(`height`)の内側で、上下に余白を残して挟む。
+ * 縁が後から縮む場合に備え、CSSの`clamp`も同じ余白(1rem)で挟む。実際の位置は、最後にCSSが決める。
+ */
+export function edgeToggleOffset(
+  pointerY: number,
+  top: number,
+  height: number,
+): number {
+  const lowest = Math.max(EDGE_TOGGLE_MARGIN, height - EDGE_TOGGLE_MARGIN);
+  return Math.min(Math.max(pointerY - top, EDGE_TOGGLE_MARGIN), lowest);
+}
