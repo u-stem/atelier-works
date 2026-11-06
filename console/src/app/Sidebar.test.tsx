@@ -184,6 +184,12 @@ describe("Sidebar edge toggle", () => {
     );
   });
 
+  test("shows the toggle at once when the keyboard focuses it", () => {
+    expect(render()).toMatch(
+      /<button[^>]*aria-label="メニューの開閉"[^>]*class="[^"]*focus-visible:transition-none/,
+    );
+  });
+
   test("lights the edge line from the keyboard focus of the toggle", () => {
     expect(render()).toContain("group-has-[:focus-visible]/edge:opacity-60");
   });
