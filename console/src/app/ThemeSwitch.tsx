@@ -8,6 +8,7 @@ import {
 import { cn } from "../lib/cn.ts";
 import { SIDEBAR_ICON_BUTTON_CLASS } from "../lib/controlClasses.ts";
 import {
+  currentTheme,
   oppositeTheme,
   resolveTheme,
   THEME_PREFERENCE_ATTRIBUTE,
@@ -93,20 +94,12 @@ function browserEnv(): ThemeEnv {
   };
 }
 
-/** いま画面に付いている配色。`data-theme`が無いときは、OSの設定に従う。 */
-function currentTheme(): "light" | "dark" {
-  const attribute = document.documentElement.getAttribute("data-theme");
-  if (attribute === "light" || attribute === "dark") {
-    return attribute;
-  }
-  try {
-    return resolveTheme(
-      "system",
-      window.matchMedia(COLOR_SCHEME_QUERY).matches,
-    );
-  } catch {
-    return "light";
-  }
+/** いま画面に付いている配色を、htmlの`data-theme`とOSの設定から読む。 */
+function readCurrentTheme(): "light" | "dark" {
+  return currentTheme(
+    document.documentElement.getAttribute("data-theme"),
+    () => window.matchMedia(COLOR_SCHEME_QUERY).matches,
+  );
 }
 
 /** 配色は、この切り替え以外にも、OSの設定の変更で替わる。属性の変化を見て、表示を合わせる。 */
@@ -136,7 +129,7 @@ export function ThemeSwitch({
 }) {
   const theme = useSyncExternalStore(
     subscribeTheme,
-    currentTheme,
+    readCurrentTheme,
     (): "light" | "dark" => "light",
   );
   const next = oppositeTheme(theme);

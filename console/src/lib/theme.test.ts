@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  currentTheme,
   oppositeTheme,
   parseThemePreference,
   resolveTheme,
   THEME_PREFERENCE_ATTRIBUTE,
-  themePreferenceLabel,
 } from "./theme.ts";
 
 describe("parseThemePreference", () => {
@@ -39,17 +39,35 @@ describe("oppositeTheme", () => {
   });
 });
 
-describe("themePreferenceLabel", () => {
-  test("labels system in Japanese", () => {
-    expect(themePreferenceLabel("system")).toBe("OSに合わせる");
+describe("currentTheme", () => {
+  const darkOs = () => true;
+  const lightOs = () => false;
+  const unreadableOs = (): boolean => {
+    throw new Error("matchMedia is unavailable");
+  };
+
+  test("uses the dark attribute even on a light OS", () => {
+    expect(currentTheme("dark", lightOs)).toBe("dark");
   });
 
-  test("labels light in Japanese", () => {
-    expect(themePreferenceLabel("light")).toBe("ライト");
+  test("uses the light attribute even on a dark OS", () => {
+    expect(currentTheme("light", darkOs)).toBe("light");
   });
 
-  test("labels dark in Japanese", () => {
-    expect(themePreferenceLabel("dark")).toBe("ダーク");
+  test("follows a dark OS when there is no attribute", () => {
+    expect(currentTheme(null, darkOs)).toBe("dark");
+  });
+
+  test("follows a light OS when there is no attribute", () => {
+    expect(currentTheme(null, lightOs)).toBe("light");
+  });
+
+  test("ignores an unknown attribute and follows the OS", () => {
+    expect(currentTheme("sepia", darkOs)).toBe("dark");
+  });
+
+  test("falls back to light when the OS setting cannot be read", () => {
+    expect(currentTheme(null, unreadableOs)).toBe("light");
   });
 });
 

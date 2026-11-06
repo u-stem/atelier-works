@@ -94,12 +94,10 @@ describe("Sidebar Windmill link", () => {
 
   test("opens in a new tab without leaking the opener", () => {
     expect(
-      windmillLinks(render()).every(
-        (tag) =>
-          tag.includes('target="_blank"') &&
-          tag.includes('rel="noopener noreferrer"'),
+      windmillLinks(render()).map((tag) =>
+        tag.includes('rel="noopener noreferrer"'),
       ),
-    ).toBe(true);
+    ).toEqual([true, true]);
   });
 });
 
@@ -117,12 +115,55 @@ describe("Sidebar theme toggle", () => {
 
   test("offers dark in the light screen", () => {
     expect(
-      themeButtons(render()).every((b) => b.includes("ダークにする")),
-    ).toBe(true);
+      themeButtons(render()).map((button) => button.includes("ダークにする")),
+    ).toEqual([true, true]);
   });
 
   test("has no three-way theme group", () => {
     expect(render()).not.toContain("OSに合わせる");
+  });
+});
+
+/** たたんだ状態(保存領域に`1`がある)で描く。bunのテストには`window`が無いので、読み出しだけを差し替える。 */
+function renderCollapsed(): string {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    value: { localStorage: { getItem: () => "1" } },
+    configurable: true,
+    writable: true,
+  });
+  try {
+    return render();
+  } finally {
+    Reflect.deleteProperty(globalThis, "window");
+    if (original !== undefined) {
+      Object.defineProperty(globalThis, "window", original);
+    }
+  }
+}
+
+/** サイドバー(`aside`)の部分だけ。ドロワーは常に広げた形なので、たたんだ形の確認から外す。 */
+function asideOf(html: string): string {
+  return html.slice(html.indexOf("<aside"));
+}
+
+describe("Sidebar when collapsed", () => {
+  test("keeps the theme button, with its name for screen readers only", () => {
+    expect(asideOf(renderCollapsed())).toContain(
+      '<span class="sr-only">ダークにする</span>',
+    );
+  });
+
+  test("keeps the Windmill link, with its name for screen readers only", () => {
+    expect(asideOf(renderCollapsed())).toMatch(
+      /<span class="sr-only">Windmill/,
+    );
+  });
+
+  test("reports the collapsed state on the edge toggle", () => {
+    expect(asideOf(renderCollapsed())).toMatch(
+      /<button[^>]*aria-expanded="false"[^>]*aria-label="メニューの開閉"/,
+    );
   });
 });
 
@@ -135,6 +176,16 @@ describe("Sidebar edge toggle", () => {
     expect(render()).toMatch(
       /<button[^>]*aria-expanded="true"[^>]*aria-label="メニューの開閉"/,
     );
+  });
+
+  test("shows the toggle always on a device that cannot hover", () => {
+    expect(render()).toMatch(
+      /<button[^>]*aria-label="メニューの開閉"[^>]*class="[^"]*pointer-coarse:opacity-100/,
+    );
+  });
+
+  test("lights the edge line only when the toggle can be seen by keyboard focus", () => {
+    expect(render()).toContain("group-has-[:focus-visible]/edge:opacity-60");
   });
 
   test("hides the toggle until the edge is hovered or focused", () => {

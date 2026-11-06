@@ -313,6 +313,8 @@ function WindmillLink({
  * サイドバーの右の縁にかぶせる、開閉のつまみ。
  * 縁にポインタを重ねると、縁の線が色づき、中ほどに丸いボタンが出る。
  * キーボードでは常に順番に入り、フォーカス中は見える。
+ * ホバーできない端末(粗いポインタ)では、ポインタを重ねられないので、ボタンを常に見せる。
+ * 縁の線は、ボタンと同じ条件(ホバーとキーボードのフォーカス)で出す。マウスで押した後にボタンだけ消えて線が残るのを避けるためである。
  */
 function EdgeToggle({
   collapsed,
@@ -326,7 +328,7 @@ function EdgeToggle({
     <div className="group/edge absolute inset-y-0 -right-1.5 z-20 w-3">
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-primary opacity-0 transition-opacity duration-(--duration-fast) ease-standard group-focus-within/edge:opacity-60 group-hover/edge:opacity-60"
+        className="pointer-events-none absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-primary opacity-0 transition-opacity duration-(--duration-fast) ease-standard group-has-[:focus-visible]/edge:opacity-60 group-hover/edge:opacity-60"
       />
       <Tooltip>
         <TooltipTrigger asChild>
@@ -334,7 +336,7 @@ function EdgeToggle({
             type="button"
             aria-expanded={!collapsed}
             aria-label="メニューの開閉"
-            className="absolute top-1/2 left-1/2 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-sidebar-border bg-sidebar text-subtle opacity-0 outline-none transition-opacity duration-(--duration-fast) ease-standard group-hover/edge:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            className="absolute top-1/2 left-1/2 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-sidebar-border bg-sidebar text-subtle opacity-0 outline-none transition-opacity duration-(--duration-fast) ease-standard group-hover/edge:opacity-100 pointer-coarse:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring"
             onClick={onToggle}
           >
             <Icon aria-hidden="true" className="size-4" />
