@@ -64,9 +64,10 @@ import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
 import { holdReasonForStoppedItem } from "../lib/pr_ci_fix_recovery.ts";
 import { prCiFixHoldInfo } from "../lib/pr_ci_support.ts";
 import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
-import type {
-  PromptReviewThread,
-  PromptThreadComment,
+import {
+  type PromptReviewThread,
+  type PromptThreadComment,
+  renderPromptThreads,
 } from "../lib/prompts.ts";
 import {
   ASCII_BOUNDARY_CLASS,
@@ -1246,7 +1247,8 @@ export function reviewThreadsForPrompt(
   const kept = new Set<number>();
   let used = 0;
   for (const { item, index } of order) {
-    const size = JSON.stringify(item).length;
+    // 1件ずつ配列に入れて数えると、字下げと区切りを含み、全体の文字列より短くならない。
+    const size = renderPromptThreads([item]).length;
     if (used + size > THREADS_PROMPT_MAX_CHARS) continue;
     used += size;
     kept.add(index);

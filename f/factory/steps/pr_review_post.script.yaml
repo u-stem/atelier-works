@@ -67,7 +67,7 @@ schema:
       default: null
     thread_responses:
       type: array
-      description: ''
+      description: 再レビューが既存のスレッドに出した答えの一覧。
       default: null
       items:
         type: resource

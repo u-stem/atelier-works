@@ -476,6 +476,16 @@ function binaryFilesSection(
   ];
 }
 
+/**
+ * プロンプトに載せるスレッドの文字列を返す。
+ * 文字数の上限を、実際に載せる形で数えられるよう、1か所にまとめる。
+ */
+export function renderPromptThreads(
+  threads: readonly PromptReviewThread[],
+): string {
+  return JSON.stringify(threads, null, 2);
+}
+
 /** 投稿する指摘の上限。省いた指摘が次の回に出ると往復が残るので、1回で出し切れる大きさにする。 */
 export const REVIEW_MAX_FINDINGS = 50;
 
@@ -626,7 +636,7 @@ export function reviewPrompt(
       dataFence(
         nonce,
         "existing review threads",
-        JSON.stringify(input.threads, null, 2),
+        renderPromptThreads(input.threads),
       ),
       "",
       "Answer the threads whose `response_kind` is not null, in `thread_responses`.",
