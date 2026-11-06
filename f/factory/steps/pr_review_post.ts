@@ -388,7 +388,7 @@ export type PublishReviewInput = {
    * 通らないときは、止める理由を返す。通るときは`null`。
    */
   readonly ensureRepoOwner: () => Promise<string | null>;
-  /** 再レビューの答え。投稿の直前に`selectThreadResponses`で確かめる。 */
+  /** 再レビューの答え。返信の前に`selectThreadResponses`で確かめる。 */
   readonly threadResponses: readonly ThreadResponse[];
   /** 許可された人の返信を見分ける。`isAllowedLabeler`を渡す。 */
   readonly isAllowedReplier: ThreadAuthorPredicate;

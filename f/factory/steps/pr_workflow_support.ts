@@ -636,7 +636,7 @@ export type ReviewBodyMode =
  * 本文の形式を、次の情報だけから選ぶ。このラウンドでインラインに投稿した指摘か
  * 除いた指摘があるか、このPRにFactoryのレビューがすでにあるか、
  * このラウンドの解決処理の後もFactory自身のスレッドが、種類を問わずいくつ残るか
- * (`openThreadCount`。呼び出し側が、解決前のスレッド一覧から解決予定のidを除いて
+ * (`openThreadCount`。呼び出し側が、解決前のスレッド一覧から解決できたidを除いて
  * `countOpenThreads`で数える。スレッドの一覧を読めなかったときは`null`)。
  * 除いた指摘(`path`がdiffに無いなどでインラインに投稿できなかったもの)があれば、
  * `postedCommentCount`が0でも`"findings"`にする。
@@ -937,9 +937,8 @@ export function selectThreadsToResolve(
 /**
  * 解決の後に残るFactory自身のスレッドを、種類を問わず数える。
  * 0件のときだけ総評にLGTMと書く。
- * GitHubがすでに解決済みにしたスレッドと、このラウンドで解決する予定のスレッド
- * (`resolvedIds`。`selectThreadsToResolve`などが、ここに渡すのと同じ解決前の`threads`から
- * 求めたid)は数えない。
+ * GitHubがすでに解決済みにしたスレッドと、このラウンドで解決できたスレッド
+ * (`resolvedIds`。ここに渡すのと同じ解決前の`threads`から選び、実際に解決できたid)は数えない。
  */
 export function countOpenThreads(
   threads: readonly ReviewThread[],
@@ -1101,7 +1100,7 @@ export type AppliedThreadResponse = {
 };
 
 /**
- * Claudeの答えを、投稿の直前に読み直したスレッドで確かめる。
+ * Claudeの答えを、返信の前に読み直したスレッドで確かめる。
  * Claudeの出力だけで解決の対象を広げないよう、対象でない`thread_id`、
  * スレッドの種類に合わない`decision`、空の`body`は捨てる。
  * 同じスレッドへの答えは最初の1件だけを使う。
@@ -5279,7 +5278,7 @@ export const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^could not post the replies to skipped findings$/,
     describe: () => "見送りの返信を投稿できませんでした",
     nextAction: () =>
-      "GitHubが応答するようになってから、Consoleの要対応で再実行してください。投稿できた返信は二重になることがあります",
+      "GitHubが応答するようになってから、Consoleの要対応で再実行してください。再実行は同じ指摘を集め直すので、投稿できていた返信がもう一度投稿されることがあります。PRで人が返信する必要はありません",
   },
   {
     pattern: /^could not add the review label for skipped findings$/,
@@ -6145,20 +6144,30 @@ export type PriorReviewSha =
  * 行に紐づけられなかった指摘はスレッドにならないので、差分だけを読む再レビューでは忘れられる。
  * スレッドの一覧を読めなかったときは`threads`が空なので、`[MUST]`があれば真になり、PR全体を読む側に倒れる。
  * 解決済みのスレッドも、投稿した指摘として数える。
+ * スレッドがあるとみなすのは、同じパスで、最初のコメントが`renderInlineComment`の形と同じものだけにする。
+ * 本文の一部の一致では、別のパスの同じ文、別の指摘の提案の中の文、空の本文でも一致し、
+ * 差分だけを読む側に倒れて指摘を忘れるためである。
+ * 比べるときは、GitHubが変えうる改行の種類と末尾の空白をそろえる。
  */
 export function hasBodyOnlyMustFinding(
   findings: readonly ReviewFinding[],
   threads: readonly ReviewThread[],
   viewer: string,
 ): boolean {
-  const posted = threads
-    .filter((thread) => isFactoryFindingThread(thread, viewer))
-    .map((thread) => thread.firstCommentBody);
+  const comparable = (body: string): string =>
+    body.replaceAll("\r\n", "\n").trimEnd();
+  const posted = threads.filter((thread) =>
+    isFactoryFindingThread(thread, viewer),
+  );
   return findings
     .filter((finding) => finding.kind === "must")
     .some((finding) => {
-      const message = postedFindingText(finding.message);
-      return !posted.some((body) => body.includes(message));
+      const expected = comparable(renderInlineComment(finding));
+      return !posted.some(
+        (thread) =>
+          thread.path === finding.path &&
+          comparable(thread.firstCommentBody) === expected,
+      );
     });
 }
 

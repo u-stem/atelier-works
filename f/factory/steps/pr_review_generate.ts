@@ -73,7 +73,7 @@ export type PrReviewGenerateResult = {
   readonly verdict: ReviewVerdict | null;
   readonly summary: string;
   readonly findings: ReviewFinding[];
-  /** 既存のスレッドへの答え。投稿の直前に、読み直したスレッドで確かめてから使う。 */
+  /** 既存のスレッドへの答え。返信の前に、読み直したスレッドで確かめてから使う。 */
   readonly thread_responses: ThreadResponse[];
   readonly pr_files: string[];
   /** 差分に内容が出ないバイナリのファイル。投稿の本文に、決定的な固定の文で載せる。 */

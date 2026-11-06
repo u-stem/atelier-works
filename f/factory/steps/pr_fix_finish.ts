@@ -1025,9 +1025,14 @@ export async function main(
    * 失敗が1件以上あれば、最後に`fix_reply_post_failed`のnoticeを1件だけ記録し、
    * Consoleの要対応でPRに人が返信するよう知らせる。Discordには通知しない。
    * noticeの記録に失敗しても、警告を残して続ける。
+   * `leaveFailureNotice`が偽なら、失敗のnoticeを残さない。
+   * 見送りだけの回は再実行で復旧するので、人に返信を頼むと二重の返信を増やすためである。
    * すべての返信を投稿できたかを返す。
    */
-  async function postFixReplies(newSha: string | null): Promise<boolean> {
+  async function postFixReplies(
+    newSha: string | null,
+    leaveFailureNotice = true,
+  ): Promise<boolean> {
     const hasInlineReply = repliesToPost.some((reply) => {
       const original = commentById.get(reply.review_comment_id);
       return original !== undefined && original.path.length > 0;
@@ -1126,6 +1131,7 @@ export async function main(
       replyFailures,
     );
     if (notice === null) return true;
+    if (!leaveFailureNotice) return false;
     try {
       await addNoticeUnlessUnresolved(notice);
     } catch (noticeErr) {
@@ -1659,7 +1665,9 @@ export async function main(
     // pushするcommitが無くても溜めた返信は投稿する。
     // Claudeがすべてを"skipped"(または差分の無い"fixed")にしたこともあり、
     // その返信も黙って捨てずにGitHubへ届ける。
-    const allRepliesPosted = ciRound || (await postFixReplies(null));
+    const allRepliesPosted =
+      ciRound ||
+      (await postFixReplies(null, nothingToCommitEnd !== "skip_only"));
     if (nothingToCommitEnd === "skip_only") {
       // 投稿できなかった見送りは、再レビューに読ませられないので、既読にせず人に回す。
       // 再実行では集め直すので、投稿できた分の返信は二重になりうる。

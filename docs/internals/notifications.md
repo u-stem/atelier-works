@@ -293,7 +293,10 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `dependabot_merge_hold_unreadable` | `poll_dependabot` | 保留を読めない原因の種類と、最初に確かめること。PRの数は載せない。保留を読めた周回で自動で解決する。壊れた行と想定外の失敗は、本文の先頭にリポジトリを置き、そのリポジトリを読めた周回で解決する |
 | `hold_released` | `hold_release`、`freeze_release` | 解除した対象(種類、対象、id)、操作者、時刻(JST、秒まで)。保留の`reason`と`holder`は載せない。解除済みの行と、期限切れの行の片付けでは残さない。Discordには通知しない |
 
-`fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
+`fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。
+見送りだけの回は残さない。
+Discordには通知しない。
+`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
 `check_slot_skipped`は、枠を飛ばすときに残す。Discordには通知しない。
 `check_slot_record_unreadable`は、読めない記録を退避するときに残す。退避した記録は読み直さないので、同じ記録では1回だけ残る。Discordには通知しない。
 検査の枠のnoticeを記録できなかったときは、検査を止めずに`check slot notice could not be recorded`をログに出す。
