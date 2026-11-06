@@ -57,6 +57,7 @@ import {
   selectThreadsToResolve,
   type ThreadAuthorPredicate,
   withReviewMarkers,
+  withTrustedResolution,
 } from "./pr_workflow_support.ts";
 
 const REVIEW_VERDICTS: readonly ReviewVerdict[] = [
@@ -446,13 +447,20 @@ export async function publishReview(
   // 再利用するときは、失敗したら記録する前に例外を投げて再実行に回す。
   // 投稿済みのレビューのスレッドを数えられないまま、通知を`reviewed`にしないため。
   // 再利用するので、この失敗で投稿が起きることは無い。
+  // 許可されていない人が解決したスレッドは、この先すべてで未解決として扱う。
+  const readThreads = async (): Promise<ReviewThread[]> =>
+    withTrustedResolution(
+      await listReviewThreads(client, owner, repo, pr_number),
+      viewerLogin,
+      input.isAllowedReplier,
+    );
   let threads: ReviewThread[] = [];
   let threadsReadable = true;
   if (reused) {
-    threads = await listReviewThreads(client, owner, repo, pr_number);
+    threads = await readThreads();
   } else if (priorReview) {
     try {
-      threads = await listReviewThreads(client, owner, repo, pr_number);
+      threads = await readThreads();
     } catch (err) {
       threadsReadable = false;
       log.warn("failed to list review threads for resolving", {

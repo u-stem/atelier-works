@@ -6139,21 +6139,47 @@ export type PriorReviewSha =
   | { readonly kind: "unreadable" }
   | { readonly kind: "found"; readonly sha: string };
 
+/**
+ * 解決した人を信頼できないスレッドを、未解決として返す。
+ * GitHubの解決のボタンは、許可されていない人でも押せる。
+ * そのまま読むと、直っていない`[MUST]`を数えず、本文にLGTMと書いてしまう。
+ * 信頼できるのは、viewerと許可された人である。解決した人を読めないときは信頼しない。
+ * 読み取りの直後に1回だけ通し、後の処理が同じ状態を見るようにする。
+ */
 export function withTrustedResolution(
   threads: readonly ReviewThread[],
-  _viewer: string,
-  _isAllowed: ThreadAuthorPredicate,
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
 ): ReviewThread[] {
-  return [...threads];
+  return threads.map((thread) => {
+    if (!thread.isResolved) return thread;
+    const login = thread.resolvedByLogin;
+    const trusted =
+      login !== "" &&
+      (isOwnPost(login, viewer) || isAllowed(login, thread.resolvedById));
+    return trusted ? thread : { ...thread, isResolved: false };
+  });
 }
 
+/**
+ * `readReviewDelta`に渡すパスを返す。名前を変えたファイルは、移動元と移動先の両方を入れる。
+ * 同じパスは1回だけにする。
+ */
 export function reviewDeltaPaths(
   files: readonly {
     readonly filename: string;
     readonly previous_filename: string | null;
   }[],
 ): string[] {
-  return files.map((file) => file.filename);
+  return [
+    ...new Set(
+      files.flatMap((file) =>
+        file.previous_filename === null
+          ? [file.filename]
+          : [file.filename, file.previous_filename],
+      ),
+    ),
+  ];
 }
 
 /**
@@ -6217,6 +6243,7 @@ export function reviewDeltaFromSha(input: ReviewScopeInput): string | null {
  * headが前回と同じときは、見送りが答えを待っていれば`threads_only`にし、
  * そうでなければ人が依頼し直したとみなして`full`にする。
  * 変更ファイルの一覧が上限に達したPRも`full`にする。一覧が切れて、絞った差分から変更が漏れるためである。
+ * 範囲にmerge commitがあるときも`full`にする。merge commitの中で手で直した行は、baseの変更と見分けられないためである。
  */
 export function decideReviewScope(
   input: ReviewScopeInput & {
@@ -6241,7 +6268,8 @@ export function decideReviewScope(
     return { kind: "full", reason: "too_many_files" };
   }
   if (input.delta === null) return { kind: "full", reason: "prior_unreadable" };
-  return { kind: "delta", fromSha: prior.sha, hasMerge: input.delta.hasMerge };
+  if (input.delta.hasMerge) return { kind: "full", reason: "merge_in_range" };
+  return { kind: "delta", fromSha: prior.sha };
 }
 
 const REVIEW_SEVERITY_ORDER: Readonly<Record<ReviewSeverity, number>> = {

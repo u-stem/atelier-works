@@ -5160,13 +5160,15 @@ export async function listBothSidesChangedPaths(opts: {
 
 export type ReviewDelta = {
   readonly diff: string;
-  /** 範囲にmerge commitがあるか。baseの変更が差分に混ざりうる。 */
+  /** 範囲にmerge commitがあるか。呼び出し側はPR全体のレビューに倒す。 */
   readonly hasMerge: boolean;
 };
 
 /**
- * 前回レビューしたcommitからheadまでの差分を、PRの変更ファイルに絞って返す。
- * 変更ファイルのAPIの上限(`PR_FILES_API_CAP`)に満たないPRなら、著者の変更は一覧に載るので、絞っても失わない。
+ * 前回レビューしたcommitからheadまでの差分を、`paths`に絞って返す。
+ * 呼び出し側は、PRの変更ファイルと、名前を変えたファイルの移動元を`paths`に渡す。
+ * 移動先だけを渡すと、gitが新しいファイルとして出し、移動元で消した行が差分から消えるためである。
+ * 変更ファイルのAPIの上限(`PR_FILES_API_CAP`)に満たないPRなら、著者の変更はどれかのパスに載るので、絞っても失わない。
  * 上限に達したPRでは一覧が切れるので、呼び出し側はこの関数を呼ばずにPR全体のレビューに倒す。
  * 前回のcommitがheadの祖先でない、読めない、gitが失敗したときは`null`を返す。
  * 呼び出し側はPR全体のレビューに倒す。

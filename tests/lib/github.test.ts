@@ -5922,10 +5922,12 @@ function reviewThreadNode(overrides: {
   readonly lastComment?: unknown;
   readonly allCommentDatabaseIds?: readonly (number | null)[];
   readonly allComments?: unknown[];
+  readonly resolvedBy?: unknown;
 }): unknown {
   return {
     id: overrides.id,
     isResolved: overrides.isResolved,
+    resolvedBy: overrides.resolvedBy,
     path: overrides.path ?? "a.ts",
     line: overrides.line ?? 10,
     firstComments: { nodes: [overrides.firstComment] },
@@ -6107,14 +6109,12 @@ describe("listReviewThreads", () => {
       const fake = createFakeCommandRunner([
         ghApiOk(
           reviewThreadsGraphqlPayload([
-            {
-              ...reviewThreadNode({
-                id: "PRRT_1",
-                isResolved: true,
-                firstComment: { author: { login: VIEWER }, body: "finding" },
-              }),
+            reviewThreadNode({
+              id: "PRRT_1",
+              isResolved: true,
+              firstComment: { author: { login: VIEWER }, body: "finding" },
               resolvedBy,
-            },
+            }),
           ]),
         ),
       ]);

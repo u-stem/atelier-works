@@ -503,12 +503,6 @@ function reviewScopeLines(scope: ReviewScope): string[] {
         "The earlier review covered everything before that commit.",
         "Report only problems these changes introduce or make visible.",
         "You may Read other files to understand the changes.",
-        ...(scope.hasMerge
-          ? [
-              "This range contains a merge commit, so changes from the base branch may appear.",
-              "Do not report those unless they conflict with this PR's change.",
-            ]
-          : []),
       ];
     case "threads_only":
       return [

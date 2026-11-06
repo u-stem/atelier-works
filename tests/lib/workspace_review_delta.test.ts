@@ -71,14 +71,7 @@ describe("readReviewDelta with a renamed file", () => {
       fromSha: from,
       headSha: head,
       paths: reviewDeltaPaths([
-        {
-          filename: "new.ts",
-          previous_filename: "old.ts",
-          status: "renamed",
-          additions: 0,
-          deletions: 1,
-          changes: 1,
-        },
+        { filename: "new.ts", previous_filename: "old.ts" },
       ]),
     });
     return delta?.diff ?? "";

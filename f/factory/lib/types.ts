@@ -725,13 +725,13 @@ export type ReviewScope =
         | "prior_unreadable"
         | "conflict_round"
         | "body_only_must"
+        | "merge_in_range"
         | "requested_again"
         | "too_many_files";
     }
   | {
       readonly kind: "delta";
       readonly fromSha: string;
-      readonly hasMerge: boolean;
     }
   | { readonly kind: "threads_only"; readonly fromSha: string };
 

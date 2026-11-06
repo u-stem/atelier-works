@@ -60,11 +60,13 @@ import {
   type PriorReviewSha,
   prReviewTimeoutMisfit,
   reviewDeltaFromSha,
+  reviewDeltaPaths,
   reviewMaxTurns,
   reviewOutputProseIssues,
   reviewThreadsForPrompt,
   selectListedBinaryFiles,
   settleReviewFindings,
+  withTrustedResolution,
 } from "./pr_workflow_support.ts";
 
 export type PrReviewGenerateResult = {
@@ -182,7 +184,7 @@ export async function main(
   // スレッドの一覧は、再レビューで重複を避けるプロンプトの材料にすぎない。
   // 読めないとき(1000件超、形の不一致など)に生成を止めると、再試行しても直らずレビューが投稿されない。
   // 空で続けても、未解決の`[MUST]`の誤判定は投稿ステップが一覧を読み直して防ぐ。
-  const [pr, prDiff, prFileEntries, viewer, reviewThreads] = await Promise.all([
+  const [pr, prDiff, prFileEntries, viewer, listedThreads] = await Promise.all([
     getPr(client, owner, repo, pr_number),
     getPrDiff(client, owner, repo, pr_number, config.diff_max_lines),
     getPrFiles(client, owner, repo, pr_number),
@@ -212,6 +214,12 @@ export async function main(
   const labelerPolicy = labelerPolicyFor(viewer.login, config);
   const isAllowedReplier = (login: string, id: number | null): boolean =>
     isAllowedLabeler(login, labelerPolicy, id);
+  // 許可されていない人が解決したスレッドは、この先すべてで未解決として扱う。
+  const reviewThreads = withTrustedResolution(
+    listedThreads,
+    viewer.login,
+    isAllowedReplier,
+  );
   // 再レビューで、同じ指摘を出し直させず、見送りの返信を読ませるために渡す。
   const promptThreads = reviewThreadsForPrompt(
     reviewThreads,
@@ -272,7 +280,7 @@ export async function main(
         dir: worktree_dir,
         fromSha: deltaFromSha,
         headSha: review_sha,
-        paths: prFiles,
+        paths: reviewDeltaPaths(prFileEntries),
       });
     } catch (err) {
       log.warn("could not read the changes since the prior review", {

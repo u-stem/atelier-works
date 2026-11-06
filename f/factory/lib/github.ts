@@ -2832,6 +2832,8 @@ export function limitReviewDiff(
 
 export type PrFile = {
   readonly filename: string;
+  /** 名前を変えたファイルの移動元のパス。名前を変えていなければ`null`。 */
+  readonly previous_filename: string | null;
   readonly status: string;
   readonly additions: number;
   readonly deletions: number;
@@ -2840,6 +2842,7 @@ export type PrFile = {
 
 type PrFilePayload = {
   readonly filename: string;
+  readonly previous_filename?: unknown;
   readonly status: string;
   readonly additions: number;
   readonly deletions: number;
@@ -2881,6 +2884,10 @@ export async function getPrFiles(
     if (!isPrFilePayload(raw)) continue;
     items.push({
       filename: raw.filename,
+      previous_filename:
+        typeof raw.previous_filename === "string"
+          ? raw.previous_filename
+          : null,
       status: raw.status,
       additions: raw.additions,
       deletions: raw.deletions,
@@ -4023,6 +4030,10 @@ export type ReviewThread = {
   readonly lastCommentAuthorId: number | null;
   /** 最後のコメントのREST id。`comments`に最後のコメントが入っているかを見分けるのに使う。 */
   readonly lastCommentDatabaseId: number | null;
+  /** スレッドを解決した人のlogin。解決されていない、読めないときは空文字列。 */
+  readonly resolvedByLogin: string;
+  /** スレッドを解決した人のGitHub id。読めない、人でないときは`null`。 */
+  readonly resolvedById: number | null;
   /**
    * スレッド内のコメントの書き手と本文(先頭の`REVIEW_THREAD_COMMENTS_LIMIT`件まで)。
    * 再レビューに、返信まで含めたスレッドの全体を渡すために使う。
@@ -4102,6 +4113,7 @@ function isReviewThreadCommentsConnectionPayload(
 type ReviewThreadNodePayload = {
   readonly id: string;
   readonly isResolved: boolean;
+  readonly resolvedBy?: unknown;
   readonly path: string;
   readonly line: number | null;
   readonly firstComments: ReviewThreadCommentsConnectionPayload;
@@ -4218,9 +4230,14 @@ function parseReviewThreadNode(
     .filter(isReviewThreadDatabaseIdNodePayload)
     .map((node) => node.databaseId)
     .filter((id): id is number => id !== null);
+  const resolvedBy = isRecord(rawNode.resolvedBy) ? rawNode.resolvedBy : null;
   return {
     id: rawNode.id,
     isResolved: rawNode.isResolved,
+    resolvedByLogin:
+      typeof resolvedBy?.login === "string" ? resolvedBy.login : "",
+    resolvedById:
+      typeof resolvedBy?.databaseId === "number" ? resolvedBy.databaseId : null,
     path: rawNode.path,
     line: rawNode.line,
     firstCommentAuthorLogin: firstComment.author?.login ?? "",
@@ -4244,7 +4261,7 @@ function parseReviewThreadNode(
  * PRのレビュースレッドを、読み取りのGraphQLクエリで全件取得する。
  * 1ページ100件で、`pageInfo`の`hasNextPage`が偽になるまで辿る。
  * スレッドごとに次のものを返す。
- * - 解決済みかどうか
+ * - 解決済みかどうかと、解決した人(loginとid)
  * - 差分上の位置(`path` / `line`)。`pr_workflow_support.ts`の
  *   `reviewThreadsForPrompt`が使う。
  * - 最初のコメントの作成者・本文・REST id(`databaseId`)
@@ -4285,6 +4302,7 @@ export async function listReviewThreads(
             nodes {
               id
               isResolved
+              resolvedBy { login ... on User { databaseId } }
               path
               line
               firstComments: comments(first: 1) {
