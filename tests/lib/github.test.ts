@@ -5985,6 +5985,7 @@ describe("listReviewThreads", () => {
         allCommentIds: [],
         comments: [],
         lastCommentAuthorId: null,
+        lastCommentDatabaseId: null,
       },
     ]);
   });
@@ -6071,6 +6072,32 @@ describe("listReviewThreads", () => {
       12,
     );
     expect(threads[0]?.lastCommentAuthorId).toBe(7);
+  });
+
+  test("reads the id of the last comment", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: { author: { login: VIEWER }, body: "finding" },
+            lastComment: {
+              author: { login: "alice" },
+              body: "reply",
+              databaseId: 42,
+            },
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]?.lastCommentDatabaseId).toBe(42);
   });
 
   test("keeps a deleted author's comment with an empty login", async () => {

@@ -43,6 +43,7 @@ function thread(overrides: Partial<ReviewThread> = {}): ReviewThread {
     allCommentIds: [101],
     comments: [],
     lastCommentAuthorId: null,
+    lastCommentDatabaseId: null,
     ...overrides,
   };
 }

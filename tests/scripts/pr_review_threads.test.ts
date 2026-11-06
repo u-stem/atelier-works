@@ -36,6 +36,7 @@ function thread(overrides: Partial<ReviewThread> = {}): ReviewThread {
     lastCommentAuthorLogin: VIEWER,
     lastCommentBody: FINDING,
     lastCommentAuthorId: null,
+    lastCommentDatabaseId: 1,
     firstCommentDatabaseId: 1,
     allCommentIds: [1],
     comments: [comment(VIEWER, FINDING)],
@@ -47,6 +48,7 @@ function replied(login: string, body: string): Partial<ReviewThread> {
   return {
     lastCommentAuthorLogin: login,
     lastCommentBody: body,
+    lastCommentDatabaseId: 2,
     comments: [comment(VIEWER, FINDING), comment(login, body, 2)],
   };
 }
@@ -76,14 +78,34 @@ describe("threadResponseKind", () => {
     ).toBe("skip");
   });
 
-  test("does not answer a skip reply from a person who is not allowed", () => {
+  // 許可されていない人の見送りは無かったものとして読むので、指摘は手つかずのまま残る。
+  test("treats a skip reply from a person who is not allowed as no reply", () => {
     expect(
       threadResponseKind(
         thread(replied("mallory", SKIP_REPLY)),
         VIEWER,
         isAllowed,
       ),
-    ).toBeNull();
+    ).toBe("addressable");
+  });
+
+  test("keeps a skip waiting for an answer after a reply from a person who is not allowed", () => {
+    expect(
+      threadResponseKind(
+        thread({
+          lastCommentAuthorLogin: "mallory",
+          lastCommentBody: "ok",
+          lastCommentDatabaseId: 3,
+          comments: [
+            comment(VIEWER, FINDING),
+            comment(VIEWER, SKIP_REPLY, 2),
+            comment("mallory", "ok", 3),
+          ],
+        }),
+        VIEWER,
+        isAllowed,
+      ),
+    ).toBe("skip");
   });
 
   test("reads the skip line above a trailing marker", () => {
@@ -221,12 +243,40 @@ describe("reviewThreadsForPrompt", () => {
           comments,
           lastCommentAuthorLogin: "alice",
           lastCommentBody: SKIP_REPLY,
+          lastCommentDatabaseId: 999,
         }),
       ],
       VIEWER,
       isAllowed,
     );
     expect(threads[0]?.comments.at(-1)?.body).toBe(SKIP_REPLY);
+  });
+
+  test("does not repeat the last comment when the thread has exactly the listed comments", () => {
+    const comments = Array.from({ length: 50 }, (_, index) =>
+      comment(VIEWER, `c${String(index)}`, index),
+    );
+    const { threads } = reviewThreadsForPrompt(
+      [
+        thread({
+          comments,
+          lastCommentBody: "c49",
+          lastCommentDatabaseId: 49,
+        }),
+      ],
+      VIEWER,
+      isAllowed,
+    );
+    expect(threads[0]?.comments).toHaveLength(50);
+  });
+
+  test("shows a control character in a comment as a visible code point", () => {
+    const { threads } = reviewThreadsForPrompt(
+      [thread({ comments: [comment(VIEWER, "a\u001bb")] })],
+      VIEWER,
+      isAllowed,
+    );
+    expect(threads[0]?.comments[0]?.body).toBe("a<U+001B>b");
   });
 
   test("drops resolved threads before open ones when over the budget", () => {
@@ -245,6 +295,55 @@ describe("reviewThreadsForPrompt", () => {
       isAllowed,
     );
     expect(result.threads.some((item) => item.status === "open")).toBe(true);
+  });
+
+  test("keeps the newest resolved thread when over the budget", () => {
+    const big = "x".repeat(1900);
+    const resolved = Array.from({ length: 60 }, (_, index) =>
+      thread({
+        firstCommentDatabaseId: index,
+        isResolved: true,
+        comments: [comment(VIEWER, big)],
+      }),
+    );
+    const result = reviewThreadsForPrompt(resolved, VIEWER, isAllowed);
+    expect(result.threads.at(-1)?.thread_id).toBe(59);
+  });
+
+  test("drops the oldest resolved thread when over the budget", () => {
+    const big = "x".repeat(1900);
+    const resolved = Array.from({ length: 60 }, (_, index) =>
+      thread({
+        firstCommentDatabaseId: index,
+        isResolved: true,
+        comments: [comment(VIEWER, big)],
+      }),
+    );
+    const result = reviewThreadsForPrompt(resolved, VIEWER, isAllowed);
+    expect(result.threads[0]?.thread_id).not.toBe(0);
+  });
+
+  test("keeps a thread to answer over an open thread with nothing to answer", () => {
+    const big = "x".repeat(1900);
+    // 答える対象にならない、自由文の返信が付いたスレッドで上限を埋める。
+    const quiet = Array.from({ length: 60 }, (_, index) =>
+      thread({
+        firstCommentDatabaseId: 100 + index,
+        comments: [comment(VIEWER, big), comment("alice", "why?", 2)],
+        lastCommentAuthorLogin: "alice",
+        lastCommentBody: "why?",
+      }),
+    );
+    const toAnswer = thread({
+      firstCommentDatabaseId: 1,
+      comments: [comment(VIEWER, big)],
+    });
+    const result = reviewThreadsForPrompt(
+      [toAnswer, ...quiet],
+      VIEWER,
+      isAllowed,
+    );
+    expect(result.threads.some((item) => item.thread_id === 1)).toBe(true);
   });
 
   test("reports how many threads it dropped", () => {

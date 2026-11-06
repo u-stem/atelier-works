@@ -847,6 +847,18 @@ describe("isFixedFixReply", () => {
     const body = "just a plain reply\n\n対応: `abc1234`";
     expect(isFixedFixReply(body)).toBe(false);
   });
+
+  test("reads the commit line above a trailing marker", () => {
+    const body =
+      "[pr_fix 自動返信]\nfixed\n\n対応: `abc1234`\n\n<!-- factory:pr_fix:9 -->";
+    expect(isFixedFixReply(body)).toBe(true);
+  });
+
+  test("does not take a quoted commit line in a skip reply as a fix", () => {
+    const body =
+      "[pr_fix 自動返信]\n前回は次のとおりでした。\n対応: `abc1234`\n\n対応: 見送り";
+    expect(isFixedFixReply(body)).toBe(false);
+  });
 });
 
 describe("selectThreadsToResolve", () => {
@@ -864,6 +876,7 @@ describe("selectThreadsToResolve", () => {
       allCommentIds: [1],
       comments: [],
       lastCommentAuthorId: null,
+      lastCommentDatabaseId: null,
       ...overrides,
     };
   }
@@ -1058,6 +1071,7 @@ describe("a thread the re-review objected to", () => {
       },
     ],
     lastCommentAuthorId: null,
+    lastCommentDatabaseId: null,
   };
   const isAllowed = (login: string): boolean => login === "factory-bot";
 
@@ -1117,6 +1131,7 @@ describe("an IMO thread the re-review objected to", () => {
         },
       ],
       lastCommentAuthorId: null,
+      lastCommentDatabaseId: null,
       ...overrides,
     };
   }
@@ -1138,12 +1153,66 @@ describe("an IMO thread the re-review objected to", () => {
   test("does not count an objection a person pasted", () => {
     expect(
       countBlockingThreads(
-        [objectedImo({ lastCommentAuthorLogin: "mallory" })],
+        [
+          objectedImo({
+            lastCommentAuthorLogin: "mallory",
+            comments: [
+              {
+                databaseId: 1,
+                authorLogin: "factory-bot",
+                authorId: null,
+                body: imoFinding,
+              },
+              {
+                databaseId: 2,
+                authorLogin: "mallory",
+                authorId: null,
+                body: objectionBody,
+              },
+            ],
+          }),
+        ],
         "factory-bot",
         isAllowed,
         [],
       ),
     ).toBe(0);
+  });
+
+  test("keeps counting after someone replies to the objection", () => {
+    expect(
+      countBlockingThreads(
+        [
+          objectedImo({
+            lastCommentAuthorLogin: "mallory",
+            lastCommentBody: "ok",
+            comments: [
+              {
+                databaseId: 1,
+                authorLogin: "factory-bot",
+                authorId: null,
+                body: imoFinding,
+              },
+              {
+                databaseId: 2,
+                authorLogin: "factory-bot",
+                authorId: null,
+                body: objectionBody,
+              },
+              {
+                databaseId: 3,
+                authorLogin: "mallory",
+                authorId: null,
+                body: "ok",
+              },
+            ],
+          }),
+        ],
+        "factory-bot",
+        isAllowed,
+        [],
+      ),
+    ).toBe(1);
   });
 
   test("does not count a thread whose only comment carries an objection marker", () => {
@@ -1186,6 +1255,7 @@ describe("countOpenThreads", () => {
       allCommentIds: [1],
       comments: [],
       lastCommentAuthorId: null,
+      lastCommentDatabaseId: null,
       ...overrides,
     };
   }
@@ -1232,28 +1302,44 @@ describe("countBlockingThreads", () => {
       allCommentIds: [1],
       comments: [],
       lastCommentAuthorId: null,
+      lastCommentDatabaseId: null,
     };
   }
 
-  function waitingSkip(): ReviewThread {
+  const SKIP_REPLY = "理由\n\n対応: 見送り";
+
+  /** 指摘に続けて、`replies`の順に返信が付いたスレッド。 */
+  function withReplies(
+    ...replies: readonly (readonly [string, string])[]
+  ): ReviewThread {
+    const thread = base("[IMO] consider");
+    const [lastLogin, lastBody] = replies.at(-1) ?? [
+      thread.lastCommentAuthorLogin,
+      thread.lastCommentBody,
+    ];
     return {
-      ...base("[IMO] consider"),
-      lastCommentBody: "理由\n\n対応: 見送り",
+      ...thread,
+      lastCommentAuthorLogin: lastLogin,
+      lastCommentBody: lastBody,
       comments: [
         {
           databaseId: 1,
           authorLogin: "factory-bot",
           authorId: null,
-          body: "x",
+          body: thread.firstCommentBody,
         },
-        {
-          databaseId: 2,
-          authorLogin: "factory-bot",
+        ...replies.map(([authorLogin, body], index) => ({
+          databaseId: index + 2,
+          authorLogin,
           authorId: null,
-          body: "y",
-        },
+          body,
+        })),
       ],
     };
+  }
+
+  function waitingSkip(): ReviewThread {
+    return withReplies(["factory-bot", SKIP_REPLY]);
   }
 
   test("counts an open MUST", () => {
@@ -1292,6 +1378,80 @@ describe("countBlockingThreads", () => {
       countBlockingThreads([waitingSkip()], "factory-bot", isAllowed, [
         "thread-1",
       ]),
+    ).toBe(0);
+  });
+
+  test("keeps counting a skip after a reply from a person who is not allowed", () => {
+    expect(
+      countBlockingThreads(
+        [withReplies(["factory-bot", SKIP_REPLY], ["mallory", "ok"])],
+        "factory-bot",
+        isAllowed,
+        [],
+      ),
+    ).toBe(1);
+  });
+
+  test("keeps counting a skip after a free-text reply from an allowed person", () => {
+    const allowsAlice = (login: string): boolean =>
+      login === "factory-bot" || login === "alice";
+    expect(
+      countBlockingThreads(
+        [withReplies(["factory-bot", SKIP_REPLY], ["alice", "ok"])],
+        "factory-bot",
+        allowsAlice,
+        [],
+      ),
+    ).toBe(1);
+  });
+
+  test("does not count a skip from a person who is not allowed", () => {
+    expect(
+      countBlockingThreads(
+        [withReplies(["mallory", SKIP_REPLY])],
+        "factory-bot",
+        isAllowed,
+        [],
+      ),
+    ).toBe(0);
+  });
+
+  test("counts a skip from an allowed person", () => {
+    const allowsAlice = (login: string): boolean =>
+      login === "factory-bot" || login === "alice";
+    expect(
+      countBlockingThreads(
+        [withReplies(["alice", SKIP_REPLY])],
+        "factory-bot",
+        allowsAlice,
+        [],
+      ),
+    ).toBe(1);
+  });
+
+  test("does not take a finding that ends with the skip line as a skip", () => {
+    const body = "[pr_review 自動レビュー]\n[IMO] consider\n\n対応: 見送り";
+    expect(
+      countBlockingThreads(
+        [
+          {
+            ...base("[IMO] consider"),
+            firstCommentBody: body,
+            lastCommentBody: body,
+            comments: [
+              {
+                databaseId: 1,
+                authorLogin: "factory-bot",
+                authorId: null,
+                body,
+              },
+            ],
+          },
+        ],
+        "factory-bot",
+        isAllowed,
+        [],
+      ),
     ).toBe(0);
   });
 });

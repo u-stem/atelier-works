@@ -29,6 +29,21 @@ describe("reviewOutputProseIssues", () => {
     ]);
   });
 
+  test("reports a plain ending in a thread response", () => {
+    const issues = reviewOutputProseIssues({
+      verdict: "comment",
+      summary: "要約です。",
+      findings: [],
+      thread_responses: [
+        { thread_id: 1, decision: "skip_rejected", body: "不要である。" },
+      ],
+    });
+
+    expect(issues).toEqual([
+      "thread_responses[0].body: 1行目: 敬体(です・ます)で書く文章に、別の文体の文末があります(である。)",
+    ]);
+  });
+
   test("does not check the summary, which is never posted", () => {
     const issues = reviewOutputProseIssues({
       verdict: "comment",

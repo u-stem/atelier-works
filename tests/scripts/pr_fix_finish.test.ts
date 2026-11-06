@@ -457,6 +457,7 @@ describe("listReviewThreadsBestEffort", () => {
     allCommentIds: [11],
     comments: [],
     lastCommentAuthorId: null,
+    lastCommentDatabaseId: null,
   };
 
   test("returns the loaded threads", async () => {
