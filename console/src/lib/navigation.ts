@@ -89,6 +89,7 @@ export const EDGE_TOGGLE_MARGIN = 16;
 /**
  * 縁のつまみの縦の位置(縁の上端からの距離、px)を返す。
  * ポインタの高さ(`pointerY`)に合わせ、縁の上端(`top`)と高さ(`height`)の内側で、上下に余白を残して挟む。
+ * 縁が後から縮む場合に備え、CSSの`clamp`も同じ余白(1rem)で挟む。実際の位置は、最後にCSSが決める。
  */
 export function edgeToggleOffset(
   pointerY: number,

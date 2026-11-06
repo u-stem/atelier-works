@@ -202,7 +202,7 @@ describe("Sidebar edge toggle", () => {
     );
   });
 
-  test("keeps the toggle inside the edge even when the edge shrinks", () => {
+  test("clamps the toggle to the inside of the edge in the style", () => {
     expect(render()).toContain("calc(100%_-_1rem))]");
   });
 
