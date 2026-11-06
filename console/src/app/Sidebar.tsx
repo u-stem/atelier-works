@@ -7,7 +7,13 @@ import {
   Menu,
   X,
 } from "lucide-react";
-import { type KeyboardEvent, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  type PointerEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { NavLink } from "react-router";
 import { useConsoleStatus } from "../api/consoleStatus.ts";
 import { useSummary } from "../api/queries.ts";
@@ -26,6 +32,7 @@ import { SIDEBAR_ICON_BUTTON_CLASS } from "../lib/controlClasses.ts";
 import { actionableCounts } from "../lib/inboxView.ts";
 import { TRANSITION_WIDTH } from "../lib/motionClasses.ts";
 import {
+  edgeToggleOffset,
   formatBadgeCount,
   menuButtonLabel,
   navLinkClass,
@@ -311,7 +318,7 @@ function WindmillLink({
 
 /**
  * サイドバーの右の縁にかぶせる、開閉のつまみ。
- * 縁にポインタを重ねると、縁の線が色づき、中ほどに丸いボタンが出る。
+ * 縁にポインタを重ねると、縁の線が色づき、ポインタを当てた高さに丸いボタンが出る。ポインタを動かすと、ボタンも縁に沿って追う。
  * キーボードでは常に順番に入り、フォーカス中は見える。
  * フォーカスで出すときは遷移を止める。遷移の最初の1フレームは不透明度が0のままで、Tabで止まった直後に見えない要素と読まれるためである。
  * ポインタを重ねられない端末(`hover: none`)では、ボタンを常に見せる。
@@ -325,20 +332,56 @@ function EdgeToggle({
   onToggle: () => void;
 }) {
   const Icon = collapsed ? ChevronRight : ChevronLeft;
+  const edgeRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [tipOpen, setTipOpen] = useState(false);
+
+  // つまみを、ポインタを当てた高さへ寄せる。位置は再描画せず、CSSの変数で渡す。
+  const followPointer = (event: PointerEvent<HTMLDivElement>): void => {
+    const edge = edgeRef.current;
+    if (edge === null) {
+      return;
+    }
+    const rect = edge.getBoundingClientRect();
+    edge.style.setProperty(
+      "--edge-y",
+      `${edgeToggleOffset(event.clientY, rect.top, rect.height)}px`,
+    );
+  };
+
+  // 名前は、ポインタがボタンの上にあるか、キーボードのフォーカスがあるときだけ出す。
+  // マウスで押した後にフォーカスが残っても、ポインタが離れたら閉じるためである。
+  const changeTip = (next: boolean): void => {
+    const button = buttonRef.current;
+    setTipOpen(
+      next &&
+        button !== null &&
+        (button.matches(":hover") || button.matches(":focus-visible")),
+    );
+  };
+
   return (
-    <div className="group/edge absolute inset-y-0 -right-1.5 z-20 w-3">
+    <div
+      ref={edgeRef}
+      className="group/edge absolute inset-y-0 -right-1.5 z-20 w-3"
+      onPointerMove={followPointer}
+    >
       <span
         aria-hidden="true"
         className="pointer-events-none absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-primary opacity-0 transition-opacity duration-(--duration-fast) ease-standard group-has-[:focus-visible]/edge:opacity-60 group-has-[:focus-visible]/edge:transition-none group-hover/edge:opacity-60"
       />
-      <Tooltip>
+      <Tooltip open={tipOpen} onOpenChange={changeTip} disableHoverableContent>
         <TooltipTrigger asChild>
           <button
+            ref={buttonRef}
             type="button"
             aria-expanded={!collapsed}
             aria-label="メニューの開閉"
-            className="absolute top-1/2 left-1/2 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-sidebar-border bg-sidebar text-subtle opacity-0 outline-none transition-opacity duration-(--duration-fast) ease-standard group-hover/edge:opacity-100 [@media(hover:none)]:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:transition-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-            onClick={onToggle}
+            className="absolute top-[var(--edge-y,50%)] left-1/2 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-sidebar-border bg-sidebar text-subtle opacity-0 outline-none transition-opacity duration-(--duration-fast) ease-standard group-hover/edge:opacity-100 [@media(hover:none)]:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:transition-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            onClick={() => {
+              setTipOpen(false);
+              onToggle();
+            }}
           >
             <Icon aria-hidden="true" className="size-4" />
           </button>

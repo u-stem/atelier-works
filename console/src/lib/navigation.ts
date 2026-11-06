@@ -83,9 +83,10 @@ export const EDGE_TOGGLE_MARGIN = 16;
  * ポインタの高さ(`pointerY`)に合わせ、縁の上端(`top`)と高さ(`height`)の内側で、上下に余白を残して挟む。
  */
 export function edgeToggleOffset(
-  _pointerY: number,
-  _top: number,
-  _height: number,
+  pointerY: number,
+  top: number,
+  height: number,
 ): number {
-  return 0;
+  const lowest = Math.max(EDGE_TOGGLE_MARGIN, height - EDGE_TOGGLE_MARGIN);
+  return Math.min(Math.max(pointerY - top, EDGE_TOGGLE_MARGIN), lowest);
 }
