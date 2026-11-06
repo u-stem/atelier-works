@@ -221,32 +221,33 @@ export function normalizeJapaneseText(text: string): string {
 
 /**
  * 投稿したレビューの結果を返す。
- * 今回の指摘に`must`が1件でもあるか、`openMustCount`
- * (`countOpenMustThreads`の値)が0より大きければ`"changes_requested"`を返す。
- * 前のラウンドから残った未解決の`[MUST]`は、新しい指摘を投稿しないラウンド
+ * 今回の指摘に`must`が1件でもあるか、`blockingThreadCount`
+ * (`countBlockingThreads`の値)が0より大きければ`"changes_requested"`を返す。
+ * 前のラウンドから残った未解決の`[MUST]`と、答えを待つ見送りも数える。
+ * どちらも、新しい指摘を投稿しないラウンド
  * (`ReviewBodyMode`の`"rereview_open"`)でも、変更が必要なPRとして扱うため。
- * `openMustCount`が`null`のときは、スレッドの一覧を読めず残りの有無が分からない。
+ * `blockingThreadCount`が`null`のときは、スレッドの一覧を読めず残りの有無が分からない。
  * 今回の指摘に`must`が無ければ`"unverified"`を返す。0件と同じ`"reviewed"`にすると、
- * 未解決の`[MUST]`が残るPRを、人の承認を待てる状態と誤って示すため。
- * それ以外(指摘が無く、未解決の`must`も無いと分かっている場合を含む)は`"reviewed"`を返す。
+ * マージを止めるスレッドが残るPRを、人の承認を待てる状態と誤って示すため。
+ * それ以外(指摘が無く、マージを止めるスレッドも無いと分かっている場合を含む)は`"reviewed"`を返す。
  * これは止める理由が無く、人の承認を待つ状態である。
  */
 export function reviewResultFor(
   findings: readonly ReviewFinding[],
-  openMustCount: number | null,
+  blockingThreadCount: number | null,
 ): ReviewOutcome {
   if (findings.some((finding) => finding.kind === "must")) {
     return "changes_requested";
   }
-  if (openMustCount === null) return "unverified";
-  return openMustCount > 0 ? "changes_requested" : "reviewed";
+  if (blockingThreadCount === null) return "unverified";
+  return blockingThreadCount > 0 ? "changes_requested" : "reviewed";
 }
 
 /**
  * `factory.reviews`に書く行を組み立てる。
- * `result`は、今回の指摘と`openMustCount`から`reviewResultFor`で決める。
+ * `result`は、今回の指摘と`blockingThreadCount`から`reviewResultFor`で決める。
  * Discordの通知もConsoleのレビュー行も、この値で状態を出す。
- * `verdict`が`approve`で今回の指摘が0件でも、未解決の`[MUST]`が残れば`changes_requested`になる。
+ * `verdict`が`approve`で今回の指摘が0件でも、マージを止めるスレッドが残れば`changes_requested`になる。
  * 未解決の指摘を読めなかった(`unverified`)ときは、`result`を`null`にして記録する。
  * Consoleのレビュー行は、`null`を「修正必須の有無の記録なし」と出す。
  */
@@ -256,10 +257,10 @@ export function buildReviewRecord(input: {
   readonly verdict: ReviewVerdict;
   readonly summary: string;
   readonly findings: readonly ReviewFinding[];
-  readonly openMustCount: number | null;
+  readonly blockingThreadCount: number | null;
   readonly postedReviewId: string | null;
 }): ReviewRecord {
-  const outcome = reviewResultFor(input.findings, input.openMustCount);
+  const outcome = reviewResultFor(input.findings, input.blockingThreadCount);
   return {
     work_item_id: input.workItemId,
     head_sha: input.headSha,
@@ -604,9 +605,9 @@ export function renderInlineComment(finding: ReviewFinding): string {
  * `hasPriorReview`(`db.ts`の`hasPriorReview`)で、
  * このPRの再レビューか最初のレビューかを区別する。
  * `"rereview_open"`は`"rereview_clean"`の対になる形式で、このラウンドでは
- * 新しい指摘が無いが、このラウンドでスレッドを解決した後も前のラウンドの
- * `[MUST]`の指摘が1件以上残っているときに使う。
- * そのときにLGTMだけの本文にすると、必須の指摘が残っているのに
+ * 新しい指摘が無いが、このラウンドでスレッドを解決した後もFactory自身の
+ * スレッドが、種類を問わず1件以上残っているときに使う。
+ * そのときにLGTMだけの本文にすると、指摘が残っているのに
  * 「もう対応は要らない」と読めてしまうため。
  * `"rereview_unverified"`も同じ理由の形式で、未解決のスレッドの一覧を読めず、
  * 残りがあるか分からないときに使う。LGTMとは書かず、確認を求める。
@@ -621,28 +622,28 @@ export type ReviewBodyMode =
 /**
  * 本文の形式を、次の情報だけから選ぶ。このラウンドでインラインに投稿した指摘か
  * 除いた指摘があるか、このPRにFactoryのレビューがすでにあるか、
- * このラウンドの解決処理の後もFactory自身の`[MUST]`のスレッドがいくつ残るか
- * (`openMustCount`。呼び出し側が、解決前のスレッド一覧から解決予定のidを除いて
- * `countOpenMustThreads`で数える。スレッドの一覧を読めなかったときは`null`)。
+ * このラウンドの解決処理の後もFactory自身のスレッドが、種類を問わずいくつ残るか
+ * (`openThreadCount`。呼び出し側が、解決前のスレッド一覧から解決予定のidを除いて
+ * `countOpenThreads`で数える。スレッドの一覧を読めなかったときは`null`)。
  * 除いた指摘(`path`がdiffに無いなどでインラインに投稿できなかったもの)があれば、
  * `postedCommentCount`が0でも`"findings"`にする。
  * `renderReviewSummary`は固定の2行目の下に除いた指摘を必ず並べるので、
  * その一覧の直上にLGTMの行を出さないため。
- * それ以外で未解決の`must`が残っていれば(`openMustCount > 0`)、指摘の無い形式
+ * それ以外でFactory自身のスレッドが残っていれば(`openThreadCount > 0`)、指摘の無い形式
  * (`"rereview_clean"`、理屈の上では`"first_clean"`も)の代わりに`"rereview_open"`にする。
  * ただし、PRの最初のレビューに前の未解決スレッドがあることはない。
- * `openMustCount`が`null`で、投稿する指摘も無いときは、残りの有無が分からないので
+ * `openThreadCount`が`null`で、投稿する指摘も無いときは、残りの有無が分からないので
  * `"rereview_unverified"`にする。
  */
 export function decideReviewBodyMode(
   postedCommentCount: number,
   droppedCount: number,
   hasPriorReview: boolean,
-  openMustCount: number | null,
+  openThreadCount: number | null,
 ): ReviewBodyMode {
   if (postedCommentCount + droppedCount > 0) return "findings";
-  if (openMustCount === null) return "rereview_unverified";
-  if (openMustCount > 0) return "rereview_open";
+  if (openThreadCount === null) return "rereview_unverified";
+  if (openThreadCount > 0) return "rereview_open";
   return hasPriorReview ? "rereview_clean" : "first_clean";
 }
 
@@ -669,7 +670,7 @@ export function decideReviewBodyMode(
  * 免責は重複になる。
  * 直すものが無い`"rereview_clean"`と`"first_clean"`は、3行目に免責を付ける。
  * LGTMの形の投稿こそ、人が「もう何もしなくてよい」と読みかねないため。
- * `"rereview_open"`は`openMustCount`で残っている`[MUST]`の件数を伝える。
+ * `"rereview_open"`は`openThreadCount`で残っているスレッドの件数を伝える。
  * これもすでに確認を求めているので、免責を付けない。
  * ここの文字列はすべて、英数字と日本語の間に半角スペースを入れない規約に従う
  * (`docs/coding-guidelines.md`)。
@@ -679,7 +680,7 @@ export function renderReviewSummary(
   postedCommentCount: number,
   mode: ReviewBodyMode,
   droppedFindings: readonly ReviewFinding[],
-  openMustCount: number | null,
+  openThreadCount: number | null,
   binaryFiles: readonly string[] = [],
   binaryUnlistedCount = 0,
 ): string {
@@ -705,7 +706,7 @@ export function renderReviewSummary(
       break;
     case "rereview_open":
       lines.push(
-        `新しい指摘はありません。未対応の指摘が${String(openMustCount)}件残っています。確認お願いします。`,
+        `新しい指摘はありません。未対応の指摘が${String(openThreadCount)}件残っています。確認お願いします。`,
       );
       break;
     case "rereview_unverified":
@@ -893,102 +894,76 @@ export function isFixedFixReply(body: string): boolean {
  * Factoryの指摘の後でも人の返信が残っていれば、最後に発言したのはFactoryではないので、
  * 人が実際に解決できるよう開いたままにする。
  *
- * `mode`で、`viewer`の最後のコメントのうちどれを「対応済み」とみなすかを決める。
- * `pr_review_post.ts`は`openMustCount`を反映する前の形式を渡すので
- * (理由は`countOpenMustThreads`のコメントを参照)、実際には`"findings"`、
- * `"rereview_clean"`、`"first_clean"`のどれかで、`"rereview_open"`にはならない。
- *   - `"rereview_clean"`(再レビューで指摘ゼロ)と、念のため同じ規則を使う
- *     `"rereview_open"`: 手つかずの`pr_review`の指摘(人が手で直したなど、
- *     もう直すものが無い)か、コミットを示す`pr_fix`の返信(`isFixedFixReply`)。
- *   - `"findings"`(指摘が残る再レビューか、最初のレビュー): コミットを示す
- *     `pr_fix`の返信だけ。この投稿で新しい指摘を残したばかりかもしれず、
- *     古い指摘はpr_fix自身の確認でしか閉じないので、手つかずの指摘は開いたままにする。
- *   - `"first_clean"`(最初のレビューで指摘ゼロ): 何も解決しない。
- *     運用者が対応しうる前のFactoryのレビューが存在しないため。
- *
- * どのモードでも、最後のコメントがviewerの了承か解消の返信
- * (`PR_REVIEW_ACK_MARKER_KIND`の目印を持つもの)のスレッドは解決する。
- * 目印は誰でも貼れるので、最後のコメントの書き手がviewerであることを先に求めている。
- * 指摘そのものに目印が書かれていても解決されないよう、返信であること
- * (コメントが2件以上あること)も求める。
+ * 解決するのは、最後のコメントが次のどちらかのスレッドだけである。
+ *   - コミットを示す`pr_fix`の返信(`isFixedFixReply`)。
+ *   - 再レビューの了承か解消の返信(`PR_REVIEW_ACK_MARKER_KIND`の目印を持つもの)。
+ *     指摘そのものに目印が書かれていても解決されないよう、返信であること
+ *     (コメントが2件以上あること)も求める。目印は誰でも貼れるので、
+ *     最後のコメントの書き手がviewerであることを先に求めている。
+ * 誰も答えていない指摘と、再レビューの反論は閉じない。範囲を絞った再レビューは、
+ * その行を見ていないことがあり、反論は指摘がまだ有効という答えであるためである。
  */
 export function selectThreadsToResolve(
   threads: readonly ReviewThread[],
   viewer: string,
-  mode: ReviewBodyMode,
 ): string[] {
-  if (mode === "first_clean") return [];
-  const viewerLower = viewer.toLowerCase();
   return threads
     .filter((thread) => !thread.isResolved)
-    .filter(
-      (thread) => thread.firstCommentAuthorLogin.toLowerCase() === viewerLower,
-    )
-    .filter((thread) => thread.firstCommentBody.startsWith(ROLE_TAGS.pr_review))
-    .filter(
-      (thread) => thread.lastCommentAuthorLogin.toLowerCase() === viewerLower,
-    )
+    .filter((thread) => isFactoryFindingThread(thread, viewer))
+    .filter((thread) => isOwnPost(thread.lastCommentAuthorLogin, viewer))
     .filter(
       (thread) =>
         (thread.comments.length > 1 &&
           hasMarker(thread.lastCommentBody, PR_REVIEW_ACK_MARKER_KIND)) ||
-        (mode === "rereview_clean" || mode === "rereview_open"
-          ? thread.lastCommentBody.startsWith(ROLE_TAGS.pr_review) ||
-            isFixedFixReply(thread.lastCommentBody)
-          : isFixedFixReply(thread.lastCommentBody)),
+        isFixedFixReply(thread.lastCommentBody),
     )
     .map((thread) => thread.id);
 }
 
 /**
- * このPRにあるFactory自身の`pr_review`の指摘のうち、未解決の`[MUST]`を数える。
- * `pr_review_post.ts`が、新しい指摘を投稿しないラウンドでLGTMだけの本文にせず
- * `"rereview_open"`にするかを決めるのに使う(`decideReviewBodyMode`の`openMustCount`)。
- * Factoryの投稿かどうかは、`selectThreadsToResolve`と同じく最初のコメントで判定する
- * (loginが大文字小文字を区別せず一致し、`pr_review`の役割タグで始まる)。
+ * 解決の後に残るFactory自身のスレッドを、種類を問わず数える。
+ * 0件のときだけ総評にLGTMと書く。
  * GitHubがすでに解決済みにしたスレッドと、このラウンドで解決する予定のスレッド
- * (`resolvedIds`。`selectThreadsToResolve`が、ここに渡すのと同じ解決前の`threads`から
- * 求めた戻り値)は数えない。
- * さらに、最初のコメントの2行目(`renderInlineComment`の形式での種別の接頭辞)が
- * `[MUST]`(`REVIEW_FINDING_KIND_PREFIXES.must`)であることを求める。
- * `[IMO]` / `[NITS]` / `[Q]`の指摘は、指摘の無い再レビューの本文を妨げない。
+ * (`resolvedIds`。`selectThreadsToResolve`などが、ここに渡すのと同じ解決前の`threads`から
+ * 求めたid)は数えない。
  */
-export function countOpenMustThreads(
+export function countOpenThreads(
   threads: readonly ReviewThread[],
   viewer: string,
   resolvedIds: readonly string[],
 ): number {
-  const viewerLower = viewer.toLowerCase();
-  const resolvedIdSet = new Set(resolvedIds);
-  return threads.filter((thread) => {
-    if (thread.isResolved) return false;
-    if (resolvedIdSet.has(thread.id)) return false;
-    if (thread.firstCommentAuthorLogin.toLowerCase() !== viewerLower) {
-      return false;
-    }
-    if (!thread.firstCommentBody.startsWith(ROLE_TAGS.pr_review)) return false;
-    const secondLine = thread.firstCommentBody.split("\n")[1] ?? "";
-    return secondLine.startsWith(REVIEW_FINDING_KIND_PREFIXES.must);
-  }).length;
+  const resolved = new Set(resolvedIds);
+  return threads.filter(
+    (thread) =>
+      !thread.isResolved &&
+      !resolved.has(thread.id) &&
+      isFactoryFindingThread(thread, viewer),
+  ).length;
 }
 
-// テストを先に足すための仮の実装。実装のコミットで置き換える。
-export function countOpenThreads(
-  _threads: readonly ReviewThread[],
-  _viewer: string,
-  _resolvedIds: readonly string[],
-): number {
-  return 0;
-}
-
-// テストを先に足すための仮の実装。実装のコミットで置き換える。
+/**
+ * 解決の後に残る、マージを止めるスレッドを数える。
+ * 未解決の`[MUST]`と、答えを待つ見送りである。
+ * 見送りが了承されるまで、マージできる状態として示さないためである。
+ * `[MUST]`かどうかは、最初のコメントの2行目(`renderInlineComment`の形式での
+ * 種別の接頭辞、`REVIEW_FINDING_KIND_PREFIXES.must`)で見る。
+ */
 export function countBlockingThreads(
-  _threads: readonly ReviewThread[],
-  _viewer: string,
-  _isAllowed: ThreadAuthorPredicate,
-  _resolvedIds: readonly string[],
+  threads: readonly ReviewThread[],
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+  resolvedIds: readonly string[],
 ): number {
-  return 0;
+  const resolved = new Set(resolvedIds);
+  return threads.filter((thread) => {
+    if (thread.isResolved || resolved.has(thread.id)) return false;
+    if (!isFactoryFindingThread(thread, viewer)) return false;
+    const secondLine = thread.firstCommentBody.split("\n")[1] ?? "";
+    return (
+      secondLine.startsWith(REVIEW_FINDING_KIND_PREFIXES.must) ||
+      threadResponseKind(thread, viewer, isAllowed) === "skip"
+    );
+  }).length;
 }
 
 /** スレッドの書き手が、答えの対象にしてよい人かを返す。`poll_support.ts`の`isAllowedLabeler`を渡す。 */

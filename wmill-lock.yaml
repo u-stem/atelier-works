@@ -91,7 +91,7 @@ locks:
   f/factory/lib/design_gate: 1a54855ba538bca04749af4b6bb428a50e286592fe942785315d616ab06f5682
   f/factory/lib/design_launch_support: f3755aa859f912007af96c4877849a5ae2c6fc362f2846bcafc26f6d2b2b917f
   f/factory/lib/design_template: 9da4537c3a80561b53250e81bb2378b3622843e90ed1828bb7365334ba539c1e
-  f/factory/lib/discord: 0dd324771303bca3f9b6ae64f09a72e6b2ce4a34398dcbc3867925c0198a0d41
+  f/factory/lib/discord: 30271d39ab462058031665503ab936450d46f5e8fdc52783b7d097da540dab9d
   f/factory/lib/doc_tree_hash: 248310a17a8d590114b08021e558454a908388727e4e199c5c4a6cd482c3e699
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/drawio_viewer_bump: 9970434f61c82d9f1e5ea228c2e5a1649b7e9eae5a6f7c332a1e31f17d9434aa
@@ -189,7 +189,7 @@ locks:
   f/factory/lib/stop_check: 93d745a44cba18e0a5db06a160ede4fe79d5fb30ba2495e4720cf7d49a773994
   f/factory/lib/summary_support: f04c8bd8ca44a82c8b53a7799cf65b22f9b1fe13b1f33271e71586e460d53029
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
-  f/factory/lib/types: 9f3034aed99d017aba6be36352e777a88cb75081cb0e1ad9e84efd130bd95926
+  f/factory/lib/types: be28acc5ff4cb306ffeef085b40051e81d52d688932f591f93cf7cab63af98d4
   f/factory/lib/worker_load_support: b68337109b6233aacd50be93bf977391910fcaf328a7a7ae6ba01be1269fe00c
   f/factory/lib/workspace: 86076e859b1a984ab1ac0a888586066a9c5a6824c22863525e793f1fb9eea470
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -239,9 +239,9 @@ locks:
   f/factory/steps/pr_fix_verify: 00d997d1b0cc2f107d7d1d1237b93fa2ecbf4367abb967e33332dd9e72ac8bab
   f/factory/steps/pr_review_generate: d0651f9ab79a4b0a5cae267258c3c86b4a148e091b19b1d7c0985ee5f22ed55a
   f/factory/steps/pr_review_intake_register: c0f6a2a2a00548ac17bf2ddb1c40f103f3ad4f693ab17500afdd592e023ff655
-  f/factory/steps/pr_review_post: 4d5b047febffd8eb432bf7bbdd1cdeba702a57762733696e5ab0b98ac98d7a8d
+  f/factory/steps/pr_review_post: 290f099d938ae057bce31577657ef129cbca0bf75899f90817f8716a13b616aa
   f/factory/steps/pr_review_prepare: 30d5c5ccb47585cf16576cf4ead44a612a878e840a118c3b5272e3e75e0ecd3a
-  f/factory/steps/pr_workflow_support: 44d85672c2e6804f147299a180785b148b3f181173c4feaf8fcacc48b717c4b9
+  f/factory/steps/pr_workflow_support: 888f0cac75f9d8e9e3e85113077584843fb4458cb737164e47d07617ab41247b
   f/factory/steps/requirements_apply: 8c96732c4d5c2f5b74bf68cb944f604b3f2910eb33ff01f04923e25d5d35343b
   f/factory/watch_main_ci: f456c37b1e0e950e6fd0dbf62a2921d677846504ed31f4da8198d4d8bf76fc54
   f/factory/watch_pr_ci: c9ec769a24272024115a57d183f61e4340dc2627ac3b84db243a56c659b7e7e2

@@ -44,7 +44,8 @@ import { blockReview } from "./pr_review_prepare.ts";
 import {
   buildReviewRecord,
   commentedFindingsOf,
-  countOpenMustThreads,
+  countBlockingThreads,
+  countOpenThreads,
   decideReviewBodyMode,
   findPostedReviewId,
   mapFindingsToReviewComments,
@@ -200,7 +201,7 @@ export async function main(
  * トリガーの`review_label`は着手時に消費済みなので、ここで外すラベルも、
  * 付けるPRの状態ラベルも無い。
  * 投稿後に結果を決め、今回の指摘に`kind === "must"`があるか、
- * 前回までの`[MUST]`の指摘が今回の解決処理の後も残っていれば
+ * 前回までの`[MUST]`の指摘か、答えを待つ見送りが今回の解決処理の後も残っていれば
  * `"changes_requested"`、それ以外は`"reviewed"`にする。
  * これはDiscordの通知で、変更が要るのか承認だけでよいのかを一目で示すためのもの。
  * 未解決のスレッドの一覧を読めず、今回の指摘にも`[MUST]`が無いときは、
@@ -210,14 +211,16 @@ export async function main(
  * いずれかで、Claudeの自由記述の`summary`は使わない。
  * `summary`は出力スキーマと`factory.reviews`に記録として残すだけ。
  * 再レビュー(このPRに以前のFactoryのレビューがある)のときは、
- * pr_fixが対応済みとみなせるFactory自身のスレッド(`selectThreadsToResolve`)を
- * ベストエフォートで解決する。
+ * pr_fixが対応済みとみなせるFactory自身のスレッド(`selectThreadsToResolve`)と、
+ * 再レビューが了承か解消と答えたスレッドを、ベストエフォートで解決する。
+ * 誰も答えていない指摘は解決しない。解決の後もFactoryのスレッドが残れば、
+ * 本文にLGTMと書かない。
  * 初回のレビューでは対応済みのものが無いため解決しない。
  *
  * 投稿の前に、この作業項目が同じ`review_sha`に対して投稿済みのレビューがPRにあるかを確かめ
  * (`findPostedReview`)、あれば投稿せずにそのidで記録する。
  * 投稿の後、記録する前にステップが落ちて再実行されても、レビューを二重に投稿しないため。
- * 再利用するときはスレッドを1つも解決せず、残っている`[MUST]`のスレッドをすべて
+ * 再利用するときはスレッドを1つも解決せず、マージを止めるスレッドをすべて
  * `"changes_requested"`の判断とDiscordの通知に反映する。
  * 再実行で作り直した指摘は投稿されないので、それを根拠に投稿済みのレビューの指摘を閉じない。
  * 再利用するときにスレッドの一覧を取得できなければ、記録する前に例外を投げる。
@@ -397,10 +400,11 @@ export type PublishReviewResult = {
   /** 投稿済みのレビューを再利用したか。 */
   readonly reused: boolean;
   /**
-   * 解決の後に残る、Factory自身の未解決の`[MUST]`のスレッドの数。
+   * 解決の後に残る、マージを止めるFactory自身のスレッドの数。
+   * 未解決の`[MUST]`と、答えを待つ見送りを数える。
    * スレッドの一覧を読めなかったときは、0と区別して`null`にする。
    */
-  readonly openMustCount: number | null;
+  readonly blockingThreadCount: number | null;
   /** オーナーの照合に落ちて、投稿もスレッドの解決もしなかったときの理由。それ以外は`null`。 */
   readonly ownerStopReason: string | null;
 };
@@ -408,9 +412,9 @@ export type PublishReviewResult = {
 /**
  * レビューの総評を組み立ててGitHubに投稿し、pr_fixが対応済みのFactory自身のスレッドを解決する。
  * この作業項目が同じshaに対して投稿済みのレビューがあれば、投稿もスレッドの解決もせずにそのidを返す。
- * そのときの`openMustCount`は、未解決の`[MUST]`のスレッドをすべて数えたもの。
+ * そのときの`blockingThreadCount`は、マージを止めるスレッドをすべて数えたもの。
  * 再利用するときにスレッドの一覧を取得できなければ、例外を投げる。
- * 新しく投稿するときに取得できなければ、投稿は続け、`openMustCount`を`null`にして返す。
+ * 新しく投稿するときに取得できなければ、投稿は続け、`blockingThreadCount`を`null`にして返す。
  * レビューの一覧の取得に失敗したら、投稿せずに例外を投げる。
  * DBとWindmillには触れない(呼び出し側の`postReview`が記録と通知を行う)。
  */
@@ -424,25 +428,24 @@ export async function publishReview(
 
   // 投稿済みのレビューは、スレッドを選ぶより先に探す。
   // 再実行ではClaudeがレビューを作り直すので、新しい指摘が0件になりやすい。
-  // そのまま"rereview_clean"の規則でスレッドを選ぶと、
-  // 投稿済みのレビュー自身の未解決の`[MUST]`まで解決してしまう。
+  // 再利用するときは、スレッドを選ばず何も解決しない。
   const existingId = input.post ? await findPostedReview(client, target) : null;
   const reused = existingId !== null;
 
-  // スレッドの一覧、`selectThreadsToResolve`が解決するid、
-  // 解決後に残るFactory自身の`[MUST]`スレッドの数は、すべて本文の種類より先に決める。
-  // 新しい指摘が無くても古い`[MUST]`が未解決なら、
+  // スレッドの一覧、解決するid、
+  // 解決後に残るFactory自身のスレッドの数は、すべて本文の種類より先に決める。
+  // 新しい指摘が無くても、前のラウンドのスレッドが未解決なら、
   // 単なるLGTMではなく`"rereview_open"`にするため。
   // 初回のレビューにはまだスレッドが無く、取得してもAPIを余分に使うだけなので、
   // `priorReview`か、投稿済みのレビューを再利用するときだけ取得する。
   // 再利用するレビューが初回のものでも、その指摘のスレッドは既にある。
   // 新しく投稿するときは、ここで失敗してもレビューの投稿は止めない。
   // `threads`は空のままになり、`threadIdsToResolve`も空になる。
-  // `openMustCount`は0ではなく`null`にして、残りの有無が分からないことを伝える。
-  // 0にすると、未解決の`[MUST]`が残るPRをLGTMの本文と`reviewed`の通知で示してしまう。
+  // 件数は0ではなく`null`にして、残りの有無が分からないことを伝える。
+  // 0にすると、マージを止めるスレッドが残るPRをLGTMの本文と`reviewed`の通知で示してしまう。
   // 指摘を投稿するときの`mode`は"findings"のままで、投稿しないときは"rereview_unverified"になる。
   // 再利用するときは、失敗したら記録する前に例外を投げて再実行に回す。
-  // 投稿済みのレビューの`[MUST]`を数えられないまま、通知を`reviewed`にしないため。
+  // 投稿済みのレビューのスレッドを数えられないまま、通知を`reviewed`にしないため。
   // 再利用するので、この失敗で投稿が起きることは無い。
   let threads: ReviewThread[] = [];
   let threadsReadable = true;
@@ -461,17 +464,6 @@ export async function publishReview(
       });
     }
   }
-  // `resolveMode`は`openMustCount`を0として求めるので、
-  // `selectThreadsToResolve`が扱える"findings" / "rereview_clean" / "first_clean"の
-  // いずれかに必ずなる。
-  // "rereview_open"になりうるのは、実際の`openMustCount`を渡す2回目の
-  // `decideReviewBodyMode`だけ。
-  const resolveMode = decideReviewBodyMode(
-    comments.length,
-    droppedFindings.length,
-    priorReview,
-    0,
-  );
   // 再利用するときは答えない。投稿済みのレビューの答えが済んでいるかもしれず、残りは次のレビューが答える。
   // 答えの対象は、Claudeの出力でなく、読み直した`threads`から決める。
   const { applied, droppedCount } = selectThreadResponses(
@@ -491,20 +483,28 @@ export async function publishReview(
   const answeredIds = applied
     .filter(({ response }) => response.decision !== "skip_rejected")
     .map(({ thread }) => thread.id);
-  // 再利用するときは何も解決せず、残っている`[MUST]`をすべて数えて通知に載せる。
+  // 再利用するときは何も解決せず、残っているスレッドをすべて数えて通知に載せる。
   const selectedIds = reused
     ? []
-    : selectThreadsToResolve(threads, viewerLogin, resolveMode);
+    : selectThreadsToResolve(threads, viewerLogin);
   const threadIdsToResolve = [...new Set([...selectedIds, ...answeredIds])];
-  const openMustCount = threadsReadable
-    ? countOpenMustThreads(threads, viewerLogin, threadIdsToResolve)
+  const openThreadCount = threadsReadable
+    ? countOpenThreads(threads, viewerLogin, threadIdsToResolve)
+    : null;
+  const blockingThreadCount = threadsReadable
+    ? countBlockingThreads(
+        threads,
+        viewerLogin,
+        input.isAllowedReplier,
+        threadIdsToResolve,
+      )
     : null;
 
   if (!input.post) {
     return {
       postedReviewId: null,
       reused: false,
-      openMustCount,
+      blockingThreadCount,
       ownerStopReason: null,
     };
   }
@@ -512,7 +512,7 @@ export async function publishReview(
     return {
       postedReviewId: existingId,
       reused: true,
-      openMustCount,
+      blockingThreadCount,
       ownerStopReason: null,
     };
   }
@@ -525,7 +525,7 @@ export async function publishReview(
     return {
       postedReviewId: null,
       reused: false,
-      openMustCount,
+      blockingThreadCount,
       ownerStopReason: ownerStop,
     };
   }
@@ -534,14 +534,14 @@ export async function publishReview(
     comments.length,
     droppedFindings.length,
     priorReview,
-    openMustCount,
+    openThreadCount,
   );
   const summaryBody = renderReviewSummary(
     input.prAuthorLogin,
     comments.length,
     mode,
     droppedFindings,
-    openMustCount,
+    openThreadCount,
     input.binaryFiles,
     input.binaryUnlistedCount,
   );
@@ -605,18 +605,19 @@ export async function publishReview(
   }
   // 本文は返信の前に決めた件数で投稿済みである。
   // 記録と通知に使う件数は、返信できず解決しなかったスレッドを残りに戻して数え直す。
-  const settledOpenMustCount =
-    openMustCount === null || unanswered.size === 0
-      ? openMustCount
-      : countOpenMustThreads(
+  const settledBlockingThreadCount =
+    blockingThreadCount === null || unanswered.size === 0
+      ? blockingThreadCount
+      : countBlockingThreads(
           threads,
           viewerLogin,
+          input.isAllowedReplier,
           threadIdsToResolve.filter((id) => !unanswered.has(id)),
         );
   return {
     postedReviewId,
     reused: false,
-    openMustCount: settledOpenMustCount,
+    blockingThreadCount: settledBlockingThreadCount,
     ownerStopReason: null,
   };
 }
@@ -625,7 +626,7 @@ export async function publishReview(
 export type ReviewTransitionNoticeInput = {
   readonly post: boolean;
   readonly findings: readonly ReviewFinding[];
-  readonly openMustCount: number | null;
+  readonly blockingThreadCount: number | null;
 };
 
 /**
@@ -640,7 +641,8 @@ export function reviewTransitionNotice(
   if (!input.post) {
     return "review_post_mode is gated: recorded without posting";
   }
-  return reviewResultFor(input.findings, input.openMustCount) === "unverified"
+  return reviewResultFor(input.findings, input.blockingThreadCount) ===
+    "unverified"
     ? "open review threads could not be read: recorded without a result"
     : null;
 }
@@ -655,7 +657,7 @@ export type ReviewedNotifyInput = {
   readonly pr_number: number;
   readonly verdict: string;
   readonly findings: readonly ReviewFinding[];
-  readonly openMustCount: number | null;
+  readonly blockingThreadCount: number | null;
 };
 
 /**
@@ -678,7 +680,7 @@ export function reviewedNotifyEvent(
     pr_url: `https://github.com/${input.owner}/${input.repo}/pull/${String(input.pr_number)}`,
     verdict: input.verdict,
     finding_count: input.findings.length,
-    result: reviewResultFor(input.findings, input.openMustCount),
+    result: reviewResultFor(input.findings, input.blockingThreadCount),
   };
 }
 
@@ -825,7 +827,7 @@ async function postReview(
     );
     return { skip: true, posted: false, posted_review_id: null };
   }
-  const openMustCount = published.openMustCount;
+  const blockingThreadCount = published.blockingThreadCount;
   const postedReviewId =
     published.postedReviewId === null ? null : String(published.postedReviewId);
   if (published.reused) {
@@ -835,7 +837,11 @@ async function postReview(
       posted_review_id: postedReviewId,
     });
   }
-  const notice = reviewTransitionNotice({ post, findings, openMustCount });
+  const notice = reviewTransitionNotice({
+    post,
+    findings,
+    blockingThreadCount,
+  });
 
   // Discordの通知とConsoleのレビュー行が同じ基準で状態を出すため、
   // 未解決の[MUST]を数えた結果を、レビューと一緒に記録する。
@@ -845,7 +851,7 @@ async function postReview(
     verdict,
     summary,
     findings,
-    openMustCount,
+    blockingThreadCount,
     postedReviewId,
   });
   await insertReview(record);
@@ -867,7 +873,7 @@ async function postReview(
       pr_number,
       verdict,
       findings,
-      openMustCount,
+      blockingThreadCount,
     });
     await sendReviewedNotification(event, {
       getWebhookUrl: () => wmill.getVariable("f/factory/discord_webhook_url"),

@@ -423,11 +423,11 @@ export function describeRound(round: WorkItemRound): RoundView {
 }
 
 /**
- * レビュー行の状態は、Discordの通知と同じ基準(未解決の修正必須の指摘の有無)で出す。
+ * レビュー行の状態は、Discordの通知と同じ基準(未解決の修正必須の指摘と未了承の見送りの有無)で出す。
  * Claudeの判定(`verdict`)は、前のラウンドから残った未解決の指摘を数えないため使わない。
  */
 const RESULT_LABELS: ReadonlyMap<string, string> = new Map([
-  ["changes_requested", "修正必須の指摘が未解決"],
+  ["changes_requested", "修正必須の指摘か未了承の見送りが未解決"],
   ["reviewed", "修正必須の指摘なし"],
 ]);
 
