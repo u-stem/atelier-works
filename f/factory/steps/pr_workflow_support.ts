@@ -972,6 +972,25 @@ export function countOpenMustThreads(
   }).length;
 }
 
+// テストを先に足すための仮の実装。実装のコミットで置き換える。
+export function countOpenThreads(
+  _threads: readonly ReviewThread[],
+  _viewer: string,
+  _resolvedIds: readonly string[],
+): number {
+  return 0;
+}
+
+// テストを先に足すための仮の実装。実装のコミットで置き換える。
+export function countBlockingThreads(
+  _threads: readonly ReviewThread[],
+  _viewer: string,
+  _isAllowed: ThreadAuthorPredicate,
+  _resolvedIds: readonly string[],
+): number {
+  return 0;
+}
+
 /** スレッドの書き手が、答えの対象にしてよい人かを返す。`poll_support.ts`の`isAllowedLabeler`を渡す。 */
 export type ThreadAuthorPredicate = (
   login: string,

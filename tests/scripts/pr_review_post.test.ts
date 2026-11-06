@@ -37,13 +37,15 @@ import {
 import {
   buildReviewRecord,
   commentedFindingsOf,
-  countOpenMustThreads,
+  countBlockingThreads,
+  countOpenThreads,
   decideReviewBodyMode,
   fenceFor,
   isFixedFixReply,
   mapFindingsToReviewComments,
   renderInlineComment,
   renderReviewSummary,
+  renderThreadReply,
   renderUnresolvedLineSummary,
   reviewResultFor,
   selectThreadsToResolve,
@@ -280,11 +282,11 @@ describe("decideReviewBodyMode", () => {
 
   // 再レビューで新しい投稿が無くても、以前の[MUST]の指摘が未解決なら、
   // 単なるLGTMに読める本文にしない。
-  test('returns "rereview_open" when nothing was posted but openMustCount is greater than zero', () => {
+  test('returns "rereview_open" when nothing was posted but openThreadCount is greater than zero', () => {
     expect(decideReviewBodyMode(0, 0, true, 2)).toBe("rereview_open");
   });
 
-  test('returns "findings" (not "rereview_open") when comments were posted even with openMustCount greater than zero', () => {
+  test('returns "findings" (not "rereview_open") when comments were posted even with openThreadCount greater than zero', () => {
     expect(decideReviewBodyMode(3, 0, true, 2)).toBe("findings");
   });
 
@@ -872,43 +874,53 @@ describe("selectThreadsToResolve", () => {
 
   test("skips a thread GitHub already marked resolved", () => {
     const ids = selectThreadsToResolve(
-      [thread({ isResolved: true })],
+      [thread({ isResolved: true, lastCommentBody: fixedFixReplyBody })],
       "factory-bot",
-      "rereview_clean",
     );
     expect(ids).toEqual([]);
   });
 
   test("skips a thread whose first comment was authored by someone else", () => {
     const ids = selectThreadsToResolve(
-      [thread({ firstCommentAuthorLogin: "alice" })],
+      [
+        thread({
+          firstCommentAuthorLogin: "alice",
+          lastCommentBody: fixedFixReplyBody,
+        }),
+      ],
       "factory-bot",
-      "rereview_clean",
     );
     expect(ids).toEqual([]);
   });
 
   test("skips a viewer-authored thread whose first comment has no pr_review role tag", () => {
     const ids = selectThreadsToResolve(
-      [thread({ firstCommentBody: "just a plain comment" })],
+      [
+        thread({
+          firstCommentBody: "just a plain comment",
+          lastCommentBody: fixedFixReplyBody,
+        }),
+      ],
       "factory-bot",
-      "rereview_clean",
     );
     expect(ids).toEqual([]);
   });
 
   test("matches the viewer login case-insensitively", () => {
     const ids = selectThreadsToResolve(
-      [thread({ firstCommentAuthorLogin: "Factory-Bot" })],
+      [
+        thread({
+          firstCommentAuthorLogin: "Factory-Bot",
+          lastCommentBody: fixedFixReplyBody,
+        }),
+      ],
       "factory-bot",
-      "rereview_clean",
     );
     expect(ids).toEqual(["thread-1"]);
   });
 
   // スレッドに人の返信が残っていれば、Factory自身の`pr_review`の指摘のあとでも、
   // スレッドを開いたままにする。自動で解決してよいのは、最後の発言がFactoryのときだけ。
-  // モードによらない規則なので、"rereview_clean"で1回だけ確かめる。
   test("skips a thread whose last comment is a human reply", () => {
     const ids = selectThreadsToResolve(
       [
@@ -918,92 +930,31 @@ describe("selectThreadsToResolve", () => {
         }),
       ],
       "factory-bot",
-      "rereview_clean",
     );
     expect(ids).toEqual([]);
   });
 
-  describe('mode "findings" (a re-review with fresh findings, or a first review)', () => {
-    test("resolves a thread whose last comment is a fixed pr_fix reply", () => {
-      const ids = selectThreadsToResolve(
-        [thread({ id: "thread-42", lastCommentBody: fixedFixReplyBody })],
-        "factory-bot",
-        "findings",
-      );
-      expect(ids).toEqual(["thread-42"]);
-    });
-
-    test("does not resolve a thread whose last comment is still the untouched finding", () => {
-      const ids = selectThreadsToResolve(
-        [thread({ id: "thread-42" })],
-        "factory-bot",
-        "findings",
-      );
-      expect(ids).toEqual([]);
-    });
-
-    test("does not resolve a thread whose last comment is a skipped (見送り) pr_fix reply", () => {
-      const ids = selectThreadsToResolve(
-        [thread({ id: "thread-42", lastCommentBody: skippedFixReplyBody })],
-        "factory-bot",
-        "findings",
-      );
-      expect(ids).toEqual([]);
-    });
+  test("resolves a thread whose last comment is a fixed pr_fix reply", () => {
+    const ids = selectThreadsToResolve(
+      [thread({ id: "thread-42", lastCommentBody: fixedFixReplyBody })],
+      "factory-bot",
+    );
+    expect(ids).toEqual(["thread-42"]);
   });
 
-  describe('mode "rereview_clean" (re-review, zero findings)', () => {
-    test("resolves a thread whose last comment is still the untouched finding", () => {
-      const ids = selectThreadsToResolve(
-        [thread({ id: "thread-42" })],
-        "factory-bot",
-        "rereview_clean",
-      );
-      expect(ids).toEqual(["thread-42"]);
-    });
-
-    test("resolves a thread whose last comment is a fixed pr_fix reply", () => {
-      const ids = selectThreadsToResolve(
-        [thread({ id: "thread-42", lastCommentBody: fixedFixReplyBody })],
-        "factory-bot",
-        "rereview_clean",
-      );
-      expect(ids).toEqual(["thread-42"]);
-    });
-
-    test("does not resolve a thread whose last comment is a skipped (見送り) pr_fix reply", () => {
-      const ids = selectThreadsToResolve(
-        [thread({ id: "thread-42", lastCommentBody: skippedFixReplyBody })],
-        "factory-bot",
-        "rereview_clean",
-      );
-      expect(ids).toEqual([]);
-    });
+  // 指摘が0件の再レビューでも、誰も直していない指摘を閉じない。
+  // 範囲を絞った再レビューは、その行を見ていないことがあるため。
+  test("keeps a thread whose last comment is still the untouched finding", () => {
+    const ids = selectThreadsToResolve([thread()], "factory-bot");
+    expect(ids).toEqual([]);
   });
 
-  describe('mode "first_clean" (first review, zero findings)', () => {
-    test("never resolves anything, even a fixed pr_fix reply", () => {
-      const ids = selectThreadsToResolve(
-        [thread({ id: "thread-42", lastCommentBody: fixedFixReplyBody })],
-        "factory-bot",
-        "first_clean",
-      );
-      expect(ids).toEqual([]);
-    });
-  });
-
-  // "rereview_open"は"rereview_clean"と同じ解決の規則に従う。
-  // `pr_review_post.ts`は実際には"rereview_open"を渡さず、`openMustCount`を
-  // 反映する前のモードを渡すが、どちらで呼ばれても関数の動作は正しく保つ。
-  describe('mode "rereview_open" (defensively, same resolving rule as "rereview_clean")', () => {
-    test("resolves a thread whose last comment is still the untouched finding", () => {
-      const ids = selectThreadsToResolve(
-        [thread({ id: "thread-42" })],
-        "factory-bot",
-        "rereview_open",
-      );
-      expect(ids).toEqual(["thread-42"]);
-    });
+  test("keeps a thread whose last comment is a skipped pr_fix reply", () => {
+    const ids = selectThreadsToResolve(
+      [thread({ lastCommentBody: skippedFixReplyBody })],
+      "factory-bot",
+    );
+    expect(ids).toEqual([]);
   });
 
   describe("acknowledgement replies", () => {
@@ -1023,7 +974,6 @@ describe("selectThreadsToResolve", () => {
       const ids = selectThreadsToResolve(
         [thread({ lastCommentBody: ACK_BODY, comments: twoComments })],
         "factory-bot",
-        "findings",
       );
       expect(ids).toEqual(["thread-1"]);
     });
@@ -1037,7 +987,6 @@ describe("selectThreadsToResolve", () => {
           }),
         ],
         "factory-bot",
-        "findings",
       );
       expect(ids).toEqual([]);
     });
@@ -1052,7 +1001,6 @@ describe("selectThreadsToResolve", () => {
           }),
         ],
         "factory-bot",
-        "findings",
       );
       expect(ids).toEqual([]);
     });
@@ -1066,24 +1014,79 @@ describe("selectThreadsToResolve", () => {
           }),
         ],
         "factory-bot",
-        "findings",
       );
       expect(ids).toEqual([]);
     });
   });
 });
 
-describe("countOpenMustThreads", () => {
-  function mustThread(overrides: Partial<ReviewThread> = {}): ReviewThread {
+// 再レビューが出した本物の反論の返信は、指摘が0件の次の再レビューでも閉じない。
+// 反論の返信は`pr_review`の役割タグで始まるので、役割タグだけで閉じると、反論した`[MUST]`が自分で閉じてしまう。
+describe("a thread the re-review objected to", () => {
+  const objectionBody = renderThreadReply(
+    {
+      thread_id: 1,
+      decision: "skip_rejected",
+      body: "見送りは認められません。",
+    },
+    9,
+  );
+  const mustFinding = "[pr_review 自動レビュー] @alice\n[MUST] fix this";
+  const objected: ReviewThread = {
+    id: "thread-1",
+    isResolved: false,
+    path: "a.ts",
+    line: 10,
+    firstCommentAuthorLogin: "factory-bot",
+    firstCommentBody: mustFinding,
+    lastCommentAuthorLogin: "factory-bot",
+    lastCommentBody: objectionBody,
+    firstCommentDatabaseId: 1,
+    allCommentIds: [1, 2],
+    comments: [
+      {
+        databaseId: 1,
+        authorLogin: "factory-bot",
+        authorId: null,
+        body: mustFinding,
+      },
+      {
+        databaseId: 2,
+        authorLogin: "factory-bot",
+        authorId: null,
+        body: objectionBody,
+      },
+    ],
+    lastCommentAuthorId: null,
+  };
+  const isAllowed = (login: string): boolean => login === "factory-bot";
+
+  test("is not resolved by a re-review", () => {
+    expect(selectThreadsToResolve([objected], "factory-bot")).toEqual([]);
+  });
+
+  test("counts as an open thread", () => {
+    expect(countOpenThreads([objected], "factory-bot", [])).toBe(1);
+  });
+
+  test("counts as a blocking thread", () => {
+    expect(countBlockingThreads([objected], "factory-bot", isAllowed, [])).toBe(
+      1,
+    );
+  });
+});
+
+describe("countOpenThreads", () => {
+  function open(overrides: Partial<ReviewThread> = {}): ReviewThread {
     return {
       id: "thread-1",
       isResolved: false,
       path: "a.ts",
       line: 10,
       firstCommentAuthorLogin: "factory-bot",
-      firstCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+      firstCommentBody: "[pr_review 自動レビュー]\n[IMO] consider",
       lastCommentAuthorLogin: "factory-bot",
-      lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+      lastCommentBody: "[pr_review 自動レビュー]\n[IMO] consider",
       firstCommentDatabaseId: 1,
       allCommentIds: [1],
       comments: [],
@@ -1092,26 +1095,109 @@ describe("countOpenMustThreads", () => {
     };
   }
 
-  test("counts an open MUST finding", () => {
-    expect(countOpenMustThreads([mustThread()], "factory-bot", [])).toBe(1);
+  test("counts an open finding of any kind", () => {
+    expect(countOpenThreads([open()], "factory-bot", [])).toBe(1);
   });
 
-  test("excludes a MUST finding resolved this round", () => {
+  test("excludes a thread resolved this round", () => {
+    expect(countOpenThreads([open()], "factory-bot", ["thread-1"])).toBe(0);
+  });
+
+  test("excludes a thread GitHub already resolved", () => {
     expect(
-      countOpenMustThreads([mustThread()], "factory-bot", ["thread-1"]),
+      countOpenThreads([open({ isResolved: true })], "factory-bot", []),
     ).toBe(0);
   });
 
-  test("does not count an IMO finding", () => {
-    const imoThread = mustThread({
-      firstCommentBody: "[pr_review 自動レビュー] @alice\n[IMO] consider this",
-    });
-    expect(countOpenMustThreads([imoThread], "factory-bot", [])).toBe(0);
+  test("does not count a thread a person started", () => {
+    expect(
+      countOpenThreads(
+        [open({ firstCommentAuthorLogin: "alice" })],
+        "factory-bot",
+        [],
+      ),
+    ).toBe(0);
+  });
+});
+
+describe("countBlockingThreads", () => {
+  const isAllowed = (login: string): boolean => login === "factory-bot";
+
+  function base(body: string): ReviewThread {
+    return {
+      id: "thread-1",
+      isResolved: false,
+      path: "a.ts",
+      line: 10,
+      firstCommentAuthorLogin: "factory-bot",
+      firstCommentBody: `[pr_review 自動レビュー]\n${body}`,
+      lastCommentAuthorLogin: "factory-bot",
+      lastCommentBody: `[pr_review 自動レビュー]\n${body}`,
+      firstCommentDatabaseId: 1,
+      allCommentIds: [1],
+      comments: [],
+      lastCommentAuthorId: null,
+    };
+  }
+
+  function waitingSkip(): ReviewThread {
+    return {
+      ...base("[IMO] consider"),
+      lastCommentBody: "理由\n\n対応: 見送り",
+      comments: [
+        {
+          databaseId: 1,
+          authorLogin: "factory-bot",
+          authorId: null,
+          body: "x",
+        },
+        {
+          databaseId: 2,
+          authorLogin: "factory-bot",
+          authorId: null,
+          body: "y",
+        },
+      ],
+    };
+  }
+
+  test("counts an open MUST", () => {
+    expect(
+      countBlockingThreads([base("[MUST] fix")], "factory-bot", isAllowed, []),
+    ).toBe(1);
   });
 
-  test("does not count a human-authored thread", () => {
-    const humanThread = mustThread({ firstCommentAuthorLogin: "alice" });
-    expect(countOpenMustThreads([humanThread], "factory-bot", [])).toBe(0);
+  test("does not count a MUST resolved this round", () => {
+    expect(
+      countBlockingThreads([base("[MUST] fix")], "factory-bot", isAllowed, [
+        "thread-1",
+      ]),
+    ).toBe(0);
+  });
+
+  test("does not count an open IMO without a skip reply", () => {
+    expect(
+      countBlockingThreads(
+        [base("[IMO] consider")],
+        "factory-bot",
+        isAllowed,
+        [],
+      ),
+    ).toBe(0);
+  });
+
+  test("counts an IMO whose skip waits for an answer", () => {
+    expect(
+      countBlockingThreads([waitingSkip()], "factory-bot", isAllowed, []),
+    ).toBe(1);
+  });
+
+  test("does not count a skip accepted this round", () => {
+    expect(
+      countBlockingThreads([waitingSkip()], "factory-bot", isAllowed, [
+        "thread-1",
+      ]),
+    ).toBe(0);
   });
 });
 
@@ -1132,7 +1218,7 @@ describe("reviewResultFor", () => {
 
   // 今回の指摘に[MUST]が無くても、前のラウンドの[MUST]が未解決なら、
   // PRを要対応のままにする(`ReviewBodyMode`の"rereview_open"にあたる)。
-  test("returns changes_requested when openMustCount is greater than zero even with no must findings", () => {
+  test("returns changes_requested when blockingThreadCount is greater than zero even with no must findings", () => {
     expect(reviewResultFor([finding({ kind: "nits" })], 2)).toBe(
       "changes_requested",
     );
@@ -1162,7 +1248,7 @@ describe("buildReviewRecord with unreadable threads", () => {
       postedReviewId: "99",
       verdict: "approve",
       findings: [],
-      openMustCount: null,
+      blockingThreadCount: null,
     });
     expect(record.result).toBeNull();
   });
@@ -1182,7 +1268,7 @@ describe("buildReviewRecord", () => {
         ...base,
         verdict: "approve",
         findings: [],
-        openMustCount: 1,
+        blockingThreadCount: 1,
       }).result,
     ).toBe("changes_requested");
   });
@@ -1193,7 +1279,7 @@ describe("buildReviewRecord", () => {
         ...base,
         verdict: "approve",
         findings: [],
-        openMustCount: 0,
+        blockingThreadCount: 0,
       }).result,
     ).toBe("reviewed");
   });
@@ -1204,7 +1290,7 @@ describe("buildReviewRecord", () => {
         ...base,
         verdict: "approve",
         findings: [],
-        openMustCount: 1,
+        blockingThreadCount: 1,
       }).verdict,
     ).toBe("approve");
   });
@@ -1214,7 +1300,7 @@ describe("buildReviewRecord", () => {
       ...base,
       verdict: "comment",
       findings: [],
-      openMustCount: 0,
+      blockingThreadCount: 0,
     });
     expect([
       record.work_item_id,
@@ -1496,11 +1582,11 @@ describe("posting a review once per sha", () => {
     return ok(ghApiStdout(500, { message: "Server Error" }));
   }
 
-  /** 先の実行が投稿したレビューの、未解決で手つかずの`[MUST]`のスレッドだけを返すGraphQLの応答。 */
-  function openMustThreads(): CommandResult {
+  /** 先の実行が投稿したレビューの、未解決で手つかずの指摘のスレッドだけを返すGraphQLの応答。 */
+  function openThreads(kind: string): CommandResult {
     const comment = {
       author: { login: VIEWER },
-      body: "[pr_review 自動レビュー]\n[MUST] fix this",
+      body: `[pr_review 自動レビュー]\n[${kind}] fix this`,
       databaseId: 501,
     };
     return ghApiOk({
@@ -1525,6 +1611,14 @@ describe("posting a review once per sha", () => {
         },
       },
     });
+  }
+
+  function openMustThreads(): CommandResult {
+    return openThreads("MUST");
+  }
+
+  function openImoThreads(): CommandResult {
+    return openThreads("IMO");
   }
 
   function isCreateReviewCall(call: FakeCall): boolean {
@@ -1834,7 +1928,12 @@ describe("posting a review once per sha", () => {
     });
 
     /** 見送りの返信が付いた、Factory自身の指摘のスレッドのノード。 */
-    function skipThreadNode(graphqlId: string, firstId: number, kind: string) {
+    function skipThreadNode(
+      graphqlId: string,
+      firstId: number,
+      kind: string,
+      replyBody = "理由です。\n\n対応: 見送り",
+    ) {
       const finding = {
         author: { login: VIEWER },
         body: `[pr_review 自動レビュー]\n[${kind}] consider`,
@@ -1842,7 +1941,7 @@ describe("posting a review once per sha", () => {
       };
       const reply = {
         author: { login: VIEWER },
-        body: "理由です。\n\n対応: 見送り",
+        body: replyBody,
         databaseId: firstId + 1,
       };
       return {
@@ -1978,7 +2077,7 @@ describe("posting a review once per sha", () => {
         }),
         SILENT,
       );
-      expect(result.openMustCount).toBe(1);
+      expect(result.blockingThreadCount).toBe(1);
     });
 
     test("resolves the thread whose reply succeeded when another reply failed", async () => {
@@ -2005,6 +2104,135 @@ describe("posting a review once per sha", () => {
       ).toEqual([expect.stringContaining("PRRT_2")]);
     });
 
+    // 新しい指摘が無くても、誰も答えていない`[IMO]`が残るならLGTMと書かない。
+    test("does not say LGTM while an open finding of any kind remains", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        openImoThreads(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput(),
+        SILENT,
+      );
+      expect(
+        JSON.parse(fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}"),
+      ).toMatchObject({
+        body: expect.stringContaining("未対応の指摘が1件残っています"),
+      });
+    });
+
+    test("does not resolve an untouched finding when the re-review has no new findings", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        openMustThreads(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput(),
+        SILENT,
+      );
+      expect(fake.calls.some(isResolveCall)).toBe(false);
+    });
+
+    test("reports a waiting skip as blocking", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 99 }),
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput(),
+        SILENT,
+      );
+      expect(result.blockingThreadCount).toBe(1);
+    });
+
+    test("reports no blocking thread after a skip is accepted", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 99 }),
+        ghApiOk({ id: 100 }),
+        RESOLVED_OK,
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(result.blockingThreadCount).toBe(0);
+    });
+
+    // 反論した`[MUST]`は、指摘が0件の次の再レビューでも閉じず、LGTMと書かない。
+    describe("when an objected MUST thread remains and the re-review has no new findings", () => {
+      const OBJECTION_REPLY = renderThreadReply(
+        {
+          thread_id: 501,
+          decision: "skip_rejected",
+          body: "見送りは認められません。",
+        },
+        9,
+      );
+
+      function objectedThreads(): CommandResult {
+        return threadsResponse([
+          skipThreadNode("PRRT_1", 501, "MUST", OBJECTION_REPLY),
+        ]);
+      }
+
+      test("resolves no thread", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([humanReview(1)]),
+          objectedThreads(),
+          ghApiOk({ id: 99 }),
+        ]);
+        await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput(),
+          SILENT,
+        );
+        expect(fake.calls.some(isResolveCall)).toBe(false);
+      });
+
+      test("does not say LGTM in the body", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([humanReview(1)]),
+          objectedThreads(),
+          ghApiOk({ id: 99 }),
+        ]);
+        await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput(),
+          SILENT,
+        );
+        expect(
+          JSON.parse(
+            fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}",
+          ),
+        ).toMatchObject({
+          body: expect.stringContaining("未対応の指摘が1件残っています"),
+        });
+      });
+
+      test("reports the thread as blocking", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([humanReview(1)]),
+          objectedThreads(),
+          ghApiOk({ id: 99 }),
+        ]);
+        const result = await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput(),
+          SILENT,
+        );
+        expect(result.blockingThreadCount).toBe(1);
+      });
+    });
+
     test("does not answer when a review for the same sha exists", async () => {
       const fake = createFakeCommandRunner([
         ghApiOk([postedReview(55)]),
@@ -2028,7 +2256,7 @@ describe("posting a review once per sha", () => {
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
-      expect(result.openMustCount).toBe(1);
+      expect(result.blockingThreadCount).toBe(1);
     });
 
     test("does not answer when the owner check stops the post", async () => {
@@ -2085,7 +2313,7 @@ describe("posting a review once per sha", () => {
         rerunInput(),
         SILENT,
       );
-      expect(result.openMustCount).toBe(1);
+      expect(result.blockingThreadCount).toBe(1);
     });
 
     // 初回のレビューの再実行では、DBにはまだ記録が無いが、
@@ -2100,7 +2328,7 @@ describe("posting a review once per sha", () => {
         rerunInput({ priorReview: false }),
         SILENT,
       );
-      expect(result.openMustCount).toBe(1);
+      expect(result.blockingThreadCount).toBe(1);
     });
 
     test("posts and records the new id when no review for the sha exists", async () => {
@@ -2172,7 +2400,7 @@ describe("posting a review once per sha", () => {
         rerunInput(),
         SILENT,
       );
-      expect(result.openMustCount).toBeNull();
+      expect(result.blockingThreadCount).toBeNull();
     });
 
     test("still posts the review when listing the threads fails before a new post", async () => {
@@ -2219,14 +2447,21 @@ describe("posting a review once per sha", () => {
         rerunInput({ priorReview: false }),
         SILENT,
       );
-      expect(result.openMustCount).toBe(0);
+      expect(result.blockingThreadCount).toBe(0);
     });
 
-    // 投稿済みのレビューが無い再レビューでは、これまでどおりスレッドを解決する。
+    // 投稿済みのレビューが無い再レビューでは、pr_fixが直したスレッドを解決する。
     test("resolves a thread selected for resolving when no review for the sha exists", async () => {
       const fake = createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
-        openMustThreads(),
+        threadsResponse([
+          skipThreadNode(
+            "PRRT_1",
+            501,
+            "MUST",
+            "[pr_fix 自動返信]\nfixed\n\n対応: `abc1234`",
+          ),
+        ]),
         ghApiOk({ id: 99 }),
         ghApiOk({
           data: {
@@ -2395,7 +2630,7 @@ describe("posting a review once per sha", () => {
         pr_number: TARGET.pr_number,
         verdict: "request_changes",
         findings: [finding({ kind: "must" })],
-        openMustCount: result.openMustCount,
+        blockingThreadCount: result.blockingThreadCount,
       });
       expect(event).toBeNull();
     });
@@ -2408,7 +2643,7 @@ describe("reviewTransitionNotice", () => {
       reviewTransitionNotice({
         post: true,
         findings: [finding({ kind: "nits" })],
-        openMustCount: null,
+        blockingThreadCount: null,
       }),
     ).toBe("open review threads could not be read: recorded without a result");
   });
@@ -2418,7 +2653,7 @@ describe("reviewTransitionNotice", () => {
       reviewTransitionNotice({
         post: true,
         findings: [finding({ kind: "must" })],
-        openMustCount: null,
+        blockingThreadCount: null,
       }),
     ).toBeNull();
   });
@@ -2428,7 +2663,7 @@ describe("reviewTransitionNotice", () => {
       reviewTransitionNotice({
         post: true,
         findings: [],
-        openMustCount: 0,
+        blockingThreadCount: 0,
       }),
     ).toBeNull();
   });
@@ -2438,7 +2673,7 @@ describe("reviewTransitionNotice", () => {
       reviewTransitionNotice({
         post: false,
         findings: [],
-        openMustCount: 0,
+        blockingThreadCount: 0,
       }),
     ).toBe("review_post_mode is gated: recorded without posting");
   });
@@ -2458,7 +2693,7 @@ describe("reviewedNotifyEvent", () => {
       ...base,
       posted: true,
       findings: [finding({ kind: "must" })],
-      openMustCount: 0,
+      blockingThreadCount: 0,
     });
     expect(event).toEqual({
       kind: "pr_reviewed",
@@ -2478,7 +2713,7 @@ describe("reviewedNotifyEvent", () => {
       ...base,
       posted: true,
       findings: [],
-      openMustCount: 2,
+      blockingThreadCount: 2,
     });
     expect(event).toMatchObject({ result: "changes_requested" });
   });
@@ -2488,7 +2723,7 @@ describe("reviewedNotifyEvent", () => {
       ...base,
       posted: true,
       findings: [],
-      openMustCount: null,
+      blockingThreadCount: null,
     });
     expect(event).toMatchObject({ result: "unverified" });
   });
@@ -2499,12 +2734,12 @@ describe("reviewedNotifyEvent", () => {
     ["open must threads only", [], 2],
   ])(
     "returns null when the review was not posted (%s)",
-    (_name, findings, openMustCount) => {
+    (_name, findings, blockingThreadCount) => {
       const event = reviewedNotifyEvent({
         ...base,
         posted: false,
         findings,
-        openMustCount,
+        blockingThreadCount,
       });
       expect(event).toBeNull();
     },

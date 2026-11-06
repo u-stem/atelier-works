@@ -701,7 +701,7 @@ describe("describeReview", () => {
   test("labels a review with a must as having unresolved required fixes", () => {
     expect(
       describeReview(review({ result: "changes_requested" })).resultLabel,
-    ).toBe("修正必須の指摘が未解決");
+    ).toBe("修正必須の指摘か未了承の見送りが未解決");
   });
 
   test("warns about unresolved required fixes even when the verdict approves and no finding is new", () => {

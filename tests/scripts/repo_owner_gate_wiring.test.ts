@@ -301,7 +301,7 @@ describe("the owner id check before the writes of the finish steps", () => {
     const branch = sliceBetween(
       text,
       "if (published.ownerStopReason !== null) {",
-      "const openMustCount",
+      "const blockingThreadCount",
     );
     expect(branch).toContain("reason: published.ownerStopReason,");
   });
@@ -311,7 +311,7 @@ describe("the owner id check before the writes of the finish steps", () => {
     const branch = sliceBetween(
       text,
       "if (published.ownerStopReason !== null) {",
-      "const openMustCount",
+      "const blockingThreadCount",
     );
     expect(positionOf(branch, "await blockReview(")).toBeLessThan(
       positionOf(
