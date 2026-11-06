@@ -201,7 +201,7 @@ export async function main(
  * トリガーの`review_label`は着手時に消費済みなので、ここで外すラベルも、
  * 付けるPRの状態ラベルも無い。
  * 投稿後に結果を決め、今回の指摘に`kind === "must"`があるか、
- * 前回までの`[MUST]`の指摘か、答えを待つ見送りが今回の解決処理の後も残っていれば
+ * 前回までの`[MUST]`の指摘か、了承されていない見送り(反論した見送りを含む)が今回の解決処理の後も残っていれば
  * `"changes_requested"`、それ以外は`"reviewed"`にする。
  * これはDiscordの通知で、変更が要るのか承認だけでよいのかを一目で示すためのもの。
  * 未解決のスレッドの一覧を読めず、今回の指摘にも`[MUST]`が無いときは、
@@ -401,7 +401,7 @@ export type PublishReviewResult = {
   readonly reused: boolean;
   /**
    * 解決の後に残る、マージを止めるFactory自身のスレッドの数。
-   * 未解決の`[MUST]`と、答えを待つ見送りを数える。
+   * 未解決の`[MUST]`と、了承されていない見送り(反論した見送りを含む)を数える。
    * スレッドの一覧を読めなかったときは、0と区別して`null`にする。
    */
   readonly blockingThreadCount: number | null;

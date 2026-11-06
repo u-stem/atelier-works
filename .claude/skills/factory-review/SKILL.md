@@ -240,7 +240,9 @@ PR全体を読むレビューでは、指摘を1回で出し切る。
 `verdict`はGitHub上の投稿には反映されない。
 GitHub APIの制約から、PRレビューの投稿種別は常に`COMMENT`にし、`approve`や`request_changes`としては投稿しない。
 `verdict`はData Tableの`factory.reviews`テーブルに記録するだけで、Consoleの表示にもDiscordの通知にも使われない。
-どちらも、修正必須の指摘の有無(今回の`[MUST]`と、前のラウンドから残った未解決の`[MUST]`)から、flowが状態を決める。
+どちらも、flowが決めた状態を使う。
+状態は、今回の`[MUST]`、前のラウンドから残った未解決の`[MUST]`、了承されていない見送りの有無で決まる。
+了承されていない見送りには、反論した見送りを含む。
 
 ### summary
 

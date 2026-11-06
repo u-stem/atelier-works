@@ -223,7 +223,7 @@ export function normalizeJapaneseText(text: string): string {
  * 投稿したレビューの結果を返す。
  * 今回の指摘に`must`が1件でもあるか、`blockingThreadCount`
  * (`countBlockingThreads`の値)が0より大きければ`"changes_requested"`を返す。
- * 前のラウンドから残った未解決の`[MUST]`と、答えを待つ見送りも数える。
+ * 前のラウンドから残った未解決の`[MUST]`と、了承されていない見送り(反論した見送りを含む)も数える。
  * どちらも、新しい指摘を投稿しないラウンド
  * (`ReviewBodyMode`の`"rereview_open"`)でも、変更が必要なPRとして扱うため。
  * `blockingThreadCount`が`null`のときは、スレッドの一覧を読めず残りの有無が分からない。
@@ -943,10 +943,15 @@ export function countOpenThreads(
 
 /**
  * 解決の後に残る、マージを止めるスレッドを数える。
- * 未解決の`[MUST]`と、答えを待つ見送りである。
+ * 未解決の`[MUST]`と、了承されていない見送りである。
+ * 了承されていない見送りは、答えを待つ見送りと、再レビューが反論した見送りを指す。
  * 見送りが了承されるまで、マージできる状態として示さないためである。
  * `[MUST]`かどうかは、最初のコメントの2行目(`renderInlineComment`の形式での
  * 種別の接頭辞、`REVIEW_FINDING_KIND_PREFIXES.must`)で見る。
+ * 反論は最後の行が`対応: 見送り`でなくなるため、最後のコメントがviewer自身の
+ * 反論の返信(`PR_REVIEW_OBJECTION_MARKER_KIND`の目印を持つ返信)かで見分ける。
+ * 目印は誰でも貼れるので、書き手がviewerであることと、返信であること
+ * (コメントが2件以上あること)も求める。
  */
 export function countBlockingThreads(
   threads: readonly ReviewThread[],
@@ -961,9 +966,19 @@ export function countBlockingThreads(
     const secondLine = thread.firstCommentBody.split("\n")[1] ?? "";
     return (
       secondLine.startsWith(REVIEW_FINDING_KIND_PREFIXES.must) ||
-      threadResponseKind(thread, viewer, isAllowed) === "skip"
+      threadResponseKind(thread, viewer, isAllowed) === "skip" ||
+      isObjectionReply(thread, viewer)
     );
   }).length;
+}
+
+/** スレッドの最後のコメントが、viewer自身の反論の返信かを返す。 */
+function isObjectionReply(thread: ReviewThread, viewer: string): boolean {
+  return (
+    thread.comments.length > 1 &&
+    isOwnPost(thread.lastCommentAuthorLogin, viewer) &&
+    hasMarker(thread.lastCommentBody, PR_REVIEW_OBJECTION_MARKER_KIND)
+  );
 }
 
 /** スレッドの書き手が、答えの対象にしてよい人かを返す。`poll_support.ts`の`isAllowedLabeler`を渡す。 */
