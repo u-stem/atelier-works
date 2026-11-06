@@ -183,7 +183,10 @@ import {
   updateStatusToRequirementsIfLeaseHolder,
 } from "../../f/factory/lib/db.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
-import { TERMINAL_WORK_ITEM_STATUSES } from "../../f/factory/lib/types.ts";
+import {
+  type ReviewFinding,
+  TERMINAL_WORK_ITEM_STATUSES,
+} from "../../f/factory/lib/types.ts";
 import { DEPENDABOT_CANCEL_NOTE } from "../../f/factory/steps/dependabot_prepare.ts";
 
 type FakeCall = { text: string; values: unknown[] };
@@ -10788,7 +10791,7 @@ describe("restartTransientPrReview against the active pr_review index", () => {
 });
 
 describe("latestPostedPrReview", () => {
-  const FINDING = {
+  const FINDING: ReviewFinding = {
     path: "a.ts",
     line: 1,
     end_line: null,

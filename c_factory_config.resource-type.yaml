@@ -15,6 +15,7 @@ schema:
     - heavy_model
     - max_attempts
     - max_turns
+    - pr_review_full_max_turns
     - max_budget_usd_per_run
     - daily_budget_usd
     - claude_timeout_sec
@@ -290,6 +291,10 @@ schema:
       type: integer
       description: 1回の自動処理でClaudeがやり取りできる最大ターン数。
       default: 40
+    pr_review_full_max_turns:
+      type: integer
+      description: PR全体を読むレビュー(初回と全体の読み直し)でClaudeがやり取りできる最大ターン数。
+      default: 80
     model:
       type: string
       description: >-

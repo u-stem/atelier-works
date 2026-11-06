@@ -61,6 +61,7 @@ type DefaultableField =
   | "heavy_model"
   | "max_attempts"
   | "max_turns"
+  | "pr_review_full_max_turns"
   | "max_budget_usd_per_run"
   | "daily_budget_usd"
   | "claude_timeout_sec"
@@ -129,6 +130,7 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   heavy_model: "claude-opus-5-5",
   max_attempts: 3,
   max_turns: 40,
+  pr_review_full_max_turns: 80,
   max_budget_usd_per_run: 5,
   daily_budget_usd: 50,
   claude_timeout_sec: 1800,
@@ -901,6 +903,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     heavy_model: modelField(raw, "heavy_model", DEFAULTS.heavy_model),
     max_attempts: numberField(raw, "max_attempts", DEFAULTS.max_attempts),
     max_turns: numberField(raw, "max_turns", DEFAULTS.max_turns),
+    pr_review_full_max_turns: numberField(
+      raw,
+      "pr_review_full_max_turns",
+      DEFAULTS.pr_review_full_max_turns,
+    ),
     max_budget_usd_per_run: numberField(
       raw,
       "max_budget_usd_per_run",

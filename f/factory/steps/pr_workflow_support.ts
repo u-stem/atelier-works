@@ -6086,9 +6086,6 @@ export type PriorReviewSha =
   | { readonly kind: "unreadable" }
   | { readonly kind: "found"; readonly sha: string };
 
-/** PR全体を読むレビューの`maxTurns`の下限。全部のファイルを読むと、既定の40に当たりうるため。費用は`max_budget_usd_per_run`が抑える。 */
-export const PR_REVIEW_FULL_MAX_TURNS = 80;
-
 /**
  * 前回の投稿の`[MUST]`のうち、スレッドにならず総評だけに載ったものがあるかを返す。
  * 行に紐づけられなかった指摘はスレッドにならないので、差分だけを読む再レビューでは忘れられる。
@@ -6167,17 +6164,50 @@ export function decideReviewScope(
   return { kind: "delta", fromSha: prior.sha, hasMerge: input.delta.hasMerge };
 }
 
+const REVIEW_SEVERITY_ORDER: Readonly<Record<ReviewSeverity, number>> = {
+  blocker: 0,
+  major: 1,
+  minor: 2,
+  nit: 3,
+};
+
+/**
+ * Claudeの出力から、投稿する指摘と記録する要約を決める。
+ * 重要なものから順に並べて上限で切るので、省くのは重要度の低いものになる。
+ * スレッドだけのレビューは新しい指摘を出さないので、出力に指摘があっても捨てる。
+ */
 export function settleReviewFindings(
-  output: { readonly summary: string; readonly findings: ReviewFinding[] },
-  _scope: ReviewScope,
-  _maxFindings: number,
+  output: {
+    readonly summary: string;
+    readonly findings: readonly ReviewFinding[];
+  },
+  scope: ReviewScope,
+  maxFindings: number,
 ): { summary: string; findings: ReviewFinding[] } {
-  return { summary: "", findings: output.findings };
+  if (scope.kind === "threads_only") {
+    return { summary: output.summary, findings: [] };
+  }
+  const sorted = [...output.findings].sort(
+    (left, right) =>
+      REVIEW_SEVERITY_ORDER[left.severity] -
+      REVIEW_SEVERITY_ORDER[right.severity],
+  );
+  const omitted = sorted.length - maxFindings;
+  return {
+    summary:
+      omitted > 0
+        ? `${output.summary}\n\n(上限の${String(maxFindings)}件を超えたため、重要度の低い指摘を${String(omitted)}件省略しました。)`
+        : output.summary,
+    findings: sorted.slice(0, maxFindings),
+  };
 }
 
-/** スコープに合う`maxTurns`を返す。 */
-export function reviewMaxTurns(scope: ReviewScope, configured: number): number {
+/** スコープに合う`maxTurns`を返す。PR全体を読むレビューは、全部のファイルを読むので別の上限を使う。 */
+export function reviewMaxTurns(
+  scope: ReviewScope,
+  config: Pick<FactoryConfig, "max_turns" | "pr_review_full_max_turns">,
+): number {
   return scope.kind === "first" || scope.kind === "full"
-    ? Math.max(configured, PR_REVIEW_FULL_MAX_TURNS)
-    : configured;
+    ? config.pr_review_full_max_turns
+    : config.max_turns;
 }

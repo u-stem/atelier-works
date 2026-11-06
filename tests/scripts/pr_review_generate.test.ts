@@ -358,7 +358,7 @@ describe("binary files wiring in the generate step", () => {
   });
 
   test("passes the narrowed binary files to the prompt", async () => {
-    expect(count(await SOURCE, "    binaryFiles,\n")).toBe(1);
+    expect(count(await SOURCE, "        ? binaryFiles\n")).toBe(1);
   });
 
   test("returns the narrowed binary files in the result", async () => {
@@ -460,8 +460,8 @@ describe("review scope wiring in the generate step", () => {
   });
 
   test("settles the findings with the shared limit", async () => {
-    expect(await SOURCE).toContain(
-      "settleReviewFindings(output, scope, REVIEW_MAX_FINDINGS)",
+    expect((await SOURCE).replace(/\s+/g, " ")).toContain(
+      "settleReviewFindings( output, scope, REVIEW_MAX_FINDINGS, )",
     );
   });
 

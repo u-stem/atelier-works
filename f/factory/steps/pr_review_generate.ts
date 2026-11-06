@@ -34,7 +34,11 @@ import {
 import { logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
 import { isAllowedLabeler, labelerPolicyFor } from "../lib/poll_support.ts";
-import { REVIEW_SCHEMA, reviewPrompt } from "../lib/prompts.ts";
+import {
+  REVIEW_MAX_FINDINGS,
+  REVIEW_SCHEMA,
+  reviewPrompt,
+} from "../lib/prompts.ts";
 import type {
   ReviewFinding,
   ReviewVerdict,
@@ -60,10 +64,8 @@ import {
   reviewOutputProseIssues,
   reviewThreadsForPrompt,
   selectListedBinaryFiles,
+  settleReviewFindings,
 } from "./pr_workflow_support.ts";
-
-// 省いた指摘が次の回に出ると往復が残るので、1回で出し切れる大きさにする。
-const MAX_FINDINGS = 50;
 
 export type PrReviewGenerateResult = {
   readonly skip: boolean;
@@ -285,14 +287,14 @@ export async function main(
     scope: scope.kind,
     ...(scope.kind === "full" ? { reason: scope.reason } : {}),
   });
+  const deltaDiff =
+    scope.kind === "delta" && delta !== null
+      ? limitReviewDiff(delta.diff, config.diff_max_lines)
+      : null;
   const diffText =
     scope.kind === "threads_only"
       ? "(no new commits)"
-      : buildReviewDiffText(
-          scope.kind === "delta" && delta !== null
-            ? limitReviewDiff(delta.diff, config.diff_max_lines)
-            : prDiff,
-        );
+      : buildReviewDiffText(deltaDiff ?? prDiff);
 
   const promptText = reviewPrompt({
     pr: {
@@ -312,7 +314,11 @@ export async function main(
     omittedThreadCount: promptThreads.omitted,
     scope,
     fixRound,
-    binaryFiles,
+    // 差分に現れたバイナリだけを読ませる。総評の一覧(`binary_files`)はPR全体のままにする。
+    binaryFiles:
+      deltaDiff === null
+        ? binaryFiles
+        : selectListedBinaryFiles(deltaDiff.binaryFiles, prFiles).listed,
   });
 
   const systemPrompt = await buildSystemPrompt({
@@ -334,7 +340,7 @@ export async function main(
       tools: ["Read", "Glob", "Grep"],
       permissionMode: "dontAsk",
       settingSources: ["user"],
-      maxTurns: reviewMaxTurns(scope, config.max_turns),
+      maxTurns: reviewMaxTurns(scope, config),
       maxBudgetUsd: config.max_budget_usd_per_run,
       cwd: worktree_dir,
       oauthToken,
@@ -360,11 +366,11 @@ export async function main(
         issues: proseIssues,
       });
     }
-    const findings = output.findings.slice(0, MAX_FINDINGS);
-    const summary =
-      output.findings.length > MAX_FINDINGS
-        ? `${output.summary}\n\n(優先度の低い指摘を${String(output.findings.length - MAX_FINDINGS)}件省略しました。)`
-        : output.summary;
+    const { summary, findings } = settleReviewFindings(
+      output,
+      scope,
+      REVIEW_MAX_FINDINGS,
+    );
 
     return {
       skip: false,

@@ -1827,6 +1827,8 @@ export type FactoryConfig = {
   heavy_model: string;
   max_attempts: number;
   max_turns: number;
+  /** PR全体を読むレビュー(初回と`full`)の`maxTurns`。全部のファイルを読むので`max_turns`と分ける。 */
+  pr_review_full_max_turns: number;
   max_budget_usd_per_run: number;
   daily_budget_usd: number;
   claude_timeout_sec: number;

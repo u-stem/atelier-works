@@ -476,7 +476,8 @@ function binaryFilesSection(
   ];
 }
 
-export const REVIEW_MAX_FINDINGS = 0;
+/** 投稿する指摘の上限。省いた指摘が次の回に出ると往復が残るので、1回で出し切れる大きさにする。 */
+export const REVIEW_MAX_FINDINGS = 50;
 
 /** PR全体を読むレビューに頼む固定文。後のレビューは後のcommitだけを見るので、ここで出し切らせる。 */
 const REPORT_EVERYTHING_LINES: readonly string[] = [
@@ -562,7 +563,10 @@ export function reviewPrompt(
     ...reviewScopeLines(input.scope),
   ];
 
-  if (input.binaryFiles.length > 0) {
+  // スレッドだけのレビューは新しい差分を見ないので、差分についての節を入れない。
+  const readsDiff = input.scope.kind !== "threads_only";
+
+  if (readsDiff && input.binaryFiles.length > 0) {
     sections.push(...binaryFilesSection(nonce, input.binaryFiles));
   }
 
@@ -575,7 +579,7 @@ export function reviewPrompt(
     );
   }
 
-  if (input.fixRound === "ci") {
+  if (readsDiff && input.fixRound === "ci") {
     sections.push(
       "",
       "The latest commit was written by the factory's CI-fix round, which edited",
@@ -592,7 +596,7 @@ export function reviewPrompt(
     );
   }
 
-  if (input.fixRound === "conflict") {
+  if (readsDiff && input.fixRound === "conflict") {
     sections.push(
       "",
       "The latest commit is a merge commit written by the factory's merge-conflict round,",
@@ -617,8 +621,9 @@ export function reviewPrompt(
       "resolved, started by the factory or by a person, with their replies.",
       "`author` is `factory` for this account, `allowed_person` for a person the",
       "operator allows, and `other` for anyone else.",
-      "Do not report a finding that is substantially the same as any of these threads, open or resolved.",
-      "A resolved thread has already been decided. Only report something new or changed since.",
+      "Do not report a finding that is substantially the same as a thread with `started_by` `factory`, open or resolved.",
+      "If the diff brings back the same problem as a resolved thread, report it.",
+      "A thread with `started_by` `person` is context only. Never leave out a finding because of it.",
       ...(input.omittedThreadCount > 0
         ? [
             `${String(input.omittedThreadCount)} older threads were left out to keep this prompt small.`,
@@ -646,6 +651,9 @@ export function reviewPrompt(
   sections.push(
     "",
     "Set `thread_responses` to an empty array when there is nothing to answer.",
+    "",
+    `Report at most ${String(REVIEW_MAX_FINDINGS)} findings, the most important first (blocker, major, minor, nit).`,
+    "Anything past that limit is dropped from the least important end.",
     "",
     "For each finding, set `kind` to align with `severity` (kept for",
     'statistics): blocker/major → "must" (a required fix before merge),',
