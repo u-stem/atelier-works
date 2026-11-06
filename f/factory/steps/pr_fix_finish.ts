@@ -73,6 +73,7 @@ import {
 } from "../lib/design_template.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
+  addLabels,
   commentIssue,
   type GhClient,
   getPr,
@@ -124,6 +125,7 @@ import {
   type CollectedReview,
   composeCommitMessage,
   decideFixFinishAction,
+  decideNothingToCommitEnd,
   deriveFallbackReviewers,
   describeReason,
   evaluateRerouteGuard,
@@ -132,6 +134,7 @@ import {
   inspectStagedChanges,
   listReviewThreadsBestEffort,
   matchReviewThreadForComment,
+  needsSkipRereviewLabel,
   nextActionFor,
   nextActionForPrFix,
   PR_FIX_DESIGN_GAP_DISABLED_REASON,
@@ -145,6 +148,8 @@ import {
   renderFixReply,
   reroutePrFixToDesign,
   rerouteRequirementsGap,
+  SKIP_ONLY_ROUND_NOTE,
+  SKIP_REREVIEW_LABEL_FAILED_REASON,
   scanPrFixBeforeCommit,
   selectProposeIssueReplies,
   shouldAdvanceWatermarks,
@@ -1566,16 +1571,46 @@ export async function main(
     throw err;
   }
 
+  /**
+   * 見送りの理由を再レビューに読ませるために、`review_label`を付ける。
+   * pushの無いラウンドでは、headが変わらないので、ラベルでしか再レビューが起きない。
+   * 書き込みの前にオーナーを照合する。失敗は例外にせず偽を返す。
+   */
+  async function requestSkipRereview(): Promise<boolean> {
+    try {
+      const stop = await repoOwnerStopReason(
+        config,
+        owner,
+        repo,
+        repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+      );
+      if (stop !== null) {
+        log.warn("not adding the review label: the owner check stopped", {
+          reason: stop,
+        });
+        return false;
+      }
+      await addLabels(client, owner, repo, pr_number, [config.review_label]);
+      return true;
+    } catch (err) {
+      log.warn("failed to add the review label for skipped findings", {
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+      return false;
+    }
+  }
+
   if (pushResult.outcome === "head_changed") {
     return finishHeadChanged(pushResult.currentSha);
   }
 
   if (pushResult.outcome === "nothing_to_commit") {
+    const nothingToCommitEnd = decideNothingToCommitEnd(repliesToPost, ciRound);
     await insertFixRound({
       work_item_id,
       round: fix_round,
       trigger_review_ids,
-      outcome: "blocked",
+      outcome: nothingToCommitEnd === "skip_only" ? "done" : "blocked",
       replies,
       commit_shas: [],
     });
@@ -1583,6 +1618,41 @@ export async function main(
     // Claudeがすべてを"skipped"(または差分の無い"fixed")にしたこともあり、
     // その返信も黙って捨てずにGitHubへ届ける。
     if (!ciRound) await postFixReplies(null);
+    if (nothingToCommitEnd === "skip_only") {
+      // 返信は投稿済みなので、ここで既読にする。
+      // ラベルの失敗で再実行したときに、同じ見送りを二重に返信しないためである。
+      if (shouldAdvanceWatermarks("skip_only_replied")) {
+        await bumpWatermarks(work_item_id, {
+          last_review_id: max_review_id,
+          last_comment_id: max_comment_id,
+          last_review_comment_id: max_review_comment_id,
+        });
+      }
+      if (!(await requestSkipRereview())) {
+        await finalizeTerminal(
+          "needs_human",
+          SKIP_REREVIEW_LABEL_FAILED_REASON,
+          SKIP_REREVIEW_LABEL_FAILED_REASON,
+        );
+        return {
+          ok: true,
+          final_status: "needs_human",
+          notice: SKIP_REREVIEW_LABEL_FAILED_REASON,
+        };
+      }
+      // 人の操作が要らず、結果は再レビューの通知で届くので、ここでは通知しない。
+      await updateStatusIfCurrent(
+        work_item_id,
+        "fixing",
+        "rereview_requested",
+        SKIP_ONLY_ROUND_NOTE,
+      );
+      return {
+        ok: true,
+        final_status: "rereview_requested",
+        notice: SKIP_ONLY_ROUND_NOTE,
+      };
+    }
     // commitするものが無いラウンドでも、Claudeが指摘を対象外と判断することがあるため、
     // push成功の経路だけでなくここでも`propose_issue`の返信を記録する。
     // `factory.issue_proposals`の行は、上の`postFixReplies`が返信の投稿前に登録済み。
@@ -1660,6 +1730,24 @@ export async function main(
       await notifyBestEffort(webhookUrl, event, log);
     }
     return { ok: true, final_status: "needs_human", notice: proposalReason };
+  }
+
+  // 見送りが混ざるラウンドは、理由を再レビューに読ませる。
+  // `poll_prs`は終端でない`pr_review`があれば二重に起動しない。
+  if (
+    needsSkipRereviewLabel(repliesToPost, ciRound) &&
+    !(await requestSkipRereview())
+  ) {
+    await finalizeTerminal(
+      "needs_human",
+      SKIP_REREVIEW_LABEL_FAILED_REASON,
+      SKIP_REREVIEW_LABEL_FAILED_REASON,
+    );
+    return {
+      ok: true,
+      final_status: "needs_human",
+      notice: SKIP_REREVIEW_LABEL_FAILED_REASON,
+    };
   }
 
   const fallbackReviewers = deriveFallbackReviewers(

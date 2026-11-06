@@ -3427,6 +3427,8 @@ export type PrFixFinishBumpKind =
  *     `needs_human`で終わる場合も`push_success`に数える。
  *     どちらにしても元のコメントには(修正でなく提案で)返信しているので、
  *     他の成功したpushと同じく、このラウンドのフィードバックは消化済みである。
+ *   - `skip_only_replied`: すべての返信が`skipped`でcommitが無く、返信を投稿した。
+ *     返信は投稿済みで、ラベルの失敗で再実行したときに二重に返信しないよう既読にする。
  *   - `requirements_gap_reroute_success`: 親のIssueを`requirements_generating`に
  *     差し戻すことで、フィードバックを消化した。
  *   - `design_gap_reroute_success`: 親のIssueを`designing`に戻すことで、フィードバックを消化した。
@@ -3439,7 +3441,7 @@ export type PrFixFinishBumpKind =
  * 失敗した設計への戻し(親が`pr_open`でない、新しいサイクルがある、読んだ後に親が動いた、
  * 比較交換に負けた、設計の上限、設計工程の無効)、
  * 実際には反映されなかったpush
- * (コミットメッセージが無い、headが動いた、コミットするものが無い))では、
+ * (コミットメッセージが無い、headが動いた、コミットするものが無く見送りだけでもない))では、
  * 処理済み位置を変えない。
  * 後の`retry_work_item`が同じフィードバックを集め直せるようにするため。
  * `main()`のどこかで例外が出た場合(`failed`になり、この関数ではなく
@@ -3449,6 +3451,7 @@ export function shouldAdvanceWatermarks(kind: PrFixFinishBumpKind): boolean {
   return (
     kind === "requirements_gap_reroute_success" ||
     kind === "design_gap_reroute_success" ||
+    kind === "skip_only_replied" ||
     kind === "push_success"
   );
 }
@@ -3949,23 +3952,44 @@ export function selectProposeIssueReplies(
 export type NothingToCommitEnd = "issue_proposal" | "skip_only" | "needs_human";
 
 /** 見送りの返信の後に、作業項目に残す補足。 */
-export const SKIP_ONLY_ROUND_NOTE = "";
+export const SKIP_ONLY_ROUND_NOTE =
+  "all findings skipped; waiting for the re-review to answer";
 
 /** 見送りの再レビューのラベルを付けられなかったときの理由。 */
-export const SKIP_REREVIEW_LABEL_FAILED_REASON = "";
+export const SKIP_REREVIEW_LABEL_FAILED_REASON =
+  "could not add the review label for skipped findings";
 
+/**
+ * commitするものが無かったラウンドの終わり方を決める。
+ * すべてが見送りなら、再レビューの答えを待つ。
+ * `fixed`なのにcommitが無い返信が混ざるときは、人の判断が要るので従来どおり止める。
+ * CI回は返信しないので、見送りの流れに入らない。
+ */
 export function decideNothingToCommitEnd(
-  _replies: readonly FixReply[],
-  _ciRound: boolean,
+  replies: readonly FixReply[],
+  ciRound: boolean,
 ): NothingToCommitEnd {
-  return "needs_human";
+  if (ciRound) return "needs_human";
+  if (selectProposeIssueReplies(replies).length > 0) return "issue_proposal";
+  return replies.length > 0 &&
+    replies.every((reply) => reply.decision === "skipped")
+    ? "skip_only"
+    : "needs_human";
 }
 
+/**
+ * このラウンドの見送りを再レビューに回すためのラベルが要るかを返す。
+ * Issue化の提案が人の判断を待つ間は、再レビューに進めない。
+ */
 export function needsSkipRereviewLabel(
-  _replies: readonly FixReply[],
-  _ciRound: boolean,
+  replies: readonly FixReply[],
+  ciRound: boolean,
 ): boolean {
-  return false;
+  return (
+    !ciRound &&
+    selectProposeIssueReplies(replies).length === 0 &&
+    replies.some((reply) => reply.decision === "skipped")
+  );
 }
 
 /**
@@ -5166,6 +5190,11 @@ export const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^replies posted$/,
     describe: () => "返信は投稿済みです",
     nextAction: () => NOTHING_TO_COMMIT_NEXT_ACTION,
+  },
+  {
+    pattern: /^could not add the review label for skipped findings$/,
+    describe: () => "見送りの再レビューを依頼するラベルを付けられませんでした",
+    nextAction: () => "PRに`factory:review`を付けてください",
   },
   // pr_fix_finish.tsの`buildIssueProposalReason`。すでに日本語なので、
   // `describe()`はそのまま返す。この規則は、`nextActionFor`が汎用の既定ではなく
