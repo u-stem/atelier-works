@@ -1105,6 +1105,18 @@ describe("the skip reply failure reason", () => {
   test("asks to run the round again", () => {
     expect(nextActionFor(SKIP_REPLY_POST_FAILED_REASON)).toContain("再実行");
   });
+
+  test("says a re-run can post a reply that was already posted", () => {
+    expect(nextActionFor(SKIP_REPLY_POST_FAILED_REASON)).toContain(
+      "投稿できていた返信がもう一度投稿されることがあります",
+    );
+  });
+
+  test("says a person does not need to reply", () => {
+    expect(nextActionFor(SKIP_REPLY_POST_FAILED_REASON)).toContain(
+      "PRで人が返信する必要はありません",
+    );
+  });
 });
 
 describe("the review label failure reason", () => {
@@ -1174,6 +1186,17 @@ describe("skip wiring in the finish step", () => {
     expect(
       source.indexOf('shouldAdvanceWatermarks("skip_only_replied")'),
     ).toBeLessThan(source.indexOf("await addSkipRereviewLabel()"));
+  });
+
+  // noticeの案内は人の返信で、次の操作の再実行と両方に従うと返信が二重になる。
+  test("does not leave the manual reply notice in a skip-only round", async () => {
+    expect((await SOURCE).replace(/\s+/g, " ")).toContain(
+      'postFixReplies(null, nothingToCommitEnd !== "skip_only")',
+    );
+  });
+
+  test("still leaves the manual reply notice after a push", async () => {
+    expect(await SOURCE).toContain("await postFixReplies(newSha);");
   });
 
   test("does not add the label when a skip reply failed", async () => {

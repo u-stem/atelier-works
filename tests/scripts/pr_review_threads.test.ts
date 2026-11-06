@@ -559,6 +559,81 @@ describe("hasBodyOnlyMustFinding", () => {
     ).toBe(false);
   });
 
+  test("does not accept the same text on a different path", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding()],
+        [thread({ path: "b.ts", firstCommentBody: POSTED })],
+        VIEWER,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not accept the text in the suggestion of a resolved IMO thread", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding()],
+        [
+          thread({
+            isResolved: true,
+            firstCommentBody:
+              "[pr_review 自動レビュー]\n[IMO] 別の話です。\n\n提案: null checkが抜けています。",
+          }),
+        ],
+        VIEWER,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not accept an empty message by matching any thread", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding({ message: "" })],
+        [thread({ firstCommentBody: POSTED })],
+        VIEWER,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not accept a thread whose message only starts with the finding's", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding({ message: "null check" })],
+        [thread({ firstCommentBody: POSTED })],
+        VIEWER,
+      ),
+    ).toBe(true);
+  });
+
+  test("matches a multi-line message", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding({ message: "一行目です。\n二行目です。" })],
+        [
+          thread({
+            firstCommentBody:
+              "[pr_review 自動レビュー]\n[MUST] 一行目です。\n二行目です。",
+          }),
+        ],
+        VIEWER,
+      ),
+    ).toBe(false);
+  });
+
+  test("matches a finding posted with a suggestion and code", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding({ suggestion: "直します。", suggested_code: "const a = 1;" })],
+        [
+          thread({
+            firstCommentBody: `${POSTED}\n\n提案: 直します。\n\n\`\`\`suggestion\nconst a = 1;\n\`\`\``,
+          }),
+        ],
+        VIEWER,
+      ),
+    ).toBe(false);
+  });
+
   test("matches a resolved thread too", () => {
     expect(
       hasBodyOnlyMustFinding(

@@ -80,8 +80,8 @@ describe("the finish step of a CI round", () => {
     const text = await source("pr_fix_finish.ts");
     expect(
       count(
-        text,
-        "const allRepliesPosted = ciRound || (await postFixReplies(null));",
+        text.replace(/\s+/g, " "),
+        "const allRepliesPosted = ciRound || (await postFixReplies(null,",
       ),
     ).toBe(1);
   });
