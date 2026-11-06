@@ -16,8 +16,11 @@ import {
   implementFixPrompt,
   implementPrompt,
   isDesignOutput,
+  type PromptReviewThread,
   REQUIREMENTS_SCHEMA,
+  REVIEW_MAX_FINDINGS,
   REVIEW_SCHEMA,
+  type ReviewPromptInput,
   requirementsPrompt,
   reviewPrompt,
 } from "../../f/factory/lib/prompts.ts";
@@ -241,7 +244,9 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: ["a.ts"],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -258,7 +263,9 @@ describe("reviewPrompt", () => {
         diff: "+a<U+001B>b",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -276,7 +283,9 @@ describe("reviewPrompt", () => {
         diff: "+x",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -292,7 +301,9 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: ["a.ts", "b.ts"],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -308,7 +319,9 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -324,7 +337,9 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -340,7 +355,9 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: ["UNIQUE_PATH_MARKER.ts"],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -358,7 +375,9 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -378,7 +397,9 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -396,7 +417,9 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -412,7 +435,9 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -429,7 +454,9 @@ describe("reviewPrompt", () => {
         diff: "+const x = 1;",
         changedFiles: [],
         requirements: null,
-        openFindings: [],
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
         fixRound: null,
         binaryFiles: [],
       },
@@ -439,40 +466,304 @@ describe("reviewPrompt", () => {
     expect(prompt).toContain("human");
   });
 
-  // 再レビューでは、未解決の指摘と実質的に同じ指摘を再投稿しない。
-  test("renders the open findings section when openFindings is non-empty", () => {
-    const prompt = reviewPrompt(
-      {
-        pr: PR,
-        diff: "+const x = 1;",
-        changedFiles: [],
-        requirements: null,
-        openFindings: [{ path: "a.ts", line: 10, body: "null check missing" }],
-        fixRound: null,
-        binaryFiles: [],
-      },
-      FIXED_UUID,
-    );
-    expect(prompt).toContain(
-      "<<<DATA-test-nonce (open findings from a prior review)",
-    );
-    expect(prompt).toContain("null check missing");
+  describe("threads", () => {
+    const OPEN_THREAD: PromptReviewThread = {
+      thread_id: 501,
+      path: "a.ts",
+      line: 10,
+      status: "open",
+      started_by: "factory",
+      response_kind: "addressable",
+      comments: [{ author: "factory", body: "null check missing" }],
+    };
+    const baseInput: ReviewPromptInput = {
+      pr: PR,
+      diff: "+const x = 1;",
+      changedFiles: [],
+      requirements: null,
+      threads: [],
+      omittedThreadCount: 0,
+      scope: { kind: "first" },
+      fixRound: null,
+      binaryFiles: [],
+    };
+
+    test("renders the existing threads", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("null check missing");
+    });
+
+    test("tells the review not to repeat a thread the factory started", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "Do not report a finding that is substantially the same as a thread with `started_by` `factory`, open or resolved.",
+      );
+    });
+
+    test("does not tell the review to leave out what a person's thread mentions", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("any of these threads");
+    });
+
+    test("treats a thread a person started as context only", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "A thread with `started_by` `person` is context only. Never leave out a finding because of it.",
+      );
+    });
+
+    test("asks to report again a problem the diff brings back", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "If the diff brings back the same problem as a resolved thread, report it.",
+      );
+    });
+
+    test("omits the threads section when there is no thread", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("existing review threads");
+    });
+
+    test("asks the review to answer a skip reply", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [{ ...OPEN_THREAD, response_kind: "skip" }],
+          omittedThreadCount: 0,
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("`skip_accepted` or `skip_rejected`");
+    });
+
+    test("explains the code point notation for thread comments too", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "In the diff and any thread comments below, `<U+XXXX>` stands for",
+      );
+    });
+
+    test("asks for the writing style in the thread responses", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("`body` of `thread_responses`");
+    });
+
+    test("says how many threads were left out", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 3 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("3 older threads were left out");
+    });
   });
 
-  test("omits the open findings section when openFindings is empty", () => {
-    const prompt = reviewPrompt(
-      {
-        pr: PR,
-        diff: "+const x = 1;",
-        changedFiles: [],
-        requirements: null,
-        openFindings: [],
-        fixRound: null,
-        binaryFiles: [],
-      },
-      FIXED_UUID,
-    );
-    expect(prompt).not.toContain("open findings from a prior review");
+  describe("scope", () => {
+    const PRIOR = "a".repeat(40);
+    const REPLY_THREAD: PromptReviewThread = {
+      thread_id: 501,
+      path: "a.ts",
+      line: 10,
+      status: "open",
+      started_by: "factory",
+      response_kind: "skip",
+      comments: [{ author: "factory", body: "null check missing" }],
+    };
+    const baseInput = {
+      pr: PR,
+      diff: "+const x = 1;",
+      changedFiles: ["a.ts"],
+      requirements: null,
+      threads: [],
+      omittedThreadCount: 0,
+      fixRound: null,
+      binaryFiles: [],
+    };
+
+    test("asks the first review to report everything in one pass", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, scope: { kind: "first" } },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("Report everything in this one pass.");
+    });
+
+    test("asks the first review to check every changed file", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, scope: { kind: "first" } },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "check every changed file against every review viewpoint",
+      );
+    });
+
+    test("asks the first review to read files a truncated diff does not show", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, scope: { kind: "first" } },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "Read every changed file that the diff does not show",
+      );
+    });
+
+    test("asks a full re-review to report everything too", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, scope: { kind: "full", reason: "prior_unreadable" } },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("Report everything in this one pass.");
+    });
+
+    test("names the prior commit in a delta review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(`the changes from ${PRIOR} to the head`);
+    });
+
+    test("does not ask a delta review to report everything", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("Report everything in this one pass.");
+    });
+
+    // mergeを含む範囲はPR全体のレビューになるので、差分のレビューに断り書きは要らない。
+    test("does not excuse base changes in a delta review", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, scope: { kind: "delta", fromSha: PRIOR } },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("changes from the base branch");
+    });
+
+    test("has no wording that excuses base changes", async () => {
+      const source = await Bun.file(
+        new URL("../../f/factory/lib/prompts.ts", import.meta.url),
+      ).text();
+      expect(source).not.toContain("changes from the base branch may appear");
+    });
+
+    test("tells a threads-only review to report no new finding", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, scope: { kind: "threads_only", fromSha: PRIOR } },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("report no new finding");
+    });
+
+    test("tells a threads-only review to answer skips only", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, scope: { kind: "threads_only", fromSha: PRIOR } },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "Only answer the threads whose `response_kind` is `skip`",
+      );
+    });
+
+    test("does not offer addressed to a threads-only review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [REPLY_THREAD],
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("use `addressed` only when");
+    });
+
+    test("still offers addressed to a delta review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [REPLY_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("use `addressed` only when");
+    });
+
+    test("leaves the binary files out of a threads-only review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          binaryFiles: ["a.png"],
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("(binary files)");
+    });
+
+    test("leaves the CI round section out of a threads-only review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          fixRound: "ci",
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("factory's CI-fix round");
+    });
+
+    test("leaves the conflict round section out of a threads-only review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          fixRound: "conflict",
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("merge-conflict round");
+    });
+
+    test("states the limit on findings", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, scope: { kind: "first" } },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        `Report at most ${String(REVIEW_MAX_FINDINGS)} findings, the most important first`,
+      );
+    });
   });
 
   describe("fixRound", () => {
@@ -483,7 +774,9 @@ describe("reviewPrompt", () => {
           diff: "+const x = 1;",
           changedFiles: ["a.ts"],
           requirements: null,
-          openFindings: [],
+          threads: [],
+          omittedThreadCount: 0,
+          scope: { kind: "first" },
           fixRound,
           binaryFiles: [],
         },
@@ -598,7 +891,9 @@ describe("reviewPrompt", () => {
           diff: "+const x = 1;",
           changedFiles: ["a.ts"],
           requirements: null,
-          openFindings: [],
+          threads: [],
+          omittedThreadCount: 0,
+          scope: { kind: "first" },
           fixRound: null,
           binaryFiles,
         },
@@ -881,6 +1176,16 @@ describe("JSON schema constants", () => {
       "comment",
       "request_changes",
     ]);
+  });
+
+  test("REVIEW_SCHEMA requires thread_responses", () => {
+    expect(REVIEW_SCHEMA.required).toContain("thread_responses");
+  });
+
+  test("REVIEW_SCHEMA's thread decision enum matches ThreadResponseDecision", () => {
+    expect(
+      REVIEW_SCHEMA.properties.thread_responses.items.properties.decision.enum,
+    ).toEqual(["addressed", "skip_accepted", "skip_rejected"]);
   });
 
   test("FIX_SCHEMA's outcome enum matches FixOutcome", () => {
@@ -1594,6 +1899,12 @@ describe("factory-implementation SKILL.md ⇔ IMPLEMENT_SCHEMA", () => {
   async function readSkillText(): Promise<string> {
     return Bun.file(SKILL_PATH).text();
   }
+});
+
+describe("REVIEW_MAX_FINDINGS", () => {
+  test("is 50", () => {
+    expect(REVIEW_MAX_FINDINGS).toBe(50);
+  });
 });
 
 describe("BINARY_LIST_MAX_FILES", () => {

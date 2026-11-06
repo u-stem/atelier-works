@@ -51,6 +51,7 @@ import {
   isOwnPost,
   LABELED_ISSUES_MAX_PAGES,
   LabelerCheckLimitError,
+  limitReviewDiff,
   listBranchRules,
   listIssueComments,
   listLabeledOpenIssues,
@@ -71,6 +72,7 @@ import {
   parseGitHubRepoUrl,
   postIssueComment,
   REVIEW_THREADS_MAX_PAGES,
+  type ReviewThread,
   removeLabel,
   replyReviewComment,
   requestReviewers,
@@ -97,6 +99,20 @@ import {
   ok,
   timeout,
 } from "./testSupport.ts";
+
+describe("limitReviewDiff", () => {
+  test("cuts the text to the line limit", () => {
+    expect(limitReviewDiff("a\nb\nc", 2).diff).toBe("a\nb");
+  });
+
+  test("reports the cut", () => {
+    expect(limitReviewDiff("a\nb\nc", 2).truncated).toBe(true);
+  });
+
+  test("reveals a control character", () => {
+    expect(limitReviewDiff("a\u001bb", 10).diff).toContain("<U+001B>");
+  });
+});
 
 describe("withMarker / hasMarker", () => {
   test("withMarker appends a factory marker with kind and work item id", () => {
@@ -4402,6 +4418,7 @@ describe("getPrFiles", () => {
     expect(files).toEqual([
       {
         filename: "src/a.ts",
+        previous_filename: null,
         status: "modified",
         additions: 3,
         deletions: 1,
@@ -4446,6 +4463,30 @@ describe("getPrFiles", () => {
       12,
     );
     expect(files.map((f) => f.filename)).toEqual(["a.ts", "b.ts"]);
+  });
+});
+
+describe("getPrFiles with a renamed file", () => {
+  test("keeps the previous path", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          filename: "new.ts",
+          previous_filename: "old.ts",
+          status: "renamed",
+          additions: 0,
+          deletions: 1,
+          changes: 1,
+        },
+      ]),
+    ]);
+    const files = await getPrFiles(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(files[0]?.previous_filename).toBe("old.ts");
   });
 });
 
@@ -5477,6 +5518,54 @@ describe("listPrReviewComments", () => {
     expect(result.items.map((c) => c.id)).toEqual([1]);
   });
 
+  function rawReviewComment(fields: {
+    id: number;
+    user: { login: string };
+    body: string;
+  }) {
+    return { path: "a.ts", line: 12, ...fields };
+  }
+
+  test("leaves out the factory's acknowledgement replies", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        rawReviewComment({
+          id: 7,
+          user: { login: VIEWER },
+          body: "了承\n\n<!-- factory:pr_review_ack:9 -->",
+        }),
+      ]),
+    ]);
+    const result = await listPrReviewComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      VIEWER,
+    );
+    expect(result.items).toEqual([]);
+  });
+
+  test("keeps the factory's objection replies as feedback", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        rawReviewComment({
+          id: 7,
+          user: { login: VIEWER },
+          body: "反論\n\n<!-- factory:pr_review_objection:9 -->",
+        }),
+      ]),
+    ]);
+    const result = await listPrReviewComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      VIEWER,
+    );
+    expect(result.items).toHaveLength(1);
+  });
+
   test("parses author_association when present", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk([
@@ -5832,18 +5921,23 @@ function reviewThreadNode(overrides: {
   readonly firstComment: unknown;
   readonly lastComment?: unknown;
   readonly allCommentDatabaseIds?: readonly (number | null)[];
+  readonly allComments?: unknown[];
+  readonly resolvedBy?: unknown;
 }): unknown {
   return {
     id: overrides.id,
     isResolved: overrides.isResolved,
+    resolvedBy: overrides.resolvedBy,
     path: overrides.path ?? "a.ts",
     line: overrides.line ?? 10,
     firstComments: { nodes: [overrides.firstComment] },
     lastComments: { nodes: [overrides.lastComment ?? overrides.firstComment] },
     allComments: {
-      nodes: (overrides.allCommentDatabaseIds ?? []).map((databaseId) => ({
-        databaseId,
-      })),
+      nodes:
+        overrides.allComments ??
+        (overrides.allCommentDatabaseIds ?? []).map((databaseId) => ({
+          databaseId,
+        })),
     },
   };
 }
@@ -5917,6 +6011,11 @@ describe("listReviewThreads", () => {
         lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
         firstCommentDatabaseId: null,
         allCommentIds: [],
+        comments: [],
+        lastCommentAuthorId: null,
+        lastCommentDatabaseId: null,
+        resolvedByLogin: "",
+        resolvedById: null,
       },
     ]);
   });
@@ -5948,6 +6047,175 @@ describe("listReviewThreads", () => {
       firstCommentDatabaseId: 501,
       allCommentIds: [501, 502],
     });
+  });
+
+  test("parses every comment's author, id, and body", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: { author: { login: VIEWER }, body: "finding" },
+            allComments: [
+              {
+                databaseId: 501,
+                body: "finding",
+                author: { login: VIEWER, databaseId: 9 },
+              },
+            ],
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]?.comments).toEqual([
+      { databaseId: 501, authorLogin: VIEWER, authorId: 9, body: "finding" },
+    ]);
+  });
+
+  test("parses the last comment's author id", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: { author: { login: VIEWER }, body: "finding" },
+            lastComment: {
+              author: { login: "alice", databaseId: 7 },
+              body: "reply",
+            },
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]?.lastCommentAuthorId).toBe(7);
+  });
+
+  describe("the resolver of a thread", () => {
+    async function listedWith(resolvedBy: unknown): Promise<ReviewThread> {
+      const fake = createFakeCommandRunner([
+        ghApiOk(
+          reviewThreadsGraphqlPayload([
+            reviewThreadNode({
+              id: "PRRT_1",
+              isResolved: true,
+              firstComment: { author: { login: VIEWER }, body: "finding" },
+              resolvedBy,
+            }),
+          ]),
+        ),
+      ]);
+      const threads = await listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      );
+      const thread = threads[0];
+      if (thread === undefined) throw new Error("no thread was listed");
+      return thread;
+    }
+
+    test("reads the login", async () => {
+      const thread = await listedWith({ login: "alice", databaseId: 7 });
+      expect(thread.resolvedByLogin).toBe("alice");
+    });
+
+    test("reads the id", async () => {
+      const thread = await listedWith({ login: "alice", databaseId: 7 });
+      expect(thread.resolvedById).toBe(7);
+    });
+
+    test("gives an empty login without a resolver", async () => {
+      const thread = await listedWith(null);
+      expect(thread.resolvedByLogin).toBe("");
+    });
+
+    test("gives no id without a resolver", async () => {
+      const thread = await listedWith(null);
+      expect(thread.resolvedById).toBeNull();
+    });
+
+    test("gives no id for a resolver that is not a user", async () => {
+      const thread = await listedWith({ login: "some-bot" });
+      expect(thread.resolvedById).toBeNull();
+    });
+
+    test("asks for the resolver in the query", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk(reviewThreadsGraphqlPayload([])),
+      ]);
+      await listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      );
+      expect(fake.calls[0]?.options?.stdin).toContain(
+        "resolvedBy { login ... on User { databaseId } }",
+      );
+    });
+  });
+
+  test("reads the id of the last comment", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: { author: { login: VIEWER }, body: "finding" },
+            lastComment: {
+              author: { login: "alice" },
+              body: "reply",
+              databaseId: 42,
+            },
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]?.lastCommentDatabaseId).toBe(42);
+  });
+
+  test("keeps a deleted author's comment with an empty login", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: { author: { login: VIEWER }, body: "finding" },
+            allComments: [{ databaseId: 502, body: "gone", author: null }],
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]?.comments[0]?.authorLogin).toBe("");
   });
 
   test("drops a null databaseId from allCommentIds", async () => {

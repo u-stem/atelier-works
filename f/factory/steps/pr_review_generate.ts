@@ -16,6 +16,7 @@ import { loadConfig } from "../lib/config.ts";
 import {
   findFixRoundKindToReview,
   latestDraft,
+  latestPostedPrReview,
   recordAgentRun,
   updateStatusIfCurrent,
 } from "../lib/db.ts";
@@ -27,26 +28,47 @@ import {
   getPrDiff,
   getPrFiles,
   getViewer,
+  limitReviewDiff,
   listReviewThreads,
 } from "../lib/github.ts";
-import { logger } from "../lib/log.ts";
+import { logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
-import { REVIEW_SCHEMA, reviewPrompt } from "../lib/prompts.ts";
-import type { ReviewFinding, ReviewVerdict } from "../lib/types.ts";
-import { runCommand } from "../lib/workspace.ts";
+import { isAllowedLabeler, labelerPolicyFor } from "../lib/poll_support.ts";
+import {
+  REVIEW_MAX_FINDINGS,
+  REVIEW_SCHEMA,
+  reviewPrompt,
+} from "../lib/prompts.ts";
+import type {
+  ReviewFinding,
+  ReviewVerdict,
+  ThreadResponse,
+} from "../lib/types.ts";
+import {
+  type ReviewDelta,
+  readReviewDelta,
+  runCommand,
+} from "../lib/workspace.ts";
 import {
   buildReviewDiffText,
+  decideReviewScope,
   describeReason,
+  hasBodyOnlyMustFinding,
   isReviewClaudeOutput,
   listReviewThreadsBestEffort,
   nextActionFor,
-  openFindingsForPrompt,
+  type PriorReviewSha,
   prReviewTimeoutMisfit,
+  reviewDeltaFromSha,
+  reviewDeltaPaths,
+  reviewMaxTurns,
   reviewOutputProseIssues,
+  reviewThreadsForPrompt,
   selectListedBinaryFiles,
+  settleReviewFindings,
+  settleThreadResponses,
+  withTrustedResolution,
 } from "./pr_workflow_support.ts";
-
-const MAX_FINDINGS = 20;
 
 export type PrReviewGenerateResult = {
   readonly skip: boolean;
@@ -54,6 +76,8 @@ export type PrReviewGenerateResult = {
   readonly verdict: ReviewVerdict | null;
   readonly summary: string;
   readonly findings: ReviewFinding[];
+  /** 既存のスレッドへの答え。返信の前に、読み直したスレッドで確かめてから使う。 */
+  readonly thread_responses: ThreadResponse[];
   readonly pr_files: string[];
   /** 差分に内容が出ないバイナリのファイル。投稿の本文に、決定的な固定の文で載せる。 */
   readonly binary_files: readonly string[];
@@ -67,6 +91,7 @@ const SKIPPED_RESULT: PrReviewGenerateResult = {
   verdict: null,
   summary: "",
   findings: [],
+  thread_responses: [],
   pr_files: [],
   binary_files: [],
   binary_unlisted_count: 0,
@@ -160,7 +185,7 @@ export async function main(
   // スレッドの一覧は、再レビューで重複を避けるプロンプトの材料にすぎない。
   // 読めないとき(1000件超、形の不一致など)に生成を止めると、再試行しても直らずレビューが投稿されない。
   // 空で続けても、未解決の`[MUST]`の誤判定は投稿ステップが一覧を読み直して防ぐ。
-  const [pr, prDiff, prFileEntries, viewer, reviewThreads] = await Promise.all([
+  const [pr, prDiff, prFileEntries, viewer, listedThreads] = await Promise.all([
     getPr(client, owner, repo, pr_number),
     getPrDiff(client, owner, repo, pr_number, config.diff_max_lines),
     getPrFiles(client, owner, repo, pr_number),
@@ -186,9 +211,22 @@ export async function main(
       ? null
       : await latestDraft(parent_work_item_id);
 
-  // 再レビューで、未解決の指摘と実質的に同じ指摘を重ねて投稿させないために渡す。
-  // 最初のレビューではスレッドがまだ無いので空になる。
-  const openFindings = openFindingsForPrompt(reviewThreads, viewer.login);
+  // `threadResponseKind`が、許可された人の返信を見分けるのに使う。
+  const labelerPolicy = labelerPolicyFor(viewer.login, config);
+  const isAllowedReplier = (login: string, id: number | null): boolean =>
+    isAllowedLabeler(login, labelerPolicy, id);
+  // 許可されていない人が解決したスレッドは、この先すべてで未解決として扱う。
+  const reviewThreads = withTrustedResolution(
+    listedThreads,
+    viewer.login,
+    isAllowedReplier,
+  );
+  // 再レビューで、同じ指摘を出し直させず、見送りの返信を読ませるために渡す。
+  const promptThreads = reviewThreadsForPrompt(
+    reviewThreads,
+    viewer.login,
+    isAllowedReplier,
+  );
 
   // レビューするcommitが、CI回か競合回のpushしたcommitなら、その差分を重点的に見るようプロンプトに加える。
   // 値はDBから決めた回の種類だけで、PRの内容からは決めない。
@@ -202,6 +240,71 @@ export async function main(
       }),
   );
 
+  // 前回の投稿が読めないときも、PR全体のレビューに倒して止めない。
+  let prior: PriorReviewSha;
+  let priorFindings: readonly ReviewFinding[] = [];
+  try {
+    const posted = await latestPostedPrReview(owner, repo, pr_number);
+    if (posted === null) {
+      prior = { kind: "none" };
+    } else {
+      prior = { kind: "found", sha: posted.head_sha };
+      priorFindings = posted.findings;
+    }
+  } catch (err) {
+    log.warn("could not read the prior review commit, reviewing the whole PR", {
+      work_item_id,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    prior = { kind: "unreadable" };
+  }
+  const scopeInput = {
+    prior,
+    headSha: review_sha,
+    fixRound,
+    pendingSkipCount: promptThreads.threads.filter(
+      (thread) => thread.response_kind === "skip",
+    ).length,
+    hasBodyOnlyMust: hasBodyOnlyMustFinding(
+      priorFindings,
+      reviewThreads,
+      viewer.login,
+    ),
+    changedFileCount: prFiles.length,
+  };
+  let delta: ReviewDelta | null = null;
+  const deltaFromSha = reviewDeltaFromSha(scopeInput);
+  if (deltaFromSha !== null) {
+    try {
+      delta = await readReviewDelta({
+        run: runCommand,
+        dir: worktree_dir,
+        fromSha: deltaFromSha,
+        headSha: review_sha,
+        paths: reviewDeltaPaths(prFileEntries),
+      });
+    } catch (err) {
+      log.warn("could not read the changes since the prior review", {
+        work_item_id,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+  const scope = decideReviewScope({ ...scopeInput, delta });
+  log.info("review scope", {
+    work_item_id,
+    scope: scope.kind,
+    ...(scope.kind === "full" ? { reason: scope.reason } : {}),
+  });
+  const deltaDiff =
+    scope.kind === "delta" && delta !== null
+      ? limitReviewDiff(delta.diff, config.diff_max_lines)
+      : null;
+  const diffText =
+    scope.kind === "threads_only"
+      ? "(no new commits)"
+      : buildReviewDiffText(deltaDiff ?? prDiff);
+
   const promptText = reviewPrompt({
     pr: {
       owner,
@@ -213,12 +316,18 @@ export async function main(
       head_sha: review_sha,
       base_ref: pr.baseRef,
     },
-    diff: buildReviewDiffText(prDiff),
+    diff: diffText,
     changedFiles: prFiles,
     requirements,
-    openFindings,
+    threads: promptThreads.threads,
+    omittedThreadCount: promptThreads.omitted,
+    scope,
     fixRound,
-    binaryFiles,
+    // 差分に現れたバイナリだけを読ませる。総評の一覧(`binary_files`)はPR全体のままにする。
+    binaryFiles:
+      deltaDiff === null
+        ? binaryFiles
+        : selectListedBinaryFiles(deltaDiff.binaryFiles, prFiles).listed,
   });
 
   const systemPrompt = await buildSystemPrompt({
@@ -240,7 +349,7 @@ export async function main(
       tools: ["Read", "Glob", "Grep"],
       permissionMode: "dontAsk",
       settingSources: ["user"],
-      maxTurns: config.max_turns,
+      maxTurns: reviewMaxTurns(scope, config),
       maxBudgetUsd: config.max_budget_usd_per_run,
       cwd: worktree_dir,
       oauthToken,
@@ -266,11 +375,11 @@ export async function main(
         issues: proseIssues,
       });
     }
-    const findings = output.findings.slice(0, MAX_FINDINGS);
-    const summary =
-      output.findings.length > MAX_FINDINGS
-        ? `${output.summary}\n\n(優先度の低い指摘を${String(output.findings.length - MAX_FINDINGS)}件省略しました。)`
-        : output.summary;
+    const { summary, findings } = settleReviewFindings(
+      output,
+      scope,
+      REVIEW_MAX_FINDINGS,
+    );
 
     return {
       skip: false,
@@ -278,6 +387,7 @@ export async function main(
       verdict: output.verdict,
       summary,
       findings,
+      thread_responses: settleThreadResponses(output.thread_responses, scope),
       pr_files: prFiles,
       binary_files: binaryFiles,
       binary_unlisted_count: binaryUnlistedCount,

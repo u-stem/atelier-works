@@ -22,6 +22,7 @@ import {
   ciRoundVerifyTimeoutMisfit,
   isCiFixOutputAllowed,
 } from "../lib/ci_fix_round.ts";
+import { revealControlChars } from "../lib/ci_log_support.ts";
 import { conflictRoundReason } from "../lib/conflict_fix_round.ts";
 import {
   DEPENDABOT_DRY_RUN_REASON,
@@ -41,9 +42,15 @@ import {
   getBranchProtected,
   getBranchRuleCount,
   getDefaultBranch,
+  hasMarker,
   isOwnPost,
+  PR_FILES_API_CAP,
+  PR_REVIEW_ACK_MARKER_KIND,
+  PR_REVIEW_OBJECTION_MARKER_KIND,
   type PrReview,
+  REVIEW_THREAD_COMMENTS_LIMIT,
   type ReviewThread,
+  type ReviewThreadComment,
   withMarker,
 } from "../lib/github.ts";
 import {
@@ -57,6 +64,11 @@ import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
 import { holdReasonForStoppedItem } from "../lib/pr_ci_fix_recovery.ts";
 import { prCiFixHoldInfo } from "../lib/pr_ci_support.ts";
 import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
+import {
+  type PromptReviewThread,
+  type PromptThreadComment,
+  renderPromptThreads,
+} from "../lib/prompts.ts";
 import {
   ASCII_BOUNDARY_CLASS,
   COMMIT_MESSAGE_RULES,
@@ -89,8 +101,11 @@ import {
   type ReviewFindingKind,
   type ReviewOutcome,
   type ReviewRecord,
+  type ReviewScope,
   type ReviewSeverity,
   type ReviewVerdict,
+  type ThreadResponse,
+  type ThreadResponseDecision,
   type WorkItem,
   type WorkItemKind,
   type WorkItemStatus,
@@ -210,32 +225,33 @@ export function normalizeJapaneseText(text: string): string {
 
 /**
  * 投稿したレビューの結果を返す。
- * 今回の指摘に`must`が1件でもあるか、`openMustCount`
- * (`countOpenMustThreads`の値)が0より大きければ`"changes_requested"`を返す。
- * 前のラウンドから残った未解決の`[MUST]`は、新しい指摘を投稿しないラウンド
+ * 今回の指摘に`must`が1件でもあるか、`blockingThreadCount`
+ * (`countBlockingThreads`の値)が0より大きければ`"changes_requested"`を返す。
+ * 前のラウンドから残った未解決の`[MUST]`と、了承されていない見送り(反論した見送りを含む)も数える。
+ * どちらも、新しい指摘を投稿しないラウンド
  * (`ReviewBodyMode`の`"rereview_open"`)でも、変更が必要なPRとして扱うため。
- * `openMustCount`が`null`のときは、スレッドの一覧を読めず残りの有無が分からない。
+ * `blockingThreadCount`が`null`のときは、スレッドの一覧を読めず残りの有無が分からない。
  * 今回の指摘に`must`が無ければ`"unverified"`を返す。0件と同じ`"reviewed"`にすると、
- * 未解決の`[MUST]`が残るPRを、人の承認を待てる状態と誤って示すため。
- * それ以外(指摘が無く、未解決の`must`も無いと分かっている場合を含む)は`"reviewed"`を返す。
+ * マージを止めるスレッドが残るPRを、人の承認を待てる状態と誤って示すため。
+ * それ以外(指摘が無く、マージを止めるスレッドも無いと分かっている場合を含む)は`"reviewed"`を返す。
  * これは止める理由が無く、人の承認を待つ状態である。
  */
 export function reviewResultFor(
   findings: readonly ReviewFinding[],
-  openMustCount: number | null,
+  blockingThreadCount: number | null,
 ): ReviewOutcome {
   if (findings.some((finding) => finding.kind === "must")) {
     return "changes_requested";
   }
-  if (openMustCount === null) return "unverified";
-  return openMustCount > 0 ? "changes_requested" : "reviewed";
+  if (blockingThreadCount === null) return "unverified";
+  return blockingThreadCount > 0 ? "changes_requested" : "reviewed";
 }
 
 /**
  * `factory.reviews`に書く行を組み立てる。
- * `result`は、今回の指摘と`openMustCount`から`reviewResultFor`で決める。
+ * `result`は、今回の指摘と`blockingThreadCount`から`reviewResultFor`で決める。
  * Discordの通知もConsoleのレビュー行も、この値で状態を出す。
- * `verdict`が`approve`で今回の指摘が0件でも、未解決の`[MUST]`が残れば`changes_requested`になる。
+ * `verdict`が`approve`で今回の指摘が0件でも、マージを止めるスレッドが残れば`changes_requested`になる。
  * 未解決の指摘を読めなかった(`unverified`)ときは、`result`を`null`にして記録する。
  * Consoleのレビュー行は、`null`を「修正必須の有無の記録なし」と出す。
  */
@@ -245,10 +261,10 @@ export function buildReviewRecord(input: {
   readonly verdict: ReviewVerdict;
   readonly summary: string;
   readonly findings: readonly ReviewFinding[];
-  readonly openMustCount: number | null;
+  readonly blockingThreadCount: number | null;
   readonly postedReviewId: string | null;
 }): ReviewRecord {
-  const outcome = reviewResultFor(input.findings, input.openMustCount);
+  const outcome = reviewResultFor(input.findings, input.blockingThreadCount);
   return {
     work_item_id: input.workItemId,
     head_sha: input.headSha,
@@ -342,7 +358,21 @@ export type ReviewClaudeOutput = {
   readonly verdict: ReviewVerdict;
   readonly summary: string;
   readonly findings: ReviewFinding[];
+  readonly thread_responses: ThreadResponse[];
 };
+
+const THREAD_RESPONSE_DECISIONS: readonly ThreadResponseDecision[] = [
+  "addressed",
+  "skip_accepted",
+  "skip_rejected",
+];
+
+function isThreadResponseShape(value: unknown): value is ThreadResponse {
+  if (!isRecord(value)) return false;
+  if (!isNumber(value.thread_id)) return false;
+  if (!isOneOf(value.decision, THREAD_RESPONSE_DECISIONS)) return false;
+  return isString(value.body);
+}
 
 function isReviewFindingShape(value: unknown): value is ReviewFinding {
   if (!isRecord(value)) return false;
@@ -371,7 +401,9 @@ export function isReviewClaudeOutput(
   if (!isOneOf(value.verdict, REVIEW_VERDICTS)) return false;
   if (!isString(value.summary)) return false;
   if (!Array.isArray(value.findings)) return false;
-  return value.findings.every(isReviewFindingShape);
+  if (!value.findings.every(isReviewFindingShape)) return false;
+  if (!Array.isArray(value.thread_responses)) return false;
+  return value.thread_responses.every(isThreadResponseShape);
 }
 
 // ---------------------------------------------------------------------------
@@ -478,8 +510,8 @@ function renderSuggestionBlock(code: string): string {
  * `summary`はGitHubに投稿しない(総評は固定の文面)ので検査しない。
  */
 export function reviewOutputProseIssues(output: ReviewClaudeOutput): string[] {
-  return checkProseFields(
-    output.findings.flatMap((finding, index) => [
+  return checkProseFields([
+    ...output.findings.flatMap((finding, index) => [
       {
         label: `findings[${index}].message`,
         text: finding.message,
@@ -495,7 +527,12 @@ export function reviewOutputProseIssues(output: ReviewClaudeOutput): string[] {
             },
           ]),
     ]),
-  );
+    ...output.thread_responses.map((response, index) => ({
+      label: `thread_responses[${index}].body`,
+      text: response.body,
+      rules: GITHUB_PROSE_RULES,
+    })),
+  ]);
 }
 
 /**
@@ -543,6 +580,11 @@ export function fixOutputProseIssues(
   ]);
 }
 
+/** 指摘の文章を、GitHubに載せる形にする。 */
+function postedFindingText(text: string): string {
+  return neutralizeHtmlComment(normalizeJapaneseText(text));
+}
+
 /**
  * 1件の指摘を、factory-reviewスキルの投稿形式に沿ったインラインコメントの本文にする。
  * 1行目は`pr_review`の投稿と分かる役割タグ、2行目は`kind`に応じた
@@ -551,15 +593,17 @@ export function fixOutputProseIssues(
  * 複数行の指摘は`mapFindingsToReviewComments`が`start_line` / `line`を
  * 指摘の`line` / `end_line`に合わせるので、ブロックは常にGitHubが表示する範囲に
  * 適用される。本文に範囲の注記は要らない。
- * `message`と`suggestion`は`normalizeJapaneseText`を通す。
+ * `message`と`suggestion`は`normalizeJapaneseText`を通し、`neutralizeHtmlComment`で
+ * 目印を無害にする。Claudeの出力が末尾に目印を書いても、了承の返信や`pr_fix`の返信と
+ * 見分けがつかなくならないようにするため。
  * `suggested_code`は文章ではなくコードなので変更しない。
  */
 export function renderInlineComment(finding: ReviewFinding): string {
   const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
-  const message = normalizeJapaneseText(finding.message);
+  const message = postedFindingText(finding.message);
   const suggestionText =
     finding.suggestion !== null
-      ? `\n\n提案: ${normalizeJapaneseText(finding.suggestion)}`
+      ? `\n\n提案: ${postedFindingText(finding.suggestion)}`
       : "";
   const codeBlock =
     finding.suggested_code === null
@@ -575,9 +619,9 @@ export function renderInlineComment(finding: ReviewFinding): string {
  * `hasPriorReview`(`db.ts`の`hasPriorReview`)で、
  * このPRの再レビューか最初のレビューかを区別する。
  * `"rereview_open"`は`"rereview_clean"`の対になる形式で、このラウンドでは
- * 新しい指摘が無いが、このラウンドでスレッドを解決した後も前のラウンドの
- * `[MUST]`の指摘が1件以上残っているときに使う。
- * そのときにLGTMだけの本文にすると、必須の指摘が残っているのに
+ * 新しい指摘が無いが、このラウンドでスレッドを解決した後もFactory自身の
+ * スレッドが、種類を問わず1件以上残っているときに使う。
+ * そのときにLGTMだけの本文にすると、指摘が残っているのに
  * 「もう対応は要らない」と読めてしまうため。
  * `"rereview_unverified"`も同じ理由の形式で、未解決のスレッドの一覧を読めず、
  * 残りがあるか分からないときに使う。LGTMとは書かず、確認を求める。
@@ -592,28 +636,28 @@ export type ReviewBodyMode =
 /**
  * 本文の形式を、次の情報だけから選ぶ。このラウンドでインラインに投稿した指摘か
  * 除いた指摘があるか、このPRにFactoryのレビューがすでにあるか、
- * このラウンドの解決処理の後もFactory自身の`[MUST]`のスレッドがいくつ残るか
- * (`openMustCount`。呼び出し側が、解決前のスレッド一覧から解決予定のidを除いて
- * `countOpenMustThreads`で数える。スレッドの一覧を読めなかったときは`null`)。
+ * このラウンドの解決処理の後もFactory自身のスレッドが、種類を問わずいくつ残るか
+ * (`openThreadCount`。呼び出し側が、解決前のスレッド一覧から解決できたidを除いて
+ * `countOpenThreads`で数える。スレッドの一覧を読めなかったときは`null`)。
  * 除いた指摘(`path`がdiffに無いなどでインラインに投稿できなかったもの)があれば、
  * `postedCommentCount`が0でも`"findings"`にする。
  * `renderReviewSummary`は固定の2行目の下に除いた指摘を必ず並べるので、
  * その一覧の直上にLGTMの行を出さないため。
- * それ以外で未解決の`must`が残っていれば(`openMustCount > 0`)、指摘の無い形式
+ * それ以外でFactory自身のスレッドが残っていれば(`openThreadCount > 0`)、指摘の無い形式
  * (`"rereview_clean"`、理屈の上では`"first_clean"`も)の代わりに`"rereview_open"`にする。
  * ただし、PRの最初のレビューに前の未解決スレッドがあることはない。
- * `openMustCount`が`null`で、投稿する指摘も無いときは、残りの有無が分からないので
+ * `openThreadCount`が`null`で、投稿する指摘も無いときは、残りの有無が分からないので
  * `"rereview_unverified"`にする。
  */
 export function decideReviewBodyMode(
   postedCommentCount: number,
   droppedCount: number,
   hasPriorReview: boolean,
-  openMustCount: number | null,
+  openThreadCount: number | null,
 ): ReviewBodyMode {
   if (postedCommentCount + droppedCount > 0) return "findings";
-  if (openMustCount === null) return "rereview_unverified";
-  if (openMustCount > 0) return "rereview_open";
+  if (openThreadCount === null) return "rereview_unverified";
+  if (openThreadCount > 0) return "rereview_open";
   return hasPriorReview ? "rereview_clean" : "first_clean";
 }
 
@@ -640,7 +684,7 @@ export function decideReviewBodyMode(
  * 免責は重複になる。
  * 直すものが無い`"rereview_clean"`と`"first_clean"`は、3行目に免責を付ける。
  * LGTMの形の投稿こそ、人が「もう何もしなくてよい」と読みかねないため。
- * `"rereview_open"`は`openMustCount`で残っている`[MUST]`の件数を伝える。
+ * `"rereview_open"`は`openThreadCount`で残っているスレッドの件数を伝える。
  * これもすでに確認を求めているので、免責を付けない。
  * ここの文字列はすべて、英数字と日本語の間に半角スペースを入れない規約に従う
  * (`docs/coding-guidelines.md`)。
@@ -650,7 +694,7 @@ export function renderReviewSummary(
   postedCommentCount: number,
   mode: ReviewBodyMode,
   droppedFindings: readonly ReviewFinding[],
-  openMustCount: number | null,
+  openThreadCount: number | null,
   binaryFiles: readonly string[] = [],
   binaryUnlistedCount = 0,
 ): string {
@@ -676,7 +720,7 @@ export function renderReviewSummary(
       break;
     case "rereview_open":
       lines.push(
-        `新しい指摘はありません。未対応の指摘が${String(openMustCount)}件残っています。確認お願いします。`,
+        `新しい指摘はありません。未対応の指摘が${String(openThreadCount)}件残っています。確認お願いします。`,
       );
       break;
     case "rereview_unverified":
@@ -824,11 +868,11 @@ export function commentedFindingsOf(
 
 /**
  * HTMLのコメントの開始`<!--`を`&lt;!--`に置き換える。
- * 総評に載せるClaudeの出力が、目印に見える行を差し込んだり、
- * 閉じないコメントで後ろの目印を表示から隠したりしないようにする。
+ * GitHubに載せるClaudeの出力(総評の箇条書き、インラインの指摘、スレッドへの答え)が、
+ * 目印に見える行を差し込んだり、閉じないコメントで後ろの目印を表示から隠したりしないようにする。
  * 通常の文中ではGitHubは`&lt;!--`を`<!--`と表示する。
  * ただしコードスパンやコードブロックの中では`&lt;!--`がそのまま表示される。
- * 対象は行に紐づけられなかった指摘の箇条書きだけで、見た目が崩れるだけなので許容する。
+ * 見た目が崩れるだけなので許容する。
  */
 function neutralizeHtmlComment(text: string): string {
   return text.replaceAll("<!--", "&lt;!--");
@@ -842,11 +886,11 @@ function neutralizeHtmlComment(text: string): string {
  * `対応: 見送り`(Claudeが対応しないと判断した)と`対応: 変更なし`(結果として
  * 何もコミットされなかった)は該当しない。
  * この2つはまだ人の判断が要るので、スレッドを開いたままにする。
+ * 目印を除いた最後の行だけを見る。見送りの理由に引用された`対応: <sha>`で解決しないためである。
  */
 export function isFixedFixReply(body: string): boolean {
-  const lines = body.split("\n");
-  if (lines[0] !== ROLE_TAGS.pr_fix) return false;
-  return lines.some((line) => /^対応: `[0-9a-f]{7,40}`$/.test(line));
+  if (body.split("\n")[0] !== ROLE_TAGS.pr_fix) return false;
+  return /^対応: `[0-9a-f]{7,40}`$/.test(lastContentLine(body));
 }
 
 /**
@@ -861,118 +905,363 @@ export function isFixedFixReply(body: string): boolean {
  * 後でFactoryが返信していても触れない。解決するのはFactory自身が始めたスレッドに限る。
  *
  * スレッドの最後のコメントもFactory自身(`viewer`)の投稿である必要がある。
- * Factoryの指摘の後でも人の返信が残っていれば、最後に発言したのはFactoryではないので、
+ * 人の返信が最後なら、最後に発言したのはFactoryではないので、
  * 人が実際に解決できるよう開いたままにする。
+ * 人の見送りに再レビューが了承で答えたスレッドは、最後のコメントがFactoryの答えになるので解決する。
  *
- * `mode`で、`viewer`の最後のコメントのうちどれを「対応済み」とみなすかを決める。
- * `pr_review_post.ts`は`openMustCount`を反映する前の形式を渡すので
- * (理由は`countOpenMustThreads`のコメントを参照)、実際には`"findings"`、
- * `"rereview_clean"`、`"first_clean"`のどれかで、`"rereview_open"`にはならない。
- *   - `"rereview_clean"`(再レビューで指摘ゼロ)と、念のため同じ規則を使う
- *     `"rereview_open"`: 手つかずの`pr_review`の指摘(人が手で直したなど、
- *     もう直すものが無い)か、コミットを示す`pr_fix`の返信(`isFixedFixReply`)。
- *   - `"findings"`(指摘が残る再レビューか、最初のレビュー): コミットを示す
- *     `pr_fix`の返信だけ。この投稿で新しい指摘を残したばかりかもしれず、
- *     古い指摘はpr_fix自身の確認でしか閉じないので、手つかずの指摘は開いたままにする。
- *   - `"first_clean"`(最初のレビューで指摘ゼロ): 何も解決しない。
- *     運用者が対応しうる前のFactoryのレビューが存在しないため。
+ * 解決するのは、最後のコメントが次のどちらかのスレッドだけである。
+ *   - コミットを示す`pr_fix`の返信(`isFixedFixReply`)。
+ *   - 再レビューの了承か解消の返信(`PR_REVIEW_ACK_MARKER_KIND`の目印を持つもの)。
+ *     指摘そのものに目印が書かれていても解決されないよう、返信であること
+ *     (コメントが2件以上あること)も求める。目印は誰でも貼れるので、
+ *     最後のコメントの書き手がviewerであることを先に求めている。
+ * 誰も答えていない指摘と、再レビューの反論は閉じない。範囲を絞った再レビューは、
+ * その行を見ていないことがあり、反論は指摘がまだ有効という答えであるためである。
  */
 export function selectThreadsToResolve(
   threads: readonly ReviewThread[],
   viewer: string,
-  mode: ReviewBodyMode,
 ): string[] {
-  if (mode === "first_clean") return [];
-  const viewerLower = viewer.toLowerCase();
   return threads
     .filter((thread) => !thread.isResolved)
+    .filter((thread) => isFactoryFindingThread(thread, viewer))
+    .filter((thread) => isOwnPost(thread.lastCommentAuthorLogin, viewer))
     .filter(
-      (thread) => thread.firstCommentAuthorLogin.toLowerCase() === viewerLower,
-    )
-    .filter((thread) => thread.firstCommentBody.startsWith(ROLE_TAGS.pr_review))
-    .filter(
-      (thread) => thread.lastCommentAuthorLogin.toLowerCase() === viewerLower,
-    )
-    .filter((thread) =>
-      mode === "rereview_clean" || mode === "rereview_open"
-        ? thread.lastCommentBody.startsWith(ROLE_TAGS.pr_review) ||
-          isFixedFixReply(thread.lastCommentBody)
-        : isFixedFixReply(thread.lastCommentBody),
+      (thread) =>
+        (thread.comments.length > 1 &&
+          hasMarker(thread.lastCommentBody, PR_REVIEW_ACK_MARKER_KIND)) ||
+        isFixedFixReply(thread.lastCommentBody),
     )
     .map((thread) => thread.id);
 }
 
 /**
- * このPRにあるFactory自身の`pr_review`の指摘のうち、未解決の`[MUST]`を数える。
- * `pr_review_post.ts`が、新しい指摘を投稿しないラウンドでLGTMだけの本文にせず
- * `"rereview_open"`にするかを決めるのに使う(`decideReviewBodyMode`の`openMustCount`)。
- * Factoryの投稿かどうかは、`selectThreadsToResolve`と同じく最初のコメントで判定する
- * (loginが大文字小文字を区別せず一致し、`pr_review`の役割タグで始まる)。
- * GitHubがすでに解決済みにしたスレッドと、このラウンドで解決する予定のスレッド
- * (`resolvedIds`。`selectThreadsToResolve`が、ここに渡すのと同じ解決前の`threads`から
- * 求めた戻り値)は数えない。
- * さらに、最初のコメントの2行目(`renderInlineComment`の形式での種別の接頭辞)が
- * `[MUST]`(`REVIEW_FINDING_KIND_PREFIXES.must`)であることを求める。
- * `[IMO]` / `[NITS]` / `[Q]`の指摘は、指摘の無い再レビューの本文を妨げない。
+ * 解決の後に残るFactory自身のスレッドを、種類を問わず数える。
+ * 0件のときだけ総評にLGTMと書く。
+ * GitHubがすでに解決済みにしたスレッドと、このラウンドで解決できたスレッド
+ * (`resolvedIds`。ここに渡すのと同じ解決前の`threads`から選び、実際に解決できたid)は数えない。
  */
-export function countOpenMustThreads(
+export function countOpenThreads(
   threads: readonly ReviewThread[],
   viewer: string,
   resolvedIds: readonly string[],
 ): number {
-  const viewerLower = viewer.toLowerCase();
-  const resolvedIdSet = new Set(resolvedIds);
+  const resolved = new Set(resolvedIds);
+  return threads.filter(
+    (thread) =>
+      !thread.isResolved &&
+      !resolved.has(thread.id) &&
+      isFactoryFindingThread(thread, viewer),
+  ).length;
+}
+
+/**
+ * 解決の後に残る、マージを止めるスレッドを数える。
+ * 未解決の`[MUST]`と、了承されていない見送りである。
+ * 了承されていない見送りは、答えを待つ見送りと、再レビューが反論した見送りを指す。
+ * 見送りが了承されるまで、マージできる状態として示さないためである。
+ * `[MUST]`かどうかは、最初のコメントの2行目(`renderInlineComment`の形式での
+ * 種別の接頭辞、`REVIEW_FINDING_KIND_PREFIXES.must`)で見る。
+ * 見送りと反論は、最後のコメントでなく返信の履歴で見る。
+ * 後から付いた人の返信で、マージを止めなくなることを防ぐためである。
+ * 見送りの書き手は、viewerか許可された人に限る。
+ * 反論の目印は誰でも貼れるので、書き手がviewerであることを求める。
+ * 最初のコメントは返信でないので見ない。
+ */
+export function countBlockingThreads(
+  threads: readonly ReviewThread[],
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+  resolvedIds: readonly string[],
+): number {
+  const resolved = new Set(resolvedIds);
   return threads.filter((thread) => {
-    if (thread.isResolved) return false;
-    if (resolvedIdSet.has(thread.id)) return false;
-    if (thread.firstCommentAuthorLogin.toLowerCase() !== viewerLower) {
-      return false;
-    }
-    if (!thread.firstCommentBody.startsWith(ROLE_TAGS.pr_review)) return false;
+    if (thread.isResolved || resolved.has(thread.id)) return false;
+    if (!isFactoryFindingThread(thread, viewer)) return false;
     const secondLine = thread.firstCommentBody.split("\n")[1] ?? "";
-    return secondLine.startsWith(REVIEW_FINDING_KIND_PREFIXES.must);
+    if (secondLine.startsWith(REVIEW_FINDING_KIND_PREFIXES.must)) return true;
+    return threadReplies(thread).some(
+      (reply) =>
+        (isAllowedThreadAuthor(reply, viewer, isAllowed) &&
+          lastContentLine(reply.body) === SKIP_REPLY_LINE) ||
+        (isOwnPost(reply.authorLogin, viewer) &&
+          hasMarker(reply.body, PR_REVIEW_OBJECTION_MARKER_KIND)),
+    );
   }).length;
 }
 
-export type OpenFindingForPrompt = {
-  readonly path: string;
-  readonly line: number | null;
-  readonly body: string;
+/**
+ * スレッドの返信を順に返す(最初のコメントを除く)。
+ * 読むコメントの上限を超えたスレッドでは、一覧に無い最後のコメントを足す。
+ */
+function threadReplies(thread: ReviewThread): readonly ReviewThreadComment[] {
+  return threadComments(thread).slice(1);
+}
+
+function threadComments(thread: ReviewThread): readonly ReviewThreadComment[] {
+  const { comments } = thread;
+  if (comments.length < REVIEW_THREAD_COMMENTS_LIMIT) return comments;
+  const listed = comments.some(
+    (comment) =>
+      comment.databaseId !== null &&
+      comment.databaseId === thread.lastCommentDatabaseId,
+  );
+  return listed
+    ? comments
+    : [
+        ...comments,
+        {
+          databaseId: thread.lastCommentDatabaseId,
+          authorLogin: thread.lastCommentAuthorLogin,
+          authorId: thread.lastCommentAuthorId,
+          body: thread.lastCommentBody,
+        },
+      ];
+}
+
+function isAllowedThreadAuthor(
+  comment: ReviewThreadComment,
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+): boolean {
+  return (
+    isOwnPost(comment.authorLogin, viewer) ||
+    isAllowed(comment.authorLogin, comment.authorId)
+  );
+}
+
+/** スレッドの書き手が、答えの対象にしてよい人かを返す。`poll_support.ts`の`isAllowedLabeler`を渡す。 */
+export type ThreadAuthorPredicate = (
+  login: string,
+  id: number | null,
+) => boolean;
+
+export type ThreadResponseKind = "skip" | "addressable";
+
+const SKIP_REPLY_LINE = "対応: 見送り";
+const COMMIT_REPLY_LINE = /^対応: (?:`[0-9a-f]{7,40}`|[0-9a-f]{7,40})$/;
+const HTML_COMMENT_LINE = /^<!--.*-->$/;
+
+/** プロンプトに載せるコメント1件の文字数の上限。超えた分は「…」にする。 */
+const THREAD_COMMENT_MAX_CHARS = 2000;
+/** プロンプトに載せるスレッド全体の文字数の上限。スレッドが多いPRでプロンプトが膨らまないようにする。 */
+const THREADS_PROMPT_MAX_CHARS = 100_000;
+
+/** 本文の、空行と目印を除いた最後の行を返す。 */
+function lastContentLine(body: string): string {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = (lines[index] ?? "").trim();
+    if (line !== "" && !HTML_COMMENT_LINE.test(line)) return line;
+  }
+  return "";
+}
+
+/** スレッドが、Factory自身の`pr_review`の指摘で始まるかを返す。 */
+function isFactoryFindingThread(thread: ReviewThread, viewer: string): boolean {
+  return (
+    isOwnPost(thread.firstCommentAuthorLogin, viewer) &&
+    thread.firstCommentBody.startsWith(ROLE_TAGS.pr_review)
+  );
+}
+
+/**
+ * 再レビューが答えるスレッドの種類を返す。答えないスレッドは`null`にする。
+ * 対象は、Factoryが始めた未解決の指摘のスレッドに限る。
+ * 判定には、許可されていない人のコメントを飛ばした最後の返信を使う。
+ * 許可されていない人が、見送りで指摘を閉じることも、返信で答えの対象から外すこともできないようにするためである。
+ * `skip`は、viewerか許可された人の、最後の行が`対応: 見送り`の返信である。
+ * `addressable`は、返信の無い指摘か、viewerか許可された人の`対応: <sha>`である。
+ * `pr_fix`の`対応: <sha>`は`selectThreadsToResolve`が解決するので除く。
+ * 許可された人の自由文の返信の後は答えず、人の判断に任せる。
+ */
+export function threadResponseKind(
+  thread: ReviewThread,
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+): ThreadResponseKind | null {
+  if (thread.isResolved) return null;
+  if (thread.firstCommentDatabaseId === null) return null;
+  if (!isFactoryFindingThread(thread, viewer)) return null;
+  const lastReply = threadReplies(thread)
+    .filter((reply) => isAllowedThreadAuthor(reply, viewer, isAllowed))
+    .at(-1);
+  if (lastReply === undefined) return "addressable";
+  const line = lastContentLine(lastReply.body);
+  if (line === SKIP_REPLY_LINE) return "skip";
+  return COMMIT_REPLY_LINE.test(line) && !isFixedFixReply(lastReply.body)
+    ? "addressable"
+    : null;
+}
+
+export type AppliedThreadResponse = {
+  readonly thread: ReviewThread;
+  readonly commentId: number;
+  readonly response: ThreadResponse;
 };
 
 /**
- * このPRにあるFactory自身の未解決の`pr_review`の指摘を、
- * `reviewPrompt`の`openFindings`の入力に変換する。
- * 再レビューで、未解決の指摘と実質的に同じ指摘を重ねて投稿させないために、
- * `pr_review_generate.ts`がこれらをすべてClaudeに渡す。
- * Factoryの投稿かどうかは`selectThreadsToResolve`と同じく判定する
- * (loginが大文字小文字を区別せず一致し、最初のコメントが`pr_review`の役割タグで始まる)。
- * ただし`mode`や最後のコメントの状態には関係しない。
- * ここで気にするのは指摘自体が未解決かどうかで、その後に誰が返信したかではない。
- * `body`からは役割タグの行を取り除く。Factoryの投稿の付け方をClaudeが知る必要は無いため。
- * 最初のレビューではスレッドがまだ無いので空になる。
+ * Claudeの答えを、返信の前に読み直したスレッドで確かめる。
+ * Claudeの出力だけで解決の対象を広げないよう、対象でない`thread_id`、
+ * スレッドの種類に合わない`decision`、空の`body`は捨てる。
+ * 同じスレッドへの答えは最初の1件だけを使う。
  */
-export function openFindingsForPrompt(
+export function selectThreadResponses(
   threads: readonly ReviewThread[],
   viewer: string,
-): OpenFindingForPrompt[] {
-  const viewerLower = viewer.toLowerCase();
-  return threads
-    .filter((thread) => !thread.isResolved)
-    .filter(
-      (thread) => thread.firstCommentAuthorLogin.toLowerCase() === viewerLower,
-    )
-    .filter((thread) => thread.firstCommentBody.startsWith(ROLE_TAGS.pr_review))
-    .map((thread) => ({
-      path: thread.path,
-      line: thread.line,
-      body: stripRoleTagLine(thread.firstCommentBody),
-    }));
+  isAllowed: ThreadAuthorPredicate,
+  responses: readonly ThreadResponse[],
+): { applied: AppliedThreadResponse[]; droppedCount: number } {
+  const applied: AppliedThreadResponse[] = [];
+  const answered = new Set<number>();
+  let droppedCount = 0;
+  for (const response of responses) {
+    const thread = threads.find(
+      (candidate) => candidate.firstCommentDatabaseId === response.thread_id,
+    );
+    const kind =
+      thread === undefined
+        ? null
+        : threadResponseKind(thread, viewer, isAllowed);
+    const fits =
+      (kind === "skip" && response.decision !== "addressed") ||
+      (kind === "addressable" && response.decision === "addressed");
+    if (
+      thread === undefined ||
+      !fits ||
+      response.body.trim() === "" ||
+      answered.has(response.thread_id)
+    ) {
+      droppedCount += 1;
+      continue;
+    }
+    answered.add(response.thread_id);
+    applied.push({ thread, commentId: response.thread_id, response });
+  }
+  return { applied, droppedCount };
+}
+
+const THREAD_REPLY_ENDINGS: Readonly<Record<ThreadResponseDecision, string>> = {
+  addressed: "解消: 確認",
+  skip_accepted: "見送り: 了承",
+  skip_rejected: "見送り: 反論",
+};
+
+/**
+ * 再レビューの答えの返信を描画する。
+ * 反論だけを別の目印にする。`pr_fix`が反論をフィードバックとして集めるためである。
+ * `body`はClaudeの出力なので、目印を偽れないよう`<!--`を無害にする。
+ */
+export function renderThreadReply(
+  response: ThreadResponse,
+  workItemId: number,
+): string {
+  const kind =
+    response.decision === "skip_rejected"
+      ? PR_REVIEW_OBJECTION_MARKER_KIND
+      : PR_REVIEW_ACK_MARKER_KIND;
+  return withMarker(
+    kind,
+    workItemId,
+    [
+      ROLE_TAGS.pr_review,
+      neutralizeHtmlComment(normalizeJapaneseText(response.body)),
+      "",
+      THREAD_REPLY_ENDINGS[response.decision],
+    ].join("\n"),
+  );
+}
+
+function threadCommentAuthor(
+  login: string,
+  id: number | null,
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+): PromptThreadComment["author"] {
+  if (isOwnPost(login, viewer)) return "factory";
+  return isAllowed(login, id) ? "allowed_person" : "other";
+}
+
+function promptCommentBody(body: string): string {
+  // 差分と同じく見える表記にする。長さの上限は、置き換えで伸びた後にかける。
+  const stripped = revealControlChars(stripRoleTagLine(body));
+  const chars = Array.from(stripped);
+  return chars.length > THREAD_COMMENT_MAX_CHARS
+    ? `${chars.slice(0, THREAD_COMMENT_MAX_CHARS).join("")}…`
+    : stripped;
+}
+
+function toPromptThread(
+  thread: ReviewThread,
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+): PromptReviewThread {
+  const comments = threadComments(thread).map(
+    (comment): PromptThreadComment => ({
+      author: threadCommentAuthor(
+        comment.authorLogin,
+        comment.authorId,
+        viewer,
+        isAllowed,
+      ),
+      body: promptCommentBody(comment.body),
+    }),
+  );
+  return {
+    thread_id: thread.firstCommentDatabaseId,
+    path: thread.path,
+    line: thread.line,
+    status: thread.isResolved ? "resolved" : "open",
+    started_by: isFactoryFindingThread(thread, viewer) ? "factory" : "person",
+    response_kind: threadResponseKind(thread, viewer, isAllowed),
+    comments,
+  };
+}
+
+/** 文字数の上限を超えたときに残す順番。答えるスレッド、開いているスレッド、解決済みの順である。 */
+function promptThreadRank(thread: PromptReviewThread): number {
+  if (thread.response_kind !== null) return 0;
+  return thread.status === "open" ? 1 : 2;
+}
+
+/**
+ * 既存のスレッドを、`reviewPrompt`の入力に変換する。
+ * 解決済みのスレッド、人が始めたスレッド、返信をすべて含める。
+ * 書き手はログインでなく役割で示す。
+ * 文字数の上限を超えたら、解決済みの古いものから落とし、落とした件数を返す。
+ */
+export function reviewThreadsForPrompt(
+  threads: readonly ReviewThread[],
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+): { threads: PromptReviewThread[]; omitted: number } {
+  const items = threads.map((thread) =>
+    toPromptThread(thread, viewer, isAllowed),
+  );
+  const order = items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const rank = promptThreadRank(left.item) - promptThreadRank(right.item);
+      return rank !== 0 ? rank : right.index - left.index;
+    });
+  const kept = new Set<number>();
+  let used = 0;
+  for (const { item, index } of order) {
+    // 1件ずつ配列に入れて数えると、字下げと区切りを含み、全体の文字列より短くならない。
+    const size = renderPromptThreads([item]).length;
+    if (used + size > THREADS_PROMPT_MAX_CHARS) continue;
+    used += size;
+    kept.add(index);
+  }
+  return {
+    threads: items.filter((_, index) => kept.has(index)),
+    omitted: items.length - kept.size,
+  };
 }
 
 /**
  * Factoryの投稿の本文から、1行目にある`pr_review`の役割タグの行を取り除く(あれば)。
- * Claudeに指摘の中身だけを見せるため、`openFindingsForPrompt`が使う。
+ * Claudeに指摘の中身だけを見せるため、`reviewThreadsForPrompt`が使う。
  */
 function stripRoleTagLine(body: string): string {
   const newlineIndex = body.indexOf("\n");
@@ -3156,6 +3445,7 @@ export type PrFixFinishBumpKind =
   | "push_missing_commit_message"
   | "push_head_changed"
   | "push_nothing_to_commit"
+  | "skip_only_replied"
   | "push_success";
 
 /**
@@ -3174,6 +3464,9 @@ export type PrFixFinishBumpKind =
  *     `needs_human`で終わる場合も`push_success`に数える。
  *     どちらにしても元のコメントには(修正でなく提案で)返信しているので、
  *     他の成功したpushと同じく、このラウンドのフィードバックは消化済みである。
+ *   - `skip_only_replied`: すべての返信が`skipped`でcommitが無く、返信をすべて投稿した。
+ *     ラベルの失敗で再実行したときに二重に返信しないよう既読にする。
+ *     投稿に1件でも失敗したときは呼ばない。
  *   - `requirements_gap_reroute_success`: 親のIssueを`requirements_generating`に
  *     差し戻すことで、フィードバックを消化した。
  *   - `design_gap_reroute_success`: 親のIssueを`designing`に戻すことで、フィードバックを消化した。
@@ -3186,7 +3479,7 @@ export type PrFixFinishBumpKind =
  * 失敗した設計への戻し(親が`pr_open`でない、新しいサイクルがある、読んだ後に親が動いた、
  * 比較交換に負けた、設計の上限、設計工程の無効)、
  * 実際には反映されなかったpush
- * (コミットメッセージが無い、headが動いた、コミットするものが無い))では、
+ * (コミットメッセージが無い、headが動いた、コミットするものが無く見送りだけでもない))では、
  * 処理済み位置を変えない。
  * 後の`retry_work_item`が同じフィードバックを集め直せるようにするため。
  * `main()`のどこかで例外が出た場合(`failed`になり、この関数ではなく
@@ -3196,6 +3489,7 @@ export function shouldAdvanceWatermarks(kind: PrFixFinishBumpKind): boolean {
   return (
     kind === "requirements_gap_reroute_success" ||
     kind === "design_gap_reroute_success" ||
+    kind === "skip_only_replied" ||
     kind === "push_success"
   );
 }
@@ -3693,6 +3987,103 @@ export function selectProposeIssueReplies(
   return replies.filter((reply) => reply.decision === "propose_issue");
 }
 
+export type NothingToCommitEnd = "issue_proposal" | "skip_only" | "needs_human";
+
+/** 見送りの返信の後に、作業項目に残す補足。 */
+export const SKIP_ONLY_ROUND_NOTE =
+  "all findings skipped; waiting for the re-review to answer";
+
+/** 見送りの再レビューのラベルを付けられなかったときの理由。 */
+export const SKIP_REREVIEW_LABEL_FAILED_REASON =
+  "could not add the review label for skipped findings";
+
+/**
+ * commitするものが無かったラウンドの終わり方を決める。
+ * すべてが見送りで、Factoryの指摘のスレッドに付くものがあれば、再レビューの答えを待つ。
+ * 付くものが無ければ、再レビューが答えられないので人の判断に回す。
+ * `fixed`なのにcommitが無い返信が混ざるときは、人の判断が要るので従来どおり止める。
+ * CI回は返信しないので、見送りの流れに入らない。
+ */
+export function decideNothingToCommitEnd(
+  replies: readonly FixReply[],
+  ciRound: boolean,
+  skipOnFactoryThread: boolean,
+): NothingToCommitEnd {
+  if (ciRound) return "needs_human";
+  if (selectProposeIssueReplies(replies).length > 0) return "issue_proposal";
+  return skipOnFactoryThread &&
+    replies.every((reply) => reply.decision === "skipped")
+    ? "skip_only"
+    : "needs_human";
+}
+
+/** 見送りだけのラウンドで、見送りの返信を投稿できなかったときの理由。 */
+export const SKIP_REPLY_POST_FAILED_REASON =
+  "could not post the replies to skipped findings";
+
+/**
+ * 見送りの返信のうち、Factoryの指摘のスレッドに付くものがあるかを返す。
+ * 再レビューが答えられるのは、そのスレッドだけである。
+ * スレッドを読めないとき(`threads`が`null`)は、見送りがあれば付くものとして扱う。
+ */
+export function hasSkipOnFactoryThread(
+  replies: readonly FixReply[],
+  threads: readonly ReviewThread[] | null,
+  viewer: string,
+): boolean {
+  const skipped = replies.filter((reply) => reply.decision === "skipped");
+  if (threads === null) return skipped.length > 0;
+  return skipped.some((reply) => {
+    const thread = findReviewThreadForComment(threads, reply.review_comment_id);
+    return thread !== undefined && isFactoryFindingThread(thread, viewer);
+  });
+}
+
+/**
+ * `.../comments/{id}/replies`に渡すidを返す。
+ * GitHubは返信への返信を受けないので、対象が返信ならスレッドの最初のコメントに宛てる。
+ * スレッドが見つからないときは、元のidのままにする。
+ */
+export function replyTargetCommentId(
+  threads: readonly ReviewThread[],
+  reviewCommentId: number,
+): number {
+  return (
+    findReviewThreadForComment(threads, reviewCommentId)
+      ?.firstCommentDatabaseId ?? reviewCommentId
+  );
+}
+
+/**
+ * 見送りだけの回の`fix_rounds`の結果を返す。
+ * すべての返信を投稿できたときだけ`done`にする。
+ * 投稿に失敗した回は人の対応待ちで終わるので、`done`で残すと、連続した失敗の数がそこで切れるためである。
+ * 返信の後にラベルだけが失敗した回は`done`のままにする。
+ * 指摘の扱いは終わって処理済みの位置も進むので、`push`の後のレビュアー依頼の失敗と同じ扱いである。
+ */
+export function skipOnlyRoundOutcome(
+  allRepliesPosted: boolean,
+): "done" | "blocked" {
+  return allRepliesPosted ? "done" : "blocked";
+}
+
+/**
+ * このラウンドの見送りを再レビューに回すためのラベルが要るかを返す。
+ * Issue化の提案が人の判断を待つ間は、再レビューに進めない。
+ * Factoryの指摘のスレッドに付く見送りが無ければ、再レビューが答えられないので要らない。
+ */
+export function needsSkipRereviewLabel(
+  replies: readonly FixReply[],
+  ciRound: boolean,
+  skipOnFactoryThread: boolean,
+): boolean {
+  return (
+    !ciRound &&
+    selectProposeIssueReplies(replies).length === 0 &&
+    skipOnFactoryThread
+  );
+}
+
 /**
  * `load`でレビュースレッドを取得し、失敗したら`onError`に理由を渡して空の一覧を返す。
  * `pr_fix_finish.ts`はpushの後にスレッドを取得する。ここで例外を投げてstepが失敗すると、
@@ -3760,12 +4151,18 @@ export function matchReviewThreadForComment(
   threads: readonly ReviewThread[],
   reviewCommentId: number,
 ): string | null {
-  const match = threads.find(
+  return findReviewThreadForComment(threads, reviewCommentId)?.id ?? null;
+}
+
+function findReviewThreadForComment(
+  threads: readonly ReviewThread[],
+  reviewCommentId: number,
+): ReviewThread | undefined {
+  return threads.find(
     (thread) =>
       thread.firstCommentDatabaseId === reviewCommentId ||
       thread.allCommentIds.includes(reviewCommentId),
   );
-  return match?.id ?? null;
 }
 
 /**
@@ -4892,6 +5289,17 @@ export const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "返信は投稿済みです",
     nextAction: () => NOTHING_TO_COMMIT_NEXT_ACTION,
   },
+  {
+    pattern: /^could not post the replies to skipped findings$/,
+    describe: () => "見送りの返信を投稿できませんでした",
+    nextAction: () =>
+      "GitHubが応答するようになってから、Consoleの要対応で再実行してください。再実行は同じ指摘を集め直すので、投稿できていた返信がもう一度投稿されることがあります。PRで人が返信する必要はありません",
+  },
+  {
+    pattern: /^could not add the review label for skipped findings$/,
+    describe: () => "見送りの再レビューを依頼するラベルを付けられませんでした",
+    nextAction: () => "PRに`factory:review`を付けてください",
+  },
   // pr_fix_finish.tsの`buildIssueProposalReason`。すでに日本語なので、
   // `describe()`はそのまま返す。この規則は、`nextActionFor`が汎用の既定ではなく
   // Consoleの要対応を案内するためにある。
@@ -5739,4 +6147,205 @@ export function selectListedBinaryFiles(
   const changed = new Set(changedFiles);
   const listed = binaryFiles.filter((path) => changed.has(path));
   return { listed, unlistedCount: binaryFiles.length - listed.length };
+}
+
+export type PriorReviewSha =
+  | { readonly kind: "none" }
+  | { readonly kind: "unreadable" }
+  | { readonly kind: "found"; readonly sha: string };
+
+/**
+ * 解決した人を信頼できないスレッドを、未解決として返す。
+ * GitHubの解決のボタンは、許可されていない人でも押せる。
+ * そのまま読むと、直っていない`[MUST]`を数えず、本文にLGTMと書いてしまう。
+ * 信頼できるのは、viewerと許可された人である。解決した人を読めないときは信頼しない。
+ * 読み取りの直後に1回だけ通し、後の処理が同じ状態を見るようにする。
+ */
+export function withTrustedResolution(
+  threads: readonly ReviewThread[],
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+): ReviewThread[] {
+  return threads.map((thread) => {
+    if (!thread.isResolved) return thread;
+    const login = thread.resolvedByLogin;
+    const trusted =
+      login !== "" &&
+      (isOwnPost(login, viewer) || isAllowed(login, thread.resolvedById));
+    return trusted ? thread : { ...thread, isResolved: false };
+  });
+}
+
+/**
+ * `readReviewDelta`に渡すパスを返す。名前を変えたファイルは、移動元と移動先の両方を入れる。
+ * 同じパスは1回だけにする。
+ */
+export function reviewDeltaPaths(
+  files: readonly {
+    readonly filename: string;
+    readonly previous_filename: string | null;
+  }[],
+): string[] {
+  return [
+    ...new Set(
+      files.flatMap((file) =>
+        file.previous_filename === null
+          ? [file.filename]
+          : [file.filename, file.previous_filename],
+      ),
+    ),
+  ];
+}
+
+/**
+ * 前回の投稿の`[MUST]`のうち、スレッドにならず総評だけに載ったものがあるかを返す。
+ * 行に紐づけられなかった指摘はスレッドにならないので、差分だけを読む再レビューでは忘れられる。
+ * スレッドの一覧を読めなかったときは`threads`が空なので、`[MUST]`があれば真になり、PR全体を読む側に倒れる。
+ * 解決済みのスレッドも、投稿した指摘として数える。
+ * スレッドがあるとみなすのは、同じパスで、最初のコメントが`renderInlineComment`の形と同じものだけにする。
+ * 本文の一部の一致では、別のパスの同じ文、別の指摘の提案の中の文、空の本文でも一致し、
+ * 差分だけを読む側に倒れて指摘を忘れるためである。
+ * 比べるときは、GitHubが変えうる改行の種類と末尾の空白をそろえる。
+ */
+export function hasBodyOnlyMustFinding(
+  findings: readonly ReviewFinding[],
+  threads: readonly ReviewThread[],
+  viewer: string,
+): boolean {
+  const comparable = (body: string): string =>
+    body.replaceAll("\r\n", "\n").trimEnd();
+  const posted = threads.filter((thread) =>
+    isFactoryFindingThread(thread, viewer),
+  );
+  return findings
+    .filter((finding) => finding.kind === "must")
+    .some((finding) => {
+      const expected = comparable(renderInlineComment(finding));
+      return !posted.some(
+        (thread) =>
+          thread.path === finding.path &&
+          comparable(thread.firstCommentBody) === expected,
+      );
+    });
+}
+
+/** `decideReviewScope`の入力のうち、差分を読む前に決まるもの。 */
+export type ReviewScopeInput = {
+  readonly prior: PriorReviewSha;
+  readonly headSha: string;
+  readonly fixRound: "ci" | "conflict" | null;
+  readonly pendingSkipCount: number;
+  /** `hasBodyOnlyMustFinding`の結果。 */
+  readonly hasBodyOnlyMust: boolean;
+  readonly changedFileCount: number;
+};
+
+/**
+ * 前回からの差分を読むときの起点のcommitを返す。読まなくてよいときは`null`を返す。
+ * 条件を`decideReviewScope`と二重に持たないよう、差分が読めたとして範囲を決める。
+ */
+export function reviewDeltaFromSha(input: ReviewScopeInput): string | null {
+  const scope = decideReviewScope({ ...input, delta: { hasMerge: false } });
+  return scope.kind === "delta" ? scope.fromSha : null;
+}
+
+/**
+ * レビューの範囲を決める。
+ * 前回の投稿が無ければ`first`にする。
+ * 前回のcommitが読めないときと競合回は、PR全体を読む`full`に倒す。
+ * 競合回の固定文が、merge全体を見るよう頼むためである。
+ * 前回の`[MUST]`が総評だけに載っているときも`full`にする。差分だけを読むと、その指摘を忘れるためである。
+ * headが前回と同じときは、見送りが答えを待っていれば`threads_only`にし、
+ * そうでなければ人が依頼し直したとみなして`full`にする。
+ * 変更ファイルの一覧が上限に達したPRも`full`にする。一覧が切れて、絞った差分から変更が漏れるためである。
+ * 範囲にmerge commitがあるときも`full`にする。merge commitの中で手で直した行は、baseの変更と見分けられないためである。
+ */
+export function decideReviewScope(
+  input: ReviewScopeInput & {
+    readonly delta: { readonly hasMerge: boolean } | null;
+  },
+): ReviewScope {
+  const { prior } = input;
+  if (prior.kind === "none") return { kind: "first" };
+  if (prior.kind === "unreadable") {
+    return { kind: "full", reason: "prior_unreadable" };
+  }
+  if (input.fixRound === "conflict") {
+    return { kind: "full", reason: "conflict_round" };
+  }
+  if (input.hasBodyOnlyMust) return { kind: "full", reason: "body_only_must" };
+  if (prior.sha === input.headSha) {
+    return input.pendingSkipCount > 0
+      ? { kind: "threads_only", fromSha: prior.sha }
+      : { kind: "full", reason: "requested_again" };
+  }
+  if (input.changedFileCount >= PR_FILES_API_CAP) {
+    return { kind: "full", reason: "too_many_files" };
+  }
+  if (input.delta === null) return { kind: "full", reason: "prior_unreadable" };
+  if (input.delta.hasMerge) return { kind: "full", reason: "merge_in_range" };
+  return { kind: "delta", fromSha: prior.sha };
+}
+
+const REVIEW_SEVERITY_ORDER: Readonly<Record<ReviewSeverity, number>> = {
+  blocker: 0,
+  major: 1,
+  minor: 2,
+  nit: 3,
+};
+
+/**
+ * Claudeの出力から、投稿する指摘と記録する要約を決める。
+ * 重要なものから順に並べて上限で切るので、省くのは重要度の低いものになる。
+ * スレッドだけのレビューは新しい指摘を出さないので、出力に指摘があっても捨てる。
+ */
+export function settleReviewFindings(
+  output: {
+    readonly summary: string;
+    readonly findings: readonly ReviewFinding[];
+  },
+  scope: ReviewScope,
+  maxFindings: number,
+): { summary: string; findings: ReviewFinding[] } {
+  if (scope.kind === "threads_only") {
+    return { summary: output.summary, findings: [] };
+  }
+  const sorted = [...output.findings].sort(
+    (left, right) =>
+      REVIEW_SEVERITY_ORDER[left.severity] -
+      REVIEW_SEVERITY_ORDER[right.severity],
+  );
+  const omitted = sorted.length - maxFindings;
+  return {
+    summary:
+      omitted > 0
+        ? `${output.summary}\n\n(上限の${String(maxFindings)}件を超えたため、重要度の低い指摘を${String(omitted)}件省略しました。)`
+        : output.summary,
+    findings: sorted.slice(0, maxFindings),
+  };
+}
+
+/**
+ * Claudeの出力から、投稿の手前まで渡すスレッドへの答えを決める。
+ * スレッドだけのレビューは、見送りへの答えだけを残し、`addressed`を捨てる。
+ * 新しいcommitが無く、前回のレビューが同じheadを見て答えられたので、
+ * 出力の揺れで誰も直していない`[MUST]`を解決し、本文をLGTMにしないためである。
+ */
+export function settleThreadResponses(
+  responses: readonly ThreadResponse[],
+  scope: ReviewScope,
+): ThreadResponse[] {
+  return scope.kind === "threads_only"
+    ? responses.filter((response) => response.decision !== "addressed")
+    : [...responses];
+}
+
+/** スコープに合う`maxTurns`を返す。PR全体を読むレビューは、全部のファイルを読むので別の上限を使う。 */
+export function reviewMaxTurns(
+  scope: ReviewScope,
+  config: Pick<FactoryConfig, "max_turns" | "pr_review_full_max_turns">,
+): number {
+  return scope.kind === "first" || scope.kind === "full"
+    ? config.pr_review_full_max_turns
+    : config.max_turns;
 }

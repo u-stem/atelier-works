@@ -116,6 +116,7 @@ const VALID_OUTPUT = {
       suggested_code: null,
     },
   ],
+  thread_responses: [],
 };
 
 describe("isReviewClaudeOutput", () => {
@@ -194,6 +195,36 @@ describe("isReviewClaudeOutput", () => {
     const { findings: _findings, ...rest } = VALID_OUTPUT;
     expect(isReviewClaudeOutput(rest)).toBe(false);
   });
+
+  test("rejects an output without thread_responses", () => {
+    expect(
+      isReviewClaudeOutput({ verdict: "approve", summary: "s", findings: [] }),
+    ).toBe(false);
+  });
+
+  test("accepts a valid thread response", () => {
+    expect(
+      isReviewClaudeOutput({
+        verdict: "approve",
+        summary: "s",
+        findings: [],
+        thread_responses: [
+          { thread_id: 1, decision: "skip_accepted", body: "了承します。" },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects an unknown decision", () => {
+    expect(
+      isReviewClaudeOutput({
+        verdict: "approve",
+        summary: "s",
+        findings: [],
+        thread_responses: [{ thread_id: 1, decision: "ok", body: "x" }],
+      }),
+    ).toBe(false);
+  });
 });
 
 const FAKE_PR = {
@@ -231,7 +262,9 @@ describe("reviewPrompt requirements wiring", () => {
       diff: "diff --git a b",
       changedFiles: ["a.ts"],
       requirements: FAKE_REQUIREMENTS,
-      openFindings: [],
+      threads: [],
+      omittedThreadCount: 0,
+      scope: { kind: "first" },
       fixRound: null,
       binaryFiles: [],
     });
@@ -244,7 +277,9 @@ describe("reviewPrompt requirements wiring", () => {
       diff: "diff --git a b",
       changedFiles: ["a.ts"],
       requirements: null,
-      openFindings: [],
+      threads: [],
+      omittedThreadCount: 0,
+      scope: { kind: "first" },
       fixRound: null,
       binaryFiles: [],
     });
@@ -323,7 +358,7 @@ describe("binary files wiring in the generate step", () => {
   });
 
   test("passes the narrowed binary files to the prompt", async () => {
-    expect(count(await SOURCE, "    binaryFiles,\n")).toBe(1);
+    expect(count(await SOURCE, "        ? binaryFiles\n")).toBe(1);
   });
 
   test("returns the narrowed binary files in the result", async () => {
@@ -370,6 +405,12 @@ describe("review threads wiring in the generate step", () => {
     expect(count(await SOURCE, "listReviewThreads(")).toBe(1);
   });
 
+  test("passes every thread to the prompt through the shared conversion", async () => {
+    expect(
+      count(await SOURCE, "reviewThreadsForPrompt(\n    reviewThreads,"),
+    ).toBe(1);
+  });
+
   test("leaves a warning when the thread listing fails", async () => {
     expect(
       count(
@@ -396,5 +437,61 @@ describe("claude failure wiring in the generate step", () => {
 
   test("does not settle the failure in the step", async () => {
     expect(await flatSource()).not.toContain("settleClaudeFailure");
+  });
+});
+
+describe("review scope wiring in the generate step", () => {
+  const SOURCE = Bun.file(
+    new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),
+  ).text();
+
+  test("passes the decided scope to the prompt", async () => {
+    expect(await SOURCE).toContain("    scope,\n");
+  });
+
+  test("sets the turn limit from the scope", async () => {
+    expect(await SOURCE).toContain("maxTurns: reviewMaxTurns(scope, config)");
+  });
+
+  test("logs why a review reads the whole PR", async () => {
+    expect(await SOURCE).toContain(
+      '...(scope.kind === "full" ? { reason: scope.reason } : {})',
+    );
+  });
+
+  test("settles the thread answers by the scope", async () => {
+    expect(await SOURCE).toContain(
+      "thread_responses: settleThreadResponses(output.thread_responses, scope),",
+    );
+  });
+
+  test("settles the findings with the shared limit", async () => {
+    expect((await SOURCE).replace(/\s+/g, " ")).toContain(
+      "settleReviewFindings( output, scope, REVIEW_MAX_FINDINGS, )",
+    );
+  });
+
+  test("trusts a resolved thread only after checking its resolver", async () => {
+    const source = await SOURCE;
+    const trusted = source.indexOf(
+      "const reviewThreads = withTrustedResolution(",
+    );
+    expect(trusted === -1 ? Number.POSITIVE_INFINITY : trusted).toBeLessThan(
+      source.indexOf("const promptThreads = reviewThreadsForPrompt("),
+    );
+  });
+
+  test("gives the delta both paths of a renamed file", async () => {
+    expect(await SOURCE).toContain("paths: reviewDeltaPaths(prFileEntries),");
+  });
+
+  test("gives the prompt only the binary files of a delta", async () => {
+    expect(await SOURCE).toContain(
+      "selectListedBinaryFiles(deltaDiff.binaryFiles, prFiles).listed",
+    );
+  });
+
+  test("keeps the binary files of the whole PR for the summary", async () => {
+    expect(await SOURCE).toContain("binary_files: binaryFiles,");
   });
 });

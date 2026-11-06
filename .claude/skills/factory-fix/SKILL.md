@@ -40,6 +40,9 @@ headlessで起動したClaude Code(`claude -p`)がレビュー指摘と未解決
 範囲外の指摘では修正を強行しない。
 提案は、人がConsoleの**要対応**で承認または却下する。
 
+`skipped`の理由は、再レビューが読んで了承か反論を返す。
+コードと指摘に照らして判断できる根拠を書く。
+
 ### Issue化の提案の書き方
 
 `decision: "propose_issue"`のときは、`issue_proposal`を次のように書く。

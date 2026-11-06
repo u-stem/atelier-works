@@ -772,6 +772,11 @@ export function withMarker(
   return `${body}\n\n<!-- factory:${kind}:${workItemId} -->`;
 }
 
+/** 再レビューの了承と解消の返信の目印の種類。フィードバックに集めない。 */
+export const PR_REVIEW_ACK_MARKER_KIND = "pr_review_ack";
+/** 再レビューの反論の返信の目印の種類。フィードバックに集める。 */
+export const PR_REVIEW_OBJECTION_MARKER_KIND = "pr_review_objection";
+
 /**
  * `text`が、単独の行にあるFactoryの目印で終わるかを返す。
  * `kind` / `workItemId`を渡さなければ、どのFactoryの目印にも一致する
@@ -2800,10 +2805,19 @@ export async function getPrDiff(
     context,
   );
   ensureSuccess(response, context);
-  const bodyText = revealControlChars(response.bodyText).replaceAll(
-    "\r\n",
-    "\n",
-  );
+  return limitReviewDiff(response.bodyText, maxLines, maxChars);
+}
+
+/**
+ * 差分の本文の、見えない文字を置き換え、行数と文字数の上限で切る。
+ * PRの差分と、前回のレビューからの差分で、同じ扱いにするために分けている。
+ */
+export function limitReviewDiff(
+  rawBody: string,
+  maxLines: number,
+  maxChars: number = PR_DIFF_MAX_CHARS,
+): PrDiff {
+  const bodyText = revealControlChars(rawBody).replaceAll("\r\n", "\n");
   const lines = bodyText.split("\n");
   const byLines =
     lines.length <= maxLines ? bodyText : lines.slice(0, maxLines).join("\n");
@@ -2818,6 +2832,8 @@ export async function getPrDiff(
 
 export type PrFile = {
   readonly filename: string;
+  /** 名前を変えたファイルの移動元のパス。名前を変えていなければ`null`。 */
+  readonly previous_filename: string | null;
   readonly status: string;
   readonly additions: number;
   readonly deletions: number;
@@ -2826,6 +2842,7 @@ export type PrFile = {
 
 type PrFilePayload = {
   readonly filename: string;
+  readonly previous_filename?: unknown;
   readonly status: string;
   readonly additions: number;
   readonly deletions: number;
@@ -2867,6 +2884,10 @@ export async function getPrFiles(
     if (!isPrFilePayload(raw)) continue;
     items.push({
       filename: raw.filename,
+      previous_filename:
+        typeof raw.previous_filename === "string"
+          ? raw.previous_filename
+          : null,
       status: raw.status,
       additions: raw.additions,
       deletions: raw.deletions,
@@ -3077,7 +3098,7 @@ export async function listPrChecks(
 }
 
 /** `pulls/{number}/files`が返せる件数の上限。 */
-const PR_FILES_API_CAP = 3000;
+export const PR_FILES_API_CAP = 3000;
 
 /**
  * `GET .../pulls/{number}/files`を最後のページまで読み、変更されたファイルのパスを返す。
@@ -3574,7 +3595,9 @@ function isPrReviewCommentPayload(
 /**
  * `GET .../comments`(インラインのレビューコメント)をページ送りしながら取得し、
  * `listPrReviews`と同じく、Factory自身の`pr_fix`の返信
- * (`isFactoryPost(login, viewer, raw.body, "pr_fix")`)だけを除いて返す。
+ * (`isFactoryPost(login, viewer, raw.body, "pr_fix")`)と、
+ * 再レビューの了承と解消の返信(`PR_REVIEW_ACK_MARKER_KIND`の目印を持つもの)を除いて返す。
+ * 再レビューの反論の返信は、`pr_fix`が対応すべきフィードバックとして残す。
  * `pr_review`でFactoryが書いた目印の無いインラインの指摘は残す。
  * pr_fixはそれを対応すべきフィードバックとして見る必要があるためである。
  */
@@ -3600,6 +3623,9 @@ export async function listPrReviewComments(
     if (raw.id > maxId) maxId = raw.id;
     const login = raw.user?.login;
     if (isFactoryPost(login, viewer, raw.body, "pr_fix")) continue;
+    if (isFactoryPost(login, viewer, raw.body, PR_REVIEW_ACK_MARKER_KIND)) {
+      continue;
+    }
     items.push({
       id: raw.id,
       authorLogin: typeof login === "string" ? login : "",
@@ -3972,7 +3998,7 @@ export type ReviewThread = {
   /**
    * スレッドが付いているファイルのパスと、現在の差分上の行。
    * 再レビューで未解決の指摘の内容だけでなく場所もClaudeに伝えるため、
-   * `pr_workflow_support.ts`の`openFindingsForPrompt`が使う。
+   * `pr_workflow_support.ts`の`reviewThreadsForPrompt`が使う。
    * `line`はGitHubの`PullRequestReviewThread.line`で、スレッドの位置が
    * 差分から外れると(コメントした行がその後また変わったなど)`null`になる。
    * `ReviewFinding`の`line`がnullを取りうるのと同じである。
@@ -4000,6 +4026,30 @@ export type ReviewThread = {
    * `matchReviewThreadForComment`が対応づけられるようにする。
    */
   readonly allCommentIds: number[];
+  /** 最後のコメントの書き手のGitHub id。取得できなければ`null`。 */
+  readonly lastCommentAuthorId: number | null;
+  /** 最後のコメントのREST id。`comments`に最後のコメントが入っているかを見分けるのに使う。 */
+  readonly lastCommentDatabaseId: number | null;
+  /** スレッドを解決した人のlogin。解決されていない、読めないときは空文字列。 */
+  readonly resolvedByLogin: string;
+  /** スレッドを解決した人のGitHub id。読めない、人でないときは`null`。 */
+  readonly resolvedById: number | null;
+  /**
+   * スレッド内のコメントの書き手と本文(先頭の`REVIEW_THREAD_COMMENTS_LIMIT`件まで)。
+   * 再レビューに、返信まで含めたスレッドの全体を渡すために使う。
+   */
+  readonly comments: readonly ReviewThreadComment[];
+};
+
+/** `listReviewThreads`が読むスレッドのコメントの件数の上限。 */
+export const REVIEW_THREAD_COMMENTS_LIMIT = 50;
+
+export type ReviewThreadComment = {
+  readonly databaseId: number | null;
+  /** 書き手が削除されたアカウントなどで読めないときは空文字列。 */
+  readonly authorLogin: string;
+  readonly authorId: number | null;
+  readonly body: string;
 };
 
 type ReviewThreadsPageInfo = {
@@ -4063,6 +4113,7 @@ function isReviewThreadCommentsConnectionPayload(
 type ReviewThreadNodePayload = {
   readonly id: string;
   readonly isResolved: boolean;
+  readonly resolvedBy?: unknown;
   readonly path: string;
   readonly line: number | null;
   readonly firstComments: ReviewThreadCommentsConnectionPayload;
@@ -4097,7 +4148,10 @@ function isReviewThreadNodePayload(
 }
 
 type ReviewThreadCommentPayload = {
-  readonly author: { readonly login: string } | null;
+  readonly author: {
+    readonly login: string;
+    readonly databaseId?: number;
+  } | null;
   readonly body: string;
   readonly databaseId?: number | null;
 };
@@ -4138,6 +4192,18 @@ function isReviewThreadDatabaseIdNodePayload(
 /** `listReviewThreads`が辿るページ数の上限(1ページ100件なので1000件まで)。 */
 export const REVIEW_THREADS_MAX_PAGES = 10;
 
+/** `allComments`の1件を読む。本文が無い行(idだけの古い形)は`null`にする。 */
+function parseThreadComment(raw: unknown): ReviewThreadComment | null {
+  if (!isRecord(raw) || typeof raw.body !== "string") return null;
+  const author = isRecord(raw.author) ? raw.author : null;
+  return {
+    databaseId: typeof raw.databaseId === "number" ? raw.databaseId : null,
+    authorLogin: typeof author?.login === "string" ? author.login : "",
+    authorId: typeof author?.databaseId === "number" ? author.databaseId : null,
+    body: raw.body,
+  };
+}
+
 /**
  * 1ページ分のノードを、`ReviewThread`に変換する。
  * 形が合わないノードは、黙って捨てずに例外を投げる。
@@ -4164,9 +4230,14 @@ function parseReviewThreadNode(
     .filter(isReviewThreadDatabaseIdNodePayload)
     .map((node) => node.databaseId)
     .filter((id): id is number => id !== null);
+  const resolvedBy = isRecord(rawNode.resolvedBy) ? rawNode.resolvedBy : null;
   return {
     id: rawNode.id,
     isResolved: rawNode.isResolved,
+    resolvedByLogin:
+      typeof resolvedBy?.login === "string" ? resolvedBy.login : "",
+    resolvedById:
+      typeof resolvedBy?.databaseId === "number" ? resolvedBy.databaseId : null,
     path: rawNode.path,
     line: rawNode.line,
     firstCommentAuthorLogin: firstComment.author?.login ?? "",
@@ -4175,6 +4246,14 @@ function parseReviewThreadNode(
     lastCommentBody: lastComment.body,
     firstCommentDatabaseId: firstComment.databaseId ?? null,
     allCommentIds,
+    lastCommentAuthorId:
+      typeof lastComment.author?.databaseId === "number"
+        ? lastComment.author.databaseId
+        : null,
+    lastCommentDatabaseId: lastComment.databaseId ?? null,
+    comments: rawNode.allComments.nodes
+      .map(parseThreadComment)
+      .filter((comment): comment is ReviewThreadComment => comment !== null),
   };
 }
 
@@ -4182,14 +4261,17 @@ function parseReviewThreadNode(
  * PRのレビュースレッドを、読み取りのGraphQLクエリで全件取得する。
  * 1ページ100件で、`pageInfo`の`hasNextPage`が偽になるまで辿る。
  * スレッドごとに次のものを返す。
- * - 解決済みかどうか
+ * - 解決済みかどうかと、解決した人(loginとid)
  * - 差分上の位置(`path` / `line`)。`pr_workflow_support.ts`の
- *   `openFindingsForPrompt`が使う。
+ *   `reviewThreadsForPrompt`が使う。
  * - 最初のコメントの作成者・本文・REST id(`databaseId`)
- * - 最後のコメントの作成者・本文(別名`lastComments`)。
+ * - 最後のコメントの作成者(loginとid)・本文・REST id(別名`lastComments`)。
  *   `pr_workflow_support.ts`の`selectThreadsToResolve`が、まだ解決していない
  *   Factory自身の`pr_review`のスレッドのうち、最後の発言もFactoryのものを
- *   探すのに使う(スレッドに人の返信が残っていれば自動で解決してはならない)。
+ *   探すのに使う(最後のコメントが人の返信なら自動で解決してはならない)。
+ *   `threadResponseKind`は、最後の書き手が許可された人かの判定に使う。
+ * - コメントの作成者(loginとid)・本文(`comments`)。
+ *   先頭の`REVIEW_THREAD_COMMENTS_LIMIT`件までで、`reviewThreadsForPrompt`が使う。
  * - コメントのREST id(別名`allComments`、先頭の50件のidだけ)。
  *   `matchReviewThreadForComment`が使う。`FixReply.review_comment_id`
  *   (REST id)を(path, line)で対応づけると、後のコミットで差分の行番号が
@@ -4220,6 +4302,7 @@ export async function listReviewThreads(
             nodes {
               id
               isResolved
+              resolvedBy { login ... on User { databaseId } }
               path
               line
               firstComments: comments(first: 1) {
@@ -4231,13 +4314,16 @@ export async function listReviewThreads(
               }
               lastComments: comments(last: 1) {
                 nodes {
-                  author { login }
+                  author { login ... on User { databaseId } }
                   body
+                  databaseId
                 }
               }
-              allComments: comments(first: 50) {
+              allComments: comments(first: ${String(REVIEW_THREAD_COMMENTS_LIMIT)}) {
                 nodes {
                   databaseId
+                  body
+                  author { login ... on User { databaseId } }
                 }
               }
             }

@@ -689,6 +689,22 @@ export type ReviewFinding = {
   suggested_code: string | null;
 };
 
+/** 再レビューが既存のスレッドに出す答えの種類。 */
+export type ThreadResponseDecision =
+  | "addressed"
+  | "skip_accepted"
+  | "skip_rejected";
+
+/**
+ * 再レビューのClaudeが、既存のスレッドに出す答え。
+ * `thread_id`はスレッドの最初のコメントのREST idである。
+ */
+export type ThreadResponse = {
+  thread_id: number;
+  decision: ThreadResponseDecision;
+  body: string;
+};
+
 /**
  * `pr_review.flow`の実行の総合判定。
  * GitHubのレビューは常にCOMMENTイベントとして投稿するため、
@@ -697,8 +713,31 @@ export type ReviewFinding = {
 export type ReviewVerdict = "approve" | "comment" | "request_changes";
 
 /**
+ * レビューが読む差分の範囲。生成のステップが、前回の投稿とheadから決める。
+ * `first`と`full`はPR全体、`delta`は前回のcommitからheadまで、
+ * `threads_only`は新しい差分なしで既存のスレッドに答える。
+ */
+export type ReviewScope =
+  | { readonly kind: "first" }
+  | {
+      readonly kind: "full";
+      readonly reason:
+        | "prior_unreadable"
+        | "conflict_round"
+        | "body_only_must"
+        | "merge_in_range"
+        | "requested_again"
+        | "too_many_files";
+    }
+  | {
+      readonly kind: "delta";
+      readonly fromSha: string;
+    }
+  | { readonly kind: "threads_only"; readonly fromSha: string };
+
+/**
  * 投稿したレビューの結果。Discordの通知とConsoleのレビュー行が、同じ基準で状態を出す。
- * `changes_requested`は、修正必須の指摘が未解決の状態である。
+ * `changes_requested`は、修正必須の指摘か、了承されていない見送りが未解決の状態である。
  * `reviewed`は、修正必須の指摘が無く、人の承認を待つ状態である。
  */
 export type ReviewResult = "changes_requested" | "reviewed";
@@ -1788,6 +1827,8 @@ export type FactoryConfig = {
   heavy_model: string;
   max_attempts: number;
   max_turns: number;
+  /** PR全体を読むレビュー(初回と`full`)の`maxTurns`。全部のファイルを読むので`max_turns`と分ける。 */
+  pr_review_full_max_turns: number;
   max_budget_usd_per_run: number;
   daily_budget_usd: number;
   claude_timeout_sec: number;

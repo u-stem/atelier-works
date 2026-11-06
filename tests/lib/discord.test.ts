@@ -933,7 +933,7 @@ describe("buildEmbed", () => {
       result: "changes_requested",
     });
     expect(embed.description).toBe(
-      "今回の指摘3件。状態: 修正必須の指摘が未解決(要修正)",
+      "今回の指摘3件。状態: 修正必須の指摘か未了承の見送りが未解決(要修正)",
     );
   });
 
@@ -950,7 +950,7 @@ describe("buildEmbed", () => {
       result: "changes_requested",
     });
     expect(embed.description).toBe(
-      "今回の指摘0件。状態: 修正必須の指摘が未解決(要修正)",
+      "今回の指摘0件。状態: 修正必須の指摘か未了承の見送りが未解決(要修正)",
     );
   });
 

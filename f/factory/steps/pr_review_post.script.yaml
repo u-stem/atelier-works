@@ -65,6 +65,14 @@ schema:
       type: boolean
       description: このステップの処理を省略するかどうか。
       default: null
+    thread_responses:
+      type: array
+      description: 再レビューが既存のスレッドに出した答えの一覧。
+      default: null
+      items:
+        type: resource
+        resourceType: thread_response
+      originalType: resource[]
     verdict:
       type: string
       description: レビューの総合判定。
@@ -88,6 +96,7 @@ schema:
     - review_sha
     - summary
     - findings
+    - thread_responses
     - pr_files
     - binary_files
     - binary_unlisted_count

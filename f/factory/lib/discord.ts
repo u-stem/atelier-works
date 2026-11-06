@@ -426,7 +426,7 @@ export function buildEmbed(event: NotifyEvent): DiscordEmbed {
  * `unverified`は、未解決の指摘を読めず、人のApprove待ちと言い切れないため、別の文にする。
  */
 const PR_REVIEWED_STATE_TEXT = {
-  changes_requested: "修正必須の指摘が未解決(要修正)",
+  changes_requested: "修正必須の指摘か未了承の見送りが未解決(要修正)",
   reviewed: "修正必須の指摘なし(人のApprove待ち)",
   unverified: "未解決の指摘を読み取れず未確認(人がPRで確かめる)",
 } as const;

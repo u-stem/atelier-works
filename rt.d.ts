@@ -9,6 +9,7 @@ declare namespace RT {
     owners: object[],
     fix_label: string,
     max_turns: number,
+    pr_review_full_max_turns: number,
     factory_repo: string,
     factory_branch: string,
     max_attempts: number,

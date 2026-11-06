@@ -229,9 +229,21 @@ describe("the owner id check before the writes of the finish steps", () => {
     ).toBeLessThan(positionOf(text, "await repoOwnerStopReason("));
   });
 
-  test("pr_fix_finish calls the gate once", async () => {
+  test("pr_fix_finish calls the gate directly for the commit only", async () => {
     const text = await source("pr_fix_finish.ts");
     expect(text.split("await repoOwnerStopReason(").length - 1).toBe(1);
+  });
+
+  test("pr_fix_finish hands the gate to the review label request", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(text).toContain("checkOwner: () =>\n        repoOwnerStopReason(");
+  });
+
+  test("pr_fix_finish defines the review label request after the commit gate", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(positionOf(text, "await repoOwnerStopReason(")).toBeLessThan(
+      positionOf(text, "async function addSkipRereviewLabel"),
+    );
   });
 
   test("dependabot_prepare hands the check to the prepare run", async () => {
@@ -301,7 +313,7 @@ describe("the owner id check before the writes of the finish steps", () => {
     const branch = sliceBetween(
       text,
       "if (published.ownerStopReason !== null) {",
-      "const openMustCount",
+      "const blockingThreadCount",
     );
     expect(branch).toContain("reason: published.ownerStopReason,");
   });
@@ -311,7 +323,7 @@ describe("the owner id check before the writes of the finish steps", () => {
     const branch = sliceBetween(
       text,
       "if (published.ownerStopReason !== null) {",
-      "const openMustCount",
+      "const blockingThreadCount",
     );
     expect(positionOf(branch, "await blockReview(")).toBeLessThan(
       positionOf(

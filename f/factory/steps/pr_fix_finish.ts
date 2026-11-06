@@ -73,6 +73,7 @@ import {
 } from "../lib/design_template.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
+  addLabels,
   commentIssue,
   type GhClient,
   getPr,
@@ -82,6 +83,7 @@ import {
   listReviewThreads,
   postIssueComment,
   type RequestReviewersResult,
+  type ReviewThread,
   replyReviewComment,
   requestReviewers,
   withMarker,
@@ -124,14 +126,16 @@ import {
   type CollectedReview,
   composeCommitMessage,
   decideFixFinishAction,
+  decideNothingToCommitEnd,
   deriveFallbackReviewers,
   describeReason,
   evaluateRerouteGuard,
   filterKnownReplies,
   fixOutputProseIssues,
+  hasSkipOnFactoryThread,
   inspectStagedChanges,
-  listReviewThreadsBestEffort,
   matchReviewThreadForComment,
+  needsSkipRereviewLabel,
   nextActionFor,
   nextActionForPrFix,
   PR_FIX_DESIGN_GAP_DISABLED_REASON,
@@ -143,11 +147,16 @@ import {
   prFixPushGateReason,
   type ReplyPostFailure,
   renderFixReply,
+  replyTargetCommentId,
   reroutePrFixToDesign,
   rerouteRequirementsGap,
+  SKIP_ONLY_ROUND_NOTE,
+  SKIP_REPLY_POST_FAILED_REASON,
+  SKIP_REREVIEW_LABEL_FAILED_REASON,
   scanPrFixBeforeCommit,
   selectProposeIssueReplies,
   shouldAdvanceWatermarks,
+  skipOnlyRoundOutcome,
   stopBeforeCommitTerminal,
   withGapReport,
 } from "./pr_workflow_support.ts";
@@ -225,6 +234,28 @@ export function reportReviewerRequest(
  */
 export function reviewerRequestFailedSupplement(apiError: string): string {
   return `GitHubでレビュアーを手動で依頼してください。\n再レビュー依頼のAPI呼び出しに失敗しました: ${apiError}`;
+}
+
+/**
+ * 見送りの理由を再レビューに読ませるためのラベルを付ける。
+ * 書き込みの前にオーナーを照合する。付けたら`null`を返し、付けられなければ止める理由を返す。
+ * オーナーの照合が止めたときはその理由を返す。ラベルを付けるよう人に案内しないためである。
+ * APIの失敗は例外にせず、ラベルを付けられなかった理由にする。
+ */
+export async function requestSkipRereview(deps: {
+  readonly checkOwner: () => Promise<string | null>;
+  readonly addLabel: () => Promise<void>;
+  readonly warn: (message: string) => void;
+}): Promise<string | null> {
+  try {
+    const stop = await deps.checkOwner();
+    if (stop !== null) return stop;
+    await deps.addLabel();
+    return null;
+  } catch (err) {
+    deps.warn(maskSecrets(err instanceof Error ? err.message : String(err)));
+    return SKIP_REREVIEW_LABEL_FAILED_REASON;
+  }
 }
 
 /**
@@ -956,6 +987,21 @@ export async function main(
     new Set(commentById.keys()),
   );
 
+  let roundThreads: Promise<readonly ReviewThread[] | null> | null = null;
+
+  /** このラウンドのレビュースレッドを1回だけ読む。読めないときは`null`にして続ける。 */
+  function loadRoundThreads(): Promise<readonly ReviewThread[] | null> {
+    roundThreads ??= listReviewThreads(client, owner, repo, pr_number).catch(
+      (err: unknown) => {
+        log.warn("failed to list review threads for the replies", {
+          error: maskSecrets(err instanceof Error ? err.message : String(err)),
+        });
+        return null;
+      },
+    );
+    return roundThreads;
+  }
+
   /**
    * 溜めた返信をすべてGitHubに投稿する。
    * 元のコメントがインラインならそのレビューコメントへの返信として、
@@ -971,33 +1017,28 @@ export async function main(
    * Consoleの要対応で人に失敗を知らせるため。
    * 行を登録した後に返信の投稿が失敗しても、致命的ではない。
    * GitHubに返信が出るかどうかに関わらず、提案はConsoleの要対応に見えている。
-   * `thread_id`は、このラウンドの全提案で共有する1回の`listReviewThreads`から
-   * ベストエフォートで求める。取得に失敗したら(rate limitを含む)`thread_id`を付けずに続ける。
+   * `thread_id`と返信先は、このラウンドで共有する1回の`listReviewThreads`から
+   * ベストエフォートで求める。取得に失敗したら(rate limitを含む)`thread_id`を付けず、
+   * 返信先は元のコメントのままにして続ける。
    * 通常のIssueコメントにはレビュースレッドが無いので、
-   * インラインの提案が1つ以上あるときだけ取得する。
+   * インラインの返信が1つ以上あるときだけ取得する。
    * 返信の投稿に失敗しても(rate limitを含む)ステップは止めず、残りの返信を続ける。
    * 失敗が1件以上あれば、最後に`fix_reply_post_failed`のnoticeを1件だけ記録し、
    * Consoleの要対応でPRに人が返信するよう知らせる。Discordには通知しない。
    * noticeの記録に失敗しても、警告を残して続ける。
+   * `leaveFailureNotice`が偽なら、失敗のnoticeを残さない。
+   * 見送りだけの回は再実行で復旧するので、人に返信を頼むと二重の返信を増やすためである。
+   * すべての返信を投稿できたかを返す。
    */
-  async function postFixReplies(newSha: string | null): Promise<void> {
-    const proposeReplies = repliesToPost.filter(
-      (reply) => reply.decision === "propose_issue",
-    );
-    const hasInlineProposal = proposeReplies.some((reply) => {
+  async function postFixReplies(
+    newSha: string | null,
+    leaveFailureNotice = true,
+  ): Promise<boolean> {
+    const hasInlineReply = repliesToPost.some((reply) => {
       const original = commentById.get(reply.review_comment_id);
       return original !== undefined && original.path.length > 0;
     });
-    const threads = hasInlineProposal
-      ? await listReviewThreadsBestEffort(
-          () => listReviewThreads(client, owner, repo, pr_number),
-          (message) => {
-            log.warn("failed to list review threads for issue proposals", {
-              error: message,
-            });
-          },
-        )
-      : [];
+    const threads = (hasInlineReply ? await loadRoundThreads() : null) ?? [];
     const replyFailures: ReplyPostFailure[] = [];
 
     for (const reply of repliesToPost) {
@@ -1065,7 +1106,7 @@ export async function main(
             owner,
             repo,
             pr_number,
-            reply.review_comment_id,
+            replyTargetCommentId(threads, reply.review_comment_id),
             body,
           );
         } else {
@@ -1090,7 +1131,8 @@ export async function main(
       { owner, repo, prNumber: pr_number, workItemId: work_item_id },
       replyFailures,
     );
-    if (notice === null) return;
+    if (notice === null) return true;
+    if (!leaveFailureNotice) return false;
     try {
       await addNoticeUnlessUnresolved(notice);
     } catch (noticeErr) {
@@ -1100,6 +1142,7 @@ export async function main(
         ),
       });
     }
+    return false;
   }
 
   /**
@@ -1566,23 +1609,121 @@ export async function main(
     throw err;
   }
 
+  /**
+   * 見送りの理由を再レビューに読ませるために、`review_label`を付ける。
+   * pushの無いラウンドでは、headが変わらないので、ラベルでしか再レビューが起きない。
+   */
+  async function addSkipRereviewLabel(): Promise<string | null> {
+    return requestSkipRereview({
+      checkOwner: () =>
+        repoOwnerStopReason(
+          config,
+          owner,
+          repo,
+          repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+        ),
+      addLabel: () =>
+        addLabels(client, owner, repo, pr_number, [config.review_label]),
+      warn: (message) => {
+        log.warn("failed to add the review label for skipped findings", {
+          error: message,
+        });
+      },
+    });
+  }
+
+  /** このラウンドの見送りに、Factoryの指摘のスレッドに付くものがあるかを返す。 */
+  async function skipOnFactoryFinding(): Promise<boolean> {
+    if (ciRound) return false;
+    if (!repliesToPost.some((reply) => reply.decision === "skipped")) {
+      return false;
+    }
+    return hasSkipOnFactoryThread(
+      repliesToPost,
+      await loadRoundThreads(),
+      viewer.login,
+    );
+  }
+
   if (pushResult.outcome === "head_changed") {
     return finishHeadChanged(pushResult.currentSha);
   }
 
   if (pushResult.outcome === "nothing_to_commit") {
-    await insertFixRound({
-      work_item_id,
-      round: fix_round,
-      trigger_review_ids,
-      outcome: "blocked",
-      replies,
-      commit_shas: [],
-    });
+    const nothingToCommitEnd = decideNothingToCommitEnd(
+      repliesToPost,
+      ciRound,
+      await skipOnFactoryFinding(),
+    );
+    // 見送りだけの回は、返信の結果で結果が決まるので、投稿の後に記録する。
+    if (nothingToCommitEnd !== "skip_only") {
+      await insertFixRound({
+        work_item_id,
+        round: fix_round,
+        trigger_review_ids,
+        outcome: "blocked",
+        replies,
+        commit_shas: [],
+      });
+    }
     // pushするcommitが無くても溜めた返信は投稿する。
     // Claudeがすべてを"skipped"(または差分の無い"fixed")にしたこともあり、
     // その返信も黙って捨てずにGitHubへ届ける。
-    if (!ciRound) await postFixReplies(null);
+    const allRepliesPosted =
+      ciRound ||
+      (await postFixReplies(null, nothingToCommitEnd !== "skip_only"));
+    if (nothingToCommitEnd === "skip_only") {
+      // 記録に失敗したら、ほかの記録と同じく例外でステップを失敗させる。
+      // watermarkを進める前なので、再実行で集め直せる。投稿済みの返信は二重になりうる。
+      await insertFixRound({
+        work_item_id,
+        round: fix_round,
+        trigger_review_ids,
+        outcome: skipOnlyRoundOutcome(allRepliesPosted),
+        replies,
+        commit_shas: [],
+      });
+      // 投稿できなかった見送りは、再レビューに読ませられないので、既読にせず人に回す。
+      // 再実行では集め直すので、投稿できた分の返信は二重になりうる。
+      if (!allRepliesPosted) {
+        await finalizeTerminal(
+          "needs_human",
+          SKIP_REPLY_POST_FAILED_REASON,
+          SKIP_REPLY_POST_FAILED_REASON,
+        );
+        return {
+          ok: true,
+          final_status: "needs_human",
+          notice: SKIP_REPLY_POST_FAILED_REASON,
+        };
+      }
+      // すべて投稿できたので、ここで既読にする。
+      // ラベルの失敗で再実行したときに、同じ見送りを二重に返信しないためである。
+      if (shouldAdvanceWatermarks("skip_only_replied")) {
+        await bumpWatermarks(work_item_id, {
+          last_review_id: max_review_id,
+          last_comment_id: max_comment_id,
+          last_review_comment_id: max_review_comment_id,
+        });
+      }
+      const labelStop = await addSkipRereviewLabel();
+      if (labelStop !== null) {
+        await finalizeTerminal("needs_human", labelStop, labelStop);
+        return { ok: true, final_status: "needs_human", notice: labelStop };
+      }
+      // 人の操作が要らず、結果は再レビューの通知で届くので、ここでは通知しない。
+      await updateStatusIfCurrent(
+        work_item_id,
+        "fixing",
+        "rereview_requested",
+        SKIP_ONLY_ROUND_NOTE,
+      );
+      return {
+        ok: true,
+        final_status: "rereview_requested",
+        notice: SKIP_ONLY_ROUND_NOTE,
+      };
+    }
     // commitするものが無いラウンドでも、Claudeが指摘を対象外と判断することがあるため、
     // push成功の経路だけでなくここでも`propose_issue`の返信を記録する。
     // `factory.issue_proposals`の行は、上の`postFixReplies`が返信の投稿前に登録済み。
@@ -1618,7 +1759,9 @@ export async function main(
   // push経路でwatermarkを進めるのはここだけ(`shouldAdvanceWatermarks`の説明を参照)。
   // CI回は、返信も、作業項目のheadと処理済みの位置の更新もしない(`runPostPushBookkeeping`)。
   await runPostPushBookkeeping(ciRound, {
-    postReplies: () => postFixReplies(newSha),
+    postReplies: async () => {
+      await postFixReplies(newSha);
+    },
     setHeadSha: () => setHeadSha(work_item_id, newSha),
     bumpWatermarks: async () => {
       if (!shouldAdvanceWatermarks("push_success")) return;
@@ -1660,6 +1803,18 @@ export async function main(
       await notifyBestEffort(webhookUrl, event, log);
     }
     return { ok: true, final_status: "needs_human", notice: proposalReason };
+  }
+
+  // 見送りが混ざるラウンドは、理由を再レビューに読ませる。
+  // `poll_prs`は終端でない`pr_review`があれば二重に起動しない。
+  if (
+    needsSkipRereviewLabel(repliesToPost, ciRound, await skipOnFactoryFinding())
+  ) {
+    const labelStop = await addSkipRereviewLabel();
+    if (labelStop !== null) {
+      await finalizeTerminal("needs_human", labelStop, labelStop);
+      return { ok: true, final_status: "needs_human", notice: labelStop };
+    }
   }
 
   const fallbackReviewers = deriveFallbackReviewers(

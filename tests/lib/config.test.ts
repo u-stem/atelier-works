@@ -289,6 +289,39 @@ describe("parseFactoryConfig", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("defaults pr_review_full_max_turns to 80", () => {
+    expect(parseFactoryConfig(LEGACY_RAW_CONFIG).pr_review_full_max_turns).toBe(
+      80,
+    );
+  });
+
+  test("passes through an explicit pr_review_full_max_turns", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_review_full_max_turns: 120 };
+    expect(parseFactoryConfig(raw).pr_review_full_max_turns).toBe(120);
+  });
+
+  test("throws when pr_review_full_max_turns is present but not a number", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_review_full_max_turns: "many" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("declares pr_review_full_max_turns in the resource type", () => {
+    expect(
+      readFileSync(
+        join(import.meta.dir, "../../c_factory_config.resource-type.yaml"),
+        "utf8",
+      ),
+    ).toMatch(
+      /^ {4}pr_review_full_max_turns:\n {6}type: integer\n(?: {6}.*\n)*? {6}default: 80$/m,
+    );
+  });
+
+  test("declares pr_review_full_max_turns in the generated resource types", () => {
+    expect(
+      readFileSync(join(import.meta.dir, "../../rt.d.ts"), "utf8"),
+    ).toContain("pr_review_full_max_turns: number,");
+  });
+
   test("throws when review_post_mode is present but not a valid mode", () => {
     const raw = { ...LEGACY_RAW_CONFIG, review_post_mode: "auto" };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);

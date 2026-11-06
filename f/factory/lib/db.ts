@@ -2993,6 +2993,46 @@ export async function hasPrReviewForHead(
   return rows.length > 0;
 }
 
+export type PostedPrReview = {
+  readonly head_sha: string;
+  readonly findings: readonly ReviewFinding[];
+};
+
+/**
+ * このPRで最後に投稿したレビューのheadと指摘を返す。無ければ`null`を返す。
+ * 再レビューが、前回からの差分を読む起点と、総評だけに載った`[MUST]`の確認に使う。
+ * PRの本文の目印でなくDBから読むのは、PRに書ける人が起点を動かせないようにするためである。
+ * 投稿しなかったレビューは、PRに指摘が見えていないので起点にしない。
+ * 行の形が不正なら例外を投げる。呼び出し側はPR全体のレビューに倒す。
+ */
+export async function latestPostedPrReview(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PostedPrReview | null> {
+  assertPrCiTarget(owner, repo, prNumber);
+  const rows = await sql`
+    SELECT r.head_sha, r.findings
+    FROM factory.reviews AS r
+    JOIN factory.work_items AS w ON w.id = r.work_item_id
+    WHERE w.kind = 'pr_review'
+      AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
+      AND w.pr_number = ${prNumber}::integer
+      AND r.posted_review_id IS NOT NULL
+    ORDER BY r.created_at DESC, r.id DESC
+    LIMIT 1
+  `.fetch();
+  const row: unknown = rows[0];
+  if (!isRecord(row)) return null;
+  return {
+    head_sha: parseRequiredString(row.head_sha, "head_sha"),
+    findings: parseJsonArray(row.findings, "findings").map((finding) =>
+      parseReviewFinding(finding, "findings"),
+    ),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // fix_rounds
 // ---------------------------------------------------------------------------
