@@ -6325,11 +6325,19 @@ export function settleReviewFindings(
   };
 }
 
+/**
+ * Claudeの出力から、投稿の手前まで渡すスレッドへの答えを決める。
+ * スレッドだけのレビューは、見送りへの答えだけを残し、`addressed`を捨てる。
+ * 新しいcommitが無く、前回のレビューが同じheadを見て答えられたので、
+ * 出力の揺れで誰も直していない`[MUST]`を解決し、本文をLGTMにしないためである。
+ */
 export function settleThreadResponses(
   responses: readonly ThreadResponse[],
-  _scope: ReviewScope,
+  scope: ReviewScope,
 ): ThreadResponse[] {
-  return [...responses];
+  return scope.kind === "threads_only"
+    ? responses.filter((response) => response.decision !== "addressed")
+    : [...responses];
 }
 
 /** スコープに合う`maxTurns`を返す。PR全体を読むレビューは、全部のファイルを読むので別の上限を使う。 */

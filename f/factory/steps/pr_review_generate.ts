@@ -66,6 +66,7 @@ import {
   reviewThreadsForPrompt,
   selectListedBinaryFiles,
   settleReviewFindings,
+  settleThreadResponses,
   withTrustedResolution,
 } from "./pr_workflow_support.ts";
 
@@ -386,7 +387,7 @@ export async function main(
       verdict: output.verdict,
       summary,
       findings,
-      thread_responses: output.thread_responses,
+      thread_responses: settleThreadResponses(output.thread_responses, scope),
       pr_files: prFiles,
       binary_files: binaryFiles,
       binary_unlisted_count: binaryUnlistedCount,
