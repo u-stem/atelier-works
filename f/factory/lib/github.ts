@@ -3588,7 +3588,9 @@ function isPrReviewCommentPayload(
 /**
  * `GET .../comments`(インラインのレビューコメント)をページ送りしながら取得し、
  * `listPrReviews`と同じく、Factory自身の`pr_fix`の返信
- * (`isFactoryPost(login, viewer, raw.body, "pr_fix")`)だけを除いて返す。
+ * (`isFactoryPost(login, viewer, raw.body, "pr_fix")`)と、
+ * 再レビューの了承と解消の返信(`PR_REVIEW_ACK_MARKER_KIND`の目印を持つもの)を除いて返す。
+ * 再レビューの反論の返信は、`pr_fix`が対応すべきフィードバックとして残す。
  * `pr_review`でFactoryが書いた目印の無いインラインの指摘は残す。
  * pr_fixはそれを対応すべきフィードバックとして見る必要があるためである。
  */
@@ -3614,6 +3616,9 @@ export async function listPrReviewComments(
     if (raw.id > maxId) maxId = raw.id;
     const login = raw.user?.login;
     if (isFactoryPost(login, viewer, raw.body, "pr_fix")) continue;
+    if (isFactoryPost(login, viewer, raw.body, PR_REVIEW_ACK_MARKER_KIND)) {
+      continue;
+    }
     items.push({
       id: raw.id,
       authorLogin: typeof login === "string" ? login : "",

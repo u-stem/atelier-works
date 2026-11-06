@@ -22,9 +22,11 @@ import {
   listReviewThreads,
   type ReviewComment,
   type ReviewThread,
+  replyReviewComment,
   resolveReviewThread,
 } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import { isAllowedLabeler, labelerPolicyFor } from "../lib/poll_support.ts";
 import { markTransientGitHubFailure } from "../lib/pr_review_retry.ts";
 import {
   repoOwnerGateDeps,
@@ -47,8 +49,10 @@ import {
   findPostedReviewId,
   mapFindingsToReviewComments,
   renderReviewSummary,
+  renderThreadReply,
   renderUnresolvedLineSummary,
   reviewResultFor,
+  selectThreadResponses,
   selectThreadsToResolve,
   type ThreadAuthorPredicate,
   withReviewMarkers,
@@ -80,10 +84,14 @@ export function normalizeBinaryInput(
   };
 }
 
+/**
+ * 古いflow定義が新しいscriptを呼ぶと、`thread_responses`がundefinedかnullで届く。
+ * そのときは、答えが無いものとして扱う。
+ */
 export function normalizeThreadResponses(
-  _value: readonly ThreadResponse[] | null | undefined,
+  value: readonly ThreadResponse[] | null | undefined,
 ): ThreadResponse[] {
-  return [];
+  return [...(value ?? [])];
 }
 
 /** `main`の引数をまとめたもの。名前は`main`の引数と同じにする。 */
@@ -97,6 +105,7 @@ export type PrReviewPostInput = {
   readonly summary: string;
   readonly verdict: string | null;
   readonly findings: ReviewFinding[];
+  readonly thread_responses: ThreadResponse[] | null | undefined;
   readonly pr_files: string[];
   readonly binary_files: string[] | null | undefined;
   readonly binary_unlisted_count: number | null | undefined;
@@ -141,6 +150,7 @@ export async function main(
   summary: string,
   verdict: string | null,
   findings: ReviewFinding[],
+  thread_responses: ThreadResponse[],
   pr_files: string[],
   binary_files: string[],
   binary_unlisted_count: number,
@@ -158,6 +168,7 @@ export async function main(
       summary,
       verdict,
       findings,
+      thread_responses,
       pr_files,
       binary_files,
       binary_unlisted_count,
@@ -374,7 +385,9 @@ export type PublishReviewInput = {
    * 通らないときは、止める理由を返す。通るときは`null`。
    */
   readonly ensureRepoOwner: () => Promise<string | null>;
+  /** 再レビューの答え。投稿の直前に`selectThreadResponses`で確かめる。 */
   readonly threadResponses: readonly ThreadResponse[];
+  /** 許可された人の返信を見分ける。`isAllowedLabeler`を渡す。 */
   readonly isAllowedReplier: ThreadAuthorPredicate;
 };
 
@@ -459,10 +472,30 @@ export async function publishReview(
     priorReview,
     0,
   );
+  // 再利用するときは答えない。投稿済みのレビューの答えが済んでいるかもしれず、残りは次のレビューが答える。
+  // 答えの対象は、Claudeの出力でなく、読み直した`threads`から決める。
+  const { applied, droppedCount } = selectThreadResponses(
+    threads,
+    viewerLogin,
+    input.isAllowedReplier,
+    reused ? [] : input.threadResponses,
+  );
+  if (droppedCount > 0) {
+    log.warn("dropped thread responses that do not fit a thread", {
+      owner,
+      repo,
+      number: pr_number,
+      dropped: droppedCount,
+    });
+  }
+  const answeredIds = applied
+    .filter(({ response }) => response.decision !== "skip_rejected")
+    .map(({ thread }) => thread.id);
   // 再利用するときは何も解決せず、残っている`[MUST]`をすべて数えて通知に載せる。
-  const threadIdsToResolve = reused
+  const selectedIds = reused
     ? []
     : selectThreadsToResolve(threads, viewerLogin, resolveMode);
+  const threadIdsToResolve = [...new Set([...selectedIds, ...answeredIds])];
   const openMustCount = threadsReadable
     ? countOpenMustThreads(threads, viewerLogin, threadIdsToResolve)
     : null;
@@ -528,10 +561,36 @@ export async function publishReview(
     { fallbackBody, log },
   );
 
-  // 再レビューのたびに、pr_fixが対応済みのFactory自身のスレッドを解決する。
+  // 答えの返信を、レビューの投稿の後に出す。
+  // 返信できなかったスレッドは解決せず、次のレビューが答え直す。
+  const unanswered = new Set<string>();
+  for (const { thread, commentId, response } of applied) {
+    try {
+      await replyReviewComment(
+        client,
+        owner,
+        repo,
+        pr_number,
+        commentId,
+        renderThreadReply(response, target.work_item_id),
+      );
+    } catch (err) {
+      unanswered.add(thread.id);
+      log.warn("failed to answer a review thread", {
+        owner,
+        repo,
+        number: pr_number,
+        threadId: thread.id,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+
+  // 再レビューのたびに、pr_fixが対応済みのFactory自身のスレッドと、答えを返したスレッドを解決する。
   // 投稿済みのレビューの扱いを妨げないよう、解決に失敗してもステップは失敗させない。
   // `threadIdsToResolve`は、本文の種類を決めたのと同じ解決前の`threads`から求めてある。
   for (const threadId of threadIdsToResolve) {
+    if (unanswered.has(threadId)) continue;
     try {
       await resolveReviewThread(client, threadId);
     } catch (err) {
@@ -699,6 +758,7 @@ async function postReview(
   );
 
   const post = shouldPostReview(config.review_post_mode);
+  const labelerPolicy = labelerPolicyFor(viewerLogin, config);
   const published = await publishReview(
     client,
     {
@@ -725,8 +785,9 @@ async function postReview(
           repo,
           repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
         ),
-      threadResponses: [],
-      isAllowedReplier: () => false,
+      threadResponses: normalizeThreadResponses(input.thread_responses),
+      isAllowedReplier: (login, id) =>
+        isAllowedLabeler(login, labelerPolicy, id),
     },
     log,
   );

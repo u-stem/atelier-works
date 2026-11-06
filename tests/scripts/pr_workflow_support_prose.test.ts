@@ -21,6 +21,7 @@ describe("reviewOutputProseIssues", () => {
           suggested_code: null,
         },
       ],
+      thread_responses: [],
     });
 
     expect(issues).toEqual([
@@ -33,6 +34,7 @@ describe("reviewOutputProseIssues", () => {
       verdict: "comment",
       summary: "要約である。",
       findings: [],
+      thread_responses: [],
     });
 
     expect(issues).toEqual([]);

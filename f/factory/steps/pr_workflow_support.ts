@@ -41,7 +41,10 @@ import {
   getBranchProtected,
   getBranchRuleCount,
   getDefaultBranch,
+  hasMarker,
   isOwnPost,
+  PR_REVIEW_ACK_MARKER_KIND,
+  PR_REVIEW_OBJECTION_MARKER_KIND,
   type PrReview,
   REVIEW_THREAD_COMMENTS_LIMIT,
   type ReviewThread,
@@ -98,6 +101,7 @@ import {
   type ReviewSeverity,
   type ReviewVerdict,
   type ThreadResponse,
+  type ThreadResponseDecision,
   type WorkItem,
   type WorkItemKind,
   type WorkItemStatus,
@@ -349,7 +353,21 @@ export type ReviewClaudeOutput = {
   readonly verdict: ReviewVerdict;
   readonly summary: string;
   readonly findings: ReviewFinding[];
+  readonly thread_responses: ThreadResponse[];
 };
+
+const THREAD_RESPONSE_DECISIONS: readonly ThreadResponseDecision[] = [
+  "addressed",
+  "skip_accepted",
+  "skip_rejected",
+];
+
+function isThreadResponseShape(value: unknown): value is ThreadResponse {
+  if (!isRecord(value)) return false;
+  if (!isNumber(value.thread_id)) return false;
+  if (!isOneOf(value.decision, THREAD_RESPONSE_DECISIONS)) return false;
+  return isString(value.body);
+}
 
 function isReviewFindingShape(value: unknown): value is ReviewFinding {
   if (!isRecord(value)) return false;
@@ -378,7 +396,9 @@ export function isReviewClaudeOutput(
   if (!isOneOf(value.verdict, REVIEW_VERDICTS)) return false;
   if (!isString(value.summary)) return false;
   if (!Array.isArray(value.findings)) return false;
-  return value.findings.every(isReviewFindingShape);
+  if (!value.findings.every(isReviewFindingShape)) return false;
+  if (!Array.isArray(value.thread_responses)) return false;
+  return value.thread_responses.every(isThreadResponseShape);
 }
 
 // ---------------------------------------------------------------------------
@@ -883,6 +903,10 @@ export function isFixedFixReply(body: string): boolean {
  *     古い指摘はpr_fix自身の確認でしか閉じないので、手つかずの指摘は開いたままにする。
  *   - `"first_clean"`(最初のレビューで指摘ゼロ): 何も解決しない。
  *     運用者が対応しうる前のFactoryのレビューが存在しないため。
+ *
+ * どのモードでも、最後のコメントがviewerの了承か解消の返信
+ * (`PR_REVIEW_ACK_MARKER_KIND`の目印を持つもの)のスレッドは解決する。
+ * 目印は誰でも貼れるので、最後のコメントの書き手がviewerであることを先に求めている。
  */
 export function selectThreadsToResolve(
   threads: readonly ReviewThread[],
@@ -900,11 +924,13 @@ export function selectThreadsToResolve(
     .filter(
       (thread) => thread.lastCommentAuthorLogin.toLowerCase() === viewerLower,
     )
-    .filter((thread) =>
-      mode === "rereview_clean" || mode === "rereview_open"
-        ? thread.lastCommentBody.startsWith(ROLE_TAGS.pr_review) ||
-          isFixedFixReply(thread.lastCommentBody)
-        : isFixedFixReply(thread.lastCommentBody),
+    .filter(
+      (thread) =>
+        hasMarker(thread.lastCommentBody, PR_REVIEW_ACK_MARKER_KIND) ||
+        (mode === "rereview_clean" || mode === "rereview_open"
+          ? thread.lastCommentBody.startsWith(ROLE_TAGS.pr_review) ||
+            isFixedFixReply(thread.lastCommentBody)
+          : isFixedFixReply(thread.lastCommentBody)),
     )
     .map((thread) => thread.id);
 }
@@ -1010,20 +1036,76 @@ export type AppliedThreadResponse = {
   readonly response: ThreadResponse;
 };
 
+/**
+ * Claudeの答えを、投稿の直前に読み直したスレッドで確かめる。
+ * Claudeの出力だけで解決の対象を広げないよう、対象でない`thread_id`、
+ * スレッドの種類に合わない`decision`、空の`body`は捨てる。
+ * 同じスレッドへの答えは最初の1件だけを使う。
+ */
 export function selectThreadResponses(
-  _threads: readonly ReviewThread[],
-  _viewer: string,
-  _isAllowed: ThreadAuthorPredicate,
-  _responses: readonly ThreadResponse[],
+  threads: readonly ReviewThread[],
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+  responses: readonly ThreadResponse[],
 ): { applied: AppliedThreadResponse[]; droppedCount: number } {
-  return { applied: [], droppedCount: 0 };
+  const applied: AppliedThreadResponse[] = [];
+  const answered = new Set<number>();
+  let droppedCount = 0;
+  for (const response of responses) {
+    const thread = threads.find(
+      (candidate) => candidate.firstCommentDatabaseId === response.thread_id,
+    );
+    const kind =
+      thread === undefined
+        ? null
+        : threadResponseKind(thread, viewer, isAllowed);
+    const fits =
+      (kind === "skip" && response.decision !== "addressed") ||
+      (kind === "addressable" && response.decision === "addressed");
+    if (
+      thread === undefined ||
+      !fits ||
+      response.body.trim() === "" ||
+      answered.has(response.thread_id)
+    ) {
+      droppedCount += 1;
+      continue;
+    }
+    answered.add(response.thread_id);
+    applied.push({ thread, commentId: response.thread_id, response });
+  }
+  return { applied, droppedCount };
 }
 
+const THREAD_REPLY_ENDINGS: Readonly<Record<ThreadResponseDecision, string>> = {
+  addressed: "解消: 確認",
+  skip_accepted: "見送り: 了承",
+  skip_rejected: "見送り: 反論",
+};
+
+/**
+ * 再レビューの答えの返信を描画する。
+ * 反論だけを別の目印にする。`pr_fix`が反論をフィードバックとして集めるためである。
+ * `body`はClaudeの出力なので、目印を偽れないよう`<!--`を無害にする。
+ */
 export function renderThreadReply(
-  _response: ThreadResponse,
-  _workItemId: number,
+  response: ThreadResponse,
+  workItemId: number,
 ): string {
-  return "";
+  const kind =
+    response.decision === "skip_rejected"
+      ? PR_REVIEW_OBJECTION_MARKER_KIND
+      : PR_REVIEW_ACK_MARKER_KIND;
+  return withMarker(
+    kind,
+    workItemId,
+    [
+      ROLE_TAGS.pr_review,
+      neutralizeHtmlComment(normalizeJapaneseText(response.body)),
+      "",
+      THREAD_REPLY_ENDINGS[response.decision],
+    ].join("\n"),
+  );
 }
 
 function threadCommentAuthor(

@@ -1204,6 +1204,7 @@ describe("runPrReviewPost worktree cleanup", () => {
       summary: "",
       verdict: null,
       findings: [],
+      thread_responses: [],
       pr_files: [],
       binary_files: [],
       binary_unlisted_count: 0,
@@ -1291,6 +1292,7 @@ describe("runPrReviewPost failure marking", () => {
     summary: "",
     verdict: "comment",
     findings: [],
+    thread_responses: [],
     pr_files: [],
     binary_files: [],
     binary_unlisted_count: 0,
@@ -1793,10 +1795,10 @@ describe("posting a review once per sha", () => {
     });
 
     /** 見送りの返信が付いた、Factory自身の指摘のスレッドだけを返すGraphQLの応答。 */
-    function skipThreads(): CommandResult {
+    function skipThreads(kind = "IMO"): CommandResult {
       const finding = {
         author: { login: VIEWER },
-        body: "[pr_review 自動レビュー]\n[IMO] consider",
+        body: `[pr_review 自動レビュー]\n[${kind}] consider`,
         databaseId: 501,
       };
       const reply = {
@@ -1922,6 +1924,19 @@ describe("posting a review once per sha", () => {
         SILENT,
       );
       expect(fake.calls.some(isReplyCall)).toBe(false);
+    });
+
+    test("counts a thread that a reused review would have answered as still open", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([postedReview(55)]),
+        skipThreads("MUST"),
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(result.openMustCount).toBe(1);
     });
 
     test("does not answer when the owner check stops the post", async () => {

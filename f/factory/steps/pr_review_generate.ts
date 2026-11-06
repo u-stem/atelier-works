@@ -35,7 +35,11 @@ import { logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
 import { isAllowedLabeler, labelerPolicyFor } from "../lib/poll_support.ts";
 import { REVIEW_SCHEMA, reviewPrompt } from "../lib/prompts.ts";
-import type { ReviewFinding, ReviewVerdict } from "../lib/types.ts";
+import type {
+  ReviewFinding,
+  ReviewVerdict,
+  ThreadResponse,
+} from "../lib/types.ts";
 import {
   type ReviewDelta,
   readReviewDelta,
@@ -66,6 +70,8 @@ export type PrReviewGenerateResult = {
   readonly verdict: ReviewVerdict | null;
   readonly summary: string;
   readonly findings: ReviewFinding[];
+  /** 既存のスレッドへの答え。投稿の直前に、読み直したスレッドで確かめてから使う。 */
+  readonly thread_responses: ThreadResponse[];
   readonly pr_files: string[];
   /** 差分に内容が出ないバイナリのファイル。投稿の本文に、決定的な固定の文で載せる。 */
   readonly binary_files: readonly string[];
@@ -79,6 +85,7 @@ const SKIPPED_RESULT: PrReviewGenerateResult = {
   verdict: null,
   summary: "",
   findings: [],
+  thread_responses: [],
   pr_files: [],
   binary_files: [],
   binary_unlisted_count: 0,
@@ -347,6 +354,7 @@ export async function main(
       verdict: output.verdict,
       summary,
       findings,
+      thread_responses: output.thread_responses,
       pr_files: prFiles,
       binary_files: binaryFiles,
       binary_unlisted_count: binaryUnlistedCount,
