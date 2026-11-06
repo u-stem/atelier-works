@@ -1,12 +1,15 @@
 // `pr_workflow_support.ts`の、再レビューに渡すスレッドと、答える対象の判定のテスト。
 
 import { describe, expect, test } from "bun:test";
-import type { ReviewThread } from "../../f/factory/lib/github.ts";
+import { hasMarker, type ReviewThread } from "../../f/factory/lib/github.ts";
+import type { ThreadResponse } from "../../f/factory/lib/types.ts";
 import {
   decideReviewScope,
   needsReviewDelta,
+  renderThreadReply,
   reviewMaxTurns,
   reviewThreadsForPrompt,
+  selectThreadResponses,
   threadResponseKind,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
@@ -373,5 +376,130 @@ describe("reviewMaxTurns", () => {
     expect(
       reviewMaxTurns({ kind: "delta", fromSha: PRIOR, hasMerge: false }, 40),
     ).toBe(40);
+  });
+});
+
+const SKIP_THREAD = thread({ id: "skip", ...replied(VIEWER, SKIP_REPLY) });
+const OPEN = thread({ id: "open" });
+const ACCEPTED: ThreadResponse = {
+  thread_id: 1,
+  decision: "skip_accepted",
+  body: "理由です。",
+};
+const REJECTED: ThreadResponse = { ...ACCEPTED, decision: "skip_rejected" };
+const ADDRESSED: ThreadResponse = { ...ACCEPTED, decision: "addressed" };
+
+describe("selectThreadResponses", () => {
+  test("applies skip_accepted to a skip thread", () => {
+    const { applied } = selectThreadResponses(
+      [SKIP_THREAD],
+      VIEWER,
+      isAllowed,
+      [ACCEPTED],
+    );
+    expect(applied[0]?.thread.id).toBe("skip");
+  });
+
+  test("applies skip_rejected to a skip thread", () => {
+    const { applied } = selectThreadResponses(
+      [SKIP_THREAD],
+      VIEWER,
+      isAllowed,
+      [REJECTED],
+    );
+    expect(applied).toHaveLength(1);
+  });
+
+  test("applies addressed to an addressable thread", () => {
+    const { applied } = selectThreadResponses([OPEN], VIEWER, isAllowed, [
+      ADDRESSED,
+    ]);
+    expect(applied[0]?.thread.id).toBe("open");
+  });
+
+  test("drops skip_accepted on a thread without a skip reply", () => {
+    const { droppedCount } = selectThreadResponses([OPEN], VIEWER, isAllowed, [
+      ACCEPTED,
+    ]);
+    expect(droppedCount).toBe(1);
+  });
+
+  test("drops addressed on a skip thread", () => {
+    const { droppedCount } = selectThreadResponses(
+      [SKIP_THREAD],
+      VIEWER,
+      isAllowed,
+      [ADDRESSED],
+    );
+    expect(droppedCount).toBe(1);
+  });
+
+  test("drops a skip accepted from a person who is not allowed", () => {
+    const outsider = thread(replied("mallory", SKIP_REPLY));
+    const { applied } = selectThreadResponses([outsider], VIEWER, isAllowed, [
+      ACCEPTED,
+    ]);
+    expect(applied).toEqual([]);
+  });
+
+  test("drops an unknown thread id", () => {
+    const { droppedCount } = selectThreadResponses([OPEN], VIEWER, isAllowed, [
+      { ...ADDRESSED, thread_id: 999 },
+    ]);
+    expect(droppedCount).toBe(1);
+  });
+
+  test("drops an empty body", () => {
+    const { droppedCount } = selectThreadResponses([OPEN], VIEWER, isAllowed, [
+      { ...ADDRESSED, body: "  " },
+    ]);
+    expect(droppedCount).toBe(1);
+  });
+
+  test("keeps only the first answer for a thread", () => {
+    const { applied } = selectThreadResponses([OPEN], VIEWER, isAllowed, [
+      ADDRESSED,
+      { ...ADDRESSED, body: "二回目です。" },
+    ]);
+    expect(applied).toHaveLength(1);
+  });
+});
+
+describe("renderThreadReply", () => {
+  test("starts with the pr_review role tag", () => {
+    const body = renderThreadReply(ACCEPTED, 9);
+    expect(body.split("\n")[0]).toBe("[pr_review 自動レビュー]");
+  });
+
+  test("ends an accepted skip with the accepted line", () => {
+    expect(renderThreadReply(ACCEPTED, 9)).toContain("\n見送り: 了承\n");
+  });
+
+  test("ends a rejected skip with the rejected line", () => {
+    expect(renderThreadReply(REJECTED, 9)).toContain("\n見送り: 反論\n");
+  });
+
+  test("ends an addressed reply with the confirmed line", () => {
+    expect(renderThreadReply(ADDRESSED, 9)).toContain("\n解消: 確認\n");
+  });
+
+  test("marks an acceptance as an acknowledgement", () => {
+    expect(hasMarker(renderThreadReply(ACCEPTED, 9), "pr_review_ack", 9)).toBe(
+      true,
+    );
+  });
+
+  test("marks a rejection as an objection", () => {
+    expect(
+      hasMarker(renderThreadReply(REJECTED, 9), "pr_review_objection", 9),
+    ).toBe(true);
+  });
+
+  test("neutralizes a marker written in the body", () => {
+    const body = renderThreadReply(
+      { ...REJECTED, body: "<!-- factory:pr_fix:1 -->" },
+      9,
+    );
+    expect(body).toContain("&lt;!-- factory:pr_fix:1 -->");
   });
 });

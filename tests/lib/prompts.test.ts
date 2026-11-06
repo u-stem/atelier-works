@@ -513,6 +513,18 @@ describe("reviewPrompt", () => {
       expect(prompt).not.toContain("existing review threads");
     });
 
+    test("asks the review to answer a skip reply", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [{ ...OPEN_THREAD, response_kind: "skip" }],
+          omittedThreadCount: 0,
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("`skip_accepted` or `skip_rejected`");
+    });
+
     test("says how many threads were left out", () => {
       const prompt = reviewPrompt(
         { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 3 },
@@ -1023,6 +1035,16 @@ describe("JSON schema constants", () => {
       "comment",
       "request_changes",
     ]);
+  });
+
+  test("REVIEW_SCHEMA requires thread_responses", () => {
+    expect(REVIEW_SCHEMA.required).toContain("thread_responses");
+  });
+
+  test("REVIEW_SCHEMA's thread decision enum matches ThreadResponseDecision", () => {
+    expect(
+      REVIEW_SCHEMA.properties.thread_responses.items.properties.decision.enum,
+    ).toEqual(["addressed", "skip_accepted", "skip_rejected"]);
   });
 
   test("FIX_SCHEMA's outcome enum matches FixOutcome", () => {

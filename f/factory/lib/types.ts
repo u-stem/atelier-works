@@ -689,6 +689,22 @@ export type ReviewFinding = {
   suggested_code: string | null;
 };
 
+/** 再レビューが既存のスレッドに出す答えの種類。 */
+export type ThreadResponseDecision =
+  | "addressed"
+  | "skip_accepted"
+  | "skip_rejected";
+
+/**
+ * 再レビューのClaudeが、既存のスレッドに出す答え。
+ * `thread_id`はスレッドの最初のコメントのREST idである。
+ */
+export type ThreadResponse = {
+  thread_id: number;
+  decision: ThreadResponseDecision;
+  body: string;
+};
+
 /**
  * `pr_review.flow`の実行の総合判定。
  * GitHubのレビューは常にCOMMENTイベントとして投稿するため、

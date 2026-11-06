@@ -711,6 +711,15 @@ export const REVIEW_SCHEMA = {
         additionalProperties: false,
       },
     },
+    thread_responses: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          decision: { type: "string", enum: [] },
+        },
+      },
+    },
   },
   required: ["verdict", "summary", "findings"],
   additionalProperties: false,

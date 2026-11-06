@@ -772,6 +772,11 @@ export function withMarker(
   return `${body}\n\n<!-- factory:${kind}:${workItemId} -->`;
 }
 
+/** 再レビューの了承と解消の返信の目印の種類。フィードバックに集めない。 */
+export const PR_REVIEW_ACK_MARKER_KIND = "pr_review_ack";
+/** 再レビューの反論の返信の目印の種類。フィードバックに集める。 */
+export const PR_REVIEW_OBJECTION_MARKER_KIND = "pr_review_objection";
+
 /**
  * `text`が、単独の行にあるFactoryの目印で終わるかを返す。
  * `kind` / `workItemId`を渡さなければ、どのFactoryの目印にも一致する

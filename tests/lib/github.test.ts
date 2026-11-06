@@ -5492,6 +5492,54 @@ describe("listPrReviewComments", () => {
     expect(result.items.map((c) => c.id)).toEqual([1]);
   });
 
+  function rawReviewComment(fields: {
+    id: number;
+    user: { login: string };
+    body: string;
+  }) {
+    return { path: "a.ts", line: 12, ...fields };
+  }
+
+  test("leaves out the factory's acknowledgement replies", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        rawReviewComment({
+          id: 7,
+          user: { login: VIEWER },
+          body: "了承\n\n<!-- factory:pr_review_ack:9 -->",
+        }),
+      ]),
+    ]);
+    const result = await listPrReviewComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      VIEWER,
+    );
+    expect(result.items).toEqual([]);
+  });
+
+  test("keeps the factory's objection replies as feedback", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        rawReviewComment({
+          id: 7,
+          user: { login: VIEWER },
+          body: "反論\n\n<!-- factory:pr_review_objection:9 -->",
+        }),
+      ]),
+    ]);
+    const result = await listPrReviewComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      VIEWER,
+    );
+    expect(result.items).toHaveLength(1);
+  });
+
   test("parses author_association when present", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk([

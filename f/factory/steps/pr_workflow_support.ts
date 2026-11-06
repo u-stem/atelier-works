@@ -97,6 +97,7 @@ import {
   type ReviewScope,
   type ReviewSeverity,
   type ReviewVerdict,
+  type ThreadResponse,
   type WorkItem,
   type WorkItemKind,
   type WorkItemStatus,
@@ -1001,6 +1002,28 @@ export function threadResponseKind(
     !isFixedFixReply(thread.lastCommentBody)
     ? "addressable"
     : null;
+}
+
+export type AppliedThreadResponse = {
+  readonly thread: ReviewThread;
+  readonly commentId: number;
+  readonly response: ThreadResponse;
+};
+
+export function selectThreadResponses(
+  _threads: readonly ReviewThread[],
+  _viewer: string,
+  _isAllowed: ThreadAuthorPredicate,
+  _responses: readonly ThreadResponse[],
+): { applied: AppliedThreadResponse[]; droppedCount: number } {
+  return { applied: [], droppedCount: 0 };
+}
+
+export function renderThreadReply(
+  _response: ThreadResponse,
+  _workItemId: number,
+): string {
+  return "";
 }
 
 function threadCommentAuthor(

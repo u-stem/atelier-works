@@ -35,6 +35,7 @@ import {
   type ReviewFinding,
   type ReviewPostMode,
   type ReviewVerdict,
+  type ThreadResponse,
 } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import { blockReview } from "./pr_review_prepare.ts";
@@ -49,6 +50,7 @@ import {
   renderUnresolvedLineSummary,
   reviewResultFor,
   selectThreadsToResolve,
+  type ThreadAuthorPredicate,
   withReviewMarkers,
 } from "./pr_workflow_support.ts";
 
@@ -76,6 +78,12 @@ export function normalizeBinaryInput(
     binaryFiles: [...(binaryFiles ?? [])],
     binaryUnlistedCount: binaryUnlistedCount ?? 0,
   };
+}
+
+export function normalizeThreadResponses(
+  _value: readonly ThreadResponse[] | null | undefined,
+): ThreadResponse[] {
+  return [];
 }
 
 /** `main`の引数をまとめたもの。名前は`main`の引数と同じにする。 */
@@ -366,6 +374,8 @@ export type PublishReviewInput = {
    * 通らないときは、止める理由を返す。通るときは`null`。
    */
   readonly ensureRepoOwner: () => Promise<string | null>;
+  readonly threadResponses: readonly ThreadResponse[];
+  readonly isAllowedReplier: ThreadAuthorPredicate;
 };
 
 export type PublishReviewResult = {
@@ -715,6 +725,8 @@ async function postReview(
           repo,
           repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
         ),
+      threadResponses: [],
+      isAllowedReplier: () => false,
     },
     log,
   );

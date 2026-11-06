@@ -116,6 +116,7 @@ const VALID_OUTPUT = {
       suggested_code: null,
     },
   ],
+  thread_responses: [],
 };
 
 describe("isReviewClaudeOutput", () => {
@@ -193,6 +194,36 @@ describe("isReviewClaudeOutput", () => {
   test("rejects a missing findings array", () => {
     const { findings: _findings, ...rest } = VALID_OUTPUT;
     expect(isReviewClaudeOutput(rest)).toBe(false);
+  });
+
+  test("rejects an output without thread_responses", () => {
+    expect(
+      isReviewClaudeOutput({ verdict: "approve", summary: "s", findings: [] }),
+    ).toBe(false);
+  });
+
+  test("accepts a valid thread response", () => {
+    expect(
+      isReviewClaudeOutput({
+        verdict: "approve",
+        summary: "s",
+        findings: [],
+        thread_responses: [
+          { thread_id: 1, decision: "skip_accepted", body: "了承します。" },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects an unknown decision", () => {
+    expect(
+      isReviewClaudeOutput({
+        verdict: "approve",
+        summary: "s",
+        findings: [],
+        thread_responses: [{ thread_id: 1, decision: "ok", body: "x" }],
+      }),
+    ).toBe(false);
   });
 });
 

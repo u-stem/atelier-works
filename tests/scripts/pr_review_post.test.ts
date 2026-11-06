@@ -13,11 +13,15 @@ import {
   type ReviewThread,
 } from "../../f/factory/lib/github.ts";
 import { logger } from "../../f/factory/lib/log.ts";
-import type { ReviewFinding } from "../../f/factory/lib/types.ts";
+import type {
+  ReviewFinding,
+  ThreadResponse,
+} from "../../f/factory/lib/types.ts";
 import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   findPostedReview,
   normalizeBinaryInput,
+  normalizeThreadResponses,
   type PostReviewTarget,
   type PrReviewPostInput,
   type PublishReviewInput,
@@ -712,6 +716,27 @@ describe("normalizeBinaryInput", () => {
   });
 });
 
+describe("normalizeThreadResponses", () => {
+  test("treats undefined as no responses", () => {
+    expect(normalizeThreadResponses(undefined)).toEqual([]);
+  });
+
+  test("treats null as no responses", () => {
+    expect(normalizeThreadResponses(null)).toEqual([]);
+  });
+});
+
+describe("thread responses wiring", () => {
+  test("passes the responses from generate to post in the flow", async () => {
+    const flow = await Bun.file(
+      new URL("../../f/factory/pr_review__flow/flow.yaml", import.meta.url),
+    ).text();
+    expect(flow).toContain(
+      "results.pr_review_generate?.thread_responses ?? []",
+    );
+  });
+});
+
 // `postReview`はWindmillとDBを直接使うので、配線はソースの並びで確かめる。
 describe("binary input wiring in the post step", () => {
   const SOURCE = Bun.file(
@@ -963,6 +988,48 @@ describe("selectThreadsToResolve", () => {
         "rereview_open",
       );
       expect(ids).toEqual(["thread-42"]);
+    });
+  });
+
+  describe("acknowledgement replies", () => {
+    test("resolves a thread whose last comment is the viewer's acknowledgement", () => {
+      const ids = selectThreadsToResolve(
+        [
+          thread({
+            lastCommentBody: "了承\n\n<!-- factory:pr_review_ack:9 -->",
+          }),
+        ],
+        "factory-bot",
+        "findings",
+      );
+      expect(ids).toEqual(["thread-1"]);
+    });
+
+    test("does not resolve an acknowledgement a person pasted", () => {
+      const ids = selectThreadsToResolve(
+        [
+          thread({
+            lastCommentAuthorLogin: "mallory",
+            lastCommentBody: "了承\n\n<!-- factory:pr_review_ack:9 -->",
+          }),
+        ],
+        "factory-bot",
+        "findings",
+      );
+      expect(ids).toEqual([]);
+    });
+
+    test("does not resolve an objection", () => {
+      const ids = selectThreadsToResolve(
+        [
+          thread({
+            lastCommentBody: "反論\n\n<!-- factory:pr_review_objection:9 -->",
+          }),
+        ],
+        "factory-bot",
+        "findings",
+      );
+      expect(ids).toEqual([]);
     });
   });
 });
@@ -1451,6 +1518,8 @@ describe("posting a review once per sha", () => {
       priorReview: true,
       post: true,
       ensureRepoOwner: async () => null,
+      threadResponses: [],
+      isAllowedReplier: (login) => login === VIEWER || login === "alice",
       ...overrides,
     };
   }
@@ -1721,6 +1790,154 @@ describe("posting a review once per sha", () => {
           "(パスを確認できなかったものが3件あります)",
         ),
       });
+    });
+
+    /** 見送りの返信が付いた、Factory自身の指摘のスレッドだけを返すGraphQLの応答。 */
+    function skipThreads(): CommandResult {
+      const finding = {
+        author: { login: VIEWER },
+        body: "[pr_review 自動レビュー]\n[IMO] consider",
+        databaseId: 501,
+      };
+      const reply = {
+        author: { login: VIEWER },
+        body: "理由です。\n\n対応: 見送り",
+        databaseId: 502,
+      };
+      return ghApiOk({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: [
+                  {
+                    id: "PRRT_1",
+                    isResolved: false,
+                    path: "a.ts",
+                    line: 10,
+                    firstComments: { nodes: [finding] },
+                    lastComments: { nodes: [reply] },
+                    allComments: { nodes: [finding, reply] },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    function isReplyCall(call: FakeCall): boolean {
+      return call.argv[2]?.endsWith("/comments/501/replies") === true;
+    }
+
+    const ACCEPT_SKIP: ThreadResponse = {
+      thread_id: 501,
+      decision: "skip_accepted",
+      body: "了承します。",
+    };
+    const RESOLVED_OK = ghApiOk({
+      data: { resolveReviewThread: { thread: { isResolved: true } } },
+    });
+    /** 返信の投稿が422で拒否された応答。 */
+    function replyRejected(): CommandResult {
+      return ok(ghApiStdout(422, { message: "Unprocessable Entity" }));
+    }
+
+    test("replies to an accepted skip after posting the review", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 99 }),
+        ghApiOk({ id: 100 }),
+        RESOLVED_OK,
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(fake.calls.findIndex(isReplyCall)).toBeGreaterThan(
+        fake.calls.findIndex(isCreateReviewCall),
+      );
+    });
+
+    test("resolves an accepted skip", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 99 }),
+        ghApiOk({ id: 100 }),
+        RESOLVED_OK,
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(fake.calls.some(isResolveCall)).toBe(true);
+    });
+
+    test("keeps a rejected skip open", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 99 }),
+        ghApiOk({ id: 100 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({
+          threadResponses: [{ ...ACCEPT_SKIP, decision: "skip_rejected" }],
+        }),
+        SILENT,
+      );
+      expect(fake.calls.some(isResolveCall)).toBe(false);
+    });
+
+    test("does not resolve a thread when its reply failed", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 99 }),
+        replyRejected(),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(fake.calls.some(isResolveCall)).toBe(false);
+    });
+
+    test("does not answer when a review for the same sha exists", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([postedReview(55)]),
+        skipThreads(),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(fake.calls.some(isReplyCall)).toBe(false);
+    });
+
+    test("does not answer when the owner check stops the post", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({
+          ensureRepoOwner: async () => "owner changed",
+          threadResponses: [ACCEPT_SKIP],
+        }),
+        SILENT,
+      );
+      expect(fake.calls.some(isReplyCall)).toBe(false);
     });
 
     test("does not post again when a review for the same sha exists", async () => {
