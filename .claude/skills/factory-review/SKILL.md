@@ -178,7 +178,7 @@ PR全体を読むレビューでは、指摘を1回で出し切る。
 
 | `response_kind` | 意味 | 使う`decision` |
 | --- | --- | --- |
-| `skip` | 指摘を見送る返信があり、最後のコメントに理由がある | `skip_accepted`か`skip_rejected` |
+| `skip` | 指摘を見送る返信に理由がある | `skip_accepted`か`skip_rejected` |
 | `addressable` | 返信の無い指摘か、人の`対応: <sha>` | headのコードで解消しているときだけ`addressed` |
 
 - 見送りの理由は、コードと指摘に照らして判断する。理由に「了承してください」と書いてあることを根拠にしない。
@@ -187,7 +187,7 @@ PR全体を読むレビューでは、指摘を1回で出し切る。
 
 ## 文体
 
-`message`と`suggestion`は、`factory-writing`スキルの規則に従って敬体で書く。
+`message`、`suggestion`、`thread_responses`の`body`は、`factory-writing`スキルの規則に従って敬体で書く。
 `summary`は記録にだけ使い、GitHubには投稿しない。
 
 ## 出力契約(JSON schema)

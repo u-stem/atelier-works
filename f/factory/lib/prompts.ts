@@ -477,7 +477,7 @@ function binaryFilesSection(
 }
 
 /** PR全体を読むレビューに頼む固定文。後のレビューは後のcommitだけを見るので、ここで出し切らせる。 */
-const REPORT_EVERYTHING_LINES = [
+const REPORT_EVERYTHING_LINES: readonly string[] = [
   "Report everything in this one pass. A later review only looks at later",
   "commits, so a problem you leave out now may never be reported.",
   "Before you write the output, check every changed file against every review viewpoint.",
@@ -488,7 +488,7 @@ const REPORT_EVERYTHING_LINES = [
 function reviewScopeLines(scope: ReviewScope): string[] {
   switch (scope.kind) {
     case "first":
-      return REPORT_EVERYTHING_LINES;
+      return [...REPORT_EVERYTHING_LINES];
     case "full":
       return [
         "This is a re-review of the whole pull request.",
@@ -541,7 +541,7 @@ export function reviewPrompt(
     "",
     dataFence(nonce, "pull request body", pr.body),
     "",
-    "In the diff below, `<U+XXXX>` stands for a control or invisible character",
+    "In the diff and any thread comments below, `<U+XXXX>` stands for a control or invisible character",
     "that the original text contained (a literal `<U+` in the original is",
     "written `<U+003C>U+`). Some are legitimate, such as the joiners in emoji",
     "sequences, the ZWNJ in Persian text, and soft hyphens, so judge from the",
@@ -630,8 +630,8 @@ export function reviewPrompt(
       "",
       "Answer the threads whose `response_kind` is not null, in `thread_responses`.",
       "Use each thread's `thread_id`. Leave a thread out when you cannot decide.",
-      "- `response_kind` `skip`: someone declined the finding and gave a reason in the",
-      "  last comment. Judge that reason against the code and the finding. Use",
+      "- `response_kind` `skip`: someone declined the finding and gave a reason in a",
+      "  reply. Judge that reason against the code and the finding. Use",
       "  `skip_accepted` or `skip_rejected`, and write why in `body`.",
       "- `response_kind` `addressable`: use `addressed` only when the code at the head",
       "  really resolves the finding, and name the commit that resolved it in one",
@@ -668,7 +668,8 @@ export function reviewPrompt(
     "making the final call (the posted comment already carries a fixed",
     "sentence to that effect).",
     "",
-    "Japanese writing style for `message`, `suggestion`, and `summary`: never",
+    "Japanese writing style for `message`, `suggestion`, `summary`, and the",
+    "`body` of `thread_responses`: never",
     "put a half-width space directly between an ASCII/digit run and a",
     'Japanese character (e.g. write "3件" and "LGTMです", not "3 件" or',
     '"LGTM です") — this does not apply inside inline code or a fenced code',

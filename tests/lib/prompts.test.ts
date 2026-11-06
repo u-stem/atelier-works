@@ -525,6 +525,24 @@ describe("reviewPrompt", () => {
       expect(prompt).toContain("`skip_accepted` or `skip_rejected`");
     });
 
+    test("explains the code point notation for thread comments too", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "In the diff and any thread comments below, `<U+XXXX>` stands for",
+      );
+    });
+
+    test("asks for the writing style in the thread responses", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 0 },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("`body` of `thread_responses`");
+    });
+
     test("says how many threads were left out", () => {
       const prompt = reviewPrompt(
         { ...baseInput, threads: [OPEN_THREAD], omittedThreadCount: 3 },

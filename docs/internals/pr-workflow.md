@@ -508,11 +508,17 @@ GitHubが行コメントの行を解決できず、レビュー全体を422で�
 
 | 種類 | 条件 | 答え |
 | --- | --- | --- |
-| `skip` | 最後のコメントの書き手がviewerか許可された人で、最後の行が`対応: 見送り` | 了承(`skip_accepted`)か反論(`skip_rejected`) |
-| `addressable` | 返信の無い指摘か、viewerか許可された人の`対応: <sha>` | 解消(`addressed`) |
+| `skip` | 判定に使う返信の最後の行が`対応: 見送り` | 了承(`skip_accepted`)か反論(`skip_rejected`) |
+| `addressable` | 判定に使う返信が無いか、`対応: <sha>` | 解消(`addressed`) |
 
+判定に使うのは、許可されていない人のコメントを飛ばした最後の返信である。
 許可された人は`allowed_labeler_logins`と`allowed_labeler_ids`で決める。
-ほかの人の`対応: 見送り`では何も起きない。
+viewerは常に許可された人として扱う。
+許可されていない人の`対応: 見送り`では何も起きず、返信を足しても答えの対象から外れない。
+許可された人の自由文の返信の後は答えず、人の判断に任せる。
+
+見送りは返信の履歴で数えるので、後から返信が付いてもマージを止め続ける(`countBlockingThreads`)。
+対象は、viewerか許可された人の`対応: 見送り`と、viewerの反論の返信である。
 
 `pr_review_post`は投稿の直前にスレッドを読み直し、対象でない`thread_id`、種類の合わない答え、空の本文を捨てる(`selectThreadResponses`)。
 Claudeの出力だけでは、解決の対象は広がらない。

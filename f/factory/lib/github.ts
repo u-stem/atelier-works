@@ -4021,6 +4021,8 @@ export type ReviewThread = {
   readonly allCommentIds: number[];
   /** 最後のコメントの書き手のGitHub id。取得できなければ`null`。 */
   readonly lastCommentAuthorId: number | null;
+  /** 最後のコメントのREST id。`comments`に最後のコメントが入っているかを見分けるのに使う。 */
+  readonly lastCommentDatabaseId: number | null;
   /**
    * スレッド内のコメントの書き手と本文(先頭の`REVIEW_THREAD_COMMENTS_LIMIT`件まで)。
    * 再レビューに、返信まで含めたスレッドの全体を渡すために使う。
@@ -4231,6 +4233,7 @@ function parseReviewThreadNode(
       typeof lastComment.author?.databaseId === "number"
         ? lastComment.author.databaseId
         : null,
+    lastCommentDatabaseId: lastComment.databaseId ?? null,
     comments: rawNode.allComments.nodes
       .map(parseThreadComment)
       .filter((comment): comment is ReviewThreadComment => comment !== null),
@@ -4245,7 +4248,7 @@ function parseReviewThreadNode(
  * - 差分上の位置(`path` / `line`)。`pr_workflow_support.ts`の
  *   `reviewThreadsForPrompt`が使う。
  * - 最初のコメントの作成者・本文・REST id(`databaseId`)
- * - 最後のコメントの作成者(loginとid)・本文(別名`lastComments`)。
+ * - 最後のコメントの作成者(loginとid)・本文・REST id(別名`lastComments`)。
  *   `pr_workflow_support.ts`の`selectThreadsToResolve`が、まだ解決していない
  *   Factory自身の`pr_review`のスレッドのうち、最後の発言もFactoryのものを
  *   探すのに使う(スレッドに人の返信が残っていれば自動で解決してはならない)。
@@ -4295,6 +4298,7 @@ export async function listReviewThreads(
                 nodes {
                   author { login ... on User { databaseId } }
                   body
+                  databaseId
                 }
               }
               allComments: comments(first: ${String(REVIEW_THREAD_COMMENTS_LIMIT)}) {

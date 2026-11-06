@@ -22,6 +22,7 @@ import {
   ciRoundVerifyTimeoutMisfit,
   isCiFixOutputAllowed,
 } from "../lib/ci_fix_round.ts";
+import { revealControlChars } from "../lib/ci_log_support.ts";
 import { conflictRoundReason } from "../lib/conflict_fix_round.ts";
 import {
   DEPENDABOT_DRY_RUN_REASON,
@@ -48,6 +49,7 @@ import {
   type PrReview,
   REVIEW_THREAD_COMMENTS_LIMIT,
   type ReviewThread,
+  type ReviewThreadComment,
   withMarker,
 } from "../lib/github.ts";
 import {
@@ -506,8 +508,8 @@ function renderSuggestionBlock(code: string): string {
  * `summary`はGitHubに投稿しない(総評は固定の文面)ので検査しない。
  */
 export function reviewOutputProseIssues(output: ReviewClaudeOutput): string[] {
-  return checkProseFields(
-    output.findings.flatMap((finding, index) => [
+  return checkProseFields([
+    ...output.findings.flatMap((finding, index) => [
       {
         label: `findings[${index}].message`,
         text: finding.message,
@@ -523,7 +525,12 @@ export function reviewOutputProseIssues(output: ReviewClaudeOutput): string[] {
             },
           ]),
     ]),
-  );
+    ...output.thread_responses.map((response, index) => ({
+      label: `thread_responses[${index}].body`,
+      text: response.body,
+      rules: GITHUB_PROSE_RULES,
+    })),
+  ]);
 }
 
 /**
@@ -854,11 +861,11 @@ export function commentedFindingsOf(
 
 /**
  * HTMLのコメントの開始`<!--`を`&lt;!--`に置き換える。
- * 総評に載せるClaudeの出力が、目印に見える行を差し込んだり、
- * 閉じないコメントで後ろの目印を表示から隠したりしないようにする。
+ * GitHubに載せるClaudeの出力(総評の箇条書き、インラインの指摘、スレッドへの答え)が、
+ * 目印に見える行を差し込んだり、閉じないコメントで後ろの目印を表示から隠したりしないようにする。
  * 通常の文中ではGitHubは`&lt;!--`を`<!--`と表示する。
  * ただしコードスパンやコードブロックの中では`&lt;!--`がそのまま表示される。
- * 対象は行に紐づけられなかった指摘の箇条書きだけで、見た目が崩れるだけなので許容する。
+ * 見た目が崩れるだけなので許容する。
  */
 function neutralizeHtmlComment(text: string): string {
   return text.replaceAll("<!--", "&lt;!--");
@@ -872,11 +879,11 @@ function neutralizeHtmlComment(text: string): string {
  * `対応: 見送り`(Claudeが対応しないと判断した)と`対応: 変更なし`(結果として
  * 何もコミットされなかった)は該当しない。
  * この2つはまだ人の判断が要るので、スレッドを開いたままにする。
+ * 目印を除いた最後の行だけを見る。見送りの理由に引用された`対応: <sha>`で解決しないためである。
  */
 export function isFixedFixReply(body: string): boolean {
-  const lines = body.split("\n");
-  if (lines[0] !== ROLE_TAGS.pr_fix) return false;
-  return lines.some((line) => /^対応: `[0-9a-f]{7,40}`$/.test(line));
+  if (body.split("\n")[0] !== ROLE_TAGS.pr_fix) return false;
+  return /^対応: `[0-9a-f]{7,40}`$/.test(lastContentLine(body));
 }
 
 /**
@@ -891,8 +898,9 @@ export function isFixedFixReply(body: string): boolean {
  * 後でFactoryが返信していても触れない。解決するのはFactory自身が始めたスレッドに限る。
  *
  * スレッドの最後のコメントもFactory自身(`viewer`)の投稿である必要がある。
- * Factoryの指摘の後でも人の返信が残っていれば、最後に発言したのはFactoryではないので、
+ * 人の返信が最後なら、最後に発言したのはFactoryではないので、
  * 人が実際に解決できるよう開いたままにする。
+ * 人の見送りに再レビューが了承で答えたスレッドは、最後のコメントがFactoryの答えになるので解決する。
  *
  * 解決するのは、最後のコメントが次のどちらかのスレッドだけである。
  *   - コミットを示す`pr_fix`の返信(`isFixedFixReply`)。
@@ -948,10 +956,11 @@ export function countOpenThreads(
  * 見送りが了承されるまで、マージできる状態として示さないためである。
  * `[MUST]`かどうかは、最初のコメントの2行目(`renderInlineComment`の形式での
  * 種別の接頭辞、`REVIEW_FINDING_KIND_PREFIXES.must`)で見る。
- * 反論は最後の行が`対応: 見送り`でなくなるため、最後のコメントがviewer自身の
- * 反論の返信(`PR_REVIEW_OBJECTION_MARKER_KIND`の目印を持つ返信)かで見分ける。
- * 目印は誰でも貼れるので、書き手がviewerであることと、返信であること
- * (コメントが2件以上あること)も求める。
+ * 見送りと反論は、最後のコメントでなく返信の履歴で見る。
+ * 後から付いた人の返信で、マージを止めなくなることを防ぐためである。
+ * 見送りの書き手は、viewerか許可された人に限る。
+ * 反論の目印は誰でも貼れるので、書き手がviewerであることを求める。
+ * 最初のコメントは返信でないので見ない。
  */
 export function countBlockingThreads(
   threads: readonly ReviewThread[],
@@ -964,20 +973,54 @@ export function countBlockingThreads(
     if (thread.isResolved || resolved.has(thread.id)) return false;
     if (!isFactoryFindingThread(thread, viewer)) return false;
     const secondLine = thread.firstCommentBody.split("\n")[1] ?? "";
-    return (
-      secondLine.startsWith(REVIEW_FINDING_KIND_PREFIXES.must) ||
-      threadResponseKind(thread, viewer, isAllowed) === "skip" ||
-      isObjectionReply(thread, viewer)
+    if (secondLine.startsWith(REVIEW_FINDING_KIND_PREFIXES.must)) return true;
+    return threadReplies(thread).some(
+      (reply) =>
+        (isAllowedThreadAuthor(reply, viewer, isAllowed) &&
+          lastContentLine(reply.body) === SKIP_REPLY_LINE) ||
+        (isOwnPost(reply.authorLogin, viewer) &&
+          hasMarker(reply.body, PR_REVIEW_OBJECTION_MARKER_KIND)),
     );
   }).length;
 }
 
-/** スレッドの最後のコメントが、viewer自身の反論の返信かを返す。 */
-function isObjectionReply(thread: ReviewThread, viewer: string): boolean {
+/**
+ * スレッドの返信を順に返す(最初のコメントを除く)。
+ * 読むコメントの上限を超えたスレッドでは、一覧に無い最後のコメントを足す。
+ */
+function threadReplies(thread: ReviewThread): readonly ReviewThreadComment[] {
+  return threadComments(thread).slice(1);
+}
+
+function threadComments(thread: ReviewThread): readonly ReviewThreadComment[] {
+  const { comments } = thread;
+  if (comments.length < REVIEW_THREAD_COMMENTS_LIMIT) return comments;
+  const listed = comments.some(
+    (comment) =>
+      comment.databaseId !== null &&
+      comment.databaseId === thread.lastCommentDatabaseId,
+  );
+  return listed
+    ? comments
+    : [
+        ...comments,
+        {
+          databaseId: thread.lastCommentDatabaseId,
+          authorLogin: thread.lastCommentAuthorLogin,
+          authorId: thread.lastCommentAuthorId,
+          body: thread.lastCommentBody,
+        },
+      ];
+}
+
+function isAllowedThreadAuthor(
+  comment: ReviewThreadComment,
+  viewer: string,
+  isAllowed: ThreadAuthorPredicate,
+): boolean {
   return (
-    thread.comments.length > 1 &&
-    isOwnPost(thread.lastCommentAuthorLogin, viewer) &&
-    hasMarker(thread.lastCommentBody, PR_REVIEW_OBJECTION_MARKER_KIND)
+    isOwnPost(comment.authorLogin, viewer) ||
+    isAllowed(comment.authorLogin, comment.authorId)
   );
 }
 
@@ -1019,10 +1062,12 @@ function isFactoryFindingThread(thread: ReviewThread, viewer: string): boolean {
 /**
  * 再レビューが答えるスレッドの種類を返す。答えないスレッドは`null`にする。
  * 対象は、Factoryが始めた未解決の指摘のスレッドに限る。
+ * 判定には、許可されていない人のコメントを飛ばした最後の返信を使う。
+ * 許可されていない人が、見送りで指摘を閉じることも、返信で答えの対象から外すこともできないようにするためである。
  * `skip`は、viewerか許可された人の、最後の行が`対応: 見送り`の返信である。
- * 許可されていない人の見送りで指摘を閉じられないよう、書き手を確かめる。
  * `addressable`は、返信の無い指摘か、viewerか許可された人の`対応: <sha>`である。
  * `pr_fix`の`対応: <sha>`は`selectThreadsToResolve`が解決するので除く。
+ * 許可された人の自由文の返信の後は答えず、人の判断に任せる。
  */
 export function threadResponseKind(
   thread: ReviewThread,
@@ -1032,14 +1077,13 @@ export function threadResponseKind(
   if (thread.isResolved) return null;
   if (thread.firstCommentDatabaseId === null) return null;
   if (!isFactoryFindingThread(thread, viewer)) return null;
-  if (thread.comments.length === 1) return "addressable";
-  if (!isAllowed(thread.lastCommentAuthorLogin, thread.lastCommentAuthorId)) {
-    return null;
-  }
-  const line = lastContentLine(thread.lastCommentBody);
+  const lastReply = threadReplies(thread)
+    .filter((reply) => isAllowedThreadAuthor(reply, viewer, isAllowed))
+    .at(-1);
+  if (lastReply === undefined) return "addressable";
+  const line = lastContentLine(lastReply.body);
   if (line === SKIP_REPLY_LINE) return "skip";
-  return COMMIT_REPLY_LINE.test(line) &&
-    !isFixedFixReply(thread.lastCommentBody)
+  return COMMIT_REPLY_LINE.test(line) && !isFixedFixReply(lastReply.body)
     ? "addressable"
     : null;
 }
@@ -1133,7 +1177,8 @@ function threadCommentAuthor(
 }
 
 function promptCommentBody(body: string): string {
-  const stripped = stripRoleTagLine(body);
+  // 差分と同じく見える表記にする。長さの上限は、置き換えで伸びた後にかける。
+  const stripped = revealControlChars(stripRoleTagLine(body));
   const chars = Array.from(stripped);
   return chars.length > THREAD_COMMENT_MAX_CHARS
     ? `${chars.slice(0, THREAD_COMMENT_MAX_CHARS).join("")}…`
@@ -1145,7 +1190,7 @@ function toPromptThread(
   viewer: string,
   isAllowed: ThreadAuthorPredicate,
 ): PromptReviewThread {
-  const comments = thread.comments.map(
+  const comments = threadComments(thread).map(
     (comment): PromptThreadComment => ({
       author: threadCommentAuthor(
         comment.authorLogin,
@@ -1156,18 +1201,6 @@ function toPromptThread(
       body: promptCommentBody(comment.body),
     }),
   );
-  // 読むコメントの上限を超えたスレッドでは、答える根拠の最後のコメントが一覧から漏れるので足す。
-  if (thread.comments.length >= REVIEW_THREAD_COMMENTS_LIMIT) {
-    comments.push({
-      author: threadCommentAuthor(
-        thread.lastCommentAuthorLogin,
-        thread.lastCommentAuthorId,
-        viewer,
-        isAllowed,
-      ),
-      body: promptCommentBody(thread.lastCommentBody),
-    });
-  }
   return {
     thread_id: thread.firstCommentDatabaseId,
     path: thread.path,
@@ -1200,18 +1233,15 @@ export function reviewThreadsForPrompt(
     toPromptThread(thread, viewer, isAllowed),
   );
   const order = items
-    .map((_, index) => index)
+    .map((item, index) => ({ item, index }))
     .sort((left, right) => {
-      const leftItem = items[left];
-      const rightItem = items[right];
-      if (leftItem === undefined || rightItem === undefined) return 0;
-      const rank = promptThreadRank(leftItem) - promptThreadRank(rightItem);
-      return rank !== 0 ? rank : right - left;
+      const rank = promptThreadRank(left.item) - promptThreadRank(right.item);
+      return rank !== 0 ? rank : right.index - left.index;
     });
   const kept = new Set<number>();
   let used = 0;
-  for (const index of order) {
-    const size = JSON.stringify(items[index]).length;
+  for (const { item, index } of order) {
+    const size = JSON.stringify(item).length;
     if (used + size > THREADS_PROMPT_MAX_CHARS) continue;
     used += size;
     kept.add(index);
