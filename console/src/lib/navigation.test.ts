@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   EDGE_TOGGLE_MARGIN,
+  edgeToggleFollows,
   edgeToggleOffset,
   formatBadgeCount,
   menuButtonLabel,
@@ -130,6 +131,20 @@ describe("navLinkClass", () => {
 
   test("keeps the label padding when expanded", () => {
     expect(navLinkClass(false)).not.toContain("justify-center");
+  });
+});
+
+describe("edgeToggleFollows", () => {
+  test("follows a mouse", () => {
+    expect(edgeToggleFollows("mouse")).toBe(true);
+  });
+
+  test("follows a pen", () => {
+    expect(edgeToggleFollows("pen")).toBe(true);
+  });
+
+  test("does not follow a finger", () => {
+    expect(edgeToggleFollows("touch")).toBe(false);
   });
 });
 

@@ -75,6 +75,14 @@ export function navLinkClass(collapsed: boolean): string {
   );
 }
 
+/**
+ * 縁のつまみが、ポインタの動きを追うかを返す。
+ * タッチは、指が縁の上を動いてもスクロールが始まるだけで、位置を決める操作ではないので追わない。
+ */
+export function edgeToggleFollows(_pointerType: string): boolean {
+  return true;
+}
+
 /** 縁のつまみが、縁の上下の端から離れる距離(px)。つまみの半分の大きさに余白を足した値である。 */
 export const EDGE_TOGGLE_MARGIN = 16;
 
