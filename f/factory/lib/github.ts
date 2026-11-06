@@ -2800,10 +2800,19 @@ export async function getPrDiff(
     context,
   );
   ensureSuccess(response, context);
-  const bodyText = revealControlChars(response.bodyText).replaceAll(
-    "\r\n",
-    "\n",
-  );
+  return limitReviewDiff(response.bodyText, maxLines, maxChars);
+}
+
+/**
+ * 差分の本文の、見えない文字を置き換え、行数と文字数の上限で切る。
+ * PRの差分と、前回のレビューからの差分で、同じ扱いにするために分けている。
+ */
+export function limitReviewDiff(
+  rawBody: string,
+  maxLines: number,
+  maxChars: number = PR_DIFF_MAX_CHARS,
+): PrDiff {
+  const bodyText = revealControlChars(rawBody).replaceAll("\r\n", "\n");
   const lines = bodyText.split("\n");
   const byLines =
     lines.length <= maxLines ? bodyText : lines.slice(0, maxLines).join("\n");
@@ -2814,14 +2823,6 @@ export async function getPrDiff(
     totalLines: lines.length,
     binaryFiles: collectBinaryFiles(lines),
   };
-}
-
-export function limitReviewDiff(
-  _rawBody: string,
-  _maxLines: number,
-  _maxChars: number = PR_DIFF_MAX_CHARS,
-): PrDiff {
-  return { diff: "", truncated: false, totalLines: 0, binaryFiles: [] };
 }
 
 export type PrFile = {

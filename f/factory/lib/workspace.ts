@@ -5157,12 +5157,23 @@ export async function listBothSidesChangedPaths(opts: {
   };
 }
 
+const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/;
+
 export type ReviewDelta = {
   readonly diff: string;
+  /** 範囲にmerge commitがあるか。baseの変更が差分に混ざりうる。 */
   readonly hasMerge: boolean;
 };
 
-export async function readReviewDelta(_options: {
+/**
+ * 前回レビューしたcommitからheadまでの差分を、PRの変更ファイルに絞って返す。
+ * PRの著者の変更は必ず変更ファイルに載るので、絞っても失わない。
+ * 前回のcommitがheadの祖先でない、読めない、gitが失敗したときは`null`を返す。
+ * 呼び出し側はPR全体のレビューに倒す。
+ * 外部のdiffとtextconvは、対象リポジトリの内容で動かさないよう止める。
+ * `--literal-pathspecs`で、パスの中のワイルドカードと`:`を文字どおりに読む。
+ */
+export async function readReviewDelta(options: {
   readonly run: CommandRunner;
   readonly dir: string;
   readonly fromSha: string;
@@ -5171,5 +5182,43 @@ export async function readReviewDelta(_options: {
   readonly home?: string;
   readonly path?: string;
 }): Promise<ReviewDelta | null> {
-  return null;
+  const { run, dir, fromSha, headSha, paths } = options;
+  if (!FULL_COMMIT_SHA.test(fromSha) || !FULL_COMMIT_SHA.test(headSha)) {
+    return null;
+  }
+  const runOptions = { cwd: dir, env: localGitEnv(options.home, options.path) };
+  const ancestor = await run(
+    buildGitArgv(["merge-base", "--is-ancestor", fromSha, headSha]),
+    runOptions,
+  );
+  if (ancestor.exitCode !== 0) return null;
+  const merges = await run(
+    buildGitArgv([
+      "rev-list",
+      "--merges",
+      "--max-count=1",
+      `${fromSha}..${headSha}`,
+    ]),
+    runOptions,
+  );
+  if (merges.exitCode !== 0 || merges.outputAbandoned === true) return null;
+  const hasMerge = merges.stdout.trim() !== "";
+  // `--`の後が空だと全部のファイルの差分になるので、先に返す。
+  if (paths.length === 0) return { diff: "", hasMerge };
+  const diff = await run(
+    buildGitArgv([
+      "--literal-pathspecs",
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-color",
+      fromSha,
+      headSha,
+      "--",
+      ...paths,
+    ]),
+    runOptions,
+  );
+  if (diff.exitCode !== 0 || diff.outputAbandoned === true) return null;
+  return { diff: diff.stdout, hasMerge };
 }

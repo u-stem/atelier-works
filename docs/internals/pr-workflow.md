@@ -279,7 +279,7 @@ PR修正は、`git gtr new`で作るPRのブランチのworktreeを使う。PR�
 Claudeへの入力は次のとおりである。
 
 - PRの本文
-- PRの差分(`diff_max_lines`行で切り詰める)
+- PRの差分(`diff_max_lines`行で切り詰める。再レビューでは範囲を絞る。下の「レビューの範囲」にある)
 - 変更されたファイルの一覧
 - 承認済みの要件定義(PRが要件定義に紐づくとき)
 - このPRの既存のスレッドの全体(解決済み、人が始めたもの、返信を含む)
@@ -296,6 +296,31 @@ PRが要件定義に紐づくのは、Factoryの実装フローが作ったPRか
 
 レビューは常にGitHubのCOMMENTレビューとして投稿する。承認(approve)と変更の要求(request changes)は使わない。スキルが返す判定(`verdict`)は`factory.reviews`に残すだけで、投稿の種類にも、通知とConsoleの状態にも使わない。
 通知とConsoleのレビュー行は、flowが決めた結果(`factory.reviews`の`result`)を使う。結果は、修正必須の指摘の有無で決まる(通知の規則は[通知](notifications.md)にある)。
+
+### レビューの範囲
+
+生成のステップは、プロンプトに渡す差分の範囲を決める(`decideReviewScope`)。
+
+| 範囲 | 条件 | 渡す差分 |
+| --- | --- | --- |
+| `first` | 投稿済みのレビューが無い | PR全体 |
+| `full` | 前回のcommitがheadの祖先でない、読めない、問い合わせに失敗した | PR全体 |
+| `full` | 競合回のhead | PR全体 |
+| `full` | 前回とheadが同じで、答えを待つ見送りが無い | PR全体 |
+| `threads_only` | 前回とheadが同じで、答えを待つ見送りがある | なし |
+| `delta` | 前回のcommitがheadの祖先である | 前回からheadまで |
+
+前回のcommitは`factory.reviews`から読む(`latestPostedPrReviewHeadSha`)。
+PRに書ける人が起点を動かせないよう、PRの本文の目印は使わない。
+`delta`の差分は、worktreeのgitで作り、PRの変更ファイルに絞る(`readReviewDelta`)。
+PRの著者の変更は必ず変更ファイルに載るので、絞っても失わない。
+範囲にmerge commitがあれば、baseの変更が混ざりうることをプロンプトで伝える。
+読めないときに止めないのは、PR全体のレビューに倒せば、指摘を見逃さないためである。
+
+PR全体を読むレビューには、1回で出し切るよう固定の文で頼む。
+`maxTurns`は`max_turns`と80の大きいほうにする。
+`diff_max_lines`は変えない。増やしてもプロンプトが膨らむだけで、残りは`Read`で読めるためである。
+投稿する指摘は50件までにする。
 
 ### 差分の取得
 

@@ -2993,13 +2993,33 @@ export async function hasPrReviewForHead(
   return rows.length > 0;
 }
 
+/**
+ * このPRで最後に投稿したレビューのheadを返す。無ければ`null`を返す。
+ * 再レビューが、前回からの差分を読む起点にする。
+ * PRの本文の目印でなくDBから読むのは、PRに書ける人が起点を動かせないようにするためである。
+ * 投稿しなかったレビューは、PRに指摘が見えていないので起点にしない。
+ */
 export async function latestPostedPrReviewHeadSha(
-  _owner: string,
-  _repo: string,
-  _prNumber: number,
-  _sql: SqlClient = defaultSqlClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<string | null> {
-  return "";
+  assertPrCiTarget(owner, repo, prNumber);
+  const rows = await sql`
+    SELECT r.head_sha
+    FROM factory.reviews AS r
+    JOIN factory.work_items AS w ON w.id = r.work_item_id
+    WHERE w.kind = 'pr_review'
+      AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
+      AND w.pr_number = ${prNumber}::integer
+      AND r.posted_review_id IS NOT NULL
+    ORDER BY r.created_at DESC, r.id DESC
+    LIMIT 1
+  `.fetch();
+  const row: unknown = rows[0];
+  if (!isRecord(row)) return null;
+  return typeof row.head_sha === "string" ? row.head_sha : null;
 }
 
 // ---------------------------------------------------------------------------

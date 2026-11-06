@@ -5879,29 +5879,55 @@ export type PriorReviewSha =
   | { readonly kind: "unreadable" }
   | { readonly kind: "found"; readonly sha: string };
 
+/** PR全体を読むレビューの`maxTurns`の下限。全部のファイルを読むと、既定の40に当たりうるため。費用は`max_budget_usd_per_run`が抑える。 */
 export const PR_REVIEW_FULL_MAX_TURNS = 80;
 
+/** 前回からの差分を読む必要があるかを返す。 */
 export function needsReviewDelta(
-  _prior: PriorReviewSha,
-  _headSha: string,
-  _fixRound: "ci" | "conflict" | null,
+  prior: PriorReviewSha,
+  headSha: string,
+  fixRound: "ci" | "conflict" | null,
 ): boolean {
-  return false;
+  return (
+    prior.kind === "found" && prior.sha !== headSha && fixRound !== "conflict"
+  );
 }
 
-export function decideReviewScope(_input: {
+/**
+ * レビューの範囲を決める。
+ * 前回の投稿が無ければ`first`にする。
+ * 前回のcommitが読めないときと競合回は、PR全体を読む`full`に倒す。
+ * 競合回の固定文が、merge全体を見るよう頼むためである。
+ * headが前回と同じときは、見送りが答えを待っていれば`threads_only`にし、
+ * そうでなければ人が依頼し直したとみなして`full`にする。
+ */
+export function decideReviewScope(input: {
   readonly prior: PriorReviewSha;
   readonly headSha: string;
   readonly fixRound: "ci" | "conflict" | null;
   readonly pendingSkipCount: number;
   readonly delta: { readonly hasMerge: boolean } | null;
 }): ReviewScope {
-  return { kind: "first" };
+  const { prior } = input;
+  if (prior.kind === "none") return { kind: "first" };
+  if (prior.kind === "unreadable") {
+    return { kind: "full", reason: "prior_unreadable" };
+  }
+  if (input.fixRound === "conflict") {
+    return { kind: "full", reason: "conflict_round" };
+  }
+  if (prior.sha === input.headSha) {
+    return input.pendingSkipCount > 0
+      ? { kind: "threads_only", fromSha: prior.sha }
+      : { kind: "full", reason: "requested_again" };
+  }
+  if (input.delta === null) return { kind: "full", reason: "prior_unreadable" };
+  return { kind: "delta", fromSha: prior.sha, hasMerge: input.delta.hasMerge };
 }
 
-export function reviewMaxTurns(
-  _scope: ReviewScope,
-  _configured: number,
-): number {
-  return 0;
+/** スコープに合う`maxTurns`を返す。 */
+export function reviewMaxTurns(scope: ReviewScope, configured: number): number {
+  return scope.kind === "first" || scope.kind === "full"
+    ? Math.max(configured, PR_REVIEW_FULL_MAX_TURNS)
+    : configured;
 }

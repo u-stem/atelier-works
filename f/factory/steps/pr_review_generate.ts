@@ -16,6 +16,7 @@ import { loadConfig } from "../lib/config.ts";
 import {
   findFixRoundKindToReview,
   latestDraft,
+  latestPostedPrReviewHeadSha,
   recordAgentRun,
   updateStatusIfCurrent,
 } from "../lib/db.ts";
@@ -27,27 +28,37 @@ import {
   getPrDiff,
   getPrFiles,
   getViewer,
+  limitReviewDiff,
   listReviewThreads,
 } from "../lib/github.ts";
-import { logger } from "../lib/log.ts";
+import { logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
 import { isAllowedLabeler, labelerPolicyFor } from "../lib/poll_support.ts";
 import { REVIEW_SCHEMA, reviewPrompt } from "../lib/prompts.ts";
 import type { ReviewFinding, ReviewVerdict } from "../lib/types.ts";
-import { runCommand } from "../lib/workspace.ts";
+import {
+  type ReviewDelta,
+  readReviewDelta,
+  runCommand,
+} from "../lib/workspace.ts";
 import {
   buildReviewDiffText,
+  decideReviewScope,
   describeReason,
   isReviewClaudeOutput,
   listReviewThreadsBestEffort,
+  needsReviewDelta,
   nextActionFor,
+  type PriorReviewSha,
   prReviewTimeoutMisfit,
+  reviewMaxTurns,
   reviewOutputProseIssues,
   reviewThreadsForPrompt,
   selectListedBinaryFiles,
 } from "./pr_workflow_support.ts";
 
-const MAX_FINDINGS = 20;
+// 省いた指摘が次の回に出ると往復が残るので、1回で出し切れる大きさにする。
+const MAX_FINDINGS = 50;
 
 export type PrReviewGenerateResult = {
   readonly skip: boolean;
@@ -210,6 +221,54 @@ export async function main(
       }),
   );
 
+  // 前回のcommitが読めないときも、PR全体のレビューに倒して止めない。
+  let prior: PriorReviewSha;
+  try {
+    const sha = await latestPostedPrReviewHeadSha(owner, repo, pr_number);
+    prior = sha === null ? { kind: "none" } : { kind: "found", sha };
+  } catch (err) {
+    log.warn("could not read the prior review commit, reviewing the whole PR", {
+      work_item_id,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    prior = { kind: "unreadable" };
+  }
+  let delta: ReviewDelta | null = null;
+  if (prior.kind === "found" && needsReviewDelta(prior, review_sha, fixRound)) {
+    try {
+      delta = await readReviewDelta({
+        run: runCommand,
+        dir: worktree_dir,
+        fromSha: prior.sha,
+        headSha: review_sha,
+        paths: prFiles,
+      });
+    } catch (err) {
+      log.warn("could not read the changes since the prior review", {
+        work_item_id,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+  const scope = decideReviewScope({
+    prior,
+    headSha: review_sha,
+    fixRound,
+    pendingSkipCount: promptThreads.threads.filter(
+      (thread) => thread.response_kind === "skip",
+    ).length,
+    delta,
+  });
+  log.info("review scope", { work_item_id, scope: scope.kind });
+  const diffText =
+    scope.kind === "threads_only"
+      ? "(no new commits)"
+      : buildReviewDiffText(
+          scope.kind === "delta" && delta !== null
+            ? limitReviewDiff(delta.diff, config.diff_max_lines)
+            : prDiff,
+        );
+
   const promptText = reviewPrompt({
     pr: {
       owner,
@@ -221,12 +280,12 @@ export async function main(
       head_sha: review_sha,
       base_ref: pr.baseRef,
     },
-    diff: buildReviewDiffText(prDiff),
+    diff: diffText,
     changedFiles: prFiles,
     requirements,
     threads: promptThreads.threads,
     omittedThreadCount: promptThreads.omitted,
-    scope: { kind: "first" },
+    scope,
     fixRound,
     binaryFiles,
   });
@@ -250,7 +309,7 @@ export async function main(
       tools: ["Read", "Glob", "Grep"],
       permissionMode: "dontAsk",
       settingSources: ["user"],
-      maxTurns: config.max_turns,
+      maxTurns: reviewMaxTurns(scope, config.max_turns),
       maxBudgetUsd: config.max_budget_usd_per_run,
       cwd: worktree_dir,
       oauthToken,

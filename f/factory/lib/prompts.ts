@@ -476,6 +476,45 @@ function binaryFilesSection(
   ];
 }
 
+/** PR全体を読むレビューに頼む固定文。後のレビューは後のcommitだけを見るので、ここで出し切らせる。 */
+const REPORT_EVERYTHING_LINES = [
+  "Report everything in this one pass. A later review only looks at later",
+  "commits, so a problem you leave out now may never be reported.",
+  "Before you write the output, check every changed file against every review viewpoint.",
+  "Include minor and nit findings. Do not stop after the first few.",
+  "If the diff is truncated, Read every changed file that the diff does not show.",
+];
+
+function reviewScopeLines(scope: ReviewScope): string[] {
+  switch (scope.kind) {
+    case "first":
+      return REPORT_EVERYTHING_LINES;
+    case "full":
+      return [
+        "This is a re-review of the whole pull request.",
+        ...REPORT_EVERYTHING_LINES,
+      ];
+    case "delta":
+      return [
+        `This is a re-review. The diff above holds only the changes from ${scope.fromSha} to the head, limited to the files this PR changes.`,
+        "The earlier review covered everything before that commit.",
+        "Report only problems these changes introduce or make visible.",
+        "You may Read other files to understand the changes.",
+        ...(scope.hasMerge
+          ? [
+              "This range contains a merge commit, so changes from the base branch may appear.",
+              "Do not report those unless they conflict with this PR's change.",
+            ]
+          : []),
+      ];
+    case "threads_only":
+      return [
+        `No commit was added since the previous review of ${scope.fromSha}, so there is no new diff.`,
+        "Only answer the existing threads below, and report no new finding.",
+      ];
+  }
+}
+
 export function reviewPrompt(
   input: ReviewPromptInput,
   deps: PromptDeps = {},
@@ -517,6 +556,8 @@ export function reviewPrompt(
       "changed files",
       input.changedFiles.join("\n") || "(none)",
     ),
+    "",
+    ...reviewScopeLines(input.scope),
   ];
 
   if (input.binaryFiles.length > 0) {
