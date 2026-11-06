@@ -44,6 +44,7 @@ import {
   assertSha,
   type GitIdentity,
   type ImplementDiffStat,
+  isGitSha,
   isNumber,
   isRecord,
   isString,
@@ -5157,8 +5158,6 @@ export async function listBothSidesChangedPaths(opts: {
   };
 }
 
-const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/;
-
 export type ReviewDelta = {
   readonly diff: string;
   /** 範囲にmerge commitがあるか。baseの変更が差分に混ざりうる。 */
@@ -5167,7 +5166,8 @@ export type ReviewDelta = {
 
 /**
  * 前回レビューしたcommitからheadまでの差分を、PRの変更ファイルに絞って返す。
- * PRの著者の変更は必ず変更ファイルに載るので、絞っても失わない。
+ * 変更ファイルのAPIの上限(`PR_FILES_API_CAP`)に満たないPRなら、著者の変更は一覧に載るので、絞っても失わない。
+ * 上限に達したPRでは一覧が切れるので、呼び出し側はこの関数を呼ばずにPR全体のレビューに倒す。
  * 前回のcommitがheadの祖先でない、読めない、gitが失敗したときは`null`を返す。
  * 呼び出し側はPR全体のレビューに倒す。
  * 外部のdiffとtextconvは、対象リポジトリの内容で動かさないよう止める。
@@ -5183,9 +5183,7 @@ export async function readReviewDelta(options: {
   readonly path?: string;
 }): Promise<ReviewDelta | null> {
   const { run, dir, fromSha, headSha, paths } = options;
-  if (!FULL_COMMIT_SHA.test(fromSha) || !FULL_COMMIT_SHA.test(headSha)) {
-    return null;
-  }
+  if (!isGitSha(fromSha) || !isGitSha(headSha)) return null;
   const runOptions = { cwd: dir, env: localGitEnv(options.home, options.path) };
   const ancestor = await run(
     buildGitArgv(["merge-base", "--is-ancestor", fromSha, headSha]),

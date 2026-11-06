@@ -724,7 +724,9 @@ export type ReviewScope =
       readonly reason:
         | "prior_unreadable"
         | "conflict_round"
-        | "requested_again";
+        | "body_only_must"
+        | "requested_again"
+        | "too_many_files";
     }
   | {
       readonly kind: "delta";

@@ -44,6 +44,7 @@ import {
   getDefaultBranch,
   hasMarker,
   isOwnPost,
+  PR_FILES_API_CAP,
   PR_REVIEW_ACK_MARKER_KIND,
   PR_REVIEW_OBJECTION_MARKER_KIND,
   type PrReview,
@@ -578,6 +579,11 @@ export function fixOutputProseIssues(
   ]);
 }
 
+/** 指摘の文章を、GitHubに載せる形にする。 */
+function postedFindingText(text: string): string {
+  return neutralizeHtmlComment(normalizeJapaneseText(text));
+}
+
 /**
  * 1件の指摘を、factory-reviewスキルの投稿形式に沿ったインラインコメントの本文にする。
  * 1行目は`pr_review`の投稿と分かる役割タグ、2行目は`kind`に応じた
@@ -593,10 +599,10 @@ export function fixOutputProseIssues(
  */
 export function renderInlineComment(finding: ReviewFinding): string {
   const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
-  const message = neutralizeHtmlComment(normalizeJapaneseText(finding.message));
+  const message = postedFindingText(finding.message);
   const suggestionText =
     finding.suggestion !== null
-      ? `\n\n提案: ${neutralizeHtmlComment(normalizeJapaneseText(finding.suggestion))}`
+      ? `\n\n提案: ${postedFindingText(finding.suggestion)}`
       : "";
   const codeBlock =
     finding.suggested_code === null
@@ -6083,27 +6089,46 @@ export type PriorReviewSha =
 /** PR全体を読むレビューの`maxTurns`の下限。全部のファイルを読むと、既定の40に当たりうるため。費用は`max_budget_usd_per_run`が抑える。 */
 export const PR_REVIEW_FULL_MAX_TURNS = 80;
 
-export function reviewDeltaFromSha(_input: unknown): string | null {
-  return null;
-}
-
+/**
+ * 前回の投稿の`[MUST]`のうち、スレッドにならず総評だけに載ったものがあるかを返す。
+ * 行に紐づけられなかった指摘はスレッドにならないので、差分だけを読む再レビューでは忘れられる。
+ * スレッドの一覧を読めなかったときは`threads`が空なので、`[MUST]`があれば真になり、PR全体を読む側に倒れる。
+ * 解決済みのスレッドも、投稿した指摘として数える。
+ */
 export function hasBodyOnlyMustFinding(
-  _findings: unknown,
-  _threads: unknown,
-  _viewer: string,
+  findings: readonly ReviewFinding[],
+  threads: readonly ReviewThread[],
+  viewer: string,
 ): boolean {
-  return false;
+  const posted = threads
+    .filter((thread) => isFactoryFindingThread(thread, viewer))
+    .map((thread) => thread.firstCommentBody);
+  return findings
+    .filter((finding) => finding.kind === "must")
+    .some((finding) => {
+      const message = postedFindingText(finding.message);
+      return !posted.some((body) => body.includes(message));
+    });
 }
 
-/** 前回からの差分を読む必要があるかを返す。 */
-export function needsReviewDelta(
-  prior: PriorReviewSha,
-  headSha: string,
-  fixRound: "ci" | "conflict" | null,
-): boolean {
-  return (
-    prior.kind === "found" && prior.sha !== headSha && fixRound !== "conflict"
-  );
+/** `decideReviewScope`の入力のうち、差分を読む前に決まるもの。 */
+export type ReviewScopeInput = {
+  readonly prior: PriorReviewSha;
+  readonly headSha: string;
+  readonly fixRound: "ci" | "conflict" | null;
+  readonly pendingSkipCount: number;
+  /** `hasBodyOnlyMustFinding`の結果。 */
+  readonly hasBodyOnlyMust: boolean;
+  readonly changedFileCount: number;
+};
+
+/**
+ * 前回からの差分を読むときの起点のcommitを返す。読まなくてよいときは`null`を返す。
+ * 条件を`decideReviewScope`と二重に持たないよう、差分が読めたとして範囲を決める。
+ */
+export function reviewDeltaFromSha(input: ReviewScopeInput): string | null {
+  const scope = decideReviewScope({ ...input, delta: { hasMerge: false } });
+  return scope.kind === "delta" ? scope.fromSha : null;
 }
 
 /**
@@ -6111,16 +6136,16 @@ export function needsReviewDelta(
  * 前回の投稿が無ければ`first`にする。
  * 前回のcommitが読めないときと競合回は、PR全体を読む`full`に倒す。
  * 競合回の固定文が、merge全体を見るよう頼むためである。
+ * 前回の`[MUST]`が総評だけに載っているときも`full`にする。差分だけを読むと、その指摘を忘れるためである。
  * headが前回と同じときは、見送りが答えを待っていれば`threads_only`にし、
  * そうでなければ人が依頼し直したとみなして`full`にする。
+ * 変更ファイルの一覧が上限に達したPRも`full`にする。一覧が切れて、絞った差分から変更が漏れるためである。
  */
-export function decideReviewScope(input: {
-  readonly prior: PriorReviewSha;
-  readonly headSha: string;
-  readonly fixRound: "ci" | "conflict" | null;
-  readonly pendingSkipCount: number;
-  readonly delta: { readonly hasMerge: boolean } | null;
-}): ReviewScope {
+export function decideReviewScope(
+  input: ReviewScopeInput & {
+    readonly delta: { readonly hasMerge: boolean } | null;
+  },
+): ReviewScope {
   const { prior } = input;
   if (prior.kind === "none") return { kind: "first" };
   if (prior.kind === "unreadable") {
@@ -6129,10 +6154,14 @@ export function decideReviewScope(input: {
   if (input.fixRound === "conflict") {
     return { kind: "full", reason: "conflict_round" };
   }
+  if (input.hasBodyOnlyMust) return { kind: "full", reason: "body_only_must" };
   if (prior.sha === input.headSha) {
     return input.pendingSkipCount > 0
       ? { kind: "threads_only", fromSha: prior.sha }
       : { kind: "full", reason: "requested_again" };
+  }
+  if (input.changedFileCount >= PR_FILES_API_CAP) {
+    return { kind: "full", reason: "too_many_files" };
   }
   if (input.delta === null) return { kind: "full", reason: "prior_unreadable" };
   return { kind: "delta", fromSha: prior.sha, hasMerge: input.delta.hasMerge };

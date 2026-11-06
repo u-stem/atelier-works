@@ -16,7 +16,7 @@ import { loadConfig } from "../lib/config.ts";
 import {
   findFixRoundKindToReview,
   latestDraft,
-  latestPostedPrReviewHeadSha,
+  latestPostedPrReview,
   recordAgentRun,
   updateStatusIfCurrent,
 } from "../lib/db.ts";
@@ -49,12 +49,13 @@ import {
   buildReviewDiffText,
   decideReviewScope,
   describeReason,
+  hasBodyOnlyMustFinding,
   isReviewClaudeOutput,
   listReviewThreadsBestEffort,
-  needsReviewDelta,
   nextActionFor,
   type PriorReviewSha,
   prReviewTimeoutMisfit,
+  reviewDeltaFromSha,
   reviewMaxTurns,
   reviewOutputProseIssues,
   reviewThreadsForPrompt,
@@ -228,11 +229,17 @@ export async function main(
       }),
   );
 
-  // 前回のcommitが読めないときも、PR全体のレビューに倒して止めない。
+  // 前回の投稿が読めないときも、PR全体のレビューに倒して止めない。
   let prior: PriorReviewSha;
+  let priorFindings: readonly ReviewFinding[] = [];
   try {
-    const sha = await latestPostedPrReviewHeadSha(owner, repo, pr_number);
-    prior = sha === null ? { kind: "none" } : { kind: "found", sha };
+    const posted = await latestPostedPrReview(owner, repo, pr_number);
+    if (posted === null) {
+      prior = { kind: "none" };
+    } else {
+      prior = { kind: "found", sha: posted.head_sha };
+      priorFindings = posted.findings;
+    }
   } catch (err) {
     log.warn("could not read the prior review commit, reviewing the whole PR", {
       work_item_id,
@@ -240,13 +247,28 @@ export async function main(
     });
     prior = { kind: "unreadable" };
   }
+  const scopeInput = {
+    prior,
+    headSha: review_sha,
+    fixRound,
+    pendingSkipCount: promptThreads.threads.filter(
+      (thread) => thread.response_kind === "skip",
+    ).length,
+    hasBodyOnlyMust: hasBodyOnlyMustFinding(
+      priorFindings,
+      reviewThreads,
+      viewer.login,
+    ),
+    changedFileCount: prFiles.length,
+  };
   let delta: ReviewDelta | null = null;
-  if (prior.kind === "found" && needsReviewDelta(prior, review_sha, fixRound)) {
+  const deltaFromSha = reviewDeltaFromSha(scopeInput);
+  if (deltaFromSha !== null) {
     try {
       delta = await readReviewDelta({
         run: runCommand,
         dir: worktree_dir,
-        fromSha: prior.sha,
+        fromSha: deltaFromSha,
         headSha: review_sha,
         paths: prFiles,
       });
@@ -257,16 +279,12 @@ export async function main(
       });
     }
   }
-  const scope = decideReviewScope({
-    prior,
-    headSha: review_sha,
-    fixRound,
-    pendingSkipCount: promptThreads.threads.filter(
-      (thread) => thread.response_kind === "skip",
-    ).length,
-    delta,
+  const scope = decideReviewScope({ ...scopeInput, delta });
+  log.info("review scope", {
+    work_item_id,
+    scope: scope.kind,
+    ...(scope.kind === "full" ? { reason: scope.reason } : {}),
   });
-  log.info("review scope", { work_item_id, scope: scope.kind });
   const diffText =
     scope.kind === "threads_only"
       ? "(no new commits)"

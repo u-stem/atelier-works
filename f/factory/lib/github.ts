@@ -3091,7 +3091,7 @@ export async function listPrChecks(
 }
 
 /** `pulls/{number}/files`が返せる件数の上限。 */
-const PR_FILES_API_CAP = 3000;
+export const PR_FILES_API_CAP = 3000;
 
 /**
  * `GET .../pulls/{number}/files`を最後のページまで読み、変更されたファイルのパスを返す。

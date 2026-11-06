@@ -455,6 +455,12 @@ describe("review scope wiring in the generate step", () => {
     );
   });
 
+  test("logs why a review reads the whole PR", async () => {
+    expect(await SOURCE).toContain(
+      '...(scope.kind === "full" ? { reason: scope.reason } : {})',
+    );
+  });
+
   test("keeps at most 50 findings", async () => {
     expect(await SOURCE).toContain("const MAX_FINDINGS = 50;");
   });
