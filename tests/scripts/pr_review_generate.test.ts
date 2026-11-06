@@ -459,6 +459,12 @@ describe("review scope wiring in the generate step", () => {
     );
   });
 
+  test("settles the thread answers by the scope", async () => {
+    expect(await SOURCE).toContain(
+      "thread_responses: settleThreadResponses(output.thread_responses, scope),",
+    );
+  });
+
   test("settles the findings with the shared limit", async () => {
     expect((await SOURCE).replace(/\s+/g, " ")).toContain(
       "settleReviewFindings( output, scope, REVIEW_MAX_FINDINGS, )",

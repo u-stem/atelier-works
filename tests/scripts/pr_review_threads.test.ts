@@ -18,6 +18,7 @@ import {
   reviewThreadsForPrompt,
   selectThreadResponses,
   settleReviewFindings,
+  settleThreadResponses,
   threadResponseKind,
   withTrustedResolution,
 } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -939,6 +940,47 @@ describe("reviewMaxTurns", () => {
     expect(
       reviewMaxTurns({ kind: "threads_only", fromSha: PRIOR }, CONFIG),
     ).toBe(40);
+  });
+});
+
+// 前回のレビューが同じheadを見ているので、出力の揺れで`addressed`に変わって解決されないようにする。
+describe("settleThreadResponses", () => {
+  const ANSWERS: readonly ThreadResponse[] = [
+    { thread_id: 1, decision: "addressed", body: "解消です。" },
+    { thread_id: 2, decision: "skip_accepted", body: "了承です。" },
+    { thread_id: 3, decision: "skip_rejected", body: "反論です。" },
+  ];
+  const THREADS_ONLY = { kind: "threads_only", fromSha: PRIOR } as const;
+
+  test("drops addressed on a threads-only review", () => {
+    expect(
+      settleThreadResponses(ANSWERS, THREADS_ONLY).map(
+        (response) => response.decision,
+      ),
+    ).not.toContain("addressed");
+  });
+
+  test("keeps the skip answers on a threads-only review", () => {
+    expect(
+      settleThreadResponses(ANSWERS, THREADS_ONLY).map(
+        (response) => response.thread_id,
+      ),
+    ).toEqual([2, 3]);
+  });
+
+  test("keeps addressed on a delta review", () => {
+    expect(
+      settleThreadResponses(ANSWERS, { kind: "delta", fromSha: PRIOR }),
+    ).toEqual([...ANSWERS]);
+  });
+
+  test("keeps addressed on a full review", () => {
+    expect(
+      settleThreadResponses(ANSWERS, {
+        kind: "full",
+        reason: "requested_again",
+      }),
+    ).toEqual([...ANSWERS]);
   });
 });
 

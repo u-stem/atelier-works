@@ -6325,6 +6325,13 @@ export function settleReviewFindings(
   };
 }
 
+export function settleThreadResponses(
+  responses: readonly ThreadResponse[],
+  _scope: ReviewScope,
+): ThreadResponse[] {
+  return [...responses];
+}
+
 /** スコープに合う`maxTurns`を返す。PR全体を読むレビューは、全部のファイルを読むので別の上限を使う。 */
 export function reviewMaxTurns(
   scope: ReviewScope,

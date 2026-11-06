@@ -583,6 +583,15 @@ describe("reviewPrompt", () => {
 
   describe("scope", () => {
     const PRIOR = "a".repeat(40);
+    const REPLY_THREAD: PromptReviewThread = {
+      thread_id: 501,
+      path: "a.ts",
+      line: 10,
+      status: "open",
+      started_by: "factory",
+      response_kind: "skip",
+      comments: [{ author: "factory", body: "null check missing" }],
+    };
     const baseInput = {
       pr: PR,
       diff: "+const x = 1;",
@@ -674,6 +683,40 @@ describe("reviewPrompt", () => {
         FIXED_UUID,
       );
       expect(prompt).toContain("report no new finding");
+    });
+
+    test("tells a threads-only review to answer skips only", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, scope: { kind: "threads_only", fromSha: PRIOR } },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "Only answer the threads whose `response_kind` is `skip`",
+      );
+    });
+
+    test("does not offer addressed to a threads-only review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [REPLY_THREAD],
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("use `addressed` only when");
+    });
+
+    test("still offers addressed to a delta review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [REPLY_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("use `addressed` only when");
     });
 
     test("leaves the binary files out of a threads-only review", () => {
