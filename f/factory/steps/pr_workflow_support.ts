@@ -4052,6 +4052,12 @@ export function replyTargetCommentId(
   );
 }
 
+export function skipOnlyRoundOutcome(
+  _allRepliesPosted: boolean,
+): "done" | "blocked" {
+  return "done";
+}
+
 /**
  * このラウンドの見送りを再レビューに回すためのラベルが要るかを返す。
  * Issue化の提案が人の判断を待つ間は、再レビューに進めない。

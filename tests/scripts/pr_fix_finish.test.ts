@@ -45,6 +45,7 @@ import {
   SKIP_REREVIEW_LABEL_FAILED_REASON,
   scanPrFixBeforeCommit,
   shouldAdvanceWatermarks,
+  skipOnlyRoundOutcome,
   stopBeforeCommitTerminal,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
@@ -1093,6 +1094,17 @@ describe("requestSkipRereview", () => {
   });
 });
 
+// 連続の失敗の数は`blocked`でない行で切れるので、投稿に失敗した回を成功として残さない。
+describe("skipOnlyRoundOutcome", () => {
+  test("records done when every reply was posted", () => {
+    expect(skipOnlyRoundOutcome(true)).toBe("done");
+  });
+
+  test("records blocked when a reply could not be posted", () => {
+    expect(skipOnlyRoundOutcome(false)).toBe("blocked");
+  });
+});
+
 describe("the skip-only round's watermarks", () => {
   test("advances watermarks once the replies are posted", () => {
     expect(shouldAdvanceWatermarks("skip_only_replied")).toBe(true);
@@ -1179,10 +1191,42 @@ describe("skip wiring in the finish step", () => {
     );
   });
 
-  test("records a skip-only round as done", async () => {
-    expect(await SOURCE).toContain(
-      'outcome: nothingToCommitEnd === "skip_only" ? "done" : "blocked"',
+  /** 見送りだけの回の分岐から後の本文。 */
+  async function skipOnlyBody(): Promise<string> {
+    const source = await SOURCE;
+    return source.slice(
+      source.indexOf('if (nothingToCommitEnd === "skip_only") {'),
     );
+  }
+
+  test("records a skip-only round from the result of the replies", async () => {
+    expect(await skipOnlyBody()).toContain(
+      "outcome: skipOnlyRoundOutcome(allRepliesPosted),",
+    );
+  });
+
+  test("records a skip-only round before stopping on a failed reply", async () => {
+    const body = await skipOnlyBody();
+    expect(body.indexOf("await insertFixRound({")).toBeLessThan(
+      body.indexOf("if (!allRepliesPosted) {"),
+    );
+  });
+
+  test("records a skip-only round before advancing the watermarks", async () => {
+    const body = await skipOnlyBody();
+    expect(body.indexOf("await insertFixRound({")).toBeLessThan(
+      body.indexOf('shouldAdvanceWatermarks("skip_only_replied")'),
+    );
+  });
+
+  test("still records the other rounds without a commit before the replies", async () => {
+    const source = await SOURCE;
+    const branch = source.slice(
+      source.indexOf('if (pushResult.outcome === "nothing_to_commit") {'),
+    );
+    expect(
+      branch.indexOf('if (nothingToCommitEnd !== "skip_only") {'),
+    ).toBeLessThan(branch.indexOf("const allRepliesPosted ="));
   });
 
   test("advances the watermarks before adding the label in a skip-only round", async () => {
