@@ -6083,6 +6083,18 @@ export type PriorReviewSha =
 /** PR全体を読むレビューの`maxTurns`の下限。全部のファイルを読むと、既定の40に当たりうるため。費用は`max_budget_usd_per_run`が抑える。 */
 export const PR_REVIEW_FULL_MAX_TURNS = 80;
 
+export function reviewDeltaFromSha(_input: unknown): string | null {
+  return null;
+}
+
+export function hasBodyOnlyMustFinding(
+  _findings: unknown,
+  _threads: unknown,
+  _viewer: string,
+): boolean {
+  return false;
+}
+
 /** 前回からの差分を読む必要があるかを返す。 */
 export function needsReviewDelta(
   prior: PriorReviewSha,

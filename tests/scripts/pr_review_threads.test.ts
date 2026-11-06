@@ -2,11 +2,15 @@
 
 import { describe, expect, test } from "bun:test";
 import { hasMarker, type ReviewThread } from "../../f/factory/lib/github.ts";
-import type { ThreadResponse } from "../../f/factory/lib/types.ts";
+import type {
+  ReviewFinding,
+  ThreadResponse,
+} from "../../f/factory/lib/types.ts";
 import {
   decideReviewScope,
-  needsReviewDelta,
+  hasBodyOnlyMustFinding,
   renderThreadReply,
+  reviewDeltaFromSha,
   reviewMaxTurns,
   reviewThreadsForPrompt,
   selectThreadResponses,
@@ -367,6 +371,8 @@ function scopeOf(
     headSha: HEAD,
     fixRound: null,
     pendingSkipCount: 0,
+    hasBodyOnlyMust: false,
+    changedFileCount: 1,
     delta: { hasMerge: false },
     ...overrides,
   });
@@ -430,29 +436,185 @@ describe("decideReviewScope", () => {
   test("reads the changes for a CI round", () => {
     expect(scopeOf({ fixRound: "ci" }).kind).toBe("delta");
   });
+
+  test("reads the whole PR when a prior MUST has no thread", () => {
+    expect(scopeOf({ hasBodyOnlyMust: true })).toEqual({
+      kind: "full",
+      reason: "body_only_must",
+    });
+  });
+
+  test("prefers an unreadable prior review over a body-only MUST", () => {
+    expect(
+      scopeOf({ prior: { kind: "unreadable" }, hasBodyOnlyMust: true }),
+    ).toEqual({ kind: "full", reason: "prior_unreadable" });
+  });
+
+  test("prefers a conflict round over a body-only MUST", () => {
+    expect(scopeOf({ fixRound: "conflict", hasBodyOnlyMust: true })).toEqual({
+      kind: "full",
+      reason: "conflict_round",
+    });
+  });
+
+  test("prefers a body-only MUST over answering threads on the same head", () => {
+    expect(
+      scopeOf({
+        prior: { kind: "found", sha: HEAD },
+        pendingSkipCount: 1,
+        hasBodyOnlyMust: true,
+      }),
+    ).toEqual({ kind: "full", reason: "body_only_must" });
+  });
+
+  test("reads the whole PR when the changed files may be cut off", () => {
+    expect(scopeOf({ changedFileCount: 3000 })).toEqual({
+      kind: "full",
+      reason: "too_many_files",
+    });
+  });
+
+  test("reads the changes just under the changed files limit", () => {
+    expect(scopeOf({ changedFileCount: 2999 }).kind).toBe("delta");
+  });
+
+  test("still answers threads on the same head with many changed files", () => {
+    expect(
+      scopeOf({
+        prior: { kind: "found", sha: HEAD },
+        pendingSkipCount: 1,
+        changedFileCount: 3000,
+      }).kind,
+    ).toBe("threads_only");
+  });
 });
 
-describe("needsReviewDelta", () => {
-  test("reads the delta when a different commit was reviewed", () => {
-    expect(needsReviewDelta({ kind: "found", sha: PRIOR }, HEAD, null)).toBe(
-      true,
-    );
+describe("reviewDeltaFromSha", () => {
+  const INPUT: Parameters<typeof reviewDeltaFromSha>[0] = {
+    prior: { kind: "found", sha: PRIOR },
+    headSha: HEAD,
+    fixRound: null,
+    pendingSkipCount: 0,
+    hasBodyOnlyMust: false,
+    changedFileCount: 1,
+  };
+
+  test("returns the prior commit when a different commit was reviewed", () => {
+    expect(reviewDeltaFromSha(INPUT)).toBe(PRIOR);
   });
 
   test("does not read it for the same head", () => {
-    expect(needsReviewDelta({ kind: "found", sha: HEAD }, HEAD, null)).toBe(
+    expect(
+      reviewDeltaFromSha({ ...INPUT, prior: { kind: "found", sha: HEAD } }),
+    ).toBeNull();
+  });
+
+  test("does not read it for a conflict round", () => {
+    expect(reviewDeltaFromSha({ ...INPUT, fixRound: "conflict" })).toBeNull();
+  });
+
+  test("does not read it without a prior review", () => {
+    expect(
+      reviewDeltaFromSha({ ...INPUT, prior: { kind: "none" } }),
+    ).toBeNull();
+  });
+
+  test("does not read it when a prior MUST has no thread", () => {
+    expect(reviewDeltaFromSha({ ...INPUT, hasBodyOnlyMust: true })).toBeNull();
+  });
+
+  test("does not read it when the changed files may be cut off", () => {
+    expect(reviewDeltaFromSha({ ...INPUT, changedFileCount: 3000 })).toBeNull();
+  });
+});
+
+describe("hasBodyOnlyMustFinding", () => {
+  function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
+    return {
+      path: "a.ts",
+      line: 10,
+      end_line: null,
+      severity: "major",
+      kind: "must",
+      message: "null checkが抜けています。",
+      suggestion: null,
+      suggested_code: null,
+      ...overrides,
+    };
+  }
+  const POSTED = "[pr_review 自動レビュー]\n[MUST] null checkが抜けています。";
+
+  test("finds a MUST whose message is in no thread", () => {
+    expect(hasBodyOnlyMustFinding([finding()], [], VIEWER)).toBe(true);
+  });
+
+  test("does not flag a MUST posted as a thread", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding()],
+        [thread({ firstCommentBody: POSTED })],
+        VIEWER,
+      ),
+    ).toBe(false);
+  });
+
+  test("matches a resolved thread too", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding()],
+        [thread({ firstCommentBody: POSTED, isResolved: true })],
+        VIEWER,
+      ),
+    ).toBe(false);
+  });
+
+  test("ignores a finding that is not a MUST", () => {
+    expect(hasBodyOnlyMustFinding([finding({ kind: "imo" })], [], VIEWER)).toBe(
       false,
     );
   });
 
-  test("does not read it for a conflict round", () => {
+  test("does not take a thread a person started as the posted finding", () => {
     expect(
-      needsReviewDelta({ kind: "found", sha: PRIOR }, HEAD, "conflict"),
+      hasBodyOnlyMustFinding(
+        [finding()],
+        [
+          thread({
+            firstCommentAuthorLogin: "alice",
+            firstCommentBody: POSTED,
+          }),
+        ],
+        VIEWER,
+      ),
+    ).toBe(true);
+  });
+
+  test("matches a message whose marker was neutralized when posted", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding({ message: "x<!-- y" })],
+        [
+          thread({
+            firstCommentBody: "[pr_review 自動レビュー]\n[MUST] x&lt;!-- y",
+          }),
+        ],
+        VIEWER,
+      ),
     ).toBe(false);
   });
 
-  test("does not read it without a prior review", () => {
-    expect(needsReviewDelta({ kind: "none" }, HEAD, null)).toBe(false);
+  test("matches a message that was normalized when posted", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding({ message: "LGTM です。" })],
+        [
+          thread({
+            firstCommentBody: "[pr_review 自動レビュー]\n[MUST] LGTMです。",
+          }),
+        ],
+        VIEWER,
+      ),
+    ).toBe(false);
   });
 });
 

@@ -77,7 +77,7 @@ locks:
   f/factory/lib/console_support: 0bf5550eaf29de2b68e5b07d5367af5d747a99a28eb91db94fe47a8786fee332
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
   f/factory/lib/credential_expiry: e259f06242b27308e1eb3838457a9fcb91dd5642d1d1b70321a6f33e732e2c1c
-  f/factory/lib/db: 0b0013a923e9f4b91d675af0cc38b17b37ddd7d07d91bca141532ef10e6264cc
+  f/factory/lib/db: 5d92ed8a2ef5a727a38d4cd03ce34ff9368d280e22430e6c996b18082cbe1286
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905
@@ -241,7 +241,7 @@ locks:
   f/factory/steps/pr_review_intake_register: c0f6a2a2a00548ac17bf2ddb1c40f103f3ad4f693ab17500afdd592e023ff655
   f/factory/steps/pr_review_post: 008db8916b487a87010d2885d31c9bbb7133ec803665133437da66f7526e533a
   f/factory/steps/pr_review_prepare: 30d5c5ccb47585cf16576cf4ead44a612a878e840a118c3b5272e3e75e0ecd3a
-  f/factory/steps/pr_workflow_support: a48e69d8dfdad392409db5d1b080840cfd90ab1de6f7c2450cf321df633d1d19
+  f/factory/steps/pr_workflow_support: b927bf8f3dae55ac2ad94ddc7cc024f6156b25f5a296ebbe71bca47034eab116
   f/factory/steps/requirements_apply: 8c96732c4d5c2f5b74bf68cb944f604b3f2910eb33ff01f04923e25d5d35343b
   f/factory/watch_main_ci: f456c37b1e0e950e6fd0dbf62a2921d677846504ed31f4da8198d4d8bf76fc54
   f/factory/watch_pr_ci: c9ec769a24272024115a57d183f61e4340dc2627ac3b84db243a56c659b7e7e2

@@ -3022,6 +3022,15 @@ export async function latestPostedPrReviewHeadSha(
   return typeof row.head_sha === "string" ? row.head_sha : null;
 }
 
+export async function latestPostedPrReview(
+  _owner: string,
+  _repo: string,
+  _prNumber: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<{ head_sha: string; findings: ReviewFinding[] } | null> {
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // fix_rounds
 // ---------------------------------------------------------------------------

@@ -88,7 +88,7 @@ import {
   latestDraft,
   latestFixRound,
   latestMainCiRunCreatedAt,
-  latestPostedPrReviewHeadSha,
+  latestPostedPrReview,
   latestPrWorkItem,
   latestRequirementsApproval,
   latestStatusEvent,
@@ -10787,28 +10787,58 @@ describe("restartTransientPrReview against the active pr_review index", () => {
   });
 });
 
-describe("latestPostedPrReviewHeadSha", () => {
+describe("latestPostedPrReview", () => {
+  const FINDING = {
+    path: "a.ts",
+    line: 1,
+    end_line: null,
+    severity: "major",
+    kind: "must",
+    message: "m",
+    suggestion: null,
+    suggested_code: null,
+  };
+
   test("returns the head of the newest posted review", async () => {
-    const { sql } = createFakeSqlClient([[{ head_sha: "a".repeat(40) }]]);
-    const sha = await latestPostedPrReviewHeadSha("octo-owner", "app", 7, sql);
-    expect(sha).toBe("a".repeat(40));
+    const { sql } = createFakeSqlClient([
+      [{ head_sha: "a".repeat(40), findings: [] }],
+    ]);
+    const posted = await latestPostedPrReview("octo-owner", "app", 7, sql);
+    expect(posted?.head_sha).toBe("a".repeat(40));
+  });
+
+  test("returns the findings of the newest posted review", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ head_sha: "a".repeat(40), findings: [FINDING] }],
+    ]);
+    const posted = await latestPostedPrReview("octo-owner", "app", 7, sql);
+    expect(posted?.findings).toEqual([FINDING]);
+  });
+
+  test("rejects a malformed finding", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ head_sha: "a".repeat(40), findings: [{ path: 1 }] }],
+    ]);
+    await expect(
+      latestPostedPrReview("octo-owner", "app", 7, sql),
+    ).rejects.toThrow("malformed finding");
   });
 
   test("returns null without a posted review", async () => {
     const { sql } = createFakeSqlClient([[]]);
-    const sha = await latestPostedPrReviewHeadSha("octo-owner", "app", 7, sql);
-    expect(sha).toBeNull();
+    const posted = await latestPostedPrReview("octo-owner", "app", 7, sql);
+    expect(posted).toBeNull();
   });
 
   test("reads only posted reviews", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestPostedPrReviewHeadSha("octo-owner", "app", 7, sql);
+    await latestPostedPrReview("octo-owner", "app", 7, sql);
     expect(calls[0]?.text).toContain("posted_review_id IS NOT NULL");
   });
 
   test("reads only pr_review work items", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestPostedPrReviewHeadSha("octo-owner", "app", 7, sql);
+    await latestPostedPrReview("octo-owner", "app", 7, sql);
     expect(calls[0]?.text).toContain("w.kind = 'pr_review'");
   });
 });
