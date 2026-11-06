@@ -2247,31 +2247,72 @@ describe("posting a review once per sha", () => {
       return ok(ghApiStdout(422, { message: "Unprocessable Entity" }));
     }
 
-    test("replies to an accepted skip after posting the review", async () => {
+    test("replies to an accepted skip before posting the review", async () => {
       const fake = createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         skipThreads(),
-        ghApiOk({ id: 99 }),
         ghApiOk({ id: 100 }),
         RESOLVED_OK,
+        ghApiOk({ id: 99 }),
       ]);
       await publishReview(
         { run: fake.run, ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
-      expect(fake.calls.findIndex(isReplyCall)).toBeGreaterThan(
+      expect(fake.calls.findIndex(isReplyCall)).toBeLessThan(
         fake.calls.findIndex(isCreateReviewCall),
       );
+    });
+
+    test("resolves a thread before posting the review", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 100 }),
+        RESOLVED_OK,
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(fake.calls.findIndex(isResolveCall)).toBeLessThan(
+        fake.calls.findIndex(isCreateReviewCall),
+      );
+    });
+
+    test("checks the owner before answering a thread", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 100 }),
+        RESOLVED_OK,
+        ghApiOk({ id: 99 }),
+      ]);
+      let callsAtCheck = -1;
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({
+          threadResponses: [ACCEPT_SKIP],
+          ensureRepoOwner: async () => {
+            callsAtCheck = fake.calls.length;
+            return null;
+          },
+        }),
+        SILENT,
+      );
+      expect(callsAtCheck).toBe(fake.calls.findIndex(isReplyCall));
     });
 
     test("resolves an accepted skip", async () => {
       const fake = createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         skipThreads(),
-        ghApiOk({ id: 99 }),
         ghApiOk({ id: 100 }),
         RESOLVED_OK,
+        ghApiOk({ id: 99 }),
       ]);
       await publishReview(
         { run: fake.run, ghToken: "tok" },
@@ -2285,8 +2326,8 @@ describe("posting a review once per sha", () => {
       const fake = createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         skipThreads(),
-        ghApiOk({ id: 99 }),
         ghApiOk({ id: 100 }),
+        ghApiOk({ id: 99 }),
       ]);
       await publishReview(
         { run: fake.run, ghToken: "tok" },
@@ -2302,8 +2343,8 @@ describe("posting a review once per sha", () => {
       const fake = createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         skipThreads(),
-        ghApiOk({ id: 99 }),
         replyRejected(),
+        ghApiOk({ id: 99 }),
       ]);
       await publishReview(
         { run: fake.run, ghToken: "tok" },
@@ -2320,10 +2361,10 @@ describe("posting a review once per sha", () => {
           skipThreadNode("PRRT_1", 501, "MUST"),
           skipThreadNode("PRRT_2", 601, "MUST"),
         ]),
-        ghApiOk({ id: 99 }),
         replyRejected(),
         ghApiOk({ id: 100 }),
         RESOLVED_OK,
+        ghApiOk({ id: 99 }),
       ]);
       const result = await publishReview(
         { run: fake.run, ghToken: "tok" },
@@ -2342,10 +2383,10 @@ describe("posting a review once per sha", () => {
           skipThreadNode("PRRT_1", 501, "MUST"),
           skipThreadNode("PRRT_2", 601, "MUST"),
         ]),
-        ghApiOk({ id: 99 }),
         replyRejected(),
         ghApiOk({ id: 100 }),
         RESOLVED_OK,
+        ghApiOk({ id: 99 }),
       ]);
       await publishReview(
         { run: fake.run, ghToken: "tok" },
@@ -2357,6 +2398,231 @@ describe("posting a review once per sha", () => {
       expect(
         fake.calls.filter(isResolveCall).map((call) => call.options?.stdin),
       ).toEqual([expect.stringContaining("PRRT_2")]);
+    });
+
+    test("counts a thread in the body when its reply failed", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        replyRejected(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(
+        JSON.parse(fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}"),
+      ).toMatchObject({
+        body: expect.stringContaining("未対応の指摘が1件残っています"),
+      });
+    });
+
+    test("counts a thread in the body when resolving it failed", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 100 }),
+        replyRejected(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(
+        JSON.parse(fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}"),
+      ).toMatchObject({
+        body: expect.stringContaining("未対応の指摘が1件残っています"),
+      });
+    });
+
+    test("reports a thread as blocking when resolving it failed", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 100 }),
+        replyRejected(),
+        ghApiOk({ id: 99 }),
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(result.blockingThreadCount).toBe(1);
+    });
+
+    test("says LGTM only after every thread was resolved", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 100 }),
+        RESOLVED_OK,
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(
+        JSON.parse(fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}"),
+      ).toMatchObject({
+        body: expect.stringContaining("修正を確認しました。LGTMです。"),
+      });
+    });
+
+    // 投稿の前に落ちて再実行されても、返信の後は最後のコメントが変わるので、対象から外れる。
+    describe("when a rerun finds the answer it already posted", () => {
+      const ACK_REPLY = renderThreadReply(ACCEPT_SKIP, 7);
+
+      function answeredThreads(): CommandResult {
+        const finding = {
+          author: { login: VIEWER },
+          body: "[pr_review 自動レビュー]\n[IMO] consider",
+          databaseId: 501,
+        };
+        const skip = {
+          author: { login: VIEWER },
+          body: "理由です。\n\n対応: 見送り",
+          databaseId: 502,
+        };
+        const ack = {
+          author: { login: VIEWER },
+          body: ACK_REPLY,
+          databaseId: 503,
+        };
+        return threadsResponse([
+          {
+            id: "PRRT_1",
+            isResolved: false,
+            path: "a.ts",
+            line: 10,
+            firstComments: { nodes: [finding] },
+            lastComments: { nodes: [ack] },
+            allComments: { nodes: [finding, skip, ack] },
+          },
+        ]);
+      }
+
+      test("does not reply a second time", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([humanReview(1)]),
+          answeredThreads(),
+          RESOLVED_OK,
+          ghApiOk({ id: 99 }),
+        ]);
+        await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+          SILENT,
+        );
+        expect(fake.calls.some(isReplyCall)).toBe(false);
+      });
+
+      test("resolves the thread it answered", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([humanReview(1)]),
+          answeredThreads(),
+          RESOLVED_OK,
+          ghApiOk({ id: 99 }),
+        ]);
+        await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+          SILENT,
+        );
+        expect(fake.calls.some(isResolveCall)).toBe(true);
+      });
+    });
+
+    describe("an addressed answer on an untouched finding", () => {
+      const ADDRESSED: ThreadResponse = {
+        thread_id: 501,
+        decision: "addressed",
+        body: "abc1234で解消しています。",
+      };
+
+      test("replies to the thread", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([humanReview(1)]),
+          openImoThreads(),
+          ghApiOk({ id: 100 }),
+          RESOLVED_OK,
+          ghApiOk({ id: 99 }),
+        ]);
+        await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput({ threadResponses: [ADDRESSED] }),
+          SILENT,
+        );
+        expect(fake.calls.some(isReplyCall)).toBe(true);
+      });
+
+      test("resolves the thread", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([humanReview(1)]),
+          openImoThreads(),
+          ghApiOk({ id: 100 }),
+          RESOLVED_OK,
+          ghApiOk({ id: 99 }),
+        ]);
+        await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput({ threadResponses: [ADDRESSED] }),
+          SILENT,
+        );
+        expect(fake.calls.some(isResolveCall)).toBe(true);
+      });
+    });
+
+    test("does not subtract a thread selected for resolving when posting is gated", async () => {
+      const fake = createFakeCommandRunner([
+        threadsResponse([
+          skipThreadNode(
+            "PRRT_1",
+            501,
+            "MUST",
+            "[pr_fix 自動返信]\nfixed\n\n対応: `abc1234`",
+          ),
+        ]),
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ post: false }),
+        SILENT,
+      );
+      expect(result.blockingThreadCount).toBe(1);
+    });
+
+    test("does not write to a thread when posting is gated", async () => {
+      const fake = createFakeCommandRunner([skipThreads()]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ post: false, threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(fake.calls).toHaveLength(1);
+    });
+
+    test("writes nothing to a thread when the threads cannot be read", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        serverError(),
+        serverError(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok", sleep: async () => {} },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(
+        fake.calls.some(isReplyCall) || fake.calls.some(isResolveCall),
+      ).toBe(false);
     });
 
     // 新しい指摘が無くても、誰も答えていない`[IMO]`が残るならLGTMと書かない。
@@ -2410,9 +2676,9 @@ describe("posting a review once per sha", () => {
       const fake = createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         skipThreads(),
-        ghApiOk({ id: 99 }),
         ghApiOk({ id: 100 }),
         RESOLVED_OK,
+        ghApiOk({ id: 99 }),
       ]);
       const result = await publishReview(
         { run: fake.run, ghToken: "tok" },
@@ -2747,12 +3013,12 @@ describe("posting a review once per sha", () => {
             "[pr_fix 自動返信]\nfixed\n\n対応: `abc1234`",
           ),
         ]),
-        ghApiOk({ id: 99 }),
         ghApiOk({
           data: {
             resolveReviewThread: { thread: { id: "PRRT_1", isResolved: true } },
           },
         }),
+        ghApiOk({ id: 99 }),
       ]);
       await publishReview(
         { run: fake.run, ghToken: "tok" },
