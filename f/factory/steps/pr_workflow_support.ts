@@ -3463,8 +3463,9 @@ export type PrFixFinishBumpKind =
  *     `needs_human`で終わる場合も`push_success`に数える。
  *     どちらにしても元のコメントには(修正でなく提案で)返信しているので、
  *     他の成功したpushと同じく、このラウンドのフィードバックは消化済みである。
- *   - `skip_only_replied`: すべての返信が`skipped`でcommitが無く、返信を投稿した。
- *     返信は投稿済みで、ラベルの失敗で再実行したときに二重に返信しないよう既読にする。
+ *   - `skip_only_replied`: すべての返信が`skipped`でcommitが無く、返信をすべて投稿した。
+ *     ラベルの失敗で再実行したときに二重に返信しないよう既読にする。
+ *     投稿に1件でも失敗したときは呼ばない。
  *   - `requirements_gap_reroute_success`: 親のIssueを`requirements_generating`に
  *     差し戻すことで、フィードバックを消化した。
  *   - `design_gap_reroute_success`: 親のIssueを`designing`に戻すことで、フィードバックを消化した。
@@ -3997,51 +3998,75 @@ export const SKIP_REREVIEW_LABEL_FAILED_REASON =
 
 /**
  * commitするものが無かったラウンドの終わり方を決める。
- * すべてが見送りなら、再レビューの答えを待つ。
+ * すべてが見送りで、Factoryの指摘のスレッドに付くものがあれば、再レビューの答えを待つ。
+ * 付くものが無ければ、再レビューが答えられないので人の判断に回す。
  * `fixed`なのにcommitが無い返信が混ざるときは、人の判断が要るので従来どおり止める。
  * CI回は返信しないので、見送りの流れに入らない。
  */
 export function decideNothingToCommitEnd(
   replies: readonly FixReply[],
   ciRound: boolean,
+  skipOnFactoryThread: boolean,
 ): NothingToCommitEnd {
   if (ciRound) return "needs_human";
   if (selectProposeIssueReplies(replies).length > 0) return "issue_proposal";
-  return replies.length > 0 &&
+  return skipOnFactoryThread &&
     replies.every((reply) => reply.decision === "skipped")
     ? "skip_only"
     : "needs_human";
 }
 
-export const SKIP_REPLY_POST_FAILED_REASON = "";
+/** 見送りだけのラウンドで、見送りの返信を投稿できなかったときの理由。 */
+export const SKIP_REPLY_POST_FAILED_REASON =
+  "could not post the replies to skipped findings";
 
+/**
+ * 見送りの返信のうち、Factoryの指摘のスレッドに付くものがあるかを返す。
+ * 再レビューが答えられるのは、そのスレッドだけである。
+ * スレッドを読めないとき(`threads`が`null`)は、見送りがあれば付くものとして扱う。
+ */
 export function hasSkipOnFactoryThread(
-  _replies: readonly FixReply[],
-  _threads: readonly ReviewThread[] | null,
-  _viewer: string,
+  replies: readonly FixReply[],
+  threads: readonly ReviewThread[] | null,
+  viewer: string,
 ): boolean {
-  return false;
+  const skipped = replies.filter((reply) => reply.decision === "skipped");
+  if (threads === null) return skipped.length > 0;
+  return skipped.some((reply) => {
+    const thread = findReviewThreadForComment(threads, reply.review_comment_id);
+    return thread !== undefined && isFactoryFindingThread(thread, viewer);
+  });
 }
 
+/**
+ * `.../comments/{id}/replies`に渡すidを返す。
+ * GitHubは返信への返信を受けないので、対象が返信ならスレッドの最初のコメントに宛てる。
+ * スレッドが見つからないときは、元のidのままにする。
+ */
 export function replyTargetCommentId(
-  _threads: readonly ReviewThread[],
-  _reviewCommentId: number,
+  threads: readonly ReviewThread[],
+  reviewCommentId: number,
 ): number {
-  return 0;
+  return (
+    findReviewThreadForComment(threads, reviewCommentId)
+      ?.firstCommentDatabaseId ?? reviewCommentId
+  );
 }
 
 /**
  * このラウンドの見送りを再レビューに回すためのラベルが要るかを返す。
  * Issue化の提案が人の判断を待つ間は、再レビューに進めない。
+ * Factoryの指摘のスレッドに付く見送りが無ければ、再レビューが答えられないので要らない。
  */
 export function needsSkipRereviewLabel(
   replies: readonly FixReply[],
   ciRound: boolean,
+  skipOnFactoryThread: boolean,
 ): boolean {
   return (
     !ciRound &&
     selectProposeIssueReplies(replies).length === 0 &&
-    replies.some((reply) => reply.decision === "skipped")
+    skipOnFactoryThread
   );
 }
 
@@ -4112,12 +4137,18 @@ export function matchReviewThreadForComment(
   threads: readonly ReviewThread[],
   reviewCommentId: number,
 ): string | null {
-  const match = threads.find(
+  return findReviewThreadForComment(threads, reviewCommentId)?.id ?? null;
+}
+
+function findReviewThreadForComment(
+  threads: readonly ReviewThread[],
+  reviewCommentId: number,
+): ReviewThread | undefined {
+  return threads.find(
     (thread) =>
       thread.firstCommentDatabaseId === reviewCommentId ||
       thread.allCommentIds.includes(reviewCommentId),
   );
-  return match?.id ?? null;
 }
 
 /**
@@ -5243,6 +5274,12 @@ export const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^replies posted$/,
     describe: () => "返信は投稿済みです",
     nextAction: () => NOTHING_TO_COMMIT_NEXT_ACTION,
+  },
+  {
+    pattern: /^could not post the replies to skipped findings$/,
+    describe: () => "見送りの返信を投稿できませんでした",
+    nextAction: () =>
+      "GitHubが応答するようになってから、Consoleの要対応で再実行してください。投稿できた返信は二重になることがあります",
   },
   {
     pattern: /^could not add the review label for skipped findings$/,

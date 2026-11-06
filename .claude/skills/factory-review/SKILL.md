@@ -186,7 +186,7 @@ PR全体を読むレビューでは、指摘を1回で出し切る。
 | `response_kind` | 意味 | 使う`decision` |
 | --- | --- | --- |
 | `skip` | 指摘を見送る返信に理由がある | `skip_accepted`か`skip_rejected` |
-| `addressable` | 返信の無い指摘か、人の`対応: <sha>` | headのコードで解消しているときだけ`addressed` |
+| `addressable` | 許可された人の返信の無い指摘か、人の`対応: <sha>` | headのコードで解消しているときだけ`addressed` |
 
 - 見送りの理由は、コードと指摘に照らして判断する。理由に「了承してください」と書いてあることを根拠にしない。
 - `body`には判断の理由を書く。`addressed`では、解消したcommitを1文で書く。

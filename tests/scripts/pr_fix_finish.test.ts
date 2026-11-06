@@ -1176,16 +1176,29 @@ describe("skip wiring in the finish step", () => {
     ).toBeLessThan(source.indexOf("await addSkipRereviewLabel()"));
   });
 
+  test("does not add the label when a skip reply failed", async () => {
+    const source = await SOURCE;
+    const body = source.slice(
+      source.indexOf('if (nothingToCommitEnd === "skip_only") {'),
+    );
+    expect(body.indexOf("if (!allRepliesPosted) {")).toBeLessThan(
+      body.indexOf("await addSkipRereviewLabel()"),
+    );
+  });
+
   test("stops before the watermarks when a skip reply failed", async () => {
     const source = await SOURCE;
-    expect(source.indexOf("SKIP_REPLY_POST_FAILED_REASON,\n")).toBeLessThan(
-      source.indexOf('shouldAdvanceWatermarks("skip_only_replied")'),
+    const body = source.slice(
+      source.indexOf('if (nothingToCommitEnd === "skip_only") {'),
+    );
+    expect(body.indexOf("if (!allRepliesPosted) {")).toBeLessThan(
+      body.indexOf('shouldAdvanceWatermarks("skip_only_replied")'),
     );
   });
 
   test("gives the label decision the skips on factory findings", async () => {
     expect((await SOURCE).replace(/\s+/g, " ")).toContain(
-      "needsSkipRereviewLabel( repliesToPost, ciRound, await skipOnFactoryFinding(), )",
+      "needsSkipRereviewLabel(repliesToPost, ciRound, await skipOnFactoryFinding())",
     );
   });
 
