@@ -360,11 +360,20 @@ function EdgeToggle({
     );
   };
 
+  // ポインタが縁から外れたら、名前を閉じる。ボタンが先に消えても、名前だけが残らないためである。
+  // キーボードのフォーカスで出している名前は、フォーカスが外れるまで残す。
+  const closeTipByPointer = (): void => {
+    if (buttonRef.current?.matches(":focus-visible") !== true) {
+      setTipOpen(false);
+    }
+  };
+
   return (
     <div
       ref={edgeRef}
       className="group/edge absolute inset-y-0 -right-1.5 z-20 w-3"
       onPointerMove={followPointer}
+      onPointerLeave={closeTipByPointer}
     >
       <span
         aria-hidden="true"
