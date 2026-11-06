@@ -4251,7 +4251,7 @@ function parseReviewThreadNode(
  * - 最後のコメントの作成者(loginとid)・本文・REST id(別名`lastComments`)。
  *   `pr_workflow_support.ts`の`selectThreadsToResolve`が、まだ解決していない
  *   Factory自身の`pr_review`のスレッドのうち、最後の発言もFactoryのものを
- *   探すのに使う(スレッドに人の返信が残っていれば自動で解決してはならない)。
+ *   探すのに使う(最後のコメントが人の返信なら自動で解決してはならない)。
  *   `threadResponseKind`は、最後の書き手が許可された人かの判定に使う。
  * - コメントの作成者(loginとid)・本文(`comments`)。
  *   先頭の`REVIEW_THREAD_COMMENTS_LIMIT`件までで、`reviewThreadsForPrompt`が使う。

@@ -1,6 +1,6 @@
 // f/factory/pr_reviewの投稿ステップ。
-// レビューをGitHubのPRレビューとして投稿して記録し、作業項目を"reviewed"に進めて
-// Discordへ通知し、`pr_review_prepare.ts`が作ったdetachedのworktreeを消す。
+// 既存のスレッドへの答えを返信して解決し、レビューをGitHubのPRレビューとして投稿して記録する。
+// 作業項目を"reviewed"に進めてDiscordへ通知し、`pr_review_prepare.ts`が作ったdetachedのworktreeを消す。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
@@ -200,8 +200,8 @@ export async function main(
  * (factory-reviewスキルの方針)。`verdict`は`factory.reviews`にだけ残す。
  * トリガーの`review_label`は着手時に消費済みなので、ここで外すラベルも、
  * 付けるPRの状態ラベルも無い。
- * 投稿後に結果を決め、今回の指摘に`kind === "must"`があるか、
- * 前回までの`[MUST]`の指摘か、了承されていない見送り(反論した見送りを含む)が今回の解決処理の後も残っていれば
+ * 投稿の後に結果を決め、今回の指摘に`kind === "must"`があるか、
+ * 前回までの`[MUST]`の指摘か、了承されていない見送り(反論した見送りを含む)が今回の解決の後も残っていれば
  * `"changes_requested"`、それ以外は`"reviewed"`にする。
  * これはDiscordの通知で、変更が要るのか承認だけでよいのかを一目で示すためのもの。
  * 未解決のスレッドの一覧を読めず、今回の指摘にも`[MUST]`が無いときは、
@@ -210,9 +210,9 @@ export async function main(
  * 投稿するレビュー本文は5種類の定型(`renderReviewSummary` / `ReviewBodyMode`)の
  * いずれかで、Claudeの自由記述の`summary`は使わない。
  * `summary`は出力スキーマと`factory.reviews`に記録として残すだけ。
- * 再レビュー(このPRに以前のFactoryのレビューがある)のときは、
- * pr_fixが対応済みとみなせるFactory自身のスレッド(`selectThreadsToResolve`)と、
- * 再レビューが了承か解消と答えたスレッドを、ベストエフォートで解決する。
+ * 再レビュー(このPRに以前のFactoryのレビューがある)のときは、レビューの投稿の前に、
+ * 再レビューの答えを返信し、pr_fixが対応済みとみなせるFactory自身のスレッド(`selectThreadsToResolve`)と、
+ * 了承か解消と答えたスレッドを、ベストエフォートで解決する。
  * 誰も答えていない指摘は解決しない。解決の後もFactoryのスレッドが残れば、
  * 本文にLGTMと書かない。
  * 初回のレビューでは対応済みのものが無いため解決しない。
@@ -230,7 +230,7 @@ export async function main(
  * 印の付いた失敗は、`auto_retry_pr_review`が作業項目の状態で自動に再開する。
  * 行コメントを解決できない422は投稿の中で復旧し(`postMarkedReview`)、失敗として表に出さない。
  *
- * 投稿の直前に、リポジトリのオーナーの数値IDを照合する。通らなければ、投稿もスレッドの解決もせず、
+ * 最初の書き込みの前に、リポジトリのオーナーの数値IDを照合する。通らなければ、返信も解決も投稿もせず、
  * 作業項目を`blocked`にしてDiscordで知らせ、`skip`で返す。投稿済みのレビューを再利用するときは書き込まないので照合しない。
  *
  * `review_post_mode`が"gated"のときは、レビューを記録して"reviewed"に進め
@@ -381,10 +381,10 @@ export type PublishReviewInput = {
   readonly binaryUnlistedCount: number;
   /** このPRに、この作業項目より前のFactoryのレビューの記録があるか。 */
   readonly priorReview: boolean;
-  /** 偽なら("gated")投稿もスレッドの解決もしない。 */
+  /** 偽なら("gated")投稿も返信もスレッドの解決もしない。 */
   readonly post: boolean;
   /**
-   * 投稿の直前に、リポジトリのオーナーの数値IDを照合する(`repoOwnerStopReason`)。
+   * 最初の書き込みの前に、リポジトリのオーナーの数値IDを照合する(`repoOwnerStopReason`)。
    * 通らないときは、止める理由を返す。通るときは`null`。
    */
   readonly ensureRepoOwner: () => Promise<string | null>;
@@ -405,16 +405,18 @@ export type PublishReviewResult = {
    * スレッドの一覧を読めなかったときは、0と区別して`null`にする。
    */
   readonly blockingThreadCount: number | null;
-  /** オーナーの照合に落ちて、投稿もスレッドの解決もしなかったときの理由。それ以外は`null`。 */
+  /** オーナーの照合に落ちて、投稿も返信も解決もしなかったときの理由。それ以外は`null`。 */
   readonly ownerStopReason: string | null;
 };
 
 /**
- * レビューの総評を組み立ててGitHubに投稿し、pr_fixが対応済みのFactory自身のスレッドを解決する。
- * この作業項目が同じshaに対して投稿済みのレビューがあれば、投稿もスレッドの解決もせずにそのidを返す。
+ * 順番は、再利用の判定、スレッドの読み取り、答えの検証、オーナーの照合、返信、解決、数え、本文の種類の決定、投稿である。
+ * 本文と`blockingThreadCount`の件数は、実際に解決できたスレッドだけを引いて数える。
+ * この作業項目が同じshaに対して投稿済みのレビューがあれば、投稿も返信も解決もせずにそのidを返す。
  * そのときの`blockingThreadCount`は、マージを止めるスレッドをすべて数えたもの。
  * 再利用するときにスレッドの一覧を取得できなければ、例外を投げる。
- * 新しく投稿するときに取得できなければ、投稿は続け、`blockingThreadCount`を`null`にして返す。
+ * 新しく投稿するときに取得できなければ、返信も解決もせずに投稿は続け、`blockingThreadCount`を`null`にして返す。
+ * 投稿しないとき("gated")は、返信も解決もせず、何も引かずに数える。
  * レビューの一覧の取得に失敗したら、投稿せずに例外を投げる。
  * DBとWindmillには触れない(呼び出し側の`postReview`が記録と通知を行う)。
  */
@@ -426,21 +428,18 @@ export async function publishReview(
   const { target, comments, droppedFindings, priorReview } = input;
   const { owner, repo, pr_number, viewer_login: viewerLogin } = target;
 
-  // 投稿済みのレビューは、スレッドを選ぶより先に探す。
+  // 投稿済みのレビューは、スレッドに書き込むより先に探す。
   // 再実行ではClaudeがレビューを作り直すので、新しい指摘が0件になりやすい。
-  // 再利用するときは、スレッドを選ばず何も解決しない。
   const existingId = input.post ? await findPostedReview(client, target) : null;
   const reused = existingId !== null;
 
-  // スレッドの一覧、解決するid、
-  // 解決後に残るFactory自身のスレッドの数は、すべて本文の種類より先に決める。
+  // スレッドは本文の種類より先に読む。
   // 新しい指摘が無くても、前のラウンドのスレッドが未解決なら、
   // 単なるLGTMではなく`"rereview_open"`にするため。
   // 初回のレビューにはまだスレッドが無く、取得してもAPIを余分に使うだけなので、
   // `priorReview`か、投稿済みのレビューを再利用するときだけ取得する。
   // 再利用するレビューが初回のものでも、その指摘のスレッドは既にある。
-  // 新しく投稿するときは、ここで失敗してもレビューの投稿は止めない。
-  // `threads`は空のままになり、`threadIdsToResolve`も空になる。
+  // 新しく投稿するときは、ここで失敗してもレビューの投稿は止めず、返信も解決もしない。
   // 件数は0ではなく`null`にして、残りの有無が分からないことを伝える。
   // 0にすると、マージを止めるスレッドが残るPRをLGTMの本文と`reviewed`の通知で示してしまう。
   // 指摘を投稿するときの`mode`は"findings"のままで、投稿しないときは"rereview_unverified"になる。
@@ -464,13 +463,46 @@ export async function publishReview(
       });
     }
   }
-  // 再利用するときは答えない。投稿済みのレビューの答えが済んでいるかもしれず、残りは次のレビューが答える。
+  // `resolvedIds`には、実際に解決できたスレッドだけを入れる。
+  const countThreads = (resolvedIds: readonly string[]) => ({
+    openThreadCount: threadsReadable
+      ? countOpenThreads(threads, viewerLogin, resolvedIds)
+      : null,
+    blockingThreadCount: threadsReadable
+      ? countBlockingThreads(
+          threads,
+          viewerLogin,
+          input.isAllowedReplier,
+          resolvedIds,
+        )
+      : null,
+  });
+
+  // 投稿しないときと再利用するときは、スレッドに書き込まず、残っているものをすべて数える。
+  // 再実行ではClaudeがレビューを作り直すので、それを根拠に投稿済みのレビューの指摘を閉じない。
+  if (!input.post) {
+    return {
+      postedReviewId: null,
+      reused: false,
+      blockingThreadCount: countThreads([]).blockingThreadCount,
+      ownerStopReason: null,
+    };
+  }
+  if (existingId !== null) {
+    return {
+      postedReviewId: existingId,
+      reused: true,
+      blockingThreadCount: countThreads([]).blockingThreadCount,
+      ownerStopReason: null,
+    };
+  }
+
   // 答えの対象は、Claudeの出力でなく、読み直した`threads`から決める。
   const { applied, droppedCount } = selectThreadResponses(
     threads,
     viewerLogin,
     input.isAllowedReplier,
-    reused ? [] : input.threadResponses,
+    input.threadResponses,
   );
   if (droppedCount > 0) {
     log.warn("dropped thread responses that do not fit a thread", {
@@ -480,44 +512,8 @@ export async function publishReview(
       dropped: droppedCount,
     });
   }
-  const answeredIds = applied
-    .filter(({ response }) => response.decision !== "skip_rejected")
-    .map(({ thread }) => thread.id);
-  // 再利用するときは何も解決せず、残っているスレッドをすべて数えて通知に載せる。
-  const selectedIds = reused
-    ? []
-    : selectThreadsToResolve(threads, viewerLogin);
-  const threadIdsToResolve = [...new Set([...selectedIds, ...answeredIds])];
-  const openThreadCount = threadsReadable
-    ? countOpenThreads(threads, viewerLogin, threadIdsToResolve)
-    : null;
-  const blockingThreadCount = threadsReadable
-    ? countBlockingThreads(
-        threads,
-        viewerLogin,
-        input.isAllowedReplier,
-        threadIdsToResolve,
-      )
-    : null;
 
-  if (!input.post) {
-    return {
-      postedReviewId: null,
-      reused: false,
-      blockingThreadCount,
-      ownerStopReason: null,
-    };
-  }
-  if (existingId !== null) {
-    return {
-      postedReviewId: existingId,
-      reused: true,
-      blockingThreadCount,
-      ownerStopReason: null,
-    };
-  }
-
-  // 書き込み(レビューの投稿と、続くスレッドの解決)の直前に、オーナーの数値IDを照合する。
+  // 書き込み(返信、解決、レビューの投稿)の直前に、オーナーの数値IDを照合する。
   // 準備の入口の照合から、Claudeの実行を挟むので、その間に名前が別の人に渡っていても、
   // コードの抜粋を含みうるレビューの文面を相手に渡さない。
   const ownerStop = await input.ensureRepoOwner();
@@ -525,11 +521,60 @@ export async function publishReview(
     return {
       postedReviewId: null,
       reused: false,
-      blockingThreadCount,
+      blockingThreadCount: countThreads([]).blockingThreadCount,
       ownerStopReason: ownerStop,
     };
   }
 
+  // 答えの返信を、レビューの投稿より先に出す。本文の件数を、実際の結果で数えるためである。
+  // 投稿で落ちて再実行されても、返信の後は最後のコメントが変わるので、同じスレッドに二重に答えない。
+  // 返信できなかったスレッドは解決せず、次のレビューが答え直す。
+  const answeredIds: string[] = [];
+  for (const { thread, commentId, response } of applied) {
+    try {
+      await replyReviewComment(
+        client,
+        owner,
+        repo,
+        pr_number,
+        commentId,
+        renderThreadReply(response, target.work_item_id),
+      );
+      if (response.decision !== "skip_rejected") answeredIds.push(thread.id);
+    } catch (err) {
+      log.warn("failed to answer a review thread", {
+        owner,
+        repo,
+        number: pr_number,
+        threadId: thread.id,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+
+  // pr_fixが対応済みのFactory自身のスレッドと、答えを返したスレッドを解決する。
+  // 解決に失敗してもステップは失敗させず、そのスレッドを未解決のまま数える。
+  const resolvedIds: string[] = [];
+  for (const threadId of new Set([
+    ...selectThreadsToResolve(threads, viewerLogin),
+    ...answeredIds,
+  ])) {
+    try {
+      await resolveReviewThread(client, threadId);
+      resolvedIds.push(threadId);
+    } catch (err) {
+      log.warn("failed to resolve review thread", {
+        owner,
+        repo,
+        number: pr_number,
+        threadId,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+
+  // 本文と戻り値の件数は、同じ実際の結果から数える。
+  const { openThreadCount, blockingThreadCount } = countThreads(resolvedIds);
   const mode = decideReviewBodyMode(
     comments.length,
     droppedFindings.length,
@@ -561,63 +606,10 @@ export async function publishReview(
     { fallbackBody, log },
   );
 
-  // 答えの返信を、レビューの投稿の後に出す。
-  // 返信できなかったスレッドは解決せず、次のレビューが答え直す。
-  const unanswered = new Set<string>();
-  for (const { thread, commentId, response } of applied) {
-    try {
-      await replyReviewComment(
-        client,
-        owner,
-        repo,
-        pr_number,
-        commentId,
-        renderThreadReply(response, target.work_item_id),
-      );
-    } catch (err) {
-      unanswered.add(thread.id);
-      log.warn("failed to answer a review thread", {
-        owner,
-        repo,
-        number: pr_number,
-        threadId: thread.id,
-        error: maskSecrets(err instanceof Error ? err.message : String(err)),
-      });
-    }
-  }
-
-  // 再レビューのたびに、pr_fixが対応済みのFactory自身のスレッドと、答えを返したスレッドを解決する。
-  // 投稿済みのレビューの扱いを妨げないよう、解決に失敗してもステップは失敗させない。
-  // `threadIdsToResolve`は、本文の種類を決めたのと同じ解決前の`threads`から求めてある。
-  for (const threadId of threadIdsToResolve) {
-    if (unanswered.has(threadId)) continue;
-    try {
-      await resolveReviewThread(client, threadId);
-    } catch (err) {
-      log.warn("failed to resolve review thread", {
-        owner,
-        repo,
-        number: pr_number,
-        threadId,
-        error: maskSecrets(err instanceof Error ? err.message : String(err)),
-      });
-    }
-  }
-  // 本文は返信の前に決めた件数で投稿済みである。
-  // 記録と通知に使う件数は、返信できず解決しなかったスレッドを残りに戻して数え直す。
-  const settledBlockingThreadCount =
-    blockingThreadCount === null || unanswered.size === 0
-      ? blockingThreadCount
-      : countBlockingThreads(
-          threads,
-          viewerLogin,
-          input.isAllowedReplier,
-          threadIdsToResolve.filter((id) => !unanswered.has(id)),
-        );
   return {
     postedReviewId,
     reused: false,
-    blockingThreadCount: settledBlockingThreadCount,
+    blockingThreadCount,
     ownerStopReason: null,
   };
 }
