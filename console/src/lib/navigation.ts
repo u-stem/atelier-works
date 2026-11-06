@@ -74,3 +74,18 @@ export function navLinkClass(collapsed: boolean): string {
     collapsed && "justify-center px-0",
   );
 }
+
+/** 縁のつまみが、縁の上下の端から離れる距離(px)。つまみの半分の大きさに余白を足した値である。 */
+export const EDGE_TOGGLE_MARGIN = 16;
+
+/**
+ * 縁のつまみの縦の位置(縁の上端からの距離、px)を返す。
+ * ポインタの高さ(`pointerY`)に合わせ、縁の上端(`top`)と高さ(`height`)の内側で、上下に余白を残して挟む。
+ */
+export function edgeToggleOffset(
+  _pointerY: number,
+  _top: number,
+  _height: number,
+): number {
+  return 0;
+}

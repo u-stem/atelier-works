@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  EDGE_TOGGLE_MARGIN,
+  edgeToggleOffset,
   formatBadgeCount,
   menuButtonLabel,
   navLinkClass,
@@ -128,5 +130,27 @@ describe("navLinkClass", () => {
 
   test("keeps the label padding when expanded", () => {
     expect(navLinkClass(false)).not.toContain("justify-center");
+  });
+});
+
+describe("edgeToggleOffset", () => {
+  test("follows the pointer inside the edge", () => {
+    expect(edgeToggleOffset(300, 0, 800)).toBe(300);
+  });
+
+  test("measures from the top of the edge", () => {
+    expect(edgeToggleOffset(364, 64, 800)).toBe(300);
+  });
+
+  test("keeps the margin at the top", () => {
+    expect(edgeToggleOffset(2, 0, 800)).toBe(EDGE_TOGGLE_MARGIN);
+  });
+
+  test("keeps the margin at the bottom", () => {
+    expect(edgeToggleOffset(799, 0, 800)).toBe(800 - EDGE_TOGGLE_MARGIN);
+  });
+
+  test("stays at the top margin when the edge is too short for both margins", () => {
+    expect(edgeToggleOffset(10, 0, 20)).toBe(EDGE_TOGGLE_MARGIN);
   });
 });
