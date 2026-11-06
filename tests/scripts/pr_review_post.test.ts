@@ -1008,14 +1008,15 @@ describe("selectThreadsToResolve", () => {
 
   describe("acknowledgement replies", () => {
     const ACK_BODY = "了承\n\n<!-- factory:pr_review_ack:9 -->";
+    const ackComment = {
+      databaseId: 2,
+      authorLogin: "factory-bot",
+      authorId: null,
+      body: ACK_BODY,
+    };
     const twoComments = [
       { databaseId: 1, authorLogin: "factory-bot", authorId: null, body: "f" },
-      {
-        databaseId: 2,
-        authorLogin: "factory-bot",
-        authorId: null,
-        body: ACK_BODY,
-      },
+      ackComment,
     ];
 
     test("resolves a thread whose last comment is the viewer's acknowledgement", () => {
@@ -1032,7 +1033,7 @@ describe("selectThreadsToResolve", () => {
         [
           thread({
             lastCommentBody: ACK_BODY,
-            comments: [twoComments[1]],
+            comments: [ackComment],
           }),
         ],
         "factory-bot",

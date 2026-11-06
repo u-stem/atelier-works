@@ -578,15 +578,17 @@ export function fixOutputProseIssues(
  * 複数行の指摘は`mapFindingsToReviewComments`が`start_line` / `line`を
  * 指摘の`line` / `end_line`に合わせるので、ブロックは常にGitHubが表示する範囲に
  * 適用される。本文に範囲の注記は要らない。
- * `message`と`suggestion`は`normalizeJapaneseText`を通す。
+ * `message`と`suggestion`は`normalizeJapaneseText`を通し、`neutralizeHtmlComment`で
+ * 目印を無害にする。Claudeの出力が末尾に目印を書いても、了承の返信や`pr_fix`の返信と
+ * 見分けがつかなくならないようにするため。
  * `suggested_code`は文章ではなくコードなので変更しない。
  */
 export function renderInlineComment(finding: ReviewFinding): string {
   const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
-  const message = normalizeJapaneseText(finding.message);
+  const message = neutralizeHtmlComment(normalizeJapaneseText(finding.message));
   const suggestionText =
     finding.suggestion !== null
-      ? `\n\n提案: ${normalizeJapaneseText(finding.suggestion)}`
+      ? `\n\n提案: ${neutralizeHtmlComment(normalizeJapaneseText(finding.suggestion))}`
       : "";
   const codeBlock =
     finding.suggested_code === null
@@ -907,6 +909,8 @@ export function isFixedFixReply(body: string): boolean {
  * どのモードでも、最後のコメントがviewerの了承か解消の返信
  * (`PR_REVIEW_ACK_MARKER_KIND`の目印を持つもの)のスレッドは解決する。
  * 目印は誰でも貼れるので、最後のコメントの書き手がviewerであることを先に求めている。
+ * 指摘そのものに目印が書かれていても解決されないよう、返信であること
+ * (コメントが2件以上あること)も求める。
  */
 export function selectThreadsToResolve(
   threads: readonly ReviewThread[],
@@ -926,7 +930,8 @@ export function selectThreadsToResolve(
     )
     .filter(
       (thread) =>
-        hasMarker(thread.lastCommentBody, PR_REVIEW_ACK_MARKER_KIND) ||
+        (thread.comments.length > 1 &&
+          hasMarker(thread.lastCommentBody, PR_REVIEW_ACK_MARKER_KIND)) ||
         (mode === "rereview_clean" || mode === "rereview_open"
           ? thread.lastCommentBody.startsWith(ROLE_TAGS.pr_review) ||
             isFixedFixReply(thread.lastCommentBody)

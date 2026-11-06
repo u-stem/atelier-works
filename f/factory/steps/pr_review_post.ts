@@ -603,10 +603,20 @@ export async function publishReview(
       });
     }
   }
+  // 本文は返信の前に決めた件数で投稿済みである。
+  // 記録と通知に使う件数は、返信できず解決しなかったスレッドを残りに戻して数え直す。
+  const settledOpenMustCount =
+    openMustCount === null || unanswered.size === 0
+      ? openMustCount
+      : countOpenMustThreads(
+          threads,
+          viewerLogin,
+          threadIdsToResolve.filter((id) => !unanswered.has(id)),
+        );
   return {
     postedReviewId,
     reused: false,
-    openMustCount,
+    openMustCount: settledOpenMustCount,
     ownerStopReason: null,
   };
 }
