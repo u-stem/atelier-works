@@ -232,6 +232,14 @@ export function reviewerRequestFailedSupplement(apiError: string): string {
   return `GitHubでレビュアーを手動で依頼してください。\n再レビュー依頼のAPI呼び出しに失敗しました: ${apiError}`;
 }
 
+export async function requestSkipRereview(_deps: {
+  readonly checkOwner: () => Promise<string | null>;
+  readonly addLabel: () => Promise<void>;
+  readonly warn: (message: string) => void;
+}): Promise<string | null> {
+  return "";
+}
+
 /**
  * `reviewers`に再レビューを依頼する。依頼先からPRの作成者を除くため、先に
  * `loadAuthorLogin`でPRを読む。依頼先が無ければ何もせず`null`を返す。

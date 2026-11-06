@@ -231,13 +231,13 @@ describe("the owner id check before the writes of the finish steps", () => {
 
   test("pr_fix_finish calls the gate for the commit and for the review label only", async () => {
     const text = await source("pr_fix_finish.ts");
-    expect(text.split("await repoOwnerStopReason(").length - 1).toBe(2);
+    expect(text.split("repoOwnerStopReason(").length - 1).toBe(2);
   });
 
   test("pr_fix_finish defines the review label request after the commit gate", async () => {
     const text = await source("pr_fix_finish.ts");
     expect(positionOf(text, "await repoOwnerStopReason(")).toBeLessThan(
-      positionOf(text, "async function requestSkipRereview"),
+      positionOf(text, "async function addSkipRereviewLabel"),
     );
   });
 

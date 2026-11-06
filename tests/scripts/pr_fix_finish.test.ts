@@ -21,6 +21,7 @@ import {
 import {
   reportReviewerRequest,
   requestRereview,
+  requestSkipRereview,
   reviewerRequestFailedSupplement,
 } from "../../f/factory/steps/pr_fix_finish.ts";
 import {
@@ -31,6 +32,7 @@ import {
   deriveFallbackReviewers,
   describeReason,
   evaluateRerouteGuard,
+  hasSkipOnFactoryThread,
   listReviewThreadsBestEffort,
   needsSkipRereviewLabel,
   nextActionFor,
@@ -38,6 +40,8 @@ import {
   type PrFixSecretScanDeps,
   prFixPushGateReason,
   renderFixReply,
+  replyTargetCommentId,
+  SKIP_REPLY_POST_FAILED_REASON,
   SKIP_REREVIEW_LABEL_FAILED_REASON,
   scanPrFixBeforeCommit,
   shouldAdvanceWatermarks,
@@ -833,8 +837,14 @@ function replyOf(decision: FixReply["decision"]): FixReply {
 
 describe("decideNothingToCommitEnd", () => {
   test("waits for the re-review when every reply is skipped", () => {
-    expect(decideNothingToCommitEnd([replyOf("skipped")], false)).toBe(
+    expect(decideNothingToCommitEnd([replyOf("skipped")], false, true)).toBe(
       "skip_only",
+    );
+  });
+
+  test("asks a person when no skip is on a factory finding", () => {
+    expect(decideNothingToCommitEnd([replyOf("skipped")], false, false)).toBe(
+      "needs_human",
     );
   });
 
@@ -843,22 +853,27 @@ describe("decideNothingToCommitEnd", () => {
       decideNothingToCommitEnd(
         [replyOf("skipped"), replyOf("propose_issue")],
         false,
+        true,
       ),
     ).toBe("issue_proposal");
   });
 
   test("asks a person when a fixed reply committed nothing", () => {
     expect(
-      decideNothingToCommitEnd([replyOf("skipped"), replyOf("fixed")], false),
+      decideNothingToCommitEnd(
+        [replyOf("skipped"), replyOf("fixed")],
+        false,
+        true,
+      ),
     ).toBe("needs_human");
   });
 
   test("asks a person when there is no reply", () => {
-    expect(decideNothingToCommitEnd([], false)).toBe("needs_human");
+    expect(decideNothingToCommitEnd([], false, false)).toBe("needs_human");
   });
 
   test("asks a person for a CI round", () => {
-    expect(decideNothingToCommitEnd([replyOf("skipped")], true)).toBe(
+    expect(decideNothingToCommitEnd([replyOf("skipped")], true, true)).toBe(
       "needs_human",
     );
   });
@@ -867,12 +882,28 @@ describe("decideNothingToCommitEnd", () => {
 describe("needsSkipRereviewLabel", () => {
   test("adds the label when a pushed round also skipped a finding", () => {
     expect(
-      needsSkipRereviewLabel([replyOf("fixed"), replyOf("skipped")], false),
+      needsSkipRereviewLabel(
+        [replyOf("fixed"), replyOf("skipped")],
+        false,
+        true,
+      ),
     ).toBe(true);
   });
 
+  test("does not add it when no skip is on a factory finding", () => {
+    expect(
+      needsSkipRereviewLabel(
+        [replyOf("fixed"), replyOf("skipped")],
+        false,
+        false,
+      ),
+    ).toBe(false);
+  });
+
   test("does not add it without a skipped reply", () => {
-    expect(needsSkipRereviewLabel([replyOf("fixed")], false)).toBe(false);
+    expect(needsSkipRereviewLabel([replyOf("fixed")], false, false)).toBe(
+      false,
+    );
   });
 
   test("does not add it while an issue proposal waits", () => {
@@ -880,18 +911,199 @@ describe("needsSkipRereviewLabel", () => {
       needsSkipRereviewLabel(
         [replyOf("skipped"), replyOf("propose_issue")],
         false,
+        true,
       ),
     ).toBe(false);
   });
 
   test("does not add it for a CI round", () => {
-    expect(needsSkipRereviewLabel([replyOf("skipped")], true)).toBe(false);
+    expect(needsSkipRereviewLabel([replyOf("skipped")], true, true)).toBe(
+      false,
+    );
+  });
+});
+
+function roundThread(overrides: Partial<ReviewThread> = {}): ReviewThread {
+  const finding = "[pr_review 自動レビュー]\n[IMO] consider";
+  return {
+    id: "thread-1",
+    isResolved: false,
+    path: "a.ts",
+    line: 1,
+    firstCommentAuthorLogin: "factory-bot",
+    firstCommentBody: finding,
+    lastCommentAuthorLogin: "factory-bot",
+    lastCommentBody: finding,
+    firstCommentDatabaseId: 1,
+    allCommentIds: [1, 2],
+    lastCommentAuthorId: null,
+    lastCommentDatabaseId: 2,
+    comments: [],
+    ...overrides,
+  };
+}
+
+describe("hasSkipOnFactoryThread", () => {
+  const SKIP_ON_REPLY: FixReply = {
+    ...replyOf("skipped"),
+    review_comment_id: 2,
+  };
+
+  test("finds a skip on a reply in a factory finding's thread", () => {
+    expect(
+      hasSkipOnFactoryThread([SKIP_ON_REPLY], [roundThread()], "factory-bot"),
+    ).toBe(true);
+  });
+
+  test("does not count a skip on a thread a person started", () => {
+    expect(
+      hasSkipOnFactoryThread(
+        [SKIP_ON_REPLY],
+        [roundThread({ firstCommentAuthorLogin: "alice" })],
+        "factory-bot",
+      ),
+    ).toBe(false);
+  });
+
+  test("does not count a skip outside every thread", () => {
+    expect(
+      hasSkipOnFactoryThread(
+        [{ ...SKIP_ON_REPLY, review_comment_id: 99 }],
+        [roundThread()],
+        "factory-bot",
+      ),
+    ).toBe(false);
+  });
+
+  test("does not count a fixed reply", () => {
+    expect(
+      hasSkipOnFactoryThread(
+        [{ ...replyOf("fixed"), review_comment_id: 2 }],
+        [roundThread()],
+        "factory-bot",
+      ),
+    ).toBe(false);
+  });
+
+  test("treats a skip as on a finding when the threads cannot be read", () => {
+    expect(hasSkipOnFactoryThread([SKIP_ON_REPLY], null, "factory-bot")).toBe(
+      true,
+    );
+  });
+
+  test("needs a skip even when the threads cannot be read", () => {
+    expect(
+      hasSkipOnFactoryThread([replyOf("fixed")], null, "factory-bot"),
+    ).toBe(false);
+  });
+});
+
+describe("replyTargetCommentId", () => {
+  test("replies to the first comment of the thread", () => {
+    expect(replyTargetCommentId([roundThread()], 2)).toBe(1);
+  });
+
+  test("keeps the comment id without a matching thread", () => {
+    expect(replyTargetCommentId([roundThread()], 99)).toBe(99);
+  });
+
+  test("keeps the comment id when the thread has no first comment id", () => {
+    expect(
+      replyTargetCommentId([roundThread({ firstCommentDatabaseId: null })], 2),
+    ).toBe(2);
+  });
+});
+
+describe("requestSkipRereview", () => {
+  const OWNER_STOP = repoOwnerIdMismatchReason("acme/widgets", 1, 2);
+
+  test("reports no stop once the label is added", async () => {
+    const stop = await requestSkipRereview({
+      checkOwner: async () => null,
+      addLabel: async () => {},
+      warn: () => {},
+    });
+    expect(stop).toBeNull();
+  });
+
+  test("returns the reason of the owner check", async () => {
+    const stop = await requestSkipRereview({
+      checkOwner: async () => OWNER_STOP,
+      addLabel: async () => {},
+      warn: () => {},
+    });
+    expect(stop).toBe(OWNER_STOP);
+  });
+
+  test("does not add the label when the owner check stops", async () => {
+    let added = 0;
+    await requestSkipRereview({
+      checkOwner: async () => OWNER_STOP,
+      addLabel: async () => {
+        added += 1;
+      },
+      warn: () => {},
+    });
+    expect(added).toBe(0);
+  });
+
+  test("does not ask to add the label when the owner check stops", () => {
+    expect(nextActionFor(OWNER_STOP)).not.toContain("factory:review");
+  });
+
+  test("returns the label failure when the label cannot be added", async () => {
+    const stop = await requestSkipRereview({
+      checkOwner: async () => null,
+      addLabel: async () => {
+        throw new Error("rate limited");
+      },
+      warn: () => {},
+    });
+    expect(stop).toBe(SKIP_REREVIEW_LABEL_FAILED_REASON);
+  });
+
+  test("returns the label failure when the owner check itself fails", async () => {
+    const stop = await requestSkipRereview({
+      checkOwner: async () => {
+        throw new Error("rate limited");
+      },
+      addLabel: async () => {},
+      warn: () => {},
+    });
+    expect(stop).toBe(SKIP_REREVIEW_LABEL_FAILED_REASON);
+  });
+
+  test("masks secrets in the warning", async () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const warnings: string[] = [];
+    await requestSkipRereview({
+      checkOwner: async () => null,
+      addLabel: async () => {
+        throw new Error(`failed with ${token}`);
+      },
+      warn: (message) => {
+        warnings.push(message);
+      },
+    });
+    expect(warnings).toEqual(["failed with ***"]);
   });
 });
 
 describe("the skip-only round's watermarks", () => {
   test("advances watermarks once the replies are posted", () => {
     expect(shouldAdvanceWatermarks("skip_only_replied")).toBe(true);
+  });
+});
+
+describe("the skip reply failure reason", () => {
+  test("translates the reason for notifications", () => {
+    expect(describeReason(SKIP_REPLY_POST_FAILED_REASON)).toBe(
+      "見送りの返信を投稿できませんでした",
+    );
+  });
+
+  test("asks to run the round again", () => {
+    expect(nextActionFor(SKIP_REPLY_POST_FAILED_REASON)).toContain("再実行");
   });
 });
 
@@ -923,10 +1135,31 @@ describe("skip wiring in the finish step", () => {
   test("checks the repository owner before adding the label", async () => {
     const source = await SOURCE;
     const body = source.slice(
-      source.indexOf("async function requestSkipRereview"),
+      source.indexOf("async function addSkipRereviewLabel"),
     );
-    expect(body.indexOf("repoOwnerStopReason(")).toBeLessThan(
-      body.indexOf("addLabels(client"),
+    expect(body.indexOf("checkOwner: () =>")).toBeLessThan(
+      body.indexOf("addLabel: () =>"),
+    );
+  });
+
+  test("checks the owner before adding the label in the shared function", async () => {
+    const calls: string[] = [];
+    await requestSkipRereview({
+      checkOwner: async () => {
+        calls.push("owner");
+        return null;
+      },
+      addLabel: async () => {
+        calls.push("label");
+      },
+      warn: () => {},
+    });
+    expect(calls).toEqual(["owner", "label"]);
+  });
+
+  test("replies through the thread's first comment", async () => {
+    expect((await SOURCE).replace(/\s+/g, " ")).toContain(
+      "replyTargetCommentId(threads, reply.review_comment_id)",
     );
   });
 
@@ -940,6 +1173,25 @@ describe("skip wiring in the finish step", () => {
     const source = await SOURCE;
     expect(
       source.indexOf('shouldAdvanceWatermarks("skip_only_replied")'),
-    ).toBeLessThan(source.indexOf("await requestSkipRereview()"));
+    ).toBeLessThan(source.indexOf("await addSkipRereviewLabel()"));
+  });
+
+  test("stops before the watermarks when a skip reply failed", async () => {
+    const source = await SOURCE;
+    expect(source.indexOf("SKIP_REPLY_POST_FAILED_REASON,\n")).toBeLessThan(
+      source.indexOf('shouldAdvanceWatermarks("skip_only_replied")'),
+    );
+  });
+
+  test("gives the label decision the skips on factory findings", async () => {
+    expect((await SOURCE).replace(/\s+/g, " ")).toContain(
+      "needsSkipRereviewLabel( repliesToPost, ciRound, await skipOnFactoryFinding(), )",
+    );
+  });
+
+  test("gives the end of the round the skips on factory findings", async () => {
+    expect((await SOURCE).replace(/\s+/g, " ")).toContain(
+      "decideNothingToCommitEnd( repliesToPost, ciRound, await skipOnFactoryFinding(), )",
+    );
   });
 });

@@ -4013,6 +4013,23 @@ export function decideNothingToCommitEnd(
     : "needs_human";
 }
 
+export const SKIP_REPLY_POST_FAILED_REASON = "";
+
+export function hasSkipOnFactoryThread(
+  _replies: readonly FixReply[],
+  _threads: readonly ReviewThread[] | null,
+  _viewer: string,
+): boolean {
+  return false;
+}
+
+export function replyTargetCommentId(
+  _threads: readonly ReviewThread[],
+  _reviewCommentId: number,
+): number {
+  return 0;
+}
+
 /**
  * このラウンドの見送りを再レビューに回すためのラベルが要るかを返す。
  * Issue化の提案が人の判断を待つ間は、再レビューに進めない。
