@@ -16,7 +16,6 @@ import type { RequirementsIndexRow } from "./api/guards/requirements.ts";
 import type { SummaryNotice } from "./api/guards/summary.ts";
 import { NavDrawer } from "./app/NavDrawer.tsx";
 import { Sidebar } from "./app/Sidebar.tsx";
-import { ThemeSwitch } from "./app/ThemeSwitch.tsx";
 import { ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { Disclosure } from "./components/Disclosure.tsx";
 import { TooltipProvider } from "./components/ui/tooltip.tsx";
@@ -63,10 +62,6 @@ const SCOPE_OFF =
   "border border-transparent duration-(--duration-fast) ease-standard focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-muted focus-visible:ring-ring h-7 hover:text-foreground inline-flex items-center outline-none px-3 rounded-md text-muted-foreground text-small transition-colors";
 const SCOPE_ON =
   "bg-selected border border-primary duration-(--duration-fast) ease-standard focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-muted focus-visible:ring-ring h-7 hover:bg-selected hover:text-selected-foreground inline-flex items-center outline-none px-3 rounded-md text-selected-foreground text-small transition-colors";
-const THEME_OFF =
-  "border border-transparent duration-(--duration-fast) ease-standard focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-muted focus-visible:ring-ring hover:text-foreground inline-flex items-center justify-center outline-none rounded-md size-7 text-subtle transition-colors";
-const THEME_ON =
-  "bg-selected border border-primary duration-(--duration-fast) ease-standard focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-muted focus-visible:ring-ring hover:bg-selected hover:text-selected-foreground inline-flex items-center justify-center outline-none rounded-md size-7 text-selected-foreground transition-colors";
 
 const CHIPS = [
   { id: "all", label: "すべて" },
@@ -120,11 +115,7 @@ function scopeSwitch(): string[] {
   ]);
 }
 
-function themeSwitch(): string[] {
-  return classLists(inRouter(<ThemeSwitch />), ["fieldset", "button"]);
-}
-
-describe("ToggleChip: the three screens render the shared toggle classes", () => {
+describe("ToggleChip: the two screens render the shared toggle classes", () => {
   test("the kind chips render the group and chip classes", () => {
     expect(kindChips()).toEqual([GROUP, KIND_OFF, KIND_ON]);
   });
@@ -132,19 +123,13 @@ describe("ToggleChip: the three screens render the shared toggle classes", () =>
   test("the scope switch renders the group and chip classes", () => {
     expect(scopeSwitch()).toEqual([GROUP, SCOPE_ON, SCOPE_OFF, SCOPE_OFF]);
   });
-
-  test("the theme switch renders the group and option classes", () => {
-    expect(themeSwitch()).toEqual([GROUP, THEME_OFF, THEME_OFF, THEME_ON]);
-  });
 });
 
-// サイドバーのアイコンボタン。メニューを開く、閉じる、たたむ・広げるの3つ。
+// サイドバーのアイコンボタン。メニューを開く、閉じるの2つ。
 const MENU_OPEN =
   "duration-(--duration-fast) ease-standard focus-visible:ring-2 focus-visible:ring-sidebar-ring hover:bg-sidebar-accent hover:text-foreground inline-flex items-center justify-center min-h-11 min-w-11 outline-none relative rounded-lg size-9 text-muted-foreground transition-colors";
 const MENU_CLOSE =
   "duration-(--duration-fast) ease-standard focus-visible:ring-2 focus-visible:ring-sidebar-ring hover:bg-sidebar-accent hover:text-foreground inline-flex items-center justify-center min-h-11 min-w-11 ml-auto outline-none rounded-lg shrink-0 size-8 text-subtle transition-colors";
-const MENU_TOGGLE =
-  "duration-(--duration-fast) ease-standard focus-visible:ring-2 focus-visible:ring-sidebar-ring hover:bg-sidebar-accent hover:text-foreground inline-flex items-center justify-center outline-none rounded-lg size-8 text-subtle transition-colors";
 
 function sidebarIconButtons(): string[] {
   const html = renderToStaticMarkup(
@@ -254,7 +239,6 @@ describe("controlClasses: shared constants render the same class", () => {
   test.each([
     ["the menu open button", () => sidebarIconButtons()[0], MENU_OPEN],
     ["the menu close button", () => sidebarIconButtons()[1], MENU_CLOSE],
-    ["the sidebar fold button", () => sidebarIconButtons()[2], MENU_TOGGLE],
     [
       "the requirements row",
       () => requirementsRowLink()[0],

@@ -3,7 +3,7 @@ import { buttonVariants } from "../components/ui/button.tsx";
 import { cn } from "./cn.ts";
 import { SELECTED_STYLE } from "./selectedStyle.ts";
 
-// 期間切替が選択中を重ねる先。KindChipsとThemeSwitchは、描画のテストで確かめる。
+// 期間切替が選択中を重ねる先。KindChipsは、描画のテストで確かめる。
 const merged = cn(
   buttonVariants({ variant: "outline", size: "sm" }),
   SELECTED_STYLE,

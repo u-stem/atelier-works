@@ -5,21 +5,29 @@ export const THEME_STORAGE_KEY = "factory-console.theme";
 
 export type ThemePreference = "system" | "light" | "dark";
 
-const LABELS: Readonly<Record<ThemePreference, string>> = {
-  system: "OSに合わせる",
-  light: "ライト",
-  dark: "ダーク",
-};
+/** 切り替えボタンが次に付ける配色。いまの配色の反対を返す。 */
+export function oppositeTheme(theme: "light" | "dark"): "light" | "dark" {
+  return theme === "dark" ? "light" : "dark";
+}
 
-/** 切り替えに並べる選択。ライト、ダーク、OSに合わせるの順。 */
-export const THEME_OPTIONS: readonly {
-  readonly value: ThemePreference;
-  readonly label: string;
-}[] = [
-  { value: "light", label: LABELS.light },
-  { value: "dark", label: LABELS.dark },
-  { value: "system", label: LABELS.system },
-];
+/**
+ * 画面にいま付いている配色を返す。
+ * `data-theme`が`light`か`dark`ならそれを使う。
+ * 無いとき(OSの設定を読めない環境など)は、OSの設定に従う。OSの設定を読む関数が例外を投げたときは`light`にする。
+ */
+export function currentTheme(
+  attribute: string | null,
+  prefersDark: () => boolean,
+): "light" | "dark" {
+  if (attribute === "light" || attribute === "dark") {
+    return attribute;
+  }
+  try {
+    return prefersDark() ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
 
 /**
  * 保存領域から読んだ値をテーマの選択にする。
@@ -27,11 +35,6 @@ export const THEME_OPTIONS: readonly {
  */
 export function parseThemePreference(value: unknown): ThemePreference {
   return value === "light" || value === "dark" ? value : "system";
-}
-
-/** 画面に出す選択の名前を返す。 */
-export function themePreferenceLabel(preference: ThemePreference): string {
-  return LABELS[preference];
 }
 
 /**
