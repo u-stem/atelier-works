@@ -877,6 +877,8 @@ describe("selectThreadsToResolve", () => {
       comments: [],
       lastCommentAuthorId: null,
       lastCommentDatabaseId: null,
+      resolvedByLogin: "",
+      resolvedById: null,
       ...overrides,
     };
   }
@@ -1072,6 +1074,8 @@ describe("a thread the re-review objected to", () => {
     ],
     lastCommentAuthorId: null,
     lastCommentDatabaseId: null,
+    resolvedByLogin: "",
+    resolvedById: null,
   };
   const isAllowed = (login: string): boolean => login === "factory-bot";
 
@@ -1132,6 +1136,8 @@ describe("an IMO thread the re-review objected to", () => {
       ],
       lastCommentAuthorId: null,
       lastCommentDatabaseId: null,
+      resolvedByLogin: "",
+      resolvedById: null,
       ...overrides,
     };
   }
@@ -1256,6 +1262,8 @@ describe("countOpenThreads", () => {
       comments: [],
       lastCommentAuthorId: null,
       lastCommentDatabaseId: null,
+      resolvedByLogin: "",
+      resolvedById: null,
       ...overrides,
     };
   }
@@ -1303,6 +1311,8 @@ describe("countBlockingThreads", () => {
       comments: [],
       lastCommentAuthorId: null,
       lastCommentDatabaseId: null,
+      resolvedByLogin: "",
+      resolvedById: null,
     };
   }
 
@@ -2670,6 +2680,79 @@ describe("posting a review once per sha", () => {
         SILENT,
       );
       expect(result.blockingThreadCount).toBe(1);
+    });
+
+    describe("a MUST resolved on GitHub", () => {
+      function resolvedMust(resolver: string): CommandResult {
+        return threadsResponse([
+          {
+            ...skipThreadNode("PRRT_1", 501, "MUST", "直しません。"),
+            isResolved: true,
+            resolvedBy: { login: resolver },
+          },
+        ]);
+      }
+
+      test("stays blocking when a person who is not allowed resolved it", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([humanReview(1)]),
+          resolvedMust("mallory"),
+          ghApiOk({ id: 99 }),
+        ]);
+        const result = await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput(),
+          SILENT,
+        );
+        expect(result.blockingThreadCount).toBe(1);
+      });
+
+      test("does not say LGTM when a person who is not allowed resolved it", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([humanReview(1)]),
+          resolvedMust("mallory"),
+          ghApiOk({ id: 99 }),
+        ]);
+        await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput(),
+          SILENT,
+        );
+        expect(
+          JSON.parse(
+            fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}",
+          ),
+        ).toMatchObject({
+          body: expect.stringContaining("未対応の指摘が1件残っています"),
+        });
+      });
+
+      test("is not blocking when an allowed person resolved it", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([humanReview(1)]),
+          resolvedMust("alice"),
+          ghApiOk({ id: 99 }),
+        ]);
+        const result = await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput(),
+          SILENT,
+        );
+        expect(result.blockingThreadCount).toBe(0);
+      });
+
+      test("stays blocking when a reused review finds a person who is not allowed resolved it", async () => {
+        const fake = createFakeCommandRunner([
+          ghApiOk([postedReview(55)]),
+          resolvedMust("mallory"),
+        ]);
+        const result = await publishReview(
+          { run: fake.run, ghToken: "tok" },
+          rerunInput(),
+          SILENT,
+        );
+        expect(result.blockingThreadCount).toBe(1);
+      });
     });
 
     test("reports no blocking thread after a skip is accepted", async () => {

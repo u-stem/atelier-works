@@ -462,6 +462,8 @@ describe("listReviewThreadsBestEffort", () => {
     comments: [],
     lastCommentAuthorId: null,
     lastCommentDatabaseId: null,
+    resolvedByLogin: "",
+    resolvedById: null,
   };
 
   test("returns the loaded threads", async () => {
@@ -938,6 +940,8 @@ function roundThread(overrides: Partial<ReviewThread> = {}): ReviewThread {
     allCommentIds: [1, 2],
     lastCommentAuthorId: null,
     lastCommentDatabaseId: 2,
+    resolvedByLogin: "",
+    resolvedById: null,
     comments: [],
     ...overrides,
   };

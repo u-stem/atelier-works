@@ -6139,6 +6139,23 @@ export type PriorReviewSha =
   | { readonly kind: "unreadable" }
   | { readonly kind: "found"; readonly sha: string };
 
+export function withTrustedResolution(
+  threads: readonly ReviewThread[],
+  _viewer: string,
+  _isAllowed: ThreadAuthorPredicate,
+): ReviewThread[] {
+  return [...threads];
+}
+
+export function reviewDeltaPaths(
+  files: readonly {
+    readonly filename: string;
+    readonly previous_filename: string | null;
+  }[],
+): string[] {
+  return files.map((file) => file.filename);
+}
+
 /**
  * 前回の投稿の`[MUST]`のうち、スレッドにならず総評だけに載ったものがあるかを返す。
  * 行に紐づけられなかった指摘はスレッドにならないので、差分だけを読む再レビューでは忘れられる。

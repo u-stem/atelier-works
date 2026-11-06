@@ -72,6 +72,7 @@ import {
   parseGitHubRepoUrl,
   postIssueComment,
   REVIEW_THREADS_MAX_PAGES,
+  type ReviewThread,
   removeLabel,
   replyReviewComment,
   requestReviewers,
@@ -4417,6 +4418,7 @@ describe("getPrFiles", () => {
     expect(files).toEqual([
       {
         filename: "src/a.ts",
+        previous_filename: null,
         status: "modified",
         additions: 3,
         deletions: 1,
@@ -4461,6 +4463,30 @@ describe("getPrFiles", () => {
       12,
     );
     expect(files.map((f) => f.filename)).toEqual(["a.ts", "b.ts"]);
+  });
+});
+
+describe("getPrFiles with a renamed file", () => {
+  test("keeps the previous path", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          filename: "new.ts",
+          previous_filename: "old.ts",
+          status: "renamed",
+          additions: 0,
+          deletions: 1,
+          changes: 1,
+        },
+      ]),
+    ]);
+    const files = await getPrFiles(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(files[0]?.previous_filename).toBe("old.ts");
   });
 });
 
@@ -5986,6 +6012,8 @@ describe("listReviewThreads", () => {
         comments: [],
         lastCommentAuthorId: null,
         lastCommentDatabaseId: null,
+        resolvedByLogin: "",
+        resolvedById: null,
       },
     ]);
   });
@@ -6072,6 +6100,74 @@ describe("listReviewThreads", () => {
       12,
     );
     expect(threads[0]?.lastCommentAuthorId).toBe(7);
+  });
+
+  describe("the resolver of a thread", () => {
+    async function listedWith(resolvedBy: unknown): Promise<ReviewThread> {
+      const fake = createFakeCommandRunner([
+        ghApiOk(
+          reviewThreadsGraphqlPayload([
+            {
+              ...reviewThreadNode({
+                id: "PRRT_1",
+                isResolved: true,
+                firstComment: { author: { login: VIEWER }, body: "finding" },
+              }),
+              resolvedBy,
+            },
+          ]),
+        ),
+      ]);
+      const threads = await listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      );
+      const thread = threads[0];
+      if (thread === undefined) throw new Error("no thread was listed");
+      return thread;
+    }
+
+    test("reads the login", async () => {
+      const thread = await listedWith({ login: "alice", databaseId: 7 });
+      expect(thread.resolvedByLogin).toBe("alice");
+    });
+
+    test("reads the id", async () => {
+      const thread = await listedWith({ login: "alice", databaseId: 7 });
+      expect(thread.resolvedById).toBe(7);
+    });
+
+    test("gives an empty login without a resolver", async () => {
+      const thread = await listedWith(null);
+      expect(thread.resolvedByLogin).toBe("");
+    });
+
+    test("gives no id without a resolver", async () => {
+      const thread = await listedWith(null);
+      expect(thread.resolvedById).toBeNull();
+    });
+
+    test("gives no id for a resolver that is not a user", async () => {
+      const thread = await listedWith({ login: "some-bot" });
+      expect(thread.resolvedById).toBeNull();
+    });
+
+    test("asks for the resolver in the query", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk(reviewThreadsGraphqlPayload([])),
+      ]);
+      await listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      );
+      expect(fake.calls[0]?.options?.stdin).toContain(
+        "resolvedBy { login ... on User { databaseId } }",
+      );
+    });
   });
 
   test("reads the id of the last comment", async () => {

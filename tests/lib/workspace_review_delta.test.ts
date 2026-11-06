@@ -10,6 +10,7 @@ import {
   readReviewDelta,
   runCommand,
 } from "../../f/factory/lib/workspace.ts";
+import { reviewDeltaPaths } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const roots: string[] = [];
 
@@ -52,6 +53,49 @@ function repo() {
   };
   return { dir, run, git, commit };
 }
+
+// 移動先のパスだけを渡すと、gitは新しいファイルとして出すので、移動元で消した行が差分から消える。
+describe("readReviewDelta with a renamed file", () => {
+  async function renamedDelta(): Promise<string> {
+    const { dir, run, git, commit } = repo();
+    await git(["init", "-q", "-b", "main"]);
+    const lines = Array.from({ length: 20 }, (_, i) => `line-${String(i)}`);
+    const from = await commit({ "old.ts": `${lines.join("\n")}\n` });
+    rmSync(join(dir, "old.ts"));
+    const head = await commit({
+      "new.ts": `${lines.filter((line) => line !== "line-5").join("\n")}\n`,
+    });
+    const delta = await readReviewDelta({
+      run,
+      dir,
+      fromSha: from,
+      headSha: head,
+      paths: reviewDeltaPaths([
+        {
+          filename: "new.ts",
+          previous_filename: "old.ts",
+          status: "renamed",
+          additions: 0,
+          deletions: 1,
+          changes: 1,
+        },
+      ]),
+    });
+    return delta?.diff ?? "";
+  }
+
+  test("shows the old path", async () => {
+    expect(await renamedDelta()).toContain("rename from old.ts");
+  });
+
+  test("shows the new path", async () => {
+    expect(await renamedDelta()).toContain("rename to new.ts");
+  });
+
+  test("shows the line removed by the rename", async () => {
+    expect(await renamedDelta()).toContain("-line-5");
+  });
+});
 
 describe("readReviewDelta", () => {
   test("returns the changes since the prior commit", async () => {

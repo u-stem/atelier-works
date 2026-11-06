@@ -465,6 +465,20 @@ describe("review scope wiring in the generate step", () => {
     );
   });
 
+  test("trusts a resolved thread only after checking its resolver", async () => {
+    const source = await SOURCE;
+    const trusted = source.indexOf(
+      "const reviewThreads = withTrustedResolution(",
+    );
+    expect(trusted === -1 ? Number.POSITIVE_INFINITY : trusted).toBeLessThan(
+      source.indexOf("const promptThreads = reviewThreadsForPrompt("),
+    );
+  });
+
+  test("gives the delta both paths of a renamed file", async () => {
+    expect(await SOURCE).toContain("paths: reviewDeltaPaths(prFileEntries),");
+  });
+
   test("gives the prompt only the binary files of a delta", async () => {
     expect(await SOURCE).toContain(
       "selectListedBinaryFiles(deltaDiff.binaryFiles, prFiles).listed",

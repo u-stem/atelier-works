@@ -7,15 +7,19 @@ import type {
   ThreadResponse,
 } from "../../f/factory/lib/types.ts";
 import {
+  countBlockingThreads,
+  countOpenThreads,
   decideReviewScope,
   hasBodyOnlyMustFinding,
   renderThreadReply,
   reviewDeltaFromSha,
+  reviewDeltaPaths,
   reviewMaxTurns,
   reviewThreadsForPrompt,
   selectThreadResponses,
   settleReviewFindings,
   threadResponseKind,
+  withTrustedResolution,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const VIEWER = "factory-bot";
@@ -42,6 +46,8 @@ function thread(overrides: Partial<ReviewThread> = {}): ReviewThread {
     lastCommentBody: FINDING,
     lastCommentAuthorId: null,
     lastCommentDatabaseId: 1,
+    resolvedByLogin: "",
+    resolvedById: null,
     firstCommentDatabaseId: 1,
     allCommentIds: [1],
     comments: [comment(VIEWER, FINDING)],
@@ -57,6 +63,174 @@ function replied(login: string, body: string): Partial<ReviewThread> {
     comments: [comment(VIEWER, FINDING), comment(login, body, 2)],
   };
 }
+
+describe("withTrustedResolution", () => {
+  const MUST = "[pr_review 自動レビュー]\n[MUST] fix this";
+
+  /** GitHubで解決済みのスレッド。 */
+  function resolvedBy(
+    login: string,
+    id: number | null = null,
+    body = FINDING,
+  ): ReviewThread {
+    return thread({
+      isResolved: true,
+      resolvedByLogin: login,
+      resolvedById: id,
+      firstCommentBody: body,
+    });
+  }
+
+  test("reopens a thread a person who is not allowed resolved", () => {
+    const [result] = withTrustedResolution(
+      [resolvedBy("mallory")],
+      VIEWER,
+      isAllowed,
+    );
+    expect(result?.isResolved).toBe(false);
+  });
+
+  test("keeps a thread the viewer resolved", () => {
+    const [result] = withTrustedResolution(
+      [resolvedBy(VIEWER)],
+      VIEWER,
+      () => false,
+    );
+    expect(result?.isResolved).toBe(true);
+  });
+
+  test("keeps a thread an allowed person resolved", () => {
+    const [result] = withTrustedResolution(
+      [resolvedBy("alice")],
+      VIEWER,
+      isAllowed,
+    );
+    expect(result?.isResolved).toBe(true);
+  });
+
+  test("does not trust an empty resolver", () => {
+    const [result] = withTrustedResolution(
+      [resolvedBy("")],
+      VIEWER,
+      () => true,
+    );
+    expect(result?.isResolved).toBe(false);
+  });
+
+  test("checks the resolver by id too", () => {
+    const [result] = withTrustedResolution(
+      [resolvedBy("alice", 7)],
+      VIEWER,
+      (_login, id) => id === 8,
+    );
+    expect(result?.isResolved).toBe(false);
+  });
+
+  test("leaves an open thread open", () => {
+    const [result] = withTrustedResolution([thread()], VIEWER, () => true);
+    expect(result?.isResolved).toBe(false);
+  });
+
+  test("counts a MUST a person who is not allowed resolved as blocking", () => {
+    expect(
+      countBlockingThreads(
+        withTrustedResolution(
+          [resolvedBy("mallory", null, MUST)],
+          VIEWER,
+          isAllowed,
+        ),
+        VIEWER,
+        isAllowed,
+        [],
+      ),
+    ).toBe(1);
+  });
+
+  test("counts a thread a person who is not allowed resolved as open", () => {
+    expect(
+      countOpenThreads(
+        withTrustedResolution([resolvedBy("mallory")], VIEWER, isAllowed),
+        VIEWER,
+        [],
+      ),
+    ).toBe(1);
+  });
+
+  test("does not count a MUST an allowed person resolved as blocking", () => {
+    expect(
+      countBlockingThreads(
+        withTrustedResolution(
+          [resolvedBy("alice", null, MUST)],
+          VIEWER,
+          isAllowed,
+        ),
+        VIEWER,
+        isAllowed,
+        [],
+      ),
+    ).toBe(0);
+  });
+
+  test("does not count a thread the viewer resolved as open", () => {
+    expect(
+      countOpenThreads(
+        withTrustedResolution([resolvedBy(VIEWER)], VIEWER, isAllowed),
+        VIEWER,
+        [],
+      ),
+    ).toBe(0);
+  });
+
+  test("shows a thread a person who is not allowed resolved as open in the prompt", () => {
+    const { threads } = reviewThreadsForPrompt(
+      withTrustedResolution([resolvedBy("mallory")], VIEWER, isAllowed),
+      VIEWER,
+      isAllowed,
+    );
+    expect(threads[0]?.status).toBe("open");
+  });
+
+  test("lets the re-review answer a thread a person who is not allowed resolved", () => {
+    const [result] = withTrustedResolution(
+      [resolvedBy("mallory")],
+      VIEWER,
+      isAllowed,
+    );
+    expect(result && threadResponseKind(result, VIEWER, isAllowed)).toBe(
+      "addressable",
+    );
+  });
+});
+
+describe("reviewDeltaPaths", () => {
+  function file(filename: string, previous: string | null = null) {
+    return {
+      filename,
+      previous_filename: previous,
+      status: previous === null ? "modified" : "renamed",
+      additions: 0,
+      deletions: 0,
+      changes: 0,
+    };
+  }
+
+  test("includes both paths of a renamed file", () => {
+    expect(reviewDeltaPaths([file("new.ts", "old.ts")])).toEqual([
+      "new.ts",
+      "old.ts",
+    ]);
+  });
+
+  test("keeps a file that was not renamed", () => {
+    expect(reviewDeltaPaths([file("a.ts")])).toEqual(["a.ts"]);
+  });
+
+  test("lists a path once", () => {
+    expect(
+      reviewDeltaPaths([file("b.ts", "a.ts"), file("a.ts", "z.ts")]),
+    ).toEqual(["b.ts", "a.ts", "z.ts"]);
+  });
+});
 
 describe("threadResponseKind", () => {
   test("treats an untouched finding as addressable", () => {
@@ -419,18 +593,13 @@ describe("decideReviewScope", () => {
   });
 
   test("reads the changes since the prior review", () => {
-    expect(scopeOf()).toEqual({
-      kind: "delta",
-      fromSha: PRIOR,
-      hasMerge: false,
-    });
+    expect(scopeOf()).toEqual({ kind: "delta", fromSha: PRIOR });
   });
 
-  test("keeps the merge flag of the range", () => {
+  test("reads the whole PR when the range has a merge commit", () => {
     expect(scopeOf({ delta: { hasMerge: true } })).toEqual({
-      kind: "delta",
-      fromSha: PRIOR,
-      hasMerge: true,
+      kind: "full",
+      reason: "merge_in_range",
     });
   });
 
@@ -717,12 +886,7 @@ describe("reviewMaxTurns", () => {
   });
 
   test("keeps the usual limit for a delta review", () => {
-    expect(
-      reviewMaxTurns(
-        { kind: "delta", fromSha: PRIOR, hasMerge: false },
-        CONFIG,
-      ),
-    ).toBe(40);
+    expect(reviewMaxTurns({ kind: "delta", fromSha: PRIOR }, CONFIG)).toBe(40);
   });
 
   test("keeps the usual limit for a threads-only review", () => {

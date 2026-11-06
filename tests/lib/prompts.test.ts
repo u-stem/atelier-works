@@ -634,7 +634,7 @@ describe("reviewPrompt", () => {
       const prompt = reviewPrompt(
         {
           ...baseInput,
-          scope: { kind: "delta", fromSha: PRIOR, hasMerge: false },
+          scope: { kind: "delta", fromSha: PRIOR },
         },
         FIXED_UUID,
       );
@@ -645,22 +645,27 @@ describe("reviewPrompt", () => {
       const prompt = reviewPrompt(
         {
           ...baseInput,
-          scope: { kind: "delta", fromSha: PRIOR, hasMerge: false },
+          scope: { kind: "delta", fromSha: PRIOR },
         },
         FIXED_UUID,
       );
       expect(prompt).not.toContain("Report everything in this one pass.");
     });
 
-    test("warns a delta review about base changes when the range has a merge", () => {
+    // mergeを含む範囲はPR全体のレビューになるので、差分のレビューに断り書きは要らない。
+    test("does not excuse base changes in a delta review", () => {
       const prompt = reviewPrompt(
-        {
-          ...baseInput,
-          scope: { kind: "delta", fromSha: PRIOR, hasMerge: true },
-        },
+        { ...baseInput, scope: { kind: "delta", fromSha: PRIOR } },
         FIXED_UUID,
       );
-      expect(prompt).toContain("changes from the base branch may appear");
+      expect(prompt).not.toContain("changes from the base branch");
+    });
+
+    test("has no wording that excuses base changes", async () => {
+      const source = await Bun.file(
+        new URL("../../f/factory/lib/prompts.ts", import.meta.url),
+      ).text();
+      expect(source).not.toContain("changes from the base branch may appear");
     });
 
     test("tells a threads-only review to report no new finding", () => {
