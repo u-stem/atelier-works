@@ -4052,10 +4052,17 @@ export function replyTargetCommentId(
   );
 }
 
+/**
+ * 見送りだけの回の`fix_rounds`の結果を返す。
+ * すべての返信を投稿できたときだけ`done`にする。
+ * 投稿に失敗した回は人の対応待ちで終わるので、`done`で残すと、連続した失敗の数がそこで切れるためである。
+ * 返信の後にラベルだけが失敗した回は`done`のままにする。
+ * 指摘の扱いは終わって処理済みの位置も進むので、`push`の後のレビュアー依頼の失敗と同じ扱いである。
+ */
 export function skipOnlyRoundOutcome(
-  _allRepliesPosted: boolean,
+  allRepliesPosted: boolean,
 ): "done" | "blocked" {
-  return "done";
+  return allRepliesPosted ? "done" : "blocked";
 }
 
 /**

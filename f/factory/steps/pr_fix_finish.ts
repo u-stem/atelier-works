@@ -156,6 +156,7 @@ import {
   scanPrFixBeforeCommit,
   selectProposeIssueReplies,
   shouldAdvanceWatermarks,
+  skipOnlyRoundOutcome,
   stopBeforeCommitTerminal,
   withGapReport,
 } from "./pr_workflow_support.ts";
@@ -1654,14 +1655,17 @@ export async function main(
       ciRound,
       await skipOnFactoryFinding(),
     );
-    await insertFixRound({
-      work_item_id,
-      round: fix_round,
-      trigger_review_ids,
-      outcome: nothingToCommitEnd === "skip_only" ? "done" : "blocked",
-      replies,
-      commit_shas: [],
-    });
+    // 見送りだけの回は、返信の結果で結果が決まるので、投稿の後に記録する。
+    if (nothingToCommitEnd !== "skip_only") {
+      await insertFixRound({
+        work_item_id,
+        round: fix_round,
+        trigger_review_ids,
+        outcome: "blocked",
+        replies,
+        commit_shas: [],
+      });
+    }
     // pushするcommitが無くても溜めた返信は投稿する。
     // Claudeがすべてを"skipped"(または差分の無い"fixed")にしたこともあり、
     // その返信も黙って捨てずにGitHubへ届ける。
@@ -1669,6 +1673,16 @@ export async function main(
       ciRound ||
       (await postFixReplies(null, nothingToCommitEnd !== "skip_only"));
     if (nothingToCommitEnd === "skip_only") {
+      // 記録に失敗したら、ほかの記録と同じく例外でステップを失敗させる。
+      // watermarkを進める前なので、再実行で集め直せる。投稿済みの返信は二重になりうる。
+      await insertFixRound({
+        work_item_id,
+        round: fix_round,
+        trigger_review_ids,
+        outcome: skipOnlyRoundOutcome(allRepliesPosted),
+        replies,
+        commit_shas: [],
+      });
       // 投稿できなかった見送りは、再レビューに読ませられないので、既読にせず人に回す。
       // 再実行では集め直すので、投稿できた分の返信は二重になりうる。
       if (!allRepliesPosted) {
