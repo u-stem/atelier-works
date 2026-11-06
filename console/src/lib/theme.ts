@@ -11,15 +11,10 @@ const LABELS: Readonly<Record<ThemePreference, string>> = {
   dark: "ダーク",
 };
 
-/** 切り替えに並べる選択。ライト、ダーク、OSに合わせるの順。 */
-export const THEME_OPTIONS: readonly {
-  readonly value: ThemePreference;
-  readonly label: string;
-}[] = [
-  { value: "light", label: LABELS.light },
-  { value: "dark", label: LABELS.dark },
-  { value: "system", label: LABELS.system },
-];
+/** 切り替えボタンが次に付ける配色。いまの配色の反対を返す。 */
+export function oppositeTheme(theme: "light" | "dark"): "light" | "dark" {
+  return theme === "dark" ? "light" : "dark";
+}
 
 /**
  * 保存領域から読んだ値をテーマの選択にする。

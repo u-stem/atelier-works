@@ -1,5 +1,12 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Keyboard, Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Keyboard,
+  Menu,
+  X,
+} from "lucide-react";
 import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router";
 import { useConsoleStatus } from "../api/consoleStatus.ts";
@@ -36,6 +43,9 @@ import { NavDrawer } from "./NavDrawer.tsx";
 import { SCREENS, type ScreenId } from "./screens.ts";
 import { ThemeSwitch } from "./ThemeSwitch.tsx";
 import { useNow } from "./useNow.ts";
+
+/** WindmillのUIの入口。Consoleと同じオリジンのルートである。 */
+export const WINDMILL_URL = "/";
 
 function readCollapsed(): boolean {
   try {
@@ -256,6 +266,88 @@ function ShortcutHelpButton({
   );
 }
 
+/**
+ * WindmillのUIへのリンク。WindmillはConsoleと同じオリジンの`/`で配信される。
+ * WindmillのUIはログインが要り、Consoleの作業を止めないよう、別のタブで開く。
+ * たたんだサイドバーでは、名前を読み上げ専用にして、アイコンだけを見せる。
+ */
+function WindmillLink({
+  compact,
+  className,
+}: {
+  compact: boolean;
+  className?: string;
+}) {
+  const link = (
+    <a
+      href={WINDMILL_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={cn(
+        SIDEBAR_ICON_BUTTON_CLASS,
+        compact
+          ? "size-8 text-subtle"
+          : "h-8 w-full justify-start gap-2 px-2 text-small text-subtle",
+        className,
+      )}
+    >
+      <ExternalLink aria-hidden="true" className="size-4 shrink-0" />
+      <span className={compact ? "sr-only" : undefined}>
+        Windmill
+        <span className="sr-only">(新しいタブで開く)</span>
+      </span>
+    </a>
+  );
+  if (!compact) {
+    return link;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      <TooltipContent side="right">Windmill(新しいタブ)</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * サイドバーの右の縁にかぶせる、開閉のつまみ。
+ * 縁にポインタを重ねると、縁の線が色づき、中ほどに丸いボタンが出る。
+ * キーボードでは常に順番に入り、フォーカス中は見える。
+ */
+function EdgeToggle({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const Icon = collapsed ? ChevronRight : ChevronLeft;
+  return (
+    <div className="group/edge absolute inset-y-0 -right-1.5 z-20 w-3">
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-primary opacity-0 transition-opacity duration-(--duration-fast) ease-standard group-focus-within/edge:opacity-60 group-hover/edge:opacity-60"
+      />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-expanded={!collapsed}
+            aria-label="メニューの開閉"
+            className="absolute top-1/2 left-1/2 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-sidebar-border bg-sidebar text-subtle opacity-0 outline-none transition-opacity duration-(--duration-fast) ease-standard group-hover/edge:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            onClick={onToggle}
+          >
+            <Icon aria-hidden="true" className="size-4" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right">
+          {collapsed ? "メニューを広げる" : "メニューをたたむ"}
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 /** 題名の2行。サイドバーの上端とドロワーの上端で共通に使う。 */
 function BrandTitle() {
   return (
@@ -269,7 +361,7 @@ function BrandTitle() {
 }
 
 /**
- * 画面のメニュー。md以上は、4つの入口と件数を出す左のサイドバーで、たたむ操作は保存領域に残す。
+ * 画面のメニュー。md以上は、4つの入口と件数を出す左のサイドバーで、たたむ操作は縁のつまみで行い、状態を保存領域に残す。
  * md未満は、上部のバーのボタンからドロワーを開く。たたむ操作は無く、常に広げた形で出す。
  * `onOpenHelp`は、ショートカットの一覧を開く。ドロワーから開くときは、ドロワーを閉じてから呼ぶ。
  */
@@ -342,7 +434,7 @@ export function Sidebar({ onOpenHelp }: { onOpenHelp: () => void }) {
         <NavList collapsed={false} onNavigate={closeDrawer} />
         <div className="mt-auto flex flex-col gap-3 border-t border-sidebar-border px-4 py-3">
           <ReleaseInfo />
-          <ThemeSwitch />
+          <ThemeSwitch className="min-h-11" />
           <ShortcutHelpButton
             compact={false}
             className="min-h-11"
@@ -351,11 +443,12 @@ export function Sidebar({ onOpenHelp }: { onOpenHelp: () => void }) {
               onOpenHelp();
             }}
           />
+          <WindmillLink compact={false} className="min-h-11" />
         </div>
       </NavDrawer>
       <aside
         className={cn(
-          "hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex",
+          "relative hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex",
           TRANSITION_WIDTH,
           collapsed ? "w-16" : "w-64",
         )}
@@ -376,34 +469,12 @@ export function Sidebar({ onOpenHelp }: { onOpenHelp: () => void }) {
             collapsed && "items-center px-0",
           )}
         >
-          {collapsed ? null : (
-            <>
-              <ReleaseInfo />
-              <ThemeSwitch />
-            </>
-          )}
+          {collapsed ? null : <ReleaseInfo />}
+          <ThemeSwitch compact={collapsed} />
           <ShortcutHelpButton compact={collapsed} onClick={onOpenHelp} />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-expanded={!collapsed}
-                aria-label="メニューの開閉"
-                className={cn(SIDEBAR_ICON_BUTTON_CLASS, "size-8 text-subtle")}
-                onClick={toggle}
-              >
-                {collapsed ? (
-                  <PanelLeftOpen aria-hidden="true" className="size-4" />
-                ) : (
-                  <PanelLeftClose aria-hidden="true" className="size-4" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              {collapsed ? "メニューを広げる" : "メニューをたたむ"}
-            </TooltipContent>
-          </Tooltip>
+          <WindmillLink compact={collapsed} />
         </div>
+        <EdgeToggle collapsed={collapsed} onToggle={toggle} />
       </aside>
     </>
   );

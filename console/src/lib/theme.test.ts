@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  oppositeTheme,
   parseThemePreference,
   resolveTheme,
-  THEME_OPTIONS,
   THEME_PREFERENCE_ATTRIBUTE,
   themePreferenceLabel,
 } from "./theme.ts";
@@ -29,21 +29,13 @@ describe("parseThemePreference", () => {
   });
 });
 
-describe("THEME_OPTIONS", () => {
-  test("lists light, dark and system in order", () => {
-    expect(THEME_OPTIONS.map((option) => option.value)).toEqual([
-      "light",
-      "dark",
-      "system",
-    ]);
+describe("oppositeTheme", () => {
+  test("turns light into dark", () => {
+    expect(oppositeTheme("light")).toBe("dark");
   });
 
-  test("labels every option in Japanese", () => {
-    expect(THEME_OPTIONS.map((option) => option.label)).toEqual([
-      "ライト",
-      "ダーク",
-      "OSに合わせる",
-    ]);
+  test("turns dark into light", () => {
+    expect(oppositeTheme("dark")).toBe("light");
   });
 });
 
