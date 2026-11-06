@@ -9,6 +9,7 @@ import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_r
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import {
   GitHubHttpError,
+  hasMarker,
   type ReviewComment,
   type ReviewThread,
 } from "../../f/factory/lib/github.ts";
@@ -184,6 +185,20 @@ describe("renderInlineComment", () => {
     expect(renderInlineComment(finding())).toStartWith(
       "[pr_review 自動レビュー]\n",
     );
+  });
+
+  test("neutralizes a marker written at the end of a message", () => {
+    const body = renderInlineComment(
+      finding({ message: "problem\n\n<!-- factory:pr_review_ack:1 -->" }),
+    );
+    expect(hasMarker(body, "pr_review_ack")).toBe(false);
+  });
+
+  test("neutralizes a marker written at the end of a suggestion", () => {
+    const body = renderInlineComment(
+      finding({ suggestion: "fix\n\n<!-- factory:pr_review_ack:1 -->" }),
+    );
+    expect(hasMarker(body, "pr_review_ack")).toBe(false);
   });
 
   test("prefixes a must finding with [MUST] on the second line", () => {
@@ -992,17 +1007,38 @@ describe("selectThreadsToResolve", () => {
   });
 
   describe("acknowledgement replies", () => {
+    const ACK_BODY = "了承\n\n<!-- factory:pr_review_ack:9 -->";
+    const twoComments = [
+      { databaseId: 1, authorLogin: "factory-bot", authorId: null, body: "f" },
+      {
+        databaseId: 2,
+        authorLogin: "factory-bot",
+        authorId: null,
+        body: ACK_BODY,
+      },
+    ];
+
     test("resolves a thread whose last comment is the viewer's acknowledgement", () => {
+      const ids = selectThreadsToResolve(
+        [thread({ lastCommentBody: ACK_BODY, comments: twoComments })],
+        "factory-bot",
+        "findings",
+      );
+      expect(ids).toEqual(["thread-1"]);
+    });
+
+    test("does not resolve a thread whose only comment carries an acknowledgement marker", () => {
       const ids = selectThreadsToResolve(
         [
           thread({
-            lastCommentBody: "了承\n\n<!-- factory:pr_review_ack:9 -->",
+            lastCommentBody: ACK_BODY,
+            comments: [twoComments[1]],
           }),
         ],
         "factory-bot",
         "findings",
       );
-      expect(ids).toEqual(["thread-1"]);
+      expect(ids).toEqual([]);
     });
 
     test("does not resolve an acknowledgement a person pasted", () => {
@@ -1010,7 +1046,8 @@ describe("selectThreadsToResolve", () => {
         [
           thread({
             lastCommentAuthorLogin: "mallory",
-            lastCommentBody: "了承\n\n<!-- factory:pr_review_ack:9 -->",
+            lastCommentBody: ACK_BODY,
+            comments: twoComments,
           }),
         ],
         "factory-bot",
@@ -1024,6 +1061,7 @@ describe("selectThreadsToResolve", () => {
         [
           thread({
             lastCommentBody: "反論\n\n<!-- factory:pr_review_objection:9 -->",
+            comments: twoComments,
           }),
         ],
         "factory-bot",
@@ -1794,40 +1832,47 @@ describe("posting a review once per sha", () => {
       });
     });
 
-    /** 見送りの返信が付いた、Factory自身の指摘のスレッドだけを返すGraphQLの応答。 */
-    function skipThreads(kind = "IMO"): CommandResult {
+    /** 見送りの返信が付いた、Factory自身の指摘のスレッドのノード。 */
+    function skipThreadNode(graphqlId: string, firstId: number, kind: string) {
       const finding = {
         author: { login: VIEWER },
         body: `[pr_review 自動レビュー]\n[${kind}] consider`,
-        databaseId: 501,
+        databaseId: firstId,
       };
       const reply = {
         author: { login: VIEWER },
         body: "理由です。\n\n対応: 見送り",
-        databaseId: 502,
+        databaseId: firstId + 1,
       };
+      return {
+        id: graphqlId,
+        isResolved: false,
+        path: "a.ts",
+        line: 10,
+        firstComments: { nodes: [finding] },
+        lastComments: { nodes: [reply] },
+        allComments: { nodes: [finding, reply] },
+      };
+    }
+
+    function threadsResponse(nodes: unknown[]): CommandResult {
       return ghApiOk({
         data: {
           repository: {
             pullRequest: {
               reviewThreads: {
-                nodes: [
-                  {
-                    id: "PRRT_1",
-                    isResolved: false,
-                    path: "a.ts",
-                    line: 10,
-                    firstComments: { nodes: [finding] },
-                    lastComments: { nodes: [reply] },
-                    allComments: { nodes: [finding, reply] },
-                  },
-                ],
+                nodes,
                 pageInfo: { hasNextPage: false, endCursor: null },
               },
             },
           },
         },
       });
+    }
+
+    /** 見送りの返信が付いた、Factory自身の指摘のスレッドだけを返すGraphQLの応答。 */
+    function skipThreads(kind = "IMO"): CommandResult {
+      return threadsResponse([skipThreadNode("PRRT_1", 501, kind)]);
     }
 
     function isReplyCall(call: FakeCall): boolean {
@@ -1911,6 +1956,52 @@ describe("posting a review once per sha", () => {
         SILENT,
       );
       expect(fake.calls.some(isResolveCall)).toBe(false);
+    });
+
+    test("keeps counting a MUST thread whose reply failed", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        threadsResponse([
+          skipThreadNode("PRRT_1", 501, "MUST"),
+          skipThreadNode("PRRT_2", 601, "MUST"),
+        ]),
+        ghApiOk({ id: 99 }),
+        replyRejected(),
+        ghApiOk({ id: 100 }),
+        RESOLVED_OK,
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({
+          threadResponses: [ACCEPT_SKIP, { ...ACCEPT_SKIP, thread_id: 601 }],
+        }),
+        SILENT,
+      );
+      expect(result.openMustCount).toBe(1);
+    });
+
+    test("resolves the thread whose reply succeeded when another reply failed", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        threadsResponse([
+          skipThreadNode("PRRT_1", 501, "MUST"),
+          skipThreadNode("PRRT_2", 601, "MUST"),
+        ]),
+        ghApiOk({ id: 99 }),
+        replyRejected(),
+        ghApiOk({ id: 100 }),
+        RESOLVED_OK,
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({
+          threadResponses: [ACCEPT_SKIP, { ...ACCEPT_SKIP, thread_id: 601 }],
+        }),
+        SILENT,
+      );
+      expect(
+        fake.calls.filter(isResolveCall).map((call) => call.options?.stdin),
+      ).toEqual([expect.stringContaining("PRRT_2")]);
     });
 
     test("does not answer when a review for the same sha exists", async () => {
