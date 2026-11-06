@@ -66,7 +66,7 @@ describe("the finish step of a CI round", () => {
     const text = await source("pr_fix_finish.ts");
     expect(
       text.includes(
-        "await runPostPushBookkeeping(ciRound, {\n    postReplies: () => postFixReplies(newSha),\n    setHeadSha: () => setHeadSha(work_item_id, newSha),",
+        "await runPostPushBookkeeping(ciRound, {\n    postReplies: async () => {\n      await postFixReplies(newSha);\n    },\n    setHeadSha: () => setHeadSha(work_item_id, newSha),",
       ),
     ).toBe(true);
   });
@@ -78,7 +78,12 @@ describe("the finish step of a CI round", () => {
 
   test("posts the replies of the nothing-to-commit path only outside a CI round", async () => {
     const text = await source("pr_fix_finish.ts");
-    expect(count(text, "if (!ciRound) await postFixReplies(null);")).toBe(1);
+    expect(
+      count(
+        text,
+        "const allRepliesPosted = ciRound || (await postFixReplies(null));",
+      ),
+    ).toBe(1);
   });
 
   test("scans the added paths of the scanned tree before the repository lock is taken", async () => {
