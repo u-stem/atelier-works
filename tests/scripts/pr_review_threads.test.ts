@@ -525,6 +525,22 @@ describe("reviewThreadsForPrompt", () => {
     expect(result.threads.some((item) => item.thread_id === 1)).toBe(true);
   });
 
+  // プロンプトは字下げした形で載せるので、字下げの無い形で数えると上限を超える。
+  test("keeps the threads under the limit in the form the prompt uses", () => {
+    const threads = Array.from({ length: 60 }, (_, threadIndex) =>
+      thread({
+        firstCommentDatabaseId: threadIndex,
+        comments: Array.from({ length: 40 }, (_, index) =>
+          comment(VIEWER, "x".repeat(50), index),
+        ),
+      }),
+    );
+    const result = reviewThreadsForPrompt(threads, VIEWER, isAllowed);
+    expect(JSON.stringify(result.threads, null, 2).length).toBeLessThanOrEqual(
+      100_000,
+    );
+  });
+
   test("reports how many threads it dropped", () => {
     const big = "x".repeat(1900);
     const resolved = Array.from({ length: 60 }, () =>

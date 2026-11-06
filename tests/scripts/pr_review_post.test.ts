@@ -752,6 +752,18 @@ describe("thread responses wiring", () => {
       "results.pr_review_generate?.thread_responses ?? []",
     );
   });
+
+  test("describes the responses in the script schema", async () => {
+    const schema = await Bun.file(
+      new URL(
+        "../../f/factory/steps/pr_review_post.script.yaml",
+        import.meta.url,
+      ),
+    ).text();
+    expect(schema).toContain(
+      "thread_responses:\n      type: array\n      description: 再レビューが既存のスレッドに出した答えの一覧。\n",
+    );
+  });
 });
 
 // `postReview`はWindmillとDBを直接使うので、配線はソースの並びで確かめる。
