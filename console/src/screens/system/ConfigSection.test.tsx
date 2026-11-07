@@ -54,10 +54,16 @@ describe("ConfigList", () => {
     );
   });
 
-  test("shows a structure as indented text in a preformatted block", () => {
-    expect(renderToStaticMarkup(<ConfigList items={ITEMS} />)).toMatch(
-      /<pre[^>]*>\[\n {2}&quot;a&quot;/,
-    );
+  test("shows a mixed structure as indented text in a preformatted block", () => {
+    expect(
+      renderToStaticMarkup(
+        <ConfigList
+          items={[
+            { key: "k", kind: "value", value: ["a", { b: 1 }], masked: false },
+          ]}
+        />,
+      ),
+    ).toMatch(/<pre[^>]*>\[\n {2}&quot;a&quot;/);
   });
 
   test("hides a reference", () => {
@@ -88,6 +94,138 @@ describe("ConfigList", () => {
         />,
       ),
     ).toContain("&lt;b&gt;x&lt;/b&gt;");
+  });
+});
+
+function renderValue(key: string, value: unknown): string {
+  return renderToStaticMarkup(
+    <ConfigList items={[{ key, kind: "value", value, masked: false }]} />,
+  );
+}
+
+describe("ConfigList values by type", () => {
+  test("shows an array of strings as a list with one row per element", () => {
+    expect(
+      renderValue("allowed_check_commands", [
+        "mise run check",
+        "mise run lint",
+      ]),
+    ).toMatch(
+      /<ul[^>]*><li[^>]*>mise run check<\/li><li[^>]*>mise run lint<\/li><\/ul>/,
+    );
+  });
+
+  test("shows no preformatted block for an array of strings", () => {
+    expect(renderValue("allowed_check_commands", ["a", "b"])).not.toContain(
+      "<pre",
+    );
+  });
+
+  test("writes an element of a list as text, not as markup", () => {
+    expect(renderValue("k", ["<b>x</b>"])).toContain("&lt;b&gt;x&lt;/b&gt;");
+  });
+
+  test("shows owners as a table with a header for each column", () => {
+    expect(
+      renderValue("owners", [
+        { name: "u-stem", kind: "user", id: 1 },
+        { name: "acme", kind: "org", id: 2 },
+      ]),
+    ).toMatch(
+      /<th[^>]*scope="col"[^>]*>name<\/th><th[^>]*scope="col"[^>]*>kind<\/th><th[^>]*scope="col"[^>]*>id<\/th>/,
+    );
+  });
+
+  test("shows a cell of the table in a row", () => {
+    expect(
+      renderValue("owners", [{ name: "u-stem", kind: "user", id: 1 }]),
+    ).toMatch(/<td[^>]*>u-stem<\/td><td[^>]*>user<\/td><td[^>]*>1<\/td>/);
+  });
+
+  test("marks a cell that a row does not have", () => {
+    expect(
+      renderValue("owners", [
+        { name: "u-stem", kind: "user", id: 1 },
+        { name: "acme", kind: "org" },
+      ]),
+    ).toMatch(/<td[^>]*>acme<\/td><td[^>]*>org<\/td><td[^>]*>未設定<\/td>/);
+  });
+
+  test("shows an object as a term and a description for each key", () => {
+    expect(renderValue("allowed_labeler_ids", { alice: 12 })).toMatch(
+      /<dl[^>]*><div[^>]*><dt[^>]*>alice<\/dt><dd[^>]*>12<\/dd>/,
+    );
+  });
+
+  test("shows an array inside an object as a list", () => {
+    expect(
+      renderValue("check_commands_by_repo", {
+        "u-stem/app": ["mise run check"],
+      }),
+    ).toMatch(
+      /<dt[^>]*>u-stem\/app<\/dt><dd[^>]*><ul[^>]*><li[^>]*>mise run check<\/li>/,
+    );
+  });
+
+  test("says an empty array inside an object is empty", () => {
+    expect(renderValue("check_commands_by_repo", { "u-stem/app": [] })).toMatch(
+      /<dt[^>]*>u-stem\/app<\/dt><dd[^>]*>[^<]*<[^>]*>空です/,
+    );
+  });
+
+  test("says an empty array is empty", () => {
+    expect(renderValue("allowed_check_commands", [])).toContain("空です");
+  });
+
+  test("says an empty object is empty", () => {
+    expect(renderValue("check_commands_by_repo", {})).toContain("空です");
+  });
+
+  test("adds what an empty repo_allowlist means", () => {
+    expect(renderValue("repo_allowlist", [])).toContain(
+      "ownersに含まれるリポジトリすべてが対象です(factory_repoは常に対象)",
+    );
+  });
+
+  test("adds nothing about the meaning for an empty list of an unknown key", () => {
+    expect(renderValue("allowed_check_commands", [])).not.toContain(
+      "空のときは",
+    );
+  });
+
+  test("writes a key of an object, a column, and a cell as text without hidden characters", () => {
+    expect(
+      renderValue("k", [{ "a‮b": "c‮d" }]) + renderValue("k", { "a‮b": "c‮d" }),
+    ).not.toContain("‮");
+  });
+
+  test("keeps a reference hidden when the value is a list", () => {
+    expect(
+      renderToStaticMarkup(
+        <ConfigList
+          items={[{ key: "k", kind: "value", value: ["secret"], masked: true }]}
+        />,
+      ),
+    ).not.toContain("secret");
+  });
+
+  test("keeps the button of a change next to a value that is a list", () => {
+    expect(
+      renderToStaticMarkup(
+        <ConfigList
+          items={[
+            { key: "daily_budget_usd", kind: "value", value: 5, masked: false },
+            {
+              key: "repo_allowlist",
+              kind: "value",
+              value: ["a"],
+              masked: false,
+            },
+          ]}
+          onChoose={() => undefined}
+        />,
+      ),
+    ).toContain("daily_budget_usdを下げる");
   });
 });
 
