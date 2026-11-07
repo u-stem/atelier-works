@@ -604,7 +604,7 @@ describe("ConfigList with the changes of a list", () => {
       locked: true,
     });
     const tags = html.match(/<button[^>]*>/g) ?? [];
-    expect(tags.map((tag) => tag.includes("disabled"))).toEqual([
+    expect(tags.map((tag) => tag.includes('disabled=""'))).toEqual([
       true,
       true,
       true,
@@ -614,7 +614,7 @@ describe("ConfigList with the changes of a list", () => {
   test("leaves every button on while nothing is being changed", () => {
     const html = renderList([listItem("default_reviewers", ["alice", "bob"])]);
     const tags = html.match(/<button[^>]*>/g) ?? [];
-    expect(tags.map((tag) => tag.includes("disabled"))).toEqual([
+    expect(tags.map((tag) => tag.includes('disabled=""'))).toEqual([
       false,
       false,
       false,
