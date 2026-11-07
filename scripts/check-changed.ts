@@ -7,16 +7,22 @@
 //   すべてがimportの解析で扱える拡張子(`.ts`、`.tsx`、`.js`、`.mjs`)なら、変更に絞って実行する。
 //   それ以外(`.sh`、`.yaml`、`.sql`、`.json`、`.toml`、拡張子の無いファイルなど)が1つでもあれば、
 //   importからテストを選べないので、カバレッジなしの全件(`test:all`)を実行する。
-//   ただしメタデータのフックが作るファイル(`wmill-lock.yaml`、`*.script.yaml`、`*.script.lock`)は、
-//   `f/`のコードと一緒に必ず変わり、全件が常態になるので、それだけでは全件にしない。
+//   ただしメタデータのフックが作るファイルは、対応するコードが同じ差分にあるときだけ、全件の判定から外す。
+//   `<base>.script.yaml`と`<base>.script.lock`は`<base>.ts`があるとき、
+//   `wmill-lock.yaml`は`f/`の下の`.ts`があるときである。コードを変えるたびに作り直され、全件が常態になるため。
+//   コードの無い単独の変更は、人が`tag`や`timeout`を手で直した変更でありうるので、全件にする。
+//   コードと一緒の手での設定変更は、拾えない。
 //   `console/`の下は、`console:check`が担うので、ルートの全件を起こさない。
-//   Markdownだけの差分でも、そのパスを書いているテスト(`tests/`をgit grepで探す)は実行する。
+//   Markdownの差分(削除と名前の変更を含む)は、そのパスを書いているテスト(`tests/`をgit grepで探す)を実行する。
+//   スキルの文書が含まれるときは、全スキルを読むテストも足す。
+//   `--changed`の基点は、差分を数えるマージ基点のコミットにそろえる。
 // CIの`check`ジョブは、カバレッジを含めた全件を実行する。ここを通っても、その確認が済んだ扱いにはしない。
 //
 // 使い方:
 //   mise run check:changed  検査をすべて絞って実行する。
 //   mise run test:changed   テストだけを同じ規則で実行する(`--test-only`)。
 
+import { existsSync } from "node:fs";
 import { extname } from "node:path";
 
 type Plan = {
@@ -38,38 +44,52 @@ const CONSOLE_AFFECTING = [
 /** `bun test --changed`がimportのグラフをたどれる拡張子。 */
 const IMPORT_RESOLVED_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".mjs"]);
 
-/** メタデータのフックが生成するファイル。それだけの変更では、全件にしない。 */
-const GENERATED_METADATA = [
-  /(^|\/)wmill-lock\.yaml$/,
-  /\.script\.yaml$/,
-  /\.script\.lock$/,
-];
+/** `f/`のスクリプトのメタデータ`<base>.script.yaml`と`<base>.script.lock`から`<base>`を取り出す。 */
+const SCRIPT_METADATA = /^(.*)\.script\.(?:yaml|lock)$/;
+
+/**
+ * メタデータのフックが作るファイルで、対応するコードが同じ差分にあるものか。
+ * コードを変えたときにフックが作り直すので、その差分ではコードの変更で選べる。
+ * 対応するコードが無い変更は、人が`tag`や`timeout`を手で直した変更でありうる。
+ * テストがパスで読むので、importでは選べず、全件にする。
+ */
+function isGeneratedWithCode(path: string, all: ReadonlySet<string>): boolean {
+  if (path === "wmill-lock.yaml") {
+    return [...all].some(
+      (other) => other.startsWith("f/") && other.endsWith(".ts"),
+    );
+  }
+  const base = SCRIPT_METADATA.exec(path)?.[1];
+  return base !== undefined && all.has(`${base}.ts`);
+}
 
 /** ルートのテストを、importの解析で選べないパスか。 */
-function needsFullTest(path: string): boolean {
+function needsFullTest(path: string, all: ReadonlySet<string>): boolean {
   if (path.startsWith("console/") || path.endsWith(".md")) return false;
-  if (GENERATED_METADATA.some((pattern) => pattern.test(path))) return false;
+  if (isGeneratedWithCode(path, all)) return false;
   return !IMPORT_RESOLVED_EXTENSIONS.has(extname(path));
 }
 
 /**
  * 差分のパスから、実行する検査を決める。
  * `deleted`は削除されたパスで、全件テスト、テスト、Consoleの判定に使う。
- * 削除されたMarkdownを`docs`に入れると、存在しないファイルを検査してしまうため、`docs`には入れない。
+ * 削除されたMarkdownは、存在しないファイルを検査しないよう`docs`に入れず、`deletedDocs`に分ける。
+ * テストが消えたパスを文字列で書いていることがあるので、`deletedDocs`はテストの収集に使う。
  */
 export function decideChecks(
   paths: readonly string[],
   deleted: readonly string[] = [],
 ): Plan {
   const all = [...paths, ...deleted];
+  const present = new Set(all);
   return {
     docs: paths.filter((path) => path.endsWith(".md")),
-    deletedDocs: [],
+    deletedDocs: deleted.filter((path) => path.endsWith(".md")),
     console: all.some((path) =>
       CONSOLE_AFFECTING.some((pattern) => pattern.test(path)),
     ),
     test: all.some((path) => !path.endsWith(".md")),
-    fullTest: all.some(needsFullTest),
+    fullTest: all.some((path) => needsFullTest(path, present)),
   };
 }
 
@@ -80,15 +100,31 @@ export type GitGrep = (needle: string) => readonly string[];
 const SKILL_DIRECTORY = /^(\.claude\/skills\/[^/]+)\//;
 
 /**
+ * 全スキルの文書を、パスを変数で組み立てて読むテスト。
+ * パスの文字列では`git grep`に当たらないので、スキルの文書が変わったときは固定で足す。
+ */
+const SKILL_READING_TESTS = [
+  "tests/lib/commit_message_style.test.ts",
+  "tests/scripts/claude-config.test.ts",
+];
+
+/**
  * 差分のMarkdownのパスを書いているテストファイルを集める。
  * スキルのパスは、ディレクトリの接頭辞でも探す。
+ * スキルの文書が含まれるときは、全スキルを読むテストを、ファイルがあれば足す。
+ * `markdownPaths`には、削除されたMarkdownのパスも含める。
  */
 export function collectMarkdownTests(
   markdownPaths: readonly string[],
   grep: GitGrep,
-  _exists: (path: string) => boolean,
+  exists: (path: string) => boolean,
 ): readonly string[] {
   const found = new Set<string>();
+  if (markdownPaths.some((path) => path.startsWith(".claude/skills/"))) {
+    for (const test of SKILL_READING_TESTS) {
+      if (exists(test)) found.add(test);
+    }
+  }
   for (const path of markdownPaths) {
     const directory = SKILL_DIRECTORY.exec(path)?.[1];
     const needles = directory === undefined ? [path] : [path, directory];
@@ -130,15 +166,18 @@ export function gitGrepTests(cwd: string = process.cwd()): GitGrep {
 
 const FULL_TEST_COMMAND: readonly string[] = ["mise", "run", "test:all"];
 
-/** `console/`を除く`bun test`の引数。`changed`が真なら、`origin/main`との差分に絞る。 */
-function bunTest(changed: boolean, files: readonly string[]): string[] {
+/** `console/`を除く`bun test`の引数。`changedFrom`があれば、そのコミットからの差分に絞る。 */
+function bunTest(
+  changedFrom: string | null,
+  files: readonly string[],
+): string[] {
   return [
     "bun",
     "test",
     "--parallel",
     "--timeout",
     "30000",
-    ...(changed ? ["--changed=origin/main"] : []),
+    ...(changedFrom === null ? [] : [`--changed=${changedFrom}`]),
     "--path-ignore-patterns",
     "console/**",
     ...files,
@@ -148,16 +187,18 @@ function bunTest(changed: boolean, files: readonly string[]): string[] {
 /**
  * 実行するテストのコマンドを決める。
  * 全件が要るときは全件だけ、そうでなければ、差分に絞った実行と、集めたMarkdownのテストを足す。
+ * 差分の基点`base`は、`listChangedPaths`と同じ、マージ基点のコミットを渡す。
+ * `origin/main`が進んでも、他の人の変更を自分の差分に数えないため。
  */
 export function planTestCommands(
   plan: Pick<Plan, "test" | "fullTest">,
   markdownTests: readonly string[],
-  _base: string,
+  base: string,
 ): readonly (readonly string[])[] {
   if (plan.fullTest) return [[...FULL_TEST_COMMAND]];
   const commands: string[][] = [];
-  if (plan.test) commands.push(bunTest(true, []));
-  if (markdownTests.length > 0) commands.push(bunTest(false, markdownTests));
+  if (plan.test) commands.push(bunTest(base, []));
+  if (markdownTests.length > 0) commands.push(bunTest(null, markdownTests));
   return commands;
 }
 
@@ -211,11 +252,15 @@ function run(label: string, argv: readonly string[]): void {
   }
 }
 
-function runTests(plan: Plan): void {
+function runTests(plan: Plan, base: string): void {
   const markdownTests = plan.fullTest
     ? []
-    : collectMarkdownTests(plan.docs, gitGrepTests(), () => false);
-  const commands = planTestCommands(plan, markdownTests, "origin/main");
+    : collectMarkdownTests(
+        [...plan.docs, ...plan.deletedDocs],
+        gitGrepTests(),
+        existsSync,
+      );
+  const commands = planTestCommands(plan, markdownTests, base);
   if (commands.length === 0) {
     console.log("\n[check:changed] no tests to run");
   }
@@ -231,7 +276,7 @@ function main(args: readonly string[]): void {
   );
 
   if (args.includes("--test-only")) {
-    runTests(plan);
+    runTests(plan, base);
     return;
   }
 
@@ -247,7 +292,7 @@ function main(args: readonly string[]): void {
   } else {
     run("docs:gen --check", ["bun", "run", "scripts/docs-gen.ts", "--check"]);
   }
-  runTests(plan);
+  runTests(plan, base);
   if (plan.console) run("console:check", ["mise", "run", "console:check"]);
   console.log("\n[check:changed] done (the full suite runs in CI)");
 }

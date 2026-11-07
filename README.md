@@ -102,7 +102,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run typecheck` | `tsc --noEmit`で型を検査する |
 | `mise run test` | `bun test --parallel`でsmallのテストを並列に実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
 | `mise run test:all` | カバレッジを測らずに、`console/`を除く全件のテストを並列に実行する。`test:changed`が、importから選べない差分で呼ぶ |
-| `mise run test:changed` | `origin/main`との差分(削除を含む)から、実行するテストを選ぶ。`.sh`、`.yaml`、`.sql`、`.json`、`.toml`、拡張子の無いファイルなど、`.ts`、`.tsx`、`.js`、`.mjs`以外が1つでもあれば`test:all`で全件を実行する。コードだけなら変更に絞る。差分のMarkdownのパスを書いているテストも実行する。メタデータのフックが作る`wmill-lock.yaml`、`*.script.yaml`、`*.script.lock`だけでは、全件にしない。`f/`のコードと一緒に必ず変わり、全件が常態になるためである。`console/`の下は、`console:check`が担うので全件にしない。日常の確認用で、全件の確認はCIが行う |
+| `mise run test:changed` | `origin/main`との差分(削除を含む)から、実行するテストを選ぶ。`.sh`、`.yaml`、`.sql`、`.json`、`.toml`、拡張子の無いファイルなど、`.ts`、`.tsx`、`.js`、`.mjs`以外が1つでもあれば`test:all`で全件を実行する。コードだけなら変更に絞る。差分のMarkdown(削除と名前の変更を含む)のパスを書いているテストも実行する。メタデータのフックが作る`<名前>.script.yaml`と`<名前>.script.lock`は、同じ差分に`<名前>.ts`があるときだけ、`wmill-lock.yaml`は`f/`の下の`.ts`があるときだけ、全件の判定から外す。コードを変えるたびに作り直されるためである。コードの無い単独の変更は全件にするが、コードと一緒に手で直した`tag`や`timeout`は拾えない。`console/`の下は、`console:check`が担うので全件にしない。日常の確認用で、全件の確認はCIが行う |
 | `mise run test:db` | Data Tableのmigrationを使い捨てのDBに適用し、すべてのviewをSELECTする(medium) |
 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査コマンドの境界(uid、秘密、書き込み先、所有権、後始末)を確かめる(medium) |
 | `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
