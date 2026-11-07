@@ -60,6 +60,14 @@ describe("groupConfigItems", () => {
     expect(groups.map((group) => group.id)).toEqual(["repos", "retention"]);
   });
 
+  test("shows every defined key exactly once across the groups", () => {
+    const defined = CONFIG_GROUP_DEFINITIONS.flatMap((group) => group.keys);
+    const shown = groupConfigItems(defined.map(item)).flatMap((group) =>
+      keysOf(group.items),
+    );
+    expect(shown.length).toBe(new Set(defined).size);
+  });
+
   test("puts a key that no group holds under the last group named その他", () => {
     const groups = groupConfigItems([item("brand_new_key"), item("owners")]);
     expect(groups.map((group) => group.label)).toEqual([

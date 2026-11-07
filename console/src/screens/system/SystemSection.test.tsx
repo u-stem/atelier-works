@@ -114,8 +114,54 @@ describe("SystemSection width", () => {
     expect(renderWidth(true)).toMatch(/<section[^>]*max-w-6xl/);
   });
 
-  test("drops the readable width when widened", () => {
-    expect(renderWidth(true)).not.toContain("max-w-3xl");
+  test("keeps the readable width on the description when widened", () => {
+    expect(renderWidth(true)).toMatch(
+      /<div class="[^"]*max-w-3xl[^"]*"><h2 id="x-heading"/,
+    );
+  });
+
+  test("leaves the description of a default section to the section", () => {
+    expect(renderWidth(undefined)).not.toMatch(
+      /<div class="[^"]*max-w-3xl[^"]*"><h2/,
+    );
+  });
+
+  test("keeps the readable width on the notice of stale values when widened", () => {
+    const html = renderToStaticMarkup(
+      <SystemSection
+        id="x-heading"
+        title="節"
+        description="説明"
+        query={staleQuery("値", new ApiFailure({ kind: "network" }))}
+        loginHint="ログインしてください"
+        wide
+      >
+        {(data) => <p>{data}</p>}
+      </SystemSection>,
+    );
+    expect(html).toMatch(/<div class="max-w-3xl"><div[^>]*><p[^>]*>最新の/);
+  });
+
+  test("keeps the readable width on the sign-in hint when widened", () => {
+    const html = renderToStaticMarkup(
+      <SystemSection
+        id="x-heading"
+        title="節"
+        description="説明"
+        query={{
+          data: undefined,
+          isError: true,
+          error: new ApiFailure({ kind: "unauthorized" }),
+          isFetching: false,
+          refetch: () => Promise.resolve(undefined),
+        }}
+        loginHint="ログインしてください"
+        wide
+      >
+        {(data) => <p>{data}</p>}
+      </SystemSection>,
+    );
+    expect(html).toMatch(/<div class="max-w-3xl"><p[^>]*>ログインしてください/);
   });
 });
 
@@ -153,6 +199,13 @@ describe("SYSTEM_SKELETONS", () => {
       ? shape.rowClassName
       : "";
   }
+
+  test("keeps the frame of the config tab at the readable width", () => {
+    const shape = SYSTEM_SKELETONS["config-heading"];
+    expect(
+      shape !== undefined && "className" in shape ? shape.className : "",
+    ).toContain("max-w-3xl");
+  });
 
   test("sizes the worker load card to its headline and the fold", () => {
     expect(rowClassOf("worker-load-heading")).toContain("h-[6.125rem]");

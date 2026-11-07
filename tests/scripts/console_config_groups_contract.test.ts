@@ -39,6 +39,13 @@ describe("the groups of the config tab", () => {
     expect(declaredKeys().filter((key) => !GROUPED.includes(key))).toEqual([]);
   });
 
+  test("hold every key of the resource type in exactly one group", () => {
+    const counts = declaredKeys().map(
+      (key) => GROUPED.filter((grouped) => grouped === key).length,
+    );
+    expect(counts.filter((count) => count !== 1)).toEqual([]);
+  });
+
   test("hold no key that the resource type does not declare", () => {
     expect(GROUPED.filter((key) => !declaredKeys().includes(key))).toEqual([]);
   });

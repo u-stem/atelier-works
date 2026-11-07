@@ -41,10 +41,31 @@ describe("ConfigList as grouped tables", () => {
     );
   });
 
-  test("ties a table to the heading of its group", () => {
+  test("names a table by the heading of its group", () => {
     const html = renderItems([item("daily_budget_usd", 5)]);
     const id = /<h3 id="([^"]+)"/.exec(html)?.[1];
-    expect(html).toContain(`aria-labelledby="${id}"`);
+    expect(html).toMatch(new RegExp(`<table[^>]*aria-labelledby="${id}"`));
+  });
+
+  test("gives each group a different heading id", () => {
+    const html = renderItems([item("daily_budget_usd", 5), item("owners", [])]);
+    const ids = [...html.matchAll(/<h3 id="([^"]+)"/g)].map((m) => m[1]);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  test("names each table by its own heading", () => {
+    const html = renderItems([item("daily_budget_usd", 5), item("owners", [])]);
+    const ids = [...html.matchAll(/<h3 id="([^"]+)"/g)].map((m) => m[1]);
+    const named = [
+      ...html.matchAll(/<table[^>]*aria-labelledby="([^"]+)"/g),
+    ].map((m) => m[1]);
+    expect(named).toEqual(ids);
+  });
+
+  test("makes no region landmark of a group", () => {
+    expect(renderItems([item("daily_budget_usd", 5)])).not.toContain(
+      "<section",
+    );
   });
 
   test("shows no heading for a group that has no item", () => {
@@ -59,10 +80,45 @@ describe("ConfigList as grouped tables", () => {
     );
   });
 
-  test("gives each table the columns item, value, and operation", () => {
-    expect(renderItems([item("daily_budget_usd", 5)])).toMatch(
+  test("gives a table with a button the columns item, value, and operation", () => {
+    expect(renderItems([item("daily_budget_usd", 5)], choose)).toMatch(
       /<th[^>]*scope="col"[^>]*>項目<\/th><th[^>]*scope="col"[^>]*>値<\/th><th[^>]*scope="col"[^>]*>操作<\/th>/,
     );
+  });
+
+  test("gives a table without a button the columns item and value", () => {
+    expect(renderItems([item("model", "opus")], choose)).toMatch(
+      /<th[^>]*scope="col"[^>]*>項目<\/th><th[^>]*scope="col"[^>]*>値<\/th><\/tr>/,
+    );
+  });
+
+  test("leaves the heading of the operation out of a table without a button", () => {
+    expect(renderItems([item("model", "opus")], choose)).not.toContain(
+      ">操作<",
+    );
+  });
+
+  test("leaves the heading of the operation out when nothing can be chosen", () => {
+    expect(renderItems([item("daily_budget_usd", 5)])).not.toContain(">操作<");
+  });
+
+  test("leaves the heading of the operation out of a group of lists only", () => {
+    expect(
+      renderItems([item("default_reviewers", ["alice"])], choose),
+    ).not.toContain(">操作<");
+  });
+
+  test("gives a row of a table without a button one cell", () => {
+    const html = renderItems([item("model", "opus")], choose);
+    expect(cellsOf(html, "model").length).toBe(1);
+  });
+
+  test("keeps the cell of the operation of a row without a button in a table with one", () => {
+    const html = renderItems(
+      [item("max_turns", "x"), item("daily_budget_usd", 5)],
+      choose,
+    );
+    expect(cellsOf(html, "max_turns").length).toBe(2);
   });
 
   test("keeps the column headings for a reader when the table is stacked", () => {
@@ -75,6 +131,38 @@ describe("ConfigList as grouped tables", () => {
     expect(renderItems([item("daily_budget_usd", 5)])).toMatch(
       /<th[^>]*scope="row"[^>]*>daily_budget_usd<\/th>/,
     );
+  });
+});
+
+describe("ConfigList roles of a stacked table", () => {
+  const html = renderItems([item("daily_budget_usd", 5)], choose);
+
+  test("says the table role outright", () => {
+    expect(html).toMatch(/<table[^>]*role="table"/);
+  });
+
+  test("says the row role outright", () => {
+    expect(html).toMatch(/<tr[^>]*role="row"/);
+  });
+
+  test("says the group of rows role outright", () => {
+    expect(html).toMatch(/<tbody[^>]*role="rowgroup"/);
+  });
+
+  test("says the group of the heading row role outright", () => {
+    expect(html).toMatch(/<thead[^>]*role="rowgroup"/);
+  });
+
+  test("says the column header role outright", () => {
+    expect(html).toMatch(/<th(?=[^>]*scope="col")[^>]*role="columnheader"/);
+  });
+
+  test("says the row header role outright", () => {
+    expect(html).toMatch(/<th(?=[^>]*scope="row")[^>]*role="rowheader"/);
+  });
+
+  test("says the cell role outright", () => {
+    expect(html).toMatch(/<td[^>]*role="cell"/);
   });
 });
 
@@ -101,6 +189,40 @@ describe("ConfigList values of a switch", () => {
     expect(cellsOf(html, "implement_enabled")[0]).toMatch(
       /<svg[^>]*aria-hidden="true"/,
     );
+  });
+
+  test("keeps a true switch out of the color of success", () => {
+    const html = renderItems([item("implement_enabled", true)]);
+    expect(cellsOf(html, "implement_enabled")[0]).not.toContain("success");
+  });
+
+  test("keeps a false switch out of the color of success", () => {
+    const html = renderItems([item("implement_enabled", false)]);
+    expect(cellsOf(html, "implement_enabled")[0]).not.toContain("success");
+  });
+
+  test("draws a true switch with a strong border", () => {
+    const html = renderItems([item("implement_enabled", true)]);
+    expect(cellsOf(html, "implement_enabled")[0]).toContain(
+      "border-foreground",
+    );
+  });
+
+  test("draws a false switch with a faint border", () => {
+    const html = renderItems([item("implement_enabled", false)]);
+    expect(cellsOf(html, "implement_enabled")[0]).toMatch(
+      /class="[^"]*border-border/,
+    );
+  });
+
+  test("marks a true switch with a check", () => {
+    const html = renderItems([item("implement_enabled", true)]);
+    expect(cellsOf(html, "implement_enabled")[0]).toContain("lucide-check");
+  });
+
+  test("marks a false switch with a hyphen", () => {
+    const html = renderItems([item("implement_enabled", false)]);
+    expect(cellsOf(html, "implement_enabled")[0]).toContain("lucide-minus");
   });
 
   test("shows a string that spells true as the string", () => {
@@ -191,5 +313,39 @@ describe("ConfigSection width and groups", () => {
 
   test("groups the items under headings", () => {
     expect(section).toMatch(/<h3[^>]*>モデルと予算<\/h3>/);
+  });
+
+  test("keeps the description at the readable width", () => {
+    expect(section).toMatch(
+      /<div class="[^"]*max-w-3xl[^"]*"><h2 id="config-heading"/,
+    );
+  });
+
+  test("keeps the groups out of the readable width", () => {
+    const groups = section.slice(section.indexOf("<h3"));
+    expect(groups).not.toContain("max-w-3xl");
+  });
+
+  test("keeps the card of the design stage at the readable width", () => {
+    const withStage = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <ConfigSection
+            query={freshQuery({
+              path: "f/factory/factory_config",
+              items: [item("daily_budget_usd", 5)],
+              design_stage: {
+                enabled: true,
+                ignored: false,
+                indeterminate: false,
+              },
+            })}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(withStage).toMatch(
+      /<div class="[^"]*max-w-3xl[^"]*"><p><span[^>]*>設計工程/,
+    );
   });
 });
