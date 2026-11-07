@@ -252,6 +252,16 @@ describe("syncStopAllNotice", () => {
   });
 });
 
+describe("the message of a released stop-all", () => {
+  test("names the command that restores the settings", () => {
+    expect(STOP_ALL_RELEASED_MESSAGE).toContain("mise run stop:restore");
+  });
+
+  test("no longer asks to turn the settings on one by one", () => {
+    expect(STOP_ALL_RELEASED_MESSAGE).not.toContain("1つずつ");
+  });
+});
+
 describe("stopAllCause", () => {
   test("names the time in JST, the operator and the reason", () => {
     expect(stopAllCause(ACTIVE)).toBe(

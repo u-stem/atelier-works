@@ -19,6 +19,17 @@ const ALLOWED = [
 /** 引用符で囲んだパス。コメントの中のコード表記(バッククォート)の言及は数えない。 */
 const QUOTED_PATH = /(["'])f\/factory\/stop_all\1/;
 
+// 全停止が止めた名前の記録`f/factory/stop_all_record`を名指しできる`f/`のファイルは、
+// 記録を書く全停止のscriptと、解析と読む入出力(`lib/stop_all.ts`)だけにする。
+// 記録は、ホストの`mise run stop:restore`が設定を有効に戻す名前の出どころになるためである。
+// ホストの`scripts/stop_all.ts`は、`lib/stop_all.ts`の定数を読み込み、パスを書かない。
+const RECORD_ALLOWED = [
+  "f/factory/console_stop_all.ts",
+  "f/factory/lib/stop_all.ts",
+];
+
+const QUOTED_RECORD_PATH = /(["'])f\/factory\/stop_all_record\1/;
+
 function listFiles(dir: string): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -48,5 +59,23 @@ describe("files under f/", () => {
 
   test.each(ALLOWED)("%s is a protected path", (path) => {
     expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("only the allowed files name the record of the stop-all by its path", () => {
+    expect(
+      SCANNED.filter((path) =>
+        QUOTED_RECORD_PATH.test(readFileSync(path, "utf8")),
+      ),
+    ).toEqual(RECORD_ALLOWED);
+  });
+});
+
+describe("the host scripts", () => {
+  test("do not name the record of the stop-all by its path", () => {
+    expect(
+      ["scripts/stop_all.ts", "scripts/stop_all_restore.ts"].filter((path) =>
+        QUOTED_RECORD_PATH.test(readFileSync(path, "utf8")),
+      ),
+    ).toEqual([]);
   });
 });

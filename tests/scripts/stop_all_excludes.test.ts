@@ -8,4 +8,11 @@ describe("wmill.yaml", () => {
       "f/factory/stop_all.variable.yaml",
     );
   });
+
+  test("keeps the record of the stop-all out of the sync", async () => {
+    const parsed = parseWmillExcludes(await Bun.file("wmill.yaml").text());
+    expect(parsed.ok ? parsed.value : []).toContain(
+      "f/factory/stop_all_record.variable.yaml",
+    );
+  });
 });

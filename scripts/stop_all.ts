@@ -6,6 +6,9 @@
 //                                       実行中のジョブを中止し、workerに残ったClaudeと検査のプロセスを止める
 //   stop_all.ts place --kill-only       Windmillが落ちているとき。workerに残ったプロセスを止めるだけ
 //   stop_all.ts release                 Consoleと同じWindmillのscriptで全停止を解除する
+//   stop_all.ts restore [--except <name>[,<name>...]]
+//                                       全停止が止めた*_enabledを、記録から検査つきで戻す(`stop_all_restore.ts`)。
+//                                       Windmillのscriptは使わず、人の`wmill`のプロファイルで設定を読み書きする
 //
 // 30秒待つのは、実行中のClaudeと検査が、自分で変数を読んで止まるまでの間である(確認は15秒ごと、読み取りは5秒まで、SIGTERMの猶予は5秒)。
 // その後にジョブを中止する。先に中止すると、ジョブのプロセスと一緒に、子プロセスを止める監視が消えるためである。
@@ -16,10 +19,13 @@
 // 検査のプロセスは、枠のuidとして全部止める。
 //
 // どの操作も、端末(TTY)で`yes`を入力して確かめる。環境変数`CLAUDECODE`があるときは、確認の前に断る。
+// `restore`は、端末が無ければ、何かを読む前に断る。
 // subagentと背景のセッションは端末を持たないので、確認も通らない。
 // 迂回のための環境変数は設けない。
 
-import { resolve } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   KILL_PATH,
   killAllArgv,
@@ -30,9 +36,22 @@ import { selectOrphanClaudePids } from "../f/factory/lib/cleanup_support.ts";
 import {
   isStopAllReason,
   STOP_ALL_REASON_MAX,
+  STOP_ALL_RECORD_VARIABLE_DESCRIPTION,
+  STOP_ALL_RECORD_VARIABLE_PATH,
+  STOP_ALL_VARIABLE_PATH,
 } from "../f/factory/lib/stop_all.ts";
 import { isRecord } from "../f/factory/lib/types.ts";
 import { parseRunningJobs, runningJobsSql } from "./check-idle.ts";
+import {
+  displayName,
+  oneLine,
+  parseExceptNames,
+  type RestoreRead,
+  type RestoreStore,
+  type RestoreWrite,
+  runRestore,
+  safeForTerminal,
+} from "./stop_all_restore.ts";
 
 /** 全停止を置くWindmillのscript。Consoleの全停止の操作と同じものを呼ぶ。 */
 export const STOP_SCRIPT = "f/factory/console_stop_all";
@@ -126,7 +145,8 @@ export function planClaudeStops(psOutput: string): ClaudeStopPlan {
 export type StopCommand =
   | { readonly kind: "place"; readonly reason: string }
   | { readonly kind: "kill_only" }
-  | { readonly kind: "release" };
+  | { readonly kind: "release" }
+  | { readonly kind: "restore"; readonly except: readonly string[] };
 
 export type StopParse =
   | { readonly ok: true; readonly value: StopCommand }
@@ -145,7 +165,10 @@ export type JobList =
 export type StopDeps = {
   /** 呼び出し元の環境変数。Claudeのセッションからの実行を断るために読む。 */
   readonly env: Readonly<Record<string, string | undefined>>;
+  readonly terminal: boolean;
   readonly confirm: (message: string) => Promise<boolean>;
+  readonly now: () => Date;
+  readonly restoreStore: RestoreStore;
   /** `wmill script run`で、Windmillのscriptを実行する。 */
   readonly runScript: (
     path: string,
@@ -165,10 +188,27 @@ export type StopDeps = {
 };
 
 const USAGE =
-  "usage: stop_all.ts place --reason <text> | place --kill-only | release";
+  "usage: stop_all.ts place --reason <text> | place --kill-only | release | restore [--except <name>[,<name>...]]";
+
+function parseRestoreArgs(rest: readonly string[]): StopParse {
+  if (rest.length === 0) {
+    return { ok: true, value: { kind: "restore", except: [] } };
+  }
+  if (rest.length === 2 && rest[0] === "--except") {
+    const parsed = parseExceptNames(rest[1] ?? "");
+    return parsed.ok
+      ? { ok: true, value: { kind: "restore", except: parsed.names } }
+      : { ok: false, reason: parsed.reason };
+  }
+  return {
+    ok: false,
+    reason: "usage: stop_all.ts restore [--except <name>[,<name>...]]",
+  };
+}
 
 export function parseStopArgs(argv: readonly string[]): StopParse {
   const [command, ...rest] = argv;
+  if (command === "restore") return parseRestoreArgs(rest);
   if (command === "release") {
     return rest.length === 0
       ? { ok: true, value: { kind: "release" } }
@@ -212,7 +252,9 @@ export function signalPidArgv(signal: "TERM" | "KILL", pid: number): string[] {
 }
 
 const SESSION_REFUSAL =
-  "mise run stop and mise run stop:release are human-only operations; run them in your own terminal, not from a Claude session";
+  "mise run stop, mise run stop:release, and mise run stop:restore are human-only operations; run them in your own terminal, not from a Claude session";
+const NO_TERMINAL_REFUSAL =
+  "mise run stop:restore needs a terminal: run it in your own terminal and type yes there. Nothing was changed.";
 const NOT_PLACED_WARNING =
   "WARNING: the stop-all was NOT placed. The schedules and the *_enabled settings are still active; fix Windmill and run mise run stop again.";
 
@@ -221,7 +263,7 @@ const PLACE_MESSAGE =
 const KILL_MESSAGE =
   "This kills the claude processes and the check processes left in the worker container, without touching Windmill.";
 const RELEASE_MESSAGE =
-  "This releases the stop-all and enables the repository schedules again. The *_enabled settings stay off; turn them on one by one.";
+  "This releases the stop-all and enables the repository schedules again. The *_enabled settings stay off, so nothing starts working yet; after you confirm that the fix is deployed, run mise run stop:restore to turn them back on.";
 
 /**
  * `wmill script run -s`の標準出力から読んだ、scriptの結果。
@@ -248,24 +290,58 @@ export function readScriptOutcome(stdout: string): ScriptOutcome {
   return { kind: "unreadable" };
 }
 
+/**
+ * 全停止のscriptの結果から、止めた名前の記録についての警告を作る。
+ * 記録に載らなかった名前は`mise run stop:restore`で戻らないので、人が手で戻せるよう名前を出す。
+ */
+export function recordWarnings(stdout: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+  if (!isRecord(parsed)) return [];
+  const unrecorded = Array.isArray(parsed.config_unrecorded)
+    ? parsed.config_unrecorded.filter(
+        (name): name is string => typeof name === "string",
+      )
+    : [];
+  const names =
+    unrecorded.length > 0 ? `: ${unrecorded.map(displayName).join(", ")}` : "";
+  if (parsed.record === "failed") {
+    return [
+      `WARNING: the names of the *_enabled settings that were turned off could not be recorded${names}. mise run stop:restore will not restore them; turn them on by hand in factory_config after the release.`,
+    ];
+  }
+  if (unrecorded.length > 0) {
+    return [
+      `WARNING: these *_enabled settings were turned off but not recorded${names}. mise run stop:restore will not restore them; turn them on by hand in factory_config after the release.`,
+    ];
+  }
+  return [];
+}
+
 /** 置けなかったか解除できなかった理由。成功していれば`null`を返す。 */
 function scriptFailure(result: ExecResult): string | null {
   if (result.exitCode !== 0) {
-    return `the script failed (exit ${String(result.exitCode)}): ${result.stderr.trim()}`;
+    return `the script failed (exit ${String(result.exitCode)}): ${oneLine(result.stderr.trim())}`;
   }
   const outcome = readScriptOutcome(result.stdout);
   switch (outcome.kind) {
     case "done":
       return null;
     case "refused":
-      return `the script refused (${outcome.reason})`;
+      return `the script refused (${oneLine(outcome.reason)})`;
     case "unreadable":
       return "the result of the script could not be read";
   }
 }
 
 /** 端末で確かめるときに見せる文。 */
-function confirmationOf(command: StopCommand): string {
+function confirmationOf(
+  command: Exclude<StopCommand, { readonly kind: "restore" }>,
+): string {
   switch (command.kind) {
     case "place":
       return PLACE_MESSAGE;
@@ -281,7 +357,7 @@ async function killLeftovers(deps: StopDeps): Promise<number> {
   const listed = await deps.workerExec(PS_ARGV);
   if (listed.exitCode !== 0) {
     deps.print(
-      `could not list the worker processes (exit ${String(listed.exitCode)}): ${listed.stderr.trim()}`,
+      `could not list the worker processes (exit ${String(listed.exitCode)}): ${oneLine(listed.stderr.trim())}`,
     );
     return 1;
   }
@@ -315,7 +391,7 @@ async function killLeftovers(deps: StopDeps): Promise<number> {
 async function cancelRunningJobs(deps: StopDeps): Promise<number> {
   const jobs = await deps.listRunningJobs();
   if (!jobs.ok) {
-    deps.print(`could not list the running jobs: ${jobs.reason}`);
+    deps.print(`could not list the running jobs: ${oneLine(jobs.reason)}`);
     return 1;
   }
   let failures = 0;
@@ -324,7 +400,9 @@ async function cancelRunningJobs(deps: StopDeps): Promise<number> {
     if (cancelled.exitCode === 0) {
       deps.print(`cancelled job ${id}`);
     } else {
-      deps.print(`could not cancel job ${id}: ${cancelled.stderr.trim()}`);
+      deps.print(
+        `could not cancel job ${id}: ${oneLine(cancelled.stderr.trim())}`,
+      );
       failures += 1;
     }
   }
@@ -340,6 +418,20 @@ export async function runStop(
   if ((deps.env.CLAUDECODE ?? "") !== "") {
     deps.print(SESSION_REFUSAL);
     return 1;
+  }
+  if (command.kind === "restore") {
+    // 読み取りの前に断る。戻す手順は、読んだ内容を見せてから確かめるので、確認の段では遅いためである。
+    if (!deps.terminal) {
+      deps.print(NO_TERMINAL_REFUSAL);
+      return 1;
+    }
+    return await runRestore(command.except, {
+      ...deps.restoreStore,
+      now: deps.now,
+      confirm: deps.confirm,
+      print: deps.print,
+      warn: deps.warn,
+    });
   }
   if (!(await deps.confirm(confirmationOf(command)))) {
     deps.print("not confirmed; nothing was changed");
@@ -371,6 +463,7 @@ export async function runStop(
       failures += 1;
       notPlaced = true;
     }
+    for (const line of recordWarnings(placed.stdout)) deps.warn(line);
     deps.print(
       `waiting ${String(SETTLE_WAIT_MS / 1000)}s for the running claude and checks to stop by themselves`,
     );
@@ -467,6 +560,166 @@ function checkUids(): number[] {
   return Array.from({ length: size }, (_unused, index) => first + index);
 }
 
+/** 戻す手順が書く設定のリソース。 */
+const FACTORY_CONFIG_PATH = "f/factory/factory_config";
+
+function parseJsonOutput(stdout: string): unknown {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+function failureOf(result: ExecResult, command: string): string {
+  const stderr = result.stderr.trim();
+  return stderr === ""
+    ? `${command} exited with ${String(result.exitCode)}`
+    : `${command} exited with ${String(result.exitCode)}: ${stderr}`;
+}
+
+/** コマンドを実行して結果を返す。テストでは、`wmill`を起動しない関数に差し替える。 */
+export type CommandRunner = (argv: readonly string[]) => Promise<ExecResult>;
+
+/** `wmill variable get --json`で、秘密でない変数の値を読む。変数が無いときも、読めないときと同じ失敗になる。 */
+async function readVariableValue(
+  run: CommandRunner,
+  path: string,
+): Promise<RestoreRead<string | null>> {
+  const result = await run(["wmill", "variable", "get", path, "--json"]);
+  if (result.exitCode !== 0) {
+    return { ok: false, reason: failureOf(result, "wmill variable get") };
+  }
+  const parsed = parseJsonOutput(result.stdout);
+  if (!isRecord(parsed)) {
+    return {
+      ok: false,
+      reason: "the output of wmill variable get is not JSON",
+    };
+  }
+  const { value } = parsed;
+  if (value === null || value === undefined) return { ok: true, value: null };
+  return typeof value === "string"
+    ? { ok: true, value }
+    : { ok: false, reason: "the value of the variable is not a string" };
+}
+
+/**
+ * `wmill resource get --json`で、`factory_config`の値を読む。
+ * このコマンドは補間しないAPI(`/resources/get`)を呼ぶので、`$var:`と`$res:`は展開されずに返る。
+ */
+async function readConfigValue(
+  run: CommandRunner,
+): Promise<RestoreRead<unknown>> {
+  const result = await run([
+    "wmill",
+    "resource",
+    "get",
+    FACTORY_CONFIG_PATH,
+    "--json",
+  ]);
+  if (result.exitCode !== 0) {
+    return { ok: false, reason: failureOf(result, "wmill resource get") };
+  }
+  const parsed = parseJsonOutput(result.stdout);
+  if (!isRecord(parsed)) {
+    return {
+      ok: false,
+      reason: "the output of wmill resource get is not JSON",
+    };
+  }
+  return { ok: true, value: parsed.value };
+}
+
+/**
+ * 一時ディレクトリに置いたJSONのファイルを、`wmill <kind> push`で書く。ファイルは書いた後に消す。
+ * `push`は、ファイルの`value`でリモートの値を置き換える。
+ */
+async function pushJson(
+  run: CommandRunner,
+  kind: "resource" | "variable",
+  fileName: string,
+  body: Record<string, unknown>,
+  remotePath: string,
+): Promise<RestoreWrite> {
+  const dir = mkdtempSync(join(tmpdir(), "stop-all-restore-"));
+  try {
+    const file = join(dir, fileName);
+    writeFileSync(file, JSON.stringify(body), { mode: 0o600 });
+    const result = await run(["wmill", kind, "push", file, remotePath]);
+    return result.exitCode === 0
+      ? { ok: true }
+      : { ok: false, reason: failureOf(result, `wmill ${kind} push`) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `factory_config`を書く。書く直前に`wmill resource get --json`で型と説明を読み、pushするファイルにも同じ値を入れる。
+ * `push`が値以外の項目を部分更新として扱っても、置き換えとして扱っても、型と説明が変わらないためである。
+ * 型を読めないときは書かない。想定外の型でリソースを書かないためである。
+ */
+async function writeConfigValue(
+  run: CommandRunner,
+  value: Record<string, unknown>,
+): Promise<RestoreWrite> {
+  const result = await run([
+    "wmill",
+    "resource",
+    "get",
+    FACTORY_CONFIG_PATH,
+    "--json",
+  ]);
+  if (result.exitCode !== 0) {
+    return { ok: false, reason: failureOf(result, "wmill resource get") };
+  }
+  const parsed = parseJsonOutput(result.stdout);
+  if (!isRecord(parsed) || typeof parsed.resource_type !== "string") {
+    return {
+      ok: false,
+      reason:
+        "the resource type of factory_config could not be read; nothing was written",
+    };
+  }
+  const body: Record<string, unknown> = {
+    value,
+    resource_type: parsed.resource_type,
+  };
+  if (typeof parsed.description === "string") {
+    body.description = parsed.description;
+  }
+  return await pushJson(
+    run,
+    "resource",
+    "factory_config.resource.json",
+    body,
+    FACTORY_CONFIG_PATH,
+  );
+}
+
+/** 戻す手順の読み書きを、人の`wmill`のプロファイルで行う。`run`はコマンドを実行する関数で、テストでは差し替える。 */
+export function wmillRestoreStore(run: CommandRunner): RestoreStore {
+  return {
+    readStopAll: () => readVariableValue(run, STOP_ALL_VARIABLE_PATH),
+    readRecord: () => readVariableValue(run, STOP_ALL_RECORD_VARIABLE_PATH),
+    readConfig: () => readConfigValue(run),
+    writeConfig: (value) => writeConfigValue(run, value),
+    clearRecord: () =>
+      pushJson(
+        run,
+        "variable",
+        "stop_all_record.variable.json",
+        {
+          value: "",
+          is_secret: false,
+          description: STOP_ALL_RECORD_VARIABLE_DESCRIPTION,
+        },
+        STOP_ALL_RECORD_VARIABLE_PATH,
+      ),
+  };
+}
+
 async function confirmOnTerminal(message: string): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
   console.log(message);
@@ -481,7 +734,10 @@ async function main(): Promise<number> {
   }
   return await runStop(command.value, {
     env: process.env,
+    terminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
     confirm: confirmOnTerminal,
+    now: () => new Date(),
+    restoreStore: wmillRestoreStore(capture),
     runScript: (path, args) =>
       capture([
         "wmill",
@@ -497,11 +753,12 @@ async function main(): Promise<number> {
       capture(["wmill", "job", "cancel", id, "--reason", "stop_all"]),
     workerExec: (argv) => capture(compose("windmill_worker", argv)),
     sleep: (ms) => Bun.sleep(ms),
+    // 出口で制御文字を字面にする。scriptの結果、`wmill`の標準エラー、設定のキーが、端末の表示を書き換えないためである。
     print: (line) => {
-      if (line !== "") console.log(line);
+      if (line !== "") console.log(safeForTerminal(line));
     },
     warn: (line) => {
-      console.error(line);
+      console.error(safeForTerminal(line));
     },
     checkUids: checkUids(),
   });

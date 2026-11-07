@@ -21,7 +21,7 @@ export const STOP_ALL_NEXT_ACTION =
 export const STOP_ALL_ACTIVE_MESSAGE = `全停止中です。Claudeと検査の実行、Issueの取り込み、自己更新と、見張りと片付けを除くリポジトリのscheduleが止まっています。次の操作: ${STOP_ALL_NEXT_ACTION}。解除すると、この通知は5分以内に自動で解決される`;
 
 export const STOP_ALL_RELEASED_MESSAGE =
-  "全停止が解除されました。止めたscheduleは有効に戻りましたが、factory_configの*_enabledは止めたままです。次の操作: 使う機能を1つずつ有効にする";
+  "全停止が解除されました。止めたscheduleは有効に戻りましたが、factory_configの*_enabledは止めたままで、機能は動き出していません。次の操作: 修正の反映を確かめてから、ホストの端末でmise run stop:restoreを実行し、止めた設定を戻す";
 
 export type StopAllNoticeDeps = {
   readonly read: () => Promise<StopAllStatus>;
