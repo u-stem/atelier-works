@@ -6,8 +6,10 @@ import {
 } from "../../f/factory/console_stop_all.ts";
 import { REPO_SCHEDULES } from "../../f/factory/lib/console_known_paths.ts";
 import {
+  parseStopAllRecord,
   parseStopAllValue,
   STOP_ALL_KEPT_SCHEDULES,
+  STOP_ALL_RECORD_MAX,
 } from "../../f/factory/lib/stop_all.ts";
 
 const NOW = new Date("2026-11-05T03:00:00.000Z");
@@ -24,16 +26,23 @@ const PLACED = JSON.stringify({
   placed_by: "earlier",
   reason: "an earlier stop",
 });
+const EARLIER_RECORD = JSON.stringify({
+  recorded_at: "2026-11-05T02:00:00.000Z",
+  flags: ["dependabot_enabled"],
+});
 
 type Calls = {
   readonly order: string[];
   readonly variable: string[];
+  readonly records: string[];
   readonly configs: Record<string, unknown>[];
   readonly schedules: { readonly path: string; readonly enabled: boolean }[];
 };
 
 type Options = {
   readonly variable?: string | null | Error;
+  readonly record?: string | null | Error;
+  readonly recordWriteError?: Error;
   readonly config?: unknown;
   readonly configError?: Error;
   readonly failSchedule?: string;
@@ -42,7 +51,13 @@ type Options = {
 };
 
 function setup(options: Options = {}): { ports: StopAllPorts; calls: Calls } {
-  const calls: Calls = { order: [], variable: [], configs: [], schedules: [] };
+  const calls: Calls = {
+    order: [],
+    variable: [],
+    records: [],
+    configs: [],
+    schedules: [],
+  };
   const ports: StopAllPorts = {
     now: () => NOW,
     deriveActor: () => {
@@ -59,6 +74,20 @@ function setup(options: Options = {}): { ports: StopAllPorts; calls: Calls } {
     writeStopAll: async (text) => {
       calls.order.push("variable");
       calls.variable.push(text);
+    },
+    record: {
+      readVariable: async () => {
+        const value = options.record === undefined ? null : options.record;
+        if (value instanceof Error) throw value;
+        return value;
+      },
+    },
+    writeRecord: async (text) => {
+      if (options.recordWriteError !== undefined) {
+        throw options.recordWriteError;
+      }
+      calls.order.push("record");
+      calls.records.push(text);
     },
     readConfig: async () => {
       if (options.configError !== undefined) throw options.configError;
@@ -180,11 +209,12 @@ describe("stopAllFromConsole placing the stop", () => {
     expect(calls.variable.length).toBe(1);
   });
 
-  test("writes the variable, then the settings, then the schedules", async () => {
+  test("writes the variable, then the record, then the settings, then the schedules", async () => {
     const { ports, calls } = setup();
     await stopAllFromConsole("r", ports);
     expect([...new Set(calls.order)]).toEqual([
       "variable",
+      "record",
       "config",
       "schedule",
     ]);
@@ -273,5 +303,146 @@ describe("stopAllFromConsole and the schedules", () => {
     const { ports } = setup();
     const result = await stopAllFromConsole("r", ports);
     expect(result.refused ? null : result.action_audit).toBe("recorded");
+  });
+});
+
+/** 最後に書いた記録の名前。読めなければ`null`。 */
+function recordedFlags(calls: Calls): readonly string[] | null {
+  const status = parseStopAllRecord(calls.records.at(-1) ?? null);
+  return status.kind === "recorded" ? status.record.flags : null;
+}
+
+describe("stopAllFromConsole and the record of the names", () => {
+  test("records the names it turned off", async () => {
+    const { ports, calls } = setup();
+    await stopAllFromConsole("r", ports);
+    expect(recordedFlags(calls)).toEqual([
+      "design_enabled",
+      "implement_enabled",
+      "pr_ci_watch_enabled",
+    ]);
+  });
+
+  test("replaces the record when the stop-all was not placed", async () => {
+    const { ports, calls } = setup({ record: EARLIER_RECORD });
+    await stopAllFromConsole("r", ports);
+    expect(recordedFlags(calls)).toEqual([
+      "design_enabled",
+      "implement_enabled",
+      "pr_ci_watch_enabled",
+    ]);
+  });
+
+  test("replaces the record with an empty one when nothing was on", async () => {
+    const { ports, calls } = setup({
+      record: EARLIER_RECORD,
+      config: { implement_enabled: false },
+    });
+    await stopAllFromConsole("r", ports);
+    expect(recordedFlags(calls)).toEqual([]);
+  });
+
+  test("merges into the record when the stop-all was already placed", async () => {
+    const { ports, calls } = setup({
+      variable: PLACED,
+      record: EARLIER_RECORD,
+    });
+    await stopAllFromConsole("again", ports);
+    expect(recordedFlags(calls)).toEqual([
+      "dependabot_enabled",
+      "design_enabled",
+      "implement_enabled",
+      "pr_ci_watch_enabled",
+    ]);
+  });
+
+  test("leaves the record alone when the stop-all was placed and nothing is newly off", async () => {
+    const { ports, calls } = setup({
+      variable: PLACED,
+      record: EARLIER_RECORD,
+      config: { implement_enabled: false },
+    });
+    await stopAllFromConsole("again", ports);
+    expect(calls.records).toEqual([]);
+  });
+
+  test("does not overwrite a corrupt record that it would merge into", async () => {
+    const { ports, calls } = setup({ variable: PLACED, record: "{not json" });
+    await stopAllFromConsole("again", ports);
+    expect(calls.records).toEqual([]);
+  });
+
+  test("says it wrote the record", async () => {
+    const { ports } = setup();
+    const result = await stopAllFromConsole("r", ports);
+    expect(result.refused ? null : result.record).toBe("written");
+  });
+
+  test("still turns settings off when the record cannot be written", async () => {
+    const { ports, calls } = setup({ recordWriteError: new Error("boom") });
+    await stopAllFromConsole("r", ports);
+    expect(calls.configs.length).toBe(1);
+  });
+
+  test("says the record failed when it cannot be written", async () => {
+    const { ports } = setup({ recordWriteError: new Error("boom") });
+    const result = await stopAllFromConsole("r", ports);
+    expect(result.refused ? null : result.record).toBe("failed");
+  });
+
+  test("lists the names it turned off as unrecorded when the record cannot be written", async () => {
+    const { ports } = setup({ recordWriteError: new Error("boom") });
+    const result = await stopAllFromConsole("r", ports);
+    expect(result.refused ? null : result.config_unrecorded).toEqual([
+      "design_enabled",
+      "implement_enabled",
+      "pr_ci_watch_enabled",
+    ]);
+  });
+
+  test("records the operation as partial when the record cannot be written", async () => {
+    const { ports } = setup({ recordWriteError: new Error("boom") });
+    const values: unknown[] = [];
+    const sql: StopAllPorts["sql"] = (_strings, ...bound) => {
+      values.push(...bound);
+      return {
+        fetch: () => Promise.resolve([{ id: 5 }]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    await stopAllFromConsole("r", { ...ports, sql });
+    expect(values).toContain("partial");
+  });
+
+  test("turns off but does not record a name outside the allowed shape", async () => {
+    const { ports, calls } = setup({
+      config: { implement_enabled: true, Odd_enabled: true },
+    });
+    await stopAllFromConsole("r", ports);
+    expect(recordedFlags(calls)).toEqual(["implement_enabled"]);
+  });
+
+  test("reports a name outside the allowed shape as unrecorded", async () => {
+    const { ports } = setup({
+      config: { implement_enabled: true, Odd_enabled: true },
+    });
+    const result = await stopAllFromConsole("r", ports);
+    expect(result.refused ? null : result.config_unrecorded).toEqual([
+      "Odd_enabled",
+    ]);
+  });
+
+  test("stops recording at the limit and reports the rest", async () => {
+    const config: Record<string, unknown> = Object.fromEntries(
+      Array.from({ length: STOP_ALL_RECORD_MAX + 1 }, (_unused, index) => [
+        `f${String(index).padStart(2, "0")}_enabled`,
+        true,
+      ]),
+    );
+    const { ports } = setup({ config });
+    const result = await stopAllFromConsole("r", ports);
+    expect(result.refused ? null : result.config_unrecorded).toEqual([
+      `f${String(STOP_ALL_RECORD_MAX)}_enabled`,
+    ]);
   });
 });

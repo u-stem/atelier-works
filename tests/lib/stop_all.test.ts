@@ -6,15 +6,21 @@ import {
 import {
   buildStopAllState,
   holdsGate,
+  isRecordableFlag,
   isStopAllReason,
+  parseStopAllRecord,
   parseStopAllValue,
+  planStopAllRecord,
   readStopAll,
+  readStopAllRecord,
   STOP_ALL_KEPT_SCHEDULES,
   STOP_ALL_REASON_MAX,
+  STOP_ALL_RECORD_MAX,
   type StopAllStatus,
   schedulesToRestart,
   schedulesToStop,
   serializeStopAll,
+  serializeStopAllRecord,
   stopsRuns,
   unlessStopped,
 } from "../../f/factory/lib/stop_all.ts";
@@ -288,5 +294,136 @@ describe("the schedules a stop touches", () => {
     expect(
       schedulesToRestart(SCHEDULES, new Set(["f/factory/poll_issues"])).enable,
     ).not.toContain("f/factory/poll_issues");
+  });
+});
+
+describe("isRecordableFlag", () => {
+  test.each([
+    ["implement_enabled", true],
+    ["pr_ci_fix_enabled", true],
+    ["Implement_enabled", false],
+    ["implement_enabled_since", false],
+    ["_enabled", false],
+    ["implement-enabled", false],
+  ])("judges %s as %p", (name, expected) => {
+    expect(isRecordableFlag(name)).toBe(expected);
+  });
+});
+
+describe("parseStopAllRecord", () => {
+  const RECORD = {
+    recorded_at: "2026-11-05T03:00:00.000Z",
+    flags: ["design_enabled", "implement_enabled"],
+  };
+
+  test("treats a missing variable as empty", () => {
+    expect(parseStopAllRecord(null)).toEqual({ kind: "empty" });
+  });
+
+  test("treats an empty value as empty", () => {
+    expect(parseStopAllRecord("")).toEqual({ kind: "empty" });
+  });
+
+  test("reads a record", () => {
+    expect(parseStopAllRecord(JSON.stringify(RECORD))).toEqual({
+      kind: "recorded",
+      record: RECORD,
+    });
+  });
+
+  test("calls a value that is not JSON corrupt", () => {
+    expect(parseStopAllRecord("{not json").kind).toBe("corrupt");
+  });
+
+  test("calls a record without a time corrupt", () => {
+    expect(
+      parseStopAllRecord(JSON.stringify({ flags: RECORD.flags })).kind,
+    ).toBe("corrupt");
+  });
+
+  test("calls a record with a name of another shape corrupt", () => {
+    expect(
+      parseStopAllRecord(JSON.stringify({ ...RECORD, flags: ["owners"] })).kind,
+    ).toBe("corrupt");
+  });
+
+  test("calls a record with a repeated name corrupt", () => {
+    expect(
+      parseStopAllRecord(
+        JSON.stringify({
+          ...RECORD,
+          flags: ["implement_enabled", "implement_enabled"],
+        }),
+      ).kind,
+    ).toBe("corrupt");
+  });
+
+  test("calls a record longer than the limit corrupt", () => {
+    const flags = Array.from(
+      { length: STOP_ALL_RECORD_MAX + 1 },
+      (_unused, index) => `f${String(index)}_enabled`,
+    );
+    expect(parseStopAllRecord(JSON.stringify({ ...RECORD, flags })).kind).toBe(
+      "corrupt",
+    );
+  });
+
+  test("round-trips through the serializer", () => {
+    expect(parseStopAllRecord(serializeStopAllRecord(RECORD))).toEqual({
+      kind: "recorded",
+      record: RECORD,
+    });
+  });
+});
+
+describe("readStopAllRecord", () => {
+  test("says it could not read the record when the read fails", async () => {
+    const status = await readStopAllRecord({
+      readVariable: () => Promise.reject(new Error("api down")),
+    });
+    expect(status.kind).toBe("unreadable");
+  });
+});
+
+describe("planStopAllRecord", () => {
+  test("records the names it is given", () => {
+    expect(
+      planStopAllRecord({
+        previous: [],
+        flags: ["design_enabled", "implement_enabled"],
+        now: NOW,
+      }).record,
+    ).toEqual({
+      recorded_at: "2026-11-05T03:00:00.000Z",
+      flags: ["design_enabled", "implement_enabled"],
+    });
+  });
+
+  test("keeps the earlier names and adds the new ones", () => {
+    expect(
+      planStopAllRecord({
+        previous: ["implement_enabled"],
+        flags: ["design_enabled", "implement_enabled"],
+        now: NOW,
+      }).record.flags,
+    ).toEqual(["implement_enabled", "design_enabled"]);
+  });
+
+  test("leaves out a name of another shape", () => {
+    expect(
+      planStopAllRecord({ previous: [], flags: ["Odd_enabled"], now: NOW })
+        .unrecorded,
+    ).toEqual(["Odd_enabled"]);
+  });
+
+  test("leaves out the names over the limit", () => {
+    const previous = Array.from(
+      { length: STOP_ALL_RECORD_MAX },
+      (_unused, index) => `f${String(index)}_enabled`,
+    );
+    expect(
+      planStopAllRecord({ previous, flags: ["implement_enabled"], now: NOW })
+        .unrecorded,
+    ).toEqual(["implement_enabled"]);
   });
 });

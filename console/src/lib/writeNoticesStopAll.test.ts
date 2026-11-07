@@ -91,6 +91,36 @@ describe("describeStopAllResult", () => {
     ).not.toContain("止め直しました");
   });
 
+  test("warns when the names could not be recorded", () => {
+    expect(
+      describeStopAllResult({
+        ...PLACED,
+        record: "failed",
+        config_unrecorded: ["implement_enabled"],
+      }).tone,
+    ).toBe("warning");
+  });
+
+  test("names the settings it could not record", () => {
+    expect(
+      describeStopAllResult({
+        ...PLACED,
+        record: "written",
+        config_unrecorded: ["Odd_enabled"],
+      }).message,
+    ).toContain("Odd_enabled");
+  });
+
+  test("does not warn when the record was written", () => {
+    expect(
+      describeStopAllResult({
+        ...PLACED,
+        record: "written",
+        config_unrecorded: [],
+      }).tone,
+    ).toBe("success");
+  });
+
   test("explains a refusal", () => {
     expect(
       describeStopAllResult({ refused: true, reason: "state_unreadable" })
@@ -103,6 +133,18 @@ describe("describeStopAllReleaseResult", () => {
   test("reminds that the switches stay off", () => {
     expect(describeStopAllReleaseResult(RELEASED).message).toContain(
       "*_enabled",
+    );
+  });
+
+  test("names the command that restores the settings", () => {
+    expect(describeStopAllReleaseResult(RELEASED).message).toContain(
+      "mise run stop:restore",
+    );
+  });
+
+  test("no longer asks to turn the settings on one by one", () => {
+    expect(describeStopAllReleaseResult(RELEASED).message).not.toContain(
+      "1つずつ",
     );
   });
 

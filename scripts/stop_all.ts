@@ -33,6 +33,7 @@ import {
 } from "../f/factory/lib/stop_all.ts";
 import { isRecord } from "../f/factory/lib/types.ts";
 import { parseRunningJobs, runningJobsSql } from "./check-idle.ts";
+import type { RestoreStore } from "./stop_all_restore.ts";
 
 /** 全停止を置くWindmillのscript。Consoleの全停止の操作と同じものを呼ぶ。 */
 export const STOP_SCRIPT = "f/factory/console_stop_all";
@@ -126,7 +127,8 @@ export function planClaudeStops(psOutput: string): ClaudeStopPlan {
 export type StopCommand =
   | { readonly kind: "place"; readonly reason: string }
   | { readonly kind: "kill_only" }
-  | { readonly kind: "release" };
+  | { readonly kind: "release" }
+  | { readonly kind: "restore"; readonly except: readonly string[] };
 
 export type StopParse =
   | { readonly ok: true; readonly value: StopCommand }
@@ -145,7 +147,10 @@ export type JobList =
 export type StopDeps = {
   /** 呼び出し元の環境変数。Claudeのセッションからの実行を断るために読む。 */
   readonly env: Readonly<Record<string, string | undefined>>;
+  readonly terminal: boolean;
   readonly confirm: (message: string) => Promise<boolean>;
+  readonly now: () => Date;
+  readonly restoreStore: RestoreStore;
   /** `wmill script run`で、Windmillのscriptを実行する。 */
   readonly runScript: (
     path: string,
@@ -273,6 +278,8 @@ function confirmationOf(command: StopCommand): string {
       return KILL_MESSAGE;
     case "release":
       return RELEASE_MESSAGE;
+    case "restore":
+      return "";
   }
 }
 
@@ -345,6 +352,7 @@ export async function runStop(
     deps.print("not confirmed; nothing was changed");
     return 1;
   }
+  if (command.kind === "restore") return 0;
   if (command.kind === "release") {
     const released = await deps.runScript(RELEASE_SCRIPT, {});
     deps.print(released.stdout.trim());
@@ -481,7 +489,16 @@ async function main(): Promise<number> {
   }
   return await runStop(command.value, {
     env: process.env,
+    terminal: false,
     confirm: confirmOnTerminal,
+    now: () => new Date(),
+    restoreStore: {
+      readStopAll: async () => ({ ok: false, reason: "not implemented" }),
+      readRecord: async () => ({ ok: false, reason: "not implemented" }),
+      readConfig: async () => ({ ok: false, reason: "not implemented" }),
+      writeConfig: async () => ({ ok: false, reason: "not implemented" }),
+      clearRecord: async () => ({ ok: false, reason: "not implemented" }),
+    },
     runScript: (path, args) =>
       capture([
         "wmill",

@@ -786,10 +786,14 @@ export type StopAllResult =
       readonly placed_at: string;
       readonly config: StopAllConfigOutcome;
       readonly disabled_flags: readonly string[];
+      readonly record?: StopAllRecordOutcome;
+      readonly config_unrecorded?: readonly string[];
       readonly schedules_disabled: readonly string[];
       readonly schedules_failed: readonly string[];
       readonly action_audit: ActionAudit;
     };
+
+export type StopAllRecordOutcome = "written" | "unchanged" | "failed";
 
 const isStopAllRefusalReason: Guard<StopAllRefusalReason> = isOneOf(
   STOP_ALL_REFUSAL_REASONS,

@@ -41,6 +41,7 @@ import {
   type StopAllState,
   schedulesToStop,
   sdkStopAllReadIo,
+  sdkStopAllRecordReadIo,
   serializeStopAll,
 } from "./lib/stop_all.ts";
 
@@ -70,6 +71,8 @@ export type StopAllConfigOutcome =
   | "has_reference"
   | "failed";
 
+export type StopAllRecordOutcome = "written" | "unchanged" | "failed";
+
 export type StopAllResult =
   | { readonly refused: true; readonly reason: StopAllRefusalReason }
   | {
@@ -79,6 +82,8 @@ export type StopAllResult =
       readonly placed_at: string;
       readonly config: StopAllConfigOutcome;
       readonly disabled_flags: readonly string[];
+      readonly record?: StopAllRecordOutcome;
+      readonly config_unrecorded?: readonly string[];
       readonly schedules_disabled: readonly string[];
       readonly schedules_failed: readonly string[];
       readonly action_audit: ActionAudit;
@@ -91,6 +96,8 @@ export type StopAllPorts = {
   readonly deriveActor: () => string;
   readonly stopAll: StopAllReadIo;
   readonly writeStopAll: (text: string) => Promise<void>;
+  readonly record: StopAllReadIo;
+  readonly writeRecord: (text: string) => Promise<void>;
   /** `factory_config`の補間しない生の値。 */
   readonly readConfig: () => Promise<unknown>;
   readonly writeConfig: (value: Record<string, unknown>) => Promise<void>;
@@ -230,6 +237,8 @@ export async function stopAllFromConsole(
     placed_at: value.placedAt,
     config: value.config.outcome,
     disabled_flags: value.config.flags,
+    record: "unchanged",
+    config_unrecorded: [],
     schedules_disabled: value.schedules.disabled,
     schedules_failed: value.schedules.failed,
     action_audit: recorded.audit,
@@ -254,6 +263,8 @@ function sdkPorts(): StopAllPorts {
         STOP_ALL_VARIABLE_DESCRIPTION,
       );
     },
+    record: sdkStopAllRecordReadIo(),
+    writeRecord: async () => {},
     readConfig: () =>
       wmill.ResourceService.getResourceValue({
         workspace,

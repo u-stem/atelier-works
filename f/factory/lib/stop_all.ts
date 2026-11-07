@@ -195,6 +195,58 @@ export function serializeStopAll(state: StopAllState): string {
   });
 }
 
+export const STOP_ALL_RECORD_VARIABLE_PATH = "f/factory/stop_all_record";
+
+export const STOP_ALL_RECORD_MAX = 64;
+
+export const STOP_ALL_RECORD_VARIABLE_DESCRIPTION = "";
+
+export type StopAllRecord = {
+  readonly recorded_at: string;
+  readonly flags: readonly string[];
+};
+
+export type StopAllRecordStatus =
+  | { readonly kind: "empty" }
+  | { readonly kind: "recorded"; readonly record: StopAllRecord }
+  | { readonly kind: "corrupt"; readonly reason: string }
+  | { readonly kind: "unreadable"; readonly reason: string };
+
+export type StopAllRecordPlan = {
+  readonly record: StopAllRecord;
+  readonly unrecorded: readonly string[];
+};
+
+export function isRecordableFlag(_value: unknown): _value is string {
+  return false;
+}
+
+export function parseStopAllRecord(_raw: string | null): StopAllRecordStatus {
+  return { kind: "empty" };
+}
+
+export async function readStopAllRecord(
+  _io: StopAllReadIo,
+): Promise<StopAllRecordStatus> {
+  return { kind: "empty" };
+}
+
+export function serializeStopAllRecord(_record: StopAllRecord): string {
+  return "";
+}
+
+export function planStopAllRecord(_input: {
+  readonly previous: readonly string[];
+  readonly flags: readonly string[];
+  readonly now: Date;
+}): StopAllRecordPlan {
+  return { record: { recorded_at: "", flags: [] }, unrecorded: [] };
+}
+
+export function sdkStopAllRecordReadIo(): StopAllReadIo {
+  return { readVariable: async () => null };
+}
+
 /** 全停止で無効にするschedule。見張りと片付けのscheduleは残す。 */
 export function schedulesToStop(
   schedules: readonly { readonly path: string }[],
