@@ -1,21 +1,63 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import {
   mkdirSync,
   mkdtempSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
+  type CheckCoverageOptions,
   checkCoverage,
   isTargetPath,
   judgeCoverage,
+  LAYER_FLOORS,
+  type Layer,
+  type LayerFloor,
+  layerOf,
+  listTargetFiles,
+  NOT_LOADABLE_BY_BUN_TEST,
+  NOT_LOADABLE_PATH,
+  selectTargets,
   summarizeLcov,
+  type TargetListing,
+  targetListArgv,
 } from "../../scripts/check-coverage.ts";
 
 type Hit = readonly [line: number, count: number];
+
+/** Factoryの修正のプロンプトに載る、検査の出力の末尾の字数。 */
+const OUTPUT_TAIL_CHARS = 2000;
+
+const ALL_LAYERS: readonly Layer[] = [
+  "f/factory/lib",
+  "f/factory/steps",
+  "f/factory (other)",
+  "scripts",
+];
+
+function floorsOf(percent: number): readonly LayerFloor[] {
+  return ALL_LAYERS.map((layer) => ({ layer, floorPercent: percent }));
+}
+
+/** 対象の列挙を差し替える関数を作る。 */
+function listing(
+  targets: readonly string[],
+  malformed: readonly string[] = [],
+): () => TargetListing {
+  return () => ({ targets, malformed });
+}
 
 /** lcovの1レコードを作る。`hits`は`DA:<行>,<回数>`の並びで、`extra`は`SF`の直後に足す行。 */
 function record(path: string, hits: readonly Hit[], extra = ""): string {
@@ -206,6 +248,481 @@ describe("judgeCoverage", () => {
   });
 });
 
+describe("layerOf", () => {
+  test.each<readonly [string, Layer]>([
+    ["f/factory/lib/a.ts", "f/factory/lib"],
+    ["f/factory/lib/deep/er/a.ts", "f/factory/lib"],
+    ["f/factory/steps/a.ts", "f/factory/steps"],
+    ["f/factory/steps/deep/a.ts", "f/factory/steps"],
+    ["f/factory/a.ts", "f/factory (other)"],
+    ["f/factory/other_dir/a.ts", "f/factory (other)"],
+    ["f/factory/library/a.ts", "f/factory (other)"],
+    ["scripts/a.ts", "scripts"],
+    ["scripts/host_apply/a.ts", "scripts"],
+    ["scripts/claude-hooks/a.ts", "scripts"],
+  ])("assigns %s to %s", (path, layer) => {
+    expect(layerOf(path)).toBe(layer);
+  });
+
+  test("assigns no layer to a path outside the target", () => {
+    expect(layerOf("console/src/a.ts")).toBeNull();
+  });
+});
+
+describe("LAYER_FLOORS", () => {
+  test("has exactly one floor for each layer", () => {
+    expect(LAYER_FLOORS.map(({ layer }) => layer).sort()).toEqual(
+      [...ALL_LAYERS].sort(),
+    );
+  });
+
+  test("keeps every floor between 0 and 100", () => {
+    const outside = LAYER_FLOORS.filter(
+      ({ floorPercent }) => floorPercent < 0 || floorPercent > 100,
+    );
+
+    expect(outside).toEqual([]);
+  });
+});
+
+describe("NOT_LOADABLE_BY_BUN_TEST", () => {
+  test("holds exactly the test-db scripts that bun test cannot load", () => {
+    expect([...NOT_LOADABLE_BY_BUN_TEST].sort()).toEqual([
+      "scripts/test-db-console-actions.ts",
+      "scripts/test-db-deploy-approvals.ts",
+      "scripts/test-db-holds.ts",
+      "scripts/test-db-queries.ts",
+    ]);
+  });
+
+  test("holds only paths of the scripts/test-db- form", () => {
+    const others = NOT_LOADABLE_BY_BUN_TEST.filter(
+      (path) => !NOT_LOADABLE_PATH.test(path),
+    );
+
+    expect(others).toEqual([]);
+  });
+});
+
+describe("targetListArgv", () => {
+  test("lists cached and untracked files for the unloaded check", () => {
+    expect(targetListArgv({ includeUntracked: true })).toEqual([
+      "git",
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      "f/factory",
+      "scripts",
+    ]);
+  });
+
+  test("lists only cached files for the load test", () => {
+    expect(targetListArgv({ includeUntracked: false })).toEqual([
+      "git",
+      "ls-files",
+      "-z",
+      "--cached",
+      "--",
+      "f/factory",
+      "scripts",
+    ]);
+  });
+});
+
+describe("selectTargets", () => {
+  const present = (): boolean => true;
+
+  test("keeps a source file under f/factory and scripts", () => {
+    const result = selectTargets(
+      ["f/factory/lib/a.ts", "scripts/b.ts"],
+      present,
+    );
+
+    expect(result.targets).toEqual(["f/factory/lib/a.ts", "scripts/b.ts"]);
+  });
+
+  test("leaves out test files, declaration files, and other extensions", () => {
+    const result = selectTargets(
+      [
+        "f/factory/lib/a.test.ts",
+        "scripts/types.d.ts",
+        "f/factory/lib/a.script.yaml",
+        "scripts/run.sh",
+      ],
+      present,
+    );
+
+    expect(result).toEqual({ targets: [], malformed: [] });
+  });
+
+  test("lists a path once when git repeats it", () => {
+    const result = selectTargets(
+      ["f/factory/lib/a.ts", "f/factory/lib/a.ts"],
+      present,
+    );
+
+    expect(result.targets).toEqual(["f/factory/lib/a.ts"]);
+  });
+
+  test("leaves out a file that is not in the working tree", () => {
+    const result = selectTargets(
+      ["f/factory/lib/gone.ts", "f/factory/lib/a.ts"],
+      (path) => path !== "f/factory/lib/gone.ts",
+    );
+
+    expect(result.targets).toEqual(["f/factory/lib/a.ts"]);
+  });
+
+  test("does not count a malformed name of a file that is gone", () => {
+    const result = selectTargets(["f/factory/lib/bad name.ts"], () => false);
+
+    expect(result.malformed).toEqual([]);
+  });
+
+  test("reports a name with a character outside the allowed set", () => {
+    const result = selectTargets(
+      ["f/factory/lib/bad name.ts", "scripts/日本語.ts"],
+      present,
+    );
+
+    expect(result.malformed).toEqual([
+      "f/factory/lib/bad name.ts",
+      "scripts/日本語.ts",
+    ]);
+  });
+
+  test("does not list a malformed name as a target", () => {
+    const result = selectTargets(["f/factory/lib/bad name.ts"], present);
+
+    expect(result.targets).toEqual([]);
+  });
+
+  test("does not report a malformed name of a test file", () => {
+    const result = selectTargets(["f/factory/lib/a b.test.ts"], present);
+
+    expect(result.malformed).toEqual([]);
+  });
+});
+
+describe("listTargetFiles", () => {
+  test("runs the argv without a shell in the root", () => {
+    const calls: { argv: readonly string[]; cwd: string }[] = [];
+
+    listTargetFiles("/the/root", { includeUntracked: true }, (argv, cwd) => {
+      calls.push({ argv, cwd });
+      return "";
+    });
+
+    expect(calls).toEqual([
+      {
+        argv: targetListArgv({ includeUntracked: true }),
+        cwd: "/the/root",
+      },
+    ]);
+  });
+
+  describe("with files in a directory", () => {
+    let dir = "";
+
+    beforeAll(() => {
+      dir = mkdtempSync(join(tmpdir(), "check-coverage-files-"));
+      mkdirSync(join(dir, "f/factory/lib"), { recursive: true });
+      mkdirSync(join(dir, "scripts"), { recursive: true });
+      writeFileSync(join(dir, "f/factory/lib/a.ts"), "");
+      writeFileSync(join(dir, "scripts/b.ts"), "");
+    });
+
+    afterAll(() => {
+      if (dir !== "") rmSync(dir, { recursive: true, force: true });
+    });
+
+    test("splits the output at NUL", () => {
+      const result = listTargetFiles(
+        dir,
+        { includeUntracked: false },
+        () => "f/factory/lib/a.ts\0scripts/b.ts\0",
+      );
+
+      expect(result.targets).toEqual(["f/factory/lib/a.ts", "scripts/b.ts"]);
+    });
+
+    test("lists the targets in order", () => {
+      const result = listTargetFiles(
+        dir,
+        { includeUntracked: false },
+        () => "scripts/b.ts\0f/factory/lib/a.ts\0",
+      );
+
+      expect(result.targets).toEqual(["f/factory/lib/a.ts", "scripts/b.ts"]);
+    });
+  });
+
+  test("throws when git fails", () => {
+    expect(() =>
+      listTargetFiles("/the/root", { includeUntracked: true }, () => {
+        throw new Error("exit code 128");
+      }),
+    ).toThrow("exit code 128");
+  });
+});
+
+describe("listTargetFiles in a temporary repository", () => {
+  let repo = "";
+
+  // gitのフックの中で走ると、親のリポジトリを指す`GIT_*`が環境に残る。一時リポジトリには引き継がない。
+  function git(cwd: string, args: readonly string[]): string {
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+    );
+    const result = Bun.spawnSync(["git", ...args], {
+      cwd,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`git ${args.join(" ")} failed`);
+    }
+    return result.stdout.toString();
+  }
+
+  function write(path: string): void {
+    mkdirSync(dirname(join(repo, path)), { recursive: true });
+    writeFileSync(join(repo, path), "export const x = 1;\n");
+  }
+
+  const run = (argv: readonly string[], cwd: string): string =>
+    git(cwd, argv.slice(1));
+
+  beforeAll(() => {
+    repo = mkdtempSync(join(tmpdir(), "check-coverage-repo-"));
+    git(repo, ["init", "-q"]);
+    write("f/factory/lib/staged.ts");
+    write("f/factory/lib/removed.ts");
+    write("f/factory/lib/staged.test.ts");
+    git(repo, ["add", "-A"]);
+    unlinkSync(join(repo, "f/factory/lib/removed.ts"));
+    write("scripts/untracked.ts");
+  });
+
+  afterAll(() => {
+    if (repo !== "") rmSync(repo, { recursive: true, force: true });
+  });
+
+  test("lists a staged source file", () => {
+    const result = listTargetFiles(repo, { includeUntracked: false }, run);
+
+    expect(result.targets).toContain("f/factory/lib/staged.ts");
+  });
+
+  test("leaves out an untracked file for the load test", () => {
+    const result = listTargetFiles(repo, { includeUntracked: false }, run);
+
+    expect(result.targets).not.toContain("scripts/untracked.ts");
+  });
+
+  test("lists an untracked file for the unloaded check", () => {
+    const result = listTargetFiles(repo, { includeUntracked: true }, run);
+
+    expect(result.targets).toContain("scripts/untracked.ts");
+  });
+
+  test("leaves out a tracked file deleted from the working tree", () => {
+    const result = listTargetFiles(repo, { includeUntracked: true }, run);
+
+    expect(result.targets).not.toContain("f/factory/lib/removed.ts");
+  });
+
+  test("leaves out a staged test file", () => {
+    const result = listTargetFiles(repo, { includeUntracked: true }, run);
+
+    expect(result.targets).not.toContain("f/factory/lib/staged.test.ts");
+  });
+});
+
+describe("judgeCoverage with layers", () => {
+  const lib = (executable: number, executed: number): string =>
+    record("f/factory/lib/a.ts", hitsOf(executable, executed));
+  const steps = (executable: number, executed: number): string =>
+    record("f/factory/steps/b.ts", hitsOf(executable, executed));
+
+  test("fails when a layer is below its floor although the total meets the floor", () => {
+    const summary = summarizeLcov([lib(1000, 1000), steps(10, 0)].join("\n"));
+
+    const verdict = judgeCoverage(summary, 80, {
+      layerFloors: [
+        { layer: "f/factory/lib", floorPercent: 90 },
+        { layer: "f/factory/steps", floorPercent: 50 },
+      ],
+    });
+
+    expect(verdict.ok).toBe(false);
+  });
+
+  test("names the layer that is below its floor", () => {
+    const summary = summarizeLcov([lib(1000, 1000), steps(10, 0)].join("\n"));
+
+    const verdict = judgeCoverage(summary, 80, {
+      layerFloors: [
+        { layer: "f/factory/lib", floorPercent: 90 },
+        { layer: "f/factory/steps", floorPercent: 50 },
+      ],
+    });
+
+    expect(verdict.message).toContain("f/factory/steps is below its floor");
+  });
+
+  test("does not name a layer that meets its floor", () => {
+    const summary = summarizeLcov([lib(1000, 1000), steps(10, 0)].join("\n"));
+
+    const verdict = judgeCoverage(summary, 80, {
+      layerFloors: [
+        { layer: "f/factory/lib", floorPercent: 90 },
+        { layer: "f/factory/steps", floorPercent: 50 },
+      ],
+    });
+
+    expect(verdict.message).not.toContain("f/factory/lib is below its floor");
+  });
+
+  test("passes when every layer and the total meet their floors", () => {
+    const summary = summarizeLcov([lib(10, 10), steps(10, 6)].join("\n"));
+
+    const verdict = judgeCoverage(summary, 80, {
+      layerFloors: [
+        { layer: "f/factory/lib", floorPercent: 90 },
+        { layer: "f/factory/steps", floorPercent: 50 },
+      ],
+    });
+
+    expect(verdict.ok).toBe(true);
+  });
+
+  test("states the ratio and floor of every layer on success", () => {
+    const summary = summarizeLcov([lib(10, 10), steps(10, 6)].join("\n"));
+
+    const verdict = judgeCoverage(summary, 80, {
+      layerFloors: [
+        { layer: "f/factory/lib", floorPercent: 90 },
+        { layer: "f/factory/steps", floorPercent: 50 },
+      ],
+    });
+
+    expect(verdict.message).toContain(
+      "f/factory/lib: 100.00% (10 of 10 lines in 1 files), floor 90.00%",
+    );
+    expect(verdict.message).toContain(
+      "f/factory/steps: 60.00% (6 of 10 lines in 1 files), floor 50.00%",
+    );
+  });
+
+  test("fails when a layer with a floor has no target", () => {
+    const summary = summarizeLcov(lib(10, 10));
+
+    const verdict = judgeCoverage(summary, 0, {
+      layerFloors: [{ layer: "scripts", floorPercent: 0 }],
+    });
+
+    expect(verdict.message).toContain("no target file in layer scripts");
+  });
+
+  test("lists the worst files only for a layer below its floor", () => {
+    const summary = summarizeLcov(
+      [
+        record("f/factory/lib/healthy_but_untested.ts", hitsOf(100, 90)),
+        steps(10, 0),
+      ].join("\n"),
+    );
+
+    const verdict = judgeCoverage(summary, 0, {
+      layerFloors: [
+        { layer: "f/factory/lib", floorPercent: 50 },
+        { layer: "f/factory/steps", floorPercent: 50 },
+      ],
+    });
+
+    expect(verdict.message).not.toContain("healthy_but_untested");
+  });
+});
+
+describe("judgeCoverage with unloaded targets", () => {
+  const summary = summarizeLcov(record("f/factory/lib/a.ts", hitsOf(10, 10)));
+  const unloaded = (count: number): string[] =>
+    Array.from({ length: count }, (_, index) => `scripts/unloaded${index}.ts`);
+
+  test("fails when a target is unloaded although the ratio is high", () => {
+    const verdict = judgeCoverage(summary, 0, { unloaded: unloaded(1) });
+
+    expect(verdict.ok).toBe(false);
+  });
+
+  test("names an unloaded path", () => {
+    const verdict = judgeCoverage(summary, 0, { unloaded: unloaded(1) });
+
+    expect(verdict.message).toContain("scripts/unloaded0.ts");
+  });
+
+  test("states the total of unloaded targets", () => {
+    const verdict = judgeCoverage(summary, 0, { unloaded: unloaded(8) });
+
+    expect(verdict.message).toContain("8 target files were not loaded");
+  });
+
+  test("lists at most five unloaded paths", () => {
+    const verdict = judgeCoverage(summary, 0, { unloaded: unloaded(8) });
+
+    expect(verdict.message.match(/scripts\/unloaded\d\.ts/g)).toHaveLength(5);
+  });
+});
+
+describe("judgeCoverage output size", () => {
+  const manyPoorFiles = (prefix: string): string[] =>
+    Array.from({ length: 12 }, (_, index) =>
+      record(`${prefix}/some_long_module_name_${index}.ts`, hitsOf(50, 0)),
+    );
+  const summary = summarizeLcov(
+    [
+      ...manyPoorFiles("f/factory/lib"),
+      ...manyPoorFiles("f/factory/steps"),
+      ...manyPoorFiles("f/factory"),
+      ...manyPoorFiles("scripts"),
+    ].join("\n"),
+  );
+  const unloaded = Array.from(
+    { length: 60 },
+    (_, index) => `scripts/unloaded_module_with_a_long_name_${index}.ts`,
+  );
+  const verdict = judgeCoverage(summary, 99, {
+    layerFloors: floorsOf(99),
+    unloaded,
+  });
+
+  test("fits in the tail the repair prompt keeps", () => {
+    expect(verdict.message.length).toBeLessThanOrEqual(OUTPUT_TAIL_CHARS);
+  });
+
+  test("puts the reasons after the file rows", () => {
+    expect(
+      verdict.message.indexOf("files with the most unexecuted"),
+    ).toBeLessThan(verdict.message.indexOf("is below its floor"));
+  });
+
+  test("keeps the unloaded total when the paths are cut", () => {
+    expect(verdict.message).toContain("60 target files were not loaded");
+  });
+
+  test("keeps the name of every layer below its floor", () => {
+    expect(
+      ALL_LAYERS.filter(
+        (layer) => !verdict.message.includes(`${layer} is below its floor`),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("checkCoverage", () => {
   let root: string;
 
@@ -224,14 +741,18 @@ describe("checkCoverage", () => {
 
   const untracked = (): readonly string[] => [];
 
+  /** 下限の検査以外を通す共通の設定。a.tsだけが対象で、層の下限は置かない。 */
+  const base: Omit<CheckCoverageOptions, "root"> = {
+    listTracked: untracked,
+    listTargets: listing(["f/factory/lib/a.ts"]),
+    layerFloors: [],
+    notLoadable: [],
+  };
+
   test("passes with a readable lcov at or above the floor", () => {
     writeLcov(record("f/factory/lib/a.ts", hitsOf(10, 8)));
 
-    const result = checkCoverage({
-      root,
-      floorPercent: 80,
-      listTracked: untracked,
-    });
+    const result = checkCoverage({ root, ...base, floorPercent: 80 });
 
     expect(result.ok).toBe(true);
   });
@@ -239,17 +760,13 @@ describe("checkCoverage", () => {
   test("fails with a readable lcov below the floor", () => {
     writeLcov(record("f/factory/lib/a.ts", hitsOf(10, 7)));
 
-    const result = checkCoverage({
-      root,
-      floorPercent: 80,
-      listTracked: untracked,
-    });
+    const result = checkCoverage({ root, ...base, floorPercent: 80 });
 
     expect(result.message).toContain("70.00%");
   });
 
   test("fails when coverage/lcov.info is missing", () => {
-    const result = checkCoverage({ root, listTracked: untracked });
+    const result = checkCoverage({ root, ...base });
 
     expect(result.message).toContain("lcov.info");
   });
@@ -257,7 +774,7 @@ describe("checkCoverage", () => {
   test("fails when coverage/lcov.info is empty", () => {
     writeLcov("");
 
-    const result = checkCoverage({ root, listTracked: untracked });
+    const result = checkCoverage({ root, ...base });
 
     expect(result.message).toContain("empty");
   });
@@ -265,7 +782,7 @@ describe("checkCoverage", () => {
   test("fails when coverage/lcov.info is a directory", () => {
     mkdirSync(join(root, "coverage", "lcov.info"), { recursive: true });
 
-    const result = checkCoverage({ root, listTracked: untracked });
+    const result = checkCoverage({ root, ...base });
 
     expect(result.message).toContain("regular file");
   });
@@ -278,7 +795,7 @@ describe("checkCoverage", () => {
     );
     symlinkSync(join(root, "real.info"), join(root, "coverage", "lcov.info"));
 
-    const result = checkCoverage({ root, listTracked: untracked });
+    const result = checkCoverage({ root, ...base });
 
     expect(result.message).toContain("symlink");
   });
@@ -286,7 +803,11 @@ describe("checkCoverage", () => {
   test("fails when the lcov has no target file", () => {
     writeLcov(record("tests/fixtures/c.ts", hitsOf(10, 10)));
 
-    const result = checkCoverage({ root, listTracked: untracked });
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([]),
+    });
 
     expect(result.message).toContain("no target");
   });
@@ -300,7 +821,7 @@ describe("checkCoverage", () => {
     );
     symlinkSync(real, join(root, "coverage"));
 
-    const result = checkCoverage({ root, listTracked: untracked });
+    const result = checkCoverage({ root, ...base });
 
     expect(result.message).toContain("symlink");
   });
@@ -310,6 +831,7 @@ describe("checkCoverage", () => {
 
     const result = checkCoverage({
       root,
+      ...base,
       listTracked: () => ["coverage/lcov.info"],
     });
 
@@ -321,11 +843,353 @@ describe("checkCoverage", () => {
 
     const result = checkCoverage({
       root,
+      ...base,
       listTracked: () => {
         throw new Error("git failed");
       },
     });
 
     expect(result.message).toContain("git ls-files");
+  });
+});
+
+describe("checkCoverage with the target listing", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "check-coverage-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function writeLcov(text: string): void {
+    mkdirSync(join(root, "coverage"), { recursive: true });
+    writeFileSync(join(root, "coverage", "lcov.info"), text);
+  }
+
+  const base: Omit<CheckCoverageOptions, "root"> = {
+    listTracked: () => [],
+    layerFloors: [],
+    notLoadable: [],
+  };
+  const A = "f/factory/lib/a.ts";
+
+  test("fails when a target has no record in lcov", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A, "scripts/never_loaded.ts"]),
+      floorPercent: 0,
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  test("names the target that has no record in lcov", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A, "scripts/never_loaded.ts"]),
+      floorPercent: 0,
+    });
+
+    expect(result.message).toContain("scripts/never_loaded.ts");
+  });
+
+  test("counts a loaded target that has no executable line as loaded", () => {
+    writeLcov(
+      [record(A, hitsOf(10, 10)), record("scripts/types.ts", [])].join("\n"),
+    );
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A, "scripts/types.ts"]),
+      floorPercent: 0,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("asks for the listing with untracked files", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+    const seen: boolean[] = [];
+
+    checkCoverage({
+      root,
+      ...base,
+      listTargets: (_root, options) => {
+        seen.push(options.includeUntracked);
+        return { targets: [A], malformed: [] };
+      },
+      floorPercent: 0,
+    });
+
+    expect(seen).toEqual([true]);
+  });
+
+  test("leaves a file that lcov has but the listing lacks out of the totals", () => {
+    writeLcov(
+      [
+        record(A, hitsOf(10, 10)),
+        record("f/factory/lib/ignored.ts", hitsOf(1000, 0)),
+      ].join("\n"),
+    );
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A]),
+      floorPercent: 100,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("fails when no target is listed", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([]),
+      floorPercent: 0,
+    });
+
+    expect(result.message).toContain("no target");
+  });
+
+  test("fails when the listing fails", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: () => {
+        throw new Error("fatal: secret stderr text");
+      },
+    });
+
+    expect(result.message).toContain("git ls-files");
+  });
+
+  test("keeps the standard error of git out of the failure", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: () => {
+        throw new Error("fatal: secret stderr text");
+      },
+    });
+
+    expect(result.message).not.toContain("secret");
+  });
+
+  test("fails when a tracked name uses a character outside the allowed set", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A], ["scripts/bad name.ts"]),
+      floorPercent: 0,
+    });
+
+    expect(result.message).toContain("1 target file names");
+  });
+
+  test("escapes control characters in a malformed name", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A], ["scripts/\u001b[2Jx.ts"]),
+      floorPercent: 0,
+    });
+
+    expect(result.message).not.toContain("\u001b");
+  });
+
+  test("shows the escaped malformed name", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A], ["scripts/\u001b[2Jx.ts"]),
+      floorPercent: 0,
+    });
+
+    expect(result.message).toContain(JSON.stringify("scripts/\u001b[2Jx.ts"));
+  });
+
+  test("shows at most five malformed names", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+    const malformed = Array.from(
+      { length: 8 },
+      (_, i) => `scripts/bad ${i}.ts`,
+    );
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A], malformed),
+      floorPercent: 0,
+    });
+
+    expect(result.message.match(/scripts\/bad \d\.ts/g)).toHaveLength(5);
+  });
+
+  test("keeps a malformed-name failure inside the tail the repair prompt keeps", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+    const malformed = Array.from(
+      { length: 8 },
+      (_, i) => `scripts/${"long ".repeat(120)}${i}.ts`,
+    );
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A], malformed),
+      floorPercent: 0,
+    });
+
+    expect(result.message.length).toBeLessThanOrEqual(OUTPUT_TAIL_CHARS);
+  });
+
+  test("fails when a layer is below its floor although the total meets it", () => {
+    writeLcov(
+      [
+        record(A, hitsOf(1000, 1000)),
+        record("scripts/s.ts", hitsOf(10, 0)),
+      ].join("\n"),
+    );
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A, "scripts/s.ts"]),
+      layerFloors: [
+        { layer: "f/factory/lib", floorPercent: 90 },
+        { layer: "scripts", floorPercent: 50 },
+      ],
+      floorPercent: 80,
+    });
+
+    expect(result.message).toContain("scripts is below its floor");
+  });
+
+  test("applies the layer floors of the repository by default", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      listTracked: () => [],
+      listTargets: listing([A]),
+      notLoadable: [],
+      floorPercent: 0,
+    });
+
+    expect(result.message).toContain("no target file in layer scripts");
+  });
+
+  test("states the ratio and floor of every layer on success", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A]),
+      layerFloors: [{ layer: "f/factory/lib", floorPercent: 90 }],
+      floorPercent: 80,
+    });
+
+    expect(result.message).toContain("f/factory/lib: 100.00%");
+  });
+});
+
+describe("checkCoverage with the not loadable list", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "check-coverage-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function writeLcov(text: string): void {
+    mkdirSync(join(root, "coverage"), { recursive: true });
+    writeFileSync(join(root, "coverage", "lcov.info"), text);
+  }
+
+  const base: Omit<CheckCoverageOptions, "root"> = {
+    listTracked: () => [],
+    layerFloors: [],
+    floorPercent: 0,
+  };
+  const A = "f/factory/lib/a.ts";
+  const DB = "scripts/test-db-x.ts";
+
+  test("does not flag a listed file as unloaded", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A, DB]),
+      notLoadable: [DB],
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("fails when a listed path is not a tracked target", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A]),
+      notLoadable: [DB],
+    });
+
+    expect(result.message).toContain("not a tracked target");
+  });
+
+  test("fails when a listed path appears in lcov", () => {
+    writeLcov([record(A, hitsOf(10, 10)), record(DB, hitsOf(5, 5))].join("\n"));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A, DB]),
+      notLoadable: [DB],
+    });
+
+    expect(result.message).toContain("is in lcov");
+  });
+
+  test("fails when a listed path is not of the scripts/test-db- form", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A, "f/factory/lib/b.ts"]),
+      notLoadable: ["f/factory/lib/b.ts"],
+    });
+
+    expect(result.message).toContain("allowed form");
   });
 });

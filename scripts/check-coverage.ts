@@ -49,12 +49,75 @@ export type Verdict = {
   readonly message: string;
 };
 
+export type Layer =
+  | "f/factory/lib"
+  | "f/factory/steps"
+  | "f/factory (other)"
+  | "scripts";
+
+export type LayerFloor = {
+  readonly layer: Layer;
+  readonly floorPercent: number;
+};
+
+/** 層ごとの行カバレッジの下限(%)。 */
+export const LAYER_FLOORS: readonly LayerFloor[] = [];
+
+/** パスが属する層を返す。対象のパスでなければnullを返す。 */
+export function layerOf(_path: string): Layer | null {
+  return null;
+}
+
+/** bunのテストでは読み込めない対象。 */
+export const NOT_LOADABLE_BY_BUN_TEST: readonly string[] = [];
+
+/** `NOT_LOADABLE_BY_BUN_TEST`に入れてよいパスの形。 */
+export const NOT_LOADABLE_PATH = /^scripts\/test-db-[\w-]+\.ts$/;
+
+export type TargetListing = {
+  readonly targets: readonly string[];
+  readonly malformed: readonly string[];
+};
+
+export type ListTargetsOptions = { readonly includeUntracked: boolean };
+
+export function targetListArgv(_options: ListTargetsOptions): string[] {
+  return [];
+}
+
+export function selectTargets(
+  _entries: readonly string[],
+  _exists: (path: string) => boolean,
+): TargetListing {
+  return { targets: [], malformed: [] };
+}
+
+export function listTargetFiles(
+  _root: string,
+  _options: ListTargetsOptions,
+  _runGit?: (argv: readonly string[], cwd: string) => string,
+): TargetListing {
+  return { targets: [], malformed: [] };
+}
+
+export type JudgeOptions = {
+  readonly layerFloors?: readonly LayerFloor[];
+  readonly unloaded?: readonly string[];
+};
+
 export type CheckCoverageOptions = {
   /** リポジトリのルート。coverage/lcov.infoはその直下から読む。 */
   readonly root: string;
   readonly floorPercent?: number;
+  readonly layerFloors?: readonly LayerFloor[];
+  readonly notLoadable?: readonly string[];
   /** `git ls-files -- coverage`の結果。既定は実際にgitを呼ぶ。 */
   readonly listTracked?: (root: string) => readonly string[];
+  /** 下限の対象の列挙。既定は実際にgitを呼ぶ。 */
+  readonly listTargets?: (
+    root: string,
+    options: ListTargetsOptions,
+  ) => TargetListing;
 };
 
 // パスに使える文字を絞る。外れたファイルは対象にしない(出力に制御文字を載せないためでもある)。
@@ -131,6 +194,7 @@ function leastCovered(summary: CoverageSummary): readonly FileCoverage[] {
 export function judgeCoverage(
   summary: CoverageSummary,
   floorPercent: number,
+  _options: JudgeOptions = {},
 ): Verdict {
   if (summary.files.length === 0 || summary.executable === 0) {
     return {
