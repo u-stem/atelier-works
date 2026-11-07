@@ -94,15 +94,15 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |
 | `mise run metadata:check` | Windmillのメタデータが古ければ失敗する |
 | `mise run check` | `lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する。`test`の後に、全体の行カバレッジが下限を割っていないかを確かめる |
-| `mise run check:changed` | `origin/main`との差分に応じて検査を絞って実行する。`lint`と`typecheck`は常に、`lint:docs`は差分のMarkdownだけ、テストは差分がMarkdownだけなら省き、`.sh`、`.yaml`、`.yml`、ルートの設定ファイルに触れたときは`test:all`、それ以外は`test:changed`で実行し、`console:check`はConsoleと共有のlibに触れたときだけ実行する。日常の確認用で、全件の確認はCIが行う |
+| `mise run check:changed` | `origin/main`との差分に応じて検査を絞って実行する。`lint`と`typecheck`は常に、`lint:docs`は差分のMarkdownだけ、テストは`test:changed`と同じ規則で選び、`console:check`はConsoleと共有のlibに触れたときだけ実行する。日常の確認用で、全件の確認はCIが行う |
 | `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査、テスト、組み立てを行う |
 | `mise run lint` | biome、`wmill lint`、型アサーションと`§`の検出を実行する |
 | `mise run lint:docs` | Markdownの文書を検査する |
 | `mise run docs:gen` | 文書の中の生成した範囲と、Consoleに出すflowごとの図のデータ(`console/src/generated/flows.json`)を作り直す |
 | `mise run typecheck` | `tsc --noEmit`で型を検査する |
 | `mise run test` | `bun test --parallel`でsmallのテストを並列に実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
-| `mise run test:all` | カバレッジを測らずに、`console/`を除く全件のテストを並列に実行する。`check:changed`が、`.sh`や設定ファイルの差分で呼ぶ |
-| `mise run test:changed` | `origin/main`との差分が影響するテストだけを実行する。日常の確認用で、全件の確認はCIが行う |
+| `mise run test:all` | カバレッジを測らずに、`console/`を除く全件のテストを並列に実行する。`test:changed`が、importから選べない差分で呼ぶ |
+| `mise run test:changed` | `origin/main`との差分(削除を含む)から、実行するテストを選ぶ。`.sh`、`.yaml`、`.sql`、`.json`、`.toml`、拡張子の無いファイルなど、`.ts`、`.tsx`、`.js`、`.mjs`以外が1つでもあれば`test:all`で全件を実行する。コードだけなら変更に絞る。差分のMarkdownのパスを書いているテストも実行する。メタデータのフックが作る`wmill-lock.yaml`、`*.script.yaml`、`*.script.lock`だけでは、全件にしない。`f/`のコードと一緒に必ず変わり、全件が常態になるためである。`console/`の下は、`console:check`が担うので全件にしない。日常の確認用で、全件の確認はCIが行う |
 | `mise run test:db` | Data Tableのmigrationを使い捨てのDBに適用し、すべてのviewをSELECTする(medium) |
 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査コマンドの境界(uid、秘密、書き込み先、所有権、後始末)を確かめる(medium) |
 | `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
