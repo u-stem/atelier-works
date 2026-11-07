@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import {
   collectMarkdownTests,
   decideChecks,
@@ -298,6 +299,20 @@ describe("collectMarkdownTests", () => {
         onlyConfig,
       ),
     ).toEqual(["tests/scripts/claude-config.test.ts"]);
+  });
+
+  test("finds the skill-reading tests at their real paths", () => {
+    // 固定の2つのパスが改名されると、黙って外れる。実在することをここで確かめる。
+    expect(
+      collectMarkdownTests(
+        [".claude/skills/hold/SKILL.md"],
+        grepFrom({}),
+        existsSync,
+      ),
+    ).toEqual([
+      "tests/lib/commit_message_style.test.ts",
+      "tests/scripts/claude-config.test.ts",
+    ]);
   });
 
   test("does not add the skill-reading tests for a document outside the skills", () => {
