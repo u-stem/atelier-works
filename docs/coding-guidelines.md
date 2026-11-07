@@ -192,7 +192,7 @@ PRを出す前に必ず通す。
 gitのpre-pushは全体の`check`を実行しない。理由は[セットアップ](setup.md#gitのフック)にある。
 
 - `lint`はbiome、`wmill lint f`、型アサーションと`§`の検出を含む。
-- `test`は`bun test --parallel`で、`console/`を除く。カバレッジを`coverage/lcov.info`に出す。`check`は、その後に`bun ./scripts/check-coverage.ts`で全体の行カバレッジの下限を確かめる。
+- `test`は`bun test --parallel`で、`console/`を除く。カバレッジを`coverage/lcov.info`に出す。`check`は、その後に`bun ./scripts/check-coverage.ts`で、全体と層ごとの行カバレッジの下限と、lcovに出ない対象を確かめる。
 - `test:changed`は、`scripts/check-changed.ts`が`origin/main`との差分(削除を含む)から、実行するテストを選ぶ。全件の確認はCIが行う。
   `bun test --changed`はimportの解析で選ぶので、コードから読まないファイルの変更は拾えない。
   そのため、`console/`の外の差分に、`.ts`、`.tsx`、`.js`、`.mjs`以外が1つでもあれば、`test:all`で全件を実行する。

@@ -440,16 +440,37 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 
 ## カバレッジの下限
 
-`mise run test`は、全体のカバレッジを`coverage/lcov.info`に出す。
-`bun ./scripts/check-coverage.ts`は、そのlcovから行カバレッジを求め、下限を割っていれば終了コード1で止まる。
+`mise run test`は、カバレッジを`coverage/lcov.info`に出す。
+`bun ./scripts/check-coverage.ts`は、そのlcovから行カバレッジを求める。
+全体か層のどれかが下限を割っているとき、またはlcovに出ない対象があるときは、終了コード1で止まる。
 `mise run check`は、`test`の後にこの検査を呼ぶ。
 CIの`check`ジョブも、`test`の後に同じ検査をステップとして呼ぶので、ローカルでもCIでも同じ検査が走る。
+成功したときも、全体と各層の値と下限を出す。
 測った値はOS(macOSとubuntu)で変わりうる。
 OSやrootの有無で、動くテストが分かれるためである。
 下限の置き方は[テストの基準](testing-guidelines.md#下限の置き方)にある。
-下限を割ったときは、失敗の出力が示す未実行の行が多いファイルにテストを足す。
+
+### 下限を割ったとき
+
+失敗の出力が示す割った層の、未実行の行が多いファイルにテストを足す。
 `main`で割ったときも同じである。下限の定数は、割った原因を直すまで下げない。
-下限を上げるときは、`mise run test`の実測を見て、`scripts/check-coverage.ts`の`COVERAGE_FLOOR_PERCENT`を実測より低い値に変える。
+
+### 未読み込みで失敗したとき
+
+失敗の出力が示すパスを、次のように直す。
+
+- `scripts/`のファイルはそのファイルをimportするテストを足す。
+- `f/factory/`のファイルは`git add`してから`mise run test`を実行する。
+  読み込みのテスト(`tests/lib/coverage_load_all.test.ts`)は、追跡しているファイルだけを読み込むためである。
+  読み込みのテストが失敗しているときは、その失敗を直す。
+  最上位でAPIを呼んでいるときは、その処理を`main`の中へ移す。
+- bunのテストで読み込めない理由があるファイルだけを、`scripts/check-coverage.ts`の`NOT_LOADABLE_BY_BUN_TEST`に足す。
+
+### 下限を置き直すとき
+
+実測を見て、`scripts/check-coverage.ts`の`COVERAGE_FLOOR_PERCENT`と`LAYER_FLOORS`を、実測より2ポイント低い値に変える。
+対象の定義を変えて置き直すときは、割った原因を直すまで下げない決まりの例外とする。
+旧い定義の値と、新しい定義の値を並べ、下がった分が定義の変化だけで説明できることを、PR本文に書く。
 この変更は保護パスの変更なので、人が書くPRでは「保護パスの変更」の節に、implementのPRでは「確認して欲しい点」の`保護パスを変更: <path>`の行に載り、人がレビューする。
 計算と限界は[テストの基準](testing-guidelines.md)に書く。
 
