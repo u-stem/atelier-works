@@ -13041,6 +13041,8 @@ await execPsqlAsync(
   target,
   "CREATE TABLE public.qdb_session_probe (n integer NOT NULL)",
 );
+const sessionPidBefore = (await sql`SELECT pg_backend_pid() AS pid`.fetch())[0]
+  ?.pid;
 const sessionError = await errorOf(async () => {
   await execPsqlAsync(
     target,
@@ -13061,11 +13063,17 @@ check(
     .join(",") === "1",
 );
 await execPsqlAsync(target, "INSERT INTO public.qdb_session_probe VALUES (3)");
+const sessionPidAfter = (await sql`SELECT pg_backend_pid() AS pid`.fetch())[0]
+  ?.pid;
 check(
   "session: the call after a failed call runs on a new session",
   (await sql`SELECT n FROM public.qdb_session_probe ORDER BY n`.fetch())
     .map((row) => row.n)
-    .join(",") === "1,3",
+    .join(",") === "1,3" &&
+    typeof sessionPidBefore === "number" &&
+    typeof sessionPidAfter === "number" &&
+    sessionPidAfter !== sessionPidBefore,
+  { before: sessionPidBefore, after: sessionPidAfter },
 );
 await execPsqlAsync(
   target,

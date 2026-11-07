@@ -15,14 +15,16 @@ const sourceLines = source.split("\n");
 type Declaration = { readonly name: string; readonly body: string };
 
 /**
- * 先頭の桁から始まる`async function`と`const <名前> = async`を、本体の範囲つきで集める。
+ * 先頭の桁から始まる`function`、`async function`、`const <名前> = async`を、本体の範囲つきで集める。
+ * `async`でない関数も、`execPsqlAsync`の約束を返すなら、呼び出しに`await`が要るので集める。
  * 本体は、宣言の行から、字下げされた行と閉じ括弧で始まる行を読み、閉じ括弧だけの行で終わる。
  */
-function asyncDeclarations(lines: readonly string[]): Declaration[] {
-  const declarations: Declaration[] = [];
+function collectDeclarations(lines: readonly string[]): Declaration[] {
+  const collected: Declaration[] = [];
   lines.forEach((line, index) => {
     const found =
-      /^async function (\w+)/.exec(line) ?? /^const (\w+) = async\b/.exec(line);
+      /^(?:async )?function (\w+)/.exec(line) ??
+      /^const (\w+) = async\b/.exec(line);
     if (found === null || found[1] === undefined) return;
     const body = [line];
     for (let next = index + 1; next < lines.length; next += 1) {
@@ -31,19 +33,19 @@ function asyncDeclarations(lines: readonly string[]): Declaration[] {
       body.push(nextLine);
       if (/^[}\])]+;?$/.test(nextLine)) break;
     }
-    declarations.push({ name: found[1], body: body.join("\n") });
+    collected.push({ name: found[1], body: body.join("\n") });
   });
-  return declarations;
+  return collected;
 }
 
 /** `execPsqlAsync`を直接か間接に呼ぶ補助関数の名前。 */
 function helperNames(lines: readonly string[]): Set<string> {
-  const declarations = asyncDeclarations(lines);
+  const collected = collectDeclarations(lines);
   const names = new Set<string>(["execPsqlAsync"]);
   let grew = true;
   while (grew) {
     grew = false;
-    for (const declaration of declarations) {
+    for (const declaration of collected) {
       if (names.has(declaration.name)) continue;
       const callsKnown = [...names].some((name) =>
         new RegExp(`(?<![\\w.])${name}\\(`).test(declaration.body),
@@ -80,9 +82,10 @@ function callsWithoutAwait(
 function statefulPatternsIn(text: string): RegExp[] {
   const stateful = [
     /pg_advisory_\w+/i,
-    /\bCREATE\s+(?:TEMP|TEMPORARY)\b/,
-    /\bPREPARE\s+\w+/,
-    /\b(?:RESET|DISCARD|LISTEN)\s+\w+/,
+    /\bCREATE\s+(?:TEMP|TEMPORARY)\b/i,
+    // 小文字にも当てるので、検査名の文に混ざる語(`reset`など)を拾わないよう、文の先頭に限る。
+    /["'`;]\s*PREPARE\s+\w+/i,
+    /["'`;]\s*(?:RESET|DISCARD|LISTEN)\s+\w+/i,
     /["'`;]\s*SET\s+(?!LOCAL\b)/,
     /set_config\([^)]*,\s*false\s*\)/i,
   ];
