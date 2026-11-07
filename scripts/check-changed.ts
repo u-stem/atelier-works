@@ -12,6 +12,7 @@ type Plan = {
   readonly docs: readonly string[];
   readonly console: boolean;
   readonly test: boolean;
+  readonly fullTest: boolean;
 };
 
 /** Consoleの検査に影響するパス。Consoleのテストが`f/factory/lib/`を読むため、共有のlibも含める。 */
@@ -23,7 +24,10 @@ const CONSOLE_AFFECTING = [
 ];
 
 /** 差分のパスから、実行する検査を決める。 */
-export function decideChecks(paths: readonly string[]): Plan {
+export function decideChecks(
+  paths: readonly string[],
+  _deleted: readonly string[] = [],
+): Plan {
   const docs = paths.filter((path) => path.endsWith(".md"));
   return {
     docs,
@@ -31,6 +35,7 @@ export function decideChecks(paths: readonly string[]): Plan {
       CONSOLE_AFFECTING.some((pattern) => pattern.test(path)),
     ),
     test: paths.some((path) => !path.endsWith(".md")),
+    fullTest: false,
   };
 }
 
