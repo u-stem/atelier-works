@@ -875,17 +875,19 @@ describe("updateConfigFromConsole: removing from a list", () => {
   });
 
   test("removes an existing element even when its form would not be accepted for an addition", async () => {
-    const legacy = ["https://github.com/octo-owner/a?x=1", "octo-owner/ok"];
+    const legacy = ["octo-owner/legacy", "https://github.com/octo-owner/ok"];
     const { ports, written } = harness({
       raw: { ...LIST_RAW, repo_allowlist: legacy },
     });
     await updateConfigFromConsole(
       "repo_allowlist",
       legacy,
-      ["octo-owner/ok"],
+      ["https://github.com/octo-owner/ok"],
       ports,
     );
-    expect(written[0]?.repo_allowlist).toEqual(["octo-owner/ok"]);
+    expect(written[0]?.repo_allowlist).toEqual([
+      "https://github.com/octo-owner/ok",
+    ]);
   });
 
   test("records the removal with the counts", async () => {
@@ -1025,7 +1027,7 @@ describe("updateConfigFromConsole: what it refuses for a list before it records"
     const result = await updateConfigFromConsole(
       "default_reviewers",
       LISTS.default_reviewers,
-      appended("default_reviewers", "a".repeat(201)),
+      appended("default_reviewers", "a".repeat(101)),
       ports,
     );
     expect([result, events]).toEqual([REFUSED("invalid_element"), []]);
@@ -1037,7 +1039,7 @@ describe("updateConfigFromConsole: what it refuses for a list before it records"
       await updateConfigFromConsole(
         "default_reviewers",
         LISTS.default_reviewers,
-        appended("default_reviewers", "a".repeat(200)),
+        appended("default_reviewers", "a".repeat(100)),
         ports,
       ),
     ).toMatchObject({ refused: false });
