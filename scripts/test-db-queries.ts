@@ -199,7 +199,12 @@ import {
   runSystemStatus,
   runWorkItemDetail,
 } from "../f/factory/steps/console_query.ts";
-import { createPsqlClient, execPsql, type PsqlTarget } from "./test-db-sql.ts";
+import {
+  closePsqlSessions,
+  createPsqlSessionClient,
+  execPsqlAsync,
+} from "./test-db-session.ts";
+import type { PsqlTarget } from "./test-db-sql.ts";
 
 /** 通知を挿入してIDを返す。同じ種類と本文の未解決の通知が既にあるときは、場面の設定の誤りなので失敗させる。 */
 async function addNotice(
@@ -220,7 +225,7 @@ if (composeFile === undefined || database === undefined) {
   process.exit(2);
 }
 const target: PsqlTarget = { composeFile, database };
-const sql = createPsqlClient(target);
+const sql = createPsqlSessionClient(target);
 
 const failures: string[] = [];
 function check(name: string, ok: boolean, detail?: unknown): void {
@@ -330,8 +335,12 @@ async function investigateWorkItem(
   );
 }
 
-function event(workItemId: number, toStatus: string, note: string): void {
-  execPsql(
+async function event(
+  workItemId: number,
+  toStatus: string,
+  note: string,
+): Promise<void> {
+  await execPsqlAsync(
     target,
     `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(workItemId)}, 'implementing', '${toStatus}', '${note}')`,
   );
@@ -381,7 +390,7 @@ const investigateLone = await investigateWorkItem(
   "failed",
   "qdb-investigate-lone",
 );
-event(failedA, "failed", "boom-a");
+await event(failedA, "failed", "boom-a");
 await recordFailure(
   {
     work_item_id: failedA,
@@ -392,7 +401,7 @@ await recordFailure(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.job_failures SET occurred_at = now() - interval '1 hour' WHERE job_id = 'old-job'`,
 );
@@ -544,12 +553,12 @@ async function auditItem(
   return id;
 }
 
-function auditReport(
+async function auditReport(
   workItemId: number,
   startDaysAgo: number,
   endDaysAgo: number,
-): void {
-  execPsql(
+): Promise<void> {
+  await execPsqlAsync(
     target,
     `INSERT INTO factory.audit_reports (work_item_id, period_start, period_end, summary, markdown)
      VALUES (${String(workItemId)}, now() - interval '${String(startDaysAgo)} days', now() - interval '${String(endDaysAgo)} days', 's', 'm')`,
@@ -560,14 +569,14 @@ function auditReport(
 const a1 = await auditItem("a1", "failed", "schedule", OWNER, "r");
 const a2 = await auditItem("a2", "failed", "manual", OWNER, "r");
 const a3 = await auditItem("a3", "audited", "schedule", OWNER, "r");
-auditReport(a3, 14, 7);
+await auditReport(a3, 14, 7);
 // 前の報告(a3、終わりは7日前)につながる後の報告(a6、開始は7日前)がある失敗は覆われる。
 // 後の報告は、別のowner/repoの手動の監査でもよい。
 const a4 = await auditItem("a4", "failed", "schedule", OWNER, "r");
 const a5 = await auditItem("a5", "failed", "schedule", OWNER, "r");
 const a6 = await auditItem("a6", "awaiting_approval", "manual", "qdb2", "r2");
 // 後の報告の開始は、前の報告の終わりと同じ時刻にする(実際の期間の計算も、前の終わりをそのまま始まりにする)。
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.audit_reports (work_item_id, period_start, period_end, summary, markdown)
    VALUES (${String(a6)}, (SELECT period_end FROM factory.audit_reports WHERE work_item_id = ${String(a3)}), now() - interval '1 day', 's', 'm')`,
@@ -576,11 +585,11 @@ execPsql(
 // 後の報告(a6c)の開始は3日前で、2つの終わりの間にある。最大値(1日前)以前なので覆われる。最小値(7日前)で比べると偽になる。
 const a6b = await auditItem("a6b", "failed", "schedule", OWNER, "r");
 const a6c = await auditItem("a6c", "audited", "schedule", OWNER, "r");
-auditReport(a6c, 3, 1);
+await auditReport(a6c, 3, 1);
 // 切り詰め: 前の報告(a6、終わりは1日前)より後に報告の開始がある(a8、開始は半日前)と、a7の期間の先頭は覆われない。
 const a7 = await auditItem("a7", "failed", "schedule", OWNER, "r");
 const a8 = await auditItem("a8", "audited", "schedule", OWNER, "r");
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.audit_reports (work_item_id, period_start, period_end, summary, markdown)
    VALUES (${String(a8)}, now() - interval '12 hours', now(), 's', 'm')`,
@@ -658,7 +667,7 @@ check(
   auditSummary.counts,
 );
 // 後の検査が監査の行を数えないよう、この場面の行を消す(報告は連鎖して消える)。
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.work_items WHERE kind = 'audit' AND title LIKE 'qdb-audit-%'`,
 );
@@ -671,7 +680,7 @@ const oldInfoId = await addNotice(
   { kind: "claim_race_lost", message: "qdb old info notice" },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.notices SET created_at = now() - interval '10 days' WHERE id = ${String(oldInfoId)}`,
 );
@@ -679,7 +688,7 @@ const resolvedNoticeId = await addNotice(
   { kind: "cleanup_db_failed", message: "qdb resolved notice" },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.notices SET resolved = true, resolved_by = 'op', resolved_at = now() + interval '1 minute' WHERE id = ${String(resolvedNoticeId)}`,
 );
@@ -687,7 +696,7 @@ const resolvedByCleanupId = await addNotice(
   { kind: "claim_race_lost", message: "qdb resolved by cleanup" },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.notices SET resolved = true, resolved_by = 'cleanup_db', resolved_at = now() + interval '2 minutes' WHERE id = ${String(resolvedByCleanupId)}`,
 );
@@ -711,11 +720,11 @@ await recordFailure(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.job_failures SET occurred_at = now() - interval '10 days' WHERE job_id = 'sched-old'`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action) VALUES (NULL, '${"b".repeat(40)}', '["f/x.ts"]'::jsonb, 'ok', false)`,
 );
@@ -791,7 +800,7 @@ check(
 // work_item_detail
 // ---------------------------------------------------------------------------
 
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome) VALUES (${String(failedA)}, 2, 1, 'implement', 'done'), (${String(failedA)}, 1, 2, 'fix', 'check_failed')`,
 );
@@ -827,11 +836,11 @@ const prItem = await insertWorkItem(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, result, summary, findings) VALUES (${String(prItem)}, 'abc1234', 'request_changes', 'changes_requested', 'long summary', '[{"a":1},{"a":2}]'::jsonb)`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, trigger_review_ids, replies, commit_shas) VALUES (${String(prItem)}, 1, 'done', '[1]'::jsonb, '[{"review_comment_id":1,"body":"x"},{"review_comment_id":2,"body":"y"}]'::jsonb, '["c1"]'::jsonb)`,
 );
@@ -848,7 +857,7 @@ check(
 );
 let reviewResultRejected = false;
 try {
-  execPsql(
+  await execPsqlAsync(
     target,
     `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, result, summary) VALUES (${String(prItem)}, 'abc1234', 'comment', 'zeta', 's')`,
   );
@@ -874,7 +883,7 @@ const ROOT_JOB = "0198a1b2-0000-7000-8000-000000000001";
 const jobLinked = await issueWorkItem(920, 1, "implementing", "qdb-job-linked");
 // 状態を移す文は、データを変更するWITHを含み、この`SqlClient`の包みを通せない。
 // 列に書けることと、Consoleの問い合わせが読むことを、行を直に入れて確かめる。
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id) VALUES (${String(jobLinked)}, 'implementing', 'failed', 'boom', '${STEP_JOB}', '${ROOT_JOB}'), (${String(jobLinked)}, 'failed', 'needs_human', 'manual', NULL, NULL)`,
 );
@@ -889,7 +898,7 @@ await recordFailure(
   sql,
   { job_id: STEP_JOB, root_job_id: ROOT_JOB },
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id) VALUES (${String(jobLinked)}, 'picked', 'failed', 'forged', '../../admin', 'unknown')`,
 );
@@ -929,7 +938,7 @@ check(
 
 // failedAのラウンド: 試行2のdone、試行1のcheck_failed。試行1にstalled、error、requirements_gap、checks_skippedを足す。
 // 試行1は最後が失敗でないので、失敗は連続していない。
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome) VALUES (${String(failedA)}, 1, 3, 'fix', 'stalled'), (${String(failedA)}, 1, 4, 'fix', 'error'), (${String(failedA)}, 1, 5, 'fix', 'requirements_gap'), (${String(failedA)}, 1, 6, 'fix', 'checks_skipped')`,
 );
@@ -956,7 +965,7 @@ const implementRecovered = await issueWorkItem(
   "implementing",
   "qdb-implement-recovered",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome) VALUES ${[
     `(${String(implementStreak)}, 1, 1, 'implement', 'error')`,
@@ -1014,7 +1023,7 @@ const implementNotStarted = await issueWorkItem(
   "implementing",
   "qdb-implement-not-started",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, failure_reason) VALUES ${[
     `(${String(implementLimitOnly)}, 'implement', 1, 'm', 'failed', 'usage_limit')`,
@@ -1029,7 +1038,7 @@ execPsql(
 function runIdOf(workItemId: number, reason: string): string {
   return `(SELECT id FROM factory.agent_runs WHERE work_item_id = ${String(workItemId)} AND failure_reason = '${reason}')`;
 }
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome, agent_run_id) VALUES ${[
     `(${String(implementLimitOnly)}, 1, 1, 'implement', 'error', ${runIdOf(implementLimitOnly, "usage_limit")})`,
@@ -1140,7 +1149,7 @@ const outputRetryFailed = await prFixItem(95);
 // 不正な出力の再試行でも失敗した(1回のrunClaudeなので1回)。
 const failedBeforeDone = await prFixItem(96);
 // applyがタイムアウトし、flowの再試行でdoneで終わった(成功が入ったので0回)。
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
     runRow(fixA, "pr_fix", 900, null),
@@ -1179,7 +1188,7 @@ execPsql(
     runRow(failedBeforeDone, "pr_fix", 700, null),
   ].join(", ")}`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, created_at) VALUES ${[
     roundRow(fixA, "blocked", 790),
@@ -1215,7 +1224,7 @@ const retriedAfterDone = await prFixItem(101);
 // blockedのラウンドの後に、design_gapのラウンドで終えた(design_gapは成功として数えるので、その前の失敗は数えない)。
 const blockedBeforeGap = await prFixItem(102);
 const gapAfterBlocked = await prFixItem(102);
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
     runRow(recoveredFirst, "pr_fix", 900, "timeout"),
@@ -1235,7 +1244,7 @@ execPsql(
     runRow(gapAfterBlocked, "pr_fix", 750, null),
   ].join(", ")}`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, created_at) VALUES ${[
     roundRow(recoveredFirst, "done", 600),
@@ -1255,7 +1264,7 @@ for (const [workItemId, round] of [
   [repeatedThird, 3],
   [roundsBelowFailures, 2],
 ] as const) {
-  execPsql(
+  await execPsqlAsync(
     target,
     `UPDATE factory.work_items SET fix_round = ${String(round)} WHERE id = ${String(workItemId)}`,
   );
@@ -1292,7 +1301,7 @@ const verifyRetryDiscardedThenLimit = await prFixItem(136);
 // 検査の再実行が不正な出力で再試行し、最後の試行が別の理由で失敗した。
 const verifyRetryDiscardedThenError = await prFixItem(137);
 // IDの順が時刻の順になるよう、古い実行から入れる。
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
     runRow(
@@ -1308,7 +1317,7 @@ execPsql(
     runRow(verifyRetryDiscardedThenError, "pr_fix", 900, null),
   ].join(", ")}`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, failure_reason, created_at) VALUES ${[
     reasonRunRow(usageLimitOnly, "pr_fix", 900, "usage_limit"),
@@ -1354,11 +1363,11 @@ execPsql(
     ),
   ].join(", ")}`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at) VALUES (${String(restartBlockedAfterLimit)}, 'failed', 'fixing', 'qdb restart', ${secondsAgo(800)})`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, created_at) VALUES ${[
     roundRow(verifyRetryUsageLimit, "blocked", 790),
@@ -1490,14 +1499,14 @@ const ciRoundItem = await insertWorkItem(
   sql,
 );
 const reviewRoundItem = await prFixItem(110);
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
     runRow(ciRoundItem, "pr_fix", 900, "timeout"),
     runRow(ciRoundItem, "pr_fix_verify_retry", 800, null),
   ].join(", ")}`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, created_at) VALUES ${roundRow(ciRoundItem, "blocked", 700)}`,
 );
@@ -1537,14 +1546,14 @@ const conflictFailRound = await insertWorkItem(
   sql,
 );
 const reviewRoundItem111 = await prFixItem(111);
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
     runRow(conflictFailRound, "pr_fix", 900, "timeout"),
     runRow(conflictFailRound, "pr_fix_verify_retry", 800, null),
   ].join(", ")}`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, created_at) VALUES ${roundRow(conflictFailRound, "blocked", 700)}`,
 );
@@ -1723,7 +1732,7 @@ async function backdated(
       : resolvedDaysAgo === "now"
         ? ", resolved = true, resolved_by = 'op', resolved_at = now()"
         : `, resolved = true, resolved_by = 'op', resolved_at = now() - interval '${String(resolvedDaysAgo)} days'`;
-  execPsql(
+  await execPsqlAsync(
     target,
     `UPDATE factory.notices SET created_at = now() - interval '${String(createdDaysAgo)} days'${resolvedPart} WHERE id = ${String(id)}`,
   );
@@ -1766,7 +1775,7 @@ const resolvedWithoutRecord = await backdated(
   40,
   "none",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.notices SET resolved = true WHERE id = ${String(resolvedWithoutRecord)}`,
 );
@@ -1851,15 +1860,19 @@ const MISMATCH_RESOLVER = "qdb_resolver";
 
 async function mismatchNotice(message: string, createdAgo: string) {
   const id = await addNotice({ kind: MISMATCH_KIND, message }, sql);
-  execPsql(
+  await execPsqlAsync(
     target,
     `UPDATE factory.notices SET created_at = now() - interval '${createdAgo}' WHERE id = ${String(id)}`,
   );
   return id;
 }
 
-function recordDeploymentRow(sha: string, result: string, ago: string): void {
-  execPsql(
+async function recordDeploymentRow(
+  sha: string,
+  result: string,
+  ago: string,
+): Promise<void> {
+  await execPsqlAsync(
     target,
     `INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action, occurred_at) VALUES (NULL, '${sha}', '[]'::jsonb, '${result}', false, now() - interval '${ago}')`,
   );
@@ -1872,14 +1885,14 @@ async function isResolved(id: number): Promise<boolean | null> {
 
 // 普通の反映: 成功の記録(30分前)より前(60分前)のnoticeは解決し、後(10分前)のnoticeは残す。
 // 別の種類のnoticeは、成功の記録より前でも触らない。
-recordDeploymentRow("qdb-sha-normal", "success", "30 minutes");
+await recordDeploymentRow("qdb-sha-normal", "success", "30 minutes");
 const normalBefore = await mismatchNotice("qdb normal before", "60 minutes");
 const normalAfter = await mismatchNotice("qdb normal after", "10 minutes");
 const otherKindBefore = await addNotice(
   { kind: "cleanup_db_failed", message: "qdb other kind before" },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.notices SET created_at = now() - interval '60 minutes' WHERE id = ${String(otherKindBefore)}`,
 );
@@ -1928,8 +1941,8 @@ check(
 
 // 古い版への書き戻し・止まったまま: 古い成功の行(3時間前)と、直近の失敗の行(1分前)しか無い版では、
 // その後(20分前)に作られたnoticeは解決しない。失敗の行は基準にならない。
-recordDeploymentRow("qdb-sha-old", "success", "3 hours");
-recordDeploymentRow("qdb-sha-old", "failed", "1 minute");
+await recordDeploymentRow("qdb-sha-old", "success", "3 hours");
+await recordDeploymentRow("qdb-sha-old", "failed", "1 minute");
 const writtenBack = await mismatchNotice("qdb written back", "20 minutes");
 const writtenBackResolved = await resolveNoticesBeforeSuccessfulDeployment(
   MISMATCH_KIND,
@@ -1961,12 +1974,12 @@ check(
 // 時刻は、ほかのnoticeより古くし、その版の判定が他を解決しないようにする。
 // 上の普通の反映の判定(30分前)で解決されないよう、「もう一度呼んでも」の後に置く。
 const boundaryTime = new Date(Date.now() - 40 * 60 * 1000).toISOString();
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action, occurred_at) VALUES (NULL, 'qdb-sha-boundary', '[]'::jsonb, 'success', false, '${boundaryTime}'::timestamptz)`,
 );
 const boundaryNotice = await mismatchNotice("qdb boundary", "0 seconds");
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.notices SET created_at = '${boundaryTime}'::timestamptz WHERE id = ${String(boundaryNotice)}`,
 );
@@ -2021,7 +2034,7 @@ const leasedItem = await issueWorkItem(
   "requirements_generating",
   "qdb leased",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'job-1' WHERE id = ${String(leasedItem)}`,
 );
@@ -2092,7 +2105,7 @@ check(
 );
 
 // 取り込み内容の更新の行は、状態の注記に出さない。却下の理由が押しのけられないようにする。
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at) VALUES (${String(refreshItem)}, 'awaiting_approval', 'requirements_generating', 'qdb reject reason', now() - interval '1 hour')`,
 );
@@ -2251,7 +2264,7 @@ check(
   "claimIssueCreation: a claim within its lease cannot be taken again",
   (await claimIssueCreation(claimId, 600, sql)) === false,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.issue_proposals SET issue_creation_claimed_at = now() - interval '1 hour' WHERE id = ${String(claimId)}`,
 );
@@ -2266,7 +2279,7 @@ check(
       await sql`SELECT issue_creation_claimed_at FROM factory.issue_proposals WHERE id = ${claimId}::bigint`.fetch()
     )[0]?.issue_creation_claimed_at !== null,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.issue_proposals SET status = 'approved' WHERE id = ${String(claimId)}`,
 );
@@ -2287,7 +2300,7 @@ check(
 const VIEWER_COMMIT_A = "a".repeat(40);
 const VIEWER_COMMIT_B = "b".repeat(40);
 await recordViewerObservation("v0.0.1", VIEWER_COMMIT_A, sql);
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.drawio_viewer_observations SET first_seen_at = now() - interval '20 days' WHERE tag = 'v0.0.1'",
 );
@@ -2311,7 +2324,7 @@ check(
   Date.now() - viewerSeenMoved.getTime() < 60 * 60 * 1000,
   viewerSeenMoved,
 );
-execPsql(target, "DELETE FROM factory.drawio_viewer_observations");
+await execPsqlAsync(target, "DELETE FROM factory.drawio_viewer_observations");
 
 // mainのCIの記録: 重複は入れず、移すのは判定待ちの行だけで、掃除は判定待ちの行を消さない。
 const CI_SHA_A = "a".repeat(40);
@@ -2418,7 +2431,7 @@ check(
 );
 let ciCheckRejected = false;
 try {
-  execPsql(
+  await execPsqlAsync(
     target,
     `INSERT INTO factory.main_ci_runs (owner, repo, head_sha) VALUES ('qdb', 'ci', 'ABC')`,
   );
@@ -2428,7 +2441,7 @@ try {
 check("main_ci_runs: the table rejects a malformed sha", ciCheckRejected);
 let ciLongSummaryRejected = false;
 try {
-  execPsql(
+  await execPsqlAsync(
     target,
     `UPDATE factory.main_ci_runs SET summary = repeat('x', 401) WHERE owner = 'qdb' AND head_sha = '${CI_SHA_B}'`,
   );
@@ -2449,7 +2462,7 @@ await recordMainCiRun(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE owner = 'qdb'",
 );
@@ -2530,7 +2543,7 @@ check(
     sql,
   )) === null,
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE repo = 'keep'",
 );
@@ -2581,7 +2594,7 @@ await recordMainCiRun(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE repo = 'late'",
 );
@@ -2692,7 +2705,7 @@ await recordMainCiRun(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.main_ci_runs SET state = 'failed' WHERE repo = 'onlyfail'",
 );
@@ -2822,7 +2835,7 @@ for (const [index, sha] of otherShas.entries()) {
     },
     sql,
   );
-  execPsql(
+  await execPsqlAsync(
     target,
     `UPDATE factory.main_ci_runs SET state = '${otherStates[index] ?? "baseline"}' WHERE repo = 'settledothers' AND head_sha = '${sha}'`,
   );
@@ -2885,7 +2898,7 @@ await recordMainCiRun(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.main_ci_runs SET state = 'passed' WHERE repo = 'othernewer'",
 );
@@ -2899,7 +2912,7 @@ check(
     sql,
   )) === false,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.main_ci_runs (owner, repo, head_sha, state, first_seen_at, run_created_at)
    VALUES ('qdb', 'nullrun', '${newerShas[1] ?? ""}', 'passed', '2026-10-13T00:00:00Z', NULL)`,
@@ -2921,7 +2934,10 @@ check(
       sql,
     )) === false,
 );
-execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qdb'");
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.main_ci_runs WHERE owner = 'qdb'",
+);
 
 // PRのCIの記録: headごとに1行で、移すのは期待する状態の行だけ、掃除は判定待ちの行と各PRの最新の行を消さない。
 const PR_CI = { owner: "qdb", repo: "prci" };
@@ -2959,7 +2975,7 @@ check(
     (await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 13, sql))
       ?.work_item_id === 4242,
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '2 hours' WHERE owner = 'qdb' AND pr_number = 11",
 );
@@ -3067,7 +3083,7 @@ for (const [name, statement] of [
 ] as const) {
   let rejected = false;
   try {
-    execPsql(target, statement);
+    await execPsqlAsync(target, statement);
   } catch {
     rejected = true;
   }
@@ -3075,11 +3091,14 @@ for (const [name, statement] of [
 }
 
 // 巡回の順は、読み直していない順(checked_at)で、読み直した行は後ろに回る。
-execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'",
+);
 for (const prNumber of [41, 42, 43]) {
   await recordPrCiCheck(prCiNew(prNumber, PR_SHA_1), sql);
 }
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET checked_at = now() - (50 - pr_number) * interval '1 hour' WHERE owner = 'qdb'",
 );
@@ -3101,7 +3120,7 @@ check(
     (await prCiOrder()) === "42,43,41",
   await prCiOrder(),
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET state = 'failed', checked_at = now() - (50 - pr_number) * interval '1 hour' WHERE owner = 'qdb'",
 );
@@ -3122,7 +3141,7 @@ check(
     await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 41, sql)
   )?.updated_at.getTime() === prCiFirst.updated_at.getTime(),
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET state = 'passed' WHERE owner = 'qdb'",
 );
@@ -3130,7 +3149,10 @@ check(
   "pr_ci_checks: a row that is neither pending nor failed is not touched",
   (await touchPrCiCheck(prCiFirst.id, sql)) === false,
 );
-execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'",
+);
 
 // headがA、B、Aと戻ったとき、Aの行はやり直しの行になる。
 const PR_BACK = 61;
@@ -3149,7 +3171,7 @@ await transitionPrCiCheck(
   sql,
 );
 await markPrCiNotified(prCiBackA.id, "ci_failure", sql);
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '3 hours' WHERE pr_number = 61",
 );
@@ -3221,7 +3243,7 @@ check(
   (await markPrCiNotified(prCiBackA.id, "ci_failure", sql)) === true,
 );
 await transitionPrCiCheck(prCiBackA.id, "pending", { state: "failed" }, sql);
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '90 days' WHERE owner = 'qdb'",
 );
@@ -3236,7 +3258,10 @@ check(
     .map((row) => `${row.head_sha.slice(0, 1)}:${row.state}`)
     .join(",") === "1:failed",
 );
-execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'",
+);
 
 // 掃除は、判定待ちの行を残す。各PRの最新の行は保持期間の4倍まで残し、最新でない行は保持期間で消す。
 const PR_SHA_3 = "3".repeat(40);
@@ -3247,25 +3272,25 @@ await recordPrCiCheck(prCiNew(23, PR_SHA_1), sql);
 await recordPrCiCheck(prCiNew(23, PR_SHA_3), sql);
 await recordPrCiCheck(prCiNew(24, PR_SHA_1), sql);
 await recordPrCiCheck(prCiNew(24, PR_SHA_2), sql);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '3 hours' WHERE pr_number IN (21, 23, 24) AND head_sha = '${PR_SHA_1}'`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_ci_checks SET state = 'superseded' WHERE pr_number = 21 AND head_sha = '${PR_SHA_1}'`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_ci_checks SET state = 'passed' WHERE (pr_number = 21 AND head_sha = '${PR_SHA_2}') OR pr_number = 22`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET state = 'failed' WHERE pr_number = 24",
 );
 const prCiCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 const prCiLatestCutoff = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '90 days' WHERE owner = 'qdb'",
 );
@@ -3303,7 +3328,7 @@ check(
   prCiDeleted === 2,
   prCiDeleted,
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '150 days' WHERE owner = 'qdb'",
 );
@@ -3335,7 +3360,10 @@ check(
     .then(() => false)
     .catch(() => true),
 );
-execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'",
+);
 
 // no_ci の行は、実行が遅れて作られた場合のために、今のheadの行だけを遅い間隔で読み直す。
 const PR_NO_CI = [81, 82, 83];
@@ -3343,7 +3371,7 @@ for (const prNumber of PR_NO_CI) {
   await recordPrCiCheck(prCiNew(prNumber, PR_SHA_1), sql);
 }
 await recordPrCiCheck(prCiNew(82, PR_SHA_2), sql);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '3 hours' WHERE pr_number = 82 AND head_sha = '${PR_SHA_1}'`,
 );
@@ -3354,7 +3382,7 @@ for (const prNumber of PR_NO_CI) {
   if (row === undefined) throw new Error("pr_ci_checks row is missing");
   await transitionPrCiCheck(row.id, "pending", { state: "no_ci" }, sql);
 }
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET checked_at = now() - interval '3 hours' WHERE pr_number IN (81, 82)",
 );
@@ -3404,7 +3432,10 @@ check(
     .then(() => false)
     .catch(() => true),
 );
-execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'",
+);
 
 // owner と repo は小文字で記録し、大文字で引いても同じ行に当たる。
 check(
@@ -3416,7 +3447,10 @@ check(
     (await recordPrCiCheck(prCiNew(71, PR_SHA_1), sql)) === false &&
     (await listPrCiChecksForPr("QDB", "PRCI", 71, sql)).length === 1,
 );
-execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'",
+);
 
 // 失敗を直す作業項目: 起動は1つの文で行の更新と作業項目の挿入を行い、条件に合わなければ何も書かない。
 const FIX = { owner: "qfix", repo: "app" };
@@ -3577,7 +3611,7 @@ check(
     (await fixRowOf(fixBlocked.id))?.state === "failed" &&
     (await fixWorkItemCount(504)) === 1,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'rereview_requested' WHERE id = ${String(blockingItem)}`,
 );
@@ -3634,11 +3668,11 @@ const seedNewer = await insertWorkItem(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET fix_round = 1, last_review_id = 11, last_comment_id = 12, last_review_comment_id = 13, created_at = now() - interval '2 hours' WHERE id = ${String(seedOlder)}`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET fix_round = 3, last_review_id = 101, last_comment_id = 202, last_review_comment_id = 303 WHERE id = ${String(seedNewer)}`,
 );
@@ -3700,9 +3734,9 @@ check(
 );
 check(
   "hold: the table refuses an empty hold reason",
-  (() => {
+  await (async () => {
     try {
-      execPsql(
+      await execPsqlAsync(
         target,
         `UPDATE factory.pr_ci_checks SET fix_hold_reason = '' WHERE id = ${String(fixHold.id)}`,
       );
@@ -3744,7 +3778,7 @@ check(
   "rounds: a pr_fix that does not fix a CI failure is not counted",
   (await countPrCiFixRounds(FIX.owner, FIX.repo, 505, [], sql)) === 1,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'rereview_requested' WHERE id = ${String(fixOkId)}`,
 );
@@ -3772,11 +3806,11 @@ check(
   "rounds: the second round of the pull request is counted",
   (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, [], sql)) === 2,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'rereview_requested' WHERE id = ${String(fixSecondId)}`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_ci_checks SET state = 'passed', fix_work_item_id = NULL, updated_at = now() WHERE id = ${String(fixOk.id)}`,
 );
@@ -3835,15 +3869,15 @@ check(
 await recordPrCiCheck(fixRowNew(521, FIX_SHA_1), sql);
 await recordPrCiCheck(fixRowNew(522, FIX_SHA_1), sql);
 await recordPrCiCheck(fixRowNew(523, FIX_SHA_1), sql);
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET state = 'fixing', fix_work_item_id = NULL, updated_at = now() - interval '5 minutes' WHERE owner = 'qfix' AND pr_number = 521",
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET state = 'fixing', fix_work_item_id = NULL, updated_at = now() - interval '11 minutes' WHERE owner = 'qfix' AND pr_number = 522",
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET state = 'fixing', fix_work_item_id = 987654321, updated_at = now() WHERE owner = 'qfix' AND pr_number = 523",
 );
@@ -3881,7 +3915,7 @@ check(
   "touch: a fixing row is touched",
   (await touchPrCiCheck(fixTouch.id, sql)) === true,
 );
-execPsql(
+await execPsqlAsync(
   target,
   "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '150 days' WHERE owner = 'qfix'",
 );
@@ -3935,9 +3969,9 @@ check(
 );
 check(
   "table: a negative number of attempts is refused",
-  (() => {
+  await (async () => {
     try {
-      execPsql(
+      await execPsqlAsync(
         target,
         `UPDATE factory.pr_ci_checks SET fix_attempts = -1 WHERE id = ${String(fixReopen.id)}`,
       );
@@ -4006,7 +4040,10 @@ check(
   "main red: a passed latest row is not red even after a failure",
   (await isLatestMainCiRunFailed(MAIN_RED.owner, MAIN_RED.repo, sql)) === false,
 );
-execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qfix'");
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.main_ci_runs WHERE owner = 'qfix'",
+);
 
 // 起動の候補: 失敗の行のうち、保留がないか一時的な保留で、時刻の条件を満たす行だけを返す。
 const CLAIM_SINCE = new Date(Date.now() - 60 * 60 * 1000);
@@ -4023,14 +4060,14 @@ await setPrCiFixHold(claimTemporary.id, "main_ci_failed", {}, sql);
 const claimDeterministic = await failedFixRow(603, FIX_SHA_1);
 await setPrCiFixHold(claimDeterministic.id, "rounds_exhausted", {}, sql);
 const claimOld = await failedFixRow(604, FIX_SHA_1);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '2 hours' WHERE id = ${String(claimOld.id)}`,
 );
 await recordPrCiCheck(fixRowNew(605, FIX_SHA_1), sql);
 // 人のPRの行(`work_item_id`がNULL)は起動の候補にしない。他の行は作業項目に結ぶ。
 const claimHuman = await failedFixRow(606, FIX_SHA_1);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_ci_checks SET work_item_id = 1 WHERE id IN (${[claimPlain, claimTemporary, claimDeterministic, claimOld].map((row) => String(row.id)).join(", ")})`,
 );
@@ -4081,7 +4118,7 @@ async function orderRow(
   if (state !== "pending") {
     await transitionPrCiCheck(row.id, "pending", { state }, sql);
   }
-  execPsql(
+  await execPsqlAsync(
     target,
     `UPDATE factory.pr_ci_checks SET checked_at = now() - interval '${checkedAgo}' WHERE id = ${String(row.id)}`,
   );
@@ -4116,7 +4153,10 @@ check(
     await listNoCiPrCiChecksToRecheck(new Date(Date.now() + 60_000), 100, sql),
   ),
 );
-execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qord'");
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.pr_ci_checks WHERE owner = 'qord'",
+);
 
 // 保留を外すときは、読んだ理由のままの行だけを外す。
 check(
@@ -4185,7 +4225,7 @@ check(
   "claim to recovery: a work item that failed before its flow started is not counted as a round",
   (await countPrCiFixRounds(FIX.owner, FIX.repo, 601, [], sql)) === 0,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = '0192d4a0-7b1c-7e2a-9f3d-1a2b3c4d5e6f' WHERE id = ${String(claimedId)}`,
 );
@@ -4204,7 +4244,7 @@ const waitedRow = await failedFixRow(611, FIX_SHA_1);
 const waitedItem = await fixClaim(waitedRow.id, FIX_SHA_1);
 if (waitedItem === null) throw new Error("the waited row was not claimed");
 await updateStatus(waitedItem, "failed", WAIT_NOTE, sql);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = '0192d4a0-7b1c-7e2a-9f3d-1a2b3c4d5e6f' WHERE id = ${String(waitedItem)}`,
 );
@@ -4241,7 +4281,7 @@ if (waitedThenBlocked === null) throw new Error("the row was not claimed");
 await updateStatus(waitedThenBlocked, "failed", WAIT_NOTE, sql);
 await updateStatus(waitedThenBlocked, "fixing", "qfix restart", sql);
 await updateStatus(waitedThenBlocked, "failed", "other failure", sql);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = '0192d4a0-7b1c-7e2a-9f3d-1a2b3c4d5e6f' WHERE id = ${String(waitedThenBlocked)}`,
 );
@@ -4276,7 +4316,7 @@ check(
 
 // 使用上限の保留の時間の上限は`first_seen_at`から測る。headが進むと新しい行になり、測り直しになる。
 const givenUpOldHead = await failedFixRow(615, FIX_SHA_1);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '9 days', fix_hold_reason = 'claude_usage_limit' WHERE id = ${String(givenUpOldHead.id)}`,
 );
@@ -4317,7 +4357,7 @@ check(
 const floorRow = await failedFixRow(613, FIX_SHA_1);
 const floorItem = await fixClaim(floorRow.id, FIX_SHA_1);
 if (floorItem === null) throw new Error("the row was not claimed");
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_ci_checks SET fix_attempts = 0 WHERE id = ${String(floorRow.id)}`,
 );
@@ -4352,7 +4392,7 @@ const reviewItem = await insertWorkItem(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, summary) VALUES (${String(reviewItem)}, '${FIX_SHA_1}', 'comment', 'qfix')`,
 );
@@ -4372,7 +4412,7 @@ check(
   "latestPostedPrReview: does not read a review that was not posted",
   (await latestPostedPrReview("qfix", "app", 606, sql)) === null,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, summary, findings, posted_review_id) VALUES (${String(reviewItem)}, '${FIX_SHA_2}', 'comment', 'qfix', '[{"path":"a.ts","line":1,"severity":"major","kind":"must","message":"m","suggestion":null}]'::jsonb, '9001')`,
 );
@@ -4398,7 +4438,7 @@ const unnotifiedPrs = async () =>
     .join(",");
 const unnotifiedOld = await failedFixRow(701, FIX_SHA_1);
 const unnotifiedNew = await failedFixRow(702, FIX_SHA_1);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_ci_checks SET updated_at = now() - interval '1 hour' WHERE id = ${String(unnotifiedOld.id)}`,
 );
@@ -4492,7 +4532,7 @@ check(
 // 時間設定の不整合の保留は一時的な保留なので、保存でき、起動の候補に残る。
 const misfitHeld = await failedFixRow(707, FIX_SHA_1);
 await setPrCiFixHold(misfitHeld.id, "config_misfit", {}, sql);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_ci_checks SET work_item_id = 1 WHERE id = ${String(misfitHeld.id)}`,
 );
@@ -4530,8 +4570,14 @@ check(
   (await releaseConfigMisfitHolds(sql)) === 0,
 );
 
-execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qfix'");
-execPsql(target, "DELETE FROM factory.work_items WHERE lower(owner) = 'qfix'");
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.pr_ci_checks WHERE owner = 'qfix'",
+);
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.work_items WHERE lower(owner) = 'qfix'",
+);
 
 // ---------------------------------------------------------------------------
 // 未解決の通知の重複の抑止
@@ -4563,7 +4609,7 @@ check(
     (await getNoticeById(dedupFirst, sql))?.created_at.getTime() ===
       dedupFirstRow?.created_at.getTime(),
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.notices SET created_at = now() - interval '2 days' WHERE id = ${String(dedupFirst)}`,
 );
@@ -4595,7 +4641,7 @@ check(
   "notice dedup: after the notice is resolved the same body inserts again",
   typeof (await addNoticeUnlessUnresolved(dedupRecord, sql)) === "number",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.notices WHERE kind = '${dedupRecord.kind}' AND message = '${dedupRecord.message}'`,
 );
@@ -4610,7 +4656,7 @@ check(
   !INFO_NOTICE_KINDS.includes(actionRecord.kind),
 );
 const actionFirst = await addNoticeUnlessUnresolved(actionRecord, sql);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.notices SET created_at = now() - interval '2 days' WHERE id = ${String(actionFirst)}`,
 );
@@ -4628,7 +4674,7 @@ check(
     actionAfter?.created_at.getTime() === actionBefore.created_at.getTime(),
   actionAfter,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.notices WHERE kind = '${actionRecord.kind}'`,
 );
@@ -4660,7 +4706,7 @@ check(
   diskAfterE.length === 1 && diskAfterE[0]?.message === "qdb disk E",
   diskAfterE,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.notices SET created_at = now() - interval '12 hours' WHERE id = ${String(diskFirst)}`,
 );
@@ -4674,7 +4720,7 @@ check(
 );
 let diskDuplicateRejected = false;
 try {
-  execPsql(
+  await execPsqlAsync(
     target,
     `INSERT INTO factory.notices (kind, message) VALUES ('${DISK_USAGE_KIND}', 'qdb disk other')`,
   );
@@ -4710,7 +4756,7 @@ check(
       diskResolvedBefore.created_at.getTime(),
   diskResolvedAfter,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.notices WHERE kind = '${DISK_USAGE_KIND}'`,
 );
@@ -4798,7 +4844,7 @@ check(
   dependabotNextToReview !== null && dependabotNextToReview > 0,
   dependabotNextToReview,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'needs_human' WHERE id = ${String(dependabotFirst)}`,
 );
@@ -4837,7 +4883,7 @@ const reviewWithHead = await prWorkItem(
   "reviewing",
   "qdb-dependabot-review-head",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET head_sha = '${DEPENDABOT_SHA_A}' WHERE id = ${String(reviewWithHead)}`,
 );
@@ -4915,7 +4961,7 @@ check(
   isActivePrReviewUniqueViolation(activeReviewInsertError),
   activeReviewInsertError,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'reviewed' WHERE id = ${String(reviewFirst)}`,
 );
@@ -4937,7 +4983,7 @@ const spelledReview = await insertWorkItem(
   { ...reviewCandidate("Qdb", "R", 9261), status: "reviewed" as const },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, summary) VALUES (${String(spelledReview)}, 'spell01', 'comment', 'qspell')`,
 );
@@ -4993,8 +5039,8 @@ const stoppedFix = await prWorkItem(
   "blocked",
   "qdb stopped fix",
 );
-event(stoppedFix, "blocked", "worker image is stale: probe");
-execPsql(
+await event(stoppedFix, "blocked", "worker image is stale: probe");
+await execPsqlAsync(
   target,
   "INSERT INTO factory.notices (kind, message, resolved, resolved_by, resolved_at) VALUES ('qdb_stale_image', 'qdb stale image probe', true, 'qdb', now() + interval '1 minute')",
 );
@@ -5043,7 +5089,7 @@ check(
   isActivePrFixUniqueViolation(activeFixUpdateError),
   activeFixUpdateError,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'failed' WHERE id = ${String(activeFix)}`,
 );
@@ -5053,7 +5099,7 @@ check(
     .map((candidate) => candidate.id)
     .includes(stoppedFix),
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET design_attempt = 2 WHERE id = ${String(stoppedFix)}`,
 );
@@ -5094,7 +5140,7 @@ const conflictStopped = await insertWorkItem(
   },
   sql,
 );
-event(conflictStopped, "blocked", "worker image is stale: probe");
+await event(conflictStopped, "blocked", "worker image is stale: probe");
 check(
   "conflict round: a stopped round is not an auto retry candidate",
   !(await listAutoRetryCandidates({ ...autoRetryParams, limit: 100 }, sql))
@@ -5121,7 +5167,7 @@ const noNoticeParams = {
   noticeMarker: "qdb no such notice",
 };
 const waitingIssue = await issueWorkItem(9801, 1, "needs_human", "qdb waiting");
-event(waitingIssue, "needs_human", "qdb active run: busy");
+await event(waitingIssue, "needs_human", "qdb active run: busy");
 const waitRestartParams = {
   ...noNoticeParams,
   id: waitingIssue,
@@ -5148,7 +5194,7 @@ const staleImageFix = await prWorkItem(
   "blocked",
   "qdb stale image fix",
 );
-event(staleImageFix, "blocked", "worker image is stale: probe");
+await event(staleImageFix, "blocked", "worker image is stale: probe");
 check(
   "wait reason: a candidate of the resolved notice is not marked as waiting",
   (await listAutoRetryCandidates({ ...autoRetryParams, limit: 100 }, sql)).find(
@@ -5161,7 +5207,7 @@ const otherReasonIssue = await issueWorkItem(
   "needs_human",
   "qdb other reason",
 );
-event(otherReasonIssue, "needs_human", "qdb another reason");
+await event(otherReasonIssue, "needs_human", "qdb another reason");
 check(
   "wait reason: an issue stopped by another reason is not a candidate without a resolved notice",
   !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
@@ -5182,7 +5228,7 @@ const waitingFix = await prWorkItem(
   "blocked",
   "qdb waiting fix",
 );
-event(waitingFix, "blocked", "qdb active run: busy");
+await event(waitingFix, "blocked", "qdb active run: busy");
 check(
   "wait reason: a pr_fix stopped by the reason is not a candidate",
   !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
@@ -5209,13 +5255,13 @@ const exhaustedIssue = await issueWorkItem(
   "qdb exhausted waiting",
 );
 for (let attempt = 0; attempt < 3; attempt += 1) {
-  event(
+  await event(
     exhaustedIssue,
     "implementing",
     "auto_retry: restarted from needs_human",
   );
 }
-event(exhaustedIssue, "needs_human", "qdb active run: busy");
+await event(exhaustedIssue, "needs_human", "qdb active run: busy");
 check(
   "wait reason: an issue that used up its restarts is not a candidate",
   !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
@@ -5237,7 +5283,12 @@ const oldWaitingIssue = await issueWorkItem(
   "needs_human",
   "qdb old waiting",
 );
-eventAgo(oldWaitingIssue, "needs_human", "qdb active run: busy", 25 * 60 * 60);
+await eventAgo(
+  oldWaitingIssue,
+  "needs_human",
+  "qdb active run: busy",
+  25 * 60 * 60,
+);
 check(
   "wait reason: an issue stopped by the reason longer ago than the limit is not a candidate",
   !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
@@ -5258,7 +5309,7 @@ const recentWaitingIssue = await issueWorkItem(
   "needs_human",
   "qdb recent waiting",
 );
-eventAgo(
+await eventAgo(
   recentWaitingIssue,
   "needs_human",
   "qdb active run: busy",
@@ -5324,7 +5375,7 @@ await updateStatusIfCurrent(
   "gate_waiting",
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'picked' WHERE id = ${String(recancelled)}`,
 );
@@ -5464,7 +5515,7 @@ for (const [name, statement] of [
 ] as const) {
   let rejected = false;
   try {
-    execPsql(target, statement);
+    await execPsqlAsync(target, statement);
   } catch {
     rejected = true;
   }
@@ -5715,7 +5766,7 @@ check(
 // 始端の11分前にも行を置き、範囲の10分前までの行だけを前の行に使うことを確かめる。
 // 11分前の行を前の行に使うと、最初の行との間の11分30秒が空白に数えられ、最初の行のOOMの増分も求まってしまう。
 // 2026-10-21(JST)が通常の日である。
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.worker_samples (slots, sampled_at, mem_oom)
    VALUES (3, '2026-10-20T14:49:00Z', 50);
@@ -5756,7 +5807,7 @@ check(
 
 // 夜間の停止の前半。2026-10-22(JST)は、0:00:30から2分おきに記録され、22:58:30の行を最後に止まる。
 // 最後の行から終端までの空白(1時間1分30秒)が、日の終わり側の空白として1回数えられる。
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.worker_samples (slots, sampled_at)
    SELECT 3, timestamptz '2026-10-21T15:00:30Z' + n * interval '2 minutes'
@@ -5795,7 +5846,7 @@ check(
 
 // 夜間の停止の後半。2026-10-23(JST)は、前日の最後の行が1時間以上前なので、始端からの空白になる。
 // 8:00:30の行から2分おきに記録され、始端から最初の行までの空白(8時間30秒)が、日の始まり側の空白として1回数えられる。
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.worker_samples (slots, sampled_at)
    SELECT 3, timestamptz '2026-10-22T23:00:30Z' + n * interval '2 minutes'
@@ -6010,7 +6061,7 @@ check(
 await prWorkItem("pr_review", 972, "reviewed", "qdb-tr-2-old");
 await Bun.sleep(30);
 const trackedNewest = await prWorkItem("pr_fix", 972, "fixing", "qdb-tr-2-new");
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET pr_closed_at = now() WHERE id = ${String(trackedNewest)}`,
 );
@@ -6025,7 +6076,7 @@ const trackedOlder = await prWorkItem(
   "reviewed",
   "qdb-tr-3-old",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET pr_closed_at = now() WHERE id = ${String(trackedOlder)}`,
 );
@@ -6050,7 +6101,10 @@ check(
 );
 
 // migrationより先にコードが反映されても、列が無いDBで一覧が今までどおり返り、印の書き込みは例外にならない。
-execPsql(target, "ALTER TABLE factory.work_items DROP COLUMN pr_closed_at");
+await execPsqlAsync(
+  target,
+  "ALTER TABLE factory.work_items DROP COLUMN pr_closed_at",
+);
 check(
   "closed mark without the column: the pr_open list still returns the items",
   (await listedPrOpenIds()).includes(closedMarkItem),
@@ -6073,13 +6127,13 @@ check(
   (await markTrackedPrClosed(OWNER, "r", 971, await readDbNow(sql), sql)) ===
     false,
 );
-execPsql(
+await execPsqlAsync(
   target,
   "ALTER TABLE factory.work_items ADD COLUMN pr_closed_at timestamptz",
 );
 
 // PRの索引が、PRの番号による引きに使える形で入っている。小さい表では計画器が走査を選ぶので、順次走査を禁じて確かめる。
-execPsql(
+await execPsqlAsync(
   target,
   `CREATE FUNCTION public.qdb_plan(query text) RETURNS text LANGUAGE plpgsql AS $$
    DECLARE line text; plan text := '';
@@ -6102,7 +6156,7 @@ check(
     lookupPlan.includes("work_items_pr_lookup_idx"),
   lookupPlan,
 );
-execPsql(target, "DROP FUNCTION public.qdb_plan(text)");
+await execPsqlAsync(target, "DROP FUNCTION public.qdb_plan(text)");
 
 // 権限の不足のnoticeは、リポジトリごとに同じ本文なので、未解決のものがあれば新しく挿入しない。
 const prCiDeniedNotice = {
@@ -6124,7 +6178,7 @@ check(
     sql,
   )) === 1 && (await addNoticeUnlessUnresolved(prCiDeniedNotice, sql)) !== null,
 );
-execPsql(
+await execPsqlAsync(
   target,
   "DELETE FROM factory.notices WHERE kind = 'pr_ci_check_denied'",
 );
@@ -6333,7 +6387,7 @@ check(
   racedResult === "not_conflicted",
   racedResult,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.pr_conflict_checks WHERE id = ${String(raced.row.id)}`,
 );
@@ -6408,8 +6462,12 @@ async function conflictRoundItem(
     sql,
   );
 }
-function conflictNote(workItemId: number, status: string, note: string): void {
-  execPsql(
+async function conflictNote(
+  workItemId: number,
+  status: string,
+  note: string,
+): Promise<void> {
+  await execPsqlAsync(
     target,
     `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(workItemId)}, 'fixing', '${status}', '${note}')`,
   );
@@ -6621,7 +6679,7 @@ check(
   (await cfWorkItemCount(706)) === 0,
 );
 const cfUnknownHold = await conflictFixRow(723, CF_HEAD_1);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_conflict_checks SET fix_hold_reason = 'something_else' WHERE id = ${String(cfUnknownHold.id)}`,
 );
@@ -6736,7 +6794,7 @@ const cfCopyPrev = await insertWorkItem(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET fix_round = 3, last_review_id = 11, last_comment_id = 12, last_review_comment_id = 13 WHERE id = ${String(cfCopyPrev)}`,
 );
@@ -6846,9 +6904,9 @@ check(
 );
 check(
   "conflict hold: the table refuses an empty hold reason",
-  (() => {
+  await (async () => {
     try {
-      execPsql(
+      await execPsqlAsync(
         target,
         `UPDATE factory.pr_conflict_checks SET fix_hold_reason = '' WHERE id = ${String(cfHold.id)}`,
       );
@@ -6940,7 +6998,7 @@ check(
 // episode をまたいだ結び: 古い回の作業項目が止まった理由を、新しい回の行に書かない。
 const cfCross = await conflictFixRow(724, CF_HEAD_1);
 const cfCrossId = await cfClaim(cfCross.id, CF_HEAD_1);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'needs_human' WHERE id = ${String(cfCrossId)}`,
 );
@@ -6988,11 +7046,11 @@ const cfListC = await conflictFixRow(715, CF_HEAD_1);
 await cfClaim(cfListA.id, CF_HEAD_1);
 await cfClaim(cfListB.id, CF_HEAD_1);
 await settlePrConflictCheck(cfListB.id, "resolved", sql);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_conflict_checks SET checked_at = now() - interval '2 hours' WHERE id = ${String(cfListB.id)}`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_conflict_checks SET checked_at = now() - interval '1 hour' WHERE id = ${String(cfListA.id)}`,
 );
@@ -7072,7 +7130,7 @@ const cfUpToDate = await conflictRoundItem(
   "reviewed",
   "job-6",
 );
-conflictNote(cfUpToDate, "reviewed", "conflict round: up_to_date");
+await conflictNote(cfUpToDate, "reviewed", "conflict round: up_to_date");
 check(
   "conflict rounds: a round that ended up to date is not counted",
   (await countPrConflictFixRounds(
@@ -7088,7 +7146,7 @@ const cfReviewedOther = await conflictRoundItem(
   "reviewed",
   "job-7",
 );
-conflictNote(cfReviewedOther, "reviewed", "something else");
+await conflictNote(cfReviewedOther, "reviewed", "something else");
 check(
   "conflict rounds: a reviewed round with another note is counted",
   (await countPrConflictFixRounds(
@@ -7104,8 +7162,8 @@ const cfNoteLatest = await conflictRoundItem(
   "reviewed",
   "job-8",
 );
-conflictNote(cfNoteLatest, "reviewed", "conflict round: up_to_date");
-conflictNote(cfNoteLatest, "reviewed", "something else");
+await conflictNote(cfNoteLatest, "reviewed", "conflict round: up_to_date");
+await conflictNote(cfNoteLatest, "reviewed", "something else");
 check(
   "conflict rounds: the latest note of the reviewed status decides",
   (await countPrConflictFixRounds(
@@ -7122,7 +7180,7 @@ const cfStaleBlocked = await conflictRoundItem(
   "blocked",
   "job-9",
 );
-conflictNote(
+await conflictNote(
   cfStaleBlocked,
   "blocked",
   "worker image is stale: run mise run up: probe",
@@ -7150,7 +7208,11 @@ const cfOtherBlocked = await conflictRoundItem(
   "blocked",
   "job-10",
 );
-conflictNote(cfOtherBlocked, "blocked", "conflict round: claude blocked: x");
+await conflictNote(
+  cfOtherBlocked,
+  "blocked",
+  "conflict round: claude blocked: x",
+);
 check(
   "conflict rounds: a blocked round with another note is counted, per episode",
   (await countPrConflictFixRounds(
@@ -7190,12 +7252,16 @@ const cfStaleLatest = await conflictRoundItem(
   "blocked",
   "job-12",
 );
-conflictNote(
+await conflictNote(
   cfStaleLatest,
   "blocked",
   "worker image is stale: run mise run up: probe",
 );
-conflictNote(cfStaleLatest, "blocked", "conflict round: claude blocked: y");
+await conflictNote(
+  cfStaleLatest,
+  "blocked",
+  "conflict round: claude blocked: y",
+);
 check(
   "conflict rounds: the latest note of the blocked status decides",
   (await countPrConflictFixRounds(
@@ -7212,7 +7278,7 @@ const cfRuntimeBlocked = await conflictRoundItem(
   "blocked",
   "job-13",
 );
-conflictNote(
+await conflictNote(
   cfRuntimeBlocked,
   "blocked",
   "worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker: probe",
@@ -7243,7 +7309,7 @@ for (const [index, note] of cfUncountedNotes.entries()) {
     "blocked",
     `job-u${String(index)}`,
   );
-  conflictNote(itemId, "blocked", note);
+  await conflictNote(itemId, "blocked", note);
 }
 check(
   "conflict rounds: a blocked round stopped by a temporary stop before Claude ran is not counted, per episode",
@@ -7269,7 +7335,7 @@ const cfMovedAtPush = await conflictRoundItem(
   "blocked",
   "job-14",
 );
-conflictNote(
+await conflictNote(
   cfMovedAtPush,
   "blocked",
   "conflict round: the PR head moved before the push",
@@ -7290,7 +7356,7 @@ const cfUncountedLonger = await conflictRoundItem(
   "blocked",
   "job-15",
 );
-conflictNote(
+await conflictNote(
   cfUncountedLonger,
   "blocked",
   "conflict round: the worktree is in use by another process x",
@@ -7303,7 +7369,7 @@ check(
     sql,
   )) === 11,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.pr_conflict_checks WHERE id = ${String(cfCount.id)}`,
 );
@@ -7334,8 +7400,8 @@ const cfNoteItem = await conflictRoundItem(
   "blocked",
   "job-n1",
 );
-conflictNote(cfNoteItem, "blocked", "conflict round: check failed");
-conflictNote(
+await conflictNote(cfNoteItem, "blocked", "conflict round: check failed");
+await conflictNote(
   cfNoteItem,
   "blocked",
   `${STALE_IMAGE_NOTE_PREFIXES[0] ?? ""}: sudo is missing`,
@@ -7372,7 +7438,7 @@ for (const [status, episode, minutes] of cfSettledAges) {
     status === "failed" ? null : `job-s-${status}`,
   );
   cfSettledIds.push(id);
-  execPsql(
+  await execPsqlAsync(
     target,
     `UPDATE factory.work_items SET updated_at = now() - interval '${String(minutes)} minutes' WHERE id = ${String(id)}`,
   );
@@ -7651,7 +7717,7 @@ check(
 );
 // 新しい競合の回は、回の開始時刻、起動の回数、保留を戻し、結んだ作業項目は残す。競合のままでは何も戻さない。
 const cfEpisode = await conflictFixRow(720, CF_HEAD_1);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_conflict_checks SET episode_started_at = now() - interval '1 day', fix_attempts = 2, fix_hold_reason = 'main_ci_failed', fix_work_item_id = 555 WHERE id = ${String(cfEpisode.id)}`,
 );
@@ -7700,7 +7766,7 @@ check(
   Number(cfRestartedRow?.fix_work_item_id) === 555,
   cfRestartedRow,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_conflict_checks SET fix_attempts = 3, fix_hold_reason = 'unresolvable' WHERE id = ${String(cfEpisode.id)}`,
 );
@@ -7715,7 +7781,7 @@ check(
 
 // 猶予の起点だけを今に戻す。競合のままで、通知も結びも無い行だけを書き換える。
 const cfGrace = await conflictFixRow(790, CF_HEAD_1);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_conflict_checks SET episode_started_at = now() - interval '1 day' WHERE id = ${String(cfGrace.id)}`,
 );
@@ -7738,7 +7804,7 @@ check(
   cfGraceRow,
 );
 const cfGraceBound = await conflictFixRow(791, CF_HEAD_1);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_conflict_checks SET episode_started_at = now() - interval '1 day', fix_work_item_id = 556 WHERE id = ${String(cfGraceBound.id)}`,
 );
@@ -7753,7 +7819,7 @@ check(
 );
 const cfGraceNotified = await conflictFixRow(792, CF_HEAD_1);
 await markPrConflictNotified(cfGraceNotified.id, sql);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.pr_conflict_checks SET episode_started_at = now() - interval '1 day' WHERE id = ${String(cfGraceNotified.id)}`,
 );
@@ -7769,8 +7835,11 @@ check(
 );
 
 // 後で適用するdown migrationが、新しい状態の行に引っかからないよう、この節で用意した行を消す。
-execPsql(target, "DELETE FROM factory.work_items WHERE lower(owner) = 'qcfix'");
-execPsql(
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.work_items WHERE lower(owner) = 'qcfix'",
+);
+await execPsqlAsync(
   target,
   "DELETE FROM factory.pr_conflict_checks WHERE owner = 'qcfix'",
 );
@@ -7784,13 +7853,13 @@ const transientQuery = {
   delaysSeconds: [300, 900, 2700],
   stallNotePrefix: "auto_retry_stalled: ",
 };
-function eventAgo(
+async function eventAgo(
   workItemId: number,
   toStatus: string,
   note: string,
   secondsAgo: number,
-): void {
-  execPsql(
+): Promise<void> {
+  await execPsqlAsync(
     target,
     `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at) VALUES (${String(workItemId)}, 'reviewing', '${toStatus}', '${note}', now() - interval '${String(secondsAgo)} seconds')`,
   );
@@ -7809,8 +7878,8 @@ const transientOld = await prWorkItem(
   "failed",
   "qdb transient old",
 );
-eventAgo(transientOld, "failed", "github_transient: boom", 600);
-execPsql(
+await eventAgo(transientOld, "failed", "github_transient: boom", 600);
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'job-old' WHERE id = ${String(transientOld)}`,
 );
@@ -7820,7 +7889,7 @@ const transientFresh = await prWorkItem(
   "failed",
   "qdb transient fresh",
 );
-eventAgo(transientFresh, "failed", "github_transient: boom", 10);
+await eventAgo(transientFresh, "failed", "github_transient: boom", 10);
 const transientExhausted = await prWorkItem(
   "pr_review",
   9303,
@@ -7828,28 +7897,28 @@ const transientExhausted = await prWorkItem(
   "qdb transient exhausted",
 );
 for (let i = 0; i < 3; i += 1) {
-  eventAgo(
+  await eventAgo(
     transientExhausted,
     "reviewing",
     "auto_retry: restarted from failed",
     5000,
   );
 }
-eventAgo(transientExhausted, "failed", "github_transient: boom", 10);
+await eventAgo(transientExhausted, "failed", "github_transient: boom", 10);
 const transientStuck = await prWorkItem(
   "pr_review",
   9304,
   "failed",
   "qdb transient stuck",
 );
-eventAgo(transientStuck, "failed", "github_transient: boom", 3000);
+await eventAgo(transientStuck, "failed", "github_transient: boom", 3000);
 const transientOther = await prWorkItem(
   "pr_review",
   9305,
   "failed",
   "qdb transient other",
 );
-eventAgo(transientOther, "failed", "HTTP 422 boom", 3000);
+await eventAgo(transientOther, "failed", "HTTP 422 boom", 3000);
 const transientListed = async (
   extra: {
     extraGraceSeconds?: number;
@@ -7993,7 +8062,7 @@ check(
     ).includes(transientExhausted),
 );
 // 同じPRの稼働中のpr_reviewは1件までなので(`work_items_active_pr_review_key`)、再開した古い行を失敗に戻してから、新しい行を入れる。
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'failed' WHERE id = ${String(transientOld)}`,
 );
@@ -8011,7 +8080,7 @@ check(
   "transient review: a review alone on its pull request is not superseded",
   (await hasSupersedingPrReview(transientStuck, sql)) === false,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'reviewed' WHERE id = ${String(transientOld)}`,
 );
@@ -8026,7 +8095,7 @@ const transientSpelled = await prWorkItem(
   "failed",
   "qdb transient spelled",
 );
-eventAgo(transientSpelled, "failed", "github_transient: boom", 600);
+await eventAgo(transientSpelled, "failed", "github_transient: boom", 600);
 await insertWorkItem(
   { ...reviewCandidate("Qdb", "R", 9308), status: "reviewed" as const },
   sql,
@@ -8058,13 +8127,13 @@ const transientLaunchFailed = await prWorkItem(
   "failed",
   "qdb transient launch failed",
 );
-eventAgo(
+await eventAgo(
   transientLaunchFailed,
   "reviewing",
   "auto_retry: restarted from failed",
   5000,
 );
-eventAgo(
+await eventAgo(
   transientLaunchFailed,
   "failed",
   "github_transient: auto_retry_launch_failed: f/factory/pr_review could not be started: down",
@@ -8094,7 +8163,7 @@ check(
   launchFailedStalled === undefined,
   launchFailedStalled,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_item_events SET occurred_at = now() - interval '1000 seconds' WHERE work_item_id = ${String(transientLaunchFailed)} AND to_status = 'failed'`,
 );
@@ -8113,14 +8182,14 @@ const transientThreeRestarts = await prWorkItem(
   "qdb transient three restarts",
 );
 for (let i = 0; i < 3; i += 1) {
-  eventAgo(
+  await eventAgo(
     transientThreeRestarts,
     "reviewing",
     "auto_retry: restarted from failed",
     5000,
   );
 }
-eventAgo(transientThreeRestarts, "failed", "github_transient: boom", 10);
+await eventAgo(transientThreeRestarts, "failed", "github_transient: boom", 10);
 check(
   "transient review: a review with three restarts is listed when the used-up ones are included",
   (await transientListed({ includeExhausted: true })).includes(
@@ -8235,7 +8304,7 @@ for (const [createdAt, postedId] of [
   ["2020-01-06T00:00:00Z", "'902'"],
   ["2020-01-08T00:00:00Z", "NULL"],
 ]) {
-  execPsql(
+  await execPsqlAsync(
     target,
     `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, result, summary, posted_review_id, created_at) VALUES (${String(prItem)}, 'gated01', 'comment', 'changes_requested', 's', ${postedId}, '${createdAt}')`,
   );
@@ -8421,7 +8490,7 @@ check(
 // 順番の印は、`led`が真で`finished_at`のある実行の`started_at`だけから取る。
 const GH_OWNER_C = "qdbghc";
 const GH_OWNER_D = "qdbghd";
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.gh_collect_runs (owner, started_at, finished_at, ok, error_code, requests, led) VALUES
     ('${GH_OWNER_C}', now() - interval '3 hours', now() - interval '3 hours' + interval '100 seconds', false, 'deadline', 2, true),
@@ -8450,7 +8519,7 @@ check(
 // リポジトリ単位の古さ: gone・archivedは読まず、開いた行の有無と使える行の有無を1つの文で返す。
 const GH_STALE_OWNER = "qdbghs";
 const GH_STALE_SHA = "a".repeat(40);
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.gh_repos (owner, owner_id, repo, repo_id, allowed, archived, gone, gone_reason, last_collected_at) VALUES
     ('${GH_STALE_OWNER}', 1, 'fresh', 701, true, false, false, NULL, now() - interval '1 minute'),
@@ -8499,7 +8568,7 @@ check(
   ghStale,
 );
 // 使用不可の行を残すと、ほかの所有者の行が変わらないことを確かめる後ろの検査が数え違えるので、消す。
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.gh_pull_requests WHERE owner = '${GH_STALE_OWNER}';
   DELETE FROM factory.gh_issues WHERE owner = '${GH_STALE_OWNER}';
@@ -8536,7 +8605,7 @@ await ghSeenSnapshot([
   ghSeenListed("returned", 802),
   ghSeenListed("widened", 803, false),
 ]);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.gh_repos SET first_seen_at = now() - interval '7 days' WHERE owner = '${GH_SEEN_OWNER}'`,
 );
@@ -8567,7 +8636,7 @@ check(
   "gh_repos: first_seen_at of a repository that stays in scope is untouched",
   (await ghSeenAgeDays("kept")) > 6.9,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.gh_repos WHERE owner = '${GH_SEEN_OWNER}'`,
 );
@@ -8575,7 +8644,7 @@ execPsql(
 const GH_OWNER_E = "qdbghe";
 const GH_OWNER_F = "qdbghf";
 const GH_OWNER_G = "qdbghg";
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.gh_collect_runs (owner, started_at, finished_at, ok, verified, error_code, next_allowed_at) VALUES
     ('${GH_OWNER_E}', now() - interval '5 hours', now() - interval '5 hours' + interval '10 seconds', true, true, NULL, NULL),
@@ -8647,7 +8716,7 @@ check(
 );
 let ghLedWithoutRequestRejected = false;
 try {
-  execPsql(
+  await execPsqlAsync(
     target,
     `INSERT INTO factory.gh_collect_runs (owner, requests, led) VALUES ('${GH_OWNER_D}', 0, true)`,
   );
@@ -8658,7 +8727,7 @@ check(
   "gh_collect_runs: the table rejects a lead without a request",
   ghLedWithoutRequestRejected,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.gh_collect_runs (owner, started_at, finished_at, ok, error_code) VALUES
     ('${GH_OWNER}', now() - interval '60 days', now() - interval '60 days', true, NULL),
@@ -8699,7 +8768,7 @@ check(
     (row) => row.id === ghRunB,
   ),
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.gh_collect_runs (owner, started_at, finished_at, ok, error_code) VALUES
     ('${GH_OWNER_B}', now() - interval '60 days', now() - interval '60 days', true, NULL),
@@ -8838,9 +8907,9 @@ check(
 );
 check(
   "gh_repos: the table refuses gone without a reason",
-  (() => {
+  await (async () => {
     try {
-      execPsql(
+      await execPsqlAsync(
         target,
         `UPDATE factory.gh_repos SET gone = true WHERE owner = '${GH_OWNER}' AND repo = 'alpha'`,
       );
@@ -8859,9 +8928,9 @@ const GH_DETAIL_SHA = "0123456789abcdef0123456789abcdef01234567";
 const GH_DETAIL_OWNER = "qdbghd";
 
 /** 文がDBに受理されたら真を返す。 */
-function ghStatementAccepted(statement: string): boolean {
+async function ghStatementAccepted(statement: string): Promise<boolean> {
   try {
-    execPsql(target, statement);
+    await execPsqlAsync(target, statement);
     return true;
   } catch {
     return false;
@@ -8872,9 +8941,12 @@ function ghStatementAccepted(statement: string): boolean {
  * 文が指定した制約に拒否されたら真を返す。
  * 別の理由(型の不一致、別の制約)で拒否されたときは偽にする。
  */
-function ghStatementRejectedBy(statement: string, constraint: string): boolean {
+async function ghStatementRejectedBy(
+  statement: string,
+  constraint: string,
+): Promise<boolean> {
   try {
-    execPsql(target, statement);
+    await execPsqlAsync(target, statement);
     return false;
   } catch (error) {
     return (
@@ -8893,7 +8965,7 @@ function ghPrInsert(
   return `INSERT INTO factory.gh_pull_requests (owner, repo, repo_id, number, state, head_sha, is_draft, is_cross_repository, created_at, updated_at${columns}) VALUES ('${GH_DETAIL_OWNER}', 'alpha', 11, ${String(number)}, 'open', '${extra.sha ?? GH_DETAIL_SHA}', false, false, now(), now()${values})`;
 }
 
-execPsql(target, ghPrInsert(1));
+await execPsqlAsync(target, ghPrInsert(1));
 const [ghPrMinimal] = await sql`
   SELECT usable, written_at IS NOT NULL AS stamped,
     mergeable IS NULL AND assignee_ids IS NULL AND has_fix_label IS NULL AND head_ref IS NULL AS unknown_null
@@ -8908,42 +8980,42 @@ check(
 );
 check(
   "gh_pull_requests: a repeated (owner, repo, number) is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     ghPrInsert(1),
     "gh_pull_requests_owner_repo_number_key",
   ),
 );
 check(
   "gh_pull_requests: a head_sha that is not 40 lowercase hex digits is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     ghPrInsert(2, { sha: GH_DETAIL_SHA.toUpperCase() }),
     "gh_pull_requests_head_sha_check",
   ),
 );
 check(
   "gh_pull_requests: an author_login without an author_type is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     ghPrInsert(3, { columns: "author_login", values: "'someone'" }),
     "gh_pull_requests_author_pair_check",
   ),
 );
 check(
   "gh_pull_requests: a non-positive id in an id array is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     ghPrInsert(4, { columns: "assignee_ids", values: "ARRAY[5, 0]::bigint[]" }),
     "gh_pull_requests_assignee_ids_check",
   ),
 );
 check(
   "gh_pull_requests: a mergeable value other than the settled two is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     ghPrInsert(5, { columns: "mergeable", values: "'UNKNOWN'" }),
     "gh_pull_requests_mergeable_check",
   ),
 );
 check(
   "gh_pull_requests: a head_ref longer than 255 bytes is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     ghPrInsert(6, {
       columns: "head_ref",
       values: `'${"a".repeat(256)}'`,
@@ -8953,7 +9025,7 @@ check(
 );
 check(
   "gh_pull_requests: a null element in assignee_ids is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     ghPrInsert(7, {
       columns: "assignee_ids",
       values: "ARRAY[5, NULL]::bigint[]",
@@ -8963,7 +9035,7 @@ check(
 );
 check(
   "gh_pull_requests: a null element in review_requested_user_ids is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     ghPrInsert(8, {
       columns: "review_requested_user_ids",
       values: "ARRAY[5, NULL]::bigint[]",
@@ -8973,7 +9045,7 @@ check(
 );
 check(
   "gh_pull_requests: positive id arrays are accepted",
-  ghStatementAccepted(
+  await ghStatementAccepted(
     ghPrInsert(9, {
       columns: "assignee_ids, review_requested_user_ids",
       values: "ARRAY[5, 6]::bigint[], ARRAY[7]::bigint[]",
@@ -8983,7 +9055,7 @@ check(
 // 255バイトの境界は、文字数ではなくバイト数で決まる(「あ」は3バイト)。
 check(
   "gh_pull_requests: a head_ref of exactly 255 bytes is accepted",
-  ghStatementAccepted(
+  await ghStatementAccepted(
     ghPrInsert(10, {
       columns: "head_ref",
       values: "repeat('あ', 85)",
@@ -8992,7 +9064,7 @@ check(
 );
 check(
   "gh_pull_requests: a head_ref of 258 bytes is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     ghPrInsert(11, {
       columns: "head_ref",
       values: "repeat('あ', 86)",
@@ -9002,7 +9074,7 @@ check(
 );
 check(
   "gh_pull_requests: a base_ref of exactly 255 bytes is accepted",
-  ghStatementAccepted(
+  await ghStatementAccepted(
     ghPrInsert(12, {
       columns: "base_ref",
       values: "repeat('あ', 85)",
@@ -9011,7 +9083,7 @@ check(
 );
 check(
   "gh_pull_requests: a base_ref of 258 bytes is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     ghPrInsert(13, {
       columns: "base_ref",
       values: "repeat('あ', 86)",
@@ -9021,7 +9093,7 @@ check(
 );
 check(
   "gh_pull_requests: an author_login of 39 characters is accepted",
-  ghStatementAccepted(
+  await ghStatementAccepted(
     ghPrInsert(14, {
       columns: "author_login, author_type",
       values: `'${"a".repeat(39)}', 'User'`,
@@ -9030,7 +9102,7 @@ check(
 );
 check(
   "gh_pull_requests: an author_login of 40 characters is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     ghPrInsert(15, {
       columns: "author_login, author_type",
       values: `'${"a".repeat(40)}', 'User'`,
@@ -9038,7 +9110,7 @@ check(
     "gh_pull_requests_author_login_check",
   ),
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.gh_issues (owner, repo, repo_id, number, state, created_at, updated_at) VALUES ('${GH_DETAIL_OWNER}', 'alpha', 11, 1, 'open', now(), now())`,
 );
@@ -9053,7 +9125,7 @@ check(
 );
 check(
   "gh_issues: the state closed is refused because a vanished issue is unlisted",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     `INSERT INTO factory.gh_issues (owner, repo, repo_id, number, state, created_at, updated_at) VALUES ('${GH_DETAIL_OWNER}', 'alpha', 11, 2, 'closed', now(), now())`,
     "gh_issues_state_check",
   ),
@@ -9080,27 +9152,27 @@ check(
 );
 check(
   "gh_collect_runs: a failed run may carry the stage detail",
-  ghStatementAccepted(
+  await ghStatementAccepted(
     `INSERT INTO factory.gh_collect_runs (owner, ok, error_code, stage) VALUES ('${GH_DETAIL_OWNER}', false, 'graphql_error', 'detail')`,
   ),
 );
 check(
   "gh_collect_runs: a successful run with a stage is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     `INSERT INTO factory.gh_collect_runs (owner, ok, stage) VALUES ('${GH_DETAIL_OWNER}', true, 'detail')`,
     "gh_collect_runs_ok_stage_check",
   ),
 );
 check(
   "gh_collect_runs: a stage other than list and detail is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     `INSERT INTO factory.gh_collect_runs (owner, ok, error_code, stage) VALUES ('${GH_DETAIL_OWNER}', false, 'graphql_error', 'other')`,
     "gh_collect_runs_stage_check",
   ),
 );
 check(
   "gh_collect_runs: a negative detail count is refused",
-  ghStatementRejectedBy(
+  await ghStatementRejectedBy(
     `INSERT INTO factory.gh_collect_runs (owner, detail_done) VALUES ('${GH_DETAIL_OWNER}', -1)`,
     "gh_collect_runs_detail_counts_check",
   ),
@@ -9668,7 +9740,7 @@ await ghWSnapshot(
   ],
 );
 // goneのリポジトリに行を足してから、次の周回でも使用不可になることを確かめる。
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.gh_pull_requests (owner, repo, repo_id, number, state, head_sha, is_draft, is_cross_repository, created_at, updated_at) VALUES ('${GH_W_OWNER}', 'gamma', 23, 50, 'open', '${GH_DETAIL_SHA}', false, false, now(), now()), ('${GH_W_OWNER}', 'delta', 24, 51, 'open', '${GH_DETAIL_SHA}', false, false, now(), now()), ('${GH_W_OWNER}', 'nowhere', 99, 52, 'open', '${GH_DETAIL_SHA}', false, false, now(), now())`,
 );
@@ -9715,11 +9787,11 @@ check(
 );
 
 // deleteClosedGhDetailRowsBefore: 閉じた行と外れた行だけを、保持期間で消す。
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.gh_pull_requests SET written_at = now() - interval '100 days' WHERE owner = '${GH_W_OWNER}' AND repo IN ('beta', 'epsilon', 'alpha')`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.gh_issues SET written_at = now() - interval '100 days' WHERE owner = '${GH_W_OWNER}'`,
 );
@@ -9829,7 +9901,7 @@ check(
 );
 let designAttemptError: unknown = null;
 try {
-  execPsql(
+  await execPsqlAsync(
     target,
     `UPDATE factory.work_items SET design_attempt = -1 WHERE id = ${String(designingItem)}`,
   );
@@ -9841,7 +9913,7 @@ check(
   String(designAttemptError).includes("design_attempt"),
   designAttemptError,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET design_attempt = 2 WHERE id = ${String(designingItem)}`,
 );
@@ -9941,7 +10013,7 @@ async function errorOf(action: () => Promise<unknown>): Promise<unknown> {
 }
 
 const ddLeasedItem = await issueWorkItem(9311, 1, "designing", "qdb leased");
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-job-a' WHERE id = ${String(ddLeasedItem)}`,
 );
@@ -10017,7 +10089,7 @@ const ddNotDesigning = await issueWorkItem(
   "needs_human",
   "qdb stopped",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-job-c' WHERE id = ${String(ddNotDesigning)}`,
 );
@@ -10088,7 +10160,7 @@ check(
   )),
 );
 
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.work_items WHERE id = ${String(ddOtherItem)}`,
 );
@@ -10110,7 +10182,7 @@ check(
   (await findApprovedWorkItemForIssue(OWNER, "r", 9314, sql))?.id ===
     ddDesigningForIssue,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'awaiting_design_approval' WHERE id = ${String(ddDesigningForIssue)}`,
 );
@@ -10159,7 +10231,7 @@ check(
 );
 
 // attemptを進めるリース保持者の更新は、同じ文でdesign_attemptを0へ戻す。リースを失った実行は何も書かない。
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-job-e', design_attempt = 2 WHERE id = ${String(dhItem)}`,
 );
@@ -10182,7 +10254,7 @@ check(
   "design drafts by doc dir: none before a draft is saved",
   !(await hasDesignDraftForDocDir(dhDesignDir, sql)),
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'designing', flow_job_id = 'qdb-job-e' WHERE id = ${String(dhItem)}`,
 );
@@ -10203,7 +10275,7 @@ check(
 // 設計の承認の照合: 最新の設計の承認依頼だけを読み、その依頼が指す設計書を結合する。
 // 最新の依頼が指す設計書が引けないとき(存在しない、別の作業項目のもの)に、古い承認へ落ちない。
 const daItem = await issueWorkItem(9331, 1, "designing", "qdb design approval");
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-job-da' WHERE id = ${String(daItem)}`,
 );
@@ -10224,7 +10296,7 @@ const daOtherItem = await issueWorkItem(
   "designing",
   "qdb other design",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-job-db' WHERE id = ${String(daOtherItem)}`,
 );
@@ -10248,7 +10320,7 @@ const daApprovedRequest = await insertApprovalRequest(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.approval_requests SET status = 'approved', decided_at = now() WHERE id = ${String(daApprovedRequest)}`,
 );
@@ -10296,7 +10368,7 @@ const daMissingRequest = await insertApprovalRequest(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.approval_requests SET status = 'approved', decided_at = now() WHERE id = ${String(daMissingRequest)}`,
 );
@@ -10365,7 +10437,7 @@ const adPointedRequest = await insertApprovalRequest(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.approval_requests SET status = 'rejected', decided_at = now() WHERE id = ${String(adPointedRequest)}`,
 );
@@ -10491,7 +10563,7 @@ check(
     reImplGap.note === "gap: first gap",
   reImplGap,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(reItem)}, 'requirements_generating', 'requirements_generating', 'intake refreshed')`,
 );
@@ -10766,7 +10838,7 @@ check(
 
 // 再実行が要件定義の生成へ戻す遷移は、同じ文で設計の試行を0へそろえ、リースを空け、遷移を記録する。
 const rtItem = await issueWorkItem(9343, 1, "needs_human", "qdb restart reset");
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-job-rt', design_attempt = 2 WHERE id = ${String(rtItem)}`,
 );
@@ -11134,7 +11206,7 @@ check(
 // 準備がattemptを進めた後、下書きを作れずに止まった(日次予算の超過など)とき、再実行が読む記録は次のとおりになる。
 // 承認は前のattemptのまま、作業項目のattemptは進み、後の下書きは無い。差し戻しの理由は消費されていない。
 async function setAttempt(workItemId: number, attempt: number): Promise<void> {
-  execPsql(
+  await execPsqlAsync(
     target,
     `UPDATE factory.work_items SET attempt = ${String(attempt)} WHERE id = ${String(workItemId)}`,
   );
@@ -11334,7 +11406,7 @@ const reasonItem = await issueWorkItem(
   "designing",
   "qdb design reason",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-job-reason' WHERE id = ${String(reasonItem)}`,
 );
@@ -11358,7 +11430,7 @@ check(
   "design approval reason: a pending request has no reason",
   (await latestDesignApproval(reasonItem, sql))?.reason === null,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.approval_requests SET status = 'rejected', decided_at = now(), reason = 'too complex' WHERE id = ${String(reasonRequest)}`,
 );
@@ -11388,7 +11460,7 @@ const latestOlder = await insertApprovalRequest(
   },
   sql,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.approval_requests SET status = 'approved', decided_at = now() WHERE id = ${String(latestOlder)}`,
 );
@@ -11420,7 +11492,7 @@ check(
   "latest request: a request of another kind is not returned",
   (await latestApprovalRequest(latestItem, "requirements", sql)) === null,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.approval_requests SET status = 'rejected', decided_at = now() WHERE id = ${String(latestNewer)}`,
 );
@@ -11511,7 +11583,7 @@ await moveStatus(
   "awaiting_design_approval",
   "design approval requested",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(countItem)}, 'requirements_generating', 'requirements_generating', 'intake refreshed')`,
 );
@@ -11607,7 +11679,7 @@ check(
   (await countFor(gapCountItem)) === 0,
   await countFor(gapCountItem),
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-gap-lease', design_attempt = 2 WHERE id = ${String(gapCountItem)}`,
 );
@@ -11798,7 +11870,7 @@ check(
   (await entryOf(entryItem))?.note === "implement design gap: first",
   await entryOf(entryItem),
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'designing', flow_job_id = 'qdb-entry-lease' WHERE id = ${String(entryItem)}`,
 );
@@ -11839,7 +11911,7 @@ check(
   await entryOf(entryItem),
 );
 const entryEventTime = `(SELECT occurred_at FROM factory.work_item_events WHERE work_item_id = ${String(entryItem)} AND from_status = 'implementing' AND to_status = 'designing' ORDER BY id DESC LIMIT 1)`;
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.approval_requests SET requested_at = ${entryEventTime} WHERE id = ${String(entryRequest)}`,
 );
@@ -11848,7 +11920,7 @@ check(
   (await entryOf(entryItem))?.designRequestedAfter === false,
   await entryOf(entryItem),
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.approval_requests SET requested_at = ${entryEventTime} - interval '1 second' WHERE id = ${String(entryRequest)}`,
 );
@@ -11999,7 +12071,7 @@ const guardItem = await issueWorkItem(
   "awaiting_design_approval",
   "qdb latest approval guard",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-flow-guard' WHERE id = ${String(guardItem)}`,
 );
@@ -12101,7 +12173,7 @@ const backItem = await issueWorkItem(
   "awaiting_design_approval",
   "qdb back to requirements",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-flow-back', design_attempt = 2 WHERE id = ${String(backItem)}`,
 );
@@ -12255,7 +12327,7 @@ check(
     Math.abs(Date.now() - redispatchLastAt.getTime()) < 60_000,
   redispatchLastAt,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_item_events SET occurred_at = now() - interval '2 hours' WHERE id = (SELECT min(id) FROM factory.work_item_events WHERE work_item_id = ${String(redispatchItem)} AND from_status = to_status AND note = '${REDISPATCH_NOTE}')`,
 );
@@ -12342,7 +12414,7 @@ check(
     "qdb waiting note",
   (await runWorkItemDetail(noteItem, sql)).work_item.status_note,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(noteItem)}, 'awaiting_design_approval', 'awaiting_design_approval', 'qdb other same-status note')`,
 );
@@ -12356,7 +12428,7 @@ check(
 // PRの修正が設計の不足を返したときの、親の`pr_open`から`designing`への戻し。
 // リースを持つ(読んだときの`flow_job_id`のままの)親だけを、1つの文で戻す。
 const prGapParent = await issueWorkItem(9700, 1, "pr_open", "qdb pr fix gap");
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-pr-gap-lease', design_attempt = 2 WHERE id = ${String(prGapParent)}`,
 );
@@ -12527,11 +12599,11 @@ const moveParent = await issueWorkItem(
   "qdb pr fix moved parent",
 );
 const moveFix = await prFixItem(9704);
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET created_at = '2026-10-01 00:00:00+00', status = 'fixing' WHERE id = ${String(moveFix)}`,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.work_item_events WHERE work_item_id IN (${String(moveParent)}, ${String(moveFix)})`,
 );
@@ -12543,7 +12615,7 @@ function eventAt(
 ): string {
   return `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at) VALUES (${String(workItemId)}, '${from}', '${to}', 'qdb', '${at}')`;
 }
-execPsql(
+await execPsqlAsync(
   target,
   eventAt(moveParent, "implementing", "pr_open", "2026-09-30 00:00:00+00"),
 );
@@ -12551,7 +12623,7 @@ check(
   "parent moved: a transition before the fix was created does not count, and a fix without transitions starts at its creation",
   !(await hasParentTransitionSinceFixStarted(moveParent, moveFix, sql)),
 );
-execPsql(
+await execPsqlAsync(
   target,
   eventAt(moveParent, "pr_open", "pr_open", "2026-10-02 00:00:00+00"),
 );
@@ -12559,11 +12631,11 @@ check(
   "parent moved: a record that keeps the status does not count",
   !(await hasParentTransitionSinceFixStarted(moveParent, moveFix, sql)),
 );
-execPsql(
+await execPsqlAsync(
   target,
   eventAt(moveFix, "reviewed", "fixing", "2026-10-03 00:00:00+00"),
 );
-execPsql(
+await execPsqlAsync(
   target,
   eventAt(moveParent, "pr_open", "implementing", "2026-10-02 12:00:00+00"),
 );
@@ -12571,7 +12643,7 @@ check(
   "parent moved: the latest move of the fix into fixing is the start, so an earlier move of the parent does not count",
   !(await hasParentTransitionSinceFixStarted(moveParent, moveFix, sql)),
 );
-execPsql(
+await execPsqlAsync(
   target,
   eventAt(moveParent, "implementing", "pr_open", "2026-10-04 00:00:00+00"),
 );
@@ -12585,7 +12657,7 @@ const moveParentOther = await issueWorkItem(
   "pr_open",
   "qdb pr fix moved other",
 );
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.work_item_events WHERE work_item_id = ${String(moveParentOther)}`,
 );
@@ -12661,8 +12733,11 @@ function intakeReservation(key: string, holder: string) {
 async function intakeRowOf(key: string) {
   return await intakeStore.read(key);
 }
-function setIntakeReservedAt(key: string, expression: string): void {
-  execPsql(
+async function setIntakeReservedAt(
+  key: string,
+  expression: string,
+): Promise<void> {
+  await execPsqlAsync(
     target,
     `UPDATE factory.manual_intake_keys SET reserved_at = ${expression} WHERE intake_key = '${key}'`,
   );
@@ -12703,7 +12778,7 @@ for (const [name, key] of [
 ] as const) {
   let rejected = false;
   try {
-    execPsql(
+    await execPsqlAsync(
       target,
       `INSERT INTO factory.manual_intake_keys (intake_key, content_hash, owner, repo, holder) VALUES (${key}, 'h', 'o', 'r', 'j')`,
     );
@@ -12717,12 +12792,12 @@ check(
   "manual_intake_keys: a reservation that is not old is not taken over",
   (await intakeStore.takeOver(INTAKE_ID_A, INTAKE_HOLDER_2)) === false,
 );
-setIntakeReservedAt(INTAKE_ID_A, "now() - interval '9 minutes'");
+await setIntakeReservedAt(INTAKE_ID_A, "now() - interval '9 minutes'");
 check(
   "manual_intake_keys: a reservation of nine minutes is not taken over",
   (await intakeStore.takeOver(INTAKE_ID_A, INTAKE_HOLDER_2)) === false,
 );
-setIntakeReservedAt(INTAKE_ID_A, "now() - interval '11 minutes'");
+await setIntakeReservedAt(INTAKE_ID_A, "now() - interval '11 minutes'");
 check(
   "manual_intake_keys: a reservation of eleven minutes is taken over",
   (await intakeStore.takeOver(INTAKE_ID_A, INTAKE_HOLDER_2)) === true,
@@ -12751,7 +12826,7 @@ check(
   "manual_intake_keys: the written number reads back",
   (await intakeRowOf(INTAKE_ID_A))?.issue_number === 42,
 );
-setIntakeReservedAt(INTAKE_ID_A, "now() - interval '11 minutes'");
+await setIntakeReservedAt(INTAKE_ID_A, "now() - interval '11 minutes'");
 check(
   "manual_intake_keys: an old reservation that has its number is not taken over",
   (await intakeStore.takeOver(INTAKE_ID_A, INTAKE_HOLDER_1)) === false,
@@ -12761,12 +12836,12 @@ check(
 const intakeCutoff = new Date("2026-08-01T00:00:00.000Z");
 await intakeStore.reserve(intakeReservation(INTAKE_ID_B, INTAKE_HOLDER_1));
 await intakeStore.reserve(intakeReservation(INTAKE_ID_C, INTAKE_HOLDER_1));
-setIntakeReservedAt(INTAKE_ID_B, `'${intakeCutoff.toISOString()}'`);
-setIntakeReservedAt(
+await setIntakeReservedAt(INTAKE_ID_B, `'${intakeCutoff.toISOString()}'`);
+await setIntakeReservedAt(
   INTAKE_ID_C,
   `'${new Date(intakeCutoff.getTime() + 1000).toISOString()}'`,
 );
-setIntakeReservedAt(
+await setIntakeReservedAt(
   INTAKE_ID_A,
   `'${new Date(intakeCutoff.getTime() - 1000).toISOString()}'`,
 );
@@ -12782,7 +12857,7 @@ check(
   "manual_intake_keys: cleanup keeps the row newer than the cutoff",
   (await intakeRowOf(INTAKE_ID_C)) !== null,
 );
-execPsql(target, "DELETE FROM factory.manual_intake_keys");
+await execPsqlAsync(target, "DELETE FROM factory.manual_intake_keys");
 
 // 移り先を引数で受ける状態の更新は、要件定義の生成へ移るときだけ、進め方を通常の進め方に戻す。
 // 要件定義の生成以外へ移る行と、すでに通常の進め方の行は、進め方が変わらない。
@@ -12801,7 +12876,7 @@ async function profileAfterMove(
     "implementing",
     "qdb profile reset",
   );
-  execPsql(
+  await execPsqlAsync(
     target,
     `UPDATE factory.work_items SET profile = '${profile}', flow_job_id = '${PROFILE_LEASE}' WHERE id = ${String(id)}`,
   );
@@ -12938,7 +13013,7 @@ check(
   "investigate by flow job id: an unknown flow job id finds nothing",
   (await getInvestigateWorkItemByFlowJobId("qdb-unknown-job", sql)) === null,
 );
-execPsql(
+await execPsqlAsync(
   target,
   `UPDATE factory.work_items SET status = 'investigated' WHERE id = ${String(investigateFirst)}`,
 );
@@ -12958,12 +13033,72 @@ check(
   )) !== null,
 );
 
+// ---------------------------------------------------------------------------
+// psqlのセッションの使い回し(エラーと通知の扱いを、本物のpsqlで確かめる)
+// ---------------------------------------------------------------------------
+
+await execPsqlAsync(
+  target,
+  "CREATE TABLE public.qdb_session_probe (n integer NOT NULL)",
+);
+const sessionPidBefore = (await sql`SELECT pg_backend_pid() AS pid`.fetch())[0]
+  ?.pid;
+const sessionError = await errorOf(async () => {
+  await execPsqlAsync(
+    target,
+    "INSERT INTO public.qdb_session_probe VALUES (1); SELECT 1 / 0; INSERT INTO public.qdb_session_probe VALUES (2)",
+  );
+});
+check(
+  "session: an error in a call is thrown with the message of that call",
+  sessionError instanceof Error &&
+    sessionError.message.startsWith("psql failed (exit 3):") &&
+    sessionError.message.includes("division by zero"),
+  sessionError,
+);
+check(
+  "session: a statement after the error in the same call is not run",
+  (await sql`SELECT n FROM public.qdb_session_probe ORDER BY n`.fetch())
+    .map((row) => row.n)
+    .join(",") === "1",
+);
+await execPsqlAsync(target, "INSERT INTO public.qdb_session_probe VALUES (3)");
+const sessionPidAfter = (await sql`SELECT pg_backend_pid() AS pid`.fetch())[0]
+  ?.pid;
+check(
+  "session: the call after a failed call runs on a new session",
+  (await sql`SELECT n FROM public.qdb_session_probe ORDER BY n`.fetch())
+    .map((row) => row.n)
+    .join(",") === "1,3" &&
+    typeof sessionPidBefore === "number" &&
+    typeof sessionPidAfter === "number" &&
+    sessionPidAfter !== sessionPidBefore,
+  { before: sessionPidBefore, after: sessionPidAfter },
+);
+await execPsqlAsync(
+  target,
+  "DO $$ BEGIN RAISE NOTICE 'qdb-session-notice'; END $$",
+);
+const afterNoticeError = await errorOf(async () => {
+  await execPsqlAsync(target, "SELECT 1 / 0");
+});
+check(
+  "session: a notice of an earlier call is not in the error of a later call",
+  afterNoticeError instanceof Error &&
+    !afterNoticeError.message.includes("qdb-session-notice"),
+  afterNoticeError,
+);
+await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
+
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
-execPsql(
+await execPsqlAsync(
   target,
   `DELETE FROM factory.work_items WHERE lower(owner) = '${OWNER}'`,
 );
+
+// 子プロセスが残るとbunが終わらないので、失敗の判定より前に、セッションを閉じる。
+await closePsqlSessions();
 
 if (failures.length > 0) {
   console.error(`[test-db-queries] ${String(failures.length)} check(s) failed`);

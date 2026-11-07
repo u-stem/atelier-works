@@ -103,7 +103,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run test` | `bun test --parallel`でsmallのテストを並列に実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
 | `mise run test:all` | カバレッジを測らずに、`console/`を除く全件のテストを並列に実行する。`test:changed`が、importから選べない差分で呼ぶ |
 | `mise run test:changed` | `origin/main`との差分から、実行するテストを選ぶ。importで選べない差分では全件を実行する。規則と限界は[コーディング規約](docs/coding-guidelines.md)に書く。日常の確認用で、全件の確認はCIが行う |
-| `mise run test:db` | Data Tableのmigrationを使い捨てのDBに適用し、すべてのviewをSELECTする(medium) |
+| `mise run test:db` | Data Tableのmigrationを使い捨てのDBに適用し、すべてのviewをSELECTし、アプリのSQL文を本物のPostgreSQLで流して確かめる(medium)。書き方は[テストの基準](docs/testing-guidelines.md)の「実DBの検査」に書く |
 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査コマンドの境界(uid、秘密、書き込み先、所有権、後始末)を確かめる(medium) |
 | `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
 | `mise run worktree:new` | `mise run worktree:new -- feat/foo`で、`origin/main`から`feat/foo`のブランチとworktreeを作り、依存を入れる。詳しくは[セットアップ](docs/setup.md)の「worktreeの作成と片付け」に書く |
