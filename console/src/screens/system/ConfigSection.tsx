@@ -351,7 +351,7 @@ function ConfigRow({
         {...ROLE.cell}
         className="block min-w-0 px-4 pb-2.5 align-top tabular-nums @2xl:table-cell @2xl:py-2.5"
       >
-        {editableList ? (
+        {editableList && onChoose !== undefined ? (
           <EditableListValue
             item={item}
             offers={offers}
