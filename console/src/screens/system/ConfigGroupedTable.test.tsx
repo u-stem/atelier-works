@@ -281,7 +281,10 @@ describe("ConfigList cell of the operation", () => {
   });
 
   test("leaves the cell of the operation of a list without a button", () => {
-    const html = renderItems([item("default_reviewers", ["alice"])], choose);
+    const html = renderItems(
+      [item("default_reviewers", ["alice"]), item("max_fix_rounds", 3)],
+      choose,
+    );
     expect(cellsOf(html, "default_reviewers")[1]).not.toContain("<button");
   });
 

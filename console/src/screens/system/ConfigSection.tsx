@@ -206,12 +206,52 @@ function ValueEntries({
   );
 }
 
+/**
+ * 表の役割。狭い幅では`display:block`にして縦に積むが、ChromiumとSafariは、表の要素の`display`を替えると表の意味(役割)を落とす。
+ * 見出しと行と列の結びつきを保つため、役割を明示する。
+ * 広い幅の表の要素が持つ意味と重なるが、同じ役割なので、読み上げは二重にならない。
+ * `noRedundantRoles`は、この意図を知らずに外させるので、属性を一括で渡して当てない。
+ */
+const ROLE = {
+  table: { role: "table" },
+  rowgroup: { role: "rowgroup" },
+  row: { role: "row" },
+  columnheader: { role: "columnheader" },
+  rowheader: { role: "rowheader" },
+  cell: { role: "cell" },
+} as const;
+
 type SwitchOrNumberOffer = Extract<ChangeOffer, { kind: "stop" | "lower" }>;
 
 function isSwitchOrNumberOffer(
   offer: ChangeOffer | undefined,
 ): offer is SwitchOrNumberOffer {
   return offer?.kind === "stop" || offer?.kind === "lower";
+}
+
+/** 1つの項目の変更の候補。一覧の3項目は値の中のボタンになり、操作の列のボタンは持たない。 */
+type RowOffers = {
+  readonly offers: readonly ChangeOffer[];
+  readonly editableList: boolean;
+  /** 操作の列のボタン。無ければ`null`。 */
+  readonly button: SwitchOrNumberOffer | null;
+};
+
+function rowOffersOf(
+  item: ConfigItemView,
+  onChoose: ((offer: ChangeOffer) => void) | undefined,
+): RowOffers {
+  const offers = onChoose === undefined ? [] : changeOffersOf(item);
+  const editableList =
+    onChoose !== undefined &&
+    EDITABLE_LISTS.includes(item.key) &&
+    offers.length > 0;
+  const offer = offers[0];
+  return {
+    offers,
+    editableList,
+    button: !editableList && isSwitchOrNumberOffer(offer) ? offer : null,
+  };
 }
 
 function ChangeButton({
@@ -244,6 +284,7 @@ function ChangeButton({
  * どのグループにも入らない項目は、最後の「その他」に出す。値はテキストのノードとして描く。
  * 参照と、伏せた値は、値を出さずに「参照(出さない)」と表示する。
  * `onChoose`を渡すと、止める向きか下げる向きに変えられる項目に、操作の列のボタンを添える。
+ * 操作の列は、ボタンを持つ項目があるグループだけに出す。
  * 一覧の3項目は、値の行を編集できる一覧にして、要素ごとの削除と一覧の追加のボタンを値の中に置く。
  * ボタンは確認のダイアログを開くだけで、書き込みは確認を通った後にだけ呼ぶ。
  */
@@ -278,31 +319,33 @@ export function ConfigList({
 /**
  * 1つの項目の行。キーは行の見出し、値は型ごとの表示、操作の列は止めるか下げるのボタンである。
  * 一覧の追加と削除のボタンは、値の中にあるので、操作の列には置かない。
+ * 狭い幅では`display`を変えて縦に積むので、表の役割は`role`で明示する。
  */
 function ConfigRow({
   item,
   onChoose,
   isLocked,
+  showOperation,
 }: {
   item: ConfigItemView;
   onChoose: ((offer: ChangeOffer) => void) | undefined;
   isLocked: (offer: ChangeOffer) => boolean;
+  showOperation: boolean;
 }) {
-  const offers = onChoose === undefined ? [] : changeOffersOf(item);
-  const offer = offers[0];
-  const editableList =
-    onChoose !== undefined &&
-    EDITABLE_LISTS.includes(item.key) &&
-    offers.length > 0;
+  const { offers, editableList, button } = rowOffersOf(item, onChoose);
   return (
-    <tr className="block @2xl:table-row">
+    <tr {...ROLE.row} className="block @2xl:table-row">
       <th
         scope="row"
+        {...ROLE.rowheader}
         className="block px-4 pt-2.5 pb-1 text-left align-top font-mono font-normal break-all @2xl:table-cell @2xl:py-2.5"
       >
         {safeText(item.key)}
       </th>
-      <td className="block min-w-0 px-4 pb-2.5 align-top tabular-nums @2xl:table-cell @2xl:py-2.5">
+      <td
+        {...ROLE.cell}
+        className="block min-w-0 px-4 pb-2.5 align-top tabular-nums @2xl:table-cell @2xl:py-2.5"
+      >
         {editableList ? (
           <EditableListValue
             item={item}
@@ -314,24 +357,32 @@ function ConfigRow({
           <ConfigValue item={item} />
         )}
       </td>
-      <td className="block px-4 align-top @2xl:table-cell @2xl:py-2.5 @2xl:text-right">
-        {editableList ||
-        onChoose === undefined ||
-        !isSwitchOrNumberOffer(offer) ? null : (
-          <div className="pb-2.5 @2xl:-my-1.5 @2xl:pb-0">
-            <ChangeButton
-              offer={offer}
-              locked={isLocked(offer)}
-              onChoose={onChoose}
-            />
-          </div>
-        )}
-      </td>
+      {showOperation ? (
+        <td
+          {...ROLE.cell}
+          className="block px-4 align-top @2xl:table-cell @2xl:py-2.5 @2xl:text-right"
+        >
+          {button === null || onChoose === undefined ? null : (
+            <div className="pb-2.5 @2xl:-my-1.5 @2xl:pb-0">
+              <ChangeButton
+                offer={button}
+                locked={isLocked(button)}
+                onChoose={onChoose}
+              />
+            </div>
+          )}
+        </td>
+      ) : null}
     </tr>
   );
 }
 
-/** 1つのグループの表。見出し(h3)が表の名前になる。狭い幅では、表をやめて項目ごとに縦に積む。 */
+/**
+ * 1つのグループの表。見出し(h3)が表の名前になる。
+ * 見出しは区画(landmark)にせず、表の`aria-labelledby`で結ぶ。グループの数だけ区画が並ぶのを避けるためである。
+ * 狭い幅では、表をやめて項目ごとに縦に積む。
+ * 操作の列は、操作の列のボタンを持つ項目があるときだけ出し、無ければ値の列が幅を使う。
+ */
 function ConfigGroupTable({
   id,
   label,
@@ -346,44 +397,75 @@ function ConfigGroupTable({
   isLocked: (offer: ChangeOffer) => boolean;
 }) {
   const headingId = `config-group-${id}`;
+  const showOperation = items.some(
+    (item) => rowOffersOf(item, onChoose).button !== null,
+  );
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2">
       <h3 id={headingId} className="text-small font-semibold">
         {label}
       </h3>
       <Card className="overflow-hidden text-small">
-        <table className="block w-full border-collapse @2xl:table @2xl:table-fixed">
+        <table
+          {...ROLE.table}
+          aria-labelledby={headingId}
+          className="block w-full border-collapse @2xl:table @2xl:table-fixed"
+        >
           <colgroup>
             <col className="@2xl:w-80" />
             <col />
-            <col className="@2xl:w-24" />
+            {showOperation ? <col className="@2xl:w-24" /> : null}
           </colgroup>
-          <thead className="sr-only @2xl:not-sr-only @2xl:table-header-group">
-            <tr className="border-b border-border text-left text-muted-foreground">
-              <th scope="col" className="px-4 py-2 font-medium">
+          <thead
+            {...ROLE.rowgroup}
+            className="sr-only @2xl:not-sr-only @2xl:table-header-group"
+          >
+            <tr
+              {...ROLE.row}
+              className="border-b border-border text-left text-muted-foreground"
+            >
+              <th
+                scope="col"
+                {...ROLE.columnheader}
+                className="px-4 py-2 font-medium"
+              >
                 項目
               </th>
-              <th scope="col" className="px-4 py-2 font-medium">
+              <th
+                scope="col"
+                {...ROLE.columnheader}
+                className="px-4 py-2 font-medium"
+              >
                 値
               </th>
-              <th scope="col" className="px-4 py-2 text-right font-medium">
-                操作
-              </th>
+              {showOperation ? (
+                <th
+                  scope="col"
+                  {...ROLE.columnheader}
+                  className="px-4 py-2 text-right font-medium"
+                >
+                  操作
+                </th>
+              ) : null}
             </tr>
           </thead>
-          <tbody className="block divide-y divide-border @2xl:table-row-group">
+          <tbody
+            {...ROLE.rowgroup}
+            className="block divide-y divide-border @2xl:table-row-group"
+          >
             {items.map((item) => (
               <ConfigRow
                 key={item.key}
                 item={item}
                 onChoose={onChoose}
                 isLocked={isLocked}
+                showOperation={showOperation}
               />
             ))}
           </tbody>
         </table>
       </Card>
-    </section>
+    </div>
   );
 }
 
