@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as consoleView from "../../console/src/lib/configChange.ts";
+import * as script from "../../f/factory/console_config_update.ts";
 import {
   BOOLEAN_STOP_ITEMS,
   CONFIG_UPDATE_REFUSAL_REASONS,
@@ -7,6 +8,7 @@ import {
   type ConfigUpdateRefusalReason,
   type ConfigUpdateResult,
   LOWERABLE_NUMBERS,
+  MAX_ELEMENT_LENGTH,
   updateConfigFromConsole,
 } from "../../f/factory/console_config_update.ts";
 import {
@@ -607,6 +609,14 @@ describe("the list of items that can be changed", () => {
         ]),
       ),
     });
+  });
+
+  test("is the list of lists that the Console shows the buttons for", () => {
+    expect([...consoleView.EDITABLE_LISTS]).toEqual([...script.LIST_ITEMS]);
+  });
+
+  test("is the longest element that the Console lets a person type", () => {
+    expect(consoleView.MAX_ELEMENT_LENGTH).toBe(MAX_ELEMENT_LENGTH);
   });
 
   test("lists the refusal reasons that the Console describes", () => {

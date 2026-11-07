@@ -38,7 +38,13 @@ export const LOWERABLE_NUMBERS: Readonly<Record<string, NumberRule>> = {
   max_fix_diff_lines: { integer: true, minimum: 1, minimumExclusive: false },
 };
 
-/** 画面が出す変更の候補。止める操作か、数値を下げる操作。 */
+/** 1要素の追加と削除ができる一覧の項目。 */
+export const EDITABLE_LISTS: readonly string[] = [];
+
+/** 一覧に足せる要素の長さの上限。 */
+export const MAX_ELEMENT_LENGTH = 0;
+
+/** 画面が出す変更の候補。止める操作、数値を下げる操作、一覧の要素の追加と削除。 */
 export type ChangeOffer =
   | { readonly kind: "stop"; readonly key: string }
   | {
@@ -46,7 +52,51 @@ export type ChangeOffer =
       readonly key: string;
       readonly current: number;
       readonly rule: NumberRule;
+    }
+  | {
+      readonly kind: "add";
+      readonly key: string;
+      /** 画面が読んだ一覧。 */
+      readonly current: readonly string[];
+    }
+  | {
+      readonly kind: "remove";
+      readonly key: string;
+      /** 画面が読んだ一覧。 */
+      readonly current: readonly string[];
+      /** 除く要素の位置。同じ文字列の要素を見分ける。 */
+      readonly index: number;
+      readonly element: string;
     };
+
+export function changeOffersOf(_item: ConfigItemView): readonly ChangeOffer[] {
+  return [];
+}
+
+export type NewElementProblem = "empty" | "too_long";
+
+export type NewElement =
+  | { readonly ok: true; readonly value: string }
+  | { readonly ok: false; readonly reason: NewElementProblem };
+
+export function parseNewElement(_text: string): NewElement {
+  return { ok: false, reason: "empty" };
+}
+
+export function newElementMessage(_reason: NewElementProblem): string {
+  return "";
+}
+
+/** `allowed_check_commands`の件数。参照や伏せた値は読めない。 */
+export type CheckCommands =
+  | { readonly kind: "count"; readonly count: number }
+  | { readonly kind: "unknown" };
+
+export function checkCommandsOf(
+  _items: readonly ConfigItemView[],
+): CheckCommands {
+  return { kind: "count", count: 0 };
+}
 
 function ownRule(key: string): NumberRule | undefined {
   return Object.hasOwn(LOWERABLE_NUMBERS, key)
@@ -146,7 +196,10 @@ const DAILY_BUDGET_ITEM = "daily_budget_usd";
  * 日次の予算は、今日の使用額を下回る値にすると、今日のClaudeを使うフローがすべて失敗する。今日の使用額は、ここでは調べない。
  * Consoleは止める向きと下げる向きの変更だけを持つので、戻すには運用者がWindmillで直す。
  */
-export function changeDialogLines(offer: ChangeOffer): readonly string[] {
+export function changeDialogLines(
+  offer: ChangeOffer,
+  _checkCommands: CheckCommands = { kind: "count", count: 0 },
+): readonly string[] {
   const lines = [
     offer.kind === "stop"
       ? "止めると、この機能は新しく動かなくなります。"

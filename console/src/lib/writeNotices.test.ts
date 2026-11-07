@@ -679,10 +679,85 @@ describe("describeConfigUpdateResult", () => {
     ["conflict", "値が変わっていました"],
     ["actor_unknown", "操作者を確認できない"],
     ["audit_unavailable", "操作の記録を残せない"],
+    ["already_present", "すでにあります"],
+    ["invalid_element", "形式"],
+    ["would_empty", "最後の1件は削除できません"],
+    ["owner_not_listed", "owners に無いアカウント"],
   ] as const)("explains the refusal %s", (reason, phrase) => {
     expect(
       describeConfigUpdateResult({ refused: true, reason }).message,
     ).toContain(phrase);
+  });
+
+  test("tells what happens to an empty repo_allowlist when its last element is refused", () => {
+    expect(
+      describeConfigUpdateResult({ refused: true, reason: "would_empty" })
+        .message,
+    ).toContain("空だと owners 配下の全リポジトリが対象になります");
+  });
+
+  test("describes the shape of an element for each list", () => {
+    const message = describeConfigUpdateResult({
+      refused: true,
+      reason: "invalid_element",
+    }).message;
+    expect([
+      message.includes("https://github.com/owner/repo"),
+      message.includes("dependabot_other_repos は owner/repo"),
+      message.includes("default_reviewers は GitHub のログイン名"),
+    ]).toEqual([true, true, true]);
+  });
+
+  const ADDED = {
+    refused: false,
+    item: "repo_allowlist",
+    op: "add",
+    element: "https://github.com/octo-owner/widgets",
+    before_count: 3,
+    after_count: 4,
+    verified: true,
+    action_audit: "recorded",
+  } as const;
+
+  test("reports an added element with the counts before and after", () => {
+    expect(describeConfigUpdateResult(ADDED)).toEqual({
+      tone: "success",
+      message: "repo_allowlistに追加しました(3件→4件)。",
+    });
+  });
+
+  test("reports a removed element with the counts before and after", () => {
+    expect(
+      describeConfigUpdateResult({
+        ...ADDED,
+        op: "remove",
+        before_count: 4,
+        after_count: 3,
+      }),
+    ).toEqual({
+      tone: "success",
+      message: "repo_allowlistから削除しました(4件→3件)。",
+    });
+  });
+
+  test("warns when the list read back differs", () => {
+    const notice = describeConfigUpdateResult({ ...ADDED, verified: false });
+    expect([notice.tone, notice.message]).toEqual([
+      "warning",
+      "repo_allowlistを書き込みましたが、読み直した値が期待と違います。Windmillで確かめてください。",
+    ]);
+  });
+
+  test("warns when the record of a list change could not be written", () => {
+    expect(
+      describeConfigUpdateResult({ ...ADDED, action_audit: "failed" }).tone,
+    ).toBe("warning");
+  });
+
+  test("writes the item of a list change without hidden characters", () => {
+    expect(
+      describeConfigUpdateResult({ ...ADDED, item: "a‮b" }).message,
+    ).not.toContain("‮");
   });
 
   test("reports a refusal as information, not as a failure", () => {
