@@ -1,13 +1,19 @@
 #!/usr/bin/env bun
-// `mise run test`が作るcoverage/lcov.infoから全体の行カバレッジを求め、下限を割っていないか確かめる。
+// `mise run test`が作るcoverage/lcov.infoから行カバレッジを求め、全体と層ごとの下限を割っていないか確かめる。
 //
-// bunの`coverageThreshold`は、ファイルごとに判定する。全体の下限には使えないので、ここで縛る。
+// bunの`coverageThreshold`は、ファイルごとに判定する。全体や層の下限には使えないので、ここで縛る。
 // lcovに分岐(BRDA)は出ないので、見るのは行だけである。
 //
 // 数える対象は、`f/factory/**`と`scripts/**`の`.ts`から、`*.test.ts`と`*.d.ts`を除いたもの。
-// lcovには`console/`、`infra/`、`tests/`の補助、テストが作る一時ファイルも混ざるが、母数に入れない。
-// bunは、テストが一度も読み込まなかったファイルをlcovに出さない。下限は「読み込まれた対象」の値で、
-// 未読み込みのファイルは分母に入らない。
+// 対象の一覧は、作業ツリーに実在する追跡中と未追跡のファイル(`git ls-files`)から作る。
+// lcovには`console/`、`infra/`、`tests/`の補助、テストが作る一時ファイルも混ざるが、
+// 一覧に無いものは分母にも分子にも入れない。
+//
+// bunは、テストが一度も読み込まなかったファイルをlcovに出さない。
+// 一覧にあるのにlcovに出ない対象は、実行可能な行数が分からず、推定は検査を甘くするので、失敗にする。
+// `f/factory/**`は`tests/lib/coverage_load_all.test.ts`がすべて読み込む。
+// `scripts/**`は、そのファイルをimportするテストを足す。
+// bunのテストでは読み込めないものだけを`NOT_LOADABLE_BY_BUN_TEST`に足す。
 //
 // 同じファイルがlcovに複数回出ても正しく数えるため、行ごとの和集合で数える。
 // どれかの記録で回数が0より大きい行を実行済みとし、`LF`と`LH`は使わない。
@@ -16,20 +22,72 @@
 // - coverage/lcov.infoが無い、空、通常のファイルでない、読めない。
 // - coverageがsymlinkなど、実在のディレクトリでない。
 // - `git ls-files -- coverage`が空でない。コミットされたlcovで検査を通せないようにする。
-// - 対象のファイルが1件も無い。
+// - 対象の一覧を作る`git ls-files`が失敗する。作業ツリーのパスを調べられない(無い場合を除く)。対象のファイルが1件も無い。
+// - 名前が許可する文字の外にある対象がある。数えられないまま外れるのを防ぐ。
+// - 一覧にあるのにlcovに出ない対象がある。
+// - `NOT_LOADABLE_BY_BUN_TEST`の項目が、許す形でない、作業ツリーの対象の一覧に無い、lcovに出ている。
+// - 下限の表に載る層に、対象が1件も無い。
+// - 全体、または層のどれかが、下限を割る。
 //
-// 失敗の出力は、全体の値、下限、未実行の行が多い対象の上位のパスと割合に限る。行の中身は出さない。
+// 失敗の出力は、Factoryの修正のプロンプトに載る末尾2000字から、miseのタスク失敗の行の分を引いた字数に収める。
+// 割った層、未読み込みの総数と上位のパスを、出力の最後に置く。
+// 出すのは、値、下限、パス、割合に限る。行の中身は出さない。標準エラーも載せない。
 //
-// 下限を上げるときは、実測を見てこの定数を変える。変更は保護パスの変更として扱う。
+// 下限を変えるときは、実測を見てこの定数を変える。変更は保護パスの変更として扱う。
 // 使い方: bun ./scripts/check-coverage.ts
 
 import { lstatSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-/** 全体の行カバレッジの下限(%)。実測より低く置き、実測を見て詰める。 */
-export const COVERAGE_FLOOR_PERCENT = 83.94;
+/** 全体の行カバレッジの下限(%)。ローカルとCIの値の小さいほうから2ポイント引き、小数第2位で切り捨てる。 */
+export const COVERAGE_FLOOR_PERCENT = 82.76;
 
-/** 失敗の出力に載せる、未実行の行が多い対象の件数。 */
+export type Layer =
+  | "f/factory/lib"
+  | "f/factory/steps"
+  | "f/factory (other)"
+  | "scripts";
+
+export type LayerFloor = {
+  readonly layer: Layer;
+  readonly floorPercent: number;
+};
+
+/**
+ * 層ごとの行カバレッジの下限(%)。全体の下限と同じ規則で置く。
+ * 層は、全体の値に隠れる低い層を拾うために分ける。
+ */
+export const LAYER_FLOORS: readonly LayerFloor[] = [
+  { layer: "f/factory/lib", floorPercent: 96.23 },
+  { layer: "f/factory/steps", floorPercent: 54.11 },
+  { layer: "f/factory (other)", floorPercent: 61.59 },
+  { layer: "scripts", floorPercent: 90.06 },
+];
+
+/**
+ * bunのテストでは読み込めない対象。読み込むと本物のDBに文を流すので、
+ * `mise run test:db`が実行する。ここに足した対象は、分母にも分子にも入れない。
+ * 足す変更は、検査の対象を狭めるので、人がレビューする。
+ */
+export const NOT_LOADABLE_BY_BUN_TEST: readonly string[] = [
+  "scripts/test-db-console-actions.ts",
+  "scripts/test-db-deploy-approvals.ts",
+  "scripts/test-db-holds.ts",
+  "scripts/test-db-queries.ts",
+];
+
+/** `NOT_LOADABLE_BY_BUN_TEST`に入れてよいパスの形。これ以外は受け付けない。 */
+export const NOT_LOADABLE_PATH = /^scripts\/test-db-[\w-]+\.ts$/;
+
+/**
+ * 失敗の出力の字数の上限。`check_runner`は出力の末尾2000字を修正のプロンプトに載せる。
+ * 末尾にはmiseのタスク失敗の行が付くので、その分を引く。
+ * 実測では、その行は`[<タスク名>] ERROR task failed`の1行(26字前後)で、入れ子のタスクでも2行である。
+ * 200字は、その数倍の余裕を取った値である。
+ */
+const OUTPUT_BUDGET_CHARS = 1800;
+
+/** 失敗の出力に載せる、未実行の行が多い対象と、未読み込みの対象の件数。 */
 const WORST_FILE_COUNT = 5;
 
 export type FileCoverage = {
@@ -49,15 +107,40 @@ export type Verdict = {
   readonly message: string;
 };
 
+export type TargetListing = {
+  /** 対象のパス。作業ツリーに実在するものに限り、並べ替えて重複を除く。 */
+  readonly targets: readonly string[];
+  /** 対象の接頭辞と拡張子を持つが、名前に許可する文字の外を含むパス。 */
+  readonly malformed: readonly string[];
+};
+
+export type ListTargetsOptions = {
+  /** trueなら、追跡していない(gitignoreされていない)ファイルも列挙する。 */
+  readonly includeUntracked: boolean;
+};
+
+export type JudgeOptions = {
+  readonly layerFloors?: readonly LayerFloor[];
+  /** 一覧にあるのにlcovに出ない対象。 */
+  readonly unloaded?: readonly string[];
+};
+
 export type CheckCoverageOptions = {
   /** リポジトリのルート。coverage/lcov.infoはその直下から読む。 */
   readonly root: string;
   readonly floorPercent?: number;
+  readonly layerFloors?: readonly LayerFloor[];
+  readonly notLoadable?: readonly string[];
   /** `git ls-files -- coverage`の結果。既定は実際にgitを呼ぶ。 */
   readonly listTracked?: (root: string) => readonly string[];
+  /** 下限の対象の列挙。既定は実際にgitを呼ぶ。 */
+  readonly listTargets?: (
+    root: string,
+    options: ListTargetsOptions,
+  ) => TargetListing;
 };
 
-// パスに使える文字を絞る。外れたファイルは対象にしない(出力に制御文字を載せないためでもある)。
+// パスに使える文字を絞る。外れたファイルは対象にせず、検査を失敗させる(出力に制御文字を載せないためでもある)。
 const TARGET_PATH = /^(?:f\/factory|scripts)\/[\w./@+-]+\.ts$/;
 const DA_LINE = /^DA:(\d+),(\d+)(?:,.*)?$/;
 
@@ -66,6 +149,18 @@ export function isTargetPath(path: string): boolean {
   if (!TARGET_PATH.test(path)) return false;
   if (path.endsWith(".test.ts") || path.endsWith(".d.ts")) return false;
   return !path.split("/").includes("..");
+}
+
+/**
+ * パスが属する層を返す。対象のパスでなければnullを返す。
+ * 接頭辞で決めるので、対象のパスはどれかの層に入る。
+ */
+export function layerOf(path: string): Layer | null {
+  if (!isTargetPath(path)) return null;
+  if (path.startsWith("f/factory/lib/")) return "f/factory/lib";
+  if (path.startsWith("f/factory/steps/")) return "f/factory/steps";
+  if (path.startsWith("f/factory/")) return "f/factory (other)";
+  return "scripts";
 }
 
 /**
@@ -112,12 +207,35 @@ export function summarizeLcov(text: string): CoverageSummary {
   return { files, executable, executed };
 }
 
+type Tally = {
+  readonly files: readonly FileCoverage[];
+  readonly executable: number;
+  readonly executed: number;
+};
+
+function tally(files: readonly FileCoverage[]): Tally {
+  return {
+    files,
+    executable: files.reduce((sum, file) => sum + file.executable, 0),
+    executed: files.reduce((sum, file) => sum + file.executed, 0),
+  };
+}
+
 function percent(executed: number, executable: number): number {
   return executable === 0 ? 0 : (executed / executable) * 100;
 }
 
-function leastCovered(summary: CoverageSummary): readonly FileCoverage[] {
-  return [...summary.files]
+function meetsFloor(counts: Tally, floorPercent: number): boolean {
+  return counts.executed * 100 >= floorPercent * counts.executable;
+}
+
+function describeCounts(counts: Tally, floorPercent: number): string {
+  const ratio = percent(counts.executed, counts.executable).toFixed(2);
+  return `${ratio}% (${counts.executed} of ${counts.executable} lines in ${counts.files.length} files), floor ${floorPercent.toFixed(2)}%`;
+}
+
+function leastCovered(files: readonly FileCoverage[]): readonly FileCoverage[] {
+  return [...files]
     .filter((file) => file.executed < file.executable)
     .sort(
       (a, b) =>
@@ -127,55 +245,311 @@ function leastCovered(summary: CoverageSummary): readonly FileCoverage[] {
     .slice(0, WORST_FILE_COUNT);
 }
 
-/** 集計が下限を満たすかを判定する。失敗の出力には行の中身を含めない。 */
-export function judgeCoverage(
-  summary: CoverageSummary,
-  floorPercent: number,
-): Verdict {
-  if (summary.files.length === 0 || summary.executable === 0) {
-    return {
-      ok: false,
-      message:
-        "coverage check failed: no target file found in coverage/lcov.info",
-    };
-  }
-  const ratio = percent(summary.executed, summary.executable);
-  const head = `line coverage ${ratio.toFixed(2)}% (${summary.executed} of ${summary.executable} lines in ${summary.files.length} files), floor ${floorPercent.toFixed(2)}%`;
-  if (summary.executed * 100 >= floorPercent * summary.executable) {
-    return { ok: true, message: head };
-  }
-  const rows = leastCovered(summary).map((file) => {
+function worstRows(files: readonly FileCoverage[]): string[] {
+  return leastCovered(files).map((file) => {
     const unexecuted = file.executable - file.executed;
     const fileRatio = percent(file.executed, file.executable).toFixed(1);
     return `  ${file.path}: ${fileRatio}% (${unexecuted} of ${file.executable} lines not executed)`;
   });
+}
+
+/** 見出し1行と、字数が足りないときに末尾から削る詳細の行。 */
+type Section = { readonly heading: string; readonly details: string[] };
+
+/** 見出しと、残っている詳細の行を並べる。詳細が無い見出しだけの節は、`keepEmpty`のときだけ残す。 */
+function render(sections: readonly Section[], keepEmpty: boolean): string[] {
+  return sections.flatMap(({ heading, details }) =>
+    details.length === 0 && !keepEmpty ? [] : [heading, ...details],
+  );
+}
+
+/**
+ * 失敗の出力を、字数の上限に収める。
+ * 理由の節(`reasons`)は出力の最後に置き、見出しを残す。
+ * 収まらないときは、未実行の行が多い対象の行を後ろから、次に理由の詳細を後ろから削る。
+ */
+function composeFailure(
+  head: readonly string[],
+  rows: readonly Section[],
+  reasons: readonly Section[],
+): string {
+  const build = (): string =>
+    [...head, ...render(rows, false), ...render(reasons, true)].join("\n");
+  const popLast = (sections: readonly Section[]): boolean => {
+    for (let index = sections.length - 1; index >= 0; index -= 1) {
+      const section = sections[index];
+      if (section !== undefined && section.details.length > 0) {
+        section.details.pop();
+        return true;
+      }
+    }
+    return false;
+  };
+  let text = build();
+  while (text.length > OUTPUT_BUDGET_CHARS) {
+    if (!popLast(rows) && !popLast(reasons)) break;
+    text = build();
+  }
+  return text;
+}
+
+/** 未読み込みの対象の理由の節。上位のパスは、字数が足りないときに削る詳細に入れる。 */
+function unloadedSection(unloaded: readonly string[]): Section {
+  const shown = [...unloaded].sort().slice(0, WORST_FILE_COUNT);
+  const rest = unloaded.length - shown.length;
   return {
-    ok: false,
-    message: [
-      `coverage check failed: ${head}`,
-      "files with the most unexecuted lines:",
-      ...rows,
-    ].join("\n"),
+    heading: `${unloaded.length} target files were not loaded by any test (no record in coverage/lcov.info; see docs/testing-guidelines.md):`,
+    details: [
+      ...shown.map((path) => `  ${path}`),
+      ...(rest > 0 ? [`  ... and ${rest} more`] : []),
+    ],
   };
 }
 
-function listTrackedWithGit(root: string): readonly string[] {
-  const result = Bun.spawnSync(["git", "ls-files", "-z", "--", "coverage"], {
-    cwd: root,
+/**
+ * 集計が全体と層ごとの下限を満たし、未読み込みの対象が無いかを判定する。
+ * 失敗の出力には行の中身を含めず、字数の上限に収める。
+ */
+export function judgeCoverage(
+  summary: CoverageSummary,
+  floorPercent: number,
+  options: JudgeOptions = {},
+): Verdict {
+  const layerFloors = options.layerFloors ?? [];
+  const unloaded = options.unloaded ?? [];
+  if (summary.files.length === 0 || summary.executable === 0) {
+    return {
+      ok: false,
+      message: composeFailure(
+        ["coverage check failed: no target file found in coverage/lcov.info"],
+        [],
+        unloaded.length > 0 ? [unloadedSection(unloaded)] : [],
+      ),
+    };
+  }
+
+  const layers = layerFloors.map(({ layer, floorPercent: layerFloor }) => ({
+    layer,
+    floorPercent: layerFloor,
+    counts: tally(summary.files.filter((file) => layerOf(file.path) === layer)),
+  }));
+  const empty = layers.filter(({ counts }) => counts.executable === 0);
+  if (empty.length > 0) {
+    return {
+      ok: false,
+      message: composeFailure(
+        ["coverage check failed:"],
+        [],
+        [
+          ...empty.map(({ layer }) => ({
+            heading: `no target file in layer ${layer}`,
+            details: [],
+          })),
+          ...(unloaded.length > 0 ? [unloadedSection(unloaded)] : []),
+        ],
+      ),
+    };
+  }
+
+  const total = tally(summary.files);
+  const totalMeets = meetsFloor(total, floorPercent);
+  const below = layers.filter(
+    ({ counts, floorPercent: layerFloor }) => !meetsFloor(counts, layerFloor),
+  );
+  const head = `line coverage ${describeCounts(total, floorPercent)}`;
+  const layerLines = layers.map(
+    ({ layer, counts, floorPercent: layerFloor }) =>
+      `  ${layer}: ${describeCounts(counts, layerFloor)}`,
+  );
+  if (totalMeets && below.length === 0 && unloaded.length === 0) {
+    return { ok: true, message: [head, ...layerLines].join("\n") };
+  }
+
+  const rows: Section[] = below.map(({ layer, counts }) => ({
+    heading: `files with the most unexecuted lines in ${layer}:`,
+    details: worstRows(counts.files),
+  }));
+  if (!totalMeets && below.length === 0) {
+    rows.push({
+      heading: "files with the most unexecuted lines:",
+      details: worstRows(summary.files),
+    });
+  }
+  const reasons: Section[] = below.map(
+    ({ layer, counts, floorPercent: layerFloor }) => ({
+      heading: `${layer} is below its floor: ${percent(counts.executed, counts.executable).toFixed(2)}% < ${layerFloor.toFixed(2)}%`,
+      details: [],
+    }),
+  );
+  if (!totalMeets) {
+    reasons.push({
+      heading: `total is below its floor: ${percent(total.executed, total.executable).toFixed(2)}% < ${floorPercent.toFixed(2)}%`,
+      details: [],
+    });
+  }
+  if (unloaded.length > 0) reasons.push(unloadedSection(unloaded));
+  return {
+    ok: false,
+    message: composeFailure(
+      [`coverage check failed: ${head}`, ...layerLines],
+      rows,
+      reasons,
+    ),
+  };
+}
+
+function runGit(argv: readonly string[], cwd: string): string {
+  const result = Bun.spawnSync([...argv], {
+    cwd,
     stdout: "pipe",
     stderr: "pipe",
   });
   if (result.exitCode !== 0) {
-    throw new Error(`exit code ${result.exitCode}`);
+    throw new Error(`git exited with code ${result.exitCode}`);
   }
-  return result.stdout
-    .toString()
+  return result.stdout.toString();
+}
+
+function listTrackedWithGit(root: string): readonly string[] {
+  return runGit(["git", "ls-files", "-z", "--", "coverage"], root)
     .split("\0")
     .filter((entry) => entry !== "");
 }
 
+/**
+ * 対象を列挙する`git ls-files`の引数。シェルを通さず、`-z`でNUL区切りにし、`--`でパスと分ける。
+ * 未読み込みの判定は未追跡のファイルも含め、読み込みのテストはステージ済みまでにする。
+ * 未追跡のファイルは、`git add`の明示の操作の後に初めて読み込まれる。
+ */
+export function targetListArgv(options: ListTargetsOptions): string[] {
+  return [
+    "git",
+    "ls-files",
+    "-z",
+    "--cached",
+    ...(options.includeUntracked ? ["--others", "--exclude-standard"] : []),
+    "--",
+    "f/factory",
+    "scripts",
+  ];
+}
+
+function isCandidate(path: string): boolean {
+  return (
+    (path.startsWith("f/factory/") || path.startsWith("scripts/")) &&
+    path.endsWith(".ts") &&
+    !path.endsWith(".test.ts") &&
+    !path.endsWith(".d.ts")
+  );
+}
+
+/**
+ * gitの出力のパスから、対象と、名前の取りこぼしを選ぶ。
+ * 作業ツリーに無いパスは、どちらにも入れない。ステージせずに消しただけの追跡中のファイルが、
+ * 読み込みの失敗や未読み込みで止まらないようにする。
+ */
+export function selectTargets(
+  entries: readonly string[],
+  exists: (path: string) => boolean,
+): TargetListing {
+  const targets = new Set<string>();
+  const malformed = new Set<string>();
+  for (const entry of entries) {
+    if (!isCandidate(entry) || !exists(entry)) continue;
+    (isTargetPath(entry) ? targets : malformed).add(entry);
+  }
+  return { targets: [...targets].sort(), malformed: [...malformed].sort() };
+}
+
+/** 下限の対象を列挙する。gitが失敗したら投げる。`run`は、テストで差し替える。 */
+export function listTargetFiles(
+  root: string,
+  options: ListTargetsOptions,
+  run: (argv: readonly string[], cwd: string) => string = runGit,
+): TargetListing {
+  const entries = run(targetListArgv(options), root)
+    .split("\0")
+    .filter((entry) => entry !== "");
+  return selectTargets(entries, (path) => existsInTree(join(root, path)));
+}
+
+/** `lstat`の失敗のエラーコード名を返す。`lstat`以外の失敗や、コード名の形でない値はnullを返す。 */
+function errnoCode(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  if (!("code" in error) || typeof error.code !== "string") return null;
+  if (!("syscall" in error) || error.syscall !== "lstat") return null;
+  return /^[A-Z][A-Z0-9_]*$/.test(error.code) ? error.code : null;
+}
+
+/**
+ * パスが作業ツリーにあるかを返す。無い(ENOENT)か、途中の要素がファイルに替わっている(ENOTDIR)ときは、
+ * falseにする。ステージせずに消しただけの追跡中のファイルを、失敗にしないためである。
+ * 権限やsymlinkの輪など、ほかの理由で調べられないときは、無いものとして外さず投げる。
+ */
+function existsInTree(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    const code = errnoCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
 function failure(reason: string): Verdict {
   return { ok: false, message: `coverage check failed: ${reason}` };
+}
+
+/**
+ * ASCIIの外の文字を、UTF-16のコード単位ごとに`\uXXXX`にする。
+ * `JSON.stringify`は、C1の制御文字、双方向の書式文字、U+2028とU+2029を残すためである。
+ */
+function escapeNonAscii(text: string): string {
+  return text.replace(
+    /[^\x20-\x7e]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/** 名前の取りこぼしの失敗。パスは`JSON.stringify`でエスケープし、制御文字を出力に載せない。 */
+function malformedFailure(malformed: readonly string[]): Verdict {
+  const details = malformed
+    .slice(0, WORST_FILE_COUNT)
+    .map((path) => `  ${escapeNonAscii(JSON.stringify(path))}`);
+  return {
+    ok: false,
+    message: composeFailure(
+      [],
+      [],
+      [
+        {
+          heading: `coverage check failed: ${malformed.length} target file names use characters outside [A-Za-z0-9_./@+-] and cannot be counted:`,
+          details,
+        },
+      ],
+    ),
+  };
+}
+
+/** `NOT_LOADABLE_BY_BUN_TEST`の項目の誤りを返す。無ければnullを返す。 */
+function checkNotLoadable(
+  notLoadable: readonly string[],
+  targets: ReadonlySet<string>,
+  lcovPaths: ReadonlySet<string>,
+): string | null {
+  for (const path of notLoadable) {
+    if (!NOT_LOADABLE_PATH.test(path)) {
+      return `NOT_LOADABLE_BY_BUN_TEST has an entry outside the allowed form scripts/test-db-*.ts: ${JSON.stringify(path)}`;
+    }
+    if (!targets.has(path)) {
+      return `NOT_LOADABLE_BY_BUN_TEST lists ${path}, which is not among the target files in the working tree (remove the entry)`;
+    }
+    if (lcovPaths.has(path)) {
+      return `NOT_LOADABLE_BY_BUN_TEST lists ${path}, but it is in lcov (remove the entry)`;
+    }
+  }
+  return null;
 }
 
 /** lstatでパスの種類を調べる。symlinkは辿らず、調べられなければ`missing`にする。 */
@@ -190,10 +564,13 @@ function inspect(path: string): "missing" | "symlink" | "directory" | "file" {
   return stat.isDirectory() ? "directory" : "file";
 }
 
-/** coverage/lcov.infoを検証して読み、下限と照らす。 */
+/** coverage/lcov.infoを検証して読み、対象の一覧と照らして、下限と未読み込みを判定する。 */
 export function checkCoverage(options: CheckCoverageOptions): Verdict {
   const floor = options.floorPercent ?? COVERAGE_FLOOR_PERCENT;
+  const layerFloors = options.layerFloors ?? LAYER_FLOORS;
+  const notLoadable = options.notLoadable ?? NOT_LOADABLE_BY_BUN_TEST;
   const listTracked = options.listTracked ?? listTrackedWithGit;
+  const listTargets = options.listTargets ?? listTargetFiles;
 
   let tracked: readonly string[];
   try {
@@ -237,7 +614,44 @@ export function checkCoverage(options: CheckCoverageOptions): Verdict {
   if (text.trim() === "") {
     return failure("coverage/lcov.info is empty");
   }
-  return judgeCoverage(summarizeLcov(text), floor);
+
+  let listing: TargetListing;
+  try {
+    listing = listTargets(options.root, { includeUntracked: true });
+  } catch (error) {
+    // 理由に載せるのは、`lstat`のエラーコード名だけにする。パスと標準エラーは載せない。
+    const code = errnoCode(error);
+    return failure(
+      code === null
+        ? "listing the target files failed (git ls-files)"
+        : `examining a target path in the working tree failed (${code})`,
+    );
+  }
+  if (listing.malformed.length > 0) {
+    return malformedFailure(listing.malformed);
+  }
+  if (listing.targets.length === 0) {
+    return failure("no target file found in the working tree (git ls-files)");
+  }
+
+  const lcov = summarizeLcov(text);
+  const lcovPaths = new Set(lcov.files.map((entry) => entry.path));
+  const invalid = checkNotLoadable(
+    notLoadable,
+    new Set(listing.targets),
+    lcovPaths,
+  );
+  if (invalid !== null) return failure(invalid);
+
+  // 分母に入れるのは、一覧にあり、読み込める対象だけである。一覧に無い`SF`は無視する。
+  const excluded = new Set(notLoadable);
+  const countable = listing.targets.filter((path) => !excluded.has(path));
+  const countableSet = new Set(countable);
+  const loaded = tally(
+    lcov.files.filter((entry) => countableSet.has(entry.path)),
+  );
+  const unloaded = countable.filter((path) => !lcovPaths.has(path));
+  return judgeCoverage(loaded, floor, { layerFloors, unloaded });
 }
 
 if (import.meta.main) {

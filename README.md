@@ -93,7 +93,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run migrate` | `wmill datatable migrate up`で、Data Tableのmigrationを適用する。deployの保留が有効なあいだは止まる |
 | `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |
 | `mise run metadata:check` | Windmillのメタデータが古ければ失敗する |
-| `mise run check` | `lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する。`test`の後に、全体の行カバレッジが下限を割っていないかを確かめる |
+| `mise run check` | `lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する。`test`の後に、全体と層ごとの行カバレッジが下限を割っていないかと、lcovに出ない対象が無いかを確かめる |
 | `mise run check:changed` | `origin/main`との差分に応じて検査を絞って実行する。`lint`と`typecheck`は常に、`lint:docs`は差分のMarkdownだけ、テストは`test:changed`と同じ規則で選び、`console:check`はConsoleと共有のlibに触れたときだけ実行する。日常の確認用で、全件の確認はCIが行う |
 | `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査、テスト、組み立てを行う |
 | `mise run lint` | biome、`wmill lint`、型アサーションと`§`の検出を実行する |
