@@ -22,14 +22,14 @@
 // - coverage/lcov.infoが無い、空、通常のファイルでない、読めない。
 // - coverageがsymlinkなど、実在のディレクトリでない。
 // - `git ls-files -- coverage`が空でない。コミットされたlcovで検査を通せないようにする。
-// - 対象の一覧を作る`git ls-files`が失敗する。対象のファイルが1件も無い。
+// - 対象の一覧を作る`git ls-files`が失敗する。作業ツリーのパスを調べられない(無い場合を除く)。対象のファイルが1件も無い。
 // - 名前が許可する文字の外にある対象がある。数えられないまま外れるのを防ぐ。
 // - 一覧にあるのにlcovに出ない対象がある。
-// - `NOT_LOADABLE_BY_BUN_TEST`の項目が、許す形でない、追跡されていない、lcovに出ている。
+// - `NOT_LOADABLE_BY_BUN_TEST`の項目が、許す形でない、作業ツリーの対象の一覧に無い、lcovに出ている。
 // - 下限の表に載る層に、対象が1件も無い。
 // - 全体、または層のどれかが、下限を割る。
 //
-// 失敗の出力は、Factoryの修正のプロンプトに載る末尾2000字に収める。
+// 失敗の出力は、Factoryの修正のプロンプトに載る末尾2000字から、miseのタスク失敗の行の分を引いた字数に収める。
 // 割った層、未読み込みの総数と上位のパスを、出力の最後に置く。
 // 出すのは、値、下限、パス、割合に限る。行の中身は出さない。標準エラーも載せない。
 //
@@ -40,7 +40,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /** 全体の行カバレッジの下限(%)。ローカルの実測より2ポイント低く置き、実測を見て詰める。 */
-export const COVERAGE_FLOOR_PERCENT = 82.75;
+export const COVERAGE_FLOOR_PERCENT = 82.76;
 
 export type Layer =
   | "f/factory/lib"
@@ -61,7 +61,7 @@ export const LAYER_FLOORS: readonly LayerFloor[] = [
   { layer: "f/factory/lib", floorPercent: 96.23 },
   { layer: "f/factory/steps", floorPercent: 54.11 },
   { layer: "f/factory (other)", floorPercent: 61.59 },
-  { layer: "scripts", floorPercent: 90.07 },
+  { layer: "scripts", floorPercent: 90.08 },
 ];
 
 /**
@@ -79,8 +79,11 @@ export const NOT_LOADABLE_BY_BUN_TEST: readonly string[] = [
 /** `NOT_LOADABLE_BY_BUN_TEST`に入れてよいパスの形。これ以外は受け付けない。 */
 export const NOT_LOADABLE_PATH = /^scripts\/test-db-[\w-]+\.ts$/;
 
-/** 失敗の出力の字数の上限。`check_runner`が修正のプロンプトに載せる末尾の字数と同じにする。 */
-const OUTPUT_BUDGET_CHARS = 2000;
+/**
+ * 失敗の出力の字数の上限。`check_runner`は出力の末尾2000字を修正のプロンプトに載せる。
+ * 末尾にはmiseのタスク失敗の行が付くので、その分を引く。
+ */
+const OUTPUT_BUDGET_CHARS = 1800;
 
 /** 失敗の出力に載せる、未実行の行が多い対象と、未読み込みの対象の件数。 */
 const WORST_FILE_COUNT = 5;
@@ -288,6 +291,19 @@ function composeFailure(
   return text;
 }
 
+/** 未読み込みの対象の理由の節。上位のパスは、字数が足りないときに削る詳細に入れる。 */
+function unloadedSection(unloaded: readonly string[]): Section {
+  const shown = [...unloaded].sort().slice(0, WORST_FILE_COUNT);
+  const rest = unloaded.length - shown.length;
+  return {
+    heading: `${unloaded.length} target files were not loaded by any test (no record in coverage/lcov.info; see docs/testing-guidelines.md):`,
+    details: [
+      ...shown.map((path) => `  ${path}`),
+      ...(rest > 0 ? [`  ... and ${rest} more`] : []),
+    ],
+  };
+}
+
 /**
  * 集計が全体と層ごとの下限を満たし、未読み込みの対象が無いかを判定する。
  * 失敗の出力には行の中身を含めず、字数の上限に収める。
@@ -316,10 +332,17 @@ export function judgeCoverage(
   if (empty.length > 0) {
     return {
       ok: false,
-      message: [
-        "coverage check failed:",
-        ...empty.map(({ layer }) => `no target file in layer ${layer}`),
-      ].join("\n"),
+      message: composeFailure(
+        ["coverage check failed:"],
+        [],
+        [
+          ...empty.map(({ layer }) => ({
+            heading: `no target file in layer ${layer}`,
+            details: [],
+          })),
+          ...(unloaded.length > 0 ? [unloadedSection(unloaded)] : []),
+        ],
+      ),
     };
   }
 
@@ -353,17 +376,13 @@ export function judgeCoverage(
       details: [],
     }),
   );
-  if (unloaded.length > 0) {
-    const shown = [...unloaded].sort().slice(0, WORST_FILE_COUNT);
-    const rest = unloaded.length - shown.length;
+  if (!totalMeets) {
     reasons.push({
-      heading: `${unloaded.length} target files were not loaded by any test (no record in coverage/lcov.info; see docs/testing-guidelines.md):`,
-      details: [
-        ...shown.map((path) => `  ${path}`),
-        ...(rest > 0 ? [`  ... and ${rest} more`] : []),
-      ],
+      heading: `total is below its floor: ${percent(total.executed, total.executable).toFixed(2)}% < ${floorPercent.toFixed(2)}%`,
+      details: [],
     });
   }
+  if (unloaded.length > 0) reasons.push(unloadedSection(unloaded));
   return {
     ok: false,
     message: composeFailure(
@@ -446,10 +465,23 @@ export function listTargetFiles(
   const entries = run(targetListArgv(options), root)
     .split("\0")
     .filter((entry) => entry !== "");
-  return selectTargets(
-    entries,
-    (path) => inspect(join(root, path)) !== "missing",
-  );
+  return selectTargets(entries, (path) => existsInTree(join(root, path)));
+}
+
+/**
+ * パスが作業ツリーにあるかを返す。無い(ENOENT)ときだけfalseにする。
+ * 権限やsymlinkの輪など、ほかの理由で調べられないときは、無いものとして外さず投げる。
+ */
+function existsInTree(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function failure(reason: string): Verdict {
@@ -487,7 +519,7 @@ function checkNotLoadable(
       return `NOT_LOADABLE_BY_BUN_TEST has an entry outside the allowed form scripts/test-db-*.ts: ${JSON.stringify(path)}`;
     }
     if (!targets.has(path)) {
-      return `NOT_LOADABLE_BY_BUN_TEST lists ${path}, which is not a tracked target (remove the entry)`;
+      return `NOT_LOADABLE_BY_BUN_TEST lists ${path}, which is not among the target files in the working tree (remove the entry)`;
     }
     if (lcovPaths.has(path)) {
       return `NOT_LOADABLE_BY_BUN_TEST lists ${path}, but it is in lcov (remove the entry)`;
