@@ -963,7 +963,6 @@ function mentionsRelease(text: string): boolean {
   );
 }
 
-/** 文字列が、書き込みを拒む変数のパスか、それに当たりうるglobを含むなら真。 */
 /**
  * 語と、パーセント符号化を解いた語。`stop%5Fall`のように符号化した名前も照合するためである。
  * 解けない語(不正な`%`の並び)は、元の語だけにする。
@@ -978,6 +977,7 @@ function decodedForms(text: string): string[] {
   return decoded === text ? [text] : [text, decoded];
 }
 
+/** 文字列が、書き込みを拒む変数のパスか、それに当たりうるglobを含むなら真。 */
 function mentionsGuardedVariable(text: string): boolean {
   return decodedForms(text).some(mentionsGuardedVariableForm);
 }
