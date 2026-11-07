@@ -67,8 +67,9 @@ export const SYSTEM_SKELETONS: Readonly<Record<string, LoadingShape>> = {
     rowClassName: "h-9 w-full rounded-xl",
   },
   // 説明の下の絞り込み(ラベルと入力欄で53px)と、項目の行(1行42px。実機で12項目を描いて測った)。
+  // 節は表のために広いが、枠は説明文と同じ読みやすい幅にとどめる。
   "config-heading": {
-    className: "flex flex-col gap-3",
+    className: "flex max-w-3xl flex-col gap-3",
     node: (
       <>
         <Skeleton className="h-[3.3rem] w-96 max-w-full rounded-lg" />
@@ -77,6 +78,14 @@ export const SYSTEM_SKELETONS: Readonly<Record<string, LoadingShape>> = {
     ),
   },
 };
+
+/** 文章の読みやすい幅。広げた節でも、説明文と知らせはこの幅にとどめる。 */
+const READABLE_WIDTH = "max-w-3xl";
+
+/** 広げた節の中で、本文以外の知らせを読みやすい幅に収める。広げない節は、節の幅がすでに読みやすい。 */
+function Readable({ wide, children }: { wide: boolean; children: ReactNode }) {
+  return wide ? <div className={READABLE_WIDTH}>{children}</div> : children;
+}
 
 /**
  * システムの画面の1つの節。見出し、取得の状態、本文を持つ。
@@ -100,7 +109,10 @@ export function SystemSection<T>({
   title: string;
   /** 見出しが、開いているタブの名前と重なるとき、画面には出さず、読み上げにだけ残す。 */
   visuallyHiddenTitle?: boolean;
-  /** 表のように横に広がる本文のために、読みやすい幅の上限を広げる。文章の節は広げない。 */
+  /**
+   * 表のように横に広がる本文のために、節の幅の上限を広げる。文章の節は広げない。
+   * 説明文と、取得の知らせは、読みやすい幅のままにする。本文の側は、広げる部分だけを広げる。
+   */
   wide?: boolean;
   description: ReactNode;
   query: SectionQuery<T>;
@@ -113,9 +125,9 @@ export function SystemSection<T>({
   return (
     <section
       aria-labelledby={id}
-      className={cn("flex flex-col gap-3", wide ? "max-w-6xl" : "max-w-3xl")}
+      className={cn("flex flex-col gap-3", wide ? "max-w-6xl" : READABLE_WIDTH)}
     >
-      <div className="min-w-0">
+      <div className={cn("min-w-0", wide && READABLE_WIDTH)}>
         {/* 要約の帯のリンクで移った後にフォーカスを受ける。Tabの順には入れない。 */}
         <h2
           id={id}
@@ -135,25 +147,29 @@ export function SystemSection<T>({
         shape={SYSTEM_SKELETONS[id] ?? DEFAULT_SKELETON}
       >
         {query.data === undefined ? (
-          <QueryFailure
-            compact
-            title={`${title}を取得できませんでした`}
-            loginHint={loginHint}
-            error={query.error}
-            onRetry={() => {
-              void query.refetch();
-            }}
-          />
+          <Readable wide={wide}>
+            <QueryFailure
+              compact
+              title={`${title}を取得できませんでした`}
+              loginHint={loginHint}
+              error={query.error}
+              onRetry={() => {
+                void query.refetch();
+              }}
+            />
+          </Readable>
         ) : (
           <>
             {query.isError ? (
-              <StaleDataNotice
-                isFetching={query.isFetching}
-                error={query.error}
-                onRetry={() => {
-                  void query.refetch();
-                }}
-              />
+              <Readable wide={wide}>
+                <StaleDataNotice
+                  isFetching={query.isFetching}
+                  error={query.error}
+                  onRetry={() => {
+                    void query.refetch();
+                  }}
+                />
+              </Readable>
             ) : null}
             {children(query.data, now)}
           </>

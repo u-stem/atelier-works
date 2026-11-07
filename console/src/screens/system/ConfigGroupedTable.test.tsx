@@ -348,7 +348,7 @@ describe("ConfigSection width and groups", () => {
       </QueryClientProvider>,
     );
     expect(withStage).toMatch(
-      /<div class="[^"]*max-w-3xl[^"]*"><p><span[^>]*>設計工程/,
+      /<div[^>]*class="[^"]*max-w-3xl[^"]*"[^>]*><p><span[^>]*>設計工程/,
     );
   });
 });

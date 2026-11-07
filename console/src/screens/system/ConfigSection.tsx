@@ -481,7 +481,10 @@ function ConfigGroupTable({
 function DesignStageStatus({ stage }: { stage: DesignStageView }) {
   const text = describeDesignStage(stage);
   return (
-    <Card padding="compact" className="flex flex-col gap-1 text-small">
+    <Card
+      padding="compact"
+      className="flex max-w-3xl flex-col gap-1 text-small"
+    >
       <p>
         <span className="text-muted-foreground">設計工程: </span>
         <span className="font-medium">{safeText(text.state)}</span>
