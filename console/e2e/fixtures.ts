@@ -288,8 +288,49 @@ export const CONFIG_NORMAL: ConfigSnapshotView = {
   path: "f/factory/config",
   design_stage: { enabled: false, ignored: true, indeterminate: false },
   items: [
+    // 通常の文字列。どのグループにも入らない項目は「その他」に出る。
     { key: "example", kind: "value", value: "on", masked: false },
+    // 同じ形のオブジェクトの配列。列見出しを持つ、表の中の表になる。
+    {
+      key: "owners",
+      kind: "value",
+      value: [
+        { name: "octo-owner", kind: "user", id: 1 },
+        { name: "acme", kind: "org" },
+      ],
+      masked: false,
+    },
+    // 空の一覧。
+    {
+      key: "allowed_labeler_logins",
+      kind: "value",
+      value: [],
+      masked: false,
+    },
+    // 真偽。語と記号のバッジになる。
+    { key: "design_enabled", kind: "value", value: true, masked: false },
+    { key: "implement_enabled", kind: "value", value: false, masked: false },
+    // 単位が付く数値。
+    { key: "claude_timeout_sec", kind: "value", value: 1800, masked: false },
+    {
+      key: "max_budget_usd_per_run",
+      kind: "value",
+      value: 5.5,
+      masked: false,
+    },
+    // キーごとの一覧を持つオブジェクト。
+    {
+      key: "check_commands_by_repo",
+      kind: "value",
+      value: {
+        "octo-owner/atelier-works": ["mise run check"],
+        "octo-owner/widgets": [],
+      },
+      masked: false,
+    },
+    // 参照と、伏せた値。値は出さない。
     { key: "secret_ref", kind: "reference" },
+    { key: "model", kind: "value", value: "hidden", masked: true },
   ],
 };
 

@@ -136,3 +136,27 @@ export function describeStructure(key: string, value: object): ConfigStructure {
   }
   return jsonOf(value);
 }
+
+/**
+ * キーの接尾辞と、数値の単位の対応。接尾辞だけで単位が決まるものに限る。
+ * 予算のキーは`_usd_per_run`で終わるので、`_usd`の後ろの`_per_run`も同じ接尾辞として扱う。
+ * 接尾辞に当たらないキーと、規則に迷うキー(`_per_pr`など)には、誤った単位を付けないよう、単位を付けない。
+ */
+const UNIT_SUFFIXES: readonly (readonly [RegExp, string])[] = [
+  [/_usd(?:_per_run)?$/, "USD"],
+  [/_sec$/, "秒"],
+  [/_days$/, "日"],
+  [/_min$/, "分"],
+  [/_lines$/, "行"],
+  [/_files$/, "ファイル"],
+  [/_rounds$/, "ラウンド"],
+  [/_turns$/, "ターン"],
+];
+
+/** 数値の項目の単位。キーの接尾辞から導き、当たらなければ`null`。 */
+export function unitOfConfigKey(key: string): string | null {
+  for (const [suffix, unit] of UNIT_SUFFIXES) {
+    if (suffix.test(key)) return unit;
+  }
+  return null;
+}
