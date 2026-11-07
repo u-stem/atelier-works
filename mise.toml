@@ -213,6 +213,10 @@ run = "bunx --bun tsc --noEmit"
 description = "Run the test suite (the console has its own suite in console:check)"
 run = "bun test --parallel --timeout 30000 --path-ignore-patterns 'console/**' --coverage --coverage-reporter=lcov --coverage-dir=coverage"
 
+[tasks."test:all"]
+description = "Run the full test suite without coverage (for local checks; check and CI measure coverage with test)"
+run = "bun test --parallel --timeout 30000 --path-ignore-patterns 'console/**'"
+
 [tasks."test:changed"]
 description = "Run only the tests affected by the diff against origin/main (CI still runs the full suite)"
 run = "bun test --parallel --timeout 30000 --changed=origin/main --path-ignore-patterns 'console/**'"

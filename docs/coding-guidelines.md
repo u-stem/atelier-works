@@ -194,7 +194,12 @@ gitのpre-pushは全体の`check`を実行しない。理由は[セットアッ�
 - `lint`はbiome、`wmill lint f`、型アサーションと`§`の検出を含む。
 - `test`は`bun test --parallel`で、`console/`を除く。カバレッジを`coverage/lcov.info`に出す。`check`は、その後に`bun ./scripts/check-coverage.ts`で全体の行カバレッジの下限を確かめる。
 - `test:changed`は`origin/main`との差分が影響するテストだけを実行する。importの解析で選ぶので、コードから読まない設定や資産の変更は拾えない。全件の確認はCIが行う。
-- `check:changed`は、`scripts/check-changed.ts`が差分のパスから実行する検査を決める。重いのは`lint:docs`なので、差分のMarkdownだけを検査する。絞り方を変えるときは`tests/scripts/check-changed.test.ts`を直す。
+- `test:all`は、カバレッジを測らずに全件を実行する。`check:changed`が、全件を要する差分で呼ぶ。
+- `check:changed`は、`scripts/check-changed.ts`が差分のパスから実行する検査を決める。重いのは`lint:docs`なので、差分のMarkdownだけを検査する。
+  テストは、差分がMarkdownだけなら省く。
+  `.sh`、`.yaml`、`.yml`とルートの設定ファイルは、importの解析で影響を選べないので、削除も含めて`test:all`を実行する。
+  それ以外は`test:changed`を実行する。
+  絞り方を変えるときは`tests/scripts/check-changed.test.ts`を直す。
 - `console:check`は、Console(`console/`)のlockfileの方針を検査し、型検査、テスト、組み立てを行う。
 - `console:a11y`は、組み立てたConsoleをChromiumで検査する。ブラウザの取得が要るので`check`に含めず、CIの`console-a11y`ジョブが動かす。
 
