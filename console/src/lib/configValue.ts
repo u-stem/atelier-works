@@ -33,11 +33,11 @@ export type ConfigStructure =
 const EMPTY_NOTES: ReadonlyMap<string, string> = new Map([
   [
     "repo_allowlist",
-    "空のときは、ownersに含まれるリポジトリすべてが対象です(factory_repoは常に対象)。",
+    "空のときは、IssueとPRの発見は、ownersのアカウントのリポジトリすべてが対象です。mainのCIの監視とdependabotは、factory_repoだけを見ます。",
   ],
   [
     "default_reviewers",
-    "空のときは、PRに既に設定されているレビュアーを使います。",
+    "空のときは、この修正のきっかけになったレビューとコメントの投稿者を指定します(PRの作者と実行アカウントは除く)。投稿者がいなければ、指定しません。",
   ],
   ["dependabot_other_repos", "空のときは、factory_repoだけを処理します。"],
 ]);
@@ -72,17 +72,15 @@ function isTableRow(value: unknown): value is Record<string, Scalar> {
 }
 
 function tableOf(rows: readonly Record<string, Scalar>[]): ConfigStructure {
-  const keys: string[] = [];
-  for (const row of rows) {
-    for (const key of Object.keys(row)) {
-      if (!keys.includes(key)) keys.push(key);
-    }
-  }
+  // Setは挿入順を保つので、列は行に現れた順に並ぶ。
+  const keys = [...new Set(rows.flatMap((row) => Object.keys(row)))];
   return {
     kind: "table",
     columns: keys.map(safeText),
     rows: rows.map((row) =>
       keys.map((key) => {
+        // 継承したプロパティ(`constructor`など)を、行の値と読まない。
+        if (!Object.hasOwn(row, key)) return null;
         const cell = row[key];
         return cell === undefined ? null : scalarText(cell);
       }),

@@ -31,7 +31,11 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
         <span className="text-muted-foreground">{CONFIG_REFERENCE_LABEL}</span>
       );
     case "scalar":
-      return <span className="break-words">{safeText(value.text)}</span>;
+      return (
+        <span className="break-words">
+          <TextValue text={value.text} />
+        </span>
+      );
     case "empty":
       return <EmptyValue note={value.note} />;
     case "list":
@@ -47,6 +51,22 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
         </pre>
       );
   }
+}
+
+/** 空の文字列を示す目印。値は等幅や通常の文字で描くので、斜体で薄い文字は値と見分けがつく。 */
+const EMPTY_STRING_LABEL = "(空の文字列)";
+
+/**
+ * 値の文字列。空か空白だけの文字列は、見えない値になるので、目印で描く。
+ * 引数は`safeText`を通した文字列である。見えない文字は代替文字になっていて、空白だけとは見なさない。
+ */
+function TextValue({ text }: { text: string }) {
+  if (text.trim() === "") {
+    return (
+      <span className="text-muted-foreground italic">{EMPTY_STRING_LABEL}</span>
+    );
+  }
+  return <>{safeText(text)}</>;
 }
 
 /** 空であることと、項目に意味があるときはその意味。 */
@@ -70,7 +90,7 @@ function ValueRows({ items }: { items: readonly string[] }) {
         // 要素は重なりうるので、位置を含めて見分ける。並びは変わらない。
         // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の要素が並びうる。
         <li key={`${index}:${text}`} className="break-all">
-          {safeText(text)}
+          <TextValue text={text} />
         </li>
       ))}
     </ul>
@@ -89,8 +109,14 @@ function ValueTable({
     <table className="w-full table-fixed border-collapse text-small">
       <thead className="text-left text-muted-foreground">
         <tr>
-          {columns.map((column) => (
-            <th key={column} scope="col" className="py-1 pr-3 font-medium">
+          {columns.map((column, columnIndex) => (
+            // 見えない文字だけが違う列は、`safeText`の後で同じ文字列になるので、位置を含めて見分ける。
+            <th
+              // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の列が並びうる。
+              key={`${columnIndex}:${column}`}
+              scope="col"
+              className="py-1 pr-3 font-medium"
+            >
               {safeText(column)}
             </th>
           ))}
@@ -102,13 +128,14 @@ function ValueTable({
           <tr key={rowIndex}>
             {cells.map((cell, cellIndex) => (
               <td
-                key={columns[cellIndex]}
+                // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の列が並びうる。
+                key={`${cellIndex}:${columns[cellIndex]}`}
                 className="py-1 pr-3 align-top break-all"
               >
                 {cell === null ? (
                   <span className="text-muted-foreground">未設定</span>
                 ) : (
-                  safeText(cell)
+                  <TextValue text={cell} />
                 )}
               </td>
             ))}
@@ -127,17 +154,21 @@ function ValueEntries({
 }) {
   return (
     <dl className="flex flex-col gap-1.5 text-small">
-      {entries.map((entry) => (
+      {entries.map(({ key, value }, index) => (
+        // キーは`safeText`の後で重なりうるので、位置を含めて見分ける。並びは変わらない。
         <div
-          key={entry.key}
+          // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列のキーが並びうる。
+          key={`${index}:${key}`}
           className="grid gap-0.5 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] sm:gap-x-3"
         >
-          <dt className="font-mono break-all">{safeText(entry.key)}</dt>
+          <dt className="font-mono break-all">{safeText(key)}</dt>
           <dd className="min-w-0">
-            {entry.value.kind === "list" ? (
-              <ValueRows items={entry.value.items} />
+            {value.kind === "list" ? (
+              <ValueRows items={value.items} />
             ) : (
-              <span className="break-all">{safeText(entry.value.text)}</span>
+              <span className="break-all">
+                <TextValue text={value.text} />
+              </span>
             )}
           </dd>
         </div>
