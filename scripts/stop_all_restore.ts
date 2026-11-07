@@ -229,6 +229,10 @@ export function safeForTerminal(text: string): string {
   );
 }
 
+export function oneLine(text: string): string {
+  return text;
+}
+
 /** 端末に出す設定の名前。記録してよい形の名前はそのまま、それ以外は引用符で囲み、制御文字を字面にして出す。 */
 export function displayName(name: string): string {
   return isRecordableFlag(name) ? name : safeForTerminal(JSON.stringify(name));

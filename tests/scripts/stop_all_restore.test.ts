@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  oneLine,
   parseExceptNames,
   planRestore,
   type RestoreIo,
@@ -751,11 +752,66 @@ describe("runRestore and the names to turn on by hand", () => {
       ],
     });
     await runRestore(["dependabot_enabled"], io);
+    const lines = printed.filter((line) =>
+      line.includes("Turn these on by hand"),
+    );
+    expect({
+      restored: lines.some((line) => line.includes("implement_enabled")),
+      excepted: lines.some((line) => line.includes("dependabot_enabled")),
+    }).toEqual({ restored: true, excepted: false });
+  });
+
+  test("does not ask to wait for a release when the stop-all could not be read", async () => {
+    const { io, printed } = fake({
+      stopAll: [ok(null), { ok: false, reason: "down" }],
+    });
+    await runRestore([], io);
+    const lines = printed.filter((line) => line.includes("on by hand"));
+    expect({
+      found: lines.length > 0,
+      release: lines.some((line) =>
+        line.includes("after the stop-all is released"),
+      ),
+      confirm: lines.every((line) =>
+        line.includes(
+          "after confirming in Windmill that no stop-all is placed",
+        ),
+      ),
+    }).toEqual({ found: true, release: false, confirm: true });
+  });
+
+  test("names the same --except in the command to run again", async () => {
+    const { io, printed } = fake({
+      stopAll: [ok(null), ok(PLACED)],
+      record: ok(recordOf(["implement_enabled", "dependabot_enabled"])),
+    });
+    await runRestore(["dependabot_enabled"], io);
     expect(
-      printed
-        .filter((line) => line.includes("Turn these on by hand"))
-        .some((line) => line.includes("dependabot_enabled")),
-    ).toBe(false);
+      printed.some((line) =>
+        line.includes("mise run stop:restore -- --except dependabot_enabled"),
+      ),
+    ).toBe(true);
+  });
+
+  test("does not let a line break in an error make a fake line", async () => {
+    const { io, printed } = fake({
+      readsBeforeWrite: [{ ok: false, reason: "boom\nturned on 9 setting(s)" }],
+    });
+    await runRestore([], io);
+    expect(printed.some((line) => line.includes("\n"))).toBe(false);
+  });
+
+  test("says the record may remain when clearing it failed and the stop-all could not be read", async () => {
+    const { io, warned } = fake({
+      clearFails: true,
+      stopAll: [ok(null), ok(null), ok(null), { ok: false, reason: "down" }],
+    });
+    await runRestore([], io);
+    expect(
+      warned.some(
+        (line) => line.includes("boom") && line.includes("may remain"),
+      ),
+    ).toBe(true);
   });
 
   test("tells to wait for the release before turning names on by hand", async () => {
@@ -791,6 +847,20 @@ describe("safeForTerminal", () => {
 
   test("keeps line breaks and tabs", () => {
     expect(safeForTerminal("a\n\tb")).toBe("a\n\tb");
+  });
+
+  test("escapes a line separator", () => {
+    expect(safeForTerminal("a b c")).toBe("a\\u2028b\\u2029c");
+  });
+});
+
+describe("oneLine", () => {
+  test("writes line breaks and tabs as their escapes", () => {
+    expect(oneLine("a\nb\tc")).toBe("a\\nb\\tc");
+  });
+
+  test("escapes an escape character", () => {
+    expect(oneLine("a\u001bb")).toBe("a\\u001bb");
   });
 });
 
