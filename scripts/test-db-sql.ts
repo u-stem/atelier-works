@@ -109,7 +109,8 @@ export function parseContainerId(output: string): string {
 // composeのCLIを文ごとに起動すると遅いので、コンテナIDは1回だけ引いて使い回す。
 const containerIds = new Map<string, string>();
 
-function dbContainerId(composeFile: string): string {
+/** composeのdbサービスのコンテナIDを返す。初回だけ`docker compose ps`を呼ぶ。 */
+export function dbContainerId(composeFile: string): string {
   const cached = containerIds.get(composeFile);
   if (cached !== undefined) return cached;
   const result = Bun.spawnSync({
@@ -151,10 +152,10 @@ function runPsql(
 }
 
 /** PostgreSQLが、更新を含む`WITH`を最上位以外に置けないときのエラーの文。 */
-const TOP_LEVEL_ONLY = "must be at the top level";
+export const TOP_LEVEL_ONLY = "must be at the top level";
 
 /** 結果の行をJSONの配列として1行で返すよう、文を`WITH`で包む。更新の`RETURNING`も行として読める。 */
-function wrapForRows(statement: string): string {
+export function wrapForRows(statement: string): string {
   return `WITH q AS (${statement.trim().replace(/;+$/, "")}) SELECT coalesce(json_agg(q), '[]'::json) FROM q`;
 }
 
@@ -211,7 +212,8 @@ export function parseCsvRows(output: string): SqlRow[] {
   );
 }
 
-function parseRows(output: string): SqlRow[] {
+/** `wrapForRows`で包んだ文の出力(JSONの配列)を、行にする。 */
+export function parseRows(output: string): SqlRow[] {
   const parsed: unknown = JSON.parse(output);
   if (!Array.isArray(parsed)) {
     throw new Error("test-db-sql: psql did not return a JSON array");
