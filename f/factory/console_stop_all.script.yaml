@@ -1,6 +1,6 @@
 summary: '[OP-2-13] Factoryを全停止'
 description: Factory
-  Consoleから、Factory全体を止めます。全停止の変数f/factory/stop_allに時刻、操作者、理由を書き、factory_configのtrueの*_enabledをまとめてfalseにし、見張りと片付けの4本を除くリポジトリのscheduleを無効にします。実行中のジョブは中止しません。実行中のClaudeと検査は、15秒以内に自分で止まります。設定に変数かresourceへの参照があれば、設定は変えません。操作の前に記録を残し、残せなければ何も変えません。要対応の通知とDiscordへの知らせは、scheduleの失敗の検出器が5分以内に出します。
+  Consoleから、Factory全体を止めます。全停止の変数f/factory/stop_allに時刻、操作者、理由を書き、factory_configのtrueの*_enabledをまとめてfalseにして、止めた名前をf/factory/stop_all_recordに記録し、見張りと片付けの4本を除くリポジトリのscheduleを無効にします。実行中のジョブは中止しません。実行中のClaudeと検査は、15秒以内に自分で止まります。設定に変数かresourceへの参照があれば、設定は変えません。操作の前に記録を残し、残せなければ何も変えません。要対応の通知とDiscordへの知らせは、scheduleの失敗の検出器が5分以内に出します。
 lock: '!inline f/factory/console_stop_all.script.lock'
 kind: script
 schema:

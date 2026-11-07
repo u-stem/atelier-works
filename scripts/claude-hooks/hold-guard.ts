@@ -741,7 +741,7 @@ const GUARDED_VARIABLES: readonly string[] = [
   "f/factory/stop_all_record",
 ];
 
-/** 書き込みを拒む変数のパス。スラッシュはパーセント符号化でも数える。 */
+/** 書き込みを拒む変数のパス。スラッシュはパーセント符号化でも数える。ほかの文字の符号化は、照合の前に`decodedForms`が解く。 */
 const GUARDED_VARIABLE_PATH =
   /f(?:\/|%2[Ff])factory(?:\/|%2[Ff])(?:freezes|stop_all|stop_all_record)(?![A-Za-z0-9_])/;
 
@@ -964,7 +964,25 @@ function mentionsRelease(text: string): boolean {
 }
 
 /** 文字列が、書き込みを拒む変数のパスか、それに当たりうるglobを含むなら真。 */
+/**
+ * 語と、パーセント符号化を解いた語。`stop%5Fall`のように符号化した名前も照合するためである。
+ * 解けない語(不正な`%`の並び)は、元の語だけにする。
+ */
+function decodedForms(text: string): string[] {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(text);
+  } catch {
+    return [text];
+  }
+  return decoded === text ? [text] : [text, decoded];
+}
+
 function mentionsGuardedVariable(text: string): boolean {
+  return decodedForms(text).some(mentionsGuardedVariableForm);
+}
+
+function mentionsGuardedVariableForm(text: string): boolean {
   return releaseForms(text).some(
     (form) =>
       GUARDED_VARIABLE_PATH.test(form) ||
@@ -981,6 +999,10 @@ function mentionsGuardedVariable(text: string): boolean {
 
 /** 文字列が、変数を書くURLの経路か、それに当たりうるglobを含むなら真。 */
 function mentionsVariableWriteUrl(text: string): boolean {
+  return decodedForms(text).some(mentionsVariableWriteUrlForm);
+}
+
+function mentionsVariableWriteUrlForm(text: string): boolean {
   return releaseForms(text).some(
     (form) =>
       VARIABLE_WRITE_URL.test(form) ||

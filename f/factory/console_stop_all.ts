@@ -6,6 +6,7 @@
 //    値のどこかに`$var:`か`$res:`があれば、参照の先をこのscriptが解決しないよう、設定は変えない。
 //    書く直前に、止める名前を変数`f/factory/stop_all_record`に記録する。
 //    全停止の変数が空だったときは記録を置き換え、すでに置かれていたときは読み直した記録との和集合にする。
+//    止める名前が無いときは、前の記録に触らない。
 //    記録を書けなくても設定は止め、結果の`record`と`config_unrecorded`で知らせる。
 // 3. リポジトリの定義のscheduleを無効にする。見張りと片付けのschedule(`STOP_ALL_KEPT_SCHEDULES`)は止めない。
 // 変数を書けなかったときは、止めずに記録を失敗にし、ジョブを失敗させる。設定とscheduleの段には進まない。
@@ -37,6 +38,7 @@ import { REPO_SCHEDULES } from "./lib/console_known_paths.ts";
 import { holdsReference, isRecord } from "./lib/console_redact.ts";
 import {
   buildStopAllState,
+  enabledFlags,
   isStopAllReason,
   planStopAllRecord,
   readStopAll,
@@ -81,7 +83,7 @@ export type StopAllConfigOutcome =
 /**
  * 止めた名前の記録の段の結果。
  * - written: 記録を書いた(置き換えたか、和集合にした)。
- * - unchanged: すでに置かれていた全停止で、新しく止めた名前が無いか、すべて記録済みだった。
+ * - unchanged: 止めた名前が無いか、すでに置かれていた全停止で、止めた名前がすべて記録済みだった。記録には触っていない。
  * - failed: 記録を読めないか、壊れていたか、書けなかった。
  */
 export type StopAllRecordOutcome = "written" | "unchanged" | "failed";
@@ -125,12 +127,8 @@ export type StopAllPorts = {
   readonly sql: ActionSqlClient;
 };
 
-/** `true`の`*_enabled`の名前を、名前の順に並べる。`*_enabled_since`などの別の項目は含めない。 */
-export function enabledFlags(config: Record<string, unknown>): string[] {
-  return Object.keys(config)
-    .filter((key) => key.endsWith("_enabled") && config[key] === true)
-    .sort();
-}
+/** 止める名前の決め方は`lib/stop_all.ts`にある。呼び出し側の読み込み先を変えないため、ここからも出す。 */
+export { enabledFlags };
 
 type RecordStep = {
   readonly outcome: StopAllRecordOutcome;
@@ -144,8 +142,12 @@ type ConfigStep = {
   readonly record: RecordStep;
 };
 
+/** 止める名前が無いときの記録の段の結果。 */
+const NO_RECORD_CHANGE: RecordStep = { outcome: "unchanged", unrecorded: [] };
+
 /**
  * 止める名前を記録する。`replace`が真なら、古い記録を引き継がずに置き換える。偽なら、読み直した記録との和集合にする。
+ * 止める名前が無いときは、記録に触らない。設定を読めないときや参照があるときに、戻していない前の記録を消さないためである。
  * 和集合にする記録が読めないか壊れているときは、書き直さずに失敗にする。
  * 壊れた値を消すと、前の全停止が止めた名前が分からなくなるためである。
  */
@@ -154,9 +156,7 @@ async function recordFlags(
   flags: readonly string[],
   replace: boolean,
 ): Promise<RecordStep> {
-  if (!replace && flags.length === 0) {
-    return { outcome: "unchanged", unrecorded: [] };
-  }
+  if (flags.length === 0) return NO_RECORD_CHANGE;
   let previous: readonly string[] = [];
   if (!replace) {
     const status = await readStopAllRecord(ports.record);
@@ -192,12 +192,10 @@ async function stopConfig(
     current = undefined;
   }
   if (!isRecord(current)) {
-    const record = await recordFlags(ports, [], replaceRecord);
-    return { outcome: "failed", flags: [], record };
+    return { outcome: "failed", flags: [], record: NO_RECORD_CHANGE };
   }
   if (holdsReference(current)) {
-    const record = await recordFlags(ports, [], replaceRecord);
-    return { outcome: "has_reference", flags: [], record };
+    return { outcome: "has_reference", flags: [], record: NO_RECORD_CHANGE };
   }
   const flags = enabledFlags(current);
   const record = await recordFlags(ports, flags, replaceRecord);

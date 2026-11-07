@@ -234,6 +234,16 @@ export type StopAllRecordPlan = {
   readonly unrecorded: readonly string[];
 };
 
+/**
+ * `true`の`*_enabled`の名前を、名前の順に並べる。`*_enabled_since`などの別の項目は含めない。
+ * 全停止が止める名前と、戻す途中に全停止を見つけたときに止め直す名前は、この規則で決める。
+ */
+export function enabledFlags(config: Record<string, unknown>): string[] {
+  return Object.keys(config)
+    .filter((key) => key.endsWith("_enabled") && config[key] === true)
+    .sort();
+}
+
 /** 記録してよい`*_enabled`の名前か。 */
 export function isRecordableFlag(value: unknown): value is string {
   return typeof value === "string" && RECORDABLE_FLAG.test(value);

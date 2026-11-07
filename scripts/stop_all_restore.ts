@@ -5,15 +5,19 @@
 // 戻すのは、記録にあり、設定に自分のキーとして実在し、今`false`の名前だけである。
 // 1つ足すたびに本番の読み込み(`parseFactoryConfig`)で検査し、通らない名前は足さない。
 // 人が`true`にした設定、記録に無い設定、`--except`で除いた設定は変えない。
-// 書く直前に設定を読み直して比べ、書いた後に全停止をもう一度読む。全停止が置かれていたら、戻した名前を`false`に書き直す。
+// 書く直前に設定を読み直して比べ、書いた後に全停止をもう一度読む。
+// 全停止が置かれていたら、読み直した設定の`true`の`*_enabled`を、全停止と同じ規則ですべて`false`に書き直す。
 // 書き込みが成功したら記録をすべて消す。戻さなかった名前を次の実行に持ち越さず、止めたままにした機能が後で戻らないためである。
+// 消すのは、最初に読んだ記録が変わっておらず、全停止が空のときだけである。
 
 import { parseFactoryConfig } from "../f/factory/lib/config.ts";
 import { holdsReference } from "../f/factory/lib/console_redact.ts";
 import {
+  enabledFlags,
   isRecordableFlag,
   parseStopAllRecord,
   parseStopAllValue,
+  type StopAllRecord,
 } from "../f/factory/lib/stop_all.ts";
 import { isRecord } from "../f/factory/lib/types.ts";
 
@@ -197,23 +201,69 @@ function confirmationOf(plan: RestorePlan): string {
 const STILL_STOPPED =
   "the stop-all is still placed (or its variable is corrupt); release it with mise run stop:release first. Nothing was changed.";
 
+const INLINE_DEPTH_MAX = 16;
+
 /**
- * 書いた後に全停止が置かれていたら、戻した名前を`false`に書き直す。
- * 書き直す元は、読み直した設定か、読めなければ書いた値である。
+ * 値のどこかに、`!inline`で始まる文字列があるか。入れ子の中も見る。
+ * `wmill resource push`は、`content`が`!inline <path>`か`!inline_fileset <dir>`で始まる値を、ホストのファイルの中身に置き換えて書く。
+ * リモートから読んだ値を書き戻すこの手順では、ホストの秘密のファイルを設定へ持ち出す経路になるので、その形の値を書かない。
+ * 深さの上限を超える入れ子は、中を見切れないので、含むものとして扱う。
  */
-async function undoRestore(
-  plan: RestorePlan,
-  after: RestoreRead<unknown>,
-  io: RestoreIo,
-): Promise<void> {
-  const base =
-    after.ok && isRecord(after.value) ? { ...after.value } : { ...plan.next };
-  for (const name of plan.restore) base[name] = false;
-  const undone = await io.writeConfig(base);
+export function holdsInlineFile(value: unknown, depth = 0): boolean {
+  if (typeof value === "string") return value.startsWith("!inline");
+  if (depth >= INLINE_DEPTH_MAX) return true;
+  if (Array.isArray(value)) {
+    return value.some((item) => holdsInlineFile(item, depth + 1));
+  }
+  if (isRecord(value)) {
+    return Object.values(value).some((item) =>
+      holdsInlineFile(item, depth + 1),
+    );
+  }
+  return false;
+}
+
+const INLINE_REFUSAL =
+  "factory_config holds a value that starts with !inline, which wmill resource push would replace with a file of this host.";
+
+function isClear(read: RestoreRead<string | null>): boolean {
+  return read.ok && parseStopAllValue(read.value).kind === "clear";
+}
+
+/**
+ * 戻す途中で全停止を見つけたら、設定を読み直し、`true`の`*_enabled`をすべて`false`にして書く。
+ * 全停止と同じ規則で止め直すので、書き込みと並行してほかの処理が有効にした名前も止まる。
+ * 戻した名前だけを戻すと、その間に有効になった機能が、全停止の間も動き続けるためである。
+ * 記録は残す。
+ */
+async function stopAgain(io: RestoreIo): Promise<void> {
+  const read = await io.readConfig();
+  if (!read.ok || !isRecord(read.value)) {
+    io.print(
+      `A stop-all appeared while restoring (or could not be read), and factory_config could not be read again${read.ok ? "" : ` (${read.reason})`}. Turn every *_enabled setting off in factory_config by hand. The record was kept.`,
+    );
+    return;
+  }
+  if (holdsInlineFile(read.value)) {
+    io.print(
+      `A stop-all appeared while restoring (or could not be read). ${INLINE_REFUSAL} Turn every *_enabled setting off in factory_config by hand. The record was kept.`,
+    );
+    return;
+  }
+  const flags = enabledFlags(read.value);
+  if (flags.length === 0) {
+    io.print(
+      "A stop-all appeared while restoring (or could not be read). Every *_enabled setting is already off; the record was kept.",
+    );
+    return;
+  }
+  const off: Record<string, unknown> = { ...read.value };
+  for (const flag of flags) off[flag] = false;
+  const undone = await io.writeConfig(off);
   io.print(
     undone.ok
-      ? "A stop-all appeared while restoring (or could not be read). Turned the restored settings off again and kept the record; run mise run stop:restore again after releasing it."
-      : `A stop-all appeared while restoring (or could not be read), and the restored settings could not be turned off again (${undone.reason}). Turn ${plan.restore.join(", ")} off in factory_config by hand. The record was kept.`,
+      ? `A stop-all appeared while restoring (or could not be read). Turned ${flags.join(", ")} off again and kept the record; run mise run stop:restore again after releasing it.`
+      : `A stop-all appeared while restoring (or could not be read), and the settings could not be turned off again (${undone.reason}). Turn ${flags.join(", ")} off in factory_config by hand. The record was kept.`,
   );
 }
 
@@ -236,19 +286,24 @@ async function writeAndCheck(
     );
     return false;
   }
+  if (holdsInlineFile(plan.next)) {
+    io.print(`${INLINE_REFUSAL} Nothing was written.`);
+    return false;
+  }
   const written = await io.writeConfig(plan.next);
+  // 書き込みが時間切れで失敗しても、値は書かれていることがあるので、全停止を確かめる。
+  const stopAll = await io.readStopAll();
+  if (!isClear(stopAll)) {
+    await stopAgain(io);
+    return false;
+  }
   if (!written.ok) {
     io.print(
-      `could not write factory_config: ${written.reason}. The record was kept.`,
+      `could not write factory_config: ${written.reason}. Check factory_config; the record was kept.`,
     );
     return false;
   }
   const after = await io.readConfig();
-  const stopAll = await io.readStopAll();
-  if (!stopAll.ok || parseStopAllValue(stopAll.value).kind !== "clear") {
-    await undoRestore(plan, after, io);
-    return false;
-  }
   const current = after.ok && isRecord(after.value) ? after.value : null;
   if (
     current === null ||
@@ -262,9 +317,55 @@ async function writeAndCheck(
   return true;
 }
 
+function exceptOption(except: readonly string[]): string {
+  return except.length === 0 ? "" : ` -- --except ${except.join(",")}`;
+}
+
+/**
+ * 記録を消す。最初に読んだ記録と今の記録が同じで、全停止が空のときだけ消す。
+ * 戻している間に新しい全停止が記録を置き換えていたら、その記録を残す。消すと、新しい全停止が止めた名前を戻せなくなるためである。
+ */
+async function clearRecordIfUnchanged(
+  first: StopAllRecord,
+  plan: RestorePlan,
+  except: readonly string[],
+  io: RestoreIo,
+): Promise<number> {
+  const again = await io.readRecord();
+  const now = again.ok ? parseStopAllRecord(again.value) : null;
+  if (
+    now === null ||
+    now.kind !== "recorded" ||
+    !Bun.deepEquals(now.record, first)
+  ) {
+    io.print(
+      "The record of the stop-all changed while restoring, so a new stop-all may have recorded other names. The record was kept; release that stop-all and run mise run stop:restore again.",
+    );
+    return 1;
+  }
+  const stopAll = await io.readStopAll();
+  if (!isClear(stopAll)) {
+    if (plan.restore.length > 0) await stopAgain(io);
+    else io.print(STILL_STOPPED);
+    return 1;
+  }
+  const cleared = await io.clearRecord();
+  if (!cleared.ok) {
+    io.print(
+      `could not clear the record of the stop-all: ${cleared.reason}. The settings listed under 'Will turn on' are on; run mise run stop:restore${exceptOption(except)} again with the same --except to clear the record.`,
+    );
+    return 1;
+  }
+  io.print(
+    `turned on ${String(plan.restore.length)} setting(s) and cleared the record of the stop-all`,
+  );
+  return 0;
+}
+
 /**
  * 記録から設定を戻す。終了コードを返す。
- * 全停止が置かれているか読めないとき、記録が読めないか壊れているとき、設定が参照を含むか検査を通らないときは、何も書かずに断る。
+ * 全停止が置かれているか読めないとき、記録が読めないか壊れているとき、記録に無い名前を`--except`に渡したとき、
+ * 設定が参照か`!inline`の値を含むか検査を通らないときは、何も書かずに断る。
  * 記録が空なら、何もせず0を返す。
  */
 export async function runRestore(
@@ -278,7 +379,7 @@ export async function runRestore(
     );
     return 1;
   }
-  if (parseStopAllValue(stopAll.value).kind !== "clear") {
+  if (!isClear(stopAll)) {
     io.print(STILL_STOPPED);
     return 1;
   }
@@ -302,6 +403,14 @@ export async function runRestore(
     );
     return 0;
   }
+  // 綴りを誤った名前で除いたつもりの機能が、戻ってしまわないようにする。
+  const unknown = except.filter((name) => !record.record.flags.includes(name));
+  if (unknown.length > 0) {
+    io.print(
+      `--except names a setting that is not in the record: ${unknown.join(", ")}. The record lists ${record.record.flags.join(", ")}. Nothing was changed.`,
+    );
+    return 1;
+  }
   const read = await io.readConfig();
   if (!read.ok) {
     io.print(
@@ -318,6 +427,12 @@ export async function runRestore(
   if (holdsReference(original)) {
     io.print(
       "factory_config holds a $var: or $res: reference. Nothing was changed; turn the settings on by hand.",
+    );
+    return 1;
+  }
+  if (holdsInlineFile(original)) {
+    io.print(
+      `${INLINE_REFUSAL} Nothing was changed; turn the settings on by hand.`,
     );
     return 1;
   }
@@ -343,15 +458,5 @@ export async function runRestore(
   if (plan.restore.length > 0 && !(await writeAndCheck(plan, original, io))) {
     return 1;
   }
-  const cleared = await io.clearRecord();
-  if (!cleared.ok) {
-    io.print(
-      `could not clear the record of the stop-all: ${cleared.reason}. The settings listed under 'Will turn on' are on; run mise run stop:restore again to clear the record.`,
-    );
-    return 1;
-  }
-  io.print(
-    `turned on ${String(plan.restore.length)} setting(s) and cleared the record of the stop-all`,
-  );
-  return 0;
+  return await clearRecordIfUnchanged(record.record, plan, except, io);
 }

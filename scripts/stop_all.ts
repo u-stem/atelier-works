@@ -286,6 +286,37 @@ export function readScriptOutcome(stdout: string): ScriptOutcome {
   return { kind: "unreadable" };
 }
 
+/**
+ * 全停止のscriptの結果から、止めた名前の記録についての警告を作る。
+ * 記録に載らなかった名前は`mise run stop:restore`で戻らないので、人が手で戻せるよう名前を出す。
+ */
+export function recordWarnings(stdout: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+  if (!isRecord(parsed)) return [];
+  const unrecorded = Array.isArray(parsed.config_unrecorded)
+    ? parsed.config_unrecorded.filter(
+        (name): name is string => typeof name === "string",
+      )
+    : [];
+  const names = unrecorded.length > 0 ? `: ${unrecorded.join(", ")}` : "";
+  if (parsed.record === "failed") {
+    return [
+      `WARNING: the names of the *_enabled settings that were turned off could not be recorded${names}. mise run stop:restore will not restore them; turn them on by hand in factory_config after the release.`,
+    ];
+  }
+  if (unrecorded.length > 0) {
+    return [
+      `WARNING: these *_enabled settings were turned off but not recorded${names}. mise run stop:restore will not restore them; turn them on by hand in factory_config after the release.`,
+    ];
+  }
+  return [];
+}
+
 /** 置けなかったか解除できなかった理由。成功していれば`null`を返す。 */
 function scriptFailure(result: ExecResult): string | null {
   if (result.exitCode !== 0) {
@@ -424,6 +455,7 @@ export async function runStop(
       failures += 1;
       notPlaced = true;
     }
+    for (const line of recordWarnings(placed.stdout)) deps.warn(line);
     deps.print(
       `waiting ${String(SETTLE_WAIT_MS / 1000)}s for the running claude and checks to stop by themselves`,
     );
