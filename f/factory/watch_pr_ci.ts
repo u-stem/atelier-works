@@ -63,6 +63,8 @@ import {
   listPrOpenIssueWorkItems,
   listUnnotifiedFailedPrCiChecks,
   markPrCiNotified,
+  markWorkItemPrClosed,
+  readDbNow,
   readGhOwnerOpenPullRequests,
   readGhRepoOpenPullRequests,
   recordFailure,
@@ -376,10 +378,12 @@ export async function main(): Promise<PrCiWatchResult> {
     log,
     instanceName: config.instance_name,
     ...gates,
+    readDbNow: () => readDbNow(),
+    // 上限を超えたかを見分けるため、1件多く取る。
     listTrackedItems: async () => {
       const items = await listPrOpenIssueWorkItems(
         new Date(Date.now() - config.tracked_pr_days * DAY_MS),
-        TRACKED_PR_LIMIT,
+        TRACKED_PR_LIMIT + 1,
       );
       return items.map((item) => ({
         id: item.id,
@@ -389,6 +393,8 @@ export async function main(): Promise<PrCiWatchResult> {
         prUrl: item.pr_url,
       }));
     },
+    markPrClosed: (id, prUrl, readAt) =>
+      markWorkItemPrClosed(id, prUrl, readAt),
     getPr: (owner, repo, number) => getPr(client, owner, repo, number),
     listRuns: (owner, repo, headSha, headRef, options) =>
       listPrHeadWorkflowRuns(client, owner, repo, headSha, headRef, options),

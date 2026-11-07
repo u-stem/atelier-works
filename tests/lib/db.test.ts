@@ -80,6 +80,7 @@ import {
   isLatestMainCiRunFailed,
   isMissingDeploymentErrorColumnError,
   isMissingDocHashColumnError,
+  isMissingPrClosedAtColumnError,
   lastApprovalRedispatchAt,
   latestApprovalRequest,
   latestConflictFixSettledAt,
@@ -120,11 +121,14 @@ import {
   listUnresolvedNoticesByKind,
   listWorkItemsByStatuses,
   markPrCiNotified,
+  markTrackedPrClosed,
+  markWorkItemPrClosed,
   newestNewerIssueCycle,
   newestNewerPrWorkItem,
   nextCycleForIssue,
   PR_CI_CHECK_COLUMNS,
   type PrCiCheckSqlRow,
+  readDbNow,
   recordAgentRun,
   recordApprovalRedispatch,
   recordDeployment,
@@ -162,6 +166,7 @@ import {
   setWorkItemBranch,
   setWorkItemPrUrl,
   sumAgentCostSince,
+  TRACKED_PR_LIST_LIMIT,
   toApprovalRequest,
   toAuditReport,
   toFixRoundRecord,
@@ -5100,6 +5105,180 @@ describe("listTrackedPrs", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listTrackedPrs(45, sql);
     expect(calls[0]?.values).toContain(45);
+  });
+});
+
+describe("listTrackedPrs limit", () => {
+  test("binds one more than the limit so that the caller can see an overflow", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTrackedPrs(30, sql, 5);
+    expect(calls[0]?.values).toContain(6);
+  });
+
+  test("binds one more than the default limit when none is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTrackedPrs(30, sql);
+    expect(calls[0]?.values).toContain(TRACKED_PR_LIST_LIMIT + 1);
+  });
+
+  test("rejects a limit of zero", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(listTrackedPrs(30, sql, 0)).rejects.toThrow("limit");
+  });
+
+  test("rejects a limit that is not an integer", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(listTrackedPrs(30, sql, 1.5)).rejects.toThrow("limit");
+  });
+
+  test("rejects a limit that is not a safe integer", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      listTrackedPrs(30, sql, Number.MAX_SAFE_INTEGER),
+    ).rejects.toThrow("limit");
+  });
+});
+
+describe("isMissingPrClosedAtColumnError", () => {
+  test("recognizes the undefined_column code", () => {
+    expect(
+      isMissingPrClosedAtColumnError(
+        Object.assign(new Error("x"), { code: "42703" }),
+      ),
+    ).toBe(true);
+  });
+
+  test("recognizes the message in the body of an API error", () => {
+    expect(
+      isMissingPrClosedAtColumnError(
+        Object.assign(new Error("Bad Request"), {
+          body: 'column "pr_closed_at" of relation "work_items" does not exist',
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("does not match another failure", () => {
+    expect(isMissingPrClosedAtColumnError(new Error("db down"))).toBe(false);
+  });
+});
+
+describe("readDbNow", () => {
+  test("returns the time that the database reports", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ now: "2026-11-07T01:02:03.456Z" }],
+    ]);
+    expect(await readDbNow(sql)).toEqual(new Date("2026-11-07T01:02:03.456Z"));
+  });
+});
+
+describe("markWorkItemPrClosed", () => {
+  const READ_AT = new Date("2026-11-07T01:00:00.123Z");
+  const PR_URL = "https://github.com/octo-owner/atelier-works/pull/7";
+
+  function failingSql(error: Error): SqlClient {
+    return () => ({
+      fetch: () => Promise.reject(error),
+      execute: () => Promise.resolve(),
+    });
+  }
+
+  function recordingLog(): { log: Logger; warnings: string[] } {
+    const warnings: string[] = [];
+    return {
+      log: { info() {}, warn: (message) => warnings.push(message), error() {} },
+      warnings,
+    };
+  }
+
+  test("binds the id, the listed pull request url and the read time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await markWorkItemPrClosed(9, PR_URL, READ_AT, sql, SILENT_LOG);
+    expect(calls[0]?.values).toEqual(
+      expect.arrayContaining([9, PR_URL, READ_AT.toISOString()]),
+    );
+  });
+
+  test("returns true when the row was marked", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(
+      await markWorkItemPrClosed(9, PR_URL, READ_AT, sql, SILENT_LOG),
+    ).toBe(true);
+  });
+
+  test("returns false when no row matched because it had moved on", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await markWorkItemPrClosed(9, PR_URL, READ_AT, sql, SILENT_LOG),
+    ).toBe(false);
+  });
+
+  test("returns false without throwing when the column is missing", async () => {
+    const sql = failingSql(Object.assign(new Error("x"), { code: "42703" }));
+    expect(
+      await markWorkItemPrClosed(9, PR_URL, READ_AT, sql, SILENT_LOG),
+    ).toBe(false);
+  });
+
+  test("warns when the column is missing", async () => {
+    const sql = failingSql(Object.assign(new Error("x"), { code: "42703" }));
+    const { log, warnings } = recordingLog();
+    await markWorkItemPrClosed(9, PR_URL, READ_AT, sql, log);
+    expect(warnings).toHaveLength(1);
+  });
+
+  test("rethrows a failure other than a missing column", async () => {
+    const sql = failingSql(new Error("db down"));
+    await expect(
+      markWorkItemPrClosed(9, PR_URL, READ_AT, sql, SILENT_LOG),
+    ).rejects.toThrow("db down");
+  });
+});
+
+describe("markTrackedPrClosed", () => {
+  const READ_AT = new Date("2026-11-07T01:00:00.123Z");
+
+  function failingSql(error: Error): SqlClient {
+    return () => ({
+      fetch: () => Promise.reject(error),
+      execute: () => Promise.resolve(),
+    });
+  }
+
+  test("binds the pull request and the read time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await markTrackedPrClosed("acme", "widgets", 7, READ_AT, sql, SILENT_LOG);
+    expect(calls[0]?.values).toEqual(
+      expect.arrayContaining(["acme", "widgets", 7, READ_AT.toISOString()]),
+    );
+  });
+
+  test("returns true when a row was marked", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 3 }, { id: 4 }]]);
+    expect(
+      await markTrackedPrClosed("acme", "widgets", 7, READ_AT, sql, SILENT_LOG),
+    ).toBe(true);
+  });
+
+  test("returns false when no row matched", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await markTrackedPrClosed("acme", "widgets", 7, READ_AT, sql, SILENT_LOG),
+    ).toBe(false);
+  });
+
+  test("returns false without throwing when the column is missing", async () => {
+    const sql = failingSql(Object.assign(new Error("x"), { code: "42703" }));
+    expect(
+      await markTrackedPrClosed("acme", "widgets", 7, READ_AT, sql, SILENT_LOG),
+    ).toBe(false);
+  });
+
+  test("rethrows a failure other than a missing column", async () => {
+    const sql = failingSql(new Error("db down"));
+    await expect(
+      markTrackedPrClosed("acme", "widgets", 7, READ_AT, sql, SILENT_LOG),
+    ).rejects.toThrow("db down");
   });
 });
 

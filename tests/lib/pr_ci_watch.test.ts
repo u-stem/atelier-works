@@ -75,6 +75,7 @@ import {
   RUN_BUDGET_MS,
   runPrCiRecovery,
   runPrCiWatch,
+  TRACKED_PR_LIMIT,
   UNREADABLE_EXPIRES_AFTER_MS,
 } from "../../f/factory/lib/pr_ci_watch.ts";
 import { PrFixFlowJobIdRecordError } from "../../f/factory/lib/pr_fix_launch.ts";
@@ -243,6 +244,12 @@ type Setup = {
   budgetUsedAfterFirstPr?: boolean;
   /** 人のPRの発見。渡したときだけ`humanDiscovery`を組む。 */
   human?: HumanSetup;
+  /** 閉じた印を付ける更新が失敗する作業項目のID。 */
+  markClosedFailsFor?: number[];
+  /** 閉じた印を付けられなかった(行が動いていた)作業項目のID。 */
+  markClosedMissesFor?: number[];
+  /** DBの時刻を読めない。 */
+  dbNowFails?: boolean;
   /** 差し替える依存。 */
   override?: Partial<PrCiWatchDeps>;
 };
@@ -312,7 +319,12 @@ type Harness = {
   readonly lists: string[];
   /** 人のPRの表の読み取りの呼び出し。所有者は名前、リポジトリは`owner/repo`。 */
   readonly tableReads: string[];
+  /** 閉じた印を付ける更新の呼び出し。 */
+  readonly closedMarks: { id: number; prUrl: string; readAt: Date }[];
 };
+
+/** テストが返す、DBの現在時刻。 */
+const DB_NOW = new Date("2026-10-12T12:00:00.123Z");
 
 function asRuns(value: PrHeadWorkflowRuns | WorkflowRun[]): PrHeadWorkflowRuns {
   return Array.isArray(value)
@@ -339,6 +351,7 @@ function harness(setup: Setup = {}): Harness {
   const fixItemReads: number[] = [];
   const lists: string[] = [];
   const tableReads: string[] = [];
+  const closedMarks: Harness["closedMarks"] = [];
   const prCursor = new Map<string, number>();
   let elapsedMs = 0;
   const log: Logger = {
@@ -380,7 +393,18 @@ function harness(setup: Setup = {}): Harness {
     isRepoAllowed: (owner, repo) => setup.allowed?.(owner, repo) ?? true,
     isRepoConfigured: (owner, repo) =>
       setup.configured?.(owner, repo) ?? setup.allowed?.(owner, repo) ?? true,
+    readDbNow: async () => {
+      if (setup.dbNowFails === true) throw new Error("clock failed");
+      return DB_NOW;
+    },
     listTrackedItems: async () => setup.items ?? [],
+    markPrClosed: async (id, prUrl, readAt) => {
+      if (setup.markClosedFailsFor?.includes(id) === true) {
+        throw new Error("mark failed");
+      }
+      closedMarks.push({ id, prUrl, readAt });
+      return setup.markClosedMissesFor?.includes(id) !== true;
+    },
     getPr: readPrReply,
     listRuns: async (_owner, _repo, headSha, headRef, options) => {
       events.push("list_runs");
@@ -551,6 +575,7 @@ function harness(setup: Setup = {}): Harness {
     misfitSteps,
     lists,
     tableReads,
+    closedMarks,
   };
 }
 
@@ -988,6 +1013,201 @@ describe("closed pull requests", () => {
     });
     await runPrCiWatch(h.deps);
     expect(h.transitions).toHaveLength(2);
+  });
+});
+
+describe("marking a merged pull request as closed", () => {
+  const merged = pr({ state: "closed", merged: true });
+  const unmerged = pr({ state: "closed", merged: false });
+
+  test("marks the work item of a merged pull request with the clock read before the list", async () => {
+    const h = harness(trackedSetup({ prs: { [PR_KEY]: merged } }));
+    await runPrCiWatch(h.deps);
+    expect(h.closedMarks).toEqual([{ id: 33, prUrl: PR_PAGE, readAt: DB_NOW }]);
+  });
+
+  test("counts the marks", async () => {
+    const h = harness(trackedSetup({ prs: { [PR_KEY]: merged } }));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.closedMarked).toBe(1);
+  });
+
+  test("does not count a mark that did not apply because the row moved", async () => {
+    const h = harness(
+      trackedSetup({ prs: { [PR_KEY]: merged }, markClosedMissesFor: [33] }),
+    );
+    const result = await runPrCiWatch(h.deps);
+    expect(result.closedMarked).toBe(0);
+  });
+
+  test("does not mark a pull request that was closed without a merge", async () => {
+    const h = harness(trackedSetup({ prs: { [PR_KEY]: unmerged } }));
+    await runPrCiWatch(h.deps);
+    expect(h.closedMarks).toEqual([]);
+  });
+
+  test("does not mark an open pull request", async () => {
+    const h = harness(trackedSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.closedMarks).toEqual([]);
+  });
+
+  test("marks after it tidied the rows of the pull request", async () => {
+    const order: string[] = [];
+    const base = harness(
+      trackedSetup({
+        prs: { [PR_KEY]: merged },
+        rowsForPr: { 12: [row({ id: 1, state: "pending" })] },
+      }),
+    );
+    const h = {
+      ...base,
+      deps: {
+        ...base.deps,
+        transition: async (
+          ...args: Parameters<PrCiWatchDeps["transition"]>
+        ) => {
+          order.push("transition");
+          return base.deps.transition(...args);
+        },
+        markPrClosed: async (
+          ...args: Parameters<PrCiWatchDeps["markPrClosed"]>
+        ) => {
+          order.push("mark");
+          return base.deps.markPrClosed(...args);
+        },
+      },
+    };
+    await runPrCiWatch(h.deps);
+    expect(order).toEqual(["transition", "mark"]);
+  });
+
+  test("does not mark when tidying the rows failed, so the next run tidies again", async () => {
+    const h = harness(
+      trackedSetup({
+        prs: { [PR_KEY]: merged },
+        rowsForPr: { 12: [row({ id: 1, state: "pending" })] },
+        transitionFailsFor: [1],
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.closedMarks).toEqual([]);
+  });
+
+  test("records the step of a failed mark", async () => {
+    const h = harness(
+      trackedSetup({ prs: { [PR_KEY]: merged }, markClosedFailsFor: [33] }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual([`mark_pr_closed:${PR_KEY}`]);
+  });
+
+  test("counts a failed mark as an error", async () => {
+    const h = harness(
+      trackedSetup({ prs: { [PR_KEY]: merged }, markClosedFailsFor: [33] }),
+    );
+    const result = await runPrCiWatch(h.deps);
+    expect(result.errors).toBe(1);
+  });
+
+  test("reads the clock before it lists the work items", async () => {
+    const order: string[] = [];
+    const base = harness(trackedSetup({ prs: { [PR_KEY]: merged } }));
+    const deps: PrCiWatchDeps = {
+      ...base.deps,
+      readDbNow: async () => {
+        order.push("clock");
+        return DB_NOW;
+      },
+      listTrackedItems: async () => {
+        order.push("list");
+        return [item()];
+      },
+    };
+    await runPrCiWatch(deps);
+    expect(order).toEqual(["clock", "list"]);
+  });
+
+  test("records the step of a failed clock read", async () => {
+    const h = harness(
+      trackedSetup({ prs: { [PR_KEY]: merged }, dbNowFails: true }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["read_db_now"]);
+  });
+
+  test("does not mark when the clock could not be read", async () => {
+    const h = harness(
+      trackedSetup({ prs: { [PR_KEY]: merged }, dbNowFails: true }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.closedMarks).toEqual([]);
+  });
+
+  test("still records the head of an open pull request when the clock could not be read", async () => {
+    const h = harness(trackedSetup({ dbNowFails: true }));
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toHaveLength(1);
+  });
+});
+
+describe("the limit of the tracked work items", () => {
+  function itemsUpTo(count: number): FactoryWorkItemRef[] {
+    return Array.from({ length: count }, (_, index) =>
+      item({
+        id: index + 1,
+        prUrl: `https://github.com/acme/widgets/pull/${String(index + 1)}`,
+      }),
+    );
+  }
+
+  function openPrs(count: number): Record<string, PullRequest> {
+    return Object.fromEntries(
+      Array.from({ length: count }, (_, index) => [
+        `acme/widgets#${String(index + 1)}`,
+        pr({ number: index + 1, draft: true }),
+      ]),
+    );
+  }
+
+  test("reads only the limit when the list has one more", async () => {
+    const h = harness({
+      items: itemsUpTo(TRACKED_PR_LIMIT + 1),
+      prs: openPrs(TRACKED_PR_LIMIT + 1),
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toHaveLength(TRACKED_PR_LIMIT);
+  });
+
+  test("warns when the list has one more than the limit", async () => {
+    const h = harness({
+      items: itemsUpTo(TRACKED_PR_LIMIT + 1),
+      prs: openPrs(TRACKED_PR_LIMIT + 1),
+    });
+    await runPrCiWatch(h.deps);
+    expect(
+      h.logs.filter(
+        (line) => line.level === "warn" && line.message.includes("limit"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("reports that the limit was exceeded", async () => {
+    const h = harness({
+      items: itemsUpTo(TRACKED_PR_LIMIT + 1),
+      prs: openPrs(TRACKED_PR_LIMIT + 1),
+    });
+    const result = await runPrCiWatch(h.deps);
+    expect(result.trackedOverLimit).toBe(true);
+  });
+
+  test("does not warn when the list has exactly the limit", async () => {
+    const h = harness({
+      items: itemsUpTo(TRACKED_PR_LIMIT),
+      prs: openPrs(TRACKED_PR_LIMIT),
+    });
+    const result = await runPrCiWatch(h.deps);
+    expect(result.trackedOverLimit).toBe(false);
   });
 });
 

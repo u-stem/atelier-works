@@ -663,6 +663,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/investigate_gate` | script | [LIB] 調査の入口を開ける門 |
 | `f/factory/lib/credential_expiry` | script | [LIB] 資格情報の期限の確認 |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
+| `f/factory/lib/tracked_pr_candidates` | script | [LIB] 追跡中のPRの候補の収集 |
 | `f/factory/lib/profile_upgrade` | script | [LIB] 進め方を通常に戻したことのIssueへのコメント |
 | `f/factory/lib/investigate_isolation_judge` | script | [LIB] 隔離の合否を決める判定 |
 | `f/factory/lib/isolation_proof` | script | [LIB] 隔離の合格の証拠の型 |

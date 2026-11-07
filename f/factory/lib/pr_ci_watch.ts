@@ -493,8 +493,26 @@ export type PrCiWatchDeps = {
    * `isRepoAllowed`が`false`でもこちらが`true`なら、照合が一時的に失敗しているだけかもしれない。
    */
   readonly isRepoConfigured: (owner: string, repo: string) => boolean;
-  /** PRを作ったまま`pr_open`の作業項目。新しい順に、最大`TRACKED_PR_LIMIT`件。 */
+  /**
+   * DBの現在時刻。閉じた印の時刻になるので、`listTrackedItems`の前に読む。
+   * 作業項目の`updated_at`と同じ時計で比べるため、アプリの時計ではなくDBから読む。
+   */
+  readonly readDbNow: () => Promise<Date>;
+  /**
+   * PRを作ったまま`pr_open`の作業項目。閉じた印が有効なものは含まない。
+   * 新しい順に、最大`TRACKED_PR_LIMIT + 1`件。上限を超えたかを、1件多く取って見分ける。
+   */
   readonly listTrackedItems: () => Promise<FactoryWorkItemRef[]>;
+  /**
+   * 作業項目に、PRがマージ済みの印を付ける。付けたら`true`を返す。
+   * `prUrl`は一覧で読んだ値で、`readAt`は一覧を読む前の`readDbNow`の値である。
+   * 一覧を読んでから行が動いていたときは、付けずに`false`を返す。
+   */
+  readonly markPrClosed: (
+    id: number,
+    prUrl: string,
+    readAt: Date,
+  ) => Promise<boolean>;
   readonly getPr: (
     owner: string,
     repo: string,
@@ -571,6 +589,10 @@ export type PrCiWatchDeps = {
 export type PrCiWatchResult = {
   /** 巡回したFactoryのPRの数。 */
   readonly tracked: number;
+  /** 巡回する作業項目が上限(`TRACKED_PR_LIMIT`)を超え、古い側を読まなかったか。 */
+  readonly trackedOverLimit: boolean;
+  /** マージ済みと確かめて、作業項目に閉じた印を付けた数。印が有効な間は、そのPRを読まない。 */
+  readonly closedMarked: number;
   readonly recorded: number;
   readonly passed: number;
   readonly failed: number;
@@ -611,6 +633,8 @@ export type PrCiWatchResult = {
  */
 export const PR_CI_WATCH_IDLE_RESULT: PrCiWatchResult = {
   tracked: 0,
+  trackedOverLimit: false,
+  closedMarked: 0,
   recorded: 0,
   passed: 0,
   failed: 0,
@@ -980,30 +1004,51 @@ async function snapshotOf(
  */
 async function discover(context: Context): Promise<void> {
   const { deps, state, counters } = context;
-  let items: FactoryWorkItemRef[];
+  // 閉じた印の時刻は、一覧を読む前に取る。読んでから動いた行に、有効な印を付けないためである。
+  // 取れなかった回は印を付けず、巡回は続ける。
+  let readAt: Date | null = null;
   try {
-    items = await deps.listTrackedItems();
+    readAt = await deps.readDbNow();
+  } catch (err) {
+    await recordFailureOf(context, "read_db_now", err);
+  }
+  let listed: FactoryWorkItemRef[];
+  try {
+    listed = await deps.listTrackedItems();
   } catch (err) {
     await recordFailureOf(context, "list_tracked", err);
     return;
   }
+  const items = listed.slice(0, TRACKED_PR_LIMIT);
+  const overLimit = listed.length > TRACKED_PR_LIMIT;
+  counters.trackedOverLimit = overLimit;
   const trackedPrKeys = new Set<string>();
   for (const item of items) {
     const ref = item.prUrl === null ? null : parsePullRequestUrl(item.prUrl);
     if (ref !== null) trackedPrKeys.add(prKey(ref));
   }
+  let skippedNotAllowed = 0;
   for (const item of items) {
     if (readingStopped(state) || overBudget(context)) break;
     const ref = item.prUrl === null ? null : parsePullRequestUrl(item.prUrl);
-    if (ref === null || !deps.isRepoAllowed(ref.owner, ref.repo)) continue;
+    if (ref === null || !deps.isRepoAllowed(ref.owner, ref.repo)) {
+      skippedNotAllowed += 1;
+      continue;
+    }
     counters.tracked += 1;
     try {
-      await discoverPr(context, item, ref);
+      await discoverPr(context, item, ref, readAt);
     } catch (err) {
       if ((await absorbReadError(context, ref, err)) === null) {
         await recordFailureOf(context, `discover_pr:${prKey(ref)}`, err);
       }
     }
+  }
+  if (overLimit) {
+    deps.log.warn(
+      "tracked work items exceed the limit, so the oldest ones are not read",
+      { limit: TRACKED_PR_LIMIT, skipped_not_allowed: skippedNotAllowed },
+    );
   }
   state.trackedPrKeys = trackedPrKeys;
 }
@@ -1012,6 +1057,7 @@ async function discoverPr(
   context: Context,
   item: FactoryWorkItemRef,
   ref: PullRequestRef,
+  readAt: Date | null,
 ): Promise<void> {
   const { deps } = context;
   // `parsePullRequestUrl`は先頭が`.`のリポジトリ名も通すが、DBへの記録は通さない。
@@ -1029,6 +1075,11 @@ async function discoverPr(
   const pr = await readPr(context, ref);
   if (pr.state === "closed") {
     await closePr(context, ref);
+    // 印を付けるのはマージ済みのPRだけである。マージせずに閉じたPRは、開き直されうるので毎回読む。
+    // 整理が済んだ後に付けるので、整理に失敗した回は印が付かず、次の回に整理し直せる。
+    if (pr.merged && readAt !== null && item.prUrl !== null) {
+      await markClosed(context, item.id, item.prUrl, readAt, ref);
+    }
     return;
   }
   // 下書きと、forkのPRと、Factoryのものでないブランチには、行を作らない。
@@ -1037,6 +1088,25 @@ async function discoverPr(
   context.state.discoveredPrs.add(prKey(ref));
   if (pr.draft) return;
   await recordPrHead(context, ref, pr, item.id);
+}
+
+/**
+ * 作業項目に閉じた印を付ける。失敗は記録して続ける。印は冪等で、次の回に付け直せる。
+ */
+async function markClosed(
+  context: Context,
+  id: number,
+  prUrl: string,
+  readAt: Date,
+  ref: PullRequestRef,
+): Promise<void> {
+  try {
+    if (await context.deps.markPrClosed(id, prUrl, readAt)) {
+      context.counters.closedMarked += 1;
+    }
+  } catch (err) {
+    await recordFailureOf(context, `mark_pr_closed:${prKey(ref)}`, err);
+  }
 }
 
 /**
