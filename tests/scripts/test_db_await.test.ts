@@ -10,7 +10,7 @@ const SOURCE_PATH = join(
   "test-db-queries.ts",
 );
 const source = readFileSync(SOURCE_PATH, "utf8");
-const lines = source.split("\n");
+const sourceLines = source.split("\n");
 
 type Declaration = { readonly name: string; readonly body: string };
 
@@ -18,7 +18,7 @@ type Declaration = { readonly name: string; readonly body: string };
  * 先頭の桁から始まる`async function`と`const <名前> = async`を、本体の範囲つきで集める。
  * 本体は、宣言の行から、字下げされた行と閉じ括弧で始まる行を読み、閉じ括弧だけの行で終わる。
  */
-function asyncDeclarations(): Declaration[] {
+function asyncDeclarations(lines: readonly string[]): Declaration[] {
   const declarations: Declaration[] = [];
   lines.forEach((line, index) => {
     const found =
@@ -37,8 +37,8 @@ function asyncDeclarations(): Declaration[] {
 }
 
 /** `execPsqlAsync`を直接か間接に呼ぶ補助関数の名前。 */
-function helperNames(): Set<string> {
-  const declarations = asyncDeclarations();
+function helperNames(lines: readonly string[]): Set<string> {
+  const declarations = asyncDeclarations(lines);
   const names = new Set<string>(["execPsqlAsync"]);
   let grew = true;
   while (grew) {
@@ -58,7 +58,10 @@ function helperNames(): Set<string> {
 }
 
 /** 呼び出しの前に`await`か`return`が無い行を、`行番号: 行の内容`で返す。 */
-function callsWithoutAwait(names: Set<string>): string[] {
+function callsWithoutAwait(
+  lines: readonly string[],
+  names: Set<string>,
+): string[] {
   const violations: string[] = [];
   lines.forEach((line, index) => {
     for (const name of names) {
@@ -73,9 +76,22 @@ function callsWithoutAwait(names: Set<string>): string[] {
   return violations;
 }
 
+/** 状態を変える文の形。`text`に当たったものを返す。 */
+function statefulPatternsIn(text: string): RegExp[] {
+  const stateful = [
+    /pg_advisory_\w+/i,
+    /\bCREATE\s+(?:TEMP|TEMPORARY)\b/,
+    /\bPREPARE\s+\w+/,
+    /\b(?:RESET|DISCARD|LISTEN)\s+\w+/,
+    /["'`;]\s*SET\s+(?!LOCAL\b)/,
+    /set_config\([^)]*,\s*false\s*\)/i,
+  ];
+  return stateful.filter((pattern) => pattern.test(text));
+}
+
 describe("test-db-queries.ts", () => {
   test("finds the helpers that call execPsqlAsync", () => {
-    const names = helperNames();
+    const names = helperNames(sourceLines);
 
     expect(names).toContain("event");
     expect(names).toContain("auditReport");
@@ -84,7 +100,7 @@ describe("test-db-queries.ts", () => {
   });
 
   test("awaits every call of execPsqlAsync and its helpers", () => {
-    const violations = callsWithoutAwait(helperNames());
+    const violations = callsWithoutAwait(sourceLines, helperNames(sourceLines));
 
     expect(violations).toEqual([]);
   });
@@ -101,17 +117,57 @@ describe("test-db-queries.ts", () => {
   });
 
   test("sends no statement that changes the state of the session", () => {
-    const stateful = [
-      /pg_advisory_\w+/i,
-      /\bCREATE\s+(?:TEMP|TEMPORARY)\b/,
-      /\bPREPARE\s+\w+/,
-      /\b(?:RESET|DISCARD|LISTEN)\s+\w+/,
-      /["'`;]\s*SET\s+(?!LOCAL\b)/,
-      /set_config\([^)]*,\s*false\s*\)/i,
-    ];
+    expect(statefulPatternsIn(source)).toEqual([]);
+  });
+});
 
-    const found = stateful.filter((pattern) => pattern.test(source));
+describe("the detector of a missing await", () => {
+  const withPlainHelper = [
+    "function plainHelper() {",
+    "  return execPsqlAsync(target, 'SELECT 1');",
+    "}",
+    "plainHelper();",
+  ];
 
-    expect(found).toEqual([]);
+  test("finds a helper that is not async and returns execPsqlAsync", () => {
+    const names = helperNames(withPlainHelper);
+
+    expect(names).toContain("plainHelper");
+  });
+
+  test("reports a call of such a helper without await", () => {
+    const violations = callsWithoutAwait(
+      withPlainHelper,
+      helperNames(withPlainHelper),
+    );
+
+    expect(violations).toEqual(["4: plainHelper();"]);
+  });
+
+  test("accepts a call of such a helper with await", () => {
+    const awaited = [...withPlainHelper.slice(0, 3), "await plainHelper();"];
+
+    const violations = callsWithoutAwait(awaited, helperNames(awaited));
+
+    expect(violations).toEqual([]);
+  });
+});
+
+describe("the detector of a statement that changes the session state", () => {
+  test.each([
+    ["create temp table x (a int)"],
+    ["prepare stmt as select 1"],
+    ["discard all"],
+  ])("detects the lowercase statement %p", (statement) => {
+    const found = statefulPatternsIn(`execPsqlAsync(target, "${statement}")`);
+
+    expect(found).toHaveLength(1);
+  });
+
+  test("does not mistake a check name that contains reset for a statement", () => {
+    const name =
+      '"sums the OOM increases across a reset and a NULL row", ok(true)';
+
+    expect(statefulPatternsIn(name)).toEqual([]);
   });
 });
