@@ -3,6 +3,7 @@ import type { ConfigItemView } from "../api/jobsQueries.ts";
 import {
   type ChangeOffer,
   type CheckCommands,
+  type CommandCount,
   changeDialogLines,
   changeOfferOf,
   changeOffersOf,
@@ -605,7 +606,7 @@ describe("changeDialogLines for a list", () => {
 });
 
 describe("checkCommandsOf", () => {
-  const COUNT = (count: number) => ({ kind: "count", count });
+  const COUNT = (count: number): CommandCount => ({ kind: "count", count });
 
   test("counts the commands that are listed", () => {
     expect(
