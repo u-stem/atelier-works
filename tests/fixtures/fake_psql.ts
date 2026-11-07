@@ -35,6 +35,7 @@ type Directive = {
   readonly exitCode?: number | undefined;
   readonly reportPending?: boolean | undefined;
   readonly topLevelOnly?: boolean | undefined;
+  readonly orphanPipes?: boolean | undefined;
   readonly tag?: string | undefined;
 };
 
@@ -66,6 +67,7 @@ function parseDirective(statement: string): Directive {
     exitCode: num("exitCode"),
     reportPending: flag("reportPending"),
     topLevelOnly: flag("topLevelOnly"),
+    orphanPipes: flag("orphanPipes"),
     tag: text("tag"),
   };
 }
@@ -95,6 +97,17 @@ async function handle(call: Call): Promise<void> {
   }
   if (directive.sleepMs !== undefined) await Bun.sleep(directive.sleepMs);
   if (directive.hang === true) await new Promise<void>(() => {});
+  if (directive.orphanPipes === true) {
+    // 終了しても、子プロセスがstdoutとstderrを握り続けるので、EOFが来ない。
+    Bun.spawn({
+      cmd: [process.execPath, "-e", "await Bun.sleep(3000)"],
+      stdin: "ignore",
+      stdout: "inherit",
+      stderr: "inherit",
+    }).unref();
+    log("exit 0");
+    process.exit(0);
+  }
   if (directive.exitCode !== undefined) {
     log(`exit ${String(directive.exitCode)}`);
     process.exit(directive.exitCode);

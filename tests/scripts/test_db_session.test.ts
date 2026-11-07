@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -93,6 +93,16 @@ function logKinds(logPath: string): string[] {
     .split("\n")
     .filter((line) => line !== "")
     .map((line) => line.split(" ")[0] ?? "");
+}
+
+/** 偽のpsqlが、種類`kind`の行をログに書くまで待つ。 */
+async function waitForLog(logPath: string, kind: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (existsSync(logPath) && logKinds(logPath).includes(kind)) return;
+    await Bun.sleep(5);
+  }
+  throw new Error(`the fake psql did not log ${kind}`);
 }
 
 describe("createPsqlSessions result", () => {
@@ -196,20 +206,24 @@ describe("createPsqlSessions ordering", () => {
     ]);
   });
 
-  test("waits at least 2 ms between two statements on one session", async () => {
+  test("waits at least 2 ms after the previous statement completes", async () => {
     let clock = 1_000;
-    const { sessions } = harness({
+    const { sessions, logPath } = harness({
       now: () => clock,
       sleep: async (ms) => {
         clock += ms;
       },
     });
-    await sessions.exec(TARGET, directive({ out: "first" }));
-    const afterFirst = clock;
+    // 1つ目の文を流している間に時計を進め、完了の時刻が文を書いた時刻と別になるようにする。
+    const first = sessions.exec(TARGET, directive({ sleepMs: 300 }));
+    await waitForLog(logPath, "start");
+    clock += 10;
+    await first;
+    const completedAt = clock;
 
     await sessions.exec(TARGET, directive({ out: "second" }));
 
-    expect(clock - afterFirst).toBeGreaterThanOrEqual(2);
+    expect(clock - completedAt).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -291,6 +305,34 @@ describe("createPsqlSessions protocol failures", () => {
 
     await expect(call).rejects.toThrow(new ExitSignal(1));
   });
+
+  test("exits when the psql process cannot be started", async () => {
+    const { sessions } = harness({
+      argv: () => {
+        throw new Error("spawn failed: EMFILE");
+      },
+    });
+
+    const call = sessions.exec(TARGET, directive({ out: "x" }));
+
+    await expect(call).rejects.toThrow(new ExitSignal(1));
+  });
+
+  test("starts a new session after the process failed to start", async () => {
+    let attempts = 0;
+    const { sessions } = harness({
+      argv: () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("spawn failed: EMFILE");
+        return [process.execPath, FAKE_PSQL];
+      },
+    });
+    await sessions.exec(TARGET, directive({ out: "x" })).catch(() => undefined);
+
+    const output = await sessions.exec(TARGET, directive({ out: "again" }));
+
+    expect(output).toBe("again");
+  });
 });
 
 describe("createPsqlSessions termination", () => {
@@ -325,14 +367,42 @@ describe("createPsqlSessions termination", () => {
     expect(terminated).toEqual([]);
   });
 
-  test("does not terminate after psql has exited", async () => {
-    const { sessions, terminated } = harness();
+  test("does not terminate when psql has exited but its pipes stay open", async () => {
+    const { sessions, terminated } = harness({ timeoutMs: 300 });
 
     await sessions
-      .exec(TARGET, directive({ exitCode: 0 }))
+      .exec(TARGET, directive({ orphanPipes: true }))
       .catch(() => undefined);
 
     expect(terminated).toEqual([]);
+  });
+
+  test("exits even when terminating the backend throws", async () => {
+    const { sessions } = harness({
+      timeoutMs: 300,
+      terminate: () => {
+        throw new Error("terminate failed");
+      },
+    });
+
+    const call = sessions.exec(TARGET, directive({ hang: true }));
+
+    await expect(call).rejects.toThrow(new ExitSignal(1));
+  });
+
+  test.each([[0], [-1], [1.5], [Number.NaN], [12_345_678_901]])(
+    "refuses to build a terminate statement for the pid %p",
+    (pid) => {
+      expect(() => terminateStatement(pid, STARTED_AT)).toThrow(
+        "invalid backend identity",
+      );
+    },
+  );
+
+  test("refuses to build a terminate statement for a start time with SQL", () => {
+    expect(() => terminateStatement(4242, "x'; DROP TABLE t; --")).toThrow(
+      "invalid backend identity",
+    );
   });
 });
 
