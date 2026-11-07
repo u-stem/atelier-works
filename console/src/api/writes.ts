@@ -287,15 +287,26 @@ export function rerunJob(
   );
 }
 
-export type ConfigUpdateInput = {
-  readonly item: string;
-  /** 画面が読んだときの値。書く直前の値と違えば、scriptは変更しない。 */
-  readonly expected: number | boolean;
-  readonly next: number | boolean;
-};
+/**
+ * 設定の変更の入力。`expected`は画面が読んだときの値で、書く直前の値と違えば、scriptは変更しない。
+ * 真偽と数値の項目は値、一覧の項目は文字列の配列を渡す。
+ * 一覧の`next`は、`expected`の末尾に1要素を足した配列か、ちょうど1要素を除いた配列である。
+ */
+export type ConfigUpdateInput =
+  | {
+      readonly item: string;
+      readonly expected: number | boolean;
+      readonly next: number | boolean;
+    }
+  | {
+      readonly item: string;
+      readonly expected: readonly string[];
+      readonly next: readonly string[];
+    };
 
 /**
  * factory_configの項目を1つ、止める向き(真偽はtrueからfalse)か下げる向き(数値は小さい値)に変更する。
+ * 一覧の3項目は、1要素の追加か削除をする。
  * 許可表の外の項目、向きの違う変更、読んだ時の値と違うときなどは、変更せずに理由つきの断りで返る。断りは失敗ではなく結果である。
  * 操作者は引数に取らない。scriptがジョブの実行文脈から導く。
  */

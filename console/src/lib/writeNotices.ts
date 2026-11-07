@@ -401,11 +401,19 @@ const CONFIG_UPDATE_REFUSALS: Readonly<
     "画面を開いた後に、設定の値が変わっていました。更新して、もう一度確かめてください。",
   actor_unknown: "操作者を確認できないため、変更しませんでした。",
   audit_unavailable: "操作の記録を残せないため、変更しませんでした。",
+  already_present: "その要素はすでにあります。変更しませんでした。",
+  invalid_element:
+    "要素の形式が正しくないため、変更しませんでした。repo_allowlist は https://github.com/owner/repo、dependabot_other_repos は owner/repo、default_reviewers は GitHub のログイン名で、どれも100字までです。",
+  would_empty:
+    "最後の1件は削除できません。空だと owners 配下の全リポジトリが対象になります。",
+  owner_not_listed:
+    "owners に無いアカウントのリポジトリは追加できません。変更しませんでした。",
 };
 
 /**
  * 設定の変更の結果。断りは失敗ではなく、何も変えなかった結果として伝える。
  * 書いた後に読み直した値が期待と違うときは、変えたと言い切らず、Windmillで確かめるよう伝える。
+ * 一覧の項目は、追加か削除かと、前後の件数を伝える。
  */
 export function describeConfigUpdateResult(
   result: ConfigUpdateResult,
@@ -423,11 +431,26 @@ export function describeConfigUpdateResult(
       result.action_audit,
     );
   }
-  const message =
-    typeof result.before === "boolean"
-      ? `${item}を止めました。`
-      : `${item}を${String(result.before)}から${String(result.after)}に下げました。`;
-  return noteActionAudit({ tone: "success", message }, result.action_audit);
+  return noteActionAudit(
+    { tone: "success", message: configChangedMessage(item, result) },
+    result.action_audit,
+  );
+}
+
+/** 変更が済んだ項目の文。`item`は`safeText`を通した文字列である。 */
+function configChangedMessage(
+  item: string,
+  result: Extract<ConfigUpdateResult, { refused: false }>,
+): string {
+  if ("op" in result) {
+    const counts = `(${String(result.before_count)}件→${String(result.after_count)}件)`;
+    return result.op === "add"
+      ? `${item}に追加しました${counts}。`
+      : `${item}から削除しました${counts}。`;
+  }
+  return typeof result.before === "boolean"
+    ? `${item}を止めました。`
+    : `${item}を${String(result.before)}から${String(result.after)}に下げました。`;
 }
 
 const HOLD_PLACE_REFUSALS: Readonly<Record<HoldPlaceRefusalReason, string>> = {
