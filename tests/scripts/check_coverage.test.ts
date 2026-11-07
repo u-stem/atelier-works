@@ -764,6 +764,43 @@ describe("judgeCoverage with unloaded targets", () => {
   });
 });
 
+describe("judgeCoverage when lcov has no target", () => {
+  const empty = summarizeLcov(record("tests/fixtures/c.ts", hitsOf(10, 10)));
+  const unloaded = (count: number): string[] =>
+    Array.from(
+      { length: count },
+      (_, index) => `scripts/unloaded_module_with_a_long_name_${index}.ts`,
+    );
+
+  test("names an unloaded path", () => {
+    const verdict = judgeCoverage(empty, 0, { unloaded: unloaded(2) });
+
+    expect(verdict.message).toContain(
+      "scripts/unloaded_module_with_a_long_name_0.ts",
+    );
+  });
+
+  test("states the unloaded total", () => {
+    const verdict = judgeCoverage(empty, 0, { unloaded: unloaded(60) });
+
+    expect(verdict.message).toContain("60 target files were not loaded");
+  });
+
+  test("fits in the tail the repair prompt keeps", () => {
+    const verdict = judgeCoverage(empty, 0, { unloaded: unloaded(60) });
+
+    expect(verdict.message.length).toBeLessThanOrEqual(OUTPUT_TAIL_CHARS);
+  });
+
+  test("keeps the message when nothing is unloaded", () => {
+    const verdict = judgeCoverage(empty, 0, { unloaded: [] });
+
+    expect(verdict.message).toBe(
+      "coverage check failed: no target file found in coverage/lcov.info",
+    );
+  });
+});
+
 describe("judgeCoverage output size", () => {
   const manyPoorFiles = (prefix: string): string[] =>
     Array.from({ length: 12 }, (_, index) =>
