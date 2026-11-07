@@ -10,7 +10,7 @@ infra/secrets.env
 *.pem
 *.key
 .claude/*.jsonl
-# 失敗ログのアーカイブ(`archive-failure-log.sh`が作る)。ログと同じく、コミットしない
+# 失敗ログを月ごとに移したアーカイブ。ログと同じく、コミットしない
 .claude/failure-log.archive/
 .claude/settings.local.json
 *.local.*
