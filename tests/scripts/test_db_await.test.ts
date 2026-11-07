@@ -161,10 +161,21 @@ describe("the detector of a statement that changes the session state", () => {
     ["create temp table x (a int)"],
     ["prepare stmt as select 1"],
     ["discard all"],
-  ])("detects the lowercase statement %p", (statement) => {
+    ["set search_path to x"],
+    ["SET search_path TO x"],
+  ])("detects the statement %p", (statement) => {
     const found = statefulPatternsIn(`execPsqlAsync(target, "${statement}")`);
 
     expect(found).toHaveLength(1);
+  });
+
+  test.each([
+    ["SET LOCAL statement_timeout = 1"],
+    ["set local statement_timeout = 1"],
+  ])("allows the transaction-scoped statement %p", (statement) => {
+    const found = statefulPatternsIn(`execPsqlAsync(target, "${statement}")`);
+
+    expect(found).toEqual([]);
   });
 
   test("does not mistake a check name that contains reset for a statement", () => {
