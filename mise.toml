@@ -218,7 +218,7 @@ description = "Run the full test suite without coverage (for local checks; check
 run = "bun test --parallel --timeout 30000 --path-ignore-patterns 'console/**'"
 
 [tasks."test:changed"]
-description = "Run the tests the diff against origin/main needs: all of them for .sh, .yaml, and config changes, otherwise the changed ones and the tests that name a changed Markdown file (CI still runs the full suite)"
+description = "Run the tests the diff against origin/main needs: all of them for .sh, .yaml, and config changes (except generated metadata that comes with its code), otherwise the changed ones and the tests that name a changed Markdown file (CI still runs the full suite)"
 run = "bun run scripts/check-changed.ts --test-only"
 
 [tasks."lint:docs"]

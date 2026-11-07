@@ -203,6 +203,7 @@ gitのpre-pushは全体の`check`を実行しない。理由は[セットアッ�
   メタデータのフックが作るファイルは、対応するコードが同じ差分にあるときだけ、全件の判定から外す。
   `<名前>.script.yaml`と`<名前>.script.lock`は`<名前>.ts`があるとき、`wmill-lock.yaml`は`f/`の下の`.ts`があるときである。コードを変えるたびに作り直され、全件が常態になるためである。
   `.script.yaml`は`tag`や`timeout`を人が手で直し、テストがパスで読む。コードの無い単独の変更は全件にするが、コードと一緒に手で直した変更は拾えない。
+  コードと一緒の差分では、新しいスクリプトの追加や名前の変更で、全`.script.yaml`の`tag`を読む`console_script_tags.test.ts`が選ばれない。生成物の形を検査する`script_yaml_lock_contract.test.ts`も走らない。どちらもCIの全件が拾う。
   `bun test --changed`の基点は、差分を数えるマージ基点のコミットにそろえる。
   `console/`の下は`console:check`が担うので、全件にしない。
 - `test:all`は、カバレッジを測らずに全件を実行する。`test:changed`が、全件を要する差分で呼ぶ。
