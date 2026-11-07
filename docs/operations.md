@@ -1498,6 +1498,8 @@ subagentと背景のセッションは書かない。
 有効にする操作が、人の判断を経るようにするためである。
 `console_config_update`の許可表に`design_enabled`と`design_enabled_since`は入れないので、Consoleからは書けない。
 Windmillの画面か、`wmill resource push`で書く。
+全停止が止めた`design_enabled`は、運用者が端末で実行する`mise run stop:restore`も戻し、そのとき`design_enabled_since`を実行時刻に書き直す。
+手順は[記録した設定を戻す](#記録した設定を戻す)にある。
 
 設定タブは、一覧の値を書かれたまま出す。
 一覧の上の**設計工程**の行が、実際に効いている値(有効、無効のどちらか)を出す。
