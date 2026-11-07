@@ -16,7 +16,7 @@ type Declaration = { readonly name: string; readonly body: string };
 
 /**
  * 先頭の桁から始まる`async function`と`const <名前> = async`を、本体の範囲つきで集める。
- * 本体は、宣言の行と、その後の字下げされた行と、閉じ括弧だけの行までである。
+ * 本体は、宣言の行から、字下げされた行と閉じ括弧で始まる行を読み、閉じ括弧だけの行で終わる。
  */
 function asyncDeclarations(): Declaration[] {
   const declarations: Declaration[] = [];
@@ -27,8 +27,9 @@ function asyncDeclarations(): Declaration[] {
     const body = [line];
     for (let next = index + 1; next < lines.length; next += 1) {
       const nextLine = lines[next] ?? "";
-      if (!/^(?:\s|[}\])]+;?$)/.test(nextLine)) break;
+      if (!/^[\s}\])]/.test(nextLine)) break;
       body.push(nextLine);
+      if (/^[}\])]+;?$/.test(nextLine)) break;
     }
     declarations.push({ name: found[1], body: body.join("\n") });
   });
@@ -89,10 +90,11 @@ describe("test-db-queries.ts", () => {
   });
 
   test("does not import the synchronous psql helpers", () => {
-    const imported = /import\s*\{([^}]*)\}\s*from\s*"\.\/test-db-sql\.ts"/s
-      .exec(source)?.[1]
-      ?.split(",")
-      .map((name) => name.replace(/^\s*type\s+/, "").trim());
+    const imported = (
+      /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*"\.\/test-db-sql\.ts"/s
+        .exec(source)?.[1]
+        ?.split(",") ?? []
+    ).map((name) => name.replace(/^\s*type\s+/, "").trim());
 
     expect(imported).not.toContain("execPsql");
     expect(imported).not.toContain("createPsqlClient");
