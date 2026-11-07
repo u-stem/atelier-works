@@ -748,8 +748,6 @@ describe("describeConfigValue", () => {
 
   test.each([
     ["abc", "abc"],
-    [3, "3"],
-    [false, "false"],
     [null, "null"],
   ])("writes the scalar %p as text", (value, text) => {
     expect(
@@ -759,6 +757,60 @@ describe("describeConfigValue", () => {
 
   const describeValue = (key: string, value: unknown) =>
     describeConfigValue({ key, kind: "value", value, masked: false });
+
+  test("tells a true switch from a string", () => {
+    expect(describeValue("k", true)).toEqual({
+      kind: "boolean",
+      enabled: true,
+      text: "true",
+    });
+  });
+
+  test("tells a false switch from a string", () => {
+    expect(describeValue("k", false)).toEqual({
+      kind: "boolean",
+      enabled: false,
+      text: "false",
+    });
+  });
+
+  test("keeps the string true as text", () => {
+    expect(describeValue("k", "true")).toEqual({
+      kind: "scalar",
+      text: "true",
+    });
+  });
+
+  test("gives a number the unit of its key", () => {
+    expect(describeValue("daily_budget_usd", 5)).toEqual({
+      kind: "number",
+      text: "5",
+      unit: "USD",
+    });
+  });
+
+  test("gives a number of a key without a rule no unit", () => {
+    expect(describeValue("max_attempts", 3)).toEqual({
+      kind: "number",
+      text: "3",
+      unit: null,
+    });
+  });
+
+  test("keeps the digits of a decimal number as they are", () => {
+    expect(describeValue("worker_alert_memory_ratio", 0.85)).toEqual({
+      kind: "number",
+      text: "0.85",
+      unit: null,
+    });
+  });
+
+  test("gives a string under a key with a unit rule no unit", () => {
+    expect(describeValue("daily_budget_usd", "5")).toEqual({
+      kind: "scalar",
+      text: "5",
+    });
+  });
 
   test("writes an array of strings as one row per element", () => {
     expect(describeValue("allowed_check_commands", ["a", "b"])).toEqual({

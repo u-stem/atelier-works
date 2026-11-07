@@ -52,6 +52,7 @@ const SCREEN_PATHS: readonly string[] = [
   "items/7/design",
   "items/7/requirements",
   "system",
+  "system?tab=config",
   "jobs",
   "jobs?tab=history",
   "jobs?tab=schedules",
@@ -92,6 +93,12 @@ const ORIGIN_PATHS: readonly string[] = [
 
 /** 起動の図が、図でなく一覧で出る幅(px)。 */
 const LIST_WIDTH = 500;
+
+/**
+ * 設定タブの表の意味を確かめる幅(px)。
+ * 広い幅は表のまま、狭い幅は項目ごとに縦に積む。縦に積む幅でも、表の意味(役割)が残ることを確かめる。
+ */
+const CONFIG_STRUCTURE_WIDTHS: readonly number[] = [1280, 320];
 
 type Audit = {
   /** 違反を、規則、影響、要素の数と最初の要素で1行にしたもの。差分で原因を辿れるようにする。 */
@@ -230,6 +237,43 @@ async function textColor(page: Page, selector: string): Promise<number[]> {
       context.fillRect(0, 0, 1, 1);
       return Array.from(context.getImageData(0, 0, 1, 1).data);
     });
+}
+
+type TableSummary = {
+  readonly name: string;
+  readonly columnheaders: number;
+  readonly rowheaders: number;
+};
+
+/**
+ * ブラウザが算出した表の意味(アクセシビリティツリー)から、名前のある表を取り出し、
+ * 表ごとに、列見出しと行見出しの数を数える。表の中の表の下は数えない。
+ * DOMの属性でなく算出された役割を読むのは、`display`の変更で表の意味が落ちるのを捕まえるためである。
+ */
+async function namedTables(page: Page): Promise<TableSummary[]> {
+  const session = await page.context().newCDPSession(page);
+  const { nodes } = await session.send("Accessibility.getFullAXTree");
+  type AxNode = (typeof nodes)[number];
+  const byId = new Map(nodes.map((node) => [node.nodeId, node]));
+  const roleOf = (node: AxNode): string =>
+    typeof node.role?.value === "string" ? node.role.value : "";
+  const nameOf = (node: AxNode): string =>
+    typeof node.name?.value === "string" ? node.name.value : "";
+  const count = (node: AxNode, role: string): number =>
+    (node.childIds ?? []).reduce((sum, id) => {
+      const child = byId.get(id);
+      if (child === undefined || roleOf(child) === "table") {
+        return sum;
+      }
+      return sum + (roleOf(child) === role ? 1 : 0) + count(child, role);
+    }, 0);
+  return nodes
+    .filter((node) => roleOf(node) === "table" && /\S/.test(nameOf(node)))
+    .map((node) => ({
+      name: nameOf(node),
+      columnheaders: count(node, "columnheader"),
+      rowheaders: count(node, "rowheader"),
+    }));
 }
 
 for (const theme of THEMES) {
@@ -442,6 +486,41 @@ for (const theme of THEMES) {
       });
     }
   });
+
+  // 設定タブの表は、見出しで名付けられ、列見出しと行見出しを持つ。axeの規則では、この構造の崩れを捕まえられない。
+  // 表の中の表(オブジェクトの配列の値)は名前を持たないので、名前のある表だけを数える。
+  // 見た目だけを変える変更が表の役割を落とすことがあるので、広い幅と狭い幅の両方で確かめる。
+  for (const width of CONFIG_STRUCTURE_WIDTHS) {
+    test.describe(`config tab structure (${theme}, ${width}px)`, () => {
+      test.use({
+        theme,
+        mode: "normal",
+        viewport: { width, height: 800 },
+      });
+
+      test("has named tables", async ({ page }) => {
+        await openScreen(page, "system?tab=config");
+
+        expect((await namedTables(page)).length).toBeGreaterThan(0);
+      });
+
+      test("gives every named table column headers", async ({ page }) => {
+        await openScreen(page, "system?tab=config");
+
+        const tables = await namedTables(page);
+
+        expect(tables.filter((table) => table.columnheaders === 0)).toEqual([]);
+      });
+
+      test("gives every named table row headers", async ({ page }) => {
+        await openScreen(page, "system?tab=config");
+
+        const tables = await namedTables(page);
+
+        expect(tables.filter((table) => table.rowheaders === 0)).toEqual([]);
+      });
+    });
+  }
 
   test.describe(`dialogs (${theme})`, () => {
     test.use({ theme, mode: "normal" });

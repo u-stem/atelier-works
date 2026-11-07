@@ -66,7 +66,7 @@ export function EditableListValue({
   return (
     <div className="flex flex-col gap-2">
       {value.kind === "list" ? (
-        <ul className="flex flex-col gap-1.5 text-small">
+        <ul className="flex w-fit max-w-full flex-col gap-1.5 text-small">
           {value.items.map((text, index) => {
             const removal = removals.get(index);
             return (
