@@ -19,20 +19,6 @@
 # 防がずに受け入れている。
 set -euo pipefail
 
-repo_root="$(git rev-parse --show-toplevel)"
-cd "$repo_root"
-
-if [ -z "$(git diff --cached --name-only -- f)" ]; then
-  exit 0
-fi
-
-before_hashes_file="$(mktemp)"
-after_hashes_file="$(mktemp)"
-before_untracked_file="$(mktemp)"
-after_untracked_file="$(mktemp)"
-wmill_output_file="$(mktemp)"
-trap 'rm -f "$before_hashes_file" "$after_hashes_file" "$before_untracked_file" "$after_untracked_file" "$wmill_output_file"' EXIT
-
 # 追跡中のファイル(`wmill-lock.yaml`と`f/`)ごとに`<path>\t<hash>`を
 # `git ls-files`の順で書き、前後のファイルを行ごとに比べられるようにする。
 # `git hash-object --stdin-paths`で一括にせず1件ずつハッシュを取るのは、
@@ -47,6 +33,25 @@ hash_tracked_files() {
     printf '%s\t%s\n' "$path" "$hash" >>"$out_file"
   done < <(git ls-files -z -- wmill-lock.yaml f)
 }
+
+# テストが関数だけを`source`できるように、直接実行されたときだけ以降を動かす。
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if [ -z "$(git diff --cached --name-only -- f)" ]; then
+  exit 0
+fi
+
+before_hashes_file="$(mktemp)"
+after_hashes_file="$(mktemp)"
+before_untracked_file="$(mktemp)"
+after_untracked_file="$(mktemp)"
+wmill_output_file="$(mktemp)"
+trap 'rm -f "$before_hashes_file" "$after_hashes_file" "$before_untracked_file" "$after_untracked_file" "$wmill_output_file"' EXIT
 
 hash_tracked_files "$before_hashes_file"
 git ls-files --others --exclude-standard -z -- f >"$before_untracked_file"
