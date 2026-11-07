@@ -3,6 +3,7 @@
 // 値は`{ "placed_at": "<RFC 3339>", "placed_by": "<操作者>", "reason": "<理由>" }`で、変数が無いか空なら止まっていない。
 // 期限は持たない。解除は人の操作だけが行い、変数を空に戻す。
 // 形の壊れた値は、止まっている扱いにする。置いた人の意図を、壊れた値で外さないためである。
+// 全停止が止めた`*_enabled`の名前は、別の変数`f/factory/stop_all_record`に記録する。解析と書く記録の決め方もここに置く。
 // SDKで行うのは、変数の読み取りと有無の確認だけである。書き込みは、置くscriptと解除するscriptが自分で行う。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
@@ -195,56 +196,153 @@ export function serializeStopAll(state: StopAllState): string {
   });
 }
 
+/**
+ * 全停止が`false`にした`*_enabled`の名前の記録を置く、syncから外した秘密でない変数。
+ * 値は`{ "recorded_at": "<RFC 3339>", "flags": ["<名前>", ...] }`で、変数が無いか空なら記録は無い。
+ * ホストの`mise run stop:restore`が、この名前だけを有効に戻す候補にし、戻した後に空にする。
+ */
 export const STOP_ALL_RECORD_VARIABLE_PATH = "f/factory/stop_all_record";
 
+/** 記録する名前の数の上限。超えた分は止めるが、記録しない。 */
 export const STOP_ALL_RECORD_MAX = 64;
 
-export const STOP_ALL_RECORD_VARIABLE_DESCRIPTION = "";
+/** 記録の変数が無いときに書き手が作る変数の説明。 */
+export const STOP_ALL_RECORD_VARIABLE_DESCRIPTION =
+  "全停止が止めた*_enabledの名前の記録です。全停止が書き、mise run stop:restoreが設定を戻した後に空にします。人が直接編集する必要はありません。";
+
+/** 記録してよい名前の形。戻すコマンドが設定のキーとして扱うので、`*_since`などの別の項目と紛れない形に限る。 */
+const RECORDABLE_FLAG = /^[a-z][a-z0-9_]*_enabled$/;
 
 export type StopAllRecord = {
   readonly recorded_at: string;
   readonly flags: readonly string[];
 };
 
+/**
+ * 記録の変数の読み取りの結果。
+ * `corrupt`は値があるが形が壊れていること、`unreadable`は読めなかったことを表す。
+ */
 export type StopAllRecordStatus =
   | { readonly kind: "empty" }
   | { readonly kind: "recorded"; readonly record: StopAllRecord }
   | { readonly kind: "corrupt"; readonly reason: string }
   | { readonly kind: "unreadable"; readonly reason: string };
 
+/** 書く記録と、止めたが記録しない名前。 */
 export type StopAllRecordPlan = {
   readonly record: StopAllRecord;
   readonly unrecorded: readonly string[];
 };
 
-export function isRecordableFlag(_value: unknown): _value is string {
-  return false;
+/** 記録してよい`*_enabled`の名前か。 */
+export function isRecordableFlag(value: unknown): value is string {
+  return typeof value === "string" && RECORDABLE_FLAG.test(value);
 }
 
-export function parseStopAllRecord(_raw: string | null): StopAllRecordStatus {
-  return { kind: "empty" };
+/** 記録の変数の値を解析する。読み取りの失敗は扱わないので、`unreadable`は返さない。 */
+export function parseStopAllRecord(raw: string | null): StopAllRecordStatus {
+  if (raw === null || raw.trim() === "") return { kind: "empty" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { kind: "corrupt", reason: "the record is not JSON" };
+  }
+  if (!isRecord(parsed)) {
+    return { kind: "corrupt", reason: "the record is not an object" };
+  }
+  const { recorded_at, flags } = parsed;
+  if (!isTimestamp(recorded_at)) {
+    return { kind: "corrupt", reason: "recorded_at is not an RFC 3339 time" };
+  }
+  if (!Array.isArray(flags) || !flags.every(isRecordableFlag)) {
+    return {
+      kind: "corrupt",
+      reason: "flags is not a list of *_enabled names",
+    };
+  }
+  if (
+    flags.length > STOP_ALL_RECORD_MAX ||
+    new Set(flags).size !== flags.length
+  ) {
+    return {
+      kind: "corrupt",
+      reason: `flags has a repeated name or more than ${String(STOP_ALL_RECORD_MAX)} names`,
+    };
+  }
+  return { kind: "recorded", record: { recorded_at, flags } };
 }
 
+/** 記録の変数を読んで解析する。読めなければ`unreadable`を返し、例外は投げない。 */
 export async function readStopAllRecord(
-  _io: StopAllReadIo,
+  io: StopAllReadIo,
 ): Promise<StopAllRecordStatus> {
-  return { kind: "empty" };
+  let raw: string | null;
+  try {
+    raw = await io.readVariable();
+  } catch (err) {
+    return {
+      kind: "unreadable",
+      reason: `could not read the stop-all record: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  return parseStopAllRecord(raw);
 }
 
-export function serializeStopAllRecord(_record: StopAllRecord): string {
-  return "";
+/** 記録の変数に書く文字列。キーの順を固定する。 */
+export function serializeStopAllRecord(record: StopAllRecord): string {
+  return JSON.stringify({
+    recorded_at: record.recorded_at,
+    flags: record.flags,
+  });
 }
 
-export function planStopAllRecord(_input: {
+/**
+ * 書く記録を決める。`previous`の名前を先に残し、`flags`の新しい名前を順に足す。
+ * 形の合わない名前と、上限を超えた名前は、記録せず`unrecorded`に返す。
+ * `previous`は、解析済みの記録の名前か、置き換えるときの空の一覧である。
+ */
+export function planStopAllRecord(input: {
   readonly previous: readonly string[];
   readonly flags: readonly string[];
   readonly now: Date;
 }): StopAllRecordPlan {
-  return { record: { recorded_at: "", flags: [] }, unrecorded: [] };
+  const kept = [...input.previous];
+  const seen = new Set(kept);
+  const unrecorded: string[] = [];
+  for (const flag of input.flags) {
+    if (seen.has(flag)) continue;
+    if (!isRecordableFlag(flag) || kept.length >= STOP_ALL_RECORD_MAX) {
+      unrecorded.push(flag);
+      continue;
+    }
+    kept.push(flag);
+    seen.add(flag);
+  }
+  return {
+    record: { recorded_at: input.now.toISOString(), flags: kept },
+    unrecorded,
+  };
 }
 
+/**
+ * `windmill-client`で記録の変数を読む入出力。有無の確かめ方は`sdkStopAllReadIo`と同じである。
+ * パスはリテラルで書く。Console用workerの境界テストが、読む変数を走査で固定するためである。
+ */
 export function sdkStopAllRecordReadIo(): StopAllReadIo {
-  return { readVariable: async () => null };
+  return {
+    readVariable: () => {
+      const workspace = wmillDefault.getWorkspace();
+      return readVariableOrNull(
+        () => wmill.getVariable("f/factory/stop_all_record"),
+        () =>
+          wmill.VariableService.existsVariable({
+            workspace,
+            path: "f/factory/stop_all_record",
+          }),
+      );
+    },
+  };
 }
 
 /** 全停止で無効にするschedule。見張りと片付けのscheduleは残す。 */

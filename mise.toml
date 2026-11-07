@@ -162,8 +162,13 @@ run = "bun ./scripts/stop_all.ts place"
 raw = true
 
 [tasks."stop:release"]
-description = "Release the stop-all and enable the repository schedules again (the *_enabled settings stay off)"
+description = "Release the stop-all and enable the repository schedules again (the *_enabled settings stay off; run stop:restore to turn them back on)"
 run = "bun ./scripts/stop_all.ts release"
+raw = true
+
+[tasks."stop:restore"]
+description = "Turn back on the *_enabled settings that the stop-all recorded, after showing them and checking the config (usage: -- --except <name>[,<name>...] to keep some off)"
+run = "bun ./scripts/stop_all.ts restore"
 raw = true
 
 [tasks."backup:export"]

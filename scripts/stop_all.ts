@@ -6,6 +6,9 @@
 //                                       実行中のジョブを中止し、workerに残ったClaudeと検査のプロセスを止める
 //   stop_all.ts place --kill-only       Windmillが落ちているとき。workerに残ったプロセスを止めるだけ
 //   stop_all.ts release                 Consoleと同じWindmillのscriptで全停止を解除する
+//   stop_all.ts restore [--except <name>[,<name>...]]
+//                                       全停止が止めた*_enabledを、記録から検査つきで戻す(`stop_all_restore.ts`)。
+//                                       Windmillのscriptは使わず、人の`wmill`のプロファイルで設定を読み書きする
 //
 // 30秒待つのは、実行中のClaudeと検査が、自分で変数を読んで止まるまでの間である(確認は15秒ごと、読み取りは5秒まで、SIGTERMの猶予は5秒)。
 // その後にジョブを中止する。先に中止すると、ジョブのプロセスと一緒に、子プロセスを止める監視が消えるためである。
@@ -16,10 +19,13 @@
 // 検査のプロセスは、枠のuidとして全部止める。
 //
 // どの操作も、端末(TTY)で`yes`を入力して確かめる。環境変数`CLAUDECODE`があるときは、確認の前に断る。
+// `restore`は、端末が無ければ、何かを読む前に断る。
 // subagentと背景のセッションは端末を持たないので、確認も通らない。
 // 迂回のための環境変数は設けない。
 
-import { resolve } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   KILL_PATH,
   killAllArgv,
@@ -30,10 +36,18 @@ import { selectOrphanClaudePids } from "../f/factory/lib/cleanup_support.ts";
 import {
   isStopAllReason,
   STOP_ALL_REASON_MAX,
+  STOP_ALL_RECORD_VARIABLE_PATH,
+  STOP_ALL_VARIABLE_PATH,
 } from "../f/factory/lib/stop_all.ts";
 import { isRecord } from "../f/factory/lib/types.ts";
 import { parseRunningJobs, runningJobsSql } from "./check-idle.ts";
-import type { RestoreStore } from "./stop_all_restore.ts";
+import {
+  parseExceptNames,
+  type RestoreRead,
+  type RestoreStore,
+  type RestoreWrite,
+  runRestore,
+} from "./stop_all_restore.ts";
 
 /** 全停止を置くWindmillのscript。Consoleの全停止の操作と同じものを呼ぶ。 */
 export const STOP_SCRIPT = "f/factory/console_stop_all";
@@ -170,10 +184,27 @@ export type StopDeps = {
 };
 
 const USAGE =
-  "usage: stop_all.ts place --reason <text> | place --kill-only | release";
+  "usage: stop_all.ts place --reason <text> | place --kill-only | release | restore [--except <name>[,<name>...]]";
+
+function parseRestoreArgs(rest: readonly string[]): StopParse {
+  if (rest.length === 0) {
+    return { ok: true, value: { kind: "restore", except: [] } };
+  }
+  if (rest.length === 2 && rest[0] === "--except") {
+    const parsed = parseExceptNames(rest[1] ?? "");
+    return parsed.ok
+      ? { ok: true, value: { kind: "restore", except: parsed.names } }
+      : { ok: false, reason: parsed.reason };
+  }
+  return {
+    ok: false,
+    reason: "usage: stop_all.ts restore [--except <name>[,<name>...]]",
+  };
+}
 
 export function parseStopArgs(argv: readonly string[]): StopParse {
   const [command, ...rest] = argv;
+  if (command === "restore") return parseRestoreArgs(rest);
   if (command === "release") {
     return rest.length === 0
       ? { ok: true, value: { kind: "release" } }
@@ -217,7 +248,9 @@ export function signalPidArgv(signal: "TERM" | "KILL", pid: number): string[] {
 }
 
 const SESSION_REFUSAL =
-  "mise run stop and mise run stop:release are human-only operations; run them in your own terminal, not from a Claude session";
+  "mise run stop, mise run stop:release, and mise run stop:restore are human-only operations; run them in your own terminal, not from a Claude session";
+const NO_TERMINAL_REFUSAL =
+  "mise run stop:restore needs a terminal: run it in your own terminal and type yes there. Nothing was changed.";
 const NOT_PLACED_WARNING =
   "WARNING: the stop-all was NOT placed. The schedules and the *_enabled settings are still active; fix Windmill and run mise run stop again.";
 
@@ -226,7 +259,7 @@ const PLACE_MESSAGE =
 const KILL_MESSAGE =
   "This kills the claude processes and the check processes left in the worker container, without touching Windmill.";
 const RELEASE_MESSAGE =
-  "This releases the stop-all and enables the repository schedules again. The *_enabled settings stay off; turn them on one by one.";
+  "This releases the stop-all and enables the repository schedules again. The *_enabled settings stay off, so nothing starts working yet; after you confirm that the fix is deployed, run mise run stop:restore to turn them back on.";
 
 /**
  * `wmill script run -s`の標準出力から読んだ、scriptの結果。
@@ -270,7 +303,9 @@ function scriptFailure(result: ExecResult): string | null {
 }
 
 /** 端末で確かめるときに見せる文。 */
-function confirmationOf(command: StopCommand): string {
+function confirmationOf(
+  command: Exclude<StopCommand, { readonly kind: "restore" }>,
+): string {
   switch (command.kind) {
     case "place":
       return PLACE_MESSAGE;
@@ -278,8 +313,6 @@ function confirmationOf(command: StopCommand): string {
       return KILL_MESSAGE;
     case "release":
       return RELEASE_MESSAGE;
-    case "restore":
-      return "";
   }
 }
 
@@ -348,11 +381,23 @@ export async function runStop(
     deps.print(SESSION_REFUSAL);
     return 1;
   }
+  if (command.kind === "restore") {
+    // 読み取りの前に断る。戻す手順は、読んだ内容を見せてから確かめるので、確認の段では遅いためである。
+    if (!deps.terminal) {
+      deps.print(NO_TERMINAL_REFUSAL);
+      return 1;
+    }
+    return await runRestore(command.except, {
+      ...deps.restoreStore,
+      now: deps.now,
+      confirm: deps.confirm,
+      print: deps.print,
+    });
+  }
   if (!(await deps.confirm(confirmationOf(command)))) {
     deps.print("not confirmed; nothing was changed");
     return 1;
   }
-  if (command.kind === "restore") return 0;
   if (command.kind === "release") {
     const released = await deps.runScript(RELEASE_SCRIPT, {});
     deps.print(released.stdout.trim());
@@ -475,6 +520,117 @@ function checkUids(): number[] {
   return Array.from({ length: size }, (_unused, index) => first + index);
 }
 
+/** 戻す手順が書く設定のリソース。 */
+const FACTORY_CONFIG_PATH = "f/factory/factory_config";
+
+function parseJsonOutput(stdout: string): unknown {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+function failureOf(result: ExecResult, command: string): string {
+  const stderr = result.stderr.trim();
+  return stderr === ""
+    ? `${command} exited with ${String(result.exitCode)}`
+    : `${command} exited with ${String(result.exitCode)}: ${stderr}`;
+}
+
+/** `wmill variable get --json`で、秘密でない変数の値を読む。変数が無いときも、読めないときと同じ失敗になる。 */
+async function readVariableValue(
+  path: string,
+): Promise<RestoreRead<string | null>> {
+  const result = await capture(["wmill", "variable", "get", path, "--json"]);
+  if (result.exitCode !== 0) {
+    return { ok: false, reason: failureOf(result, "wmill variable get") };
+  }
+  const parsed = parseJsonOutput(result.stdout);
+  if (!isRecord(parsed)) {
+    return {
+      ok: false,
+      reason: "the output of wmill variable get is not JSON",
+    };
+  }
+  const { value } = parsed;
+  if (value === null || value === undefined) return { ok: true, value: null };
+  return typeof value === "string"
+    ? { ok: true, value }
+    : { ok: false, reason: "the value of the variable is not a string" };
+}
+
+/**
+ * `wmill resource get --json`で、`factory_config`の値を読む。
+ * このコマンドは補間しないAPI(`/resources/get`)を呼ぶので、`$var:`と`$res:`は展開されずに返る。
+ */
+async function readConfigValue(): Promise<RestoreRead<unknown>> {
+  const result = await capture([
+    "wmill",
+    "resource",
+    "get",
+    FACTORY_CONFIG_PATH,
+    "--json",
+  ]);
+  if (result.exitCode !== 0) {
+    return { ok: false, reason: failureOf(result, "wmill resource get") };
+  }
+  const parsed = parseJsonOutput(result.stdout);
+  if (!isRecord(parsed)) {
+    return {
+      ok: false,
+      reason: "the output of wmill resource get is not JSON",
+    };
+  }
+  return { ok: true, value: parsed.value };
+}
+
+/**
+ * 一時ディレクトリに置いたJSONのファイルを、`wmill <kind> push`で書く。ファイルは書いた後に消す。
+ * `push`は、ファイルの`value`でリモートの値を置き換える。
+ */
+async function pushJson(
+  kind: "resource" | "variable",
+  fileName: string,
+  body: Record<string, unknown>,
+  remotePath: string,
+): Promise<RestoreWrite> {
+  const dir = mkdtempSync(join(tmpdir(), "stop-all-restore-"));
+  try {
+    const file = join(dir, fileName);
+    writeFileSync(file, JSON.stringify(body), { mode: 0o600 });
+    const result = await capture(["wmill", kind, "push", file, remotePath]);
+    return result.exitCode === 0
+      ? { ok: true }
+      : { ok: false, reason: failureOf(result, `wmill ${kind} push`) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** 戻す手順の読み書きを、人の`wmill`のプロファイルで行う。 */
+function wmillRestoreStore(): RestoreStore {
+  return {
+    readStopAll: () => readVariableValue(STOP_ALL_VARIABLE_PATH),
+    readRecord: () => readVariableValue(STOP_ALL_RECORD_VARIABLE_PATH),
+    readConfig: readConfigValue,
+    writeConfig: (value) =>
+      pushJson(
+        "resource",
+        "factory_config.resource.json",
+        { value },
+        FACTORY_CONFIG_PATH,
+      ),
+    clearRecord: () =>
+      pushJson(
+        "variable",
+        "stop_all_record.variable.json",
+        { value: "", is_secret: false },
+        STOP_ALL_RECORD_VARIABLE_PATH,
+      ),
+  };
+}
+
 async function confirmOnTerminal(message: string): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
   console.log(message);
@@ -489,16 +645,10 @@ async function main(): Promise<number> {
   }
   return await runStop(command.value, {
     env: process.env,
-    terminal: false,
+    terminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
     confirm: confirmOnTerminal,
     now: () => new Date(),
-    restoreStore: {
-      readStopAll: async () => ({ ok: false, reason: "not implemented" }),
-      readRecord: async () => ({ ok: false, reason: "not implemented" }),
-      readConfig: async () => ({ ok: false, reason: "not implemented" }),
-      writeConfig: async () => ({ ok: false, reason: "not implemented" }),
-      clearRecord: async () => ({ ok: false, reason: "not implemented" }),
-    },
+    restoreStore: wmillRestoreStore(),
     runScript: (path, args) =>
       capture([
         "wmill",

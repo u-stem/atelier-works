@@ -4254,33 +4254,58 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 - 変数を書くのは、Consoleの2つのscript(全停止と解除)と、それを`wmill script run`で呼ぶ`mise run stop`だけである。
   2つのscriptは、操作者を導き、操作の記録を残せないときは何も変えずに断る。
 - 2つのscriptはConsole用のworkerで動き、どのsecret変数も読まない。
-  Console用workerの境界の走査は、読む変数のパスを`freezes`と`stop_all`の2つに限る。
+  Console用workerの境界の走査は、読む変数のパスを`freezes`、`stop_all`、`stop_all_record`の3つに限る。
   通知とDiscordへの送信は、定期ジョブ用のworkerで動く検出器が、変数を読んで行う。
-- `factory_config`は、`*_enabled`を`true`から`false`へ変えるだけで、有効にする向きには変えない。
+- 2つのscriptは、`factory_config`の`*_enabled`を`true`から`false`へ変えるだけで、有効にする向きには変えない。
   解除しても`*_enabled`は戻らないので、解除の操作だけでは、止めた機能は動き出さない。
+- 全停止のscriptは、止める名前を秘密でない変数`f/factory/stop_all_record`に記録する。
+  名前の形は`*_enabled`に限り、64個までにする。
+  記録の変数を名指しできる`f/`のファイルは、全停止のscriptと`lib/stop_all.ts`だけで、配線のテストが固定する。
+- 止めた設定を戻すのは、ホストの端末で人が実行する`mise run stop:restore`だけである。
+  Windmillのscriptを通らず、人の`wmill`のプロファイルで`factory_config`を書く。
+  有効にする向きの書き込みを、Console用workerのscriptに持たせないためである。
+  戻すのは、記録にあって今`false`で、設定の検査を通る名前だけである。
+  書く前に名前を表示し、`yes`で確かめる。
+  書く直前の読み直しと、書いた後の全停止の読み直しで、ほかの書き込みと全停止との競合を検出する。
 - 実行中のClaudeと検査は、ランナーが15秒ごとに変数を読み、置かれていればプロセスグループごと止める。
   変数を読めないときは止めない。
   変数を読むAPIの障害で、動いている実行を壊さないためである。
   その受け皿は、ホストの`mise run stop -- --kill-only`である。
 - 自己更新と取り込みは、変数を読めないときも見送る。
   止まっていないと確かめられないまま、Factoryを動かし直さないためである。
-- `mise run stop`は、端末で`yes`を入力して確かめる。
+- `mise run stop`と`mise run stop:restore`は、端末で`yes`を入力して確かめる。
   端末を持たないsubagentと背景のセッションは、確認を通せない。
   `scripts/stop_all.ts`は、環境変数`CLAUDECODE`があるときも、確認の前に断る。
-  Claude Codeのフックが`mise run stop`、`mise run stop:release`、`scripts/stop_all.ts`の呼び出しと、変数への直接の書き込みを止めるので、環境変数は二重の守りである。
+  Claude Codeのフックが`mise run stop`、`mise run stop:release`、`mise run stop:restore`、`scripts/stop_all.ts`の呼び出しと、全停止の変数と記録の変数への直接の書き込みを止めるので、環境変数は二重の守りである。
   `CLAUDE_CODE_ENTRYPOINT`は、Claudeのセッションの印にしない。
 - workerの中のプロセスは、`docker compose exec`で止める。
   Claudeはプロセスグループごと、検査は枠のuidごとに止める。
   workerの本体が属するグループには送らず、そのグループのClaudeはpidごとに止める。
   `detached`で起動しないClaudeが、workerと同じグループに入りうるためである。
 - 2つのscript、変数の解析、実行中の監視と、それを固定するテストは、保護パスにある(`f/factory/lib/protected_paths.ts`)。
-- ホストのCLI`scripts/stop_all.ts`は、ホストのユーザーの権限で動くので、保護パスにある。
+- ホストのCLI`scripts/stop_all.ts`と、戻す手順の`scripts/stop_all_restore.ts`は、ホストのユーザーの権限で動くので、保護パスにある。
   CLIが読む`lib/cleanup_support.ts`と`lib/types.ts`は、日常的に直す部品なので守らない。
+  戻す手順が検査に使う`lib/config.ts`も守らない。
+  検査を再実装せず、設定を読む処理と同じ規則で通すためである。
 
 次のことは、この仕組みでは守れない。
 
 - Windmillの画面で変数を直接書き換えられる者は、Consoleの確認と記録を経ずに全停止を外せる。
   外しても`*_enabled`は戻らない。
+- 記録の変数は、全停止のscriptとホストの戻すコマンドのほかに、Windmillの画面の利用者と`f/`の他のscriptも書ける。
+  設定を直接書ける経路と同じで、Claudeの書き込みはフックが止める。
+  偽の名前が記録されても、戻すコマンドが戻すのは、設定に実在して`false`で検査を通り、人が`yes`で確かめた名前だけである。
+- 戻すコマンドの読み直しは、`wmill resource push`と全停止の間を排他にしない。
+  読み直しの後、書き込みまでの間に入った書き込みは、上書きされうる。
+  書いた後に全停止が置かれていれば戻した名前を`false`に書き直すが、その間は機能が動きうる。
+- `lib/config.ts`を緩める変更は、戻すコマンドの検査も緩める。
+  検査をすり抜けた設定が書かれうるが、書くには人が端末で確かめる。
+  この変更は、PRの人のレビューとマージが守る。
+- 記録を書けなかった全停止と、記録に載らなかった名前は、手で戻す。
+  ホストでは`mise run stop`の結果に、Consoleでは全停止の結果のトーストに出る。
+- 戻すコマンドの操作は、Consoleの操作の記録(`console_actions`)に残らない。
+  結果は端末に残る。
+  人が設定を直接編集する今の運用と同じ水準である。
   検出器が全停止を見つけた後に外されたときは、検出器が5分以内に`stop_all_released`を残すので気づける。
   置いてから検出器の次の回までに外されたときは、どちらの通知も残らない。
   変数を直接外す操作はConsoleのscriptを通らないので、Consoleの操作の記録(`console_actions`)にも残らない。
@@ -6529,6 +6554,9 @@ PR修正の報告は、親の遷移の注記と通知の理由に整えてから
 
 `design_enabled`と`design_enabled_since`を書く操作は、運用者がWindmillの画面か`wmill resource push`で行う。
 Consoleの設定の変更(`console_config_update`)の許可表には入れない。
+全停止が止めた`design_enabled`は、ホストの`mise run stop:restore`も戻す([全停止](#全停止))。
+このとき、`design_enabled_since`の項目があれば、その値を実行した時刻に書き直す。
+これも運用者の`wmill`のプロファイルで`wmill resource push`を呼ぶ経路で、人が端末で`yes`を入力して確かめる。
 
 開く向きの変更は、許可表に入れない。
 入れると、確認のダイアログ1つで、設計工程が開くためである。

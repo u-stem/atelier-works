@@ -4,6 +4,9 @@
 // 1. 変数`f/factory/stop_all`に、置いた時刻、操作者、理由を書く。すでに置かれていれば書き直さない。壊れた値は書き直す。
 // 2. `factory_config`の`*_enabled`のうち`true`の項目を、1回の書き込みですべて`false`にする。
 //    値のどこかに`$var:`か`$res:`があれば、参照の先をこのscriptが解決しないよう、設定は変えない。
+//    書く直前に、止める名前を変数`f/factory/stop_all_record`に記録する。
+//    全停止の変数が空だったときは記録を置き換え、すでに置かれていたときは読み直した記録との和集合にする。
+//    記録を書けなくても設定は止め、結果の`record`と`config_unrecorded`で知らせる。
 // 3. リポジトリの定義のscheduleを無効にする。見張りと片付けのschedule(`STOP_ALL_KEPT_SCHEDULES`)は止めない。
 // 変数を書けなかったときは、止めずに記録を失敗にし、ジョブを失敗させる。設定とscheduleの段には進まない。
 // 変数が置かれないと、実行中のClaudeと検査が止まらず、取り込みと自己更新の関門も開いたままだからである。
@@ -13,7 +16,7 @@
 // このscriptはConsole用workerで動き、Discordの送り先(秘密の変数)を読まないためである。
 // 実行中のジョブは中止しない。中止すると、ジョブのプロセスと一緒に、子プロセスを止める監視が消えるためである。
 // 実行中のClaudeと検査は、変数を15秒ごとに読み、置かれていれば自分で止まる。
-// `*_enabled`は、解除しても戻さない。人が1つずつ有効にする。
+// `*_enabled`は、解除しても戻さない。修正の反映を確かめた人が、ホストで`mise run stop:restore`を実行して記録から戻す。
 //
 // 操作の記録(`factory.console_actions`)は、書く前に`attempted`の行を入れ、後で結果を更新する。
 // 行を入れられなければ、何も変えずに断る。記録するのは理由の長さと結果の数だけで、理由の本文は入れない。
@@ -35,7 +38,10 @@ import { holdsReference, isRecord } from "./lib/console_redact.ts";
 import {
   buildStopAllState,
   isStopAllReason,
+  planStopAllRecord,
   readStopAll,
+  readStopAllRecord,
+  STOP_ALL_RECORD_VARIABLE_DESCRIPTION,
   STOP_ALL_VARIABLE_DESCRIPTION,
   type StopAllReadIo,
   type StopAllState,
@@ -43,6 +49,7 @@ import {
   sdkStopAllReadIo,
   sdkStopAllRecordReadIo,
   serializeStopAll,
+  serializeStopAllRecord,
 } from "./lib/stop_all.ts";
 
 /**
@@ -71,6 +78,12 @@ export type StopAllConfigOutcome =
   | "has_reference"
   | "failed";
 
+/**
+ * 止めた名前の記録の段の結果。
+ * - written: 記録を書いた(置き換えたか、和集合にした)。
+ * - unchanged: すでに置かれていた全停止で、新しく止めた名前が無いか、すべて記録済みだった。
+ * - failed: 記録を読めないか、壊れていたか、書けなかった。
+ */
 export type StopAllRecordOutcome = "written" | "unchanged" | "failed";
 
 export type StopAllResult =
@@ -82,6 +95,10 @@ export type StopAllResult =
       readonly placed_at: string;
       readonly config: StopAllConfigOutcome;
       readonly disabled_flags: readonly string[];
+      /**
+       * 止めた名前の記録の段の結果と、止めたが記録に載らなかった名前。
+       * このscriptは必ず返す。Consoleの型と一致させる契約のため、任意の項目として宣言する(Consoleは古い結果も読む)。
+       */
       readonly record?: StopAllRecordOutcome;
       readonly config_unrecorded?: readonly string[];
       readonly schedules_disabled: readonly string[];
@@ -115,30 +132,84 @@ export function enabledFlags(config: Record<string, unknown>): string[] {
     .sort();
 }
 
+type RecordStep = {
+  readonly outcome: StopAllRecordOutcome;
+  /** 止める名前のうち、記録に載らなかったもの。 */
+  readonly unrecorded: readonly string[];
+};
+
 type ConfigStep = {
   readonly outcome: StopAllConfigOutcome;
   readonly flags: readonly string[];
+  readonly record: RecordStep;
 };
 
-async function stopConfig(ports: StopAllPorts): Promise<ConfigStep> {
+/**
+ * 止める名前を記録する。`replace`が真なら、古い記録を引き継がずに置き換える。偽なら、読み直した記録との和集合にする。
+ * 和集合にする記録が読めないか壊れているときは、書き直さずに失敗にする。
+ * 壊れた値を消すと、前の全停止が止めた名前が分からなくなるためである。
+ */
+async function recordFlags(
+  ports: StopAllPorts,
+  flags: readonly string[],
+  replace: boolean,
+): Promise<RecordStep> {
+  if (!replace && flags.length === 0) {
+    return { outcome: "unchanged", unrecorded: [] };
+  }
+  let previous: readonly string[] = [];
+  if (!replace) {
+    const status = await readStopAllRecord(ports.record);
+    if (status.kind === "unreadable" || status.kind === "corrupt") {
+      return { outcome: "failed", unrecorded: flags };
+    }
+    if (status.kind === "recorded") previous = status.record.flags;
+  }
+  const plan = planStopAllRecord({ previous, flags, now: ports.now() });
+  if (!replace && plan.record.flags.length === previous.length) {
+    return { outcome: "unchanged", unrecorded: plan.unrecorded };
+  }
+  try {
+    await ports.writeRecord(serializeStopAllRecord(plan.record));
+  } catch {
+    return { outcome: "failed", unrecorded: flags };
+  }
+  return { outcome: "written", unrecorded: plan.unrecorded };
+}
+
+/**
+ * 設定の`true`の`*_enabled`を止める。止める直前に、その名前を記録する。
+ * 記録を書けなくても、設定は止める。止めることを、戻せることより優先するためである。
+ */
+async function stopConfig(
+  ports: StopAllPorts,
+  replaceRecord: boolean,
+): Promise<ConfigStep> {
   let current: unknown;
   try {
     current = await ports.readConfig();
   } catch {
-    return { outcome: "failed", flags: [] };
+    current = undefined;
   }
-  if (!isRecord(current)) return { outcome: "failed", flags: [] };
-  if (holdsReference(current)) return { outcome: "has_reference", flags: [] };
+  if (!isRecord(current)) {
+    const record = await recordFlags(ports, [], replaceRecord);
+    return { outcome: "failed", flags: [], record };
+  }
+  if (holdsReference(current)) {
+    const record = await recordFlags(ports, [], replaceRecord);
+    return { outcome: "has_reference", flags: [], record };
+  }
   const flags = enabledFlags(current);
-  if (flags.length === 0) return { outcome: "unchanged", flags };
+  const record = await recordFlags(ports, flags, replaceRecord);
+  if (flags.length === 0) return { outcome: "unchanged", flags, record };
   const next: Record<string, unknown> = { ...current };
   for (const flag of flags) next[flag] = false;
   try {
     await ports.writeConfig(next);
   } catch {
-    return { outcome: "failed", flags: [] };
+    return { outcome: "failed", flags: [], record };
   }
-  return { outcome: "written", flags };
+  return { outcome: "written", flags, record };
 }
 
 type ScheduleStep = {
@@ -169,7 +240,7 @@ type StopStep = {
 
 /**
  * 全停止を置く。呼び出しの順序は、理由の検査、変数の読み取り、操作者の導出、記録(`attempted`)、
- * 変数の書き込み、設定の書き込み、scheduleの無効化、記録(結果)に固定する。
+ * 変数の書き込み、止める名前の記録、設定の書き込み、scheduleの無効化、記録(結果)に固定する。
  * 変数の書き込みの失敗は、記録を`failed`にしてから投げる。
  */
 export async function stopAllFromConsole(
@@ -205,10 +276,13 @@ export async function stopAllFromConsole(
       if (existing === null) {
         await ports.writeStopAll(serializeStopAll(built.state));
       }
-      const config = await stopConfig(ports);
+      // 変数が空だったときだけ、記録を置き換える。壊れた値は前の全停止が残したものでありうるので、和集合にする。
+      const config = await stopConfig(ports, status.kind === "clear");
       const schedules = await stopSchedules(ports);
       const complete =
         (config.outcome === "written" || config.outcome === "unchanged") &&
+        config.record.outcome !== "failed" &&
+        config.record.unrecorded.length === 0 &&
         schedules.failed.length === 0;
       return {
         outcome: complete ? "succeeded" : "partial",
@@ -216,6 +290,8 @@ export async function stopAllFromConsole(
           placed: existing === null,
           config: config.outcome,
           flags: config.flags.length,
+          record: config.record.outcome,
+          unrecorded: config.record.unrecorded.length,
           disabled: schedules.disabled.length,
           failed: schedules.failed.length,
         },
@@ -237,8 +313,8 @@ export async function stopAllFromConsole(
     placed_at: value.placedAt,
     config: value.config.outcome,
     disabled_flags: value.config.flags,
-    record: "unchanged",
-    config_unrecorded: [],
+    record: value.config.record.outcome,
+    config_unrecorded: value.config.record.unrecorded,
     schedules_disabled: value.schedules.disabled,
     schedules_failed: value.schedules.failed,
     action_audit: recorded.audit,
@@ -264,7 +340,14 @@ function sdkPorts(): StopAllPorts {
       );
     },
     record: sdkStopAllRecordReadIo(),
-    writeRecord: async () => {},
+    writeRecord: async (text) => {
+      await wmill.setVariable(
+        "f/factory/stop_all_record",
+        text,
+        false,
+        STOP_ALL_RECORD_VARIABLE_DESCRIPTION,
+      );
+    },
     readConfig: () =>
       wmill.ResourceService.getResourceValue({
         workspace,

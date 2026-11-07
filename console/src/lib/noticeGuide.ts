@@ -557,17 +557,18 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       "原因を確かめてから、システムの画面の「保留と凍結」の全停止の区画で解除してください。ホストの端末では、mise run stop:releaseで解除できます。",
       {
         commands: ["mise run stop:release"],
-        note: "解除すると、5分以内に自動で解決されます。Consoleからは解決できません。factory_configの*_enabledは解除しても戻らないので、使う機能を1つずつ有効にします。",
+        note: "解除すると、5分以内に自動で解決されます。Consoleからは解決できません。factory_configの*_enabledは解除しても戻らないので、機能は動き出しません。",
       },
     ),
   ],
   [
     "stop_all_released",
     guide(
-      "全停止が解除されました。止めたscheduleは有効に戻りましたが、factory_configの*_enabledは止めたままです。",
-      "使う機能を、設定の手順に従って1つずつ有効にしてください。",
+      "全停止が解除されました。止めたscheduleは有効に戻りましたが、factory_configの*_enabledは止めたままで、機能は動き出していません。",
+      "修正の反映を確かめてから、ホストの端末でmise run stop:restoreを実行し、全停止が止めた設定を戻してください。",
       {
-        note: "通知は情報なので、システム画面に7日だけ出ます。",
+        commands: ["mise run stop:restore"],
+        note: "通知は情報なので、システム画面に7日だけ出ます。原因の機能だけを止めたままにするときは、mise run stop:restore -- --except <名前>を実行します。",
       },
     ),
   ],

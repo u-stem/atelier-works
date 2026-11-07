@@ -38,6 +38,9 @@ excludes:
   # 全停止の状態。Consoleの全停止の操作と`mise run stop`が、実行時にこの秘密でない変数へ書く。
   # syncすると、無関係なpushで全停止が消える。変数が無いか空なら、止まっていない。
   - "f/factory/stop_all.variable.yaml"
+  # 全停止が止めた*_enabledの名前の記録。全停止の操作が実行時に書き、`mise run stop:restore`が空にする。
+  # syncすると、無関係なpushで記録が消え、止めた設定を戻せなくなる。
+  - "f/factory/stop_all_record.variable.yaml"
   # 資格情報の期限の記録。`scripts/bootstrap.sh`が実行時にこの秘密でない変数へ書き、日次のまとめが読む。
   # syncすると、無関係なpushで記録が消える。
   - "f/factory/credential_expiry.variable.yaml"

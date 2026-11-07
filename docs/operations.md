@@ -4631,7 +4631,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `claude_usage_limit` | Claudeの実行がサブスクリプションの使用上限に当たって失敗した。Claudeを呼ぶどのflowでも残る。本文は固定の文だけで、解除の時刻を含む失敗の詳細は`agent_runs`の`error`に、flowのパスはそのジョブのログにある。未解決の間は通知を重ねない。Discordへの通知は、そのflowの失敗の通知に任せる | 上限が戻ってから、[Claudeの実行が上限で失敗したとき](#claudeの実行が上限で失敗したとき)の経路で動かし直す。初めて出たときは、[使用上限の判定を確かめる](#使用上限の判定を確かめる)の手順で判定を確かめる。対応したら人が解決する |
 | `credential_expiring` | 資格情報(Windmillのトークン、Claude CodeのOAuthトークン、GitHubのPAT、読み取り専用のPAT、interaction-limits)の期限が、`credential_warn_days`日(既定30日)より近いか、過ぎている。本文に資格情報と期限の日付(JST)が載り、残り日数は載らない。Discordにも届く | [秘密をローテーションする](#秘密をローテーションする)の手順で更新し、`mise run bootstrap`を実行する。期限が先に延びると、次の日次のまとめ(毎日09:00)が自動で解決する |
 | `stop_all_active` | Factoryが全停止している。Claudeと検査の実行、Issueの取り込み、自己更新と、見張りと片付けを除くリポジトリのscheduleが止まっている。置いた直後の1回だけDiscordにも届き、時刻、操作者、理由はDiscordとシステムの画面に出る | 原因を確かめ、[全停止を解除する](#全停止を解除する)の手順で解除する。解除すると、5分以内に検出器が自動で解決する。Consoleからは解決できない |
-| `stop_all_released` | 全停止が解除された。止めたscheduleは有効に戻ったが、`factory_config`の`*_enabled`は止めたままである。「情報」で、Discordには届かない | 使う機能を、1つずつ有効にする |
+| `stop_all_released` | 全停止が解除された。止めたscheduleは有効に戻ったが、`factory_config`の`*_enabled`は止めたままで、機能は動き出していない。「情報」で、Discordには届かない | 修正の反映を確かめてから、[記録した設定を戻す](#記録した設定を戻す)の手順で、ホストの端末から`mise run stop:restore`を実行する |
 
 ### Console用のworkerの検知を確かめる
 
@@ -6484,8 +6484,9 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 
 `f/factory/deployed_sha`変数も同期の対象外である。自己更新が書き込む実行時の状態だからである。`bootstrap`は初回だけ空の値で作り、既にあれば値を変えない。値を戻したいときは、Windmillの画面で直接編集する。
 
-`f/factory/stop_all`と`f/factory/credential_expiry`も同期の対象外である。
+`f/factory/stop_all`、`f/factory/stop_all_record`、`f/factory/credential_expiry`も同期の対象外である。
 `stop_all`は全停止の状態で、Consoleと`mise run stop`が書く。
+`stop_all_record`は全停止が止めた`*_enabled`の名前の記録で、全停止が書き、`mise run stop:restore`が空にする。
 `credential_expiry`は資格情報の期限の記録で、`mise run bootstrap`が書く。
 同期すると、無関係なpushで全停止が外れたり、記録が消えたりする。
 
@@ -7065,6 +7066,9 @@ Factoryが暴走したとき、1つの操作でFactory全体を止める。
 全停止は、次のことを行う。
 
 - `factory_config`の`true`の`*_enabled`を、すべて`false`にする。
+  止める直前に、その名前を秘密でない変数`f/factory/stop_all_record`に記録する。
+  全停止が置かれていなかったときは記録を置き換え、すでに置かれていたときは前の記録に足す。
+  記録は、解除の後に[記録した設定を戻す](#記録した設定を戻す)ときに使う。
 - リポジトリのscheduleを無効にする。
   次の見張りと片付けの4本は、動かし続ける。
   - `detect_schedule_failures`(失敗の検出、全停止の通知、外部の死活監視)
@@ -7113,6 +7117,8 @@ pushが、止めたscheduleを定義の`enabled: true`で有効に戻すため�
 3. 結果のトーストを読む。
    止められなかったscheduleがあれば、Windmillの画面で無効にする。
    すでに全停止中のときは、設定とscheduleを止め直す。
+   名前を記録できなかったときや、記録に載らなかった名前があるときは、トーストが警告で知らせる。
+   その名前は`mise run stop:restore`では戻らないので、控えておき、解除の後に手で戻す。
 4. 15秒ほど待ち、Consoleのジョブの画面で、実行中のジョブが終わることを確かめる。
    プロセスが残ったときは、ホストで`mise run stop -- --kill-only`を実行する。
 
@@ -7153,8 +7159,9 @@ Consoleでは、全停止の区画の**解除**を押し、確認のダイアロ
 凍結が終わると、自己更新が戻す。
 凍結を読めないときは、解除を断る。
 
-`factory_config`の`*_enabled`は戻らない。
-Windmillの画面で`f/factory/factory_config`を開き、使う機能を1つずつ`true`にする。
+解除は`factory_config`の`*_enabled`を戻さないので、機能は動き出さない。
+全停止の間は自己更新が反映しないので、解除の直後は、修正のマージがまだWindmillに届いていないことがある。
+修正の反映を確かめてから、[記録した設定を戻す](#記録した設定を戻す)の手順で戻す。
 5分以内に、検出器が情報の通知(`stop_all_released`)を残してから、`stop_all_active`を解決する。
 
 全停止で止めた実行の作業項目は、失敗のまま残り、自動では再実行されない。
@@ -7162,6 +7169,58 @@ Windmillの画面で`f/factory/factory_config`を開き、使う機能を1つず
 監査は再実行できないので、**レポート**の**今すぐ監査**で起動し直す。
 全停止の後は、日次予算に早く達しうる。
 達したときの対応は、[Claudeの実行が上限で失敗したとき](#claudeの実行が上限で失敗したとき)に書く。
+
+### 記録した設定を戻す
+
+全停止が止めて記録した`*_enabled`は、解除の後に、ホストの端末で次を実行して戻す。
+修正の反映(Consoleのシステムの画面の反映の状態)を確かめてから実行する。
+
+```bash
+mise run stop:restore
+```
+
+原因の機能だけを止めたままにするときは、名前をカンマで区切って除く。
+
+```bash
+mise run stop:restore -- --except pr_conflict_fix_enabled
+```
+
+コマンドは次の順に進む。
+
+1. 全停止の変数を読む。
+   置かれているか、壊れているか、読めないときは、何も変えずに断る。
+   先に[全停止を解除する](#全停止を解除する)。
+2. 記録を読む。
+   記録が空なら、何もせずに終える。
+   記録が壊れているか読めないときは断るので、Windmillの画面で`f/factory/factory_config`を開き、手で戻す。
+3. `factory_config`を、参照を展開しない生の値で読む。
+   値に`$var:`か`$res:`があるときと、今の設定が設定の検査(`lib/config.ts`)を通らないとき(`config_invalid`)は断る。
+4. 記録の名前のうち、設定にあり、今`false`のものを、1つずつ`true`にして検査する。
+   `pr_conflict_watch_enabled`は、`pr_conflict_fix_enabled`より先に戻す。
+   `<名前>_since`の項目がある名前は、その値を実行した時刻に書き直す。
+   止めている間に起きたことまで、戻した機能が拾いに行かないためである。
+5. 戻す名前と、戻さない名前を理由つきで表示する。
+   戻さない理由は次のどれかである。
+   - 今`true`である。
+   - 設定に無い。
+   - 真偽値でない。
+   - 有効にすると検査を通らない。
+   - `--except`で除いた。
+6. `yes`を入力して確かめると、設定を読み直し、読んだときと同じなら書く。
+   違っていれば、何も書かずに断るので、もう一度実行する。
+7. 書いた後に、設定と全停止の変数を読み直す。
+   その間に全停止が置かれていたら、戻した名前を`false`に書き直し、記録を残して失敗で終える。
+8. 書けたら、記録をすべて消す。
+   戻す名前が無いときは、設定を書かずに記録を消す。
+
+戻さなかった名前も記録から消える。
+記録に残すと、止めたままにした機能が、次の`mise run stop:restore`や別の全停止の後に、意図せず戻るためである。
+必要なら、Windmillの画面で`factory_config`を開いて手で`true`にする。
+書き込みに失敗したときだけ、記録を残す。
+
+端末(TTY)を持たない実行と、環境変数`CLAUDECODE`があるときは、何かを読む前に断る。
+Claude Codeのフックもこのコマンドと記録の変数への書き込みを止める。
+設定を有効にする向きの書き込みを、人の`wmill`のプロファイルだけに限るためである。
 
 ### 全停止の変数を読めないとき
 
@@ -7188,6 +7247,7 @@ Windmillの画面で`f/factory/factory_config`を開き、使う機能を1つず
 | 通知 | 5分以内に`stop_all_active`が残り、Discordに1回届く | 未実施 |
 | `mise run stop -- --kill-only` | workerにClaudeと検査のプロセスが残らない | 未実施 |
 | 解除する | scheduleが戻り、5分以内に`stop_all_released`が残る | 未実施 |
+| `mise run stop`、`mise run stop:release`、`mise run stop:restore`の往復 | 全停止の前に`true`だった`*_enabled`だけが`true`に戻り、`*_since`が実行の時刻になり、記録が空になる | 未実施 |
 
 ## 設定を止める向きに変える
 

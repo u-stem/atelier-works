@@ -307,6 +307,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 全停止のホストのCLI(`scripts/stop_all.ts`、`mise run stop`の入口)と、資格情報の期限の記録を組み立てる
  * `scripts/credential_expiry.ts`(`bootstrap.sh`が秘密値を環境に持たせて起動する)、その部品`lib/credential_expiry.ts`と`.script.yaml`も守る。
  * どれも、ホストのユーザーの権限と秘密値のある環境で動くため、書き換えられると任意の処理が秘密値の近くで動く。
+ * 全停止が止めた設定を記録から戻す手順(`scripts/stop_all_restore.ts`、`mise run stop:restore`の本体)も守る。
+ * 設定を有効にする向きに書くので、書き換えられると、検査と人の確認を経ずに機能が動き出す。
+ * 手順が検査に使う`lib/config.ts`は、上に書いた理由で守らない。
+ * 緩めると検査をすり抜けた設定が書かれうるが、書くには人が端末で`yes`を入力する。
  * `lib/credential_expiry.script.lock`は守らない。依存の無いlibのlockと同じ扱いである。
  * これらが読む`lib/log.ts`と`lib/types.ts`、`lib/cleanup_support.ts`は、多くのscriptが使う日常的に直す部品なので守らない。
  * 全停止の通知を変数に合わせる`lib/stop_all_notice.ts`と、ランナーの`lib/workspace.ts`は守らない。
@@ -642,6 +646,7 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/scripts/console_stop_all_release.test.ts",
   "tests/scripts/stop_all_wiring.test.ts",
   "scripts/stop_all.ts",
+  "scripts/stop_all_restore.ts",
   "scripts/credential_expiry.ts",
   "f/factory/lib/credential_expiry.ts",
   "f/factory/lib/credential_expiry.script.yaml",

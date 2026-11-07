@@ -21,11 +21,11 @@
 // `wmill`が解除scriptを実行せずに読む・配る副コマンド(`script get`、`job list`、`script push`など)は通す。
 // パイプの上流の語にある名前は、`xargs`が受ける読み取りのプログラムと、`wmill`と、実行するプログラムに当てる。
 // `wmill jobs push`は、待ち行列のファイルからジョブを積み、名前が語に現れないので、名前なしで拒否する。
-// 凍結の変数`f/factory/freezes`と全停止の変数`f/factory/stop_all`は、`variable add/push`の語と、
-// 変数を書くURLの経路に、そのパスが当たるときに拒否する。
+// 凍結の変数`f/factory/freezes`、全停止の変数`f/factory/stop_all`、全停止が止めた名前の記録`f/factory/stop_all_record`は、
+// `variable add/push`の語と、変数を書くURLの経路に、そのパスが当たるときに拒否する。
 // 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。
 //
-// 全停止のCLI(`scripts/stop_all.ts`)の実行と、`mise run stop`、`mise run stop:release`は、
+// 全停止のCLI(`scripts/stop_all.ts`)の実行と、`mise run stop`、`mise run stop:release`、`mise run stop:restore`は、
 // 主セッションを含むすべてのセッションで拒否する(`findStopAllCall`)。
 // CLIは`CLAUDECODE`があれば断るが、環境変数を外せば迂回できるので、ここでも止める。
 // 全停止の入口は、プログラムの種類を問わず、どの語(`script -c`などのコマンド文字列の中も含む)に現れても拒否する。
@@ -731,15 +731,19 @@ const RELEASE_FILE_NAMES: readonly string[] = CONSOLE_WRITE_SCRIPTS.flatMap(
   (name) => [name, `${name}.ts`, `${name}.script.yaml`, `${name}.script.lock`],
 );
 
-/** 書き込みを拒む変数。凍結の変数と全停止の変数である。globが当たるかを見る対象でもある。 */
+/**
+ * 書き込みを拒む変数。凍結の変数、全停止の変数、全停止が止めた名前の記録である。globが当たるかを見る対象でもある。
+ * 記録は、`mise run stop:restore`が有効に戻す名前の出どころなので、書き換えると戻す名前を変えられる。
+ */
 const GUARDED_VARIABLES: readonly string[] = [
   "f/factory/freezes",
   "f/factory/stop_all",
+  "f/factory/stop_all_record",
 ];
 
 /** 書き込みを拒む変数のパス。スラッシュはパーセント符号化でも数える。 */
 const GUARDED_VARIABLE_PATH =
-  /f(?:\/|%2[Ff])factory(?:\/|%2[Ff])(?:freezes|stop_all)(?![A-Za-z0-9_])/;
+  /f(?:\/|%2[Ff])factory(?:\/|%2[Ff])(?:freezes|stop_all|stop_all_record)(?![A-Za-z0-9_])/;
 
 /** 変数を書くURLの経路。読み取り(`get_value`など)は数えない。 */
 const VARIABLE_WRITE_URL =
@@ -1231,8 +1235,12 @@ const STOP_ALL_MENTION =
 /** 全停止のCLIのファイル名。globが当たるかを見る対象である。 */
 const STOP_ALL_FILE_NAMES: readonly string[] = ["stop_all", "stop_all.ts"];
 
-/** 全停止を置く・解除するmiseのタスク。 */
-const STOP_ALL_TASKS: readonly string[] = ["stop", "stop:release"];
+/** 全停止を置く・解除するmiseのタスクと、全停止が止めた設定を記録から戻すタスク。 */
+const STOP_ALL_TASKS: readonly string[] = [
+  "stop",
+  "stop:release",
+  "stop:restore",
+];
 
 /** 語が全停止のCLIを指すか、引用符の外のglobが全停止のCLIの名前に当たりうるなら真。ディレクトリは問わない。 */
 function pointsAtStopAllCode(word: Word): boolean {
@@ -1284,7 +1292,7 @@ function miseStopAllCall(
   );
 }
 
-/** 全停止の変数のパス(`f/factory/stop_all`)。CLIのファイル名とは別のものである。 */
+/** 全停止の変数のパス(`f/factory/stop_all`と`f/factory/stop_all_record`)。CLIのファイル名とは別のものである。 */
 const STOP_ALL_VARIABLE_PATH = /(?:^|[^A-Za-z0-9_])f\/factory\/stop_/;
 
 /** コマンド文字列を入れ子に読む深さの上限。深すぎる入力で処理が止まらないようにする。 */
@@ -1349,8 +1357,8 @@ function stopAllCallAt(
 }
 
 /**
- * 単純コマンドが、全停止を置く・解除する操作なら真を返す。
- * 全停止のCLI(`scripts/stop_all.ts`)の実行と、`mise run stop`、`mise run stop:release`である。
+ * 単純コマンドが、全停止を置く・解除する操作か、止めた設定を戻す操作なら真を返す。
+ * 全停止のCLI(`scripts/stop_all.ts`)の実行と、`mise run stop`、`mise run stop:release`、`mise run stop:restore`である。
  * CLIは`CLAUDECODE`があれば断るが、環境変数を外せば迂回できるので、すべてのセッションでここでも止める。
  * プログラムの種類は問わない。`script`、`unbuffer`、`caffeinate`のような前置きの後ろの語と、
  * `script -c`のようなコマンド文字列の中も、同じ規則で見る。

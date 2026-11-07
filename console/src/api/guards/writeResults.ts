@@ -786,6 +786,7 @@ export type StopAllResult =
       readonly placed_at: string;
       readonly config: StopAllConfigOutcome;
       readonly disabled_flags: readonly string[];
+      /** 止めた名前の記録の結果と、記録に載らなかった名前。この項目を返さない版のscriptの結果も読むので、任意にする。 */
       readonly record?: StopAllRecordOutcome;
       readonly config_unrecorded?: readonly string[];
       readonly schedules_disabled: readonly string[];
@@ -793,7 +794,14 @@ export type StopAllResult =
       readonly action_audit: ActionAudit;
     };
 
+/** 止めた名前の記録の段の結果。`f/factory/console_stop_all.ts`の`StopAllRecordOutcome`と同じ値である。 */
 export type StopAllRecordOutcome = "written" | "unchanged" | "failed";
+
+const isStopAllRecordOutcome: Guard<StopAllRecordOutcome> = isOneOf([
+  "written",
+  "unchanged",
+  "failed",
+]);
 
 const isStopAllRefusalReason: Guard<StopAllRefusalReason> = isOneOf(
   STOP_ALL_REFUSAL_REASONS,
@@ -821,6 +829,9 @@ export function isStopAllResult(value: unknown): value is StopAllResult {
     isIsoTimestamp(value.placed_at) &&
     isStopAllConfigOutcome(value.config) &&
     isStrings(value.disabled_flags) &&
+    (value.record === undefined || isStopAllRecordOutcome(value.record)) &&
+    (value.config_unrecorded === undefined ||
+      isStrings(value.config_unrecorded)) &&
     isStrings(value.schedules_disabled) &&
     isStrings(value.schedules_failed) &&
     isActionAudit(value.action_audit)
