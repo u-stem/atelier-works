@@ -25,6 +25,7 @@ import {
   LAYER_FLOORS,
   type Layer,
   type LayerFloor,
+  type ListTargetsOptions,
   layerOf,
   listTargetFiles,
   NOT_LOADABLE_BY_BUN_TEST,
@@ -467,6 +468,16 @@ describe("listTargetFiles", () => {
         dir,
         { includeUntracked: false },
         () => "f/factory/lib/gone.ts\0scripts/b.ts\0",
+      );
+
+      expect(result.targets).toEqual(["scripts/b.ts"]);
+    });
+
+    test("leaves out a path under a file", () => {
+      const result = listTargetFiles(
+        dir,
+        { includeUntracked: false },
+        () => "scripts/b.ts/x.ts\0scripts/b.ts\0",
       );
 
       expect(result.targets).toEqual(["scripts/b.ts"]);
@@ -1066,6 +1077,94 @@ describe("checkCoverage with the target listing", () => {
     });
 
     expect(result.message).not.toContain("secret");
+  });
+
+  describe("when a target path cannot be examined", () => {
+    function loopListing(): (
+      root: string,
+      options: ListTargetsOptions,
+    ) => TargetListing {
+      mkdirSync(join(root, "f/factory/loop"), { recursive: true });
+      symlinkSync("self", join(root, "f/factory/loop/self"));
+      return (dir, options) =>
+        listTargetFiles(dir, options, () => "f/factory/loop/self/a.ts\0");
+    }
+
+    test("names the error code", () => {
+      writeLcov(record(A, hitsOf(10, 10)));
+
+      const result = checkCoverage({
+        root,
+        ...base,
+        listTargets: loopListing(),
+      });
+
+      expect(result.message).toContain("(ELOOP)");
+    });
+
+    test("keeps the path out of the failure", () => {
+      writeLcov(record(A, hitsOf(10, 10)));
+
+      const result = checkCoverage({
+        root,
+        ...base,
+        listTargets: loopListing(),
+      });
+
+      expect(result.message).not.toContain("loop");
+    });
+
+    test("does not call it a failure of git", () => {
+      writeLcov(record(A, hitsOf(10, 10)));
+
+      const result = checkCoverage({
+        root,
+        ...base,
+        listTargets: loopListing(),
+      });
+
+      expect(result.message).not.toContain("git ls-files");
+    });
+  });
+
+  test("does not call a failure of git a failure of a target path", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: () => {
+        throw new Error("git exited with code 128");
+      },
+    });
+
+    expect(result.message).not.toContain("target path");
+  });
+
+  test("escapes characters outside ASCII in a malformed name", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A], ["scripts/\u0085\u202e\u2028\u007f\u65e5.ts"]),
+      floorPercent: 0,
+    });
+
+    expect(/[^\x20-\x7e\n]/.test(result.message)).toBe(false);
+  });
+
+  test("shows a malformed name with its characters escaped as code units", () => {
+    writeLcov(record(A, hitsOf(10, 10)));
+
+    const result = checkCoverage({
+      root,
+      ...base,
+      listTargets: listing([A], ["scripts/\u202ex.ts"]),
+      floorPercent: 0,
+    });
+
+    expect(result.message).toContain('"scripts/\\u202ex.ts"');
   });
 
   test("fails when a tracked name uses a character outside the allowed set", () => {
