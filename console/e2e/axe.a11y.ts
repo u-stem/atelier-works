@@ -239,6 +239,43 @@ async function textColor(page: Page, selector: string): Promise<number[]> {
     });
 }
 
+type TableSummary = {
+  readonly name: string;
+  readonly columnheaders: number;
+  readonly rowheaders: number;
+};
+
+/**
+ * ブラウザが算出した表の意味(アクセシビリティツリー)から、名前のある表を取り出し、
+ * 表ごとに、列見出しと行見出しの数を数える。表の中の表の下は数えない。
+ * DOMの属性でなく算出された役割を読むのは、`display`の変更で表の意味が落ちるのを捕まえるためである。
+ */
+async function namedTables(page: Page): Promise<TableSummary[]> {
+  const session = await page.context().newCDPSession(page);
+  const { nodes } = await session.send("Accessibility.getFullAXTree");
+  type AxNode = (typeof nodes)[number];
+  const byId = new Map(nodes.map((node) => [node.nodeId, node]));
+  const roleOf = (node: AxNode): string =>
+    typeof node.role?.value === "string" ? node.role.value : "";
+  const nameOf = (node: AxNode): string =>
+    typeof node.name?.value === "string" ? node.name.value : "";
+  const count = (node: AxNode, role: string): number =>
+    (node.childIds ?? []).reduce((sum, id) => {
+      const child = byId.get(id);
+      if (child === undefined || roleOf(child) === "table") {
+        return sum;
+      }
+      return sum + (roleOf(child) === role ? 1 : 0) + count(child, role);
+    }, 0);
+  return nodes
+    .filter((node) => roleOf(node) === "table" && /\S/.test(nameOf(node)))
+    .map((node) => ({
+      name: nameOf(node),
+      columnheaders: count(node, "columnheader"),
+      rowheaders: count(node, "rowheader"),
+    }));
+}
+
 for (const theme of THEMES) {
   for (const mode of MODES) {
     test.describe(`screens (${theme}, ${mode})`, () => {
@@ -461,41 +498,26 @@ for (const theme of THEMES) {
         viewport: { width, height: 800 },
       });
 
-      /** 名前のある表ごとに、直下の指定の役割の要素の数を数える。 */
-      const countsByNamedTable = async (
-        page: Page,
-        role: "columnheader" | "rowheader",
-      ): Promise<number[]> => {
-        const tables = page.getByRole("table", { name: /\S/ });
-        const counts: number[] = [];
-        for (let index = 0; index < (await tables.count()); index += 1) {
-          counts.push(await tables.nth(index).getByRole(role).count());
-        }
-        return counts;
-      };
-
       test("has named tables", async ({ page }) => {
         await openScreen(page, "system?tab=config");
 
-        expect(
-          await page.getByRole("table", { name: /\S/ }).count(),
-        ).toBeGreaterThan(0);
+        expect((await namedTables(page)).length).toBeGreaterThan(0);
       });
 
       test("gives every named table column headers", async ({ page }) => {
         await openScreen(page, "system?tab=config");
 
-        const counts = await countsByNamedTable(page, "columnheader");
+        const tables = await namedTables(page);
 
-        expect(counts.filter((count) => count === 0)).toEqual([]);
+        expect(tables.filter((table) => table.columnheaders === 0)).toEqual([]);
       });
 
       test("gives every named table row headers", async ({ page }) => {
         await openScreen(page, "system?tab=config");
 
-        const counts = await countsByNamedTable(page, "rowheader");
+        const tables = await namedTables(page);
 
-        expect(counts.filter((count) => count === 0)).toEqual([]);
+        expect(tables.filter((table) => table.rowheaders === 0)).toEqual([]);
       });
     });
   }
