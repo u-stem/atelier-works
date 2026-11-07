@@ -53,16 +53,25 @@ let repo = "";
 let fakeBin = "";
 let gitLog = "";
 
-// 呼ばれたgitのサブコマンドを記録して本物のgitに渡す偽のgitを置く。
-// `failBatch`が真なら、`hash-object --stdin-paths`だけを失敗させる。
-function installFakeGit(failBatch: boolean): void {
+type FakeGitMode = "pass" | "failBatch" | "dropLine";
+
+// 呼ばれたgitの引数を記録して本物のgitに渡す偽のgitを置く。
+// `failBatch`は`hash-object --stdin-paths`だけを失敗させ、
+// `dropLine`は同じ呼び出しの出力の1行目を落とす。
+function installFakeGit(mode: FakeGitMode): void {
   mkdirSync(fakeBin, { recursive: true });
   const script = `#!/bin/sh
-echo "$1" >> "${gitLog}"
-if [ "$1" = hash-object ] && [ "${failBatch ? "1" : "0"}" = 1 ]; then
+echo "$*" >> "${gitLog}"
+if [ "$1" = hash-object ]; then
   for arg in "$@"; do
     if [ "$arg" = --stdin-paths ]; then
-      exit 1
+      if [ "${mode}" = failBatch ]; then
+        exit 1
+      fi
+      if [ "${mode}" = dropLine ]; then
+        "${REAL_GIT}" "$@" | sed 1d
+        exit 0
+      fi
     fi
   done
 fi
@@ -107,11 +116,18 @@ function runHashTrackedFiles(): string {
   return readFileSync(outFile, "utf8");
 }
 
-function hashObjectCalls(): number {
-  const lines = readFileSync(gitLog, "utf8")
+function loggedCalls(prefix: string): readonly string[] {
+  return readFileSync(gitLog, "utf8")
     .split("\n")
-    .filter((line) => line === "hash-object");
-  return lines.length;
+    .filter((line) => line.startsWith(prefix));
+}
+
+function hashObjectCalls(): number {
+  return loggedCalls("hash-object").length;
+}
+
+function batchCalls(): number {
+  return loggedCalls("hash-object --stdin-paths").length;
 }
 
 beforeEach(() => {
@@ -122,7 +138,7 @@ beforeEach(() => {
   mkdirSync(repo);
   git(repo, ["init", "-q"]);
   writeFileSync(gitLog, "");
-  installFakeGit(false);
+  installFakeGit("pass");
 });
 
 afterEach(() => {
@@ -177,7 +193,7 @@ describe("hash_tracked_files", () => {
     );
   });
 
-  test("hashes a path that starts with a double quote", () => {
+  test("hashes a path that contains double quotes", () => {
     trackFile('f/"quoted".ts', "export const q = 1;\n");
     trackFile("f/a.ts", "export const a = 1;\n");
 
@@ -188,10 +204,42 @@ describe("hash_tracked_files", () => {
     );
   });
 
+  test("hashes a path containing a carriage return", () => {
+    trackFile("f/a.ts", "export const a = 1;\n");
+    trackFile("f/cr\r.ts", "export const c = 1;\n");
+
+    const output = runHashTrackedFiles();
+
+    expect(output).toBe(
+      `f/a.ts\t${blobHash("f/a.ts")}\nf/cr\r.ts\t${blobHash("f/cr\r.ts")}\n`,
+    );
+  });
+
+  test("skips the batch hash-object when a path contains a carriage return", () => {
+    trackFile("f/a.ts", "export const a = 1;\n");
+    trackFile("f/cr\r.ts", "export const c = 1;\n");
+
+    runHashTrackedFiles();
+
+    expect(batchCalls()).toBe(0);
+  });
+
+  test("returns the same lines when the batch hash-object drops a line", () => {
+    trackFile("f/a.ts", "export const a = 1;\n");
+    trackFile("f/b.ts", "export const b = 1;\n");
+    installFakeGit("dropLine");
+
+    const output = runHashTrackedFiles();
+
+    expect(output).toBe(
+      `f/a.ts\t${blobHash("f/a.ts")}\nf/b.ts\t${blobHash("f/b.ts")}\n`,
+    );
+  });
+
   test("returns the same lines when the batch hash-object fails", () => {
     trackFile("f/a.ts", "export const a = 1;\n");
     trackFile("f/b.ts", "export const b = 1;\n");
-    installFakeGit(true);
+    installFakeGit("failBatch");
 
     const output = runHashTrackedFiles();
 

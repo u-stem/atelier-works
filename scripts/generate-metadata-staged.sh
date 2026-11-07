@@ -27,8 +27,10 @@ set -euo pipefail
 # 1回の`git hash-object --stdin-paths`に渡す。一括にするときの落とし穴は次のとおり。
 # - 2回の取得の間に消えたパスが一括処理全体を止める。先に`-e`で絞り、
 #   それでも失敗したら1件ずつに戻る。
-# - `--stdin-paths`は行区切りで読み、行末のCRを落とし、先頭が二重引用符の行を
-#   引用符付きのパスとして解く。そのようなパスがあれば1件ずつに戻る。
+# - `--stdin-paths`は行区切りで読み、行末のCRを落とす。改行かCRを含むパスが
+#   あれば1件ずつに戻る。先頭が二重引用符のパスは引用符付きとして解釈されるが、
+#   対象の`git ls-files -- wmill-lock.yaml f`は`f`か`wmill-lock.yaml`で始まる
+#   パスしか返さないので、その分岐は置かない。
 # - 出力は入力と1対1なので、存在したパスの順に出力の行を割り当てる。
 #   行数が合わなければ1件ずつに戻る。
 hash_tracked_files_one_by_one() {
@@ -49,7 +51,7 @@ hash_tracked_files() {
 
   while IFS= read -r -d '' path; do
     case "$path" in
-      *"$newline"* | *"$carriage_return"* | '"'*)
+      *"$newline"* | *"$carriage_return"*)
         hash_tracked_files_one_by_one "$out_file"
         return 0
         ;;
