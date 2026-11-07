@@ -4,7 +4,8 @@
 -- pr_closed_atは、PRがマージ済みと確かめた時刻である。行がその後に更新されていなければ(updated_at <= pr_closed_at)、
 -- 巡回の対象から外す。行が書かれると印は無効になり、再開や再実装の行は自動で巡回に戻る。
 -- 既存の行はNULL(印なし)で、今までどおり巡回される。
--- 索引は、PRの番号から作業項目を引く問い合わせ(listTrackedPrsなど)が使う。
+-- 索引は、種別とPRの番号から作業項目を等号で引く問い合わせ(markTrackedPrClosedなど)が使う。
+-- listTrackedPrsは、並べ替えの列にupdated_atを含むので、この索引で並べ替えを省けない。
 BEGIN;
 
 SET LOCAL lock_timeout = '30s';
