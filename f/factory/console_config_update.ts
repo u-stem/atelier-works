@@ -488,14 +488,17 @@ function ownerIsListed(
 type Plan = {
   /** 操作の記録の`attempted`の行に入れる内容。 */
   readonly changes: Record<string, unknown>;
-  /** 読み直した設定から、書く項目の値か、断る理由を返す。比較交換と、項目ごとの追加の検査を含む。 */
-  readonly prepare: (
-    current: Record<string, unknown>,
-  ) =>
-    | { readonly kind: "write"; readonly value: unknown }
+  /**
+   * 読み直した設定から、書く項目の値と、書いた後の期待か、断る理由を返す。比較交換と、項目ごとの追加の検査を含む。
+   * `matches`は、書いた後に読み直した対象の項目の値が、書いた値と同じかを判定する。
+   */
+  readonly prepare: (current: Record<string, unknown>) =>
+    | {
+        readonly kind: "write";
+        readonly value: unknown;
+        readonly matches: (read: unknown) => boolean;
+      }
     | { readonly kind: "refused"; readonly reason: ConfigUpdateRefusalReason };
-  /** 書いた後に読み直した、対象の項目の値が、書いた値と同じか。 */
-  readonly matches: (value: unknown) => boolean;
   readonly succeeded: (
     verified: boolean,
     audit: ActionAudit,
@@ -512,9 +515,12 @@ function scalarPlan(
     prepare: (current) => {
       if (current[item] !== before) return refusedStep("conflict");
       if (holdsReference(current)) return refusedStep("has_reference");
-      return { kind: "write", value: after };
+      return {
+        kind: "write",
+        value: after,
+        matches: (read) => read === after,
+      };
     },
-    matches: (value) => value === after,
     succeeded: (verified, audit) => ({
       refused: false,
       item,
@@ -547,7 +553,6 @@ function listPlan(
   change: Extract<ListChange, { kind: "ok" }>,
 ): Plan {
   const { op, element, owner, removedIndex, beforeCount, afterCount } = change;
-  let written: readonly string[] = [];
   return {
     changes: {
       item,
@@ -565,13 +570,16 @@ function listPlan(
       if (owner !== undefined && !ownerIsListed(current, owner)) {
         return refusedStep("owner_not_listed");
       }
-      written =
+      const written =
         op === "add"
           ? [...list, element]
           : list.filter((_entry, index) => index !== removedIndex);
-      return { kind: "write", value: written };
+      return {
+        kind: "write",
+        value: written,
+        matches: (read) => sameList(read, written),
+      };
     },
-    matches: (value) => sameList(value, written),
     succeeded: (verified, audit) => ({
       refused: false,
       item,
@@ -633,7 +641,12 @@ export async function updateConfigFromConsole(
       if (prepared.kind === "refused") return failedWith(prepared.reason);
       const written = { ...current, [item]: prepared.value };
       await ports.writeConfig(written);
-      const verified = await verifyWritten(ports, item, written, plan.matches);
+      const verified = await verifyWritten(
+        ports,
+        item,
+        written,
+        prepared.matches,
+      );
       return {
         outcome: verified ? "succeeded" : "partial",
         changes: { verified },
