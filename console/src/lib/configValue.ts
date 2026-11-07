@@ -112,19 +112,18 @@ function jsonOf(value: unknown): ConfigStructure {
 
 /**
  * 配列かオブジェクトの値を、型ごとの形にする。
- * 空は、項目に意味があれば注記を添える。
+ * 空の配列は、項目に意味があれば注記を添える。空のオブジェクトには添えない。
  * 単純な値の配列は行の一覧、同じ形のオブジェクトの配列は表、
  * 単純な値か単純な値の配列を値に持つオブジェクトはキーと値の行にする。
  * どれにも当たらない入れ子と混在は、字下げしたJSONにする。
  */
 export function describeStructure(key: string, value: object): ConfigStructure {
-  const empty: ConfigStructure = {
-    kind: "empty",
-    note: EMPTY_NOTES.get(key) ?? null,
-  };
   if (Array.isArray(value)) {
     const elements: readonly unknown[] = value;
-    if (elements.length === 0) return empty;
+    // 注記は配列の項目の意味なので、空のオブジェクトには付けない。
+    if (elements.length === 0) {
+      return { kind: "empty", note: EMPTY_NOTES.get(key) ?? null };
+    }
     if (isScalarArray(elements)) {
       return { kind: "list", items: elements.map(scalarText) };
     }
@@ -132,7 +131,7 @@ export function describeStructure(key: string, value: object): ConfigStructure {
     return jsonOf(value);
   }
   if (isPlainObject(value)) {
-    if (Object.keys(value).length === 0) return empty;
+    if (Object.keys(value).length === 0) return { kind: "empty", note: null };
     return entriesOf(value) ?? jsonOf(value);
   }
   return jsonOf(value);

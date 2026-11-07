@@ -53,11 +53,11 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
   }
 }
 
-/** 空の文字列を示す目印。値は等幅や通常の文字で描くので、斜体で薄い文字は値と見分けがつく。 */
+/** 空の文字列を示す目印。値とキーは等幅や通常の文字で描くので、斜体で薄い文字は見分けがつく。 */
 const EMPTY_STRING_LABEL = "(空の文字列)";
 
 /**
- * 値の文字列。空か空白だけの文字列は、見えない値になるので、目印で描く。
+ * 値、キー、列の見出しの文字列。空か空白だけの文字列は、見えなくなるので、目印で描く。
  * 引数は`safeText`を通した文字列である。見えない文字は代替文字になっていて、空白だけとは見なさない。
  */
 function TextValue({ text }: { text: string }) {
@@ -117,7 +117,7 @@ function ValueTable({
               scope="col"
               className="py-1 pr-3 font-medium"
             >
-              {safeText(column)}
+              <TextValue text={safeText(column)} />
             </th>
           ))}
         </tr>
@@ -161,7 +161,9 @@ function ValueEntries({
           key={`${index}:${key}`}
           className="grid gap-0.5 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] sm:gap-x-3"
         >
-          <dt className="font-mono break-all">{safeText(key)}</dt>
+          <dt className="font-mono break-all">
+            <TextValue text={safeText(key)} />
+          </dt>
           <dd className="min-w-0">
             {value.kind === "list" ? (
               <ValueRows items={value.items} />
