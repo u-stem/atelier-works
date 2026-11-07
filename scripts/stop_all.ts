@@ -577,11 +577,15 @@ function failureOf(result: ExecResult, command: string): string {
     : `${command} exited with ${String(result.exitCode)}: ${stderr}`;
 }
 
+/** コマンドを実行して結果を返す。テストでは、`wmill`を起動しない関数に差し替える。 */
+export type CommandRunner = (argv: readonly string[]) => Promise<ExecResult>;
+
 /** `wmill variable get --json`で、秘密でない変数の値を読む。変数が無いときも、読めないときと同じ失敗になる。 */
 async function readVariableValue(
+  run: CommandRunner,
   path: string,
 ): Promise<RestoreRead<string | null>> {
-  const result = await capture(["wmill", "variable", "get", path, "--json"]);
+  const result = await run(["wmill", "variable", "get", path, "--json"]);
   if (result.exitCode !== 0) {
     return { ok: false, reason: failureOf(result, "wmill variable get") };
   }
@@ -603,8 +607,10 @@ async function readVariableValue(
  * `wmill resource get --json`で、`factory_config`の値を読む。
  * このコマンドは補間しないAPI(`/resources/get`)を呼ぶので、`$var:`と`$res:`は展開されずに返る。
  */
-async function readConfigValue(): Promise<RestoreRead<unknown>> {
-  const result = await capture([
+async function readConfigValue(
+  run: CommandRunner,
+): Promise<RestoreRead<unknown>> {
+  const result = await run([
     "wmill",
     "resource",
     "get",
@@ -629,6 +635,7 @@ async function readConfigValue(): Promise<RestoreRead<unknown>> {
  * `push`は、ファイルの`value`でリモートの値を置き換える。
  */
 async function pushJson(
+  run: CommandRunner,
   kind: "resource" | "variable",
   fileName: string,
   body: Record<string, unknown>,
@@ -638,7 +645,7 @@ async function pushJson(
   try {
     const file = join(dir, fileName);
     writeFileSync(file, JSON.stringify(body), { mode: 0o600 });
-    const result = await capture(["wmill", kind, "push", file, remotePath]);
+    const result = await run(["wmill", kind, "push", file, remotePath]);
     return result.exitCode === 0
       ? { ok: true }
       : { ok: false, reason: failureOf(result, `wmill ${kind} push`) };
@@ -648,13 +655,14 @@ async function pushJson(
 }
 
 /** 戻す手順の読み書きを、人の`wmill`のプロファイルで行う。 */
-function wmillRestoreStore(): RestoreStore {
+export function wmillRestoreStore(run: CommandRunner): RestoreStore {
   return {
-    readStopAll: () => readVariableValue(STOP_ALL_VARIABLE_PATH),
-    readRecord: () => readVariableValue(STOP_ALL_RECORD_VARIABLE_PATH),
-    readConfig: readConfigValue,
+    readStopAll: () => readVariableValue(run, STOP_ALL_VARIABLE_PATH),
+    readRecord: () => readVariableValue(run, STOP_ALL_RECORD_VARIABLE_PATH),
+    readConfig: () => readConfigValue(run),
     writeConfig: (value) =>
       pushJson(
+        run,
         "resource",
         "factory_config.resource.json",
         { value },
@@ -662,6 +670,7 @@ function wmillRestoreStore(): RestoreStore {
       ),
     clearRecord: () =>
       pushJson(
+        run,
         "variable",
         "stop_all_record.variable.json",
         { value: "", is_secret: false },
@@ -687,7 +696,7 @@ async function main(): Promise<number> {
     terminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
     confirm: confirmOnTerminal,
     now: () => new Date(),
-    restoreStore: wmillRestoreStore(),
+    restoreStore: wmillRestoreStore(capture),
     runScript: (path, args) =>
       capture([
         "wmill",

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { killAllArgv } from "../../f/factory/lib/check_sandbox.ts";
+import { STOP_ALL_RECORD_VARIABLE_DESCRIPTION } from "../../f/factory/lib/stop_all.ts";
 import {
   type ExecResult,
   parseStopArgs,
@@ -9,6 +10,7 @@ import {
   type StopCommand,
   type StopDeps,
   signalGroupArgv,
+  wmillRestoreStore,
 } from "../../scripts/stop_all.ts";
 
 const OK: ExecResult = { exitCode: 0, stdout: "", stderr: "" };
@@ -734,5 +736,149 @@ describe("runStop release", () => {
   test("returns 1 when the result of the release is not JSON", async () => {
     const { deps } = record({ scriptStdout: "" });
     expect(await runStop({ kind: "release" }, deps)).toBe(1);
+  });
+});
+
+// 戻す手順の読み書きは、人の`wmill`のプロファイルで行う。`wmill`を起動せず、組み立てる引数とファイルの中身を確かめる。
+type WmillCall = {
+  readonly argv: readonly string[];
+  /** pushに渡したファイルの中身。書いた後に消えるので、呼ばれた時点で読む。 */
+  readonly file: unknown;
+};
+
+function wmillFake(outputs: Readonly<Record<string, string>> = {}): {
+  readonly calls: WmillCall[];
+  readonly run: (argv: readonly string[]) => Promise<ExecResult>;
+} {
+  const calls: WmillCall[] = [];
+  return {
+    calls,
+    run: async (argv) => {
+      const path = argv[3];
+      const file =
+        argv[2] === "push" && path !== undefined
+          ? JSON.parse(await Bun.file(path).text())
+          : null;
+      calls.push({ argv, file });
+      return { ...OK, stdout: outputs[argv.slice(1, 4).join(" ")] ?? "{}" };
+    },
+  };
+}
+
+const CONFIG_OUTPUT = JSON.stringify({
+  path: "f/factory/factory_config",
+  resource_type: "c_factory_config",
+  description: "the settings",
+  value: { implement_enabled: false },
+});
+
+describe("wmillRestoreStore", () => {
+  test("reads the stop-all variable as JSON", async () => {
+    const { calls, run } = wmillFake();
+    await wmillRestoreStore(run).readStopAll();
+    expect(calls[0]?.argv).toEqual([
+      "wmill",
+      "variable",
+      "get",
+      "f/factory/stop_all",
+      "--json",
+    ]);
+  });
+
+  test("reads the record as JSON", async () => {
+    const { calls, run } = wmillFake();
+    await wmillRestoreStore(run).readRecord();
+    expect(calls[0]?.argv).toEqual([
+      "wmill",
+      "variable",
+      "get",
+      "f/factory/stop_all_record",
+      "--json",
+    ]);
+  });
+
+  test("returns the value of a variable", async () => {
+    const { run } = wmillFake({
+      "variable get f/factory/stop_all": JSON.stringify({ value: "x" }),
+    });
+    expect(await wmillRestoreStore(run).readStopAll()).toEqual({
+      ok: true,
+      value: "x",
+    });
+  });
+
+  test("reads the config as JSON without interpolation", async () => {
+    const { calls, run } = wmillFake({
+      "resource get f/factory/factory_config": CONFIG_OUTPUT,
+    });
+    await wmillRestoreStore(run).readConfig();
+    expect(calls[0]?.argv).toEqual([
+      "wmill",
+      "resource",
+      "get",
+      "f/factory/factory_config",
+      "--json",
+    ]);
+  });
+
+  test("returns the value of the config", async () => {
+    const { run } = wmillFake({
+      "resource get f/factory/factory_config": CONFIG_OUTPUT,
+    });
+    expect(await wmillRestoreStore(run).readConfig()).toEqual({
+      ok: true,
+      value: { implement_enabled: false },
+    });
+  });
+
+  test("pushes the config with the resource type and description it read", async () => {
+    const { calls, run } = wmillFake({
+      "resource get f/factory/factory_config": CONFIG_OUTPUT,
+    });
+    await wmillRestoreStore(run).writeConfig({ implement_enabled: true });
+    const push = calls.find((call) => call.argv[2] === "push");
+    expect({
+      argv: [push?.argv[0], push?.argv[1], push?.argv[2], push?.argv[4]],
+      file: push?.file,
+    }).toEqual({
+      argv: ["wmill", "resource", "push", "f/factory/factory_config"],
+      file: {
+        value: { implement_enabled: true },
+        resource_type: "c_factory_config",
+        description: "the settings",
+      },
+    });
+  });
+
+  test("refuses to push the config when the resource type cannot be read", async () => {
+    const { calls, run } = wmillFake({
+      "resource get f/factory/factory_config": JSON.stringify({ value: {} }),
+    });
+    const written = await wmillRestoreStore(run).writeConfig({});
+    expect({
+      ok: written.ok,
+      pushed: calls.some((call) => call.argv[2] === "push"),
+    }).toEqual({ ok: false, pushed: false });
+  });
+
+  test("clears the record with an empty value that is not secret and its description", async () => {
+    const { calls, run } = wmillFake();
+    await wmillRestoreStore(run).clearRecord();
+    expect({
+      argv: [
+        calls[0]?.argv[0],
+        calls[0]?.argv[1],
+        calls[0]?.argv[2],
+        calls[0]?.argv[4],
+      ],
+      file: calls[0]?.file,
+    }).toEqual({
+      argv: ["wmill", "variable", "push", "f/factory/stop_all_record"],
+      file: {
+        value: "",
+        is_secret: false,
+        description: STOP_ALL_RECORD_VARIABLE_DESCRIPTION,
+      },
+    });
   });
 });

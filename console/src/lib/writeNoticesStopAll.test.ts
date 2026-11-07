@@ -101,6 +101,18 @@ describe("describeStopAllResult", () => {
     ).toBe("warning");
   });
 
+  test("names the settings once when the record failed", () => {
+    const message = describeStopAllResult({
+      ...PLACED,
+      record: "failed",
+      config_unrecorded: ["implement_enabled"],
+    }).message;
+    expect({
+      names: message.includes("implement_enabled"),
+      second: message.includes("記録に載らなかった"),
+    }).toEqual({ names: true, second: false });
+  });
+
   test("names the settings it could not record", () => {
     expect(
       describeStopAllResult({
