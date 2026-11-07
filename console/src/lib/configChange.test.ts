@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ConfigItemView } from "../api/jobsQueries.ts";
 import {
   type ChangeOffer,
+  type CheckCommands,
   changeDialogLines,
   changeOfferOf,
   changeOffersOf,
@@ -9,6 +10,7 @@ import {
   EDITABLE_LISTS,
   LOWERABLE_NUMBERS,
   MAX_ELEMENT_LENGTH,
+  NO_CHECK_COMMANDS,
   newElementMessage,
   newValueMessage,
   parseNewElement,
@@ -449,11 +451,18 @@ describe("parseNewElement", () => {
 });
 
 describe("changeDialogLines for a list", () => {
-  const NO_COMMANDS = { kind: "count", count: 0 } as const;
+  const NO_COMMANDS = NO_CHECK_COMMANDS;
+
+  function commandsOf(allowed: number, byRepo = 0): CheckCommands {
+    return {
+      allowed: { kind: "count", count: allowed },
+      byRepo: { kind: "count", count: byRepo },
+    };
+  }
 
   function linesOf(
     offer: ChangeOffer,
-    commands: Parameters<typeof changeDialogLines>[1] = NO_COMMANDS,
+    commands: CheckCommands = NO_COMMANDS,
   ): string {
     return changeDialogLines(offer, commands).join("\n");
   }
@@ -528,10 +537,7 @@ describe("changeDialogLines for a list", () => {
 
   test("tells how many check commands also reach a new repository", () => {
     expect(
-      linesOf(addTo("repo_allowlist", [REPOS[0] ?? ""]), {
-        kind: "count",
-        count: 2,
-      }),
+      linesOf(addTo("repo_allowlist", [REPOS[0] ?? ""]), commandsOf(2)),
     ).toContain(
       "検査コマンドが 2 件あり、新しいリポジトリの修正の検証でも、隔離なしで実行されます",
     );
@@ -545,57 +551,155 @@ describe("changeDialogLines for a list", () => {
 
   test("says that the count cannot be read when the check commands are hidden", () => {
     expect(
-      linesOf(addTo("repo_allowlist", [REPOS[0] ?? ""]), { kind: "unknown" }),
+      linesOf(addTo("repo_allowlist", [REPOS[0] ?? ""]), {
+        ...NO_COMMANDS,
+        allowed: { kind: "unknown" },
+      }),
     ).toContain(
       "件数を読めません。検査コマンドが新しいリポジトリでも実行されます",
     );
   });
 
+  test("tells how many repositories have their own check commands", () => {
+    expect(
+      linesOf(addTo("repo_allowlist", [REPOS[0] ?? ""]), commandsOf(0, 3)),
+    ).toContain(
+      "リポジトリ別の検査コマンドが 3 リポジトリ分あり、追加したリポジトリが同じ名前なら、その検査コマンドも隔離なしで実行されます",
+    );
+  });
+
+  test("says that the per-repository check commands cannot be counted", () => {
+    expect(
+      linesOf(addTo("repo_allowlist", [REPOS[0] ?? ""]), {
+        ...NO_COMMANDS,
+        byRepo: { kind: "unknown" },
+      }),
+    ).toContain(
+      "リポジトリ別の検査コマンドの数を読めません。追加したリポジトリが同じ名前なら、その検査コマンドがあれば隔離なしで実行されます",
+    );
+  });
+
+  test("says nothing about per-repository check commands when there are none", () => {
+    expect(
+      linesOf(addTo("repo_allowlist", [REPOS[0] ?? ""]), commandsOf(2, 0)),
+    ).not.toContain("リポジトリ別の検査コマンド");
+  });
+
+  test("keeps the count of allowed check commands when per-repository ones exist too", () => {
+    expect(
+      linesOf(addTo("repo_allowlist", [REPOS[0] ?? ""]), commandsOf(2, 3)),
+    ).toContain("検査コマンドが 2 件あり");
+  });
+
   test("says nothing about check commands when another list gets an element", () => {
     expect(
-      linesOf(addTo("default_reviewers", ["alice"]), {
-        kind: "count",
-        count: 2,
-      }),
+      linesOf(addTo("default_reviewers", ["alice"]), commandsOf(2, 3)),
     ).not.toContain("検査コマンド");
   });
 
   test("says nothing about check commands when an element is removed", () => {
     expect(
-      linesOf(removeFrom("repo_allowlist", REPOS), { kind: "count", count: 2 }),
+      linesOf(removeFrom("repo_allowlist", REPOS), commandsOf(2, 3)),
     ).not.toContain("検査コマンド");
   });
 });
 
 describe("checkCommandsOf", () => {
+  const COUNT = (count: number) => ({ kind: "count", count });
+
   test("counts the commands that are listed", () => {
     expect(
-      checkCommandsOf([value("allowed_check_commands", ["bun test", "bun x"])]),
-    ).toEqual({ kind: "count", count: 2 });
+      checkCommandsOf([value("allowed_check_commands", ["bun test", "bun x"])])
+        .allowed,
+    ).toEqual(COUNT(2));
   });
 
   test("counts none when the item is absent", () => {
-    expect(checkCommandsOf([value("daily_budget_usd", 5)])).toEqual({
-      kind: "count",
-      count: 0,
-    });
+    expect(checkCommandsOf([value("daily_budget_usd", 5)]).allowed).toEqual(
+      COUNT(0),
+    );
   });
 
   test("cannot count a reference", () => {
     expect(
-      checkCommandsOf([{ key: "allowed_check_commands", kind: "reference" }]),
+      checkCommandsOf([{ key: "allowed_check_commands", kind: "reference" }])
+        .allowed,
     ).toEqual({ kind: "unknown" });
   });
 
   test("cannot count a value that was masked", () => {
     expect(
-      checkCommandsOf([value("allowed_check_commands", ["bun test"], true)]),
+      checkCommandsOf([value("allowed_check_commands", ["bun test"], true)])
+        .allowed,
     ).toEqual({ kind: "unknown" });
   });
 
   test("cannot count a value that is not a list", () => {
     expect(
-      checkCommandsOf([value("allowed_check_commands", "bun test")]),
+      checkCommandsOf([value("allowed_check_commands", "bun test")]).allowed,
+    ).toEqual({ kind: "unknown" });
+  });
+
+  test("counts the repositories that have check commands", () => {
+    expect(
+      checkCommandsOf([
+        value("check_commands_by_repo", {
+          "u-stem/app": ["bun test"],
+          "u-stem/lib": ["bun test", "bun x"],
+        }),
+      ]).byRepo,
+    ).toEqual(COUNT(2));
+  });
+
+  test("does not count a repository whose commands are an empty list", () => {
+    expect(
+      checkCommandsOf([
+        value("check_commands_by_repo", {
+          "u-stem/app": [],
+          "u-stem/lib": ["bun test"],
+        }),
+      ]).byRepo,
+    ).toEqual(COUNT(1));
+  });
+
+  test("counts none for an empty object of per-repository commands", () => {
+    expect(
+      checkCommandsOf([value("check_commands_by_repo", {})]).byRepo,
+    ).toEqual(COUNT(0));
+  });
+
+  test("counts none for per-repository commands when the item is absent", () => {
+    expect(checkCommandsOf([value("daily_budget_usd", 5)]).byRepo).toEqual(
+      COUNT(0),
+    );
+  });
+
+  test("cannot count per-repository commands that are a reference", () => {
+    expect(
+      checkCommandsOf([{ key: "check_commands_by_repo", kind: "reference" }])
+        .byRepo,
+    ).toEqual({ kind: "unknown" });
+  });
+
+  test("cannot count per-repository commands that were masked", () => {
+    expect(
+      checkCommandsOf([
+        value("check_commands_by_repo", { "u-stem/app": ["bun test"] }, true),
+      ]).byRepo,
+    ).toEqual({ kind: "unknown" });
+  });
+
+  test("cannot count per-repository commands that are not an object", () => {
+    expect(
+      checkCommandsOf([value("check_commands_by_repo", ["bun test"])]).byRepo,
+    ).toEqual({ kind: "unknown" });
+  });
+
+  test("cannot count per-repository commands when an entry is not a list of strings", () => {
+    expect(
+      checkCommandsOf([
+        value("check_commands_by_repo", { "u-stem/app": "bun test" }),
+      ]).byRepo,
     ).toEqual({ kind: "unknown" });
   });
 });

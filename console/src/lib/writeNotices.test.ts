@@ -696,6 +696,15 @@ describe("describeConfigUpdateResult", () => {
     ).toContain("空だと owners 配下の全リポジトリが対象になります");
   });
 
+  test("tells that an existing element that cannot be recorded is also refused with the audit reason", () => {
+    expect(
+      describeConfigUpdateResult({ refused: true, reason: "audit_unavailable" })
+        .message,
+    ).toContain(
+      "削除する要素が100字を超える、または記録に使えない文字を含むときも、この理由で断ります。その場合はCLIで直します",
+    );
+  });
+
   test("describes the shape of an element for each list", () => {
     const message = describeConfigUpdateResult({
       refused: true,

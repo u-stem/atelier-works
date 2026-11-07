@@ -114,24 +114,42 @@ export function newElementMessage(reason: NewElementProblem): string {
 /** 検査コマンドの項目。リポジトリを足すと、その修正の検証にも及ぶ。 */
 const CHECK_COMMANDS_ITEM = "allowed_check_commands";
 
-/** `allowed_check_commands`の件数。参照と伏せた値は、件数を読めない。 */
-export type CheckCommands =
+/** 検査コマンドの件数。参照と伏せた値は、件数を読めない。 */
+export type CommandCount =
   | { readonly kind: "count"; readonly count: number }
   | { readonly kind: "unknown" };
 
 /**
- * 設定の項目の一覧から、`allowed_check_commands`の件数を読む。
+ * `repo_allowlist`への追加が及ぼす、検査コマンドの設定。
+ * `allowed`は`allowed_check_commands`の件数、`byRepo`は`check_commands_by_repo`で検査コマンドを持つリポジトリの数である。
+ */
+export type CheckCommands = {
+  readonly allowed: CommandCount;
+  readonly byRepo: CommandCount;
+};
+
+/** 検査コマンドの設定が無い状態。 */
+export const NO_CHECK_COMMANDS: CheckCommands = {
+  allowed: { kind: "count", count: 0 },
+  byRepo: { kind: "count", count: 0 },
+};
+
+/**
+ * 設定の項目の一覧から、検査コマンドの設定を読む。
  * 項目が無いときは、設定を読む処理の既定の空として、0件と見なす。
  */
 export function checkCommandsOf(
   items: readonly ConfigItemView[],
 ): CheckCommands {
   const item = items.find((entry) => entry.key === CHECK_COMMANDS_ITEM);
-  if (item === undefined) return { kind: "count", count: 0 };
+  if (item === undefined) return NO_CHECK_COMMANDS;
   if (item.kind !== "value" || item.masked || !isStringArray(item.value)) {
-    return { kind: "unknown" };
+    return { ...NO_CHECK_COMMANDS, allowed: { kind: "unknown" } };
   }
-  return { kind: "count", count: item.value.length };
+  return {
+    ...NO_CHECK_COMMANDS,
+    allowed: { kind: "count", count: item.value.length },
+  };
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -265,7 +283,7 @@ export function newValueMessage(reason: NewNumberProblem): string {
 const TAKES_EFFECT =
   "変更は、次に設定を読む処理から効きます。動いているフローも、以後の手順が設定を読むときから、新しい値で動きます。";
 
-function checkCommandsLine(checkCommands: CheckCommands): string | null {
+function checkCommandsLine(checkCommands: CommandCount): string | null {
   if (checkCommands.kind === "unknown") {
     return "件数を読めません。検査コマンドが新しいリポジトリでも実行されます。";
   }
@@ -295,7 +313,7 @@ function listDialogLines(
         "owners 配下の、ここに挙げたリポジトリだけが対象になります。挙げていない他のリポジトリは対象から外れます。",
       );
     }
-    const commands = checkCommandsLine(checkCommands);
+    const commands = checkCommandsLine(checkCommands.allowed);
     if (commands !== null) lines.push(commands);
   }
   lines.push(
@@ -323,7 +341,7 @@ const DAILY_BUDGET_ITEM = "daily_budget_usd";
  */
 export function changeDialogLines(
   offer: ChangeOffer,
-  checkCommands: CheckCommands = { kind: "count", count: 0 },
+  checkCommands: CheckCommands = NO_CHECK_COMMANDS,
 ): readonly string[] {
   if (offer.kind === "add" || offer.kind === "remove") {
     return listDialogLines(offer, checkCommands);

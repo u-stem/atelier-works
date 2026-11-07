@@ -5,6 +5,7 @@ import {
   type ChangeOffer,
   type CheckCommands,
   changeDialogLines,
+  NO_CHECK_COMMANDS,
   newElementMessage,
   newValueMessage,
   parseNewElement,
@@ -134,7 +135,7 @@ function TargetFields({ offer }: { offer: ChangeOffer }) {
 export function ConfigChangeDialog({
   offer,
   text,
-  checkCommands = { kind: "count", count: 0 },
+  checkCommands = NO_CHECK_COMMANDS,
   onTextChange,
   onConfirm,
   onCancel,

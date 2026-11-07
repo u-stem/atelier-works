@@ -4,6 +4,7 @@ import {
   type ChangeOffer,
   type CheckCommands,
   changeOfferOf,
+  NO_CHECK_COMMANDS,
 } from "../../lib/configChange.ts";
 import { ConfigChangeDialog } from "./ConfigChangeDialog.tsx";
 
@@ -22,7 +23,7 @@ function render(
     <ConfigChangeDialog
       offer={offer}
       text={text}
-      checkCommands={checkCommands ?? { kind: "count", count: 0 }}
+      checkCommands={checkCommands ?? NO_CHECK_COMMANDS}
       onTextChange={() => undefined}
       onConfirm={() => undefined}
       onCancel={() => undefined}
@@ -284,15 +285,30 @@ describe("ConfigChangeDialog for adding to a list", () => {
   });
 
   test("tells how many check commands also run for the new repository", () => {
-    expect(render(offer, "x", { kind: "count", count: 2 })).toContain(
-      "検査コマンドが 2 件あり",
-    );
+    expect(
+      render(offer, "x", {
+        ...NO_CHECK_COMMANDS,
+        allowed: { kind: "count", count: 2 },
+      }),
+    ).toContain("検査コマンドが 2 件あり");
   });
 
   test("tells that the check commands cannot be counted", () => {
-    expect(render(offer, "x", { kind: "unknown" })).toContain(
-      "件数を読めません",
-    );
+    expect(
+      render(offer, "x", {
+        ...NO_CHECK_COMMANDS,
+        allowed: { kind: "unknown" },
+      }),
+    ).toContain("件数を読めません");
+  });
+
+  test("tells how many repositories have their own check commands", () => {
+    expect(
+      render(offer, "x", {
+        ...NO_CHECK_COMMANDS,
+        byRepo: { kind: "count", count: 3 },
+      }),
+    ).toContain("リポジトリ別の検査コマンドが 3 リポジトリ分あり");
   });
 
   test("says nothing about check commands when there are none", () => {
@@ -370,8 +386,8 @@ describe("ConfigChangeDialog for removing from a list", () => {
   test("says nothing about check commands", () => {
     expect(
       render({ ...offer, key: "repo_allowlist" }, "", {
-        kind: "count",
-        count: 2,
+        allowed: { kind: "count", count: 2 },
+        byRepo: { kind: "count", count: 3 },
       }),
     ).not.toContain("検査コマンド");
   });
