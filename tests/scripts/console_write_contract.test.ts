@@ -1239,6 +1239,20 @@ describe("what the scripts return", () => {
     expect(isConfigUpdateResult(JSON.parse(JSON.stringify(result)))).toBe(true);
   });
 
+  test("an added element of a list passes the guard", async () => {
+    const written: Record<string, unknown> = {
+      owners: [{ name: "octo-owner", kind: "user" }],
+      default_reviewers: ["alice"],
+    };
+    const result = await configUpdate.updateConfigFromConsole(
+      "default_reviewers",
+      ["alice"],
+      ["alice", "bob"],
+      { ...configPorts(), readConfig: () => Promise.resolve(written) },
+    );
+    expect(isConfigUpdateResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
   test("a configuration change refused by the real check passes the guard", async () => {
     const result = await configUpdate.updateConfigFromConsole(
       "owners",

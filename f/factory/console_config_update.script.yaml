@@ -1,6 +1,6 @@
-summary: '[OP-2-8] 設定を止める向きに変更'
+summary: '[OP-2-8] 設定の停止・引き下げと一覧の追加・削除'
 description: Factory
-  Consoleから、factory_configの許可した項目を1つ、止める向きか下げる向きにだけ変更します。真偽の項目はtrueからfalseへ、数値の項目は小さい値へ変えられます。読んだ時の値と書く直前の値が違えば変更しません。参照を含む設定は変更しません。操作の前に記録を残し、残せなければ変更しません。書いた後に読み直して返します。
+  Consoleから、factory_configの許可した項目を1つ変更します。真偽の項目はtrueからfalseへ、数値の項目は小さい値へ、許可リポジトリとdependabotの他リポジトリと既定レビュアーの一覧は1要素の追加か削除だけ変えられます。読んだ時の値と書く直前の値が違えば変更しません。参照を含む設定は変更しません。操作の前に記録を残し、残せなければ変更しません。書いた後に読み直して返します。
 lock: '!inline f/factory/console_config_update.script.lock'
 kind: script
 schema:

@@ -10,6 +10,7 @@ import {
   isArrayOf,
   isBoolean,
   isIsoTimestamp,
+  isNonNegativeInteger,
   isNullableIsoTimestamp,
   isNullableString,
   isOneOf,
@@ -433,6 +434,11 @@ export const CONFIG_UPDATE_REFUSAL_REASONS = [
   "conflict",
   "actor_unknown",
   "audit_unavailable",
+  // 一覧の追加と削除だけが返す理由。
+  "already_present",
+  "invalid_element",
+  "would_empty",
+  "owner_not_listed",
 ] as const;
 
 export type ConfigUpdateRefusalReason =
@@ -442,9 +448,18 @@ const isConfigUpdateRefusalReason: Guard<ConfigUpdateRefusalReason> = isOneOf(
   CONFIG_UPDATE_REFUSAL_REASONS,
 );
 
+/** 一覧の項目で行える操作。 */
+export type ConfigListOperation = "add" | "remove";
+
+const isConfigListOperation: Guard<ConfigListOperation> = isOneOf([
+  "add",
+  "remove",
+]);
+
 /**
  * 設定を変更した結果。`verified`は、書いた後に読み直した値が期待と同じだったか。
- * 値は、真偽か数値の項目だけを変えるので、どちらかである。
+ * 真偽か数値の項目は`before`と`after`を持ち、一覧の項目は`op`、動いた要素、前後の件数を持つ。
+ * 両者は`op`の有無で見分ける。
  */
 export type ConfigUpdateResult =
   | { readonly refused: true; readonly reason: ConfigUpdateRefusalReason }
@@ -453,6 +468,16 @@ export type ConfigUpdateResult =
       readonly item: string;
       readonly before: number | boolean;
       readonly after: number | boolean;
+      readonly verified: boolean;
+      readonly action_audit: ActionAudit;
+    }
+  | {
+      readonly refused: false;
+      readonly item: string;
+      readonly op: ConfigListOperation;
+      readonly element: string;
+      readonly before_count: number;
+      readonly after_count: number;
       readonly verified: boolean;
       readonly action_audit: ActionAudit;
     };
@@ -472,14 +497,23 @@ export function isConfigUpdateResult(
   if (value.refused === true) {
     return isConfigUpdateRefusalReason(value.reason);
   }
-  return (
-    value.refused === false &&
-    isString(value.item) &&
-    isConfigValue(value.before) &&
-    isConfigValue(value.after) &&
-    isBoolean(value.verified) &&
-    isActionAudit(value.action_audit)
-  );
+  if (
+    value.refused !== false ||
+    !isString(value.item) ||
+    !isBoolean(value.verified) ||
+    !isActionAudit(value.action_audit)
+  ) {
+    return false;
+  }
+  if (value.op !== undefined) {
+    return (
+      isConfigListOperation(value.op) &&
+      isString(value.element) &&
+      isNonNegativeInteger(value.before_count) &&
+      isNonNegativeInteger(value.after_count)
+    );
+  }
+  return isConfigValue(value.before) && isConfigValue(value.after);
 }
 
 /**

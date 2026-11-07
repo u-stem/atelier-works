@@ -681,6 +681,53 @@ describe("isConfigUpdateResult", () => {
     expect(isConfigUpdateResult({ ...CHANGED, before: "50" })).toBe(false);
   });
 
+  const LISTED = {
+    refused: false,
+    item: "repo_allowlist",
+    op: "add",
+    element: "https://github.com/octo-owner/widgets",
+    before_count: 3,
+    after_count: 4,
+    verified: true,
+    action_audit: "recorded",
+  };
+
+  test("accepts an added element of a list", () => {
+    expect(isConfigUpdateResult(LISTED)).toBe(true);
+  });
+
+  test("accepts a removed element of a list", () => {
+    expect(
+      isConfigUpdateResult({
+        ...LISTED,
+        op: "remove",
+        before_count: 4,
+        after_count: 3,
+      }),
+    ).toBe(true);
+  });
+
+  test("accepts a list change that could not be verified", () => {
+    expect(isConfigUpdateResult({ ...LISTED, verified: false })).toBe(true);
+  });
+
+  test("rejects a list change with an operation it does not know", () => {
+    expect(isConfigUpdateResult({ ...LISTED, op: "replace" })).toBe(false);
+  });
+
+  test("rejects a list change without the element", () => {
+    const { element: _omitted, ...without } = LISTED;
+    expect(isConfigUpdateResult(without)).toBe(false);
+  });
+
+  test("rejects a list change whose count is not a whole number", () => {
+    expect(isConfigUpdateResult({ ...LISTED, after_count: 3.5 })).toBe(false);
+  });
+
+  test("rejects a list change whose count is negative", () => {
+    expect(isConfigUpdateResult({ ...LISTED, before_count: -1 })).toBe(false);
+  });
+
   test("rejects an audit state it does not know", () => {
     expect(isConfigUpdateResult({ ...CHANGED, action_audit: "maybe" })).toBe(
       false,

@@ -5,7 +5,11 @@ import { configQueryKey } from "../../api/jobsQueries.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
 import type { WriteRunnerConfig } from "../../api/writeRunner.ts";
 import { type ConfigUpdateInput, updateConfig } from "../../api/writes.ts";
-import { type ChangeOffer, parseNewNumber } from "../../lib/configChange.ts";
+import {
+  type ChangeOffer,
+  parseNewElement,
+  parseNewNumber,
+} from "../../lib/configChange.ts";
 import {
   describeConfigUpdateResult,
   type ReleaseNotice,
@@ -45,20 +49,40 @@ const CONFIG_UPDATE: WriteRunnerConfig<ConfigUpdateInput, ConfigUpdateResult> =
   };
 
 /**
- * 変更の候補から、書き込みの入力を作る。数値は、入力欄の文字列が使えるときだけ作る。
+ * 変更の候補から、書き込みの入力を作る。数値と追加する要素は、入力欄の文字列が使えるときだけ作る。
  * 読んだ時の値(`expected`)は、候補を作ったときの値で、scriptが書く直前の値と突き合わせる。
+ * 一覧の`next`は、読んだ配列の末尾に要素を足した配列か、選んだ位置の要素を除いた配列である。
  */
 export function changeInputOf(
   offer: ChangeOffer,
   text: string,
 ): ConfigUpdateInput | null {
-  if (offer.kind === "stop") {
-    return { item: offer.key, expected: true, next: false };
+  switch (offer.kind) {
+    case "stop":
+      return { item: offer.key, expected: true, next: false };
+    case "lower": {
+      const parsed = parseNewNumber(text, offer);
+      return parsed.ok
+        ? { item: offer.key, expected: offer.current, next: parsed.value }
+        : null;
+    }
+    case "add": {
+      const parsed = parseNewElement(text);
+      return parsed.ok
+        ? {
+            item: offer.key,
+            expected: offer.current,
+            next: [...offer.current, parsed.value],
+          }
+        : null;
+    }
+    case "remove":
+      return {
+        item: offer.key,
+        expected: offer.current,
+        next: offer.current.filter((_entry, index) => index !== offer.index),
+      };
   }
-  const parsed = parseNewNumber(text, offer);
-  return parsed.ok
-    ? { item: offer.key, expected: offer.current, next: parsed.value }
-    : null;
 }
 
 /**
