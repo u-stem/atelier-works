@@ -91,6 +91,34 @@ describe("SystemSection heading", () => {
   });
 });
 
+describe("SystemSection width", () => {
+  const renderWidth = (wide: boolean | undefined): string =>
+    renderToStaticMarkup(
+      <SystemSection
+        id="x-heading"
+        title="節"
+        description="説明"
+        query={freshQuery("値")}
+        loginHint="ログインしてください"
+        {...(wide === undefined ? {} : { wide })}
+      >
+        {(data) => <p>{data}</p>}
+      </SystemSection>,
+    );
+
+  test("keeps the readable width by default", () => {
+    expect(renderWidth(undefined)).toMatch(/<section[^>]*max-w-3xl/);
+  });
+
+  test("widens the section when asked", () => {
+    expect(renderWidth(true)).toMatch(/<section[^>]*max-w-6xl/);
+  });
+
+  test("drops the readable width when widened", () => {
+    expect(renderWidth(true)).not.toContain("max-w-3xl");
+  });
+});
+
 describe("SystemSection while loading", () => {
   test("shows only the frame in the first moment", () => {
     expect(render(loadingQuery<string>())).not.toContain("読み込み中");

@@ -136,3 +136,7 @@ export function describeStructure(key: string, value: object): ConfigStructure {
   }
   return jsonOf(value);
 }
+
+export function unitOfConfigKey(_key: string): string | null {
+  return null;
+}

@@ -49,9 +49,9 @@ describe("ConfigList", () => {
     expect(renderToStaticMarkup(<ConfigList items={ITEMS} />)).toContain(">5<");
   });
 
-  test("shows a boolean as text", () => {
-    expect(renderToStaticMarkup(<ConfigList items={ITEMS} />)).toContain(
-      ">false<",
+  test("keeps the raw value of a switch for a reader", () => {
+    expect(renderToStaticMarkup(<ConfigList items={ITEMS} />)).toMatch(
+      /sr-only[^>]*>\(false\)</,
     );
   });
 
