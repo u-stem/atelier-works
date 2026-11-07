@@ -53,9 +53,10 @@ const TERMINATE_TIMEOUT_MS = 10_000;
 const CLOSE_TIMEOUT_MS = 5_000;
 
 /**
- * 連続する2つの文の間に空ける、最小の間隔。
+ * 前の文が完了(印を受け取る)してから、次の文を書くまでに空ける最小の間隔。
  * DBの`now()`はマイクロ秒だが、JSの`Date`はミリ秒に切り捨てるので、
  * 文が1ミリ秒未満で続くと、別の文の時刻が同じ値に見えて「時刻が変わっていない」検査が退行を見逃す。
+ * 前の文の`now()`は完了より前、次の文の`now()`は書いた後なので、サーバーの2つの`now()`は2ミリ秒以上離れる。
  */
 const MIN_STATEMENT_GAP_MS = 2;
 
@@ -322,7 +323,7 @@ export function createPsqlSessions(
     });
 
   const tails = new Map<string, Promise<void>>();
-  const lastWrites = new Map<string, number>();
+  const completions = new Map<string, number>();
   const processes = new Map<string, Promise<PsqlProcess>>();
 
   function databaseKey(target: PsqlTarget): string {
@@ -332,21 +333,23 @@ export function createPsqlSessions(
   /** プロトコルの失敗を標準エラーに出し、psqlを殺して終わる。待ちの上限のときだけ、生きているbackendを止める。 */
   function fatal(
     reason: string,
-    proc: PsqlProcess,
+    proc: PsqlProcess | null,
     target: PsqlTarget,
     stopBackend: boolean,
   ): never {
     console.error(`[test-db-session] ${reason}`);
-    if (stopBackend && proc.alive && proc.backend !== null) {
+    // プロセスの終了を観測した後は、backendも無いので止める文を流さない。
+    const backend = proc?.alive ? proc.backend : null;
+    if (stopBackend && backend !== null) {
       try {
-        terminate(proc.backend.pid, proc.backend.startedAt, target);
+        terminate(backend.pid, backend.startedAt, target);
       } catch (err) {
         console.error(
           `[test-db-session] could not terminate the backend: ${String(err)}`,
         );
       }
     }
-    proc.kill();
+    proc?.kill();
     return exit(1);
   }
 
@@ -354,9 +357,21 @@ export function createPsqlSessions(
     target: PsqlTarget,
     format: PsqlFormat,
   ): Promise<PsqlProcess> {
-    const proc = new PsqlProcess(
-      argv(containerId(target.composeFile), target.database, format),
-    );
+    let proc: PsqlProcess;
+    try {
+      proc = new PsqlProcess(
+        argv(containerId(target.composeFile), target.database, format),
+      );
+    } catch (err) {
+      // `Bun.spawn`の失敗(ファイル記述子の不足など)や、コンテナIDの解決の失敗。
+      // 検査の失敗として投げると、検査のcatchが飲み込むので、終わる。
+      return fatal(
+        `session start: could not start psql: ${String(err)}`,
+        null,
+        target,
+        false,
+      );
+    }
     const result = await proc.round(BACKEND_QUERY, timeoutMs);
     if (result.kind !== "ok") {
       return fatal(
@@ -386,10 +401,14 @@ export function createPsqlSessions(
     target: PsqlTarget,
     format: PsqlFormat,
   ): Promise<PsqlProcess> {
+    const key = `${databaseKey(target)}\u0000${format}`;
     const started = start(target, format);
     // 次に使われるまで結果を読まないので、未処理の拒否にしない。使われたときは、同じ拒否が呼び出しに届く。
-    started.catch(noop);
-    processes.set(`${databaseKey(target)}\u0000${format}`, started);
+    // 起動に失敗したセッションは残さず、次の呼び出しが起動し直す。
+    started.catch(() => {
+      if (processes.get(key) === started) processes.delete(key);
+    });
+    processes.set(key, started);
     return started;
   }
 
@@ -404,11 +423,9 @@ export function createPsqlSessions(
   }
 
   async function waitGap(key: string): Promise<void> {
-    const last = lastWrites.get(key);
-    if (last !== undefined) {
-      while (now() - last < MIN_STATEMENT_GAP_MS) await sleep(1);
-    }
-    lastWrites.set(key, now());
+    const last = completions.get(key);
+    if (last === undefined) return;
+    while (now() - last < MIN_STATEMENT_GAP_MS) await sleep(1);
   }
 
   function enqueue<T>(key: string, task: () => Promise<T>): Promise<T> {
@@ -427,6 +444,7 @@ export function createPsqlSessions(
       const proc = await acquire(target, format);
       await waitGap(key);
       const result = await proc.round(sql, timeoutMs);
+      completions.set(key, now());
       if (result.kind === "ok") {
         // CSVでは、値がNULLの1列だけの行が空行になる。全体をtrimすると、その行が消えて0行と区別できなくなるので、
         // 末尾の改行を1つだけ取り除く。
@@ -482,7 +500,7 @@ export function createPsqlSessions(
       const started = [...processes.values()];
       processes.clear();
       tails.clear();
-      lastWrites.clear();
+      completions.clear();
       const opened = await Promise.all(
         started.map((promise) => promise.catch(() => null)),
       );
