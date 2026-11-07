@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 追跡中のPRの候補の収集'
+description: 内部ライブラリです。直接実行するものではありません。poll_prsが、DBで追跡中のPRのうち開いているものを候補にし、マージ済みのPRに閉じた印を付ける手順を置きます。
 lock: '!inline f/factory/lib/tracked_pr_candidates.script.lock'
 kind: script
 schema:

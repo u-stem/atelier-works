@@ -5866,7 +5866,7 @@ check(
 const closedMarkUrl = (number: number): string =>
   `https://github.com/${OWNER}/r/pull/${String(number)}`;
 const closedMarkItem = await issueWorkItem(
-  961,
+  7961,
   1,
   "pr_open",
   "qdb-closed-mark",
@@ -5928,7 +5928,7 @@ check(
   (await listedPrOpenIds()).includes(closedMarkItem),
 );
 const movedAfterRead = await issueWorkItem(
-  962,
+  7962,
   1,
   "pr_open",
   "qdb-closed-mark-moved",
@@ -5955,7 +5955,7 @@ check(
   )) === false,
 );
 const notPrOpen = await issueWorkItem(
-  963,
+  7963,
   1,
   "cancelled",
   "qdb-closed-mark-cancelled",

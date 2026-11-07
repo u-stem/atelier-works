@@ -1191,6 +1191,11 @@ export async function listActiveIssueWorkItems(
  * PRを作った(`pr_open`)`issue`の作業項目のうち、PRのURLを持ち、`updatedAfter`より後に更新されたものを、
  * IDの新しい順に最大`limit`件返す。PRのCI監視が、Factoryが作ったPRを見つけるのに使う。
  * `pr_open`は終端で、PRが閉じても作業項目は変わらない。期間で絞らないと、閉じたPRを毎回読み続ける。
+ *
+ * 閉じた印(`pr_closed_at`)が有効な行は返さない。印は`markWorkItemPrClosed`が付け、
+ * 行がその後に更新されていない間(`pr_closed_at >= updated_at`)だけ有効である。
+ * 印の列は`to_jsonb`で読む。列を足すmigrationより先にこの文が動いても、
+ * 列が無いエラーにせず、印の無い行として今までどおり返すためである。
  */
 export async function listPrOpenIssueWorkItems(
   updatedAfter: Date,
@@ -1198,9 +1203,10 @@ export async function listPrOpenIssueWorkItems(
   sql: SqlClient = defaultSqlClient,
 ): Promise<WorkItem[]> {
   const rows = await sql`
-    SELECT * FROM factory.work_items
+    SELECT * FROM factory.work_items w
     WHERE kind = 'issue' AND status = 'pr_open' AND pr_url IS NOT NULL
       AND updated_at > ${updatedAfter.toISOString()}::timestamptz
+      AND NOT COALESCE((to_jsonb(w) ->> 'pr_closed_at')::timestamptz >= updated_at, false)
     ORDER BY id DESC
     LIMIT ${limit}::bigint
   `.fetch();
@@ -3846,6 +3852,12 @@ const TRACKED_PR_KINDS: readonly ("pr_review" | "pr_fix")[] = [
 ];
 
 /**
+ * `listTrackedPrs`が読む件数の既定の上限。
+ * 上限を超えた追跡中のPRの古い側は、読まれない。
+ */
+export const TRACKED_PR_LIST_LIMIT = 200;
+
+/**
  * Factoryがまだ追跡しているPRを返す。`poll_prs.ts`がDBからPRを見つけ直すのに使う。
  * PRの起動ラベル(`factory:review` / `factory:fix`)は確保した時点で外すので、
  * サイクルが始まった後はラベルで探し直せない。
@@ -3856,17 +3868,37 @@ const TRACKED_PR_KINDS: readonly ("pr_review" | "pr_fix")[] = [
  * (閉じたなどでキャンセルしたPRは追跡から外す)、直近`withinDays`日
  * (`factory_config.tracked_pr_days`)以内に更新されていれば返す。
  * その期間だれも触れていないPRは、いつまでもポーリングせずに追跡から外す。
+ * 最新の行の閉じた印(`pr_closed_at`)が有効なPRも返さない。印は`markTrackedPrClosed`が付け、
+ * 行がその後に更新されていない間(`pr_closed_at >= updated_at`)だけ有効である。
+ * 印の列は`to_jsonb`で読む。列を足すmigrationより先にこの文が動いても、
+ * 列が無いエラーにせず、印の無い行として今までどおり返すためである。
+ *
+ * 新しく更新された順に、最大`limit + 1`件を返す。呼び出し側は、返った件数が`limit`を超えたときに、
+ * 上限で読み残したPRがあると分かる。`limit`は正の整数で、`limit + 1`が安全な整数に収まる値に限る。
+ * 上の条件はすべて`DISTINCT ON`の外側に置く。最新の行を選んだ後で絞らないと、
+ * 古い行が代わりに返ってしまう。
  */
 export async function listTrackedPrs(
   withinDays: number,
   sql: SqlClient = defaultSqlClient,
+  limit: number = TRACKED_PR_LIST_LIMIT,
 ): Promise<TrackedPr[]> {
+  if (
+    !Number.isInteger(limit) ||
+    limit <= 0 ||
+    !Number.isSafeInteger(limit + 1)
+  ) {
+    throw new Error(
+      `db: listTrackedPrs: limit must be a positive safe integer, got ${String(limit)}`,
+    );
+  }
   const kinds: string[] = [...TRACKED_PR_KINDS];
   const rows = await sql`
     WITH latest AS (
       SELECT DISTINCT ON (owner, repo, pr_number)
-        owner, repo, pr_number, head_sha, kind, status, updated_at
-      FROM factory.work_items
+        owner, repo, pr_number, head_sha, kind, status, updated_at,
+        (to_jsonb(w) ->> 'pr_closed_at')::timestamptz AS pr_closed_at
+      FROM factory.work_items w
       WHERE kind = ANY(${kinds}) AND pr_number IS NOT NULL
       ORDER BY owner, repo, pr_number, updated_at DESC
     )
@@ -3874,7 +3906,9 @@ export async function listTrackedPrs(
     FROM latest
     WHERE status != 'cancelled'
       AND updated_at >= now() - make_interval(days => ${withinDays}::int)
+      AND NOT COALESCE(pr_closed_at >= updated_at, false)
     ORDER BY updated_at DESC
+    LIMIT ${limit + 1}::bigint
   `.fetch();
 
   return rows.map((row) => ({
@@ -3888,42 +3922,108 @@ export async function listTrackedPrs(
   }));
 }
 
-/** `listTrackedPrs`が返す件数の既定の上限。 */
-export const TRACKED_PR_LIST_LIMIT = 200;
+const PR_CLOSED_AT_COLUMN_PATTERN =
+  /column "pr_closed_at"(?: of relation "work_items")? does not exist/;
 
-/** 例外が、`work_items.pr_closed_at`の列が無いことによるものかを返す。 */
-export function isMissingPrClosedAtColumnError(_err: unknown): boolean {
-  return false;
+/**
+ * 例外が、`work_items.pr_closed_at`の列が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * エラーコード42703か、列の名前を含む文のどちらかで判定する(`isMissingJobLinkColumnError`と同じ)。
+ */
+export function isMissingPrClosedAtColumnError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (Reflect.get(err, "code") === "42703") return true;
+  if (PR_CLOSED_AT_COLUMN_PATTERN.test(err.message)) return true;
+  const body: unknown = Reflect.get(err, "body");
+  return typeof body === "string" && PR_CLOSED_AT_COLUMN_PATTERN.test(body);
 }
 
-/** DBの現在時刻を返す。 */
+/**
+ * DBの現在時刻を返す。
+ * 閉じた印の時刻(`markWorkItemPrClosed`の`readAt`)は、行の`updated_at`と同じDBの時計で取る。
+ * アプリの時計で取ると、時計のずれで、動いた行に有効な印が付きうるためである。
+ */
 export async function readDbNow(
-  _sql: SqlClient = defaultSqlClient,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<Date> {
-  return new Date(0);
+  const row = await fetchOneRow(sql`SELECT now() AS now`, "readDbNow");
+  return parseDate(row.now, "now");
 }
 
-/** 作業項目に、PRが閉じた印を付ける。付けたら`true`を返す。 */
+/**
+ * 作業項目に、PRが閉じた印(`pr_closed_at = readAt`)を付ける。付けたら`true`を返す。
+ * `readAt`は、作業項目の一覧を読む前に`readDbNow`で取った時刻である。
+ * 更新は、次をすべて満たす行にだけ当たる。当たらなければ`false`を返す。
+ * - 一覧で読んだ`prUrl`のまま変わっていない。
+ * - 状態が`pr_open`のままである。
+ * - 一覧を読む前から更新されていない(`updated_at <= readAt`)。
+ * 一覧を読んでから動いた行に、有効な印を付けないためである。
+ * 印を付ける更新は`updated_at`を進めない。進めると、印を付けた直後に印が無効になる。
+ * 列を足すmigrationより先に動いたときは、警告のログを出して`false`を返す。ほかのエラーは投げる。
+ */
 export async function markWorkItemPrClosed(
-  _id: number,
-  _prUrl: string,
-  _readAt: Date,
-  _sql: SqlClient = defaultSqlClient,
-  _log: Logger = logger("db"),
+  id: number,
+  prUrl: string,
+  readAt: Date,
+  sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
 ): Promise<boolean> {
-  return false;
+  const at = readAt.toISOString();
+  try {
+    const rows = await sql`
+      UPDATE factory.work_items
+      SET pr_closed_at = ${at}::timestamptz
+      WHERE id = ${id}::bigint AND pr_url = ${prUrl} AND status = 'pr_open'
+        AND updated_at <= ${at}::timestamptz
+        AND (pr_closed_at IS NULL OR pr_closed_at < ${at}::timestamptz)
+      RETURNING id
+    `.fetch();
+    return rows.length > 0;
+  } catch (err) {
+    if (!isMissingPrClosedAtColumnError(err)) throw err;
+    log.warn(
+      "work_items.pr_closed_at is missing; the closed mark was not written (the datatable migration has not run yet)",
+      { work_item_id: id },
+    );
+    return false;
+  }
 }
 
-/** PRの作業項目(`pr_review`と`pr_fix`)に、PRが閉じた印を付ける。付けたら`true`を返す。 */
+/**
+ * PRの作業項目(`pr_review`と`pr_fix`)のうち、同じ`(owner, repo, prNumber)`のすべての行に、
+ * PRが閉じた印(`pr_closed_at = readAt`)を付ける。1行でも付けたら`true`を返す。
+ * 一覧を読む前から更新されていない行(`updated_at <= readAt`)にだけ付ける。理由は`markWorkItemPrClosed`と同じである。
+ * 一覧を読んだ後に書かれた行は印を持たないので、最新の行がその行のPRは一覧に残る。
+ * 列が無いときの扱いは`markWorkItemPrClosed`と同じである。
+ */
 export async function markTrackedPrClosed(
-  _owner: string,
-  _repo: string,
-  _prNumber: number,
-  _readAt: Date,
-  _sql: SqlClient = defaultSqlClient,
-  _log: Logger = logger("db"),
+  owner: string,
+  repo: string,
+  prNumber: number,
+  readAt: Date,
+  sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
 ): Promise<boolean> {
-  return false;
+  const at = readAt.toISOString();
+  const kinds: string[] = [...TRACKED_PR_KINDS];
+  try {
+    const rows = await sql`
+      UPDATE factory.work_items
+      SET pr_closed_at = ${at}::timestamptz
+      WHERE kind = ANY(${kinds}) AND owner = ${owner} AND repo = ${repo}
+        AND pr_number = ${prNumber}::integer
+        AND updated_at <= ${at}::timestamptz
+        AND (pr_closed_at IS NULL OR pr_closed_at < ${at}::timestamptz)
+      RETURNING id
+    `.fetch();
+    return rows.length > 0;
+  } catch (err) {
+    if (!isMissingPrClosedAtColumnError(err)) throw err;
+    log.warn(
+      "work_items.pr_closed_at is missing; the closed mark was not written (the datatable migration has not run yet)",
+      { owner, repo, pr_number: prNumber },
+    );
+    return false;
+  }
 }
 
 /**

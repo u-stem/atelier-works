@@ -44,12 +44,15 @@ import {
   latestPrWorkItem,
   listActive,
   listTrackedPrs,
+  markTrackedPrClosed,
+  readDbNow,
   readGhOwnerOpenPullRequests,
   recordFailure,
   resolveUnresolvedNoticesByMessage,
   setFixRound,
   setFlowJobId,
   setObservedWatermarks,
+  TRACKED_PR_LIST_LIMIT,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
 import { ghDetailStaleAfterMs } from "./lib/gh_collect_read.ts";
@@ -101,6 +104,7 @@ import {
   type PrReviewStartResult,
   startPrReview,
 } from "./lib/pr_review_start.ts";
+import { collectTrackedPrCandidates } from "./lib/tracked_pr_candidates.ts";
 import {
   hasLabel,
   isRecord,
@@ -1340,6 +1344,10 @@ export async function main(): Promise<{
   team_remembered: number;
   candidates: number;
   dropped: number;
+  /** 追跡中のPRのうち、マージ済みと確かめて閉じた印を付けた数。印が有効な間は、そのPRを読まない。 */
+  trackedClosedMarked: number;
+  /** 追跡中のPRが上限を超え、古い側を読まなかったか。 */
+  trackedOverLimit: boolean;
 }> {
   const log = logger("poll_prs");
   const config = await loadConfig(() =>
@@ -1419,50 +1427,29 @@ export async function main(): Promise<{
   // DBから見つけ直す。トリガーラベルを取得時に消費すると、収集の表のラベルでも
   // 一覧のラベルでも、そのPRを見つけられない。そこで`listTrackedPrs`が、
   // Factoryが追跡中のPR(pr_review・pr_fix種別、取り消されていない、
-  // `config.tracked_pr_days`以内に更新)を候補に足す。上の発見の結果とは
-  // PRのキーで重複を除き、`getPr`で取り直して開いていないものは落とす。
+  // `config.tracked_pr_days`以内に更新、閉じた印が有効でない、最大200件)を候補に足す。
+  // 上の発見の結果とはPRのキーで重複を除き、`getPr`で取り直して開いていないものは落とす。
+  // マージ済みのPRは、作業項目に閉じた印を付けて、以後の回で読み直さない。
   // 閉じた・マージされたPRの作業項目の取り消しは`poll_issues.ts`の
   // reconcileが行うので、ここでは扱わない。
-  const seenKeys = new Set(
-    rawCandidates.map((item) => prKey(item.owner, item.repo, item.number)),
+  const tracked = await collectTrackedPrCandidates(
+    new Set(
+      rawCandidates.map((item) => prKey(item.owner, item.repo, item.number)),
+    ),
+    {
+      limit: TRACKED_PR_LIST_LIMIT,
+      readDbNow: () => readDbNow(),
+      listTracked: () => listTrackedPrs(config.tracked_pr_days),
+      isRepoAllowed: (owner, repo) => isRepoAllowed(scope, owner, repo),
+      getPr: (owner, repo, number) => getPr(client, owner, repo, number),
+      markClosed: (pr, readAt) =>
+        markTrackedPrClosed(pr.owner, pr.repo, pr.pr_number, readAt),
+      recordFailure: (step, err) => recordFailureSafe(step, err, log),
+      log,
+    },
   );
-  try {
-    const tracked = await listTrackedPrs(config.tracked_pr_days);
-    for (const trackedPr of tracked) {
-      const key = prKey(trackedPr.owner, trackedPr.repo, trackedPr.pr_number);
-      if (seenKeys.has(key)) continue;
-      // 照合で飛ばしたオーナーや`owners`に無いオーナーの追跡中のPRは、
-      // 取り直さずに候補から外す。
-      if (!isRepoAllowed(scope, trackedPr.owner, trackedPr.repo)) continue;
-      try {
-        const pr = await getPr(
-          client,
-          trackedPr.owner,
-          trackedPr.repo,
-          trackedPr.pr_number,
-        );
-        if (pr.state !== "open") continue;
-        seenKeys.add(key);
-        rawCandidates.push({
-          owner: trackedPr.owner,
-          repo: trackedPr.repo,
-          number: trackedPr.pr_number,
-          title: pr.title,
-          htmlUrl: `https://github.com/${trackedPr.owner}/${trackedPr.repo}/pull/${String(trackedPr.pr_number)}`,
-        });
-      } catch (err) {
-        failed += 1;
-        await recordFailureSafe(
-          `fetch_tracked_pr:${trackedPr.owner}/${trackedPr.repo}#${String(trackedPr.pr_number)}`,
-          err,
-          log,
-        );
-      }
-    }
-  } catch (err) {
-    failed += 1;
-    await recordFailureSafe("list_tracked_prs", err, log);
-  }
+  failed += tracked.failed;
+  rawCandidates.push(...tracked.items);
 
   const allowed = filterByRepoAllowlist(rawCandidates, scope);
 
@@ -1606,6 +1593,8 @@ export async function main(): Promise<{
     team_remembered: discovered.stats.team_remembered,
     candidates: discovered.stats.candidates,
     dropped: discovered.stats.dropped,
+    trackedClosedMarked: tracked.closedMarked,
+    trackedOverLimit: tracked.overLimit,
   };
 }
 

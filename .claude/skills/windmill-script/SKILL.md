@@ -297,5 +297,6 @@ GitHubのラベルは、人からFactoryへのトリガーの役割に限る。
 - `kind IN ('pr_review', 'pr_fix')`
 - `status != 'cancelled'`
 - `tracked_pr_days`以内に更新されている
+- PRごとの最新の行で、閉じた印(`pr_closed_at`)が有効でない
 
 最初からやり直すには、人がトリガーラベルを付け直す。これが新しいcycleになる。
