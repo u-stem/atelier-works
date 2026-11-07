@@ -21,6 +21,7 @@ import { extname } from "node:path";
 
 type Plan = {
   readonly docs: readonly string[];
+  readonly deletedDocs: readonly string[];
   readonly console: boolean;
   readonly test: boolean;
   readonly fullTest: boolean;
@@ -63,6 +64,7 @@ export function decideChecks(
   const all = [...paths, ...deleted];
   return {
     docs: paths.filter((path) => path.endsWith(".md")),
+    deletedDocs: [],
     console: all.some((path) =>
       CONSOLE_AFFECTING.some((pattern) => pattern.test(path)),
     ),
@@ -84,6 +86,7 @@ const SKILL_DIRECTORY = /^(\.claude\/skills\/[^/]+)\//;
 export function collectMarkdownTests(
   markdownPaths: readonly string[],
   grep: GitGrep,
+  _exists: (path: string) => boolean,
 ): readonly string[] {
   const found = new Set<string>();
   for (const path of markdownPaths) {
@@ -149,6 +152,7 @@ function bunTest(changed: boolean, files: readonly string[]): string[] {
 export function planTestCommands(
   plan: Pick<Plan, "test" | "fullTest">,
   markdownTests: readonly string[],
+  _base: string,
 ): readonly (readonly string[])[] {
   if (plan.fullTest) return [[...FULL_TEST_COMMAND]];
   const commands: string[][] = [];
@@ -210,8 +214,8 @@ function run(label: string, argv: readonly string[]): void {
 function runTests(plan: Plan): void {
   const markdownTests = plan.fullTest
     ? []
-    : collectMarkdownTests(plan.docs, gitGrepTests());
-  const commands = planTestCommands(plan, markdownTests);
+    : collectMarkdownTests(plan.docs, gitGrepTests(), () => false);
+  const commands = planTestCommands(plan, markdownTests, "origin/main");
   if (commands.length === 0) {
     console.log("\n[check:changed] no tests to run");
   }

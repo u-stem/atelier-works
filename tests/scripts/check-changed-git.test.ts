@@ -8,7 +8,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { gitGrepTests, listChangedPaths } from "../../scripts/check-changed.ts";
+import {
+  collectMarkdownTests,
+  decideChecks,
+  gitGrepTests,
+  listChangedPaths,
+} from "../../scripts/check-changed.ts";
 
 // フックの中で動くとGIT_DIRなどが入るので、テスト用のリポジトリに漏らさない。
 function cleanEnv(): Record<string, string> {
@@ -137,6 +142,42 @@ describe("listChangedPaths", () => {
     commitAll();
 
     expect(listChangedPaths("HEAD", repo)).toEqual({ paths: [], deleted: [] });
+  });
+});
+
+describe("Markdown test selection", () => {
+  test("selects the test that writes the old path of a renamed document", () => {
+    write("docs/a.md", "a\n");
+    write("tests/lib/x.test.ts", 'read("docs/a.md");\n');
+    commitAll();
+    git(repo, ["mv", "docs/a.md", "docs/b.md"]);
+    const { paths, deleted } = listChangedPaths("HEAD", repo);
+    const plan = decideChecks(paths, deleted);
+
+    const selected = collectMarkdownTests(
+      [...plan.docs, ...plan.deletedDocs],
+      gitGrepTests(repo),
+      () => false,
+    );
+
+    expect(selected).toEqual(["tests/lib/x.test.ts"]);
+  });
+
+  test("selects the test that writes the path of a deleted document", () => {
+    write("docs/a.md", "a\n");
+    write("tests/lib/x.test.ts", 'read("docs/a.md");\n');
+    commitAll();
+    rmSync(join(repo, "docs/a.md"));
+    const { paths, deleted } = listChangedPaths("HEAD", repo);
+    const plan = decideChecks(paths, deleted);
+
+    const selected = collectMarkdownTests(
+      [...plan.docs, ...plan.deletedDocs],
+      gitGrepTests(repo),
+      () => false,
+    );
+
+    expect(selected).toEqual(["tests/lib/x.test.ts"]);
   });
 });
 
