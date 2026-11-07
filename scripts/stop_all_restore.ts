@@ -214,23 +214,34 @@ function confirmationOf(plan: RestorePlan): string {
 const STILL_STOPPED =
   "the stop-all is still placed (or its variable is corrupt); release it with mise run stop:release first. Nothing was changed.";
 
-/** 端末で働きうる制御文字と書式文字。改行とタブは、表示を崩さないので残す。 */
-const UNSAFE_FOR_TERMINAL = /[\p{Cc}\p{Cf}]/gu;
+/** 端末で働きうる制御文字と書式文字、行と段落の区切り。`f/factory/lib/stop_all.ts`の検査と同じ範囲である。 */
+const UNSAFE_FOR_TERMINAL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+function escapeChar(char: string): string {
+  return `\\u${(char.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`;
+}
 
 /**
  * 端末に出す文字列の、制御文字と書式文字を`\uXXXX`の字面に置き換える。改行とタブは残す。
  * 設定のキーや`wmill`の標準エラーは信頼できない入力で、端末の表示や題名を書き換える並びを含みうるためである。
+ * 改行を残すのは、複数行のscriptの結果を読める形で出すためで、1行の値には`oneLine`を使う。
  */
 export function safeForTerminal(text: string): string {
   return text.replace(UNSAFE_FOR_TERMINAL, (char) =>
-    char === "\n" || char === "\t"
-      ? char
-      : `\\u${(char.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`,
+    char === "\n" || char === "\t" ? char : escapeChar(char),
   );
 }
 
+/**
+ * 1行の値(例外の文、`wmill`の失敗の理由)を、改行とタブも字面にして1行にする。
+ * 値の中の改行が、このコマンドの出力に見える偽の行を作らないためである。
+ */
 export function oneLine(text: string): string {
-  return text;
+  return text.replace(UNSAFE_FOR_TERMINAL, (char) => {
+    if (char === "\n") return "\\n";
+    if (char === "\t") return "\\t";
+    return escapeChar(char);
+  });
 }
 
 /** 端末に出す設定の名前。記録してよい形の名前はそのまま、それ以外は引用符で囲み、制御文字を字面にして出す。 */
@@ -282,7 +293,10 @@ async function checkStopAll(io: RestoreIo): Promise<StopAllCheck> {
 }
 
 /** 止め直したときの、何が起きたかの文と、次にすることの文。読めなかった全停止を、置かれたものとして案内しない。 */
-function stopAgainWords(cause: Exclude<StopAllCheck, "clear">): {
+function stopAgainWords(
+  cause: Exclude<StopAllCheck, "clear">,
+  except: readonly string[],
+): {
   readonly head: string;
   readonly next: string;
   /** 手で戻してよくなる時点。読めなかった全停止の解除を待たせない。 */
@@ -291,12 +305,12 @@ function stopAgainWords(cause: Exclude<StopAllCheck, "clear">): {
   return cause === "placed"
     ? {
         head: "A stop-all was placed while restoring.",
-        next: "Run mise run stop:restore again after the stop-all is released.",
+        next: `Run mise run stop:restore${exceptOption(except)} again after the stop-all is released.`,
         when: "after the stop-all is released",
       }
     : {
         head: "The stop-all variable could not be read while restoring, so the settings are treated as stopped.",
-        next: "Check the stop-all variable in Windmill, then run mise run stop:restore again.",
+        next: `Check the stop-all variable in Windmill, then run mise run stop:restore${exceptOption(except)} again.`,
         when: "after confirming in Windmill that no stop-all is placed",
       };
 }
@@ -312,9 +326,10 @@ async function reportRecord(
   mode: "during" | "after_clear",
   first: StopAllRecord,
   plan: RestorePlan,
+  except: readonly string[],
   io: RestoreIo,
 ): Promise<void> {
-  const { next, when } = stopAgainWords(cause);
+  const { next, when } = stopAgainWords(cause, except);
   if (mode === "after_clear") {
     io.print(
       `Turn these on by hand in factory_config ${when}, when they should be on: ${plan.restore.map(displayName).join(", ")}. Check the other *_enabled settings that are false at the same time.`,
@@ -346,28 +361,29 @@ async function stopAgain(
   mode: "during" | "after_clear",
   first: StopAllRecord,
   plan: RestorePlan,
+  except: readonly string[],
   io: RestoreIo,
 ): Promise<void> {
-  const { head, when } = stopAgainWords(cause);
+  const { head, when } = stopAgainWords(cause, except);
   const read = await io.readConfig();
   if (!read.ok || !isRecord(read.value)) {
     io.print(
-      `${head} factory_config could not be read again${read.ok ? "" : ` (${read.reason})`}. Turn every *_enabled setting off in factory_config by hand.`,
+      `${head} factory_config could not be read again${read.ok ? "" : ` (${oneLine(read.reason)})`}. Turn every *_enabled setting off in factory_config by hand.`,
     );
-    await reportRecord(cause, mode, first, plan, io);
+    await reportRecord(cause, mode, first, plan, except, io);
     return;
   }
   if (holdsInlineFile(read.value)) {
     io.print(
       `${head} ${INLINE_REFUSAL} Turn every *_enabled setting off in factory_config by hand.`,
     );
-    await reportRecord(cause, mode, first, plan, io);
+    await reportRecord(cause, mode, first, plan, except, io);
     return;
   }
   const flags = enabledFlags(read.value);
   if (flags.length === 0) {
     io.print(`${head} Every *_enabled setting is already off.`);
-    await reportRecord(cause, mode, first, plan, io);
+    await reportRecord(cause, mode, first, plan, except, io);
     return;
   }
   const off: Record<string, unknown> = { ...read.value };
@@ -377,17 +393,15 @@ async function stopAgain(
   io.print(
     undone.ok
       ? `${head} Turned ${shown} off again.`
-      : `${head} The settings could not be turned off again (${undone.reason}). Turn ${shown} off in factory_config by hand.`,
+      : `${head} The settings could not be turned off again (${oneLine(undone.reason)}). Turn ${shown} off in factory_config by hand.`,
   );
-  const unrecorded = flags.filter(
-    (flag) => !first.flags.includes(flag) && !plan.restore.includes(flag),
-  );
+  const unrecorded = flags.filter((flag) => !first.flags.includes(flag));
   if (undone.ok && unrecorded.length > 0) {
     io.print(
       `These settings were on but not in the record, so turn them on by hand ${when}, when they should be on: ${unrecorded.map(displayName).join(", ")}.`,
     );
   }
-  await reportRecord(cause, mode, first, plan, io);
+  await reportRecord(cause, mode, first, plan, except, io);
 }
 
 /** 最初に読んだ記録と、今の記録が同じか。 */
@@ -408,12 +422,13 @@ async function writeAndCheck(
   plan: RestorePlan,
   original: Record<string, unknown>,
   first: StopAllRecord,
+  except: readonly string[],
   io: RestoreIo,
 ): Promise<boolean> {
   const again = await io.readConfig();
   if (!again.ok) {
     io.print(
-      `could not read factory_config again: ${again.reason}. Nothing was changed.`,
+      `could not read factory_config again: ${oneLine(again.reason)}. Nothing was changed.`,
     );
     return false;
   }
@@ -437,12 +452,12 @@ async function writeAndCheck(
   // 書き込みが時間切れで失敗しても、値は書かれていることがあるので、全停止を確かめる。
   const stopAll = await checkStopAll(io);
   if (stopAll !== "clear") {
-    await stopAgain(stopAll, "during", first, plan, io);
+    await stopAgain(stopAll, "during", first, plan, except, io);
     return false;
   }
   if (!written.ok) {
     io.print(
-      `could not write factory_config: ${written.reason}. Check factory_config; the record was kept.`,
+      `could not write factory_config: ${oneLine(written.reason)}. Check factory_config; the record was kept.`,
     );
     return false;
   }
@@ -492,9 +507,9 @@ async function clearRecordIfUnchanged(
   const before = await checkStopAll(io);
   if (before !== "clear") {
     if (plan.restore.length > 0) {
-      await stopAgain(before, "during", first, plan, io);
+      await stopAgain(before, "during", first, plan, except, io);
     } else {
-      const { head, next } = stopAgainWords(before);
+      const { head, next } = stopAgainWords(before, except);
       io.print(`${head} Nothing was changed. ${next}`);
     }
     return 1;
@@ -504,17 +519,22 @@ async function clearRecordIfUnchanged(
   if (after === "placed") {
     io.warn(PLACED_AFTER_CLEAR);
     if (plan.restore.length > 0) {
-      await stopAgain(after, "after_clear", first, plan, io);
+      await stopAgain(after, "after_clear", first, plan, except, io);
     }
     return 1;
   }
   if (after === "unreadable") {
-    io.warn(UNREADABLE_AFTER_CLEAR);
+    // 消す書き込みが失敗と返ったときは、記録が残っていることもあるので、その理由を添える。
+    io.warn(
+      cleared.ok
+        ? UNREADABLE_AFTER_CLEAR
+        : `${UNREADABLE_AFTER_CLEAR} Clearing the record also failed (${oneLine(cleared.reason)}), so the record may remain.`,
+    );
     return 1;
   }
   if (!cleared.ok) {
     io.print(
-      `could not clear the record of the stop-all: ${cleared.reason}. The settings listed under 'Will turn on' are on; run mise run stop:restore${exceptOption(except)} again with the same --except to clear the record.`,
+      `could not clear the record of the stop-all: ${oneLine(cleared.reason)}. The settings listed under 'Will turn on' are on; run mise run stop:restore${exceptOption(except)} again with the same --except to clear the record.`,
     );
     return 1;
   }
@@ -537,7 +557,7 @@ export async function runRestore(
   const stopAll = await io.readStopAll();
   if (!stopAll.ok) {
     io.print(
-      `could not read the stop-all variable: ${stopAll.reason}. Nothing was changed.`,
+      `could not read the stop-all variable: ${oneLine(stopAll.reason)}. Nothing was changed.`,
     );
     return 1;
   }
@@ -548,14 +568,14 @@ export async function runRestore(
   const recordRead = await io.readRecord();
   if (!recordRead.ok) {
     io.print(
-      `could not read the record of the stop-all (it may not exist yet): ${recordRead.reason}. Nothing was changed.`,
+      `could not read the record of the stop-all (it may not exist yet): ${oneLine(recordRead.reason)}. Nothing was changed.`,
     );
     return 1;
   }
   const record = parseStopAllRecord(recordRead.value);
   if (record.kind === "corrupt" || record.kind === "unreadable") {
     io.print(
-      `the record of the stop-all is corrupt: ${record.reason}. Nothing was changed; turn the settings on by hand in factory_config.`,
+      `the record of the stop-all is corrupt: ${oneLine(record.reason)}. Nothing was changed; turn the settings on by hand in factory_config.`,
     );
     return 1;
   }
@@ -576,7 +596,7 @@ export async function runRestore(
   const read = await io.readConfig();
   if (!read.ok) {
     io.print(
-      `could not read factory_config: ${read.reason}. Nothing was changed.`,
+      `could not read factory_config: ${oneLine(read.reason)}. Nothing was changed.`,
     );
     return 1;
   }
@@ -602,7 +622,7 @@ export async function runRestore(
     parseFactoryConfig(original);
   } catch (err) {
     io.print(
-      `factory_config does not pass the config check (config_invalid): ${err instanceof Error ? err.message : String(err)}. Nothing was changed; fix it first.`,
+      `factory_config does not pass the config check (config_invalid): ${oneLine(err instanceof Error ? err.message : String(err))}. Nothing was changed; fix it first.`,
     );
     return 1;
   }
@@ -619,7 +639,7 @@ export async function runRestore(
   }
   if (
     plan.restore.length > 0 &&
-    !(await writeAndCheck(plan, original, record.record, io))
+    !(await writeAndCheck(plan, original, record.record, except, io))
   ) {
     return 1;
   }

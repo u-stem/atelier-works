@@ -43,6 +43,7 @@ import { isRecord } from "../f/factory/lib/types.ts";
 import { parseRunningJobs, runningJobsSql } from "./check-idle.ts";
 import {
   displayName,
+  oneLine,
   parseExceptNames,
   type RestoreRead,
   type RestoreStore,
@@ -323,14 +324,14 @@ export function recordWarnings(stdout: string): string[] {
 /** 置けなかったか解除できなかった理由。成功していれば`null`を返す。 */
 function scriptFailure(result: ExecResult): string | null {
   if (result.exitCode !== 0) {
-    return `the script failed (exit ${String(result.exitCode)}): ${result.stderr.trim()}`;
+    return `the script failed (exit ${String(result.exitCode)}): ${oneLine(result.stderr.trim())}`;
   }
   const outcome = readScriptOutcome(result.stdout);
   switch (outcome.kind) {
     case "done":
       return null;
     case "refused":
-      return `the script refused (${outcome.reason})`;
+      return `the script refused (${oneLine(outcome.reason)})`;
     case "unreadable":
       return "the result of the script could not be read";
   }
@@ -355,7 +356,7 @@ async function killLeftovers(deps: StopDeps): Promise<number> {
   const listed = await deps.workerExec(PS_ARGV);
   if (listed.exitCode !== 0) {
     deps.print(
-      `could not list the worker processes (exit ${String(listed.exitCode)}): ${listed.stderr.trim()}`,
+      `could not list the worker processes (exit ${String(listed.exitCode)}): ${oneLine(listed.stderr.trim())}`,
     );
     return 1;
   }
@@ -389,7 +390,7 @@ async function killLeftovers(deps: StopDeps): Promise<number> {
 async function cancelRunningJobs(deps: StopDeps): Promise<number> {
   const jobs = await deps.listRunningJobs();
   if (!jobs.ok) {
-    deps.print(`could not list the running jobs: ${jobs.reason}`);
+    deps.print(`could not list the running jobs: ${oneLine(jobs.reason)}`);
     return 1;
   }
   let failures = 0;
@@ -398,7 +399,9 @@ async function cancelRunningJobs(deps: StopDeps): Promise<number> {
     if (cancelled.exitCode === 0) {
       deps.print(`cancelled job ${id}`);
     } else {
-      deps.print(`could not cancel job ${id}: ${cancelled.stderr.trim()}`);
+      deps.print(
+        `could not cancel job ${id}: ${oneLine(cancelled.stderr.trim())}`,
+      );
       failures += 1;
     }
   }

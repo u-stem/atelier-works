@@ -752,12 +752,13 @@ describe("runRestore and the names to turn on by hand", () => {
       ],
     });
     await runRestore(["dependabot_enabled"], io);
-    const lines = printed.filter((line) =>
-      line.includes("Turn these on by hand"),
-    );
+    // 名前の一覧だけを見る。再実行の案内の`--except`に出る名前は数えない。
+    const names = printed
+      .filter((line) => line.includes("Turn these on by hand"))
+      .map((line) => /should be on: ([^.]*)\./.exec(line)?.[1] ?? "");
     expect({
-      restored: lines.some((line) => line.includes("implement_enabled")),
-      excepted: lines.some((line) => line.includes("dependabot_enabled")),
+      restored: names.some((list) => list.includes("implement_enabled")),
+      excepted: names.some((list) => list.includes("dependabot_enabled")),
     }).toEqual({ restored: true, excepted: false });
   });
 
