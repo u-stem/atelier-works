@@ -36,6 +36,7 @@ import { selectOrphanClaudePids } from "../f/factory/lib/cleanup_support.ts";
 import {
   isStopAllReason,
   STOP_ALL_REASON_MAX,
+  STOP_ALL_RECORD_VARIABLE_DESCRIPTION,
   STOP_ALL_RECORD_VARIABLE_PATH,
   STOP_ALL_VARIABLE_PATH,
 } from "../f/factory/lib/stop_all.ts";
@@ -654,26 +655,66 @@ async function pushJson(
   }
 }
 
-/** 戻す手順の読み書きを、人の`wmill`のプロファイルで行う。 */
+/**
+ * `factory_config`を書く。書く直前に`wmill resource get --json`で型と説明を読み、pushするファイルにも同じ値を入れる。
+ * `push`が値以外の項目を部分更新として扱っても、置き換えとして扱っても、型と説明が変わらないためである。
+ * 型を読めないときは書かない。想定外の型でリソースを書かないためである。
+ */
+async function writeConfigValue(
+  run: CommandRunner,
+  value: Record<string, unknown>,
+): Promise<RestoreWrite> {
+  const result = await run([
+    "wmill",
+    "resource",
+    "get",
+    FACTORY_CONFIG_PATH,
+    "--json",
+  ]);
+  if (result.exitCode !== 0) {
+    return { ok: false, reason: failureOf(result, "wmill resource get") };
+  }
+  const parsed = parseJsonOutput(result.stdout);
+  if (!isRecord(parsed) || typeof parsed.resource_type !== "string") {
+    return {
+      ok: false,
+      reason:
+        "the resource type of factory_config could not be read; nothing was written",
+    };
+  }
+  const body: Record<string, unknown> = {
+    value,
+    resource_type: parsed.resource_type,
+  };
+  if (typeof parsed.description === "string") {
+    body.description = parsed.description;
+  }
+  return await pushJson(
+    run,
+    "resource",
+    "factory_config.resource.json",
+    body,
+    FACTORY_CONFIG_PATH,
+  );
+}
+
+/** 戻す手順の読み書きを、人の`wmill`のプロファイルで行う。`run`はコマンドを実行する関数で、テストでは差し替える。 */
 export function wmillRestoreStore(run: CommandRunner): RestoreStore {
   return {
     readStopAll: () => readVariableValue(run, STOP_ALL_VARIABLE_PATH),
     readRecord: () => readVariableValue(run, STOP_ALL_RECORD_VARIABLE_PATH),
     readConfig: () => readConfigValue(run),
-    writeConfig: (value) =>
-      pushJson(
-        run,
-        "resource",
-        "factory_config.resource.json",
-        { value },
-        FACTORY_CONFIG_PATH,
-      ),
+    writeConfig: (value) => writeConfigValue(run, value),
     clearRecord: () =>
       pushJson(
         run,
         "variable",
         "stop_all_record.variable.json",
-        { value: "", is_secret: false },
+        {
+          value: "",
+          is_secret: false,
+          description: STOP_ALL_RECORD_VARIABLE_DESCRIPTION,
+        },
         STOP_ALL_RECORD_VARIABLE_PATH,
       ),
   };
