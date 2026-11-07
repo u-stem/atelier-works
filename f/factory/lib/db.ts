@@ -3876,7 +3876,8 @@ export const TRACKED_PR_LIST_LIMIT = 200;
  * 新しく更新された順に、最大`limit + 1`件を返す。呼び出し側は、返った件数が`limit`を超えたときに、
  * 上限で読み残したPRがあると分かる。`limit`は正の整数で、`limit + 1`が安全な整数に収まる値に限る。
  * 上の条件はすべて`DISTINCT ON`の外側に置く。最新の行を選んだ後で絞らないと、
- * 古い行が代わりに返ってしまう。
+ * 古い行が代わりに返ってしまう。印の列を読む`to_jsonb`は、最新の行に絞った後で、
+ * 行を`id`で結び直して1回だけ読む。内側で読むと、期間で絞る前の全行に対して動く。
  */
 export async function listTrackedPrs(
   withinDays: number,
@@ -3896,18 +3897,19 @@ export async function listTrackedPrs(
   const rows = await sql`
     WITH latest AS (
       SELECT DISTINCT ON (owner, repo, pr_number)
-        owner, repo, pr_number, head_sha, kind, status, updated_at,
-        (to_jsonb(w) ->> 'pr_closed_at')::timestamptz AS pr_closed_at
-      FROM factory.work_items w
+        id, owner, repo, pr_number, head_sha, kind, status, updated_at
+      FROM factory.work_items
       WHERE kind = ANY(${kinds}) AND pr_number IS NOT NULL
       ORDER BY owner, repo, pr_number, updated_at DESC
     )
-    SELECT owner, repo, pr_number, head_sha, kind, status, updated_at
+    SELECT latest.owner, latest.repo, latest.pr_number, latest.head_sha,
+           latest.kind, latest.status, latest.updated_at
     FROM latest
-    WHERE status != 'cancelled'
-      AND updated_at >= now() - make_interval(days => ${withinDays}::int)
-      AND NOT COALESCE(pr_closed_at >= updated_at, false)
-    ORDER BY updated_at DESC
+    JOIN factory.work_items w ON w.id = latest.id
+    WHERE latest.status != 'cancelled'
+      AND latest.updated_at >= now() - make_interval(days => ${withinDays}::int)
+      AND NOT COALESCE((to_jsonb(w) ->> 'pr_closed_at')::timestamptz >= latest.updated_at, false)
+    ORDER BY latest.updated_at DESC
     LIMIT ${limit + 1}::bigint
   `.fetch();
 
