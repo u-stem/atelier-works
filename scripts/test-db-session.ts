@@ -36,6 +36,9 @@ export type PsqlSessionOptions = {
   readonly exit?: (code: number) => never;
   /** 1文を待つ上限。 */
   readonly timeoutMs?: number;
+  /** セッションの起動(接続と、控えるbackendの問い合わせ)を待つ上限。文の上限とは別にする。 */
+  readonly startTimeoutMs?: number;
+  /** 間隔を測る時計(ミリ秒)。既定は単調な時計で、戻ることが無い。 */
   readonly now?: () => number;
   readonly sleep?: (ms: number) => Promise<void>;
 };
@@ -49,6 +52,7 @@ export type PsqlSessions = {
 };
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_START_TIMEOUT_MS = 60_000;
 const TERMINATE_TIMEOUT_MS = 10_000;
 const CLOSE_TIMEOUT_MS = 5_000;
 
@@ -56,7 +60,9 @@ const CLOSE_TIMEOUT_MS = 5_000;
  * 前の文が完了(印を受け取る)してから、次の文を書くまでに空ける最小の間隔。
  * DBの`now()`はマイクロ秒だが、JSの`Date`はミリ秒に切り捨てるので、
  * 文が1ミリ秒未満で続くと、別の文の時刻が同じ値に見えて「時刻が変わっていない」検査が退行を見逃す。
- * 前の文の`now()`は完了より前、次の文の`now()`は書いた後なので、サーバーの2つの`now()`は2ミリ秒以上離れる。
+ * 前の文の`now()`は完了より前、次の文の`now()`は書いた後なので、サーバーの2つの`now()`は、測った間隔の分だけ離れる。
+ * 測るのは2ミリ秒で、切り捨てた後に別の値になる条件(1ミリ秒を超えて離れること)を満たす。
+ * サーバーとこのプロセスの時計のずれまでは保証しない。
  */
 const MIN_STATEMENT_GAP_MS = 2;
 
@@ -232,7 +238,7 @@ class PsqlProcess {
    */
   async round(sql: string, timeoutMs: number): Promise<Round> {
     const mark = newMark();
-    const deadline = Date.now() + timeoutMs;
+    const deadline = performance.now() + timeoutMs;
     try {
       await this.proc.stdin.write(frame(sql, mark));
       await this.proc.stdin.flush();
@@ -263,7 +269,7 @@ class PsqlProcess {
           stderr: new TextDecoder().decode(this.stderr).trim(),
         };
       }
-      const remaining = deadline - Date.now();
+      const remaining = deadline - performance.now();
       if (remaining <= 0) return { kind: "timeout" };
       await this.wait(remaining);
     }
@@ -281,9 +287,9 @@ class PsqlProcess {
     } catch {
       // すでに閉じている。
     }
-    const deadline = Date.now() + CLOSE_TIMEOUT_MS;
-    while (!this.finished && deadline - Date.now() > 0) {
-      await this.wait(deadline - Date.now());
+    const deadline = performance.now() + CLOSE_TIMEOUT_MS;
+    while (!this.finished && deadline - performance.now() > 0) {
+      await this.wait(deadline - performance.now());
     }
     if (!this.finished) this.proc.kill();
   }
@@ -305,7 +311,8 @@ export function createPsqlSessions(
   const argv = options.argv ?? psqlArgv;
   const containerId = options.containerId ?? dbContainerId;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const now = options.now ?? Date.now;
+  const startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
+  const now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms));
   const exit = options.exit ?? ((code: number): never => process.exit(code));
   const terminate =
@@ -372,10 +379,10 @@ export function createPsqlSessions(
         false,
       );
     }
-    const result = await proc.round(BACKEND_QUERY, timeoutMs);
+    const result = await proc.round(BACKEND_QUERY, startTimeoutMs);
     if (result.kind !== "ok") {
       return fatal(
-        describeFailure("session start", result),
+        describeFailure("session start", result, startTimeoutMs),
         proc,
         target,
         false,
@@ -386,12 +393,16 @@ export function createPsqlSessions(
     return proc;
   }
 
-  function describeFailure(label: string, result: Round): string {
+  function describeFailure(
+    label: string,
+    result: Round,
+    limitMs: number,
+  ): string {
     if (result.kind === "exited") {
       return `${label}: psql exited with code ${String(result.code)}: ${result.stderr}`;
     }
     if (result.kind === "timeout") {
-      return `${label}: no reply within ${String(timeoutMs)} ms`;
+      return `${label}: no reply within ${String(limitMs)} ms`;
     }
     if (result.kind === "protocol") return `${label}: ${result.reason}`;
     return `${label}: unexpected state`;
@@ -404,7 +415,8 @@ export function createPsqlSessions(
     const key = `${databaseKey(target)}\u0000${format}`;
     const started = start(target, format);
     // 次に使われるまで結果を読まないので、未処理の拒否にしない。使われたときは、同じ拒否が呼び出しに届く。
-    // 起動に失敗したセッションは残さず、次の呼び出しが起動し直す。
+    // 既定の`exit`は`process.exit`なので、本番では起動の失敗が拒否にならない。
+    // `exit`を差し替えたときに、拒否したセッションを残さず、次の呼び出しが起動し直す。
     started.catch(() => {
       if (processes.get(key) === started) processes.delete(key);
     });
@@ -458,7 +470,7 @@ export function createPsqlSessions(
         throw new Error(`psql failed (exit 3): ${result.stderr}`);
       }
       return fatal(
-        describeFailure("statement", result),
+        describeFailure("statement", result, timeoutMs),
         proc,
         target,
         result.kind === "timeout",
