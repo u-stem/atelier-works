@@ -1,3 +1,4 @@
+import { Check, Minus } from "lucide-react";
 import { useState } from "react";
 import type {
   ConfigItemView,
@@ -6,6 +7,7 @@ import type {
 } from "../../api/jobsQueries.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { EmptyNote } from "../../components/EmptyNote.tsx";
+import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { Field } from "../../components/ui/field.tsx";
@@ -16,6 +18,7 @@ import {
   checkCommandsOf,
   EDITABLE_LISTS,
 } from "../../lib/configChange.ts";
+import { groupConfigItems } from "../../lib/configGroups.ts";
 import type { ConfigEntryValue } from "../../lib/configValue.ts";
 import {
   CONFIG_REFERENCE_LABEL,
@@ -43,6 +46,10 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
           <TextValue text={value.text} />
         </span>
       );
+    case "boolean":
+      return <SwitchBadge enabled={value.enabled} rawText={value.text} />;
+    case "number":
+      return <NumberValue text={value.text} unit={value.unit} />;
     case "empty":
       return <EmptyValue note={value.note} />;
     case "list":
@@ -58,6 +65,39 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
         </pre>
       );
   }
+}
+
+/**
+ * 真偽。語(有効、無効)と記号(チェック、ハイフン)で示し、色だけに頼らない。
+ * 書かれた値(true、false)は、読み上げにだけ残す。
+ */
+function SwitchBadge({
+  enabled,
+  rawText,
+}: {
+  enabled: boolean;
+  rawText: string;
+}) {
+  const Mark = enabled ? Check : Minus;
+  return (
+    <Badge variant={enabled ? "success" : "muted"}>
+      <Mark aria-hidden="true" />
+      {enabled ? "有効" : "無効"}
+      <span className="sr-only">({rawText})</span>
+    </Badge>
+  );
+}
+
+/** 数値。広い幅では右にそろえて桁をそろえる。単位は数字の後ろに薄く添え、生の数字はそのまま読める。 */
+function NumberValue({ text, unit }: { text: string; unit: string | null }) {
+  return (
+    <span className="inline-flex items-baseline gap-1">
+      <span className="tabular-nums @2xl:min-w-14 @2xl:text-right">{text}</span>
+      {unit === null ? null : (
+        <span className="text-caption text-muted-foreground">{unit}</span>
+      )}
+    </span>
+  );
 }
 
 /** 要素ごとの1行。括弧とカンマを出さない。 */
@@ -200,10 +240,11 @@ function ChangeButton({
 }
 
 /**
- * 設定の項目の一覧。キー、値の順に並べる。値はテキストのノードとして描く。
+ * 設定の項目の一覧。機能ごとのグループに分け、グループごとに、項目、値、操作の列を持つ表にする。
+ * どのグループにも入らない項目は、最後の「その他」に出す。値はテキストのノードとして描く。
  * 参照と、伏せた値は、値を出さずに「参照(出さない)」と表示する。
- * `onChoose`を渡すと、止める向きか下げる向きに変えられる項目に、その操作のボタンを添える。
- * 一覧の3項目は、値の行を編集できる一覧にして、要素ごとの削除と一覧の追加のボタンを置く。
+ * `onChoose`を渡すと、止める向きか下げる向きに変えられる項目に、操作の列のボタンを添える。
+ * 一覧の3項目は、値の行を編集できる一覧にして、要素ごとの削除と一覧の追加のボタンを値の中に置く。
  * ボタンは確認のダイアログを開くだけで、書き込みは確認を通った後にだけ呼ぶ。
  */
 export function ConfigList({
@@ -219,46 +260,130 @@ export function ConfigList({
     return <EmptyNote>該当する項目はありません。</EmptyNote>;
   }
   return (
-    <Card tag="dl" variant="list">
-      {items.map((item) => {
-        const offers = onChoose === undefined ? [] : changeOffersOf(item);
-        const offer = offers[0];
-        return (
-          <div
-            key={item.key}
-            className="grid gap-1 px-4 py-2.5 text-small sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] sm:gap-x-4"
-          >
-            <dt className="font-mono break-all">{safeText(item.key)}</dt>
-            {onChoose !== undefined &&
-            EDITABLE_LISTS.includes(item.key) &&
-            offers.length > 0 ? (
-              <dd className="min-w-0 tabular-nums">
-                <EditableListValue
-                  item={item}
-                  offers={offers}
-                  isLocked={isLocked}
-                  onChoose={onChoose}
-                />
-              </dd>
-            ) : (
-              <dd className="flex min-w-0 items-start justify-between gap-3 tabular-nums">
-                <div className="min-w-0">
-                  <ConfigValue item={item} />
-                </div>
-                {onChoose === undefined ||
-                !isSwitchOrNumberOffer(offer) ? null : (
-                  <ChangeButton
-                    offer={offer}
-                    locked={isLocked(offer)}
-                    onChoose={onChoose}
-                  />
-                )}
-              </dd>
-            )}
+    <div className="@container flex flex-col gap-5">
+      {groupConfigItems(items).map((group) => (
+        <ConfigGroupTable
+          key={group.id}
+          id={group.id}
+          label={group.label}
+          items={group.items}
+          onChoose={onChoose}
+          isLocked={isLocked}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 1つの項目の行。キーは行の見出し、値は型ごとの表示、操作の列は止めるか下げるのボタンである。
+ * 一覧の追加と削除のボタンは、値の中にあるので、操作の列には置かない。
+ */
+function ConfigRow({
+  item,
+  onChoose,
+  isLocked,
+}: {
+  item: ConfigItemView;
+  onChoose: ((offer: ChangeOffer) => void) | undefined;
+  isLocked: (offer: ChangeOffer) => boolean;
+}) {
+  const offers = onChoose === undefined ? [] : changeOffersOf(item);
+  const offer = offers[0];
+  const editableList =
+    onChoose !== undefined &&
+    EDITABLE_LISTS.includes(item.key) &&
+    offers.length > 0;
+  return (
+    <tr className="block @2xl:table-row">
+      <th
+        scope="row"
+        className="block px-4 pt-2.5 pb-1 text-left align-top font-mono font-normal break-all @2xl:table-cell @2xl:py-2.5"
+      >
+        {safeText(item.key)}
+      </th>
+      <td className="block min-w-0 px-4 pb-2.5 align-top tabular-nums @2xl:table-cell @2xl:py-2.5">
+        {editableList ? (
+          <EditableListValue
+            item={item}
+            offers={offers}
+            isLocked={isLocked}
+            onChoose={onChoose}
+          />
+        ) : (
+          <ConfigValue item={item} />
+        )}
+      </td>
+      <td className="block px-4 align-top @2xl:table-cell @2xl:py-2.5 @2xl:text-right">
+        {editableList ||
+        onChoose === undefined ||
+        !isSwitchOrNumberOffer(offer) ? null : (
+          <div className="pb-2.5 @2xl:pb-0">
+            <ChangeButton
+              offer={offer}
+              locked={isLocked(offer)}
+              onChoose={onChoose}
+            />
           </div>
-        );
-      })}
-    </Card>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+/** 1つのグループの表。見出し(h3)が表の名前になる。狭い幅では、表をやめて項目ごとに縦に積む。 */
+function ConfigGroupTable({
+  id,
+  label,
+  items,
+  onChoose,
+  isLocked,
+}: {
+  id: string;
+  label: string;
+  items: readonly ConfigItemView[];
+  onChoose: ((offer: ChangeOffer) => void) | undefined;
+  isLocked: (offer: ChangeOffer) => boolean;
+}) {
+  const headingId = `config-group-${id}`;
+  return (
+    <section aria-labelledby={headingId} className="flex flex-col gap-2">
+      <h3 id={headingId} className="text-small font-semibold">
+        {label}
+      </h3>
+      <Card className="overflow-hidden text-small">
+        <table className="block w-full border-collapse @2xl:table @2xl:table-fixed">
+          <colgroup>
+            <col className="@2xl:w-72" />
+            <col />
+            <col className="@2xl:w-24" />
+          </colgroup>
+          <thead className="sr-only @2xl:not-sr-only @2xl:table-header-group">
+            <tr className="border-b border-border text-left text-muted-foreground">
+              <th scope="col" className="px-4 py-2 font-medium">
+                項目
+              </th>
+              <th scope="col" className="px-4 py-2 font-medium">
+                値
+              </th>
+              <th scope="col" className="px-4 py-2 text-right font-medium">
+                操作
+              </th>
+            </tr>
+          </thead>
+          <tbody className="block divide-y divide-border @2xl:table-row-group">
+            {items.map((item) => (
+              <ConfigRow
+                key={item.key}
+                item={item}
+                onChoose={onChoose}
+                isLocked={isLocked}
+              />
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </section>
   );
 }
 
@@ -340,6 +465,7 @@ export function ConfigSection({
       id="config-heading"
       title="設定"
       visuallyHiddenTitle
+      wide
       description="factory_configの全項目です。参照と伏せた値は「参照(出さない)」と表示します。許可した項目だけ、止める向きと下げる向きの変更と、一覧の追加と削除ができます。"
       query={query}
       loginHint="上のバナーからログインすると、設定を表示します。"

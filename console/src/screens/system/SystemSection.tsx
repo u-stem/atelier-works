@@ -9,6 +9,7 @@ import {
 } from "../../components/LoadingState.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
+import { cn } from "../../lib/cn.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 
 /** 内容が未知の節の読み込み中の形。 */
@@ -91,6 +92,7 @@ export function SystemSection<T>({
   query,
   loginHint,
   visuallyHiddenTitle = false,
+  wide = false,
   children,
 }: {
   /** 見出しの要素のid。節の`aria-labelledby`が指す。 */
@@ -98,6 +100,8 @@ export function SystemSection<T>({
   title: string;
   /** 見出しが、開いているタブの名前と重なるとき、画面には出さず、読み上げにだけ残す。 */
   visuallyHiddenTitle?: boolean;
+  /** 表のように横に広がる本文のために、読みやすい幅の上限を広げる。文章の節は広げない。 */
+  wide?: boolean;
   description: ReactNode;
   query: SectionQuery<T>;
   /** 401で取得できないときに、ログイン後に何が出るかを伝える文。 */
@@ -107,7 +111,10 @@ export function SystemSection<T>({
 }) {
   const now = useNow();
   return (
-    <section aria-labelledby={id} className="flex max-w-3xl flex-col gap-3">
+    <section
+      aria-labelledby={id}
+      className={cn("flex flex-col gap-3", wide ? "max-w-6xl" : "max-w-3xl")}
+    >
       <div className="min-w-0">
         {/* 要約の帯のリンクで移った後にフォーカスを受ける。Tabの順には入れない。 */}
         <h2

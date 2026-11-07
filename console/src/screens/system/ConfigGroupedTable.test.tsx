@@ -119,7 +119,7 @@ describe("ConfigList values of a number", () => {
 
   test("shows a number whose key has no unit without one", () => {
     const html = renderItems([item("max_attempts", 3)]);
-    expect(cellsOf(html, "max_attempts")[0]).toMatch(/>3<\/span>$/);
+    expect(cellsOf(html, "max_attempts")[0]?.replace(/<[^>]*>/g, "")).toBe("3");
   });
 
   test("aligns a number to the right", () => {
