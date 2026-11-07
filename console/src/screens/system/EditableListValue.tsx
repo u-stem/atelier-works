@@ -1,6 +1,6 @@
 import type { ConfigItemView } from "../../api/jobsQueries.ts";
 import { Button } from "../../components/ui/button.tsx";
-import type { ChangeOffer } from "../../lib/configChange.ts";
+import { type ChangeOffer, LAST_ELEMENT_NOTE } from "../../lib/configChange.ts";
 import { describeConfigValue } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { EmptyValue, TextValue } from "./ConfigText.tsx";
@@ -39,10 +39,6 @@ export function ListChangeButton({
     </Button>
   );
 }
-
-/** 最後の1件を削除できない理由。`repo_allowlist`を空にすると、`owners`配下の全リポジトリが対象になる。 */
-const LAST_ELEMENT_NOTE =
-  "最後の1件は削除できません。空だと owners 配下の全リポジトリが対象になります。";
 
 /**
  * 1要素ずつ追加と削除ができる一覧。各要素の行に削除、一覧の下に追加のボタンを置く。

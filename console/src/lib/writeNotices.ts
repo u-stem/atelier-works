@@ -28,6 +28,7 @@ import type {
   StopAllReleaseResult,
   StopAllResult,
 } from "../api/guards/writeResults.ts";
+import { LAST_ELEMENT_NOTE } from "./configChange.ts";
 import {
   STOP_MIN_REMAINING_MINUTES,
   STOP_READY_AFTER_MINUTES,
@@ -405,8 +406,7 @@ const CONFIG_UPDATE_REFUSALS: Readonly<
   already_present: "その要素はすでにあります。変更しませんでした。",
   invalid_element:
     "要素の形式が正しくないため、変更しませんでした。repo_allowlist は https://github.com/owner/repo、dependabot_other_repos は owner/repo、default_reviewers は GitHub のログイン名で、どれも100字までです。",
-  would_empty:
-    "最後の1件は削除できません。空だと owners 配下の全リポジトリが対象になります。",
+  would_empty: LAST_ELEMENT_NOTE,
   owner_not_listed:
     "owners に無いアカウントのリポジトリは追加できません。変更しませんでした。",
 };

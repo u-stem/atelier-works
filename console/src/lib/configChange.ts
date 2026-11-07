@@ -57,6 +57,10 @@ export const MAX_ELEMENT_LENGTH = 100;
  */
 const ALLOWLIST_ITEM = "repo_allowlist";
 
+/** `repo_allowlist`の最後の1件を削除できない理由。行の案内と、削除を断る通知が同じ文を使う。 */
+export const LAST_ELEMENT_NOTE =
+  "最後の1件は削除できません。空だと owners 配下の全リポジトリが対象になります。";
+
 /** 画面が出す変更の候補。止める操作、数値を下げる操作、一覧の要素の追加と削除。 */
 export type ChangeOffer =
   | { readonly kind: "stop"; readonly key: string }
