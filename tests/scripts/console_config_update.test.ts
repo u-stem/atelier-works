@@ -621,7 +621,6 @@ describe("the list of items that can be changed", () => {
         "invalid_value",
         "item_not_allowed",
         "not_lowering",
-        "not_present",
         "owner_not_listed",
         "would_empty",
       ].sort(),
