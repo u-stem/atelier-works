@@ -10,7 +10,12 @@ import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
-import { type ChangeOffer, changeOfferOf } from "../../lib/configChange.ts";
+import {
+  type ChangeOffer,
+  changeOffersOf,
+  checkCommandsOf,
+  EDITABLE_LISTS,
+} from "../../lib/configChange.ts";
 import type { ConfigEntryValue } from "../../lib/configValue.ts";
 import {
   CONFIG_REFERENCE_LABEL,
@@ -20,6 +25,8 @@ import {
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { ConfigChangeDialog } from "./ConfigChangeDialog.tsx";
+import { EmptyValue, TextValue } from "./ConfigText.tsx";
+import { EditableListValue } from "./EditableListValue.tsx";
 import { SystemSection } from "./SystemSection.tsx";
 import { useConfigChange } from "./useConfigChange.ts";
 
@@ -51,32 +58,6 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
         </pre>
       );
   }
-}
-
-/** 空の文字列を示す目印。値とキーは等幅や通常の文字で描くので、斜体で薄い文字は見分けがつく。 */
-const EMPTY_STRING_LABEL = "(空の文字列)";
-
-/**
- * 値、キー、列の見出しの文字列。空か空白だけの文字列は、見えなくなるので、目印で描く。
- * 引数は`safeText`を通した文字列である。見えない文字は代替文字になっていて、空白だけとは見なさない。
- */
-function TextValue({ text }: { text: string }) {
-  if (text.trim() === "") {
-    return (
-      <span className="text-muted-foreground italic">{EMPTY_STRING_LABEL}</span>
-    );
-  }
-  return <>{safeText(text)}</>;
-}
-
-/** 空であることと、項目に意味があるときはその意味。 */
-function EmptyValue({ note }: { note: string | null }) {
-  return (
-    <span className="flex flex-col gap-0.5 text-muted-foreground">
-      <span>空です。</span>
-      {note === null ? null : <span>{safeText(note)}</span>}
-    </span>
-  );
 }
 
 /** 要素ごとの1行。括弧とカンマを出さない。 */
@@ -185,12 +166,20 @@ function ValueEntries({
   );
 }
 
+type SwitchOrNumberOffer = Extract<ChangeOffer, { kind: "stop" | "lower" }>;
+
+function isSwitchOrNumberOffer(
+  offer: ChangeOffer | undefined,
+): offer is SwitchOrNumberOffer {
+  return offer?.kind === "stop" || offer?.kind === "lower";
+}
+
 function ChangeButton({
   offer,
   locked,
   onChoose,
 }: {
-  offer: ChangeOffer;
+  offer: SwitchOrNumberOffer;
   locked: boolean;
   onChoose: (offer: ChangeOffer) => void;
 }) {
@@ -214,6 +203,7 @@ function ChangeButton({
  * 設定の項目の一覧。キー、値の順に並べる。値はテキストのノードとして描く。
  * 参照と、伏せた値は、値を出さずに「参照(出さない)」と表示する。
  * `onChoose`を渡すと、止める向きか下げる向きに変えられる項目に、その操作のボタンを添える。
+ * 一覧の3項目は、値の行を編集できる一覧にして、要素ごとの削除と一覧の追加のボタンを置く。
  * ボタンは確認のダイアログを開くだけで、書き込みは確認を通った後にだけ呼ぶ。
  */
 export function ConfigList({
@@ -231,25 +221,40 @@ export function ConfigList({
   return (
     <Card tag="dl" variant="list">
       {items.map((item) => {
-        const offer = onChoose === undefined ? null : changeOfferOf(item);
+        const offers = onChoose === undefined ? [] : changeOffersOf(item);
+        const offer = offers[0];
         return (
           <div
             key={item.key}
             className="grid gap-1 px-4 py-2.5 text-small sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] sm:gap-x-4"
           >
             <dt className="font-mono break-all">{safeText(item.key)}</dt>
-            <dd className="flex min-w-0 items-start justify-between gap-3 tabular-nums">
-              <div className="min-w-0">
-                <ConfigValue item={item} />
-              </div>
-              {offer === null || onChoose === undefined ? null : (
-                <ChangeButton
-                  offer={offer}
-                  locked={isLocked(offer)}
+            {onChoose !== undefined &&
+            EDITABLE_LISTS.includes(item.key) &&
+            offers.length > 0 ? (
+              <dd className="min-w-0 tabular-nums">
+                <EditableListValue
+                  item={item}
+                  offers={offers}
+                  isLocked={isLocked}
                   onChoose={onChoose}
                 />
-              )}
-            </dd>
+              </dd>
+            ) : (
+              <dd className="flex min-w-0 items-start justify-between gap-3 tabular-nums">
+                <div className="min-w-0">
+                  <ConfigValue item={item} />
+                </div>
+                {onChoose === undefined ||
+                !isSwitchOrNumberOffer(offer) ? null : (
+                  <ChangeButton
+                    offer={offer}
+                    locked={isLocked(offer)}
+                    onChoose={onChoose}
+                  />
+                )}
+              </dd>
+            )}
           </div>
         );
       })}
@@ -311,6 +316,7 @@ function ConfigBody({
       <ConfigChangeDialog
         offer={change.offer}
         text={change.text}
+        checkCommands={checkCommandsOf(items)}
         onTextChange={change.setText}
         onConfirm={change.confirm}
         onCancel={change.dismiss}
@@ -320,7 +326,7 @@ function ConfigBody({
 }
 
 /**
- * 設定のタブの節。factory_configの全項目を読む。許可した項目だけ、止める向きか下げる向きに変えられる。
+ * 設定のタブの節。factory_configの全項目を読む。許可した項目だけ、止める向きか下げる向きに変えるか、一覧の要素を追加か削除できる。
  * 見出しは、タブの名前と重なるので、画面には出さない。
  * 取得は画面が持つ。値は、補間しない生の値で読んだものである。
  */
@@ -334,7 +340,7 @@ export function ConfigSection({
       id="config-heading"
       title="設定"
       visuallyHiddenTitle
-      description="factory_configの全項目です。参照と伏せた値は「参照(出さない)」と表示します。止める向きと下げる向きの変更だけ、許可した項目でできます。"
+      description="factory_configの全項目です。参照と伏せた値は「参照(出さない)」と表示します。許可した項目だけ、止める向きと下げる向きの変更と、一覧の追加と削除ができます。"
       query={query}
       loginHint="上のバナーからログインすると、設定を表示します。"
     >

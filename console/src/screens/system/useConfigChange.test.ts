@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { type ChangeOffer, changeOfferOf } from "../../lib/configChange.ts";
+import {
+  type ChangeOffer,
+  changeOfferOf,
+  changeOffersOf,
+} from "../../lib/configChange.ts";
 import { changeInputOf } from "./useConfigChange.ts";
 
 function offerFor(key: string, value: unknown): ChangeOffer {
@@ -43,5 +47,65 @@ describe("changeInputOf", () => {
 
   test("gives nothing for a fraction of an integer item", () => {
     expect(changeInputOf(offerFor("max_fix_rounds", 3), "1.5")).toBeNull();
+  });
+});
+
+describe("changeInputOf for a list", () => {
+  const LIST = ["alice", "bob", "carol"];
+
+  function offersFor(key: string, value: unknown): readonly ChangeOffer[] {
+    return changeOffersOf({ key, kind: "value", value, masked: false });
+  }
+
+  function offerOf(kind: "add" | "remove", index = 0): ChangeOffer {
+    const offers = offersFor("default_reviewers", LIST).filter(
+      (offer) => offer.kind === kind,
+    );
+    const offer = offers[index];
+    if (offer === undefined) throw new Error(`no ${kind} offer`);
+    return offer;
+  }
+
+  test("puts a typed element at the end of the list that was read", () => {
+    expect(changeInputOf(offerOf("add"), "dave")).toEqual({
+      item: "default_reviewers",
+      expected: LIST,
+      next: [...LIST, "dave"],
+    });
+  });
+
+  test("trims the whitespace around a typed element", () => {
+    expect(changeInputOf(offerOf("add"), "  dave\n")).toEqual({
+      item: "default_reviewers",
+      expected: LIST,
+      next: [...LIST, "dave"],
+    });
+  });
+
+  test("gives nothing while the box is empty", () => {
+    expect(changeInputOf(offerOf("add"), " ")).toBeNull();
+  });
+
+  test("gives nothing for an element that is too long", () => {
+    expect(changeInputOf(offerOf("add"), "a".repeat(101))).toBeNull();
+  });
+
+  test("takes the chosen element out of the list that was read, whatever was typed", () => {
+    expect(changeInputOf(offerOf("remove", 1), "ignored")).toEqual({
+      item: "default_reviewers",
+      expected: LIST,
+      next: ["alice", "carol"],
+    });
+  });
+
+  test("takes only the chosen one out of elements that are the same", () => {
+    const offers = offersFor("default_reviewers", ["alice", "alice", "bob"]);
+    const second = offers[1];
+    if (second === undefined) throw new Error("no second offer");
+    expect(changeInputOf(second, "")).toEqual({
+      item: "default_reviewers",
+      expected: ["alice", "alice", "bob"],
+      next: ["alice", "bob"],
+    });
   });
 });

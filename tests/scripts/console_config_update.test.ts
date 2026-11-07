@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as consoleView from "../../console/src/lib/configChange.ts";
+import * as script from "../../f/factory/console_config_update.ts";
 import {
   BOOLEAN_STOP_ITEMS,
   CONFIG_UPDATE_REFUSAL_REASONS,
@@ -7,10 +8,16 @@ import {
   type ConfigUpdateRefusalReason,
   type ConfigUpdateResult,
   LOWERABLE_NUMBERS,
+  MAX_ELEMENT_LENGTH,
   updateConfigFromConsole,
 } from "../../f/factory/console_config_update.ts";
-import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
+import {
+  isRepoAllowed,
+  normalizeRepoUrl,
+  parseFactoryConfig,
+} from "../../f/factory/lib/config.ts";
 import type { ActionSqlClient } from "../../f/factory/lib/console_actions.ts";
+import { isGitHubName, parseGitHubRepoUrl } from "../../f/factory/lib/types.ts";
 
 const TARGET = "f/factory/factory_config";
 
@@ -124,7 +131,8 @@ const REFUSED = (reason: ConfigUpdateRefusalReason): ConfigUpdateResult => ({
 describe("updateConfigFromConsole: what it refuses before it records", () => {
   test.each([
     "owners",
-    "repo_allowlist",
+    "allowed_check_commands",
+    "allowed_labeler_logins",
     "pr_conflict_watch_enabled",
     "pr_ci_fix_enabled_since",
     "pr_conflict_fix_enabled_since",
@@ -603,16 +611,28 @@ describe("the list of items that can be changed", () => {
     });
   });
 
+  test("is the list of lists that the Console shows the buttons for", () => {
+    expect([...consoleView.EDITABLE_LISTS]).toEqual([...script.LIST_ITEMS]);
+  });
+
+  test("is the longest element that the Console lets a person type", () => {
+    expect(consoleView.MAX_ELEMENT_LENGTH).toBe(MAX_ELEMENT_LENGTH);
+  });
+
   test("lists the refusal reasons that the Console describes", () => {
     expect<string[]>([...CONFIG_UPDATE_REFUSAL_REASONS].sort()).toEqual(
       [
         "actor_unknown",
+        "already_present",
         "audit_unavailable",
         "conflict",
         "has_reference",
+        "invalid_element",
         "invalid_value",
         "item_not_allowed",
         "not_lowering",
+        "owner_not_listed",
+        "would_empty",
       ].sort(),
     );
   });
@@ -645,5 +665,811 @@ describe("the generated input schema", () => {
 
   test("the item is a string", async () => {
     expect(await declaredType("item")).toBe("string");
+  });
+});
+
+const LISTS = {
+  repo_allowlist: [
+    "https://github.com/octo-owner/atelier-works",
+    "https://github.com/octo-owner/other",
+  ],
+  dependabot_other_repos: ["octo-owner/lib-a", "octo-owner/lib-b"],
+  default_reviewers: ["alice", "bob"],
+};
+
+type ListItem = keyof typeof LISTS;
+
+const LIST_ITEMS: readonly ListItem[] = [
+  "repo_allowlist",
+  "dependabot_other_repos",
+  "default_reviewers",
+];
+
+/** 3つの一覧の項目を持つ設定。一覧の追加と削除の土台。 */
+const LIST_RAW: Record<string, unknown> = { ...RAW, ...LISTS };
+
+/** 追加の例。画面が渡す形(読んだ配列の末尾に1要素を足したもの)で呼ぶ。 */
+const ADDITIONS: readonly (readonly [ListItem, string])[] = [
+  ["repo_allowlist", "https://github.com/octo-owner/new-repo"],
+  ["dependabot_other_repos", "octo-owner/lib-c"],
+  ["default_reviewers", "carol"],
+];
+
+function appended(item: ListItem, element: string): string[] {
+  return [...LISTS[item], element];
+}
+
+function withoutFirst(item: ListItem): string[] {
+  return LISTS[item].slice(1);
+}
+
+describe("updateConfigFromConsole: adding to a list", () => {
+  test.each(ADDITIONS)(
+    "%s: writes the list with the one element appended and the other keys as they were",
+    async (item, element) => {
+      const { ports, written } = harness({ raw: LIST_RAW });
+      await updateConfigFromConsole(
+        item,
+        LISTS[item],
+        appended(item, element),
+        ports,
+      );
+      expect(written).toEqual([
+        { ...LIST_RAW, [item]: appended(item, element) },
+      ]);
+    },
+  );
+
+  test.each(ADDITIONS)(
+    "%s: keeps the order of the keys",
+    async (item, element) => {
+      const { ports, written } = harness({ raw: LIST_RAW });
+      await updateConfigFromConsole(
+        item,
+        LISTS[item],
+        appended(item, element),
+        ports,
+      );
+      expect(Object.keys(written[0] ?? {})).toEqual(Object.keys(LIST_RAW));
+    },
+  );
+
+  test("returns the operation, the element and the counts for a list", async () => {
+    const { ports } = harness({ raw: LIST_RAW });
+    expect(
+      await updateConfigFromConsole(
+        "default_reviewers",
+        LISTS.default_reviewers,
+        appended("default_reviewers", "carol"),
+        ports,
+      ),
+    ).toEqual({
+      refused: false,
+      item: "default_reviewers",
+      op: "add",
+      element: "carol",
+      before_count: 2,
+      after_count: 3,
+      verified: true,
+      action_audit: "recorded",
+    });
+  });
+
+  test("writes a repository URL without the .git suffix and the trailing slash", async () => {
+    const { ports, written } = harness({ raw: LIST_RAW });
+    await updateConfigFromConsole(
+      "repo_allowlist",
+      LISTS.repo_allowlist,
+      appended("repo_allowlist", "https://github.com/Octo-Owner/New-Repo.git/"),
+      ports,
+    );
+    expect(written[0]?.repo_allowlist).toEqual([
+      ...LISTS.repo_allowlist,
+      "https://github.com/Octo-Owner/New-Repo",
+    ]);
+  });
+
+  test("returns the element in the form that was written", async () => {
+    const { ports } = harness({ raw: LIST_RAW });
+    expect(
+      await updateConfigFromConsole(
+        "repo_allowlist",
+        LISTS.repo_allowlist,
+        appended("repo_allowlist", "https://github.com/octo-owner/New.git"),
+        ports,
+      ),
+    ).toMatchObject({ element: "https://github.com/octo-owner/New" });
+  });
+
+  test("adds to an empty list", async () => {
+    const { ports, written } = harness({
+      raw: { ...LIST_RAW, default_reviewers: [] },
+    });
+    await updateConfigFromConsole("default_reviewers", [], ["carol"], ports);
+    expect(written[0]?.default_reviewers).toEqual(["carol"]);
+  });
+
+  test("accepts an owner of the owners in another letter case", async () => {
+    const { ports } = harness({ raw: LIST_RAW });
+    expect(
+      await updateConfigFromConsole(
+        "repo_allowlist",
+        LISTS.repo_allowlist,
+        appended("repo_allowlist", "https://github.com/OCTO-OWNER/zzz"),
+        ports,
+      ),
+    ).toMatchObject({ refused: false, op: "add" });
+  });
+
+  test("records the item, the operation, the element and the counts, and not the list", async () => {
+    const { ports, sqlCalls } = harness({ raw: LIST_RAW });
+    await updateConfigFromConsole(
+      "default_reviewers",
+      LISTS.default_reviewers,
+      appended("default_reviewers", "carol"),
+      ports,
+    );
+    expect(sqlCalls[0]?.values).toEqual([
+      "operator",
+      "config_update",
+      TARGET,
+      '{"item":"default_reviewers","op":"add","element":"carol","before_count":2,"after_count":3}',
+    ]);
+  });
+
+  test("reads, writes and reads back between the two records", async () => {
+    const { ports, events } = harness({ raw: LIST_RAW });
+    await updateConfigFromConsole(
+      "default_reviewers",
+      LISTS.default_reviewers,
+      appended("default_reviewers", "carol"),
+      ports,
+    );
+    expect(events).toEqual(["insert", "read", "write", "read", "update"]);
+  });
+});
+
+describe("updateConfigFromConsole: removing from a list", () => {
+  test.each(LIST_ITEMS)(
+    "%s: writes the list without the one element and the other keys as they were",
+    async (item) => {
+      const { ports, written } = harness({ raw: LIST_RAW });
+      await updateConfigFromConsole(
+        item,
+        LISTS[item],
+        withoutFirst(item),
+        ports,
+      );
+      expect(written).toEqual([{ ...LIST_RAW, [item]: withoutFirst(item) }]);
+    },
+  );
+
+  test("removes an element from the middle", async () => {
+    const { ports, written } = harness({
+      raw: { ...LIST_RAW, default_reviewers: ["a", "b", "c"] },
+    });
+    await updateConfigFromConsole(
+      "default_reviewers",
+      ["a", "b", "c"],
+      ["a", "c"],
+      ports,
+    );
+    expect(written[0]?.default_reviewers).toEqual(["a", "c"]);
+  });
+
+  test("returns the removed element and the counts", async () => {
+    const { ports } = harness({ raw: LIST_RAW });
+    expect(
+      await updateConfigFromConsole(
+        "dependabot_other_repos",
+        LISTS.dependabot_other_repos,
+        ["octo-owner/lib-a"],
+        ports,
+      ),
+    ).toMatchObject({
+      refused: false,
+      op: "remove",
+      element: "octo-owner/lib-b",
+      before_count: 2,
+      after_count: 1,
+    });
+  });
+
+  test("removes the last element of a list other than repo_allowlist", async () => {
+    const { ports, written } = harness({
+      raw: { ...LIST_RAW, default_reviewers: ["alice"] },
+    });
+    await updateConfigFromConsole("default_reviewers", ["alice"], [], ports);
+    expect(written[0]?.default_reviewers).toEqual([]);
+  });
+
+  test("removes an existing element even when its form would not be accepted for an addition", async () => {
+    const legacy = ["octo-owner/legacy", "https://github.com/octo-owner/ok"];
+    const { ports, written } = harness({
+      raw: { ...LIST_RAW, repo_allowlist: legacy },
+    });
+    await updateConfigFromConsole(
+      "repo_allowlist",
+      legacy,
+      ["https://github.com/octo-owner/ok"],
+      ports,
+    );
+    expect(written[0]?.repo_allowlist).toEqual([
+      "https://github.com/octo-owner/ok",
+    ]);
+  });
+
+  test("records the removal with the counts", async () => {
+    const { ports, sqlCalls } = harness({ raw: LIST_RAW });
+    await updateConfigFromConsole(
+      "default_reviewers",
+      LISTS.default_reviewers,
+      ["bob"],
+      ports,
+    );
+    expect(sqlCalls[0]?.values[3]).toBe(
+      '{"item":"default_reviewers","op":"remove","element":"alice","before_count":2,"after_count":1}',
+    );
+  });
+
+  test("refuses to remove the last element of repo_allowlist, and records nothing", async () => {
+    const one = ["https://github.com/octo-owner/atelier-works"];
+    const { ports, events } = harness({
+      raw: { ...LIST_RAW, repo_allowlist: one },
+    });
+    const result = await updateConfigFromConsole(
+      "repo_allowlist",
+      one,
+      [],
+      ports,
+    );
+    expect([result, events]).toEqual([REFUSED("would_empty"), []]);
+  });
+});
+
+describe("updateConfigFromConsole: what it refuses for a list before it records", () => {
+  test.each(LIST_ITEMS)(
+    "%s: refuses a value that is not an array as the value that was read",
+    async (item) => {
+      const { ports, events } = harness({ raw: LIST_RAW });
+      const result = await updateConfigFromConsole(item, "text", ["x"], ports);
+      expect([result, events]).toEqual([REFUSED("invalid_value"), []]);
+    },
+  );
+
+  test.each(LIST_ITEMS)(
+    "%s: refuses a value that is not an array as the new value",
+    async (item) => {
+      const { ports, events } = harness({ raw: LIST_RAW });
+      const result = await updateConfigFromConsole(
+        item,
+        LISTS[item],
+        "text",
+        ports,
+      );
+      expect([result, events]).toEqual([REFUSED("invalid_value"), []]);
+    },
+  );
+
+  test("refuses a number in the value that was read", async () => {
+    const { ports } = harness({ raw: LIST_RAW });
+    expect(
+      await updateConfigFromConsole(
+        "default_reviewers",
+        ["a", 1],
+        ["a"],
+        ports,
+      ),
+    ).toEqual(REFUSED("invalid_value"));
+  });
+
+  test("refuses an object in the new value", async () => {
+    const { ports } = harness({ raw: LIST_RAW });
+    expect(
+      await updateConfigFromConsole(
+        "default_reviewers",
+        LISTS.default_reviewers,
+        [...LISTS.default_reviewers, { name: "carol" }],
+        ports,
+      ),
+    ).toEqual(REFUSED("invalid_value"));
+  });
+
+  test.each([
+    ["two elements added", ["alice", "bob", "carol", "dave"]],
+    ["two elements removed", []],
+    ["the same list", ["alice", "bob"]],
+    ["the order swapped", ["bob", "alice"]],
+    ["one element replaced", ["alice", "carol"]],
+    ["an element added at the front", ["carol", "alice", "bob"]],
+    ["an element added and the order swapped", ["bob", "alice", "carol"]],
+    ["one removed and another replaced", ["carol"]],
+  ])("refuses %s", async (_label, next) => {
+    const { ports, events } = harness({ raw: LIST_RAW });
+    const result = await updateConfigFromConsole(
+      "default_reviewers",
+      LISTS.default_reviewers,
+      next,
+      ports,
+    );
+    expect([result, events]).toEqual([REFUSED("invalid_value"), []]);
+  });
+
+  test.each([
+    [
+      "repo_allowlist",
+      "the same repository with .git",
+      "https://github.com/octo-owner/atelier-works.git",
+    ],
+    [
+      "repo_allowlist",
+      "the same repository in another letter case",
+      "https://github.com/OCTO-OWNER/Atelier-Works",
+    ],
+    [
+      "repo_allowlist",
+      "the same repository with a trailing slash",
+      "https://github.com/octo-owner/atelier-works/",
+    ],
+    [
+      "dependabot_other_repos",
+      "the same repository in another letter case",
+      "OCTO-OWNER/LIB-A",
+    ],
+    ["default_reviewers", "the same login in another letter case", "ALICE"],
+  ] as const)(
+    "%s: refuses %s as already present",
+    async (item, _label, element) => {
+      const { ports, events } = harness({ raw: LIST_RAW });
+      const result = await updateConfigFromConsole(
+        item,
+        LISTS[item],
+        appended(item, element),
+        ports,
+      );
+      expect([result, events]).toEqual([REFUSED("already_present"), []]);
+    },
+  );
+
+  test("refuses an element that is too long", async () => {
+    const { ports, events } = harness({ raw: LIST_RAW });
+    const result = await updateConfigFromConsole(
+      "default_reviewers",
+      LISTS.default_reviewers,
+      appended("default_reviewers", "a".repeat(101)),
+      ports,
+    );
+    expect([result, events]).toEqual([REFUSED("invalid_element"), []]);
+  });
+
+  test("accepts an element of the longest length", async () => {
+    const { ports } = harness({ raw: LIST_RAW });
+    expect(
+      await updateConfigFromConsole(
+        "default_reviewers",
+        LISTS.default_reviewers,
+        appended("default_reviewers", "a".repeat(100)),
+        ports,
+      ),
+    ).toMatchObject({ refused: false });
+  });
+
+  test("refuses an empty element", async () => {
+    const { ports } = harness({ raw: LIST_RAW });
+    expect(
+      await updateConfigFromConsole(
+        "default_reviewers",
+        LISTS.default_reviewers,
+        appended("default_reviewers", ""),
+        ports,
+      ),
+    ).toEqual(REFUSED("invalid_element"));
+  });
+});
+
+describe("updateConfigFromConsole: the compare and swap of a list", () => {
+  test("refuses when the list has the same elements in another order, and writes nothing", async () => {
+    const { ports, events, written } = harness({
+      raw: { ...LIST_RAW, default_reviewers: ["bob", "alice"] },
+    });
+    const result = await updateConfigFromConsole(
+      "default_reviewers",
+      LISTS.default_reviewers,
+      appended("default_reviewers", "carol"),
+      ports,
+    );
+    expect([result, events, written]).toEqual([
+      REFUSED("conflict"),
+      ["insert", "read", "update"],
+      [],
+    ]);
+  });
+
+  test("refuses when an element was added after the list was read", async () => {
+    const { ports, written } = harness({
+      raw: { ...LIST_RAW, default_reviewers: ["alice", "bob", "dave"] },
+    });
+    const result = await updateConfigFromConsole(
+      "default_reviewers",
+      LISTS.default_reviewers,
+      appended("default_reviewers", "carol"),
+      ports,
+    );
+    expect([result, written]).toEqual([REFUSED("conflict"), []]);
+  });
+
+  test("refuses when the item is not set in the resource", async () => {
+    const { default_reviewers: _unused, ...without } = LIST_RAW;
+    const { ports, written } = harness({ raw: without });
+    const result = await updateConfigFromConsole(
+      "default_reviewers",
+      [],
+      ["carol"],
+      ports,
+    );
+    expect([result, written]).toEqual([REFUSED("conflict"), []]);
+  });
+
+  test("refuses when the item in the resource is not a list", async () => {
+    const { ports } = harness({
+      raw: { ...LIST_RAW, default_reviewers: "alice" },
+    });
+    expect(
+      await updateConfigFromConsole("default_reviewers", ["alice"], [], ports),
+    ).toEqual(REFUSED("conflict"));
+  });
+
+  test("refuses when any value holds a reference", async () => {
+    const { ports, written, events } = harness({
+      raw: { ...LIST_RAW, token_name: "$var:f/factory/github_token" },
+    });
+    const result = await updateConfigFromConsole(
+      "default_reviewers",
+      LISTS.default_reviewers,
+      appended("default_reviewers", "carol"),
+      ports,
+    );
+    expect([result, written, events]).toEqual([
+      REFUSED("has_reference"),
+      [],
+      ["insert", "read", "update"],
+    ]);
+  });
+
+  test("refuses to add a repository of an owner that is not in owners, and records it as failed", async () => {
+    const { ports, written, events, sqlCalls } = harness({ raw: LIST_RAW });
+    const result = await updateConfigFromConsole(
+      "repo_allowlist",
+      LISTS.repo_allowlist,
+      appended("repo_allowlist", "https://github.com/stranger/repo"),
+      ports,
+    );
+    expect([result, written, events, sqlCalls[1]?.values.slice(0, 2)]).toEqual([
+      REFUSED("owner_not_listed"),
+      [],
+      ["insert", "read", "update"],
+      ["failed", '{"refusal":"owner_not_listed"}'],
+    ]);
+  });
+
+  test("refuses to add a repository when owners cannot be read", async () => {
+    const { ports, written } = harness({
+      raw: { ...LIST_RAW, owners: "octo-owner" },
+    });
+    const result = await updateConfigFromConsole(
+      "repo_allowlist",
+      LISTS.repo_allowlist,
+      appended("repo_allowlist", "https://github.com/octo-owner/zzz"),
+      ports,
+    );
+    expect([result, written]).toEqual([REFUSED("owner_not_listed"), []]);
+  });
+
+  test("does not check owners for a list other than repo_allowlist", async () => {
+    const { ports } = harness({ raw: { ...LIST_RAW, owners: [] } });
+    expect(
+      await updateConfigFromConsole(
+        "default_reviewers",
+        LISTS.default_reviewers,
+        appended("default_reviewers", "carol"),
+        ports,
+      ),
+    ).toMatchObject({ refused: false });
+  });
+
+  test("does not check owners when a repository is removed", async () => {
+    const { ports } = harness({ raw: { ...LIST_RAW, owners: [] } });
+    expect(
+      await updateConfigFromConsole(
+        "repo_allowlist",
+        LISTS.repo_allowlist,
+        withoutFirst("repo_allowlist"),
+        ports,
+      ),
+    ).toMatchObject({ refused: false, op: "remove" });
+  });
+});
+
+describe("updateConfigFromConsole: the read back of a list", () => {
+  test("says the read back differs when the list is not the written one", async () => {
+    const { ports } = harness({
+      raw: LIST_RAW,
+      afterWrite: { ...LIST_RAW, default_reviewers: ["alice", "bob"] },
+    });
+    expect(
+      await updateConfigFromConsole(
+        "default_reviewers",
+        LISTS.default_reviewers,
+        appended("default_reviewers", "carol"),
+        ports,
+      ),
+    ).toMatchObject({ refused: false, verified: false });
+  });
+
+  test("says the read back differs when the elements are in another order", async () => {
+    const { ports } = harness({
+      raw: LIST_RAW,
+      afterWrite: {
+        ...LIST_RAW,
+        default_reviewers: ["carol", "alice", "bob"],
+      },
+    });
+    expect(
+      await updateConfigFromConsole(
+        "default_reviewers",
+        LISTS.default_reviewers,
+        appended("default_reviewers", "carol"),
+        ports,
+      ),
+    ).toMatchObject({ refused: false, verified: false });
+  });
+
+  test("says the read back differs when another key changed", async () => {
+    const { ports } = harness({
+      raw: LIST_RAW,
+      afterWrite: {
+        ...LIST_RAW,
+        default_reviewers: ["alice", "bob", "carol"],
+        max_fix_rounds: 9,
+      },
+    });
+    expect(
+      await updateConfigFromConsole(
+        "default_reviewers",
+        LISTS.default_reviewers,
+        appended("default_reviewers", "carol"),
+        ports,
+      ),
+    ).toMatchObject({ refused: false, verified: false });
+  });
+});
+
+// 追加で受ける形と断る形の表。読み込み側の規則との一致を、両方向で固定する。
+const ACCEPTED_REPO_URLS = [
+  "https://github.com/octo-owner/new-repo",
+  "https://github.com/octo-owner/new-repo.git",
+  "https://github.com/octo-owner/new-repo/",
+  "https://github.com/Octo-Owner/New.Repo_1",
+  "https://GITHUB.com/octo-owner/new-repo",
+];
+
+const REJECTED_REPO_URLS = [
+  "http://github.com/octo-owner/new-repo",
+  "git@github.com:octo-owner/new-repo.git",
+  "ssh://git@github.com/octo-owner/new-repo.git",
+  "https://www.github.com/octo-owner/new-repo",
+  "https://gitlab.com/octo-owner/new-repo",
+  "https://user@github.com/octo-owner/new-repo",
+  "https://user:token@github.com/octo-owner/new-repo",
+  "https://github.com/octo-owner/new-repo?x=1",
+  "https://github.com/octo-owner/new-repo#frag",
+  "https://github.com/octo-owner",
+  "https://github.com/octo-owner/new-repo/extra",
+  "https://github.com/./new-repo",
+  "https://github.com/octo-owner/..",
+  "octo-owner/new-repo",
+  "",
+];
+
+const ACCEPTED_OTHER_REPOS = [
+  "octo-owner/lib-c",
+  "a/b",
+  "a.b/c_d",
+  "a/b.github",
+  "a/.hidden",
+];
+
+const REJECTED_OTHER_REPOS = [
+  "a/b.git",
+  "a/B.GIT",
+  "a/..",
+  "../b",
+  "./b",
+  "a/.",
+  "a",
+  "a/b/c",
+  "https://github.com/a/b",
+  "a b/c",
+  "a/b/",
+  "",
+];
+
+const ACCEPTED_LOGINS = ["carol", "Carol-1", "a_b.c", "x"];
+
+const REJECTED_LOGINS = [
+  "dependabot[bot]",
+  "Foo[BOT]",
+  "",
+  "a b",
+  "-x",
+  "org/team",
+  "@carol",
+];
+
+async function addOutcome(item: ListItem, element: string) {
+  const { ports, written } = harness({ raw: LIST_RAW });
+  const result = await updateConfigFromConsole(
+    item,
+    LISTS[item],
+    appended(item, element),
+    ports,
+  );
+  return { result, written };
+}
+
+describe("the form of the elements that can be added", () => {
+  test.each(ACCEPTED_REPO_URLS)(
+    "repo_allowlist accepts %s",
+    async (element) => {
+      const { result } = await addOutcome("repo_allowlist", element);
+      expect(result).toMatchObject({ refused: false });
+    },
+  );
+
+  test.each(ACCEPTED_REPO_URLS)(
+    "the repository URL %s is read back as an allowed repository",
+    async (element) => {
+      const { written } = await addOutcome("repo_allowlist", element);
+      const config = parseFactoryConfig(written[0]);
+      const { owner, repo } = parseGitHubRepoUrl(
+        config.repo_allowlist[config.repo_allowlist.length - 1] ?? "",
+      );
+      expect(isRepoAllowed(config, owner, repo)).toBe(true);
+    },
+  );
+
+  test.each(ACCEPTED_REPO_URLS)(
+    "the repository URL %s is added as the repository that the URL names",
+    async (element) => {
+      const { written } = await addOutcome("repo_allowlist", element);
+      const config = parseFactoryConfig(written[0]);
+      expect(normalizeRepoUrl(config.repo_allowlist[2] ?? "")).toBe(
+        normalizeRepoUrl(element),
+      );
+    },
+  );
+
+  test.each(REJECTED_REPO_URLS)(
+    "the load side does not read %s as a repository URL",
+    (element) => {
+      expect(() => parseGitHubRepoUrl(element)).toThrow();
+    },
+  );
+
+  test.each(REJECTED_REPO_URLS)(
+    "repo_allowlist refuses %s",
+    async (element) => {
+      const { result, written } = await addOutcome("repo_allowlist", element);
+      expect([result, written]).toEqual([REFUSED("invalid_element"), []]);
+    },
+  );
+
+  test.each(ACCEPTED_OTHER_REPOS)(
+    "dependabot_other_repos accepts %s",
+    async (element) => {
+      const { result } = await addOutcome("dependabot_other_repos", element);
+      expect(result).toMatchObject({ refused: false });
+    },
+  );
+
+  test.each(ACCEPTED_OTHER_REPOS)(
+    "the configuration with %s in dependabot_other_repos still loads",
+    async (element) => {
+      const { written } = await addOutcome("dependabot_other_repos", element);
+      expect(() => parseFactoryConfig(written[0])).not.toThrow();
+    },
+  );
+
+  test.each(REJECTED_OTHER_REPOS)(
+    "the load side rejects %s in dependabot_other_repos",
+    (element) => {
+      expect(() =>
+        parseFactoryConfig({ ...LIST_RAW, dependabot_other_repos: [element] }),
+      ).toThrow();
+    },
+  );
+
+  test.each(REJECTED_OTHER_REPOS)(
+    "dependabot_other_repos refuses %s",
+    async (element) => {
+      const { result, written } = await addOutcome(
+        "dependabot_other_repos",
+        element,
+      );
+      expect([result, written]).toEqual([REFUSED("invalid_element"), []]);
+    },
+  );
+
+  test.each(ACCEPTED_LOGINS)(
+    "default_reviewers accepts %s",
+    async (element) => {
+      const { result } = await addOutcome("default_reviewers", element);
+      expect(result).toMatchObject({ refused: false });
+    },
+  );
+
+  test.each(ACCEPTED_LOGINS)(
+    "the login %s has the form of a GitHub name",
+    (element) => {
+      expect(isGitHubName(element)).toBe(true);
+    },
+  );
+
+  test.each(ACCEPTED_LOGINS)(
+    "the configuration with %s in default_reviewers still loads",
+    async (element) => {
+      const { written } = await addOutcome("default_reviewers", element);
+      expect(() => parseFactoryConfig(written[0])).not.toThrow();
+    },
+  );
+
+  test.each(REJECTED_LOGINS)(
+    "the load side does not read %s as a login",
+    (element) => {
+      expect(isGitHubName(element)).toBe(false);
+    },
+  );
+
+  test.each(REJECTED_LOGINS)(
+    "default_reviewers refuses %s",
+    async (element) => {
+      const { result, written } = await addOutcome(
+        "default_reviewers",
+        element,
+      );
+      expect([result, written]).toEqual([REFUSED("invalid_element"), []]);
+    },
+  );
+});
+
+describe("the list items that can be changed", () => {
+  test("allows the three lists and no other list", async () => {
+    const results = await Promise.all(
+      [
+        "repo_allowlist",
+        "dependabot_other_repos",
+        "default_reviewers",
+        "allowed_check_commands",
+        "allowed_labeler_logins",
+      ].map(async (item) => {
+        const { ports } = harness({ raw: { ...LIST_RAW, [item]: ["x"] } });
+        const result = await updateConfigFromConsole(item, ["x"], [], ports);
+        return [item, result.refused ? result.reason : "changed"];
+      }),
+    );
+    expect(results).toEqual([
+      ["repo_allowlist", "would_empty"],
+      ["dependabot_other_repos", "changed"],
+      ["default_reviewers", "changed"],
+      ["allowed_check_commands", "item_not_allowed"],
+      ["allowed_labeler_logins", "item_not_allowed"],
+    ]);
+  });
+
+  test("refuses a number for a list item", async () => {
+    const { ports } = harness({ raw: LIST_RAW });
+    expect(
+      await updateConfigFromConsole("repo_allowlist", 30, 20, ports),
+    ).toEqual(REFUSED("invalid_value"));
   });
 });
