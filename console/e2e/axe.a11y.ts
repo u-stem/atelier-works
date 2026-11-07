@@ -52,6 +52,7 @@ const SCREEN_PATHS: readonly string[] = [
   "items/7/design",
   "items/7/requirements",
   "system",
+  "system?tab=config",
   "jobs",
   "jobs?tab=history",
   "jobs?tab=schedules",
@@ -92,6 +93,12 @@ const ORIGIN_PATHS: readonly string[] = [
 
 /** 起動の図が、図でなく一覧で出る幅(px)。 */
 const LIST_WIDTH = 500;
+
+/**
+ * 設定タブの表の意味を確かめる幅(px)。
+ * 広い幅は表のまま、狭い幅は項目ごとに縦に積む。縦に積む幅でも、表の意味(役割)が残ることを確かめる。
+ */
+const CONFIG_STRUCTURE_WIDTHS: readonly number[] = [1280, 320];
 
 type Audit = {
   /** 違反を、規則、影響、要素の数と最初の要素で1行にしたもの。差分で原因を辿れるようにする。 */
@@ -442,6 +449,56 @@ for (const theme of THEMES) {
       });
     }
   });
+
+  // 設定タブの表は、見出しで名付けられ、列見出しと行見出しを持つ。axeの規則では、この構造の崩れを捕まえられない。
+  // 表の中の表(オブジェクトの配列の値)は名前を持たないので、名前のある表だけを数える。
+  // 見た目だけを変える変更が表の役割を落とすことがあるので、広い幅と狭い幅の両方で確かめる。
+  for (const width of CONFIG_STRUCTURE_WIDTHS) {
+    test.describe(`config tab structure (${theme}, ${width}px)`, () => {
+      test.use({
+        theme,
+        mode: "normal",
+        viewport: { width, height: 800 },
+      });
+
+      /** 名前のある表ごとに、直下の指定の役割の要素の数を数える。 */
+      const countsByNamedTable = async (
+        page: Page,
+        role: "columnheader" | "rowheader",
+      ): Promise<number[]> => {
+        const tables = page.getByRole("table", { name: /\S/ });
+        const counts: number[] = [];
+        for (let index = 0; index < (await tables.count()); index += 1) {
+          counts.push(await tables.nth(index).getByRole(role).count());
+        }
+        return counts;
+      };
+
+      test("has named tables", async ({ page }) => {
+        await openScreen(page, "system?tab=config");
+
+        expect(
+          await page.getByRole("table", { name: /\S/ }).count(),
+        ).toBeGreaterThan(0);
+      });
+
+      test("gives every named table column headers", async ({ page }) => {
+        await openScreen(page, "system?tab=config");
+
+        const counts = await countsByNamedTable(page, "columnheader");
+
+        expect(counts.filter((count) => count === 0)).toEqual([]);
+      });
+
+      test("gives every named table row headers", async ({ page }) => {
+        await openScreen(page, "system?tab=config");
+
+        const counts = await countsByNamedTable(page, "rowheader");
+
+        expect(counts.filter((count) => count === 0)).toEqual([]);
+      });
+    });
+  }
 
   test.describe(`dialogs (${theme})`, () => {
     test.use({ theme, mode: "normal" });
