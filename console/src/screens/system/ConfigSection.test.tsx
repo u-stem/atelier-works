@@ -185,7 +185,7 @@ describe("ConfigList values by type", () => {
 
   test("adds what an empty repo_allowlist means", () => {
     expect(renderValue("repo_allowlist", [])).toContain(
-      "ownersに含まれるリポジトリすべてが対象です(factory_repoは常に対象)",
+      "mainのCIの監視とdependabotは、factory_repoだけを見ます。",
     );
   });
 
@@ -199,6 +199,42 @@ describe("ConfigList values by type", () => {
     expect(
       renderValue("k", [{ "a‮b": "c‮d" }]) + renderValue("k", { "a‮b": "c‮d" }),
     ).not.toContain("‮");
+  });
+
+  test("marks an element of a list that is an empty string", () => {
+    expect(renderValue("repo_allowlist", [""])).toMatch(
+      /<li[^>]*><span[^>]*>\(空の文字列\)<\/span><\/li>/,
+    );
+  });
+
+  test("marks an element of a list that is only whitespace", () => {
+    expect(renderValue("repo_allowlist", [" "])).toMatch(
+      /<li[^>]*><span[^>]*>\(空の文字列\)<\/span><\/li>/,
+    );
+  });
+
+  test("marks a cell of a table that is an empty string", () => {
+    expect(renderValue("k", [{ name: "" }])).toMatch(
+      /<td[^>]*><span[^>]*>\(空の文字列\)<\/span><\/td>/,
+    );
+  });
+
+  test("marks a value of an object that is an empty string", () => {
+    expect(renderValue("k", { a: "" })).toMatch(
+      /<dd[^>]*><span[^>]*><span[^>]*>\(空の文字列\)<\/span><\/span><\/dd>/,
+    );
+  });
+
+  test("marks an element of a list inside an object that is an empty string", () => {
+    expect(renderValue("k", { a: [""] })).toMatch(
+      /<dd[^>]*><ul[^>]*><li[^>]*><span[^>]*>\(空の文字列\)<\/span><\/li>/,
+    );
+  });
+
+  test("shows a string that spells the marker without the marker's style", () => {
+    expect(renderValue("k", ["(空の文字列)"])).toMatch(
+      /<li[^>]*>\(空の文字列\)<\/li>/,
+    );
   });
 
   test("keeps a reference hidden when the value is a list", () => {

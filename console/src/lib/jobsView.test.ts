@@ -821,6 +821,19 @@ describe("describeConfigValue", () => {
     });
   });
 
+  test("leaves the cell empty for a key that a row only inherits", () => {
+    // JSON.parseは、`__proto__`を行自身のキーとして作る。
+    const first: unknown = JSON.parse('{"__proto__":"a","constructor":"b"}');
+    expect(describeValue("k", [first, { name: "c" }])).toEqual({
+      kind: "table",
+      columns: ["__proto__", "constructor", "name"],
+      rows: [
+        ["a", "b", null],
+        [null, null, "c"],
+      ],
+    });
+  });
+
   test("writes an object as rows of a key and a value", () => {
     expect(
       describeValue("allowed_labeler_ids", { alice: 12, bob: 34 }),
@@ -882,11 +895,11 @@ describe("describeConfigValue", () => {
   test.each([
     [
       "repo_allowlist",
-      "空のときは、ownersに含まれるリポジトリすべてが対象です(factory_repoは常に対象)。",
+      "空のときは、IssueとPRの発見は、ownersのアカウントのリポジトリすべてが対象です。mainのCIの監視とdependabotは、factory_repoだけを見ます。",
     ],
     [
       "default_reviewers",
-      "空のときは、PRに既に設定されているレビュアーを使います。",
+      "空のときは、この修正のきっかけになったレビューとコメントの投稿者を指定します(PRの作者と実行アカウントは除く)。投稿者がいなければ、指定しません。",
     ],
     ["dependabot_other_repos", "空のときは、factory_repoだけを処理します。"],
   ])("tells what an empty %s means", (key, note) => {
