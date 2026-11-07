@@ -333,13 +333,22 @@ describe("stopAllFromConsole and the record of the names", () => {
     ]);
   });
 
-  test("replaces the record with an empty one when nothing was on", async () => {
+  test("leaves the earlier record alone when a new stop-all turned nothing off", async () => {
     const { ports, calls } = setup({
       record: EARLIER_RECORD,
       config: { implement_enabled: false },
     });
     await stopAllFromConsole("r", ports);
-    expect(recordedFlags(calls)).toEqual([]);
+    expect(calls.records).toEqual([]);
+  });
+
+  test("leaves the earlier record alone when the settings hold a reference", async () => {
+    const { ports, calls } = setup({
+      record: EARLIER_RECORD,
+      config: { ...CONFIG, model: "$var:f/factory/model" },
+    });
+    await stopAllFromConsole("r", ports);
+    expect(calls.records).toEqual([]);
   });
 
   test("merges into the record when the stop-all was already placed", async () => {

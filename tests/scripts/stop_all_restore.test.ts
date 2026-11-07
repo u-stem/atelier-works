@@ -47,13 +47,28 @@ function ok<T>(value: T): RestoreRead<T> {
   return { ok: true, value };
 }
 
+/**
+ * 設定の書き込みの結果。`applied_fail`は、値は書かれたのに失敗が返る場合(時間切れなど)を表す。
+ */
+type WriteResult = "ok" | "fail" | "applied_fail";
+
 type Options = {
   /** 全停止の変数の読み取りの結果を、呼ばれた順に返す。最後の値を繰り返す。 */
   readonly stopAll?: readonly RestoreRead<string | null>[];
   readonly record?: RestoreRead<string | null>;
-  /** 設定の読み取りの結果を、呼ばれた順に返す。最後の値を繰り返す。書いた後は書いた値を返す。 */
+  /** 記録の読み取りの結果を、呼ばれた順に返す。最後の値を繰り返す。`record`より優先する。 */
+  readonly records?: readonly RestoreRead<string | null>[];
+  /** 最初に書くまでの設定の読み取りの結果を、呼ばれた順に返す。最後の値を繰り返す。 */
   readonly configs?: readonly unknown[];
+  /** 最初に書くまでの設定の読み取りを、この順に差し替える。`undefined`の位置は`configs`を使う。 */
+  readonly readsBeforeWrite?: readonly (RestoreRead<unknown> | undefined)[];
+  /** 書いた後の設定の読み取りを、この順に差し替える。`undefined`の位置は今の値を返す。 */
+  readonly readsAfterWrite?: readonly (RestoreRead<unknown> | undefined)[];
+  /** 書き込みのたびの結果。足りない分は`writeFails`に従う。 */
+  readonly writeResults?: readonly WriteResult[];
   readonly writeFails?: boolean;
+  /** 書いた後に、ほかの処理が設定を書き換えた結果。並行する書き込みを再現する。 */
+  readonly onWrite?: (value: Record<string, unknown>, index: number) => unknown;
   readonly clearFails?: boolean;
   readonly confirmed?: boolean;
 };
@@ -70,8 +85,16 @@ function fake(options: Options = {}): Fake {
   const printed: string[] = [];
   let cleared = 0;
   let stopReads = 0;
+  let recordReads = 0;
   let configReads = 0;
+  let afterReads = 0;
+  let writeIndex = 0;
+  let wrote = false;
+  let current: unknown;
   const stopAll = options.stopAll ?? [ok(null)];
+  const records = options.records ?? [
+    options.record ?? ok(recordOf(["implement_enabled"])),
+  ];
   const configs = options.configs ?? [STOPPED];
   const io: RestoreIo = {
     readStopAll: async () => {
@@ -80,19 +103,36 @@ function fake(options: Options = {}): Fake {
       stopReads += 1;
       return value;
     },
-    readRecord: async () =>
-      options.record ?? ok(recordOf(["implement_enabled"])),
+    readRecord: async () => {
+      const value =
+        records[Math.min(recordReads, records.length - 1)] ?? ok(null);
+      recordReads += 1;
+      return value;
+    },
     readConfig: async () => {
-      const written = writes.at(-1);
-      if (written !== undefined) return ok(written);
+      if (wrote) {
+        const scripted = options.readsAfterWrite?.[afterReads];
+        afterReads += 1;
+        return scripted ?? ok(current);
+      }
+      const scripted = options.readsBeforeWrite?.[configReads];
       const value = configs[Math.min(configReads, configs.length - 1)];
       configReads += 1;
-      return ok(value);
+      return scripted ?? ok(value);
     },
     writeConfig: async (value) => {
-      if (options.writeFails === true) return { ok: false, reason: "boom" };
+      const result: WriteResult =
+        options.writeResults?.[writeIndex] ??
+        (options.writeFails === true ? "fail" : "ok");
+      const index = writeIndex;
+      writeIndex += 1;
+      if (result === "fail") return { ok: false, reason: "boom" };
       writes.push(value);
-      return { ok: true };
+      wrote = true;
+      current = options.onWrite ? options.onWrite(value, index) : value;
+      return result === "ok"
+        ? { ok: true }
+        : { ok: false, reason: "timed out" };
     },
     clearRecord: async () => {
       if (options.clearFails === true) return { ok: false, reason: "boom" };
@@ -415,6 +455,160 @@ describe("runRestore writing the settings", () => {
     });
     await runRestore([], io);
     expect({ writes, cleared: cleared() }).toEqual({ writes: [], cleared: 1 });
+  });
+});
+
+// `wmill resource push`は、値の`content`が`!inline <path>`か`!inline_fileset <dir>`で始まると、ホストのファイルを読んで埋め込む。
+// リモートから読んだ値を書き戻すので、その形の文字列があれば断る。
+describe("runRestore and inline file references", () => {
+  test.each([
+    [
+      "a nested inline file",
+      { deep: [{ content: "!inline mise.local.toml" }] },
+    ],
+    ["an inline fileset", { content: "!inline_fileset infra" }],
+  ])(
+    "refuses a config that holds an inline file reference (%s)",
+    async (_name, extra) => {
+      const { io, writes } = fake({ configs: [{ ...STOPPED, extra }] });
+      const code = await runRestore([], io);
+      expect({ code, writes }).toEqual({ code: 1, writes: [] });
+    },
+  );
+
+  test("does not write back an inline file reference that appeared while turning the settings off again", async () => {
+    const { io, writes } = fake({
+      stopAll: [ok(null), ok(PLACED)],
+      onWrite: (value) => ({
+        ...value,
+        extra: { content: "!inline mise.local.toml" },
+      }),
+    });
+    const code = await runRestore([], io);
+    expect({ code, writes: writes.length }).toEqual({ code: 1, writes: 1 });
+  });
+});
+
+describe("runRestore and a stop-all placed during the restore", () => {
+  test("turns every enabled flag off again when a stop-all appeared during the write", async () => {
+    const { io, writes } = fake({
+      stopAll: [ok(null), ok(PLACED)],
+      onWrite: (value, index) =>
+        index === 0 ? { ...value, dependabot_enabled: true } : value,
+    });
+    await runRestore([], io);
+    expect(writes.at(-1)).toEqual({
+      ...STOPPED,
+      implement_enabled: false,
+      dependabot_enabled: false,
+      pr_ci_watch_enabled: false,
+    });
+  });
+
+  test("turns the settings off again when the write timed out and a stop-all appeared", async () => {
+    const { io, writes, cleared } = fake({
+      stopAll: [ok(null), ok(PLACED)],
+      writeResults: ["applied_fail"],
+    });
+    const code = await runRestore([], io);
+    expect({
+      code,
+      last: writes.at(-1)?.implement_enabled,
+      cleared: cleared(),
+    }).toEqual({ code: 1, last: false, cleared: 0 });
+  });
+
+  test("tells to fix the settings by hand when the config cannot be read after a stop-all appeared", async () => {
+    const { io, printed, cleared } = fake({
+      stopAll: [ok(null), ok(PLACED)],
+      readsAfterWrite: [{ ok: false, reason: "api down" }],
+    });
+    const code = await runRestore([], io);
+    expect({
+      code,
+      byHand: printed.some((line) => line.includes("by hand")),
+      cleared: cleared(),
+    }).toEqual({ code: 1, byHand: true, cleared: 0 });
+  });
+
+  test("keeps the record when turning the settings off again fails", async () => {
+    const { io, cleared } = fake({
+      stopAll: [ok(null), ok(PLACED)],
+      writeResults: ["ok", "fail"],
+    });
+    const code = await runRestore([], io);
+    expect({ code, cleared: cleared() }).toEqual({ code: 1, cleared: 0 });
+  });
+
+  test("keeps a record that a new stop-all replaced during the restore", async () => {
+    const { io, cleared } = fake({
+      records: [
+        ok(recordOf(["implement_enabled"])),
+        ok(
+          JSON.stringify({
+            recorded_at: "2026-11-07T00:30:00.000Z",
+            flags: ["implement_enabled"],
+          }),
+        ),
+      ],
+    });
+    const code = await runRestore([], io);
+    expect({ code, cleared: cleared() }).toEqual({ code: 1, cleared: 0 });
+  });
+
+  test("keeps the record when a stop-all is placed before it is cleared", async () => {
+    const { io, cleared } = fake({
+      records: [ok(recordOf(["pr_ci_watch_enabled"]))],
+      stopAll: [ok(null), ok(PLACED)],
+    });
+    const code = await runRestore([], io);
+    expect({ code, cleared: cleared() }).toEqual({ code: 1, cleared: 0 });
+  });
+});
+
+describe("runRestore when a step after the confirmation fails", () => {
+  test("keeps the record when the settings are not on after the write", async () => {
+    const { io, cleared } = fake({
+      onWrite: (value) => ({ ...value, implement_enabled: false }),
+    });
+    const code = await runRestore([], io);
+    expect({ code, cleared: cleared() }).toEqual({ code: 1, cleared: 0 });
+  });
+
+  test("keeps the record when the config cannot be read again before the write", async () => {
+    const { io, writes, cleared } = fake({
+      readsBeforeWrite: [undefined, { ok: false, reason: "api down" }],
+    });
+    const code = await runRestore([], io);
+    expect({ code, writes, cleared: cleared() }).toEqual({
+      code: 1,
+      writes: [],
+      cleared: 0,
+    });
+  });
+
+  test("refuses a config that is not an object", async () => {
+    const { io, writes } = fake({ configs: [["implement_enabled"]] });
+    const code = await runRestore([], io);
+    expect({ code, writes }).toEqual({ code: 1, writes: [] });
+  });
+
+  test("tells to run again with the same --except when the record cannot be cleared", async () => {
+    const { io, printed } = fake({ clearFails: true });
+    await runRestore([], io);
+    expect(printed.some((line) => line.includes("--except"))).toBe(true);
+  });
+});
+
+describe("runRestore and --except", () => {
+  test("refuses an --except name that is not in the record", async () => {
+    const { io, writes, cleared } = fake();
+    const code = await runRestore(["implemnt_enabled"], io);
+    expect({ code, writes, cleared: cleared() }).toEqual({
+      code: 1,
+      writes: [],
+      cleared: 0,
+    });
   });
 });
 

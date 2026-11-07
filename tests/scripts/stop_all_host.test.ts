@@ -511,6 +511,46 @@ describe("runStop place", () => {
   });
 });
 
+describe("runStop place and the record of the names", () => {
+  test("warns on stderr when the names could not be recorded", async () => {
+    const { warned, deps } = record({
+      scriptStdout: JSON.stringify({
+        refused: false,
+        record: "failed",
+        config_unrecorded: ["implement_enabled"],
+      }),
+    });
+    await runStop(PLACE, deps);
+    expect(warned.some((line) => line.includes("implement_enabled"))).toBe(
+      true,
+    );
+  });
+
+  test("warns on stderr about names that were turned off but not recorded", async () => {
+    const { warned, deps } = record({
+      scriptStdout: JSON.stringify({
+        refused: false,
+        record: "written",
+        config_unrecorded: ["Odd_enabled"],
+      }),
+    });
+    await runStop(PLACE, deps);
+    expect(warned.some((line) => line.includes("Odd_enabled"))).toBe(true);
+  });
+
+  test("does not warn when every name was recorded", async () => {
+    const { warned, deps } = record({
+      scriptStdout: JSON.stringify({
+        refused: false,
+        record: "written",
+        config_unrecorded: [],
+      }),
+    });
+    await runStop(PLACE, deps);
+    expect(warned).toEqual([]);
+  });
+});
+
 describe("runStop place when a claude shares the group of the worker", () => {
   test("does not terminate the group of the worker", async () => {
     const { calls, deps } = record({ ps: PS_WITH_WORKER_GROUP });

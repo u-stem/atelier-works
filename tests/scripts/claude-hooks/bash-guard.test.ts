@@ -2461,6 +2461,8 @@ describe("bash-guard and restoring the settings that the stop-all turned off", (
     `curl -X POST http://localhost:8000/api/w/factory/variables/update/f/factory/stop_all_record -d '{}'`,
     `curl -X POST http://localhost:8000/api/w/factory/variables/update/f%2Ffactory%2Fstop_all_record -d '{}'`,
     `curl -X POST http://localhost:8000/api/w/factory/variables/delete/f/factory/stop_all_record`,
+    `curl -X POST http://localhost:8000/api/w/factory/variables/update/f/factory/stop%5Fall%5Frecord -d '{}'`,
+    `curl -X POST http://localhost:8000/api/w/factory/variables%2Fupdate/f%2Ffactory%2Fstop%5Fall%5Frecord -d '{}'`,
   ])("denies the write %s to the record variable", async (command) => {
     expect(await decide(command, { subagent: true })).toBe("deny");
   });
