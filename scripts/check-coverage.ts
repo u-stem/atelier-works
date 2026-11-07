@@ -320,8 +320,11 @@ export function judgeCoverage(
   if (summary.files.length === 0 || summary.executable === 0) {
     return {
       ok: false,
-      message:
-        "coverage check failed: no target file found in coverage/lcov.info",
+      message: composeFailure(
+        ["coverage check failed: no target file found in coverage/lcov.info"],
+        [],
+        unloaded.length > 0 ? [unloadedSection(unloaded)] : [],
+      ),
     };
   }
 
