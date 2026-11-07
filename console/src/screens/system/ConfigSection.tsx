@@ -97,7 +97,11 @@ function ValueRows({ items }: { items: readonly string[] }) {
   );
 }
 
-/** 同じ形のオブジェクトの配列。列の見出しを持つ表で、行が持たないキーのセルは「未設定」と出す。 */
+/**
+ * 同じ形のオブジェクトの配列。列の見出しを持つ表で、行が持たないキーのセルは「未設定」と出す。
+ * 列の幅は内容に合わせ、長い名前はハイフンなどの切れ目で折る。
+ * 切れ目の無い長い文字列で収まらない表は、表の中だけを横にスクロールする。
+ */
 function ValueTable({
   columns,
   rows,
@@ -106,43 +110,45 @@ function ValueTable({
   rows: readonly (readonly (string | null)[])[];
 }) {
   return (
-    <table className="w-full table-fixed border-collapse text-small">
-      <thead className="text-left text-muted-foreground">
-        <tr>
-          {columns.map((column, columnIndex) => (
-            // 見えない文字だけが違う列は、`safeText`の後で同じ文字列になるので、位置を含めて見分ける。
-            <th
-              // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の列が並びうる。
-              key={`${columnIndex}:${column}`}
-              scope="col"
-              className="py-1 pr-3 font-medium"
-            >
-              <TextValue text={safeText(column)} />
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-border">
-        {rows.map((cells, rowIndex) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: 行を見分けるキーが無く、並びは変わらない。
-          <tr key={rowIndex}>
-            {cells.map((cell, cellIndex) => (
-              <td
+    <div className="overflow-x-auto">
+      <table className="w-full table-auto border-collapse text-small">
+        <thead className="text-left text-muted-foreground">
+          <tr>
+            {columns.map((column, columnIndex) => (
+              // 見えない文字だけが違う列は、`safeText`の後で同じ文字列になるので、位置を含めて見分ける。
+              <th
                 // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の列が並びうる。
-                key={`${cellIndex}:${columns[cellIndex]}`}
-                className="py-1 pr-3 align-top break-all"
+                key={`${columnIndex}:${column}`}
+                scope="col"
+                className="py-1 pr-3 font-medium"
               >
-                {cell === null ? (
-                  <span className="text-muted-foreground">未設定</span>
-                ) : (
-                  <TextValue text={cell} />
-                )}
-              </td>
+                <TextValue text={safeText(column)} />
+              </th>
             ))}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {rows.map((cells, rowIndex) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: 行を見分けるキーが無く、並びは変わらない。
+            <tr key={rowIndex}>
+              {cells.map((cell, cellIndex) => (
+                <td
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の列が並びうる。
+                  key={`${cellIndex}:${columns[cellIndex]}`}
+                  className="py-1 pr-3 align-top break-words"
+                >
+                  {cell === null ? (
+                    <span className="text-muted-foreground">未設定</span>
+                  ) : (
+                    <TextValue text={cell} />
+                  )}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
