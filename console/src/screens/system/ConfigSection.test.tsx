@@ -148,12 +148,14 @@ describe("ConfigList values by type", () => {
         { name: "u-stem", kind: "user", id: 1 },
         { name: "acme", kind: "org" },
       ]),
-    ).toMatch(/<td[^>]*>acme<\/td><td[^>]*>org<\/td><td[^>]*>未設定<\/td>/);
+    ).toMatch(
+      /<td[^>]*>acme<\/td><td[^>]*>org<\/td><td[^>]*><span[^>]*>未設定<\/span><\/td>/,
+    );
   });
 
   test("shows an object as a term and a description for each key", () => {
     expect(renderValue("allowed_labeler_ids", { alice: 12 })).toMatch(
-      /<dl[^>]*><div[^>]*><dt[^>]*>alice<\/dt><dd[^>]*>12<\/dd>/,
+      /<dt[^>]*>alice<\/dt><dd[^>]*><span[^>]*>12<\/span><\/dd>/,
     );
   });
 

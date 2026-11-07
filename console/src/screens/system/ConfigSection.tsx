@@ -11,6 +11,7 @@ import { Card } from "../../components/ui/card.tsx";
 import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { type ChangeOffer, changeOfferOf } from "../../lib/configChange.ts";
+import type { ConfigEntryValue } from "../../lib/configValue.ts";
 import {
   CONFIG_REFERENCE_LABEL,
   describeConfigValue,
@@ -31,6 +32,14 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
       );
     case "scalar":
       return <span className="break-words">{safeText(value.text)}</span>;
+    case "empty":
+      return <EmptyValue note={value.note} />;
+    case "list":
+      return <ValueRows items={value.items} />;
+    case "table":
+      return <ValueTable columns={value.columns} rows={value.rows} />;
+    case "entries":
+      return <ValueEntries entries={value.entries} />;
     case "structure":
       return (
         <pre className="font-mono text-small break-words whitespace-pre-wrap">
@@ -38,6 +47,103 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
         </pre>
       );
   }
+}
+
+/** 空であることと、項目に意味があるときはその意味。 */
+function EmptyValue({ note }: { note: string | null }) {
+  return (
+    <span className="flex flex-col gap-0.5 text-muted-foreground">
+      <span>空です。</span>
+      {note === null ? null : <span>{safeText(note)}</span>}
+    </span>
+  );
+}
+
+/** 要素ごとの1行。括弧とカンマを出さない。 */
+function ValueRows({ items }: { items: readonly string[] }) {
+  if (items.length === 0) {
+    return <span className="text-muted-foreground">空です。</span>;
+  }
+  return (
+    <ul className="flex flex-col gap-0.5 font-mono text-small">
+      {items.map((text, index) => (
+        // 要素は重なりうるので、位置を含めて見分ける。並びは変わらない。
+        // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の要素が並びうる。
+        <li key={`${index}:${text}`} className="break-all">
+          {safeText(text)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** 同じ形のオブジェクトの配列。列の見出しを持つ表で、行が持たないキーのセルは「未設定」と出す。 */
+function ValueTable({
+  columns,
+  rows,
+}: {
+  columns: readonly string[];
+  rows: readonly (readonly (string | null)[])[];
+}) {
+  return (
+    <table className="w-full table-fixed border-collapse text-small">
+      <thead className="text-left text-muted-foreground">
+        <tr>
+          {columns.map((column) => (
+            <th key={column} scope="col" className="py-1 pr-3 font-medium">
+              {safeText(column)}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-border">
+        {rows.map((cells, rowIndex) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: 行を見分けるキーが無く、並びは変わらない。
+          <tr key={rowIndex}>
+            {cells.map((cell, cellIndex) => (
+              <td
+                key={columns[cellIndex]}
+                className="py-1 pr-3 align-top break-all"
+              >
+                {cell === null ? (
+                  <span className="text-muted-foreground">未設定</span>
+                ) : (
+                  safeText(cell)
+                )}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** オブジェクトのキーと値の行。値が配列なら、その中も行で並べる。 */
+function ValueEntries({
+  entries,
+}: {
+  entries: readonly { key: string; value: ConfigEntryValue }[];
+}) {
+  return (
+    <dl className="flex flex-col gap-1.5 text-small">
+      {entries.map((entry) => (
+        <div
+          key={entry.key}
+          className="grid gap-0.5 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] sm:gap-x-3"
+        >
+          <dt className="font-mono break-all">{safeText(entry.key)}</dt>
+          <dd className="min-w-0">
+            {entry.value.kind === "list" ? (
+              <ValueRows items={entry.value.items} />
+            ) : (
+              <span className="break-all">{safeText(entry.value.text)}</span>
+            )}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
 }
 
 function ChangeButton({

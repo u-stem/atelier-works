@@ -11,6 +11,7 @@ import type {
   OutputViewData,
   ScheduleViewData,
 } from "../api/jobsQueries.ts";
+import { type ConfigStructure, describeStructure } from "./configValue.ts";
 import { formatRemainingTime, formatShortAbsoluteIso } from "./relativeTime.ts";
 import { parseIdParam } from "./routeParams.ts";
 import { safeText } from "./safeText.ts";
@@ -424,18 +425,19 @@ export function filterConfigItems(
 export type ConfigValueText =
   | { readonly kind: "reference" }
   | { readonly kind: "scalar"; readonly text: string }
-  | { readonly kind: "structure"; readonly text: string };
+  | ConfigStructure;
 
 /**
- * 設定の値を、テキストにする。参照と、伏せた値は出さない。
- * 配列とオブジェクトは、字下げしたJSONの文字列にする。見えない文字と並びを入れ替える文字は、代替文字にする。
+ * 設定の値を、画面が描く形にする。参照と、伏せた値は出さない。
+ * 配列とオブジェクトは、型ごとの形(行の一覧、表、キーと値の行、空の注記)にし、
+ * どれにも当たらない入れ子と混在は、字下げしたJSONの文字列にする。
+ * 見えない文字と並びを入れ替える文字は、代替文字にする。
  */
 export function describeConfigValue(item: ConfigItemView): ConfigValueText {
   if (item.kind === "reference" || item.masked) return { kind: "reference" };
   const value = item.value;
   if (typeof value === "object" && value !== null) {
-    const text = JSON.stringify(value, null, 2) ?? String(value);
-    return { kind: "structure", text: safeText(text) };
+    return describeStructure(item.key, value);
   }
   return { kind: "scalar", text: safeText(String(value)) };
 }
