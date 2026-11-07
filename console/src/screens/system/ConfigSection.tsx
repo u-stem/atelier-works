@@ -92,7 +92,7 @@ function SwitchBadge({
 function NumberValue({ text, unit }: { text: string; unit: string | null }) {
   return (
     <span className="inline-flex items-baseline gap-1">
-      <span className="tabular-nums @2xl:min-w-14 @2xl:text-right">{text}</span>
+      <span className="tabular-nums @2xl:min-w-16 @2xl:text-right">{text}</span>
       {unit === null ? null : (
         <span className="text-caption text-muted-foreground">{unit}</span>
       )}
@@ -132,7 +132,7 @@ function ValueTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full table-auto border-collapse text-small">
+      <table className="w-full max-w-2xl table-auto border-collapse text-small">
         <thead className="text-left text-muted-foreground">
           <tr>
             {columns.map((column, columnIndex) => (
@@ -186,7 +186,7 @@ function ValueEntries({
         <div
           // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列のキーが並びうる。
           key={`${index}:${key}`}
-          className="grid gap-0.5 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] sm:gap-x-3"
+          className="grid gap-0.5 sm:grid-cols-[minmax(0,16rem)_minmax(0,1fr)] sm:gap-x-3"
         >
           <dt className="font-mono break-all">
             <TextValue text={safeText(key)} />
@@ -318,7 +318,7 @@ function ConfigRow({
         {editableList ||
         onChoose === undefined ||
         !isSwitchOrNumberOffer(offer) ? null : (
-          <div className="pb-2.5 @2xl:pb-0">
+          <div className="pb-2.5 @2xl:-my-1.5 @2xl:pb-0">
             <ChangeButton
               offer={offer}
               locked={isLocked(offer)}
@@ -354,7 +354,7 @@ function ConfigGroupTable({
       <Card className="overflow-hidden text-small">
         <table className="block w-full border-collapse @2xl:table @2xl:table-fixed">
           <colgroup>
-            <col className="@2xl:w-72" />
+            <col className="@2xl:w-80" />
             <col />
             <col className="@2xl:w-24" />
           </colgroup>
