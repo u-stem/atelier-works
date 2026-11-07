@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -39,7 +45,11 @@ afterEach(async () => {
 });
 
 function harness(
-  overrides: Partial<PsqlSessionOptions> & { pid?: string } = {},
+  overrides: Partial<PsqlSessionOptions> & {
+    pid?: string;
+    /** 偽のpsqlが、起動の問い合わせに答えるまでの遅れ。 */
+    startDelayMs?: number;
+  } = {},
 ): Harness {
   const dir = mkdtempSync(join(tmpdir(), "test-db-session-"));
   const logPath = join(dir, "fake.log");
@@ -54,6 +64,8 @@ function harness(
       overrides.pid ?? "4242",
       "--started",
       STARTED_AT,
+      "--start-delay",
+      String(overrides.startDelayMs ?? 0),
       ...(format === "csv" ? ["--csv"] : []),
     ],
     containerId: () => "0123456789ab",
@@ -72,6 +84,12 @@ function harness(
   });
   return { sessions, terminated, logPath };
 }
+
+/**
+ * 文の待ちの上限だけを短くする。
+ * 起動の問い合わせは文の上限より遅く答えるので、起動の上限が文の上限と同じなら、起動で終わってしまう。
+ */
+const SHORT_TIMEOUT = { timeoutMs: 300, startDelayMs: 600 };
 
 /** 偽のpsqlへの指示を、文に埋め込む。 */
 function directive(instruction: object, body = "SELECT 1"): string {
@@ -215,9 +233,12 @@ describe("createPsqlSessions ordering", () => {
       },
     });
     // 1つ目の文を流している間に時計を進め、完了の時刻が文を書いた時刻と別になるようにする。
-    const first = sessions.exec(TARGET, directive({ sleepMs: 300 }));
+    // 偽のpsqlは、門のファイルができるまで応答しないので、時計を進めた後に必ず完了する。
+    const gate = `${logPath}.gate`;
+    const first = sessions.exec(TARGET, directive({ gate }));
     await waitForLog(logPath, "start");
     clock += 10;
+    writeFileSync(gate, "");
     await first;
     const completedAt = clock;
 
@@ -275,11 +296,12 @@ describe("createPsqlSessions errors", () => {
 
 describe("createPsqlSessions protocol failures", () => {
   test("exits instead of throwing on timeout", async () => {
-    const { sessions } = harness({ timeoutMs: 300 });
+    const { sessions, logPath } = harness(SHORT_TIMEOUT);
 
     const call = sessions.exec(TARGET, directive({ hang: true }));
 
     await expect(call).rejects.toThrow(new ExitSignal(1));
+    expect(logKinds(logPath)).toContain("start");
   });
 
   test("exits when the transaction stays open", async () => {
@@ -337,7 +359,7 @@ describe("createPsqlSessions protocol failures", () => {
 
 describe("createPsqlSessions termination", () => {
   test("terminates the recorded backend when a call times out", async () => {
-    const { sessions, terminated } = harness({ timeoutMs: 300 });
+    const { sessions, terminated } = harness(SHORT_TIMEOUT);
 
     await sessions
       .exec(TARGET, directive({ hang: true }))
@@ -358,29 +380,37 @@ describe("createPsqlSessions termination", () => {
   });
 
   test("does not terminate when the pid is not an integer", async () => {
-    const { sessions, terminated } = harness({ timeoutMs: 300, pid: "abc" });
+    const { sessions, terminated, logPath } = harness({
+      ...SHORT_TIMEOUT,
+      pid: "abc",
+    });
 
     await sessions
       .exec(TARGET, directive({ hang: true }))
       .catch(() => undefined);
 
+    // 起動ではなく、文の待ちの上限で終わったことも確かめる。
+    expect(logKinds(logPath)).toContain("start");
     expect(terminated).toEqual([]);
   });
 
   test("does not terminate when psql has exited but its pipes stay open", async () => {
-    const { sessions, terminated } = harness({ timeoutMs: 300 });
+    const { sessions, terminated, logPath } = harness(SHORT_TIMEOUT);
 
     await sessions
       .exec(TARGET, directive({ orphanPipes: true }))
       .catch(() => undefined);
 
+    expect(logKinds(logPath)).toContain("exit");
     expect(terminated).toEqual([]);
   });
 
   test("exits even when terminating the backend throws", async () => {
+    let attempts = 0;
     const { sessions } = harness({
-      timeoutMs: 300,
+      ...SHORT_TIMEOUT,
       terminate: () => {
+        attempts += 1;
         throw new Error("terminate failed");
       },
     });
@@ -388,6 +418,7 @@ describe("createPsqlSessions termination", () => {
     const call = sessions.exec(TARGET, directive({ hang: true }));
 
     await expect(call).rejects.toThrow(new ExitSignal(1));
+    expect(attempts).toBe(1);
   });
 
   test.each([[0], [-1], [1.5], [Number.NaN], [12_345_678_901]])(

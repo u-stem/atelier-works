@@ -2,9 +2,9 @@
 // 標準入力から、文と、区切りの印を出す行の組を読み、文の中の`/*FAKE{...}*/`の指示どおりに応答する。
 // 指示の無い文には、何も出力せず、印だけを返す。
 //
-// 引数: [--csv] [--pid <値>] [--started <値>] [--log <ファイル>]
+// 引数: [--csv] [--pid <値>] [--started <値>] [--start-delay <ミリ秒>] [--log <ファイル>]
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const csv = args.includes("--csv");
@@ -18,6 +18,7 @@ function option(name: string, fallback: string): string {
 const pid = option("--pid", "4242");
 const started = option("--started", "2026-11-08 12:00:00.123456+00");
 const logPath = option("--log", "");
+const startDelayMs = Number(option("--start-delay", "0"));
 
 function log(line: string): void {
   if (logPath !== "") appendFileSync(logPath, `${line}\n`);
@@ -30,6 +31,7 @@ type Directive = {
   readonly err?: string | undefined;
   readonly notice?: string | undefined;
   readonly sleepMs?: number | undefined;
+  readonly gate?: string | undefined;
   readonly unclean?: boolean | undefined;
   readonly hang?: boolean | undefined;
   readonly exitCode?: number | undefined;
@@ -62,6 +64,7 @@ function parseDirective(statement: string): Directive {
     err: text("err"),
     notice: text("notice"),
     sleepMs: num("sleepMs"),
+    gate: text("gate"),
     unclean: flag("unclean"),
     hang: flag("hang"),
     exitCode: num("exitCode"),
@@ -96,6 +99,11 @@ async function handle(call: Call): Promise<void> {
     log(`start ${directive.tag ?? ""}`);
   }
   if (directive.sleepMs !== undefined) await Bun.sleep(directive.sleepMs);
+  if (startup) await Bun.sleep(startDelayMs);
+  // 門のファイルができるまで、応答しない。
+  while (directive.gate !== undefined && !existsSync(directive.gate)) {
+    await Bun.sleep(5);
+  }
   if (directive.hang === true) await new Promise<void>(() => {});
   if (directive.orphanPipes === true) {
     // 終了しても、子プロセスがstdoutとstderrを握り続けるので、EOFが来ない。
