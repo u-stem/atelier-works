@@ -78,11 +78,14 @@ type Fake = {
   readonly writes: Record<string, unknown>[];
   readonly cleared: () => number;
   readonly printed: string[];
+  /** 標準エラーに出した警告。 */
+  readonly warned: string[];
 };
 
 function fake(options: Options = {}): Fake {
   const writes: Record<string, unknown>[] = [];
   const printed: string[] = [];
+  const warned: string[] = [];
   let cleared = 0;
   let stopReads = 0;
   let recordReads = 0;
@@ -144,8 +147,11 @@ function fake(options: Options = {}): Fake {
     print: (line) => {
       printed.push(line);
     },
+    warn: (line) => {
+      warned.push(line);
+    },
   };
-  return { io, writes, cleared: () => cleared, printed };
+  return { io, writes, cleared: () => cleared, printed, warned };
 }
 
 describe("runRestore refusals", () => {
@@ -597,6 +603,103 @@ describe("runRestore when a step after the confirmation fails", () => {
     const { io, printed } = fake({ clearFails: true });
     await runRestore([], io);
     expect(printed.some((line) => line.includes("--except"))).toBe(true);
+  });
+});
+
+// 記録を消す操作と全停止の間に排他は無い。消した後に全停止を読み直し、置かれていれば大きく警告する。
+describe("runRestore and a stop-all placed while the record is cleared", () => {
+  const AFTER_CLEAR = [ok(null), ok(null), ok(null), ok(PLACED)];
+
+  test("warns on stderr and fails when a stop-all appeared right after the record was cleared", async () => {
+    const { io, warned } = fake({ stopAll: AFTER_CLEAR });
+    const code = await runRestore([], io);
+    expect({
+      code,
+      warned: warned.some((line) => line.startsWith("WARNING")),
+    }).toEqual({ code: 1, warned: true });
+  });
+
+  test("turns the settings off again when a stop-all appeared right after the record was cleared", async () => {
+    const { io, writes } = fake({ stopAll: AFTER_CLEAR });
+    await runRestore([], io);
+    expect(writes.at(-1)?.implement_enabled).toBe(false);
+  });
+});
+
+describe("runRestore turning the settings off again", () => {
+  test("names the earlier names when the record was replaced", async () => {
+    const { io, printed } = fake({
+      stopAll: [ok(null), ok(PLACED)],
+      records: [
+        ok(recordOf(["implement_enabled"])),
+        ok(recordOf(["implement_enabled"])),
+        ok(
+          JSON.stringify({
+            recorded_at: "2026-11-07T00:30:00.000Z",
+            flags: ["dependabot_enabled"],
+          }),
+        ),
+      ],
+    });
+    await runRestore([], io);
+    expect(
+      printed.some(
+        (line) =>
+          line.includes("replaced") && line.includes("implement_enabled"),
+      ),
+    ).toBe(true);
+  });
+
+  test("names a setting that it turned off but that was not in the record", async () => {
+    const { io, printed } = fake({ stopAll: [ok(null), ok(PLACED)] });
+    await runRestore([], io);
+    expect(
+      printed.some(
+        (line) =>
+          line.includes("not in the record") &&
+          line.includes("pr_ci_watch_enabled"),
+      ),
+    ).toBe(true);
+  });
+
+  test("reads the stop-all variable once more before it turns the settings off again", async () => {
+    const { io, writes } = fake({
+      stopAll: [ok(null), { ok: false, reason: "api down" }, ok(null)],
+    });
+    const code = await runRestore([], io);
+    expect({ code, writes: writes.length }).toEqual({ code: 0, writes: 1 });
+  });
+
+  test("does not ask to release a stop-all that could not be read", async () => {
+    const { io, printed } = fake({
+      stopAll: [ok(null), { ok: false, reason: "api down" }],
+    });
+    await runRestore([], io);
+    expect(printed.join("\n")).not.toContain("releas");
+  });
+});
+
+describe("runRestore and the record before the write", () => {
+  test("shows when the record was made", async () => {
+    const { io, printed } = fake();
+    await runRestore([], io);
+    expect(printed.join("\n")).toContain("2026-11-07T00:00:00.000Z");
+  });
+
+  test("refuses to write when the record changed after it was read", async () => {
+    const { io, writes } = fake({
+      records: [
+        ok(recordOf(["implement_enabled"])),
+        ok(
+          JSON.stringify({
+            recorded_at: "2026-11-07T00:30:00.000Z",
+            flags: ["implement_enabled"],
+          }),
+        ),
+      ],
+    });
+    const code = await runRestore([], io);
+    expect({ code, writes }).toEqual({ code: 1, writes: [] });
   });
 });
 

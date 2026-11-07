@@ -50,6 +50,8 @@ export type RestoreIo = RestoreStore & {
   /** 端末で確かめる。`yes`が入力されたときだけ真を返す。 */
   readonly confirm: (message: string) => Promise<boolean>;
   readonly print: (line: string) => void;
+  /** 標準エラーに警告を出す。 */
+  readonly warn: (line: string) => void;
 };
 
 /**

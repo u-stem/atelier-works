@@ -423,6 +423,7 @@ export async function runStop(
       now: deps.now,
       confirm: deps.confirm,
       print: deps.print,
+      warn: deps.warn,
     });
   }
   if (!(await deps.confirm(confirmationOf(command)))) {
