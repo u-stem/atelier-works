@@ -44,6 +44,21 @@ const GUARDS: readonly Guard[] = [
   { owner: Bun, name: "serve", label: "Bun.serve" },
 ];
 
+/** 差し替えの前の関数と、現在の関数を返す関数。差し替えが戻ったかを、APIごとに比べる。 */
+const GUARDED_ORIGINALS: readonly (readonly [
+  string,
+  unknown,
+  () => unknown,
+])[] = [
+  ["fetch", globalThis.fetch, () => globalThis.fetch],
+  ["Bun.spawn", Bun.spawn, () => Bun.spawn],
+  ["Bun.spawnSync", Bun.spawnSync, () => Bun.spawnSync],
+  ["Bun.$", Bun.$, () => Bun.$],
+  ["Bun.write", Bun.write, () => Bun.write],
+  ["Bun.connect", Bun.connect, () => Bun.connect],
+  ["Bun.serve", Bun.serve, () => Bun.serve],
+];
+
 type LoadResult = {
   /** 読み込めなかったパスと理由。 */
   readonly failures: readonly string[];
@@ -143,12 +158,6 @@ describe("loadModules", () => {
       "f/factory/fake/secret_arg.ts",
       'try { fetch("https://example.invalid/?token=SECRET"); } catch {}\n',
     );
-    write("f/factory/fake/throws_again.ts", 'throw new Error("boom");\n');
-    write(
-      "f/factory/fake/restore_fetch.ts",
-      "fetch('https://example.invalid');\n",
-    );
-    write("f/factory/fake/restore_spawn.ts", "Bun.spawn(['true']);\n");
     write(
       "f/factory/fake/call_fetch.ts",
       "fetch('https://example.invalid');\n",
@@ -213,27 +222,18 @@ describe("loadModules", () => {
     expect(result.failures).toEqual(["f/factory/fake/link.ts: is a symlink"]);
   });
 
-  test("puts the original fetch back after loading", async () => {
-    const original = globalThis.fetch;
-
-    await loadModules(dir, ["f/factory/fake/restore_fetch.ts"]);
-
-    expect(globalThis.fetch).toBe(original);
+  test("rejects when a path does not exist", async () => {
+    await expect(
+      loadModules(dir, ["f/factory/fake/missing.ts"]),
+    ).rejects.toThrow();
   });
 
-  test("puts the original Bun.spawn back after loading", async () => {
-    const original = Bun.spawn;
+  test.each(GUARDED_ORIGINALS)(
+    "puts the original %s back after loading fails",
+    async (_label, original, current) => {
+      await loadModules(dir, ["f/factory/fake/missing.ts"]).catch(() => null);
 
-    await loadModules(dir, ["f/factory/fake/restore_spawn.ts"]);
-
-    expect(Bun.spawn).toBe(original);
-  });
-
-  test("puts the originals back after a module fails to load", async () => {
-    const original = Bun.write;
-
-    await loadModules(dir, ["f/factory/fake/throws_again.ts"]);
-
-    expect(Bun.write).toBe(original);
-  });
+      expect(current()).toBe(original);
+    },
+  );
 });

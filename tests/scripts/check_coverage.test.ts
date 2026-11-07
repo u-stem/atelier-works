@@ -37,8 +37,11 @@ import {
 
 type Hit = readonly [line: number, count: number];
 
-/** Factoryの修正のプロンプトに載る、検査の出力の末尾の字数。 */
-const OUTPUT_TAIL_CHARS = 2000;
+/**
+ * 失敗の出力の字数の上限。Factoryの修正のプロンプトには、出力の末尾2000字が載る。
+ * 末尾にはmiseのタスク失敗の行が付くので、その分を引く。
+ */
+const OUTPUT_TAIL_CHARS = 1800;
 
 const ALL_LAYERS: readonly Layer[] = [
   "f/factory/lib",
@@ -458,6 +461,29 @@ describe("listTargetFiles", () => {
 
       expect(result.targets).toEqual(["f/factory/lib/a.ts", "scripts/b.ts"]);
     });
+
+    test("leaves out a path that does not exist", () => {
+      const result = listTargetFiles(
+        dir,
+        { includeUntracked: false },
+        () => "f/factory/lib/gone.ts\0scripts/b.ts\0",
+      );
+
+      expect(result.targets).toEqual(["scripts/b.ts"]);
+    });
+
+    test("throws when a path cannot be examined for another reason", () => {
+      mkdirSync(join(dir, "f/factory/loop"), { recursive: true });
+      symlinkSync("self", join(dir, "f/factory/loop/self"));
+
+      expect(() =>
+        listTargetFiles(
+          dir,
+          { includeUntracked: false },
+          () => "f/factory/loop/self/a.ts\0",
+        ),
+      ).toThrow();
+    });
   });
 
   test("throws when git fails", () => {
@@ -627,6 +653,55 @@ describe("judgeCoverage with layers", () => {
     });
 
     expect(verdict.message).toContain("no target file in layer scripts");
+  });
+
+  test("names the unloaded targets when a layer has no target", () => {
+    const summary = summarizeLcov(lib(10, 10));
+
+    const verdict = judgeCoverage(summary, 0, {
+      layerFloors: [{ layer: "scripts", floorPercent: 0 }],
+      unloaded: ["scripts/unloaded.ts"],
+    });
+
+    expect(verdict.message).toContain("scripts/unloaded.ts");
+  });
+
+  test("states the unloaded total when a layer has no target", () => {
+    const summary = summarizeLcov(lib(10, 10));
+
+    const verdict = judgeCoverage(summary, 0, {
+      layerFloors: [{ layer: "scripts", floorPercent: 0 }],
+      unloaded: ["scripts/a.ts", "scripts/b.ts"],
+    });
+
+    expect(verdict.message).toContain("2 target files were not loaded");
+  });
+
+  test("ends with the reason when only the total is below its floor", () => {
+    const summary = summarizeLcov(lib(10, 9));
+
+    const verdict = judgeCoverage(summary, 99, {
+      layerFloors: [{ layer: "f/factory/lib", floorPercent: 50 }],
+    });
+
+    expect(verdict.message.split("\n").at(-1)).toContain(
+      "total is below its floor: 90.00% < 99.00%",
+    );
+  });
+
+  test("names the total after the layers that are below their floors", () => {
+    const summary = summarizeLcov([lib(10, 0), steps(10, 0)].join("\n"));
+
+    const verdict = judgeCoverage(summary, 99, {
+      layerFloors: [
+        { layer: "f/factory/lib", floorPercent: 50 },
+        { layer: "f/factory/steps", floorPercent: 50 },
+      ],
+    });
+
+    expect(verdict.message.indexOf("total is below its floor")).toBeGreaterThan(
+      verdict.message.indexOf("f/factory/steps is below its floor"),
+    );
   });
 
   test("lists the worst files only for a layer below its floor", () => {
@@ -1154,7 +1229,7 @@ describe("checkCoverage with the not loadable list", () => {
     expect(result.ok).toBe(true);
   });
 
-  test("fails when a listed path is not a tracked target", () => {
+  test("fails when a listed path is not among the targets", () => {
     writeLcov(record(A, hitsOf(10, 10)));
 
     const result = checkCoverage({
@@ -1164,7 +1239,7 @@ describe("checkCoverage with the not loadable list", () => {
       notLoadable: [DB],
     });
 
-    expect(result.message).toContain("not a tracked target");
+    expect(result.message).toContain("not among the target files");
   });
 
   test("fails when a listed path appears in lcov", () => {
