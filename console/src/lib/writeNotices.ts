@@ -400,7 +400,8 @@ const CONFIG_UPDATE_REFUSALS: Readonly<
   conflict:
     "画面を開いた後に、設定の値が変わっていました。更新して、もう一度確かめてください。",
   actor_unknown: "操作者を確認できないため、変更しませんでした。",
-  audit_unavailable: "操作の記録を残せないため、変更しませんでした。",
+  audit_unavailable:
+    "操作の記録を残せないため、変更しませんでした。削除する要素が100字を超える、または記録に使えない文字を含むときも、この理由で断ります。その場合はCLIで直します。",
   already_present: "その要素はすでにあります。変更しませんでした。",
   invalid_element:
     "要素の形式が正しくないため、変更しませんでした。repo_allowlist は https://github.com/owner/repo、dependabot_other_repos は owner/repo、default_reviewers は GitHub のログイン名で、どれも100字までです。",

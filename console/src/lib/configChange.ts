@@ -114,6 +114,9 @@ export function newElementMessage(reason: NewElementProblem): string {
 /** 検査コマンドの項目。リポジトリを足すと、その修正の検証にも及ぶ。 */
 const CHECK_COMMANDS_ITEM = "allowed_check_commands";
 
+/** リポジトリ別の検査コマンドの項目。キーが追加したリポジトリと同じ名前なら、その検査コマンドが実装の検証でも走る。 */
+const CHECK_COMMANDS_BY_REPO_ITEM = "check_commands_by_repo";
+
 /** 検査コマンドの件数。参照と伏せた値は、件数を読めない。 */
 export type CommandCount =
   | { readonly kind: "count"; readonly count: number }
@@ -134,6 +137,36 @@ export const NO_CHECK_COMMANDS: CheckCommands = {
   byRepo: { kind: "count", count: 0 },
 };
 
+const UNKNOWN_COUNT: CommandCount = { kind: "unknown" };
+
+/** `allowed_check_commands`の件数。項目が無いときは、設定を読む処理の既定の空として、0件と見なす。 */
+function allowedCount(item: ConfigItemView | undefined): CommandCount {
+  if (item === undefined) return { kind: "count", count: 0 };
+  if (item.kind !== "value" || item.masked || !isStringArray(item.value)) {
+    return UNKNOWN_COUNT;
+  }
+  return { kind: "count", count: item.value.length };
+}
+
+/**
+ * `check_commands_by_repo`で、検査コマンドを持つリポジトリの数。空の配列のエントリは、実行するコマンドが無いので数えない。
+ * キーの正規化は設定を読む処理が行うので、画面では追加するリポジトリとの一致を判定しない。
+ */
+function byRepoCount(item: ConfigItemView | undefined): CommandCount {
+  if (item === undefined) return { kind: "count", count: 0 };
+  if (item.kind !== "value" || item.masked) return UNKNOWN_COUNT;
+  const value = item.value;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return UNKNOWN_COUNT;
+  }
+  let count = 0;
+  for (const commands of Object.values(value)) {
+    if (!isStringArray(commands)) return UNKNOWN_COUNT;
+    if (commands.length > 0) count += 1;
+  }
+  return { kind: "count", count };
+}
+
 /**
  * 設定の項目の一覧から、検査コマンドの設定を読む。
  * 項目が無いときは、設定を読む処理の既定の空として、0件と見なす。
@@ -141,14 +174,13 @@ export const NO_CHECK_COMMANDS: CheckCommands = {
 export function checkCommandsOf(
   items: readonly ConfigItemView[],
 ): CheckCommands {
-  const item = items.find((entry) => entry.key === CHECK_COMMANDS_ITEM);
-  if (item === undefined) return NO_CHECK_COMMANDS;
-  if (item.kind !== "value" || item.masked || !isStringArray(item.value)) {
-    return { ...NO_CHECK_COMMANDS, allowed: { kind: "unknown" } };
-  }
   return {
-    ...NO_CHECK_COMMANDS,
-    allowed: { kind: "count", count: item.value.length },
+    allowed: allowedCount(
+      items.find((entry) => entry.key === CHECK_COMMANDS_ITEM),
+    ),
+    byRepo: byRepoCount(
+      items.find((entry) => entry.key === CHECK_COMMANDS_BY_REPO_ITEM),
+    ),
   };
 }
 
@@ -283,13 +315,22 @@ export function newValueMessage(reason: NewNumberProblem): string {
 const TAKES_EFFECT =
   "変更は、次に設定を読む処理から効きます。動いているフローも、以後の手順が設定を読むときから、新しい値で動きます。";
 
-function checkCommandsLine(checkCommands: CommandCount): string | null {
-  if (checkCommands.kind === "unknown") {
+function allowedCommandsLine(count: CommandCount): string | null {
+  if (count.kind === "unknown") {
     return "件数を読めません。検査コマンドが新しいリポジトリでも実行されます。";
   }
-  return checkCommands.count === 0
+  return count.count === 0
     ? null
-    : `検査コマンドが ${String(checkCommands.count)} 件あり、新しいリポジトリの修正の検証でも、隔離なしで実行されます。`;
+    : `検査コマンドが ${String(count.count)} 件あり、新しいリポジトリの修正の検証でも、隔離なしで実行されます。`;
+}
+
+function byRepoCommandsLine(count: CommandCount): string | null {
+  if (count.kind === "unknown") {
+    return "リポジトリ別の検査コマンドの数を読めません。追加したリポジトリが同じ名前なら、その検査コマンドがあれば隔離なしで実行されます。";
+  }
+  return count.count === 0
+    ? null
+    : `リポジトリ別の検査コマンドが ${String(count.count)} リポジトリ分あり、追加したリポジトリが同じ名前なら、その検査コマンドも隔離なしで実行されます。`;
 }
 
 /**
@@ -313,8 +354,12 @@ function listDialogLines(
         "owners 配下の、ここに挙げたリポジトリだけが対象になります。挙げていない他のリポジトリは対象から外れます。",
       );
     }
-    const commands = checkCommandsLine(checkCommands.allowed);
-    if (commands !== null) lines.push(commands);
+    for (const line of [
+      allowedCommandsLine(checkCommands.allowed),
+      byRepoCommandsLine(checkCommands.byRepo),
+    ]) {
+      if (line !== null) lines.push(line);
+    }
   }
   lines.push(
     adding
@@ -338,6 +383,7 @@ const DAILY_BUDGET_ITEM = "daily_budget_usd";
  * 止める向きと下げる向きの変更は、Consoleからは戻せないので、戻すには運用者がWindmillで直す。
  * 一覧の追加と削除は、逆の操作で戻せる。
  * `checkCommands`は、`repo_allowlist`への追加が、検査コマンドの及ぶ範囲を広げることを伝えるために使う。
+ * リポジトリ別の検査コマンドは、追加した要素との一致を判定せず、あれば一般の警告にする。
  */
 export function changeDialogLines(
   offer: ChangeOffer,
