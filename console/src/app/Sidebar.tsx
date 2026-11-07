@@ -174,8 +174,10 @@ function NavList({
               : actionableCounts(summary.data),
           ),
         );
+        // 広げた形では、チップの中身を描かない。中身が無いと、Radixはポインタが外れても閉じないので、
+        // 「開いた」状態が残り、たたんだときに一斉に出る。外れたらすぐ閉じるよう、`disableHoverableContent`を付ける。
         return (
-          <Tooltip key={screen.id}>
+          <Tooltip key={screen.id} disableHoverableContent>
             <TooltipTrigger asChild>
               <NavLink
                 to={screen.path}

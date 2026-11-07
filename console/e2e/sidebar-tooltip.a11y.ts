@@ -27,3 +27,19 @@ test("nav tooltips do not stay open after the sidebar is collapsed", async ({
 
   await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
 });
+
+test("a nav tooltip shows on hover while collapsed and closes after leaving", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("factory-console.sidebar", "1");
+  });
+  await openScreen(page, "");
+
+  const tooltips = page.locator('[data-slot="tooltip-content"]');
+  await page.locator("aside nav a").first().hover();
+  await expect(tooltips).toHaveCount(1);
+
+  await page.mouse.move(900, 400);
+  await expect(tooltips).toHaveCount(0);
+});
