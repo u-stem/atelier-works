@@ -58,6 +58,34 @@ export function decideChecks(
   };
 }
 
+/** 検索語を書いているテストファイルを返す、gitの呼び出し。 */
+export type GitGrep = (needle: string) => readonly string[];
+
+export function collectMarkdownTests(
+  _markdownPaths: readonly string[],
+  _grep: GitGrep,
+): readonly string[] {
+  return [];
+}
+
+export function gitGrepTests(_cwd?: string): GitGrep {
+  return () => [];
+}
+
+export function planTestCommands(
+  _plan: Pick<Plan, "test" | "fullTest">,
+  _markdownTests: readonly string[],
+): readonly (readonly string[])[] {
+  return [];
+}
+
+export function listChangedPaths(
+  _base: string,
+  _cwd?: string,
+): { readonly paths: readonly string[]; readonly deleted: readonly string[] } {
+  return { paths: [], deleted: [] };
+}
+
 function capture(argv: readonly string[]): string {
   const result = Bun.spawnSync([...argv], { stderr: "inherit" });
   if (result.exitCode !== 0) {
@@ -71,7 +99,7 @@ function capture(argv: readonly string[]): string {
  * `paths`は残っているファイル、`deleted`は削除されたファイルである。
  * 名前の変更は、元のパスを削除、新しいパスを追加として数える。
  */
-function listChangedPaths(): {
+function legacyListChangedPaths(): {
   readonly paths: readonly string[];
   readonly deleted: readonly string[];
 } {
@@ -119,7 +147,7 @@ function run(label: string, argv: readonly string[]): void {
 }
 
 function main(): void {
-  const { paths, deleted } = listChangedPaths();
+  const { paths, deleted } = legacyListChangedPaths();
   const plan = decideChecks(paths, deleted);
   console.log(`[check:changed] ${paths.length} changed files`);
 
