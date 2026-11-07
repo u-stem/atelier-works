@@ -94,7 +94,29 @@ describe("poll_prs: the wiring of the discovery", () => {
 
   test("still adds the tracked pull requests that the discovery did not return", async () => {
     const source = await read("f/factory/poll_prs.ts");
-    expect(source).toContain("await listTrackedPrs(config.tracked_pr_days)");
+    expect(source).toContain("await collectTrackedPrCandidates(");
+  });
+
+  test("lists the tracked pull requests within the configured days", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain(
+      "listTracked: () => listTrackedPrs(config.tracked_pr_days),",
+    );
+  });
+
+  test("marks the rows of a merged tracked pull request through the db module", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("markTrackedPrClosed(");
+  });
+
+  test("reports the number of the marks", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("trackedClosedMarked: tracked.closedMarked,");
+  });
+
+  test("reports whether the tracked list exceeded the limit", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("trackedOverLimit: tracked.overLimit,");
   });
 });
 

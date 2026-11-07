@@ -176,3 +176,20 @@ describe("watch_pr_ci: the result", () => {
     expect(source).toContain("human_collect_disabled");
   });
 });
+
+describe("watch_pr_ci: the tracked work items", () => {
+  test("asks for one more than the limit so that the watch can see an overflow", async () => {
+    const source = await read("f/factory/watch_pr_ci.ts");
+    expect(source).toContain("TRACKED_PR_LIMIT + 1,");
+  });
+
+  test("reads the database clock through the db module", async () => {
+    const source = await read("f/factory/watch_pr_ci.ts");
+    expect(source).toContain("readDbNow: () => readDbNow(),");
+  });
+
+  test("marks the work item through the db module", async () => {
+    const source = await read("f/factory/watch_pr_ci.ts");
+    expect(source).toContain("markWorkItemPrClosed(id, prUrl, readAt),");
+  });
+});

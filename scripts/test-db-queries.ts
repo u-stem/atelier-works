@@ -110,6 +110,7 @@ import {
   listRecentGhCollectRuns,
   listRecentWorkerSamples,
   listRecordedScheduleFailureJobIds,
+  listTrackedPrs,
   listTransientReviewCandidates,
   listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
@@ -118,9 +119,12 @@ import {
   markGhRepoDetailIncomplete,
   markPrCiNotified,
   markPrConflictNotified,
+  markTrackedPrClosed,
+  markWorkItemPrClosed,
   type NewInvestigateWorkItem,
   type NewWorkerSample,
   newestNewerPrWorkItem,
+  readDbNow,
   readGhOwnerOpenIssues,
   readGhOwnerOpenPullRequests,
   readGhRepoOpenPullRequests,
@@ -5856,6 +5860,249 @@ check(
     await listPrOpenIssueWorkItems(new Date(Date.now() + 60_000), 100, sql)
   ).every((item) => item.owner !== OWNER),
 );
+
+// マージ済みのPRの作業項目は、閉じた印が有効な間だけ巡回の一覧から外れる。
+// 印は`updated_at`を進めず、行が書かれると無効になる。
+const closedMarkUrl = (number: number): string =>
+  `https://github.com/${OWNER}/r/pull/${String(number)}`;
+const closedMarkItem = await issueWorkItem(
+  961,
+  1,
+  "pr_open",
+  "qdb-closed-mark",
+);
+await setWorkItemPrUrl(closedMarkItem, closedMarkUrl(961), sql);
+const listedPrOpenIds = async (): Promise<number[]> =>
+  (await listPrOpenIssueWorkItems(new Date(Date.now() - 600_000), 1000, sql))
+    .filter((item) => item.owner === OWNER)
+    .map((item) => item.id);
+check(
+  "closed mark: an item without a mark is listed",
+  (await listedPrOpenIds()).includes(closedMarkItem),
+);
+await Bun.sleep(30);
+const closedMarkReadAt = await readDbNow(sql);
+const updatedBeforeMark = (await getWorkItem(closedMarkItem, sql))?.updated_at;
+check(
+  "closed mark: the mark is applied to the item that has not moved since the read",
+  (await markWorkItemPrClosed(
+    closedMarkItem,
+    closedMarkUrl(961),
+    closedMarkReadAt,
+    sql,
+  )) === true,
+);
+check(
+  "closed mark: an item with a valid mark is not listed",
+  !(await listedPrOpenIds()).includes(closedMarkItem),
+);
+check(
+  "closed mark: the mark does not move updated_at",
+  (await getWorkItem(closedMarkItem, sql))?.updated_at.getTime() ===
+    updatedBeforeMark?.getTime(),
+);
+check(
+  "closed mark: marking again with the same read time applies nothing",
+  (await markWorkItemPrClosed(
+    closedMarkItem,
+    closedMarkUrl(961),
+    closedMarkReadAt,
+    sql,
+  )) === false,
+);
+await setWorkItemPrUrl(closedMarkItem, closedMarkUrl(961), sql);
+check(
+  "closed mark: writing the pull request url of the item brings it back to the list",
+  (await listedPrOpenIds()).includes(closedMarkItem),
+);
+await Bun.sleep(30);
+await markWorkItemPrClosed(
+  closedMarkItem,
+  closedMarkUrl(961),
+  await readDbNow(sql),
+  sql,
+);
+await updateStatusIfCurrent(closedMarkItem, "pr_open", "pr_open", null, sql);
+check(
+  "closed mark: updating the status of the item brings it back to the list",
+  (await listedPrOpenIds()).includes(closedMarkItem),
+);
+const movedAfterRead = await issueWorkItem(
+  962,
+  1,
+  "pr_open",
+  "qdb-closed-mark-moved",
+);
+await setWorkItemPrUrl(movedAfterRead, closedMarkUrl(962), sql);
+const staleReadAt = new Date(Date.now() - 600_000);
+check(
+  "closed mark: an item written after the read time is not marked",
+  (await markWorkItemPrClosed(
+    movedAfterRead,
+    closedMarkUrl(962),
+    staleReadAt,
+    sql,
+  )) === false && (await listedPrOpenIds()).includes(movedAfterRead),
+);
+await Bun.sleep(30);
+check(
+  "closed mark: an item whose pull request url changed since the list is not marked",
+  (await markWorkItemPrClosed(
+    movedAfterRead,
+    closedMarkUrl(9620),
+    await readDbNow(sql),
+    sql,
+  )) === false,
+);
+const notPrOpen = await issueWorkItem(
+  963,
+  1,
+  "cancelled",
+  "qdb-closed-mark-cancelled",
+);
+await setWorkItemPrUrl(notPrOpen, closedMarkUrl(963), sql);
+await Bun.sleep(30);
+check(
+  "closed mark: an item that is not pr_open is not marked",
+  (await markWorkItemPrClosed(
+    notPrOpen,
+    closedMarkUrl(963),
+    await readDbNow(sql),
+    sql,
+  )) === false,
+);
+
+// 追跡中のPRの一覧(`listTrackedPrs`)も、最新の行の印が有効なPRを外す。
+const trackedReview = await prWorkItem(
+  "pr_review",
+  971,
+  "reviewed",
+  "qdb-tr-1",
+);
+const trackedNumbers = async (limit?: number): Promise<number[]> =>
+  (await listTrackedPrs(30, sql, limit))
+    .filter((tracked) => tracked.owner === OWNER)
+    .map((tracked) => tracked.pr_number);
+check(
+  "tracked prs: a pull request without a mark is listed",
+  (await trackedNumbers()).includes(971),
+);
+await Bun.sleep(30);
+check(
+  "tracked prs: the mark is applied to the rows of the pull request",
+  (await markTrackedPrClosed(OWNER, "r", 971, await readDbNow(sql), sql)) ===
+    true,
+);
+check(
+  "tracked prs: a pull request with a valid mark is not listed",
+  !(await trackedNumbers()).includes(971),
+);
+await updateStatusIfCurrent(trackedReview, "reviewed", "reviewing", null, sql);
+check(
+  "tracked prs: updating the row brings the pull request back to the list",
+  (await trackedNumbers()).includes(971),
+);
+check(
+  "tracked prs: a mark with a read time before the last update applies nothing",
+  (await markTrackedPrClosed(OWNER, "r", 971, staleReadAt, sql)) === false,
+);
+// 古い行に印が無く、最新の行に印があるPRは返さない。
+await prWorkItem("pr_review", 972, "reviewed", "qdb-tr-2-old");
+await Bun.sleep(30);
+const trackedNewest = await prWorkItem("pr_fix", 972, "fixing", "qdb-tr-2-new");
+execPsql(
+  target,
+  `UPDATE factory.work_items SET pr_closed_at = now() WHERE id = ${String(trackedNewest)}`,
+);
+check(
+  "tracked prs: an old row without a mark does not bring back a pull request whose newest row is marked",
+  !(await trackedNumbers()).includes(972),
+);
+// 古い行に印があり、最新の行に印が無いPRは返す。
+const trackedOlder = await prWorkItem(
+  "pr_review",
+  973,
+  "reviewed",
+  "qdb-tr-3-old",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET pr_closed_at = now() WHERE id = ${String(trackedOlder)}`,
+);
+await Bun.sleep(30);
+await prWorkItem("pr_fix", 973, "fixing", "qdb-tr-3-new");
+check(
+  "tracked prs: a pull request whose newest row has no mark is listed even if an old row is marked",
+  (await trackedNumbers()).includes(973),
+);
+check(
+  "tracked prs: the limit caps the list at one more than the limit",
+  (await listTrackedPrs(30, sql, 1)).length === 2,
+);
+check(
+  "tracked prs: a limit of one still returns the newest pull request first",
+  (await listTrackedPrs(30, sql, 1))[0]?.updated_at.getTime() ===
+    Math.max(
+      ...(await listTrackedPrs(30, sql, 1000)).map((tracked) =>
+        tracked.updated_at.getTime(),
+      ),
+    ),
+);
+
+// migrationより先にコードが反映されても、列が無いDBで一覧が今までどおり返り、印の書き込みは例外にならない。
+execPsql(target, "ALTER TABLE factory.work_items DROP COLUMN pr_closed_at");
+check(
+  "closed mark without the column: the pr_open list still returns the items",
+  (await listedPrOpenIds()).includes(closedMarkItem),
+);
+check(
+  "closed mark without the column: the tracked list still returns the pull requests",
+  (await trackedNumbers()).includes(971),
+);
+check(
+  "closed mark without the column: marking an item returns false instead of throwing",
+  (await markWorkItemPrClosed(
+    closedMarkItem,
+    closedMarkUrl(961),
+    await readDbNow(sql),
+    sql,
+  )) === false,
+);
+check(
+  "closed mark without the column: marking a tracked pull request returns false instead of throwing",
+  (await markTrackedPrClosed(OWNER, "r", 971, await readDbNow(sql), sql)) ===
+    false,
+);
+execPsql(
+  target,
+  "ALTER TABLE factory.work_items ADD COLUMN pr_closed_at timestamptz",
+);
+
+// PRの索引が、PRの番号による引きに使える形で入っている。小さい表では計画器が走査を選ぶので、順次走査を禁じて確かめる。
+execPsql(
+  target,
+  `CREATE FUNCTION public.qdb_plan(query text) RETURNS text LANGUAGE plpgsql AS $$
+   DECLARE line text; plan text := '';
+   BEGIN
+     PERFORM set_config('enable_seqscan', 'off', true);
+     FOR line IN EXECUTE 'EXPLAIN ' || query LOOP plan := plan || line || E'\n'; END LOOP;
+     RETURN plan;
+   END $$`,
+);
+const lookupPlan = (
+  await sql`
+    SELECT public.qdb_plan(
+      'SELECT id FROM factory.work_items WHERE kind = ANY(ARRAY[''pr_review'', ''pr_fix'']) AND owner = ''qdb'' AND repo = ''r'' AND pr_number = 971'
+    ) AS plan
+  `.fetch()
+)[0]?.plan;
+check(
+  "pr lookup index: a lookup by kind, owner, repo and number can use work_items_pr_lookup_idx",
+  typeof lookupPlan === "string" &&
+    lookupPlan.includes("work_items_pr_lookup_idx"),
+  lookupPlan,
+);
+execPsql(target, "DROP FUNCTION public.qdb_plan(text)");
 
 // 権限の不足のnoticeは、リポジトリごとに同じ本文なので、未解決のものがあれば新しく挿入しない。
 const prCiDeniedNotice = {

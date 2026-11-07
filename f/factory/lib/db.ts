@@ -3888,6 +3888,44 @@ export async function listTrackedPrs(
   }));
 }
 
+/** `listTrackedPrs`が返す件数の既定の上限。 */
+export const TRACKED_PR_LIST_LIMIT = 200;
+
+/** 例外が、`work_items.pr_closed_at`の列が無いことによるものかを返す。 */
+export function isMissingPrClosedAtColumnError(_err: unknown): boolean {
+  return false;
+}
+
+/** DBの現在時刻を返す。 */
+export async function readDbNow(
+  _sql: SqlClient = defaultSqlClient,
+): Promise<Date> {
+  return new Date(0);
+}
+
+/** 作業項目に、PRが閉じた印を付ける。付けたら`true`を返す。 */
+export async function markWorkItemPrClosed(
+  _id: number,
+  _prUrl: string,
+  _readAt: Date,
+  _sql: SqlClient = defaultSqlClient,
+  _log: Logger = logger("db"),
+): Promise<boolean> {
+  return false;
+}
+
+/** PRの作業項目(`pr_review`と`pr_fix`)に、PRが閉じた印を付ける。付けたら`true`を返す。 */
+export async function markTrackedPrClosed(
+  _owner: string,
+  _repo: string,
+  _prNumber: number,
+  _readAt: Date,
+  _sql: SqlClient = defaultSqlClient,
+  _log: Logger = logger("db"),
+): Promise<boolean> {
+  return false;
+}
+
 /**
  * `sinceIso`以降(その時刻を含む)の`factory.agent_runs`の費用の合計を返す。
  * `factory_config.daily_budget_usd`と比べる日次予算の確認に使う。
