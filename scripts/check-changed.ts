@@ -12,6 +12,8 @@
 //   `wmill-lock.yaml`は`f/`の下の`.ts`があるときである。コードを変えるたびに作り直され、全件が常態になるため。
 //   コードの無い単独の変更は、人が`tag`や`timeout`を手で直した変更でありうるので、全件にする。
 //   コードと一緒の手での設定変更は、拾えない。
+//   削除されたコード(`.ts`、`.tsx`、`.js`、`.mjs`)は、importのグラフに現れず、
+//   消したモジュールをまだ読むテストを選べないので、1つでもあれば全件にする。
 //   `console/`の下は、`console:check`が担うので、ルートの全件を起こさない。
 //   Markdownの差分(削除と名前の変更を含む)は、そのパスを書いているテスト(`tests/`をgit grepで探す)を実行する。
 //   スキルの文書が含まれるときは、全スキルを読むテストも足す。
@@ -63,9 +65,18 @@ function isGeneratedWithCode(path: string, all: ReadonlySet<string>): boolean {
   return base !== undefined && all.has(`${base}.ts`);
 }
 
-/** ルートのテストを、importの解析で選べないパスか。 */
-function needsFullTest(path: string, all: ReadonlySet<string>): boolean {
+/**
+ * ルートのテストを、importの解析で選べないパスか。
+ * 削除されたコードは、importのグラフに現れず、消したモジュールをまだ読むテストを選べないので、
+ * 拡張子がimportで扱えるものでも、全件にする。
+ */
+function needsFullTest(
+  path: string,
+  all: ReadonlySet<string>,
+  isDeleted: boolean,
+): boolean {
   if (path.startsWith("console/") || path.endsWith(".md")) return false;
+  if (isDeleted && IMPORT_RESOLVED_EXTENSIONS.has(extname(path))) return true;
   if (isGeneratedWithCode(path, all)) return false;
   return !IMPORT_RESOLVED_EXTENSIONS.has(extname(path));
 }
@@ -89,7 +100,9 @@ export function decideChecks(
       CONSOLE_AFFECTING.some((pattern) => pattern.test(path)),
     ),
     test: all.some((path) => !path.endsWith(".md")),
-    fullTest: all.some((path) => needsFullTest(path, present)),
+    fullTest:
+      paths.some((path) => needsFullTest(path, present, false)) ||
+      deleted.some((path) => needsFullTest(path, present, true)),
   };
 }
 
