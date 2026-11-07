@@ -11,6 +11,7 @@ import { Card } from "../../components/ui/card.tsx";
 import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { type ChangeOffer, changeOfferOf } from "../../lib/configChange.ts";
+import type { ConfigEntryValue } from "../../lib/configValue.ts";
 import {
   CONFIG_REFERENCE_LABEL,
   describeConfigValue,
@@ -30,7 +31,19 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
         <span className="text-muted-foreground">{CONFIG_REFERENCE_LABEL}</span>
       );
     case "scalar":
-      return <span className="break-words">{safeText(value.text)}</span>;
+      return (
+        <span className="break-words">
+          <TextValue text={value.text} />
+        </span>
+      );
+    case "empty":
+      return <EmptyValue note={value.note} />;
+    case "list":
+      return <ValueRows items={value.items} />;
+    case "table":
+      return <ValueTable columns={value.columns} rows={value.rows} />;
+    case "entries":
+      return <ValueEntries entries={value.entries} />;
     case "structure":
       return (
         <pre className="font-mono text-small break-words whitespace-pre-wrap">
@@ -38,6 +51,138 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
         </pre>
       );
   }
+}
+
+/** 空の文字列を示す目印。値とキーは等幅や通常の文字で描くので、斜体で薄い文字は見分けがつく。 */
+const EMPTY_STRING_LABEL = "(空の文字列)";
+
+/**
+ * 値、キー、列の見出しの文字列。空か空白だけの文字列は、見えなくなるので、目印で描く。
+ * 引数は`safeText`を通した文字列である。見えない文字は代替文字になっていて、空白だけとは見なさない。
+ */
+function TextValue({ text }: { text: string }) {
+  if (text.trim() === "") {
+    return (
+      <span className="text-muted-foreground italic">{EMPTY_STRING_LABEL}</span>
+    );
+  }
+  return <>{safeText(text)}</>;
+}
+
+/** 空であることと、項目に意味があるときはその意味。 */
+function EmptyValue({ note }: { note: string | null }) {
+  return (
+    <span className="flex flex-col gap-0.5 text-muted-foreground">
+      <span>空です。</span>
+      {note === null ? null : <span>{safeText(note)}</span>}
+    </span>
+  );
+}
+
+/** 要素ごとの1行。括弧とカンマを出さない。 */
+function ValueRows({ items }: { items: readonly string[] }) {
+  if (items.length === 0) {
+    return <span className="text-muted-foreground">空です。</span>;
+  }
+  return (
+    <ul className="flex flex-col gap-0.5 font-mono text-small">
+      {items.map((text, index) => (
+        // 要素は重なりうるので、位置を含めて見分ける。並びは変わらない。
+        // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の要素が並びうる。
+        <li key={`${index}:${text}`} className="break-all">
+          <TextValue text={text} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * 同じ形のオブジェクトの配列。列の見出しを持つ表で、行が持たないキーのセルは「未設定」と出す。
+ * 列の幅は内容に合わせ、長い名前はハイフンなどの切れ目で折る。
+ * 切れ目の無い長い文字列で収まらない表は、表の中だけを横にスクロールする。
+ */
+function ValueTable({
+  columns,
+  rows,
+}: {
+  columns: readonly string[];
+  rows: readonly (readonly (string | null)[])[];
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full table-auto border-collapse text-small">
+        <thead className="text-left text-muted-foreground">
+          <tr>
+            {columns.map((column, columnIndex) => (
+              // 見えない文字だけが違う列は、`safeText`の後で同じ文字列になるので、位置を含めて見分ける。
+              <th
+                // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の列が並びうる。
+                key={`${columnIndex}:${column}`}
+                scope="col"
+                className="py-1 pr-3 font-medium"
+              >
+                <TextValue text={safeText(column)} />
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {rows.map((cells, rowIndex) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: 行を見分けるキーが無く、並びは変わらない。
+            <tr key={rowIndex}>
+              {cells.map((cell, cellIndex) => (
+                <td
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の列が並びうる。
+                  key={`${cellIndex}:${columns[cellIndex]}`}
+                  className="py-1 pr-3 align-top break-words"
+                >
+                  {cell === null ? (
+                    <span className="text-muted-foreground">未設定</span>
+                  ) : (
+                    <TextValue text={cell} />
+                  )}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** オブジェクトのキーと値の行。値が配列なら、その中も行で並べる。 */
+function ValueEntries({
+  entries,
+}: {
+  entries: readonly { key: string; value: ConfigEntryValue }[];
+}) {
+  return (
+    <dl className="flex flex-col gap-1.5 text-small">
+      {entries.map(({ key, value }, index) => (
+        // キーは`safeText`の後で重なりうるので、位置を含めて見分ける。並びは変わらない。
+        <div
+          // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列のキーが並びうる。
+          key={`${index}:${key}`}
+          className="grid gap-0.5 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] sm:gap-x-3"
+        >
+          <dt className="font-mono break-all">
+            <TextValue text={safeText(key)} />
+          </dt>
+          <dd className="min-w-0">
+            {value.kind === "list" ? (
+              <ValueRows items={value.items} />
+            ) : (
+              <span className="break-all">
+                <TextValue text={value.text} />
+              </span>
+            )}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
 }
 
 function ChangeButton({

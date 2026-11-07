@@ -757,26 +757,206 @@ describe("describeConfigValue", () => {
     ).toEqual({ kind: "scalar", text });
   });
 
-  test("writes an array as indented text", () => {
-    expect(
-      describeConfigValue({
-        key: "k",
-        kind: "value",
-        value: ["a", "b"],
-        masked: false,
-      }),
-    ).toEqual({ kind: "structure", text: '[\n  "a",\n  "b"\n]' });
+  const describeValue = (key: string, value: unknown) =>
+    describeConfigValue({ key, kind: "value", value, masked: false });
+
+  test("writes an array of strings as one row per element", () => {
+    expect(describeValue("allowed_check_commands", ["a", "b"])).toEqual({
+      kind: "list",
+      items: ["a", "b"],
+    });
   });
 
-  test("writes an object as indented text", () => {
+  test("writes an array of numbers as one row per element", () => {
+    expect(describeValue("k", [1, 2])).toEqual({
+      kind: "list",
+      items: ["1", "2"],
+    });
+  });
+
+  test("replaces a hidden character in an element of a list", () => {
+    expect(describeValue("k", ["a‮b"])).toEqual({
+      kind: "list",
+      items: ["a�b"],
+    });
+  });
+
+  test("writes an array of objects with the same keys as a table", () => {
+    expect(
+      describeValue("owners", [
+        { name: "u-stem", kind: "user", id: 1 },
+        { name: "acme", kind: "org", id: 2 },
+      ]),
+    ).toEqual({
+      kind: "table",
+      columns: ["name", "kind", "id"],
+      rows: [
+        ["u-stem", "user", "1"],
+        ["acme", "org", "2"],
+      ],
+    });
+  });
+
+  test("leaves the cell empty for a key that a row does not have", () => {
+    expect(
+      describeValue("owners", [
+        { name: "u-stem", kind: "user", id: 1 },
+        { name: "acme", kind: "org" },
+      ]),
+    ).toEqual({
+      kind: "table",
+      columns: ["name", "kind", "id"],
+      rows: [
+        ["u-stem", "user", "1"],
+        ["acme", "org", null],
+      ],
+    });
+  });
+
+  test("replaces a hidden character in a column and a cell of a table", () => {
+    expect(describeValue("k", [{ "a‮b": "c‮d" }])).toEqual({
+      kind: "table",
+      columns: ["a�b"],
+      rows: [["c�d"]],
+    });
+  });
+
+  test("leaves the cell empty for a key that a row only inherits", () => {
+    // JSON.parseは、`__proto__`を行自身のキーとして作る。
+    const first: unknown = JSON.parse('{"__proto__":"a","constructor":"b"}');
+    expect(describeValue("k", [first, { name: "c" }])).toEqual({
+      kind: "table",
+      columns: ["__proto__", "constructor", "name"],
+      rows: [
+        ["a", "b", null],
+        [null, null, "c"],
+      ],
+    });
+  });
+
+  test("writes an object as rows of a key and a value", () => {
+    expect(
+      describeValue("allowed_labeler_ids", { alice: 12, bob: 34 }),
+    ).toEqual({
+      kind: "entries",
+      entries: [
+        { key: "alice", value: { kind: "text", text: "12" } },
+        { key: "bob", value: { kind: "text", text: "34" } },
+      ],
+    });
+  });
+
+  test("writes an array inside an object as a list of its own", () => {
+    expect(
+      describeValue("check_commands_by_repo", {
+        "u-stem/app": ["mise run check", "mise run lint"],
+      }),
+    ).toEqual({
+      kind: "entries",
+      entries: [
+        {
+          key: "u-stem/app",
+          value: { kind: "list", items: ["mise run check", "mise run lint"] },
+        },
+      ],
+    });
+  });
+
+  test("keeps an empty array inside an object as an empty list", () => {
+    expect(
+      describeValue("check_commands_by_repo", { "u-stem/app": [] }),
+    ).toEqual({
+      kind: "entries",
+      entries: [{ key: "u-stem/app", value: { kind: "list", items: [] } }],
+    });
+  });
+
+  test("replaces a hidden character in a key and a value of an object", () => {
+    expect(describeValue("k", { "a‮b": "c‮d" })).toEqual({
+      kind: "entries",
+      entries: [{ key: "a�b", value: { kind: "text", text: "c�d" } }],
+    });
+  });
+
+  test("says an empty array is empty, with no meaning for an unknown key", () => {
+    expect(describeValue("allowed_check_commands", [])).toEqual({
+      kind: "empty",
+      note: null,
+    });
+  });
+
+  test("says an empty object is empty", () => {
+    expect(describeValue("check_commands_by_repo", {})).toEqual({
+      kind: "empty",
+      note: null,
+    });
+  });
+
+  test.each([
+    [
+      "repo_allowlist",
+      "空のときは、IssueとPRの発見は、ownersのアカウントのリポジトリすべてが対象です。mainのCIの監視とdependabotは、factory_repoだけを見ます。",
+    ],
+    [
+      "default_reviewers",
+      "空のときは、この修正のきっかけになったレビューとコメントの投稿者を指定します(PRの作者と実行アカウントは除く)。投稿者がいなければ、指定しません。",
+    ],
+    ["dependabot_other_repos", "空のときは、factory_repoだけを処理します。"],
+  ])("tells what an empty %s means", (key, note) => {
+    expect(describeValue(key, [])).toEqual({ kind: "empty", note });
+  });
+
+  test("falls back to JSON for an array of arrays", () => {
+    expect(describeValue("k", [["a"]])).toEqual({
+      kind: "structure",
+      text: '[\n  [\n    "a"\n  ]\n]',
+    });
+  });
+
+  test("falls back to JSON for an array that mixes a string and an object", () => {
+    expect(describeValue("k", ["a", { b: 1 }])).toEqual({
+      kind: "structure",
+      text: '[\n  "a",\n  {\n    "b": 1\n  }\n]',
+    });
+  });
+
+  test("falls back to JSON for an array that holds null", () => {
+    expect(describeValue("k", ["a", null])).toEqual({
+      kind: "structure",
+      text: '[\n  "a",\n  null\n]',
+    });
+  });
+
+  test("falls back to JSON for objects that hold a nested value", () => {
+    expect(describeValue("k", [{ name: "a", tags: ["x"] }])).toEqual({
+      kind: "structure",
+      text: '[\n  {\n    "name": "a",\n    "tags": [\n      "x"\n    ]\n  }\n]',
+    });
+  });
+
+  test("falls back to JSON for an object that holds an object", () => {
+    expect(describeValue("k", { a: { b: 1 } })).toEqual({
+      kind: "structure",
+      text: '{\n  "a": {\n    "b": 1\n  }\n}',
+    });
+  });
+
+  test("falls back to JSON for an object whose array holds an object", () => {
+    expect(describeValue("k", { a: [{ b: 1 }] })).toEqual({
+      kind: "structure",
+      text: '{\n  "a": [\n    {\n      "b": 1\n    }\n  ]\n}',
+    });
+  });
+
+  test("hides a masked list, whatever it held", () => {
     expect(
       describeConfigValue({
         key: "k",
         kind: "value",
-        value: { a: 1 },
-        masked: false,
+        value: ["x"],
+        masked: true,
       }),
-    ).toEqual({ kind: "structure", text: '{\n  "a": 1\n}' });
+    ).toEqual({ kind: "reference" });
   });
 
   test("replaces a character that reorders the text", () => {
