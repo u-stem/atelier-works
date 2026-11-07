@@ -10,7 +10,8 @@
 // 書き込みが成功したら記録をすべて消す。戻さなかった名前を次の実行に持ち越さず、止めたままにした機能が後で戻らないためである。
 // 消す前に、最初に読んだ記録が変わっておらず、全停止が空であることを確かめる。
 // 変数に条件つきの更新は無いので、確かめてから消すまでの間に置かれた全停止の記録は、消えうる。
-// 消した後に全停止を読み直し、置かれていれば警告して止め直す。
+// 消した後に、消す書き込みの成否によらず全停止を読み直し、置かれていれば警告して止め直す。読めなければ警告だけにする。
+// 端末に出す設定の名前は、制御文字を字面にしてから出す。
 
 import { parseFactoryConfig } from "../f/factory/lib/config.ts";
 import { holdsReference } from "../f/factory/lib/console_redact.ts";
@@ -213,8 +214,24 @@ function confirmationOf(plan: RestorePlan): string {
 const STILL_STOPPED =
   "the stop-all is still placed (or its variable is corrupt); release it with mise run stop:release first. Nothing was changed.";
 
+/** 端末で働きうる制御文字と書式文字。改行とタブは、表示を崩さないので残す。 */
+const UNSAFE_FOR_TERMINAL = /[\p{Cc}\p{Cf}]/gu;
+
+/**
+ * 端末に出す文字列の、制御文字と書式文字を`\uXXXX`の字面に置き換える。改行とタブは残す。
+ * 設定のキーや`wmill`の標準エラーは信頼できない入力で、端末の表示や題名を書き換える並びを含みうるためである。
+ */
 export function safeForTerminal(text: string): string {
-  return text;
+  return text.replace(UNSAFE_FOR_TERMINAL, (char) =>
+    char === "\n" || char === "\t"
+      ? char
+      : `\\u${(char.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/** 端末に出す設定の名前。記録してよい形の名前はそのまま、それ以外は引用符で囲み、制御文字を字面にして出す。 */
+export function displayName(name: string): string {
+  return isRecordableFlag(name) ? name : safeForTerminal(JSON.stringify(name));
 }
 
 const INLINE_DEPTH_MAX = 16;
@@ -264,27 +281,42 @@ async function checkStopAll(io: RestoreIo): Promise<StopAllCheck> {
 function stopAgainWords(cause: Exclude<StopAllCheck, "clear">): {
   readonly head: string;
   readonly next: string;
+  /** 手で戻してよくなる時点。読めなかった全停止の解除を待たせない。 */
+  readonly when: string;
 } {
   return cause === "placed"
     ? {
         head: "A stop-all was placed while restoring.",
         next: "Run mise run stop:restore again after the stop-all is released.",
+        when: "after the stop-all is released",
       }
     : {
         head: "The stop-all variable could not be read while restoring, so the settings are treated as stopped.",
         next: "Check the stop-all variable in Windmill, then run mise run stop:restore again.",
+        when: "after confirming in Windmill that no stop-all is placed",
       };
 }
 
 /**
- * 記録が、最初に読んだ記録のままかを伝える。
- * 置き換わっていたら、最初の記録にあって今の記録に無い名前を、手で戻す名前として出す。
+ * 止め直した後の記録の状態と、次にすることを伝える。
+ * - during: 記録を消す前に止め直した。記録が最初のままなら、戻すコマンドを実行し直せばよい。
+ * - after_clear: 記録を消した後に止め直した。記録はこの手順が消したので、戻した名前を手で戻すよう伝える。
+ * 手で戻す名前は、今回戻した名前のうち、今の記録に無いものに限る。`--except`で除いた名前と、検査を通らなかった名前は含めない。
  */
 async function reportRecord(
+  cause: Exclude<StopAllCheck, "clear">,
+  mode: "during" | "after_clear",
   first: StopAllRecord,
-  next: string,
+  plan: RestorePlan,
   io: RestoreIo,
 ): Promise<void> {
+  const { next, when } = stopAgainWords(cause);
+  if (mode === "after_clear") {
+    io.print(
+      `Turn these on by hand in factory_config ${when}, when they should be on: ${plan.restore.map(displayName).join(", ")}. Check the other *_enabled settings that are false at the same time.`,
+    );
+    return;
+  }
   const again = await io.readRecord();
   const now = again.ok ? parseStopAllRecord(again.value) : null;
   if (now?.kind === "recorded" && Bun.deepEquals(now.record, first)) {
@@ -292,9 +324,9 @@ async function reportRecord(
     return;
   }
   const kept = now?.kind === "recorded" ? now.record.flags : [];
-  const lost = first.flags.filter((name) => !kept.includes(name));
+  const lost = plan.restore.filter((name) => !kept.includes(name));
   io.print(
-    `The record was replaced by a new stop-all or is gone. ${lost.length > 0 ? `Turn these on by hand in factory_config when they should be on: ${lost.join(", ")}. ` : ""}${next}`,
+    `The record was replaced by a new stop-all or is gone. ${lost.length > 0 ? `Turn these on by hand in factory_config ${when}, when they should be on: ${lost.map(displayName).join(", ")}. ` : ""}${next}`,
   );
 }
 
@@ -303,49 +335,55 @@ async function reportRecord(
  * 全停止と同じ規則で止め直すので、書き込みと並行してほかの処理が有効にした名前も止まる。
  * 戻した名前だけを戻すと、その間に有効になった機能が、全停止の間も動き続けるためである。
  * 記録には触らない。記録に無い名前を止めたときは、手で戻すよう名前を出す。
+ * 設定のキーは信頼できない入力なので、端末に出す名前は`displayName`を通す。
  */
 async function stopAgain(
   cause: Exclude<StopAllCheck, "clear">,
+  mode: "during" | "after_clear",
   first: StopAllRecord,
+  plan: RestorePlan,
   io: RestoreIo,
 ): Promise<void> {
-  const { head, next } = stopAgainWords(cause);
+  const { head, when } = stopAgainWords(cause);
   const read = await io.readConfig();
   if (!read.ok || !isRecord(read.value)) {
     io.print(
       `${head} factory_config could not be read again${read.ok ? "" : ` (${read.reason})`}. Turn every *_enabled setting off in factory_config by hand.`,
     );
-    await reportRecord(first, next, io);
+    await reportRecord(cause, mode, first, plan, io);
     return;
   }
   if (holdsInlineFile(read.value)) {
     io.print(
       `${head} ${INLINE_REFUSAL} Turn every *_enabled setting off in factory_config by hand.`,
     );
-    await reportRecord(first, next, io);
+    await reportRecord(cause, mode, first, plan, io);
     return;
   }
   const flags = enabledFlags(read.value);
   if (flags.length === 0) {
     io.print(`${head} Every *_enabled setting is already off.`);
-    await reportRecord(first, next, io);
+    await reportRecord(cause, mode, first, plan, io);
     return;
   }
   const off: Record<string, unknown> = { ...read.value };
   for (const flag of flags) off[flag] = false;
   const undone = await io.writeConfig(off);
+  const shown = flags.map(displayName).join(", ");
   io.print(
     undone.ok
-      ? `${head} Turned ${flags.join(", ")} off again.`
-      : `${head} The settings could not be turned off again (${undone.reason}). Turn ${flags.join(", ")} off in factory_config by hand.`,
+      ? `${head} Turned ${shown} off again.`
+      : `${head} The settings could not be turned off again (${undone.reason}). Turn ${shown} off in factory_config by hand.`,
   );
-  const unrecorded = flags.filter((flag) => !first.flags.includes(flag));
+  const unrecorded = flags.filter(
+    (flag) => !first.flags.includes(flag) && !plan.restore.includes(flag),
+  );
   if (undone.ok && unrecorded.length > 0) {
     io.print(
-      `These settings were on but not in the record, so turn them on by hand when they should be on: ${unrecorded.join(", ")}.`,
+      `These settings were on but not in the record, so turn them on by hand ${when}, when they should be on: ${unrecorded.map(displayName).join(", ")}.`,
     );
   }
-  await reportRecord(first, next, io);
+  await reportRecord(cause, mode, first, plan, io);
 }
 
 /** 最初に読んだ記録と、今の記録が同じか。 */
@@ -395,7 +433,7 @@ async function writeAndCheck(
   // 書き込みが時間切れで失敗しても、値は書かれていることがあるので、全停止を確かめる。
   const stopAll = await checkStopAll(io);
   if (stopAll !== "clear") {
-    await stopAgain(stopAll, first, io);
+    await stopAgain(stopAll, "during", first, plan, io);
     return false;
   }
   if (!written.ok) {
@@ -422,11 +460,18 @@ function exceptOption(except: readonly string[]): string {
   return except.length === 0 ? "" : ` -- --except ${except.join(",")}`;
 }
 
+const PLACED_AFTER_CLEAR =
+  "WARNING: a stop-all was placed while the record was being cleared, so the record of that stop-all may be gone. After the stop-all is released, check the *_enabled settings that are false in factory_config and turn on by hand the ones that should be on.";
+const UNREADABLE_AFTER_CLEAR =
+  "WARNING: the stop-all variable could not be read right after the record was cleared, so the settings were not turned off again. If a stop-all was placed at that moment, its record may be gone. After confirming in Windmill that no stop-all is placed, check the *_enabled settings that are false in factory_config and turn on by hand the ones that should be on.";
+
 /**
  * 記録を消す。最初に読んだ記録と今の記録が同じで、全停止が空のときだけ消す。
  * 戻している間に新しい全停止が記録を置き換えていたら、その記録を残す。消すと、新しい全停止が止めた名前を戻せなくなるためである。
  * Windmillの変数には条件つきの更新が無いので、確かめてから消すまでの間に置かれた全停止は止められない。
- * 消した後に全停止を読み直し、置かれていれば警告して止め直す。この場合に消えうるのは記録だけで、設定は全停止が`false`にする。
+ * 消した後に全停止を読み直す。消す書き込みが失敗と返っても、値は書かれていることがあるので、必ず読み直す。
+ * 置かれていれば警告して止め直す。この場合に消えうるのは記録だけで、設定は全停止が`false`にする。
+ * 読めなければ警告だけにする。記録はもう無いので、止め直すと、成功した戻しがすべて手作業になるためである。
  */
 async function clearRecordIfUnchanged(
   first: StopAllRecord,
@@ -442,28 +487,31 @@ async function clearRecordIfUnchanged(
   }
   const before = await checkStopAll(io);
   if (before !== "clear") {
-    if (plan.restore.length > 0) await stopAgain(before, first, io);
-    else {
+    if (plan.restore.length > 0) {
+      await stopAgain(before, "during", first, plan, io);
+    } else {
       const { head, next } = stopAgainWords(before);
       io.print(`${head} Nothing was changed. ${next}`);
     }
     return 1;
   }
   const cleared = await io.clearRecord();
+  const after = await checkStopAll(io);
+  if (after === "placed") {
+    io.warn(PLACED_AFTER_CLEAR);
+    if (plan.restore.length > 0) {
+      await stopAgain(after, "after_clear", first, plan, io);
+    }
+    return 1;
+  }
+  if (after === "unreadable") {
+    io.warn(UNREADABLE_AFTER_CLEAR);
+    return 1;
+  }
   if (!cleared.ok) {
     io.print(
       `could not clear the record of the stop-all: ${cleared.reason}. The settings listed under 'Will turn on' are on; run mise run stop:restore${exceptOption(except)} again with the same --except to clear the record.`,
     );
-    return 1;
-  }
-  const after = await checkStopAll(io);
-  if (after !== "clear") {
-    io.warn(
-      after === "placed"
-        ? "WARNING: a stop-all was placed while the record was being cleared. The record of that stop-all may be gone. After the stop-all is released, check the *_enabled settings that are false in factory_config and turn on by hand the ones that should be on."
-        : "WARNING: the stop-all variable could not be read right after the record was cleared. If a stop-all was placed at that moment, its record may be gone. Check the stop-all variable and the *_enabled settings that are false in factory_config, and turn on by hand the ones that should be on.",
-    );
-    if (plan.restore.length > 0) await stopAgain(after, first, io);
     return 1;
   }
   io.print(

@@ -42,11 +42,13 @@ import {
 import { isRecord } from "../f/factory/lib/types.ts";
 import { parseRunningJobs, runningJobsSql } from "./check-idle.ts";
 import {
+  displayName,
   parseExceptNames,
   type RestoreRead,
   type RestoreStore,
   type RestoreWrite,
   runRestore,
+  safeForTerminal,
 } from "./stop_all_restore.ts";
 
 /** 全停止を置くWindmillのscript。Consoleの全停止の操作と同じものを呼ぶ。 */
@@ -303,7 +305,8 @@ export function recordWarnings(stdout: string): string[] {
         (name): name is string => typeof name === "string",
       )
     : [];
-  const names = unrecorded.length > 0 ? `: ${unrecorded.join(", ")}` : "";
+  const names =
+    unrecorded.length > 0 ? `: ${unrecorded.map(displayName).join(", ")}` : "";
   if (parsed.record === "failed") {
     return [
       `WARNING: the names of the *_enabled settings that were turned off could not be recorded${names}. mise run stop:restore will not restore them; turn them on by hand in factory_config after the release.`,
@@ -697,11 +700,12 @@ async function main(): Promise<number> {
       capture(["wmill", "job", "cancel", id, "--reason", "stop_all"]),
     workerExec: (argv) => capture(compose("windmill_worker", argv)),
     sleep: (ms) => Bun.sleep(ms),
+    // 出口で制御文字を字面にする。scriptの結果、`wmill`の標準エラー、設定のキーが、端末の表示を書き換えないためである。
     print: (line) => {
-      if (line !== "") console.log(line);
+      if (line !== "") console.log(safeForTerminal(line));
     },
     warn: (line) => {
-      console.error(line);
+      console.error(safeForTerminal(line));
     },
     checkUids: checkUids(),
   });
