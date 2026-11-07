@@ -430,16 +430,21 @@ const BOUND_PATH_CALLS: Readonly<
     paths: ["f/factory/factory_config"],
     requestBody: true,
   },
-  // 凍結の変数と全停止の変数が無いときの有無の確認。他の変数の有無は読ませない。
+  // 凍結の変数、全停止の変数、全停止が止めた名前の記録が無いときの有無の確認。他の変数の有無は読ませない。
   "VariableService.existsVariable": {
-    paths: ["f/factory/freezes", "f/factory/stop_all"],
+    paths: [
+      "f/factory/freezes",
+      "f/factory/stop_all",
+      "f/factory/stop_all_record",
+    ],
     requestBody: false,
   },
 };
 
 /**
- * パスをリテラルに固定する変数の呼び出し。凍結の変数と全停止の変数だけを読み書きしてよい。
- * どのscriptがどちらを書くかは、script別の許可表とレビューで決める。
+ * パスをリテラルに固定する変数の呼び出し。凍結の変数、全停止の変数、全停止が止めた名前の記録だけを読み書きしてよい。
+ * どのscriptがどれを書くかは、script別の許可表とレビューで決める。
+ * 記録の変数を名指しできる`f/`のファイルは、`tests/scripts/stop_all_wiring.test.ts`が全停止のscriptと`lib/stop_all.ts`に限る。
  * `setVariable`は変数が無いときに作るので、秘密の変数として作らないよう、3番目の引数を`false`に固定する。
  * 名前の出現はすべて`name(`の呼び出しでなければならない。別名、`.call`、`.bind`、`.apply`、
  * 引数への受け渡しは、パスの固定をすり抜けるので禁じる。
@@ -447,6 +452,7 @@ const BOUND_PATH_CALLS: Readonly<
 const BOUND_VARIABLE_PATHS: readonly string[] = [
   "f/factory/freezes",
   "f/factory/stop_all",
+  "f/factory/stop_all_record",
 ];
 const BOUND_VARIABLE_CALLS = ["getVariable", "setVariable"] as const;
 

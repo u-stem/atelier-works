@@ -7,6 +7,7 @@ import {
 
 // 全停止を置く・解除するscript、変数の解析、実行中の監視と、それを固定するテストは、
 // 書き換えられると、全停止が効かなくなるか、Consoleの確認を経ずに解除できるようになる。
+// ホストのCLIと、記録から設定を戻す手順は、ホストのユーザーの権限で設定を有効にする向きに書くので、同じく守る。
 // グロブではなくファイル名で列挙するので、保護が完全一致の一覧から来ていることを確かめる。
 const PATHS = [
   "f/factory/console_stop_all.ts",
@@ -20,6 +21,8 @@ const PATHS = [
   "tests/lib/stop_all.test.ts",
   "tests/scripts/console_stop_all.test.ts",
   "tests/scripts/console_stop_all_release.test.ts",
+  "scripts/stop_all.ts",
+  "scripts/stop_all_restore.ts",
 ];
 
 const LOCKS = [

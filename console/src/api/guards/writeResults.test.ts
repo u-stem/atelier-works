@@ -949,6 +949,24 @@ describe("isStopAllResult", () => {
     const { placed_at: _omitted, ...without } = PLACED;
     expect(isStopAllResult(without)).toBe(false);
   });
+
+  test("accepts a placed stop with the record of the names", () => {
+    expect(
+      isStopAllResult({
+        ...PLACED,
+        record: "written",
+        config_unrecorded: ["Odd_enabled"],
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a record outcome it does not know", () => {
+    expect(isStopAllResult({ ...PLACED, record: "lost" })).toBe(false);
+  });
+
+  test("rejects unrecorded names that are not strings", () => {
+    expect(isStopAllResult({ ...PLACED, config_unrecorded: [1] })).toBe(false);
+  });
 });
 
 describe("isStopAllReleaseResult", () => {

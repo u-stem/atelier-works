@@ -2426,6 +2426,70 @@ describe("bash-guard denies placing and releasing the stop-all", () => {
   });
 });
 
+// 記録から設定を戻す`mise run stop:restore`は、設定を有効にする向きに書く人の操作である。
+// 記録の変数を書き換えると、戻す名前を変えられるので、書き込みも止める。読み取りは許す。
+describe("bash-guard and restoring the settings that the stop-all turned off", () => {
+  test("denies mise run stop:restore", async () => {
+    expect(await decide("mise run stop:restore")).toBe("deny");
+  });
+
+  test.each([
+    "mise run stop:restore -- --except pr_conflict_fix_enabled",
+    "mise stop:restore",
+    "mise run stop:res*",
+    "caffeinate mise run stop:restore",
+    "bun scripts/stop_all.ts restore",
+  ])("denies %s in a subagent", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("the reason for the CLI names the restoring task", async () => {
+    expect(await denyReason("mise run stop:restore")).toContain(
+      "mise run stop:restore",
+    );
+  });
+
+  test("denies writing the stop-all record variable", async () => {
+    expect(
+      await decide("wmill variable add '' f/factory/stop_all_record"),
+    ).toBe("deny");
+  });
+
+  test.each([
+    "wmill variable push record.variable.json f/factory/stop_all_record",
+    "wmill variable add '' f/factory/stop_all_rec*",
+    `curl -X POST http://localhost:8000/api/w/factory/variables/update/f/factory/stop_all_record -d '{}'`,
+    `curl -X POST http://localhost:8000/api/w/factory/variables/update/f%2Ffactory%2Fstop_all_record -d '{}'`,
+    `curl -X POST http://localhost:8000/api/w/factory/variables/delete/f/factory/stop_all_record`,
+    `curl -X POST http://localhost:8000/api/w/factory/variables/update/f/factory/stop%5Fall%5Frecord -d '{}'`,
+    `curl -X POST http://localhost:8000/api/w/factory/variables%2Fupdate/f%2Ffactory%2Fstop%5Fall%5Frecord -d '{}'`,
+  ])("denies the write %s to the record variable", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("the reason for a write of the record names the record variable", async () => {
+    expect(
+      await denyReason("wmill variable add '' f/factory/stop_all_record"),
+    ).toContain("f/factory/stop_all_record");
+  });
+
+  test("allows reading the record variable", async () => {
+    expect(await decide("wmill variable get f/factory/stop_all_record")).toBe(
+      "allow",
+    );
+  });
+
+  test.each([
+    "curl http://localhost:8000/api/w/factory/variables/get_value/f/factory/stop_all_record",
+    "bun test tests/scripts/stop_all_restore.test.ts",
+    "bunx biome check scripts/stop_all_restore.ts",
+    "cat scripts/stop_all_restore.ts",
+    "mise tasks info stop:restore",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
 describe("bash-guard allows work near the stop-all", () => {
   test.each([
     "bun test tests/scripts/stop_all.test.ts",

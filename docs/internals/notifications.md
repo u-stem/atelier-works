@@ -288,7 +288,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `review_gated_prolonged` | `notify_daily_summary` | 投稿しない状態が続く日数、作業項目の画面のリンク、次の操作 |
 | `credential_expiring` | `notify_daily_summary` | `<資格情報>の期限が<YYYY-MM-DD>に切れる。`で始まる固定の文と、次の操作。残り日数は載せない。期限が先に延びた資格情報と、記録から消えた資格情報の通知は、本文の一致で解決する。記録の項目が壊れた資格情報の通知は、解決しない |
 | `stop_all_active` | `detect_schedule_failures` | 全停止中であることと、解除の操作を述べる固定の文。時刻、操作者、理由は載せない(システムの画面に出す)。解除で検出器が解決し、Consoleからは解決できない |
-| `stop_all_released` | `detect_schedule_failures` | 全停止の解除と、`*_enabled`を1つずつ有効にする操作を述べる固定の文。Discordには通知しない |
+| `stop_all_released` | `detect_schedule_failures` | 全停止の解除で機能が動き出していないことと、`mise run stop:restore`で戻す操作を述べる固定の文。Discordには通知しない |
 | `dependabot_merge_held` | `poll_dependabot` | 一覧と解除の操作。取得の1周ごとに1件にまとめ、PRの数は載せない |
 | `dependabot_merge_hold_unreadable` | `poll_dependabot` | 保留を読めない原因の種類と、最初に確かめること。PRの数は載せない。保留を読めた周回で自動で解決する。壊れた行と想定外の失敗は、本文の先頭にリポジトリを置き、そのリポジトリを読めた周回で解決する |
 | `hold_released` | `hold_release`、`freeze_release` | 解除した対象(種類、対象、id)、操作者、時刻(JST、秒まで)。保留の`reason`と`holder`は載せない。解除済みの行と、期限切れの行の片付けでは残さない。Discordには通知しない |

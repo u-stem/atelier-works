@@ -153,7 +153,7 @@ const SDK_ALLOWED: Readonly<Record<string, SdkAllowance>> = {
     ],
     members: ["getWorkspace", "datatable", "getVariable"],
   },
-  // 全停止は、全停止の変数を読んで書き、factory_configの生の値を読んで書き戻し、scheduleを無効にする。
+  // 全停止は、全停止の変数と、止めた名前の記録の変数を読んで書き、factory_configの生の値を読んで書き戻し、scheduleを無効にする。
   // 変数のパスと、変数を秘密として作らないことは、走査が固定する。
   "f/factory/console_stop_all": {
     services: [
@@ -724,6 +724,37 @@ describe("the SDK use scan", () => {
         `${JOB}await wmill.VariableService.existsVariable({ workspace, path: "f/factory/stop_all" });`,
       ).problems,
     ).toEqual([]);
+  });
+
+  const RECORD = '"f/factory/stop_all_record"';
+
+  test("accepts getVariable with the literal path of the stop-all record", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.getVariable(${RECORD});`).problems,
+    ).toEqual([]);
+  });
+
+  test("accepts setVariable with the literal path of the stop-all record that is not secret", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.setVariable(${RECORD}, text, false, "d");`)
+        .problems,
+    ).toEqual([]);
+  });
+
+  test("accepts the existence check of the stop-all record", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.VariableService.existsVariable({ workspace, path: ${RECORD} });`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("flags getVariable with a path that only starts like the stop-all record", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.getVariable("f/factory/stop_all_records");`,
+      ).problems,
+    ).not.toEqual([]);
   });
 
   test("flags existsVariable with another literal path", () => {

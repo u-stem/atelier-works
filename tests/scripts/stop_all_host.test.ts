@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { killAllArgv } from "../../f/factory/lib/check_sandbox.ts";
+import { STOP_ALL_RECORD_VARIABLE_DESCRIPTION } from "../../f/factory/lib/stop_all.ts";
 import {
   type ExecResult,
   parseStopArgs,
@@ -9,6 +10,7 @@ import {
   type StopCommand,
   type StopDeps,
   signalGroupArgv,
+  wmillRestoreStore,
 } from "../../scripts/stop_all.ts";
 
 const OK: ExecResult = { exitCode: 0, stdout: "", stderr: "" };
@@ -43,7 +45,32 @@ type Recorded = {
   readonly calls: string[];
   readonly printed: string[];
   readonly warned: string[];
+  /** 確認を求めた時点までに出した行。 */
+  readonly printedBeforeConfirm: string[];
   readonly deps: StopDeps;
+};
+
+/** 記録と、記録の名前を止めた設定。`parseFactoryConfig`を通る最小の形である。 */
+const RECORD = JSON.stringify({
+  recorded_at: "2026-11-07T00:00:00.000Z",
+  flags: ["implement_enabled", "pr_ci_watch_enabled"],
+});
+const STOPPED_CONFIG = {
+  owners: [{ name: "octo-owner", kind: "user" }],
+  trigger_label: "factory",
+  allowed_labeler_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
+  model: "claude-opus-5-5",
+  max_attempts: 3,
+  max_turns: 40,
+  max_budget_usd_per_run: 5,
+  daily_budget_usd: 50,
+  claude_timeout_sec: 1800,
+  worktree_ttl_days: 7,
+  factory_repo: "https://github.com/octo-owner/atelier-works",
+  instance_name: "local",
+  windmill_public_url: "http://127.0.0.1:8080",
+  implement_enabled: false,
+  pr_ci_watch_enabled: true,
 };
 
 function record(
@@ -55,15 +82,46 @@ function record(
     readonly ps?: string;
     readonly psAfterGrace?: string;
     readonly env?: Readonly<Record<string, string | undefined>>;
+    readonly terminal?: boolean;
   } = {},
 ): Recorded {
   const calls: string[] = [];
   const printed: string[] = [];
   const warned: string[] = [];
+  const printedBeforeConfirm: string[] = [];
   let psCount = 0;
+  let written: Record<string, unknown> | null = null;
   const deps: StopDeps = {
     env: options.env ?? {},
-    confirm: async () => options.confirmed ?? true,
+    terminal: options.terminal ?? true,
+    confirm: async () => {
+      printedBeforeConfirm.push(...printed);
+      return options.confirmed ?? true;
+    },
+    now: () => new Date("2026-11-07T01:00:00.000Z"),
+    restoreStore: {
+      readStopAll: async () => {
+        calls.push("read stop_all");
+        return { ok: true, value: "" };
+      },
+      readRecord: async () => {
+        calls.push("read record");
+        return { ok: true, value: RECORD };
+      },
+      readConfig: async () => {
+        calls.push("read config");
+        return { ok: true, value: written ?? STOPPED_CONFIG };
+      },
+      writeConfig: async (value) => {
+        calls.push("write config");
+        written = value;
+        return { ok: true };
+      },
+      clearRecord: async () => {
+        calls.push("clear record");
+        return { ok: true };
+      },
+    },
     runScript: async (path, args) => {
       calls.push(`script ${path} ${JSON.stringify(args)}`);
       return {
@@ -103,7 +161,7 @@ function record(
     },
     checkUids: [10001, 10002],
   };
-  return { calls, printed, warned, deps };
+  return { calls, printed, warned, printedBeforeConfirm, deps };
 }
 
 const PLACE: StopCommand = { kind: "place", reason: "a runaway loop" };
@@ -156,6 +214,88 @@ describe("parseStopArgs", () => {
 
   test("refuses an unknown command", () => {
     expect(parseStopArgs(["pause"]).ok).toBe(false);
+  });
+
+  test("reads restore", () => {
+    expect(parseStopArgs(["restore"])).toEqual({
+      ok: true,
+      value: { kind: "restore", except: [] },
+    });
+  });
+
+  test("reads restore with the names to leave out", () => {
+    expect(
+      parseStopArgs([
+        "restore",
+        "--except",
+        "implement_enabled,pr_conflict_fix_enabled",
+      ]),
+    ).toEqual({
+      ok: true,
+      value: {
+        kind: "restore",
+        except: ["implement_enabled", "pr_conflict_fix_enabled"],
+      },
+    });
+  });
+
+  test("refuses restore with a name of the wrong shape", () => {
+    expect(parseStopArgs(["restore", "--except", "owners"]).ok).toBe(false);
+  });
+
+  test("refuses restore with --except but no names", () => {
+    expect(parseStopArgs(["restore", "--except"]).ok).toBe(false);
+  });
+});
+
+const RESTORE: StopCommand = { kind: "restore", except: [] };
+
+describe("runStop restore", () => {
+  test("refuses without a terminal", async () => {
+    const { calls, deps } = record({ terminal: false });
+    const code = await runStop(RESTORE, deps);
+    expect({ code, calls }).toEqual({ code: 1, calls: [] });
+  });
+
+  test("refuses inside a Claude session", async () => {
+    const { calls, deps } = record({ env: { CLAUDECODE: "1" } });
+    const code = await runStop(RESTORE, deps);
+    expect({ code, calls }).toEqual({ code: 1, calls: [] });
+  });
+
+  test("prints what it will and will not restore before asking", async () => {
+    const { printedBeforeConfirm, deps } = record();
+    await runStop(RESTORE, deps);
+    expect(printedBeforeConfirm.join("\n")).toContain(
+      "pr_ci_watch_enabled: already on",
+    );
+  });
+
+  test("prints the names it will turn on before asking", async () => {
+    const { printedBeforeConfirm, deps } = record();
+    await runStop(RESTORE, deps);
+    expect(printedBeforeConfirm).toContain("  - implement_enabled");
+  });
+
+  test("writes nothing when the answer is not yes", async () => {
+    const { calls, deps } = record({ confirmed: false });
+    await runStop(RESTORE, deps);
+    expect(
+      calls.filter(
+        (call) => call.startsWith("write") || call.startsWith("clear"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("turns the settings on and clears the record when confirmed", async () => {
+    const { calls, deps } = record();
+    const code = await runStop(RESTORE, deps);
+    expect({
+      code,
+      writes: calls.filter(
+        (call) => call.startsWith("write") || call.startsWith("clear"),
+      ),
+    }).toEqual({ code: 0, writes: ["write config", "clear record"] });
   });
 });
 
@@ -217,7 +357,7 @@ describe("runStop inside a Claude session", () => {
     const { printed, deps } = record({ env: SESSION });
     await runStop(PLACE, deps);
     expect(printed).toContain(
-      "mise run stop and mise run stop:release are human-only operations; run them in your own terminal, not from a Claude session",
+      "mise run stop, mise run stop:release, and mise run stop:restore are human-only operations; run them in your own terminal, not from a Claude session",
     );
   });
 
@@ -370,6 +510,58 @@ describe("runStop place", () => {
   test("returns 0 when every step succeeds", async () => {
     const { deps } = record();
     expect(await runStop(PLACE, deps)).toBe(0);
+  });
+});
+
+describe("runStop place and the record of the names", () => {
+  test("warns on stderr when the names could not be recorded", async () => {
+    const { warned, deps } = record({
+      scriptStdout: JSON.stringify({
+        refused: false,
+        record: "failed",
+        config_unrecorded: ["implement_enabled"],
+      }),
+    });
+    await runStop(PLACE, deps);
+    expect(warned.some((line) => line.includes("implement_enabled"))).toBe(
+      true,
+    );
+  });
+
+  test("warns on stderr about names that were turned off but not recorded", async () => {
+    const { warned, deps } = record({
+      scriptStdout: JSON.stringify({
+        refused: false,
+        record: "written",
+        config_unrecorded: ["Odd_enabled"],
+      }),
+    });
+    await runStop(PLACE, deps);
+    expect(warned.some((line) => line.includes("Odd_enabled"))).toBe(true);
+  });
+
+  test("does not pass a control character in an unrecorded name to the terminal", async () => {
+    const { warned, deps } = record({
+      scriptStdout: JSON.stringify({
+        refused: false,
+        record: "written",
+        config_unrecorded: ["\u001b]0;x\u0007_enabled"],
+      }),
+    });
+    await runStop(PLACE, deps);
+    expect(warned.join("\n")).not.toContain("\u001b");
+  });
+
+  test("does not warn when every name was recorded", async () => {
+    const { warned, deps } = record({
+      scriptStdout: JSON.stringify({
+        refused: false,
+        record: "written",
+        config_unrecorded: [],
+      }),
+    });
+    await runStop(PLACE, deps);
+    expect(warned).toEqual([]);
   });
 });
 
@@ -544,5 +736,149 @@ describe("runStop release", () => {
   test("returns 1 when the result of the release is not JSON", async () => {
     const { deps } = record({ scriptStdout: "" });
     expect(await runStop({ kind: "release" }, deps)).toBe(1);
+  });
+});
+
+// 戻す手順の読み書きは、人の`wmill`のプロファイルで行う。`wmill`を起動せず、組み立てる引数とファイルの中身を確かめる。
+type WmillCall = {
+  readonly argv: readonly string[];
+  /** pushに渡したファイルの中身。書いた後に消えるので、呼ばれた時点で読む。 */
+  readonly file: unknown;
+};
+
+function wmillFake(outputs: Readonly<Record<string, string>> = {}): {
+  readonly calls: WmillCall[];
+  readonly run: (argv: readonly string[]) => Promise<ExecResult>;
+} {
+  const calls: WmillCall[] = [];
+  return {
+    calls,
+    run: async (argv) => {
+      const path = argv[3];
+      const file =
+        argv[2] === "push" && path !== undefined
+          ? JSON.parse(await Bun.file(path).text())
+          : null;
+      calls.push({ argv, file });
+      return { ...OK, stdout: outputs[argv.slice(1, 4).join(" ")] ?? "{}" };
+    },
+  };
+}
+
+const CONFIG_OUTPUT = JSON.stringify({
+  path: "f/factory/factory_config",
+  resource_type: "c_factory_config",
+  description: "the settings",
+  value: { implement_enabled: false },
+});
+
+describe("wmillRestoreStore", () => {
+  test("reads the stop-all variable as JSON", async () => {
+    const { calls, run } = wmillFake();
+    await wmillRestoreStore(run).readStopAll();
+    expect(calls[0]?.argv).toEqual([
+      "wmill",
+      "variable",
+      "get",
+      "f/factory/stop_all",
+      "--json",
+    ]);
+  });
+
+  test("reads the record as JSON", async () => {
+    const { calls, run } = wmillFake();
+    await wmillRestoreStore(run).readRecord();
+    expect(calls[0]?.argv).toEqual([
+      "wmill",
+      "variable",
+      "get",
+      "f/factory/stop_all_record",
+      "--json",
+    ]);
+  });
+
+  test("returns the value of a variable", async () => {
+    const { run } = wmillFake({
+      "variable get f/factory/stop_all": JSON.stringify({ value: "x" }),
+    });
+    expect(await wmillRestoreStore(run).readStopAll()).toEqual({
+      ok: true,
+      value: "x",
+    });
+  });
+
+  test("reads the config as JSON without interpolation", async () => {
+    const { calls, run } = wmillFake({
+      "resource get f/factory/factory_config": CONFIG_OUTPUT,
+    });
+    await wmillRestoreStore(run).readConfig();
+    expect(calls[0]?.argv).toEqual([
+      "wmill",
+      "resource",
+      "get",
+      "f/factory/factory_config",
+      "--json",
+    ]);
+  });
+
+  test("returns the value of the config", async () => {
+    const { run } = wmillFake({
+      "resource get f/factory/factory_config": CONFIG_OUTPUT,
+    });
+    expect(await wmillRestoreStore(run).readConfig()).toEqual({
+      ok: true,
+      value: { implement_enabled: false },
+    });
+  });
+
+  test("pushes the config with the resource type and description it read", async () => {
+    const { calls, run } = wmillFake({
+      "resource get f/factory/factory_config": CONFIG_OUTPUT,
+    });
+    await wmillRestoreStore(run).writeConfig({ implement_enabled: true });
+    const push = calls.find((call) => call.argv[2] === "push");
+    expect({
+      argv: [push?.argv[0], push?.argv[1], push?.argv[2], push?.argv[4]],
+      file: push?.file,
+    }).toEqual({
+      argv: ["wmill", "resource", "push", "f/factory/factory_config"],
+      file: {
+        value: { implement_enabled: true },
+        resource_type: "c_factory_config",
+        description: "the settings",
+      },
+    });
+  });
+
+  test("refuses to push the config when the resource type cannot be read", async () => {
+    const { calls, run } = wmillFake({
+      "resource get f/factory/factory_config": JSON.stringify({ value: {} }),
+    });
+    const written = await wmillRestoreStore(run).writeConfig({});
+    expect({
+      ok: written.ok,
+      pushed: calls.some((call) => call.argv[2] === "push"),
+    }).toEqual({ ok: false, pushed: false });
+  });
+
+  test("clears the record with an empty value that is not secret and its description", async () => {
+    const { calls, run } = wmillFake();
+    await wmillRestoreStore(run).clearRecord();
+    expect({
+      argv: [
+        calls[0]?.argv[0],
+        calls[0]?.argv[1],
+        calls[0]?.argv[2],
+        calls[0]?.argv[4],
+      ],
+      file: calls[0]?.file,
+    }).toEqual({
+      argv: ["wmill", "variable", "push", "f/factory/stop_all_record"],
+      file: {
+        value: "",
+        is_secret: false,
+        description: STOP_ALL_RECORD_VARIABLE_DESCRIPTION,
+      },
+    });
   });
 });

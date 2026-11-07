@@ -616,6 +616,19 @@ export function describeStopAllResult(result: StopAllResult): WriteNotice {
       "設定の*_enabledを止められませんでした。Windmillでfactory_configを確かめてください。",
     );
   }
+  // 記録が失敗したときは、scriptが止めた名前をすべて`config_unrecorded`に入れるので、名前は1つの文にまとめる。
+  const unrecorded = result.config_unrecorded ?? [];
+  if (result.record === "failed") {
+    const names =
+      unrecorded.length > 0 ? `止めた名前: ${unrecorded.join("、")}。` : "";
+    problems.push(
+      `止めた*_enabledの名前を記録できませんでした。${names}mise run stop:restoreでは戻らないので、解除の後にWindmillでfactory_configを開いて手で戻してください。`,
+    );
+  } else if (unrecorded.length > 0) {
+    problems.push(
+      `記録に載らなかった名前: ${unrecorded.join("、")}。この名前は、解除の後に手で戻してください。`,
+    );
+  }
   if (result.schedules_failed.length > 0) {
     problems.push(
       `止められなかったスケジュールが${String(result.schedules_failed.length)}本あります。Windmillで確かめてください。`,
@@ -647,7 +660,7 @@ const STOP_ALL_RELEASE_REFUSALS: Readonly<
     "操作の記録を残せませんでした。何も変えていません。急ぐときは、ホストでmise run stop:releaseを実行してください。",
 };
 
-/** 全停止の解除の結果。`*_enabled`が戻らないことを、毎回伝える。 */
+/** 全停止の解除の結果。`*_enabled`が戻らないことと、戻すコマンドを、毎回伝える。 */
 export function describeStopAllReleaseResult(
   result: StopAllReleaseResult,
 ): WriteNotice {
@@ -671,7 +684,7 @@ export function describeStopAllReleaseResult(
   return noteActionAudit(
     {
       tone: result.schedules_failed.length > 0 ? "warning" : "success",
-      message: `全停止を解除しました。factory_configの*_enabledは止めたままなので、使う機能を1つずつ有効にしてください。${notes.join("")}`,
+      message: `全停止を解除しました。factory_configの*_enabledは止めたままで、機能は動き出していません。修正の反映を確かめてから、ホストの端末でmise run stop:restoreを実行してください。${notes.join("")}`,
     },
     result.action_audit,
   );

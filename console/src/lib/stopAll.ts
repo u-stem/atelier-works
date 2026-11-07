@@ -38,12 +38,12 @@ export const STOP_ALL_EFFECT_LINES: readonly string[] = [
   "factory_configのtrueの*_enabledを、すべてfalseにします。",
   "見張りと片付けの4本を除く、リポジトリのスケジュールを無効にします。自己更新も止まります。",
   "実行中のClaudeと検査は、15秒以内に自分で止まります。ジョブは中止しません。",
-  "解除しても*_enabledは戻りません。使う機能を1つずつ有効にします。",
+  "止めた*_enabledの名前を記録します。解除しても*_enabledは戻りません。修正の反映を確かめてから、ホストの端末でmise run stop:restoreを実行して戻します。",
   "残ったプロセスは、ホストでmise run stop -- --kill-onlyを実行して止めます。",
 ];
 
 /** 解除の確認で並べる効果。 */
 export const STOP_ALL_RELEASE_LINES: readonly string[] = [
   "全停止の変数を空に戻し、リポジトリのスケジュールを有効に戻します。凍結のあるスケジュールは戻しません。",
-  "factory_configの*_enabledは止めたままです。使う機能を1つずつ有効にします。",
+  "factory_configの*_enabledは止めたままなので、機能は動き出しません。修正の反映を確かめてから、ホストの端末でmise run stop:restoreを実行して戻します。",
 ];

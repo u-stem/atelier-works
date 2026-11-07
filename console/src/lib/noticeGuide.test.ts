@@ -553,3 +553,19 @@ describe("deploy approval guides", () => {
     );
   });
 });
+
+describe("stop-all guides", () => {
+  test("the released guide gives the command that restores the settings", () => {
+    expect(noticeGuide("stop_all_released").commands).toEqual([
+      "mise run stop:restore",
+    ]);
+  });
+
+  test("the released guide no longer asks to turn the settings on one by one", () => {
+    expect(noticeGuide("stop_all_released").action).not.toContain("1つずつ");
+  });
+
+  test("the active guide no longer asks to turn the settings on one by one", () => {
+    expect(noticeGuide("stop_all_active").note).not.toContain("1つずつ");
+  });
+});

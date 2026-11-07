@@ -1,5 +1,29 @@
 import { describe, expect, test } from "bun:test";
-import { checkStopAllReason, stopAllReasonMessage } from "./stopAll.ts";
+import {
+  checkStopAllReason,
+  STOP_ALL_EFFECT_LINES,
+  STOP_ALL_RELEASE_LINES,
+  stopAllReasonMessage,
+} from "./stopAll.ts";
+
+// 解除しても機能は動き出さず、戻すのは端末のコマンドである。その手順を、置く前と解除する前に見せる。
+describe("the effects shown before a stop and a release", () => {
+  test("the stop names the command that restores the settings", () => {
+    expect(STOP_ALL_EFFECT_LINES.join("")).toContain("mise run stop:restore");
+  });
+
+  test("the stop no longer asks to turn the settings on one by one", () => {
+    expect(STOP_ALL_EFFECT_LINES.join("")).not.toContain("1つずつ");
+  });
+
+  test("the release names the command that restores the settings", () => {
+    expect(STOP_ALL_RELEASE_LINES.join("")).toContain("mise run stop:restore");
+  });
+
+  test("the release no longer asks to turn the settings on one by one", () => {
+    expect(STOP_ALL_RELEASE_LINES.join("")).not.toContain("1つずつ");
+  });
+});
 
 describe("checkStopAllReason", () => {
   test("accepts a reason", () => {
