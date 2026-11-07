@@ -40,6 +40,9 @@
   手動の入口は`mise run worktree:prune`である。
   手順は[セットアップ](docs/setup.md)の「worktreeの作成と片付け」にある。
 - `worktree:new`の標準エラーに自動の片付けの失敗の警告が出たら、運用者に報告する。
+- worktreeの中では、`cd`と、gitやghをつなぐ複合コマンドを使わない。
+  フックが拒否するためである。
+  拒否されやすい書き方は[セットアップ](docs/setup.md)の「worktreeの中でのコマンド」にある。
 - prune系のスクリプトを編集する作業では、親のセッションを、`WORKTREE_AUTO_PRUNE=0`をexportして起動する。
   編集中の版が本物のworktreeを消すのを避けるため。
   フックが作るworktreeにも効く。
