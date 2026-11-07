@@ -9,6 +9,7 @@ import type {
 } from "../../api/jobsQueries.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
 import { ConfigList, ConfigSection } from "./ConfigSection.tsx";
+import { ListChangeButton } from "./EditableListValue.tsx";
 
 const ITEMS: ConfigItemView[] = [
   { key: "daily_budget_usd", kind: "value", value: 5, masked: false },
@@ -296,9 +297,9 @@ describe("ConfigSection", () => {
     expect(renderSection()).toMatch(/<label[^>]*>キー名で絞り込む<\/label>/);
   });
 
-  test("says that only some items can be changed, and only one way", () => {
+  test("says which changes can be made on the items that are allowed", () => {
     expect(renderSection()).toContain(
-      "止める向きと下げる向きの変更だけ、許可した項目でできます",
+      "許可した項目だけ、止める向きと下げる向きの変更と、一覧の追加と削除ができます",
     );
   });
 
@@ -495,5 +496,229 @@ describe("ConfigList with the changes", () => {
         <ConfigList items={ITEMS} onChoose={() => undefined} />,
       ),
     ).toContain("daily_budget_usdを下げる");
+  });
+});
+
+describe("ConfigList with the changes of a list", () => {
+  const REPOS = [
+    "https://github.com/octo-owner/atelier-works",
+    "https://github.com/octo-owner/widgets",
+  ];
+
+  function listItem(
+    key: string,
+    value: unknown,
+    masked = false,
+  ): ConfigItemView {
+    return { key, kind: "value", value, masked };
+  }
+
+  function renderList(
+    items: ConfigItemView[],
+    options: { locked?: boolean; editable?: boolean } = {},
+  ): string {
+    const { locked = false, editable = true } = options;
+    return renderToStaticMarkup(
+      <ConfigList
+        items={items}
+        {...(editable
+          ? { onChoose: () => undefined, isLocked: () => locked }
+          : {})}
+      />,
+    );
+  }
+
+  /** `aria-label`が`label`のボタンの開始タグ。 */
+  function buttonTag(html: string, label: string): string | undefined {
+    return html
+      .match(/<button[^>]*>/g)
+      ?.find((tag) => tag.includes(`aria-label="${label}"`));
+  }
+
+  test("puts a button to remove beside each element", () => {
+    const html = renderList([listItem("repo_allowlist", REPOS)]);
+    expect([
+      buttonTag(html, `repo_allowlistから${REPOS[0]}を削除`) !== undefined,
+      buttonTag(html, `repo_allowlistから${REPOS[1]}を削除`) !== undefined,
+    ]).toEqual([true, true]);
+  });
+
+  test("puts a button to add under the list", () => {
+    const html = renderList([listItem("repo_allowlist", REPOS)]);
+    expect(buttonTag(html, "repo_allowlistに追加")).toBeDefined();
+  });
+
+  test("labels the button to remove with the word for the action", () => {
+    const html = renderList([listItem("default_reviewers", ["alice"])]);
+    expect(html).toContain(">削除<");
+  });
+
+  test("labels the button to add with the word for the action", () => {
+    const html = renderList([listItem("default_reviewers", ["alice"])]);
+    expect(html).toContain(">追加<");
+  });
+
+  test("offers only to add to an empty list, and still says it is empty", () => {
+    const html = renderList([listItem("dependabot_other_repos", [])]);
+    expect([
+      html.includes("空です。"),
+      buttonTag(html, "dependabot_other_reposに追加") !== undefined,
+      html.includes(">削除<"),
+    ]).toEqual([true, true, false]);
+  });
+
+  test("keeps the meaning of an empty list beside the button to add", () => {
+    const html = renderList([listItem("repo_allowlist", [])]);
+    expect(html).toContain("ownersのアカウントのリポジトリすべてが対象です");
+  });
+
+  test("shows no button to remove the last element of repo_allowlist", () => {
+    const html = renderList([listItem("repo_allowlist", [REPOS[0]])]);
+    expect(html).not.toContain(">削除<");
+  });
+
+  test("tells why the last element of repo_allowlist cannot be removed", () => {
+    const html = renderList([listItem("repo_allowlist", [REPOS[0]])]);
+    expect(html).toContain(
+      "最後の1件は削除できません。空だと owners 配下の全リポジトリが対象になります",
+    );
+  });
+
+  test("still shows the last element of repo_allowlist", () => {
+    const html = renderList([listItem("repo_allowlist", [REPOS[0]])]);
+    expect(html).toContain("https://github.com/octo-owner/atelier-works");
+  });
+
+  test("tells nothing about the last element when repo_allowlist has two", () => {
+    const html = renderList([listItem("repo_allowlist", REPOS)]);
+    expect(html).not.toContain("最後の1件は削除できません");
+  });
+
+  test("lets the last element of another list be removed", () => {
+    const html = renderList([listItem("default_reviewers", ["alice"])]);
+    expect(buttonTag(html, "default_reviewersからaliceを削除")).toBeDefined();
+  });
+
+  test("keeps every button off while the item is being changed", () => {
+    const html = renderList([listItem("default_reviewers", ["alice", "bob"])], {
+      locked: true,
+    });
+    const tags = html.match(/<button[^>]*>/g) ?? [];
+    expect(tags.map((tag) => tag.includes("disabled"))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  test("leaves every button on while nothing is being changed", () => {
+    const html = renderList([listItem("default_reviewers", ["alice", "bob"])]);
+    const tags = html.match(/<button[^>]*>/g) ?? [];
+    expect(tags.map((tag) => tag.includes("disabled"))).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  test("shows no button when no handler is given", () => {
+    const html = renderList([listItem("default_reviewers", ["alice"])], {
+      editable: false,
+    });
+    expect(html).not.toContain("<button");
+  });
+
+  test("shows the elements as a list when no handler is given", () => {
+    const html = renderList([listItem("default_reviewers", ["alice"])], {
+      editable: false,
+    });
+    expect(html).toContain("alice");
+  });
+
+  test("shows no button for a list that was masked", () => {
+    const html = renderList([listItem("default_reviewers", ["alice"], true)]);
+    expect(html).not.toContain("<button");
+  });
+
+  test("shows no button for a list that is a reference", () => {
+    const html = renderList([{ key: "default_reviewers", kind: "reference" }]);
+    expect(html).not.toContain("<button");
+  });
+
+  test("shows no button for a list that holds a number", () => {
+    const html = renderList([listItem("default_reviewers", ["alice", 1])]);
+    expect(html).not.toContain("<button");
+  });
+
+  test("shows no button for a list that holds a reference", () => {
+    const html = renderList([
+      listItem("default_reviewers", ["alice", "$var:f/factory/token"]),
+    ]);
+    expect(html).not.toContain("<button");
+  });
+
+  test("shows no button for a list that is not allowed to change", () => {
+    const html = renderList([listItem("allowed_check_commands", ["bun test"])]);
+    expect(html).not.toContain("<button");
+  });
+
+  test("writes an element as text in the label of its button", () => {
+    const html = renderList([
+      listItem("default_reviewers", ["<img src=x onerror=alert(1)>", "bob"]),
+    ]);
+    expect(html).not.toContain("<img");
+  });
+
+  test("replaces hidden characters in the label of the button", () => {
+    const html = renderList([listItem("default_reviewers", ["a‮b"])]);
+    expect(html).not.toContain("‮");
+  });
+});
+
+describe("ListChangeButton", () => {
+  const ADD = {
+    kind: "add",
+    key: "default_reviewers",
+    current: ["alice"],
+  } as const;
+  const REMOVE = {
+    kind: "remove",
+    key: "default_reviewers",
+    current: ["alice"],
+    index: 0,
+    element: "alice",
+  } as const;
+
+  test("hands the offer to the handler when the button to add is pressed", () => {
+    const chosen: unknown[] = [];
+    ListChangeButton({
+      offer: ADD,
+      locked: false,
+      onChoose: (offer) => {
+        chosen.push(offer);
+      },
+    }).props.onClick();
+    expect(chosen).toEqual([ADD]);
+  });
+
+  test("hands the offer to the handler when the button to remove is pressed", () => {
+    const chosen: unknown[] = [];
+    ListChangeButton({
+      offer: REMOVE,
+      locked: false,
+      onChoose: (offer) => {
+        chosen.push(offer);
+      },
+    }).props.onClick();
+    expect(chosen).toEqual([REMOVE]);
+  });
+
+  test("keeps the button off while the item is being changed", () => {
+    const element = ListChangeButton({
+      offer: ADD,
+      locked: true,
+      onChoose: () => undefined,
+    });
+    expect(element.props.disabled).toBe(true);
   });
 });
