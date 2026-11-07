@@ -36,6 +36,9 @@
 - gitのフックはlefthookで動く([セットアップ](docs/setup.md)の「gitのフック」)。`--no-verify`は使わない。フックの検査を飛ばすと、壊れた変更や秘密値がpushされるため。
 - worktreeは`mise run worktree:new -- <type>/<name>`で作り、既存のworktreeへは`EnterWorktree`の`path`で入る。
   置き場所と依存をそろえるためである。
+- worktreeに隔離したセッションでは、`cd`と、複数のコマンドを1回につなぐ書き方を使わない。
+  拒否されることがあるためである。
+  拒否されやすい書き方は[セットアップ](docs/setup.md)の「worktreeの中でのコマンド」にある。
 - マージ済みのworktreeは、`mise run worktree:new`で新しく作った後に自動で片付く。
   手動の入口は`mise run worktree:prune`である。
   手順は[セットアップ](docs/setup.md)の「worktreeの作成と片付け」にある。

@@ -8,6 +8,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  Fragment,
   type KeyboardEvent,
   type PointerEvent,
   useMemo,
@@ -174,57 +175,61 @@ function NavList({
               : actionableCounts(summary.data),
           ),
         );
+        const link = (
+          <NavLink
+            to={screen.path}
+            end={screen.path === "/"}
+            className={navLinkClass(collapsed)}
+            onClick={onNavigate}
+            onPointerDown={(event) => {
+              prefetchScreen(screen.id, {
+                pointerType: event.pointerType,
+                button: event.button,
+                ctrlKey: event.ctrlKey,
+                metaKey: event.metaKey,
+                shiftKey: event.shiftKey,
+                altKey: event.altKey,
+              });
+            }}
+          >
+            <span className="relative inline-flex shrink-0">
+              <Icon aria-hidden="true" className="size-[18px]" />
+              {collapsed && badge !== null ? (
+                <span
+                  aria-hidden="true"
+                  className="absolute -top-2 -right-2.5 min-w-4 rounded-full bg-primary px-1 text-center text-caption leading-4 font-semibold text-primary-foreground tabular-nums"
+                >
+                  {badge}
+                </span>
+              ) : null}
+            </span>
+            <span className={cn("flex-1 truncate", collapsed && "sr-only")}>
+              {screen.label}
+            </span>
+            {badge === null ? null : (
+              <span
+                className={cn(
+                  "rounded-full bg-primary px-2 text-caption leading-5 font-semibold text-primary-foreground tabular-nums",
+                  collapsed && "sr-only",
+                )}
+              >
+                {badge}
+                <span className="sr-only">件</span>
+              </span>
+            )}
+          </NavLink>
+        );
+        // ツールチップは、たたんだ形でだけ描く。広げた形で中身の無いツールチップを持つと、
+        // ポインタが外れても閉じる処理が働かず、「開いた」状態が残って、たたんだ瞬間にすべて見えるためである。
+        if (!collapsed) {
+          return <Fragment key={screen.id}>{link}</Fragment>;
+        }
         return (
           <Tooltip key={screen.id}>
-            <TooltipTrigger asChild>
-              <NavLink
-                to={screen.path}
-                end={screen.path === "/"}
-                className={navLinkClass(collapsed)}
-                onClick={onNavigate}
-                onPointerDown={(event) => {
-                  prefetchScreen(screen.id, {
-                    pointerType: event.pointerType,
-                    button: event.button,
-                    ctrlKey: event.ctrlKey,
-                    metaKey: event.metaKey,
-                    shiftKey: event.shiftKey,
-                    altKey: event.altKey,
-                  });
-                }}
-              >
-                <span className="relative inline-flex shrink-0">
-                  <Icon aria-hidden="true" className="size-[18px]" />
-                  {collapsed && badge !== null ? (
-                    <span
-                      aria-hidden="true"
-                      className="absolute -top-2 -right-2.5 min-w-4 rounded-full bg-primary px-1 text-center text-caption leading-4 font-semibold text-primary-foreground tabular-nums"
-                    >
-                      {badge}
-                    </span>
-                  ) : null}
-                </span>
-                <span className={cn("flex-1 truncate", collapsed && "sr-only")}>
-                  {screen.label}
-                </span>
-                {badge === null ? null : (
-                  <span
-                    className={cn(
-                      "rounded-full bg-primary px-2 text-caption leading-5 font-semibold text-primary-foreground tabular-nums",
-                      collapsed && "sr-only",
-                    )}
-                  >
-                    {badge}
-                    <span className="sr-only">件</span>
-                  </span>
-                )}
-              </NavLink>
-            </TooltipTrigger>
-            {collapsed ? (
-              <TooltipContent side="right">
-                {badge === null ? screen.label : `${screen.label}(${badge}件)`}
-              </TooltipContent>
-            ) : null}
+            <TooltipTrigger asChild>{link}</TooltipTrigger>
+            <TooltipContent side="right">
+              {badge === null ? screen.label : `${screen.label}(${badge}件)`}
+            </TooltipContent>
           </Tooltip>
         );
       })}
