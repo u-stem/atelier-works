@@ -86,7 +86,7 @@ function statefulPatternsIn(text: string): RegExp[] {
     // 小文字にも当てるので、検査名の文に混ざる語(`reset`など)を拾わないよう、文の先頭に限る。
     /["'`;]\s*PREPARE\s+\w+/i,
     /["'`;]\s*(?:RESET|DISCARD|LISTEN)\s+\w+/i,
-    /["'`;]\s*SET\s+(?!LOCAL\b)/,
+    /["'`;]\s*SET\s+(?!LOCAL\b)/i,
     /set_config\([^)]*,\s*false\s*\)/i,
   ];
   return stateful.filter((pattern) => pattern.test(text));
