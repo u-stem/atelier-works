@@ -11,7 +11,11 @@ import type {
   OutputViewData,
   ScheduleViewData,
 } from "../api/jobsQueries.ts";
-import { type ConfigStructure, describeStructure } from "./configValue.ts";
+import {
+  type ConfigStructure,
+  describeStructure,
+  unitOfConfigKey,
+} from "./configValue.ts";
 import { formatRemainingTime, formatShortAbsoluteIso } from "./relativeTime.ts";
 import { parseIdParam } from "./routeParams.ts";
 import { safeText } from "./safeText.ts";
@@ -425,10 +429,23 @@ export function filterConfigItems(
 export type ConfigValueText =
   | { readonly kind: "reference" }
   | { readonly kind: "scalar"; readonly text: string }
+  /** 真偽。`text`は書かれた値(`true`か`false`)で、読み上げに残す。 */
+  | {
+      readonly kind: "boolean";
+      readonly enabled: boolean;
+      readonly text: string;
+    }
+  /** 数値。`unit`はキーの接尾辞から導き、規則に当たらなければ`null`。 */
+  | {
+      readonly kind: "number";
+      readonly text: string;
+      readonly unit: string | null;
+    }
   | ConfigStructure;
 
 /**
  * 設定の値を、画面が描く形にする。参照と、伏せた値は出さない。
+ * 真偽と数値は、文字列と分ける(数値にはキーから導いた単位を添える)。
  * 配列とオブジェクトは、型ごとの形(行の一覧、表、キーと値の行、空の注記)にし、
  * どれにも当たらない入れ子と混在は、字下げしたJSONの文字列にする。
  * 見えない文字と並びを入れ替える文字は、代替文字にする。
@@ -438,6 +455,16 @@ export function describeConfigValue(item: ConfigItemView): ConfigValueText {
   const value = item.value;
   if (typeof value === "object" && value !== null) {
     return describeStructure(item.key, value);
+  }
+  if (typeof value === "boolean") {
+    return { kind: "boolean", enabled: value, text: String(value) };
+  }
+  if (typeof value === "number") {
+    return {
+      kind: "number",
+      text: String(value),
+      unit: unitOfConfigKey(item.key),
+    };
   }
   return { kind: "scalar", text: safeText(String(value)) };
 }
