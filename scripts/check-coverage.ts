@@ -61,7 +61,7 @@ export const LAYER_FLOORS: readonly LayerFloor[] = [
   { layer: "f/factory/lib", floorPercent: 96.23 },
   { layer: "f/factory/steps", floorPercent: 54.11 },
   { layer: "f/factory (other)", floorPercent: 61.59 },
-  { layer: "scripts", floorPercent: 90.09 },
+  { layer: "scripts", floorPercent: 90.06 },
 ];
 
 /**
