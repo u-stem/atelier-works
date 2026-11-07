@@ -231,6 +231,26 @@ describe("ConfigList values by type", () => {
     );
   });
 
+  test("marks a column header of a table that is an empty string", () => {
+    expect(renderValue("owners", [{ "": "x" }])).toMatch(
+      /<th[^>]*scope="col"[^>]*><span[^>]*>\(空の文字列\)<\/span><\/th>/,
+    );
+  });
+
+  test("marks a key of an object that is an empty string", () => {
+    expect(renderValue("k", { "": 5 })).toMatch(
+      /<dt[^>]*><span[^>]*>\(空の文字列\)<\/span><\/dt>/,
+    );
+  });
+
+  test("adds no meaning to an empty object of a key that means something when empty as a list", () => {
+    expect(renderValue("repo_allowlist", {})).not.toContain("空のときは");
+  });
+
+  test("still says an empty object of that key is empty", () => {
+    expect(renderValue("repo_allowlist", {})).toContain("空です");
+  });
+
   test("shows a string that spells the marker without the marker's style", () => {
     expect(renderValue("k", ["(空の文字列)"])).toMatch(
       /<li[^>]*>\(空の文字列\)<\/li>/,
