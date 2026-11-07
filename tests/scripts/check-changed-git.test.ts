@@ -25,6 +25,8 @@ function cleanEnv(): Record<string, string> {
   }
   env.GIT_CONFIG_GLOBAL = "/dev/null";
   env.GIT_CONFIG_NOSYSTEM = "1";
+  // 開発機のユーザーの除外の設定(`$XDG_CONFIG_HOME/git/ignore`)を読ませない。
+  env.XDG_CONFIG_HOME = "/nonexistent/xdg-config-home";
   env.GIT_AUTHOR_NAME = "test";
   env.GIT_AUTHOR_EMAIL = "test@example.com";
   env.GIT_COMMITTER_NAME = "test";
@@ -54,12 +56,31 @@ function commitAll(): void {
   git(repo, ["commit", "-q", "--no-gpg-sign", "-m", "base"]);
 }
 
+// テスト対象の関数は、呼び出し元のプロセスの環境でgitを実行する。
+// 開発機のgitの設定(グローバルの除外の設定など)で、未追跡のファイルの一覧が変わらないよう、
+// テストの間だけプロセスの環境を差し替えて、終わったら戻す。
+const ISOLATED_GIT_ENV: Readonly<Record<string, string>> = {
+  XDG_CONFIG_HOME: "/nonexistent/xdg-config-home",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+};
+const savedEnv = new Map<string, string | undefined>();
+
 beforeEach(() => {
+  for (const [key, value] of Object.entries(ISOLATED_GIT_ENV)) {
+    savedEnv.set(key, process.env[key]);
+    process.env[key] = value;
+  }
   repo = realpathSync(mkdtempSync(join(tmpdir(), "check-changed-")));
   git(repo, ["init", "-q", "-b", "main"]);
 });
 
 afterEach(() => {
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  savedEnv.clear();
   rmSync(repo, { recursive: true, force: true });
 });
 

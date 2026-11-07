@@ -141,10 +141,16 @@ describe("decideChecks", () => {
     ).toBe(true);
   });
 
-  test("a deleted script lock with its deleted TypeScript file keeps the selective test run", () => {
+  test("a deleted script lock with its changed TypeScript file keeps the selective test run", () => {
+    expect(
+      decideChecks(["f/factory/a.ts"], ["f/factory/a.script.lock"]).fullTest,
+    ).toBe(false);
+  });
+
+  test("a deleted script lock with its deleted TypeScript file runs the full test run", () => {
     expect(
       decideChecks([], ["f/factory/a.script.lock", "f/factory/a.ts"]).fullTest,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   test("a deleted script lock alone runs the full test run", () => {
@@ -197,8 +203,28 @@ describe("decideChecks", () => {
     expect(decideChecks([], ["docs/old.md"]).docs).toEqual([]);
   });
 
-  test("a deleted TypeScript file does not run the full test run", () => {
-    expect(decideChecks([], ["scripts/old.ts"]).fullTest).toBe(false);
+  // 削除されたコードは、importのグラフに現れない。消したモジュールをまだ読むテストを選べない。
+  test.each([
+    ["TypeScript", "scripts/old.ts"],
+    ["TSX", "f/factory/old.tsx"],
+    ["JavaScript", "scripts/old.js"],
+    ["ES module JavaScript", "scripts/old.mjs"],
+  ])("a deleted %s file runs the full test run", (_label, path) => {
+    expect(decideChecks([], [path]).fullTest).toBe(true);
+  });
+
+  test("a deleted Markdown file does not run the full test run", () => {
+    expect(decideChecks([], ["docs/old.md"]).fullTest).toBe(false);
+  });
+
+  test("a deleted TypeScript file under console/ does not run the full test run", () => {
+    expect(decideChecks([], ["console/src/old.ts"]).fullTest).toBe(false);
+  });
+
+  test("a deleted TypeScript file with a changed one still runs the full test run", () => {
+    expect(decideChecks(["scripts/new.ts"], ["scripts/old.ts"]).fullTest).toBe(
+      true,
+    );
   });
 });
 

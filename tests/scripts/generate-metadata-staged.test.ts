@@ -28,6 +28,8 @@ function cleanEnv(): Record<string, string> {
   }
   env.GIT_CONFIG_GLOBAL = "/dev/null";
   env.GIT_CONFIG_NOSYSTEM = "1";
+  // 開発機のユーザーの除外の設定(`$XDG_CONFIG_HOME/git/ignore`)を読ませない。
+  env.XDG_CONFIG_HOME = "/nonexistent/xdg-config-home";
   env.GIT_AUTHOR_NAME = "test";
   env.GIT_AUTHOR_EMAIL = "test@example.com";
   env.GIT_COMMITTER_NAME = "test";
