@@ -19,6 +19,88 @@
 # 防がずに受け入れている。
 set -euo pipefail
 
+# 追跡中のファイル(`wmill-lock.yaml`と`f/`)ごとに`<path>\t<hash>`を
+# `git ls-files`の順で書き、前後のファイルを行ごとに比べられるようにする。
+# 消えたファイルのハッシュは空になる。
+#
+# 数百件に1件ずつ`git hash-object`を起動すると数秒かかるので、存在するパスだけを
+# 1回の`git hash-object --stdin-paths`に渡す。一括にするときの落とし穴は次のとおり。
+# - 2回の取得の間に消えたパスが一括処理全体を止める。先に`-e`で絞り、
+#   それでも失敗したら1件ずつに戻る。
+# - `--stdin-paths`は行区切りで読み、行末のCRを落とす。改行かCRを含むパスが
+#   あれば1件ずつに戻る。先頭が二重引用符のパスは引用符付きとして解釈されるが、
+#   対象の`git ls-files -- wmill-lock.yaml f`は`f`か`wmill-lock.yaml`で始まる
+#   パスしか返さないので、その分岐は置かない。
+# - 出力は入力と1対1なので、存在したパスの順に出力の行を割り当てる。
+#   行数が合わなければ1件ずつに戻る。
+hash_tracked_files_one_by_one() {
+  local out_file="$1"
+  local path hash
+  : >"$out_file"
+  while IFS= read -r -d '' path; do
+    hash="$(git hash-object -- "$path" 2>/dev/null || true)"
+    printf '%s\t%s\n' "$path" "$hash" >>"$out_file"
+  done < <(git ls-files -z -- wmill-lock.yaml f)
+}
+
+hash_tracked_files() {
+  local out_file="$1"
+  local paths=() present=() existing=() hashes=()
+  local path hash batch_output index=0 next=0
+  local newline=$'\n' carriage_return=$'\r'
+
+  while IFS= read -r -d '' path; do
+    case "$path" in
+      *"$newline"* | *"$carriage_return"*)
+        hash_tracked_files_one_by_one "$out_file"
+        return 0
+        ;;
+    esac
+    paths+=("$path")
+    if [ -e "$path" ]; then
+      present+=(1)
+      existing+=("$path")
+    else
+      present+=(0)
+    fi
+  done < <(git ls-files -z -- wmill-lock.yaml f)
+
+  if [ "${#paths[@]}" -eq 0 ]; then
+    : >"$out_file"
+    return 0
+  fi
+
+  if [ "${#existing[@]}" -gt 0 ]; then
+    if ! batch_output="$(printf '%s\n' "${existing[@]}" | git hash-object --stdin-paths 2>/dev/null)"; then
+      hash_tracked_files_one_by_one "$out_file"
+      return 0
+    fi
+    while IFS= read -r hash; do
+      hashes+=("$hash")
+    done <<<"$batch_output"
+    if [ "${#hashes[@]}" -ne "${#existing[@]}" ]; then
+      hash_tracked_files_one_by_one "$out_file"
+      return 0
+    fi
+  fi
+
+  for path in "${paths[@]}"; do
+    if [ "${present[$index]}" -eq 1 ]; then
+      hash="${hashes[$next]}"
+      next=$((next + 1))
+    else
+      hash=""
+    fi
+    printf '%s\t%s\n' "$path" "$hash"
+    index=$((index + 1))
+  done >"$out_file"
+}
+
+# テストが関数だけを`source`できるように、直接実行されたときだけ以降を動かす。
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
+
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
@@ -32,21 +114,6 @@ before_untracked_file="$(mktemp)"
 after_untracked_file="$(mktemp)"
 wmill_output_file="$(mktemp)"
 trap 'rm -f "$before_hashes_file" "$after_hashes_file" "$before_untracked_file" "$after_untracked_file" "$wmill_output_file"' EXIT
-
-# 追跡中のファイル(`wmill-lock.yaml`と`f/`)ごとに`<path>\t<hash>`を
-# `git ls-files`の順で書き、前後のファイルを行ごとに比べられるようにする。
-# `git hash-object --stdin-paths`で一括にせず1件ずつハッシュを取るのは、
-# 2回の取得の間に消えたパスが一括処理全体を止め、パスとハッシュの対応が
-# ずれるのを防ぐため。消えたファイルのハッシュは空になる。
-hash_tracked_files() {
-  local out_file="$1"
-  local path hash
-  : >"$out_file"
-  while IFS= read -r -d '' path; do
-    hash="$(git hash-object -- "$path" 2>/dev/null || true)"
-    printf '%s\t%s\n' "$path" "$hash" >>"$out_file"
-  done < <(git ls-files -z -- wmill-lock.yaml f)
-}
 
 hash_tracked_files "$before_hashes_file"
 git ls-files --others --exclude-standard -z -- f >"$before_untracked_file"
