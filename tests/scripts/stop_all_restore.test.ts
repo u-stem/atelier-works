@@ -5,6 +5,7 @@ import {
   type RestoreIo,
   type RestoreRead,
   runRestore,
+  safeForTerminal,
 } from "../../scripts/stop_all_restore.ts";
 
 const NOW = new Date("2026-11-07T01:00:00.000Z");
@@ -676,6 +677,120 @@ describe("runRestore turning the settings off again", () => {
     });
     await runRestore([], io);
     expect(printed.join("\n")).not.toContain("releas");
+  });
+});
+
+describe("runRestore after the record was cleared", () => {
+  test("warns and fails when clearing the record fails and a stop-all was placed", async () => {
+    const { io, warned, printed } = fake({
+      clearFails: true,
+      stopAll: [ok(null), ok(null), ok(null), ok(PLACED)],
+    });
+    const code = await runRestore([], io);
+    expect({
+      code,
+      warned: warned.some((line) => line.startsWith("WARNING")),
+      rerun: printed.some((line) => line.includes("could not clear")),
+    }).toEqual({ code: 1, warned: true, rerun: false });
+  });
+
+  test("does not turn the settings off again when the stop-all cannot be read after the record was cleared", async () => {
+    const { io, writes, warned } = fake({
+      stopAll: [ok(null), ok(null), ok(null), { ok: false, reason: "down" }],
+    });
+    const code = await runRestore([], io);
+    expect({
+      code,
+      writes: writes.length,
+      warned: warned.some((line) => line.startsWith("WARNING")),
+    }).toEqual({ code: 1, writes: 1, warned: true });
+  });
+
+  test("warns without writing when nothing was turned on and a stop-all appeared after the record was cleared", async () => {
+    const { io, writes, warned } = fake({
+      record: ok(recordOf(["pr_ci_watch_enabled"])),
+      stopAll: [ok(null), ok(null), ok(PLACED)],
+    });
+    const code = await runRestore([], io);
+    expect({
+      code,
+      writes,
+      warned: warned.some((line) => line.startsWith("WARNING")),
+    }).toEqual({ code: 1, writes: [], warned: true });
+  });
+
+  test("tells to turn on by hand the restored names instead of running the command again", async () => {
+    const { io, printed, warned } = fake({
+      stopAll: [ok(null), ok(null), ok(null), ok(PLACED)],
+    });
+    await runRestore([], io);
+    const output = [...printed, ...warned];
+    expect({
+      byHand: output.some(
+        (line) =>
+          line.includes("by hand") && line.includes("implement_enabled"),
+      ),
+      rerun: output.some((line) => line.includes("stop:restore again")),
+    }).toEqual({ byHand: true, rerun: false });
+  });
+});
+
+describe("runRestore and the names to turn on by hand", () => {
+  test("lists only the names it restored", async () => {
+    const { io, printed } = fake({
+      stopAll: [ok(null), ok(PLACED)],
+      records: [
+        ok(recordOf(["implement_enabled", "dependabot_enabled"])),
+        ok(recordOf(["implement_enabled", "dependabot_enabled"])),
+        ok(
+          JSON.stringify({
+            recorded_at: "2026-11-07T00:30:00.000Z",
+            flags: ["pr_ci_watch_enabled"],
+          }),
+        ),
+      ],
+    });
+    await runRestore(["dependabot_enabled"], io);
+    expect(
+      printed
+        .filter((line) => line.includes("Turn these on by hand"))
+        .some((line) => line.includes("dependabot_enabled")),
+    ).toBe(false);
+  });
+
+  test("tells to wait for the release before turning names on by hand", async () => {
+    const { io, printed } = fake({ stopAll: [ok(null), ok(PLACED)] });
+    await runRestore([], io);
+    const lines = printed.filter((line) => line.includes("on by hand"));
+    expect({
+      found: lines.length > 0,
+      waits: lines.every((line) =>
+        line.includes("after the stop-all is released"),
+      ),
+    }).toEqual({ found: true, waits: true });
+  });
+
+  test("does not print a control character from a setting name", async () => {
+    const { io, printed } = fake({
+      stopAll: [ok(null), ok(PLACED)],
+      onWrite: (value) => ({ ...value, "\u001b[2Jx_enabled": true }),
+    });
+    await runRestore([], io);
+    expect(printed.join("\n")).not.toContain("\u001b");
+  });
+});
+
+describe("safeForTerminal", () => {
+  test("escapes an escape character", () => {
+    expect(safeForTerminal("a\u001b[2Jb")).toBe("a\\u001b[2Jb");
+  });
+
+  test("escapes a format character", () => {
+    expect(safeForTerminal("a‮b")).toBe("a\\u202eb");
+  });
+
+  test("keeps line breaks and tabs", () => {
+    expect(safeForTerminal("a\n\tb")).toBe("a\n\tb");
   });
 });
 

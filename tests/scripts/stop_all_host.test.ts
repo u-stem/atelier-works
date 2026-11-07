@@ -538,6 +538,18 @@ describe("runStop place and the record of the names", () => {
     expect(warned.some((line) => line.includes("Odd_enabled"))).toBe(true);
   });
 
+  test("does not pass a control character in an unrecorded name to the terminal", async () => {
+    const { warned, deps } = record({
+      scriptStdout: JSON.stringify({
+        refused: false,
+        record: "written",
+        config_unrecorded: ["\u001b]0;x\u0007_enabled"],
+      }),
+    });
+    await runStop(PLACE, deps);
+    expect(warned.join("\n")).not.toContain("\u001b");
+  });
+
   test("does not warn when every name was recorded", async () => {
     const { warned, deps } = record({
       scriptStdout: JSON.stringify({

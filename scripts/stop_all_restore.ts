@@ -213,6 +213,10 @@ function confirmationOf(plan: RestorePlan): string {
 const STILL_STOPPED =
   "the stop-all is still placed (or its variable is corrupt); release it with mise run stop:release first. Nothing was changed.";
 
+export function safeForTerminal(text: string): string {
+  return text;
+}
+
 const INLINE_DEPTH_MAX = 16;
 
 /**
