@@ -39,7 +39,7 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-/** 全体の行カバレッジの下限(%)。ローカルの実測より2ポイント低く置き、実測を見て詰める。 */
+/** 全体の行カバレッジの下限(%)。ローカルとCIの値の小さいほうから2ポイント引き、小数第2位で切り捨てる。 */
 export const COVERAGE_FLOOR_PERCENT = 82.76;
 
 export type Layer =
@@ -54,14 +54,14 @@ export type LayerFloor = {
 };
 
 /**
- * 層ごとの行カバレッジの下限(%)。ローカルの実測より2ポイント低く置き、実測を見て詰める。
+ * 層ごとの行カバレッジの下限(%)。全体の下限と同じ規則で置く。
  * 層は、全体の値に隠れる低い層を拾うために分ける。
  */
 export const LAYER_FLOORS: readonly LayerFloor[] = [
   { layer: "f/factory/lib", floorPercent: 96.23 },
   { layer: "f/factory/steps", floorPercent: 54.11 },
   { layer: "f/factory (other)", floorPercent: 61.59 },
-  { layer: "scripts", floorPercent: 90.08 },
+  { layer: "scripts", floorPercent: 90.09 },
 ];
 
 /**
@@ -82,6 +82,8 @@ export const NOT_LOADABLE_PATH = /^scripts\/test-db-[\w-]+\.ts$/;
 /**
  * 失敗の出力の字数の上限。`check_runner`は出力の末尾2000字を修正のプロンプトに載せる。
  * 末尾にはmiseのタスク失敗の行が付くので、その分を引く。
+ * 実測では、その行は`[<タスク名>] ERROR task failed`の1行(26字前後)で、入れ子のタスクでも2行である。
+ * 200字は、その数倍の余裕を取った値である。
  */
 const OUTPUT_BUDGET_CHARS = 1800;
 
@@ -468,8 +470,17 @@ export function listTargetFiles(
   return selectTargets(entries, (path) => existsInTree(join(root, path)));
 }
 
+/** `lstat`の失敗のエラーコード名を返す。`lstat`以外の失敗や、コード名の形でない値はnullを返す。 */
+function errnoCode(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  if (!("code" in error) || typeof error.code !== "string") return null;
+  if (!("syscall" in error) || error.syscall !== "lstat") return null;
+  return /^[A-Z][A-Z0-9_]*$/.test(error.code) ? error.code : null;
+}
+
 /**
- * パスが作業ツリーにあるかを返す。無い(ENOENT)ときだけfalseにする。
+ * パスが作業ツリーにあるかを返す。無い(ENOENT)か、途中の要素がファイルに替わっている(ENOTDIR)ときは、
+ * falseにする。ステージせずに消しただけの追跡中のファイルを、失敗にしないためである。
  * 権限やsymlinkの輪など、ほかの理由で調べられないときは、無いものとして外さず投げる。
  */
 function existsInTree(path: string): boolean {
@@ -477,9 +488,8 @@ function existsInTree(path: string): boolean {
     lstatSync(path);
     return true;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return false;
-    }
+    const code = errnoCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
     throw error;
   }
 }
@@ -488,11 +498,22 @@ function failure(reason: string): Verdict {
   return { ok: false, message: `coverage check failed: ${reason}` };
 }
 
+/**
+ * ASCIIの外の文字を、UTF-16のコード単位ごとに`\uXXXX`にする。
+ * `JSON.stringify`は、C1の制御文字、双方向の書式文字、U+2028とU+2029を残すためである。
+ */
+function escapeNonAscii(text: string): string {
+  return text.replace(
+    /[^\x20-\x7e]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
 /** 名前の取りこぼしの失敗。パスは`JSON.stringify`でエスケープし、制御文字を出力に載せない。 */
 function malformedFailure(malformed: readonly string[]): Verdict {
   const details = malformed
     .slice(0, WORST_FILE_COUNT)
-    .map((path) => `  ${JSON.stringify(path)}`);
+    .map((path) => `  ${escapeNonAscii(JSON.stringify(path))}`);
   return {
     ok: false,
     message: composeFailure(
@@ -591,12 +612,17 @@ export function checkCoverage(options: CheckCoverageOptions): Verdict {
     return failure("coverage/lcov.info is empty");
   }
 
-  // 失敗の理由にgitの標準エラーを載せないよう、投げられた内容は読まない。
   let listing: TargetListing;
   try {
     listing = listTargets(options.root, { includeUntracked: true });
-  } catch {
-    return failure("listing the target files failed (git ls-files)");
+  } catch (error) {
+    // 理由に載せるのは、`lstat`のエラーコード名だけにする。パスと標準エラーは載せない。
+    const code = errnoCode(error);
+    return failure(
+      code === null
+        ? "listing the target files failed (git ls-files)"
+        : `examining a target path in the working tree failed (${code})`,
+    );
   }
   if (listing.malformed.length > 0) {
     return malformedFailure(listing.malformed);
