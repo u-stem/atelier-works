@@ -110,7 +110,6 @@ export const CONFIG_UPDATE_REFUSAL_REASONS = [
   "audit_unavailable",
   // 一覧の追加と削除だけが返す理由。
   "already_present",
-  "not_present",
   "invalid_element",
   "would_empty",
   "owner_not_listed",

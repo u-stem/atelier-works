@@ -698,7 +698,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/freeze_release` | script | [OP-2-5] 凍結を解除 |
 | `f/factory/console_job_cancel` | script | [OP-2-6] ジョブを取り消し |
 | `f/factory/console_job_rerun` | script | [OP-2-7] 失敗した定期ジョブを再実行 |
-| `f/factory/console_config_update` | script | [OP-2-8] 設定を止める向きに変更 |
+| `f/factory/console_config_update` | script | [OP-2-8] 設定の停止・引き下げと一覧の追加・削除 |
 | `f/factory/console_hold_place` | script | [OP-2-9] 保留と凍結を置く |
 | `f/factory/poll_issues` | script | [SF-1-1] Issueを巡回して担当を確定 |
 | `f/factory/poll_prs` | script | [SF-1-2] PRを巡回してレビュー / 修正を起動 |
