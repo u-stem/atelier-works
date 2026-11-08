@@ -42,8 +42,7 @@ import {
   findConsoleReleaseCall,
   findHoldOperation,
   findStopAllCall,
-  type HoldStdin,
-  type HoldUpstream,
+  holdStdin,
 } from "./hold-guard.ts";
 import {
   ALLOW,
@@ -400,11 +399,13 @@ export const REASONS = {
   stopAll:
     "Placing or releasing the stop-all, and restoring the settings it turned off, is not allowed in any Claude session: running scripts/stop_all.ts, mise run stop, mise run stop:release, or mise run stop:restore. The stop-all halts the whole Factory, cancels the running jobs, and kills the leftover Claude processes, releasing it enables the schedules again, and restoring turns the *_enabled settings back on, so a person confirms it in a terminal. A person runs mise run stop, mise run stop:release, or mise run stop:restore in a terminal and types yes there, or uses the stop-all section of the system screen in the Console to place or release it. Reading the code (cat, rg, git) and running the tests (bun test) are fine. A command that builds the name from a variable is not caught here; do not try it.",
   subagentHold:
-    "Subagents must not place or release holds, place a deploy freeze, or release a freeze: a hold stops merges, a deploy freeze stops every deployment, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, or mise run freeze:release. Listing with mise run hold:list or mise run freeze:list is fine, and so is placing a schedule freeze (mise run freeze:place -- --target ...). A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
+    "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push: a hold stops merges, a deploy freeze stops every deployment, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, mise run freeze:release, mise run freeze:reset, or mise run push:prune. Behind a prefix such as script or caffeinate, a command that only carries those words as arguments (for example in a commit message) is denied too; write it without the prefix. A prefix with xargs, parallel, find -exec, a shell, or a standard input it cannot read is denied because the words it runs cannot be read. Listing with mise run hold:list or mise run freeze:list is fine, and so is placing a schedule freeze (mise run freeze:place -- --target ...). A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
   subagentHoldOption:
     "This mise command has an option that is not in the list this hook knows, and an option can take a value that shifts the subcommand, so it cannot be told apart from mise run hold:place or mise run hold:release. Use only known options of mise (-q, -v, -y, -C <dir>, -E <env>, --log-level <level> ...), or write the option as --name=value. Subagents must not place or release holds.",
+  subagentHoldPrefix:
+    "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push, and this command cannot be told apart from one that does. Behind a prefix (script, unbuffer, caffeinate, /usr/bin/time, or ssh), a command that adds words at run time (xargs, parallel, find -exec), starts a shell, or reads a standard input from a file or a program is denied, whatever it runs, because the words it runs cannot be read. Run the command without the prefix, or ask the main session or a person for the hold or freeze operation.",
   subagentHoldDynamic:
-    "This command has a word built from a variable, a command substitution, or a glob, so it cannot be told apart from mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, or mise run freeze:release. Write the task name and the arguments out as literal text. Subagents must not place or release holds, place a deploy freeze, or release a freeze.",
+    "This command has a word built from a variable, a command substitution, or a glob, so it cannot be told apart from mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, mise run freeze:release, mise run freeze:reset, or mise run push:prune. Write the task name and the arguments out as literal text. The same denial applies when the pipeline behind a prefix is too long or its input too large to check; remove the prefix or split the command. Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push.",
 } as const;
 
 const DOCKER_REASONS = {
@@ -562,29 +563,6 @@ function directoryAfter(
   return resolveFrom(directory, target.text);
 }
 
-/** 標準入力に流れ込むものの出どころ。保留と凍結のコードを実行系へ流し込む形を見分けるために渡す。 */
-function holdStdin(command: SimpleCommand): HoldStdin {
-  const upstream: HoldUpstream[] = [];
-  for (
-    let source = command.pipedFrom;
-    source !== null;
-    source = source.pipedFrom
-  ) {
-    upstream.push({
-      words: [...stripWrappers(source.words).words],
-      redirects: source.redirects,
-      inputs: source.inputs,
-    });
-  }
-  return {
-    redirects: command.redirects,
-    upstream,
-    dynamicInput:
-      command.inputs.some((word) => word.dynamic) ||
-      command.redirects.some((word) => word.dynamic),
-  };
-}
-
 /** パイプの上流のコマンドの語を、連鎖の先頭までたどってすべて返す。前置きは外す。 */
 function upstreamWords(command: SimpleCommand): readonly Word[] {
   const words: Word[] = [];
@@ -648,7 +626,9 @@ function checkSimpleCommand(
           words,
           () => literalShellInputs(command),
           holdStdin(command),
+          wrappers.includes("xargs"),
         );
+  if (hold === "prefix") return deny(REASONS.subagentHoldPrefix);
   if (hold === "dynamic") return deny(REASONS.subagentHoldDynamic);
   if (hold === "option") return deny(REASONS.subagentHoldOption);
   if (hold !== null) return deny(REASONS.subagentHold);
