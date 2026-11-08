@@ -511,6 +511,89 @@ describe("describeRow for a notice", () => {
     );
   });
 
+  test("drops the empty label and the period left by the cut version", () => {
+    expect(
+      describeRow(
+        noticeItem(
+          1,
+          `反映を待つ版: ${SHA_A}。前回の反映からの変更に、止めるファイルがある`,
+        ),
+        NOW,
+      ).subLabel,
+    ).toBe("版 0123456・前回の反映からの変更に、止めるファイルがある");
+  });
+
+  test("keeps the words before a version that has no label of its own", () => {
+    expect(
+      describeRow(noticeItem(1, `差し戻した版 ${SHA_A} を確かめる`), NOW)
+        .subLabel,
+    ).toBe("版 0123456・差し戻した版 を確かめる");
+  });
+
+  test("cuts only the first version and keeps the second one shortened", () => {
+    expect(
+      describeRow(
+        noticeItem(1, `反映を待つ版: ${SHA_A}。前は ${SHA_B} だった`),
+        NOW,
+      ).subLabel,
+    ).toBe("版 0123456・前は fedcba9 だった");
+  });
+
+  test("cuts a label that overlaps the target together with the target", () => {
+    expect(
+      describeRow(noticeItem(1, `o/r#12: ${SHA_A}。前回の変更`), NOW).subLabel,
+    ).toBe("o/r#12・版 0123456・前回の変更");
+  });
+
+  test("cuts a label that is apart from the target", () => {
+    expect(
+      describeRow(noticeItem(1, `待つ版: ${SHA_A}。o/r#12 の変更`), NOW)
+        .subLabel,
+    ).toBe("o/r#12・版 0123456・の変更");
+  });
+
+  test("cuts a label that ends with a full-width colon", () => {
+    expect(
+      describeRow(noticeItem(1, `反映を待つ版：${SHA_A}。前回の変更`), NOW)
+        .subLabel,
+    ).toBe("版 0123456・前回の変更");
+  });
+
+  test("cuts a label whose colon has no space after it", () => {
+    expect(
+      describeRow(noticeItem(1, `反映を待つ版:${SHA_A}。前回の変更`), NOW)
+        .subLabel,
+    ).toBe("版 0123456・前回の変更");
+  });
+
+  test("counts the length of a label in code points", () => {
+    expect(
+      describeRow(
+        noticeItem(1, `${"🚀".repeat(12)}: ${SHA_A}。前回の変更`),
+        NOW,
+      ).subLabel,
+    ).toBe("版 0123456・前回の変更");
+  });
+
+  test("keeps a label longer than twelve code points", () => {
+    expect(
+      describeRow(
+        noticeItem(1, `${"🚀".repeat(13)}: ${SHA_A}。前回の変更`),
+        NOW,
+      ).subLabel,
+    ).toBe(`版 0123456・${"🚀".repeat(13)}: 。前回の変更`);
+  });
+
+  test("keeps the label and the version when the version is not cut", () => {
+    const items = [
+      noticeItem(1, `a 反映を待つ版: ${SHA_A}。`, "deploy_approval_required"),
+      noticeItem(2, `b 反映を待つ版: ${SHA_A}。`, "deploy_approval_required"),
+    ];
+    expect(
+      items.map((item) => describeRow(item, NOW, { peers: items }).subLabel),
+    ).toEqual(["a 反映を待つ版: 0123456。", "b 反映を待つ版: 0123456。"]);
+  });
+
   test("puts the target before the version and drops only the first target from the excerpt", () => {
     expect(
       describeRow(noticeItem(1, `${SHA_A} for o/r#12 and p/q#3`), NOW).subLabel,
