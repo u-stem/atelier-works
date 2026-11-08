@@ -388,7 +388,7 @@ const DAILY_BUDGET_ITEM = "daily_budget_usd";
  * 変更は、次に設定を読む処理から効く。動いているフローも、以後の手順が設定を読めば、新しい値で動く。
  * 実装を止めている間の承認は、承認済みで止まり、要対応に載らない。再開は、有効に戻した後に人が再実行で行う。
  * 設計工程を止めている間の承認は、設計を経ずに実装へ進む。進行中の設計と承認待ちは止まらない。
- * 止める書き込みは`design_enabled_since`も空にするので、有効に戻すには、`design_enabled`を`true`にして`design_enabled_since`に新しい時刻を書く。
+ * 止めても`design_enabled_since`は残るので、`design_enabled`だけを`true`に戻すと、残った日時が読め、設計工程がすぐ開く。有効に戻すには、日時も新しく書く。
  * 日次の予算は、今日の使用額を下回る値にすると、今日のClaudeを使うフローがすべて失敗する。今日の使用額は、ここでは調べない。
  * 止める向きと下げる向きの変更は、Consoleからは戻せないので、戻すには運用者がWindmillで直す。
  * 一覧の追加と削除は、逆の操作で戻せる。
@@ -417,7 +417,8 @@ export function changeDialogLines(
     lines.push(
       "止めている間に承認した要件定義は、設計書を作らず、設計の承認も挟まずに、実装へ進みます。",
       "すでに設計中の作業と設計の承認待ちは止まりません。承認すると設計書を実装に渡さずに実装へ進みます。却下すると、Issueが変わっているときは要件定義へ戻り、そうでなければ設計を作り直さず人の対応待ちで止まります。",
-      "止めると、同じ書き込みで design_enabled_since も空(null)になります。有効に戻すには、運用者が design_enabled を true にし、design_enabled_since に新しい時刻を書きます。",
+      "止めても design_enabled_since は残ります。有効に戻すには、運用者が design_enabled を true にし、design_enabled_since に新しい時刻を書きます。",
+      "注意: design_enabled だけを true に戻すと、残った design_enabled_since が読めるので、有効にする意思の表明が無いまま設計工程がすぐ開きます。",
     );
   }
   if (offer.key === DAILY_BUDGET_ITEM) {
