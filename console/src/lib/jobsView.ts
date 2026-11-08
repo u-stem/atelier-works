@@ -426,6 +426,11 @@ export function filterConfigItems(
     : items.filter((item) => item.key.toLowerCase().includes(needle));
 }
 
+/** 設計工程の判定の行を、キー名の絞り込みの語で残すか。 */
+export function matchesDesignStageQuery(_query: string): boolean {
+  return false;
+}
+
 export type ConfigValueText =
   | { readonly kind: "reference" }
   | { readonly kind: "scalar"; readonly text: string }

@@ -26,6 +26,7 @@ import {
   jobStateInfo,
   jobsBackState,
   logScrollTop,
+  matchesDesignStageQuery,
   outputNotes,
   parseHistoryScript,
   parseHistoryStatus,
@@ -635,6 +636,28 @@ describe("filterConfigItems", () => {
 
   test("does not search the values", () => {
     expect(filterConfigItems(ITEMS, "5")).toEqual([]);
+  });
+});
+
+describe("matchesDesignStageQuery", () => {
+  test("keeps the design stage row for an empty query", () => {
+    expect(matchesDesignStageQuery("")).toBe(true);
+  });
+
+  test("keeps the design stage row for a query of spaces", () => {
+    expect(matchesDesignStageQuery("  ")).toBe(true);
+  });
+
+  test("keeps the design stage row for a query that names the design", () => {
+    expect(matchesDesignStageQuery("設計")).toBe(true);
+  });
+
+  test("keeps the design stage row for a part of the word design", () => {
+    expect(matchesDesignStageQuery("DESI")).toBe(true);
+  });
+
+  test("drops the design stage row for a query of another key", () => {
+    expect(matchesDesignStageQuery("budget")).toBe(false);
   });
 });
 

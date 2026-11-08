@@ -88,6 +88,21 @@ describe("ConfigList", () => {
     );
   });
 
+  test("does not say that no key matches while the design stage row is shown", () => {
+    expect(
+      renderToStaticMarkup(
+        <ConfigList
+          items={[]}
+          designStage={{
+            enabled: true,
+            ignored: false,
+            indeterminate: false,
+          }}
+        />,
+      ),
+    ).not.toContain("該当する項目はありません");
+  });
+
   test("writes a string as text, not as markup", () => {
     expect(
       renderToStaticMarkup(
@@ -334,6 +349,26 @@ describe("ConfigList values by type", () => {
   });
 });
 
+const DESIGN_ROW_LABEL = "設計工程(実際の状態)";
+
+/** 設計工程の判定の行(`tr`)。無ければ空。 */
+function designRowOf(html: string): string {
+  return (
+    html.match(
+      /<tr[^>]*>(?:(?!<\/tr>)[\s\S])*設計工程\(実際の状態\)[\s\S]*?<\/tr>/,
+    )?.[0] ?? ""
+  );
+}
+
+/** 設計工程の判定の行の見出しのセル(`th`)。無ければ空。 */
+function designRowHeaderOf(html: string): string {
+  return (
+    designRowOf(html).match(
+      /<th[^>]*>[^<]*設計工程\(実際の状態\)<\/th>/,
+    )?.[0] ?? ""
+  );
+}
+
 describe("ConfigSection", () => {
   test("has a heading for the section", () => {
     expect(renderSection()).toMatch(/<h2 id="config-heading"[^>]*>設定<\/h2>/);
@@ -421,9 +456,7 @@ describe("ConfigSection", () => {
       ...SNAPSHOT,
       design_stage: { enabled: true, ignored: false, indeterminate: false },
     });
-    expect(renderSection(query)).toMatch(
-      /設計工程: <\/span><span[^>]*>有効<\/span>/,
-    );
+    expect(designRowOf(renderSection(query))).toContain(">有効<");
   });
 
   test("shows a closed design stage as off", () => {
@@ -431,9 +464,7 @@ describe("ConfigSection", () => {
       ...SNAPSHOT,
       design_stage: { enabled: false, ignored: false, indeterminate: false },
     });
-    expect(renderSection(query)).toMatch(
-      /設計工程: <\/span><span[^>]*>無効<\/span>/,
-    );
+    expect(designRowOf(renderSection(query))).toContain(">無効<");
   });
 
   test("tells that the written value is ignored", () => {
@@ -441,7 +472,7 @@ describe("ConfigSection", () => {
       ...SNAPSHOT,
       design_stage: { enabled: false, ignored: true, indeterminate: false },
     });
-    expect(renderSection(query)).toContain(
+    expect(designRowOf(renderSection(query))).toContain(
       "design_enabled_sinceが無いか日時として読めないため、無視しています。",
     );
   });
@@ -459,9 +490,7 @@ describe("ConfigSection", () => {
       ...SNAPSHOT,
       design_stage: { enabled: false, ignored: false, indeterminate: true },
     });
-    expect(renderSection(query)).toMatch(
-      /設計工程: <\/span><span[^>]*>判定できない<\/span>/,
-    );
+    expect(designRowOf(renderSection(query))).toContain(">判定できない<");
   });
 
   test("tells why the design stage cannot be told", () => {
@@ -469,7 +498,7 @@ describe("ConfigSection", () => {
       ...SNAPSHOT,
       design_stage: { enabled: false, ignored: false, indeterminate: true },
     });
-    expect(renderSection(query)).toContain(
+    expect(designRowOf(renderSection(query))).toContain(
       "参照で書かれているため、効いている値をここでは判定できません。",
     );
   });
@@ -479,13 +508,85 @@ describe("ConfigSection", () => {
       ...SNAPSHOT,
       design_stage: { enabled: false, ignored: false, indeterminate: true },
     });
-    expect(renderSection(query)).not.toMatch(
-      /設計工程: <\/span><span[^>]*>無効<\/span>/,
-    );
+    const row = designRowOf(renderSection(query));
+    expect([row.includes(">判定できない<"), row.includes(">無効<")]).toEqual([
+      true,
+      false,
+    ]);
   });
 
   test("shows no design stage when the backend does not send it", () => {
     expect(renderSection(freshQuery(SNAPSHOT))).not.toContain("設計工程");
+  });
+
+  test("has no card for the design stage above the groups", () => {
+    const query = freshQuery({
+      ...SNAPSHOT,
+      design_stage: { enabled: true, ignored: false, indeterminate: false },
+    });
+    const html = renderSection(query);
+    expect(html.slice(0, html.indexOf("<h3"))).not.toContain("設計工程");
+  });
+
+  test("puts the design stage first in the design group", () => {
+    const query = freshQuery({
+      path: "f/factory/factory_config",
+      items: [
+        { key: "design_enabled", kind: "value", value: true, masked: false },
+        { key: "max_design_attempts", kind: "value", value: 3, masked: false },
+      ],
+      design_stage: { enabled: true, ignored: false, indeterminate: false },
+    });
+    const html = renderSection(query).replaceAll("<wbr/>", "");
+    const stageAt = html.indexOf(DESIGN_ROW_LABEL);
+    expect(stageAt >= 0 && stageAt < html.indexOf("design_enabled")).toBe(true);
+  });
+
+  test("shows the design group for the design stage when the config has no design item", () => {
+    const query = freshQuery({
+      path: "f/factory/factory_config",
+      items: [{ key: "owners", kind: "value", value: ["a"], masked: false }],
+      design_stage: { enabled: false, ignored: false, indeterminate: false },
+    });
+    expect(renderSection(query)).toMatch(
+      /<h3 id="config-group-design"[^>]*>設計<\/h3>/,
+    );
+  });
+
+  test("shows the design stage row in the design group, not under the other groups", () => {
+    const query = freshQuery({
+      path: "f/factory/factory_config",
+      items: [{ key: "owners", kind: "value", value: ["a"], masked: false }],
+      design_stage: { enabled: false, ignored: false, indeterminate: false },
+    });
+    const html = renderSection(query);
+    expect(html.indexOf(DESIGN_ROW_LABEL)).toBeGreaterThan(
+      html.indexOf("config-group-design"),
+    );
+  });
+
+  test("names the design stage row so that it is not read as a key of the config", () => {
+    const query = freshQuery({
+      ...SNAPSHOT,
+      design_stage: { enabled: true, ignored: false, indeterminate: false },
+    });
+    const header = designRowHeaderOf(renderSection(query));
+    expect([header !== "", header.includes("font-mono")]).toEqual([
+      true,
+      false,
+    ]);
+  });
+
+  test("shows no button in the operation column of the design stage row", () => {
+    const query = freshQuery({
+      path: "f/factory/factory_config",
+      items: [
+        { key: "design_enabled", kind: "value", value: true, masked: false },
+      ],
+      design_stage: { enabled: true, ignored: false, indeterminate: false },
+    });
+    const row = designRowOf(renderSection(query));
+    expect([row !== "", row.includes("<button")]).toEqual([true, false]);
   });
 
   test("says the items are stale after a failed refetch", () => {

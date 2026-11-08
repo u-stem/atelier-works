@@ -167,6 +167,7 @@ export const CONFIG_GROUP_DEFINITIONS: readonly ConfigGroupDefinition[] = [
  */
 export function groupConfigItems(
   items: readonly ConfigItemView[],
+  _keepEmpty: readonly string[] = [],
 ): ConfigGroup[] {
   const byKey = new Map(items.map((item) => [item.key, item]));
   const grouped = new Set(
