@@ -75,7 +75,7 @@ export type GuardDeps = {
   readonly repoRoot: (dir: string) => string | null;
   /** `dir`のリポジトリに、`name`というローカルのブランチがあれば真を返す。 */
   readonly localBranchExists: (dir: string, name: string) => boolean;
-  /** 判定の締め切りを測る時計(ミリ秒)。省略すると実時刻を使う。 */
+  /** 判定の締め切りを測る時計(ミリ秒)。省略すると、時刻の補正で飛ばない単調な時計を使う。 */
   readonly now?: () => number;
 };
 
@@ -411,7 +411,7 @@ export const REASONS = {
   subagentHoldDynamic:
     "This command has a word built from a variable, a command substitution, or a glob, so it cannot be told apart from mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, mise run freeze:release, mise run freeze:reset, or mise run push:prune. Write the task name and the arguments out as literal text. The same denial applies when the pipeline behind a prefix is too long or its input too large to check, or when the check ran past its time limit on a very long command line; remove the prefix or split the command. Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push.",
   subagentHoldContext:
-    "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push, and this command cannot be told apart from one that does. A command that adds words at run time (xargs, find with -exec, -execdir, -ok, or -okdir) or starts another program (parallel, watch, strace) is denied unless the program it runs is a read-only tool: cat, head, tail, wc, ls, grep, egrep, fgrep, stat, file, basename, dirname, realpath, echo, or printf. After find -exec, a check such as tsc, biome, or bun test is allowed too. parallel, watch, and strace are always denied, because the words they run cannot be read. An xargs option that this hook does not know is denied as well, because it can shift the command that xargs runs. Call the tool directly (for example git add or rg without xargs), use a shell loop over a literal list, or ask the main session or a person for the hold or freeze operation.",
+    "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push, and this command cannot be told apart from one that does. A command that adds words at run time (xargs, find with -exec, -execdir, -ok, or -okdir) or starts another program (parallel, watch, strace) is denied unless the program it runs is a read-only tool: cat, head, tail, wc, ls, grep, egrep, fgrep, stat, file, basename, dirname, realpath, echo, or printf. After find -exec, tsc, biome, and a runner of them (bunx biome, for example) are allowed too, but a test runner such as bun test is not. parallel, watch, and strace are always denied, because the words they run cannot be read. An xargs is denied as well when this hook cannot tell the command it runs: an xargs option that it does not know, a replacement option (-I, -J, -i, --replace), or a prefix such as env, nohup, time, timeout, sudo, or mise exec between xargs and the command. Call the tool directly (for example git add or rg without xargs), use a shell loop over a literal list, or ask the main session or a person for the hold or freeze operation.",
   subagentHoldAssignment:
     "A variable assignment in front of the command has a value that names the hold or freeze code (hold.ts, freeze.ts, and the like) or a write task (hold:place, hold:release, freeze:place, freeze:release, freeze:reset, push:prune). An environment variable such as a pager or a proxy command can run its value, so the assignment cannot be told apart from running the hold or freeze operation, whichever program follows. Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push. Drop the assignment or write the value without the name, or ask the main session or a person for the operation.",
 } as const;
@@ -600,7 +600,7 @@ function checkSimpleCommand(
   };
   const secret = findSecretReference(command, context);
   if (secret !== null) return deny(secret);
-  const { assignments, words, wrappers, mise, opaque, unknownXargsOption } =
+  const { assignments, words, wrappers, mise, opaque, xargsCommandUnknown } =
     stripWrappers(command.words);
   if (opaque) return deny(REASONS.envSplit);
   const program = baseName(words[0]?.text ?? "");
@@ -640,8 +640,8 @@ function checkSimpleCommand(
           holdStdin(command),
           wrappers.includes("xargs"),
           {
-            assignments,
-            xargsUnknown: unknownXargsOption,
+            assignments: [...assignments, ...declared],
+            xargsUnknown: xargsCommandUnknown,
             clock: scope.holdClock,
           },
         );

@@ -98,12 +98,16 @@
 //   足される語は字面から読めないので、実行される側が読み取りの閉じた集合(`WORD_ADDER_SAFE_PROGRAMS`)に入らなければ拒否する。
 //   指す語、glob、パイプの上流は見ない。
 //   実行される側は、`xargs`では`stripWrappers`の後の先頭の語、`find`では各式の先頭の語である。
-//   `xargs`のオプションに知らないものがあれば、実行される側の位置が決まらないので拒否する。
+//   `xargs`のオプションに知らないものがあるとき、置換のオプションがあるとき、後ろに前置きが続くときは、
+//   実行される側が先頭の語に決まらないので拒否する。
 //   `parallel`、`watch`、`strace`は例外を作らず、常に拒否する。
 //   `xargs`の後ろでは、標準入力からオプションが届くので、検査の道具を通さない。
-//   `find`の後ろに限り、検査の道具も通す。`find`が渡す語は`./`などで始まるパスで、オプションを差し込めないためである。
+//   `find`の後ろに限り、プログラム自身が検査の道具である形(`tsc`、`biome`)と、その実行系を通す。
+//   `find`が渡す語は`./`などで始まるパスで、オプションを差し込めないためである。
+//   テストのファイルを読み込んで実行する形(`test`を最初のオペランドとする実行系)は、`find`の後ろでも通さない。
 //   集合は、引数で実行を委ねる機能を持たない道具だけに閉じる。要素から実行に届く経路が見つかったら、その要素を外す。
 // - 変数代入の値: 先頭の代入の値が、保留か凍結のコードを指す字面か、書き込みのタスク名を含めば、実行する側によらず拒否する。
+//   値に、2度目のシェルが語を変える字(引用符、バックスラッシュ、globの字、ブレース)が残っていても、読めない値として拒否する。
 //   ページャーなどの環境変数は、値をコマンドとして実行できるためである。
 //
 // 判定には締め切りがあり、`evaluateBashGuard`の開始から数える。超えたら`dynamic`で拒否する。
@@ -117,7 +121,8 @@
 // - subagentが新しいファイルを書いて実行する形。
 // 次は誤検知として受け入れ、拒否する。
 // - 語を足す文脈の後ろの、集合の外のプログラム。編集の道具、権限や形式を変える道具、gitなどである。読み取りだけの呼び出しでも拒否する。
-// - 代入の値に、保留や凍結を指す語を含む形。後ろのプログラムが実行しなくても拒否する。
+// - 代入の値に、保留や凍結を指す語や、引用符などの字を含む形。後ろのプログラムが実行しなくても拒否する。
+// - 置換のオプションを付けた`xargs`と、`xargs`の後ろに前置きが続く形。
 // Bashとdockerを持つ主体は、psqlで保留を直接書ける。ここで止めるのは、誤操作と、拒否を知らない呼び出しである。
 
 import { CONSOLE_WRITE_SCRIPTS } from "./console-scripts.ts";
@@ -418,6 +423,11 @@ function namesHoldWriteTask(word: Word): boolean {
  * `@biomejs/biome@1.9.4`のような版の付いた名前は、版を落として比べる。
  */
 function startsWithInspectionTool(args: readonly Word[]): boolean {
+  return inspectionOperand(args) !== null;
+}
+
+/** `startsWithInspectionTool`が見る最初のオペランドが検査の道具なら、版を落とした名前を返す。そうでなければnullを返す。 */
+function inspectionOperand(args: readonly Word[]): string | null {
   let index = 0;
   while (index < 4) {
     const text = args[index]?.text ?? "";
@@ -425,7 +435,7 @@ function startsWithInspectionTool(args: readonly Word[]): boolean {
     index += 1;
   }
   const first = (args[index]?.text ?? "").replace(VERSION_SUFFIX, "");
-  return INSPECTION_TOOLS.has(first) || LINT_SCRIPT.test(first);
+  return INSPECTION_TOOLS.has(first) || LINT_SCRIPT.test(first) ? first : null;
 }
 
 /** 保留のコードを指す語が、すべて`hold`の直後に`list`を置く形なら真。 */
@@ -909,13 +919,20 @@ export type HoldClock = {
  * フックのタイムアウトは10秒で、超えると判定が拒否にならず、通常の権限の流れに進む。
  * 同期の判定は途中で止められないので、各所で締め切りを見て、超えたら`dynamic`で拒否して早く終える。
  * 超えた時点で拒否が決まり、続くコマンドは判定しないので、残る処理は出力だけである。起動と出力の余裕として4秒を残す。
- * 予算(語の数、解析の回数)の中で終わる最も長い入力(3000段のパイプ)は約5秒で終わるので、
- * それより後ろに置き、通常の入力では働かないようにする。
+ * 予算(語の数、解析の回数)の中に収まる入力は、実測で1秒未満(最も遅い256段×100語で約0.8秒)で、
+ * テストは3000段のパイプなどを3秒未満、幅のある256段を8秒未満で固定している。
+ * 締め切りはこの約7倍なので、CIの負荷で数倍遅くなっても、通常の入力では働かない。
+ * 保留の判定より前の検査(前置きの無い数千段のパイプで約4.5秒)は、この締め切りでは止められない。
  */
 export const HOLD_DEADLINE_MS = 6000;
 
-/** `now`の時刻から数える締め切りの時計を作る。 */
-export function holdClock(now: () => number = Date.now): HoldClock {
+/**
+ * `now`の時刻から数える締め切りの時計を作る。
+ * 既定は単調な時計(`performance.now`)で、時刻の補正で時計が飛んでも締め切りを誤らない。
+ */
+export function holdClock(
+  now: () => number = () => performance.now(),
+): HoldClock {
   return { now, deadline: now() + HOLD_DEADLINE_MS };
 }
 
@@ -1048,7 +1065,7 @@ const FREEZE_WRITE_WORDS: readonly string[] = [
  * `inputs`は標準入力に渡る文字列(外側のコマンドの文字列をつなぐ)、`own`はそのコマンド自身の標準入力の文字列である。
  * `inString`は、前置きの後ろの文字列から読んだコマンドのとき真になる。
  * `viaXargs`は、前置きの`xargs`が標準入力の語を末尾に足すことを表す。
- * `xargsUnknown`は、その`xargs`のオプションに知らないものがあり、実行される側の語が決まらないことを表す。
+ * `xargsUnknown`は、その`xargs`が実行するコマンドが先頭の語に決まらないことを表す(知らないオプション、置換のオプション、後ろの前置き)。
  */
 type HoldContext = {
   readonly inputs: () => readonly string[] | null;
@@ -1216,7 +1233,7 @@ function textFinding(
       depth: context.depth + 1,
       budget,
       viaXargs: stripped.wrappers.includes("xargs"),
-      xargsUnknown: stripped.unknownXargsOption,
+      xargsUnknown: stripped.xargsCommandUnknown,
       inString: true,
     };
     found = stronger(found, holdOperationAt(stripped.words, inner));
@@ -1400,38 +1417,64 @@ function isWordAdderSafe(word: Word | undefined): boolean {
   return name !== null && WORD_ADDER_SAFE_PROGRAMS.has(name);
 }
 
+/** `startsWithInspectionTool`が先頭から読む語の数の上限。`find`の区間の後ろを、コピーせずに有限の長さで切り出すために使う。 */
+const INSPECTION_LOOKAHEAD = 6;
+
 /**
- * `find`の実行系の後ろの語が、検査の道具なら真。`tsc`と`biome`自身か、実行系の最初のオペランドが検査の道具である形。
+ * `find`の実行系の式の後ろの、`start`番目の語から始まるコマンドが、検査の道具なら真。
+ * `tsc`と`biome`自身か、実行系の最初のオペランドが検査の道具である形を通す。
+ * `test`を最初のオペランドとする実行系(`bun test`、`deno test`、`npm test`)は、テストのファイルを読み込んで実行するので通さない。
  * `find`が渡す語は`./`などで始まるパスで、オプションを差し込めないので、`find`の後ろに限って通す。
  */
-function isInspectionCommand(region: readonly Word[]): boolean {
-  const name = programNameOf(region[0]);
+function isInspectionCommandAt(words: readonly Word[], start: number): boolean {
+  const name = programNameOf(words[start]);
   if (name === null) return false;
   if (name === "tsc" || name === "biome") return true;
-  return RUNNERS.has(name) && startsWithInspectionTool(region.slice(1));
+  if (!RUNNERS.has(name)) return false;
+  const operand = inspectionOperand(
+    words.slice(start + 1, start + 1 + INSPECTION_LOOKAHEAD),
+  );
+  return operand !== null && operand !== "test";
 }
 
-/** `find`の実行系の式(`-exec`、`-execdir`、`-ok`、`-okdir`)ごとに、`;`か`+`までの語を返す。 */
-function findExecutionRegions(words: readonly Word[]): Word[][] {
-  const regions: Word[][] = [];
-  for (const [at, word] of words.entries()) {
-    if (!FIND_EXECUTION.test(word.text)) continue;
-    let end = at + 1;
-    while (end < words.length) {
-      const text = words[end]?.text;
-      if (text === ";" || text === "+") break;
-      end += 1;
+/**
+ * `find`の実行系の式(`-exec`、`-execdir`、`-ok`、`-okdir`)のうち、実行される側が通す道具でないものがあれば真。
+ * 式は`;`か`+`で閉じる。閉じるまでの`-exec`は、その式の引数である。
+ * 語を1回だけ走査するので、閉じない式を多数並べても処理は語の数に比例する。
+ */
+function hasUnsafeFindExecution(words: readonly Word[]): boolean {
+  let at = 0;
+  while (at < words.length) {
+    if (!FIND_EXECUTION.test(words[at]?.text ?? "")) {
+      at += 1;
+      continue;
     }
-    regions.push(words.slice(at + 1, end));
+    const start = at + 1;
+    if (
+      !isWordAdderSafe(words[start]) &&
+      !isInspectionCommandAt(words, start)
+    ) {
+      return true;
+    }
+    at = start;
+    while (
+      at < words.length &&
+      words[at]?.text !== ";" &&
+      words[at]?.text !== "+"
+    ) {
+      at += 1;
+    }
+    at += 1;
   }
-  return regions;
+  return false;
 }
 
 /**
  * 前置きの無い語を足す文脈で、実行される側が読み取りの閉じた集合に入らなければ`context`を返す。
  * 文脈は、`xargs`、`find`の実行系の式、先頭の`parallel`、`watch`、`strace`である。
  * 指す語、glob、パイプの上流は見ない。足される語は字面から読めないので、指す語の有無によらず拒否する。
- * - `xargs`: `stripWrappers`の後の先頭の語が実行される側である。`xargs`のオプションに知らないものがあれば、語の位置が決まらない。
+ * - `xargs`: `stripWrappers`の後の先頭の語が実行される側である。`xargs`のオプションに知らないものがあるときと、
+ *   置換のオプションや後ろの前置きで先頭の語が実行される側と決まらないときは、拒否する。
  *   標準入力からオプションが届くので、検査の道具は通さない。
  * - `find`: 実行系の式ごとの先頭の語が実行される側である。集合の道具か検査の道具だけを通す。`{}`自身が先頭の形は通さない。
  * - `parallel`、`watch`、`strace`: 例外を作らない。
@@ -1450,18 +1493,28 @@ function wordAdderFinding(
     return "context";
   }
   if (program !== "find") return null;
-  const unsafe = findExecutionRegions(words).some(
-    (region) => !isWordAdderSafe(region[0]) && !isInspectionCommand(region),
-  );
-  return unsafe ? "context" : null;
+  return hasUnsafeFindExecution(words) ? "context" : null;
 }
 
-/** 先頭の変数代入の値が、保留か凍結のコードか書き込みのタスク名を指すなら`assignment`を返す。実行する側は問わない。 */
+/**
+ * 値の中で、2度目のシェルが語を変える字。引用符、バックスラッシュ、globの字、ブレース。
+ * 値は環境変数として別のプログラムに渡り、そのプログラムがシェルで再び読むことがある。
+ * 残っていれば、字面で保留のコードを指していなくても、再び読んだ結果は決まらない。
+ * `$`とバッククォートは、組み立てる形の分類として残す。
+ */
+const SECOND_SHELL_RESHAPES = /['"\\*?[{]/;
+
+/**
+ * 先頭の変数代入の値が、保留か凍結のコードか書き込みのタスク名を指すか、2度目のシェルで語が変わる字を含むなら`assignment`を返す。
+ * 実行する側は問わない。
+ */
 function assignmentFinding(assignments: readonly Word[]): HoldFinding | null {
-  const names = assignments.some((assignment) =>
-    spellings(assignmentValue(assignment)).some(mentionsHoldOrFreeze),
+  const flagged = assignments.some((assignment) =>
+    spellings(assignmentValue(assignment)).some(
+      (text) => SECOND_SHELL_RESHAPES.test(text) || mentionsHoldOrFreeze(text),
+    ),
   );
-  return names ? "assignment" : null;
+  return flagged ? "assignment" : null;
 }
 
 function holdOperationAt(
@@ -1528,7 +1581,7 @@ function launchedFinding(
  * 先頭の変数代入(`assignments`)の値が保留や凍結のコードを指していれば、実行する側によらず拒否する。
  * それ以外の先頭は調べず、nullを返す。
  * 読めないときはnullを返す。呼ばれるのは、必要になったときだけである。
- * `xargsUnknown`は`xargs`のオプションに知らないものがあること、`clock`は判定の締め切りの時計である。
+ * `xargsUnknown`は`xargs`が実行するコマンドが先頭の語に決まらないこと、`clock`は判定の締め切りの時計である。
  * 時計を渡さないときは、呼び出しの時点から数える。
  */
 export function findHoldOperation(
