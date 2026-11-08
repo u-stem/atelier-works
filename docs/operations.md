@@ -1496,8 +1496,10 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 `design_enabled_since`を書くのは運用者である。
 subagentと背景のセッションは書かない。
 有効にする操作が、人の判断を経るようにするためである。
-`console_config_update`の許可表に`design_enabled`と`design_enabled_since`は入れないので、Consoleからは書けない。
-Windmillの画面か、`wmill resource push`で書く。
+`console_config_update`の許可表に入るのは、`design_enabled`を`true`から`false`へ閉じる向きだけである。
+Consoleの設定タブは、`design_enabled`が`true`のとき**止める**を出す。
+`design_enabled`を`true`にする向きと、`design_enabled_since`は、許可表に入れないので、Consoleからは書けない。
+開く操作は、Windmillの画面か、`wmill resource push`で書く。
 全停止が止めた`design_enabled`は、運用者が端末で実行する`mise run stop:restore`も戻し、そのとき`design_enabled_since`を実行時刻に書き直す。
 手順は[記録した設定を戻す](#記録した設定を戻す)にある。
 
@@ -1577,6 +1579,11 @@ Windmillの画面か、`wmill resource push`で書く。
    問題があれば、次の手順で無効に戻す。
 
 ### 無効にする手順
+
+Consoleの設定タブの`design_enabled`の行にある**止める**でも、無効にできる。
+Consoleは`design_enabled_since`を消さない。
+もう一度有効にするときは、`design_enabled`を`true`にし、`design_enabled_since`に新しい時刻を書く。
+Consoleから止めても、全停止の記録には載らないので、`mise run stop:restore`は戻さない。
 
 1. `design_enabled`を`false`にし、`design_enabled_since`も消す(`null`にする)。
    もう一度有効にするときは、`design_enabled_since`に新しい時刻を書く。

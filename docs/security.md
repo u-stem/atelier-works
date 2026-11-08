@@ -1785,12 +1785,12 @@ scriptのscheduleは、次の回を前の回の終了時に積む。そのため
 
 | 絞る対象 | 内容 |
 | --- | --- |
-| 変更できる真偽の項目 | `implement_enabled`、`dependabot_enabled`、`dependabot_merge_enabled`、`pr_ci_fix_enabled`、`pr_conflict_fix_enabled`の5つ。`true`から`false`へだけ変えられる。自動でGitHubに書くか、実装を起動する機能を止める向きである |
+| 変更できる真偽の項目 | `implement_enabled`、`dependabot_enabled`、`dependabot_merge_enabled`、`pr_ci_fix_enabled`、`pr_conflict_fix_enabled`、`design_enabled`の6つ。`true`から`false`へだけ変えられる。自動でGitHubに書くか、実装か設計を起動する機能を止める向きである。`design_enabled`を止めた後の動きは、[設計工程を有効にする操作](#設計工程を有効にする操作)にある |
 | 変更できる数値の項目 | `daily_budget_usd`、`max_budget_usd_per_run`、`max_fix_rounds`、`implement_max_changed_files`、`max_fix_diff_lines`の5つ。いまの値より小さい値へだけ変えられる。予算の2つは0より大きい値、ほかの3つは1以上の整数に限る。0にすると、設定の検証が拒否するか、Claudeの利用が止まる。止めるのは真偽の項目の役割である |
 | 変更できる一覧の項目 | `repo_allowlist`、`dependabot_other_repos`、`default_reviewers`の3つ。1回の呼び出しで、1要素の追加か1要素の削除だけをする。呼び出し側は、読んだ配列と、末尾に1要素を足したか、ちょうど1要素を除いた配列を渡す。scriptは、その差分から操作と動いた要素を導く。並べ替え、要素の書き換え、複数要素の増減、同じ長さの配列は、`invalid_value`で断る。書く値は、書く直前に読み直した配列に、その1要素を足すか除くかしたものである。読んだ配列は比較交換にだけ使い、書かない |
 | 一覧に足せる要素の形 | 読み込み側と同じ規則にそろえて、scriptに写す。長さは100字までで、操作の記録が文字列の値を100字までに限るためである。形に合わなければ`invalid_element`で断る。`repo_allowlist`は`https://github.com/<owner>/<repo>`の形だけで、userinfo、クエリ、フラグメント、`github.com`以外のホスト、`http://`、sshは拒否する。`dependabot_other_repos`は`owner/repo`で、`.`と`..`の部分と末尾の`.git`は拒否する。`default_reviewers`はGitHubのログイン名の形で、`[bot]`で終わるものは拒否する。重複は、大文字小文字を区別せずに照合し、`repo_allowlist`は末尾の`.git`とスラッシュも除いて照合する。重複は`already_present`で断る。`repo_allowlist`は、`.git`と末尾のスラッシュを除いた形で書く。読み込み側の照合も、取得の列挙も、この形で通る |
 | 一覧で断る変更 | `repo_allowlist`を空にする削除は、`would_empty`で断る。空の一覧は、`owners`配下のすべてのリポジトリを対象にするためである。空にする作業は人がCLIで行う。`repo_allowlist`への追加で、URLのownerが、読み直した生の`owners`の`name`のどれにも無いものは、`owner_not_listed`で断る(大文字小文字は区別しない)。足しても効かないのに、成功に見えるのを防ぐためである。ほかの2項目は、最後の1件の削除も許す |
-| 変更できない項目 | 上の13個以外のすべて。`owners`、`factory_repo`、`allowed_*`、`check_commands_by_repo`、モデル名のような権限や宛先に関わる設定、`*_since`、`retention_*`、`dependabot_min_published_days`、`worker_alert_memory_ratio`、`*_timeout_sec`、`pr_conflict_watch_enabled`を含む。新しい項目も、決めるまで変更できない。真偽を有効にする向きと数値を上げる向きは、手順(有効にする前の確認、`*_since`の書き直し)があるので、人がCLIで行う |
+| 変更できない項目 | 上の14個以外のすべて。`owners`、`factory_repo`、`allowed_*`、`check_commands_by_repo`、モデル名のような権限や宛先に関わる設定、`*_since`、`retention_*`、`dependabot_min_published_days`、`worker_alert_memory_ratio`、`*_timeout_sec`、`pr_conflict_watch_enabled`を含む。新しい項目も、決めるまで変更できない。真偽を有効にする向きと数値を上げる向きは、手順(有効にする前の確認、`*_since`の書き直し)があるので、人がCLIで行う |
 | 読み取り | 補間しない生の値(`ResourceService.getResourceValue`)。パスはリテラルの`f/factory/factory_config`に固定し、境界テストが確かめる。補間する取得(`getResourceValueInterpolated`と`getResource`)は使わない |
 | 参照 | 設定のどこかに`$var:`か`$res:`があれば、変更しない。読み取りが参照を展開すると、書き戻しで秘密の値が設定に入るおそれがあるためである |
 | 比較交換 | 呼び出し側が「読んだ時の値」を渡す。書く直前に読み直した値と違えば、変更しない。項目が設定に無いときも変更しない。一覧は、要素を順序つきで比べる。読み直しも、同じく内容で比べる |
@@ -6591,18 +6591,24 @@ PR修正の報告は、親の遷移の注記と通知の理由に整えてから
 
 ### 設計工程を有効にする操作
 
-`design_enabled`と`design_enabled_since`を書く操作は、運用者がWindmillの画面か`wmill resource push`で行う。
-Consoleの設定の変更(`console_config_update`)の許可表には入れない。
+`design_enabled`を`true`にする操作と、`design_enabled_since`を書く操作は、運用者がWindmillの画面か`wmill resource push`で行う。
+Consoleの設定の変更(`console_config_update`)の許可表に入るのは、`design_enabled`を`true`から`false`へ閉じる向きだけである。
+`design_enabled_since`は、許可表に入れない。
 全停止が止めた`design_enabled`は、ホストの`mise run stop:restore`も戻す([全停止](#全停止))。
 このとき、`design_enabled_since`の項目があれば、その値を実行した時刻に書き直す。
 これも運用者の`wmill`のプロファイルで`wmill resource push`を呼ぶ経路で、人が端末で`yes`を入力して確かめる。
+Consoleで閉じた`design_enabled`は、全停止の記録に載らないので、`stop:restore`は戻さない。
 
 開く向きの変更は、許可表に入れない。
 入れると、確認のダイアログ1つで、設計工程が開くためである。
 
-閉じる向きの変更も、許可表に入れていない。
-許可表の`BOOLEAN_STOP_ITEMS`は、trueからfalseへの変更だけを許す。
-設計工程の設定はこの許可表に無いので、閉じるにも、Windmillの画面か`wmill resource push`が要る。
+閉じる向きの変更は、許可表の`BOOLEAN_STOP_ITEMS`に入れる。
+`BOOLEAN_STOP_ITEMS`は、`true`から`false`への変更だけを許し、`false`から`true`へは断る。
+閉じても、設計中と設計の承認待ちの作業は止まらない。
+閉じている間に承認した要件定義は、設計書を作らず、設計の承認も挟まずに、実装へ進む。
+設計書の承認という関門が外れるが、要件定義の承認と、PRのレビューとマージは残る。
+入れる理由は、閉じる向きが、設計工程が無い既定の運用へ戻す操作で、新しく書き込みや実行の範囲を広げないためである。
+再び開くときは、人が`design_enabled`を`true`にし、`design_enabled_since`を新しい時刻に書き直す。
 
 subagentと背景のセッションは、この2つを書かない([運用](operations.md)の「設計工程を有効にする」)。
 
