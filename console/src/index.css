@@ -224,7 +224,7 @@ body {
 [data-section-anchor][data-highlighted] {
   background-color: var(--selected);
   outline: 2px solid var(--ring);
-  outline-offset: 0.5rem;
+  outline-offset: 0.25rem;
 }
 
 /*
