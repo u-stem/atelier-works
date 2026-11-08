@@ -99,11 +99,9 @@ const DESIGN_ENABLED_SINCE_TOKEN = /(?<![\w$])design_enabled_since(?![\w$])/g;
  * `lib/config.ts`の6つは、既定値、生の値の読み、既定値の参照、読めた値の返却、通知の本文の中の2つである。
  * `console_config.ts`の1つは、設定タブに出す効く値のために、生の値を門へ渡す読みである。
  * `lib/self_update_support.ts`の1つは、警告の固定文に入る語である。
- * `console_config_update.ts`の1つは、`design_enabled`を閉じる書き込みで`null`を書く項目名である。値を書く経路ではなく、`null`以外の値は`SINCE_LITERAL`が禁じる。
  */
 const ALLOWED_DESIGN_ENABLED_SINCE_TOKENS: Readonly<Record<string, number>> = {
   "console_config.ts": 1,
-  "console_config_update.ts": 1,
   "lib/config.ts": 6,
   "lib/self_update_support.ts": 1,
 };
