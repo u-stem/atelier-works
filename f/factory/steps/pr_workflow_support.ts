@@ -903,7 +903,7 @@ function neutralizeHtmlComment(text: string): string {
  * 目印を除いた最後の行だけを見る。見送りの理由に引用された`対応: <sha>`で解決しないためである。
  */
 export function isFixedFixReply(body: string): boolean {
-  if (body.split("\n")[0] !== ROLE_TAGS.pr_fix) return false;
+  if (firstLineOf(body) !== ROLE_TAGS.pr_fix) return false;
   // 再レビューの返信は`pr_fix`と同じタグを使うので、最後の行だけでなく目印でも除く。
   if (REVIEW_REPLY_MARKER_KINDS.some((kind) => hasMarker(body, kind))) {
     return false;
@@ -1065,6 +1065,11 @@ const THREAD_COMMENT_MAX_CHARS = 2000;
 /** プロンプトに載せるスレッド全体の文字数の上限。スレッドが多いPRでプロンプトが膨らまないようにする。 */
 const THREADS_PROMPT_MAX_CHARS = 100_000;
 
+/** 本文の1行目を返す。改行コードは`\n`にそろえ、前後の空白は除く。役割タグの比較に使う。 */
+function firstLineOf(body: string): string {
+  return body.replace(/\r\n/g, "\n").split("\n")[0]?.trim() ?? "";
+}
+
 /** 本文の、空行と目印を除いた最後の行を返す。 */
 function lastContentLine(body: string): string {
   const lines = body.replace(/\r\n/g, "\n").split("\n");
@@ -1130,8 +1135,7 @@ function isFactoryComment(
   viewer: string,
 ): boolean {
   if (!isOwnPost(comment.authorLogin, viewer)) return false;
-  const firstLine =
-    comment.body.replace(/\r\n/g, "\n").split("\n")[0]?.trim() ?? "";
+  const firstLine = firstLineOf(comment.body);
   return (
     Object.values<string>(ROLE_TAGS).includes(firstLine) ||
     hasMarker(comment.body, PR_FIX_MARKER_KIND) ||
