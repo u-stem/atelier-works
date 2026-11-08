@@ -164,10 +164,11 @@ export const CONFIG_GROUP_DEFINITIONS: readonly ConfigGroupDefinition[] = [
  * 項目を、定義の並びのグループに分ける。グループの中は、定義のキーの並びに従う。
  * どのグループにも入らない項目は、受け取った順のまま、最後の「その他」に出す。
  * 項目の無いグループは返さない。絞り込んだ後の項目を渡せば、該当の無いグループの見出しは出ない。
+ * `keepEmpty`に挙げたグループは、項目が無くても返す。項目以外の行(設計工程の判定)を持つグループが、見出しごと消えないためである。
  */
 export function groupConfigItems(
   items: readonly ConfigItemView[],
-  _keepEmpty: readonly string[] = [],
+  keepEmpty: readonly string[] = [],
 ): ConfigGroup[] {
   const byKey = new Map(items.map((item) => [item.key, item]));
   const grouped = new Set(
@@ -179,7 +180,7 @@ export function groupConfigItems(
       const item = byKey.get(key);
       return item === undefined ? [] : [item];
     });
-    if (members.length > 0) {
+    if (members.length > 0 || keepEmpty.includes(definition.id)) {
       groups.push({
         id: definition.id,
         label: definition.label,

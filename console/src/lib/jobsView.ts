@@ -426,9 +426,18 @@ export function filterConfigItems(
     : items.filter((item) => item.key.toLowerCase().includes(needle));
 }
 
-/** 設計工程の判定の行を、キー名の絞り込みの語で残すか。 */
-export function matchesDesignStageQuery(_query: string): boolean {
-  return false;
+/** 設計工程の判定の行を、キー名の絞り込みで探す語。行はキーでないので、行の名前の語で探す。 */
+const DESIGN_STAGE_TERMS: readonly string[] = ["設計工程", "design"];
+
+/**
+ * 設計工程の判定の行を、キー名の絞り込みの語で残すか。
+ * 語が空のときと、行の名前(設計工程、design)の一部のときだけ残す。それ以外の語は、他のキーを探しているので消す。
+ */
+export function matchesDesignStageQuery(query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  return (
+    needle === "" || DESIGN_STAGE_TERMS.some((term) => term.includes(needle))
+  );
 }
 
 export type ConfigValueText =

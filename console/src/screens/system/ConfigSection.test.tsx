@@ -6,6 +6,7 @@ import { freshQuery, staleQuery } from "../../api/fakeSectionQuery.testing.ts";
 import type {
   ConfigItemView,
   ConfigSnapshotView,
+  DesignStageView,
 } from "../../api/jobsQueries.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
 import { ConfigList, ConfigSection } from "./ConfigSection.tsx";
@@ -26,6 +27,13 @@ const SNAPSHOT: ConfigSnapshotView = {
 
 function snapshotOf(items: ConfigItemView[]): ConfigSnapshotView {
   return { path: "f/factory/factory_config", items };
+}
+
+function snapshotWithStage(
+  items: ConfigItemView[],
+  design_stage: DesignStageView,
+): ConfigSnapshotView {
+  return { path: "f/factory/factory_config", items, design_stage };
 }
 
 function renderSection(query = freshQuery(SNAPSHOT)): string {
@@ -529,36 +537,44 @@ describe("ConfigSection", () => {
   });
 
   test("puts the design stage first in the design group", () => {
-    const query = freshQuery({
-      path: "f/factory/factory_config",
-      items: [
-        { key: "design_enabled", kind: "value", value: true, masked: false },
-        { key: "max_design_attempts", kind: "value", value: 3, masked: false },
-      ],
-      design_stage: { enabled: true, ignored: false, indeterminate: false },
-    });
+    const query = freshQuery(
+      snapshotWithStage(
+        [
+          { key: "design_enabled", kind: "value", value: true, masked: false },
+          {
+            key: "max_design_attempts",
+            kind: "value",
+            value: 3,
+            masked: false,
+          },
+        ],
+        { enabled: true, ignored: false, indeterminate: false },
+      ),
+    );
     const html = renderSection(query).replaceAll("<wbr/>", "");
     const stageAt = html.indexOf(DESIGN_ROW_LABEL);
     expect(stageAt >= 0 && stageAt < html.indexOf("design_enabled")).toBe(true);
   });
 
   test("shows the design group for the design stage when the config has no design item", () => {
-    const query = freshQuery({
-      path: "f/factory/factory_config",
-      items: [{ key: "owners", kind: "value", value: ["a"], masked: false }],
-      design_stage: { enabled: false, ignored: false, indeterminate: false },
-    });
+    const query = freshQuery(
+      snapshotWithStage(
+        [{ key: "owners", kind: "value", value: ["a"], masked: false }],
+        { enabled: false, ignored: false, indeterminate: false },
+      ),
+    );
     expect(renderSection(query)).toMatch(
       /<h3 id="config-group-design"[^>]*>設計<\/h3>/,
     );
   });
 
   test("shows the design stage row in the design group, not under the other groups", () => {
-    const query = freshQuery({
-      path: "f/factory/factory_config",
-      items: [{ key: "owners", kind: "value", value: ["a"], masked: false }],
-      design_stage: { enabled: false, ignored: false, indeterminate: false },
-    });
+    const query = freshQuery(
+      snapshotWithStage(
+        [{ key: "owners", kind: "value", value: ["a"], masked: false }],
+        { enabled: false, ignored: false, indeterminate: false },
+      ),
+    );
     const html = renderSection(query);
     expect(html.indexOf(DESIGN_ROW_LABEL)).toBeGreaterThan(
       html.indexOf("config-group-design"),
@@ -578,13 +594,12 @@ describe("ConfigSection", () => {
   });
 
   test("shows no button in the operation column of the design stage row", () => {
-    const query = freshQuery({
-      path: "f/factory/factory_config",
-      items: [
-        { key: "design_enabled", kind: "value", value: true, masked: false },
-      ],
-      design_stage: { enabled: true, ignored: false, indeterminate: false },
-    });
+    const query = freshQuery(
+      snapshotWithStage(
+        [{ key: "design_enabled", kind: "value", value: true, masked: false }],
+        { enabled: true, ignored: false, indeterminate: false },
+      ),
+    );
     const row = designRowOf(renderSection(query));
     expect([row !== "", row.includes("<button")]).toEqual([true, false]);
   });

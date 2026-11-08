@@ -25,6 +25,7 @@ import {
   describeConfigValue,
   describeDesignStage,
   filterConfigItems,
+  matchesDesignStageQuery,
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { ConfigChangeDialog } from "./ConfigChangeDialog.tsx";
@@ -246,6 +247,9 @@ const ROLE = {
   cell: { role: "cell" },
 } as const;
 
+/** 設計工程の判定の行を置くグループ。 */
+const DESIGN_GROUP_ID = "design";
+
 type SwitchOrNumberOffer = Extract<ChangeOffer, { kind: "stop" | "lower" }>;
 
 function isSwitchOrNumberOffer(
@@ -312,27 +316,35 @@ function ChangeButton({
  * 操作の列は、ボタンを持つ項目があるグループだけに出す。
  * 一覧の3項目は、値の行を編集できる一覧にして、要素ごとの削除と一覧の追加のボタンを値の中に置く。
  * ボタンは確認のダイアログを開くだけで、書き込みは確認を通った後にだけ呼ぶ。
+ * `designStage`を渡すと、「設計」グループの表の先頭に、設計工程が実際に効いているかの行を置く。
+ * 設計の項目が無くても、「設計」グループはその行のために出す。
  */
 export function ConfigList({
   items,
+  designStage,
   onChoose,
   isLocked = () => false,
 }: {
   items: readonly ConfigItemView[];
+  designStage?: DesignStageView | undefined;
   onChoose?: (offer: ChangeOffer) => void;
   isLocked?: (offer: ChangeOffer) => boolean;
 }) {
-  if (items.length === 0) {
+  if (items.length === 0 && designStage === undefined) {
     return <EmptyNote>該当する項目はありません。</EmptyNote>;
   }
   return (
     <div className="@container flex flex-col gap-5">
-      {groupConfigItems(items).map((group) => (
+      {groupConfigItems(
+        items,
+        designStage === undefined ? [] : [DESIGN_GROUP_ID],
+      ).map((group) => (
         <ConfigGroupTable
           key={group.id}
           id={group.id}
           label={group.label}
           items={group.items}
+          designStage={group.id === DESIGN_GROUP_ID ? designStage : undefined}
           onChoose={onChoose}
           isLocked={isLocked}
         />
@@ -407,17 +419,20 @@ function ConfigRow({
  * 見出しは区画(landmark)にせず、表の`aria-labelledby`で結ぶ。グループの数だけ区画が並ぶのを避けるためである。
  * 狭い幅では、表をやめて項目ごとに縦に積む。
  * 操作の列は、操作の列のボタンを持つ項目があるときだけ出し、無ければ値の列が幅を使う。
+ * `designStage`があるグループは、項目の行の前に、設計工程の判定の行を置く。
  */
 function ConfigGroupTable({
   id,
   label,
   items,
+  designStage,
   onChoose,
   isLocked,
 }: {
   id: string;
   label: string;
   items: readonly ConfigItemView[];
+  designStage: DesignStageView | undefined;
   onChoose: ((offer: ChangeOffer) => void) | undefined;
   isLocked: (offer: ChangeOffer) => boolean;
 }) {
@@ -478,6 +493,12 @@ function ConfigGroupTable({
             {...ROLE.rowgroup}
             className="block divide-y divide-border @min-[40rem]:table-row-group"
           >
+            {designStage === undefined ? null : (
+              <DesignStageRow
+                stage={designStage}
+                showOperation={showOperation}
+              />
+            )}
             {items.map((item) => (
               <ConfigRow
                 key={item.key}
@@ -495,24 +516,44 @@ function ConfigGroupTable({
 }
 
 /**
- * 設計工程の、効いている値。一覧の値は書かれたままなので、実際に動くかはここで確かめる。
- * 書かれた値が無視されているときと、参照のため判定できないときは、その理由を添える。
+ * 設計工程の、効いている値の行。「設計」グループの表の先頭に置く。
+ * 一覧の値は書かれたままなので、実際に動くかはこの行で確かめる。
+ * 項目の列は設定のキーでないので、等幅にせず、通常の書体で出す。操作の列は空である。
+ * 書かれた値が無視されているときと、参照のため判定できないときは、その理由を値の列に添える。
+ * 他の行と同じく、狭い幅では縦に積むので、表の役割は`role`で明示する。
  */
-function DesignStageStatus({ stage }: { stage: DesignStageView }) {
+function DesignStageRow({
+  stage,
+  showOperation,
+}: {
+  stage: DesignStageView;
+  showOperation: boolean;
+}) {
   const text = describeDesignStage(stage);
   return (
-    <Card
-      padding="compact"
-      className="flex max-w-3xl flex-col gap-1 text-small"
-    >
-      <p>
-        <span className="text-muted-foreground">設計工程: </span>
-        <span className="font-medium">{safeText(text.state)}</span>
-      </p>
-      {text.note === null ? null : (
-        <p className="text-muted-foreground">{safeText(text.note)}</p>
-      )}
-    </Card>
+    <tr {...ROLE.row} className="block @min-[40rem]:table-row">
+      <th
+        scope="row"
+        {...ROLE.rowheader}
+        className="block px-4 pt-2.5 pb-1 text-left align-top font-normal break-words @min-[40rem]:table-cell @min-[40rem]:py-2.5"
+      >
+        設計工程(実際の状態)
+      </th>
+      <td
+        {...ROLE.cell}
+        className="block min-w-0 px-4 pb-2.5 align-top @min-[40rem]:table-cell @min-[40rem]:py-2.5"
+      >
+        <div className="flex flex-col gap-1">
+          <span className="font-medium">{safeText(text.state)}</span>
+          {text.note === null ? null : (
+            <p className="text-muted-foreground">{safeText(text.note)}</p>
+          )}
+        </div>
+      </td>
+      {showOperation ? (
+        <td {...ROLE.cell} className="block @min-[40rem]:table-cell" />
+      ) : null}
+    </tr>
   );
 }
 
@@ -527,9 +568,6 @@ function ConfigBody({
   const change = useConfigChange();
   return (
     <div className="flex flex-col gap-3">
-      {designStage === undefined ? null : (
-        <DesignStageStatus stage={designStage} />
-      )}
       <Field tone="filter" label="キー名で絞り込む" className="max-w-sm">
         {(control) => (
           <Input
@@ -545,6 +583,7 @@ function ConfigBody({
       </Field>
       <ConfigList
         items={filterConfigItems(items, query)}
+        designStage={matchesDesignStageQuery(query) ? designStage : undefined}
         onChoose={change.choose}
         isLocked={change.isLocked}
       />
