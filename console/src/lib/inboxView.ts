@@ -377,22 +377,23 @@ function shortenedMessage(description: NoticeDescription): string {
   return description.messageParts.map((part) => part.text).join("");
 }
 
-/** 版の直前に置かれる「ラベル: 」の、ラベルの最大の文字数。 */
-const LABEL_MAX_LENGTH = 12;
+/** 本文の中の、始まりと終わり(含まない)の位置。 */
+type TextRange = { readonly start: number; readonly end: number };
+
+/**
+ * 版の直前の「ラベル: 」。ラベルは文頭(先頭、「。」、改行の直後)から始まる12文字以内で、
+ * 区切りは半角か全角のコロンに空白が0個以上続く形である。
+ * `u`フラグで、絵文字などの文字数をコードポイントで数える。
+ */
+const LABEL_BEFORE_SHA = /(?<![^。\n])[^。\n:：]{1,12}[:：]\s*$/u;
 
 /**
  * 版を切り出すと値の無いラベルになる部分を含む範囲。該当しなければ`null`。
- * 版の直前が文頭(先頭、「。」、改行の直後)から始まる短い「ラベル: 」で、
- * 直後が「。」か本文の終わりのとき、ラベルとコロンと「。」ごと切り出す。
+ * 版の直前が短い「ラベル: 」で、直後が「。」か本文の終わりのとき、ラベルとコロンと「。」ごと含める。
  * 版だけを切ると「ラベル: 。」が残り、値が抜けたように読めるためである。
  */
-function orphanedLabelRange(
-  message: string,
-  sha: { start: number; end: number },
-): { start: number; end: number } | null {
-  const label = new RegExp(
-    `(?<![^。\\n])[^。\\n:：]{1,${LABEL_MAX_LENGTH}}: $`,
-  ).exec(message.slice(0, sha.start));
+function orphanedLabelRange(message: string, sha: TextRange): TextRange | null {
+  const label = LABEL_BEFORE_SHA.exec(message.slice(0, sha.start));
   if (label === null) {
     return null;
   }
@@ -403,6 +404,23 @@ function orphanedLabelRange(
   return rest.startsWith("。")
     ? { start: label.index, end: sha.end + 1 }
     : null;
+}
+
+/** 重なる範囲と隣り合う範囲を1つの和にまとめ、始まりの順に返す。離れた範囲はそのまま残す。 */
+function mergeRanges(ranges: readonly TextRange[]): TextRange[] {
+  const merged: TextRange[] = [];
+  for (const range of [...ranges].sort((a, b) => a.start - b.start)) {
+    const last = merged.at(-1);
+    if (last !== undefined && range.start <= last.end) {
+      merged[merged.length - 1] = {
+        start: last.start,
+        end: Math.max(last.end, range.end),
+      };
+    } else {
+      merged.push(range);
+    }
+  }
+  return merged;
 }
 
 /**
@@ -419,7 +437,7 @@ function excerptSource(
   const target = description.targets[0];
   const sha = description.shas[0];
   const { message } = description;
-  const ranges: { start: number; end: number }[] = [];
+  const ranges: TextRange[] = [];
   if (cutTarget && target !== undefined) {
     ranges.push({
       start: target.index,
@@ -428,17 +446,12 @@ function excerptSource(
   }
   const shaStart = sha === undefined ? -1 : message.indexOf(sha);
   if (cutSha && sha !== undefined && shaStart >= 0) {
-    const range = { start: shaStart, end: shaStart + sha.length };
-    const label = orphanedLabelRange(message, range);
-    const overlapsTarget = ranges.some(
-      (other) =>
-        label !== null && other.start < label.end && label.start < other.end,
-    );
-    ranges.push(label === null || overlapsTarget ? range : label);
+    const shaRange = { start: shaStart, end: shaStart + sha.length };
+    ranges.push(orphanedLabelRange(message, shaRange) ?? shaRange);
   }
-  // 後ろから切り出し、前の範囲の位置がずれないようにする。
-  const text = ranges
-    .sort((a, b) => b.start - a.start)
+  // 重なる範囲は和にまとめ、後ろから切り出して、前の範囲の位置がずれないようにする。
+  const text = mergeRanges(ranges)
+    .reverse()
     .reduce(
       (rest, range) => rest.slice(0, range.start) + rest.slice(range.end),
       message,
