@@ -129,7 +129,8 @@ function ValueRows({ items }: { items: readonly string[] }) {
 /**
  * 同じ形のオブジェクトの配列。列の見出しを持つ表で、行が持たないキーのセルは「未設定」と出す。
  * 列の幅は内容に合わせ、長い名前はハイフンなどの切れ目で折る。
- * 切れ目の無い長い文字列で収まらない表は、表の中だけを横にスクロールする。
+ * セルは`overflow-wrap:anywhere`にして、切れ目の無い長い文字列が表の最小幅を押し広げないようにする。
+ * それでも収まらない表は、表の中だけを横にスクロールする。
  */
 function ValueTable({
   columns,
@@ -164,7 +165,7 @@ function ValueTable({
                 <td
                   // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の列が並びうる。
                   key={`${cellIndex}:${columns[cellIndex]}`}
-                  className="py-1 pr-6 align-top break-words"
+                  className="min-w-[14ch] py-1 pr-6 align-top [overflow-wrap:anywhere]"
                 >
                   {cell === null ? (
                     <span className="text-muted-foreground">未設定</span>
@@ -192,33 +193,40 @@ function ValueEntries({
   entries: readonly { key: string; value: ConfigEntryValue }[];
 }) {
   return (
-    <dl className="flex flex-col gap-1.5 text-small">
-      {entries.map(({ key, value }, index) => (
-        // キーは`safeText`の後で重なりうるので、位置を含めて見分ける。並びは変わらない。
-        <div
-          // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列のキーが並びうる。
-          key={`${index}:${key}`}
-          className={
-            value.kind === "list"
-              ? "flex flex-col gap-0.5"
-              : "grid gap-0.5 @md:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] @md:gap-x-3"
-          }
-        >
-          <dt className="font-mono break-words">
-            <TextValue text={safeText(key)} />
-          </dt>
-          <dd className={value.kind === "list" ? "min-w-0 pl-4" : "min-w-0"}>
-            {value.kind === "list" ? (
-              <ValueRows items={value.items} />
-            ) : (
-              <span className="break-words">
-                <TextValue text={value.text} />
-              </span>
-            )}
-          </dd>
-        </div>
-      ))}
-    </dl>
+    // 横に並べるかは、一覧全体でなく、このセルの幅で決める。`td`は表のレイアウトを崩さないよう、包みの`div`にコンテナを付ける。
+    <div className="@container">
+      <dl className="flex flex-col gap-1.5 text-small">
+        {entries.map(({ key, value }, index) => (
+          // キーは`safeText`の後で重なりうるので、位置を含めて見分ける。並びは変わらない。
+          <div
+            // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列のキーが並びうる。
+            key={`${index}:${key}`}
+            className={
+              value.kind === "list"
+                ? "flex flex-col gap-0.5"
+                : "grid gap-0.5 @md:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] @md:gap-x-3"
+            }
+          >
+            <dt className="font-mono break-words">
+              <TextValue text={safeText(key)} />
+            </dt>
+            <dd
+              className={
+                value.kind === "list" ? "min-w-0 pl-4" : "min-w-0 pl-4 @md:pl-0"
+              }
+            >
+              {value.kind === "list" ? (
+                <ValueRows items={value.items} />
+              ) : (
+                <span className="break-words">
+                  <TextValue text={value.text} />
+                </span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 
