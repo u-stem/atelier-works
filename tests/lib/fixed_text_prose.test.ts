@@ -24,13 +24,13 @@ const SPACE_RULES: ProseRules = {
 const EXCLUDED_FILES = new Set(["f/factory/lib/prompts.ts"]);
 
 /**
- * 検査しない行。役割タグは投稿の1行目を見分ける固定の文字列で、
- * 既に投稿したコメントとの照合に使うため変えられない。
+ * 検査しない行。役割タグ(`[Factory 自動<種類>]`)は投稿の1行目を見分ける固定の文字列で、
+ * 英字と日本語の間のスペースを含む形が決まっているため変えられない。
  * 英語の文の中で画面の項目名を引く行と、文体の指示で「です・ます」「だ・である」を引く行は、
  * 英語の語の区切りとしてスペースが要る。文体の指示は`commit_message_style.test.ts`が文面を固定する。
  */
 const EXCLUDED_LINE_PATTERN =
-  /自動レビュー\]|自動返信\]|自動調査\]|今すぐ監査 in the Console|polite です・ます form|plain だ・である form/;
+  /\[Factory 自動|自動レビュー\]|自動返信\]|自動調査\]|今すぐ監査 in the Console|polite です・ます form|plain だ・である form/;
 
 const STRING_LITERAL_PATTERN =
   /"(?:[^"\\\n]|\\.)*"|`(?:[^`\\\n]|\\.)*`|'(?:[^'\\\n]|\\.)*'/g;
