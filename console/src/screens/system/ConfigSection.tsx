@@ -28,7 +28,7 @@ import {
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { ConfigChangeDialog } from "./ConfigChangeDialog.tsx";
-import { EmptyValue, TextValue } from "./ConfigText.tsx";
+import { EmptyValue, KeyText, TextValue } from "./ConfigText.tsx";
 import { EditableListValue } from "./EditableListValue.tsx";
 import { SystemSection } from "./SystemSection.tsx";
 import { useConfigChange } from "./useConfigChange.ts";
@@ -351,17 +351,17 @@ function ConfigRow({
 }) {
   const { offers, editableList, button } = rowOffersOf(item, onChoose);
   return (
-    <tr {...ROLE.row} className="block @4xl:table-row">
+    <tr {...ROLE.row} className="block @min-[40rem]:table-row">
       <th
         scope="row"
         {...ROLE.rowheader}
-        className="block px-4 pt-2.5 pb-1 text-left align-top font-mono font-normal break-words @4xl:table-cell @4xl:py-2.5"
+        className="block px-4 pt-2.5 pb-1 text-left align-top font-mono font-normal break-words @min-[40rem]:table-cell @min-[40rem]:py-2.5"
       >
-        {safeText(item.key)}
+        <KeyText text={safeText(item.key)} />
       </th>
       <td
         {...ROLE.cell}
-        className="block min-w-0 px-4 pb-2.5 align-top tabular-nums @4xl:table-cell @4xl:py-2.5"
+        className="block min-w-0 px-4 pb-2.5 align-top tabular-nums @min-[40rem]:table-cell @min-[40rem]:py-2.5"
       >
         {editableList && onChoose !== undefined ? (
           <EditableListValue
@@ -377,10 +377,10 @@ function ConfigRow({
       {showOperation ? (
         <td
           {...ROLE.cell}
-          className="block px-4 align-top @4xl:table-cell @4xl:py-2.5 @4xl:text-right"
+          className="block px-4 align-top @min-[40rem]:table-cell @min-[40rem]:px-2 @min-[40rem]:py-2.5 @min-[40rem]:text-right"
         >
           {button === null || onChoose === undefined ? null : (
-            <div className="pb-2.5 @4xl:-my-1.5 @4xl:pb-0">
+            <div className="pb-2.5 @min-[40rem]:-my-1.5 @min-[40rem]:pb-0">
               <ChangeButton
                 offer={button}
                 locked={isLocked(button)}
@@ -426,16 +426,16 @@ function ConfigGroupTable({
         <table
           {...ROLE.table}
           aria-labelledby={headingId}
-          className="block w-full border-collapse @4xl:table @4xl:table-fixed"
+          className="block w-full border-collapse @min-[40rem]:table @min-[40rem]:table-fixed"
         >
           <colgroup>
-            <col className="@4xl:w-76" />
+            <col className="@min-[40rem]:w-56 @min-[48rem]:w-64 @min-[56rem]:w-76" />
             <col />
-            {showOperation ? <col className="@4xl:w-24" /> : null}
+            {showOperation ? <col className="@min-[40rem]:w-20" /> : null}
           </colgroup>
           <thead
             {...ROLE.rowgroup}
-            className="sr-only @4xl:not-sr-only @4xl:table-header-group"
+            className="sr-only @min-[40rem]:not-sr-only @min-[40rem]:table-header-group"
           >
             <tr
               {...ROLE.row}
@@ -459,7 +459,7 @@ function ConfigGroupTable({
                 <th
                   scope="col"
                   {...ROLE.columnheader}
-                  className="px-4 py-2 text-right font-medium"
+                  className="px-2 py-2 text-right font-medium"
                 >
                   操作
                 </th>
@@ -468,7 +468,7 @@ function ConfigGroupTable({
           </thead>
           <tbody
             {...ROLE.rowgroup}
-            className="block divide-y divide-border @4xl:table-row-group"
+            className="block divide-y divide-border @min-[40rem]:table-row-group"
           >
             {items.map((item) => (
               <ConfigRow
