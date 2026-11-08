@@ -81,7 +81,9 @@
 //       スケジュールの凍結を置く形(`freeze:place -- --target a/b`)と、`list --scope deploy`は通す。
 //   (d) 空白を含む語(`script -c`や`ssh`の文字列)と標準入力の文字列は、コマンドとして読み、内側のコマンドごとに判定し直す。
 //       結果は足し合わせない。内側が読み取りの道具(`rg -n release scripts/hold.ts`)なら通す。
-//       内側の先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうるので、値も先頭の語として判定する。
+//       内側の先頭が`mise`、実行系、`docker`、`psql`でも、語を足すコマンドとシェルの規則は重ねて当てる。
+//       内側の先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうるので、値を先頭の語として判定する。
+//       値が保留か凍結のコードを指すときだけ、後ろの語を引数として付ける。
 //       内側の`xargs`が足す語は、先頭が何でも読めないので拒否する。
 //       標準入力の文字列は、最上位でも入れ子でも同じに判定する。
 //       コマンド文字列は4段の入れ子まで読む。段を超えた文字列と読めない文字列は、字面で判定する。
@@ -675,11 +677,11 @@ export function holdStdin(command: SimpleCommand): HoldStdin {
   }
   return {
     redirects: command.redirects,
-    // `2>&1`の`1`のような、ファイル記述子の番号の語は、入力のファイルではない。
+    // `2>&1`の`1`や`2`のような、出力の複製の定番の語は、入力のファイルではない。
+    // `<&3`のように、ほかの番号の入力の複製は、読めない入力として残す。
     inputFiles: command.redirects.filter(
       (word) =>
-        !command.writeTargets.includes(word) &&
-        !/^(?:\d+-?|-)$/.test(word.text),
+        !command.writeTargets.includes(word) && !/^(?:[12]|-)$/.test(word.text),
     ),
     upstream,
     dynamicInput:
@@ -865,10 +867,13 @@ const HOLD_MAX_PARSES = 256;
 const HOLD_MAX_TEXT = 1_000_000;
 
 /** 1回の判定で、コマンド文字列を読んだ回数と文字数。 */
-type HoldBudget = { parses: number; chars: number };
+type HoldBudget = { parses: number; chars: number; words: number };
+
+/** 共起で走査した語の数の合計の上限。パイプの上流の語は、読むたびに走査し直すので、合計に数える。 */
+const HOLD_MAX_WORDS = 200_000;
 
 function newBudget(): HoldBudget {
-  return { parses: 0, chars: 0 };
+  return { parses: 0, chars: 0, words: 0 };
 }
 
 const FINDING_RANK: Record<HoldFinding, number> = {
@@ -1047,6 +1052,12 @@ function cooccurrenceFinding(
   from: number,
   context: HoldContext,
 ): HoldFinding | null {
+  const upstreamSize = context.stdin.upstream.reduce(
+    (sum, command) => sum + command.words.length,
+    0,
+  );
+  context.budget.words += words.length - from + upstreamSize;
+  if (context.budget.words > HOLD_MAX_WORDS) return "dynamic";
   const own = words.slice(from).filter((word) => !/\s/.test(word.text));
   const upstream = context.stdin.upstream.flatMap((command) =>
     command.words.filter((word) => !/\s/.test(word.text)),
@@ -1124,11 +1135,16 @@ function textFinding(
     };
     found = stronger(found, holdOperationAt(stripped.words, inner));
     // 先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうる(`ProxyCommand=…`、`LESSOPEN=…`)。値を先頭の語として判定する。
+    // 値が保留や凍結のCLIを指すときだけ、後ろの語を引数として付ける。実際に実行される語は上で判定している。
+    // 代入ごとの判定は、解析の回数に数える。
     for (const assignment of stripped.assignments) {
+      budget.parses += 1;
+      if (budget.parses > HOLD_MAX_PARSES) return "dynamic";
       const value = assignmentValue(assignment);
+      const pointing = pointsAtHoldCode(value) || pointsAtFreezeCode(value);
       found = stronger(
         found,
-        holdOperationAt([value, ...stripped.words], inner),
+        holdOperationAt(pointing ? [value, ...stripped.words] : [value], inner),
       );
       if (/\s/.test(value.text)) {
         found = stronger(found, textFinding(value.text, inner, "string"));
@@ -1247,6 +1263,26 @@ function holdOperationAt(
   if (context.inString && context.viaXargs) return "prefix";
   const first = words[0]?.text ?? "";
   const program = baseName(first);
+  if (PREFIX_PROGRAMS.has(program)) {
+    return underPrefixFinding(words, 1, context);
+  }
+  const launched = launchedFinding(words, program, context);
+  // 前置きの後ろの文字列の中のコマンドは、先頭が起動語でも、前置きの規則を重ねて当てる。
+  // 起動語の判定は先頭の語から後ろしか見ず、語を足すコマンドやシェルを見ないためである。
+  if (!context.inString || launched === "operation") return launched;
+  return stronger(launched, underPrefixFinding(words, 0, context));
+}
+
+/**
+ * 先頭が`mise`、実行系、`docker`と`psql`、保留や凍結のCLIの直接実行のとき、その分岐の判定を返す。
+ * どれでもなければnullを返す。
+ */
+function launchedFinding(
+  words: readonly Word[],
+  program: string,
+  context: HoldContext,
+): HoldFinding | null {
+  const first = words[0]?.text ?? "";
   const { inputs, stdin } = context;
   if (program === "mise") return miseFinding(words, inputs, stdin);
   if (RUNNERS.has(program)) return runnerFinding(words.slice(1), inputs, stdin);
@@ -1262,10 +1298,7 @@ function holdOperationAt(
       ? null
       : "operation";
   }
-  if (PREFIX_PROGRAMS.has(program))
-    return underPrefixFinding(words, 1, context);
-  // 前置きの無い形は、前置きの後ろの文字列から読んだコマンドだけを、前置きの規則で見る。
-  return context.inString ? underPrefixFinding(words, 0, context) : null;
+  return null;
 }
 
 /**
