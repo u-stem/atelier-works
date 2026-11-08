@@ -2561,3 +2561,240 @@ describe("bash-guard keeps reading prefixes and nested strings for the stop-all"
     );
   });
 });
+
+// `script`、`unbuffer`、`caffeinate`、`/usr/bin/time`のような前置きの後ろでも、保留と凍結の書き込みはsubagentに許さない。
+describe("bash-guard denies a subagent that writes holds or freezes behind a prefix", () => {
+  test.each([
+    "script -q /dev/null mise run hold:release 1",
+    "script -q /dev/null mise run hold:place -- --scope merge --target a/b --minutes 5 --reason x",
+    "unbuffer mise run freeze:release 1",
+    "unbuffer mise run freeze:place -- --scope deploy --minutes 5 --reason x",
+    "caffeinate bun scripts/hold.ts release 1",
+    "caffeinate -t 60 mise run hold:place",
+    "/usr/bin/time bun scripts/freeze.ts release 1",
+    "ssh host mise run hold:release 1",
+    "caffeinate bunx tsx scripts/hold.ts place",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("the reason is the hold reason", async () => {
+    expect(
+      await denyReason("script -q /dev/null mise run hold:release 1", {
+        subagent: true,
+      }),
+    ).toContain("main session");
+  });
+});
+
+// 起動語(`mise`、実行系、シェル)が前置きの後ろに無くても、保留や凍結のCLIを指す語の直後が書き込みなら拒否する。
+describe("bash-guard denies a subagent that runs the hold or freeze CLI directly behind a prefix", () => {
+  test.each([
+    "script -q /dev/null ./scripts/hold.ts release 1",
+    "script -q ./scripts/hold.ts release 1",
+    "script -q mise ./scripts/hold.ts release 1",
+    "script -q sh ./scripts/hold.ts release 1",
+    "script -q /dev/null ./scripts/hold.ts -- release 1",
+    "caffeinate ./scripts/freeze.ts release 1",
+    "caffeinate ./scripts/hold.ts place --scope merge --target a/b --minutes 5 --reason x",
+    "python3 scripts/hold.ts release 1",
+    "find . -maxdepth 0 -exec ./scripts/hold.ts release 1 \\; -exec bun --version \\;",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 前置きの後ろでも、サブコマンドが読めない形(実行時に決まる語、glob、ブレース、語を足す前置き)は拒否する。
+describe("bash-guard denies a subagent whose subcommand behind a prefix cannot be read", () => {
+  test.each([
+    "script -q /dev/null ./scripts/hold.ts $ACTION 1",
+    "script -q /dev/null ./scripts/hold.ts rel* 1",
+    "script -q /dev/null ./scripts/hold.ts {release,list} 1",
+    'script -q /dev/null ./scripts/hold.ts "$(printf release)" 1',
+    "caffeinate ./scripts/freeze.ts $ACTION",
+    "find . -name x -exec ./scripts/hold.ts \\;",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 前置きの後ろの凍結の`reset`と`push --prune`は、人の端末の確認を通る書き込みなので、subagentに許さない。
+describe("bash-guard denies a subagent that resets freezes or prunes a push", () => {
+  test.each([
+    "mise run freeze:reset",
+    "mise run push:prune",
+    "bun scripts/freeze.ts reset",
+    "bun scripts/freeze.ts push --prune",
+    "caffeinate mise run freeze:reset",
+    "caffeinate mise run push:prune",
+    "script -q /dev/null ./scripts/freeze.ts reset",
+    "script -q /dev/null ./scripts/freeze.ts push --prune",
+    "bun scripts/freeze.ts push $FLAGS",
+    "bun -e \"await Bun.spawn(['bun','scripts/freeze.ts','reset'])\"",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// `script -c`などのコマンド文字列は、中身をコマンドとして読んで判定する。
+describe("bash-guard denies a subagent that writes holds or freezes inside a command string", () => {
+  test.each([
+    `script -qc "bun scripts/hold.ts release 1" /dev/null`,
+    `script -qc "bun scripts/hold.ts release 1" bun`,
+    `script -qc "mise run freeze:release 1" /dev/null`,
+    `ssh host "mise run hold:release 1"`,
+    `script -qc "cat scripts/hold.ts | bun run -" /dev/null`,
+    `script -qc "bun run - < scripts/hold.ts" /dev/null`,
+    `script -qc "bun run - release 1" /dev/null < scripts/freeze.ts`,
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 前置きの後ろのシェルが標準入力からコードを読む形は、標準入力の文字列を読んで判定する。読めなければ拒否する。
+describe("bash-guard denies a subagent that feeds a shell behind a prefix through its stdin", () => {
+  test.each([
+    "echo 'mise run hold:release 1' | script -q /dev/null sh",
+    "script -q /dev/null bash <<< 'mise run hold:release 1'",
+    "script -q /dev/null bash <<'EOF'\nmise run hold:release 1\nEOF",
+    "script -q /dev/null sh <<< 'bun scripts/freeze.ts release 1'",
+    'echo "$X" | script -q /dev/null sh',
+    "script -q /dev/null sh <<< 'mise run hold:release 1'; true",
+    "caffeinate -i sh <<< 'mise run hold:place'",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 先頭の変数代入の値は、コマンドの語として前置きが外れるので、語とは別に同じ規則で判定する。
+describe("bash-guard denies a subagent that writes holds or freezes in an assignment value", () => {
+  test.each([
+    "GIT_PAGER='mise run hold:release 1' git log",
+    "GIT_EXTERNAL_DIFF='bun scripts/freeze.ts release 1' git diff",
+    "PAGER='bun scripts/hold.ts place' git log",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 入れ子の深さの上限は4。上限の中は文字列を読み、超えた文字列は字面で判定する。
+describe("bash-guard reads command strings nested up to the limit for holds", () => {
+  test("denies a hold release inside a string nested four times", async () => {
+    expect(
+      await decide(nestedInScript("mise run hold:release 1", 4), {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test("denies a hold release by its name inside a string nested six times", async () => {
+    expect(
+      await decide(nestedInScript("mise run hold:release 1", 6), {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test("denies a string nested six times that only names the hold code", async () => {
+    expect(
+      await decide(nestedInScript("cat scripts/hold.ts", 6), {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test("allows a string nested six times that names nothing", async () => {
+    expect(
+      await decide(nestedInScript("echo hello", 6), { subagent: true }),
+    ).toBe("allow");
+  });
+});
+
+// フックのタイムアウトは10秒。深い入れ子とブレースの多い入力が、その中で終わる。
+describe("bash-guard finishes deep and brace-heavy input for holds in time", () => {
+  const BRACES = "{a,b}".repeat(300);
+
+  test("finishes a long run of brace groups behind a prefix", async () => {
+    const started = Date.now();
+    await decide(`script -q /dev/null touch ${BRACES}`, { subagent: true });
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  test("finishes brace groups inside strings nested deeply", async () => {
+    const started = Date.now();
+    await decide(nestedInScript(`touch ${BRACES}`, 8), { subagent: true });
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  test("finishes many launcher words behind a prefix", async () => {
+    const started = Date.now();
+    await decide(`script -q /dev/null ${"bun x ".repeat(2000)}`, {
+      subagent: true,
+    });
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+});
+
+// 起動語の一覧に当たらない、実行ではない形は止めない。
+describe("bash-guard allows a subagent to work on the hold code behind a prefix", () => {
+  test.each([
+    "script -q /dev/null mise run hold:list",
+    "caffeinate bun scripts/hold.ts list",
+    "caffeinate mise run freeze:place -- --target a/b --minutes 5 --reason x",
+    "caffeinate ./scripts/freeze.ts check",
+    "caffeinate bun scripts/freeze.ts push --dry-run",
+    "caffeinate mise run push:dry",
+    "vim scripts/hold.ts",
+    "chmod +x scripts/hold.ts",
+    "script -q /dev/null vim scripts/hold.ts",
+    "script -q /dev/null cat scripts/hold.ts",
+    "caffeinate git log -- scripts/hold.ts",
+    "caffeinate bunx biome check scripts/hold.ts",
+    "caffeinate bun test tests/scripts/hold.test.ts",
+    `script -qc "cat scripts/hold.ts" /dev/null`,
+    "echo 'cat scripts/hold.ts' | script -q /dev/null sh",
+    "script -q /dev/null bash ./x.sh",
+    "bash ./x.sh",
+    "mise run push:dry",
+    "bun scripts/freeze.ts push --dry-run",
+    "bun scripts/freeze.ts push",
+    "TARGET=scripts/hold.ts bunx biome check src",
+    "GIT_PAGER=cat git log",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+
+  test("allows a commit message that names a hold task", async () => {
+    expect(
+      await decide('git commit -m "docs: mise run hold:release の注意"', {
+        subagent: true,
+      }),
+    ).toBe("allow");
+  });
+});
+
+// 前置きの後ろで、実行の字面が引数にある形は、実行と区別できないので拒否する。
+describe("bash-guard denies a subagent whose arguments carry a hold command behind a prefix", () => {
+  test.each([
+    "script -q /dev/null rg -n bun scripts/hold.ts",
+    'script -q /dev/null git commit -m "docs: mise run hold:release の注意"',
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 判定が変わるのはsubagentだけである。主セッションは、前置きの有無によらず今までどおり実行できる。
+describe("bash-guard leaves the main session free to run holds behind a prefix", () => {
+  test.each([
+    "script -q /dev/null mise run hold:release 1",
+    "caffeinate bun scripts/freeze.ts release 1",
+    "script -q /dev/null ./scripts/hold.ts release 1",
+    `script -qc "bun scripts/hold.ts release 1" /dev/null`,
+    "mise run freeze:reset",
+    "mise run push:prune",
+    "bun scripts/freeze.ts push --prune",
+    "GIT_PAGER='mise run hold:release 1' git log",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
