@@ -55,13 +55,10 @@ function otherDeployCountOf(
 export function HoldsSection({
   holds,
   arrival,
-  landingNote,
 }: {
   holds: SectionQuery<HoldsSnapshot>;
   /** 通知などから区画へ移る受け取りと、強調の状態。 */
   arrival: SectionArrival;
-  /** 反映の承認待ちが無いまま着地したときの、見出しの下の1文。無ければ`null`。 */
-  landingNote: string | null;
 }) {
   const releaseHold = useReleaseHold();
   const releaseFreeze = useReleaseFreeze();
@@ -114,9 +111,6 @@ export function HoldsSection({
     >
       {(data, now) => (
         <>
-          {landingNote === null ? null : (
-            <p className="text-small text-muted-foreground">{landingNote}</p>
-          )}
           <StopAllPanel
             view={data.stop_all}
             locked={stopLocked}

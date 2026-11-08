@@ -33,7 +33,7 @@ describe("systemTargetSection", () => {
 
 describe("the target of the notice guide", () => {
   test("is the section of the small table, for a kind that the table has", () => {
-    expect(noticeGuide("stop_all_active").target?.section).toBe(
+    expect(noticeGuide("stop_all_active").target?.section ?? null).toBe(
       systemTargetSection("stop_all_active"),
     );
   });

@@ -1,8 +1,9 @@
 // サイドバーの「システム」に出す件数。システムの画面でしか解けない操作を、要対応の通知から数える。
 // 件数は要対応の件数と同じ通知から来るので、要対応の内訳と食い違わない。要対応の合計には足さない。
+// 通知の案内の文面は取り込まず、種類の小さな表(`systemTargetKinds.ts`)だけを読む。
 
 import type { ConsoleSummary } from "../api/guards/summary.ts";
-import { noticeGuide } from "./noticeGuide.ts";
+import { systemTargetSection } from "./systemTargetKinds.ts";
 
 /**
  * 未解決の要対応の通知のうち、対応の行き先がシステムの画面の区画である通知の数。
@@ -19,6 +20,6 @@ export function systemActionCount(summary: ConsoleSummary | undefined): number {
     (notice) =>
       !notice.resolved &&
       notice.severity === "action" &&
-      noticeGuide(notice.kind).target !== null,
+      systemTargetSection(notice.kind) !== null,
   ).length;
 }

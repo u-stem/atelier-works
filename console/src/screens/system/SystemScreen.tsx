@@ -57,9 +57,9 @@ import { SystemSection } from "./SystemSection.tsx";
 import { refreshStatusOfSystem } from "./systemRefresh.ts";
 import {
   arrivalTarget,
+  chipJumpParams,
   HOLDS_HEADING_ID,
   type HoldsFetch,
-  landingNote,
   needsTabSwitch,
   type PendingJump,
   shouldDiscardJump,
@@ -337,8 +337,11 @@ export function SystemScreen() {
     );
   };
   const onJump = (target: SystemTabId, id: string): void => {
-    if (needsTabSwitch(target, tab)) {
-      selectTab(target);
+    // 同じタブへのチップでも、待っている区画は捨てる。遅れて着地する区画が、人の操作の後でスクロールとフォーカスを奪わないためである。
+    if (needsTabSwitch(target, tab) || pendingSection !== null) {
+      setSearchParams((current) => chipJumpParams(current, target), {
+        replace: true,
+      });
     }
     setJump({ tab: target, id });
   };
@@ -350,12 +353,10 @@ export function SystemScreen() {
     isFetching: holds.isFetching,
   };
   const highlight = useSectionHighlight();
-  const [landed, setLanded] = useState<SystemSectionId | null>(null);
   const clearSection = (id: SystemSectionId): void => {
     setSearchParams((current) => afterArrival(current, id), { replace: true });
   };
   const onArrived = (id: SystemSectionId): void => {
-    setLanded(null);
     clearSection(id);
     if (shouldHighlight(id, holdsFetch)) {
       highlight.show(id);
@@ -365,7 +366,6 @@ export function SystemScreen() {
   useEffect(() => {
     if (fallBack && pendingSection !== null) {
       jumpToSection(HOLDS_HEADING_ID);
-      setLanded(pendingSection);
       setSearchParams((current) => afterArrival(current, pendingSection), {
         replace: true,
       });
@@ -402,15 +402,7 @@ export function SystemScreen() {
           mounted={visited.has("status")}
         >
           <Sections>
-            <HoldsSection
-              holds={holds}
-              arrival={arrival}
-              landingNote={landingNote({
-                landed,
-                holds: holds.data,
-                summary: summary.data,
-              })}
-            />
+            <HoldsSection holds={holds} arrival={arrival} />
             <ReleaseSection status={status} summary={summary} />
             <WorkerLoadSection status={status} />
           </Sections>

@@ -4,6 +4,7 @@
 // 足し忘れは、`tests/scripts/console_notices_contract.test.ts`が落として知らせる。
 
 import type { SystemSectionId } from "./systemSections.ts";
+import { systemTargetSection } from "./systemTargetKinds.ts";
 
 /** 通知の対応を、システムの画面のどの区画で行うか。通知の詳細の移動のボタンが読む。 */
 export type SystemTarget = {
@@ -37,22 +38,36 @@ export const GENERIC_NOTICE_GUIDE: NoticeGuide = {
 function guide(
   meaning: string,
   action: string,
-  extra: {
-    commands?: readonly string[];
-    note?: string;
-    target?: SystemTarget;
-  } = {},
+  extra: { commands?: readonly string[]; note?: string } = {},
 ): NoticeGuide {
   return {
     meaning,
     action,
     commands: extra.commands ?? [],
     note: extra.note ?? null,
-    target: extra.target ?? null,
+    target: null,
   };
 }
 
-const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
+/** 移動のボタンの名前。区画ごとに決まる。 */
+const TARGET_LABELS: Readonly<Record<SystemSectionId, string>> = {
+  "deploy-approvals": "システムの画面の反映の承認待ちへ",
+  "stop-all": "システムの画面の全停止へ",
+  holds: "システムの画面の保留と凍結へ",
+};
+
+/**
+ * 種類の行き先を、案内に付ける。どの種類が行き先を持つかは`systemTargetKinds.ts`が持ち、
+ * ここは、その区画のボタンの名前を足すだけである。
+ */
+function withTarget(kind: string, base: NoticeGuide): NoticeGuide {
+  const section = systemTargetSection(kind);
+  return section === null
+    ? base
+    : { ...base, target: { section, label: TARGET_LABELS[section] } };
+}
+
+const GUIDES_BY_KIND: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "approval_notify_failed",
     guide(
@@ -140,10 +155,6 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       {
         commands: ["mise run hold:list", "mise run hold:release -- <id>"],
         note: "保留が解けると、次の取得で自動で再開します。通知は情報なので、システム画面に7日だけ出ます。1件の保留の期限は最長24時間です。",
-        target: {
-          section: "holds",
-          label: "システムの画面の保留と凍結へ",
-        },
       },
     ),
   ],
@@ -269,10 +280,6 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       "システムの画面の「反映の承認待ち」で、版と保護パスの変更を確かめ、承認してください。承認すると、次の自己更新(2分以内)が反映します。受け入れない変更なら却下し、mainへ戻すPRを作ってマージしてください。",
       {
         note: "承認すると、この通知は自動で解決されます。却下すると通知は残り、mainへ戻すPRの反映で解決されます。mainが進んで新しい版の承認待ちになったときと、反映が済んだときも、自動で解決されます。この画面から解決することはできません。",
-        target: {
-          section: "deploy-approvals",
-          label: "システムの画面の反映の承認待ちへ",
-        },
       },
     ),
   ],
@@ -583,10 +590,6 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       {
         commands: ["mise run stop:release"],
         note: "解除すると、5分以内に自動で解決されます。Consoleからは解決できません。factory_configの*_enabledは解除しても戻らないので、機能は動き出しません。",
-        target: {
-          section: "stop-all",
-          label: "システムの画面の全停止へ",
-        },
       },
     ),
   ],
@@ -602,6 +605,10 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
 ]);
+
+const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map(
+  [...GUIDES_BY_KIND].map(([kind, base]) => [kind, withTarget(kind, base)]),
+);
 
 /** `kind`の説明。表に無い種類は`GENERIC_NOTICE_GUIDE`を返す。 */
 export function noticeGuide(kind: string): NoticeGuide {

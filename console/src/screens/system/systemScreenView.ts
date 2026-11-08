@@ -1,13 +1,14 @@
 // システムの画面が、取得の結果と帯とタブを結ぶ規則。描画から切り離して、純関数でテストする。
 
 import type { HoldsSnapshot } from "../../api/guards/holds.ts";
-import type { ConsoleSummary } from "../../api/guards/summary.ts";
 import { isHeaderError } from "../../app/refreshStatus.ts";
 import { deployApprovalsView } from "../../lib/deployApprovalsView.ts";
-import { DEPLOY_APPROVALS_TEXT } from "../../lib/labels.ts";
-import { noticeGuide } from "../../lib/noticeGuide.ts";
-import { SECTION_TAB, type SystemSectionId } from "../../lib/systemSections.ts";
-import type { SystemTabId } from "../../lib/systemTabs.ts";
+import {
+  SECTION_TAB,
+  type SystemSectionId,
+  withSystemSection,
+} from "../../lib/systemSections.ts";
+import { type SystemTabId, withSystemTab } from "../../lib/systemTabs.ts";
 
 /** 取得の結果のうち、失敗の印を決めるのに読む項目。 */
 export type FailureQuery = {
@@ -184,39 +185,14 @@ export function shouldDiscardJump(
   return pending !== null && SECTION_TAB[pending] !== selected;
 }
 
+/**
+ * 帯のチップを押したときのクエリ。チップの行き先のタブを開き、待っている区画を外す。
+ * 同じタブへのチップでも外す。待つ間に遅れて着地する区画が、人の操作の後で、
+ * スクロールとフォーカスを奪わないためである。他のクエリは残す。
+ */
 export function chipJumpParams(
   current: URLSearchParams,
-  _target: SystemTabId,
+  target: SystemTabId,
 ): URLSearchParams {
-  return new URLSearchParams(current);
-}
-
-/**
- * 反映の承認待ちの区画が無いまま着地したとき、見出しの下に出す1文。
- * 承認待ちが無いのに、未解決の反映の承認の通知が残るのは、人が却下した後の状態である。
- * 承認待ちが読めないとき(旧版のbackendを含む)と、通知が無いときは、言い切れないので出さない。
- */
-export function landingNote(input: {
-  readonly landed: SystemSectionId | null;
-  readonly holds: HoldsSnapshot | undefined;
-  readonly summary: ConsoleSummary | undefined;
-}): string | null {
-  const { landed, holds, summary } = input;
-  if (landed !== "deploy-approvals" || holds === undefined) {
-    return null;
-  }
-  const approvals = holds.deploy_approvals;
-  if (
-    approvals === undefined ||
-    !approvals.ok ||
-    approvals.pending.length > 0
-  ) {
-    return null;
-  }
-  const open = (summary?.notices ?? []).some(
-    (notice) =>
-      !notice.resolved &&
-      noticeGuide(notice.kind).target?.section === "deploy-approvals",
-  );
-  return open ? DEPLOY_APPROVALS_TEXT.noPendingNote : null;
+  return withSystemSection(withSystemTab(current, target), null);
 }
