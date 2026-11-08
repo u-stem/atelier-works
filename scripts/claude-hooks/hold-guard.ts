@@ -1620,9 +1620,9 @@ export function findHoldOperation(
     readonly clock?: HoldClock;
   } = {},
 ): HoldFinding | null {
+  // 代入の値の拒否と後ろの判定は合わせ、強い方(`operation`が最上位)を返す。
   const assigned = assignmentFinding(extras.assignments ?? []);
-  if (assigned !== null) return assigned;
-  return holdOperationAt(words, {
+  const found = holdOperationAt(words, {
     inputs,
     own: inputs,
     stdin,
@@ -1632,6 +1632,7 @@ export function findHoldOperation(
     xargsUnknown: extras.xargsUnknown ?? false,
     inString: false,
   });
+  return stronger(assigned, found);
 }
 
 /**
