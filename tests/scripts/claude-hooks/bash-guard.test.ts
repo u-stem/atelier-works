@@ -2517,3 +2517,47 @@ describe("bash-guard allows work near the stop-all", () => {
     expect(await decide(command)).toBe("allow");
   });
 });
+
+/** `script -qc '<command>' /dev/null`で、コマンドを`levels`回、文字列に包む。 */
+function nestedInScript(command: string, levels: number): string {
+  let wrapped = command;
+  for (let level = 0; level < levels; level += 1) {
+    wrapped = `script -qc '${wrapped.replace(/'/g, "'\\''")}' /dev/null`;
+  }
+  return wrapped;
+}
+
+// 全停止の判定は、前置きの後ろと、コマンド文字列の入れ子を読む。判定の部品を共通にするときに、この挙動を変えない。
+describe("bash-guard keeps reading prefixes and nested strings for the stop-all", () => {
+  test("denies a stop-all task inside a string nested four times", async () => {
+    expect(await decide(nestedInScript("mise run stop", 4))).toBe("deny");
+  });
+
+  test("denies the stop-all CLI by its name inside a string nested six times", async () => {
+    expect(
+      await decide(nestedInScript("bun scripts/stop_all.ts release", 6)),
+    ).toBe("deny");
+  });
+
+  test("does not read a task name inside a string nested five times", async () => {
+    expect(await decide(nestedInScript("mise run stop", 5))).toBe("allow");
+  });
+
+  test("denies a stop-all task in a string that comes before the launcher word", async () => {
+    expect(await decide(`script -qc "mise run stop" bun --version`)).toBe(
+      "deny",
+    );
+  });
+
+  test("allows a reading command in a string that comes before the launcher word", async () => {
+    expect(
+      await decide(`script -qc "cat scripts/stop_all.ts" bun --version`),
+    ).toBe("allow");
+  });
+
+  test("denies reading the stop-all code behind a prefix when there is no launcher word", async () => {
+    expect(await decide("script -q /dev/null cat scripts/stop_all.ts")).toBe(
+      "deny",
+    );
+  });
+});
