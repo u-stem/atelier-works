@@ -190,7 +190,7 @@ locks:
   f/factory/lib/summary_support: f04c8bd8ca44a82c8b53a7799cf65b22f9b1fe13b1f33271e71586e460d53029
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
   f/factory/lib/tracked_pr_candidates: 255226636be8af88987734df7badb6ccbd0dbb7ea50a99dafc21f5d85890ca8a
-  f/factory/lib/types: e54ed359dc2e187340ce40c48b992d5fda5203117b7e24c00b9560d918f67f1d
+  f/factory/lib/types: 8b5833843e3e822dd92053b2acf26f6a18a83ffae28f410e09b0790ea5d8d760
   f/factory/lib/worker_load_support: b68337109b6233aacd50be93bf977391910fcaf328a7a7ae6ba01be1269fe00c
   f/factory/lib/workspace: 09f2757e8f23ee8848c3eb57ffb81844196b26a4b5492c8bd3a5fe25e1df39c5
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a

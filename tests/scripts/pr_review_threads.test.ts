@@ -421,6 +421,153 @@ describe("threadResponseKind", () => {
     ).toBe("reply");
   });
 
+  // 再レビューの答えの後は、次に人が返信するまで、同じスレッドに答えない。
+  describe("after the re-review answered the thread", () => {
+    const QUESTION = "なぜこの実装にしたのですか？";
+
+    function answeredBy(response: ThreadResponse): ReviewThread {
+      const answer = renderThreadReply(response, 9);
+      return thread({
+        lastCommentAuthorLogin: VIEWER,
+        lastCommentBody: answer,
+        lastCommentDatabaseId: 3,
+        comments: [
+          comment(VIEWER, FINDING),
+          comment("alice", QUESTION, 2),
+          comment(VIEWER, answer, 3),
+        ],
+      });
+    }
+
+    test("does not answer a thread the re-review answered with answered", () => {
+      expect(
+        threadResponseKind(
+          answeredBy({
+            thread_id: 1,
+            decision: "answered",
+            body: "事実です。",
+          }),
+          VIEWER,
+          isAllowed,
+        ),
+      ).toBeNull();
+    });
+
+    test("does not answer a thread the re-review objected to", () => {
+      expect(
+        threadResponseKind(answeredBy(REJECTED), VIEWER, isAllowed),
+      ).toBeNull();
+    });
+
+    test("does not answer a thread the re-review accepted", () => {
+      expect(
+        threadResponseKind(answeredBy(ACCEPTED), VIEWER, isAllowed),
+      ).toBeNull();
+    });
+
+    test("does not answer a thread the re-review confirmed as addressed", () => {
+      expect(
+        threadResponseKind(answeredBy(ADDRESSED), VIEWER, isAllowed),
+      ).toBeNull();
+    });
+
+    test("does not answer a viewer reply that has only the reply role tag", () => {
+      expect(
+        threadResponseKind(
+          thread(replied(VIEWER, "[Factoryによる返信]\n理由が不十分です。")),
+          VIEWER,
+          isAllowed,
+        ),
+      ).toBeNull();
+    });
+
+    test("does not answer a viewer reply that has only the earlier pr_review role tag", () => {
+      expect(
+        threadResponseKind(
+          thread(replied(VIEWER, "[pr_review 自動レビュー]\n事実です。")),
+          VIEWER,
+          isAllowed,
+        ),
+      ).toBeNull();
+    });
+
+    test("does not take a thread that starts with the reply role tag for a finding", () => {
+      expect(
+        threadResponseKind(
+          thread({
+            firstCommentBody: "[Factoryによる返信]\n事実です。",
+            comments: [comment(VIEWER, "[Factoryによる返信]\n事実です。")],
+          }),
+          VIEWER,
+          isAllowed,
+        ),
+      ).toBeNull();
+    });
+
+    test("does not answer a viewer reply that has only the answer marker", () => {
+      expect(
+        threadResponseKind(
+          thread(
+            replied(
+              VIEWER,
+              "事実です。\n\n<!-- factory:pr_review_answer:9 -->",
+            ),
+          ),
+          VIEWER,
+          isAllowed,
+        ),
+      ).toBeNull();
+    });
+
+    test("does not answer after a person who is not allowed replied to the answer", () => {
+      const answer = renderThreadReply(
+        { thread_id: 1, decision: "answered", body: "事実です。" },
+        9,
+      );
+      expect(
+        threadResponseKind(
+          thread({
+            lastCommentAuthorLogin: "mallory",
+            lastCommentBody: "ok",
+            lastCommentDatabaseId: 4,
+            comments: [
+              comment(VIEWER, FINDING),
+              comment("alice", QUESTION, 2),
+              comment(VIEWER, answer, 3),
+              comment("mallory", "ok", 4),
+            ],
+          }),
+          VIEWER,
+          isAllowed,
+        ),
+      ).toBeNull();
+    });
+
+    test("answers again when an allowed person replies after the answer", () => {
+      const answer = renderThreadReply(
+        { thread_id: 1, decision: "answered", body: "事実です。" },
+        9,
+      );
+      expect(
+        threadResponseKind(
+          thread({
+            lastCommentAuthorLogin: "alice",
+            lastCommentBody: "もう一点あります。",
+            lastCommentDatabaseId: 4,
+            comments: [
+              comment(VIEWER, FINDING),
+              comment("alice", QUESTION, 2),
+              comment(VIEWER, answer, 3),
+              comment("alice", "もう一点あります。", 4),
+            ],
+          }),
+          VIEWER,
+          isAllowed,
+        ),
+      ).toBe("reply");
+    });
+  });
+
   test("keeps a commit reply as addressable even after a free-text reply", () => {
     expect(
       threadResponseKind(
@@ -510,6 +657,24 @@ describe("reviewThreadsForPrompt", () => {
   test("strips the pr_review role tag from the body", () => {
     const { threads } = reviewThreadsForPrompt([thread()], VIEWER, isAllowed);
     expect(threads[0]?.comments[0]?.body).toBe("[IMO] consider this");
+  });
+
+  test("strips the reply role tag from the body of a reply", () => {
+    const { threads } = reviewThreadsForPrompt(
+      [thread(replied(VIEWER, "[Factoryによる返信]\n事実です。"))],
+      VIEWER,
+      isAllowed,
+    );
+    expect(threads[0]?.comments[1]?.body).toBe("事実です。");
+  });
+
+  test("strips the earlier pr_review role tag from the body of a reply", () => {
+    const { threads } = reviewThreadsForPrompt(
+      [thread(replied(VIEWER, "[pr_review 自動レビュー]\n事実です。"))],
+      VIEWER,
+      isAllowed,
+    );
+    expect(threads[0]?.comments[1]?.body).toBe("事実です。");
   });
 
   test("cuts a long comment to 2000 characters and an ellipsis", () => {
@@ -1178,6 +1343,7 @@ const ACCEPTED: ThreadResponse = {
 };
 const REJECTED: ThreadResponse = { ...ACCEPTED, decision: "skip_rejected" };
 const ADDRESSED: ThreadResponse = { ...ACCEPTED, decision: "addressed" };
+const ANSWERED: ThreadResponse = { ...ACCEPTED, decision: "answered" };
 
 describe("selectThreadResponses", () => {
   test("applies skip_accepted to a skip thread", () => {
@@ -1237,6 +1403,33 @@ describe("selectThreadResponses", () => {
     expect(applied[0]?.thread.id).toBe("reply");
   });
 
+  test("applies answered to a free-text reply thread", () => {
+    const { applied } = selectThreadResponses(
+      [REPLY_THREAD],
+      VIEWER,
+      isAllowed,
+      [ANSWERED],
+    );
+    expect(applied[0]?.thread.id).toBe("reply");
+  });
+
+  test("drops answered on a skip thread", () => {
+    const { droppedCount } = selectThreadResponses(
+      [SKIP_THREAD],
+      VIEWER,
+      isAllowed,
+      [ANSWERED],
+    );
+    expect(droppedCount).toBe(1);
+  });
+
+  test("drops answered on an addressable thread", () => {
+    const { droppedCount } = selectThreadResponses([OPEN], VIEWER, isAllowed, [
+      ANSWERED,
+    ]);
+    expect(droppedCount).toBe(1);
+  });
+
   test("drops an answer to a free-text reply from a person who is not allowed", () => {
     const outsider = thread(replied("mallory", "直しました"));
     const { applied } = selectThreadResponses([outsider], VIEWER, isAllowed, [
@@ -1294,9 +1487,21 @@ describe("selectThreadResponses", () => {
 });
 
 describe("renderThreadReply", () => {
-  test("starts with the pr_review role tag", () => {
+  test("starts with the reply role tag", () => {
     const body = renderThreadReply(ACCEPTED, 9);
-    expect(body.split("\n")[0]).toBe("[pr_review 自動レビュー]");
+    expect(body.split("\n")[0]).toBe("[Factoryによる返信]");
+  });
+
+  test("starts an objection with the reply role tag", () => {
+    expect(renderThreadReply(REJECTED, 9).split("\n")[0]).toBe(
+      "[Factoryによる返信]",
+    );
+  });
+
+  test("starts an answer with the reply role tag", () => {
+    expect(renderThreadReply(ANSWERED, 9).split("\n")[0]).toBe(
+      "[Factoryによる返信]",
+    );
   });
 
   test("ends an accepted skip with the accepted line", () => {
@@ -1321,6 +1526,22 @@ describe("renderThreadReply", () => {
     expect(
       hasMarker(renderThreadReply(REJECTED, 9), "pr_review_objection", 9),
     ).toBe(true);
+  });
+
+  test("ends an answer with the answer line", () => {
+    expect(renderThreadReply(ANSWERED, 9)).toContain("\n回答\n");
+  });
+
+  test("marks an answer as an answer", () => {
+    expect(
+      hasMarker(renderThreadReply(ANSWERED, 9), "pr_review_answer", 9),
+    ).toBe(true);
+  });
+
+  test("does not mark an answer as an acknowledgement", () => {
+    expect(hasMarker(renderThreadReply(ANSWERED, 9), "pr_review_ack")).toBe(
+      false,
+    );
   });
 
   test("neutralizes a marker written in the body", () => {

@@ -794,7 +794,67 @@ describe("reviewPrompt", () => {
         },
         FIXED_UUID,
       );
-      expect(prompt).toContain("a question or small talk");
+      expect(prompt).toContain("small talk");
+    });
+
+    test("tells a delta review to answer a question with answered", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("use `answered`");
+    });
+
+    test("tells a threads-only review to answer a question with answered", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("use `answered`");
+    });
+
+    test("tells the review that answered does not resolve the thread", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("`answered` does not resolve the thread");
+    });
+
+    test("tells the review to answer from facts and not to guess", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("Write no guess.");
+    });
+
+    test("tells the review never to turn a question into addressed", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("Never turn a question into `addressed`.");
     });
 
     test("leaves the binary files out of a threads-only review", () => {
@@ -1263,7 +1323,7 @@ describe("JSON schema constants", () => {
   test("REVIEW_SCHEMA's thread decision enum matches ThreadResponseDecision", () => {
     expect(
       REVIEW_SCHEMA.properties.thread_responses.items.properties.decision.enum,
-    ).toEqual(["addressed", "skip_accepted", "skip_rejected"]);
+    ).toEqual(["addressed", "skip_accepted", "skip_rejected", "answered"]);
   });
 
   test("FIX_SCHEMA's outcome enum matches FixOutcome", () => {

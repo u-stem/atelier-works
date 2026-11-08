@@ -899,6 +899,46 @@ describe("selectThreadsToResolve", () => {
   const skippedFixReplyBody =
     "[pr_fix 自動返信]\nnot doing this\n\n対応: 見送り";
 
+  test("does not resolve a thread whose last comment is an answer to a question", () => {
+    const ids = selectThreadsToResolve(
+      [
+        thread({
+          lastCommentBody:
+            "[pr_review 自動レビュー]\n事実です。\n\n回答\n\n<!-- factory:pr_review_answer:9 -->",
+          comments: [
+            {
+              databaseId: 1,
+              authorLogin: "factory-bot",
+              authorId: null,
+              body: "finding",
+            },
+            {
+              databaseId: 2,
+              authorLogin: "factory-bot",
+              authorId: null,
+              body: "answer",
+            },
+          ],
+        }),
+      ],
+      "factory-bot",
+    );
+    expect(ids).toEqual([]);
+  });
+
+  test("skips a thread that starts with the reply role tag", () => {
+    const ids = selectThreadsToResolve(
+      [
+        thread({
+          firstCommentBody: "[Factoryによる返信]\nfixed",
+          lastCommentBody: fixedFixReplyBody,
+        }),
+      ],
+      "factory-bot",
+    );
+    expect(ids).toEqual([]);
+  });
+
   test("skips a thread GitHub already marked resolved", () => {
     const ids = selectThreadsToResolve(
       [thread({ isResolved: true, lastCommentBody: fixedFixReplyBody })],
@@ -2356,6 +2396,46 @@ describe("posting a review once per sha", () => {
         rerunInput({
           threadResponses: [{ ...ACCEPT_SKIP, decision: "skip_rejected" }],
         }),
+        SILENT,
+      );
+      expect(fake.calls.some(isResolveCall)).toBe(false);
+    });
+
+    const QUESTION_THREADS = () =>
+      threadsResponse([
+        skipThreadNode("PRRT_1", 501, "IMO", "なぜこの実装にしたのですか？"),
+      ]);
+    const ANSWER: ThreadResponse = {
+      ...ACCEPT_SKIP,
+      decision: "answered",
+      body: "コードの事実だけを書きます。",
+    };
+
+    test("posts the answer to a question reply", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        QUESTION_THREADS(),
+        ghApiOk({ id: 100 }),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ANSWER] }),
+        SILENT,
+      );
+      expect(fake.calls.some(isReplyCall)).toBe(true);
+    });
+
+    test("keeps a thread open after answering a question", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        QUESTION_THREADS(),
+        ghApiOk({ id: 100 }),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ANSWER] }),
         SILENT,
       );
       expect(fake.calls.some(isResolveCall)).toBe(false);

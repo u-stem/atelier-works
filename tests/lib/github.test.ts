@@ -5546,6 +5546,26 @@ describe("listPrReviewComments", () => {
     expect(result.items).toEqual([]);
   });
 
+  test("leaves out the factory's answer replies", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        rawReviewComment({
+          id: 7,
+          user: { login: VIEWER },
+          body: "事実です。\n\n<!-- factory:pr_review_answer:9 -->",
+        }),
+      ]),
+    ]);
+    const result = await listPrReviewComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      VIEWER,
+    );
+    expect(result.items).toEqual([]);
+  });
+
   test("keeps the factory's objection replies as feedback", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk([
