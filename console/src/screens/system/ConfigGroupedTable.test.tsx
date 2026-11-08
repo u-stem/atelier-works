@@ -162,6 +162,18 @@ function headingTagOf(html: string, label: string): string {
 
 const TABLE_LINE = "@min-[40rem]:border-l @min-[40rem]:border-border";
 
+describe("ConfigList alignment of the operation column", () => {
+  test("aligns the heading of the operation column to the left like the other columns", () => {
+    const html = renderItems([item("daily_budget_usd", 5)], choose);
+    expect(headingTagOf(html, "操作")).not.toContain("text-right");
+  });
+
+  test("aligns the cell of the operation column to the left like the other columns", () => {
+    const html = renderItems([item("daily_budget_usd", 5)], choose);
+    expect(cellTagsOf(html, "daily_budget_usd")[1]).not.toContain("text-right");
+  });
+});
+
 describe("ConfigList vertical lines between the columns", () => {
   test("draws a line before the value column in the heading row", () => {
     const html = renderItems([item("daily_budget_usd", 5)], choose);
