@@ -3108,14 +3108,29 @@ describe("bash-guard reads only the value of an assignment in a string", () => {
   });
 });
 
-// 入力の複製(`<&3`)は、読めない入力のファイル記述子である。出力の複製(`2>&1`)だけを入力のファイルから外す。
-describe("bash-guard keeps a duplicated input descriptor as an unreadable input", () => {
-  test.each(["script -q /dev/null <&3", "ssh host <&3", "ssh host <&0"])(
-    "denies %s",
-    async (command) => {
-      expect(await decide(command, { subagent: true })).toBe("deny");
-    },
-  );
+// 入力の複製(`<&3`)、出力の複製(`>&3`)、`/dev/null`を入力にする形は、字面では見分けられないので、読めない入力として拒否する。
+describe("bash-guard keeps a duplicated descriptor and /dev/null as an unreadable input", () => {
+  test.each([
+    "script -q /dev/null <&3",
+    "ssh host <&3",
+    "ssh host <&0",
+    "ssh host >&3",
+    "ssh host < /dev/null",
+    "script -q /dev/null mise run check >&3",
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 上限を超えた拒否の理由は、変数やglobの語がなくても拒否されうることを伝える。
+describe("bash-guard explains a denial caused by a budget", () => {
+  test("names the pipeline length and input size in the reason", async () => {
+    const reason = await denyReason(
+      `${"caffeinate true | ".repeat(257)}caffeinate true`,
+      { subagent: true },
+    );
+    expect(reason).toContain("too long or its input too large");
+  });
 });
 
 // 数千の代入の語と、数千の語や上流のコマンドを並べた文字列でも、フックのタイムアウト(10秒)の中で終える。
@@ -3170,6 +3185,35 @@ describe("bash-guard finishes a long top-level pipeline in time", () => {
         subagent: true,
       }),
     ).toBe("deny");
+  });
+});
+
+// 前置きのコマンドを256段つなぎ、各段に語を並べた1行。語の数が予算(3万語)に収まるかで分かれる。
+function widePipeline(stages: number, wordsPerStage: number): string {
+  const stage = `caffeinate true ${"x ".repeat(wordsPerStage)}`;
+  return `${`${stage}| `.repeat(stages - 1)}${stage}`;
+}
+
+describe("bash-guard bounds the work for a wide prefixed pipeline", () => {
+  test("allows 256 stages of about a hundred words each in time", async () => {
+    const started = Date.now();
+    const decision = await decide(widePipeline(256, 100), { subagent: true });
+    expect(decision).toBe("allow");
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  test("denies 256 stages of about two hundred words each in time", async () => {
+    const started = Date.now();
+    const decision = await decide(widePipeline(256, 200), { subagent: true });
+    expect(decision).toBe("deny");
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  test("denies 256 stages of eight hundred words each in time", async () => {
+    const started = Date.now();
+    const decision = await decide(widePipeline(256, 800), { subagent: true });
+    expect(decision).toBe("deny");
+    expect(Date.now() - started).toBeLessThan(3000);
   });
 });
 
