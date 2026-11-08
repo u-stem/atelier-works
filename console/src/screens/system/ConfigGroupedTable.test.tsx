@@ -24,8 +24,11 @@ function renderItems(
 
 /** `key`の項目の行の、見出しのセルを除いたセルの中身。 */
 function cellsOf(html: string, key: string): string[] {
+  // キーの折り返しの位置(`<wbr/>`)は、文字ではないので外して照合する。
   const row = (html.match(/<tr[^>]*>.*?<\/tr>/g) ?? []).find(
-    (tr) => tr.includes('scope="row"') && tr.includes(`>${key}<`),
+    (tr) =>
+      tr.includes('scope="row"') &&
+      tr.replaceAll("<wbr/>", "").includes(`>${key}<`),
   );
   return (row?.split(/<td[^>]*>/).slice(1) ?? []).map((cell) =>
     cell.replace(/<\/td>.*$/, ""),
@@ -128,8 +131,40 @@ describe("ConfigList as grouped tables", () => {
   });
 
   test("makes the key the header of its row", () => {
+    expect(
+      renderItems([item("daily_budget_usd", 5)]).replaceAll("<wbr/>", ""),
+    ).toMatch(/<th[^>]*scope="row"[^>]*>daily_budget_usd<\/th>/);
+  });
+
+  test("switches from the stack to a table at a container width of 40rem", () => {
     expect(renderItems([item("daily_budget_usd", 5)])).toMatch(
-      /<th[^>]*scope="row"[^>]*>daily_budget_usd<\/th>/,
+      /<table[^>]*@min-\[40rem\]:table[ "]/,
+    );
+  });
+});
+
+describe("ConfigList key of an item", () => {
+  const key = "implement_max_budget_usd_per_run";
+
+  function headerOf(html: string): string {
+    return html.match(/<th[^>]*scope="row"[^>]*>(.*?)<\/th>/)?.[1] ?? "";
+  }
+
+  test("offers a place to break the line after each underscore", () => {
+    expect(headerOf(renderItems([item(key, 5)]))).toBe(
+      "implement_<wbr/>max_<wbr/>budget_<wbr/>usd_<wbr/>per_<wbr/>run",
+    );
+  });
+
+  test("reads the key as the original text without the places to break", () => {
+    expect(headerOf(renderItems([item(key, 5)])).replaceAll("<wbr/>", "")).toBe(
+      key,
+    );
+  });
+
+  test("writes a key that holds markup as text", () => {
+    expect(headerOf(renderItems([item("a_<b>x</b>", 5)]))).toBe(
+      "a_<wbr/>&lt;b&gt;x&lt;/b&gt;",
     );
   });
 });
