@@ -3379,7 +3379,7 @@ describe("bash-guard allows a subagent to add words only to a read-only tool", (
   test.each([
     "git ls-files | xargs cat",
     "find . -name '*.ts' | xargs grep -l x",
-    "ls | xargs -n1 -I{} head {}",
+    "ls | xargs -n1 head",
     "echo a | xargs -0 -P4 wc -l",
     "echo a | xargs -r stat",
     "echo a | xargs file",
@@ -3421,7 +3421,6 @@ describe("bash-guard allows a subagent to run an inspection tool through find", 
     "find . -exec biome check {} +",
     "find . -exec bunx biome check {} +",
     "find . -exec bunx --bun biome check {} \\;",
-    "find . -exec bun test {} +",
     "find . -execdir bunx biome check {} \\;",
   ])("%s", async (command) => {
     expect(await decide(command, { subagent: true })).toBe("allow");
@@ -3435,6 +3434,128 @@ describe("bash-guard denies a subagent that runs code through find with a runner
     "find . -exec node {} +",
   ])("%s", async (command) => {
     expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// `test`を最初のオペランドとする実行系は、テストのファイルを読み込んで実行する。外部の挙動は確かめられないので、`find`の後ろでも通さない。
+describe("bash-guard denies a subagent that runs a test runner through find", () => {
+  test.each([
+    "find . -exec bun test {} +",
+    "find . -exec deno test {} +",
+    "find . -exec npm test {} +",
+    "find . -exec bun run test {} +",
+    "find . -execdir bun test --preload ./x.ts {} \\;",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 実行される側が決まらない`xargs`は拒否する。前置きや置換のオプションが、後ろの語を別のコマンドに変えるためである。
+describe("bash-guard denies a subagent whose xargs command cannot be told", () => {
+  test.each([
+    "ls | xargs env cat",
+    "ls | xargs nohup cat",
+    "ls | xargs time cat",
+    "ls | xargs command cat",
+    "ls | xargs timeout 5 cat",
+    "ls | xargs sudo cat",
+    "ls | xargs xargs cat",
+    "ls | xargs mise exec -- cat",
+    "ls | xargs FOO=1 cat",
+    "ls | xargs -I{} cat {}",
+    "ls | xargs -n1 -I{} head {}",
+    "ls | xargs -J % cat %",
+    "ls | xargs -i cat {}",
+    "ls | xargs --replace cat {}",
+    "ls | xargs --replace=@ cat @",
+    "ls | xargs -0I{} cat {}",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows a bare xargs, which runs echo", async () => {
+    expect(await decide("ls | xargs", { subagent: true })).toBe("allow");
+  });
+});
+
+// `--max-lines`の値は`=`付きで渡す(GNU)。次の語は値でなく、実行される側である。
+describe("bash-guard reads the next word after xargs --max-lines as the command", () => {
+  test("denies a program outside the read-only set after --max-lines", async () => {
+    expect(
+      await decide("echo a | xargs --max-lines flock cat", { subagent: true }),
+    ).toBe("deny");
+  });
+
+  test("allows a read-only tool after --max-lines with a value", async () => {
+    expect(
+      await decide("echo a | xargs --max-lines=2 cat", { subagent: true }),
+    ).toBe("allow");
+  });
+});
+
+// `find`の実行系の区間は、`;`か`+`で閉じる。閉じるまでの`-exec`は、その区間の引数である。
+describe("bash-guard reads the regions of find -exec by where they close", () => {
+  test("allows a -exec inside an open region, which is an argument", async () => {
+    expect(
+      await decide("find . -exec cat -exec rm {} \\;", { subagent: true }),
+    ).toBe("allow");
+  });
+
+  test("denies a -exec after the region closed", async () => {
+    expect(
+      await decide("find . -exec cat {} \\; -exec rm {} \\;", {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test(
+    "finishes tens of thousands of unclosed -exec words in time",
+    async () => {
+      const started = Date.now();
+      const decision = await decide(`find . ${"-exec cat ".repeat(40000)}`, {
+        subagent: true,
+      });
+      expect(decision).toBe("allow");
+      expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+    },
+    WIDE_PIPELINE_TIMEOUT_MS * 2,
+  );
+});
+
+// 先頭の変数代入の値に、2度目のシェルで語を変える字が残っていれば、読めない値として拒否する。
+describe("bash-guard denies a subagent whose assignment value a second shell can reshape", () => {
+  test.each([
+    `FOO="a'b" cat x`,
+    `FOO='a"b' cat x`,
+    "FOO=a\\\\b cat x",
+    "FOO=sc*pts cat x",
+    "FOO=sc?ipts cat x",
+    "FOO=sc[a]ipts cat x",
+    "FOO={a,b} cat x",
+    `FOO='{"a":1}' cat x`,
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows a value with a space and no such character", async () => {
+    expect(await decide("FOO='a b' cat x", { subagent: true })).toBe("allow");
+  });
+});
+
+// `export`や`declare`の引数の代入も、先頭の代入と同じに値を調べる。
+describe("bash-guard checks the assignments that export and declare carry", () => {
+  test.each([
+    "export TARGET=scripts/hold.ts",
+    "declare X=hold:release",
+    "readonly PAGER=scripts/freeze.ts",
+    "local -x X=push:prune",
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows export of an unrelated value", async () => {
+    expect(await decide("export CI=1", { subagent: true })).toBe("allow");
   });
 });
 
