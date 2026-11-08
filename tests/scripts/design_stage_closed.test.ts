@@ -62,6 +62,7 @@ const DESIGN_ENABLED_TOKEN = /(?<![\w$])design_enabled(?![\w$])/g;
  * 型の宣言(`lib/types.ts`の`design_enabled: boolean`、`Pick`の中の名前)は、変換で消える。
  * `lib/config.ts`の6つは、既定値、通知の本文の中の2つ、リソースの読み取りの名前と既定値の参照、門の結果の導出である。
  * `console_config.ts`の1つは、設定タブに出す効く値のために、生の値を門へ渡す読みである。
+ * `console_config_update.ts`の1つは、設定変更の許可表(`BOOLEAN_STOP_ITEMS`)に入る名前である。許可表は`true`から`false`へ閉じる向きだけを許すので、設計の門を開く向き(`false`から`true`)と、`design_enabled_since`を書く経路にはならない。
  * 残りは、設定の値を読む呼び出しの側の1つずつである。`steps/design_apply.ts`は、却下の再生成の分岐で入口が閉じているかを読む。
  * `steps/implement_finish.ts`と`steps/pr_fix_finish.ts`は、設計の不足を返した実装とPRの修正を設計へ戻すかの判定に渡す。
  * `steps/pr_fix_apply.ts`と`steps/pr_fix_verify.ts`は、PRの修正のレビュー回に設計書を渡すかの判定に渡す。
@@ -71,6 +72,7 @@ const DESIGN_ENABLED_TOKEN = /(?<![\w$])design_enabled(?![\w$])/g;
 const ALLOWED_DESIGN_ENABLED_TOKENS: Readonly<Record<string, number>> = {
   "auto_retry_stale_image.ts": 1,
   "console_config.ts": 1,
+  "console_config_update.ts": 1,
   "lib/config.ts": 6,
   "lib/implement_finish_support.ts": 1,
   "lib/self_update_support.ts": 1,

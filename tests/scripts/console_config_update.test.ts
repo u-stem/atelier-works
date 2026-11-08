@@ -32,6 +32,8 @@ const RAW: Record<string, unknown> = {
   max_fix_diff_lines: 1500,
   implement_max_changed_files: 60,
   implement_enabled: true,
+  design_enabled: true,
+  design_enabled_since: "2026-11-01T00:00:00Z",
   dependabot_enabled: true,
   dependabot_merge_enabled: true,
   pr_ci_fix_enabled: true,
@@ -136,6 +138,7 @@ describe("updateConfigFromConsole: what it refuses before it records", () => {
     "pr_conflict_watch_enabled",
     "pr_ci_fix_enabled_since",
     "pr_conflict_fix_enabled_since",
+    "design_enabled_since",
     "retention_logs_days",
     "retention_work_items_days",
     "dependabot_min_published_days",
@@ -267,6 +270,19 @@ describe("updateConfigFromConsole: what it refuses before it records", () => {
     const { ports, events } = harness();
     const result = await updateConfigFromConsole(
       "implement_enabled",
+      false,
+      true,
+      ports,
+    );
+    expect([result, events]).toEqual([REFUSED("not_lowering"), []]);
+  });
+
+  test("refuses to switch the design stage on", async () => {
+    const { ports, events } = harness({
+      raw: { ...RAW, design_enabled: false },
+    });
+    const result = await updateConfigFromConsole(
+      "design_enabled",
       false,
       true,
       ports,
@@ -459,6 +475,97 @@ describe("updateConfigFromConsole: the result", () => {
     ]);
   });
 
+  test("returns the design stage with its values before and after", async () => {
+    const { ports } = harness();
+    expect(
+      await updateConfigFromConsole("design_enabled", true, false, ports),
+    ).toEqual({
+      refused: false,
+      item: "design_enabled",
+      before: true,
+      after: false,
+      verified: true,
+      action_audit: "recorded",
+    });
+  });
+
+  test("keeps design_enabled_since as it was read when the design stage is switched off", async () => {
+    const { ports, written } = harness();
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(written[0]?.design_enabled_since).toBe("2026-11-01T00:00:00Z");
+  });
+
+  test("changes only design_enabled when the design stage is switched off", async () => {
+    const { ports, written } = harness();
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(written).toEqual([{ ...RAW, design_enabled: false }]);
+  });
+
+  test("keeps the order of the keys when the design stage is switched off", async () => {
+    const { ports, written } = harness();
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(Object.keys(written[0] ?? {})).toEqual(Object.keys(RAW));
+  });
+
+  test("does not add design_enabled_since when the resource has no such key", async () => {
+    const { design_enabled_since: _unused, ...without } = RAW;
+    const { ports, written } = harness({ raw: without });
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(written[0]).toEqual({ ...without, design_enabled: false });
+  });
+
+  test("leaves design_enabled_since alone when another switch is switched off", async () => {
+    const { ports, written } = harness();
+    await updateConfigFromConsole("implement_enabled", true, false, ports);
+    expect(written[0]?.design_enabled_since).toBe("2026-11-01T00:00:00Z");
+  });
+
+  test("writes nothing when the design stage was already switched off", async () => {
+    const { ports, written } = harness({
+      raw: { ...RAW, design_enabled: false },
+    });
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(written).toEqual([]);
+  });
+
+  test("reads the written configuration as a design stage that is closed and not ignored", async () => {
+    const { ports, written } = harness();
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    const config = parseFactoryConfig(written[0]);
+    expect([config.design_enabled, config.design_enabled_ignored]).toEqual([
+      false,
+      false,
+    ]);
+  });
+
+  test("says the read back differs when design_enabled_since was changed by someone else", async () => {
+    const { ports } = harness({
+      afterWrite: { ...RAW, design_enabled: false, design_enabled_since: null },
+    });
+    expect(
+      await updateConfigFromConsole("design_enabled", true, false, ports),
+    ).toMatchObject({ refused: false, verified: false });
+  });
+
+  test("records the design stage in the same form as the other switches", async () => {
+    const { ports, sqlCalls } = harness();
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(sqlCalls[0]?.values[3]).toBe(
+      '{"item":"design_enabled","before":true,"after":false}',
+    );
+  });
+
+  test("refuses to take design_enabled_since as the item", async () => {
+    const { ports, events } = harness();
+    const result = await updateConfigFromConsole(
+      "design_enabled_since",
+      "2026-11-01T00:00:00Z",
+      null,
+      ports,
+    );
+    expect([result, events]).toEqual([REFUSED("item_not_allowed"), []]);
+  });
+
   test("records the switch values as booleans", async () => {
     const { ports, sqlCalls } = harness();
     await updateConfigFromConsole("implement_enabled", true, false, ports);
@@ -524,13 +631,14 @@ function configValue(item: string): unknown {
 }
 
 describe("the list of items that can be changed", () => {
-  test("names the five switches that only stop", () => {
+  test("names the six switches that only stop", () => {
     expect([...BOOLEAN_STOP_ITEMS]).toEqual([
       "implement_enabled",
       "dependabot_enabled",
       "dependabot_merge_enabled",
       "pr_ci_fix_enabled",
       "pr_conflict_fix_enabled",
+      "design_enabled",
     ]);
   });
 

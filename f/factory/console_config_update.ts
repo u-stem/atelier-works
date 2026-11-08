@@ -1,7 +1,7 @@
 // Consoleから、factory_configの許可した項目を1つ変更するscript。
 //
 // 変更できるのは、次の項目と向きだけである。
-// - 真偽の項目(`BOOLEAN_STOP_ITEMS`): `true`から`false`へ。自動でGitHubに書く機能を止める向きだけで、有効にする向きは人がCLIで行う。
+// - 真偽の項目(`BOOLEAN_STOP_ITEMS`): `true`から`false`へ。自動でGitHubに書く機能か、実装と設計の入口を止める向きだけで、有効にする向きは人がCLIで行う。
 // - 数値の項目(`LOWERABLE_NUMBERS`): いまの値より小さい値へ。下限は項目ごとに決める。
 // - 文字列の一覧の項目(`LIST_ITEMS`): `repo_allowlist`、`dependabot_other_repos`、`default_reviewers`の3つ。
 //   1回の呼び出しで、1要素の追加か、1要素の削除だけをする。
@@ -56,7 +56,9 @@ import { holdsReference, isRecord } from "./lib/console_redact.ts";
 const CONFIG_TARGET = "f/factory/factory_config";
 
 /**
- * `true`から`false`へだけ変えられる真偽の項目。どれも、自動でGitHubに書くか、実装を起動する機能の入口である。
+ * `true`から`false`へだけ変えられる真偽の項目。どれも、自動でGitHubに書くか、実装か設計を起動する機能の入口である。
+ * `design_enabled`を閉じても、設計中と設計の承認待ちの作業は止まらず、承認の反映は設計書なしで実装へ進む。
+ * 閉じても`design_enabled_since`は残る。開く向きと、日時を書く操作は、運用者が手順を踏んで書くので、ここでは扱わない。
  * `pr_conflict_watch_enabled`は、GitHubに書かず通知だけなので入れない。`*_since`には触れない。
  */
 export const BOOLEAN_STOP_ITEMS: readonly string[] = [
@@ -65,6 +67,7 @@ export const BOOLEAN_STOP_ITEMS: readonly string[] = [
   "dependabot_merge_enabled",
   "pr_ci_fix_enabled",
   "pr_conflict_fix_enabled",
+  "design_enabled",
 ];
 
 /**

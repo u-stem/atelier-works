@@ -143,6 +143,135 @@ describe("ConfigList as grouped tables", () => {
   });
 });
 
+/** `key`の項目の行の、セル(`td`)の開始タグ。 */
+function cellTagsOf(html: string, key: string): string[] {
+  const row = (html.match(/<tr[^>]*>.*?<\/tr>/g) ?? []).find(
+    (tr) =>
+      tr.includes('scope="row"') &&
+      tr.replaceAll("<wbr/>", "").includes(`>${key}<`),
+  );
+  return row?.match(/<td[^>]*>/g) ?? [];
+}
+
+/** 列の見出し(`th`)の開始タグ。`label`の見出しを探す。 */
+function headingTagOf(html: string, label: string): string {
+  return (
+    html.match(new RegExp(`<th[^>]*scope="col"[^>]*>${label}</th>`))?.[0] ?? ""
+  );
+}
+
+const TABLE_LINE = "@min-[40rem]:border-l @min-[40rem]:border-border";
+
+describe("ConfigList vertical lines between the columns", () => {
+  test("draws a line before the value column in the heading row", () => {
+    const html = renderItems([item("daily_budget_usd", 5)], choose);
+    expect(headingTagOf(html, "値")).toContain(TABLE_LINE);
+  });
+
+  test("draws a line before the operation column in the heading row", () => {
+    const html = renderItems([item("daily_budget_usd", 5)], choose);
+    expect(headingTagOf(html, "操作")).toContain(TABLE_LINE);
+  });
+
+  test("draws no line before the first column", () => {
+    const html = renderItems([item("daily_budget_usd", 5)], choose);
+    expect([
+      headingTagOf(html, "項目") !== "",
+      headingTagOf(html, "項目").includes("border-l"),
+    ]).toEqual([true, false]);
+  });
+
+  test("draws a line before the value cell of a row", () => {
+    const html = renderItems([item("daily_budget_usd", 5)], choose);
+    expect(cellTagsOf(html, "daily_budget_usd")[0]).toContain(TABLE_LINE);
+  });
+
+  test("draws a line before the operation cell of a row", () => {
+    const html = renderItems([item("daily_budget_usd", 5)], choose);
+    expect(cellTagsOf(html, "daily_budget_usd")[1]).toContain(TABLE_LINE);
+  });
+
+  test("draws a line before the operation cell of a row without a button", () => {
+    const html = renderItems(
+      [item("max_turns", "x"), item("daily_budget_usd", 5)],
+      choose,
+    );
+    expect(cellTagsOf(html, "max_turns")[1]).toContain(TABLE_LINE);
+  });
+
+  test("draws only the line between the item and the value when there is no operation column", () => {
+    const html = renderItems([item("model", "opus")], choose);
+    expect([
+      headingTagOf(html, "値").includes(TABLE_LINE),
+      cellTagsOf(html, "model").length,
+    ]).toEqual([true, 1]);
+  });
+
+  test("draws a line only at the table width, not in the stack", () => {
+    const html = renderItems([item("daily_budget_usd", 5)], choose);
+    expect(html).not.toMatch(/[ "]border-l[ "]/);
+  });
+
+  test("draws a line before the value cell of the design stage row", () => {
+    const html = renderToStaticMarkup(
+      <ConfigList
+        items={[item("design_enabled", true)]}
+        designStage={{ enabled: true, ignored: false, indeterminate: false }}
+        onChoose={choose}
+      />,
+    );
+    const row = (html.match(/<tr[^>]*>.*?<\/tr>/g) ?? []).find((tr) =>
+      tr.includes("設計工程(実際の状態)"),
+    );
+    expect(row?.match(/<td[^>]*>/g)?.[0]).toContain(TABLE_LINE);
+  });
+});
+
+/** 設計工程の判定の行のセル(`td`)の開始タグ。 */
+function designRowCellTags(html: string): string[] {
+  const row = (html.match(/<tr[^>]*>.*?<\/tr>/g) ?? []).find((tr) =>
+    tr.includes("設計工程(実際の状態)"),
+  );
+  return row?.match(/<td[^>]*>/g) ?? [];
+}
+
+const STAGE = { enabled: true, ignored: false, indeterminate: false };
+
+describe("ConfigList cells of the design stage row", () => {
+  test("gives the row one cell when the group has an operation column", () => {
+    const html = renderToStaticMarkup(
+      <ConfigList
+        items={[item("design_enabled", true)]}
+        designStage={STAGE}
+        onChoose={choose}
+      />,
+    );
+    expect(designRowCellTags(html).length).toBe(1);
+  });
+
+  test("makes the value cell reach the operation column", () => {
+    const html = renderToStaticMarkup(
+      <ConfigList
+        items={[item("design_enabled", true)]}
+        designStage={STAGE}
+        onChoose={choose}
+      />,
+    );
+    expect(designRowCellTags(html)[0]).toContain('colSpan="2"');
+  });
+
+  test("gives the row one cell that spans nothing when the group has no operation column", () => {
+    const html = renderToStaticMarkup(
+      <ConfigList
+        items={[item("design_enabled", false)]}
+        designStage={STAGE}
+      />,
+    );
+    const cells = designRowCellTags(html);
+    expect([cells.length, cells[0]?.includes("colSpan")]).toEqual([1, false]);
+  });
+});
+
 describe("ConfigList key of an item", () => {
   const key = "implement_max_budget_usd_per_run";
 
@@ -367,7 +496,7 @@ describe("ConfigSection width and groups", () => {
     expect(groups).not.toContain("max-w-3xl");
   });
 
-  test("keeps the card of the design stage at the readable width", () => {
+  test("keeps the row of the design stage inside the groups, at their width", () => {
     const withStage = renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>
         <TooltipProvider>
@@ -385,8 +514,10 @@ describe("ConfigSection width and groups", () => {
         </TooltipProvider>
       </QueryClientProvider>,
     );
-    expect(withStage).toMatch(
-      /<div[^>]*class="[^"]*max-w-3xl[^"]*"[^>]*><p><span[^>]*>設計工程/,
-    );
+    const groups = withStage.slice(withStage.indexOf("<h3"));
+    expect([
+      groups.includes("設計工程(実際の状態)"),
+      groups.includes("max-w-3xl"),
+    ]).toEqual([true, false]);
   });
 });

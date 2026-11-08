@@ -26,6 +26,7 @@ import {
   jobStateInfo,
   jobsBackState,
   logScrollTop,
+  matchesDesignStageQuery,
   outputNotes,
   parseHistoryScript,
   parseHistoryStatus,
@@ -636,6 +637,43 @@ describe("filterConfigItems", () => {
   test("does not search the values", () => {
     expect(filterConfigItems(ITEMS, "5")).toEqual([]);
   });
+});
+
+describe("matchesDesignStageQuery", () => {
+  test("keeps the design stage row for an empty query", () => {
+    expect(matchesDesignStageQuery("")).toBe(true);
+  });
+
+  test("keeps the design stage row for a query of spaces", () => {
+    expect(matchesDesignStageQuery("  ")).toBe(true);
+  });
+
+  test("keeps the design stage row for the first letter of design", () => {
+    expect(matchesDesignStageQuery("d")).toBe(true);
+  });
+
+  test("keeps the design stage row for the beginning of design in any case", () => {
+    expect(matchesDesignStageQuery("DESI")).toBe(true);
+  });
+
+  test("keeps the design stage row for the first character of the label", () => {
+    expect(matchesDesignStageQuery("設")).toBe(true);
+  });
+
+  test("keeps the design stage row for the beginning of the label", () => {
+    expect(matchesDesignStageQuery("設計工程(実際")).toBe(true);
+  });
+
+  test("keeps the design stage row for the whole label", () => {
+    expect(matchesDesignStageQuery("設計工程(実際の状態)")).toBe(true);
+  });
+
+  test.each(["n", "e", "esign", "工程", "状態", "budget", "design_enabled"])(
+    "drops the design stage row for %s, which is not the beginning of the name",
+    (query) => {
+      expect(matchesDesignStageQuery(query)).toBe(false);
+    },
+  );
 });
 
 describe("describeDesignStage", () => {

@@ -290,6 +290,8 @@ export const CONFIG_NORMAL: ConfigSnapshotView = {
   items: [
     // 通常の文字列。どのグループにも入らない項目は「その他」に出る。
     { key: "example", kind: "value", value: "on", masked: false },
+    // 書かれた値が無視されている設計工程。「設計」グループは、判定の行と、止めるボタンを持つ行を並べる。
+    { key: "design_enabled", kind: "value", value: true, masked: false },
     // 同じ形のオブジェクトの配列。列見出しを持つ、表の中の表になる。
     {
       key: "owners",

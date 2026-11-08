@@ -18,13 +18,15 @@ import {
   checkCommandsOf,
   EDITABLE_LISTS,
 } from "../../lib/configChange.ts";
-import { groupConfigItems } from "../../lib/configGroups.ts";
+import { DESIGN_GROUP_ID, groupConfigItems } from "../../lib/configGroups.ts";
 import type { ConfigEntryValue } from "../../lib/configValue.ts";
 import {
   CONFIG_REFERENCE_LABEL,
+  DESIGN_STAGE_ROW_LABEL,
   describeConfigValue,
   describeDesignStage,
   filterConfigItems,
+  matchesDesignStageQuery,
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { ConfigChangeDialog } from "./ConfigChangeDialog.tsx";
@@ -246,6 +248,13 @@ const ROLE = {
   cell: { role: "cell" },
 } as const;
 
+/**
+ * 表のレイアウト(本文の幅が40rem以上)のときだけ、列の前に引く縦の区切り線。
+ * 色は行の間の横線(`divide-border`)と同じにする。縦に積む幅では列が無いので、線も引かない。
+ * 最初の列には付けない。列の見出しの行と、すべての行のセルに付けるので、表の高さを通して続く。
+ */
+const COLUMN_LINE = "@min-[40rem]:border-l @min-[40rem]:border-border";
+
 type SwitchOrNumberOffer = Extract<ChangeOffer, { kind: "stop" | "lower" }>;
 
 function isSwitchOrNumberOffer(
@@ -312,27 +321,35 @@ function ChangeButton({
  * 操作の列は、ボタンを持つ項目があるグループだけに出す。
  * 一覧の3項目は、値の行を編集できる一覧にして、要素ごとの削除と一覧の追加のボタンを値の中に置く。
  * ボタンは確認のダイアログを開くだけで、書き込みは確認を通った後にだけ呼ぶ。
+ * `designStage`を渡すと、「設計」グループの表の先頭に、設計工程が実際に効いているかの行を置く。
+ * 設計の項目が無くても、「設計」グループはその行のために出す。
  */
 export function ConfigList({
   items,
+  designStage,
   onChoose,
   isLocked = () => false,
 }: {
   items: readonly ConfigItemView[];
+  designStage?: DesignStageView | undefined;
   onChoose?: (offer: ChangeOffer) => void;
   isLocked?: (offer: ChangeOffer) => boolean;
 }) {
-  if (items.length === 0) {
+  if (items.length === 0 && designStage === undefined) {
     return <EmptyNote>該当する項目はありません。</EmptyNote>;
   }
   return (
     <div className="@container flex flex-col gap-5">
-      {groupConfigItems(items).map((group) => (
+      {groupConfigItems(
+        items,
+        designStage === undefined ? [] : [DESIGN_GROUP_ID],
+      ).map((group) => (
         <ConfigGroupTable
           key={group.id}
           id={group.id}
           label={group.label}
           items={group.items}
+          designStage={group.id === DESIGN_GROUP_ID ? designStage : undefined}
           onChoose={onChoose}
           isLocked={isLocked}
         />
@@ -369,7 +386,7 @@ function ConfigRow({
       </th>
       <td
         {...ROLE.cell}
-        className="block min-w-0 px-4 pb-2.5 align-top tabular-nums @min-[40rem]:table-cell @min-[40rem]:py-2.5"
+        className={`block min-w-0 px-4 pb-2.5 align-top tabular-nums @min-[40rem]:table-cell @min-[40rem]:py-2.5 ${COLUMN_LINE}`}
       >
         {editableList && onChoose !== undefined ? (
           <EditableListValue
@@ -385,7 +402,7 @@ function ConfigRow({
       {showOperation ? (
         <td
           {...ROLE.cell}
-          className="block px-4 align-top @min-[40rem]:table-cell @min-[40rem]:px-2 @min-[40rem]:py-2.5 @min-[40rem]:text-right"
+          className={`block px-4 align-top @min-[40rem]:table-cell @min-[40rem]:px-2 @min-[40rem]:py-2.5 @min-[40rem]:text-right ${COLUMN_LINE}`}
         >
           {button === null || onChoose === undefined ? null : (
             <div className="pb-2.5 @min-[40rem]:-my-1.5 @min-[40rem]:pb-0">
@@ -407,17 +424,20 @@ function ConfigRow({
  * 見出しは区画(landmark)にせず、表の`aria-labelledby`で結ぶ。グループの数だけ区画が並ぶのを避けるためである。
  * 狭い幅では、表をやめて項目ごとに縦に積む。
  * 操作の列は、操作の列のボタンを持つ項目があるときだけ出し、無ければ値の列が幅を使う。
+ * `designStage`があるグループは、項目の行の前に、設計工程の判定の行を置く。
  */
 function ConfigGroupTable({
   id,
   label,
   items,
+  designStage,
   onChoose,
   isLocked,
 }: {
   id: string;
   label: string;
   items: readonly ConfigItemView[];
+  designStage: DesignStageView | undefined;
   onChoose: ((offer: ChangeOffer) => void) | undefined;
   isLocked: (offer: ChangeOffer) => boolean;
 }) {
@@ -459,7 +479,7 @@ function ConfigGroupTable({
               <th
                 scope="col"
                 {...ROLE.columnheader}
-                className="px-4 py-2 font-medium"
+                className={`px-4 py-2 font-medium ${COLUMN_LINE}`}
               >
                 値
               </th>
@@ -467,7 +487,7 @@ function ConfigGroupTable({
                 <th
                   scope="col"
                   {...ROLE.columnheader}
-                  className="px-2 py-2 text-right font-medium"
+                  className={`px-2 py-2 text-right font-medium ${COLUMN_LINE}`}
                 >
                   操作
                 </th>
@@ -478,6 +498,12 @@ function ConfigGroupTable({
             {...ROLE.rowgroup}
             className="block divide-y divide-border @min-[40rem]:table-row-group"
           >
+            {designStage === undefined ? null : (
+              <DesignStageRow
+                stage={designStage}
+                showOperation={showOperation}
+              />
+            )}
             {items.map((item) => (
               <ConfigRow
                 key={item.key}
@@ -495,24 +521,43 @@ function ConfigGroupTable({
 }
 
 /**
- * 設計工程の、効いている値。一覧の値は書かれたままなので、実際に動くかはここで確かめる。
- * 書かれた値が無視されているときと、参照のため判定できないときは、その理由を添える。
+ * 設計工程の、効いている値の行。「設計」グループの表の先頭に置く。
+ * 一覧の値は書かれたままなので、実際に動くかはこの行で確かめる。
+ * 項目の列は設定のキーでないので、等幅にせず、通常の書体で出す。
+ * 操作の列があるグループでは、値のセルを操作の列まで広げ、空のセルを置かない。
+ * 書かれた値が無視されているときと、参照のため判定できないときは、その理由を値の列に添える。
+ * 他の行と同じく、狭い幅では縦に積むので、表の役割は`role`で明示する。
  */
-function DesignStageStatus({ stage }: { stage: DesignStageView }) {
+function DesignStageRow({
+  stage,
+  showOperation,
+}: {
+  stage: DesignStageView;
+  showOperation: boolean;
+}) {
   const text = describeDesignStage(stage);
   return (
-    <Card
-      padding="compact"
-      className="flex max-w-3xl flex-col gap-1 text-small"
-    >
-      <p>
-        <span className="text-muted-foreground">設計工程: </span>
-        <span className="font-medium">{safeText(text.state)}</span>
-      </p>
-      {text.note === null ? null : (
-        <p className="text-muted-foreground">{safeText(text.note)}</p>
-      )}
-    </Card>
+    <tr {...ROLE.row} className="block @min-[40rem]:table-row">
+      <th
+        scope="row"
+        {...ROLE.rowheader}
+        className="block px-4 pt-2.5 pb-1 text-left align-top font-normal break-words @min-[40rem]:table-cell @min-[40rem]:py-2.5"
+      >
+        {DESIGN_STAGE_ROW_LABEL}
+      </th>
+      <td
+        {...ROLE.cell}
+        colSpan={showOperation ? 2 : undefined}
+        className={`block min-w-0 px-4 pb-2.5 align-top @min-[40rem]:table-cell @min-[40rem]:py-2.5 ${COLUMN_LINE}`}
+      >
+        <div className="flex flex-col gap-1">
+          <span className="font-medium">{safeText(text.state)}</span>
+          {text.note === null ? null : (
+            <p className="text-muted-foreground">{safeText(text.note)}</p>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -527,9 +572,6 @@ function ConfigBody({
   const change = useConfigChange();
   return (
     <div className="flex flex-col gap-3">
-      {designStage === undefined ? null : (
-        <DesignStageStatus stage={designStage} />
-      )}
       <Field tone="filter" label="キー名で絞り込む" className="max-w-sm">
         {(control) => (
           <Input
@@ -545,6 +587,7 @@ function ConfigBody({
       </Field>
       <ConfigList
         items={filterConfigItems(items, query)}
+        designStage={matchesDesignStageQuery(query) ? designStage : undefined}
         onChoose={change.choose}
         isLocked={change.isLocked}
       />

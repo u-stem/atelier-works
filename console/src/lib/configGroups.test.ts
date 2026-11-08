@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { ConfigItemView } from "../api/jobsQueries.ts";
-import { CONFIG_GROUP_DEFINITIONS, groupConfigItems } from "./configGroups.ts";
+import {
+  CONFIG_GROUP_DEFINITIONS,
+  DESIGN_GROUP_ID,
+  groupConfigItems,
+} from "./configGroups.ts";
 import { filterConfigItems } from "./jobsView.ts";
 
 function item(key: string): ConfigItemView {
@@ -115,5 +119,43 @@ describe("groupConfigItems", () => {
       "_",
     );
     expect(groupConfigItems(filtered).length).toBe(2);
+  });
+});
+
+describe("groupConfigItems for a group that is asked for", () => {
+  test("returns the group even when it has no item", () => {
+    const groups = groupConfigItems([item("owners")], ["design"]);
+    expect(groups.map((group) => group.id)).toContain("design");
+  });
+
+  test("puts the group in its place in the order of the definitions", () => {
+    const groups = groupConfigItems(
+      [item("owners"), item("implement_enabled")],
+      ["design"],
+    );
+    expect(groups.map((group) => group.id)).toEqual([
+      "repos",
+      "design",
+      "implement",
+    ]);
+  });
+
+  test("leaves the items of the group as they are", () => {
+    const groups = groupConfigItems([item("design_enabled")], ["design"]);
+    expect(keysOf(groups[0]?.items ?? [])).toEqual(["design_enabled"]);
+  });
+
+  test("does not return a group that is not asked for and has no item", () => {
+    expect(groupConfigItems([item("owners")], ["design"]).length).toBe(2);
+  });
+});
+
+describe("DESIGN_GROUP_ID", () => {
+  test("is the id of the group that holds design_enabled", () => {
+    expect(
+      CONFIG_GROUP_DEFINITIONS.find((group) =>
+        group.keys.includes("design_enabled"),
+      )?.id,
+    ).toBe(DESIGN_GROUP_ID);
   });
 });
