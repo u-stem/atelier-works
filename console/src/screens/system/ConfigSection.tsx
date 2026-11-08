@@ -402,7 +402,7 @@ function ConfigRow({
       {showOperation ? (
         <td
           {...ROLE.cell}
-          className={`block px-4 align-top @min-[40rem]:table-cell @min-[40rem]:px-2 @min-[40rem]:py-2.5 @min-[40rem]:text-right ${COLUMN_LINE}`}
+          className={`block px-4 text-left align-top @min-[40rem]:table-cell @min-[40rem]:px-2 @min-[40rem]:py-2.5 ${COLUMN_LINE}`}
         >
           {button === null || onChoose === undefined ? null : (
             <div className="pb-2.5 @min-[40rem]:-my-1.5 @min-[40rem]:pb-0">
@@ -487,7 +487,7 @@ function ConfigGroupTable({
                 <th
                   scope="col"
                   {...ROLE.columnheader}
-                  className={`px-2 py-2 text-right font-medium ${COLUMN_LINE}`}
+                  className={`px-2 py-2 font-medium ${COLUMN_LINE}`}
                 >
                   操作
                 </th>

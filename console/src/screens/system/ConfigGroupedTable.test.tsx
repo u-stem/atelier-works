@@ -162,6 +162,63 @@ function headingTagOf(html: string, label: string): string {
 
 const TABLE_LINE = "@min-[40rem]:border-l @min-[40rem]:border-border";
 
+/** 操作の列の見出し(`th`)の開始タグ。見つからないときは、空の文字列で通さず失敗させる。 */
+function operationHeadingTagOf(html: string): string {
+  const tag = headingTagOf(html, "操作");
+  if (tag === "")
+    throw new Error("the heading of the operation column is missing");
+  return tag;
+}
+
+/** 列の見出しの行(`tr`)の開始タグ。 */
+function headingRowTagOf(html: string): string {
+  const tag = html.match(/<tr[^>]*>(?=<th[^>]*scope="col")/)?.[0];
+  if (tag === undefined) throw new Error("the heading row is missing");
+  return tag;
+}
+
+/**
+ * `key`の項目の行の、操作のセル(`td`)の開始タグ。
+ * 位置ではなく、止める、下げるのボタンを持つセルとして引く。
+ */
+function operationCellTagOf(html: string, key: string): string {
+  const row = (html.match(/<tr[^>]*>.*?<\/tr>/g) ?? []).find(
+    (tr) =>
+      tr.includes('scope="row"') &&
+      tr.replaceAll("<wbr/>", "").includes(`>${key}<`),
+  );
+  const cells = [...(row ?? "").matchAll(/(<td[^>]*>)(.*?)<\/td>/g)];
+  const cell = cells.find((c) => /止める|下げる/.test(c[2] ?? ""));
+  if (cell?.[1] === undefined) {
+    throw new Error(`the operation cell of ${key} is missing`);
+  }
+  return cell[1];
+}
+
+describe("ConfigList alignment of the operation column", () => {
+  const html = renderItems([item("daily_budget_usd", 5)], choose);
+
+  test("does not right-align the heading of the operation column", () => {
+    expect(operationHeadingTagOf(html)).not.toContain("text-right");
+  });
+
+  test("left-aligns the heading row that holds the operation column", () => {
+    expect(headingRowTagOf(html)).toMatch(/[ "]text-left[ "]/);
+  });
+
+  test("does not right-align the cell of the operation column", () => {
+    expect(operationCellTagOf(html, "daily_budget_usd")).not.toContain(
+      "text-right",
+    );
+  });
+
+  test("left-aligns the cell of the operation column by itself", () => {
+    expect(operationCellTagOf(html, "daily_budget_usd")).toMatch(
+      /[ "]text-left[ "]/,
+    );
+  });
+});
+
 describe("ConfigList vertical lines between the columns", () => {
   test("draws a line before the value column in the heading row", () => {
     const html = renderItems([item("daily_budget_usd", 5)], choose);
