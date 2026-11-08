@@ -2536,7 +2536,7 @@ function nestedInBash(command: string, levels: number): string {
   return wrapped;
 }
 
-// 全停止の判定は、前置きの後ろと、コマンド文字列の入れ子を読む。判定の部品を共通にするときに、この挙動を変えない。
+// 全停止の判定は、前置きの後ろの語と、4段までのコマンド文字列の入れ子を読む。段を超えた文字列は、CLIの名前の字面だけで判定する。
 describe("bash-guard keeps reading prefixes and nested strings for the stop-all", () => {
   test("denies a stop-all task inside a string nested four times", async () => {
     expect(await decide(nestedInScript("mise run stop", 4))).toBe("deny");
@@ -2940,7 +2940,7 @@ describe("bash-guard allows a subagent to work on the hold code behind a prefix"
   });
 });
 
-// 前置きの無い形は、前置きの規則に入れない。このPRでは判定を変えない。
+// 前置きの無い形は、前置きの規則に入れない。先頭が前置きでないコマンドは、保留と凍結の判定の対象にならない。
 describe("bash-guard leaves forms without a prefix as they were", () => {
   test.each([
     "vim scripts/hold.ts",
@@ -2992,5 +2992,83 @@ describe("bash-guard leaves the main session free to run holds behind a prefix",
     "GIT_PAGER='mise run hold:release 1' git log",
   ])("%s", async (command) => {
     expect(await decide(command)).toBe("allow");
+  });
+});
+
+// 前置きの後ろの文字列の中でも、前置きの`xargs`が足す語は読めない。先頭が`mise`や凍結のCLIでも拒否する。
+describe("bash-guard denies xargs inside a string behind a prefix", () => {
+  test.each([
+    `ssh host "printf 'hold:release 1' | xargs mise run"`,
+    `ssh host "echo release | xargs ./scripts/freeze.ts"`,
+    `script -qc "printf 'hold:release 1' | xargs mise run" /dev/null`,
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 文字列の中の先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうる。値も先頭の語として判定する。
+describe("bash-guard reads the value of an assignment inside a string behind a prefix", () => {
+  test.each([
+    "ssh -o 'ProxyCommand=./scripts/hold.ts release 1' x",
+    "ssh -o 'ProxyCommand=./scripts/freeze.ts reset' x",
+    "ssh -o 'ProxyCommand=./scripts/freeze.ts release' x",
+    `ssh h "LESSOPEN='|./scripts/hold.ts release 1 %s' less f"`,
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows an assignment that only sets a number", async () => {
+    expect(await decide("ssh h 'FOO=1 bun test'", { subagent: true })).toBe(
+      "allow",
+    );
+  });
+});
+
+// 前置きの後ろの`docker`と`psql`は、保留の表を直接書きうる。語か標準入力の文字列に`holds`があれば拒否する。
+describe("bash-guard reads docker and psql behind a prefix", () => {
+  test.each([
+    "caffeinate psql -c 'delete from holds'",
+    "caffeinate docker compose exec db psql -c 'update holds set x = 1'",
+    "echo 'delete from holds' | caffeinate psql",
+    "script -q /dev/null docker compose exec db psql -c 'update holds set x = 1'",
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows psql that does not name the holds table", async () => {
+    expect(
+      await decide("caffeinate psql -c 'select 1'", { subagent: true }),
+    ).toBe("allow");
+  });
+});
+
+// `2>&1`の`1`はファイル記述子の番号で、入力のファイルではない。
+describe("bash-guard does not take a file descriptor for an input file", () => {
+  test.each([
+    "ssh host ls 2>&1 | tail",
+    "script -q /dev/null ls > /tmp/out 2>&1",
+  ])("allows %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+// 前置きの後ろで語を足すコマンド、シェル、読めない標準入力を拒否するときは、前置きを外して書くよう伝える。
+describe("bash-guard explains how to rewrite a prefix it cannot read", () => {
+  test.each([
+    "caffeinate bash ./x.sh",
+    "ssh host < /tmp/x.sh",
+    "caffeinate xargs grep -l x",
+  ])("the reason for %s says to drop the prefix", async (command) => {
+    expect(await denyReason(command, { subagent: true })).toContain(
+      "without the prefix",
+    );
+  });
+
+  test("the reason for a word built at run time still says to write it out", async () => {
+    expect(
+      await denyReason("script -q /dev/null ./scripts/hold.ts $ACTION 1", {
+        subagent: true,
+      }),
+    ).toContain("literal");
   });
 });
