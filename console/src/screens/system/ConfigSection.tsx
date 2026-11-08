@@ -247,6 +247,13 @@ const ROLE = {
   cell: { role: "cell" },
 } as const;
 
+/**
+ * 表のレイアウト(本文の幅が40rem以上)のときだけ、列の前に引く縦の区切り線。
+ * 色は行の間の横線(`divide-border`)と同じにする。縦に積む幅では列が無いので、線も引かない。
+ * 最初の列には付けない。列の見出しの行と、すべての行のセルに付けるので、表の高さを通して続く。
+ */
+const COLUMN_LINE = "@min-[40rem]:border-l @min-[40rem]:border-border";
+
 /** 設計工程の判定の行を置くグループ。 */
 const DESIGN_GROUP_ID = "design";
 
@@ -381,7 +388,7 @@ function ConfigRow({
       </th>
       <td
         {...ROLE.cell}
-        className="block min-w-0 px-4 pb-2.5 align-top tabular-nums @min-[40rem]:table-cell @min-[40rem]:py-2.5"
+        className={`block min-w-0 px-4 pb-2.5 align-top tabular-nums @min-[40rem]:table-cell @min-[40rem]:py-2.5 ${COLUMN_LINE}`}
       >
         {editableList && onChoose !== undefined ? (
           <EditableListValue
@@ -397,7 +404,7 @@ function ConfigRow({
       {showOperation ? (
         <td
           {...ROLE.cell}
-          className="block px-4 align-top @min-[40rem]:table-cell @min-[40rem]:px-2 @min-[40rem]:py-2.5 @min-[40rem]:text-right"
+          className={`block px-4 align-top @min-[40rem]:table-cell @min-[40rem]:px-2 @min-[40rem]:py-2.5 @min-[40rem]:text-right ${COLUMN_LINE}`}
         >
           {button === null || onChoose === undefined ? null : (
             <div className="pb-2.5 @min-[40rem]:-my-1.5 @min-[40rem]:pb-0">
@@ -474,7 +481,7 @@ function ConfigGroupTable({
               <th
                 scope="col"
                 {...ROLE.columnheader}
-                className="px-4 py-2 font-medium"
+                className={`px-4 py-2 font-medium ${COLUMN_LINE}`}
               >
                 値
               </th>
@@ -482,7 +489,7 @@ function ConfigGroupTable({
                 <th
                   scope="col"
                   {...ROLE.columnheader}
-                  className="px-2 py-2 text-right font-medium"
+                  className={`px-2 py-2 text-right font-medium ${COLUMN_LINE}`}
                 >
                   操作
                 </th>
@@ -541,7 +548,7 @@ function DesignStageRow({
       </th>
       <td
         {...ROLE.cell}
-        className="block min-w-0 px-4 pb-2.5 align-top @min-[40rem]:table-cell @min-[40rem]:py-2.5"
+        className={`block min-w-0 px-4 pb-2.5 align-top @min-[40rem]:table-cell @min-[40rem]:py-2.5 ${COLUMN_LINE}`}
       >
         <div className="flex flex-col gap-1">
           <span className="font-medium">{safeText(text.state)}</span>
@@ -551,7 +558,10 @@ function DesignStageRow({
         </div>
       </td>
       {showOperation ? (
-        <td {...ROLE.cell} className="block @min-[40rem]:table-cell" />
+        <td
+          {...ROLE.cell}
+          className={`block @min-[40rem]:table-cell ${COLUMN_LINE}`}
+        />
       ) : null}
     </tr>
   );
