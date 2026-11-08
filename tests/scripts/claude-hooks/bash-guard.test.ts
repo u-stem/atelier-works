@@ -3131,6 +3131,17 @@ describe("bash-guard explains a denial caused by a budget", () => {
     );
     expect(reason).toContain("too long or its input too large");
   });
+
+  test.each(["freeze:reset", "push:prune"])(
+    "names %s as an operation the denial covers",
+    async (task) => {
+      const reason = await denyReason(
+        `${"caffeinate true | ".repeat(257)}caffeinate true`,
+        { subagent: true },
+      );
+      expect(reason).toContain(task);
+    },
+  );
 });
 
 // 数千の代入の語と、数千の語や上流のコマンドを並べた文字列でも、フックのタイムアウト(10秒)の中で終える。
@@ -3194,27 +3205,45 @@ function widePipeline(stages: number, wordsPerStage: number): string {
   return `${`${stage}| `.repeat(stages - 1)}${stage}`;
 }
 
+// 閾値はフックのタイムアウト(10秒)の内に置く。並列に走る検査では数倍遅くなるので、遅さのゆれでは落ちず、
+// 退行(修正前は約35秒、語の数の上限が無い最悪の形で約9秒)だけを検出できる値にする。
+// bunのテストの既定のタイムアウト(5秒)は、閾値より長く延ばす。
+const WIDE_PIPELINE_LIMIT_MS = 8000;
+const WIDE_PIPELINE_TIMEOUT_MS = 20000;
+
 describe("bash-guard bounds the work for a wide prefixed pipeline", () => {
-  test("allows 256 stages of about a hundred words each in time", async () => {
-    const started = Date.now();
-    const decision = await decide(widePipeline(256, 100), { subagent: true });
-    expect(decision).toBe("allow");
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
+  test(
+    "allows 256 stages of about a hundred words each in time",
+    async () => {
+      const started = Date.now();
+      const decision = await decide(widePipeline(256, 100), { subagent: true });
+      expect(decision).toBe("allow");
+      expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+    },
+    WIDE_PIPELINE_TIMEOUT_MS,
+  );
 
-  test("denies 256 stages of about two hundred words each in time", async () => {
-    const started = Date.now();
-    const decision = await decide(widePipeline(256, 200), { subagent: true });
-    expect(decision).toBe("deny");
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
+  test(
+    "denies 256 stages of about two hundred words each in time",
+    async () => {
+      const started = Date.now();
+      const decision = await decide(widePipeline(256, 200), { subagent: true });
+      expect(decision).toBe("deny");
+      expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+    },
+    WIDE_PIPELINE_TIMEOUT_MS,
+  );
 
-  test("denies 256 stages of eight hundred words each in time", async () => {
-    const started = Date.now();
-    const decision = await decide(widePipeline(256, 800), { subagent: true });
-    expect(decision).toBe("deny");
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
+  test(
+    "denies 256 stages of eight hundred words each in time",
+    async () => {
+      const started = Date.now();
+      const decision = await decide(widePipeline(256, 800), { subagent: true });
+      expect(decision).toBe("deny");
+      expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+    },
+    WIDE_PIPELINE_TIMEOUT_MS,
+  );
 });
 
 // 解析の回数と、走査した語の数の予算を超えたら、判定できないものとして拒否する。
