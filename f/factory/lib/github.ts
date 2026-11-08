@@ -776,6 +776,8 @@ export function withMarker(
 export const PR_REVIEW_ACK_MARKER_KIND = "pr_review_ack";
 /** 再レビューの反論の返信の目印の種類。フィードバックに集める。 */
 export const PR_REVIEW_OBJECTION_MARKER_KIND = "pr_review_objection";
+/** 再レビューが質問に答えた返信の目印の種類。フィードバックに集めず、スレッドも解決しない。 */
+export const PR_REVIEW_ANSWER_MARKER_KIND = "pr_review_answer";
 
 /**
  * `text`が、単独の行にあるFactoryの目印で終わるかを返す。
@@ -3596,7 +3598,8 @@ function isPrReviewCommentPayload(
  * `GET .../comments`(インラインのレビューコメント)をページ送りしながら取得し、
  * `listPrReviews`と同じく、Factory自身の`pr_fix`の返信
  * (`isFactoryPost(login, viewer, raw.body, "pr_fix")`)と、
- * 再レビューの了承と解消の返信(`PR_REVIEW_ACK_MARKER_KIND`の目印を持つもの)を除いて返す。
+ * 再レビューの了承と解消の返信(`PR_REVIEW_ACK_MARKER_KIND`の目印を持つもの)と、
+ * 質問への回答の返信(`PR_REVIEW_ANSWER_MARKER_KIND`の目印を持つもの)を除いて返す。
  * 再レビューの反論の返信は、`pr_fix`が対応すべきフィードバックとして残す。
  * `pr_review`でFactoryが書いた目印の無いインラインの指摘は残す。
  * pr_fixはそれを対応すべきフィードバックとして見る必要があるためである。
@@ -3624,6 +3627,9 @@ export async function listPrReviewComments(
     const login = raw.user?.login;
     if (isFactoryPost(login, viewer, raw.body, "pr_fix")) continue;
     if (isFactoryPost(login, viewer, raw.body, PR_REVIEW_ACK_MARKER_KIND)) {
+      continue;
+    }
+    if (isFactoryPost(login, viewer, raw.body, PR_REVIEW_ANSWER_MARKER_KIND)) {
       continue;
     }
     items.push({
