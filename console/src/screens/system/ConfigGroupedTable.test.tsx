@@ -367,7 +367,7 @@ describe("ConfigSection width and groups", () => {
     expect(groups).not.toContain("max-w-3xl");
   });
 
-  test("keeps the card of the design stage at the readable width", () => {
+  test("keeps the row of the design stage inside the groups, at their width", () => {
     const withStage = renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>
         <TooltipProvider>
@@ -385,8 +385,10 @@ describe("ConfigSection width and groups", () => {
         </TooltipProvider>
       </QueryClientProvider>,
     );
-    expect(withStage).toMatch(
-      /<div[^>]*class="[^"]*max-w-3xl[^"]*"[^>]*><p><span[^>]*>設計工程/,
-    );
+    const groups = withStage.slice(withStage.indexOf("<h3"));
+    expect([
+      groups.includes("設計工程(実際の状態)"),
+      groups.includes("max-w-3xl"),
+    ]).toEqual([true, false]);
   });
 });
