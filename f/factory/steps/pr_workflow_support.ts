@@ -1073,7 +1073,10 @@ function isFactoryFindingThread(thread: ReviewThread, viewer: string): boolean {
  * `skip`は、viewerか許可された人の、最後の行が`対応: 見送り`の返信である。
  * `addressable`は、返信の無い指摘か、viewerか許可された人の`対応: <sha>`である。
  * `pr_fix`の`対応: <sha>`は`selectThreadsToResolve`が解決するので除く。
- * 許可された人の自由文の返信の後は答えず、人の判断に任せる。
+ * `reply`は、viewerか許可された人の、上のどれでもない自由文の返信である。
+ * 返信の意味は、再レビューのClaudeが読んで判定する。
+ * Factoryは運用者と同じアカウントで動くので、viewerの返信でも、Factory自身の役割タグで始まるものは
+ * 人の返信でなく、前回の答えか`pr_fix`の返信なので除く。
  */
 export function threadResponseKind(
   thread: ReviewThread,
@@ -1089,9 +1092,20 @@ export function threadResponseKind(
   if (lastReply === undefined) return "addressable";
   const line = lastContentLine(lastReply.body);
   if (line === SKIP_REPLY_LINE) return "skip";
-  return COMMIT_REPLY_LINE.test(line) && !isFixedFixReply(lastReply.body)
-    ? "addressable"
-    : null;
+  if (COMMIT_REPLY_LINE.test(line)) {
+    return isFixedFixReply(lastReply.body) ? null : "addressable";
+  }
+  return isFactoryTaggedReply(lastReply, viewer) ? null : "reply";
+}
+
+/** viewerの返信が、Factory自身の役割タグの行で始まるかを返す。 */
+function isFactoryTaggedReply(
+  comment: ReviewThreadComment,
+  viewer: string,
+): boolean {
+  if (!isOwnPost(comment.authorLogin, viewer)) return false;
+  const firstLine = comment.body.split("\n")[0] ?? "";
+  return Object.values<string>(ROLE_TAGS).includes(firstLine);
 }
 
 export type AppliedThreadResponse = {
@@ -1125,7 +1139,8 @@ export function selectThreadResponses(
         : threadResponseKind(thread, viewer, isAllowed);
     const fits =
       (kind === "skip" && response.decision !== "addressed") ||
-      (kind === "addressable" && response.decision === "addressed");
+      (kind === "addressable" && response.decision === "addressed") ||
+      kind === "reply";
     if (
       thread === undefined ||
       !fits ||
