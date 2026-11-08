@@ -38,7 +38,7 @@
 //
 // 保留と凍結の判定は、語の字面で行う。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
-// 先頭の語で、次の4つの規則のどれかに分ける。
+// 先頭の語で、次の4つの規則のどれかに分ける。どれにも当たらない先頭の呼び出しは、判定の対象にしない。
 //
 // - 実行系(`bun`、`bunx`、`node`、`tsx`、`ts-node`、`deno`、`npx`、`npm`、`pnpm`、`pnpx`、`yarn`)と、
 //   スクリプトを直接実行する形: 語のどれかが保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省略できる)を指していれば拒否する。
@@ -63,49 +63,43 @@
 //   `mise exec`の中のコマンドは、呼び出し側が前置きを外したあとの語として判定する。
 //   タスク`push`に`--prune`を渡す形(`mise run push -- --prune`)は、`push:prune`と同じなので拒否する。
 // - `docker`、`docker-compose`、`psql`: 語か標準入力の文字列に`holds`を含めば拒否する。
-// - 前置き: 先頭が、上の3つでも、読み取りと検査の道具でもないコマンド(`script`、`unbuffer`、`caffeinate`、
-//   `/usr/bin/time`、`ssh`、`watch`、`parallel`、`find -exec`、`strace`、`vim`、`python3`など)。
-//   読み取りのプログラム(`NON_EXECUTING_PROGRAMS`)は、実行を委ねるオプション(`git -c`など)が無い限り通す。
-//   `sed`と`bat`のようにパスの形の語だけを読む道具は、パスの形でない語があれば通さず、この規則で見る。
-//   次の3つを調べる。
-//   (a) 全部の語。保留か凍結のCLIを指す語の直後(`--`は読み飛ばす)が書き込みの副コマンドなら拒否する。
-//       `place`と`release`、凍結の`reset`、`push --prune`、`place --scope deploy`である。
-//       直後が実行時に決まる語、glob、ブレースなら拒否する。`find -exec`、`xargs`、`parallel`の後ろは、
-//       語が足されるので、直後に語が無い形と、`parallel`の`:::`も拒否する。それ以外の語(`list`、ほかのファイル名)は通す。
-//       `find -exec`の`{}`が、`-exec`か起動語の直後にあり、同じコマンドに保留か凍結のコードを指す語があれば、
-//       `{}`をそのコードとして、直後の語を同じ規則で見る。
-//       `vim scripts/hold.ts`や`chmod +x scripts/hold.ts`は、保留のコードを開く・変えるだけなので止めない。
-//       書き込みのタスク名(`hold:place`、`hold:release`、`freeze:release`、`freeze:reset`、`push:prune`、
-//       `--scope deploy`の`freeze:place`)の語も拒否する。
-//       空白を含む語(`script -c`の文字列、`ssh`の引数)は、コマンド文字列として読んで同じ規則で判定する。
-//       前置きの`xargs`が標準入力の語を末尾に足す形(`viaXargs`)も、語が足されるものとして扱う。
-//   (b) 前置きの後ろの起動語(`mise`、実行系、シェル)。その位置から、先頭のときと同じ規則で判定し直す。
+// - 前置き: 先頭が`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`のどれかである。
+//   前置きの後ろは、語、`script -c`と`ssh`の文字列の中身、標準入力の文字列(ヒアドキュメント、ヒアストリング、
+//   `echo`と`printf`のパイプ)を、次の順で調べる。オプションの文法は追わない。
+//   (a) 語を足すコマンド(`xargs`、`parallel`、`-exec`系の式を伴う`find`)、シェル、読めない標準入力があれば、
+//       指す語の有無によらず拒否する。足される語やシェルの引数は、字面から読めないためである。
+//       読めない標準入力は、`script`か`ssh`に、ファイルや、`echo`と`printf`以外のパイプや、実行時に決まる文字列が入る形である。
+//       前置きの前の`xargs`が標準入力の語を足す形(`viaXargs`)も同じに扱う。
+//   (b) 前置きの後ろの`mise`と実行系は、その位置から先頭のときと同じ分岐で判定し直す。
 //       起動語は16個まで見て、超えたら拒否する。
-//       シェルの`-c`の文字列はコマンド文字列として読み、外側の標準入力(リダイレクト、パイプ)もつなぐ。
-//       `-c`が無いシェルは標準入力の文字列を読んで判定する。
-//       標準入力の出どころがファイルか、`echo`と`printf`以外のパイプなら、中身を読めないので拒否する。
-//   (c) 最上位のコマンドの標準入力の文字列(ヒアドキュメント、ヒアストリング、`echo`のパイプ)。
-//       `script`が標準入力から読んだ文字列を、中のシェルが実行できるためである。
-//       先頭がシェルでなければ、読めた文字列は(a)の語の規則だけで見る。
-//       読めない文字列は、保留か凍結のコードを指す字面と書き込みの語が並ぶか、書き込みのタスク名の字面のときだけ拒否する。
-//   コマンド文字列は、4段の入れ子まで読む。
-//   段を超えた文字列と読めない文字列は、保留か凍結のコードを指す字面か、書き込みのタスク名の字面があれば拒否する。
-//   読む文字列の数と長さの合計にも上限を置き、超えたら拒否する。フックのタイムアウトの中で終えるためである。
-//   前置きの後ろで、実行の字面が引数にある形(`script -q /dev/null rg -n bun scripts/hold.ts`)は、実行と区別できないので拒否する。
-//   先頭の変数代入の値も、前置きとして外れるので、同じ規則で別に判定する(`findHoldAssignment`)。
+//       保留と凍結のCLIの直接実行(`script -q /dev/null ./scripts/hold.ts release 1`)は、(c)の共起で見る。
+//   (c) 起動語の外にある語は、共起で見る。指す語(保留か凍結のコードを指す語、書き込みのタスク名)と、
+//       書き込みの語(`place`、`release`、`reset`、`prune`、`--prune`、`deploy`)が、同じコマンドの語とパイプの上流の語の和にあれば拒否する。
+//       語の綴り(ブレースの展開を含む)の完全一致で数え、位置は見ない。
+//       指す語があり、ほかに実行時に決まる語、glob、ブレースがあれば、拒否する。
+//       凍結の`place`と`deploy`は共起の語に数えず、`--scope`の値を別に判定する。
+//       スケジュールの凍結を置く形(`freeze:place -- --target a/b`)と、`list --scope deploy`は通す。
+//   (d) 空白を含む語(`script -c`や`ssh`の文字列)と標準入力の文字列は、コマンドとして読み、内側のコマンドごとに判定し直す。
+//       結果は足し合わせない。内側が読み取りの道具(`rg -n release scripts/hold.ts`)なら通す。
+//       標準入力の文字列は、最上位でも入れ子でも同じに判定する。
+//       コマンド文字列は4段の入れ子まで読む。段を超えた文字列と読めない文字列は、字面で判定する。
+//       標準入力の文字列の字面は、保留か凍結のコードを指す字面と書き込みの語が並ぶときだけ拒否する。
+//       読む文字列の数と長さの合計にも上限を置き、超えたら拒否する。フックのタイムアウトの中で終えるためである。
+//   前置きの後ろでは、実行の字面が引数にある形(`git commit -m "… hold.ts release …"`)や、シェルを使う正当な作業も拒否する。
+//   実行と区別できないためである。
+//   前置きの無い形は、上の3つの規則に当たらない限り、判定の対象にしない。
 //
 // ベストエフォートの規則で、境界ではない。次は止めない。
 // - Consoleの解除scriptを、ハッシュ(`run_wait_result/h/<hash>`)、パーセント符号化したパス、
 //   変数や連結で組み立てた名前で呼ぶ形。
 // - 別名の呼び出し(`cp scripts/hold.ts /tmp/h.ts`の後に実行する形)。
 // - 変数や文字列の連結で組んだパス、動的なimport、`docker compose exec db psql`に渡す語を組み立てて書く形。
-// - 起動語の一覧(`mise`、実行系、シェル)に無いインタプリタが文字列として受け取るコード(`python -c`、`perl -e`、
-//   `ruby -e`、`awk`の`system()`など)。文字列がシェルのコマンドとして読める形だけ、前置きの規則で止める。
+// - 前置きの無い`xargs`、`parallel`、`find -exec`、`watch`、`strace`、シェルの`-c`と標準入力、変数代入の値、
+//   起動語の一覧に無いインタプリタ(`python -c`、`perl -e`、`ruby -e`、`awk`の`system()`など)が受け取る文字列。
 // - subagentが新しいファイルを書いて実行する形。
 // Bashとdockerを持つ主体は、psqlで保留を直接書ける。ここで止めるのは、誤操作と、拒否を知らない呼び出しである。
 
 import { CONSOLE_WRITE_SCRIPTS } from "./console-scripts.ts";
-import { shellInputSource } from "./env-exposure.ts";
 import {
   baseName,
   literalShellInputs,
@@ -114,7 +108,6 @@ import {
   type SimpleCommand,
   scanMiseGlobalOptions,
   shellArguments,
-  shellScriptArgument,
   stripWrappers,
   type Word,
 } from "./shell-words.ts";
@@ -613,19 +606,17 @@ function firstOperandAt(words: readonly Word[], from: number): number {
  * 凍結のCLIを指す語は、すべて調べる。直後の語が副コマンドである。
  * 実行時に決まるときは判定できないので`dynamic`を返す。
  * `-e`などの直後の文字列と標準入力で渡すコードは、凍結のCLIを指しながら`release`、`deploy`、`reset`、`prune`を含めば拒否する。
- * `appends`が真なら、`xargs`などが語を足すので、副コマンドが無い形も`dynamic`にする。
  */
 function freezeCliFinding(
   args: readonly Word[],
   inputs: () => readonly string[] | null,
-  appends = false,
 ): HoldFinding | null {
   const codes = [...(inputs() ?? []), ...codeStrings(args)];
   if (codes.some(codeTouchesFreezeRelease)) return "operation";
   let found: HoldFinding | null = null;
   for (const [at, word] of args.entries()) {
     if (!pointsAtFreezeCode(word)) continue;
-    const finding = freezeWordSubcommandAt(args, at + 1, appends);
+    const finding = freezeSubcommandAt(args, at + 1);
     if (finding === "operation") return finding;
     found = found ?? finding;
   }
@@ -786,7 +777,6 @@ function runnerFinding(
   args: readonly Word[],
   inputs: () => readonly string[] | null,
   stdin: HoldStdin = NO_STDIN,
-  appends = false,
 ): HoldFinding | null {
   // `bun run - < scripts/freeze.ts`のように、標準入力で流し込んだコードも実行される。
   if (
@@ -799,18 +789,13 @@ function runnerFinding(
   if (runnerTouchesHolds(args, inputs)) return "operation";
   const fromStdin = stdinCodeFinding(args, inputs, stdin);
   if (fromStdin !== null) return fromStdin;
-  return freezeCliFinding(
-    args,
-    inputs,
-    appends && !startsWithInspectionTool(args),
-  );
+  return freezeCliFinding(args, inputs);
 }
 
 function miseFinding(
   words: readonly Word[],
   inputs: () => readonly string[] | null,
   stdin: HoldStdin = NO_STDIN,
-  appends = false,
 ): HoldFinding | null {
   const scan = scanMiseGlobalOptions(words, 1);
   // 知らないオプションが値を取ると、サブコマンドの位置が決まらない。コマンド全体を拒否する。
@@ -823,12 +808,7 @@ function miseFinding(
     (word) => word.text === "exec" || word.text === "x",
   );
   if (execAt !== -1) {
-    const finding = runnerFinding(
-      args.slice(execAt + 1),
-      inputs,
-      stdin,
-      appends,
-    );
+    const finding = runnerFinding(args.slice(execAt + 1), inputs, stdin);
     if (finding !== null) return finding;
   }
   const inTasks = MISE_TASKS_WORDS.has(subcommand.text);
@@ -864,18 +844,14 @@ function sqlTouchesHolds(
 const COMMAND_TEXT_MAX_DEPTH = 4;
 
 /**
- * 前置きの後ろから判定し直す起動語の名前なら真。`mise`と実行系が対象で、`withShells`が真ならシェルも数える。
- * 保留と凍結の判定はシェルも数え、全停止の判定は数えない。
+ * 前置きの後ろから判定し直す起動語の名前なら真。`mise`と実行系が対象である。
+ * 全停止の判定と共通である。
  */
-function isLauncherName(name: string, withShells: boolean): boolean {
-  return (
-    name === "mise" ||
-    RUNNERS.has(name) ||
-    (withShells && (SHELLS.has(name) || name === "busybox"))
-  );
+function isLauncherName(name: string): boolean {
+  return name === "mise" || RUNNERS.has(name);
 }
 
-/** 前置きの後ろで調べる起動語(`mise`、実行系、シェル)の数の上限。超えたら判定できないものとして拒否する。 */
+/** 前置きの後ろで調べる起動語(`mise`と実行系)の数の上限。超えたら判定できないものとして拒否する。 */
 const HOLD_MAX_LAUNCHERS = 16;
 
 /** 1回の判定で読むコマンド文字列の数と、その長さの合計の上限。フックのタイムアウト(10秒)の中で終えるためである。 */
@@ -905,7 +881,7 @@ function stronger(
   return FINDING_RANK[second] > FINDING_RANK[first] ? second : first;
 }
 
-/** 書き込みの副コマンドの語。 */
+/** 書き込みの副コマンドの語。読めない標準入力の文字列の判定に使う。 */
 const WRITE_WORD = /\b(?:place|release|reset|prune|deploy)\b/i;
 
 /** 削除を確定する押し出しの字面。タスク名か、`push`と`--prune`が並ぶ形である。 */
@@ -948,71 +924,92 @@ function isUnreadable(word: Word): boolean {
   );
 }
 
-/** 語が、実行時に語を足すコマンド(`xargs`、`parallel`、`find -exec`の式)なら真。 */
-function isAppender(word: Word | undefined): boolean {
-  const name = baseName(word?.text ?? "");
-  return name === "xargs" || name === "parallel" || FIND_EXECUTION.test(name);
-}
-
-/** `parallel`が、引数を後ろから足す区切りの語なら真。 */
-const PARALLEL_SEPARATOR = /^::::?\+?$/;
-
 /**
- * 保留や凍結のCLIの`from`番目以降に、副コマンドの語が無い(`--`だけ、またはコマンドの終わり)なら真。
- * `find -exec`の終わりの`;`と`+`も、副コマンドではない。
+ * 前置きとして扱うプログラム。後ろのコマンドを起動する。
+ * `stripWrappers`が外さないもので、`/usr/bin/time`は名前の部分の`time`で数える。
  */
-function endsWithoutSubcommandAt(
-  words: readonly Word[],
-  from: number,
-): boolean {
-  const next = words[firstOperandAt(words, from)];
-  return next === undefined || next.text === ";" || next.text === "+";
-}
+const PREFIX_PROGRAMS: ReadonlySet<string> = new Set([
+  "script",
+  "unbuffer",
+  "caffeinate",
+  "time",
+  "ssh",
+]);
+
+/** 標準入力を子のコマンドへ渡す前置き。標準入力の中身が読めないと、何が実行されるか分からない。 */
+const STDIN_PREFIX_PROGRAMS: ReadonlySet<string> = new Set(["script", "ssh"]);
+
+/** 保留のコードを指す語と並んだとき、書き込みになる語。 */
+const HOLD_WRITE_WORDS: readonly string[] = [
+  "place",
+  "release",
+  "reset",
+  "prune",
+  "--prune",
+  "deploy",
+];
+
+/** 凍結のコードを指す語と並んだとき、書き込みになる語。`place`と`deploy`は、`--scope`の値を見て別に判定する。 */
+const FREEZE_WRITE_WORDS: readonly string[] = [
+  "release",
+  "reset",
+  "prune",
+  "--prune",
+];
 
 /**
- * 保留のコードを指す語の`from`番目以降から、置く・解除する形を見分ける。
- * 直後の`--`は読み飛ばし、次の語が`place`か`release`なら拒否する。
- * 実行時に決まる語、glob、ブレース、`parallel`の`:::`は判定できないので`dynamic`を返す。
- * それ以外の語(`list`、ほかのファイル名など)は通す。`vim`や`chmod`でコードを開く・変える形を止めないためである。
- * `appends`が真なら、実行時に語が足されうるので、副コマンドが無い形も`dynamic`にする。
+ * 1つのコマンドを判定するときの、周りの状態。
+ * `inputs`は標準入力に渡る文字列(外側のコマンドの文字列をつなぐ)、`own`はそのコマンド自身の標準入力の文字列である。
+ * `inString`は、前置きの後ろの文字列から読んだコマンドのとき真になる。
+ * `viaXargs`は、前置きの`xargs`が標準入力の語を末尾に足すことを表す。
  */
-function holdSubcommandAt(
-  words: readonly Word[],
-  from: number,
-  appends: boolean,
-): HoldFinding | null {
-  const next = words[firstOperandAt(words, from)];
-  if (next === undefined) return appends ? "dynamic" : null;
-  if (isUnreadable(next)) return "dynamic";
-  if (next.text === "place" || next.text === "release") return "operation";
-  if (appends && PARALLEL_SEPARATOR.test(next.text)) return "dynamic";
-  return appends && endsWithoutSubcommandAt(words, from) ? "dynamic" : null;
+type HoldContext = {
+  readonly inputs: () => readonly string[] | null;
+  readonly own: () => readonly string[] | null;
+  readonly stdin: HoldStdin;
+  readonly depth: number;
+  readonly budget: HoldBudget;
+  readonly viaXargs: boolean;
+  readonly inString: boolean;
+};
+
+/**
+ * 語を実行時に足すコマンド(`xargs`、`parallel`、`-exec`系の式を伴う`find`)か、シェルがあれば真。
+ * 足される語やシェルの引数は、字面から読めない。オプションの文法は追わず、あれば指す語の有無によらず拒否する。
+ */
+function addsWordsOrRunsShell(words: readonly Word[]): boolean {
+  return words.some((word) => {
+    const name = baseName(word.text);
+    return (
+      name === "xargs" ||
+      name === "parallel" ||
+      FIND_EXECUTION.test(word.text) ||
+      SHELLS.has(name)
+    );
+  });
 }
 
-/** 凍結のCLIを指す語の`from`番目以降の判定。`appends`の扱いは`holdSubcommandAt`と同じ。 */
-function freezeWordSubcommandAt(
-  words: readonly Word[],
-  from: number,
-  appends: boolean,
-): HoldFinding | null {
-  const found = freezeSubcommandAt(words, from);
-  if (found !== null || !appends) return found;
-  const next = words[firstOperandAt(words, from)];
-  if (next !== undefined && PARALLEL_SEPARATOR.test(next.text)) {
-    return "dynamic";
-  }
-  return endsWithoutSubcommandAt(words, from) ? "dynamic" : null;
+/** 標準入力の出どころが読めないなら真。ファイル、実行時に決まる入力、`echo`と`printf`以外のパイプである。 */
+function hasUnreadableStdin(context: HoldContext): boolean {
+  const { stdin } = context;
+  if (stdin.dynamicInput || stdin.inputFiles.length > 0) return true;
+  const unreadablePipe = stdin.upstream.some((command) => {
+    const program = baseName(command.words[0]?.text ?? "");
+    return program !== "echo" && program !== "printf";
+  });
+  return unreadablePipe || context.inputs() === null;
 }
 
 /**
- * 語が、置く・解除する・消す書き込みのタスク名(`hold:release`、`freeze:reset`など)なら、拒否の種類を返す。
+ * 語が、書き込みのタスク名(`hold:release`、`freeze:reset`など)なら、拒否の種類を返す。
  * `freeze:place`は、`--scope deploy`のときだけ拒否する。globは、起動語の後ろで`mise`の判定が見る。
  */
 function taskNameFinding(
   words: readonly Word[],
   at: number,
-  word: Word,
 ): HoldFinding | null {
+  const word = words[at];
+  if (word === undefined) return null;
   const all = spellings(word);
   if (all.some((text) => text.startsWith("hold:") && text !== "hold:list")) {
     return "operation";
@@ -1026,399 +1023,127 @@ function taskNameFinding(
   return null;
 }
 
-/** 走査の途中で持ち回る、すでに見た語の状態。 */
-type WordsScan = {
-  /** `xargs`、`parallel`、`find -exec`の式を、もう見た。 */
-  appends: boolean;
-  /** `find -exec`の式を、もう見た。 */
-  findExec: boolean;
-  /** 保留と凍結のコードを指す語の有無。`{}`を判定するときに、1回だけ調べる。 */
-  mentions: { hold: boolean; freeze: boolean } | null;
-};
-
-/**
- * `find -exec`の`{}`が、保留や凍結のCLIの代わりになる位置なら、そのCLIの種類ごとに判定する。
- * `-exec`の直後か起動語の直後の`{}`で、コマンドのどこかの語が、そのCLIを指すときである。
- */
-function findPlaceholderFinding(
-  words: readonly Word[],
-  at: number,
-  scan: WordsScan,
-): HoldFinding | null {
-  const before = words[at - 1];
-  if (!scan.findExec || words[at]?.text !== "{}" || before === undefined) {
-    return null;
-  }
-  const afterExec = FIND_EXECUTION.test(before.text);
-  if (!afterExec && !isLauncherName(baseName(before.text), true)) return null;
-  scan.mentions ??= {
-    hold: words.some(pointsAtHoldCode),
-    freeze: words.some(pointsAtFreezeCode),
-  };
-  let found: HoldFinding | null = null;
-  if (scan.mentions.hold) {
-    found = stronger(found, holdSubcommandAt(words, at + 1, true));
-  }
-  if (scan.mentions.freeze) {
-    found = stronger(found, freezeWordSubcommandAt(words, at + 1, true));
-  }
-  return found;
+/** 語の綴りのどれかが、`target`と完全に一致するなら真。 */
+function hasSpelling(word: Word, target: string): boolean {
+  return spellings(word).includes(target);
 }
 
 /**
- * 語が、保留や凍結のCLIを指し、直後が書き込みの副コマンドか、書き込みのタスク名なら、拒否の種類を返す。
- * 空白を含む語は、コマンド文字列として読んで判定する。
+ * 起動語の外にある語を、共起で見る。指す語と書き込みの語が、同じコマンドの語とパイプの上流の語の和にあれば拒否する。
+ * 指す語は、保留か凍結のコードを指す語と、書き込みのタスク名である。書き込みの語は、綴りの完全一致で数える。
+ * 位置は見ない。語の並びを変えても、語を足しても、同じ結果になる。
+ * 指す語があり、ほかに実行時に決まる語、glob、ブレースがあれば、書き込みの語かを判定できないので`dynamic`にする。
+ * 凍結の`place`は、`--scope`の値を`deployScopeFinding`で別に判定する。
  */
-function wordFinding(
+function cooccurrenceFinding(
   words: readonly Word[],
-  at: number,
-  scan: WordsScan,
-  inputs: () => readonly string[] | null,
-  stdin: HoldStdin,
-  depth: number,
-  budget: HoldBudget,
+  from: number,
+  context: HoldContext,
 ): HoldFinding | null {
-  const word = words[at];
-  if (word === undefined) return null;
-  if (/\s/.test(word.text)) {
-    return textFinding(word.text, inputs, stdin, depth, budget);
-  }
-  let found = taskNameFinding(words, at, word);
-  if (found === "operation") return found;
-  found = stronger(found, findPlaceholderFinding(words, at, scan));
-  if (pointsAtHoldCode(word)) {
-    found = stronger(found, holdSubcommandAt(words, at + 1, scan.appends));
-  }
-  if (pointsAtFreezeCode(word)) {
-    found = stronger(
-      found,
-      freezeWordSubcommandAt(words, at + 1, scan.appends),
-    );
-  }
-  return found;
-}
-
-/**
- * 語のどれかが、書き込みの形なら、拒否の種類を返す。
- * `xargs`などの語を見たかは、1回の走査で持ち回る。`viaXargs`が真なら、最初から見たものとして扱う。
- */
-function wordsFinding(
-  words: readonly Word[],
-  inputs: () => readonly string[] | null,
-  stdin: HoldStdin,
-  depth: number,
-  budget: HoldBudget,
-  viaXargs: boolean,
-): HoldFinding | null {
-  const scan: WordsScan = {
-    appends: viaXargs,
-    findExec: false,
-    mentions: null,
-  };
+  const own = words.slice(from).filter((word) => !/\s/.test(word.text));
+  const upstream = context.stdin.upstream.flatMap((command) =>
+    command.words.filter((word) => !/\s/.test(word.text)),
+  );
+  const all = [...own, ...upstream];
   let found: HoldFinding | null = null;
-  for (let at = 0; at < words.length; at += 1) {
-    found = stronger(
-      found,
-      wordFinding(words, at, scan, inputs, stdin, depth, budget),
-    );
+  for (let at = 0; at < all.length; at += 1) {
+    found = stronger(found, taskNameFinding(all, at));
     if (found === "operation") return found;
-    const word = words[at];
-    if (isAppender(word)) {
-      scan.appends = true;
-      scan.findExec ||= FIND_EXECUTION.test(word?.text ?? "");
-    }
   }
-  return found;
+  const holdPoints = all.filter(pointsAtHoldCode);
+  const freezePoints = all.filter(pointsAtFreezeCode);
+  if (holdPoints.length === 0 && freezePoints.length === 0) return found;
+  const writes = (targets: readonly string[]) =>
+    all.some((word) => targets.some((target) => hasSpelling(word, target)));
+  if (holdPoints.length > 0 && writes(HOLD_WRITE_WORDS)) return "operation";
+  if (freezePoints.length > 0 && writes(FREEZE_WRITE_WORDS)) return "operation";
+  const placeAt = all.findIndex((word) => hasSpelling(word, "place"));
+  if (freezePoints.length > 0 && placeAt !== -1) {
+    found = stronger(
+      found,
+      deployScopeFinding(
+        all.slice(placeAt + 1).filter((word) => word.text !== "--"),
+      ),
+    );
+  }
+  const pointing = new Set([...holdPoints, ...freezePoints]);
+  const unreadable = all.some(
+    (word) => !pointing.has(word) && isUnreadable(word),
+  );
+  return unreadable ? stronger(found, "dynamic") : found;
 }
 
 /**
- * コマンド文字列(`script -c`の文字列、`ssh`の引数、シェルの標準入力の文字列)を、コマンドとして読んで判定する。
- * 外側の標準入力は、中のコマンドにも流れるものとして渡す。中のコマンドが読めなければ`dynamic`を返す。
- * 深さの上限を超えた文字列と、コマンドとして読めない文字列は、保留や凍結のコードを指す字面があれば拒否する。
+ * コマンド文字列(`script -c`の文字列、`ssh`の引数、`script`の標準入力の文字列)を、コマンドとして読んで判定する。
+ * 中のコマンドごとに`holdOperationAt`で判定し直す。結果を足し合わせて、語の共起を文字列をまたいで数えることはしない。
+ * `kind`が`string`のとき、外側の標準入力は中のコマンドにも流れるものとして渡す。`stdin`のとき、文字列自体が標準入力なので渡さない。
+ * 深さの上限を超えた文字列と、コマンドとして読めない文字列は、字面で判定する。
  * 読む回数と長さの合計の上限を超えたときも、判定できないものとして拒否する。
  */
 function textFinding(
   text: string,
-  inputs: () => readonly string[] | null,
-  stdin: HoldStdin,
-  depth: number,
-  budget: HoldBudget,
+  context: HoldContext,
+  kind: "string" | "stdin",
 ): HoldFinding | null {
-  if (depth >= COMMAND_TEXT_MAX_DEPTH)
-    return mentionsHoldOrFreeze(text) ? "operation" : null;
+  const literal = kind === "stdin" ? mentionsCodeWrite : mentionsHoldOrFreeze;
+  if (context.depth >= COMMAND_TEXT_MAX_DEPTH) {
+    return literal(text) ? "operation" : null;
+  }
+  const { budget } = context;
   budget.parses += 1;
   budget.chars += text.length;
   if (budget.parses > HOLD_MAX_PARSES || budget.chars > HOLD_MAX_TEXT) {
     return "dynamic";
   }
   const parsed = parseCommandLine(text);
-  if (!parsed.ok) return mentionsHoldOrFreeze(text) ? "operation" : null;
+  if (!parsed.ok) return literal(text) ? "operation" : null;
   let found: HoldFinding | null = null;
   for (const command of parsed.commands) {
     const stripped = stripWrappers(command.words);
     if (stripped.opaque) return "dynamic";
-    const innerInputs = chainInputs(inputs, () => literalShellInputs(command));
-    const innerStdin = chainStdin(stdin, holdStdin(command));
-    found = stronger(
-      found,
-      assignmentsFinding(
-        stripped.assignments,
-        innerInputs,
-        innerStdin,
-        depth + 1,
-        budget,
-      ),
-    );
-    if (stripped.words.length > 0) {
-      found = stronger(
-        found,
-        holdOperationAt(
-          stripped.words,
-          innerInputs,
-          innerStdin,
-          depth + 1,
-          budget,
-          stripped.wrappers.includes("xargs"),
-        ),
-      );
-    }
-    if (found === "operation") return found;
-  }
-  return found;
-}
-
-/**
- * 先頭がシェルでないコマンドの標準入力の文字列を判定する。シェルが実行するわけではないので、書き込みの形だけを拒否する。
- * 読めた文字列は、各コマンドの語を、保留や凍結のCLIを指す語の直後と書き込みのタスク名で見る。
- * 先頭の直接実行の規則は当てない。ファイル名を書いただけの文字列(`scripts/hold.ts`)を止めないためである。
- * 読めない文字列は、コードを指す字面と書き込みの語が並ぶか、書き込みのタスク名の字面のときだけ拒否する。
- */
-function stdinTextFinding(
-  text: string,
-  depth: number,
-  budget: HoldBudget,
-): HoldFinding | null {
-  budget.parses += 1;
-  budget.chars += text.length;
-  if (budget.parses > HOLD_MAX_PARSES || budget.chars > HOLD_MAX_TEXT) {
-    return "dynamic";
-  }
-  const parsed = parseCommandLine(text);
-  if (!parsed.ok) return mentionsCodeWrite(text) ? "operation" : null;
-  let found: HoldFinding | null = null;
-  for (const command of parsed.commands) {
-    const stripped = stripWrappers(command.words);
-    if (stripped.opaque) return "dynamic";
-    found = stronger(
-      found,
-      wordsFinding(
-        stripped.words,
-        () => literalShellInputs(command),
-        holdStdin(command),
-        depth + 1,
-        budget,
-        stripped.wrappers.includes("xargs"),
-      ),
-    );
-    if (found === "operation") return found;
-  }
-  return found;
-}
-
-/**
- * 変数代入の値を、語と同じ規則で判定する。値は、代入ごとに別の語として見る。
- * 代入は前置きとして外れるので、コマンドの語には現れない。
- */
-function assignmentsFinding(
-  assignments: readonly Word[],
-  inputs: () => readonly string[] | null,
-  stdin: HoldStdin,
-  depth: number,
-  budget: HoldBudget,
-): HoldFinding | null {
-  let found: HoldFinding | null = null;
-  for (const word of assignments) {
-    const cut = (text: string) => text.slice(text.indexOf("=") + 1);
-    const value: Word = {
-      text: cut(word.text),
-      dynamic: word.dynamic,
-      glob: word.glob,
-      ...(word.variants === undefined
-        ? {}
-        : { variants: word.variants.map(cut) }),
+    if (stripped.words.length === 0) continue;
+    const own = () => literalShellInputs(command);
+    const inner: HoldContext = {
+      inputs: kind === "stdin" ? own : chainInputs(context.inputs, own),
+      own,
+      stdin:
+        kind === "stdin"
+          ? holdStdin(command)
+          : chainStdin(context.stdin, holdStdin(command)),
+      depth: context.depth + 1,
+      budget,
+      viaXargs: stripped.wrappers.includes("xargs"),
+      inString: true,
     };
-    found = stronger(
-      found,
-      wordsFinding([value], inputs, stdin, depth, budget, false),
-    );
+    found = stronger(found, holdOperationAt(stripped.words, inner));
     if (found === "operation") return found;
   }
   return found;
 }
 
 /**
- * シェルが標準入力から読むコードの判定。標準入力の文字列を、コマンドとして読んで判定する。
- * 入力元が実行時に決まるか、文字列として読めなければ`dynamic`を返す。
- * 入力元がファイルか、パイプの前が`echo`と`printf`以外のコマンドのときも、中身を読めないので`dynamic`を返す。
- */
-function shellStdinFinding(
-  inputs: () => readonly string[] | null,
-  stdin: HoldStdin,
-  depth: number,
-  budget: HoldBudget,
-): HoldFinding | null {
-  if (stdin.dynamicInput || stdin.inputFiles.length > 0) return "dynamic";
-  const unreadableUpstream = stdin.upstream.some((command) => {
-    const program = baseName(command.words[0]?.text ?? "");
-    return program !== "echo" && program !== "printf";
-  });
-  if (unreadableUpstream) return "dynamic";
-  const literal = inputs();
-  if (literal === null) return "dynamic";
-  let found: HoldFinding | null = null;
-  for (const text of literal) {
-    found = stronger(
-      found,
-      textFinding(text, () => [], NO_STDIN, depth, budget),
-    );
-    if (found === "operation") return found;
-  }
-  return found;
-}
-
-/**
- * 前置きの後ろのシェルの判定。`-c`の文字列は、コマンド文字列として読んで判定する。
- * `-c`が無いシェルは標準入力からコードを読むので、標準入力の文字列を判定する。
- * ファイルを渡す形(`bash ./x.sh`)は標準入力を読まないので通す。
- */
-function launchedShellFinding(
-  shell: readonly Word[],
-  inputs: () => readonly string[] | null,
-  stdin: HoldStdin,
-  depth: number,
-  budget: HoldBudget,
-): HoldFinding | null {
-  const args = shellArguments(shell);
-  if (args === null) return null;
-  const source = shellInputSource(args);
-  if (source === "command") {
-    const script = shellScriptArgument(args);
-    return script === null
-      ? null
-      : textFinding(script.text, inputs, stdin, depth, budget);
-  }
-  return source === "stdin"
-    ? shellStdinFinding(inputs, stdin, depth, budget)
-    : null;
-}
-
-/**
- * 前置きの後ろの起動語(`mise`、実行系、シェル)を、その位置から先頭のときと同じ規則で判定する。
+ * 前置きの後ろの起動語(`mise`と実行系)を、その位置から先頭のときと同じ規則で判定し直す。
  * 起動語が複数あれば、すべて調べる。数に上限を置き、超えたら拒否する。
  */
 function launchersFinding(
   words: readonly Word[],
-  inputs: () => readonly string[] | null,
-  stdin: HoldStdin,
-  depth: number,
-  budget: HoldBudget,
-  viaXargs: boolean,
+  context: HoldContext,
 ): HoldFinding | null {
   let found: HoldFinding | null = null;
   let count = 0;
-  let appends = viaXargs || isAppender(words[0]);
   for (let at = 1; at < words.length; at += 1) {
-    const word = words[at];
-    const name = baseName(word?.text ?? "");
-    const wasAppends = appends;
-    appends ||= isAppender(word);
-    if (!isLauncherName(name, true)) continue;
-    const isShell = name !== "mise" && !RUNNERS.has(name);
+    const name = baseName(words[at]?.text ?? "");
+    if (!isLauncherName(name)) continue;
     count += 1;
     if (count > HOLD_MAX_LAUNCHERS) return "dynamic";
-    let finding: HoldFinding | null;
-    if (name === "mise") {
-      finding = miseFinding(words.slice(at), inputs, stdin, wasAppends);
-    } else if (isShell) {
-      finding = launchedShellFinding(
-        words.slice(at),
-        inputs,
-        stdin,
-        depth + 1,
-        budget,
-      );
-    } else {
-      finding = runnerFinding(words.slice(at + 1), inputs, stdin, wasAppends);
-    }
+    const finding =
+      name === "mise"
+        ? miseFinding(words.slice(at), context.inputs, context.stdin)
+        : runnerFinding(words.slice(at + 1), context.inputs, context.stdin);
     found = stronger(found, finding);
     if (found === "operation") return found;
   }
   return found;
-}
-
-/** 標準入力に渡るものが、何かあるか読めないなら真。 */
-function hasStdinSource(
-  inputs: () => readonly string[] | null,
-  stdin: HoldStdin,
-): boolean {
-  if (
-    stdin.redirects.length > 0 ||
-    stdin.upstream.length > 0 ||
-    stdin.dynamicInput
-  ) {
-    return true;
-  }
-  const literal = inputs();
-  return literal === null || literal.length > 0;
-}
-
-/**
- * 先頭が起動語でも、読み取りや検査の道具でもないコマンドの判定。`script`、`caffeinate`、`ssh`、`vim`などである。
- * 全部の語を、保留や凍結のCLIを指す語の直後が書き込みの形か、書き込みのタスク名かで見る。
- * 前置きの後ろの起動語は、その位置から判定し直す。
- * 先頭がシェルでないときは、標準入力の文字列(ヒアドキュメント、ヒアストリング、`echo`のパイプ)も、最上位のコマンドだけ見る。
- * `script`が標準入力から読んだ文字列を、中のシェルが実行できるためである。
- * 先頭がシェルのときの`-c`の文字列は、標準入力が無ければ飛ばす。字句に分ける処理が別のコマンドとして取り出し、そちらで判定するためである。
- * 標準入力があれば、外側の標準入力をつないで読む。中のコマンドが標準入力からコードを読めるためである。
- * 標準入力からコードを読むシェルは、標準入力の文字列を判定する。
- */
-function prefixedFinding(
-  words: readonly Word[],
-  inputs: () => readonly string[] | null,
-  stdin: HoldStdin,
-  depth: number,
-  budget: HoldBudget,
-  viaXargs: boolean,
-): HoldFinding | null {
-  const shellArgs = shellArguments(words);
-  const source = shellArgs === null ? null : shellInputSource(shellArgs);
-  const script =
-    shellArgs !== null && source === "command"
-      ? shellScriptArgument(shellArgs)
-      : null;
-  const scanned =
-    script === null ? words : words.filter((word) => word !== script);
-  let found = wordsFinding(scanned, inputs, stdin, depth, budget, viaXargs);
-  if (found === "operation") return found;
-  if (script !== null) {
-    if (hasStdinSource(inputs, stdin)) {
-      found = stronger(
-        found,
-        textFinding(script.text, inputs, stdin, depth + 1, budget),
-      );
-    }
-  } else if (source === "stdin") {
-    found = stronger(found, shellStdinFinding(inputs, stdin, depth, budget));
-  } else if (shellArgs === null && depth === 0) {
-    for (const text of inputs() ?? []) {
-      found = stronger(found, stdinTextFinding(text, depth, budget));
-      if (found === "operation") return found;
-    }
-  }
-  return stronger(
-    found,
-    launchersFinding(words, inputs, stdin, depth, budget, viaXargs),
-  );
 }
 
 /**
@@ -1434,27 +1159,58 @@ function isReadOnlyProgram(program: string, words: readonly Word[]): boolean {
   );
 }
 
+/**
+ * 前置きの後ろの判定。`words`の`from`番目から後ろを見る。
+ * 前置き自身が先頭のときは1、前置きの後ろの文字列から読んだコマンドは0である。
+ * 1. 語を足すコマンド、シェル、読めない標準入力があれば、指す語の有無によらず`dynamic`で拒否する。
+ * 2. 空白を含む語(`script -c`や`ssh`の文字列)と、標準入力の文字列は、コマンドとして読んで判定し直す。
+ * 3. 前置きの後ろの起動語は、既存の分岐で判定し直す。
+ * 4. 語は、共起で見る。
+ * 文字列から読んだコマンドが読み取りの道具なら、通す。
+ */
+function underPrefixFinding(
+  words: readonly Word[],
+  from: number,
+  context: HoldContext,
+): HoldFinding | null {
+  if (context.viaXargs || addsWordsOrRunsShell(words)) return "dynamic";
+  if (from === 0 && isReadOnlyProgram(baseName(words[0]?.text ?? ""), words)) {
+    return null;
+  }
+  const readsStdin = words.some((word) =>
+    STDIN_PREFIX_PROGRAMS.has(baseName(word.text)),
+  );
+  if (readsStdin && hasUnreadableStdin(context)) return "dynamic";
+  let found: HoldFinding | null = null;
+  for (let at = from; at < words.length; at += 1) {
+    const word = words[at];
+    if (word === undefined || !/\s/.test(word.text)) continue;
+    found = stronger(found, textFinding(word.text, context, "string"));
+    if (found === "operation") return found;
+  }
+  for (const text of context.own() ?? []) {
+    found = stronger(found, textFinding(text, context, "stdin"));
+    if (found === "operation") return found;
+  }
+  found = stronger(found, launchersFinding(words, context));
+  if (found === "operation") return found;
+  return stronger(found, cooccurrenceFinding(words, from, context));
+}
+
 function holdOperationAt(
   words: readonly Word[],
-  inputs: () => readonly string[] | null,
-  stdin: HoldStdin,
-  depth: number,
-  budget: HoldBudget,
-  viaXargs: boolean,
+  context: HoldContext,
 ): HoldFinding | null {
   const first = words[0]?.text ?? "";
   const program = baseName(first);
-  if (program === "mise") return miseFinding(words, inputs, stdin, viaXargs);
-  if (RUNNERS.has(program)) {
-    return runnerFinding(words.slice(1), inputs, stdin, viaXargs);
-  }
+  const { inputs, stdin } = context;
+  if (program === "mise") return miseFinding(words, inputs, stdin);
+  if (RUNNERS.has(program)) return runnerFinding(words.slice(1), inputs, stdin);
   if (SQL_PROGRAMS.has(program)) {
     return sqlTouchesHolds(words, inputs) ? "operation" : null;
   }
   // `./scripts/freeze.ts release`のように、凍結のCLIを直接実行する形。
-  if (direct0IsFreezeCli(words)) {
-    return freezeCliFinding(words, inputs, viaXargs);
-  }
+  if (direct0IsFreezeCli(words)) return freezeCliFinding(words, inputs);
   // `./scripts/hold.ts place`のように、スクリプトを直接実行する形。
   const direct = words[0];
   if (direct !== undefined && pointsAtHoldCode(direct)) {
@@ -1462,8 +1218,10 @@ function holdOperationAt(
       ? null
       : "operation";
   }
-  if (isReadOnlyProgram(program, words)) return null;
-  return prefixedFinding(words, inputs, stdin, depth, budget, viaXargs);
+  if (PREFIX_PROGRAMS.has(program))
+    return underPrefixFinding(words, 1, context);
+  // 前置きの無い形は、前置きの後ろの文字列から読んだコマンドだけを、前置きの規則で見る。
+  return context.inString ? underPrefixFinding(words, 0, context) : null;
 }
 
 /**
@@ -1473,8 +1231,9 @@ function holdOperationAt(
  * `stdin`は、標準入力に流れ込むものの出どころ(リダイレクト、パイプの前のコマンド、動的な入力)である。
  * `viaXargs`は、前置きの`xargs`が標準入力の語を末尾に足すことを表す。
  * 実行系が標準入力をコードとして読む形で、出どころが保留か凍結のコード、または読めないものなら拒否する。
- * 先頭が`mise`と実行系なら、その引数を調べる。それ以外で、読み取りや検査の道具でもなければ、
- * 前置き(`script`、`caffeinate`など)の後ろの語、コマンド文字列、前置きの後ろの起動語も同じ規則で調べる。
+ * 先頭が`mise`、実行系、`docker`と`psql`、保留や凍結のCLIの直接実行なら、その引数を調べる。
+ * 先頭が前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`)なら、前置きの規則で調べる。
+ * それ以外の先頭は調べず、nullを返す。
  * 読めないときはnullを返す。呼ばれるのは、必要になったときだけである。
  */
 export function findHoldOperation(
@@ -1483,19 +1242,15 @@ export function findHoldOperation(
   stdin: HoldStdin = NO_STDIN,
   viaXargs = false,
 ): HoldFinding | null {
-  return holdOperationAt(words, inputs, stdin, 0, newBudget(), viaXargs);
-}
-
-/**
- * 先頭の変数代入の値が、保留を置く・解除する操作などを含むなら、拒否の種類を返す。
- * 代入は前置きとして外れ、`findHoldOperation`に渡らない。`GIT_PAGER`のように、値がコマンドとして実行される変数があるためである。
- */
-export function findHoldAssignment(
-  assignments: readonly Word[],
-  inputs: () => readonly string[] | null,
-  stdin: HoldStdin = NO_STDIN,
-): HoldFinding | null {
-  return assignmentsFinding(assignments, inputs, stdin, 0, newBudget());
+  return holdOperationAt(words, {
+    inputs,
+    own: inputs,
+    stdin,
+    depth: 0,
+    budget: newBudget(),
+    viaXargs,
+    inString: false,
+  });
 }
 
 /**
@@ -2136,7 +1891,7 @@ function stopAllCallAt(
   }
   // `script`や`caffeinate`のような前置きの後ろに`mise`か実行系が続く形は、その位置から判定する。
   const launcherAt = words.findIndex((word, index) => {
-    return index > 0 && isLauncherName(baseName(word.text), false);
+    return index > 0 && isLauncherName(baseName(word.text));
   });
   if (launcherAt === -1) {
     return words.some((word) => wordStopAllCall(word, inputs, depth));

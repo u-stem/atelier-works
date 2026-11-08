@@ -40,10 +40,8 @@ import {
 import { findSecretReference, type SecretContext } from "./guarded-files.ts";
 import {
   findConsoleReleaseCall,
-  findHoldAssignment,
   findHoldOperation,
   findStopAllCall,
-  type HoldFinding,
   holdStdin,
 } from "./hold-guard.ts";
 import {
@@ -401,7 +399,7 @@ export const REASONS = {
   stopAll:
     "Placing or releasing the stop-all, and restoring the settings it turned off, is not allowed in any Claude session: running scripts/stop_all.ts, mise run stop, mise run stop:release, or mise run stop:restore. The stop-all halts the whole Factory, cancels the running jobs, and kills the leftover Claude processes, releasing it enables the schedules again, and restoring turns the *_enabled settings back on, so a person confirms it in a terminal. A person runs mise run stop, mise run stop:release, or mise run stop:restore in a terminal and types yes there, or uses the stop-all section of the system screen in the Console to place or release it. Reading the code (cat, rg, git) and running the tests (bun test) are fine. A command that builds the name from a variable is not caught here; do not try it.",
   subagentHold:
-    "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push: a hold stops merges, a deploy freeze stops every deployment, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, mise run freeze:release, mise run freeze:reset, or mise run push:prune. Behind a prefix such as script or caffeinate, a command that only carries those words as arguments (for example in a commit message) is denied too; write it without the prefix. Listing with mise run hold:list or mise run freeze:list is fine, and so is placing a schedule freeze (mise run freeze:place -- --target ...). A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
+    "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push: a hold stops merges, a deploy freeze stops every deployment, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, mise run freeze:release, mise run freeze:reset, or mise run push:prune. Behind a prefix such as script or caffeinate, a command that only carries those words as arguments (for example in a commit message) is denied too; write it without the prefix. A prefix with xargs, parallel, find -exec, a shell, or a standard input it cannot read is denied because the words it runs cannot be read. Listing with mise run hold:list or mise run freeze:list is fine, and so is placing a schedule freeze (mise run freeze:place -- --target ...). A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
   subagentHoldOption:
     "This mise command has an option that is not in the list this hook knows, and an option can take a value that shifts the subcommand, so it cannot be told apart from mise run hold:place or mise run hold:release. Use only known options of mise (-q, -v, -y, -C <dir>, -E <env>, --log-level <level> ...), or write the option as --name=value. Subagents must not place or release holds.",
   subagentHoldDynamic:
@@ -576,21 +574,6 @@ function upstreamWords(command: SimpleCommand): readonly Word[] {
   return words;
 }
 
-/** subagentが保留や凍結を書く操作を、コマンドの語と、前置きとして外れた変数代入の値から探す。 */
-function holdFinding(
-  command: SimpleCommand,
-  assignments: readonly Word[],
-  words: readonly Word[],
-  viaXargs: boolean,
-): HoldFinding | null {
-  const inputs = () => literalShellInputs(command);
-  const stdin = holdStdin(command);
-  return (
-    findHoldOperation(words, inputs, stdin, viaXargs) ??
-    findHoldAssignment(assignments, inputs, stdin)
-  );
-}
-
 function checkSimpleCommand(
   command: SimpleCommand,
   directory: string | null,
@@ -637,7 +620,12 @@ function checkSimpleCommand(
   const hold =
     scope.input.agentId === null
       ? null
-      : holdFinding(command, assignments, words, wrappers.includes("xargs"));
+      : findHoldOperation(
+          words,
+          () => literalShellInputs(command),
+          holdStdin(command),
+          wrappers.includes("xargs"),
+        );
   if (hold === "dynamic") return deny(REASONS.subagentHoldDynamic);
   if (hold === "option") return deny(REASONS.subagentHoldOption);
   if (hold !== null) return deny(REASONS.subagentHold);
