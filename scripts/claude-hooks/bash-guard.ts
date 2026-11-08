@@ -40,10 +40,11 @@ import {
 import { findSecretReference, type SecretContext } from "./guarded-files.ts";
 import {
   findConsoleReleaseCall,
+  findHoldAssignment,
   findHoldOperation,
   findStopAllCall,
-  type HoldStdin,
-  type HoldUpstream,
+  type HoldFinding,
+  holdStdin,
 } from "./hold-guard.ts";
 import {
   ALLOW,
@@ -562,29 +563,6 @@ function directoryAfter(
   return resolveFrom(directory, target.text);
 }
 
-/** 標準入力に流れ込むものの出どころ。保留と凍結のコードを実行系へ流し込む形を見分けるために渡す。 */
-function holdStdin(command: SimpleCommand): HoldStdin {
-  const upstream: HoldUpstream[] = [];
-  for (
-    let source = command.pipedFrom;
-    source !== null;
-    source = source.pipedFrom
-  ) {
-    upstream.push({
-      words: [...stripWrappers(source.words).words],
-      redirects: source.redirects,
-      inputs: source.inputs,
-    });
-  }
-  return {
-    redirects: command.redirects,
-    upstream,
-    dynamicInput:
-      command.inputs.some((word) => word.dynamic) ||
-      command.redirects.some((word) => word.dynamic),
-  };
-}
-
 /** パイプの上流のコマンドの語を、連鎖の先頭までたどってすべて返す。前置きは外す。 */
 function upstreamWords(command: SimpleCommand): readonly Word[] {
   const words: Word[] = [];
@@ -596,6 +574,20 @@ function upstreamWords(command: SimpleCommand): readonly Word[] {
     words.push(...stripWrappers(source.words).words);
   }
   return words;
+}
+
+/** subagentが保留や凍結を書く操作を、コマンドの語と、前置きとして外れた変数代入の値から探す。 */
+function holdFinding(
+  command: SimpleCommand,
+  assignments: readonly Word[],
+  words: readonly Word[],
+): HoldFinding | null {
+  const inputs = () => literalShellInputs(command);
+  const stdin = holdStdin(command);
+  return (
+    findHoldOperation(words, inputs, stdin) ??
+    findHoldAssignment(assignments, inputs, stdin)
+  );
 }
 
 function checkSimpleCommand(
@@ -644,11 +636,7 @@ function checkSimpleCommand(
   const hold =
     scope.input.agentId === null
       ? null
-      : findHoldOperation(
-          words,
-          () => literalShellInputs(command),
-          holdStdin(command),
-        );
+      : holdFinding(command, assignments, words);
   if (hold === "dynamic") return deny(REASONS.subagentHoldDynamic);
   if (hold === "option") return deny(REASONS.subagentHoldOption);
   if (hold !== null) return deny(REASONS.subagentHold);

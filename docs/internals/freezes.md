@@ -257,12 +257,13 @@ pushとmigrationの間に保留が置かれても、migrationは続く。
 | スケジュールを止める(Consoleの画面) | できない。`console_schedule_stop`を呼ぶ形は拒否される | 凍結を置いて7分後に、確認のダイアログを通して止める |
 | 解除(`freeze:release`) | 自分の`holder`の行だけ解除できる。subagentは拒否される | 端末で`yes`を入力して解除する |
 | 解除(Consoleの画面) | できない。`freeze_release`を`wmill`や`curl`で呼ぶ形は、主セッションを含めて拒否される | 確認のダイアログを通して、誰の行でも解除できる |
-| 壊れた変数を空に戻す(`freeze:reset`) | できない | 端末で`yes`を入力して実行する |
-| 削除を反映するpush(`push:prune`) | できない | 端末で`yes`を入力して実行する |
+| 壊れた変数を空に戻す(`freeze:reset`) | できない。subagentは拒否される | 端末で`yes`を入力して実行する |
+| 削除を反映するpush(`push:prune`) | できない。subagentは拒否される | 端末で`yes`を入力して実行する |
 
 `--dry-run`付きのpushは、どちらの主体も実行できる。
 
 subagentの拒否は、[セキュリティ](../security.md)の「Claude Codeの拒否ルール」にある、ベストエフォートの規則である。
+`script`や`caffeinate`のような前置きの後ろと、コマンド文字列の中の同じ形も拒否する。
 
 ### Consoleからの解除
 

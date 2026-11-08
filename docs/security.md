@@ -4004,7 +4004,7 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
   窓は秒単位で、運用手順に止める直前の`freeze:list`による確認を置いているため、受け入れる。
 - `session`は、deployの保留を確認なしで置ける。
   上限は120分で、この区別は誤操作を防ぐためのもので、境界ではない。
-  subagentは、`hold-guard.ts`が`freeze:place`の`--scope deploy`と`freeze:release`を拒否する。
+  subagentは、`hold-guard.ts`が`freeze:place`の`--scope deploy`、`freeze:release`、`freeze:reset`、`push:prune`を拒否する。
   ベストエフォートの規則で、保留の拒否と同じ限界を持つ。
   `bun run - list < scripts/freeze.ts`のように標準入力へ流し込む形は、作業ツリーの`scripts/`で実行すると動くことを実測した。
   `mise run -- freeze:release 1`は、mise 2026.9.13で実測すると、`--`より後ろをタスク`default`への引数として扱い、実行しない。
@@ -4178,9 +4178,30 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 - `merge-guard`の読みは、`mise exec`で包んだ子プロセスを使う。
   子の環境で自動インストールを止めるので、ネットワークには出ない。
   `mise`のツールが入っていなければ、読めないものとして拒否される。
-- subagentの保留の操作と、凍結のCLIでのdeployの保留の設置と解除は、`scripts/claude-hooks/hold-guard.ts`が、拒否を既定にして拒否する。
-  判定はプログラムの種類によらず、語や標準入力に保留のコードの字面があるかで行う。
-  保留のコードを指す語を含む呼び出しは、`list`と検査の道具の2つの形だけを許す。
+- subagentの保留の操作と、凍結のCLIでの端末の確認を通る書き込みは、`scripts/claude-hooks/hold-guard.ts`が拒否する。
+  凍結の書き込みは、deployの保留の設置、凍結の解除、凍結の全消去(`freeze:reset`)、削除を確定する押し出し(`push:prune`)である。
+  判定は語の字面で行い、先頭の語で規則を分ける。
+  先頭が`mise`か実行系なら、保留のコードを指す語を含む呼び出しは、`list`と検査の道具の2つの形だけを許す。
+  先頭がそれ以外で、読み取りや検査の道具でもなければ、前置きの規則で見る。
+  前置きの規則は、`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`、`find -exec`、`watch`、`parallel`、`strace`の後ろに使う。
+  `python3`や`vim`のように、起動語の一覧に無いコマンドが先頭のときも同じである。
+  全部の語を見て、保留か凍結のCLIを指す語の直後が書き込みの副コマンド(`place`、`release`など)なら拒否する。
+  直後が実行時に決まる語、glob、ブレースなら拒否する。
+  `find -exec`、`xargs`、`parallel`の後ろは、語が足されうるので、直後に語が無い形も拒否する。
+  `vim scripts/hold.ts`のようにコードを開く・変えるだけの形は、直後に副コマンドが無いので止めない。
+  前置きの後ろの`mise`、実行系、シェルは、その位置から先頭のときと同じ規則で判定し直す。
+  この起動語は16個まで見て、超えたら拒否する。
+  `script -c`や`ssh`の引数の文字列と、シェルの`-c`の文字列は、コマンドとして読んで判定する。
+  標準入力から読むシェルは、標準入力の文字列(ヒアドキュメント、ヒアストリング、`echo`のパイプ)を判定する。
+  読めなければ拒否する。
+  最上位のコマンドの標準入力の文字列も、`script`が読んだ文字列を中のシェルが実行できるので、同じ規則で判定する。
+  文字列は4段の入れ子まで読む。
+  超えた文字列は、保留か凍結のコードの字面があれば拒否する。
+  読む文字列の数と長さの合計にも上限を置き、超えたら拒否する。
+  フックのタイムアウトの中で終えるためである。
+  先頭の変数代入の値(`GIT_PAGER='…'`など)は、前置きとして外れるので、コマンドの語とは別に同じ規則で判定する。
+  前置きの後ろで、実行の字面が引数に入る形(`script -q /dev/null rg -n bun scripts/hold.ts`)は、実行と区別できないので拒否する。
+  この誤拒否は、前置きの後ろに読み取りの道具を置く形に限られるため、受け入れる。
   引用符の外のglobと文字クラス(`scripts/hol?.ts`、`scripts/hol[d].ts`、`hold:[pr]*`)は、保留のコードの名前に当たりうれば拒否する。
   ファイル名の部分だけを見て、ディレクトリの書き方(`//`、`/./`、`/../`)は問わない。
   POSIXの文字クラス(`[:lower:]`、`[=o=]`、`[.o.]`)は、括弧の中のどこにあっても読み解かず、当たりうるものとして拒否する。
@@ -4200,7 +4221,7 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   `npm`、`pnpm`、`pnpx`、`yarn`も実行系として扱う。
   拒否はベストエフォートで、境界ではない。
   別名の呼び出し、変数で組んだパス、`docker compose exec db psql`に渡す語を組み立てて書く形、新しいファイルを書いて実行する形は止めない。
-  コマンドを起動する前置き(`find -exec`、`watch`、`parallel`、`ssh`、`/usr/bin/time`、`caffeinate`など)の後ろに実行系を置く形と、実行系以外が文字列で受け取るコード(`python -c`、`perl -e`など)も止めない。
+  起動語の一覧(`mise`、実行系、シェル)に無いインタプリタが文字列で受け取るコード(`python -c`、`perl -e`など)は、シェルのコマンドとして読める形だけ止める。
   BashとDockerを持つ主体は、psqlで保留を直接書ける。
   止めるのは、誤操作と、拒否を知らない呼び出しである。
   フックのディレクトリは保護パスなので、拒否を外す変更はPRの差分で見える。
@@ -4429,9 +4450,9 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | 無条件のforce push(`--force`、`-f`、`+`で始まるrefspec) | 公開した履歴を書き換えると、ほかの作業やFactoryの`pr_fix`の変更を消しうる |
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
-| subagentのdeployの保留を置く操作(`freeze:place`の`--scope deploy`、`scripts/freeze.ts place --scope deploy`)と凍結の解除(`freeze:release`、`scripts/freeze.ts release`)。`--scope`の値が実行時に決まる形も拒否する | deployの保留は反映全体を止める。解除すると保留を外せる。subagentには、確認する相手がいない。スケジュールの凍結を置くことと一覧は許す |
+| subagentのdeployの保留を置く操作(`freeze:place`の`--scope deploy`、`scripts/freeze.ts place --scope deploy`)、凍結の解除(`freeze:release`、`scripts/freeze.ts release`)、凍結の全消去(`freeze:reset`、`scripts/freeze.ts reset`)、削除を確定する押し出し(`push:prune`、`scripts/freeze.ts push --prune`)。前置き(`script`、`caffeinate`など)の後ろも拒否する。`--scope`の値が実行時に決まる形も拒否する | deployの保留は反映全体を止める。解除と全消去は保留を外せる。削除を確定する押し出しは、リモートだけの項目を消す。どれも人の端末の確認を通る操作で、subagentには確認する相手がいない。スケジュールの凍結を置くことと一覧は許す |
 | 主セッションを含むすべてのClaudeのセッションの、Consoleの書き込みのscriptを呼びうる操作。コマンドの語か標準入力の文字列に、書き込みのscript(`scripts/claude-hooks/console-scripts.ts`の一覧。解除の`hold_release`と`freeze_release`、取消の`console_job_cancel`、再実行の`console_job_rerun`、設定変更の`console_config_update`、`approval_decide`、`retry_work_item`など)の名前、名前に当たりうるglob、ブレースの形があるもの。読み取りのプログラムと`wmill`の読み取りの副コマンドは、実行を表す語が並ばない限り除く。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる |
-| subagentの保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。一覧(`list`)は許す |
+| subagentの保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する。前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`など)の後ろの同じ形と、コマンド文字列の中の同じ形も拒否する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。一覧(`list`)は許す |
 | `gh pr`と`gh api`のうち、読み取りか編集と確かめられた形以外(`gh pr merge`、書き込みのメソッドの`gh api`、GraphQLのマージのmutationなど)と、マージを含む`gh alias`。対象のリポジトリのマージの保留が有効なときと、保留を読めないとき。リポジトリが決まらないものは、どのリポジトリの保留でも拒否する | 保留は、期限つきでマージを止める。綴りの列挙は漏れるので、確かめられた形以外を対象にする。読めないときに通すと、保留を置いた意味が外れる |
 | `wmill datatable migrate up`と`migrate down`(deployの保留が有効か、読めないとき)。`--dry-run`の無い`wmill sync push`(deployの保留かスケジュールの凍結が有効か、読めないとき) | deployの保留は反映全体を止める。除外を付けない手動のpushは、凍結中のスケジュールを上書きする |
 | `xargs`の引数で渡す`git push`と`git commit` | 標準入力から来る引数は、実行するまで分からない |
@@ -4629,12 +4650,11 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
   - 変数や文字列の連結で組んだパス、動的なimport
   - `docker compose exec db psql`に渡す語を、組み立てて書く形
   - 新しいファイルを書いて実行する形。`mise-tasks/`と`.mise-tasks/`は保護パスだが、止めるのはFactoryのフローだけで、ローカルのsubagentには効かない
-  - コマンドを起動する前置き(`find -exec`、`watch`、`parallel`、`ssh`、`/usr/bin/time`、`caffeinate`、`script`、`strace`など)の後ろに実行系を置く形
-  - 実行系以外が文字列で受け取るコード(`python -c`、`perl -e`、`ruby -e`、`awk`の`system()`など)
+  - 起動語の一覧(`mise`、実行系、シェル)に無いインタプリタが文字列で受け取るコード(`python -c`、`perl -e`、`ruby -e`、`awk`の`system()`など)。シェルのコマンドとして読める形だけ止める
   - `mise generate`の書き先の照合は、既存の`.git/hooks`と`.git/config`の照合(`GIT_INTERNALS`)と同じ限界を持つ。`cd`やシンボリックリンクを使った別名の書き方は見ない
   - ブレースの展開は、数字や文字の範囲(`{a..c}`)を展開しない
   - `mise generate`の書き先の照合は、`/../`をまとめない。globとブレースを含む語は、書き先の判定ができないので拒否する
-  - 凍結のCLIは、副コマンドの語(`place`、`release`)と`--scope`の値の字面で判定する。別名と、組み立てたパスは見ない
+  - 凍結のCLIは、副コマンドの語(`place`、`release`、`reset`、`push`の`--prune`)と`--scope`の値の字面で判定する。別名と、組み立てたパスは見ない
   - 実行時に決まる語を含む`mise run`は、保留の操作と区別できないので拒否する。静的な値で書けば通る。全体オプションの値(`mise -C "$DIR" run check`)の変数は、保留とは別の規則で拒否する
 - マージと反映の判定が追わない形。残るリスクは「保留」に書く。
   - 別名と関数、変数や連結で組んだ語、スクリプトのファイルの中の呼び出し

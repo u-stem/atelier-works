@@ -701,7 +701,7 @@ function collectCommands(
 }
 
 /** `sh -c`の後の語を返す。`-c`が無ければnullを返す。 */
-function shellScriptArgument(args: readonly Word[]): Word | null {
+export function shellScriptArgument(args: readonly Word[]): Word | null {
   for (let index = 0; index < args.length; index += 1) {
     const text = args[index]?.text ?? "";
     if (text === "-o" || text === "+o") {
