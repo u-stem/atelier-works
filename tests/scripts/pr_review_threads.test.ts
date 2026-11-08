@@ -676,6 +676,73 @@ describe("reviewThreadsForPrompt", () => {
     expect(threads[0]?.comments[1]?.author).toBe("other");
   });
 
+  describe("the author shown in the prompt", () => {
+    function authorOfReply(body: string, login = VIEWER) {
+      const { threads } = reviewThreadsForPrompt(
+        [thread(replied(login, body))],
+        VIEWER,
+        isAllowed,
+      );
+      return threads[0]?.comments[1]?.author;
+    }
+
+    test("shows the viewer's free-text reply without a tag or marker as an allowed person", () => {
+      expect(authorOfReply("この指摘は仕様なので見送ります。")).toBe(
+        "allowed_person",
+      );
+    });
+
+    test("shows the finding that starts with the review role tag as the factory", () => {
+      const { threads } = reviewThreadsForPrompt([thread()], VIEWER, isAllowed);
+      expect(threads[0]?.comments[0]?.author).toBe("factory");
+    });
+
+    test("shows a reply that has a re-review marker as the factory", () => {
+      expect(
+        authorOfReply("事実です。\n\n<!-- factory:pr_review_answer:9 -->"),
+      ).toBe("factory");
+    });
+
+    test("shows a reply that has the pr_fix marker as the factory", () => {
+      expect(authorOfReply("直しました。\n\n<!-- factory:pr_fix:9 -->")).toBe(
+        "factory",
+      );
+    });
+
+    test("shows a reply whose role tag line ends with CRLF as the factory", () => {
+      expect(authorOfReply("[Factory 自動返信]\r\n事実です。")).toBe("factory");
+    });
+
+    test("shows a reply written by the re-review as the factory", () => {
+      expect(
+        authorOfReply(
+          renderThreadReply(
+            { thread_id: 1, decision: "answered", body: "事実です。" },
+            9,
+          ),
+        ),
+      ).toBe("factory");
+    });
+
+    test("shows an allowed person other than the viewer as an allowed person", () => {
+      expect(authorOfReply("質問です。", "alice")).toBe("allowed_person");
+    });
+
+    test("does not start a thread for the factory when the viewer's first comment has no role tag", () => {
+      const { threads } = reviewThreadsForPrompt(
+        [
+          thread({
+            firstCommentBody: "just a note",
+            comments: [comment(VIEWER, "just a note")],
+          }),
+        ],
+        VIEWER,
+        isAllowed,
+      );
+      expect(threads[0]?.started_by).toBe("person");
+    });
+  });
+
   test("strips the pr_review role tag from the body", () => {
     const { threads } = reviewThreadsForPrompt([thread()], VIEWER, isAllowed);
     expect(threads[0]?.comments[0]?.body).toBe("[IMO] consider this");
@@ -1217,6 +1284,26 @@ describe("settleThreadResponses", () => {
         (response) => response.decision,
       ),
     ).not.toContain("addressed");
+  });
+
+  test("drops addressed to a free-text reply thread on a threads-only review", () => {
+    const replyThreadAnswer: ThreadResponse = {
+      thread_id: 4,
+      decision: "addressed",
+      body: "解消です。",
+    };
+    expect(settleThreadResponses([replyThreadAnswer], THREADS_ONLY)).toEqual(
+      [],
+    );
+  });
+
+  test("keeps answered on a threads-only review", () => {
+    const answer: ThreadResponse = {
+      thread_id: 4,
+      decision: "answered",
+      body: "事実です。",
+    };
+    expect(settleThreadResponses([answer], THREADS_ONLY)).toEqual([answer]);
   });
 
   test("keeps the skip answers on a threads-only review", () => {
