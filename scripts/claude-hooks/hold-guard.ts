@@ -1426,18 +1426,18 @@ function isWordAdderSafe(word: Word | undefined): boolean {
 /** `startsWithInspectionTool`が先頭から読む語の数の上限。`find`の区間の後ろを、コピーせずに有限の長さで切り出すために使う。 */
 const INSPECTION_LOOKAHEAD = 6;
 
-/** `find`の後ろで、検査の道具の前に読み飛ばす実行の語。`exec`は文字列をシェルのコードとして実行しうるので含めない。 */
-const FIND_RUNNER_SUBCOMMANDS: ReadonlySet<string> = new Set([
-  "run",
-  "x",
-  "dlx",
-]);
+/**
+ * `find`の後ろで、検査の道具の前に読み飛ばす実行の語は`run`だけである。
+ * `exec`は文字列をシェルのコードとして実行しうる。`x`は`exec`の別名にもなり(`npm x`)、
+ * `dlx`は取得して実行する。実行系によっては、ツール名の後ろの語も自分のオプションとして読む。
+ */
+const FIND_RUNNER_SUBCOMMANDS: ReadonlySet<string> = new Set(["run"]);
 
 /**
  * `find`の実行系の式の後ろの、`start`番目の語から始まるコマンドが、検査の道具なら真。
  * `tsc`と`biome`自身か、実行系の最初のオペランドが検査の道具である形を通す。
  * `test`を最初のオペランドとする実行系(`bun test`、`deno test`、`npm test`)は、テストのファイルを読み込んで実行するので通さない。
- * `exec`を読み飛ばさない(`bun exec`は文字列をシェルのコードとして実行する)。
+ * `exec`、`x`、`dlx`を読み飛ばさない(`bun exec`は文字列をシェルのコードとして実行する)。
  * `find`が渡す語は`./`などで始まるパスで、オプションを差し込めないので、`find`の後ろに限って通す。
  */
 function isInspectionCommandAt(words: readonly Word[], start: number): boolean {
