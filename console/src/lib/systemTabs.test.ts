@@ -134,6 +134,23 @@ describe("withSystemTab", () => {
       "1",
     );
   });
+
+  test("keeps the section while the default tab drops its name", () => {
+    expect(
+      withSystemTab(
+        new URLSearchParams("tab=failures&section=holds"),
+        "status",
+      ).get("section"),
+    ).toBe("holds");
+  });
+
+  test("keeps the section next to the name of another tab", () => {
+    expect(
+      withSystemTab(new URLSearchParams("section=holds"), "failures").get(
+        "section",
+      ),
+    ).toBe("holds");
+  });
 });
 
 describe("systemTabHref", () => {

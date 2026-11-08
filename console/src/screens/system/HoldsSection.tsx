@@ -26,6 +26,7 @@ import {
   useReleaseFreeze,
   useReleaseHold,
 } from "./useRelease.ts";
+import type { SectionArrival } from "./useSectionArrival.ts";
 import { useReleaseStopAll, useStopAll } from "./useStopAll.ts";
 
 function otherDeployCountOf(
@@ -49,11 +50,15 @@ function otherDeployCountOf(
  * scheduleを止める操作はジョブの画面のスケジュールのタブにあり、この節は凍結を置くところまでを持つ。
  * 全停止の区画は、この節の先頭に出す。次に、保護パスの変更の反映の承認待ちを出し、確認のダイアログを通して承認か却下を記録する。
  * 認可はWindmillのログインとフォルダの権限に任せ、この画面は操作者の名前を送らない。
+ * 通知から区画へ移るとき、全停止、反映の承認待ち、保留の各区画が着地先になる。区画が描かれないときの着地先は、この節の見出しである。
  */
 export function HoldsSection({
   holds,
+  arrival,
 }: {
   holds: SectionQuery<HoldsSnapshot>;
+  /** 通知などから区画へ移る受け取りと、強調の状態。 */
+  arrival: SectionArrival;
 }) {
   const releaseHold = useReleaseHold();
   const releaseFreeze = useReleaseFreeze();
@@ -109,6 +114,7 @@ export function HoldsSection({
           <StopAllPanel
             view={data.stop_all}
             locked={stopLocked}
+            arrival={arrival}
             onRequestStop={() => {
               setStopReason("");
               setStopDialog("stop");
@@ -146,6 +152,7 @@ export function HoldsSection({
               decideDeploy.isLocked({ sha, decision: "approve" })
             }
             onRequest={setDecision}
+            arrival={arrival}
           />
           <DeployDecideDialog
             request={decision}
@@ -178,6 +185,7 @@ export function HoldsSection({
               void holds.refetch();
             }}
             isFetching={holds.isFetching}
+            arrival={arrival}
           />
           <HoldReleaseDialog
             item={chosen}

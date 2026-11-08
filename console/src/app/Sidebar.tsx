@@ -168,12 +168,16 @@ function NavList({
     >
       {SCREENS.map((screen) => {
         const Icon = screen.icon;
+        const readCount = screen.badge(
+          summary.data === undefined
+            ? undefined
+            : actionableCounts(summary.data),
+        );
+        // 要対応の件数を持つ画面は、行き先の件数を持たない。どちらか0より大きいほうを出す。
         const badge = formatBadgeCount(
-          screen.badge(
-            summary.data === undefined
-              ? undefined
-              : actionableCounts(summary.data),
-          ),
+          readCount > 0
+            ? readCount
+            : (screen.destinationBadge?.(summary.data) ?? 0),
         );
         const link = (
           <NavLink
@@ -402,6 +406,7 @@ export function Sidebar({ onOpenHelp }: { onOpenHelp: () => void }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const counts =
     summary.data === undefined ? undefined : actionableCounts(summary.data);
+  // 合計は`badge`だけを足す。行き先の件数(`destinationBadge`)は同じ通知を数えているので足さない。
   const actionableTotal = SCREENS.reduce(
     (total, screen) => total + screen.badge(counts),
     0,

@@ -1,9 +1,16 @@
 import type { StopAllRead } from "../../api/guards/holds.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
+import { cn } from "../../lib/cn.ts";
 import { STOP_ALL_TEXT } from "../../lib/labels.ts";
 import { formatAbsoluteIso } from "../../lib/relativeTime.ts";
 import { safeText } from "../../lib/safeText.ts";
+import {
+  ANCHOR_FOCUS_CLASS,
+  focusAttrs,
+  highlightAttrs,
+} from "./sectionAnchor.ts";
+import { type SectionArrival, useSectionArrival } from "./useSectionArrival.ts";
 
 const BIDI = "[unicode-bidi:isolate]";
 
@@ -14,6 +21,7 @@ type PanelProps = {
   readonly locked: boolean;
   readonly onRequestStop: () => void;
   readonly onRequestRelease: () => void;
+  readonly arrival: SectionArrival;
 };
 
 function ReleaseButton({
@@ -37,20 +45,39 @@ function ReleaseButton({
  * 止まっていないときは「全停止」のボタンだけを出し、止まっているときは、置いた時刻、操作者、理由と解除のボタンを出す。
  * 読めないときは、止まっているかが分からないことを出す。
  * 理由と操作者は入力された文字列なので、`safeText`を通して文字としてだけ描く。
+ * 通知から移るときの着地先で、状態ごとの根の要素がフォーカスを受ける。描かれたときに、移動を受ける。
  */
-export function StopAllPanel({
+export function StopAllPanel(props: PanelProps) {
+  const { view } = props;
+  if (view === undefined) {
+    return null;
+  }
+  return <StopAllBody {...props} view={view} />;
+}
+
+/** 移動を受けるフックを、区画が描かれる間だけ呼ぶために、何も描かない場合から分けた本体。 */
+function StopAllBody({
   view,
   locked,
   onRequestStop,
   onRequestRelease,
-}: PanelProps) {
-  if (view === undefined) {
-    return null;
-  }
+  arrival,
+}: Omit<PanelProps, "view"> & { view: StopAllRead }) {
+  useSectionArrival("stop-all", arrival.pending, arrival.onArrived);
+  const anchor = {
+    ...focusAttrs("stop-all"),
+    ...highlightAttrs("stop-all", arrival.highlighted),
+  };
   switch (view.kind) {
     case "clear":
       return (
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div
+          {...anchor}
+          className={cn(
+            "flex flex-wrap items-center justify-between gap-3 rounded-xl",
+            ANCHOR_FOCUS_CLASS,
+          )}
+        >
           <p className="text-small text-muted-foreground">
             {STOP_ALL_TEXT.clearNote}
           </p>
@@ -70,6 +97,8 @@ export function StopAllPanel({
           tag="section"
           padding="default"
           aria-label={STOP_ALL_TEXT.activeTitle}
+          {...anchor}
+          className={ANCHOR_FOCUS_CLASS}
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -110,6 +139,8 @@ export function StopAllPanel({
           tag="section"
           padding="default"
           aria-label={STOP_ALL_TEXT.activeTitle}
+          {...anchor}
+          className={ANCHOR_FOCUS_CLASS}
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -131,7 +162,10 @@ export function StopAllPanel({
       );
     case "unreadable":
       return (
-        <div className="flex flex-col gap-1">
+        <div
+          {...anchor}
+          className={cn("flex flex-col gap-1 rounded-xl", ANCHOR_FOCUS_CLASS)}
+        >
           <p className="text-small text-warning">
             {`${STOP_ALL_TEXT.unreadable}: ${safeText(view.reason)}`}
           </p>

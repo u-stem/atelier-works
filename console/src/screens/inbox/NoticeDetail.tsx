@@ -1,5 +1,6 @@
 import { CircleCheck, ExternalLink, Info, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
+import { Link } from "react-router";
 import { toast } from "sonner";
 import type { WriteOutcome } from "../../api/executeWrite.ts";
 import type { SummaryNotice } from "../../api/guards/summary.ts";
@@ -13,6 +14,7 @@ import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { describeNotice } from "../../lib/noticeView.ts";
 import { formatAbsoluteWithRelative } from "../../lib/relativeTime.ts";
+import { systemSectionPath } from "../../lib/systemSections.ts";
 import {
   describeNoticeResult,
   STALE_LIST_NOTICE,
@@ -73,6 +75,7 @@ const RESOLVE_CONFIG = {
  * 本文は信頼できない文字を含みうるので、プレーンテキストで描く。
  * 解決のボタンは、未解決でConsoleから解決できる種類のときだけ出す。
  * 解決できない種類には、ボタンの代わりに理由を出す。
+ * 対応をシステムの画面の区画で行う種類は、未解決のときだけ、次の操作の文の下に、その区画へ移るボタンを出す。
  */
 export function NoticeDetail({
   notice,
@@ -166,6 +169,15 @@ export function NoticeDetail({
         <div className="flex flex-col gap-1">
           <h3 className="text-small font-medium text-subtle">次の操作</h3>
           <p className="text-body text-foreground">{guide.action}</p>
+          {guide.target === null || description.resolved ? null : (
+            <div className="mt-1">
+              <Button asChild variant="outline" size="sm">
+                <Link to={systemSectionPath(guide.target.section)}>
+                  {guide.target.label}
+                </Link>
+              </Button>
+            </div>
+          )}
           {guide.commands.length === 0 ? null : (
             <ol className="mt-1 flex list-decimal flex-col gap-1.5 pl-6">
               {guide.commands.map((command) => (

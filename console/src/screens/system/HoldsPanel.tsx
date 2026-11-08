@@ -4,6 +4,7 @@ import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
+import { cn } from "../../lib/cn.ts";
 import {
   deployFreezeItems,
   type FailureView,
@@ -18,6 +19,14 @@ import {
 } from "../../lib/holdsView.ts";
 import { HOLDS_TEXT } from "../../lib/labels.ts";
 import { formatAbsoluteIso } from "../../lib/relativeTime.ts";
+import type { SystemSectionId } from "../../lib/systemSections.ts";
+import {
+  ANCHOR_FOCUS_CLASS,
+  focusAttrs,
+  highlightAttrs,
+} from "./sectionAnchor.ts";
+import { noActiveHoldsOrFreezes } from "./systemScreenView.ts";
+import { type SectionArrival, useSectionArrival } from "./useSectionArrival.ts";
 
 type PanelProps = {
   readonly data: HoldsSnapshot;
@@ -27,6 +36,7 @@ type PanelProps = {
   readonly onRetry: () => void;
   /** 取得中は「もう一度取得する」を押せなくする。押すと進行中の取得を打ち切るためである。 */
   readonly isFetching: boolean;
+  readonly arrival: SectionArrival;
 };
 
 const BIDI = "[unicode-bidi:isolate]";
@@ -195,19 +205,40 @@ function FailureBox({
   );
 }
 
+/** カードを、通知から移る着地先にするときの指定。見出しがフォーカスを受け、枠が強調される。 */
+type GroupAnchor = {
+  readonly section: SystemSectionId;
+  readonly highlighted: SystemSectionId | null;
+};
+
 function HoldGroup({
   title,
   note,
+  anchor,
   children,
 }: {
   title: string;
   note: string;
+  anchor?: GroupAnchor;
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      {...(anchor === undefined
+        ? {}
+        : highlightAttrs(anchor.section, anchor.highlighted))}
+      className="flex flex-col gap-2 rounded-xl"
+    >
       <div>
-        <h3 className="text-body font-semibold">{title}</h3>
+        <h3
+          {...(anchor === undefined ? {} : focusAttrs(anchor.section))}
+          className={cn(
+            "text-body font-semibold",
+            anchor !== undefined && `rounded-sm ${ANCHOR_FOCUS_CLASS}`,
+          )}
+        >
+          {title}
+        </h3>
         <p className="text-small text-muted-foreground">{note}</p>
       </div>
       {children}
@@ -215,12 +246,19 @@ function HoldGroup({
   );
 }
 
+/**
+ * 保留のカード。カードが描かれるときだけ、通知からの移動を受ける。
+ * 凍結のカードは着地先にしない。
+ */
 function HoldsCard(props: PanelProps) {
   const { holds } = props.data;
+  const { arrival } = props;
+  useSectionArrival("holds", arrival.pending, arrival.onArrived);
   return (
     <HoldGroup
       title={HOLDS_TEXT.holdsCardTitle}
       note={HOLDS_TEXT.holdsCardNote}
+      anchor={{ section: "holds", highlighted: arrival.highlighted }}
     >
       {!holds.ok ? (
         <FailureBox
@@ -279,14 +317,8 @@ function FreezesCard(props: PanelProps) {
  * 期限は画面の時計で判定し、取得の間に期限が来た行は、解除のボタンを外して「期限切れ」と出す。
  */
 export function HoldsPanel(props: PanelProps) {
-  const { holds, freezes } = props.data;
-  if (
-    holds.ok &&
-    holds.rows.length === 0 &&
-    freezes.ok &&
-    freezes.schedule.length + freezes.deploy.length === 0
-  ) {
-    // 何も有効でないときは、2つの空のカードを1行にたたむ。
+  if (noActiveHoldsOrFreezes(props.data)) {
+    // 何も有効でないときは、2つの空のカードを1行にたたむ。保留のカードが描かれないので、移動は節の見出しへ着地する。
     return (
       <EmptyNote>{`${HOLDS_TEXT.noneActive}。${HOLDS_TEXT.placeHint}`}</EmptyNote>
     );
