@@ -40,9 +40,12 @@ function renderSection(query = freshQuery(SNAPSHOT)): string {
 
 describe("ConfigList", () => {
   test("shows the key of every item", () => {
-    expect(renderToStaticMarkup(<ConfigList items={ITEMS} />)).toContain(
-      "daily_budget_usd",
-    );
+    expect(
+      renderToStaticMarkup(<ConfigList items={ITEMS} />).replaceAll(
+        "<wbr/>",
+        "",
+      ),
+    ).toContain("daily_budget_usd");
   });
 
   test("shows a scalar as text", () => {
