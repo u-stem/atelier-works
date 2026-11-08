@@ -772,6 +772,8 @@ export function withMarker(
   return `${body}\n\n<!-- factory:${kind}:${workItemId} -->`;
 }
 
+/** `pr_fix`の返信の目印の種類。 */
+export const PR_FIX_MARKER_KIND = "pr_fix";
 /** 再レビューの了承と解消の返信の目印の種類。フィードバックに集めない。 */
 export const PR_REVIEW_ACK_MARKER_KIND = "pr_review_ack";
 /** 再レビューの反論の返信の目印の種類。フィードバックに集める。 */
@@ -3523,7 +3525,7 @@ export type ListHumanResult<T> = {
 
 /**
  * `GET .../reviews`をページ送りしながら取得し、Factory自身の`pr_fix`の返信
- * (`isFactoryPost(login, viewer, raw.body, "pr_fix")`)だけを除いて返す。
+ * (`isFactoryPost(login, viewer, raw.body, PR_FIX_MARKER_KIND)`)だけを除いて返す。
  * Factory自身の`pr_review`のレビューと人のレビューは意図して残す。
  * Factoryのレビューの後に修正ラベルを付けるのは「その指摘を直せ」という意味である。
  * 運用者とアカウントを共有していてログイン名がviewerと一致するというだけで
@@ -3550,7 +3552,7 @@ export async function listPrReviews(
     if (!isPrReviewPayload(raw)) continue;
     if (raw.id > maxId) maxId = raw.id;
     const login = raw.user?.login;
-    if (isFactoryPost(login, viewer, raw.body, "pr_fix")) continue;
+    if (isFactoryPost(login, viewer, raw.body, PR_FIX_MARKER_KIND)) continue;
     items.push({
       id: raw.id,
       authorLogin: typeof login === "string" ? login : "",
@@ -3597,7 +3599,7 @@ function isPrReviewCommentPayload(
 /**
  * `GET .../comments`(インラインのレビューコメント)をページ送りしながら取得し、
  * `listPrReviews`と同じく、Factory自身の`pr_fix`の返信
- * (`isFactoryPost(login, viewer, raw.body, "pr_fix")`)と、
+ * (`isFactoryPost(login, viewer, raw.body, PR_FIX_MARKER_KIND)`)と、
  * 再レビューの了承と解消の返信(`PR_REVIEW_ACK_MARKER_KIND`の目印を持つもの)と、
  * 質問への回答の返信(`PR_REVIEW_ANSWER_MARKER_KIND`の目印を持つもの)を除いて返す。
  * 再レビューの反論の返信は、`pr_fix`が対応すべきフィードバックとして残す。
@@ -3625,7 +3627,7 @@ export async function listPrReviewComments(
     if (!isPrReviewCommentPayload(raw)) continue;
     if (raw.id > maxId) maxId = raw.id;
     const login = raw.user?.login;
-    if (isFactoryPost(login, viewer, raw.body, "pr_fix")) continue;
+    if (isFactoryPost(login, viewer, raw.body, PR_FIX_MARKER_KIND)) continue;
     if (isFactoryPost(login, viewer, raw.body, PR_REVIEW_ACK_MARKER_KIND)) {
       continue;
     }

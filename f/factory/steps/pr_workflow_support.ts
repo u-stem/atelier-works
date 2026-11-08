@@ -45,6 +45,7 @@ import {
   hasMarker,
   isOwnPost,
   PR_FILES_API_CAP,
+  PR_FIX_MARKER_KIND,
   PR_REVIEW_ACK_MARKER_KIND,
   PR_REVIEW_ANSWER_MARKER_KIND,
   PR_REVIEW_OBJECTION_MARKER_KIND,
@@ -1113,17 +1114,21 @@ export function threadResponseKind(
   if (COMMIT_REPLY_LINE.test(line)) {
     return isFixedFixReply(lastReply.body) ? null : "addressable";
   }
-  return isFactoryReply(lastReply, viewer) ? null : "reply";
+  return isFactoryComment(lastReply, viewer) ? null : "reply";
 }
 
 /**
- * 返信が、Factory自身のものかを返す。
+ * コメントが、Factory自身の投稿かを返す。
+ * Factoryは運用者と同じアカウントで動くので、viewerの投稿でも、人が書いたものは偽にする。
  * viewerの投稿で、次のどれかに当てはまるときに真にする。
  *   - 1行目が役割タグである(改行コードと前後の空白は除いて比べる)。
  *   - `pr_fix`の返信の目印を持つ。
  *   - 再レビューの答えの目印を持つ。
  */
-function isFactoryReply(comment: ReviewThreadComment, viewer: string): boolean {
+function isFactoryComment(
+  comment: ReviewThreadComment,
+  viewer: string,
+): boolean {
   if (!isOwnPost(comment.authorLogin, viewer)) return false;
   const firstLine =
     comment.body.replace(/\r\n/g, "\n").split("\n")[0]?.trim() ?? "";
@@ -1147,9 +1152,6 @@ const THREAD_REPLY_MARKER_KINDS: Readonly<
 const REVIEW_REPLY_MARKER_KINDS: readonly string[] = Object.values(
   THREAD_REPLY_MARKER_KINDS,
 );
-
-/** `pr_fix`の返信の目印の種類。 */
-const PR_FIX_MARKER_KIND = "pr_fix";
 
 /**
  * 答えの後にスレッドを解決する`decision`かを返す。
@@ -1241,13 +1243,14 @@ export function renderThreadReply(
 }
 
 function threadCommentAuthor(
-  login: string,
-  id: number | null,
+  comment: ReviewThreadComment,
   viewer: string,
   isAllowed: ThreadAuthorPredicate,
 ): PromptThreadComment["author"] {
-  if (isOwnPost(login, viewer)) return "factory";
-  return isAllowed(login, id) ? "allowed_person" : "other";
+  if (isFactoryComment(comment, viewer)) return "factory";
+  return isAllowedThreadAuthor(comment, viewer, isAllowed)
+    ? "allowed_person"
+    : "other";
 }
 
 function promptCommentBody(body: string): string {
@@ -1266,12 +1269,7 @@ function toPromptThread(
 ): PromptReviewThread {
   const comments = threadComments(thread).map(
     (comment): PromptThreadComment => ({
-      author: threadCommentAuthor(
-        comment.authorLogin,
-        comment.authorId,
-        viewer,
-        isAllowed,
-      ),
+      author: threadCommentAuthor(comment, viewer, isAllowed),
       body: promptCommentBody(comment.body),
     }),
   );
