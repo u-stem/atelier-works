@@ -73,6 +73,42 @@ describe("the jump from a chip", () => {
   });
 });
 
+describe("the jump from a link to a section", () => {
+  test("reads the section from the URL with the shared parameter name", () => {
+    expect(BODY).toMatch(
+      /parseSystemSection\(searchParams\.get\(SECTION_PARAM\)\)/,
+    );
+  });
+
+  test("opens the tab of the pending section, whatever the URL names", () => {
+    expect(BODY).toMatch(/SECTION_TAB\[pendingSection\]/);
+  });
+
+  test("hands the pending section to the holds section only after the fetch settled", () => {
+    expect(BODY).toMatch(/arrivalTarget\(pendingSection, holdsFetch\)/);
+  });
+
+  test("removes the section from the URL when a section received the jump", () => {
+    expect(BODY).toMatch(/afterArrival\(current, id\)/);
+  });
+
+  test("replaces the entry of the URL, not adding one to the history", () => {
+    expect(BODY).toMatch(/afterArrival\(current, id\),\s*\{\s*replace: true/);
+  });
+
+  test("lands on the heading of the section when no section is drawn", () => {
+    expect(BODY).toMatch(/jumpToSection\(HOLDS_HEADING_ID\)/);
+  });
+
+  test("drops the jump when the person selects another tab meanwhile", () => {
+    expect(BODY).toMatch(/shouldDiscardJump\(/);
+  });
+
+  test("highlights only when the section needs an action", () => {
+    expect(BODY).toMatch(/shouldHighlight\(id, holdsFetch\)/);
+  });
+});
+
 describe("the host action of the release section", () => {
   test("counts it from the unresolved notices of the summary", () => {
     expect(BODY).toMatch(/<ReleaseSection[^>]*summary=\{summary\}/s);

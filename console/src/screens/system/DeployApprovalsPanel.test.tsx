@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DeployApprovalsView } from "../../lib/deployApprovalsView.ts";
 import { DeployApprovalsPanel } from "./DeployApprovalsPanel.tsx";
+import type { SectionArrival } from "./useSectionArrival.ts";
 
 const NOW = Date.parse("2026-11-05T02:00:00.000Z");
 const SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -17,13 +18,24 @@ const PENDING: DeployApprovalsView = {
   ],
 };
 
-function render(view: DeployApprovalsView, locked = false): string {
+const IDLE: SectionArrival = {
+  pending: null,
+  highlighted: null,
+  onArrived: () => undefined,
+};
+
+function render(
+  view: DeployApprovalsView,
+  locked = false,
+  arrival: SectionArrival = IDLE,
+): string {
   return renderToStaticMarkup(
     <DeployApprovalsPanel
       view={view}
       now={NOW}
       isLocked={() => locked}
       onRequest={() => undefined}
+      arrival={arrival}
     />,
   );
 }
@@ -80,5 +92,34 @@ describe("DeployApprovalsPanel", () => {
     expect(render({ kind: "failed", reason: "db down" })).toContain(
       'role="alert"',
     );
+  });
+});
+
+describe("DeployApprovalsPanel as the place to land on", () => {
+  test("gives the heading the id that the arrival looks for", () => {
+    expect(render(PENDING)).toMatch(
+      /<h3 id="system-section-deploy-approvals" tabindex="-1"/,
+    );
+  });
+
+  test("marks the panel while its section is highlighted", () => {
+    expect(
+      render(PENDING, false, { ...IDLE, highlighted: "deploy-approvals" }),
+    ).toContain('data-highlighted=""');
+  });
+
+  test("does not mark the panel while another section is highlighted", () => {
+    expect(
+      render(PENDING, false, { ...IDLE, highlighted: "holds" }),
+    ).not.toContain("data-highlighted");
+  });
+
+  test("draws nothing, whatever is pending, when nothing waits", () => {
+    expect(
+      render({ kind: "none" }, false, {
+        ...IDLE,
+        pending: "deploy-approvals",
+      }),
+    ).toBe("");
   });
 });

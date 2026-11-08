@@ -1,6 +1,9 @@
 // システムの画面が、取得の結果と帯とタブを結ぶ規則。描画から切り離して、純関数でテストする。
 
+import type { HoldsSnapshot } from "../../api/guards/holds.ts";
+import type { ConsoleSummary } from "../../api/guards/summary.ts";
 import { isHeaderError } from "../../app/refreshStatus.ts";
+import type { SystemSectionId } from "../../lib/systemSections.ts";
 import type { SystemTabId } from "../../lib/systemTabs.ts";
 
 /** 取得の結果のうち、失敗の印を決めるのに読む項目。 */
@@ -55,4 +58,68 @@ export function needsTabSwitch(
   currentTab: SystemTabId,
 ): boolean {
   return target !== currentTab;
+}
+
+/** 「保留と凍結」の節の見出しのid。区画が描かれないとき、移動の着地先にする。 */
+export const HOLDS_HEADING_ID = "holds-heading";
+
+/** 保留と凍結の取得の結果のうち、区画への移動が読む項目。 */
+export type HoldsFetch = {
+  readonly data: HoldsSnapshot | undefined;
+  readonly isError: boolean;
+  readonly isFetching: boolean;
+};
+
+export function noActiveHoldsOrFreezes(_snapshot: HoldsSnapshot): boolean {
+  return false;
+}
+
+export function sectionRendered(
+  _section: SystemSectionId,
+  _snapshot: HoldsSnapshot,
+): boolean {
+  return false;
+}
+
+export function sectionNeedsAction(
+  _section: SystemSectionId,
+  _snapshot: HoldsSnapshot,
+): boolean {
+  return false;
+}
+
+export function arrivalTarget(
+  _pending: SystemSectionId | null,
+  _fetch: HoldsFetch,
+): SystemSectionId | null {
+  return null;
+}
+
+export function shouldFallBackToHeading(
+  _pending: SystemSectionId | null,
+  _fetch: HoldsFetch,
+): boolean {
+  return false;
+}
+
+export function shouldHighlight(
+  _section: SystemSectionId,
+  _fetch: HoldsFetch,
+): boolean {
+  return false;
+}
+
+export function shouldDiscardJump(
+  _pending: SystemSectionId | null,
+  _selected: SystemTabId,
+): boolean {
+  return false;
+}
+
+export function landingNote(_input: {
+  readonly landed: SystemSectionId | null;
+  readonly holds: HoldsSnapshot | undefined;
+  readonly summary: ConsoleSummary | undefined;
+}): string | null {
+  return null;
 }

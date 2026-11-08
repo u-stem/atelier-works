@@ -10,7 +10,7 @@ import {
   Server,
 } from "lucide-react";
 import type { ComponentType } from "react";
-import type { SummaryCounts } from "../api/guards/summary.ts";
+import type { ConsoleSummary, SummaryCounts } from "../api/guards/summary.ts";
 import { holdsQueryOptions } from "../api/holdsQueries.ts";
 import { jobsActiveQueryOptions } from "../api/jobsQueries.ts";
 import {
@@ -98,6 +98,11 @@ export type Screen = {
   readonly icon: LucideIcon;
   /** サイドバーに出す件数。件数が分からないときと、件数の無い入口は0を返す。 */
   readonly badge: (counts: SummaryCounts | undefined) => number;
+  /**
+   * 行き先の画面でしか解けない操作の件数。要対応の合計には数えない。
+   * 件数が分からないときは0を返す。持たない画面は省く。
+   */
+  readonly destinationBadge?: (summary: ConsoleSummary | undefined) => number;
   /** 入口に触れたときに先読みする取得。 */
   readonly prefetch: () => readonly PrefetchOptions[];
   readonly lazy: LazyScreen;
@@ -293,6 +298,7 @@ export const SCREENS: readonly Screen[] = [
     destinations: [],
     icon: Server,
     badge: noBadge,
+    destinationBadge: () => 0,
     // 画面が開く直後に走る3つの取得を先読みする。summaryはサイドバーが常に持つので含めない。
     // 入口1つが走らせるジョブは、workerが直列に処理するので、この3つに限る。
     prefetch: () => [

@@ -3,6 +3,15 @@
 // 種類を足したときは、ここと表の両方に足す。
 // 足し忘れは、`tests/scripts/console_notices_contract.test.ts`が落として知らせる。
 
+import type { SystemSectionId } from "./systemSections.ts";
+
+/** 通知の対応を、システムの画面のどの区画で行うか。通知の詳細の移動のボタンが読む。 */
+export type SystemTarget = {
+  readonly section: SystemSectionId;
+  /** 移動のボタンの名前。 */
+  readonly label: string;
+};
+
 export type NoticeGuide = {
   /** 何が起きたか。 */
   readonly meaning: string;
@@ -12,6 +21,8 @@ export type NoticeGuide = {
   readonly commands: readonly string[];
   /** 解決の扱いなど、操作の補足。無ければ`null`。 */
   readonly note: string | null;
+  /** 対応をシステムの画面の区画で行う種類の行き先。無ければ`null`。 */
+  readonly target: SystemTarget | null;
 };
 
 /** 表に無い種類(backendが先に足した新しい種類)に出す説明。 */
@@ -20,18 +31,24 @@ export const GENERIC_NOTICE_GUIDE: NoticeGuide = {
   action: "本文を確かめ、対応を終えたら解決してください。",
   commands: [],
   note: null,
+  target: null,
 };
 
 function guide(
   meaning: string,
   action: string,
-  extra: { commands?: readonly string[]; note?: string } = {},
+  extra: {
+    commands?: readonly string[];
+    note?: string;
+    target?: SystemTarget;
+  } = {},
 ): NoticeGuide {
   return {
     meaning,
     action,
     commands: extra.commands ?? [],
     note: extra.note ?? null,
+    target: null,
   };
 }
 
