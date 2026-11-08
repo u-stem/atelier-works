@@ -320,11 +320,23 @@ export function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
+const STRIPPED = new WeakMap<readonly Word[], StrippedCommand>();
+
 /**
  * 先頭の変数代入、`env`や`sudo`などの前置きのコマンド、制御構文の語を外し、
  * 実際に起動するプログラムからの語を返す。外した変数代入は`assignments`に入れる。
+ * 同じ語の配列には同じ結果を返す。長いパイプラインの上流を、コマンドごとにたどり直しても、
+ * 外す処理を繰り返さないためである。結果は書き換えない。
  */
 export function stripWrappers(input: readonly Word[]): StrippedCommand {
+  const known = STRIPPED.get(input);
+  if (known !== undefined) return known;
+  const stripped = stripWrappersOf(input);
+  STRIPPED.set(input, stripped);
+  return stripped;
+}
+
+function stripWrappersOf(input: readonly Word[]): StrippedCommand {
   let words = input;
   let expanded = false;
   let opaque = false;

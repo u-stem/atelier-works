@@ -677,8 +677,9 @@ export function holdStdin(command: SimpleCommand): HoldStdin {
   }
   return {
     redirects: command.redirects,
-    // `2>&1`の`1`や`2`のような、出力の複製の定番の語は、入力のファイルではない。
-    // `<&3`のように、ほかの番号の入力の複製は、読めない入力として残す。
+    // 語が`1`、`2`、`-`だけのものを外す。`2>&1`と`1>&2`の出力の複製と、`<&-`の閉じる指定を、入力に数えないためである。
+    // `<&3`と`>&3`、`/dev/null`を入力にする形は、語の字面では見分けられないので、読めない入力として残す。
+    // 名前が`1`、`2`、`-`のファイルを入力にする形も見分けられず、入力に数えない。
     inputFiles: command.redirects.filter(
       (word) =>
         !command.writeTargets.includes(word) && !/^(?:[12]|-)$/.test(word.text),
@@ -868,6 +869,12 @@ const HOLD_MAX_TEXT = 1_000_000;
 
 /** 1回の判定で、コマンド文字列を読んだ回数と文字数。 */
 type HoldBudget = { parses: number; chars: number; words: number };
+
+/**
+ * 前置きのコマンドの上流にたどるパイプのコマンドの数の上限。超えたら判定できないものとして拒否する。
+ * 上流は前置きのコマンドごとにたどり直すので、長いパイプラインの処理が数の2乗で増えるためである。
+ */
+const HOLD_MAX_UPSTREAM = 256;
 
 /** 共起で走査した語の数の合計の上限。パイプの上流の語は、読むたびに走査し直すので、合計に数える。 */
 const HOLD_MAX_WORDS = 200_000;
@@ -1232,6 +1239,7 @@ function underPrefixFinding(
   context: HoldContext,
 ): HoldFinding | null {
   if (context.viaXargs || addsWordsOrRunsShell(words)) return "prefix";
+  if (context.stdin.upstream.length > HOLD_MAX_UPSTREAM) return "dynamic";
   if (from === 0 && isReadOnlyProgram(baseName(words[0]?.text ?? ""), words)) {
     return null;
   }
@@ -1633,8 +1641,30 @@ function mentionsVariableWriteUrlForm(text: string): boolean {
   );
 }
 
+/**
+ * 語の綴りのどれかが`test`に当たるかの記録。パイプの上流の語は、続くコマンドごとに読み直されるので、
+ * 語と判定の組ごとに1回だけ調べる。長いパイプラインで、処理が語の数の2乗に増えないようにするためである。
+ */
+const WORD_MATCHES = new WeakMap<
+  Word,
+  Map<(text: string) => boolean, boolean>
+>();
+
+function wordMatches(word: Word, test: (text: string) => boolean): boolean {
+  let tests = WORD_MATCHES.get(word);
+  if (tests === undefined) {
+    tests = new Map();
+    WORD_MATCHES.set(word, tests);
+  }
+  const cached = tests.get(test);
+  if (cached !== undefined) return cached;
+  const matched = wordForms(word).some(test);
+  tests.set(test, matched);
+  return matched;
+}
+
 function anyWord(words: readonly Word[], test: (text: string) => boolean) {
-  return words.some((word) => wordForms(word).some(test));
+  return words.some((word) => wordMatches(word, test));
 }
 
 /** 文字列に、実行を表す語が1つでもあれば真。 */
