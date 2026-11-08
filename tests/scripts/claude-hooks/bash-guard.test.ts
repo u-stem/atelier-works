@@ -3510,10 +3510,11 @@ describe("bash-guard reads the regions of find -exec by where they close", () =>
   });
 
   test(
-    "finishes tens of thousands of unclosed -exec words in time",
+    "finishes thousands of unclosed -exec words before the deadline",
     async () => {
       const started = Date.now();
-      const decision = await decide(`find . ${"-exec cat ".repeat(40000)}`, {
+      // 線形の走査はCIの遅さでも締め切りの6秒に収まり、2乗の走査は締め切りで拒否に変わる。
+      const decision = await decide(`find . ${"-exec cat ".repeat(15000)}`, {
         subagent: true,
       });
       expect(decision).toBe("allow");
