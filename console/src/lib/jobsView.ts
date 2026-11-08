@@ -426,17 +426,25 @@ export function filterConfigItems(
     : items.filter((item) => item.key.toLowerCase().includes(needle));
 }
 
-/** 設計工程の判定の行を、キー名の絞り込みで探す語。行はキーでないので、行の名前の語で探す。 */
-const DESIGN_STAGE_TERMS: readonly string[] = ["設計工程", "design"];
+/** 設計工程の判定の行の名前。表の項目の列に出す文字である。 */
+export const DESIGN_STAGE_ROW_LABEL = "設計工程(実際の状態)";
+
+/** 設計工程の判定の行を、絞り込みで探す名前。行はキーでないので、行の名前と、設計のグループのキーの先頭の語で探す。 */
+const DESIGN_STAGE_NAMES: readonly string[] = [
+  DESIGN_STAGE_ROW_LABEL,
+  "design",
+];
 
 /**
  * 設計工程の判定の行を、キー名の絞り込みの語で残すか。
- * 語が空のときと、行の名前(設計工程、design)の一部のときだけ残す。それ以外の語は、他のキーを探しているので消す。
+ * 語が空のときと、語が行の名前(設計工程(実際の状態)、design)の先頭から打った語のときだけ残す。
+ * 大文字と小文字は区別しない。途中の文字だけが当たる語は、他のキーを探しているので消す。
  */
 export function matchesDesignStageQuery(query: string): boolean {
   const needle = query.trim().toLowerCase();
   return (
-    needle === "" || DESIGN_STAGE_TERMS.some((term) => term.includes(needle))
+    needle === "" ||
+    DESIGN_STAGE_NAMES.some((name) => name.toLowerCase().startsWith(needle))
   );
 }
 

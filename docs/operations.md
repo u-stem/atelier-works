@@ -1498,7 +1498,8 @@ subagentと背景のセッションは書かない。
 有効にする操作が、人の判断を経るようにするためである。
 `console_config_update`の許可表に入るのは、`design_enabled`を`true`から`false`へ閉じる向きだけである。
 Consoleの設定タブは、`design_enabled`が`true`のとき**止める**を出す。
-`design_enabled`を`true`にする向きと、`design_enabled_since`は、許可表に入れないので、Consoleからは書けない。
+この書き込みは、同じ1回で`design_enabled_since`を`null`にする。
+`design_enabled`を`true`にする向きと、`design_enabled_since`に値を書く操作は、許可表に入れないので、Consoleからは書けない。
 開く操作は、Windmillの画面か、`wmill resource push`で書く。
 全停止が止めた`design_enabled`は、運用者が端末で実行する`mise run stop:restore`も戻し、そのとき`design_enabled_since`を実行時刻に書き直す。
 手順は[記録した設定を戻す](#記録した設定を戻す)にある。
@@ -1581,7 +1582,7 @@ Consoleの設定タブは、`design_enabled`が`true`のとき**止める**を�
 ### 無効にする手順
 
 Consoleの設定タブの`design_enabled`の行にある**止める**でも、無効にできる。
-Consoleは`design_enabled_since`を消さない。
+Consoleは、同じ書き込みで`design_enabled_since`も`null`にする。
 もう一度有効にするときは、`design_enabled`を`true`にし、`design_enabled_since`に新しい時刻を書く。
 Consoleから止めても、全停止の記録には載らないので、`mise run stop:restore`は戻さない。
 
@@ -7294,7 +7295,7 @@ Consoleのシステムの**設定**タブから、factory_configの許可した�
 
 | 項目 | できる変更 | ボタン |
 | --- | --- | --- |
-| `implement_enabled`、`dependabot_enabled`、`dependabot_merge_enabled`、`pr_ci_fix_enabled`、`pr_conflict_fix_enabled` | `true`から`false`へ。`false`の項目にはボタンが出ない | **止める** |
+| `implement_enabled`、`dependabot_enabled`、`dependabot_merge_enabled`、`pr_ci_fix_enabled`、`pr_conflict_fix_enabled`、`design_enabled` | `true`から`false`へ。`false`の項目にはボタンが出ない | **止める** |
 | `daily_budget_usd`、`max_budget_usd_per_run` | いまより小さい、0より大きい値へ | **下げる** |
 | `max_fix_rounds`、`implement_max_changed_files`、`max_fix_diff_lines` | いまより小さい、1以上の整数へ | **下げる** |
 | `repo_allowlist`、`dependabot_other_repos`、`default_reviewers` | 1要素の追加か、1要素の削除 | 一覧の下の**追加**と、各要素の**削除** |
@@ -7312,9 +7313,15 @@ Consoleのシステムの**設定**タブから、factory_configの許可した�
 動いているフローも、以後の手順が設定を読むときから、新しい値で動く。
 実行中のジョブを止めるには、[動いているジョブを中止する](#動いているジョブを中止する)。
 
-次の2つは、確認のダイアログが先に伝える。
+次の3つは、確認のダイアログが先に伝える。
 
 - `implement_enabled`を止めている間に承認した要件定義は、承認済みで止まる。要対応には載らず、再開の口が無い。有効に戻した後、人が**再実行**で再開する。
+- `design_enabled`を止めると、同じ書き込みで`design_enabled_since`も空(`null`)になる。
+  止めている間に承認した要件定義は、設計を経ずに実装へ進む。
+  進行中の設計と承認待ちは止まらない。
+  承認すると、設計書を実装へ渡さずに進む。
+  却下は、Issueが変わっていれば要件定義へ戻り、そうでなければ人の対応待ちで止まる。
+  有効に戻すには、人が`design_enabled`を`true`にし、`design_enabled_since`に新しい時刻を書く。
 - `daily_budget_usd`を今日の使用額より小さくすると、今日のClaudeを使うフローがすべて失敗する。Consoleからは引き上げられない。
 
 結果は、画面に出る知らせで確かめる。
@@ -7342,7 +7349,7 @@ Consoleのシステムの**設定**タブから、factory_configの許可した�
 時刻を書き直さないと、止めていた間の失敗を、まとめて直しに行く。
 この2つは、上の手順に従って戻す。
 
-操作の記録は、操作が`config_update`、対象が`f/factory/factory_config`で、`item`に項目名、`before`と`after`に前後の値が残る。
+操作の記録は、操作が`config_update`、対象が`f/factory/factory_config`で、`item`に項目名、`before`と`after`に前後の値が残る。`design_enabled`を止めたときは、`design_enabled_since`を空にしたことを示す`since_cleared`も残る。
 一覧では、`before`と`after`の代わりに、`op`(`add`か`remove`)、`element`、`before_count`、`after_count`が残る。
 設定の全体は記録に入れない。
 

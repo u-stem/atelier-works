@@ -9,6 +9,7 @@
 //   並べ替え、書き換え、複数要素の増減は断る。動いた要素は、この差分から導く。
 //   書く値は、書く直前に読み直した配列に、その1要素を足すか除くかしたものである。`expected`は比較にだけ使い、書かない。
 // 許可表の外の項目、`owners`や`allowed_*`のような権限に関わる設定、`*_since`は、変更できない。
+// 例外は、`design_enabled`を閉じる書き込みが同時に`design_enabled_since`を`null`にすることだけである(項目として受けるわけではない)。
 //
 // 真偽と数値の変更は、設定の組み合わせの検査(有効にする向きの検査だけ)に触れない。
 // 一覧の3項目には、他の項目との組み合わせの検査が無い。
@@ -33,7 +34,7 @@
 // その前提は`tests/scripts/console_script_tags.test.ts`が固定する。
 //
 // 操作の記録(`factory.console_actions`)は、読み取りの前に`attempted`の行を入れ、後で結果を更新する。
-// 記録するのは項目名と前後の値(数値か真偽)だけで、設定の全体は入れない。
+// 記録するのは項目名と前後の値(数値か真偽)だけで、設定の全体は入れない。同時に空にしたキーがあるときは、`since_cleared`の真だけを足す。
 // 一覧では、項目名、操作(`add`か`remove`)、動かした要素、前後の件数を記録し、配列の中身は入れない。
 // 要素は形を検査済みで、資格情報を含むURL(userinfo)は形の検査で断るので、記録に資格情報は入らない。
 // 行を入れられなければ、変更せずに断る。更新に失敗しても変更は戻さず、`action_audit`を`failed`にする。
@@ -55,10 +56,13 @@ import { holdsReference, isRecord } from "./lib/console_redact.ts";
 
 const CONFIG_TARGET = "f/factory/factory_config";
 
+/** 設計工程の入口の項目名。許可表と、閉じる書き込みで同時に空にするキーの表が、同じ名前を使う。 */
+const DESIGN_SWITCH = "design_enabled";
+
 /**
  * `true`から`false`へだけ変えられる真偽の項目。どれも、自動でGitHubに書くか、実装か設計を起動する機能の入口である。
  * `design_enabled`を閉じても、設計中と設計の承認待ちの作業は止まらず、承認の反映は設計書なしで実装へ進む。
- * 開く向きと`design_enabled_since`は、運用者が手順を踏んで書くので、ここでは扱わない。
+ * 閉じる書き込みは、同じ書き込みで`design_enabled_since`を`null`にする(`CLEARED_WITH_STOP`)。開く向きと、日時を書く操作は、運用者が手順を踏んで書くので、ここでは扱わない。
  * `pr_conflict_watch_enabled`は、GitHubに書かず通知だけなので入れない。`*_since`には触れない。
  */
 export const BOOLEAN_STOP_ITEMS: readonly string[] = [
@@ -67,7 +71,7 @@ export const BOOLEAN_STOP_ITEMS: readonly string[] = [
   "dependabot_merge_enabled",
   "pr_ci_fix_enabled",
   "pr_conflict_fix_enabled",
-  "design_enabled",
+  DESIGN_SWITCH,
 ];
 
 /**
@@ -499,6 +503,8 @@ type Plan = {
     | {
         readonly kind: "write";
         readonly value: unknown;
+        /** 同じ書き込みで置き換える、ほかのキーと値。無ければ省く。 */
+        readonly alsoSet?: Record<string, unknown>;
         readonly matches: (read: unknown) => boolean;
       }
     | { readonly kind: "refused"; readonly reason: ConfigUpdateRefusalReason };
@@ -508,19 +514,37 @@ type Plan = {
   ) => ConfigUpdateResult;
 };
 
+/**
+ * 項目を閉じる書き込みと同時に、`null`にするキー。
+ * 設計工程は、有効にする意思の表明(`design_enabled_since`)を残したまま閉じると、`design_enabled`だけを`true`に戻した時点で、
+ * 日付の書き込みなしに開く。閉じる手順は`design_enabled_since`も空にするので、Consoleの閉じる操作も同じ状態にする。
+ * ここは`null`だけを書く表で、`design_enabled_since`に値を書く経路ではない。
+ */
+const CLEARED_WITH_STOP: Readonly<Record<string, string>> = {
+  [DESIGN_SWITCH]: "design_enabled_since",
+};
+
 function scalarPlan(
   item: string,
   before: number | boolean,
   after: number | boolean,
 ): Plan {
+  const cleared = Object.hasOwn(CLEARED_WITH_STOP, item)
+    ? CLEARED_WITH_STOP[item]
+    : undefined;
   return {
-    changes: { item, before, after },
+    changes:
+      cleared === undefined
+        ? { item, before, after }
+        : { item, before, after, since_cleared: true },
     prepare: (current) => {
       if (current[item] !== before) return refusedStep("conflict");
       if (holdsReference(current)) return refusedStep("has_reference");
       return {
         kind: "write",
         value: after,
+        // 書く直前に読み直した設定を土台にするので、読んだ後に`since`が変わっていても、`null`で置き換える。閉じるときは`since`が効かないため。
+        alsoSet: cleared === undefined ? {} : { [cleared]: null },
         matches: (read) => read === after,
       };
     },
@@ -642,7 +666,11 @@ export async function updateConfigFromConsole(
       if (!isRecord(current)) return failedWith("conflict");
       const prepared = plan.prepare(current);
       if (prepared.kind === "refused") return failedWith(prepared.reason);
-      const written = { ...current, [item]: prepared.value };
+      const written = {
+        ...current,
+        [item]: prepared.value,
+        ...prepared.alsoSet,
+      };
       await ports.writeConfig(written);
       const verified = await verifyWritten(
         ports,

@@ -1790,12 +1790,12 @@ scriptのscheduleは、次の回を前の回の終了時に積む。そのため
 | 変更できる一覧の項目 | `repo_allowlist`、`dependabot_other_repos`、`default_reviewers`の3つ。1回の呼び出しで、1要素の追加か1要素の削除だけをする。呼び出し側は、読んだ配列と、末尾に1要素を足したか、ちょうど1要素を除いた配列を渡す。scriptは、その差分から操作と動いた要素を導く。並べ替え、要素の書き換え、複数要素の増減、同じ長さの配列は、`invalid_value`で断る。書く値は、書く直前に読み直した配列に、その1要素を足すか除くかしたものである。読んだ配列は比較交換にだけ使い、書かない |
 | 一覧に足せる要素の形 | 読み込み側と同じ規則にそろえて、scriptに写す。長さは100字までで、操作の記録が文字列の値を100字までに限るためである。形に合わなければ`invalid_element`で断る。`repo_allowlist`は`https://github.com/<owner>/<repo>`の形だけで、userinfo、クエリ、フラグメント、`github.com`以外のホスト、`http://`、sshは拒否する。`dependabot_other_repos`は`owner/repo`で、`.`と`..`の部分と末尾の`.git`は拒否する。`default_reviewers`はGitHubのログイン名の形で、`[bot]`で終わるものは拒否する。重複は、大文字小文字を区別せずに照合し、`repo_allowlist`は末尾の`.git`とスラッシュも除いて照合する。重複は`already_present`で断る。`repo_allowlist`は、`.git`と末尾のスラッシュを除いた形で書く。読み込み側の照合も、取得の列挙も、この形で通る |
 | 一覧で断る変更 | `repo_allowlist`を空にする削除は、`would_empty`で断る。空の一覧は、`owners`配下のすべてのリポジトリを対象にするためである。空にする作業は人がCLIで行う。`repo_allowlist`への追加で、URLのownerが、読み直した生の`owners`の`name`のどれにも無いものは、`owner_not_listed`で断る(大文字小文字は区別しない)。足しても効かないのに、成功に見えるのを防ぐためである。ほかの2項目は、最後の1件の削除も許す |
-| 変更できない項目 | 上の14個以外のすべて。`owners`、`factory_repo`、`allowed_*`、`check_commands_by_repo`、モデル名のような権限や宛先に関わる設定、`*_since`、`retention_*`、`dependabot_min_published_days`、`worker_alert_memory_ratio`、`*_timeout_sec`、`pr_conflict_watch_enabled`を含む。新しい項目も、決めるまで変更できない。真偽を有効にする向きと数値を上げる向きは、手順(有効にする前の確認、`*_since`の書き直し)があるので、人がCLIで行う |
+| 変更できない項目 | 上の14個以外のすべて。`owners`、`factory_repo`、`allowed_*`、`check_commands_by_repo`、モデル名のような権限や宛先に関わる設定、`*_since`(`design_enabled`を止める書き込みが`null`にする場合を除く)、`retention_*`、`dependabot_min_published_days`、`worker_alert_memory_ratio`、`*_timeout_sec`、`pr_conflict_watch_enabled`を含む。新しい項目も、決めるまで変更できない。真偽を有効にする向きと数値を上げる向きは、手順(有効にする前の確認、`*_since`の書き直し)があるので、人がCLIで行う |
 | 読み取り | 補間しない生の値(`ResourceService.getResourceValue`)。パスはリテラルの`f/factory/factory_config`に固定し、境界テストが確かめる。補間する取得(`getResourceValueInterpolated`と`getResource`)は使わない |
 | 参照 | 設定のどこかに`$var:`か`$res:`があれば、変更しない。読み取りが参照を展開すると、書き戻しで秘密の値が設定に入るおそれがあるためである |
 | 比較交換 | 呼び出し側が「読んだ時の値」を渡す。書く直前に読み直した値と違えば、変更しない。項目が設定に無いときも変更しない。一覧は、要素を順序つきで比べる。読み直しも、同じく内容で比べる |
 | 書き戻し | 対象の項目だけを置き換えた全体を書く。他のキーは同じ順の同じ文字列のまま残す。書いた後に読み直し、対象の項目が新しい値で、他のキーが書いた内容と同じかを返す。違えば、記録の結果を`partial`にする。読み直しが検出するのは、書き込みの後に起きた変更だけである。書く直前の読み取りから書き込みまでの間の変更は、検出できない |
-| 記録 | 項目名と、前後の値(数値か真偽)だけを入れる。一覧は、項目名、操作(`add`か`remove`)、動かした要素、前後の件数を入れる。設定の全体と、配列の中身は入れない。userinfoを拒否するので、要素に資格情報は入らない |
+| 記録 | 項目名と、前後の値(数値か真偽)だけを入れる。`design_enabled`を止めたときは、`design_enabled_since`を空にしたことを示す真偽の`since_cleared`も入れる。一覧は、項目名、操作(`add`か`remove`)、動かした要素、前後の件数を入れる。設定の全体と、配列の中身は入れない。userinfoを拒否するので、要素に資格情報は入らない |
 | 呼び出しの順序 | 許可表の判定、操作者の導出、記録(`attempted`)、読み取り、比較と参照の検査、書き込み、読み直し、記録(結果)の順に固定する。項目が文字列でないときは、許可表の外として断る。比較と参照の検査で断ったときも、記録は`failed`で残す |
 | SDKの呼び出し | `ResourceService.getResourceValue`、`ResourceService.updateResourceValue`、`wmill.getWorkspace`、`wmill.datatable`だけ。境界テストの許可表に載せ、書き込みのパスもリテラルに固定する |
 | SQL | 自分のSQLは持たない。書くのは記録の部品だけで、書く表は`factory.console_actions`に限る |
@@ -6593,7 +6593,7 @@ PR修正の報告は、親の遷移の注記と通知の理由に整えてから
 
 `design_enabled`を`true`にする操作と、`design_enabled_since`を書く操作は、運用者がWindmillの画面か`wmill resource push`で行う。
 Consoleの設定の変更(`console_config_update`)の許可表に入るのは、`design_enabled`を`true`から`false`へ閉じる向きだけである。
-`design_enabled_since`は、許可表に入れない。
+`design_enabled_since`は、許可表に入れない。閉じる書き込みが、同時に`null`にするだけである。
 全停止が止めた`design_enabled`は、ホストの`mise run stop:restore`も戻す([全停止](#全停止))。
 このとき、`design_enabled_since`の項目があれば、その値を実行した時刻に書き直す。
 これも運用者の`wmill`のプロファイルで`wmill resource push`を呼ぶ経路で、人が端末で`yes`を入力して確かめる。
@@ -6608,7 +6608,16 @@ Consoleで閉じた`design_enabled`は、全停止の記録に載らないので
 閉じている間に承認した要件定義は、設計書を作らず、設計の承認も挟まずに、実装へ進む。
 設計書の承認という関門が外れるが、要件定義の承認と、PRのレビューとマージは残る。
 入れる理由は、閉じる向きが、設計工程が無い既定の運用へ戻す操作で、新しく書き込みや実行の範囲を広げないためである。
-再び開くときは、人が`design_enabled`を`true`にし、`design_enabled_since`を新しい時刻に書き直す。
+
+閉じる書き込みは、同じ1回で`design_enabled_since`を`null`にする。
+日時を残したまま閉じると、後で人が`design_enabled`だけを`true`に戻した時点で、読める日時が残っているので、日時を書く操作なしに設計工程が開くためである。
+`null`は設定を読む処理が受け入れる値で、`design_enabled`が`false`なら、門は閉じたままで通知も出ない。
+これは`design_enabled_since`を項目として受ける経路ではない。
+`null`だけを書く固定の表(`CLEARED_WITH_STOP`)で、`design_enabled`を閉じる書き込みにだけ付く。
+`design_enabled_since`に値を書く経路は作らない。`null`以外の値の字面は、保護されたテストが本番のコードから探して禁じる。
+書く直前に読み直した設定を土台にするので、読んだ後に`design_enabled_since`が変わっていても、`null`で置き換える。閉じた設計工程では、日時が効かないためである。
+書いた後の読み直しは、他のキーが書いた内容と同じことを確かめる。日時が`null`でなければ、`verified`が偽になる。
+再び開くときは、人が`design_enabled`を`true`にし、`design_enabled_since`に新しい時刻を書く。
 
 subagentと背景のセッションは、この2つを書かない([運用](operations.md)の「設計工程を有効にする」)。
 

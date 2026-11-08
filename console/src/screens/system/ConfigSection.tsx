@@ -18,10 +18,11 @@ import {
   checkCommandsOf,
   EDITABLE_LISTS,
 } from "../../lib/configChange.ts";
-import { groupConfigItems } from "../../lib/configGroups.ts";
+import { DESIGN_GROUP_ID, groupConfigItems } from "../../lib/configGroups.ts";
 import type { ConfigEntryValue } from "../../lib/configValue.ts";
 import {
   CONFIG_REFERENCE_LABEL,
+  DESIGN_STAGE_ROW_LABEL,
   describeConfigValue,
   describeDesignStage,
   filterConfigItems,
@@ -253,9 +254,6 @@ const ROLE = {
  * 最初の列には付けない。列の見出しの行と、すべての行のセルに付けるので、表の高さを通して続く。
  */
 const COLUMN_LINE = "@min-[40rem]:border-l @min-[40rem]:border-border";
-
-/** 設計工程の判定の行を置くグループ。 */
-const DESIGN_GROUP_ID = "design";
 
 type SwitchOrNumberOffer = Extract<ChangeOffer, { kind: "stop" | "lower" }>;
 
@@ -525,7 +523,8 @@ function ConfigGroupTable({
 /**
  * 設計工程の、効いている値の行。「設計」グループの表の先頭に置く。
  * 一覧の値は書かれたままなので、実際に動くかはこの行で確かめる。
- * 項目の列は設定のキーでないので、等幅にせず、通常の書体で出す。操作の列は空である。
+ * 項目の列は設定のキーでないので、等幅にせず、通常の書体で出す。
+ * 操作の列があるグループでは、値のセルを操作の列まで広げ、空のセルを置かない。
  * 書かれた値が無視されているときと、参照のため判定できないときは、その理由を値の列に添える。
  * 他の行と同じく、狭い幅では縦に積むので、表の役割は`role`で明示する。
  */
@@ -544,10 +543,11 @@ function DesignStageRow({
         {...ROLE.rowheader}
         className="block px-4 pt-2.5 pb-1 text-left align-top font-normal break-words @min-[40rem]:table-cell @min-[40rem]:py-2.5"
       >
-        設計工程(実際の状態)
+        {DESIGN_STAGE_ROW_LABEL}
       </th>
       <td
         {...ROLE.cell}
+        colSpan={showOperation ? 2 : undefined}
         className={`block min-w-0 px-4 pb-2.5 align-top @min-[40rem]:table-cell @min-[40rem]:py-2.5 ${COLUMN_LINE}`}
       >
         <div className="flex flex-col gap-1">
@@ -557,12 +557,6 @@ function DesignStageRow({
           )}
         </div>
       </td>
-      {showOperation ? (
-        <td
-          {...ROLE.cell}
-          className={`block @min-[40rem]:table-cell ${COLUMN_LINE}`}
-        />
-      ) : null}
     </tr>
   );
 }

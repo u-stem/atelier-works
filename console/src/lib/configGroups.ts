@@ -25,7 +25,7 @@ const OTHER: Pick<ConfigGroup, "id" | "label"> = {
 };
 
 /** 設計のグループのid。設計工程の判定の行を、このグループの先頭に置く。 */
-export const DESIGN_GROUP_ID = "";
+export const DESIGN_GROUP_ID = "design";
 
 /** グループの並びは、画面の上からの並びである。 */
 export const CONFIG_GROUP_DEFINITIONS: readonly ConfigGroupDefinition[] = [
