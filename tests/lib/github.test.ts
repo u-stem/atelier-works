@@ -6007,7 +6007,7 @@ describe("listReviewThreads", () => {
             isResolved: false,
             firstComment: {
               author: { login: VIEWER },
-              body: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+              body: "[Factory 自動レビュー] @alice\n[MUST] fix this",
             },
           }),
         ]),
@@ -6026,9 +6026,9 @@ describe("listReviewThreads", () => {
         path: "a.ts",
         line: 10,
         firstCommentAuthorLogin: VIEWER,
-        firstCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+        firstCommentBody: "[Factory 自動レビュー] @alice\n[MUST] fix this",
         lastCommentAuthorLogin: VIEWER,
-        lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+        lastCommentBody: "[Factory 自動レビュー] @alice\n[MUST] fix this",
         firstCommentDatabaseId: null,
         allCommentIds: [],
         comments: [],
@@ -6049,7 +6049,7 @@ describe("listReviewThreads", () => {
             isResolved: false,
             firstComment: {
               author: { login: VIEWER },
-              body: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+              body: "[Factory 自動レビュー] @alice\n[MUST] fix this",
               databaseId: 501,
             },
             allCommentDatabaseIds: [501, 502],
@@ -6272,7 +6272,7 @@ describe("listReviewThreads", () => {
             isResolved: false,
             firstComment: {
               author: { login: VIEWER },
-              body: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+              body: "[Factory 自動レビュー] @alice\n[MUST] fix this",
             },
             lastComment: { author: { login: "alice" }, body: "done, thanks" },
           }),

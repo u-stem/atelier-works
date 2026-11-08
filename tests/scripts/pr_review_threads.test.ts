@@ -11,6 +11,7 @@ import {
   countOpenThreads,
   decideReviewScope,
   hasBodyOnlyMustFinding,
+  isFixedFixReply,
   renderThreadReply,
   reviewDeltaFromSha,
   reviewDeltaPaths,
@@ -24,7 +25,7 @@ import {
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const VIEWER = "factory-bot";
-const FINDING = "[pr_review 自動レビュー]\n[IMO] consider this";
+const FINDING = "[Factory 自動レビュー]\n[IMO] consider this";
 const SKIP_REPLY = "理由です。\n\n対応: 見送り";
 
 /** viewerと`alice`を許可された書き手とする。 */
@@ -66,7 +67,7 @@ function replied(login: string, body: string): Partial<ReviewThread> {
 }
 
 describe("withTrustedResolution", () => {
-  const MUST = "[pr_review 自動レビュー]\n[MUST] fix this";
+  const MUST = "[Factory 自動レビュー]\n[MUST] fix this";
 
   /** GitHubで解決済みのスレッド。 */
   function resolvedBy(
@@ -290,7 +291,7 @@ describe("threadResponseKind", () => {
 
   test("reads the skip line above a trailing marker", () => {
     const body =
-      "[pr_fix 自動返信]\n理由\n\n対応: 見送り\n\n<!-- factory:pr_fix:9 -->";
+      "[Factory 自動返信]\n理由\n\n対応: 見送り\n\n<!-- factory:pr_fix:9 -->";
     expect(
       threadResponseKind(thread(replied(VIEWER, body)), VIEWER, isAllowed),
     ).toBe("skip");
@@ -339,7 +340,7 @@ describe("threadResponseKind", () => {
   test("leaves a pr_fix commit reply to the automatic resolving", () => {
     expect(
       threadResponseKind(
-        thread(replied(VIEWER, "[pr_fix 自動返信]\nfixed\n\n対応: `abc1234`")),
+        thread(replied(VIEWER, "[Factory 自動返信]\nfixed\n\n対応: `abc1234`")),
         VIEWER,
         isAllowed,
       ),
@@ -349,7 +350,7 @@ describe("threadResponseKind", () => {
   test("does not answer a no-change reply", () => {
     expect(
       threadResponseKind(
-        thread(replied(VIEWER, "[pr_fix 自動返信]\nx\n\n対応: 変更なし")),
+        thread(replied(VIEWER, "[Factory 自動返信]\nx\n\n対応: 変更なし")),
         VIEWER,
         isAllowed,
       ),
@@ -383,7 +384,7 @@ describe("threadResponseKind", () => {
         thread(
           replied(
             VIEWER,
-            "[pr_review 自動レビュー]\n理由が不十分です。\n\n見送り: 反論",
+            "[Factory 自動レビュー]\n理由が不十分です。\n\n見送り: 反論",
           ),
         ),
         VIEWER,
@@ -474,17 +475,7 @@ describe("threadResponseKind", () => {
     test("does not answer a viewer reply that has only the reply role tag", () => {
       expect(
         threadResponseKind(
-          thread(replied(VIEWER, "[Factoryによる返信]\n理由が不十分です。")),
-          VIEWER,
-          isAllowed,
-        ),
-      ).toBeNull();
-    });
-
-    test("does not answer a viewer reply that has only the earlier pr_review role tag", () => {
-      expect(
-        threadResponseKind(
-          thread(replied(VIEWER, "[pr_review 自動レビュー]\n事実です。")),
+          thread(replied(VIEWER, "[Factory 自動返信]\n理由が不十分です。")),
           VIEWER,
           isAllowed,
         ),
@@ -495,8 +486,8 @@ describe("threadResponseKind", () => {
       expect(
         threadResponseKind(
           thread({
-            firstCommentBody: "[Factoryによる返信]\n事実です。",
-            comments: [comment(VIEWER, "[Factoryによる返信]\n事実です。")],
+            firstCommentBody: "[Factory 自動返信]\n事実です。",
+            comments: [comment(VIEWER, "[Factory 自動返信]\n事実です。")],
           }),
           VIEWER,
           isAllowed,
@@ -661,16 +652,7 @@ describe("reviewThreadsForPrompt", () => {
 
   test("strips the reply role tag from the body of a reply", () => {
     const { threads } = reviewThreadsForPrompt(
-      [thread(replied(VIEWER, "[Factoryによる返信]\n事実です。"))],
-      VIEWER,
-      isAllowed,
-    );
-    expect(threads[0]?.comments[1]?.body).toBe("事実です。");
-  });
-
-  test("strips the earlier pr_review role tag from the body of a reply", () => {
-    const { threads } = reviewThreadsForPrompt(
-      [thread(replied(VIEWER, "[pr_review 自動レビュー]\n事実です。"))],
+      [thread(replied(VIEWER, "[Factory 自動返信]\n事実です。"))],
       VIEWER,
       isAllowed,
     );
@@ -784,10 +766,10 @@ describe("reviewThreadsForPrompt", () => {
         firstCommentDatabaseId: 100 + index,
         comments: [
           comment(VIEWER, big),
-          comment(VIEWER, "[pr_fix 自動返信]\nx\n\n対応: 変更なし", 2),
+          comment(VIEWER, "[Factory 自動返信]\nx\n\n対応: 変更なし", 2),
         ],
         lastCommentAuthorLogin: VIEWER,
-        lastCommentBody: "[pr_fix 自動返信]\nx\n\n対応: 変更なし",
+        lastCommentBody: "[Factory 自動返信]\nx\n\n対応: 変更なし",
       }),
     );
     const toAnswer = thread({
@@ -1005,7 +987,7 @@ describe("hasBodyOnlyMustFinding", () => {
       ...overrides,
     };
   }
-  const POSTED = "[pr_review 自動レビュー]\n[MUST] null checkが抜けています。";
+  const POSTED = "[Factory 自動レビュー]\n[MUST] null checkが抜けています。";
 
   test("finds a MUST whose message is in no thread", () => {
     expect(hasBodyOnlyMustFinding([finding()], [], VIEWER)).toBe(true);
@@ -1039,7 +1021,7 @@ describe("hasBodyOnlyMustFinding", () => {
           thread({
             isResolved: true,
             firstCommentBody:
-              "[pr_review 自動レビュー]\n[IMO] 別の話です。\n\n提案: null checkが抜けています。",
+              "[Factory 自動レビュー]\n[IMO] 別の話です。\n\n提案: null checkが抜けています。",
           }),
         ],
         VIEWER,
@@ -1074,7 +1056,7 @@ describe("hasBodyOnlyMustFinding", () => {
         [
           thread({
             firstCommentBody:
-              "[pr_review 自動レビュー]\n[MUST] 一行目です。\n二行目です。",
+              "[Factory 自動レビュー]\n[MUST] 一行目です。\n二行目です。",
           }),
         ],
         VIEWER,
@@ -1133,7 +1115,7 @@ describe("hasBodyOnlyMustFinding", () => {
         [finding({ message: "x<!-- y" })],
         [
           thread({
-            firstCommentBody: "[pr_review 自動レビュー]\n[MUST] x&lt;!-- y",
+            firstCommentBody: "[Factory 自動レビュー]\n[MUST] x&lt;!-- y",
           }),
         ],
         VIEWER,
@@ -1147,7 +1129,7 @@ describe("hasBodyOnlyMustFinding", () => {
         [finding({ message: "LGTM です。" })],
         [
           thread({
-            firstCommentBody: "[pr_review 自動レビュー]\n[MUST] LGTMです。",
+            firstCommentBody: "[Factory 自動レビュー]\n[MUST] LGTMです。",
           }),
         ],
         VIEWER,
@@ -1486,21 +1468,53 @@ describe("selectThreadResponses", () => {
   });
 });
 
+describe("a re-review reply and a pr_fix reply share the role tag", () => {
+  test("does not take an accepted skip reply for a fixed commit reply", () => {
+    expect(isFixedFixReply(renderThreadReply(ACCEPTED, 9))).toBe(false);
+  });
+
+  test("does not take an objection reply for a fixed commit reply", () => {
+    expect(isFixedFixReply(renderThreadReply(REJECTED, 9))).toBe(false);
+  });
+
+  test("does not take an addressed reply for a fixed commit reply", () => {
+    expect(isFixedFixReply(renderThreadReply(ADDRESSED, 9))).toBe(false);
+  });
+
+  test("does not take an answer for a fixed commit reply even when the body ends with a commit line", () => {
+    const answer = renderThreadReply(
+      { ...ANSWERED, body: "対応: `abc1234`" },
+      9,
+    );
+    expect(isFixedFixReply(answer)).toBe(false);
+  });
+
+  test("does not give a pr_fix reply the marker of a re-review answer", () => {
+    const reply =
+      "[Factory 自動返信]\nfixed\n\n対応: `abc1234`\n\n<!-- factory:pr_fix:9 -->";
+    expect(
+      ["pr_review_ack", "pr_review_objection", "pr_review_answer"].some(
+        (kind) => hasMarker(reply, kind),
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("renderThreadReply", () => {
   test("starts with the reply role tag", () => {
     const body = renderThreadReply(ACCEPTED, 9);
-    expect(body.split("\n")[0]).toBe("[Factoryによる返信]");
+    expect(body.split("\n")[0]).toBe("[Factory 自動返信]");
   });
 
   test("starts an objection with the reply role tag", () => {
     expect(renderThreadReply(REJECTED, 9).split("\n")[0]).toBe(
-      "[Factoryによる返信]",
+      "[Factory 自動返信]",
     );
   });
 
   test("starts an answer with the reply role tag", () => {
     expect(renderThreadReply(ANSWERED, 9).split("\n")[0]).toBe(
-      "[Factoryによる返信]",
+      "[Factory 自動返信]",
     );
   });
 
