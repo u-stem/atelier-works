@@ -11,6 +11,12 @@ import {
   formatAbsoluteIso,
   formatRelativeIso,
 } from "../../lib/relativeTime.ts";
+import {
+  ANCHOR_FOCUS_CLASS,
+  focusAttrs,
+  highlightAttrs,
+} from "./sectionAnchor.ts";
+import { type SectionArrival, useSectionArrival } from "./useSectionArrival.ts";
 
 /** 押したボタンの判断と、その行。確認のダイアログに渡す。 */
 export type DeployDecisionRequest = {
@@ -100,29 +106,49 @@ function Row({
   );
 }
 
-/**
- * 保護パスの変更の反映の承認待ち。承認待ちが無いときは何も描かない(保留と凍結の空の旨は、隣の一覧が出す)。
- * 読めないときは、承認待ちなしとは書かず、反映が止まったままである旨と理由を出す。承認の注記は承認待ちがあるときだけ出す。
- * 版とパスはリポジトリ由来の文字列なので、文字としてだけ描く(リンクにしない)。
- */
-export function DeployApprovalsPanel({
-  view,
-  now,
-  isLocked,
-  onRequest,
-}: {
+type PanelProps = {
   view: DeployApprovalsView;
   now: number;
   isLocked: (sha: string) => boolean;
   onRequest: (request: DeployDecisionRequest) => void;
-}) {
+  arrival: SectionArrival;
+};
+
+/**
+ * 保護パスの変更の反映の承認待ち。承認待ちが無いときは何も描かない(保留と凍結の空の旨は、隣の一覧が出す)。
+ * 読めないときは、承認待ちなしとは書かず、反映が止まったままである旨と理由を出す。承認の注記は承認待ちがあるときだけ出す。
+ * 版とパスはリポジトリ由来の文字列なので、文字としてだけ描く(リンクにしない)。
+ * 通知から移るときの着地先で、見出しがフォーカスを受ける。描かれたときに、移動を受ける。
+ */
+export function DeployApprovalsPanel(props: PanelProps) {
+  const { view } = props;
   if (view.kind === "none") {
     return null;
   }
+  return <DeployApprovalsCard {...props} view={view} />;
+}
+
+/** 移動を受けるフックを、区画が描かれる間だけ呼ぶために、何も描かない場合から分けた本体。 */
+function DeployApprovalsCard({
+  view,
+  now,
+  isLocked,
+  onRequest,
+  arrival,
+}: Omit<PanelProps, "view"> & {
+  view: Exclude<DeployApprovalsView, { kind: "none" }>;
+}) {
+  useSectionArrival("deploy-approvals", arrival.pending, arrival.onArrived);
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      {...highlightAttrs("deploy-approvals", arrival.highlighted)}
+      className="flex flex-col gap-2 rounded-xl"
+    >
       <div>
-        <h3 className="text-body font-semibold">
+        <h3
+          {...focusAttrs("deploy-approvals")}
+          className={`rounded-sm text-body font-semibold ${ANCHOR_FOCUS_CLASS}`}
+        >
           {DEPLOY_APPROVALS_TEXT.cardTitle}
         </h3>
         {view.kind === "pending" ? (

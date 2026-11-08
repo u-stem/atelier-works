@@ -48,7 +48,7 @@ function guide(
     action,
     commands: extra.commands ?? [],
     note: extra.note ?? null,
-    target: null,
+    target: extra.target ?? null,
   };
 }
 
@@ -140,6 +140,10 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       {
         commands: ["mise run hold:list", "mise run hold:release -- <id>"],
         note: "保留が解けると、次の取得で自動で再開します。通知は情報なので、システム画面に7日だけ出ます。1件の保留の期限は最長24時間です。",
+        target: {
+          section: "holds",
+          label: "システムの画面の保留と凍結へ",
+        },
       },
     ),
   ],
@@ -265,6 +269,10 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       "システムの画面の「反映の承認待ち」で、版と保護パスの変更を確かめ、承認してください。承認すると、次の自己更新(2分以内)が反映します。受け入れない変更なら却下し、mainへ戻すPRを作ってマージしてください。",
       {
         note: "承認すると、この通知は自動で解決されます。却下すると通知は残り、mainへ戻すPRの反映で解決されます。mainが進んで新しい版の承認待ちになったときと、反映が済んだときも、自動で解決されます。この画面から解決することはできません。",
+        target: {
+          section: "deploy-approvals",
+          label: "システムの画面の反映の承認待ちへ",
+        },
       },
     ),
   ],
@@ -575,6 +583,10 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       {
         commands: ["mise run stop:release"],
         note: "解除すると、5分以内に自動で解決されます。Consoleからは解決できません。factory_configの*_enabledは解除しても戻らないので、機能は動き出しません。",
+        target: {
+          section: "stop-all",
+          label: "システムの画面の全停止へ",
+        },
       },
     ),
   ],

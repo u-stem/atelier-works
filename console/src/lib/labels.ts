@@ -303,6 +303,8 @@ export const DEPLOY_APPROVALS_TEXT = {
   readFailedTitle: "反映の承認待ちを読めませんでした",
   readFailedDetail:
     "読めない間も、保護パスの変更を含む反映は止まったままです。",
+  noPendingNote:
+    "承認待ちはありません。却下した版は、mainへ戻すPRの反映を待っています。",
 } as const;
 
 /** 一覧から外した保護パスの件数の文。 */

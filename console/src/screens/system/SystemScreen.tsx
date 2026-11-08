@@ -20,6 +20,14 @@ import { STICKY_HEADER_PROPS } from "../../lib/scrollRoot.ts";
 import { jumpToSection } from "../../lib/sectionJump.ts";
 import { summaryBandRows } from "../../lib/summaryBand.ts";
 import {
+  afterArrival,
+  parseSystemSection,
+  SECTION_PARAM,
+  SECTION_TAB,
+  type SystemSectionId,
+  withSystemSection,
+} from "../../lib/systemSections.ts";
+import {
   parseSystemTab,
   SYSTEM_TABS,
   type SystemTabId,
@@ -48,12 +56,20 @@ import { SummaryBand } from "./SummaryBand.tsx";
 import { SystemSection } from "./SystemSection.tsx";
 import { refreshStatusOfSystem } from "./systemRefresh.ts";
 import {
+  arrivalTarget,
+  HOLDS_HEADING_ID,
+  type HoldsFetch,
+  landingNote,
   needsTabSwitch,
   type PendingJump,
+  shouldDiscardJump,
+  shouldFallBackToHeading,
+  shouldHighlight,
   shouldRunJump,
   systemFailedTabs,
 } from "./systemScreenView.ts";
 import { UpdateHistory } from "./UpdateHistory.tsx";
+import { useSectionHighlight } from "./useSectionArrival.ts";
 import { WorkerLoadCard } from "./WorkerLoadCard.tsx";
 
 function Note({ text }: { text: string | null }) {
@@ -256,10 +272,18 @@ function Sections({ children }: { children: ReactNode }) {
  * 失敗が隠れないよう、帯の失敗のチップに件数を出し、失敗と通知のタブには注意以上のときの印だけを付ける。
  * 見出しの更新ボタンが4つと、開いた後の設定を取り直し、節は失敗したときの「もう一度取得する」だけを持つ。
  * 書き込みは「保留と凍結」の節の置く操作と解除と、反映の承認と却下だけで、ほかの節は読むだけである。通知の解決は、要対応の画面の詳細で行う。設定も読むだけで、変更はできない。
+ * 要対応の通知の詳細から、`?section=`で、全停止、反映の承認待ち、保留の区画へ直接移れる。
+ * `?section=`があるあいだは、区画のタブを開く。保留と凍結の取得が済み、区画が描かれたとき、区画の側が移動を受け、
+ * `?section=`を消して(履歴は積まない)、操作を求める状態の区画だけを数秒強調する。
+ * 区画が描かれないときは、節の見出しへ着地し、強調しない。移動を待つ間に別のタブを選んだら、移動を捨てる。
  */
 export function SystemScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab = parseSystemTab(searchParams.get("tab"));
+  const pendingSection = parseSystemSection(searchParams.get(SECTION_PARAM));
+  const tab =
+    pendingSection === null
+      ? parseSystemTab(searchParams.get("tab"))
+      : SECTION_TAB[pendingSection];
   const visited = useVisitedTabs(tab);
   const holds = useHolds();
   const status = useSystemStatus();
@@ -299,15 +323,58 @@ export function SystemScreen() {
     }
   }, [jump, tab]);
   const selectTab = (id: SystemTabId): void => {
-    setSearchParams((current) => withSystemTab(current, id), {
-      replace: true,
-    });
+    setSearchParams(
+      (current) => {
+        const next = withSystemTab(current, id);
+        return shouldDiscardJump(
+          parseSystemSection(current.get(SECTION_PARAM)),
+          id,
+        )
+          ? withSystemSection(next, null)
+          : next;
+      },
+      { replace: true },
+    );
   };
   const onJump = (target: SystemTabId, id: string): void => {
     if (needsTabSwitch(target, tab)) {
       selectTab(target);
     }
     setJump({ tab: target, id });
+  };
+
+  // 通知などからの区画への移動。保留と凍結の取得が済んでから、区画の側が受ける。
+  const holdsFetch: HoldsFetch = {
+    data: holds.data,
+    isError: holds.isError,
+    isFetching: holds.isFetching,
+  };
+  const highlight = useSectionHighlight();
+  const [landed, setLanded] = useState<SystemSectionId | null>(null);
+  const clearSection = (id: SystemSectionId): void => {
+    setSearchParams((current) => afterArrival(current, id), { replace: true });
+  };
+  const onArrived = (id: SystemSectionId): void => {
+    setLanded(null);
+    clearSection(id);
+    if (shouldHighlight(id, holdsFetch)) {
+      highlight.show(id);
+    }
+  };
+  const fallBack = shouldFallBackToHeading(pendingSection, holdsFetch);
+  useEffect(() => {
+    if (fallBack && pendingSection !== null) {
+      jumpToSection(HOLDS_HEADING_ID);
+      setLanded(pendingSection);
+      setSearchParams((current) => afterArrival(current, pendingSection), {
+        replace: true,
+      });
+    }
+  }, [fallBack, pendingSection, setSearchParams]);
+  const arrival = {
+    pending: arrivalTarget(pendingSection, holdsFetch),
+    highlighted: highlight.highlighted,
+    onArrived,
   };
 
   return (
@@ -335,7 +402,15 @@ export function SystemScreen() {
           mounted={visited.has("status")}
         >
           <Sections>
-            <HoldsSection holds={holds} />
+            <HoldsSection
+              holds={holds}
+              arrival={arrival}
+              landingNote={landingNote({
+                landed,
+                holds: holds.data,
+                summary: summary.data,
+              })}
+            />
             <ReleaseSection status={status} summary={summary} />
             <WorkerLoadSection status={status} />
           </Sections>

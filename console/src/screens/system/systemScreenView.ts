@@ -3,7 +3,10 @@
 import type { HoldsSnapshot } from "../../api/guards/holds.ts";
 import type { ConsoleSummary } from "../../api/guards/summary.ts";
 import { isHeaderError } from "../../app/refreshStatus.ts";
-import type { SystemSectionId } from "../../lib/systemSections.ts";
+import { deployApprovalsView } from "../../lib/deployApprovalsView.ts";
+import { DEPLOY_APPROVALS_TEXT } from "../../lib/labels.ts";
+import { noticeGuide } from "../../lib/noticeGuide.ts";
+import { SECTION_TAB, type SystemSectionId } from "../../lib/systemSections.ts";
 import type { SystemTabId } from "../../lib/systemTabs.ts";
 
 /** 取得の結果のうち、失敗の印を決めるのに読む項目。 */
@@ -70,56 +73,143 @@ export type HoldsFetch = {
   readonly isFetching: boolean;
 };
 
-export function noActiveHoldsOrFreezes(_snapshot: HoldsSnapshot): boolean {
-  return false;
+/**
+ * 保留も凍結も、読めていて有効な行が1つも無いか。
+ * 読めない源があるときは、無いとは言えないので偽にする。
+ */
+export function noActiveHoldsOrFreezes(snapshot: HoldsSnapshot): boolean {
+  const { holds, freezes } = snapshot;
+  return (
+    holds.ok &&
+    holds.rows.length === 0 &&
+    freezes.ok &&
+    freezes.schedule.length + freezes.deploy.length === 0
+  );
 }
 
+/**
+ * 取得した値で、区画が描かれるか。区画の部品が何も描かない条件と同じにする。
+ * 反映の承認待ちは、承認待ちが無いとき(読めないときは描く)と、返さない旧版のbackendでは描かない。
+ * 全停止は、状態を返さない旧版のbackendでは描かない。
+ * 保留の区画は、保留も凍結も有効な行が無いとき、1行にたたまれるので描かない。
+ */
 export function sectionRendered(
-  _section: SystemSectionId,
-  _snapshot: HoldsSnapshot,
+  section: SystemSectionId,
+  snapshot: HoldsSnapshot,
 ): boolean {
-  return false;
+  switch (section) {
+    case "deploy-approvals":
+      return deployApprovalsView(snapshot).kind !== "none";
+    case "stop-all":
+      return snapshot.stop_all !== undefined;
+    case "holds":
+      return !noActiveHoldsOrFreezes(snapshot);
+  }
 }
 
+/**
+ * 区画が、人の操作を求める状態か。着地の強調は、この状態のときだけにする。
+ * 承認待ちが1件以上、全停止が`active`か`corrupt`、保留の行が1件以上のときである。
+ * 読めない状態は、操作を求めているとは言えないので偽にする。
+ */
 export function sectionNeedsAction(
-  _section: SystemSectionId,
-  _snapshot: HoldsSnapshot,
+  section: SystemSectionId,
+  snapshot: HoldsSnapshot,
 ): boolean {
-  return false;
+  switch (section) {
+    case "deploy-approvals":
+      return deployApprovalsView(snapshot).kind === "pending";
+    case "stop-all":
+      return (
+        snapshot.stop_all?.kind === "active" ||
+        snapshot.stop_all?.kind === "corrupt"
+      );
+    case "holds":
+      return snapshot.holds.ok && snapshot.holds.rows.length > 0;
+  }
 }
 
+/**
+ * 区画の部品へ渡す、移動を待つ区画。取得が走っている間は渡さない。
+ * 取得の途中の値は、取り終えると変わりうる。承認済みの区画へ着地して強調しないよう、取得が済むまで待つ。
+ */
 export function arrivalTarget(
-  _pending: SystemSectionId | null,
-  _fetch: HoldsFetch,
+  pending: SystemSectionId | null,
+  fetch: HoldsFetch,
 ): SystemSectionId | null {
-  return null;
+  return fetch.isFetching ? null : pending;
 }
 
+/**
+ * 区画が描かれないので、節の見出しへ着地するか。
+ * 取得が済んで、値が無く失敗したときと、値が区画を描かないと言うときだけ、見出しへ着地する。
+ * 区画を描くと言う値なら、区画の部品が描かれて、自分で受けるのを待つ。取得が走っている間も待つ。
+ */
 export function shouldFallBackToHeading(
-  _pending: SystemSectionId | null,
-  _fetch: HoldsFetch,
+  pending: SystemSectionId | null,
+  fetch: HoldsFetch,
 ): boolean {
-  return false;
+  if (pending === null || fetch.isFetching) {
+    return false;
+  }
+  if (fetch.data === undefined) {
+    return fetch.isError;
+  }
+  return !sectionRendered(pending, fetch.data);
 }
 
+/**
+ * 着地した区画を強調するか。取得が済んだ値で、区画が操作を求める状態のときだけである。
+ * 取得の途中の古い値で、承認済みの区画を強調しないためである。
+ */
 export function shouldHighlight(
-  _section: SystemSectionId,
-  _fetch: HoldsFetch,
+  section: SystemSectionId,
+  fetch: HoldsFetch,
 ): boolean {
-  return false;
+  return (
+    !fetch.isFetching &&
+    fetch.data !== undefined &&
+    sectionNeedsAction(section, fetch.data)
+  );
 }
 
+/**
+ * 移動を待つ間に選んだタブが、区画のタブと違うとき、移動を捨てるか。
+ * 人が別のタブを選んだなら、その選択を優先する。同じタブを選び直したときは、移動を続ける。
+ */
 export function shouldDiscardJump(
-  _pending: SystemSectionId | null,
-  _selected: SystemTabId,
+  pending: SystemSectionId | null,
+  selected: SystemTabId,
 ): boolean {
-  return false;
+  return pending !== null && SECTION_TAB[pending] !== selected;
 }
 
-export function landingNote(_input: {
+/**
+ * 反映の承認待ちの区画が無いまま着地したとき、見出しの下に出す1文。
+ * 承認待ちが無いのに、未解決の反映の承認の通知が残るのは、人が却下した後の状態である。
+ * 承認待ちが読めないとき(旧版のbackendを含む)と、通知が無いときは、言い切れないので出さない。
+ */
+export function landingNote(input: {
   readonly landed: SystemSectionId | null;
   readonly holds: HoldsSnapshot | undefined;
   readonly summary: ConsoleSummary | undefined;
 }): string | null {
-  return null;
+  const { landed, holds, summary } = input;
+  if (landed !== "deploy-approvals" || holds === undefined) {
+    return null;
+  }
+  const approvals = holds.deploy_approvals;
+  if (
+    approvals === undefined ||
+    !approvals.ok ||
+    approvals.pending.length > 0
+  ) {
+    return null;
+  }
+  const open = (summary?.notices ?? []).some(
+    (notice) =>
+      !notice.resolved &&
+      noticeGuide(notice.kind).target?.section === "deploy-approvals",
+  );
+  return open ? DEPLOY_APPROVALS_TEXT.noPendingNote : null;
 }

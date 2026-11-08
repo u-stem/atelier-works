@@ -211,6 +211,23 @@ body {
 }
 
 /*
+ * 通知などから移った直後の区画の強調。色の静的な指定(背景と輪郭)で示し、動きは背景の色の遷移だけにする。
+ * アニメーションにしないのは、動きを減らす設定の利用者では、アニメーションが一瞬で終わり、強調が見えなくなるためである。
+ * 強調を外す時機は画面の状態(タイマー)が持ち、ここでは決めない。
+ * 動きを減らす設定は、上の全要素の規則が受けて、遷移を止める。
+ * 輪郭はコンポーネントのフォーカスの輪(box-shadow)と重ならない。utilitiesの層より後に効かせるため、層には入れない。
+ */
+[data-section-anchor] {
+  transition: background-color var(--duration-moderate) var(--ease-standard);
+}
+
+[data-section-anchor][data-highlighted] {
+  background-color: var(--selected);
+  outline: 2px solid var(--ring);
+  outline-offset: 0.5rem;
+}
+
+/*
  * 確認のダイアログは、開くときだけ不透明度をフェードする。閉じるときは即時に消す。
  * 動かすのは透明度だけで、位置も大きさも変えない。
  * 閉じる間も最前面に残すと、閉じる途中のダイアログを押せてしまうので、残す仕組みは使わない。
