@@ -3780,6 +3780,33 @@ describe("bash-guard checks every region that find -exec closes with a plus", ()
   });
 });
 
+// 代入の値の拒否と、後ろの保留の操作の拒否が重なるときは、強い方の`operation`の理由を返す。
+describe("bash-guard gives the strongest reason when an assignment and an operation overlap", () => {
+  test("gives the operation reason when a hold release follows an unreadable assignment", async () => {
+    const reason = await denyReason(`FOO="a'b" ./scripts/hold.ts release 1`, {
+      subagent: true,
+    });
+    expect(reason).toContain("Ask the main session or a person to run");
+  });
+
+  test("does not give the assignment reason for that overlap", async () => {
+    const reason = await denyReason(`FOO="a'b" ./scripts/hold.ts release 1`, {
+      subagent: true,
+    });
+    expect(reason).not.toContain("variable assignment");
+  });
+
+  test("keeps the assignment reason for an assignment alone", async () => {
+    const reason = await denyReason(`FOO="a'b" true`, { subagent: true });
+    expect(reason).toContain("variable assignment");
+  });
+
+  test("keeps the assignment reason when a read follows", async () => {
+    const reason = await denyReason(`FOO="a'b" cat x`, { subagent: true });
+    expect(reason).toContain("variable assignment");
+  });
+});
+
 describe("bash-guard explains which characters make an assignment value unreadable", () => {
   test("names quotes, backslashes, and pattern characters in the reason", async () => {
     const reason = await denyReason(`FOO="a'b" cat x`, { subagent: true });
