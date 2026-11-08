@@ -678,8 +678,9 @@ export function holdStdin(command: SimpleCommand): HoldStdin {
   return {
     redirects: command.redirects,
     // 語が`1`、`2`、`-`だけのものを外す。`2>&1`と`1>&2`の出力の複製と、`<&-`の閉じる指定を、入力に数えないためである。
-    // `<&3`と`>&3`、`/dev/null`を入力にする形は、語の字面では見分けられないので、読めない入力として残す。
-    // 名前が`1`、`2`、`-`のファイルを入力にする形も見分けられず、入力に数えない。
+    // `<&3`の入力の複製と`>&3`の出力の複製は、番号が`3`という名前のファイルと字面で区別せず、読めない入力として残す。
+    // `/dev/null`を入力にする形も、中身を読めないファイルとして同じに残す。
+    // 名前が`1`、`2`、`-`のファイルと、読み書きの両方で開く`<>`の先は、読めない入力に数えない。
     inputFiles: command.redirects.filter(
       (word) =>
         !command.writeTargets.includes(word) && !/^(?:[12]|-)$/.test(word.text),
@@ -876,8 +877,11 @@ type HoldBudget = { parses: number; chars: number; words: number };
  */
 const HOLD_MAX_UPSTREAM = 256;
 
-/** 共起で走査した語の数の合計の上限。パイプの上流の語は、読むたびに走査し直すので、合計に数える。 */
-const HOLD_MAX_WORDS = 200_000;
+/**
+ * 共起で走査した語の数の合計の上限。パイプの上流の語は、読むたびに走査し直すので、合計に数える。
+ * 数えるのは最上位の単純コマンドごとで、上流の段の数の上限と合わせて、1つの入力の処理量を抑える。
+ */
+const HOLD_MAX_WORDS = 30_000;
 
 function newBudget(): HoldBudget {
   return { parses: 0, chars: 0, words: 0 };
