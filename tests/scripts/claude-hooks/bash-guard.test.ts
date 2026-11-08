@@ -2527,6 +2527,15 @@ function nestedInScript(command: string, levels: number): string {
   return wrapped;
 }
 
+/** `bash -c '<command>'`で、コマンドを`levels`回、文字列に包む。 */
+function nestedInBash(command: string, levels: number): string {
+  let wrapped = command;
+  for (let level = 0; level < levels; level += 1) {
+    wrapped = `bash -c '${wrapped.replace(/'/g, "'\\''")}'`;
+  }
+  return wrapped;
+}
+
 // 全停止の判定は、前置きの後ろと、コマンド文字列の入れ子を読む。判定の部品を共通にするときに、この挙動を変えない。
 describe("bash-guard keeps reading prefixes and nested strings for the stop-all", () => {
   test("denies a stop-all task inside a string nested four times", async () => {
@@ -2646,6 +2655,9 @@ describe("bash-guard denies a subagent that writes holds or freezes inside a com
     `script -qc "cat scripts/hold.ts | bun run -" /dev/null`,
     `script -qc "bun run - < scripts/hold.ts" /dev/null`,
     `script -qc "bun run - release 1" /dev/null < scripts/freeze.ts`,
+    `script -qc "bash -c 'mise run hold:release 1'" /dev/null`,
+    `script -qc "echo 'mise run hold:release 1' | sh" /dev/null`,
+    `script -qc 'echo "$X" | sh' /dev/null`,
   ])("%s", async (command) => {
     expect(await decide(command, { subagent: true })).toBe("deny");
   });
@@ -2661,6 +2673,8 @@ describe("bash-guard denies a subagent that feeds a shell behind a prefix throug
     'echo "$X" | script -q /dev/null sh',
     "script -q /dev/null sh <<< 'mise run hold:release 1'; true",
     "caffeinate -i sh <<< 'mise run hold:place'",
+    "script -q /dev/null <<< 'mise run hold:release 1'",
+    "script -q /dev/null <<'EOF'\nbun scripts/freeze.ts release 1\nEOF",
   ])("%s", async (command) => {
     expect(await decide(command, { subagent: true })).toBe("deny");
   });
@@ -2707,6 +2721,31 @@ describe("bash-guard reads command strings nested up to the limit for holds", ()
     expect(
       await decide(nestedInScript("echo hello", 6), { subagent: true }),
     ).toBe("allow");
+  });
+
+  test("allows listing holds in shell strings nested seven times", async () => {
+    expect(
+      await decide(nestedInBash("mise run hold:list", 7), { subagent: true }),
+    ).toBe("allow");
+  });
+});
+
+// 前置きの後ろで調べる起動語の数の上限は16。超えたら、どの語を実行するか決められないので拒否する。
+describe("bash-guard caps the launcher words it reads behind a prefix", () => {
+  test("allows sixteen launcher words that run nothing", async () => {
+    expect(
+      await decide(`caffeinate ${"bun --version ".repeat(16)}`, {
+        subagent: true,
+      }),
+    ).toBe("allow");
+  });
+
+  test("denies seventeen launcher words", async () => {
+    expect(
+      await decide(`caffeinate ${"bun --version ".repeat(17)}`, {
+        subagent: true,
+      }),
+    ).toBe("deny");
   });
 });
 
