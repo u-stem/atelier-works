@@ -277,6 +277,7 @@ describe("Sidebar badge of the system entrance", () => {
       "/system",
     );
 
+    expect(links.length).toBeGreaterThan(0);
     expect(
       links.every((link) => link.includes('>1<span class="sr-only">件')),
     ).toBe(true);
@@ -309,6 +310,7 @@ describe("Sidebar badge of the system entrance", () => {
       "/",
     );
 
+    expect(links.length).toBeGreaterThan(0);
     expect(
       links.every((link) => link.includes('>1<span class="sr-only">件')),
     ).toBe(true);

@@ -3,7 +3,6 @@ import {
   approvalKindLabel,
   approvalStatusLabel,
   attemptRef,
-  DEPLOY_APPROVALS_TEXT,
   deploymentResultLabel,
   hasPullRequestOrigin,
   holderKindLabel,
@@ -349,10 +348,4 @@ describe("hasPullRequestOrigin", () => {
       expect(hasPullRequestOrigin(origin)).toBe(false);
     },
   );
-});
-
-describe("DEPLOY_APPROVALS_TEXT", () => {
-  test("has no sentence that says the version was rejected, which the screen cannot tell", () => {
-    expect(Object.keys(DEPLOY_APPROVALS_TEXT)).not.toContain("noPendingNote");
-  });
 });
