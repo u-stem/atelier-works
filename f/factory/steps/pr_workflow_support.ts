@@ -1131,6 +1131,11 @@ function isFactoryReply(comment: ReviewThreadComment, viewer: string): boolean {
   );
 }
 
+/** 答えの後にスレッドを解決する`decision`かを返す。 */
+export function resolvesThread(_decision: ThreadResponseDecision): boolean {
+  return false;
+}
+
 export type AppliedThreadResponse = {
   readonly thread: ReviewThread;
   readonly commentId: number;

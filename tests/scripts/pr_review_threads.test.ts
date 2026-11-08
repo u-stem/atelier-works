@@ -13,6 +13,7 @@ import {
   hasBodyOnlyMustFinding,
   isFixedFixReply,
   renderThreadReply,
+  resolvesThread,
   reviewDeltaFromSha,
   reviewDeltaPaths,
   reviewMaxTurns,
@@ -489,6 +490,36 @@ describe("threadResponseKind", () => {
             firstCommentBody: "[Factory 自動返信]\n事実です。",
             comments: [comment(VIEWER, "[Factory 自動返信]\n事実です。")],
           }),
+          VIEWER,
+          isAllowed,
+        ),
+      ).toBeNull();
+    });
+
+    test("does not answer a viewer reply whose role tag line ends with CRLF", () => {
+      expect(
+        threadResponseKind(
+          thread(replied(VIEWER, "[Factory 自動返信]\r\n事実です。")),
+          VIEWER,
+          isAllowed,
+        ),
+      ).toBeNull();
+    });
+
+    test("does not answer a viewer reply whose role tag line has trailing spaces", () => {
+      expect(
+        threadResponseKind(
+          thread(replied(VIEWER, "[Factory 自動返信]  \n事実です。")),
+          VIEWER,
+          isAllowed,
+        ),
+      ).toBeNull();
+    });
+
+    test("does not answer a viewer reply that has only the pr_fix marker", () => {
+      expect(
+        threadResponseKind(
+          thread(replied(VIEWER, "直しました。\n\n<!-- factory:pr_fix:9 -->")),
           VIEWER,
           isAllowed,
         ),
@@ -1489,6 +1520,20 @@ describe("a re-review reply and a pr_fix reply share the role tag", () => {
     expect(isFixedFixReply(answer)).toBe(false);
   });
 
+  test.each(["pr_review_ack", "pr_review_objection", "pr_review_answer"])(
+    "does not take a reply with the %s marker for a fixed commit reply",
+    (kind) => {
+      const body = `[Factory 自動返信]\nfixed\n\n対応: \`abc1234\`\n\n<!-- factory:${kind}:9 -->`;
+      expect(isFixedFixReply(body)).toBe(false);
+    },
+  );
+
+  test("takes a reply with the pr_fix marker for a fixed commit reply", () => {
+    const body =
+      "[Factory 自動返信]\nfixed\n\n対応: `abc1234`\n\n<!-- factory:pr_fix:9 -->";
+    expect(isFixedFixReply(body)).toBe(true);
+  });
+
   test("does not give a pr_fix reply the marker of a re-review answer", () => {
     const reply =
       "[Factory 自動返信]\nfixed\n\n対応: `abc1234`\n\n<!-- factory:pr_fix:9 -->";
@@ -1497,6 +1542,24 @@ describe("a re-review reply and a pr_fix reply share the role tag", () => {
         (kind) => hasMarker(reply, kind),
       ),
     ).toBe(false);
+  });
+});
+
+describe("resolvesThread", () => {
+  test("resolves a thread after an addressed answer", () => {
+    expect(resolvesThread("addressed")).toBe(true);
+  });
+
+  test("resolves a thread after an accepted skip", () => {
+    expect(resolvesThread("skip_accepted")).toBe(true);
+  });
+
+  test("keeps a thread open after a rejected skip", () => {
+    expect(resolvesThread("skip_rejected")).toBe(false);
+  });
+
+  test("keeps a thread open after an answer to a question", () => {
+    expect(resolvesThread("answered")).toBe(false);
   });
 });
 
