@@ -377,6 +377,34 @@ function shortenedMessage(description: NoticeDescription): string {
   return description.messageParts.map((part) => part.text).join("");
 }
 
+/** 版の直前に置かれる「ラベル: 」の、ラベルの最大の文字数。 */
+const LABEL_MAX_LENGTH = 12;
+
+/**
+ * 版を切り出すと値の無いラベルになる部分を含む範囲。該当しなければ`null`。
+ * 版の直前が文頭(先頭、「。」、改行の直後)から始まる短い「ラベル: 」で、
+ * 直後が「。」か本文の終わりのとき、ラベルとコロンと「。」ごと切り出す。
+ * 版だけを切ると「ラベル: 。」が残り、値が抜けたように読めるためである。
+ */
+function orphanedLabelRange(
+  message: string,
+  sha: { start: number; end: number },
+): { start: number; end: number } | null {
+  const label = new RegExp(
+    `(?<![^。\\n])[^。\\n:：]{1,${LABEL_MAX_LENGTH}}: $`,
+  ).exec(message.slice(0, sha.start));
+  if (label === null) {
+    return null;
+  }
+  const rest = message.slice(sha.end);
+  if (rest.trim() === "") {
+    return { start: label.index, end: message.length };
+  }
+  return rest.startsWith("。")
+    ? { start: label.index, end: sha.end + 1 }
+    : null;
+}
+
 /**
  * 副題の抜粋の元になる本文。版は先頭7桁に縮め、空白と改行は1つの空白にまとめる。
  * `cutTarget`が真のとき、副題に出す先頭の対象を、`cutSha`が真のとき、副題に出す最初の版を、
@@ -400,7 +428,13 @@ function excerptSource(
   }
   const shaStart = sha === undefined ? -1 : message.indexOf(sha);
   if (cutSha && sha !== undefined && shaStart >= 0) {
-    ranges.push({ start: shaStart, end: shaStart + sha.length });
+    const range = { start: shaStart, end: shaStart + sha.length };
+    const label = orphanedLabelRange(message, range);
+    const overlapsTarget = ranges.some(
+      (other) =>
+        label !== null && other.start < label.end && label.start < other.end,
+    );
+    ranges.push(label === null || overlapsTarget ? range : label);
   }
   // 後ろから切り出し、前の範囲の位置がずれないようにする。
   const text = ranges
