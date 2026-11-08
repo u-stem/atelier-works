@@ -3,6 +3,16 @@
 // 種類を足したときは、ここと表の両方に足す。
 // 足し忘れは、`tests/scripts/console_notices_contract.test.ts`が落として知らせる。
 
+import type { SystemSectionId } from "./systemSections.ts";
+import { systemTargetSection } from "./systemTargetKinds.ts";
+
+/** 通知の対応を、システムの画面のどの区画で行うか。通知の詳細の移動のボタンが読む。 */
+export type SystemTarget = {
+  readonly section: SystemSectionId;
+  /** 移動のボタンの名前。 */
+  readonly label: string;
+};
+
 export type NoticeGuide = {
   /** 何が起きたか。 */
   readonly meaning: string;
@@ -12,6 +22,8 @@ export type NoticeGuide = {
   readonly commands: readonly string[];
   /** 解決の扱いなど、操作の補足。無ければ`null`。 */
   readonly note: string | null;
+  /** 対応をシステムの画面の区画で行う種類の行き先。無ければ`null`。 */
+  readonly target: SystemTarget | null;
 };
 
 /** 表に無い種類(backendが先に足した新しい種類)に出す説明。 */
@@ -20,6 +32,7 @@ export const GENERIC_NOTICE_GUIDE: NoticeGuide = {
   action: "本文を確かめ、対応を終えたら解決してください。",
   commands: [],
   note: null,
+  target: null,
 };
 
 function guide(
@@ -32,10 +45,29 @@ function guide(
     action,
     commands: extra.commands ?? [],
     note: extra.note ?? null,
+    target: null,
   };
 }
 
-const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
+/** 移動のボタンの名前。区画ごとに決まる。 */
+const TARGET_LABELS: Readonly<Record<SystemSectionId, string>> = {
+  "deploy-approvals": "システムの画面の反映の承認待ちへ",
+  "stop-all": "システムの画面の全停止へ",
+  holds: "システムの画面の保留と凍結へ",
+};
+
+/**
+ * 種類の行き先を、案内に付ける。どの種類が行き先を持つかは`systemTargetKinds.ts`が持ち、
+ * ここは、その区画のボタンの名前を足すだけである。
+ */
+function withTarget(kind: string, base: NoticeGuide): NoticeGuide {
+  const section = systemTargetSection(kind);
+  return section === null
+    ? base
+    : { ...base, target: { section, label: TARGET_LABELS[section] } };
+}
+
+const GUIDES_BY_KIND: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "approval_notify_failed",
     guide(
@@ -573,6 +605,10 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
 ]);
+
+const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map(
+  [...GUIDES_BY_KIND].map(([kind, base]) => [kind, withTarget(kind, base)]),
+);
 
 /** `kind`の説明。表に無い種類は`GENERIC_NOTICE_GUIDE`を返す。 */
 export function noticeGuide(kind: string): NoticeGuide {

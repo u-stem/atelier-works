@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ConsoleSummary } from "../api/guards/summary.ts";
 import { holdsQueryKey, holdsQueryOptions } from "../api/holdsQueries.ts";
 import {
   jobsActiveQueryKey,
@@ -175,6 +176,47 @@ describe("other badges", () => {
         screen.badge({ approvals: 1, failures: 1, notices: 1 }),
       ),
     ).toEqual([0, 0, 0, 0]);
+  });
+});
+
+const SYSTEM_NOTICE_SUMMARY: ConsoleSummary = {
+  counts: { approvals: 0, failures: 0, notices: 1 },
+  approvals: [],
+  failures: [],
+  notices: [
+    {
+      notice_id: 1,
+      kind: "deploy_approval_required",
+      message: "m",
+      resolved: false,
+      created_at: "2026-11-08T00:00:00.000Z",
+      severity: "action",
+      resolvable: false,
+    },
+  ],
+};
+
+describe("destination badge", () => {
+  const system = SCREENS.find((screen) => screen.id === "system");
+
+  test("system counts the notices that the system screen resolves", () => {
+    expect(system?.destinationBadge?.(SYSTEM_NOTICE_SUMMARY)).toBe(1);
+  });
+
+  test("system is zero before the summary is known", () => {
+    expect(system?.destinationBadge?.(undefined)).toBe(0);
+  });
+
+  test("system keeps its plain badge at zero, so the total of the inbox does not count it twice", () => {
+    expect(system?.badge({ approvals: 0, failures: 0, notices: 1 })).toBe(0);
+  });
+
+  test("no other screen has one", () => {
+    expect(
+      SCREENS.filter((screen) => screen.id !== "system").filter(
+        (screen) => "destinationBadge" in screen,
+      ),
+    ).toEqual([]);
   });
 });
 

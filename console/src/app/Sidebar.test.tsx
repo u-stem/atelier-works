@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
+import type { ConsoleSummary } from "../api/guards/summary.ts";
+import { summaryQueryKey } from "../api/queries.ts";
 import { TooltipProvider } from "../components/ui/tooltip.tsx";
 import type { ReleaseDescription } from "../lib/consoleStatus.ts";
 import { ReleaseNote, Sidebar, WINDMILL_URL } from "./Sidebar.tsx";
@@ -220,5 +222,97 @@ describe("Sidebar edge toggle", () => {
     expect(render()).toMatch(
       /<button[^>]*aria-label="メニューの開閉"[^>]*class="[^"]*opacity-0[^"]*group-hover\/edge:opacity-100[^"]*focus-visible:opacity-100/,
     );
+  });
+});
+
+function summaryWith(kind: string | null): ConsoleSummary {
+  const notices =
+    kind === null
+      ? []
+      : [
+          {
+            notice_id: 1,
+            kind,
+            message: "m",
+            resolved: false,
+            created_at: "2026-11-08T00:00:00.000Z",
+            severity: "action",
+            resolvable: false,
+          },
+        ];
+  return {
+    counts: { approvals: 0, failures: 0, notices: notices.length },
+    approvals: [],
+    failures: [],
+    notices,
+  };
+}
+
+function renderWithSummary(summary: ConsoleSummary): string {
+  const client = new QueryClient();
+  client.setQueryData(summaryQueryKey, summary);
+  return renderToStaticMarkup(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <TooltipProvider>
+          <Sidebar onOpenHelp={() => undefined} />
+        </TooltipProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+/** 入口へのリンク(aタグ全体)。広げた形のサイドバーとドロワーの2つがある。 */
+function entranceLinks(html: string, href: string): string[] {
+  return (html.match(/<a [^>]*>(?:(?!<\/a>).)*<\/a>/g) ?? []).filter(
+    (link) =>
+      link.includes(`href="${href}"`) && !link.includes('target="_blank"'),
+  );
+}
+
+describe("Sidebar badge of the system entrance", () => {
+  test("shows the count of the notices that the system screen resolves", () => {
+    const links = entranceLinks(
+      renderWithSummary(summaryWith("deploy_approval_required")),
+      "/system",
+    );
+
+    expect(links.length).toBeGreaterThan(0);
+    expect(
+      links.every((link) => link.includes('>1<span class="sr-only">件')),
+    ).toBe(true);
+  });
+
+  test("shows no badge when no such notice is open", () => {
+    const links = entranceLinks(
+      renderWithSummary(summaryWith("cleanup_db_failed")),
+      "/system",
+    );
+
+    expect(links.some((link) => link.includes("件"))).toBe(false);
+  });
+
+  test("shows no badge before the summary is known", () => {
+    expect(
+      entranceLinks(render(), "/system").some((link) => link.includes("件")),
+    ).toBe(false);
+  });
+
+  test("does not add the count to the total of the menu button, since the inbox already counts the notice", () => {
+    expect(
+      renderWithSummary(summaryWith("deploy_approval_required")),
+    ).toContain('aria-label="メニューを開く(要対応1件)"');
+  });
+
+  test("keeps the badge of the inbox at the number of the notices", () => {
+    const links = entranceLinks(
+      renderWithSummary(summaryWith("deploy_approval_required")),
+      "/",
+    );
+
+    expect(links.length).toBeGreaterThan(0);
+    expect(
+      links.every((link) => link.includes('>1<span class="sr-only">件')),
+    ).toBe(true);
   });
 });

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { HoldsSnapshot } from "../../api/guards/holds.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
 import { HoldsPanel } from "./HoldsPanel.tsx";
+import type { SectionArrival } from "./useSectionArrival.ts";
 
 const NOW = Date.parse("2026-10-24T03:00:00.000Z");
 const T0 = "2026-10-24T02:00:00.000Z";
@@ -48,9 +49,19 @@ const FULL: HoldsSnapshot = {
   freezes: { ok: true, schedule: [SCHEDULE], deploy: [DEPLOY] },
 };
 
+const IDLE: SectionArrival = {
+  pending: null,
+  highlighted: null,
+  onArrived: () => undefined,
+};
+
 function render(
   data: HoldsSnapshot,
-  options: { locked?: readonly string[]; now?: number } = {},
+  options: {
+    locked?: readonly string[];
+    now?: number;
+    arrival?: SectionArrival;
+  } = {},
 ): string {
   const locked = options.locked ?? [];
   return renderToStaticMarkup(
@@ -64,6 +75,7 @@ function render(
         onRequestRelease={() => undefined}
         onRetry={() => undefined}
         isFetching={false}
+        arrival={options.arrival ?? IDLE}
       />
     </TooltipProvider>,
   );
@@ -353,5 +365,35 @@ describe("HoldsPanel untrusted text", () => {
         holds: { ok: false, kind: "read_failed", reason: MARKUP },
       }),
     ).not.toContain("<img");
+  });
+});
+
+describe("HoldsPanel as the place to land on", () => {
+  test("gives the heading of the holds the id that the arrival looks for", () => {
+    expect(render(FULL)).toMatch(/<h3 id="system-section-holds" tabindex="-1"/);
+  });
+
+  test("gives the id to the holds only, not to the freezes", () => {
+    expect(render(FULL).match(/system-section-holds/g)?.length).toBe(1);
+  });
+
+  test("marks the holds while their section is highlighted", () => {
+    expect(
+      render(FULL, { arrival: { ...IDLE, highlighted: "holds" } }).match(
+        /data-highlighted=""/g,
+      )?.length,
+    ).toBe(1);
+  });
+
+  test("does not mark the holds while another section is highlighted", () => {
+    expect(
+      render(FULL, { arrival: { ...IDLE, highlighted: "stop-all" } }),
+    ).not.toContain("data-highlighted");
+  });
+
+  test("draws no anchor when nothing is active, which folds into one line", () => {
+    expect(
+      render(EMPTY, { arrival: { ...IDLE, pending: "holds" } }),
+    ).not.toContain("system-section-holds");
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { GENERIC_NOTICE_GUIDE, noticeGuide } from "./noticeGuide.ts";
+import { SECTION_TAB, SYSTEM_SECTION_IDS } from "./systemSections.ts";
 
 describe("noticeGuide", () => {
   test("explains a known kind", () => {
@@ -567,5 +568,77 @@ describe("stop-all guides", () => {
 
   test("the active guide no longer asks to turn the settings on one by one", () => {
     expect(noticeGuide("stop_all_active").note).not.toContain("1つずつ");
+  });
+});
+
+describe("the target in the system screen", () => {
+  test("points a deploy approval notice to the approvals section", () => {
+    expect(noticeGuide("deploy_approval_required").target).toEqual({
+      section: "deploy-approvals",
+      label: "システムの画面の反映の承認待ちへ",
+    });
+  });
+
+  test("points a held merge notice to the holds section", () => {
+    expect(noticeGuide("dependabot_merge_held").target).toEqual({
+      section: "holds",
+      label: "システムの画面の保留と凍結へ",
+    });
+  });
+
+  test("points an active stop-all notice to the stop-all section", () => {
+    expect(noticeGuide("stop_all_active").target).toEqual({
+      section: "stop-all",
+      label: "システムの画面の全停止へ",
+    });
+  });
+
+  test("has no target for a kind that is resolved outside the system screen", () => {
+    expect(noticeGuide("config_misfit").target).toBeNull();
+  });
+
+  test("has no target for a kind that only reports a released stop-all", () => {
+    expect(noticeGuide("stop_all_released").target).toBeNull();
+  });
+
+  test("has no target in the generic guide", () => {
+    expect(GENERIC_NOTICE_GUIDE.target).toBeNull();
+  });
+
+  test("gives only three kinds a target", () => {
+    const kinds = [
+      "deploy_approval_required",
+      "dependabot_merge_held",
+      "stop_all_active",
+      "config_misfit",
+      "stop_all_released",
+      "cleanup_db_failed",
+      "host_action_required",
+    ];
+
+    expect(
+      kinds.filter((kind) => noticeGuide(kind).target !== null).sort(),
+    ).toEqual([
+      "dependabot_merge_held",
+      "deploy_approval_required",
+      "stop_all_active",
+    ]);
+  });
+
+  test("points every target to an allowed section that has a tab", () => {
+    const sections = [
+      "deploy_approval_required",
+      "dependabot_merge_held",
+      "stop_all_active",
+    ].map((kind) => noticeGuide(kind).target?.section);
+
+    expect(
+      sections.every(
+        (section) =>
+          section !== undefined &&
+          SYSTEM_SECTION_IDS.some((id) => id === section) &&
+          SECTION_TAB[section] === "status",
+      ),
+    ).toBe(true);
   });
 });

@@ -10,7 +10,7 @@ import {
   Server,
 } from "lucide-react";
 import type { ComponentType } from "react";
-import type { SummaryCounts } from "../api/guards/summary.ts";
+import type { ConsoleSummary, SummaryCounts } from "../api/guards/summary.ts";
 import { holdsQueryOptions } from "../api/holdsQueries.ts";
 import { jobsActiveQueryOptions } from "../api/jobsQueries.ts";
 import {
@@ -22,6 +22,7 @@ import { systemStatusQueryOptions } from "../api/systemQueries.ts";
 import { JOBS_PATH } from "../lib/jobsView.ts";
 import { workItemRef } from "../lib/labels.ts";
 import { parseIdParam } from "../lib/routeParams.ts";
+import { systemActionCount } from "../lib/systemActionCount.ts";
 import { SYSTEM_PATH } from "./paths.ts";
 
 /** 画面の部品を必要になってから読み込む関数。react-routerの`lazy`にそのまま渡す。 */
@@ -96,8 +97,17 @@ export type Screen = {
    */
   readonly destinations: readonly Destination[];
   readonly icon: LucideIcon;
-  /** サイドバーに出す件数。件数が分からないときと、件数の無い入口は0を返す。 */
+  /**
+   * サイドバーに出す件数。件数が分からないときと、件数の無い入口は0を返す。
+   * 要対応の合計(メニューのボタンの名前と点)は、この件数の和である。
+   */
   readonly badge: (counts: SummaryCounts | undefined) => number;
+  /**
+   * 行き先の画面でしか解けない操作の件数。要対応の合計には足さない。
+   * 同じ通知が要対応の件数にも入っており、足すと二重に数えるためである。
+   * 件数が分からないときは0を返す。持たない画面は省く。
+   */
+  readonly destinationBadge?: (summary: ConsoleSummary | undefined) => number;
   /** 入口に触れたときに先読みする取得。 */
   readonly prefetch: () => readonly PrefetchOptions[];
   readonly lazy: LazyScreen;
@@ -293,6 +303,8 @@ export const SCREENS: readonly Screen[] = [
     destinations: [],
     icon: Server,
     badge: noBadge,
+    // 件数は要対応の通知から数えるので、要対応の合計(`badge`の和)には足さない。
+    destinationBadge: systemActionCount,
     // 画面が開く直後に走る3つの取得を先読みする。summaryはサイドバーが常に持つので含めない。
     // 入口1つが走らせるジョブは、workerが直列に処理するので、この3つに限る。
     prefetch: () => [
