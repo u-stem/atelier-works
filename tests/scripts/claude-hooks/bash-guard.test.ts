@@ -2837,3 +2837,222 @@ describe("bash-guard leaves the main session free to run holds behind a prefix",
     expect(await decide(command)).toBe("allow");
   });
 });
+
+// 先頭のシェルの`-c`の文字列にも、外側の標準入力(リダイレクト、パイプ)が流れる。
+describe("bash-guard passes the stdin of a shell to the -c string it runs", () => {
+  test.each([
+    "bash -c 'bun run - release 1' < scripts/freeze.ts",
+    "cat scripts/freeze.ts | bash -c 'bun run - release 1'",
+    `script -qc "bash -c 'bun run - release 1' < scripts/freeze.ts" /dev/null`,
+    `script -qc "cat scripts/hold.ts | sh -c 'bun run - release 1'" /dev/null`,
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows a -c string that only reads the hold code", async () => {
+    expect(
+      await decide("bash -c 'cat scripts/hold.ts'", { subagent: true }),
+    ).toBe("allow");
+  });
+});
+
+// `xargs`は標準入力の語をコマンドの末尾に足すので、保留や凍結のCLIの直後に語が無い形も、副コマンドが決まらない。
+describe("bash-guard treats words that xargs appends as unknown", () => {
+  test.each([
+    "echo 'release 1' | xargs caffeinate ./scripts/hold.ts",
+    "echo 'release 1' | xargs script -q /dev/null ./scripts/hold.ts",
+    "echo 'release 1' | xargs caffeinate bun scripts/freeze.ts",
+    "echo 'release 1' | xargs bun scripts/freeze.ts",
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows xargs with a reading command", async () => {
+    expect(
+      await decide("echo 'release 1' | xargs cat scripts/hold.ts", {
+        subagent: true,
+      }),
+    ).toBe("allow");
+  });
+
+  test("allows xargs with a check tool", async () => {
+    expect(
+      await decide("echo scripts | xargs bunx biome check scripts/freeze.ts", {
+        subagent: true,
+      }),
+    ).toBe("allow");
+  });
+});
+
+// `find -exec`の`{}`と、`parallel`の`:::`は、実行時に保留や凍結のCLIの副コマンドになりうる。
+describe("bash-guard reads find -exec and parallel that fill in the subcommand", () => {
+  test.each([
+    "find scripts -name hold.ts -exec {} release 1 \\;",
+    "find scripts -name freeze.ts -exec bun {} release 1 \\;",
+    "parallel ./scripts/hold.ts ::: release ::: 1",
+    "parallel ./scripts/freeze.ts :::: /tmp/args",
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows find -exec that only reads the hold code", async () => {
+    expect(
+      await decide("find scripts -name hold.ts -exec cat {} \\;", {
+        subagent: true,
+      }),
+    ).toBe("allow");
+  });
+});
+
+// コードを読まないシェルの標準入力は、入力元を読めない。パイプの前が`echo`と`printf`以外、またはファイルからの入力なら拒否する。
+describe("bash-guard denies a shell that reads its stdin from an unreadable source", () => {
+  test.each([
+    "cat /tmp/x.sh | sh",
+    "cat /tmp/x.sh | script -q /dev/null sh",
+    "base64 -d <<< eA== | sh",
+    "sh < /tmp/x.sh",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows a shell that runs a script file", async () => {
+    expect(await decide("bash ./x.sh", { subagent: true })).toBe("allow");
+  });
+});
+
+// 深さの上限を超えた文字列と、読めない文字列は、字面で判定する。書き込みのタスク名と、`push`と`--prune`が並ぶ字面も拒否する。
+describe("bash-guard reads the wording of strings it cannot parse", () => {
+  const DEEP = "$(".repeat(9).concat("true", ")".repeat(9));
+
+  test("denies a push task name after a substitution nested nine times", async () => {
+    expect(
+      await decide(`script -qc '${DEEP}; mise run push:prune' /dev/null`, {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test("denies a push task name in a string nested five times", async () => {
+    expect(
+      await decide(nestedInScript("mise run push:prune", 5), {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test("denies push with the prune option in a string nested five times", async () => {
+    expect(
+      await decide(nestedInScript("mise run push -- --prune", 5), {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test("allows a dry-run push in a string nested five times", async () => {
+    expect(
+      await decide(nestedInScript("mise run push:dry", 5), { subagent: true }),
+    ).toBe("allow");
+  });
+});
+
+// `sed`と`bat`のような、パスの形の語だけを読む道具は、パスの形でない語があれば別のコマンドを実行しうる。
+describe("bash-guard reads path-only reading tools that carry a command", () => {
+  test.each([
+    "bat --paging=always --pager './scripts/hold.ts release 1' README.md",
+    "sed -n '1e ./scripts/hold.ts release 1' README.md",
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows sed that prints lines of the hold code", async () => {
+    expect(
+      await decide("sed -n 1,5p scripts/hold.ts", { subagent: true }),
+    ).toBe("allow");
+  });
+});
+
+// `mise run push`は、`--prune`を付けると削除を確定する押し出しになる。
+describe("bash-guard reads the prune option of the push task", () => {
+  test.each([
+    "mise run push -- --prune",
+    "mise run push --prune",
+    "mise push --prune",
+    "caffeinate mise run push -- --prune",
+    "mise run push -- $FLAGS",
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test.each([
+    "mise run push",
+    "mise run push:dry",
+    "mise run push -- --dry-run",
+    "mise push",
+  ])("allows %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+// 最上位のコマンドの標準入力の文字列は、シェルが実行するわけではない。書き込みの形だけを拒否する。
+describe("bash-guard reads the stdin text of a command that is not a shell", () => {
+  test("allows a heredoc that only has the word hold", async () => {
+    expect(
+      await decide("python3 - <<'EOF'\nprint(\"hold on\")\nEOF", {
+        subagent: true,
+      }),
+    ).toBe("allow");
+  });
+
+  test("allows a pipe that only names the hold code", async () => {
+    expect(
+      await decide("echo scripts/hold.ts | pbcopy", { subagent: true }),
+    ).toBe("allow");
+  });
+
+  test("denies a pipe that carries a hold release", async () => {
+    expect(
+      await decide("echo './scripts/hold.ts release 1' | script -q /dev/null", {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test("denies unreadable text that names the hold code and a release", async () => {
+    expect(
+      await decide(
+        "python3 - <<'EOF'\nsubprocess.run(['hold.ts', 'release'\nEOF",
+        {
+          subagent: true,
+        },
+      ),
+    ).toBe("deny");
+  });
+});
+
+// 1行に並ぶ数千の語やコマンドでも、フックのタイムアウト(10秒)の中で終える。
+describe("bash-guard finishes long hold input in time", () => {
+  test("finishes thousands of words that point at the hold code", async () => {
+    const started = Date.now();
+    await decide(`script -q /dev/null ${"scripts/hold.ts a ".repeat(3000)}`, {
+      subagent: true,
+    });
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  test("finishes thousands of commands that nest -c strings", async () => {
+    const started = Date.now();
+    await decide(`${`bash -c "bash -c 'echo a b'"; `.repeat(3000)}true`, {
+      subagent: true,
+    });
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  test("finishes thousands of prefixed commands that nest -c strings", async () => {
+    const started = Date.now();
+    await decide(
+      `${`script -q /dev/null bash -c "bash -c 'echo a b'"; `.repeat(3000)}true`,
+      { subagent: true },
+    );
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+});
