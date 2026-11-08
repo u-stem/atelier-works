@@ -184,6 +184,13 @@ export function shouldDiscardJump(
   return pending !== null && SECTION_TAB[pending] !== selected;
 }
 
+export function chipJumpParams(
+  current: URLSearchParams,
+  _target: SystemTabId,
+): URLSearchParams {
+  return new URLSearchParams(current);
+}
+
 /**
  * 反映の承認待ちの区画が無いまま着地したとき、見出しの下に出す1文。
  * 承認待ちが無いのに、未解決の反映の承認の通知が残るのは、人が却下した後の状態である。

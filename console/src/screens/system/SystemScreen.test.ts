@@ -107,6 +107,18 @@ describe("the jump from a link to a section", () => {
   test("highlights only when the section needs an action", () => {
     expect(BODY).toMatch(/shouldHighlight\(id, holdsFetch\)/);
   });
+
+  test("drops the pending section when a chip of the band is pressed", () => {
+    expect(BODY).toMatch(/chipJumpParams\(/);
+  });
+
+  test("keeps no note about a rejection, which the screen cannot tell from an approval it has just given", () => {
+    expect(SOURCE).not.toContain("landingNote");
+  });
+
+  test("keeps no landed section for such a note", () => {
+    expect(BODY).not.toContain("setLanded");
+  });
 });
 
 describe("the host action of the release section", () => {

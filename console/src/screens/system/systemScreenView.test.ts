@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { ApiFailure } from "../../api/errors.ts";
 import type { HoldsSnapshot, StopAllRead } from "../../api/guards/holds.ts";
-import type { ConsoleSummary } from "../../api/guards/summary.ts";
 import {
   arrivalTarget,
+  chipJumpParams,
   type FailureQuery,
   type HoldsFetch,
-  landingNote,
   needsTabSwitch,
   noActiveHoldsOrFreezes,
   sectionNeedsAction,
@@ -468,106 +467,37 @@ describe("shouldDiscardJump", () => {
   });
 });
 
-function summaryWithNotice(kind: string, resolved = false): ConsoleSummary {
-  return {
-    counts: { approvals: 0, failures: 0, notices: 1 },
-    approvals: [],
-    failures: [],
-    notices: [
-      {
-        notice_id: 1,
-        kind,
-        message: "m",
-        resolved,
-        created_at: T,
-        severity: "action",
-        resolvable: false,
-      },
-    ],
-  };
-}
-
-describe("landingNote", () => {
-  const NOTE =
-    "承認待ちはありません。却下した版は、mainへ戻すPRの反映を待っています。";
-
-  test("explains an open notice with no waiting approval", () => {
+describe("chipJumpParams", () => {
+  test("removes the pending section even when the chip leads to the tab that is already open", () => {
     expect(
-      landingNote({
-        landed: "deploy-approvals",
-        holds: NO_APPROVAL,
-        summary: summaryWithNotice("deploy_approval_required"),
-      }),
-    ).toBe(NOTE);
+      chipJumpParams(new URLSearchParams("section=holds"), "status").has(
+        "section",
+      ),
+    ).toBe(false);
   });
 
-  test("says nothing while an approval waits", () => {
+  test("removes the pending section when the chip leads to another tab", () => {
     expect(
-      landingNote({
-        landed: "deploy-approvals",
-        holds: WAITING_APPROVAL,
-        summary: summaryWithNotice("deploy_approval_required"),
-      }),
-    ).toBeNull();
+      chipJumpParams(new URLSearchParams("section=holds"), "failures").has(
+        "section",
+      ),
+    ).toBe(false);
   });
 
-  test("says nothing when no notice is open", () => {
+  test("opens the tab that the chip leads to", () => {
     expect(
-      landingNote({
-        landed: "deploy-approvals",
-        holds: NO_APPROVAL,
-        summary: summaryWithNotice("deploy_approval_required", true),
-      }),
-    ).toBeNull();
+      chipJumpParams(new URLSearchParams("section=holds"), "failures").get(
+        "tab",
+      ),
+    ).toBe("failures");
   });
 
-  test("says nothing when the open notice is of another kind", () => {
+  test("keeps other queries", () => {
     expect(
-      landingNote({
-        landed: "deploy-approvals",
-        holds: NO_APPROVAL,
-        summary: summaryWithNotice("cleanup_db_failed"),
-      }),
-    ).toBeNull();
-  });
-
-  test("says nothing when the landing was on another section", () => {
-    expect(
-      landingNote({
-        landed: "holds",
-        holds: NO_APPROVAL,
-        summary: summaryWithNotice("deploy_approval_required"),
-      }),
-    ).toBeNull();
-  });
-
-  test("says nothing when there was no landing", () => {
-    expect(
-      landingNote({
-        landed: null,
-        holds: NO_APPROVAL,
-        summary: summaryWithNotice("deploy_approval_required"),
-      }),
-    ).toBeNull();
-  });
-
-  test("says nothing for an older backend, which cannot tell the approvals", () => {
-    expect(
-      landingNote({
-        landed: "deploy-approvals",
-        holds: QUIET,
-        summary: summaryWithNotice("deploy_approval_required"),
-      }),
-    ).toBeNull();
-  });
-
-  test("says nothing before the summary is known", () => {
-    expect(
-      landingNote({
-        landed: "deploy-approvals",
-        holds: NO_APPROVAL,
-        summary: undefined,
-      }),
-    ).toBeNull();
+      chipJumpParams(
+        new URLSearchParams("section=holds&other=1"),
+        "status",
+      ).get("other"),
+    ).toBe("1");
   });
 });
