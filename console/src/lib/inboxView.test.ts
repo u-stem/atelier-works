@@ -539,6 +539,51 @@ describe("describeRow for a notice", () => {
     ).toBe("版 0123456・前は fedcba9 だった");
   });
 
+  test("cuts a label that overlaps the target together with the target", () => {
+    expect(
+      describeRow(noticeItem(1, `o/r#12: ${SHA_A}。前回の変更`), NOW).subLabel,
+    ).toBe("o/r#12・版 0123456・前回の変更");
+  });
+
+  test("cuts a label that is apart from the target", () => {
+    expect(
+      describeRow(noticeItem(1, `待つ版: ${SHA_A}。o/r#12 の変更`), NOW)
+        .subLabel,
+    ).toBe("o/r#12・版 0123456・の変更");
+  });
+
+  test("cuts a label that ends with a full-width colon", () => {
+    expect(
+      describeRow(noticeItem(1, `反映を待つ版：${SHA_A}。前回の変更`), NOW)
+        .subLabel,
+    ).toBe("版 0123456・前回の変更");
+  });
+
+  test("cuts a label whose colon has no space after it", () => {
+    expect(
+      describeRow(noticeItem(1, `反映を待つ版:${SHA_A}。前回の変更`), NOW)
+        .subLabel,
+    ).toBe("版 0123456・前回の変更");
+  });
+
+  test("counts the length of a label in code points", () => {
+    expect(
+      describeRow(
+        noticeItem(1, `${"🚀".repeat(12)}: ${SHA_A}。前回の変更`),
+        NOW,
+      ).subLabel,
+    ).toBe("版 0123456・前回の変更");
+  });
+
+  test("keeps a label longer than twelve code points", () => {
+    expect(
+      describeRow(
+        noticeItem(1, `${"🚀".repeat(13)}: ${SHA_A}。前回の変更`),
+        NOW,
+      ).subLabel,
+    ).toBe(`版 0123456・${"🚀".repeat(13)}: 。前回の変更`);
+  });
+
   test("keeps the label and the version when the version is not cut", () => {
     const items = [
       noticeItem(1, `a 反映を待つ版: ${SHA_A}。`, "deploy_approval_required"),
