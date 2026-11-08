@@ -903,6 +903,10 @@ function neutralizeHtmlComment(text: string): string {
  */
 export function isFixedFixReply(body: string): boolean {
   if (body.split("\n")[0] !== ROLE_TAGS.pr_fix) return false;
+  // 再レビューの返信は`pr_fix`と同じタグを使うので、最後の行だけでなく目印でも除く。
+  if (REVIEW_REPLY_MARKER_KINDS.some((kind) => hasMarker(body, kind))) {
+    return false;
+  }
   return /^対応: `[0-9a-f]{7,40}`$/.test(lastContentLine(body));
 }
 
@@ -1112,28 +1116,48 @@ export function threadResponseKind(
   return isFactoryReply(lastReply, viewer) ? null : "reply";
 }
 
-const REVIEW_REPLY_MARKER_KINDS: readonly string[] = [
-  PR_REVIEW_ACK_MARKER_KIND,
-  PR_REVIEW_OBJECTION_MARKER_KIND,
-  PR_REVIEW_ANSWER_MARKER_KIND,
-];
-
 /**
  * 返信が、Factory自身のものかを返す。
- * viewerの投稿で、1行目が役割タグか、再レビューの答えの目印を持つときに真にする。
+ * viewerの投稿で、次のどれかに当てはまるときに真にする。
+ *   - 1行目が役割タグである(改行コードと前後の空白は除いて比べる)。
+ *   - `pr_fix`の返信の目印を持つ。
+ *   - 再レビューの答えの目印を持つ。
  */
 function isFactoryReply(comment: ReviewThreadComment, viewer: string): boolean {
   if (!isOwnPost(comment.authorLogin, viewer)) return false;
-  const firstLine = comment.body.split("\n")[0] ?? "";
+  const firstLine =
+    comment.body.replace(/\r\n/g, "\n").split("\n")[0]?.trim() ?? "";
   return (
     Object.values<string>(ROLE_TAGS).includes(firstLine) ||
+    hasMarker(comment.body, PR_FIX_MARKER_KIND) ||
     REVIEW_REPLY_MARKER_KINDS.some((kind) => hasMarker(comment.body, kind))
   );
 }
 
-/** 答えの後にスレッドを解決する`decision`かを返す。 */
-export function resolvesThread(_decision: ThreadResponseDecision): boolean {
-  return false;
+/** 答えの返信に付ける目印の種類。了承と解消だけが同じ目印を持ち、`selectThreadsToResolve`が解決する。 */
+const THREAD_REPLY_MARKER_KINDS: Readonly<
+  Record<ThreadResponseDecision, string>
+> = {
+  addressed: PR_REVIEW_ACK_MARKER_KIND,
+  skip_accepted: PR_REVIEW_ACK_MARKER_KIND,
+  skip_rejected: PR_REVIEW_OBJECTION_MARKER_KIND,
+  answered: PR_REVIEW_ANSWER_MARKER_KIND,
+};
+
+const REVIEW_REPLY_MARKER_KINDS: readonly string[] = Object.values(
+  THREAD_REPLY_MARKER_KINDS,
+);
+
+/** `pr_fix`の返信の目印の種類。 */
+const PR_FIX_MARKER_KIND = "pr_fix";
+
+/**
+ * 答えの後にスレッドを解決する`decision`かを返す。
+ * 解決するのは了承と解消だけで、反論と回答のスレッドは開いたままにする。
+ * 了承の目印を持つ返信を解決する`selectThreadsToResolve`と、同じ条件になる。
+ */
+export function resolvesThread(decision: ThreadResponseDecision): boolean {
+  return THREAD_REPLY_MARKER_KINDS[decision] === PR_REVIEW_ACK_MARKER_KIND;
 }
 
 export type AppliedThreadResponse = {
@@ -1191,15 +1215,6 @@ const THREAD_REPLY_ENDINGS: Readonly<Record<ThreadResponseDecision, string>> = {
   skip_accepted: "見送り: 了承",
   skip_rejected: "見送り: 反論",
   answered: "回答",
-};
-
-const THREAD_REPLY_MARKER_KINDS: Readonly<
-  Record<ThreadResponseDecision, string>
-> = {
-  addressed: PR_REVIEW_ACK_MARKER_KIND,
-  skip_accepted: PR_REVIEW_ACK_MARKER_KIND,
-  skip_rejected: PR_REVIEW_OBJECTION_MARKER_KIND,
-  answered: PR_REVIEW_ANSWER_MARKER_KIND,
 };
 
 /**
