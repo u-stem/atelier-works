@@ -689,9 +689,6 @@ function skipTransparentOptions(
 /** `xargs`の、値を取らない短いオプションの文字(BSDとGNUの両方)。 */
 const XARGS_FLAG_LETTERS = "0oprtx";
 
-/** `xargs`の、値が直後にだけ付く短いオプションの文字(GNUの省略できる値)。 */
-const XARGS_ATTACHED_LETTERS = "ile";
-
 /** `xargs`の長いオプションの名前(BSDとGNUの両方)。`=`より前の部分である。 */
 const XARGS_LONG_OPTIONS: ReadonlySet<string> = new Set([
   "null",
@@ -717,18 +714,14 @@ const XARGS_LONG_OPTIONS: ReadonlySet<string> = new Set([
 /**
  * 値を取らないか、値が同じ語に付くかの`xargs`のオプションが、知っている一覧にあれば真。
  * 束ねた短いオプションは、値を取る文字に着くまでの文字がすべて知っている文字でなければならない。
+ * GNUの`-e`と`-l`は省略できる値を同じ語に取り、残りの字が値になる。値の位置の読み方が束ごとに変わるので、知らない字として扱う。
  */
 function xargsOptionKnown(text: string, valueLetters: string): boolean {
   if (text.startsWith("--")) {
     return XARGS_LONG_OPTIONS.has(text.slice(2).split("=")[0] ?? "");
   }
   for (const letter of text.slice(1)) {
-    if (
-      valueLetters.includes(letter) ||
-      XARGS_ATTACHED_LETTERS.includes(letter)
-    ) {
-      return true;
-    }
+    if (valueLetters.includes(letter)) return true;
     if (!XARGS_FLAG_LETTERS.includes(letter)) return false;
   }
   return true;
@@ -742,12 +735,7 @@ function xargsReplaces(text: string, valueLetters: string): boolean {
   if (text.startsWith("--")) return text.slice(2).split("=")[0] === "replace";
   for (const letter of text.slice(1)) {
     if ("IJi".includes(letter)) return true;
-    if (
-      valueLetters.includes(letter) ||
-      XARGS_ATTACHED_LETTERS.includes(letter)
-    ) {
-      return false;
-    }
+    if (valueLetters.includes(letter)) return false;
   }
   return false;
 }

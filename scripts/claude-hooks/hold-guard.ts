@@ -98,7 +98,7 @@
 //   足される語は字面から読めないので、実行される側が読み取りの閉じた集合(`WORD_ADDER_SAFE_PROGRAMS`)に入らなければ拒否する。
 //   指す語、glob、パイプの上流は見ない。
 //   実行される側は、`xargs`では`stripWrappers`の後の先頭の語、`find`では各式の先頭の語である。
-//   `xargs`のオプションに知らないものがあるとき、置換のオプションがあるとき、後ろに前置きが続くときは、
+//   `xargs`のオプションに知らないものがあるとき、置換のオプションかGNUの省略できる値を取るオプションがあるとき、後ろに前置きが続くときは、
 //   実行される側が先頭の語に決まらないので拒否する。
 //   `parallel`、`watch`、`strace`は例外を作らず、常に拒否する。
 //   `xargs`の後ろでは、標準入力からオプションが届くので、検査の道具を通さない。
@@ -426,12 +426,18 @@ function startsWithInspectionTool(args: readonly Word[]): boolean {
   return inspectionOperand(args) !== null;
 }
 
-/** `startsWithInspectionTool`が見る最初のオペランドが検査の道具なら、版を落とした名前を返す。そうでなければnullを返す。 */
-function inspectionOperand(args: readonly Word[]): string | null {
+/**
+ * `startsWithInspectionTool`が見る最初のオペランドが検査の道具なら、版を落とした名前を返す。そうでなければnullを返す。
+ * `subcommands`は、検査の道具の前に読み飛ばす実行の語である。
+ */
+function inspectionOperand(
+  args: readonly Word[],
+  subcommands: ReadonlySet<string> = RUNNER_SUBCOMMANDS,
+): string | null {
   let index = 0;
   while (index < 4) {
     const text = args[index]?.text ?? "";
-    if (!RUNNER_FLAGS.has(text) && !RUNNER_SUBCOMMANDS.has(text)) break;
+    if (!RUNNER_FLAGS.has(text) && !subcommands.has(text)) break;
     index += 1;
   }
   const first = (args[index]?.text ?? "").replace(VERSION_SUFFIX, "");
@@ -1420,10 +1426,18 @@ function isWordAdderSafe(word: Word | undefined): boolean {
 /** `startsWithInspectionTool`が先頭から読む語の数の上限。`find`の区間の後ろを、コピーせずに有限の長さで切り出すために使う。 */
 const INSPECTION_LOOKAHEAD = 6;
 
+/** `find`の後ろで、検査の道具の前に読み飛ばす実行の語。`exec`は文字列をシェルのコードとして実行しうるので含めない。 */
+const FIND_RUNNER_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "run",
+  "x",
+  "dlx",
+]);
+
 /**
  * `find`の実行系の式の後ろの、`start`番目の語から始まるコマンドが、検査の道具なら真。
  * `tsc`と`biome`自身か、実行系の最初のオペランドが検査の道具である形を通す。
  * `test`を最初のオペランドとする実行系(`bun test`、`deno test`、`npm test`)は、テストのファイルを読み込んで実行するので通さない。
+ * `exec`を読み飛ばさない(`bun exec`は文字列をシェルのコードとして実行する)。
  * `find`が渡す語は`./`などで始まるパスで、オプションを差し込めないので、`find`の後ろに限って通す。
  */
 function isInspectionCommandAt(words: readonly Word[], start: number): boolean {
@@ -1433,6 +1447,7 @@ function isInspectionCommandAt(words: readonly Word[], start: number): boolean {
   if (!RUNNERS.has(name)) return false;
   const operand = inspectionOperand(
     words.slice(start + 1, start + 1 + INSPECTION_LOOKAHEAD),
+    FIND_RUNNER_SUBCOMMANDS,
   );
   return operand !== null && operand !== "test";
 }
