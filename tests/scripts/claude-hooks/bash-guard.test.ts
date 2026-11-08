@@ -3697,3 +3697,55 @@ describe("bash-guard stops checking a subagent command after its deadline", () =
     expect(decision.kind).toBe("deny");
   });
 });
+
+// GNUの`xargs`の`-e`と`-l`は、値が同じ語に付く省略できる値を取る。束の中に置くと、値の字の読み方が変わるので、知らない字として拒否する。
+describe("bash-guard denies a subagent whose xargs bundle holds the optional-value letters", () => {
+  test.each([
+    "echo a | xargs -en flock cat",
+    "echo a | xargs -eE flock cat",
+    "echo a | xargs -eI flock cat",
+    "echo a | xargs -0en flock cat",
+    "echo a | xargs -ten flock cat",
+    "echo a | xargs -e cat",
+    "echo a | xargs -l2 cat",
+    "echo a | xargs -enx cat",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("keeps reading a bundle that ends in a letter taking a value", async () => {
+    expect(await decide("echo a | xargs -0nx cat", { subagent: true })).toBe(
+      "allow",
+    );
+  });
+});
+
+// `bun exec`は文字列をシェルのコードとして実行する。`find`の後ろでは、検査の道具の前に置ける語から外す。
+describe("bash-guard reads exec after a runner behind find as code", () => {
+  test("denies bun exec in front of an inspection tool", async () => {
+    expect(
+      await decide("find . -exec bun exec tsc {} +", { subagent: true }),
+    ).toBe("deny");
+  });
+
+  test("allows bun run in front of an inspection tool", async () => {
+    expect(
+      await decide("find . -exec bun run tsc {} +", { subagent: true }),
+    ).toBe("allow");
+  });
+});
+
+describe("bash-guard checks every region that find -exec closes with a plus", () => {
+  test("denies a second region after a region closed with a plus", async () => {
+    expect(
+      await decide("find . -exec cat {} + -exec rm {} +", { subagent: true }),
+    ).toBe("deny");
+  });
+});
+
+describe("bash-guard explains which characters make an assignment value unreadable", () => {
+  test("names quotes, backslashes, and pattern characters in the reason", async () => {
+    const reason = await denyReason(`FOO="a'b" cat x`, { subagent: true });
+    expect(reason).toContain("backslash");
+  });
+});
