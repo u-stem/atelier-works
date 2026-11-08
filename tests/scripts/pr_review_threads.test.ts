@@ -316,24 +316,24 @@ describe("threadResponseKind", () => {
     ).toBe("addressable");
   });
 
-  test("does not answer a commit reply with only an opening backtick", () => {
+  test("reads a commit reply with only an opening backtick as a free-text reply", () => {
     expect(
       threadResponseKind(
         thread(replied("alice", "直しました。\n\n対応: `abc1234")),
         VIEWER,
         isAllowed,
       ),
-    ).toBeNull();
+    ).toBe("reply");
   });
 
-  test("does not answer a commit reply with only a closing backtick", () => {
+  test("reads a commit reply with only a closing backtick as a free-text reply", () => {
     expect(
       threadResponseKind(
         thread(replied("alice", "直しました。\n\n対応: abc1234`")),
         VIEWER,
         isAllowed,
       ),
-    ).toBeNull();
+    ).toBe("reply");
   });
 
   test("leaves a pr_fix commit reply to the automatic resolving", () => {
@@ -356,10 +356,88 @@ describe("threadResponseKind", () => {
     ).toBeNull();
   });
 
-  test("does not answer a free-text reply", () => {
+  test("treats an allowed person's free-text reply as reply", () => {
     expect(
-      threadResponseKind(thread(replied("alice", "why?")), VIEWER, isAllowed),
+      threadResponseKind(
+        thread(replied("alice", "修正しました（abc1234）。")),
+        VIEWER,
+        isAllowed,
+      ),
+    ).toBe("reply");
+  });
+
+  // Factoryは運用者と同じアカウントで動くので、タグの無い自由文は人の返信として読む。
+  test("treats the viewer's free-text reply without a role tag as reply", () => {
+    expect(
+      threadResponseKind(
+        thread(replied(VIEWER, "この指摘は仕様なので見送ります。")),
+        VIEWER,
+        isAllowed,
+      ),
+    ).toBe("reply");
+  });
+
+  test("does not answer the factory's own reply that is not a skip or a commit", () => {
+    expect(
+      threadResponseKind(
+        thread(
+          replied(
+            VIEWER,
+            "[pr_review 自動レビュー]\n理由が不十分です。\n\n見送り: 反論",
+          ),
+        ),
+        VIEWER,
+        isAllowed,
+      ),
     ).toBeNull();
+  });
+
+  test("ignores a free-text reply from a person who is not allowed", () => {
+    expect(
+      threadResponseKind(
+        thread(replied("mallory", "直しました")),
+        VIEWER,
+        isAllowed,
+      ),
+    ).toBe("addressable");
+  });
+
+  test("reads the last reply of an allowed person past a later reply from a person who is not allowed", () => {
+    expect(
+      threadResponseKind(
+        thread({
+          lastCommentAuthorLogin: "mallory",
+          lastCommentBody: "ok",
+          lastCommentDatabaseId: 3,
+          comments: [
+            comment(VIEWER, FINDING),
+            comment("alice", "直しました", 2),
+            comment("mallory", "ok", 3),
+          ],
+        }),
+        VIEWER,
+        isAllowed,
+      ),
+    ).toBe("reply");
+  });
+
+  test("keeps a commit reply as addressable even after a free-text reply", () => {
+    expect(
+      threadResponseKind(
+        thread({
+          lastCommentAuthorLogin: "alice",
+          lastCommentBody: "対応: abc1234",
+          lastCommentDatabaseId: 3,
+          comments: [
+            comment(VIEWER, FINDING),
+            comment("alice", "why?", 2),
+            comment("alice", "対応: abc1234", 3),
+          ],
+        }),
+        VIEWER,
+        isAllowed,
+      ),
+    ).toBe("addressable");
   });
 
   test("does not answer a resolved thread", () => {
@@ -535,13 +613,16 @@ describe("reviewThreadsForPrompt", () => {
 
   test("keeps a thread to answer over an open thread with nothing to answer", () => {
     const big = "x".repeat(1900);
-    // 答える対象にならない、自由文の返信が付いたスレッドで上限を埋める。
+    // 答える対象にならない、Factory自身の返信が最後に付いたスレッドで上限を埋める。
     const quiet = Array.from({ length: 60 }, (_, index) =>
       thread({
         firstCommentDatabaseId: 100 + index,
-        comments: [comment(VIEWER, big), comment("alice", "why?", 2)],
-        lastCommentAuthorLogin: "alice",
-        lastCommentBody: "why?",
+        comments: [
+          comment(VIEWER, big),
+          comment(VIEWER, "[pr_fix 自動返信]\nx\n\n対応: 変更なし", 2),
+        ],
+        lastCommentAuthorLogin: VIEWER,
+        lastCommentBody: "[pr_fix 自動返信]\nx\n\n対応: 変更なし",
       }),
     );
     const toAnswer = thread({
@@ -1085,6 +1166,10 @@ describe("settleReviewFindings", () => {
 });
 
 const SKIP_THREAD = thread({ id: "skip", ...replied(VIEWER, SKIP_REPLY) });
+const REPLY_THREAD = thread({
+  id: "reply",
+  ...replied("alice", "修正しました（abc1234）。"),
+});
 const OPEN = thread({ id: "open" });
 const ACCEPTED: ThreadResponse = {
   thread_id: 1,
@@ -1120,6 +1205,44 @@ describe("selectThreadResponses", () => {
       ADDRESSED,
     ]);
     expect(applied[0]?.thread.id).toBe("open");
+  });
+
+  test("applies addressed to a free-text reply thread", () => {
+    const { applied } = selectThreadResponses(
+      [REPLY_THREAD],
+      VIEWER,
+      isAllowed,
+      [ADDRESSED],
+    );
+    expect(applied[0]?.thread.id).toBe("reply");
+  });
+
+  test("applies skip_accepted to a free-text reply thread", () => {
+    const { applied } = selectThreadResponses(
+      [REPLY_THREAD],
+      VIEWER,
+      isAllowed,
+      [ACCEPTED],
+    );
+    expect(applied[0]?.thread.id).toBe("reply");
+  });
+
+  test("applies skip_rejected to a free-text reply thread", () => {
+    const { applied } = selectThreadResponses(
+      [REPLY_THREAD],
+      VIEWER,
+      isAllowed,
+      [REJECTED],
+    );
+    expect(applied[0]?.thread.id).toBe("reply");
+  });
+
+  test("drops an answer to a free-text reply from a person who is not allowed", () => {
+    const outsider = thread(replied("mallory", "直しました"));
+    const { applied } = selectThreadResponses([outsider], VIEWER, isAllowed, [
+      ACCEPTED,
+    ]);
+    expect(applied).toEqual([]);
   });
 
   test("drops skip_accepted on a thread without a skip reply", () => {

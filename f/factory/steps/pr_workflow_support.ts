@@ -1036,7 +1036,7 @@ export type ThreadAuthorPredicate = (
   id: number | null,
 ) => boolean;
 
-export type ThreadResponseKind = "skip" | "addressable";
+export type ThreadResponseKind = "skip" | "addressable" | "reply";
 
 const SKIP_REPLY_LINE = "対応: 見送り";
 const COMMIT_REPLY_LINE = /^対応: (?:`[0-9a-f]{7,40}`|[0-9a-f]{7,40})$/;

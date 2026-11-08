@@ -404,7 +404,7 @@ export type PromptReviewThread = {
   line: number | null;
   status: "open" | "resolved";
   started_by: "factory" | "person";
-  response_kind: "skip" | "addressable" | null;
+  response_kind: "skip" | "addressable" | "reply" | null;
   comments: PromptThreadComment[];
 };
 
