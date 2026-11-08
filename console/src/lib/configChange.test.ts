@@ -312,10 +312,20 @@ describe("changeDialogLines for what the change reaches", () => {
     );
   });
 
-  test("says that design_enabled_since is cleared by the same write", () => {
+  test("says that design_enabled_since stays after the stop", () => {
     expect(linesFor("design_enabled", true)).toContain(
-      "同じ書き込みで design_enabled_since も空(null)になります",
+      "止めても design_enabled_since は残ります",
     );
+  });
+
+  test("warns that turning only design_enabled on opens the design stage at once", () => {
+    expect(linesFor("design_enabled", true)).toContain(
+      "注意: design_enabled だけを true に戻すと、残った design_enabled_since が読めるので、有効にする意思の表明が無いまま設計工程がすぐ開きます",
+    );
+  });
+
+  test("does not say that design_enabled_since is cleared", () => {
+    expect(linesFor("design_enabled", true)).not.toContain("空(null)");
   });
 
   test("says that a person turns it on and writes a new time in design_enabled_since to resume", () => {
