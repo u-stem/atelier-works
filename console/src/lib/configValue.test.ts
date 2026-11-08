@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { unitOfConfigKey } from "./configValue.ts";
+import { describeStructure, unitOfConfigKey } from "./configValue.ts";
 
 describe("unitOfConfigKey", () => {
   test.each([
@@ -31,5 +31,56 @@ describe("unitOfConfigKey", () => {
 
   test("gives a key that only holds a suffix in the middle no unit", () => {
     expect(unitOfConfigKey("usd_rate")).toBeNull();
+  });
+});
+
+describe("describeStructure column order of a table", () => {
+  test("orders the columns of owners as name, kind, id whatever the order of the keys", () => {
+    const structure = describeStructure("owners", [
+      { id: 1, kind: "user", name: "u-stem" },
+    ]);
+
+    expect(structure.kind === "table" ? structure.columns : null).toEqual([
+      "name",
+      "kind",
+      "id",
+    ]);
+  });
+
+  test("orders the cells of a row of owners the same way as the columns", () => {
+    const structure = describeStructure("owners", [
+      { id: 1, kind: "user", name: "u-stem" },
+    ]);
+
+    expect(structure.kind === "table" ? structure.rows : null).toEqual([
+      ["u-stem", "user", "1"],
+    ]);
+  });
+
+  test("puts a key outside the known order after the known ones, in the order it appears", () => {
+    const structure = describeStructure("owners", [
+      { zeta: "z", id: 1, alpha: "a", name: "u-stem" },
+    ]);
+
+    expect(structure.kind === "table" ? structure.columns : null).toEqual([
+      "name",
+      "id",
+      "zeta",
+      "alpha",
+    ]);
+  });
+
+  test("keeps the order of the first row for an item with no known order", () => {
+    const structure = describeStructure("unknown_key", [
+      { id: 1, kind: "user", name: "u-stem" },
+      { extra: "x", name: "acme" },
+    ]);
+
+    expect(structure.kind === "table" ? structure.columns : null).toEqual([
+      "id",
+      "kind",
+      "name",
+      "extra",
+    ]);
   });
 });

@@ -244,11 +244,14 @@ describe("ConfigList values of a number", () => {
     expect(cellsOf(html, "max_attempts")[0]?.replace(/<[^>]*>/g, "")).toBe("3");
   });
 
-  test("aligns a number to the right", () => {
+  test("keeps a number on the left edge of the value like a string", () => {
     const html = renderItems([item("daily_budget_usd", 5)]);
-    expect(cellsOf(html, "daily_budget_usd")[0]).toMatch(
-      /class="[^"]*text-right[^"]*"[^>]*>5</,
-    );
+    expect(cellsOf(html, "daily_budget_usd")[0]).not.toMatch(/text-right/);
+  });
+
+  test("gives a number no box wider than its digits", () => {
+    const html = renderItems([item("daily_budget_usd", 5)]);
+    expect(cellsOf(html, "daily_budget_usd")[0]).not.toMatch(/min-w-/);
   });
 
   test("sets the digits of a number in tabular figures", () => {
