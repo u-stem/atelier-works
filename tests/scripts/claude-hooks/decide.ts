@@ -10,6 +10,8 @@ export type Options = {
   readonly localBranches?: readonly string[];
   readonly subagent?: boolean;
   readonly cwd?: string;
+  /** 判定の締め切りの時計。渡さないときは実時刻で数える。 */
+  readonly now?: () => number;
 };
 
 const REPO_ROOT = "/repo";
@@ -35,6 +37,7 @@ async function run(command: string, options: Options) {
     (input) =>
       Promise.resolve(
         evaluateBashGuard(input, {
+          ...(options.now === undefined ? {} : { now: options.now }),
           currentBranch: (dir) => {
             const branches = options.branches ?? {};
             return dir in branches ? (branches[dir] ?? null) : fallbackBranch;

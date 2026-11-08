@@ -3213,12 +3213,18 @@ function widePipeline(stages: number, wordsPerStage: number): string {
 const WIDE_PIPELINE_LIMIT_MS = 8000;
 const WIDE_PIPELINE_TIMEOUT_MS = 20000;
 
+// 時間のテストは、判定の締め切りが決定を変えないよう、経過しない時計で測る。締め切りの働きは別のテストで固定している。
+const NEVER_EXPIRES = () => 0;
+
 describe("bash-guard bounds the work for a wide prefixed pipeline", () => {
   test(
     "allows 256 stages of about a hundred words each in time",
     async () => {
       const started = Date.now();
-      const decision = await decide(widePipeline(256, 100), { subagent: true });
+      const decision = await decide(widePipeline(256, 100), {
+        subagent: true,
+        now: NEVER_EXPIRES,
+      });
       expect(decision).toBe("allow");
       expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
     },
@@ -3229,7 +3235,10 @@ describe("bash-guard bounds the work for a wide prefixed pipeline", () => {
     "denies 256 stages of about two hundred words each in time",
     async () => {
       const started = Date.now();
-      const decision = await decide(widePipeline(256, 200), { subagent: true });
+      const decision = await decide(widePipeline(256, 200), {
+        subagent: true,
+        now: NEVER_EXPIRES,
+      });
       expect(decision).toBe("deny");
       expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
     },
@@ -3240,7 +3249,10 @@ describe("bash-guard bounds the work for a wide prefixed pipeline", () => {
     "denies 256 stages of eight hundred words each in time",
     async () => {
       const started = Date.now();
-      const decision = await decide(widePipeline(256, 800), { subagent: true });
+      const decision = await decide(widePipeline(256, 800), {
+        subagent: true,
+        now: NEVER_EXPIRES,
+      });
       expect(decision).toBe("deny");
       expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
     },
@@ -3510,12 +3522,13 @@ describe("bash-guard reads the regions of find -exec by where they close", () =>
   });
 
   test(
-    "finishes thousands of unclosed -exec words before the deadline",
+    "finishes thousands of unclosed -exec words in time",
     async () => {
       const started = Date.now();
-      // 線形の走査はCIの遅さでも締め切りの6秒に収まり、2乗の走査は締め切りで拒否に変わる。
+      // 線形の走査はCIの遅さでも閾値に収まり、2乗の走査は閾値を超える。
       const decision = await decide(`find . ${"-exec cat ".repeat(15000)}`, {
         subagent: true,
+        now: NEVER_EXPIRES,
       });
       expect(decision).toBe("allow");
       expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
