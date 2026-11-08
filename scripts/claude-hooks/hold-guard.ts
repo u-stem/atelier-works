@@ -70,7 +70,7 @@
 //       指す語の有無によらず拒否する。足される語やシェルの引数は、字面から読めないためである。
 //       読めない標準入力は、`script`か`ssh`に、ファイルや、`echo`と`printf`以外のパイプや、実行時に決まる文字列が入る形である。
 //       前置きの前の`xargs`が標準入力の語を足す形(`viaXargs`)も同じに扱う。
-//   (b) 前置きの後ろの`mise`と実行系は、その位置から先頭のときと同じ分岐で判定し直す。
+//   (b) 前置きの後ろの`mise`、実行系、`docker`、`psql`は、その位置から先頭のときと同じ分岐で判定し直す。
 //       起動語は16個まで見て、超えたら拒否する。
 //       保留と凍結のCLIの直接実行(`script -q /dev/null ./scripts/hold.ts release 1`)は、(c)の共起で見る。
 //   (c) 起動語の外にある語は、共起で見る。指す語(保留か凍結のコードを指す語、書き込みのタスク名)と、
@@ -81,6 +81,8 @@
 //       スケジュールの凍結を置く形(`freeze:place -- --target a/b`)と、`list --scope deploy`は通す。
 //   (d) 空白を含む語(`script -c`や`ssh`の文字列)と標準入力の文字列は、コマンドとして読み、内側のコマンドごとに判定し直す。
 //       結果は足し合わせない。内側が読み取りの道具(`rg -n release scripts/hold.ts`)なら通す。
+//       内側の先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうるので、値も先頭の語として判定する。
+//       内側の`xargs`が足す語は、先頭が何でも読めないので拒否する。
 //       標準入力の文字列は、最上位でも入れ子でも同じに判定する。
 //       コマンド文字列は4段の入れ子まで読む。段を超えた文字列と読めない文字列は、字面で判定する。
 //       標準入力の文字列の字面は、保留か凍結のコードを指す字面と書き込みの語が並ぶときだけ拒否する。
@@ -116,8 +118,9 @@ import {
  * 拒否の種類。
  * `dynamic`は、実行時に決まる語のせいで判定できないこと。
  * `option`は、`mise`の知らないオプションのせいで、サブコマンドの位置が決まらないこと。
+ * `prefix`は、前置きの後ろの語を足すコマンド、シェル、読めない標準入力のせいで、何が実行されるか読めないこと。
  */
-export type HoldFinding = "operation" | "dynamic" | "option";
+export type HoldFinding = "operation" | "prefix" | "dynamic" | "option";
 
 /** スクリプトを実行するプログラム。 */
 const RUNNERS: ReadonlySet<string> = new Set([
@@ -672,8 +675,11 @@ export function holdStdin(command: SimpleCommand): HoldStdin {
   }
   return {
     redirects: command.redirects,
+    // `2>&1`の`1`のような、ファイル記述子の番号の語は、入力のファイルではない。
     inputFiles: command.redirects.filter(
-      (word) => !command.writeTargets.includes(word),
+      (word) =>
+        !command.writeTargets.includes(word) &&
+        !/^(?:\d+-?|-)$/.test(word.text),
     ),
     upstream,
     dynamicInput:
@@ -866,12 +872,13 @@ function newBudget(): HoldBudget {
 }
 
 const FINDING_RANK: Record<HoldFinding, number> = {
-  operation: 3,
+  operation: 4,
+  prefix: 3,
   dynamic: 2,
   option: 1,
 };
 
-/** 2つの判定のうち、強い方(`operation`、`dynamic`、`option`、null の順)を返す。 */
+/** 2つの判定のうち、強い方(`operation`、`prefix`、`dynamic`、`option`、null の順)を返す。 */
 function stronger(
   first: HoldFinding | null,
   second: HoldFinding | null,
@@ -1116,13 +1123,37 @@ function textFinding(
       inString: true,
     };
     found = stronger(found, holdOperationAt(stripped.words, inner));
+    // 先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうる(`ProxyCommand=…`、`LESSOPEN=…`)。値を先頭の語として判定する。
+    for (const assignment of stripped.assignments) {
+      const value = assignmentValue(assignment);
+      found = stronger(
+        found,
+        holdOperationAt([value, ...stripped.words], inner),
+      );
+      if (/\s/.test(value.text)) {
+        found = stronger(found, textFinding(value.text, inner, "string"));
+      }
+    }
     if (found === "operation") return found;
   }
   return found;
 }
 
+/** 変数代入の語`NAME=値`から、`=`より後ろの値を語として取り出す。 */
+function assignmentValue(assignment: Word): Word {
+  const cut = (text: string) => text.slice(text.indexOf("=") + 1);
+  return {
+    text: cut(assignment.text),
+    dynamic: assignment.dynamic,
+    glob: assignment.glob,
+    ...(assignment.variants === undefined
+      ? {}
+      : { variants: assignment.variants.map(cut) }),
+  };
+}
+
 /**
- * 前置きの後ろの起動語(`mise`と実行系)を、その位置から先頭のときと同じ規則で判定し直す。
+ * 前置きの後ろの起動語(`mise`、実行系、`docker`と`psql`)を、その位置から先頭のときと同じ規則で判定し直す。
  * 起動語が複数あれば、すべて調べる。数に上限を置き、超えたら拒否する。
  */
 function launchersFinding(
@@ -1133,13 +1164,24 @@ function launchersFinding(
   let count = 0;
   for (let at = 1; at < words.length; at += 1) {
     const name = baseName(words[at]?.text ?? "");
-    if (!isLauncherName(name)) continue;
+    const sql = SQL_PROGRAMS.has(name);
+    if (!isLauncherName(name) && !sql) continue;
     count += 1;
     if (count > HOLD_MAX_LAUNCHERS) return "dynamic";
-    const finding =
-      name === "mise"
-        ? miseFinding(words.slice(at), context.inputs, context.stdin)
-        : runnerFinding(words.slice(at + 1), context.inputs, context.stdin);
+    let finding: HoldFinding | null;
+    if (sql) {
+      finding = sqlTouchesHolds(words.slice(at), context.inputs)
+        ? "operation"
+        : null;
+    } else if (name === "mise") {
+      finding = miseFinding(words.slice(at), context.inputs, context.stdin);
+    } else {
+      finding = runnerFinding(
+        words.slice(at + 1),
+        context.inputs,
+        context.stdin,
+      );
+    }
     found = stronger(found, finding);
     if (found === "operation") return found;
   }
@@ -1173,14 +1215,14 @@ function underPrefixFinding(
   from: number,
   context: HoldContext,
 ): HoldFinding | null {
-  if (context.viaXargs || addsWordsOrRunsShell(words)) return "dynamic";
+  if (context.viaXargs || addsWordsOrRunsShell(words)) return "prefix";
   if (from === 0 && isReadOnlyProgram(baseName(words[0]?.text ?? ""), words)) {
     return null;
   }
   const readsStdin = words.some((word) =>
     STDIN_PREFIX_PROGRAMS.has(baseName(word.text)),
   );
-  if (readsStdin && hasUnreadableStdin(context)) return "dynamic";
+  if (readsStdin && hasUnreadableStdin(context)) return "prefix";
   let found: HoldFinding | null = null;
   for (let at = from; at < words.length; at += 1) {
     const word = words[at];
@@ -1201,6 +1243,8 @@ function holdOperationAt(
   words: readonly Word[],
   context: HoldContext,
 ): HoldFinding | null {
+  // 前置きの後ろの文字列の中で、`xargs`が足す語は、先頭が何でも読めない。
+  if (context.inString && context.viaXargs) return "prefix";
   const first = words[0]?.text ?? "";
   const program = baseName(first);
   const { inputs, stdin } = context;
