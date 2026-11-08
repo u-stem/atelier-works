@@ -2941,6 +2941,7 @@ describe("bash-guard allows a subagent to work on the hold code behind a prefix"
 });
 
 // 前置きの無い形は、前置きの規則に入れない。先頭が前置きでないコマンドは、保留と凍結の判定の対象にならない。
+// 前置きの無い`find -exec`や`xargs`で書き込みを実行する形は、別の変更で止めるので、ここでは書き込みの語を含まない形だけを固定する。
 describe("bash-guard leaves forms without a prefix as they were", () => {
   test.each([
     "vim scripts/hold.ts",
@@ -2948,7 +2949,7 @@ describe("bash-guard leaves forms without a prefix as they were", () => {
     "sed -i 's/a/b/' scripts/hold.ts",
     "sed -n 1,5p scripts/hold.ts",
     "find scripts -name hold.ts -exec cat {} \\;",
-    "find scripts -name hold.ts -exec bun {} release 1 \\;",
+    "find scripts -name hold.ts -exec head -n 3 {} \\;",
     "bash ./x.sh",
     "bash -c 'cat scripts/hold.ts'",
     "echo scripts | xargs bunx biome check scripts/freeze.ts",
@@ -3070,5 +3071,77 @@ describe("bash-guard explains how to rewrite a prefix it cannot read", () => {
         subagent: true,
       }),
     ).toContain("literal");
+  });
+});
+
+// 前置きの後ろの文字列の中でも、先頭が`mise`、実行系、`docker`の命令に、シェルや語を足すコマンドが並ぶ形は読めない。
+// 最上位で前置きの後ろに書いた形と同じに拒否する。
+describe("bash-guard applies the prefix rule to a string that starts with a launcher", () => {
+  test.each([
+    `script -qc "bun run x.ts bash ./x.sh" /dev/null`,
+    `ssh host "mise run check bash ./x.sh"`,
+    `script -qc "bun run find . -exec x {} +" /dev/null`,
+    `ssh host "docker compose exec app bun scripts/hold.ts release 1"`,
+    `script -qc "docker compose exec app bun scripts/freeze.ts reset" /dev/null`,
+    `ssh host "docker compose exec app bash"`,
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test.each([
+    `ssh host "bun test"`,
+    `script -qc "mise run check" /dev/null`,
+    `ssh host "docker compose ps"`,
+    `ssh host "docker compose exec app bun test"`,
+  ])("allows %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+// 文字列の中の先頭の変数代入は、値だけを先頭の語として判定する。実際に実行される語は別に判定する。
+describe("bash-guard reads only the value of an assignment in a string", () => {
+  test.each([
+    `ssh h "LANG=C rg -n release scripts/hold.ts"`,
+    `script -qc "LANG=C rg -n release scripts/hold.ts" /dev/null`,
+  ])("allows %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+// 入力の複製(`<&3`)は、読めない入力のファイル記述子である。出力の複製(`2>&1`)だけを入力のファイルから外す。
+describe("bash-guard keeps a duplicated input descriptor as an unreadable input", () => {
+  test.each(["script -q /dev/null <&3", "ssh host <&3", "ssh host <&0"])(
+    "denies %s",
+    async (command) => {
+      expect(await decide(command, { subagent: true })).toBe("deny");
+    },
+  );
+});
+
+// 数千の代入の語と、数千の語や上流のコマンドを並べた文字列でも、フックのタイムアウト(10秒)の中で終える。
+describe("bash-guard finishes long assignment and pipeline input in time", () => {
+  test("finishes thousands of assignments and words in one string", async () => {
+    const started = Date.now();
+    await decide(
+      `script -qc "${"A=1 ".repeat(5000)}echo ${"x ".repeat(5000)}" /dev/null`,
+      { subagent: true },
+    );
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  test("finishes a pipeline of thousands of commands in a nested string", async () => {
+    const started = Date.now();
+    const pipeline = `${"echo x | ".repeat(3000)}vim a`;
+    await decide(`script -qc "script -qc '${pipeline}' /dev/null" /dev/null`, {
+      subagent: true,
+    });
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  test("finishes a pipeline of thousands of commands ending in a hold word", async () => {
+    const started = Date.now();
+    const pipeline = `${"echo x | ".repeat(3000)}python3 scripts/hold.ts list`;
+    await decide(`script -qc '${pipeline}' /dev/null`, { subagent: true });
+    expect(Date.now() - started).toBeLessThan(3000);
   });
 });
