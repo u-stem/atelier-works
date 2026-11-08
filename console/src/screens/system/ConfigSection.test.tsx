@@ -199,6 +199,18 @@ describe("ConfigList values by type", () => {
     );
   });
 
+  test("measures an object against the width of its own cell", () => {
+    const html = renderValue("allowed_labeler_ids", { alice: 12 });
+    expect(html).toMatch(/<div class="[^"]*@container[^"]*"><dl/);
+  });
+
+  test("lets a cell of a table shrink below a long string without a break", () => {
+    const html = renderValue("owners", [{ name: "x" }]);
+    expect(html).toMatch(
+      /<td class="[^"]*\[overflow-wrap:anywhere\][^"]*">x<\/td>/,
+    );
+  });
+
   test("puts the key and a scalar value of an object side by side", () => {
     const html = renderValue("allowed_labeler_ids", { alice: 12 });
     expect(entryClassOf(html, "alice")).toContain("grid-cols");
