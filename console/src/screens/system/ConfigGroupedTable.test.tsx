@@ -227,6 +227,51 @@ describe("ConfigList vertical lines between the columns", () => {
   });
 });
 
+/** 設計工程の判定の行のセル(`td`)の開始タグ。 */
+function designRowCellTags(html: string): string[] {
+  const row = (html.match(/<tr[^>]*>.*?<\/tr>/g) ?? []).find((tr) =>
+    tr.includes("設計工程(実際の状態)"),
+  );
+  return row?.match(/<td[^>]*>/g) ?? [];
+}
+
+const STAGE = { enabled: true, ignored: false, indeterminate: false };
+
+describe("ConfigList cells of the design stage row", () => {
+  test("gives the row one cell when the group has an operation column", () => {
+    const html = renderToStaticMarkup(
+      <ConfigList
+        items={[item("design_enabled", true)]}
+        designStage={STAGE}
+        onChoose={choose}
+      />,
+    );
+    expect(designRowCellTags(html).length).toBe(1);
+  });
+
+  test("makes the value cell reach the operation column", () => {
+    const html = renderToStaticMarkup(
+      <ConfigList
+        items={[item("design_enabled", true)]}
+        designStage={STAGE}
+        onChoose={choose}
+      />,
+    );
+    expect(designRowCellTags(html)[0]).toContain('colSpan="2"');
+  });
+
+  test("gives the row one cell that spans nothing when the group has no operation column", () => {
+    const html = renderToStaticMarkup(
+      <ConfigList
+        items={[item("design_enabled", false)]}
+        designStage={STAGE}
+      />,
+    );
+    const cells = designRowCellTags(html);
+    expect([cells.length, cells[0]?.includes("colSpan")]).toEqual([1, false]);
+  });
+});
+
 describe("ConfigList key of an item", () => {
   const key = "implement_max_budget_usd_per_run";
 

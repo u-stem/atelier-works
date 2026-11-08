@@ -489,10 +489,97 @@ describe("updateConfigFromConsole: the result", () => {
     });
   });
 
-  test("keeps design_enabled_since as it was when the design stage is switched off", async () => {
+  test("clears design_enabled_since in the same write when the design stage is switched off", async () => {
     const { ports, written } = harness();
     await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(written[0]?.design_enabled_since).toBeNull();
+  });
+
+  test("changes only design_enabled and design_enabled_since when the design stage is switched off", async () => {
+    const { ports, written } = harness();
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(written).toEqual([
+      { ...RAW, design_enabled: false, design_enabled_since: null },
+    ]);
+  });
+
+  test("keeps the order of the keys when the design stage is switched off", async () => {
+    const { ports, written } = harness();
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(Object.keys(written[0] ?? {})).toEqual(Object.keys(RAW));
+  });
+
+  test("writes design_enabled_since as null even when the resource has no such key", async () => {
+    const { design_enabled_since: _unused, ...without } = RAW;
+    const { ports, written } = harness({ raw: without });
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(written[0]?.design_enabled_since).toBeNull();
+  });
+
+  test("overwrites a design_enabled_since that changed after it was read", async () => {
+    const { ports, written } = harness({
+      raw: { ...RAW, design_enabled_since: "2026-12-01T00:00:00Z" },
+    });
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(written[0]?.design_enabled_since).toBeNull();
+  });
+
+  test("leaves design_enabled_since alone when another switch is switched off", async () => {
+    const { ports, written } = harness();
+    await updateConfigFromConsole("implement_enabled", true, false, ports);
     expect(written[0]?.design_enabled_since).toBe("2026-11-01T00:00:00Z");
+  });
+
+  test("does not clear design_enabled_since when the write is refused", async () => {
+    const { ports, written } = harness({
+      raw: { ...RAW, design_enabled: false },
+    });
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(written).toEqual([]);
+  });
+
+  test("reads the written configuration as a design stage that is closed and not ignored", async () => {
+    const { ports, written } = harness();
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    const config = parseFactoryConfig(written[0]);
+    expect([config.design_enabled, config.design_enabled_ignored]).toEqual([
+      false,
+      false,
+    ]);
+  });
+
+  test("says the read back differs when design_enabled_since is still set", async () => {
+    const { ports } = harness({
+      afterWrite: { ...RAW, design_enabled: false },
+    });
+    expect(
+      await updateConfigFromConsole("design_enabled", true, false, ports),
+    ).toMatchObject({ refused: false, verified: false });
+  });
+
+  test("records that design_enabled_since was cleared", async () => {
+    const { ports, sqlCalls } = harness();
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(sqlCalls[0]?.values[3]).toBe(
+      '{"item":"design_enabled","before":true,"after":false,"since_cleared":true}',
+    );
+  });
+
+  test("records no since_cleared for another switch", async () => {
+    const { ports, sqlCalls } = harness();
+    await updateConfigFromConsole("implement_enabled", true, false, ports);
+    expect(sqlCalls[0]?.values[3]).not.toContain("since_cleared");
+  });
+
+  test("refuses to take design_enabled_since as the item", async () => {
+    const { ports, events } = harness();
+    const result = await updateConfigFromConsole(
+      "design_enabled_since",
+      "2026-11-01T00:00:00Z",
+      null,
+      ports,
+    );
+    expect([result, events]).toEqual([REFUSED("item_not_allowed"), []]);
   });
 
   test("records the switch values as booleans", async () => {

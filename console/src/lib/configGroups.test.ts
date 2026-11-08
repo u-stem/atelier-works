@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { ConfigItemView } from "../api/jobsQueries.ts";
-import { CONFIG_GROUP_DEFINITIONS, groupConfigItems } from "./configGroups.ts";
+import {
+  CONFIG_GROUP_DEFINITIONS,
+  DESIGN_GROUP_ID,
+  groupConfigItems,
+} from "./configGroups.ts";
 import { filterConfigItems } from "./jobsView.ts";
 
 function item(key: string): ConfigItemView {
@@ -143,5 +147,15 @@ describe("groupConfigItems for a group that is asked for", () => {
 
   test("does not return a group that is not asked for and has no item", () => {
     expect(groupConfigItems([item("owners")], ["design"]).length).toBe(2);
+  });
+});
+
+describe("DESIGN_GROUP_ID", () => {
+  test("is the id of the group that holds design_enabled", () => {
+    expect(
+      CONFIG_GROUP_DEFINITIONS.find((group) =>
+        group.keys.includes("design_enabled"),
+      )?.id,
+    ).toBe(DESIGN_GROUP_ID);
   });
 });

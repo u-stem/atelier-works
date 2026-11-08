@@ -648,17 +648,32 @@ describe("matchesDesignStageQuery", () => {
     expect(matchesDesignStageQuery("  ")).toBe(true);
   });
 
-  test("keeps the design stage row for a query that names the design", () => {
-    expect(matchesDesignStageQuery("設計")).toBe(true);
+  test("keeps the design stage row for the first letter of design", () => {
+    expect(matchesDesignStageQuery("d")).toBe(true);
   });
 
-  test("keeps the design stage row for a part of the word design", () => {
+  test("keeps the design stage row for the beginning of design in any case", () => {
     expect(matchesDesignStageQuery("DESI")).toBe(true);
   });
 
-  test("drops the design stage row for a query of another key", () => {
-    expect(matchesDesignStageQuery("budget")).toBe(false);
+  test("keeps the design stage row for the first character of the label", () => {
+    expect(matchesDesignStageQuery("設")).toBe(true);
   });
+
+  test("keeps the design stage row for the beginning of the label", () => {
+    expect(matchesDesignStageQuery("設計工程(実際")).toBe(true);
+  });
+
+  test("keeps the design stage row for the whole label", () => {
+    expect(matchesDesignStageQuery("設計工程(実際の状態)")).toBe(true);
+  });
+
+  test.each(["n", "e", "esign", "工程", "状態", "budget", "design_enabled"])(
+    "drops the design stage row for %s, which is not the beginning of the name",
+    (query) => {
+      expect(matchesDesignStageQuery(query)).toBe(false);
+    },
+  );
 });
 
 describe("describeDesignStage", () => {

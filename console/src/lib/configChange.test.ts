@@ -300,15 +300,27 @@ describe("changeDialogLines for what the change reaches", () => {
     );
   });
 
-  test("says what an approval and a rejection do while the design stage is stopped", () => {
+  test("says that an approval while the design stage is stopped goes on without the design", () => {
     expect(linesFor("design_enabled", true)).toContain(
-      "承認すると設計書を実装に渡さずに実装へ進み、却下すると設計を作り直さず人の対応待ちで止まります",
+      "承認すると設計書を実装に渡さずに実装へ進みます",
     );
   });
 
-  test("says that a person turns it on and rewrites design_enabled_since to resume", () => {
+  test("says that a rejection goes back to the requirements when the issue has changed", () => {
     expect(linesFor("design_enabled", true)).toContain(
-      "有効に戻すには、運用者が design_enabled を true にし、design_enabled_since を新しい時刻に書き直します",
+      "却下すると、Issueが変わっているときは要件定義へ戻り、そうでなければ設計を作り直さず人の対応待ちで止まります",
+    );
+  });
+
+  test("says that design_enabled_since is cleared by the same write", () => {
+    expect(linesFor("design_enabled", true)).toContain(
+      "同じ書き込みで design_enabled_since も空(null)になります",
+    );
+  });
+
+  test("says that a person turns it on and writes a new time in design_enabled_since to resume", () => {
+    expect(linesFor("design_enabled", true)).toContain(
+      "有効に戻すには、運用者が design_enabled を true にし、design_enabled_since に新しい時刻を書きます",
     );
   });
 
