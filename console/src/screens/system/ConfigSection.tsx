@@ -28,7 +28,7 @@ import {
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { ConfigChangeDialog } from "./ConfigChangeDialog.tsx";
-import { EmptyValue, TextValue } from "./ConfigText.tsx";
+import { EmptyValue, KeyText, TextValue } from "./ConfigText.tsx";
 import { EditableListValue } from "./EditableListValue.tsx";
 import { SystemSection } from "./SystemSection.tsx";
 import { useConfigChange } from "./useConfigChange.ts";
@@ -93,11 +93,14 @@ function SwitchBadge({
   );
 }
 
-/** 数値。広い幅では右にそろえて桁をそろえる。単位は数字の後ろに薄く添え、生の数字はそのまま読める。 */
+/**
+ * 数値。左端を、文字列の値とそろえる。桁は等幅の数字にする。
+ * 単位は数字の後ろに薄く添え、生の数字はそのまま読める。
+ */
 function NumberValue({ text, unit }: { text: string; unit: string | null }) {
   return (
     <span className="inline-flex items-baseline gap-1">
-      <span className="tabular-nums @2xl:min-w-16 @2xl:text-right">{text}</span>
+      <span className="tabular-nums">{text}</span>
       {unit === null ? null : (
         <span className="text-caption text-muted-foreground">{unit}</span>
       )}
@@ -115,7 +118,7 @@ function ValueRows({ items }: { items: readonly string[] }) {
       {items.map((text, index) => (
         // 要素は重なりうるので、位置を含めて見分ける。並びは変わらない。
         // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の要素が並びうる。
-        <li key={`${index}:${text}`} className="break-all">
+        <li key={`${index}:${text}`} className="break-words">
           <TextValue text={text} />
         </li>
       ))}
@@ -126,7 +129,8 @@ function ValueRows({ items }: { items: readonly string[] }) {
 /**
  * 同じ形のオブジェクトの配列。列の見出しを持つ表で、行が持たないキーのセルは「未設定」と出す。
  * 列の幅は内容に合わせ、長い名前はハイフンなどの切れ目で折る。
- * 切れ目の無い長い文字列で収まらない表は、表の中だけを横にスクロールする。
+ * セルは`overflow-wrap:anywhere`にして、切れ目の無い長い文字列が表の最小幅を押し広げないようにする。
+ * それでも収まらない表は、表の中だけを横にスクロールする。
  */
 function ValueTable({
   columns,
@@ -137,7 +141,7 @@ function ValueTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full max-w-2xl table-auto border-collapse text-small">
+      <table className="max-w-full table-auto border-collapse text-small">
         <thead className="text-left text-muted-foreground">
           <tr>
             {columns.map((column, columnIndex) => (
@@ -146,7 +150,7 @@ function ValueTable({
                 // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の列が並びうる。
                 key={`${columnIndex}:${column}`}
                 scope="col"
-                className="py-1 pr-3 font-medium"
+                className="py-1 pr-6 font-medium"
               >
                 <TextValue text={safeText(column)} />
               </th>
@@ -161,7 +165,7 @@ function ValueTable({
                 <td
                   // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の列が並びうる。
                   key={`${cellIndex}:${columns[cellIndex]}`}
-                  className="py-1 pr-3 align-top break-words"
+                  className="min-w-[14ch] py-1 pr-6 align-top [overflow-wrap:anywhere]"
                 >
                   {cell === null ? (
                     <span className="text-muted-foreground">未設定</span>
@@ -178,36 +182,51 @@ function ValueTable({
   );
 }
 
-/** オブジェクトのキーと値の行。値が配列なら、その中も行で並べる。 */
+/**
+ * オブジェクトのキーと値の行。
+ * 値が配列のときは、キーを上の行、配列を下の行に字下げして積む。コマンドやURLが長くても、値の幅を使えるためである。
+ * 値が文字列、数、真偽のときだけ、キーと値を横に並べる。キーの列は、値の列を圧迫しない幅にとどめる。
+ */
 function ValueEntries({
   entries,
 }: {
   entries: readonly { key: string; value: ConfigEntryValue }[];
 }) {
   return (
-    <dl className="flex flex-col gap-1.5 text-small">
-      {entries.map(({ key, value }, index) => (
-        // キーは`safeText`の後で重なりうるので、位置を含めて見分ける。並びは変わらない。
-        <div
-          // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列のキーが並びうる。
-          key={`${index}:${key}`}
-          className="grid gap-0.5 sm:grid-cols-[minmax(0,16rem)_minmax(0,1fr)] sm:gap-x-3"
-        >
-          <dt className="font-mono break-all">
-            <TextValue text={safeText(key)} />
-          </dt>
-          <dd className="min-w-0">
-            {value.kind === "list" ? (
-              <ValueRows items={value.items} />
-            ) : (
-              <span className="break-all">
-                <TextValue text={value.text} />
-              </span>
-            )}
-          </dd>
-        </div>
-      ))}
-    </dl>
+    // 横に並べるかは、一覧全体でなく、このセルの幅で決める。`td`は表のレイアウトを崩さないよう、包みの`div`にコンテナを付ける。
+    <div className="@container">
+      <dl className="flex flex-col gap-1.5 text-small">
+        {entries.map(({ key, value }, index) => (
+          // キーは`safeText`の後で重なりうるので、位置を含めて見分ける。並びは変わらない。
+          <div
+            // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列のキーが並びうる。
+            key={`${index}:${key}`}
+            className={
+              value.kind === "list"
+                ? "flex flex-col gap-0.5"
+                : "grid gap-0.5 @md:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] @md:gap-x-3"
+            }
+          >
+            <dt className="font-mono break-words">
+              <TextValue text={safeText(key)} />
+            </dt>
+            <dd
+              className={
+                value.kind === "list" ? "min-w-0 pl-4" : "min-w-0 pl-4 @md:pl-0"
+              }
+            >
+              {value.kind === "list" ? (
+                <ValueRows items={value.items} />
+              ) : (
+                <span className="break-words">
+                  <TextValue text={value.text} />
+                </span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 
@@ -340,17 +359,17 @@ function ConfigRow({
 }) {
   const { offers, editableList, button } = rowOffersOf(item, onChoose);
   return (
-    <tr {...ROLE.row} className="block @2xl:table-row">
+    <tr {...ROLE.row} className="block @min-[40rem]:table-row">
       <th
         scope="row"
         {...ROLE.rowheader}
-        className="block px-4 pt-2.5 pb-1 text-left align-top font-mono font-normal break-all @2xl:table-cell @2xl:py-2.5"
+        className="block px-4 pt-2.5 pb-1 text-left align-top font-mono font-normal break-words @min-[40rem]:table-cell @min-[40rem]:py-2.5"
       >
-        {safeText(item.key)}
+        <KeyText text={safeText(item.key)} />
       </th>
       <td
         {...ROLE.cell}
-        className="block min-w-0 px-4 pb-2.5 align-top tabular-nums @2xl:table-cell @2xl:py-2.5"
+        className="block min-w-0 px-4 pb-2.5 align-top tabular-nums @min-[40rem]:table-cell @min-[40rem]:py-2.5"
       >
         {editableList && onChoose !== undefined ? (
           <EditableListValue
@@ -366,10 +385,10 @@ function ConfigRow({
       {showOperation ? (
         <td
           {...ROLE.cell}
-          className="block px-4 align-top @2xl:table-cell @2xl:py-2.5 @2xl:text-right"
+          className="block px-4 align-top @min-[40rem]:table-cell @min-[40rem]:px-2 @min-[40rem]:py-2.5 @min-[40rem]:text-right"
         >
           {button === null || onChoose === undefined ? null : (
-            <div className="pb-2.5 @2xl:-my-1.5 @2xl:pb-0">
+            <div className="pb-2.5 @min-[40rem]:-my-1.5 @min-[40rem]:pb-0">
               <ChangeButton
                 offer={button}
                 locked={isLocked(button)}
@@ -415,16 +434,16 @@ function ConfigGroupTable({
         <table
           {...ROLE.table}
           aria-labelledby={headingId}
-          className="block w-full border-collapse @2xl:table @2xl:table-fixed"
+          className="block w-full border-collapse @min-[40rem]:table @min-[40rem]:table-fixed"
         >
           <colgroup>
-            <col className="@2xl:w-80" />
+            <col className="@min-[40rem]:w-56 @min-[48rem]:w-64 @min-[56rem]:w-76" />
             <col />
-            {showOperation ? <col className="@2xl:w-24" /> : null}
+            {showOperation ? <col className="@min-[40rem]:w-20" /> : null}
           </colgroup>
           <thead
             {...ROLE.rowgroup}
-            className="sr-only @2xl:not-sr-only @2xl:table-header-group"
+            className="sr-only @min-[40rem]:not-sr-only @min-[40rem]:table-header-group"
           >
             <tr
               {...ROLE.row}
@@ -448,7 +467,7 @@ function ConfigGroupTable({
                 <th
                   scope="col"
                   {...ROLE.columnheader}
-                  className="px-4 py-2 text-right font-medium"
+                  className="px-2 py-2 text-right font-medium"
                 >
                   操作
                 </th>
@@ -457,7 +476,7 @@ function ConfigGroupTable({
           </thead>
           <tbody
             {...ROLE.rowgroup}
-            className="block divide-y divide-border @2xl:table-row-group"
+            className="block divide-y divide-border @min-[40rem]:table-row-group"
           >
             {items.map((item) => (
               <ConfigRow

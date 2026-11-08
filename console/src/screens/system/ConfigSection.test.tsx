@@ -40,9 +40,12 @@ function renderSection(query = freshQuery(SNAPSHOT)): string {
 
 describe("ConfigList", () => {
   test("shows the key of every item", () => {
-    expect(renderToStaticMarkup(<ConfigList items={ITEMS} />)).toContain(
-      "daily_budget_usd",
-    );
+    expect(
+      renderToStaticMarkup(<ConfigList items={ITEMS} />).replaceAll(
+        "<wbr/>",
+        "",
+      ),
+    ).toContain("daily_budget_usd");
   });
 
   test("shows a scalar as text", () => {
@@ -101,6 +104,16 @@ describe("ConfigList", () => {
 function renderValue(key: string, value: unknown): string {
   return renderToStaticMarkup(
     <ConfigList items={[{ key, kind: "value", value, masked: false }]} />,
+  );
+}
+
+/** オブジェクトの値で、`key`の行を包む要素の`class`。 */
+function entryClassOf(html: string, key: string): string {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  return (
+    html.match(
+      new RegExp(`<div class="([^"]*)"><dt[^>]*>${escaped}</dt>`),
+    )?.[1] ?? ""
   );
 }
 
@@ -168,6 +181,39 @@ describe("ConfigList values by type", () => {
     ).toMatch(
       /<dt[^>]*>u-stem\/app<\/dt><dd[^>]*><ul[^>]*><li[^>]*>mise run check<\/li>/,
     );
+  });
+
+  test("puts the key of an array on a line above the array", () => {
+    const html = renderValue("check_commands_by_repo", {
+      "u-stem/app": ["mise run check"],
+    });
+    expect(entryClassOf(html, "u-stem/app")).not.toContain("grid-cols");
+  });
+
+  test("indents the array under its key", () => {
+    const html = renderValue("check_commands_by_repo", {
+      "u-stem/app": ["mise run check"],
+    });
+    expect(html).toMatch(
+      /<dt[^>]*>u-stem\/app<\/dt><dd class="[^"]*\bpl-4\b[^"]*"><ul/,
+    );
+  });
+
+  test("measures an object against the width of its own cell", () => {
+    const html = renderValue("allowed_labeler_ids", { alice: 12 });
+    expect(html).toMatch(/<div class="[^"]*@container[^"]*"><dl/);
+  });
+
+  test("lets a cell of a table shrink below a long string without a break", () => {
+    const html = renderValue("owners", [{ name: "x" }]);
+    expect(html).toMatch(
+      /<td class="[^"]*\[overflow-wrap:anywhere\][^"]*">x<\/td>/,
+    );
+  });
+
+  test("puts the key and a scalar value of an object side by side", () => {
+    const html = renderValue("allowed_labeler_ids", { alice: 12 });
+    expect(entryClassOf(html, "alice")).toContain("grid-cols");
   });
 
   test("says an empty array inside an object is empty", () => {

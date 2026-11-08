@@ -74,7 +74,7 @@ export function EditableListValue({
               // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の要素が並びうる。
               <li key={`${index}:${text}`} className="flex flex-col gap-0.5">
                 <div className="flex items-start justify-between gap-3">
-                  <span className="min-w-0 font-mono break-all">
+                  <span className="min-w-0 font-mono break-words">
                     <TextValue text={text} />
                   </span>
                   {removal === undefined ? null : (

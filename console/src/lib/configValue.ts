@@ -71,9 +71,34 @@ function isTableRow(value: unknown): value is Record<string, Scalar> {
   return values.length > 0 && values.every(isScalar);
 }
 
-function tableOf(rows: readonly Record<string, Scalar>[]): ConfigStructure {
-  // Setは挿入順を保つので、列は行に現れた順に並ぶ。
-  const keys = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+/**
+ * 表の列の順。項目のキーごとに、先頭から並べるキーを持つ。
+ * 読まれる値はキーが並べ替えられていて、名前が末尾に来る。読み手が最初に探すのは名前なので、決めた順で名前を左に置く。
+ * ここに無いキーは、決めた列の後ろに、行に現れた順で並べる。
+ */
+const TABLE_COLUMN_ORDER: ReadonlyMap<string, readonly string[]> = new Map([
+  ["owners", ["name", "kind", "id"]],
+]);
+
+/** 行に現れたキーを、決めた順を先頭にして並べる。 */
+function columnKeysOf(
+  itemKey: string,
+  rows: readonly Record<string, Scalar>[],
+): string[] {
+  // Setは挿入順を保つので、現れた順に並ぶ。
+  const appeared = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  const known = TABLE_COLUMN_ORDER.get(itemKey) ?? [];
+  return [
+    ...known.filter((key) => appeared.includes(key)),
+    ...appeared.filter((key) => !known.includes(key)),
+  ];
+}
+
+function tableOf(
+  itemKey: string,
+  rows: readonly Record<string, Scalar>[],
+): ConfigStructure {
+  const keys = columnKeysOf(itemKey, rows);
   return {
     kind: "table",
     columns: keys.map(safeText),
@@ -113,7 +138,7 @@ function jsonOf(value: unknown): ConfigStructure {
 /**
  * 配列かオブジェクトの値を、型ごとの形にする。
  * 空の配列は、項目に意味があれば注記を添える。空のオブジェクトには添えない。
- * 単純な値の配列は行の一覧、同じ形のオブジェクトの配列は表、
+ * 単純な値の配列は行の一覧、同じ形のオブジェクトの配列は表(列の順は`TABLE_COLUMN_ORDER`)、
  * 単純な値か単純な値の配列を値に持つオブジェクトはキーと値の行にする。
  * どれにも当たらない入れ子と混在は、字下げしたJSONにする。
  */
@@ -127,7 +152,7 @@ export function describeStructure(key: string, value: object): ConfigStructure {
     if (isScalarArray(elements)) {
       return { kind: "list", items: elements.map(scalarText) };
     }
-    if (elements.every(isTableRow)) return tableOf(elements);
+    if (elements.every(isTableRow)) return tableOf(key, elements);
     return jsonOf(value);
   }
   if (isPlainObject(value)) {

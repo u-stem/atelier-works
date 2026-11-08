@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { safeText } from "../../lib/safeText.ts";
 
 /** 空の文字列を示す目印。値とキーは等幅や通常の文字で描くので、斜体で薄い文字は見分けがつく。 */
@@ -14,6 +15,31 @@ export function TextValue({ text }: { text: string }) {
     );
   }
   return <>{safeText(text)}</>;
+}
+
+/**
+ * 項目のキー。アンダースコアの後ろに折り返しの位置(`wbr`)を置き、長いキーが文字の途中でなく語の切れ目で折れるようにする。
+ * 文字は変えないので、読み上げとコピーでは元のキーのままである。引数は`safeText`を通した文字列で、文字としてだけ描く。
+ */
+export function KeyText({ text }: { text: string }) {
+  const parts = text.split("_");
+  return (
+    <>
+      {parts.map((part, index) => (
+        // 分けた位置は変わらず、同じ文字列の部分が並びうるので、位置で見分ける。
+        // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の部分が並びうる。
+        <Fragment key={index}>
+          {index < parts.length - 1 ? (
+            <>
+              {part}_<wbr />
+            </>
+          ) : (
+            part
+          )}
+        </Fragment>
+      ))}
+    </>
+  );
 }
 
 /** 空であることと、項目に意味があるときはその意味。 */
