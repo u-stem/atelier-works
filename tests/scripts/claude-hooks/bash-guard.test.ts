@@ -3735,6 +3735,42 @@ describe("bash-guard reads exec after a runner behind find as code", () => {
   });
 });
 
+// `npm x`は`npm exec`の別名で、`pnpm dlx`は取得して実行する。`find`の後ろでは、検査の道具の前に読み飛ばす語は`run`だけである。
+describe("bash-guard reads only run as the word in front of an inspection tool behind find", () => {
+  test.each([
+    "find . -exec npm x tsc {} +",
+    "find . -exec pnpm dlx biome {} +",
+    "find . -exec bun x biome check {} +",
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard says what made an xargs or a find denied", () => {
+  const reasonOf = (command: string) => denyReason(command, { subagent: true });
+
+  test("names an assignment after xargs", async () => {
+    expect(await reasonOf("ls | xargs FOO=1 cat")).toContain(
+      "assignment after xargs",
+    );
+  });
+
+  test("names a relative path for the program", async () => {
+    expect(await reasonOf("ls | xargs ./cat")).toContain("relative path");
+  });
+
+  test("names a {} in front of the command of find", async () => {
+    expect(await reasonOf("find . -exec {} \\;")).toContain(
+      "{} in the place of the program",
+    );
+  });
+
+  test("asks the main session or a person once in the assignment reason", async () => {
+    const reason = await reasonOf("TARGET=scripts/hold.ts true");
+    expect(reason.split("ask the main session or a person").length - 1).toBe(1);
+  });
+});
+
 describe("bash-guard checks every region that find -exec closes with a plus", () => {
   test("denies a second region after a region closed with a plus", async () => {
     expect(
