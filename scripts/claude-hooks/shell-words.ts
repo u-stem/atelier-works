@@ -55,6 +55,11 @@ export type StrippedCommand = {
   readonly expanded: boolean;
   /** `env -S`の文字列を読めなかったとき(実行時に決まる、引用符が閉じない)は真。 */
   readonly opaque: boolean;
+  /**
+   * `xargs`のオプションに、知っている一覧に無いものがあるときは真。
+   * 知らないオプションは値を取るかもしれず、実行される側の語の位置が決まらない。
+   */
+  readonly unknownXargsOption: boolean;
 };
 
 /** 実行時に今のブランチ名になる置換。push先に書いても、ブランチが決まらない語として扱わない。 */
@@ -340,6 +345,7 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
   let words = input;
   let expanded = false;
   let opaque = false;
+  let unknownXargsOption = false;
   const assignments: Word[] = [];
   const wrappers: string[] = [];
   let mise: MiseExec | null = null;
@@ -366,7 +372,9 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
         expanded ||= split.expanded;
         opaque ||= split.opaque;
       }
-      index = skipWrapperOptions(words, index + 1, name);
+      const skipped = skipWrapperOptions(words, index + 1, name);
+      unknownXargsOption ||= skipped.unknownXargsOption;
+      index = skipped.next;
     } else if (name === "mise" && miseExecAt(words, index) !== -1) {
       wrappers.push(text);
       const read = readMiseExec(words, miseExecAt(words, index) + 1);
@@ -388,6 +396,7 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
     mise,
     expanded,
     opaque,
+    unknownXargsOption,
   };
 }
 
@@ -672,24 +681,82 @@ function skipTransparentOptions(
   return index;
 }
 
+/** `xargs`の、値を取らない短いオプションの文字(BSDとGNUの両方)。 */
+const XARGS_FLAG_LETTERS = "0oprtx";
+
+/** `xargs`の、値が直後にだけ付く短いオプションの文字(GNUの省略できる値)。 */
+const XARGS_ATTACHED_LETTERS = "ile";
+
+/** `xargs`の長いオプションの名前(BSDとGNUの両方)。`=`より前の部分である。 */
+const XARGS_LONG_OPTIONS: ReadonlySet<string> = new Set([
+  "null",
+  "max-args",
+  "max-procs",
+  "max-chars",
+  "max-lines",
+  "interactive",
+  "no-run-if-empty",
+  "verbose",
+  "exit",
+  "arg-file",
+  "delimiter",
+  "eof",
+  "replace",
+  "open-tty",
+  "show-limits",
+  "process-slot-var",
+  "version",
+  "help",
+]);
+
+/**
+ * 値を取らないか、値が同じ語に付くかの`xargs`のオプションが、知っている一覧にあれば真。
+ * 束ねた短いオプションは、値を取る文字に着くまでの文字がすべて知っている文字でなければならない。
+ */
+function xargsOptionKnown(text: string, valueLetters: string): boolean {
+  if (text.startsWith("--")) {
+    return XARGS_LONG_OPTIONS.has(text.slice(2).split("=")[0] ?? "");
+  }
+  for (const letter of text.slice(1)) {
+    if (
+      valueLetters.includes(letter) ||
+      XARGS_ATTACHED_LETTERS.includes(letter)
+    ) {
+      return true;
+    }
+    if (!XARGS_FLAG_LETTERS.includes(letter)) return false;
+  }
+  return true;
+}
+
+/**
+ * 前置きのコマンドのオプションを読み飛ばし、次の語の位置を返す。
+ * `unknownXargsOption`は、`xargs`のオプションに知っている一覧に無いものがあったときに真になる。
+ */
 function skipWrapperOptions(
   words: readonly Word[],
   start: number,
   wrapper: string,
-): number {
+): { readonly next: number; readonly unknownXargsOption: boolean } {
   const valueOptions = WRAPPER_VALUE_OPTIONS.get(wrapper) ?? new Set<string>();
   const valueLetters = [...valueOptions]
     .filter((option) => option.length === 2 && !option.startsWith("--"))
     .map((option) => option.charAt(1))
     .join("");
+  let unknownXargsOption = false;
   let index = start;
   while (index < words.length) {
     const text = words[index]?.text ?? "";
-    if (text === "--") return index + 1;
+    if (text === "--") return { next: index + 1, unknownXargsOption };
     if (!text.startsWith("-") || text === "-") break;
     if (valueOptions.has(text)) {
       index += 2;
-    } else if (text.startsWith("--")) {
+      continue;
+    }
+    if (wrapper === "xargs" && !xargsOptionKnown(text, valueLetters)) {
+      unknownXargsOption = true;
+    }
+    if (text.startsWith("--")) {
       index += 1;
     } else {
       // 束ねた短いオプションは、値を取る最初の文字から後ろが値である。後ろが空なら次の語が値になる。
@@ -701,7 +768,7 @@ function skipWrapperOptions(
   }
   // `timeout`は、オプションの後の1語が継続時間になる。
   if (wrapper === "timeout" && index < words.length) index += 1;
-  return index;
+  return { next: index, unknownXargsOption };
 }
 
 function collectCommands(

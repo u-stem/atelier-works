@@ -264,6 +264,9 @@ pushとmigrationの間に保留が置かれても、migrationは続く。
 
 subagentの拒否は、[セキュリティ](../security.md)の「Claude Codeの拒否ルール」にある、ベストエフォートの規則である。
 `script`や`caffeinate`のような前置きの後ろと、コマンド文字列の中の同じ形も拒否する。
+前置きの無い`xargs`、`find`の実行系の式、`parallel`、`watch`、`strace`は、実行される側が読み取りの閉じた集合に入らなければ拒否する。
+先頭の変数代入の値が凍結のコードを指す形も、実行する側によらず拒否する。
+どちらも読み取りだけの呼び出しを巻き込む誤検知を受け入れる。詳しくは[保留](holds.md)の「subagentの拒否」に書く。
 `mise run push -- --prune`のように、タスク`push`に`--prune`を渡す形は`push:prune`と同じなので拒否する。
 
 ### Consoleからの解除

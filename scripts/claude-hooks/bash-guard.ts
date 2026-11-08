@@ -42,6 +42,8 @@ import {
   findConsoleReleaseCall,
   findHoldOperation,
   findStopAllCall,
+  type HoldClock,
+  holdClock,
   holdStdin,
 } from "./hold-guard.ts";
 import {
@@ -407,7 +409,11 @@ export const REASONS = {
   subagentHoldPrefix:
     "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push, and this command cannot be told apart from one that does. Behind a prefix (script, unbuffer, caffeinate, /usr/bin/time, or ssh), a command that adds words at run time (xargs, parallel, find -exec), starts a shell, or reads a standard input from a file or a program is denied, whatever it runs, because the words it runs cannot be read. Run the command without the prefix, or ask the main session or a person for the hold or freeze operation.",
   subagentHoldDynamic:
-    "This command has a word built from a variable, a command substitution, or a glob, so it cannot be told apart from mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, mise run freeze:release, mise run freeze:reset, or mise run push:prune. Write the task name and the arguments out as literal text. The same denial applies when the pipeline behind a prefix is too long or its input too large to check; remove the prefix or split the command. Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push.",
+    "This command has a word built from a variable, a command substitution, or a glob, so it cannot be told apart from mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, mise run freeze:release, mise run freeze:reset, or mise run push:prune. Write the task name and the arguments out as literal text. The same denial applies when the pipeline behind a prefix is too long or its input too large to check, or when the check ran past its time limit on a very long command line; remove the prefix or split the command. Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push.",
+  subagentHoldContext:
+    "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push, and this command cannot be told apart from one that does. A command that adds words at run time (xargs, find with -exec, -execdir, -ok, or -okdir) or starts another program (parallel, watch, strace) is denied unless the program it runs is a read-only tool: cat, head, tail, wc, ls, grep, egrep, fgrep, stat, file, basename, dirname, realpath, echo, or printf. After find -exec, a check such as tsc, biome, or bun test is allowed too. parallel, watch, and strace are always denied, because the words they run cannot be read. An xargs option that this hook does not know is denied as well, because it can shift the command that xargs runs. Call the tool directly (for example git add or rg without xargs), use a shell loop over a literal list, or ask the main session or a person for the hold or freeze operation.",
+  subagentHoldAssignment:
+    "A variable assignment in front of the command has a value that names the hold or freeze code (hold.ts, freeze.ts, and the like) or a write task (hold:place, hold:release, freeze:place, freeze:release, freeze:reset, push:prune). An environment variable such as a pager or a proxy command can run its value, so the assignment cannot be told apart from running the hold or freeze operation, whichever program follows. Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push. Drop the assignment or write the value without the name, or ask the main session or a person for the operation.",
 } as const;
 
 const DOCKER_REASONS = {
@@ -446,6 +452,8 @@ type Scope = {
   readonly depth: number;
   /** 入れ子の判定とも共有する、ブランチの切り替えの記録。 */
   readonly branchState: { assumed: AssumedBranch | null };
+  /** 保留と凍結の判定の締め切りの時計。`evaluateBashGuard`の開始から数え、入れ子の判定とも共有する。 */
+  readonly holdClock: HoldClock;
 };
 
 /** Bashのコマンド行を判定する。どれか1つの単純コマンドが拒否に当たれば、全体を拒否する。 */
@@ -453,6 +461,8 @@ export function evaluateBashGuard(
   input: BashToolInput,
   deps: GuardDeps,
 ): Decision {
+  // 締め切りは、判定の開始から数える。時計の最初の読み取りが開始の時刻である。
+  const clock = holdClock(deps.now);
   const budgeted = withGitBudget(deps);
   let cached: string | undefined;
   const repoRoot = (): string => {
@@ -468,6 +478,7 @@ export function evaluateBashGuard(
         repoRoot,
         depth: 0,
         branchState: { assumed: null },
+        holdClock: clock,
       },
       input.cwd,
     );
@@ -589,9 +600,8 @@ function checkSimpleCommand(
   };
   const secret = findSecretReference(command, context);
   if (secret !== null) return deny(secret);
-  const { assignments, words, wrappers, mise, opaque } = stripWrappers(
-    command.words,
-  );
+  const { assignments, words, wrappers, mise, opaque, unknownXargsOption } =
+    stripWrappers(command.words);
   if (opaque) return deny(REASONS.envSplit);
   const program = baseName(words[0]?.text ?? "");
   const declared = ENVIRONMENT_BUILTINS.has(program)
@@ -629,8 +639,15 @@ function checkSimpleCommand(
           () => literalShellInputs(command),
           holdStdin(command),
           wrappers.includes("xargs"),
+          {
+            assignments,
+            xargsUnknown: unknownXargsOption,
+            clock: scope.holdClock,
+          },
         );
   if (hold === "prefix") return deny(REASONS.subagentHoldPrefix);
+  if (hold === "context") return deny(REASONS.subagentHoldContext);
+  if (hold === "assignment") return deny(REASONS.subagentHoldAssignment);
   if (hold === "dynamic") return deny(REASONS.subagentHoldDynamic);
   if (hold === "option") return deny(REASONS.subagentHoldOption);
   if (hold !== null) return deny(REASONS.subagentHold);
