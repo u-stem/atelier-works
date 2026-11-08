@@ -3145,3 +3145,53 @@ describe("bash-guard finishes long assignment and pipeline input in time", () =>
     expect(Date.now() - started).toBeLessThan(3000);
   });
 });
+
+// 最上位の長いパイプラインでも、フックのタイムアウト(10秒)の中で終える。
+describe("bash-guard finishes a long top-level pipeline in time", () => {
+  test("finishes a pipeline of three thousand prefixed commands", async () => {
+    const started = Date.now();
+    await decide(`${"caffeinate true | ".repeat(3000)}caffeinate true`, {
+      subagent: true,
+    });
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+});
+
+// 解析の回数と、走査した語の数の予算を超えたら、判定できないものとして拒否する。
+describe("bash-guard denies input that passes the analysis budget", () => {
+  test("denies a string with 257 assignments", async () => {
+    expect(
+      await decide(`script -qc "${"A=1 ".repeat(257)}echo x" /dev/null`, {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test("allows a string with 200 assignments", async () => {
+    expect(
+      await decide(`script -qc "${"A=1 ".repeat(200)}echo x" /dev/null`, {
+        subagent: true,
+      }),
+    ).toBe("allow");
+  });
+
+  test("denies a string whose pipeline passes the word budget", async () => {
+    const started = Date.now();
+    const decision = await decide(
+      `script -qc '${"vim a | ".repeat(500)}vim a' /dev/null`,
+      { subagent: true },
+    );
+    expect(decision).toBe("deny");
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+});
+
+// 出力の複製(`2>&1`)と、閉じる指定(`<&-`)は、読めない入力ではない。
+describe("bash-guard allows a duplicated output and a closed input behind a prefix", () => {
+  test.each(["script -q /dev/null mise run check 2>&1", "ssh host <&-"])(
+    "%s",
+    async (command) => {
+      expect(await decide(command, { subagent: true })).toBe("allow");
+    },
+  );
+});
