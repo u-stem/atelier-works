@@ -32,6 +32,8 @@ const RAW: Record<string, unknown> = {
   max_fix_diff_lines: 1500,
   implement_max_changed_files: 60,
   implement_enabled: true,
+  design_enabled: true,
+  design_enabled_since: "2026-11-01T00:00:00Z",
   dependabot_enabled: true,
   dependabot_merge_enabled: true,
   pr_ci_fix_enabled: true,
@@ -136,6 +138,7 @@ describe("updateConfigFromConsole: what it refuses before it records", () => {
     "pr_conflict_watch_enabled",
     "pr_ci_fix_enabled_since",
     "pr_conflict_fix_enabled_since",
+    "design_enabled_since",
     "retention_logs_days",
     "retention_work_items_days",
     "dependabot_min_published_days",
@@ -267,6 +270,19 @@ describe("updateConfigFromConsole: what it refuses before it records", () => {
     const { ports, events } = harness();
     const result = await updateConfigFromConsole(
       "implement_enabled",
+      false,
+      true,
+      ports,
+    );
+    expect([result, events]).toEqual([REFUSED("not_lowering"), []]);
+  });
+
+  test("refuses to switch the design stage on", async () => {
+    const { ports, events } = harness({
+      raw: { ...RAW, design_enabled: false },
+    });
+    const result = await updateConfigFromConsole(
+      "design_enabled",
       false,
       true,
       ports,
@@ -459,6 +475,26 @@ describe("updateConfigFromConsole: the result", () => {
     ]);
   });
 
+  test("returns the design stage with its values before and after", async () => {
+    const { ports } = harness();
+    expect(
+      await updateConfigFromConsole("design_enabled", true, false, ports),
+    ).toEqual({
+      refused: false,
+      item: "design_enabled",
+      before: true,
+      after: false,
+      verified: true,
+      action_audit: "recorded",
+    });
+  });
+
+  test("keeps design_enabled_since as it was when the design stage is switched off", async () => {
+    const { ports, written } = harness();
+    await updateConfigFromConsole("design_enabled", true, false, ports);
+    expect(written[0]?.design_enabled_since).toBe("2026-11-01T00:00:00Z");
+  });
+
   test("records the switch values as booleans", async () => {
     const { ports, sqlCalls } = harness();
     await updateConfigFromConsole("implement_enabled", true, false, ports);
@@ -524,13 +560,14 @@ function configValue(item: string): unknown {
 }
 
 describe("the list of items that can be changed", () => {
-  test("names the five switches that only stop", () => {
+  test("names the six switches that only stop", () => {
     expect([...BOOLEAN_STOP_ITEMS]).toEqual([
       "implement_enabled",
       "dependabot_enabled",
       "dependabot_merge_enabled",
       "pr_ci_fix_enabled",
       "pr_conflict_fix_enabled",
+      "design_enabled",
     ]);
   });
 

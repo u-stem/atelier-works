@@ -362,6 +362,29 @@ describe("ConfigSection", () => {
     expect(renderSection(query)).toContain(">止める<");
   });
 
+  test("offers to stop design_enabled while it is on", () => {
+    const query = freshQuery(
+      snapshotOf([
+        { key: "design_enabled", kind: "value", value: true, masked: false },
+      ]),
+    );
+    expect(renderSection(query)).toContain("design_enabledを止める");
+  });
+
+  test("offers nothing for design_enabled_since", () => {
+    const query = freshQuery(
+      snapshotOf([
+        {
+          key: "design_enabled_since",
+          kind: "value",
+          value: "2026-11-01T00:00:00Z",
+          masked: false,
+        },
+      ]),
+    );
+    expect(renderSection(query)).not.toContain(">止める<");
+  });
+
   test("offers nothing for a switch that is already off", () => {
     const query = freshQuery(
       snapshotOf([

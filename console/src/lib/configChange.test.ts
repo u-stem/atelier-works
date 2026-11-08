@@ -38,6 +38,23 @@ describe("changeOfferOf", () => {
     },
   );
 
+  test("offers to stop design_enabled while it is on", () => {
+    expect(changeOfferOf(value("design_enabled", true))).toEqual({
+      kind: "stop",
+      key: "design_enabled",
+    });
+  });
+
+  test("offers nothing for design_enabled while it is off", () => {
+    expect(changeOfferOf(value("design_enabled", false))).toBeNull();
+  });
+
+  test("offers nothing for design_enabled_since", () => {
+    expect(
+      changeOfferOf(value("design_enabled_since", "2026-11-01T00:00:00Z")),
+    ).toBeNull();
+  });
+
   test("offers to lower a number", () => {
     const rule = LOWERABLE_NUMBERS.daily_budget_usd;
     if (rule === undefined) throw new Error("daily_budget_usd has no rule");
@@ -269,6 +286,42 @@ describe("changeDialogLines for what the change reaches", () => {
 
   test("keeps the approval warning out of the other switches", () => {
     expect(linesFor("dependabot_enabled", true)).not.toContain("承認");
+  });
+
+  test("says that an approval while the design stage is stopped goes to the implementation without a design", () => {
+    expect(linesFor("design_enabled", true)).toContain(
+      "止めている間に承認した要件定義は、設計書を作らず、設計の承認も挟まずに、実装へ進みます",
+    );
+  });
+
+  test("says that the designs already in progress are not stopped", () => {
+    expect(linesFor("design_enabled", true)).toContain(
+      "すでに設計中の作業と設計の承認待ちは止まりません",
+    );
+  });
+
+  test("says what an approval and a rejection do while the design stage is stopped", () => {
+    expect(linesFor("design_enabled", true)).toContain(
+      "承認すると設計書を実装に渡さずに実装へ進み、却下すると設計を作り直さず人の対応待ちで止まります",
+    );
+  });
+
+  test("says that a person turns it on and rewrites design_enabled_since to resume", () => {
+    expect(linesFor("design_enabled", true)).toContain(
+      "有効に戻すには、運用者が design_enabled を true にし、design_enabled_since を新しい時刻に書き直します",
+    );
+  });
+
+  test("keeps the implementation approval warning out of the design stage", () => {
+    expect(linesFor("design_enabled", true)).not.toContain(
+      "承認済みで止まります",
+    );
+  });
+
+  test("keeps the design warnings out of the implementation switch", () => {
+    expect(linesFor("implement_enabled", true)).not.toContain(
+      "design_enabled_since",
+    );
   });
 
   test("warns that a daily limit below today's spending fails the flows that use Claude today", () => {
