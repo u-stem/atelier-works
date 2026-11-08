@@ -1615,6 +1615,16 @@ describe("a re-review reply and a pr_fix reply share the role tag", () => {
     },
   );
 
+  test("takes a fixed commit reply whose role tag line ends with CRLF", () => {
+    const body = "[Factory 自動返信]\r\nfixed\r\n\r\n対応: `abc1234`";
+    expect(isFixedFixReply(body)).toBe(true);
+  });
+
+  test("takes a fixed commit reply whose role tag line has trailing spaces", () => {
+    const body = "[Factory 自動返信]  \nfixed\n\n対応: `abc1234`";
+    expect(isFixedFixReply(body)).toBe(true);
+  });
+
   test("takes a reply with the pr_fix marker for a fixed commit reply", () => {
     const body =
       "[Factory 自動返信]\nfixed\n\n対応: `abc1234`\n\n<!-- factory:pr_fix:9 -->";
