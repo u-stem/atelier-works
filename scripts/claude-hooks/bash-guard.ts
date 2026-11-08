@@ -73,6 +73,8 @@ export type GuardDeps = {
   readonly repoRoot: (dir: string) => string | null;
   /** `dir`のリポジトリに、`name`というローカルのブランチがあれば真を返す。 */
   readonly localBranchExists: (dir: string, name: string) => boolean;
+  /** 判定の締め切りを測る時計(ミリ秒)。省略すると実時刻を使う。 */
+  readonly now?: () => number;
 };
 
 const PROTECTED_BRANCHES: ReadonlySet<string> = new Set(["main", "master"]);
