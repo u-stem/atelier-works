@@ -3155,6 +3155,22 @@ describe("bash-guard finishes a long top-level pipeline in time", () => {
     });
     expect(Date.now() - started).toBeLessThan(3000);
   });
+
+  test("allows a prefixed command behind 256 pipeline stages", async () => {
+    expect(
+      await decide(`${"caffeinate true | ".repeat(256)}caffeinate true`, {
+        subagent: true,
+      }),
+    ).toBe("allow");
+  });
+
+  test("denies a prefixed command behind 257 pipeline stages", async () => {
+    expect(
+      await decide(`${"caffeinate true | ".repeat(257)}caffeinate true`, {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
 });
 
 // 解析の回数と、走査した語の数の予算を超えたら、判定できないものとして拒否する。
