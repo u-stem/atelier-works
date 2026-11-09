@@ -7,7 +7,6 @@ import {
   type CheckCommands,
   changeDialogConclusion,
   changeDialogDetails,
-  lowerChangeText,
   lowerHint,
   NO_CHECK_COMMANDS,
   newElementMessage,
@@ -103,20 +102,19 @@ function inputState(
 }
 
 /**
- * 変更の対象を示す行。項目と、止める向きは「有効 → 無効」、下げる向きは「50 USD → 5 USD」の前後の値。
- * 追加と削除は要素を結論が言うので、項目だけを出す。
- * 書かれた値(true、false)は、止める向きの読み上げにだけ残す。
+ * 止める向きの、項目と「有効 → 無効」の行。結論が項目も値も言わないので、ここで示す。
+ * 書かれた値(true、false)は、読み上げにだけ残す。
+ * 下げる、追加、削除は、結論が項目と値か要素を言うので、行を置かない。
  */
-function TargetFields({ offer, text }: { offer: ChangeOffer; text: string }) {
+function StopFields({
+  offer,
+}: {
+  offer: Extract<ChangeOffer, { kind: "stop" }>;
+}) {
   return (
     <dl className="flex flex-col gap-1">
       <FixedField label="項目" value={safeText(offer.key)} />
-      {offer.kind === "stop" ? (
-        <FixedField label="値" value="有効 → 無効" reader="(true → false)" />
-      ) : null}
-      {offer.kind === "lower" ? (
-        <FixedField label="値" value={lowerChangeText(offer, text)} />
-      ) : null}
+      <FixedField label="値" value="有効 → 無効" reader="(true → false)" />
     </dl>
   );
 }
@@ -124,7 +122,7 @@ function TargetFields({ offer, text }: { offer: ChangeOffer; text: string }) {
 /**
  * 設定の項目を変える前の確認。止める向き、下げる向き、一覧への追加、一覧からの削除の4つを扱う。
  * 確認のボタンは破壊的な色にする。止めると下げるはConsoleから戻せず、追加は対象を広げ、削除は対象を外すためである。
- * 先頭に、重大な結果を言う1つの結論を強調して出す。続けて項目と前後の値を示し、効く時期と元に戻す方法を箇条書きで並べる。
+ * 先頭に、重大な結果を言う1つの結論を強調して出す。止める向きだけ、結論の後に項目と値の行を置く。最後に、効く時期と元に戻す方法を箇条書きで並べる。
  * 設計工程が無視されているときは、`design_enabled`を止めても動きが変わらないことを結論が言う。
  * 数値の項目は変更後の値、追加は足す要素を入力欄で受ける。使えない値の間は確認のボタンを押せなくする。
  * 追加の要素の形式は、画面では検査しない。scriptの断りの文が伝える。
@@ -186,7 +184,7 @@ export function ConfigChangeDialog({
       <p className="text-body font-semibold">
         {changeDialogConclusion(offer, context)}
       </p>
-      <TargetFields offer={offer} text={text} />
+      {offer.kind === "stop" ? <StopFields offer={offer} /> : null}
       {typed ? (
         <Field
           tone="filter"

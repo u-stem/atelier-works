@@ -352,15 +352,6 @@ export function lowerHint(offer: LowerOffer): string {
     : `いまの値(${current})より小さい数。${bound}`;
 }
 
-/** 「下げる」の確認の、前後の値。入力が使えないときは、変更後の値を求める。 */
-export function lowerChangeText(offer: LowerOffer, text: string): string {
-  const before = formatNumberValue(offer.key, offer.current);
-  const parsed = parseNewNumber(text, offer);
-  return parsed.ok
-    ? `${before} → ${formatNumberValue(offer.key, parsed.value)}`
-    : `${before} → ${ENTER_NEW_VALUE}`;
-}
-
 /** 止めている間の承認が、承認済みで止まる項目。 */
 const APPROVAL_STOPPING_SWITCH = "implement_enabled";
 
@@ -383,7 +374,7 @@ function stopConclusion(
     if (designStage?.ignored === true) {
       return "いま設計工程は無視されていて、動いていません。止めても、動きは変わりません。";
     }
-    return "設計工程を止めます。止めた後に承認した要件定義は、設計書の承認を挟まず、実装へ進みます。戻すには端末が要ります。";
+    return "設計工程を止めます。止めた後に承認した要件定義は、設計書の承認を挟まず、実装へ進みます。戻すには、設定の書き換えが要ります。";
   }
   if (key === APPROVAL_STOPPING_SWITCH) {
     return "実装を止めます。止めている間に承認した要件定義は、承認済みで止まります(要対応には載りません)。";
