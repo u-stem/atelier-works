@@ -358,7 +358,9 @@ describe("reserved words the parser cannot read", () => {
   });
 
   test("rejects a coprocess followed by a parenthesis", () => {
-    expect(parses("coproc (git push)")).toBe(false);
+    const result = parseCommandLine("coproc (git push)");
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error).toContain("may start a glob group");
   });
 
   test("keeps case as a plain word after a command name", () => {
