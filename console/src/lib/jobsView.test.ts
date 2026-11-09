@@ -879,6 +879,18 @@ describe("describeConfigValue for a time", () => {
     expect(describeValue("k", "2026-13-03T00:10:00Z").kind).toBe("scalar");
   });
 
+  test("keeps a day that does not exist in the month as text", () => {
+    expect(describeValue("k", "2026-02-31T00:00:00Z").kind).toBe("scalar");
+  });
+
+  test("keeps February 29 of a year that is not a leap year as text", () => {
+    expect(describeValue("k", "2025-02-29T00:00:00Z").kind).toBe("scalar");
+  });
+
+  test("recognizes February 29 of a leap year", () => {
+    expect(describeValue("k", "2024-02-29T00:00:00Z").kind).toBe("datetime");
+  });
+
   test("keeps an hour that does not exist as text", () => {
     expect(describeValue("k", "2026-11-03T24:10:00Z").kind).toBe("scalar");
   });

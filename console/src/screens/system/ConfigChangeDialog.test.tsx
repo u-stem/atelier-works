@@ -433,6 +433,12 @@ describe("ConfigChangeDialog for removing from a list", () => {
     expect(render(offer)).not.toContain(">項目<");
   });
 
+  test("lets the conclusion wrap an element without a break", () => {
+    expect(render({ ...offer, element: "a".repeat(100) })).toMatch(
+      /<p class="[^"]*\[overflow-wrap:anywhere\][^"]*">default_reviewers から a{100} を削除します。/,
+    );
+  });
+
   test("tells the element to remove in the conclusion", () => {
     expect(render(offer)).toMatch(
       /<p class="[^"]*font-semibold[^"]*">default_reviewers から bob を削除します。/,

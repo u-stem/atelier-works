@@ -357,13 +357,15 @@ describe("changeDialogDetails for what the change reaches", () => {
     );
   });
 
-  test("has nothing more to say when the design stage is ignored", () => {
+  test("says only how to resume when the design stage is ignored", () => {
     const offer = changeOfferOf(value("design_enabled", true));
     expect(
       offer === null
         ? ["no offer"]
         : changeDialogDetails(offer, undefined, { designStage: IGNORED_STAGE }),
-    ).toEqual([]);
+    ).toEqual([
+      "再開するには、設定を書き換えて design_enabled を true にし、新しい design_enabled_since を書きます。",
+    ]);
   });
 
   test("leaves the daily warning to the conclusion", () => {
