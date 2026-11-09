@@ -45,6 +45,10 @@ describe("ConfigChangeDialog for a switch", () => {
     expect(render(offer)).toContain("implement_enabled");
   });
 
+  test("has a row of the item", () => {
+    expect(render(offer)).toMatch(/項目<\/dt><dd[^>]*>implement_enabled</);
+  });
+
   test("shows the value before and after in the words enabled and disabled", () => {
     expect(render(offer)).toContain("有効 → 無効");
   });
@@ -128,12 +132,12 @@ describe("ConfigChangeDialog for a number", () => {
     expect(render(offer)).toContain("この設定の値を下げますか");
   });
 
-  test("asks for the new value in the row of the values before and after", () => {
-    expect(render(offer)).toContain("50 USD → 変更後の値を入力してください");
+  test("has no row of the item, since the conclusion names it", () => {
+    expect(render(offer, "5")).not.toContain(">項目<");
   });
 
-  test("shows the values before and after with the unit once a value is typed", () => {
-    expect(render(offer, "5")).toContain("50 USD → 5 USD");
+  test("has no row of the values before and after, since the conclusion tells them", () => {
+    expect(render(offer, "5")).not.toContain("50 USD →");
   });
 
   test("tells the constraint of the new value before anything is typed", () => {
@@ -278,8 +282,12 @@ describe("ConfigChangeDialog for adding to a list", () => {
     );
   });
 
-  test("names the item", () => {
+  test("names the item in the conclusion", () => {
     expect(render(offer)).toContain("repo_allowlist");
+  });
+
+  test("has no row of the item, since the conclusion names it", () => {
+    expect(render(offer, "x")).not.toContain(">項目<");
   });
 
   test("has a box to type the element, with a label", () => {
@@ -417,8 +425,12 @@ describe("ConfigChangeDialog for removing from a list", () => {
     expect(render(offer)).toContain("この一覧から削除しますか");
   });
 
-  test("names the item", () => {
+  test("names the item in the conclusion", () => {
     expect(render(offer)).toContain("default_reviewers");
+  });
+
+  test("has no row of the item, since the conclusion names it", () => {
+    expect(render(offer)).not.toContain(">項目<");
   });
 
   test("tells the element to remove in the conclusion", () => {

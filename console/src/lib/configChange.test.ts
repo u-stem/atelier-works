@@ -13,7 +13,6 @@ import {
   EDITABLE_LISTS,
   formatNumberValue,
   LOWERABLE_NUMBERS,
-  lowerChangeText,
   lowerHint,
   MAX_ELEMENT_LENGTH,
   NO_CHECK_COMMANDS,
@@ -380,7 +379,7 @@ describe("changeDialogConclusion for a switch", () => {
 
   test("says that a design approval goes to the implementation without the approval of a design", () => {
     expect(conclusionFor("design_enabled")).toBe(
-      "設計工程を止めます。止めた後に承認した要件定義は、設計書の承認を挟まず、実装へ進みます。戻すには端末が要ります。",
+      "設計工程を止めます。止めた後に承認した要件定義は、設計書の承認を挟まず、実装へ進みます。戻すには、設定の書き換えが要ります。",
     );
   });
 
@@ -497,26 +496,6 @@ describe("lowerHint", () => {
     expect(hintFor("max_fix_diff_lines", 1500)).toBe(
       "整数。1以上、いまの値(1500 行)より小さい",
     );
-  });
-});
-
-describe("lowerChangeText", () => {
-  const offer = changeOfferOf(value("daily_budget_usd", 50));
-
-  function changeFor(text: string): string {
-    return offer?.kind === "lower" ? lowerChangeText(offer, text) : "";
-  }
-
-  test("writes the values before and after with an arrow", () => {
-    expect(changeFor("5")).toBe("50 USD → 5 USD");
-  });
-
-  test("asks for the new value while nothing is typed", () => {
-    expect(changeFor("")).toBe("50 USD → 変更後の値を入力してください");
-  });
-
-  test("asks for the new value while the text cannot be used", () => {
-    expect(changeFor("60")).toBe("50 USD → 変更後の値を入力してください");
   });
 });
 
