@@ -4291,3 +4291,104 @@ describeForCallers(
     });
   },
 );
+
+/** 前置きの後ろの操作。種類の名前と、後ろに置く単純コマンドの組である。 */
+const OPERATIONS_BEHIND_A_LEADING_FORM: readonly (readonly [string, string])[] =
+  [
+    [
+      "a hold write",
+      "mise run hold:place -- --scope merge --target a/b --minutes 5 --reason x",
+    ],
+    ["a freeze write", "mise run freeze:release -- d0a1b2c3"],
+    ["the stop-all", "mise run stop"],
+    ["an environment dump through mise", "mise exec -- printenv"],
+    ["a push to the protected branch", "git push origin main"],
+    ["a hook skip", "git commit --no-verify -m x"],
+  ];
+
+/** 読めない構文として拒否する形。種類の名前と、操作を埋め込む関数の組である。 */
+const UNREADABLE_FORMS: readonly (readonly [string, (op: string) => string])[] =
+  [
+    ["a precommand modifier", (op) => `nocorrect ${op}`],
+    ["a lone dash modifier", (op) => `- ${op}`],
+    ["a try-block continuation", (op) => `always ${op}`],
+    ["a coprocess without a name", (op) => `coproc ${op}`],
+    ["a coprocess with a name", (op) => `coproc NAME ${op}`],
+    ["a repeat loop", (op) => `repeat 1 ${op}`],
+    ["a function definition keyword", (op) => `function ${op}`],
+    ["a case statement", (op) => `case x in a) ${op};; esac`],
+    ["a case terminator", (op) => `esac ${op}`],
+    ["a for loop without in", (op) => `for NAME do ${op}; done`],
+    ["a select loop without in", (op) => `select NAME do ${op}; done`],
+    ["a conditional with a trailing body", (op) => `[[ -n x ]] ${op}`],
+    ["a stray closing brace", (op) => `echo a } ${op}`],
+  ];
+
+// 読めない構文は解析の失敗として拒否する。前置きの語を外せない形の後ろに操作を置いても、全主体で止まる。
+describeForCallers(
+  "bash-guard denies an operation behind a syntax it cannot read",
+  (subagent) => {
+    test.each(
+      UNREADABLE_FORMS.flatMap(([form, embed]) =>
+        OPERATIONS_BEHIND_A_LEADING_FORM.map(
+          ([operation, command]): [string, string, string] => [
+            form,
+            operation,
+            embed(command),
+          ],
+        ),
+      ),
+    )("denies %s before %s", async (_form, _operation, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 読み取りは拒否しない。SQL、awk、JSONの引数は、空白を含む語として入れ子の文字列の読み直しに入る。
+describeForCallers(
+  "bash-guard allows reads that look like reserved words",
+  (subagent) => {
+    test.each([
+      "psql -c 'select 1 from work_items'",
+      "caffeinate psql -c 'select 1 from work_items'",
+      "awk '{ print $1 }' notes.txt",
+      "caffeinate awk '{ print $1 }' notes.txt",
+      `curl -d '{"a":1}' http://localhost:8000/api/version`,
+      `caffeinate curl -d '{"a":1}' http://localhost:8000/api/version`,
+      "echo '- item'",
+      "caffeinate echo '- item'",
+      "caffeinate echo 'case of beer'",
+      "[[ a && b ]] && cat a",
+      "[[ -n x ]]",
+      "echo {a,b}",
+      "for x in a b; do echo $x; done",
+      "select x in a b; do echo $x; done",
+      "f() { echo a; }",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 読めない文字列の中の全停止のタスクは、字面で見て拒否する。保留と凍結の書き込みも、字面の判定が止める。
+describeForCallers(
+  "bash-guard reads a string it cannot parse by its wording",
+  (subagent) => {
+    test.each([
+      `script -qc "nocorrect mise run stop" /dev/null`,
+      `script -qc "nocorrect mise run stop:release" /dev/null`,
+      `script -qc "nocorrect mise run stop:restore" /dev/null`,
+      `ssh host "function mise run stop"`,
+      `script -qc "nocorrect mise run hold:place" /dev/null`,
+      `script -qc "nocorrect mise run freeze:release -- d0a1b2c3" /dev/null`,
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test("allows an unreadable string that names no mise", async () => {
+      expect(
+        await decide(`caffeinate psql -c 'select stop from t'`, { subagent }),
+      ).toBe("allow");
+    });
+  },
+);

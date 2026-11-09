@@ -61,6 +61,8 @@ export type StrippedCommand = {
    * `xargs`の後ろで外した前置き(代入、`env`、`time`、`mise exec`、2つ目の`xargs`など)がそうである。
    */
   readonly xargsCommandUnknown: boolean;
+  /** 外した後の語が、このチェックでは読み切れない構文(予約語の代替形など)を含むときは真。 */
+  readonly unreadable: boolean;
 };
 
 /** 実行時に今のブランチ名になる置換。push先に書いても、ブランチが決まらない語として扱わない。 */
@@ -402,6 +404,7 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
     expanded,
     opaque,
     xargsCommandUnknown,
+    unreadable: false,
   };
 }
 
