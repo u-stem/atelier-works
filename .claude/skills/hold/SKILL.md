@@ -47,6 +47,7 @@ Factoryの二重取りは、作業項目の一意制約が防ぐ。
 
 2. 保留を置く。
    理由には秘密を書かない。理由は一覧に表示される。
+   理由に句読点と全角の括弧は使えない。空白と英数字、日本語の文字で書く。
 
    ```bash
    mise run hold:place -- --scope merge --target <owner>/<repo> --minutes <分> --reason <理由>
