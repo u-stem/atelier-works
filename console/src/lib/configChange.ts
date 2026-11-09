@@ -3,7 +3,9 @@
 // 設定変更のscriptの契約テストが突き合わせる。
 // 画面が出す操作の絞り込みで、権限の境界ではない。境界はscriptが同じ表で確かめる。
 
-import type { ConfigItemView } from "../api/jobsQueries.ts";
+import type { ConfigItemView, DesignStageView } from "../api/jobsQueries.ts";
+import { unitOfConfigKey } from "./configValue.ts";
+import { safeText } from "./safeText.ts";
 
 /** `true`から`false`へだけ変えられる真偽の項目。 */
 export const STOPPABLE_SWITCHES: readonly string[] = [
@@ -317,6 +319,117 @@ export function newValueMessage(reason: NewNumberProblem): string {
   return NEW_VALUE_MESSAGES[reason];
 }
 
+/** 確認の文を決める、ダイアログの外の状況。 */
+export type DialogContext = {
+  /** 入力欄の文字列。数値と追加する要素の結論に使う。 */
+  readonly text?: string;
+  /** 設計工程が実際に効いているか。`design_enabled`を止める確認の結論を替える。 */
+  readonly designStage?: DesignStageView | undefined;
+};
+
+/** 数値を、キーから導いた単位つきの文字列にする。単位が無いキーは数字だけにする。 */
+export function formatNumberValue(key: string, value: number): string {
+  const unit = unitOfConfigKey(key);
+  return unit === null ? String(value) : `${String(value)} ${unit}`;
+}
+
+type LowerOffer = Extract<ChangeOffer, { kind: "lower" }>;
+
+/**
+ * 「下げる」の入力欄の前に出す制約。いまの値より小さいことと、整数か、下限を規則から作る。
+ * 下限を含む規則は「以上」、含まない規則は「より大きい」と書く。
+ */
+export function lowerHint(offer: LowerOffer): string {
+  const current = formatNumberValue(offer.key, offer.current);
+  const bound = offer.rule.minimumExclusive
+    ? `${String(offer.rule.minimum)}より大きい`
+    : `${String(offer.rule.minimum)}以上`;
+  return offer.rule.integer
+    ? `整数。${bound}、いまの値(${current})より小さい`
+    : `いまの値(${current})より小さい数。${bound}`;
+}
+
+/** 止めている間の承認が、承認済みで止まる項目。 */
+const APPROVAL_STOPPING_SWITCH = "implement_enabled";
+
+/** 設計工程の入口の項目。止めても進行中の設計は止まらず、止めている間の承認は設計を経ずに実装へ進む。 */
+const DESIGN_SWITCH = "design_enabled";
+
+/** 日次の予算の項目。下げた値が今日の使用額を下回ると、今日のClaudeを使うフローが止まる。 */
+const DAILY_BUDGET_ITEM = "daily_budget_usd";
+
+/** 日次の予算を下回る値にしたときの、重大な結果。 */
+const DAILY_BUDGET_CONSEQUENCE =
+  "今日の使用額を下回ると、今日のClaudeを使うフローがすべて失敗します。";
+
+function stopConclusion(
+  key: string,
+  designStage: DesignStageView | undefined,
+): string {
+  if (key === DESIGN_SWITCH) {
+    // 無視されている間は、止めても動きが変わらない。止めた後の結果を言うと、実態と食い違う。
+    if (designStage?.ignored === true) {
+      return "いま設計工程は無視されていて、動いていません。止めても、動きは変わりません。";
+    }
+    return "設計工程を止めます。止めた後に承認した要件定義は、設計書の承認を挟まず、実装へ進みます。戻すには、設定の書き換えが要ります。";
+  }
+  if (key === APPROVAL_STOPPING_SWITCH) {
+    return "実装を止めます。止めている間に承認した要件定義は、承認済みで止まります(要対応には載りません)。";
+  }
+  return `${safeText(key)} を止めます。この機能は、新しく動かなくなります。`;
+}
+
+function lowerConclusion(offer: LowerOffer, text: string): string {
+  const before = formatNumberValue(offer.key, offer.current);
+  const parsed = parseNewNumber(text, offer);
+  const action = parsed.ok
+    ? `${safeText(offer.key)} を ${before} から ${formatNumberValue(offer.key, parsed.value)} に下げます。`
+    : `${safeText(offer.key)} を ${before} から下げます。`;
+  return offer.key === DAILY_BUDGET_ITEM
+    ? `${action}${DAILY_BUDGET_CONSEQUENCE}`
+    : action;
+}
+
+function addConclusion(
+  offer: Extract<ChangeOffer, { kind: "add" }>,
+  text: string,
+): string {
+  const parsed = parseNewElement(text);
+  const key = safeText(offer.key);
+  const action = parsed.ok
+    ? `${key} に ${safeText(parsed.value)} を追加します。`
+    : `${key} に要素を追加します。`;
+  // 空のときは`owners`配下のすべてが対象だった。追加すると、`factory_repo`と追加した要素だけが対象になる。
+  return offer.key === ALLOWLIST_ITEM && offer.current.length === 0
+    ? `${action}空の一覧への追加です。factory_repo と追加した要素以外のリポジトリは止まります。`
+    : action;
+}
+
+/**
+ * 確認のダイアログの先頭に強調して出す、1つの結論。項目ごとの、重大な結果を言う。
+ * 止める向きは、何が止まるか。設計工程が無視されているときは、止めても動きが変わらないことを言う。
+ * 下げる向きは、前後の値。日次の予算は、今日の使用額を下回ると今日のClaudeを使うフローがすべて失敗することも言う。
+ * 前後の値と追加する要素は、入力欄が使える値のときだけ入れる。
+ * 空の`repo_allowlist`への追加は、`factory_repo`と追加した要素以外が止まることを言う。
+ * 項目名と要素はサーバー由来なので、`safeText`を通す。
+ */
+export function changeDialogConclusion(
+  offer: ChangeOffer,
+  context: DialogContext = {},
+): string {
+  const text = context.text ?? "";
+  switch (offer.kind) {
+    case "stop":
+      return stopConclusion(offer.key, context.designStage);
+    case "lower":
+      return lowerConclusion(offer, text);
+    case "add":
+      return addConclusion(offer, text);
+    case "remove":
+      return `${safeText(offer.key)} から ${safeText(offer.element)} を削除します。`;
+  }
+}
+
 const TAKES_EFFECT =
   "変更は、次に設定を読む処理から効きます。動いているフローも、以後の手順が設定を読むときから、新しい値で動きます。";
 
@@ -339,26 +452,16 @@ function byRepoCommandsLine(count: CommandCount): string | null {
 }
 
 /**
- * 一覧の追加と削除の確認に並べる文。逆の操作で元に戻せるので、Windmillで直す手順は書かない。
- * 空の`repo_allowlist`への追加は、挙げたリポジトリだけが対象になる。空のときは`owners`配下のすべてが対象だったためである。
+ * 一覧の追加と削除の詳細。逆の操作で元に戻せるので、Windmillで直す手順は書かない。
+ * 対象に加わるか外れるかは結論が言うので、ここでは繰り返さない。
  */
-function listDialogLines(
+function listDetails(
   offer: Extract<ChangeOffer, { kind: "add" | "remove" }>,
   checkCommands: CheckCommands,
 ): readonly string[] {
   const adding = offer.kind === "add";
-  const lines = [
-    adding
-      ? "追加した要素は、この項目の対象に加わります。"
-      : "削除した要素は、この項目の対象から外れます。",
-    TAKES_EFFECT,
-  ];
+  const lines = [TAKES_EFFECT];
   if (adding && offer.key === ALLOWLIST_ITEM) {
-    if (offer.current.length === 0) {
-      lines.push(
-        "owners 配下の、ここに挙げたリポジトリだけが対象になります。挙げていない他のリポジトリは対象から外れます。",
-      );
-    }
     for (const line of [
       allowedCommandsLine(checkCommands.allowed),
       byRepoCommandsLine(checkCommands.byRepo),
@@ -374,60 +477,57 @@ function listDialogLines(
   return lines;
 }
 
-/** 止めている間の承認が、承認済みで止まる項目。 */
-const APPROVAL_STOPPING_SWITCH = "implement_enabled";
+/** 設計工程が無視されているときの、止めた後に戻す手順。 */
+const DESIGN_RESUME_DETAIL =
+  "再開するには、設定を書き換えて design_enabled を true にし、新しい design_enabled_since を書きます。";
 
-/** 設計工程の入口の項目。止めても進行中の設計は止まらず、止めている間の承認は設計を経ずに実装へ進む。 */
-const DESIGN_SWITCH = "design_enabled";
-
-/** 日次の予算の項目。下げた値が今日の使用額を下回ると、今日のClaudeを使うフローが止まる。 */
-const DAILY_BUDGET_ITEM = "daily_budget_usd";
+/** 設計工程を止めたときの詳細。止めている間の承認の行き先は結論が言う。 */
+const DESIGN_STOP_DETAILS: readonly string[] = [
+  "すでに設計中の作業と設計の承認待ちは止まりません。",
+  "承認すると設計書を実装に渡さずに実装へ進みます。却下すると、Issueが変わっているときは要件定義へ戻り、そうでなければ設計を作り直さず人の対応待ちで止まります。",
+  "止めても design_enabled_since は残ります。有効に戻すには、運用者が design_enabled を true にし、design_enabled_since に新しい時刻を書きます。",
+  "注意: design_enabled だけを true に戻すと、残った design_enabled_since が読めるので、有効にする意思の表明が無いまま設計工程がすぐ開きます。",
+];
 
 /**
- * 確認のダイアログに並べる文。効く範囲と、項目ごとの注意と、元に戻す方法を書く。
+ * 確認のダイアログの、結論の後に箇条書きにする詳細。効く範囲と、項目ごとの注意と、元に戻す方法を書く。
  * 変更は、次に設定を読む処理から効く。動いているフローも、以後の手順が設定を読めば、新しい値で動く。
- * 実装を止めている間の承認は、承認済みで止まり、要対応に載らない。再開は、有効に戻した後に人が再実行で行う。
- * 設計工程を止めている間の承認は、設計を経ずに実装へ進む。進行中の設計と承認待ちは止まらない。
- * 止めても`design_enabled_since`は残るので、`design_enabled`だけを`true`に戻すと、残った日時が読め、設計工程がすぐ開く。有効に戻すには、日時も新しく書く。
- * 日次の予算は、今日の使用額を下回る値にすると、今日のClaudeを使うフローがすべて失敗する。今日の使用額は、ここでは調べない。
+ * 実装を止めた後の再開は、有効に戻した後に人が再実行で行う。
+ * 設計工程を止めても進行中の設計と承認待ちは止まらず、`design_enabled_since`は残る。
+ * `design_enabled`だけを`true`に戻すと、残った日時が読め、設計工程がすぐ開く。
+ * 設計工程が無視されているときは、止めても動きが変わらないので、効く時期は言わず、戻す手順だけを持つ。
  * 止める向きと下げる向きの変更は、Consoleからは戻せないので、戻すには運用者がWindmillで直す。
  * 一覧の追加と削除は、逆の操作で戻せる。
  * `checkCommands`は、`repo_allowlist`への追加が、検査コマンドの及ぶ範囲を広げることを伝えるために使う。
  * リポジトリ別の検査コマンドは、追加した要素との一致を判定せず、あれば一般の警告にする。
  */
-export function changeDialogLines(
+export function changeDialogDetails(
   offer: ChangeOffer,
   checkCommands: CheckCommands = NO_CHECK_COMMANDS,
+  context: DialogContext = {},
 ): readonly string[] {
   if (offer.kind === "add" || offer.kind === "remove") {
-    return listDialogLines(offer, checkCommands);
+    return listDetails(offer, checkCommands);
   }
-  const lines = [
-    offer.kind === "stop"
-      ? "止めると、この機能は新しく動かなくなります。"
-      : "下げた値は、いまの値より厳しい上限になります。",
-    TAKES_EFFECT,
-  ];
+  if (
+    offer.kind === "stop" &&
+    offer.key === DESIGN_SWITCH &&
+    context.designStage?.ignored === true
+  ) {
+    // 止めても動きは変わらないので、効く時期は言わない。止めた後に戻す手順だけは、再開のために残す。
+    return [DESIGN_RESUME_DETAIL];
+  }
+  const lines = [TAKES_EFFECT];
   if (offer.key === APPROVAL_STOPPING_SWITCH) {
-    lines.push(
-      "止めている間に承認した要件定義は、承認済みで止まります。要対応には載りません。有効に戻した後、人が再実行で再開します。",
-    );
+    lines.push("有効に戻した後、人が再実行で再開します。");
   }
   if (offer.key === DESIGN_SWITCH) {
-    lines.push(
-      "止めている間に承認した要件定義は、設計書を作らず、設計の承認も挟まずに、実装へ進みます。",
-      "すでに設計中の作業と設計の承認待ちは止まりません。承認すると設計書を実装に渡さずに実装へ進みます。却下すると、Issueが変わっているときは要件定義へ戻り、そうでなければ設計を作り直さず人の対応待ちで止まります。",
-      "止めても design_enabled_since は残ります。有効に戻すには、運用者が design_enabled を true にし、design_enabled_since に新しい時刻を書きます。",
-      "注意: design_enabled だけを true に戻すと、残った design_enabled_since が読めるので、有効にする意思の表明が無いまま設計工程がすぐ開きます。",
-    );
-  }
-  if (offer.key === DAILY_BUDGET_ITEM) {
-    lines.push(
-      "今日の使用額を下回る値にすると、今日のClaudeを使うフローがすべて失敗します。引き上げはConsoleではできません。",
-    );
+    lines.push(...DESIGN_STOP_DETAILS);
   }
   lines.push(
-    "元に戻すには、運用者がWindmillでリソースを編集するか、wmill resource pushで戻します。Consoleからは戻せません。",
+    offer.kind === "lower"
+      ? "元に戻すには、運用者がWindmillでリソースを編集するか、wmill resource pushで戻します。Consoleからは戻せず、引き上げもできません。"
+      : "元に戻すには、運用者がWindmillでリソースを編集するか、wmill resource pushで戻します。Consoleからは戻せません。",
   );
   return lines;
 }

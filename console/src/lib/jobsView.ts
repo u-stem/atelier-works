@@ -412,6 +412,46 @@ export function describeDesignStage(stage: DesignStageView): DesignStageText {
   };
 }
 
+/** `design_enabled`の行に添える注記。`label`は無視中などの語で、無ければ`null`。 */
+export type DesignEnabledNoteText = {
+  readonly label: string | null;
+  readonly text: string;
+};
+
+/** `design_enabled`を止めたままにしているときの、再開の手順。止めても`design_enabled_since`は残るので、残った時刻ですぐ開く注意も添える。 */
+const DESIGN_RESUME_NOTE =
+  "再開は端末から行います。design_enabled を true にし、design_enabled_since に新しい時刻を書きます(design_enabled だけを true にすると、残った時刻で、すぐ開きます)。";
+
+/**
+ * `design_enabled`の行に添える注記。
+ * 書かれた値が`false`のときは、再開の手順を常に出す。判定の結果とは関係なく、止めた後の操作を示すためである。
+ * 書かれた値が`true`のときは、設計工程の判定が無視中か、判定できないときだけ、その語と短い理由を出す。
+ * 効いているときと、backendが判定を返さないときは、出さない。
+ * 判定の行(`describeDesignStage`)は設計工程の状態、この注記は書かれた値の行で何が起きているかを言うので、役割が違う。
+ */
+export function describeDesignEnabledNote(
+  item: ConfigItemView,
+  stage: DesignStageView | undefined,
+): DesignEnabledNoteText | null {
+  if (item.key !== "design_enabled" || item.kind !== "value" || item.masked) {
+    return null;
+  }
+  if (item.value === false) return { label: null, text: DESIGN_RESUME_NOTE };
+  if (item.value !== true || stage === undefined) return null;
+  if (stage.indeterminate) {
+    return {
+      label: "判定できません",
+      text: "design_enabled_since が参照で書かれているため、効いている値をここでは判定できません。",
+    };
+  }
+  return stage.ignored
+    ? {
+        label: "無視中",
+        text: "design_enabled_since が無いか、日時として読めないためです。",
+      }
+    : null;
+}
+
 /** 値を出さない設定の印の文言。参照と、伏せた値に使う。 */
 export const CONFIG_REFERENCE_LABEL = "参照(出さない)";
 
@@ -451,6 +491,8 @@ export function matchesDesignStageQuery(query: string): boolean {
 export type ConfigValueText =
   | { readonly kind: "reference" }
   | { readonly kind: "scalar"; readonly text: string }
+  /** 日時。`text`は日本時間の短い表記、`iso`は書かれた文字列で、`title`と`dateTime`に残す。 */
+  | { readonly kind: "datetime"; readonly text: string; readonly iso: string }
   /** 真偽。`text`は書かれた値(`true`か`false`)で、読み上げに残す。 */
   | {
       readonly kind: "boolean";
@@ -466,7 +508,31 @@ export type ConfigValueText =
   | ConfigStructure;
 
 /**
+ * 厳密なISO 8601の日時。秒までと、タイムゾーン(`Z`かオフセット)を必ず持つ。小数秒は許す。
+ * タイムゾーンの無い文字列は、どの時刻か決められないので日時と見なさない。
+ */
+const ISO_DATETIME =
+  /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+
+/** 日付が、その年月に存在するか。`Date`は2月31日を3月に繰り上げるので、月の日数で確かめる。 */
+function isRealDate(year: number, month: number, day: number): boolean {
+  return day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function isIsoDatetime(value: string): boolean {
+  if (!ISO_DATETIME.test(value) || Number.isNaN(Date.parse(value))) {
+    return false;
+  }
+  return isRealDate(
+    Number(value.slice(0, 4)),
+    Number(value.slice(5, 7)),
+    Number(value.slice(8, 10)),
+  );
+}
+
+/**
  * 設定の値を、画面が描く形にする。参照と、伏せた値は出さない。
+ * 厳密なISO 8601の日時の文字列は、キーを問わず、日本時間の短い表記にする。書かれた文字列は残す。
  * 真偽と数値は、文字列と分ける(数値にはキーから導いた単位を添える)。
  * 配列とオブジェクトは、型ごとの形(行の一覧、表、キーと値の行、空の注記)にし、
  * どれにも当たらない入れ子と混在は、字下げしたJSONの文字列にする。
@@ -486,6 +552,13 @@ export function describeConfigValue(item: ConfigItemView): ConfigValueText {
       kind: "number",
       text: String(value),
       unit: unitOfConfigKey(item.key),
+    };
+  }
+  if (typeof value === "string" && isIsoDatetime(value)) {
+    return {
+      kind: "datetime",
+      text: formatShortAbsoluteIso(value),
+      iso: safeText(value),
     };
   }
   return { kind: "scalar", text: safeText(String(value)) };
