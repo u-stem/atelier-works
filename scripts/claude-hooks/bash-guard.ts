@@ -14,7 +14,9 @@
 // - `mise generate`の`git-pre-commit --write`と`github-action --write`: 同じフックとワークフローを、生成の書き込みで上書きする。
 // - xargsや標準入力から渡すgit push、シェルのコード: 渡された引数やコードを判定できないまま実行する。
 // - 秘密値のファイルの参照(`guarded-files.ts`)、`mise exec`と`docker`の環境変数の表示(`env-exposure.ts`): 値が会話の記録に残る。
-// - subagentの保留(hold)を置く・解除する操作(`hold-guard.ts`): 確認する相手がいないまま、自動マージを止めるか、止めている保留を外す。
+// - 保留(hold)と凍結の書き込み(`hold-guard.ts`): 確認する相手がいないまま、自動マージや反映を止めるか、止めている保留を外す。
+//   subagentには、書き込みをすべて拒否する。主セッションにも同じ判定を当て、書き込みは
+//   `mise run hold:place`、`hold:release`、`freeze:place`、`freeze:release`の単独の行(`isMainSessionHoldForm`)だけ許す。
 //   一覧(`list`)は許す。ベストエフォートで、別名の呼び出しや変数で組んだパスは止めない。
 // - Consoleの書き込みのscript(`console-scripts.ts`の一覧。`hold_release`、`freeze_release`、`console_job_cancel`など)の名前に
 //   当たりうる語や標準入力を持つコマンドと、凍結の変数を書く`wmill variable`と`curl`(`hold-guard.ts`):
@@ -43,6 +45,7 @@ import {
   findHoldOperation,
   findStopAllCall,
   type HoldClock,
+  type HoldFinding,
   holdClock,
   holdStdin,
 } from "./hold-guard.ts";
@@ -339,6 +342,31 @@ const CONFIG_READ_OR_UNSET_OPTIONS: ReadonlySet<string> = new Set([
   "--unset-all",
 ]);
 
+const HOLD_BAN =
+  "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push";
+
+/** 主セッションが保留と凍結を書く形。`isMainSessionHoldForm`が許す形と合わせる。 */
+const MAIN_HOLD_FORM =
+  "In the main session, run it as a single line: mise run hold:place -- <args>, mise run hold:release -- <id>, mise run freeze:place -- <args>, or mise run freeze:release -- <id>. Write the task name and the arguments as literal text of letters, digits, and - _ . : / = , + @ (a word may hold spaces), with no prefix, variable assignment, mise option, pipe, redirect, or second command. mise run freeze:reset and mise run push:prune are for a person in a terminal.";
+
+const HOLD_PREFIX_NOTE =
+  "Behind a prefix such as script or caffeinate, a command that only carries those words as arguments (for example in a commit message) is denied too; write it without the prefix. A prefix with xargs, parallel, find -exec, a shell, or a standard input it cannot read is denied because the words it runs cannot be read. Listing with mise run hold:list or mise run freeze:list is fine, and so is placing a schedule freeze (mise run freeze:place -- --target ...). A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.";
+
+const HOLD_OPTION_BODY =
+  "This mise command has an option that is not in the list this hook knows, and an option can take a value that shifts the subcommand, so it cannot be told apart from mise run hold:place or mise run hold:release. Use only known options of mise (-q, -v, -y, -C <dir>, -E <env>, --log-level <level> ...), or write the option as --name=value.";
+
+const HOLD_PREFIX_BODY =
+  "Behind a prefix (script, unbuffer, caffeinate, /usr/bin/time, or ssh), a command that adds words at run time (xargs, parallel, find -exec), starts a shell, or reads a standard input from a file or a program is denied, whatever it runs, because the words it runs cannot be read.";
+
+const HOLD_DYNAMIC_BODY =
+  "This command has a word built from a variable, a command substitution, or a glob, so it cannot be told apart from mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, mise run freeze:release, mise run freeze:reset, or mise run push:prune. Write the task name and the arguments out as literal text. The same denial applies when the pipeline behind a prefix is too long or its input too large to check, or when the check ran past its time limit on a very long command line; remove the prefix or split the command.";
+
+const HOLD_CONTEXT_BODY =
+  "A command that adds words at run time (xargs, find with -exec, -execdir, -ok, or -okdir) or starts another program (parallel, watch, strace) is denied unless the program it runs is a read-only tool: cat, head, tail, wc, ls, grep, egrep, fgrep, stat, file, basename, dirname, realpath, echo, or printf. After find -exec, tsc, biome, and a runner of them (bunx biome, for example) are allowed too, but a test runner such as bun test is not. parallel, watch, and strace are always denied, because the words they run cannot be read. An xargs is denied as well when this hook cannot tell the command it runs: an xargs option that it does not know, a replacement option (-I, -J, -i, --replace), the GNU options that take an optional value (-e, -l), a variable assignment after xargs, or a prefix such as env, nohup, time, timeout, sudo, or mise exec between xargs and the command. The program must also be written as a bare name or an absolute path, because a relative path such as ./cat is a file in the repository and not the tool, and find must not put {} in the place of the program. Call the tool directly (for example git add or rg without xargs), or use a shell loop over a literal list.";
+
+const HOLD_ASSIGNMENT_BODY =
+  "A variable assignment in front of the command has a value that names the hold or freeze code (hold.ts, freeze.ts, and the like) or a write task (hold:place, hold:release, freeze:place, freeze:release, freeze:reset, push:prune). An environment variable such as a pager or a proxy command can run its value, so the assignment cannot be told apart from running the hold or freeze operation, whichever program follows. The same applies when the value still holds a quote, a backslash, or one of the characters * ? [ {, because a second shell reads it again and can turn it into other words.";
+
 export const REASONS = {
   envSplit:
     "The string of env -S is decided at run time or cannot be split, so the command it runs cannot be checked. Write the command out without env -S.",
@@ -402,18 +430,25 @@ export const REASONS = {
     "Running a Console write script (hold_release, freeze_release, console_job_cancel, console_job_rerun, console_config_update, console_hold_place, console_schedule_stop, console_stop_all, console_stop_all_release, and the others listed in scripts/claude-hooks/console-scripts.ts) is not allowed in any Claude session. This hook denies any command whose words, variable assignments, or standard input could name one of them (a glob, a brace, or an xargs input counts), even for git, grep, or sed when a word such as wmill, curl, npx, bun, or sh is next to the name, and any write to f/factory/freezes, f/factory/stop_all, or f/factory/stop_all_record (wmill variable add/push, or a URL under /variables/update, create, or delete), whichever program runs it. They skip the confirmation that a person gives in the Console or in the terminal. A person releases a hold or a freeze from the system screen of the Console and stops a job from the job screen, or runs mise run hold:release or mise run freeze:release in a terminal and confirms there. To read the source, use the Read tool or git show, because a command that names the script is denied even when it only reads over the network. A call with a name built from a variable or a file is not caught here; do not try it.",
   stopAll:
     "Placing or releasing the stop-all, and restoring the settings it turned off, is not allowed in any Claude session: running scripts/stop_all.ts, mise run stop, mise run stop:release, or mise run stop:restore. The stop-all halts the whole Factory, cancels the running jobs, and kills the leftover Claude processes, releasing it enables the schedules again, and restoring turns the *_enabled settings back on, so a person confirms it in a terminal. A person runs mise run stop, mise run stop:release, or mise run stop:restore in a terminal and types yes there, or uses the stop-all section of the system screen in the Console to place or release it. Reading the code (cat, rg, git) and running the tests (bun test) are fine. A command that builds the name from a variable is not caught here; do not try it.",
-  subagentHold:
-    "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push: a hold stops merges, a deploy freeze stops every deployment, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, mise run freeze:release, mise run freeze:reset, or mise run push:prune. Behind a prefix such as script or caffeinate, a command that only carries those words as arguments (for example in a commit message) is denied too; write it without the prefix. A prefix with xargs, parallel, find -exec, a shell, or a standard input it cannot read is denied because the words it runs cannot be read. Listing with mise run hold:list or mise run freeze:list is fine, and so is placing a schedule freeze (mise run freeze:place -- --target ...). A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
-  subagentHoldOption:
-    "This mise command has an option that is not in the list this hook knows, and an option can take a value that shifts the subcommand, so it cannot be told apart from mise run hold:place or mise run hold:release. Use only known options of mise (-q, -v, -y, -C <dir>, -E <env>, --log-level <level> ...), or write the option as --name=value. Subagents must not place or release holds.",
-  subagentHoldPrefix:
-    "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push, and this command cannot be told apart from one that does. Behind a prefix (script, unbuffer, caffeinate, /usr/bin/time, or ssh), a command that adds words at run time (xargs, parallel, find -exec), starts a shell, or reads a standard input from a file or a program is denied, whatever it runs, because the words it runs cannot be read. Run the command without the prefix, or ask the main session or a person for the hold or freeze operation.",
-  subagentHoldDynamic:
-    "This command has a word built from a variable, a command substitution, or a glob, so it cannot be told apart from mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, mise run freeze:release, mise run freeze:reset, or mise run push:prune. Write the task name and the arguments out as literal text. The same denial applies when the pipeline behind a prefix is too long or its input too large to check, or when the check ran past its time limit on a very long command line; remove the prefix or split the command. Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push.",
-  subagentHoldContext:
-    "Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push, and this command cannot be told apart from one that does. A command that adds words at run time (xargs, find with -exec, -execdir, -ok, or -okdir) or starts another program (parallel, watch, strace) is denied unless the program it runs is a read-only tool: cat, head, tail, wc, ls, grep, egrep, fgrep, stat, file, basename, dirname, realpath, echo, or printf. After find -exec, tsc, biome, and a runner of them (bunx biome, for example) are allowed too, but a test runner such as bun test is not. parallel, watch, and strace are always denied, because the words they run cannot be read. An xargs is denied as well when this hook cannot tell the command it runs: an xargs option that it does not know, a replacement option (-I, -J, -i, --replace), the GNU options that take an optional value (-e, -l), a variable assignment after xargs, or a prefix such as env, nohup, time, timeout, sudo, or mise exec between xargs and the command. The program must also be written as a bare name or an absolute path, because a relative path such as ./cat is a file in the repository and not the tool, and find must not put {} in the place of the program. Call the tool directly (for example git add or rg without xargs), use a shell loop over a literal list, or ask the main session or a person for the hold or freeze operation.",
-  subagentHoldAssignment:
-    "A variable assignment in front of the command has a value that names the hold or freeze code (hold.ts, freeze.ts, and the like) or a write task (hold:place, hold:release, freeze:place, freeze:release, freeze:reset, push:prune). An environment variable such as a pager or a proxy command can run its value, so the assignment cannot be told apart from running the hold or freeze operation, whichever program follows. The same applies when the value still holds a quote, a backslash, or one of the characters * ? [ {, because a second shell reads it again and can turn it into other words. Subagents must not place or release holds, place a deploy freeze, release a freeze, reset the freezes, or prune a push. Drop the assignment, write the value without the name and without those characters, or ask the main session or a person for the operation.",
+  subagentHold: `${HOLD_BAN}: a hold stops merges, a deploy freeze stops every deployment, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, mise run freeze:release, mise run freeze:reset, or mise run push:prune. ${HOLD_PREFIX_NOTE}`,
+  subagentHoldOption: `${HOLD_OPTION_BODY} Subagents must not place or release holds.`,
+  subagentHoldPrefix: `${HOLD_BAN}, and this command cannot be told apart from one that does. ${HOLD_PREFIX_BODY} Run the command without the prefix, or ask the main session or a person for the hold or freeze operation.`,
+  subagentHoldDynamic: `${HOLD_DYNAMIC_BODY} ${HOLD_BAN}.`,
+  subagentHoldContext: `${HOLD_BAN}, and this command cannot be told apart from one that does. ${HOLD_CONTEXT_BODY} To place or release a hold or a freeze, ask the main session or a person.`,
+  subagentHoldAssignment: `${HOLD_ASSIGNMENT_BODY} ${HOLD_BAN}. Drop the assignment, write the value without the name and without those characters, or ask the main session or a person for the operation.`,
+} as const;
+
+/**
+ * 主セッションへの拒否の理由。診断の本文はsubagent向けと共有し、案内だけを免除の形に差し替える。
+ * 主セッションが保留と凍結を書けるのは、免除の形の単独の行だけだからである。
+ */
+const MAIN_HOLD_REASONS = {
+  operation: `This command places or releases a hold, places a deploy freeze, releases a freeze, resets the freezes, or prunes a push, or it cannot be told apart from one that does. A hold stops merges and a deploy freeze stops every deployment, so the main session runs only the closed form. ${MAIN_HOLD_FORM} ${HOLD_PREFIX_NOTE}`,
+  option: `${HOLD_OPTION_BODY} ${MAIN_HOLD_FORM}`,
+  prefix: `This command cannot be told apart from a hold or freeze operation. ${HOLD_PREFIX_BODY} Run the command without the prefix. ${MAIN_HOLD_FORM}`,
+  dynamic: `${HOLD_DYNAMIC_BODY} ${MAIN_HOLD_FORM}`,
+  context: `This command cannot be told apart from a hold or freeze operation. ${HOLD_CONTEXT_BODY} ${MAIN_HOLD_FORM}`,
+  assignment: `${HOLD_ASSIGNMENT_BODY} Drop the assignment, or write the value without the name and without those characters. ${MAIN_HOLD_FORM}`,
 } as const;
 
 const DOCKER_REASONS = {
@@ -541,8 +576,10 @@ function evaluateLine(
   const parsed = parseCommandLine(line);
   if (!parsed.ok) return deny(REASONS.unparsable(parsed.error));
   let directory = startDirectory;
+  // 主セッションの免除は、入力全体が単純コマンド1つの最上位の呼び出しにだけ効く。
+  const alone = scope.depth === 0 && parsed.commands.length === 1;
   for (const command of parsed.commands) {
-    const decision = checkSimpleCommand(command, directory, scope);
+    const decision = checkSimpleCommand(command, directory, scope, alone);
     if (decision.kind === "deny") return decision;
     trackBranch(command, directory, scope);
     directory = directoryAfter(command, directory);
@@ -589,10 +626,77 @@ function upstreamWords(command: SimpleCommand): readonly Word[] {
   return words;
 }
 
+/** 主セッションが保留と凍結を書くために実行してよいタスク。 */
+const MAIN_HOLD_TASKS: ReadonlySet<string> = new Set([
+  "hold:place",
+  "hold:release",
+  "freeze:place",
+  "freeze:release",
+]);
+
+/**
+ * 主セッションの免除の形の引数に使える字。英数字、日本語の文字、`-_.:/=,+@`、語の中のスペースである。
+ * これ以外の字を持つ語は、シェルが解釈しうる引用符やメタ文字を含みうるので免除しない。
+ */
+const MAIN_HOLD_ARGUMENT = /^[\p{L}\p{N}_.:/=,+@ -]*$/u;
+
+/**
+ * 外す前の語が、ちょうど`mise run <タスク> [-- <引数…>]`なら真を返す。
+ * タスクは`MAIN_HOLD_TASKS`の4つで、引数はリテラルかつ`MAIN_HOLD_ARGUMENT`の字だけでできている。
+ * 先頭の代入、前置き、miseのオプション、別名、パスで書いた`mise`は、語がこの形に合わないので免除しない。
+ * `line`は入力全体である。後ろに回す実行の`&`と`2>&1`は字句の解析が語にも記録にも残さないので、`&`の有無を行から見る。
+ */
+function isMainSessionHoldForm(command: SimpleCommand, line: string): boolean {
+  if (
+    command.pipedFrom !== null ||
+    command.redirects.length > 0 ||
+    command.inputs.length > 0 ||
+    line.includes("&")
+  ) {
+    return false;
+  }
+  const [mise, run, task, separator, ...args] = command.words;
+  if (mise?.text !== "mise" || run?.text !== "run" || task === undefined) {
+    return false;
+  }
+  if (!MAIN_HOLD_TASKS.has(task.text)) return false;
+  if (separator !== undefined && separator.text !== "--") return false;
+  const literal = (word: Word): boolean =>
+    !word.dynamic && !word.glob && word.variants === undefined;
+  if (![mise, run, task, separator ?? task].every(literal)) return false;
+  return args.every(
+    (word) =>
+      literal(word) &&
+      MAIN_HOLD_ARGUMENT.test(word.text) &&
+      !word.text.startsWith("=") &&
+      !word.text.includes(":::"),
+  );
+}
+
+/** 保留と凍結の判定の結果に当たる拒否の理由。主セッションには、免除の形を案内する理由を返す。 */
+function holdReason(finding: HoldFinding, main: boolean): string {
+  if (main) return MAIN_HOLD_REASONS[finding];
+  switch (finding) {
+    case "prefix":
+      return REASONS.subagentHoldPrefix;
+    case "context":
+      return REASONS.subagentHoldContext;
+    case "assignment":
+      return REASONS.subagentHoldAssignment;
+    case "dynamic":
+      return REASONS.subagentHoldDynamic;
+    case "option":
+      return REASONS.subagentHoldOption;
+    case "operation":
+      return REASONS.subagentHold;
+  }
+}
+
 function checkSimpleCommand(
   command: SimpleCommand,
   directory: string | null,
   scope: Scope,
+  alone: boolean,
 ): Decision {
   const context: SecretContext = {
     cwd: directory ?? scope.input.cwd,
@@ -631,26 +735,23 @@ function checkSimpleCommand(
   if (findStopAllCall(words, () => literalShellInputs(command))) {
     return deny(REASONS.stopAll);
   }
-  const hold =
-    scope.input.agentId === null
-      ? null
-      : findHoldOperation(
-          words,
-          () => literalShellInputs(command),
-          holdStdin(command),
-          wrappers.includes("xargs"),
-          {
-            assignments: [...assignments, ...declared],
-            xargsUnknown: xargsCommandUnknown,
-            clock: scope.holdClock,
-          },
-        );
-  if (hold === "prefix") return deny(REASONS.subagentHoldPrefix);
-  if (hold === "context") return deny(REASONS.subagentHoldContext);
-  if (hold === "assignment") return deny(REASONS.subagentHoldAssignment);
-  if (hold === "dynamic") return deny(REASONS.subagentHoldDynamic);
-  if (hold === "option") return deny(REASONS.subagentHoldOption);
-  if (hold !== null) return deny(REASONS.subagentHold);
+  const main = scope.input.agentId === null;
+  const exempt =
+    main && alone && isMainSessionHoldForm(command, scope.input.command);
+  const hold = exempt
+    ? null
+    : findHoldOperation(
+        words,
+        () => literalShellInputs(command),
+        holdStdin(command),
+        wrappers.includes("xargs"),
+        {
+          assignments: [...assignments, ...declared],
+          xargsUnknown: xargsCommandUnknown,
+          clock: scope.holdClock,
+        },
+      );
+  if (hold !== null) return deny(holdReason(hold, main));
   if (isLefthookUninstall(words)) {
     return deny(REASONS.lefthookUninstall);
   }

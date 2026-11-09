@@ -1,6 +1,8 @@
-// subagentが保留(hold)を置く・解除する操作を見分ける。
+// 保留(hold)を置く・解除する操作を見分ける。
 // 保留は、Factoryの自動マージなどを止める印である。subagentは置かず、解除もしない。
 // 主セッションか人に頼む。許すのは一覧(`list`)と、保留のコードの検査だけである。
+// 呼び出し側(`bash-guard.ts`)は、主セッションにも同じ判定を当てる。
+// 主セッションは、`mise run <タスク>`の単独の行1つだけを、この判定の前に免除する。
 // 凍結のCLI(`freeze:place`、`freeze:release`、`freeze:reset`、`push:prune`、`scripts/freeze.ts`)も、
 // 人の端末の確認を通る書き込みは同じ扱いにする。
 // - deployの保留を置く操作(`place`の`--scope deploy`)。反映全体を止めるためである。
