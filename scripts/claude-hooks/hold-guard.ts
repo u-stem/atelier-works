@@ -2258,6 +2258,26 @@ function miseStopAllCall(
 /** 全停止の変数のパス(`f/factory/stop_all`と`f/factory/stop_all_record`)。CLIのファイル名とは別のものである。 */
 const STOP_ALL_VARIABLE_PATH = /(?:^|[^A-Za-z0-9_])f\/factory\/stop_/;
 
+/** 全停止のタスク名を、区切られた語として含む字面。 */
+const STOP_ALL_TASK_WORDING = new RegExp(
+  `(?:^|[^\\w:-])(?:${STOP_ALL_TASKS.join("|")})(?![\\w:-])`,
+);
+
+/** `mise`を、区切られた語として含む字面。 */
+const MISE_WORDING = /(?:^|[^\w-])mise(?![\w-])/;
+
+/**
+ * 読めない文字列と、入れ子が深さの上限を超えた文字列の字面が、全停止を指すなら真。
+ * 全停止のCLIを指す語か、`mise`と全停止のタスク名が並ぶ字面である。
+ * 読めない文字列を一律に拒否すると、SQLやJSONの引数のような読み取りまで止まるので、字面で絞る。
+ */
+function unreadableTextStopAll(word: Word): boolean {
+  if (pointsAtStopAllCode(word)) return true;
+  return spellings(word).some(
+    (text) => MISE_WORDING.test(text) && STOP_ALL_TASK_WORDING.test(text),
+  );
+}
+
 /** 空白を含む語が、中に全停止の入口を実行する形を持つか。読めない文字列は、字面で判定する。 */
 function textStopAllCall(
   word: Word,
@@ -2266,7 +2286,7 @@ function textStopAllCall(
 ): boolean {
   const parsed =
     depth >= COMMAND_TEXT_MAX_DEPTH ? null : parseCommandLine(word.text);
-  if (parsed === null || !parsed.ok) return pointsAtStopAllCode(word);
+  if (parsed === null || !parsed.ok) return unreadableTextStopAll(word);
   return parsed.commands.some((command) => {
     const inner = stripWrappers(command.words).words;
     return inner.length > 0 && stopAllCallAt(inner, inputs, depth + 1);

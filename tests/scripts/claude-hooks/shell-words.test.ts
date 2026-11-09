@@ -245,51 +245,206 @@ describe("inputs", () => {
   });
 });
 
-describe("case statements", () => {
-  test("reads the commands of every clause", () => {
-    expect(commandTexts('case "$x" in a) echo a;; b|c) echo b;; esac')).toEqual(
-      [
-        ["echo", "a"],
-        ["echo", "b"],
-      ],
+/** シェルのパラメーター展開の開き。文字列に直接書くとリンターが誤検知するため組み立てる。 */
+const OPEN = "$".concat("{");
+
+/** 構文として読めたかどうか。 */
+function parses(line: string): boolean {
+  return parseCommandLine(line).ok;
+}
+
+/** 読めない構文として拒否する語を先頭に置いた行。種類の名前と行の組である。 */
+const UNREADABLE_LEADING: readonly (readonly [string, string])[] = [
+  ["a precommand modifier", "nocorrect git push"],
+  ["a lone dash modifier", "- git push"],
+  ["a try-block continuation", "always git push"],
+  ["a coprocess without a name", "coproc git push"],
+  ["a coprocess with a name", "coproc NAME git push"],
+  ["a repeat loop", "repeat 1 git push"],
+  ["a function definition keyword", "function git push"],
+  ["a case clause with a pattern", "case x in a) git push;; esac"],
+  ["a case terminator", "esac git push"],
+];
+
+/**
+ * `case`の語そのものの拒否を確かめる行。パターンの`)`を含まないので、
+ * 構文が`)`で崩れる前に、先頭の語の判定が拒否することになる。
+ */
+const CASE_WORD_FORMS: readonly (readonly [string, string])[] = [
+  ["a case header alone", "case x"],
+  ["a case header with in", "case x in a"],
+  ["a case terminator alone", "esac"],
+  ["a case header behind an assignment", "X=1 case x"],
+];
+
+describe("reserved words the parser cannot read", () => {
+  test.each(UNREADABLE_LEADING)(
+    "rejects %s at the start of a command",
+    (_kind, line) => {
+      expect(parses(line)).toBe(false);
+    },
+  );
+
+  test.each(UNREADABLE_LEADING)(
+    "rejects %s behind a transparent word",
+    (_kind, line) => {
+      expect(parses(`then ${line}`)).toBe(false);
+    },
+  );
+
+  test.each([
+    ["env", "env nocorrect git push"],
+    ["nice", "nice -n 5 nocorrect git push"],
+    ["time", "time nocorrect git push"],
+    ["command", "command nocorrect git push"],
+    ["an assignment", "X=1 nocorrect git push"],
+    ["mise exec", "mise exec -- nocorrect git push"],
+    ["a lone dash after env", "env - git push"],
+  ])("rejects a reserved word behind %s", (_wrapper, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test("rejects a case clause with a pattern behind a transparent word in a double-quoted substitution", () => {
+    expect(parses('echo "$(then case x in a) :;; esac)"')).toBe(false);
+  });
+
+  test("rejects a case clause with a pattern behind a transparent word in a parameter expansion", () => {
+    expect(parses(`echo ${OPEN}x:-$(then case x in a) :;; esac)}`)).toBe(false);
+  });
+
+  test("rejects a case clause with a pattern behind a transparent word in a here-document body", () => {
+    expect(parses("cat <<EOF\n$(then case x in a) :;; esac)\nEOF\n")).toBe(
+      false,
     );
   });
 
-  test("reads a multi-line case with a default clause", () => {
-    expect(
-      commandTexts("case $x in\n  a) echo a ;;\n  *) echo b ;;\nesac\n"),
-    ).toEqual([
-      ["echo", "a"],
-      ["echo", "b"],
-    ]);
+  test.each(CASE_WORD_FORMS)("rejects the case word of %s", (_kind, line) => {
+    expect(parses(line)).toBe(false);
   });
 
-  test("reads a clause without a closing double semicolon", () => {
-    expect(commandTexts("case $x in a) echo a; esac; echo done")).toEqual([
-      ["echo", "a"],
-      ["echo", "done"],
-    ]);
+  test.each(CASE_WORD_FORMS)(
+    "rejects the case word of %s behind a transparent word",
+    (_kind, line) => {
+      expect(parses(`then ${line}`)).toBe(false);
+    },
+  );
+
+  test.each(CASE_WORD_FORMS)(
+    "rejects the case word of %s in a double-quoted substitution",
+    (_kind, line) => {
+      expect(parses(`echo "$(${line})"`)).toBe(false);
+    },
+  );
+
+  test.each(CASE_WORD_FORMS)(
+    "rejects the case word of %s in a parameter expansion",
+    (_kind, line) => {
+      expect(parses(`echo ${OPEN}x:-$(${line})}`)).toBe(false);
+    },
+  );
+
+  test.each(CASE_WORD_FORMS)(
+    "rejects the case word of %s in a here-document body",
+    (_kind, line) => {
+      expect(parses(`cat <<EOF\n$(${line})\nEOF\n`)).toBe(false);
+    },
+  );
+
+  test.each([
+    ["a single-quoted spelling", "'case' x"],
+    ["a backslash spelling", "ca\\se x"],
+  ])("rejects the case word written with %s", (_spelling, line) => {
+    expect(parses(line)).toBe(false);
   });
 
-  test("reads a pattern with a leading parenthesis and quotes", () => {
-    expect(commandTexts("case $x in (a|'b)') echo hit;; esac")).toEqual([
-      ["echo", "hit"],
-    ]);
+  test("rejects a coprocess followed by a parenthesis", () => {
+    const result = parseCommandLine("coproc (git push)");
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error).toContain("may start a glob group");
   });
 
   test("keeps case as a plain word after a command name", () => {
     expect(commandTexts("echo case")).toEqual([["echo", "case"]]);
   });
 
-  test("reads a command inside a nested case clause", () => {
-    expect(
-      commandTexts("case $x in a) case $y in b) git push -f;; esac;; esac"),
-    ).toContainEqual(["git", "push", "-f"]);
+  test("rejects a zsh foreach loop through its parenthesis", () => {
+    expect(parses("foreach x (a b) echo $x end")).toBe(false);
+  });
+
+  test("marks a reserved word at the start as unreadable", () => {
+    expect(stripWrappers(words("nocorrect", "git", "push")).unreadable).toBe(
+      true,
+    );
+  });
+
+  test("keeps the words of an unreadable command as they were", () => {
+    const stripped = stripWrappers(words("nocorrect", "git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual([
+      "nocorrect",
+      "git",
+      "push",
+    ]);
+  });
+
+  test("does not mark a plain command as unreadable", () => {
+    expect(stripWrappers(words("git", "push")).unreadable).toBe(false);
   });
 });
 
-/** シェルのパラメーター展開の開き。文字列に直接書くとリンターが誤検知するため組み立てる。 */
-const OPEN = "$".concat("{");
+describe("for and select headers", () => {
+  test.each([
+    ["a for loop with in", "for x in a b; do echo $x; done"],
+    ["a select loop with in", "select x in a b; do echo $x; done"],
+    ["a for header of two words", "for x\ndo echo $x; done"],
+    ["an arithmetic for header", "for ((i=0; i<3; i++)); do echo $i; done"],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+
+  test.each([
+    ["a for loop", "for NAME do git push; done"],
+    ["a select loop", "select NAME do git push; done"],
+    ["a for loop behind a transparent word", "then for NAME do git push; done"],
+  ])("rejects %s whose do joins the header command", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+});
+
+describe("conditional expressions", () => {
+  test.each([
+    ["a conditional alone", "[[ -n x ]]"],
+    ["a conditional joined to a command", "[[ a && b ]] && cat a"],
+    ["a conditional and a separate command", "[[ -n x ]]; git status"],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+
+  test.each([
+    ["a body after the closing", "[[ -n x ]] git push"],
+    ["a body after the closing behind &&", "[[ a && b ]] git push"],
+    ["a closing at the start", "]] git push"],
+  ])("rejects %s in one simple command", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+});
+
+describe("closing braces", () => {
+  test.each([
+    ["a group", "{ echo a; }"],
+    ["a function definition", "f() { echo a; }"],
+    ["a brace expansion", "echo {a,b}"],
+    ["a word that ends with a brace", "echo a}"],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+
+  test.each([
+    ["a bare closing brace", "echo a } git push"],
+    ["a quoted closing brace", "echo a '}' git push"],
+  ])("rejects %s left in the words", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+});
 
 describe("parameter expansions", () => {
   test("accepts a closing parenthesis inside a parameter expansion", () => {

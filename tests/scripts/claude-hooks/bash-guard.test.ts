@@ -1322,8 +1322,6 @@ describe("bash-guard handles previous-branch and root rebases", () => {
 
 describe("bash-guard parses common shell syntax", () => {
   test.each([
-    'case "$x" in a) echo a;; esac',
-    "case $x in\n  a) echo a ;;\n  *) echo b ;;\nesac\n",
     `echo ${OPEN}x//)/y}`,
     `echo ${OPEN}x%%)*}`,
     `echo ${OPEN}arr[@]}`,
@@ -1334,6 +1332,14 @@ describe("bash-guard parses common shell syntax", () => {
     "f() { git status; }; f",
   ])("%s", async (command) => {
     expect(await decide(command)).toBe("allow");
+  });
+
+  // `case`は文法を確かめず、読めない構文として全て拒否する。
+  test.each([
+    'case "$x" in a) echo a;; esac',
+    "case $x in\n  a) echo a ;;\n  *) echo b ;;\nesac\n",
+  ])("denies a case statement: %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
   });
 });
 
@@ -1670,11 +1676,10 @@ describe("bash-guard denies the main session when a closed form gets anything el
 });
 
 // 「単純コマンド1つ」は、解析の結果のコマンドが1つであることで数える。
-// 丸括弧のサブシェル、`case`の本体1つ、本文の無いヒアドキュメント、注釈、末尾の`;`は、解析の結果が1つなので、実行されるのは免除の形そのものである。
+// 丸括弧のサブシェル、本文の無いヒアドキュメント、注釈、末尾の`;`は、解析の結果が1つなので、実行されるのは免除の形そのものである。
 describe("bash-guard counts one command by the parse result for the main session", () => {
   test.each([
     "(mise run hold:place)",
-    "case x in x) mise run hold:place;; esac",
     "mise run hold:place <<EOF",
     "mise run hold:place # note",
     "mise run hold:place;",
@@ -1686,6 +1691,7 @@ describe("bash-guard counts one command by the parse result for the main session
     "{ mise run hold:place; }",
     "! mise run hold:place",
     "if true; then mise run hold:place; fi",
+    "case x in x) mise run hold:place;; esac",
   ])("denies %s", async (command) => {
     expect(await decide(command)).toBe("deny");
   });
@@ -2830,7 +2836,7 @@ function nestedInBash(command: string, levels: number): string {
   return wrapped;
 }
 
-// 全停止の判定は、前置きの後ろの語と、4段までのコマンド文字列の入れ子を読む。段を超えた文字列は、CLIの名前の字面だけで判定する。
+// 全停止の判定は、前置きの後ろの語と、4段までのコマンド文字列の入れ子を読む。段を超えた文字列は、CLIの名前の字面と、`mise`と全停止のタスク名が並ぶ字面で判定する。
 describe("bash-guard keeps reading prefixes and nested strings for the stop-all", () => {
   test("denies a stop-all task inside a string nested four times", async () => {
     expect(await decide(nestedInScript("mise run stop", 4))).toBe("deny");
@@ -2842,8 +2848,26 @@ describe("bash-guard keeps reading prefixes and nested strings for the stop-all"
     ).toBe("deny");
   });
 
-  test("does not read a task name inside a string nested five times", async () => {
-    expect(await decide(nestedInScript("mise run stop", 5))).toBe("allow");
+  test("denies a stop-all task name inside a string nested five times", async () => {
+    expect(await decide(nestedInScript("mise run stop", 5))).toBe("deny");
+  });
+
+  test("denies a stop-all task name inside a string nested five times for a subagent", async () => {
+    expect(
+      await decide(nestedInScript("mise run stop:release", 5), {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test("allows a reading command that names no stop-all word inside a string nested five times", async () => {
+    expect(await decide(nestedInScript("mise run check", 5))).toBe("allow");
+  });
+
+  test("allows a reading command that names a stop word without mise inside a string nested five times", async () => {
+    expect(
+      await decide(nestedInScript("psql -c 'select stop from t'", 5)),
+    ).toBe("allow");
   });
 
   test("denies a stop-all task in a string that comes before the launcher word", async () => {
@@ -4288,6 +4312,107 @@ describeForCallers(
     test("names quotes, backslashes, and pattern characters in the reason", async () => {
       const reason = await denyReason(`FOO="a'b" cat x`, { subagent });
       expect(reason).toContain("backslash");
+    });
+  },
+);
+
+/** 前置きの後ろの操作。種類の名前と、後ろに置く単純コマンドの組である。 */
+const OPERATIONS_BEHIND_A_LEADING_FORM: readonly (readonly [string, string])[] =
+  [
+    [
+      "a hold write",
+      "mise run hold:place -- --scope merge --target a/b --minutes 5 --reason x",
+    ],
+    ["a freeze write", "mise run freeze:release -- d0a1b2c3"],
+    ["the stop-all", "mise run stop"],
+    ["an environment dump through mise", "mise exec -- printenv"],
+    ["a push to the protected branch", "git push origin main"],
+    ["a hook skip", "git commit --no-verify -m x"],
+  ];
+
+/** 読めない構文として拒否する形。種類の名前と、操作を埋め込む関数の組である。 */
+const UNREADABLE_FORMS: readonly (readonly [string, (op: string) => string])[] =
+  [
+    ["a precommand modifier", (op) => `nocorrect ${op}`],
+    ["a lone dash modifier", (op) => `- ${op}`],
+    ["a try-block continuation", (op) => `always ${op}`],
+    ["a coprocess without a name", (op) => `coproc ${op}`],
+    ["a coprocess with a name", (op) => `coproc NAME ${op}`],
+    ["a repeat loop", (op) => `repeat 1 ${op}`],
+    ["a function definition keyword", (op) => `function ${op}`],
+    ["a case statement", (op) => `case x in a) ${op};; esac`],
+    ["a case terminator", (op) => `esac ${op}`],
+    ["a for loop without in", (op) => `for NAME do ${op}; done`],
+    ["a select loop without in", (op) => `select NAME do ${op}; done`],
+    ["a conditional with a trailing body", (op) => `[[ -n x ]] ${op}`],
+    ["a stray closing brace", (op) => `echo a } ${op}`],
+  ];
+
+// 読めない構文は解析の失敗として拒否する。前置きの語を外せない形の後ろに操作を置いても、全主体で止まる。
+describeForCallers(
+  "bash-guard denies an operation behind a syntax it cannot read",
+  (subagent) => {
+    test.each(
+      UNREADABLE_FORMS.flatMap(([form, embed]) =>
+        OPERATIONS_BEHIND_A_LEADING_FORM.map(
+          ([operation, command]): [string, string, string] => [
+            form,
+            operation,
+            embed(command),
+          ],
+        ),
+      ),
+    )("denies %s before %s", async (_form, _operation, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 読み取りは拒否しない。SQL、awk、JSONの引数は、空白を含む語として入れ子の文字列の読み直しに入る。
+describeForCallers(
+  "bash-guard allows reads that look like reserved words",
+  (subagent) => {
+    test.each([
+      "psql -c 'select 1 from work_items'",
+      "caffeinate psql -c 'select 1 from work_items'",
+      "awk '{ print $1 }' notes.txt",
+      "caffeinate awk '{ print $1 }' notes.txt",
+      `curl -d '{"a":1}' http://localhost:8000/api/version`,
+      `caffeinate curl -d '{"a":1}' http://localhost:8000/api/version`,
+      "echo '- item'",
+      "caffeinate echo '- item'",
+      "caffeinate echo 'case of beer'",
+      "[[ a && b ]] && cat a",
+      "[[ -n x ]]",
+      "echo {a,b}",
+      "for x in a b; do echo $x; done",
+      "select x in a b; do echo $x; done",
+      "f() { echo a; }",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 読めない文字列の中の全停止のタスクは、字面で見て拒否する。保留と凍結の書き込みも、字面の判定が止める。
+describeForCallers(
+  "bash-guard reads a string it cannot parse by its wording",
+  (subagent) => {
+    test.each([
+      `script -qc "nocorrect mise run stop" /dev/null`,
+      `script -qc "nocorrect mise run stop:release" /dev/null`,
+      `script -qc "nocorrect mise run stop:restore" /dev/null`,
+      `ssh host "function mise run stop"`,
+      `script -qc "nocorrect mise run hold:place" /dev/null`,
+      `script -qc "nocorrect mise run freeze:release -- d0a1b2c3" /dev/null`,
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test("allows an unreadable string that names no mise", async () => {
+      expect(
+        await decide(`caffeinate psql -c 'select stop from t'`, { subagent }),
+      ).toBe("allow");
     });
   },
 );
