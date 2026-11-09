@@ -2836,7 +2836,7 @@ function nestedInBash(command: string, levels: number): string {
   return wrapped;
 }
 
-// 全停止の判定は、前置きの後ろの語と、4段までのコマンド文字列の入れ子を読む。段を超えた文字列は、CLIの名前の字面だけで判定する。
+// 全停止の判定は、前置きの後ろの語と、4段までのコマンド文字列の入れ子を読む。段を超えた文字列は、CLIの名前の字面と、`mise`と全停止のタスク名が並ぶ字面で判定する。
 describe("bash-guard keeps reading prefixes and nested strings for the stop-all", () => {
   test("denies a stop-all task inside a string nested four times", async () => {
     expect(await decide(nestedInScript("mise run stop", 4))).toBe("deny");

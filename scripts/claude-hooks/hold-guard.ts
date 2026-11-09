@@ -2267,7 +2267,7 @@ const STOP_ALL_TASK_WORDING = new RegExp(
 const MISE_WORDING = /(?:^|[^\w-])mise(?![\w-])/;
 
 /**
- * 読めない文字列の字面が、全停止を指すなら真。
+ * 読めない文字列と、入れ子が深さの上限を超えた文字列の字面が、全停止を指すなら真。
  * 全停止のCLIを指す語か、`mise`と全停止のタスク名が並ぶ字面である。
  * 読めない文字列を一律に拒否すると、SQLやJSONの引数のような読み取りまで止まるので、字面で絞る。
  */
@@ -2286,8 +2286,7 @@ function textStopAllCall(
 ): boolean {
   const parsed =
     depth >= COMMAND_TEXT_MAX_DEPTH ? null : parseCommandLine(word.text);
-  if (parsed === null) return pointsAtStopAllCode(word);
-  if (!parsed.ok) return unreadableTextStopAll(word);
+  if (parsed === null || !parsed.ok) return unreadableTextStopAll(word);
   return parsed.commands.some((command) => {
     const inner = stripWrappers(command.words).words;
     return inner.length > 0 && stopAllCallAt(inner, inputs, depth + 1);
