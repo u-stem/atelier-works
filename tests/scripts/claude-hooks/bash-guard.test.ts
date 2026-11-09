@@ -35,6 +35,10 @@ const EXEMPT_FORMS: ReadonlySet<string> = new Set([
   "mise run freeze:place -- --scope=deploy --minutes 60 --reason x",
   "mise run freeze:place -- --scope DEPLOY --minutes 60 --reason x",
   "mise run freeze:release -- d0a1b2c3",
+  // 引用符の綴りを外すと、免除の形と同じ語になる。実行されるのは免除の形そのものである。
+  "mise run $'\\x68old:place'",
+  "mise run $'hold\\x3aplace'",
+  'mise run $"hold:place"',
 ]);
 
 /** 拒否の表の行のうち、呼び出し元で拒否になるものだけを返す。 */
@@ -446,12 +450,18 @@ describe("bash-guard allows refspecs that stay off protected branches", () => {
 
 describe("bash-guard allows xargs without a push or commit", () => {
   test.each([
-    "git diff --name-only | xargs bunx biome check",
     "git ls-files | xargs wc -l",
-    "echo a | xargs git add",
     "git diff --name-only origin/main...HEAD | xargs -n1 echo",
   ])("%s", async (command) => {
     expect(await decide(command)).toBe("allow");
+  });
+
+  // 語を足す文脈の後ろの、読み取りの閉じた集合の外のプログラムは、主セッションでも拒否する。
+  test.each([
+    "git diff --name-only | xargs bunx biome check",
+    "echo a | xargs git add",
+  ])("%s is denied for the main session", async (command) => {
+    expect(await decide(command)).toBe("deny");
   });
 });
 
@@ -1610,6 +1620,7 @@ describe("bash-guard denies the main session when a closed form gets anything el
     "mise run hold:place -- --reason 'a\\b'",
     "mise run hold:place -- --reason '#x'",
     "mise run hold:place -- --reason ':::'",
+    "mise run hold:place 2>&1",
     // 免除の外のタスク
     "mise run freeze:reset",
     "mise run push:prune",
@@ -1954,39 +1965,41 @@ describe("bash-guard reads the script of bun exec as shell input", () => {
 describeForCallers(
   "bash-guard denies a caller that hides a hold operation behind a pattern",
   (subagent) => {
-    test.each([
-      "mise run h[o]ld:place",
-      "mise run 'hold:[pr]*'",
-      "mise run hold:[pr]*",
-      "mise run hold:rel[a-z]ase 1",
-      "mise run hold:[!l]*",
-      "mise run hold:pla?e",
-      "mise run hold:*",
-      "mise hold:place",
-      "mise hold:release 3",
-      "mise hold*",
-      "mise -q hold:place",
-      "bun scripts/hol?.ts place",
-      "bun scripts/hol[d].ts place",
-      "bun scripts/ho*.ts place",
-      "bun run scripts/*.ts",
-      "bun run f/factory/lib/hold?.ts",
-      "bun scripts/hol[!x].ts place",
-      "bun run ./scripts/hol?",
-      "bun $'scripts/hol\\x64.ts' place",
-      "bun $'scripts/hol\\144.ts' place",
-      "bun $'scripts/hol\\u0064.ts' place",
-      "bun $'scripts/hol\\U00000064.ts' place",
-      "mise run $'\\x68old:place'",
-      "mise run $'hold\\x3aplace'",
-      "mise run $'hold\\072release' 1",
-      "npm exec tsx scripts/hold.ts place",
-      "pnpm exec tsx scripts/hold.ts place",
-      "pnpx tsx scripts/hold.ts place",
-      "yarn tsx scripts/hold.ts place",
-      "yarn dlx tsx scripts/hold.ts release 1",
-      "npm run hold -- place",
-    ])("%s", async (command) => {
+    test.each(
+      deniedFor(subagent, [
+        "mise run h[o]ld:place",
+        "mise run 'hold:[pr]*'",
+        "mise run hold:[pr]*",
+        "mise run hold:rel[a-z]ase 1",
+        "mise run hold:[!l]*",
+        "mise run hold:pla?e",
+        "mise run hold:*",
+        "mise hold:place",
+        "mise hold:release 3",
+        "mise hold*",
+        "mise -q hold:place",
+        "bun scripts/hol?.ts place",
+        "bun scripts/hol[d].ts place",
+        "bun scripts/ho*.ts place",
+        "bun run scripts/*.ts",
+        "bun run f/factory/lib/hold?.ts",
+        "bun scripts/hol[!x].ts place",
+        "bun run ./scripts/hol?",
+        "bun $'scripts/hol\\x64.ts' place",
+        "bun $'scripts/hol\\144.ts' place",
+        "bun $'scripts/hol\\u0064.ts' place",
+        "bun $'scripts/hol\\U00000064.ts' place",
+        "mise run $'\\x68old:place'",
+        "mise run $'hold\\x3aplace'",
+        "mise run $'hold\\072release' 1",
+        "npm exec tsx scripts/hold.ts place",
+        "pnpm exec tsx scripts/hold.ts place",
+        "pnpx tsx scripts/hold.ts place",
+        "yarn tsx scripts/hold.ts place",
+        "yarn dlx tsx scripts/hold.ts release 1",
+        "npm run hold -- place",
+      ]),
+    )("%s", async (command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
   },
@@ -2090,11 +2103,15 @@ describeForCallers(
       );
     });
 
-    test("the reason for a held task names the hold tasks", async () => {
-      expect(await denyReason("mise run hold:place", { subagent })).toContain(
-        "hold:place",
-      );
-    });
+    // 主セッションでは、この形は免除の形で、拒否の理由が無い。
+    test.skipIf(!subagent)(
+      "the reason for a held task names the hold tasks",
+      async () => {
+        expect(await denyReason("mise run hold:place", { subagent })).toContain(
+          "hold:place",
+        );
+      },
+    );
   },
 );
 
@@ -2127,36 +2144,38 @@ describe("bash-guard denies mise generate that writes anywhere in the hook or wo
 describeForCallers(
   "bash-guard denies a caller that builds the hold code with a pattern",
   (subagent) => {
-    test.each([
-      "mise run hold:[[:lower:]]*",
-      "mise run hold:[[=p=]]lace",
-      "mise run 'hold:[[.p.]]lace'",
-      "bun scripts/hol[[:lower:]].ts place",
-      "bun scripts/[[.h.]]old.ts place",
-      "bun scripts//hol?.ts place",
-      "bun scripts/./hol?.ts place",
-      "bun scripts/x/../hol?.ts place",
-      "bun /abs/dir/hol?.ts place",
-      "bun ../hol?.ts place",
-      "bun run ./hol[d].ts",
-      "bun $'scripts/hold.ts\\0junk' place",
-      "bun $'scripts/hol\\x00d.ts' place",
-      "bun $'scripts/hol\\000d.ts' place",
-      "mise run $'hold:pla\\u0000ce'",
-      "mise run $'hold:place\\x00x'",
-      'mise run $"hold:place"',
-      'bun scripts/$"hold".ts place',
-      "bun --cwd scripts {hold.ts,place}",
-      "bun scripts/{hold,x}.ts place",
-      "bun run {scripts/hold.ts,x}",
-      "bun {a,scripts/hold}.ts place",
-      "bun h{old,x}.ts place",
-      "bun scripts/ho{ld,x}.ts place",
-      "=bun scripts/hold.ts place",
-      "=mise run hold:place",
-      "=env bun scripts/hold.ts place",
-      "=node scripts/hold.ts release 1",
-    ])("%s", async (command) => {
+    test.each(
+      deniedFor(subagent, [
+        "mise run hold:[[:lower:]]*",
+        "mise run hold:[[=p=]]lace",
+        "mise run 'hold:[[.p.]]lace'",
+        "bun scripts/hol[[:lower:]].ts place",
+        "bun scripts/[[.h.]]old.ts place",
+        "bun scripts//hol?.ts place",
+        "bun scripts/./hol?.ts place",
+        "bun scripts/x/../hol?.ts place",
+        "bun /abs/dir/hol?.ts place",
+        "bun ../hol?.ts place",
+        "bun run ./hol[d].ts",
+        "bun $'scripts/hold.ts\\0junk' place",
+        "bun $'scripts/hol\\x00d.ts' place",
+        "bun $'scripts/hol\\000d.ts' place",
+        "mise run $'hold:pla\\u0000ce'",
+        "mise run $'hold:place\\x00x'",
+        'mise run $"hold:place"',
+        'bun scripts/$"hold".ts place',
+        "bun --cwd scripts {hold.ts,place}",
+        "bun scripts/{hold,x}.ts place",
+        "bun run {scripts/hold.ts,x}",
+        "bun {a,scripts/hold}.ts place",
+        "bun h{old,x}.ts place",
+        "bun scripts/ho{ld,x}.ts place",
+        "=bun scripts/hold.ts place",
+        "=mise run hold:place",
+        "=env bun scripts/hold.ts place",
+        "=node scripts/hold.ts release 1",
+      ]),
+    )("%s", async (command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
   },
@@ -2204,9 +2223,12 @@ describe("bash-guard keeps the secret check working behind unknown mise options"
   test.each([
     "mise --log-level debug x -- echo hi",
     "mise --future-flag=1 x -- echo hi",
-    "mise --future-flag run check",
   ])("%s is allowed for the main session", async (command) => {
     expect(await decide(command)).toBe("allow");
+  });
+
+  test("mise --future-flag run check is denied for the main session", async () => {
+    expect(await decide("mise --future-flag run check")).toBe("deny");
   });
 });
 
@@ -4135,12 +4157,15 @@ describeForCallers(
       );
     });
 
-    test("asks the main session or a person once in the assignment reason", async () => {
-      const reason = await reasonOf("TARGET=scripts/hold.ts true");
-      expect(reason.split("ask the main session or a person").length - 1).toBe(
-        1,
-      );
-    });
+    test.skipIf(!subagent)(
+      "asks the main session or a person once in the assignment reason",
+      async () => {
+        const reason = await reasonOf("TARGET=scripts/hold.ts true");
+        expect(
+          reason.split("ask the main session or a person").length - 1,
+        ).toBe(1);
+      },
+    );
   },
 );
 
@@ -4189,7 +4214,9 @@ describeForCallers(
       const reason = await denyReason(`FOO="a'b" ./scripts/hold.ts release 1`, {
         subagent,
       });
-      expect(reason).not.toContain("variable assignment");
+      expect(reason).not.toContain(
+        "A variable assignment in front of the command",
+      );
     });
 
     test("keeps the assignment reason for an assignment alone", async () => {
