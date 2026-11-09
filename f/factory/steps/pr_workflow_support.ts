@@ -1336,8 +1336,9 @@ export function reviewThreadsForPrompt(
 function stripRoleTagLine(body: string): string {
   const newlineIndex = body.indexOf("\n");
   if (newlineIndex === -1) return body;
-  const firstLine = body.slice(0, newlineIndex);
-  if (!Object.values<string>(ROLE_TAGS).includes(firstLine)) return body;
+  if (!Object.values<string>(ROLE_TAGS).includes(firstLineOf(body))) {
+    return body;
+  }
   return body.slice(newlineIndex + 1);
 }
 
