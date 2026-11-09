@@ -2848,8 +2848,26 @@ describe("bash-guard keeps reading prefixes and nested strings for the stop-all"
     ).toBe("deny");
   });
 
-  test("does not read a task name inside a string nested five times", async () => {
-    expect(await decide(nestedInScript("mise run stop", 5))).toBe("allow");
+  test("denies a stop-all task name inside a string nested five times", async () => {
+    expect(await decide(nestedInScript("mise run stop", 5))).toBe("deny");
+  });
+
+  test("denies a stop-all task name inside a string nested five times for a subagent", async () => {
+    expect(
+      await decide(nestedInScript("mise run stop:release", 5), {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test("allows a reading command that names no stop-all word inside a string nested five times", async () => {
+    expect(await decide(nestedInScript("mise run check", 5))).toBe("allow");
+  });
+
+  test("allows a reading command that names a stop word without mise inside a string nested five times", async () => {
+    expect(
+      await decide(nestedInScript("psql -c 'select stop from t'", 5)),
+    ).toBe("allow");
   });
 
   test("denies a stop-all task in a string that comes before the launcher word", async () => {
