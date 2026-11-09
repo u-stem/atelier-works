@@ -347,7 +347,7 @@ const HOLD_BAN =
 
 /** 主セッションが保留と凍結を書く形。`isMainSessionHoldForm`が許す形と合わせる。 */
 const MAIN_HOLD_FORM =
-  "In the main session, run it as a single line: mise run hold:place -- <args>, mise run hold:release -- <id>, mise run freeze:place -- <args>, or mise run freeze:release -- <id>. Write the task name and the arguments as literal text of letters, digits, and - _ . : / = , + @ (a word may hold spaces), with no prefix, variable assignment, mise option, pipe, redirect, or second command. mise run freeze:reset and mise run push:prune are for a person in a terminal.";
+  "In the main session, run it as a single line: mise run hold:place -- <args>, mise run hold:release -- <id>, mise run freeze:place -- <args>, or mise run freeze:release -- <id>. Write the task name and the arguments as literal text of letters, digits, Japanese letters, and - _ . : / = , + @ (a word may hold spaces; Japanese punctuation such as 、 。 ・ 「」 （） and # are not allowed), with no prefix, variable assignment, mise option, pipe, redirect, or second command. mise run freeze:reset and mise run push:prune are for a person in a terminal.";
 
 const HOLD_PREFIX_NOTE =
   "Behind a prefix such as script or caffeinate, a command that only carries those words as arguments (for example in a commit message) is denied too; write it without the prefix. A prefix with xargs, parallel, find -exec, a shell, or a standard input it cannot read is denied because the words it runs cannot be read. Listing with mise run hold:list or mise run freeze:list is fine, and so is placing a schedule freeze (mise run freeze:place -- --target ...). A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.";
@@ -637,11 +637,15 @@ const MAIN_HOLD_TASKS: ReadonlySet<string> = new Set([
 /**
  * 主セッションの免除の形の引数に使える字。英数字、日本語の文字、`-_.:/=,+@`、語の中のスペースである。
  * これ以外の字を持つ語は、シェルが解釈しうる引用符やメタ文字を含みうるので免除しない。
+ * 日本語の句読点(`、`、`。`、`・`)、かぎ括弧、全角の括弧、`#`もこの外にある。字の種類を閉じておくためで、広げない。
+ * `\p{L}`は日本語の文字(ひらがな、カタカナ、漢字)に当たるが、句読点と括弧の記号は当たらない。
  */
 const MAIN_HOLD_ARGUMENT = /^[\p{L}\p{N}_.:/=,+@ -]*$/u;
 
 /**
  * 外す前の語が、ちょうど`mise run <タスク> [-- <引数…>]`なら真を返す。
+ * 「単純コマンド1つ」は、呼び出し側が解析の結果のコマンドが1つであることで数える。丸括弧のサブシェルや`case`の本体1つ、
+ * 注釈つきの行も解析の結果は1つで、実行されるのは免除の形そのものなので、免除に含まれる。
  * タスクは`MAIN_HOLD_TASKS`の4つで、引数はリテラルかつ`MAIN_HOLD_ARGUMENT`の字だけでできている。
  * 先頭の代入、前置き、miseのオプション、別名、パスで書いた`mise`は、語がこの形に合わないので免除しない。
  * `line`は入力全体である。後ろに回す実行の`&`と`2>&1`は字句の解析が語にも記録にも残さないので、`&`の有無を行から見る。
