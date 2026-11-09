@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import {
+  evaluateBashGuard,
+  type GuardDeps,
+} from "../../../scripts/claude-hooks/bash-guard.ts";
 import { decide, denyReason } from "./decide.ts";
 
 /** シェルのパラメーター展開の開き。文字列に直接書くとリンターが誤検知するため組み立てる。 */
@@ -2940,8 +2944,8 @@ describe("bash-guard allows a subagent to work on the hold code behind a prefix"
   });
 });
 
-// 前置きの無い形は、前置きの規則に入れない。先頭が前置きでないコマンドは、保留と凍結の判定の対象にならない。
-// 前置きの無い`find -exec`や`xargs`で書き込みを実行する形は、別の変更で止めるので、ここでは書き込みの語を含まない形だけを固定する。
+// 前置きの無い形は、語を足す文脈と代入の値を除いて、前置きの規則に入れない。
+// 先頭が前置きでないコマンドは、保留と凍結の判定の対象にならない。シェルとインタプリタの文字列は、別の変更で止める。
 describe("bash-guard leaves forms without a prefix as they were", () => {
   test.each([
     "vim scripts/hold.ts",
@@ -2952,11 +2956,9 @@ describe("bash-guard leaves forms without a prefix as they were", () => {
     "find scripts -name hold.ts -exec head -n 3 {} \\;",
     "bash ./x.sh",
     "bash -c 'cat scripts/hold.ts'",
-    "echo scripts | xargs bunx biome check scripts/freeze.ts",
     "echo 'release 1' | xargs cat scripts/hold.ts",
     "python3 - <<'EOF'\nprint(\"hold on\")\nEOF",
     "echo scripts/hold.ts | pbcopy",
-    "TARGET=scripts/hold.ts bunx biome check src",
     "GIT_PAGER=cat git log",
   ])("%s", async (command) => {
     expect(await decide(command, { subagent: true })).toBe("allow");
@@ -3211,12 +3213,18 @@ function widePipeline(stages: number, wordsPerStage: number): string {
 const WIDE_PIPELINE_LIMIT_MS = 8000;
 const WIDE_PIPELINE_TIMEOUT_MS = 20000;
 
+// 時間のテストは、判定の締め切りが決定を変えないよう、経過しない時計で測る。締め切りの働きは別のテストで固定している。
+const NEVER_EXPIRES = () => 0;
+
 describe("bash-guard bounds the work for a wide prefixed pipeline", () => {
   test(
     "allows 256 stages of about a hundred words each in time",
     async () => {
       const started = Date.now();
-      const decision = await decide(widePipeline(256, 100), { subagent: true });
+      const decision = await decide(widePipeline(256, 100), {
+        subagent: true,
+        now: NEVER_EXPIRES,
+      });
       expect(decision).toBe("allow");
       expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
     },
@@ -3227,7 +3235,10 @@ describe("bash-guard bounds the work for a wide prefixed pipeline", () => {
     "denies 256 stages of about two hundred words each in time",
     async () => {
       const started = Date.now();
-      const decision = await decide(widePipeline(256, 200), { subagent: true });
+      const decision = await decide(widePipeline(256, 200), {
+        subagent: true,
+        now: NEVER_EXPIRES,
+      });
       expect(decision).toBe("deny");
       expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
     },
@@ -3238,7 +3249,10 @@ describe("bash-guard bounds the work for a wide prefixed pipeline", () => {
     "denies 256 stages of eight hundred words each in time",
     async () => {
       const started = Date.now();
-      const decision = await decide(widePipeline(256, 800), { subagent: true });
+      const decision = await decide(widePipeline(256, 800), {
+        subagent: true,
+        now: NEVER_EXPIRES,
+      });
       expect(decision).toBe("deny");
       expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
     },
@@ -3283,4 +3297,533 @@ describe("bash-guard allows a duplicated output and a closed input behind a pref
       expect(await decide(command, { subagent: true })).toBe("allow");
     },
   );
+});
+
+// 語を足す文脈(`xargs`、`find -exec`、先頭の`parallel`、`watch`、`strace`)は、実行される側が読み取りの閉じた集合に入らなければ、
+// 指す語の有無によらず拒否する。足される語は字面から読めないためである。
+describe("bash-guard denies a subagent that adds words with xargs to a program outside the read-only set", () => {
+  test.each([
+    "echo hold:release 1 | xargs mise run",
+    "ls scripts | xargs -I{} bun {} release 1",
+    "printf 'rel%s 1\\n' ease | xargs ./scripts/hold.ts",
+    "echo release | xargs -I@ ./scripts/freeze.ts @ 1",
+    "echo a | xargs vim",
+    "echo a | xargs python3 x.py",
+    "echo a | xargs chmod +x",
+    "echo a | xargs sh -c 'true'",
+    "echo a | xargs ./cat",
+    "echo a | xargs -0 -n1 -P4 awk 1",
+    "env X=1 xargs ln -s",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// `git`、`rg`、`sort`と検査の道具は、オプションを標準入力から受けられる(`--pre`、`-o`、`--exec`)ので、`xargs`の後ろでは通さない。
+describe("bash-guard denies a subagent that passes xargs a tool that can run what it reads", () => {
+  test.each([
+    "echo a | xargs git add",
+    "git ls-files | xargs git log",
+    "echo a | xargs rg x",
+    "echo a | xargs sort",
+    "echo a | xargs sed -n 1p",
+    "echo a | xargs tee out",
+    "echo a | xargs tsc",
+    "echo a | xargs bunx biome check",
+    "echo a | xargs bun test",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 実行される側を決めるには、`xargs`のオプションを読み飛ばす。知らないオプションがあると位置が決まらないので拒否する。
+describe("bash-guard denies a subagent whose xargs option it does not know", () => {
+  test.each([
+    "echo a | xargs --future-flag grep x",
+    "echo a | xargs -X grep x",
+    "echo a | xargs -0X grep x",
+    "echo a | xargs --no-such=1 cat",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard denies a subagent that runs a program outside the read-only set through find", () => {
+  test.each([
+    "find scripts -name hold.ts -exec bun run {} release 1 \\;",
+    "find scripts -name hold.ts -execdir bun ./{} release 1 \\;",
+    "find scripts -name hold.ts -ok bun {} \\;",
+    "find scripts -name hold.ts -okdir bun {} \\;",
+    "find scripts -name 'hol?.ts' -exec bun {} release 1 \\;",
+    "find . -exec vim {} +",
+    "find . -exec git add {} +",
+    "find . -exec rg x {} +",
+    "find . -exec sh -c 'true' _ {} \\;",
+    "find . -exec {} \\;",
+    "find . -execdir {} release 1 \\;",
+    "find . -exec ./cat {} \\;",
+    "find . -exec cat {} \\; -exec chmod +x {} \\;",
+    "find . -exec cat {} \\; -execdir vim {} +",
+    "env find . -exec vim {} +",
+    "echo a | xargs find . -exec cat {} +",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// `parallel`、`watch`、`strace`には例外を作らない。後ろの語を実行する仕組みが、集合の中の道具にも及ぶためである。
+describe("bash-guard denies a subagent that starts parallel, watch, or strace", () => {
+  test.each([
+    "parallel ./scripts/hold.ts release 1 ::: a",
+    "parallel echo ::: a b",
+    "parallel :::: /tmp/args",
+    "watch -n 1 cat x",
+    "watch 'mise run hold:release 1'",
+    "strace -f cat x",
+    "strace -o /tmp/out bun scripts/hold.ts release 1",
+    "env strace ls",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard allows a subagent to add words only to a read-only tool", () => {
+  test.each([
+    "git ls-files | xargs cat",
+    "find . -name '*.ts' | xargs grep -l x",
+    "ls | xargs -n1 head",
+    "echo a | xargs -0 -P4 wc -l",
+    "echo a | xargs -r stat",
+    "echo a | xargs file",
+    "echo a | xargs basename",
+    "ls | xargs",
+    "ls | xargs echo",
+    "echo hold:release | xargs echo",
+    "echo a | xargs -n 1 -- cat",
+    "echo a | xargs --max-args=2 ls",
+    "echo a | xargs /usr/bin/head",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+
+  test.each([
+    "find . -name '*.ts' -exec cat {} +",
+    "find . -exec grep -l release {} +",
+    "find . -exec egrep -l release {} \\;",
+    "find . -exec fgrep -l release {} \\;",
+    "find scripts -name hold.ts -exec cat {} \\;",
+    "find scripts -name hold.ts -exec head -n 3 {} \\;",
+    "find . -exec tail -n 3 {} \\;",
+    "find . -exec ls -l {} +",
+    "find . -execdir stat {} \\;",
+    "find . -ok wc -l {} \\;",
+    "find . -okdir file {} \\;",
+    "find . -exec realpath {} +",
+    "find . -exec cat {} \\; -exec head {} \\;",
+    "find . -name x -print",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+// `find`が探索で見つけたパスは起点を前に付けて渡すので`-`から始まらない。
+// 起点の綴りは`tsc`と`biome`のオプションに渡りうるが受け入れ、`find`の後ろに限って検査の道具を通す。
+describe("bash-guard allows a subagent to run an inspection tool through find", () => {
+  test.each([
+    "find . -exec tsc --noEmit {} +",
+    "find . -exec biome check {} +",
+    "find . -exec bunx biome check {} +",
+    "find . -exec bunx --bun biome check {} \\;",
+    "find . -execdir bunx biome check {} \\;",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+describe("bash-guard denies a subagent that runs code through find with a runner", () => {
+  test.each([
+    "find . -exec bun x-ray {} +",
+    "find . -exec bun -e 'true' test {} +",
+    "find . -exec node {} +",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// `test`を最初のオペランドとする実行系は、テストのファイルを読み込んで実行する。外部の挙動は確かめられないので、`find`の後ろでも通さない。
+describe("bash-guard denies a subagent that runs a test runner through find", () => {
+  test.each([
+    "find . -exec bun test {} +",
+    "find . -exec deno test {} +",
+    "find . -exec npm test {} +",
+    "find . -exec bun run test {} +",
+    "find . -execdir bun test --preload ./x.ts {} \\;",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 実行される側が決まらない`xargs`は拒否する。前置きや置換のオプションが、後ろの語を別のコマンドに変えるためである。
+describe("bash-guard denies a subagent whose xargs command cannot be told", () => {
+  test.each([
+    "ls | xargs env cat",
+    "ls | xargs nohup cat",
+    "ls | xargs time cat",
+    "ls | xargs command cat",
+    "ls | xargs timeout 5 cat",
+    "ls | xargs sudo cat",
+    "ls | xargs xargs cat",
+    "ls | xargs mise exec -- cat",
+    "ls | xargs FOO=1 cat",
+    "ls | xargs -I{} cat {}",
+    "ls | xargs -n1 -I{} head {}",
+    "ls | xargs -J % cat %",
+    "ls | xargs -i cat {}",
+    "ls | xargs --replace cat {}",
+    "ls | xargs --replace=@ cat @",
+    "ls | xargs -0I{} cat {}",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows a bare xargs, which runs echo", async () => {
+    expect(await decide("ls | xargs", { subagent: true })).toBe("allow");
+  });
+});
+
+// `--max-lines`の値は`=`付きで渡す(GNU)。次の語は値でなく、実行される側である。
+describe("bash-guard reads the next word after xargs --max-lines as the command", () => {
+  test("denies a program outside the read-only set after --max-lines", async () => {
+    expect(
+      await decide("echo a | xargs --max-lines flock cat", { subagent: true }),
+    ).toBe("deny");
+  });
+
+  test("allows a read-only tool after --max-lines with a value", async () => {
+    expect(
+      await decide("echo a | xargs --max-lines=2 cat", { subagent: true }),
+    ).toBe("allow");
+  });
+});
+
+// `find`の実行系の区間は、`;`か`+`で閉じる。閉じるまでの`-exec`は、その区間の引数である。
+describe("bash-guard reads the regions of find -exec by where they close", () => {
+  test("allows a -exec inside an open region, which is an argument", async () => {
+    expect(
+      await decide("find . -exec cat -exec rm {} \\;", { subagent: true }),
+    ).toBe("allow");
+  });
+
+  test("denies a -exec after the region closed", async () => {
+    expect(
+      await decide("find . -exec cat {} \\; -exec rm {} \\;", {
+        subagent: true,
+      }),
+    ).toBe("deny");
+  });
+
+  test(
+    "finishes thousands of unclosed -exec words in time",
+    async () => {
+      const started = Date.now();
+      // 線形の走査はCIの遅さでも閾値に収まり、2乗の走査は閾値を超える。
+      const decision = await decide(`find . ${"-exec cat ".repeat(15000)}`, {
+        subagent: true,
+        now: NEVER_EXPIRES,
+      });
+      expect(decision).toBe("allow");
+      expect(Date.now() - started).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+    },
+    WIDE_PIPELINE_TIMEOUT_MS * 2,
+  );
+});
+
+// 先頭の変数代入の値に、2度目のシェルで語を変える字が残っていれば、読めない値として拒否する。
+describe("bash-guard denies a subagent whose assignment value a second shell can reshape", () => {
+  test.each([
+    `FOO="a'b" cat x`,
+    `FOO='a"b' cat x`,
+    "FOO=a\\\\b cat x",
+    "FOO=sc*pts cat x",
+    "FOO=sc?ipts cat x",
+    "FOO=sc[a]ipts cat x",
+    "FOO={a,b} cat x",
+    `FOO='{"a":1}' cat x`,
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows a value with a space and no such character", async () => {
+    expect(await decide("FOO='a b' cat x", { subagent: true })).toBe("allow");
+  });
+});
+
+// `export`や`declare`の引数の代入も、先頭の代入と同じに値を調べる。
+describe("bash-guard checks the assignments that export and declare carry", () => {
+  test.each([
+    "export TARGET=scripts/hold.ts",
+    "declare X=hold:release",
+    "readonly PAGER=scripts/freeze.ts",
+    "local -x X=push:prune",
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("allows export of an unrelated value", async () => {
+    expect(await decide("export CI=1", { subagent: true })).toBe("allow");
+  });
+});
+
+// 直接の呼び出しと、語を足さない読み取りは、今までどおり通す。
+describe("bash-guard keeps allowing direct reads and the list command of the hold code", () => {
+  test.each([
+    "cat scripts/hold.ts",
+    "rg -n release scripts/hold.ts",
+    "git add scripts/hold.ts",
+    "git log -- scripts/freeze.ts",
+    "pip freeze",
+    "git commit -m 'freeze deps'",
+    "bun scripts/hold.ts list",
+    "mise run hold:list",
+    "mise run freeze:place -- --target a/b",
+    "bunx biome check scripts/hold.ts",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+// 先頭の変数代入の値が保留や凍結のコード、書き込みのタスク名を指していれば、実行する側によらず拒否する。
+// ページャーや`LESSOPEN`のような環境変数は、値をコマンドとして実行できるためである。
+describe("bash-guard denies a subagent whose variable assignment names the hold or freeze code", () => {
+  test.each([
+    "TARGET=scripts/hold.ts bunx biome check src",
+    "GIT_PAGER='bun scripts/hold.ts release 1' git log",
+    "GIT_PAGER=scripts/freeze.ts git log",
+    "LESSOPEN='| mise run freeze:reset' less x",
+    "X=hold:release git log",
+    "X=push:prune true",
+    "X={scripts/hold.ts,release} true",
+    "env TARGET=scripts/hold.ts true",
+    "A=1 B=./scripts/hold_psql.ts cat x",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test.each([
+    "GIT_PAGER=cat git log",
+    "CI=1 mise run check",
+    "LEFTHOOK_EXCLUDE=wmill-metadata git commit -m x",
+    "X=scripts/hold.test.ts bun test",
+  ])("allows %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+// 判定が変わるのはsubagentだけである。主セッションは今までどおり実行できる。
+describe("bash-guard leaves the main session free to add words and assign values", () => {
+  test.each([
+    "echo a | xargs vim",
+    "find . -exec vim {} +",
+    "parallel echo ::: a",
+    "watch -n 1 cat x",
+    "strace -f cat x",
+    "TARGET=scripts/hold.ts bunx biome check src",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+describe("bash-guard explains a denial of a command that adds words", () => {
+  test("names the contexts that add words and the tools it lets through", async () => {
+    const reason = await denyReason("echo a | xargs vim", { subagent: true });
+    expect(reason).toContain("adds words at run time");
+  });
+
+  test("tells how to run the read-only tool directly", async () => {
+    const reason = await denyReason("find . -exec vim {} +", {
+      subagent: true,
+    });
+    expect(reason).toContain("cat, head, tail");
+  });
+
+  test("names the xargs option it does not know", async () => {
+    const reason = await denyReason("echo a | xargs --future-flag grep x", {
+      subagent: true,
+    });
+    expect(reason).toContain("xargs option");
+  });
+
+  test("names the assignment as the cause", async () => {
+    const reason = await denyReason("TARGET=scripts/hold.ts true", {
+      subagent: true,
+    });
+    expect(reason).toContain("variable assignment");
+  });
+});
+
+// 判定の締め切り。`evaluateBashGuard`の開始から測り、超えたら判定できないものとして拒否する。
+// 時計は偽物で固定する。最初の読み取りが開始の時刻、以後の読み取りが経過後の時刻である。
+describe("bash-guard stops checking a subagent command after its deadline", () => {
+  const deps: GuardDeps = {
+    currentBranch: () => "feature",
+    repoRoot: () => "/repo",
+    localBranchExists: () => false,
+    now: () => 0,
+  };
+
+  /** 開始の時刻を0、以後の時刻を`elapsedMs`にする時計で判定する。 */
+  function evaluateAfter(
+    command: string,
+    elapsedMs: number,
+    agentId: string | null,
+  ) {
+    let reads = 0;
+    return evaluateBashGuard(
+      { command, cwd: "/repo", agentId },
+      { ...deps, now: () => (reads++ === 0 ? 0 : elapsedMs) },
+    );
+  }
+
+  test("allows a read within the deadline", () => {
+    expect(evaluateAfter("cat x", 5000, "agent-1").kind).toBe("allow");
+  });
+
+  test("denies a read after the deadline", () => {
+    expect(evaluateAfter("cat x", 7000, "agent-1").kind).toBe("deny");
+  });
+
+  test("says the time limit ran out in the reason", () => {
+    const decision = evaluateAfter("cat x", 7000, "agent-1");
+    expect(decision.kind === "deny" ? decision.reason : "").toContain(
+      "time limit",
+    );
+  });
+
+  test("leaves the main session alone after the deadline", () => {
+    expect(evaluateAfter("cat x", 60000, null).kind).toBe("allow");
+  });
+
+  test("measures the deadline again for every command on the line", () => {
+    let now = 0;
+    const decision = evaluateBashGuard(
+      { command: "true; ".repeat(20), cwd: "/repo", agentId: "agent-1" },
+      { ...deps, now: () => (now += 1000) },
+    );
+    expect(decision.kind).toBe("deny");
+  });
+});
+
+// GNUの`xargs`の`-e`と`-l`は、値が同じ語に付く省略できる値を取る。束の中に置くと、値の字の読み方が変わるので、知らない字として拒否する。
+describe("bash-guard denies a subagent whose xargs bundle holds the optional-value letters", () => {
+  test.each([
+    "echo a | xargs -en flock cat",
+    "echo a | xargs -eE flock cat",
+    "echo a | xargs -eI flock cat",
+    "echo a | xargs -0en flock cat",
+    "echo a | xargs -ten flock cat",
+    "echo a | xargs -e cat",
+    "echo a | xargs -l2 cat",
+    "echo a | xargs -enx cat",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("keeps reading a bundle that ends in a letter taking a value", async () => {
+    expect(await decide("echo a | xargs -0nx cat", { subagent: true })).toBe(
+      "allow",
+    );
+  });
+});
+
+// `bun exec`は文字列をシェルのコードとして実行する。`find`の後ろでは、検査の道具の前に置ける語から外す。
+describe("bash-guard reads exec after a runner behind find as code", () => {
+  test("denies bun exec in front of an inspection tool", async () => {
+    expect(
+      await decide("find . -exec bun exec tsc {} +", { subagent: true }),
+    ).toBe("deny");
+  });
+
+  test("allows bun run in front of an inspection tool", async () => {
+    expect(
+      await decide("find . -exec bun run tsc {} +", { subagent: true }),
+    ).toBe("allow");
+  });
+});
+
+// `npm x`は`npm exec`の別名で、`pnpm dlx`は取得して実行する。`find`の後ろでは、検査の道具の前に読み飛ばす語は`run`だけである。
+describe("bash-guard reads only run as the word in front of an inspection tool behind find", () => {
+  test.each([
+    "find . -exec npm x tsc {} +",
+    "find . -exec pnpm dlx biome {} +",
+    "find . -exec bun x biome check {} +",
+  ])("denies %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard says what made an xargs or a find denied", () => {
+  const reasonOf = (command: string) => denyReason(command, { subagent: true });
+
+  test("names an assignment after xargs", async () => {
+    expect(await reasonOf("ls | xargs FOO=1 cat")).toContain(
+      "assignment after xargs",
+    );
+  });
+
+  test("names a relative path for the program", async () => {
+    expect(await reasonOf("ls | xargs ./cat")).toContain("relative path");
+  });
+
+  test("names a {} in front of the command of find", async () => {
+    expect(await reasonOf("find . -exec {} \\;")).toContain(
+      "{} in the place of the program",
+    );
+  });
+
+  test("asks the main session or a person once in the assignment reason", async () => {
+    const reason = await reasonOf("TARGET=scripts/hold.ts true");
+    expect(reason.split("ask the main session or a person").length - 1).toBe(1);
+  });
+});
+
+describe("bash-guard checks every region that find -exec closes with a plus", () => {
+  test("denies a second region after a region closed with a plus", async () => {
+    expect(
+      await decide("find . -exec cat {} + -exec rm {} +", { subagent: true }),
+    ).toBe("deny");
+  });
+});
+
+// 代入の値の拒否と、後ろの保留の操作の拒否が重なるときは、強い方の`operation`の理由を返す。
+describe("bash-guard gives the strongest reason when an assignment and an operation overlap", () => {
+  test("gives the operation reason when a hold release follows an unreadable assignment", async () => {
+    const reason = await denyReason(`FOO="a'b" ./scripts/hold.ts release 1`, {
+      subagent: true,
+    });
+    expect(reason).toContain("Ask the main session or a person to run");
+  });
+
+  test("does not give the assignment reason for that overlap", async () => {
+    const reason = await denyReason(`FOO="a'b" ./scripts/hold.ts release 1`, {
+      subagent: true,
+    });
+    expect(reason).not.toContain("variable assignment");
+  });
+
+  test("keeps the assignment reason for an assignment alone", async () => {
+    const reason = await denyReason(`FOO="a'b" true`, { subagent: true });
+    expect(reason).toContain("variable assignment");
+  });
+
+  test("keeps the assignment reason when a read follows", async () => {
+    const reason = await denyReason(`FOO="a'b" cat x`, { subagent: true });
+    expect(reason).toContain("variable assignment");
+  });
+});
+
+describe("bash-guard explains which characters make an assignment value unreadable", () => {
+  test("names quotes, backslashes, and pattern characters in the reason", async () => {
+    const reason = await denyReason(`FOO="a'b" cat x`, { subagent: true });
+    expect(reason).toContain("backslash");
+  });
 });
