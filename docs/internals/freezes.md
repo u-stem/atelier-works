@@ -252,21 +252,23 @@ pushとmigrationの間に保留が置かれても、migrationは続く。
 | 操作 | `session` | `human` |
 | --- | --- | --- |
 | スケジュールの凍結を置く(`freeze:place`) | 置ける | 端末(TTY)で`yes`を入力して置く |
-| deployの保留を置く(`freeze:place -- --scope deploy`) | 置ける。subagentは拒否される | 端末で`yes`を入力して置く |
+| deployの保留を置く(`freeze:place -- --scope deploy`) | 置ける。フックは、単独の`mise run freeze:place`の行だけ通す。subagentは拒否される | 端末で`yes`を入力して置く |
 | 置く(Consoleの画面) | できない。`console_hold_place`を`wmill`や`curl`で呼ぶ形は、主セッションを含めて拒否される | 確認のダイアログを通して、スケジュールの凍結もdeployの保留も置ける |
 | スケジュールを止める(Consoleの画面) | できない。`console_schedule_stop`を呼ぶ形は拒否される | 凍結を置いて7分後に、確認のダイアログを通して止める |
-| 解除(`freeze:release`) | 自分の`holder`の行だけ解除できる。subagentは拒否される | 端末で`yes`を入力して解除する |
+| 解除(`freeze:release`) | 自分の`holder`の行だけ解除できる。フックは、単独の`mise run freeze:release`の行だけ通す。subagentは拒否される | 端末で`yes`を入力して解除する |
 | 解除(Consoleの画面) | できない。`freeze_release`を`wmill`や`curl`で呼ぶ形は、主セッションを含めて拒否される | 確認のダイアログを通して、誰の行でも解除できる |
-| 壊れた変数を空に戻す(`freeze:reset`) | できない。subagentは拒否される | 端末で`yes`を入力して実行する |
-| 削除を反映するpush(`push:prune`) | できない。subagentは拒否される | 端末で`yes`を入力して実行する |
+| 壊れた変数を空に戻す(`freeze:reset`) | できない。CLIが断り、フックもsubagentと主セッションの両方で拒否する | 端末で`yes`を入力して実行する |
+| 削除を反映するpush(`push:prune`) | できない。CLIが断り、フックもsubagentと主セッションの両方で拒否する | 端末で`yes`を入力して実行する |
 
 `--dry-run`付きのpushは、どちらの主体も実行できる。
 
-subagentの拒否は、[セキュリティ](../security.md)の「Claude Codeの拒否ルール」にある、ベストエフォートの規則である。
+フックの拒否は、[セキュリティ](../security.md)の「Claude Codeの拒否ルール」にある、ベストエフォートの規則である。
+subagentと主セッションに同じ判定を当て、主セッションは単独の`mise run <タスク>`の行だけ免れる。
+免除の条件は[保留](holds.md)の「主セッションの免除」にある。
 `script`や`caffeinate`のような前置きの後ろと、コマンド文字列の中の同じ形も拒否する。
 前置きの無い`xargs`、`find`の実行系の式、`parallel`、`watch`、`strace`は、実行される側が読み取りの閉じた集合に入らなければ拒否する。
 先頭の変数代入の値が凍結のコードを指す形も、実行する側によらず拒否する。
-どちらも読み取りだけの呼び出しを巻き込む誤検知を受け入れる。詳しくは[保留](holds.md)の「subagentの拒否」に書く。
+どちらも読み取りだけの呼び出しを巻き込む誤検知を受け入れる。詳しくは[保留](holds.md)の「保留と凍結の書き込みの拒否」に書く。
 `mise run push -- --prune`のように、タスク`push`に`--prune`を渡す形は`push:prune`と同じなので拒否する。
 
 ### Consoleからの解除
