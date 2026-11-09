@@ -1,10 +1,14 @@
+import type { DesignStageView } from "../../api/jobsQueries.ts";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import {
   type ChangeOffer,
   type CheckCommands,
-  changeDialogLines,
+  changeDialogConclusion,
+  changeDialogDetails,
+  lowerChangeText,
+  lowerHint,
   NO_CHECK_COMMANDS,
   newElementMessage,
   newValueMessage,
@@ -16,23 +20,24 @@ import { safeText } from "../../lib/safeText.ts";
 function FixedField({
   label,
   value,
-  breakAnywhere = false,
+  reader,
 }: {
   label: string;
   value: string;
-  /** 区切りの無い長い文字列(URLなど)を、どこでも折る。 */
-  breakAnywhere?: boolean;
+  /** 画面には出さず、読み上げにだけ添える補足。書かれた値(true、false)を残す。 */
+  reader?: string;
 }) {
   return (
     <div className="grid grid-cols-[7rem_1fr] gap-x-3">
       <dt className="text-small text-subtle">{label}</dt>
       <dd
         dir="ltr"
-        className={`min-w-0 text-body [unicode-bidi:isolate] ${
-          breakAnywhere ? "break-all" : "break-words"
-        }`}
+        className="min-w-0 text-body break-words [unicode-bidi:isolate]"
       >
         {value}
+        {reader === undefined ? null : (
+          <span className="sr-only">{reader}</span>
+        )}
       </dd>
     </div>
   );
@@ -97,26 +102,20 @@ function inputState(
   return { blocked: false, problem: null };
 }
 
-/** 変更の対象を示す行。止める・下げるは現在の値、追加は何も足さない、削除は除く要素。 */
-function TargetFields({ offer }: { offer: ChangeOffer }) {
+/**
+ * 変更の対象を示す行。項目と、止める向きは「有効 → 無効」、下げる向きは「50 USD → 5 USD」の前後の値。
+ * 追加と削除は要素を結論が言うので、項目だけを出す。
+ * 書かれた値(true、false)は、止める向きの読み上げにだけ残す。
+ */
+function TargetFields({ offer, text }: { offer: ChangeOffer; text: string }) {
   return (
     <dl className="flex flex-col gap-1">
       <FixedField label="項目" value={safeText(offer.key)} />
       {offer.kind === "stop" ? (
-        <>
-          <FixedField label="現在の値" value="true" />
-          <FixedField label="変更後の値" value="false" />
-        </>
+        <FixedField label="値" value="有効 → 無効" reader="(true → false)" />
       ) : null}
       {offer.kind === "lower" ? (
-        <FixedField label="現在の値" value={String(offer.current)} />
-      ) : null}
-      {offer.kind === "remove" ? (
-        <FixedField
-          label="削除する要素"
-          value={safeText(offer.element)}
-          breakAnywhere
-        />
+        <FixedField label="値" value={lowerChangeText(offer, text)} />
       ) : null}
     </dl>
   );
@@ -125,17 +124,20 @@ function TargetFields({ offer }: { offer: ChangeOffer }) {
 /**
  * 設定の項目を変える前の確認。止める向き、下げる向き、一覧への追加、一覧からの削除の4つを扱う。
  * 確認のボタンは破壊的な色にする。止めると下げるはConsoleから戻せず、追加は対象を広げ、削除は対象を外すためである。
- * 対象の項目と、止める・下げるは現在の値、削除は除く要素を示し、効く時期と元に戻す方法を並べる。
+ * 先頭に、重大な結果を言う1つの結論を強調して出す。続けて項目と前後の値を示し、効く時期と元に戻す方法を箇条書きで並べる。
+ * 設計工程が無視されているときは、`design_enabled`を止めても動きが変わらないことを結論が言う。
  * 数値の項目は変更後の値、追加は足す要素を入力欄で受ける。使えない値の間は確認のボタンを押せなくする。
  * 追加の要素の形式は、画面では検査しない。scriptの断りの文が伝える。
  * 初期のフォーカスは、操作をやめる「取り消す」ボタンにある(`ConfirmDialog`)。
  * 項目名と要素はサーバー由来の文字列なので、`safeText`を通して文字としてだけ描く。
  * `checkCommands`は、`repo_allowlist`への追加の確認が、検査コマンドの及ぶ範囲を伝えるために使う。
+ * `designStage`は、設計工程が実際に効いているか。backendが返さない間は渡さない。
  */
 export function ConfigChangeDialog({
   offer,
   text,
   checkCommands = NO_CHECK_COMMANDS,
+  designStage,
   onTextChange,
   onConfirm,
   onCancel,
@@ -143,6 +145,7 @@ export function ConfigChangeDialog({
   offer: ChangeOffer | null;
   text: string;
   checkCommands?: CheckCommands;
+  designStage?: DesignStageView | undefined;
   onTextChange: (text: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
@@ -162,6 +165,14 @@ export function ConfigChangeDialog({
   }
   const { blocked, problem } = inputState(offer, text);
   const typed = offer.kind === "lower" || offer.kind === "add";
+  const hint =
+    offer.kind === "add"
+      ? newElementHint(offer.key)
+      : offer.kind === "lower"
+        ? lowerHint(offer)
+        : undefined;
+  const context = { text, designStage };
+  const details = changeDialogDetails(offer, checkCommands, context);
   return (
     <ConfirmDialog
       open
@@ -172,12 +183,15 @@ export function ConfigChangeDialog({
       onConfirm={onConfirm}
       onCancel={onCancel}
     >
-      <TargetFields offer={offer} />
+      <p className="text-body font-semibold">
+        {changeDialogConclusion(offer, context)}
+      </p>
+      <TargetFields offer={offer} text={text} />
       {typed ? (
         <Field
           tone="filter"
           label={offer.kind === "add" ? "追加する要素" : "変更後の値"}
-          hint={offer.kind === "add" ? newElementHint(offer.key) : undefined}
+          hint={hint}
           problem={problem === null ? undefined : problem}
         >
           {(control) => (
@@ -195,11 +209,13 @@ export function ConfigChangeDialog({
           )}
         </Field>
       ) : null}
-      {changeDialogLines(offer, checkCommands).map((line) => (
-        <p key={line} className="text-body">
-          {line}
-        </p>
-      ))}
+      {details.length === 0 ? null : (
+        <ul className="flex list-disc flex-col gap-1 pl-5 text-body marker:text-muted-foreground">
+          {details.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
     </ConfirmDialog>
   );
 }

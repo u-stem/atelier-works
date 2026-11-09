@@ -309,9 +309,16 @@ export const CONFIG_NORMAL: ConfigSnapshotView = {
       value: [],
       masked: false,
     },
-    // 真偽。語と記号のバッジになる。
-    { key: "design_enabled", kind: "value", value: true, masked: false },
+    // 真偽。語と記号のバッジになる。無効の`design_enabled`は再開の注記を持つが、ここでは別の項目で無効のバッジだけを出す。
+    { key: "dependabot_enabled", kind: "value", value: true, masked: false },
     { key: "implement_enabled", kind: "value", value: false, masked: false },
+    // ISO 8601の日時。日本時間の短い表記になり、書かれた文字列は`title`に残る。
+    {
+      key: "example_since",
+      kind: "value",
+      value: "2026-11-03T00:10:00Z",
+      masked: false,
+    },
     // 単位が付く数値。
     { key: "claude_timeout_sec", kind: "value", value: 1800, masked: false },
     {

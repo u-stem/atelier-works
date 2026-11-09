@@ -23,7 +23,9 @@ import type { ConfigEntryValue } from "../../lib/configValue.ts";
 import {
   CONFIG_REFERENCE_LABEL,
   DESIGN_STAGE_ROW_LABEL,
+  type DesignEnabledNoteText,
   describeConfigValue,
+  describeDesignEnabledNote,
   describeDesignStage,
   filterConfigItems,
   matchesDesignStageQuery,
@@ -47,6 +49,12 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
         <span className="break-words">
           <TextValue text={value.text} />
         </span>
+      );
+    case "datetime":
+      return (
+        <time dateTime={value.iso} title={value.iso} className="break-words">
+          {safeText(value.text)}
+        </time>
       );
     case "boolean":
       return <SwitchBadge enabled={value.enabled} rawText={value.text} />;
@@ -323,38 +331,59 @@ function ChangeButton({
  * ボタンは確認のダイアログを開くだけで、書き込みは確認を通った後にだけ呼ぶ。
  * `designStage`を渡すと、「設計」グループの表の先頭に、設計工程が実際に効いているかの行を置く。
  * 設計の項目が無くても、「設計」グループはその行のために出す。
+ * 絞り込みで判定の行だけを消すときは、`hideDesignStageRow`を渡す。
+ * `design_enabled`の行の注記(無視中)は、判定を渡す限り出す。キーで絞っても、実態と食い違わないためである。
  */
 export function ConfigList({
   items,
   designStage,
+  hideDesignStageRow = false,
   onChoose,
   isLocked = () => false,
 }: {
   items: readonly ConfigItemView[];
   designStage?: DesignStageView | undefined;
+  hideDesignStageRow?: boolean;
   onChoose?: (offer: ChangeOffer) => void;
   isLocked?: (offer: ChangeOffer) => boolean;
 }) {
-  if (items.length === 0 && designStage === undefined) {
+  const stageRow = designStage !== undefined && !hideDesignStageRow;
+  if (items.length === 0 && !stageRow) {
     return <EmptyNote>該当する項目はありません。</EmptyNote>;
   }
   return (
     <div className="@container flex flex-col gap-5">
-      {groupConfigItems(
-        items,
-        designStage === undefined ? [] : [DESIGN_GROUP_ID],
-      ).map((group) => (
-        <ConfigGroupTable
-          key={group.id}
-          id={group.id}
-          label={group.label}
-          items={group.items}
-          designStage={group.id === DESIGN_GROUP_ID ? designStage : undefined}
-          onChoose={onChoose}
-          isLocked={isLocked}
-        />
-      ))}
+      {groupConfigItems(items, stageRow ? [DESIGN_GROUP_ID] : []).map(
+        (group) => (
+          <ConfigGroupTable
+            key={group.id}
+            id={group.id}
+            label={group.label}
+            items={group.items}
+            designStage={group.id === DESIGN_GROUP_ID ? designStage : undefined}
+            showStageRow={stageRow}
+            onChoose={onChoose}
+            isLocked={isLocked}
+          />
+        ),
+      )}
     </div>
+  );
+}
+
+/**
+ * `design_enabled`の値の下に添える注記。無視中と判定できないときは、語を先頭に出し、色だけに頼らない。
+ * 止めたままのときは、再開の手順を出す。判定の行は設計工程の状態、この注記は書かれた値の行の状態で、役割が違う。
+ */
+function DesignEnabledNote({ note }: { note: DesignEnabledNoteText }) {
+  return (
+    <p className="mt-1 text-muted-foreground">
+      {note.label === null ? null : (
+        <span className="font-medium text-foreground">{note.label}</span>
+      )}
+      {note.label === null ? null : " "}
+      {safeText(note.text)}
+    </p>
   );
 }
 
@@ -365,16 +394,19 @@ export function ConfigList({
  */
 function ConfigRow({
   item,
+  designStage,
   onChoose,
   isLocked,
   showOperation,
 }: {
   item: ConfigItemView;
+  designStage: DesignStageView | undefined;
   onChoose: ((offer: ChangeOffer) => void) | undefined;
   isLocked: (offer: ChangeOffer) => boolean;
   showOperation: boolean;
 }) {
   const { offers, editableList, button } = rowOffersOf(item, onChoose);
+  const note = describeDesignEnabledNote(item, designStage);
   return (
     <tr {...ROLE.row} className="block @min-[40rem]:table-row">
       <th
@@ -398,6 +430,7 @@ function ConfigRow({
         ) : (
           <ConfigValue item={item} />
         )}
+        {note === null ? null : <DesignEnabledNote note={note} />}
       </td>
       {showOperation ? (
         <td
@@ -431,6 +464,7 @@ function ConfigGroupTable({
   label,
   items,
   designStage,
+  showStageRow,
   onChoose,
   isLocked,
 }: {
@@ -438,6 +472,7 @@ function ConfigGroupTable({
   label: string;
   items: readonly ConfigItemView[];
   designStage: DesignStageView | undefined;
+  showStageRow: boolean;
   onChoose: ((offer: ChangeOffer) => void) | undefined;
   isLocked: (offer: ChangeOffer) => boolean;
 }) {
@@ -498,7 +533,7 @@ function ConfigGroupTable({
             {...ROLE.rowgroup}
             className="block divide-y divide-border @min-[40rem]:table-row-group"
           >
-            {designStage === undefined ? null : (
+            {designStage === undefined || !showStageRow ? null : (
               <DesignStageRow
                 stage={designStage}
                 showOperation={showOperation}
@@ -508,6 +543,7 @@ function ConfigGroupTable({
               <ConfigRow
                 key={item.key}
                 item={item}
+                designStage={designStage}
                 onChoose={onChoose}
                 isLocked={isLocked}
                 showOperation={showOperation}
@@ -587,7 +623,8 @@ function ConfigBody({
       </Field>
       <ConfigList
         items={filterConfigItems(items, query)}
-        designStage={matchesDesignStageQuery(query) ? designStage : undefined}
+        designStage={designStage}
+        hideDesignStageRow={!matchesDesignStageQuery(query)}
         onChoose={change.choose}
         isLocked={change.isLocked}
       />
@@ -595,6 +632,7 @@ function ConfigBody({
         offer={change.offer}
         text={change.text}
         checkCommands={checkCommandsOf(items)}
+        designStage={designStage}
         onTextChange={change.setText}
         onConfirm={change.confirm}
         onCancel={change.dismiss}
@@ -619,7 +657,25 @@ export function ConfigSection({
       title="設定"
       visuallyHiddenTitle
       wide
-      description="factory_configの全項目です。参照と伏せた値は「参照(出さない)」と表示します。許可した項目だけ、止める向きと下げる向きの変更と、一覧の追加と削除ができます。"
+      description={
+        <>
+          <p>
+            factory_configの全項目を表示し、参照と伏せた値は「参照(出さない)」として表示します。
+          </p>
+          <ul className="list-disc pl-5">
+            <li>
+              Consoleで変えられるのは、機能を止める向き、値を下げる向き、3つの一覧の追加と削除です。
+            </li>
+            <li>
+              それ以外の変更(有効にする向き、値の引き上げ、ownersなど)は、端末から行います(wmill
+              resource pushなど)。
+            </li>
+            <li>
+              全部を止めるときは、システムの「状態」タブの全停止を使います。
+            </li>
+          </ul>
+        </>
+      }
       query={query}
       loginHint="上のバナーからログインすると、設定を表示します。"
     >
