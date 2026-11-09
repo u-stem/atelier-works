@@ -1384,7 +1384,7 @@ describe("bash-guard allows mentioning CHECK_IDLE_FORCE without setting it", () 
   });
 });
 
-// 保留(hold)を置く・解除する操作は、subagentに許さない。許すのは一覧(list)だけである。
+// 保留(hold)を置く・解除する操作は、subagentにも主セッションにも許さない。許すのは一覧(list)と、主セッションの免除の形だけである。
 // ベストエフォートの規則で、別名の呼び出しや、変数で組んだパスは止めない。
 describeForCallers(
   "bash-guard denies a caller that places or releases a hold",
@@ -1533,7 +1533,7 @@ describeForCallers(
 );
 
 // 主セッションが保留と凍結を書くのは、`mise run <タスク>`の単独の行だけである。
-// 引数はリテラルで、英数字、日本語の文字、`-_.:/=,+@`と、語の中のスペースに限る。
+// 引数はリテラルで、Unicodeの文字と数字、`-_.:/=,+@`と、語の中のスペースに限る。
 describe("bash-guard allows the main session to run the closed hold and freeze forms", () => {
   test.each([
     "mise run hold:place",
@@ -1732,7 +1732,8 @@ describe("bash-guard explains a denial to the main session", () => {
   );
 });
 
-// deployの保留(`freeze:place --scope deploy`)を置くことと、凍結の解除(`freeze:release`)は、subagentに許さない。
+// deployの保留(`freeze:place --scope deploy`)を置くことと、凍結の解除(`freeze:release`)は、subagentにも主セッションにも許さない。
+// 主セッションには、免除の形(単独の`mise run <タスク>`の行)だけ許す。
 // スケジュールの凍結を置くこと(`--scope`なし、または`--scope schedule`)と、一覧と検査は許す。
 describeForCallers(
   "bash-guard denies a caller that places a deploy freeze or releases a freeze",
@@ -2143,9 +2144,9 @@ describeForCallers(
   "bash-guard says why a dynamic mise word is denied",
   (subagent) => {
     test("the reason for a dynamic option value names the variable", async () => {
-      expect(await denyReason('mise -C "$DIR" run check')).toContain(
-        "variable",
-      );
+      expect(
+        await denyReason('mise -C "$DIR" run check', { subagent }),
+      ).toContain("variable");
     });
 
     test("the reason names the dynamic word", async () => {
@@ -2864,7 +2865,7 @@ describe("bash-guard keeps reading prefixes and nested strings for the stop-all"
   });
 });
 
-// `script`、`unbuffer`、`caffeinate`、`/usr/bin/time`のような前置きの後ろでも、保留と凍結の書き込みはsubagentに許さない。
+// `script`、`unbuffer`、`caffeinate`、`/usr/bin/time`のような前置きの後ろでも、保留と凍結の書き込みはsubagentにも主セッションにも許さない。免除の形は前置きを付けた時点で外れる。
 describeForCallers(
   "bash-guard denies a caller that writes holds or freezes behind a prefix",
   (subagent) => {
@@ -2929,7 +2930,7 @@ describeForCallers(
   },
 );
 
-// 前置きの後ろの凍結の`reset`と`push --prune`は、人の端末の確認を通る書き込みなので、subagentに許さない。
+// 前置きの後ろの凍結の`reset`と`push --prune`は、人の端末の確認を通る書き込みなので、subagentにも主セッションにも許さない。免除の形には入らない。
 describeForCallers(
   "bash-guard denies a caller that resets freezes or prunes a push",
   (subagent) => {
@@ -3321,7 +3322,6 @@ describeForCallers(
   },
 );
 
-// 判定が変わるのはsubagentだけである。主セッションは、前置きの有無によらず今までどおり実行できる。
 // 前置きの後ろの文字列の中でも、前置きの`xargs`が足す語は読めない。先頭が`mise`や凍結のCLIでも拒否する。
 describeForCallers(
   "bash-guard denies xargs inside a string behind a prefix",
