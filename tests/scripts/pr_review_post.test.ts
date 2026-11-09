@@ -904,7 +904,7 @@ describe("selectThreadsToResolve", () => {
       [
         thread({
           lastCommentBody:
-            "[Factory 自動レビュー]\n事実です。\n\n回答\n\n<!-- factory:pr_review_answer:9 -->",
+            "[Factory 自動返信]\n事実です。\n\n回答\n\n<!-- factory:pr_review_answer:9 -->",
           comments: [
             {
               databaseId: 1,

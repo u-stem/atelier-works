@@ -385,7 +385,7 @@ describe("threadResponseKind", () => {
         thread(
           replied(
             VIEWER,
-            "[Factory 自動レビュー]\n理由が不十分です。\n\n見送り: 反論",
+            "[Factory 自動返信]\n理由が不十分です。\n\n見送り: 反論",
           ),
         ),
         VIEWER,
@@ -746,6 +746,24 @@ describe("reviewThreadsForPrompt", () => {
   test("strips the pr_review role tag from the body", () => {
     const { threads } = reviewThreadsForPrompt([thread()], VIEWER, isAllowed);
     expect(threads[0]?.comments[0]?.body).toBe("[IMO] consider this");
+  });
+
+  test("strips the reply role tag whose line ends with CRLF", () => {
+    const { threads } = reviewThreadsForPrompt(
+      [thread(replied(VIEWER, "[Factory 自動返信]\r\n事実です。"))],
+      VIEWER,
+      isAllowed,
+    );
+    expect(threads[0]?.comments[1]?.body).toBe("事実です。");
+  });
+
+  test("strips the reply role tag whose line has trailing spaces", () => {
+    const { threads } = reviewThreadsForPrompt(
+      [thread(replied(VIEWER, "[Factory 自動返信]  \n事実です。"))],
+      VIEWER,
+      isAllowed,
+    );
+    expect(threads[0]?.comments[1]?.body).toBe("事実です。");
   });
 
   test("strips the reply role tag from the body of a reply", () => {
