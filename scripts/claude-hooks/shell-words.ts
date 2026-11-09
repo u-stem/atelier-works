@@ -123,9 +123,11 @@ const TRANSPARENT_WORDS: ReadonlySet<string> = new Set([
 /**
  * コマンドの先頭に置かれたら、読めない構文として拒否する語。
  * 文法を確かめない限り、後ろの語がコマンドか引数か決まらないためである。
- * zshとbashの予約語と前置きの修飾語のうち、前置きとして外す語、見出しを確かめる語、語の並びを確かめる語を除いた閉じた一覧である。
- * 外す語は`TRANSPARENT_WORDS`と`TRANSPARENT_OPTIONS`、見出しを確かめる語は`LOOP_WORDS`、
+ * zshとbashの予約語と前置きの修飾語のうち、ほかの経路が扱う語を除いた閉じた一覧である。
+ * ほかの経路は次のとおりである。
+ * 前置きとして外す語は`TRANSPARENT_WORDS`と`TRANSPARENT_OPTIONS`、見出しを確かめる語は`LOOP_WORDS`、
  * 語の並びを確かめる語は`hasUnreadableWords`が扱う。
+ * 語の後ろの`(`で拒否する語(zshの代替形の繰り返しの語など)は、`rejectGlobGroup`が扱う。
  */
 const UNREADABLE_LEADING_WORDS: ReadonlySet<string> = new Set([
   "nocorrect",
@@ -169,7 +171,6 @@ const PAREN_LEADING_WORDS: ReadonlySet<string> = new Set([
   "for",
   "select",
   "time",
-  "coproc",
 ]);
 
 /** 後ろの語を実行するだけで、自分のオプションを持つ語。オプションだけを読み飛ばす(`command -v`は問い合わせなので外さない)。 */
