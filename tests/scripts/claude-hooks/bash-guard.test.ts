@@ -3426,7 +3426,8 @@ describe("bash-guard allows a subagent to add words only to a read-only tool", (
   });
 });
 
-// `find`が渡す語は`./`などで始まるパスで、オプションを差し込めないので、`find`の後ろに限って検査の道具を通す。
+// `find`が探索で見つけたパスは起点を前に付けて渡すので`-`から始まらない。
+// 起点の綴りは`tsc`と`biome`のオプションに渡りうるが受け入れ、`find`の後ろに限って検査の道具を通す。
 describe("bash-guard allows a subagent to run an inspection tool through find", () => {
   test.each([
     "find . -exec tsc --noEmit {} +",
