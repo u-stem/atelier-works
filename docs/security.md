@@ -3694,7 +3694,7 @@ mainは承認0件でマージでき、管理者は失敗したチェックを無
 - 承認が要る道具と、実行役の実装。
 - `infra/docker-compose.yml`と`tests/infra/docker_compose.test.ts`。
 - `infra/worker/`と`mise/`の下のファイル。
-- ローカルのフック(`scripts/claude-hooks/`)とそのテスト(`tests/scripts/claude-hooks/`)。subagentの拒否を決めるためである。
+- ローカルのフック(`scripts/claude-hooks/`)とそのテスト(`tests/scripts/claude-hooks/`)。subagentと主セッションの拒否を決めるためである。
 - miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)。置いたファイルがタスクとして実行され、フックが見分けるタスク名の外から操作できるためである。
 - 保留のCLI(`scripts/hold.ts`と`scripts/hold_psql.ts`)とそのテスト。
 - 保留のCLIが起動のたびに読み込む、凍結の道具(`scripts/freeze.ts`、`f/factory/lib/freezes.ts`、`f/factory/lib/freeze_apply.ts`)。書き換えられると、保留のCLIの実行に任意の処理を足せるためである。
@@ -3920,8 +3920,10 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
 - 凍結はWindmillの変数なので、`f/factory`に書ける主体は凍結を書き換えられる。
   この権限を持つ主体は、スケジュールそのものも書き換えられるため、凍結が増やす危険は無い。
 - `CLAUDECODE`とTTYによる`session`と`human`の区別は、誤操作を防ぐためで、権限の境界ではない。
-  `env -u CLAUDECODE`と擬似端末で通れる。
+  環境の差し替えと、端末を与える経路で通れる。
   守る対象が誤操作であり、悪意のある主体は上の項目の権限で直接書き換えられるため、受け入れる。
+  主セッションのフックも、書き込みを`mise run <タスク>`の単独の行に絞って誤操作を止める発見的な検査で、境界ではない。
+  人の確認の境界は、CLIの端末での確認とClaude Codeの権限の流れにある。
 - 凍結を覆わない操作がある。
   `wmill sync push`の直接実行と、凍結を取り込む前の作業ツリーの`mise run`である。
   特に、取り込む前の作業ツリーで`push:prune`(旧タスクの`wmill sync push --yes`)を走らせると、変数ごと削除される。
@@ -4178,7 +4180,14 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 - `merge-guard`の読みは、`mise exec`で包んだ子プロセスを使う。
   子の環境で自動インストールを止めるので、ネットワークには出ない。
   `mise`のツールが入っていなければ、読めないものとして拒否される。
-- subagentの保留の操作と、凍結のCLIでの端末の確認を通る書き込みは、`scripts/claude-hooks/hold-guard.ts`が拒否する。
+- 保留の操作と、凍結のCLIでの端末の確認を通る書き込みは、`scripts/claude-hooks/hold-guard.ts`が拒否する。
+  `bash-guard`が、subagentと主セッションに同じ判定を当てる。
+  `agent_id`の無い呼び出しは、`claude -p`を含めてすべて主セッションとして扱う。
+  主セッションの免除は、入力全体が単純コマンド1つの最上位の呼び出しで、外す前の語がちょうど`mise run <タスク> [-- <引数…>]`の形のものだけである。
+  タスクは`hold:place`、`hold:release`、`freeze:place`、`freeze:release`の4つで、引数はリテラルかつ閉じた字の種類に限る。
+  先頭の代入、前置き、`mise exec`、miseのオプション、別名、直接実行、入れ子の文字列の中は免除しない。
+  免除の外の書き込みは、subagentと同じ判定で拒否する。
+  拒否の文は主セッションに免除の形を案内する。
   凍結の書き込みはdeployの保留の設置、凍結の解除、凍結の全消去(`freeze:reset`)、削除を確定する押し出し(`push:prune`)である。
   判定は語の字面で行い、先頭の語で規則を分ける。
   先頭が`mise`か実行系なら、保留のコードを指す語を含む呼び出しは、`list`と検査の道具の2つの形だけを許す。
@@ -4214,6 +4223,12 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   置換のオプションとGNUの`-e`、`-l`を付けた`xargs`と、`xargs`の後ろに前置きが続く形。
   代入の値に、保留や凍結を指す語を持つ形と、引用符などの字を含む形(JSONを入れた代入など)。
   どれも、実行しない読み取りだけの呼び出しでも拒否する。
+  主セッションでは次の分類も新しく誤検知として受け入れる。
+  前置きの後ろでシェルや語を足す作業。
+  免除の形の外の保留と凍結の直接実行。
+  `mise run hold:place`を前置き、代入、パイプと組み合わせた形(単独の行に直せば通る)。
+  引数の字の種類の外にある語(括弧、引用符、`;`などを含む理由の文)。
+  締め切りに達した読み取り。gitの起動が遅いときに起こる。
   前置きの規則は語、`script -c`と`ssh`の文字列の中身、標準入力の文字列を次の順で調べる。
   オプションの文法は追わない。
   語を足すコマンド(`xargs`、`parallel`、`-exec`系の式を伴う`find`)、シェル、読めない標準入力があれば、指す語の有無によらず拒否する。
@@ -4516,9 +4531,9 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | 無条件のforce push(`--force`、`-f`、`+`で始まるrefspec) | 公開した履歴を書き換えると、ほかの作業やFactoryの`pr_fix`の変更を消しうる |
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
-| subagentのdeployの保留を置く操作(`freeze:place`の`--scope deploy`、`scripts/freeze.ts place --scope deploy`)、凍結の解除(`freeze:release`、`scripts/freeze.ts release`)、凍結の全消去(`freeze:reset`、`scripts/freeze.ts reset`)、削除を確定する押し出し(`push:prune`、`scripts/freeze.ts push --prune`)。前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`)の後ろも拒否する。`--scope`の値が実行時に決まる形も拒否する | deployの保留は反映全体を止める。解除と全消去は保留を外せる。削除を確定する押し出しは、リモートだけの項目を消す。どれも人の端末の確認を通る操作で、subagentには確認する相手がいない。スケジュールの凍結を置くことと一覧は許す |
+| deployの保留を置く操作(`freeze:place`の`--scope deploy`、`scripts/freeze.ts place --scope deploy`)、凍結の解除(`freeze:release`、`scripts/freeze.ts release`)、凍結の全消去(`freeze:reset`、`scripts/freeze.ts reset`)、削除を確定する押し出し(`push:prune`、`scripts/freeze.ts push --prune`)。前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`)の後ろも拒否する。`--scope`の値が実行時に決まる形も拒否する | deployの保留は反映全体を止める。解除と全消去は保留を外せる。削除を確定する押し出しは、リモートだけの項目を消す。どれも人の端末の確認を通る操作で、subagentには確認する相手がいない。主セッションには、単独の`mise run <タスク>`の行(`freeze:place`と`freeze:release`)だけ許す。スケジュールの凍結を置くことと一覧は、両方に許す |
 | 主セッションを含むすべてのClaudeのセッションの、Consoleの書き込みのscriptを呼びうる操作。コマンドの語か標準入力の文字列に、書き込みのscript(`scripts/claude-hooks/console-scripts.ts`の一覧。解除の`hold_release`と`freeze_release`、取消の`console_job_cancel`、再実行の`console_job_rerun`、設定変更の`console_config_update`、`approval_decide`、`retry_work_item`など)の名前、名前に当たりうるglob、ブレースの形があるもの。読み取りのプログラムと`wmill`の読み取りの副コマンドは、実行を表す語が並ばない限り除く。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる |
-| subagentの保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する。前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`)の後ろの同じ形と、コマンド文字列の中の同じ形、語を足すコマンドとシェルを伴う形も拒否する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。一覧(`list`)は許す |
+| 保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する。前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`)の後ろの同じ形と、コマンド文字列の中の同じ形、語を足すコマンドとシェルを伴う形も拒否する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。主セッションには、単独の`mise run hold:place`と`mise run hold:release`の行だけ許す。一覧(`list`)は両方に許す |
 | `gh pr`と`gh api`のうち、読み取りか編集と確かめられた形以外(`gh pr merge`、書き込みのメソッドの`gh api`、GraphQLのマージのmutationなど)と、マージを含む`gh alias`。対象のリポジトリのマージの保留が有効なときと、保留を読めないとき。リポジトリが決まらないものは、どのリポジトリの保留でも拒否する | 保留は、期限つきでマージを止める。綴りの列挙は漏れるので、確かめられた形以外を対象にする。読めないときに通すと、保留を置いた意味が外れる |
 | `wmill datatable migrate up`と`migrate down`(deployの保留が有効か、読めないとき)。`--dry-run`の無い`wmill sync push`(deployの保留かスケジュールの凍結が有効か、読めないとき) | deployの保留は反映全体を止める。除外を付けない手動のpushは、凍結中のスケジュールを上書きする |
 | `xargs`の引数で渡す`git push`と`git commit` | 標準入力から来る引数は、実行するまで分からない |
@@ -4711,7 +4726,10 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
     - パッケージ、リポジトリ、dotfiles、ツールを整え、`bootstrap`タスクがあれば実行する
     - このリポジトリのタスク`mise run bootstrap`は`scripts/bootstrap.sh`を動かすので、`mise bootstrap`もそれを実行する
     - 2つは別のコマンドである
-- subagentの保留の操作のうち、次の形。
+- 保留と凍結の操作のうち、次の形。
+  - 名乗りのholder。`session:<ブランチ>`は同じブランチのセッションで共有され、作業ディレクトリや別のチェックアウトによっても名乗るブランチは変わる
+  - 端末を与える経路の列挙の外。前置きは5種に限り、人の確認を端末で通す仕組みは、端末を与える経路を列挙し切れない
+  - 人の確認を端末からConsoleの承認へ移す構造的な案。境界を強めるには、フックの追加ではなくこの案が要る
   - 別名の呼び出し(`cp scripts/hold.ts /tmp/h.ts`の後に実行する形)
   - 変数や文字列の連結で組んだパス、動的なimport
   - `docker compose exec db psql`に渡す語を、組み立てて書く形

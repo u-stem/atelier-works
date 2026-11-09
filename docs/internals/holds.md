@@ -8,7 +8,7 @@
 - `migrations/datatable/main/20261023131355_holds.up.sql`
 - `f/factory/poll_dependabot.ts`と`f/factory/steps/dependabot_finish.ts`(保留を読む処理)
 - `scripts/hold.ts`と`scripts/hold_psql.ts`(CLI)
-- `scripts/claude-hooks/hold-guard.ts`(subagentの拒否)
+- `scripts/claude-hooks/hold-guard.ts`(保留と凍結の書き込みの拒否)
 - `scripts/claude-hooks/merge-guard.ts`、`merge-targets.ts`、`merge-read.ts`(ローカルのセッションのフック)
 - `.claude/skills/hold/SKILL.md`(保留を置く・解除する手順)
 - `tests/scripts/hold_wiring.test.ts`
@@ -582,13 +582,39 @@ deployの保留の文は、期限まで待つか、置いた人に頼むこと�
 迂回のための環境変数は設けない。
 残るリスクは[セキュリティ](../security.md)の「保留」に書く。
 
-## subagentの拒否
+## 保留と凍結の書き込みの拒否
 
-`scripts/claude-hooks/hold-guard.ts`が、subagentの保留の操作を拒否する。
-`bash-guard`が、subagentのBashのコマンドだけに適用する。
-主セッションと人は、止められない。
-許すのは一覧(`list`)だけである。
-subagentが保留を置くと、確認する相手がいないまま、自動マージを止められるためである。
+`scripts/claude-hooks/hold-guard.ts`が、保留と凍結の書き込みを拒否する。
+`bash-guard`が、subagentと主セッションのBashのコマンドに同じ判定を当てる。
+人の端末(Claude Codeの外)とConsoleは、フックを通らないので止められない。
+許すのは一覧(`list`)と、後述の主セッションの免除の形だけである。
+書き込みを許すと、確認する相手がいないまま、自動マージや反映を止められるためである。
+このフックは、誤操作と、拒否を知らない呼び出しを止める発見的な検査である。
+人の確認の境界は、CLIの端末での確認とClaude Codeの権限の流れにある。
+`agent_id`の無い呼び出しは、`claude -p`を含めてすべて主セッションとして扱う。
+
+### 主セッションの免除
+
+主セッションは次の条件をすべて満たす呼び出しだけ、保留と凍結の判定を免れる。
+正規の手順が`mise run <タスク>`だけで済み、免除の外へ漏れる形を増やさないためである。
+
+- Bashの呼び出しの最上位で、入力全体が単純コマンド1つである。
+  パイプ、リダイレクト、後ろに回す実行、`&&`や`;`で続く別のコマンドは無い。
+  `sh -c`、`eval`、`bun exec`の文字列とシェルの標準入力の中は、免除しない。
+- 外す前の語が、ちょうど`mise run <タスク> [-- <引数…>]`である。
+  タスクは`hold:place`、`hold:release`、`freeze:place`、`freeze:release`の4つに限る。
+- 引数はリテラルで、変数、コマンド置換、glob、ブレースを含まない。
+  使える字は、英数字、日本語の文字、`-`、`_`、`.`、`:`、`/`、`=`、`,`、`+`、`@`と、語の中のスペースである。
+  `:::`を含む語と、`=`で始まる語は免除しない。
+
+次の形は免除しない。外した語や付け足した要素のどれかで、免除の形から外れるためである。
+
+- 先頭の代入、`env`や`sudo`などの前置き、`mise exec`、miseのオプション、`mise r`などの別名、パスで書いた`mise`
+- `bun scripts/hold.ts`などの直接実行
+- `freeze:reset`と`push:prune`。CLIが`session`から断るので、免除しても結果は変わらない
+
+免除の外の書き込みは、subagentと同じ判定で拒否する。
+拒否の文は、主セッションには免除の形を案内し、subagentには主セッションか人に頼むよう伝える。
 凍結のCLIのうち、人の端末の確認を通る書き込みも同じ規則で拒否する。
 deployの保留を置く操作(`--scope deploy`)、凍結の解除(`release`)、凍結の全消去(`reset`)、削除を確定する押し出し(`push --prune`)である。
 一覧と検査(`list`、`check`)、削除を確定しない押し出し、スケジュールの凍結を置く操作は許す。
@@ -787,7 +813,7 @@ BashとDockerを持つ主体は、psqlで保留を直接書ける。
 ### 全セッションの拒否
 
 Consoleの解除scriptを1コマンドで呼ぶ形は、subagentだけでなく、主セッションを含むすべてのセッションで拒否する。
-subagentの拒否と違い、`bash-guard`は、セッションの種類で分けずに`findConsoleReleaseCall`を適用する。
+`bash-guard`は、`findConsoleReleaseCall`を、免除を持たずに、セッションの種類で分けずに適用する。
 解除scriptの名前を軸にして、拒否を既定にする。
 プログラムは問わない。次のどれかに、名前、名前に当たりうるglob、ブレースの形があれば拒否する。
 
@@ -987,7 +1013,7 @@ migrationが失敗すると、`self_update`は次の回で再試行する。
 | `tests/scripts/hold_psql.test.ts` | psqlの引数、値の束縛、読み書きのモード、接続先、時間切れ、失敗の文 |
 | `tests/scripts/hold.test.ts` | 引数、主体、`claim`の拒否、一覧と置く操作と解除、表示の無害化、CLIの接続先 |
 | `tests/scripts/dependabot_finish.test.ts`、`tests/scripts/poll_dependabot.test.ts` | 保留があるとき、読めないときに、マージせず作業項目も作らないこと。読む位置。読めない通知の解決 |
-| `tests/scripts/claude-hooks/bash-guard.test.ts` | subagentの拒否と許可の形、主セッションを止めないこと、主セッションを含む全セッションでConsoleの解除scriptの呼び出しを拒否し、検査やビルドなどの近い作業を許すこと |
+| `tests/scripts/claude-hooks/bash-guard.test.ts` | subagentと主セッションの保留と凍結の拒否と許可の形、主セッションの免除の形と、それに何かを足した形の拒否、主セッション向けの理由の文、締め切り、主セッションを含む全セッションでConsoleの解除scriptの呼び出しを拒否し、検査やビルドなどの近い作業を許すこと |
 | `tests/scripts/claude-hooks/merge-targets.test.ts` | マージと反映の操作の見つけ方、リポジトリの候補の集め方と食い違い、入れ子のシェル、見つけない形 |
 | `tests/scripts/claude-hooks/merge-read.test.ts` | 読みの子プロセスの起動の形、失敗の種類、時間切れとプロセスグループの終了、`mise`の探索、子の環境、凍結の変数の読み方 |
 | `tests/scripts/claude-hooks/merge-guard.test.ts` | 判定、リポジトリの照合、読めないときの拒否、時間切れ、主セッションとsubagentの文言、敵対的な文字列を載せないこと |
