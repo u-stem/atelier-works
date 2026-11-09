@@ -1551,6 +1551,10 @@ describe("bash-guard allows the main session to run the closed hold and freeze f
     expect(await decide(command)).toBe("allow");
   });
 
+  test.each([...EXEMPT_FORMS])("exempt form %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
   test.each([
     "cat scripts/hold.ts",
     "rg -n release scripts/hold.ts",
@@ -1621,6 +1625,17 @@ describe("bash-guard denies the main session when a closed form gets anything el
     "mise run hold:place -- --reason '#x'",
     "mise run hold:place -- --reason ':::'",
     "mise run hold:place 2>&1",
+    // 標準入力
+    "mise run hold:place <<< x",
+    "mise run hold:place <<EOF\nx\nEOF",
+    // NULを含む語
+    "mise run hold:place -- --reason $'a\\x00b'",
+    // 日本語の句読点と全角の括弧
+    "mise run hold:place -- --reason '確認、済み'",
+    "mise run hold:place -- --reason '確認済み。'",
+    "mise run hold:place -- --reason 'a・b'",
+    "mise run hold:place -- --reason '「確認」'",
+    "mise run hold:place -- --reason '確認（済み）'",
     // 免除の外のタスク
     "mise run freeze:reset",
     "mise run push:prune",
@@ -1654,6 +1669,28 @@ describe("bash-guard denies the main session when a closed form gets anything el
   });
 });
 
+// 「単純コマンド1つ」は、解析の結果のコマンドが1つであることで数える。
+// 丸括弧のサブシェル、`case`の本体1つ、本文の無いヒアドキュメント、注釈、末尾の`;`は、解析の結果が1つなので、実行されるのは免除の形そのものである。
+describe("bash-guard counts one command by the parse result for the main session", () => {
+  test.each([
+    "(mise run hold:place)",
+    "case x in x) mise run hold:place;; esac",
+    "mise run hold:place <<EOF",
+    "mise run hold:place # note",
+    "mise run hold:place;",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test.each([
+    "{ mise run hold:place; }",
+    "! mise run hold:place",
+    "if true; then mise run hold:place; fi",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+});
+
 describe("bash-guard explains a denial to the main session", () => {
   test.each([
     ["an operation", "bun scripts/hold.ts place"],
@@ -1679,6 +1716,19 @@ describe("bash-guard explains a denial to the main session", () => {
     expect(reason).toContain("mise run hold:place");
     expect(reason).toContain("mise run freeze:release");
   });
+
+  test.each([
+    ["an operation", "bun scripts/hold.ts place"],
+    ["a dynamic word", 'mise run "$TASK"'],
+    ["an assignment", "TARGET=scripts/hold.ts true"],
+  ])(
+    "%s names the characters an argument cannot hold",
+    async (_kind, command) => {
+      const reason = await denyReason(command);
+      expect(reason).toContain("Japanese punctuation");
+      expect(reason).toContain("#");
+    },
+  );
 });
 
 // deployの保留(`freeze:place --scope deploy`)を置くことと、凍結の解除(`freeze:release`)は、subagentに許さない。
