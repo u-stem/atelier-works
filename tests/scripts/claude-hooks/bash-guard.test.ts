@@ -1322,8 +1322,6 @@ describe("bash-guard handles previous-branch and root rebases", () => {
 
 describe("bash-guard parses common shell syntax", () => {
   test.each([
-    'case "$x" in a) echo a;; esac',
-    "case $x in\n  a) echo a ;;\n  *) echo b ;;\nesac\n",
     `echo ${OPEN}x//)/y}`,
     `echo ${OPEN}x%%)*}`,
     `echo ${OPEN}arr[@]}`,
@@ -1334,6 +1332,14 @@ describe("bash-guard parses common shell syntax", () => {
     "f() { git status; }; f",
   ])("%s", async (command) => {
     expect(await decide(command)).toBe("allow");
+  });
+
+  // `case`は文法を確かめず、読めない構文として全て拒否する。
+  test.each([
+    'case "$x" in a) echo a;; esac',
+    "case $x in\n  a) echo a ;;\n  *) echo b ;;\nesac\n",
+  ])("denies a case statement: %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
   });
 });
 
@@ -1670,11 +1676,10 @@ describe("bash-guard denies the main session when a closed form gets anything el
 });
 
 // 「単純コマンド1つ」は、解析の結果のコマンドが1つであることで数える。
-// 丸括弧のサブシェル、`case`の本体1つ、本文の無いヒアドキュメント、注釈、末尾の`;`は、解析の結果が1つなので、実行されるのは免除の形そのものである。
+// 丸括弧のサブシェル、本文の無いヒアドキュメント、注釈、末尾の`;`は、解析の結果が1つなので、実行されるのは免除の形そのものである。
 describe("bash-guard counts one command by the parse result for the main session", () => {
   test.each([
     "(mise run hold:place)",
-    "case x in x) mise run hold:place;; esac",
     "mise run hold:place <<EOF",
     "mise run hold:place # note",
     "mise run hold:place;",
@@ -1686,6 +1691,7 @@ describe("bash-guard counts one command by the parse result for the main session
     "{ mise run hold:place; }",
     "! mise run hold:place",
     "if true; then mise run hold:place; fi",
+    "case x in x) mise run hold:place;; esac",
   ])("denies %s", async (command) => {
     expect(await decide(command)).toBe("deny");
   });

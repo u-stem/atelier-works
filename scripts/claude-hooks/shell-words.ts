@@ -6,6 +6,7 @@
 // ヒアドキュメントとヒアストリングの本文は、結び付いたコマンドの`inputs`に入れる。
 // 引用符のないヒアドキュメントの`$(...)`は実行されるので、別の単純コマンドとして取り出す。
 // 読めない構文は構文エラーとして返し、呼び出し側が拒否に倒す。
+// 予約語の代替形のように、語の並びだけでは後ろの語の役割が決まらない構文も、読めない構文として返す。
 
 /**
  * 引用符を外した後の語。
@@ -118,6 +119,49 @@ const TRANSPARENT_WORDS: ReadonlySet<string> = new Set([
   "nohup",
   "noglob",
 ]);
+
+/**
+ * コマンドの先頭に置かれたら、読めない構文として拒否する語。
+ * 文法を確かめない限り、後ろの語がコマンドか引数か決まらないためである。
+ * zshとbashの予約語と前置きの修飾語のうち、前置きとして外す語、見出しを確かめる語、語の並びを確かめる語を除いた閉じた一覧である。
+ * 外す語は`TRANSPARENT_WORDS`と`TRANSPARENT_OPTIONS`、見出しを確かめる語は`LOOP_WORDS`、
+ * 語の並びを確かめる語は`hasUnreadableWords`が扱う。
+ */
+const UNREADABLE_LEADING_WORDS: ReadonlySet<string> = new Set([
+  "nocorrect",
+  "-",
+  "always",
+  "coproc",
+  "repeat",
+  "function",
+  "case",
+  "esac",
+]);
+
+/** 見出しの形を確かめる繰り返しの語。 */
+const LOOP_WORDS: ReadonlySet<string> = new Set(["for", "select"]);
+
+/**
+ * `for`と`select`の見出しが読める形なら真。`at`はその語の位置である。
+ * 語が2つ以下か、3つ目が`in`の形だけを読む。
+ * `in`を省いて`do`が同じ単純コマンドに入る形は、`do`以降が見出しの引数に見える。
+ */
+function loopHeaderReadable(words: readonly Word[], at: number): boolean {
+  return words.length - at <= 2 || words[at + 2]?.text === "in";
+}
+
+/**
+ * 外した後の語が、読めない構文を含むなら真。
+ * `]]`が最後の語でない形は、`[[ … ]]`の後ろに本体が付く代替形である。
+ * `}`の綴りの語は、`{`で始めた塊の閉じが単純コマンドの途中に残った形である。
+ * どちらも語が引用符つきだったかを区別できないので、引用符つきの綴りも拒否する。
+ */
+function hasUnreadableWords(rest: readonly Word[]): boolean {
+  return rest.some(
+    (word, index) =>
+      word.text === "}" || (word.text === "]]" && index < rest.length - 1),
+  );
+}
 
 /** 後ろに`(`が続いてよい語。制御構文と、`for ((`のような算術の構文である。 */
 const PAREN_LEADING_WORDS: ReadonlySet<string> = new Set([
@@ -348,6 +392,7 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
   let expanded = false;
   let opaque = false;
   let xargsCommandUnknown = false;
+  let unreadable = false;
   let seenXargs = false;
   const assignments: Word[] = [];
   const wrappers: string[] = [];
@@ -386,12 +431,19 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
       const read = readMiseExec(words, miseExecAt(words, index) + 1);
       mise ??= read.mise;
       index = read.next;
+    } else if (UNREADABLE_LEADING_WORDS.has(text)) {
+      unreadable = true;
+      break;
+    } else if (LOOP_WORDS.has(text)) {
+      unreadable = !loopHeaderReadable(words, index);
+      break;
     } else {
       break;
     }
     xargsCommandUnknown ||= afterXargs;
   }
   const rest = words.slice(index);
+  unreadable ||= hasUnreadableWords(rest);
   const first = rest[0];
   if (first !== undefined && zshCommandName(first.text) !== first.text) {
     rest[0] = { ...first, text: zshCommandName(first.text) };
@@ -404,7 +456,7 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
     expanded,
     opaque,
     xargsCommandUnknown,
-    unreadable: false,
+    unreadable,
   };
 }
 
@@ -846,12 +898,6 @@ class Parser {
   private hereStringNextWord = false;
   private subshellDepth = 0;
   private readonly heredocs: PendingHeredoc[] = [];
-  /** 開いている`case`の数。 */
-  private caseDepth = 0;
-  /** `case`から`in`までの語を読んでいる間は真。 */
-  private caseHeader = false;
-  /** `in`や`;;`の直後で、`)`までがパターンのとき真。 */
-  private expectPattern = false;
 
   constructor(
     source: string,
@@ -870,10 +916,6 @@ class Parser {
   /** 単純コマンドを読み進める。`untilParen`が真なら、対応する`)`で止まる(`$(...)`の中身)。 */
   parseList(untilParen: boolean): void {
     while (this.position < this.source.length) {
-      if (this.expectPattern) {
-        this.skipCasePattern();
-        continue;
-      }
       const char = this.peek(0);
       if (char === ")" && this.subshellDepth === 0) {
         if (!untilParen)
@@ -907,16 +949,6 @@ class Parser {
         this.skipHeredocBodies();
         return;
       case ";":
-        if (
-          this.caseDepth > 0 &&
-          (this.peek(1) === ";" || this.peek(1) === "&")
-        ) {
-          // `;;`、`;&`、`;;&`は`case`の節の終わり。次はパターンが来る。
-          this.endCommand();
-          this.position += this.source.startsWith(";;&", this.position) ? 3 : 2;
-          this.expectPattern = true;
-          return;
-        }
         this.endCommand();
         this.position += 1;
         return;
@@ -1064,67 +1096,10 @@ class Parser {
         this.writeTargets.push(word);
       }
       this.redirectNextWord = false;
-    } else if (this.isCaseKeyword(word)) {
-      // `case`、`in`、`esac`は制御構文の語で、コマンドの語にしない。
     } else {
       this.words.push(word);
     }
     this.resetWord();
-  }
-
-  /** `case`の構文を表す語なら、状態を進めて真を返す。 */
-  private isCaseKeyword(word: Word): boolean {
-    if (this.caseHeader) {
-      if (word.text === "in") {
-        this.caseHeader = false;
-        this.expectPattern = true;
-      }
-      return true;
-    }
-    if (this.words.length > 0 || word.dynamic) return false;
-    if (word.text === "case") {
-      this.caseDepth += 1;
-      this.caseHeader = true;
-      return true;
-    }
-    if (word.text === "esac" && this.caseDepth > 0) {
-      this.caseDepth -= 1;
-      return true;
-    }
-    return false;
-  }
-
-  /** `in`や`;;`の直後に、`)`までのパターンを読み飛ばす。`esac`が来れば`case`を閉じる。 */
-  private skipCasePattern(): void {
-    while (this.position < this.source.length && /\s/.test(this.peek(0)))
-      this.position += 1;
-    if (this.position >= this.source.length) return;
-    if (
-      this.source.startsWith("esac", this.position) &&
-      !/[\w-]/.test(this.peek(4))
-    ) {
-      this.position += 4;
-      this.caseDepth -= 1;
-      this.expectPattern = false;
-      return;
-    }
-    if (this.peek(0) === "(") this.position += 1;
-    while (this.position < this.source.length) {
-      const char = this.peek(0);
-      if (char === "\\") {
-        this.position += 2;
-      } else if (char === "'" || char === '"') {
-        const end = this.findClosingQuote(char, this.position + 1);
-        this.position = end + 1;
-      } else if (char === ")") {
-        this.position += 1;
-        this.expectPattern = false;
-        return;
-      } else {
-        this.position += 1;
-      }
-    }
-    throw new ShellSyntaxError("unterminated case pattern");
   }
 
   private findClosingQuote(quote: string, from: number): number {
@@ -1133,7 +1108,7 @@ class Parser {
       if (char === "\\" && quote === '"') at += 1;
       else if (char === quote) return at;
     }
-    throw new ShellSyntaxError(`unterminated ${quote} quote in a case pattern`);
+    throw new ShellSyntaxError(`unterminated ${quote} quote`);
   }
 
   private endCommand(): void {
@@ -1162,7 +1137,13 @@ class Parser {
 
   /** `sh -c '...'`、`bun exec '...'`、`eval ...`の引数を、別のコマンド行として読む。 */
   private expandNested(command: SimpleCommand): void {
-    const { words } = stripWrappers(command.words);
+    const stripped = stripWrappers(command.words);
+    if (stripped.unreadable) {
+      throw new ShellSyntaxError(
+        "a reserved word or compound-command form that the guard cannot read",
+      );
+    }
+    const { words } = stripped;
     const program = words[0];
     if (program === undefined) return;
     const name = baseName(program.text);
