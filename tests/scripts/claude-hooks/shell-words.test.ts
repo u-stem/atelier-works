@@ -262,8 +262,19 @@ const UNREADABLE_LEADING: readonly (readonly [string, string])[] = [
   ["a coprocess with a name", "coproc NAME git push"],
   ["a repeat loop", "repeat 1 git push"],
   ["a function definition keyword", "function git push"],
-  ["a case statement", "case x in a) git push;; esac"],
+  ["a case clause with a pattern", "case x in a) git push;; esac"],
   ["a case terminator", "esac git push"],
+];
+
+/**
+ * `case`の語そのものの拒否を確かめる行。パターンの`)`を含まないので、
+ * 構文が`)`で崩れる前に、先頭の語の判定が拒否することになる。
+ */
+const CASE_WORD_FORMS: readonly (readonly [string, string])[] = [
+  ["a case header alone", "case x"],
+  ["a case header with in", "case x in a"],
+  ["a case terminator alone", "esac"],
+  ["a case header behind an assignment", "X=1 case x"],
 ];
 
 describe("reserved words the parser cannot read", () => {
@@ -293,25 +304,61 @@ describe("reserved words the parser cannot read", () => {
     expect(parses(line)).toBe(false);
   });
 
-  test("rejects a case statement behind a transparent word in a double-quoted substitution", () => {
+  test("rejects a case clause with a pattern behind a transparent word in a double-quoted substitution", () => {
     expect(parses('echo "$(then case x in a) :;; esac)"')).toBe(false);
   });
 
-  test("rejects a case statement behind a transparent word in a parameter expansion", () => {
+  test("rejects a case clause with a pattern behind a transparent word in a parameter expansion", () => {
     expect(parses(`echo ${OPEN}x:-$(then case x in a) :;; esac)}`)).toBe(false);
   });
 
-  test("rejects a case statement behind a transparent word in a here-document body", () => {
+  test("rejects a case clause with a pattern behind a transparent word in a here-document body", () => {
     expect(parses("cat <<EOF\n$(then case x in a) :;; esac)\nEOF\n")).toBe(
       false,
     );
   });
 
-  test.each([
-    ["a single-quoted spelling", "'case' x in a) git push;; esac"],
-    ["a backslash spelling", "ca\\se x in a) git push;; esac"],
-  ])("rejects a case statement written with %s", (_spelling, line) => {
+  test.each(CASE_WORD_FORMS)("rejects the case word of %s", (_kind, line) => {
     expect(parses(line)).toBe(false);
+  });
+
+  test.each(CASE_WORD_FORMS)(
+    "rejects the case word of %s behind a transparent word",
+    (_kind, line) => {
+      expect(parses(`then ${line}`)).toBe(false);
+    },
+  );
+
+  test.each(CASE_WORD_FORMS)(
+    "rejects the case word of %s in a double-quoted substitution",
+    (_kind, line) => {
+      expect(parses(`echo "$(${line})"`)).toBe(false);
+    },
+  );
+
+  test.each(CASE_WORD_FORMS)(
+    "rejects the case word of %s in a parameter expansion",
+    (_kind, line) => {
+      expect(parses(`echo ${OPEN}x:-$(${line})}`)).toBe(false);
+    },
+  );
+
+  test.each(CASE_WORD_FORMS)(
+    "rejects the case word of %s in a here-document body",
+    (_kind, line) => {
+      expect(parses(`cat <<EOF\n$(${line})\nEOF\n`)).toBe(false);
+    },
+  );
+
+  test.each([
+    ["a single-quoted spelling", "'case' x"],
+    ["a backslash spelling", "ca\\se x"],
+  ])("rejects the case word written with %s", (_spelling, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test("rejects a coprocess followed by a parenthesis", () => {
+    expect(parses("coproc (git push)")).toBe(false);
   });
 
   test("keeps case as a plain word after a command name", () => {
