@@ -1725,8 +1725,9 @@ describe("bash-guard explains a denial to the main session", () => {
     "%s names the characters an argument cannot hold",
     async (_kind, command) => {
       const reason = await denyReason(command);
-      expect(reason).toContain("Japanese punctuation");
-      expect(reason).toContain("#");
+      expect(reason).toContain(
+        "Japanese punctuation such as 、 。 ・ 「」 （） and # are not allowed",
+      );
     },
   );
 });
