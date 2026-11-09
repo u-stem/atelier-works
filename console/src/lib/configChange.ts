@@ -3,7 +3,7 @@
 // 設定変更のscriptの契約テストが突き合わせる。
 // 画面が出す操作の絞り込みで、権限の境界ではない。境界はscriptが同じ表で確かめる。
 
-import type { ConfigItemView } from "../api/jobsQueries.ts";
+import type { ConfigItemView, DesignStageView } from "../api/jobsQueries.ts";
 
 /** `true`から`false`へだけ変えられる真偽の項目。 */
 export const STOPPABLE_SWITCHES: readonly string[] = [
@@ -430,4 +430,46 @@ export function changeDialogLines(
     "元に戻すには、運用者がWindmillでリソースを編集するか、wmill resource pushで戻します。Consoleからは戻せません。",
   );
   return lines;
+}
+
+// 以下は、確認の文を結論と詳細に分ける関数のスタブ。実装は次のコミットで書く。
+
+/** 確認の文を決める、ダイアログの外の状況。 */
+export type DialogContext = {
+  /** 入力欄の文字列。 */
+  readonly text?: string;
+  /** 設計工程が実際に効いているか。 */
+  readonly designStage?: DesignStageView | undefined;
+};
+
+export function formatNumberValue(_key: string, value: number): string {
+  return String(value);
+}
+
+export function lowerHint(
+  _offer: Extract<ChangeOffer, { kind: "lower" }>,
+): string {
+  return "";
+}
+
+export function lowerChangeText(
+  _offer: Extract<ChangeOffer, { kind: "lower" }>,
+  _text: string,
+): string {
+  return "";
+}
+
+export function changeDialogConclusion(
+  _offer: ChangeOffer,
+  _context: DialogContext = {},
+): string {
+  return "";
+}
+
+export function changeDialogDetails(
+  offer: ChangeOffer,
+  checkCommands: CheckCommands = NO_CHECK_COMMANDS,
+  _context: DialogContext = {},
+): readonly string[] {
+  return changeDialogLines(offer, checkCommands);
 }

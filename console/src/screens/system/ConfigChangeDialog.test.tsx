@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { DesignStageView } from "../../api/jobsQueries.ts";
 import {
   type ChangeOffer,
   type CheckCommands,
@@ -18,12 +19,14 @@ function render(
   offer: ChangeOffer | null,
   text = "",
   checkCommands?: CheckCommands,
+  designStage?: DesignStageView,
 ) {
   return renderToStaticMarkup(
     <ConfigChangeDialog
       offer={offer}
       text={text}
       checkCommands={checkCommands ?? NO_CHECK_COMMANDS}
+      designStage={designStage}
       onTextChange={() => undefined}
       onConfirm={() => undefined}
       onCancel={() => undefined}
@@ -42,12 +45,32 @@ describe("ConfigChangeDialog for a switch", () => {
     expect(render(offer)).toContain("implement_enabled");
   });
 
-  test("shows the current value and the new one", () => {
+  test("shows the value before and after in the words enabled and disabled", () => {
+    expect(render(offer)).toContain("有効 → 無効");
+  });
+
+  test("keeps the written values true and false for a reader", () => {
+    expect(render(offer)).toMatch(/sr-only[^>]*>\(true → false\)</);
+  });
+
+  test("puts the conclusion before the item", () => {
     const html = render(offer);
-    expect([html.includes(">true<"), html.includes(">false<")]).toEqual([
-      true,
-      true,
-    ]);
+    expect(html.indexOf("実装を止めます")).toBeLessThan(html.indexOf("項目"));
+  });
+
+  test("emphasizes the conclusion", () => {
+    expect(render(offer)).toMatch(
+      /<p class="[^"]*font-semibold[^"]*">実装を止めます/,
+    );
+  });
+
+  test("lists the details as items", () => {
+    expect(render(offer)).toMatch(/<li[^>]*>元に戻すには/);
+  });
+
+  test("does not repeat the conclusion in the details", () => {
+    const html = render(offer);
+    expect(html.split("承認済みで止まります").length - 1).toBe(1);
   });
 
   test("has no box to type a value", () => {
@@ -65,6 +88,39 @@ describe("ConfigChangeDialog for a switch", () => {
   });
 });
 
+describe("ConfigChangeDialog for design_enabled", () => {
+  const offer = offerFor("design_enabled", true);
+  const ignored: DesignStageView = {
+    enabled: false,
+    ignored: true,
+    indeterminate: false,
+  };
+
+  test("says that the stop changes nothing while the design stage is ignored", () => {
+    expect(render(offer, "", undefined, ignored)).toContain(
+      "いま設計工程は無視されていて、動いていません。止めても、動きは変わりません。",
+    );
+  });
+
+  test("keeps the button to stop while the design stage is ignored", () => {
+    expect(render(offer, "", undefined, ignored)).toContain(">止める<");
+  });
+
+  test("says what the stop causes while the design stage is in effect", () => {
+    expect(
+      render(offer, "", undefined, {
+        enabled: true,
+        ignored: false,
+        indeterminate: false,
+      }),
+    ).toContain("設計書の承認を挟まず、実装へ進みます");
+  });
+
+  test("says what the stop causes when the backend sends no stage", () => {
+    expect(render(offer)).toContain("設計書の承認を挟まず、実装へ進みます");
+  });
+});
+
 describe("ConfigChangeDialog for a number", () => {
   const offer = offerFor("daily_budget_usd", 50);
 
@@ -72,8 +128,24 @@ describe("ConfigChangeDialog for a number", () => {
     expect(render(offer)).toContain("この設定の値を下げますか");
   });
 
-  test("shows the current value", () => {
-    expect(render(offer)).toContain(">50<");
+  test("asks for the new value in the row of the values before and after", () => {
+    expect(render(offer)).toContain("50 USD → 変更後の値を入力してください");
+  });
+
+  test("shows the values before and after with the unit once a value is typed", () => {
+    expect(render(offer, "5")).toContain("50 USD → 5 USD");
+  });
+
+  test("tells the constraint of the new value before anything is typed", () => {
+    expect(render(offer)).toContain(
+      "いまの値(50 USD)より小さい数。0より大きい",
+    );
+  });
+
+  test("puts the conclusion with the values and the daily warning first", () => {
+    expect(render(offer, "5")).toMatch(
+      /<p class="[^"]*font-semibold[^"]*">daily_budget_usd を 50 USD から 5 USD に下げます。今日の使用額を下回ると/,
+    );
   });
 
   test("has a box to type the new value, with a label", () => {
@@ -200,6 +272,12 @@ describe("ConfigChangeDialog for adding to a list", () => {
     expect(render(offer)).toContain("この一覧に追加しますか");
   });
 
+  test("tells the typed element in the conclusion", () => {
+    expect(render(addOffer("default_reviewers", []), "alice")).toMatch(
+      /<p class="[^"]*font-semibold[^"]*">default_reviewers に alice を追加します。/,
+    );
+  });
+
   test("names the item", () => {
     expect(render(offer)).toContain("repo_allowlist");
   });
@@ -278,9 +356,9 @@ describe("ConfigChangeDialog for adding to a list", () => {
     expect(render(offer, "x")).not.toContain("Consoleからは戻せません");
   });
 
-  test("tells that others leave the targets when repo_allowlist was empty", () => {
-    expect(render(addOffer("repo_allowlist", []))).toContain(
-      "挙げていない他のリポジトリは対象から外れます",
+  test("tells in the conclusion that the other repositories stop when repo_allowlist was empty", () => {
+    expect(render(addOffer("repo_allowlist", []), "x")).toContain(
+      "factory_repo と追加した要素以外のリポジトリは止まります",
     );
   });
 
@@ -343,8 +421,10 @@ describe("ConfigChangeDialog for removing from a list", () => {
     expect(render(offer)).toContain("default_reviewers");
   });
 
-  test("shows the element to remove", () => {
-    expect(render(offer)).toMatch(/削除する要素<\/dt><dd[^>]*>bob</);
+  test("tells the element to remove in the conclusion", () => {
+    expect(render(offer)).toMatch(
+      /<p class="[^"]*font-semibold[^"]*">default_reviewers から bob を削除します。/,
+    );
   });
 
   test("has no box to type a value", () => {

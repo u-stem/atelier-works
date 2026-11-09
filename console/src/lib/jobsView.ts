@@ -412,6 +412,20 @@ export function describeDesignStage(stage: DesignStageView): DesignStageText {
   };
 }
 
+/** `design_enabled`の行に添える注記。`label`は無視中などの語で、無ければ`null`。 */
+export type DesignEnabledNote = {
+  readonly label: string | null;
+  readonly text: string;
+};
+
+// 注記の実装は次のコミットで書く。
+export function describeDesignEnabledNote(
+  _item: ConfigItemView,
+  _stage: DesignStageView | undefined,
+): DesignEnabledNote | null {
+  return null;
+}
+
 /** 値を出さない設定の印の文言。参照と、伏せた値に使う。 */
 export const CONFIG_REFERENCE_LABEL = "参照(出さない)";
 

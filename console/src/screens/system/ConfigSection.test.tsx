@@ -386,10 +386,32 @@ describe("ConfigSection", () => {
     expect(renderSection()).toMatch(/<label[^>]*>キー名で絞り込む<\/label>/);
   });
 
-  test("says which changes can be made on the items that are allowed", () => {
+  test("says that a reference and a masked value are shown as hidden", () => {
     expect(renderSection()).toContain(
-      "許可した項目だけ、止める向きと下げる向きの変更と、一覧の追加と削除ができます",
+      "参照と伏せた値は「参照(出さない)」として表示します",
     );
+  });
+
+  test("says which changes can be made in the Console", () => {
+    expect(renderSection()).toContain(
+      "Consoleで変えられるのは、機能を止める向き、値を下げる向き、3つの一覧の追加と削除です",
+    );
+  });
+
+  test("says that the other changes are made from a terminal", () => {
+    expect(renderSection()).toContain(
+      "それ以外の変更(有効にする向き、値の引き上げ、ownersなど)は、端末から行います(wmill resource pushなど)",
+    );
+  });
+
+  test("says where to stop everything", () => {
+    expect(renderSection()).toContain(
+      "全部を止めるときは、システムの「状態」タブの全停止を使います",
+    );
+  });
+
+  test("lists the changes in the description as items", () => {
+    expect(renderSection()).toMatch(/<li[^>]*>Consoleで変えられるのは/);
   });
 
   test("offers to lower a number that is on the list", () => {
@@ -608,6 +630,146 @@ describe("ConfigSection", () => {
     expect(
       renderSection(staleQuery(SNAPSHOT, new ApiFailure({ kind: "network" }))),
     ).toContain("前回取得した値を表示しています");
+  });
+});
+
+/** 項目のキーで見つけた行。キーは折り返しの位置(wbr)を含むので外して探す。 */
+function rowOfKey(html: string, key: string): string {
+  const rows = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/g) ?? [];
+  return (
+    rows.find((row) => row.replaceAll("<wbr/>", "").includes(`>${key}<`)) ?? ""
+  );
+}
+
+describe("ConfigList for a time", () => {
+  const SINCE: ConfigItemView = {
+    key: "design_enabled_since",
+    kind: "value",
+    value: "2026-11-03T00:10:00Z",
+    masked: false,
+  };
+
+  function rowFor(item: ConfigItemView): string {
+    return rowOfKey(
+      renderToStaticMarkup(<ConfigList items={[item]} />),
+      item.key,
+    );
+  }
+
+  test("shows the time in Japan time in a short form", () => {
+    expect(rowFor(SINCE)).toContain(">11/03 09:10<");
+  });
+
+  test("keeps the written string in the datetime attribute", () => {
+    expect(rowFor(SINCE)).toContain(`<time dateTime="2026-11-03T00:10:00Z"`);
+  });
+
+  test("keeps the written string in the title", () => {
+    expect(rowFor(SINCE)).toContain(`title="2026-11-03T00:10:00Z"`);
+  });
+
+  test("shows a string that is not a time as it is", () => {
+    expect(rowFor({ ...SINCE, value: "soon" })).not.toContain("<time");
+  });
+
+  test("shows a time of any other key in the short form too", () => {
+    expect(rowFor({ ...SINCE, key: "paused_until" })).toContain(
+      ">11/03 09:10<",
+    );
+  });
+});
+
+describe("ConfigList for the notes of design_enabled", () => {
+  const ON: ConfigItemView = {
+    key: "design_enabled",
+    kind: "value",
+    value: true,
+    masked: false,
+  };
+  const OFF: ConfigItemView = { ...ON, value: false };
+  const IGNORED: DesignStageView = {
+    enabled: false,
+    ignored: true,
+    indeterminate: false,
+  };
+  const UNKNOWN: DesignStageView = {
+    enabled: false,
+    ignored: false,
+    indeterminate: true,
+  };
+  const IN_EFFECT: DesignStageView = {
+    enabled: true,
+    ignored: false,
+    indeterminate: false,
+  };
+
+  function rowWith(item: ConfigItemView, stage?: DesignStageView): string {
+    return rowOfKey(
+      renderToStaticMarkup(<ConfigList items={[item]} designStage={stage} />),
+      item.key,
+    );
+  }
+
+  test("says that the written true is ignored", () => {
+    expect(rowWith(ON, IGNORED)).toContain("無視中");
+  });
+
+  test("gives the reason of the ignoring in the row", () => {
+    expect(rowWith(ON, IGNORED)).toContain(
+      "design_enabled_since が無いか、日時として読めないためです。",
+    );
+  });
+
+  test("still shows the badge of the written value", () => {
+    expect(rowWith(ON, IGNORED)).toContain("有効");
+  });
+
+  test("says that the written true cannot be told", () => {
+    expect(rowWith(ON, UNKNOWN)).toContain("判定できません");
+  });
+
+  test("says nothing when the written true is in effect", () => {
+    expect(rowWith(ON, IN_EFFECT)).not.toMatch(/無視中|判定できません/);
+  });
+
+  test("says nothing about ignoring when the backend sends no stage", () => {
+    expect(rowWith(ON)).not.toContain("無視中");
+  });
+
+  test("keeps the note of the ignoring when the row of the stage is hidden", () => {
+    const html = renderToStaticMarkup(
+      <ConfigList items={[ON]} designStage={IGNORED} hideDesignStageRow />,
+    );
+    expect([
+      html.includes("設計工程(実際の状態)"),
+      rowOfKey(html, "design_enabled").includes("無視中"),
+    ]).toEqual([false, true]);
+  });
+
+  test("tells how to resume while it is written false", () => {
+    expect(rowWith(OFF, IN_EFFECT)).toContain(
+      "再開は端末から行います。design_enabled を true にし、design_enabled_since に新しい時刻を書きます",
+    );
+  });
+
+  test("tells how to resume while the backend sends no stage", () => {
+    expect(rowWith(OFF)).toContain("再開は端末から行います");
+  });
+
+  test("does not tell how to resume while it is written true", () => {
+    expect(rowWith(ON, IN_EFFECT)).not.toContain("再開は端末から行います");
+  });
+
+  test("does not tell how to resume for another switch", () => {
+    expect(
+      rowWith({ ...OFF, key: "implement_enabled" }, IN_EFFECT),
+    ).not.toContain("再開は端末から行います");
+  });
+
+  test("does not tell how to resume for a reference", () => {
+    expect(
+      rowWith({ key: "design_enabled", kind: "reference" }, IN_EFFECT),
+    ).not.toContain("再開は端末から行います");
   });
 });
 

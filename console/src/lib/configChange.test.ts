@@ -1,15 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import type { ConfigItemView } from "../api/jobsQueries.ts";
+import type { ConfigItemView, DesignStageView } from "../api/jobsQueries.ts";
 import {
   type ChangeOffer,
   type CheckCommands,
   type CommandCount,
-  changeDialogLines,
+  changeDialogConclusion,
+  changeDialogDetails,
   changeOfferOf,
   changeOffersOf,
   checkCommandsOf,
+  type DialogContext,
   EDITABLE_LISTS,
+  formatNumberValue,
   LOWERABLE_NUMBERS,
+  lowerChangeText,
+  lowerHint,
   MAX_ELEMENT_LENGTH,
   NO_CHECK_COMMANDS,
   newElementMessage,
@@ -218,40 +223,53 @@ describe("newValueMessage", () => {
   });
 });
 
-describe("changeDialogLines", () => {
+const IGNORED_STAGE: DesignStageView = {
+  enabled: false,
+  ignored: true,
+  indeterminate: false,
+};
+
+function detailsOf(offer: ChangeOffer | null, context?: DialogContext): string {
+  return offer === null
+    ? ""
+    : changeDialogDetails(offer, undefined, context).join("\n");
+}
+
+describe("changeDialogDetails", () => {
   test("says that a person edits it in Windmill to undo the change", () => {
     const offer = changeOfferOf(value("implement_enabled", true));
-    expect(offer === null ? [] : changeDialogLines(offer).join("\n")).toContain(
+    expect(detailsOf(offer)).toContain(
       "元に戻すには、運用者がWindmillでリソースを編集するか、wmill resource pushで戻します",
     );
   });
 
   test("says the same for a number", () => {
     const offer = changeOfferOf(value("daily_budget_usd", 50));
-    expect(offer === null ? [] : changeDialogLines(offer).join("\n")).toContain(
+    expect(detailsOf(offer)).toContain(
       "元に戻すには、運用者がWindmillでリソースを編集するか、wmill resource pushで戻します",
     );
   });
 
   test("says that the Console cannot undo it", () => {
-    const offer = changeOfferOf(value("daily_budget_usd", 50));
-    expect(offer === null ? [] : changeDialogLines(offer).join("\n")).toContain(
-      "Consoleからは戻せません",
-    );
+    const offer = changeOfferOf(value("implement_enabled", true));
+    expect(detailsOf(offer)).toContain("Consoleからは戻せません");
+  });
+
+  test("says that the Console cannot raise a lowered number again", () => {
+    const offer = changeOfferOf(value("max_fix_rounds", 3));
+    expect(detailsOf(offer)).toContain("引き上げもできません");
   });
 
   test("says when the new value takes effect", () => {
     const offer = changeOfferOf(value("daily_budget_usd", 50));
-    expect(offer === null ? [] : changeDialogLines(offer).join("\n")).toContain(
-      "次に設定を読む処理から",
-    );
+    expect(detailsOf(offer)).toContain("次に設定を読む処理から");
   });
 });
 
-describe("changeDialogLines for what the change reaches", () => {
+describe("changeDialogDetails for what the change reaches", () => {
   function linesFor(key: string, value: unknown): string {
     const offer = changeOfferOf({ key, kind: "value", value, masked: false });
-    return offer === null ? "" : changeDialogLines(offer).join("\n");
+    return detailsOf(offer);
   }
 
   test("does not say that running work is not affected", () => {
@@ -272,26 +290,20 @@ describe("changeDialogLines for what the change reaches", () => {
     );
   });
 
-  test("warns that an approval while the implementation is stopped ends as approved", () => {
-    expect(linesFor("implement_enabled", true)).toContain(
-      "止めている間に承認した要件定義は、承認済みで止まります",
-    );
-  });
-
   test("says that a person resumes it by the retry after the switch is on again", () => {
     expect(linesFor("implement_enabled", true)).toContain(
       "有効に戻した後、人が再実行で再開します",
     );
   });
 
-  test("keeps the approval warning out of the other switches", () => {
-    expect(linesFor("dependabot_enabled", true)).not.toContain("承認");
+  test("leaves the warning about the approval to the conclusion", () => {
+    expect(linesFor("implement_enabled", true)).not.toContain(
+      "止めている間に承認した要件定義は",
+    );
   });
 
-  test("says that an approval while the design stage is stopped goes to the implementation without a design", () => {
-    expect(linesFor("design_enabled", true)).toContain(
-      "止めている間に承認した要件定義は、設計書を作らず、設計の承認も挟まずに、実装へ進みます",
-    );
+  test("keeps the resume by a retry out of the other switches", () => {
+    expect(linesFor("dependabot_enabled", true)).not.toContain("再実行");
   });
 
   test("says that the designs already in progress are not stopped", () => {
@@ -334,9 +346,9 @@ describe("changeDialogLines for what the change reaches", () => {
     );
   });
 
-  test("keeps the implementation approval warning out of the design stage", () => {
+  test("leaves the sentence about the approval of the design stage to the conclusion", () => {
     expect(linesFor("design_enabled", true)).not.toContain(
-      "承認済みで止まります",
+      "設計書を作らず、設計の承認も挟まずに",
     );
   });
 
@@ -346,20 +358,257 @@ describe("changeDialogLines for what the change reaches", () => {
     );
   });
 
-  test("warns that a daily limit below today's spending fails the flows that use Claude today", () => {
-    expect(linesFor("daily_budget_usd", 50)).toContain(
-      "今日の使用額を下回る値にすると、今日のClaudeを使うフローがすべて失敗します",
+  test("has nothing more to say when the design stage is ignored", () => {
+    const offer = changeOfferOf(value("design_enabled", true));
+    expect(
+      offer === null
+        ? ["no offer"]
+        : changeDialogDetails(offer, undefined, { designStage: IGNORED_STAGE }),
+    ).toEqual([]);
+  });
+
+  test("leaves the daily warning to the conclusion", () => {
+    expect(linesFor("daily_budget_usd", 50)).not.toContain("今日の使用額");
+  });
+});
+
+describe("changeDialogConclusion for a switch", () => {
+  function conclusionFor(key: string, context?: DialogContext): string {
+    const offer = changeOfferOf(value(key, true));
+    return offer === null ? "" : changeDialogConclusion(offer, context);
+  }
+
+  test("says that a design approval goes to the implementation without the approval of a design", () => {
+    expect(conclusionFor("design_enabled")).toBe(
+      "設計工程を止めます。止めた後に承認した要件定義は、設計書の承認を挟まず、実装へ進みます。戻すには端末が要ります。",
     );
   });
 
-  test("says that the Console cannot raise it again", () => {
-    expect(linesFor("daily_budget_usd", 50)).toContain(
-      "引き上げはConsoleではできません",
+  test("says that the design stage is ignored and the stop changes nothing", () => {
+    expect(
+      conclusionFor("design_enabled", { designStage: IGNORED_STAGE }),
+    ).toBe(
+      "いま設計工程は無視されていて、動いていません。止めても、動きは変わりません。",
+    );
+  });
+
+  test("keeps the usual conclusion when the design stage cannot be told", () => {
+    expect(
+      conclusionFor("design_enabled", {
+        designStage: { enabled: false, ignored: false, indeterminate: true },
+      }),
+    ).toContain("設計書の承認を挟まず、実装へ進みます");
+  });
+
+  test("keeps the usual conclusion when the design stage is in effect", () => {
+    expect(
+      conclusionFor("design_enabled", {
+        designStage: { enabled: true, ignored: false, indeterminate: false },
+      }),
+    ).toContain("設計書の承認を挟まず、実装へ進みます");
+  });
+
+  test("says that an approval while the implementation is stopped ends as approved", () => {
+    expect(conclusionFor("implement_enabled")).toBe(
+      "実装を止めます。止めている間に承認した要件定義は、承認済みで止まります(要対応には載りません)。",
+    );
+  });
+
+  test("names the item of any other switch", () => {
+    expect(conclusionFor("dependabot_enabled")).toBe(
+      "dependabot_enabled を止めます。この機能は、新しく動かなくなります。",
+    );
+  });
+
+  test("does not use the ignored sentence for another switch", () => {
+    expect(
+      conclusionFor("implement_enabled", { designStage: IGNORED_STAGE }),
+    ).not.toContain("無視されて");
+  });
+});
+
+describe("changeDialogConclusion for a number", () => {
+  function conclusionFor(key: string, current: number, text?: string): string {
+    const offer = changeOfferOf(value(key, current));
+    if (offer === null) return "";
+    return changeDialogConclusion(offer, text === undefined ? {} : { text });
+  }
+
+  test("tells the values before and after with the unit", () => {
+    expect(conclusionFor("max_fix_rounds", 3, "2")).toBe(
+      "max_fix_rounds を 3 ラウンド から 2 ラウンド に下げます。",
+    );
+  });
+
+  test("leaves the new value out while nothing is typed", () => {
+    expect(conclusionFor("max_fix_rounds", 3)).toBe(
+      "max_fix_rounds を 3 ラウンド から下げます。",
+    );
+  });
+
+  test("leaves the new value out while the text is not a number", () => {
+    expect(conclusionFor("max_fix_rounds", 3, "abc")).toBe(
+      "max_fix_rounds を 3 ラウンド から下げます。",
+    );
+  });
+
+  test("leaves the new value out while the value is not lower", () => {
+    expect(conclusionFor("max_fix_rounds", 3, "5")).toBe(
+      "max_fix_rounds を 3 ラウンド から下げます。",
+    );
+  });
+
+  test("warns that the flows that use Claude fail when the daily limit goes below today's spending", () => {
+    expect(conclusionFor("daily_budget_usd", 50, "5")).toBe(
+      "daily_budget_usd を 50 USD から 5 USD に下げます。今日の使用額を下回ると、今日のClaudeを使うフローがすべて失敗します。",
     );
   });
 
   test("keeps the daily warning out of the per-run limit", () => {
-    expect(linesFor("max_budget_usd_per_run", 5)).not.toContain("今日の使用額");
+    expect(conclusionFor("max_budget_usd_per_run", 5, "1")).not.toContain(
+      "今日の使用額",
+    );
+  });
+
+  test("writes a number without a unit when the key has none", () => {
+    expect(formatNumberValue("unknown_key", 3)).toBe("3");
+  });
+});
+
+describe("lowerHint", () => {
+  function hintFor(key: string, current: number): string {
+    const offer = changeOfferOf(value(key, current));
+    return offer?.kind === "lower" ? lowerHint(offer) : "";
+  }
+
+  test("says the value must be smaller than the current one and above zero for a budget", () => {
+    expect(hintFor("daily_budget_usd", 50)).toBe(
+      "いまの値(50 USD)より小さい数。0より大きい",
+    );
+  });
+
+  test("says the value must be an integer of the lower limit or more for a count", () => {
+    expect(hintFor("max_fix_rounds", 3)).toBe(
+      "整数。1以上、いまの値(3 ラウンド)より小さい",
+    );
+  });
+
+  test("writes the current value of a line limit with its unit", () => {
+    expect(hintFor("max_fix_diff_lines", 1500)).toBe(
+      "整数。1以上、いまの値(1500 行)より小さい",
+    );
+  });
+});
+
+describe("lowerChangeText", () => {
+  const offer = changeOfferOf(value("daily_budget_usd", 50));
+
+  function changeFor(text: string): string {
+    return offer?.kind === "lower" ? lowerChangeText(offer, text) : "";
+  }
+
+  test("writes the values before and after with an arrow", () => {
+    expect(changeFor("5")).toBe("50 USD → 5 USD");
+  });
+
+  test("asks for the new value while nothing is typed", () => {
+    expect(changeFor("")).toBe("50 USD → 変更後の値を入力してください");
+  });
+
+  test("asks for the new value while the text cannot be used", () => {
+    expect(changeFor("60")).toBe("50 USD → 変更後の値を入力してください");
+  });
+});
+
+describe("changeDialogConclusion for a list", () => {
+  function conclusionFor(offer: ChangeOffer, text?: string): string {
+    return changeDialogConclusion(offer, text === undefined ? {} : { text });
+  }
+
+  test("tells which element is added to which list", () => {
+    expect(
+      conclusionFor(
+        { kind: "add", key: "default_reviewers", current: [] },
+        "alice",
+      ),
+    ).toBe("default_reviewers に alice を追加します。");
+  });
+
+  test("leaves the element out while nothing is typed", () => {
+    expect(
+      conclusionFor({ kind: "add", key: "default_reviewers", current: [] }),
+    ).toBe("default_reviewers に要素を追加します。");
+  });
+
+  test("trims the whitespace around the element", () => {
+    expect(
+      conclusionFor(
+        { kind: "add", key: "default_reviewers", current: ["bob"] },
+        "  alice ",
+      ),
+    ).toBe("default_reviewers に alice を追加します。");
+  });
+
+  test("replaces hidden characters in the element", () => {
+    expect(
+      conclusionFor(
+        { kind: "add", key: "default_reviewers", current: [] },
+        "a‮b",
+      ),
+    ).not.toContain("‮");
+  });
+
+  test("says that all but factory_repo and the new element stop when repo_allowlist was empty", () => {
+    expect(
+      conclusionFor(
+        { kind: "add", key: "repo_allowlist", current: [] },
+        "https://github.com/octo-owner/widgets",
+      ),
+    ).toBe(
+      "repo_allowlist に https://github.com/octo-owner/widgets を追加します。空の一覧への追加です。factory_repo と追加した要素以外のリポジトリは止まります。",
+    );
+  });
+
+  test("says nothing about stopping when repo_allowlist already has elements", () => {
+    expect(
+      conclusionFor(
+        { kind: "add", key: "repo_allowlist", current: ["x"] },
+        "https://github.com/octo-owner/widgets",
+      ),
+    ).not.toContain("止まります");
+  });
+
+  test("says nothing about stopping when another list was empty", () => {
+    expect(
+      conclusionFor(
+        { kind: "add", key: "default_reviewers", current: [] },
+        "alice",
+      ),
+    ).not.toContain("止まります");
+  });
+
+  test("tells which element is removed from which list", () => {
+    expect(
+      conclusionFor({
+        kind: "remove",
+        key: "default_reviewers",
+        current: ["alice", "bob"],
+        index: 1,
+        element: "bob",
+      }),
+    ).toBe("default_reviewers から bob を削除します。");
+  });
+
+  test("replaces hidden characters in the element to remove", () => {
+    expect(
+      conclusionFor({
+        kind: "remove",
+        key: "default_reviewers",
+        current: ["a‮b"],
+        index: 0,
+        element: "a‮b",
+      }),
+    ).not.toContain("‮");
   });
 });
 
@@ -526,7 +775,7 @@ describe("parseNewElement", () => {
   });
 });
 
-describe("changeDialogLines for a list", () => {
+describe("changeDialogDetails for a list", () => {
   const NO_COMMANDS = NO_CHECK_COMMANDS;
 
   function commandsOf(allowed: number, byRepo = 0): CheckCommands {
@@ -540,7 +789,7 @@ describe("changeDialogLines for a list", () => {
     offer: ChangeOffer,
     commands: CheckCommands = NO_COMMANDS,
   ): string {
-    return changeDialogLines(offer, commands).join("\n");
+    return changeDialogDetails(offer, commands).join("\n");
   }
 
   function addTo(key: string, current: string[]): ChangeOffer {
@@ -593,22 +842,22 @@ describe("changeDialogLines for a list", () => {
     );
   });
 
-  test("tells that only the listed repositories remain when repo_allowlist was empty", () => {
-    expect(linesOf(addTo("repo_allowlist", []))).toContain(
-      "owners 配下の、ここに挙げたリポジトリだけが対象になります。挙げていない他のリポジトリは対象から外れます",
-    );
-  });
-
-  test("does not say that others leave when repo_allowlist already has elements", () => {
-    expect(linesOf(addTo("repo_allowlist", [REPOS[0] ?? ""]))).not.toContain(
+  test("leaves what an empty repo_allowlist means to the conclusion", () => {
+    expect(linesOf(addTo("repo_allowlist", []))).not.toContain(
       "対象から外れます",
     );
   });
 
-  test("does not say that others leave when another list was empty", () => {
-    expect(linesOf(addTo("default_reviewers", []))).not.toContain(
-      "対象から外れます",
+  test("does not repeat in the details that the element joins the targets", () => {
+    expect(linesOf(addTo("default_reviewers", ["alice"]))).not.toContain(
+      "対象に加わります",
     );
+  });
+
+  test("does not repeat in the details that the element leaves the targets", () => {
+    expect(
+      linesOf(removeFrom("default_reviewers", ["alice", "bob"])),
+    ).not.toContain("対象から外れます");
   });
 
   test("tells how many check commands also reach a new repository", () => {

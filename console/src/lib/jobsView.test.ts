@@ -13,6 +13,7 @@ import {
   currentJobs,
   describeArg,
   describeConfigValue,
+  describeDesignEnabledNote,
   describeDesignStage,
   describeSchedule,
   filterConfigItems,
@@ -759,6 +760,138 @@ describe("describeDesignStage", () => {
     ).toBe(
       "design_enabledかdesign_enabled_sinceが参照で書かれているため、効いている値をここでは判定できません。設定を読む処理は、参照を解決した値で判定します。",
     );
+  });
+});
+
+describe("describeDesignEnabledNote", () => {
+  const ON: ConfigItemView = {
+    key: "design_enabled",
+    kind: "value",
+    value: true,
+    masked: false,
+  };
+  const OFF: ConfigItemView = { ...ON, value: false };
+  const IGNORED = { enabled: false, ignored: true, indeterminate: false };
+  const UNKNOWN = { enabled: false, ignored: false, indeterminate: true };
+  const IN_EFFECT = { enabled: true, ignored: false, indeterminate: false };
+
+  test("labels a written true that is ignored", () => {
+    expect(describeDesignEnabledNote(ON, IGNORED)?.label).toBe("無視中");
+  });
+
+  test("gives the short reason for the ignored value", () => {
+    expect(describeDesignEnabledNote(ON, IGNORED)?.text).toBe(
+      "design_enabled_since が無いか、日時として読めないためです。",
+    );
+  });
+
+  test("labels a written true that cannot be told", () => {
+    expect(describeDesignEnabledNote(ON, UNKNOWN)?.label).toBe(
+      "判定できません",
+    );
+  });
+
+  test("has no note for a written true that is in effect", () => {
+    expect(describeDesignEnabledNote(ON, IN_EFFECT)).toBeNull();
+  });
+
+  test("has no note for a written true when the backend sends no stage", () => {
+    expect(describeDesignEnabledNote(ON, undefined)).toBeNull();
+  });
+
+  test("tells how to resume a written false", () => {
+    expect(describeDesignEnabledNote(OFF, IN_EFFECT)?.text).toBe(
+      "再開は端末から行います。design_enabled を true にし、design_enabled_since に新しい時刻を書きます(design_enabled だけを true にすると、残った時刻で、すぐ開きます)。",
+    );
+  });
+
+  test("tells how to resume a written false when the backend sends no stage", () => {
+    expect(describeDesignEnabledNote(OFF, undefined)?.text).toContain(
+      "再開は端末から行います",
+    );
+  });
+
+  test("has no note for another key", () => {
+    expect(
+      describeDesignEnabledNote({ ...OFF, key: "implement_enabled" }, IGNORED),
+    ).toBeNull();
+  });
+
+  test("has no note for a reference", () => {
+    expect(
+      describeDesignEnabledNote(
+        { key: "design_enabled", kind: "reference" },
+        IGNORED,
+      ),
+    ).toBeNull();
+  });
+
+  test("has no note for a value that was masked", () => {
+    expect(
+      describeDesignEnabledNote({ ...OFF, masked: true }, IGNORED),
+    ).toBeNull();
+  });
+});
+
+describe("describeConfigValue for a time", () => {
+  const describeValue = (key: string, value: unknown) =>
+    describeConfigValue({ key, kind: "value", value, masked: false });
+
+  test("shows an ISO time in Japan time", () => {
+    expect(
+      describeValue("design_enabled_since", "2026-11-03T00:10:00Z"),
+    ).toEqual({
+      kind: "datetime",
+      text: "11/03 09:10",
+      iso: "2026-11-03T00:10:00Z",
+    });
+  });
+
+  test("shows a time with an offset in Japan time", () => {
+    expect(describeValue("k", "2026-11-03T09:10:00.123+09:00")).toEqual({
+      kind: "datetime",
+      text: "11/03 09:10",
+      iso: "2026-11-03T09:10:00.123+09:00",
+    });
+  });
+
+  test("recognizes a time whatever the key is", () => {
+    expect(describeValue("some_other_key", "2026-11-03T00:10:00Z").kind).toBe(
+      "datetime",
+    );
+  });
+
+  test("keeps a time without a zone as text", () => {
+    expect(describeValue("k", "2026-11-03T00:10:00").kind).toBe("scalar");
+  });
+
+  test("keeps a date without a time as text", () => {
+    expect(describeValue("k", "2026-11-03").kind).toBe("scalar");
+  });
+
+  test("keeps a string that only starts like a time as text", () => {
+    expect(describeValue("k", "2026-11-03T00:10:00Z and more").kind).toBe(
+      "scalar",
+    );
+  });
+
+  test("keeps a month that does not exist as text", () => {
+    expect(describeValue("k", "2026-13-03T00:10:00Z").kind).toBe("scalar");
+  });
+
+  test("keeps an hour that does not exist as text", () => {
+    expect(describeValue("k", "2026-11-03T24:10:00Z").kind).toBe("scalar");
+  });
+
+  test("keeps a reference hidden even if it looked like a time", () => {
+    expect(
+      describeConfigValue({
+        key: "k",
+        kind: "value",
+        value: "2026-11-03T00:10:00Z",
+        masked: true,
+      }),
+    ).toEqual({ kind: "reference" });
   });
 });
 
