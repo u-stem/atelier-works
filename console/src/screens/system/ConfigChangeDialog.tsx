@@ -181,7 +181,8 @@ export function ConfigChangeDialog({
       onConfirm={onConfirm}
       onCancel={onCancel}
     >
-      <p className="text-body font-semibold">
+      {/* 区切りの無い長い要素(URLなど)が、枠からはみ出さないよう、どこでも折る。 */}
+      <p className="text-body font-semibold break-words [overflow-wrap:anywhere]">
         {changeDialogConclusion(offer, context)}
       </p>
       {offer.kind === "stop" ? <StopFields offer={offer} /> : null}

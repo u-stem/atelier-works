@@ -306,11 +306,8 @@ export function parseNewNumber(
   return { ok: true, value };
 }
 
-/** 変更後の値を求める句。入力欄の誤りと、前後の値の行が使う。 */
-const ENTER_NEW_VALUE = "変更後の値を入力してください";
-
 const NEW_VALUE_MESSAGES: Readonly<Record<NewNumberProblem, string>> = {
-  empty: `${ENTER_NEW_VALUE}。`,
+  empty: "変更後の値を入力してください。",
   not_a_number: "数字で入力してください。",
   not_integer: "整数で入力してください。",
   too_small: "この項目の下限より小さい値です。",
@@ -480,6 +477,10 @@ function listDetails(
   return lines;
 }
 
+/** 設計工程が無視されているときの、止めた後に戻す手順。 */
+const DESIGN_RESUME_DETAIL =
+  "再開するには、設定を書き換えて design_enabled を true にし、新しい design_enabled_since を書きます。";
+
 /** 設計工程を止めたときの詳細。止めている間の承認の行き先は結論が言う。 */
 const DESIGN_STOP_DETAILS: readonly string[] = [
   "すでに設計中の作業と設計の承認待ちは止まりません。",
@@ -494,7 +495,7 @@ const DESIGN_STOP_DETAILS: readonly string[] = [
  * 実装を止めた後の再開は、有効に戻した後に人が再実行で行う。
  * 設計工程を止めても進行中の設計と承認待ちは止まらず、`design_enabled_since`は残る。
  * `design_enabled`だけを`true`に戻すと、残った日時が読め、設計工程がすぐ開く。
- * 設計工程が無視されているときは、止めても動きが変わらないので、詳細を持たない。
+ * 設計工程が無視されているときは、止めても動きが変わらないので、効く時期は言わず、戻す手順だけを持つ。
  * 止める向きと下げる向きの変更は、Consoleからは戻せないので、戻すには運用者がWindmillで直す。
  * 一覧の追加と削除は、逆の操作で戻せる。
  * `checkCommands`は、`repo_allowlist`への追加が、検査コマンドの及ぶ範囲を広げることを伝えるために使う。
@@ -513,7 +514,8 @@ export function changeDialogDetails(
     offer.key === DESIGN_SWITCH &&
     context.designStage?.ignored === true
   ) {
-    return [];
+    // 止めても動きは変わらないので、効く時期は言わない。止めた後に戻す手順だけは、再開のために残す。
+    return [DESIGN_RESUME_DETAIL];
   }
   const lines = [TAKES_EFFECT];
   if (offer.key === APPROVAL_STOPPING_SWITCH) {

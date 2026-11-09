@@ -514,8 +514,20 @@ export type ConfigValueText =
 const ISO_DATETIME =
   /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 
+/** 日付が、その年月に存在するか。`Date`は2月31日を3月に繰り上げるので、月の日数で確かめる。 */
+function isRealDate(year: number, month: number, day: number): boolean {
+  return day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
 function isIsoDatetime(value: string): boolean {
-  return ISO_DATETIME.test(value) && !Number.isNaN(Date.parse(value));
+  if (!ISO_DATETIME.test(value) || Number.isNaN(Date.parse(value))) {
+    return false;
+  }
+  return isRealDate(
+    Number(value.slice(0, 4)),
+    Number(value.slice(5, 7)),
+    Number(value.slice(8, 10)),
+  );
 }
 
 /**
