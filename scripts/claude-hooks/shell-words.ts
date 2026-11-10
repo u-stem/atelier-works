@@ -112,11 +112,6 @@ export function shellInvocation(
   return null;
 }
 
-/** シェルの起動なら、シェルに渡す引数の語を返す(`busybox sh`も含む)。シェルでなければnull。 */
-export function shellArguments(words: readonly Word[]): readonly Word[] | null {
-  return shellInvocation(words)?.args ?? null;
-}
-
 /**
  * シェルの起動オプションを読んだ結果。読み切れない起動は`ok: false`で返す。
  * `source`はコードの出どころで、`command`は`-c`の文字列、`file`はスクリプトのファイル、`stdin`は標準入力である。
@@ -134,9 +129,9 @@ export type ShellLaunch =
     }
   | { readonly ok: false; readonly reason: string };
 
-/** bashの短いオプションの字。値を取る`o`と`O`、対話モードの`i`、確かめていない`k`・`D`・`R`は含まない。 */
+/** bashの短いオプションの字。値を取る`o`と`O`、対話モードの`i`、履歴の展開を有効にする`H`、確かめていない`k`・`D`・`R`は含まない。 */
 const BASH_OPTION_LETTERS: ReadonlySet<string> = new Set(
-  "abcefhlmnprstuvxBCEHPT",
+  "abcefhlmnprstuvxBCEPT",
 );
 
 /** `sh`と`dash`の短いオプションの字。POSIXの一覧に、`c`と`s`を足したものである。`sh`の実体は何でもありうる。 */
@@ -192,8 +187,9 @@ const BASH_LONG_NAMES: ReadonlySet<string> = new Set(
   ),
 );
 
-/** `${...}`の語の目印。語の中の波括弧がブレースの展開かを見るとき、取り除く。 */
-const PARAMETER_MARKER = "$".concat("{...}");
+/** `${...}`を読んだ語に入れる目印。語の中の波括弧がブレースの展開かを見るときは、この目印を取り除く。 */
+// biome-ignore lint/suspicious/noTemplateCurlyInString: 語の目印として入れる文字列である
+const PARAMETER_MARKER = "${...}";
 
 function unreadableLaunch(reason: string): ShellLaunch {
   return { ok: false, reason };
@@ -2029,8 +2025,7 @@ class Parser {
     const end = this.scanBraced(this.position, this.depth);
     this.rejectPendingNewline(this.source.slice(this.position, end));
     this.position = end;
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: 語の目印として入れる文字列である
-    this.markDynamic("${...}");
+    this.markDynamic(PARAMETER_MARKER);
   }
 
   /**

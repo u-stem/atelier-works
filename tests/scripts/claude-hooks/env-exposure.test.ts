@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { shellInputSource } from "../../../scripts/claude-hooks/env-exposure.ts";
+import {
+  type ShellInputSource,
+  shellInputSource,
+} from "../../../scripts/claude-hooks/env-exposure.ts";
 import type { Word } from "../../../scripts/claude-hooks/shell-words.ts";
 
 function words(...texts: string[]): Word[] {
@@ -7,7 +10,7 @@ function words(...texts: string[]): Word[] {
 }
 
 describe("shellInputSource", () => {
-  test.each([
+  test.each<[string, string, string[], boolean, ShellInputSource]>([
     ["a command string", "bash", ["-c", "cmd"], false, "command"],
     ["a script file", "bash", ["script.sh"], false, "file"],
     ["no arguments", "bash", [], false, "stdin"],

@@ -39,7 +39,6 @@ import {
   parseCommandLine,
   readsStandardInput,
   type SimpleCommand,
-  shellArguments,
   shellInvocation,
   stripWrappers,
   type Word,
@@ -555,7 +554,7 @@ function commandOperations(command: SimpleCommand): GuardedOperation[] {
     return [...found, ...wmillOperation(words.slice(1), viaXargs)];
   }
   // シェルの`-c`の文字列は、起動オプションを読んだうえで、字句に分ける段階で別のコマンドとして取り出されている。
-  if (shellArguments(words) !== null) return found;
+  if (shellInvocation(words) !== null) return found;
   return wrappers.length > 0 ? [...found, ...leftoverOperations(words)] : found;
 }
 

@@ -7,7 +7,6 @@
 import {
   baseName,
   readShellLaunch,
-  shellArguments,
   shellInvocation,
   stripWrappers,
   type Word,
@@ -179,7 +178,7 @@ export function dumpsEnvironment(inner: readonly Word[]): boolean {
   if (
     name === "busybox" &&
     words.length > 1 &&
-    shellArguments(words) === null
+    shellInvocation(words) === null
   ) {
     return dumpsEnvironment(words.slice(1));
   }
