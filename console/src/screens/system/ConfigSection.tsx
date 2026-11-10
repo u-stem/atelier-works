@@ -1,4 +1,3 @@
-import { Check, Minus } from "lucide-react";
 import { useState } from "react";
 import type {
   ConfigItemView,
@@ -7,8 +6,6 @@ import type {
 } from "../../api/jobsQueries.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { EmptyNote } from "../../components/EmptyNote.tsx";
-import { Badge } from "../../components/ui/badge.tsx";
-import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
@@ -31,9 +28,11 @@ import {
   matchesDesignStageQuery,
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
+import { ChangeButton, type SwitchOrNumberOffer } from "./ChangeButton.tsx";
 import { ConfigChangeDialog } from "./ConfigChangeDialog.tsx";
 import { EmptyValue, KeyText, TextValue } from "./ConfigText.tsx";
 import { EditableListValue } from "./EditableListValue.tsx";
+import { SwitchBadge } from "./SwitchBadge.tsx";
 import { SystemSection } from "./SystemSection.tsx";
 import { useConfigChange } from "./useConfigChange.ts";
 
@@ -75,32 +74,6 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
         </pre>
       );
   }
-}
-
-/**
- * 真偽。語(有効、無効)と記号(チェック、ハイフン)で示し、色だけに頼らない。
- * 有効は強調した枠、無効は薄い枠にする。成功や警告の色は使わない。
- * 慎重に入れる項目も同じ見た目になるので、有効を健全な状態と読ませないためである。
- * 書かれた値(true、false)は、読み上げにだけ残す。
- */
-function SwitchBadge({
-  enabled,
-  rawText,
-}: {
-  enabled: boolean;
-  rawText: string;
-}) {
-  const Mark = enabled ? Check : Minus;
-  return (
-    <Badge
-      variant="outline"
-      className={enabled ? "border-foreground/60 text-foreground" : undefined}
-    >
-      <Mark aria-hidden="true" />
-      {enabled ? "有効" : "無効"}
-      <span className="sr-only">({rawText})</span>
-    </Badge>
-  );
 }
 
 /**
@@ -263,8 +236,6 @@ const ROLE = {
  */
 const COLUMN_LINE = "@min-[40rem]:border-l @min-[40rem]:border-border";
 
-type SwitchOrNumberOffer = Extract<ChangeOffer, { kind: "stop" | "lower" }>;
-
 function isSwitchOrNumberOffer(
   offer: ChangeOffer | undefined,
 ): offer is SwitchOrNumberOffer {
@@ -294,31 +265,6 @@ function rowOffersOf(
     editableList,
     button: !editableList && isSwitchOrNumberOffer(offer) ? offer : null,
   };
-}
-
-function ChangeButton({
-  offer,
-  locked,
-  onChoose,
-}: {
-  offer: SwitchOrNumberOffer;
-  locked: boolean;
-  onChoose: (offer: ChangeOffer) => void;
-}) {
-  const verb = offer.kind === "stop" ? "止める" : "下げる";
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={locked}
-      aria-label={`${safeText(offer.key)}を${verb}`}
-      onClick={() => {
-        onChoose(offer);
-      }}
-    >
-      {verb}
-    </Button>
-  );
 }
 
 /**
