@@ -1531,6 +1531,73 @@ describe("long inputs finish with a decision", () => {
   });
 });
 
+/** `line`のコマンドから、`text`の語の`glob`の印を集める。 */
+function globFlagsOf(line: string, text: string): boolean[] {
+  const result = parseCommandLine(line);
+  if (!result.ok) throw new Error(result.error);
+  return result.commands.flatMap((command) =>
+    command.words.filter((word) => word.text === text).map((word) => word.glob),
+  );
+}
+
+describe("a substitution region that a shell may read as a substitution", () => {
+  test.each([
+    ["two subshells joined by an operator", "echo $((x) | (y))"],
+    ["two parenthesized terms", "echo $((a) + (b))"],
+    ["a subshell followed by a word", "echo $((x) y)"],
+    [
+      "a subshell with a command inside",
+      "echo $((git push origin main) | (cat))",
+    ],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    ["a parenthesized product", "echo $(( (1+2) * 3 ))"],
+    [
+      "two parenthesized terms inside outer parentheses",
+      "echo $(( (a) + (b) ))",
+    ],
+    ["a plain sum", "echo $((a+b))"],
+    ["a nested call-like group", "echo $((n*(n+1)/2))"],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+
+  test("keeps the command-position region unchanged", () => {
+    expect(parses("((x) | (y))")).toBe(true);
+  });
+});
+
+describe("a lone asterisk in a substitution region", () => {
+  test("is not a glob directly in the region", () => {
+    expect(globFlagsOf("echo $(( x * 2 ))", "*")).toEqual([false]);
+  });
+
+  test("is not a glob for a double asterisk", () => {
+    expect(globFlagsOf("echo $(( 2 ** 3 ))", "**")).toEqual([false]);
+  });
+
+  test("stays a glob inside a word of the region", () => {
+    expect(
+      globFlagsOf("echo $((cat scripts/stop_*))", "scripts/stop_*"),
+    ).toEqual([true]);
+  });
+
+  test("stays a glob inside a substitution opened in the region", () => {
+    expect(globFlagsOf("echo $(( $(echo *) ))", "*")).toEqual([true]);
+  });
+
+  test("stays a glob in a command-position region", () => {
+    expect(globFlagsOf("((a * b))", "*")).toEqual([true]);
+  });
+
+  test("stays a glob outside the region", () => {
+    expect(globFlagsOf("echo $(( x * 2 )) ; bun *", "*")).toEqual([true]);
+  });
+});
+
 describe("accepted false positives stay rejected", () => {
   test.each([
     ["a bracket expansion", "echo $[1+2]"],
