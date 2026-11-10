@@ -168,7 +168,6 @@ const BASH_LONG_FLAGS: ReadonlySet<string> = new Set([
   "--login",
   "--restricted",
   "--verbose",
-  "--debugger",
   "--noediting",
   "--dump-strings",
   "--dump-po-strings",
@@ -326,7 +325,9 @@ function readWideLaunch(
   hasStdin: boolean,
 ): ShellLaunch {
   const letters = shell === "bash" ? BASH_OPTION_LETTERS : POSIX_OPTION_LETTERS;
-  const longOptions = shell !== "dash";
+  // 長いオプションを読むのは`bash`だけにする。
+  // `sh`の実体が未知の長いオプションを値を取らずに読み飛ばすシェルのとき、後ろの語の読み方がずれるためである。
+  const longOptions = shell === "bash";
   let command = false;
   let stdin = false;
   let index = 0;
@@ -346,7 +347,8 @@ function readWideLaunch(
       break;
     }
     if (text.startsWith("--")) {
-      if (!longOptions) return unreadableLaunch("a long option in dash");
+      if (!longOptions)
+        return unreadableLaunch("a long option in a shell other than bash");
       if (text === "--version" || text === "--help") {
         return readLaunch("none", args.slice(index + 1));
       }
