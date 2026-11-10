@@ -1457,9 +1457,9 @@ describe("here-documents and the end of input", () => {
     ["a non-ASCII word", "cat <<あ\nx\nあ\n"],
     ["an empty quoted word", "cat <<''\nx\n\n"],
     ["a carriage return after a bare word", "cat <<EOF\r\nx\nEOF\n"],
-    ["a Unicode space after a bare word", "cat <<EOF \nx\nEOF\n"],
+    ["a no-break space after a bare word", "cat <<EOF\u00a0\nx\nEOF\n"],
     ["a carriage return after a quoted word", "cat <<'EOF'\r\nx\nEOF\n"],
-    ["a Unicode space after a quoted word", 'cat <<"EOF" \nx\nEOF\n'],
+    ["a no-break space after a quoted word", 'cat <<"EOF"\u00a0\nx\nEOF\n'],
   ])("rejects a delimiter that is %s", (_form, line) => {
     expect(parses(line)).toBe(false);
   });

@@ -4523,9 +4523,12 @@ describeForCallers(
       ["a delimiter that is partly quoted", "cat <<E'O'F\nx\nEOF\n"],
       ["a delimiter with a space in quotes", "cat <<'a b'\nx\na b\n"],
       ["a carriage return after a bare delimiter", "cat <<EOF\r\nx\nEOF\n"],
-      ["a Unicode space after a bare delimiter", "cat <<EOF \nx\nEOF\n"],
+      ["a no-break space after a bare delimiter", "cat <<EOF\u00a0\nx\nEOF\n"],
       ["a carriage return after a quoted delimiter", "cat <<'EOF'\r\nx\nEOF\n"],
-      ["a Unicode space after a quoted delimiter", 'cat <<"EOF" \nx\nEOF\n'],
+      [
+        "a no-break space after a quoted delimiter",
+        'cat <<"EOF"\u00a0\nx\nEOF\n',
+      ],
     ])("denies %s", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
