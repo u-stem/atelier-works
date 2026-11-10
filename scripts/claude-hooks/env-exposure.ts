@@ -2,10 +2,13 @@
 // `mise exec`の中のコマンドと、`docker exec`や`docker inspect`などが対象である。
 // 環境変数の一覧を出すコマンドと、コードを渡したシェルは、値を表示できる。
 // 名前を指定したツールや、スクリプトのファイルを渡したシェルは、拒否しない。
+// シェルの起動オプションを読み切れない起動は、コードを渡したシェルとして扱う。
 
 import {
   baseName,
+  readShellLaunch,
   shellArguments,
+  shellInvocation,
   stripWrappers,
   type Word,
 } from "./shell-words.ts";
@@ -118,37 +121,26 @@ export function firstOperand(
   return null;
 }
 
+/** シェルのコードの出どころ。`unreadable`は、起動オプションを読み切れない起動である。 */
+export type ShellInputSource =
+  | "command"
+  | "file"
+  | "stdin"
+  | "none"
+  | "unreadable";
+
 /**
- * シェルの引数から、コードの出どころ(`-c`の引数、スクリプトのファイル、標準入力)を返す。
- * `--version`のようにコードを読まない呼び出しは`none`を返す。
+ * シェルの起動から、コードの出どころ(`-c`の引数、スクリプトのファイル、標準入力)を返す。
+ * `--version`のようにコードを読まない呼び出しは`none`、起動オプションを読み切れない呼び出しは`unreadable`を返す。
+ * `shell`は起動語の名前(`busybox`の下は`busybox`)、`hasStdin`は標準入力にコードを渡す手段があれば真である。
  */
 export function shellInputSource(
+  shell: string,
   args: readonly Word[],
-): "command" | "file" | "stdin" | "none" {
-  let readsStdin = false;
-  for (let index = 0; index < args.length; index += 1) {
-    const text = args[index]?.text ?? "";
-    if (text === "--") {
-      if (readsStdin || args[index + 1] === undefined) return "stdin";
-      return "file";
-    }
-    if (text === "-o" || text === "+o" || text === "-O" || text === "+O") {
-      index += 1;
-      continue;
-    }
-    if (text === "--version" || text === "--help") return "none";
-    // 単独の`-`は標準入力からスクリプトを読む印である。
-    if (text === "-") return "stdin";
-    if (text.startsWith("--")) continue;
-    if (text.startsWith("-") && text.length > 1) {
-      if (text.includes("c")) return "command";
-      if (text.includes("s")) readsStdin = true;
-      continue;
-    }
-    if (text.startsWith("+")) continue;
-    return readsStdin ? "stdin" : "file";
-  }
-  return "stdin";
+  hasStdin: boolean,
+): ShellInputSource {
+  const launch = readShellLaunch(shell, args, hasStdin);
+  return launch.ok ? launch.source : "unreadable";
 }
 
 /** 語が`/proc/<pid>/environ`を指すなら真。値が実行時に決まる語は、`/proc/`で始まり`/environ`で終われば指すものとして扱う。 */
@@ -193,10 +185,11 @@ export function dumpsEnvironment(inner: readonly Word[]): boolean {
   }
   if (ENVIRONMENT_PRINTERS.has(name)) return true;
   if (LISTING_BUILTINS.has(name)) return words[1]?.text === "-p";
-  const shellArgs = shellArguments(words);
-  if (shellArgs === null) return false;
-  const source = shellInputSource(shellArgs);
-  return source === "command" || source === "stdin";
+  const invocation = shellInvocation(words);
+  if (invocation === null) return false;
+  // 語の並びだけでは標準入力の有無が決まらないので、あるものとして読む。
+  const source = shellInputSource(invocation.shell, invocation.args, true);
+  return source !== "file" && source !== "none";
 }
 
 /** `docker exec`の引数から、コンテナの名前を飛ばした後のコマンドが環境変数を出すなら真。 */

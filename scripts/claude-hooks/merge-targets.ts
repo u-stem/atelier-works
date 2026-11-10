@@ -37,8 +37,10 @@ import {
   baseName,
   literalShellInputs,
   parseCommandLine,
+  readsStandardInput,
   type SimpleCommand,
   shellArguments,
+  shellInvocation,
   stripWrappers,
   type Word,
 } from "./shell-words.ts";
@@ -552,7 +554,7 @@ function commandOperations(command: SimpleCommand): GuardedOperation[] {
   if (program === "wmill") {
     return [...found, ...wmillOperation(words.slice(1), viaXargs)];
   }
-  // シェルの`-c`の引数は、字句に分ける段階で別のコマンドとして取り出されている。
+  // シェルの`-c`の文字列は、起動オプションを読んだうえで、字句に分ける段階で別のコマンドとして取り出されている。
   if (shellArguments(words) !== null) return found;
   return wrappers.length > 0 ? [...found, ...leftoverOperations(words)] : found;
 }
@@ -565,8 +567,18 @@ function scan(line: string, depth: number): GuardedOperation[] {
     found.push(...commandOperations(command));
     if (depth >= MAX_INPUT_DEPTH) continue;
     const { words } = stripWrappers(command.words);
-    const shellArgs = shellArguments(words);
-    if (shellArgs === null || shellInputSource(shellArgs) !== "stdin") continue;
+    const invocation = shellInvocation(words);
+    // 起動オプションを読み切れない起動は、字句に分ける段階で拒否済みなので、ここでは読まない。
+    if (
+      invocation === null ||
+      shellInputSource(
+        invocation.shell,
+        invocation.args,
+        readsStandardInput(command),
+      ) !== "stdin"
+    ) {
+      continue;
+    }
     for (const source of literalShellInputs(command) ?? []) {
       found.push(...scan(source, depth + 1));
     }

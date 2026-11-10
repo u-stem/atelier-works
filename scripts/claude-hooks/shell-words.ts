@@ -12,6 +12,8 @@
 // 集合には引用符、バックスラッシュ、バッククォート、改行が無いので、括弧の数え方は、どちらの読み方でも同じになる。
 // ヒアドキュメントが区切りの行に着かずに終わる形と、閉じない括弧も、読めない構文として返す。
 // 対話モードを指定したシェルの起動と、字句の規則を実行時に変える変数の名前も、読めない構文として返す。
+// シェルの起動オプションは、閉じた集合の中だけを読み、`-c`の文字列とコードの出どころを1か所で決める。
+// 集合の外のオプションや、文字列が決まらない起動は、読めない構文として返す。
 
 /**
  * 引用符を外した後の語。
@@ -36,6 +38,8 @@ export type SimpleCommand = {
   /** `redirects`のうち、書き込みになるもの(`>`、`>>`、`>|`、`&>`、`<>`の先)。`<`の先は含まない。 */
   readonly writeTargets: readonly Word[];
   readonly inputs: readonly Word[];
+  /** 標準入力を、ヒアストリング、ヒアドキュメント、`<`、`<>`、`<&`のどれかで受けるなら真。 */
+  readonly readsInput: boolean;
   /** パイプで標準入力を渡してくる、すぐ前のコマンド。パイプの後ろでなければnull。 */
   readonly pipedFrom: SimpleCommand | null;
 };
@@ -93,17 +97,33 @@ export const SHELLS: ReadonlySet<string> = new Set([
   "tcsh",
 ]);
 
-/** シェルの起動なら、シェルに渡す引数の語を返す(`busybox sh`も含む)。シェルでなければnull。 */
-export function shellArguments(words: readonly Word[]): readonly Word[] | null {
+/**
+ * シェルの起動なら、読み手に渡すシェルの名前と、シェルに渡す引数の語を返す。シェルでなければnull。
+ * `busybox`の下は、続く語の名前を問わず`busybox`として返す。
+ */
+export function shellInvocation(
+  words: readonly Word[],
+): { readonly shell: string; readonly args: readonly Word[] } | null {
   const program = baseName(words[0]?.text ?? "");
-  if (SHELLS.has(program)) return words.slice(1);
+  if (SHELLS.has(program)) return { shell: program, args: words.slice(1) };
   if (program === "busybox" && SHELLS.has(baseName(words[1]?.text ?? ""))) {
-    return words.slice(2);
+    return { shell: "busybox", args: words.slice(2) };
   }
   return null;
 }
 
-/** シェルの起動オプションを読んだ結果。読み切れない起動は`ok: false`で返す。 */
+/** シェルの起動なら、シェルに渡す引数の語を返す(`busybox sh`も含む)。シェルでなければnull。 */
+export function shellArguments(words: readonly Word[]): readonly Word[] | null {
+  return shellInvocation(words)?.args ?? null;
+}
+
+/**
+ * シェルの起動オプションを読んだ結果。読み切れない起動は`ok: false`で返す。
+ * `source`はコードの出どころで、`command`は`-c`の文字列、`file`はスクリプトのファイル、`stdin`は標準入力である。
+ * `none`はコードを読まずに終わる起動(`--version`など)である。
+ * `script`と`scriptIndex`は、`command`のときの文字列の語とその`args`内の位置である。
+ * `operands`は、オプションを読み終えた後ろの語で、`command`のときは文字列の語から始まる。
+ */
 export type ShellLaunch =
   | {
       readonly ok: true;
@@ -114,28 +134,342 @@ export type ShellLaunch =
     }
   | { readonly ok: false; readonly reason: string };
 
-export function readShellLaunch(
-  _shell: string,
-  _args: readonly Word[],
-  _hasStdin: boolean,
+/** bashの短いオプションの字。値を取る`o`と`O`、対話モードの`i`、確かめていない`k`・`D`・`R`は含まない。 */
+const BASH_OPTION_LETTERS: ReadonlySet<string> = new Set(
+  "abcefhlmnprstuvxBCEHPT",
+);
+
+/** `sh`と`dash`の短いオプションの字。POSIXの一覧に、`c`と`s`を足したものである。`sh`の実体は何でもありうる。 */
+const POSIX_OPTION_LETTERS: ReadonlySet<string> = new Set("abCefhmnuvxcs");
+
+/** `-o`・`+o`・`-O`・`+O`が値に取る名前。`normalizeOptionName`で正規化した綴りで照合する。 */
+const SHELL_OPTION_NAMES: ReadonlySet<string> = new Set(
+  [
+    "errexit",
+    "nounset",
+    "pipefail",
+    "xtrace",
+    "verbose",
+    "noglob",
+    "noclobber",
+    "allexport",
+    "noexec",
+    "posix",
+    "extglob",
+    "nullglob",
+    "globstar",
+    "failglob",
+    "dotglob",
+    "inheritErrexit",
+    "lastpipe",
+  ].map(normalizeOptionName),
+);
+
+/** `bash`の値を取らない長いオプション。 */
+const BASH_LONG_FLAGS: ReadonlySet<string> = new Set([
+  "--norc",
+  "--noprofile",
+  "--posix",
+  "--login",
+  "--restricted",
+  "--verbose",
+  "--debugger",
+  "--noediting",
+  "--dump-strings",
+  "--dump-po-strings",
+]);
+
+/** `bash`の、次の語を値に取る長いオプション。 */
+const BASH_LONG_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "--rcfile",
+  "--init-file",
+]);
+
+/** `bash`は、`-`1つで始まる語も、長いオプションの名前に当たれば長いオプションとして読むことがある。 */
+const BASH_LONG_NAMES: ReadonlySet<string> = new Set(
+  [...BASH_LONG_FLAGS, ...BASH_LONG_VALUE_OPTIONS, "--version", "--help"].map(
+    (option) => option.slice(2),
+  ),
+);
+
+/** `${...}`の語の目印。語の中の波括弧がブレースの展開かを見るとき、取り除く。 */
+const PARAMETER_MARKER = "$".concat("{...}");
+
+function unreadableLaunch(reason: string): ShellLaunch {
+  return { ok: false, reason };
+}
+
+/** コードの出どころが決まった起動。`command`のときだけ、文字列の語とその位置を持つ。 */
+function readLaunch(
+  source: "command" | "file" | "stdin" | "none",
+  operands: readonly Word[],
+  script: Word | null = null,
+  scriptIndex: number | null = null,
 ): ShellLaunch {
-  return {
-    ok: true,
-    source: "none",
-    script: null,
-    scriptIndex: null,
-    operands: [],
-  };
+  return { ok: true, source, script, scriptIndex, operands };
 }
 
-export function readsStandardInput(_command: SimpleCommand): boolean {
-  return false;
+/** オプションの位置にあると、実行時に別のオプションや語に変わりうる語なら真。 */
+function isUnstableOption(word: Word): boolean {
+  return (
+    word.dynamic ||
+    word.glob ||
+    word.text.includes("{") ||
+    word.variants !== undefined
+  );
 }
 
-export function shellInvocation(
-  _words: readonly Word[],
-): { readonly shell: string; readonly args: readonly Word[] } | null {
+/**
+ * 最初のオペランドを読めない理由を返す。読めるならnull。
+ * 実行時に決まる語は、後ろに語が続くと、語の数が変わってオプションの位置がずれるので読めない。
+ * globとNULを含む語は、後ろに語が無くても読めない。
+ * コマンドの文字列ではない語は、ブレースの展開が`-c`のようなオプションに変わりうるので、ブレースを含めば読めない。
+ */
+function firstOperandProblem(
+  first: Word,
+  hasMore: boolean,
+  isCommandString: boolean,
+): string | null {
+  if (first.glob || first.variants !== undefined) {
+    return "an operand with a glob or a spelling that depends on the shell";
+  }
+  if (first.dynamic && hasMore) {
+    return "an operand decided at run time followed by more words";
+  }
+  if (
+    !isCommandString &&
+    first.text.replaceAll(PARAMETER_MARKER, "").includes("{")
+  ) {
+    return "an operand with a brace that can expand into options";
+  }
   return null;
+}
+
+/** 起動オプションを読み終えた後ろの語から、コードの出どころを決める。 */
+function launchFromOperands(
+  operands: readonly Word[],
+  offset: number,
+  marks: { readonly command: boolean; readonly stdin: boolean },
+  hasStdin: boolean,
+): ShellLaunch {
+  if (marks.command && marks.stdin) {
+    return unreadableLaunch(
+      "both the command flag and the stdin flag, which some shells read as code from the string and then from stdin",
+    );
+  }
+  const first = operands[0];
+  if (first !== undefined) {
+    const problem = firstOperandProblem(
+      first,
+      operands.length > 1,
+      marks.command,
+    );
+    if (problem !== null) return unreadableLaunch(problem);
+  }
+  if (marks.command) {
+    if (first === undefined) {
+      return unreadableLaunch("the command flag without a string");
+    }
+    return readLaunch("command", operands, first, offset);
+  }
+  if (marks.stdin || first === undefined) return readLaunch("stdin", operands);
+  // 実行時に決まる1語は、空になると語が無い起動になり、標準入力を読む。
+  if (first.dynamic && operands.length === 1 && hasStdin) {
+    return readLaunch("stdin", operands);
+  }
+  return readLaunch("file", operands);
+}
+
+/**
+ * `-`か`+`で始まる語1つを、短いオプションのまとまりとして読む。
+ * 読めたら、`c`と`s`の印と、値を取る語の数(0か1)を返す。読めなければ理由を返す。
+ */
+function readOptionBundle(
+  text: string,
+  letters: ReadonlySet<string>,
+  allowLongNames: boolean,
+):
+  | {
+      readonly command: boolean;
+      readonly stdin: boolean;
+      readonly takesValue: boolean;
+    }
+  | string {
+  if (text.length === 1) return "a lone plus";
+  if (
+    allowLongNames &&
+    text.startsWith("-") &&
+    BASH_LONG_NAMES.has(text.slice(1))
+  ) {
+    return "a long option name written with one dash";
+  }
+  let command = false;
+  let stdin = false;
+  let takesValue = false;
+  for (let at = 1; at < text.length; at += 1) {
+    const letter = text.charAt(at);
+    if (letters.has(letter)) {
+      if (letter === "c") command = true;
+      if (letter === "s") stdin = true;
+    } else if (letter === "o" || letter === "O") {
+      // 値を取る字は、まとまりの最後の1つだけ読む。値は次の語である。
+      if (at !== text.length - 1)
+        return "a value option in the middle of a bundle";
+      takesValue = true;
+    } else {
+      return "a short option letter outside the closed set";
+    }
+  }
+  return { command, stdin, takesValue };
+}
+
+/** `bash`・`sh`・`dash`の起動オプションを、閉じた集合で読む。 */
+function readWideLaunch(
+  shell: string,
+  args: readonly Word[],
+  hasStdin: boolean,
+): ShellLaunch {
+  const letters = shell === "bash" ? BASH_OPTION_LETTERS : POSIX_OPTION_LETTERS;
+  const longOptions = shell !== "dash";
+  let command = false;
+  let stdin = false;
+  let index = 0;
+  while (index < args.length) {
+    const word = args[index];
+    if (word === undefined) break;
+    const text = word.text;
+    if (!text.startsWith("-") && !text.startsWith("+")) break;
+    if (isUnstableOption(word)) {
+      return unreadableLaunch(
+        "an option word that is decided at run time or can expand into other words",
+      );
+    }
+    // 単独の`--`と`-`は、オプションの読み取りを終えるだけで、出どころは決めない。
+    if (text === "--" || text === "-") {
+      index += 1;
+      break;
+    }
+    if (text.startsWith("--")) {
+      if (!longOptions) return unreadableLaunch("a long option in dash");
+      if (text === "--version" || text === "--help") {
+        return readLaunch("none", args.slice(index + 1));
+      }
+      if (BASH_LONG_FLAGS.has(text)) {
+        index += 1;
+        continue;
+      }
+      if (BASH_LONG_VALUE_OPTIONS.has(text)) {
+        const value = args[index + 1];
+        if (value === undefined || isUnstableOption(value)) {
+          return unreadableLaunch(
+            "a long option without a value that can be read",
+          );
+        }
+        index += 2;
+        continue;
+      }
+      return unreadableLaunch("a long option outside the closed set");
+    }
+    const bundle = readOptionBundle(text, letters, longOptions);
+    if (typeof bundle === "string") return unreadableLaunch(bundle);
+    command = command || bundle.command;
+    stdin = stdin || bundle.stdin;
+    if (!bundle.takesValue) {
+      index += 1;
+      continue;
+    }
+    const value = args[index + 1];
+    if (
+      value === undefined ||
+      isUnstableOption(value) ||
+      /^[-+]/.test(value.text) ||
+      !SHELL_OPTION_NAMES.has(normalizeOptionName(value.text))
+    ) {
+      return unreadableLaunch(
+        "a value option whose value is missing or outside the closed set",
+      );
+    }
+    index += 2;
+  }
+  return launchFromOperands(
+    args.slice(index),
+    index,
+    { command, stdin },
+    hasStdin,
+  );
+}
+
+/** `bash`・`sh`・`dash`以外のシェルの起動を、引数なし、`-c`と文字列、オプションの語が無い並びの3つだけ読む。 */
+function readNarrowLaunch(
+  args: readonly Word[],
+  hasStdin: boolean,
+): ShellLaunch {
+  const first = args[0];
+  if (first === undefined) return readLaunch("stdin", args);
+  const script = args[1];
+  if (args.length === 2 && script !== undefined && first.text === "-c") {
+    if (first.dynamic || first.variants !== undefined) {
+      return unreadableLaunch(
+        "an option word that can expand into other words",
+      );
+    }
+    if (script.glob || script.variants !== undefined) {
+      return unreadableLaunch(
+        "a command string with a glob or a spelling that depends on the shell",
+      );
+    }
+    return readLaunch("command", args.slice(1), script, 1);
+  }
+  if (args.some((word) => /^[-+]/.test(word.text))) {
+    return unreadableLaunch(
+      "an option of a shell whose options the guard does not read",
+    );
+  }
+  const problem = firstOperandProblem(first, args.length > 1, false);
+  if (problem !== null) return unreadableLaunch(problem);
+  if (
+    args
+      .slice(1)
+      .some((word) => word.dynamic || word.glob || word.variants !== undefined)
+  ) {
+    return unreadableLaunch("a word decided at run time after the script");
+  }
+  return launchFromOperands(
+    args,
+    0,
+    { command: false, stdin: false },
+    hasStdin,
+  );
+}
+
+/**
+ * シェルの起動オプションを読み、コードの出どころを決める。例外は投げない。
+ * `shell`は起動語の名前で、`busybox`の下は`busybox`として渡す。
+ * `hasStdin`は、標準入力にコードを渡す手段(パイプ、ヒアストリング、ヒアドキュメント、`<`)があれば真である。
+ * 実行時に決まる1語だけのオペランドが、空になって標準入力を読む起動になりうるかの判定にだけ効く。
+ * `ok`と`script`の判定には効かない。
+ */
+export function readShellLaunch(
+  shell: string,
+  args: readonly Word[],
+  hasStdin: boolean,
+): ShellLaunch {
+  if (shell === "bash" || shell === "sh" || shell === "dash") {
+    return readWideLaunch(shell, args, hasStdin);
+  }
+  return readNarrowLaunch(args, hasStdin);
+}
+
+/**
+ * コマンドが標準入力を受けるなら真。
+ * ヒアストリング、ヒアドキュメント、パイプ、`<`・`<>`・`<&`のリダイレクトがそれに当たる。
+ */
+export function readsStandardInput(command: SimpleCommand): boolean {
+  return (
+    command.readsInput ||
+    command.inputs.length > 0 ||
+    command.pipedFrom !== null
+  );
 }
 
 /** 入れ子の深さの上限。深すぎる入力で処理が止まらないようにする。 */
@@ -1005,21 +1339,6 @@ function collectCommands(
   new Parser(source, 0, out, depth).parseList(false);
 }
 
-/** `sh -c`の後の語を返す。`-c`が無ければnullを返す。 */
-function shellScriptArgument(args: readonly Word[]): Word | null {
-  for (let index = 0; index < args.length; index += 1) {
-    const text = args[index]?.text ?? "";
-    if (text === "-o" || text === "+o") {
-      index += 1;
-      continue;
-    }
-    if (!text.startsWith("-") || text === "-" || text === "--") return null;
-    if (!text.startsWith("--") && text.includes("c"))
-      return args[index + 1] ?? null;
-  }
-  return null;
-}
-
 type PendingHeredoc = {
   readonly delimiter: string;
   readonly stripTabs: boolean;
@@ -1044,6 +1363,8 @@ class Parser {
   private lastCommand: SimpleCommand | null = null;
   private redirectOperator = "";
   private redirectWrites = false;
+  /** 今のコマンドが、標準入力を受けるリダイレクトを持つなら真。 */
+  private readsInput = false;
   private text = "";
   /** NULを含む`$'...'`を読んだ語の、別の綴り。無ければnull。 */
   private variantText: string | null = null;
@@ -1347,12 +1668,15 @@ class Parser {
     this.hereStringNextWord = false;
     const inputs = this.inputs;
     this.inputs = [];
+    const readsInput = this.readsInput;
+    this.readsInput = false;
     if (this.words.length === 0 && this.redirects.length === 0) return;
     const command: SimpleCommand = {
       words: this.words,
       redirects: this.redirects,
       writeTargets: this.writeTargets,
       inputs,
+      readsInput,
       pipedFrom: this.pipeNext ? this.lastCommand : null,
     };
     this.pipeNext = false;
@@ -1377,16 +1701,23 @@ class Parser {
     const program = words[0];
     if (program === undefined) return;
     const name = baseName(program.text);
-    const shellArgs = shellArguments(words);
-    if (shellArgs !== null) {
-      if (launchesInteractiveShell(shellArgs)) {
+    const invocation = shellInvocation(words);
+    if (invocation !== null) {
+      if (launchesInteractiveShell(invocation.args)) {
         throw new ShellSyntaxError(
           "an interactive shell follows lexical rules the guard cannot read",
         );
       }
-      const script = shellScriptArgument(shellArgs);
-      if (script !== null)
-        collectCommands(script.text, this.out, this.depth + 1);
+      // 標準入力の有無は、`ok`と`script`の判定に効かないので偽を渡す。
+      const launch = readShellLaunch(invocation.shell, invocation.args, false);
+      if (!launch.ok) {
+        throw new ShellSyntaxError(
+          `shell launch options that the guard cannot read: ${launch.reason}`,
+        );
+      }
+      if (launch.script !== null) {
+        collectCommands(launch.script.text, this.out, this.depth + 1);
+      }
     } else if (name === "bun" && words[1]?.text === "exec") {
       // `bun exec '<シェルの文字列>'`は、文字列をbunのシェルで実行する。`sh -c`と同じく、別のコマンド行として読む。
       for (const word of words.slice(2)) {
@@ -1410,10 +1741,12 @@ class Parser {
       // ヒアストリングの語はファイルではなく入力の文字列なので、語にもリダイレクトの先にもせず、`inputs`に入れる。
       this.position += 3;
       this.hereStringNextWord = true;
+      this.readsInput = true;
       return;
     }
     if (this.source.startsWith("<<", this.position)) {
       this.position += 2;
+      this.readsInput = true;
       this.readHeredocDelimiter();
       return;
     }
@@ -1425,6 +1758,7 @@ class Parser {
     this.redirectNextWord = true;
     this.redirectOperator = text;
     this.redirectWrites = text !== "<" && text !== "<&";
+    if (text === "<" || text === "<>" || text === "<&") this.readsInput = true;
   }
 
   /** `>&`の先がファイル記述子の番号(`2>&1`の`1`)や`-`なら真。ファイルへの書き込みではない。 */
