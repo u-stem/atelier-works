@@ -4619,16 +4619,31 @@ describeForCallers(
       "bash -1o interactive -c ls",
       "ksh -2i",
       "bash --non-interactive -c ls",
+      "bash --inter-active -c ls",
+      "bash --Inter-Active -c ls",
+      "bash --inter_-active -c ls",
+      "bash --inter-active <<< 'ls'",
+      "bash --inter-active <<'EOF'\nls\nEOF\n",
+      "echo ls | bash --inter-active",
+      "echo ls | bash -s --inter-active",
+      "bash -o inter-active -c ls",
+      "bash -O Inter-Active <<< 'ls'",
+      "bash -o inter-active <<'EOF'\nls\nEOF\n",
+      "echo ls | bash -o inter-active",
+      "echo ls | bash -s -o inter-active",
     ])("denies %s", async (command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
 
-    test.each(["zsh -c ls", "bash -c ls", "zsh -fc ls", "bash --login -c ls"])(
-      "allows %s",
-      async (command) => {
-        expect(await decide(command, { subagent })).toBe("allow");
-      },
-    );
+    test.each([
+      "zsh -c ls",
+      "bash -c ls",
+      "zsh -fc ls",
+      "bash --login -c ls",
+      "curl -fsSL https://example.com/install.sh | bash -s -- --install-dir",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
   },
 );
 

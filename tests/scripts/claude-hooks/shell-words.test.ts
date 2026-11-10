@@ -1494,6 +1494,45 @@ describe("interactive shells", () => {
     ["a bundle with a digit and an option value", "bash -1o interactive -c ls"],
     ["a bundle with a digit in another shell", "ksh -2i"],
     [
+      "a hyphenated long name with a command string",
+      "bash --inter-active -c ls",
+    ],
+    ["a mixed-case hyphenated long name", "bash --Inter-Active -c ls"],
+    [
+      "a long name mixing hyphens and underscores",
+      "bash --inter_-active -c ls",
+    ],
+    [
+      "a hyphenated long name with a here-string",
+      "bash --inter-active <<< 'ls'",
+    ],
+    [
+      "a hyphenated long name with a here-document",
+      "bash --inter-active <<'EOF'\nls\nEOF\n",
+    ],
+    [
+      "a hyphenated long name with a pipe input",
+      "echo ls | bash --inter-active",
+    ],
+    [
+      "a hyphenated long name with a stdin flag",
+      "echo ls | bash -s --inter-active",
+    ],
+    ["a hyphenated option value", "bash -o inter-active -c ls"],
+    ["a mixed-case hyphenated option value", "bash -O Inter-Active <<< 'ls'"],
+    [
+      "a hyphenated option value with a here-document",
+      "bash -o inter-active <<'EOF'\nls\nEOF\n",
+    ],
+    [
+      "a hyphenated option value with a pipe input",
+      "echo ls | bash -o inter-active",
+    ],
+    [
+      "a hyphenated option value with a stdin flag",
+      "echo ls | bash -s -o inter-active",
+    ],
+    [
       "a script option that contains the flag name",
       "bash --non-interactive -c ls",
     ],
@@ -1507,6 +1546,7 @@ describe("interactive shells", () => {
     ["zsh with bundled flags", "zsh -fc ls"],
     ["a script file", "bash script.sh"],
     ["a login shell", "bash --login -c ls"],
+    ["an installer script with a long option", "bash -s -- --install-dir"],
     ["a here-string input", "bash <<< 'ls'"],
     ["a here-document input", "bash <<'EOF'\nls\nEOF\n"],
   ])("accepts %s", (_form, line) => {
