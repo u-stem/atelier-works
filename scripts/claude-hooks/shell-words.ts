@@ -2271,7 +2271,9 @@ class Parser {
 
 /**
  * 改行を含む標準入力を、本文・引用・継続を読み直さずに中断すると確かめたシェル。
- * これらのシェルは、構文エラーの後に次の行を実行するのが、配列の括弧の直下の演算子だけである。
+ * これらのシェルは、配列の括弧の外の構文エラーの後では、本文・引用・継続の行を実行しない。
+ * 本文・引用・継続の行が実行されるのは、配列の括弧の直下の演算子の後だけで、それは配列の括弧の拒否で塞ぐ。
+ * `sh`と`ksh`は名前で判定する。確かめた実体はmacOS上のものである。
  * zshは、標準入力から読むときだけ、構文エラーの後に次の行から読み続けるので、
  * 複数行の引用、行末の継続、ヒアドキュメントの中身を、コマンドとして実行する。
  * 確かめていないシェルは、改行を含む標準入力を判定できないものとして扱う。
@@ -2290,9 +2292,12 @@ const MULTILINE_STDIN_CONFIRMED_SHELLS: ReadonlySet<string> = new Set([
  * 上流の`echo`の文字列とヒアドキュメントの本文は、途中で変わりうる入力として含める。
  * `curl ... | sh`のように別のプログラムが渡すコードは中身を読めないので、読める文字列が無ければ空の配列を返して通す。
  * `echo "$X" | sh`のように、変数から組み立てた文字列は判定できないのでnullを返す。
- * 確かめたシェル以外が標準入力からコードを読む起動で、文字列の途中に改行があるときも、判定できないのでnullを返す。
+ * 確かめたシェル以外が標準入力からコードを読む起動で、次のときも、判定できないのでnullを返す。
+ * 文字列の途中に改行があるとき、文字列が2つ以上届くとき(外側のシェルが各文字列を改行つきで連ねる)、
+ * 文字列に`<<`を含むとき(改行を別の綴りで書く形を拾う)である。
  * 末尾の改行は、後ろに読む行が無いので数えない。
  * `-c`とファイルを読む起動は、標準入力をコードとして読まないので、この判定を行わない。
+ * 標準入力の記述子を指すファイルの形は、見ない一覧で受け入れた形で、この判定の対象外である。
  */
 export function literalShellInputs(
   command: SimpleCommand,
@@ -2324,7 +2329,8 @@ export function literalShellInputs(
   if (
     launched !== null &&
     !MULTILINE_STDIN_CONFIRMED_SHELLS.has(launched.shell) &&
-    texts.join("").replace(/\n+$/, "").includes("\n")
+    (texts.join("\n").replace(/\n+$/, "").includes("\n") ||
+      texts.some((text) => text.includes("<<")))
   ) {
     const launch = readShellLaunch(launched.shell, launched.args, true);
     if (!launch.ok || launch.source === "stdin") return null;
