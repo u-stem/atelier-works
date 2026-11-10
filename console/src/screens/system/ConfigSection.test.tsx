@@ -467,9 +467,15 @@ describe("ConfigSection", () => {
     );
   });
 
-  test("points to the stop-all section from the table of the switches", () => {
+  test("points to the stop-all section from the description", () => {
     expect(renderSection()).toMatch(
-      /全部を止めるときは、システムの「状態」タブの<a [^>]*href="\/system\?section=stop-all"[^>]*>全停止<\/a>を使います/,
+      /<li[^>]*>全部を止めるときは、システムの「状態」タブの<a [^>]*href="\/system\?section=stop-all"[^>]*>全停止<\/a>を使います/,
+    );
+  });
+
+  test("points to the stop-all section even when the config has no item", () => {
+    expect(renderSection(freshQuery(snapshotOf([])))).toContain(
+      'href="/system?section=stop-all"',
     );
   });
 
@@ -491,19 +497,26 @@ describe("ConfigSection", () => {
   });
 
   test("shows the table of the switches once", () => {
-    expect(renderSection().split("機能のスイッチ").length - 1).toBe(1);
+    expect(renderSection().split(">機能のスイッチ</h3>").length - 1).toBe(1);
   });
 
-  test("offers the same stop in the table of the switches and in the table of the group", () => {
-    const query = freshQuery(
-      snapshotOf([
-        { key: "implement_enabled", kind: "value", value: true, masked: false },
-      ]),
-    );
+  const STOP_ON = freshQuery(
+    snapshotOf([
+      { key: "implement_enabled", kind: "value", value: true, masked: false },
+    ]),
+  );
+
+  test("offers the stop in the table of the group under the name of the item", () => {
     expect(
-      renderSection(query).split('aria-label="implement_enabledを止める"')
+      renderSection(STOP_ON).split('aria-label="implement_enabledを止める"')
         .length - 1,
-    ).toBe(2);
+    ).toBe(1);
+  });
+
+  test("offers the stop in the table of the switches under a name that tells it apart", () => {
+    expect(renderSection(STOP_ON)).toContain(
+      'aria-label="機能のスイッチからimplement_enabledを止める"',
+    );
   });
 
   test("shows the notice that is kept until it is closed above the search box", () => {

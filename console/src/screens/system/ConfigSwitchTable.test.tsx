@@ -99,9 +99,9 @@ describe("ConfigSwitchTable", () => {
     expect(rowOfKey(render(ALL_ON), "implement_enabled")).toContain(">止める<");
   });
 
-  test("names the item in the label of the button", () => {
+  test("names the table and the item in the label of the button, and keeps the visible word", () => {
     expect(rowOfKey(render(ALL_ON), "implement_enabled")).toContain(
-      'aria-label="implement_enabledを止める"',
+      'aria-label="機能のスイッチからimplement_enabledを止める"',
     );
   });
 
@@ -160,10 +160,8 @@ describe("ConfigSwitchTable", () => {
     ).not.toContain("無視中");
   });
 
-  test("links to the stop-all section of the status tab", () => {
-    expect(render(ALL_ON)).toMatch(
-      /<a [^>]*href="\/system\?section=stop-all"[^>]*>全停止<\/a>/,
-    );
+  test("does not carry the guide to the stop-all section, which the description keeps", () => {
+    expect(render(ALL_ON)).not.toContain("全停止");
   });
 
   test("writes a key as text, not as markup", () => {
@@ -200,5 +198,23 @@ describe("ChangeButton", () => {
       ChangeButton({ offer: STOP, locked: true, onChoose: () => undefined })
         .props.disabled,
     ).toBe(true);
+  });
+
+  test("puts the name of the place before the item in its label when one is given", () => {
+    expect(
+      ChangeButton({
+        offer: STOP,
+        locked: false,
+        onChoose: () => undefined,
+        labelPrefix: "機能のスイッチから",
+      }).props["aria-label"],
+    ).toBe("機能のスイッチからimplement_enabledを止める");
+  });
+
+  test("names only the item in its label when no place is given", () => {
+    expect(
+      ChangeButton({ offer: STOP, locked: false, onChoose: () => undefined })
+        .props["aria-label"],
+    ).toBe("implement_enabledを止める");
   });
 });
