@@ -106,7 +106,7 @@ describe("switchRowsOf", () => {
   test("gives the same offer as the table of the group for a switch that is on", () => {
     const item = flag("dependabot_enabled", true);
     expect(rowOf([item], "dependabot_enabled").offer).toEqual(
-      changeOffersOf(item)[0],
+      changeOffersOf(item)[0] ?? null,
     );
   });
 

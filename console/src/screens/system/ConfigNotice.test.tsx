@@ -17,10 +17,8 @@ function pressesIn(node: unknown): (() => void)[] {
   }
   const props = node.props;
   if (typeof props !== "object" || props === null) return [];
-  const own =
-    "onClick" in props && typeof props.onClick === "function"
-      ? [props.onClick]
-      : [];
+  const click = "onClick" in props ? props.onClick : undefined;
+  const own = typeof click === "function" ? [() => click()] : [];
   const inner = "children" in props ? pressesIn(props.children) : [];
   return [...own, ...inner];
 }

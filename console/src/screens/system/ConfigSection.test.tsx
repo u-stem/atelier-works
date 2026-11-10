@@ -683,7 +683,8 @@ describe("ConfigSection", () => {
         { enabled: true, ignored: false, indeterminate: false },
       ),
     );
-    const html = renderSection(query).replaceAll("<wbr/>", "");
+    const whole = renderSection(query).replaceAll("<wbr/>", "");
+    const html = whole.slice(whole.indexOf('id="config-group-design"'));
     const stageAt = html.indexOf(DESIGN_ROW_LABEL);
     expect(stageAt >= 0 && stageAt < html.indexOf("design_enabled")).toBe(true);
   });

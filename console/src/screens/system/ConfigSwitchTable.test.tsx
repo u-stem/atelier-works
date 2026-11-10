@@ -118,12 +118,12 @@ describe("ConfigSwitchTable", () => {
   test("keeps the button off while the item is being changed", () => {
     expect(
       rowOfKey(render(ALL_ON, { isLocked: () => true }), "implement_enabled"),
-    ).toMatch(/<button[^>]*disabled/);
+    ).toContain('disabled=""');
   });
 
   test("leaves the button on while nothing is being changed", () => {
-    expect(rowOfKey(render(ALL_ON), "implement_enabled")).not.toMatch(
-      /<button[^>]*disabled/,
+    expect(rowOfKey(render(ALL_ON), "implement_enabled")).not.toContain(
+      'disabled=""',
     );
   });
 
