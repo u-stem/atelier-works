@@ -609,7 +609,7 @@ describe("renderFixReply", () => {
   // 投稿の1行目には書いたジョブの名前を入れる。
   test("starts with the pr_fix role tag", () => {
     expect(renderFixReply(fixReply(), "abc1234ef")).toStartWith(
-      "[pr_fix 自動返信]\n",
+      "[Factory 自動返信]\n",
     );
   });
 
@@ -927,7 +927,7 @@ describe("needsSkipRereviewLabel", () => {
 });
 
 function roundThread(overrides: Partial<ReviewThread> = {}): ReviewThread {
-  const finding = "[pr_review 自動レビュー]\n[IMO] consider";
+  const finding = "[Factory 自動レビュー]\n[IMO] consider";
   return {
     id: "thread-1",
     isResolved: false,

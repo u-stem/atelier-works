@@ -5546,6 +5546,26 @@ describe("listPrReviewComments", () => {
     expect(result.items).toEqual([]);
   });
 
+  test("leaves out the factory's answer replies", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        rawReviewComment({
+          id: 7,
+          user: { login: VIEWER },
+          body: "事実です。\n\n<!-- factory:pr_review_answer:9 -->",
+        }),
+      ]),
+    ]);
+    const result = await listPrReviewComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      VIEWER,
+    );
+    expect(result.items).toEqual([]);
+  });
+
   test("keeps the factory's objection replies as feedback", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk([
@@ -5987,7 +6007,7 @@ describe("listReviewThreads", () => {
             isResolved: false,
             firstComment: {
               author: { login: VIEWER },
-              body: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+              body: "[Factory 自動レビュー] @alice\n[MUST] fix this",
             },
           }),
         ]),
@@ -6006,9 +6026,9 @@ describe("listReviewThreads", () => {
         path: "a.ts",
         line: 10,
         firstCommentAuthorLogin: VIEWER,
-        firstCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+        firstCommentBody: "[Factory 自動レビュー] @alice\n[MUST] fix this",
         lastCommentAuthorLogin: VIEWER,
-        lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+        lastCommentBody: "[Factory 自動レビュー] @alice\n[MUST] fix this",
         firstCommentDatabaseId: null,
         allCommentIds: [],
         comments: [],
@@ -6029,7 +6049,7 @@ describe("listReviewThreads", () => {
             isResolved: false,
             firstComment: {
               author: { login: VIEWER },
-              body: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+              body: "[Factory 自動レビュー] @alice\n[MUST] fix this",
               databaseId: 501,
             },
             allCommentDatabaseIds: [501, 502],
@@ -6252,7 +6272,7 @@ describe("listReviewThreads", () => {
             isResolved: false,
             firstComment: {
               author: { login: VIEWER },
-              body: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+              body: "[Factory 自動レビュー] @alice\n[MUST] fix this",
             },
             lastComment: { author: { login: "alice" }, body: "done, thanks" },
           }),

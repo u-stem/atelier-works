@@ -185,7 +185,7 @@ describe("renderInlineComment", () => {
   // 投稿の1行目には書いたジョブの名前を入れる。
   test("starts with the pr_review role tag", () => {
     expect(renderInlineComment(finding())).toStartWith(
-      "[pr_review 自動レビュー]\n",
+      "[Factory 自動レビュー]\n",
     );
   });
 
@@ -305,7 +305,7 @@ describe("renderReviewSummary", () => {
   // 役割タグと作者へのメンションを1行目に並べる。
   test("starts with the pr_review role tag and the author mention on one line", () => {
     const body = renderReviewSummary("alice", 0, "first_clean", [], 0);
-    expect(body).toStartWith("[pr_review 自動レビュー] @alice\n");
+    expect(body).toStartWith("[Factory 自動レビュー] @alice\n");
   });
 
   test('mode "findings" includes the posted comment count and an ask-to-confirm line', () => {
@@ -841,17 +841,17 @@ describe("renderUnresolvedLineSummary with binary files", () => {
 
 describe("isFixedFixReply", () => {
   test("returns true for a pr_fix reply that names a commit sha", () => {
-    const body = "[pr_fix 自動返信]\nfixed the null check\n\n対応: `abc1234`";
+    const body = "[Factory 自動返信]\nfixed the null check\n\n対応: `abc1234`";
     expect(isFixedFixReply(body)).toBe(true);
   });
 
   test("returns false for a pr_fix reply Claude chose to skip (見送り)", () => {
-    const body = "[pr_fix 自動返信]\nnot going to change this\n\n対応: 見送り";
+    const body = "[Factory 自動返信]\nnot going to change this\n\n対応: 見送り";
     expect(isFixedFixReply(body)).toBe(false);
   });
 
   test("returns false for a pr_fix reply with nothing to commit (変更なし)", () => {
-    const body = "[pr_fix 自動返信]\nalready fine\n\n対応: 変更なし";
+    const body = "[Factory 自動返信]\nalready fine\n\n対応: 変更なし";
     expect(isFixedFixReply(body)).toBe(false);
   });
 
@@ -862,13 +862,13 @@ describe("isFixedFixReply", () => {
 
   test("reads the commit line above a trailing marker", () => {
     const body =
-      "[pr_fix 自動返信]\nfixed\n\n対応: `abc1234`\n\n<!-- factory:pr_fix:9 -->";
+      "[Factory 自動返信]\nfixed\n\n対応: `abc1234`\n\n<!-- factory:pr_fix:9 -->";
     expect(isFixedFixReply(body)).toBe(true);
   });
 
   test("does not take a quoted commit line in a skip reply as a fix", () => {
     const body =
-      "[pr_fix 自動返信]\n前回は次のとおりでした。\n対応: `abc1234`\n\n対応: 見送り";
+      "[Factory 自動返信]\n前回は次のとおりでした。\n対応: `abc1234`\n\n対応: 見送り";
     expect(isFixedFixReply(body)).toBe(false);
   });
 });
@@ -881,9 +881,9 @@ describe("selectThreadsToResolve", () => {
       path: "a.ts",
       line: 10,
       firstCommentAuthorLogin: "factory-bot",
-      firstCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+      firstCommentBody: "[Factory 自動レビュー] @alice\n[MUST] fix this",
       lastCommentAuthorLogin: "factory-bot",
-      lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+      lastCommentBody: "[Factory 自動レビュー] @alice\n[MUST] fix this",
       firstCommentDatabaseId: 1,
       allCommentIds: [1],
       comments: [],
@@ -895,9 +895,49 @@ describe("selectThreadsToResolve", () => {
     };
   }
 
-  const fixedFixReplyBody = "[pr_fix 自動返信]\nfixed\n\n対応: `abc1234`";
+  const fixedFixReplyBody = "[Factory 自動返信]\nfixed\n\n対応: `abc1234`";
   const skippedFixReplyBody =
-    "[pr_fix 自動返信]\nnot doing this\n\n対応: 見送り";
+    "[Factory 自動返信]\nnot doing this\n\n対応: 見送り";
+
+  test("does not resolve a thread whose last comment is an answer to a question", () => {
+    const ids = selectThreadsToResolve(
+      [
+        thread({
+          lastCommentBody:
+            "[Factory 自動返信]\n事実です。\n\n回答\n\n<!-- factory:pr_review_answer:9 -->",
+          comments: [
+            {
+              databaseId: 1,
+              authorLogin: "factory-bot",
+              authorId: null,
+              body: "finding",
+            },
+            {
+              databaseId: 2,
+              authorLogin: "factory-bot",
+              authorId: null,
+              body: "answer",
+            },
+          ],
+        }),
+      ],
+      "factory-bot",
+    );
+    expect(ids).toEqual([]);
+  });
+
+  test("skips a thread that starts with the reply role tag", () => {
+    const ids = selectThreadsToResolve(
+      [
+        thread({
+          firstCommentBody: "[Factory 自動返信]\nfixed",
+          lastCommentBody: fixedFixReplyBody,
+        }),
+      ],
+      "factory-bot",
+    );
+    expect(ids).toEqual([]);
+  });
 
   test("skips a thread GitHub already marked resolved", () => {
     const ids = selectThreadsToResolve(
@@ -1058,7 +1098,7 @@ describe("a thread the re-review objected to", () => {
     },
     9,
   );
-  const mustFinding = "[pr_review 自動レビュー] @alice\n[MUST] fix this";
+  const mustFinding = "[Factory 自動レビュー] @alice\n[MUST] fix this";
   const objected: ReviewThread = {
     id: "thread-1",
     isResolved: false,
@@ -1117,7 +1157,7 @@ describe("an IMO thread the re-review objected to", () => {
     },
     9,
   );
-  const imoFinding = "[pr_review 自動レビュー] @alice\n[IMO] consider";
+  const imoFinding = "[Factory 自動レビュー] @alice\n[IMO] consider";
   const isAllowed = (login: string): boolean => login === "factory-bot";
 
   function objectedImo(overrides: Partial<ReviewThread> = {}): ReviewThread {
@@ -1266,9 +1306,9 @@ describe("countOpenThreads", () => {
       path: "a.ts",
       line: 10,
       firstCommentAuthorLogin: "factory-bot",
-      firstCommentBody: "[pr_review 自動レビュー]\n[IMO] consider",
+      firstCommentBody: "[Factory 自動レビュー]\n[IMO] consider",
       lastCommentAuthorLogin: "factory-bot",
-      lastCommentBody: "[pr_review 自動レビュー]\n[IMO] consider",
+      lastCommentBody: "[Factory 自動レビュー]\n[IMO] consider",
       firstCommentDatabaseId: 1,
       allCommentIds: [1],
       comments: [],
@@ -1315,9 +1355,9 @@ describe("countBlockingThreads", () => {
       path: "a.ts",
       line: 10,
       firstCommentAuthorLogin: "factory-bot",
-      firstCommentBody: `[pr_review 自動レビュー]\n${body}`,
+      firstCommentBody: `[Factory 自動レビュー]\n${body}`,
       lastCommentAuthorLogin: "factory-bot",
-      lastCommentBody: `[pr_review 自動レビュー]\n${body}`,
+      lastCommentBody: `[Factory 自動レビュー]\n${body}`,
       firstCommentDatabaseId: 1,
       allCommentIds: [1],
       comments: [],
@@ -1452,7 +1492,7 @@ describe("countBlockingThreads", () => {
   });
 
   test("does not take a finding that ends with the skip line as a skip", () => {
-    const body = "[pr_review 自動レビュー]\n[IMO] consider\n\n対応: 見送り";
+    const body = "[Factory 自動レビュー]\n[IMO] consider\n\n対応: 見送り";
     expect(
       countBlockingThreads(
         [
@@ -1825,7 +1865,7 @@ describe("renderUnresolvedLineSummary", () => {
 describe("posting a review once per sha", () => {
   const VIEWER = "factory-bot";
   const SHA = "0123456789abcdef0123456789abcdef01234567";
-  const SUMMARY = "[pr_review 自動レビュー] @alice\n1件コメントしました。";
+  const SUMMARY = "[Factory 自動レビュー] @alice\n1件コメントしました。";
   const SILENT = logger("pr_review_post", { sink: () => {} });
   const TARGET: PostReviewTarget = {
     owner: "acme",
@@ -1863,7 +1903,7 @@ describe("posting a review once per sha", () => {
   function openThreads(kind: string): CommandResult {
     const comment = {
       author: { login: VIEWER },
-      body: `[pr_review 自動レビュー]\n[${kind}] fix this`,
+      body: `[Factory 自動レビュー]\n[${kind}] fix this`,
       databaseId: 501,
     };
     return ghApiOk({
@@ -2008,7 +2048,7 @@ describe("posting a review once per sha", () => {
   });
 
   describe("postMarkedReview when GitHub cannot resolve a comment line", () => {
-    const FALLBACK = "[pr_review 自動レビュー] @alice\n1件コメントしました。";
+    const FALLBACK = "[Factory 自動レビュー] @alice\n1件コメントしました。";
     const LINE_ERROR = {
       message: "Unprocessable Entity",
       errors: ["Line could not be resolved"],
@@ -2213,7 +2253,7 @@ describe("posting a review once per sha", () => {
     ) {
       const finding = {
         author: { login: VIEWER },
-        body: `[pr_review 自動レビュー]\n[${kind}] consider`,
+        body: `[Factory 自動レビュー]\n[${kind}] consider`,
         databaseId: firstId,
       };
       const reply = {
@@ -2356,6 +2396,46 @@ describe("posting a review once per sha", () => {
         rerunInput({
           threadResponses: [{ ...ACCEPT_SKIP, decision: "skip_rejected" }],
         }),
+        SILENT,
+      );
+      expect(fake.calls.some(isResolveCall)).toBe(false);
+    });
+
+    const QUESTION_THREADS = () =>
+      threadsResponse([
+        skipThreadNode("PRRT_1", 501, "IMO", "なぜこの実装にしたのですか？"),
+      ]);
+    const ANSWER: ThreadResponse = {
+      ...ACCEPT_SKIP,
+      decision: "answered",
+      body: "コードの事実だけを書きます。",
+    };
+
+    test("posts the answer to a question reply", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        QUESTION_THREADS(),
+        ghApiOk({ id: 100 }),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ANSWER] }),
+        SILENT,
+      );
+      expect(fake.calls.some(isReplyCall)).toBe(true);
+    });
+
+    test("keeps a thread open after answering a question", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        QUESTION_THREADS(),
+        ghApiOk({ id: 100 }),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ threadResponses: [ANSWER] }),
         SILENT,
       );
       expect(fake.calls.some(isResolveCall)).toBe(false);
@@ -2504,7 +2584,7 @@ describe("posting a review once per sha", () => {
       function answeredThreads(): CommandResult {
         const finding = {
           author: { login: VIEWER },
-          body: "[pr_review 自動レビュー]\n[IMO] consider",
+          body: "[Factory 自動レビュー]\n[IMO] consider",
           databaseId: 501,
         };
         const skip = {
@@ -2608,7 +2688,7 @@ describe("posting a review once per sha", () => {
             "PRRT_1",
             501,
             "MUST",
-            "[pr_fix 自動返信]\nfixed\n\n対応: `abc1234`",
+            "[Factory 自動返信]\nfixed\n\n対応: `abc1234`",
           ),
         ]),
       ]);
@@ -3105,7 +3185,7 @@ describe("posting a review once per sha", () => {
             "PRRT_1",
             501,
             "MUST",
-            "[pr_fix 自動返信]\nfixed\n\n対応: `abc1234`",
+            "[Factory 自動返信]\nfixed\n\n対応: `abc1234`",
           ),
         ]),
         ghApiOk({

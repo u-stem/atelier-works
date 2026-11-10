@@ -45,7 +45,9 @@ import {
   hasMarker,
   isOwnPost,
   PR_FILES_API_CAP,
+  PR_FIX_MARKER_KIND,
   PR_REVIEW_ACK_MARKER_KIND,
+  PR_REVIEW_ANSWER_MARKER_KIND,
   PR_REVIEW_OBJECTION_MARKER_KIND,
   type PrReview,
   REVIEW_THREAD_COMMENTS_LIMIT,
@@ -150,9 +152,20 @@ export {
  */
 export const BINARY_LIST_MAX_FILES = 20;
 
+/** 投稿の1行目に付ける役割タグを、`[Factory 自動<種類>]`の形で組み立てる。 */
+function roleTag(kind: string): string {
+  return `[Factory 自動${kind}]`;
+}
+
+/**
+ * キーは、投稿したジョブの名前である。
+ * `pr_fix`の返信と再レビューの返信は、同じ文言のタグを使う。
+ * 取り違えないよう、`対応: <sha>`の最後の行(`isFixedFixReply`)と、再レビューの返信の目印で区別する。
+ */
 export const ROLE_TAGS = {
-  pr_review: "[pr_review 自動レビュー]",
-  pr_fix: "[pr_fix 自動返信]",
+  pr_review: roleTag("レビュー"),
+  pr_fix: roleTag("返信"),
+  pr_review_reply: roleTag("返信"),
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -365,6 +378,7 @@ const THREAD_RESPONSE_DECISIONS: readonly ThreadResponseDecision[] = [
   "addressed",
   "skip_accepted",
   "skip_rejected",
+  "answered",
 ];
 
 function isThreadResponseShape(value: unknown): value is ThreadResponse {
@@ -889,7 +903,11 @@ function neutralizeHtmlComment(text: string): string {
  * 目印を除いた最後の行だけを見る。見送りの理由に引用された`対応: <sha>`で解決しないためである。
  */
 export function isFixedFixReply(body: string): boolean {
-  if (body.split("\n")[0] !== ROLE_TAGS.pr_fix) return false;
+  if (firstLineOf(body) !== ROLE_TAGS.pr_fix) return false;
+  // 再レビューの返信は`pr_fix`と同じタグを使うので、最後の行だけでなく目印でも除く。
+  if (REVIEW_REPLY_MARKER_KINDS.some((kind) => hasMarker(body, kind))) {
+    return false;
+  }
   return /^対応: `[0-9a-f]{7,40}`$/.test(lastContentLine(body));
 }
 
@@ -1036,7 +1054,7 @@ export type ThreadAuthorPredicate = (
   id: number | null,
 ) => boolean;
 
-export type ThreadResponseKind = "skip" | "addressable";
+export type ThreadResponseKind = "skip" | "addressable" | "reply";
 
 const SKIP_REPLY_LINE = "対応: 見送り";
 const COMMIT_REPLY_LINE = /^対応: (?:`[0-9a-f]{7,40}`|[0-9a-f]{7,40})$/;
@@ -1046,6 +1064,11 @@ const HTML_COMMENT_LINE = /^<!--.*-->$/;
 const THREAD_COMMENT_MAX_CHARS = 2000;
 /** プロンプトに載せるスレッド全体の文字数の上限。スレッドが多いPRでプロンプトが膨らまないようにする。 */
 const THREADS_PROMPT_MAX_CHARS = 100_000;
+
+/** 本文の1行目を返す。改行コードは`\n`にそろえ、前後の空白は除く。役割タグの比較に使う。 */
+function firstLineOf(body: string): string {
+  return body.replace(/\r\n/g, "\n").split("\n")[0]?.trim() ?? "";
+}
 
 /** 本文の、空行と目印を除いた最後の行を返す。 */
 function lastContentLine(body: string): string {
@@ -1073,7 +1096,11 @@ function isFactoryFindingThread(thread: ReviewThread, viewer: string): boolean {
  * `skip`は、viewerか許可された人の、最後の行が`対応: 見送り`の返信である。
  * `addressable`は、返信の無い指摘か、viewerか許可された人の`対応: <sha>`である。
  * `pr_fix`の`対応: <sha>`は`selectThreadsToResolve`が解決するので除く。
- * 許可された人の自由文の返信の後は答えず、人の判断に任せる。
+ * `reply`は、viewerか許可された人の、上のどれでもない自由文の返信である。
+ * 返信の意味は、再レビューのClaudeが読んで判定する。
+ * Factoryは運用者と同じアカウントで動くので、viewerの返信でも、Factoryの返信は人の返信として数えない。
+ * Factoryの返信は、役割タグで始まるか、再レビューの答えの目印を持つ。
+ * 最後の返信がFactoryの答えのスレッドは、次に人が返信するまで`null`になり、同じスレッドに二度答えない。
  */
 export function threadResponseKind(
   thread: ReviewThread,
@@ -1089,9 +1116,54 @@ export function threadResponseKind(
   if (lastReply === undefined) return "addressable";
   const line = lastContentLine(lastReply.body);
   if (line === SKIP_REPLY_LINE) return "skip";
-  return COMMIT_REPLY_LINE.test(line) && !isFixedFixReply(lastReply.body)
-    ? "addressable"
-    : null;
+  if (COMMIT_REPLY_LINE.test(line)) {
+    return isFixedFixReply(lastReply.body) ? null : "addressable";
+  }
+  return isFactoryComment(lastReply, viewer) ? null : "reply";
+}
+
+/**
+ * コメントが、Factory自身の投稿かを返す。
+ * Factoryは運用者と同じアカウントで動くので、viewerの投稿でも、人が書いたものは偽にする。
+ * viewerの投稿で、次のどれかに当てはまるときに真にする。
+ *   - 1行目が役割タグである(改行コードと前後の空白は除いて比べる)。
+ *   - `pr_fix`の返信の目印を持つ。
+ *   - 再レビューの答えの目印を持つ。
+ */
+function isFactoryComment(
+  comment: ReviewThreadComment,
+  viewer: string,
+): boolean {
+  if (!isOwnPost(comment.authorLogin, viewer)) return false;
+  const firstLine = firstLineOf(comment.body);
+  return (
+    Object.values<string>(ROLE_TAGS).includes(firstLine) ||
+    hasMarker(comment.body, PR_FIX_MARKER_KIND) ||
+    REVIEW_REPLY_MARKER_KINDS.some((kind) => hasMarker(comment.body, kind))
+  );
+}
+
+/** 答えの返信に付ける目印の種類。了承と解消だけが同じ目印を持ち、`selectThreadsToResolve`が解決する。 */
+const THREAD_REPLY_MARKER_KINDS: Readonly<
+  Record<ThreadResponseDecision, string>
+> = {
+  addressed: PR_REVIEW_ACK_MARKER_KIND,
+  skip_accepted: PR_REVIEW_ACK_MARKER_KIND,
+  skip_rejected: PR_REVIEW_OBJECTION_MARKER_KIND,
+  answered: PR_REVIEW_ANSWER_MARKER_KIND,
+};
+
+const REVIEW_REPLY_MARKER_KINDS: readonly string[] = Object.values(
+  THREAD_REPLY_MARKER_KINDS,
+);
+
+/**
+ * 答えの後にスレッドを解決する`decision`かを返す。
+ * 解決するのは了承と解消だけで、反論と回答のスレッドは開いたままにする。
+ * 了承の目印を持つ返信を解決する`selectThreadsToResolve`と、同じ条件になる。
+ */
+export function resolvesThread(decision: ThreadResponseDecision): boolean {
+  return THREAD_REPLY_MARKER_KINDS[decision] === PR_REVIEW_ACK_MARKER_KIND;
 }
 
 export type AppliedThreadResponse = {
@@ -1124,8 +1196,11 @@ export function selectThreadResponses(
         ? null
         : threadResponseKind(thread, viewer, isAllowed);
     const fits =
-      (kind === "skip" && response.decision !== "addressed") ||
-      (kind === "addressable" && response.decision === "addressed");
+      (kind === "skip" &&
+        (response.decision === "skip_accepted" ||
+          response.decision === "skip_rejected")) ||
+      (kind === "addressable" && response.decision === "addressed") ||
+      kind === "reply";
     if (
       thread === undefined ||
       !fits ||
@@ -1145,26 +1220,25 @@ const THREAD_REPLY_ENDINGS: Readonly<Record<ThreadResponseDecision, string>> = {
   addressed: "解消: 確認",
   skip_accepted: "見送り: 了承",
   skip_rejected: "見送り: 反論",
+  answered: "回答",
 };
 
 /**
  * 再レビューの答えの返信を描画する。
- * 反論だけを別の目印にする。`pr_fix`が反論をフィードバックとして集めるためである。
+ * 反論と回答は、了承と解消とは別の目印にする。
+ * `pr_fix`は反論をフィードバックとして集め、回答は集めない。
+ * 回答の目印は、`selectThreadsToResolve`が解決する了承の目印と別なので、回答のスレッドは開いたままになる。
  * `body`はClaudeの出力なので、目印を偽れないよう`<!--`を無害にする。
  */
 export function renderThreadReply(
   response: ThreadResponse,
   workItemId: number,
 ): string {
-  const kind =
-    response.decision === "skip_rejected"
-      ? PR_REVIEW_OBJECTION_MARKER_KIND
-      : PR_REVIEW_ACK_MARKER_KIND;
   return withMarker(
-    kind,
+    THREAD_REPLY_MARKER_KINDS[response.decision],
     workItemId,
     [
-      ROLE_TAGS.pr_review,
+      ROLE_TAGS.pr_review_reply,
       neutralizeHtmlComment(normalizeJapaneseText(response.body)),
       "",
       THREAD_REPLY_ENDINGS[response.decision],
@@ -1173,13 +1247,14 @@ export function renderThreadReply(
 }
 
 function threadCommentAuthor(
-  login: string,
-  id: number | null,
+  comment: ReviewThreadComment,
   viewer: string,
   isAllowed: ThreadAuthorPredicate,
 ): PromptThreadComment["author"] {
-  if (isOwnPost(login, viewer)) return "factory";
-  return isAllowed(login, id) ? "allowed_person" : "other";
+  if (isFactoryComment(comment, viewer)) return "factory";
+  return isAllowedThreadAuthor(comment, viewer, isAllowed)
+    ? "allowed_person"
+    : "other";
 }
 
 function promptCommentBody(body: string): string {
@@ -1198,12 +1273,7 @@ function toPromptThread(
 ): PromptReviewThread {
   const comments = threadComments(thread).map(
     (comment): PromptThreadComment => ({
-      author: threadCommentAuthor(
-        comment.authorLogin,
-        comment.authorId,
-        viewer,
-        isAllowed,
-      ),
+      author: threadCommentAuthor(comment, viewer, isAllowed),
       body: promptCommentBody(comment.body),
     }),
   );
@@ -1260,13 +1330,15 @@ export function reviewThreadsForPrompt(
 }
 
 /**
- * Factoryの投稿の本文から、1行目にある`pr_review`の役割タグの行を取り除く(あれば)。
- * Claudeに指摘の中身だけを見せるため、`reviewThreadsForPrompt`が使う。
+ * Factoryの投稿の本文から、1行目にある役割タグの行を取り除く(あれば)。
+ * Claudeに指摘と返信の中身だけを見せるため、`reviewThreadsForPrompt`が使う。
  */
 function stripRoleTagLine(body: string): string {
   const newlineIndex = body.indexOf("\n");
   if (newlineIndex === -1) return body;
-  if (body.slice(0, newlineIndex) !== ROLE_TAGS.pr_review) return body;
+  if (!Object.values<string>(ROLE_TAGS).includes(firstLineOf(body))) {
+    return body;
+  }
   return body.slice(newlineIndex + 1);
 }
 
@@ -6327,7 +6399,7 @@ export function settleReviewFindings(
 
 /**
  * Claudeの出力から、投稿の手前まで渡すスレッドへの答えを決める。
- * スレッドだけのレビューは、見送りへの答えだけを残し、`addressed`を捨てる。
+ * スレッドだけのレビューは、見送りと自由文の返信への答えだけを残し、`addressed`を捨てる。
  * 新しいcommitが無く、前回のレビューが同じheadを見て答えられたので、
  * 出力の揺れで誰も直していない`[MUST]`を解決し、本文をLGTMにしないためである。
  */

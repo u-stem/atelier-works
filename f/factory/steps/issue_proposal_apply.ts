@@ -27,6 +27,7 @@ import {
   findIssueByMarker,
   type GhClient,
   getViewer,
+  PR_FIX_MARKER_KIND,
   postIssueComment,
   replyReviewComment,
   resolveReviewThread,
@@ -527,7 +528,7 @@ async function run(
         proposal.work_item_id,
       );
       const replyBody = withMarker(
-        "pr_fix",
+        PR_FIX_MARKER_KIND,
         workItemId,
         renderIssueProposalApprovedReply(created.number),
       );
@@ -565,7 +566,7 @@ async function run(
           proposal.work_item_id,
         );
         const replyBody = withMarker(
-          "pr_fix",
+          PR_FIX_MARKER_KIND,
           workItemId,
           renderIssueProposalRejectedReply(reason),
         );

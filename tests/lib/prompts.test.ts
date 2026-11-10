@@ -592,6 +592,10 @@ describe("reviewPrompt", () => {
       response_kind: "skip",
       comments: [{ author: "factory", body: "null check missing" }],
     };
+    const FREE_TEXT_THREAD: PromptReviewThread = {
+      ...REPLY_THREAD,
+      response_kind: "reply",
+    };
     const baseInput = {
       pr: PR,
       diff: "+const x = 1;",
@@ -717,6 +721,140 @@ describe("reviewPrompt", () => {
         FIXED_UUID,
       );
       expect(prompt).toContain("use `addressed` only when");
+    });
+
+    test("explains a free-text reply to the review", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("- `response_kind` `reply`:");
+    });
+
+    test("tells a delta review to answer a fix claim with addressed", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("a claim that the finding is fixed");
+    });
+
+    test("does not tell a threads-only review to answer a fix claim", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).not.toContain("a claim that the finding is fixed");
+    });
+
+    test("tells a threads-only review to leave a fix claim unanswered", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("claims a fix, leave the thread out");
+    });
+
+    test("asks a threads-only review to answer the reply threads too", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        "Only answer the threads whose `response_kind` is `skip` or `reply`",
+      );
+    });
+
+    test("asks a delta review to leave a question or small talk unanswered", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("small talk");
+    });
+
+    test("tells a delta review to answer a question with answered", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("use `answered`");
+    });
+
+    test("tells a threads-only review to answer a question with answered", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "threads_only", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("use `answered`");
+    });
+
+    test("tells the review that answered does not resolve the thread", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("`answered` does not resolve the thread");
+    });
+
+    test("tells the review to answer from facts and not to guess", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("Write no guess.");
+    });
+
+    test("tells the review never to turn a question into addressed", () => {
+      const prompt = reviewPrompt(
+        {
+          ...baseInput,
+          threads: [FREE_TEXT_THREAD],
+          scope: { kind: "delta", fromSha: PRIOR },
+        },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain("Never turn a question into `addressed`.");
     });
 
     test("leaves the binary files out of a threads-only review", () => {
@@ -1185,7 +1323,7 @@ describe("JSON schema constants", () => {
   test("REVIEW_SCHEMA's thread decision enum matches ThreadResponseDecision", () => {
     expect(
       REVIEW_SCHEMA.properties.thread_responses.items.properties.decision.enum,
-    ).toEqual(["addressed", "skip_accepted", "skip_rejected"]);
+    ).toEqual(["addressed", "skip_accepted", "skip_rejected", "answered"]);
   });
 
   test("FIX_SCHEMA's outcome enum matches FixOutcome", () => {
