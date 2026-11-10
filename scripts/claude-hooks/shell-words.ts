@@ -649,6 +649,14 @@ class ShellSyntaxError extends Error {}
 const REGION_CHARS = /^[A-Za-z0-9_ \t+\-*/%=!&|^~?:,.;[\]()<>]$/;
 
 /**
+ * 配列の代入の括弧の中で拒否する字。語を区切る字と、添字の対を開く字である。
+ * 語を区切る字は、シェルのメタ文字のうち、空白、改行、`)`を除いた`;`、`&`、`|`、`<`、`>`、`(`で、bashの区切りはこれで全部である。
+ * `[`は、bashが対応する`]`までを添字の対として読み、その間の`#`をコメントにしない。
+ * フックはその`#`をコメントとして読み捨てるので、同じ行の`)`以降が隠れる。
+ */
+const ARRAY_REJECTED_CHARS = ";&|<>([";
+
+/**
  * zshが字句の規則(コメントの字)を実行時に決める変数の名前。
  * 実行時に決まる規則は字面から読めないので、大文字小文字を問わず、入力のどこかに現れたら拒否する。
  */
@@ -1376,6 +1384,11 @@ class Parser {
   private subshellDepth = 0;
   /** `((`の領域を開いたときの`subshellDepth`。深さがこの値に戻る`)`で領域を出る。領域の外ならnull。 */
   private regionBase: number | null = null;
+  /**
+   * 配列の代入の括弧(`NAME=(`)を開いたときの`subshellDepth`。深さがこの値に戻る`)`で出る。括弧の外ならnull。
+   * 入れ子のParserへは引き継がず、各Parserが自分の中で開いた括弧を検出する。
+   */
+  private arrayBase: number | null = null;
   private readonly heredocs: PendingHeredoc[] = [];
   private readonly context: ParserContext;
 
@@ -1453,8 +1466,24 @@ class Parser {
     );
   }
 
+  /**
+   * 配列の代入の括弧の中で、語を区切る字と添字の対を開く字を拒否する。
+   * 括弧の中に演算子があると、シェルは構文エラーの後に次の行から読み続け、
+   * 先に登録したヒアドキュメントの本文の行がコマンドとして実行されるためである。
+   * `[`があると、bashは`#`をコメントにせず、フックだけが読み捨てて同じ行の`)`以降を見落とす。
+   * 空白、改行、`)`は語の区切りとして読む。引用、置換、バックスラッシュは各読み手に任せる。
+   */
+  private checkArrayChar(char: string): void {
+    if (ARRAY_REJECTED_CHARS.includes(char)) {
+      throw new ShellSyntaxError(
+        `${JSON.stringify(char)} at offset ${this.position} inside the parentheses of an array assignment`,
+      );
+    }
+  }
+
   private step(char: string): void {
     if (this.restricted) this.checkRegionChar(char);
+    if (this.arrayBase !== null) this.checkArrayChar(char);
     switch (char) {
       case " ":
       case "\t":
@@ -1499,6 +1528,16 @@ class Parser {
       case "(":
         // 領域の直下の`(`は、算術の括弧にもサブシェルの括弧にもなる。語の後ろでも読む。
         if (!this.inRegionRoot) this.rejectGlobGroup();
+        // `NAME=(`は配列の代入の括弧である。算術の領域の中の`=`の後ろの括弧は数えない。
+        if (!this.restricted && this.text.endsWith("=")) {
+          // 保留中のヒアドキュメントがあると、括弧の中の構文エラーがその保留を捨てうる。
+          if (this.heredocs.length > 0) {
+            throw new ShellSyntaxError(
+              `an array assignment at offset ${this.position} opens while a here-document is pending`,
+            );
+          }
+          this.arrayBase = this.subshellDepth;
+        }
         // `< <(...)`のプロセス置換は、標準入力の出どころが実行時に決まる。内側のコマンドは別に読む。
         if (this.redirectNextWord && !this.redirectWrites) {
           this.redirects.push({ text: "<(", dynamic: true, glob: false });
@@ -1524,6 +1563,7 @@ class Parser {
         this.endCommand();
         this.subshellDepth -= 1;
         if (this.regionBase === this.subshellDepth) this.regionBase = null;
+        if (this.arrayBase === this.subshellDepth) this.arrayBase = null;
         // `$((`の最初の括弧が閉じた直後が`)`でなければ、bashは算術でなくコマンド置換として読みうる。
         if (
           this.context.regionRoot &&
@@ -2230,12 +2270,34 @@ class Parser {
 }
 
 /**
+ * 改行を含む標準入力を、本文・引用・継続を読み直さずに中断すると確かめたシェル。
+ * これらのシェルは、配列の括弧の外の構文エラーの後では、本文・引用・継続の行を実行しない。
+ * 本文・引用・継続の行が実行されるのは、配列の括弧の直下の演算子の後だけで、それは配列の括弧の拒否で塞ぐ。
+ * `sh`と`ksh`は名前で判定する。確かめた実体はmacOS上のものである。
+ * zshは、標準入力から読むときだけ、構文エラーの後に次の行から読み続けるので、
+ * 複数行の引用、行末の継続、ヒアドキュメントの中身を、コマンドとして実行する。
+ * 確かめていないシェルは、改行を含む標準入力を判定できないものとして扱う。
+ */
+const MULTILINE_STDIN_CONFIRMED_SHELLS: ReadonlySet<string> = new Set([
+  "bash",
+  "sh",
+  "dash",
+  "ksh",
+]);
+
+/**
  * シェルに標準入力で渡るコードのうち、文字列として読めるものを返す。
  * ヒアストリングとヒアドキュメントの本文と、`echo`や`printf`が書いた文字列がそれに当たる。
  * パイプの連鎖は上流まですべて辿る。間に`cat`、`tee`、`sed`などが挟まっても、
  * 上流の`echo`の文字列とヒアドキュメントの本文は、途中で変わりうる入力として含める。
  * `curl ... | sh`のように別のプログラムが渡すコードは中身を読めないので、読める文字列が無ければ空の配列を返して通す。
  * `echo "$X" | sh`のように、変数から組み立てた文字列は判定できないのでnullを返す。
+ * 確かめたシェル以外が標準入力からコードを読む起動で、次のときも、判定できないのでnullを返す。
+ * 文字列の途中に改行があるとき、空でない文字列が2つ以上届くとき(どれが標準入力に届くか決められない)、
+ * 文字列に`<<`を含むとき(改行を別の綴りで書く形を拾う)である。
+ * 末尾の改行は、後ろに読む行が無いので数えない。
+ * `-c`とファイルを読む起動は、標準入力をコードとして読まないので、この判定を行わない。
+ * 標準入力の記述子を指すファイルの形は、見ない一覧で受け入れた形で、この判定の対象外である。
  */
 export function literalShellInputs(
   command: SimpleCommand,
@@ -2262,6 +2324,16 @@ export function literalShellInputs(
     );
     if (program === "echo") texts.push(written.join(" "));
     else texts.push(...written);
+  }
+  const launched = shellInvocation(stripWrappers(command.words).words);
+  if (
+    launched !== null &&
+    !MULTILINE_STDIN_CONFIRMED_SHELLS.has(launched.shell) &&
+    (texts.join("\n").replace(/\n+$/, "").includes("\n") ||
+      texts.some((text) => text.includes("<<")))
+  ) {
+    const launch = readShellLaunch(launched.shell, launched.args, true);
+    if (!launch.ok || launch.source === "stdin") return null;
   }
   return texts;
 }

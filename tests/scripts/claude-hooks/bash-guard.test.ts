@@ -4768,6 +4768,205 @@ describeForCallers(
   },
 );
 
+// 配列の代入の括弧の中は、語だけを読む。演算子があると、シェルは構文エラーの後に次の行から読み続けるので、本文の行が実行される。
+describeForCallers(
+  "bash-guard denies an operator between the parentheses of an array assignment",
+  (subagent) => {
+    test.each([
+      ["a here-document operator", "a=(<<EOF\nmise run stop\nEOF\n)"],
+      ["a tab-stripping operator", "a=(<<-EOF\nmise run stop\nEOF\n)"],
+      ["a here-string operator", "a=(<<<x)"],
+      ["a semicolon", "a=(x; y)"],
+      ["a pipe", "a=(x | y)"],
+      ["an ampersand", "a=(x & y)"],
+      ["an input redirect", "a=(x < f)"],
+      ["an output redirect", "a=(x > f)"],
+      ["a redirect with a file descriptor", "a=(x 2> f)"],
+      ["a nested parenthesis", "a=(x (y))"],
+      ["a process substitution", "a=(<(x))"],
+      ["an operator on a later line", "a=(x\ny\n; z)"],
+      ["an appended array", "a+=(<<EOF\nmise run stop\nEOF\n)"],
+      [
+        "an array on the line of a pending here-document",
+        "cat <<A; a=(x; y)\nmise run stop\nA\n",
+      ],
+      [
+        "a plain array on the line of a pending here-document",
+        "cat <<A; a=(x)\nb\nA\n",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// bashは括弧の中の`[`から対応する`]`までを添字の対として読み、その間の`#`をコメントにしない。
+describeForCallers(
+  "bash-guard denies the opening of a subscript pair inside an array assignment",
+  (subagent) => {
+    test.each([
+      ["a bracket at the start of a word", "a=([0]=x y)"],
+      ["a bracket in the middle of a word", "a=(k[0]=x y)"],
+      ["a comment start behind a bracket", "a=(x [ # y\n)"],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard denies an array assignment opened in a nested reader",
+  (subagent) => {
+    test.each([
+      ["a command substitution", "echo $(a=(<<EOF\nmise run stop\nEOF\n))"],
+      ["a backquote", "echo `a=(<<EOF\nmise run stop\nEOF\n)`"],
+      ["a command string", "bash -c 'a=(<<EOF\nmise run stop\nEOF\n)'"],
+      ["an eval argument", "eval 'a=(<<EOF\nmise run stop\nEOF\n)'"],
+      [
+        "a here-document read as shell input",
+        "bash <<'X'\na=(<<EOF\nmise run stop\nEOF\n)\nX\n",
+      ],
+      ["a command string with a semicolon", "bash -c 'a=(x; y)'"],
+      ["an eval argument with a pipe", "eval 'a=(x | y)'"],
+    ])("denies an array opened in %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard denies a command on a line inside an array assignment",
+  (subagent) => {
+    test("denies a line of the array that is a forbidden command", async () => {
+      expect(await decide("a=(x\nmise run stop\n)", { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows the daily array assignment forms",
+  (subagent) => {
+    test.each([
+      "a=(x y z)",
+      "a+=(x y)",
+      "a=()",
+      "a=(\"x;y\" 'p|q' c\\;d)",
+      "a=($(echo hi) `echo hi` y)",
+      "a=($(cat <<EOF\nx\nEOF\n) y)",
+      "a=(\"[x]\" '[y' c\\[d)",
+      `a=(${OPEN}b[0]} y)`,
+      "a=($([ -f x ] && echo y) z)",
+      "a=(x\ny\n)",
+      "a=(x # c ; d\ny)",
+      "a=(x) cat <<EOF\nb\nEOF\n",
+      "a=(x); cat <<EOF\nb\nEOF\n",
+      "a=(x) | cat",
+      "echo $((a=(1<2)))",
+      "git commit -m \"$(cat <<'EOF'\nfix: a\n\nbody\nEOF\n)\"",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard keeps the glob group rejection before an array assignment",
+  (subagent) => {
+    test.each(["declare -a a=(x)", "local a=(x)", "b=1 a=(x)"])(
+      "denies %s",
+      async (command) => {
+        expect(await decide(command, { subagent })).toBe("deny");
+      },
+    );
+
+    test("names the glob group in the reason", async () => {
+      expect(await denyReason("declare -a a=(x)", { subagent })).toContain(
+        "may start a glob group",
+      );
+    });
+  },
+);
+
+// zshは、標準入力から読むときだけ、構文エラーの後に次の行から読み続ける。確認済みでないシェルへの改行を含む入力は拒否する。
+describeForCallers(
+  "bash-guard handles a newline in the input of a shell",
+  (subagent) => {
+    test.each([
+      [
+        "a single quote across lines",
+        "zsh <<'X'\necho 'a\nmise run stop\n'\nX\n",
+      ],
+      [
+        "a double quote across lines",
+        "zsh <<'X'\necho \"a\nmise run stop\"\nX\n",
+      ],
+      ["a backslash continuation", "zsh <<'X'\necho a \\\nmise run stop\nX\n"],
+      ["a here-document", "zsh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["a here-string", "zsh <<< \"echo 'a\nmise run stop'\""],
+      ["an echo through a pipe", "echo 'echo \"a\\nb\"' | zsh"],
+      ["a launch behind a wrapper", "env zsh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["a launch by an absolute path", "/bin/zsh <<'X'\necho 'a\nb'\nX\n"],
+      ["a launch behind busybox", "busybox zsh <<'X'\necho 'a\nb'\nX\n"],
+      ["a here-document operator on one line", "zsh <<< 'echo \"<<\"'"],
+      ["a here-document operator in an echo", "echo 'echo \"<<\"' | zsh"],
+      ["two single-line texts", "zsh <<< 'echo a' <<< 'echo b'"],
+      ["a body that starts with a newline", "zsh <<'X'\n\necho hi\nX\n"],
+    ])("denies %s for an unconfirmed shell", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.each([
+      ["bash", "bash <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["sh", "sh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["dash", "dash <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["ksh", "ksh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+    ])(
+      "allows the same input for a confirmed shell (%s)",
+      async (_s, command) => {
+        expect(await decide(command, { subagent })).toBe("allow");
+      },
+    );
+
+    test("allows a multi-line input for bash", async () => {
+      expect(await decide("bash <<'X'\necho 'a\nb'\nX\n", { subagent })).toBe(
+        "allow",
+      );
+    });
+
+    test.each([
+      ["a here-string", "zsh <<< 'echo hi'"],
+      ["an echo through a pipe", "echo 'echo hi' | zsh"],
+      ["a body with only a trailing newline", "zsh <<'X'\necho hi\nX\n"],
+      ["a body with several trailing newlines", "zsh <<'X'\necho hi\n\n\nX\n"],
+    ])("allows a single line for an unconfirmed shell (%s)", async (_k, c) => {
+      expect(await decide(c, { subagent })).toBe("allow");
+    });
+
+    test.each([
+      ["a here-document operator", "bash <<< 'echo \"<<\"'"],
+      ["two single-line texts", "bash <<< 'echo a' <<< 'echo b'"],
+    ])("allows the same line for a confirmed shell (%s)", async (_k, c) => {
+      expect(await decide(c, { subagent })).toBe("allow");
+    });
+
+    test.each([
+      ["a command string", "zsh -c 'echo hi' <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["a file", "zsh script.sh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      [
+        "a command string with an operator",
+        "zsh -c 'echo hi' <<< 'echo \"<<\"'",
+      ],
+      ["a file with an operator", "zsh script.sh <<< 'echo \"<<\"'"],
+      ["a file with two texts", "zsh script.sh <<< 'echo a' <<< 'echo b'"],
+    ])(
+      "allows a here-document the unconfirmed shell does not read as code (%s)",
+      async (_kind, command) => {
+        expect(await decide(command, { subagent })).toBe("allow");
+      },
+    );
+  },
+);
+
 // 長い入力は、拒否として終わる。入力の大きさに比例する作業で足りるので、実時間は測らない。
 describeForCallers(
   "bash-guard finishes long nested input with a denial",

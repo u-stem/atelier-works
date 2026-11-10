@@ -965,6 +965,135 @@ describe("literalShellInputs", () => {
   });
 });
 
+describe("literalShellInputs with a newline in the text", () => {
+  const BODY = "cat <<X\nb\nX\n";
+
+  test.each(["bash", "sh", "dash", "ksh"])(
+    "returns a multi-line text for a confirmed shell (%s)",
+    (shell) => {
+      expect(shellInputsOf(`${shell} <<'EOF'\n${BODY}EOF\n`)).toEqual([BODY]);
+    },
+  );
+
+  test.each(["zsh", "ash", "mksh", "fish", "csh", "tcsh", "busybox sh"])(
+    "returns null for a multi-line here-document read by an unconfirmed shell (%s)",
+    (shell) => {
+      expect(shellInputsOf(`${shell} <<'EOF'\n${BODY}EOF\n`)).toBeNull();
+    },
+  );
+
+  test.each([
+    ["a single quote across lines", "echo 'a\nb'\n"],
+    ["a double quote across lines", 'echo "a\nb"\n'],
+    ["a backslash continuation", "echo a \\\nb\n"],
+    ["a here-document", BODY],
+  ])("returns null for %s read by an unconfirmed shell", (_kind, body) => {
+    expect(shellInputsOf(`zsh <<'EOF'\n${body}EOF\n`)).toBeNull();
+  });
+
+  test("returns null for a multi-line here-string read by an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<< \"echo 'a\nb'\"")).toBeNull();
+  });
+
+  test("returns null for a multi-line echo text read by an unconfirmed shell", () => {
+    expect(shellInputsOf("echo 'echo \"a\\nb\"' | zsh")).toBeNull();
+  });
+
+  test("returns null when a wrapper precedes the unconfirmed shell", () => {
+    expect(shellInputsOf(`env zsh <<'EOF'\n${BODY}EOF\n`)).toBeNull();
+  });
+
+  test("returns null when the unconfirmed shell is an absolute path", () => {
+    expect(shellInputsOf(`/bin/zsh <<'EOF'\n${BODY}EOF\n`)).toBeNull();
+  });
+
+  test("returns null when busybox starts the unconfirmed shell", () => {
+    expect(shellInputsOf(`busybox zsh <<'EOF'\n${BODY}EOF\n`)).toBeNull();
+  });
+
+  test("returns null for a multi-line here-document earlier in a pipe chain", () => {
+    expect(shellInputsOf(`cat <<'EOF' | zsh\n${BODY}EOF\n`)).toBeNull();
+  });
+
+  test("returns null for a here-document operator on one line read by an unconfirmed shell", () => {
+    expect(shellInputsOf("echo 'cat <<X' | zsh")).toBeNull();
+  });
+
+  test("returns null for a here-document operator in a here-string read by an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<< 'cat <<X'")).toBeNull();
+  });
+
+  test("returns the line with a here-document operator for a confirmed shell", () => {
+    expect(shellInputsOf("bash <<< 'cat <<X'")).toEqual(["cat <<X"]);
+  });
+
+  test("returns the line with a here-document operator when the unconfirmed shell reads a command string", () => {
+    const result = parseCommandLine("zsh -c 'echo hi' <<< 'cat <<X'");
+    if (!result.ok) throw new Error(result.error);
+    const launch = result.commands[0];
+    if (launch === undefined) throw new Error("no command");
+    expect(literalShellInputs(launch)).toEqual(["cat <<X"]);
+  });
+
+  test("returns the line with a here-document operator when the unconfirmed shell reads a file", () => {
+    expect(shellInputsOf("zsh script.sh <<< 'cat <<X'")).toEqual(["cat <<X"]);
+  });
+
+  test("returns null for two single-line texts read by an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<< 'echo a' <<< 'echo b'")).toBeNull();
+  });
+
+  test("returns the two single-line texts for a confirmed shell", () => {
+    expect(shellInputsOf("bash <<< 'echo a' <<< 'echo b'")).toEqual([
+      "echo a",
+      "echo b",
+    ]);
+  });
+
+  test("returns the two single-line texts when the unconfirmed shell reads a file", () => {
+    expect(shellInputsOf("zsh script.sh <<< 'echo a' <<< 'echo b'")).toEqual([
+      "echo a",
+      "echo b",
+    ]);
+  });
+
+  test("returns a single-line here-string for an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<< 'echo hi'")).toEqual(["echo hi"]);
+  });
+
+  test("returns a body with only a trailing newline for an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<'EOF'\necho hi\nEOF\n")).toEqual(["echo hi\n"]);
+  });
+
+  test("returns a body with several trailing newlines for an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<'EOF'\necho hi\n\n\nEOF\n")).toEqual([
+      "echo hi\n\n\n",
+    ]);
+  });
+
+  test("returns null for a body that starts with a newline for an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<'EOF'\n\necho hi\nEOF\n")).toBeNull();
+  });
+
+  test("returns the text when the unconfirmed shell reads a command string", () => {
+    const result = parseCommandLine(`zsh -c 'echo hi' <<'EOF'\n${BODY}EOF\n`);
+    if (!result.ok) throw new Error(result.error);
+    const launch = result.commands[0];
+    if (launch === undefined) throw new Error("no command");
+    expect(literalShellInputs(launch)).toEqual([BODY]);
+  });
+
+  test("returns the text when the unconfirmed shell reads a file", () => {
+    expect(shellInputsOf(`zsh script.sh <<'EOF'\n${BODY}EOF\n`)).toEqual([
+      BODY,
+    ]);
+  });
+
+  test("returns the text for a program that is not a shell", () => {
+    expect(shellInputsOf(`cat <<'EOF'\n${BODY}EOF\n`)).toEqual([BODY]);
+  });
+});
+
 describe("stripWrappers with env -S", () => {
   function stripped(line: string): string[] {
     const result = parseCommandLine(line);
@@ -1117,6 +1246,7 @@ const REGION_DAILY_BODIES: readonly (readonly [string, string])[] = [
   ["special parameters", "$# + $? + $$"],
   ["a braced parameter", `${OPEN}x:-1} + 1`],
   ["a comparison", "a >= b"],
+  ["an assignment of a parenthesis", "a=(1<2)"],
 ];
 
 /** 領域の本体で、閉じた集合の外にある形。 */
@@ -2390,5 +2520,163 @@ describe("a shell launch with a long argument list finishes", () => {
 
   test("rejects a long line of repeated invalid flags", () => {
     expect(parses(`bash ${"-k ".repeat(COUNT)}-c ls`)).toBe(false);
+  });
+});
+
+/** 配列の代入の括弧の中で、語を区切る演算子を持つ行。種類の名前と行の組である。 */
+const ARRAY_OPERATOR_FORMS: readonly (readonly [string, string])[] = [
+  ["a here-document operator", "a=(<<EOF\nx\nEOF\n)"],
+  ["a tab-stripping operator", "a=(<<-EOF\nx\nEOF\n)"],
+  ["a here-document operator behind a word", "a=(x <<EOF\ny\nEOF\n)"],
+  ["a here-string operator", "a=(<<<x)"],
+  ["a semicolon", "a=(x; y)"],
+  ["a pipe", "a=(x | y)"],
+  ["a leading pipe", "a=(| y)"],
+  ["an ampersand", "a=(x & y)"],
+  ["an input redirect", "a=(x < f)"],
+  ["an output redirect", "a=(x > f)"],
+  ["an append redirect", "a=(x >> f)"],
+  ["a redirect with a file descriptor", "a=(x 2> f)"],
+  ["a redirect of both outputs", "a=(x &> f)"],
+  ["a nested parenthesis", "a=(x (y))"],
+  ["a doubled opening parenthesis", "a=((x))"],
+  ["an input process substitution", "a=(<(x))"],
+  ["an output process substitution", "a=(>(x))"],
+  ["an operator on a later line", "a=(x\ny\n; z)"],
+  ["a here-document operator on a later line", "a=(x\n<<EOF\ny\nEOF\n)"],
+  ["an operator behind a comment line", "a=(x # c\n| y)"],
+  ["an operator in an appended array", "a+=(x; y)"],
+];
+
+describe("array assignments read only words between the parentheses", () => {
+  test.each(ARRAY_OPERATOR_FORMS)("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    ["a semicolon", "cat <<A; a=(x; y)\nb\nA\n"],
+    ["a here-document operator", "cat <<A; a=(<<B\nc\nB\n)\nb\nA\n"],
+    ["a pipe", "cat <<A; a=(x | y)\nb\nA\n"],
+  ])(
+    "rejects %s in an array opened on the line of a here-document",
+    (_form, line) => {
+      expect(parses(line)).toBe(false);
+    },
+  );
+
+  test.each([
+    ["behind a semicolon", "cat <<A; a=(x)\nb\nA\n"],
+    ["behind a pipe", "cat <<A | a=(x)\nb\nA\n"],
+  ])(
+    "rejects a plain array opened %s while a here-document is pending",
+    (_form, line) => {
+      expect(parses(line)).toBe(false);
+    },
+  );
+});
+
+describe("array assignments reject the opening of a subscript pair", () => {
+  test.each([
+    ["a bracket at the start of a word", "a=([0]=x)"],
+    ["a bracket in the middle of a word", "a=(k[0]=x)"],
+    ["a bracket at the end of a word", "a=(k[)"],
+    ["a comment start behind a bracket", "a=(x [ # y\n)"],
+    ["a comment start inside a bracket word", "a=(x [# y\n)"],
+    ["a bracket in an appended array", "a+=([0]=x)"],
+    ["a bracket on a later line", "a=(x\n[0]=y\n)"],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+});
+
+describe("array assignments in nested readers", () => {
+  test.each([
+    ["a command substitution", "echo $(a=(x; y))"],
+    ["a backquote", "echo `a=(x; y)`"],
+    ["a quoted command substitution", 'echo "$(a=(<<EOF\nx\nEOF\n))"'],
+    ["a here-document body", "cat <<EOF\n$(a=(x | y))\nEOF\n"],
+    ["a command substitution inside an array", "a=($(b=(x & y)))"],
+  ])("rejects an array opened in %s", (_where, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    ["a command substitution", "a=(x $(echo a; echo b) y)"],
+    ["a backquote", "a=(x `echo a | cat` y)"],
+    ["a command substitution with a redirect", "a=(x $(echo a > f) y)"],
+    ["a subshell in a substitution", "a=(x $( (echo a) ) y)"],
+  ])("does not carry the rule into %s", (_where, line) => {
+    expect(parses(line)).toBe(true);
+  });
+});
+
+describe("array assignments accept the daily forms", () => {
+  test.each([
+    ["an empty array", "a=()"],
+    ["words", "a=(x y z)"],
+    ["an appended array", "a+=(x y)"],
+    ["quoted operators", 'a=("x;y" \'p|q&r\' "<s>")'],
+    ["escaped operators", "a=(c\\;d e\\|f g\\&h)"],
+    ["globs", "a=(*.ts ?.md)"],
+    ["quoted brackets", 'a=("[x]" \'[y\' "k[")'],
+    ["escaped brackets", "a=(c\\[d e\\]f)"],
+    ["a subscript in a parameter expansion", `a=(${OPEN}b[0]} $c)`],
+    ["a test inside a command substitution", "a=($([ -f x ] && echo y) z)"],
+    ["a command substitution", "a=($(echo hi) y)"],
+    ["a backquote", "a=(`echo hi` y)"],
+    ["a parameter expansion", `a=(${OPEN}x} $y)`],
+    [
+      "a here-document inside a command substitution",
+      "a=($(cat <<EOF\nx\nEOF\n) y)",
+    ],
+    ["a here-document inside a backquote", "a=(`cat <<EOF\nx\nEOF\n` y)"],
+    ["newlines between words", "a=(x\ny\nz\n)"],
+    ["a comment holding operators", "a=(x # c ; d | e\ny)"],
+    ["an array behind a finished here-document", "cat <<A\nb\nA\na=(x)\n"],
+    [
+      "a here-document on the command after the array",
+      "a=(x) cat <<EOF\nb\nEOF\n",
+    ],
+    [
+      "a parenthesis after an equals sign in an arithmetic region",
+      "echo $((a=(1<2)))",
+    ],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+});
+
+describe("a closed array lets the operators work again", () => {
+  test.each([
+    ["a semicolon", "a=(x); echo y"],
+    ["a pipe", "a=(x) | cat"],
+    ["an ampersand", "a=(x) & echo y"],
+    ["a redirect", "a=(x) > f"],
+    ["an opening parenthesis", "a=(x); (echo y)"],
+    ["a here-document", "a=(x); cat <<EOF\nb\nEOF\n"],
+    ["a here-document on the next line", "a=(x)\ncat <<EOF\nb\nEOF\n"],
+    ["a second array", "a=(x); b=(y z)"],
+  ])("accepts %s after the closing parenthesis", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+
+  test("reads a line of an array as a command", () => {
+    expect(commandTexts("a=(x\ngit push -f\n)")).toContainEqual([
+      "git",
+      "push",
+      "-f",
+    ]);
+  });
+});
+
+describe("a prefix before an array keeps the glob group rejection", () => {
+  test.each([
+    ["a declaration", "declare -a a=(x)"],
+    ["a local declaration", "local a=(x)"],
+    ["an assignment before the array", "b=1 a=(x)"],
+  ])("rejects %s with the glob group reason", (_form, line) => {
+    const result = parseCommandLine(line);
+
+    expect(result.ok ? "" : result.error).toContain("may start a glob group");
   });
 });
