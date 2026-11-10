@@ -1,4 +1,3 @@
-import { Link } from "react-router";
 import type { ConfigItemView, DesignStageView } from "../../api/jobsQueries.ts";
 import { Card } from "../../components/ui/card.tsx";
 import type { ChangeOffer } from "../../lib/configChange.ts";
@@ -9,7 +8,6 @@ import {
 } from "../../lib/configSwitches.ts";
 import { CONFIG_REFERENCE_LABEL } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
-import { systemSectionPath } from "../../lib/systemSections.ts";
 import { ChangeButton } from "./ChangeButton.tsx";
 import { KeyText } from "./ConfigText.tsx";
 import { SwitchBadge } from "./SwitchBadge.tsx";
@@ -49,7 +47,8 @@ function StateCell({ row }: { row: SwitchRow }) {
  * 状態は、グループの表と同じバッジで示す。`design_enabled`が無視中か判定できないときは、バッジの横に語を添える。
  * 理由の文は、グループの表の`design_enabled`の行と「設計」グループの先頭の行が持つので、ここでは繰り返さない。
  * 止めるボタンは、グループの表と同じ`onChoose`に候補を渡すので、同じ確認のダイアログを開く。
- * 全部を止める操作は、状態タブの全停止の区画にあるので、そこへのリンクだけを置く。
+ * ボタンの名前は「機能のスイッチから<項目>を止める」にする。グループの表に同じ項目のボタンがあるので、名前を区別する。
+ * 全部を止める案内は、絞り込み中と設定が空のときも要るので、表に置かず、節の説明文が持つ。
  * 表の列幅は、グループの表の広い幅の列と同じにして、操作の列を縦にそろえる。
  */
 export function ConfigSwitchTable({
@@ -69,16 +68,6 @@ export function ConfigSwitchTable({
       <h3 id={HEADING_ID} className="text-small font-semibold">
         機能のスイッチ
       </h3>
-      <p className="text-small text-muted-foreground">
-        全部を止めるときは、システムの「状態」タブの
-        <Link
-          to={systemSectionPath("stop-all")}
-          className="rounded-sm font-medium text-primary underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          全停止
-        </Link>
-        を使います。
-      </p>
       <Card className="overflow-hidden text-small">
         <table
           aria-labelledby={HEADING_ID}
@@ -120,6 +109,7 @@ export function ConfigSwitchTable({
                       offer={row.offer}
                       locked={isLocked(row.offer)}
                       onChoose={onChoose}
+                      labelPrefix="機能のスイッチから"
                     />
                   )}
                 </td>

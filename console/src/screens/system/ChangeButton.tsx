@@ -11,15 +11,18 @@ export type SwitchOrNumberOffer = Extract<
 /**
  * 止めるか下げるのボタン。押すと確認のダイアログを開く候補を渡すだけで、書き込みは呼ばない。
  * 名前に項目を含め、同じ語のボタンを見分けられるようにする。
+ * 同じ項目のボタンが別の表にもあるときは、`labelPrefix`に表の名前を渡し、名前を区別する。名前は見える語(止める、下げる)を含む。
  */
 export function ChangeButton({
   offer,
   locked,
   onChoose,
+  labelPrefix = "",
 }: {
   offer: SwitchOrNumberOffer;
   locked: boolean;
   onChoose: (offer: ChangeOffer) => void;
+  labelPrefix?: string;
 }) {
   const verb = offer.kind === "stop" ? "止める" : "下げる";
   return (
@@ -27,7 +30,7 @@ export function ChangeButton({
       variant="outline"
       size="sm"
       disabled={locked}
-      aria-label={`${safeText(offer.key)}を${verb}`}
+      aria-label={`${labelPrefix}${safeText(offer.key)}を${verb}`}
       onClick={() => {
         onChoose(offer);
       }}

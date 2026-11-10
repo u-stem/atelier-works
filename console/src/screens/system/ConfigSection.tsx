@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import type {
   ConfigItemView,
   ConfigSnapshotView,
@@ -28,8 +29,14 @@ import {
   filterConfigItems,
   matchesDesignStageQuery,
 } from "../../lib/jobsView.ts";
+import {
+  type NoticeSeen,
+  noticeMoveReason,
+  shouldMoveToNotice,
+} from "../../lib/noticeFocus.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { jumpToSection } from "../../lib/sectionJump.ts";
+import { systemSectionPath } from "../../lib/systemSections.ts";
 import { ChangeButton, type SwitchOrNumberOffer } from "./ChangeButton.tsx";
 import { ConfigChangeDialog } from "./ConfigChangeDialog.tsx";
 import { CONFIG_NOTICE_ID, ConfigNotice } from "./ConfigNotice.tsx";
@@ -566,24 +573,46 @@ function DesignStageRow({
 /**
  * 設定のタブの本体。上から、閉じるまで残す変更の知らせ、絞り込み、機能のスイッチの表、グループの表の順に並べる。
  * スイッチの表とグループの表のボタンは、同じ`change.choose`に候補を渡すので、同じ確認のダイアログを開く。
- * 知らせが現れたときは、そこへ移ってフォーカスを置く。スクロールした先の操作の結果を、見落とさないためである。
+ * 知らせへ移ってフォーカスを置くのは、スクロールした先の操作の結果を、見落とさないためである。
+ * 隠れたタブには移らず、タブが見えた時点で、残っている知らせへ移る。
+ * 新しい知らせが届いたときは、フォーカスが体にあるか、確認のダイアログを開いたボタンに戻っているときだけ移る。
+ * 絞り込み欄などで入力している間は、フォーカスもスクロールも奪わない(`noticeFocus.ts`)。
  * 知らせを閉じたら、フォーカスを節の見出しへ戻す。閉じるボタンが消えて、フォーカスが失われないためである。
  */
 function ConfigBody({
   items,
   designStage,
+  visible,
 }: {
   items: readonly ConfigItemView[];
   designStage: DesignStageView | undefined;
+  /** 設定のタブが選ばれていて、見えているか。 */
+  visible: boolean;
 }) {
   const [query, setQuery] = useState("");
   const change = useConfigChange();
   const noticeId = change.notice?.id;
+  // 確認のダイアログを開いたボタン。ダイアログを閉じると、フォーカスはここへ戻る。
+  const trigger = useRef<Element | null>(null);
+  const seen = useRef<NoticeSeen>({ id: undefined, visible: false });
   useEffect(() => {
-    if (noticeId !== undefined) {
+    const reason = noticeMoveReason(seen.current, { id: noticeId, visible });
+    seen.current = { id: noticeId, visible };
+    if (
+      shouldMoveToNotice({
+        reason,
+        active: document.activeElement,
+        body: document.body,
+        trigger: trigger.current,
+      })
+    ) {
       jumpToSection(CONFIG_NOTICE_ID);
     }
-  }, [noticeId]);
+  }, [noticeId, visible]);
+  const choose = (offer: ChangeOffer): void => {
+    trigger.current = document.activeElement;
+    change.choose(offer);
+  };
   return (
     <div className="flex flex-col gap-3">
       {change.notice === null ? null : (
@@ -620,7 +649,7 @@ function ConfigBody({
         <ConfigSwitchTable
           items={items}
           designStage={designStage}
-          onChoose={change.choose}
+          onChoose={choose}
           isLocked={change.isLocked}
         />
       ) : null}
@@ -629,7 +658,7 @@ function ConfigBody({
         designStage={designStage}
         hideDesignStageRow={!matchesDesignStageQuery(query)}
         queried={query.trim() !== ""}
-        onChoose={change.choose}
+        onChoose={choose}
         isLocked={change.isLocked}
       />
       <ConfigChangeDialog
@@ -652,8 +681,11 @@ function ConfigBody({
  */
 export function ConfigSection({
   query,
+  visible = true,
 }: {
   query: SectionQuery<ConfigSnapshotView>;
+  /** 設定のタブが見えているか。隠れている間は、知らせへ移らない。 */
+  visible?: boolean;
 }) {
   return (
     <SystemSection
@@ -674,6 +706,16 @@ export function ConfigSection({
               それ以外の変更(有効にする向き、値の引き上げ、ownersなど)は、端末から行います(wmill
               resource pushなど)。
             </li>
+            <li>
+              全部を止めるときは、システムの「状態」タブの
+              <Link
+                to={systemSectionPath("stop-all")}
+                className="rounded-sm font-medium text-primary underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                全停止
+              </Link>
+              を使います。
+            </li>
           </ul>
         </>
       }
@@ -681,7 +723,11 @@ export function ConfigSection({
       loginHint="上のバナーからログインすると、設定を表示します。"
     >
       {(data) => (
-        <ConfigBody items={data.items} designStage={data.design_stage} />
+        <ConfigBody
+          items={data.items}
+          designStage={data.design_stage}
+          visible={visible}
+        />
       )}
     </SystemSection>
   );
