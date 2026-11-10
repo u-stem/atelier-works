@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   ConfigItemView,
   ConfigSnapshotView,
@@ -16,6 +16,7 @@ import {
   EDITABLE_LISTS,
 } from "../../lib/configChange.ts";
 import { DESIGN_GROUP_ID, groupConfigItems } from "../../lib/configGroups.ts";
+import { switchTableShown } from "../../lib/configSwitches.ts";
 import type { ConfigEntryValue } from "../../lib/configValue.ts";
 import {
   CONFIG_REFERENCE_LABEL,
@@ -28,8 +29,11 @@ import {
   matchesDesignStageQuery,
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
+import { jumpToSection } from "../../lib/sectionJump.ts";
 import { ChangeButton, type SwitchOrNumberOffer } from "./ChangeButton.tsx";
 import { ConfigChangeDialog } from "./ConfigChangeDialog.tsx";
+import { CONFIG_NOTICE_ID, ConfigNotice } from "./ConfigNotice.tsx";
+import { ConfigSwitchTable } from "./ConfigSwitchTable.tsx";
 import { EmptyValue, KeyText, TextValue } from "./ConfigText.tsx";
 import { EditableListValue } from "./EditableListValue.tsx";
 import { SwitchBadge } from "./SwitchBadge.tsx";
@@ -278,24 +282,32 @@ function rowOffersOf(
  * `designStage`を渡すと、「設計」グループの表の先頭に、設計工程が実際に効いているかの行を置く。
  * 設計の項目が無くても、「設計」グループはその行のために出す。
  * 絞り込みで判定の行だけを消すときは、`hideDesignStageRow`を渡す。
- * `design_enabled`の行の注記(無視中)は、判定を渡す限り出す。キーで絞っても、実態と食い違わないためである。
+ * `design_enabled`の行の注記(無視中)は、判定を渡す限り出す。絞り込んでも、実態と食い違わないためである。
+ * 項目が無いときの文は、`queried`で替える。絞り込みの語が当たらないことと、設定に項目が無いことを見分けるためである。
  */
 export function ConfigList({
   items,
   designStage,
   hideDesignStageRow = false,
+  queried = false,
   onChoose,
   isLocked = () => false,
 }: {
   items: readonly ConfigItemView[];
   designStage?: DesignStageView | undefined;
   hideDesignStageRow?: boolean;
+  /** 絞り込みの語を打っているか。 */
+  queried?: boolean;
   onChoose?: (offer: ChangeOffer) => void;
   isLocked?: (offer: ChangeOffer) => boolean;
 }) {
   const stageRow = designStage !== undefined && !hideDesignStageRow;
   if (items.length === 0 && !stageRow) {
-    return <EmptyNote>該当する項目はありません。</EmptyNote>;
+    return (
+      <EmptyNote>
+        {queried ? "当たる項目がありません。" : "項目がありません。"}
+      </EmptyNote>
+    );
   }
   return (
     <div className="@container flex flex-col gap-5">
@@ -305,6 +317,7 @@ export function ConfigList({
             key={group.id}
             id={group.id}
             label={group.label}
+            description={group.description}
             items={group.items}
             designStage={group.id === DESIGN_GROUP_ID ? designStage : undefined}
             showStageRow={stageRow}
@@ -399,8 +412,8 @@ function ConfigRow({
 }
 
 /**
- * 1つのグループの表。見出し(h3)が表の名前になる。
- * 見出しは区画(landmark)にせず、表の`aria-labelledby`で結ぶ。グループの数だけ区画が並ぶのを避けるためである。
+ * 1つのグループの表。見出し(h3)が表の名前になり、見出しの下の1文が表の説明になる。
+ * 見出しは区画(landmark)にせず、表の`aria-labelledby`と`aria-describedby`で結ぶ。グループの数だけ区画が並ぶのを避けるためである。
  * 狭い幅では、表をやめて項目ごとに縦に積む。
  * 操作の列は、操作の列のボタンを持つ項目があるときだけ出し、無ければ値の列が幅を使う。
  * `designStage`があるグループは、項目の行の前に、設計工程の判定の行を置く。
@@ -408,6 +421,7 @@ function ConfigRow({
 function ConfigGroupTable({
   id,
   label,
+  description,
   items,
   designStage,
   showStageRow,
@@ -416,6 +430,7 @@ function ConfigGroupTable({
 }: {
   id: string;
   label: string;
+  description: string;
   items: readonly ConfigItemView[];
   designStage: DesignStageView | undefined;
   showStageRow: boolean;
@@ -423,6 +438,7 @@ function ConfigGroupTable({
   isLocked: (offer: ChangeOffer) => boolean;
 }) {
   const headingId = `config-group-${id}`;
+  const descriptionId = `config-group-${id}-description`;
   const showOperation = items.some(
     (item) => rowOffersOf(item, onChoose).button !== null,
   );
@@ -431,10 +447,14 @@ function ConfigGroupTable({
       <h3 id={headingId} className="text-small font-semibold">
         {label}
       </h3>
+      <p id={descriptionId} className="text-small text-muted-foreground">
+        {description}
+      </p>
       <Card className="overflow-hidden text-small">
         <table
           {...ROLE.table}
           aria-labelledby={headingId}
+          aria-describedby={descriptionId}
           className="block w-full border-collapse @min-[40rem]:table @min-[40rem]:table-fixed"
         >
           <colgroup>
@@ -543,6 +563,12 @@ function DesignStageRow({
   );
 }
 
+/**
+ * 設定のタブの本体。上から、閉じるまで残す変更の知らせ、絞り込み、機能のスイッチの表、グループの表の順に並べる。
+ * スイッチの表とグループの表のボタンは、同じ`change.choose`に候補を渡すので、同じ確認のダイアログを開く。
+ * 知らせが現れたときは、そこへ移ってフォーカスを置く。スクロールした先の操作の結果を、見落とさないためである。
+ * 知らせを閉じたら、フォーカスを節の見出しへ戻す。閉じるボタンが消えて、フォーカスが失われないためである。
+ */
 function ConfigBody({
   items,
   designStage,
@@ -552,9 +578,32 @@ function ConfigBody({
 }) {
   const [query, setQuery] = useState("");
   const change = useConfigChange();
+  const noticeId = change.notice?.id;
+  useEffect(() => {
+    if (noticeId !== undefined) {
+      jumpToSection(CONFIG_NOTICE_ID);
+    }
+  }, [noticeId]);
   return (
     <div className="flex flex-col gap-3">
-      <Field tone="filter" label="キー名で絞り込む" className="max-w-sm">
+      {change.notice === null ? null : (
+        <ConfigNotice
+          key={change.notice.id}
+          item={change.notice.item}
+          notice={change.notice.notice}
+          onClose={() => {
+            change.closeNotice();
+            document
+              .getElementById("config-heading")
+              ?.focus({ preventScroll: true });
+          }}
+        />
+      )}
+      <Field
+        tone="filter"
+        label="キー名、グループ名、値で絞り込む"
+        className="max-w-sm"
+      >
         {(control) => (
           <Input
             {...control}
@@ -567,10 +616,19 @@ function ConfigBody({
           />
         )}
       </Field>
+      {switchTableShown(query, items.length) ? (
+        <ConfigSwitchTable
+          items={items}
+          designStage={designStage}
+          onChoose={change.choose}
+          isLocked={change.isLocked}
+        />
+      ) : null}
       <ConfigList
         items={filterConfigItems(items, query)}
         designStage={designStage}
         hideDesignStageRow={!matchesDesignStageQuery(query)}
+        queried={query.trim() !== ""}
         onChoose={change.choose}
         isLocked={change.isLocked}
       />
@@ -615,9 +673,6 @@ export function ConfigSection({
             <li>
               それ以外の変更(有効にする向き、値の引き上げ、ownersなど)は、端末から行います(wmill
               resource pushなど)。
-            </li>
-            <li>
-              全部を止めるときは、システムの「状態」タブの全停止を使います。
             </li>
           </ul>
         </>

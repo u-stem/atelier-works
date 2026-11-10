@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
+import type { WriteOutcome } from "../../api/executeWrite.ts";
 import type { ConfigUpdateResult } from "../../api/guards/writeResults.ts";
 import { configQueryKey } from "../../api/jobsQueries.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
@@ -16,6 +17,7 @@ import {
   type ReleaseNotice,
   releaseNotice,
   STALE_LIST_NOTICE,
+  staysUntilClosed,
 } from "../../lib/writeNotices.ts";
 
 function announce(notice: ReleaseNotice): void {
@@ -35,16 +37,32 @@ function announce(notice: ReleaseNotice): void {
   }
 }
 
+/**
+ * 閉じるまで残す知らせの置き場。設定のタブが1つだけ読む。
+ * 画面の部品の外に置くので、結果が届いたときにシステムの画面を離れていても、戻ると残っている。
+ */
 export const configNoticeStore = createPinnedNoticeStore();
 
+/**
+ * 設定の変更の結果を、知らせの出し先に振り分ける。
+ * 成功は数秒で消えるトーストにする。断り、確かめる警告、失敗は、操作が要るので、閉じるまで残す置き場に置く。
+ * 置き場の知らせは、どの項目の結果かを保つため、入力の項目を添える。
+ */
 export function routeConfigOutcome(
-  _outcome: unknown,
-  _input: ConfigUpdateInput,
-  _sinks: {
+  outcome: WriteOutcome<ConfigUpdateResult>,
+  input: ConfigUpdateInput,
+  sinks: {
     announce: (notice: ReleaseNotice) => void;
     pin: (item: string, notice: ReleaseNotice) => void;
   },
-): void {}
+): void {
+  const notice = releaseNotice(outcome, describeConfigUpdateResult);
+  if (staysUntilClosed(notice)) {
+    sinks.pin(input.item, notice);
+  } else {
+    sinks.announce(notice);
+  }
+}
 
 /** 設定の変更を、共通の書き込みの流れに載せる設定。項目ごとにロックし、変更の後は設定の取得を読み直す。 */
 const CONFIG_UPDATE: WriteRunnerConfig<ConfigUpdateInput, ConfigUpdateResult> =
@@ -52,8 +70,11 @@ const CONFIG_UPDATE: WriteRunnerConfig<ConfigUpdateInput, ConfigUpdateResult> =
     keyOf: (input) => `config:${input.item}`,
     run: (input) => updateConfig(input),
     invalidates: [configQueryKey],
-    onOutcome: (outcome) => {
-      announce(releaseNotice(outcome, describeConfigUpdateResult));
+    onOutcome: (outcome, input) => {
+      routeConfigOutcome(outcome, input, {
+        announce,
+        pin: configNoticeStore.pin,
+      });
     },
     onStale: () => {
       announce(STALE_LIST_NOTICE);
@@ -100,16 +121,24 @@ export function changeInputOf(
 /**
  * 設定の変更の操作。項目を選ぶと確認のダイアログを開き、確認を通った後にだけscriptを呼ぶ。
  * 実行中は同じ項目を操作できない。
+ * 閉じるまで残す知らせ(`notice`)は、次の変更を始めたときに消す。前の結果が、新しい結果の隣に残らないためである。
  */
 export function useConfigChange() {
   const [offer, setOffer] = useState<ChangeOffer | null>(null);
   const [text, setText] = useState("");
   const change = useWriteMutation(CONFIG_UPDATE);
+  const notice = useSyncExternalStore(
+    configNoticeStore.subscribe,
+    configNoticeStore.get,
+    configNoticeStore.get,
+  );
 
   return {
     offer,
     text,
     setText,
+    notice,
+    closeNotice: configNoticeStore.dismiss,
     choose: (chosen: ChangeOffer) => {
       setText("");
       setOffer(chosen);
@@ -122,7 +151,9 @@ export function useConfigChange() {
       const input = changeInputOf(offer, text);
       if (input === null) return;
       setOffer(null);
-      change.submit(input);
+      if (change.submit(input)) {
+        configNoticeStore.dismiss();
+      }
     },
     isLocked: (chosen: ChangeOffer) =>
       change.isLocked({ item: chosen.key, expected: true, next: false }),

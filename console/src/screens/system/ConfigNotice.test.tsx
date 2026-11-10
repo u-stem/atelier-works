@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReleaseNotice } from "../../lib/writeNotices.ts";
-import { CONFIG_NOTICE_TITLE_ID, ConfigNotice } from "./ConfigNotice.tsx";
+import { CONFIG_NOTICE_ID, ConfigNotice } from "./ConfigNotice.tsx";
 
 const REFUSAL: ReleaseNotice = {
   tone: "info",
@@ -44,12 +44,18 @@ describe("ConfigNotice", () => {
     );
   });
 
-  test("gives the title an id that the page can move the focus to", () => {
-    expect(render(REFUSAL)).toContain(`id="${CONFIG_NOTICE_TITLE_ID}"`);
+  test("gives the alert an id that the page can move the focus to", () => {
+    expect(render(REFUSAL)).toMatch(
+      new RegExp(
+        `<div(?=[^>]*role="alert")(?=[^>]*id="${CONFIG_NOTICE_ID}")[^>]*>`,
+      ),
+    );
   });
 
-  test("lets the title take the focus without a place in the order of the Tab key", () => {
-    expect(render(REFUSAL)).toMatch(/<div[^>]*tabindex="-1"/);
+  test("lets the alert take the focus without a place in the order of the Tab key", () => {
+    expect(render(REFUSAL)).toMatch(
+      /<div(?=[^>]*role="alert")(?=[^>]*tabindex="-1")[^>]*>/,
+    );
   });
 
   test("says why the change was refused", () => {
