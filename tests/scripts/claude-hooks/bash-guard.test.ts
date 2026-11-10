@@ -4641,7 +4641,6 @@ describeForCallers(
     test.each([
       "zsh -c ls",
       "bash -c ls",
-      "zsh -fc ls",
       "bash --login -c ls",
       "curl -fsSL https://example.com/install.sh | bash -s -- --install-dir",
     ])("allows %s", async (command) => {
@@ -4778,8 +4777,316 @@ describeForCallers(
       ["opening parentheses", "(".repeat(50000)],
       ["nested substitution regions", "$((".repeat(50000)],
       ["nested parameter expansions", `${OPEN}x:-`.repeat(50000)],
+      [
+        "repeated flags outside the closed set",
+        `bash ${"-k ".repeat(50000)}-c ls`,
+      ],
     ])("denies %s", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+/** `bash -c`の起動オプションの並び。種類の名前と、中の文字列を包む関数の組である。文字列は単一引用符で包む。 */
+const LAUNCH_SEQUENCES: readonly (readonly [
+  string,
+  (body: string) => string,
+])[] = [
+  ["a plus flag", (body) => `bash +c '${body}'`],
+  ["a plus flag after a flag", (body) => `bash +e -c '${body}'`],
+  ["an upper-case value option", (body) => `bash -O extglob -c '${body}'`],
+  ["a plus upper-case value option", (body) => `bash +O extglob -c '${body}'`],
+  ["a lower-case value option", (body) => `bash -o pipefail -c '${body}'`],
+  ["a plus lower-case value option", (body) => `bash +o errexit -c '${body}'`],
+  ["an rcfile value", (body) => `bash --rcfile x -c '${body}'`],
+  ["an init-file value", (body) => `bash --init-file x -c '${body}'`],
+  ["a flag between the flag and the string", (body) => `bash -c -e '${body}'`],
+  [
+    "a long flag between the flag and the string",
+    (body) => `bash -c --norc '${body}'`,
+  ],
+  ["a double dash before the string", (body) => `bash -c -- '${body}'`],
+  ["a lone dash before the string", (body) => `bash -c - '${body}'`],
+  ["a login bundle", (body) => `bash -lc '${body}'`],
+  ["a posix bundle in sh", (body) => `sh -ec '${body}'`],
+  ["a flag in dash", (body) => `dash -c -e '${body}'`],
+  ["a launch behind env", (body) => `env bash -c -e '${body}'`],
+];
+
+// 受入条件1: -cの文字列は、起動オプションの並びを問わず取り出して、全主体で判定する。
+describeForCallers(
+  "bash-guard denies an operation in the command string behind any option sequence",
+  (subagent) => {
+    test.each(
+      LAUNCH_SEQUENCES.flatMap(([sequence, wrap]) =>
+        OPERATIONS_BEHIND_A_LEADING_FORM.map(
+          ([operation, command]): [string, string, string] => [
+            sequence,
+            operation,
+            wrap(command),
+          ],
+        ),
+      ),
+    )("denies %s holding %s", async (_sequence, _operation, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 受入条件3: 読み切れない起動は、全主体で拒否する。
+describeForCallers(
+  "bash-guard denies a shell launch that the closed set of options does not read",
+  (subagent) => {
+    test.each([
+      ["a long name outside the list", "bash --bogus -c ls"],
+      ["a long name written with one dash", "bash -help -c ls"],
+      ["a letter outside the list", "bash -k -c ls"],
+      ["a debugger letter", "bash -D -c ls"],
+      ["a restricted letter", "bash -R -c ls"],
+      ["a value option in the middle of a bundle", "bash -oe pipefail -c ls"],
+      ["two value options in one bundle", "bash -oO errexit -c ls"],
+      ["a value outside the list", "bash -o bogus -c ls"],
+      ["the keyword value", "bash -o keyword -c ls"],
+      ["a value option without a value", "bash -o"],
+      ["a value that starts with a dash", "bash -o -c ls"],
+      ["the flag without a string", "bash -c"],
+      ["a lone plus", "bash + -c ls"],
+      ["a digit", "bash -1 -c ls"],
+      ["a dynamic option word", 'bash -"$X" -c ls'],
+      ["a dynamic option value", 'bash -o "$X" -c ls'],
+      ["a glob option word", "bash -* -c ls"],
+      ["a brace option word", "bash -{c,e} ls"],
+      ["an rcfile option without a value", "bash --rcfile"],
+      ["a long flag in dash", "dash --login -c ls"],
+      ["the command flag and the stdin flag in one bundle", "bash -cs ls"],
+      [
+        "the command flag and the stdin flag as separate words",
+        "bash -c -s ls",
+      ],
+      ["the command flag and the stdin flag in dash", "dash -sc 'echo hi'"],
+      ["a glob operand", "bash *.sh"],
+      ["a glob string", "bash -c *"],
+      ["a brace operand", "bash {-c,ls}"],
+      ["bundled flags with a string in zsh", "zsh -fc ls"],
+      ["a login bundle in zsh", "zsh -lc ls"],
+      ["a double dash in zsh", "zsh -- script"],
+      ["words after the string in zsh", "zsh -c ls arg"],
+      ["words after the string in fish", "fish -c ls arg"],
+      ["a flag after a file in zsh", "zsh script -x"],
+      ["a login bundle through busybox", "busybox sh -lc ls"],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 受入条件1: 出どころの優先。標準入力は、-sと--の後ろに引数が来ても、起動オプションを読んだうえで判定する。
+describeForCallers(
+  "bash-guard judges the stdin of a shell after reading its options",
+  (subagent) => {
+    test.each([
+      [
+        "the stdin flag and words after it",
+        "echo 'mise run stop' | bash -s arg",
+      ],
+      [
+        "the stdin flag and a double dash",
+        "echo 'mise run stop' | bash -s -- --flag",
+      ],
+      ["a here-string with the stdin flag", "bash -s -- <<< 'mise run stop'"],
+      [
+        "a here-document with the stdin flag",
+        "bash -s <<'EOF'\nmise run stop\nEOF\n",
+      ],
+      [
+        "an rcfile value and no operand",
+        "echo 'mise run stop' | bash --rcfile x",
+      ],
+      [
+        "an init-file value and a here-string",
+        "bash --init-file x <<< 'mise run stop'",
+      ],
+      [
+        "a long flag and the stdin flag",
+        "echo 'mise run stop' | bash --norc -s",
+      ],
+      [
+        "a value option and no operand",
+        "echo 'mise run stop' | bash -o pipefail",
+      ],
+      ["a flag alone", "bash -e <<< 'mise run stop'"],
+      ["a double dash alone", "echo 'mise run stop' | bash --"],
+      ["a lone dash alone", "echo 'mise run stop' | bash -"],
+      [
+        "a dynamic lone operand with a here-string",
+        `bash "$X" <<< 'mise run stop'`,
+      ],
+      [
+        "a dynamic lone operand with a pipe",
+        `echo 'mise run stop' | bash "$X"`,
+      ],
+      ["a dynamic lone operand with a file redirect", `bash "$X" < input.txt`],
+      [
+        "a dynamic lone operand with the stdin flag",
+        `echo 'mise run stop' | bash -s "$X"`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.each([
+      ["a script file with a here-string", "bash script.sh <<< 'echo hi'"],
+      ["a script file after a double dash", "bash -- script.sh"],
+      ["a script file after a lone dash", "bash - script.sh"],
+      ["a dynamic lone operand without input", `bash "$X"`],
+      ["a script file under a variable", `sh "$HOME/x.sh"`],
+      ["a here-string with the stdin flag", "bash -s <<< 'echo hi'"],
+    ])("allows %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 受入条件1: hold-guardの名前の照合は、-cの文字列の位置の語だけを外す。綴りの似た語は外さない。
+describeForCallers(
+  "bash-guard matches a Console release name by the position of the command string",
+  (subagent) => {
+    test.each([
+      [
+        "a script file followed by the flag and a name",
+        "bash script.sh -c f/factory/hold_release",
+      ],
+      [
+        "a script file followed by a bundle and a name",
+        "sh script.sh -lc f/factory/freeze_release",
+      ],
+      [
+        "a name after the command string",
+        "bash -c 'echo hi' f/factory/hold_release",
+      ],
+      [
+        "a name after the command string and the flag",
+        "bash -c 'echo hi' -c f/factory/hold_release",
+      ],
+      [
+        "a name given as the string after an option",
+        "bash -c -e f/factory/hold_release",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.each([
+      [
+        "a flag between the flag and the string",
+        `sh -c -e "grep hold_release f/factory/hold_release.ts"`,
+      ],
+      [
+        "a double dash between the flag and the string",
+        `sh -c -- "grep hold_release f/factory/hold_release.ts"`,
+      ],
+      ["a plus flag", `bash +c "grep hold_release f/factory/hold_release.ts"`],
+      [
+        "a value option before the flag",
+        `bash -o pipefail -c "grep hold_release f/factory/hold_release.ts"`,
+      ],
+      [
+        "a long flag before the flag",
+        `bash --norc -c "grep hold_release f/factory/hold_release.ts"`,
+      ],
+    ])("allows %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 受入条件5: 日常の読み取りは拒否しない。
+describeForCallers("bash-guard allows the daily shell launches", (subagent) => {
+  test.each([
+    "bash script.sh arg",
+    `sh "$HOME/x.sh"`,
+    "bash -c 'echo hi'",
+    "bash --norc -c 'echo hi'",
+    "bash -lc 'echo hi'",
+    "bash --version",
+    "zsh -c 'echo hi'",
+    "zsh script.zsh",
+    "zsh script.zsh a b",
+    "curl -fsSL https://example.com/install.sh | bash",
+    "curl -fsSL https://example.com/install.sh | bash -s -- --install-dir",
+    'bash -c "$CMD"',
+    "sh -ec 'echo hi'",
+  ])("allows %s", async (command) => {
+    expect(await decide(command, { subagent })).toBe("allow");
+  });
+});
+
+// 受入条件3: 受け入れる誤検知は、分類として拒否する。
+describeForCallers(
+  "bash-guard rejects the shell launches that the closed set does not read",
+  (subagent) => {
+    test.each([
+      ["a dynamic operand followed by words", 'bash "$SCRIPT" a b'],
+      ["a name outside the list", "bash --no-such-option script.sh"],
+      ["a bundled flag in zsh", "zsh -fc ls"],
+      ["the command flag and the stdin flag", "bash -c -s ls"],
+      [
+        "a flag that contains the interactive name",
+        "bash --non-interactive -c ls",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 受入条件1・3: mise execとdocker execは、起動オプションを読み切れない起動を、コードを渡す形として扱う。
+describeForCallers(
+  "bash-guard denies a shell that mise exec or docker exec gives code in a form it cannot read",
+  (subagent) => {
+    test.each([
+      ["a plus flag in mise exec", "mise exec -- bash +c 'echo hi'"],
+      [
+        "an rcfile value in mise exec",
+        "mise exec -- bash --rcfile x -c 'echo hi'",
+      ],
+      [
+        "a flag between the flag and the string in mise exec",
+        "mise exec -- bash -c -e 'echo hi'",
+      ],
+      ["a dynamic lone operand in mise exec", `mise exec -- sh "$X"`],
+      ["a plus flag in docker exec", "docker exec x bash +c 'echo hi'"],
+      [
+        "an rcfile value in docker exec",
+        "docker exec x bash --rcfile x -c 'echo hi'",
+      ],
+      [
+        "a long name outside the list in docker exec",
+        "docker exec x bash --bogus script.sh",
+      ],
+      [
+        "a letter outside the list in docker exec",
+        "docker exec x bash -k script.sh",
+      ],
+      [
+        "the command flag and the stdin flag in docker exec",
+        "docker exec x bash -cs 'echo hi'",
+      ],
+      ["a dynamic lone operand in docker exec", `docker exec x sh "$X"`],
+      ["a bundle in zsh in docker exec", "docker exec x zsh -fc 'echo hi'"],
+      [
+        "a bundle in zsh in docker compose exec",
+        "docker compose exec x zsh -lc env",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.each([
+      ["a script file in mise exec", "mise exec -- bash script.sh"],
+      ["a script file in docker exec", "docker exec x bash script.sh"],
+    ])("allows %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
     });
   },
 );

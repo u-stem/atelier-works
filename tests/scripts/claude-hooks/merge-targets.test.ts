@@ -210,6 +210,48 @@ describe("gh pr merge behind a wrapper or a nested shell", () => {
   });
 });
 
+// 受入条件1: シェルの起動オプションを読んだうえで、-cの文字列と標準入力の中のマージ操作を拾う。
+describe("gh pr merge behind the launch options of a shell", () => {
+  test.each([
+    ["a plus flag", "bash +c 'gh pr merge 1'"],
+    ["a flag between the flag and the string", "bash -c -e 'gh pr merge 1'"],
+    ["an rcfile value", "bash --rcfile x -c 'gh pr merge 1'"],
+    ["a value option", "bash -o pipefail -c 'gh pr merge 1'"],
+    ["the stdin flag and a double dash", "bash -s -- <<< 'gh pr merge 1'"],
+    ["the stdin flag and words", "echo 'gh pr merge 1' | bash -s arg"],
+    [
+      "an rcfile value and a here-string",
+      "bash --rcfile x <<< 'gh pr merge 1'",
+    ],
+    [
+      "an init-file value and a pipe",
+      "echo 'gh pr merge 1' | bash --init-file x",
+    ],
+    ["a long flag and the stdin flag", "echo 'gh pr merge 1' | bash --norc -s"],
+    [
+      "a dynamic lone operand with a here-string",
+      `sh "$X" <<< 'gh pr merge 1'`,
+    ],
+    ["a dynamic lone operand with a pipe", `echo 'gh pr merge 1' | sh "$X"`],
+    ["a lone dash", "echo 'gh pr merge 1' | bash -"],
+  ])("finds a merge through %s", (_form, command) => {
+    expect(findGuardedOperations(command).map((op) => op.kind)).toContain(
+      "merge",
+    );
+  });
+
+  test.each([
+    ["a script file with a here-string", "bash script.sh <<< 'gh pr merge 1'"],
+    [
+      "a script file after a double dash with a pipe",
+      "echo 'gh pr merge 1' | bash -- script.sh",
+    ],
+    ["a dynamic lone operand without input", `sh "$X"`],
+  ])("finds nothing through %s", (_form, command) => {
+    expect(findGuardedOperations(command)).toEqual([]);
+  });
+});
+
 describe("a wrapper that takes an option value", () => {
   test.each([
     "env -P /opt/homebrew/bin gh pr merge 1",

@@ -103,6 +103,41 @@ export function shellArguments(words: readonly Word[]): readonly Word[] | null {
   return null;
 }
 
+/** シェルの起動オプションを読んだ結果。読み切れない起動は`ok: false`で返す。 */
+export type ShellLaunch =
+  | {
+      readonly ok: true;
+      readonly source: "command" | "file" | "stdin" | "none";
+      readonly script: Word | null;
+      readonly scriptIndex: number | null;
+      readonly operands: readonly Word[];
+    }
+  | { readonly ok: false; readonly reason: string };
+
+export function readShellLaunch(
+  _shell: string,
+  _args: readonly Word[],
+  _hasStdin: boolean,
+): ShellLaunch {
+  return {
+    ok: true,
+    source: "none",
+    script: null,
+    scriptIndex: null,
+    operands: [],
+  };
+}
+
+export function readsStandardInput(_command: SimpleCommand): boolean {
+  return false;
+}
+
+export function shellInvocation(
+  _words: readonly Word[],
+): { readonly shell: string; readonly args: readonly Word[] } | null {
+  return null;
+}
+
 /** 入れ子の深さの上限。深すぎる入力で処理が止まらないようにする。 */
 const MAX_DEPTH = 8;
 
