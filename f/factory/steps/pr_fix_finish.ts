@@ -81,6 +81,7 @@ import {
   getViewer,
   gitIdentityForViewer,
   listReviewThreads,
+  PR_FIX_MARKER_KIND,
   postIssueComment,
   type RequestReviewersResult,
   type ReviewThread,
@@ -1095,7 +1096,7 @@ export async function main(
       }
 
       const body = withMarker(
-        "pr_fix",
+        PR_FIX_MARKER_KIND,
         work_item_id,
         renderFixReply(reply, newSha),
       );

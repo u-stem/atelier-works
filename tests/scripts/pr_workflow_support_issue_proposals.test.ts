@@ -36,9 +36,9 @@ function thread(overrides: Partial<ReviewThread> = {}): ReviewThread {
     path: "a.ts",
     line: 10,
     firstCommentAuthorLogin: "octo-factory",
-    firstCommentBody: "[pr_review 自動レビュー]\n[MUST] fix this",
+    firstCommentBody: "[Factory 自動レビュー]\n[MUST] fix this",
     lastCommentAuthorLogin: "octo-factory",
-    lastCommentBody: "[pr_review 自動レビュー]\n[MUST] fix this",
+    lastCommentBody: "[Factory 自動レビュー]\n[MUST] fix this",
     firstCommentDatabaseId: 101,
     allCommentIds: [101],
     comments: [],
@@ -143,7 +143,7 @@ describe("buildIssueProposalBody", () => {
 describe("renderIssueProposalApprovedReply", () => {
   test("starts with the pr_fix role tag", () => {
     expect(renderIssueProposalApprovedReply(42)).toStartWith(
-      "[pr_fix 自動返信]\n",
+      "[Factory 自動返信]\n",
     );
   });
 
@@ -162,7 +162,7 @@ describe("renderIssueProposalApprovedReply", () => {
 describe("renderIssueProposalRejectedReply", () => {
   test("starts with the pr_fix role tag", () => {
     expect(renderIssueProposalRejectedReply("scope外のため")).toStartWith(
-      "[pr_fix 自動返信]\n",
+      "[Factory 自動返信]\n",
     );
   });
 

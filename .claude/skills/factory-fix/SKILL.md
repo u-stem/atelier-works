@@ -126,7 +126,7 @@ commitとpushはflow側が行い、この2フィールドを結合してコミ�
 返信を組み立てるのはClaudeではない。
 
 ```text
-[pr_fix 自動返信]
+[Factory 自動返信]
 <body>
 
 対応: <commit sha7>

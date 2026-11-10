@@ -17,7 +17,7 @@ import {
 const VIEWER = "factory-bot";
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const OTHER_SHA = "fedcba9876543210fedcba9876543210fedcba98";
-const SUMMARY = "[pr_review 自動レビュー] @alice\n指摘はありません。LGTMです。";
+const SUMMARY = "[Factory 自動レビュー] @alice\n指摘はありません。LGTMです。";
 
 function review(
   overrides: Partial<PostedReviewCandidate> = {},

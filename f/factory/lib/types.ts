@@ -693,7 +693,8 @@ export type ReviewFinding = {
 export type ThreadResponseDecision =
   | "addressed"
   | "skip_accepted"
-  | "skip_rejected";
+  | "skip_rejected"
+  | "answered";
 
 /**
  * 再レビューのClaudeが、既存のスレッドに出す答え。

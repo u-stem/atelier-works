@@ -52,6 +52,7 @@ import {
   renderReviewSummary,
   renderThreadReply,
   renderUnresolvedLineSummary,
+  resolvesThread,
   reviewResultFor,
   selectThreadResponses,
   selectThreadsToResolve,
@@ -548,7 +549,7 @@ export async function publishReview(
         commentId,
         renderThreadReply(response, target.work_item_id),
       );
-      if (response.decision !== "skip_rejected") answeredIds.push(thread.id);
+      if (resolvesThread(response.decision)) answeredIds.push(thread.id);
     } catch (err) {
       log.warn("failed to answer a review thread", {
         owner,
