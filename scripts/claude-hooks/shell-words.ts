@@ -1157,6 +1157,15 @@ class Parser {
         this.position += 1;
         return;
       case ")":
+        // 保留したヒアドキュメントを登録した括弧を、保留中に閉じる形は読まない。
+        // 閉じて開き直すと、深さが登録時に戻り、改行の検査をすり抜けるためである。
+        if (
+          this.heredocs.some((heredoc) => heredoc.depth >= this.subshellDepth)
+        ) {
+          throw new ShellSyntaxError(
+            'a ")" closes the parenthesis of a pending here-document',
+          );
+        }
         this.endCommand();
         this.subshellDepth -= 1;
         if (this.regionBase === this.subshellDepth) this.regionBase = null;
