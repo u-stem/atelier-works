@@ -1028,9 +1028,11 @@ describe("literalShellInputs with a newline in the text", () => {
   });
 
   test("returns the text when the unconfirmed shell reads a command string", () => {
-    expect(shellInputsOf(`zsh -c 'echo hi' <<'EOF'\n${BODY}EOF\n`)).toEqual([
-      BODY,
-    ]);
+    const result = parseCommandLine(`zsh -c 'echo hi' <<'EOF'\n${BODY}EOF\n`);
+    if (!result.ok) throw new Error(result.error);
+    const launch = result.commands[0];
+    if (launch === undefined) throw new Error("no command");
+    expect(literalShellInputs(launch)).toEqual([BODY]);
   });
 
   test("returns the text when the unconfirmed shell reads a file", () => {
