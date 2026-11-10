@@ -4862,6 +4862,15 @@ describeForCallers(
         "bash -o -noglob -c ls",
       ],
       ["the history expansion letter", "bash -H -c ls"],
+      ["the debugger long option", "bash --debugger -c ls"],
+      ["a long option with a value in sh", "sh --rcfile x -c ls"],
+      [
+        "a long option with a value in sh before a script",
+        "sh --init-file x script.sh",
+      ],
+      ["a long option without a value in sh", "sh --norc -c ls"],
+      ["a version request in sh", "sh --version"],
+      ["a help request in sh", "sh --help"],
       ["an rcfile option without a value", "bash --rcfile"],
       ["a long flag in dash", "dash --login -c ls"],
       ["the command flag and the stdin flag in one bundle", "bash -cs ls"],
@@ -5079,6 +5088,12 @@ describeForCallers(
         "docker exec x bash -cs 'echo hi'",
       ],
       ["a dynamic lone operand in docker exec", `docker exec x sh "$X"`],
+      ["a version request in sh in docker exec", "docker exec x sh --version"],
+      [
+        "a long option with a value in sh in docker exec",
+        "docker exec x sh --rcfile y script.sh",
+      ],
+      ["a version request in sh in mise exec", "mise exec -- sh --version"],
       ["a bundle in zsh in docker exec", "docker exec x zsh -fc 'echo hi'"],
       [
         "a bundle in zsh in docker compose exec",

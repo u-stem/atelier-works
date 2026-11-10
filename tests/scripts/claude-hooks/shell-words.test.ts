@@ -1980,6 +1980,7 @@ describe("a shell launch outside the closed set of options is unreadable", () =>
       ["-o", "+noglob", "-c", "cmd"],
     ],
     ["an rcfile value with a brace", ["--rcfile", "{a,b}", "-c", "cmd"]],
+    ["the debugger long option", ["--debugger", "-c", "cmd"]],
     ["an init-file value with a brace", ["--init-file", "{a,b}", "-c", "cmd"]],
     ["the history expansion letter", ["-H", "-c", "cmd"]],
     ["the history expansion letter in a bundle", ["-Hc", "cmd"]],
@@ -2014,6 +2015,20 @@ describe("a shell launch outside the closed set of options is unreadable", () =>
     ["a letter that only bash reads, in dash", "dash", ["-p", "-c", "cmd"]],
     ["the history expansion letter in sh", "sh", ["-H", "-c", "cmd"]],
     ["the history expansion letter in dash", "dash", ["-Hc", "cmd"]],
+    ["a long option with a value in sh", "sh", ["--rcfile", "x", "-c", "cmd"]],
+    [
+      "a long option with a value in sh before a script",
+      "sh",
+      ["--init-file", "x", "script.sh"],
+    ],
+    ["a long option without a value in sh", "sh", ["--norc", "-c", "cmd"]],
+    ["a version request in sh", "sh", ["--version"]],
+    ["a help request in sh", "sh", ["--help"]],
+    [
+      "a long option after a version request in sh",
+      "sh",
+      ["--version", "-c", "cmd"],
+    ],
   ])("rejects %s", (_form, shell, args) => {
     expect(launchOf(shell, args)).toBe("unreadable");
   });
@@ -2259,6 +2274,10 @@ describe("a shell launch that cannot be read is a syntax error", () => {
       "bash -o -noglob -c ls",
     ],
     ["the history expansion letter", "bash -H -c ls"],
+    ["the debugger long option", "bash --debugger -c ls"],
+    ["a long option with a value in sh", "sh --rcfile x -c ls"],
+    ["a long option without a value in sh", "sh --norc -c ls"],
+    ["a version request in sh", "sh --version"],
     ["an rcfile option without a value", "bash --rcfile"],
     ["a long flag in dash", "dash --login -c ls"],
     ["both the command flag and the stdin flag", "bash -cs ls"],

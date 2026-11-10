@@ -27,6 +27,9 @@ describe("shellInputSource", () => {
     ["the command flag and the stdin flag", "bash", ["-cs", "cmd"]],
     ["the command flag without a string", "bash", ["-c"]],
     ["a bundle in zsh", "zsh", ["-lc", "cmd"]],
+    ["a version request in sh", "sh", ["--version"]],
+    ["a long option with a value in sh", "sh", ["--rcfile", "x", "script.sh"]],
+    ["the debugger long option", "bash", ["--debugger", "-c", "cmd"]],
   ])("returns unreadable for %s", (_form, shell, args) => {
     expect(shellInputSource(shell, words(...args), false)).toBe("unreadable");
   });
