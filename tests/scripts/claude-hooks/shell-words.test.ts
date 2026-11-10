@@ -1090,3 +1090,461 @@ describe("stripWrappers with options that take a value", () => {
     expect(stripped(line)).toEqual(expected);
   });
 });
+
+/** 算術の領域の書き方。本体は同じ規則で読む。 */
+const REGION_FORMS: readonly (readonly [string, (body: string) => string])[] = [
+  ["a command-position region", (body) => `((${body}))`],
+  ["a for-header region", (body) => `for ((${body})); do :; done`],
+  ["a substitution region", (body) => `echo $((${body}))`],
+  ["a double-quoted substitution region", (body) => `echo "$((${body}))"`],
+];
+
+/** 領域の本体として読める、日常の形。 */
+const REGION_DAILY_BODIES: readonly (readonly [string, string])[] = [
+  ["a sum", "a+b"],
+  ["spaces around an operator", " x * 2 "],
+  ["a nested parenthesis", "n*(n+1)/2"],
+  ["an increment", "i++"],
+  ["a loop header", "i=0; i<3; i++"],
+  ["a command substitution", " $(date +%s) - t "],
+  ["a variable", " $x + 1 "],
+  ["a base prefix", "16#ff"],
+  ["a ternary", "a ? b : c"],
+  ["a subscript", "a[1] + b"],
+  ["special parameters", "$# + $? + $$"],
+  ["a braced parameter", `${OPEN}x:-1} + 1`],
+  ["a comparison", "a >= b"],
+];
+
+/** 領域の本体で、閉じた集合の外にある形。 */
+const REGION_VIOLATIONS: readonly (readonly [string, string])[] = [
+  ["a single quote", "'a'"],
+  ["a double quote", '"a"'],
+  ["a backslash", "a\\b"],
+  ["a backquote", "`date`"],
+  ["an ANSI-C quote", "$'a'"],
+  ["a locale quote", '$"a"'],
+  ["a bracket expansion", "$[1]"],
+  ["a newline", "1\n+2"],
+  ["a NUL", "1\u0000+2"],
+  ["a here-document operator", "1 <<EOF"],
+  ["a here-string operator", "a <<< b"],
+  ["a tab-stripping operator", "a <<-b"],
+  ["a shift-assign operator", "a <<= 1"],
+  ["an opening brace", "{a}"],
+  ["a closing brace", "a } b"],
+  ["a character outside the set", "a @ b"],
+  ["a non-ASCII letter", "あ"],
+  ["a comment start", "a # b"],
+  ["a dollar without a name", "$ "],
+];
+
+describe("arithmetic regions read the body as commands", () => {
+  test.each(REGION_FORMS)("reads the body of %s", (_form, embed) => {
+    expect(commandTexts(embed("git push origin main"))).toContainEqual([
+      "git",
+      "push",
+      "origin",
+      "main",
+    ]);
+  });
+
+  test("reads the body of a substitution region inside a shell string", () => {
+    expect(
+      commandTexts("sh -c 'echo $((git push origin main))'"),
+    ).toContainEqual(["git", "push", "origin", "main"]);
+  });
+
+  test("reads the body of a command-position region inside a shell string", () => {
+    expect(commandTexts("sh -c '((git push origin main))'")).toContainEqual([
+      "git",
+      "push",
+      "origin",
+      "main",
+    ]);
+  });
+
+  test("reads two subshells joined by an operator inside outer parentheses", () => {
+    expect(commandTexts("((git push origin main) | (cat))")).toContainEqual([
+      "git",
+      "push",
+      "origin",
+      "main",
+    ]);
+  });
+
+  test("reads a command inside a substitution inside a region", () => {
+    expect(
+      commandTexts("echo $(( $(git push origin main) + 1 ))"),
+    ).toContainEqual(["git", "push", "origin", "main"]);
+  });
+
+  test("reads an arithmetic region inside a parameter expansion", () => {
+    expect(
+      commandTexts(`echo ${OPEN}x:-$((git push origin main))}`),
+    ).toContainEqual(["git", "push", "origin", "main"]);
+  });
+});
+
+describe("arithmetic regions accept the daily bodies", () => {
+  describe.each(REGION_FORMS)("in %s", (_form, embed) => {
+    test.each(REGION_DAILY_BODIES)("accepts %s", (_body, text) => {
+      expect(parses(embed(text))).toBe(true);
+    });
+  });
+
+  test.each([
+    ["a statement after a region", "((i++)); echo $i"],
+    ["a region after a control word", "if ((i > 0)); then echo a; fi"],
+    ["a region joined by a list operator", "true && ((i++))"],
+    ["nested regions", "echo $(( $((1+2)) + 3 ))"],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+});
+
+describe("arithmetic regions reject a character outside the closed set", () => {
+  describe.each(REGION_FORMS)("in %s", (_form, embed) => {
+    test.each(REGION_VIOLATIONS)("rejects %s", (_body, text) => {
+      expect(parses(embed(text))).toBe(false);
+    });
+  });
+
+  test("rejects a here-document operator in a command-position region before the body lines", () => {
+    expect(parses("((cat <<EOF))\ngit push -f\nEOF\n")).toBe(false);
+  });
+
+  test("rejects a region that never closes", () => {
+    expect(parses("((i++")).toBe(false);
+  });
+
+  test("rejects a substitution region that never closes", () => {
+    expect(parses("echo $((i++")).toBe(false);
+  });
+
+  test("rejects a word followed directly by a double parenthesis", () => {
+    expect(parses("echo ((a))")).toBe(false);
+  });
+
+  test("keeps the closed set inside a substitution opened in a region", () => {
+    expect(parses("echo $(( $(echo 'a') + 1 ))")).toBe(false);
+  });
+
+  test("keeps the glob group rejection inside a substitution opened in a region", () => {
+    expect(parses("echo $(( $(echo a(b)) + 1 ))")).toBe(false);
+  });
+});
+
+describe("arithmetic regions keep the redirect and word rules", () => {
+  test("records the target of a redirect inside a region", () => {
+    expect(writeTexts("((a > out.txt))")).toEqual(["out.txt"]);
+  });
+
+  test("rejects a lone dash at the start of a region", () => {
+    expect(parses("echo $(( - x ))")).toBe(false);
+  });
+});
+
+/** `${…}`の中の、読める形。 */
+const PARAMETER_ACCEPTED: readonly (readonly [string, string])[] = [
+  ["a plain name", `${OPEN}x}`],
+  ["a default", `${OPEN}x:-default}`],
+  ["a default with a variable", `${OPEN}x:-$y}`],
+  ["a default with a command substitution", `${OPEN}x:-$(cmd)}`],
+  ["a replacement", `${OPEN}x//a/b}`],
+  ["a length", `${OPEN}#x}`],
+  ["a length of an array", `${OPEN}#a[@]}`],
+  ["a positional parameter", `${OPEN}1}`],
+  ["all positional parameters", `${OPEN}@}`],
+  ["the status", `${OPEN}?}`],
+  ["the process id", `${OPEN}$}`],
+  ["a numeric subscript", `${OPEN}a[0]}`],
+  ["a negative subscript", `${OPEN}a[-1]}`],
+  ["a name subscript", `${OPEN}a[i]}`],
+  ["a variable subscript", `${OPEN}a[$i]}`],
+  ["an all-elements subscript", `${OPEN}a[*]}`],
+  ["a nested default", `${OPEN}x:-${OPEN}y:-z}}`],
+  ["an offset", `${OPEN}x:1:2}`],
+  ["a signed offset", `${OPEN}x: -1}`],
+  ["a prefix trim", `${OPEN}x##*/}`],
+  ["a suffix trim", `${OPEN}x%.*}`],
+  ["an alternative", `${OPEN}x:+y}`],
+  ["an error message", `${OPEN}x:?msg}`],
+  ["a closing parenthesis in a pattern", `${OPEN}x//)/y}`],
+  ["an arithmetic region", `${OPEN}x:-$((1+2))}`],
+];
+
+/** `${…}`の中の、拒否する形。 */
+const PARAMETER_REJECTED: readonly (readonly [string, string])[] = [
+  ["an indirection", `${OPEN}!x}`],
+  ["a transformation", `${OPEN}x@Q}`],
+  ["a flag group", `${OPEN}(f)x}`],
+  ["a tilde start", `${OPEN}~x}`],
+  ["an equals start", `${OPEN}=x}`],
+  ["a caret start", `${OPEN}^x}`],
+  ["a plus start", `${OPEN}+x}`],
+  ["a percent start", `${OPEN}%x}`],
+  ["a slash start", `${OPEN}/x}`],
+  ["a space start", `${OPEN} x}`],
+  ["a parenthesis start", `${OPEN}(x)}`],
+  ["a case operator", `${OPEN}x^}`],
+  ["a lower-case operator", `${OPEN}x,,}`],
+  ["a tilde operator", `${OPEN}x~}`],
+  ["a dollar before a name", `${OPEN}$x}`],
+  ["an empty expansion", `${OPEN}}`],
+  ["an expression subscript", `${OPEN}a[1+2]}`],
+  ["a substitution subscript", `${OPEN}a[$(date)]}`],
+  ["a spaced subscript", `${OPEN}a[b c]}`],
+  ["an unclosed subscript", `${OPEN}a[1}`],
+  ["an inner expansion without a name", `${OPEN}x:-${OPEN} y}}`],
+  ["an inner flag group", `${OPEN}x:-${OPEN}(f)y}}`],
+  ["a single quote in the body", `${OPEN}x:-'a b'}`],
+  ["a double quote in the body", `${OPEN}x:-"a"}`],
+  ["a parenthesis in the body", `${OPEN}x:-(a)}`],
+  ["an input process substitution in the body", `${OPEN}x:-<(a)}`],
+  ["an output process substitution in the body", `${OPEN}x:->(a)}`],
+  ["an equals group in the body", `${OPEN}x:-=(a)}`],
+  ["an escaped dollar in the body", `${OPEN}x:-\\$y}`],
+  ["an escaped backquote in the body", `${OPEN}x:-\\\`a\\\`}`],
+  ["a bracket expansion in the body", `${OPEN}x:-$[1]}`],
+  ["an ANSI-C quote in the body", `${OPEN}x:-$'a'}`],
+];
+
+describe("parameter expansions read only a closed set of forms", () => {
+  test.each(PARAMETER_ACCEPTED)("accepts %s", (_form, text) => {
+    expect(parses(`echo ${text}`)).toBe(true);
+  });
+
+  test.each(PARAMETER_REJECTED)("rejects %s", (_form, text) => {
+    expect(parses(`echo ${text}`)).toBe(false);
+  });
+
+  test.each(PARAMETER_REJECTED)(
+    "rejects %s inside double quotes",
+    (_form, text) => {
+      expect(parses(`echo "${text}"`)).toBe(false);
+    },
+  );
+
+  test("rejects an expansion nested past the depth limit", () => {
+    const nested = `${`${OPEN}x:-`.repeat(20)}${"}".repeat(20)}`;
+    expect(parses(`echo ${nested}`)).toBe(false);
+  });
+
+  test("accepts an expansion nested within the depth limit", () => {
+    const nested = `${`${OPEN}x:-`.repeat(3)}z${"}".repeat(3)}`;
+    expect(parses(`echo ${nested}`)).toBe(true);
+  });
+
+  test("reads a backquote in the body as commands", () => {
+    expect(
+      commandTexts(`echo ${OPEN}x:-\`git push origin main\`}`),
+    ).toContainEqual(["git", "push", "origin", "main"]);
+  });
+});
+
+describe("parameter expansions inside a region keep the closed set", () => {
+  test.each([
+    ["a closing parenthesis", `${OPEN}x//)/y}`],
+    ["an opening parenthesis", `${OPEN}x:-(1)}`],
+    ["a command substitution", `${OPEN}x:-$(date)}`],
+    ["a nested region", `${OPEN}x:-$((1))}`],
+    ["a single quote", `${OPEN}x:-'a'}`],
+    ["a backslash", `${OPEN}x:-\\a}`],
+    ["a brace", `${OPEN}x:-{a}}`],
+    ["a nested expansion with a parenthesis", `${OPEN}x:-${OPEN}y:-(1)}}`],
+  ])("rejects %s", (_form, text) => {
+    expect(parses(`echo $(( ${text} + 1 ))`)).toBe(false);
+  });
+
+  test.each([
+    ["a plain name", `${OPEN}x} + 1`],
+    ["a default", `${OPEN}x:-1} + 1`],
+    ["a nested default", `${OPEN}x:-${OPEN}y:-1}} + 1`],
+    ["a length", `${OPEN}#x} + 1`],
+  ])("accepts %s", (_form, text) => {
+    expect(parses(`echo $(( ${text} ))`)).toBe(true);
+  });
+});
+
+describe("bracket expansions are rejected where expansion happens", () => {
+  test.each([
+    ["outside quotes", "echo $[1+2]"],
+    ["inside double quotes", 'echo "$[1+2]"'],
+    ["in a parameter expansion body", `echo ${OPEN}x:-$[1]}`],
+    ["in an unquoted here-document body", "cat <<EOF\n$[1+2]\nEOF\n"],
+    ["in a region", "echo $(( $[1] ))"],
+  ])("rejects a bracket expansion %s", (_where, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    ["inside single quotes", "echo '$[1+2]'"],
+    ["in a quoted here-document body", "cat <<'EOF'\n$[1+2]\nEOF\n"],
+    ["in a backslash-quoted here-document body", "cat <<\\EOF\n$[1+2]\nEOF\n"],
+    [
+      "in a double-quoted delimiter here-document body",
+      'cat <<"EOF"\n$[1+2]\nEOF\n',
+    ],
+  ])("accepts a bracket expansion %s", (_where, line) => {
+    expect(parses(line)).toBe(true);
+  });
+});
+
+describe("here-documents and the end of input", () => {
+  test.each([
+    ["an unclosed subshell", "(echo a"],
+    ["a here-document without a body", "cat <<EOF"],
+    ["a here-document without a closing line", "cat <<EOF\nbody\n"],
+    ["a here-document without a closing line at the end", "cat <<EOF\nbody"],
+    ["a pending here-document left by a substitution", "echo $(cat <<EOF)"],
+    ["a pending here-document left by a backquote", "echo `cat <<EOF`"],
+    ["a substitution body without a closing line", "echo $(cat <<EOF\nx\n)"],
+  ])("rejects %s", (_state, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    ["a substitution", "cat <<EOF $(echo a\nb)\nbody\nEOF\n"],
+    ["a backquote", "cat <<EOF `echo a\nb`\nbody\nEOF\n"],
+    ["a parameter expansion", `cat <<EOF ${OPEN}x:-a\nb}\nbody\nEOF\n`],
+  ])(
+    "rejects a newline in %s while a here-document is pending",
+    (_where, line) => {
+      expect(parses(line)).toBe(false);
+    },
+  );
+
+  test.each([
+    ["a bare word", "cat <<EOF\nx\nEOF\n"],
+    ["a single-quoted word", "cat <<'EOF'\nx\nEOF\n"],
+    ["a double-quoted word", 'cat <<"EOF"\nx\nEOF\n'],
+    ["a backslash word", "cat <<\\EOF\nx\nEOF\n"],
+    ["a tab-stripping word", "cat <<-EOF\n\tx\n\tEOF\n"],
+    [
+      "a word with dots, dashes, and underscores",
+      "cat <<E.O-F_1\nx\nE.O-F_1\n",
+    ],
+    ["a word before a redirect", "cat <<EOF > out\nx\nEOF\n"],
+    ["a word before a pipe", "cat <<EOF | wc\nx\nEOF\n"],
+    ["a closing line at the end of input", "cat <<EOF\nx\nEOF"],
+    ["two here-documents", "cat <<A <<B\nx\nA\ny\nB\n"],
+    [
+      "a here-document inside a substitution",
+      "echo \"$(cat <<'EOF'\nx\nEOF\n)\"",
+    ],
+    [
+      "a commit message here-document",
+      "git commit -m \"$(cat <<'EOF'\nfix: a\n\nbody\nEOF\n)\"",
+    ],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+
+  test.each([
+    ["an expansion", "cat <<$x\nx\n$x\n"],
+    ["a partly quoted word", "cat <<E'O'F\nx\nEOF\n"],
+    ["a command substitution", "cat <<$(a)\nx\n"],
+    ["a space in single quotes", "cat <<'a b'\nx\na b\n"],
+    ["an expansion in double quotes", 'cat <<"$x"\nx\n$x\n'],
+    ["a backslash in the middle", "cat <<E\\OF\nx\nEOF\n"],
+    ["text after the closing quote", "cat <<'EOF'x\nx\nEOFx\n"],
+    ["a backquote word", "cat <<`a`\nx\n`a`\n"],
+    ["a non-ASCII word", "cat <<あ\nx\nあ\n"],
+    ["an empty quoted word", "cat <<''\nx\n\n"],
+  ])("rejects a delimiter that is %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+});
+
+describe("interactive shells", () => {
+  test.each([
+    ["a bundled flag with a command string", "zsh -ic 'ls'"],
+    ["a bundled flag in bash", "bash -ic ls"],
+    ["a lone flag", "bash -i"],
+    ["an option name and value", "bash -o interactive -c ls"],
+    ["an option name and value with a plus", "bash +o interactive -c ls"],
+    ["an upper-case option name", "bash -O interactive -c ls"],
+    ["an option and value in one word", "bash -ointeractive -c ls"],
+    ["a long name", "bash --interactive -c ls"],
+    [
+      "a long name with mixed case and underscores",
+      "bash --Inter_Active -c ls",
+    ],
+    ["a plus flag", "bash +i"],
+    ["a script file argument", "bash -i script.sh"],
+    ["a flag after the script", "bash script.sh -i"],
+    ["a here-string input", "zsh -i <<< 'ls'"],
+    ["a here-document input", "zsh -i <<'EOF'\nls\nEOF\n"],
+    ["a pipe input", "echo ls | zsh -i"],
+    ["a prefixed launch", "env zsh -ic ls"],
+    ["a launch in a shell string", "sh -c 'zsh -ic ls'"],
+    ["a launch in a substitution", "echo $(zsh -ic ls)"],
+    ["a launch through busybox", "busybox sh -ic ls"],
+    ["a launch through another shell", "ksh -i"],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    ["zsh with a command string", "zsh -c ls"],
+    ["bash with a command string", "bash -c ls"],
+    ["zsh with bundled flags", "zsh -fc ls"],
+    ["a script file", "bash script.sh"],
+    ["a login shell", "bash --login -c ls"],
+    ["a here-string input", "bash <<< 'ls'"],
+    ["a here-document input", "bash <<'EOF'\nls\nEOF\n"],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+});
+
+describe("forms that change the lexical rules at run time", () => {
+  test.each([
+    ["a lower-case name", "zsh -c 'histchars=ab'"],
+    ["an upper-case name", "zsh -c 'HISTCHARS=ab'"],
+    ["a mixed-case name", "zsh -c 'HistChars=ab'"],
+    ["a name outside a shell string", "echo histchars"],
+    ["a name in a nested shell string", `sh -c "zsh -c 'HistChars=ab'"`],
+    ["a name in a here-string", "zsh <<< 'histchars=ab'"],
+    ["a name in a here-document", "zsh <<'EOF'\nhistchars=ab\nEOF\n"],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+});
+
+describe("long inputs finish with a decision", () => {
+  test.each([
+    ["opening parentheses", "(".repeat(50000)],
+    ["double opening parentheses", "((".repeat(25000)],
+    ["nested substitution regions", "$((".repeat(50000)],
+    ["nested parameter expansions", `${OPEN}x:-`.repeat(50000)],
+    ["nested parameter expansions in a region", `((${OPEN}x:-`.repeat(25000)],
+    ["an odd number of backquotes", "`".repeat(50001)],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test("accepts deeply balanced parentheses", () => {
+    const depth = 20000;
+    expect(parses(`${"(".repeat(depth)}${")".repeat(depth)}`)).toBe(true);
+  });
+});
+
+describe("accepted false positives stay rejected", () => {
+  test.each([
+    ["a bracket expansion", "echo $[1+2]"],
+    ["a quoted default", `echo ${OPEN}x:-'a b'}`],
+    ["a quote inside a quoted expansion", `echo "${OPEN}x:-"$y"}"`],
+    ["a shift in a region", "echo $(( 1 << 2 ))"],
+    ["a quote in a region", "echo $(( 'a' ))"],
+    ["a backslash in a region", "echo $(( a\\b ))"],
+    ["a parenthesized offset", `echo ${OPEN}x:(-1)}`],
+    ["a leading dash in a region", "echo $(( - x ))"],
+    ["a quote in a substitution in a region", 'echo $(( $(date "+%s") - t ))'],
+    ["a case operator", `echo ${OPEN}x,,}`],
+    ["an indirection", `echo ${OPEN}!x}`],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+});
