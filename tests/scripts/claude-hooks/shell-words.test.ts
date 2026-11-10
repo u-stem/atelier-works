@@ -1594,7 +1594,10 @@ describe("a lone asterisk in a substitution region", () => {
   });
 
   test("stays a glob outside the region", () => {
-    expect(globFlagsOf("echo $(( x * 2 )) ; bun *", "*")).toEqual([true]);
+    expect(globFlagsOf("echo $(( x * 2 )) ; bun *", "*")).toEqual([
+      false,
+      true,
+    ]);
   });
 });
 

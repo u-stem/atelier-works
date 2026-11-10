@@ -1147,6 +1147,16 @@ class Parser {
         this.endCommand();
         this.subshellDepth -= 1;
         if (this.regionBase === this.subshellDepth) this.regionBase = null;
+        // `$((`の最初の括弧が閉じた直後が`)`でなければ、bashは算術でなくコマンド置換として読みうる。
+        if (
+          this.context.regionRoot &&
+          this.subshellDepth === 0 &&
+          this.peek(1) !== ")"
+        ) {
+          throw new ShellSyntaxError(
+            `"$((" before offset ${this.position} may be read as a command substitution`,
+          );
+        }
         this.position += 1;
         return;
       case "<":
@@ -1248,7 +1258,8 @@ class Parser {
       // 今のブランチ名になる置換だけの語は、値が決まっているものとして扱う。
       dynamic:
         this.dynamic && !CURRENT_BRANCH_SUBSTITUTIONS.includes(this.text),
-      glob: this.glob,
+      // `$((`の領域の直下の`*`だけの語は、算術の乗算である。この領域はどのシェルでも算術として読まれ、展開されない。
+      glob: this.glob && !(this.context.regionRoot && /^\*+$/.test(this.text)),
       ...(this.variantText === null ? {} : { variants: [this.variantText] }),
     };
     if (this.hereStringNextWord) {
