@@ -351,7 +351,8 @@ function substitutionMarker(inner: string): string {
 
 /**
  * 対話モードを指定する語なら真。
- * `-`か`+`で始まる語を、小文字にして`_`を除いたうえで`interactive`を含むか見る。
+ * `-`か`+`で始まる語を、小文字にして`-`と`_`を除いたうえで`interactive`を含むか見る。
+ * zshは、長い名前の大文字小文字と、`-`と`_`の違いを区別しない。
  * `-o interactive`のように、値を別の語に分ける形は、呼び出し側が値の語を渡す。
  * `--`で始まらず`-`か`+`で始まる語は、字の種類を問わず、`i`を含めば真である。
  */
@@ -362,7 +363,7 @@ function isInteractiveFlag(text: string): boolean {
 }
 
 function normalizeOptionName(text: string): string {
-  return text.toLowerCase().replaceAll("_", "");
+  return text.toLowerCase().replaceAll("_", "").replaceAll("-", "");
 }
 
 /**
