@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 import { ApiFailure } from "../../api/errors.ts";
 import { freshQuery, staleQuery } from "../../api/fakeSectionQuery.testing.ts";
 import type {
@@ -9,8 +10,10 @@ import type {
   DesignStageView,
 } from "../../api/jobsQueries.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
+import { CONFIG_GROUP_DEFINITIONS } from "../../lib/configGroups.ts";
 import { ConfigList, ConfigSection } from "./ConfigSection.tsx";
 import { ListChangeButton } from "./EditableListValue.tsx";
+import { configNoticeStore } from "./useConfigChange.ts";
 
 const ITEMS: ConfigItemView[] = [
   { key: "daily_budget_usd", kind: "value", value: 5, masked: false },
@@ -38,11 +41,13 @@ function snapshotWithStage(
 
 function renderSection(query = freshQuery(SNAPSHOT)): string {
   return renderToStaticMarkup(
-    <QueryClientProvider client={new QueryClient()}>
-      <TooltipProvider>
-        <ConfigSection query={query} />
-      </TooltipProvider>
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <ConfigSection query={query} />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -90,17 +95,30 @@ describe("ConfigList", () => {
     );
   });
 
-  test("says when no key matches", () => {
-    expect(renderToStaticMarkup(<ConfigList items={[]} />)).toContain(
-      "該当する項目はありません",
+  test("says when nothing matches the query", () => {
+    expect(renderToStaticMarkup(<ConfigList items={[]} queried />)).toContain(
+      "当たる項目がありません",
     );
   });
 
-  test("does not say that no key matches while the design stage row is shown", () => {
+  test("does not say that nothing matches when no query was typed", () => {
+    expect(renderToStaticMarkup(<ConfigList items={[]} />)).not.toContain(
+      "当たる項目がありません",
+    );
+  });
+
+  test("says that the config has no item when no query was typed", () => {
+    expect(renderToStaticMarkup(<ConfigList items={[]} />)).toContain(
+      "項目がありません",
+    );
+  });
+
+  test("does not say that nothing matches while the design stage row is shown", () => {
     expect(
       renderToStaticMarkup(
         <ConfigList
           items={[]}
+          queried
           designStage={{
             enabled: true,
             ignored: false,
@@ -108,7 +126,7 @@ describe("ConfigList", () => {
           }}
         />,
       ),
-    ).not.toContain("該当する項目はありません");
+    ).not.toContain("当たる項目がありません");
   });
 
   test("writes a string as text, not as markup", () => {
@@ -121,6 +139,45 @@ describe("ConfigList", () => {
         />,
       ),
     ).toContain("&lt;b&gt;x&lt;/b&gt;");
+  });
+});
+
+describe("ConfigList for the description of a group", () => {
+  const ALL_KEYS: ConfigItemView[] = CONFIG_GROUP_DEFINITIONS.flatMap((group) =>
+    group.keys.map((key) => ({
+      key,
+      kind: "value" as const,
+      value: "x",
+      masked: false,
+    })),
+  );
+
+  test.each(
+    CONFIG_GROUP_DEFINITIONS.map((group) => [group.id, group.description]),
+  )("shows the description of the group %s", (_id, description) => {
+    expect(renderToStaticMarkup(<ConfigList items={ALL_KEYS} />)).toContain(
+      `>${description}<`,
+    );
+  });
+
+  test("puts the description under the heading of the group", () => {
+    const html = renderToStaticMarkup(
+      <ConfigList
+        items={[{ key: "owners", kind: "value", value: [], masked: false }]}
+      />,
+    );
+    expect(html).toMatch(/<h3[^>]*>対象リポジトリ<\/h3><p[^>]*>[^<]+<\/p>/);
+  });
+
+  test("ties the table to its description for a reader", () => {
+    const html = renderToStaticMarkup(
+      <ConfigList
+        items={[{ key: "owners", kind: "value", value: [], masked: false }]}
+      />,
+    );
+    expect(html).toMatch(
+      /<p id="([^"]+)"[^>]*>[^<]+<\/p>[\s\S]*<table[^>]*aria-describedby="\1"/,
+    );
   });
 });
 
@@ -377,13 +434,19 @@ function designRowHeaderOf(html: string): string {
   );
 }
 
+afterEach(() => {
+  configNoticeStore.dismiss();
+});
+
 describe("ConfigSection", () => {
   test("has a heading for the section", () => {
     expect(renderSection()).toMatch(/<h2 id="config-heading"[^>]*>設定<\/h2>/);
   });
 
-  test("has a search box labeled by the key name", () => {
-    expect(renderSection()).toMatch(/<label[^>]*>キー名で絞り込む<\/label>/);
+  test("has a search box that says what it searches", () => {
+    expect(renderSection()).toMatch(
+      /<label[^>]*>キー名、グループ名、値で絞り込む<\/label>/,
+    );
   });
 
   test("says that a reference and a masked value are shown as hidden", () => {
@@ -404,14 +467,61 @@ describe("ConfigSection", () => {
     );
   });
 
-  test("says where to stop everything", () => {
-    expect(renderSection()).toContain(
-      "全部を止めるときは、システムの「状態」タブの全停止を使います",
+  test("points to the stop-all section from the table of the switches", () => {
+    expect(renderSection()).toMatch(
+      /全部を止めるときは、システムの「状態」タブの<a [^>]*href="\/system\?section=stop-all"[^>]*>全停止<\/a>を使います/,
     );
+  });
+
+  test("says where to stop everything only once", () => {
+    expect(renderSection().split("全部を止めるときは").length - 1).toBe(1);
   });
 
   test("lists the changes in the description as items", () => {
     expect(renderSection()).toMatch(/<li[^>]*>Consoleで変えられるのは/);
+  });
+
+  test("puts the table of the switches above the tables of the groups", () => {
+    const html = renderSection();
+    const switches = html.indexOf("機能のスイッチ");
+    expect([switches >= 0, switches < html.indexOf("対象リポジトリ")]).toEqual([
+      true,
+      true,
+    ]);
+  });
+
+  test("shows the table of the switches once", () => {
+    expect(renderSection().split("機能のスイッチ").length - 1).toBe(1);
+  });
+
+  test("offers the same stop in the table of the switches and in the table of the group", () => {
+    const query = freshQuery(
+      snapshotOf([
+        { key: "implement_enabled", kind: "value", value: true, masked: false },
+      ]),
+    );
+    expect(
+      renderSection(query).split('aria-label="implement_enabledを止める"')
+        .length - 1,
+    ).toBe(2);
+  });
+
+  test("shows the notice that is kept until it is closed above the search box", () => {
+    configNoticeStore.pin("implement_enabled", {
+      tone: "info",
+      message: "変更しませんでした。",
+      nextStep: "端末から変更します。",
+    });
+    const html = renderSection();
+    const notice = html.indexOf("変更しませんでした。");
+    expect([
+      notice >= 0,
+      notice < html.indexOf("キー名、グループ名、値で絞り込む"),
+    ]).toEqual([true, true]);
+  });
+
+  test("shows no notice while nothing is kept", () => {
+    expect(renderSection()).not.toContain('role="alert"');
   });
 
   test("offers to lower a number that is on the list", () => {

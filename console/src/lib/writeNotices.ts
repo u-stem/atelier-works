@@ -690,6 +690,10 @@ export function describeStopAllReleaseResult(
   );
 }
 
+export function staysUntilClosed(_notice: ReleaseNotice): boolean {
+  return false;
+}
+
 /** 書き込みの結果を、トーストの文にする。失敗は、失敗の文をそのまま`error`にする。 */
 export function releaseNotice<T>(
   outcome: WriteOutcome<T>,

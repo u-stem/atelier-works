@@ -4,6 +4,7 @@ import {
   CONFIG_GROUP_DEFINITIONS,
   DESIGN_GROUP_ID,
   groupConfigItems,
+  groupLabelOfKey,
 } from "./configGroups.ts";
 import { filterConfigItems } from "./jobsView.ts";
 
@@ -147,6 +148,54 @@ describe("groupConfigItems for a group that is asked for", () => {
 
   test("does not return a group that is not asked for and has no item", () => {
     expect(groupConfigItems([item("owners")], ["design"]).length).toBe(2);
+  });
+});
+
+describe("the description of a group", () => {
+  test("is given to every defined group", () => {
+    expect(
+      CONFIG_GROUP_DEFINITIONS.filter(
+        (group) => (group.description ?? "").trim() === "",
+      ).map((group) => group.id),
+    ).toEqual([]);
+  });
+
+  test("is one sentence for every defined group", () => {
+    expect(
+      CONFIG_GROUP_DEFINITIONS.filter(
+        (group) =>
+          !/^[^。]+。$/.test(group.description ?? "") ||
+          (group.description ?? "").length > 60,
+      ).map((group) => group.id),
+    ).toEqual([]);
+  });
+
+  test("differs from group to group", () => {
+    const texts = CONFIG_GROUP_DEFINITIONS.map((group) => group.description);
+    expect(new Set(texts).size).toBe(texts.length);
+  });
+
+  test("travels with the group that groupConfigItems returns", () => {
+    const groups = groupConfigItems([item("owners")]);
+    expect(groups[0]?.description).toBe(
+      CONFIG_GROUP_DEFINITIONS.find((group) => group.id === "repos")
+        ?.description,
+    );
+  });
+
+  test("is given to the group of the keys that no group holds", () => {
+    const groups = groupConfigItems([item("brand_new_key")]);
+    expect((groups[0]?.description ?? "").endsWith("。")).toBe(true);
+  });
+});
+
+describe("groupLabelOfKey", () => {
+  test("gives the label of the group that holds the key", () => {
+    expect(groupLabelOfKey("daily_budget_usd")).toBe("モデルと予算");
+  });
+
+  test("gives その他 for a key that no group holds", () => {
+    expect(groupLabelOfKey("brand_new_key")).toBe("その他");
   });
 });
 

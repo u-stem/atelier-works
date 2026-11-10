@@ -635,8 +635,147 @@ describe("filterConfigItems", () => {
     ]);
   });
 
-  test("does not search the values", () => {
-    expect(filterConfigItems(ITEMS, "5")).toEqual([]);
+  const keysOf = (items: readonly ConfigItemView[]) =>
+    items.map((item) => item.key);
+
+  test("matches every item of the group when the query is a part of the group name", () => {
+    const items: ConfigItemView[] = [
+      { key: "model", kind: "value", value: "m", masked: false },
+      { key: "daily_budget_usd", kind: "value", value: 5, masked: false },
+      { key: "owners", kind: "value", value: ["a"], masked: false },
+    ];
+    expect(keysOf(filterConfigItems(items, "予算"))).toEqual([
+      "model",
+      "daily_budget_usd",
+    ]);
+  });
+
+  test("matches the items that no group holds by the name その他", () => {
+    const items: ConfigItemView[] = [
+      { key: "brand_new_key", kind: "value", value: "x", masked: false },
+      { key: "owners", kind: "value", value: ["a"], masked: false },
+    ];
+    expect(keysOf(filterConfigItems(items, "その他"))).toEqual([
+      "brand_new_key",
+    ]);
+  });
+
+  test("matches the text of a string value", () => {
+    const items: ConfigItemView[] = [
+      {
+        key: "model",
+        kind: "value",
+        value: "claude-sonnet-5-5",
+        masked: false,
+      },
+      { key: "heavy_model", kind: "value", value: "opus", masked: false },
+    ];
+    expect(keysOf(filterConfigItems(items, "SONNET"))).toEqual(["model"]);
+  });
+
+  test("matches the digits of a number value", () => {
+    expect(keysOf(filterConfigItems(ITEMS, "5"))).toEqual(["daily_budget_usd"]);
+  });
+
+  test("matches an element of a list", () => {
+    const items: ConfigItemView[] = [
+      {
+        key: "default_reviewers",
+        kind: "value",
+        value: ["alice", "bob"],
+        masked: false,
+      },
+      { key: "claude_timeout_sec", kind: "value", value: 5, masked: false },
+    ];
+    expect(keysOf(filterConfigItems(items, "bob"))).toEqual([
+      "default_reviewers",
+    ]);
+  });
+
+  test("matches a cell of a table", () => {
+    const items: ConfigItemView[] = [
+      {
+        key: "owners",
+        kind: "value",
+        value: [{ name: "octo-owner", kind: "user", id: 1 }],
+        masked: false,
+      },
+    ];
+    expect(keysOf(filterConfigItems(items, "octo"))).toEqual(["owners"]);
+  });
+
+  test("matches a key of an object", () => {
+    const items: ConfigItemView[] = [
+      {
+        key: "check_commands_by_repo",
+        kind: "value",
+        value: { "octo/widgets": ["mise run check"] },
+        masked: false,
+      },
+    ];
+    expect(keysOf(filterConfigItems(items, "widgets"))).toEqual([
+      "check_commands_by_repo",
+    ]);
+  });
+
+  test("matches an element of a list inside an object", () => {
+    const items: ConfigItemView[] = [
+      {
+        key: "check_commands_by_repo",
+        kind: "value",
+        value: { "octo/widgets": ["mise run check"] },
+        masked: false,
+      },
+    ];
+    expect(keysOf(filterConfigItems(items, "mise run"))).toEqual([
+      "check_commands_by_repo",
+    ]);
+  });
+
+  test("matches the word shown for a switch", () => {
+    const items: ConfigItemView[] = [
+      { key: "implement_enabled", kind: "value", value: true, masked: false },
+      { key: "dependabot_enabled", kind: "value", value: false, masked: false },
+    ];
+    expect(keysOf(filterConfigItems(items, "無効"))).toEqual([
+      "dependabot_enabled",
+    ]);
+  });
+
+  test("matches a time by the short form that is shown", () => {
+    const items: ConfigItemView[] = [
+      {
+        key: "design_enabled_since",
+        kind: "value",
+        value: "2026-11-03T00:10:00Z",
+        masked: false,
+      },
+    ];
+    expect(keysOf(filterConfigItems(items, "11/03 09:10"))).toEqual([
+      "design_enabled_since",
+    ]);
+  });
+
+  test("does not search the value that was masked", () => {
+    const items: ConfigItemView[] = [
+      { key: "secret_like", kind: "value", value: "hunter2", masked: true },
+    ];
+    expect(filterConfigItems(items, "hunter")).toEqual([]);
+  });
+
+  test("still matches the key of a value that was masked", () => {
+    const items: ConfigItemView[] = [
+      { key: "secret_like", kind: "value", value: "hunter2", masked: true },
+    ];
+    expect(keysOf(filterConfigItems(items, "secret"))).toEqual(["secret_like"]);
+  });
+
+  test("does not match the mark that stands for a reference", () => {
+    expect(filterConfigItems(ITEMS, "参照")).toEqual([]);
+  });
+
+  test("keeps no item when nothing matches", () => {
+    expect(filterConfigItems(ITEMS, "zzz-no-such-text")).toEqual([]);
   });
 });
 
@@ -667,6 +806,10 @@ describe("matchesDesignStageQuery", () => {
 
   test("keeps the design stage row for the whole label", () => {
     expect(matchesDesignStageQuery("設計工程(実際の状態)")).toBe(true);
+  });
+
+  test("keeps the design stage row for a part of the name of its group", () => {
+    expect(matchesDesignStageQuery("計")).toBe(true);
   });
 
   test.each(["n", "e", "esign", "工程", "状態", "budget", "design_enabled"])(

@@ -10,6 +10,7 @@ import {
   parseNewElement,
   parseNewNumber,
 } from "../../lib/configChange.ts";
+import { createPinnedNoticeStore } from "../../lib/pinnedNotice.ts";
 import {
   describeConfigUpdateResult,
   type ReleaseNotice,
@@ -33,6 +34,17 @@ function announce(notice: ReleaseNotice): void {
       return;
   }
 }
+
+export const configNoticeStore = createPinnedNoticeStore();
+
+export function routeConfigOutcome(
+  _outcome: unknown,
+  _input: ConfigUpdateInput,
+  _sinks: {
+    announce: (notice: ReleaseNotice) => void;
+    pin: (item: string, notice: ReleaseNotice) => void;
+  },
+): void {}
 
 /** 設定の変更を、共通の書き込みの流れに載せる設定。項目ごとにロックし、変更の後は設定の取得を読み直す。 */
 const CONFIG_UPDATE: WriteRunnerConfig<ConfigUpdateInput, ConfigUpdateResult> =

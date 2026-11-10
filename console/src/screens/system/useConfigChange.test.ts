@@ -4,7 +4,7 @@ import {
   changeOfferOf,
   changeOffersOf,
 } from "../../lib/configChange.ts";
-import { changeInputOf } from "./useConfigChange.ts";
+import { changeInputOf, routeConfigOutcome } from "./useConfigChange.ts";
 
 function offerFor(key: string, value: unknown): ChangeOffer {
   const offer = changeOfferOf({ key, kind: "value", value, masked: false });
@@ -47,6 +47,73 @@ describe("changeInputOf", () => {
 
   test("gives nothing for a fraction of an integer item", () => {
     expect(changeInputOf(offerFor("max_fix_rounds", 3), "1.5")).toBeNull();
+  });
+});
+
+describe("routeConfigOutcome", () => {
+  const INPUT = { item: "daily_budget_usd", expected: 50, next: 20 };
+  const LOWERED = {
+    refused: false,
+    item: "daily_budget_usd",
+    before: 50,
+    after: 20,
+    verified: true,
+    action_audit: "recorded",
+  } as const;
+
+  function route(outcome: Parameters<typeof routeConfigOutcome>[0]) {
+    const announced: unknown[] = [];
+    const pinned: unknown[] = [];
+    routeConfigOutcome(outcome, INPUT, {
+      announce: (notice) => {
+        announced.push(notice);
+      },
+      pin: (item, notice) => {
+        pinned.push({ item, notice });
+      },
+    });
+    return { announced, pinned };
+  }
+
+  test("lets a success go by itself as a toast", () => {
+    expect(route({ kind: "done", result: LOWERED }).announced).toHaveLength(1);
+  });
+
+  test("pins nothing for a success", () => {
+    expect(route({ kind: "done", result: LOWERED }).pinned).toEqual([]);
+  });
+
+  test("pins a refusal with the item that was changed", () => {
+    const { pinned } = route({
+      kind: "done",
+      result: { refused: true, reason: "has_reference" },
+    });
+    expect(pinned).toMatchObject([
+      { item: "daily_budget_usd", notice: { tone: "info" } },
+    ]);
+  });
+
+  test("announces no toast for a refusal", () => {
+    expect(
+      route({ kind: "done", result: { refused: true, reason: "conflict" } })
+        .announced,
+    ).toEqual([]);
+  });
+
+  test("pins a write that could not be read back", () => {
+    expect(
+      route({ kind: "done", result: { ...LOWERED, verified: false } }).pinned,
+    ).toHaveLength(1);
+  });
+
+  test("pins a failure of the write", () => {
+    expect(
+      route({
+        kind: "failed",
+        error: { kind: "network" },
+        message: "サーバーに接続できませんでした。",
+      }).pinned,
+    ).toMatchObject([{ notice: { tone: "error" } }]);
   });
 });
 
