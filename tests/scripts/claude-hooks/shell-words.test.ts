@@ -2392,3 +2392,143 @@ describe("a shell launch with a long argument list finishes", () => {
     expect(parses(`bash ${"-k ".repeat(COUNT)}-c ls`)).toBe(false);
   });
 });
+
+/** 配列の代入の括弧の中で、語を区切る演算子を持つ行。種類の名前と行の組である。 */
+const ARRAY_OPERATOR_FORMS: readonly (readonly [string, string])[] = [
+  ["a here-document operator", "a=(<<EOF\nx\nEOF\n)"],
+  ["a tab-stripping operator", "a=(<<-EOF\nx\nEOF\n)"],
+  ["a here-document operator behind a word", "a=(x <<EOF\ny\nEOF\n)"],
+  ["a here-string operator", "a=(<<<x)"],
+  ["a semicolon", "a=(x; y)"],
+  ["a pipe", "a=(x | y)"],
+  ["a leading pipe", "a=(| y)"],
+  ["an ampersand", "a=(x & y)"],
+  ["an input redirect", "a=(x < f)"],
+  ["an output redirect", "a=(x > f)"],
+  ["an append redirect", "a=(x >> f)"],
+  ["a redirect with a file descriptor", "a=(x 2> f)"],
+  ["a redirect of both outputs", "a=(x &> f)"],
+  ["a nested parenthesis", "a=(x (y))"],
+  ["a doubled opening parenthesis", "a=((x))"],
+  ["an input process substitution", "a=(<(x))"],
+  ["an output process substitution", "a=(>(x))"],
+  ["an operator on a later line", "a=(x\ny\n; z)"],
+  ["a here-document operator on a later line", "a=(x\n<<EOF\ny\nEOF\n)"],
+  ["an operator behind a comment line", "a=(x # c\n| y)"],
+  ["an operator in an appended array", "a+=(x; y)"],
+];
+
+describe("array assignments read only words between the parentheses", () => {
+  test.each(ARRAY_OPERATOR_FORMS)("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    ["a semicolon", "cat <<A; a=(x; y)\nb\nA\n"],
+    ["a here-document operator", "cat <<A; a=(<<B\nc\nB\n)\nb\nA\n"],
+    ["a pipe", "cat <<A; a=(x | y)\nb\nA\n"],
+  ])(
+    "rejects %s in an array opened on the line of a here-document",
+    (_form, line) => {
+      expect(parses(line)).toBe(false);
+    },
+  );
+
+  test.each([
+    ["behind a semicolon", "cat <<A; a=(x)\nb\nA\n"],
+    ["behind a pipe", "cat <<A | a=(x)\nb\nA\n"],
+  ])(
+    "rejects a plain array opened %s while a here-document is pending",
+    (_form, line) => {
+      expect(parses(line)).toBe(false);
+    },
+  );
+});
+
+describe("array assignments in nested readers", () => {
+  test.each([
+    ["a command substitution", "echo $(a=(x; y))"],
+    ["a backquote", "echo `a=(x; y)`"],
+    ["a quoted command substitution", 'echo "$(a=(<<EOF\nx\nEOF\n))"'],
+    ["a here-document body", "cat <<EOF\n$(a=(x | y))\nEOF\n"],
+    ["a command substitution inside an array", "a=($(b=(x & y)))"],
+  ])("rejects an array opened in %s", (_where, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    ["a command substitution", "a=(x $(echo a; echo b) y)"],
+    ["a backquote", "a=(x `echo a | cat` y)"],
+    ["a command substitution with a redirect", "a=(x $(echo a > f) y)"],
+    ["a subshell in a substitution", "a=(x $( (echo a) ) y)"],
+  ])("does not carry the rule into %s", (_where, line) => {
+    expect(parses(line)).toBe(true);
+  });
+});
+
+describe("array assignments accept the daily forms", () => {
+  test.each([
+    ["an empty array", "a=()"],
+    ["words", "a=(x y z)"],
+    ["an appended array", "a+=(x y)"],
+    ["quoted operators", 'a=("x;y" \'p|q&r\' "<s>")'],
+    ["escaped operators", "a=(c\\;d e\\|f g\\&h)"],
+    ["globs", "a=(*.ts ?.md [ab]c)"],
+    ["a command substitution", "a=($(echo hi) y)"],
+    ["a backquote", "a=(`echo hi` y)"],
+    ["a parameter expansion", `a=(${OPEN}x} $y)`],
+    [
+      "a here-document inside a command substitution",
+      "a=($(cat <<EOF\nx\nEOF\n) y)",
+    ],
+    ["a here-document inside a backquote", "a=(`cat <<EOF\nx\nEOF\n` y)"],
+    ["newlines between words", "a=(x\ny\nz\n)"],
+    ["a comment holding operators", "a=(x # c ; d | e\ny)"],
+    ["an array behind a finished here-document", "cat <<A\nb\nA\na=(x)\n"],
+    [
+      "a here-document on the command after the array",
+      "a=(x) cat <<EOF\nb\nEOF\n",
+    ],
+    [
+      "a parenthesis after an equals sign in an arithmetic region",
+      "echo $((a=(1<2)))",
+    ],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+});
+
+describe("a closed array lets the operators work again", () => {
+  test.each([
+    ["a semicolon", "a=(x); echo y"],
+    ["a pipe", "a=(x) | cat"],
+    ["an ampersand", "a=(x) & echo y"],
+    ["a redirect", "a=(x) > f"],
+    ["an opening parenthesis", "a=(x); (echo y)"],
+    ["a here-document", "a=(x); cat <<EOF\nb\nEOF\n"],
+    ["a here-document on the next line", "a=(x)\ncat <<EOF\nb\nEOF\n"],
+    ["a second array", "a=(x); b=(y z)"],
+  ])("accepts %s after the closing parenthesis", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+
+  test("reads a line of an array as a command", () => {
+    expect(commandTexts("a=(x\ngit push -f\n)")).toContainEqual([
+      "git",
+      "push",
+      "-f",
+    ]);
+  });
+});
+
+describe("a prefix before an array keeps the glob group rejection", () => {
+  test.each([
+    ["a declaration", "declare -a a=(x)"],
+    ["a local declaration", "local a=(x)"],
+    ["an assignment before the array", "b=1 a=(x)"],
+  ])("rejects %s with the glob group reason", (_form, line) => {
+    const result = parseCommandLine(line);
+
+    expect(result.ok ? "" : result.error).toContain("may start a glob group");
+  });
+});

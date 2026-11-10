@@ -4768,6 +4768,108 @@ describeForCallers(
   },
 );
 
+// 配列の代入の括弧の中は、語だけを読む。演算子があると、シェルは構文エラーの後に次の行から読み続けるので、本文の行が実行される。
+describeForCallers(
+  "bash-guard denies an operator between the parentheses of an array assignment",
+  (subagent) => {
+    test.each([
+      ["a here-document operator", "a=(<<EOF\nmise run stop\nEOF\n)"],
+      ["a tab-stripping operator", "a=(<<-EOF\nmise run stop\nEOF\n)"],
+      ["a here-string operator", "a=(<<<x)"],
+      ["a semicolon", "a=(x; y)"],
+      ["a pipe", "a=(x | y)"],
+      ["an ampersand", "a=(x & y)"],
+      ["an input redirect", "a=(x < f)"],
+      ["an output redirect", "a=(x > f)"],
+      ["a redirect with a file descriptor", "a=(x 2> f)"],
+      ["a nested parenthesis", "a=(x (y))"],
+      ["a process substitution", "a=(<(x))"],
+      ["an operator on a later line", "a=(x\ny\n; z)"],
+      ["an appended array", "a+=(<<EOF\nmise run stop\nEOF\n)"],
+      [
+        "an array on the line of a pending here-document",
+        "cat <<A; a=(x; y)\nmise run stop\nA\n",
+      ],
+      [
+        "a plain array on the line of a pending here-document",
+        "cat <<A; a=(x)\nb\nA\n",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard denies an array assignment opened in a nested reader",
+  (subagent) => {
+    test.each([
+      ["a command substitution", "echo $(a=(<<EOF\nmise run stop\nEOF\n))"],
+      ["a backquote", "echo `a=(<<EOF\nmise run stop\nEOF\n)`"],
+      ["a command string", "bash -c 'a=(<<EOF\nmise run stop\nEOF\n)'"],
+      ["an eval argument", "eval 'a=(<<EOF\nmise run stop\nEOF\n)'"],
+      [
+        "a here-document read as shell input",
+        "bash <<'X'\na=(<<EOF\nmise run stop\nEOF\n)\nX\n",
+      ],
+      ["a command string with a semicolon", "bash -c 'a=(x; y)'"],
+      ["an eval argument with a pipe", "eval 'a=(x | y)'"],
+    ])("denies an array opened in %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard denies a command on a line inside an array assignment",
+  (subagent) => {
+    test("denies a line of the array that is a forbidden command", async () => {
+      expect(await decide("a=(x\nmise run stop\n)", { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows the daily array assignment forms",
+  (subagent) => {
+    test.each([
+      "a=(x y z)",
+      "a+=(x y)",
+      "a=()",
+      "a=(\"x;y\" 'p|q' c\\;d)",
+      "a=($(echo hi) `echo hi` y)",
+      "a=($(cat <<EOF\nx\nEOF\n) y)",
+      "a=(x\ny\n)",
+      "a=(x # c ; d\ny)",
+      "a=(x) cat <<EOF\nb\nEOF\n",
+      "a=(x); cat <<EOF\nb\nEOF\n",
+      "a=(x) | cat",
+      "echo $((a=(1<2)))",
+      "git commit -m \"$(cat <<'EOF'\nfix: a\n\nbody\nEOF\n)\"",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard keeps the glob group rejection before an array assignment",
+  (subagent) => {
+    test.each(["declare -a a=(x)", "local a=(x)", "b=1 a=(x)"])(
+      "denies %s",
+      async (command) => {
+        expect(await decide(command, { subagent })).toBe("deny");
+      },
+    );
+
+    test("names the glob group in the reason", async () => {
+      expect(await denyReason("declare -a a=(x)", { subagent })).toContain(
+        "may start a glob group",
+      );
+    });
+  },
+);
+
 // 長い入力は、拒否として終わる。入力の大きさに比例する作業で足りるので、実時間は測らない。
 describeForCallers(
   "bash-guard finishes long nested input with a denial",
