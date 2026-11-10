@@ -990,6 +990,8 @@ type PendingHeredoc = {
   readonly stripTabs: boolean;
   /** 区切り語に引用符かバックスラッシュがあれば、本文は展開されない。 */
   readonly quoted: boolean;
+  /** 登録したときの`subshellDepth`。これより深い括弧の中で改行を読んだら、本文の始まりが決まらない。 */
+  readonly depth: number;
   /** 本文を渡す先のコマンドの`inputs`。コマンドが確定するまでnull。 */
   target: Word[] | null;
 };
@@ -1105,6 +1107,14 @@ class Parser {
         this.position += 1;
         return;
       case "\n":
+        // 保留したヒアドキュメントより深い括弧の中の改行は、本文の始まりが決まらない。
+        if (
+          this.heredocs.some((heredoc) => heredoc.depth < this.subshellDepth)
+        ) {
+          throw new ShellSyntaxError(
+            "a newline inside parentheses while a here-document is pending",
+          );
+        }
         this.endCommand();
         this.position += 1;
         this.skipHeredocBodies();
@@ -1420,7 +1430,13 @@ class Parser {
       throw new ShellSyntaxError(
         "a here-document delimiter has a character outside the closed set",
       );
-    this.heredocs.push({ delimiter, stripTabs, quoted, target: null });
+    this.heredocs.push({
+      delimiter,
+      stripTabs,
+      quoted,
+      depth: this.subshellDepth,
+      target: null,
+    });
   }
 
   /**
@@ -1718,7 +1734,8 @@ class Parser {
     while (at < source.length) {
       const char = source.charAt(at);
       if (char === "}") return at + 1;
-      if (char === "'" || char === '"' || char === "(") {
+      // `{`は、bashが最初の`}`で閉じ、zshが入れ子として数えて閉じる位置が変わるので、読まない。
+      if (char === "'" || char === '"' || char === "(" || char === "{") {
         throw new ShellSyntaxError(
           `${JSON.stringify(char)} at offset ${at} in a parameter expansion`,
         );
@@ -1730,7 +1747,12 @@ class Parser {
         at = this.scanBackquoted(at);
       } else if (char === "\\") {
         const escaped = source.charAt(at + 1);
-        if (restricted || escaped === "$" || escaped === "`") {
+        if (
+          restricted ||
+          escaped === "$" ||
+          escaped === "`" ||
+          escaped === "{"
+        ) {
           throw new ShellSyntaxError(
             `a backslash at offset ${at} in a parameter expansion`,
           );
