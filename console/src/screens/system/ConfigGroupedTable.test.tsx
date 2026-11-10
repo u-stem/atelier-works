@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 import { freshQuery } from "../../api/fakeSectionQuery.testing.ts";
 import type { ConfigItemView } from "../../api/jobsQueries.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
@@ -522,16 +523,18 @@ describe("ConfigList cell of the operation", () => {
 
 describe("ConfigSection width and groups", () => {
   const section = renderToStaticMarkup(
-    <QueryClientProvider client={new QueryClient()}>
-      <TooltipProvider>
-        <ConfigSection
-          query={freshQuery({
-            path: "f/factory/factory_config",
-            items: [item("daily_budget_usd", 5)],
-          })}
-        />
-      </TooltipProvider>
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <ConfigSection
+            query={freshQuery({
+              path: "f/factory/factory_config",
+              items: [item("daily_budget_usd", 5)],
+            })}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 
   test("widens the section of the config tab", () => {
@@ -555,21 +558,23 @@ describe("ConfigSection width and groups", () => {
 
   test("keeps the row of the design stage inside the groups, at their width", () => {
     const withStage = renderToStaticMarkup(
-      <QueryClientProvider client={new QueryClient()}>
-        <TooltipProvider>
-          <ConfigSection
-            query={freshQuery({
-              path: "f/factory/factory_config",
-              items: [item("daily_budget_usd", 5)],
-              design_stage: {
-                enabled: true,
-                ignored: false,
-                indeterminate: false,
-              },
-            })}
-          />
-        </TooltipProvider>
-      </QueryClientProvider>,
+      <MemoryRouter>
+        <QueryClientProvider client={new QueryClient()}>
+          <TooltipProvider>
+            <ConfigSection
+              query={freshQuery({
+                path: "f/factory/factory_config",
+                items: [item("daily_budget_usd", 5)],
+                design_stage: {
+                  enabled: true,
+                  ignored: false,
+                  indeterminate: false,
+                },
+              })}
+            />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </MemoryRouter>,
     );
     const groups = withStage.slice(withStage.indexOf("<h3"));
     expect([
