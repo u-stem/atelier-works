@@ -4800,6 +4800,20 @@ describeForCallers(
   },
 );
 
+// bashは括弧の中の`[`から対応する`]`までを添字の対として読み、その間の`#`をコメントにしない。
+describeForCallers(
+  "bash-guard denies the opening of a subscript pair inside an array assignment",
+  (subagent) => {
+    test.each([
+      ["a bracket at the start of a word", "a=([0]=x y)"],
+      ["a bracket in the middle of a word", "a=(k[0]=x y)"],
+      ["a comment start behind a bracket", "a=(x [ # y\n)"],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
 describeForCallers(
   "bash-guard denies an array assignment opened in a nested reader",
   (subagent) => {
@@ -4839,6 +4853,9 @@ describeForCallers(
       "a=(\"x;y\" 'p|q' c\\;d)",
       "a=($(echo hi) `echo hi` y)",
       "a=($(cat <<EOF\nx\nEOF\n) y)",
+      "a=(\"[x]\" '[y' c\\[d)",
+      `a=(${OPEN}b[0]} y)`,
+      "a=($([ -f x ] && echo y) z)",
       "a=(x\ny\n)",
       "a=(x # c ; d\ny)",
       "a=(x) cat <<EOF\nb\nEOF\n",
@@ -4865,6 +4882,39 @@ describeForCallers(
     test("names the glob group in the reason", async () => {
       expect(await denyReason("declare -a a=(x)", { subagent })).toContain(
         "may start a glob group",
+      );
+    });
+  },
+);
+
+// zshは、標準入力から読むときだけ、構文エラーになる複数の位置で本文の行を実行する。確認済みでないシェルへの`<<`を含む入力は拒否する。
+describeForCallers(
+  "bash-guard handles a here-document operator in the input of a shell",
+  (subagent) => {
+    test.each([
+      ["a here-document", "zsh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["a here-string", "zsh <<< 'cat <<< x'"],
+      ["an echo through a pipe", "echo 'cat <<< x' | zsh"],
+      ["a launch behind a wrapper", "env zsh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+    ])("denies %s for an unconfirmed shell", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.each([
+      ["bash", "bash <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["sh", "sh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["dash", "dash <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["ksh", "ksh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+    ])(
+      "allows the same input for a confirmed shell (%s)",
+      async (_s, command) => {
+        expect(await decide(command, { subagent })).toBe("allow");
+      },
+    );
+
+    test("allows an unconfirmed shell without the operator", async () => {
+      expect(await decide("zsh <<'X'\necho hi\nX\n", { subagent })).toBe(
+        "allow",
       );
     });
   },

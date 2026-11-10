@@ -965,6 +965,48 @@ describe("literalShellInputs", () => {
   });
 });
 
+describe("literalShellInputs with a here-document operator in the text", () => {
+  const BODY = "cat <<X\nb\nX\n";
+
+  test.each(["bash", "sh", "dash", "ksh"])(
+    "returns the text for a confirmed shell (%s)",
+    (shell) => {
+      expect(shellInputsOf(`${shell} <<'EOF'\n${BODY}EOF\n`)).toEqual([BODY]);
+    },
+  );
+
+  test.each(["zsh", "ash", "mksh", "fish", "csh", "tcsh", "busybox sh"])(
+    "returns null for an unconfirmed shell (%s)",
+    (shell) => {
+      expect(shellInputsOf(`${shell} <<'EOF'\n${BODY}EOF\n`)).toBeNull();
+    },
+  );
+
+  test("returns null for a here-string read by an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<< 'cat <<X'")).toBeNull();
+  });
+
+  test("returns null for an echo text read by an unconfirmed shell", () => {
+    expect(shellInputsOf("echo 'cat <<X' | zsh")).toBeNull();
+  });
+
+  test("returns null when a wrapper precedes the unconfirmed shell", () => {
+    expect(shellInputsOf(`env zsh <<'EOF'\n${BODY}EOF\n`)).toBeNull();
+  });
+
+  test("returns null for a here-document earlier in a pipe chain", () => {
+    expect(shellInputsOf(`cat <<'EOF' | zsh\n${BODY}EOF\n`)).toBeNull();
+  });
+
+  test("returns the text for an unconfirmed shell without the operator", () => {
+    expect(shellInputsOf("zsh <<'EOF'\necho hi\nEOF\n")).toEqual(["echo hi\n"]);
+  });
+
+  test("returns the text for a program that is not a shell", () => {
+    expect(shellInputsOf(`cat <<'EOF'\n${BODY}EOF\n`)).toEqual([BODY]);
+  });
+});
+
 describe("stripWrappers with env -S", () => {
   function stripped(line: string): string[] {
     const result = parseCommandLine(line);
@@ -1117,6 +1159,7 @@ const REGION_DAILY_BODIES: readonly (readonly [string, string])[] = [
   ["special parameters", "$# + $? + $$"],
   ["a braced parameter", `${OPEN}x:-1} + 1`],
   ["a comparison", "a >= b"],
+  ["an assignment of a parenthesis", "a=(1<2)"],
 ];
 
 /** 領域の本体で、閉じた集合の外にある形。 */
@@ -2445,6 +2488,20 @@ describe("array assignments read only words between the parentheses", () => {
   );
 });
 
+describe("array assignments reject the opening of a subscript pair", () => {
+  test.each([
+    ["a bracket at the start of a word", "a=([0]=x)"],
+    ["a bracket in the middle of a word", "a=(k[0]=x)"],
+    ["a bracket at the end of a word", "a=(k[)"],
+    ["a comment start behind a bracket", "a=(x [ # y\n)"],
+    ["a comment start inside a bracket word", "a=(x [# y\n)"],
+    ["a bracket in an appended array", "a+=([0]=x)"],
+    ["a bracket on a later line", "a=(x\n[0]=y\n)"],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+});
+
 describe("array assignments in nested readers", () => {
   test.each([
     ["a command substitution", "echo $(a=(x; y))"],
@@ -2473,7 +2530,11 @@ describe("array assignments accept the daily forms", () => {
     ["an appended array", "a+=(x y)"],
     ["quoted operators", 'a=("x;y" \'p|q&r\' "<s>")'],
     ["escaped operators", "a=(c\\;d e\\|f g\\&h)"],
-    ["globs", "a=(*.ts ?.md [ab]c)"],
+    ["globs", "a=(*.ts ?.md)"],
+    ["quoted brackets", 'a=("[x]" \'[y\' "k[")'],
+    ["escaped brackets", "a=(c\\[d e\\]f)"],
+    ["a subscript in a parameter expansion", `a=(${OPEN}b[0]} $c)`],
+    ["a test inside a command substitution", "a=($([ -f x ] && echo y) z)"],
     ["a command substitution", "a=($(echo hi) y)"],
     ["a backquote", "a=(`echo hi` y)"],
     ["a parameter expansion", `a=(${OPEN}x} $y)`],
