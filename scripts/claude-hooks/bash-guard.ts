@@ -65,8 +65,9 @@ import {
   type MiseExec,
   miseOptionTakesNext,
   parseCommandLine,
+  readsStandardInput,
   type SimpleCommand,
-  shellArguments,
+  shellInvocation,
   stripWrappers,
   type Word,
 } from "./shell-words.ts";
@@ -765,9 +766,9 @@ function checkSimpleCommand(
   if (writesGeneratedFiles(program, words)) {
     return deny(REASONS.miseGenerate);
   }
-  const shellArgs = shellArguments(words);
-  if (shellArgs !== null) {
-    const shell = checkShellInput(command, shellArgs, directory, scope);
+  const invocation = shellInvocation(words);
+  if (invocation !== null) {
+    const shell = checkShellInput(command, invocation, directory, scope);
     if (shell.kind === "deny") return shell;
   }
   if (program === "mise" && listsMiseValues(words)) {
@@ -1006,17 +1007,26 @@ function copyDestination(args: readonly Word[]): string | null {
 }
 
 /**
- * シェルが標準入力からコードを読むときの判定。`-c`の引数は字句に分ける段階で取り出し済みで、
+ * シェルが標準入力からコードを読むときの判定。`-c`の文字列は、起動オプションを読んだうえで字句に分ける段階で取り出し済みで、
  * スクリプトのファイルは中身を見られない。標準入力が文字列(ヒアストリングやヒアドキュメント)なら、
  * その中身を別のコマンド行として判定する。パイプなど中身が分からない標準入力は拒否する。
+ * 起動オプションを読み切れない起動は、字句に分ける段階で拒否済みだが、ここでも拒否する。
  */
 function checkShellInput(
   command: SimpleCommand,
-  shellArgs: readonly Word[],
+  invocation: { readonly shell: string; readonly args: readonly Word[] },
   directory: string | null,
   scope: Scope,
 ): Decision {
-  if (shellInputSource(shellArgs) !== "stdin") return ALLOW;
+  const source = shellInputSource(
+    invocation.shell,
+    invocation.args,
+    readsStandardInput(command),
+  );
+  if (source === "unreadable") {
+    return deny(REASONS.unparsable("the shell launch options cannot be read"));
+  }
+  if (source !== "stdin") return ALLOW;
   const sources = literalShellInputs(command);
   if (sources === null) return deny(REASONS.shellStdin);
   for (const source of sources) {

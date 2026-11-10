@@ -4,7 +4,10 @@ import {
   literalShellInputs,
   miseOptionTakesNext,
   parseCommandLine,
+  readShellLaunch,
+  readsStandardInput,
   scanMiseGlobalOptions,
+  shellInvocation,
   stripWrappers,
   type Word,
 } from "../../../scripts/claude-hooks/shell-words.ts";
@@ -1613,7 +1616,6 @@ describe("interactive shells", () => {
   test.each([
     ["zsh with a command string", "zsh -c ls"],
     ["bash with a command string", "bash -c ls"],
-    ["zsh with bundled flags", "zsh -fc ls"],
     ["a script file", "bash script.sh"],
     ["a login shell", "bash --login -c ls"],
     ["an installer script with a long option", "bash -s -- --install-dir"],
@@ -1733,5 +1735,660 @@ describe("accepted false positives stay rejected", () => {
     ["an indirection", `echo ${OPEN}!x}`],
   ])("rejects %s", (_form, line) => {
     expect(parses(line)).toBe(false);
+  });
+});
+
+/** 実行時に決まる語。 */
+function dynamicWord(text: string): Word {
+  return { text, dynamic: true, glob: false };
+}
+
+/** 引用符の外にglobの文字を持つ語。 */
+function globWord(text: string): Word {
+  return { text, dynamic: false, glob: true };
+}
+
+/** NULを含んでいた語。`text`のほかに、NULを除いた綴りを持つ。 */
+function variantWord(text: string, other: string): Word {
+  return { text, dynamic: false, glob: false, variants: [other] };
+}
+
+/** `shell`の起動に`args`を渡したときの読み方を、`出どころ@scriptの位置`の短い表記にする。読み切れなければ`unreadable`。 */
+function launchOf(
+  shell: string,
+  args: readonly (string | Word)[],
+  hasStdin = false,
+): string {
+  const launch = readShellLaunch(
+    shell,
+    args.map((arg) =>
+      typeof arg === "string"
+        ? { text: arg, dynamic: false, glob: false }
+        : arg,
+    ),
+    hasStdin,
+  );
+  if (!launch.ok) return "unreadable";
+  return `${launch.source}@${launch.scriptIndex ?? "-"}`;
+}
+
+// -cの文字列を、すべてのオプションの並びで読む。
+describe("a shell launch reads the command string through every option sequence", () => {
+  test.each<[string, string, readonly string[], string]>([
+    ["a flag", "bash", ["-c", "cmd"], "command@1"],
+    ["a plus flag", "bash", ["+c", "cmd"], "command@1"],
+    ["a bundle that ends in the flag", "bash", ["-ec", "cmd"], "command@1"],
+    ["a login bundle", "bash", ["-lc", "cmd"], "command@1"],
+    ["a flag before the flag", "bash", ["-e", "-c", "cmd"], "command@2"],
+    ["a plus flag before the flag", "bash", ["+e", "-c", "cmd"], "command@2"],
+    [
+      "an upper-case value option",
+      "bash",
+      ["-O", "extglob", "-c", "cmd"],
+      "command@3",
+    ],
+    [
+      "a plus upper-case value option",
+      "bash",
+      ["+O", "extglob", "-c", "cmd"],
+      "command@3",
+    ],
+    [
+      "a lower-case value option",
+      "bash",
+      ["-o", "pipefail", "-c", "cmd"],
+      "command@3",
+    ],
+    [
+      "a plus lower-case value option",
+      "bash",
+      ["+o", "errexit", "-c", "cmd"],
+      "command@3",
+    ],
+    [
+      "a bundle that ends in a value option",
+      "bash",
+      ["-eo", "pipefail", "-c", "cmd"],
+      "command@3",
+    ],
+    [
+      "a value with another case and separators",
+      "bash",
+      ["-o", "Pipe_Fail", "-c", "cmd"],
+      "command@3",
+    ],
+    ["an rcfile value", "bash", ["--rcfile", "x", "-c", "cmd"], "command@3"],
+    [
+      "an init-file value",
+      "bash",
+      ["--init-file", "x", "-c", "cmd"],
+      "command@3",
+    ],
+    [
+      "an rcfile value that looks like the flag",
+      "bash",
+      ["--rcfile", "-c", "-c", "cmd"],
+      "command@3",
+    ],
+    [
+      "a long flag before the flag",
+      "bash",
+      ["--norc", "-c", "cmd"],
+      "command@2",
+    ],
+    [
+      "two long flags before the flag",
+      "bash",
+      ["--noprofile", "--norc", "-c", "cmd"],
+      "command@3",
+    ],
+    [
+      "a flag between the flag and the string",
+      "bash",
+      ["-c", "-e", "cmd"],
+      "command@2",
+    ],
+    [
+      "a value option between the flag and the string",
+      "bash",
+      ["-c", "-o", "pipefail", "cmd"],
+      "command@3",
+    ],
+    [
+      "a long flag between the flag and the string",
+      "bash",
+      ["-c", "--norc", "cmd"],
+      "command@2",
+    ],
+    [
+      "a double dash before the string",
+      "bash",
+      ["-c", "--", "cmd"],
+      "command@2",
+    ],
+    ["a lone dash before the string", "bash", ["-c", "-", "cmd"], "command@2"],
+    [
+      "a string that starts with a dash after a double dash",
+      "bash",
+      ["-c", "--", "-x"],
+      "command@2",
+    ],
+    ["words after the string", "bash", ["-c", "cmd", "a", "b"], "command@1"],
+    ["a posix bundle in sh", "sh", ["-ec", "cmd"], "command@1"],
+    ["a flag before the flag in sh", "sh", ["-e", "-c", "cmd"], "command@2"],
+    [
+      "a flag between the flag and the string in dash",
+      "dash",
+      ["-c", "-e", "cmd"],
+      "command@2",
+    ],
+    ["a plain flag in dash", "dash", ["-c", "cmd"], "command@1"],
+  ])("reads %s (%s)", (_form, shell, args, expected) => {
+    expect(launchOf(shell, args)).toBe(expected);
+  });
+});
+
+// 出どころの優先。
+describe("a shell launch decides where the code comes from", () => {
+  test.each<[string, readonly (string | Word)[], string]>([
+    ["no arguments", [], "stdin@-"],
+    ["a lone s flag", ["-s"], "stdin@-"],
+    ["a plus s flag", ["+s"], "stdin@-"],
+    ["an s flag with words", ["-s", "a", "b"], "stdin@-"],
+    ["an s flag and a double dash", ["-s", "--", "--install-dir"], "stdin@-"],
+    ["an s flag in a bundle", ["-es", "a"], "stdin@-"],
+    ["a script file", ["script.sh", "a"], "file@-"],
+    ["a script file after a double dash", ["--", "script.sh"], "file@-"],
+    ["a script file after a lone dash", ["-", "script.sh"], "file@-"],
+    [
+      "a file name that looks like the flag after a double dash",
+      ["--", "-c"],
+      "file@-",
+    ],
+    [
+      "a file name that looks like the flag after a lone dash",
+      ["-", "-c"],
+      "file@-",
+    ],
+    ["a script file after a flag", ["-e", "script.sh"], "file@-"],
+    ["a script file after an rcfile", ["--rcfile", "x", "script.sh"], "file@-"],
+    ["an rcfile alone", ["--rcfile", "x"], "stdin@-"],
+    ["flags alone", ["-e", "-x"], "stdin@-"],
+    ["a double dash alone", ["--"], "stdin@-"],
+    ["a lone dash alone", ["-"], "stdin@-"],
+    ["an s flag after a script file", ["script.sh", "-s"], "file@-"],
+    ["a c flag after a script file", ["script.sh", "-c", "cmd"], "file@-"],
+    ["a version request", ["--version"], "none@-"],
+    ["a help request", ["--help"], "none@-"],
+    ["a version request after a flag", ["-e", "--version"], "none@-"],
+  ])("reads %s", (_form, args, expected) => {
+    expect(launchOf("bash", args)).toBe(expected);
+  });
+});
+
+// cとsの併用は、dash・ash系が文字列の後に標準入力も読むので、読み切れない起動として扱う。
+describe("a shell launch with both the command flag and the stdin flag is unreadable", () => {
+  test.each<[string, string, readonly string[]]>([
+    ["both in one bundle", "bash", ["-cs", "cmd"]],
+    ["both in a reversed bundle", "bash", ["-sc", "cmd"]],
+    ["both as separate flags", "bash", ["-c", "-s", "cmd"]],
+    ["the stdin flag first", "bash", ["-s", "-c", "cmd"]],
+    ["a plus flag and a minus flag", "bash", ["+c", "-s", "cmd"]],
+    ["both in sh", "sh", ["-cs", "cmd"]],
+    ["both in dash", "dash", ["-sc", "cmd"]],
+  ])("rejects %s", (_form, shell, args) => {
+    expect(launchOf(shell, args)).toBe("unreadable");
+  });
+});
+
+// 読めない起動は拒否する。
+describe("a shell launch outside the closed set of options is unreadable", () => {
+  test.each<[string, readonly (string | Word)[]]>([
+    ["a long name outside the list", ["--bogus", "-c", "cmd"]],
+    ["a long name with a value attached", ["--rcfile=x", "-c", "cmd"]],
+    ["an interactive long name", ["--interactive", "-c", "cmd"]],
+    ["a long name written with one dash", ["-help"]],
+    ["a long name written with one dash and a flag", ["-norc", "-c", "cmd"]],
+    ["a letter outside the list (k)", ["-k", "-c", "cmd"]],
+    ["a letter outside the list (D)", ["-D", "-c", "cmd"]],
+    ["a letter outside the list (R)", ["-R", "-c", "cmd"]],
+    ["the interactive letter", ["-i", "-c", "cmd"]],
+    ["a digit", ["-1", "-c", "cmd"]],
+    ["a lone plus", ["+", "-c", "cmd"]],
+    ["a plus of a long name", ["++x", "-c", "cmd"]],
+    [
+      "a value option in the middle of a bundle",
+      ["-oe", "pipefail", "-c", "cmd"],
+    ],
+    ["two value options in one bundle", ["-oO", "errexit", "-c", "cmd"]],
+    [
+      "a value option that takes a value option",
+      ["-o", "-o", "pipefail", "-c", "cmd"],
+    ],
+    ["a value option without a value", ["-o"]],
+    ["a value option without a value after the flag", ["-c", "-o"]],
+    ["a value outside the list", ["-o", "bogus", "-c", "cmd"]],
+    ["the keyword value", ["-o", "keyword", "-c", "cmd"]],
+    ["a value that starts with a dash", ["-o", "-c", "cmd"]],
+    ["a value that starts with a plus", ["-o", "+e", "-c", "cmd"]],
+    [
+      "a value with a leading dash that names a listed option",
+      ["-o", "-noglob", "-c", "cmd"],
+    ],
+    [
+      "a value with a leading plus that names a listed option",
+      ["-o", "+noglob", "-c", "cmd"],
+    ],
+    ["an rcfile value with a brace", ["--rcfile", "{a,b}", "-c", "cmd"]],
+    ["the debugger long option", ["--debugger", "-c", "cmd"]],
+    ["an init-file value with a brace", ["--init-file", "{a,b}", "-c", "cmd"]],
+    ["the history expansion letter", ["-H", "-c", "cmd"]],
+    ["the history expansion letter in a bundle", ["-Hc", "cmd"]],
+    ["a dynamic value", ["-o", dynamicWord("$X"), "-c", "cmd"]],
+    ["an rcfile option without a value", ["--rcfile"]],
+    [
+      "an rcfile option with a dynamic value",
+      ["--rcfile", dynamicWord("$F"), "-c", "cmd"],
+    ],
+    ["the flag without a string", ["-c"]],
+    ["the flag followed by flags only", ["-c", "-e"]],
+    ["a dynamic option word", [dynamicWord("-$X"), "-c", "cmd"]],
+    ["a glob option word", [globWord("-*"), "-c", "cmd"]],
+    ["a brace option word", ["-{c,e}", "cmd"]],
+    [
+      "an option word with a variant spelling",
+      [variantWord("-e", "-ex"), "-c", "cmd"],
+    ],
+  ])("rejects %s", (_form, args) => {
+    expect(launchOf("bash", args)).toBe("unreadable");
+  });
+
+  test.each<[string, string, readonly string[]]>([
+    ["a long flag in dash", "dash", ["--login", "-c", "cmd"]],
+    ["an upper-case value option in sh", "sh", ["-O", "extglob", "-c", "cmd"]],
+    [
+      "an upper-case value option in dash",
+      "dash",
+      ["-O", "extglob", "-c", "cmd"],
+    ],
+    ["a long flag in dash without the flag", "dash", ["--norc"]],
+    ["a letter that only bash reads, in sh", "sh", ["-l", "-c", "cmd"]],
+    [
+      "a bundle with a letter that only bash reads, in sh",
+      "sh",
+      ["-lc", "cmd"],
+    ],
+    ["a letter that only bash reads, in dash", "dash", ["-p", "-c", "cmd"]],
+    ["the history expansion letter in sh", "sh", ["-H", "-c", "cmd"]],
+    ["the history expansion letter in dash", "dash", ["-Hc", "cmd"]],
+    ["a long option with a value in sh", "sh", ["--rcfile", "x", "-c", "cmd"]],
+    [
+      "a long option with a value in sh before a script",
+      "sh",
+      ["--init-file", "x", "script.sh"],
+    ],
+    ["a long option without a value in sh", "sh", ["--norc", "-c", "cmd"]],
+    ["a version request in sh", "sh", ["--version"]],
+    ["a help request in sh", "sh", ["--help"]],
+    [
+      "a long option after a version request in sh",
+      "sh",
+      ["--version", "-c", "cmd"],
+    ],
+  ])("rejects %s", (_form, shell, args) => {
+    expect(launchOf(shell, args)).toBe("unreadable");
+  });
+});
+
+// 実行時に決まる語と、グロブ・ブレース・NULを含む語。
+describe("a shell launch with a word that is decided at run time", () => {
+  test.each<[string, readonly (string | Word)[], boolean, string]>([
+    ["a lone operand without input", [dynamicWord("$X")], false, "file@-"],
+    ["a lone operand with input", [dynamicWord("$X")], true, "stdin@-"],
+    [
+      "a lone operand after a double dash",
+      ["--", dynamicWord("$X")],
+      false,
+      "file@-",
+    ],
+    [
+      "a lone operand with the stdin flag",
+      ["-s", dynamicWord("$X")],
+      false,
+      "stdin@-",
+    ],
+    ["a command string", ["-c", dynamicWord("$X")], false, "command@1"],
+    [
+      "a command string with input",
+      ["-c", dynamicWord("$X")],
+      true,
+      "command@1",
+    ],
+    ["a command string with a brace", ["-c", "echo {a,b}"], false, "command@1"],
+    [
+      "a dynamic word after the command string",
+      ["-c", "cmd", dynamicWord("$X")],
+      false,
+      "command@1",
+    ],
+    [
+      "a dynamic word after a script file",
+      ["script.sh", dynamicWord("$X")],
+      false,
+      "file@-",
+    ],
+  ])("reads %s", (_form, args, hasStdin, expected) => {
+    expect(launchOf("bash", args, hasStdin)).toBe(expected);
+  });
+
+  test.each<[string, readonly (string | Word)[]]>([
+    ["a dynamic operand followed by a word", [dynamicWord("$X"), "a"]],
+    [
+      "a dynamic operand followed by a word with the stdin flag",
+      ["-s", dynamicWord("$X"), "a"],
+    ],
+    ["a dynamic string followed by a word", ["-c", dynamicWord("$X"), "a"]],
+    ["a glob operand", [globWord("*.sh")]],
+    ["a glob operand with the stdin flag", ["-s", globWord("*")]],
+    ["a glob string", ["-c", globWord("*")]],
+    ["an operand with a variant spelling", [variantWord("a", "ab")]],
+    ["a string with a variant spelling", ["-c", variantWord("a", "ab")]],
+    ["an operand with a brace", ["{-c,echo}"]],
+  ])("rejects %s", (_form, args) => {
+    expect(launchOf("bash", args)).toBe("unreadable");
+  });
+});
+
+// bash・sh・dash以外は、狭い3つの形だけ読む。
+describe("a shell other than bash, sh, and dash reads only three forms", () => {
+  const OTHERS = [
+    "zsh",
+    "ksh",
+    "mksh",
+    "ash",
+    "fish",
+    "csh",
+    "tcsh",
+    "busybox",
+  ];
+
+  test.each(OTHERS)("reads no arguments of %s as stdin", (shell) => {
+    expect(launchOf(shell, [])).toBe("stdin@-");
+  });
+
+  test.each(OTHERS)("reads the flag and a string of %s", (shell) => {
+    expect(launchOf(shell, ["-c", "cmd"])).toBe("command@1");
+  });
+
+  test.each(OTHERS)(
+    "reads words without an option of %s as a file",
+    (shell) => {
+      expect(launchOf(shell, ["script", "a", "b"])).toBe("file@-");
+    },
+  );
+
+  test.each(OTHERS)("rejects a bundle of flags in %s", (shell) => {
+    expect(launchOf(shell, ["-lc", "cmd"])).toBe("unreadable");
+  });
+
+  test.each<[string, readonly (string | Word)[], boolean, string]>([
+    ["a dynamic string", ["-c", dynamicWord("$X")], false, "command@1"],
+    [
+      "a dynamic lone operand without input",
+      [dynamicWord("$X")],
+      false,
+      "file@-",
+    ],
+    ["a dynamic lone operand with input", [dynamicWord("$X")], true, "stdin@-"],
+  ])("reads %s in zsh", (_form, args, hasStdin, expected) => {
+    expect(launchOf("zsh", args, hasStdin)).toBe(expected);
+  });
+
+  test.each<[string, readonly (string | Word)[]]>([
+    ["bundled flags with a string", ["-fc", "cmd"]],
+    ["a double dash", ["--", "x"]],
+    ["a string followed by a word", ["-c", "cmd", "a"]],
+    ["the flag without a string", ["-c"]],
+    ["a plus flag", ["+c", "cmd"]],
+    ["the stdin flag", ["-s"]],
+    ["a flag before a file", ["-e", "x"]],
+    ["a flag after a file", ["x", "-e"]],
+    ["a value option", ["-o", "pipefail", "-c", "cmd"]],
+    ["a version request", ["--version"]],
+    ["a lone dash", ["-"]],
+    ["the interactive flag", ["-i"]],
+    ["a glob string", ["-c", globWord("*")]],
+    ["a dynamic operand followed by a word", [dynamicWord("$X"), "x"]],
+    ["a word followed by a dynamic operand", ["x", dynamicWord("$X")]],
+  ])("rejects %s in zsh", (_form, args) => {
+    expect(launchOf("zsh", args)).toBe("unreadable");
+  });
+});
+
+/** `line`の最後の単純コマンド。 */
+function lastCommand(line: string) {
+  const result = parseCommandLine(line);
+  if (!result.ok) throw new Error(result.error);
+  const command = result.commands.at(-1);
+  if (command === undefined) throw new Error("no command");
+  return command;
+}
+
+// 標準入力の有無は、1つの関数が求める。
+describe("readsStandardInput", () => {
+  test.each([
+    ["a here-string", "bash <<< 'ls'"],
+    ["a here-document", "bash <<'EOF'\nls\nEOF\n"],
+    ["a pipe", "echo ls | bash"],
+    ["a file redirect", "bash < in.sh"],
+    ["a read-write redirect", "bash <> in.sh"],
+    ["a descriptor redirect", "bash <&3"],
+    ["a file redirect with the stdin flag", "bash -s < in.sh"],
+  ])("is true for %s", (_form, line) => {
+    expect(readsStandardInput(lastCommand(line))).toBe(true);
+  });
+
+  test.each([
+    ["a script file", "bash script.sh"],
+    ["no redirect", "bash"],
+    ["an output redirect", "bash > out.log"],
+    ["a descriptor copy", "bash script.sh 2>&1"],
+    ["a command after a separator", "echo ls; bash"],
+  ])("is false for %s", (_form, line) => {
+    expect(readsStandardInput(lastCommand(line))).toBe(false);
+  });
+});
+
+// シェルの起動語は、busyboxの下をbusyboxとして渡す。
+describe("shellInvocation", () => {
+  test.each([
+    ["a bare name", ["bash", "-c", "x"], "bash", 2],
+    ["a path", ["/bin/zsh", "x"], "zsh", 1],
+    ["busybox with a shell", ["busybox", "sh", "-c", "x"], "busybox", 2],
+    ["busybox with a shell named bash", ["busybox", "bash", "x"], "busybox", 1],
+  ])("names the shell of %s", (_form, texts, shell, rest) => {
+    const found = shellInvocation(words(...texts));
+
+    expect([found?.shell, found?.args.length]).toEqual([shell, rest]);
+  });
+
+  test.each([
+    ["a program that is not a shell", ["git", "status"]],
+    ["a busybox applet", ["busybox", "ls"]],
+    ["no words", []],
+  ])("returns nothing for %s", (_form, texts) => {
+    expect(shellInvocation(words(...texts))).toBeNull();
+  });
+});
+
+// 入れ子の文字列は、起動オプションを読んだ位置の語から取り出す。
+describe("a shell launch hands the command string to the parser", () => {
+  test.each([
+    ["a plus flag", "bash +c 'echo marker'"],
+    ["a plus flag after a flag", "bash +e -c 'echo marker'"],
+    ["an upper-case value option", "bash -O extglob -c 'echo marker'"],
+    ["a plus upper-case value option", "bash +O extglob -c 'echo marker'"],
+    ["a lower-case value option", "bash -o pipefail -c 'echo marker'"],
+    [
+      "a bundle that ends in a value option",
+      "bash -eo pipefail -c 'echo marker'",
+    ],
+    ["an rcfile value", "bash --rcfile x -c 'echo marker'"],
+    ["an init-file value", "bash --init-file x -c 'echo marker'"],
+    ["a flag between the flag and the string", "bash -c -e 'echo marker'"],
+    [
+      "a long flag between the flag and the string",
+      "bash -c --norc 'echo marker'",
+    ],
+    ["a double dash before the string", "bash -c -- 'echo marker'"],
+    ["a lone dash before the string", "bash -c - 'echo marker'"],
+    ["a login bundle", "bash -lc 'echo marker'"],
+    ["a posix bundle in sh", "sh -ec 'echo marker'"],
+    ["a launch behind env", "env bash -c -e 'echo marker'"],
+    ["a launch through busybox", "busybox sh -c 'echo marker'"],
+    ["a shell string in a shell string", `sh -c "bash +c 'echo marker'"`],
+  ])("reads the string of %s", (_form, line) => {
+    expect(commandTexts(line)).toContainEqual(["echo", "marker"]);
+  });
+});
+
+// 読めない起動は構文エラーとして拒否する。
+describe("a shell launch that cannot be read is a syntax error", () => {
+  test.each([
+    ["a long name outside the list", "bash --bogus -c ls"],
+    ["a long name written with one dash", "bash -help -c ls"],
+    ["a letter outside the list", "bash -k -c ls"],
+    ["a debugger letter", "bash -D -c ls"],
+    ["a restricted letter", "bash -R -c ls"],
+    ["a value option in the middle of a bundle", "bash -oe pipefail -c ls"],
+    ["two value options in one bundle", "bash -oO errexit -c ls"],
+    ["a value outside the list", "bash -o bogus -c ls"],
+    ["the keyword value", "bash -o keyword -c ls"],
+    ["a value option without a value", "bash -o"],
+    ["a value that starts with a dash", "bash -o -c ls"],
+    ["the flag without a string", "bash -c"],
+    ["a lone plus", "bash + -c ls"],
+    ["a digit", "bash -1 -c ls"],
+    ["a dynamic option word", 'bash -"$X" -c ls'],
+    ["a dynamic option value", 'bash -o "$X" -c ls'],
+    ["a glob option word", "bash -* -c ls"],
+    ["a brace option word", "bash -{c,e} ls"],
+    ["an rcfile value with a brace", "bash --rcfile {a,b} -c ls"],
+    ["an init-file value with a brace", "bash --init-file {a,b} -c ls"],
+    [
+      "a value with a leading dash that names a listed option",
+      "bash -o -noglob -c ls",
+    ],
+    ["the history expansion letter", "bash -H -c ls"],
+    ["the debugger long option", "bash --debugger -c ls"],
+    ["a long option with a value in sh", "sh --rcfile x -c ls"],
+    ["a long option without a value in sh", "sh --norc -c ls"],
+    ["a version request in sh", "sh --version"],
+    ["an rcfile option without a value", "bash --rcfile"],
+    ["a long flag in dash", "dash --login -c ls"],
+    ["both the command flag and the stdin flag", "bash -cs ls"],
+    ["both flags as separate words", "bash -c -s ls"],
+    ["both flags in sh", "sh -sc ls"],
+    ["a dynamic operand followed by a word", 'bash "$X" arg'],
+    ["a dynamic string followed by a word", 'bash -c "$X" arg'],
+    ["a glob operand", "bash *.sh"],
+    ["a glob string", "bash -c *"],
+    ["a string with a variant spelling", "bash -c $'a\\x00b'"],
+    ["a brace operand", "bash {-c,ls}"],
+    ["bundled flags with a string in zsh", "zsh -fc ls"],
+    ["a login bundle in zsh", "zsh -lc ls"],
+    ["a double dash in zsh", "zsh -- script"],
+    ["words after the string in zsh", "zsh -c ls arg"],
+    ["words after the string in ksh", "ksh -c ls arg"],
+    ["words after the string in fish", "fish -c ls arg"],
+    ["a flag after a file in zsh", "zsh script -x"],
+    ["a login bundle through busybox", "busybox sh -lc ls"],
+    ["a login bundle through busybox with a bash name", "busybox bash -lc ls"],
+    ["a launch in a shell string", "sh -c 'bash --bogus -c ls'"],
+    ["a launch in a substitution", "echo $(bash --bogus -c ls)"],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    ["a letter outside the list", "bash -k -c ls"],
+    ["an unknown long name", "bash --bogus -c ls"],
+  ])("explains the reason for %s", (_form, line) => {
+    const result = parseCommandLine(line);
+
+    expect(!result.ok && result.error).toContain("shell launch options");
+  });
+
+  test("keeps the reason of the interactive check ahead of the option check", () => {
+    const result = parseCommandLine("bash --interactive -c ls");
+
+    expect(!result.ok && result.error).toContain("interactive shell");
+  });
+});
+
+// 日常の読み取りは拒否しない。
+describe("a shell launch of the daily forms is read", () => {
+  test.each([
+    ["a script with an argument", "bash script.sh arg"],
+    ["a script under a variable", 'sh "$HOME/x.sh"'],
+    ["an installer with a long option", "bash -s -- --install-dir"],
+    ["a command string", "bash -c 'echo hi'"],
+    ["a command string after a long flag", "bash --norc -c 'cmd'"],
+    ["a login command string", "bash -lc 'cmd'"],
+    ["a version request", "bash --version"],
+    ["a command string in zsh", "zsh -c 'cmd'"],
+    ["a script in zsh", "zsh script.zsh"],
+    ["a script with arguments in zsh", "zsh script.zsh a b"],
+    [
+      "a download piped into the shell",
+      "curl -fsSL https://example.com/x.sh | bash",
+    ],
+    ["a command string from a variable", 'bash -c "$CMD"'],
+    ["a command string in sh with a posix bundle", "sh -ec 'cmd'"],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+});
+
+// 受け入れる誤検知を固定する。
+describe("accepted false positives of the shell launch stay rejected", () => {
+  test.each([
+    ["a dynamic operand followed by words", 'bash "$SCRIPT" a b'],
+    ["a name outside the list", "bash --no-such-option script.sh"],
+    ["a bundled flag outside bash and sh", "zsh -fc ls"],
+    ["both the command flag and the stdin flag", "bash -c -s ls"],
+    [
+      "a flag that contains the interactive name",
+      "bash --non-interactive -c ls",
+    ],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+});
+
+// 長い引数の並びは、引数の数に比例する作業で終わる。実時間は測らない。
+describe("a shell launch with a long argument list finishes", () => {
+  const COUNT = 100000;
+
+  test("reads many flags before the string", () => {
+    const args = [...Array.from({ length: COUNT }, () => "-e"), "-c", "cmd"];
+
+    expect(launchOf("bash", args)).toBe(`command@${COUNT + 1}`);
+  });
+
+  test("reads many words after the string", () => {
+    const args = ["-c", "cmd", ...Array.from({ length: COUNT }, () => "a")];
+
+    expect(launchOf("bash", args)).toBe("command@1");
+  });
+
+  test("reads many words of a script file", () => {
+    const args = ["script.sh", ...Array.from({ length: COUNT }, () => "-e")];
+
+    expect(launchOf("bash", args)).toBe("file@-");
+  });
+
+  test("rejects a long line of repeated invalid flags", () => {
+    expect(parses(`bash ${"-k ".repeat(COUNT)}-c ls`)).toBe(false);
   });
 });

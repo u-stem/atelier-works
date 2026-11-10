@@ -138,10 +138,11 @@ import {
   baseName,
   literalShellInputs,
   parseCommandLine,
+  readShellLaunch,
   SHELLS,
   type SimpleCommand,
   scanMiseGlobalOptions,
-  shellArguments,
+  shellInvocation,
   stripWrappers,
   type Word,
 } from "./shell-words.ts";
@@ -2014,12 +2015,16 @@ function wmillReadsOnly(positional: readonly string[]): boolean {
 }
 
 /**
- * シェルの語から、`-c`の直後のコマンド文字列を除いた語を返す。
+ * シェルの語から、起動オプションを読んで決まった`-c`のコマンド文字列を除いた語を返す。
  * コマンド文字列は再帰で別に調べるので、位置引数と`$0`、スクリプトのオペランドだけを残す。
+ * 文字列の位置で外し、綴りでは外さない。起動オプションを読み切れないときは、どの語も外さない。
+ * 標準入力の有無は文字列の位置に効かないので、偽を渡す。
  */
-function shellOperands(args: readonly Word[]): readonly Word[] {
-  const at = args.findIndex((word) => /^-[A-Za-z]*c[A-Za-z]*$/.test(word.text));
-  return at === -1 ? args : args.filter((_, index) => index !== at + 1);
+function shellOperands(shell: string, args: readonly Word[]): readonly Word[] {
+  const launch = readShellLaunch(shell, args, false);
+  if (!launch.ok || launch.scriptIndex === null) return args;
+  const at = launch.scriptIndex;
+  return args.filter((_, index) => index !== at);
 }
 
 type ReaderKind = "plain" | "path-only";
@@ -2136,7 +2141,7 @@ function readerRefuses(
  * - 読み取りなどのプログラム(`NON_EXECUTING_PROGRAMS`と、`bun test`などの検査の道具)。名前と実行を表す語が並ぶとき、
  *   実行を委ねるオプション(`git -c`、`rebase`、`gh alias set`、`rg --pre`など)があるとき、変数代入の値に名前があるときは拒否する。
  * - `sed`、`bat`、`ag`。名前がファイルのパスの形の語にあるときだけ通す。
- * - シェル。`-c`の直後の文字列は再帰で別に調べるので、それ以外の語と標準入力の文字列に名前があるときだけ拒否する。
+ * - シェル。起動オプションを読んで決まった`-c`の文字列は再帰で別に調べるので、それ以外の語と標準入力の文字列に名前があるときだけ拒否する。
  * - `wmill`が解除scriptを実行せずに読む・配る副コマンド(`script get`、`job list`、`script push`など)。
  * `wmill jobs push`は名前なしで`script`を返す。
  * 凍結の変数は、`variable add/push`の語と、変数を書くURLの経路に、凍結の変数のパスが当たるときに`variable`を返す。
@@ -2148,9 +2153,12 @@ export function findConsoleReleaseCall(
   const program = baseName(words[0]?.text ?? "");
   const literal = context.inputs() ?? [];
   if (anyWord(context.assignments, mentionsRelease)) return "script";
-  const shellArgs = shellArguments(words);
-  if (shellArgs !== null) {
-    return anyWord(shellOperands(shellArgs), mentionsRelease) ||
+  const invocation = shellInvocation(words);
+  if (invocation !== null) {
+    return anyWord(
+      shellOperands(invocation.shell, invocation.args),
+      mentionsRelease,
+    ) ||
       anyWord(context.upstream, mentionsRelease) ||
       literal.some(mentionsRelease)
       ? "script"
