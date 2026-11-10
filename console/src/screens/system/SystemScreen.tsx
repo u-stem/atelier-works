@@ -431,7 +431,7 @@ export function SystemScreen() {
           mounted={visited.has("config")}
         >
           <Sections>
-            <ConfigSection query={config} />
+            <ConfigSection query={config} visible={tab === "config"} />
           </Sections>
         </TabPanel>
       </div>

@@ -47,6 +47,8 @@ import { safeText } from "./safeText.ts";
 export type WriteNotice = {
   readonly tone: "success" | "info" | "warning";
   readonly message: string;
+  /** 断りの後にすること。閉じるまで残す知らせが、文の後に分けて出す。無いときは持たない。 */
+  readonly nextStep?: string;
 };
 
 /**
@@ -163,6 +165,7 @@ export function describeNoticeResult(result: NoticeResolveResult): WriteNotice {
 export type ReleaseNotice = {
   readonly tone: "success" | "info" | "warning" | "error";
   readonly message: string;
+  readonly nextStep?: string;
 };
 
 const AUDIT_FAILED_NOTE =
@@ -399,10 +402,10 @@ const CONFIG_UPDATE_REFUSALS: Readonly<
     "止める向きか、下げる向きの変更だけできます。変更しませんでした。",
   has_reference: "設定に変数かresourceへの参照があるため、変更しませんでした。",
   conflict:
-    "画面を開いた後に、設定の値が変わっていました。更新して、もう一度確かめてください。",
+    "画面を開いた後に、設定の値が変わっていました。変更しませんでした。",
   actor_unknown: "操作者を確認できないため、変更しませんでした。",
   audit_unavailable:
-    "操作の記録を残せないため、変更しませんでした。削除する要素が100字を超える、または記録に使えない文字を含むときも、この理由で断ります。その場合はCLIで直します。",
+    "操作の記録を残せないため、変更しませんでした。削除する要素が100字を超える、または記録に使えない文字を含むときも、この理由で断ります。",
   already_present: "その要素はすでにあります。変更しませんでした。",
   invalid_element:
     "要素の形式が正しくないため、変更しませんでした。repo_allowlist は https://github.com/owner/repo、dependabot_other_repos は owner/repo、default_reviewers は GitHub のログイン名で、どれも100字までです。",
@@ -412,7 +415,32 @@ const CONFIG_UPDATE_REFUSALS: Readonly<
 };
 
 /**
- * 設定の変更の結果。断りは失敗ではなく、何も変えなかった結果として伝える。
+ * 設定の変更の断りの後にすること。理由ごとに、画面で直せるか、端末で直すかを分けて言う。
+ * 断りの文は何が起きたかだけを言い、操作はここが受け持つ。
+ */
+const CONFIG_UPDATE_NEXT_STEPS: Readonly<
+  Record<ConfigUpdateRefusalReason, string>
+> = {
+  item_not_allowed: "端末から変更します(wmill resource pushなど)。",
+  invalid_value: "画面を更新して、いまの値を確かめてから、もう一度行います。",
+  not_lowering:
+    "画面を更新して、いまの値を確かめます。値の引き上げと有効にする向きは、端末から変更します(wmill resource pushなど)。",
+  has_reference:
+    "端末から変更します(wmill resource pushなど)。変更したら、画面を更新して、値が変わったことを確かめます。",
+  conflict:
+    "画面を更新して、いまの値を確かめます。変えたいときは、もう一度行います。",
+  actor_unknown: "ログインし直して、もう一度行います。",
+  audit_unavailable:
+    "少し待って、もう一度行います。要素が原因のときは、CLIで直します。",
+  already_present: "画面の一覧で、その要素があることを確かめます。",
+  invalid_element: "要素を正しい形に直して、もう一度行います。",
+  would_empty:
+    "置き換えるときは、新しい要素を先に追加してから、古い要素を削除します。",
+  owner_not_listed: "ownersを端末から変更して、もう一度行います。",
+};
+
+/**
+ * 設定の変更の結果。断りは失敗ではなく、何も変えなかった結果として伝え、理由ごとに次の操作を添える。
  * 書いた後に読み直した値が期待と違うときは、変えたと言い切らず、Windmillで確かめるよう伝える。
  * 一覧の項目は、追加か削除かと、前後の件数を伝える。
  */
@@ -420,7 +448,11 @@ export function describeConfigUpdateResult(
   result: ConfigUpdateResult,
 ): WriteNotice {
   if (result.refused) {
-    return { tone: "info", message: CONFIG_UPDATE_REFUSALS[result.reason] };
+    return {
+      tone: "info",
+      message: CONFIG_UPDATE_REFUSALS[result.reason],
+      nextStep: CONFIG_UPDATE_NEXT_STEPS[result.reason],
+    };
   }
   const item = safeText(result.item);
   if (!result.verified) {
@@ -688,6 +720,14 @@ export function describeStopAllReleaseResult(
     },
     result.action_audit,
   );
+}
+
+/**
+ * 閉じるまで残す知らせか。成功は済んだことを知らせるだけなので、時間で消えてよい。
+ * 断り、確かめる警告、失敗は、読み手に操作が要るので、読み終えるまで残す。
+ */
+export function staysUntilClosed(notice: ReleaseNotice): boolean {
+  return notice.tone !== "success";
 }
 
 /** 書き込みの結果を、トーストの文にする。失敗は、失敗の文をそのまま`error`にする。 */

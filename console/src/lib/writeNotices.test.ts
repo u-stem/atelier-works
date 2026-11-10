@@ -18,6 +18,7 @@ import {
   describeScheduleStopResult,
   releaseNotice,
   STALE_LIST_NOTICE,
+  staysUntilClosed,
 } from "./writeNotices.ts";
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -568,6 +569,30 @@ describe("releaseNotice", () => {
   });
 });
 
+describe("releaseNotice for a refused config change", () => {
+  test("carries the next step of the refusal", () => {
+    expect(
+      releaseNotice(
+        { kind: "done", result: { refused: true, reason: "has_reference" } },
+        describeConfigUpdateResult,
+      ).nextStep,
+    ).toContain("端末");
+  });
+});
+
+describe("staysUntilClosed", () => {
+  test.each(["info", "warning", "error"] as const)(
+    "keeps a notice of tone %s until it is closed",
+    (tone) => {
+      expect(staysUntilClosed({ tone, message: "m" })).toBe(true);
+    },
+  );
+
+  test("lets a success go by itself", () => {
+    expect(staysUntilClosed({ tone: "success", message: "m" })).toBe(false);
+  });
+});
+
 describe("describeJobRerunResult", () => {
   const STARTED = {
     found: true,
@@ -701,8 +726,94 @@ describe("describeConfigUpdateResult", () => {
       describeConfigUpdateResult({ refused: true, reason: "audit_unavailable" })
         .message,
     ).toContain(
-      "削除する要素が100字を超える、または記録に使えない文字を含むときも、この理由で断ります。その場合はCLIで直します",
+      "削除する要素が100字を超える、または記録に使えない文字を含むときも、この理由で断ります",
     );
+  });
+
+  test("tells to fix an element that cannot be recorded with the CLI as the next step", () => {
+    expect(
+      describeConfigUpdateResult({ refused: true, reason: "audit_unavailable" })
+        .nextStep,
+    ).toContain("CLIで直します");
+  });
+
+  test("keeps the next step out of the message of the refusal conflict", () => {
+    expect(
+      describeConfigUpdateResult({ refused: true, reason: "conflict" }).message,
+    ).not.toContain("更新して");
+  });
+
+  test.each([
+    "item_not_allowed",
+    "invalid_value",
+    "not_lowering",
+    "has_reference",
+    "conflict",
+    "actor_unknown",
+    "audit_unavailable",
+    "already_present",
+    "invalid_element",
+    "would_empty",
+    "owner_not_listed",
+  ] as const)("gives a next step for the refusal %s", (reason) => {
+    expect(
+      (describeConfigUpdateResult({ refused: true, reason }).nextStep ?? "")
+        .length,
+    ).toBeGreaterThan(0);
+  });
+
+  test("tells to fix a setting that holds a reference from a terminal", () => {
+    expect(
+      describeConfigUpdateResult({ refused: true, reason: "has_reference" })
+        .nextStep,
+    ).toContain("端末");
+  });
+
+  test("tells how to check the setting that holds a reference after the fix", () => {
+    expect(
+      describeConfigUpdateResult({ refused: true, reason: "has_reference" })
+        .nextStep,
+    ).toContain("画面を更新");
+  });
+
+  test("tells to reload the screen and do it again when the value changed under the screen", () => {
+    expect(
+      describeConfigUpdateResult({ refused: true, reason: "conflict" })
+        .nextStep,
+    ).toContain("画面を更新");
+  });
+
+  test("tells to change an item that the Console cannot change from a terminal", () => {
+    expect(
+      describeConfigUpdateResult({ refused: true, reason: "item_not_allowed" })
+        .nextStep,
+    ).toContain("端末");
+  });
+
+  test("gives no next step for a success", () => {
+    expect(
+      describeConfigUpdateResult({
+        refused: false,
+        item: "daily_budget_usd",
+        before: 50,
+        after: 20,
+        verified: true,
+        action_audit: "recorded",
+      }).nextStep,
+    ).toBeUndefined();
+  });
+
+  test("gives no next step for a write that could not be read back", () => {
+    expect(
+      describeConfigUpdateResult({
+        refused: false,
+        item: "daily_budget_usd",
+        before: 50,
+        after: 20,
+        verified: false,
+        action_audit: "recorded",
+      }).nextStep,
+    ).toBeUndefined();
   });
 
   test("describes the shape of an element for each list", () => {

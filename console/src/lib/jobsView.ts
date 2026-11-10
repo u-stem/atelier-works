@@ -12,6 +12,11 @@ import type {
   ScheduleViewData,
 } from "../api/jobsQueries.ts";
 import {
+  DESIGN_GROUP_ID,
+  groupLabelOfId,
+  groupLabelOfKey,
+} from "./configGroups.ts";
+import {
   type ConfigStructure,
   describeStructure,
   unitOfConfigKey,
@@ -455,15 +460,58 @@ export function describeDesignEnabledNote(
 /** 値を出さない設定の印の文言。参照と、伏せた値に使う。 */
 export const CONFIG_REFERENCE_LABEL = "参照(出さない)";
 
-/** キー名の部分一致で絞る。大文字と小文字を区別せず、前後の空白は無視する。値は探さない。 */
+/**
+ * 値の欄に出る文字のうち、探す対象にするもの。値そのものの文字に限る。
+ * 参照と伏せた値は、中身を出さないので探さず、その印の文言(参照(出さない))も探さない。
+ * 真偽はバッジの語(有効、無効)を探し、読み上げにだけ残す書かれた値(true、false)は探さない。
+ * 日時は画面に出す短い表記を探す。表の列の見出しと、空の注記、「未設定」は値でないので探さない。
+ */
+function searchableTexts(item: ConfigItemView): string[] {
+  const value = describeConfigValue(item);
+  switch (value.kind) {
+    case "reference":
+    case "empty":
+      return [];
+    case "scalar":
+    case "datetime":
+    case "number":
+    case "structure":
+      return [value.text];
+    case "boolean":
+      return [value.enabled ? "有効" : "無効"];
+    case "list":
+      return [...value.items];
+    case "table":
+      return value.rows.flatMap((row) =>
+        row.filter((cell): cell is string => cell !== null),
+      );
+    case "entries":
+      return value.entries.flatMap(({ key, value: entry }) => [
+        key,
+        ...(entry.kind === "list" ? entry.items : [entry.text]),
+      ]);
+  }
+}
+
+/**
+ * キー名、グループ名、画面に出ている値の文字のどれかの部分一致で絞る。
+ * グループ名が当たったときは、そのグループの項目をすべて残す。
+ * 大文字と小文字を区別せず、前後の空白は無視する。
+ * 参照と伏せた値の中身では当てない。
+ */
 export function filterConfigItems(
   items: readonly ConfigItemView[],
   query: string,
 ): ConfigItemView[] {
   const needle = query.trim().toLowerCase();
-  return needle === ""
-    ? [...items]
-    : items.filter((item) => item.key.toLowerCase().includes(needle));
+  if (needle === "") return [...items];
+  const hits = (text: string) => text.toLowerCase().includes(needle);
+  return items.filter(
+    (item) =>
+      hits(item.key) ||
+      hits(groupLabelOfKey(item.key)) ||
+      searchableTexts(item).some(hits),
+  );
 }
 
 /** 設計工程の判定の行の名前。表の項目の列に出す文字である。 */
@@ -476,15 +524,17 @@ const DESIGN_STAGE_NAMES: readonly string[] = [
 ];
 
 /**
- * 設計工程の判定の行を、キー名の絞り込みの語で残すか。
- * 語が空のときと、語が行の名前(設計工程(実際の状態)、design)の先頭から打った語のときだけ残す。
- * 大文字と小文字は区別しない。途中の文字だけが当たる語は、他のキーを探しているので消す。
+ * 設計工程の判定の行を、絞り込みの語で残すか。
+ * 語が空のときと、語が行の名前(設計工程(実際の状態)、design)の先頭から打った語のときに残す。
+ * 語が「設計」グループの名前の一部のときも残す。グループの項目が残るので、判定の行だけを消さないためである。
+ * 大文字と小文字は区別しない。行の名前の途中の文字だけが当たる語は、他のキーを探しているので消す。
  */
 export function matchesDesignStageQuery(query: string): boolean {
   const needle = query.trim().toLowerCase();
   return (
     needle === "" ||
-    DESIGN_STAGE_NAMES.some((name) => name.toLowerCase().startsWith(needle))
+    DESIGN_STAGE_NAMES.some((name) => name.toLowerCase().startsWith(needle)) ||
+    (groupLabelOfId(DESIGN_GROUP_ID) ?? "").toLowerCase().includes(needle)
   );
 }
 
