@@ -1015,8 +1015,46 @@ describe("literalShellInputs with a newline in the text", () => {
     expect(shellInputsOf(`cat <<'EOF' | zsh\n${BODY}EOF\n`)).toBeNull();
   });
 
-  test("returns a single line for an unconfirmed shell", () => {
-    expect(shellInputsOf("echo 'cat <<X' | zsh")).toEqual(["cat <<X"]);
+  test("returns null for a here-document operator on one line read by an unconfirmed shell", () => {
+    expect(shellInputsOf("echo 'cat <<X' | zsh")).toBeNull();
+  });
+
+  test("returns null for a here-document operator in a here-string read by an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<< 'cat <<X'")).toBeNull();
+  });
+
+  test("returns the line with a here-document operator for a confirmed shell", () => {
+    expect(shellInputsOf("bash <<< 'cat <<X'")).toEqual(["cat <<X"]);
+  });
+
+  test("returns the line with a here-document operator when the unconfirmed shell reads a command string", () => {
+    const result = parseCommandLine("zsh -c 'echo hi' <<< 'cat <<X'");
+    if (!result.ok) throw new Error(result.error);
+    const launch = result.commands[0];
+    if (launch === undefined) throw new Error("no command");
+    expect(literalShellInputs(launch)).toEqual(["cat <<X"]);
+  });
+
+  test("returns the line with a here-document operator when the unconfirmed shell reads a file", () => {
+    expect(shellInputsOf("zsh script.sh <<< 'cat <<X'")).toEqual(["cat <<X"]);
+  });
+
+  test("returns null for two single-line texts read by an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<< 'echo a' <<< 'echo b'")).toBeNull();
+  });
+
+  test("returns the two single-line texts for a confirmed shell", () => {
+    expect(shellInputsOf("bash <<< 'echo a' <<< 'echo b'")).toEqual([
+      "echo a",
+      "echo b",
+    ]);
+  });
+
+  test("returns the two single-line texts when the unconfirmed shell reads a file", () => {
+    expect(shellInputsOf("zsh script.sh <<< 'echo a' <<< 'echo b'")).toEqual([
+      "echo a",
+      "echo b",
+    ]);
   });
 
   test("returns a single-line here-string for an unconfirmed shell", () => {
@@ -1025,6 +1063,16 @@ describe("literalShellInputs with a newline in the text", () => {
 
   test("returns a body with only a trailing newline for an unconfirmed shell", () => {
     expect(shellInputsOf("zsh <<'EOF'\necho hi\nEOF\n")).toEqual(["echo hi\n"]);
+  });
+
+  test("returns a body with several trailing newlines for an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<'EOF'\necho hi\n\n\nEOF\n")).toEqual([
+      "echo hi\n\n\n",
+    ]);
+  });
+
+  test("returns null for a body that starts with a newline for an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<'EOF'\n\necho hi\nEOF\n")).toBeNull();
   });
 
   test("returns the text when the unconfirmed shell reads a command string", () => {

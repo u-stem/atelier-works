@@ -4907,6 +4907,10 @@ describeForCallers(
       ["a launch behind a wrapper", "env zsh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
       ["a launch by an absolute path", "/bin/zsh <<'X'\necho 'a\nb'\nX\n"],
       ["a launch behind busybox", "busybox zsh <<'X'\necho 'a\nb'\nX\n"],
+      ["a here-document operator on one line", "zsh <<< 'echo \"<<\"'"],
+      ["a here-document operator in an echo", "echo 'echo \"<<\"' | zsh"],
+      ["two single-line texts", "zsh <<< 'echo a' <<< 'echo b'"],
+      ["a body that starts with a newline", "zsh <<'X'\n\necho hi\nX\n"],
     ])("denies %s for an unconfirmed shell", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
@@ -4930,16 +4934,30 @@ describeForCallers(
     });
 
     test.each([
-      ["a here-string", "zsh <<< 'cat <<< x'"],
-      ["an echo through a pipe", "echo 'cat <<< x' | zsh"],
+      ["a here-string", "zsh <<< 'echo hi'"],
+      ["an echo through a pipe", "echo 'echo hi' | zsh"],
       ["a body with only a trailing newline", "zsh <<'X'\necho hi\nX\n"],
+      ["a body with several trailing newlines", "zsh <<'X'\necho hi\n\n\nX\n"],
     ])("allows a single line for an unconfirmed shell (%s)", async (_k, c) => {
+      expect(await decide(c, { subagent })).toBe("allow");
+    });
+
+    test.each([
+      ["a here-document operator", "bash <<< 'echo \"<<\"'"],
+      ["two single-line texts", "bash <<< 'echo a' <<< 'echo b'"],
+    ])("allows the same line for a confirmed shell (%s)", async (_k, c) => {
       expect(await decide(c, { subagent })).toBe("allow");
     });
 
     test.each([
       ["a command string", "zsh -c 'echo hi' <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
       ["a file", "zsh script.sh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      [
+        "a command string with an operator",
+        "zsh -c 'echo hi' <<< 'echo \"<<\"'",
+      ],
+      ["a file with an operator", "zsh script.sh <<< 'echo \"<<\"'"],
+      ["a file with two texts", "zsh script.sh <<< 'echo a' <<< 'echo b'"],
     ])(
       "allows a here-document the unconfirmed shell does not read as code (%s)",
       async (_kind, command) => {
