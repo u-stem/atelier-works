@@ -277,7 +277,7 @@ function launchFromOperands(
 
 /**
  * `-`か`+`で始まる語1つを、短いオプションのまとまりとして読む。
- * 読めたら、`c`と`s`の印と、値を取る語の数(0か1)を返す。読めなければ理由を返す。
+ * 読めたら、`c`と`s`の印と、次の語を値に取るかを返す。読めなければ理由を返す。
  */
 function readOptionBundle(
   text: string,
@@ -306,7 +306,7 @@ function readOptionBundle(
     if (letters.has(letter)) {
       if (letter === "c") command = true;
       if (letter === "s") stdin = true;
-    } else if (letter === "o" || letter === "O") {
+    } else if (letter === "o" || (letter === "O" && allowLongNames)) {
       // 値を取る字は、まとまりの最後の1つだけ読む。値は次の語である。
       if (at !== text.length - 1)
         return "a value option in the middle of a bundle";
@@ -461,6 +461,7 @@ export function readShellLaunch(
 /**
  * コマンドが標準入力を受けるなら真。
  * ヒアストリング、ヒアドキュメント、パイプ、`<`・`<>`・`<&`のリダイレクトがそれに当たる。
+ * 直前の数字は区別しないので、標準入力以外への入力(`3<file`)も真になる。拒否側に倒れる。
  */
 export function readsStandardInput(command: SimpleCommand): boolean {
   return (

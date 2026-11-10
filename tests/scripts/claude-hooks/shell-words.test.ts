@@ -2005,6 +2005,12 @@ describe("a shell launch outside the closed set of options is unreadable", () =>
 
   test.each<[string, string, readonly string[]]>([
     ["a long flag in dash", "dash", ["--login", "-c", "cmd"]],
+    ["an upper-case value option in sh", "sh", ["-O", "extglob", "-c", "cmd"]],
+    [
+      "an upper-case value option in dash",
+      "dash",
+      ["-O", "extglob", "-c", "cmd"],
+    ],
     ["a long flag in dash without the flag", "dash", ["--norc"]],
     ["a letter that only bash reads, in sh", "sh", ["-l", "-c", "cmd"]],
     [
