@@ -1328,7 +1328,7 @@ describe("bash-guard parses common shell syntax", () => {
     `echo ${OPEN}#arr[@]}`,
     "for ((i=0;i<3;i++)); do echo $i; done",
     "diff <(git show a:f) <(git show b:f)",
-    "echo $(( (1+2) * 3 ))",
+    "echo $(( (1+2) + 3 ))",
     "f() { git status; }; f",
   ])("%s", async (command) => {
     expect(await decide(command)).toBe("allow");
@@ -4522,6 +4522,10 @@ describeForCallers(
       ["a delimiter with an expansion", "cat <<$x\nx\n$x\n"],
       ["a delimiter that is partly quoted", "cat <<E'O'F\nx\nEOF\n"],
       ["a delimiter with a space in quotes", "cat <<'a b'\nx\na b\n"],
+      ["a carriage return after a bare delimiter", "cat <<EOF\r\nx\nEOF\n"],
+      ["a Unicode space after a bare delimiter", "cat <<EOF \nx\nEOF\n"],
+      ["a carriage return after a quoted delimiter", "cat <<'EOF'\r\nx\nEOF\n"],
+      ["a Unicode space after a quoted delimiter", 'cat <<"EOF" \nx\nEOF\n'],
     ])("denies %s", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
@@ -4534,9 +4538,8 @@ describeForCallers(
   (subagent) => {
     test.each([
       "echo $((a+b))",
-      "echo $(( x * 2 ))",
-      "echo $(( (1+2) * 3 ))",
-      "echo $(( 2 ** 3 ))",
+      "echo $(( x + 2 ))",
+      "echo $(( (1+2) + 3 ))",
       "echo $((n*(n+1)/2))",
       "((i++))",
       "for ((i=0; i<3; i++)); do echo $i; done",
@@ -4569,6 +4572,9 @@ describeForCallers(
       `echo "${OPEN}x:-"$y"}"`,
       "echo $(( 1 << 2 ))",
       "true; ((a * b))",
+      "echo $(( x * 2 ))",
+      "echo $(( (1+2) * 3 ))",
+      "echo $(( 2 ** 3 ))",
       "echo $((x) | (y))",
       "echo $((a) + (b))",
       "echo $(( x * 2 )) ; bun *",
@@ -4607,6 +4613,12 @@ describeForCallers(
       "echo ls | zsh -i",
       "env zsh -ic ls",
       "sh -c 'zsh -ic ls'",
+      "bash -1i -c ls",
+      "bash -1i <<< 'ls'",
+      "echo ls | bash -1i",
+      "bash -1o interactive -c ls",
+      "ksh -2i",
+      "bash --non-interactive -c ls",
     ])("denies %s", async (command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
@@ -4632,6 +4644,9 @@ describeForCallers(
       "zsh <<< 'histchars=ab'",
       "zsh <<'EOF'\nhistchars=ab\nEOF\n",
       "echo 'histchars=ab' | zsh",
+      "typeset hist'chars'=ab",
+      'env hist"chars"=ab zsh -c ls',
+      "typeset HIST'CHARS'=ab",
     ])("denies %s", async (command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });

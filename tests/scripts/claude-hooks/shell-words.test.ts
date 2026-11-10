@@ -1248,6 +1248,7 @@ describe("arithmetic regions keep the redirect and word rules", () => {
 /** `${…}`の中の、読める形。 */
 const PARAMETER_ACCEPTED: readonly (readonly [string, string])[] = [
   ["a plain name", `${OPEN}x}`],
+  ["the number of arguments", `${OPEN}#}`],
   ["a default", `${OPEN}x:-default}`],
   ["a default with a variable", `${OPEN}x:-$y}`],
   ["a default with a command substitution", `${OPEN}x:-$(cmd)}`],
@@ -1277,6 +1278,7 @@ const PARAMETER_ACCEPTED: readonly (readonly [string, string])[] = [
 /** `${…}`の中の、拒否する形。 */
 const PARAMETER_REJECTED: readonly (readonly [string, string])[] = [
   ["an indirection", `${OPEN}!x}`],
+  ["a length of the number of arguments", `${OPEN}##}`],
   ["a transformation", `${OPEN}x@Q}`],
   ["a flag group", `${OPEN}(f)x}`],
   ["a tilde start", `${OPEN}~x}`],
@@ -1452,6 +1454,10 @@ describe("here-documents and the end of input", () => {
     ["a backquote word", "cat <<`a`\nx\n`a`\n"],
     ["a non-ASCII word", "cat <<あ\nx\nあ\n"],
     ["an empty quoted word", "cat <<''\nx\n\n"],
+    ["a carriage return after a bare word", "cat <<EOF\r\nx\nEOF\n"],
+    ["a Unicode space after a bare word", "cat <<EOF \nx\nEOF\n"],
+    ["a carriage return after a quoted word", "cat <<'EOF'\r\nx\nEOF\n"],
+    ["a Unicode space after a quoted word", 'cat <<"EOF" \nx\nEOF\n'],
   ])("rejects a delimiter that is %s", (_form, line) => {
     expect(parses(line)).toBe(false);
   });
@@ -1482,6 +1488,15 @@ describe("interactive shells", () => {
     ["a launch in a substitution", "echo $(zsh -ic ls)"],
     ["a launch through busybox", "busybox sh -ic ls"],
     ["a launch through another shell", "ksh -i"],
+    ["a bundle with a digit and a command string", "bash -1i -c ls"],
+    ["a bundle with a digit and a here-string", "bash -1i <<< 'ls'"],
+    ["a bundle with a digit and a pipe input", "echo ls | bash -1i"],
+    ["a bundle with a digit and an option value", "bash -1o interactive -c ls"],
+    ["a bundle with a digit in another shell", "ksh -2i"],
+    [
+      "a script option that contains the flag name",
+      "bash --non-interactive -c ls",
+    ],
   ])("rejects %s", (_form, line) => {
     expect(parses(line)).toBe(false);
   });
@@ -1507,6 +1522,9 @@ describe("forms that change the lexical rules at run time", () => {
     ["a name outside a shell string", "echo histchars"],
     ["a name in a nested shell string", `sh -c "zsh -c 'HistChars=ab'"`],
     ["a name in a here-string", "zsh <<< 'histchars=ab'"],
+    ["a quote-split name in a builtin argument", "typeset hist'chars'=ab"],
+    ["a quote-split name in an env argument", 'env hist"chars"=ab zsh -c ls'],
+    ["a quote-split upper-case name", "typeset HIST'CHARS'=ab"],
     ["a name in a here-document", "zsh <<'EOF'\nhistchars=ab\nEOF\n"],
   ])("rejects %s", (_form, line) => {
     expect(parses(line)).toBe(false);
@@ -1570,34 +1588,23 @@ describe("a substitution region that a shell may read as a substitution", () => 
   });
 });
 
-describe("a lone asterisk in a substitution region", () => {
-  test("is not a glob directly in the region", () => {
-    expect(globFlagsOf("echo $(( x * 2 ))", "*")).toEqual([false]);
+describe("a lone asterisk in a region is a glob", () => {
+  test("directly in a substitution region", () => {
+    expect(globFlagsOf("echo $(( x * 2 ))", "*")).toEqual([true]);
   });
 
-  test("is not a glob for a double asterisk", () => {
-    expect(globFlagsOf("echo $(( 2 ** 3 ))", "**")).toEqual([false]);
+  test("for a double asterisk in a substitution region", () => {
+    expect(globFlagsOf("echo $(( 2 ** 3 ))", "**")).toEqual([true]);
   });
 
-  test("stays a glob inside a word of the region", () => {
+  test("inside a word of a substitution region", () => {
     expect(
       globFlagsOf("echo $((cat scripts/stop_*))", "scripts/stop_*"),
     ).toEqual([true]);
   });
 
-  test("stays a glob inside a substitution opened in the region", () => {
-    expect(globFlagsOf("echo $(( $(echo *) ))", "*")).toEqual([true]);
-  });
-
-  test("stays a glob in a command-position region", () => {
+  test("in a command-position region", () => {
     expect(globFlagsOf("((a * b))", "*")).toEqual([true]);
-  });
-
-  test("stays a glob outside the region", () => {
-    expect(globFlagsOf("echo $(( x * 2 )) ; bun *", "*")).toEqual([
-      false,
-      true,
-    ]);
   });
 });
 
