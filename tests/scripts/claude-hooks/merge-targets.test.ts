@@ -210,7 +210,7 @@ describe("gh pr merge behind a wrapper or a nested shell", () => {
   });
 });
 
-// 受入条件1: シェルの起動オプションを読んだうえで、-cの文字列と標準入力の中のマージ操作を拾う。
+// シェルの起動オプションを読んだうえで、-cの文字列と標準入力の中のマージ操作を拾う。
 describe("gh pr merge behind the launch options of a shell", () => {
   test.each([
     ["a plus flag", "bash +c 'gh pr merge 1'"],

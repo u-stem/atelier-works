@@ -1772,7 +1772,7 @@ function launchOf(
   return `${launch.source}@${launch.scriptIndex ?? "-"}`;
 }
 
-// 受入条件1: -cの文字列を、すべてのオプションの並びで読む。
+// -cの文字列を、すべてのオプションの並びで読む。
 describe("a shell launch reads the command string through every option sequence", () => {
   test.each<[string, string, readonly string[], string]>([
     ["a flag", "bash", ["-c", "cmd"], "command@1"],
@@ -1888,7 +1888,7 @@ describe("a shell launch reads the command string through every option sequence"
   });
 });
 
-// 受入条件1: 出どころの優先。
+// 出どころの優先。
 describe("a shell launch decides where the code comes from", () => {
   test.each<[string, readonly (string | Word)[], string]>([
     ["no arguments", [], "stdin@-"],
@@ -1926,7 +1926,7 @@ describe("a shell launch decides where the code comes from", () => {
   });
 });
 
-// 受入条件1: cとsの併用は、dash・ash系が文字列の後に標準入力も読むので、読み切れない起動として扱う。
+// cとsの併用は、dash・ash系が文字列の後に標準入力も読むので、読み切れない起動として扱う。
 describe("a shell launch with both the command flag and the stdin flag is unreadable", () => {
   test.each<[string, string, readonly string[]]>([
     ["both in one bundle", "bash", ["-cs", "cmd"]],
@@ -1941,7 +1941,7 @@ describe("a shell launch with both the command flag and the stdin flag is unread
   });
 });
 
-// 受入条件3: 読めない起動は拒否する。
+// 読めない起動は拒否する。
 describe("a shell launch outside the closed set of options is unreadable", () => {
   test.each<[string, readonly (string | Word)[]]>([
     ["a long name outside the list", ["--bogus", "-c", "cmd"]],
@@ -1971,6 +1971,18 @@ describe("a shell launch outside the closed set of options is unreadable", () =>
     ["the keyword value", ["-o", "keyword", "-c", "cmd"]],
     ["a value that starts with a dash", ["-o", "-c", "cmd"]],
     ["a value that starts with a plus", ["-o", "+e", "-c", "cmd"]],
+    [
+      "a value with a leading dash that names a listed option",
+      ["-o", "-noglob", "-c", "cmd"],
+    ],
+    [
+      "a value with a leading plus that names a listed option",
+      ["-o", "+noglob", "-c", "cmd"],
+    ],
+    ["an rcfile value with a brace", ["--rcfile", "{a,b}", "-c", "cmd"]],
+    ["an init-file value with a brace", ["--init-file", "{a,b}", "-c", "cmd"]],
+    ["the history expansion letter", ["-H", "-c", "cmd"]],
+    ["the history expansion letter in a bundle", ["-Hc", "cmd"]],
     ["a dynamic value", ["-o", dynamicWord("$X"), "-c", "cmd"]],
     ["an rcfile option without a value", ["--rcfile"]],
     [
@@ -2000,12 +2012,14 @@ describe("a shell launch outside the closed set of options is unreadable", () =>
       ["-lc", "cmd"],
     ],
     ["a letter that only bash reads, in dash", "dash", ["-p", "-c", "cmd"]],
+    ["the history expansion letter in sh", "sh", ["-H", "-c", "cmd"]],
+    ["the history expansion letter in dash", "dash", ["-Hc", "cmd"]],
   ])("rejects %s", (_form, shell, args) => {
     expect(launchOf(shell, args)).toBe("unreadable");
   });
 });
 
-// 受入条件3・4: 実行時に決まる語と、グロブ・ブレース・NULを含む語。
+// 実行時に決まる語と、グロブ・ブレース・NULを含む語。
 describe("a shell launch with a word that is decided at run time", () => {
   test.each<[string, readonly (string | Word)[], boolean, string]>([
     ["a lone operand without input", [dynamicWord("$X")], false, "file@-"],
@@ -2064,7 +2078,7 @@ describe("a shell launch with a word that is decided at run time", () => {
   });
 });
 
-// 受入条件3・5: bash・sh・dash以外は、狭い3つの形だけ読む。
+// bash・sh・dash以外は、狭い3つの形だけ読む。
 describe("a shell other than bash, sh, and dash reads only three forms", () => {
   const OTHERS = [
     "zsh",
@@ -2139,7 +2153,7 @@ function lastCommand(line: string) {
   return command;
 }
 
-// 受入条件2: 標準入力の有無は、1つの関数が求める。
+// 標準入力の有無は、1つの関数が求める。
 describe("readsStandardInput", () => {
   test.each([
     ["a here-string", "bash <<< 'ls'"],
@@ -2164,7 +2178,7 @@ describe("readsStandardInput", () => {
   });
 });
 
-// 受入条件2: シェルの起動語は、busyboxの下をbusyboxとして渡す。
+// シェルの起動語は、busyboxの下をbusyboxとして渡す。
 describe("shellInvocation", () => {
   test.each([
     ["a bare name", ["bash", "-c", "x"], "bash", 2],
@@ -2186,7 +2200,7 @@ describe("shellInvocation", () => {
   });
 });
 
-// 受入条件1: 入れ子の文字列は、起動オプションを読んだ位置の語から取り出す。
+// 入れ子の文字列は、起動オプションを読んだ位置の語から取り出す。
 describe("a shell launch hands the command string to the parser", () => {
   test.each([
     ["a plus flag", "bash +c 'echo marker'"],
@@ -2217,7 +2231,7 @@ describe("a shell launch hands the command string to the parser", () => {
   });
 });
 
-// 受入条件3: 読めない起動は構文エラーとして拒否する。
+// 読めない起動は構文エラーとして拒否する。
 describe("a shell launch that cannot be read is a syntax error", () => {
   test.each([
     ["a long name outside the list", "bash --bogus -c ls"],
@@ -2238,6 +2252,13 @@ describe("a shell launch that cannot be read is a syntax error", () => {
     ["a dynamic option value", 'bash -o "$X" -c ls'],
     ["a glob option word", "bash -* -c ls"],
     ["a brace option word", "bash -{c,e} ls"],
+    ["an rcfile value with a brace", "bash --rcfile {a,b} -c ls"],
+    ["an init-file value with a brace", "bash --init-file {a,b} -c ls"],
+    [
+      "a value with a leading dash that names a listed option",
+      "bash -o -noglob -c ls",
+    ],
+    ["the history expansion letter", "bash -H -c ls"],
     ["an rcfile option without a value", "bash --rcfile"],
     ["a long flag in dash", "dash --login -c ls"],
     ["both the command flag and the stdin flag", "bash -cs ls"],
@@ -2280,7 +2301,7 @@ describe("a shell launch that cannot be read is a syntax error", () => {
   });
 });
 
-// 受入条件5: 日常の読み取りは拒否しない。
+// 日常の読み取りは拒否しない。
 describe("a shell launch of the daily forms is read", () => {
   test.each([
     ["a script with an argument", "bash script.sh arg"],
@@ -2304,7 +2325,7 @@ describe("a shell launch of the daily forms is read", () => {
   });
 });
 
-// 受入条件3: 受け入れる誤検知を固定する。
+// 受け入れる誤検知を固定する。
 describe("accepted false positives of the shell launch stay rejected", () => {
   test.each([
     ["a dynamic operand followed by words", 'bash "$SCRIPT" a b'],
@@ -2320,7 +2341,7 @@ describe("accepted false positives of the shell launch stay rejected", () => {
   });
 });
 
-// 受入条件6: 長い引数の並びは、引数の数に比例する作業で終わる。実時間は測らない。
+// 長い引数の並びは、引数の数に比例する作業で終わる。実時間は測らない。
 describe("a shell launch with a long argument list finishes", () => {
   const COUNT = 100000;
 

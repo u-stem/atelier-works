@@ -4812,7 +4812,7 @@ const LAUNCH_SEQUENCES: readonly (readonly [
   ["a launch behind env", (body) => `env bash -c -e '${body}'`],
 ];
 
-// 受入条件1: -cの文字列は、起動オプションの並びを問わず取り出して、全主体で判定する。
+// -cの文字列は、起動オプションの並びを問わず取り出して、全主体で判定する。
 describeForCallers(
   "bash-guard denies an operation in the command string behind any option sequence",
   (subagent) => {
@@ -4832,7 +4832,7 @@ describeForCallers(
   },
 );
 
-// 受入条件3: 読み切れない起動は、全主体で拒否する。
+// 読み切れない起動は、全主体で拒否する。
 describeForCallers(
   "bash-guard denies a shell launch that the closed set of options does not read",
   (subagent) => {
@@ -4855,6 +4855,13 @@ describeForCallers(
       ["a dynamic option value", 'bash -o "$X" -c ls'],
       ["a glob option word", "bash -* -c ls"],
       ["a brace option word", "bash -{c,e} ls"],
+      ["an rcfile value with a brace", "bash --rcfile {a,b} -c ls"],
+      ["an init-file value with a brace", "bash --init-file {a,b} -c ls"],
+      [
+        "a value with a leading dash that names a listed option",
+        "bash -o -noglob -c ls",
+      ],
+      ["the history expansion letter", "bash -H -c ls"],
       ["an rcfile option without a value", "bash --rcfile"],
       ["a long flag in dash", "dash --login -c ls"],
       ["the command flag and the stdin flag in one bundle", "bash -cs ls"],
@@ -4879,7 +4886,7 @@ describeForCallers(
   },
 );
 
-// 受入条件1: 出どころの優先。標準入力は、-sと--の後ろに引数が来ても、起動オプションを読んだうえで判定する。
+// 出どころの優先。標準入力は、-sと--の後ろに引数が来ても、起動オプションを読んだうえで判定する。
 describeForCallers(
   "bash-guard judges the stdin of a shell after reading its options",
   (subagent) => {
@@ -4945,7 +4952,7 @@ describeForCallers(
   },
 );
 
-// 受入条件1: hold-guardの名前の照合は、-cの文字列の位置の語だけを外す。綴りの似た語は外さない。
+// hold-guardの名前の照合は、-cの文字列の位置の語だけを外す。綴りの似た語は外さない。
 describeForCallers(
   "bash-guard matches a Console release name by the position of the command string",
   (subagent) => {
@@ -4998,7 +5005,7 @@ describeForCallers(
   },
 );
 
-// 受入条件5: 日常の読み取りは拒否しない。
+// 日常の読み取りは拒否しない。
 describeForCallers("bash-guard allows the daily shell launches", (subagent) => {
   test.each([
     "bash script.sh arg",
@@ -5019,7 +5026,7 @@ describeForCallers("bash-guard allows the daily shell launches", (subagent) => {
   });
 });
 
-// 受入条件3: 受け入れる誤検知は、分類として拒否する。
+// 受け入れる誤検知は、分類として拒否する。
 describeForCallers(
   "bash-guard rejects the shell launches that the closed set does not read",
   (subagent) => {
@@ -5039,7 +5046,7 @@ describeForCallers(
   },
 );
 
-// 受入条件1・3: mise execとdocker execは、起動オプションを読み切れない起動を、コードを渡す形として扱う。
+// mise execとdocker execは、起動オプションを読み切れない起動を、コードを渡す形として扱う。
 describeForCallers(
   "bash-guard denies a shell that mise exec or docker exec gives code in a form it cannot read",
   (subagent) => {
