@@ -353,12 +353,12 @@ function substitutionMarker(inner: string): string {
  * 対話モードを指定する語なら真。
  * `-`か`+`で始まる語を、小文字にして`_`を除いたうえで`interactive`を含むか見る。
  * `-o interactive`のように、値を別の語に分ける形は、呼び出し側が値の語を渡す。
- * 短いまとまり(`-ic`、`+i`)は、`i`を含めば真である。
+ * `--`で始まらず`-`か`+`で始まる語は、字の種類を問わず、`i`を含めば真である。
  */
 function isInteractiveFlag(text: string): boolean {
-  if (!text.startsWith("-") && !text.startsWith("+")) return false;
+  if (!/^[-+]/.test(text)) return false;
   if (normalizeOptionName(text).includes("interactive")) return true;
-  return /^[-+][A-Za-z]+$/.test(text) && text.includes("i");
+  return !text.startsWith("--") && text.includes("i");
 }
 
 function normalizeOptionName(text: string): string {
@@ -374,7 +374,9 @@ function launchesInteractiveShell(args: readonly Word[]): boolean {
   return args.some((word, index) => {
     if (isInteractiveFlag(word.text)) return true;
     // `-o`と`-O`は、値を次の語に取る。まとまりに含まれる`o`も同じである。
-    if (!/^[-+][A-Za-z]*[oO][A-Za-z]*$/.test(word.text)) return false;
+    if (!/^[-+][^-].*$/s.test(word.text) || !/[oO]/.test(word.text)) {
+      return false;
+    }
     const value = args[index + 1]?.text ?? "";
     return normalizeOptionName(value).includes("interactive");
   });
@@ -1258,10 +1260,17 @@ class Parser {
       // 今のブランチ名になる置換だけの語は、値が決まっているものとして扱う。
       dynamic:
         this.dynamic && !CURRENT_BRANCH_SUBSTITUTIONS.includes(this.text),
-      // `$((`の領域の直下の`*`だけの語は、算術の乗算である。この領域はどのシェルでも算術として読まれ、展開されない。
-      glob: this.glob && !(this.context.regionRoot && /^\*+$/.test(this.text)),
+      glob: this.glob,
       ...(this.variantText === null ? {} : { variants: [this.variantText] }),
     };
+    // 引用符で名前を分けた綴りも、語として確定した後の綴りで照合する。
+    for (const spelling of [word.text, ...(word.variants ?? [])]) {
+      if (LEXICAL_RULE_VARIABLE.test(spelling)) {
+        throw new ShellSyntaxError(
+          "a variable that changes the lexical rules at run time",
+        );
+      }
+    }
     if (this.hereStringNextWord) {
       this.hereStringNextWord = false;
       this.inputs.push(word);
@@ -1402,7 +1411,11 @@ class Parser {
         "a here-document delimiter has a character outside the closed set",
       );
     // 区切り語の後ろは、語の終わりでなければならない。
-    if (this.position < this.source.length && !/[\s;&|<>()]/.test(this.peek(0)))
+    // 字句解析の語の区切り(空白、タブ、改行)に合わせる。CRやUnicodeの空白は、シェルによって語の区切りかが違う。
+    if (
+      this.position < this.source.length &&
+      !/[ \t\n;&|<>()]/.test(this.peek(0))
+    )
       throw new ShellSyntaxError(
         "a here-document delimiter has a character outside the closed set",
       );
