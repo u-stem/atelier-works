@@ -1498,6 +1498,10 @@ describe("a newline in a process substitution while a here-document is pending",
       "a subshell closed before the here-document is placed",
       "(echo a); cat <<EOF\nx\nEOF\n",
     ],
+    [
+      "a deeper process substitution closed on the line of an outer here-document",
+      "cat <<EOF <(echo a)\nx\nEOF\n",
+    ],
   ])("accepts %s", (_form, line) => {
     expect(parses(line)).toBe(true);
   });

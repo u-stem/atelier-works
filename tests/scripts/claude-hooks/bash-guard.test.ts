@@ -4754,6 +4754,10 @@ describeForCallers(
         "(echo a); cat <<EOF\nx\nEOF\n",
       ],
       [
+        "a deeper process substitution closed on the line of an outer here-document",
+        "cat <<EOF <(echo a)\nx\nEOF\n",
+      ],
+      [
         "a commit message here-document",
         "git commit -m \"$(cat <<'EOF'\nfix: a\n\nbody\nEOF\n)\"",
       ],
