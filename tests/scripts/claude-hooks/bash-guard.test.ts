@@ -4716,6 +4716,53 @@ describeForCallers(
   },
 );
 
+// 保留中のヒアドキュメントを登録した括弧は、保留中に閉じられない。閉じて開き直すと、深さが戻り、次の行の扱いが決まらなくなる。
+describeForCallers(
+  "bash-guard denies a parenthesis closed while a here-document is pending",
+  (subagent) => {
+    test.each([
+      ["an input substitution", "cat <(cat <<EOF)\nx\nEOF\n"],
+      [
+        "an input substitution with a quoted word",
+        "cat <(cat <<'EOF')\nx\nEOF\n",
+      ],
+      ["an output substitution", "cat >(cat <<EOF)\nx\nEOF\n"],
+      [
+        "an output substitution with a quoted word",
+        "cat >(cat <<'EOF')\nx\nEOF\n",
+      ],
+      ["a subshell", "(cat <<EOF)\nx\nEOF\n"],
+      [
+        "a process substitution reopened at the same depth",
+        "cat <(cat <<EOF) <(echo a\nx\nEOF\n)",
+      ],
+      [
+        "a nested subshell reopened at the same depth",
+        "( (cat <<EOF) ; (echo a\nx\nEOF\n) )",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.each([
+      [
+        "two here-documents placed inside process substitutions",
+        "diff <(cat <<EOF\na\nb\nEOF\n) <(cat <<EOF\na\nEOF\n)",
+      ],
+      [
+        "a subshell closed before the here-document is placed",
+        "(echo a); cat <<EOF\nx\nEOF\n",
+      ],
+      [
+        "a commit message here-document",
+        "git commit -m \"$(cat <<'EOF'\nfix: a\n\nbody\nEOF\n)\"",
+      ],
+    ])("allows %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
 // 長い入力は、拒否として終わる。入力の大きさに比例する作業で足りるので、実時間は測らない。
 describeForCallers(
   "bash-guard finishes long nested input with a denial",

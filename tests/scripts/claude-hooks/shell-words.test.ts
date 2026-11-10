@@ -1491,11 +1491,41 @@ describe("a newline in a process substitution while a here-document is pending",
     ],
     ["a here-document placed inside a subshell", "(cat <<'EOF'\nx\ny\nEOF\n)"],
     [
-      "a here-document closed by a subshell before the newline",
-      "(cat <<EOF)\nx\nEOF\n",
+      "two here-documents placed inside process substitutions",
+      "diff <(cat <<EOF\na\nb\nEOF\n) <(cat <<EOF\na\nEOF\n)",
+    ],
+    [
+      "a subshell closed before the here-document is placed",
+      "(echo a); cat <<EOF\nx\nEOF\n",
     ],
   ])("accepts %s", (_form, line) => {
     expect(parses(line)).toBe(true);
+  });
+});
+
+describe("a parenthesis closed while a here-document is pending", () => {
+  test.each([
+    ["an input substitution with a bare word", "cat <(cat <<EOF)\nx\nEOF\n"],
+    [
+      "an input substitution with a quoted word",
+      "cat <(cat <<'EOF')\nx\nEOF\n",
+    ],
+    ["an output substitution with a bare word", "cat >(cat <<EOF)\nx\nEOF\n"],
+    [
+      "an output substitution with a quoted word",
+      "cat >(cat <<'EOF')\nx\nEOF\n",
+    ],
+    ["a subshell", "(cat <<EOF)\nx\nEOF\n"],
+    [
+      "a process substitution reopened at the same depth",
+      "cat <(cat <<EOF) <(echo a\nx\nEOF\n)",
+    ],
+    [
+      "a nested subshell reopened at the same depth",
+      "( (cat <<EOF) ; (echo a\nx\nEOF\n) )",
+    ],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
   });
 });
 
