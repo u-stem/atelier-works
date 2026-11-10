@@ -1278,6 +1278,8 @@ const PARAMETER_ACCEPTED: readonly (readonly [string, string])[] = [
 /** `${…}`の中の、拒否する形。 */
 const PARAMETER_REJECTED: readonly (readonly [string, string])[] = [
   ["an indirection", `${OPEN}!x}`],
+  ["a brace in the body", `${OPEN}x:-{a}}`],
+  ["an escaped brace in the body", `${OPEN}x:-\\{a}`],
   ["a length of the number of arguments", `${OPEN}##}`],
   ["a transformation", `${OPEN}x@Q}`],
   ["a flag group", `${OPEN}(f)x}`],
@@ -1460,6 +1462,40 @@ describe("here-documents and the end of input", () => {
     ["a Unicode space after a quoted word", 'cat <<"EOF" \nx\nEOF\n'],
   ])("rejects a delimiter that is %s", (_form, line) => {
     expect(parses(line)).toBe(false);
+  });
+});
+
+describe("a newline in a process substitution while a here-document is pending", () => {
+  test.each([
+    ["an input substitution with a bare word", "cat <<EOF <(echo a\nx\nEOF\n)"],
+    [
+      "an input substitution with a quoted word",
+      "cat <<'EOF' <(echo a\nx\nEOF\n)",
+    ],
+    [
+      "an output substitution with a bare word",
+      "cat <<EOF >(echo a\nx\nEOF\n)",
+    ],
+    [
+      "an output substitution with a quoted word",
+      "cat <<'EOF' >(echo a\nx\nEOF\n)",
+    ],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    [
+      "a here-document placed inside a process substitution",
+      "cat <(cat <<'EOF'\nx\ny\nEOF\n)",
+    ],
+    ["a here-document placed inside a subshell", "(cat <<'EOF'\nx\ny\nEOF\n)"],
+    [
+      "a here-document closed by a subshell before the newline",
+      "(cat <<EOF)\nx\nEOF\n",
+    ],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
   });
 });
 

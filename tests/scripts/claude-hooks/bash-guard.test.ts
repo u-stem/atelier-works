@@ -4668,6 +4668,54 @@ describeForCallers(
   },
 );
 
+// 変数展開の本体の波括弧は、シェルによって閉じる位置が違う。後ろに注釈とコマンドが続く形を隠せるので拒否する。
+describeForCallers(
+  "bash-guard denies a brace in the body of a parameter expansion",
+  (subagent) => {
+    test.each([
+      ["a brace and a trailing comment", `echo ${OPEN}x:-{a} # }\nls`],
+      ["a brace in double quotes", `echo "${OPEN}x:-{a} # }"\nls`],
+      ["an escaped brace", `echo ${OPEN}x:-\\{a} # }\nls`],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 保留中のヒアドキュメントの本文は、行の終わりから始まる。プロセス置換の中で改行を読む形は、本文の始まりが決まらないので拒否する。
+describeForCallers(
+  "bash-guard handles a newline in a process substitution while a here-document is pending",
+  (subagent) => {
+    test.each([
+      ["an input substitution", "cat <<EOF <(echo a\nx\nEOF\n)"],
+      [
+        "an input substitution with a quoted word",
+        "cat <<'EOF' <(echo a\nx\nEOF\n)",
+      ],
+      ["an output substitution", "cat <<EOF >(echo a\nx\nEOF\n)"],
+      [
+        "an output substitution with a quoted word",
+        "cat <<'EOF' >(echo a\nx\nEOF\n)",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.each([
+      [
+        "a here-document placed inside a process substitution",
+        "cat <(cat <<'EOF'\nx\ny\nEOF\n)",
+      ],
+      [
+        "a here-document placed inside a subshell",
+        "(cat <<'EOF'\nx\ny\nEOF\n)",
+      ],
+    ])("allows %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
 // 長い入力は、拒否として終わる。入力の大きさに比例する作業で足りるので、実時間は測らない。
 describeForCallers(
   "bash-guard finishes long nested input with a denial",
