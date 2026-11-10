@@ -4887,15 +4887,26 @@ describeForCallers(
   },
 );
 
-// zshは、標準入力から読むときだけ、構文エラーになる複数の位置で本文の行を実行する。確認済みでないシェルへの`<<`を含む入力は拒否する。
+// zshは、標準入力から読むときだけ、構文エラーの後に次の行から読み続ける。確認済みでないシェルへの改行を含む入力は拒否する。
 describeForCallers(
-  "bash-guard handles a here-document operator in the input of a shell",
+  "bash-guard handles a newline in the input of a shell",
   (subagent) => {
     test.each([
+      [
+        "a single quote across lines",
+        "zsh <<'X'\necho 'a\nmise run stop\n'\nX\n",
+      ],
+      [
+        "a double quote across lines",
+        "zsh <<'X'\necho \"a\nmise run stop\"\nX\n",
+      ],
+      ["a backslash continuation", "zsh <<'X'\necho a \\\nmise run stop\nX\n"],
       ["a here-document", "zsh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
-      ["a here-string", "zsh <<< 'cat <<< x'"],
-      ["an echo through a pipe", "echo 'cat <<< x' | zsh"],
+      ["a here-string", "zsh <<< \"echo 'a\nmise run stop'\""],
+      ["an echo through a pipe", "echo 'echo \"a\\nb\"' | zsh"],
       ["a launch behind a wrapper", "env zsh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["a launch by an absolute path", "/bin/zsh <<'X'\necho 'a\nb'\nX\n"],
+      ["a launch behind busybox", "busybox zsh <<'X'\necho 'a\nb'\nX\n"],
     ])("denies %s for an unconfirmed shell", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
@@ -4912,11 +4923,29 @@ describeForCallers(
       },
     );
 
-    test("allows an unconfirmed shell without the operator", async () => {
-      expect(await decide("zsh <<'X'\necho hi\nX\n", { subagent })).toBe(
+    test("allows a multi-line input for bash", async () => {
+      expect(await decide("bash <<'X'\necho 'a\nb'\nX\n", { subagent })).toBe(
         "allow",
       );
     });
+
+    test.each([
+      ["a here-string", "zsh <<< 'cat <<< x'"],
+      ["an echo through a pipe", "echo 'cat <<< x' | zsh"],
+      ["a body with only a trailing newline", "zsh <<'X'\necho hi\nX\n"],
+    ])("allows a single line for an unconfirmed shell (%s)", async (_k, c) => {
+      expect(await decide(c, { subagent })).toBe("allow");
+    });
+
+    test.each([
+      ["a command string", "zsh -c 'echo hi' <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+      ["a file", "zsh script.sh <<'X'\ncat <<EOF\nb\nEOF\nX\n"],
+    ])(
+      "allows a here-document the unconfirmed shell does not read as code (%s)",
+      async (_kind, command) => {
+        expect(await decide(command, { subagent })).toBe("allow");
+      },
+    );
   },
 );
 

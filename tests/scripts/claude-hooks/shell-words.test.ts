@@ -965,41 +965,78 @@ describe("literalShellInputs", () => {
   });
 });
 
-describe("literalShellInputs with a here-document operator in the text", () => {
+describe("literalShellInputs with a newline in the text", () => {
   const BODY = "cat <<X\nb\nX\n";
 
   test.each(["bash", "sh", "dash", "ksh"])(
-    "returns the text for a confirmed shell (%s)",
+    "returns a multi-line text for a confirmed shell (%s)",
     (shell) => {
       expect(shellInputsOf(`${shell} <<'EOF'\n${BODY}EOF\n`)).toEqual([BODY]);
     },
   );
 
   test.each(["zsh", "ash", "mksh", "fish", "csh", "tcsh", "busybox sh"])(
-    "returns null for an unconfirmed shell (%s)",
+    "returns null for a multi-line here-document read by an unconfirmed shell (%s)",
     (shell) => {
       expect(shellInputsOf(`${shell} <<'EOF'\n${BODY}EOF\n`)).toBeNull();
     },
   );
 
-  test("returns null for a here-string read by an unconfirmed shell", () => {
-    expect(shellInputsOf("zsh <<< 'cat <<X'")).toBeNull();
+  test.each([
+    ["a single quote across lines", "echo 'a\nb'\n"],
+    ["a double quote across lines", 'echo "a\nb"\n'],
+    ["a backslash continuation", "echo a \\\nb\n"],
+    ["a here-document", BODY],
+  ])("returns null for %s read by an unconfirmed shell", (_kind, body) => {
+    expect(shellInputsOf(`zsh <<'EOF'\n${body}EOF\n`)).toBeNull();
   });
 
-  test("returns null for an echo text read by an unconfirmed shell", () => {
-    expect(shellInputsOf("echo 'cat <<X' | zsh")).toBeNull();
+  test("returns null for a multi-line here-string read by an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<< \"echo 'a\nb'\"")).toBeNull();
+  });
+
+  test("returns null for a multi-line echo text read by an unconfirmed shell", () => {
+    expect(shellInputsOf("echo 'echo \"a\\nb\"' | zsh")).toBeNull();
   });
 
   test("returns null when a wrapper precedes the unconfirmed shell", () => {
     expect(shellInputsOf(`env zsh <<'EOF'\n${BODY}EOF\n`)).toBeNull();
   });
 
-  test("returns null for a here-document earlier in a pipe chain", () => {
+  test("returns null when the unconfirmed shell is an absolute path", () => {
+    expect(shellInputsOf(`/bin/zsh <<'EOF'\n${BODY}EOF\n`)).toBeNull();
+  });
+
+  test("returns null when busybox starts the unconfirmed shell", () => {
+    expect(shellInputsOf(`busybox zsh <<'EOF'\n${BODY}EOF\n`)).toBeNull();
+  });
+
+  test("returns null for a multi-line here-document earlier in a pipe chain", () => {
     expect(shellInputsOf(`cat <<'EOF' | zsh\n${BODY}EOF\n`)).toBeNull();
   });
 
-  test("returns the text for an unconfirmed shell without the operator", () => {
+  test("returns a single line for an unconfirmed shell", () => {
+    expect(shellInputsOf("echo 'cat <<X' | zsh")).toEqual(["cat <<X"]);
+  });
+
+  test("returns a single-line here-string for an unconfirmed shell", () => {
+    expect(shellInputsOf("zsh <<< 'echo hi'")).toEqual(["echo hi"]);
+  });
+
+  test("returns a body with only a trailing newline for an unconfirmed shell", () => {
     expect(shellInputsOf("zsh <<'EOF'\necho hi\nEOF\n")).toEqual(["echo hi\n"]);
+  });
+
+  test("returns the text when the unconfirmed shell reads a command string", () => {
+    expect(shellInputsOf(`zsh -c 'echo hi' <<'EOF'\n${BODY}EOF\n`)).toEqual([
+      BODY,
+    ]);
+  });
+
+  test("returns the text when the unconfirmed shell reads a file", () => {
+    expect(shellInputsOf(`zsh script.sh <<'EOF'\n${BODY}EOF\n`)).toEqual([
+      BODY,
+    ]);
   });
 
   test("returns the text for a program that is not a shell", () => {
