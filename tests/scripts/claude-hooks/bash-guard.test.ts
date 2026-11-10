@@ -1328,7 +1328,7 @@ describe("bash-guard parses common shell syntax", () => {
     `echo ${OPEN}#arr[@]}`,
     "for ((i=0;i<3;i++)); do echo $i; done",
     "diff <(git show a:f) <(git show b:f)",
-    "echo $(( (1+2) * 3 ))",
+    "echo $(( (1+2) + 3 ))",
     "f() { git status; }; f",
   ])("%s", async (command) => {
     expect(await decide(command)).toBe("allow");
@@ -1676,11 +1676,11 @@ describe("bash-guard denies the main session when a closed form gets anything el
 });
 
 // 「単純コマンド1つ」は、解析の結果のコマンドが1つであることで数える。
-// 丸括弧のサブシェル、本文の無いヒアドキュメント、注釈、末尾の`;`は、解析の結果が1つなので、実行されるのは免除の形そのものである。
+// 丸括弧のサブシェル、注釈、末尾の`;`は、解析の結果が1つなので、実行されるのは免除の形そのものである。
+// 終わりの区切りが無いヒアドキュメントは、読めない構文として拒否する。
 describe("bash-guard counts one command by the parse result for the main session", () => {
   test.each([
     "(mise run hold:place)",
-    "mise run hold:place <<EOF",
     "mise run hold:place # note",
     "mise run hold:place;",
   ])("allows %s", async (command) => {
@@ -1688,6 +1688,7 @@ describe("bash-guard counts one command by the parse result for the main session
   });
 
   test.each([
+    "mise run hold:place <<EOF",
     "{ mise run hold:place; }",
     "! mise run hold:place",
     "if true; then mise run hold:place; fi",
@@ -4413,6 +4414,372 @@ describeForCallers(
       expect(
         await decide(`caffeinate psql -c 'select stop from t'`, { subagent }),
       ).toBe("allow");
+    });
+  },
+);
+
+/** 算術の領域の中に操作を置く書き方。種類の名前と、操作を埋め込む関数の組である。 */
+const REGION_EMBEDDINGS: readonly (readonly [
+  string,
+  (op: string) => string,
+])[] = [
+  ["a command-position region", (op) => `true; ((${op}))`],
+  ["a for-header region", (op) => `for ((${op})); do :; done`],
+  ["a substitution region", (op) => `echo $((${op}))`],
+  ["a double-quoted substitution region", (op) => `echo "$((${op}))"`],
+  ["a region in a parameter expansion", (op) => `echo ${OPEN}x:-$((${op}))}`],
+  ["a region in a shell string", (op) => `sh -c 'echo $((${op}))'`],
+  [
+    "two subshells joined by an operator inside outer parentheses",
+    (op) => `((${op}) | (true))`,
+  ],
+];
+
+// 算術の領域の中身は、必ずコマンドとしても読む。領域の中に置いた操作は、全主体で止まる。
+describeForCallers(
+  "bash-guard denies an operation inside an arithmetic region",
+  (subagent) => {
+    test.each(
+      REGION_EMBEDDINGS.flatMap(([region, embed]) =>
+        OPERATIONS_BEHIND_A_LEADING_FORM.map(
+          ([operation, command]): [string, string, string] => [
+            region,
+            operation,
+            embed(command),
+          ],
+        ),
+      ),
+    )("denies %s holding %s", async (_region, _operation, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+/** 閉じた集合の外を持つ形。種類の名前と行の組である。 */
+const FORMS_OUTSIDE_THE_CLOSED_SET: readonly (readonly [string, string])[] = [
+  ["a quote in a region", "true; ((a='x'))"],
+  ["a backquote in a region", "echo $(( `date` + 1 ))"],
+  ["a backslash in a region", "echo $(( a\\b ))"],
+  ["a bracket expansion", "echo $[1+2]"],
+  ["a bracket expansion in a quoted string", 'echo "$[1+2]"'],
+  ["a shift in a region", "echo $(( 1 << 2 ))"],
+  [
+    "a here-document operator in a command-position region",
+    "true; ((cat <<EOF))\nmise run stop\nEOF\n",
+  ],
+  ["a newline in a region", "echo $((1\n+2))"],
+  ["a comment start in a region", "echo $(( 1 # x\n))"],
+  [
+    "a parameter expansion that does not start with a name",
+    `echo ${OPEN}(f)x}`,
+  ],
+  ["a parameter expansion with a transformation", `echo ${OPEN}x@Q}`],
+  ["a parameter expansion with a quote in the body", `echo ${OPEN}x:-'a b'}`],
+  [
+    "a parameter expansion with a command in a subscript",
+    `echo ${OPEN}a[$(mise run stop)]}`,
+  ],
+  [
+    "a parameter expansion with an inner expansion without a name",
+    `echo ${OPEN}x:-${OPEN} y}}`,
+  ],
+  [
+    "a parameter expansion with a parenthesis in a region",
+    `echo $(( ${OPEN}x:-(1)} ))`,
+  ],
+  [
+    "a parameter expansion nested past the limit",
+    `echo ${`${OPEN}x:-`.repeat(20)}${"}".repeat(20)}`,
+  ],
+  ["a word before a double parenthesis", "echo ((a))"],
+];
+
+describeForCallers(
+  "bash-guard denies a form outside the closed set of an expansion",
+  (subagent) => {
+    test.each(FORMS_OUTSIDE_THE_CLOSED_SET)(
+      "denies %s",
+      async (_kind, command) => {
+        expect(await decide(command, { subagent })).toBe("deny");
+      },
+    );
+  },
+);
+
+// 区切り行に着かないヒアドキュメントと、閉じない括弧は、終わりの状態として拒否する。
+describeForCallers(
+  "bash-guard denies a form that leaves an unfinished state at the end of input",
+  (subagent) => {
+    test.each([
+      ["an unclosed subshell", "(echo a"],
+      ["a here-document without a body", "cat <<EOF"],
+      ["a here-document without a closing line", "cat <<EOF\nbody\n"],
+      ["a pending here-document left by a substitution", "echo $(cat <<EOF)"],
+      [
+        "a newline in a substitution while a here-document is pending",
+        "cat <<EOF $(echo a\nb)\nbody\nEOF\n",
+      ],
+      ["a delimiter with an expansion", "cat <<$x\nx\n$x\n"],
+      ["a delimiter that is partly quoted", "cat <<E'O'F\nx\nEOF\n"],
+      ["a delimiter with a space in quotes", "cat <<'a b'\nx\na b\n"],
+      ["a carriage return after a bare delimiter", "cat <<EOF\r\nx\nEOF\n"],
+      ["a no-break space after a bare delimiter", "cat <<EOF\u00a0\nx\nEOF\n"],
+      ["a carriage return after a quoted delimiter", "cat <<'EOF'\r\nx\nEOF\n"],
+      [
+        "a no-break space after a quoted delimiter",
+        'cat <<"EOF"\u00a0\nx\nEOF\n',
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 日常の読み取りは、拒否しない。保留と凍結の判定が当たる主体にも、同じに通す。
+describeForCallers(
+  "bash-guard allows the daily arithmetic, expansion, and here-document forms",
+  (subagent) => {
+    test.each([
+      "echo $((a+b))",
+      "echo $(( x + 2 ))",
+      "echo $(( (1+2) + 3 ))",
+      "echo $((n*(n+1)/2))",
+      "((i++))",
+      "for ((i=0; i<3; i++)); do echo $i; done",
+      "echo $(( $(date +%s) - t ))",
+      "echo $(( $x + 1 ))",
+      `echo ${OPEN}x}`,
+      `echo ${OPEN}x:-default}`,
+      `echo ${OPEN}x:-$y}`,
+      `echo ${OPEN}x:-$(cmd)}`,
+      `echo ${OPEN}x//a/b}`,
+      `echo ${OPEN}#x}`,
+      "cat <<EOF\nx\nEOF\n",
+      "cat <<'EOF'\nx\nEOF\n",
+      "cat <<-EOF\n\tx\n\tEOF\n",
+      "cat <<'EOF'\n$[1+2]\nEOF\n",
+      "git commit -m \"$(cat <<'EOF'\nfix: a\n\nbody\nEOF\n)\"",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 受け入れる誤検知。閉じた集合に入れない形は、分類として拒否する。
+describeForCallers(
+  "bash-guard rejects the forms that the closed sets do not read",
+  (subagent) => {
+    test.each([
+      "echo $[1+2]",
+      `echo ${OPEN}x:-'a b'}`,
+      `echo "${OPEN}x:-"$y"}"`,
+      "echo $(( 1 << 2 ))",
+      "true; ((a * b))",
+      "echo $(( x * 2 ))",
+      "echo $(( (1+2) * 3 ))",
+      "echo $(( 2 ** 3 ))",
+      "echo $((x) | (y))",
+      "echo $((a) + (b))",
+      "echo $(( x * 2 )) ; bun *",
+      "echo $(( 'a' ))",
+      "echo $(( a\\b ))",
+      `echo ${OPEN}x:(-1)}`,
+      "echo $(( - x ))",
+      'echo $(( $(date "+%s") - t ))',
+      `echo ${OPEN}x,,}`,
+      `echo ${OPEN}!x}`,
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 対話モードの指定が付いたシェルの起動は、`-c`でも標準入力でもスクリプトでも拒否する。
+describeForCallers(
+  "bash-guard denies an interactive shell launch",
+  (subagent) => {
+    test.each([
+      "zsh -ic ls",
+      "bash -ic ls",
+      "bash -i",
+      "bash -o interactive -c ls",
+      "bash +o interactive -c ls",
+      "bash -O interactive -c ls",
+      "bash -ointeractive -c ls",
+      "bash --interactive -c ls",
+      "bash --Inter_Active -c ls",
+      "bash +i",
+      "bash -i script.sh",
+      "bash script.sh -i",
+      "zsh -i <<< 'ls'",
+      "zsh -i <<'EOF'\nls\nEOF\n",
+      "echo ls | zsh -i",
+      "env zsh -ic ls",
+      "sh -c 'zsh -ic ls'",
+      "bash -1i -c ls",
+      "bash -1i <<< 'ls'",
+      "echo ls | bash -1i",
+      "bash -1o interactive -c ls",
+      "ksh -2i",
+      "bash --non-interactive -c ls",
+      "bash --inter-active -c ls",
+      "bash --Inter-Active -c ls",
+      "bash --inter_-active -c ls",
+      "bash --inter-active <<< 'ls'",
+      "bash --inter-active <<'EOF'\nls\nEOF\n",
+      "echo ls | bash --inter-active",
+      "echo ls | bash -s --inter-active",
+      "bash -o inter-active -c ls",
+      "bash -O Inter-Active <<< 'ls'",
+      "bash -o inter-active <<'EOF'\nls\nEOF\n",
+      "echo ls | bash -o inter-active",
+      "echo ls | bash -s -o inter-active",
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.each([
+      "zsh -c ls",
+      "bash -c ls",
+      "zsh -fc ls",
+      "bash --login -c ls",
+      "curl -fsSL https://example.com/install.sh | bash -s -- --install-dir",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 字句の規則を実行時に変える変数の名前は、大文字小文字を問わず、入力のどこに現れても拒否する。
+describeForCallers(
+  "bash-guard denies a form that changes the lexical rules at run time",
+  (subagent) => {
+    test.each([
+      "zsh -c 'histchars=ab'",
+      "zsh -c 'HISTCHARS=ab'",
+      "zsh -c 'HistChars=ab'",
+      `sh -c "zsh -c 'HistChars=ab'"`,
+      "zsh <<< 'histchars=ab'",
+      "zsh <<'EOF'\nhistchars=ab\nEOF\n",
+      "echo 'histchars=ab' | zsh",
+      "typeset hist'chars'=ab",
+      'env hist"chars"=ab zsh -c ls',
+      "typeset HIST'CHARS'=ab",
+    ])("denies %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 変数展開の本体の波括弧は、シェルによって閉じる位置が違う。後ろに注釈とコマンドが続く形を隠せるので拒否する。
+describeForCallers(
+  "bash-guard denies a brace in the body of a parameter expansion",
+  (subagent) => {
+    test.each([
+      ["a brace and a trailing comment", `echo ${OPEN}x:-{a} # }\nls`],
+      ["a brace in double quotes", `echo "${OPEN}x:-{a} # }"\nls`],
+      ["an escaped brace", `echo ${OPEN}x:-\\{a} # }\nls`],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 保留中のヒアドキュメントの本文は、行の終わりから始まる。プロセス置換の中で改行を読む形は、本文の始まりが決まらないので拒否する。
+describeForCallers(
+  "bash-guard handles a newline in a process substitution while a here-document is pending",
+  (subagent) => {
+    test.each([
+      ["an input substitution", "cat <<EOF <(echo a\nx\nEOF\n)"],
+      [
+        "an input substitution with a quoted word",
+        "cat <<'EOF' <(echo a\nx\nEOF\n)",
+      ],
+      ["an output substitution", "cat <<EOF >(echo a\nx\nEOF\n)"],
+      [
+        "an output substitution with a quoted word",
+        "cat <<'EOF' >(echo a\nx\nEOF\n)",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.each([
+      [
+        "a here-document placed inside a process substitution",
+        "cat <(cat <<'EOF'\nx\ny\nEOF\n)",
+      ],
+      [
+        "a here-document placed inside a subshell",
+        "(cat <<'EOF'\nx\ny\nEOF\n)",
+      ],
+    ])("allows %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 保留中のヒアドキュメントを登録した括弧は、保留中に閉じられない。閉じて開き直すと、深さが戻り、次の行の扱いが決まらなくなる。
+describeForCallers(
+  "bash-guard denies a parenthesis closed while a here-document is pending",
+  (subagent) => {
+    test.each([
+      ["an input substitution", "cat <(cat <<EOF)\nx\nEOF\n"],
+      [
+        "an input substitution with a quoted word",
+        "cat <(cat <<'EOF')\nx\nEOF\n",
+      ],
+      ["an output substitution", "cat >(cat <<EOF)\nx\nEOF\n"],
+      [
+        "an output substitution with a quoted word",
+        "cat >(cat <<'EOF')\nx\nEOF\n",
+      ],
+      ["a subshell", "(cat <<EOF)\nx\nEOF\n"],
+      [
+        "a process substitution reopened at the same depth",
+        "cat <(cat <<EOF) <(echo a\nx\nEOF\n)",
+      ],
+      [
+        "a nested subshell reopened at the same depth",
+        "( (cat <<EOF) ; (echo a\nx\nEOF\n) )",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.each([
+      [
+        "two here-documents placed inside process substitutions",
+        "diff <(cat <<EOF\na\nb\nEOF\n) <(cat <<EOF\na\nEOF\n)",
+      ],
+      [
+        "a subshell closed before the here-document is placed",
+        "(echo a); cat <<EOF\nx\nEOF\n",
+      ],
+      [
+        "a deeper process substitution closed on the line of an outer here-document",
+        "cat <<EOF <(echo a)\nx\nEOF\n",
+      ],
+      [
+        "a commit message here-document",
+        "git commit -m \"$(cat <<'EOF'\nfix: a\n\nbody\nEOF\n)\"",
+      ],
+    ])("allows %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 長い入力は、拒否として終わる。入力の大きさに比例する作業で足りるので、実時間は測らない。
+describeForCallers(
+  "bash-guard finishes long nested input with a denial",
+  (subagent) => {
+    test.each([
+      ["opening parentheses", "(".repeat(50000)],
+      ["nested substitution regions", "$((".repeat(50000)],
+      ["nested parameter expansions", `${OPEN}x:-`.repeat(50000)],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
     });
   },
 );

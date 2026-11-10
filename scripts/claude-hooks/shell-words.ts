@@ -7,6 +7,11 @@
 // 引用符のないヒアドキュメントの`$(...)`は実行されるので、別の単純コマンドとして取り出す。
 // 読めない構文は構文エラーとして返し、呼び出し側が拒否に倒す。
 // 予約語の代替形のように、語の並びだけでは後ろの語の役割が決まらない構文も、読めない構文として返す。
+// 算術の領域(`$((`と`((`)と`${...}`は、読み飛ばさず、閉じた字の集合の中だけを読む。集合の外の字は構文エラーにする。
+// 領域の中身は、算術としても、サブシェルとしても読めるので、必ずコマンドとしても取り出す。
+// 集合には引用符、バックスラッシュ、バッククォート、改行が無いので、括弧の数え方は、どちらの読み方でも同じになる。
+// ヒアドキュメントが区切りの行に着かずに終わる形と、閉じない括弧も、読めない構文として返す。
+// 対話モードを指定したシェルの起動と、字句の規則を実行時に変える変数の名前も、読めない構文として返す。
 
 /**
  * 引用符を外した後の語。
@@ -268,6 +273,115 @@ const WRAPPER_VALUE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
 );
 
 class ShellSyntaxError extends Error {}
+
+/**
+ * 算術の領域の中で読んでよい字。`$`と、語の中の`#`は別に確かめる。
+ * 引用符、バックスラッシュ、バッククォート、改行、波括弧は含まない。
+ */
+const REGION_CHARS = /^[A-Za-z0-9_ \t+\-*/%=!&|^~?:,.;[\]()<>]$/;
+
+/**
+ * zshが字句の規則(コメントの字)を実行時に決める変数の名前。
+ * 実行時に決まる規則は字面から読めないので、大文字小文字を問わず、入力のどこかに現れたら拒否する。
+ */
+const LEXICAL_RULE_VARIABLE = /histchars/i;
+
+/** `${`の名前の後ろに許す演算子。前方一致で選ぶので、長いものを先に置く。 */
+const PARAMETER_OPERATORS: readonly string[] = [
+  ":-",
+  ":=",
+  ":?",
+  ":+",
+  "##",
+  "%%",
+  "//",
+  "-",
+  "=",
+  "?",
+  "+",
+  "#",
+  "%",
+  "/",
+  ":",
+];
+
+/** `${`の添字。数字、名前、`$`+名前、`@`、`*`だけを許す。 */
+const SUBSCRIPT =
+  /\[(?:-?[0-9]+|[A-Za-z_][A-Za-z0-9_]*|\$[A-Za-z_][A-Za-z0-9_]*|@|\*)\]/y;
+const IDENTIFIER = /[A-Za-z_][A-Za-z0-9_]*/y;
+const DIGITS = /[0-9]+/y;
+/** 区切り語に使える字の並び。 */
+const DELIMITER_RUN = /[A-Za-z0-9_.-]*/y;
+
+/** `source`の`at`から`pattern`(stickyな正規表現)に合う部分を返す。合わなければnull。 */
+function matchAt(pattern: RegExp, source: string, at: number): string | null {
+  pattern.lastIndex = at;
+  return pattern.exec(source)?.[0] ?? null;
+}
+
+/** `Parser`が読む場所の種類。 */
+type ParserContext = {
+  /** 算術の領域の中。字を閉じた集合に限る。 */
+  readonly restricted: boolean;
+  /** `$((`の入れ子そのもの。直下の`(`は、語の後ろでも読む。 */
+  readonly regionRoot: boolean;
+};
+
+const PLAIN_CONTEXT: ParserContext = { restricted: false, regionRoot: false };
+const REGION_ROOT_CONTEXT: ParserContext = {
+  restricted: true,
+  regionRoot: true,
+};
+
+/** 領域の中で読めない字を拒否する構文エラー。 */
+function regionError(text: string, at: number): ShellSyntaxError {
+  return new ShellSyntaxError(
+    `${JSON.stringify(text)} at offset ${at} is outside what an arithmetic region reads`,
+  );
+}
+
+/**
+ * `$(...)`の語の目印。今のブランチ名になる置換だけは、値が決まっているので中身を残す。
+ * `inner`は括弧の中の元の綴りである。
+ */
+function substitutionMarker(inner: string): string {
+  const marker = `$(${inner.trim().replace(/\s+/g, " ")})`;
+  return CURRENT_BRANCH_SUBSTITUTIONS.includes(marker) ? marker : "$(...)";
+}
+
+/**
+ * 対話モードを指定する語なら真。
+ * `-`か`+`で始まる語を、小文字にして`-`と`_`を除いたうえで`interactive`を含むか見る。
+ * zshは、長い名前の大文字小文字と、`-`と`_`の違いを区別しない。
+ * `-o interactive`のように、値を別の語に分ける形は、呼び出し側が値の語を渡す。
+ * `--`で始まらず`-`か`+`で始まる語は、字の種類を問わず、`i`を含めば真である。
+ */
+function isInteractiveFlag(text: string): boolean {
+  if (!/^[-+]/.test(text)) return false;
+  if (normalizeOptionName(text).includes("interactive")) return true;
+  return !text.startsWith("--") && text.includes("i");
+}
+
+function normalizeOptionName(text: string): string {
+  return text.toLowerCase().replaceAll("_", "").replaceAll("-", "");
+}
+
+/**
+ * シェルの引数のどれかが、対話モードを指定していれば真。
+ * 対話モードでは、コメントの扱いなど字句の規則が変わり、`-c`の文字列と標準入力のどちらにも及ぶ。
+ * `-c`の前後を読み分けず、すべての語を見るので、スクリプトの引数の`-i`も当たる。
+ */
+function launchesInteractiveShell(args: readonly Word[]): boolean {
+  return args.some((word, index) => {
+    if (isInteractiveFlag(word.text)) return true;
+    // `-o`と`-O`は、値を次の語に取る。まとまりに含まれる`o`も同じである。
+    if (!/^[-+][^-].*$/s.test(word.text) || !/[oO]/.test(word.text)) {
+      return false;
+    }
+    const value = args[index + 1]?.text ?? "";
+    return normalizeOptionName(value).includes("interactive");
+  });
+}
 
 /** `$'...'`の中の、1文字で表す逃れ(`\n`など)。 */
 const ANSI_C_SIMPLE_ESCAPES: ReadonlyMap<string, string> = new Map([
@@ -848,6 +962,11 @@ function collectCommands(
   out: SimpleCommand[],
   depth: number,
 ): void {
+  if (LEXICAL_RULE_VARIABLE.test(source)) {
+    throw new ShellSyntaxError(
+      "a variable that changes the lexical rules at run time",
+    );
+  }
   new Parser(source, 0, out, depth).parseList(false);
 }
 
@@ -871,6 +990,8 @@ type PendingHeredoc = {
   readonly stripTabs: boolean;
   /** 区切り語に引用符かバックスラッシュがあれば、本文は展開されない。 */
   readonly quoted: boolean;
+  /** 登録したときの`subshellDepth`。これより深い括弧の中で改行を読んだら、本文の始まりが決まらない。 */
+  readonly depth: number;
   /** 本文を渡す先のコマンドの`inputs`。コマンドが確定するまでnull。 */
   target: Word[] | null;
 };
@@ -898,13 +1019,17 @@ class Parser {
   private redirectNextWord = false;
   private hereStringNextWord = false;
   private subshellDepth = 0;
+  /** `((`の領域を開いたときの`subshellDepth`。深さがこの値に戻る`)`で領域を出る。領域の外ならnull。 */
+  private regionBase: number | null = null;
   private readonly heredocs: PendingHeredoc[] = [];
+  private readonly context: ParserContext;
 
   constructor(
     source: string,
     position: number,
     out: SimpleCommand[],
     depth: number,
+    context: ParserContext = PLAIN_CONTEXT,
   ) {
     if (depth > MAX_DEPTH)
       throw new ShellSyntaxError("commands are nested too deeply");
@@ -912,6 +1037,17 @@ class Parser {
     this.position = position;
     this.out = out;
     this.depth = depth;
+    this.context = context;
+  }
+
+  /** 算術の領域の中なら真。`$((`の入れ子と、その中の入れ子、`((`の開きから閉じまでである。 */
+  private get restricted(): boolean {
+    return this.context.restricted || this.regionBase !== null;
+  }
+
+  /** 領域の直下なら真。入れ子のParserの中は、領域の直下に数えない。 */
+  private get inRegionRoot(): boolean {
+    return this.context.regionRoot || this.regionBase !== null;
   }
 
   /** 単純コマンドを読み進める。`untilParen`が真なら、対応する`)`で止まる(`$(...)`の中身)。 */
@@ -924,6 +1060,7 @@ class Parser {
             `unexpected ")" at offset ${this.position}`,
           );
         this.endCommand();
+        this.rejectPendingHeredoc();
         this.position += 1;
         return;
       }
@@ -931,13 +1068,38 @@ class Parser {
     }
     if (untilParen) throw new ShellSyntaxError("unterminated $(");
     this.endCommand();
+    if (this.subshellDepth !== 0)
+      throw new ShellSyntaxError('unterminated "("');
+    this.rejectPendingHeredoc();
+  }
+
+  /** 区切りの行に着いていないヒアドキュメントが残っていれば拒否する。 */
+  private rejectPendingHeredoc(): void {
+    if (this.heredocs.length > 0)
+      throw new ShellSyntaxError("a here-document has no closing line");
   }
 
   private peek(offset: number): string {
     return this.source.charAt(this.position + offset);
   }
 
+  /** 領域の中で、集合の外の字を拒否する。`$`は`readDollar`が、語の中の`#`は`inWord`で確かめる。 */
+  private checkRegionChar(char: string): void {
+    if (REGION_CHARS.test(char)) {
+      if (char === "<" && this.peek(1) === "<")
+        throw new ShellSyntaxError(
+          `"<<" at offset ${this.position} in an arithmetic region`,
+        );
+      return;
+    }
+    if (char === "$" || (char === "#" && this.inWord)) return;
+    throw new ShellSyntaxError(
+      `${JSON.stringify(char)} at offset ${this.position} is outside the characters an arithmetic region reads`,
+    );
+  }
+
   private step(char: string): void {
+    if (this.restricted) this.checkRegionChar(char);
     switch (char) {
       case " ":
       case "\t":
@@ -945,6 +1107,14 @@ class Parser {
         this.position += 1;
         return;
       case "\n":
+        // 保留したヒアドキュメントより深い括弧の中の改行は、本文の始まりが決まらない。
+        if (
+          this.heredocs.some((heredoc) => heredoc.depth < this.subshellDepth)
+        ) {
+          throw new ShellSyntaxError(
+            "a newline inside parentheses while a here-document is pending",
+          );
+        }
         this.endCommand();
         this.position += 1;
         this.skipHeredocBodies();
@@ -972,18 +1142,43 @@ class Parser {
         this.position += 1;
         return;
       case "(":
-        this.rejectGlobGroup();
+        // 領域の直下の`(`は、算術の括弧にもサブシェルの括弧にもなる。語の後ろでも読む。
+        if (!this.inRegionRoot) this.rejectGlobGroup();
         // `< <(...)`のプロセス置換は、標準入力の出どころが実行時に決まる。内側のコマンドは別に読む。
         if (this.redirectNextWord && !this.redirectWrites) {
           this.redirects.push({ text: "<(", dynamic: true, glob: false });
+        }
+        // 空白なしで続く`((`は、領域の始まりである。領域の中の`((`は数え直さない。
+        if (!this.restricted && this.peek(1) === "(") {
+          this.regionBase = this.subshellDepth;
         }
         this.endCommand();
         this.subshellDepth += 1;
         this.position += 1;
         return;
       case ")":
+        // 保留したヒアドキュメントを登録した括弧を、保留中に閉じる形は読まない。
+        // 閉じて開き直すと、深さが登録時に戻り、改行の検査をすり抜けるためである。
+        if (
+          this.heredocs.some((heredoc) => heredoc.depth >= this.subshellDepth)
+        ) {
+          throw new ShellSyntaxError(
+            'a ")" closes the parenthesis of a pending here-document',
+          );
+        }
         this.endCommand();
         this.subshellDepth -= 1;
+        if (this.regionBase === this.subshellDepth) this.regionBase = null;
+        // `$((`の最初の括弧が閉じた直後が`)`でなければ、bashは算術でなくコマンド置換として読みうる。
+        if (
+          this.context.regionRoot &&
+          this.subshellDepth === 0 &&
+          this.peek(1) !== ")"
+        ) {
+          throw new ShellSyntaxError(
+            `"$((" before offset ${this.position} may be read as a command substitution`,
+          );
+        }
         this.position += 1;
         return;
       case "<":
@@ -1088,6 +1283,14 @@ class Parser {
       glob: this.glob,
       ...(this.variantText === null ? {} : { variants: [this.variantText] }),
     };
+    // 引用符で名前を分けた綴りも、語として確定した後の綴りで照合する。
+    for (const spelling of [word.text, ...(word.variants ?? [])]) {
+      if (LEXICAL_RULE_VARIABLE.test(spelling)) {
+        throw new ShellSyntaxError(
+          "a variable that changes the lexical rules at run time",
+        );
+      }
+    }
     if (this.hereStringNextWord) {
       this.hereStringNextWord = false;
       this.inputs.push(word);
@@ -1101,15 +1304,6 @@ class Parser {
       this.words.push(word);
     }
     this.resetWord();
-  }
-
-  private findClosingQuote(quote: string, from: number): number {
-    for (let at = from; at < this.source.length; at += 1) {
-      const char = this.source.charAt(at);
-      if (char === "\\" && quote === '"') at += 1;
-      else if (char === quote) return at;
-    }
-    throw new ShellSyntaxError(`unterminated ${quote} quote`);
   }
 
   private endCommand(): void {
@@ -1150,6 +1344,11 @@ class Parser {
     const name = baseName(program.text);
     const shellArgs = shellArguments(words);
     if (shellArgs !== null) {
+      if (launchesInteractiveShell(shellArgs)) {
+        throw new ShellSyntaxError(
+          "an interactive shell follows lexical rules the guard cannot read",
+        );
+      }
       const script = shellScriptArgument(shellArgs);
       if (script !== null)
         collectCommands(script.text, this.out, this.depth + 1);
@@ -1205,20 +1404,48 @@ class Parser {
       this.position += 1;
     }
     while (this.peek(0) === " " || this.peek(0) === "\t") this.position += 1;
-    let delimiter = "";
+    let delimiter: string;
     let quoted = false;
-    while (
-      this.position < this.source.length &&
-      !/[\s;&|<>()]/.test(this.peek(0))
-    ) {
-      const char = this.peek(0);
-      if (char === "'" || char === '"' || char === "\\") quoted = true;
-      else delimiter += char;
-      this.position += 1;
+    const first = this.peek(0);
+    if (first === "'" || first === '"') {
+      // 引用は語全体を囲む1組だけを読む。閉じの引用符まで読んでから、中の字を確かめる。
+      const end = this.source.indexOf(first, this.position + 1);
+      if (end === -1)
+        throw new ShellSyntaxError("unterminated here-document delimiter");
+      delimiter = this.source.slice(this.position + 1, end);
+      this.position = end + 1;
+      quoted = true;
+    } else {
+      // 先頭のバックスラッシュ1つだけは、引用として読む。
+      if (first === "\\") {
+        quoted = true;
+        this.position += 1;
+      }
+      delimiter = matchAt(DELIMITER_RUN, this.source, this.position) ?? "";
+      this.position += delimiter.length;
     }
     if (delimiter === "")
       throw new ShellSyntaxError("missing here-document delimiter");
-    this.heredocs.push({ delimiter, stripTabs, quoted, target: null });
+    if (matchAt(DELIMITER_RUN, delimiter, 0) !== delimiter)
+      throw new ShellSyntaxError(
+        "a here-document delimiter has a character outside the closed set",
+      );
+    // 区切り語の後ろは、語の終わりでなければならない。
+    // 字句解析の語の区切り(空白、タブ、改行)に合わせる。CRやUnicodeの空白は、シェルによって語の区切りかが違う。
+    if (
+      this.position < this.source.length &&
+      !/[ \t\n;&|<>()]/.test(this.peek(0))
+    )
+      throw new ShellSyntaxError(
+        "a here-document delimiter has a character outside the closed set",
+      );
+    this.heredocs.push({
+      delimiter,
+      stripTabs,
+      quoted,
+      depth: this.subshellDepth,
+      target: null,
+    });
   }
 
   /**
@@ -1228,15 +1455,21 @@ class Parser {
   private skipHeredocBodies(): void {
     for (const heredoc of this.heredocs.splice(0)) {
       let body = "";
+      let closed = false;
       while (this.position < this.source.length) {
         const newline = this.source.indexOf("\n", this.position);
         const end = newline === -1 ? this.source.length : newline;
         const rawLine = this.source.slice(this.position, end);
         this.position = newline === -1 ? this.source.length : newline + 1;
         const line = heredoc.stripTabs ? rawLine.replace(/^\t+/, "") : rawLine;
-        if (line === heredoc.delimiter) break;
+        if (line === heredoc.delimiter) {
+          closed = true;
+          break;
+        }
         body += `${line}\n`;
       }
+      if (!closed)
+        throw new ShellSyntaxError("a here-document has no closing line");
       if (!heredoc.quoted) {
         new Parser(body, 0, this.out, this.depth + 1).scanExpansions();
       }
@@ -1323,40 +1556,40 @@ class Parser {
 
   private readDollar(inDoubleQuotes: boolean): void {
     const next = this.peek(1);
+    if (next === "[") {
+      // `$[...]`は古い算術の書き方で、方言によって読み方が違う。展開が起こる場所では読まない。
+      throw new ShellSyntaxError(`"$[" at offset ${this.position}`);
+    }
+    if (this.restricted && (next === "'" || next === '"')) {
+      throw new ShellSyntaxError(
+        `"$${next}" at offset ${this.position} in an arithmetic region`,
+      );
+    }
     if (next === '"' && !inDoubleQuotes) {
       // `$"..."`は、ロケールの翻訳を除けば、ふつうの二重引用符である。
       this.position += 1;
       return;
     }
     if (next === "(") {
-      if (this.peek(2) === "(") {
-        this.skipArithmetic();
-        return;
-      }
-      const nested = new Parser(
-        this.source,
-        this.position + 2,
-        this.out,
-        this.depth + 1,
-      );
-      nested.parseList(true);
-      const inner = this.source
-        .slice(this.position + 2, nested.position - 1)
-        .trim()
-        .replace(/\s+/g, " ");
-      const marker = `$(${inner})`;
-      this.position = nested.position;
-      this.markDynamic(
-        CURRENT_BRANCH_SUBSTITUTIONS.includes(marker) ? marker : "$(...)",
-      );
+      const end = this.readSubstitution(this.position);
+      const marker =
+        this.peek(2) === "("
+          ? "$((...))"
+          : substitutionMarker(this.source.slice(this.position + 2, end - 1));
+      this.position = end;
+      this.markDynamic(marker);
       return;
     }
     if (next === "{") {
-      this.skipParameterExpansion();
+      this.readParameterExpansion();
       return;
     }
     if (next === "'" && !inDoubleQuotes) {
       this.readAnsiCQuoted();
+      return;
+    }
+    if (this.restricted) {
+      this.readRegionParameter(next);
       return;
     }
     if (/^[A-Za-z0-9_@*#?$!-]$/.test(next)) this.dynamic = true;
@@ -1365,72 +1598,208 @@ class Parser {
   }
 
   /**
-   * `${...}`を1つの動的な語として読み飛ばす。中の`)`はコマンドの終わりではない。
+   * 領域の中の`$`+名前を読む。名前は識別子、数字、`@ * # ? $ ! -`の1字である。
+   * 識別子の後ろの字は、ふつうの字として集合の検査を通る。
+   */
+  private readRegionParameter(next: string): void {
+    if (/^[A-Za-z0-9_]$/.test(next)) {
+      this.dynamic = true;
+      this.append("$");
+      this.position += 1;
+      return;
+    }
+    if (/^[@*#?$!-]$/.test(next)) {
+      this.dynamic = true;
+      this.append(`$${next}`);
+      this.position += 2;
+      return;
+    }
+    throw new ShellSyntaxError(
+      `"$" at offset ${this.position} has no name in an arithmetic region`,
+    );
+  }
+
+  /**
+   * `at`の`$(`か`$((`を、入れ子のParserで読み、閉じの`)`の次の位置を返す。
+   * `$((`の入れ子は領域そのもの、領域の中の`$(`は集合の検査を引き継ぐ。
+   */
+  private readSubstitution(at: number): number {
+    const context: ParserContext =
+      this.source.charAt(at + 2) === "("
+        ? REGION_ROOT_CONTEXT
+        : { restricted: this.restricted, regionRoot: false };
+    const nested = new Parser(
+      this.source,
+      at + 2,
+      this.out,
+      this.depth + 1,
+      context,
+    );
+    nested.parseList(true);
+    this.rejectPendingNewline(this.source.slice(at, nested.position));
+    return nested.position;
+  }
+
+  /**
+   * ヒアドキュメントが保留中に、入れ子の中で改行を読んだら拒否する。
+   * 保留中の本文がどの行から始まるかが、シェルによって変わりうるためである。
+   */
+  private rejectPendingNewline(nestedText: string): void {
+    if (this.heredocs.length > 0 && nestedText.includes("\n")) {
+      throw new ShellSyntaxError(
+        "a newline inside a nested construct while a here-document is pending",
+      );
+    }
+  }
+
+  /**
+   * `${...}`を1つの動的な語として読む。閉じた形だけを読み、それ以外は構文エラーにする。
    * 中の`$(...)`とバッククォートは実行されるので、別の単純コマンドとして取り出す。
    */
-  private skipParameterExpansion(): void {
-    let depth = 1;
-    let at = this.position + 2;
-    while (at < this.source.length) {
-      const char = this.source.charAt(at);
-      if (char === "\\") {
-        at += 2;
-      } else if (char === "'") {
-        at = this.findClosingQuote(char, at + 1) + 1;
-      } else if (char === '"') {
-        at = this.findClosingQuote(char, at + 1) + 1;
-      } else if (char === "$" && this.source.charAt(at + 1) === "(") {
-        const nested = new Parser(
-          this.source,
-          at + 2,
-          this.out,
-          this.depth + 1,
+  private readParameterExpansion(): void {
+    const end = this.scanBraced(this.position, this.depth);
+    this.rejectPendingNewline(this.source.slice(this.position, end));
+    this.position = end;
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: 語の目印として入れる文字列である
+    this.markDynamic("${...}");
+  }
+
+  /**
+   * `at`の`${`を読み、閉じの`}`の次の位置を返す。
+   * 名前(と添字)の後ろは、`}`か、閉じた演算子の一覧だけを許す。
+   * 内側の`${`も同じ入口で読み、再帰の深さに上限を置く。
+   */
+  private scanBraced(at: number, level: number): number {
+    if (level > MAX_DEPTH)
+      throw new ShellSyntaxError("parameter expansions are nested too deeply");
+    const name = this.scanParameterName(at);
+    if (this.source.charAt(name.next) === "}") return name.next + 1;
+    const operator = name.length
+      ? undefined
+      : PARAMETER_OPERATORS.find((candidate) =>
+          this.source.startsWith(candidate, name.next),
         );
-        nested.parseList(true);
-        at = nested.position;
-      } else if (char === "$" && this.source.charAt(at + 1) === "{") {
-        depth += 1;
-        at += 2;
-      } else if (char === "}") {
-        depth -= 1;
-        at += 1;
-        if (depth === 0) {
-          this.position = at;
-          // biome-ignore lint/suspicious/noTemplateCurlyInString: 語の目印として入れる文字列である
-          this.markDynamic("${...}");
-          return;
-        }
+    if (operator === undefined) {
+      throw new ShellSyntaxError(
+        `a parameter expansion at offset ${at} has an operator the guard cannot read`,
+      );
+    }
+    return this.scanBracedBody(name.next + operator.length, level);
+  }
+
+  /**
+   * `at`の`${`の直後の名前(と添字)を読む。`next`は読み終えた位置、`length`は`#`+名前(長さ)の形のとき真である。
+   * 名前は識別子、数字、`@ * ? ! -`の1字、`$`の1字(直後が`}`のときだけ)である。
+   */
+  private scanParameterName(at: number): {
+    readonly next: number;
+    readonly length: boolean;
+  } {
+    const source = this.source;
+    let cursor = at + 2;
+    let length = false;
+    if (source.charAt(cursor) === "#") {
+      // `${#}`は引数の数である。
+      if (source.charAt(cursor + 1) === "}")
+        return { next: cursor + 1, length: false };
+      length = true;
+      cursor += 1;
+    }
+    const word =
+      matchAt(IDENTIFIER, source, cursor) ?? matchAt(DIGITS, source, cursor);
+    const char = source.charAt(cursor);
+    if (word !== null) {
+      cursor += word.length;
+    } else if (/^[@*?!-]$/.test(char)) {
+      cursor += 1;
+    } else if (char === "$" && source.charAt(cursor + 1) === "}") {
+      cursor += 1;
+    } else {
+      throw new ShellSyntaxError(
+        `a parameter expansion at offset ${at} has no name`,
+      );
+    }
+    if (source.charAt(cursor) === "[") {
+      const subscript = matchAt(SUBSCRIPT, source, cursor);
+      if (subscript === null) {
+        throw new ShellSyntaxError(
+          `a parameter expansion at offset ${at} has a subscript the guard cannot read`,
+        );
+      }
+      cursor += subscript.length;
+    }
+    return { next: cursor, length };
+  }
+
+  /**
+   * `${`の演算子の後ろの本体を読み、閉じの`}`の次の位置を返す。
+   * 本体の引用符と、`$`の直後でない`(`は拒否する。`$`は、名前、`${`、`$(`、`$((`だけを読む。
+   * 算術の領域の中では、`(`、`)`、`$(`、バッククォート、バックスラッシュも拒否し、字は集合の中に限る。
+   */
+  private scanBracedBody(from: number, level: number): number {
+    const source = this.source;
+    const restricted = this.restricted;
+    let at = from;
+    while (at < source.length) {
+      const char = source.charAt(at);
+      if (char === "}") return at + 1;
+      // `{`は、bashが最初の`}`で閉じ、zshが入れ子として数えて閉じる位置が変わるので、読まない。
+      if (char === "'" || char === '"' || char === "(" || char === "{") {
+        throw new ShellSyntaxError(
+          `${JSON.stringify(char)} at offset ${at} in a parameter expansion`,
+        );
+      }
+      if (char === "$") {
+        at = this.scanBracedDollar(at, level, restricted);
       } else if (char === "`") {
-        const end = this.source.indexOf("`", at + 1);
-        if (end === -1) throw new ShellSyntaxError("unterminated backquote");
-        collectCommands(
-          this.source.slice(at + 1, end),
-          this.out,
-          this.depth + 1,
-        );
-        at = end + 1;
+        if (restricted) throw regionError(char, at);
+        at = this.scanBackquoted(at);
+      } else if (char === "\\") {
+        const escaped = source.charAt(at + 1);
+        if (
+          restricted ||
+          escaped === "$" ||
+          escaped === "`" ||
+          escaped === "{"
+        ) {
+          throw new ShellSyntaxError(
+            `a backslash at offset ${at} in a parameter expansion`,
+          );
+        }
+        at += 2;
       } else {
+        if (restricted) this.checkRegionBodyChar(char, at);
         at += 1;
       }
     }
     throw new ShellSyntaxError("unterminated ${");
   }
 
-  private skipArithmetic(): void {
-    let depth = 0;
-    for (let at = this.position + 1; at < this.source.length; at += 1) {
-      const char = this.source.charAt(at);
-      if (char === "(") depth += 1;
-      if (char === ")") {
-        depth -= 1;
-        if (depth === 0) {
-          this.position = at + 1;
-          this.markDynamic("$((...))");
-          return;
-        }
-      }
+  /** 領域の中の`${`の本体で、集合の外の字を拒否する。`)`は、領域の本体では読まない。 */
+  private checkRegionBodyChar(char: string, at: number): void {
+    const allowed = char !== ")" && (char === "#" || REGION_CHARS.test(char));
+    if (!allowed || (char === "<" && this.source.charAt(at + 1) === "<")) {
+      throw regionError(char, at);
     }
-    throw new ShellSyntaxError("unterminated $((");
+  }
+
+  /** `${`の本体の`$`を読み、次の位置を返す。 */
+  private scanBracedDollar(
+    at: number,
+    level: number,
+    restricted: boolean,
+  ): number {
+    const next = this.source.charAt(at + 1);
+    if (next === "{") return this.scanBraced(at, level + 1);
+    if (next === "(") {
+      if (restricted) throw regionError("$(", at);
+      return this.readSubstitution(at);
+    }
+    if (/^[A-Za-z0-9_]$/.test(next)) return at + 1;
+    if (/^[@*#?$!-]$/.test(next)) return at + 2;
+    throw new ShellSyntaxError(
+      `a "$" at offset ${at} in a parameter expansion has no name`,
+    );
   }
 
   /**
@@ -1465,24 +1834,29 @@ class Parser {
   }
 
   private readBackquoted(): void {
-    let at = this.position + 1;
+    this.position = this.scanBackquoted(this.position);
+    this.markDynamic("`...`");
+  }
+
+  /** `at`の開きのバッククォートから中身を別のコマンド行として取り出し、閉じの次の位置を返す。 */
+  private scanBackquoted(at: number): number {
+    let cursor = at + 1;
     let inner = "";
-    while (at < this.source.length) {
-      const char = this.source.charAt(at);
+    while (cursor < this.source.length) {
+      const char = this.source.charAt(cursor);
       if (char === "\\") {
-        const next = this.source.charAt(at + 1);
+        const next = this.source.charAt(cursor + 1);
         inner += next !== "" && "$`\\".includes(next) ? next : char + next;
-        at += 2;
+        cursor += 2;
         continue;
       }
       if (char === "`") {
+        this.rejectPendingNewline(inner);
         collectCommands(inner, this.out, this.depth + 1);
-        this.position = at + 1;
-        this.markDynamic("`...`");
-        return;
+        return cursor + 1;
       }
       inner += char;
-      at += 1;
+      cursor += 1;
     }
     throw new ShellSyntaxError("unterminated backquote");
   }
