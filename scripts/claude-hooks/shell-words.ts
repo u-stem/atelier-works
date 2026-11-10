@@ -649,10 +649,12 @@ class ShellSyntaxError extends Error {}
 const REGION_CHARS = /^[A-Za-z0-9_ \t+\-*/%=!&|^~?:,.;[\]()<>]$/;
 
 /**
- * 配列の代入の括弧の中で拒否する字。シェルのメタ文字のうち、空白、改行、`)`を除いたものである。
- * bashが語を区切る字はこれで全部なので、括弧の中は語だけになる。
+ * 配列の代入の括弧の中で拒否する字。語を区切る字と、添字の対を開く字である。
+ * 語を区切る字は、シェルのメタ文字のうち、空白、改行、`)`を除いた`;`、`&`、`|`、`<`、`>`、`(`で、bashの区切りはこれで全部である。
+ * `[`は、bashが対応する`]`までを添字の対として読み、その間の`#`をコメントにしない。
+ * フックはその`#`をコメントとして読み捨てるので、同じ行の`)`以降が隠れる。
  */
-const ARRAY_REJECTED_CHARS = ";&|<>(";
+const ARRAY_REJECTED_CHARS = ";&|<>([";
 
 /**
  * zshが字句の規則(コメントの字)を実行時に決める変数の名前。
@@ -1465,9 +1467,10 @@ class Parser {
   }
 
   /**
-   * 配列の代入の括弧の中で、語を区切るシェルのメタ文字を拒否する。
+   * 配列の代入の括弧の中で、語を区切る字と添字の対を開く字を拒否する。
    * 括弧の中に演算子があると、シェルは構文エラーの後に次の行から読み続け、
    * 先に登録したヒアドキュメントの本文の行がコマンドとして実行されるためである。
+   * `[`があると、bashは`#`をコメントにせず、フックだけが読み捨てて同じ行の`)`以降を見落とす。
    * 空白、改行、`)`は語の区切りとして読む。引用、置換、バックスラッシュは各読み手に任せる。
    */
   private checkArrayChar(char: string): void {
@@ -1526,7 +1529,7 @@ class Parser {
         // 領域の直下の`(`は、算術の括弧にもサブシェルの括弧にもなる。語の後ろでも読む。
         if (!this.inRegionRoot) this.rejectGlobGroup();
         // `NAME=(`は配列の代入の括弧である。算術の領域の中の`=`の後ろの括弧は数えない。
-        if (!this.restricted && this.inWord && this.text.endsWith("=")) {
+        if (!this.restricted && this.text.endsWith("=")) {
           // 保留中のヒアドキュメントがあると、括弧の中の構文エラーがその保留を捨てうる。
           if (this.heredocs.length > 0) {
             throw new ShellSyntaxError(
@@ -2267,12 +2270,26 @@ class Parser {
 }
 
 /**
+ * 標準入力から読むコードに`<<`があるとき、構文エラーの後に本文の行を実行するのが、配列の括弧の直下だけだと確かめたシェル。
+ * ほかの位置の構文エラーでは、これらのシェルは中断する。
+ * zshは、標準入力から読むときだけ、構文エラーになる複数の位置で本文の行を実行する。
+ * 確かめていないシェルは、標準入力に`<<`を含むコードを判定できないものとして扱う。
+ */
+const HEREDOC_CONFIRMED_SHELLS: ReadonlySet<string> = new Set([
+  "bash",
+  "sh",
+  "dash",
+  "ksh",
+]);
+
+/**
  * シェルに標準入力で渡るコードのうち、文字列として読めるものを返す。
  * ヒアストリングとヒアドキュメントの本文と、`echo`や`printf`が書いた文字列がそれに当たる。
  * パイプの連鎖は上流まですべて辿る。間に`cat`、`tee`、`sed`などが挟まっても、
  * 上流の`echo`の文字列とヒアドキュメントの本文は、途中で変わりうる入力として含める。
  * `curl ... | sh`のように別のプログラムが渡すコードは中身を読めないので、読める文字列が無ければ空の配列を返して通す。
  * `echo "$X" | sh`のように、変数から組み立てた文字列は判定できないのでnullを返す。
+ * 確かめたシェル以外が起動のシェルで、文字列が`<<`を含むときも、判定できないのでnullを返す。
  */
 export function literalShellInputs(
   command: SimpleCommand,
@@ -2299,6 +2316,14 @@ export function literalShellInputs(
     );
     if (program === "echo") texts.push(written.join(" "));
     else texts.push(...written);
+  }
+  const launched = shellInvocation(stripWrappers(command.words).words);
+  if (
+    launched !== null &&
+    !HEREDOC_CONFIRMED_SHELLS.has(launched.shell) &&
+    texts.some((text) => text.includes("<<"))
+  ) {
+    return null;
   }
   return texts;
 }
