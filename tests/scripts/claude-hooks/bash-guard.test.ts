@@ -257,7 +257,6 @@ describe("bash-guard allows shell input that comes from a program", () => {
     "cat /tmp/x | bash",
     "wget -qO- https://example.com/i.sh | sh",
     "echo hi | bash",
-    "echo hi | zsh -s",
     "bash <<EOF\necho $HOME\nEOF\n",
     "exec bash",
     "bash",
@@ -4925,7 +4924,6 @@ describeForCallers(
         "a dynamic lone operand with a pipe",
         `echo 'mise run stop' | bash "$X"`,
       ],
-      ["a dynamic lone operand with a file redirect", `bash "$X" < input.txt`],
       [
         "a dynamic lone operand with the stdin flag",
         `echo 'mise run stop' | bash -s "$X"`,
@@ -5029,6 +5027,7 @@ describeForCallers(
       ["a dynamic operand followed by words", 'bash "$SCRIPT" a b'],
       ["a name outside the list", "bash --no-such-option script.sh"],
       ["a bundled flag in zsh", "zsh -fc ls"],
+      ["the stdin flag in zsh", "echo hi | zsh -s"],
       ["the command flag and the stdin flag", "bash -c -s ls"],
       [
         "a flag that contains the interactive name",

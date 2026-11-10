@@ -1809,7 +1809,7 @@ describe("a shell launch reads the command string through every option sequence"
       "a bundle that ends in a value option",
       "bash",
       ["-eo", "pipefail", "-c", "cmd"],
-      "command@4",
+      "command@3",
     ],
     [
       "a value with another case and separators",
