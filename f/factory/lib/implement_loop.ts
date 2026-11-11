@@ -248,7 +248,7 @@ export function implementPromptInput(
   docDir: string | null,
 ): ImplementPromptInput {
   return {
-    specKind: implementContextSpecKind(context),
+    specKind: context.spec_kind,
     profile: context.profile,
     issue: {
       owner: context.owner,
@@ -268,13 +268,6 @@ export function implementPromptInput(
     design: context.design_markdown,
     hasPreviousImplementation: context.has_previous_implementation,
   };
-}
-
-/** 文脈の仕様の出どころを返す。 */
-export function implementContextSpecKind(context: {
-  readonly spec_kind: ImplementSpecKind;
-}): ImplementSpecKind {
-  return context.spec_kind;
 }
 
 /** 文脈が設計書を持つかを返す。設計書を持つ実行だけが、`design_gap`を返せる。 */

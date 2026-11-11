@@ -92,7 +92,6 @@ import {
   IMPLEMENT_PREPARE_OUTCOMES,
   type ImplementContext,
   type ImplementLoopResult,
-  implementContextSpecKind,
   isImplementContextShape,
   isImplementLoopResultShape,
 } from "../lib/implement_loop.ts";
@@ -521,7 +520,7 @@ async function finishImplement(
           });
           if (changed.length > 0) return changed;
           return protectedPartialPushStopReasons({
-            specKind: implementContextSpecKind(ctx),
+            specKind: ctx.spec_kind,
             listStagedChanges: () =>
               listChangedPaths(runCommand, ctx.worktree_dir, ctx.base_sha),
           });
@@ -536,7 +535,7 @@ async function finishImplement(
     ctx: ImplementContext,
   ): Promise<string[]> =>
     shouldWithholdPartialPush({
-      specKind: implementContextSpecKind(ctx),
+      specKind: ctx.spec_kind,
       protectedChanges: loop_result?.protected_changes ?? [],
     })
       ? [PROTECTED_WORK_NOT_PUSHED_REASON]
@@ -706,7 +705,7 @@ async function finishImplement(
   const protectedReroute =
     action.kind === "open_pr"
       ? decideProtectedPathReroute({
-          specKind: implementContextSpecKind(context),
+          specKind: context.spec_kind,
           protectedChanges: loop_result.protected_changes,
         })
       : null;
@@ -932,7 +931,7 @@ async function finishImplement(
         summary: claudeText(output.summary),
         spec: prBodySpecFor(ctx),
         profileWarnings:
-          implementContextSpecKind(ctx) === "issue"
+          ctx.spec_kind === "issue"
             ? profileDiffWarnings(ctx.profile, loop.changed_paths)
             : [],
         checks,

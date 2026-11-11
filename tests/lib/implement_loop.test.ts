@@ -46,7 +46,6 @@ import {
   type ImplementLoopDeps,
   type ImplementLoopInput,
   implementContextHasDesign,
-  implementContextSpecKind,
   implementOutputContractNote,
   implementPromptInput,
   isCopyableDocEntry,
@@ -274,12 +273,6 @@ describe("implementPromptInput", () => {
         "/tmp/copy/requirements",
       ).requirements.doc_dir,
     ).toBe("/tmp/copy/requirements");
-  });
-});
-
-describe("implementContextSpecKind", () => {
-  test("reads the kind the preparation recorded", () => {
-    expect(implementContextSpecKind({ spec_kind: "issue" })).toBe("issue");
   });
 });
 

@@ -15,7 +15,6 @@ import {
   type ImplementLoopExit,
   type ImplementLoopResult,
   type ImplementPrepareOutcome,
-  implementContextSpecKind,
 } from "./implement_loop.ts";
 import {
   classifyProtectedChanges,
@@ -611,7 +610,7 @@ export function prBodySpecFor(context: {
   readonly requirements_markdown: string | null;
   readonly requirements_console_url: string | null;
 }): ImplementPrBodySpec {
-  if (implementContextSpecKind(context) === "issue") {
+  if (context.spec_kind === "issue") {
     return { kind: "issue", profile: context.profile };
   }
   return {
