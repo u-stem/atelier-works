@@ -668,14 +668,46 @@ export function currentSteps(
 }
 
 /**
+ * 取り直しが止まっていた状態から再開したとき、一覧をすぐ取り直すか。
+ * 操作の再開と、実行中と待ちのタブへの切り替えでは、次の取り直しまで最大60秒かかる。
+ * その間、見出しは自動更新と出したまま、古い一覧が残るのを避けるためである。
+ * 新しいとみなす間隔(`JOBS_LIST_STALE_MS`)より古いときだけ取り直す。
+ */
+export function shouldRefetchStaleList(input: {
+  /** 取り直しが、止まっていた状態から有効になったか。 */
+  readonly resumed: boolean;
+  /** 最後の取得の時刻(ミリ秒)。まだ取っていなければ0。 */
+  readonly dataUpdatedAt: number;
+  readonly now: number;
+}): boolean {
+  return input.resumed && input.now - input.dataUpdatedAt >= JOBS_LIST_STALE_MS;
+}
+
+/**
  * 実行中と待ちのジョブを取る。`enabled`が偽の間は取らない(開いていないタブの取得を避ける)。
  * 実行中と待ちのタブを選んでいて、画面が操作されているあいだは、60秒ごとに取り直す。
+ * 取り直しが再開したとき、一覧が古ければすぐ1回取り直す。取得中は始めない。
  */
 export function useActiveJobs(
   enabled: boolean,
   polling: ActiveListPolling,
 ): UseQueryResult<JobListView, Error> {
-  return useQuery({ ...activeListQueryOptions(polling), enabled });
+  const query = useQuery({ ...activeListQueryOptions(polling), enabled });
+  const refreshing = activeListRefetchInterval(polling) !== false;
+  const wasRefreshing = useRef(refreshing);
+  const { refetch, isFetching, dataUpdatedAt } = query;
+  useEffect(() => {
+    const resumed = refreshing && !wasRefreshing.current;
+    wasRefreshing.current = refreshing;
+    if (
+      enabled &&
+      !isFetching &&
+      shouldRefetchStaleList({ resumed, dataUpdatedAt, now: Date.now() })
+    ) {
+      void refetch();
+    }
+  }, [enabled, refreshing, isFetching, dataUpdatedAt, refetch]);
+  return query;
 }
 
 /** scheduleの状態を取る。`enabled`が偽の間は取らない。 */
