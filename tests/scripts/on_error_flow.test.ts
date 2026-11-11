@@ -281,6 +281,20 @@ describe("handleFlowFailure with every form of the error that the flow can pass"
   });
 });
 
+describe("handleFlowFailure without an error", () => {
+  test("records the failure", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput({ error: undefined }));
+    expect(fake.failures).toHaveLength(1);
+  });
+
+  test("moves the work item", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput({ error: undefined }));
+    expect(fake.statusCalls).toHaveLength(1);
+  });
+});
+
 describe("handleFlowFailure with the marker that stops the flow retry", () => {
   const MARKED = {
     error: { message: "[no-flow-retry] step: failed", step_id: "generate" },
