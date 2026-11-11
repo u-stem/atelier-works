@@ -3239,8 +3239,9 @@ describeForCallers(
 /**
  * 判定の処理が使ったCPU時間(ミリ秒)を、判定の結果と一緒に返す。
  * 判定は同じプロセスの中で同期に走る。壁時計で測ると、`mise run check`の並列の実行でほかの検査とCPUを分け合ったとき、
- * 処理量が同じでも数倍に伸びて落ちる。CPU時間は待たされた分を含まないので、負荷による遅れでは伸びず、
- * 処理量が増える退行(2乗の走査など)だけを検出できる。
+ * 処理量が同じでも数倍に伸びて落ちる。CPU時間は待たされた分を含まないので、壁時計より負荷で伸びにくい。
+ * ただし負荷の下でも、キャッシュの競合などで1.5倍ほどには伸びる。
+ * `process.cpuUsage()`はプロセスの全スレッドの合計で、JITやGCの補助スレッドの分も含むため、測る値は判定だけのCPU時間ではない。
  */
 async function withCpuTime<T>(
   work: () => Promise<T>,
@@ -3251,40 +3252,72 @@ async function withCpuTime<T>(
   return { value, cpuMs: (used.user + used.system) / 1000 };
 }
 
-// 長い入力の判定が使うCPU時間の上限。最も遅い入力でも単独の実測は1秒未満で、その数倍を置く。
+// 時間のテストは、判定の締め切りが決定を変えたり処理を打ち切ったりしないよう、経過しない時計で測る。
+// 締め切りで処理が止まると、負荷の下でCPU時間が上限に届かず、処理量の退行を見逃す。締め切りの働きは別のテストで固定している。
+const NEVER_EXPIRES = () => 0;
+
+// 時間のテストは、処理量をCPU時間の上限で、待ちを壁時計のタイムアウトで確かめる。
+// CPU時間では、CPUを使わない待ち(同期のサブプロセスやブロックするI/O)を捕まえられないためである。
+// bunのテストの既定のタイムアウト(5秒)に頼らず、壁時計の上限をテストごとに明示する。
+// 壁時計の上限はフックのタイムアウトにそろえる。超えるとフックの判定が拒否にならず、通常の権限の流れに進むためである。
+const HOOK_TIMEOUT_MS = 10_000;
+
+// 長い入力の判定が使うCPU時間の上限。最も遅い入力でも、無負荷の単独の実測は0.5秒未満である。
 const LONG_INPUT_CPU_LIMIT_MS = 3000;
+
+// 幅のある256段などの判定が使うCPU時間の上限。最も遅い入力の、無負荷の単独の実測は約1秒で、
+// 語の数の上限が無い最悪の形では約9秒になる。
+const WIDE_INPUT_CPU_LIMIT_MS = 8000;
+
+// 幅のある入力の壁時計のタイムアウト。無負荷で約1秒かかり、並列の検査では約9倍(約9秒)に伸びた実測があるため、
+// フックのタイムアウトでは足りず、2倍の余裕を置く。
+const WIDE_INPUT_TIMEOUT_MS = 2 * HOOK_TIMEOUT_MS;
 
 // 1行に並ぶ数千の語やコマンドでも、フックのタイムアウト(10秒)の中で終える。
 describeForCallers(
   "bash-guard finishes long hold input in time",
   (subagent) => {
-    test("finishes thousands of words that point at the hold code behind a prefix", async () => {
-      const { cpuMs } = await withCpuTime(() =>
-        decide(`script -q /dev/null ${"scripts/hold.ts a ".repeat(3000)}`, {
-          subagent,
-        }),
-      );
-      expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
-    });
+    test(
+      "finishes thousands of words that point at the hold code behind a prefix",
+      async () => {
+        const { cpuMs } = await withCpuTime(() =>
+          decide(`script -q /dev/null ${"scripts/hold.ts a ".repeat(3000)}`, {
+            subagent,
+            now: NEVER_EXPIRES,
+          }),
+        );
+        expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
+      },
+      HOOK_TIMEOUT_MS,
+    );
 
-    test("finishes thousands of commands that nest -c strings", async () => {
-      const { cpuMs } = await withCpuTime(() =>
-        decide(`${`bash -c "bash -c 'echo a b'"; `.repeat(3000)}true`, {
-          subagent,
-        }),
-      );
-      expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
-    });
+    test(
+      "finishes thousands of commands that nest -c strings",
+      async () => {
+        const { cpuMs } = await withCpuTime(() =>
+          decide(`${`bash -c "bash -c 'echo a b'"; `.repeat(3000)}true`, {
+            subagent,
+            now: NEVER_EXPIRES,
+          }),
+        );
+        expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
+      },
+      HOOK_TIMEOUT_MS,
+    );
 
-    test("finishes thousands of prefixed commands that nest strings", async () => {
-      const { cpuMs } = await withCpuTime(() =>
-        decide(
-          `${`script -qc "script -qc 'echo a b' /dev/null" /dev/null; `.repeat(3000)}true`,
-          { subagent },
-        ),
-      );
-      expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
-    });
+    test(
+      "finishes thousands of prefixed commands that nest strings",
+      async () => {
+        const { cpuMs } = await withCpuTime(() =>
+          decide(
+            `${`script -qc "script -qc 'echo a b' /dev/null" /dev/null; `.repeat(3000)}true`,
+            { subagent, now: NEVER_EXPIRES },
+          ),
+        );
+        expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
+      },
+      HOOK_TIMEOUT_MS,
+    );
   },
 );
 
@@ -3546,33 +3579,49 @@ describeForCallers(
 describeForCallers(
   "bash-guard finishes long assignment and pipeline input in time",
   (subagent) => {
-    test("finishes thousands of assignments and words in one string", async () => {
-      const { cpuMs } = await withCpuTime(() =>
-        decide(
-          `script -qc "${"A=1 ".repeat(5000)}echo ${"x ".repeat(5000)}" /dev/null`,
-          { subagent },
-        ),
-      );
-      expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
-    });
+    test(
+      "finishes thousands of assignments and words in one string",
+      async () => {
+        const { cpuMs } = await withCpuTime(() =>
+          decide(
+            `script -qc "${"A=1 ".repeat(5000)}echo ${"x ".repeat(5000)}" /dev/null`,
+            { subagent, now: NEVER_EXPIRES },
+          ),
+        );
+        expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
+      },
+      HOOK_TIMEOUT_MS,
+    );
 
-    test("finishes a pipeline of thousands of commands in a nested string", async () => {
-      const pipeline = `${"echo x | ".repeat(3000)}vim a`;
-      const { cpuMs } = await withCpuTime(() =>
-        decide(`script -qc "script -qc '${pipeline}' /dev/null" /dev/null`, {
-          subagent,
-        }),
-      );
-      expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
-    });
+    test(
+      "finishes a pipeline of thousands of commands in a nested string",
+      async () => {
+        const pipeline = `${"echo x | ".repeat(3000)}vim a`;
+        const { cpuMs } = await withCpuTime(() =>
+          decide(`script -qc "script -qc '${pipeline}' /dev/null" /dev/null`, {
+            subagent,
+            now: NEVER_EXPIRES,
+          }),
+        );
+        expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
+      },
+      HOOK_TIMEOUT_MS,
+    );
 
-    test("finishes a pipeline of thousands of commands ending in a hold word", async () => {
-      const pipeline = `${"echo x | ".repeat(3000)}python3 scripts/hold.ts list`;
-      const { cpuMs } = await withCpuTime(() =>
-        decide(`script -qc '${pipeline}' /dev/null`, { subagent }),
-      );
-      expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
-    });
+    test(
+      "finishes a pipeline of thousands of commands ending in a hold word",
+      async () => {
+        const pipeline = `${"echo x | ".repeat(3000)}python3 scripts/hold.ts list`;
+        const { cpuMs } = await withCpuTime(() =>
+          decide(`script -qc '${pipeline}' /dev/null`, {
+            subagent,
+            now: NEVER_EXPIRES,
+          }),
+        );
+        expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
+      },
+      HOOK_TIMEOUT_MS,
+    );
   },
 );
 
@@ -3580,14 +3629,19 @@ describeForCallers(
 describeForCallers(
   "bash-guard finishes a long top-level pipeline in time",
   (subagent) => {
-    test("finishes a pipeline of three thousand prefixed commands", async () => {
-      const { cpuMs } = await withCpuTime(() =>
-        decide(`${"caffeinate true | ".repeat(3000)}caffeinate true`, {
-          subagent,
-        }),
-      );
-      expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
-    });
+    test(
+      "finishes a pipeline of three thousand prefixed commands",
+      async () => {
+        const { cpuMs } = await withCpuTime(() =>
+          decide(`${"caffeinate true | ".repeat(3000)}caffeinate true`, {
+            subagent,
+            now: NEVER_EXPIRES,
+          }),
+        );
+        expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
+      },
+      HOOK_TIMEOUT_MS,
+    );
 
     test("allows a prefixed command behind 256 pipeline stages", async () => {
       expect(
@@ -3613,15 +3667,6 @@ function widePipeline(stages: number, wordsPerStage: number): string {
   return `${`${stage}| `.repeat(stages - 1)}${stage}`;
 }
 
-// 閾値はフックのタイムアウト(10秒)の内に置き、CPU時間で測る。並列に走る検査でCPUを待たされても伸びないので、
-// 負荷のゆれでは落ちず、退行(修正前は約35秒、語の数の上限が無い最悪の形で約9秒)だけを検出できる。
-// 壁時計の経過ではないので、テストの待ち時間は閾値と別に伸びうる。bunのテストの既定のタイムアウト(5秒)は延ばす。
-const WIDE_PIPELINE_LIMIT_MS = 8000;
-const WIDE_PIPELINE_TIMEOUT_MS = 20000;
-
-// 時間のテストは、判定の締め切りが決定を変えないよう、経過しない時計で測る。締め切りの働きは別のテストで固定している。
-const NEVER_EXPIRES = () => 0;
-
 describeForCallers(
   "bash-guard bounds the work for a wide prefixed pipeline",
   (subagent) => {
@@ -3635,9 +3680,9 @@ describeForCallers(
           }),
         );
         expect(decision).toBe("allow");
-        expect(cpuMs).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+        expect(cpuMs).toBeLessThan(WIDE_INPUT_CPU_LIMIT_MS);
       },
-      WIDE_PIPELINE_TIMEOUT_MS,
+      WIDE_INPUT_TIMEOUT_MS,
     );
 
     test(
@@ -3650,9 +3695,9 @@ describeForCallers(
           }),
         );
         expect(decision).toBe("deny");
-        expect(cpuMs).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+        expect(cpuMs).toBeLessThan(WIDE_INPUT_CPU_LIMIT_MS);
       },
-      WIDE_PIPELINE_TIMEOUT_MS,
+      WIDE_INPUT_TIMEOUT_MS,
     );
 
     test(
@@ -3665,9 +3710,9 @@ describeForCallers(
           }),
         );
         expect(decision).toBe("deny");
-        expect(cpuMs).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+        expect(cpuMs).toBeLessThan(WIDE_INPUT_CPU_LIMIT_MS);
       },
-      WIDE_PIPELINE_TIMEOUT_MS,
+      WIDE_INPUT_TIMEOUT_MS,
     );
   },
 );
@@ -3680,6 +3725,7 @@ describeForCallers(
       expect(
         await decide(`script -qc "${"A=1 ".repeat(257)}echo x" /dev/null`, {
           subagent,
+          now: NEVER_EXPIRES,
         }),
       ).toBe("deny");
     });
@@ -3692,15 +3738,19 @@ describeForCallers(
       ).toBe("allow");
     });
 
-    test("denies a string whose pipeline passes the word budget", async () => {
-      const { value: decision, cpuMs } = await withCpuTime(() =>
-        decide(`script -qc '${"vim a | ".repeat(500)}vim a' /dev/null`, {
-          subagent,
-        }),
-      );
-      expect(decision).toBe("deny");
-      expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
-    });
+    test(
+      "denies a string whose pipeline passes the word budget",
+      async () => {
+        const { value: decision, cpuMs } = await withCpuTime(() =>
+          decide(`script -qc '${"vim a | ".repeat(500)}vim a' /dev/null`, {
+            subagent,
+          }),
+        );
+        expect(decision).toBe("deny");
+        expect(cpuMs).toBeLessThan(LONG_INPUT_CPU_LIMIT_MS);
+      },
+      HOOK_TIMEOUT_MS,
+    );
   },
 );
 
@@ -3986,9 +4036,9 @@ describeForCallers(
           }),
         );
         expect(decision).toBe("allow");
-        expect(cpuMs).toBeLessThan(WIDE_PIPELINE_LIMIT_MS);
+        expect(cpuMs).toBeLessThan(WIDE_INPUT_CPU_LIMIT_MS);
       },
-      WIDE_PIPELINE_TIMEOUT_MS * 2,
+      WIDE_INPUT_TIMEOUT_MS,
     );
   },
 );

@@ -638,6 +638,8 @@ describe("runChild", () => {
     expect(finished).toMatchObject({ timedOut: true, exitCode: null });
   });
 
+  // 孫が出力を握り続けると、待った場合は30秒かかる。上限は、その待ちとはっきり分かれ、負荷でも落ちない値にする。
+  // bunのテストのタイムアウトは、上限より長くする。
   test("returns soon after a timeout even if a grandchild holds the output open", async () => {
     const started = Date.now();
     await runChild({
@@ -645,8 +647,8 @@ describe("runChild", () => {
       stdin: "",
       timeoutMs: 300,
     });
-    expect(Date.now() - started).toBeLessThan(3000);
-  });
+    expect(Date.now() - started).toBeLessThan(15000);
+  }, 20000);
 
   test("kills the grandchild at a timeout", async () => {
     const finished = await runChild({
@@ -659,19 +661,21 @@ describe("runChild", () => {
     expect(isAlive(pid)).toBe(false);
   });
 
+  // 子が終わっても返らない場合は、タイムアウト(30秒)まで待つ。上限は、その待ちとはっきり分かれ、負荷でも落ちない値にする。
+  // bunのテストのタイムアウトは、上限より長くする。
   test("returns when the child exits even if a grandchild holds the output open", async () => {
     const started = Date.now();
     const finished = await runChild({
       argv: ["/bin/sh", "-c", "sleep 32 & echo done"],
       stdin: "",
-      timeoutMs: 5000,
+      timeoutMs: 30000,
     });
     expect({
       stdout: finished.stdout,
       exitCode: finished.exitCode,
-      quick: Date.now() - started < 3000,
+      quick: Date.now() - started < 15000,
     }).toEqual({ stdout: "done\n", exitCode: 0, quick: true });
-  });
+  }, 20000);
 
   test("kills a grandchild that outlives the child", async () => {
     const finished = await runChild({
