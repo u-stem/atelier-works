@@ -61,7 +61,7 @@
 //       実行ではなく検査なので、`bunx biome check scripts/hold.ts`は止めない。
 //       版付きの名前(`@biomejs/biome@1.9.4`)と、実行系のオプション(`--bun`、`--yes`、`-y`)の後ろも同じに扱う。
 // - `mise`: 全体オプション(`-q`、`-C <dir>`など)を読み飛ばしたあとの、何かを実行するサブコマンド
-//   (`run`、`r`、`tasks run`、`watch`、`w`、`exec`、`x`)かタスク名(コロンを含む語)があるコマンド行に、
+//   (`run`、`r`、`watch`、`w`、`exec`、`x`、`tasks`の後ろの実行しない語の集合の外の語)かタスク名(コロンを含む語)があるコマンド行に、
 //   `hold:place`か`hold:release`を指しうる語が1つでもあれば、位置を問わず拒否する。
 //   `hold:`で始まる`hold:list`以外の語、globや文字クラスが当たる語、実行時に決まる語、ブレースを含む語が、これに当たる。
 //   `--`より後ろはタスクへの引数なので、glob、ブレース、実行時に決まる語は見ない。`hold:`で名指しする語は見る。
@@ -287,8 +287,34 @@ const MISE_RUNNING_WORDS: ReadonlySet<string> = new Set([
   "x",
 ]);
 
-/** `mise tasks`とその別名。`run`が付かない限り、タスクの一覧や情報を出すだけである。 */
+/** `mise tasks`とその別名。後ろの語が実行しない語の集合(`MISE_TASKS_INERT_WORDS`)にあれば、タスクの一覧や情報を出すだけである。 */
 const MISE_TASKS_WORDS: ReadonlySet<string> = new Set(["tasks", "task", "t"]);
+
+/**
+ * `mise tasks`の副コマンドのうち、タスクを実行せず、タスクの定義も書き換えない語。
+ * 集合の外の語(globと実行時に決まる語を含む)は、実行の語として扱う。版で増えた語も実行の側に倒す。
+ * タスクの定義を書き換える語(追加、編集、削除、設定)は、集合に入れない。
+ */
+const MISE_TASKS_INERT_WORDS: ReadonlySet<string> = new Set([
+  "deps",
+  "graph",
+  "help",
+  "history",
+  "info",
+  "log",
+  "ls",
+  "validate",
+]);
+
+/**
+ * `args`の先頭が`mise tasks`の語のとき、その後ろの最初の位置引数が無いか、実行しない語なら真。
+ * 位置引数は`-`で始まらない語である。実行時に決まる語、glob、ブレースを含む語は、実行しない語に数えない。
+ */
+function miseTasksListsOnly(args: readonly Word[]): boolean {
+  const first = args.slice(1).find((word) => !word.text.startsWith("-"));
+  if (first === undefined) return true;
+  return !isUnreadable(first) && MISE_TASKS_INERT_WORDS.has(first.text);
+}
 
 /** `docker`と`psql`の呼び出しとして、語に`holds`を含むかを見るプログラム。 */
 const SQL_PROGRAMS: ReadonlySet<string> = new Set([
@@ -934,6 +960,7 @@ function miseFinding(
   const inTasks = MISE_TASKS_WORDS.has(subcommand.text);
   const running =
     args.some((word) => MISE_RUNNING_WORDS.has(word.text)) ||
+    (inTasks && !miseTasksListsOnly(args)) ||
     subcommand.dynamic ||
     namesHoldWriteTask(subcommand) ||
     subcommand.text === PUSH_TASK ||
@@ -2654,10 +2681,11 @@ function miseStopAllCall(
   if (execAt !== -1 && runnerStopAllCall(args.slice(execAt + 1), inputs)) {
     return true;
   }
-  // `mise tasks`は、`run`が付かない限りタスクの一覧や情報を出すだけである。
+  // `mise tasks`は、後ろの語が実行しない語の集合にあり、`run`が付かない限り、タスクの一覧や情報を出すだけである。
   const listsOnly =
     MISE_TASKS_WORDS.has(subcommand.text) &&
-    !args.some((word) => MISE_RUNNING_WORDS.has(word.text));
+    !args.some((word) => MISE_RUNNING_WORDS.has(word.text)) &&
+    miseTasksListsOnly(args);
   if (listsOnly) return false;
   // `--`より後ろはタスクへの引数なので、タスクの名前としては見ない。
   const dashAt = args.findIndex((word) => word.text === "--");
