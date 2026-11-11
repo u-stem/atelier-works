@@ -1784,6 +1784,7 @@ const NON_EXECUTING_PROGRAMS: ReadonlySet<string> = new Set([
 /**
  * 名前が、ファイルのパスの形の語にあるときだけ通すプログラム。
  * `sed`の`e`コマンドと、`bat`と`ag`の`--pager`は、文字列をコマンドとして実行できる。
+ * `--pager`は、パスの形によらず、実行を委ねる形(`delegatesExecution`)としても扱う。
  */
 const PATH_ONLY_PROGRAMS: ReadonlySet<string> = new Set(["sed", "bat", "ag"]);
 
@@ -2216,14 +2217,34 @@ function ghExecutes(args: readonly Word[]): boolean {
   );
 }
 
-/** 何も実行しないはずのプログラムが、オプションで別のコマンドを実行する形なら真。 */
+/** `--pager`で、出力を渡すページャーのコマンドを受け取る読み取りの道具。 */
+const PAGER_OPTION_PROGRAMS: ReadonlySet<string> = new Set(["ag", "bat"]);
+
+/**
+ * `+`で始まる語を、起動したときに実行する初期コマンドとして受け取るページャー。
+ * 初期コマンドの`!`は、シェルのコマンドを実行する。macOSの`more`は`less`である。
+ */
+const INITIAL_COMMAND_PROGRAMS: ReadonlySet<string> = new Set(["less", "more"]);
+
+/** 語のどれかが、オプション`name`そのものか、`name=`で始まるなら真。 */
+function hasOption(args: readonly Word[], name: string): boolean {
+  return args.some(
+    (word) => word.text === name || word.text.startsWith(`${name}=`),
+  );
+}
+
+/**
+ * 何も実行しないはずのプログラムが、副コマンド、設定、オプションで別のコマンドの実行を委ねる形なら真。
+ * gitとghの副コマンドと設定、`rg`の前処理、`ag`と`bat`のページャー、`less`と`more`の初期コマンドである。
+ * 保留・凍結、全停止、Consoleのscriptの判定が、この関数で委ねる形を見分ける。
+ */
 function delegatesExecution(program: string, args: readonly Word[]): boolean {
   if (program === "git") return gitExecutes(args);
   if (program === "gh") return ghExecutes(args);
-  if (program === "rg") {
-    return args.some(
-      (word) => word.text === "--pre" || word.text.startsWith("--pre="),
-    );
+  if (program === "rg") return hasOption(args, "--pre");
+  if (PAGER_OPTION_PROGRAMS.has(program)) return hasOption(args, "--pager");
+  if (INITIAL_COMMAND_PROGRAMS.has(program)) {
+    return args.some((word) => word.text.startsWith("+"));
   }
   return false;
 }
