@@ -399,9 +399,9 @@ describe("noticeGuide", () => {
     );
   });
 
-  test("names the script to rerun by hand", () => {
+  test("tells to rerun by hand from the failures of the inbox", () => {
     expect(noticeGuide("host_action_required").action).toContain(
-      "f/factory/retry_work_item",
+      "止まった作業項目を要対応の失敗で再実行してください",
     );
   });
 
@@ -413,7 +413,7 @@ describe("noticeGuide", () => {
 
   test("tells how to rerun a work item stopped for a person", () => {
     expect(noticeGuide("implement_needs_human").action).toContain(
-      "f/factory/retry_work_item",
+      "要対応の失敗で再実行を押してください",
     );
   });
 
@@ -640,5 +640,49 @@ describe("the target in the system screen", () => {
           SECTION_TAB[section] === "status",
       ),
     ).toBe(true);
+  });
+});
+
+describe("the retry of the work item a notice names", () => {
+  test.each(["implement_needs_human", "implement_launch_failed"])(
+    "lets the notice of kind %s name the work item to retry",
+    (kind) => {
+      expect(noticeGuide(kind).retriesWorkItem).toBe(true);
+    },
+  );
+
+  test.each([
+    "host_action_required",
+    "check_runtime_unsafe",
+    "cleanup_db_failed",
+    "approval_comment_failed",
+  ])("does not let the notice of kind %s name a work item", (kind) => {
+    expect(noticeGuide(kind).retriesWorkItem).toBe(false);
+  });
+
+  test("does not name a work item in the generic guide", () => {
+    expect(GENERIC_NOTICE_GUIDE.retriesWorkItem).toBe(false);
+  });
+
+  test("does not name a work item for a kind that is not in the table", () => {
+    expect(noticeGuide("future_kind").retriesWorkItem).toBe(false);
+  });
+
+  test.each([
+    "implement_needs_human",
+    "implement_launch_failed",
+    "host_action_required",
+    "check_runtime_unsafe",
+  ])("tells the next step of %s without the script of Windmill", (kind) => {
+    expect(noticeGuide(kind).action).not.toContain("retry_work_item");
+  });
+
+  test.each([
+    "implement_needs_human",
+    "implement_launch_failed",
+    "host_action_required",
+    "check_runtime_unsafe",
+  ])("tells to rerun %s from the failures of the inbox", (kind) => {
+    expect(noticeGuide(kind).action).toContain("要対応の失敗で");
   });
 });

@@ -221,8 +221,8 @@ export const SUMMARY_NORMAL: ConsoleSummary = {
   notices: [
     {
       notice_id: 1,
-      kind: "example",
-      message: "example notice",
+      kind: "implement_needs_human",
+      message: "o/r#2 (work item 2): 実装フローが止まりました。",
       resolved: false,
       created_at: STAMP,
       severity: "action",
