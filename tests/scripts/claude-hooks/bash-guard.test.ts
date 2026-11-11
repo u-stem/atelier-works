@@ -6129,3 +6129,38 @@ describeForCallers("bash-guard allows daily brace ranges", (subagent) => {
     expect(await decide(command, { subagent })).toBe("allow");
   });
 });
+
+// `mise tasks`の後ろの語は、実行しない語の閉じた集合の外なら実行の語として扱う。
+describeForCallers(
+  "bash-guard denies task runs whose run word after the tasks subcommand is not literal",
+  (subagent) => {
+    test.each([
+      ["a glob run word with a hold task", "mise tasks r?n hold:place"],
+      ["a variable run word with a hold task", "mise tasks $X hold:place"],
+      [
+        "a brace run word with a freeze task",
+        "mise tasks r{u,u}n freeze:release",
+      ],
+      ["a glob run word with a stop task", "mise tasks r?n stop"],
+      ["a variable run word with a stop task", "mise tasks $X stop"],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows task listings and task information",
+  (subagent) => {
+    test.each([
+      "mise tasks",
+      "mise tasks ls",
+      "mise tasks --hidden",
+      "mise tasks info hold:place",
+      "mise tasks deps stop",
+      "mise tasks --sort name",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
