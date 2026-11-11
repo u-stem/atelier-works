@@ -4,8 +4,38 @@ import {
   collectMarkdownTests,
   decideChecks,
   type GitGrep,
+  planDocChecks,
   planTestCommands,
 } from "../../scripts/check-changed.ts";
+
+const LINKS_ONLY = [
+  "bun",
+  "run",
+  "scripts/lint-docs.ts",
+  "--links-only",
+] as const;
+
+describe("planDocChecks", () => {
+  test("runs the link check, then the docs:gen check, when no document changed", () => {
+    expect(planDocChecks([])).toEqual([
+      { label: "doc links", argv: [...LINKS_ONLY] },
+      {
+        label: "docs:gen --check",
+        argv: ["bun", "run", "scripts/docs-gen.ts", "--check"],
+      },
+    ]);
+  });
+
+  test("runs the link check, then lint:docs for the changed documents, when documents changed", () => {
+    expect(planDocChecks(["docs/a.md", "README.md"])).toEqual([
+      { label: "doc links", argv: [...LINKS_ONLY] },
+      {
+        label: "lint:docs (changed files)",
+        argv: ["bun", "run", "scripts/lint-docs.ts", "docs/a.md", "README.md"],
+      },
+    ]);
+  });
+});
 
 describe("decideChecks", () => {
   test("changed Markdown files are passed to the docs lint", () => {
