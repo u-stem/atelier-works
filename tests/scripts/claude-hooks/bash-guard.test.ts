@@ -6370,3 +6370,37 @@ describeForCallers(
     });
   },
 );
+
+// 標準入力をコードとして読むオペランドは、重ねたスラッシュや`.`、`..`の区切りをまとめた綴りで見る。
+describeForCallers(
+  "bash-guard denies guarded code piped into a runner through a respelled standard input path",
+  (subagent) => {
+    test.each([
+      ["a doubled slash", "cat scripts/hold.ts | bun /dev//stdin place"],
+      ["a dot segment", "cat scripts/hold.ts | bun /dev/./stdin place"],
+      ["a parent segment", "cat scripts/hold.ts | bun /dev/../dev/stdin place"],
+      [
+        "a doubled slash in a descriptor path",
+        "cat scripts/hold.ts | bun /dev/fd//0 place",
+      ],
+      [
+        "a leading doubled slash",
+        "cat scripts/hold.ts | bun //dev/stdin place",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows runners given absolute script paths",
+  (subagent) => {
+    test.each(["bun /repo/scripts/x.ts", "cat README.md | bun run check"])(
+      "allows %s",
+      async (command) => {
+        expect(await decide(command, { subagent })).toBe("allow");
+      },
+    );
+  },
+);
