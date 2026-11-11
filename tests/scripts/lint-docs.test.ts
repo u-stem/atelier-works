@@ -20,8 +20,10 @@ import {
   lintAllDocLinks,
   lintDocText,
   lintWithTools,
+  listDocCandidates,
   listRepoFiles,
   MARKDOWNLINT_BIN,
+  main,
   parseArgs,
   type Spawned,
   shardCount,
@@ -263,47 +265,104 @@ describe("guardCheck", () => {
   });
 });
 
+type Git = (...args: string[]) => void;
+
+/** コミット済みの`tracked.md`と、無視する`*.log`を持つ一時のリポジトリを作る。 */
+function createRepo(): { dir: string; git: Git; remove(): void } {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "lint-docs-files-"));
+  const git = (...args: string[]): void => {
+    const result = Bun.spawnSync(["git", ...args], {
+      cwd: dir,
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: dir,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_AUTHOR_NAME: "test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
+    }
+  };
+  const remove = (): void => {
+    rmSync(dir, { recursive: true, force: true });
+  };
+  try {
+    git("init", "-q");
+    writeFileSync(join(dir, ".gitignore"), "*.log\n");
+    writeFileSync(join(dir, "tracked.md"), "# T\n");
+    git("add", ".gitignore", "tracked.md");
+    git("commit", "-q", "--no-gpg-sign", "-m", "base");
+  } catch (error) {
+    remove();
+    throw error;
+  }
+  return { dir, git, remove };
+}
+
+function withRepo(run: (dir: string, git: Git) => void): void {
+  const repo = createRepo();
+  try {
+    run(repo.dir, repo.git);
+  } finally {
+    repo.remove();
+  }
+}
+
+async function withRepoAsync(
+  run: (dir: string, git: Git) => Promise<void>,
+): Promise<void> {
+  const repo = createRepo();
+  try {
+    await run(repo.dir, repo.git);
+  } finally {
+    repo.remove();
+  }
+}
+
+describe("listDocCandidates", () => {
+  test("lists a committed markdown file", () => {
+    withRepo((dir) => {
+      expect(listDocCandidates(dir)).toContain("tracked.md");
+    });
+  });
+
+  test("lists an untracked markdown file that is not ignored", () => {
+    withRepo((dir) => {
+      writeFileSync(join(dir, "draft.md"), "# D\n");
+
+      expect(listDocCandidates(dir)).toContain("draft.md");
+    });
+  });
+
+  test("does not list an ignored markdown file", () => {
+    withRepo((dir) => {
+      writeFileSync(join(dir, ".gitignore"), "*.log\nignored.md\n");
+      writeFileSync(join(dir, "ignored.md"), "# I\n");
+
+      expect(listDocCandidates(dir)).not.toContain("ignored.md");
+    });
+  });
+
+  test("does not list a file that is not markdown", () => {
+    withRepo((dir) => {
+      writeFileSync(join(dir, "note.txt"), "x\n");
+
+      expect(listDocCandidates(dir)).not.toContain("note.txt");
+    });
+  });
+});
+
 describe("listRepoFiles", () => {
   test("lists the files of the repository relative to the root", () => {
     const files = listRepoFiles(join(import.meta.dir, "..", ".."));
 
     expect(files).toContain("scripts/lint-docs.ts");
   });
-
-  /** コミット済みの`tracked.md`と、無視する`*.log`を持つ一時のリポジトリで`run`を実行する。 */
-  function withRepo(
-    run: (dir: string, git: (...args: string[]) => void) => void,
-  ): void {
-    const dir = mkdtempSync(join(realpathSync(tmpdir()), "lint-docs-files-"));
-    const git = (...args: string[]): void => {
-      const result = Bun.spawnSync(["git", ...args], {
-        cwd: dir,
-        env: {
-          PATH: process.env.PATH ?? "",
-          HOME: dir,
-          GIT_CONFIG_GLOBAL: "/dev/null",
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_AUTHOR_NAME: "test",
-          GIT_AUTHOR_EMAIL: "test@example.com",
-          GIT_COMMITTER_NAME: "test",
-          GIT_COMMITTER_EMAIL: "test@example.com",
-        },
-      });
-      if (result.exitCode !== 0) {
-        throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
-      }
-    };
-    try {
-      git("init", "-q");
-      writeFileSync(join(dir, ".gitignore"), "*.log\n");
-      writeFileSync(join(dir, "tracked.md"), "# T\n");
-      git("add", ".gitignore", "tracked.md");
-      git("commit", "-q", "--no-gpg-sign", "-m", "base");
-      run(dir, git);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
 
   test("lists a committed file", () => {
     withRepo((dir) => {
@@ -345,17 +404,45 @@ describe("listRepoFiles", () => {
   });
 });
 
-describe("lint-docs --links-only", () => {
-  test("exits with 0 and prints nothing when every link of the repository documents resolves", () => {
-    const result = Bun.spawnSync(
-      ["bun", "run", "scripts/lint-docs.ts", "--links-only"],
-      { cwd: join(import.meta.dir, "..", "..") },
-    );
+describe("main with --links-only", () => {
+  /** `root`で`--links-only`を実行し、終了コードと報告の行を返す。 */
+  async function runLinksOnly(
+    root: string,
+  ): Promise<{ exitCode: number; output: string[] }> {
+    const output: string[] = [];
+    const exitCode = await main(root, ["--links-only"], root, (line) => {
+      output.push(line);
+    });
+    return { exitCode, output };
+  }
 
-    expect({
-      exitCode: result.exitCode,
-      output: result.stdout.toString() + result.stderr.toString(),
-    }).toEqual({ exitCode: 0, output: "" });
+  test("exits with 0 and prints nothing when every link resolves", async () => {
+    await withRepoAsync(async (dir, git) => {
+      writeFileSync(join(dir, "good.md"), "[t](tracked.md)\n");
+      git("add", "good.md");
+
+      expect(await runLinksOnly(dir)).toEqual({ exitCode: 0, output: [] });
+    });
+  });
+
+  test("exits with 1 and prints the problem when a link is broken", async () => {
+    await withRepoAsync(async (dir, git) => {
+      writeFileSync(join(dir, "broken.md"), "[m](missing.md)\n");
+      git("add", "broken.md");
+
+      expect(await runLinksOnly(dir)).toEqual({
+        exitCode: 1,
+        output: ["broken.md:1: [link] file not found: missing.md"],
+      });
+    });
+  });
+
+  test("does not check an untracked draft", async () => {
+    await withRepoAsync(async (dir) => {
+      writeFileSync(join(dir, "draft.md"), "[m](missing.md)\n");
+
+      expect(await runLinksOnly(dir)).toEqual({ exitCode: 0, output: [] });
+    });
   });
 });
 
@@ -653,7 +740,7 @@ describe("lintWithTools with the real textlint", () => {
       }
       const output: string[] = [];
       const deps: LintDeps = {
-        ...createProductionDeps(),
+        ...createProductionDeps(join(import.meta.dir, "..", "..")),
         cpuCount: 4,
         write: (text) => {
           output.push(text);
