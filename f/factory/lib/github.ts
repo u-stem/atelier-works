@@ -2842,11 +2842,17 @@ export type PrFile = {
   readonly additions: number;
   readonly deletions: number;
   readonly changes: number;
+  /**
+   * ファイルの差分(unified diffのhunkの並び)。
+   * GitHubは、バイナリ、差分が大きすぎるファイル、中身の変わらない名前の変更では返さないので、そのときは`null`。
+   */
+  readonly patch: string | null;
 };
 
 type PrFilePayload = {
   readonly filename: string;
   readonly previous_filename?: unknown;
+  readonly patch?: unknown;
   readonly status: string;
   readonly additions: number;
   readonly deletions: number;
@@ -2896,6 +2902,7 @@ export async function getPrFiles(
       additions: raw.additions,
       deletions: raw.deletions,
       changes: raw.changes,
+      patch: typeof raw.patch === "string" ? raw.patch : null,
     });
   }
   return items;

@@ -33,6 +33,7 @@ import {
   repoOwnerStopReason,
 } from "../lib/repo_owner_gate.ts";
 import {
+  type FileDiffHunks,
   isOneOf,
   type ReviewFinding,
   type ReviewPostMode,
@@ -97,6 +98,21 @@ export function normalizeThreadResponses(
   return [...(value ?? [])];
 }
 
+/**
+ * 古いflow定義が新しいscriptを呼ぶと、`pr_file_hunks`がundefinedかnullで届く。
+ * そのときは、変更ファイルごとに範囲が分からないものとして扱い、指摘を確かめずに行コメントにする。
+ * 差分の外の行は、GitHubに拒否されたときの総評への退避で受ける。
+ */
+export function normalizePrFileHunks(
+  prFileHunks: readonly FileDiffHunks[] | null | undefined,
+  prFiles: readonly string[],
+): FileDiffHunks[] {
+  if (prFileHunks === null || prFileHunks === undefined) {
+    return prFiles.map((path) => ({ path, hunks: null }));
+  }
+  return [...prFileHunks];
+}
+
 /** `main`の引数をまとめたもの。名前は`main`の引数と同じにする。 */
 export type PrReviewPostInput = {
   readonly work_item_id: number;
@@ -110,6 +126,7 @@ export type PrReviewPostInput = {
   readonly findings: ReviewFinding[];
   readonly thread_responses: ThreadResponse[] | null | undefined;
   readonly pr_files: string[];
+  readonly pr_file_hunks: FileDiffHunks[] | null | undefined;
   readonly binary_files: string[] | null | undefined;
   readonly binary_unlisted_count: number | null | undefined;
   readonly worktree_dir: string;
@@ -155,6 +172,7 @@ export async function main(
   findings: ReviewFinding[],
   thread_responses: ThreadResponse[],
   pr_files: string[],
+  pr_file_hunks: FileDiffHunks[],
   binary_files: string[],
   binary_unlisted_count: number,
   worktree_dir: string,
@@ -173,6 +191,7 @@ export async function main(
       findings,
       thread_responses,
       pr_files,
+      pr_file_hunks,
       binary_files,
       binary_unlisted_count,
       worktree_dir,
@@ -756,10 +775,17 @@ async function postReview(
     return { skip: true, posted: false, posted_review_id: null };
   }
 
-  const { comments, droppedFindings } = mapFindingsToReviewComments(
-    findings,
-    pr_files,
-  );
+  const { comments, droppedFindings, reattachedFindings } =
+    mapFindingsToReviewComments(
+      findings,
+      normalizePrFileHunks(input.pr_file_hunks, pr_files),
+    );
+  if (reattachedFindings.length > 0) {
+    log.info("moved findings outside the diff to the nearest diff line", {
+      work_item_id,
+      count: reattachedFindings.length,
+    });
+  }
   const pr = await getPr(client, owner, repo, pr_number);
   // 投稿済みのレビューを探すのに要るので、取得に失敗したら投稿せずにステップを失敗させる。
   const viewerLogin = (await getViewer(client)).login;

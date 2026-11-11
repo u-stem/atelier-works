@@ -87,8 +87,10 @@ import {
 import { isRepoOwnerStopReason } from "../lib/repo_owner_gate.ts";
 import {
   assertSha,
+  type DiffHunkRange,
   type FactoryConfig,
   FIX_OUTCOMES,
+  type FileDiffHunks,
   type FixOutcome,
   type FixReply,
   type FixReplyDecision,
@@ -432,13 +434,91 @@ export type ReviewCommentLike = {
   readonly body: string;
 };
 
+const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+
+/**
+ * unified diffの差分(PRの変更ファイルの`patch`)から、hunkごとの新しい側の行の範囲を読む。
+ * GitHubが行コメントを受け付けるのは、hunkに現れる新しい側の行(追加行と文脈の行)だけである。
+ * 新しい側の行はhunkの中で途切れないので、ヘッダ`@@ -a,b +c,d @@`の`c`から`d`行分が範囲になる。
+ * `d`を省いたヘッダは1行、`d`が0のhunk(削除だけ)は範囲に入れない。
+ * 行の先頭が`@@`になるのはヘッダだけである。本文の行は先頭が`+`、`-`、空白、`\`のどれかになる。
+ */
+export function parseNewSideHunks(patch: string): DiffHunkRange[] {
+  const hunks: DiffHunkRange[] = [];
+  for (const line of patch.split("\n")) {
+    const match = HUNK_HEADER.exec(line);
+    if (match === null) continue;
+    const start = Number(match[1]);
+    const count = match[2] === undefined ? 1 : Number(match[2]);
+    if (count > 0) hunks.push({ start, end: start + count - 1 });
+  }
+  return hunks;
+}
+
+/**
+ * PRの変更ファイル1件から、行コメントを付けられる範囲を求める。
+ * `patch`が無いときは、変わった行が無い(`changes`が0。バイナリや中身の変わらない名前の変更)ならば範囲なし、
+ * 変わった行があるならば範囲が分からない(`null`)として扱う。
+ * 後者はGitHubが大きすぎる差分の`patch`を省いたときで、範囲を決めつけると、差分の中の指摘まで外へ移してしまうため。
+ */
+export function fileDiffHunksOf(file: {
+  readonly filename: string;
+  readonly patch: string | null;
+  readonly changes: number;
+}): FileDiffHunks {
+  if (file.patch !== null) {
+    return { path: file.filename, hunks: parseNewSideHunks(file.patch) };
+  }
+  return { path: file.filename, hunks: file.changes === 0 ? [] : null };
+}
+
+/**
+ * `line`に最も近い、hunkの中の行を返す。hunkが無ければ`null`。
+ * 同じ距離の行が2つあるときは、前の行を選ぶ。
+ */
+function nearestDiffLine(
+  line: number,
+  hunks: readonly DiffHunkRange[],
+): number | null {
+  let nearest: number | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const hunk of hunks) {
+    const candidate = Math.min(Math.max(line, hunk.start), hunk.end);
+    const distance = Math.abs(line - candidate);
+    if (
+      distance < nearestDistance ||
+      (distance === nearestDistance && candidate < (nearest ?? candidate))
+    ) {
+      nearest = candidate;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
+export type MappedReviewComments = {
+  readonly comments: ReviewCommentLike[];
+  /** 行コメントにできず、総評に並べる指摘。 */
+  readonly droppedFindings: ReviewFinding[];
+  /** 位置が差分の外だったため、最も近い差分の行に付け替えて`comments`に入れた指摘。 */
+  readonly reattachedFindings: ReviewFinding[];
+};
+
 /**
  * 指摘をGitHubのインラインのレビューコメントに変換する。
- * 次の指摘は除く。`path`がPRの変更ファイルに無いもの(diffの外のパスへの
- * インラインコメントはGitHubが拒否する)と、`line`でコメントの位置を
- * 決められないもの(`null`か0以下)。
- * 除いた指摘は、件数だけでなく指摘そのものも返す。
- * 黙って捨てずに、まとめのコメントに載せるため。
+ * `files`はPRの変更ファイルごとの、行コメントを付けられる範囲である(`fileDiffHunksOf`)。
+ * 行に紐づく指摘が1件でも差分の外を指すと、GitHubはレビュー全体を拒否する。
+ * そのため、投稿の前に、指摘ごとに位置を確かめる。
+ *
+ * - 指摘の行(範囲の指摘は最初から最後の行まで)が1つのhunkに収まれば、その位置に付ける。
+ *   複数のhunkにまたがる範囲を、GitHubは受け付けない。
+ * - 収まらなければ、同じファイルで最も近い差分の行に、1行のコメントとして付け替える。
+ *   本文には元の位置を添え、提案のブロックは通常のコードに変える(`renderReattachedInlineComment`)。
+ * - ファイルの`hunks`が`null`のときは範囲が分からないので、確かめずにそのまま付ける。
+ *   拒否されたときは、投稿の側が総評に移して投稿し直す。
+ * - 次の指摘は付け替えず、除いて総評に載せる。`path`がPRの変更ファイルに無いもの、
+ *   変更ファイルに新しい側の行が無いもの、`line`で位置を決められないもの(`null`か0以下)。
+ *   黙って捨てずに、件数だけでなく指摘そのものも返す。
  *
  * `end_line`が別の行を指す指摘は、範囲に固定したコメント
  * (`lib/github.ts`の`ReviewComment.start_line`)にする。
@@ -451,36 +531,51 @@ export type ReviewCommentLike = {
  */
 export function mapFindingsToReviewComments(
   findings: readonly ReviewFinding[],
-  prFiles: readonly string[],
-): {
-  readonly comments: ReviewCommentLike[];
-  readonly droppedFindings: ReviewFinding[];
-} {
-  const fileSet = new Set(prFiles);
+  files: readonly FileDiffHunks[],
+): MappedReviewComments {
+  const hunksByPath = new Map(files.map((file) => [file.path, file.hunks]));
   const comments: ReviewCommentLike[] = [];
   const droppedFindings: ReviewFinding[] = [];
+  const reattachedFindings: ReviewFinding[] = [];
   for (const finding of findings) {
-    if (
-      finding.line === null ||
-      finding.line <= 0 ||
-      !fileSet.has(finding.path)
-    ) {
+    const line = finding.line;
+    if (line === null || line <= 0 || !hunksByPath.has(finding.path)) {
       droppedFindings.push(finding);
       continue;
     }
-    const endLine = finding.end_line;
+    const lastLine =
+      finding.end_line !== null && finding.end_line > line
+        ? finding.end_line
+        : line;
     const range =
-      endLine !== null && endLine > finding.line
-        ? { start_line: finding.line, line: endLine }
-        : { line: finding.line };
+      lastLine > line ? { start_line: line, line: lastLine } : { line };
+    const hunks = hunksByPath.get(finding.path) ?? null;
+    if (
+      hunks === null ||
+      hunks.some((hunk) => hunk.start <= line && lastLine <= hunk.end)
+    ) {
+      comments.push({
+        path: finding.path,
+        side: "RIGHT",
+        ...range,
+        body: renderInlineComment(finding),
+      });
+      continue;
+    }
+    const nearest = nearestDiffLine(line, hunks);
+    if (nearest === null) {
+      droppedFindings.push(finding);
+      continue;
+    }
     comments.push({
       path: finding.path,
       side: "RIGHT",
-      ...range,
-      body: renderInlineComment(finding),
+      line: nearest,
+      body: renderReattachedInlineComment(finding),
     });
+    reattachedFindings.push(finding);
   }
-  return { comments, droppedFindings };
+  return { comments, droppedFindings, reattachedFindings };
 }
 
 const REVIEW_FINDING_KIND_PREFIXES: Record<ReviewFindingKind, string> = {
@@ -613,17 +708,43 @@ function postedFindingText(text: string): string {
  * `suggested_code`は文章ではなくコードなので変更しない。
  */
 export function renderInlineComment(finding: ReviewFinding): string {
+  const codeBlock =
+    finding.suggested_code === null
+      ? ""
+      : renderSuggestionBlock(finding.suggested_code);
+  return `${renderInlineCommentText(finding)}${codeBlock}`;
+}
+
+/** 役割タグ、`kind`の接頭辞と`message`、あれば`suggestion`の注記まで。コードのブロックは含まない。 */
+function renderInlineCommentText(finding: ReviewFinding): string {
   const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
   const message = postedFindingText(finding.message);
   const suggestionText =
     finding.suggestion !== null
       ? `\n\n提案: ${postedFindingText(finding.suggestion)}`
       : "";
+  return `${ROLE_TAGS.pr_review}\n${prefix} ${message}${suggestionText}`;
+}
+
+/**
+ * 位置が差分の外だったため、最も近い差分の行に付け替える指摘のインラインコメントの本文にする。
+ * 役割タグ、`kind`の接頭辞と`message`、`suggestion`の注記は`renderInlineComment`と同じで、
+ * 続けて元の位置(`path:line`、範囲の指摘は`path:line-end_line`)を添える。
+ *
+ * `suggested_code`は、GitHubのsuggestionブロックにしない。
+ * suggestionブロックは、コメントを付けた行を置き換えるので、付け替えると別の行を壊す提案になる。
+ * 通常のコードのブロックにして、元の位置の行を置き換える内容だと書く。
+ * 総評に移さないのは、提案をスレッドに残し、`pr_fix`と再レビューが他の指摘と同じように扱えるようにするため。
+ * 本文は`finding`だけから決まるので、`hasBodyOnlyMustFinding`が投稿済みのスレッドと突き合わせられる。
+ */
+export function renderReattachedInlineComment(finding: ReviewFinding): string {
+  const origin = `\n\n元の位置は${findingLocation(finding)}です。\n差分に収まらないため、最も近い差分の行に付けています。`;
+  const code = finding.suggested_code;
   const codeBlock =
-    finding.suggested_code === null
+    code === null
       ? ""
-      : renderSuggestionBlock(finding.suggested_code);
-  return `${ROLE_TAGS.pr_review}\n${prefix} ${message}${suggestionText}${codeBlock}`;
+      : `\n\n次のコードは、元の位置の行を置き換える提案です。\n\n${fenceFor(code)}\n${code}\n${fenceFor(code)}`;
+  return `${renderInlineCommentText(finding)}${origin}${codeBlock}`;
 }
 
 /**
@@ -6274,7 +6395,7 @@ export function reviewDeltaPaths(
  * 行に紐づけられなかった指摘はスレッドにならないので、差分だけを読む再レビューでは忘れられる。
  * スレッドの一覧を読めなかったときは`threads`が空なので、`[MUST]`があれば真になり、PR全体を読む側に倒れる。
  * 解決済みのスレッドも、投稿した指摘として数える。
- * スレッドがあるとみなすのは、同じパスで、最初のコメントが`renderInlineComment`の形と同じものだけにする。
+ * スレッドがあるとみなすのは、同じパスで、最初のコメントが`renderInlineComment`か`renderReattachedInlineComment`の形と同じものだけにする。
  * 本文の一部の一致では、別のパスの同じ文、別の指摘の提案の中の文、空の本文でも一致し、
  * 差分だけを読む側に倒れて指摘を忘れるためである。
  * 比べるときは、GitHubが変えうる改行の種類と末尾の空白をそろえる。
@@ -6292,11 +6413,15 @@ export function hasBodyOnlyMustFinding(
   return findings
     .filter((finding) => finding.kind === "must")
     .some((finding) => {
-      const expected = comparable(renderInlineComment(finding));
+      // 位置が差分の外で、近い行に付け替えて投稿したスレッドも、投稿済みとみなす。
+      const expected = [
+        comparable(renderInlineComment(finding)),
+        comparable(renderReattachedInlineComment(finding)),
+      ];
       return !posted.some(
         (thread) =>
           thread.path === finding.path &&
-          comparable(thread.firstCommentBody) === expected,
+          expected.includes(comparable(thread.firstCommentBody)),
       );
     });
 }

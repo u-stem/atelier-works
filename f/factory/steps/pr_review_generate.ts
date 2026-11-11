@@ -40,6 +40,7 @@ import {
   reviewPrompt,
 } from "../lib/prompts.ts";
 import type {
+  FileDiffHunks,
   ReviewFinding,
   ReviewVerdict,
   ThreadResponse,
@@ -53,6 +54,7 @@ import {
   buildReviewDiffText,
   decideReviewScope,
   describeReason,
+  fileDiffHunksOf,
   hasBodyOnlyMustFinding,
   isReviewClaudeOutput,
   listReviewThreadsBestEffort,
@@ -79,6 +81,8 @@ export type PrReviewGenerateResult = {
   /** 既存のスレッドへの答え。返信の前に、読み直したスレッドで確かめてから使う。 */
   readonly thread_responses: ThreadResponse[];
   readonly pr_files: string[];
+  /** 変更ファイルごとの、行コメントを付けられる新しい側の行の範囲。投稿の前に、指摘の位置を確かめるのに使う。 */
+  readonly pr_file_hunks: FileDiffHunks[];
   /** 差分に内容が出ないバイナリのファイル。投稿の本文に、決定的な固定の文で載せる。 */
   readonly binary_files: readonly string[];
   /** `binary_files`に載せなかった(パスを変更ファイルと照合できなかった)バイナリの件数。 */
@@ -93,6 +97,7 @@ const SKIPPED_RESULT: PrReviewGenerateResult = {
   findings: [],
   thread_responses: [],
   pr_files: [],
+  pr_file_hunks: [],
   binary_files: [],
   binary_unlisted_count: 0,
 };
@@ -389,6 +394,7 @@ export async function main(
       findings,
       thread_responses: settleThreadResponses(output.thread_responses, scope),
       pr_files: prFiles,
+      pr_file_hunks: prFileEntries.map(fileDiffHunksOf),
       binary_files: binaryFiles,
       binary_unlisted_count: binaryUnlistedCount,
     };
