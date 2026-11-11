@@ -140,13 +140,13 @@ describe("lintAllDocLinks", () => {
   test("checks the links of every target document", () => {
     const docs = {
       "README.md": "[a](docs/none.md)\n",
-      "docs/a.md": "[b](docs/b.md#無い)\n",
+      "docs/a.md": "[b](b.md#無い)\n",
       "docs/b.md": "# B\n",
     };
 
     expect(lintAllDocLinks(Object.keys(docs), readerOf(docs))).toEqual([
       "README.md:1: [link] file not found: docs/none.md",
-      "docs/a.md:1: [link] anchor not found: docs/b.md#無い",
+      "docs/a.md:1: [link] anchor not found: b.md#無い",
     ]);
   });
 
