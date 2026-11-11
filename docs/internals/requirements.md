@@ -211,7 +211,7 @@ Consoleの要件定義書の画面(`/console/items/:id/requirements`)が、本�
 本文は、落とした図を「安全の検査を通らなかったので表示しません」と出す。
 通った図は、隔離したiframeの中で描く。
 画面の仕様は[Consoleの仕様](console.md)の「要件定義書の画面」にある。
-理由は[セキュリティ](console/security.md#drawioの図の描画)の「draw.ioの図の描画」と「要件定義書のリンク」にある。
+理由は[Consoleの安全策の内部仕様](console/security.md#drawioの図の描画)の「draw.ioの図の描画」と「要件定義書のリンク」にある。
 
 読み戻しの規則は次のとおり。
 

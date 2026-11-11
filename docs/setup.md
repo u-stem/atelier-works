@@ -314,7 +314,7 @@ artifactの中身は次のとおりである。
 含まないときは、merge木とheadの木が違い、パッチはheadに対する結果ではなくなる。
 manifestを読む判定は、同じファイルの`parseManifest`にある。
 
-仕組みの権限と前提は、[セキュリティ](internals/ci-fix.md#ciのメタデータの再生成)に書く。
+仕組みの権限と前提は、[CIの失敗を直す部品の内部仕様](internals/ci-fix.md#ciのメタデータの再生成)に書く。
 
 ### CIの実行の範囲
 

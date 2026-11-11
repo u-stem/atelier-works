@@ -2005,7 +2005,7 @@ getfacl -R -P -s -p -- /data/c | wc -l
 記録はworkerの`/var/lib/factory/check-slots/slot-<N>.state`である。
 記録は、所有権をrootに戻し終えたときだけ消える。
 残った記録は、次にその枠を取る検査か、次にそのworktreeを使うステップが使って片付ける。
-仕組みは[セキュリティ](internals/check-sandbox.md#枠の記録と片付け)にある。
+仕組みは[検査コマンドの実行と権限の内部仕様](internals/check-sandbox.md#枠の記録と片付け)にある。
 
 人が片付けるのは、次の4つの場合である。
 
@@ -2089,7 +2089,7 @@ Discordに実装のPRの通知(`pr_opened`)が届く。
 - 保護パスを変えたラウンドでは、検査コマンドを実行しない。
   PR本文の「動作確認結果」に「検査未実施」と理由が出るので、GitHub側のCIの結果を確かめる。
 
-保護パスの一覧と理由は[セキュリティ](security.md)にある。
+保護パスの一覧と理由は[PRワークフローの仕様](internals/pr-workflow.md#保護パスの変更を止める)にある。
 
 ### 人の対応待ちになったら
 
@@ -4032,7 +4032,7 @@ dependabotの対象は、baseが`main`のPRに限る。
 この間は、ゲートまで通ったことを、人に回った理由(`dependabot prepare:`)で確かめるために使う。
 `factory_repo`の必須チェックは、今までどおり固定の10件で、設定に左右されない。
 
-マージする条件と残るリスクは[セキュリティ](internals/dependabot.md#dependabotの更新の自動マージ)に、選び方と状態は[dependabotの更新の内部仕様](internals/dependabot.md)にある。
+マージする条件と残るリスクは[dependabotの更新の内部仕様](internals/dependabot.md#dependabotの更新の自動マージ)に、選び方と状態は同じ文書の前半にある。
 
 ### 有効にする
 
@@ -4136,7 +4136,7 @@ dependabotの対象は、baseが`main`のPRに限る。
 一覧の読み取りが失敗すると、失敗の記録の段`list_open_pull_requests`に残り、`failed`に数える。
 開いているPRが1000件を超えるリポジトリでは、一覧が上限に当たって失敗し続ける。
 一覧を読むのは、収集が止まっている間と、収集が集めないリポジトリである。
-公開のリポジトリへ第三者が大量のPRを開くと、その場合に当たりうる([セキュリティ](internals/dependabot.md#dependabotの更新の自動マージ)の残るリスク)。
+公開のリポジトリへ第三者が大量のPRを開くと、その場合に当たりうる([dependabotの更新の内部仕様](internals/dependabot.md#dependabotの更新の自動マージ)の残るリスク)。
 
 定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
 説明できなければ、収集の失敗として調べる。
@@ -4187,7 +4187,7 @@ dependabotの作業項目は再実行できない。
 実行できるのは、`f/factory`を実行できる主体に限る。
 Consoleの投入フォームと取り消しは無い。
 フローは、登録、準備、生成、投稿の4つのstepで進む。
-各stepの確認と、本文を作るときの無害化と検査は[セキュリティ](internals/investigate.md#調査の入口)にある。
+各stepの確認と、本文を作るときの無害化と検査は[調査の隔離の内部仕様](internals/investigate.md#調査の入口)にある。
 
 ### 調査の入口を開ける設定
 
@@ -4286,7 +4286,7 @@ stepが例外で落ちたときは、`on_error_flow`が調査を`failed`にし�
 出力の形が不正だと、1回だけ再試行する。
 日次の予算は、調査の実行の費用も数える。
 
-調査の隔離の層と、読み出しの固定の一覧、worktreeの置き場の検査は[セキュリティ](internals/investigate.md#調査の隔離)にある。
+調査の隔離の層と、読み出しの固定の一覧、worktreeの置き場の検査は[調査の隔離の内部仕様](internals/investigate.md#調査の隔離)にある。
 
 ## 隔離の測定を実行する
 
@@ -4299,7 +4299,7 @@ Claudeを、ツール(`Read`、`Glob`、`Grep`)と置き場(3つの置き場と�
 通常は、1回の起動が3〜5秒で、12回で約1分、費用は合計で$0.1〜0.2である。
 最悪は、出力の形の検査に失敗して、各回が1度ずつ再試行される場合である。
 1試行の予算の上限は$0.5、時間の上限は180秒なので、費用は$12(12回×2試行×$0.5)、所要時間は約72分(12回×2試行×180秒)になる。
-測定の枠と、結果に残す項目と、判定の条件は[セキュリティ](internals/investigate.md#隔離の測定と判定)にある。
+測定の枠と、結果に残す項目と、判定の条件は[調査の隔離の内部仕様](internals/investigate.md#隔離の測定と判定)にある。
 
 実行の前に、次を確かめる。
 
@@ -6346,7 +6346,7 @@ miseの自動インストールが`mise run`の前に不足分を入れるかは
 そのため、通知の手順に`mise install`を含める。
 
 `mise.toml`の`windmill-cli`の版を上げる変更では、反映の前に`mise run push:dry`を実行し、`deployed_sha`と凍結中のスケジュールが変更に出ないことを確かめる。
-凍結の除外は、CLIの`--excludes`の挙動に依存するためである([セキュリティ](internals/freezes.md#凍結とdeployの保留)の「凍結とdeployの保留」)。
+凍結の除外は、CLIの`--excludes`の挙動に依存するためである([凍結とdeployの保留の内部仕様](internals/freezes.md#凍結とdeployの保留)の「凍結とdeployの保留」)。
 
 workerのメモリの上限のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
 マウントの変更では、該当するコンテナが作り直される。
@@ -6495,7 +6495,7 @@ workerのコンテナが作り直されるので、実装中(`implementing`)の�
 
 migrationのように、反映を待たせたい作業の間は、deployの保留を置く。
 保留が有効なあいだ、`self_update`は反映全体を見送り、`mise run push`、`push:prune`、`migrate`、`deploy`、`up`は、反映の前に止まる。
-仕様と残るリスクは、[凍結とdeployの保留の内部仕様](internals/freezes.md)と[セキュリティ](internals/freezes.md#凍結とdeployの保留)の「凍結とdeployの保留」にある。
+仕様と残るリスクは、[凍結とdeployの保留の内部仕様](internals/freezes.md)にある。
 
 1. `f/factory/deployed_sha`が、保留の仕組みを含むコミットに進んでいることを確かめる。
    進んでいないと、古い`self_update`は保留を無視する。
@@ -6772,7 +6772,7 @@ CIの失敗を直す回は除く([PRワークフロー](internals/pr-workflow.md
 mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker /usr/bin/find /workspaces /var/lib/factory -xdev '!' -type l -perm -0002 -print
 ```
 
-2つ目の走査は、検査の準備と同じ走査である([セキュリティ](internals/check-sandbox.md#誰でも書き込めるものの探し方))。
+2つ目の走査は、検査の準備と同じ走査である([検査コマンドの実行と権限の内部仕様](internals/check-sandbox.md#誰でも書き込めるものの探し方))。
 引数は`f/factory/lib/check_sandbox.ts`の`worldWritablePathsArgv`と同じである。
 食い違わないことは`tests/lib/check_sandbox.test.ts`が確かめる。
 
@@ -6801,7 +6801,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chm
 イメージのビルドが同じことを確かめるので、見つかったパスは稼働中にできたものである。
 共有の一時ディレクトリの下で数えるのは、rootが所有し、stickyでない、誰でも書き込めるディレクトリだけである。
 ただし、`/tmp/.cache`とその下では、ファイルも数える。
-探し方は[セキュリティ](internals/check-sandbox.md#誰でも書き込めるものの探し方)にある。
+探し方は[検査コマンドの実行と権限の内部仕様](internals/check-sandbox.md#誰でも書き込めるものの探し方)にある。
 走査がタイムアウトしたときと、走査が失敗したときも、同じ扱いにする。
 
 止まった作業項目の状態とラウンドの記録は、[f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)の表と同じである。
@@ -7408,7 +7408,7 @@ Issueの取り込みの保留は、読む処理が無いので置けない。
 
 解除は、同じ画面の一覧の「解除」で行う。
 期限が来ても終わる。
-仕様と残るリスクは、[保留の内部仕様](internals/holds.md)と[凍結とdeployの保留の内部仕様](internals/freezes.md)、[セキュリティ](internals/console/security.md#保留と凍結を置く)の「保留と凍結を置く」にある。
+仕様と残るリスクは、[保留の内部仕様](internals/holds.md)と[凍結とdeployの保留の内部仕様](internals/freezes.md)、[Consoleの安全策の内部仕様](internals/console/security.md#保留と凍結を置く)の「保留と凍結を置く」にある。
 
 ### Consoleでスケジュールを止める
 
@@ -7478,7 +7478,7 @@ Windmillの画面で、スケジュールを有効に戻す。
 `mise run freeze:reset`で変数を空にした後も、Consoleで止めたスケジュールは、次の反映まで戻らない。
 Windmillの画面で、スケジュールを有効に戻す。
 `reset`は、この旨を表示する。
-仕様と残るリスクは、[凍結とdeployの保留の内部仕様](internals/freezes.md)と[セキュリティ](internals/console/security.md#スケジュールを止める)の「スケジュールを止める」にある。
+仕様と残るリスクは、[凍結とdeployの保留の内部仕様](internals/freezes.md)と[Consoleの安全策の内部仕様](internals/console/security.md#スケジュールを止める)の「スケジュールを止める」にある。
 
 ### 凍結と合わせて確かめる
 

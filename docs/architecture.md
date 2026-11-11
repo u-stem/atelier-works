@@ -301,7 +301,7 @@ migrationは追加だけにし、列やテーブルの名前は変えない。
 | `issue_proposals` | Issue化の提案の題名と本文、決定の履歴 |
 | `audit_reports` | 監査1回のレポート。作業項目と1対1に対応する |
 | `cleanup_runs` | DBの掃除1回ごとの削除件数 |
-| `console_actions` | Consoleから行った操作の記録。操作者、操作の名前、対象、変えたキーと値、結果、時刻を持つ。保持は90日。改ざんに耐えない([セキュリティ](internals/console/security.md#操作の記録)) |
+| `console_actions` | Consoleから行った操作の記録。操作者、操作の名前、対象、変えたキーと値、結果、時刻を持つ。保持は90日。改ざんに耐えない([Consoleの安全策の内部仕様](internals/console/security.md#操作の記録)) |
 | `deploy_approvals` | 保護パスに触れた変更の反映の、HEADのコミットごとの承認。反映する範囲で止めたファイル、依頼の時刻、判断(承認か却下)と判断した人を持つ。判断の対象は、最後に成功した反映より後の、最も新しい行だけで、行は消さずに残す。読み書きは`lib/deploy_approvals`だけが行う([反映の承認の内部仕様](internals/deploy-approvals.md)) |
 | `drawio_viewer_observations` | draw.ioのリリースのタグごとに、最初に見たcommitと時刻。ビューアの固定を上げる処理が、14日の待ちを数えるのに使う |
 | `main_ci_runs` | 既定ブランチのコミットごとのCIの判定結果。作業項目とは独立した読み取り専用の記録で、判定を待つ行と判定済みの行を持つ |
@@ -820,7 +820,7 @@ PRに書くのは、レビューの指摘と総評、修正の返信だけであ
 | PR修正 | `git gtr new`で作るPRブランチのworktree |
 
 Factoryの投稿の見分け方、総評の組み立て、スレッドの解決、Issue化の提案、処理済みの位置(watermark)は[PRワークフローの内部仕様](internals/pr-workflow.md)に書く。
-安全策は[セキュリティ](security.md)に書く。
+安全策は[PRワークフローの内部仕様](internals/pr-workflow.md#pr修正の安全策)に書く。
 
 ## 自己更新
 
@@ -1042,7 +1042,7 @@ Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself clone�
 対象は`factory_repo`と、`repo_allowlist`に明示したリポジトリだけである。
 1つのPRで上がるパッケージは、1つが基本で、`dependabot_group_enabled`を真にしたときだけ3つまで扱う。
 候補のPRは、収集の表か、表を使えない明示リポジトリのRESTの一覧から列挙する。
-マージする条件と残るリスクは[セキュリティ](internals/dependabot.md#dependabotの更新の自動マージ)に、選び方と状態は[dependabotの更新の内部仕様](internals/dependabot.md)に書く。
+マージする条件と残るリスクは[dependabotの更新の内部仕様](internals/dependabot.md#dependabotの更新の自動マージ)に、選び方と状態は同じ文書の前半に書く。
 
 ## 工程4のmainのCI監視
 
@@ -1163,7 +1163,7 @@ Consoleの**レポート**の**今すぐ監査**からも起動できる。
 3. 生成: 隔離の関門を確かめて、読み出し専用のClaudeで調べ、結果から投稿する本文を作る。
 4. 投稿: 本文に秘密値の検査をもう一度掛けて、Issueへ投稿する。
 
-手順は[運用](operations.md#調査を実行する)に、隔離と本文の検査は[セキュリティ](internals/investigate.md#調査の入口)に、状態の動きは[作業項目の状態とリース](internals/work-items.md#調査の作業項目)に書く。
+手順は[運用](operations.md#調査を実行する)に、隔離と本文の検査は[調査の隔離の内部仕様](internals/investigate.md#調査の入口)に、状態の動きは[作業項目の状態とリース](internals/work-items.md#調査の作業項目)に書く。
 
 ## 未実装の機能
 

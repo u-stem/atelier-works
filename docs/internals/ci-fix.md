@@ -16,7 +16,7 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 
 PRのマージの競合を直す回(競合回)の部品も、同じ考え方で作るので、この文書の「競合回のgit操作と検査」に書く。
 競合回が`pr_fix`の各ステップでどう動くかは[PRワークフローの仕様](pr-workflow.md#マージの競合を解く回)に書く。
-残る危険は[セキュリティ](../security.md)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
+安全策と残る危険は[PRワークフローの仕様](pr-workflow.md#pr修正の安全策)と[この文書の「CIのメタデータの再生成」](#ciのメタデータの再生成)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
 ## 方針
 
@@ -794,7 +794,7 @@ PRが基点の行を一部だけ変えていても、PRが足した行の修正�
 
 PRのブランチが既定のブランチ(base)と競合するときに、baseをmergeして、競合をClaudeに解かせる部品である。
 git操作は`lib/workspace.ts`に、判定と検査は`lib/conflict_fix_round.ts`にある。
-安全策の理由は[セキュリティ](pr-workflow.md#マージの競合を解く回-1)にある。
+安全策の理由は[PRワークフローの仕様](pr-workflow.md#マージの競合を解く回pr修正の安全策)にある。
 
 ### mergeして基準コミットを作る
 
@@ -848,7 +848,7 @@ gitの2.54では、`--`の有無で動作が変わらないことを確かめた
 
 親の照合を偽らせないため、すべてのgitで`core.commitGraph=false`と`GIT_GRAFT_FILE=/dev/null`を固定する。
 署名の検証でプログラムを動かさないよう、`gpg.program`も空に固定し、`merge`には`--no-verify-signatures`を付ける。
-理由は[セキュリティ](pr-workflow.md#マージの競合を解く回-1)にある。
+理由は[PRワークフローの仕様](pr-workflow.md#マージの競合を解く回pr修正の安全策)にある。
 
 必要なgitの版は、使うオプションで決まる。
 `check-attr --source`は2.40以降、`merge-file --object-id`は2.43以降、`merge-file --diff-algorithm`は2.44以降である。
@@ -1162,7 +1162,7 @@ workerが検査の前提を満たさないとき(イメージが古いなど)だ
 
 CIの`metadata`ジョブが出すパッチ(artifact)を、取得し、検査し、書き込む内容の一覧にする部品である。
 artifactはPRの作者が完全に決められるので、安全は内容の制限で成り立たせる。
-取り決めは[セキュリティ](ci-fix.md#受け取る側が必ず確かめること)にある。
+取り決めは[この文書の「受け取る側が必ず確かめること」](#受け取る側が必ず確かめること)にある。
 
 | ファイル | 責務 |
 | --- | --- |
@@ -1196,7 +1196,7 @@ zipは`fetch`で取得する。
 `readMetadataPatchZip`は、中央ディレクトリを自前で読み、`inflateRawSync`で展開する。
 結果は`{ ok: true, files }`か`{ ok: false, reason }`で、`reason`は固定の種別である。
 zipの中の文字列は、`reason`に載せない。
-断る内容は、[セキュリティ](ci-fix.md#zipの内容の制限)にある。
+断る内容は、[この文書の「zipの内容の制限」](#zipの内容の制限)にある。
 
 ### importの読み取り
 
@@ -1262,7 +1262,7 @@ PRの差分(`PrFacts.diff`)は、`base...head`の全件でなければならな�
 呼び出し側は、APIの件数の上限で切れたときに`diffTruncated`を真にする。
 真のときは、許可リストの外のパスを見落とすので、検査はパッチを断る。
 
-ファイルごとの検査の条件は、[セキュリティ](ci-fix.md#lockの制限)にある。
+ファイルごとの検査の条件は、[この文書の「lockの制限」](#lockの制限)にある。
 
 成功の結果は、書き込む内容の一覧(`writes`)である。
 書き込む側は、headの木のsymlinkをたどって木の外へ書かないよう、書き込む前に確かめる。
@@ -1394,7 +1394,7 @@ wmill CLIとバックエンドを使わずに、Factory自身が`wmill-lock.yaml
 artifactを経由しないので、取得、zip、出どころ、manifestの検査は要らない。
 未信頼のPRのheadを読むだけで、scriptの実行も、wmill CLIの起動もしない。
 事前検査は、悪意のあるPRに対する境界ではなく、悪意のないPRで古い`schema`やlockが最新のように書き直されるのを防ぐ、正しさの検査である。
-取り決めは[セキュリティ](ci-fix.md#hashの再計算)にある。
+取り決めは[この文書の「hashの再計算」](#hashの再計算)にある。
 
 ### 再計算の部品
 
@@ -1531,7 +1531,7 @@ Windmillのトリガーのファイル名は`*.http_trigger.yaml`などの形で
 ただし、実行時に残るimportだけを数える(`runtimeOnly`)。
 型だけのimport、型だけのexport、型の位置でしか使わないimport、使われないimportは、トランスパイラが省くので数えない。
 読み方は、`trimUnusedImports`を有効にした`Bun.Transpiler`の`scanImports`だけである。
-実行しない読み方だけを使う理由は、[セキュリティ](ci-fix.md#hashの再計算)にある。
+実行しない読み方だけを使う理由は、[この文書の「hashの再計算」](#hashの再計算)にある。
 マクロの実測の根拠は、`tests/lib/metadata_patch_imports_runtime.test.ts`にある。
 閉包の実測の根拠は、リポジトリの全scriptで閉包のパッケージ名と`.script.lock`の`dependencies`のキーが一致するテストにある。
 値のimportに書き換えて本体で使い始める変更は、省かれていたimportが現れるので、依存の変化として人の手に回る。
@@ -2065,8 +2065,8 @@ wmillが書く決まった形に1行ずつ合わせて読み、外れるもの�
 
 #### 受け取る側の実装で決めること
 
-artifactの適用で残る論点は、[内部仕様](ci-fix.md#artifactの適用で残る論点)にまとめる。
-この文書は、それらを前提にせず、内容の制限を定める。
+artifactの適用で残る論点は、[この文書の「artifactの適用で残る論点」](#artifactの適用で残る論点)にまとめる。
+この節は、それらを前提にせず、内容の制限を定める。
 
 ### hashの再計算
 

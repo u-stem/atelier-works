@@ -2,7 +2,7 @@
 
 dependabotが開いた依存の更新PRを、Factoryがどう選び、どう評価し、どの作業項目の状態で終えるかを定める仕様である。
 `poll_dependabot`、フロー`f/factory/dependabot`とそのステップ、`lib/dependabot_*.ts`を変更する人が読む。
-自動でマージする条件と残るリスクは[セキュリティ](dependabot.md#dependabotの更新の自動マージ)に、有効にする手順は[運用](../operations.md#dependabotの更新を設定する)に書く。
+自動でマージする条件、安全策、残るリスクは[この文書の「dependabotの更新の自動マージ」](#dependabotの更新の自動マージ)に、有効にする手順は[運用](../operations.md#dependabotの更新を設定する)に書く。
 
 ## 全体の流れ
 
@@ -448,7 +448,7 @@ Factoryは、原則としてPRをマージしない。
 既定では無効で、`f/factory/factory_config`の`dependabot_enabled`を真にしたときだけ動く。
 マージは、`dependabot_merge_enabled`も真にしたときだけ行う。
 `dependabot_merge_enabled`が偽の間は試運転で、マージしてよいと判断したPRもマージせず人に回す。
-有効にする手順は[運用](../operations.md#dependabotの更新を設定する)に、状態と分岐は[dependabotの更新の内部仕様](dependabot.md)にある。
+有効にする手順は[運用](../operations.md#dependabotの更新を設定する)に、状態と分岐は[この文書の「評価と分岐」](#評価と分岐)と[この文書の「作業項目の状態」](#作業項目の状態)にある。
 
 候補のPRの列挙は、収集が有効なときは収集の表から読み、表を使えないリポジトリはRESTの開いているPRの一覧から読む。
 表と一覧の値は、候補を絞ることにだけ使う。

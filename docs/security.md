@@ -1,8 +1,9 @@
 # セキュリティ
 
-Software Factoryの信頼境界、秘密値の扱い、資格情報の取得手順、各フローの安全策を説明する。
+Software Factoryの信頼境界、秘密値の扱い、資格情報の取得手順、フローをまたぐ脅威を説明する。
 Factoryを運用する人と、フローを変更する人が読む。
-安全策の仕組みの詳細は[実装フローの仕様](internals/implement.md)と[PRワークフローの仕様](internals/pr-workflow.md)にある。
+各フローの安全策は、フローごとの内部仕様の文書にある。
+置き場は、末尾の[各フローの安全策の置き場](#各フローの安全策の置き場)の表から引ける。
 
 ## 信頼境界
 
@@ -193,8 +194,6 @@ PRを作ればCIが走査し、Factoryは実装ブランチのpushの前に走�
 `console_query.ts`が`lib/config.ts`を読むので、`f/factory/lib/config.ts`を入れている。
 入れないと、設定の読み取りだけを変えるPRで`db`のジョブが動かない。
 
-「CIのメタデータの再生成」の節は、[CIの失敗を直す部品の内部仕様](internals/ci-fix.md#ciのメタデータの再生成)に移した。
-
 ### 開発セッションのsubagent
 
 開発のセッションでは、superpowersのsubagentと組み込みの`/code-review`を使う。
@@ -278,8 +277,6 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
   これは通知の仕組みより前からある性質である。
 - `factory.deployments`に書けるDBの利用者は、この判定も動かせる。
 
-「ホストの反映の印」の節は、[ホストの実行役の内部仕様](internals/host-apply.md#ホストの反映の印)に移した。
-
 ### Factory自身のリポジトリの照合
 
 `factory_repo_id`を設定すると、Factory自身のcloneを用意する処理は、取得の前にGitHubの現在のリポジトリIDと照合する。
@@ -362,8 +359,6 @@ cloneを開くステップでは、`openFactoryClone`の照合も重なるので
   残る余地は、照合からブランチの作成までの間だけである。
   `factory_repo_id`が未設定のときは照合せず、名前だけでブランチとPRを作る。
   送る内容は公開物である。
-
-「RESTの検索の拒否」の節は、[GitHubの収集の内部仕様](internals/github-collect.md#restの検索の拒否)に移した。
 
 ### migrationを戻した日の日次予算
 
@@ -470,6 +465,8 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 これらが読む`lib/log.ts`と`lib/types.ts`は、多くのscriptが使う部品なので守らない。
 
 ### 秘密の入れ替え
+
+調査の隔離の測定の結果([止める条件](internals/investigate.md#止める条件))に`notice`が出たときの手順である。
 
 結果の`notice`が出たときは、本物の秘密に届いた可能性があるので、次を入れ替える。
 読めたかどうかは、結果から分からない。
@@ -609,7 +606,7 @@ PRのマージの競合を検知するscript`watch_pr_conflicts`は、Pull reque
 `watch_pr_conflicts`自身は、PRとリポジトリへ書き込まない。
 設定`pr_conflict_fix_enabled`が`true`のときは、競合を直す作業項目(`pr_fix`の競合回)を起動する。
 そのフローが、同じPATでmergeコミットをPRのブランチへpushする。
-書き込みの安全策は、[マージの競合を解く回](internals/pr-workflow.md#マージの競合を解く回-1)に書く。
+書き込みの安全策は、[マージの競合を解く回](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策)に書く。
 起動の判断のために、読む資源が増える。
 
 - PRのcommit本文は、トレーラー`Generated-By`の完全一致の判定だけに使う。
@@ -1289,8 +1286,6 @@ Podmanは対象外である。
   突くにはdefaultのworkerでのコード実行が要る。
   その権限があれば`factory_state`のボリューム全体を直接読めるので、実害は増えない。
 
-操作と画面ごとの守りの節は、[Consoleの安全策](internals/console/security.md)に移した。
-
 ## 定期ジョブ用workerの境界
 
 定期ジョブ用のworker(`windmill_worker_periodic`)は、tag`periodic`を付けた定期ジョブを処理する。
@@ -1564,7 +1559,7 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
 
 ## ホストの実行役の境界
 
-この節は[ホストの実行役の内部仕様の「ホストの実行役の境界」](internals/host-apply.md#ホストの実行役の境界)に移した。
+この節の内容は[ホストの実行役の内部仕様の「ホストの実行役の境界」](internals/host-apply.md#ホストの実行役の境界)にある。
 
 ## サブプロセスのnpmのinstall script
 
@@ -1626,7 +1621,7 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 
 ## 反映の承認
 
-この節は[反映の承認の内部仕様の「反映の承認」](internals/deploy-approvals.md#反映の承認)に移した。
+この節の内容は[反映の承認の内部仕様の「反映の承認」](internals/deploy-approvals.md#反映の承認)にある。
 
 ## 自己更新の打ち切り
 
@@ -1649,11 +1644,11 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 
 ## 凍結とdeployの保留
 
-この節は[凍結とdeployの保留の内部仕様の「凍結とdeployの保留」](internals/freezes.md#凍結とdeployの保留)に移した。
+この節の内容は[凍結とdeployの保留の内部仕様の「凍結とdeployの保留」](internals/freezes.md#凍結とdeployの保留)にある。
 
 ## 保留
 
-この節は[保留の内部仕様の「保留」](internals/holds.md#保留)に移した。
+この節の内容は[保留の内部仕様の「保留」](internals/holds.md#保留)にある。
 
 ## 全停止
 
@@ -2130,39 +2125,39 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 
 ## draw.ioの図の描画
 
-この節は[Consoleの安全策の「draw.ioの図の描画」](internals/console/security.md#drawioの図の描画)に移した。
+この節の内容は[Consoleの安全策の内部仕様の「draw.ioの図の描画」](internals/console/security.md#drawioの図の描画)にある。
 
 ## 要件定義書のリンク
 
-この節は[Consoleの安全策の「要件定義書のリンク」](internals/console/security.md#要件定義書のリンク)に移した。
+この節の内容は[Consoleの安全策の内部仕様の「要件定義書のリンク」](internals/console/security.md#要件定義書のリンク)にある。
 
 ## 更新履歴のPR
 
-この節は[Consoleの安全策の「更新履歴のPR」](internals/console/security.md#更新履歴のpr)に移した。
+この節の内容は[Consoleの安全策の内部仕様の「更新履歴のPR」](internals/console/security.md#更新履歴のpr)にある。
 
 ## PR修正の安全策
 
-この節は[PRワークフローの「PR修正の安全策」](internals/pr-workflow.md#pr修正の安全策)と、[検査コマンドの実行と権限の「検査コマンドはフローが実行する」](internals/check-sandbox.md#検査コマンドはフローが実行する)と[「検査コマンドの権限」](internals/check-sandbox.md#検査コマンドの権限)に移した。
+この節の内容は[PRワークフローの仕様の「PR修正の安全策」](internals/pr-workflow.md#pr修正の安全策)と、[検査コマンドの実行と権限の「検査コマンドはフローが実行する」](internals/check-sandbox.md#検査コマンドはフローが実行する)と[「検査コマンドの権限」](internals/check-sandbox.md#検査コマンドの権限)にある。
 
 ## 実装の安全策
 
-この節は[実装フローの「実装の安全策」](internals/implement.md#実装の安全策)に移した。
+この節の内容は[実装フローの仕様の「実装の安全策」](internals/implement.md#実装の安全策)にある。
 
 ## 設計書の生成の安全策
 
-この節は[設計書の生成の「設計書の生成の安全策」](internals/design.md#設計書の生成の安全策)に移した。
+この節の内容は[設計書の生成の仕様の「設計書の生成の安全策」](internals/design.md#設計書の生成の安全策)にある。
 
 ## 調査の隔離
 
-この節は[調査の隔離の内部仕様の「調査の隔離」](internals/investigate.md#調査の隔離)に移した。
+この節の内容は[調査の隔離の内部仕様の「調査の隔離」](internals/investigate.md#調査の隔離)にある。
 
 ## 監査の安全策
 
-この節は[監査の内部仕様の「監査の安全策」](internals/audit.md#監査の安全策)に移した。
+この節の内容は[監査の内部仕様の「監査の安全策」](internals/audit.md#監査の安全策)にある。
 
 ## dependabotの更新の自動マージ
 
-この節は[dependabotの更新の内部仕様の「dependabotの更新の自動マージ」](internals/dependabot.md#dependabotの更新の自動マージ)に移した。
+この節の内容は[dependabotの更新の内部仕様の「dependabotの更新の自動マージ」](internals/dependabot.md#dependabotの更新の自動マージ)にある。
 
 ## 承認と権限
 
@@ -2424,3 +2419,127 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
   第三者のイベントで閉じる自動化は、`GITHUB_TOKEN`かGitHub Appのinstallation tokenで動かす。
 - 判定は、要対応の一覧の取り消しにだけかかる。
   承認待ちなど終端でない作業項目は、既存のreconcileが閉じた人を確かめずに取り消す。
+
+## 各フローの安全策の置き場
+
+各フローの安全策と残るリスクは、フローごとの内部仕様の文書にある。
+次の表は、節の名前から置き場を引くためのものである。
+
+| 節 | 置き場 |
+| --- | --- |
+| CIのメタデータの再生成 | [CIの失敗を直す部品の内部仕様の「CIのメタデータの再生成」](internals/ci-fix.md#ciのメタデータの再生成) |
+| ホストの反映の印 | [ホストの実行役の内部仕様の「ホストの反映の印」](internals/host-apply.md#ホストの反映の印) |
+| RESTの検索の拒否 | [GitHubの収集の内部仕様の「RESTの検索の拒否」](internals/github-collect.md#restの検索の拒否) |
+| ジョブのログと結果の読み取り | [Consoleの安全策の内部仕様の「ジョブのログと結果の読み取り」](internals/console/security.md#ジョブのログと結果の読み取り) |
+| ログと結果の伏せ字 | [Consoleの安全策の内部仕様の「ログと結果の伏せ字」](internals/console/security.md#ログと結果の伏せ字) |
+| PRレビューの投入 | [Consoleの安全策の内部仕様の「PRレビューの投入」](internals/console/security.md#prレビューの投入) |
+| ジョブの取消 | [Consoleの安全策の内部仕様の「ジョブの取消」](internals/console/security.md#ジョブの取消) |
+| 定期ジョブの再実行 | [Consoleの安全策の内部仕様の「定期ジョブの再実行」](internals/console/security.md#定期ジョブの再実行) |
+| 設定の変更 | [Consoleの安全策の内部仕様の「設定の変更」](internals/console/security.md#設定の変更) |
+| 保留と凍結を置く | [Consoleの安全策の内部仕様の「保留と凍結を置く」](internals/console/security.md#保留と凍結を置く) |
+| スケジュールを止める | [Consoleの安全策の内部仕様の「スケジュールを止める」](internals/console/security.md#スケジュールを止める) |
+| 操作の記録 | [Consoleの安全策の内部仕様の「操作の記録」](internals/console/security.md#操作の記録) |
+| ジョブの画面の描画 | [Consoleの安全策の内部仕様の「ジョブの画面の描画」](internals/console/security.md#ジョブの画面の描画) |
+| 設計書の読み返しの画面 | [Consoleの安全策の内部仕様の「設計書の読み返しの画面」](internals/console/security.md#設計書の読み返しの画面) |
+| 取り込み時点のIssueと提案の描画 | [Consoleの安全策の内部仕様の「取り込み時点のIssueと提案の描画」](internals/console/security.md#取り込み時点のissueと提案の描画) |
+| 設計の承認画面の保護 | [Consoleの安全策の内部仕様の「設計の承認画面の保護」](internals/console/security.md#設計の承認画面の保護) |
+| 設計書のプレビュー | [Consoleの安全策の内部仕様の「設計書のプレビュー」](internals/console/security.md#設計書のプレビュー) |
+| ホストの実行役の境界 | [ホストの実行役の内部仕様の「ホストの実行役の境界」](internals/host-apply.md#ホストの実行役の境界) |
+| 実行役のコード | [ホストの実行役の内部仕様の「実行役のコード」](internals/host-apply.md#実行役のコード) |
+| treeの検査 | [ホストの実行役の内部仕様の「treeの検査」](internals/host-apply.md#treeの検査) |
+| 人の承認が要る変更 | [ホストの実行役の内部仕様の「人の承認が要る変更」](internals/host-apply.md#人の承認が要る変更) |
+| 承認の門 | [ホストの実行役の内部仕様の「承認の門」](internals/host-apply.md#承認の門) |
+| 状態の置き場 | [ホストの実行役の内部仕様の「状態の置き場」](internals/host-apply.md#状態の置き場) |
+| composeの方針 | [ホストの実行役の内部仕様の「composeの方針」](internals/host-apply.md#composeの方針) |
+| composeのimageと秘密値の表 | [ホストの実行役の内部仕様の「composeのimageと秘密値の表」](internals/host-apply.md#composeのimageと秘密値の表) |
+| 外部コマンドの許可表 | [ホストの実行役の内部仕様の「外部コマンドの許可表」](internals/host-apply.md#外部コマンドの許可表) |
+| 子プロセスの環境とログ | [ホストの実行役の内部仕様の「子プロセスの環境とログ」](internals/host-apply.md#子プロセスの環境とログ) |
+| CIの確認 | [ホストの実行役の内部仕様の「CIの確認」](internals/host-apply.md#ciの確認) |
+| 保護パスとその限界 | [ホストの実行役の内部仕様の「保護パスとその限界」](internals/host-apply.md#保護パスとその限界) |
+| 残るリスク(ホストの実行役の境界) | [ホストの実行役の内部仕様の「残るリスク」](internals/host-apply.md#残るリスク) |
+| 反映の承認 | [反映の承認の内部仕様の「反映の承認」](internals/deploy-approvals.md#反映の承認) |
+| 凍結とdeployの保留 | [凍結とdeployの保留の内部仕様の「凍結とdeployの保留」](internals/freezes.md#凍結とdeployの保留) |
+| 保留 | [保留の内部仕様の「保留」](internals/holds.md#保留) |
+| draw.ioの図の描画 | [Consoleの安全策の内部仕様の「draw.ioの図の描画」](internals/console/security.md#drawioの図の描画) |
+| ラベルのHTMLの読み方 | [Consoleの安全策の内部仕様の「ラベルのHTMLの読み方」](internals/console/security.md#ラベルのhtmlの読み方) |
+| 隔離したiframeで描く | [Consoleの安全策の内部仕様の「隔離したiframeで描く」](internals/console/security.md#隔離したiframeで描く) |
+| 親の部品が守ること | [Consoleの安全策の内部仕様の「親の部品が守ること」](internals/console/security.md#親の部品が守ること) |
+| ビューアの更新 | [Consoleの安全策の内部仕様の「ビューアの更新」](internals/console/security.md#ビューアの更新) |
+| 要件定義書のリンク | [Consoleの安全策の内部仕様の「要件定義書のリンク」](internals/console/security.md#要件定義書のリンク) |
+| 監査レポートの本文 | [Consoleの安全策の内部仕様の「監査レポートの本文」](internals/console/security.md#監査レポートの本文) |
+| 更新履歴のPR | [Consoleの安全策の内部仕様の「更新履歴のPR」](internals/console/security.md#更新履歴のpr) |
+| PR修正の安全策 | [PRワークフローの仕様の「PR修正の安全策」](internals/pr-workflow.md#pr修正の安全策) |
+| Factory自身の投稿の判定 | [PRワークフローの仕様の「Factory自身の投稿の判定」](internals/pr-workflow.md#factory自身の投稿の判定) |
+| ツールの制限 | [PRワークフローの仕様の「ツールの制限」](internals/pr-workflow.md#ツールの制限) |
+| 検査コマンドはフローが実行する | [検査コマンドの実行と権限の内部仕様の「検査コマンドはフローが実行する」](internals/check-sandbox.md#検査コマンドはフローが実行する) |
+| 検査コマンドの権限 | [検査コマンドの実行と権限の内部仕様の「検査コマンドの権限」](internals/check-sandbox.md#検査コマンドの権限) |
+| 対象リポジトリの設定を信頼しない | [PRワークフローの仕様の「対象リポジトリの設定を信頼しない」](internals/pr-workflow.md#対象リポジトリの設定を信頼しない) |
+| 保護パスの変更を止める | [PRワークフローの仕様の「保護パスの変更を止める」](internals/pr-workflow.md#保護パスの変更を止める) |
+| symlinkと特殊なファイルを止める | [PRワークフローの仕様の「symlinkと特殊なファイルを止める」](internals/pr-workflow.md#symlinkと特殊なファイルを止める) |
+| HEADとブランチの確認 | [PRワークフローの仕様の「HEADとブランチの確認(PR修正の安全策)」](internals/pr-workflow.md#headとブランチの確認pr修正の安全策) |
+| worktreeの.gitファイルの書き換えを止める | [PRワークフローの仕様の「worktreeの.gitファイルの書き換えを止める」](internals/pr-workflow.md#worktreeのgitファイルの書き換えを止める) |
+| gitが読む設定を限る | [PRワークフローの仕様の「gitが読む設定を限る」](internals/pr-workflow.md#gitが読む設定を限る) |
+| コミットの直前の再検査 | [PRワークフローの仕様の「コミットの直前の再検査」](internals/pr-workflow.md#コミットの直前の再検査) |
+| 差し替えとサブモジュールに惑わされない | [PRワークフローの仕様の「差し替えとサブモジュールに惑わされない」](internals/pr-workflow.md#差し替えとサブモジュールに惑わされない) |
+| 差分の大きさの上限(PR修正の安全策) | [PRワークフローの仕様の「差分の大きさの上限(PR修正の安全策)」](internals/pr-workflow.md#差分の大きさの上限pr修正の安全策) |
+| PRの状態とheadの確認 | [PRワークフローの仕様の「PRの状態とheadの確認」](internals/pr-workflow.md#prの状態とheadの確認) |
+| コミットの作成者情報 | [PRワークフローの仕様の「コミットの作成者情報(PR修正の安全策)」](internals/pr-workflow.md#コミットの作成者情報pr修正の安全策) |
+| CIのログの扱い | [PRワークフローの仕様の「CIのログの扱い」](internals/pr-workflow.md#ciのログの扱い) |
+| マージの競合を解く回 | [PRワークフローの仕様の「マージの競合を解く回(PR修正の安全策)」](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策) |
+| 実装の安全策 | [実装フローの仕様の「実装の安全策」](internals/implement.md#実装の安全策) |
+| ツールの制限と検査の分担 | [実装フローの仕様の「ツールの制限と検査の分担」](internals/implement.md#ツールの制限と検査の分担) |
+| 取り込み後のIssueの書き換え | [実装フローの仕様の「取り込み後のIssueの書き換え」](internals/implement.md#取り込み後のissueの書き換え) |
+| 同じ作業項目を同時に実装しない | [実装フローの仕様の「同じ作業項目を同時に実装しない」](internals/implement.md#同じ作業項目を同時に実装しない) |
+| 承認済みの要件定義を書き換えさせない | [実装フローの仕様の「承認済みの要件定義を書き換えさせない」](internals/implement.md#承認済みの要件定義を書き換えさせない) |
+| 検査コマンドを明示したリポジトリだけで実行する | [実装フローの仕様の「検査コマンドを明示したリポジトリだけで実行する」](internals/implement.md#検査コマンドを明示したリポジトリだけで実行する) |
+| 対象リポジトリのCIが動く | [実装フローの仕様の「対象リポジトリのCIが動く」](internals/implement.md#対象リポジトリのciが動く) |
+| 保護パスは止めずに明示する | [実装フローの仕様の「保護パスは止めずに明示する」](internals/implement.md#保護パスは止めずに明示する) |
+| symlinkの変更を止める | [実装フローの仕様の「symlinkの変更を止める」](internals/implement.md#symlinkの変更を止める) |
+| 差分の大きさの上限(実装の安全策) | [実装フローの仕様の「差分の大きさの上限(実装の安全策)」](internals/implement.md#差分の大きさの上限実装の安全策) |
+| 保護ブランチのガードは使わない | [実装フローの仕様の「保護ブランチのガードは使わない」](internals/implement.md#保護ブランチのガードは使わない) |
+| gitleaksで毎ラウンド検査する | [実装フローの仕様の「gitleaksで毎ラウンド検査する」](internals/implement.md#gitleaksで毎ラウンド検査する) |
+| 検証したツリーだけをコミットする | [実装フローの仕様の「検証したツリーだけをコミットする」](internals/implement.md#検証したツリーだけをコミットする) |
+| pushする履歴を記録した先頭と新しい1つのcommitに限る | [実装フローの仕様の「pushする履歴を記録した先頭と新しい1つのcommitに限る」](internals/implement.md#pushする履歴を記録した先頭と新しい1つのcommitに限る) |
+| pushの前に生き残りのプロセスを確かめる | [実装フローの仕様の「pushの前に生き残りのプロセスを確かめる」](internals/implement.md#pushの前に生き残りのプロセスを確かめる) |
+| コミットメッセージのIssue参照を無効にする | [実装フローの仕様の「コミットメッセージのIssue参照を無効にする」](internals/implement.md#コミットメッセージのissue参照を無効にする) |
+| 子プロセスをグループごと止める | [実装フローの仕様の「子プロセスをグループごと止める」](internals/implement.md#子プロセスをグループごと止める) |
+| 検査コマンドの出力を絞って保存する | [実装フローの仕様の「検査コマンドの出力を絞って保存する」](internals/implement.md#検査コマンドの出力を絞って保存する) |
+| workflowの変更はpushで止まる | [実装フローの仕様の「workflowの変更はpushで止まる」](internals/implement.md#workflowの変更はpushで止まる) |
+| 進め方ごとの承認 | [実装フローの仕様の「進め方ごとの承認」](internals/implement.md#進め方ごとの承認) |
+| 設計書の生成の安全策 | [設計書の生成の仕様の「設計書の生成の安全策」](internals/design.md#設計書の生成の安全策) |
+| 書き込める範囲と読める範囲 | [設計書の生成の仕様の「書き込める範囲と読める範囲」](internals/design.md#書き込める範囲と読める範囲) |
+| worktreeの扱い | [設計書の生成の仕様の「worktreeの扱い」](internals/design.md#worktreeの扱い) |
+| 差し戻しの報告 | [設計書の生成の仕様の「差し戻しの報告」](internals/design.md#差し戻しの報告) |
+| 設計の承認の照合 | [設計書の生成の仕様の「設計の承認の照合」](internals/design.md#設計の承認の照合) |
+| 設計の承認の反映 | [設計書の生成の仕様の「設計の承認の反映」](internals/design.md#設計の承認の反映) |
+| 設計工程の門の固定 | [設計書の生成の仕様の「設計工程の門の固定」](internals/design.md#設計工程の門の固定) |
+| 設計工程を有効にする操作 | [設計書の生成の仕様の「設計工程を有効にする操作」](internals/design.md#設計工程を有効にする操作) |
+| 実装に渡す設計書 | [設計書の生成の仕様の「実装に渡す設計書」](internals/design.md#実装に渡す設計書) |
+| 残るリスク(設計書の生成の安全策) | [設計書の生成の仕様の「残るリスク」](internals/design.md#残るリスク) |
+| 調査の隔離 | [調査の隔離の内部仕様の「調査の隔離」](internals/investigate.md#調査の隔離) |
+| 起動の引数の固定 | [調査の隔離の内部仕様の「起動の引数の固定」](internals/investigate.md#起動の引数の固定) |
+| 読み出しの拒否の固定の一覧 | [調査の隔離の内部仕様の「読み出しの拒否の固定の一覧」](internals/investigate.md#読み出しの拒否の固定の一覧) |
+| 作業ディレクトリと設定の置き場の検査 | [調査の隔離の内部仕様の「作業ディレクトリと設定の置き場の検査」](internals/investigate.md#作業ディレクトリと設定の置き場の検査) |
+| worktreeの置き場 | [調査の隔離の内部仕様の「worktreeの置き場」](internals/investigate.md#worktreeの置き場) |
+| 指示ファイルの無効化 | [調査の隔離の内部仕様の「指示ファイルの無効化」](internals/investigate.md#指示ファイルの無効化) |
+| 合格の証拠と関門 | [調査の隔離の内部仕様の「合格の証拠と関門」](internals/investigate.md#合格の証拠と関門) |
+| 隔離の測定と判定 | [調査の隔離の内部仕様の「隔離の測定と判定」](internals/investigate.md#隔離の測定と判定) |
+| 出力の本文を記録に残さない | [調査の隔離の内部仕様の「出力の本文を記録に残さない」](internals/investigate.md#出力の本文を記録に残さない) |
+| 調査の入口を開ける門 | [調査の隔離の内部仕様の「調査の入口を開ける門」](internals/investigate.md#調査の入口を開ける門) |
+| 調査の入口 | [調査の隔離の内部仕様の「調査の入口」](internals/investigate.md#調査の入口) |
+| 保護パス | [調査の隔離の内部仕様の「保護パス」](internals/investigate.md#保護パス) |
+| 残るリスク(調査の隔離) | [調査の隔離の内部仕様の「残るリスク(調査の隔離)」](internals/investigate.md#残るリスク調査の隔離) |
+| 入口の前提の扱い | [調査の隔離の内部仕様の「入口の前提の扱い」](internals/investigate.md#入口の前提の扱い) |
+| 監査の安全策 | [監査の内部仕様の「監査の安全策」](internals/audit.md#監査の安全策) |
+| dependabotの更新の自動マージ | [dependabotの更新の内部仕様の「dependabotの更新の自動マージ」](internals/dependabot.md#dependabotの更新の自動マージ) |
+| マージする条件 | [dependabotの更新の内部仕様の「マージする条件」](internals/dependabot.md#マージする条件) |
+| 他のリポジトリ | [dependabotの更新の内部仕様の「他のリポジトリ」](internals/dependabot.md#他のリポジトリ) |
+| グループの更新 | [dependabotの更新の内部仕様の「グループの更新」](internals/dependabot.md#グループの更新) |
+| インストールの後の確認 | [dependabotの更新の内部仕様の「インストールの後の確認」](internals/dependabot.md#インストールの後の確認) |
+| Claudeは関門を緩めない | [dependabotの更新の内部仕様の「Claudeは関門を緩めない」](internals/dependabot.md#claudeは関門を緩めない) |
+| 影響があるとき | [dependabotの更新の内部仕様の「影響があるとき」](internals/dependabot.md#影響があるとき) |
+| マージの仕方 | [dependabotの更新の内部仕様の「マージの仕方」](internals/dependabot.md#マージの仕方) |
+| PATのマージ権限 | [dependabotの更新の内部仕様の「PATのマージ権限」](internals/dependabot.md#patのマージ権限) |
+| 守る部品と守らない部品 | [dependabotの更新の内部仕様の「守る部品と守らない部品」](internals/dependabot.md#守る部品と守らない部品) |
+| 有効化の前の確認 | [dependabotの更新の内部仕様の「有効化の前の確認」](internals/dependabot.md#有効化の前の確認) |
+| 残るリスク(dependabotの更新の自動マージ) | [dependabotの更新の内部仕様の「残るリスク」](internals/dependabot.md#残るリスク) |
