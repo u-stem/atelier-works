@@ -1,21 +1,32 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   blankFrontmatter,
   buildPlan,
   coversTargets,
+  createDocReader,
   createProductionDeps,
+  guardCheck,
   isTargetDoc,
   type LintDeps,
+  lintAllDocLinks,
   lintDocText,
   lintWithTools,
+  listRepoFiles,
   MARKDOWNLINT_BIN,
   type Spawned,
   shardCount,
   splitIntoShards,
   TEXTLINT_BIN,
+  toRepoPath,
   toToolPath,
 } from "../../scripts/lint-docs.ts";
 
@@ -55,6 +66,167 @@ describe("lintDocText", () => {
     const problems = lintDocText("docs/a.md", "# 見出し\n\n再実行します。\n");
 
     expect(problems[0]).toStartWith("docs/a.md:3: [register] ");
+  });
+});
+
+describe("toRepoPath", () => {
+  const root = "/repo";
+
+  test("drops a leading ./", () => {
+    expect(toRepoPath(root, "./docs/a.md")).toBe("docs/a.md");
+  });
+
+  test("makes an absolute path under the root relative to it", () => {
+    expect(toRepoPath(root, "/repo/docs/a.md")).toBe("docs/a.md");
+  });
+
+  test("leaves a relative path unchanged", () => {
+    expect(toRepoPath(root, "docs/a.md")).toBe("docs/a.md");
+  });
+});
+
+describe("createDocReader", () => {
+  function withDir(run: (dir: string) => void): void {
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), "lint-docs-reader-"));
+    try {
+      run(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("reads a file relative to the root", () => {
+    withDir((dir) => {
+      writeFileSync(join(dir, "a.md"), "# A\n");
+
+      expect(createDocReader(dir)("a.md")).toBe("# A\n");
+    });
+  });
+
+  test("returns undefined for a path that does not exist", () => {
+    withDir((dir) => {
+      expect(createDocReader(dir)("none.md")).toBeUndefined();
+    });
+  });
+
+  test("returns undefined for a directory", () => {
+    withDir((dir) => {
+      mkdirSync(join(dir, "docs.md"));
+
+      expect(createDocReader(dir)("docs.md")).toBeUndefined();
+    });
+  });
+
+  test("returns the body of the first read when the file changes afterwards", () => {
+    withDir((dir) => {
+      const read = createDocReader(dir);
+      writeFileSync(join(dir, "a.md"), "first\n");
+      read("a.md");
+      writeFileSync(join(dir, "a.md"), "second\n");
+
+      expect(read("a.md")).toBe("first\n");
+    });
+  });
+});
+
+describe("lintAllDocLinks", () => {
+  /** `docs`の本文を返す`readDoc`。 */
+  function readerOf(
+    docs: Readonly<Record<string, string>>,
+  ): (path: string) => string | undefined {
+    return (path) => docs[path];
+  }
+
+  test("checks the links of every target document", () => {
+    const docs = {
+      "README.md": "[a](docs/none.md)\n",
+      "docs/a.md": "[b](docs/b.md#無い)\n",
+      "docs/b.md": "# B\n",
+    };
+
+    expect(lintAllDocLinks(Object.keys(docs), readerOf(docs))).toEqual([
+      "README.md:1: [link] file not found: docs/none.md",
+      "docs/a.md:1: [link] anchor not found: docs/b.md#無い",
+    ]);
+  });
+
+  test("does not check the links inside a document that is not a target", () => {
+    const docs = { "AGENTS.wmill.md": "[a](none.md)\n" };
+
+    expect(lintAllDocLinks(Object.keys(docs), readerOf(docs))).toEqual([]);
+  });
+
+  test("checks an anchor in a Markdown file that is not a target", () => {
+    const docs = {
+      "AGENTS.md": "[w](AGENTS.wmill.md#無い)\n",
+      "AGENTS.wmill.md": "# Windmill\n",
+    };
+
+    expect(lintAllDocLinks(Object.keys(docs), readerOf(docs))).toEqual([
+      "AGENTS.md:1: [link] anchor not found: AGENTS.wmill.md#無い",
+    ]);
+  });
+
+  test("reports a link to a file that is not in the file list", () => {
+    const docs = { "README.md": "[a](docs/ignored.md)\n" };
+
+    expect(
+      lintAllDocLinks(
+        Object.keys(docs),
+        readerOf({ ...docs, "docs/ignored.md": "# i\n" }),
+      ),
+    ).toEqual(["README.md:1: [link] file not found: docs/ignored.md"]);
+  });
+
+  test("reports a link whose path differs from a listed file only in case", () => {
+    const docs = { "README.md": "[a](Docs/a.md)\n", "docs/a.md": "# A\n" };
+
+    expect(lintAllDocLinks(Object.keys(docs), readerOf(docs))).toEqual([
+      "README.md:1: [link] file not found: Docs/a.md",
+    ]);
+  });
+
+  test("reads each document once even when other documents link to it", () => {
+    const docs: Readonly<Record<string, string>> = {
+      "README.md": "[a](docs/a.md)\n",
+      "docs/a.md": "[r](../README.md#readme)\n\n# A\n",
+    };
+    const reads: string[] = [];
+
+    lintAllDocLinks(Object.keys(docs), (path) => {
+      reads.push(path);
+      return docs[path];
+    });
+
+    expect(reads.sort()).toEqual(["README.md", "docs/a.md"]);
+  });
+
+  test("skips a listed document that cannot be read", () => {
+    expect(lintAllDocLinks(["gone.md"], () => undefined)).toEqual([]);
+  });
+});
+
+describe("guardCheck", () => {
+  test("returns the problems of a check that finishes", () => {
+    expect(guardCheck("links", () => ["a.md:1: [link] x"])).toEqual([
+      "a.md:1: [link] x",
+    ]);
+  });
+
+  test("turns an exception into one problem that names the check", () => {
+    expect(
+      guardCheck("links", () => {
+        throw new Error("boom");
+      }),
+    ).toEqual(["lint-docs: links failed: boom"]);
+  });
+});
+
+describe("listRepoFiles", () => {
+  test("lists the files of the repository relative to the root", () => {
+    const files = listRepoFiles(join(import.meta.dir, "..", ".."));
+
+    expect(files).toContain("scripts/lint-docs.ts");
   });
 });
 
