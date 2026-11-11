@@ -157,6 +157,75 @@ describe("stripWrappers", () => {
     ]);
   });
 
+  test.each([
+    ["a subscript", ["a[1]=1", "git", "push"]],
+    ["an appending subscript", ["a[1]+=1", "git", "push"]],
+    ["a nested subscript", ["a[b[1]]=1", "git", "push"]],
+    ["a subscript behind a plain assignment", ["x=1", "a[1]=1", "git", "push"]],
+  ])("removes a leading assignment with %s", (_form, texts) => {
+    const stripped = stripWrappers(words(...texts));
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("keeps a subscripted word without an assignment as the command", () => {
+    const stripped = stripWrappers(words("a[1]x=1", "git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual([
+      "a[1]x=1",
+      "git",
+      "push",
+    ]);
+  });
+
+  test.each([
+    ["a hyphen", "a-b=1"],
+    ["a dot", "a.b=1"],
+    ["a slash", "a/b=1"],
+    ["a subscript", "a[1]=1"],
+  ])("removes an env assignment whose name has %s", (_form, assignment) => {
+    const stripped = stripWrappers(words("env", assignment, "git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test.each([
+    ["behind another assignment", ["env", "a=1", "-b=2", "git", "push"]],
+    ["behind the end of the options", ["env", "--", "-b=2", "git", "push"]],
+  ])(
+    "removes an env assignment that starts with a hyphen %s",
+    (_form, texts) => {
+      const stripped = stripWrappers(words(...texts));
+      expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+    },
+  );
+
+  test("keeps a word with an equals sign behind env and another wrapper as the command", () => {
+    const stripped = stripWrappers(
+      words("env", "nice", "a-b=1", "git", "push"),
+    );
+    expect(stripped.words.map((word) => word.text)).toEqual([
+      "a-b=1",
+      "git",
+      "push",
+    ]);
+  });
+
+  test("removes several env assignments in a row", () => {
+    const stripped = stripWrappers(
+      words("env", "a-b=1", "c.d=2", "git", "push"),
+    );
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("keeps a word with an equals sign behind another wrapper as the command", () => {
+    const stripped = stripWrappers(
+      words("timeout", "10", "a-b=1", "git", "push"),
+    );
+    expect(stripped.words.map((word) => word.text)).toEqual([
+      "a-b=1",
+      "git",
+      "push",
+    ]);
+  });
+
   test("skips mise exec up to --", () => {
     const stripped = stripWrappers(
       words("mise", "exec", "--", "bun", "add", "x"),
@@ -2678,5 +2747,90 @@ describe("a prefix before an array keeps the glob group rejection", () => {
     const result = parseCommandLine(line);
 
     expect(result.ok ? "" : result.error).toContain("may start a glob group");
+  });
+});
+
+describe("a bracket opened inside a word must close in the same word", () => {
+  test.each([
+    ["a space and a comment start", "a[ # ]=1; echo x"],
+    ["no equals sign", "a[ # ]; echo x"],
+    [
+      "a nested bracket that the outer one does not close",
+      "a[b[1] # ]=1; echo x",
+    ],
+    ["a here-document operator", "a[ <<EOF ]=1\nbody\nEOF\n"],
+    ["a newline", "a[\n]=1; echo x"],
+    ["a semicolon", "a[;]=1; echo x"],
+    ["only an escaped closing bracket", "a[\\]=1; echo x"],
+    ["only a quoted closing bracket", 'a["]"=1; echo x'],
+    [
+      "a substitution nested in an arithmetic expansion",
+      "echo $(( $(a[ 1 ]=1 echo x) ))",
+    ],
+    ["a command behind a subscripted assignment", "a[1]=1 echo x"],
+    ["a command behind an appending subscripted assignment", "a[1]+=1 echo x"],
+    ["a command behind a quoted subscripted assignment", "'a[1]=1' echo x"],
+    ["a command behind an escaped subscripted assignment", "a\\[1]=1 echo x"],
+    [
+      "a command behind a wrapper and a subscripted assignment",
+      "nice a[1]=1 echo x",
+    ],
+    [
+      "a command behind an env assignment with a subscript",
+      "env a[1]=1 echo x",
+    ],
+    ["an escaped opening bracket in front of a bracket", "\\[[ x"],
+    ["a character class that holds an opening bracket", "ls x[[]"],
+    ["an option value that is an opening bracket", "cut -d[ -f2 file"],
+    ["a line continuation before the bracket", "a\\\n[ # ]=1; echo x"],
+    ["a position behind an assignment", "b=1 a[ # ]=1; echo x"],
+    ["a position behind a negation", "! a[ # ]=1; echo x"],
+    ["a position behind an and-list", "true && a[ # ]=1; echo x"],
+    ["a subshell", "(a[ # ]=1; echo x)"],
+    ["a brace group", "{ a[ # ]=1; echo x; }"],
+    ["a command substitution", "echo $(a[ # ]=1; echo x)"],
+    ["a backquote", "echo `a[ # ]=1; echo x`"],
+    ["a shell command string", "sh -c 'a[ # ]=1; echo x'"],
+    ["a second bracket after a closed one", "a[1]b[ # ]"],
+    ["an argument position", "echo a[ # ]"],
+    ["a subscript with spaces", "arr[i + 1]=x"],
+    [
+      "an arithmetic command that a shell may read as nested subshells",
+      "((a[ 1 ]=1 echo x) )",
+    ],
+    ["a spaced subscript in an arithmetic command", "(( a[ 1 ] ))"],
+    ["a spaced subscript in an arithmetic expansion", "echo $(( a[i + 1] ))"],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    ["a closed subscript", "a[1]=x"],
+    ["two subscripted assignments without a command", "a[0]=x a[1]=y"],
+    ["a subscripted assignment in front of a separator", "a[1]=x; echo y"],
+    ["a variable subscript", "a[$i]=x"],
+    ["a length subscript", `a[${OPEN}#a[@]}]=x`],
+    ["an arithmetic subscript", "a[$((i+1))]=x"],
+    ["a quoted subscript", 'a["key with space"]=x'],
+    ["a substitution subscript", "a[$(echo 1)]=x"],
+    ["the test command", "[ -f x ]"],
+    ["the test command in an and-list", '[ "$a" = b ] && echo y'],
+    ["a conditional expression", "[[ -f x ]]"],
+    ["a bracket glob at the start", "ls [ab]*"],
+    ["a bracket glob in the middle", "ls foo[ab]*"],
+    ["a character class glob", "ls [[:alpha:]]*"],
+    ["a character class glob behind a prefix", "ls x[[:alpha:]]"],
+    ["a closing bracket as the first member", "ls x[]]"],
+    ["brackets in double quotes", 'echo "a[ # ]"'],
+    ["brackets in single quotes", "echo 'a[ x'"],
+    ["a jq filter", "jq '.a[ 0 ]'"],
+    ["a closed subscript in an arithmetic command", "(( a[1] += 2 ))"],
+    ["a closed subscript in an arithmetic expansion", "echo $(( a[i+1] ))"],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+
+  test("reads a comment behind a closed word as a comment", () => {
+    expect(commandTexts("a[1]=x # note")).toEqual([["a[1]=x"]]);
   });
 });

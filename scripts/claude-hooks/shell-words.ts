@@ -84,6 +84,18 @@ export const CURRENT_BRANCH_SUBSTITUTIONS: readonly string[] = [
 /** 変数代入の語(`NAME=value`と、追記の`NAME+=value`)。 */
 export const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 
+/**
+ * 添字つきの変数代入の語(`NAME[添字]=value`と、追記の形)。
+ * bash、zsh、kshは、この語を先頭の代入として外し、後ろの語をコマンドとして実行する。
+ * 添字は最後の`]`まで広く取る。
+ * 名前を引用した語や、前置きの後ろの語は、同じ字面でもコマンドの名前として実行される。
+ * どちらかを決められないので、後ろに語が続く形は`Parser`が読めない構文にする。
+ * `env`の後ろの語は代入に決まるが、同じ字面なので区別せずに拒否する。
+ * 添字の後ろに字が続く語(最初の`]`の後ろが`=`でない語)も、ここでは代入として外れる。
+ * その語が1語だけの行では、シェルは語をコマンドの名前として探すが、引数を渡せないので受け入れる。
+ */
+const SUBSCRIPT_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\[.*\]\+?=/s;
+
 export const SHELLS: ReadonlySet<string> = new Set([
   "sh",
   "bash",
@@ -885,6 +897,8 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
   let xargsCommandUnknown = false;
   let unreadable = false;
   let seenXargs = false;
+  /** 直前に`env`とそのオプションを読み終え、まだ`env`の代入の並びの中なら真。 */
+  let afterEnv = false;
   const assignments: Word[] = [];
   const wrappers: string[] = [];
   let mise: MiseExec | null = null;
@@ -898,7 +912,12 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
     // 絶対パスで書いた前置き(`/usr/bin/env`)も、名前で見分ける。
     const name = baseName(text);
     const transparent = TRANSPARENT_OPTIONS.get(text);
-    if (ASSIGNMENT.test(text)) {
+    // `env`は、`=`を含む語を、名前の字を問わず代入として読む。`env`のオプションを読み終えた直後の並びだけが当たる。
+    const envAssignment = afterEnv && text.includes("=");
+    const assignment =
+      ASSIGNMENT.test(text) || SUBSCRIPT_ASSIGNMENT.test(text) || envAssignment;
+    if (!assignment) afterEnv = false;
+    if (assignment) {
       assignments.push(word);
       index += 1;
     } else if (TRANSPARENT_WORDS.has(text)) {
@@ -916,6 +935,7 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
       const skipped = skipWrapperOptions(words, index + 1, name);
       xargsCommandUnknown ||= skipped.xargsCommandUnknown;
       seenXargs ||= name === "xargs";
+      afterEnv = name === "env";
       index = skipped.next;
     } else if (name === "mise" && miseExecAt(words, index) !== -1) {
       wrappers.push(text);
@@ -1376,6 +1396,10 @@ class Parser {
   /** NULを含む`$'...'`を読んだ語の、別の綴り。無ければnull。 */
   private variantText: string | null = null;
   private inWord = false;
+  /** 今の語の中で開いたまま閉じていない`[`の数。 */
+  private openBrackets = 0;
+  /** 今の語の語頭から続けて読んだ`[`の数。語の字数と等しい間は、語が`[`だけでできている。 */
+  private leadingBrackets = 0;
   private dynamic = false;
   private glob = false;
   private inputs: Word[] = [];
@@ -1603,8 +1627,20 @@ class Parser {
         return;
       case "*":
       case "?":
+        this.glob = true;
+        break;
       case "[":
         this.glob = true;
+        // 語頭から続く`[`の列(`[`コマンドと`[[`)は数えない。語の途中で開いた`[`だけを数える。
+        // 算術の領域の中も数える。閉じ方によって、シェルが領域を入れ子のサブシェルとして読むためである。
+        if (this.text.length === this.leadingBrackets) {
+          this.leadingBrackets += 1;
+        } else {
+          this.openBrackets += 1;
+        }
+        break;
+      case "]":
+        if (this.openBrackets > 0) this.openBrackets -= 1;
         break;
     }
     this.append(char);
@@ -1666,10 +1702,19 @@ class Parser {
     this.inWord = false;
     this.dynamic = false;
     this.glob = false;
+    this.openBrackets = 0;
+    this.leadingBrackets = 0;
   }
 
   private endWord(): void {
     if (!this.inWord) return;
+    // bashとkshは、コマンドの位置の`名前[`を対応する`]`までの添字の対として読み、間の空白、`#`、`;`、改行で語を区切らない。
+    // フックは区切るので、同じ語の中で閉じない`[`は、位置や前置きを問わず読めない構文にする。
+    if (this.openBrackets > 0) {
+      throw new ShellSyntaxError(
+        "a bracket opened inside a word is not closed in the same word; quote the bracket if it is literal text",
+      );
+    }
     const word: Word = {
       text: this.text,
       // 今のブランチ名になる置換だけの語は、値が決まっているものとして扱う。
@@ -1739,6 +1784,15 @@ class Parser {
     const { words } = stripped;
     const program = words[0];
     if (program === undefined) return;
+    // 添字つきの代入の形の語は、シェルと引用の有無によって、代入にもコマンドの名前にもなる。
+    // 後ろにコマンドの語が続く形は、どちらが実行されるかを決められない。
+    if (
+      stripped.assignments.some((word) => SUBSCRIPT_ASSIGNMENT.test(word.text))
+    ) {
+      throw new ShellSyntaxError(
+        "a subscripted assignment in front of a command; run the assignment and the command separately",
+      );
+    }
     const name = baseName(program.text);
     const invocation = shellInvocation(words);
     if (invocation !== null) {
