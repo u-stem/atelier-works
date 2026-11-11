@@ -602,7 +602,7 @@ worktreeを作るフックと、既存のブランチを使う経路(worktreeの
 - 最上位の`.yomiyasu/`の下で、無視されたファイルとして出るものは、確認なしで消える。
   無視の元は問わない。
   中の`.gitignore`(`*`)は、置いたものを中身にかかわらず無視させる。
-  yomiyasuが置く最終稿の写し(`exports/`)と入力の写し(`inputs/`)も消えるので、原文と最終稿はworktreeの外に置く。
+  yomiyasuが置く最終稿の写し(`exports/`)と入力の写し(`inputs/`)も消えるので、残したい原文と最終稿はworktreeの外に写す。
 - gitが入れ子のリポジトリと認めたものは、末尾が`/`の1行で出るので残す。
   認めないもの(bareのリポジトリ、指す先の無いgitfile)は消える。
 - `.yomiyasu`を`.git/info/exclude`やユーザーの除外の設定に足すと、中に`.gitignore`の無い`.yomiyasu/`も消える側に移る。

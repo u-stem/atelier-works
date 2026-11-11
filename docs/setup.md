@@ -586,7 +586,7 @@ mise run worktree:prune -- --apply
   gitが無視と示すかだけで決め、無視の元(中の`.gitignore`や除外の設定)は問わない。
   `.yomiyasu/`の下に入れ子のリポジトリがあると、gitは`/`で終わる1行で示すので、残す。
   引用符付きで出るパスは、この許可に当たらない。
-  それ以外(`*.local.*`、`.claude/settings.local.json`など)は、削除で黙って消えるので、`ignored files`として残す。
+  それ以外(`*.local.*`、`.claude/settings.local.json`、消し忘れた`yomiyasu-work/`など)は、削除で黙って消えるので、`ignored files`として残す。
 - 直近120分以内に更新したファイルが無い。
 - cwdをその中に持つプロセスが無い。
 - 次のどちらかを満たす。

@@ -41,3 +41,6 @@ coverage/
 # superpowersが書く台帳と計画と仕様。設計文書をリポジトリに残さないので、コミットしない
 .superpowers/
 docs/superpowers/
+
+# yomiyasuで推敲する原文の写しと最終稿の置き場所。検査が済んだら消す
+/yomiyasu-work/
