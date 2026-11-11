@@ -716,10 +716,19 @@ export function shouldRefetchOnResume(input: {
 /** 文書が見えているか。見えない間は、`refetchIntervalInBackground`が偽の取り直しが止まる。 */
 function useDocumentVisible(): boolean {
   return useSyncExternalStore(
-    (onChange) => focusManager.subscribe(onChange),
-    () => focusManager.isFocused(),
+    subscribeDocumentVisible,
+    readDocumentVisible,
     () => true,
   );
+}
+
+// 購読の関数は、描画のたびに作り直さない。作り直すと、Reactが購読を解いて張り直すためである。
+function subscribeDocumentVisible(onChange: () => void): () => void {
+  return focusManager.subscribe(onChange);
+}
+
+function readDocumentVisible(): boolean {
+  return focusManager.isFocused();
 }
 
 /**
