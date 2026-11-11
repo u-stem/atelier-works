@@ -93,6 +93,17 @@ describe("lintDocText", () => {
     ]);
   });
 
+  test("keeps the line numbers of both checks after the frontmatter", () => {
+    const problems = lintDocText(
+      "docs/a.md",
+      "---\nname: a。b\n---\n再実行する。確認する。\n\n再実行します。\n",
+    );
+
+    expect(problems.map((problem) => Number(problem.split(":")[1]))).toEqual([
+      4, 6,
+    ]);
+  });
+
   test("accepts a document that writes one sentence per line", () => {
     expect(lintDocText("docs/a.md", "再実行する。\n確認する。\n")).toEqual([]);
   });

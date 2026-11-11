@@ -65,6 +65,18 @@ describe("formatDocument layout", () => {
     expect(formatted("A。\nB。C\nD。\n")).toBe("A。\nB。\nC\nD。\n");
   });
 
+  test("indents the next sentence of a later line like that line", () => {
+    expect(formatted("- A。\n  B。C\n")).toBe("- A。\n  B。\n  C\n");
+  });
+
+  test("marks the next sentence of a later quote line with the quote sign", () => {
+    expect(formatted("> A。\n> B。C\n")).toBe("> A。\n> B。\n> C\n");
+  });
+
+  test("does not mark the next sentence of a lazy quote line", () => {
+    expect(formatted("> A。\nB。C\n")).toBe("> A。\nB。\nC\n");
+  });
+
   test("splits with the line ending the document already uses", () => {
     expect(formatted("A。B\r\nC。\r\n")).toBe("A。\r\nB\r\nC。\r\n");
   });
@@ -120,6 +132,35 @@ describe("main", () => {
 
   afterEach(() => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true });
+  });
+
+  test("does not write a file outside the repository", () => {
+    const outside = makeRoot({ "out.md": "A。B\n" });
+    const dir = makeRoot({});
+
+    run(dir, [join(outside, "out.md")]);
+
+    expect(readFileSync(join(outside, "out.md"), "utf8")).toBe("A。B\n");
+  });
+
+  test("does not read an outside path as a path under the repository", () => {
+    const outside = makeRoot({ "out.md": "A。B\n" });
+    const decoyPath = join(outside, "out.md");
+    const dir = makeRoot({ [decoyPath]: "C。D\n" });
+
+    run(dir, [decoyPath]);
+
+    expect(readFileSync(join(dir, decoyPath), "utf8")).toBe("C。D\n");
+  });
+
+  test("exits with 1 and names an argument outside the repository", () => {
+    const outside = makeRoot({ "out.md": "A。B\n" });
+    const dir = makeRoot({});
+
+    const { exitCode, output } = run(dir, [join(outside, "out.md")]);
+
+    expect(exitCode).toBe(1);
+    expect(output.join("\n")).toContain(join(outside, "out.md"));
   });
 
   test("rewrites a file that has a violation", () => {

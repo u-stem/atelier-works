@@ -1,22 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import {
   findSentenceBreaks,
-  lintOneSentencePerLine,
+  findSentenceViolationLines,
+  formatSentenceViolation,
 } from "../../scripts/lint-one-sentence-per-line.ts";
 
 /** 違反の行番号だけを返す。 */
 function violatingLines(markdown: string): number[] {
-  return lintOneSentencePerLine("docs/a.md", markdown).map((problem) =>
-    Number(problem.split(":")[1]),
-  );
+  return findSentenceViolationLines(markdown);
 }
 
-describe("lintOneSentencePerLine report", () => {
-  test("reports the path, line, and rule name of a violation", () => {
-    const problems = lintOneSentencePerLine("docs/a.md", "# 題\n\nA。B。\n");
+describe("formatSentenceViolation", () => {
+  test("writes the path, line, and rule name of a violation", () => {
+    expect(formatSentenceViolation("docs/a.md", 3)).toStartWith(
+      "docs/a.md:3: [one-sentence-per-line] ",
+    );
+  });
+});
 
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toStartWith("docs/a.md:3: [one-sentence-per-line] ");
+describe("findSentenceViolationLines report", () => {
+  test("reports the line of a violation after other blocks", () => {
+    expect(violatingLines("# 題\n\nA。B。\n")).toEqual([3]);
   });
 
   test("reports a line once even when it holds three sentences", () => {
@@ -28,7 +32,7 @@ describe("lintOneSentencePerLine report", () => {
   });
 });
 
-describe("lintOneSentencePerLine paragraphs", () => {
+describe("findSentenceViolationLinesparagraphs", () => {
   test("accepts one sentence per line", () => {
     expect(violatingLines("A。\nB。\nC。\n")).toEqual([]);
   });
@@ -54,7 +58,7 @@ describe("lintOneSentencePerLine paragraphs", () => {
   });
 });
 
-describe("lintOneSentencePerLine closers after the full stop", () => {
+describe("findSentenceViolationLinesclosers after the full stop", () => {
   test("accepts a closing bracket after the full stop at the end of a line", () => {
     expect(violatingLines("これは「A」である。）\n")).toEqual([]);
   });
@@ -84,7 +88,7 @@ describe("lintOneSentencePerLine closers after the full stop", () => {
   });
 });
 
-describe("lintOneSentencePerLine spans that hide a full stop", () => {
+describe("findSentenceViolationLinesspans that hide a full stop", () => {
   test("ignores a full stop inside an inline code span", () => {
     expect(violatingLines("`a。b`と書く。\n")).toEqual([]);
   });
@@ -138,7 +142,7 @@ describe("lintOneSentencePerLine spans that hide a full stop", () => {
   });
 });
 
-describe("lintOneSentencePerLine blocks", () => {
+describe("findSentenceViolationLinesblocks", () => {
   test("reports a violation in a bullet item", () => {
     expect(violatingLines("- A。B。\n")).toEqual([1]);
   });
@@ -281,7 +285,7 @@ describe("findSentenceBreaks", () => {
   });
 });
 
-describe("lintOneSentencePerLine inline HTML after the full stop", () => {
+describe("findSentenceViolationLinesinline HTML after the full stop", () => {
   test("accepts a closing tag at the end of a line", () => {
     expect(violatingLines("<b>A。</b>\n")).toEqual([]);
   });
@@ -299,7 +303,7 @@ describe("lintOneSentencePerLine inline HTML after the full stop", () => {
   });
 });
 
-describe("lintOneSentencePerLine brackets that are never closed", () => {
+describe("findSentenceViolationLinesbrackets that are never closed", () => {
   test("reports the later sentences of a paragraph with an unclosed bracket", () => {
     expect(violatingLines("区間(0, 1]を使う。次。もう1つ。\n")).toEqual([1]);
   });
@@ -319,7 +323,7 @@ describe("lintOneSentencePerLine brackets that are never closed", () => {
   });
 });
 
-describe("lintOneSentencePerLine with CRLF line endings", () => {
+describe("findSentenceViolationLineswith CRLF line endings", () => {
   test("accepts one sentence per line", () => {
     expect(violatingLines("A。\r\nB。\r\n")).toEqual([]);
   });
