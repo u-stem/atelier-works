@@ -14,7 +14,8 @@
 // `--scope`の値が実行時に決まる形(変数、コマンド置換、glob)は、`deploy`かを判定できないので拒否する。
 // 凍結のCLIを指す語は、直後の`--`を読み飛ばして副コマンドを決め、globは凍結のファイル名に当たるかで判定する。
 // `-e`の直後の文字列と標準入力のコードは、凍結のCLIを指しながら`release`、`deploy`、`reset`、`prune`を含めば拒否する。
-// 空白か、シェルが語を分けるか展開する字を含む語も、コードを取るオプションの種類を問わず同じに見る。凍結のCLIの理由の値は見ない。
+// 空白か、シェルが語を分けるか展開する字を含む語は、凍結のコードをパスの形で指す字面か凍結の書き込みのタスク名と、書き込みの語が並べば拒否する。
+// 凍結を指す裸の語と書き込みの語が並ぶだけの文章は通す。凍結のCLIの理由の値と、検査の道具の引数は見ない。
 // 標準入力へ流し込むファイル(`bun run - < scripts/freeze.ts`)が保留か凍結のコードなら拒否する。
 //
 // Consoleの書き込みのscript(`console-scripts.ts`の一覧。保留と凍結の解除、ジョブの取消など)を1コマンドで呼ぶ形は、
@@ -678,11 +679,34 @@ function codeStrings(args: readonly Word[]): string[] {
   return codes;
 }
 
+/** 凍結のCLIの、端末の確認を通る書き込みかdeployの保留を表す語。 */
+const FREEZE_WRITE_WORD = /\b(?:release|deploy|reset|prune)\b/i;
+
 /** コードの文字列が、凍結のCLIを指しながら、端末の確認を通る書き込みかdeployの保留を書いているなら真。 */
 function codeTouchesFreezeRelease(text: string): boolean {
+  return FREEZE_MENTION.test(text) && FREEZE_WRITE_WORD.test(text);
+}
+
+/**
+ * 凍結のコードをパスの形で指す字面。`scripts/freeze`か、拡張子の付いた名前(`freeze.ts`)である。
+ * 裸の`freeze`は、文章の中の語と区別できないので数えない。
+ */
+const FREEZE_PATH_MENTION =
+  /(?:scripts\/freeze(?:\.[cm]?[jt]sx?)?|(?:^|[/'"`\s(=,[{])freeze\.[cm]?[jt]sx?)(?![A-Za-z0-9_.-])/i;
+
+/** 凍結の書き込みのタスク名の字面。`freeze:place`は、`deploy`の語と並ぶときだけ書き込みに数える。 */
+const FREEZE_TASK_MENTION =
+  /(?:^|[^\w:-])freeze:(?:place|release|reset)(?![\w-])/i;
+
+/**
+ * 語に分かれる語が、凍結のコードをパスの形で指す字面か凍結の書き込みのタスク名と、書き込みの語を持つなら真。
+ * コードを取るオプションの値と標準入力の文字列(`codeTouchesFreezeRelease`)より狭く読む。
+ * 凍結を指す裸の語と書き込みの語が並ぶだけの文章の引数(説明文やメッセージ)を止めないためである。
+ */
+function wordTouchesFreezeRelease(text: string): boolean {
   return (
-    FREEZE_MENTION.test(text) &&
-    /\b(?:release|deploy|reset|prune)\b/i.test(text)
+    (FREEZE_PATH_MENTION.test(text) || FREEZE_TASK_MENTION.test(text)) &&
+    FREEZE_WRITE_WORD.test(text)
   );
 }
 
@@ -744,10 +768,11 @@ function firstOperandAt(words: readonly Word[], from: number): number {
  * 実行系の引数が、凍結のCLI(`scripts/freeze.ts`)で、端末の確認を通る書き込みか、deployの保留を置く形なら拒否の種類を返す。
  * 凍結のCLIを指す語は、すべて調べる。直後の語が副コマンドである。凍結のCLIは、副コマンドを最初の引数として読むためである。
  * 実行時に決まるときは判定できないので`dynamic`を返す。
- * 標準入力のコード、`-e`などの直後の文字列、空白かシェルが語を分けるか展開する字を含む語は、
- * 凍結のCLIを指しながら`release`、`deploy`、`reset`、`prune`を含めば拒否する。
- * 最後の種類の語は、コードを取るオプションの一覧に無いオプションの値を読むためである。凍結のCLIの理由の値は読まない。
- * 最初のオペランドが検査の道具なら、最後の種類の語は見ない。凍結のCLIを指す語の次の語は、検査の道具の後ろでも副コマンドとして読む。
+ * 標準入力のコードと`-e`などの直後の文字列は、凍結のCLIを指しながら`release`、`deploy`、`reset`、`prune`を含めば拒否する。
+ * 空白かシェルが語を分けるか展開する字を含む語は、凍結のコードをパスの形で指す字面か凍結の書き込みのタスク名と、
+ * 同じ書き込みの語を含むときだけ拒否する(`wordTouchesFreezeRelease`)。
+ * この語は、コードを取るオプションの一覧に無いオプションの値を読むためである。凍結のCLIの理由の値は読まない。
+ * 最初のオペランドが検査の道具なら、この語は見ない。凍結のCLIを指す語の次の語は、検査の道具の後ろでも副コマンドとして読む。
  */
 function freezeCliFinding(
   args: readonly Word[],
@@ -761,7 +786,7 @@ function freezeCliFinding(
       (word, index) =>
         splitsIntoWords(word.text) &&
         !isReasonValue(args, index) &&
-        spellings(word).some(codeTouchesFreezeRelease),
+        spellings(word).some(wordTouchesFreezeRelease),
     )
   ) {
     return "operation";
