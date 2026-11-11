@@ -6011,3 +6011,635 @@ describeForCallers(
     });
   },
 );
+
+// 言及の直前の区切りは、閉じた字の集合で読む。バッククォート、`,`、`[`、`{`の直後の名前も指す語である。
+describeForCallers(
+  "bash-guard denies holds and stops named right after a backquote, a comma, or an opening bracket inside code",
+  (subagent) => {
+    test.each([
+      [
+        "a hold after a backquote",
+        'bun -e \'Bun.spawnSync(["bun",`hold.ts`,"place"])\'',
+      ],
+      ["a hold after a comma", "bun -e 'x=[1,hold.ts]' place"],
+      ["a hold after an opening bracket", "bun -e 'x=[hold.ts]' place"],
+      [
+        "a stop after a backquote",
+        "bun -e 'Bun.spawnSync([\"bun\",`stop_all.ts`])'",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 区切りの集合の外の字(`@`、`:`、`+`など)の直後の名前は、パッケージ名やタスク名の一部なので指す語に数えない。
+describeForCallers(
+  "bash-guard allows names that only share letters with the guarded code",
+  (subagent) => {
+    test.each([
+      "bun -e 'console.log(\"hold_released\")'",
+      "bun scripts/lint-docs.ts docs/internals/holds.md",
+      "bun test tests/scripts/freeze.test.ts",
+      "bun -e 'console.log(1)' -- --stop_all_x",
+      "bunx @hold/cli --version",
+      "npx @freeze/cli release",
+      "bun run check:holds",
+      "bun run test:hold place",
+      "bun run lint:stop_all",
+      "bun scripts/x.ts a+hold place",
+      "bun scripts/x.ts a+stop_all",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// コードを取るオプションの値と標準入力のコードは、凍結のCLIを指す字面と書き込みの語が並べば拒否する。字面は、名前だけで指す形とタスク名も含む。
+// 空白などで語に分かれる語は、パスの形かタスク名で凍結を指し、書き込みの語が並べば拒否する。
+describeForCallers(
+  "bash-guard denies freeze writes in code strings and in option values that split into words",
+  (subagent) => {
+    test.each([
+      [
+        "a print-and-eval bundle",
+        `node -pe "require('child_process').execSync('bun scripts/freeze.ts release')"`,
+      ],
+      [
+        "a call option of a package runner",
+        `npx --call "bun scripts/freeze.ts release"`,
+      ],
+      [
+        "a shell option of a package manager",
+        `pnpm -c exec "bun scripts/freeze.ts release"`,
+      ],
+      [
+        "an exec subcommand of a package manager",
+        `yarn exec "bun scripts/freeze.ts reset"`,
+      ],
+      [
+        "a freeze task inside runner code",
+        `bun -e 'Bun.spawnSync(["mise","run","freeze:release"])'`,
+      ],
+      [
+        "a module named without a path inside runner code",
+        `bun -e "process.chdir('scripts'); require('./freeze').release()"`,
+      ],
+      [
+        "a module named without a path in standard input code",
+        `echo "process.chdir('scripts'); require('./freeze').release()" | bun -`,
+      ],
+      [
+        "a freeze task in a call option of a package runner",
+        `npx --call "mise run freeze:release"`,
+      ],
+      [
+        "a freeze path with an extension in an option value",
+        `bunx some-cli --run "bun freeze.ts reset"`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 語に分かれる語は、凍結のコードをパスの形で指す字面か、凍結の書き込みのタスク名があるときだけ拒否する。
+// 凍結を指す裸の語と書き込みの語が並ぶだけの文章の引数は通す。
+describeForCallers(
+  "bash-guard allows sentences that only name freezes and write words",
+  (subagent) => {
+    test.each([
+      [
+        "a description given to a script",
+        `bun scripts/x.ts "fix freeze release notes"`,
+      ],
+      [
+        "an argument of an inspection task",
+        `bun run check -- "freeze release"`,
+      ],
+      [
+        "a message option of another tool",
+        `bunx some-cli --message "freeze reset notes"`,
+      ],
+    ])("allows %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 凍結のCLIは副コマンドを最初の引数として読むので、読み取りの副コマンドの後ろの語は書き込みの語と同じ綴りでも通す。
+// 理由の値は、実行系の最初のオペランドの凍結のCLIの`--reason`の値なら、コードの文字列として読まない。
+describeForCallers(
+  "bash-guard allows freeze reads, schedule freezes, inspections, and reason values",
+  (subagent) => {
+    test.each([
+      "bun scripts/freeze.ts list",
+      "bun scripts/freeze.ts list --scope deploy",
+      "bun scripts/freeze.ts place --target a/b",
+      'bun scripts/freeze.ts place --target a/b --reason "freeze for release"',
+      "bun scripts/freeze.ts push --dry-run",
+      'bun test -t "freeze release"',
+      "bunx biome check scripts/freeze.ts",
+      "bun scripts/freeze.ts list release",
+      "bun scripts/freeze.ts list --target release",
+      "bun scripts/freeze.ts place --target a/b --reason release",
+      "bun scripts/freeze.ts place --target a/b --reason=release",
+      'bun scripts/freeze.ts place --target a/b --reason "see scripts/freeze.ts release notes"',
+      'bun run scripts/freeze.ts place --target a/b --reason "see scripts/freeze.ts release notes"',
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 理由の値を読まないのは、凍結のCLIが実行系の最初のオペランドにあるときだけである。ほかのスクリプトの引数の後ろの`--reason`の値は読む。
+describeForCallers(
+  "bash-guard denies freeze write strings in reason values of other scripts",
+  (subagent) => {
+    test.each([
+      [
+        "a value after the option",
+        `bun scripts/x.ts scripts/freeze.ts --reason "bun scripts/freeze.ts release"`,
+      ],
+      [
+        "a value joined by an equals sign",
+        `bun scripts/x.ts scripts/freeze.ts --reason="bun scripts/freeze.ts reset"`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 保留か凍結のコードに当たりうるglobを実行系に渡す形は、検査の道具の外なら拒否する。
+describeForCallers(
+  "bash-guard denies runners given a glob that can match guarded code",
+  (subagent) => {
+    test.each([
+      ["a glob as the script", "bun scripts/*.ts"],
+      ["a glob after the script", "bun x.ts scripts/*.ts"],
+      ["a glob given to a package runner", "npx tsx scripts/*.ts"],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 検査の道具が最初のオペランドでも、凍結のCLIを指す語の次の語は副コマンドとして読む。
+describeForCallers(
+  "bash-guard denies freeze writes placed after an inspection tool",
+  (subagent) => {
+    test.each([
+      [
+        "a release after a linter",
+        "bunx biome check scripts/freeze.ts release",
+      ],
+      ["a reset after a test runner", "bun test scripts/freeze.ts reset"],
+      [
+        "a deploy placement after a linter",
+        "bunx --bun biome check scripts/freeze.ts place --scope deploy",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 検査の道具に1つのglobだけを渡す形は、次の語が無いので副コマンドを読まずに通す。
+describeForCallers(
+  "bash-guard allows inspection tools given a single glob",
+  (subagent) => {
+    test.each(["bunx biome check scripts/*.ts", "bun test scripts/*.ts"])(
+      "allows %s",
+      async (command) => {
+        expect(await decide(command, { subagent })).toBe("allow");
+      },
+    );
+  },
+);
+
+// カンマの無いブレースの範囲は、端点の字の集合に置き換えてglobと同じに照合する。英字の範囲は字の集合、数の範囲は数字で始まる並びである。
+describeForCallers(
+  "bash-guard denies guarded code named through a brace range",
+  (subagent) => {
+    test.each([
+      ["a hold path", "bun scripts/h{o..o}ld.ts place"],
+      ["a freeze path", "bun scripts/free{z..z}e.ts release"],
+      ["a stop path", "bun scripts/stop_al{l..l}.ts"],
+      [
+        "a hold path piped through cat",
+        "cat scripts/h{o..o}ld.ts | bun - place",
+      ],
+      [
+        "a hold path after a prefix",
+        "script -q /dev/null bun scripts/h{o..o}ld.ts place",
+      ],
+      [
+        "a hold path written only in ranges",
+        "bun scripts/{h..h}{o..o}{l..l}{d..d}.ts place",
+      ],
+      [
+        "a freeze path written only in ranges",
+        "bun scripts/{f..f}{r..r}{e..e}{e..e}{z..z}{e..e}.ts release",
+      ],
+      [
+        "a stop path written only in ranges",
+        "bun scripts/{s..s}{t..t}{o..o}{p..p}_{a..a}{l..l}{l..l}.ts",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 数の範囲は数字に展開されるので、保留、凍結、全停止のコードとConsoleのscriptの名前に当たらない。
+describeForCallers("bash-guard allows daily brace ranges", (subagent) => {
+  test.each([
+    "for i in {1..3}; do gh pr view $i; done",
+    "echo {1..5}",
+    "mkdir -p /tmp/d{1..3}",
+    "curl -s https://example.com/{1..3}",
+    "bun run x{1..3}",
+    "printf '%s\\n' {a..c}",
+    "bun scripts/x.ts out/stop_{1..3}",
+    "bun scripts/x.ts out/freeze_{01..12}",
+    "curl -s https://example.com/api/{1..3}_release",
+  ])("allows %s", async (command) => {
+    expect(await decide(command, { subagent })).toBe("allow");
+  });
+});
+
+// Consoleの書き込みのscriptの名前も、範囲を展開される字の集合に置き換えた形は、括弧の外の英字の数を問わずに照合する。
+describe("bash-guard denies Console write scripts named only through brace ranges", () => {
+  test.each([
+    [
+      "a script run",
+      "wmill script run f/factory/{h..h}{o..o}{l..l}{d..d}_{r..r}{e..e}{l..l}{e..e}{a..a}{s..s}{e..e}",
+    ],
+    [
+      "a job URL",
+      "curl -X POST http://localhost:8000/api/w/factory/jobs/run_wait_result/p/f/factory/{f..f}{r..r}{e..e}{e..e}{z..z}{e..e}_{r..r}{e..e}{l..l}{e..e}{a..a}{s..s}{e..e} -d {}",
+    ],
+  ])("denies %s", async (_kind, command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+});
+
+// `mise tasks`の後ろの語は、miseのオプションとその値を読み飛ばした最初の語が、実行の語に当たりうるglobかブレースか、実行時に決まる語なら実行の語として扱う。
+describeForCallers(
+  "bash-guard denies task runs whose run word after the tasks subcommand is not literal",
+  (subagent) => {
+    test.each([
+      ["a glob run word with a hold task", "mise tasks r?n hold:place"],
+      ["a variable run word with a hold task", "mise tasks $X hold:place"],
+      [
+        "a brace run word with a freeze task",
+        "mise tasks r{u,u}n freeze:release",
+      ],
+      ["a glob run word with a stop task", "mise tasks r?n stop"],
+      ["a variable run word with a stop task", "mise tasks $X stop"],
+      ["a brace range run word with a stop task", "mise tasks {r..r}un stop"],
+      [
+        "a glob run word after an option value",
+        "mise tasks --cd x r?n hold:place",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// `mise tasks <タスク名>`は定義を表示するだけなので、字のままの語は実行に数えない。オプションの値も読み飛ばす。
+describeForCallers(
+  "bash-guard allows task listings and task information",
+  (subagent) => {
+    test.each([
+      "mise tasks",
+      "mise tasks ls",
+      "mise tasks --hidden",
+      "mise tasks info hold:place",
+      "mise tasks deps stop",
+      "mise tasks --sort name",
+      "mise tasks --cd $W",
+      "mise tasks --cd $W ls",
+      "mise tasks hold:place",
+      "mise tasks freeze:release",
+      "mise tasks stop",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 前置きの無いインタプリタとストリームエディタのコードの文字列は判定しない。保留と凍結のコードを読むだけの呼び出しは通る。
+describeForCallers(
+  "bash-guard allows interpreters and stream editors that only read guarded code",
+  (subagent) => {
+    test.each([
+      "awk '/release/ {print NR}' scripts/hold.ts",
+      `awk '/hold|release/ {print NR": "$0}' scripts/claude-hooks/hold-guard.ts`,
+      "perl -ne 'print if /place/' scripts/freeze.ts",
+      `python3 -c "import json,sys; print(json.load(sys.stdin)['release'])"`,
+      "awk -F: '{print $1}' scripts/hold.ts",
+      "sed -n '1,50p' scripts/hold.ts",
+      "sed -i 's/release/x/' scripts/hold.ts",
+      "sed -n '/stop_all/,+5p' scripts/x.ts",
+      `python3 -c "print('see hold release notes')"`,
+      "jq -r '.release' package.json",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 名前を引用した代入の形の語と、前置きの後ろの代入の形の語は、シェルがコマンドの名前として実行するので、その名前で判定する。
+describe("bash-guard denies pushes to main through an assignment-shaped command name", () => {
+  test.each([
+    ["a quoted name", "'a=/x/git' push origin main"],
+    ["a name with a backslash", "a\\=/x/git push origin main"],
+    ["a name after a niceness prefix", "nice a=/x/git push origin main"],
+    ["a name after the command builtin", "command a=/x/git push origin main"],
+    ["a name after a timeout prefix", "timeout 5 a=/x/git push origin main"],
+  ])("denies %s", async (_kind, command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard allows leading assignments in front of reads", () => {
+  test.each([
+    "FOO=1 git status",
+    "FOO='a b' git status",
+    "env FOO=1 git status",
+    "if FOO=1 true; then echo ok; fi",
+    "time FOO=1 git status",
+    "LANG=C rg -n x",
+  ])("allows %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+// 添字つきの代入の形の語は、名前の引用と位置によらず、後ろに語が続けば読めない構文として拒否する。`sudo`の後ろの代入の形の語も同じである。
+describe("bash-guard denies subscripted assignment-shaped words and assignments after sudo in front of a command", () => {
+  test.each([
+    ["a quoted subscripted name", "'a[1]=1' git status"],
+    ["a quoted subscript", "a['1']=1 git status"],
+    ["a subscripted name after a prefix", "nice a[1]=1 git status"],
+    ["an assignment after sudo", "sudo FOO=1 ls"],
+  ])("denies %s", async (_kind, command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+// 読めない入れ子の文字列は、引用符とバックスラッシュを除いた綴りでも字面を判定する。語の途中の空の引用で名前を分けた形を見落とさないためである。
+describeForCallers(
+  "bash-guard denies guarded names split by empty quotes inside unreadable nested strings",
+  (subagent) => {
+    test.each([
+      [
+        "a hold path in a remote case",
+        `ssh host "case x in x) bun scripts/ho''ld.ts place;; esac"`,
+      ],
+      [
+        "a stop path in a remote case",
+        `ssh host "case x in x) bun scripts/stop_al''l.ts;; esac"`,
+      ],
+      [
+        "a stop task in a remote case",
+        `ssh host "case x in x) mise run st''op;; esac"`,
+      ],
+      [
+        "a hold path in a pager setting",
+        `git -c core.pager="case x in x) bun scripts/ho''ld.ts place;; esac" log`,
+      ],
+      [
+        "a hold path split by an empty ANSI-C quote",
+        `ssh host "case x in x) bun scripts/ho$''ld.ts place;; esac"`,
+      ],
+      [
+        "a hold path split by an empty locale quote",
+        `ssh host 'case x in x) bun scripts/ho$""ld.ts place;; esac'`,
+      ],
+      [
+        "a stop path split by an empty ANSI-C quote",
+        `ssh host "case x in x) bun scripts/stop_al$''l.ts;; esac"`,
+      ],
+      [
+        "a stop task split by an empty locale quote",
+        `ssh host 'case x in x) mise run st$""op;; esac'`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows unreadable nested strings without guarded names",
+  (subagent) => {
+    test.each([`ssh host "case x in x) echo hi;; esac"`])(
+      "allows %s",
+      async (command) => {
+        expect(await decide(command, { subagent })).toBe("allow");
+      },
+    );
+  },
+);
+
+// 名前だけの代入の形で始まる文字列は、値が起動語なら、値と後ろの語の組をコマンドとして判定する。
+describeForCallers(
+  "bash-guard denies launchers given as the value of an assignment-shaped string",
+  (subagent) => {
+    test.each([
+      [
+        "a database client touching holds",
+        `ssh -o 'ProxyCommand=psql -c "delete from holds"' host`,
+      ],
+      [
+        "a runner given a hold path",
+        `ssh host 'X=bun -e "import(\\"./x\\")" scripts/hold.ts'`,
+      ],
+      [
+        "a task runner given a stop task",
+        "ssh -o 'ProxyCommand=mise run stop' host",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows assignment-shaped strings whose values are not launchers",
+  (subagent) => {
+    test.each([
+      "ssh host 'LANG=C rg -n release scripts/hold.ts'",
+      "ssh -o 'ProxyCommand=nc %h %p' host",
+      "ssh host 'FOO=1 bun test'",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 全停止も、空白などで語に分かれる先頭の代入の値を字面で判定する。ページャーなどの環境変数は、値をコマンドとして実行できるためである。
+describeForCallers(
+  "bash-guard denies stops written in the values of leading assignments",
+  (subagent) => {
+    test.each([
+      ["a pager of git", "GIT_PAGER='bun scripts/stop_all.ts' git log"],
+      [
+        "an input preprocessor of a pager",
+        "LESSOPEN='|bun scripts/stop_all.ts %s' less README.md",
+      ],
+      ["a pager of gh with a stop task", "PAGER='mise run stop' gh pr view 1"],
+      [
+        "an external diff of git with a stop task",
+        "GIT_EXTERNAL_DIFF='mise run stop' git diff",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 値が1語の代入は、引数を渡せないので判定しない。全停止のコードのパスや名前を変数に入れて読む形は通る。
+describeForCallers(
+  "bash-guard allows leading assignments whose values are single words",
+  (subagent) => {
+    test.each([
+      "GIT_PAGER=cat git log",
+      "FOO=stop git status",
+      "LESS=-R git log",
+      "F=scripts/stop_all.ts; wc -l $F",
+      "F=scripts/stop_all.ts wc -l scripts/x.ts",
+      "NAME=stop_all git status",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 標準入力をコードとして読むオペランドは、重ねたスラッシュや`.`、`..`の区切りをまとめた綴りで見る。
+describeForCallers(
+  "bash-guard denies guarded code piped into a runner through a respelled standard input path",
+  (subagent) => {
+    test.each([
+      ["a doubled slash", "cat scripts/hold.ts | bun /dev//stdin place"],
+      ["a dot segment", "cat scripts/hold.ts | bun /dev/./stdin place"],
+      ["a parent segment", "cat scripts/hold.ts | bun /dev/../dev/stdin place"],
+      [
+        "a doubled slash in a descriptor path",
+        "cat scripts/hold.ts | bun /dev/fd//0 place",
+      ],
+      [
+        "a leading doubled slash",
+        "cat scripts/hold.ts | bun //dev/stdin place",
+      ],
+      [
+        "a relative path",
+        "cat scripts/hold.ts | bun ../../../../dev/stdin place",
+      ],
+      ["a glob", "cat scripts/hold.ts | bun /dev/std?n place"],
+      ["a character class", "cat scripts/hold.ts | bun /dev/std[i]n place"],
+      ["a brace", "cat scripts/hold.ts | bun /dev/{stdin,x} place"],
+      ["a brace range", "cat scripts/hold.ts | bun /dev/fd/{0..0} place"],
+      [
+        "a descriptor number with a leading zero",
+        "cat scripts/hold.ts | bun /dev/fd/00 place",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 根からのパスのスクリプトは、標準入力の綴りに当たらない。上流が保留と凍結のコードでなければ、パイプで読む形も止めない。
+describeForCallers(
+  "bash-guard allows runners given absolute script paths or piped other files",
+  (subagent) => {
+    test.each([
+      "bun /repo/scripts/x.ts",
+      "cat README.md | bun run check",
+      "cat README.md | bun $IN",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 実行時に決まる語のオペランドは、標準入力とみなさない。変数のパスのスクリプトと、変数の値を取るオプションは日常の形である。
+describeForCallers(
+  "bash-guard allows runners given variable operands",
+  (subagent) => {
+    test.each([
+      [
+        "a diff piped into a script with a variable argument",
+        "git diff | bun scripts/x.ts $F",
+      ],
+      [
+        "a diff piped into a variable script",
+        "git diff origin/main | bun $S/review.ts --base $B",
+      ],
+      [
+        "a variable script writing to a variable log",
+        "bun $S/x.ts > $S/out.log",
+      ],
+      ["a variable working directory", "bun --cwd $W run build > $S/build.log"],
+      [
+        "a variable working directory joined by an equals sign",
+        "bun --cwd=$W test > $S/test.log",
+      ],
+      [
+        "a variable script reading a variable input after writing it with cat",
+        `cat > $S/probe.ts <<'EOF'\nimport { decide } from "./scripts/hold.ts";\nEOF\nbun run $S/probe.ts < $S/in.txt`,
+      ],
+    ])("allows %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 入れ子の文字列の中の代入の値も、最上位と同じく、語に分かれる値の字面で全停止を見る。
+describeForCallers(
+  "bash-guard denies the stop-all written in an assignment value inside a nested string",
+  (subagent) => {
+    test.each([
+      [
+        "a pager of git in a remote command",
+        `ssh host "GIT_PAGER='bun scripts/stop_all.ts' git log"`,
+      ],
+      [
+        "a pager with a stop task in a remote command",
+        `ssh host "PAGER='mise run stop' man ls"`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 削除を確定する押し出しのタスク名も、語に分かれる語の中の凍結の書き込みとして数える。
+describeForCallers(
+  "bash-guard denies a pruning push task named in a word that splits into words",
+  (subagent) => {
+    test("denies a run option of another tool", async () => {
+      expect(
+        await decide('bunx some-cli --run "mise run push:prune"', { subagent }),
+      ).toBe("deny");
+    });
+  },
+);
+
+// 1字に当たるglobだけの引数は、標準入力のオペランドとして読まない。
+describeForCallers(
+  "bash-guard allows a lone glob argument behind piped hold code",
+  (subagent) => {
+    test("allows a single-character glob argument", async () => {
+      expect(
+        await decide("cat scripts/hold.ts | bun scripts/x.ts ? list", {
+          subagent,
+        }),
+      ).toBe("allow");
+    });
+  },
+);

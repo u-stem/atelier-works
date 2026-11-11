@@ -25,7 +25,15 @@ export type Word = {
   readonly glob: boolean;
   /** NULを含んでいた語の、NULを除いた綴り。シェルによって切り詰めるかが違うので、判定には両方を使う。 */
   readonly variants?: readonly string[];
+  /**
+   * `=`を含む語のうち、最初の`=`までに引用符かバックスラッシュがあったものなら真。
+   * シェルは、名前か`=`を引用した語を代入として読まず、コマンドの名前として実行する。
+   */
+  readonly quotedName?: true;
 };
+
+/** 名前を引用した語に足す印。 */
+const QUOTED_NAME: { readonly quotedName: true } = { quotedName: true };
 
 /**
  * `;`、`&&`、パイプなどで区切られた1つのコマンド。
@@ -68,7 +76,8 @@ export type StrippedCommand = {
   /**
    * `xargs`が実行するコマンドが、`words`の先頭の語に決まらないときは真。
    * 知っている一覧に無いオプション、置換のオプション(`-I`、`-J`、`-i`、`--replace`)、
-   * `xargs`の後ろで外した前置き(代入、`env`、`time`、`mise exec`、2つ目の`xargs`など)がそうである。
+   * `xargs`の後ろで外した前置き(`env`、`time`、`mise exec`、2つ目の`xargs`など)がそうである。
+   * `xargs`の後ろの代入の形の語は、代入として外さず、`xargs`が実行する名前として残る。
    */
   readonly xargsCommandUnknown: boolean;
   /** 外した後の語が、このチェックでは読み切れない構文(予約語の代替形など)を含むときは真。 */
@@ -81,15 +90,23 @@ export const CURRENT_BRANCH_SUBSTITUTIONS: readonly string[] = [
   "$(git rev-parse --abbrev-ref HEAD)",
 ];
 
-/** 変数代入の語(`NAME=value`と、追記の`NAME+=value`)。 */
+/**
+ * 変数代入の語(`NAME=value`と、追記の`NAME+=value`)。
+ * `stripWrappers`は、コマンドの先頭と、予約語と`time`の直後の語だけを代入として外す。
+ * 名前か`=`を引用した語(`quotedName`)は、シェルがコマンドの名前として実行するので外さない。
+ * 前置きのコマンドの後ろの語も外さない。前置きのプログラムは、語をそのままコマンドの名前として実行するためである。
+ * `env`の後ろの語は、`env`が代入として読むので外す。
+ * `sudo`の後ろの語は、代入として読むかを確かめていないので、後ろに語が続く形を`Parser`が読めない構文にする。
+ */
 export const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 
 /**
  * 添字つきの変数代入の語(`NAME[添字]=value`と、追記の形)。
  * bash、zsh、kshは、この語を先頭の代入として外し、後ろの語をコマンドとして実行する。
  * 添字は最後の`]`まで広く取る。
- * 名前を引用した語や、前置きの後ろの語は、同じ字面でもコマンドの名前として実行される。
- * どちらかを決められないので、後ろに語が続く形は`Parser`が読めない構文にする。
+ * 名前を引用した語と、前置きの後ろの語は、`ASSIGNMENT`と同じく代入として外さず、コマンドの名前として残す。
+ * 代入として外したか、コマンドの名前として残したかによらず、後ろに語が続く形は`Parser`が読めない構文にする。
+ * 添字の中だけを引用した語(名前は裸)を、シェルは代入として読むが、名前の引用の印からは区別しないためである。
  * `env`の後ろの語は代入に決まるが、同じ字面なので区別せずに拒否する。
  * 添字の後ろに字が続く語(最初の`]`の後ろが`=`でない語)も、ここでは代入として外れる。
  * その語が1語だけの行では、シェルは語をコマンドの名前として探すが、引数を渡せないので受け入れる。
@@ -505,6 +522,13 @@ const TRANSPARENT_WORDS: ReadonlySet<string> = new Set([
   "noglob",
 ]);
 
+/** `TRANSPARENT_WORDS`のうち、予約語でなく前置きのコマンドの語。後ろの代入の形の語を、シェルはコマンドの名前として実行する。 */
+const COMMAND_PREFIX_WORDS: ReadonlySet<string> = new Set([
+  "builtin",
+  "nohup",
+  "noglob",
+]);
+
 /**
  * コマンドの先頭に置かれたら、読めない構文として拒否する語。
  * 文法を確かめない限り、後ろの語がコマンドか引数か決まらないためである。
@@ -899,6 +923,12 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
   let seenXargs = false;
   /** 直前に`env`とそのオプションを読み終え、まだ`env`の代入の並びの中なら真。 */
   let afterEnv = false;
+  /**
+   * 代入の形の語を代入として外してよい位置なら真。コマンドの先頭と、予約語と`time`の直後だけである。
+   * 前置きのコマンド(`nice`、`timeout`、`command`、`exec`、`nohup`、`xargs`、`mise exec`など)の後ろでは、
+   * 前置きのプログラムが語をそのままコマンドの名前として実行する。`env`の後ろは、`env`が代入として読む(`afterEnv`)。
+   */
+  let assignable = true;
   const assignments: Word[] = [];
   const wrappers: string[] = [];
   let mise: MiseExec | null = null;
@@ -914,17 +944,23 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
     const transparent = TRANSPARENT_OPTIONS.get(text);
     // `env`は、`=`を含む語を、名前の字を問わず代入として読む。`env`のオプションを読み終えた直後の並びだけが当たる。
     const envAssignment = afterEnv && text.includes("=");
-    const assignment =
-      ASSIGNMENT.test(text) || SUBSCRIPT_ASSIGNMENT.test(text) || envAssignment;
+    const shellAssignment =
+      assignable &&
+      word.quotedName !== true &&
+      (ASSIGNMENT.test(text) || SUBSCRIPT_ASSIGNMENT.test(text));
+    const assignment = shellAssignment || envAssignment;
     if (!assignment) afterEnv = false;
     if (assignment) {
       assignments.push(word);
       index += 1;
     } else if (TRANSPARENT_WORDS.has(text)) {
+      if (COMMAND_PREFIX_WORDS.has(text)) assignable = false;
       index += 1;
     } else if (transparent !== undefined) {
+      if (text !== "time") assignable = false;
       index = skipTransparentOptions(words, index + 1, transparent);
     } else if (WRAPPER_VALUE_OPTIONS.has(name)) {
+      assignable = false;
       wrappers.push(name);
       if (name === "env") {
         const split = expandEnvSplitString(words, index);
@@ -938,6 +974,7 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
       afterEnv = name === "env";
       index = skipped.next;
     } else if (name === "mise" && miseExecAt(words, index) !== -1) {
+      assignable = false;
       wrappers.push(text);
       const read = readMiseExec(words, miseExecAt(words, index) + 1);
       mise ??= read.mise;
@@ -1402,6 +1439,8 @@ class Parser {
   private leadingBrackets = 0;
   private dynamic = false;
   private glob = false;
+  /** 今の語の最初の`=`より前で、引用符かバックスラッシュを読んだなら真。 */
+  private nameQuoted = false;
   private inputs: Word[] = [];
   private redirectNextWord = false;
   private hereStringNextWord = false;
@@ -1702,8 +1741,14 @@ class Parser {
     this.inWord = false;
     this.dynamic = false;
     this.glob = false;
+    this.nameQuoted = false;
     this.openBrackets = 0;
     this.leadingBrackets = 0;
+  }
+
+  /** 語の最初の`=`より前で引用やバックスラッシュが現れたら、名前を引用した印を立てる。 */
+  private markQuoting(): void {
+    if (!this.text.includes("=")) this.nameQuoted = true;
   }
 
   private endWord(): void {
@@ -1722,6 +1767,7 @@ class Parser {
         this.dynamic && !CURRENT_BRANCH_SUBSTITUTIONS.includes(this.text),
       glob: this.glob,
       ...(this.variantText === null ? {} : { variants: [this.variantText] }),
+      ...(this.nameQuoted && this.text.includes("=") ? QUOTED_NAME : {}),
     };
     // 引用符で名前を分けた綴りも、語として確定した後の綴りで照合する。
     for (const spelling of [word.text, ...(word.variants ?? [])]) {
@@ -1786,11 +1832,25 @@ class Parser {
     if (program === undefined) return;
     // 添字つきの代入の形の語は、シェルと引用の有無によって、代入にもコマンドの名前にもなる。
     // 後ろにコマンドの語が続く形は、どちらが実行されるかを決められない。
+    // 代入として外した語と、コマンドの名前として残した語の両方を見る。
     if (
-      stripped.assignments.some((word) => SUBSCRIPT_ASSIGNMENT.test(word.text))
+      stripped.assignments.some((word) =>
+        SUBSCRIPT_ASSIGNMENT.test(word.text),
+      ) ||
+      (SUBSCRIPT_ASSIGNMENT.test(program.text) && words.length > 1)
     ) {
       throw new ShellSyntaxError(
         "a subscripted assignment in front of a command; run the assignment and the command separately",
+      );
+    }
+    // `sudo`が後ろの代入の形の語を代入として読むかは確かめていない。後ろに語が続く形は、何が実行されるかを決められない。
+    if (
+      stripped.wrappers[stripped.wrappers.length - 1] === "sudo" &&
+      ASSIGNMENT.test(program.text) &&
+      words.length > 1
+    ) {
+      throw new ShellSyntaxError(
+        "an assignment after sudo in front of a command; pass the variable with env instead",
       );
     }
     const name = baseName(program.text);
@@ -1968,17 +2028,20 @@ class Parser {
     const next = this.peek(1);
     this.position += 2;
     if (next === "\n" || next === "") return;
+    this.markQuoting();
     this.append(next);
   }
 
   private readSingleQuoted(): void {
     const end = this.source.indexOf("'", this.position + 1);
     if (end === -1) throw new ShellSyntaxError("unterminated single quote");
+    this.markQuoting();
     this.append(this.source.slice(this.position + 1, end));
     this.position = end + 1;
   }
 
   private readDoubleQuoted(): void {
+    this.markQuoting();
     this.append("");
     this.position += 1;
     for (;;) {
@@ -2029,6 +2092,7 @@ class Parser {
     }
     if (next === '"' && !inDoubleQuotes) {
       // `$"..."`は、ロケールの翻訳を除けば、ふつうの二重引用符である。
+      this.markQuoting();
       this.position += 1;
       return;
     }
@@ -2268,6 +2332,7 @@ class Parser {
    * 捨てる前の綴り(NULだけを除いたもの)は、語の`variants`に残す。切り詰めないシェルのためである。
    */
   private readAnsiCQuoted(): void {
+    this.markQuoting();
     let at = this.position + 2;
     let kept = "";
     let full = "";

@@ -608,6 +608,48 @@ describe("stripWrappers options", () => {
   });
 });
 
+describe("stripWrappers keeps assignment-shaped words that the shell runs as command names", () => {
+  const firstWords = (line: string): string[] => {
+    const parsed = parseCommandLine(line);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const [first] = parsed.commands;
+    if (first === undefined) throw new Error("no command");
+    return stripWrappers(first.words).words.map((word) => word.text);
+  };
+
+  test.each([
+    ["a single-quoted name", "'a=/x/git' push", "a=/x/git"],
+    ["a double-quoted name", '"a"=/x/git push', "a=/x/git"],
+    ["a backslash before the equals sign", "a\\=/x/git push", "a=/x/git"],
+    ["a name after a niceness prefix", "nice a=/x/git push", "a=/x/git"],
+    ["a name after a timeout prefix", "timeout 5 a=/x/git push", "a=/x/git"],
+    ["a name after the command builtin", "command a=/x/git push", "a=/x/git"],
+    ["a name after nohup", "nohup a=/x/git push", "a=/x/git"],
+    ["a path with an equals sign after sudo", "sudo /x=y/git push", "/x=y/git"],
+  ])("keeps %s as the command name", (_kind, line, name) => {
+    expect(firstWords(line)[0]).toBe(name);
+  });
+
+  test.each([
+    ["a leading assignment", "FOO=1 git status"],
+    ["a quoted value", "FOO='a b' git status"],
+    ["an assignment after env", "env FOO=1 git status"],
+    ["an assignment after time", "time FOO=1 git status"],
+  ])("strips %s", (_kind, line) => {
+    expect(firstWords(line)[0]).toBe("git");
+  });
+});
+
+// `sudo`が後ろの代入の形の語を代入として読むかは確かめていないので、後ろに語が続く形は読めない構文にする。
+describe("an assignment-shaped word after sudo in front of a command is unreadable", () => {
+  test.each([
+    ["an assignment right after sudo", "sudo FOO=1 git status"],
+    ["an assignment after an option of sudo", "sudo -n FOO=1 git status"],
+  ])("rejects %s", (_kind, line) => {
+    expect(parseCommandLine(line).ok).toBe(false);
+  });
+});
+
 describe("stripWrappers with mise exec", () => {
   test("reads the command of a form without --", () => {
     const stripped = stripWrappers(
@@ -2770,6 +2812,10 @@ describe("a bracket opened inside a word must close in the same word", () => {
     ["a command behind a subscripted assignment", "a[1]=1 echo x"],
     ["a command behind an appending subscripted assignment", "a[1]+=1 echo x"],
     ["a command behind a quoted subscripted assignment", "'a[1]=1' echo x"],
+    [
+      "a command behind an assignment with a quoted subscript",
+      "a['1']=1 echo x",
+    ],
     ["a command behind an escaped subscripted assignment", "a\\[1]=1 echo x"],
     [
       "a command behind a wrapper and a subscripted assignment",

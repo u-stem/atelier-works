@@ -14,6 +14,8 @@
 // `--scope`の値が実行時に決まる形(変数、コマンド置換、glob)は、`deploy`かを判定できないので拒否する。
 // 凍結のCLIを指す語は、直後の`--`を読み飛ばして副コマンドを決め、globは凍結のファイル名に当たるかで判定する。
 // `-e`の直後の文字列と標準入力のコードは、凍結のCLIを指しながら`release`、`deploy`、`reset`、`prune`を含めば拒否する。
+// 空白か、シェルが語を分けるか展開する字を含む語は、凍結のコードをパスの形で指す字面か凍結の書き込みのタスク名と、書き込みの語が並べば拒否する。
+// 凍結を指す裸の語と書き込みの語が並ぶだけの文章は通す。凍結のCLIの理由の値と、検査の道具の引数は見ない。
 // 標準入力へ流し込むファイル(`bun run - < scripts/freeze.ts`)が保留か凍結のコードなら拒否する。
 //
 // Consoleの書き込みのscript(`console-scripts.ts`の一覧。保留と凍結の解除、ジョブの取消など)を1コマンドで呼ぶ形は、
@@ -51,6 +53,7 @@
 //   引用符の外のglob(`scripts/hol?.ts`、`scripts/hol[d].ts`、`scripts/*`)は、ファイル名の部分が保留のコードの名前に当たりうれば拒否する。
 //   ディレクトリは見ない。POSIXの文字クラス(`[[:lower:]]`)は読み解かず、当たりうるものとして扱う。
 //   ブレース(`{hold.ts,place}`)は、展開した綴りと、空白に置き換えた綴りの両方で判定する。
+//   カンマの無いブレースの範囲(`{o..o}`)は、展開される字の集合(英字は`[o-o]`、数は`[0-9]*`)に置き換えてglobと同じに照合する。
 //   NULを含む`$'...'`の語は、切り詰めた綴りと、切り詰めない綴り(`variants`)の両方で判定する。
 //   `-e`などの文字列と標準入力で渡すコードに含まれる場合も同じである。
 //   許すのは次の2つだけである。
@@ -61,6 +64,7 @@
 // - `mise`: 全体オプション(`-q`、`-C <dir>`など)を読み飛ばしたあとの、何かを実行するサブコマンド
 //   (`run`、`r`、`tasks run`、`watch`、`w`、`exec`、`x`)かタスク名(コロンを含む語)があるコマンド行に、
 //   `hold:place`か`hold:release`を指しうる語が1つでもあれば、位置を問わず拒否する。
+//   `tasks`の後ろは、オプションとその値を読み飛ばした最初の語が、実行時に決まる語か、実行の語に当たりうるglobかブレースなら、実行として扱う。
 //   `hold:`で始まる`hold:list`以外の語、globや文字クラスが当たる語、実行時に決まる語、ブレースを含む語が、これに当たる。
 //   `--`より後ろはタスクへの引数なので、glob、ブレース、実行時に決まる語は見ない。`hold:`で名指しする語は見る。
 //   一覧に無い長いオプション(`=`の無いもの)があれば、サブコマンドの位置が決まらないので、コマンド全体を拒否する。
@@ -88,7 +92,7 @@
 //       結果は足し合わせない。内側が読み取りの道具(`rg -n release scripts/hold.ts`)なら通す。
 //       内側の先頭が`mise`、実行系、`docker`、`psql`でも、語を足すコマンドとシェルの規則は重ねて当てる。
 //       内側の先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうるので、値を先頭の語として判定する。
-//       値が保留か凍結のコードを指すときだけ、後ろの語を引数として付ける。
+//       値が保留か凍結のコードを指すときと、起動語(実行系、`mise`、`docker`と`psql`、前置き、シェル)のときに、後ろの語を引数として付ける。全停止も同じである。
 //       内側の`xargs`が足す語は、先頭が何でも読めないので拒否する。
 //       標準入力の文字列は、最上位でも入れ子でも同じに判定する。
 //       コマンド文字列は4段の入れ子まで読む。段を超えた文字列と読めない文字列は、字面で判定する。
@@ -136,7 +140,7 @@
 // - Consoleの解除scriptを、名前を直接書かない呼び出しで呼ぶ形(別の識別子、符号化した綴り、実行時に組み立てた名前)。
 // - 別名の呼び出しと、保留のコードを書き換えてから起動する形。
 // - 実行時に組み立てたパス、動的なimport、docker経由でpsqlに渡す語を組み立てる形。
-// - シェルの`-c`と標準入力、起動語の一覧に無いインタプリタが受け取る文字列。
+// - シェルの`-c`と標準入力、起動語の一覧に無いインタプリタが受け取る文字列。ストリームエディタの実行の命令も同じである。
 // - subagentが新しいファイルを書いて実行する形。
 // 次は誤検知として受け入れ、拒否する。
 // - 語を足す文脈の後ろの、集合の外のプログラム。編集の道具、権限や形式を変える道具、gitなどである。読み取りだけの呼び出しでも拒否する。
@@ -144,6 +148,7 @@
 // - 置換のオプション、GNUの`-e`と`-l`、知らないオプションを付けた`xargs`と、`xargs`の後ろに前置きが続く形。
 // Bashとdockerを持つ主体は、psqlで保留を直接書ける。ここで止めるのは、誤操作と、拒否を知らない呼び出しである。
 
+import { posix } from "node:path";
 import { CONSOLE_WRITE_SCRIPTS } from "./console-scripts.ts";
 import {
   baseName,
@@ -191,19 +196,20 @@ const RUNNERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 保留のコードを指すパスの末尾。区切り(行頭、`/`、引用符、空白、括弧、`=`)の直後の
+ * 保留のコードを指すパスの末尾。区切り(行頭、`/`、引用符、バッククォート、空白、括弧、`=`、`,`、`[`、`{`)の直後の
  * `hold`、`hold_psql`、`holds`で、拡張子は省略できる。
  * `hold.test.ts`、`holds_db.test.ts`、`hold-guard.ts`、`holds.md`のような別のファイルには当たらない。
+ * 区切りを閉じた集合にするのは、`:`や`@`や`+`の後ろの、タスク名やパッケージ名の一部を指す語に数えないためである。
  */
 const HOLD_MENTION =
-  /(?:^|[/'"\s(=])(?:hold|hold_psql|holds)(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
+  /(?:^|[/'"`\s(=,[{])(?:hold|hold_psql|holds)(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
 
 /**
  * 凍結のCLIを指すパスの末尾。保留のコードと同じ区切りの直後の`freeze`で、拡張子は省略できる。
  * `freeze.test.ts`、`freezes.ts`、`freeze_apply.ts`のような別のファイルには当たらない。
  */
 const FREEZE_MENTION =
-  /(?:^|[/'"\s(=])freeze(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
+  /(?:^|[/'"`\s(=,[{])freeze(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
 
 /** `hold`だけを指すパス(`hold_psql`と`holds`は含まない)。 */
 const HOLD_CLI = /^(?:.*\/)?hold(?:\.[cm]?[jt]sx?)?$/i;
@@ -279,6 +285,24 @@ const MISE_RUNNING_WORDS: ReadonlySet<string> = new Set([
 
 /** `mise tasks`とその別名。`run`が付かない限り、タスクの一覧や情報を出すだけである。 */
 const MISE_TASKS_WORDS: ReadonlySet<string> = new Set(["tasks", "task", "t"]);
+
+/**
+ * `args`の先頭が`mise tasks`の語のとき、後ろのmiseのオプションとその値を読み飛ばした最初の語が、
+ * 実行時に決まる語か、実行の語(`MISE_RUNNING_WORDS`)に当たりうるglobかブレースなら真。
+ * 字のままの語は、呼び出し側が実行の語との完全一致で見る。`mise tasks <タスク名>`は定義を表示するだけなので、実行に数えない。
+ */
+function miseTasksRunsUnreadably(args: readonly Word[]): boolean {
+  const first = args[scanMiseGlobalOptions(args, 1).next];
+  if (first === undefined || !isUnreadable(first)) return false;
+  if (first.dynamic) return true;
+  const forms = spellings(first).flatMap((text) => [
+    text,
+    ...(rangeAsGlob(text) ?? []),
+  ]);
+  return forms.some((form) =>
+    [...MISE_RUNNING_WORDS].some((running) => globMatches(form, running)),
+  );
+}
 
 /** `docker`と`psql`の呼び出しとして、語に`holds`を含むかを見るプログラム。 */
 const SQL_PROGRAMS: ReadonlySet<string> = new Set([
@@ -408,15 +432,69 @@ function spellings(word: Word): readonly string[] {
 /** 語ごとの綴りの記録。同じ語を前置きの判定と起動語の判定で何度も見るので、ブレースの展開は1回にする。 */
 const SPELLINGS = new WeakMap<Word, readonly string[]>();
 
-/** 語が保留のコードを指すか、引用符の外のglobが保留のコードの名前に当たりうるなら真。ディレクトリは問わない。 */
-function pointsAtHoldCode(word: Word): boolean {
-  const all = spellings(word);
-  if (all.some((text) => HOLD_MENTION.test(text))) return true;
-  if (!word.glob) return false;
-  return all.some((text) => {
-    const file = text.slice(text.lastIndexOf("/") + 1);
-    return HOLD_FILE_NAMES.some((name) => globMatches(file, name, true));
+/** カンマの無いブレースの範囲(`{a..c}`、`{1..9..2}`)。括弧の中を取り出す。シェルは字や数の並びに展開する。 */
+const BRACE_RANGES = /\{([^{},\s]*\.\.[^{},\s]*)\}/g;
+
+/**
+ * 範囲の括弧の中を、展開される字の集合のglobにする。英字の範囲は`[x-y]`、数の範囲は桁数が決まらないので`[0-9]*`である。
+ * 増分(`..2`)は読まず、端点の間の字を全部含める。シェルが範囲として展開しない形はnullを返す。
+ */
+function rangeGlob(inner: string): string | null {
+  const letters = /^([A-Za-z])\.\.([A-Za-z])(?:\.\.[-+]?\d+)?$/.exec(inner);
+  if (letters?.[1] !== undefined && letters[2] !== undefined) {
+    const [low, high] = [letters[1], letters[2]].sort();
+    return `[${low}-${high}]`;
+  }
+  return /^[-+]?\d+\.\.[-+]?\d+(?:\.\.[-+]?\d+)?$/.test(inner)
+    ? "[0-9]*"
+    : null;
+}
+
+/**
+ * 範囲を展開される字の集合(`rangeGlob`)に置き換えた綴りを返す。置き換える範囲が無ければnullを返す。
+ * 置き換えた綴りは、globと同じ照合に通す。
+ * 範囲は`{`を含むので、`{`の無い綴りは正規表現の置き換えに通さない。共起の判定で、語ごとに何度も呼ばれるためである。
+ */
+function rangeAsGlob(text: string): string | null {
+  if (!text.includes("{")) return null;
+  let replaced = false;
+  const glob = text.replace(BRACE_RANGES, (whole: string, inner: string) => {
+    const set = rangeGlob(inner);
+    if (set === null) return whole;
+    replaced = true;
+    return set;
   });
+  return replaced ? glob : null;
+}
+
+/**
+ * 語が`mention`に当たるか、引用符の外のglobかブレースの範囲が`names`に当たりうるなら真。ディレクトリは問わない。
+ * 範囲は展開される字の集合に置き換えるので、数の範囲(`{1..3}`)は英字の名前に当たらない。
+ */
+function pointsAtCode(
+  word: Word,
+  mention: RegExp,
+  names: readonly string[],
+): boolean {
+  // 共起の判定で語ごとに何度も呼ばれるので、綴りを1回の走査で見る。
+  for (const text of spellings(word)) {
+    if (mention.test(text)) return true;
+    if (word.glob && namesMatchFile(text, names)) return true;
+    const ranged = rangeAsGlob(text);
+    if (ranged !== null && namesMatchFile(ranged, names)) return true;
+  }
+  return false;
+}
+
+/** パスの形のglobの、ファイル名の部分が`names`のどれかに当たりうるなら真。 */
+function namesMatchFile(pattern: string, names: readonly string[]): boolean {
+  const file = pattern.slice(pattern.lastIndexOf("/") + 1);
+  return names.some((name) => globMatches(file, name, true));
+}
+
+/** 語が保留のコードを指すか、引用符の外のglobかブレースの範囲が保留のコードの名前に当たりうるなら真。ディレクトリは問わない。 */
+function pointsAtHoldCode(word: Word): boolean {
+  return pointsAtCode(word, HOLD_MENTION, HOLD_FILE_NAMES);
 }
 
 /** miseのコマンド行の語が、置く・解除するタスクを名前で指すなら真。 */
@@ -454,14 +532,26 @@ function inspectionOperand(
   args: readonly Word[],
   subcommands: ReadonlySet<string> = RUNNER_SUBCOMMANDS,
 ): string | null {
+  const index = runnerOperandAt(args, subcommands);
+  const first = (args[index]?.text ?? "").replace(VERSION_SUFFIX, "");
+  return INSPECTION_TOOLS.has(first) || LINT_SCRIPT.test(first) ? first : null;
+}
+
+/**
+ * 実行系の引数の、最初のオペランド(実行するスクリプトか道具の位置)の添字を返す。
+ * 実行系のオプション(`--bun`、`--yes`、`-y`)と`subcommands`の語を、4語まで読み飛ばす。
+ */
+function runnerOperandAt(
+  args: readonly Word[],
+  subcommands: ReadonlySet<string> = RUNNER_SUBCOMMANDS,
+): number {
   let index = 0;
   while (index < 4) {
     const text = args[index]?.text ?? "";
     if (!RUNNER_FLAGS.has(text) && !subcommands.has(text)) break;
     index += 1;
   }
-  const first = (args[index]?.text ?? "").replace(VERSION_SUFFIX, "");
-  return INSPECTION_TOOLS.has(first) || LINT_SCRIPT.test(first) ? first : null;
+  return index;
 }
 
 /** 保留のコードを指す語が、すべて`hold`の直後に`list`を置く形なら真。 */
@@ -562,17 +652,11 @@ const FREEZE_FILE_NAMES: readonly string[] = [
 ];
 
 /**
- * 語が凍結のCLIを指すか、引用符の外のglobが凍結のコードの名前に当たりうるなら真。
+ * 語が凍結のCLIを指すか、引用符の外のglobかブレースの範囲が凍結のコードの名前に当たりうるなら真。
  * 保留のコードと同じく、ファイル名の部分だけを見て、ディレクトリは問わない。
  */
 function pointsAtFreezeCode(word: Word): boolean {
-  const all = spellings(word);
-  if (all.some((text) => FREEZE_MENTION.test(text))) return true;
-  if (!word.glob) return false;
-  return all.some((text) => {
-    const file = text.slice(text.lastIndexOf("/") + 1);
-    return FREEZE_FILE_NAMES.some((name) => globMatches(file, name, true));
-  });
+  return pointsAtCode(word, FREEZE_MENTION, FREEZE_FILE_NAMES);
 }
 
 /** 次の語をコードとして実行する実行系のオプションと副コマンド。 */
@@ -606,11 +690,37 @@ function codeStrings(args: readonly Word[]): string[] {
   return codes;
 }
 
+/** 凍結のCLIの、端末の確認を通る書き込みかdeployの保留を表す語。 */
+const FREEZE_WRITE_WORD = /\b(?:release|deploy|reset|prune)\b/i;
+
 /** コードの文字列が、凍結のCLIを指しながら、端末の確認を通る書き込みかdeployの保留を書いているなら真。 */
 function codeTouchesFreezeRelease(text: string): boolean {
+  return FREEZE_MENTION.test(text) && FREEZE_WRITE_WORD.test(text);
+}
+
+/**
+ * 凍結のコードをパスの形で指す字面。`scripts/freeze`か、拡張子の付いた名前(`freeze.ts`)である。
+ * 裸の`freeze`は、文章の中の語と区別できないので数えない。
+ */
+const FREEZE_PATH_MENTION =
+  /(?:scripts\/freeze(?:\.[cm]?[jt]sx?)?|(?:^|[/'"`\s(=,[{])freeze\.[cm]?[jt]sx?)(?![A-Za-z0-9_.-])/i;
+
+/**
+ * 凍結の書き込みのタスク名の字面。削除を確定する押し出しのタスク名も数える。
+ * `freeze:place`は、書き込みの語(`deploy`など)と並ぶときだけ書き込みに数える。
+ */
+const FREEZE_TASK_MENTION =
+  /(?:^|[^\w:-])(?:freeze:(?:place|release|reset)|push:prune)(?![\w-])/i;
+
+/**
+ * 語に分かれる語が、凍結のコードをパスの形で指す字面か凍結の書き込みのタスク名と、書き込みの語を持つなら真。
+ * コードを取るオプションの値と標準入力の文字列(`codeTouchesFreezeRelease`)より狭く読む。
+ * 凍結を指す裸の語と書き込みの語が並ぶだけの文章の引数(説明文やメッセージ)を止めないためである。
+ */
+function wordTouchesFreezeRelease(text: string): boolean {
   return (
-    FREEZE_MENTION.test(text) &&
-    /\b(?:release|deploy|reset|prune)\b/i.test(text)
+    (FREEZE_PATH_MENTION.test(text) || FREEZE_TASK_MENTION.test(text)) &&
+    FREEZE_WRITE_WORD.test(text)
   );
 }
 
@@ -670,9 +780,13 @@ function firstOperandAt(words: readonly Word[], from: number): number {
 
 /**
  * 実行系の引数が、凍結のCLI(`scripts/freeze.ts`)で、端末の確認を通る書き込みか、deployの保留を置く形なら拒否の種類を返す。
- * 凍結のCLIを指す語は、すべて調べる。直後の語が副コマンドである。
+ * 凍結のCLIを指す語は、すべて調べる。直後の語が副コマンドである。凍結のCLIは、副コマンドを最初の引数として読むためである。
  * 実行時に決まるときは判定できないので`dynamic`を返す。
- * `-e`などの直後の文字列と標準入力で渡すコードは、凍結のCLIを指しながら`release`、`deploy`、`reset`、`prune`を含めば拒否する。
+ * 標準入力のコードと`-e`などの直後の文字列は、凍結のCLIを指しながら`release`、`deploy`、`reset`、`prune`を含めば拒否する。
+ * 空白かシェルが語を分けるか展開する字を含む語は、凍結のコードをパスの形で指す字面か凍結の書き込みのタスク名と、
+ * 同じ書き込みの語を含むときだけ拒否する(`wordTouchesFreezeRelease`)。
+ * この語は、コードを取るオプションの一覧に無いオプションの値を読むためである。凍結のCLIの理由の値は読まない。
+ * 最初のオペランドが検査の道具なら、この語は見ない。凍結のCLIを指す語の次の語は、検査の道具の後ろでも副コマンドとして読む。
  */
 function freezeCliFinding(
   args: readonly Word[],
@@ -680,6 +794,17 @@ function freezeCliFinding(
 ): HoldFinding | null {
   const codes = [...(inputs() ?? []), ...codeStrings(args)];
   if (codes.some(codeTouchesFreezeRelease)) return "operation";
+  if (
+    !startsWithInspectionTool(args) &&
+    args.some(
+      (word, index) =>
+        splitsIntoWords(word.text) &&
+        !isReasonValue(args, index) &&
+        spellings(word).some(wordTouchesFreezeRelease),
+    )
+  ) {
+    return "operation";
+  }
   let found: HoldFinding | null = null;
   for (const [at, word] of args.entries()) {
     if (!pointsAtFreezeCode(word)) continue;
@@ -688,6 +813,25 @@ function freezeCliFinding(
     found = found ?? finding;
   }
   return found;
+}
+
+/**
+ * `index`番目の語が、実行される凍結のCLIの`--reason`の値(直後の語か、`--reason=`の形)なら真。
+ * 凍結のCLIが実行系の最初のオペランド(実行するスクリプトの位置)にあり、オプションがその後ろにあるときだけである。
+ * 理由の文字列はコードとして実行されないので、CLIを指す字面と書き込みの語が並ぶ文字列の判定から外す。
+ * ほかのスクリプトやプログラムの同じ名前のオプションの値は、コードとして読まれうるので外さない。
+ */
+function isReasonValue(args: readonly Word[], index: number): boolean {
+  const word = args[index];
+  if (word === undefined) return false;
+  const inline = word.text.startsWith("--reason=");
+  if (!inline && args[index - 1]?.text !== "--reason") return false;
+  const optionAt = inline ? index : index - 1;
+  const scriptAt = runnerOperandAt(args);
+  const script = args[scriptAt];
+  return (
+    script !== undefined && scriptAt < optionAt && pointsAtFreezeCode(script)
+  );
 }
 
 /** 先頭の語が凍結のコードを指すなら真。 */
@@ -776,16 +920,55 @@ function chainInputs(
   };
 }
 
-/** 標準入力をコードとして読む形のオペランド。 */
-const STDIN_OPERANDS: ReadonlySet<string> = new Set([
-  "-",
+/**
+ * 標準入力をコードとして読む形のパス。globとブレースの範囲が当たりうるかを見る対象である。
+ * `-`は入れない。`-`に当たるglobは、1字の名前のファイルに展開される引数と区別できないためである。
+ */
+const STDIN_OPERANDS: readonly string[] = [
   "/dev/stdin",
   "/dev/fd/0",
   "/proc/self/fd/0",
-]);
+];
+
+/** まとめた綴りが標準入力を指すパス。記述子の番号は、前に0を重ねた綴りも当たる。 */
+const STDIN_PATH = /^\/(?:dev\/stdin|dev\/fd\/0+|proc\/self\/fd\/0+)$/;
+
+/**
+ * オペランドの綴りを、重ねたスラッシュ、`/./`、`/../`をまとめた絶対パスの形にする。`-`は変えない。
+ * 相対パスは、先頭の`..`を除いて根からのパスとみなす。`..`を重ねれば根に届くためである。
+ */
+function stdinOperandForm(text: string): string {
+  if (text === "-") return text;
+  const normal = posix.normalize(text);
+  if (text.startsWith("/")) return normal;
+  return `/${normal.replace(/^(?:\.\.(?:\/|$))+/, "")}`;
+}
+
+/**
+ * 語が、標準入力をコードとして読む形のオペランドなら真。
+ * まとめた綴りが標準入力を指す語と、標準入力の綴りに当たりうるglobとブレースの語である。
+ * 実行時に決まる語は見ない。変数のパスのスクリプトや、変数の値を取るオプションは日常の形で、
+ * 変数で標準入力を指す形は、実行時に組んだ名前と同じく判定しないためである。
+ */
+function readsStdinOperand(word: Word): boolean {
+  return spellings(word).some((text) => {
+    const form = stdinOperandForm(text);
+    if (form === "-" || STDIN_PATH.test(form)) return true;
+    const ranged = rangeAsGlob(text);
+    const globs = [
+      ...(word.glob ? [text] : []),
+      ...(ranged === null ? [] : [ranged]),
+    ];
+    return globs.some((glob) =>
+      [glob, stdinOperandForm(glob)].some((pattern) =>
+        STDIN_OPERANDS.some((operand) => globMatches(pattern, operand)),
+      ),
+    );
+  });
+}
 
 function readsCodeFromStdin(args: readonly Word[]): boolean {
-  return args.some((word) => STDIN_OPERANDS.has(word.text));
+  return args.some(readsStdinOperand);
 }
 
 /** パイプの前に置いてよい、中身を語から読めるプログラム。 */
@@ -838,8 +1021,13 @@ function stdinCodeFinding(
     }
   }
   if (literal.some((text) => FREEZE_MENTION.test(text))) {
-    const dash = args.findIndex((word) => STDIN_OPERANDS.has(word.text));
-    return freezeSubcommandFinding(args.slice(dash + 1));
+    // 標準入力とみなすオペランドが複数あるときは、どれが標準入力かを決めないので、それぞれの後ろを副コマンドとして判定する。
+    let found: HoldFinding | null = null;
+    for (const [at, word] of args.entries()) {
+      if (!readsStdinOperand(word)) continue;
+      found = stronger(found, freezeSubcommandFinding(args.slice(at + 1)));
+    }
+    return found;
   }
   return null;
 }
@@ -886,6 +1074,7 @@ function miseFinding(
   const inTasks = MISE_TASKS_WORDS.has(subcommand.text);
   const running =
     args.some((word) => MISE_RUNNING_WORDS.has(word.text)) ||
+    (inTasks && miseTasksRunsUnreadably(args)) ||
     subcommand.dynamic ||
     namesHoldWriteTask(subcommand) ||
     subcommand.text === PUSH_TASK ||
@@ -1042,6 +1231,14 @@ function mentionsCodeWrite(text: string): boolean {
       WRITE_WORD.test(text)) ||
     mentionsWriteTask(text)
   );
+}
+
+/**
+ * 引用符とバックスラッシュを除いた綴り。読めない文字列の中で、語の途中の空の引用で名前を分けた形を照合するためである。
+ * 引用符の直前の`$`も除く。`$''`と`$""`の空の引用も、シェルは名前をつなげて読むためである。
+ */
+function unquotedText(text: string): string {
+  return text.replace(/\$(?=['"])/g, "").replace(/['"\\]/g, "");
 }
 
 /** 語に、実行時に決まる部分、glob、ブレースのどれかがあり、綴りが決まらないなら真。 */
@@ -1227,7 +1424,9 @@ function textFinding(
   context: HoldContext,
   kind: "string" | "stdin",
 ): HoldFinding | null {
-  const literal = kind === "stdin" ? mentionsCodeWrite : mentionsHoldOrFreeze;
+  const base = kind === "stdin" ? mentionsCodeWrite : mentionsHoldOrFreeze;
+  // 読めない文字列は、語の途中の空の引用で名前を分けた形も見るため、引用符とバックスラッシュを除いた綴りでも判定する。
+  const literal = (t: string) => base(t) || base(unquotedText(t));
   if (context.depth >= COMMAND_TEXT_MAX_DEPTH) {
     return literal(text) ? "operation" : null;
   }
@@ -1264,13 +1463,16 @@ function textFinding(
     };
     found = stronger(found, holdOperationAt(stripped.words, inner));
     // 先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうる(`ProxyCommand=…`、`LESSOPEN=…`)。値を先頭の語として判定する。
-    // 値が保留や凍結のCLIを指すときだけ、後ろの語を引数として付ける。実際に実行される語は上で判定している。
+    // 値が保留や凍結のCLIを指すときと、起動語のときに、後ろの語を引数として付ける。実際に実行される語は上で判定している。
     // 代入ごとの判定は、解析の回数に数える。
     for (const assignment of stripped.assignments) {
       budget.parses += 1;
       if (budget.parses > HOLD_MAX_PARSES) return "dynamic";
       const value = assignmentValue(assignment);
-      const pointing = pointsAtHoldCode(value) || pointsAtFreezeCode(value);
+      const pointing =
+        pointsAtHoldCode(value) ||
+        pointsAtFreezeCode(value) ||
+        launchesWithArguments(value);
       found = stronger(
         found,
         holdOperationAt(pointing ? [value, ...stripped.words] : [value], inner),
@@ -1295,6 +1497,21 @@ function assignmentValue(assignment: Word): Word {
       ? {}
       : { variants: assignment.variants.map(cut) }),
   };
+}
+
+/**
+ * 値の先頭の語が、後ろの語を引数として受ける起動語なら真。
+ * 実行系と`mise`、`docker`と`psql`、前置き、シェルの閉じた集合である。
+ * 名前だけの代入の形で始まる文字列(リモートの道具のオプションの値)は、値と後ろの語の組がコマンドとして実行されるためである。
+ */
+function launchesWithArguments(value: Word): boolean {
+  const name = baseName(value.text);
+  return (
+    isLauncherName(name) ||
+    SQL_PROGRAMS.has(name) ||
+    PREFIX_PROGRAMS.has(name) ||
+    SHELLS.has(name)
+  );
 }
 
 /**
@@ -2083,10 +2300,15 @@ export type ReleaseCallContext = {
 /**
  * 文字列の綴り。ブレースは、展開した形に加えて、括弧だけを外した形も足す。
  * カンマの無い`{x}`は、シェルは展開しないが、curlは外して読むためである。
+ * ブレースの範囲は、展開される字の集合(`rangeAsGlob`)に置き換えた形も足す。globと同じに照合するためである。
  */
 function releaseForms(text: string): string[] {
   const forms = [text, ...expandBraces(text)];
-  return [...forms, ...forms.map((form) => form.replace(/[{}]/g, ""))];
+  // `{`の無い文字列は、展開した形にも範囲が無いので、置き換えを探さない。
+  const all = text.includes("{")
+    ? [...forms, ...forms.flatMap((form) => rangeAsGlob(form) ?? [])]
+    : forms;
+  return [...all, ...all.map((form) => form.replace(/[{}]/g, ""))];
 }
 
 /** 語の綴りをすべて返す。NULを除いた綴りとブレースの形を含む。 */
@@ -2115,13 +2337,24 @@ function aimsAtName(file: string): boolean {
   return file.replace(/\[[^\]]*\]/g, "").replace(/[^A-Za-z_]/g, "").length >= 3;
 }
 
-/** 文字列が、解除scriptの名前を含むか、globがファイル名に当たりうるなら真。 */
+/**
+ * 文字列が、解除scriptの名前を含むか、globかブレースの範囲がファイル名に当たりうるなら真。
+ * ファイル名の部分の範囲は、展開される字の集合(`rangeAsGlob`)に置き換えて照合し、`aimsAtName`の条件を掛けない。
+ * 展開される字が分かるので、名前を狙った書き方かを字の数で見なくてよいためである。数の範囲は英字の名前に当たらない。
+ */
 function mentionsRelease(text: string): boolean {
   return releaseForms(text).some(
     (form) =>
       RELEASE_SCRIPT_NAME.test(form) ||
       patternTokens(form).some((token) => {
         const file = token.slice(token.lastIndexOf("/") + 1);
+        const ranged = rangeAsGlob(file);
+        if (
+          ranged !== null &&
+          RELEASE_FILE_NAMES.some((name) => globMatches(ranged, name))
+        ) {
+          return true;
+        }
         return (
           GLOB_CHARACTERS.test(file) &&
           aimsAtName(file) &&
@@ -2560,7 +2793,7 @@ export function findConsoleReleaseCall(
  * `stop_all.test.ts`、`stop_all_excludes.ts`のような別のファイルには当たらない。
  */
 const STOP_ALL_MENTION =
-  /(?:^|[/'"\s(=])stop_all(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
+  /(?:^|[/'"`\s(=,[{])stop_all(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
 
 /** 全停止のCLIのファイル名。globが当たるかを見る対象である。 */
 const STOP_ALL_FILE_NAMES: readonly string[] = ["stop_all", "stop_all.ts"];
@@ -2572,15 +2805,9 @@ const STOP_ALL_TASKS: readonly string[] = [
   "stop:restore",
 ];
 
-/** 語が全停止のCLIを指すか、引用符の外のglobが全停止のCLIの名前に当たりうるなら真。ディレクトリは問わない。 */
+/** 語が全停止のCLIを指すか、引用符の外のglobかブレースの範囲が全停止のCLIの名前に当たりうるなら真。ディレクトリは問わない。 */
 function pointsAtStopAllCode(word: Word): boolean {
-  const all = spellings(word);
-  if (all.some((text) => STOP_ALL_MENTION.test(text))) return true;
-  if (!word.glob) return false;
-  return all.some((text) => {
-    const file = text.slice(text.lastIndexOf("/") + 1);
-    return STOP_ALL_FILE_NAMES.some((name) => globMatches(file, name, true));
-  });
+  return pointsAtCode(word, STOP_ALL_MENTION, STOP_ALL_FILE_NAMES);
 }
 
 /** 実行系の引数が、全停止のCLIを実行する形なら真。検査の道具が最初のオペランドなら、実行ではないので通す。 */
@@ -2609,10 +2836,11 @@ function miseStopAllCall(
   if (execAt !== -1 && runnerStopAllCall(args.slice(execAt + 1), inputs)) {
     return true;
   }
-  // `mise tasks`は、`run`が付かない限りタスクの一覧や情報を出すだけである。
+  // `mise tasks`は、`run`が付かず、後ろの最初の語が実行の語に当たりうる読めない語でない限り、タスクの一覧や情報を出すだけである。
   const listsOnly =
     MISE_TASKS_WORDS.has(subcommand.text) &&
-    !args.some((word) => MISE_RUNNING_WORDS.has(word.text));
+    !args.some((word) => MISE_RUNNING_WORDS.has(word.text)) &&
+    !miseTasksRunsUnreadably(args);
   if (listsOnly) return false;
   // `--`より後ろはタスクへの引数なので、タスクの名前としては見ない。
   const dashAt = args.findIndex((word) => word.text === "--");
@@ -2642,13 +2870,22 @@ function stopAllWording(text: string): boolean {
 }
 
 /**
+ * 元の綴りと、引用符とバックスラッシュを除いた綴り(`unquotedText`)のどちらかが、全停止を指す字面(`stopAllWording`)を持つなら真。
+ * 語の途中の空の引用で名前を分けた形を見落とさないためである。
+ */
+function stopAllWordingUnquoted(text: string): boolean {
+  return stopAllWording(text) || stopAllWording(unquotedText(text));
+}
+
+/**
  * 読めない文字列と、入れ子が深さの上限を超えた文字列の字面が、全停止を指すなら真。
  * 全停止のCLIを指す語か、`mise`と全停止のタスク名が並ぶ字面である。
  * 読めない文字列を一律に拒否すると、SQLやJSONの引数のような読み取りまで止まるので、字面で絞る。
+ * 引用符とバックスラッシュを除いた綴りでも判定する。
  */
 function unreadableTextStopAll(word: Word): boolean {
   if (pointsAtStopAllCode(word)) return true;
-  return spellings(word).some(stopAllWording);
+  return spellings(word).some(stopAllWordingUnquoted);
 }
 
 /** 空白を含む語が、中に全停止の入口を実行する形を持つか。読めない文字列は、字面で判定する。 */
@@ -2661,8 +2898,22 @@ function textStopAllCall(
     depth >= COMMAND_TEXT_MAX_DEPTH ? null : parseCommandLine(word.text);
   if (parsed === null || !parsed.ok) return unreadableTextStopAll(word);
   return parsed.commands.some((command) => {
-    const inner = stripWrappers(command.words).words;
-    return inner.length > 0 && stopAllCallAt(inner, inputs, depth + 1);
+    const stripped = stripWrappers(command.words);
+    const inner = stripped.words;
+    const values = stripped.assignments.map(assignmentValue);
+    // 語に分かれる値は、最上位と同じく字面で判定する。
+    const worded = values
+      .filter((value) => splitsIntoWords(value.text))
+      .some((value) => spellings(value).some(stopAllWordingUnquoted));
+    // 起動語を値に持つ代入の形の語は、値と後ろの語の組がコマンドとして実行されうる。
+    const launched = values
+      .filter(launchesWithArguments)
+      .some((value) => stopAllCallAt([value, ...inner], inputs, depth + 1));
+    return (
+      worded ||
+      launched ||
+      (inner.length > 0 && stopAllCallAt(inner, inputs, depth + 1))
+    );
   });
 }
 
@@ -2742,11 +2993,20 @@ function stopAllCallAt(
  * `script -c`のようなコマンド文字列の中も、同じ規則で見る。
  * 検査の道具(`bun test`、`biome`など)の引数と、読み取りのプログラム(`cat`、`git`、`rg`など)は、実行ではないので通す。
  * 読み取りのプログラムでも、別のコマンドの実行を委ねる形(`delegatesExecution`)は通さず、委ねる先を字面でも見る。
+ * 先頭の代入の値(`assignments`)のうち、空白か、シェルが語を分けるか展開する字を含む値も、字面で判定する。
+ * 全停止のCLIを指す字面か、`mise`と全停止のタスク名が並ぶ字面があれば真を返す。
+ * 値が1語の代入は判定しない。引数を渡せず、ファイルのパスを変数に入れて読む日常の形を止めないためである。
  * ベストエフォートの規則で、変数や連結で組み立てた名前と、別名の呼び出しは止めない。
  */
 export function findStopAllCall(
   words: readonly Word[],
   inputs: () => readonly string[] | null,
+  assignments: readonly Word[] = [],
 ): boolean {
-  return stopAllCallAt(words, inputs, 0);
+  // 先頭の代入の値は、ページャーなどの環境変数としてコマンドに実行されうる。実行する側によらず、字面で判定する。
+  const assigned = assignments
+    .map(assignmentValue)
+    .filter((value) => splitsIntoWords(value.text))
+    .some((value) => spellings(value).some(stopAllWordingUnquoted));
+  return assigned || stopAllCallAt(words, inputs, 0);
 }
