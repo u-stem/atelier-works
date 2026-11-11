@@ -6012,7 +6012,7 @@ describeForCallers(
   },
 );
 
-// 言及の直前の字は、名前の字(英数字、`_`、`.`、`-`)でなければ区切りとして読む。バッククォートや`,`の直後の名前も指す語である。
+// 言及の直前の区切りは、閉じた字の集合で読む。バッククォート、`,`、`[`、`{`の直後の名前も指す語である。
 describeForCallers(
   "bash-guard denies holds, freezes, and stops named right after a backquote or a comma inside code",
   (subagent) => {
@@ -6022,6 +6022,7 @@ describeForCallers(
         'bun -e \'Bun.spawnSync(["bun",`hold.ts`,"place"])\'',
       ],
       ["a hold after a comma", "bun -e 'x=[1,hold.ts]' place"],
+      ["a hold after an opening bracket", "bun -e 'x=[hold.ts]' place"],
       [
         "a stop after a backquote",
         "bun -e 'Bun.spawnSync([\"bun\",`stop_all.ts`])'",
@@ -6032,6 +6033,7 @@ describeForCallers(
   },
 );
 
+// 区切りの集合の外の字(`@`、`:`、`+`など)の直後の名前は、パッケージ名やタスク名の一部なので指す語に数えない。
 describeForCallers(
   "bash-guard allows names that only share letters with the guarded code",
   (subagent) => {
@@ -6040,6 +6042,13 @@ describeForCallers(
       "bun scripts/lint-docs.ts docs/internals/holds.md",
       "bun test tests/scripts/freeze.test.ts",
       "bun -e 'console.log(1)' -- --stop_all_x",
+      "bunx @hold/cli --version",
+      "npx @freeze/cli release",
+      "bun run check:holds",
+      "bun run test:hold place",
+      "bun run lint:stop_all",
+      "bun scripts/x.ts a+hold place",
+      "bun scripts/x.ts a+stop_all",
     ])("allows %s", async (command) => {
       expect(await decide(command, { subagent })).toBe("allow");
     });
