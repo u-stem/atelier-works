@@ -906,7 +906,7 @@ ActionsをRead-onlyにするのは、次の3つを読むためである。
 時間の予算は、読み始める前に確かめる。読み始めた1リポジトリは最大10ページを読み切るので、1リポジトリの分だけ超えうる。
 FactoryのPRの判定と起動は発見より前に終わるので、この超過に巻き込まれない。
 条件は、対象のリポジトリが明示リポジトリで、公開されていることなので、受け入れる。
-検索へ戻す設定は無く、戻すにはコードの戻しと反映が要る。
+検索へ戻す設定は無い。
 人のPRには、直す作業項目を起動せず、PRとリポジトリへの書き込みもしない。
 通知の文は、FactoryのPRと同じ固定文である。
 forkのPRの実行と、別のPRの実行は、判定に使わず捨てる。headのリポジトリのIDがベースと違う実行と、結び付いたPRの番号が違う実行を使うと、forkや別のPRの結果を、FactoryのPRの結果として扱ってしまうためである。
@@ -949,7 +949,7 @@ REST一覧を読むのは、表の記録が新しくない間の作業項目、�
 残るリスクとして、次のPRを拾えなくなる。
 作業項目も競合の行も無く、表も古い、明示でないリポジトリにあるFactoryのPRである。
 読めない間は、収集の鮮度の監視が通知するまで、黙って見送る。
-検索へ戻す設定は無く、戻すにはコードの戻しと反映が要る。
+検索へ戻す設定は無い。
 
 fine-grained PATは、トークンの値を変えずに権限の設定だけを変えられる。権限を変えるときは既存のトークンを更新すればよく、再発行は要らない。
 orgのリポジトリでは、権限を足すと、org側で再び承認を求められることもある。承認するまで、同じ通知は残る。
@@ -2686,14 +2686,12 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
   鮮度の監視が通知するまでの時間は、黙って見送る。
   最大の時間は[GitHubの収集](internals/github-collect.md#鮮度の足りないリポジトリ)にある。
 - `poll_issues`が検索を使わないので、発見の経路を設定だけで検索へ戻す手段は無い。
-  戻すにはコードの戻しと反映が要る。手順は[運用](operations.md#issueの発見の元を確かめる)にある。
 - `poll_issues`が明示リポジトリを一覧で読むとき、トリガーラベルの付いた開いたIssueとPRが合わせて1000件を超えると、一覧が失敗し続ける。
   トリガーラベルはIssueフォームに設定しない方針なので、外の人が埋めるのは難しい。失敗は`list_labeled_issues`の段に残る。
 - `poll_prs`は、明示でないリポジトリの記録が古い間、そのリポジトリのPRを見つけない。
   鮮度の監視が通知するまでの時間は、黙って見送る。
   最大の時間は[GitHubの収集](internals/github-collect.md#鮮度の足りないリポジトリ)にある。
 - `poll_prs`が検索を使わないので、発見の経路を設定だけで検索へ戻す手段は無い。
-  戻すにはコードの戻しと反映が要る。手順は[運用](operations.md#prの発見の元を確かめる)にある。
 - `poll_prs`が明示リポジトリを一覧で読むとき、開いたPRが1000件を超えると、一覧が失敗し続ける。
   公開リポジトリでは、外の人がforkからPRを開けて、一覧を失敗させ続けられる。
   失敗は`list_open_prs`の段に残り、通知は出ない。
@@ -2798,7 +2796,7 @@ composeが`.env`を探す場所は、実機で確かめていない。
 | 種類 | ファイル |
 | --- | --- |
 | 実行役が動かす道具 | `scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/check-docker-version.sh`、`scripts/custom-tags.ts`、`scripts/record-host-applied.sh`、`scripts/check-idle.ts` |
-| 実行役の実装 | `scripts/host-apply.*`、`scripts/host_apply/`、まだ存在しない`scripts/host-install.sh` |
+| 実行役の実装 | `scripts/host-apply.*`、`scripts/host_apply/`、`scripts/host-install.sh` |
 | mise設定 | `mise.toml`、`mise.*.toml`、`.mise.toml`、`mise/`、`.mise/`、`.config/mise/`、`.tool-versions` |
 | 実行環境の設定 | `package.json`、`bunfig.toml`、`.npmrc`、`.env`、`.env.*`、`.nvmrc`、`.node-version`などの`.*-version` |
 | 必須チェックの定義 | `.github/workflows/`の全体、`scripts/ci-scope.ts` |
