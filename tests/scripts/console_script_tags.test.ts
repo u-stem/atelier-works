@@ -99,6 +99,49 @@ describe("console scripts", () => {
   });
 });
 
+// `on_behalf_of_email`は、flowとscriptの定義に置く値で、実行する主体を別の主体にする。
+// 運用者が入力した文を包まずに受け入れる根拠(`flow_untrusted_args.test.ts`)は、
+// どの定義も呼び出した主体の権限で動くことに頼る。
+describe("the definitions under f/factory", () => {
+  const DEFINITION_GLOB = "f/factory/**/{flow,*.script,*.schedule}.yaml";
+
+  async function definitionsThatDelegate(): Promise<string[]> {
+    const delegating: string[] = [];
+    for await (const file of new Glob(DEFINITION_GLOB).scan(".")) {
+      if (/^\s*on_behalf_of\w*\s*:/m.test(await Bun.file(file).text())) {
+        delegating.push(file);
+      }
+    }
+    return delegating.sort();
+  }
+
+  test("none runs on behalf of another user", async () => {
+    expect(await definitionsThatDelegate()).toEqual([]);
+  });
+
+  test.each([
+    "f/factory/steps/requirements_apply.script.yaml",
+    "f/factory/steps/design_apply.script.yaml",
+    "f/factory/approval_decide.script.yaml",
+    "f/factory/manual_intake_submit.script.yaml",
+    "f/factory/pr_review_submit.script.yaml",
+    "f/factory/pipeline__flow/flow.yaml",
+    "f/factory/design__flow/flow.yaml",
+  ])("%s is among the definitions that are checked", async (file) => {
+    const checked: string[] = [];
+    for await (const found of new Glob(DEFINITION_GLOB).scan(".")) {
+      checked.push(found);
+    }
+    expect(checked).toContain(file);
+  });
+
+  test("the pattern finds the key in a definition", () => {
+    expect(
+      /^\s*on_behalf_of\w*\s*:/m.test("summary: a\non_behalf_of_email: a@b\n"),
+    ).toBe(true);
+  });
+});
+
 // Console用workerと定期ジョブ用workerは、1つずつ動かす前提で書いたscriptがある。
 // 再実行は、同じscriptが実行中か待ちかを読んで判断するので、同じtagの枠が1つであることに頼る。
 // 設定の変更は、読み直しから書き込みまでの間に、同じscriptの別の呼び出しが入らないことに頼る。

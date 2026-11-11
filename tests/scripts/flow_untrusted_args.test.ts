@@ -1,6 +1,6 @@
 // stepの間で渡す値が、Windmillの引数の解決の対象にならない形かを、すべてのflowの定義から確かめる。
 // Windmillは、ジョブの引数の文字列が`$var:`、`$jsonvar:`、`$res:`、`$encrypted:`で始まるとき、ジョブの権限で解決する。
-// 前のstepの結果を式に持つ引数(`results`、`previous_result`、`resume`、`flow_input.iter`、失敗の`error`)は、
+// 前のstepの結果かflowの入力を式に持つ引数(`results`、`previous_result`、`resume`、`flow_input`、失敗の`error`)は、
 // 次のどれかでなければならない。
 // - 値全体をJSONの文字列にして渡す(`lib/untrusted_arg.ts`)。式は`JSON.stringify(...)`で始まり、`$`を置き換える呼び出しで終わる。
 // - 下の`PLAIN`に、flowとstepと引数の名前を挙げる。参照の形を取れない値だけを挙げる。
@@ -40,36 +40,70 @@ const POISON = "$var:f/factory/github_token";
  * - 先頭が固定の文字列(調査の本文は役割のタグ、証跡パックは注意書き)と、固定の2種類の符号
  */
 const PLAIN: Readonly<Record<string, string>> = {
-  "audit/audit_generate": "evidence_markdown,factory_clone_dir,metrics",
-  "design/generate": "head_sha,worktree_dir",
-  "implement/implement_finish": "prepare_outcome",
+  "audit/audit_prepare":
+    "period_end,period_start,unaudited_gap_days,work_item_id",
+  "audit/audit_generate":
+    "evidence_markdown,factory_clone_dir,metrics,period_end,period_start,unaudited_gap_days,work_item_id",
+  "audit/failure": "work_item_id",
+  "dependabot/dependabot_prepare": "work_item_id",
+  "dependabot/dependabot_assess": "work_item_id",
+  "dependabot/dependabot_finish": "work_item_id",
+  "dependabot/failure": "work_item_id",
+  "design/prepare": "design_attempt,work_item_id",
+  "design/generate": "design_attempt,head_sha,work_item_id,worktree_dir",
+  "design/request_approval": "design_attempt,work_item_id",
+  "design/failure": "work_item_id",
+  "implement/implement_prepare": "work_item_id",
+  "implement/implement_generate": "work_item_id",
+  "implement/implement_verify": "work_item_id",
+  "implement/implement_finish": "prepare_outcome,work_item_id",
+  "implement/failure": "work_item_id",
   "investigate/investigate_prepare": "work_item_id",
   "investigate/investigate_generate":
     "factory_clone_dir,repo_dir,sha,work_item_id",
   "investigate/investigate_post": "comment_body,withheld,work_item_id",
   "manual_intake/register":
     "intake_key,issue_number,issue_url,owner,profile,repo,reused",
-  "pipeline/generate": "worktree_dir",
-  "pr_fix/pr_fix_collect": "owner,pr_number,repo",
+  "pipeline/prepare": "attempt,work_item_id",
+  "pipeline/generate": "attempt,work_item_id,worktree_dir",
+  "pipeline/request_approval": "attempt,work_item_id",
+  "pipeline/failure": "work_item_id",
+  "pr_fix/pr_fix_prepare": "work_item_id",
+  "pr_fix/pr_fix_collect": "owner,pr_number,repo,work_item_id",
   "pr_fix/pr_fix_apply":
-    "attempt,base_sha,ci_check_id,conflict_check_id,factory_clone_dir,head_sha,owner,parent_work_item_id,pr_number,repo,worktree_dir,worktree_git_pointer",
+    "attempt,base_sha,ci_check_id,conflict_check_id,factory_clone_dir,head_sha,owner,parent_work_item_id,pr_number,repo,work_item_id,worktree_dir,worktree_git_pointer",
   "pr_fix/pr_fix_verify":
-    "apply_outcome,attempt,auto_tree_sha,base_sha,baseline_sha,ci_check_id,conflict_check_id,factory_clone_dir,head_sha,owner,parent_work_item_id,pr_number,repo,worktree_dir,worktree_git_pointer",
+    "apply_outcome,attempt,auto_tree_sha,base_sha,baseline_sha,ci_check_id,conflict_check_id,factory_clone_dir,head_sha,owner,parent_work_item_id,pr_number,repo,work_item_id,worktree_dir,worktree_git_pointer",
   "pr_fix/pr_fix_finish":
-    "auto_tree_sha,base_sha,baseline_sha,ci_check_id,conflict_check_id,fix_round,head_sha,max_comment_id,max_review_comment_id,max_review_id,outcome,owner,parent_work_item_id,pr_number,repo,repo_dir,trigger_review_ids,verified_tree_sha,worktree_dir,worktree_git_pointer",
+    "auto_tree_sha,base_sha,baseline_sha,ci_check_id,conflict_check_id,fix_round,head_sha,max_comment_id,max_review_comment_id,max_review_id,outcome,owner,parent_work_item_id,pr_number,repo,repo_dir,trigger_review_ids,verified_tree_sha,work_item_id,worktree_dir,worktree_git_pointer",
+  "pr_fix/failure": "work_item_id",
+  "pr_review/pr_review_prepare": "work_item_id",
   "pr_review/pr_review_generate":
-    "attempt,factory_clone_dir,owner,parent_work_item_id,pr_number,repo,review_sha,skip,worktree_dir",
+    "attempt,factory_clone_dir,owner,parent_work_item_id,pr_number,repo,review_sha,skip,work_item_id,worktree_dir",
   "pr_review/pr_review_post":
-    "binary_unlisted_count,owner,pr_number,repo,repo_dir,review_sha,skip,worktree_dir",
+    "binary_unlisted_count,owner,pr_number,repo,repo_dir,review_sha,skip,work_item_id,worktree_dir",
+  "pr_review/failure": "work_item_id",
 };
 
 /**
  * 包まずに受け入れる引数。
- * 運用者が自由に入力した文で、先頭が固定でない。入力するConsoleのscriptは、フォルダ`f/factory`の権限を持つ主体だけが実行でき、
- * 起動したflowも同じ主体の権限で動く(`on_behalf_of_email`を置かない)。入力した主体は、変数を直接読める主体と同じである。
+ * 運用者が自由に入力した文で、先頭が固定でない。
+ * - 手動投入の題名、本文、受け入れ基準、owner、repo、進め方、冪等キー。
+ * - PRレビューの投入と調査の入力(owner、repo、PR番号、Issue番号、依頼の文)。
+ * - 承認の却下の理由(`feedback`)。実装やPRの修正が返す自動の報告は、`automatedFeedback`の印が先頭に付く。
+ *   `feedback`を渡す起動の呼び出しは、下の「feedbackを渡す起動」の表で固定する。
+ * 入力するConsoleのscriptと、flowを動かす主体は、ワークスペースの管理者だけである。
+ * フォルダ`f/factory`の権限が管理者だけに限られるためで、下の「受け入れの土台」のテストがその前提を固定する。
+ * 入力できる主体は、変数を直接読める主体と同じなので、置き換えで読める範囲は広がらない。
  */
 const ACCEPTED: Readonly<Record<string, string>> = {
-  "manual_intake/register": "body,title",
+  "design/generate": "feedback",
+  "investigate/investigate_register": "issue_number,owner,repo,request",
+  "manual_intake/create_issue":
+    "acceptance_criteria,body,intake_key,owner,profile,repo,title",
+  "manual_intake/register": "acceptance_criteria,body,intake_body,title",
+  "pipeline/generate": "feedback",
+  "pr_review_intake/register": "owner,pr_number,repo",
 };
 
 /** 値全体を包む引数。flowとstepごとに、引数の名前を挙げる。 */
@@ -133,9 +167,9 @@ function modulesIn(value: unknown): unknown[] {
   return isModule ? [value, ...nested] : nested;
 }
 
-/** 前のstepの結果か失敗の`error`を式に持つ引数の判定。 */
+/** 前のstepの結果、失敗の`error`、flowの入力(`flow_input`)のどれかを式に持つ引数の判定。 */
 const CARRIES_STEP_VALUE =
-  /\b(?:results|error|previous_result|resume)\b|\bflow_input\.iter\b/;
+  /\b(?:results|error|previous_result|resume|flow_input)\b/;
 
 /** 前のstepの結果を式に持つ引数を、すべてのflowから集める。 */
 const STEP_VALUES: readonly Transform[] = readdirSync(FACTORY_DIR)
@@ -267,24 +301,150 @@ describe("the arguments passed between the steps of the flows", () => {
   });
 });
 
-/** 運用者が自由に入力した文を、包まずにflowへ渡すConsoleのscript。 */
-const OPERATOR_INPUT_SCRIPTS = [
-  "approval_decide.ts",
-  "manual_intake_submit.ts",
-  "pr_review_submit.ts",
+/**
+ * 受け入れの土台はフォルダの権限である。所有者や追加の権限を足すと、運用者の入力を受け入れる根拠が崩れる。
+ * `on_behalf_of`を置かないことは、`console_script_tags.test.ts`が、すべての定義について確かめる。
+ */
+describe("the ground of the accepted arguments", () => {
+  const folder: unknown = Bun.YAML.parse(
+    readFileSync(join(FACTORY_DIR, "folder.meta.yaml"), "utf8"),
+  );
+
+  test("the folder has no owner", () => {
+    expect(field(folder, "owners")).toEqual([]);
+  });
+
+  test("the folder has no extra permission", () => {
+    expect(field(folder, "extra_perms")).toEqual({});
+  });
+});
+
+/**
+ * `feedback`を設計と要件定義のflowへ渡す起動の呼び出し。`feedback`は包まずに渡すので、先頭が決まった文か、運用者の入力でなければならない。
+ * - `automated`: 実装やPRの修正などが返した自動の報告。`automatedFeedback`が先頭に固定の印を付ける。
+ * - `operator`: 承認の却下の理由。運用者が入力する。
+ */
+const FEEDBACK_LAUNCHES: ReadonlyArray<{
+  readonly file: string;
+  readonly expression: string;
+  readonly source: "automated" | "operator";
+}> = [
+  {
+    file: "steps/design_generate.ts",
+    expression: "feedback: automatedFeedback(gap),",
+    source: "automated",
+  },
+  {
+    file: "steps/implement_finish.ts",
+    expression: "feedback: automatedFeedback(limitGapReport(gapReport)),",
+    source: "automated",
+  },
+  {
+    file: "steps/pr_fix_finish.ts",
+    expression: "feedback: automatedFeedback(limitGapReport(gapReport)),",
+    source: "automated",
+  },
+  {
+    file: "lib/implement_finish_support.ts",
+    expression: "return automatedFeedback(limitGapReport(report));",
+    source: "automated",
+  },
+  {
+    file: "lib/implement_finish_support.ts",
+    expression: "automatedFeedback(limitGapReport(args.gapReport)),",
+    source: "automated",
+  },
+  {
+    file: "steps/pr_workflow_support.ts",
+    expression: "deps.launchDesign(designGapFeedback(gapReport))",
+    source: "automated",
+  },
+  {
+    file: "retry_work_item.ts",
+    expression:
+      'return report.trim() === "" ? null : automatedFeedback(report);',
+    source: "automated",
+  },
+  {
+    file: "steps/requirements_apply.ts",
+    expression: 'feedback: request.reason ?? "",',
+    source: "operator",
+  },
+  {
+    file: "steps/design_apply.ts",
+    expression: 'const feedback = request.reason ?? "";',
+    source: "operator",
+  },
+  {
+    file: "retry_work_item.ts",
+    expression: "feedbackFromRejection(requirementsApproval.reason)",
+    source: "operator",
+  },
+  {
+    file: "retry_work_item.ts",
+    expression: "feedbackFromRejection(designApproval.reason)",
+    source: "operator",
+  },
 ];
 
-describe("the accepted arguments", () => {
-  test.each(OPERATOR_INPUT_SCRIPTS)(
-    "%s starts the flow without running it on behalf of another user",
-    (name) => {
-      const source = readFileSync(join(FACTORY_DIR, name), "utf8");
+/** `feedback`を渡す手順の部品で、値を作らずに受け渡すだけのファイル。 */
+const FEEDBACK_RELAY_FILES = [
+  "lib/design_apply_support.ts",
+  "lib/design_launch_support.ts",
+  "steps/pipeline_generate.ts",
+];
 
-      const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
+function sourceOf(file: string): string {
+  return readFileSync(join(FACTORY_DIR, file), "utf8");
+}
 
-      expect(code).not.toContain("on_behalf_of_email");
+/** `feedback`を持ち、flowの起動に関わるファイル。`f/factory`の下のscriptから集める。 */
+function filesThatCarryFeedback(): string[] {
+  return [...new Bun.Glob("**/*.ts").scanSync(FACTORY_DIR)]
+    .filter((file) => {
+      const source = sourceOf(file);
+      return (
+        /\bfeedback\b/.test(source) &&
+        /runFlowAsync|FLOW_PATH|flowPath|launchDesign|launchPipeline|designFlowInput|designRejectionPipelineInput/.test(
+          source,
+        )
+      );
+    })
+    .sort();
+}
+
+describe("the launches that pass the feedback to a flow", () => {
+  test("are all listed", () => {
+    const listed = new Set([
+      ...FEEDBACK_LAUNCHES.map((launch) => launch.file),
+      ...FEEDBACK_RELAY_FILES,
+    ]);
+
+    expect(filesThatCarryFeedback()).toEqual([...listed].sort());
+  });
+
+  test.each(FEEDBACK_LAUNCHES.map((launch) => [launch.file, launch]))(
+    "%s still has the listed expression",
+    (_file, launch) => {
+      expect(sourceOf(launch.file)).toContain(launch.expression);
     },
   );
+
+  test("mark the automated report through automatedFeedback", () => {
+    const unmarked = FEEDBACK_LAUNCHES.filter(
+      (launch) =>
+        launch.source === "automated" &&
+        !/automatedFeedback\(|designGapFeedback\(/.test(launch.expression),
+    );
+
+    expect(unmarked).toEqual([]);
+  });
+
+  test("build the designGapFeedback from automatedFeedback", () => {
+    expect(sourceOf("lib/implement_finish_support.ts")).toContain(
+      "return automatedFeedback(limitGapReport(report));",
+    );
+  });
 });
 
 describe("the sealed arguments", () => {
