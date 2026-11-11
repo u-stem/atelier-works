@@ -194,19 +194,20 @@ const RUNNERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 保留のコードを指すパスの末尾。名前の字(英数字、`_`、`.`、`-`)に続かない位置の
+ * 保留のコードを指すパスの末尾。区切り(行頭、`/`、引用符、バッククォート、空白、括弧、`=`、`,`、`[`、`{`)の直後の
  * `hold`、`hold_psql`、`holds`で、拡張子は省略できる。
  * `hold.test.ts`、`holds_db.test.ts`、`hold-guard.ts`、`holds.md`のような別のファイルには当たらない。
+ * 区切りを閉じた集合にするのは、`:`や`@`や`+`の後ろの、タスク名やパッケージ名の一部を指す語に数えないためである。
  */
 const HOLD_MENTION =
-  /(?<![A-Za-z0-9_.-])(?:hold|hold_psql|holds)(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
+  /(?:^|[/'"`\s(=,[{])(?:hold|hold_psql|holds)(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
 
 /**
- * 凍結のCLIを指すパスの末尾。保留のコードと同じく、名前の字に続かない位置の`freeze`で、拡張子は省略できる。
+ * 凍結のCLIを指すパスの末尾。保留のコードと同じ区切りの直後の`freeze`で、拡張子は省略できる。
  * `freeze.test.ts`、`freezes.ts`、`freeze_apply.ts`のような別のファイルには当たらない。
  */
 const FREEZE_MENTION =
-  /(?<![A-Za-z0-9_.-])freeze(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
+  /(?:^|[/'"`\s(=,[{])freeze(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
 
 /**
  * 保留と凍結のコードを、パスの形で指す字面。`scripts/<名前>`か、拡張子の付いた`<名前>.ts`の形である。
@@ -2667,11 +2668,11 @@ export function findConsoleReleaseCall(
 }
 
 /**
- * 全停止のCLIを指すパスの末尾。保留のコードと同じく、名前の字に続かない位置の`stop_all`で、拡張子は省略できる。
+ * 全停止のCLIを指すパスの末尾。保留のコードと同じ区切りの直後の`stop_all`で、拡張子は省略できる。
  * `stop_all.test.ts`、`stop_all_excludes.ts`のような別のファイルには当たらない。
  */
 const STOP_ALL_MENTION =
-  /(?<![A-Za-z0-9_.-])stop_all(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
+  /(?:^|[/'"`\s(=,[{])stop_all(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
 
 /** 全停止のCLIのファイル名。globが当たるかを見る対象である。 */
 const STOP_ALL_FILE_NAMES: readonly string[] = ["stop_all", "stop_all.ts"];
