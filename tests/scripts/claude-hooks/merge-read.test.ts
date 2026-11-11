@@ -528,6 +528,25 @@ describe("rootOf", () => {
   });
 });
 
+// 孫が出力を握っても待たないことを確かめる検査の上限。読みの上限(6秒)とフックのタイムアウト(10秒)の間の余裕は約4秒で、
+// それを超える遅れの退行を捕まえる。待った場合は30秒かかるので、はっきり分かれる。
+const NO_WAIT_LIMIT_MS = 4000;
+
+// 同じ操作を数回測り、最小の経過時間(ミリ秒)と各回の結果を返す。最小値は、負荷の山に当たった回に引きずられない。
+async function timeRepeatedly<T>(
+  work: () => Promise<T>,
+  times = 3,
+): Promise<{ minMs: number; results: T[] }> {
+  const elapsed: number[] = [];
+  const results: T[] = [];
+  for (let i = 0; i < times; i += 1) {
+    const started = Date.now();
+    results.push(await work());
+    elapsed.push(Date.now() - started);
+  }
+  return { minMs: Math.min(...elapsed), results };
+}
+
 describe("runChild", () => {
   test("passes the standard input to the child", async () => {
     const finished = await runChild({
@@ -638,16 +657,17 @@ describe("runChild", () => {
     expect(finished).toMatchObject({ timedOut: true, exitCode: null });
   });
 
-  // 孫が出力を握り続けると、待った場合は30秒かかる。上限は、その待ちとはっきり分かれ、負荷でも落ちない値にする。
-  // bunのテストのタイムアウトは、上限より長くする。
+  // 孫が出力を握り続けると、待った場合は30秒かかる。3回測った最小値で確かめる。
+  // 順序は、上限(4秒) < bunのテストのタイムアウト(20秒) < 孫のsleep(30秒)である。
   test("returns soon after a timeout even if a grandchild holds the output open", async () => {
-    const started = Date.now();
-    await runChild({
-      argv: ["/bin/sh", "-c", "sleep 30 & wait"],
-      stdin: "",
-      timeoutMs: 300,
-    });
-    expect(Date.now() - started).toBeLessThan(15000);
+    const { minMs } = await timeRepeatedly(() =>
+      runChild({
+        argv: ["/bin/sh", "-c", "sleep 30 & wait"],
+        stdin: "",
+        timeoutMs: 300,
+      }),
+    );
+    expect(minMs).toBeLessThan(NO_WAIT_LIMIT_MS);
   }, 20000);
 
   test("kills the grandchild at a timeout", async () => {
@@ -661,20 +681,27 @@ describe("runChild", () => {
     expect(isAlive(pid)).toBe(false);
   });
 
-  // 子が終わっても返らない場合は、タイムアウト(30秒)まで待つ。上限は、その待ちとはっきり分かれ、負荷でも落ちない値にする。
-  // bunのテストのタイムアウトは、上限より長くする。
+  // 子が終わっても返らない場合は、タイムアウト(30秒)まで待つ。3回測った最小値で確かめる。
+  // 順序は、上限(4秒) < bunのテストのタイムアウト(20秒) < `timeoutMs`(30秒) < 孫のsleep(32秒)である。
   test("returns when the child exits even if a grandchild holds the output open", async () => {
-    const started = Date.now();
-    const finished = await runChild({
-      argv: ["/bin/sh", "-c", "sleep 32 & echo done"],
-      stdin: "",
-      timeoutMs: 30000,
-    });
+    const { minMs, results } = await timeRepeatedly(() =>
+      runChild({
+        argv: ["/bin/sh", "-c", "sleep 32 & echo done"],
+        stdin: "",
+        timeoutMs: 30000,
+      }),
+    );
     expect({
-      stdout: finished.stdout,
-      exitCode: finished.exitCode,
-      quick: Date.now() - started < 15000,
-    }).toEqual({ stdout: "done\n", exitCode: 0, quick: true });
+      outputs: results.map((r) => [r.stdout, r.exitCode]),
+      quick: minMs < NO_WAIT_LIMIT_MS,
+    }).toEqual({
+      outputs: [
+        ["done\n", 0],
+        ["done\n", 0],
+        ["done\n", 0],
+      ],
+      quick: true,
+    });
   }, 20000);
 
   test("kills a grandchild that outlives the child", async () => {
