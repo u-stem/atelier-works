@@ -786,30 +786,6 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 `trigger_label`を変えるときは、手順2と手順3をやり直す。
 収集が各リポジトリを取り直すまで、表は古いラベル名で答えるためである。
 
-反映後は、次の3つを確かめる。
-
-- 反映直後の1周回は、`poll_prs`と`poll_source`の版が混ざり、失敗として記録されうる。次の周回で消えることを確かめる。
-- 実ジョブで手順4と手順5の結果を確かめた後に、`poll_prs`の発見の元を選んでいた項目を、手で消す。
-  対象は、同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマである。
-  消すまでUIに説明が残るが、その項目の値を変えても何も起きない。
-- 作業項目の`owner`と`repo`が、GitHubの正規の綴りである。手順5と同じ確認で、追跡中のPRとの重ねの除去に効く。
-
-検索へ戻す設定は無い。
-検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
-検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
-通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
-発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
-戻しは次の順で行う。
-
-1. リソース`f/factory/factory_config`に、控えの値`gh_source_poll_issues: db`を先に入れる。戻す前の版は、この項目が`db`のときに表を読む。取得して直して反映する手順は、[収集を有効にする](#収集を有効にする)の手順4と同じである。
-2. 同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマを、手で元に戻す。
-3. 戻しのPRをマージする。反映は`self_update`が行う。
-4. 反映後の実ジョブの結果を確かめる。
-
-リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
-整理後に戻すときは、控えの値を入れ直してから、revertする。
-今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
-
 ### PRの発見の元を確かめる
 
 `poll_prs`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、ラベル、レビューの依頼、assigneeのPRを収集の表から見つける。
@@ -970,22 +946,6 @@ stateを書けない間は、毎周回先頭から選ぶ。
 
 `review_label`か`fix_label`を変えるときは、手順3をやり直す。
 収集が各リポジトリを取り直すまで、表のラベルの真偽は古い名前で答えるためである。
-
-検索へ戻す設定は無い。
-検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
-検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
-通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
-発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
-戻しは次の順で行う。
-
-1. リソース`f/factory/factory_config`に、控えの値`gh_source_poll_prs: db`を先に入れる。戻す前の版は、この項目が`db`のときに表を読む。取得して直して反映する手順は、[収集を有効にする](#収集を有効にする)の手順4と同じである。
-2. 同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマを、手で元に戻す。
-3. 戻しのPRをマージする。反映は`self_update`が行う。
-4. 反映後の実ジョブの結果を確かめる。
-
-リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
-整理後に戻すときは、控えの値を入れ直してから、revertする。
-今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
 
 ### 組織の所有者を足す前の確認
 
@@ -2335,7 +2295,7 @@ Consoleを使えないときは、Windmillで`f/factory/approval_decide`を実�
 ### 修正を再実行する
 
 失敗(`failed`)、人の対応待ち、ブロック(`blocked`)で終わった修正は、`retry_work_item`で再実行できる。
-ただしCIの失敗を直す回は除く([PRワークフロー](internals/pr-workflow.md#CIの失敗を直す回))。
+ただしCIの失敗を直す回は除く([PRワークフロー](internals/pr-workflow.md#ciの失敗を直す回))。
 実行のしかたは[失敗した作業を再実行する](#失敗した作業を再実行する)にある。
 
 修正がpushに成功するか、要件定義へ差し戻すまでは、処理済みの位置が進まない。そのため、それ以外で終わった修正を再実行すると、前回と同じ指摘を集め直す。
@@ -2738,32 +2698,6 @@ PRの読み直し、作者とforkとブランチの確認、記録するhead、�
 改名か移管をした古い名前の明示リポジトリは、一覧がリダイレクトで読めても、応答のリポジトリが候補と違うため、候補を記録せず警告のログを毎周回残す。
 どちらも、設定の明示から外して直す。
 
-反映後は、次の2つを確かめる。
-
-- 反映直後の1周回は、新旧の版が混ざると`TypeError`でジョブごと失敗し、`job_failures`に残らないことがある。Consoleのジョブの画面の履歴で失敗を見て、次の周回で成功に戻ることを確かめる。
-- `watch_pr_ci`の発見の元を選んでいた項目を、手で消す。
-  `pr_ci_watch_human_prs`が真なら、実ジョブで手順4の結果を確かめた後に消す。
-  偽の間は、表と一覧を読まないので、反映後の1周回が成功し、`errors`が0であることを確かめた後に消す。偽のままでも消してよい。
-  対象は、同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマである。
-  消すまでUIに説明が残るが、その項目の値を変えても何も起きない。
-  手で消すまで、bootstrapが`rt.d.ts`を再生成すると項目が戻り、`config.test.ts`の「生成された型に宣言されない」テストが落ちる。そうなる前に消す。
-
-検索へ戻す設定は無い。
-検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
-検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
-通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
-発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
-戻しは次の順で行う。
-
-1. リソース`f/factory/factory_config`に`gh_source_pr_ci_watch`を入れていなければ、何もしない。入れていたら、消して未設定に戻す。戻した版は、未設定のとき検索で読む。取得して直して反映する手順は、[収集を有効にする](#収集を有効にする)の手順4と同じである。
-2. 同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマを、手で元に戻す。
-3. 戻しのPRをマージする。反映は`self_update`が行う。
-4. 反映後の実ジョブの結果を確かめる。
-
-リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
-整理後に戻すときは、控えの値を入れ直してから、revertする。
-今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
-
 人のPRの発見をやめるときは、`pr_ci_watch_human_prs`を`false`にする。
 
 #### 読めないリポジトリの通知
@@ -2783,7 +2717,7 @@ PATの権限の不足とは限らないので、表の候補の404と403は、�
 
 設定`pr_ci_fix_enabled`を`true`にすると、`watch_pr_ci`が失敗したheadを直す作業項目を起動する。
 既定は`false`で、偽の間は何も起動しない。
-起動した作業項目は、失敗した実行のログの抜粋をClaudeに渡して直し、PRのブランチにpushする([PRワークフロー](internals/pr-workflow.md#CIの失敗を直す回))。
+起動した作業項目は、失敗した実行のログの抜粋をClaudeに渡して直し、PRのブランチにpushする([PRワークフロー](internals/pr-workflow.md#ciの失敗を直す回))。
 自動で直す対象の失敗は、見つけた時点では通知しない。直せるかが決まってから、通知`pr_ci_failed`を1件残し、Discordにも届ける。
 直せたときは、通知は出ない。
 通知が出るのは、次のどれかのときである。
@@ -3141,30 +3075,6 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、どの
 失敗は`job_failures`に残り、日次のまとめに載る。
 `repo_allowlist`が空でないと、リポジトリ単位の古さの通知と収集の無効の通知が出ないためである。
 結果の`errors`と、失敗の記録の段`list_open_prs:`を定期的に見る。
-
-反映後は、次の2つを確かめる。
-
-- 反映直後の1周回は、新旧の版が混ざると`TypeError`でジョブごと失敗し、`job_failures`に残らないことがある。Consoleのジョブの画面の履歴で失敗を見て、次の周回で成功に戻ることを確かめる。
-- 実ジョブで手順3の結果を確かめた後に、`watch_pr_conflicts`の発見の元を選んでいた項目を、手で消す。
-  対象は、同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマである。
-  消すまでUIに説明が残るが、その項目の値を変えても何も起きない。
-  ただし、手で消すまで、bootstrapが`rt.d.ts`を再生成すると項目が戻り、`config.test.ts`の「生成された型に宣言されない」テストが落ちる。
-
-検索へ戻す設定は無い。
-検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
-検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
-通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
-発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
-戻しは次の順で行う。
-
-1. リソース`f/factory/factory_config`に、控えの値`gh_source_pr_conflict_watch: db`を先に入れる。戻す前の版は、この項目が`db`のときに表を読む。取得して直して反映する手順は、[収集を有効にする](#収集を有効にする)の手順4と同じである。
-2. 同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマを、手で元に戻す。
-3. 戻しのPRをマージする。反映は`self_update`が行う。
-4. 反映後の実ジョブの結果を確かめる。
-
-リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
-整理後に戻すときは、控えの値を入れ直してから、revertする。
-今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
 
 監視を止めるときは、`pr_conflict_watch_enabled`を`false`にする。
 
@@ -3652,71 +3562,6 @@ PR修正のラウンドは`20261028110000_fix_rounds_design_gap`である。
 重複した行があると、索引を作れないためである。
 1件を残して終端にしてから、やり直す。
 
-### 5分の境目の403を数える
-
-検索を使うフローが無くなった後、5分の境目に検索の枠の403が出ないことを、ジョブのログと失敗の記録で確かめる。
-検索を外した変更が反映されてから、平日を含む7日間たった後に、読み取りだけで行う。
-Windmill本体のデータベース`windmill`と、`factory.job_failures`のある`datatable_db`を、どちらも`db`のコンテナで読む。
-
-`callGhApi`は、rate limitと判定した応答を、警告のログ1行に残す。
-メッセージは`github rate limit response`で、`status`、クエリを除いた`endpoint`、`retry_after`、`resource`、`outcome`を載せる。
-`resource`は、応答のヘッダー`x-ratelimit-resource`の値で、`core`、`search`、`graphql`のどれかになる。
-`outcome`は、待って再試行する`waiting`、待ちが長すぎて失敗する`wait_too_long`、再試行も拒まれた`still_limited`のどれかになる。
-待って成功した403も、このログに残る。
-
-1. 7日分のジョブのログで、4つの印を、スクリプトごとに数える。
-   - `limit_logged`は、ログ`github rate limit response`を含むジョブの数である。
-   - `resource_search`は、そのログの`resource`が`search`のジョブの数である。
-   - `rate_limit_text`は、失敗の文`GitHub rate limit on`を含むジョブの数である。
-   - `search_rejected`は、実行時の拒否の文`GitHub REST search endpoints are not allowed`を含むジョブの数である。
-
-   ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d windmill -c "SELECT j.runnable_path, count(*) AS runs, count(*) FILTER (WHERE l.logs LIKE '%\"message\":\"github rate limit response\"%') AS limit_logged, count(*) FILTER (WHERE l.logs LIKE '%\"resource\":\"search\"%') AS resource_search, count(*) FILTER (WHERE l.logs LIKE '%GitHub rate limit on%') AS rate_limit_text, count(*) FILTER (WHERE l.logs LIKE '%GitHub REST search endpoints are not allowed%') AS search_rejected FROM v2_job j JOIN job_logs l ON l.job_id = j.id WHERE j.workspace_id = 'factory' AND j.runnable_path LIKE 'f/factory/%' AND j.created_at > now() - interval '7 days' GROUP BY j.runnable_path ORDER BY j.runnable_path"
-   ```
-
-2. 同じ7日分の失敗の記録で、文`GitHub rate limit on`を含む行を、フローごとに数える。
-   ログに残らない失敗も、この表には残る。
-
-   ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT flow_path, count(*) FROM factory.job_failures WHERE error LIKE '%GitHub rate limit on%' AND occurred_at > now() - interval '7 days' GROUP BY flow_path ORDER BY flow_path"
-   ```
-
-3. `resource_search`と`search_rejected`が、すべてのスクリプトで0であることを見る。
-   1以上なら、検索を呼ぶ経路が残っているか、新しく入っている。
-   その`runnable_path`のコードを調べ、検索を外す。
-4. `limit_logged`が1以上のスクリプトは、`resource`が`core`か`graphql`の403である。
-   検索の枠ではないので、時刻が5分の境目に集まっているかを、次の問い合わせで見る。
-   集まっていれば、同じ時刻に動くフローの呼び出しの数を見直す。
-   集まっていなければ、[GitHubのrate limitで失敗したとき](#githubのrate-limitで失敗したとき)に従う。
-
-   ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d windmill -c "SELECT j.runnable_path, (extract(minute FROM j.created_at)::int % 5) AS minute_mod_5, count(*) FROM v2_job j JOIN job_logs l ON l.job_id = j.id WHERE j.workspace_id = 'factory' AND j.runnable_path LIKE 'f/factory/%' AND l.logs LIKE '%\"message\":\"github rate limit response\"%' AND j.created_at > now() - interval '7 days' GROUP BY 1, 2 ORDER BY 1, 2"
-   ```
-
-5. 手順1の問い合わせが検出できることを、対照で確かめる。
-   検索を外す前のコミットが反映されていた期間のジョブに、`created_at`の範囲を替えて、同じ問い合わせをする。
-   検索の枠の403があったジョブでは、失敗の文`GitHub rate limit on`か`GET search/`を含むジョブが1以上になる。
-   その期間のログが保持期間で消えていれば、対照を確かめられなかったことを、確認の記録に書く。
-
-数えるのは、ログと失敗の記録に残るものだけである。
-ログのメッセージを足す前に反映されたジョブでは、待って成功した403は残らない。
-
-### 検索を外した反映の確認
-
-検索を外した変更を反映した後に、次の4つを確かめる。
-反映は`self_update`が行う。
-
-1. 反映が成功し、新しいhashが使われている。
-   デプロイの記録で、反映の行が成功であることを見る。
-2. `poll_issues`、`poll_prs`、`watch_pr_conflicts`、`watch_pr_ci`、`poll_dependabot`の、反映後の1周回の結果を見る。
-   - `failed`と`skipped_stale`が、反映の前より増えていない。
-   - 文`GitHub REST search endpoints are not allowed`が、ジョブのログと失敗の記録のどちらにも、0件である。
-   - ログの問い合わせは、[5分の境目の403を数える](#5分の境目の403を数える)の手順1の`search_rejected`を使う。失敗の記録は、`factory.job_failures`の`error`に同じ文を含む行を数える。
-3. dependabotの判断が、通常どおり進む。
-   `dependabot_merge_enabled`が偽の試運転なら、人に回る件数が、反映の前と変わらない。
-4. `gh_source_*`の値とresource-typeの項目を整理した後も、次の周回が通る。
-   整理した後の最初の周回で、5つのフローの結果が成功であることを見る。
-
 ## 監査を使う
 
 Factory自身の運用記録の監査は、毎週月曜09:30に自動で走る(`audit_kickoff`)。Consoleの**レポート**の**今すぐ監査**で前倒しできる。
@@ -3887,19 +3732,6 @@ dependabotの対象は、baseが`main`のPRに限る。
 
 定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
 説明できなければ、収集の失敗として調べる。
-
-検索へ戻す設定は無い。
-検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
-検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
-通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
-dependabotの対象は明示したリポジトリだけで、一覧の読み取りは小さいためである。
-列挙の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
-戻しは次の順で行う。
-
-1. 戻しのPRをマージする。`poll_dependabot.ts`は保護パスなので、戻しのPRも人がマージする。反映は`self_update`が行う。
-2. リソース`f/factory/factory_config`に、`gh_source_dependabot: db`を入れ直す。戻す前の版は、この項目で表を読むかを決める。
-3. 同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマを、手で元に戻す。
-4. 反映後の実ジョブの結果を確かめてから、リソースに残った項目を整理する。
 
 すべてを止める手順は、[無効にする](#無効にする)の節にある。
 
@@ -6370,7 +6202,7 @@ PR修正の`blocked`はConsoleの**要対応**の失敗に出ないので、こ�
 対処は、ホストのcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。
 通知の本文に反映した版が載っていれば、ホストがその版以降で`mise run up`したときに、自己更新が自動で解決する。
 通知が自動で解決されると、止まった実装とPR修正を、自己更新が自動で再開する([実装フローの仕様](internals/implement.md#イメージが古くて止まったとき))。
-CIの失敗を直す回は除く([PRワークフロー](internals/pr-workflow.md#CIの失敗を直す回))。
+CIの失敗を直す回は除く([PRワークフロー](internals/pr-workflow.md#ciの失敗を直す回))。
 人の再実行は要らない。
 同じ作業項目の自動の再開は3回までで、上限に達したときは、止まった作業項目をWindmillの`f/factory/retry_work_item`で再実行する。
 版が載らない通知は自動では解決されず、自動の再開も起きないので、`mise run up`の後に人が解決し、止まった作業項目を`retry_work_item`で再実行する。

@@ -1,21 +1,35 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   blankFrontmatter,
   buildPlan,
   coversTargets,
+  createDocReader,
   createProductionDeps,
+  guardCheck,
   isTargetDoc,
   type LintDeps,
+  lintAllDocLinks,
   lintDocText,
   lintWithTools,
+  listDocCandidates,
+  listRepoFiles,
   MARKDOWNLINT_BIN,
+  main,
+  parseArgs,
   type Spawned,
   shardCount,
   splitIntoShards,
   TEXTLINT_BIN,
+  toRepoPath,
   toToolPath,
 } from "../../scripts/lint-docs.ts";
 
@@ -55,6 +69,380 @@ describe("lintDocText", () => {
     const problems = lintDocText("docs/a.md", "# 見出し\n\n再実行します。\n");
 
     expect(problems[0]).toStartWith("docs/a.md:3: [register] ");
+  });
+});
+
+describe("toRepoPath", () => {
+  const root = "/repo";
+
+  test("drops a leading ./", () => {
+    expect(toRepoPath(root, "./docs/a.md", root)).toBe("docs/a.md");
+  });
+
+  test("makes an absolute path under the root relative to it", () => {
+    expect(toRepoPath(root, "/repo/docs/a.md", root)).toBe("docs/a.md");
+  });
+
+  test("leaves a relative path unchanged when the directory is the root", () => {
+    expect(toRepoPath(root, "docs/a.md", root)).toBe("docs/a.md");
+  });
+
+  test("resolves a relative path from the current directory", () => {
+    expect(toRepoPath(root, "a.md", "/repo/docs")).toBe("docs/a.md");
+  });
+
+  test("resolves a relative path that goes up from the current directory", () => {
+    expect(toRepoPath(root, "../README.md", "/repo/docs")).toBe("README.md");
+  });
+
+  test("returns an absolute path for a relative path that leaves the root", () => {
+    expect(toRepoPath(root, "../other/a.md", root)).toBe("/other/a.md");
+  });
+
+  test("leaves an absolute path outside the root unchanged", () => {
+    expect(toRepoPath(root, "/other/a.md", root)).toBe("/other/a.md");
+  });
+
+  test("does not treat a sibling directory of the root as inside it", () => {
+    expect(toRepoPath(root, "/repo-other/a.md", root)).toBe("/repo-other/a.md");
+  });
+});
+
+describe("parseArgs", () => {
+  test("returns every argument as a path when there is no flag", () => {
+    expect(parseArgs(["a.md", "b.md"])).toEqual({
+      linksOnly: false,
+      paths: ["a.md", "b.md"],
+    });
+  });
+
+  test("reads --links-only as a flag and keeps the other arguments as paths", () => {
+    expect(parseArgs(["a.md", "--links-only", "b.md"])).toEqual({
+      linksOnly: true,
+      paths: ["a.md", "b.md"],
+    });
+  });
+
+  test("returns no path and no flag for no arguments", () => {
+    expect(parseArgs([])).toEqual({ linksOnly: false, paths: [] });
+  });
+});
+
+describe("createDocReader", () => {
+  function withDir(run: (dir: string) => void): void {
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), "lint-docs-reader-"));
+    try {
+      run(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("reads a file relative to the root", () => {
+    withDir((dir) => {
+      writeFileSync(join(dir, "a.md"), "# A\n");
+
+      expect(createDocReader(dir)("a.md")).toBe("# A\n");
+    });
+  });
+
+  test("returns undefined for a path that does not exist", () => {
+    withDir((dir) => {
+      expect(createDocReader(dir)("none.md")).toBeUndefined();
+    });
+  });
+
+  test("throws for a directory, as reading a document that is not a file fails", () => {
+    withDir((dir) => {
+      mkdirSync(join(dir, "docs.md"));
+
+      expect(() => createDocReader(dir)("docs.md")).toThrow();
+    });
+  });
+
+  test("returns the body of the first read when the file changes afterwards", () => {
+    withDir((dir) => {
+      const read = createDocReader(dir);
+      writeFileSync(join(dir, "a.md"), "first\n");
+      read("a.md");
+      writeFileSync(join(dir, "a.md"), "second\n");
+
+      expect(read("a.md")).toBe("first\n");
+    });
+  });
+});
+
+describe("lintAllDocLinks", () => {
+  /** `docs`の本文を返す`readDoc`。 */
+  function readerOf(
+    docs: Readonly<Record<string, string>>,
+  ): (path: string) => string | undefined {
+    return (path) => docs[path];
+  }
+
+  test("checks the links of every target document", () => {
+    const docs = {
+      "README.md": "[a](docs/none.md)\n",
+      "docs/a.md": "[b](b.md#無い)\n",
+      "docs/b.md": "# B\n",
+    };
+
+    expect(lintAllDocLinks(Object.keys(docs), readerOf(docs))).toEqual([
+      "README.md:1: [link] file not found: docs/none.md",
+      "docs/a.md:1: [link] anchor not found: b.md#無い",
+    ]);
+  });
+
+  test("does not check the links inside a document that is not a target", () => {
+    const docs = { "AGENTS.wmill.md": "[a](none.md)\n" };
+
+    expect(lintAllDocLinks(Object.keys(docs), readerOf(docs))).toEqual([]);
+  });
+
+  test("checks an anchor in a Markdown file that is not a target", () => {
+    const docs = {
+      "AGENTS.md": "[w](AGENTS.wmill.md#無い)\n",
+      "AGENTS.wmill.md": "# Windmill\n",
+    };
+
+    expect(lintAllDocLinks(Object.keys(docs), readerOf(docs))).toEqual([
+      "AGENTS.md:1: [link] anchor not found: AGENTS.wmill.md#無い",
+    ]);
+  });
+
+  test("reports a link to a file that is not in the file list", () => {
+    const docs = { "README.md": "[a](docs/ignored.md)\n" };
+
+    expect(
+      lintAllDocLinks(
+        Object.keys(docs),
+        readerOf({ ...docs, "docs/ignored.md": "# i\n" }),
+      ),
+    ).toEqual(["README.md:1: [link] file not found: docs/ignored.md"]);
+  });
+
+  test("reports a link whose path differs from a listed file only in case", () => {
+    const docs = { "README.md": "[a](Docs/a.md)\n", "docs/a.md": "# A\n" };
+
+    expect(lintAllDocLinks(Object.keys(docs), readerOf(docs))).toEqual([
+      "README.md:1: [link] file not found: Docs/a.md",
+    ]);
+  });
+
+  test("reads each document once even when other documents link to it", () => {
+    const docs: Readonly<Record<string, string>> = {
+      "README.md": "[a](docs/a.md)\n",
+      "docs/a.md": "[r](../README.md#readme)\n\n# A\n",
+    };
+    const reads: string[] = [];
+
+    lintAllDocLinks(Object.keys(docs), (path) => {
+      reads.push(path);
+      return docs[path];
+    });
+
+    expect(reads.sort()).toEqual(["README.md", "docs/a.md"]);
+  });
+
+  test("skips a listed document that cannot be read", () => {
+    expect(lintAllDocLinks(["gone.md"], () => undefined)).toEqual([]);
+  });
+});
+
+describe("guardCheck", () => {
+  test("returns the problems of a check that finishes", () => {
+    expect(guardCheck("links", () => ["a.md:1: [link] x"])).toEqual([
+      "a.md:1: [link] x",
+    ]);
+  });
+
+  test("turns an exception into one problem that names the check", () => {
+    expect(
+      guardCheck("links", () => {
+        throw new Error("boom");
+      }),
+    ).toEqual(["lint-docs: links failed: boom"]);
+  });
+});
+
+type Git = (...args: string[]) => void;
+
+/** コミット済みの`tracked.md`と、無視する`*.log`を持つ一時のリポジトリを作る。 */
+function createRepo(): { dir: string; git: Git; remove(): void } {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "lint-docs-files-"));
+  const git = (...args: string[]): void => {
+    const result = Bun.spawnSync(["git", ...args], {
+      cwd: dir,
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: dir,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_AUTHOR_NAME: "test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
+    }
+  };
+  const remove = (): void => {
+    rmSync(dir, { recursive: true, force: true });
+  };
+  try {
+    git("init", "-q");
+    writeFileSync(join(dir, ".gitignore"), "*.log\n");
+    writeFileSync(join(dir, "tracked.md"), "# T\n");
+    git("add", ".gitignore", "tracked.md");
+    git("commit", "-q", "--no-gpg-sign", "-m", "base");
+  } catch (error) {
+    remove();
+    throw error;
+  }
+  return { dir, git, remove };
+}
+
+function withRepo(run: (dir: string, git: Git) => void): void {
+  const repo = createRepo();
+  try {
+    run(repo.dir, repo.git);
+  } finally {
+    repo.remove();
+  }
+}
+
+async function withRepoAsync(
+  run: (dir: string, git: Git) => Promise<void>,
+): Promise<void> {
+  const repo = createRepo();
+  try {
+    await run(repo.dir, repo.git);
+  } finally {
+    repo.remove();
+  }
+}
+
+describe("listDocCandidates", () => {
+  test("lists a committed markdown file", () => {
+    withRepo((dir) => {
+      expect(listDocCandidates(dir)).toContain("tracked.md");
+    });
+  });
+
+  test("lists an untracked markdown file that is not ignored", () => {
+    withRepo((dir) => {
+      writeFileSync(join(dir, "draft.md"), "# D\n");
+
+      expect(listDocCandidates(dir)).toContain("draft.md");
+    });
+  });
+
+  test("does not list an ignored markdown file", () => {
+    withRepo((dir) => {
+      writeFileSync(join(dir, ".gitignore"), "*.log\nignored.md\n");
+      writeFileSync(join(dir, "ignored.md"), "# I\n");
+
+      expect(listDocCandidates(dir)).not.toContain("ignored.md");
+    });
+  });
+
+  test("does not list a file that is not markdown", () => {
+    withRepo((dir) => {
+      writeFileSync(join(dir, "note.txt"), "x\n");
+
+      expect(listDocCandidates(dir)).not.toContain("note.txt");
+    });
+  });
+});
+
+describe("listRepoFiles", () => {
+  test("lists the files of the repository relative to the root", () => {
+    const files = listRepoFiles(join(import.meta.dir, "..", ".."));
+
+    expect(files).toContain("scripts/lint-docs.ts");
+  });
+
+  test("lists a committed file", () => {
+    withRepo((dir) => {
+      expect(listRepoFiles(dir)).toContain("tracked.md");
+    });
+  });
+
+  test("lists a file that is only in the index", () => {
+    withRepo((dir, git) => {
+      writeFileSync(join(dir, "staged.md"), "# S\n");
+      git("add", "staged.md");
+
+      expect(listRepoFiles(dir)).toContain("staged.md");
+    });
+  });
+
+  test("does not list an untracked file", () => {
+    withRepo((dir) => {
+      writeFileSync(join(dir, "draft.md"), "# D\n");
+
+      expect(listRepoFiles(dir)).not.toContain("draft.md");
+    });
+  });
+
+  test("does not list an ignored file", () => {
+    withRepo((dir) => {
+      writeFileSync(join(dir, "debug.log"), "x\n");
+
+      expect(listRepoFiles(dir)).not.toContain("debug.log");
+    });
+  });
+
+  test("does not list a tracked file that is deleted from the working tree", () => {
+    withRepo((dir) => {
+      rmSync(join(dir, "tracked.md"));
+
+      expect(listRepoFiles(dir)).not.toContain("tracked.md");
+    });
+  });
+});
+
+describe("main with --links-only", () => {
+  /** `root`で`--links-only`を実行し、終了コードと報告の行を返す。 */
+  async function runLinksOnly(
+    root: string,
+  ): Promise<{ exitCode: number; output: string[] }> {
+    const output: string[] = [];
+    const exitCode = await main(root, ["--links-only"], root, (line) => {
+      output.push(line);
+    });
+    return { exitCode, output };
+  }
+
+  test("exits with 0 and prints nothing when every link resolves", async () => {
+    await withRepoAsync(async (dir, git) => {
+      writeFileSync(join(dir, "good.md"), "[t](tracked.md)\n");
+      git("add", "good.md");
+
+      expect(await runLinksOnly(dir)).toEqual({ exitCode: 0, output: [] });
+    });
+  });
+
+  test("exits with 1 and prints the problem when a link is broken", async () => {
+    await withRepoAsync(async (dir, git) => {
+      writeFileSync(join(dir, "broken.md"), "[m](missing.md)\n");
+      git("add", "broken.md");
+
+      expect(await runLinksOnly(dir)).toEqual({
+        exitCode: 1,
+        output: ["broken.md:1: [link] file not found: missing.md"],
+      });
+    });
+  });
+
+  test("does not check an untracked draft", async () => {
+    await withRepoAsync(async (dir) => {
+      writeFileSync(join(dir, "draft.md"), "[m](missing.md)\n");
+
+      expect(await runLinksOnly(dir)).toEqual({ exitCode: 0, output: [] });
+    });
   });
 });
 
@@ -352,7 +740,7 @@ describe("lintWithTools with the real textlint", () => {
       }
       const output: string[] = [];
       const deps: LintDeps = {
-        ...createProductionDeps(),
+        ...createProductionDeps(join(import.meta.dir, "..", "..")),
         cpuCount: 4,
         write: (text) => {
           output.push(text);

@@ -1086,6 +1086,7 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
+- ホストの実行役の導入スクリプト`scripts/host-install.sh`。保護パスの一覧には載るが、ファイルはまだ無い
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 - 調査(`investigate`)の、新規投入の入口、Consoleの投入フォームと表示と取り消し、置き場の定期的な掃除、孤児の扱いの拡張、隔離の測定の定期実行。Windmillから直接実行するフロー`f/factory/investigate`だけがある([調査を実行する](operations.md#調査を実行する)、[調査の隔離](security.md#調査の隔離))
 

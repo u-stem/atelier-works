@@ -194,7 +194,7 @@ mise run instance:tags
 
 | フック | 実行するもの |
 | --- | --- |
-| pre-commit | `f/`の下をステージしたときは、先に`scripts/generate-metadata-staged.sh`を実行する。メタデータを作り直し、変わったlockとスキーマのファイルをステージする。続けて、biome、`as`の検出、`§`の検出、短い名前のリモートrefの検出、gitleaks、`wmill lint f`、文書の検査を並列に実行する |
+| pre-commit | `f/`の下をステージしたときは、先に`scripts/generate-metadata-staged.sh`を実行する。メタデータを作り直し、変わったlockとスキーマのファイルをステージする。続けて、biome、`as`の検出、`§`の検出、短い名前のリモートrefの検出、gitleaks、`wmill lint f`、文書の検査、文書の間のリンクの検査を並列に実行する。リンクの検査は、ステージしたファイルの種類を問わずに動く |
 | post-checkout | リンクされたgit worktreeでは、`scripts/link-worktree-wmill.sh`が`.wmill`をメイン作業ツリーの`.wmill`へのシンボリックリンクにする。メイン作業ツリーでは何もしない |
 | commit-msg | `scripts/check-commit-msg.sh`でコミットメッセージの規約を検査する。Claude Codeのセッション(`CLAUDECODE=1`)では、最後の段落にClaudeのトレーラーの行があるかも検査する |
 | pre-push | pushに`f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`の変更があるときだけ、`mise run metadata:check`で古いメタデータを見つけてpushを止める |
