@@ -901,22 +901,19 @@ export async function refreshActiveThenSteps(reads: {
 /**
  * 今のステップの取得の設定。
  * 実行中と待ちのタブを選んでいて、画面が操作されていて、読むflowがあるときだけ読む。
- * 一覧を取っている間は読まない。2つの取得をworkerの枠で重ねないためである。
- * 一覧が取り直されると読むジョブのキーが変わるので、ステップは一覧の後に取られる。
+ * 一覧の取得中かどうかは、`enabled`に入れない。
+ * `enabled`が切り替わるたびに、取り直しのタイマーが張り直され、間隔が延びるためである。
+ * 一覧の取得と重なることは受け入れる。待ちは最大でも詳細2件分で小さい。
  */
 export function activeStepsOptions(
   list: JobListView | undefined,
   selectedTab: JobsTabId,
   idle: boolean,
-  listFetching = false,
 ) {
   const ids = stepTargets(list?.jobs ?? []);
   return {
     ...activeStepsQueryOptions(ids),
-    enabled:
-      ids.length > 0 &&
-      !listFetching &&
-      activeStepsEnabled({ selectedTab, idle }),
+    enabled: ids.length > 0 && activeStepsEnabled({ selectedTab, idle }),
   };
 }
 
@@ -988,7 +985,6 @@ const NO_DETAILS: StepDetails = new Map();
 /**
  * 実行中のflowのルートのうち古い2件の、今のステップを読む。
  * 実行中と待ちのタブを選んでいて、画面が操作されているときだけ読み、文書が見えない間は止まる。
- * 一覧を取っている間は読まない。
  * 操作の有無は、一覧の取得と同じ値を画面から受ける。
  * 詳細が終了を返したジョブがあれば、購読のある一覧を1回だけ取り直す。
  * 同じ周期に複数が終わっても、まとめて1回にする。
@@ -996,12 +992,10 @@ const NO_DETAILS: StepDetails = new Map();
 export function useActiveJobSteps(
   list: JobListView | undefined,
   selectedTab: JobsTabId,
-  state: { readonly idle: boolean; readonly listFetching: boolean },
+  idle: boolean,
 ): ActiveJobStepsView {
   const client = useQueryClient();
-  const query = useQuery(
-    activeStepsOptions(list, selectedTab, state.idle, state.listFetching),
-  );
+  const query = useQuery(activeStepsOptions(list, selectedTab, idle));
   const details = query.data ?? NO_DETAILS;
 
   const watch = useMemo(() => createFinishWatcher(client), [client]);

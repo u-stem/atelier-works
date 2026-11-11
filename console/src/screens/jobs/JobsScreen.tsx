@@ -49,7 +49,7 @@ import { ScheduleList } from "./ScheduleList.tsx";
  * 集合は、ルートのジョブとして動くものだけである。フローのステップや、Consoleの呼び出しを選んでも、常に0件になるためである。
  * 履歴とスケジュールの一覧は自動では取り直さない。Console用workerの枠が1つで、一覧の取得が承認などの呼び出しを待たせるためである。
  * 実行中と待ちの一覧は、そのタブを選んでいて、画面が操作されているあいだだけ60秒ごとに取り直す。文書が見えない間は止まる。
- * 実行中のflowの行に添える今のステップも、同じ条件で30秒ごとに取り直す。一覧を取っている間は取らず、2つの取得を重ねない。
+ * 実行中のflowの行に添える今のステップも、同じ条件で30秒ごとに取り直す。一覧の取得とは独立に動き、重なることがある。
  * 取得は、タブを初めて開いたときに始める。見出しの更新ボタンは、今開いているタブの取得だけを取り直す。
  * 実行中と待ちの更新は、一覧を取ってから今のステップを取る。
  * スケジュールの凍結の突き合わせに使う保留と凍結の取得は、定期の取り直しをせず、そのタブの更新で取り直す。
@@ -77,10 +77,7 @@ export function JobsScreen() {
     },
     visited.has("history"),
   );
-  const steps = useActiveJobSteps(active.data, tab, {
-    idle,
-    listFetching: active.isFetching,
-  });
+  const steps = useActiveJobSteps(active.data, tab, idle);
   const schedules = useSchedules(visited.has("schedules"));
   const holds = useQuery({
     ...jobsHoldsQueryOptions(),
