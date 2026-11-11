@@ -10,7 +10,6 @@ import {
   fillDailyTotals,
   firstTryApprovalRate,
   formatHours,
-  formatIsoDate,
   formatMonthDay,
   formatPercent,
   formatUsd,
@@ -437,16 +436,6 @@ describe("formatMonthDay", () => {
 
   test("returns a value that is not a date as it is", () => {
     expect(formatMonthDay("not a date")).toBe("not a date");
-  });
-});
-
-describe("formatIsoDate", () => {
-  test("shows the year, month and day in Japan time", () => {
-    expect(formatIsoDate("2026-10-08T14:59:59.000Z")).toBe("2026-10-08");
-  });
-
-  test("moves an instant after Japan midnight to the next day", () => {
-    expect(formatIsoDate("2026-10-08T15:00:00.000Z")).toBe("2026-10-09");
   });
 });
 

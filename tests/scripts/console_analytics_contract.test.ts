@@ -23,8 +23,8 @@ function sqlReturning(rows: SqlRow[]): SqlClient {
 // 日本時間の0時で丸めたviewの値。UTCでは前日の15時になる。
 const DAY = new Date("2026-10-07T15:00:00.000Z");
 
-// 日をUTCの0時で丸めていた古いviewの値。
-const LEGACY_UTC_DAY = new Date("2026-10-08T00:00:00.000Z");
+// migrationの反映前のviewが返す値。日をUTCの0時で丸める。
+const UNMIGRATED_UTC_DAY = new Date("2026-10-08T00:00:00.000Z");
 
 // PostgreSQLのnumericとbigintは、文字列で返ることがある。
 const COST_ROW: SqlRow = {
@@ -114,9 +114,9 @@ describe("analytics contract between console_query and the console guards", () =
     );
   });
 
-  test("reads a day rounded at UTC midnight by the older view as the same date", async () => {
+  test("reads a day rounded at UTC midnight by the view before the migration as the same date", async () => {
     const rows = await delivered("agent_cost_daily", [
-      { ...COST_ROW, day: LEGACY_UTC_DAY },
+      { ...COST_ROW, day: UNMIGRATED_UTC_DAY },
     ]);
     expect(isAgentCostDailyRows(rows) ? dailyTotals(rows)[0]?.day : null).toBe(
       "2026-10-08",

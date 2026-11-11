@@ -20,7 +20,6 @@ import {
   dailyTotals,
   firstTryApprovalRate,
   formatHours,
-  formatIsoDate,
   formatPercent,
   formatUsd,
   hitsRowLimit,
@@ -104,7 +103,7 @@ function CostReport({
         rows={totals.map((total) => ({
           key: total.day,
           cells: [
-            formatIsoDate(total.day),
+            total.day,
             formatUsd(total.costUsd),
             formatCount(total.runCount),
           ],

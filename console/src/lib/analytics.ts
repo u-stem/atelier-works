@@ -7,6 +7,7 @@ import type {
   ApprovalStatsRow,
   LeadTimeRow,
 } from "../api/guards/analytics.ts";
+import { JST_OFFSET_MS } from "./jst.ts";
 import { SELECTED_STYLE } from "./selectedStyle.ts";
 
 /** 集計の期間(日)の選択肢。 */
@@ -46,14 +47,9 @@ export function hitsRowLimit(rowCount: number, limit: number): boolean {
   return rowCount >= limit;
 }
 
-const MS_PER_HOUR = 60 * 60 * 1000;
-
-/** 日本時間とUTCの差。日本時間は夏時間を持たないので、固定の値でよい。 */
-const JST_OFFSET_MS = 9 * MS_PER_HOUR;
-
 /**
  * 時刻の日本時間の日付(`YYYY-MM-DD`)。読めない値は元の文字列を返す。
- * 日本時間の0時の時刻と、古いviewが返したUTCの0時の時刻は、どちらも同じ日付になる。
+ * 日本時間の0時の時刻と、migrationの反映前のviewが返すUTCの0時の時刻は、どちらも同じ日付になる。
  */
 function dayKey(iso: string): string {
   const date = new Date(iso);
@@ -271,11 +267,6 @@ export function formatMonthDay(day: string): string {
     return day;
   }
   return `${date.getUTCMonth() + 1}/${date.getUTCDate()}`;
-}
-
-/** 表に出す「2026-10-08」の形(日本時間の日付)。日付として読めない値は、そのまま返す。 */
-export function formatIsoDate(iso: string): string {
-  return dayKey(iso);
 }
 
 export function formatUsd(value: number): string {
