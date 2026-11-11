@@ -2,6 +2,8 @@
 // 通らないと、Consoleは失敗の表示を描き、検査が本来の画面を見なくなる。
 
 import { describe, expect, test } from "bun:test";
+import { classifyRunResponse } from "../src/api/errors.ts";
+import { isResultUnknown } from "../src/api/executeWrite.ts";
 import { isApprovalDesignDocRows } from "../src/api/guards/approvalDesignDoc.ts";
 import { isDesignDocRows } from "../src/api/guards/design.ts";
 import { isHoldsSnapshot } from "../src/api/guards/holds.ts";
@@ -18,16 +20,31 @@ import { isConsoleSummary } from "../src/api/guards/summary.ts";
 import { isSystemStatus } from "../src/api/guards/systemStatus.ts";
 import { isWorkItemDetail } from "../src/api/guards/workItemDetail.ts";
 import {
+  isApprovalDecideResult,
+  isHoldPlaceResult,
+  isJobCancelResult,
+  isStopAllResult,
+} from "../src/api/guards/writeResults.ts";
+import {
   isConfigSnapshot,
   isJobDetail,
   isJobList,
   isSchedulesSnapshot,
 } from "../src/api/jobsQueries.ts";
+import { classifyDecisionRefusal } from "../src/lib/approvalRefusal.ts";
+import { canCancelJob } from "../src/lib/jobActions.ts";
 import {
   APPROVAL_DESIGN_DOC_NORMAL,
   APPROVAL_DESIGN_DOC_TRUNCATED_ITEM,
 } from "./fixtures.ts";
-import { type Mode, replyFor, scriptOfPath } from "./responses.ts";
+import {
+  type Mode,
+  type Reply,
+  replyFor,
+  scriptOfPath,
+  type WriteResult,
+  type WriteScript,
+} from "./responses.ts";
 
 const QUERY = "f/factory/steps/console_query";
 const JOBS = "f/factory/console_jobs";
@@ -173,6 +190,137 @@ describe("requests the checks do not expect", () => {
 
   test("a body that is not a record gets no reply", () => {
     expect(replyFor(QUERY, "summary", "normal")).toBeNull();
+  });
+});
+
+const APPROVAL = "f/factory/approval_decide";
+const CANCEL = "f/factory/console_job_cancel";
+const PLACE = "f/factory/console_hold_place";
+const STOP_ALL = "f/factory/console_stop_all";
+
+const APPROVE_ARGS = {
+  approval_request_id: 1,
+  decision: "approve",
+  reason: "",
+};
+const CANCEL_ARGS = { job_id: "0190a1b2-c3d4-7e5f-8a9b-000000000002" };
+const PLACE_ARGS = { kind: "merge", target: "o/r", minutes: 60, reason: "x" };
+const STOP_ALL_ARGS = { reason: "x" };
+
+/** 1つの書き込みを、選んだ結果で応答させる。 */
+function writeReplyOf(
+  script: WriteScript,
+  args: unknown,
+  result: WriteResult,
+): Reply | null {
+  return replyFor(script, args, "normal", { [script]: result });
+}
+
+/** 応答を、Consoleが`run_wait_result`の応答を読むのと同じ手順で分類する。 */
+function classified(reply: Reply | null) {
+  return classifyRunResponse(
+    reply?.status ?? 0,
+    JSON.stringify(reply?.body ?? null),
+  );
+}
+
+describe("write replies", () => {
+  test("a write script that the check did not choose gets no reply", () => {
+    expect(replyFor(STOP_ALL, {}, "normal", { [PLACE]: "success" })).toBeNull();
+  });
+
+  test.each([
+    [APPROVAL, APPROVE_ARGS, "success", isApprovalDecideResult],
+    [CANCEL, CANCEL_ARGS, "success", isJobCancelResult],
+    [CANCEL, CANCEL_ARGS, "refused", isJobCancelResult],
+    [PLACE, PLACE_ARGS, "success", isHoldPlaceResult],
+    [PLACE, PLACE_ARGS, "refused", isHoldPlaceResult],
+    [STOP_ALL, STOP_ALL_ARGS, "success", isStopAllResult],
+    [STOP_ALL, STOP_ALL_ARGS, "refused", isStopAllResult],
+  ] as const)(
+    "%s (%o) %s passes the guard of the console",
+    (script, args, result, guard) => {
+      const reply = writeReplyOf(script, args, result);
+
+      expect(reply?.status === 200 && guard(reply.body)).toBe(true);
+    },
+  );
+
+  test("the approval success records the decision that the request sent", () => {
+    const reply = writeReplyOf(
+      APPROVAL,
+      { ...APPROVE_ARGS, decision: "reject" },
+      "success",
+    );
+
+    expect(isRecord(reply?.body) ? reply.body.status : undefined).toBe(
+      "rejected",
+    );
+  });
+
+  test("a refused approval is a failed job that the console reads as a recorded decision", () => {
+    const run = classified(writeReplyOf(APPROVAL, APPROVE_ARGS, "refused"));
+
+    expect(run.ok ? undefined : classifyDecisionRefusal(run.error)?.kind).toBe(
+      "conflict",
+    );
+  });
+
+  test("a server error of an approval is not read as a refusal", () => {
+    const run = classified(
+      writeReplyOf(APPROVAL, APPROVE_ARGS, "server_error"),
+    );
+
+    expect(run.ok ? undefined : classifyDecisionRefusal(run.error)).toBeNull();
+  });
+
+  test.each([
+    [APPROVAL, APPROVE_ARGS],
+    [CANCEL, CANCEL_ARGS],
+    [PLACE, PLACE_ARGS],
+    [STOP_ALL, STOP_ALL_ARGS],
+  ] as const)("a server error of %s is a 500", (script, args) => {
+    expect(writeReplyOf(script, args, "server_error")?.status).toBe(500);
+  });
+
+  test("a server error is a result the console cannot know", () => {
+    const run = classified(
+      writeReplyOf(STOP_ALL, STOP_ALL_ARGS, "server_error"),
+    );
+
+    expect(run.ok ? undefined : isResultUnknown(run.error)).toBe(true);
+  });
+
+  test("the hold place success echoes the kind and the target", () => {
+    const reply = writeReplyOf(PLACE, PLACE_ARGS, "success");
+
+    expect(
+      isRecord(reply?.body)
+        ? { kind: reply.body.kind, target: reply.body.target }
+        : undefined,
+    ).toEqual({ kind: "merge", target: "o/r" });
+  });
+});
+
+describe("the job detail", () => {
+  function detailOf(jobId: string): unknown {
+    return replyFor(JOBS, { view: "detail", job_id: jobId }, "normal")?.body;
+  }
+
+  test("returns the running flow job for its id", () => {
+    const body = detailOf(CANCEL_ARGS.job_id);
+
+    expect(isRecord(body) && isRecord(body.job) ? body.job.id : undefined).toBe(
+      CANCEL_ARGS.job_id,
+    );
+  });
+
+  test("the running flow job can be canceled", () => {
+    const body = detailOf(CANCEL_ARGS.job_id);
+
+    expect(isJobDetail(body) && body.found && canCancelJob(body.job)).toBe(
+      true,
+    );
   });
 });
 

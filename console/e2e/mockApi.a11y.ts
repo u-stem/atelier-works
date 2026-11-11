@@ -24,6 +24,28 @@ async function openAndFetch(
   return { outcome, problems: mock.problems };
 }
 
+/** 同じオリジンでページを開き、scriptの実行の経路へ、書き込みと同じPOSTを送る。 */
+async function openAndPost(
+  page: Page,
+  script: string,
+): Promise<readonly string[]> {
+  const mock = await installMockApi(page, ORIGIN, "normal");
+  await page.goto("/console/status.json");
+  await page.evaluate(
+    (url) =>
+      fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: "x" }),
+      }).then(
+        () => "reached",
+        () => "blocked",
+      ),
+    `/api/w/factory/jobs/run_wait_result/p/${script}`,
+  );
+  return mock.problems;
+}
+
 test.describe("the mock API", () => {
   test("blocks a same-origin request outside /console/", async ({ page }) => {
     const { outcome } = await openAndFetch(page, "/outside/path");
@@ -72,5 +94,13 @@ test.describe("the mock API", () => {
     expect(problems).toEqual([
       "unexpected API request: GET /api/w/factory/jobs/run_wait_result/p/f/factory/unknown_script null",
     ]);
+  });
+
+  test("records a write script that the check did not choose", async ({
+    page,
+  }) => {
+    const problems = await openAndPost(page, "f/factory/console_stop_all");
+
+    expect(problems).toHaveLength(1);
   });
 });

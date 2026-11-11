@@ -38,6 +38,17 @@ export const JOB: JobSummaryView = {
   is_flow_step: false,
 };
 
+/** 中止できるジョブ。作業項目のフローの根で、実行中である。 */
+export const RUNNING_FLOW_JOB: JobSummaryView = {
+  ...JOB,
+  id: "0190a1b2-c3d4-7e5f-8a9b-000000000002",
+  state: "running",
+  script_path: "f/factory/implement",
+  job_kind: "flow",
+  completed_at: null,
+  duration_ms: null,
+};
+
 export function jobList(
   view: "active" | "history",
   jobs: readonly JobSummaryView[],

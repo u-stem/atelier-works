@@ -10,8 +10,8 @@ const inCi = process.env.CI !== undefined && process.env.CI !== "";
 
 export default defineConfig({
   testDir: "e2e",
-  // `bun test`が拾わないよう、検査の名前は`*.a11y.ts`にする。
-  testMatch: "**/*.a11y.ts",
+  // 検査の名前は、`bun test`が拾わない名前(`*.a11y.ts`と`*.e2e.ts`)にする。
+  testMatch: ["**/*.a11y.ts", "**/*.e2e.ts"],
   fullyParallel: true,
   // 検査はaxeの解析でCPUを使うので、CIでは論理コアの数だけ並列にする。
   // ローカルはPlaywrightの既定(論理コアの半分)のままにする。

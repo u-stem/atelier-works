@@ -4,7 +4,7 @@ import base, { expect, type Page } from "@playwright/test";
 import { THEME_STORAGE_KEY } from "../src/lib/theme.ts";
 import { installMockApi, type MockApi } from "./mockApi.ts";
 import { ORIGIN } from "./origin.ts";
-import type { Mode } from "./responses.ts";
+import type { Mode, WriteReplies } from "./responses.ts";
 
 export type Theme = "light" | "dark";
 export type { Mode };
@@ -12,6 +12,8 @@ export type { Mode };
 type Options = {
   mode: Mode;
   theme: Theme;
+  /** 応答させる書き込みのscriptと結果。既定は空で、書き込みの呼び出しは検査を失敗にする。 */
+  writes: WriteReplies;
 };
 
 type Fixtures = {
@@ -22,15 +24,16 @@ type Fixtures = {
 export const test = base.extend<Options & Fixtures>({
   mode: ["normal", { option: true }],
   theme: ["light", { option: true }],
+  writes: [{}, { option: true }],
   mock: [
-    async ({ page, mode, theme }, use) => {
+    async ({ page, mode, theme, writes }, use) => {
       await page.addInitScript(
         ({ key, value }) => {
           window.localStorage.setItem(key, value);
         },
         { key: THEME_STORAGE_KEY, value: theme },
       );
-      const mock = await installMockApi(page, ORIGIN, mode);
+      const mock = await installMockApi(page, ORIGIN, mode, writes);
       await use(mock);
       expect(mock.problems).toEqual([]);
     },
