@@ -30,10 +30,13 @@ export function InboxDetail({
   item,
   selection,
   now,
+  failureIds,
 }: {
   item: InboxItem | null;
   selection: InboxSelection | null;
   now: number;
+  /** 一覧にある失敗の作業項目のID。通知の詳細が、名指しされた作業項目の失敗へ移るボタンを出すかを決める。 */
+  failureIds: ReadonlySet<number>;
 }) {
   if (item === null) {
     if (selection?.type === "notice") {
@@ -42,6 +45,7 @@ export function InboxDetail({
           noticeId={selection.id}
           now={now}
           missing={missingSelectionMessage(selection)}
+          failureIds={failureIds}
         />
       );
     }
@@ -66,6 +70,8 @@ export function InboxDetail({
         />
       );
     case "notice":
-      return <NoticeDetail notice={item.notice} now={now} />;
+      return (
+        <NoticeDetail notice={item.notice} now={now} failureIds={failureIds} />
+      );
   }
 }

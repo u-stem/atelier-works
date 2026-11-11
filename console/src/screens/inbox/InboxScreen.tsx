@@ -200,6 +200,16 @@ export function InboxScreen() {
     () => (data === undefined ? [] : sortInboxItems(buildInboxItems(data))),
     [data],
   );
+  // 通知の詳細が、名指しされた作業項目の失敗へ移るボタンを出すかを決めるために、一覧にある失敗の作業項目を集める。
+  const failureIds = useMemo(
+    () =>
+      new Set(
+        items.flatMap((item) =>
+          item.type === "failure" ? [item.failure.work_item_id] : [],
+        ),
+      ),
+    [items],
+  );
   const activeChip = effectiveChip(items, chip);
   if (activeChip !== chip) {
     // 選んだ種類の項目がなくなったら、状態も「すべて」に揃える。
@@ -341,6 +351,7 @@ export function InboxScreen() {
               item={findInboxItem(items, selection)}
               selection={selection}
               now={now}
+              failureIds={failureIds}
             />
           </div>
         </section>
