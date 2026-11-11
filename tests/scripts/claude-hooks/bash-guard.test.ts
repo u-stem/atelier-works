@@ -5807,3 +5807,68 @@ describeForCallers(
     });
   },
 );
+
+// 他の所有者のリポジトリの設定を有効にするキーは、値が実行されなくても、委ねない形の一覧に入れない。
+// 語の値は、空白を含むときだけコマンドとして読む。設定のキーは、サブセクションの区切りの字も含めて読む。
+describeForCallers(
+  "bash-guard denies holds or freezes written through setting keys and values that the value rule reads",
+  (subagent) => {
+    test.each([
+      [
+        "a key that trusts a repository of another owner",
+        "git -c safe.directory=/tmp/r log 'bun scripts/hold.ts release 1'",
+      ],
+      [
+        "a launcher behind a key with a slash in its subsection",
+        String.raw`git -c 'diff.a/b.command=bun -e "import(\"./scripts/hold.ts\")"' diff`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard denies the stop-all through setting keys and values that the value rule reads",
+  (subagent) => {
+    test.each([
+      [
+        "a key that trusts a repository of another owner",
+        "git -c safe.directory=/tmp/r log -- scripts/stop_all.ts",
+      ],
+      [
+        "a key with a slash in its subsection behind a prefix",
+        "script -q /dev/null git -c 'credential.https://example.com.helper=!mise run stop' fetch",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 値の中の値を読む入れ子は、深さの上限で止まり、字面の判定に倒れる。入力の大きさに比例する作業で足りるので、実時間は測らない。
+describeForCallers(
+  "bash-guard finishes a value nested in many equals signs with the wording rule",
+  (subagent) => {
+    test("denies the wording of the stop-all", async () => {
+      expect(
+        await decide(`./tool '${"-a=".repeat(50000)}mise run stop'`, {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows one-word values that the value rule does not read",
+  (subagent) => {
+    test.each([
+      "caffeinate bun test --reporter=watch",
+      "git clone --branch=watch https://example.com/r.git",
+      "git -c core.pager=cat log --output=scripts/hold.ts",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
