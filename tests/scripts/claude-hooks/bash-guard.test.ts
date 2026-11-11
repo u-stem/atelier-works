@@ -5618,3 +5618,176 @@ describeForCallers(
     });
   },
 );
+
+// gitの副コマンドとグローバルオプションは、委ねないと分かっている閉じた一覧だけを通し、一覧の外は実行を委ねる形として扱う。
+// オプションは、省略形とまとめ書きを含めて、委ねる側に倒して見る。
+describeForCallers(
+  "bash-guard denies holds or freezes written through git and gh forms outside the closed lists",
+  (subagent) => {
+    test.each([
+      [
+        "a subcommand that passes its arguments to git in other repositories",
+        "git for-each-repo --config=maintenance.repo -- bisect run bun scripts/hold.ts release 1",
+      ],
+      [
+        "a subcommand outside the list",
+        "git daemon --access-hook='bun scripts/freeze.ts release 1' --base-path=.",
+      ],
+      [
+        "a delegating form behind a global option outside the list",
+        "git --attr-source HEAD rebase -x 'bun scripts/hold.ts release 1' origin/main",
+      ],
+      [
+        "an abbreviated send-side program of a fetch",
+        "git fetch --upl='bun scripts/hold.ts release 1' origin",
+      ],
+      [
+        "an abbreviated run option of an archive",
+        "git archive --exe='bun scripts/freeze.ts release 1' --remote=x HEAD",
+      ],
+      [
+        "an abbreviated pager option of a grep",
+        "git grep --ope='bun scripts/hold.ts release 1' x",
+      ],
+      [
+        "a bundle of short grep options",
+        "git grep -nO'bun scripts/freeze.ts release 1' x",
+      ],
+      [
+        "a gh setting written with a valued flag before the action",
+        "gh config -h github.com set pager 'bun scripts/hold.ts release 1'",
+      ],
+      [
+        "a gh extension under its other name",
+        "gh extensions exec x bun scripts/freeze.ts release 1",
+      ],
+      [
+        "an abbreviated pager option of a search tool",
+        "ag --pag='bun scripts/hold.ts release 1' x",
+      ],
+      [
+        "an initial command inside a bundle of pager options",
+        "less -N+'!bun scripts/freeze.ts reset' README.md",
+      ],
+      [
+        "an inert setting next to a setting outside the list",
+        "git -c user.name=x -c core.pager='bun scripts/hold.ts release 1' log",
+      ],
+      [
+        "an upper-case setting key",
+        "git -c CORE.PAGER='bun scripts/hold.ts release 1' log",
+      ],
+      [
+        "a setting from the environment",
+        "git --config-env=core.pager=X log 'bun scripts/freeze.ts release 1'",
+      ],
+      [
+        "a setting behind a directory option",
+        "git -C sub -c core.pager='bun scripts/hold.ts release 1' log",
+      ],
+      [
+        "a delegating subcommand behind a repository option and an inert setting",
+        "git --git-dir=.git -c user.name=x bisect run bun scripts/hold.ts release 1",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard denies the stop-all through git and gh forms outside the closed lists",
+  (subagent) => {
+    test.each([
+      [
+        "a subcommand that passes its arguments to git in other repositories",
+        "git for-each-repo --config=maintenance.repo -- bisect run mise run stop",
+      ],
+      [
+        "a subcommand outside the list",
+        "git daemon --access-hook='mise run stop' --base-path=.",
+      ],
+      [
+        "a delegating form behind a global option outside the list",
+        "git --attr-source HEAD bisect run mise run stop:release",
+      ],
+      [
+        "an abbreviated send-side program of a fetch",
+        "git fetch --upl='mise run stop' origin",
+      ],
+      [
+        "an abbreviated run option of an archive",
+        "git archive --exe='bun scripts/stop_all.ts' --remote=x HEAD",
+      ],
+      [
+        "an abbreviated pager option of a grep",
+        "git grep --ope='mise run stop:restore' x",
+      ],
+      ["a bundle of short grep options", "git grep -nO'mise run stop' x"],
+      [
+        "a gh setting written with a valued flag before the action",
+        "gh config -h github.com set browser 'mise run stop'",
+      ],
+      [
+        "a gh extension under its other name",
+        "gh extensions exec x mise run stop",
+      ],
+      [
+        "an abbreviated pager option of a search tool",
+        "ag --page='mise run stop' x",
+      ],
+      [
+        "an initial command inside a bundle of pager options",
+        "less -N+'!mise run stop' README.md",
+      ],
+      [
+        "a setting from the environment",
+        "git --config-env=core.pager=X log -- scripts/stop_all.ts",
+      ],
+      [
+        "a delegating subcommand behind a directory option and an inert setting",
+        "git -C sub -c user.name=x bisect run mise run stop",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 委ねる形の判定は、Consoleのscriptの判定も同じ関数で見る。
+describe("bash-guard denies the Console release scripts named through git and gh forms outside the closed lists", () => {
+  const COMMANDS = [
+    "git config core.pager 'less f/factory/hold_release.ts'",
+    "gh config -h github.com set pager 'less f/factory/freeze_release.ts'",
+    "ag --pag less f/factory/hold_release.ts",
+    "less -N+G f/factory/freeze_release.ts",
+    "git -c user.name=x for-each-repo --config=maintenance.repo -- log -- f/factory/hold_release.ts",
+  ];
+
+  test.each(COMMANDS)("denies %s in the main session", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each(COMMANDS)("denies %s in a subagent", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describeForCallers(
+  "bash-guard allows git and gh forms inside the closed lists",
+  (subagent) => {
+    test.each([
+      "git -C sub log -p",
+      "git --git-dir=.git status",
+      "git --no-pager log -p -- scripts/hold.ts",
+      "git --no-pager show HEAD:scripts/stop_all.ts",
+      "git fetch --prune origin",
+      "git -c user.name=x log -- f/factory/hold_release.ts",
+      "git log -p --exclude=x",
+      "less +G README.md",
+      "gh pr create --title x --body y",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
