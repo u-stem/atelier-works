@@ -5895,3 +5895,48 @@ describeForCallers(
     });
   },
 );
+
+// ghの語に実行時に決まる語があっても、最初の語が読み取りと日常の操作のグループで、設定する語も取り込む語も無ければ、委ねる形にしない。
+describeForCallers(
+  "bash-guard allows gh reads and daily operations with words decided at run time",
+  (subagent) => {
+    test.each([
+      "for n in 1 2; do gh pr view $n --json labels; done",
+      "gh pr view $n -R o/r --json state",
+      `gh api "repos/o/r/commits/$SHA/check-runs?per_page=100" --jq '.x'`,
+      String.raw`gh api graphql -f query="query { repository(owner: \"$(gh repo view --json owner --jq .owner.login)\") { id } }"`,
+      `gh pr view 537 --repo "$(gh pr view 537 --json url --jq .url)" --json statusCheckRollup`,
+      "gh issue view $n --json title,body",
+      "gh pr checks $n",
+      "for n in 1 2; do gh pr comment $n --body 'fix: hold release の判定'; done",
+      "gh pr comment $n -R o/r --body 'fix: hold release の判定'",
+      `gh api "repos/o/r/contents/scripts/stop_all.ts?ref=$SHA" --jq .sha`,
+      `gh api graphql -f query="$Q" -F path=scripts/stop_all.ts`,
+      `gh pr comment 537 --repo "$(gh repo view --json url --jq .url)" --body 'fix: hold release の判定'`,
+      "gh issue comment $n --body 'feat: freeze release を足す'",
+      `gh pr create --title 'feat: mise run stop を足す' --body "$(cat body.md)"`,
+      "gh search code scripts/hold.ts --repo $R",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// グループが実行時に決まる語か、値を取るフラグの値で位置がずれて本当のグループが実行時に決まる語になる形は、設定する語があれば委ねる形のままにする。
+describeForCallers(
+  "bash-guard denies holds or freezes written through a gh group decided at run time",
+  (subagent) => {
+    test.each([
+      [
+        "a group decided at run time",
+        "gh $g set pager 'bun scripts/hold.ts release 1'",
+      ],
+      [
+        "a group shifted by the value of a valued flag",
+        "gh -R pr $g set pager 'bun scripts/freeze.ts release 1'",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
