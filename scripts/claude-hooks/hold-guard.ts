@@ -150,6 +150,7 @@
 // - 置換のオプション、GNUの`-e`と`-l`、知らないオプションを付けた`xargs`と、`xargs`の後ろに前置きが続く形。
 // Bashとdockerを持つ主体は、psqlで保留を直接書ける。ここで止めるのは、誤操作と、拒否を知らない呼び出しである。
 
+import { posix } from "node:path";
 import { CONSOLE_WRITE_SCRIPTS } from "./console-scripts.ts";
 import {
   baseName,
@@ -862,8 +863,13 @@ const STDIN_OPERANDS: ReadonlySet<string> = new Set([
   "/proc/self/fd/0",
 ]);
 
+/** 標準入力のオペランドの綴りを、重ねたスラッシュ、`/./`、`/../`をまとめた形にする。`/`で始まらない語は変えない。 */
+function stdinOperandForm(text: string): string {
+  return text.startsWith("/") ? posix.normalize(text) : text;
+}
+
 function readsCodeFromStdin(args: readonly Word[]): boolean {
-  return args.some((word) => STDIN_OPERANDS.has(word.text));
+  return args.some((word) => STDIN_OPERANDS.has(stdinOperandForm(word.text)));
 }
 
 /** パイプの前に置いてよい、中身を語から読めるプログラム。 */
@@ -916,7 +922,9 @@ function stdinCodeFinding(
     }
   }
   if (literal.some((text) => FREEZE_MENTION.test(text))) {
-    const dash = args.findIndex((word) => STDIN_OPERANDS.has(word.text));
+    const dash = args.findIndex((word) =>
+      STDIN_OPERANDS.has(stdinOperandForm(word.text)),
+    );
     return freezeSubcommandFinding(args.slice(dash + 1));
   }
   return null;
