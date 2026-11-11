@@ -2680,3 +2680,61 @@ describe("a prefix before an array keeps the glob group rejection", () => {
     expect(result.ok ? "" : result.error).toContain("may start a glob group");
   });
 });
+
+describe("a bracket opened inside a word must close in the same word", () => {
+  test.each([
+    ["a space and a comment start", "a[ # ]=1; echo x"],
+    ["no equals sign", "a[ # ]; echo x"],
+    [
+      "a nested bracket that the outer one does not close",
+      "a[b[1] # ]=1; echo x",
+    ],
+    ["a here-document operator", "a[ <<EOF ]=1\nbody\nEOF\n"],
+    ["a newline", "a[\n]=1; echo x"],
+    ["a semicolon", "a[;]=1; echo x"],
+    ["only an escaped closing bracket", "a[ \\]=1; echo x"],
+    ["only a quoted closing bracket", 'a[ "]"=1; echo x'],
+    ["a line continuation before the bracket", "a\\\n[ # ]=1; echo x"],
+    ["a position behind an assignment", "b=1 a[ # ]=1; echo x"],
+    ["a position behind a negation", "! a[ # ]=1; echo x"],
+    ["a position behind an and-list", "true && a[ # ]=1; echo x"],
+    ["a subshell", "(a[ # ]=1; echo x)"],
+    ["a brace group", "{ a[ # ]=1; echo x; }"],
+    ["a command substitution", "echo $(a[ # ]=1; echo x)"],
+    ["a backquote", "echo `a[ # ]=1; echo x`"],
+    ["a shell command string", "sh -c 'a[ # ]=1; echo x'"],
+    ["a second bracket after a closed one", "a[1]b[ # ]"],
+    ["an argument position", "echo a[ # ]"],
+    ["a subscript with spaces", "arr[i + 1]=x"],
+  ])("rejects %s", (_form, line) => {
+    expect(parses(line)).toBe(false);
+  });
+
+  test.each([
+    ["a closed subscript", "a[1]=x"],
+    ["a variable subscript", "a[$i]=x"],
+    ["a length subscript", `a[${OPEN}#a[@]}]=x`],
+    ["an arithmetic subscript", "a[$((i+1))]=x"],
+    ["a quoted subscript", 'a["key with space"]=x'],
+    ["a substitution subscript", "a[$(echo 1)]=x"],
+    ["the test command", "[ -f x ]"],
+    ["the test command in an and-list", '[ "$a" = b ] && echo y'],
+    ["a conditional expression", "[[ -f x ]]"],
+    ["a bracket glob at the start", "ls [ab]*"],
+    ["a bracket glob in the middle", "ls foo[ab]*"],
+    ["a character class glob", "ls [[:alpha:]]*"],
+    ["a character class glob behind a prefix", "ls x[[:alpha:]]"],
+    ["a closing bracket as the first member", "ls x[]]"],
+    ["brackets in double quotes", 'echo "a[ # ]"'],
+    ["brackets in single quotes", "echo 'a[ x'"],
+    ["a jq filter", "jq '.a[ 0 ]'"],
+    ["a spaced subscript in an arithmetic command", "(( a[ 1 ] ))"],
+    ["a spaced subscript in an arithmetic expansion", "echo $(( a[i + 1] ))"],
+  ])("accepts %s", (_form, line) => {
+    expect(parses(line)).toBe(true);
+  });
+
+  test("reads a comment behind a closed word as a comment", () => {
+    expect(commandTexts("a[1]=x # note")).toEqual([["a[1]=x"]]);
+  });
+});
