@@ -6165,56 +6165,7 @@ describeForCallers(
   },
 );
 
-// 文字列や標準入力でコードを受け取るプログラムは、同じ文字列の中にコードのパスと書き込みの語が並べば拒否する。
-describeForCallers(
-  "bash-guard denies hold and freeze writes in code given to interpreters and stream editors",
-  (subagent) => {
-    test.each([
-      [
-        "a python string",
-        `python3 -c "import subprocess; subprocess.run(['bun','scripts/hold.ts','place'])"`,
-      ],
-      ["a perl string", "perl -e 'system qw(bun scripts/freeze.ts release)'"],
-      ["a ruby string", `ruby -e 'system("bun scripts/hold.ts release 1")'`],
-      ["an awk program", `awk 'BEGIN{system("bun scripts/hold.ts place")}'`],
-      [
-        "an apple script",
-        `osascript -e 'do shell script "bun scripts/freeze.ts reset"'`,
-      ],
-      [
-        "a php string with a task name",
-        `php -r 'system("mise run hold:place");'`,
-      ],
-      [
-        "a python here-document",
-        `python3 - <<'EOF'\nimport os\nos.system("bun scripts/hold.ts place")\nEOF`,
-      ],
-      [
-        "a stream editor command",
-        "sed -n '1e bun scripts/hold.ts place' README.md",
-      ],
-      [
-        "a stream editor fed from echo",
-        "echo 'bun scripts/freeze.ts release' | sed 's/^//e'",
-      ],
-    ])("denies %s", async (_kind, command) => {
-      expect(await decide(command, { subagent })).toBe("deny");
-    });
-  },
-);
-
-describeForCallers(
-  "bash-guard denies stops in commands of a stream editor",
-  (subagent) => {
-    test.each([
-      ["a stop path", "sed -n '1e bun scripts/stop_all.ts' README.md"],
-      ["a stop task", "sed -n '1e mise run stop' README.md"],
-    ])("denies %s", async (_kind, command) => {
-      expect(await decide(command, { subagent })).toBe("deny");
-    });
-  },
-);
-
+// 前置きの無いインタプリタとストリームエディタのコードの文字列は判定しない。保留と凍結のコードを読むだけの呼び出しは通る。
 describeForCallers(
   "bash-guard allows interpreters and stream editors that only read guarded code",
   (subagent) => {

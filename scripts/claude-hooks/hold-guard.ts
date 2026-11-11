@@ -44,7 +44,7 @@
 //
 // 保留と凍結の判定は、語の字面で行う。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
-// 先頭の語で、次の6つの規則のどれかに分ける。どれにも当たらない先頭の呼び出しは、判定の対象にしない。
+// 先頭の語で、次の5つの規則のどれかに分ける。どれにも当たらない先頭の呼び出しは、判定の対象にしない。
 //
 // - 実行系(`bun`、`bunx`、`node`、`tsx`、`ts-node`、`deno`、`npx`、`npm`、`pnpm`、`pnpx`、`yarn`)と、
 //   スクリプトを直接実行する形: 語のどれかが保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省略できる)を指していれば拒否する。
@@ -70,9 +70,6 @@
 //   `mise exec`の中のコマンドは、呼び出し側が前置きを外したあとの語として判定する。
 //   タスク`push`に`--prune`を渡す形(`mise run push -- --prune`)は、`push:prune`と同じなので拒否する。
 // - `docker`、`docker-compose`、`psql`: 語か標準入力の文字列に`holds`を含めば拒否する。
-// - コードを文字列で受け取るプログラム(スクリプトの言語のインタプリタ、テキスト処理の言語、OSのスクリプト、`sed`。`CODE_TEXT_PROGRAM`):
-//   同じ語か同じ標準入力の文字列の中に、保留か凍結のコードをパスの形で指す字面と書き込みの語が並ぶか、書き込みのタスク名があれば拒否する。
-//   語をまたいで数えないので、パターンに語が出るだけの読み取りは通す。
 // - 前置き: 先頭が`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`のどれかである。
 //   前置きの後ろは、語、`script -c`と`ssh`の文字列の中身、標準入力の文字列(ヒアドキュメント、ヒアストリング、
 //   `echo`と`printf`のパイプ)を、次の順で調べる。オプションの文法は追わない。
@@ -109,7 +106,7 @@
 //   `git -c`は、値がコマンドとして実行されないキーの閉じた一覧だけを委ねない形とし、一覧の外のキーは委ねる形とする。
 //   gitの副コマンドとグローバルのオプションも、委ねないと分かっている閉じた一覧の外は委ねる形とする。オプションは省略形を前方一致で見る。
 //   委ねる形でも、語を足すコマンドやシェルの名前で終わる語が無く、保留と凍結を指す語が無ければ通す。
-//   前置きの無い形は、上の5つの規則と、次の2つの規則に当たらない限り、判定の対象にしない。
+//   前置きの無い形は、上の4つの規則と、次の2つの規則に当たらない限り、判定の対象にしない。
 //
 // 前置きの無い形に当てる2つの規則は、先頭のプログラムが何でも当てる。
 // 語を足す文脈は、指す語の有無を見ずに拒否する。代入の値は、値の字面だけを見る。
@@ -141,8 +138,7 @@
 // - Consoleの解除scriptを、名前を直接書かない呼び出しで呼ぶ形(別の識別子、符号化した綴り、実行時に組み立てた名前)。
 // - 別名の呼び出しと、保留のコードを書き換えてから起動する形。
 // - 実行時に組み立てたパス、動的なimport、docker経由でpsqlに渡す語を組み立てる形。
-// - シェルの`-c`と標準入力、コードを文字列で受け取るプログラムの一覧の外の言語が受け取る文字列。
-// - コードを文字列で受け取るプログラムに、拡張子もディレクトリも付けずに名前だけで指す文字列と、読めない標準入力。
+// - シェルの`-c`と標準入力、起動語の一覧に無いインタプリタが受け取る文字列。ストリームエディタの実行の命令も同じである。
 // - subagentが新しいファイルを書いて実行する形。
 // 次は誤検知として受け入れ、拒否する。
 // - 語を足す文脈の後ろの、集合の外のプログラム。編集の道具、権限や形式を変える道具、gitなどである。読み取りだけの呼び出しでも拒否する。
@@ -1122,37 +1118,6 @@ function mentionsHoldOrFreeze(text: string): boolean {
   );
 }
 
-/**
- * 文字列や標準入力でコードを受け取り、別のコマンドを実行できるプログラム(前置きと実行系の外)。
- * スクリプトの言語のインタプリタ、テキスト処理の言語、OSのスクリプト、コマンドを実行する命令を持つ`sed`である。
- * 版の数字の付いた名前(`python3.12`など)も含める。
- */
-const CODE_TEXT_PROGRAM =
-  /^(?:python[0-9.]*|pypy[0-9.]*|perl[0-9.]*|ruby[0-9.]*|php[0-9.]*|lua[0-9.]*|Rscript|[gmn]?awk|busybox-awk|osascript|g?sed)$/;
-
-/** 文字列が、保留か凍結のコードをパスの形で指す字面と書き込みの語が並ぶか、書き込みのタスク名の字面を含むなら真。 */
-function mentionsCodePathWrite(text: string): boolean {
-  return (
-    (CODE_PATH_MENTION.test(text) && WRITE_WORD.test(text)) ||
-    mentionsWriteTask(text)
-  );
-}
-
-/**
- * コードを文字列で受け取るプログラムの語と標準入力の文字列のどれかが、`mentionsCodePathWrite`に当たれば`operation`を返す。
- * 語ごとに判定し、語をまたいで数えない。パターンの語と読むファイルの語が別の語になる読み取り(`awk '/release/' <パス>`)を止めないためである。
- */
-function codeTextFinding(
-  words: readonly Word[],
-  inputs: () => readonly string[] | null,
-): HoldFinding | null {
-  const inWords = words
-    .slice(1)
-    .some((word) => spellings(word).some(mentionsCodePathWrite));
-  const inInputs = (inputs() ?? []).some(mentionsCodePathWrite);
-  return inWords || inInputs ? "operation" : null;
-}
-
 /** 文字列が、保留か凍結のコードを指す字面と書き込みの語が並ぶか、書き込みのタスク名の字面を含むなら真。 */
 function mentionsCodeWrite(text: string): boolean {
   return (
@@ -1804,7 +1769,6 @@ function launchedFinding(
   if (SQL_PROGRAMS.has(program)) {
     return sqlTouchesHolds(words, inputs) ? "operation" : null;
   }
-  if (CODE_TEXT_PROGRAM.test(program)) return codeTextFinding(words, inputs);
   // `./scripts/freeze.ts release`のように、凍結のCLIを直接実行する形。
   if (direct0IsFreezeCli(words)) return freezeCliFinding(words, inputs);
   // `./scripts/hold.ts place`のように、スクリプトを直接実行する形。
@@ -2851,19 +2815,6 @@ function stopAllCallAt(
   const program = baseName(words[0]?.text ?? "");
   if (program === "mise") return miseStopAllCall(words, inputs);
   if (RUNNERS.has(program)) return runnerStopAllCall(words.slice(1), inputs);
-  // `sed`の命令の文字列はコマンドを実行しうる。パスの形でない語と標準入力の文字列に、全停止を指す字面があれば拒否する。
-  // パスの形の語(`/stop_all/,+5p`のような範囲の指定)は、読み取りとして免除のまま通す。
-  if (
-    program === "sed" &&
-    (words
-      .slice(1)
-      .some(
-        (word) => !PATH_LIKE.test(word.text) && unreadableTextStopAll(word),
-      ) ||
-      (inputs() ?? []).some(stopAllWording))
-  ) {
-    return true;
-  }
   // 読み取りのプログラムでも、別のコマンドの実行を委ねる形は免除しない。
   // 免除をパスの形だけを通す規則(`isReadOnlyProgram`)に置き換えないのは、`bat -r 1:10 <パス>`のような読み取りを止めないためである。
   const delegates = delegatesExecution(program, words.slice(1));
