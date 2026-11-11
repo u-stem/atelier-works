@@ -115,9 +115,9 @@ locks:
   f/factory/lib/heartbeat: 0780343b32026cd007ea35b095340c0b7cb640fb2bab46eb8d213c0a5204673e
   f/factory/lib/holds: 2377c9840d17e626331e3450f97978bfa8fafa583d01b243a9073169aaad728c
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
-  f/factory/lib/implement_finish_support: c2d85952377d9c9973d062c2ca8b8a87d2bb02fd88b7a477ac3a7c1eb00815ed
+  f/factory/lib/implement_finish_support: 3824eb2a109b79338e6883b9563159fa9ffd785c9a6cf19c0e33f45dbd5c4d3c
   f/factory/lib/implement_launch_support: 7be386046ce792cfe2a9959285a931351d0b3592d565ce23b6e4195880ae6cf4
-  f/factory/lib/implement_loop: 7a8c6e723e203693f9c2e4ea6fd8a487a89cf3ba26c6d061859fb23d6e42a510
+  f/factory/lib/implement_loop: 8745405f7a30afb77c6433d9b0b25eb0e5d70a3df17235fcc9626a0490b8fe6a
   f/factory/lib/implement_support: e7da9f8e6e75d3b924d01d6035bd780f45f36274411fa833c6cab8364577e1a6
   f/factory/lib/intake_refresh: 10bf958e6d3a3a18d0b3e867f271b7974b66aad6e621bf193f735a30c6e88cf3
   f/factory/lib/investigate_claude: 74a2f49e01c4df1d170dc32bac261e388877888c6b51a3d4a87ef18dec888e0e
@@ -173,7 +173,7 @@ locks:
   f/factory/lib/profile_upgrade: 25c6854e8bfef10f6042c3db54442adefc1062d836398a44b2f0feec27979d6c
   f/factory/lib/prompts: e74e1e48771aca248d639fe484b3743e04a5d09384afdad56aedc8c2d5b98a1f
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: 21203595d88ba116a03f4820b17d54bf9291350e2fa5ad73c1f060b0773533a0
+  f/factory/lib/protected_paths: b35aaacfa6ab55fd86eab57e63829bf0dbcbaf3a92e591d8caf60dbb6518dd8f
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
   f/factory/lib/requirements_doc: c175acfaa2af360877513464eb2204289018739f267ab983ad991a5939242d62
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955
@@ -220,7 +220,7 @@ locks:
   f/factory/steps/design_generate: eac645bc587d8d0fea0a5d976c7a481dfbd283e5efe88ae9fdb4dbcd3b676055
   f/factory/steps/design_prepare: 8bef3c8c3fbf955935a67feae8c6b7e4cf42fc2a470e126f5ef353ecea082fa1
   f/factory/steps/design_request_approval: 5263c832493d2c3aa5209ceb43a93fbb150b8ba3673949e4d0a25bb77059f4aa
-  f/factory/steps/implement_finish: a5692eebb54a5043f2e43009d3c908535a1c243d7e31f8c3509f17f6d7b5a477
+  f/factory/steps/implement_finish: a290b14f27a1fab36f2bc53e7c227f41a4a2b6225814c86842c47a22e22c9475
   f/factory/steps/implement_generate: f1c3cbab1ae82a3fe3eec3402b18f1f731902c4cc4949e837e8fab43564b2fbd
   f/factory/steps/implement_prepare: 3e5501b35141a900247069f034645fe47444db9797a77da658d3ad61392cf262
   f/factory/steps/implement_verify: 4ac07b4d400e4bbbed4911d4678fc6e60eb83ee25ec5d4ad3ef655e5414b3976
