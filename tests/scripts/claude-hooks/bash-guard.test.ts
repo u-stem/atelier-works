@@ -4822,6 +4822,18 @@ describeForCallers(
         "deny",
       );
     });
+
+    test("denies a push to main behind a subscripted assignment", async () => {
+      expect(await decide("a[1]=1 git push origin main", { subagent })).toBe(
+        "deny",
+      );
+    });
+
+    test("denies a push to main behind an env assignment with a free name", async () => {
+      expect(await decide("env a-b=1 git push origin main", { subagent })).toBe(
+        "deny",
+      );
+    });
   },
 );
 

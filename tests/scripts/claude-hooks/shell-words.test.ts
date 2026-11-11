@@ -157,6 +157,53 @@ describe("stripWrappers", () => {
     ]);
   });
 
+  test.each([
+    ["a subscript", ["a[1]=1", "git", "push"]],
+    ["an appending subscript", ["a[1]+=1", "git", "push"]],
+    ["a nested subscript", ["a[b[1]]=1", "git", "push"]],
+    ["a subscript behind a plain assignment", ["x=1", "a[1]=1", "git", "push"]],
+  ])("removes a leading assignment with %s", (_form, texts) => {
+    const stripped = stripWrappers(words(...texts));
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("keeps a subscripted word without an assignment as the command", () => {
+    const stripped = stripWrappers(words("a[1]x=1", "git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual([
+      "a[1]x=1",
+      "git",
+      "push",
+    ]);
+  });
+
+  test.each([
+    ["a hyphen", "a-b=1"],
+    ["a dot", "a.b=1"],
+    ["a slash", "a/b=1"],
+    ["a subscript", "a[1]=1"],
+  ])("removes an env assignment whose name has %s", (_form, assignment) => {
+    const stripped = stripWrappers(words("env", assignment, "git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("removes several env assignments in a row", () => {
+    const stripped = stripWrappers(
+      words("env", "a-b=1", "c.d=2", "git", "push"),
+    );
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("keeps a word with an equals sign behind another wrapper as the command", () => {
+    const stripped = stripWrappers(
+      words("timeout", "10", "a-b=1", "git", "push"),
+    );
+    expect(stripped.words.map((word) => word.text)).toEqual([
+      "a-b=1",
+      "git",
+      "push",
+    ]);
+  });
+
   test("skips mise exec up to --", () => {
     const stripped = stripWrappers(
       words("mise", "exec", "--", "bun", "add", "x"),
@@ -2692,8 +2739,14 @@ describe("a bracket opened inside a word must close in the same word", () => {
     ["a here-document operator", "a[ <<EOF ]=1\nbody\nEOF\n"],
     ["a newline", "a[\n]=1; echo x"],
     ["a semicolon", "a[;]=1; echo x"],
-    ["only an escaped closing bracket", "a[ \\]=1; echo x"],
-    ["only a quoted closing bracket", 'a[ "]"=1; echo x'],
+    ["only an escaped closing bracket", "a[\\]=1; echo x"],
+    ["only a quoted closing bracket", 'a["]"=1; echo x'],
+    [
+      "a substitution nested in an arithmetic expansion",
+      "echo $(( $(a[ 1 ]=1 echo x) ))",
+    ],
+    ["a character class that holds an opening bracket", "ls x[[]"],
+    ["an option value that is an opening bracket", "cut -d[ -f2 file"],
     ["a line continuation before the bracket", "a\\\n[ # ]=1; echo x"],
     ["a position behind an assignment", "b=1 a[ # ]=1; echo x"],
     ["a position behind a negation", "! a[ # ]=1; echo x"],
