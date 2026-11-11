@@ -1,6 +1,6 @@
-// ビルド済みのConsole(`dist/`)をブラウザで開いて、アクセシビリティを検査する設定。
+// ビルド済みのConsole(`dist/`)をブラウザで開いて、アクセシビリティと書き込みの操作を検査する設定。
 // 配信は`scripts/console-branch-server.ts`で行う。本番のCaddyと同じCSPなどのヘッダーを付けるため、
-// CSPの下でも検査が動くことを確かめられる。APIは各検査が固定の値で受けるので、中継先には繋がない。
+// CSPの下でも検査が動くことを確かめられる。APIは、書き込みも含めて各検査が固定の値で受けるので、中継先には繋がない。
 // 検査の起動は`bun run test:a11y`。先に`bun run build`が要る。
 
 import { defineConfig, devices } from "@playwright/test";

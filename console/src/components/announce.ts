@@ -11,18 +11,31 @@ export type Toaster = Readonly<
   >
 >;
 
+export type AnnounceOptions = {
+  /** どの対象の結果かを、文の下に添える。 */
+  readonly description?: string;
+  /** 成功以外でも、閉じるまで残さない。 */
+  readonly transient?: boolean;
+};
+
 /**
- * 知らせのトーストの設定。成功は済んだことを知らせるだけなので、sonnerの既定の時間で消す。
- * 成功以外(断り、確かめる警告、失敗)は、読み手に操作が要るので、閉じるボタンを付けて閉じるまで残す。
- * `description`は、どの対象の結果かを文の下に添えるときに渡す。
+ * 知らせのトーストの設定。
+ * 成功は、sonnerの既定の時間(数秒)で消える。成功以外(断り、確かめる警告、失敗)は、閉じるまで残す。
+ * `transient`を付けた知らせは、成功以外でも数秒で消える。一覧を読み直せなかった警告に付ける。
+ * 一覧が更新されると要らなくなり、残すと内容が古くなるためである。
+ * 文の下の説明には、添える対象と、知らせの次の操作(`nextStep`)を、この順に続けて出す。
+ * 閉じるボタンは、置き場(`ui/sonner.tsx`)がすべてのトーストに付ける。
  */
 function optionsOf(
   notice: ReleaseNotice,
-  description: string | undefined,
+  options: AnnounceOptions,
 ): ExternalToast {
-  const described = description === undefined ? {} : { description };
-  return staysUntilClosed(notice)
-    ? { ...described, duration: Number.POSITIVE_INFINITY, closeButton: true }
+  const parts = [options.description, notice.nextStep].filter(
+    (part): part is string => part !== undefined,
+  );
+  const described = parts.length === 0 ? {} : { description: parts.join(" ") };
+  return staysUntilClosed(notice) && options.transient !== true
+    ? { ...described, duration: Number.POSITIVE_INFINITY }
     : described;
 }
 
@@ -30,12 +43,15 @@ function optionsOf(
 export function announceWith(
   toaster: Toaster,
   notice: ReleaseNotice,
-  description?: string,
+  options: AnnounceOptions = {},
 ): void {
-  toaster[notice.tone](notice.message, optionsOf(notice, description));
+  toaster[notice.tone](notice.message, optionsOf(notice, options));
 }
 
 /** 書き込みの結果の知らせを、画面のトーストで出す。 */
-export function announce(notice: ReleaseNotice, description?: string): void {
-  announceWith(toast, notice, description);
+export function announce(
+  notice: ReleaseNotice,
+  options: AnnounceOptions = {},
+): void {
+  announceWith(toast, notice, options);
 }

@@ -45,7 +45,7 @@ const RESOLVE_CONFIG = {
     announce(releaseNotice(outcome, describeNoticeResult));
   },
   onStale: (): void => {
-    announce(STALE_LIST_NOTICE);
+    announce(STALE_LIST_NOTICE, { transient: true });
   },
   invalidates: NOTICE_RESOLVE_INVALIDATES,
 } as const;

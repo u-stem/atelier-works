@@ -64,7 +64,7 @@ export function useApprovalDecision(mode: "decide" | "redo"): {
       announce(approvalOutcomeNotice(outcome, mode, input.kind));
     },
     onStale: () => {
-      announce(STALE_LIST_NOTICE);
+      announce(STALE_LIST_NOTICE, { transient: true });
     },
   });
   return {

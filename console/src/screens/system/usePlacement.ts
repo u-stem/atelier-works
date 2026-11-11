@@ -40,7 +40,7 @@ export const PLACE_HOLD: WriteRunnerConfig<HoldPlaceInput, HoldPlaceResult> = {
     announce(releaseNotice(outcome, describeHoldPlaceResult));
   },
   onStale: () => {
-    announce(STALE_LIST_NOTICE);
+    announce(STALE_LIST_NOTICE, { transient: true });
   },
 };
 
@@ -53,7 +53,7 @@ export const STOP_SCHEDULE: WriteRunnerConfig<string, ScheduleStopResult> = {
     announce(releaseNotice(outcome, describeScheduleStopResult));
   },
   onStale: () => {
-    announce(STALE_LIST_NOTICE);
+    announce(STALE_LIST_NOTICE, { transient: true });
   },
 };
 

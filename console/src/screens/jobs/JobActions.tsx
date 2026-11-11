@@ -202,7 +202,7 @@ function cancelConfig(
       announce(releaseNotice(outcome, describeJobCancelResult));
     },
     onStale: () => {
-      announce(STALE_LIST_NOTICE);
+      announce(STALE_LIST_NOTICE, { transient: true });
     },
   };
 }
@@ -232,7 +232,7 @@ function rerunConfig(
       }
     },
     onStale: () => {
-      announce(STALE_LIST_NOTICE);
+      announce(STALE_LIST_NOTICE, { transient: true });
     },
   };
 }
