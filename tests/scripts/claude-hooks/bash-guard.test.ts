@@ -6132,6 +6132,39 @@ describeForCallers(
   },
 );
 
+// 検査の道具が最初のオペランドでも、凍結のCLIを指す語の次の語は副コマンドとして読む。
+describeForCallers(
+  "bash-guard denies freeze writes placed after an inspection tool",
+  (subagent) => {
+    test.each([
+      [
+        "a release after a linter",
+        "bunx biome check scripts/freeze.ts release",
+      ],
+      ["a reset after a test runner", "bun test scripts/freeze.ts reset"],
+      [
+        "a deploy placement after a linter",
+        "bunx --bun biome check scripts/freeze.ts place --scope deploy",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 検査の道具に1つのglobだけを渡す形は、次の語が無いので副コマンドを読まずに通す。
+describeForCallers(
+  "bash-guard allows inspection tools given a single glob",
+  (subagent) => {
+    test.each(["bunx biome check scripts/*.ts", "bun test scripts/*.ts"])(
+      "allows %s",
+      async (command) => {
+        expect(await decide(command, { subagent })).toBe("allow");
+      },
+    );
+  },
+);
+
 // カンマの無いブレースの範囲は、端点の字の集合に置き換えてglobと同じに照合する。英字の範囲は字の集合、数の範囲は数字で始まる並びである。
 describeForCallers(
   "bash-guard denies guarded code named through a brace range",
