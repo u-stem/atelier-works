@@ -670,7 +670,6 @@ describe("the retry of the work item a notice names", () => {
 
   test.each([
     "implement_needs_human",
-    "implement_launch_failed",
     "host_action_required",
     "check_runtime_unsafe",
   ])("tells the next step of %s without the script of Windmill", (kind) => {
@@ -683,6 +682,13 @@ describe("the retry of the work item a notice names", () => {
     "host_action_required",
     "check_runtime_unsafe",
   ])("tells to rerun %s from the failures of the inbox", (kind) => {
-    expect(noticeGuide(kind).action).toContain("要対応の失敗で");
+    expect(noticeGuide(kind).action).toContain("要対応の失敗");
+  });
+
+  // 起動の失敗は、作業項目が承認済みのまま残って失敗の一覧に出ない経路があるので、Windmillの手順を残す。
+  test("keeps the script of Windmill for a failed launch whose work item is not in the failures", () => {
+    expect(noticeGuide("implement_launch_failed").action).toContain(
+      "出ていないときは、Windmillでf/factory/retry_work_item",
+    );
   });
 });
