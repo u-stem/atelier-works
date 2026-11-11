@@ -8,7 +8,7 @@ schema:
   properties:
     untrusted:
       type: string
-      description: ''
+      description: 準備ステップの結果を、JSONの文字列に包んだもの。
       default: null
       originalType: string
     work_item_id:

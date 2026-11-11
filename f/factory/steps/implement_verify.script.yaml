@@ -8,7 +8,7 @@ schema:
   properties:
     untrusted:
       type: string
-      description: ''
+      description: 実装の文脈(Issueの題名と本文を含む)と、1回目のラウンドの結果(Claudeの出力を含む)を、JSONの文字列に包んだもの。
       default: null
       originalType: string
     work_item_id:
