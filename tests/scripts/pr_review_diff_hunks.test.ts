@@ -10,6 +10,7 @@ import type {
   FileDiffHunks,
   ReviewFinding,
 } from "../../f/factory/lib/types.ts";
+import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   normalizePrFileHunks,
   type PostReviewTarget,
@@ -22,8 +23,14 @@ import {
   parseNewSideHunks,
   renderInlineComment,
   renderReattachedInlineComment,
+  splitChangedFiles,
 } from "../../f/factory/steps/pr_workflow_support.ts";
-import { createFakeCommandRunner, ghApiOk } from "../lib/testSupport.ts";
+import {
+  createFakeCommandRunner,
+  ghApiOk,
+  ghApiStdout,
+  ok,
+} from "../lib/testSupport.ts";
 
 function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   return {
@@ -89,20 +96,68 @@ describe("fileDiffHunksOf", () => {
         filename: "a.ts",
         patch: "@@ -1 +1,2 @@\n a\n+b",
         changes: 1,
+        status: "modified",
       }),
     ).toEqual({ path: "a.ts", hunks: [{ start: 1, end: 2 }] });
   });
 
   test("has no hunk for a file with no changed lines and no patch", () => {
     expect(
-      fileDiffHunksOf({ filename: "img.png", patch: null, changes: 0 }),
+      fileDiffHunksOf({
+        filename: "img.png",
+        patch: null,
+        changes: 0,
+        status: "added",
+      }),
     ).toEqual({ path: "img.png", hunks: [] });
   });
 
   test("leaves the hunks unknown for a changed file whose patch GitHub left out", () => {
     expect(
-      fileDiffHunksOf({ filename: "big.ts", patch: null, changes: 4000 }),
+      fileDiffHunksOf({
+        filename: "big.ts",
+        patch: null,
+        changes: 4000,
+        status: "modified",
+      }),
     ).toEqual({ path: "big.ts", hunks: null });
+  });
+
+  test("has no hunk for a removed file even when GitHub left the patch out", () => {
+    expect(
+      fileDiffHunksOf({
+        filename: "old.ts",
+        patch: null,
+        changes: 4000,
+        status: "removed",
+      }),
+    ).toEqual({ path: "old.ts", hunks: [] });
+  });
+});
+
+describe("splitChangedFiles", () => {
+  const FILES = [
+    {
+      filename: "new.ts",
+      previous_filename: "old.ts",
+      status: "renamed",
+      additions: 1,
+      deletions: 0,
+      changes: 1,
+      patch: "@@ -1 +1,2 @@\n a\n+b",
+    },
+  ];
+
+  test("returns the hunks of every file", () => {
+    expect(splitChangedFiles(FILES).hunks).toEqual([
+      { path: "new.ts", hunks: [{ start: 1, end: 2 }] },
+    ]);
+  });
+
+  test("returns the paths without keeping the patch text", () => {
+    expect(splitChangedFiles(FILES).entries).toEqual([
+      { filename: "new.ts", previous_filename: "old.ts" },
+    ]);
   });
 });
 
@@ -181,34 +236,63 @@ describe("mapFindingsToReviewComments against the diff", () => {
     expect(comments[0]?.side).toBe("RIGHT");
   });
 
-  test("moves a range that starts outside the hunk to a single line", () => {
+  test("clips a range that starts before the hunk to the part inside it", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ line: 5, end_line: 12 })],
       [TWO_HUNKS],
     );
     expect(
       comments.map((comment) => [comment.start_line, comment.line]),
-    ).toEqual([[undefined, 10]]);
+    ).toEqual([[10, 12]]);
   });
 
-  test("moves a range that crosses the end of a hunk to a single line", () => {
+  test("clips a range that crosses the end of a hunk to the part inside it", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ line: 18, end_line: 22 })],
       [TWO_HUNKS],
     );
     expect(
       comments.map((comment) => [comment.start_line, comment.line]),
-    ).toEqual([[undefined, 18]]);
+    ).toEqual([[18, 20]]);
   });
 
-  test("moves a range that spans two hunks to a single line", () => {
+  test("clips a range that spans two hunks to the part inside the earlier hunk", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ line: 18, end_line: 42 })],
       [TWO_HUNKS],
     );
     expect(
       comments.map((comment) => [comment.start_line, comment.line]),
-    ).toEqual([[undefined, 18]]);
+    ).toEqual([[18, 20]]);
+  });
+
+  test("clips a range that only touches the hunk by one line to a single line", () => {
+    const { comments } = mapFindingsToReviewComments(
+      [finding({ line: 20, end_line: 25 })],
+      [TWO_HUNKS],
+    );
+    expect(
+      comments.map((comment) => [comment.start_line, comment.line]),
+    ).toEqual([[undefined, 20]]);
+  });
+
+  test("moves a range that overlaps no hunk to the nearest line", () => {
+    const { comments } = mapFindingsToReviewComments(
+      [finding({ line: 25, end_line: 30 })],
+      [TWO_HUNKS],
+    );
+    expect(
+      comments.map((comment) => [comment.start_line, comment.line]),
+    ).toEqual([[undefined, 20]]);
+  });
+
+  test("returns the clipped finding as a moved finding", () => {
+    const clipped = finding({ line: 18, end_line: 22 });
+    const { reattachedFindings } = mapFindingsToReviewComments(
+      [clipped],
+      [TWO_HUNKS],
+    );
+    expect(reattachedFindings).toEqual([clipped]);
   });
 
   test("writes the original line into the body of a moved finding", () => {
@@ -219,12 +303,52 @@ describe("mapFindingsToReviewComments against the diff", () => {
     expect(comments[0]?.body).toContain("`a.ts:30`");
   });
 
-  test("writes the original range into the body of a moved range", () => {
+  test("writes the original range into the body of a clipped range", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ line: 5, end_line: 12 })],
       [TWO_HUNKS],
     );
     expect(comments[0]?.body).toContain("`a.ts:5-12`");
+  });
+
+  test("says the clipped range was put only on the lines inside the diff", () => {
+    const { comments } = mapFindingsToReviewComments(
+      [finding({ line: 18, end_line: 22 })],
+      [TWO_HUNKS],
+    );
+    expect(comments[0]?.body).toBe(
+      renderReattachedInlineComment(
+        finding({ line: 18, end_line: 22 }),
+        "clipped",
+      ),
+    );
+  });
+
+  test("says a finding moved to the nearest line was put on the nearest line", () => {
+    const { comments } = mapFindingsToReviewComments(
+      [finding({ line: 30 })],
+      [TWO_HUNKS],
+    );
+    expect(comments[0]?.body).toBe(
+      renderReattachedInlineComment(finding({ line: 30 }), "nearest"),
+    );
+  });
+
+  test("returns a finding in a file with unknown hunks as unverified", () => {
+    const unknown = finding({ path: "big.ts", line: 999 });
+    const { unverifiedFindings } = mapFindingsToReviewComments(
+      [finding({ line: 15 }), unknown],
+      [TWO_HUNKS, { path: "big.ts", hunks: null }],
+    );
+    expect(unverifiedFindings).toEqual([unknown]);
+  });
+
+  test("does not return a verified or moved finding as unverified", () => {
+    const { unverifiedFindings } = mapFindingsToReviewComments(
+      [finding({ line: 15 }), finding({ line: 30 })],
+      [TWO_HUNKS],
+    );
+    expect(unverifiedFindings).toEqual([]);
   });
 
   test("returns the moved finding itself", () => {
@@ -292,14 +416,51 @@ describe("renderReattachedInlineComment", () => {
     );
   });
 
-  test("keeps the kind prefix on the second line", () => {
+  test("keeps the kind prefix at the start of the second line", () => {
     const body = renderReattachedInlineComment(finding({ kind: "must" }));
     expect(body.split("\n")[1]).toStartWith("[MUST]");
+  });
+
+  test("puts the original position right after the kind prefix", () => {
+    const body = renderReattachedInlineComment(finding({ line: 30 }));
+    expect(body.split("\n")[1]).toBe("[MUST] 元の位置は`a.ts:30`です。");
+  });
+
+  test("puts the original position before the message", () => {
+    const body = renderReattachedInlineComment(
+      finding({ line: 30, message: "problem" }),
+    );
+    expect(body.indexOf("`a.ts:30`")).toBeLessThan(body.indexOf("problem"));
+  });
+
+  test("explains a move to the nearest line in its own sentence", () => {
+    const body = renderReattachedInlineComment(finding(), "nearest");
+    expect(body.split("\n")).toContain(
+      "差分に収まらないため、最も近い差分の行に付けています。",
+    );
+  });
+
+  test("explains a clipped range in its own sentence", () => {
+    const body = renderReattachedInlineComment(finding(), "clipped");
+    expect(body.split("\n")).toContain("差分に収まる行だけに付けています。");
+  });
+
+  test("does not call a clipped range a move to the nearest line", () => {
+    const body = renderReattachedInlineComment(finding(), "clipped");
+    expect(body).not.toContain("最も近い差分の行");
   });
 
   test("turns suggested_code into a plain code block", () => {
     const body = renderReattachedInlineComment(
       finding({ suggested_code: "const x = 1;" }),
+    );
+    expect(body).toContain("\n```\nconst x = 1;\n```");
+  });
+
+  test("turns suggested_code of a clipped range into a plain code block too", () => {
+    const body = renderReattachedInlineComment(
+      finding({ suggested_code: "const x = 1;" }),
+      "clipped",
     );
     expect(body).toContain("\n```\nconst x = 1;\n```");
   });
@@ -350,6 +511,17 @@ describe("normalizePrFileHunks", () => {
       { path: "a.ts", hunks: null },
     ]);
   });
+
+  // フローの既定値が空の配列だったときも、変更ファイルが0件という意味にしない。
+  test("treats an empty list as unknown when the PR has changed files", () => {
+    expect(normalizePrFileHunks([], ["a.ts"])).toEqual([
+      { path: "a.ts", hunks: null },
+    ]);
+  });
+
+  test("keeps an empty list when the PR has no changed files", () => {
+    expect(normalizePrFileHunks([], [])).toEqual([]);
+  });
 });
 
 // 差分の外の行を指す指摘が混ざっても、差分の中の指摘は行コメントとして投稿され、
@@ -373,45 +545,66 @@ describe("publishing findings when some point outside the diff", () => {
     message: "file not in PR",
   });
 
-  /** 投稿されたレビューのリクエストの本文。 */
-  async function postedPayload(): Promise<{
+  type PostedPayload = {
     body: string;
     comments: { path: string; line: number; start_line?: number }[];
-  }> {
-    const findings = [INSIDE, OUTSIDE, NO_DIFF, NOT_IN_PR];
-    const { comments, droppedFindings } = mapFindingsToReviewComments(
-      findings,
-      FILES,
-    );
+  };
+
+  /** 投稿の入口に指摘を通し、GitHubに送られたレビューの作成の要求を順に返す。 */
+  async function publishAll(
+    findings: readonly ReviewFinding[],
+    files: readonly FileDiffHunks[],
+    responses: CommandResult[],
+  ): Promise<{ posts: PostedPayload[]; error: unknown }> {
+    const { comments, droppedFindings, unverifiedFindings } =
+      mapFindingsToReviewComments(findings, files);
     const fake = createFakeCommandRunner([
       ghApiOk([
         { id: 1, user: { login: "alice" }, state: "COMMENTED", body: "" },
       ]),
-      ghApiOk({ id: 99 }),
+      ...responses,
     ]);
-    await publishReview(
-      { run: fake.run, ghToken: "tok" },
-      {
-        target: TARGET,
-        prAuthorLogin: "alice",
-        comments,
-        commentedFindings: commentedFindingsOf(findings, droppedFindings),
-        droppedFindings,
-        binaryFiles: [],
-        binaryUnlistedCount: 0,
-        priorReview: false,
-        post: true,
-        ensureRepoOwner: async () => null,
-        threadResponses: [],
-        isAllowedReplier: () => true,
-      },
-      SILENT,
+    let error: unknown = null;
+    try {
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        {
+          target: TARGET,
+          prAuthorLogin: "alice",
+          comments,
+          commentedFindings: commentedFindingsOf(findings, droppedFindings),
+          unverifiedFindings,
+          droppedFindings,
+          binaryFiles: [],
+          binaryUnlistedCount: 0,
+          priorReview: false,
+          post: true,
+          ensureRepoOwner: async () => null,
+          threadResponses: [],
+          isAllowedReplier: () => true,
+        },
+        SILENT,
+      );
+    } catch (err) {
+      error = err;
+    }
+    const posts = fake.calls
+      .filter(
+        (c) =>
+          c.argv.includes("POST") && c.argv[2]?.endsWith("/reviews") === true,
+      )
+      .map((c) => JSON.parse(c.options?.stdin ?? "{}"));
+    return { posts, error };
+  }
+
+  /** 最初の投稿の要求の本文。 */
+  async function postedPayload(): Promise<PostedPayload> {
+    const { posts } = await publishAll(
+      [INSIDE, OUTSIDE, NO_DIFF, NOT_IN_PR],
+      FILES,
+      [ghApiOk({ id: 99 })],
     );
-    const call = fake.calls.find(
-      (c) =>
-        c.argv.includes("POST") && c.argv[2]?.endsWith("/reviews") === true,
-    );
-    return JSON.parse(call?.options?.stdin ?? "{}");
+    return posts[0] ?? { body: "", comments: [] };
   }
 
   test("posts the finding inside the diff and the moved finding as line comments", async () => {
@@ -440,5 +633,94 @@ describe("publishing findings when some point outside the diff", () => {
   test("does not list a finding that became a line comment in the summary", async () => {
     const payload = await postedPayload();
     expect(payload.body).not.toContain("outside the diff");
+  });
+
+  describe("when GitHub rejects the review", () => {
+    const FILES_WITH_UNKNOWN: FileDiffHunks[] = [
+      TWO_HUNKS,
+      { path: "big.ts", hunks: null },
+    ];
+    const UNVERIFIED = finding({
+      path: "big.ts",
+      line: 999,
+      message: "unverified text",
+    });
+    const REJECTED = () => ok(ghApiStdout(422, { message: "Unprocessable" }));
+
+    test("posts again without the unverified findings first", async () => {
+      const { posts } = await publishAll(
+        [INSIDE, OUTSIDE, UNVERIFIED],
+        FILES_WITH_UNKNOWN,
+        [REJECTED(), ghApiOk({ id: 99 })],
+      );
+      expect(posts[1]?.comments.map((c) => [c.path, c.line])).toEqual([
+        ["a.ts", 15],
+        ["a.ts", 20],
+      ]);
+    });
+
+    test("moves the unverified finding to the summary with its position", async () => {
+      const { posts } = await publishAll(
+        [INSIDE, UNVERIFIED],
+        FILES_WITH_UNKNOWN,
+        [REJECTED(), ghApiOk({ id: 99 })],
+      );
+      expect(posts[1]?.body).toContain("`big.ts:999`: unverified text");
+    });
+
+    test("counts only the remaining line comments in the second summary", async () => {
+      const { posts } = await publishAll(
+        [INSIDE, OUTSIDE, UNVERIFIED],
+        FILES_WITH_UNKNOWN,
+        [REJECTED(), ghApiOk({ id: 99 })],
+      );
+      expect(posts[1]?.body).toContain("2件コメントしました。");
+    });
+
+    test("keeps the review markers on the second post", async () => {
+      const { posts } = await publishAll(
+        [INSIDE, UNVERIFIED],
+        FILES_WITH_UNKNOWN,
+        [REJECTED(), ghApiOk({ id: 99 })],
+      );
+      expect(posts[1]?.body).toContain("<!-- factory:pr_review:7 -->");
+    });
+
+    test("falls back to the summary with every finding when the second post is rejected too", async () => {
+      const { posts } = await publishAll(
+        [INSIDE, UNVERIFIED],
+        FILES_WITH_UNKNOWN,
+        [REJECTED(), REJECTED(), ghApiOk({ id: 99 })],
+      );
+      expect(posts[2]).toMatchObject({
+        comments: [],
+        body: expect.stringContaining("`a.ts:15`: problem"),
+      });
+    });
+
+    test("does not post a third time when the second post fails with another error", async () => {
+      const { posts } = await publishAll(
+        [INSIDE, UNVERIFIED],
+        FILES_WITH_UNKNOWN,
+        [REJECTED(), ok(ghApiStdout(403, { message: "Forbidden" }))],
+      );
+      expect(posts).toHaveLength(2);
+    });
+
+    test("goes straight to the full fallback when there is no unverified finding", async () => {
+      const { posts } = await publishAll([INSIDE, OUTSIDE], FILES, [
+        REJECTED(),
+        ghApiOk({ id: 99 }),
+      ]);
+      expect(posts.map((p) => p.comments.length)).toEqual([2, 0]);
+    });
+
+    test("goes straight to the full fallback when every line comment is unverified", async () => {
+      const { posts } = await publishAll([UNVERIFIED], FILES_WITH_UNKNOWN, [
+        REJECTED(),
+        ghApiOk({ id: 99 }),
+      ]);
+      expect(posts.map((p) => p.comments.length)).toEqual([1, 0]);
+    });
   });
 });

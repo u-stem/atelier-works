@@ -1970,6 +1970,7 @@ describe("posting a review once per sha", () => {
       prAuthorLogin: "alice",
       comments: [],
       commentedFindings: [],
+      unverifiedFindings: [],
       droppedFindings: [],
       binaryFiles: [],
       binaryUnlistedCount: 0,

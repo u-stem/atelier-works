@@ -218,7 +218,7 @@ describe("pr_review flow.yaml", () => {
 
   test("passes the diff hunks of the generate step to the post step", () => {
     expect(moduleBlock(PR_REVIEW_FLOW, "pr_review_post")).toContain(
-      "          pr_file_hunks:\n            type: javascript\n            expr: results.pr_review_generate?.pr_file_hunks ?? []\n",
+      "          pr_file_hunks:\n            type: javascript\n            expr: results.pr_review_generate?.pr_file_hunks ?? null\n",
     );
   });
 

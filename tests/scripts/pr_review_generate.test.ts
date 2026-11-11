@@ -334,12 +334,18 @@ describe("selectListedBinaryFiles", () => {
 });
 
 describe("diff hunks wiring in the generate step", () => {
+  const SOURCE = Bun.file(
+    new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),
+  ).text();
+
   test("returns the diff hunks of every changed file in the result", async () => {
-    const source = await Bun.file(
-      new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),
-    ).text();
-    expect(source).toContain(
-      "      pr_file_hunks: prFileEntries.map(fileDiffHunksOf),\n",
+    expect(await SOURCE).toContain("      pr_file_hunks: prFileHunks,\n");
+  });
+
+  // patchの文字列を、Claudeの実行のあいだ持たないため、一覧を取った場所で分ける。
+  test("splits the changed files right where the list is read", async () => {
+    expect(await SOURCE).toContain(
+      "getPrFiles(client, owner, repo, pr_number).then(splitChangedFiles)",
     );
   });
 });

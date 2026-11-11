@@ -1216,6 +1216,36 @@ describe("hasBodyOnlyMustFinding", () => {
     ).toBe(false);
   });
 
+  test("matches a finding posted on the lines of the diff that its range overlapped", () => {
+    const clipped = finding({ line: 18, end_line: 22 });
+    expect(
+      hasBodyOnlyMustFinding(
+        [clipped],
+        [
+          thread({
+            firstCommentBody: renderReattachedInlineComment(clipped, "clipped"),
+          }),
+        ],
+        VIEWER,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not match a moved finding by a thread that only has the message", () => {
+    const moved = finding({ line: 30 });
+    expect(
+      hasBodyOnlyMustFinding(
+        [moved],
+        [
+          thread({
+            firstCommentBody: "[Factory 自動レビュー]\n[MUST] 別の話です。",
+          }),
+        ],
+        VIEWER,
+      ),
+    ).toBe(true);
+  });
+
   test("ignores a finding that is not a MUST", () => {
     expect(hasBodyOnlyMustFinding([finding({ kind: "imo" })], [], VIEWER)).toBe(
       false,
