@@ -6094,3 +6094,38 @@ describeForCallers(
     });
   },
 );
+
+// カンマの無いブレースの範囲は、展開した字が決まらないものとしてglobと同じに照合する。
+describeForCallers(
+  "bash-guard denies guarded code named through a brace range",
+  (subagent) => {
+    test.each([
+      ["a hold path", "bun scripts/h{o..o}ld.ts place"],
+      ["a freeze path", "bun scripts/free{z..z}e.ts release"],
+      ["a stop path", "bun scripts/stop_al{l..l}.ts"],
+      [
+        "a hold path piped through cat",
+        "cat scripts/h{o..o}ld.ts | bun - place",
+      ],
+      [
+        "a hold path after a prefix",
+        "script -q /dev/null bun scripts/h{o..o}ld.ts place",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers("bash-guard allows daily brace ranges", (subagent) => {
+  test.each([
+    "for i in {1..3}; do gh pr view $i; done",
+    "echo {1..5}",
+    "mkdir -p /tmp/d{1..3}",
+    "curl -s https://example.com/{1..3}",
+    "bun run x{1..3}",
+    "printf '%s\\n' {a..c}",
+  ])("allows %s", async (command) => {
+    expect(await decide(command, { subagent })).toBe("allow");
+  });
+});
