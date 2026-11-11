@@ -1,10 +1,14 @@
 # セキュリティ
 
-Software Factoryの信頼境界、秘密値の扱い、資格情報の取得手順、各フローの安全策を説明する。Factoryを運用する人と、フローを変更する人が読む。安全策の仕組みの詳細は[実装フローの仕様](internals/implement.md)と[PRワークフローの仕様](internals/pr-workflow.md)にある。
+Software Factoryの信頼境界、秘密値の扱い、資格情報の取得手順、各フローの安全策を説明する。
+Factoryを運用する人と、フローを変更する人が読む。
+安全策の仕組みの詳細は[実装フローの仕様](internals/implement.md)と[PRワークフローの仕様](internals/pr-workflow.md)にある。
 
 ## 信頼境界
 
-Issue本文と対象リポジトリの内容は、信頼できない入力として扱う。headless Claudeはこれらをデータとして読むだけで、内容に書かれた指示には従わない。要件定義の生成での扱いは`factory-requirements`スキルに定める。
+Issue本文と対象リポジトリの内容は、信頼できない入力として扱う。
+headless Claudeはこれらをデータとして読むだけで、内容に書かれた指示には従わない。
+要件定義の生成での扱いは`factory-requirements`スキルに定める。
 
 ### 書き込める範囲
 
@@ -41,7 +45,10 @@ headless Claudeの起動には、次のフラグと環境変数で防御を足�
 | `--max-budget-usd`、`--max-turns`、サブプロセスのタイムアウト | 暴走とコストの超過を打ち切る |
 | `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1` | システムプロンプトにgit statusの写しとcommit・PRの手順を載せない |
 
-最後の環境変数は、すべてのフローで設定する。写しを作るとき、Claudeは起動時に作業ディレクトリでgitを実行する。そのため、書き換えられた`.git`の参照先にあるconfig(`core.fsmonitor`など)を読みうる。どのフローのClaudeにも`Bash`を渡さないので、gitの文脈を使う処理は無い。
+最後の環境変数は、すべてのフローで設定する。
+写しを作るとき、Claudeは起動時に作業ディレクトリでgitを実行する。
+そのため、書き換えられた`.git`の参照先にあるconfig(`core.fsmonitor`など)を読みうる。
+どのフローのClaudeにも`Bash`を渡さないので、gitの文脈を使う処理は無い。
 
 サブプロセスのタイムアウトで打ち切った実行は、結果のJSONを読めないことが多く、費用が分からない。
 そのため、標準出力に費用が無ければ、`--max-budget-usd`の値を費用として`agent_runs`に記録し、日次予算に数える。
@@ -64,11 +71,14 @@ PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リ�
 `main`はrulesetの`protect-main`で保護し、次の制限をかける。
 
 - `main`の削除とforce pushを禁止する。
-- `main`への変更はPRを必須にする。承認は0件でよく、人のレビューをGitHubが強制するわけではない。
-- 必須チェックは次の10件である。条件付きのジョブは、スキップされると通過として扱われる。
+- `main`への変更はPRを必須にする。
+  承認は0件でよく、人のレビューをGitHubが強制するわけではない。
+- 必須チェックは次の10件である。
+  条件付きのジョブは、スキップされると通過として扱われる。
   - `scope`、`check`、`check-docs`、`check-worker`、`test-db`
   - `metadata`、`console`、`console-a11y`、`caddyfile`、`console-fetcher-image`
-- 設定を迂回できるのは、管理者のロールだけである。迂回のモードは`pull_request`なので、直接pushはできず、PRを経由する迂回に限られる。
+- 設定を迂回できるのは、管理者のロールだけである。
+  迂回のモードは`pull_request`なので、直接pushはできず、PRを経由する迂回に限られる。
 
 迂回すると、`check`などの必須チェックが失敗していてもPRをマージできる。
 運用者は、迂回を使わず、必須チェックが成功してからマージする。
@@ -76,7 +86,8 @@ PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リ�
 必須チェックを足すときは、そのジョブが`main`の`ci.yml`に入ってから、rulesetの一覧を更新する。
 先に更新すると、そのジョブを持たない古い`main`から分かれたPRが、出ないチェックを待ち続けてマージできない。
 ジョブを足すPR自身は、一覧を更新する前にマージする。
-更新は、マージの後にClaudeが行う。次の順に進める。
+更新は、マージの後にClaudeが行う。
+次の順に進める。
 
 射影には、次の`jq`を使う。
 読み取り専用のフィールドを外し、書き込めるフィールドだけを残すためである。
@@ -124,10 +135,13 @@ Factory自身のリポジトリのPRは、rulesetでなく、Factory内部の固
 
 公開に伴い、外部からの操作は次のように絞る。
 
-- GitHubのinteraction-limitsを`collaborators_only`にしている。期限付きの設定で、切れると外部の利用者もIssueやPRを作れるようになる。期限はGitHubの設定画面で確かめる。
+- GitHubのinteraction-limitsを`collaborators_only`にしている。
+  期限付きの設定で、切れると外部の利用者もIssueやPRを作れるようになる。
+  期限はGitHubの設定画面で確かめる。
 - forkのPRのワークフローは、すべての外部の投稿者について、承認があるまで動かさない。
 - secret scanningとpush protection、Dependabot security updatesを有効にしている。
-- 脆弱性は、非公開の報告で受ける。窓口は[SECURITY.md](../SECURITY.md)にある。
+- 脆弱性は、非公開の報告で受ける。
+  窓口は[SECURITY.md](../SECURITY.md)にある。
 
 FactoryはPAT(`f/factory/github_token`)で、人と同じアカウントとしてGitHubを操作する。
 PRをマージするAPIを呼ぶのは、dependabotの更新のフローだけで、既定では無効である([dependabotの更新の自動マージ](#dependabotの更新の自動マージ))。
@@ -171,7 +185,8 @@ PRを作ればCIが走査し、Factoryは実装ブランチのpushの前に走�
 ### CIの実行の範囲の判定
 
 残るリスクとして、PRの実行の判定は、PRの版の`scripts/ci-scope.ts`で行う。
-判定を書き換える変更は、保護パスとして`pr_fix`が止める。`implement`は止めず、記録して検査を省き、PRの「確認して欲しい点」に載せる。
+判定を書き換える変更は、保護パスとして`pr_fix`が止める。
+`implement`は止めず、記録して検査を省き、PRの「確認して欲しい点」に載せる。
 人が書いたPRは`ci.yml`も書き換えられるので、レビューで確かめる。
 
 判定の`DB_DEPENDENCY_FILES`には、`test:db`が実行するコードの依存を列挙する。
@@ -209,7 +224,8 @@ Windmillのサーバーとworkerは、ジョブの中のコンテナだけで動
 ネットワークは分離しない。
 作り直しで増えるのは、次の2点である。
 
-- レジストリからの依存の取得。取得する依存は、PRのブランチのscriptが決める。
+- レジストリからの依存の取得。
+  取得する依存は、PRのブランチのscriptが決める。
 - PRで書き換えた`mise.toml`の`metadata`タスクの実行。
 
 #### install script
@@ -219,7 +235,8 @@ bunは`NPM_CONFIG_IGNORE_SCRIPTS`を読まない。
 そのため、`windmill_worker_ci`は次の2つで止める。
 
 - bunfigの`ignoreScripts = true`を、workerの`/root/.bunfig.toml`に読み取り専用でマウントする(`infra/ci-worker-bunfig.toml`)。
-- `NPM_CONFIG_IGNORE_SCRIPTS=true`を渡す。npmを使う経路があっても、install scriptを動かさないための備えである。
+- `NPM_CONFIG_IGNORE_SCRIPTS=true`を渡す。
+  npmを使う経路があっても、install scriptを動かさないための備えである。
 
 workerは、依存の解決のプロセスの環境を絞る。
 `NPM_CONFIG_IGNORE_SCRIPTS`を`WHITELIST_ENVS`にも挙げて、`bun install`まで届かせる。
@@ -248,15 +265,18 @@ Bunのmacroと、Pythonのsdistのビルドは、bunfigでは止まらない。
 次は確かめていない。
 
 - GitHub Actionsのランナーでの動作。
-- レジストリのパッケージでのinstall scriptの停止。試験に使ったのは、ローカルの`file:`の依存である。
+- レジストリのパッケージでのinstall scriptの停止。
+  試験に使ったのは、ローカルの`file:`の依存である。
 - Windmillがnpmを呼ぶ経路が実在するか。
-- Windmillの版を上げたときの、環境の絞り方とbunfigの読み方の変化。`mise.toml`の`WM_VERSION`を上げたときは、上の表を確かめ直す。
+- Windmillの版を上げたときの、環境の絞り方とbunfigの読み方の変化。
+  `mise.toml`の`WM_VERSION`を上げたときは、上の表を確かめ直す。
 
 #### artifactの扱い
 
 artifactの内容は、PRのブランチにある`scripts/metadata-patch.ts`が書く。
 PRの作者が書き換えられるので、受け取る側は内容を信用しない。
-artifactに秘密は入らない。入るのは、リポジトリにあるファイルの再生成結果だけである。
+artifactに秘密は入らない。
+入るのは、リポジトリにあるファイルの再生成結果だけである。
 保持は7日に絞り、古いパッチが長く残らないようにする。
 
 manifestは、PRのheadのsha(`headSha`)、baseのsha(`baseSha`)、作り直したmerge木のcommit(`mergeSha`)を持つ。
@@ -264,7 +284,8 @@ manifestは、PRのheadのsha(`headSha`)、baseのsha(`baseSha`)、作り直し�
 
 #### 受け取る側が必ず確かめること
 
-artifactの中身は、攻撃者が完全に決められるものとして扱う。安全は、内容の制限だけで成り立たせる。
+artifactの中身は、攻撃者が完全に決められるものとして扱う。
+安全は、内容の制限だけで成り立たせる。
 出どころの確認は、無関係な第三者のartifactを避けるための補助にとどまる。
 同じ実行の別のジョブ(`check`、`check-docs`、`check-worker`など)で動くPRのコードは、ランナーのトークンを使って、同名のartifactを上げ直せる。
 ブランチやworkflowのパスの照合では、これを防げない。
@@ -294,7 +315,8 @@ artifactを取る実行は、次をすべて満たすものに限る。
 - 実行の`head_sha`が、PRの今のheadと一致する。
 - 実行の結論が`failure`で、原因が`metadata`ジョブの失敗である。
 - PRの差分(`base...head`)が、`f/**`、`migrations/**`、`docs/**`、`tests/**`のパスと、ルートの`wmill-lock.yaml`だけである。
-- PRの差分を、全件読めている。APIの件数の上限で切れた差分は、許可リストの外を隠しうるので断る。
+- PRの差分を、全件読めている。
+  APIの件数の上限で切れた差分は、許可リストの外を隠しうるので断る。
 
 差分の条件は、これら以外に触れていれば、パッチを適用しない。
 該当するのは、次のようなパスである。
@@ -317,7 +339,8 @@ artifactは、その実行のIDに紐づくものだけを取る。
 照合できないときは、パッチを適用しない。
 別のジョブが上げ直したartifactは、IDとdigestが違うため、見分けられる。
 `ci.yml`がIDとdigestを出す処理は、まだ無い。
-追加は保護パスの変更として、別に行う。それまでは、パッチを適用しない。
+追加は保護パスの変更として、別に行う。
+それまでは、パッチを適用しない。
 
 出どころの検査(`checkProvenance`)は、実行の事実とPRの差分だけを見る。
 適用する側は、artifactの一覧の取得とダウンロードの前に呼び、出どころで断れるものは、ダウンロードと展開をしない。
@@ -344,8 +367,10 @@ PRの版の`scripts/metadata-patch.ts`が出した結果は、信用しない。
 - `main`の版の`isAllowedMetadataPath`と`parseManifest`で、manifestの全項目を再検査する。
 - `headSha`と`sha256`を照合する。
 - `baseSha`が、PRのbaseの今のshaの祖先であること(`--is-ancestor`)を確かめる。
-- PRのheadが、baseの今の先端を祖先に含むことを確かめる。`baseSha`がheadの祖先であることは、この2つから従う。
-- `mergeSha`のcommitをAPIで取得し、第1親が`baseSha`、第2親が`headSha`に一致することを確かめる。取得できないときは拒否する。
+- PRのheadが、baseの今の先端を祖先に含むことを確かめる。
+  `baseSha`がheadの祖先であることは、この2つから従う。
+- `mergeSha`のcommitをAPIで取得し、第1親が`baseSha`、第2親が`headSha`に一致することを確かめる。
+  取得できないときは拒否する。
 
 `baseSha`の照合を、一致ではなく祖先にする。
 一致を求めると、`main`が進むたびに適用が先送りされるためである。
@@ -370,7 +395,8 @@ zipは、展開の前に宣言された大きさとパスを検査し、展開�
 
 - 保護パス(`f/factory/lib/protected_paths.ts`の`matchesForbiddenPath`)に当たるパスを拒否する。
 - 削除を拒否する。
-- `*.script.yaml`は、`schema`以外のキー(`tag`、`timeout`、`lock`の参照先など)が、headの今の版と違えば拒否する。summaryなどを正当に変えたPRを、拒否しないためである。
+- `*.script.yaml`は、`schema`以外のキー(`tag`、`timeout`、`lock`の参照先など)が、headの今の版と違えば拒否する。
+  summaryなどを正当に変えたPRを、拒否しないためである。
 - `schema`は、許可リストの範囲に収める。
   `\`、`!`、`&`、`*`、`%`、タブ、`$`を含むものと、`x-windmill`を含むキーを拒否する。
   `$`で始まる値(`$var:`、`$res:`)は実行者の権限で解決され、`x-windmill`のキーはフォームの挙動を変えるためである。
@@ -397,30 +423,42 @@ lockの意味(版の範囲、パッケージの入れ子、取得元、integrity
   1つでも違えば、manifestの内容と無関係に、パッチ全体を拒否する。
   依存の変更は、パッチの`.script.lock`を見なくても、コードのimportに現れるためである。
 - 局所importは、Windmillの解決に合わせて読む。
-  追えないimportは拒否する。import属性は、キーワードとの間にコメントを挟んだ形も含む。
+  追えないimportは拒否する。
+  import属性は、キーワードとの間にコメントを挟んだ形も含む。
   一覧は[importの読み取り](internals/ci-fix.md#importの読み取り)にある。
-  閉包を求める解決と、依存の集合をたどる解決は、同じ関数を使う。食い違うと、閉包の外のscriptに、依存を隠せるためである。
-- 既存のscript(headの木にlockがある)のlockは、headの木のlockとバイト列まで同一であること。適用しても変わらない。
+  閉包を求める解決と、依存の集合をたどる解決は、同じ関数を使う。
+  食い違うと、閉包の外のscriptに、依存を隠せるためである。
+- 既存のscript(headの木にlockがある)のlockは、headの木のlockとバイト列まで同一であること。
+  適用しても変わらない。
   加えて、閉包の既存のscriptのlockは、baseの先端の木のlockとも同一であること。
   PRの作者がlockを手で変えた形と、古いlockに新しいhashが残る形を、断るためである。
-  比べる相手はheadの木とbaseの先端の木で、manifestの`baseSha`は出どころの照合にだけ使い、内容の比較には使わない。過去のcommitを選ばれて、比較の相手を変えられないためである。
+  比べる相手はheadの木とbaseの先端の木で、manifestの`baseSha`は出どころの照合にだけ使い、内容の比較には使わない。
+  過去のcommitを選ばれて、比較の相手を変えられないためである。
 - 新しいscriptは、同じPRで`.ts`を追加したものに限る。
-  裸のimportの集合が空であること。baseの先端が同じ内容を持つときも、空であることを求める。
+  裸のimportの集合が空であること。
+  baseの先端が同じ内容を持つときも、空であることを求める。
   lockは、baseの先端の木にある依存の無いlib(`f/factory/lib/metadata_patch_manifest.script.lock`)のlockと同一であること。
   参照のlockは、前半の`dependencies`が空で、後半が`<empty>`であることを、検査の中で確かめる。
-  lockと`.script.yaml`の両方が、パッチが運ぶか、headの木にすでにあること。lockの無い新しいscriptは拒否する。
-- `*.script.yaml`を変えてよいのは、`.ts`自身が変わったscriptに限る。入力のスキーマは、そのscript自身の`main`の引数からしか決まらないためである。
-- 空のlockを固定の値として埋め込まない。lockの書式がwmillの版で変わっても、リポジトリの実物と比べるためである。
+  lockと`.script.yaml`の両方が、パッチが運ぶか、headの木にすでにあること。
+  lockの無い新しいscriptは拒否する。
+- `*.script.yaml`を変えてよいのは、`.ts`自身が変わったscriptに限る。
+  入力のスキーマは、そのscript自身の`main`の引数からしか決まらないためである。
+- 空のlockを固定の値として埋め込まない。
+  lockの書式がwmillの版で変わっても、リポジトリの実物と比べるためである。
 - headの木かbaseの木のファイルを読めないときは拒否する。
-- headの木の`f/`の下の`.ts`が5000件を超えるときは拒否する。閉包の計算を有界にするためである。
+- headの木の`f/`の下の`.ts`が5000件を超えるときは拒否する。
+  閉包の計算を有界にするためである。
 
 ##### ロックのハッシュの制限
 
-`wmill-lock.yaml`は、完全なYAMLとして解析しない。wmillが書く決まった形に1行ずつ合わせて読み、外れるものは断る。
+`wmill-lock.yaml`は、完全なYAMLとして解析しない。
+wmillが書く決まった形に1行ずつ合わせて読み、外れるものは断る。
 
 - 変わったキーが、許可したscriptのものに限られることを確かめる。
-  許可するのは、閉包に入るscriptである。hashはimportする先のコードにも依存するためである。
-  この範囲では、hashを任意の値にできる。ただし、lockの内容は変えられないので、依存の解決には影響しない。
+  許可するのは、閉包に入るscriptである。
+  hashはimportする先のコードにも依存するためである。
+  この範囲では、hashを任意の値にできる。
+  ただし、lockの内容は変えられないので、依存の解決には影響しない。
 - 値が64桁の小文字の16進数であることを確かめる。
 - キーの削除と、未知の`version`を拒否する。
 
@@ -476,7 +514,8 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   lockを書くには依存の解決が要り、解決はPRのコードが決めたimportに従って、外部のレジストリへ取りに行くためである。
 - 自動で直すのは、依存が変わらないPRに限る。
   判定は[事前検査](internals/ci-fix.md#事前検査)にあり、判断できないときは通さずに人の手に回す。
-  依存の比較は、実行時に残るimportで行う。Windmillのlockが、型だけのimportと使われないimportの先の依存を含めないためである。
+  依存の比較は、実行時に残るimportで行う。
+  Windmillのlockが、型だけのimportと使われないimportの先の依存を含めないためである。
 - baseの先端のメタデータが最新でないときは、人の手に回す。
   メタデータの生成を飛ばしたcommitが`main`に入りうるので、PRと関係の無い古い`schema`やlockを、最新のように書き直さないためである。
   また、hashが変わるのは、PRが`.ts`を変えたscriptと、baseの先端の値に戻すキーだけに限る。
@@ -492,21 +531,27 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
 - Windmillの注釈、`preprocessor`、flowの定義、インラインscriptを持つflowは、人の手に回す。
   これらは、依存の解決、workerの種類、`.script.yaml`の項目を変えうるのに、hashだけを直しても追いつけないためである。
 - ポートが返す値と上限の値は、入口で検査し、正しくないときは断る。
-  上限の値は正の整数だけを通す。NaNで上限が外れるのを防ぐためである。
+  上限の値は正の整数だけを通す。
+  NaNで上限が外れるのを防ぐためである。
 
 `metadata`ジョブだけが落ちたCI回の再計算の経路は、次で守る。
 流れは[metadataジョブの失敗を直す経路](internals/ci-fix.md#metadataジョブの失敗を直す経路)にある。
 
-- Claudeを起動しない。失敗のログは、通知にも載せない。
+- Claudeを起動しない。
+  失敗のログは、通知にも載せない。
   外部入力で動くのは、事前検査の字句の読み取りと、整合のテストだけの失敗かを決めるためのログの読み取りである。
-  ログは、成否の判断にだけ使い、どこにも残さない。判断は、形を照合する純関数(`isLockIntegrityOnlyLog`)で行う。
+  ログは、成否の判断にだけ使い、どこにも残さない。
+  判断は、形を照合する純関数(`isLockIntegrityOnlyLog`)で行う。
   ログの内容を実行や解釈に使わない。
 - 書き込む先は、worktreeの根の`wmill-lock.yaml`だけで、パスはコードが決める。
-  `O_NOFOLLOW`と`O_NONBLOCK`で開き、FIFOで止まらない。通常のファイルでないとき、ほかにhard linkがあるときは書かない。無いファイルは作らない。
+  `O_NOFOLLOW`と`O_NONBLOCK`で開き、FIFOで止まらない。
+  通常のファイルでないとき、ほかにhard linkがあるときは書かない。
+  無いファイルは作らない。
 - 検証と完了のステップは、修正のステップの出力を信用しない。
   worktreeの変更が、根の`wmill-lock.yaml`1件の`modified`(モード`100644`)で、本文がPRのheadの木からの再計算とバイト列まで同じときに限り、許す。
   許可リスト方式の検査(`checkCiFixChanges`)は変えず、例外は呼び出し側の`inspectCiFixChanges`だけに置く。
-  次のものは、保護パスの一覧に入れない。日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
+  次のものは、保護パスの一覧に入れない。
+  日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
   - 例外を開くコールバックの本体(`pr_fix_verify.ts`、`pr_fix_finish.ts`)。
   - `ci_fix_round.ts`の`isLockOnlyChange`、`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、`readCiFailure`。
   - `ci_fix_round.ts`の`isLockIntegrityOnlyFailure`。
@@ -515,12 +560,15 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
     判定に使う`LOCK_INTEGRITY_TESTS`と`LOCK_INTEGRITY_ANCHOR`も同じである。
     この結果が、再計算で直す回(`metadata_only`)を決め、起動の判断で予算とマーカーの確認を免除する。
     `isLockIntegrityOnlyLog`は、外部由来のCIのログで免除を決めるので、判定の誤りは、予算を使わない再計算の回に入る誤りになる。
-  - `workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)。再計算が読むgitの動き方を決める。
+  - `workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)。
+    再計算が読むgitの動き方を決める。
 
-  これらを書き換えて条件を緩める変更は、マージ前の人のレビューで止める。CI回のClaudeには、CI回の拒否が別に止める。
+  これらを書き換えて条件を緩める変更は、マージ前の人のレビューで止める。
+  CI回のClaudeには、CI回の拒否が別に止める。
   本文が再計算と違うときと、確認できないときは、保護パスの違反として拒否する。
   再試行しても直らない理由で再計算できないときは、再計算の回に限り、固定の理由を返し、保護パスの違反にはしない。
-  回の種類は、CIの実行から読み直して決める。Claudeの回では、保護パスの違反として拒否する。
+  回の種類は、CIの実行から読み直して決める。
+  Claudeの回では、保護パスの違反として拒否する。
   一時的な失敗は、拒否せず、例外にして再試行する。
 - 比べるのは、文字列ではなくバイト列である。
   文字列に復号すると、先頭のBOMが落ち、不正なUTF-8が置き換わって、違う内容が同じに見えるためである。
@@ -528,7 +576,8 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   リポジトリのロックの外から追跡refを更新して、`commitAndPush`と衝突することを避けるためである。
 - 完了のステップの既存の関門は、すべて通る。
   秘密値の検査、検査したツリーとの照合、保護パスの検査、PRの状態とheadの確認、オーナーの数値IDの照合である。
-- commitの親は、`head_sha`に固定する。pushは強制しない。
+- commitの親は、`head_sha`に固定する。
+  pushは強制しない。
   ブランチの先端が動いていればpushは拒否され、動いた回は、新しい失敗として判定し直される。
 - baseの先端は、PRのAPIの`base.sha`ではなく、baseブランチの今の先端をAPIで読んで使う。
   照合の中と、pushの直前に読み直し、動いていれば新しい先端で確かめ直す。
@@ -539,7 +588,8 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   再試行で直らない失敗(想定外の例外の`internal_error`、自己検査の`scan_unavailable`、木の一覧が読めない`tree_unreadable`)は、人の手に回す。
   PRの作者が決めるパスは、通知にも作業項目の理由にも載せない。
   補足は、`scan_unavailable`のworkerのBunの版(`bun <版>`)と、`internal_error`の例外の種類(標準のエラーの名前だけ)に限る。
-- 検査コマンドは、この形のとき実行しない。hashだけを書き換えた変更に、対象リポジトリのコードを実行する意味が無いためである。
+- 検査コマンドは、この形のとき実行しない。
+  hashだけを書き換えた変更に、対象リポジトリのコードを実行する意味が無いためである。
 
 事前検査は、悪意のあるPRに対する境界ではない。
 hashは`.script.lock`の中身を含まない。
@@ -629,9 +679,11 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 通知は、今の`deployed_sha`への反映が成功した記録(`factory.deployments`)のうち最も新しいものより前に作られたものだけが、自動で解決される。
 残るリスクは次のとおりである。
 
-- stateを書けるWindmillの利用者は、`deployed_sha_mismatch`の通知を遅らせられる。`deployed_sha`を書ける者と同じ範囲である。
+- stateを書けるWindmillの利用者は、`deployed_sha_mismatch`の通知を遅らせられる。
+  `deployed_sha`を書ける者と同じ範囲である。
 - stateや`deployed_sha`を書き換えても、通知より新しい反映の成功の記録が無い限り、通知は解決されない。
-- `deployed_sha`を今のHEADに書き換えると、版が一致するので、自己更新もそれを反映済みとみなす。これは通知の仕組みより前からある性質である。
+- `deployed_sha`を今のHEADに書き換えると、版が一致するので、自己更新もそれを反映済みとみなす。
+  これは通知の仕組みより前からある性質である。
 - `factory.deployments`に書けるDBの利用者は、この判定も動かせる。
 
 ### ホストの反映の印
@@ -640,18 +692,26 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 印は、ホストの`mise run up`が共有ボリュームの`/var/lib/factory/host_applied_sha`に書く。
 読む側は、印を信用しすぎないよう次のように読む。
 
-- 通常のファイルで、symlinkでなく、128バイト以下のときだけ読む。`O_NOFOLLOW`と`O_NONBLOCK`で開き、先頭の64バイトだけを読む。
+- 通常のファイルで、symlinkでなく、128バイト以下のときだけ読む。
+  `O_NOFOLLOW`と`O_NONBLOCK`で開き、先頭の64バイトだけを読む。
 - 40桁の版として読めて、self cloneにあるコミットのときだけ使う。
 - 条件に合わなければ、通知を解決しない。
 
 残るリスクは次のとおりである。
 
-- defaultのworkerのジョブは、印を偽造できる。偽の印で、`host_action_required`を黙らせられる。影響は、ホストでの反映の遅れに気づけなくなるところまでである。突くには、defaultのworkerでのコード実行が要る。
-- 印を`approve`の`--applied`の値に使うと、偽の印が承認の始点になる。実際の適用済みと違う始点で承認すると、人が見ていない変更を、記録が隠しうる。そのため、`--applied`の値は印から取らず、ホストのcheckoutの履歴で確かめる([変更を承認する](operations.md#変更を承認する))。印は照合にだけ使う。
+- defaultのworkerのジョブは、印を偽造できる。
+  偽の印で、`host_action_required`を黙らせられる。
+  影響は、ホストでの反映の遅れに気づけなくなるところまでである。
+  突くには、defaultのworkerでのコード実行が要る。
+- 印を`approve`の`--applied`の値に使うと、偽の印が承認の始点になる。
+  実際の適用済みと違う始点で承認すると、人が見ていない変更を、記録が隠しうる。
+  そのため、`--applied`の値は印から取らず、ホストのcheckoutの履歴で確かめる([変更を承認する](operations.md#変更を承認する))。
+  印は照合にだけ使う。
 - ホストの書き込み(`docker compose exec`)は、ジョブと同じ権限で動く。
   同じディレクトリに、`mktemp`のランダムな名前の一時ファイルを排他的に作って書き、`mv -fT`で置き換える。
   印のパスがsymlinkでも、その先は上書きされず、置き換わるのはsymlink自体である。
-  印のパスがディレクトリのときは、中へ移さず失敗し、一時ファイルを消す。その場合、記録は警告で終わる。
+  印のパスがディレクトリのときは、中へ移さず失敗し、一時ファイルを消す。
+  その場合、記録は警告で終わる。
   一時ファイルの名前は予測できないので、ジョブがFIFOなどを先回りして置くことはできない。
   それでも止まらないよう、書き込みは`timeout 10`で包む。
   ホストのスクリプトが得る権限はジョブと同じで、権限は広がらない。
@@ -679,12 +739,16 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 そのリポジトリをcloneして検査コマンドを実行すると、他人のコードを秘密値を持つworkerで動かすことになる。
 そこで、発見の入口に加えて、次の処理が保存済みの名前を照合する。
 
-- 作業項目を進める準備のステップ。リポジトリの取得の前に照合する。
+- 作業項目を進める準備のステップ。
+  リポジトリの取得の前に照合する。
   dependabotの準備(`dependabot_prepare`)は、事実を再収集した後、cloneの前に1回照合する。
   取得の入口の照合から収集を挟むので、その間に名前が入れ替わっても、相手のリポジトリをcloneして依存をインストールしないためである。
-- フォームからのIssueの作成。投稿の前に照合する。
-- Issue化の提案の処理。承認は判断の記録の前に、却下は返信の前に照合する。
-- 長い実行を挟んだ後の書き込みのうち、次の5つの処理。照合は、書き込みの直前に1回行う。
+- フォームからのIssueの作成。
+  投稿の前に照合する。
+- Issue化の提案の処理。
+  承認は判断の記録の前に、却下は返信の前に照合する。
+- 長い実行を挟んだ後の書き込みのうち、次の5つの処理。
+  照合は、書き込みの直前に1回行う。
   実装の終了処理(`implement_finish`)は、pushとリモートブランチの削除の前に照合する。
   PR修正の終了処理(`pr_fix_finish`)は、pushの前に照合する。
   PRレビューの投稿(`pr_review_post`)は、レビューの投稿の前に照合する。
@@ -717,7 +781,8 @@ cloneを開くステップでは、`openFactoryClone`の照合も重なるので
 - 保存済みの名前でGitHubを読み書きする処理は、ほかにもある。
   Issueの状態の確認と整理、承認後のIssueへのコメント、PRへの返信は、名前のままである。
   取り消された作業項目を再開する前の状態の確認と、要件定義を作り直す再実行の前の取り込みも、名前のままである。
-  これらはcloneも検査コマンドの実行もしない。投稿の内容は、名前を取得した人の目に触れうる。
+  これらはcloneも検査コマンドの実行もしない。
+  投稿の内容は、名前を取得した人の目に触れうる。
 - 監視が無効の間の`watch_pr_ci`の回復は、オーナーの照合をせずに、名前でPRの状態とheadを読む。
   書き込みは、FactoryのDBと、Discordへの固定文に限る。
   DBへの書き込みは、行を戻すこと、行を`superseded`にすること、noticeを足すこと、noticeを解決することである。
@@ -743,15 +808,20 @@ cloneを開くステップでは、`openFactoryClone`の照合も重なるので
 残るリスクは次のとおりである。
 
 - 拒否は、`callGhApi`を通る呼び出しにだけ効く。
-  argv配列で`gh`を起動するのは`github.ts`だけである。`workspace.ts`のgit credential helperの`gh auth git-credential`は除く。
+  argv配列で`gh`を起動するのは`github.ts`だけである。
+  `workspace.ts`のgit credential helperの`gh auth git-credential`は除く。
   静的テストが、argvの先頭に`gh`を置く配列を書くファイルが`github.ts`だけであることを確かめる。
 - `fetch`でRESTを呼ぶ経路は、`callGhApi`を通らず、実行時の拒否が効かない。
   経路は、`github.ts`の`fetchIssueObject`、`lib/metadata_patch_download.ts`、GraphQLの`gh_graphql.ts`である。
-  字面の`search/`だけを静的テストが止める。宛先は固定で、実害は無い。
+  字面の`search/`だけを静的テストが止める。
+  宛先は固定で、実害は無い。
 - `gh search`、`--search`、argvの`gh`と`search`の並びも、静的テストが字面で走査して止める。
-- GraphQLの`search`のフィールドは拒まない。使う変更は、枠の消費を設計から見直す。
-- endpointを文字列の組み立てで作る呼び出しは、静的テストが見つけられない。`callGhApi`を通る呼び出しなら、実行時の拒否が止める。
-- 実行時の拒否が正規化するのは、先頭の`/`、大文字、絶対URLの3種類だけである。ドットセグメントとパーセントエンコードは対象外で、呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通る。
+- GraphQLの`search`のフィールドは拒まない。
+  使う変更は、枠の消費を設計から見直す。
+- endpointを文字列の組み立てで作る呼び出しは、静的テストが見つけられない。
+  `callGhApi`を通る呼び出しなら、実行時の拒否が止める。
+- 実行時の拒否が正規化するのは、先頭の`/`、大文字、絶対URLの3種類だけである。
+  ドットセグメントとパーセントエンコードは対象外で、呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通る。
 
 ### migrationを戻した日の日次予算
 
@@ -774,12 +844,18 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 - `f/factory/db_backup_url`
 - `f/factory/heartbeat_url`
 
-scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
+scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。
+URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
 親プロセスが`fetch`で使う秘密値は、次の5か所である。
 
-- Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。使うのは、取り消された作業項目を再開するときの対象の状態の確認と、Issueの要件定義を作り直す再実行のときの取り込み内容の更新(現在のIssueの題名と本文の取得)である。宛先は`https://api.github.com`に固定し、リダイレクトは辿らない。境界は[Console用workerの境界](#console用workerの境界)に書く。
-- Console用のworkerで動く`approval_decide`は、要件定義の承認の前に現在のIssueを読むため、同じ形で`github_token`を使う。10秒の締め切りを付け、エラーの文とログにトークンとIssueの内容を含めない。
-- Discordへの送信(`lib/discord.ts`の`notify`)は、`discord_webhook_url`を`fetch`の宛先のURLにする。URLそのものが秘密なので、エラーメッセージとログには含めない。
+- Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。
+  使うのは、取り消された作業項目を再開するときの対象の状態の確認と、Issueの要件定義を作り直す再実行のときの取り込み内容の更新(現在のIssueの題名と本文の取得)である。
+  宛先は`https://api.github.com`に固定し、リダイレクトは辿らない。
+  境界は[Console用workerの境界](#console用workerの境界)に書く。
+- Console用のworkerで動く`approval_decide`は、要件定義の承認の前に現在のIssueを読むため、同じ形で`github_token`を使う。
+  10秒の締め切りを付け、エラーの文とログにトークンとIssueの内容を含めない。
+- Discordへの送信(`lib/discord.ts`の`notify`)は、`discord_webhook_url`を`fetch`の宛先のURLにする。
+  URLそのものが秘密なので、エラーメッセージとログには含めない。
 - 収集の`collect_github`(`lib/gh_graphql.ts`)は、`github_read_tokens`の所有者ごとのトークンを`fetch`の`Authorization`ヘッダに載せる。
   宛先は`https://api.github.com/graphql`に固定し、リダイレクトは辿らず、1要求に10秒の締め切りを付ける。
   エラーの文とログに、トークンと応答の本文を含めない。
@@ -791,11 +867,14 @@ scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変�
   URLそのものが秘密なので、ログには伏せた形だけを残す。
   漏れたときの影響は、偽の生存の報告で、止まったことに気づくのが遅れることに限られる。
 
-エラーメッセージと失敗の記録(`job_failures`)には、マスク処理を通してから値を入れる。マスクの関数はテストで検証する。
+エラーメッセージと失敗の記録(`job_failures`)には、マスク処理を通してから値を入れる。
+マスクの関数はテストで検証する。
 
 ### ホストでの保持
 
-ホストで使う次の秘密値は、gitignore済みの`mise.local.toml`に置く。テンプレートは`mise.local.toml.example`である。秘密でない設定は`mise.toml`の`[env]`にコミットする。
+ホストで使う次の秘密値は、gitignore済みの`mise.local.toml`に置く。
+テンプレートは`mise.local.toml.example`である。
+秘密でない設定は`mise.toml`の`[env]`にコミットする。
 
 - `DB_PASSWORD`
 - `WM_ADMIN_EMAIL`
@@ -807,17 +886,28 @@ scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変�
 - `GITHUB_READ_TOKEN_<OWNER>`(所有者ごとに1つ。`<OWNER>`は所有者のloginを大文字にして、`-`を`_`にした名前)
 - `HEARTBEAT_URL`(任意。外部の死活監視のURL)
 
-値は人が投入する。投入のコマンドは[セットアップ](setup.md)にある。Claudeが更新するのは、値の無いテンプレートである`mise.local.toml.example`までにする。投入が必要になったら、Claudeは実行するコマンドを示し、待たずにほかの作業を続ける。
+値は人が投入する。
+投入のコマンドは[セットアップ](setup.md)にある。
+Claudeが更新するのは、値の無いテンプレートである`mise.local.toml.example`までにする。
+投入が必要になったら、Claudeは実行するコマンドを示し、待たずにほかの作業を続ける。
 
-`infra/.env`は置かない。存在するとDocker Composeが自動で読み込むためである。composeファイルは`mise run`が解決した環境変数を`${VAR:?run via mise}`の形で参照する。`mise run`を通さずに`docker compose`を実行すると、変数が無いので起動前に止まる。
+`infra/.env`は置かない。
+存在するとDocker Composeが自動で読み込むためである。
+composeファイルは`mise run`が解決した環境変数を`${VAR:?run via mise}`の形で参照する。
+`mise run`を通さずに`docker compose`を実行すると、変数が無いので起動前に止まる。
 
 ### コマンド引数の例外
 
-`scripts/bootstrap.sh`は、秘密値をコマンドの引数に載せない。例外は`wmill workspace add --token <t>`の1か所で、CLIにほかの受け口が無いためである。共有のマシンで実行すると、`ps`などでこの引数が見える。
+`scripts/bootstrap.sh`は、秘密値をコマンドの引数に載せない。
+例外は`wmill workspace add --token <t>`の1か所で、CLIにほかの受け口が無いためである。
+共有のマシンで実行すると、`ps`などでこの引数が見える。
 
 ### Windmill APIトークンの期限
 
-workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限定した有効期限180日のAPIトークンである。`mise run bootstrap`を実行するたびに新しいトークンを発行し、古いトークンを失効させる。これがトークンのローテーションの手段になる。期限が切れると、`self_update`のスケジュールが失敗する。
+workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限定した有効期限180日のAPIトークンである。
+`mise run bootstrap`を実行するたびに新しいトークンを発行し、古いトークンを失効させる。
+これがトークンのローテーションの手段になる。
+期限が切れると、`self_update`のスケジュールが失敗する。
 
 ### 資格情報の期限の記録
 
@@ -839,7 +929,9 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 
 ## 資格情報の取得
 
-`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`は自分で決める。次の5つは外部のサービスから取得する。取得した値の投入は[セットアップ](setup.md)の手順で行う。
+`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`は自分で決める。
+次の5つは外部のサービスから取得する。
+取得した値の投入は[セットアップ](setup.md)の手順で行う。
 
 ### GitHubのPAT
 
@@ -848,8 +940,10 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 1. GitHub右上のアイコンから、**Settings**、**Developer settings**、**Personal access tokens**、**Fine-grained tokens**の順に開く。
 2. **Generate new token**を押す。
 3. 下の表のとおりに各項目を設定する。
-4. **Generate token**を押す。表示された`github_pat_...`は一度しか表示されないので、その場で`GITHUB_TOKEN`として投入する。
-5. orgのリポジトリが対象なら、org側でトークンを承認する。orgの設定によっては承認が要る。
+4. **Generate token**を押す。
+   表示された`github_pat_...`は一度しか表示されないので、その場で`GITHUB_TOKEN`として投入する。
+5. orgのリポジトリが対象なら、org側でトークンを承認する。
+   orgの設定によっては承認が要る。
 
 | 項目 | 設定値 |
 | --- | --- |
@@ -866,8 +960,13 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 | Repository permissions: Workflows | No access |
 | Account permissions | すべてNo access |
 
-ContentsをRead and writeにするのは、PR修正と実装のフローがブランチにpushするためである。WorkflowsはNo accessのままにする。`.github/workflows/`を含むpushをGitHubに拒否させるためである。実装フローは`.github/`の変更を止めずに記録するので、この拒否が実質のガードになる。
-ただし、この拒否が及ぶのは`.github/workflows/`の下だけである。`.github/actions/`のcomposite actionには及ばないので、PR修正はパスで止め、実装フローは記録する。組み立てなど配布物に関わる手順は、composite actionに分けない。
+ContentsをRead and writeにするのは、PR修正と実装のフローがブランチにpushするためである。
+WorkflowsはNo accessのままにする。
+`.github/workflows/`を含むpushをGitHubに拒否させるためである。
+実装フローは`.github/`の変更を止めずに記録するので、この拒否が実質のガードになる。
+ただし、この拒否が及ぶのは`.github/workflows/`の下だけである。
+`.github/actions/`のcomposite actionには及ばないので、PR修正はパスで止め、実装フローは記録する。
+組み立てなど配布物に関わる手順は、composite actionに分けない。
 
 ActionsをRead-onlyにするのは、次の3つを読むためである。
 
@@ -876,17 +975,24 @@ ActionsをRead-onlyにするのは、次の3つを読むためである。
 - CI回の部品(`getWorkflowJobLog`)が読む、失敗したジョブのログ本文。
   詳細は[CIの失敗を直す部品の仕様](internals/ci-fix.md)にある。
 
-書き込みの権限は付けない。実行の再実行や取り消しをさせないためである。
-権限が足りないリポジトリは、`watch_main_ci`が要対応の通知`main_ci_check_denied`で、`watch_pr_ci`が要対応の通知`pr_ci_check_denied`で知らせる。権限が足りない間は、そのリポジトリのCIの失敗に気づけない。
-`watch_pr_ci`は、実行の一覧とジョブの一覧とPRの状態に加えて、PRのコミット本文と、Factoryのリポジトリのfactory-fixスキルのファイルを読む。ワークフローのログは取得しない。
-コミット本文は、トレーラーの照合だけに使い、ログに出さない。スキルのファイルは、マーカーの有無だけを見る。
+書き込みの権限は付けない。
+実行の再実行や取り消しをさせないためである。
+権限が足りないリポジトリは、`watch_main_ci`が要対応の通知`main_ci_check_denied`で、`watch_pr_ci`が要対応の通知`pr_ci_check_denied`で知らせる。
+権限が足りない間は、そのリポジトリのCIの失敗に気づけない。
+`watch_pr_ci`は、実行の一覧とジョブの一覧とPRの状態に加えて、PRのコミット本文と、Factoryのリポジトリのfactory-fixスキルのファイルを読む。
+ワークフローのログは取得しない。
+コミット本文は、トレーラーの照合だけに使い、ログに出さない。
+スキルのファイルは、マーカーの有無だけを見る。
 ログを読んでClaudeに渡すのは、`watch_pr_ci`が起動した`pr_fix`のCI回だけである。
-`watch_pr_ci`が起動するのは、設定`pr_ci_fix_enabled`が`true`のときに限る。起動の判断は、レビューの有無、ジョブの種類などの固定の条件で決め、PRやログの文字列を読んで決めない。
+`watch_pr_ci`が起動するのは、設定`pr_ci_fix_enabled`が`true`のときに限る。
+起動の判断は、レビューの有無、ジョブの種類などの固定の条件で決め、PRやログの文字列を読んで決めない。
 コミット本文は、トレーラーの行との完全一致だけを見て、自由な文字列は解釈しない。
-通知とDiscordの文は固定文で、workflowの名前、実行の結論、ログといった外部の文字列を入れない。リポジトリへ書ける人が決める文字列なので、通知を介して人やClaudeへ指示を渡させないためである。
+通知とDiscordの文は固定文で、workflowの名前、実行の結論、ログといった外部の文字列を入れない。
+リポジトリへ書ける人が決める文字列なので、通知を介して人やClaudeへ指示を渡させないためである。
 設定`pr_ci_watch_human_prs`が`true`のときは、許可された人が作ったPRのheadの実行も同じ権限で読む。
 許可された人は、PATのアカウントと`allowed_labeler_logins`のアカウントである。
-候補は、収集の表の行と、設定で明示したリポジトリのRESTの一覧から見つける。検索は使わない。
+候補は、収集の表の行と、設定で明示したリポジトリのRESTの一覧から見つける。
+検索は使わない。
 表の行も一覧の要素も候補を絞るだけなので、PRを読み直して、作者の種別が`User`で、許可された名前(IDを設定した名前はIDも)に合うことを確かめる。
 種別が`Bot`の作者、forkのPR、Factoryの実装ブランチの形のブランチのPRは、行を作らない。
 リポジトリ、作者、fork、ブランチは、どちらの元から来た候補でも読み直した値で確かめる。
@@ -903,21 +1009,26 @@ ActionsをRead-onlyにするのは、次の3つを読むためである。
 `owners`の外の`factory_repo`は、表に行が無いので、常に該当する。
 このとき5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。
 1回の実行に、1リポジトリ10ページ、発見の時間の予算30秒、rate limitでの停止という上限がある。
-時間の予算は、読み始める前に確かめる。読み始めた1リポジトリは最大10ページを読み切るので、1リポジトリの分だけ超えうる。
+時間の予算は、読み始める前に確かめる。
+読み始めた1リポジトリは最大10ページを読み切るので、1リポジトリの分だけ超えうる。
 FactoryのPRの判定と起動は発見より前に終わるので、この超過に巻き込まれない。
 条件は、対象のリポジトリが明示リポジトリで、公開されていることなので、受け入れる。
 検索へ戻す設定は無い。
 人のPRには、直す作業項目を起動せず、PRとリポジトリへの書き込みもしない。
 通知の文は、FactoryのPRと同じ固定文である。
-forkのPRの実行と、別のPRの実行は、判定に使わず捨てる。headのリポジトリのIDがベースと違う実行と、結び付いたPRの番号が違う実行を使うと、forkや別のPRの結果を、FactoryのPRの結果として扱ってしまうためである。
+forkのPRの実行と、別のPRの実行は、判定に使わず捨てる。
+headのリポジトリのIDがベースと違う実行と、結び付いたPRの番号が違う実行を使うと、forkや別のPRの結果を、FactoryのPRの結果として扱ってしまうためである。
 Actions: Read-onlyでは、実行の一覧だけでなく、選んだ全リポジトリの実行のログとartifactも読める。
 `github_token`は、Console用workerの`approval_decide`と`retry_work_item`も読む。
 そのため、漏れたときの影響は、Contentsの読み書きに加えて、ログとartifactを読まれる分だけ広がる。
-ログとartifactには秘密値を入れない。漏れたときの影響が広がる分は、残るリスクとして受け入れる。
+ログとartifactには秘密値を入れない。
+漏れたときの影響が広がる分は、残るリスクとして受け入れる。
 
 PRのマージの競合を検知するscript`watch_pr_conflicts`は、Pull requestsの読み取りだけを使い、開いているPRの一覧とPRの状態を読む。
-読む範囲は、許可リストに合うリポジトリの開いているPRで、作者を問わない。検索は使わない。
-判定するのは、そのうちPATのアカウントが作った、Factoryのブランチの形のPRだけである。見つけ方は[PRのCI監視の内部仕様](internals/pr-ci.md#対象の見つけ方)にある。
+読む範囲は、許可リストに合うリポジトリの開いているPRで、作者を問わない。
+検索は使わない。
+判定するのは、そのうちPATのアカウントが作った、Factoryのブランチの形のPRだけである。
+見つけ方は[PRのCI監視の内部仕様](internals/pr-ci.md#対象の見つけ方)にある。
 収集の2つの設定が真のときは、リポジトリの発見とPRの列挙を収集の表から読む。
 表の値は候補を絞ることにだけ使い、Factoryがpushしてよいブランチかの判断には使わない。
 候補は、読み直したPRの応答で確かめ直してから扱う。
@@ -927,16 +1038,22 @@ PRのマージの競合を検知するscript`watch_pr_conflicts`は、Pull reque
 候補が減れば、次に収集が書き直すまで列挙されず、処理が遅れるだけである。
 `watch_pr_conflicts`自身は、PRとリポジトリへ書き込まない。
 設定`pr_conflict_fix_enabled`が`true`のときは、競合を直す作業項目(`pr_fix`の競合回)を起動する。
-そのフローが、同じPATでmergeコミットをPRのブランチへpushする。書き込みの安全策は、[マージの競合を解く回](#マージの競合を解く回)に書く。
+そのフローが、同じPATでmergeコミットをPRのブランチへpushする。
+書き込みの安全策は、[マージの競合を解く回](#マージの競合を解く回)に書く。
 起動の判断のために、読む資源が増える。
 
-- PRのcommit本文は、トレーラー`Generated-By`の完全一致の判定だけに使う。ログと通知には出さない。
-- Factoryのリポジトリのfactory-fixスキルは、マーカーの有無だけを見る。本文は使わない。
+- PRのcommit本文は、トレーラー`Generated-By`の完全一致の判定だけに使う。
+  ログと通知には出さない。
+- Factoryのリポジトリのfactory-fixスキルは、マーカーの有無だけを見る。
+  本文は使わない。
 - リポジトリの既定のブランチの名前と、その先頭のshaを読み、mainのCIの記録を引く。
 
-起動の入力は、作業項目のIDだけである。競合の行のIDと競合の回は、作業項目の列から読む。
-保留の理由を通知とDiscordの文に載せるときは、語彙の固定値に対応する固定の説明だけを使う。外部の文字列は載せない。
-通知とDiscordの文には、PRの題名やブランチ名を載せない。リポジトリへ書ける人が決める文字列を、通知を介して人やClaudeへ渡させないためである。
+起動の入力は、作業項目のIDだけである。
+競合の行のIDと競合の回は、作業項目の列から読む。
+保留の理由を通知とDiscordの文に載せるときは、語彙の固定値に対応する固定の説明だけを使う。
+外部の文字列は載せない。
+通知とDiscordの文には、PRの題名やブランチ名を載せない。
+リポジトリへ書ける人が決める文字列を、通知を介して人やClaudeへ渡させないためである。
 残るリスクとして、トレーラーはcommit本文の照合なので、リポジトリへ書ける人は偽れる。
 偽ったcommitだけのPRは、「Factoryが作ったPR」として自動で直す対象になりうる。
 対象のPRは、PATのアカウントが作った、Factoryのブランチの形のPRに限る。
@@ -944,17 +1061,21 @@ PRのマージの競合を検知するscript`watch_pr_conflicts`は、Pull reque
 残るリスクとして、第三者が1000件超のPRで、REST一覧を読むリポジトリを埋めることがある。
 REST一覧を読むのは、表の記録が新しくない間の作業項目、競合の行、明示リポジトリと、収集が止まっている間である。
 このとき5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。
-1回の実行に、1リポジトリ10ページ、予算120秒、rate limitでの停止という上限がある。条件は、対象のリポジトリが作業項目、競合の行、明示リポジトリのどれかに入り、公開されていることなので、受け入れる。
+1回の実行に、1リポジトリ10ページ、予算120秒、rate limitでの停止という上限がある。
+条件は、対象のリポジトリが作業項目、競合の行、明示リポジトリのどれかに入り、公開されていることなので、受け入れる。
 明示リポジトリは、運用者本人のPRが無くてもREST一覧で読まれる。
 残るリスクとして、次のPRを拾えなくなる。
 作業項目も競合の行も無く、表も古い、明示でないリポジトリにあるFactoryのPRである。
 読めない間は、収集の鮮度の監視が通知するまで、黙って見送る。
 検索へ戻す設定は無い。
 
-fine-grained PATは、トークンの値を変えずに権限の設定だけを変えられる。権限を変えるときは既存のトークンを更新すればよく、再発行は要らない。
-orgのリポジトリでは、権限を足すと、org側で再び承認を求められることもある。承認するまで、同じ通知は残る。
+fine-grained PATは、トークンの値を変えずに権限の設定だけを変えられる。
+権限を変えるときは既存のトークンを更新すればよく、再発行は要らない。
+orgのリポジトリでは、権限を足すと、org側で再び承認を求められることもある。
+承認するまで、同じ通知は残る。
 
-Issue化の提案を承認してIssueを作るとき(`issue_proposal_apply`)も、同じ`f/factory/github_token`を使う。別の資格情報は用意しない。
+Issue化の提案を承認してIssueを作るとき(`issue_proposal_apply`)も、同じ`f/factory/github_token`を使う。
+別の資格情報は用意しない。
 
 作成済みのIssueは、本文の最後の行の目印で見つける(`findIssueByMarker`)。
 リポジトリのIssueの一覧を、PATのアカウントが作ったものに絞り、新しい順に読む。
@@ -962,12 +1083,16 @@ Issue化の提案を承認してIssueを作るとき(`issue_proposal_apply`)も�
 提案の作成時刻の1時間前より古い項目に当たったら読み終える。
 10ページ(1000件)で読み終えなければ失敗にして、提案を保留に戻す。
 一部だけで「無い」と判断すると、Issueが重複して作られるためである。
-1000件は、PATのアカウントが作ったIssueとPRの合計である。PRは除くが、ページは消費する。
-走査は承認のたびに行う。前回の試行があるときだけに絞る案は、試行の記録の列を足すmigrationが要るので採らない。
+1000件は、PATのアカウントが作ったIssueとPRの合計である。
+PRは除くが、ページは消費する。
+走査は承認のたびに行う。
+前回の試行があるときだけに絞る案は、試行の記録の列を足すmigrationが要るので採らない。
 走査の所要時間に、実時間の予算は置かない。
 残るリスクは次のとおりである。
 
-- 人がIssueの末尾に書き足すと、目印が最後の行でなくなり、再試行のときに見つからず、Issueが重複して起票される。書き足せるのは、リポジトリのIssueを編集できる人に限る。受け入れる。
+- 人がIssueの末尾に書き足すと、目印が最後の行でなくなり、再試行のときに見つからず、Issueが重複して起票される。
+  書き足せるのは、リポジトリのIssueを編集できる人に限る。
+  受け入れる。
 - 目印を偽造して、作成済みのIssueとして再利用させる経路がある。
   外の人が、PATと同じアカウントのIssueの最後の行に、目印を書く経路は無い。
   一覧を作成者で絞ること、Factoryが作るIssueの最後の行が`appendIssueProposalMarker`の目印に固定されることが、その根拠である。
@@ -979,17 +1104,28 @@ Issue化の提案を承認してIssueを作るとき(`issue_proposal_apply`)も�
   偽の目印は、作成済みのIssueとして再利用される。
   新しいIssueは作られず、再利用されたIssueの番号が`setIssueProposalCreatedIssue`で提案に記録される。
   `pr_fix`の提案では、PRのスレッドにその番号で返信して、スレッドを解決する。
-  ラベルは再利用のとき付け直さず、記録済みの選択をそのまま付けた扱いにする(`issue_proposal_apply.ts`の`labelApplied`)。そのため、実際には付いていないラベルが付いた扱いになりうる。
-  受け入れる。偽造できる人は、Factoryのリポジトリに書き込める人で、その人はIssueやPRを直接操作できるためである。
-- 提案の作成の1時間前から承認までの間に、PATのアカウントが作ったIssueとPRが1000件を超えると、その提案の承認は通らない。承認は保留のまま残り、再度承認しても通らないので、却下して起票し直すしかない。受け入れる。長く保留した提案だけで起き、却下して起票し直せば復旧できるためである。
-- 走査と作成が、Issueを作る処理の印の有効期間(15分)を超えて続く障害では、印を取り直した別の呼び出しと重なり、Issueが重複して起票されうる。受け入れる。Consoleの残るリスクにある「期限を超える処理と取り直した処理は、理論上は重なりうる」と同じ内容である。
-- 再試行の前にPATのアカウントが替わると、前のアカウントが作ったIssueは作成者で絞った一覧に出ず、取りこぼして重複して起票される。受け入れる。再試行の前にPATを替える運用は想定しないためである。
+  ラベルは再利用のとき付け直さず、記録済みの選択をそのまま付けた扱いにする(`issue_proposal_apply.ts`の`labelApplied`)。
+  そのため、実際には付いていないラベルが付いた扱いになりうる。
+  受け入れる。
+  偽造できる人は、Factoryのリポジトリに書き込める人で、その人はIssueやPRを直接操作できるためである。
+- 提案の作成の1時間前から承認までの間に、PATのアカウントが作ったIssueとPRが1000件を超えると、その提案の承認は通らない。
+  承認は保留のまま残り、再度承認しても通らないので、却下して起票し直すしかない。
+  受け入れる。
+  長く保留した提案だけで起き、却下して起票し直せば復旧できるためである。
+- 走査と作成が、Issueを作る処理の印の有効期間(15分)を超えて続く障害では、印を取り直した別の呼び出しと重なり、Issueが重複して起票されうる。
+  受け入れる。
+  Consoleの残るリスクにある「期限を超える処理と取り直した処理は、理論上は重なりうる」と同じ内容である。
+- 再試行の前にPATのアカウントが替わると、前のアカウントが作ったIssueは作成者で絞った一覧に出ず、取りこぼして重複して起票される。
+  受け入れる。
+  再試行の前にPATを替える運用は想定しないためである。
 
-有効期限は最長で1年である。`poll_issues`は冒頭で`GET /user`を呼び、トークンが失効していればジョブを失敗させる。
+有効期限は最長で1年である。
+`poll_issues`は冒頭で`GET /user`を呼び、トークンが失効していればジョブを失敗させる。
 失敗は、スケジュールの失敗を拾う検出器(`detect_schedule_failures`)が`job_failures`に記録し、Discordに`job_failed`として通知する。
 直近3回の実行が続けて失敗すると、要対応の通知`schedule_failing`も残る。
 
-GitHubの認証は、環境変数`GH_TOKEN`と、gitのcredential helperとしての`gh auth git-credential`だけで行う。`gh auth login`の対話ログインと、トークンを埋め込んだclone URLは使わない。
+GitHubの認証は、環境変数`GH_TOKEN`と、gitのcredential helperとしての`gh auth git-credential`だけで行う。
+`gh auth login`の対話ログインと、トークンを埋め込んだclone URLは使わない。
 
 ### Claude CodeのOAuthトークン
 
@@ -1086,9 +1222,13 @@ loginに`_`を含む所有者(EMUのアカウント)は、環境変数の名前�
 
 ## Windmillの公開範囲と初期パスワード
 
-Caddyは`WM_BIND`のアドレスにだけバインドする。既定値は`mise.toml`の`[env]`にある`127.0.0.1`なので、ホストの外からは到達できない。外部に公開するときは、利用者が`WM_BIND`を明示的に変える。
+Caddyは`WM_BIND`のアドレスにだけバインドする。
+既定値は`mise.toml`の`[env]`にある`127.0.0.1`なので、ホストの外からは到達できない。
+外部に公開するときは、利用者が`WM_BIND`を明示的に変える。
 
-初期の管理者アカウントのパスワードは、既知の既定値`changeme`である。`scripts/bootstrap.sh`はログインした後、パスワードを必ず`WM_ADMIN_PASSWORD`に変える。`WM_ADMIN_PASSWORD`が`changeme`か12文字未満なら、`bootstrap.sh`は実行を拒む。
+初期の管理者アカウントのパスワードは、既知の既定値`changeme`である。
+`scripts/bootstrap.sh`はログインした後、パスワードを必ず`WM_ADMIN_PASSWORD`に変える。
+`WM_ADMIN_PASSWORD`が`changeme`か12文字未満なら、`bootstrap.sh`は実行を拒む。
 
 `mise run doctor`は、既定のパスワードでログインできる状態をNGとして報告する。
 
@@ -1125,7 +1265,9 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 
 残るリスクは次のとおりである。
 
-- 許可リストと型付きの関数が防ぐのは、Console自身の誤りだけである。ConsoleのXSSや、運用者のCookieを持つ攻撃者は防げない。Cookieがあれば、許可リストの外のscriptも、Windmillのapiから直に呼べる。
+- 許可リストと型付きの関数が防ぐのは、Console自身の誤りだけである。
+  ConsoleのXSSや、運用者のCookieを持つ攻撃者は防げない。
+  Cookieがあれば、許可リストの外のscriptも、Windmillのapiから直に呼べる。
   ログインのセッションの有効期間は30日で、Windmillの既定の3日より長い。
   運用者のブラウザが管理者のCookieを持つ時間も、そのぶん長い。
 - 新規投入の再送は、冪等キーで止める。
@@ -1137,7 +1279,8 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
   - 止まらないのは、次の場合である。
     - リロードの後の再送
     - 別のタブからの再送
-    - 入力を変えた再送。新しいキーを付けて、別の投入として扱う
+    - 入力を変えた再送。
+      新しいキーを付けて、別の投入として扱う
     - キーを付けない直接のフロー実行
     - 保持期間(`retention_work_items_days`)を過ぎたキー
 
@@ -1156,7 +1299,8 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
   - 同じキーで内容が違う投入は、黙って捨てず、`intake_key_conflict`で失敗させて通知に出す。
   - 作成の途中で別のジョブが同じキーを予約しているときは、成功で返さず、`intake_key_in_flight`で失敗させて通知に出す。
     成功で返すと、作成が失敗したときに、Issueの無い投入が成功に見えるためである。
-  - 作成に失敗しても、予約は消さない。GitHubに届いたか分からないためである。
+  - 作成に失敗しても、予約は消さない。
+    GitHubに届いたか分からないためである。
     次の試行は、Issueの本文の末尾の目印(`<!-- factory:intake:<キー> -->`)で、作成済みのIssueを探して使う。
     本文の末尾は、区切りの行(`<!-- factory:intake:end -->`)、空行、目印の順に終わる。
     手動投入は、キーの有無にかかわらず本文の最後に区切りの行を足す。
@@ -1168,60 +1312,127 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
     時刻の比較は、DBの時計だけで行う。
   - 残るリスクは次の3つである。
     GitHubの一覧の反映が遅れると、目印の探索が作成済みのIssueを見つけられず、Issueが二重になりうる。
-    `gh`がタイムアウトすると、予約が10分残る。その間の同じキーの再送は、`intake_key_in_flight`で失敗して通知に出る。
+    `gh`がタイムアウトすると、予約が10分残る。
+    その間の同じキーの再送は、`intake_key_in_flight`で失敗して通知に出る。
     取り直した試行の目印の探索が、タイムアウトやレート制限、一覧の件数の上限で失敗すると、予約の時刻だけが先へ進む。
     探索の窓は予約の時刻から始まるので、次の取り直しは最初の試行が作ったIssueを見つけられず、Issueが二重になりうる。
-    被害はIssue1件の重複で、重複したpipelineは承認で止まる。取り直しの前に探索する順にすると設計が変わるので、受け入れる。
-    承認を省く進め方では、重複したIssueが承認で止まらない。ラベルも作業項目も無い孤立したIssueとして残り、人が閉じる。
+    被害はIssue1件の重複で、重複したpipelineは承認で止まる。
+    取り直しの前に探索する順にすると設計が変わるので、受け入れる。
+    承認を省く進め方では、重複したIssueが承認で止まらない。
+    ラベルも作業項目も無い孤立したIssueとして残り、人が閉じる。
   - 承認を省く進め方では、キーが必須である。
     検証(`validateManualIntake`)、Issueの作成、登録の3か所が、副作用の前に断る。
     キーを扱う3つのファイルと、キーの表のmigrationは、保護パスに入れる([進め方ごとの承認](#進め方ごとの承認))。
-- 承認の二重の送信を画面で止められるのは、このタブの中だけである。別のタブや別の端末、リロードの後は止められない。
+- 承認の二重の送信を画面で止められるのは、このタブの中だけである。
+  別のタブや別の端末、リロードの後は止められない。
   Issue提案のIssue作成のやり直しは、画面でもこのタブで15分間止める。
   それでも重なると、どちらの呼び出しも作成済みのIssueが無いと見て、Issueが2件できうる。
   サーバーは、Issueを作る前に承認依頼ごとの印を条件付きのUPDATEで取り、取れなかった呼び出しを何もせずに終えて、この重なりを緩和する。
-  Windmillの同時実行の制限(`concurrent_limit`)は設定しない。有償版でしか効かない。設定すると、自動の反映を拒否されるおそれもある。
+  Windmillの同時実行の制限(`concurrent_limit`)は設定しない。
+  有償版でしか効かない。
+  設定すると、自動の反映を拒否されるおそれもある。
   印は15分で切れるので、止まった処理のやり直しは塞がれない。
-  失敗して提案を保留に戻した後も、印は期限まで残る。期限を過ぎて走り続けた呼び出しが失敗して戻すとき、印を取り直した別の呼び出しがIssueを作っている最中でも、次の承認と重ならないようにするためである。
-  印に持ち主の識別子は無い。期限を超える処理と取り直した処理は、理論上は重なりうる。
-- `main`へのマージは、承認0件のPRで済む。PRの必須チェックは通る必要があるが、人のレビューは強制されない。FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開))。そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
+  失敗して提案を保留に戻した後も、印は期限まで残る。
+  期限を過ぎて走り続けた呼び出しが失敗して戻すとき、印を取り直した別の呼び出しがIssueを作っている最中でも、次の承認と重ならないようにするためである。
+  印に持ち主の識別子は無い。
+  期限を超える処理と取り直した処理は、理論上は重なりうる。
+- `main`へのマージは、承認0件のPRで済む。
+  PRの必須チェックは通る必要があるが、人のレビューは強制されない。
+  FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開))。
+  そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。
+  Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
   保護パスの反映の承認は、Consoleの配信物(`console/`)を止めない([反映の承認](#反映の承認))。
-- CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
-- `ci.yml`の`console-a11y`ジョブが使うPlaywrightのブラウザは、ハッシュで照合しない。HTTPSで公式の取得元(`cdn.playwright.dev`、予備に`playwright.download.prss.microsoft.com`)から取る。取得元かその通信が侵害されると、改ざんされたブラウザが動く。
+- CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。
+  `digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
+- `ci.yml`の`console-a11y`ジョブが使うPlaywrightのブラウザは、ハッシュで照合しない。
+  HTTPSで公式の取得元(`cdn.playwright.dev`、予備に`playwright.download.prss.microsoft.com`)から取る。
+  取得元かその通信が侵害されると、改ざんされたブラウザが動く。
   受け入れる理由は、このジョブが`contents: read`の権限だけを持ち、秘密値と配信物を扱わず、PRの実行だけで動くためである。
   キャッシュのトークン(`ACTIONS_RUNTIME_TOKEN`)は、`permissions`と関係なく全ジョブに渡る。
   そのため、`main`のpushで動かすと、`main`の範囲のキャッシュ(`console-dist.yml`が復元するビューアのキャッシュ)へ書く経路ができる。
   `main`の実行では、このジョブを飛ばす。
-  ブラウザはキャッシュせず、毎回取得する。照合しないキャッシュを、`main`の実行が書いてPRの実行が読む経路を作らないためである。
-- e2eの依存(`@playwright/test`、`@axe-core/playwright`、`axe-core`)は、`console/package.json`にある。そのため、配信するジョブ(`console-dist.yml`と`ci.yml`の`console`ジョブ)の`node_modules`に入る。
+  ブラウザはキャッシュせず、毎回取得する。
+  照合しないキャッシュを、`main`の実行が書いてPRの実行が読む経路を作らないためである。
+- e2eの依存(`@playwright/test`、`@axe-core/playwright`、`axe-core`)は、`console/package.json`にある。
+  そのため、配信するジョブ(`console-dist.yml`と`ci.yml`の`console`ジョブ)の`node_modules`に入る。
   インストールは`--ignore-scripts`で行うので、install scriptは動かない。
   `vite build`はこの3つを読み込まないので、配布物には入らない。
-  別の`package.json`に分けると、lockfileの検査とdependabotの設定が二重になる。そのため、分けない。
-- 信頼の境界は`console-dist.yml`の1つのジョブと、そこで動くツールや依存に及ぶ。`ci.yml`のジョブは同名の成果物を上げても、取り込み先の実行(`console-dist.yml`)に入らない。組み立ての手順は`console-dist.yml`に直接書き、composite actionに分けない。`console-dist.yml`を書き換える変更は、`main`へのマージで反映されるので、マージ前のレビューが唯一の防御である。
-- 同じ実行の中では、成果物を`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。`console-dist.yml`のジョブは1つなので、同じ実行にほかの上げ手はいない。
-- `console-dist.yml`の成功が示すのは、組み立てが通ったことだけである。型検査、lint、テストを担う`ci.yml`の成功も、同じcommitについて取り込みの条件にする。`ci.yml`が実行中のcommitは、成功するまで取り込まない。
-- `main`という名前のタグの実行は、ブランチ名が`main`で現れる。`console_fetcher`は同じcommitで、`console-dist.yml`と`ci.yml`のどちらも`main`へのpushとして成功していることを求める。FactoryのPATはWorkflowsの権限が無く、ワークフローのファイルを書き換えたcommitを作れない。現在のワークフローは`main`のブランチのpushでしか動かないので、PATによるタグでは実行が作られない。
-- 両方のワークフローを書き換えたcommitに`main`というタグを付けられる人は、この照合を通せる。タグの作成と更新は、rulesetの`protect-tags`で管理者に限っている。管理者は迂回できるので、管理者のアカウントの侵害は防げない。取り込むcommitが`main`の履歴に含まれるかは、確かめていない。
-- draw.ioのビューアも、この成果物の差し替えの範囲に入る。ビューアは`console-dist.yml`が取得して、同じ成果物に入れるためである。
-- `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけである。`WM_BIND`を外向きにしてHTTPで公開すると、この防御は効かない。外向きにするならHTTPSで公開する。
-- `Origin`の検査が比べる相手は、要求の`Host`ヘッダーから作ったオリジンである。DNSリバインディングで`Host`が攻撃者のホスト名になると、`Origin`も一致して通る。ただしCookieはホスト名ごとに付くので、運用者のCookieは付かない。
-- `Origin`の検査が補えるのは、GETとHEAD以外のブラウザの要求だけである。ナビゲーションや`<img>`のGETには`Origin`が付かず、Firefox 70未満はフォームのPOSTにも付けない。この検査は、HTTPで公開してもブラウザが送るので、`Sec-Fetch-Site`の弱点を補う。
-- 前段でTLSを終端するときは、プロキシが`Host`をポートを含めて保つ(nginxなら`proxy_set_header Host $http_host`)。nginxの既定は`Host`を書き換え、`$host`はポートを落とす。どちらも`Origin`と合わず、ログインを含む書き込みがすべて403になる。
-- スキームを問わず許すので、HTTPS公開のときも、同じホスト名とポートの`http://`の`Origin`が通る。`Sec-Fetch-*`を送るブラウザは、`Sec-Fetch-Site`の規則が止める。止められないのは、`Sec-Fetch-*`を送らないブラウザだけである。
-- GETでも副作用のあるAPIは、`Sec-Fetch-Site`と`Origin`では止まらない。同じオリジンの`<img>`やリンクから、Cookieの持ち主の権限でジョブを起動できる。そのため、副作用のあるGETの経路を洗い出し、fetchとXHR以外を403にしている。洗い出しの一覧は[Consoleの仕様](internals/console.md)にある。洗い出したのは`windmill-client`の型定義にあるAPIまでで、サーバーの全経路ではない。HTTPトリガー(`/api/r/*`)を足すときは、GETでジョブを起動する経路にならないかを確かめる。
-- 古いブラウザと、HTTPで公開したブラウザは、`Sec-Fetch-Dest`を送らない。`Sec-Fetch-*`は、localhostかHTTPSのオリジンにだけ付くためである。この場合、副作用のあるGETは`Cookie`を持つときだけ止める。WindmillのフロントエンドがこれらのGETを使うと、その環境では403になる。
-- 注入された`<form method="post">`のクリックは、`Sec-Fetch-Mode: navigate`で止める。`Sec-Fetch-Mode`を送らないブラウザは止めない。止めるとfetchの書き込みまで巻き込むためである。
+  別の`package.json`に分けると、lockfileの検査とdependabotの設定が二重になる。
+  そのため、分けない。
+- 信頼の境界は`console-dist.yml`の1つのジョブと、そこで動くツールや依存に及ぶ。
+  `ci.yml`のジョブは同名の成果物を上げても、取り込み先の実行(`console-dist.yml`)に入らない。
+  組み立ての手順は`console-dist.yml`に直接書き、composite actionに分けない。
+  `console-dist.yml`を書き換える変更は、`main`へのマージで反映されるので、マージ前のレビューが唯一の防御である。
+- 同じ実行の中では、成果物を`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。
+  `console-dist.yml`のジョブは1つなので、同じ実行にほかの上げ手はいない。
+- `console-dist.yml`の成功が示すのは、組み立てが通ったことだけである。
+  型検査、lint、テストを担う`ci.yml`の成功も、同じcommitについて取り込みの条件にする。
+  `ci.yml`が実行中のcommitは、成功するまで取り込まない。
+- `main`という名前のタグの実行は、ブランチ名が`main`で現れる。
+  `console_fetcher`は同じcommitで、`console-dist.yml`と`ci.yml`のどちらも`main`へのpushとして成功していることを求める。
+  FactoryのPATはWorkflowsの権限が無く、ワークフローのファイルを書き換えたcommitを作れない。
+  現在のワークフローは`main`のブランチのpushでしか動かないので、PATによるタグでは実行が作られない。
+- 両方のワークフローを書き換えたcommitに`main`というタグを付けられる人は、この照合を通せる。
+  タグの作成と更新は、rulesetの`protect-tags`で管理者に限っている。
+  管理者は迂回できるので、管理者のアカウントの侵害は防げない。
+  取り込むcommitが`main`の履歴に含まれるかは、確かめていない。
+- draw.ioのビューアも、この成果物の差し替えの範囲に入る。
+  ビューアは`console-dist.yml`が取得して、同じ成果物に入れるためである。
+- `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけである。
+  `WM_BIND`を外向きにしてHTTPで公開すると、この防御は効かない。
+  外向きにするならHTTPSで公開する。
+- `Origin`の検査が比べる相手は、要求の`Host`ヘッダーから作ったオリジンである。
+  DNSリバインディングで`Host`が攻撃者のホスト名になると、`Origin`も一致して通る。
+  ただしCookieはホスト名ごとに付くので、運用者のCookieは付かない。
+- `Origin`の検査が補えるのは、GETとHEAD以外のブラウザの要求だけである。
+  ナビゲーションや`<img>`のGETには`Origin`が付かず、Firefox 70未満はフォームのPOSTにも付けない。
+  この検査は、HTTPで公開してもブラウザが送るので、`Sec-Fetch-Site`の弱点を補う。
+- 前段でTLSを終端するときは、プロキシが`Host`をポートを含めて保つ(nginxなら`proxy_set_header Host $http_host`)。
+  nginxの既定は`Host`を書き換え、`$host`はポートを落とす。
+  どちらも`Origin`と合わず、ログインを含む書き込みがすべて403になる。
+- スキームを問わず許すので、HTTPS公開のときも、同じホスト名とポートの`http://`の`Origin`が通る。
+  `Sec-Fetch-*`を送るブラウザは、`Sec-Fetch-Site`の規則が止める。
+  止められないのは、`Sec-Fetch-*`を送らないブラウザだけである。
+- GETでも副作用のあるAPIは、`Sec-Fetch-Site`と`Origin`では止まらない。
+  同じオリジンの`<img>`やリンクから、Cookieの持ち主の権限でジョブを起動できる。
+  そのため、副作用のあるGETの経路を洗い出し、fetchとXHR以外を403にしている。
+  洗い出しの一覧は[Consoleの仕様](internals/console.md)にある。
+  洗い出したのは`windmill-client`の型定義にあるAPIまでで、サーバーの全経路ではない。
+  HTTPトリガー(`/api/r/*`)を足すときは、GETでジョブを起動する経路にならないかを確かめる。
+- 古いブラウザと、HTTPで公開したブラウザは、`Sec-Fetch-Dest`を送らない。
+  `Sec-Fetch-*`は、localhostかHTTPSのオリジンにだけ付くためである。
+  この場合、副作用のあるGETは`Cookie`を持つときだけ止める。
+  WindmillのフロントエンドがこれらのGETを使うと、その環境では403になる。
+- 注入された`<form method="post">`のクリックは、`Sec-Fetch-Mode: navigate`で止める。
+  `Sec-Fetch-Mode`を送らないブラウザは止めない。
+  止めるとfetchの書き込みまで巻き込むためである。
 - `<link rel="prefetch">`、`<link rel="preload">`、`<a ping>`は、`Sec-Fetch-Dest: empty`などで、副作用のあるGETを送りうる。
   どれも生のHTMLの注入が要り、サニタイザが落とすので、止めていない。
-- この4つの規則が効くのは`/api/*`だけである。`windmill_extra`の経路(`/ws/*`、`/ws_mp/*`、`/ws_debug/*`)には、`Origin`の検査も含めて効かない。`handle @extra`が先に当たるためである。
-- 旧Consoleへの規則は、過去のDiscordの通知、Issueのコメント、PRの本文に残るリンクのために、旧Consoleを削除した後も残す。飛ばすのは閲覧の`/apps/get/`と`/apps_raw/get/`だけで、編集画面やAPIには触れない。フラグメントはブラウザがリダイレクトを越えて保ち、新しいConsoleが読み替える。読み替えるのは、正の整数のidを持つ要件定義書と監査レポートの形だけで、ほかのフラグメントは入口に着く。
-- 共有の`assets/`には古い版のファイルも残る。その間は`script-src`で読み込めるので、XSSの足がかり(script gadget)に使われうる。
-- Trusted TypesのReport-Onlyの方針には報告先が無い。違反はブラウザの開発者ツールのコンソールにしか出ない。
-- `console_fetcher`の外への通信はnetworkでは絞れない。コードが侵害されれば、任意の宛先へ出られる。
-- `console_egress`は通常のbridgeで、ホストのloopbackから切り離されない。既定の`WM_BIND=127.0.0.1`のままでも、`host.docker.internal`経由でホストのCaddy、つまりWindmillに届く(OrbStackで確認)。`WM_BIND`を外向きにすると、ホストのゲートウェイのIP経由でも届く。`console_fetcher`はWindmillの資格情報を持たないが、認証の要らない経路には届く。
+- この4つの規則が効くのは`/api/*`だけである。
+  `windmill_extra`の経路(`/ws/*`、`/ws_mp/*`、`/ws_debug/*`)には、`Origin`の検査も含めて効かない。
+  `handle @extra`が先に当たるためである。
+- 旧Consoleへの規則は、過去のDiscordの通知、Issueのコメント、PRの本文に残るリンクのために、旧Consoleを削除した後も残す。
+  飛ばすのは閲覧の`/apps/get/`と`/apps_raw/get/`だけで、編集画面やAPIには触れない。
+  フラグメントはブラウザがリダイレクトを越えて保ち、新しいConsoleが読み替える。
+  読み替えるのは、正の整数のidを持つ要件定義書と監査レポートの形だけで、ほかのフラグメントは入口に着く。
+- 共有の`assets/`には古い版のファイルも残る。
+  その間は`script-src`で読み込めるので、XSSの足がかり(script gadget)に使われうる。
+- Trusted TypesのReport-Onlyの方針には報告先が無い。
+  違反はブラウザの開発者ツールのコンソールにしか出ない。
+- `console_fetcher`の外への通信はnetworkでは絞れない。
+  コードが侵害されれば、任意の宛先へ出られる。
+- `console_egress`は通常のbridgeで、ホストのloopbackから切り離されない。
+  既定の`WM_BIND=127.0.0.1`のままでも、`host.docker.internal`経由でホストのCaddy、つまりWindmillに届く(OrbStackで確認)。
+  `WM_BIND`を外向きにすると、ホストのゲートウェイのIP経由でも届く。
+  `console_fetcher`はWindmillの資格情報を持たないが、認証の要らない経路には届く。
 - `CONSOLE_GITHUB_TOKEN`は、ホストのdockerを使える人には`docker inspect`で見える。
-- 成果物を取りに行くリポジトリ`CONSOLE_GITHUB_REPO`は、コミットされた`mise.toml`にある。これを書き換える変更がマージされると、任意のpublicリポジトリの成果物を取り込みうる。`mise.toml`は保護パスで、マージは人が行うことで抑えている。ただしPATのマージ権限は未確認である。
-- 成果物の保持は30日である。30日以上`main`へのpushが無いと、新しく立ち上げた環境は取り込めない。そのときは`main`に何かをマージしてCIを動かす。
+- 成果物を取りに行くリポジトリ`CONSOLE_GITHUB_REPO`は、コミットされた`mise.toml`にある。
+  これを書き換える変更がマージされると、任意のpublicリポジトリの成果物を取り込みうる。
+  `mise.toml`は保護パスで、マージは人が行うことで抑えている。
+  ただしPATのマージ権限は未確認である。
+- 成果物の保持は30日である。
+  30日以上`main`へのpushが無いと、新しく立ち上げた環境は取り込めない。
+  そのときは`main`に何かをマージしてCIを動かす。
 - 検証用サーバー(`scripts/console-branch-server.ts`)は、ブランチ版のConsoleに、運用者のCookieで本物のWindmillのAPIを呼ばせる。
   ブランチの変更は人のレビューの前なので、悪意のあるConsoleのコードは、運用者のCookieで管理者の操作を呼べる。
   そのため、既定は読み取りだけにする。
@@ -1248,7 +1459,9 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 
 ## workerコンテナの権限
 
-workerは`privileged`にせず、`FAVOR_UNSHARE_PID`も有効にしない。Windmillの公式の構成は、ジョブを隔離するためにこれらを使うことがある。このworkerは信頼できないIssueを読むheadless Claudeを実行するので、侵害されたときにホストへ波及する範囲を小さくすることを優先する。
+workerは`privileged`にせず、`FAVOR_UNSHARE_PID`も有効にしない。
+Windmillの公式の構成は、ジョブを隔離するためにこれらを使うことがある。
+このworkerは信頼できないIssueを読むheadless Claudeを実行するので、侵害されたときにホストへ波及する範囲を小さくすることを優先する。
 
 ジョブ間の隔離は、追加の特権に頼らず、工程ごとのツールの制限と読み取り専用の方針で確保する。
 
@@ -1270,7 +1483,8 @@ workerのPATHには、rootのホームの`/root/.local/bin`と、誰でも書き
 イメージには、検査コマンドを動かす非特権のユーザー`factory-check-0`から`factory-check-7`を作ってある。
 `useradd -M`でホームのディレクトリは作らず、passwdに記録されるホームのパスも実在しない。
 `HOME`は、実行のたびに`/tmp`の下に作る非公開のディレクトリを渡す。
-ジョブの`TMPDIR`が指す先には作らない。そこは検査用のユーザーが入れない0700の下なので、`HOME`にたどり着けないためである。
+ジョブの`TMPDIR`が指す先には作らない。
+そこは検査用のユーザーが入れない0700の下なので、`HOME`にたどり着けないためである。
 ログインシェルは使えない。
 uidの切り替えに使う`setpriv`と、枠のロックに使う`flock`も入っている。
 後始末に使う`kill`(procps)と、ACLを確かめて消す`getfacl`と`setfacl`(acl)も入っている。
@@ -1319,8 +1533,10 @@ scriptはURLを読み解き、接続の情報を環境変数(`PGPASSWORD`など)
 
 ### 控えの残るリスク
 
-- `db_backup_url`は秘密の変数で、ワークスペースのどのscriptも読める。defaultのworkerのジョブはrootで動き、workerの環境変数`DATABASE_URL`からも同じ接続先に届くので、新しい経路ではない。
-- 控えは暗号化しない。控えの容量も監視しない。
+- `db_backup_url`は秘密の変数で、ワークスペースのどのscriptも読める。
+  defaultのworkerのジョブはrootで動き、workerの環境変数`DATABASE_URL`からも同じ接続先に届くので、新しい経路ではない。
+- 控えは暗号化しない。
+  控えの容量も監視しない。
 - `mise run backup:restore`は、クラスタ全体の複製を、使い捨てのプロジェクトの`factory-restore_*`のvolumeに残す。
   複製は、Windmillの秘密を復号する鍵を含む。
   `db`は`restart: unless-stopped`で動き続け、人が最後に出る`down -v`のコマンドを実行するまで残る。
@@ -1331,7 +1547,8 @@ scriptはURLを読み解き、接続の情報を環境変数(`PGPASSWORD`など)
 Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと操作の受付だけを処理する。
 信頼できないIssueを読むClaudeは、このworkerでは動かさない。
 このworkerの境界が守るのは、ファイルシステムだけである。
-以下で「ボリューム全体」と書くのは、`factory_state`の最上位を指す。`claude`、`gh`、`audits`、`requirements`などが並ぶ層である。
+以下で「ボリューム全体」と書くのは、`factory_state`の最上位を指す。
+`claude`、`gh`、`audits`、`requirements`などが並ぶ層である。
 絞り方は次のとおりである。
 
 | 項目 | 設定 |
@@ -1379,7 +1596,8 @@ Consoleから押せる書き込みには、読むsecret変数の上限を決め�
 `github_token`を読んでよいのは、`approval_decide`と`retry_work_item`だけである。
 `audit_kickoff`、`notice_resolve`、`manual_intake_submit`、`pr_review_submit`は、どのsecret変数も読まない。
 保留と凍結の3つ(`console_holds`、`hold_release`、`freeze_release`)も、どのsecret変数も読まない。
-保留と凍結の3つは、`discord_webhook_url`も読めないので、Discordへは送らない。解除の記録は情報の通知に残す。
+保留と凍結の3つは、`discord_webhook_url`も読めないので、Discordへは送らない。
+解除の記録は情報の通知に残す。
 ジョブを取り消す`console_job_cancel`も、どのsecret変数も読まず、SDKの呼び出しを許可表に絞る([ジョブの取消](#ジョブの取消))。
 失敗した定期ジョブを再実行する`console_job_rerun`と、設定を変更する`console_config_update`も、同じ上限と同じ絞り方である([定期ジョブの再実行](#定期ジョブの再実行)、[設定の変更](#設定の変更))。
 保留と凍結を置く`console_hold_place`と、スケジュールを止める`console_schedule_stop`も、同じ上限と同じ絞り方である。
@@ -1393,8 +1611,11 @@ tag`console`のscriptがimportでたどれるソースを数える契約テス�
 - 絶対パスと、`f/`か`u/`で始まるimport
 - `require`
 - 引数が単純な文字列リテラルでないimport()
-- `.name("literal")`の形の呼び出しで説明できない、`getVariable`と`getResource`の出現。添字アクセス、分割代入、名前付きimport、別名への代入、引数が変数の呼び出し、注入された関数の呼び出しが当たる
-- 呼び出し(`名前(`)でない、`getVariable`と`setVariable`の出現。別名への代入、`.call`、`.bind`、`.apply`、他の関数への受け渡し、`?.(`の形の呼び出しが当たる。パスの固定は呼び出しの引数を見るので、呼び出しでない使い方は固定をすり抜ける
+- `.name("literal")`の形の呼び出しで説明できない、`getVariable`と`getResource`の出現。
+  添字アクセス、分割代入、名前付きimport、別名への代入、引数が変数の呼び出し、注入された関数の呼び出しが当たる
+- 呼び出し(`名前(`)でない、`getVariable`と`setVariable`の出現。
+  別名への代入、`.call`、`.bind`、`.apply`、他の関数への受け渡し、`?.(`の形の呼び出しが当たる。
+  パスの固定は呼び出しの引数を見るので、呼び出しでない使い方は固定をすり抜ける
 
 script.yamlに`$var:`か`$res:`の参照があるときも、テストは落ちる。
 例外は3件で、いずれも読み取りを依存として注入するため、引数が変数になる。
@@ -1403,7 +1624,8 @@ script.yamlに`$var:`か`$res:`の参照があるときも、テストは落ち�
 凍結の変数の入出力(`freeze_apply.ts`)は、注入されたSDKの読み取りである。
 凍結の変数`f/factory/freezes`は、書き込みのときに`isSecretIfNotExist`へ`false`を渡すので、secretではない。
 呼び出し側が定数だけを渡すことを確かめ、テストの許可リストに理由を書いている。
-テストが見ないのは、文字列を組み立てて作ったsecretのパス、環境変数やDBを経由して受け取る名前、`eval`、文字列の中に隠したコードである。これらはコードのレビューで見る。
+テストが見ないのは、文字列を組み立てて作ったsecretのパス、環境変数やDBを経由して受け取る名前、`eval`、文字列の中に隠したコードである。
+これらはコードのレビューで見る。
 
 サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
 1回限りのサービス`factory_state_init`が、起動の前に`requirements`を作る。
@@ -1424,7 +1646,8 @@ Podmanは対象外である。
 
 次のことは、この境界では守れない。
 
-- DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
+- DBには届く。
+  `DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
 - 次のtag`console`のscriptは、resource`f/factory/factory_config`を読む。
   `audit_kickoff`、`retry_work_item`、`manual_intake_submit`、`pr_review_submit`、`console_query`、`console_fetch_watch`である。
   `console_query`は、手動投入の候補(`intake_targets`)のために読む。
@@ -1439,45 +1662,62 @@ Podmanは対象外である。
   Issueの要件定義を作り直す再実行のときの、取り込み内容の更新。
   `approval_decide`が読むのは、要件定義の承認のときの`github_token`である。
   Console用のworkerで動くscriptから`github_token`を読むのは、この2つのscriptに限る取り決めである。
-  この取り決めは、tag`console`のscriptがたどれるソースを数える契約テストで確かめる。強制する仕組みは無い。
+  この取り決めは、tag`console`のscriptがたどれるソースを数える契約テストで確かめる。
+  強制する仕組みは無い。
   マウントの制限で守るのは、Claude Codeとghの設定と履歴のファイルだけである。
   トークンそのものは守らない。
 - scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
-- 要件定義書と図は読める。Consoleが表示するのと同じ内容である。
+- 要件定義書と図は読める。
+  Consoleが表示するのと同じ内容である。
 - ジョブのログと結果を通して、defaultのworkerの出力に届く。
   `f/factory/`のジョブのログと結果は、伏せ字を通してConsoleに返る。
   伏せ字は、形を持つ秘密とキー名で見分けられる秘密しか伏せられない。
   次の秘密は伏せられない。
-  - 16進だけの秘密。古い形式の40桁のOAuthトークンや、HMACの鍵である。commit shaとダイジェストを残す例外に当たるため。
+  - 16進だけの秘密。
+    古い形式の40桁のOAuthトークンや、HMACの鍵である。
+    commit shaとダイジェストを残す例外に当たるため。
   - base64や分割で符号化された秘密。
   - 32字に満たず、形も持たない秘密。
-  - 1行ずつ別の葉(配列の要素)に分けたPEM。BEGINとENDが別の葉になり、ブロックとして読めない。本文の行は、`+`と`/`で途切れない32字以上の部分だけが、一般形の規則で伏せられる。
-  - 形を確かめていないトークン。ユーザーのAPIトークンの形は実測していないので、一般形の規則に当たる保証は無い。
+  - 1行ずつ別の葉(配列の要素)に分けたPEM。
+    BEGINとENDが別の葉になり、ブロックとして読めない。
+    本文の行は、`+`と`/`で途切れない32字以上の部分だけが、一般形の規則で伏せられる。
+  - 形を確かめていないトークン。
+    ユーザーのAPIトークンの形は実測していないので、一般形の規則に当たる保証は無い。
   defaultのworkerで動くscriptが、秘密値をログと結果に書かないことが前提である。
   伏せ字は画面の共有と貼り付けのための規則で、ConsoleのXSSの対策ではない。
 - workerの生死とグループは、Consoleから読まない。
   `WorkerService`の一覧は、ワークスペースの管理者のジョブトークンでは403になる。
   Console用workerの停止は`console_worker_missing`の通知が、負荷は`worker_load`が、defaultのworkerの停止は`default_worker_watch`が知らせる。
-- このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
+- このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。
+  ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
   `console`をカスタムtagに許可しているので、superadminでない者が付けたscriptも、このworkerで動く。
-  tag`console`を付けたscriptは、`requirements`の下を読める。書けるのはdefaultのworkerだけである。
-- 許可した主体は、Console用workerの依存キャッシュ(`worker_console_dependency_cache`)に書ける。defaultのworkerでscriptを実行できる者には、元から同等のことができるので、実害は増えない。
-- Console用workerの枠は1つである。長く動くjobで枠を埋めると、Consoleの問い合わせと承認が止まる。可用性の問題で、秘密の漏れではない。
-- 許可はすべてのワークスペースに及ぶ。ワークスペースに絞る書式(`console(factory)`)は、実機で確かめていないので採用していない。
+  tag`console`を付けたscriptは、`requirements`の下を読める。
+  書けるのはdefaultのworkerだけである。
+- 許可した主体は、Console用workerの依存キャッシュ(`worker_console_dependency_cache`)に書ける。
+  defaultのworkerでscriptを実行できる者には、元から同等のことができるので、実害は増えない。
+- Console用workerの枠は1つである。
+  長く動くjobで枠を埋めると、Consoleの問い合わせと承認が止まる。
+  可用性の問題で、秘密の漏れではない。
+- 許可はすべてのワークスペースに及ぶ。
+  ワークスペースに絞る書式(`console(factory)`)は、実機で確かめていないので採用していない。
 - `doctor`と`bootstrap`の宛先の照合が防ぐのは、ポートの取り違えだけである。
   Windmillを装うローカルのプロセスには、資格情報が渡る。
   照合とログインは別の接続なので、その間に宛先が入れ替わる隙もある。
   `bootstrap`は、1回の照合の後に長い手順で同じ宛先へトークンを送るので、手順の途中の入れ替わりも防げない。
-- composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
+- composeの環境変数`WORKER_TAGS`は既定値である。
+  DBにワーカーグループの設定があると、そちらが実効になる。
+  変化はWindmillの画面の「Workers」で確かめる。
 - `factory_state_init`の確認の後にも隙がある。
   Console用のworkerは、`factory_state_init`を経ない起動のたびに、サブパスを解決し直す。
   契機は、restart policy、Dockerデーモンの再起動、ホストの再起動、手動の`docker compose restart windmill_worker_console`である。
   その前にdefaultのworkerが`requirements`をsymlinkに置き換えると、symlinkの先がマウントされうる。
   隙は、`factory_state_init`を経ずにworkerが起動するたびに開く。
-  誤ったマウントは、symlinkを消してworkerを起動し直すまで残る。`mise run up`は、設定の変わらない、動いているworkerを作り直さないためである。
+  誤ったマウントは、symlinkを消してworkerを起動し直すまで残る。
+  `mise run up`は、設定の変わらない、動いているworkerを作り直さないためである。
   `mise run up`が`factory_state_init`の失敗で止まったときは、その時点のworkerのマウントを疑う。
   [Console用workerを確かめる](operations.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
-  突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`のボリューム全体を直接読めるので、実害は増えない。
+  突くにはdefaultのworkerでのコード実行が要る。
+  その権限があれば`factory_state`のボリューム全体を直接読めるので、実害は増えない。
 
 ### ジョブのログと結果の読み取り
 
@@ -1518,10 +1758,20 @@ lockの差分は、レビューで確かめる。
 
 - `windmill-client`の再エクスポート。
 - `global`、`self`、`window`、`globalThis`の経由。
-- リソースの引数の上書き。読み取り(`getResourceValue`)の引数は`{ workspace, path: <定数> }`の形に固定し、`requestBody`を認めない。更新(`updateResourceValue`)は、`requestBody`の外側にほかのキー、`path`の重複、スプレッドを置かない。`requestBody`の本文の中身は見ない。
-- `process.env.NAME`の形以外の環境変数の使い方。許可表に載せるのは名前で読むものだけで、現在、3つのscriptとたどれるファイルが読む環境変数は無い。環境全体の列挙と、`process`の別名は禁じる。
-- 文字列で渡すSQL。datatableの`query`と`raw`、`RawSql`は、文字列がそのままSQLになるので禁じる。タグ付きテンプレートの`${}`は引数として渡る。
-- 字句の迂回。`constructor`の言及(文字列の中も数える)、`eval`、`Function`、`Bun`の添字アクセスを禁じる。`require`(変数に入れる形も)、`import.meta`のすべて、`Worker`も禁じる。`import.meta`は`env`と`require`を持つためである。
+- リソースの引数の上書き。
+  読み取り(`getResourceValue`)の引数は`{ workspace, path: <定数> }`の形に固定し、`requestBody`を認めない。
+  更新(`updateResourceValue`)は、`requestBody`の外側にほかのキー、`path`の重複、スプレッドを置かない。
+  `requestBody`の本文の中身は見ない。
+- `process.env.NAME`の形以外の環境変数の使い方。
+  許可表に載せるのは名前で読むものだけで、現在、3つのscriptとたどれるファイルが読む環境変数は無い。
+  環境全体の列挙と、`process`の別名は禁じる。
+- 文字列で渡すSQL。
+  datatableの`query`と`raw`、`RawSql`は、文字列がそのままSQLになるので禁じる。
+  タグ付きテンプレートの`${}`は引数として渡る。
+- 字句の迂回。
+  `constructor`の言及(文字列の中も数える)、`eval`、`Function`、`Bun`の添字アクセスを禁じる。
+  `require`(変数に入れる形も)、`import.meta`のすべて、`Worker`も禁じる。
+  `import.meta`は`env`と`require`を持つためである。
 - ファイルとサブプロセスへの依存。
 
 読み取り専用であることは、たどれるファイルのテンプレートリテラルに、書き込みやスキーマ変更のSQLの語が無いことで確かめる。
@@ -1531,8 +1781,10 @@ lockの差分は、レビューで確かめる。
 走査には、見ないものもある。
 保護した部品の変更は人がレビューするので、次の点は差分を読んで確かめる。
 
-- 文字列の連結で組み立てた名前の参照。`Bun`の添字は禁じるが、ほかの対象に連結した名前で触れる書き方は見つけられない。
-- 割り算を正規表現リテラルと読み違えた範囲。走査は、読み違えた間のコードを落とす。
+- 文字列の連結で組み立てた名前の参照。
+  `Bun`の添字は禁じるが、ほかの対象に連結した名前で触れる書き方は見つけられない。
+- 割り算を正規表現リテラルと読み違えた範囲。
+  走査は、読み違えた間のコードを落とす。
 - 識別子を組み立てて呼ぶ`eval`や`Function`の別名。
 - `require`や`Worker`を、識別子を組み立てて呼ぶ書き方。
 - 第三者パッケージの中身。
@@ -1544,24 +1796,37 @@ lockの差分は、レビューで確かめる。
 ### ログと結果の伏せ字
 
 伏せ字の目的は、画面の共有、スクリーンショット、貼り付けで漏れる量を減らすことである。
-ConsoleのXSSで漏れる量は減らない。XSSは、管理者のCookieでAPIを直接呼べるためである。
-secret変数の値との完全一致は使わない。Console用のworkerにsecret変数を読ませない境界を保つためである。
+ConsoleのXSSで漏れる量は減らない。
+XSSは、管理者のCookieでAPIを直接呼べるためである。
+secret変数の値との完全一致は使わない。
+Console用のworkerにsecret変数を読ませない境界を保つためである。
 値の形とキー名だけで判定する。
 
 処理は次の順に行う。
 
-1. ログは行ごとにJSONとして読む。読めない行(Windmill自身の行、子プロセスの出力)は、文字列の規則だけをかけ、その行数を返す。
-2. JSONは値をたどる。キー名が秘密を指す項目の値は、型を問わず丸ごと置き換える。名前に`TOKEN`、`SECRET`、`KEY`、`PASSWORD`、`WEBHOOK`、`CREDENTIAL`、`AUTHORIZATION`のどれかを含む項目が当たる。
+1. ログは行ごとにJSONとして読む。
+   読めない行(Windmill自身の行、子プロセスの出力)は、文字列の規則だけをかけ、その行数を返す。
+2. JSONは値をたどる。
+   キー名が秘密を指す項目の値は、型を問わず丸ごと置き換える。
+   名前に`TOKEN`、`SECRET`、`KEY`、`PASSWORD`、`WEBHOOK`、`CREDENTIAL`、`AUTHORIZATION`のどれかを含む項目が当たる。
 3. 文字列の値に、次の表の規則をかける。
-4. 結果は、直列化の前にも、葉の文字列に値の規則をかける。直列化すると引用符が変わり、`password="x"`のような対が当たらなくなるためである。直列化した後の文字列にも、もう一度かける。葉の合計が上限の2倍を超えたら、以降の葉は捨てる。
+4. 結果は、直列化の前にも、葉の文字列に値の規則をかける。
+   直列化すると引用符が変わり、`password="x"`のような対が当たらなくなるためである。
+   直列化した後の文字列にも、もう一度かける。
+   葉の合計が上限の2倍を超えたら、以降の葉は捨てる。
 5. ANSIと双方向の制御文字を含む制御文字を、解いた後の値と最終の出力の両方で落とす。
-6. 切る。ログは末尾の256KBを残し、切った先頭の途中の行は捨てる。結果は先頭の64KBを残す。
+6. 切る。
+   ログは末尾の256KBを残し、切った先頭の途中の行は捨てる。
+   結果は先頭の64KBを残す。
 
-伏せてから切る。切り口で鍵の途中が残るのを防ぐためである。
+伏せてから切る。
+切り口で鍵の途中が残るのを防ぐためである。
 入力が上限の2倍を超えるときだけ、計算量を抑えるために、伏せる前に粗く切る。
 粗い切り口でPEMの`BEGIN`の行が落ちたときは、先頭から対応する`END`までを伏せる。
-BEGINを欠くENDを探すのは、粗い切り口の近く(先頭の窓)に限る。遠いENDまで伏せると、間の普通の行を失うためである。
-切り口に残る末尾の語は落とす。秘密の断片を残さないためである。
+BEGINを欠くENDを探すのは、粗い切り口の近く(先頭の窓)に限る。
+遠いENDまで伏せると、間の普通の行を失うためである。
+切り口に残る末尾の語は落とす。
+秘密の断片を残さないためである。
 正規表現の計算量が入力長の二乗に膨らまないよう、URLのschemeとJWTの区間の長さに上限を置く。
 PEMは、入力を前から1度だけ走査し、`-----BEGIN NAME-----`の形ごとに、16384字の窓の中のENDまでを伏せる。
 ENDが窓に無いときは、BEGINと、その後ろの鍵の本文らしい並びだけを伏せる。
@@ -1574,11 +1839,14 @@ ENDが窓に無いときは、BEGINと、その後ろの鍵の本文らしい並
 | キー=値 | 名前に上のキー名を含む`token=`、`password:`、`API_KEY=`の形。値が短くても伏せる |
 | 一般形 | 英数字と`_`と`-`だけからなる32字以上の連続。40桁と64桁の16進(commit shaとダイジェスト)とUUIDは除く |
 
-過剰に伏せることは許容する。伏せた箇所があるときは、戻りの`masked`で画面に示す。
+過剰に伏せることは許容する。
+伏せた箇所があるときは、戻りの`masked`で画面に示す。
 既知の形の規則は、`lib/log.ts`の`maskSecrets`の形の複製で、`lib/console_redact.ts`が持つ。
 `lib/log.ts`と`lib/types.ts`は多くのscriptが使うので保護パスに入れられず、3つのscriptがたどれるファイルを保護パスに閉じるには、複製が要る。
 複製が元の形とずれたときは、32字に満たない形の秘密が伏せられなくなる。
-`tests/lib/console_redact.test.ts`は、`lib/log.ts`の`SECRET_PATTERNS`を読んで、次の2つを確かめる。パターンの数と見本の数が合うこと。パターンごとの見本が伏せられること。
+`tests/lib/console_redact.test.ts`は、`lib/log.ts`の`SECRET_PATTERNS`を読んで、次の2つを確かめる。
+パターンの数と見本の数が合うこと。
+パターンごとの見本が伏せられること。
 `log.ts`に形が足されて複製が追従しなければ、このテストが落ちる。
 `isRecord`も、`lib/types.ts`と同じ判定を返すことを、同じテストで確かめる。
 切ったときは`truncated`で示す。
@@ -1609,7 +1877,8 @@ PRが開いていることも確かめ、GitHubが返す正規のリポジトリ
 画面の1回の送信で、取り消せないPRへの投稿が始まる。
 確認のダイアログは置かず、送信ボタンの文言で、外部への投稿を始める操作と分かるようにする。
 画面は、断りの文を符号だけから引いて出す。
-入力の文字列は文に含めない。隠れた文字を画面に出さないためである。
+入力の文字列は文に含めない。
+隠れた文字を画面に出さないためである。
 フローの結果は、ジョブの結果から読む。
 切り詰められたか伏せられた結果と、形の違う結果は、読み取れないものとして扱い、ジョブを開くよう伝える。
 
@@ -1675,7 +1944,8 @@ PRが開いていることも確かめ、GitHubが返す正規のリポジトリ
 ジョブを取り消す`console_job_cancel`は、tag`console`で動かす書き込みのscriptである。
 運用者がConsoleの確認のダイアログを通した後にだけ呼ぶ。
 ローカルのClaudeのセッションが、このscriptを名前で呼ぶ経路は、拒否フックが止める([Claude Codeのフック](#claude-codeのフック))。
-フックが止めるのはその経路だけで、汎用の取り消しの経路は止めない。後述の残るリスクに書く。
+フックが止めるのはその経路だけで、汎用の取り消しの経路は止めない。
+後述の残るリスクに書く。
 取り消せる対象を、次のとおりに絞る。
 
 | 絞る対象 | 内容 |
@@ -1689,24 +1959,34 @@ PRが開いていることも確かめ、GitHubが返す正規のリポジトリ
 | SQL | 読むのは作業項目の1行(`id`、`status`、`flow_job_id`)だけ。書くのは記録の部品だけで、書く表は`factory.console_actions`に限る。境界テストが、書く文の表の名前まで確かめる |
 | 環境変数 | 操作者を導くための`WM_USERNAME`と`WM_EMAIL`だけ |
 
-取り消しは、Windmillにジョブを止めさせるだけである。作業項目の行は書き換えない。
+取り消しは、Windmillにジョブを止めさせるだけである。
+作業項目の行は書き換えない。
 リースがそのジョブを指したまま残り、次の照合(`poll_issues`、5分ごと)が、終わった取り消し済みのジョブを見つけて失敗にする。
 ただし、承認待ち(`awaiting_approval`、`awaiting_design_approval`)の作業項目は、人の判断を待つ状態なので、照合は失敗にしない。
-取り消した後に、ジョブの状態と作業項目の行を読み直して返す。読めなければ`null`にして、取り消しの結果は隠さない。
+取り消した後に、ジョブの状態と作業項目の行を読み直して返す。
+読めなければ`null`にして、取り消しの結果は隠さない。
 
 実機のWindmillで、tag`console`のscriptのジョブトークンが、待ちのジョブと、実行中のフローを取り消せることを確かめた。
 取り消した主体(`canceled_by`)は、Consoleを呼んだユーザーになる。
 
 次のことは、この操作では守れない。
 
-- 子プロセス(Claudeと検査コマンド)は、取り消しで止まらない。Claudeは別のセッションとプロセスグループで起動するので、Windmillがジョブのプロセスにだけ送る取り消しは届かない。Claudeは、ターン数と費用の上限まで動き続けることがあり、その費用は日次予算に数えられないことがある。毎日03:00の作業領域の掃除が止めるのは、実行の上限時間に5分を足した時間を過ぎたClaudeのプロセスだけである。確認のダイアログが、この旨を伝える。
-- 承認待ちへ移した後、通知の前に取り消すと、作業項目は承認待ちのまま残り、承認依頼の通知は届かないことがある。照合は承認待ちを失敗にしないので、運用者がConsoleの要対応で承認依頼を確かめる。要件定義のpipelineと設計のdesignは、どちらも承認依頼の記録、状態の移行、通知の順に動く。確認のダイアログと結果の知らせが、この旨を伝える。
+- 子プロセス(Claudeと検査コマンド)は、取り消しで止まらない。
+  Claudeは別のセッションとプロセスグループで起動するので、Windmillがジョブのプロセスにだけ送る取り消しは届かない。
+  Claudeは、ターン数と費用の上限まで動き続けることがあり、その費用は日次予算に数えられないことがある。
+  毎日03:00の作業領域の掃除が止めるのは、実行の上限時間に5分を足した時間を過ぎたClaudeのプロセスだけである。
+  確認のダイアログが、この旨を伝える。
+- 承認待ちへ移した後、通知の前に取り消すと、作業項目は承認待ちのまま残り、承認依頼の通知は届かないことがある。
+  照合は承認待ちを失敗にしないので、運用者がConsoleの要対応で承認依頼を確かめる。
+  要件定義のpipelineと設計のdesignは、どちらも承認依頼の記録、状態の移行、通知の順に動く。
+  確認のダイアログと結果の知らせが、この旨を伝える。
 - pr_fixを取り消すと、作業項目が失敗になった後で、新しい修正が起動し直される。
   起動し直すのは、保留中のラベルと、CIの自動修正が有効なときのCIの監視(`watch_pr_ci`)である。
   残ったプロセスがworktreeを使っていると、その準備はブロックで止まる。
   確認のダイアログが、この旨を伝える。
 - 対象の判定と取り消しの間にジョブが終わると、取り消しのAPIは404を返すので、終わったジョブとして断る。
-- 管理者は、Windmillの画面か`wmill job cancel`で、許可表の外のジョブも取り消せる。その取り消しは操作の記録に残らない。
+- 管理者は、Windmillの画面か`wmill job cancel`で、許可表の外のジョブも取り消せる。
+  その取り消しは操作の記録に残らない。
 - ローカルのClaudeのセッションも、運用者のwmillの資格で、同じことができる。
   `wmill job cancel`や、取り消しのAPI(`curl`での`/jobs_u/queue/cancel/<id>`)は、許可表、tag`console`の除外、操作の記録のどれも通らない。
   そのため、`self_update`、migrationを走らせるscript、`cleanup_*`のジョブも止められる。
@@ -1742,7 +2022,8 @@ PRが開いていることも確かめ、GitHubが返す正規のリポジトリ
 | 環境変数 | 操作者を導くための`WM_USERNAME`と`WM_EMAIL`だけ |
 
 次の隙があるので、次の回が近いときは、再実行せずに次の回を待たせる。
-scriptのscheduleは、次の回を前の回の終了時に積む。そのため、定期の回同士は重ならない。
+scriptのscheduleは、次の回を前の回の終了時に積む。
+そのため、定期の回同士は重ならない。
 手動で起動したジョブは、この連鎖に入らない。
 フローのscheduleの重なりを防ぐ`no_flow_overlap`は、`trigger_kind`が`schedule`のジョブだけを数える。
 手動のジョブは数えられないので、定期の回が始まると、手動の再実行と重なりうる。
@@ -1751,23 +2032,32 @@ scriptのscheduleは、次の回を前の回の終了時に積む。そのため
 
 実機のWindmill(1.817.0)で、次のことを確かめた。
 
-- 使い捨てのpreview(defaultのworker)のジョブのトークンで、`getJob`、`listQueue`、`getSchedule`、`runScriptByPathAsync`が通る。tag`console`のworkerでの実行は、反映の後の実ジョブで確かめる。
-- scheduleの`args`は、`getSchedule`が返す。`collect_github`と`auto_retry_pr_review`は、どちらも空のオブジェクトである。
+- 使い捨てのpreview(defaultのworker)のジョブのトークンで、`getJob`、`listQueue`、`getSchedule`、`runScriptByPathAsync`が通る。
+  tag`console`のworkerでの実行は、反映の後の実ジョブで確かめる。
+- scheduleの`args`は、`getSchedule`が返す。
+  `collect_github`と`auto_retry_pr_review`は、どちらも空のオブジェクトである。
 - `runScriptByPathAsync`で起動したジョブは、`trigger_kind`が`webhook`で、`schedule_path`を持たず、`parent_job`が起動元になる。
   そのため、失敗の検知(`detect_schedule_failures`)は、`schedule_path`の無いジョブを拾わない。
 - 起動元のジョブが先に終わっても、起動したジョブは最後まで動く。
-- `no_flow_overlap`と次の回の積み方は、Windmillのソース(1.817.0)で読んだ。実機では、定期の回と重なる場面を作っていない。
+- `no_flow_overlap`と次の回の積み方は、Windmillのソース(1.817.0)で読んだ。
+  実機では、定期の回と重なる場面を作っていない。
 
 次のことは、この操作では守れない。
 
-- 再実行の失敗は、失敗の検知に載らない。通知も出ない。画面は新しいジョブの詳細へ移るので、結果はそこで確かめる。
-- 押すたびに1回起動する。複数のタブから押すと、2つ起動しうる。ロックは画面を開いたタブの中だけで効く。
+- 再実行の失敗は、失敗の検知に載らない。
+  通知も出ない。
+  画面は新しいジョブの詳細へ移るので、結果はそこで確かめる。
+- 押すたびに1回起動する。
+  複数のタブから押すと、2つ起動しうる。
+  ロックは画面を開いたタブの中だけで効く。
   どちらの処理も冪等なので、二重の副作用は出ない。
 - 重なりを避ける判定は、Console用workerと定期ジョブ用workerが、それぞれ1枠であることを前提にする。
   Console用workerが1枠なので、この操作の呼び出し同士は重ならない。
   定期ジョブ用workerが1枠なので、起動した再実行と定期の回は、同時には動かず、どちらかが待つ。
-  同じ処理が2つ起動しても、直列に動く。`auto_retry_pr_review`の見送りの通知は、先の実行が記録するので、後の実行は二重に送らない。
-  `replicas`が1であることは、`tests/scripts/console_script_tags.test.ts`が固定する。枠を増やすと、この前提が崩れる。
+  同じ処理が2つ起動しても、直列に動く。
+  `auto_retry_pr_review`の見送りの通知は、先の実行が記録するので、後の実行は二重に送らない。
+  `replicas`が1であることは、`tests/scripts/console_script_tags.test.ts`が固定する。
+  枠を増やすと、この前提が崩れる。
 - 許可の根拠は、`collect_github`と`auto_retry_pr_review`が冪等であることである。
   この2つの中身は保護パスではないので、変更で前提が崩れうる。
   5分ごとの定期の回が同じ副作用をすでに起こすので、再実行で増えるのは、押した回数分だけである。
@@ -1802,18 +2092,23 @@ scriptのscheduleは、次の回を前の回の終了時に積む。そのため
 | 環境変数 | 操作者を導くための`WM_USERNAME`と`WM_EMAIL`だけ |
 
 実機のWindmill(1.817.0)で、使い捨てのpreview(defaultのworker)のジョブのトークンが、`factory_config`の生の値を読めることを確かめた。
-現在の設定は参照を含まないので、生の値と補間した値は同じである。この読み取りだけでは、補間しないことは示せない。
+現在の設定は参照を含まないので、生の値と補間した値は同じである。
+この読み取りだけでは、補間しないことは示せない。
 補間しないことは、取得の呼び出しが別のエンドポイントであることと、境界テストが補間する呼び出しを禁じることで守る。
-書き込み(`updateResourceValue`)は、実際の設定を書き換えるため、実機では確かめていない。反映の後に、実ジョブで確かめる。
+書き込み(`updateResourceValue`)は、実際の設定を書き換えるため、実機では確かめていない。
+反映の後に、実ジョブで確かめる。
 
 次のことは、この操作では守れない。
 
-- 書く直前の読み取りから書き込みまでは原子的でない。Windmillのresourceの更新は、条件付きの書き込みを持たない。
+- 書く直前の読み取りから書き込みまでは原子的でない。
+  Windmillのresourceの更新は、条件付きの書き込みを持たない。
   その間に、Windmillの画面や`wmill resource push`が設定を書くと、書き戻しがその変更を失わせる。
-  項目を問わない。対象の項目以外の変更も失われ、検出できない。
+  項目を問わない。
+  対象の項目以外の変更も失われ、検出できない。
   書いた後の読み直しが検出するのは、書き込みの後に起きた変更だけである。
   読み直しは、対象の項目が新しい値で、他のキーが書いた内容と同じかを確かめ、違えば`verified`を偽にして知らせる。
-  この間が問題になるのは、別の経路が同時に書く場合に限る。Console用workerが1枠なので、この操作の呼び出し同士は重ならない。
+  この間が問題になるのは、別の経路が同時に書く場合に限る。
+  Console用workerが1枠なので、この操作の呼び出し同士は重ならない。
 - 置き換えた設定の全体は、書く前に設定の読み込みの検証にかけない。
   別の項目がすでに壊れていても、許可した1項目の変更は書かれる。
   全体を検証するには、その本体(`lib/config.ts`)とその型(`lib/types.ts`)をscriptがたどり、境界の走査が要求する保護パスに入れる必要がある。
@@ -1830,25 +2125,32 @@ scriptのscheduleは、次の回を前の回の終了時に積む。そのため
   2つ目は、要素の形の検査を読み込み側と同じ規則にそろえ、両方向の契約テストで固定することである。
   真偽と数値の変更は、向きを下げるだけなので、組み合わせの検査に触れない。
   一覧は広げる向きを含むので、向きではなく、この2つで守る。
-  組み合わせの検査が3項目に加わると、1つ目の根拠が崩れる。そのときは、この検査を見直す。
+  組み合わせの検査が3項目に加わると、1つ目の根拠が崩れる。
+  そのときは、この検査を見直す。
 - 一覧の追加は、対象を広げる向きに働く。
   Consoleの管理者は、`owners`配下の別のリポジトリを、`repo_allowlist`に加えて対象にできる。
   対象に加わったリポジトリにも、`allowed_check_commands`の検査コマンドが及ぶ。
   `check_commands_by_repo`に同じ名前のエントリがあれば、実装の検証でその検査コマンドも、隔離なしで実行される。
-  確認のダイアログは、この2つを警告する。`check_commands_by_repo`は、追加した要素との一致を判定せず、エントリがあれば一般の警告にする。
+  確認のダイアログは、この2つを警告する。
+  `check_commands_by_repo`は、追加した要素との一致を判定せず、エントリがあれば一般の警告にする。
   `repo_allowlist`が空のときに追加すると、追加した1件と`factory_repo`以外のリポジトリが対象から外れる。
   `owners`に無いownerの追加と、空にする削除は、断る。
-  管理者は、`f/factory`フォルダの権限を持つので、Windmillで直接設定を書ける。この操作は、その権限を増やさない。
+  管理者は、`f/factory`フォルダの権限を持つので、Windmillで直接設定を書ける。
+  この操作は、その権限を増やさない。
   比較交換、形式の検査、操作の記録は、直接書く経路にない守りである。
 - 一覧の要素が記録の形に合わないとき(100字を超える、記録に使えない文字を含む)は、Consoleから削除できない。
-  記録を入れられず、`audit_unavailable`で断るためである。人がCLIで直す。
+  記録を入れられず、`audit_unavailable`で断るためである。
+  人がCLIで直す。
   断りの文は、この原因と、CLIで直すことを伝える。
-- 元に戻す機能は無い。元に戻すには、運用者がWindmillでリソースを編集するか、`wmill resource push`で戻す。
+- 元に戻す機能は無い。
+  元に戻すには、運用者がWindmillでリソースを編集するか、`wmill resource push`で戻す。
 - 実装を止めている間に承認すると、要件定義は承認済みで終わり、要対応に載らず、再開の口が無い。
-  有効に戻した後、人が`retry_work_item`(Consoleの再実行)で再開する。確認のダイアログが、この旨を伝える。
+  有効に戻した後、人が`retry_work_item`(Consoleの再実行)で再開する。
+  確認のダイアログが、この旨を伝える。
 - 数値の項目は、動いているフローの以後の手順にも効く。
   日次の予算を今日の使用額より小さくすると、今日のClaudeを使うフローがすべて失敗し、Consoleからは引き上げられない。
-  確認のダイアログが、この旨を伝える。今日の使用額は、ダイアログでは調べない。
+  確認のダイアログが、この旨を伝える。
+  今日の使用額は、ダイアログでは調べない。
 - ローカルのClaudeのセッションも、運用者のwmillの資格で、`wmill resource push`やAPIから、設定を直接書ける。
   この経路は、許可表も、比較交換も、操作の記録も通らない。
   フックが止めるのは、書き込みのscriptを名前で呼ぶ経路だけである。
@@ -1937,11 +2239,13 @@ scriptのscheduleは、次の回を前の回の終了時に積む。そのため
 - 止めたスケジュールは、凍結の解除だけで戻る。
   凍結が終わるか解除された後の、次の自己更新の追従で、リポジトリの定義(有効)に戻る。
   有効なdeployの保留があるあいだは、追従も待つので、凍結が終わっても、解除しても戻らない。
-  `freeze:reset`で変数を空にすると、追従が動かず、次の反映まで戻らない。そのときはWindmillで有効に戻す。
+  `freeze:reset`で変数を空にすると、追従が動かず、次の反映まで戻らない。
+  そのときはWindmillで有効に戻す。
   確認のダイアログが、deployの保留があるときの旨を伝える。
 - 追従(`self_update`)が24時間以上動かないと、終わった凍結の行は、次に保留か凍結を置く操作の掃除で片付けられる。
   すると、Consoleで止めたスケジュールは、追従で戻らなくなる。
-  通知は出ない。そのときはWindmillで有効に戻す。
+  通知は出ない。
+  そのときはWindmillで有効に戻す。
   24時間は、置く部品が終わった行を残す時間(`STALE_ENDED_MS`)で、凍結の期限の上限と同じである。
 - 止めるスケジュールごとに、止めると黙る処理がある。
   通知が出るものと出ないものがあり、確認のダイアログが、対象ごとの影響を伝える。
@@ -1957,9 +2261,12 @@ Consoleから行う書き込みの操作は、表`factory.console_actions`に記
 表を書く部品は`lib/console_actions.ts`にあり、書き込みの操作の前後の順序を決める。
 
 1. 操作の前に、結果が`attempted`の行を入れる。
-2. 行を入れられなければ、新しい書き込みの操作は拒否する。記録の無い操作を通さないためである。
-3. 操作の後に、結果を`succeeded`か`failed`に更新する。複数の段の操作で途中まで進んだときは`partial`にし、段ごとの結果を`changes`に入れる。
-4. 更新に失敗しても、操作は取り消さない。戻りに記録の失敗(`action_audit`が`failed`)を載せる。
+2. 行を入れられなければ、新しい書き込みの操作は拒否する。
+   記録の無い操作を通さないためである。
+3. 操作の後に、結果を`succeeded`か`failed`に更新する。
+   複数の段の操作で途中まで進んだときは`partial`にし、段ごとの結果を`changes`に入れる。
+4. 更新に失敗しても、操作は取り消さない。
+   戻りに記録の失敗(`action_audit`が`failed`)を載せる。
 
 既存の操作に記録を足すときは、1の失敗で拒否せず、操作を通して記録の失敗を戻す。
 データベースの障害が、記録と無関係な変数だけを書く操作まで止めないためである。
@@ -1996,7 +2303,8 @@ PRレビューの投入の記録に入れるのは、`owner`、`repo`、`pr_numb
 設定の全体や、`reason`などの自由な文字列は入れない。
 記録に秘密値や長い文章が混ざるのを、入力の段で防ぐためである。
 
-保持は、固定の90日である。設定の項目にしない。
+保持は、固定の90日である。
+設定の項目にしない。
 定義は`lib/console_actions.ts`にあり、保護パスで守る。
 保護パスの目的は、PRの自動修正と実装が、人のレビューを経ずに書き換えるのを止めることである。
 この表に記録する書き込みのscriptは、記録の順序を持つので保護パスに入れる。
@@ -2018,7 +2326,9 @@ PRレビューの投入の記録に入れるのは、`owner`、`repo`、`pr_numb
 `approval_decide`、`notice_resolve`、`audit_kickoff`は、この表に記録しない。
 記録の順序を持たないので、この理由では保護パスに入れていない。
 `approval_decide`が決めた人を残す先は、承認依頼の表の`decided_by`である。
-`cleanup_db`が毎日、90日を過ぎた行を消す。消せなかったときは、`cleanup_db_failed`の通知を残す。件数はログに残す。
+`cleanup_db`が毎日、90日を過ぎた行を消す。
+消せなかったときは、`cleanup_db_failed`の通知を残す。
+件数はログに残す。
 
 この表は、defaultのworkerと管理者が書けるので、改ざんに耐えない。
 誤操作を後から追うための記録であり、不正の証拠には使えない。
@@ -2027,14 +2337,17 @@ PRレビューの投入の記録に入れるのは、`owner`、`repo`、`pr_numb
 
 ジョブの画面と設定のタブは、サーバー由来の文字列を、テキストのノードとしてだけ描く。
 見えない文字と、並びを入れ替える文字は、無害化の入口(`console/src/lib/safeText.ts`)で代替文字にする。
-入口は、置き換える文字の範囲を自分で持つ。保護パスの外のファイルには頼らない。
+入口は、置き換える文字の範囲を自分で持つ。
+保護パスの外のファイルには頼らない。
 範囲を狭める変更が、人のレビューを経ずに入るのを防ぐためである。
 
 保護パスに入れるのは、次の4つである。
 
 - 無害化の入口(`safeText.ts`)
-- 入口のテスト。分類ごとの代表の文字が置き換わることを確かめる
-- 網羅テスト(`console/src/screens/jobs/safeTextCoverage.test.tsx`)。全項目に見えない文字を入れて描き、残らないことを確かめる
+- 入口のテスト。
+  分類ごとの代表の文字が置き換わることを確かめる
+- 網羅テスト(`console/src/screens/jobs/safeTextCoverage.test.tsx`)。
+  全項目に見えない文字を入れて描き、残らないことを確かめる
 - ソースの契約テスト(`tests/scripts/console_jobs_render_contract.test.ts`)
 
 描画の部品は、保護パスに入れない。
@@ -2052,9 +2365,12 @@ PRレビューの投入の記録に入れるのは、`owner`、`repo`、`pr_numb
 設計書の本文の画面(`/console/items/:id/design`)は、承認の操作を持たない読み返しの画面である。
 backendの`design_doc`ビューが、本文と図を返す。
 
-- 本文は、承認画面と同じ整形(`sanitizeModelTextDetailed`)を通す。制御文字と書式文字を除き、秘密値をマスクする。長さでは切らない。
+- 本文は、承認画面と同じ整形(`sanitizeModelTextDetailed`)を通す。
+  制御文字と書式文字を除き、秘密値をマスクする。
+  長さでは切らない。
 - 要約と未確定事項は、保存の前に整えてあるので、そのまま返す。
-- 図のXMLは、マスクを通さない。残るリスクは[draw.ioの図の描画](#drawioの図の描画)に書く。
+- 図のXMLは、マスクを通さない。
+  残るリスクは[draw.ioの図の描画](#drawioの図の描画)に書く。
 - `design_doc`は、作業項目の番号と設計書の番号で本文を返し、持ち主を確かめない。
 
 この画面の描画は、承認と実装が受け取る文字と違う。
@@ -2241,7 +2557,8 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
 承認の詳細(`ApprovalOverview.tsx`)、共有のパネル(`ReviewPanel.tsx`)、承認バー(`ApprovalBar.tsx`)も保護しない。
 承認画面(`DesignReview.tsx`)の中の描き方と配線は、上の2つの契約テストが固定する。
 固定するのは、画面が固定した入力の全文を描き切ること(描いた`<pre>`の文字と、印が持つ元の文字列から全文を組み直せること)と、ソースの形である。
-印の見える文字が空でないことは、組み直しの検査では確かめない。部品のテストと人のレビューで確かめる。
+印の見える文字が空でないことは、組み直しの検査では確かめない。
+部品のテストと人のレビューで確かめる。
 全文を切る、隠すスタイルの書き方は、代表的なものを拒否の一覧で捕まえる。
 一覧は網羅しないので、漏れはレビューで確かめる。
 承認画面のファイルを変える変更は、保護パスなので、人のレビューを経る。
@@ -2357,7 +2674,8 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
 - 最初の描画が原文で、設計書のパネルに行ごとの`<bdo dir="ltr">`があり、プレビューの印と確認のチェックが無い。
 - `initialView`が、プレビューで、まだ選んでいない状態のとき、承認ボタンが無効になる。
   止める理由の文の全体とプレビューの印が出て、`<bdo dir="ltr">`は無い。
-  理由の文は、テストが文字列で直接書いて照合する。保護の外から期待値を取らない。
+  理由の文は、テストが文字列で直接書いて照合する。
+  保護の外から期待値を取らない。
 - `initialView`が、プレビューで、まだ選んでいない状態のとき、設計書のパネルより前にプレビューの印が無い(取り込み時点のIssueは原文のまま)。
 - 切り詰めた設計書と、プレビューの状態の組み合わせで、止める理由が切り詰めの理由である。
 - `initialView`が、原文で、プレビューを選んだ状態のとき、確認のチェックの文が出る。
@@ -2508,20 +2826,25 @@ superadminは、許可の有無にかかわらず使える。
 superadminでない主体は、許可されたtagしか使えない。
 次のことは、この境界では守れない。
 
-- DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
+- DBには届く。
+  `DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
 - secret変数の`claude_oauth_token`、`github_token`、`discord_webhook_url`、`github_read_tokens`、`heartbeat_url`を読める。
   どのscriptが読むかを制限する仕組みは、契約テストの許可だけである。
 - このworkerで動かすのは、上の基準で選んだ定期ジョブの想定である。
   リポジトリに入る変更のうち、テストが走査できる形は、契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が止める。
   走査できない形と、Windmillの画面でtag`periodic`を付ける操作は止められない。
   ワークスペースでscriptを編集できる者は、任意のscriptにtag`periodic`を付けられる。
-- 許可はすべてのワークスペースに及ぶ。ワークスペースで絞らない。
+- 許可はすべてのワークスペースに及ぶ。
+  ワークスペースで絞らない。
 - scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
 - 許可した主体は、このworkerの依存キャッシュ(`worker_periodic_dependency_cache`)に書ける。
   defaultのworkerでscriptを実行できる者には、元から同等のことができるので、実害は増えない。
-- このworkerの枠は1つである。長く動くjobで枠を埋めると、ほかの定期ジョブが待つ。
+- このworkerの枠は1つである。
+  長く動くjobで枠を埋めると、ほかの定期ジョブが待つ。
   可用性の問題で、秘密の漏れではない。
-- composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
+- composeの環境変数`WORKER_TAGS`は既定値である。
+  DBにワーカーグループの設定があると、そちらが実効になる。
+  変化はWindmillの画面の「Workers」で確かめる。
 
 ### tagを付けるscriptの選び方
 
@@ -2530,14 +2853,18 @@ superadminでない主体は、許可されたtagしか使えない。
 そのため、tag`periodic`を付けるのは、次のどれにも依存しない定期ジョブだけである。
 依存するジョブは、defaultのworkerに残す。
 
-- ファイル。`factory_state`、`factory_workspaces`、self cloneの下を読み書きするジョブがあたる。
+- ファイル。
+  `factory_state`、`factory_workspaces`、self cloneの下を読み書きするジョブがあたる。
   このworkerには同じパスのボリュームが無い。
   ジョブは失敗するか、コンテナの中の別のディレクトリを触って成功したように見える。
   後者は気づきにくい。
-- 独自イメージの道具。`claude`、`gh`、`git`、`gtr`を使うジョブと、道具や検査の枠を確かめるジョブがあたる。
+- 独自イメージの道具。
+  `claude`、`gh`、`git`、`gtr`を使うジョブと、道具や検査の枠を確かめるジョブがあたる。
   道具や検査の枠を確かめるジョブは、上流のイメージでは、必ず確認に失敗して保留される。
-- cgroup。cgroupのファイルを読んで、負荷や使用量を測るジョブがあたる。
-- 子プロセス。`child_process`で外部のコマンドを起動するジョブがあたる。
+- cgroup。
+  cgroupのファイルを読んで、負荷や使用量を測るジョブがあたる。
+- 子プロセス。
+  `child_process`で外部のコマンドを起動するジョブがあたる。
 
 選ぶときは、scriptと、importでたどれるソースをすべて読み、上の4つに依存しないことを確かめる。
 見る箇所は、ファイルのパスと`fs`の使用、`child_process`のimport、道具や検査の枠を確かめる呼び出し、cgroupのパスである。
@@ -2614,7 +2941,8 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 - Windmillの画面で付けたtag。
 - 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
 - 第三者パッケージ(`execa`、`fs-extra`、`zx`など)の中身。
-- resourceの中身で解決されるsecret。`getResource`が返す値の中の`$var:`は、走査が見ない。
+- resourceの中身で解決されるsecret。
+  `getResource`が返す値の中の`$var:`は、走査が見ない。
 
 tag`periodic`を新しく付けるPRでは、そのscriptが読むresourceの中身を確かめる。
 `getResource`の引数のresourceごとに、値に`$var:`で始まる参照が無いことを、Windmillで確かめる。
@@ -2634,7 +2962,8 @@ tag`periodic`を付けたのは、次の5本である。
 
 いずれもresource`f/factory/factory_config`だけを読む。
 ローカルのインスタンスでは、その値に`$var:`と`$res:`の参照が無いことを確かめた。
-本番相当のインスタンスのresourceは、リポジトリから確かめられない。人がWindmillの画面で見て確かめる。
+本番相当のインスタンスのresourceは、リポジトリから確かめられない。
+人がWindmillの画面で見て確かめる。
 
 | script | 依存と読むsecret | 結論 |
 | --- | --- | --- |
@@ -2687,7 +3016,8 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
   最大の時間は[GitHubの収集](internals/github-collect.md#鮮度の足りないリポジトリ)にある。
 - `poll_issues`が検索を使わないので、発見の経路を設定だけで検索へ戻す手段は無い。
 - `poll_issues`が明示リポジトリを一覧で読むとき、トリガーラベルの付いた開いたIssueとPRが合わせて1000件を超えると、一覧が失敗し続ける。
-  トリガーラベルはIssueフォームに設定しない方針なので、外の人が埋めるのは難しい。失敗は`list_labeled_issues`の段に残る。
+  トリガーラベルはIssueフォームに設定しない方針なので、外の人が埋めるのは難しい。
+  失敗は`list_labeled_issues`の段に残る。
 - `poll_prs`は、明示でないリポジトリの記録が古い間、そのリポジトリのPRを見つけない。
   鮮度の監視が通知するまでの時間は、黙って見送る。
   最大の時間は[GitHubの収集](internals/github-collect.md#鮮度の足りないリポジトリ)にある。
@@ -2700,9 +3030,12 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
   外の人が自分でそこへ到達できるので、1000件を超えると、通知なしに失敗が続く。
 - `poll_prs`は、組織の所有者のPRのチーム宛てのレビューの依頼を、`GET /user/teams`のチームの数値IDで照合する。
   チームへの依頼は、作者が許可された人のPRだけ、候補にする。
-  個人の所有者のリポジトリには、チーム宛ての依頼が付かないので、現在の構成では起きない。個人の所有者の行は、直接の依頼だけで判定する。
-- 組織の所有者での次の4つは、実機で確かめていない。所有者が個人で、確かめる手段が無いためである。
-  - `GET /user/teams`に必要なPATの権限。組織の権限のMembersの読み取りなどが要る可能性がある。
+  個人の所有者のリポジトリには、チーム宛ての依頼が付かないので、現在の構成では起きない。
+  個人の所有者の行は、直接の依頼だけで判定する。
+- 組織の所有者での次の4つは、実機で確かめていない。
+  所有者が個人で、確かめる手段が無いためである。
+  - `GET /user/teams`に必要なPATの権限。
+    組織の権限のMembersの読み取りなどが要る可能性がある。
   - `GET /user/teams`が、PATのアカウントのチームを返すか。
   - 親チーム経由の依頼の扱い。
   - `requested_teams`と`/user/teams`の応答の形。
@@ -2716,15 +3049,19 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
   - 同じheadのまま、別のチームが依頼されたとき。
   - PATのアカウントが、依頼されたチームに足されたとき。
   - 表の依頼先が`NULL`のまま、同じheadで直接の依頼が足されたとき。
-  - 作者を`allowed_labeler_logins`か`allowed_labeler_ids`に足したとき。作者が許可されていないために対象でなかったPRも、覚えているためである。
+  - 作者を`allowed_labeler_logins`か`allowed_labeler_ids`に足したとき。
+    作者が許可されていないために対象でなかったPRも、覚えているためである。
 - `poll_prs`は、stateを書けない間、チームへの依頼の確認を毎周回先頭から選ぶ。
   先頭の候補が枠を使うので、後ろの候補を確かめられないことがある。
 - `poll_prs`は、チーム宛ての確認が要る行を、1周回に20件までRESTで確かめる。
-  超えた分は、結果の`team_capped`に出る。前の周回の続きから選ぶので、次の周回以降に確かめられる。
+  超えた分は、結果の`team_capped`に出る。
+  前の周回の続きから選ぶので、次の周回以降に確かめられる。
 - 許可されていない作者のPRも、1周回20件のチーム宛ての確認の枠を使う。
-  外の人がheadを変え続けると、許可された作者のチーム依頼の確認が数周回遅れうる。止まらない。
+  外の人がheadを変え続けると、許可された作者のチーム依頼の確認が数周回遅れうる。
+  止まらない。
 - `listPrReviews`と`listPrReviewComments`にはページの上限が無い。
-  許可された作者のPRや直接の依頼のPRに、外の人がコメントを増やせる経路は、以前からある。この変更の範囲外の記録である。
+  許可された作者のPRや直接の依頼のPRに、外の人がコメントを増やせる経路は、以前からある。
+  この変更の範囲外の記録である。
 
 ## ホストの実行役の境界
 
@@ -2746,7 +3083,8 @@ mainに入った変更は、その権限で動く道具を書き換えうる。
 
 入口と部品は、`f/**`をimportしない。
 importするのは、Nodeの組み込み4つ(`node:crypto`、`node:fs`、`node:path`、`node:readline`)と、`scripts/host_apply/`の中だけである。
-`bun`と`bun:*`はimportしない。`Bun`はYAMLとTOMLの解析にだけ使う。
+`bun`と`bun:*`はimportしない。
+`Bun`はYAMLとTOMLの解析にだけ使う。
 実行口(`spawn_runner.ts`)だけは、これに加えて`Bun.spawn`を呼ぶ。
 外部コマンドの実行口を迂回する経路を塞ぐためである。
 リポジトリの外へコピーしても、単独で動くようにするためでもある。
@@ -2760,12 +3098,15 @@ symlink(mode 120000)かsubmodule(160000)が1つでもあれば、目標を拒否
 たとえば、秘密値のファイルを読ませたり、Caddyfile経由でホストのファイルに書かせたりできるためである。
 今のtreeには、どちらも1つも無い。
 
-次のパスも拒否する。1つのパスが2つのファイルを指しうるためである。
+次のパスも拒否する。
+1つのパスが2つのファイルを指しうるためである。
 
 - ASCIIの印字できる文字以外を含むパス。
   `ſcripts/doctor.sh`や、ケルビン記号を使った`docKer-compose.yml`は、大文字小文字の畳み込みやUnicode正規化で、ASCIIのファイルと同じ名前になりうる。
-- ディレクトリを含めて、ASCIIの小文字にそろえると衝突するパス。大文字小文字を区別しないファイルシステムでは、同じファイルになる。
-- composeが自動で読むoverrideファイル(`docker-compose.override.yml`、`compose.override.yaml`など)。定義を後から上書きできる。
+- ディレクトリを含めて、ASCIIの小文字にそろえると衝突するパス。
+  大文字小文字を区別しないファイルシステムでは、同じファイルになる。
+- composeが自動で読むoverrideファイル(`docker-compose.override.yml`、`compose.override.yaml`など)。
+  定義を後から上書きできる。
 
 前提は、1つのパスが1つのファイルを指すことである。
 
@@ -2803,7 +3144,8 @@ composeが`.env`を探す場所は、実機で確かめていない。
 
 `package.json`、`bunfig.toml`、`.npmrc`は、リポジトリのルートのものだけを対象にする。
 mise設定の名前、`.env`系、`.nvmrc`、`.*-version`は、ディレクトリを問わず対象にする。
-判定は大文字小文字を区別しない。APFSでは`Bunfig.toml`も`bunfig.toml`と同じファイルを指すためである。
+判定は大文字小文字を区別しない。
+APFSでは`Bunfig.toml`も`bunfig.toml`と同じファイルを指すためである。
 
 `bunfig.toml`は`preload`でコードを実行でき、`.npmrc`はmiseのツールのinstallが読む。
 `package.json`は、`scripts`、`bin`、`workspaces`、`trustedDependencies`など、コードを動かす欄を持つ。
@@ -2811,7 +3153,8 @@ mise設定の名前、`.env`系、`.nvmrc`、`.*-version`は、ディレクト�
 そのため、`scripts/doctor.sh`と`scripts/bootstrap.sh`は、`bun ./scripts/custom-tags.ts`で起動する。
 `./`で始め、`run`を付けない形は、必ずファイルを実行する。
 miseは、`devEngines`、`packageManager`、`.nvmrc`、`.*-version`を、設定で有効にしたツールについてだけ、バージョンの指定として読む。
-既定では、どのツールについても読まない。読む設定になっても、これらの変更は承認を通る。
+既定では、どのツールについても読まない。
+読む設定になっても、これらの変更は承認を通る。
 `bun.lock`は対象にしない。
 実行役は`bun install`を実行せず、ホストで実行するファイルは依存をimportしないためである。
 
@@ -2838,7 +3181,8 @@ dependabotの更新のたびに、人の承認を求めないためである。
 URL、gitやfileの指定、`npm:`の別名、`latest`、`*`への変更は、取得元や中身を変えうるので、承認が要る。
 ほかのキーの変更と、新規作成、読めない内容も、承認が要る。
 免除は、`dependencies`、`devDependencies`、`overrides`の既存の名前の、版の文字列だけに効く。
-新しい名前を足す変更は、承認が要る。名前を消す変更は、承認を求めない。
+新しい名前を足す変更は、承認が要る。
+名前を消す変更は、承認を求めない。
 `peerDependencies`、`optionalDependencies`、`resolutions`の変更は、承認が要る。
 免除は、小文字の`package.json`だけに効く。
 
@@ -2863,9 +3207,11 @@ URL、gitやfileの指定、`npm:`の別名、`latest`、`*`への変更は、�
 
 次の差は、免除の対象外で、承認が要る。
 
-- `CONSOLE_GITHUB_REPO`の値の変更。Consoleの配信物の取得元を決めるが、形式だけでは正しい取得元か確かめられないため。
+- `CONSOLE_GITHUB_REPO`の値の変更。
+  Consoleの配信物の取得元を決めるが、形式だけでは正しい取得元か確かめられないため。
 - 15個以外のキーの変更。
-- `[tools]`、`[tasks]`の変更。`gh`などの版の更新も含む。
+- `[tools]`、`[tasks]`の変更。
+  `gh`などの版の更新も含む。
 - キーの追加と削除、`mise.toml`の新規作成、読めない内容への変更。
 
 実行役は、目標の`mise.toml`を、`mise`コマンドではなくTOMLとして静的に読む。
@@ -2878,7 +3224,8 @@ URL、gitやfileの指定、`npm:`の別名、`latest`、`*`への変更は、�
 承認が要る変更は、人が`approve`で承認するまで、反映の対象にならない。
 承認の記録を書けるのは、端末で確認の文言を入力した人だけである。
 入口は`bun --no-env-file ./scripts/host-apply.ts approve <sha> --applied <適用済みのsha>`である。
-`mise run`を経由しない。`mise.local.toml`の秘密値を、承認のプロセスの環境に入れないためである。
+`mise run`を経由しない。
+`mise.local.toml`の秘密値を、承認のプロセスの環境に入れないためである。
 `--no-env-file`は、カレントディレクトリの`.env`をBunが読まないようにする。
 付け忘れると、書く前に終了コード3で止まる。
 手順は[変更を承認する](operations.md#変更を承認する)にある。
@@ -2948,7 +3295,9 @@ URL、gitやfileの指定、`npm:`の別名、`latest`、`*`への変更は、�
 承認の表示を作るコードが書き換えられていると、人は偽の表示に確認の文言を答える。
 そこで、次の3つを確かめる。
 
-- 実行しているスクリプトが、メインのチェックアウトにある。リンクされたworktreeでは動かさない。カレントディレクトリは、リポジトリのトップでなければならない。
+- 実行しているスクリプトが、メインのチェックアウトにある。
+  リンクされたworktreeでは動かさない。
+  カレントディレクトリは、リポジトリのトップでなければならない。
 - 実行するファイルの内容が、`HEAD`と同じである。
   対象は、入口、`scripts/host_apply/`の全ファイル、`bunfig.toml`、`package.json`である。
   `tsconfig.json`、`tsconfig.wmill.json`、`scripts/tsconfig.json`も対象にする。
@@ -2957,7 +3306,8 @@ URL、gitやfileの指定、`npm:`の別名、`latest`、`*`への変更は、�
 
 内容の照合は、作業ツリーのファイルのblobのsha1を、`HEAD`のtreeと比べて行う。
 `scripts/host_apply/`にあって`HEAD`に無いファイルは、不一致になる。
-`git status`は使わない。`skip-worktree`、`.gitignore`、フィルタで隠せるためである。
+`git status`は使わない。
+`skip-worktree`、`.gitignore`、フィルタで隠せるためである。
 検査が通ったときは、検査に使った`HEAD`のshaを返す。
 検査とは別に`HEAD`を解決し直すと、その間に`HEAD`が動きうるためである。
 
@@ -2974,7 +3324,8 @@ modeだけの変更も、ヘッダーの`old mode`と`new mode`の行で見え�
 文言は、`approve`と承認するコミットの先頭12桁である。
 内容を見ずに反射で答えるのを止めるためのもので、agentを止める守りではない。
 
-表示は、許可した文字だけをそのまま出す。許可する文字は次のとおりである。
+表示は、許可した文字だけをそのまま出す。
+許可する文字は次のとおりである。
 
 - ASCIIの印字できる文字、タブ、改行
 - ひらがな(`U+3041`〜`U+3096`)、`々`、カタカナ(`U+30A1`〜`U+30FA`)、`・`、`ー`、漢字(`U+4E00`〜`U+9FFF`)
@@ -2991,10 +3342,12 @@ modeだけの変更も、ヘッダーの`old mode`と`new mode`の行で見え�
 
 次の変更は、この道具では承認しない。
 
-- `.env`系のファイルを含む変更。差分の本文に秘密値が出うるため。
+- `.env`系のファイルを含む変更。
+  差分の本文に秘密値が出うるため。
 - 追加、変更、削除のどれでもない変更(ファイルの種類の変更など)。
 - 差分が512KiBを超える変更。
-- 承認の記録が64KiBを超える変更。ファイルの数が多い変更は、これに当たる。
+- 承認の記録が64KiBを超える変更。
+  ファイルの数が多い変更は、これに当たる。
 
 #### gitの呼び出し
 
@@ -3012,32 +3365,48 @@ modeだけの変更も、ヘッダーの`old mode`と`new mode`の行で見え�
 
 #### 承認の門の残るリスク
 
-- 同じホストユーザーのプロセスは、`approved.json`を直接書ける。ファイルの権限では防げない。
-- agentが環境変数を消し、疑似端末で文言を入力すれば、`approve`を通せる。起動を拒否ルールで止めるかは、運用者の判断である。
+- 同じホストユーザーのプロセスは、`approved.json`を直接書ける。
+  ファイルの権限では防げない。
+- agentが環境変数を消し、疑似端末で文言を入力すれば、`approve`を通せる。
+  起動を拒否ルールで止めるかは、運用者の判断である。
 - コードの出どころの検査は、書き換えた側が迂回できる。
-  - Bunの読み込み: `~/.bunfig.toml`と`$XDG_CONFIG_HOME/.bunfig.toml`の`preload`、`BUN_OPTIONS`。リポジトリの外にある親ディレクトリの`tsconfig.json`は、照合できない。カレントディレクトリの`bunfig.toml`の`preload`は、`--no-env-file`とカレントディレクトリの検査では防げない。
-  - gitの挙動: `.git/info/grafts`と、gitの設定。環境の固定で緩和するだけである。
+  - Bunの読み込み: `~/.bunfig.toml`と`$XDG_CONFIG_HOME/.bunfig.toml`の`preload`、`BUN_OPTIONS`。
+    リポジトリの外にある親ディレクトリの`tsconfig.json`は、照合できない。
+    カレントディレクトリの`bunfig.toml`の`preload`は、`--no-env-file`とカレントディレクトリの検査では防げない。
+  - gitの挙動: `.git/info/grafts`と、gitの設定。
+    環境の固定で緩和するだけである。
   - `origin/main`のref: 同じユーザーが書き換えられる。
-  - `HEAD`が、承認する版そのものになりうる。`--applied`と`HEAD`を揃える案は、人が先に`git pull`した場合の拒否を招くので採らない。
-  - `mise activate`を使うシェルでは、`mise.local.toml`の`[env]`が環境に入りうる。gitの子プロセスの環境は固定するので、実害は小さい。
-- 承認の表示を作るコードの変更は、`origin/main`へのマージ時の人のレビューにだけ守られる。mainは承認0件でマージできる。
+  - `HEAD`が、承認する版そのものになりうる。
+    `--applied`と`HEAD`を揃える案は、人が先に`git pull`した場合の拒否を招くので採らない。
+  - `mise activate`を使うシェルでは、`mise.local.toml`の`[env]`が環境に入りうる。
+    gitの子プロセスの環境は固定するので、実害は小さい。
+- 承認の表示を作るコードの変更は、`origin/main`へのマージ時の人のレビューにだけ守られる。
+  mainは承認0件でマージできる。
   Windmillへの反映の承認は、ホストの実行役のコードを止めない([反映の承認](#反映の承認))。
-- 許可した日本語の文字の中にある同形異字は、検出しない。ASCIIの記号に似る`一`、`ー`、`〜`は、許可した文字なので通る。
-- `origin/main`のrefは、人が`git fetch`で更新する。古い参照は拒否側に倒れる。偽の参照は、表示した先端のshaをGitHubと照合して見分ける。
-- 適用済みのshaは人が入力する。実際の適用済みと一致しない記録は`plan`が使わない。
+- 許可した日本語の文字の中にある同形異字は、検出しない。
+  ASCIIの記号に似る`一`、`ー`、`〜`は、許可した文字なので通る。
+- `origin/main`のrefは、人が`git fetch`で更新する。
+  古い参照は拒否側に倒れる。
+  偽の参照は、表示した先端のshaをGitHubと照合して見分ける。
+- 適用済みのshaは人が入力する。
+  実際の適用済みと一致しない記録は`plan`が使わない。
   ただし、これは「実際の適用済み」を偽造できない出どころから得たときだけ成り立つ。
   共有ボリュームの印はworkerが偽造できるので、`--applied`はホストのcheckoutの履歴で確かめる。
   ホストの状態ディレクトリ(0700)に適用済みのshaを書き、`approve`と`plan`がそれを読む形は、後続の段階である。
-- `plan --approved`は、承認の`applied`を照合しない。自動の経路は`plan --state-dir`だけを使う。
-- ページ送りは論理行単位である。1行が極端に長い入力は、画面の外へ流れる。
+- `plan --approved`は、承認の`applied`を照合しない。
+  自動の経路は`plan --state-dir`だけを使う。
+- ページ送りは論理行単位である。
+  1行が極端に長い入力は、画面の外へ流れる。
 - パスが`-`で始まる承認の対象は、gitの引数に渡せないので、`approve`が終了コード1で止まる。
 - 承認は1回に1件で、前の記録を置き換える。
 
 ### 状態の置き場
 
 状態の置き場は、実行役がホストに残すファイルを置くディレクトリである。
-場所は、ホストの`~/Library/Application Support/atelier-works-host/`である。`--state-dir`で変えられる。
-共有ボリュームとコンテナの中には置かない。workerが書き換えられないようにするためである。
+場所は、ホストの`~/Library/Application Support/atelier-works-host/`である。
+`--state-dir`で変えられる。
+共有ボリュームとコンテナの中には置かない。
+workerが書き換えられないようにするためである。
 置き場に置くファイルは、承認の記録、排水の記録、状態ファイル、ロックのファイル(`lock`)である(排水の記録と状態ファイルの書き手は後続の段階で入る)。
 
 #### ファイルの読み書きの規則
@@ -3160,7 +3529,8 @@ schema 1を書いた実行役は無いので、移行の関数は置かず、sch
 型ガードは、最上位と`converging`のキーを完全に一致するものだけ通す。
 自由文字列の欄は持たない。
 sha、イメージID、コンテナID、時刻、サービス名、通知の理由、結果の種類は、欄ごとに形を確かめる。
-排水の記録は`state.json`に持たない。`drain`のキーがあれば拒否する。
+排水の記録は`state.json`に持たない。
+`drain`のキーがあれば拒否する。
 件数にも上限がある。
 適用済みのイメージは2件、CIの通過は20件、拒否の控えと人の手が要る版は200件までである。
 上限を超えないよう、新しい順に残す補助関数を置く。
@@ -3175,12 +3545,15 @@ sha、イメージID、コンテナID、時刻、サービス名、通知の理�
 
 - 新しい収束は、ビルドの段階から始める。
 - 確認の証拠、候補、コミット、開始時刻は変えない。
-- 段階は1つずつ進み、飛ばさない。巻き戻しに入れるのは排水と適用の段階からで、巻き戻しから前進には戻らない。
-- 一度書いたビルド前の`:latest`のイメージIDは変えない。ビルドの後は、作り直す集合と、作り直す前のコンテナとイメージも変えない。
+- 段階は1つずつ進み、飛ばさない。
+  巻き戻しに入れるのは排水と適用の段階からで、巻き戻しから前進には戻らない。
+- 一度書いたビルド前の`:latest`のイメージIDは変えない。
+  ビルドの後は、作り直す集合と、作り直す前のコンテナとイメージも変えない。
 - 前進しかできない状態は、偽に戻さない。
 - 作り直しが済んだ記録は、巻き戻しの外では減らさない。
 - ケースは決まったら変えない。
-- 収束の記録を消せるのは、ビルドの段階と巻き戻しの段階のときだけである。排水以降は、止めたworkerを戻す情報を失わないよう、巻き戻しを経る。
+- 収束の記録を消せるのは、ビルドの段階と巻き戻しの段階のときだけである。
+  排水以降は、止めたworkerを戻す情報を失わないよう、巻き戻しを経る。
 
 後続の段階の実行役は、適用済みのコミット(`applied_sha`)を、この`state.json`だけから読む。
 置き場は0700で、共有ボリュームとコンテナの中に無い。
@@ -3196,9 +3569,16 @@ sha、イメージID、コンテナID、時刻、サービス名、通知の理�
 共有ボリュームの印を、唯一の根拠にしない。
 関数の実装は、dockerを呼ぶ後続の段階で入れ、その契約を同じ段階のテストで固定する。
 
-- `commitApplied`: 後処理まで済んだ収束を適用済みにする。後処理の段階の収束が要り、作り直したサービスの新しいイメージIDを全部覆い、記録と一致するイメージだけを受ける。
-- `createState`: 状態を新しく作る。`state.json`が無く、排水の記録が無いか空のときだけ作る。壊れたファイルがあっても失敗する。排水の記録が無ければ、状態より先に空の記録を作る。置き場は作らない。
-- `reinit`: 人の指定で置き換える。収束が無く、排水の記録が読めて空のときだけ行う。排水の記録が無いか壊れているときは、空でないものとして拒否する。
+- `commitApplied`: 後処理まで済んだ収束を適用済みにする。
+  後処理の段階の収束が要り、作り直したサービスの新しいイメージIDを全部覆い、記録と一致するイメージだけを受ける。
+- `createState`: 状態を新しく作る。
+  `state.json`が無く、排水の記録が無いか空のときだけ作る。
+  壊れたファイルがあっても失敗する。
+  排水の記録が無ければ、状態より先に空の記録を作る。
+  置き場は作らない。
+- `reinit`: 人の指定で置き換える。
+  収束が無く、排水の記録が読めて空のときだけ行う。
+  排水の記録が無いか壊れているときは、空でないものとして拒否する。
 
 `writeState`は、`applied_sha`と適用済みのイメージが変わる更新を拒否する。
 `state.json`を書く経路は`state_io.ts`だけである。
@@ -3212,7 +3592,8 @@ sha、イメージID、コンテナID、時刻、サービス名、通知の理�
 `assertHeld`が例外を投げたときは、書かずに止まる。
 `HeldLock`は非公開の欄を持つクラスで、`{ assertHeld }`の形の偽物は型の上で作れない。
 作れるモジュールは契約テストで閉じ、`lock.ts`だけである。
-ロックの実装(`lock.ts`)はどこにも配線されていない。それまで、`state_io.ts`と`lock.ts`を呼ぶのはテストだけである。
+ロックの実装(`lock.ts`)はどこにも配線されていない。
+それまで、`state_io.ts`と`lock.ts`を呼ぶのはテストだけである。
 
 後続の段階の実行役は、承認の記録の`applied`が`state.json`の`applied_sha`と一致するときだけ、記録を使う。
 今の`plan --state-dir`は、人が渡す`--applied`と照合する。
@@ -3227,46 +3608,57 @@ sha、イメージID、コンテナID、時刻、サービス名、通知の理�
 
 取り方は、次のとおりである。
 
-- `O_EXLOCK`を付けた非ブロックのopenで取る。取れなければ待たずに`busy`を返す。
+- `O_EXLOCK`を付けた非ブロックのopenで取る。
+  取れなければ待たずに`busy`を返す。
   Bunの`fs.constants`に`O_EXLOCK`が無いので、darwinの値(`0x20`)を`lock.ts`に直書きする。
 - `lock`は消さない常設のファイルで、人も移さない・消さない(復旧できない`unsafe`の場合を除く。[置き場の残るリスク](#置き場の残るリスク)を参照)。
   実体が替わると、別々のプロセスが別の実体のロックを持てるためである。
   作るのは`init`と、人が`create`を指定した`resetOwnerRecord`だけで、他の取得は`lock`が無ければ止まる(`lock_absent`)。
-- 取得のたびに、自己検査をする。ロックを取った後で、同じ`lock`をもう一度開き、`EAGAIN`になることを確かめる。
-  ならなければ`unsupported`で止める。darwin以外では`0x20`が助言ロックにならないためである。
-  この検査が見るのは、同じプロセスの中でロックが効くことまでである。プロセスの間で効くか(ネットワークのファイルシステムなど)は見ないので、置き場はローカルのディスクに置く。
+- 取得のたびに、自己検査をする。
+  ロックを取った後で、同じ`lock`をもう一度開き、`EAGAIN`になることを確かめる。
+  ならなければ`unsupported`で止める。
+  darwin以外では`0x20`が助言ロックにならないためである。
+  この検査が見るのは、同じプロセスの中でロックが効くことまでである。
+  プロセスの間で効くか(ネットワークのファイルシステムなど)は見ないので、置き場はローカルのディスクに置く。
 - 取得後に、通常のファイル、所有者、グループと他者の権限が無いこと(0600など)、リンク数1、パスの先と開いた実体の一致、置き場の実体の一致を確かめる。
   外れれば閉じて`unsafe`で止める。
-- 子プロセスはロックのfdを引き継がない。実機の確認で、`Bun.spawn`の子が残っても、fdを閉じた後に再取得できる。
+- 子プロセスはロックのfdを引き継がない。
+  実機の確認で、`Bun.spawn`の子が残っても、fdを閉じた後に再取得できる。
 
 `lock`の本文は、所有者の記録である。
 記録は診断と孤児の検査のためのもので、排他の根拠ではない。
 1024バイトの固定長で、先頭へ1回の書き込みで書く。
 SIGKILLされても、全部書かれるか、全く書かれないかになる。
 欄は、保持者のpidと取得時刻、子のプロセスグループの控え(`groups`)だけである。
-自由な文字列の欄は持たず、欄ごとに形を確かめる。大きさが0か1024でなければ読めない記録として止める(`owner_unreadable`)。
+自由な文字列の欄は持たず、欄ごとに形を確かめる。
+大きさが0か1024でなければ読めない記録として止める(`owner_unreadable`)。
 止まった理由の文言は固定で、パスとシステムのエラーの本文を含めない。
 
 書き込み側のフェンス(`HeldLock`)は、書く直前に、解放されていないこと、書く先が取得した置き場であること、`lock`の実体と置き場の実体が取得時のままであることを確かめる。
-確かめられるのは、書く直前までである。dockerの操作は、フェンスの外にある。
+確かめられるのは、書く直前までである。
+dockerの操作は、フェンスの外にある。
 ロックを持つ間に`lock`が消されたり差し替えられたりすれば、次の書き込みが例外で止まる。
 
 孤児の規則は、実行役の子が親より長く生きる場合のためにある。
-子は新しいセッションで起動する(`detached`)ので、端末の中断もlaunchdの停止も届かない。親がSIGKILLされると、子だけが残る。
+子は新しいセッションで起動する(`detached`)ので、端末の中断もlaunchdの停止も届かない。
+親がSIGKILLされると、子だけが残る。
 保持者は、子を起動した直後に、子のプロセスグループと、起動の前後の時刻を控える。
 次の取得者は、控えのグループが残っているかを調べる。
 残っていて、先頭のプロセスが居ないか、先頭の開始時刻が起動の前後の時刻の区間(誤差1秒)に入るなら、本物の孤児とみなす。
 このときはロックを取らず、`orphan_alive`で止まる。
 区間の外なら、pidを再利用した別のグループとして無視する。
 グループが残る間は、そのpidを別のプロセスに割り当てられないので、先頭が居ないグループは元のグループである。
-孤児を殺しには行かない。pgidの再利用で、無関係のグループを殺しうるためである。
-本物の孤児が残る状態は、人に渡す。止まるのは、孤児が終わるまでである。
+孤児を殺しには行かない。
+pgidの再利用で、無関係のグループを殺しうるためである。
+本物の孤児が残る状態は、人に渡す。
+止まるのは、孤児が終わるまでである。
 
 復旧は、`lock`を動かさずに、記録だけを直す関数(`resetOwnerRecord`)で行う。
 ロックを取れたときだけ書くので、保持者が居れば`busy`になる。
 記録が読めて、本物の孤児が残るときは、人が`discard`で孤児のpgidを名指しして、本物の集合と完全に一致するときだけ消す。
 記録が読めないときは、孤児を調べられないので、そのまま初期状態に戻す。
-人だけが呼ぶ。自動の復旧の経路から呼ばない。
+人だけが呼ぶ。
+自動の復旧の経路から呼ばない。
 
 実行口への配線と、`init`、`approve`などのサブコマンドは後続の段階で入る。
 今、`lock.ts`をimportするモジュールは無く、契約テストで固定する。
@@ -3276,16 +3668,20 @@ SIGKILLされても、全部書かれるか、全く書かれないかになる�
 - 同じホストユーザーのプロセスは、置き場のファイルを直接書ける。
   0700が防ぐのは、他のユーザーとworkerのコンテナである。
 - 排水の記録の読み書きの競合と、状態ファイルを新しく作るときの「無いときだけ」の確認から書くまでの競合は、ロックを持つ書き手だけが書くことで防ぐ。
-  ロックが防ぐのはプロセスの間だけである。プロセスの中の書き手は、1つに直列化する(実行役の本体の規則)。
+  ロックが防ぐのはプロセスの間だけである。
+  プロセスの中の書き手は、1つに直列化する(実行役の本体の規則)。
 - フェンスは、書く直前の`lock`の実体の照合までを確かめる。
   同じホストユーザーのプロセスが`lock`を消す・差し替えると、排他を割れる。
   dockerの操作はフェンスの外にあり、照合の後の差し替えは次の書き込みまで検出できない。
-- ロックは置き場ごとである。dockerのスタックはホストに1つなので、別の`--state-dir`で動く実行役は別のロックを取れる。
+- ロックは置き場ごとである。
+  dockerのスタックはホストに1つなので、別の`--state-dir`で動く実行役は別のロックを取れる。
   dockerを操作するサブコマンドは、既定の置き場だけを受ける(実行役の本体の規則)。
 - 本物の孤児は、控えに残る限り`orphan_alive`で止める。
   pgidの再利用は区間の照合で除くが、先頭が抜けた別のグループ、`setsid`で別のグループへ逃げた孫、子を控える前のSIGKILLは守れない。
-  人が確かめて、`resetOwnerRecord`の`discard`で外す。生きた本物を名指しすれば、孤児と並んで実行役が動く。
-- 電源断で`lock`の本文が壊れると、`owner_unreadable`で止まる。`resetOwnerRecord`で戻す。
+  人が確かめて、`resetOwnerRecord`の`discard`で外す。
+  生きた本物を名指しすれば、孤児と並んで実行役が動く。
+- 電源断で`lock`の本文が壊れると、`owner_unreadable`で止まる。
+  `resetOwnerRecord`で戻す。
   通常のファイルでない、他者の所有、緩い権限、リンクの複数化、symlinkの`lock`は`unsafe`で止まり、記録の復旧では直らない。
   実行役が動いていないことを確かめたうえで、人がそのパスの実体だけを除き、`init`で作り直す。
 - `lock`のopenと置き場の照合の間に、置き場をsymlinkへ差し替えて戻されると、置き場の外のファイルに記録を書かれる。
@@ -3298,16 +3694,19 @@ SIGKILLされても、全部書かれるか、全く書かれないかになる�
   渡せるのは実行役のコードだけで、コードの出どころの検査が守る。
   ただし、正当なコードの誤りは防げない。
 - 同じホストユーザーのプロセスは、`state.json`の`applied_sha`を書き換えられる。
-  これで承認の差の基準をずらせる。`approved.json`を直接書ける場合と同じ扱いである。
+  これで承認の差の基準をずらせる。
+  `approved.json`を直接書ける場合と同じ扱いである。
 - コンテナから状態の置き場を守るのは、0700ではなく、置き場をマウントしないことである。
   Docker Desktop for Macのbind mountでは、コンテナが書いたファイルはホストのユーザーの所有に見える。
   所有者と権限の検査では区別できない。
   `--state-dir`は、共有の場所やbind mountの下に置かない。
 - 契約テストは字句の検査である。
-  文字列の連結は検出できない。レビューが守る。
+  文字列の連結は検出できない。
+  レビューが守る。
   `node:fs`を使えるモジュールは、閉じた一覧(`code_origin.ts`、`lock.ts`、`secure_file.ts`)で固定する。
 - 状態ファイルが読めないとき(`state_unreadable`)は、`createState`と`reinit`のどちらも使えない。
-  人が壊れたファイルを退避して初期化する。手順は、初期化を足す段階で`docs/operations.md`に書く。
+  人が壊れたファイルを退避して初期化する。
+  手順は、初期化を足す段階で`docs/operations.md`に書く。
 - 親のディレクトリの鎖とACLは検査しない。
   `--state-dir`は、本人だけが書ける親の下に置く。
 - 置き場の検査から開くまでの間に、パスを差し替えられる隙がある。
@@ -3316,18 +3715,25 @@ SIGKILLされても、全部書かれるか、全く書かれないかになる�
 ### composeの方針
 
 実行役は、`infra/docker-compose.yml`を`Bun.YAML.parse`で静的に読み、許可する形だけを通す。
-未知のキーは拒否する。新しい書き方を足す変更は、許可リストの更新を伴う。
+未知のキーは拒否する。
+新しい書き方を足す変更は、許可リストの更新を伴う。
 
 - 許可リストにないサービス名とキー。
 - 特権とケーパビリティの拡張: `privileged`、`cap_add`、`devices`、`userns_mode`、`cgroup`、`sysctls`、`volumes_from`、`include`、`extends`。
-- ホストやほかのコンテナとの名前空間の共有。`pid`、`ipc`、`uts`、`network_mode`が`host`、`container:`、`service:`で始まる値である。`network_mode: none`は許す。
+- ホストやほかのコンテナとの名前空間の共有。
+  `pid`、`ipc`、`uts`、`network_mode`が`host`、`container:`、`service:`で始まる値である。
+  `network_mode: none`は許す。
 - `security_opt`の、`no-new-privileges:true`(`=true`でもよい)以外。
   `seccomp=`、`apparmor=`、`label=`、`systempaths=`は、権限を変えうるので、許可リストに無い値はすべて拒否する。
-- `127.0.0.1`以外に公開するポート。変数は、取り出した値で展開して評価する。
-  展開するのは、検査が知っている名前の参照だけである。知っている名前は、`mise.toml`の15個のキーである。
+- `127.0.0.1`以外に公開するポート。
+  変数は、取り出した値で展開して評価する。
+  展開するのは、検査が知っている名前の参照だけである。
+  知っている名前は、`mise.toml`の15個のキーである。
   本番の子プロセスには`HOME`なども入るので、ほかの名前の参照は、`${HOME-.}`のように既定値があっても拒否する。
-- 展開した後の絶対パス。`secrets`と`configs`のファイル、`build.context`、`dockerfile`も、bind mountと同じく拒否する。
-- チェックアウトの外を指す`secrets`、`configs`、`build.context`、`build.additional_contexts`、`dockerfile`。リモートのbuild contextも含む。
+- 展開した後の絶対パス。
+  `secrets`と`configs`のファイル、`build.context`、`dockerfile`も、bind mountと同じく拒否する。
+- チェックアウトの外を指す`secrets`、`configs`、`build.context`、`build.additional_contexts`、`dockerfile`。
+  リモートのbuild contextも含む。
 - `env_file`。
   ファイルの中身は承認の対象にならず、composeは中の`${DB_PASSWORD}`を補間する。
   表の検査はYAMLだけを読むので、中身を通して秘密値を運ばれると見えない。
@@ -3336,18 +3742,27 @@ SIGKILLされても、全部書かれるか、全く書かれないかになる�
   bindの元、`secrets`と`configs`のファイル、`build.context`、`build.additional_contexts`、`dockerfile`が対象で、大文字小文字を区別しない。
   `prod`の木には、このファイルへのリンクが置かれるためである。
   パスの要素にASCII以外の文字があるものも拒否する。
-  ディレクトリの指定(`..`でルートを含むbindやcontext)は拒否しない。リンクがsymlinkで、コンテナの中では辿れない前提である。
+  ディレクトリの指定(`..`でルートを含むbindやcontext)は拒否しない。
+  リンクがsymlinkで、コンテナの中では辿れない前提である。
 - チェックアウトの外のbind mount、絶対パスのbind mountの元、書き込める状態のbind mount。
-  絶対パスは、チェックアウトの中を指していても拒否する。ステージングのパスは実行のたびに変わるためである。
+  絶対パスは、チェックアウトの中を指していても拒否する。
+  ステージングのパスは実行のたびに変わるためである。
   書き込めるのは`infra/Caddyfile`だけである。
-- `deploy.resources.reservations`の`cpus`と`memory`以外。`devices`はホストのデバイスを割り当てるので拒否する。
+- `deploy.resources.reservations`の`cpus`と`memory`以外。
+  `devices`はホストのデバイスを割り当てるので拒否する。
 - `local`以外のdriverのボリューム、`bridge`以外のdriverのネットワーク、`driver_opts`と`external`を持つもの。
-- `pid`、`ipc`、`uts`、`network_mode`、`security_opt`の値に含まれる変数。展開すると拒否リストを回避できるため、展開せずに拒否する。
+- `pid`、`ipc`、`uts`、`network_mode`、`security_opt`の値に含まれる変数。
+  展開すると拒否リストを回避できるため、展開せずに拒否する。
 - 短い形のvolumeの、知らないオプションと4つ以上の項目。
-- 短い形のbindのうち、`ro`の無いもの(`infra/Caddyfile`を除く)と、`rw`と一緒に書いたもの。読み取り専用とみなすのは、`ro`があり、`rw`が無いときだけである。
-- サービスの`networks`のうち、名前の一覧と、`aliases`と`ipv4_address`だけを持つ対応表以外。`driver_opts`などを経由した設定を防ぐ。
-- `docker.sock`の文字列。パースの前に、生のテキストで探す。コメントも対象にする。
-- YAMLのタグ(`!`)、マージキー(`<<`)、バックスラッシュ、`\r`、U+0085、U+2028、U+2029。同じく生のテキストで探し、コメントも対象にする。
+- 短い形のbindのうち、`ro`の無いもの(`infra/Caddyfile`を除く)と、`rw`と一緒に書いたもの。
+  読み取り専用とみなすのは、`ro`があり、`rw`が無いときだけである。
+- サービスの`networks`のうち、名前の一覧と、`aliases`と`ipv4_address`だけを持つ対応表以外。
+  `driver_opts`などを経由した設定を防ぐ。
+- `docker.sock`の文字列。
+  パースの前に、生のテキストで探す。
+  コメントも対象にする。
+- YAMLのタグ(`!`)、マージキー(`<<`)、バックスラッシュ、`\r`、U+0085、U+2028、U+2029。
+  同じく生のテキストで探し、コメントも対象にする。
   バックスラッシュを拒否するのは、二重引用符のエスケープ(`"\x3c\x3c"`、`"\x24{…}"`)で、ほかの文字を書かずに同じ意味を作れるためである。
   `!!binary`は、Bunにはbase64の文字列のまま読まれ、composeにはデコードされた値として読まれる。
   そのため、`${DB_PASSWORD}`や`docker.sock`を、検査から隠せる。
@@ -3357,7 +3772,8 @@ SIGKILLされても、全部書かれるか、全く書かれないかになる�
 
 テキストは256KiBまでしか読まない。
 `Bun.YAML.parse`はaliasの参照を共有するので、パース結果を文字列にすると、小さな入力が数百MBに膨らむ。
-そのため、パース結果の全体は文字列にしない。深すぎるaliasは、パーサーが自分で拒否する。
+そのため、パース結果の全体は文字列にしない。
+深すぎるaliasは、パーサーが自分で拒否する。
 
 今の`infra/docker-compose.yml`が方針を通ることは、`tests/scripts/host_apply_compose_policy.test.ts`が確かめる。
 `docker.sock`をマウントするサービスが無いことは、`tests/infra/docker_compose.test.ts`が確かめる。
@@ -3388,10 +3804,17 @@ SIGKILLされても、全部書かれるか、全く書かれないかになる�
 `$$NAME`も参照として数えるので、コンテナの中で展開する変数は書けない。
 参照してよいのは、次の名前だけである。
 
-- `mise.toml`の列挙したキー。どこにあっても通す。
-- `DB_PASSWORD`と`CONSOLE_GITHUB_TOKEN`。表に挙げたサービスの`environment`の値の側だけで通す。ほかの欄、名前の側、表の外のサービスにあれば、違反にする。
-- `HOME`と`PATH`。違反にする。
-- それ以外の名前。`mise.local.toml`の他の秘密値を含む。拒否する。実行役のcomposeはこれらの値を受け取らず、人の`mise run up`だけが環境に持つため、承認しても得るものが無く、漏れる経路だけが残る。
+- `mise.toml`の列挙したキー。
+  どこにあっても通す。
+- `DB_PASSWORD`と`CONSOLE_GITHUB_TOKEN`。
+  表に挙げたサービスの`environment`の値の側だけで通す。
+  ほかの欄、名前の側、表の外のサービスにあれば、違反にする。
+- `HOME`と`PATH`。
+  違反にする。
+- それ以外の名前。
+  `mise.local.toml`の他の秘密値を含む。
+  拒否する。
+  実行役のcomposeはこれらの値を受け取らず、人の`mise run up`だけが環境に持つため、承認しても得るものが無く、漏れる経路だけが残る。
 
 走査は、同じノードの結果を1回だけ求めて使い回す。
 別名で共有されたノードが、後に訪れるサービスで見逃されないようにするためである。
@@ -3425,17 +3848,22 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 呼び出し側は、検査の後で引数や環境を書き換えられない。
 検査は、次の順に行う。
 
-1. `bin`と`cwd`が絶対パスで、`..`の要素と`\0`を含まない。`my..repo`のような名前の一部は許す。
+1. `bin`と`cwd`が絶対パスで、`..`の要素と`\0`を含まない。
+   `my..repo`のような名前の一部は許す。
 2. 引数のすべての要素に、`\0`が無い。
 3. 環境のキーが`^[A-Z][A-Z0-9_]*$`に合い、値に`\0`が無い。
-4. 種類が文字列で、作れる種類の表にある。配列などは受けず、種類の名前は、継承したプロパティ(`constructor`など)として引かない。
-5. 時間の上限が、種類の表と等しい。呼び出し側は変えられない。
-6. 標準出力の上限が、種類の天井以下である。呼び出し側は下げることだけできる。
+4. 種類が文字列で、作れる種類の表にある。
+   配列などは受けず、種類の名前は、継承したプロパティ(`constructor`など)として引かない。
+5. 時間の上限が、種類の表と等しい。
+   呼び出し側は変えられない。
+6. 標準出力の上限が、種類の天井以下である。
+   呼び出し側は下げることだけできる。
 7. `bin`が、種類の表の絶対パスのどれかと等しい。
 8. 引数と環境が、種類の文法に合う。
 
 実行口は、登録簿に無い指定を、起動せずに`invalid_spec`で拒否する。
-発行した指定の型は、外から作れない印を持つ。リテラルで作った指定は、型の上でも通らない。
+発行した指定の型は、外から作れない印を持つ。
+リテラルで作った指定は、型の上でも通らない。
 
 検査を飛ばして発行する入口(`issueSpecUnchecked`)は、`command.ts`にある。
 テストが、使い捨てのコマンドで実行口を確かめるための入口である。
@@ -3454,7 +3882,8 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 標準エラーは、種類を問わず、末尾の64KiBを残す。
 失敗の診断に使うため、捨てずに残す。
 
-次の11種は、種類の一覧にあるが作れない。作ろうとすると例外になる。
+次の11種は、種類の一覧にあるが作れない。
+作ろうとすると例外になる。
 
 - `git_worktree_add`
 - `docker_inspect`、`docker_ps`、`docker_volume_ls`
@@ -3512,9 +3941,13 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 入口はこのモジュールを取り込まない。
 取得は、次の順で行う。
 
-1. 導入時に記録したURLが、GitHubのhttpsの形(`https://github.com/<owner>/<repo>`、末尾の`.git`は可)に合う。合わなければ、何も実行しない。
-2. `remote.origin.url`を、リポジトリの設定から読む。出力がちょうど1行で、同じ形で、記録したURLと一致する。
-3. 検査したURLを位置引数で渡して取得する。`origin`の名前では渡さない。照合したURLと取得するURLを食い違わせないためである。
+1. 導入時に記録したURLが、GitHubのhttpsの形(`https://github.com/<owner>/<repo>`、末尾の`.git`は可)に合う。
+   合わなければ、何も実行しない。
+2. `remote.origin.url`を、リポジトリの設定から読む。
+   出力がちょうど1行で、同じ形で、記録したURLと一致する。
+3. 検査したURLを位置引数で渡して取得する。
+   `origin`の名前では渡さない。
+   照合したURLと取得するURLを食い違わせないためである。
 
 取得の引数は、`protocol.allow`を`never`にしたうえで、`protocol.https.allow`を`always`にして、httpsだけを許す。
 リダイレクト、サブモジュール、フック、fsmonitor、認証ヘルパー、askpass、自動の保守は無効にする。
@@ -3530,7 +3963,8 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 環境は、読み取りのgitの環境へ`GIT_DIR`と認証の1組だけを足し、`GIT_ALLOW_PROTOCOL`の値をhttpsとした形だけを通す。
 `remote.origin.url`の読み取りは、`GIT_DIR`だけを足し、`GIT_ALLOW_PROTOCOL`を空のままにする。
 `GIT_DIR`は、作業ディレクトリと等しい絶対パスにする。
-トークンは環境の`GIT_CONFIG_*`に入れ、引数には載せない。プロセスの一覧に出さないためである。
+トークンは環境の`GIT_CONFIG_*`に入れ、引数には載せない。
+プロセスの一覧に出さないためである。
 トークンは、GitHubへの基本認証のヘッダーの形に限る。
 
 取得の結果は、取得できた、URLの不一致、失敗の3つである。
@@ -3545,7 +3979,11 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 環境は`PATH`、`LC_ALL=C`、`TZ=UTC`に固定し、作業ディレクトリは`/`に固定する。
 `LC_ALL`を付けないと`ps`が日本語で表記し、`TZ`を付けないとローカル時刻で表記するためである。
 
-- `processStart`は、`/bin/ps -o lstart= -p <pid>`の出力を、ISO 8601のUTCに直して返す。pidは1以上4194304以下の整数に限る。出力は欄ごとに検査し、暦に無い日付や1970年より前の年は拒否する。プロセスが無いとき(終了コード1で出力が空)は`null`を返す。他の失敗は例外にする。
+- `processStart`は、`/bin/ps -o lstart= -p <pid>`の出力を、ISO 8601のUTCに直して返す。
+  pidは1以上4194304以下の整数に限る。
+  出力は欄ごとに検査し、暦に無い日付や1970年より前の年は拒否する。
+  プロセスが無いとき(終了コード1で出力が空)は`null`を返す。
+  他の失敗は例外にする。
 - `bootId`は、`/usr/sbin/sysctl -n kern.bootsessionuuid`の出力を、UUIDの形だけ受けて、小文字で返す。
 
 #### 実行口
@@ -3567,14 +4005,20 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 
 結果は、次の形で返す。
 
-- 終了コードが0以外でも、結果として返す。分類は呼び出し側が行う。
-- 標準出力が上限を超えて止めたときは、`truncated`の結果になる。この結果は、終了コードと標準出力を持たない。
-- 捨てた分があるときは、`stdoutDropped`が真になる。解析する側は、真なら失敗にする。
-- 時間切れ、中断、シグナルでの終了、起動の失敗、標準出力の読み取りの失敗は、固定の文言の例外にする。出力と引数は文言に含めない。
-- 標準エラーの読み取りの失敗は、情報として許す。標準出力は欠けた出力を意味するので、許さない。
+- 終了コードが0以外でも、結果として返す。
+  分類は呼び出し側が行う。
+- 標準出力が上限を超えて止めたときは、`truncated`の結果になる。
+  この結果は、終了コードと標準出力を持たない。
+- 捨てた分があるときは、`stdoutDropped`が真になる。
+  解析する側は、真なら失敗にする。
+- 時間切れ、中断、シグナルでの終了、起動の失敗、標準出力の読み取りの失敗は、固定の文言の例外にする。
+  出力と引数は文言に含めない。
+- 標準エラーの読み取りの失敗は、情報として許す。
+  標準出力は欠けた出力を意味するので、許さない。
 
 入口は、`git_read`の種類だけを通す実行口を`plan`と`approve`に渡す。
-上限を超えたgitの出力は、終了コードが0でも失敗にする。切れた出力を判定に使わないためである。
+上限を超えたgitの出力は、終了コードが0でも失敗にする。
+切れた出力を判定に使わないためである。
 `approve`の差分の上限は512KiBで、`plan`の出力の上限は64MiBである。
 `plan --repo`は、作業ディレクトリに対する絶対パスにしてから指定を作る。
 
@@ -3583,8 +4027,10 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 `tests/scripts/host_apply_imports.test.ts`が、次を固定する。
 
 - 子プロセスを起動する字句(`Bun.spawn`、`Bun.spawnSync`、`child_process`、`Bun.$`)は、`spawn_runner.ts`にだけある。
-- 実行口を取り込むのは、入口だけである。入口が取る値は`createRunner`だけで、起動の部品は外に出さない。
-- 指定を発行できるのは、`run_git.ts`、`run_fetch.ts`、`host_probe.ts`だけである。各モジュールが`command.ts`から取る名前も、一覧に閉じる。
+- 実行口を取り込むのは、入口だけである。
+  入口が取る値は`createRunner`だけで、起動の部品は外に出さない。
+- 指定を発行できるのは、`run_git.ts`、`run_fetch.ts`、`host_probe.ts`だけである。
+  各モジュールが`command.ts`から取る名前も、一覧に閉じる。
 - 検査を飛ばす入口は、本番のモジュールが取り込まず、`acceptUnchecked`を真にするコードも無い。
 - 承認の道具は、実行口と指定のモジュールを取り込まない。
 - 入口と`scripts/host_apply/`は、次の形を使わない。
@@ -3609,39 +4055,50 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 禁止の語は、呼び出しの形ではなく語そのものを調べる。
 奇数個の円記号に続く`u`と`x`は、文字列の中でも違反とし、正規表現の中の`\u`は許す。
 分割代入、文字列の連結、`Reflect`などによる間接参照は、検出できない。
-検査は穴埋めの競争になるので、これ以上は閉じない。レビューが守る。
+検査は穴埋めの競争になるので、これ以上は閉じない。
+レビューが守る。
 
 #### 外部コマンドの残るリスク
 
 - 実行口の検査は、実行役のコード自身が行う。
-  同じユーザーのプロセスが実行役のコードを書き換えれば、迂回できる。コードの出どころの検査が守る。
-- 本番の`command.ts`が、検査を飛ばす入口をexportする。守りは、別の登録簿と契約テストである。
+  同じユーザーのプロセスが実行役のコードを書き換えれば、迂回できる。
+  コードの出どころの検査が守る。
+- 本番の`command.ts`が、検査を飛ばす入口をexportする。
+  守りは、別の登録簿と契約テストである。
 - 取得先のURLの照合は、`url.<base>.insteadOf`、URLごとの`http.<url>.*`、`include`を見ない。
   リポジトリの置き場は0700だが、同じユーザーのプロセスは書き換えられる。
-- トークンは環境に入る。同じユーザーのプロセスは、`ps eww`で読める。
-- `ps`の開始時刻は秒単位である。同じ秒の内にpidが再利用されると、区別できない。
-- 子は別のプロセスグループで動くので、`plan`と`approve`のgitは、端末のCtrl-Cを受けない。読み取りだけなので害は無い。
+- トークンは環境に入る。
+  同じユーザーのプロセスは、`ps eww`で読める。
+- `ps`の開始時刻は秒単位である。
+  同じ秒の内にpidが再利用されると、区別できない。
+- 子は別のプロセスグループで動くので、`plan`と`approve`のgitは、端末のCtrl-Cを受けない。
+  読み取りだけなので害は無い。
 - 終了を見た後にグループを止めるとき、別のグループが同じpgidを得ていると、無関係なグループを止めうる。
   グループが空になった後にだけ起きる、狭い競合である。
   標準出力の溢れでプロセスを止める経路も、終了を見た後に止める窓を持つ。
 - `setsid`で別のグループに移った孫は、止められない。
-- `Bun.spawn`の`detached`の挙動は、Bunの版に依る。実際のプロセスのテストが検知する。
-- `GIT_NO_LAZY_FETCH`は、ホストのgitの版に依る。古いgitは無視する。
+- `Bun.spawn`の`detached`の挙動は、Bunの版に依る。
+  実際のプロセスのテストが検知する。
+- `GIT_NO_LAZY_FETCH`は、ホストのgitの版に依る。
+  古いgitは無視する。
   読み取りの環境の空の`GIT_ALLOW_PROTOCOL`も、遅延取得を止める。
 - リポジトリの設定の`http.*`のうち、検証、プロキシ、リダイレクトのURL別の指定と、名前解決の上書きだけを引数で固定する。
   `http.sslCAInfo`や`fetch.bundleURI`などは、取得の通信先や検証を変えうるが、止まらない。
   `url.<base>.insteadOf`と`include`を見ないことと同じく、置き場の0700に頼る。
 - 取得先を別のホストへ向けられると、URLで照合する認証ヘッダー(`http.https://github.com/.extraHeader`)のトークンがそのホストへ送られうる。
   向ける手段は、リポジトリの設定の`http.sslCAInfo`と、名前解決の上書きの組である。
-  名前解決の上書きは、引数の空の値で消えると、gitの文書にある。実機では確かめていない。
+  名前解決の上書きは、引数の空の値で消えると、gitの文書にある。
+  実機では確かめていない。
 - リポジトリの設定の`remote.<取得先URL>.*`(`remote.<取得先URL>.proxy`など)が、`http.<URL>.*`を覆いうる。
-  gitのソースからの推論で、実機では確かめていない。置き場の0700に頼る。
+  gitのソースからの推論で、実機では確かめていない。
+  置き場の0700に頼る。
 - `git fetch`が`GIT_DIR`と作業ディレクトリの組で動くことは、実機で確かめていない。
 
 ### 子プロセスの環境とログ
 
 子プロセスの環境は、許可リストで作る。
-親のプロセスの環境は引き継がない。`PATH`と`HOME`のほかは、種類ごとに決めた名前の値だけを渡す。
+親のプロセスの環境は引き継がない。
+`PATH`と`HOME`のほかは、種類ごとに決めた名前の値だけを渡す。
 
 | 種類 | 渡す値 |
 | --- | --- |
@@ -3654,7 +4111,8 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 管理者の資格を使う処理を、最小にするためである。
 
 実行役が出す通知の本文は、固定の文と7桁のshaだけで作る。
-`doctor.sh`や`bootstrap.sh`の出力、エラーメッセージは載せない。秘密値や任意の文字列が入りうるためである。
+`doctor.sh`や`bootstrap.sh`の出力、エラーメッセージは載せない。
+秘密値や任意の文字列が入りうるためである。
 Discordのwebhookには`allowed_mentions`を空にして送り、本文からのメンションを無効にする。
 ログに書く外部コマンドの出力は、`mise.local.toml`の`[env]`の全キーの値(8文字以上)を伏せてから書く。
 
@@ -3682,7 +4140,8 @@ mainは承認0件でマージでき、管理者は失敗したチェックを無
 | 1つでも失敗、キャンセル、時間切れ | 拒否。ほかが走行中でも拒否する |
 | 実行が未着、走行中、チェックが欠ける、応答が読めない | 保留 |
 
-名前が変わるとチェックが欠けた扱いになり、保留のまま進まない。安全側に倒れる。
+名前が変わるとチェックが欠けた扱いになり、保留のまま進まない。
+安全側に倒れる。
 
 ### 保護パスとその限界
 
@@ -3692,10 +4151,13 @@ mainは承認0件でマージでき、管理者は失敗したチェックを無
 - 承認が要る道具と、実行役の実装。
 - `infra/docker-compose.yml`と`tests/infra/docker_compose.test.ts`。
 - `infra/worker/`と`mise/`の下のファイル。
-- ローカルのフック(`scripts/claude-hooks/`)とそのテスト(`tests/scripts/claude-hooks/`)。subagentと主セッションの拒否を決めるためである。
-- miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)。置いたファイルがタスクとして実行され、フックが見分けるタスク名の外から操作できるためである。
+- ローカルのフック(`scripts/claude-hooks/`)とそのテスト(`tests/scripts/claude-hooks/`)。
+  subagentと主セッションの拒否を決めるためである。
+- miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)。
+  置いたファイルがタスクとして実行され、フックが見分けるタスク名の外から操作できるためである。
 - 保留のCLI(`scripts/hold.ts`と`scripts/hold_psql.ts`)とそのテスト。
-- 保留のCLIが起動のたびに読み込む、凍結の道具(`scripts/freeze.ts`、`f/factory/lib/freezes.ts`、`f/factory/lib/freeze_apply.ts`)。書き換えられると、保留のCLIの実行に任意の処理を足せるためである。
+- 保留のCLIが起動のたびに読み込む、凍結の道具(`scripts/freeze.ts`、`f/factory/lib/freezes.ts`、`f/factory/lib/freeze_apply.ts`)。
+  書き換えられると、保留のCLIの実行に任意の処理を足せるためである。
 - 実行役のテストと、それが使う一時リポジトリの補助(`tests/fixtures/host_apply_repo.ts`)。
 - `.tool-versions`、`.env`系、`.node-version`、`.bun-version`。
 
@@ -3705,14 +4167,18 @@ mainは承認0件でマージでき、管理者は失敗したチェックを無
 パスからゼロ幅文字などの無視される文字を除き、NFKCで正規化し、小文字、大文字、小文字の順に変換して畳み込み、畳み込んだ一覧と比べる。
 ホストのファイルシステムで同じファイルに潰れる別名(`Scripts/Doctor.sh`、ラテン文字の異体字を使った`ſcripts/doctor.sh`など)を通さないための処理である。
 全角文字や無視される文字を使った別名は、潰れるとは限らないが、紛らわしいので安全側で止める。
-ファイル名の正規表現は、大文字小文字を区別せずに当てる。畳み込みで文字数や`/`が変わっても狭くならないよう、畳み込む前のファイル名にも当てる。
+ファイル名の正規表現は、大文字小文字を区別せずに当てる。
+畳み込みで文字数や`/`が変わっても狭くならないよう、畳み込む前のファイル名にも当てる。
 実行役は、別名になるパスが目標のtreeに入ることを、tree検査でも拒否する。
 
 保護パスだけでは、実行役の変更を人が確かめる関門にならない。
 
-- mainは承認0件でマージできる。管理者は、失敗したチェックを無視してPR経由でマージできる。人のレビューをGitHubは強制しない。
+- mainは承認0件でマージできる。
+  管理者は、失敗したチェックを無視してPR経由でマージできる。
+  人のレビューをGitHubは強制しない。
   ただし、保護パスに触れた変更は、マージの後、人がConsoleで承認するまでWindmillへ反映されない([反映の承認](#反映の承認))。
-- PR修正は保護パスの変更で止まるが、実装フローは止めない。保護パスに触れても、記録してPR本文に明記するだけである。
+- PR修正は保護パスの変更で止まるが、実装フローは止めない。
+  保護パスに触れても、記録してPR本文に明記するだけである。
 
 人に通す関門は、保護パスではなく、実行役の承認である。
 保護パスの役割は補助である。
@@ -3721,7 +4187,8 @@ PR修正の自動修正がこれらを書き換えるのを止め、実装のPR�
 mainへの反映は、保護パスで止まる。
 `self_update`は、前回の反映からの変更を確かめる。
 Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)かmigrationがあると、人がConsoleで承認するまで反映しない([反映の承認](#反映の承認))。
-止めるのはWindmillへの反映で、ホストの実行役の反映ではない。実行役の関門は、引き続き実行役の承認である。
+止めるのはWindmillへの反映で、ホストの実行役の反映ではない。
+実行役の関門は、引き続き実行役の承認である。
 
 副作用として、`infra/docker-compose.yml`、`scripts/doctor.sh`、`scripts/bootstrap.sh`を変えるPR修正は、保護パスで止まって人の対応待ちになる。
 実装フローは、保護パスに触れたラウンドで検査コマンドを実行しない([保護パスの記録](internals/implement.md#保護パスの記録))。
@@ -3732,7 +4199,8 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
 
 ### 残るリスク
 
-- composeの検査は、YAMLを静的に読む。`docker compose config`の解釈とは突き合わせていない。
+- composeの検査は、YAMLを静的に読む。
+  `docker compose config`の解釈とは突き合わせていない。
   解釈が食い違うと、許可した形が別の意味になりうる。
   食い違いうる書き方のうち、マージキー、YAMLのタグ、`\r`とUnicodeの改行は、文字があれば拒否する。
   重複したキーは、composeが失敗するので反映されない。
@@ -3742,7 +4210,8 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
   そのため、表の外のリポジトリや、表の外のサービスへの`DB_PASSWORD`の受け渡しは、`would_converge`と判定される。
   止まるのは、拒否になる形だけである。
   拒否になる形は、[composeの方針](#composeの方針)と[composeのimageと秘密値の表](#composeのimageと秘密値の表)に挙げた。
-  承認の記録は後続の段階で足す。それまでの防ぎは、保護パス(`infra/docker-compose.yml`)と人のマージで、mainは承認0件でマージできるため、補助にとどまる。
+  承認の記録は後続の段階で足す。
+  それまでの防ぎは、保護パス(`infra/docker-compose.yml`)と人のマージで、mainは承認0件でマージできるため、補助にとどまる。
   受け入れる理由は、実行役がまだ反映しないためである。
 - 表が見るのは参照名とリポジトリ名だけである。
   タグが同じ名前の別のイメージを指す浮動タグは、見ない。
@@ -3764,21 +4233,29 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
   利用者とシステムのgit設定を読ませないためである。
 - `bun.lock`は承認の対象ではないので、取得元の欄を承認なしで書き換えられる。
   実行役が`bun install`を呼ぶ段階を足すときは、`bun install --frozen-lockfile`の前に、`bun.lock`の取得元を検査するか、承認の対象にする。
-- 設計は`mise`コマンドを使わないと定めるが、`scripts/doctor.sh`は`mise exec`を使う。反映する段階の設計で見直す。
+- 設計は`mise`コマンドを使わないと定めるが、`scripts/doctor.sh`は`mise exec`を使う。
+  反映する段階の設計で見直す。
 - composeとYAMLの重複キーの解釈の差と、`package.json`の重複キーの解釈の差（compose-goとbun）は、`docker compose config`との突き合わせで確かめる。
 - `.github/workflows/`で作られたcheck-runが付くcheck suiteは、使い捨てのリポジトリで確かめる。
 - 反映に使うチェックアウトの`git worktree add`と`git checkout`にも、同じ設定を付ける。
   付けるのは、`-c core.hooksPath=/dev/null`、`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_NOSYSTEM=1`である。
   lefthookのpost-checkoutが動かないようにするためである。
-- `tree_forbidden`の通知は、原因のパスと次の操作を載せる。日本語のファイル名を足すと止まるためである。
+- `tree_forbidden`の通知は、原因のパスと次の操作を載せる。
+  日本語のファイル名を足すと止まるためである。
 - 設定ファイルの読み取りの違い。
-  - `Bun.TOML.parse`は、重複したキーとテーブルをエラーにする。`__proto__`は通常のキーとして残り、`Object.prototype`は汚れない。
-  - `Bun.YAML.parse`は、重複したキーを最後の値で上書きし、エラーにしない。`__proto__`は通常のキーとして残る。
+  - `Bun.TOML.parse`は、重複したキーとテーブルをエラーにする。
+    `__proto__`は通常のキーとして残り、`Object.prototype`は汚れない。
+  - `Bun.YAML.parse`は、重複したキーを最後の値で上書きし、エラーにしない。
+    `__proto__`は通常のキーとして残る。
   - composeの解釈とYAMLの重複キーの扱いが違うかは、`docker compose config`と突き合わせて確かめる。
-- パスの検査は、文字列で行い、symlinkを辿らない。目標のtreeにsymlinkがあれば拒否するが、実行役が使うチェックアウトに後から置かれたsymlinkは見ない。
-- miseの値の免除は、形式だけを見る。`GTR_COMMIT`の指す内容は確かめない。
-- `plan`はCIを確認しない。`would_converge`は、CIの通過を含まない判定である。
-- `docker compose up --dry-run`の出力のうち、`Creating`などの行の形は実測した。`Running`と`Recreate`の行の形は、同じ3列と見なした推定で、実機の出力では確かめていない。
+- パスの検査は、文字列で行い、symlinkを辿らない。
+  目標のtreeにsymlinkがあれば拒否するが、実行役が使うチェックアウトに後から置かれたsymlinkは見ない。
+- miseの値の免除は、形式だけを見る。
+  `GTR_COMMIT`の指す内容は確かめない。
+- `plan`はCIを確認しない。
+  `would_converge`は、CIの通過を含まない判定である。
+- `docker compose up --dry-run`の出力のうち、`Creating`などの行の形は実測した。
+  `Running`と`Recreate`の行の形は、同じ3列と見なした推定で、実機の出力では確かめていない。
 - `mise run up`の許可は、自前でビルドした旧イメージの削除を含む。
   `mise run up`と`mise run deploy`は、終わりに`docker image prune -f --filter label=com.atelier-works.prune=true`を実行する。
   消えるのは、ラベルが付いた、タグの無いイメージだけで、他のイメージ、ボリューム、コンテナ、ビルドキャッシュには触れない。
@@ -3876,7 +4353,8 @@ Consoleの判断のscript(`console_deploy_decide`)は、ローカルのClaudeの
   参照の検出(`tests/scripts/deploy_approvals_wiring.test.ts`)は、名前の連結や動的SQLを見つけられない。
 - Consoleの配信物(`console/`)は、`console_fetcher`がCIの後に取り込むので、この承認を通らない。
   保護パスに当たるConsoleのファイルの変更も、マージの後に配信される。
-- 承認する人は、Consoleにログインできる人なら誰でもよい。承認者の区別はしない。
+- 承認する人は、Consoleにログインできる人なら誰でもよい。
+  承認者の区別はしない。
 - 判定の範囲は、`self_update`が本番へ反映するファイル(`f/`と`migrations/`の下、`wmill.yaml`)に絞る。
   範囲の外の保護パス(`infra/`、`.github/`、`.claude/`、`scripts/`、lockfile、設定)の変更は、この承認を通らない。
   `infra/`はホストで人が`mise run up`するまで効かず、`.github/`はCIにしか効かない。
@@ -3913,7 +4391,8 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
 仕様は[凍結とdeployの保留の内部仕様](internals/freezes.md)にある。
 状態は秘密でない変数に置き、置く主体は環境変数`CLAUDECODE`と端末(TTY)で分ける。
 
-残るリスクは次のとおりである。いずれも受け入れる。
+残るリスクは次のとおりである。
+いずれも受け入れる。
 
 - 凍結はWindmillの変数なので、`f/factory`に書ける主体は凍結を書き換えられる。
   この権限を持つ主体は、スケジュールそのものも書き換えられるため、凍結が増やす危険は無い。
@@ -4008,7 +4487,8 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
   ベストエフォートの規則で、保留の拒否と同じ限界を持つ。
   `bun run - list < scripts/freeze.ts`のように標準入力へ流し込む形は、作業ツリーの`scripts/`で実行すると動くことを実測した。
   `mise run -- freeze:release 1`は、mise 2026.9.13で実測すると、`--`より後ろをタスク`default`への引数として扱い、実行しない。
-  保留の側は`--`より後ろの`hold:`を名指しする語も拒否するが、凍結の側はこの形を見ない。実行されないためである。
+  保留の側は`--`より後ろの`hold:`を名指しする語も拒否するが、凍結の側はこの形を見ない。
+  実行されないためである。
   実行系が標準入力をコードとして読む形(オペランドが`-`、`/dev/stdin`、`/dev/fd/0`、`/proc/self/fd/0`のどれか)では、入力元を調べる。
   次の形は拒否する。
   - リダイレクトの先、またはパイプの前の`cat`の引数が、保留か凍結のコードである。
@@ -4060,7 +4540,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 保護パスを書き換える変更は、PR修正のpushが止まり、実装のPRには明記される。
 
 検出は文字列を読むヒューリスティックで、まれな入力では見逃しが起こる。
-見逃しの例と、残るリスクは次のとおりである。いずれも受け入れる。
+見逃しの例と、残るリスクは次のとおりである。
+いずれも受け入れる。
 
 - Windmillのscriptはすべて同じdatatableの接続を持つ。
   検出をすり抜けるコードは、表を読み書きできる。
@@ -4075,7 +4556,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   `factory.holds`の名前(コメントや引用符を挟んだ形と3部の名前を含む)、`search_path`、`SET SCHEMA`。
   `DROP SCHEMA factory`(スキーマを何個並べても検出する)、`DROP OWNED BY`、`DROP DATABASE`。
   `key`、`idx`、`check`、`pkey`、`fkey`、`excl`、`seq`で終わる`holds_`の名前。
-  `datatable`の名前が`:factory`で終わる指定。実行時に`SET search_path`が足され、スキーマの付かない名前で書けるためである。
+  `datatable`の名前が`:factory`で終わる指定。
+  実行時に`SET search_path`が足され、スキーマの付かない名前で書けるためである。
   動詞の直後のスキーマの付かない`holds`は、SQLの構造が続くときだけ検出する。
 - 英文のログ(`could not update holds`など)は当たらない。
   `factory.holds`を含む文字列は、英文でも、SQLコメントや`COMMENT ON`、`.script.yaml`の`description`でも当たる。
@@ -4087,7 +4569,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   `PGOPTIONS=-csearch_path=factory`や`set_config('search_'||'path', ...)`のように、語を分ける形もある。
   これらは例であり、すべてではない。
 - `wmill.datatable()`の接続の既定の`search_path`は`"$user", public`で、`factory`は入っていない。
-  mainの`9dae4761`を反映したスタックで確かめた。スキーマ無しの`holds`は解決しない。
+  mainの`9dae4761`を反映したスタックで確かめた。
+  スキーマ無しの`holds`は解決しない。
   入っていれば、スキーマ無しの`holds`が`factory.holds`を指す。
   参照の検出の動詞の規則は、その場合も働く。
 - `scripts/test-db.sh`は守らない。
@@ -4123,11 +4606,14 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   `tests/scripts/hold_wiring.test.ts`が、`f/`のすべてのファイル(`.lock`とflowの定義を含む)を走査して固定する。
   名前を組み立てる形は、検出できない。
 - Consoleの解除は、`f/`で`releaseHold`を読み込める唯一のファイルである(`HOLD_RELEASERS`)。
-  `placeHold`を読み込むファイルは、`f/`のどこにも無い。表示だけの読み手(`HOLD_VIEWERS`)は`listActiveHolds`だけを読み込み、読んで止まる主体の一覧(`HOLD_READERS`)には入れない。
+  `placeHold`を読み込むファイルは、`f/`のどこにも無い。
+  表示だけの読み手(`HOLD_VIEWERS`)は`listActiveHolds`だけを読み込み、読んで止まる主体の一覧(`HOLD_READERS`)には入れない。
   3つの分類は、読み込む名前の一覧が、実際のimportと一致することで固定する。
-  解除のscriptとその部品、テストは保護パスに入れる。書き換えられると、他の主体の保留を無条件に外せるためである。
+  解除のscriptとその部品、テストは保護パスに入れる。
+  書き換えられると、他の主体の保留を無条件に外せるためである。
 - 保留の表の壊れた行が1つでもあると、Consoleは一覧を出さない(`corrupt`)。
-  回復はpsqlで行う。読めない間は、dependabotの自動マージが止まる側に倒れる。
+  回復はpsqlで行う。
+  読めない間は、dependabotの自動マージが止まる側に倒れる。
 - 画面の時計とDBの`now()`のずれで、期限の境界に数秒の誤差が出る。
   解除はidで行い、idは再利用されないので、別の保留を解除することはない。
   idは、migrationをdownしてからupすると振り直されるが、運用では行わない。
@@ -4144,7 +4630,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   次のマージは止まらない。
   - 人の端末(プロンプトの`!`)、GitHubのWeb UI、他の人のマージ。
   - クラウドのセッションがGitHubのMCPで行うマージ。
-  - 保留を置く前から有効だった自動マージ。GitHubが、チェックの通過で実行する。
+  - 保留を置く前から有効だった自動マージ。
+    GitHubが、チェックの通過で実行する。
   - 追わない形(別名、変数で組んだ語、`curl`、`hub`、スクリプトのファイルの中の呼び出し)。
   端末は人が意図して実行する経路で、止めると復旧の手段を失うため、受け入れる。
   ほかは、保留は止めるだけの補助で、元の保護(レビューとゲート)が残るため、受け入れる。
@@ -4172,7 +4659,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   クラウドでの動作は、実機で確かめていない。
   マージは人が行う方針と合うため、受け入れる。
 - `.claude/settings.local.json`の`disableAllHooks`は、`merge-guard`を含むすべてのフックを止める。
-  ファイルはgitignore済みで、置くのは人である。範囲外の既存の穴として受け入れる。
+  ファイルはgitignore済みで、置くのは人である。
+  範囲外の既存の穴として受け入れる。
 - ホストの実行役(`scripts/host_apply/`)の反映は、`merge-guard`が覆わない。
   実行役は承認の門を別に持つため、受け入れる。
 - `merge-guard`の読みは、`mise exec`で包んだ子プロセスを使う。
@@ -4210,7 +4698,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   先頭がそれ以外のコマンドは、次の2つを除いて、この判定の対象にしない。
   前置きの無い語を足す文脈は、実行される側が読み取りの閉じた集合に入らなければ拒否する。
   文脈は、`xargs`、`find`の実行系の式、先頭の`parallel`、`watch`、`strace`である。
-  足される語は字面から読めないので、指す語の有無によらず拒否する。指す語、glob、パイプの上流は見ない。
+  足される語は字面から読めないので、指す語の有無によらず拒否する。
+  指す語、glob、パイプの上流は見ない。
   集合は、`cat`、`head`、`tail`、`wc`、`ls`、`grep`、`egrep`、`fgrep`、`stat`、`file`、`basename`、`dirname`、`realpath`、`echo`、`printf`である。
   引数やオプションで別のプログラムの実行を委ねる機能を持たない道具だけに閉じる。
   `git`、`rg`、`sort`、`sed`、`tee`のように、オプションで実行を委ねうる道具は入れない。
@@ -4219,12 +4708,14 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   `xargs`の実行される側は、前置きを外した後の先頭の語である。
   標準入力からオプションが届くので、検査の道具は通さない。
   `xargs`のオプションに知らないものがあるとき、置換のオプションかGNUの`-e`、`-l`があるとき、後ろに前置きが続くときは、先頭の語が実行される側と決まらないので拒否する。
-  `find`の実行される側は、各実行系の式の先頭の語である。`find`の後ろに限り、プログラム自身が検査の道具である形(`tsc`、`biome`)と、その実行系を通す。
+  `find`の実行される側は、各実行系の式の先頭の語である。
+  `find`の後ろに限り、プログラム自身が検査の道具である形(`tsc`、`biome`)と、その実行系を通す。
   実行系の最初のオペランドが、リポジトリの検査用スクリプト(`scripts/lint-*.ts`)の形でも通す。
   `node`、`tsx`、`ts-node`、`deno`は最初のオペランドをファイルとして実行するので、探索先に検査の道具と同じ名前のファイルがあると、それが実行される。
   この形は、新しいファイルを書いて実行する形として受け入れる。
   `test`を最初のオペランドとする実行系は、テストのファイルを読み込んで実行するので、`find`の後ろでも通さない。
-  検査の道具の前に読み飛ばす実行系の語は`run`だけで、`exec`、`x`、`dlx`は読み飛ばさない。実行系によっては、ツール名の後ろの語も自分のオプションとして読むためである。
+  検査の道具の前に読み飛ばす実行系の語は`run`だけで、`exec`、`x`、`dlx`は読み飛ばさない。
+  実行系によっては、ツール名の後ろの語も自分のオプションとして読むためである。
   `find`が探索で見つけたパスは、起点を前に付けて渡すので`-`から始まらない。
   コマンド行に書いた起点は綴りのまま渡り、道具のオプションとして読まれうる。
   `tsc`と`biome`のオプションは、実行や保留の操作に届かないので受け入れる。
@@ -4240,10 +4731,12 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   主セッションでは、上の分類に加えて次の分類も誤検知として受け入れる。
   前置きの後ろでシェルや語を足す作業。
   免除の形の外の保留と凍結の直接実行。
-  実行系の引数に、`hold`、`holds`、`freeze`で終わる語を持つ形(テスト名の絞り込みなど)。保留や凍結のコードを指すものと区別できない。
+  実行系の引数に、`hold`、`holds`、`freeze`で終わる語を持つ形(テスト名の絞り込みなど)。
+  保留や凍結のコードを指すものと区別できない。
   `mise run hold:place`を前置き、代入、パイプと組み合わせた形(単独の行に直せば通る)。
   引数の字の種類の外にある語(句読点と全角の括弧、引用符、`;`、`#`などを含む理由の文)。
-  締め切りに達した読み取り。gitの起動が遅いときに起こる。
+  締め切りに達した読み取り。
+  gitの起動が遅いときに起こる。
   実行を委ねる呼び出しの、保留や凍結を指す語と書き込みの語を持つ引数。
   実行を委ねる呼び出しの語に、シェルや語を足すコマンドの名前で終わる語がある形。
   ghのフラグの値が、別名、extension、設定の書き込みを表す語と同じ形。
@@ -4276,38 +4769,46 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   標準入力の文字列は最上位と入れ子で同じに判定する。
   文字列は4段の入れ子まで読む。
   超えた文字列と読めない文字列は、字面で判定する。
-  読めない入れ子の文字列の字面は、引用符とバックスラッシュを除いた綴りでも判定する。引用符の直前の`$`も除く。
+  読めない入れ子の文字列の字面は、引用符とバックスラッシュを除いた綴りでも判定する。
+  引用符の直前の`$`も除く。
   標準入力の文字列の字面は、保留か凍結のコードを指す字面と書き込みの語が並ぶときだけ拒否する。
   削除を確定する押し出しは、`push`と`--prune`が並ぶ字面でも拒否するので、`git push --prune`のような凍結と関係の無い呼び出しも当たる。
   読む文字列の数と長さの合計、代入ごとの判定の回数、共起で走査した語の数にも上限を置く。
   語の数は3万語まで、上流にたどるパイプのコマンドの数は256個までで、超えたら拒否する。
   フックのタイムアウトの中で終えるためである。
-  判定の上限は最上位の単純コマンドごとに数える。入力1つにつき1つの共有はまだ入れていない。
+  判定の上限は最上位の単純コマンドごとに数える。
+  入力1つにつき1つの共有はまだ入れていない。
   subagentが1回に出すコマンドの長さでは、フックのタイムアウトに届かない見込みである。
   段数と語数が上限に近い入力でも、実測では3秒未満に収まる。
   上限とは別に、判定の開始から6秒の締め切りを置き、超えたら判定できないものとして拒否する。
   フックのタイムアウトは10秒で、超えると判定が拒否にならず、通常の権限の流れに進む。
   同期の判定は途中で止められないので、各所で時計を見て早く終える。
   超えた後に残る処理は出力だけで、残りの4秒は起動と出力の余裕である。
-  予算の中に収まる入力は、実測で1秒未満である。テストは、3000段のパイプなどを3000ms未満、幅のある256段を8000ms未満で固定している。
+  予算の中に収まる入力は、実測で1秒未満である。
+  テストは、3000段のパイプなどを3000ms未満、幅のある256段を8000ms未満で固定している。
   締め切りの6秒は、最も遅い実測(約0.8秒)の約7倍なので、CIの負荷で数倍遅くなっても、通常の入力では働かない。
   時計は、時刻の補正で飛ばない単調な時計を既定とする。
   前置きの後ろでは、実行の字面が引数に入る形(`git commit -m "… hold.ts release …"`)も、シェルを使う正当な作業も拒否する。
   実行と区別できないため、受け入れる。
   前置きの後ろの語の名前が`script`か`ssh`なら、引数のパスの名前でも読めない標準入力として拒否する。
   文字列の中の先頭の変数代入は前置きとして外れるので、値を先頭の語として判定する。
-  値が保留か凍結のコードを指すときと、起動語(実行系、`mise`、`docker`と`psql`、前置き、シェル)のときに、後ろの語を引数として付ける。実行される語は別に判定している。
-  名前だけの代入の形で始まる文字列(リモートの道具のオプションの値)は、値と後ろの語の組がコマンドとして実行されるためである。全停止も同じに判定する。
+  値が保留か凍結のコードを指すときと、起動語(実行系、`mise`、`docker`と`psql`、前置き、シェル)のときに、後ろの語を引数として付ける。
+  実行される語は別に判定している。
+  名前だけの代入の形で始まる文字列(リモートの道具のオプションの値)は、値と後ろの語の組がコマンドとして実行されるためである。
+  全停止も同じに判定する。
   指す語がリテラルの名前として、コマンド行のどこにも現れない形(上流の出力の中にしか名前が無い形)は止めない。
   解析できない文字列と、深さ4を超える入れ子は字面で判定するので、実行時に組んだ名前は通る側に残る。
-  前置きとして扱うのは5種に限る。近縁のプログラム(`expect`、`gtime`、`stdbuf`など)は前置きに数えず、止めない。
+  前置きとして扱うのは5種に限る。
+  近縁のプログラム(`expect`、`gtime`、`stdbuf`など)は前置きに数えず、止めない。
   引用符の外のglobと文字クラス(`scripts/hol?.ts`、`scripts/hol[d].ts`、`hold:[pr]*`)は、保留のコードの名前に当たりうれば拒否する。
   ファイル名の部分だけを見て、ディレクトリの書き方(`//`、`/./`、`/../`)は問わない。
   POSIXの文字クラス(`[:lower:]`、`[=o=]`、`[.o.]`)は、括弧の中のどこにあっても読み解かず、当たりうるものとして拒否する。
-  語の途中の`(`は、zshでは引数のglobのまとまり(`(ho)ld.ts`、`*(.)`)になりうるので、構文エラーとして拒否する。主セッションにも効く。
+  語の途中の`(`は、zshでは引数のglobのまとまり(`(ho)ld.ts`、`*(.)`)になりうるので、構文エラーとして拒否する。
+  主セッションにも効く。
   配列の代入、関数の定義、プロセス置換、制御語だけが前にある括弧は、拒否しない。
   ただし配列の代入の括弧は、中に演算子か添字の対を開く字がある形と、ヒアドキュメントが保留中に開く形を拒否する。
-  予約語の代替形のように、語の並びだけでは後ろの語がコマンドか引数か決まらない形は、読めない構文として拒否する。主セッションにも効く。
+  予約語の代替形のように、語の並びだけでは後ろの語がコマンドか引数か決まらない形は、読めない構文として拒否する。
+  主セッションにも効く。
   前置きの後ろと、制御語の後ろの位置も同じである。
   コマンドの先頭にある前置きの修飾語、try-blockのつなぎ、コプロセス、繰り返しの短い形、関数定義の予約語、case文とその終端が当たる。
   繰り返しの見出しで`in`を省き、本体が同じ単純コマンドに入る形も当たる。
@@ -4433,7 +4934,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   閉じた集合に入らない形は、読み取りでも拒否する。
   算術の中の引用符、`${...}`の本体の引用符と波括弧、`$[`は、受け入れる誤検知である。
   この拒否は、最上位とシェルの標準入力で解析の失敗として返す。
-  入れ子の文字列を読み直す経路は、拒否に倒さず字面で判定する。SQLやJSONの引数のような読み取りが全主体で止まるためである。
+  入れ子の文字列を読み直す経路は、拒否に倒さず字面で判定する。
+  SQLやJSONの引数のような読み取りが全主体で止まるためである。
   全停止の判定は、読めない文字列と深さを超えた文字列の字面に、全停止のCLIを指す語か、`mise`と全停止のタスク名が並ぶ字面があれば拒否する。
   ブレース(`{hold.ts,place}`)は、展開した綴りと、空白に置き換えた綴りの両方で判定する。
   カンマの無いブレースの範囲は、展開される字の集合に置き換えて、globと同じにコードの名前に照合する。
@@ -4442,12 +4944,14 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   `$'\x68old:place'`のように文字コードで書いた語は、展開してから判定する。
   NULを含む`$'...'`は、bashと同じに切り詰めた綴りと、切り詰めない綴りの両方で判定する。
   `$"hold:place"`は、ふつうの二重引用符として読む。
-  zshの`=bun`のように`=`で始まるコマンドは、`=`を外した名前として読む。このためpushの拒否にも効く。
+  zshの`=bun`のように`=`で始まるコマンドは、`=`を外した名前として読む。
+  このためpushの拒否にも効く。
   `mise -q exec --`や`mise -C /repo x --`のように、全体オプションを前に置いた`mise exec`は、オプションを読み飛ばして内側のコマンドを判定する。
   全体オプションの一覧は、`mise set`の拒否と共有する。
   一覧に無い長いオプション(`=`の無いもの)がある`mise`のコマンドは、subagentでは全体を拒否する。
   主セッションの秘密値の検査は、そのとき後ろで最初の`exec`か`x`を、サブコマンドとして読む。
-  `--`より後ろのタスクへの引数のglobと実行時に決まる語は、拒否しない。`hold:`で名指しする語は拒否する。
+  `--`より後ろのタスクへの引数のglobと実行時に決まる語は、拒否しない。
+  `hold:`で名指しする語は拒否する。
   この版のmiseは、`--`より後ろの`:::`をタスクの区切りとして実行しないことを、実測で確かめた。
   `npm`、`pnpm`、`pnpx`、`yarn`も実行系として扱う。
   拒否はベストエフォートで、境界ではない。
@@ -4499,7 +5003,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   凍結の変数を書く`wmill variable add/push`と、変数を書くURLの経路(globを含む)も拒否する。
   コミットメッセージやPR本文に、名前と実行を表す語を並べると、読み取りのプログラムでも拒否する。
   本文はファイルに書き、`git commit -F <ファイル>`や`gh pr create --body-file <ファイル>`で渡す。
-  ファイルはWriteツールで書く。Bashのヒアドキュメント(`cat <<'EOF' > ファイル`)で並べると、拒否される。
+  ファイルはWriteツールで書く。
+  Bashのヒアドキュメント(`cat <<'EOF' > ファイル`)で並べると、拒否される。
   パイプの上流の語にある名前は、`wmill`、実行するプログラム、`xargs`が受ける読み取りのプログラムに当てる。
   下流に名前がある読み取り(`wmill job list ... | grep hold_release`)は通す。
   ベストエフォートで、止めない形は次のとおりである。
@@ -4511,10 +5016,13 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
     `for x in f/factory/hold_release; do wmill script run "$x"; done`、`select`、`printf -v`、`$_`である。
     変数で組んだ名前と同じ類として、コードでは追わない。
     `for`と`select`を止めると、正規のループ(`for f in tests/...; do bun test $f; done`)も止まるためである。
-  - ソースは、ReadツールかGitの`git show`で読む。名前を含むURLの取得は、読み取りでも拒否する。
-  解除は、人がConsoleの画面で行う。ログイン済みのブラウザの自動操作は、Bashのフックの外で解除のボタンを押せるので、実機の解除の操作は人が行う。
+  - ソースは、ReadツールかGitの`git show`で読む。
+    名前を含むURLの取得は、読み取りでも拒否する。
+  解除は、人がConsoleの画面で行う。
+    ログイン済みのブラウザの自動操作は、Bashのフックの外で解除のボタンを押せるので、実機の解除の操作は人が行う。
 - `mise run hold:list -- '<文字列>'`で余分な引数を渡しても、シェルの文としては解釈されない。
-  実機で確かめた。miseは追加の引数を引用符で囲んでコマンドに続け、CLIは`list`の後ろの引数を拒否する。
+  実機で確かめた。
+  miseは追加の引数を引用符で囲んでコマンドに続け、CLIは`list`の後ろの引数を拒否する。
   置く・解除する操作と違い、`hold:list`は標準入力を使わないので、`raw`にしない。
 - CLIの接続先のデータベースは、`scripts/hold.ts`の定数だけに書く。
   実DBの検査は、使い捨てのデータベースだけを渡す。
@@ -4569,7 +5077,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   フックは、読み取りのプログラムでも、別のコマンドの実行を委ねる形なら全停止の呼び出しとして見る。
   空白か、シェルが語を分けるか展開する字を含む先頭の代入の値も、全停止のCLIを指す字面か、`mise`と全停止のタスク名が並ぶ字面があれば拒否する。
   値が1語の代入は、引数を渡せないので判定しない。
-  空白を含む値に全停止の字面がある代入は、後ろのプログラムが値を実行しなくても拒否する。受け入れる誤検知である。
+  空白を含む値に全停止の字面がある代入は、後ろのプログラムが値を実行しなくても拒否する。
+  受け入れる誤検知である。
   `CLAUDE_CODE_ENTRYPOINT`は、Claudeのセッションの印にしない。
 - workerの中のプロセスは、`docker compose exec`で止める。
   Claudeはプロセスグループごと、検査は枠のuidごとに止める。
@@ -4594,7 +5103,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 - 記録の変数は、全停止のscriptとホストの戻すコマンドのほかに、Windmillの画面の利用者と`f/`の他のscriptも書ける。
   設定を直接書ける経路と同じで、Claudeの書き込みはフックが止める。
   偽の名前が記録されても、戻すコマンドが戻すのは、設定に実在して`false`で検査を通り、人が`yes`で確かめた名前だけである。
-  フックの照合は、パーセント符号化を1回解いた形までを見る。`/./`や`/../`を挟んだURLと、JSONの`\uXXXX`で書いたパスは、`freezes`と`stop_all`の変数と同じく、記録の変数でも止められない。
+  フックの照合は、パーセント符号化を1回解いた形までを見る。
+  `/./`や`/../`を挟んだURLと、JSONの`\uXXXX`で書いたパスは、`freezes`と`stop_all`の変数と同じく、記録の変数でも止められない。
 - 戻すコマンドの読み直しは、`wmill resource push`と全停止の間を排他にしない。
   読み直しの後、書き込みまでの間に入った書き込みは、上書きされうる。
   書いた後に全停止が置かれていれば、設定を読み直して`true`の`*_enabled`をすべて`false`に書き直すが、その間は機能が動きうる。
@@ -4623,9 +5133,12 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 
 ## Claude Codeの拒否ルール
 
-`.claude/settings.json`の`deny`は、誤操作を防ぐためのもので、秘匿性を保証しない。設定ファイルを読めば、ルールは誰でも確かめられる。秘匿性は、値をコミットしないこと(`mise.local.toml`はgitignore済み)と、値をWindmillのsecret変数に置くことで保つ。
+`.claude/settings.json`の`deny`は、誤操作を防ぐためのもので、秘匿性を保証しない。
+設定ファイルを読めば、ルールは誰でも確かめられる。
+秘匿性は、値をコミットしないこと(`mise.local.toml`はgitignore済み)と、値をWindmillのsecret変数に置くことで保つ。
 
-次の操作を拒否する。どれも、展開した後の秘密値を出力しうる。
+次の操作を拒否する。
+どれも、展開した後の秘密値を出力しうる。
 
 | 拒否する操作 | 理由 |
 | --- | --- |
@@ -4638,7 +5151,8 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 | `mise exec -- env`、`mise exec -- printenv`、`mise x -- env`、`mise x -- printenv`、`printenv`、`env` | 環境変数を出力する |
 | `cat mise.local.toml` | 秘密値そのものを出力する |
 
-値を指定して書き込むだけの`mise set -E local KEY=value`は拒否しない。これらのルールは、`mise run <task>`を通した迂回(タスクの中で秘密値を出力する処理など)は防げない。
+値を指定して書き込むだけの`mise set -E local KEY=value`は拒否しない。
+これらのルールは、`mise run <task>`を通した迂回(タスクの中で秘密値を出力する処理など)は防げない。
 
 `mise x`は`mise exec`の別名で、`mise x -- bun test`のように通常の作業にも使うので、環境変数を出す形だけをこの設定で拒否する。
 `docker exec`と`docker inspect`は、設定のルールが引数を絞れないので、ここには置かない。
@@ -4669,9 +5183,14 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 
 守りは、守る対象ごとに次のとおり分かれる。
 
-- `Read`ツールで`mise.local.toml`とその別名を読む経路は、`deny`が止める。GrepとGlobへの適用はベストエフォートである
-- Bashで、秘密値のファイル名を字面で書いた参照は、フックの`guarded-files.ts`が拒否する。変数、ブレース展開、`find -exec`、`xargs`、`*`だけのglobを使う形は、「判定しないもの」に挙げる
-- コミットへの混入は、層ごとに止める対象が違う。gitignoreは`git add`を、lefthookのgitleaksはコミットを、CIのgitleaksはmainへのマージを止める。CIが動くのは`pull_request`と`main`へのpushだけなので、値がリモートのブランチへ載ってから走る。`git add -f`はgitignoreを越え、gitleaksは規則に合う値だけを拾う
+- `Read`ツールで`mise.local.toml`とその別名を読む経路は、`deny`が止める。
+  GrepとGlobへの適用はベストエフォートである
+- Bashで、秘密値のファイル名を字面で書いた参照は、フックの`guarded-files.ts`が拒否する。
+  変数、ブレース展開、`find -exec`、`xargs`、`*`だけのglobを使う形は、「判定しないもの」に挙げる
+- コミットへの混入は、層ごとに止める対象が違う。
+  gitignoreは`git add`を、lefthookのgitleaksはコミットを、CIのgitleaksはmainへのマージを止める。
+  CIが動くのは`pull_request`と`main`へのpushだけなので、値がリモートのブランチへ載ってから走る。
+  `git add -f`はgitignoreを越え、gitleaksは規則に合う値だけを拾う
 - Windmill上の保存とUIでの表示は、secret変数が守る
 
 `mise`の一覧を出す経路は、これらのどの層も止めない。
@@ -4733,7 +5252,8 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 - フックが外さない前置き(`stdbuf`、`caffeinate`、`bunx`、`npx cross-env`など)。
 - 標準入力から渡る値(`xargs`)。
 - miseの設定ファイルへの書き込みと、`docker compose up`の直接実行。
-- `mise set CHECK_IDLE_FORCE=1`による`mise.toml`の`[env]`への書き込み。`mise.toml`は保護パスなので、差分はレビューされる。
+- `mise set CHECK_IDLE_FORCE=1`による`mise.toml`の`[env]`への書き込み。
+  `mise.toml`は保護パスなので、差分はレビューされる。
 
 添字付きの代入をコマンドの前に置く形(`CHECK_IDLE_FORCE[1]=1`、`LEFTHOOK[1]=0`)は、読めない構文として拒否する。
 `env -S`の文字列は、`env`と同じ規則で語に分けて判定する。
@@ -4773,7 +5293,8 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 
 `--no-verify`は、フックを実行するgitのサブコマンド(`commit`、`push`、`merge`、`rebase`、`am`、`cherry-pick`、`revert`、`pull`)でだけ拒否する。
 `--`より後ろはパスとして扱う。
-`git config core.hooksPath`は、値を設定するときだけ拒否する。読むことと`--unset`は拒否しない。
+`git config core.hooksPath`は、値を設定するときだけ拒否する。
+読むことと`--unset`は拒否しない。
 
 `git push`のブランチを省いたときの今のブランチは、同じコマンド行の前にある文字どおりの`cd`と`pushd`をたどって調べる。
 `git -C`、`--git-dir`、`--work-tree`が指すディレクトリも同じように使う。
@@ -4832,9 +5353,14 @@ Claude Codeは終了コード2以外のフックの失敗ではツールの呼�
 実行環境が無いときは、警告を出して通す。
 実行環境が無いのは、次の3つの場合である。
 
-- 動くbunも、24以上のnodeも無いとき。依存を入れる前のコンテナが当たる。PATHにあってもshimの中身が無いbunや、24未満のnodeは、動かないものとして扱う
-- 起動スクリプトが無いとき。`CLAUDE_PROJECT_DIR`が空のときが当たる
-- `merge-guard`のスクリプトが無いとき。登録コマンドは、起動スクリプトに加えて、このスクリプトの有無も確かめる。古いチェックアウトで、すべてのBashを止めないためである
+- 動くbunも、24以上のnodeも無いとき。
+  依存を入れる前のコンテナが当たる。
+  PATHにあってもshimの中身が無いbunや、24未満のnodeは、動かないものとして扱う
+- 起動スクリプトが無いとき。
+  `CLAUDE_PROJECT_DIR`が空のときが当たる
+- `merge-guard`のスクリプトが無いとき。
+  登録コマンドは、起動スクリプトに加えて、このスクリプトの有無も確かめる。
+  古いチェックアウトで、すべてのBashを止めないためである
 
 この場合も拒否すると、すべてのBashが止まり、人が復旧できないクラウドのセッションでは作業を続けられない。
 `run.sh`は、動くbun、24以上のnode、`$HOME/.bun/bin/bun`、警告して通す、の順に試す。
@@ -4842,7 +5368,8 @@ Claude Codeは終了コード2以外のフックの失敗ではツールの呼�
 起動スクリプトが無いときの登録コマンドも同じである。
 警告は、フックごとに何が確かめられなくなったかを示す。
 `bash-guard`は拒否ルールだけが残ること、`merge-guard`は保留に照らしていないことを伝える。
-起動スクリプトは`mise`を経由しない。自動インストールがタイムアウトを超えることがあり、信頼していない設定では動かないためである。
+起動スクリプトは`mise`を経由しない。
+自動インストールがタイムアウトを超えることがあり、信頼していない設定では動かないためである。
 `merge-guard`が保留と凍結を読むときだけ、`mise exec`を経由する。
 composeと`wmill`が、`mise`の環境変数とツールを要するためである。
 読みの子プロセスでは、`mise`のツールの自動インストールを止める。
@@ -4883,7 +5410,8 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - `MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS`などの`MISE_*`の環境変数、`BASH_ENV`や`PATH`の差し替え
 - `mise set`のサブコマンドの前に、値を取る隠しオプションを置く形(未知の版で増えたもの)
 - `mise set`が、`-E local`を付けずにコミット対象の`mise.toml`へ、`-g`でグローバル設定へ、`--file`で任意のファイルへ書き込む形
-- `mise`の書き込みと実行のサブコマンド(次は例で、ほかにもある)。フックが`mise`を、書き込むコマンドとして扱わないので拒否しない
+- `mise`の書き込みと実行のサブコマンド(次は例で、ほかにもある)。
+  フックが`mise`を、書き込むコマンドとして扱わないので拒否しない
   - `mise generate task-stubs`
   - `mise settings set`(設定を追加、更新する。既定は`~/.config/mise/config.toml`で、`--local`でローカルの設定になる)
   - `mise tasks add`(ローカルの`mise.toml`にタスクを足す。`-f`でファイルタスクを作る)と`mise tasks edit`
@@ -4895,39 +5423,59 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
     - このリポジトリのタスク`mise run bootstrap`は`scripts/bootstrap.sh`を動かすので、`mise bootstrap`もそれを実行する
     - 2つは別のコマンドである
 - 保留と凍結の操作のうち、次の形。
-  - 名乗りのholder。`session:<ブランチ>`は同じブランチのセッションで共有され、作業ディレクトリや別のチェックアウトによっても名乗るブランチは変わる
-  - 端末を与える経路の列挙の外。前置きは5種に限り、人の確認を端末で通す仕組みは、端末を与える経路を列挙し切れない
-  - 人の確認を端末からConsoleの承認へ移す構造的な案。境界を強めるには、フックの追加ではなくこの案が要る
+  - 名乗りのholder。
+    `session:<ブランチ>`は同じブランチのセッションで共有され、作業ディレクトリや別のチェックアウトによっても名乗るブランチは変わる
+  - 端末を与える経路の列挙の外。
+    前置きは5種に限り、人の確認を端末で通す仕組みは、端末を与える経路を列挙し切れない
+  - 人の確認を端末からConsoleの承認へ移す構造的な案。
+    境界を強めるには、フックの追加ではなくこの案が要る
   - 別名の呼び出し(`cp scripts/hold.ts /tmp/h.ts`の後に実行する形)
   - 変数や文字列の連結で組んだパス、動的なimport
   - `docker compose exec db psql`に渡す語を、組み立てて書く形
-  - 新しいファイルを書いて実行する形。`mise-tasks/`と`.mise-tasks/`は保護パスだが、止めるのはFactoryのフローだけで、ローカルのsubagentには効かない
+  - 新しいファイルを書いて実行する形。
+    `mise-tasks/`と`.mise-tasks/`は保護パスだが、止めるのはFactoryのフローだけで、ローカルのsubagentには効かない
   - 保留のコードを書き換えてから起動する形(ファイルの複製、移動、書き込みの道具、設定ファイルの書き換え。Editツールを含む)
   - 前置きの無いシェルの`-c`と標準入力
   - 語を足す文脈の集合の名前が、絶対パスや探索先の違いで別のファイルに解決される形(新しいファイルを書いて実行する形に含む)
   - 変数とglobから`-exec`の語を作る形(実行時に組み立てる形の一種)
-  - `xargs`や`find`の別名と、前置きの一覧に無い前置き(列挙の抜け)。語を足す別のプログラム(5つの文脈の外)を含む
+  - `xargs`や`find`の別名と、前置きの一覧に無い前置き(列挙の抜け)。
+    語を足す別のプログラム(5つの文脈の外)を含む
   - `find`の後ろの検査の道具に、探索の起点の綴りでオプションを渡す形(`-`で始まる名前のファイルを先に書く形)
-  - 保留の判定より前の検査にかかる時間。締め切りは判定の開始から数えるが、時計を見るのは保留の判定の中だけである(判定の時間の上限の外の検査)
-  - 前置きの近縁のプログラム(`expect`、`gtime`、`stdbuf`など)。前置きは5種に限る
-  - 実行時に組んだ名前。解析できない文字列と深さ4を超える入れ子は字面で判定するため
+  - 保留の判定より前の検査にかかる時間。
+    締め切りは判定の開始から数えるが、時計を見るのは保留の判定の中だけである(判定の時間の上限の外の検査)
+  - 前置きの近縁のプログラム(`expect`、`gtime`、`stdbuf`など)。
+    前置きは5種に限る
+  - 実行時に組んだ名前。
+    解析できない文字列と深さ4を超える入れ子は字面で判定するため
   - 実行を委ねる呼び出しの、委ねる先や設定の値を実行時に組み立てる形と、値を環境変数から読む設定の指定(実行時に組んだ名前の類)
   - 実行系に、変数で標準入力を指すオペランドを渡す形(実行時に組んだ名前の類)
   - 取り込むファイルの中身と、書き換えたファイルを値で指す設定(新しいファイルを書いて実行する形の類)
-  - 字句の規則を変える変数の名前を、展開で組み立てて、代入を受ける組み込みの引数に渡す形。組み込みコマンドの引数の再評価と同じ分類として受け入れる
+  - 字句の規則を変える変数の名前を、展開で組み立てて、代入を受ける組み込みの引数に渡す形。
+    組み込みコマンドの引数の再評価と同じ分類として受け入れる
   - 入れ子の文字列を読み直す経路で、予約語の代替形とcase文を含む文字列
-    - 読めない文字列として字面で判定する。語の途中の引用で名前を分けた形は、引用を除いた綴りでも判定するが、字の並びを組み立てる形は見落とす
+    - 読めない文字列として字面で判定する。
+      語の途中の引用で名前を分けた形は、引用を除いた綴りでも判定するが、字の並びを組み立てる形は見落とす
     - 同じ迂回は、別の読めない形でも使える
     - 最上位とシェルの標準入力では、読めない構文として拒否するので塞がっている
-  - 前置きの無いインタプリタが文字列で受け取るコード(`python -c`、`perl -e`、`ruby -e`、`awk`の`system()`など)。ストリームエディタのコマンドを実行する命令も同じ分類である
-  - 起動語の列挙の外の名前(別名の実行ファイル、パッケージ管理の経由、アーキテクチャを選ぶ前置き)。名前の集合は開いているので、列挙を足さない
-  - 先に用意したファイルや設定を使って実行に至る、gitの委ねない副コマンドの形(テンプレート、マージの戦略、リモートの補助、ヘルプの表示プログラム、属性のフィルター)。用意の段は、設定の書き込みを委ねる形として見るか、新しいファイルを書いて実行する形に入る
-  - ブレースの範囲の端点を実行時に決まる語で書く形。範囲として読まない
-  - `mise generate`の書き先の照合は、既存の`.git/hooks`と`.git/config`の照合(`GIT_INTERNALS`)と同じ限界を持つ。`cd`やシンボリックリンクを使った別名の書き方は見ない
-  - `mise generate`の書き先の照合は、`/../`をまとめない。globとブレースを含む語は、書き先の判定ができないので拒否する
-  - 凍結のCLIは、副コマンドの語(`place`、`release`、`reset`、`push`の`--prune`)と`--scope`の値の字面で判定する。別名と、組み立てたパスは見ない
-  - 実行時に決まる語を含む`mise run`は、保留の操作と区別できないので拒否する。静的な値で書けば通る。全体オプションの値(`mise -C "$DIR" run check`)の変数は、保留とは別の規則で拒否する
-- マージと反映の判定が追わない形。残るリスクは「保留」に書く。
+  - 前置きの無いインタプリタが文字列で受け取るコード(`python -c`、`perl -e`、`ruby -e`、`awk`の`system()`など)。
+    ストリームエディタのコマンドを実行する命令も同じ分類である
+  - 起動語の列挙の外の名前(別名の実行ファイル、パッケージ管理の経由、アーキテクチャを選ぶ前置き)。
+    名前の集合は開いているので、列挙を足さない
+  - 先に用意したファイルや設定を使って実行に至る、gitの委ねない副コマンドの形(テンプレート、マージの戦略、リモートの補助、ヘルプの表示プログラム、属性のフィルター)。
+    用意の段は、設定の書き込みを委ねる形として見るか、新しいファイルを書いて実行する形に入る
+  - ブレースの範囲の端点を実行時に決まる語で書く形。
+    範囲として読まない
+  - `mise generate`の書き先の照合は、既存の`.git/hooks`と`.git/config`の照合(`GIT_INTERNALS`)と同じ限界を持つ。
+    `cd`やシンボリックリンクを使った別名の書き方は見ない
+  - `mise generate`の書き先の照合は、`/../`をまとめない。
+    globとブレースを含む語は、書き先の判定ができないので拒否する
+  - 凍結のCLIは、副コマンドの語(`place`、`release`、`reset`、`push`の`--prune`)と`--scope`の値の字面で判定する。
+    別名と、組み立てたパスは見ない
+  - 実行時に決まる語を含む`mise run`は、保留の操作と区別できないので拒否する。
+    静的な値で書けば通る。
+    全体オプションの値(`mise -C "$DIR" run check`)の変数は、保留とは別の規則で拒否する
+- マージと反映の判定が追わない形。
+  残るリスクは「保留」に書く。
   - 別名と関数、変数や連結で組んだ語、スクリプトのファイルの中の呼び出し
   - `curl`、`python`、`hub`、GitHubのMCP
   - GraphQLの`mergeBranch`
@@ -4942,7 +5490,8 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
   - `wmill trash get`
   - フックに判定は無く、値が会話に出るかは確かめていない
   - CLIのプロファイルのトークンで復号されて返るなら、値が会話に出る
-- ブレース展開で作る秘密値のファイル名(`cat mise.local.{toml,}`)。ファイル名の判定が展開を見ない
+- ブレース展開で作る秘密値のファイル名(`cat mise.local.{toml,}`)。
+  ファイル名の判定が展開を見ない
 - 外すことにしていない前置きのコマンド(`watch`、`flock`、`stdbuf`、`script`、`parallel`、`setsid`、`doas`など)
 - スクリプトのファイルの中身
 - コマンドを起動するインタープリター(`bun -e`、`python -c`が`git push`を実行する場合など)
@@ -4951,9 +5500,11 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - 式の中でファイルを開く操作(`sed`の`r`コマンド、`perl -e`など)
 - `cd`やglob、`dd`、`perl -pi`、`find -delete`を使った`.git/hooks`と`.git/config`の書き換え
 - 行き先を`.git/`にした`cp`、`mv`、`rsync`と、`tar -C`、`unzip -d`、`curl -o`による展開と書き込み
-- リポジトリの根での`rg KEY *`や`grep KEY *`。シェルが`*`を`mise.local.toml`に展開しても拒否しない
+- リポジトリの根での`rg KEY *`や`grep KEY *`。
+  シェルが`*`を`mise.local.toml`に展開しても拒否しない
 - `echo ... | cat | sh`のように、間にコマンドを挟んだ標準入力のシェル(直前のパイプの元だけを見る)
-- グループやサブシェルの中の、最後でないコマンドが標準入力へ渡す文字列。集められないので判定されない
+- グループやサブシェルの中の、最後でないコマンドが標準入力へ渡す文字列。
+  集められないので判定されない
 - `docker run ... env`のように、新しく起動するコンテナで環境変数を出す操作
 - `gh auth token`や`mise token`(gitのホストのトークン)のように、認証情報を表示するコマンドと、`~/.ssh`やgh CLIの設定ファイルの読み取り
 - `mise exec`経由で秘密値を読む方法の一部(ベストエフォートの規則である)
@@ -4966,9 +5517,13 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 
 ## draw.ioの図の描画
 
-要件定義の図(`<name>.drawio`)は、生のXMLとして、要件定義のファイルと同じworker専用のディレクトリ(`requirement_drafts.doc_dir`の下)に書く。DBの`requirement_drafts.diagrams`列には、`{name, file}`の参照だけを入れる。図の内容とURLは、GitHubのIssueとPRのコメントにも、Discordの通知にも投稿しない。
+要件定義の図(`<name>.drawio`)は、生のXMLとして、要件定義のファイルと同じworker専用のディレクトリ(`requirement_drafts.doc_dir`の下)に書く。
+DBの`requirement_drafts.diagrams`列には、`{name, file}`の参照だけを入れる。
+図の内容とURLは、GitHubのIssueとPRのコメントにも、Discordの通知にも投稿しない。
 
-Consoleは、`f/factory/steps/console_query.ts`の`requirements_doc`ビューで、`requirements.md`と各図のファイルを読み戻す。読む前に、`doc_dir`が`REQUIREMENTS_BASE_DIR`の下にあることを確かめる。図のXMLはWindmillのジョブ結果としてConsoleのフロントエンドに渡るだけで、GitHubとDiscordには送らない。
+Consoleは、`f/factory/steps/console_query.ts`の`requirements_doc`ビューで、`requirements.md`と各図のファイルを読み戻す。
+読む前に、`doc_dir`が`REQUIREMENTS_BASE_DIR`の下にあることを確かめる。
+図のXMLはWindmillのジョブ結果としてConsoleのフロントエンドに渡るだけで、GitHubとDiscordには送らない。
 
 設計の図も、`design_doc`ビューが同じ基準のディレクトリの下から読み戻す。
 設計のディレクトリに置くのは`design.md`と`<name>.drawio`だけである。
@@ -4979,28 +5534,37 @@ Consoleは、`f/factory/steps/console_query.ts`の`requirements_doc`ビューで
 その防御として、最新の行以外は図を読まない。
 
 図のXMLは、`f/factory/lib/drawio.ts`の`validateDrawioXml`で検査する。
-検査は2か所でかける。生成の時点と、`requirements_doc`と`design_doc`のビューがディスクから読み戻す時点である。
+検査は2か所でかける。
+生成の時点と、`requirements_doc`と`design_doc`のビューがディスクから読み戻す時点である。
 ディスクのファイルは生成の後に書き換わりうるので、読み戻す時点でも同じ検査をかける。
 読み戻しで通らない図は、ファイル名が不正な図と同じように、警告のログを残して一覧から落とす。
-検査が例外で終わった図も、通らない図として扱い、警告のログを残す。安全と確かめられない図は、表示しないほうを選ぶためである。
+検査が例外で終わった図も、通らない図として扱い、警告のログを残す。
+安全と確かめられない図は、表示しないほうを選ぶためである。
 文書の本文と、ほかの図は返す。
 
 検査は、大きさ、ルート要素に加えて、次のものを加工せずに拒否する。
 拒否したときは`valid: false`と理由を返す。
 
-- 圧縮した図。すべての`<diagram>`について、空白以外のテキストとCDATAを拒否する。`<mxfile>`の`compressed`属性の値が`true`のときも、引用符の種類を問わず拒否する。圧縮した図は中身が見えず、以降の検査を素通りするためである
+- 圧縮した図。
+  すべての`<diagram>`について、空白以外のテキストとCDATAを拒否する。
+  `<mxfile>`の`compressed`属性の値が`true`のときも、引用符の種類を問わず拒否する。
+  圧縮した図は中身が見えず、以降の検査を素通りするためである
 - `link`属性と`usemap`属性
-- `placeholders`属性と、`<mxfile>`の`vars`属性。理由は下にある
+- `placeholders`属性と、`<mxfile>`の`vars`属性。
+  理由は下にある
 - 図の構造としての`<a>`、`<area>`、`<map>`、`<meta>`、`<iframe>`要素
-- ラベルのHTMLの、パーサーによって読み方が分かれる構文。大文字小文字を区別しない。
+- ラベルのHTMLの、パーサーによって読み方が分かれる構文。
+  大文字小文字を区別しない。
   - `<!`で始まる構文(コメント、DOCTYPE、CDATA、偽のコメント)、`<?`、`</`の後ろが英字でない形
-  - 中身をタグとして読まない要素。属性の有無を問わない。
+  - 中身をタグとして読まない要素。
+    属性の有無を問わない。
     対象は`<textarea>`、`<title>`、`<xmp>`、`<noscript>`、`<noembed>`、`<noframes>`、`<plaintext>`、`<iframe>`、`<style>`、`<script>`である
   - 外来要素の`<svg>`と`<math>`
   - SVGのアニメーション要素: `<set>`、`<animate>`、`<animateMotion>`、`<animateTransform>`
 
   理由は、下の「ラベルのHTMLの読み方」にある。
-- ラベルのHTMLの、属性付きの次の要素。属性付きとは、`名前=`の形の属性を持つことである。
+- ラベルのHTMLの、属性付きの次の要素。
+  属性付きとは、`名前=`の形の属性を持つことである。
   - リンク: `<a>`、`<area>`、`<map>`
   - ページ遷移: `<meta>`、`<base>`、`<link>`
   - 埋め込み: `<object>`、`<embed>`、`<frame>`、`<img>`、`<image>`、`<video>`、`<audio>`、`<source>`、`<use>`
@@ -5008,29 +5572,37 @@ Consoleは、`f/factory/steps/console_query.ts`の`requirements_doc`ビューで
 
   `<image>`は、HTMLのパーサーが`<img>`に置き換えるので、`<img>`と同じに扱う。
   `<iframe>`と`<svg>`は、上の読み方が分かれる構文として、属性の有無を問わず拒否する。
-- ラベルのHTMLのタグの中のイベントハンドラ属性。`onclick=`のように、`on`と英字の名前に`=`が続く形である
+- ラベルのHTMLのタグの中のイベントハンドラ属性。
+  `onclick=`のように、`on`と英字の名前に`=`が続く形である
 - ラベルのHTMLの`usemap=`、`formaction=`、`srcdoc=`
-- 構文が不正なXML。閉じていないコメント、CDATA、処理命令、タグ、引用符と、タグの引用符の外の`<`である。XML全体を前から1回だけ読み、読めない箇所があれば拒否する。正規表現の打ち切りで、手前までしか検査されずに通ることを防ぐためである
+- 構文が不正なXML。
+  閉じていないコメント、CDATA、処理命令、タグ、引用符と、タグの引用符の外の`<`である。
+  XML全体を前から1回だけ読み、読めない箇所があれば拒否する。
+  正規表現の打ち切りで、手前までしか検査されずに通ることを防ぐためである
 
 `Promise<Object>`、`List<Map>`、`Result<A, E>`のように、属性を持たない要素名だけの表記は通す。
 型の書き方としてラベルに現れ、属性の無い要素は行き先も資源のURLも持てないためである。
-`<A extends B = C>`のような表記は拒否することがある。要素名と同じ型引数の名前に`名前=`が続くと、属性付きの要素と見分けられないためである。
+`<A extends B = C>`のような表記は拒否することがある。
+要素名と同じ型引数の名前に`名前=`が続くと、属性付きの要素と見分けられないためである。
 
 図のXMLを加工して取り除くと、図の見た目が変わり、ビューアの解釈との差が新しい抜け道にもなる。
 そのため、取り除かずに拒否し、理由を生成のやり直しでClaudeに伝える。
 
 属性の値とテキストは、XMLの実体参照(`&lt;a`、数値文字参照の`&#60;`と`&#x3c;`)を復号してから調べる。
 ビューアは`html=1`のラベルをHTMLとして解釈するためである。
-二重にエスケープした`&amp;lt;a`も、安全側に倒して復号し、拒否する。実際に何として読まれるかは追わない。
+二重にエスケープした`&amp;lt;a`も、安全側に倒して復号し、拒否する。
+実際に何として読まれるかは追わない。
 復号は5段までで、それでも変わり続ける値は調べきれないので拒否する。
-`placeholders`属性は、どの要素にあっても値を問わず拒否する。`<mxfile>`の`vars`属性も拒否する。
+`placeholders`属性は、どの要素にあっても値を問わず拒否する。
+`<mxfile>`の`vars`属性も拒否する。
 `placeholders`を持つセルでは、draw.ioがラベルの`%名前%`を別の値に置き換える。
 置き換える値は、祖先のセルの属性、ページの名前、`vars`に書いた値などである。
 タグを置き換え元の値とラベルに分けて書けるので、置き換えた後のラベルを検査では確かめきれない。
 要件定義の図には置き換えが要らないので、使うこと自体を拒否する。
 要素と属性の名前は、大文字小文字を区別せずに比べる。
 `link`と`usemap`は名前の完全一致だけを見るので、`linkTarget`のような別の属性や、ラベルの文章にあるだけの単語は拒否しない。
-`<object>`は、draw.ioがセルを包む要素として正しい。構造としては許し、ラベルのHTMLの中の、属性付きのものだけを拒否する。
+`<object>`は、draw.ioがセルを包む要素として正しい。
+構造としては許し、ラベルのHTMLの中の、属性付きのものだけを拒否する。
 
 ### ラベルのHTMLの読み方
 
@@ -5076,7 +5648,8 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 安全の検査を通らなかった図(`rejected_diagrams`)は、iframeを作らず、表示しない旨だけを出す。
 仕組みは[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
 
-ジョブの画面と作業項目の詳細のflowの図(`console/src/screens/jobs/FlowDiagram.tsx`)と、スケジュールの説明は、iframeを使わない。自前のSVGと文字で描く。
+ジョブの画面と作業項目の詳細のflowの図(`console/src/screens/jobs/FlowDiagram.tsx`)と、スケジュールの説明は、iframeを使わない。
+自前のSVGと文字で描く。
 図のSVGは、`dangerouslySetInnerHTML`を使わず、サーバー由来の文字列を、子のジョブへのリンクのidを除いて属性に入れない。
 図のデータ(`console/src/generated/flows.json`)はリポジトリのコードから作ったバンドルの静的なJSONで、信用できない入力を含まない。
 重ねるジョブのステップのidと状態はサーバー由来なので、見えない文字を代替文字にしてから描く。
@@ -5109,22 +5682,31 @@ XMLをpostMessageで送る先は、このsandboxのiframeだけである。
 XMLそのものは、`console_query`のジョブ結果としてWindmillに残り、Consoleの最上位のページにも渡る。
 
 サーバー側で図の`link`属性と`html=1`を落とす処理は入れない。
-`validateDrawioXml`は1層目として、リンクを含む図のうち既知の形を拒否する。網羅はしない。
+`validateDrawioXml`は1層目として、リンクを含む図のうち既知の形を拒否する。
+網羅はしない。
 すり抜けた図は、2層目のCSP、sandbox、受け口のscriptとビューアの設定が受け止める。
 iframeの中で動くscriptが取れるのは、そのiframeが受け取った図のXMLだけで、リンクを押せず、外への取得はCSPが止める。
 `html=1`を落とすと、`<br>`による改行のような正しい図が壊れる。
 
 残るリスクは次のとおりである。
 
-- ビューアの欠陥でiframeの中でscriptが動くと、iframe自身を別のURLへ遷移させ、受け取ったXMLをURLに載せて外のサーバーへ送れる。CSPは、ページの遷移を止められない。
+- ビューアの欠陥でiframeの中でscriptが動くと、iframe自身を別のURLへ遷移させ、受け取ったXMLをURLに載せて外のサーバーへ送れる。
+  CSPは、ページの遷移を止められない。
   送った1回のXMLは外へ出せる。
   次のXMLを渡さないので、被害は、そのiframeが受け取った図1枚に限る。
   CookieとWindmillの資格情報には届かない。
-- `'unsafe-eval'`は許さない。根拠は、32.4.1のビューアのコードの読解と、ヘッドレスのChromeでの確認である。
-  自動で上げた版は、この調査を経ていない。`eval`が要る版は、図が描かれなくなるだけで、CSPが評価を止める。
-  - ビューアが`eval`を呼ぶ箇所は2つある。図のスタイルや定義に書かれた式を評価する経路は、評価を許すフラグがどれも既定で無効である。外部の図形ライブラリのscriptを取得して評価する経路は、取得をCSPの`connect-src 'none'`が止める。`new Function`は無い。
-  - `'unsafe-eval'`を付けずに、普通の図と、リンク、外部の画像、フォント、図形ライブラリ、評価を許す式を含む図を描いた。`eval`の違反は出なかった。
-- 外部の図形ライブラリ(AWSなどのアイコン集)を使う図は、その図形が描かれない。外部への取得をCSPが止めるためである。
+- `'unsafe-eval'`は許さない。
+  根拠は、32.4.1のビューアのコードの読解と、ヘッドレスのChromeでの確認である。
+  自動で上げた版は、この調査を経ていない。
+  `eval`が要る版は、図が描かれなくなるだけで、CSPが評価を止める。
+  - ビューアが`eval`を呼ぶ箇所は2つある。
+    図のスタイルや定義に書かれた式を評価する経路は、評価を許すフラグがどれも既定で無効である。
+    外部の図形ライブラリのscriptを取得して評価する経路は、取得をCSPの`connect-src 'none'`が止める。
+    `new Function`は無い。
+  - `'unsafe-eval'`を付けずに、普通の図と、リンク、外部の画像、フォント、図形ライブラリ、評価を許す式を含む図を描いた。
+    `eval`の違反は出なかった。
+- 外部の図形ライブラリ(AWSなどのアイコン集)を使う図は、その図形が描かれない。
+  外部への取得をCSPが止めるためである。
 
 ### 親の部品が守ること
 
@@ -5141,7 +5723,8 @@ iframeとのメッセージは、`console/src/lib/drawioMessages.ts`と`console/
 読み戻しで拒否した図は、`requirements_doc`と`design_doc`のビューが名前を`rejected_diagrams`で返す。
 本文は、その名前の図を「安全の検査を通らなかったので表示しません」と表示し、図が見つからない場合と区別する。
 
-読み戻しの検査は、すでにディスクにある図にもかかる。検査を通らない図は表示しない。
+読み戻しの検査は、すでにディスクにある図にもかかる。
+検査を通らない図は表示しない。
 `link`属性や`<a>`を含む既存の図は、「表示しません」になる。
 承認する人は、図を見ないまま判断することになる。
 図が判断に要るときは、要件定義の作り直しを求める。
@@ -5167,12 +5750,15 @@ ConsoleのSPAの親のページは、iframeから高さと失敗の種類だけ�
 
 制約は次のとおりである。
 
-- `/console/drawio.html`が配信されていないと、図は描かれない。親は、応答がないものとして固定の文を出す。
+- `/console/drawio.html`が配信されていないと、図は描かれない。
+  親は、応答がないものとして固定の文を出す。
 - 外部の図形ライブラリ(AWSなどのアイコン集)と、ビューアのtoolbar、ズーム、レイヤは使えない。
 
 残るリスクは次のとおりである。
 
-- ビューアがiframeの中で`window.location`を書き換えて遷移する経路は、`sandbox`で防げない。2回目のloadの検知で表示を止めるが、loadが起きない遷移は検知できない。そのときも、親が受け取るのは、範囲に収めた高さと、固定の失敗の種類だけである。
+- ビューアがiframeの中で`window.location`を書き換えて遷移する経路は、`sandbox`で防げない。
+  2回目のloadの検知で表示を止めるが、loadが起きない遷移は検知できない。
+  そのときも、親が受け取るのは、範囲に収めた高さと、固定の失敗の種類だけである。
 - ラベルの`%名前%`を別の値に置き換える`placeholders`と`vars`は、検査が拒否する。
   draw.ioが別の属性でも同じ置き換えをするようになると、検査はその図を拒否できない。
   その図は、iframeの隔離とCSPで止める。
@@ -5189,7 +5775,8 @@ GitHub Actionsではなく、Windmillで動かす。
 ActionsでPRを作るには、PRに書ける長期のトークンをActionsのsecretに足す必要があるためである。
 Actionsの既定のトークンで作ったPRは、CIを起動しない。
 このリポジトリは、`ci.yml`の権限を読み取りだけに保つ。
-Windmillは、実装とPR修正が使う`f/factory/github_token`で足りる。このトークンはWorkflowsの権限が無いので、`.github/workflows/`には書けない。
+Windmillは、実装とPR修正が使う`f/factory/github_token`で足りる。
+このトークンはWorkflowsの権限が無いので、`.github/workflows/`には書けない。
 
 | 守ること | 内容 |
 | --- | --- |
@@ -5212,15 +5799,27 @@ Windmillは、実装とPR修正が使う`f/factory/github_token`で足りる。�
 
 残るリスクは次のとおりである。
 
-- 新しい版が図を描けるかは、自動では確かめない。描けない版は、iframeが固定の失敗の文を出す。PR本文が、マージ後にConsoleで図を開いて確かめるよう求める。
-- 上流のリポジトリが侵害され、2つの待ちと大きさの確認をすり抜けた版は、PRになる。マージの前に人が見る。マージ後も、iframeの隔離とCSPが被害を限る。
-- 観測の時刻は、こちらが見た時刻である。公開日を古く偽られても、こちらが初めて見た時刻から数えるので、14日の待ちは回避されない。
+- 新しい版が図を描けるかは、自動では確かめない。
+  描けない版は、iframeが固定の失敗の文を出す。
+  PR本文が、マージ後にConsoleで図を開いて確かめるよう求める。
+- 上流のリポジトリが侵害され、2つの待ちと大きさの確認をすり抜けた版は、PRになる。
+  マージの前に人が見る。
+  マージ後も、iframeの隔離とCSPが被害を限る。
+- 観測の時刻は、こちらが見た時刻である。
+  公開日を古く偽られても、こちらが初めて見た時刻から数えるので、14日の待ちは回避されない。
 - 観測は週に1回なので、観測の間にタグを付け替えて元に戻されると、気づけない。
-- 最初に動かした週は、すべての版の観測が始まったばかりなので、14日間は何も上げない。記録が消えたときも、同じように待ちを数え直す。
-- 上げる版に選んだ最新の版を保留している間は、それより古い版も上げない。保留の理由はnoticeに出る。
-- 保護するのは更新に専用の部品である。汎用の層(`github.ts`、`db.ts`、`types.ts`、`workspace.ts`)は保護していない。更新はこれらの関数を呼ぶので、挙動を変える変更は通常のレビューで確かめる。
-- script定義とlockのうち、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は保護しない。`windmill-client`の版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。部品のscript定義を保護し、部品の依存の無いlockを保護しない(理由は[保護パスの変更を止める](#保護パスの変更を止める)の「libのlockを保護しない理由」)。
-- ブランチ名が`factory/drawio-viewer-`で始まる未完了のPRが残ると、更新は止まる。そのPRを閉じるかマージすると、次の週に再開する。
+- 最初に動かした週は、すべての版の観測が始まったばかりなので、14日間は何も上げない。
+  記録が消えたときも、同じように待ちを数え直す。
+- 上げる版に選んだ最新の版を保留している間は、それより古い版も上げない。
+  保留の理由はnoticeに出る。
+- 保護するのは更新に専用の部品である。
+  汎用の層(`github.ts`、`db.ts`、`types.ts`、`workspace.ts`)は保護していない。
+  更新はこれらの関数を呼ぶので、挙動を変える変更は通常のレビューで確かめる。
+- script定義とlockのうち、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は保護しない。
+  `windmill-client`の版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
+  部品のscript定義を保護し、部品の依存の無いlockを保護しない(理由は[保護パスの変更を止める](#保護パスの変更を止める)の「libのlockを保護しない理由」)。
+- ブランチ名が`factory/drawio-viewer-`で始まる未完了のPRが残ると、更新は止まる。
+  そのPRを閉じるかマージすると、次の週に再開する。
 
 ## 要件定義書のリンク
 
@@ -5232,20 +5831,26 @@ Consoleは、これをWindmillと同じオリジンで描く。
 `src/components/markdown/Markdown.tsx`は`a`を差し替える。
 リンクにするものは、`src/lib/markdownLink.ts`の`resolveMarkdownLink`で絞る。
 
-- 作業項目と同じリポジトリのIssueとPRのURL。`src/lib/safeUrl.ts`の`safeGitHubUrl`を通り、ownerとrepoが作業項目のものと一致するものに限る。ownerとrepoは、大文字小文字を区別せずに比べる。信頼できない本文が、読み手を別のリポジトリへ誘導できないようにするためである。
-- 同じページの見出しへのフラグメント。`#`で始まり、`slugify`が作るslugと同じ形に限る。
+- 作業項目と同じリポジトリのIssueとPRのURL。
+  `src/lib/safeUrl.ts`の`safeGitHubUrl`を通り、ownerとrepoが作業項目のものと一致するものに限る。
+  ownerとrepoは、大文字小文字を区別せずに比べる。
+  信頼できない本文が、読み手を別のリポジトリへ誘導できないようにするためである。
+- 同じページの見出しへのフラグメント。
+  `#`で始まり、`slugify`が作るslugと同じ形に限る。
 
 それ以外は、リンクにせず文字で出す。
 リンクの文字とURLが違うときは、URLも括弧で添える。
 読み手が行き先を判断できるようにするためである。
-添えたURLは`<bdi>`で包む。文字の向きを変える制御文字が、周りの表示を崩さないようにするためである。
+添えたURLは`<bdi>`で包む。
+文字の向きを変える制御文字が、周りの表示を崩さないようにするためである。
 同じページの見出しへのリンクは、行き先を取り違えようがないので、URLを添えない。
 GitHubへのリンクは、`rel="noopener noreferrer"`を付けて新しいタブで開く。
 
 `Markdown`が`repo`を必須の引数で受けるので、リポジトリを渡さずにGitHubのURLをリンクにする経路は無い。
 見出しへのフラグメントは、接頭辞`h-`を付けた見出しの`id`を指すように読み替える。
 見出しの`id`が、ページの他の要素の`id`や`name`と重ならないようにするためである。
-脚注の記法は使わない。脚注への参照(`#user-content-fn`で始まるフラグメント)は、リンクにせず文字で出す。
+脚注の記法は使わない。
+脚注への参照(`#user-content-fn`で始まるフラグメント)は、リンクにせず文字で出す。
 本文、要約、未確定事項、題名は、描く前に`displayableIssueText`で見えない文字を置き換える。
 画像は図の参照`<name>.drawio`だけを無害化のスキーマで通し、それ以外の画像のURLは描かない。
 `src/components/markdown/Markdown.test.tsx`が、次のものを描かないことを固定している。
@@ -5256,7 +5861,8 @@ GitHubへのリンクは、`rel="noopener noreferrer"`を付けて新しいタ�
 新しいConsoleの監査レポートの本文(`console/src/screens/reports/AuditMarkdown.tsx`)は、リンクを張らない。
 本文は、監査のClaudeが信頼できない運用記録から書くためである。
 監査レポートの本文にはURLを書かない決まりで、リポジトリの情報も渡されないので、張ってよいリンクが無い。
-同じページの見出しへのリンクも張らない。見出しに`id`を付けないので、行き先が無い。
+同じページの見出しへのリンクも張らない。
+見出しに`id`を付けないので、行き先が無い。
 
 リンクの文字はそのまま文字で出し、URLが文字と違うときは括弧で添える。
 添えたURLは`<bdi>`で包む。
@@ -5283,7 +5889,8 @@ FactoryのPRの題名は、信頼できないIssueに由来する。
 
 作り手のバッジは、確かな証明ではなく、ブランチの名前から決めた印である。
 ownerがFactoryのリポジトリと同じで、ブランチが実装ブランチ(`factory/issue-<N>-wi-<id>`)のときだけ「Software Factory」にする。
-同じ名前のブランチを作れるのは、リポジトリに書ける人だけである。forkのブランチは「人」になる。
+同じ名前のブランチを作れるのは、リポジトリに書ける人だけである。
+forkのブランチは「人」になる。
 マージの方式がsquashのPRと、Factoryのリポジトリを読めないときは、ブランチが確かめられないので「不明」にする。
 
 mainに直接pushされたコミットも、件名の末尾が`(#<N>)`で親が1つなら、PRとして記録される。
@@ -5292,17 +5899,24 @@ mainのrulesetが直接pushを止めていることを前提にする。
 
 ## PR修正の安全策
 
-PR修正のフロー(`pr_fix`)は、Claudeに書き込みのツールを与える。次の安全策で、信頼できないPRの内容やコメントから、Factoryの設定やworkerを書き換えられないようにする。仕組みの詳細は[PRワークフローの仕様](internals/pr-workflow.md)にある。
+PR修正のフロー(`pr_fix`)は、Claudeに書き込みのツールを与える。
+次の安全策で、信頼できないPRの内容やコメントから、Factoryの設定やworkerを書き換えられないようにする。
+仕組みの詳細は[PRワークフローの仕様](internals/pr-workflow.md)にある。
 
 ### Factory自身の投稿の判定
 
-コメントがFactory自身の投稿かどうかは、投稿者がFactoryのGitHubアカウントであり、かつ本文にFactoryのマーカーがあるかで判定する。Factoryは人と同じGitHubアカウントで動くので、ログインだけでは人の投稿と区別できない。マーカーだけでは第三者が偽装できる。
+コメントがFactory自身の投稿かどうかは、投稿者がFactoryのGitHubアカウントであり、かつ本文にFactoryのマーカーがあるかで判定する。
+Factoryは人と同じGitHubアカウントで動くので、ログインだけでは人の投稿と区別できない。
+マーカーだけでは第三者が偽装できる。
 
-この判定で除外するのは、Factory自身のPR修正の返信だけである。人のコメントと、Factoryの最初のレビューの指摘は、修正の依頼として扱う。
+この判定で除外するのは、Factory自身のPR修正の返信だけである。
+人のコメントと、Factoryの最初のレビューの指摘は、修正の依頼として扱う。
 
 ### ツールの制限
 
-Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで、`Bash`は渡さない。`--restricted`でコード実行のツールとWebFetchを外し、ファイルのツールを作業ディレクトリに閉じる。ネットワークは遮断しない。
+Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで、`Bash`は渡さない。
+`--restricted`でコード実行のツールとWebFetchを外し、ファイルのツールを作業ディレクトリに閉じる。
+ネットワークは遮断しない。
 
 ### 検査コマンドはフローが実行する
 
@@ -5311,11 +5925,13 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 検査コマンドは対象リポジトリのコードを実行するので、workerのrootではなく、非特権のユーザー(`factory-check-N`)で動かす([検査コマンドの権限](#検査コマンドの権限))。
 ただしコンテナ、network、CPUとメモリはworkerと共有する。
 そのため既定値は空の配列にし、空でなければ、コンテナの分離が無いことを知らせる記録(notice)を作業項目ごとに残す。
-同じ本文の未解決の記録があれば新しく作らない。作成から1日を過ぎていれば、時刻を更新する。
+同じ本文の未解決の記録があれば新しく作らない。
+作成から1日を過ぎていれば、時刻を更新する。
 
 検査コマンドに渡す`PATH`は固定の`/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin`で、workerの`PATH`は引き継がない。
 どのディレクトリもrootが所有し、非特権のuidは書き込めない。
-rootのホームと`/tmp`の下は入れない。そこに置かれた実行ファイルを、名前の解決で拾わないようにするためである。
+rootのホームと`/tmp`の下は入れない。
+そこに置かれた実行ファイルを、名前の解決で拾わないようにするためである。
 
 ### 検査コマンドの権限
 
@@ -5351,13 +5967,18 @@ workerの同時実行数(nativeでないworkerは1)に、片付けられず飛�
 
 実行の順序は次のとおりである。
 
-1. イメージと実行時の前提を確かめる。満たさなければ止まる。
+1. イメージと実行時の前提を確かめる。
+   満たさなければ止まる。
 2. `/tmp/windmill`を0700にする。
-3. 空いている枠を取る。全部埋まっていれば、2秒おきに取り直し、最大5分待つ。待っても取れなければ「検査の枠が空かない」という失敗にする。
-4. 枠を片付ける。片付けられなければ、その枠を手放し、noticeを残して次の枠を試す。
+3. 空いている枠を取る。
+   全部埋まっていれば、2秒おきに取り直し、最大5分待つ。
+   待っても取れなければ「検査の枠が空かない」という失敗にする。
+4. 枠を片付ける。
+   片付けられなければ、その枠を手放し、noticeを残して次の枠を試す。
 5. 枠の記録に、worktreeと`HOME`のパスを書く。
 6. worktreeと`HOME`のうち、rootが所有するものを枠のuidに渡す。
-7. コマンドを、worktreeのロック(`flock`)の下の`prlimit`と`setpriv`で実行する。コマンドごとに、残ったプロセスを止める。
+7. コマンドを、worktreeのロック(`flock`)の下の`prlimit`と`setpriv`で実行する。
+   コマンドごとに、残ったプロセスを止める。
 8. 枠のuidのプロセスがいないことを確かめてから、worktreeの所有権を取り戻す。
 9. `HOME`を消し、共有の一時ディレクトリとIPCから枠のuidのものを消し、枠の記録を消して、枠を手放す。
 
@@ -5378,7 +5999,8 @@ PR修正の完了のステップが、commitの前に同じ理由で止まった
 稼働中のworkerの問題なら、要対応の通知`check_runtime_unsafe`で、パスを閉じるか、workerのコンテナを作り直すよう求める([運用](operations.md#稼働中のworkerが検査の前提を満たさないとき))。
 確かめた結果は、1回の実行の間だけ覚える。
 
-9で共有の一時ディレクトリを消し切れなくても、検査は失敗にしない。次にその枠を取る実行が、4で消し直すためである。
+9で共有の一時ディレクトリを消し切れなくても、検査は失敗にしない。
+次にその枠を取る実行が、4で消し直すためである。
 9で消すのは、番号の大きい枠が次に使われるまで、検査の残したファイルを共有の場所に長く置かないためである。
 
 #### 誰でも書き込めるものの探し方
@@ -5387,16 +6009,19 @@ PR修正の完了のステップが、commitの前に同じ理由で止まった
 ほかのマウント(`/proc`、ボリューム)には入らない。
 `/dev/shm`は`/`と別のファイルシステムなので、`/`からはたどれず、起点に足す。
 rootのジョブがそこに誰でも書けるディレクトリを作ると、`/tmp`の下と同じく、検査用のユーザーが名前を差し替えられるためである。
-`/dev/mqueue`は見ない。ディレクトリを作れないファイルシステムで、共有の一時ディレクトリの下ではディレクトリだけを数えるためである。
+`/dev/mqueue`は見ない。
+ディレクトリを作れないファイルシステムで、共有の一時ディレクトリの下ではディレクトリだけを数えるためである。
 ボリュームのマウントポイントそのものは見るので、`/workspaces`と`/var/lib/factory`はrootの0755にしておく。
 誰でも書ける権限にすると、検査のたびに止まる。
 ボリュームの中は見ないので、そこに残ったものは、導入のときに人が確かめる([前提と残るリスク](#前提と残るリスク))。
-`/tmp/windmill`の下は見ない。検査の前に、所有者だけが入れる権限(0700)へ変えるためである。
+`/tmp/windmill`の下は見ない。
+検査の前に、所有者だけが入れる権限(0700)へ変えるためである。
 
 共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/run/lock`、`/dev/shm`)そのものは数えない。
 その下では、rootが所有し、stickyでない、誰でも書き込めるディレクトリだけを数える。
 検査用のユーザーが、rootの使う名前のファイルを差し替えられる場所になるためである。
-枠のuidのものは数えない。枠を取るたびに消すためである。
+枠のuidのものは数えない。
+枠を取るたびに消すためである。
 ただし、`/tmp/.cache`とその下では、この緩和を当てず、ファイルも含めて数える。
 ベースのイメージが開いている場所で、新しいイメージはビルドで中のものまで閉じるためである。
 
@@ -5451,7 +6076,8 @@ rootが行うのは、`chown`と、後で述べるACLの削除だけである。
 木のほとんどが枠のuidの所有になっているので、ディレクトリごとに`chown`を起動すると時間がかかるためである。
 一括の戻しの後に残るのは、ほかのユーザーのごく少数なので、ディレクトリごとの戻しは短く終わる。
 
-1. rootで、枠のuidのものでないディレクトリすべてと、ほかの非rootのユーザーのものを、枠のuidに集める。書き込みかsetidのビットが立った、rootの単独のファイルも集める。
+1. rootで、枠のuidのものでないディレクトリすべてと、ほかの非rootのユーザーのものを、枠のuidに集める。
+   書き込みかsetidのビットが立った、rootの単独のファイルも集める。
 2. 枠のuidとして、所有者が入れないディレクトリを開ける。
 3. 枠のuidとして、グループとその他の書き込みと、setuidとsetgidのビットを落とす。
 4. rootで、枠のuidのものを`chown -R -P -h --from=<枠のuid>`で一括して戻し、続けて、残ったrootでないものをすべてrootに戻す。
@@ -5475,7 +6101,8 @@ worktreeの外のrootのファイルの権限を変えないためである。
 失敗、タイムアウト、出力があるときは、ディレクトリごとの確かめを正とする。
 ディレクトリごとの確かめは、`find -execdir`で各ディレクトリの中から、名前だけで`getfacl`を呼ぶ。
 `getfacl -R`はパスを組み立てるので、パスの長さがPATH_MAXを超えるエントリがあると失敗する。
-失敗するとき、終了コードは1である。確かめた木(ACLを付けたエントリがどちらもPATH_MAXより深い位置にある)では、標準出力も空だった。
+失敗するとき、終了コードは1である。
+確かめた木(ACLを付けたエントリがどちらもPATH_MAXより深い位置にある)では、標準出力も空だった。
 PATH_MAXを超える木で、終了コード0かつ出力なしになる例は、確かめた範囲では無かった。
 一括が失敗したときは、出力の有無によらず、ディレクトリごとの確かめに戻る。
 そのため、パスが長すぎる木を、一括の確かめで「無い」とみなすことは無い。
@@ -5593,7 +6220,8 @@ rootで動く修正のClaudeが、次のラウンドでそのsymlinkをたどっ
 - 控えにあって中身が同じものは、残す。
   新しく置かれたものは、消して`removed`に載せる。
   失敗にはしない。
-  控えにあって中身が変わったものは、消し、失敗にする。パスで張り直せないためである。
+  控えにあって中身が変わったものは、消し、失敗にする。
+  パスで張り直せないためである。
 - 書き出しを読めないか、inode番号で消せなかったときは、読めないパスとして扱い、後述の全消しの後始末に倒す。
 
 ##### 消す動作と失敗の扱い
@@ -5703,10 +6331,13 @@ rootのClaudeのラウンドへ進ませないためである。
 
 枠を取った実行は、ロックを持ったまま、次の順で片付けてから使う。
 
-1. 枠のuidのプロセスをすべて止める。枠のロックを持つ間、残っているのは終わった実行のものだけだからである。
+1. 枠のuidのプロセスをすべて止める。
+   枠のロックを持つ間、残っているのは終わった実行のものだけだからである。
 2. 記録があれば、そのworktreeの所有権を取り戻し、`HOME`を消し、記録を消す。
-3. 共有の一時ディレクトリから、枠のuidのファイルとディレクトリを消す。消し切れなければ失敗にする。
-4. 枠のuidが所有するか作ったSystem VのIPC(共有メモリ、セマフォ、メッセージキュー)を消す。workerのrootは`CAP_IPC_OWNER`を持たないので、枠のuidとして消す。
+3. 共有の一時ディレクトリから、枠のuidのファイルとディレクトリを消す。
+   消し切れなければ失敗にする。
+4. 枠のuidが所有するか作ったSystem VのIPC(共有メモリ、セマフォ、メッセージキュー)を消す。
+   workerのrootは`CAP_IPC_OWNER`を持たないので、枠のuidとして消す。
 
 2で記録が読めなければ、記録を`slot-N.state.corrupt-<時刻>-<乱数>`へ退避する。
 続けて`check_slot_record_unreadable`のnoticeを残し、記録が無いものとして片付けを続ける。
@@ -5717,13 +6348,15 @@ rootのClaudeのラウンドへ進ませないためである。
 例えば、止まらないプロセス(D状態など)が残ると、片付けに失敗する。
 すべての枠で失敗すれば、検査を失敗させる。
 
-`HOME`は`rm -rf`で消す。GNUの`rm`は`openat`で降り、symlinkをたどらない。
+`HOME`は`rm -rf`で消す。
+GNUの`rm`は`openat`で降り、symlinkをたどらない。
 後始末に失敗した実行は`HOME`を消さず、記録を通して次の片付けに任せる。
 止まらないプロセスが書き換えている木を、rootでたどらないためである。
 
 worktreeを次に使うときにも片付ける。
 関係するプロセスが走査で見えないと分かった後に、記録がそのworktreeを指す枠のロックを取り、上の1と2を行う。
-worktreeのロックが塞がっているのに保持者が見えないときも行う。取り消された検査が別のセッションに残したプロセスが、worktreeのロックを持ち続けることがあるためである。
+worktreeのロックが塞がっているのに保持者が見えないときも行う。
+取り消された検査が別のセッションに残したプロセスが、worktreeのロックを持ち続けることがあるためである。
 1でそのプロセスが止まるので、ロックが空く。
 枠のロックを最大5秒待っても取れなければ、記録を読み直す。
 記録がもうそのworktreeを指していなければ、ロックを持つ実行が片付けを終えたので、先へ進む。
@@ -5748,18 +6381,22 @@ rootでないものが残ったworktreeでは、rootのgitが所有者の違い�
 `kill -1`は、送り手が送れるすべてのプロセスに送り、送り手自身には送らない。
 枠のuidとして送るので、rootのプロセスと別の枠のプロセスには届かない。
 1回のシグナルで、その時点で生きているものがすべて止まるので、止める間に子を作り続けるプロセスにも追い越されない。
-`/proc`で枠のuidの生きたプロセスが見つからなくなるまで、100msおきに送り続ける。30秒を過ぎても残れば、止められないものとして失敗にする。
-この操作は、枠のロックを持つ間にだけ行う。ロックを持たずに行うと、並行して動く別の検査を巻き込むためである。
+`/proc`で枠のuidの生きたプロセスが見つからなくなるまで、100msおきに送り続ける。
+30秒を過ぎても残れば、止められないものとして失敗にする。
+この操作は、枠のロックを持つ間にだけ行う。
+ロックを持たずに行うと、並行して動く別の検査を巻き込むためである。
 
 検査のコマンドには、実行ごとの目印として、補助グループの大きなgidを1つ付ける。
 子孫に受け継がれ、検査用のユーザーは`CAP_SETGID`が無いので外せない。
 別のセッションに抜けたプロセスも、`/proc/<pid>/status`の`Groups`行で、どの実行が起動したかを見分けられる。
-止める対象は目印ではなくuidで選ぶ。枠を取るときに前の実行の残りを止めるので、枠のロックを持つ間の枠のuidのプロセスは、その実行のものだけだからである。
+止める対象は目印ではなくuidで選ぶ。
+枠を取るときに前の実行の残りを止めるので、枠のロックを持つ間の枠のuidのプロセスは、その実行のものだけだからである。
 
 workerには`CAP_SYS_PTRACE`が無いので、別のuidのプロセスの環境変数とfdは読めない。
 プロセスロックの走査は、枠のuidで動くプロセスを一覧に入れない。
 どのworktreeの検査かを特定できず、一覧に入れると無関係なworktreeの走査まで塞ぐためである。
-目印のgidを記録に残して走査で照らし合わせる形は採らない。枠のロックを取れるかどうかで、そのプロセスを起動した実行が終わったかが分かり、記録から止められるためである。
+目印のgidを記録に残して走査で照らし合わせる形は採らない。
+枠のロックを取れるかどうかで、そのプロセスを起動した実行が終わったかが分かり、記録から止められるためである。
 
 #### プロセス数の上限の決め方
 
@@ -5813,14 +6450,20 @@ VM全体の上限は別にあり、測ったVMでは`kernel.threads-max`が64,27
 main cloneの`.git`はrootが所有する。
 検査用のユーザーは、`config`、`hooks/`、`info/attributes`、worktreeごとの`config.worktree`を書き換えられない。
 そのため、検査コマンドがgitの設定を書き換えて、rootのgitに実行させる経路は無い。
-検査コマンドの中のgitは、indexを書けないので`git add`と`git commit`が失敗する。`git status`と`git diff`は動く。
+検査コマンドの中のgitは、indexを書けないので`git add`と`git commit`が失敗する。
+`git status`と`git diff`は動く。
 
 #### 前提と残るリスク
 
 前提は次のとおりである。
 
-- ホストのカーネルで`fs.protected_hardlinks`と`fs.protected_symlinks`が1である。他のユーザーのファイルへのリンクを作らせないためである。1でなければ、検査の実行のたびにnoticeへ警告を足す。検査は止めない。
-- Docker Engineがuser namespaceの再マップ(userns-remap)やrootlessで動いていない。再マップがあると、目印の補助グループが設定できず、検査が失敗する。検査が失敗するだけで、安全側に倒れる。
+- ホストのカーネルで`fs.protected_hardlinks`と`fs.protected_symlinks`が1である。
+  他のユーザーのファイルへのリンクを作らせないためである。
+  1でなければ、検査の実行のたびにnoticeへ警告を足す。
+  検査は止めない。
+- Docker Engineがuser namespaceの再マップ(userns-remap)やrootlessで動いていない。
+  再マップがあると、目印の補助グループが設定できず、検査が失敗する。
+  検査が失敗するだけで、安全側に倒れる。
 - `allowed_check_commands`と`check_commands_by_repo`に、`.git`へ書き込むコマンドを置かない。
   `git add`、`git commit`、`git stash`、lint-stagedなどである。
   main cloneの`.git`はrootの所有なので、検査用のユーザーでは失敗する。
@@ -5834,10 +6477,19 @@ main cloneの`.git`はrootが所有する。
 
 残るリスクは次のとおりである。
 
-- 検査用のユーザーは、`/workspaces`の下の他のリポジトリのcloneとworktreeを読める。cloneのURLにトークンは無い。`/workspaces/<owner>/<repo>`を0700にすると、worktreeの受け渡しと衝突しやすいので、今は受け入れる。
-- 検査が並行して動く構成にしたときは、検査の間でもworktreeのファイルは読める。書き込めるのは、検査が権限のビットかACLで誰でも書けるようにしたものだけで、そこに置かれたものは取り戻しでrootに戻り、ACLも消える。ハードリンクで置かれたものは、worktreeの外のリンク先ごとrootに戻る([所有権の取り戻し](#所有権の取り戻し))。HOMEは他の枠から書けないが、0755にされると読める。
-- 検査コマンドは、workerと同じコンテナとnetworkで動く。DBとWindmillの宛先に届く。認証に使う秘密には届かないが、認証が要らない経路には届く。
-- メモリとCPUはworkerと共有する。検査コマンドがworkerのジョブを枯渇させうる。プロセス数は、検査が上限まで使い、飛ばした枠が2つ残っても、検査の外に256が残るように抑える。
+- 検査用のユーザーは、`/workspaces`の下の他のリポジトリのcloneとworktreeを読める。
+  cloneのURLにトークンは無い。
+  `/workspaces/<owner>/<repo>`を0700にすると、worktreeの受け渡しと衝突しやすいので、今は受け入れる。
+- 検査が並行して動く構成にしたときは、検査の間でもworktreeのファイルは読める。
+  書き込めるのは、検査が権限のビットかACLで誰でも書けるようにしたものだけで、そこに置かれたものは取り戻しでrootに戻り、ACLも消える。
+  ハードリンクで置かれたものは、worktreeの外のリンク先ごとrootに戻る([所有権の取り戻し](#所有権の取り戻し))。
+  HOMEは他の枠から書けないが、0755にされると読める。
+- 検査コマンドは、workerと同じコンテナとnetworkで動く。
+  DBとWindmillの宛先に届く。
+  認証に使う秘密には届かないが、認証が要らない経路には届く。
+- メモリとCPUはworkerと共有する。
+  検査コマンドがworkerのジョブを枯渇させうる。
+  プロセス数は、検査が上限まで使い、飛ばした枠が2つ残っても、検査の外に256が残るように抑える。
 - 検査のプロセス自身は、worktree、`HOME`、共有の一時ディレクトリの外に書けない。
   ただし、検査がworktreeの中身を書き換えた結果は、次のラウンドでrootの処理に影響しうる。
   例えば、gitが無視するパス(`node_modules/`など)に、worktreeの外を指すsymlinkを置ける。
@@ -5847,11 +6499,18 @@ main cloneの`.git`はrootが所有する。
   取り戻しが失敗した実行と、取り消された実行は検出まで進まない。
   その場合は、回復の経路が取り戻した後に、絶対パスか`..`を含むsymlinkをすべて消す。
   実装フローは、次の検査の前の`git clean -fdX`で、無視されるパスのsymlinkを消す。
-- 共有の一時ディレクトリとSystem VのIPCは、並行して動く別の枠の検査と共有する。権限で開いたものは、別の枠から読み書きできる。同じuidを次に使う実行には、枠を取るときに消してから渡す。
-- `/proc/<pid>/cmdline`は誰でも読める。workerのプロセスの引数に秘密を載せない。
-- `/var/lib/factory`の`requirements`と`audits`は0755で、検査用のユーザーが読める。`claude`は一覧を読めるが、中のファイルは0600である。
-- Windmillが`/tmp/windmill`の権限を戻す契機は確かめていない。戻ると、その間だけ上の保護が外れる。検査の前には、毎回0700へ直す。
-- 共有の一時ディレクトリの下にある、rootが所有する誰でも書き込めるファイルは数えない。検査用のユーザーは、その中身を書き換えられる。
+- 共有の一時ディレクトリとSystem VのIPCは、並行して動く別の枠の検査と共有する。
+  権限で開いたものは、別の枠から読み書きできる。
+  同じuidを次に使う実行には、枠を取るときに消してから渡す。
+- `/proc/<pid>/cmdline`は誰でも読める。
+  workerのプロセスの引数に秘密を載せない。
+- `/var/lib/factory`の`requirements`と`audits`は0755で、検査用のユーザーが読める。
+  `claude`は一覧を読めるが、中のファイルは0600である。
+- Windmillが`/tmp/windmill`の権限を戻す契機は確かめていない。
+  戻ると、その間だけ上の保護が外れる。
+  検査の前には、毎回0700へ直す。
+- 共有の一時ディレクトリの下にある、rootが所有する誰でも書き込めるファイルは数えない。
+  検査用のユーザーは、その中身を書き換えられる。
 - workerのジョブは`HOME`が`/root`で、`TMPDIR`が無い。
   共有の`/tmp`に作られる一時ファイルは、まだ無い名前なら検査用のユーザーが先に作れ、その後でrootのジョブがそれを使いうる。
   そのため、ジョブごとに`/run/factory-tmp/fj-<ジョブID>`を0700で作り、一時ファイルをそこへ向ける。
@@ -5861,19 +6520,26 @@ main cloneの`.git`はrootが所有する。
   - Claudeの設定の置き場(`CLAUDE_CONFIG_DIR`)も、ここの下の`claude-config`にする。
   - Claudeの設定の置き場をジョブごとにするのは、`--setting-sources user`が読むユーザー層に、永続のボリュームの設定や、人が手で動かしたClaudeの変更を混ぜないためである。
   - Claude Codeが`TMPDIR`に従うかは確かめていないので、`CLAUDE_CODE_TMPDIR`にも同じ場所を渡す。
-  - `/run/factory-tmp`はジョブが作る。rootの所有なら、0700でなくても0700に直して使う。他のユーザーの所有かsymlinkなら、ジョブを失敗させる。
+  - `/run/factory-tmp`はジョブが作る。
+    rootの所有なら、0700でなくても0700に直して使う。
+    他のユーザーの所有かsymlinkなら、ジョブを失敗させる。
   - 既にあるジョブ用のディレクトリが、他のユーザーの所有か、他のユーザーに開いているときも、ジョブを失敗させる。
   - ジョブのIDが読めないときは、共有の`/tmp`を使うことを警告に残し、ジョブは止めない。
   - ジョブの終了時に、プロセスの終了処理でディレクトリの削除を試みる。
-  - 消えなかったものは、毎日の作業領域の掃除が、3日を過ぎてから消す。取り消しやworkerの強制終了で終了処理が走らなかったものも、ここで消える。
+  - 消えなかったものは、毎日の作業領域の掃除が、3日を過ぎてから消す。
+    取り消しやworkerの強制終了で終了処理が走らなかったものも、ここで消える。
     掃除も、消す前に`/run/factory-tmp`を同じ基準で確かめ、満たさなければ何も消さない。
     ジョブ用のディレクトリが他のユーザーの所有か、他のユーザーに開いているときも、rootでは消さずに失敗として残す。
-    3日は、`claude_timeout_sec`と`implement_timeout_sec`の既定値より十分長い。設定がこの3日を超える値は、設定の検証が拒否する。
+    3日は、`claude_timeout_sec`と`implement_timeout_sec`の既定値より十分長い。
+    設定がこの3日を超える値は、設定の検証が拒否する。
   - `TMPDIR`を渡さないworkerのプロセス自身(Windmillとbunの依存の取得など)は、共有の`/tmp`を使う。
   - ClaudeのBashツールが固定の名前で`/tmp`の下に書く場合は、`TMPDIR`では塞げない。
   - 検査の準備が`lockDownRuntimeDir`で閉じるのは`/tmp/windmill`だけで、`/run/factory-tmp`には触れない。
   - 検査用のユーザーが共有の`/tmp`に作ったものは、枠を取るときと手放すときに消える。
-- 取り消されたジョブが残した、枠のuidの孤児プロセスは、同じ枠が次に使われるか、そのworktreeが次に使われるまで残る。その間は、記録したworktreeと`HOME`を書き換え、共有の一時ディレクトリにファイルを作りうる。取り消されたジョブでは手放すときの片付けが走らないので、共有の一時ディレクトリのものは、同じ枠が次に使われて消されるまで残る。片付けでプロセスを止めてから取り戻すので、次にそのworktreeを使う実行と、その枠の次の利用者には引き継がれない。
+- 取り消されたジョブが残した、枠のuidの孤児プロセスは、同じ枠が次に使われるか、そのworktreeが次に使われるまで残る。
+  その間は、記録したworktreeと`HOME`を書き換え、共有の一時ディレクトリにファイルを作りうる。
+  取り消されたジョブでは手放すときの片付けが走らないので、共有の一時ディレクトリのものは、同じ枠が次に使われて消されるまで残る。
+  片付けでプロセスを止めてから取り戻すので、次にそのworktreeを使う実行と、その枠の次の利用者には引き継がれない。
 - 所有権の受け渡しと取り戻しは、ディレクトリの数に比例して時間がかかる。
   取り戻しは常に一括で、受け渡しもハードリンクが無ければ一括なので、約9,300個のディレクトリで`chown -R`は約0.1秒、約9万3千個で約2秒である。
   残りは`find`と`getfacl`がたどる時間で、1回に、約9,300個なら約0.1秒、約9万3千個なら1〜2秒かかる。
@@ -5905,14 +6571,18 @@ workerと同じ制限の使い捨てのコンテナで、実際のsetpriv、floc
 
 ### 対象リポジトリの設定を信頼しない
 
-対象リポジトリの`mise.toml`や`package.json`のscriptsは、信頼できない入力として扱う。workerのmiseは対象リポジトリの`mise.toml`を信頼しない。信頼が無いと動かない検査コマンドは実行せず、止めて報告する。
+対象リポジトリの`mise.toml`や`package.json`のscriptsは、信頼できない入力として扱う。
+workerのmiseは対象リポジトリの`mise.toml`を信頼しない。
+信頼が無いと動かない検査コマンドは実行せず、止めて報告する。
 
 ### 保護パスの変更を止める
 
-保護パスを変更したら、修正を止める。保護パスは`.claude/`、`.agents/`、`mise.toml`、`lefthook.yml`、`package.json`のscripts、新しい`*.sh`などである。
+保護パスを変更したら、修正を止める。
+保護パスは`.claude/`、`.agents/`、`mise.toml`、`lefthook.yml`、`package.json`のscripts、新しい`*.sh`などである。
 CIのワークフローとcomposite action(`.github/workflows/`と`.github/actions/`)も含む。
 これらはFactoryやCIが実行する設定で、書き換えられるとコードを実行されるためである。
-markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。どちらも設定から任意のモジュールを読み込め、pre-commitと`check-docs`ジョブの`mise run lint:docs`が読むためである。
+markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。
+どちらも設定から任意のモジュールを読み込め、pre-commitと`check-docs`ジョブの`mise run lint:docs`が読むためである。
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
 固定を書き換えるPRを作る側も止める。
@@ -5924,7 +6594,8 @@ Consoleでバンドルを通らずに配信される`console/public/`と`console
 - `drawio_viewer_observations.ts`
 
 この3つのscript定義(`.script.yaml`)も対象である。
-lockは保護しない。理由は、残るリスクと「libのlockを保護しない理由」に書いた。
+lockは保護しない。
+理由は、残るリスクと「libのlockを保護しない理由」に書いた。
 
 dependabotのセキュリティ更新PRを自動で処理するフローも止める。
 対象は、次のscriptと定義である。
@@ -5932,15 +6603,19 @@ dependabotのセキュリティ更新PRを自動で処理するフローも止�
 - マージの判定、影響調査のプロンプト、npm registryの取得、ゲート入力の組み立て、フローの支援関数
 - PRの取得、スケジュール、3つのステップ
 - 上のscriptそれぞれの定義(`.script.yaml`)
-- フローのディレクトリ(`f/factory/dependabot__flow/`)の全体。フローに埋め込むモジュールも含む
+- フローのディレクトリ(`f/factory/dependabot__flow/`)の全体。
+  フローに埋め込むモジュールも含む
 
 書き換えられると、許可していない更新を人の確認なしにマージできるためである。
-まだ存在しないファイルも、名前を先に止める。後から置かれたファイルが、保護から漏れないようにするためである。
-PRの取得とステップのlockは止めない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
+まだ存在しないファイルも、名前を先に止める。
+後から置かれたファイルが、保護から漏れないようにするためである。
+PRの取得とステップのlockは止めない。
+`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
 共有のGitHub取得(`f/factory/lib/github.ts`)は、ほかのフローも使うので止めない。
 
 固定を強制し、配信物を作って検査するスクリプトも止める。
-図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。
+一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 scriptの定義の`lock`が自分の`.script.lock`を指す契約テストも止める。
 対象は`tests/lib/script_yaml_lock_contract.test.ts`である。
 `wmill sync push`は、`lock: '!inline <パス>'`のパスを読み、中身をlockとして保存する。
@@ -6035,7 +6710,8 @@ CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める
 CIが出すメタデータのパッチを取得して検査する`f/factory/lib/metadata_patch_*.ts`の6つも止める。
 6つは、manifest、zip、yaml、verify、imports、downloadである。
 それぞれの`.script.yaml`も止める。
-lockは、`metadata_patch_manifest.script.lock`だけを止める。新しいscriptのlockを照合するときの空のlockの参照(`EMPTY_LOCK_REFERENCE`)で、壊されると新しいscriptの自動適用が断られ続けるためである。
+lockは、`metadata_patch_manifest.script.lock`だけを止める。
+新しいscriptのlockを照合するときの空のlockの参照(`EMPTY_LOCK_REFERENCE`)で、壊されると新しいscriptの自動適用が断られ続けるためである。
 書き換えられると、パッチの受け取り側の検査が緩むためである。
 
 `wmill-lock.yaml`のhashを再計算する`f/factory/lib/`の`metadata_hash`、`metadata_precheck`、`metadata_signature`も止める。
@@ -6054,14 +6730,22 @@ implementのClaudeは保護パスの変更を記録するだけで止まらな�
 中身は`"dependencies": {}`と`<empty>`だけである。
 `metadata_patch_manifest.script.lock`は、空のlockの参照なので保護する。
 
-- libは`main`を持たず、単独のjobとして動かない。importする側のscriptは、自分の`.ts`と`.script.lock`で動くので、libのlockは実行の入力にならない。
-- libの`.ts`と、`lock`の参照先をlib自身のlockに固定する`.script.yaml`は、保護する。`.script.yaml`の`lock: '!inline <パス>'`は、反映のときに`wmill sync push`が読む。書き換えられると、任意のファイルがlockとして保存されうる。
-- CI回と競合回は、`*.script.lock`を全scriptについて拒否する(`ci_fix_paths.ts`)。この拒否は変わらない。
-- メタデータのパッチを適用する経路は、対応する`.ts`が保護されたscriptのlockを`protected_source`で拒否する。拒否の理由は`protected_path`から変わりうるが、拒否は続く。
-- 保護しない前提は「libが入口を持たない」ことである。`tests/lib/protected_paths.test.ts`が、保護するlibの`.ts`に次が無いことを固定する。
+- libは`main`を持たず、単独のjobとして動かない。
+  importする側のscriptは、自分の`.ts`と`.script.lock`で動くので、libのlockは実行の入力にならない。
+- libの`.ts`と、`lock`の参照先をlib自身のlockに固定する`.script.yaml`は、保護する。
+  `.script.yaml`の`lock: '!inline <パス>'`は、反映のときに`wmill sync push`が読む。
+  書き換えられると、任意のファイルがlockとして保存されうる。
+- CI回と競合回は、`*.script.lock`を全scriptについて拒否する(`ci_fix_paths.ts`)。
+  この拒否は変わらない。
+- メタデータのパッチを適用する経路は、対応する`.ts`が保護されたscriptのlockを`protected_source`で拒否する。
+  拒否の理由は`protected_path`から変わりうるが、拒否は続く。
+- 保護しない前提は「libが入口を持たない」ことである。
+  `tests/lib/protected_paths.test.ts`が、保護するlibの`.ts`に次が無いことを固定する。
   `main`、`preprocessor`、行頭の`export default`、再exportである。
   崩れたら、lockを保護に戻す。
-- 実機のWindmillで、libのlockが使われないことは確かめていない。根拠は、Windmillの文書とリポジトリの実物である。前提が外れていても、importする側のlock(`steps/*.script.lock`など)がすでに保護の外にあるので、新しい種類の穴は増えない。
+- 実機のWindmillで、libのlockが使われないことは確かめていない。
+  根拠は、Windmillの文書とリポジトリの実物である。
+  前提が外れていても、importする側のlock(`steps/*.script.lock`など)がすでに保護の外にあるので、新しい種類の穴は増えない。
 
 #### 修正と実装で範囲が違う理由
 
@@ -6124,8 +6808,10 @@ lockfileや`package.json`の`trustedDependencies`も、人がinstallしたとき
 これらも、受け入れる対象に含める。
 通常の回を実装の一覧にそろえる場合は、次のどちらかを選ぶ。
 
-- 実装の一覧だけに当たったパスを、返信と通知に載せる。コードとテストの変更で足りる。
-- 実装の回と同じに、止めずに検査を省き、返信と通知に載せる。検査をしていない修正を、既存のPRのheadへpushする。
+- 実装の一覧だけに当たったパスを、返信と通知に載せる。
+  コードとテストの変更で足りる。
+- 実装の回と同じに、止めずに検査を省き、返信と通知に載せる。
+  検査をしていない修正を、既存のPRのheadへpushする。
 
 保護パスで止まった回の集計は、この差の根拠にしない。
 通常の回について、集計が数えるのは`FORBIDDEN_*`に当たって止めた回で、lockfileやツールの設定を書き換えて通った回は数えない([保護パスで止まった回数を数える](operations.md#保護パスで止まった回数を数える))。
@@ -6134,15 +6820,21 @@ CIの修正と競合の修正は、実装の一覧を使うので、この差を
 
 ### symlinkと特殊なファイルを止める
 
-symlinkの作成・変更・削除、入れ子のリポジトリ、`.git`という要素を含むパス、通常のファイルでないものがあれば止める。symlinkを通すと、作業ディレクトリの外のファイルを読み書きされるためである。変更の一覧は、引用符付きのパスや未追跡のディレクトリでも判定を素通りしない形で取得する。
+symlinkの作成・変更・削除、入れ子のリポジトリ、`.git`という要素を含むパス、通常のファイルでないものがあれば止める。
+symlinkを通すと、作業ディレクトリの外のファイルを読み書きされるためである。
+変更の一覧は、引用符付きのパスや未追跡のディレクトリでも判定を素通りしない形で取得する。
 
 ### HEADとブランチの確認
 
-変更を調べる前に、worktreeのHEADとブランチが、準備のときに見たPRのものと同じかを確かめる。検査コマンドがcommitやブランチの切り替えをすると、その変更が差分から消えて検査を素通りするためである。
+変更を調べる前に、worktreeのHEADとブランチが、準備のときに見たPRのものと同じかを確かめる。
+検査コマンドがcommitやブランチの切り替えをすると、その変更が差分から消えて検査を素通りするためである。
 
 ### worktreeの.gitファイルの書き換えを止める
 
-worktreeの`.git`ファイルは、準備のときに検証して中身を記録する。以降、Claudeを起動する前とgitを実行する前に、記録と一致することを確かめる。参照先を別のディレクトリに向けられると、そこのconfigの設定を次のgitがrootで実行するためである。この安全策は実装のフローでも同じように働く。
+worktreeの`.git`ファイルは、準備のときに検証して中身を記録する。
+以降、Claudeを起動する前とgitを実行する前に、記録と一致することを確かめる。
+参照先を別のディレクトリに向けられると、そこのconfigの設定を次のgitがrootで実行するためである。
+この安全策は実装のフローでも同じように働く。
 
 ### gitが読む設定を限る
 
@@ -6154,12 +6846,14 @@ workerのホストの設定が、検証の前提を変えないためである�
 コミットのauthorは環境変数で、認証は`GH_TOKEN`で渡すので、これらの設定は要らない。
 workerのイメージは、グローバルのgit設定もgtrのグローバル設定も持たない。
 HOMEは、ghなどの子プロセスと、gitの`~`の展開(`.git/config`のパスの`~`、httpsの`$HOME/.netrc`)のために渡す。
-workerのHOMEには`.netrc`を置かない。イメージにも置いていない。
+workerのHOMEには`.netrc`を置かない。
+イメージにも置いていない。
 `safe.directory`は設定しない。
 workerとcloneはどちらもrootで動き、`/workspaces`のボリュームの所有者が同じになるためである。
 Dockerfileとworkerの`docker-compose.yml`に、`USER`と`user:`の指定は無い。
 
-転送はhttpsだけを許す。環境変数`GIT_ALLOW_PROTOCOL`を`https`にする。
+転送はhttpsだけを許す。
+環境変数`GIT_ALLOW_PROTOCOL`を`https`にする。
 `.git/config`に`protocol.ext.allow=always`と`ext::`のremoteを書かれると、`GH_TOKEN`を持つ環境でコマンドを実行されうる。
 この環境変数は`protocol.*`の設定より優先されるので、設定ファイルでは許可を広げられない。
 対象のremoteはhttpsだけなので、fileやsshは使えなくてよい。
@@ -6167,7 +6861,8 @@ Dockerfileとworkerの`docker-compose.yml`に、`USER`と`user:`の指定は無�
 main cloneの`.git/config`は、gitがremoteやブランチの設定を読むので、読ませないことはできない。
 `extensions.worktreeConfig`が有効なときは、worktreeごとの`config.worktree`も読まれる。
 どちらも書き換えられると、`-c`では`config.worktree`の読み込みを止められない。
-検査コマンドは別のuidで動き、書き込めない。書き込める経路が増えたときに備えて固定する。
+検査コマンドは別のuidで動き、書き込めない。
+書き込める経路が増えたときに備えて固定する。
 そこで、プログラムの実行と検証の前提に関わる設定を、コマンドラインの`-c`で固定する。
 `-c`はどの設定ファイルよりも優先されるので、設定ファイルに別の値を書かれても効かない。
 `git gtr`の子のgitにも、環境変数`GIT_CONFIG_PARAMETERS`を通して渡る。
@@ -6208,7 +6903,9 @@ Factoryのリポジトリにsymlinkを足すと、self cloneでは普通のフ�
 
 ### コミットの直前の再検査
 
-完了のステップは検証とは別のジョブなので、commitの前にもう一度確かめる。worktreeを使うプロセスが残っていないこと、ブランチとHEADが記録どおりであること、ステージした内容に保護パスやsymlinkが無いことを見る。1つでも通らなければ、commitとpushをしない。
+完了のステップは検証とは別のジョブなので、commitの前にもう一度確かめる。
+worktreeを使うプロセスが残っていないこと、ブランチとHEADが記録どおりであること、ステージした内容に保護パスやsymlinkが無いことを見る。
+1つでも通らなければ、commitとpushをしない。
 
 commitの前には、実装フローと同じgitleaksの検査もする。
 commitするツリーは、gitleaksが検査したツリーと同じことを確かめ、pushは作ったcommitのshaだけを送る。
@@ -6217,7 +6914,9 @@ commitするツリーは、gitleaksが検査したツリーと同じことを確
 
 ### 差し替えとサブモジュールに惑わされない
 
-gitの実行には`GIT_NO_REPLACE_OBJECTS=1`を付け、`refs/replace/`で差し替えたオブジェクトを読まない。変更の一覧には`--ignore-submodules=none`を付け、サブモジュールの変更を隠させない。差し替えのrefとサブモジュールの設定は、検査コマンドが作れるためである。
+gitの実行には`GIT_NO_REPLACE_OBJECTS=1`を付け、`refs/replace/`で差し替えたオブジェクトを読まない。
+変更の一覧には`--ignore-submodules=none`を付け、サブモジュールの変更を隠させない。
+差し替えのrefとサブモジュールの設定は、検査コマンドが作れるためである。
 
 同じ理由で、ローカルの`origin/HEAD`と追跡ref(`refs/remotes/origin/*`)も、送る内容を決めるときには信じない。
 検査コマンドはメインのcloneの`.git`を書き換えられ、`--prune`なしのfetchは書き換えられた`origin/HEAD`を直さない。
@@ -6226,7 +6925,8 @@ gitの実行には`GIT_NO_REPLACE_OBJECTS=1`を付け、`refs/replace/`で差し
 
 ### 差分の大きさの上限
 
-変更したファイルの数が`max_fix_changed_files`を超えるか、差分の行数が`max_fix_diff_lines`を超えたら止める。マージの衝突やファイルの削除による大きな変更を、レビューなしにpushしないためである。
+変更したファイルの数が`max_fix_changed_files`を超えるか、差分の行数が`max_fix_diff_lines`を超えたら止める。
+マージの衝突やファイルの削除による大きな変更を、レビューなしにpushしないためである。
 
 ### PRの状態とheadの確認
 
@@ -6266,7 +6966,9 @@ pushの直前には、PRのheadが準備のときから変わっていないこ�
 
 ### コミットの作成者情報
 
-コミットのauthorとcommitterには、PATのアカウントのログイン名とGitHubのnoreplyメールアドレスを使う。個人のメールアドレスをどこにも書き込まないためである。値は`git commit`の環境変数としてだけ渡し、git configには書かない。
+コミットのauthorとcommitterには、PATのアカウントのログイン名とGitHubのnoreplyメールアドレスを使う。
+個人のメールアドレスをどこにも書き込まないためである。
+値は`git commit`の環境変数としてだけ渡し、git configには書かない。
 
 ### CIのログの扱い
 
@@ -6304,12 +7006,15 @@ CIの失敗を直す回の部品は、Actionsのログを取り込んでClaude�
   差分は、`-U0 --inter-hunk-context=0 --diff-algorithm=myers`で取り、hunkの見出しの行数ではなく、中の行を数えて読む。
   利用者の設定で範囲がずれないようにするためである。
   PR側と先端側の差分は`--ignore-all-space`も付け、PRが字下げだけを変えた基点の行を、PRが足した行にしない。
-  整形で1行が複数行に分かれたときは、分かれた行がPRの追加になる。これは受け入れている。
+  整形で1行が複数行に分かれたときは、分かれた行がPRの追加になる。
+  これは受け入れている。
   PRが足した行でも、空行とコメントだけの行(行頭が`//`、`#`、`/*`、`*`、`<!--`の行)への置き換えと、削除より意味のある追加行が少ないhunkは拒否する。
-  判定は行頭の文字列だけで行う。`void 0;`、`;`、`if (false) ...`のような、書いてあるが何もしない行への置き換えは検出できない。
+  判定は行頭の文字列だけで行う。
+  `void 0;`、`;`、`if (false) ...`のような、書いてあるが何もしない行への置き換えは検出できない。
   `#`で始まる行は常にコメントと読むので、Rustの属性やCのプリプロセッサの行を書き換える修正は拒否される。
   `--`、`;`、`%`で始まるコメントは見分けない。
-  差分が大きすぎるとき、読めないときは、拒否に倒す。APIやgitの一時的な失敗は、例外にして自動の回復に任せる。
+  差分が大きすぎるとき、読めないときは、拒否に倒す。
+  APIやgitの一時的な失敗は、例外にして自動の回復に任せる。
   基点を取り込むgitは、`.git`の記録を照合した直後にだけ実行する。
   基点は、PRが既定のブランチを向いているときだけ求める。
   既定でないブランチは、そのテストを持たないことがあり、持たないと全行がPRの追加に見えるためである。
@@ -6330,15 +7035,19 @@ CIの失敗を直す回の部品は、Actionsのログを取り込んでClaude�
   再レビューに頼る。
   PRが足した行の書き換えを許すので、この限界はPRが足した行にも及ぶ。
   行の数と位置だけを見るので、同じhunkの中で別の行へ置き換える変更も、書き換えと区別できない。
-  置き換え先の行の判定は、行頭の文字列だけで行う。`void 0;`、`;`、`if (false) ...`のような、何もしない行への置き換えは検出できない。
+  置き換え先の行の判定は、行頭の文字列だけで行う。
+  `void 0;`、`;`、`if (false) ...`のような、何もしない行への置き換えは検出できない。
   再レビューは、PR全体の差分を読み、CI回のcommit単体の差分(書き換え前後の行)は入力に無い。
   書き換えは、最終の形が新しいコードとして読まれ、気づかれない可能性が残る。
-- 空白を無視した差分では、行の位置がずれる。次の2点は受け入れている。
+- 空白を無視した差分では、行の位置がずれる。
+  次の2点は受け入れている。
   - 隣り合う同じ内容の行は、どちらがPRの追加かを決められず、基点の行がPRの追加に見えることがある。
-  - 字下げだけが違う複製の行は、同じ行と見なされる。字下げに意味がある言語のテストでは、基点の行がすり替わりうる。
+  - 字下げだけが違う複製の行は、同じ行と見なされる。
+    字下げに意味がある言語のテストでは、基点の行がすり替わりうる。
 - どのファイルへでも、PRが移した行はPRの追加に見える。
   基点のテストの行を消して別のファイル(新しいファイルを含む)へ移したPRでは、移した行を1行ずつ書き換える変更が通る。
-  名前の変更も検出しない。行を削る変更は、意味のある追加行より多く減らせないので通らない。
+  名前の変更も検出しない。
+  行を削る変更は、意味のある追加行より多く減らせないので通らない。
 - ログの取得先は署名付きURLへの302で、`gh`が内部でたどる。
   認証情報が別のホストへ渡らないことは、`gh`の挙動に頼る。
 - 拒否した安全装置が直接importするモジュールのうち、`db`、`discord`、`poll_support`、`implement_*`などの共有モジュールは、拒否せずに受け入れている。
@@ -6363,7 +7072,8 @@ git操作は`lib/workspace.ts`の`mergeBaseIntoWorktree`と`pushMergeCommit`に�
 
 mergeするのは、PRのbaseがリモートの既定のブランチのときだけである。
 `git ls-remote --symref`でリモートの`HEAD`が指すブランチを、完全なref名で照合し、そのブランチの先頭のshaを読む。
-ローカルの追跡ref(`refs/remotes/origin/*`)は読まない。検査コマンドが書き換えられるためである。
+ローカルの追跡ref(`refs/remotes/origin/*`)は読まない。
+検査コマンドが書き換えられるためである。
 
 読んだshaを明示してfetchし、mergeもそのshaで行う。
 fetchはサブモジュールに降りない。
@@ -6377,14 +7087,16 @@ PATにWorkflowsの権限は付けない([GitHubのPAT](#githubのpat))。
 baseの側が`.github/workflows/`を変えていると、mergeコミットのpushは拒否される。
 そのため、mergeした結果のツリーで、PRのheadからの差に`.github/workflows/`が含まれれば、Claudeを起動せずに止める。
 それでもpushが`.github/workflows/`を理由に拒否されたときは、他の拒否と区別して返す。
-区別は、拒否の行の括弧の中の理由だけで行う。ブランチ名に`.github/workflows/`を含む別の拒否を、取り違えないためである。
+区別は、拒否の行の括弧の中の理由だけで行う。
+ブランチ名に`.github/workflows/`を含む別の拒否を、取り違えないためである。
 
 #### mergeコミットのpush
 
 pushするのは、検査したツリーを持ち、親が[PRのhead, base]のmergeコミット1つだけである。
 rebaseとforce pushはしない。
 
-基準コミットは送らない。基準コミットは衝突マーカーを残したままローカルにだけ作り、pushするコミットは`commit-tree`で新しく作る。
+基準コミットは送らない。
+基準コミットは衝突マーカーを残したままローカルにだけ作り、pushするコミットは`commit-tree`で新しく作る。
 競合ファイルだけをステージして作ったツリーが、検査したツリーと一致することは、コミットを作る前に確かめる。
 
 第2親(base)の履歴は、すでにリモートにある。
@@ -6434,7 +7146,8 @@ gitの2.54で、graftsが効くことと、この指定で無効になること�
 ローカルのgitには、authorとcommitterを環境変数で渡す。
 `merge`はコミットを作らない呼び出しでも、利用者名が決まらないと失敗するためである。
 実行する環境の利用者設定には頼らず、設定ファイルには書き込まない。
-基準コミットには、競合ファイルだけを`add`する。`add -A`は使わない。
+基準コミットには、競合ファイルだけを`add`する。
+`add -A`は使わない。
 
 #### 残るリスク
 
@@ -6477,15 +7190,21 @@ gitの2.54で、graftsが効くことと、この指定で無効になること�
 
 ## 実装の安全策
 
-実装のフロー(`implement`)も、Claudeに書き込みのツールを与える。PRを作るところで止まり、マージは常に人が行う。実装のフローはmerge APIを呼ばない。仕組みの詳細は[実装フローの仕様](internals/implement.md)にある。
+実装のフロー(`implement`)も、Claudeに書き込みのツールを与える。
+PRを作るところで止まり、マージは常に人が行う。
+実装のフローはmerge APIを呼ばない。
+仕組みの詳細は[実装フローの仕様](internals/implement.md)にある。
 
 ### ツールの制限と検査の分担
 
-Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで、`Bash`は渡さない。検査コマンドはフローが実行する。
+Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで、`Bash`は渡さない。
+検査コマンドはフローが実行する。
 
 ### 取り込み後のIssueの書き換え
 
-Claudeに渡すIssueの題名と本文は、作業項目に取り込んだものである。承認の後にIssueを書き換えても、プロンプトには入らない。現在のIssueは、openかどうかの確認と、PR本文の注記にだけ使う。
+Claudeに渡すIssueの題名と本文は、作業項目に取り込んだものである。
+承認の後にIssueを書き換えても、プロンプトには入らない。
+現在のIssueは、openかどうかの確認と、PR本文の注記にだけ使う。
 
 取り込んだ内容が変わる経路は、却下や再実行による作り直しだけである。
 作り直しの前に、取り込んだ題名と本文を現在のIssueの内容へ更新する([作業項目の状態とリース](internals/work-items.md)の「却下と再生成」)。
@@ -6493,26 +7212,47 @@ Claudeに渡すIssueの題名と本文は、作業項目に取り込んだもの
 
 承認者が見ていない内容が渡らないよう、次の策を重ねる。
 
-- Consoleの要件定義の承認画面に、取り込んだ題名と本文を出す。更新後の内容は更新後の値で出し、更新したことを警告で示す。
-- 同じ画面に、承認する試行の要件定義書を並べる。取り込んだ内容と要件定義書の両方を見られるまで、承認を押せない。承認の試行が分からないときは、最新の試行で代えず、承認を止める。
-- 要件定義の承認では、決定を記録する前に現在のIssueを取り込んだ内容と比べる。違うときと、比べられなかったときは、承認を断る。比べる処理は`approval_decide`の中で、`github_token`を使ってGitHubのREST APIを`fetch`で読む。Console用のworkerの`github_token`の扱いは[Console用workerの境界](#console用workerの境界)に書く。
-- 取り込んだ内容を更新したときは、`work_item_events`に文字数とハッシュを残し、noticeとDiscordで承認者に知らせる(再実行ではnoticeだけ)。更新後の内容は信頼できない入力なので、履歴にはそのまま入れない。
-- 更新したことのある作業項目のPR本文には、「確認して欲しい点」に注記を必ず出す。更新後の内容と現在のIssueを比べる注記では、更新のときの書き換えを拾えないためである。
+- Consoleの要件定義の承認画面に、取り込んだ題名と本文を出す。
+  更新後の内容は更新後の値で出し、更新したことを警告で示す。
+- 同じ画面に、承認する試行の要件定義書を並べる。
+  取り込んだ内容と要件定義書の両方を見られるまで、承認を押せない。
+  承認の試行が分からないときは、最新の試行で代えず、承認を止める。
+- 要件定義の承認では、決定を記録する前に現在のIssueを取り込んだ内容と比べる。
+  違うときと、比べられなかったときは、承認を断る。
+  比べる処理は`approval_decide`の中で、`github_token`を使ってGitHubのREST APIを`fetch`で読む。
+  Console用のworkerの`github_token`の扱いは[Console用workerの境界](#console用workerの境界)に書く。
+- 取り込んだ内容を更新したときは、`work_item_events`に文字数とハッシュを残し、noticeとDiscordで承認者に知らせる(再実行ではnoticeだけ)。
+  更新後の内容は信頼できない入力なので、履歴にはそのまま入れない。
+- 更新したことのある作業項目のPR本文には、「確認して欲しい点」に注記を必ず出す。
+  更新後の内容と現在のIssueを比べる注記では、更新のときの書き換えを拾えないためである。
 
 次のことは、この策では守れない。
 
-- 確認から決定の記録までの間のIssueの書き換えは防げない。承認者が見た内容のハッシュに結び付ける案は、`approval_decide`がそのハッシュを受け取らないので、今は採れない。
-- 承認者は、Consoleの要件定義の承認画面で、取り込んだ内容と更新の警告を確かめて承認する。Consoleは、取り込んだ内容を表示できないあいだ、承認を押せないようにする。確かめずに承認しても、承認の前の確認が働くので、承認の時点で書き換わっているIssueは通らない。ただし、却下を挟むと、書き換え後の内容が取り込み直されて承認画面に出るので、確かめずに承認すると書き換え後の内容が実装に渡る。通知とPR本文の注記が緩和する。
-- Claudeに渡す題名と本文から、不可視の文字(tag文字、ゼロ幅の文字、双方向の制御文字など)を除いていない。Consoleは置き換えて警告を出すが、Claudeには置き換える前の内容が届く。除く処理は別に扱う。
-- 本文が長いとき、Consoleは先頭だけを表示する。表示していない後ろの部分は、Consoleでも、MarkdownとしてHTMLのコメントや不可視の文字を描かないGitHubの画面でも、確かめられない。後ろの部分にある`<!--`と不可視の文字の数を数えて警告するが、内容そのものは確かめられない。
+- 確認から決定の記録までの間のIssueの書き換えは防げない。
+  承認者が見た内容のハッシュに結び付ける案は、`approval_decide`がそのハッシュを受け取らないので、今は採れない。
+- 承認者は、Consoleの要件定義の承認画面で、取り込んだ内容と更新の警告を確かめて承認する。
+  Consoleは、取り込んだ内容を表示できないあいだ、承認を押せないようにする。
+  確かめずに承認しても、承認の前の確認が働くので、承認の時点で書き換わっているIssueは通らない。
+  ただし、却下を挟むと、書き換え後の内容が取り込み直されて承認画面に出るので、確かめずに承認すると書き換え後の内容が実装に渡る。
+  通知とPR本文の注記が緩和する。
+- Claudeに渡す題名と本文から、不可視の文字(tag文字、ゼロ幅の文字、双方向の制御文字など)を除いていない。
+  Consoleは置き換えて警告を出すが、Claudeには置き換える前の内容が届く。
+  除く処理は別に扱う。
+- 本文が長いとき、Consoleは先頭だけを表示する。
+  表示していない後ろの部分は、Consoleでも、MarkdownとしてHTMLのコメントや不可視の文字を描かないGitHubの画面でも、確かめられない。
+  後ろの部分にある`<!--`と不可視の文字の数を数えて警告するが、内容そのものは確かめられない。
 
 ### 同じ作業項目を同時に実装しない
 
-同じ作業項目の実装フローは、同時に1つしか作業しない。フローのジョブIDをリースとして扱い、worktreeとClaudeのプロセスにはロックファイルを持たせる。Windmillでジョブを取り消しても、Claudeや検査コマンドのプロセスは止まらないためである。
+同じ作業項目の実装フローは、同時に1つしか作業しない。
+フローのジョブIDをリースとして扱い、worktreeとClaudeのプロセスにはロックファイルを持たせる。
+Windmillでジョブを取り消しても、Claudeや検査コマンドのプロセスは止まらないためである。
 
 ### 承認済みの要件定義を書き換えさせない
 
-Claudeには、要件定義のディレクトリを一時ディレクトリに複製して渡す。Consoleが表示する承認済みの文書は渡さない。複製にはsymlinkを写さないので、Claudeが文書の外のファイルに書き込む経路は残らない。
+Claudeには、要件定義のディレクトリを一時ディレクトリに複製して渡す。
+Consoleが表示する承認済みの文書は渡さない。
+複製にはsymlinkを写さないので、Claudeが文書の外のファイルに書き込む経路は残らない。
 
 ### 検査コマンドを明示したリポジトリだけで実行する
 
@@ -6522,15 +7262,22 @@ networkとworkerの資源を共有するので、Issueを信頼できる人だ�
 
 ### 対象リポジトリのCIが動く
 
-実装ブランチのpushとPRの作成で、対象リポジトリの`push`と`pull_request`のCIが動く。atelier-worksのCIはPRの作成から動く。Claudeの書いたコードは、人のレビューより前に、そのリポジトリのsecretsを使える状態で実行されうる。対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
+実装ブランチのpushとPRの作成で、対象リポジトリの`push`と`pull_request`のCIが動く。
+atelier-worksのCIはPRの作成から動く。
+Claudeの書いたコードは、人のレビューより前に、そのリポジトリのsecretsを使える状態で実行されうる。
+対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
 
 ### 保護パスは止めずに明示する
 
-保護パスの変更は止めずに、PR本文とDiscordの通知に列挙する。保護パスは、PR修正の一覧より広い`IMPLEMENT_PROTECTED_PATH_PREFIXES`などで定める。そのラウンドは検査コマンドを実行せず、検査はGitHubのCIに任せる。書き換えられた設定をworkerで実行すると、Issueの本文からコードを実行する経路になるためである。
+保護パスの変更は止めずに、PR本文とDiscordの通知に列挙する。
+保護パスは、PR修正の一覧より広い`IMPLEMENT_PROTECTED_PATH_PREFIXES`などで定める。
+そのラウンドは検査コマンドを実行せず、検査はGitHubのCIに任せる。
+書き換えられた設定をworkerで実行すると、Issueの本文からコードを実行する経路になるためである。
 
 ### symlinkの変更を止める
 
-symlinkの作成・変更・削除があれば、人の対応待ちにする。ファイルシステムではなくgitのモードで判定するので、worktreeに残っていないsymlinkも捕まえる。
+symlinkの作成・変更・削除があれば、人の対応待ちにする。
+ファイルシステムではなくgitのモードで判定するので、worktreeに残っていないsymlinkも捕まえる。
 
 ### 差分の大きさの上限
 
@@ -6538,18 +7285,22 @@ symlinkの作成・変更・削除があれば、人の対応待ちにする。�
 
 ### 保護ブランチのガードは使わない
 
-headが保護ブランチなら止めるガードは、実装フローには適用しない。実装フローはPRごとに新しいブランチを作ってpushし、保護されたbaseやデフォルトブランチには直接pushしないためである。
+headが保護ブランチなら止めるガードは、実装フローには適用しない。
+実装フローはPRごとに新しいブランチを作ってpushし、保護されたbaseやデフォルトブランチには直接pushしないためである。
 
 ### gitleaksで毎ラウンド検査する
 
-毎ラウンド、デフォルトブランチから分かれた点と、そのラウンドで記録したツリーの間の差分全体を、gitleaksの既定のルールで検査する。対象リポジトリの`.gitleaks.toml`、`.gitleaksignore`、行内の`gitleaks:allow`などでは検出を無効にできない。検出結果はルール名とファイル名だけをClaudeとDBに渡し、一致した文字列は渡さない。
+毎ラウンド、デフォルトブランチから分かれた点と、そのラウンドで記録したツリーの間の差分全体を、gitleaksの既定のルールで検査する。
+対象リポジトリの`.gitleaks.toml`、`.gitleaksignore`、行内の`gitleaks:allow`などでは検出を無効にできない。
+検出結果はルール名とファイル名だけをClaudeとDBに渡し、一致した文字列は渡さない。
 
 検査したツリーが、そのラウンドで変更を判定したツリーと違えば、そのラウンドで止める。
 判定と検査の両方を経たツリーだけを、検証済みとして記録するためである。
 
 ### 検証したツリーだけをコミットする
 
-検査に通ったラウンドのツリーを記録し、コミットの直前に一致を確かめる。検査コマンドがファイルを書き換えた場合など、検証の後にworktreeが変わっていればpushしない。
+検査に通ったラウンドのツリーを記録し、コミットの直前に一致を確かめる。
+検査コマンドがファイルを書き換えた場合など、検証の後にworktreeが変わっていればpushしない。
 
 commitの直前には、ステージし直した索引のツリーも同じツリーと比べる。
 commitの後には、作ったcommitのツリーを確かめ、違えばcommitを取り消す。
@@ -6572,20 +7323,27 @@ pushは、作ったcommitのshaだけを送る。
 
 ### コミットメッセージのIssue参照を無効にする
 
-Claudeが書くコミットメッセージの`#12`などのIssue参照は`No.12`の形に、IssueとPRのURLのホストは`github[.]com`に書き換える。デフォルトブランチへのマージで、任意のIssueを閉じたり無関係なIssueにリンクしたりしないためである。Issueとの紐づけは、Factoryが書くPR本文の`Closes #N`だけで行う。
+Claudeが書くコミットメッセージの`#12`などのIssue参照は`No.12`の形に、IssueとPRのURLのホストは`github[.]com`に書き換える。
+デフォルトブランチへのマージで、任意のIssueを閉じたり無関係なIssueにリンクしたりしないためである。
+Issueとの紐づけは、Factoryが書くPR本文の`Closes #N`だけで行う。
 
 ### 子プロセスをグループごと止める
 
-git、gh、Claude、検査コマンドは、新しいプロセスグループで起動する。終了した後もグループに残ったプロセスを止め、出力のパイプが閉じなければ読み取りを打ち切る。打ち切った出力は途中で切れているので、判断に使う実行は失敗として扱う。
+git、gh、Claude、検査コマンドは、新しいプロセスグループで起動する。
+終了した後もグループに残ったプロセスを止め、出力のパイプが閉じなければ読み取りを打ち切る。
+打ち切った出力は途中で切れているので、判断に使う実行は失敗として扱う。
 検査コマンドが別のセッションに抜けたときは、枠のuidのプロセスとして止める([プロセスの止め方](#プロセスの止め方))。
 
 ### 検査コマンドの出力を絞って保存する
 
-検査コマンドの出力は、ストリームごとに1MiBまで保持する。DBには、秘密値をマスクした出力を16KB以内で保存する。収まらないときは、先頭と末尾を残して間を省く。
+検査コマンドの出力は、ストリームごとに1MiBまで保持する。
+DBには、秘密値をマスクした出力を16KB以内で保存する。
+収まらないときは、先頭と末尾を残して間を省く。
 
 ### workflowの変更はpushで止まる
 
-`.github/workflows/`を含むpushは、PATにWorkflowsの権限が無いのでGitHubが拒否する。拒否されたら、作業項目は人の対応待ちになり、理由に拒否が載る。
+`.github/workflows/`を含むpushは、PATにWorkflowsの権限が無いのでGitHubが拒否する。
+拒否されたら、作業項目は人の対応待ちになり、理由に拒否が載る。
 
 ### 進め方ごとの承認
 
@@ -6642,10 +7400,12 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
   - 進め方が承認を省くものであること
   - リポジトリが設定の許可リストにあり、オーナーのIDが照合を通ること
   - キーの表の行が、引数のオーナー、リポジトリ、Issueの番号と一致すること
-  - 行の内容のハッシュが、引数から再計算した値と一致すること。ハッシュは進め方を含むので、進め方を差し替えた登録は断られる
+  - 行の内容のハッシュが、引数から再計算した値と一致すること。
+    ハッシュは進め方を含むので、進め方を差し替えた登録は断られる
 - 進め方は、フローの入力ではなく、Issueを作ったステップが検証した結果から登録に渡る。
 - Issueに作業項目が1件でもあれば、再利用か新規かにかかわらず登録しない。
-  再利用したIssueに作業項目が1件も無ければ登録する。ラベルが無く、誰も拾わないIssueが孤立するのを避けるためである。
+  再利用したIssueに作業項目が1件も無ければ登録する。
+  ラベルが無く、誰も拾わないIssueが孤立するのを避けるためである。
   終端の作業項目があるIssueには、新しいサイクルを始めない。
 - 登録は、作業項目の本文を、入力とキーから組み立て直して照合する。
   IssueのURLは入力から受けず、オーナー名、リポジトリ名、番号から組み立てて保存する。
@@ -6688,8 +7448,11 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
   戻さない更新があると、承認済みの要件定義が出た後も、承認を省く経路で実装が進むためである。
   戻す前の進め方が通常でなければ、Issueにコメントして知らせる。
 - PR本文の「確認して欲しい点」の先頭に、進め方と、要件定義の承認なしで実装した旨を載せる。
-  `docs`で文書以外を変更した差分と、`bugfix`でテストのファイルが無い差分は、本文に警告を載せる。警告はPRを止めない。
-- PRのレビューとマージは、人が行う。承認を省いても、これは強制されない。承認が0件でもマージできる。
+  `docs`で文書以外を変更した差分と、`bugfix`でテストのファイルが無い差分は、本文に警告を載せる。
+  警告はPRを止めない。
+- PRのレビューとマージは、人が行う。
+  承認を省いても、これは強制されない。
+  承認が0件でもマージできる。
 
 次のファイルは、保護パスに入れる。
 書き換えられると、承認を省く進め方が、人の確認なしに通るためである。
@@ -6705,13 +7468,16 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
 テストは次を固定する。
 
 - `standard`が要件定義と設計の承認を求めること。
-- `direct`、`bugfix`、`docs`が、両方の承認を省くこと。表の行は字面で固定する。
+- `direct`、`bugfix`、`docs`が、両方の承認を省くこと。
+  表の行は字面で固定する。
 - 未知の値が、両方の承認を求めること。
 - `ACCEPTED_PROFILES`が字面で`["standard", "direct", "bugfix", "docs"]`であること。
 - 手動投入のファイルのうち、実装フローを起動するのは登録のステップだけであること。
   承認を省くかは、`requiredApprovals(profile).requirements`の否定で決めること。
-- 作業項目に進め方を渡して挿入する本番のファイルが、登録のステップだけであること。`poll_issues`の挿入は進め方を書かない。
-- 承認を省く進め方の前提が、コードにあること。仕様の出どころの分岐、スキルの「入力の種類」の節、保護パスの差し戻しがpushより前にあることを確かめる。
+- 作業項目に進め方を渡して挿入する本番のファイルが、登録のステップだけであること。
+  `poll_issues`の挿入は進め方を書かない。
+- 承認を省く進め方の前提が、コードにあること。
+  仕様の出どころの分岐、スキルの「入力の種類」の節、保護パスの差し戻しがpushより前にあることを確かめる。
 - 要件定義の生成へ移す直書きのUPDATEが、すべて同じ文で進め方を`standard`にすること。
 - 移り先を引数で受ける状態の更新が、`lib/db.ts`にだけあり、テスト内の一覧の関数と一致すること。
   どれも同じ文に、進め方を戻す式を持つこと。
@@ -6731,14 +7497,16 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
 
 残るリスクは次のとおりである。
 
-- `implement_prepare.ts`と`auto_retry_stale_image.ts`は保護パスではない。`approval_gate.ts`と`self_update.ts`は保護パスで、変更は人の承認を経て反映される。
+- `implement_prepare.ts`と`auto_retry_stale_image.ts`は保護パスではない。
+  `approval_gate.ts`と`self_update.ts`は保護パスで、変更は人の承認を経て反映される。
   保護テストが固定するのは、表を呼ぶ字面と、表の宣言と取り込みの位置である。
   呼び出しの結果を条件にどう組み込むかは固定しないので、この範囲はPRの人のレビューと、保護パスの反映の承認が守る。
 - 比較交換が失敗した作業項目は、`picked`のまま、照合が失敗に移すまでの猶予の間、残る。
   その間、同じIssueに稼働中の作業項目があり、再投入は挿入に断られる。
 - 目印の探索は、区切りの行を足す前に作ったIssueを、作成済みと信じない。
   区切りの行を足す前に作ったIssueの番号を書けなかった投入は、同じキーの再送でIssueが二重になりうる。
-- ラベルを外さないので、assigneeを設定しない。Issueの担当者は空のままである。
+- ラベルを外さないので、assigneeを設定しない。
+  Issueの担当者は空のままである。
 
 ## 設計書の生成の安全策
 
@@ -6815,7 +7583,8 @@ PR修正の報告は、親の遷移の注記と通知の理由に整えてから
 整えるとは、秘密値のマスク、制御文字の除去、長さの制限、区切りのエスケープである。
 設計のClaudeには、人の却下の理由ではなく、信頼できない報告として`dataFence`に入れ、ヒントにとどめるよう指示する。
 再実行が注記から報告を読み出して渡すときも、同じ整え方と印を使う。
-人の却下の理由には印を付けず、整形もしない。書き手が承認者本人だからである。
+人の却下の理由には印を付けず、整形もしない。
+書き手が承認者本人だからである。
 
 ### 設計の承認の照合
 
@@ -6833,13 +7602,22 @@ PR修正の報告は、親の遷移の注記と通知の理由に整えてから
 
 ### 設計の承認の反映
 
-設計の承認と却下は、`design_apply`が作業項目に反映する。仕組みは[設計書の生成](internals/design.md)の「承認の反映」にある。
+設計の承認と却下は、`design_apply`が作業項目に反映する。
+仕組みは[設計書の生成](internals/design.md)の「承認の反映」にある。
 
-- 承認は、実装の関門と同じ判定(`approval_gate`)を通ったときだけ承認済みへ移す。通らなければ人の対応待ちで止め、自動で戻さない。自動で戻すと、承認済みの要件定義を捨てるか、設計を作り直し続けるためである。
-- 最新の設計の依頼でない依頼は、作業項目を動かさない。古い依頼の再実行が、新しい依頼を待つ作業項目を進めないためである。要件定義の承認の反映も同じ確認をする。最新の依頼は、下書きと結合しない問い合わせで読む。
-- 状態を動かす比較交換は、読み直した作業項目の状態と`flow_job_id`を条件にする。副作用は比較交換の後にだけ行う。
-- 承認の受理と却下の受理は、Issueにコメントしない。GitHubには成果物だけを載せる。
-- 却下の遷移の注記は固定文で、人の理由を入れない。理由に長さの上限が無く、遷移の記録がConsoleの履歴と通知に流れるためである。
+- 承認は、実装の関門と同じ判定(`approval_gate`)を通ったときだけ承認済みへ移す。
+  通らなければ人の対応待ちで止め、自動で戻さない。
+  自動で戻すと、承認済みの要件定義を捨てるか、設計を作り直し続けるためである。
+- 最新の設計の依頼でない依頼は、作業項目を動かさない。
+  古い依頼の再実行が、新しい依頼を待つ作業項目を進めないためである。
+  要件定義の承認の反映も同じ確認をする。
+  最新の依頼は、下書きと結合しない問い合わせで読む。
+- 状態を動かす比較交換は、読み直した作業項目の状態と`flow_job_id`を条件にする。
+  副作用は比較交換の後にだけ行う。
+- 承認の受理と却下の受理は、Issueにコメントしない。
+  GitHubには成果物だけを載せる。
+- 却下の遷移の注記は固定文で、人の理由を入れない。
+  理由に長さの上限が無く、遷移の記録がConsoleの履歴と通知に流れるためである。
 
 ### 設計工程の門の固定
 
@@ -6867,7 +7645,8 @@ PR修正の報告は、親の遷移の注記と通知の理由に整えてから
 - `DEFAULTS.design_enabled`は`false`、`DEFAULTS.design_enabled_since`は`null`の字面である。
 - 本番のコードに、`null`以外の`design_enabled_since`の字面が無い。
 - `design_enabled`と`design_enabled_since`を参照するファイルの集合と数が、テスト内の表と一致する。
-- 設定を本番の読み込みに通した結果で、全入口の開閉が決まる。`design_enabled_since`が無いか読めなければ閉じ、読めれば開く。
+- 設定を本番の読み込みに通した結果で、全入口の開閉が決まる。
+  `design_enabled_since`が無いか読めなければ閉じ、読めれば開く。
 
 起動元のテストは、起動の台帳(`LAUNCH_EDGES`)や、台帳のテストの補助関数に頼らず、許可表で固定する。
 それらは保護パスにないので、緩められると黙って通るためである。
@@ -6885,7 +7664,8 @@ PR修正の報告は、親の遷移の注記と通知の理由に整えてから
 
 `design_enabled`を`true`にする操作と、`design_enabled_since`を書く操作は、運用者がWindmillの画面か`wmill resource push`で行う。
 Consoleの設定の変更(`console_config_update`)の許可表に入るのは、`design_enabled`を`true`から`false`へ閉じる向きだけである。
-`design_enabled_since`は、許可表に入れない。閉じる書き込みは、`design_enabled`の1キーだけを書く。
+`design_enabled_since`は、許可表に入れない。
+閉じる書き込みは、`design_enabled`の1キーだけを書く。
 全停止が止めた`design_enabled`は、ホストの`mise run stop:restore`も戻す([全停止](#全停止))。
 このとき、`design_enabled_since`の項目があれば、その値を実行した時刻に書き直す。
 これも運用者の`wmill`のプロファイルで`wmill resource push`を呼ぶ経路で、人が端末で`yes`を入力して確かめる。
@@ -6901,7 +7681,8 @@ Consoleで閉じた`design_enabled`は、全停止の記録に載らないので
 設計書の承認という関門が外れるが、要件定義の承認と、PRのレビューとマージは残る。
 入れる理由は、閉じる向きが、設計工程が無い既定の運用へ戻す操作で、新しく書き込みや実行の範囲を広げないためである。
 
-閉じる書き込みは、他の真偽の項目と同じく、`design_enabled`の1キーだけを書く。`design_enabled_since`は読んだ値のまま残る。
+閉じる書き込みは、他の真偽の項目と同じく、`design_enabled`の1キーだけを書く。
+`design_enabled_since`は読んだ値のまま残る。
 残った日時が読めるので、後で人が`design_enabled`だけを`true`に戻すと、日時を書き直す操作なしに設計工程が開く。
 この注意は、確認のダイアログと[運用](operations.md)の「設計工程を有効にする」が伝える。
 再び開くときは、人が`design_enabled`を`true`にし、`design_enabled_since`に新しい時刻を書く。
@@ -6957,7 +7738,8 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
 - Issueに仕込んだ指示で、設計が毎回`requirements_gap`を返すと、人の要件定義の承認を毎回無効にし、上限まで要件定義と設計の生成を繰り返す。
   止まるのは、`max_attempts`、日次予算、承認の待ちである。
 - Issueに仕込んだ指示で、設計書を受け取った実装が毎回`design_gap`を返すと、設計と実装の繰り返しが上限まで続く。
-  実装が戻すたびに、worktreeと、PRが無ければ実装ブランチを、リモートとローカルの両方で片付ける。実装の作業は捨てられる。
+  実装が戻すたびに、worktreeと、PRが無ければ実装ブランチを、リモートとローカルの両方で片付ける。
+  実装の作業は捨てられる。
   戻す数は、人の設計の却下と同じ上限(`max_design_attempts`)を分け合う。
   仕込みが上限を使い切ると、人が却下できる回数は減る。
   上限に達すると人の対応待ちで止まる。
@@ -6968,7 +7750,8 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
 - Issueに仕込んだ指示や、レビューの指摘の文が、PR修正のClaudeに`design_gap`を返させうる。
   指摘の文は、許可された投稿者のコメントか、Factory自身のPRレビューの出力である。
   返させると、人が承認した設計を戻し、人の却下と共有する上限(`max_design_attempts`)を減らす。
-  1回の戻しごとに、人の設計の承認を通る。上限に達すると人の対応待ちで止まる。
+  1回の戻しごとに、人の設計の承認を通る。
+  上限に達すると人の対応待ちで止まる。
   この影響は、残るリスクとして受け入れる。
   軽減として、返してよい条件を「設計どおりに直すと要件か受入条件を満たせないとき」に狭め、設計と食い違うだけなら見送らせる。
   設計工程が無効の間は、設計書がPR修正に渡らないので起きない。
@@ -6978,7 +7761,8 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   誤った`design_gap`は、返してよい条件を狭めたこと、見送る(`skipped`)逃げ道、戻しの上限、人の設計の承認で抑える。
 - PR修正の設計への戻しは、書き込みが途中で失敗しうる。
   設計の起動の後に、処理済みの位置か修正のブロックの書き込みが失敗すると、PR修正は失敗になり、位置が進まない。
-  再実行は、親が設計の段階の間は準備の確認が止める。同じ指摘を、設計なしで直してpushすることは無い。
+  再実行は、親が設計の段階の間は準備の確認が止める。
+  同じ指摘を、設計なしで直してpushすることは無い。
   設計の承認の後の実装は、PRのレビューも処理済みの位置も読まないので、元の指摘を集めない。
   処理済みの位置が進んでいると、次のPR修正の行は位置を引き継ぐので、元の指摘は二度と集まらない。
   指摘は、絞った要約として設計に届くだけで、PRには返信しない。
@@ -6998,7 +7782,8 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
 - PR修正の設計への戻しが、上限か設計工程の無効で止まったとき、親はPR作成済みのまま残り、再実行で設計を作り直せない。
   人が、トリガーのラベルを付け直すか、PRを直す。
   自動で設計を作り直し続けることは無い。
-- 設計の段階の間、PRのブランチへ別の回がpushしないよう、回ごとに止める。設計の承認の後に、実装がPRを引き継ぐためである。
+- 設計の段階の間、PRのブランチへ別の回がpushしないよう、回ごとに止める。
+  設計の承認の後に、実装がPRを引き継ぐためである。
   親の行を持つPR修正の依頼は、準備の親の状態の確認が`guard_blocked`で止まる。
   ブランチから引いた作業項目の確認も、設計の段階、実装中、承認直後の4状態で止まる。
   親の行を持たない競合回と、本文から閉じるIssueが消えたレビュー回も、この確認で止まる。
@@ -7012,12 +7797,14 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   レビュー回には設計書が渡らないので、設計の不足は返らない。
   ブランチ名から作業項目を引けないとき(形が違う、削除済み、別のリポジトリ)は、どの回も止めない。
 - 起動の判断が作業項目の状態を読んでから、回の準備が動くまでの間に承認が入ると、回が終わらないうちに実装の準備が動く。
-  準備は、PRに終端でない回があることを見つけて、人の対応待ちで止まる。理由は、PRに動いている修正があることである。
+  準備は、PRに終端でない回があることを見つけて、人の対応待ちで止まる。
+  理由は、PRに動いている修正があることである。
   止まった実装は、PRの終端でない回が無くなった後に自動で再開する。
   再開の許可リストは、この理由だけを載せた別の一覧で、通知の解決を待つ理由の一覧とは混ぜない。
   再開は、ほかの自動の再開と同じ上限(3回)と間隔に従い、上限を超えたら人が再実行する。
   再開の対象は、最新の注記を書いてから24時間以内の止まりに限る。
-  反映の時点で残っている古い止まりを、一度にまとめて再開しないためである。古い止まりは人が再実行する。
+  反映の時点で残っている古い止まりを、一度にまとめて再開しないためである。
+  古い止まりは人が再実行する。
   終端でない回を探す範囲は、作業項目が記録したPRのURLと、作業項目を親とする回に限る。
   それ以外の回が残っていたときは、再開した準備が止め直し、再開の回数を1回使う。
 - 自動の再開の回数の上限(3回)は、イメージが古い理由で止まった後の再開と共有する。
@@ -7124,18 +7911,23 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   設計が有効なら設計、無効なら実装で再開するが、実装の関門が最後に止める。
 - 再実行が渡す却下の理由に、scriptの側の長さの上限が無い。
   設計の経路も同じで、`design_apply`が設計フローと要件定義の生成へ渡す理由と、再実行の設計フローへの`designFeedback`がそのまま渡す。
-  上限はConsoleの4000コードポイントだけである。書き手は人である。
+  上限はConsoleの4000コードポイントだけである。
+  書き手は人である。
 - 設計の承認依頼の期限切れの直後に人が承認を記録すると、判断は反映されず、依頼は承認済みのまま残る。
-  走査が先に作業項目を期限切れへ移すためである。この競合は、作業項目を移してから依頼を期限切れにするまでの間に限られる。
+  走査が先に作業項目を期限切れへ移すためである。
+  この競合は、作業項目を移してから依頼を期限切れにするまでの間に限られる。
   通知は依頼の期限切れの後に送るので、通知を待つ間は開かない。
-  作業項目は期限切れで、再実行できる。再実行は最新の依頼が承認済みなら承認の後の工程から始まる。実装が人の承認なしに進むことはない。
+  作業項目は期限切れで、再実行できる。
+  再実行は最新の依頼が承認済みなら承認の後の工程から始まる。
+  実装が人の承認なしに進むことはない。
 - 判断の反映が3回の起動し直しの後に止まった作業項目を再実行すると、承認の副作用は実行されない。
   止まった理由は`approval decision could not be applied after 3 restarts of the handler`である。
   要件定義の承認では、Issueへのコメントと要件定義のworktreeの片付けが対象である。
   反映の処理が失敗し続けた作業項目なので、人がConsoleで状態と承認の記録を確かめてから再実行する。
 - 設計の却下の反映でIssueが消えた、または移された場合は、Issueを読めない。
   変わっていないものとして設計を再生成するので、要件定義へ戻る出口に入れず、`max_design_attempts`の回数まで再生成が繰り返される。
-  上限で人の対応待ちになり、通知が知らせる。却下は人の意思で、読めないことを理由に止めても再実行は同じ状態に戻るだけで出口にならない。
+  上限で人の対応待ちになり、通知が知らせる。
+  却下は人の意思で、読めないことを理由に止めても再実行は同じ状態に戻るだけで出口にならない。
   承認の断りの案内が、この挙動を先に伝える。
 - 恒久的に失敗する決定済みの依頼は、処理先を3回起動し直した後に人の対応待ちにする。
   それ以降は走査の対象から外れ、3回の起動し直しの失敗が`job_failures`に残る。
@@ -7149,8 +7941,11 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   開ける前にPRを出していた作業項目で`design_gap`が出ると、設計へ差し戻される。
   差し戻しは、上限と人の承認で抑えられるため、受け入れる。
 - `design_enabled`を真から偽に戻しても、設計中と設計の承認待ちの作業項目は止まらず、`design_apply`も動く。
-  承認の反映は`design_enabled`の値を見ず、設計書を渡さずに実装へ進む。関門は設計が無効のときの扱い(`skip`)になるためである。
-  却下の反映は、設計を作り直す分岐でだけ値を見る。偽なら設計フローを起動せず、人の対応待ちで止める。閉じた入口を、`design_apply`が迂回しないためである。
+  承認の反映は`design_enabled`の値を見ず、設計書を渡さずに実装へ進む。
+  関門は設計が無効のときの扱い(`skip`)になるためである。
+  却下の反映は、設計を作り直す分岐でだけ値を見る。
+  偽なら設計フローを起動せず、人の対応待ちで止める。
+  閉じた入口を、`design_apply`が迂回しないためである。
 - 要件定義の下書きができた後に止まった作業項目は、理由が使われ済みなので、再実行は理由を渡さない。
 - `design_enabled`が真偽値でないときと、`max_design_attempts`が範囲外のときは、設定を読む処理が例外のままである。
   設定を読む処理は`self_update`で`try`の外にあるので、自己更新と検知が止まる。
@@ -7166,7 +7961,8 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   `false`として読まれている`design_enabled`の`true`も、`true`と表示される。
   設計工程だけは、「設計」グループの先頭の**設計工程(実際の状態)**の行が、効いている値と、書かれた値が無視されている理由を出す。
   設定が参照で書かれているときは、設定タブが参照を解決しないので、効いている値を断定せず「判定できない」と出す。
-  通知`design_enabled_ignored`は、書き忘れだけを知らせる。効いている値の確認は、設定タブだけである。
+  通知`design_enabled_ignored`は、書き忘れだけを知らせる。
+  効いている値の確認は、設定タブだけである。
 
 ## 調査の隔離
 
@@ -7280,11 +8076,15 @@ worktreeのパスを求める関数は`investigateWorktreeDir`の1つで、作�
 worktreeの作成(`createInvestigateWorktree`)は、解決済みの40桁の小文字のsha1つだけを受ける。
 リポジトリのロックを1度だけ取り、その中で次の順に実行する。
 
-1. shaをfetchする。clone済みのリポジトリが持たないshaでも取れる。
-2. `git worktree prune`で、ディスクから消えたworktreeの登録を消す。同じIDで作り直せる。
-3. `git ls-tree -r`で、モード120000(symlink)か160000(submodule)が1つでもあれば例外にする。読めない行があるときも例外にする。
+1. shaをfetchする。
+   clone済みのリポジトリが持たないshaでも取れる。
+2. `git worktree prune`で、ディスクから消えたworktreeの登録を消す。
+   同じIDで作り直せる。
+3. `git ls-tree -r`で、モード120000(symlink)か160000(submodule)が1つでもあれば例外にする。
+   読めない行があるときも例外にする。
 4. `git worktree add --detach`で、`core.symlinks=false`のままcheckoutする。
-5. checkoutしたファイルにsymlinkが無いことを、ファイルシステムで確かめ直す。あるときと、読めない項目があって確かめ終えられないときは、worktreeを消して例外にする。
+5. checkoutしたファイルにsymlinkが無いことを、ファイルシステムで確かめ直す。
+   あるときと、読めない項目があって確かめ終えられないときは、worktreeを消して例外にする。
 
 対象リポジトリの内容は信頼できない入力で、symlinkはworkerの秘密を指しうる。
 そのため、checkoutの前後の2か所で止める。
@@ -7294,7 +8094,8 @@ worktreeの作成(`createInvestigateWorktree`)は、解決済みの40桁の小�
 symlinkはたどらずリンク自体を消し、`.git`を持たない項目やファイルも消す。
 残すIDの項目も、ディレクトリでなければ消す。
 消した後に、呼び出し側が渡した主リポジトリで`git worktree prune`を実行する。
-主リポジトリは、残った項目の`.git`ファイルからは求めない。信頼できない入力から求めないためである。
+主リポジトリは、残った項目の`.git`ファイルからは求めない。
+信頼できない入力から求めないためである。
 掃除も置き場の検査を満たさなければ何も消さない。
 差し替えられた置き場の先を消さないためである。
 
@@ -7339,7 +8140,8 @@ symlinkはたどらずリンク自体を消し、`.git`を持たない項目や�
 `runInvestigateClaude`を通る起動は、隔離の測定に合格した証拠が無ければ起動しない。
 `runInvestigateClaude`と`runInvestigateClaudeWithDeps`は、最初に証拠を検査する。
 作業ディレクトリの検査より前なので、証拠が無いときは、ほかの検査にも進まない。
-`runClaude`を直接呼ぶ経路は`lib/claude.ts`にあり、この証拠では塞がない。`lib/claude.ts`は保護パスで、変更は人の承認を経て反映される。
+`runClaude`を直接呼ぶ経路は`lib/claude.ts`にあり、この証拠では塞がない。
+`lib/claude.ts`は保護パスで、変更は人の承認を経て反映される。
 調査の4つのstepと支援のlib(`lib/investigate_flow.ts`)が`runClaude`を名指ししないことは、保護されたテストが固定する。
 テストは`tests/scripts/investigate_flow.test.ts`である。
 
@@ -7387,7 +8189,8 @@ flowの段をまたげないので、呼び出し側は、同じプロセスの�
 4. 条件を満たさないときは、古い合格を使わず、`proof_unreadable`で閉じる。
    pathの一致する要素が1件も無いときは、下の根のジョブによる見分けに進む。
 5. 選んだジョブが失敗なら、古い合格を使わずに閉じる。
-6. 成功なら結果を取り、判定が合格であること、Claude Codeの版、判定の版、隔離の指紋、起動の形のハッシュが、今の値と一致することを確かめる。Claude Codeの版は、両側が空でない文字列でなければ一致とみなさない。
+6. 成功なら結果を取り、判定が合格であること、Claude Codeの版、判定の版、隔離の指紋、起動の形のハッシュが、今の値と一致することを確かめる。
+   Claude Codeの版は、両側が空でない文字列でなければ一致とみなさない。
 
 閉じる理由は、次の符号で表す。
 
@@ -7448,7 +8251,8 @@ flowの段をまたげないので、呼び出し側は、同じプロセスの�
 
 モデルには、ツールごとに固定の文で、1回だけ呼ぶよう頼む。
 
-- `Read`: 目印のファイルを読む。パラメータは`file_path`だけにする。
+- `Read`: 目印のファイルを読む。
+  パラメータは`file_path`だけにする。
 - `Glob`: パラメータを、`pattern`が`*`、`path`が目印のディレクトリの2つだけにする。
 - `Grep`: パラメータを、`pattern`が目印の値の形(値そのものは含まない)、`path`が目印のディレクトリ、`output_mode`が`content`の3つだけにする。
 
@@ -7462,7 +8266,8 @@ Claudeは、ツール(`Read`、`Glob`、`Grep`の順)と置き場の組ごとに
 入口は、次の条件を満たさなければ、Claudeを起動せずに例外を投げる。
 
 - 作業ディレクトリが、測定専用の`investigateWorktreeDir(PROBE_RESERVED_ID)`と一致する。
-- 組のツールが、すべて同じである。`Read`は1件から3件、`Glob`と`Grep`は1件に限る。
+- 組のツールが、すべて同じである。
+  `Read`は1件から3件、`Glob`と`Grep`は1件に限る。
 - `Read`のパスが、4つの置き場のどれかの直下にある目印の形のファイルである。
 - `Glob`と`Grep`のパスが、4つの置き場のどれかの直下にある目印の形のディレクトリである。
   末尾の`/`は付けない。
@@ -7486,12 +8291,16 @@ Claudeは、ツール(`Read`、`Glob`、`Grep`の順)と置き場の組ごとに
   `tool_result`のフィールド名も残す。
   `Glob`と`Grep`の拒否の文言は、目印のファイルの綴りを含まないので、綴りの有無で成功した探索と区別できる。
   `Read`の拒否の文言はファイルのパスを含むので、`Read`の実行では、この項目は区別に使えない。
-- 組と一致しない呼び出し: 実行ごとの件数だけ。入力の綴りは残さない。
-- 出力用のツール名: `Read`、`Glob`、`Grep`以外のツールのうち、名前の形(英字で始まる64字以内の英数字と`_`)に合い、入力のキーが`attempted`だけで値が真偽のものを記録する。止める条件にはしない。記録する条件は、下に書く。
+- 組と一致しない呼び出し: 実行ごとの件数だけ。
+  入力の綴りは残さない。
+- 出力用のツール名: `Read`、`Glob`、`Grep`以外のツールのうち、名前の形(英字で始まる64字以内の英数字と`_`)に合い、入力のキーが`attempted`だけで値が真偽のものを記録する。
+  止める条件にはしない。
+  記録する条件は、下に書く。
 - 実行: 回数、時刻、ツール、置き場、成否、ターン数、所要時間。
 
 結果のトップレベルには、観測のほかに、合否`passed`、不合格の理由の一覧`failures`、判定の版、Claude Codeの版、隔離の指紋、起動の形のハッシュを載せる。
-`failures`の要素は、全体か、ツールと置き場の組を示す範囲と、理由の符号だけを持つ。本文は持たない。
+`failures`の要素は、全体か、ツールと置き場の組を示す範囲と、理由の符号だけを持つ。
+本文は持たない。
 
 本文を残す例外は1つだけである。
 組と完全に一致する`tool_use`の結果のうち、`is_error`が`true`のものを、先頭200文字まで残す。
@@ -7501,7 +8310,8 @@ Claudeは、ツール(`Read`、`Glob`、`Grep`の順)と置き場の組ごとに
 キーの集合と各キーの値が、次のとおりでなければ一致としない。
 末尾の`/`などの正規化はしない。
 
-- `Read`: `file_path`だけを持つ。値は目印のファイルのパスである。
+- `Read`: `file_path`だけを持つ。
+  値は目印のファイルのパスである。
 - `Glob`: `pattern`が`*`、`path`が目印のディレクトリの2つだけを持つ。
 - `Grep`: `pattern`が目印の値の形、`path`が目印のディレクトリ、`output_mode`が`content`の3つだけを持つ。
 
@@ -7596,15 +8406,18 @@ transcriptと設定の置き場は、実行のたびに消す。
 
 - 止めた理由(`stoppedBy`)、注意(`notice`)、例外の名前(`errorName`)がいずれも無い。
 - 予定外の`tool_use`が無い。
-- 実行が12件で、実行の回数(`runs.count`)と一覧の件数が一致する。ツール3つと置き場4つの組が、1件ずつある。
+- 実行が12件で、実行の回数(`runs.count`)と一覧の件数が一致する。
+  ツール3つと置き場4つの組が、1件ずつある。
 - worker imageのClaude Codeの版が空でなく、観測した環境変数の版が欠けても`unparsed`でもない。
-- `claude --version`の出力が、その版で始まる。失敗した出力や違う版は、不合格にする。
+- `claude --version`の出力が、その版で始まる。
+  失敗した出力や違う版は、不合格にする。
 - 設定の置き場が、ジョブ専用の一時領域の下にある。
 - 隔離の指紋と起動の形のハッシュが、64桁の16進である。
 
 12件に共通の条件は次のとおりである。
 
-- 実行が成功し、再試行していない。再試行を許すと、1回目の失敗の結果を見落とすためである。
+- 実行が成功し、再試行していない。
+  再試行を許すと、1回目の失敗の結果を見落とすためである。
 - セッションがちょうど1つで、transcriptを解析できている。
 - 組と一致する呼び出しがちょうど1回で、組と一致しない呼び出しが0回である。
 - 結果がちょうど1つである。
@@ -7612,13 +8425,18 @@ transcriptと設定の置き場は、実行のたびに消す。
 外の9件(3つの置き場と3つのツール)の条件は次のとおりである。
 
 - 結果の`is_error`が`true`である。
-- 目印の値を含まない。`Glob`と`Grep`は、目印のファイルの綴りも含まない。`Read`の拒否の文言は目印のファイルのパスを含むので、`Read`はこの綴りを条件にしない。
-- 拒否の文言が、下の形に合う。本文の長さは見ない。
+- 目印の値を含まない。
+  `Glob`と`Grep`は、目印のファイルの綴りも含まない。
+  `Read`の拒否の文言は目印のファイルのパスを含むので、`Read`はこの綴りを条件にしない。
+- 拒否の文言が、下の形に合う。
+  本文の長さは見ない。
 
 作業ディレクトリの3件の条件は次のとおりである。
 
-- 結果の`is_error`が`true`でない。成功した結果の`is_error`は、値を持たない(`null`)場合もある。
-- 目印を読めている。`Read`は値を含み、`Glob`は目印のファイルの綴りを含み、`Grep`は両方を含む。
+- 結果の`is_error`が`true`でない。
+  成功した結果の`is_error`は、値を持たない(`null`)場合もある。
+- 目印を読めている。
+  `Read`は値を含み、`Glob`は目印のファイルの綴りを含み、`Grep`は両方を含む。
 
 拒否の文言は、次の形である。
 
@@ -7629,8 +8447,12 @@ transcriptと設定の置き場は、実行のたびに消す。
 観測は先頭の200文字で切るので、次の規則で照合する。
 
 1. 最初の` is outside `で、前後の2つに分ける。
-2. 前の部分(拒否されたパス)は、`Read`なら`<canary-name>/canary.txt`で終わり、`Glob`と`Grep`なら`<canary-name>`で終わる。観測が目印の名前を`<canary-name>`に置き換えるので、照合できる。拒否が、その組の対象のパスに対するものだと確かめる。
-3. 後ろの部分は、作業ディレクトリに変わらない部分を続けた全文と照合する。長さが200字に満たなければ全文と一致し、200字ちょうどなら全文の前置であればよい。長いパスでは、`; --restricted`と`confines`の間など、語の途中で切れる。
+2. 前の部分(拒否されたパス)は、`Read`なら`<canary-name>/canary.txt`で終わり、`Glob`と`Grep`なら`<canary-name>`で終わる。
+   観測が目印の名前を`<canary-name>`に置き換えるので、照合できる。
+   拒否が、その組の対象のパスに対するものだと確かめる。
+3. 後ろの部分は、作業ディレクトリに変わらない部分を続けた全文と照合する。
+   長さが200字に満たなければ全文と一致し、200字ちょうどなら全文の前置であればよい。
+   長いパスでは、`; --restricted`と`confines`の間など、語の途中で切れる。
 4. 作業ディレクトリは、測定のscriptが`investigateWorktreeDir(PROBE_RESERVED_ID)`の値を渡す。
 
 文言は補助の条件である。
@@ -7639,7 +8461,8 @@ transcriptと設定の置き場は、実行のたびに消す。
 
 後始末の失敗(`cleanup.failed`)は条件にしない。
 目印は秘密でなく、後始末の失敗は秘密に関わらないためである。
-組の`label`と`tool`が実行の一覧と等しいことも、条件にしない。測定が同じ組から作るので、独立した確認にならない。
+組の`label`と`tool`が実行の一覧と等しいことも、条件にしない。
+測定が同じ組から作るので、独立した確認にならない。
 
 不合格の理由は、次の符号で`failures`に載る。
 
@@ -7678,9 +8501,11 @@ transcriptと設定の置き場は、実行のたびに消す。
 
 呼び出しそのものを防ぐのは、次の3つである。
 
-- `--tools`によるツールの制限。`Read`、`Glob`、`Grep`以外を使えなくする。
+- `--tools`によるツールの制限。
+  `Read`、`Glob`、`Grep`以外を使えなくする。
 - `--restricted`による作業ディレクトリへの閉じ込め。
-- `deny`の規則。効くかは、まだ測っていない。
+- `deny`の規則。
+  効くかは、まだ測っていない。
 
 この観測が分かるのは、ツールを通る経路についてだけである。
 設定の層、`CLAUDE.md`の`@`、hookなど、ツールを通らない経路は、別に測る。
@@ -7690,8 +8515,10 @@ transcriptと設定の置き場は、実行のたびに消す。
 結果の`notice`が出たときは、本物の秘密に届いた可能性があるので、次を入れ替える。
 読めたかどうかは、結果から分からない。
 
-1. Claude CodeのOAuthトークンを、[Claude CodeのOAuthトークン](#claude-codeのoauthトークン)の手順で発行し直し、[運用](operations.md#秘密をローテーションする)の手順で反映する。旧いトークンは、発行元のアカウントの設定で取り消す。
-2. GitHubのPAT(`github_token`)を、[GitHubのPAT](#githubのpat)の手順で発行し直し、同じ手順で反映する。旧いPATは、GitHubの**Fine-grained tokens**の画面で削除する。
+1. Claude CodeのOAuthトークンを、[Claude CodeのOAuthトークン](#claude-codeのoauthトークン)の手順で発行し直し、[運用](operations.md#秘密をローテーションする)の手順で反映する。
+   旧いトークンは、発行元のアカウントの設定で取り消す。
+2. GitHubのPAT(`github_token`)を、[GitHubのPAT](#githubのpat)の手順で発行し直し、同じ手順で反映する。
+   旧いPATは、GitHubの**Fine-grained tokens**の画面で削除する。
 3. `DB_PASSWORD`を、次の順に変える。
    1. 次のコマンドでpsqlを開き、プロンプトで`\password postgres`と打って新しい値を入れる。
       値はコマンドの引数に載らず、履歴にも残らない。
@@ -7701,7 +8528,8 @@ transcriptと設定の置き場は、実行のたびに消す。
       ```
 
    2. 新しい値を、[セットアップ](setup.md#秘密値を投入する)の手順で`DB_PASSWORD`として投入する。
-   3. `mise run up`を実行する。コンテナの`DATABASE_URL`が新しい値で作り直される。
+   3. `mise run up`を実行する。
+      コンテナの`DATABASE_URL`が新しい値で作り直される。
    Postgresのパスワードを変えてから`mise run up`で反映するまでの間、Windmillはデータベースに接続できない。
 4. workerの`/var/lib/factory/claude`と`/var/lib/factory/gh`に、ログインの記録があれば、発行元で失効させてから消す。
    中身は、次のコマンドで確かめる。
@@ -7728,7 +8556,8 @@ transcriptと設定の置き場は、実行のたびに消す。
 
 観測した事実は次のとおりである。
 
-- 目印の読み出し: 3つの置き場(`/run/factory-tmp/fj-<ジョブID>`、`/tmp`、`$HOME`の`/root`)への`Read`は、すべて`is_error`が`true`で拒否された。目印の値を含む結果は無かった。
+- 目印の読み出し: 3つの置き場(`/run/factory-tmp/fj-<ジョブID>`、`/tmp`、`$HOME`の`/root`)への`Read`は、すべて`is_error`が`true`で拒否された。
+  目印の値を含む結果は無かった。
 - 拒否の文言: 次の形だった。
   `<パス> is outside <作業ディレクトリ>; --restricted confines the file tools to the working directory.`
 - 作業ディレクトリ: `/var/lib/factory-investigate/<予約ID>`だった。
@@ -7736,8 +8565,10 @@ transcriptと設定の置き場は、実行のたびに消す。
 - transcript: `CLAUDE_CONFIG_DIR`の直下の`projects/<ディレクトリ>/<uuid>.jsonl`にあり、深さは2、1実行につき1ファイルで、23行だった。
 - 行の`type`: `assistant`、`atis-latch`、`attachment`、`cost-state`、`last-prompt`、`queue-operation`、`user`の7種類だった。
 - `tool_use`のキー: `caller`、`id`、`input`、`name`、`type`だった。
-- `tool_result`のキー: `content`、`is_error`、`tool_use_id`、`type`だった。`tool_use_id`で`tool_use`と対応が取れた。
-- 出力用のツール名: `StructuredOutput`で、入力は`{attempted}`だった。形の条件に合い、止める条件には当たらなかった。
+- `tool_result`のキー: `content`、`is_error`、`tool_use_id`、`type`だった。
+  `tool_use_id`で`tool_use`と対応が取れた。
+- 出力用のツール名: `StructuredOutput`で、入力は`{attempted}`だった。
+  形の条件に合い、止める条件には当たらなかった。
 - 標準出力のJSON: トップレベルのキーは26個だった。
   次のキーを含む。
   `api_error_status`、`duration_api_ms`、`duration_ms`、`is_error`、`modelUsage`、`num_turns`、`permission_denials`、`result`、`session_id`、`stop_reason`、`structured_output`、`subtype`、`total_cost_usd`、`type`、`usage`、`uuid`
@@ -7753,28 +8584,40 @@ transcriptと設定の置き場は、実行のたびに消す。
 
 観測した事実は次のとおりである。
 
-- 外の3つの置き場(`/run/factory-tmp/fj-<ジョブID>`、`/tmp`、`$HOME`の`/root`): `Read`、`Glob`、`Grep`の9件はすべて、`is_error`を`true`にして拒否された。目印の値を含む結果は無かった。
-- 拒否の文言: 3ツールとも、`Read`の文言と同じ形だった。`Glob`と`Grep`の文言に出るパスは、目印のディレクトリである。
+- 外の3つの置き場(`/run/factory-tmp/fj-<ジョブID>`、`/tmp`、`$HOME`の`/root`): `Read`、`Glob`、`Grep`の9件はすべて、`is_error`を`true`にして拒否された。
+  目印の値を含む結果は無かった。
+- 拒否の文言: 3ツールとも、`Read`の文言と同じ形だった。
+  `Glob`と`Grep`の文言に出るパスは、目印のディレクトリである。
   `<パス> is outside <作業ディレクトリ>; --restricted confines the file tools to the working directory.`
-  `Read`の文言は目印のファイルのパスを含むので、目印のファイルの綴りの有無が`true`になる。`Glob`と`Grep`の文言は含まない。
-- 文言の長さ: 先頭200文字で切る制限に掛かったのは、ジョブ専用の一時領域の`Read`の1件だけである。長いパスで約202文字になり、`working director`で切れた。ほかの8件は139〜191文字で、全文が残った。
-- 作業ディレクトリの中の陽性対照: 3ツールとも成功した。`Read`は目印の値を含み、`Glob`は目印のファイルの名前を含み、`Grep`は値とファイルの名前の両方を含んだ。
-- 入力のキー: `Glob`と`Grep`の入力は、プロンプトで固定した形(`pattern`と`path`、`Grep`は`output_mode`も)と完全に一致した。12件すべてで、組と一致しない呼び出し(`unmatchedToolUse`)は0件だった。
-- 成功した結果の`is_error`は、`false`ではなく、値が無い(`null`)。結果の読み方は、`true`かどうかで見る。
+  `Read`の文言は目印のファイルのパスを含むので、目印のファイルの綴りの有無が`true`になる。
+  `Glob`と`Grep`の文言は含まない。
+- 文言の長さ: 先頭200文字で切る制限に掛かったのは、ジョブ専用の一時領域の`Read`の1件だけである。
+  長いパスで約202文字になり、`working director`で切れた。
+  ほかの8件は139〜191文字で、全文が残った。
+- 作業ディレクトリの中の陽性対照: 3ツールとも成功した。
+  `Read`は目印の値を含み、`Glob`は目印のファイルの名前を含み、`Grep`は値とファイルの名前の両方を含んだ。
+- 入力のキー: `Glob`と`Grep`の入力は、プロンプトで固定した形(`pattern`と`path`、`Grep`は`output_mode`も)と完全に一致した。
+  12件すべてで、組と一致しない呼び出し(`unmatchedToolUse`)は0件だった。
+- 成功した結果の`is_error`は、`false`ではなく、値が無い(`null`)。
+  結果の読み方は、`true`かどうかで見る。
 
 この実行から言えるのは、ツールを通る3つの経路(`Read`、`Glob`、`Grep`)が、3つの置き場で`--restricted`の閉じ込めに止められたことである。
 拒否は、すべて`deny`の規則でなく、閉じ込めによる。
 
 未測定の事項は次のとおりである。
 
-- `deny`の規則が読み出しを止めるか。閉じ込めが先に拒否するため、規則の効果は測れていない。
-- 祖先(`/var/lib`、`/run`)を`path`にした`Glob`と`Grep`。閉じ込めの基準は作業ディレクトリなので、同じ文言で拒否される見込みだが、測っていない。
-- ツールを通らない経路。設定の層(project・localの設定、`.mcp.json`)、`CLAUDE.md`の`@`による取り込み、hookである。
+- `deny`の規則が読み出しを止めるか。
+  閉じ込めが先に拒否するため、規則の効果は測れていない。
+- 祖先(`/var/lib`、`/run`)を`path`にした`Glob`と`Grep`。
+  閉じ込めの基準は作業ディレクトリなので、同じ文言で拒否される見込みだが、測っていない。
+- ツールを通らない経路。
+  設定の層(project・localの設定、`.mcp.json`)、`CLAUDE.md`の`@`による取り込み、hookである。
 - 閉じ込めの内側にある、設定ファイルとatimeの組。
 
 この観測から、次を前提にする。
 
-- 設定ファイル(`.claude/settings.json`など)の組とatimeの測定は、閉じ込めの内側に置いた物でなければ意味を持たない。外の物は`--restricted`が先に拒否するためである。
+- 設定ファイル(`.claude/settings.json`など)の組とatimeの測定は、閉じ込めの内側に置いた物でなければ意味を持たない。
+  外の物は`--restricted`が先に拒否するためである。
 - ツールの経路の判定は、外の9件がすべて閉じ込めで拒否され、作業ディレクトリの3件が成功することを、条件にする。
 - `deny`の規則が効くかの測り方は、まだ決めていない。
 
@@ -7786,11 +8629,13 @@ transcriptと設定の置き場は、実行のたびに消す。
 12件とも成功し、再試行は0件、組と一致しない呼び出しは0件、`stoppedBy`と`notice`は空で、後始末の失敗も無かった。
 12件の合計は約77秒、ジョブ全体は1分41秒だった。
 結果に、目印の値とトークンの形は無かった。
-この合格は版1の記録なので、現在の関門は受けない。版2の合格は、次の実行に示す。
+この合格は版1の記録なので、現在の関門は受けない。
+版2の合格は、次の実行に示す。
 
 判定のテストでは確かめられず、この実行で初めて確かめられた点は次のとおりである。
 
-- 設定の置き場の形(`configDirShape`)は`job_tmp`になった。テストでは、設定の置き場とtranscriptの置き場が同じ値から決まるため、この形を作れなかった。
+- 設定の置き場の形(`configDirShape`)は`job_tmp`になった。
+  テストでは、設定の置き場とtranscriptの置き場が同じ値から決まるため、この形を作れなかった。
 - 版のコマンドの出力は`2.1.282 (Claude Code)`で、環境変数の版と先頭の語が一致した。
 - 判定が使う作業ディレクトリの綴りは、実機の拒否の文言と一致した。
 
@@ -7825,7 +8670,8 @@ transcriptと設定の置き場は、実行のたびに消す。
 真偽値でない値で例外にしないのは、設定を読む全てのscriptが止まるためである。
 門はimportを持たず、環境変数と現在時刻を読まない。
 設定を読む処理(`lib/config.ts`)は、門の結果だけから`investigate_enabled`を導く。
-`config.ts`は日常的に直すので保護しない。導き方は、保護されたテスト(`tests/scripts/investigate_gate.test.ts`)が固定する。
+`config.ts`は日常的に直すので保護しない。
+導き方は、保護されたテスト(`tests/scripts/investigate_gate.test.ts`)が固定する。
 このテストは、`investigate_enabled`を参照するファイルの集合と数も固定する。
 `investigate_enabled`を書く操作は、運用者がWindmillの画面か`wmill resource push`で行う。
 Consoleの設定タブには出ない。
@@ -7842,12 +8688,19 @@ Consoleの投入と新規投入の経路には繋がっていない。
 
 登録のstep(`steps/investigate_register.ts`)は、次の順に確かめ、1つでも満たさなければ、行を作らずに断る。
 
-1. 入力の形。ownerとrepoはGitHubの名前の形、Issueの番号は正の整数、依頼文は空でなく8,000字以内でNUL文字を含まない。
-2. 調査の設定。偽なら、行を作らずに断る。このとき、GitHubとsecret変数には触れない。
+1. 入力の形。
+   ownerとrepoはGitHubの名前の形、Issueの番号は正の整数、依頼文は空でなく8,000字以内でNUL文字を含まない。
+2. 調査の設定。
+   偽なら、行を作らずに断る。
+   このとき、GitHubとsecret変数には触れない。
 3. リポジトリの許可(`isRepoAllowed`)と、オーナーの数値IDの照合。
-4. 対象のIssue。開いていて、PRでなく、GitHubが返すリポジトリの綴りが入力と同じで、作者が運用者のPATのアカウントであること。
-5. 隔離の測定のジョブが、待ちの状態にも実行中の状態にもないこと。測定は、調査のworktreeの置き場の中身をすべて消す。
-6. 稼働中の調査が無いこと。挿入は、部分一意インデックスが衝突を受ける。一意制約の違反(`cycle`の衝突)も、同じ断りにする。
+4. 対象のIssue。
+   開いていて、PRでなく、GitHubが返すリポジトリの綴りが入力と同じで、作者が運用者のPATのアカウントであること。
+5. 隔離の測定のジョブが、待ちの状態にも実行中の状態にもないこと。
+   測定は、調査のworktreeの置き場の中身をすべて消す。
+6. 稼働中の調査が無いこと。
+   挿入は、部分一意インデックスが衝突を受ける。
+   一意制約の違反(`cycle`の衝突)も、同じ断りにする。
 
 依頼文は引数で受けて、行の`body`に保存する。
 以後のstepはその文だけを使い、Issueの本文は読まない。
@@ -7863,14 +8716,20 @@ Issueは返信の宛先であり、依頼文の出どころではない。
 生成のstep(`steps/investigate_generate.ts`)は、調査のClaudeを起動する本番で唯一の場所で、次の順序を固定する。
 順序は、保護されたテスト(`tests/scripts/investigate_generate.test.ts`)が、依存を差し替えた実行で固定する。
 
-1. 設定を読み直す。偽なら調査を取り消す。
+1. 設定を読み直す。
+   偽なら調査を取り消す。
 2. 行がこの実行のものであり、ほかに稼働中の調査が無く、隔離の測定のジョブも無いことを確かめる。
-3. 隔離の関門を呼ぶ。閉じていれば、置き場と作業ツリーには触れず、調査を`needs_human`にして止める。
+3. 隔離の関門を呼ぶ。
+   閉じていれば、置き場と作業ツリーには触れず、調査を`needs_human`にして止める。
 4. 置き場の自分以外の項目をすべて消す。
 5. 作業ツリーを作り、指示と設定の項目を無効にする([指示ファイルの無効化](#指示ファイルの無効化))。
-6. 起動の直前に、設定を読み直し、関門をもう一度呼ぶ。設定が偽になっているか、3の後で隔離が変わっていれば、起動しない。設定が偽なら、調査を取り消す。
-7. `runInvestigateClaude`で起動する。実行の記録は残す。
-8. 構造化出力から投稿する本文を作る([結果の無害化と投稿](#結果の無害化と投稿))。作れなければ、調査を`needs_human`にして通知する。
+6. 起動の直前に、設定を読み直し、関門をもう一度呼ぶ。
+   設定が偽になっているか、3の後で隔離が変わっていれば、起動しない。
+   設定が偽なら、調査を取り消す。
+7. `runInvestigateClaude`で起動する。
+   実行の記録は残す。
+8. 構造化出力から投稿する本文を作る([結果の無害化と投稿](#結果の無害化と投稿))。
+   作れなければ、調査を`needs_human`にして通知する。
 9. 成否にかかわらず、作業ツリーとシステムプロンプトのファイルを消す。
 
 関門の証拠は同じプロセスの中でしか使えないので、関門の呼び出しと起動は同じstepに置く。
@@ -7879,7 +8738,8 @@ Issueは返信の宛先であり、依頼文の出どころではない。
 テストは`tests/scripts/investigate_flow.test.ts`である。
 フローの定義(`flow.yaml`)のmoduleは、`f/factory/steps/investigate_`で始まるpathだけで、inline scriptを持たない。
 このことも同じテストが固定する。
-生成のstepの定義には、tagを付けない。付けると、tagを受けるworkerが無く、仕事が待ち行列に溜まる。
+生成のstepの定義には、tagを付けない。
+付けると、tagを受けるworkerが無く、仕事が待ち行列に溜まる。
 tagが無いことも、同じテストが固定する。
 
 失敗の詳細は、状態の注記と通知のどちらにも載せない。
@@ -7914,7 +8774,8 @@ Windmillは、引数の`$var:`や`$res:`で始まる文字列を、実行者の�
 1. 生の出力に、gitleaksを掛ける。
 2. 欄ごとに、次の3つを順に掛ける。
    workerが持つ秘密値の完全一致のマスク(`maskSecrets`)、`sanitizeUntrustedProse`による無害化、もう一度の完全一致のマスクである。
-   1回目は、欄の切り詰めが値を割る前に消すためである。2回目は、無害化で見えない文字が消えて、つながった値を消すためである。
+   1回目は、欄の切り詰めが値を割る前に消すためである。
+   2回目は、無害化で見えない文字が消えて、つながった値を消すためである。
 3. 組み立てて、投稿の目印を足しても65,536字に収まるよう切り詰め、最終の本文にgitleaksを掛ける。
 
 完全一致のマスクの対象は、生成のstepのジョブのトークンと、そのstepが読む秘密値である。
@@ -7922,7 +8783,8 @@ Windmillは、引数の`$var:`や`$res:`で始まる文字列を、実行者の�
 
 1か3で秘密値を検出したときと、検査できなかったときは、本文を作らない。
 生成のstepが、その場で調査を`needs_human`にして通知し、投稿のstepを飛ばす。
-投稿のstepも、符号を受けたら同じように人に回す。行が既に動いていれば、何もしないので、通知は重ならない。
+投稿のstepも、符号を受けたら同じように人に回す。
+行が既に動いていれば、何もしないので、通知は重ならない。
 検出のときの次の操作は、秘密の入れ替えである。
 検出した文字列はどこにも残らず、確かめる先が無い。
 workerの秘密値の流出を疑い、[秘密の入れ替え](#秘密の入れ替え)の手順を行う。
@@ -7936,7 +8798,8 @@ workerの秘密値の流出を疑い、[秘密の入れ替え](#秘密の入れ�
 完全一致のマスクとgitleaksは、どちらも第2層である。
 形が秘密値でない本文や、値を変えて書かれた秘密値は消せない。
 最後に投稿を止める守りは、投稿のstepの直前のgitleaks検査である。
-この検査の経路は保護の外にある。[残るリスク](#残るリスク)に書く。
+この検査の経路は保護の外にある。
+[残るリスク](#残るリスク)に書く。
 
 コメントは、先頭にタグ`[investigate 自動調査]`、末尾に目印`<!-- factory:investigate:<id> -->`を付けて投稿する。
 目印は、Factory自身のアカウントのコメントにあるものだけを、投稿済みとみなす。
@@ -8016,7 +8879,8 @@ sha256の表は人が更新できるので、表の更新だけでは緩めて�
 調査の行を読む2つの関数と、失敗処理の調査の分岐も、同じ理由で保護しない。
 関数は`listInvestigatingWorkItemIds`と`getInvestigateWorkItemByFlowJobId`で、分岐は`on_error_flow.ts`にある。
 読む述語と分岐は、それぞれのテストが固定する。
-5つの`.script.lock`は保護しない。`windmill-client`を含みうるlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
+5つの`.script.lock`は保護しない。
+`windmill-client`を含みうるlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
 
 置き場を作るworker imageの記述(`infra/worker/Dockerfile`)は、`infra/worker/`の前方一致で既に保護されている。
 `lib/workspace.ts`は保護しない。
@@ -8038,11 +8902,13 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   拒否は、`--restricted`の閉じ込め1枚に頼る。
 - ツールを通らない経路(設定の層、hook)は、測っていない。
   `CLAUDE.md`の`@`による取り込みは測らずに、[指示ファイルの無効化](#指示ファイルの無効化)で名前を変えて塞ぐ。
-  設定の層を`user`だけにしたとき、対象リポジトリの`CLAUDE.md`が読み込まれなくなるかは、実機で確かめていない。読み込まれうる条件が残っても、改名の後の確かめ直しが、対象の名前が残ったworktreeを使わせない。
+  設定の層を`user`だけにしたとき、対象リポジトリの`CLAUDE.md`が読み込まれなくなるかは、実機で確かめていない。
+  読み込まれうる条件が残っても、改名の後の確かめ直しが、対象の名前が残ったworktreeを使わせない。
 - 判定の根拠は、1回の実行(ジョブ01a1a0b1-cd69-6017-20f8-26b7407b6f3b)で、Claude Code 2.1.282に限る。
   版が上がると、関門が`version_changed`で閉じる。
   そのとき拒否の文言が変わっていれば、判定の版を上げて測り直す。
-- 拒否の文言は、Claude Codeの内部の文字列に頼る。変わると、不合格に倒れる。
+- 拒否の文言は、Claude Codeの内部の文字列に頼る。
+  変わると、不合格に倒れる。
 - 12件の実行は、モデルの振る舞いに依存する。
   呼び出しが1回でなくなると不合格になるので、再実行して通るかを確かめる。
 - 観測のモジュールの変更は、ハッシュの表が拾う。
@@ -8050,7 +8916,8 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   その変更は、観測のテストの固定とレビューが受け持つ。
 - 表に入っていないファイルの変更も、表は拾わない。
   `lib/investigate_workspace.ts`の`investigateWorktreeDir`が返す作業ディレクトリや、`lib/investigate_isolation.ts`の定数が対象である。
-  保護パスとレビューが受け持つ。表に足さないのは、判定に効く変更が頻繁に版を上げる原因にならないよう、判定の直接の入力だけに絞るためである。
+  保護パスとレビューが受け持つ。
+  表に足さないのは、判定に効く変更が頻繁に版を上げる原因にならないよう、判定の直接の入力だけに絞るためである。
 - 測定のscriptが、結果を自己申告する。
   信頼の根は、測定のscriptの保護(`f/factory/investigate_isolation_probe.`の前方一致)にある。
   関門が読むのは、Windmillに置かれた`f/factory/investigate_isolation_probe`の完了ジョブである。
@@ -8059,7 +8926,8 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   測定は、判定と観測のモジュールを相対のimportで読み、Windmillはこのimportを実行のときに解決する。
   そのため、判定と観測のモジュールのpathと、測定が起動に使う`lib/claude.ts`のpathも、同じ理由で書き換えの対象になる。
   この偽造できる主体は、デプロイできる者であり、デプロイ済みのコード全体と同じ信頼の範囲に含める。
-  scriptのハッシュの照合は入れない。受け入れる。
+  scriptのハッシュの照合は入れない。
+  受け入れる。
 - 測定の実行の経路に、保護されていないモジュールが入っている。
   対象は次の3つである。
   `lib/log.ts`(`maskSecrets`)、`lib/types.ts`、`lib/db.ts`(`hasInvestigatingWorkItem`)。
@@ -8071,10 +8939,12 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   失敗は調査を止める側に倒れるので、受け入れる。
 - Claude Codeの版が上がると、作業ディレクトリから読む指示や設定の名前が増えうる。
   版を上げるときは、その名前を確かめ、`INSTRUCTION_ENTRY_NAMES`(`lib/investigate_workspace.ts`)を直す。
-  確かめない間は、新しい名前の項目が改名されずに残る。受け入れる。
+  確かめない間は、新しい名前の項目が改名されずに残る。
+  受け入れる。
 - 関門が見るのは、最新の完了ジョブ1件だけである。
   不合格の後に再実行して通ると、前の不合格は見えなくなる。
-- 判定は、後始末の失敗(`cleanup.failed`)を条件にしない。目印が秘密でなく、後始末の失敗が秘密に関わらないためである。
+- 判定は、後始末の失敗(`cleanup.failed`)を条件にしない。
+  目印が秘密でなく、後始末の失敗が秘密に関わらないためである。
 - 公開の関門`checkIsolationProof`と、調査のClaudeを起動する公開の`runInvestigateClaude`を名指しする本番のファイルは、2種類に限る。
   1つは定義元で、もう1つは調査の生成のstep(`steps/investigate_generate.ts`)である。
   生成のstepでは、importと、依存の初期値として渡す箇所の2回ずつ現れる。
@@ -8101,9 +8971,11 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   scriptのハッシュの照合は入れない。
 - 測定を動かす主体と、関門を呼ぶ主体が、同じ範囲のジョブの記録を読めることを前提にする。
   見える範囲が違うと、閉じる理由が`proof_unreadable`か`proof_missing`になる。
-- ジョブの記録の保持期間(約30日)が切れると、測定のジョブが見えなくなり、関門が閉じる。閉じるのは安全な側である。
+- ジョブの記録の保持期間(約30日)が切れると、測定のジョブが見えなくなり、関門が閉じる。
+  閉じるのは安全な側である。
 - 関門が塞ぐのは、`runInvestigateClaude`を通る起動だけである。
-  `runClaude`を直接呼ぶ経路は`lib/claude.ts`にあり、この証拠では塞がない。`lib/claude.ts`は保護パスで、変更は人の承認を経て反映される。
+  `runClaude`を直接呼ぶ経路は`lib/claude.ts`にあり、この証拠では塞がない。
+  `lib/claude.ts`は保護パスで、変更は人の承認を経て反映される。
   調査の4つのstepと支援のlibが`runClaude`を名指ししないことは、保護されたテストが固定する。
   別のファイルから名指しする経路は、このテストでは見つからないので、PRのレビューで見る。
 - 証拠の参照元の走査は、識別子を連結や別名で組み立てる動的な参照を数えられない。
@@ -8112,7 +8984,8 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   対象リポジトリの設定を読まないこと(設定の層を`user`だけにしたこと)が、実際に文脈へ入らないことも、実機で確かめていない。
 - `lib/claude.ts`の分岐のうち、テストと本番で振る舞いが変わるものは、保護されたテストでは見つからない。
   PRのレビューで見る。
-- 作業ディレクトリの検査は、起動の前の1回である。起動の後にsymlinkを差し替える操作は、検出しない。
+- 作業ディレクトリの検査は、起動の前の1回である。
+  起動の後にsymlinkを差し替える操作は、検出しない。
 - 置き場をworker imageが作ること、置き場の検査、`git worktree add`が置き場の下に作れることは、実機で確かめていない。
   image(`mise run up`)の反映の後でないと確かめられない。
 - 掃除は、置き場の下の自分以外の項目をすべて消す。
@@ -8124,7 +8997,8 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   測定は、始める前に稼働中の調査をDBで確かめ、あれば断る。
   調査の側は、登録のstepと生成のstepが、測定のジョブが待ちか実行中でないことを確かめ、あれば断る。
   確認は、測定の開始時と、調査の登録と生成の開始時に、1回ずつである。
-  確認と掃除の間に相手が始まる競合は残る。受け入れる。
+  確認と掃除の間に相手が始まる競合は残る。
+  受け入れる。
   workerを増やす変更や、調査を並行させる変更では、この前提を見直す。
 - 調査のフローの失敗処理は、`flow_job_id`を記録していない行を`failed`にしない。
   登録が、行の作成と同時にフローのルートジョブのIDを`flow_job_id`に記録することを前提にする。
@@ -8144,13 +9018,16 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   生成のstepでは、この本文は検査を2回通っている。
 - 投稿のstepは、コメントの投稿と、調査の状態の更新を、別の操作で行う。
   投稿の後に更新が失敗すると、調査は`failed`になり、コメントは残る。
-  投稿し直すと、新しい作業項目の目印で、2件目のコメントが付く。受け入れる。
+  投稿し直すと、新しい作業項目の目印で、2件目のコメントが付く。
+  受け入れる。
 - 調査の実行の途中で、予定外の読み出しを見つけて止める手段は無い。
   隔離の測定は実行の後にtranscriptを読んで検出するが、調査の本番の実行には、実行後のtranscriptの検査が無い。
-  読み出しを防ぐのは、ツールの制限と`--restricted`の閉じ込めと、指示ファイルの無効化に限る。受け入れる。
+  読み出しを防ぐのは、ツールの制限と`--restricted`の閉じ込めと、指示ファイルの無効化に限る。
+  受け入れる。
 - 調査の結果のコメントには、`Glob`と`Grep`の結果のパス名が出うる。
   対象は、作業ディレクトリの中のパスと、それを根拠にした説明である。
-  Issueを読める人には見える。非公開の試験用リポジトリで、敵対的な依頼文を使って確かめる。
+  Issueを読める人には見える。
+  非公開の試験用リポジトリで、敵対的な依頼文を使って確かめる。
 - 完全一致のマスクの対象は、生成のstepが読む秘密値に限る。
   `claude_oauth_token`、`github_token`、`wmill_token`、`discord_webhook_url`の値と、生成のstepのジョブのトークンである。
   `github_read_tokens`は、対応表の値を1つずつ消す。
@@ -8171,7 +9048,8 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   見えないと、確認が空の一覧になり、測定が動いていても調査を始めうる。
 - 依頼文の`@`が、プロンプトの展開で取り込みにならないことは、実装でなく実機の確認に回した。
 - 作業ディレクトリの中(対象リポジトリの内容)は、読めるので、信頼できない入力のままである。
-  プロンプトのデータの区切りと、出力の検査で抑える。どちらも、呼び出し側が担う。
+  プロンプトのデータの区切りと、出力の検査で抑える。
+  どちらも、呼び出し側が担う。
 
 ### 入口の前提の扱い
 
@@ -8187,14 +9065,23 @@ worktreeを作った後に、指示と設定の項目を改名する([指示フ�
 
 #### 受け入れるもの
 
-- 関門が完了ジョブの`script_hash`を照らさないこと。偽造できる主体は、デプロイできる者であり、デプロイの信頼範囲に含める。
+- 関門が完了ジョブの`script_hash`を照らさないこと。
+  偽造できる主体は、デプロイできる者であり、デプロイの信頼範囲に含める。
   対象には、測定のscript、判定と観測のモジュールのpath、`lib/claude.ts`のpathを含む。
-- 関門が直近の不合格の履歴を見ないこと。不合格の後の扱いは、[運用](operations.md#不合格のときの扱い)の手順が決める。
-- 関門が保存された観測から判定を計算し直さないこと。観測も、測定のscriptと同じ主体が偽造できる。判定の版は、ハッシュの表のテストが強制する。
-- 判定の版が変わったときに、測定を自動で走らせないこと。手で測り直す。
-- `Glob`の`pattern`に`..`や絶対パスを書く逃げ道。拒否は作業ディレクトリへの閉じ込めに頼り、パス名だけが漏れうる。
-- `deny`の規則の効果。閉じ込めが先に拒否するので測れない。効果は主張しない。
-- 祖先のディレクトリを`path`にした検索。閉じ込めの基準は作業ディレクトリなので、拒否される見込みである。
+- 関門が直近の不合格の履歴を見ないこと。
+  不合格の後の扱いは、[運用](operations.md#不合格のときの扱い)の手順が決める。
+- 関門が保存された観測から判定を計算し直さないこと。
+  観測も、測定のscriptと同じ主体が偽造できる。
+  判定の版は、ハッシュの表のテストが強制する。
+- 判定の版が変わったときに、測定を自動で走らせないこと。
+  手で測り直す。
+- `Glob`の`pattern`に`..`や絶対パスを書く逃げ道。
+  拒否は作業ディレクトリへの閉じ込めに頼り、パス名だけが漏れうる。
+- `deny`の規則の効果。
+  閉じ込めが先に拒否するので測れない。
+  効果は主張しない。
+- 祖先のディレクトリを`path`にした検索。
+  閉じ込めの基準は作業ディレクトリなので、拒否される見込みである。
 
 #### 実機で確かめるもの
 
@@ -8256,7 +9143,8 @@ Factoryは、原則としてPRをマージしない。
 | 公開の日数 | 更新先の版の公開から`dependabot_min_published_days`日(既定7日)以上たっている |
 | マージの設定 | `dependabot_merge_enabled`が真である。偽なら、マージの直前の確認までを行い、マージせずに人に回す |
 
-`factory_repo`の必須チェックの名前は、`main`のrulesetの10件に固定している。設定では変えられない。
+`factory_repo`の必須チェックの名前は、`main`のrulesetの10件に固定している。
+設定では変えられない。
 他のリポジトリの必須チェックは、設定に持たず、そのリポジトリのrulesetから読む([他のリポジトリ](#他のリポジトリ))。
 
 事実はすべて、最初に読んだheadとbaseのshaに固定して集める。
@@ -8426,7 +9314,8 @@ Claudeのバージョンが変わったときは、同じ実験をやり直す�
   一覧を読むのは、収集が止まっているか、そのリポジトリの記録を使えない間と、収集が集めないリポジトリ(`owners`に無い所有者の`factory_repo`、fork、先頭が`.`のリポジトリ名など)である。
   収集が集めないリポジトリでは、収集が動いていても当たる。
   失敗は`failed`に数え、失敗の記録として残る。
-- セキュリティ更新と版の更新を区別しない。どちらも同じ関門を通る。
+- セキュリティ更新と版の更新を区別しない。
+  どちらも同じ関門を通る。
 - `node_modules`の下の`CLAUDE.md`と`AGENTS.md`は、単独の実験では読み込まれなかった。
   ただし、Claudeのバージョンが変わると結果が変わりうるので、更新のたびに同じ実験をやり直す。
   依存が同梱する指示のファイルが読み込まれれば、影響調査の判断に指示を注入される窓が開く。
@@ -8438,15 +9327,21 @@ Claudeのバージョンが変わったときは、同じ実験をやり直す�
   パッケージが増えるほど調査が浅くなりうる。
   変更履歴どうしの影響も、機械では確かめない。
 - 名前の網羅検査は補助にすぎない([グループの更新](#グループの更新))。
-- 他のリポジトリを処理する条件を外す前に、次を決める。これを決めるまで、他のリポジトリはマージの経路に入れない。
+- 他のリポジトリを処理する条件を外す前に、次を決める。
+  これを決めるまで、他のリポジトリはマージの経路に入れない。
   - 古典的なブランチ保護の必須チェックの読み方(権限と、404の曖昧さ)と、併用するリポジトリの扱い。
   - ルールの`bypass_actors`、`strict`、古典的な保護の`enforce_admins`、commit statusで満たす必須チェック。
   - `required_status_checks`以外の規則。
     `workflows`、`code_scanning`、`required_deployments`、`merge_queue`、承認数1以上の`pull_request`がある。
-  - `dependabot_other_repos`の既定値の置き場。今は保護パスの外の`config.ts`にある。保護パスの定数にするか、リソースに明示されたときだけ有効にする。
+  - `dependabot_other_repos`の既定値の置き場。
+    今は保護パスの外の`config.ts`にある。
+    保護パスの定数にするか、リソースに明示されたときだけ有効にする。
   - インストールを使わない変更履歴と同一性の確認(5b)。
-- 他のリポジトリを人に回す条件は、`factory_repo`の値と、その読み込み(保護パスの外の`config.ts`)を信頼する前提に立つ。`factory_repo`を書き換えられる者は、`self_update`などで全体を握れるので、新しいリスクではない。
-- ルールの読み取り(`listBranchRules`)は、保護パスの外の`lib/github.ts`にある。偽の値を返すように書き換える変更は、チェックの一覧(`listPrChecks`)と同じく、PRのレビューだけが止める。解釈と検証は保護パスの`requiredChecksFromRules`にある。
+- 他のリポジトリを人に回す条件は、`factory_repo`の値と、その読み込み(保護パスの外の`config.ts`)を信頼する前提に立つ。
+  `factory_repo`を書き換えられる者は、`self_update`などで全体を握れるので、新しいリスクではない。
+- ルールの読み取り(`listBranchRules`)は、保護パスの外の`lib/github.ts`にある。
+  偽の値を返すように書き換える変更は、チェックの一覧(`listPrChecks`)と同じく、PRのレビューだけが止める。
+  解釈と検証は保護パスの`requiredChecksFromRules`にある。
 - `repo_allowlist`の他のリポジトリを処理していた環境では、この変更の反映後、`dependabot_other_repos`に挙げるまで、そのリポジトリのdependabotのPRを処理しない。
 - `dependabot_group_enabled`の既定値は、保護パスの外の`config.ts`にある。
   Factoryの修正が書き換えても保護パスでは止まらず、PRのレビューだけが防ぐ。
@@ -8468,10 +9363,13 @@ Windmillは、引数の文字列が変数やresourceへの参照の形で始ま�
 
 次の点は、Windmillの公開ソース(`backend/windmill-worker/src/common.rs`)の、`mise.toml`の`WM_VERSION`と同じ版のタグで確かめた。
 
-- 置き換えは、引数ごとに働く。flowのstepの引数(式の結果)も同じである。
-- 置き換えるのは、文字列の先頭が`$var:`、`$jsonvar:`、`$res:`、`$encrypted:`のどれかのときである。`$`で始まり、残りが予約変数の名前と一致する文字列も、その値に置き換わる。
+- 置き換えは、引数ごとに働く。
+  flowのstepの引数(式の結果)も同じである。
+- 置き換えるのは、文字列の先頭が`$var:`、`$jsonvar:`、`$res:`、`$encrypted:`のどれかのときである。
+  `$`で始まり、残りが予約変数の名前と一致する文字列も、その値に置き換わる。
 - 引数のJSONのどこにも上の4つの形が無ければ、その引数は走査されない。
-- 走査は、オブジェクトの中を深さ50まで進む。深さ2と1000件の制限は、配列だけにかかる。
+- 走査は、オブジェクトの中を深さ50まで進む。
+  深さ2と1000件の制限は、配列だけにかかる。
 
 ここから、次のことが決まる。
 
@@ -8566,11 +9464,18 @@ PRレビューの投稿のstepは、戻せなかったときも、レビュー�
 
 ## 承認と権限
 
-承認できるのは、`f/factory/**`のスクリプトを実行できるアカウントである。実行の権限はフォルダ`f/factory`の権限で決まり、このフォルダには所有者も追加の権限も付けていないので、ワークスペースの管理者だけが該当する。
+承認できるのは、`f/factory/**`のスクリプトを実行できるアカウントである。
+実行の権限はフォルダ`f/factory`の権限で決まり、このフォルダには所有者も追加の権限も付けていないので、ワークスペースの管理者だけが該当する。
 
-承認は必ずConsoleの要対応(`approval_decide`を実行する)から行う。Windmillのapproval pageのURLは署名付きのcapability URLなので、PRのコメントやDiscordの通知に載せない。approval pageのURLから直接resumeすると承認の状態が記録されず、作業項目は人の対応待ちになる。
+承認は必ずConsoleの要対応(`approval_decide`を実行する)から行う。
+Windmillのapproval pageのURLは署名付きのcapability URLなので、PRのコメントやDiscordの通知に載せない。
+approval pageのURLから直接resumeすると承認の状態が記録されず、作業項目は人の対応待ちになる。
 
-承認者は`f/factory/lib/approver.ts`の`deriveApprover`が導出する。記録先は`approval_requests.decided_by`と`issue_proposals.decided_by`である。Windmillのログインユーザー名(`WM_USERNAME`)を優先し、無ければ`WM_EMAIL`を使い、どちらも無ければ例外で処理を止める。呼び出し元が渡す引数は承認者として信頼しない。承認者が不明なまま既定値で記録することは無い。
+承認者は`f/factory/lib/approver.ts`の`deriveApprover`が導出する。
+記録先は`approval_requests.decided_by`と`issue_proposals.decided_by`である。
+Windmillのログインユーザー名(`WM_USERNAME`)を優先し、無ければ`WM_EMAIL`を使い、どちらも無ければ例外で処理を止める。
+呼び出し元が渡す引数は承認者として信頼しない。
+承認者が不明なまま既定値で記録することは無い。
 
 ## ラベル付与の制限
 
@@ -8598,7 +9503,8 @@ GitHubでは、ラベルを付けるのにtriage以上の権限が要る。
 ラベル名は、GitHubと同じく大文字小文字を区別せずに比べる。
 
 `poll_issues`は、トリガーラベル付きのIssueを収集の表から見つける。
-表を使えない明示リポジトリは、RESTのIssueの一覧を`labels`で絞って読む。検索は使わない。
+表を使えない明示リポジトリは、RESTのIssueの一覧を`labels`で絞って読む。
+検索は使わない。
 表から見つけたIssueと、一覧で見つけたIssueは、付与者の確認の前に、`getIssue`で開いていること、PRでないこと、トリガーラベルが付いていることを確かめる。
 閉じたIssue、PR、ラベルが外れたIssueは、付与者を読まずに外す。
 外れたラベルの付与者を読むと、許可されない人がラベルを外した後に、偽の`labeler_denied`を残すためである。
@@ -8609,7 +9515,8 @@ GitHubでは、ラベルを付けるのにtriage以上の権限が要る。
 一覧を読むのは、照合を通った所有者の明示リポジトリだけで、読む範囲を設定の外へ広げない。
 
 `poll_prs`は、ラベル、レビューの依頼、assigneeのPRを収集の表から見つける。
-表を使えない明示リポジトリは、RESTのPRの一覧を読む。検索は使わない。
+表を使えない明示リポジトリは、RESTのPRの一覧を読む。
+検索は使わない。
 表から見つけたPRと、一覧で見つけたPRは、`getPr`と`getIssue`で確かめてから判定に進む。
 確かめるのは、PRが開いていることと、ラベル、PATのアカウントへの依頼、assigneeのどれかに今も当たることである。
 閉じたPRと、どれにも当たらなくなったPRは外す。
@@ -8657,7 +9564,8 @@ assigneeや依頼を外された後の古い行から、対象でないPRのレ�
 
 拒否したときは、ラベルを外さずに、noticeの`labeler_denied`を記録する。
 本文は対象とラベルだけで決まり、同じ本文の未解決のnoticeがあるあいだは追加しない。
-イベントの取得に失敗したときは、noticeを増やさず、失敗の記録を残す。Consoleの**システム**の「作業項目に紐づかない失敗」に出る。
+イベントの取得に失敗したときは、noticeを増やさず、失敗の記録を残す。
+Consoleの**システム**の「作業項目に紐づかない失敗」に出る。
 記録されるステップ名は、Issueが`fetch_labeler:<owner>/<repo>#<番号>`、PRが`fetch_pr:<owner>/<repo>#<番号>`である。
 
 付与者を判定できないときは、失敗ではなく、noticeの`labeler_check_limit`を1回だけ記録する。
@@ -8669,7 +9577,8 @@ noticeは、対応した後にConsoleで解決する。
 
 判定から取得までには時間差があるので、取得の直前に同じ確認をもう一度行う。
 拒否されたときは、取得せずに`labeler_denied`を記録する。
-取得できなかったときは、取得せず、失敗の記録に`confirm_labeler:<owner>/<repo>#<番号>`として残す。Consoleの**システム**の「作業項目に紐づかない失敗」に出る。
+取得できなかったときは、取得せず、失敗の記録に`confirm_labeler:<owner>/<repo>#<番号>`として残す。
+Consoleの**システム**の「作業項目に紐づかない失敗」に出る。
 このときラベルは外れていないので、操作は要らない。
 次のポーリングが、自動で拾い直す。
 ラベルを付け直すと、付与者がその人に変わる。
@@ -8748,7 +9657,8 @@ forkの内容は第三者が書いたもので、信頼してレビューに渡�
 - 起票者がIssueを書き換え続けると、承認を止め続けられる。
   書き換えのたびに承認が断られ、却下で作り直すとClaudeの実行と試行が1回ずつ減り、`max_attempts`に達すると人の対応待ちになる。
   起票者を信頼できないリポジトリ、特に公開リポジトリを対象とする前には、ラベルを付けた後のIssueをロックし、編集を止める運用を決める。
-  Issueの「Lock conversation」が起票者の本文の編集を止めるかは未確認である。採用の前に確かめる。
+  Issueの「Lock conversation」が起票者の本文の編集を止めるかは未確認である。
+  採用の前に確かめる。
 - 確認からラベルを外すまでの窓は数百ミリ秒である。
   付け直しを成功させるには、狙ったタイミングが要る。
 - 書き込み権限のある人がラベルを改名すると、過去の付与が現在のトリガーラベルの付与として数えられる。
@@ -8780,7 +9690,8 @@ PRのレビューとコメントは、投稿者で絞る。
 - 作者の`author_association`
 
 タイムラインの`closed`と`merged`のイベントには`author_association`が無いので、使わない。
-判定は次の順に行う。ログイン名は大文字と小文字を区別せずに比べる。
+判定は次の順に行う。
+ログイン名は大文字と小文字を区別せずに比べる。
 
 | 順 | 状況 | 判定 |
 | --- | --- | --- |
@@ -8792,7 +9703,8 @@ PRのレビューとコメントは、投稿者で絞る。
 | 6 | 作者が閉じ、作者の`author_association`が`allowed_labeler_associations`に含まれる | 取り消す |
 | 7 | 作者が閉じ、作者の関係が含まれないか分からない | 取り消さない |
 
-取り消さなかった対象は、一覧に残る。理由と対象は`poll_issues`のログにinfoで残す。
+取り消さなかった対象は、一覧に残る。
+理由と対象は`poll_issues`のログにinfoで残す。
 
 第三者が自分のIssueやPRを閉じて、安全策で止まった作業項目を一覧から消せないようにするためである。
 publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIssueやPRを閉じられる。
@@ -8803,6 +9715,10 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
 
 残るリスクは次のとおり。
 
-- PRのheadブランチやforkを消してPRが閉じたときの`closed_by`は、実機で確かめる。作者と別のアカウントが消すと、作者以外の人が閉じた扱いで取り消されうる。
-- 人のアカウント(`type`が`User`)のPATで閉じる自動化は、Botとして扱われない。作者と別のアカウントなら、作者以外の人が閉じた扱いになり、取り消される。第三者のイベントで閉じる自動化は、`GITHUB_TOKEN`かGitHub Appのinstallation tokenで動かす。
-- 判定は、要対応の一覧の取り消しにだけかかる。承認待ちなど終端でない作業項目は、既存のreconcileが閉じた人を確かめずに取り消す。
+- PRのheadブランチやforkを消してPRが閉じたときの`closed_by`は、実機で確かめる。
+  作者と別のアカウントが消すと、作者以外の人が閉じた扱いで取り消されうる。
+- 人のアカウント(`type`が`User`)のPATで閉じる自動化は、Botとして扱われない。
+  作者と別のアカウントなら、作者以外の人が閉じた扱いになり、取り消される。
+  第三者のイベントで閉じる自動化は、`GITHUB_TOKEN`かGitHub Appのinstallation tokenで動かす。
+- 判定は、要対応の一覧の取り消しにだけかかる。
+  承認待ちなど終端でない作業項目は、既存のreconcileが閉じた人を確かめずに取り消す。

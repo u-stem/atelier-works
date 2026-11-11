@@ -1,10 +1,13 @@
 # 要件定義の生成と承認
 
-工程2で要件定義ドラフトを作る処理と、人の承認を待って反映する仕組みを定める仕様である。pipelineフロー、承認のscript、Consoleの要件定義の表示を変更する人が読む。
+工程2で要件定義ドラフトを作る処理と、人の承認を待って反映する仕組みを定める仕様である。
+pipelineフロー、承認のscript、Consoleの要件定義の表示を変更する人が読む。
 
 ## 生成の流れ
 
-pipelineフロー(`f/factory/pipeline`)は次の3つのステップで動く。どのステップも、要件定義フローのリースを持つときだけ作業項目を書き換える。リースは[作業項目の状態とリース](work-items.md)に書く。
+pipelineフロー(`f/factory/pipeline`)は次の3つのステップで動く。
+どのステップも、要件定義フローのリースを持つときだけ作業項目を書き換える。
+リースは[作業項目の状態とリース](work-items.md)に書く。
 
 | ステップ | 処理 |
 | --- | --- |
@@ -12,9 +15,11 @@ pipelineフロー(`f/factory/pipeline`)は次の3つのステップで動く。�
 | `pipeline_generate` | 日次予算を確かめ、headless Claudeに要件定義書と図を書かせ、検査してドラフトとして保存する |
 | `pipeline_request_approval` | 承認依頼を記録して通知し、人の判断を待たずにフローを終える |
 
-要件定義用のworktreeは`/workspaces/<owner>/<repo>/req-<N>`に置く。既存のworktreeが既定ブランチの今の先頭と違えば、消して作り直す。
+要件定義用のworktreeは`/workspaces/<owner>/<repo>/req-<N>`に置く。
+既存のworktreeが既定ブランチの今の先頭と違えば、消して作り直す。
 
-日次予算を超えていれば、`pipeline_generate`はClaudeを起動しない。作業項目を人の対応待ち(`needs_human`)にし、Discordに通知する。
+日次予算を超えていれば、`pipeline_generate`はClaudeを起動しない。
+作業項目を人の対応待ち(`needs_human`)にし、Discordに通知する。
 
 リポジトリのオーナーの照合に通らないときは、`pipeline_prepare`が、対象リポジトリをcloneせずに、作業項目を人の対応待ちにしてDiscordに通知する。
 後続のステップは飛ばす。
@@ -22,20 +27,26 @@ pipelineフロー(`f/factory/pipeline`)は次の3つのステップで動く。�
 
 ## 要件定義ファイルの置き場所
 
-生成した要件定義書と図は、DBではなくworkerのファイルに置く。試行ごとのディレクトリ(`doc_dir`)の形式は次のとおり。
+生成した要件定義書と図は、DBではなくworkerのファイルに置く。
+試行ごとのディレクトリ(`doc_dir`)の形式は次のとおり。
 
 ```text
 /var/lib/factory/requirements/<owner>/<repo>/issue-<N>/wi-<work_item_id>/attempt-<attempt>/
 ```
 
-`/var/lib/factory`は、名前付きボリューム`factory_state`である。defaultのworkerが読み書きし、Console用のworkerはサブパス`requirements`だけを読み取り専用でマウントする。このディレクトリはコミットしない。`owner`と`repo`は、GitHubの名前として正しいかを確かめてからパスに埋め込む。
+`/var/lib/factory`は、名前付きボリューム`factory_state`である。
+defaultのworkerが読み書きし、Console用のworkerはサブパス`requirements`だけを読み取り専用でマウントする。
+このディレクトリはコミットしない。
+`owner`と`repo`は、GitHubの名前として正しいかを確かめてからパスに埋め込む。
 
 ディレクトリには、要件定義書の`requirements.md`と、図の`<name>.drawio`だけを置く。
 DBの`requirement_drafts`には、本文(`markdown`)、図の参照(`{name, file}`)、未確定事項、`doc_dir`、基準値(`doc_hash`)を保存する。
 基準値は[基準値](#基準値)に書く。
 図のXMLはDBに保存しない。
 
-Consoleのbackendがどのworkerで動くかは、scriptの`tag`で決まる。どちらのworkerも、同じボリュームを読む。workerを別のホストに分けるときは、このディレクトリを共有するストレージが要る。
+Consoleのbackendがどのworkerで動くかは、scriptの`tag`で決まる。
+どちらのworkerも、同じボリュームを読む。
+workerを別のホストに分けるときは、このディレクトリを共有するストレージが要る。
 
 作業項目を削除するときの要件定義ディレクトリの扱いは、DBの掃除(`cleanup_db`)が受け持つ。
 
@@ -134,7 +145,8 @@ DBの本文と基準値を、同じ時点の内容にするためである。
 
 ## Claudeの実行
 
-`pipeline_generate`は、試行ごとのディレクトリを空にしてからテンプレートを`requirements.md`として複製し、そこをClaudeのカレントディレクトリにする。空にするのは、再試行した試行に前の試行の書きかけを見せないためである。
+`pipeline_generate`は、試行ごとのディレクトリを空にしてからテンプレートを`requirements.md`として複製し、そこをClaudeのカレントディレクトリにする。
+空にするのは、再試行した試行に前の試行の書きかけを見せないためである。
 
 | 項目 | 値 |
 | --- | --- |
@@ -147,15 +159,20 @@ DBの本文と基準値を、同じ時点の内容にするためである。
 | モデル | `heavy_model` |
 | 上限 | `max_turns`、`max_budget_usd_per_run`、`claude_timeout_sec` |
 
-Claudeは`requirements.md`を`Edit`で埋め、図があれば`<name>.drawio`を`Write`で横に置く。`Write`と`Edit`を許可しても、`--restricted`によって書き込みはカレントディレクトリの下に閉じる。
+Claudeは`requirements.md`を`Edit`で埋め、図があれば`<name>.drawio`を`Write`で横に置く。
+`Write`と`Edit`を許可しても、`--restricted`によって書き込みはカレントディレクトリの下に閉じる。
 
-本文と図は、実行の後にディレクトリから読み戻す。想定外のファイルやディレクトリがあれば、警告を残して消す。
+本文と図は、実行の後にディレクトリから読み戻す。
+想定外のファイルやディレクトリがあれば、警告を残して消す。
 
-Claudeに渡すIssueの題名、本文、URLは、作業項目に取り込んだときのものである。2回目以降の試行では、前のドラフトと却下の理由も渡す。
+Claudeに渡すIssueの題名、本文、URLは、作業項目に取り込んだときのものである。
+2回目以降の試行では、前のドラフトと却下の理由も渡す。
 
 ## テンプレートと検査
 
-テンプレートは`.claude/skills/factory-requirements/template.md`にある。生成した文書は`f/factory/lib/requirements_doc.ts`が機械的に検査する。章立てなどの決まりは`f/factory/lib/requirements_template.ts`に定数として持つ。
+テンプレートは`.claude/skills/factory-requirements/template.md`にある。
+生成した文書は`f/factory/lib/requirements_doc.ts`が機械的に検査する。
+章立てなどの決まりは`f/factory/lib/requirements_template.ts`に定数として持つ。
 
 | 検査 | 内容 |
 | --- | --- |
@@ -173,13 +190,16 @@ Claudeに渡すIssueの題名、本文、URLは、作業項目に取り込んだ
 
 Claudeの出力が検査を通らないときは、問題点をプロンプトに付け足して1回だけ再試行する(`runClaude`の`reviewOutput`)。
 再試行は新しいセッションで動くので、前回書いたファイルを作り直さずに編集して直すよう、プロンプトで伝える(`reviewRetryNote`)。
-再試行がタイムアウトなどの別の理由で失敗したときは、再試行に至った問題も失敗の詳細に残す。再試行の後も通らなければ、ステップは例外で失敗する。失敗は`on_error_flow`が扱う。
+再試行がタイムアウトなどの別の理由で失敗したときは、再試行に至った問題も失敗の詳細に残す。
+再試行の後も通らなければ、ステップは例外で失敗する。
+失敗は`on_error_flow`が扱う。
 Claudeの実行がtimeout、`--max-budget-usd`の超過、使用上限、全停止で失敗したときは、例外の文の先頭に`[no-flow-retry]`を付ける。
 `flow.yaml`の`retry_if`がこのタグを見て再試行を止め、flowは失敗のまま`failure_module`へ進む。
 
 ## Consoleでの表示
 
-Consoleの**作業項目**の要件定義書の画面と、**要対応**の要件定義の詳細は、どちらも`f/factory/steps/console_query.ts`の`requirements_doc`ビューを使う。このビューは`requirements_doc.ts`の検査とは別のものである。
+Consoleの**作業項目**の要件定義書の画面と、**要対応**の要件定義の詳細は、どちらも`f/factory/steps/console_query.ts`の`requirements_doc`ビューを使う。
+このビューは`requirements_doc.ts`の検査とは別のものである。
 
 ビューは、DBの行の`doc_dir`から`requirements.md`と各図のファイルを読み戻す(`readDocFromDisk`)。
 Consoleの要件定義書の画面(`/console/items/:id/requirements`)が、本文、目次、試行の切り替え、図を描画する。
@@ -200,11 +220,13 @@ Consoleの要件定義書の画面(`/console/items/:id/requirements`)が、本�
 - 図のファイルが1つ読めなくても、その図だけを落として本文は表示する。
 - 図名かファイル名が決まった形式に合わない図は、パスをつなぐ前に落とし、警告をログに残す。
 
-図のXMLはConsoleの描画のためだけに読む。GitHubとDiscordには送らない。
+図のXMLはConsoleの描画のためだけに読む。
+GitHubとDiscordには送らない。
 
 ## 承認の仕組み
 
-承認はWindmillのsuspendを使わず、承認依頼のテーブル(`approval_requests`)の行で待つ。pipelineフローは承認依頼を記録して終わり、人の決定は別のジョブが反映する。
+承認はWindmillのsuspendを使わず、承認依頼のテーブル(`approval_requests`)の行で待つ。
+pipelineフローは承認依頼を記録して終わり、人の決定は別のジョブが反映する。
 
 ### 承認依頼
 
@@ -218,7 +240,9 @@ Consoleの要件定義書の画面(`/console/items/:id/requirements`)が、本�
 
 設計の承認依頼の反映は[設計書の生成](design.md)の「承認の反映」に書く。
 
-`(kind, subject_id)`は一意である。依頼側の情報は`payload`に入る。要件定義の承認依頼では`{"attempt": n}`である。
+`(kind, subject_id)`は一意である。
+依頼側の情報は`payload`に入る。
+要件定義の承認依頼では`{"attempt": n}`である。
 
 承認依頼の状態は次の4つである。
 
@@ -233,7 +257,11 @@ Consoleの要件定義書の画面(`/console/items/:id/requirements`)が、本�
 
 ### 決定の記録
 
-人はConsoleの**要対応**から承認か却下をする。Consoleは`f/factory/approval_decide`を実行する。却下には理由が必須で、承認には要らない。補足(`note`)は理由に織り込んで記録する。判断側のオプション(`options`)は`decision_options`列に記録する。
+人はConsoleの**要対応**から承認か却下をする。
+Consoleは`f/factory/approval_decide`を実行する。
+却下には理由が必須で、承認には要らない。
+補足(`note`)は理由に織り込んで記録する。
+判断側のオプション(`options`)は`decision_options`列に記録する。
 
 `approval_decide`は、行の今の状態と今回の決定を比べて扱いを決める(`classifyExistingDecision`)。
 
@@ -250,19 +278,24 @@ Consoleの要件定義書の画面(`/console/items/:id/requirements`)が、本�
 記録した後でpathを引けないと、記録だけが残って反映されないためである。
 記録済みの依頼を再実行する経路も、同じ位置を通る。
 
-決定の記録は、`status = 'pending'`を条件にした更新で行う(`decideApprovalRequestIfPending`)。読み取りと書き込みの間に別の呼び出しが記録していれば、行を読み直して上の表で分類し直す。
+決定の記録は、`status = 'pending'`を条件にした更新で行う(`decideApprovalRequestIfPending`)。
+読み取りと書き込みの間に別の呼び出しが記録していれば、行を読み直して上の表で分類し直す。
 
 反映するscriptは`wmill.runScriptByPathAsync`で起動する。
 
-承認者(`decided_by`)は引数ではなく、ジョブの実行文脈から決める(`deriveApprover`)。`WM_USERNAME`を使い、無ければ`WM_EMAIL`を使う。どちらも無ければ例外にし、承認者が分からないまま記録しない。
+承認者(`decided_by`)は引数ではなく、ジョブの実行文脈から決める(`deriveApprover`)。
+`WM_USERNAME`を使い、無ければ`WM_EMAIL`を使う。
+どちらも無ければ例外にし、承認者が分からないまま記録しない。
 
 ### 承認の前のIssueの確認
 
-要件定義か設計を承認するときは、決定を記録する前に、現在のIssueの題名と本文が取り込み時点(`work_items.title`、`body`)と同じかを確かめる。実装のClaudeに渡るのは取り込み時点の内容なので、承認者が見た内容と一致させるためである。
+要件定義か設計を承認するときは、決定を記録する前に、現在のIssueの題名と本文が取り込み時点(`work_items.title`、`body`)と同じかを確かめる。
+実装のClaudeに渡るのは取り込み時点の内容なので、承認者が見た内容と一致させるためである。
 
 確認は`approval_decide`の中で行う。
 `approval_decide`はConsole用のworkerで動き、`gh`を起動できない。
-そのため、`github_token`を読み、GitHubのREST APIを`fetch`で直接呼ぶ(`fetchIssueContent`)。読むのは`GET /repos/<owner>/<repo>/issues/<番号>`である。
+そのため、`github_token`を読み、GitHubのREST APIを`fetch`で直接呼ぶ(`fetchIssueContent`)。
+読むのは`GET /repos/<owner>/<repo>/issues/<番号>`である。
 別のscriptに頼むと、defaultのworkerの待ち行列に並ぶ間、Console用workerの枠を塞ぐためである。
 通信の決まりは次のとおりである。
 
@@ -280,11 +313,14 @@ Consoleの要件定義書の画面(`/console/items/:id/requirements`)が、本�
 | `changed` | 取り込み後に題名か本文が変わった | 断る |
 | `unavailable` | 作業項目やIssue番号が無い、トークンを読めない、通信の失敗、締め切りの超過、2xx以外の応答(3xx、4xx、5xxを含む)、形の違う応答のどれかで、比べられなかった | 断る |
 
-確認するのは、要件定義か設計の承認を新しく記録するときだけである(`needsIssueCheck`)。却下、決定が記録済みの行への再実行、Issue化の提案は確認しない。
+確認するのは、要件定義か設計の承認を新しく記録するときだけである(`needsIssueCheck`)。
+却下、決定が記録済みの行への再実行、Issue化の提案は確認しない。
 
 断るときのエラーは、Issueが変わった旨と、承認者が取れる手を示す。
 1つは、Issueを取り込み時点の内容に戻して、もう一度承認することである。
-もう1つは、却下することである。却下による作り直しは、現在のIssueの題名と本文を取り込み直し、更新したことを承認者に知らせる([作業項目の状態とリース](work-items.md)の「却下と再生成」)。作り直した要件定義には、あらためて承認が要る。
+もう1つは、却下することである。
+却下による作り直しは、現在のIssueの題名と本文を取り込み直し、更新したことを承認者に知らせる([作業項目の状態とリース](work-items.md)の「却下と再生成」)。
+作り直した要件定義には、あらためて承認が要る。
 `unavailable`はしばらく待ってからやり直す。
 設計の承認で`unavailable`のときの案内は、却下しても設計の再生成が`max_design_attempts`に達するまで繰り返されることを加えて伝える。
 Issueを読めないと、設計の却下は要件定義へ戻れないためである([設計書の生成](design.md)の「Issueの確認」)。
@@ -298,41 +334,55 @@ Console用のworkerで動くscriptのうち、`github_token`を読むのは、`r
 
 ### 要件定義の承認の反映
 
-`requirements_apply`は、作業項目が承認待ち(`awaiting_approval`)のときだけ処理する。それ以外の状態なら何もしない。
+`requirements_apply`は、作業項目が承認待ち(`awaiting_approval`)のときだけ処理する。
+それ以外の状態なら何もしない。
 作業項目の最新の要件定義の承認依頼がこの依頼でなければ、承認と却下のどちらでも何もしない。
 古い依頼の再実行が、新しい依頼を待つ作業項目を動かさないためである。
 最新の依頼は、下書きと結合しない問い合わせで読む。
 
-承認なら、作業項目を承認済み(`approved`)にする。続けてIssueへのコメント、Discordへの通知、`req-<N>`のworktreeの削除を順に実行する。Issueへのコメントは、Consoleの要件定義へのリンク1件だけである。本文と図はIssueに書かない。
+承認なら、作業項目を承認済み(`approved`)にする。
+続けてIssueへのコメント、Discordへの通知、`req-<N>`のworktreeの削除を順に実行する。
+Issueへのコメントは、Consoleの要件定義へのリンク1件だけである。
+本文と図はIssueに書かない。
 
-リンクは、承認した試行の要件定義書のページ(`/console/items/<work_item_id>/requirements?attempt=<k>`)を指す。コメントには`work_item_id`も書き、リンクが開けないときでも、どの作業項目の承認かを特定できるようにする。
+リンクは、承認した試行の要件定義書のページ(`/console/items/<work_item_id>/requirements?attempt=<k>`)を指す。
+コメントには`work_item_id`も書き、リンクが開けないときでも、どの作業項目の承認かを特定できるようにする。
 
 承認の分岐は、依存を注入できる関数に切り出してある。
 設計フローを起動する依存が空でなければ、承認済みの代わりに設計中(`designing`)へ移して設計フローを起動する。
-設計フローを起動する依存は、設定の`design_enabled`が真のときだけ渡す。`design_enabled`が真でも`design_enabled_since`が日時として読めなければ偽として読むので、既定では空で、設計フローは動かない。
+設計フローを起動する依存は、設定の`design_enabled`が真のときだけ渡す。
+`design_enabled`が真でも`design_enabled_since`が日時として読めなければ偽として読むので、既定では空で、設計フローは動かない。
 仕組みは[設計書の生成](design.md)に書く。
 
-`implement_enabled`が真なら、続けて実装フローを起動する。却下のときの遷移と、実装フローの起動の手順は[作業項目の状態とリース](work-items.md)に書く。
+`implement_enabled`が真なら、続けて実装フローを起動する。
+却下のときの遷移と、実装フローの起動の手順は[作業項目の状態とリース](work-items.md)に書く。
 
 ### 期限切れ
 
-要件定義の承認依頼は、記録したときに7日後の期限(`expires_at`)を持つ。期限は`poll_issues`が、reconcileの後に毎回実行する承認待ちの走査で判定する。
-走査の全体は[設計書の生成](design.md)の「承認待ちの走査」に書く。要件定義の依頼は、次のとおり扱う。
+要件定義の承認依頼は、記録したときに7日後の期限(`expires_at`)を持つ。
+期限は`poll_issues`が、reconcileの後に毎回実行する承認待ちの走査で判定する。
+走査の全体は[設計書の生成](design.md)の「承認待ちの走査」に書く。
+要件定義の依頼は、次のとおり扱う。
 
-1. 承認待ちの作業項目ごとに、最新の依頼を読む。最新の依頼が`pending`のまま期限を過ぎていれば、作業項目を承認待ちから期限切れ(`expired`)へ、最新の依頼であることを条件にした比較交換で移す。
-2. 移せたら、Discordに人の対応待ちとして通知する。理由は`approval timed out`である。
+1. 承認待ちの作業項目ごとに、最新の依頼を読む。
+   最新の依頼が`pending`のまま期限を過ぎていれば、作業項目を承認待ちから期限切れ(`expired`)へ、最新の依頼であることを条件にした比較交換で移す。
+2. 移せたら、Discordに人の対応待ちとして通知する。
+   理由は`approval timed out`である。
 3. その後で、依頼を`status = 'pending'`を条件に期限切れへ更新する。
 
 作業項目を先に動かすのは、途中で落ちても依頼が承認待ちのまま残り、次の回でやり直せるためである。
 最新でない依頼が期限切れになっても、作業項目は動かさない。
-人の決定と期限切れの更新が同時に起きても、条件付きの更新なので片方だけが記録される。作業項目が既に次の状態に進んでいれば、作業項目は変えない。
+人の決定と期限切れの更新が同時に起きても、条件付きの更新なので片方だけが記録される。
+作業項目が既に次の状態に進んでいれば、作業項目は変えない。
 
 決定済み(`approved`、`rejected`)なのに、5分以上たっても作業項目が承認待ちのままなら、走査が反映するscript(`requirements_apply`)を起動し直す。
 反映するscriptは、作業項目の状態と最新の依頼を条件にした比較交換で動くので、起動し直しても二重に反映しない。
 
 期限切れの通知の次の操作は、`retry_work_item`である。
 最新の依頼が承認済みなら、承認の後の工程(設計が有効なら設計、そうでなければ実装)から始まる。
-そうでなければ、要件定義を作り直し、取り込み内容を現在のIssueで更新する。作り直した要件定義には、あらためて承認が要る。
+そうでなければ、要件定義を作り直し、取り込み内容を現在のIssueで更新する。
+作り直した要件定義には、あらためて承認が要る。
 期限切れの依頼は、承認と却下のどちらも断られる。
 
-1件の処理が例外を投げたときは、`job_failures`に記録して次へ進む。Issue化の提案の承認依頼は期限を持たないので、期限切れにならない。
+1件の処理が例外を投げたときは、`job_failures`に記録して次へ進む。
+Issue化の提案の承認依頼は期限を持たないので、期限切れにならない。

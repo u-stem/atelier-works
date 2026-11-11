@@ -28,13 +28,8 @@
 
 import { posix } from "node:path";
 import GithubSlugger from "github-slugger";
-import type { Nodes } from "mdast";
-import { fromMarkdown } from "mdast-util-from-markdown";
-import { frontmatterFromMarkdown } from "mdast-util-frontmatter";
-import { gfmFromMarkdown } from "mdast-util-gfm";
 import * as mdastToString from "mdast-util-to-string";
-import { frontmatter } from "micromark-extension-frontmatter";
-import { gfm } from "micromark-extension-gfm";
+import { parseMarkdown, visit } from "./markdown-tree.ts";
 
 /** 文書の中のリンク。`line`は1始まり。 */
 export type DocLink = {
@@ -86,20 +81,9 @@ function htmlIds(html: string): string[] {
   return ids;
 }
 
-/** 子を持つ節をたどり、文書の順に`onNode`を呼ぶ。 */
-function visit(node: Nodes, onNode: (node: Nodes) => void): void {
-  onNode(node);
-  if ("children" in node) {
-    for (const child of node.children) visit(child, onNode);
-  }
-}
-
 /** `markdown`のリンクと、リンクが指せるアンカーを集める。 */
 export function indexDoc(markdown: string): DocIndex {
-  const tree = fromMarkdown(markdown, {
-    extensions: [gfm(), frontmatter()],
-    mdastExtensions: [gfmFromMarkdown(), frontmatterFromMarkdown()],
-  });
+  const tree = parseMarkdown(markdown);
   const slugger = new GithubSlugger();
   const candidates: (DocLink & { readonly identifier?: string })[] = [];
   const linkReferenced = new Set<string>();
