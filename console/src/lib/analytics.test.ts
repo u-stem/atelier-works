@@ -98,10 +98,28 @@ describe("dailyTotals", () => {
   test("returns an empty list for no rows", () => {
     expect(dailyTotals([])).toEqual([]);
   });
+
+  test("counts the midnight of Japan time on that Japan day", () => {
+    const totals = dailyTotals([costRow({ day: "2026-10-07T15:00:00.000Z" })]);
+    expect(totals.map((total) => total.day)).toEqual(["2026-10-08"]);
+  });
+
+  test("counts the midnight of UTC from the older view on the same day", () => {
+    const totals = dailyTotals([costRow({ day: "2026-10-08T00:00:00.000Z" })]);
+    expect(totals.map((total) => total.day)).toEqual(["2026-10-08"]);
+  });
+
+  test("keeps the instants of one Japan day together", () => {
+    const totals = dailyTotals([
+      costRow({ day: "2026-10-07T15:00:00.000Z", run_count: 2 }),
+      costRow({ day: "2026-10-08T00:00:00.000Z", run_count: 3 }),
+    ]);
+    expect(totals.map((total) => total.runCount)).toEqual([5]);
+  });
 });
 
 describe("fillDailyTotals", () => {
-  const NOW = new Date("2026-10-11T15:30:00.000Z");
+  const NOW = new Date("2026-10-11T03:30:00.000Z");
   const total = (day: string, runCount: number) => ({
     day,
     costUsd: runCount,
@@ -157,22 +175,30 @@ describe("fillDailyTotals", () => {
     );
   });
 
-  describe("in a time zone far from UTC", () => {
+  test("ends the period on the Japan day of now", () => {
+    // UTCではまだ10月11日だが、日本時間では10月12日の0時30分。
+    const filled = fillDailyTotals([], 7, new Date("2026-10-11T15:30:00.000Z"));
+    expect(filled.at(-1)?.day).toBe("2026-10-12");
+  });
+
+  describe("in a time zone far from Japan", () => {
     const originalTimeZone = process.env.TZ;
     beforeEach(() => {
-      process.env.TZ = "Asia/Tokyo";
+      process.env.TZ = "America/Los_Angeles";
     });
     afterEach(() => {
       // 未設定のときは`delete`しても実行時の時刻帯が戻らないので、UTCを明示して戻す。
       process.env.TZ = originalTimeZone ?? "UTC";
     });
 
-    test("counts the days in UTC rather than the local time zone", () => {
-      // 東京では翌日の朝になる時刻。端末の暦で数えると最後の日が1日進む。
-      const lateInUtcDay = new Date("2026-10-11T23:59:59.000Z");
-      expect(fillDailyTotals([], 7, lateInUtcDay).at(-1)?.day).toBe(
-        "2026-10-11",
+    test("counts the days in Japan time rather than the local time zone", () => {
+      // ロサンゼルスでは10月11日の朝、日本時間では10月12日の0時30分になる時刻。
+      const filled = fillDailyTotals(
+        [],
+        7,
+        new Date("2026-10-11T15:30:00.000Z"),
       );
+      expect(filled.at(-1)?.day).toBe("2026-10-12");
     });
   });
 
@@ -279,7 +305,7 @@ describe("fillDailyTotals", () => {
 });
 
 describe("chartSeries", () => {
-  const NOW = new Date("2026-10-11T15:30:00.000Z");
+  const NOW = new Date("2026-10-11T03:30:00.000Z");
   const rows = [
     costRow({ day: "2026-10-08T00:00:00.000Z", run_count: 2 }),
     costRow({ day: "2026-10-09T00:00:00.000Z", run_count: 4 }),
@@ -405,8 +431,8 @@ describe("leadTimeByStatus", () => {
 });
 
 describe("formatMonthDay", () => {
-  test("shows the month and day in UTC", () => {
-    expect(formatMonthDay("2026-10-08T00:00:00.000Z")).toBe("10/8");
+  test("shows the month and day of a day key", () => {
+    expect(formatMonthDay("2026-10-08")).toBe("10/8");
   });
 
   test("returns a value that is not a date as it is", () => {
@@ -415,8 +441,12 @@ describe("formatMonthDay", () => {
 });
 
 describe("formatIsoDate", () => {
-  test("shows the year, month and day in UTC", () => {
-    expect(formatIsoDate("2026-10-08T23:59:59.000Z")).toBe("2026-10-08");
+  test("shows the year, month and day in Japan time", () => {
+    expect(formatIsoDate("2026-10-08T14:59:59.000Z")).toBe("2026-10-08");
+  });
+
+  test("moves an instant after Japan midnight to the next day", () => {
+    expect(formatIsoDate("2026-10-08T15:00:00.000Z")).toBe("2026-10-09");
   });
 });
 

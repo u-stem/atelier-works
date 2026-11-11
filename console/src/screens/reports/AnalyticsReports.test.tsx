@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  analyticsQueryKey,
   useAgentCostDaily,
   useApprovalStats,
   useLeadTime,
@@ -41,6 +42,51 @@ function sectionsOf(): { cost: string; approvals: string; leadTime: string } {
     leadTime: html.slice(leadAt),
   };
 }
+
+/** 日別コストの行を取得済みにして描いた、費用の区画の文字列。 */
+function costSectionWithRows(): string {
+  const client = new QueryClient();
+  client.setQueryData(analyticsQueryKey("agent_cost_daily", 7), [
+    {
+      day: "2026-10-07T15:00:00.000Z",
+      stage: "requirements",
+      model: "sonnet",
+      run_count: 1,
+      total_cost_usd: 1,
+      total_input_tokens: null,
+      total_output_tokens: null,
+      total_cache_read_tokens: null,
+      total_turns: null,
+      avg_duration_ms: null,
+    },
+  ]);
+  const html = renderToStaticMarkup(
+    <QueryClientProvider client={client}>
+      <Harness />
+    </QueryClientProvider>,
+  );
+  return html.slice(0, html.indexOf('id="analytics-approval-heading"'));
+}
+
+describe("the headings of the daily cost charts", () => {
+  const cost = costSectionWithRows();
+
+  test("do not name a time zone", () => {
+    expect(cost).not.toContain("UTC");
+  });
+
+  test("name the daily cost chart", () => {
+    expect(cost).toContain("日別コスト(USD)");
+  });
+
+  test("name the daily run count chart", () => {
+    expect(cost).toContain("日別実行件数");
+  });
+
+  test("name the day column of the table", () => {
+    expect(cost).toMatch(/<th[^>]*>日<\/th>/);
+  });
+});
 
 describe("the skeletons of the analytics sections", () => {
   const sections = sectionsOf();
