@@ -1318,24 +1318,15 @@ describe("activeJobSteps", () => {
     );
   });
 
-  describe("while the active list is fetched", () => {
-    const RUNNING_FLOW: JobListView = {
+  // `enabled`が切り替わるたびに、取り直しのタイマーが張り直される。
+  // 一覧の取得の状態を入力にしないので、30秒の間隔は一覧の取り直しに邪魔されない。
+  test("keeps reading the steps whatever the state of the list fetch is", () => {
+    const runningFlow: JobListView = {
       ...LIST,
       view: "active",
       jobs: [{ ...JOB, state: "running", job_kind: "flow" }],
     };
-
-    test("reads the steps once the list is settled", () => {
-      expect(
-        activeStepsOptions(RUNNING_FLOW, "active", false, false).enabled,
-      ).toBe(true);
-    });
-
-    test("does not read the steps while the list is being fetched", () => {
-      expect(
-        activeStepsOptions(RUNNING_FLOW, "active", false, true).enabled,
-      ).toBe(false);
-    });
+    expect(activeStepsOptions(runningFlow, "active", false).enabled).toBe(true);
   });
 
   test("refresh button reads active before details", async () => {

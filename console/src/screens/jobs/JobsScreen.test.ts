@@ -35,11 +35,12 @@ describe("the wiring of the job list screen", () => {
 
 describe("the wiring of the current steps", () => {
   test("reads the steps of the running flows of the active list", () => {
-    expect(BODY).toContain("useActiveJobSteps(active.data, tab, {");
+    expect(BODY).toContain("useActiveJobSteps(active.data, tab, idle)");
   });
 
-  test("holds the steps while the active list is being fetched", () => {
-    expect(BODY).toContain("listFetching: active.isFetching");
+  // 一覧の取得中に`enabled`を切り替えると、今のステップの30秒のタイマーが張り直される。
+  test("does not switch the steps off while the active list is being fetched", () => {
+    expect(BODY).not.toContain("listFetching");
   });
 
   test("shares one idle state between the list and the steps", () => {
