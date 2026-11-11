@@ -6,7 +6,11 @@ import {
 } from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
 import {
+  ACTIVE_LIST_REFRESH_MS,
   ACTIVE_STEPS_REFRESH_MS,
+  activeListQueryOptions,
+  activeListRefetchInterval,
+  activeStepsOptions,
   activeStepsQueryKey,
   activeStepsQueryOptions,
   type ConfigSnapshotView,
@@ -597,8 +601,59 @@ describe("the query keys", () => {
   });
 });
 
+describe("the refresh of the active list", () => {
+  test("the interval is 60 seconds", () => {
+    expect(ACTIVE_LIST_REFRESH_MS).toBe(60_000);
+  });
+
+  test("refreshes every 60 seconds while the active tab is used", () => {
+    expect(
+      activeListRefetchInterval({ selectedTab: "active", idle: false }),
+    ).toBe(ACTIVE_LIST_REFRESH_MS);
+  });
+
+  test("does not refresh while the history tab is selected", () => {
+    expect(
+      activeListRefetchInterval({ selectedTab: "history", idle: false }),
+    ).toBe(false);
+  });
+
+  test("does not refresh while the screen is idle", () => {
+    expect(
+      activeListRefetchInterval({ selectedTab: "active", idle: true }),
+    ).toBe(false);
+  });
+
+  test("the subscription takes the interval of the active tab", () => {
+    expect(
+      activeListQueryOptions({ selectedTab: "active", idle: false })
+        .refetchInterval,
+    ).toBe(ACTIVE_LIST_REFRESH_MS);
+  });
+
+  test("the subscription stops while the document is hidden", () => {
+    expect(
+      activeListQueryOptions({ selectedTab: "active", idle: false })
+        .refetchIntervalInBackground,
+    ).toBe(false);
+  });
+
+  test("the subscription does not refresh when the window gets the focus", () => {
+    expect(
+      activeListQueryOptions({ selectedTab: "active", idle: false })
+        .refetchOnWindowFocus,
+    ).toBe(false);
+  });
+
+  test("the subscription keeps the key of the prefetch", () => {
+    expect(
+      activeListQueryOptions({ selectedTab: "active", idle: false }).queryKey,
+    ).toEqual(jobsActiveQueryKey);
+  });
+});
+
 describe("the query options", () => {
-  test("the lists do not refresh by themselves", () => {
+  test("the prefetched lists do not refresh by themselves", () => {
     expect(
       [
         jobsActiveQueryOptions(),
@@ -1261,6 +1316,26 @@ describe("activeJobSteps", () => {
     expect(activeStepsQueryKey([A])).not.toEqual(
       jobDetailQueryKey(A, { includeOutput: false }),
     );
+  });
+
+  describe("while the active list is fetched", () => {
+    const RUNNING_FLOW: JobListView = {
+      ...LIST,
+      view: "active",
+      jobs: [{ ...JOB, state: "running", job_kind: "flow" }],
+    };
+
+    test("reads the steps once the list is settled", () => {
+      expect(
+        activeStepsOptions(RUNNING_FLOW, "active", false, false).enabled,
+      ).toBe(true);
+    });
+
+    test("does not read the steps while the list is being fetched", () => {
+      expect(
+        activeStepsOptions(RUNNING_FLOW, "active", false, true).enabled,
+      ).toBe(false);
+    });
   });
 
   test("refresh button reads active before details", async () => {
