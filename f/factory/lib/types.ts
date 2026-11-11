@@ -689,6 +689,22 @@ export type ReviewFinding = {
   suggested_code: string | null;
 };
 
+/** 差分の1つのhunkが覆う、新しい側(head)の行の範囲。両端を含む。 */
+export type DiffHunkRange = {
+  start: number;
+  end: number;
+};
+
+/**
+ * PRの1ファイルの、行コメントを付けられる新しい側の行の範囲。
+ * `hunks`が`null`のときは、差分を取得できず、範囲が分からない。
+ * 空配列のときは、新しい側に行が1つも無い(削除だけのファイル、中身の変わらない名前の変更、バイナリ)。
+ */
+export type FileDiffHunks = {
+  path: string;
+  hunks: DiffHunkRange[] | null;
+};
+
 /** 再レビューが既存のスレッドに出す答えの種類。 */
 export type ThreadResponseDecision =
   | "addressed"

@@ -82,6 +82,9 @@ value:
           owner:
             type: javascript
             expr: results.pr_review_prepare.owner
+          pr_file_hunks:
+            type: javascript
+            expr: results.pr_review_generate?.pr_file_hunks ?? null
           pr_files:
             type: javascript
             expr: results.pr_review_generate?.pr_files ?? []

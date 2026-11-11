@@ -333,6 +333,23 @@ describe("selectListedBinaryFiles", () => {
   });
 });
 
+describe("diff hunks wiring in the generate step", () => {
+  const SOURCE = Bun.file(
+    new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),
+  ).text();
+
+  test("returns the diff hunks of every changed file in the result", async () => {
+    expect(await SOURCE).toContain("      pr_file_hunks: prFileHunks,\n");
+  });
+
+  // patchの文字列を、Claudeの実行のあいだ持たないため、一覧を取った場所で分ける。
+  test("splits the changed files right where the list is read", async () => {
+    expect(await SOURCE).toContain(
+      "getPrFiles(client, owner, repo, pr_number).then(splitChangedFiles)",
+    );
+  });
+});
+
 // `main()`はWindmillとDBを直接使うので、配線はソースの並びで確かめる。
 // 文字列の一致は、その行が1か所にあることだけを保証する。整形や変数名の変更で落ちたら、配線が変わっていないかを確かめて文字列を直す。
 describe("binary files wiring in the generate step", () => {

@@ -15,6 +15,7 @@ import {
 } from "../../f/factory/lib/github.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import type {
+  FileDiffHunks,
   ReviewFinding,
   ThreadResponse,
 } from "../../f/factory/lib/types.ts";
@@ -73,21 +74,24 @@ function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   };
 }
 
+/** 差分のhunkが分からない`a.ts`だけの変更ファイル。指摘はそのまま行コメントになる。 */
+const A_TS_FILES: FileDiffHunks[] = [{ path: "a.ts", hunks: null }];
+
 describe("mapFindingsToReviewComments", () => {
   test("maps a finding whose path is in the PR files to an inline comment", () => {
-    const { comments } = mapFindingsToReviewComments([finding()], ["a.ts"]);
+    const { comments } = mapFindingsToReviewComments([finding()], A_TS_FILES);
     expect(comments).toHaveLength(1);
   });
 
   test("inline comment uses side RIGHT", () => {
-    const { comments } = mapFindingsToReviewComments([finding()], ["a.ts"]);
+    const { comments } = mapFindingsToReviewComments([finding()], A_TS_FILES);
     expect(comments[0]?.side).toBe("RIGHT");
   });
 
   test("drops a finding whose path is not among the PR files", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ path: "b.ts" })],
-      ["a.ts"],
+      A_TS_FILES,
     );
     expect(comments).toHaveLength(0);
   });
@@ -95,7 +99,7 @@ describe("mapFindingsToReviewComments", () => {
   test("returns the dropped finding itself (not just a count)", () => {
     const { droppedFindings } = mapFindingsToReviewComments(
       [finding({ path: "b.ts" })],
-      ["a.ts"],
+      A_TS_FILES,
     );
     expect(droppedFindings).toEqual([finding({ path: "b.ts" })]);
   });
@@ -103,7 +107,7 @@ describe("mapFindingsToReviewComments", () => {
   test("drops a finding with a null line", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ line: null })],
-      ["a.ts"],
+      A_TS_FILES,
     );
     expect(comments).toHaveLength(0);
   });
@@ -111,7 +115,7 @@ describe("mapFindingsToReviewComments", () => {
   test("drops a finding with a non-positive line", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ line: 0 })],
-      ["a.ts"],
+      A_TS_FILES,
     );
     expect(comments).toHaveLength(0);
   });
@@ -119,7 +123,7 @@ describe("mapFindingsToReviewComments", () => {
   test("finding body is rendered via renderInlineComment", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ kind: "nits" })],
-      ["a.ts"],
+      A_TS_FILES,
     );
     expect(comments[0]?.body).toBe(
       renderInlineComment(finding({ kind: "nits" })),
@@ -127,14 +131,14 @@ describe("mapFindingsToReviewComments", () => {
   });
 
   test("a single-line finding has no start_line", () => {
-    const { comments } = mapFindingsToReviewComments([finding()], ["a.ts"]);
+    const { comments } = mapFindingsToReviewComments([finding()], A_TS_FILES);
     expect(comments[0]?.start_line).toBeUndefined();
   });
 
   test("a multi-line finding anchors start_line to the finding's line", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ line: 10, end_line: 12 })],
-      ["a.ts"],
+      A_TS_FILES,
     );
     expect(comments[0]?.start_line).toBe(10);
   });
@@ -142,7 +146,7 @@ describe("mapFindingsToReviewComments", () => {
   test("a multi-line finding anchors line to the finding's end_line", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ line: 10, end_line: 12 })],
-      ["a.ts"],
+      A_TS_FILES,
     );
     expect(comments[0]?.line).toBe(12);
   });
@@ -152,7 +156,7 @@ describe("mapFindingsToReviewComments", () => {
   test("an end_line before line has no start_line (treated as single-line)", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ line: 10, end_line: 5 })],
-      ["a.ts"],
+      A_TS_FILES,
     );
     expect(comments[0]?.start_line).toBeUndefined();
   });
@@ -160,7 +164,7 @@ describe("mapFindingsToReviewComments", () => {
   test("an end_line before line anchors line to the finding's own line", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ line: 10, end_line: 5 })],
-      ["a.ts"],
+      A_TS_FILES,
     );
     expect(comments[0]?.line).toBe(10);
   });
@@ -1648,6 +1652,7 @@ describe("runPrReviewPost worktree cleanup", () => {
       findings: [],
       thread_responses: [],
       pr_files: [],
+      pr_file_hunks: [],
       binary_files: [],
       binary_unlisted_count: 0,
       worktree_dir: WORKTREE_DIR,
@@ -1736,6 +1741,7 @@ describe("runPrReviewPost failure marking", () => {
     findings: [],
     thread_responses: [],
     pr_files: [],
+    pr_file_hunks: [],
     binary_files: [],
     binary_unlisted_count: 0,
     worktree_dir: "",
@@ -1780,7 +1786,7 @@ describe("runPrReviewPost failure marking", () => {
 describe("commentedFindingsOf", () => {
   const inline = finding({ message: "inline" });
   const unanchored = finding({ path: "b.ts", message: "unanchored" });
-  const files = ["a.ts"];
+  const files = A_TS_FILES;
 
   test("keeps the findings that became inline comments in order", () => {
     const { droppedFindings } = mapFindingsToReviewComments(
@@ -1964,6 +1970,7 @@ describe("posting a review once per sha", () => {
       prAuthorLogin: "alice",
       comments: [],
       commentedFindings: [],
+      unverifiedFindings: [],
       droppedFindings: [],
       binaryFiles: [],
       binaryUnlistedCount: 0,
