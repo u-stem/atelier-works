@@ -5333,3 +5333,681 @@ describeForCallers(
     });
   },
 );
+
+// gitとghが別のコマンドの実行を委ねる呼び出しは、前置きの後ろと同じ規則で、保留と凍結の書き込みを拒否する。
+describeForCallers(
+  "bash-guard denies a caller that writes holds or freezes through a command that git or gh runs",
+  (subagent) => {
+    test.each([
+      ["a bisect run", "git bisect run bun scripts/hold.ts release 1"],
+      [
+        "a rebase exec",
+        "git rebase -x 'bun scripts/freeze.ts release 1' origin/main",
+      ],
+      [
+        "a rebase exec with an equals sign",
+        "git rebase --exec='bun scripts/hold.ts release 1' origin/main",
+      ],
+      [
+        "a submodule foreach",
+        "git submodule foreach 'mise run hold:release -- 1'",
+      ],
+      [
+        "a difftool command",
+        "git difftool -x 'bun scripts/hold.ts place' HEAD",
+      ],
+      [
+        "a filter-branch filter",
+        "git filter-branch --tree-filter 'bun scripts/freeze.ts reset' HEAD",
+      ],
+      [
+        "a pager setting",
+        "git -c core.pager='bun scripts/hold.ts release 1' log",
+      ],
+      [
+        "a monitor setting",
+        "git -c core.fsmonitor='bun scripts/freeze.ts release 1' status",
+      ],
+      [
+        "an attached setting",
+        "git -ccore.sshCommand='bun scripts/hold.ts release 1' fetch",
+      ],
+      [
+        "a launcher hidden behind an equals sign",
+        String.raw`git rebase --exec='bun -e "import(\"./scripts/hold.ts\")"' origin/main`,
+      ],
+      [
+        "a shell alias",
+        "gh alias set x --shell 'bun scripts/hold.ts release 1'",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.skipIf(!subagent)("the reason is the hold reason", async () => {
+      expect(
+        await denyReason("git bisect run bun scripts/hold.ts release 1", {
+          subagent,
+        }),
+      ).toContain("main session");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows git and gh calls that run nothing that touches holds or freezes",
+  (subagent) => {
+    test.each([
+      "git log -p",
+      "git show",
+      "git show HEAD:scripts/hold.ts",
+      "git grep hold",
+      "git grep -n 'hold release'",
+      "git diff -- scripts/hold.ts",
+      "git log -p -- scripts/freeze.ts",
+      "git rebase origin/main",
+      "git rebase -i HEAD~3",
+      "git rebase -x 'bun test' origin/main",
+      "git rebase --exec='mise run check' origin/main",
+      "git bisect start",
+      "git bisect run bun test",
+      "git submodule status",
+      "git submodule update --init",
+      "git -c user.name=x commit -m 'fix: hold release の判定'",
+      "git -c core.quotepath=false status",
+      "git -c advice.detachedHead=false checkout x",
+      "git -c color.ui=always log",
+      "git -c core.pager=cat log",
+      "gh pr view 1",
+      "gh alias list",
+      "gh repo clone o/r",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 送信のコマンド、副コマンドの実体の置き場所、設定を書く副コマンド、取り込み、gitへ渡す引数も、実行を委ねる形として扱う。
+describeForCallers(
+  "bash-guard denies holds or freezes written through more ways that git or gh runs a command",
+  (subagent) => {
+    test.each([
+      [
+        "a send command",
+        "git send-email --to-cmd='bun scripts/hold.ts release 1' x.patch",
+      ],
+      [
+        "a web server command",
+        "git instaweb --httpd='bun scripts/freeze.ts release 1'",
+      ],
+      [
+        "a clone setting",
+        "git clone -c core.fsmonitor='bun scripts/hold.ts release 1' https://example.com/r.git",
+      ],
+      [
+        "a setting written for later",
+        "git config core.pager 'bun scripts/hold.ts release 1'",
+      ],
+      [
+        "a global setting written for later",
+        "git config --global sequence.editor 'bun scripts/freeze.ts reset'",
+      ],
+      [
+        "a gh setting written for later",
+        "gh config set pager 'bun scripts/freeze.ts release 1'",
+      ],
+      [
+        "an imported gh alias",
+        "gh alias import - <<'X'\nx: '!bun scripts/hold.ts release 1'\nX\n",
+      ],
+      ["a bang gh alias", "gh alias set x '!bun scripts/hold.ts place'"],
+      [
+        "git arguments after gh",
+        "gh repo clone o/r -- --upload-pack='bun scripts/hold.ts release 1'",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows git and gh settings that touch no holds or freezes",
+  (subagent) => {
+    test.each([
+      "git config user.name x",
+      "git config --get core.pager",
+      "gh config get pager",
+      "gh config set git_protocol ssh",
+      "gh repo clone o/r -- --depth=1",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// ページャーを起動できる読み取りの道具のオプションは、最上位でも前置きの文字列の中でも、実行を委ねる形として扱う。
+describeForCallers(
+  "bash-guard denies holds or freezes written through the pager of a reading tool",
+  (subagent) => {
+    test.each([
+      [
+        "a pager option of a viewer",
+        "bat --paging=always --pager='bun scripts/hold.ts release 1' README.md",
+      ],
+      [
+        "a pager option of a search tool",
+        "ag --pager 'bun scripts/freeze.ts release 1' x",
+      ],
+      [
+        "an initial command of a pager inside a prefix string",
+        `script -qc "less '+!bun scripts/hold.ts release 1' README.md" /dev/null`,
+      ],
+      [
+        "an initial command of a pager at the top",
+        "less '+!bun scripts/freeze.ts reset' README.md",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows reading tools that start no pager",
+  (subagent) => {
+    test.each([
+      "bat scripts/hold.ts",
+      "bat -r 1:10 scripts/hold.ts",
+      "less scripts/hold.ts",
+      "rg hold scripts/",
+      "cat scripts/hold.ts",
+      `script -qc "less scripts/hold.ts" /dev/null`,
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 全停止は、読み取りのプログラムでも、別のコマンドの実行を委ねる形なら通さない。委ねる先は字面でも見る。
+describeForCallers(
+  "bash-guard denies the stop-all through a command that a reading program runs",
+  (subagent) => {
+    test.each([
+      ["a bisect run of the task", "git bisect run mise run stop"],
+      ["a bisect run of the CLI", "git bisect run bun scripts/stop_all.ts"],
+      [
+        "a rebase exec with an equals sign",
+        "git rebase --exec='mise run stop' origin/main",
+      ],
+      ["a rebase exec", "git rebase -x 'mise run stop:release' origin/main"],
+      ["a difftool command", "git difftool -x 'mise run stop:restore' HEAD"],
+      ["a pager setting", "git -c core.pager='mise run stop' log"],
+      [
+        "an external diff setting",
+        "git -c diff.external='bun scripts/stop_all.ts' diff",
+      ],
+      [
+        "a send command",
+        "git send-email --sendmail-cmd='mise run stop' x.patch",
+      ],
+      [
+        "a setting written for later",
+        "git config --global sequence.editor 'mise run stop'",
+      ],
+      [
+        "an executable path",
+        "git --exec-path=/tmp/x log -- scripts/stop_all.ts",
+      ],
+      ["a bang gh alias", "gh alias set x '!mise run stop'"],
+      ["a shell gh alias", "gh alias set x --shell 'mise run stop:release'"],
+      [
+        "an imported gh alias",
+        "gh alias import - <<'X'\nx: '!mise run stop'\nX\n",
+      ],
+      [
+        "a gh setting written for later",
+        "gh config set browser 'mise run stop:restore'",
+      ],
+      ["a pager option of a viewer", "bat --pager='mise run stop' README.md"],
+      ["a pager option of a search tool", "ag --pager='mise run stop' x"],
+      [
+        "a pager option behind a prefix",
+        "script -q /dev/null bat --pager='mise run stop' README.md",
+      ],
+      [
+        "an initial command of a pager inside a prefix string",
+        `script -qc "less '+!mise run stop' README.md" /dev/null`,
+      ],
+      [
+        "an initial command of a pager behind a prefix",
+        "script -q /dev/null more '+!mise run stop' README.md",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test("the reason is the stop-all reason", async () => {
+      expect(
+        await denyReason("git bisect run mise run stop", { subagent }),
+      ).toContain("stop-all");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows reading programs near the stop-all that run nothing",
+  (subagent) => {
+    test.each([
+      "git log -p -- scripts/stop_all.ts",
+      "git show HEAD:scripts/stop_all.ts",
+      "git diff -- scripts/stop_all.ts",
+      "git grep stop_all",
+      "git rebase origin/main",
+      "git rebase -x 'bun test' origin/main",
+      "git bisect run bun test",
+      "git -c color.ui=always log -p -- scripts/stop_all.ts",
+      "git config --get core.pager",
+      "gh alias list",
+      "rg stop_all scripts/",
+      "bat scripts/stop_all.ts",
+      "bat -r 1:10 scripts/stop_all.ts",
+      "bat --style=plain scripts/stop_all.ts",
+      "less scripts/stop_all.ts",
+      "sed -n '1,20p' scripts/stop_all.ts",
+      `script -qc "less scripts/stop_all.ts" /dev/null`,
+      "git commit -m 'feat: mise run stop を足す'",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 受け入れる誤検知: 委ねる呼び出しの語に、全停止のCLIを指す語がある読み取り。
+describeForCallers(
+  "bash-guard rejects reading programs that delegate execution and name the stop-all",
+  (subagent) => {
+    test.each([
+      [
+        "a pager setting outside the inert keys",
+        "git -c core.pager=cat log -p -- scripts/stop_all.ts",
+      ],
+      [
+        "a bisect start with a path",
+        "git bisect start HEAD v1 -- scripts/stop_all.ts",
+      ],
+      [
+        "a reading option that shares a prefix with the conversion option",
+        "git diff --text -- scripts/stop_all.ts",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// gitの副コマンドとグローバルオプションは、委ねないと分かっている閉じた一覧だけを通し、一覧の外は実行を委ねる形として扱う。
+// オプションは、省略形とまとめ書きを含めて、委ねる側に倒して見る。
+describeForCallers(
+  "bash-guard denies holds or freezes written through git and gh forms outside the closed lists",
+  (subagent) => {
+    test.each([
+      [
+        "a subcommand that passes its arguments to git in other repositories",
+        "git for-each-repo --config=maintenance.repo -- bisect run bun scripts/hold.ts release 1",
+      ],
+      [
+        "a subcommand outside the list",
+        "git daemon --access-hook='bun scripts/freeze.ts release 1' --base-path=.",
+      ],
+      [
+        "a delegating form behind a global option outside the list",
+        "git --attr-source HEAD rebase -x 'bun scripts/hold.ts release 1' origin/main",
+      ],
+      [
+        "an abbreviated send-side program of a fetch",
+        "git fetch --upl='bun scripts/hold.ts release 1' origin",
+      ],
+      [
+        "an abbreviated run option of an archive",
+        "git archive --exe='bun scripts/freeze.ts release 1' --remote=x HEAD",
+      ],
+      [
+        "an abbreviated pager option of a grep",
+        "git grep --ope='bun scripts/hold.ts release 1' x",
+      ],
+      [
+        "a bundle of short grep options",
+        "git grep -nO'bun scripts/freeze.ts release 1' x",
+      ],
+      [
+        "a one-letter abbreviation of a send-side program",
+        "git ls-remote --u='bun scripts/hold.ts release 1' origin",
+      ],
+      [
+        "a bundle of short options with a send-side program",
+        "git ls-remote -qu'bun scripts/freeze.ts release 1' origin",
+      ],
+      [
+        "a gh setting written with a valued flag before the action",
+        "gh config -h github.com set pager 'bun scripts/hold.ts release 1'",
+      ],
+      [
+        "a gh extension under its other name",
+        "gh extensions exec x bun scripts/freeze.ts release 1",
+      ],
+      [
+        "an abbreviated pager option of a search tool",
+        "ag --pag='bun scripts/hold.ts release 1' x",
+      ],
+      [
+        "an initial command inside a bundle of pager options",
+        "less -N+'!bun scripts/freeze.ts reset' README.md",
+      ],
+      [
+        "an inert setting next to a setting outside the list",
+        "git -c user.name=x -c core.pager='bun scripts/hold.ts release 1' log",
+      ],
+      [
+        "an upper-case setting key",
+        "git -c CORE.PAGER='bun scripts/hold.ts release 1' log",
+      ],
+      [
+        "a setting from the environment",
+        "git --config-env=core.pager=X log 'bun scripts/freeze.ts release 1'",
+      ],
+      [
+        "a setting behind a directory option",
+        "git -C sub -c core.pager='bun scripts/hold.ts release 1' log",
+      ],
+      [
+        "a delegating subcommand behind a repository option and an inert setting",
+        "git --git-dir=.git -c user.name=x bisect run bun scripts/hold.ts release 1",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard denies the stop-all through git and gh forms outside the closed lists",
+  (subagent) => {
+    test.each([
+      [
+        "a subcommand that passes its arguments to git in other repositories",
+        "git for-each-repo --config=maintenance.repo -- bisect run mise run stop",
+      ],
+      [
+        "a subcommand outside the list",
+        "git daemon --access-hook='mise run stop' --base-path=.",
+      ],
+      [
+        "a delegating form behind a global option outside the list",
+        "git --attr-source HEAD bisect run mise run stop:release",
+      ],
+      [
+        "an abbreviated send-side program of a fetch",
+        "git fetch --upl='mise run stop' origin",
+      ],
+      [
+        "an abbreviated run option of an archive",
+        "git archive --exe='bun scripts/stop_all.ts' --remote=x HEAD",
+      ],
+      [
+        "an abbreviated pager option of a grep",
+        "git grep --ope='mise run stop:restore' x",
+      ],
+      ["a bundle of short grep options", "git grep -nO'mise run stop' x"],
+      [
+        "a one-letter abbreviation of a send-side program",
+        "git ls-remote --u='mise run stop' origin",
+      ],
+      [
+        "a bundle of short options with a send-side program",
+        "git ls-remote -qu'mise run stop:release' origin",
+      ],
+      [
+        "a gh setting written with a valued flag before the action",
+        "gh config -h github.com set browser 'mise run stop'",
+      ],
+      [
+        "a gh extension under its other name",
+        "gh extensions exec x mise run stop",
+      ],
+      [
+        "an abbreviated pager option of a search tool",
+        "ag --page='mise run stop' x",
+      ],
+      [
+        "an initial command inside a bundle of pager options",
+        "less -N+'!mise run stop' README.md",
+      ],
+      [
+        "a setting from the environment",
+        "git --config-env=core.pager=X log -- scripts/stop_all.ts",
+      ],
+      [
+        "a delegating subcommand behind a directory option and an inert setting",
+        "git -C sub -c user.name=x bisect run mise run stop",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 委ねる形の判定は、Consoleのscriptの判定も同じ関数で見る。
+describe("bash-guard denies the Console release scripts named through git and gh forms outside the closed lists", () => {
+  const COMMANDS = [
+    "git config core.pager 'less f/factory/hold_release.ts'",
+    "gh config -h github.com set pager 'less f/factory/freeze_release.ts'",
+    "ag --pag less f/factory/hold_release.ts",
+    "less -N+G f/factory/freeze_release.ts",
+    "git -c user.name=x for-each-repo --config=maintenance.repo -- log -- f/factory/hold_release.ts",
+  ];
+
+  test.each(COMMANDS)("denies %s in the main session", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each(COMMANDS)("denies %s in a subagent", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describeForCallers(
+  "bash-guard allows git and gh forms inside the closed lists",
+  (subagent) => {
+    test.each([
+      "git -C sub log -p",
+      "git --git-dir=.git status",
+      "git --no-pager log -p -- scripts/hold.ts",
+      "git --no-pager show HEAD:scripts/stop_all.ts",
+      "git fetch --prune origin",
+      "git -c user.name=x log -- f/factory/hold_release.ts",
+      "git log -p --exclude=x",
+      "less +G README.md",
+      "gh pr create --title x --body y",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 他の所有者のリポジトリの設定を有効にするキーは、値が実行されなくても、委ねない形の一覧に入れない。
+// 語の値は、空白か、シェルが語を分けるか展開する字を含むときだけコマンドとして読む。設定のキーは、サブセクションの区切りの字も含めて読む。
+describeForCallers(
+  "bash-guard denies holds or freezes written through setting keys and values that the value rule reads",
+  (subagent) => {
+    test.each([
+      [
+        "a key that trusts a repository of another owner",
+        "git -c safe.directory=/tmp/r log 'bun scripts/hold.ts release 1'",
+      ],
+      [
+        "a launcher behind a key with a slash in its subsection",
+        String.raw`git -c 'diff.a/b.command=bun -e "import(\"./scripts/hold.ts\")"' diff`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard denies the stop-all through setting keys and values that the value rule reads",
+  (subagent) => {
+    test.each([
+      [
+        "a key that trusts a repository of another owner",
+        "git -c safe.directory=/tmp/r log -- scripts/stop_all.ts",
+      ],
+      [
+        "a key with a slash in its subsection behind a prefix",
+        "script -q /dev/null git -c 'credential.https://example.com.helper=!mise run stop' fetch",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 値の中の値を読む入れ子は、深さの上限で止まり、字面の判定に倒れる。入力の大きさに比例する作業で足りるので、実時間は測らない。
+describeForCallers(
+  "bash-guard finishes a value nested in many equals signs with the wording rule",
+  (subagent) => {
+    test("denies the wording of the stop-all", async () => {
+      expect(
+        await decide(`./tool '${"-a=".repeat(50000)}mise run stop'`, {
+          subagent,
+        }),
+      ).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows one-word values that the value rule does not read",
+  (subagent) => {
+    test.each([
+      "caffeinate bun test --reporter=watch",
+      "git clone --branch=watch https://example.com/r.git",
+      "git -c core.pager=cat log --output=scripts/hold.ts",
+      "git log --format=%h -1",
+      "git -c core.pager=cat log --output=x.txt",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// ghの語に実行時に決まる語があっても、最初の語が読み取りと日常の操作のグループで、設定する語も取り込む語も無ければ、委ねる形にしない。
+describeForCallers(
+  "bash-guard allows gh reads and daily operations with words decided at run time",
+  (subagent) => {
+    test.each([
+      "for n in 1 2; do gh pr view $n --json labels; done",
+      "gh pr view $n -R o/r --json state",
+      `gh api "repos/o/r/commits/$SHA/check-runs?per_page=100" --jq '.x'`,
+      String.raw`gh api graphql -f query="query { repository(owner: \"$(gh repo view --json owner --jq .owner.login)\") { id } }"`,
+      `gh pr view 537 --repo "$(gh pr view 537 --json url --jq .url)" --json statusCheckRollup`,
+      "gh issue view $n --json title,body",
+      "gh pr checks $n",
+      "for n in 1 2; do gh pr comment $n --body 'fix: hold release の判定'; done",
+      "gh pr comment $n -R o/r --body 'fix: hold release の判定'",
+      `gh api "repos/o/r/contents/scripts/stop_all.ts?ref=$SHA" --jq .sha`,
+      `gh api graphql -f query="$Q" -F path=scripts/stop_all.ts`,
+      `gh pr comment 537 --repo "$(gh repo view --json url --jq .url)" --body 'fix: hold release の判定'`,
+      "gh issue comment $n --body 'feat: freeze release を足す'",
+      `gh pr create --title 'feat: mise run stop を足す' --body "$(cat body.md)"`,
+      "gh search code scripts/hold.ts --repo $R",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// グループが実行時に決まる語か、値を取るフラグの値で位置がずれて本当のグループが実行時に決まる語になる形は、設定する語があれば委ねる形のままにする。
+describeForCallers(
+  "bash-guard denies holds or freezes written through a gh group decided at run time",
+  (subagent) => {
+    test.each([
+      [
+        "a group decided at run time",
+        "gh $g set pager 'bun scripts/hold.ts release 1'",
+      ],
+      [
+        "a group shifted by the value of a valued flag",
+        "gh -R pr $g set pager 'bun scripts/freeze.ts release 1'",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 語の値は、空白のほか、シェルが語を分けたり展開したりする字を含むときも、コマンドとして読む。
+describeForCallers(
+  "bash-guard denies holds or freezes written through values that the shell splits or expands",
+  (subagent) => {
+    test.each([
+      [
+        "a setting value split by a variable expansion",
+        `git -c core.pager=bun${OPEN}IFS}scripts/hold.ts${OPEN}IFS}release${OPEN}IFS}1 log`,
+      ],
+      [
+        "a setting value written as a brace list",
+        "git -c core.pager={bun,scripts/hold.ts,release,1} log",
+      ],
+      [
+        "a send-side program value written as a brace list",
+        "git fetch --upload-pack={bun,scripts/freeze.ts,release,1} origin",
+      ],
+      [
+        "a positional setting value split by a variable expansion",
+        `git config core.pager bun${OPEN}IFS}scripts/hold.ts${OPEN}IFS}release${OPEN}IFS}1`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// ページャーの初期コマンドの値は、まとめ書きの中、`+`と`!`の間に空白がある形、パイプのコマンドからも取り出す。
+describeForCallers(
+  "bash-guard denies holds written through a launcher hidden in an initial command of a pager",
+  (subagent) => {
+    test.each([
+      [
+        "inside a bundle of pager options",
+        String.raw`less -N+'!bun -e "import(\"./scripts/hold.ts\")"' README.md`,
+      ],
+      [
+        "after a space between the plus and the bang",
+        String.raw`less '+G !bun -e "import(\"./scripts/hold.ts\")"' README.md`,
+      ],
+      [
+        "in a pipe command",
+        String.raw`less '+|.bun -e "import(\"./scripts/hold.ts\")"' README.md`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 送信の副コマンドだけが受け付けるオプションは、委ねる長いオプションの一覧に置かない。前方が重なる読み取りのオプションを止めないためである。
+// 値を取るグローバルのオプションの値が実行時に決まる語でも、委ねる形にしない。
+describeForCallers(
+  "bash-guard allows git reads whose options share a prefix only with options of the send subcommand",
+  (subagent) => {
+    test.each([
+      "git log --cc -- scripts/stop_all.ts",
+      "git show --cc HEAD -- scripts/stop_all.ts",
+      "git -C $W log",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);

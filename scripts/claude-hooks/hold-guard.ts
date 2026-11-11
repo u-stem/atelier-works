@@ -23,7 +23,7 @@
 // 書き込みのscriptの名前を軸に、拒否を既定にする。プログラムの種類を問わず、語、変数代入の値、標準入力の文字列に、
 // 名前、名前に当たりうるglob、ブレースの形があれば拒否する。標準入力の文字列は、パイプの連鎖の上流まで辿る。
 // 読み取りなどのプログラム(`git`、`grep`、`cat`など)は、名前だけでは通す。同じコマンドに実行を表す語(`wmill`、`curl`、`npx`、`sh`など)が
-// 並ぶとき、実行を委ねるオプション(`git -c`、`rebase`、`gh alias set`、`rg --pre`)があるとき、変数代入の値に名前があるときは拒否する。
+// 並ぶとき、実行を委ねるオプション(一覧の外のキーの`git -c`、`rebase`、`gh alias set`、`rg --pre`)があるとき、変数代入の値に名前があるときは拒否する。
 // `wmill`が解除scriptを実行せずに読む・配る副コマンド(`script get`、`job list`、`script push`など)は通す。
 // パイプの上流の語にある名前は、`xargs`が受ける読み取りのプログラムと、`wmill`と、実行するプログラムに当てる。
 // `wmill jobs push`は、待ち行列のファイルからジョブを積み、名前が語に現れないので、名前なしで拒否する。
@@ -37,10 +37,13 @@
 // 全停止の入口は、プログラムの種類を問わず、どの語(`script -c`などのコマンド文字列の中も含む)に現れても拒否する。
 // `script`、`unbuffer`、`caffeinate`のような前置きの後ろでも止める。
 // 読み取りのプログラム(`NON_EXECUTING_PROGRAMS`)と検査の道具は、入口の名前が語にあっても通す。
+// ただし、読み取りのプログラムでも、実行を委ねる形(`delegatesExecution`)は通さず、委ねる先を字面でも見る。
+// 語と標準入力の文字列に、全停止のCLIを指す語か、`mise`と全停止のタスク名が並ぶ字面があれば拒否する。
+// 語の値の部分(`--opt=<値>`、`<キー>=<値>`、ページャーの初期コマンド、`!<値>`)も、値を語として判定する。
 //
 // 保留と凍結の判定は、語の字面で行う。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
-// 先頭の語で、次の4つの規則のどれかに分ける。どれにも当たらない先頭の呼び出しは、判定の対象にしない。
+// 先頭の語で、次の5つの規則のどれかに分ける。どれにも当たらない先頭の呼び出しは、判定の対象にしない。
 //
 // - 実行系(`bun`、`bunx`、`node`、`tsx`、`ts-node`、`deno`、`npx`、`npm`、`pnpm`、`pnpx`、`yarn`)と、
 //   スクリプトを直接実行する形: 語のどれかが保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省略できる)を指していれば拒否する。
@@ -81,7 +84,7 @@
 //       指す語があり、ほかに実行時に決まる語、glob、ブレースがあれば、拒否する。
 //       凍結の`place`と`deploy`は共起の語に数えず、`--scope`の値を別に判定する。
 //       スケジュールの凍結を置く形(`freeze:place -- --target a/b`)と、`list --scope deploy`は通す。
-//   (d) 空白を含む語(`script -c`や`ssh`の文字列)と標準入力の文字列は、コマンドとして読み、内側のコマンドごとに判定し直す。
+//   (d) 空白か、シェルが語を分けるか展開する字を含む語(`script -c`や`ssh`の文字列など)と標準入力の文字列は、コマンドとして読み、内側のコマンドごとに判定し直す。
 //       結果は足し合わせない。内側が読み取りの道具(`rg -n release scripts/hold.ts`)なら通す。
 //       内側の先頭が`mise`、実行系、`docker`、`psql`でも、語を足すコマンドとシェルの規則は重ねて当てる。
 //       内側の先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうるので、値を先頭の語として判定する。
@@ -91,9 +94,17 @@
 //       コマンド文字列は4段の入れ子まで読む。段を超えた文字列と読めない文字列は、字面で判定する。
 //       標準入力の文字列の字面は、保留か凍結のコードを指す字面と書き込みの語が並ぶときだけ拒否する。
 //       読む文字列の数と長さの合計にも上限を置き、超えたら拒否する。フックのタイムアウトの中で終えるためである。
+//       語の値の部分(`--opt=<値>`、`<キー>=<値>`、ページャーの初期コマンド、シェルの別名の`!<値>`)も、語が同じ字を含めばコマンドとして読む。
+//       字は、空白、`$`、バッククォート、`;`、`|`、`&`、`<`、`>`と、`{`と`}`の間に`,`か`..`がある形である。
+//       起動語が前の部分に隠れると、(b)が当たらないためである。
 //   前置きの後ろでは、実行の字面が引数にある形(`git commit -m "… hold.ts release …"`)や、シェルを使う正当な作業も拒否する。
 //   実行と区別できないためである。
-//   前置きの無い形は、上の3つの規則と、次の2つの規則に当たらない限り、判定の対象にしない。
+// - 実行を委ねる呼び出し: 先頭が読み取りの道具で、別のコマンドの実行を委ねる副コマンド、設定、オプションを持つ形(`delegatesExecution`)。
+//   前置きと同じ規則で、先頭の次の語から調べる。実行の字面が引数にある形を拒否するのも、前置きと同じである。
+//   `git -c`は、値がコマンドとして実行されないキーの閉じた一覧だけを委ねない形とし、一覧の外のキーは委ねる形とする。
+//   gitの副コマンドとグローバルのオプションも、委ねないと分かっている閉じた一覧の外は委ねる形とする。オプションは省略形を前方一致で見る。
+//   委ねる形でも、語を足すコマンドやシェルの名前で終わる語が無く、保留と凍結を指す語が無ければ通す。
+//   前置きの無い形は、上の4つの規則と、次の2つの規則に当たらない限り、判定の対象にしない。
 //
 // 前置きの無い形に当てる2つの規則は、先頭のプログラムが何でも当てる。
 // 語を足す文脈は、指す語の有無を見ずに拒否する。代入の値は、値の字面だけを見る。
@@ -1287,6 +1298,61 @@ function assignmentValue(assignment: Word): Word {
 }
 
 /**
+ * 語の中で、コマンドとして実行されうる値の前に付く部分。
+ * `--opt=`、`<キー>=`(`-c`の値と`-c<キー>=`を含む)、シェルの別名の`!`と、ページャーの初期コマンドの前の部分である。
+ * ページャーの初期コマンドは、`+`の後ろの`!`(シェルのコマンド)か`|`と印の1字(パイプのコマンド)までを外す。
+ * `+`と`!`の間の空白と、短いオプションのまとめ書きの後ろの`+`も含める。`!`と`|`は、先に現れた方で切る。
+ * キーは、空白と`=`以外の字の並びとする。設定のキーのサブセクションは、`/`や`:`を含みうる。
+ * 短いオプションのまとめ書きの、コマンドを値にくっつけて取る文字(`git grep`の`O`と`git ls-remote`の`u`)までも、前の部分として外す。
+ * どの文字が値を取るかはプログラムで決まるので、最初に現れた文字までを外す。外しすぎても、判定する値が増えるだけである。
+ */
+const COMMAND_VALUE_PREFIX =
+  /^(?:(?:-[A-Za-z0-9]*)?\+[^!|]*(?:!|\|.)|!|[^\s=]+=|-[A-Za-z0-9]*?O|-[A-Za-z0-9]*?u)/s;
+
+/** シェルの変数代入の形の前の部分。 */
+const SHELL_ASSIGNMENT_PREFIX = /^[A-Za-z_]\w*=/;
+
+/** シェルが語を分けるか展開する字。空白、`$`、バッククォート、`;`、`|`、`&`、`<`、`>`である。 */
+const SHELL_SPLITTING_CHARACTERS = /[\s$`;|&<>]/;
+
+/**
+ * 文字列が、シェルが語を分けるか展開する字を含むか、`{`と`}`の間に`,`か`..`を持つ(ブレースの並びの形)なら真。
+ * ブレースの並びは、最初の`{`と最後の`}`の間で見る。どの組の間にあっても、その範囲に入るためである。
+ */
+function splitsIntoWords(text: string): boolean {
+  if (SHELL_SPLITTING_CHARACTERS.test(text)) return true;
+  const open = text.indexOf("{");
+  const close = text.lastIndexOf("}");
+  if (open === -1 || close <= open) return false;
+  const inner = text.slice(open + 1, close);
+  return inner.includes(",") || inner.includes("..");
+}
+
+/**
+ * 語に値の部分があり、語がシェルの語を分けるか展開する字を含めば(`splitsIntoWords`)、前の部分を外した値を語として返す。そうでなければnullを返す。
+ * そうした字の無い値は、1語のまま渡り引数を渡せず、起動語を判定しても日常の値(`--reporter=watch`など)を拒否するだけなので、取り出さない。
+ * `assignmentValue`と同じく、NULを除いた綴りからも前の部分を外し、`dynamic`と`glob`を引き継ぐ。
+ * シェルの変数代入の形で始まる語(`LANG=C rg …`)は、nullを返す。
+ * その語はコマンドとして読むときに代入として外れ、値は代入の判定が空白までを見るので、後ろのコマンドまで値に含めない。
+ */
+function commandValue(word: Word): Word | null {
+  if (!splitsIntoWords(word.text)) return null;
+  const prefix = COMMAND_VALUE_PREFIX.exec(word.text)?.[0];
+  if (prefix === undefined || prefix.length === word.text.length) return null;
+  if (SHELL_ASSIGNMENT_PREFIX.test(prefix)) return null;
+  const cut = (text: string) =>
+    text.slice(COMMAND_VALUE_PREFIX.exec(text)?.[0].length ?? 0);
+  return {
+    text: word.text.slice(prefix.length),
+    dynamic: word.dynamic,
+    glob: word.glob,
+    ...(word.variants === undefined
+      ? {}
+      : { variants: word.variants.map(cut) }),
+  };
+}
+
+/**
  * 前置きの後ろの起動語(`mise`、実行系、`docker`と`psql`)を、その位置から先頭のときと同じ規則で判定し直す。
  * 起動語が複数あれば、すべて調べる。数に上限を置き、超えたら拒否する。
  */
@@ -1339,10 +1405,12 @@ function isReadOnlyProgram(program: string, words: readonly Word[]): boolean {
  * 前置きの後ろの判定。`words`の`from`番目から後ろを見る。
  * 前置き自身が先頭のときは1、前置きの後ろの文字列から読んだコマンドは0である。
  * 1. 語を足すコマンド、シェル、読めない標準入力があれば、指す語の有無によらず`dynamic`で拒否する。
- * 2. 空白を含む語(`script -c`や`ssh`の文字列)と、標準入力の文字列は、コマンドとして読んで判定し直す。
+ * 2. 空白か、シェルが語を分けるか展開する字を含む語(`script -c`や`ssh`の文字列など)と、標準入力の文字列は、コマンドとして読んで判定し直す。
+ *    語の値の部分(`--opt=<値>`、`<キー>=<値>`、ページャーの初期コマンド、`!<値>`)も、語が同じ字を含めばコマンドとして読む。
  * 3. 前置きの後ろの起動語は、既存の分岐で判定し直す。
  * 4. 語は、共起で見る。
  * 文字列から読んだコマンドが読み取りの道具なら、通す。
+ * 読み取りの道具が別のコマンドの実行を委ねる呼び出し(`delegatesExecution`)も、`from`を1にしてこの判定に通す。
  */
 function underPrefixFinding(
   words: readonly Word[],
@@ -1359,10 +1427,19 @@ function underPrefixFinding(
   );
   if (readsStdin && hasUnreadableStdin(context)) return "prefix";
   let found: HoldFinding | null = null;
+  // 語を分けるか展開する字を含む語は、受け取った側が文字列としてシェルに渡すと複数の語になるので、コマンドとして読む。
   for (let at = from; at < words.length; at += 1) {
     const word = words[at];
-    if (word === undefined || !/\s/.test(word.text)) continue;
+    if (word === undefined || !splitsIntoWords(word.text)) continue;
     found = stronger(found, textFinding(word.text, context, "string"));
+    if (found === "operation") return found;
+  }
+  // 語の`=`より後ろと、ページャーの初期コマンドや`!`の後ろは、コマンドとして実行されうる。起動語が前の部分に隠れないよう、値をコマンドとして読む。
+  // 解析の回数は、値を読む`textFinding`が数える。
+  for (const word of words.slice(from)) {
+    const value = commandValue(word);
+    if (value === null) continue;
+    found = stronger(found, textFinding(value.text, context, "string"));
     if (found === "operation") return found;
   }
   for (const text of context.own() ?? []) {
@@ -1569,6 +1646,7 @@ function holdOperationAt(
 
 /**
  * 先頭が`mise`、実行系、`docker`と`psql`、保留や凍結のCLIの直接実行のとき、その分岐の判定を返す。
+ * 先頭が読み取りの道具で、別のコマンドの実行を委ねる形(`delegatesExecution`)なら、前置きの後ろと同じ規則で判定する。
  * どれでもなければnullを返す。
  */
 function launchedFinding(
@@ -1592,6 +1670,10 @@ function launchedFinding(
       ? null
       : "operation";
   }
+  // 読み取りの道具が別のコマンドの実行を委ねる形は、前置きの後ろと同じ規則で、次の語から調べる。
+  if (delegatesExecution(program, words.slice(1))) {
+    return underPrefixFinding(words, 1, context);
+  }
   return null;
 }
 
@@ -1604,6 +1686,7 @@ function launchedFinding(
  * 実行系が標準入力をコードとして読む形で、出どころが保留か凍結のコード、または読めないものなら拒否する。
  * 先頭が`mise`、実行系、`docker`と`psql`、保留や凍結のCLIの直接実行なら、その引数を調べる。
  * 先頭が前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`)なら、前置きの規則で調べる。
+ * 先頭が読み取りの道具で、別のコマンドの実行を委ねる形(`git rebase`、`gh alias set`など)も、前置きの規則で調べる。
  * 前置きの無い語を足す文脈(`xargs`、`find`の実行系の式、`parallel`、`watch`、`strace`)は、
  * 実行される側が読み取りの閉じた集合に入らなければ拒否する。
  * 先頭の変数代入(`assignments`)の値が保留や凍結のコードを指していれば、実行する側によらず拒否する。
@@ -1724,6 +1807,7 @@ const NON_EXECUTING_PROGRAMS: ReadonlySet<string> = new Set([
 /**
  * 名前が、ファイルのパスの形の語にあるときだけ通すプログラム。
  * `sed`の`e`コマンドと、`bat`と`ag`の`--pager`は、文字列をコマンドとして実行できる。
+ * `--pager`は、パスの形によらず、実行を委ねる形(`delegatesExecution`)としても扱う。
  */
 const PATH_ONLY_PROGRAMS: ReadonlySet<string> = new Set(["sed", "bat", "ag"]);
 
@@ -1761,24 +1845,188 @@ const EXECUTION_FRAGMENTS: readonly string[] = [
   "/jobs/run",
 ];
 
-/** `git`が別のコマンドを実行する副コマンド。名前が当たるときは通さない。 */
-const GIT_EXECUTING_SUBCOMMANDS: ReadonlySet<string> = new Set([
-  "rebase",
-  "bisect",
-  "submodule",
-  "difftool",
-  "mergetool",
-  "filter-branch",
+/**
+ * `git`の、別のコマンドの実行を委ねないと分かっている副コマンド。一覧の外の副コマンドと別名は、実行を委ねる形として扱う。
+ * 別のコマンドを実行する副コマンド、設定を書く副コマンド、引数を別のリポジトリのgitへ渡す副コマンドは、版ごとに増える開いた集合なので、許す側を閉じた一覧にする。
+ * 一覧の中の副コマンドでも、実行を委ねるオプション(`GIT_DELEGATING_LONG_OPTIONS`など)があれば委ねる形として扱う。
+ */
+const GIT_INERT_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "add",
+  "am",
+  "apply",
+  "archive",
+  "blame",
+  "branch",
+  "cat-file",
+  "check-ignore",
+  "checkout",
+  "cherry-pick",
+  "clean",
+  "commit",
+  "describe",
+  "diff",
+  "diff-tree",
+  "fetch",
+  "for-each-ref",
+  "grep",
+  "help",
+  "init",
+  "log",
+  "ls-files",
+  "ls-remote",
+  "ls-tree",
+  "merge",
+  "merge-base",
+  "mv",
+  "name-rev",
+  "pull",
+  "push",
+  "reflog",
+  "remote",
+  "reset",
+  "restore",
+  "rev-list",
+  "rev-parse",
+  "revert",
+  "rm",
+  "shortlog",
+  "show",
+  "show-ref",
+  "stash",
+  "status",
+  "switch",
+  "symbolic-ref",
+  "tag",
+  "version",
+  "worktree",
 ]);
 
-/** `git`の、値を次の語に取るグローバルのオプション。 */
+/** `git`の、値を取らず、別のコマンドの実行を委ねないグローバルのオプション。一覧の外のオプションは、実行を委ねる形として扱う。 */
+const GIT_INERT_GLOBAL_FLAGS: ReadonlySet<string> = new Set([
+  "-p",
+  "--paginate",
+  "-P",
+  "--no-pager",
+  "--bare",
+  "--no-replace-objects",
+  "--literal-pathspecs",
+  "--glob-pathspecs",
+  "--noglob-pathspecs",
+  "--icase-pathspecs",
+  "--no-optional-locks",
+  "--no-lazy-fetch",
+  "--version",
+  "--help",
+  "-h",
+]);
+
+/** `git`の、値を次の語に取り、別のコマンドの実行を委ねないグローバルのオプション。 */
 const GIT_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set([
   "-C",
   "--git-dir",
   "--work-tree",
   "--namespace",
-  "--exec-path",
+  "--super-prefix",
 ]);
+
+/** `git`の、値を`=`でくっつけて取り、別のコマンドの実行を委ねないグローバルのオプションの前の部分。 */
+const GIT_OPTIONS_WITH_ATTACHED_VALUE: readonly string[] = [
+  "--git-dir=",
+  "--work-tree=",
+  "--namespace=",
+];
+
+/**
+ * 副コマンドの後ろで、実行するコマンドを受け取るか、設定のコマンドを起動する`git`の長いオプションの名前。
+ * gitは長いオプションの一意な省略形を受け付けるので、名前の前方一致で見る(`isDelegatingLongOption`)。
+ * 委ねない副コマンドの一覧(`GIT_INERT_SUBCOMMANDS`)の中の副コマンドが受け付けるものだけを置く。
+ * 一覧の外の副コマンドだけが受け付けるもの(送信の副コマンドのオプションなど)は、副コマンドの判定で委ねる形になるので置かない。
+ * 置くと、前方が重なる読み取りのオプションまで委ねる形にするためである。
+ */
+const GIT_DELEGATING_LONG_OPTIONS: readonly string[] = [
+  "--upload-pack",
+  "--receive-pack",
+  "--exec",
+  "--ext-diff",
+  "--open-files-in-pager",
+  "--textconv",
+];
+
+/**
+ * 語が、`options`のどれかの長いオプションか、その省略形なら真。
+ * 語の`=`より前を名前とし、`--`の後ろに`minimum`字以上あって、どれかのオプションの名前がその名前で始まるか、その名前がオプションの名前で始まるときである。
+ * 一意かは確かめない。ほかのオプションの省略形と重なっても、委ねる側に倒れるだけである。
+ */
+function isDelegatingLongOption(
+  text: string,
+  options: readonly string[],
+  minimum: number,
+): boolean {
+  if (!text.startsWith("--")) return false;
+  const equals = text.indexOf("=");
+  const name = equals === -1 ? text : text.slice(0, equals);
+  if (name.length < 2 + minimum) return false;
+  return options.some(
+    (option) => option.startsWith(name) || name.startsWith(option),
+  );
+}
+
+/** 語が、`-`で始まり`--`で始まらない短いオプションのまとめ書きで、`letter`を含むなら真。 */
+function hasShortOption(text: string, letter: string): boolean {
+  return (
+    text.startsWith("-") && !text.startsWith("--") && text.includes(letter)
+  );
+}
+
+/** 短いオプションの文字で、実行するコマンドを受け取る`git`の副コマンド。`grep`のページャーと、`ls-remote`の送信側のプログラムである。 */
+const GIT_DELEGATING_SHORT_OPTIONS: ReadonlyMap<string, string> = new Map([
+  ["grep", "O"],
+  ["ls-remote", "u"],
+]);
+
+/**
+ * `git -c`で付けても、値がコマンドとして実行されないキー(小文字で比べる)。一覧の外のキーは、実行を委ねる形として扱う。
+ * 値が実行されるキーは、版ごとに増える開いた集合なので、拒否する側ではなく許す側を閉じた一覧にする。
+ * 値が実行されなくても、他の所有者のリポジトリの設定を有効にするキーは入れない。その設定の中の、値が実行されるキーが効くためである。
+ */
+const GIT_INERT_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  "user.name",
+  "user.email",
+  "core.quotepath",
+  "core.autocrlf",
+  "core.safecrlf",
+  "core.abbrev",
+  "core.filemode",
+  "init.defaultbranch",
+  "commit.gpgsign",
+  "tag.gpgsign",
+]);
+
+/** 下の名前を問わず、値がコマンドとして実行されないキーの接頭辞。 */
+const GIT_INERT_CONFIG_PREFIXES: readonly string[] = ["color.", "advice."];
+
+/** `<キー>=<値>`か`<キー>`の文字列のキーが、値を実行しない一覧にあるなら真。 */
+function isInertGitConfigText(text: string): boolean {
+  const equals = text.indexOf("=");
+  const key = (equals === -1 ? text : text.slice(0, equals)).toLowerCase();
+  return (
+    GIT_INERT_CONFIG_KEYS.has(key) ||
+    GIT_INERT_CONFIG_PREFIXES.some((prefix) => key.startsWith(prefix))
+  );
+}
+
+/**
+ * `git -c`の値の語の、先頭の`skip`文字より後ろのキーが、値を実行しない一覧にあるなら真。
+ * `skip`は、くっついた形(`-c<キー>=<値>`)の`-c`を外すために使う。
+ * 語が無いか、実行時に決まるかglobなら、キーが決まらないので偽にする。
+ * NULを除いた綴りも、すべて一覧に当たるときだけ真にする。
+ */
+function isInertGitConfig(word: Word | undefined, skip = 0): boolean {
+  if (word === undefined || word.dynamic || word.glob) return false;
+  return [word.text, ...(word.variants ?? [])].every((text) =>
+    isInertGitConfigText(text.slice(skip)),
+  );
+}
 
 /** `find`が別のコマンドを実行する式。 */
 const FIND_EXECUTION = /^-(?:exec|execdir|ok|okdir)$/;
@@ -2051,50 +2299,161 @@ function readerKind(
     : null;
 }
 
-/** `git`の呼び出しが、別のコマンドを実行する設定、副コマンド、オプションを持つなら真。 */
-function gitExecutes(args: readonly Word[]): boolean {
-  let subcommand: string | null = null;
+/**
+ * 副コマンドより前の語(グローバルのオプション)を読む。
+ * 副コマンドの位置を返す。実行を委ねる形か、閉じた一覧の外のオプションがあれば`delegates`を返す。副コマンドが無ければnullを返す。
+ * `-c`のキーは、値がコマンドとして実行されないキーの一覧だけを通す。
+ */
+function gitSubcommandAt(args: readonly Word[]): number | "delegates" | null {
   for (let index = 0; index < args.length; index += 1) {
-    const text = args[index]?.text ?? "";
-    if (subcommand === null) {
-      if (text.startsWith("-c") || text.startsWith("--config-env")) return true;
-      if (GIT_OPTIONS_WITH_VALUE.has(text)) {
-        index += 1;
-      } else if (!text.startsWith("-")) {
-        subcommand = text;
-        if (GIT_EXECUTING_SUBCOMMANDS.has(text)) return true;
-      }
-      continue;
-    }
-    if (
-      /^--(?:ext-diff|upload-pack|receive-pack|exec|open-files-in-pager)/.test(
-        text,
-      )
+    const word = args[index];
+    if (word === undefined) break;
+    const { text } = word;
+    if (text === "-c") {
+      index += 1;
+      if (!isInertGitConfig(args[index])) return "delegates";
+    } else if (text.startsWith("-c")) {
+      if (!isInertGitConfig(word, 2)) return "delegates";
+    } else if (GIT_OPTIONS_WITH_VALUE.has(text)) {
+      index += 1;
+    } else if (
+      GIT_INERT_GLOBAL_FLAGS.has(text) ||
+      GIT_OPTIONS_WITH_ATTACHED_VALUE.some((prefix) => text.startsWith(prefix))
     ) {
-      return true;
+      // 値を取らないか、値を`=`でくっつけた、委ねないオプション。
+    } else if (text.startsWith("-")) {
+      // 環境変数から読む設定、副コマンドの実体の置き場所、知らないオプションは、委ねる形に倒す。
+      return "delegates";
+    } else {
+      return index;
     }
-    if (subcommand === "grep" && text.startsWith("-O")) return true;
   }
-  return false;
+  return null;
 }
 
-/** `gh`の呼び出しが、別名やextensionでコマンドを足すものなら真。 */
+/**
+ * `git`の呼び出しが、別のコマンドを実行する設定、副コマンド、オプションを持つなら真。
+ * 副コマンドは閉じた一覧(`GIT_INERT_SUBCOMMANDS`)の中だけを委ねない形とし、一覧の外と、実行時に決まる語とglobは委ねる形とする。
+ * 一覧の中の副コマンドでも、後ろの語に実行を委ねるオプションか、その省略形があれば委ねる形とする。
+ */
+function gitExecutes(args: readonly Word[]): boolean {
+  const at = gitSubcommandAt(args);
+  if (at === null) return false;
+  if (at === "delegates") return true;
+  const subcommand = args[at];
+  if (
+    subcommand === undefined ||
+    subcommand.dynamic ||
+    subcommand.glob ||
+    !GIT_INERT_SUBCOMMANDS.has(subcommand.text)
+  ) {
+    return true;
+  }
+  const letter = GIT_DELEGATING_SHORT_OPTIONS.get(subcommand.text);
+  return args
+    .slice(at + 1)
+    .some(
+      (word) =>
+        isDelegatingLongOption(word.text, GIT_DELEGATING_LONG_OPTIONS, 1) ||
+        (letter !== undefined && hasShortOption(word.text, letter)),
+    );
+}
+
+/** `gh`の、extensionを扱うグループの名前。 */
+const GH_EXTENSION_GROUPS: ReadonlySet<string> = new Set([
+  "extension",
+  "extensions",
+  "ext",
+]);
+
+/**
+ * `gh`の、読み取りと日常の操作のグループ。別名、設定、extension、codespace、秘密値と変数のグループは入れない。
+ * 位置引数に実行時に決まる語があっても、最初の位置引数がこの一覧にあれば、グループが決まったものとして扱う。
+ */
+const GH_INERT_GROUPS: ReadonlySet<string> = new Set([
+  "pr",
+  "issue",
+  "api",
+  "run",
+  "repo",
+  "release",
+  "workflow",
+  "search",
+  "label",
+  "status",
+  "browse",
+  "cache",
+  "gist",
+  "auth",
+  "ruleset",
+  "project",
+  "org",
+]);
+
+/**
+ * `gh`の呼び出しが、別名、extension、設定の書き込み、gitへ渡す引数で、コマンドを足すか実行するものなら真。
+ * 値を取るフラグが副コマンドの前にも置けるので、位置引数の位置は見ず、語の有無で見る。
+ * 設定は、キーを問わず書き込みを委ねる形にする。後から別のコマンドが値を実行するキーがあるためである。
+ * `--`の後ろは、`repo clone`や`repo fork`がgitへ渡すので、グループを問わず委ねる形にする。
+ * 位置引数に実行時に決まる語かglobがあれば、その語が別名や設定を表しうる。
+ * 最初の位置引数が読み取りと日常の操作のグループ(`GH_INERT_GROUPS`)に無いか、設定する語か取り込む語があるときは、委ねる形にする。
+ * 最初の位置引数は値を取るフラグの値のこともあるが、そのときも設定する語か取り込む語があれば委ねる形になる。
+ */
 function ghExecutes(args: readonly Word[]): boolean {
-  const positional = wmillPositional(args);
+  const positional = args.filter((word) => !word.text.startsWith("-"));
+  const texts = new Set(positional.map((word) => word.text));
+  const writes = texts.has("set") || texts.has("import");
+  if (positional.some((word) => word.dynamic || word.glob)) {
+    const first = positional[0];
+    const inertGroup =
+      first !== undefined &&
+      !first.dynamic &&
+      !first.glob &&
+      GH_INERT_GROUPS.has(first.text);
+    if (!inertGroup || writes) return true;
+  }
   return (
-    (positional[0] === "alias" && positional[1] === "set") ||
-    positional[0] === "extension" ||
-    positional[0] === "ext"
+    (texts.has("alias") && writes) ||
+    (texts.has("config") && texts.has("set")) ||
+    [...GH_EXTENSION_GROUPS].some((group) => texts.has(group)) ||
+    args.some((word) => word.text === "--")
   );
 }
 
-/** 何も実行しないはずのプログラムが、オプションで別のコマンドを実行する形なら真。 */
+/**
+ * `+`で始まる語を、起動したときに実行する初期コマンドとして受け取るページャー。
+ * 初期コマンドの`!`は、シェルのコマンドを実行する。macOSの`more`は`less`である。
+ */
+const INITIAL_COMMAND_PROGRAMS: ReadonlySet<string> = new Set(["less", "more"]);
+
+/** 語のどれかが、オプション`name`そのものか、`name=`で始まるなら真。 */
+function hasOption(args: readonly Word[], name: string): boolean {
+  return args.some(
+    (word) => word.text === name || word.text.startsWith(`${name}=`),
+  );
+}
+
+/**
+ * 何も実行しないはずのプログラムが、副コマンド、設定、オプションで別のコマンドの実行を委ねる形なら真。
+ * gitとghの副コマンドと設定、`rg`の前処理、`ag`と`bat`のページャー、`less`と`more`の初期コマンドである。
+ * `ag`は長いオプションの一意な省略形を受け付けるので、ページャーのオプションを前方一致で見る。`bat`は省略形を受け付けない。
+ * `less`と`more`の初期コマンドは、短いオプションのまとめ書きの中の`+`も数える。
+ * 保留・凍結、全停止、Consoleのscriptの判定が、この関数で委ねる形を見分ける。
+ */
 function delegatesExecution(program: string, args: readonly Word[]): boolean {
   if (program === "git") return gitExecutes(args);
   if (program === "gh") return ghExecutes(args);
-  if (program === "rg") {
+  if (program === "rg") return hasOption(args, "--pre");
+  if (program === "bat") return hasOption(args, "--pager");
+  if (program === "ag") {
+    // `--pa`は、ほかのオプションと重なって一意にならない。
+    return args.some((word) =>
+      isDelegatingLongOption(word.text, ["--pager"], 3),
+    );
+  }
+  if (INITIAL_COMMAND_PROGRAMS.has(program)) {
     return args.some(
-      (word) => word.text === "--pre" || word.text.startsWith("--pre="),
+      (word) => word.text.startsWith("+") || hasShortOption(word.text, "+"),
     );
   }
   return false;
@@ -2139,7 +2498,7 @@ function readerRefuses(
  * 名前、名前に当たりうるglob、ブレースの形があれば`script`を返す。名前を標準入力で受ける`xargs`も同じである。
  * 例外は次のとおりである。
  * - 読み取りなどのプログラム(`NON_EXECUTING_PROGRAMS`と、`bun test`などの検査の道具)。名前と実行を表す語が並ぶとき、
- *   実行を委ねるオプション(`git -c`、`rebase`、`gh alias set`、`rg --pre`など)があるとき、変数代入の値に名前があるときは拒否する。
+ *   実行を委ねるオプション(一覧の外のキーの`git -c`、`rebase`、`gh alias set`、`rg --pre`など)があるとき、変数代入の値に名前があるときは拒否する。
  * - `sed`、`bat`、`ag`。名前がファイルのパスの形の語にあるときだけ通す。
  * - シェル。起動オプションを読んで決まった`-c`の文字列は再帰で別に調べるので、それ以外の語と標準入力の文字列に名前があるときだけ拒否する。
  * - `wmill`が解除scriptを実行せずに読む・配る副コマンド(`script get`、`job list`、`script push`など)。
@@ -2274,6 +2633,14 @@ const STOP_ALL_TASK_WORDING = new RegExp(
 /** `mise`を、区切られた語として含む字面。 */
 const MISE_WORDING = /(?:^|[^\w-])mise(?![\w-])/;
 
+/** 文字列が、全停止のCLIを指す字面か、`mise`と全停止のタスク名が並ぶ字面を持つなら真。 */
+function stopAllWording(text: string): boolean {
+  return (
+    STOP_ALL_MENTION.test(text) ||
+    (MISE_WORDING.test(text) && STOP_ALL_TASK_WORDING.test(text))
+  );
+}
+
 /**
  * 読めない文字列と、入れ子が深さの上限を超えた文字列の字面が、全停止を指すなら真。
  * 全停止のCLIを指す語か、`mise`と全停止のタスク名が並ぶ字面である。
@@ -2281,9 +2648,7 @@ const MISE_WORDING = /(?:^|[^\w-])mise(?![\w-])/;
  */
 function unreadableTextStopAll(word: Word): boolean {
   if (pointsAtStopAllCode(word)) return true;
-  return spellings(word).some(
-    (text) => MISE_WORDING.test(text) && STOP_ALL_TASK_WORDING.test(text),
-  );
+  return spellings(word).some(stopAllWording);
 }
 
 /** 空白を含む語が、中に全停止の入口を実行する形を持つか。読めない文字列は、字面で判定する。 */
@@ -2301,12 +2666,25 @@ function textStopAllCall(
   });
 }
 
-/** 語が全停止のCLIを指すか、空白を含む語なら中のコマンドが全停止の入口を実行する形なら真。 */
+/**
+ * 語が全停止のCLIを指すか、空白を含む語なら中のコマンドが全停止の入口を実行する形なら真。
+ * 語の値の部分(`commandValue`)も、入れ子を1段深くして同じ規則で判定する。
+ * 深さの上限に達したら、値を取り出さずに語の字面で判定する。値の中の値を重ねた語でも、上限の段数で終わる。
+ */
 function wordStopAllCall(
   word: Word,
   inputs: () => readonly string[] | null,
   depth: number,
 ): boolean {
+  // 語の`=`より後ろと、ページャーの初期コマンドや`!`の後ろは、コマンドとして実行されうるので、値も判定する。
+  const value = commandValue(word);
+  if (value !== null) {
+    if (depth >= COMMAND_TEXT_MAX_DEPTH) {
+      if (unreadableTextStopAll(word)) return true;
+    } else if (wordStopAllCall(value, inputs, depth + 1)) {
+      return true;
+    }
+  }
   if (/\s/.test(word.text)) return textStopAllCall(word, inputs, depth);
   // 全停止の変数のパスは、読み取りの引数にも現れる。書き込みは変数の判定(`findConsoleReleaseCall`)が止める。
   return pointsAtStopAllCode(word) && !STOP_ALL_VARIABLE_PATH.test(word.text);
@@ -2320,8 +2698,21 @@ function stopAllCallAt(
   const program = baseName(words[0]?.text ?? "");
   if (program === "mise") return miseStopAllCall(words, inputs);
   if (RUNNERS.has(program)) return runnerStopAllCall(words.slice(1), inputs);
-  if (readerKind(program, words) !== null || INSPECTION_TOOLS.has(program)) {
+  // 読み取りのプログラムでも、別のコマンドの実行を委ねる形は免除しない。
+  // 免除をパスの形だけを通す規則(`isReadOnlyProgram`)に置き換えないのは、`bat -r 1:10 <パス>`のような読み取りを止めないためである。
+  const delegates = delegatesExecution(program, words.slice(1));
+  if (
+    !delegates &&
+    (readerKind(program, words) !== null || INSPECTION_TOOLS.has(program))
+  ) {
     return false;
+  }
+  // 委ねる先は読めない形が多いので、語と標準入力の文字列に全停止を指す字面があれば拒否する。
+  if (
+    delegates &&
+    (words.some(unreadableTextStopAll) || (inputs() ?? []).some(stopAllWording))
+  ) {
+    return true;
   }
   // `script`や`caffeinate`のような前置きの後ろに`mise`か実行系が続く形は、その位置から判定する。
   const launcherAt = words.findIndex((word, index) => {
@@ -2350,6 +2741,7 @@ function stopAllCallAt(
  * プログラムの種類は問わない。`script`、`unbuffer`、`caffeinate`のような前置きの後ろの語と、
  * `script -c`のようなコマンド文字列の中も、同じ規則で見る。
  * 検査の道具(`bun test`、`biome`など)の引数と、読み取りのプログラム(`cat`、`git`、`rg`など)は、実行ではないので通す。
+ * 読み取りのプログラムでも、別のコマンドの実行を委ねる形(`delegatesExecution`)は通さず、委ねる先を字面でも見る。
  * ベストエフォートの規則で、変数や連結で組み立てた名前と、別名の呼び出しは止めない。
  */
 export function findStopAllCall(
