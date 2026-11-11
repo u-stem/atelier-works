@@ -6132,7 +6132,7 @@ describeForCallers(
   },
 );
 
-// カンマの無いブレースの範囲は、展開した字が決まらないものとしてglobと同じに照合する。
+// カンマの無いブレースの範囲は、端点の字の集合に置き換えてglobと同じに照合する。英字の範囲は字の集合、数の範囲は数字で始まる並びである。
 describeForCallers(
   "bash-guard denies guarded code named through a brace range",
   (subagent) => {
@@ -6148,12 +6148,25 @@ describeForCallers(
         "a hold path after a prefix",
         "script -q /dev/null bun scripts/h{o..o}ld.ts place",
       ],
+      [
+        "a hold path written only in ranges",
+        "bun scripts/{h..h}{o..o}{l..l}{d..d}.ts place",
+      ],
+      [
+        "a freeze path written only in ranges",
+        "bun scripts/{f..f}{r..r}{e..e}{e..e}{z..z}{e..e}.ts release",
+      ],
+      [
+        "a stop path written only in ranges",
+        "bun scripts/{s..s}{t..t}{o..o}{p..p}_{a..a}{l..l}{l..l}.ts",
+      ],
     ])("denies %s", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
   },
 );
 
+// 数の範囲は数字に展開されるので、保留、凍結、全停止のコードとConsoleのscriptの名前に当たらない。
 describeForCallers("bash-guard allows daily brace ranges", (subagent) => {
   test.each([
     "for i in {1..3}; do gh pr view $i; done",
@@ -6162,6 +6175,9 @@ describeForCallers("bash-guard allows daily brace ranges", (subagent) => {
     "curl -s https://example.com/{1..3}",
     "bun run x{1..3}",
     "printf '%s\\n' {a..c}",
+    "bun scripts/x.ts out/stop_{1..3}",
+    "bun scripts/x.ts out/freeze_{01..12}",
+    "curl -s https://example.com/api/{1..3}_release",
   ])("allows %s", async (command) => {
     expect(await decide(command, { subagent })).toBe("allow");
   });
