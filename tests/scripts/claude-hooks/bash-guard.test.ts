@@ -6433,20 +6433,35 @@ describeForCallers(
         "a leading doubled slash",
         "cat scripts/hold.ts | bun //dev/stdin place",
       ],
+      [
+        "a relative path",
+        "cat scripts/hold.ts | bun ../../../../dev/stdin place",
+      ],
+      ["a glob", "cat scripts/hold.ts | bun /dev/std?n place"],
+      ["a character class", "cat scripts/hold.ts | bun /dev/std[i]n place"],
+      ["a brace", "cat scripts/hold.ts | bun /dev/{stdin,x} place"],
+      ["a brace range", "cat scripts/hold.ts | bun /dev/fd/{0..0} place"],
+      ["a variable", "cat scripts/hold.ts | bun $IN place"],
+      [
+        "a descriptor number with a leading zero",
+        "cat scripts/hold.ts | bun /dev/fd/00 place",
+      ],
     ])("denies %s", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
   },
 );
 
+// 読めない綴りのオペランドを標準入力とみなしても、上流が保留と凍結のコードでなければ止めない。
 describeForCallers(
   "bash-guard allows runners given absolute script paths",
   (subagent) => {
-    test.each(["bun /repo/scripts/x.ts", "cat README.md | bun run check"])(
-      "allows %s",
-      async (command) => {
-        expect(await decide(command, { subagent })).toBe("allow");
-      },
-    );
+    test.each([
+      "bun /repo/scripts/x.ts",
+      "cat README.md | bun run check",
+      "cat README.md | bun $IN",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
   },
 );
