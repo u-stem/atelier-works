@@ -76,9 +76,15 @@ describe("collectAnchors", () => {
   });
 
   test("drops emphasis markers with an underscore in a heading", () => {
+    const anchors = collectAnchors("## _強調_ needs_human\n");
+
+    expect(anchors.has("強調-needs_human")).toBe(true);
+  });
+
+  test("keeps underscores that sit inside a word", () => {
     const anchors = collectAnchors("## _強調_と needs_human\n");
 
-    expect(anchors.has("強調と-needs_human")).toBe(true);
+    expect(anchors.has("_強調_と-needs_human")).toBe(true);
   });
 
   test("keeps an escaped character in a heading", () => {

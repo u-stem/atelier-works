@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 // リポジトリのMarkdown文書を`docs/writing-guidelines.md`の規則で検査する。
-// 次の4つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
+// 次の5つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
 // - このリポジトリの規則(`f/factory/lib/prose_check.ts`の`REPO_DOC_RULES`)
+// - 文書の間のリンクとアンカー(`scripts/lint-doc-links.ts`)
 // - markdownlint(`.markdownlint-cli2.jsonc`)
 // - textlint(`.textlintrc.json`)
 // - 生成範囲とmiseタスクの表の確認(`scripts/docs-gen.ts --check`)
@@ -22,6 +23,7 @@ import { availableParallelism } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { checkProse, REPO_DOC_RULES } from "../f/factory/lib/prose_check.ts";
 import { runDocsGen } from "./docs-gen.ts";
+import { lintDocLinkFiles } from "./lint-doc-links.ts";
 
 /** 自作のスキル。これ以外の`.claude/skills/`は`wmill`の管理スキルか取り込んだもの。 */
 const OWN_SKILL_PATTERN =
@@ -331,6 +333,7 @@ async function main(): Promise<void> {
   for (const path of targets) {
     problems.push(...lintDocText(path, readFileSync(path, "utf8")));
   }
+  problems.push(...lintDocLinkFiles(targets, join(import.meta.dir, "..")));
   for (const problem of problems) console.error(problem);
 
   const toolsOk = await lintWithTools(targets, createProductionDeps());
