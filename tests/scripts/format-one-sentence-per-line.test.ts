@@ -203,13 +203,28 @@ describe("main", () => {
   });
 
   test("leaves a file that the lint does not cover alone", () => {
+    const dir = makeRoot({
+      ".claude/skills/write-script-bun/SKILL.md": "A。B\n",
+    });
+
+    run(dir, [".claude/skills/write-script-bun/SKILL.md"]);
+
+    expect(
+      readFileSync(
+        join(dir, ".claude/skills/write-script-bun/SKILL.md"),
+        "utf8",
+      ),
+    ).toBe("A。B\n");
+  });
+
+  test("formats a skill that the repository writes itself", () => {
     const dir = makeRoot({ ".claude/skills/hold/SKILL.md": "A。B\n" });
 
     run(dir, [".claude/skills/hold/SKILL.md"]);
 
     expect(
       readFileSync(join(dir, ".claude/skills/hold/SKILL.md"), "utf8"),
-    ).toBe("A。B\n");
+    ).toBe("A。\nB\n");
   });
 
   test("formats every document of the repository when no file is given", () => {
