@@ -900,10 +900,11 @@ function stdinOperandForm(text: string): string {
 
 /**
  * 語が、標準入力をコードとして読む形のオペランドなら真。
- * まとめた綴りが標準入力を指す語、実行時に決まる語、標準入力の綴りに当たりうるglobとブレースの語である。
+ * まとめた綴りが標準入力を指す語と、標準入力の綴りに当たりうるglobとブレースの語である。
+ * 実行時に決まる語は見ない。変数のパスのスクリプトや、変数の値を取るオプションは日常の形で、
+ * 変数で標準入力を指す形は、実行時に組んだ名前と同じく判定しないためである。
  */
 function readsStdinOperand(word: Word): boolean {
-  if (word.dynamic) return true;
   return spellings(word).some((text) => {
     const form = stdinOperandForm(text);
     if (form === "-" || STDIN_PATH.test(form)) return true;
