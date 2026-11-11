@@ -210,6 +210,7 @@ gitのpre-pushは全体の`check`を実行しない。理由は[セットアッ�
   `console/`の下は`console:check`が担うので、全件にしない。
 - `test:all`は、カバレッジを測らずに全件を実行する。`test:changed`が、全件を要する差分で呼ぶ。
 - `check:changed`は、`scripts/check-changed.ts`が差分のパスから実行する検査を決める。重いのは`lint:docs`なので、差分のMarkdownだけを検査する。
+  文書の間のリンクは、差分に文書が無くても、全文書を検査する(`scripts/lint-docs.ts --links-only`)。リンク先や文書の削除、`.md`以外のファイルの改名で壊れるためである。
   テストは、`test:changed`と同じ規則で選ぶ。
   絞り方を変えるときは`tests/scripts/check-changed.test.ts`と`tests/scripts/check-changed-git.test.ts`を直す。
 - `console:check`は、Console(`console/`)のlockfileの方針を検査し、型検査、テスト、組み立てを行う。

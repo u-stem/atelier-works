@@ -12,15 +12,22 @@
 // ファイルの大きさが偏らないように振り分け、1つでも失敗かシグナルで終われば全体を失敗にする。
 // textlintの規則は文書の単位で働くので、分けても指摘の集合は変わらない。
 //
-// 対象は、gitが追跡しているか無視していない`.md`のうち、`isTargetDoc`が選ぶもの。
+// 対象は、gitが追跡している(インデックスを含む)`.md`のうち、`isTargetDoc`が選ぶもの。
+// 未追跡のファイルと無視されたファイルは見ない。下書きの壊れたリンクで、無関係なコミットを止めないため。
+// 作業ツリーで消えていて、インデックスに残るファイルは、読めないので飛ばす。
 // `wmill`が生成するファイルと外から取り込んだスキルは、自分で書き直さないので対象外にする。
 //
-// 使い方: bun run scripts/lint-docs.ts [file...]
+// 使い方: bun run scripts/lint-docs.ts [--links-only] [file...]
 // 引数があれば、規則、markdownlint、textlintは、そのうち対象のファイルだけを検査する(pre-commitで使う)。
+// 相対パスの引数は、カレントディレクトリから解決する。読めない、または対象外のファイルは飛ばす。
 // リンクの検査は引数にかかわらず対象の全文書を見る。
 // 見出しを変えると、変えていない文書からのリンクが壊れるため。
+// `--links-only`は、リンクの検査だけを実行する(約1秒)。
+// リンク先や文書の削除、`.md`以外のファイルの改名による壊れたリンクを、文書を変えていないコミットでも止めるために使う。
+// このときのファイルの引数は使わない。
 //
-// パスはすべてリポジトリの根を基準に読む。実行するときのカレントディレクトリには依存しない。
+// リポジトリの中のパスは、実行するときのカレントディレクトリではなく、リポジトリの根を基準に読む。
+// ただし、生成範囲の確認(`scripts/docs-gen.ts`)はカレントディレクトリを根として読むので、根で実行する。
 
 import { readFileSync, statSync } from "node:fs";
 import { availableParallelism } from "node:os";
@@ -93,28 +100,42 @@ export function toToolPath(path: string): string {
 }
 
 /**
- * 引数のパスを、`root`からの相対パスにする。先頭の`./`は落とす。
- * `root`の外を指す絶対パスは、そのまま返す。
+ * 引数のパスを、`root`からの相対パスにする。相対パスは`cwd`から解決する。
+ * `root`の外を指すパスは、絶対パスにして返す。
  */
-export function toRepoPath(root: string, path: string): string {
-  const relativePath = isAbsolute(path) ? relative(root, path) : path;
-  if (relativePath === ".." || relativePath.startsWith("../")) return path;
-  return relativePath.startsWith("./") ? relativePath.slice(2) : relativePath;
+export function toRepoPath(root: string, path: string, cwd: string): string {
+  const absolute = resolve(cwd, path);
+  const relativePath = relative(root, absolute);
+  if (relativePath === ".." || relativePath.startsWith("../")) return absolute;
+  return relativePath;
+}
+
+/** コマンドラインの引数。`linksOnly`は`--links-only`、`paths`はそれ以外。 */
+export type ParsedArgs = {
+  readonly linksOnly: boolean;
+  readonly paths: readonly string[];
+};
+
+/** `--links-only`を旗として読み、残りをパスとして返す。 */
+export function parseArgs(args: readonly string[]): ParsedArgs {
+  return {
+    linksOnly: args.includes("--links-only"),
+    paths: args.filter((arg) => arg !== "--links-only"),
+  };
 }
 
 function isMissingFile(error: unknown): boolean {
   return (
     error instanceof Error &&
     "code" in error &&
-    (error.code === "ENOENT" ||
-      error.code === "ENOTDIR" ||
-      error.code === "EISDIR")
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
   );
 }
 
 /**
  * `root`からの相対パスの文書を読む`ReadDoc`を作る。
- * 同じパスは1回だけディスクから読み、以後は同じ本文を返す。無い、またはファイルでないパスは`undefined`。
+ * 同じパスは1回だけディスクから読み、以後は同じ本文を返す。無いパスは`undefined`。
+ * ディレクトリや権限の不足など、無い以外の読めない理由は例外にする。
  */
 export function createDocReader(root: string): ReadDoc {
   const cache = new Map<string, string | undefined>();
@@ -131,15 +152,10 @@ export function createDocReader(root: string): ReadDoc {
   };
 }
 
-/**
- * gitが管理しているファイルと、管理外で無視もされていないファイルを、`root`からの相対パスで返す。
- * 無視されたファイルは含めない。`git ls-files`を1回だけ呼ぶ。
- */
-export function listRepoFiles(root: string): string[] {
-  const result = Bun.spawnSync(
-    ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-    { cwd: root },
-  );
+function gitFiles(root: string, option: string): string[] {
+  const result = Bun.spawnSync(["git", "ls-files", "-z", option], {
+    cwd: root,
+  });
   if (result.exitCode !== 0) {
     throw new Error(`git ls-files failed: ${result.stderr.toString().trim()}`);
   }
@@ -147,6 +163,17 @@ export function listRepoFiles(root: string): string[] {
     .toString()
     .split("\0")
     .filter((path) => path !== "");
+}
+
+/**
+ * gitが追跡しているファイル(インデックスを含む)を、`root`からの相対パスで返す。
+ * 未追跡のファイルと無視されたファイルは含めない。
+ * 作業ツリーで消えていて、インデックスに残るファイルも含めない。
+ * 検査の対象を集めるときに、読めないファイルを外すのと同じ扱いにするため。
+ */
+export function listRepoFiles(root: string): string[] {
+  const deleted = new Set(gitFiles(root, "--deleted"));
+  return gitFiles(root, "--cached").filter((path) => !deleted.has(path));
 }
 
 /**
@@ -396,16 +423,24 @@ export function createProductionDeps(): LintDeps {
 }
 
 async function main(): Promise<void> {
+  const { linksOnly, paths } = parseArgs(process.argv.slice(2));
   const readDoc = createDocReader(REPO_ROOT);
-  let repoFiles: string[] | undefined;
-  const files = (): string[] => {
-    repoFiles ??= listRepoFiles(REPO_ROOT);
-    return repoFiles;
-  };
+  const files = listRepoFiles(REPO_ROOT);
+  const linkProblems = guardCheck("document links", () =>
+    lintAllDocLinks(files, readDoc),
+  );
 
-  const argv = process.argv.slice(2).map((path) => toRepoPath(REPO_ROOT, path));
+  if (linksOnly) {
+    for (const problem of linkProblems) console.error(problem);
+    if (linkProblems.length > 0) process.exitCode = 1;
+    return;
+  }
+
+  const cwd = process.cwd();
   const candidates =
-    argv.length > 0 ? argv : files().filter((path) => path.endsWith(".md"));
+    paths.length > 0
+      ? paths.map((path) => toRepoPath(REPO_ROOT, path, cwd))
+      : files.filter((path) => path.endsWith(".md"));
   const targets = [...new Set(candidates)]
     .filter((path) => isTargetDoc(path) && readDoc(path) !== undefined)
     .sort();
@@ -415,9 +450,7 @@ async function main(): Promise<void> {
     const markdown = readDoc(path);
     if (markdown !== undefined) problems.push(...lintDocText(path, markdown));
   }
-  problems.push(
-    ...guardCheck("document links", () => lintAllDocLinks(files(), readDoc)),
-  );
+  problems.push(...linkProblems);
   for (const problem of problems) console.error(problem);
 
   const toolsOk = await lintWithTools(targets, createProductionDeps());

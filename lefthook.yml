@@ -35,6 +35,11 @@ pre-commit:
           - name: lint-docs
             glob: "*.md"
             run: mise exec -- bun run scripts/lint-docs.ts {staged_files}
+          # 文書以外のステージ(リンク先や文書の削除、`.md`以外のファイルの改名)でも、
+          # 文書の間のリンクが壊れる。そのため、ステージしたファイルの種類を問わずに動かす。
+          # `.md`をステージしたときは、上のlint-docsもリンクを検査するので、リンクの検査は2回動く(約1秒)。
+          - name: lint-doc-links
+            run: mise exec -- bun run scripts/lint-docs.ts --links-only
 
 # リンクされたgit worktreeに、メイン作業ツリーの`.wmill`(wmillのログインプロファイル)を
 # シンボリックリンクで張る。`git worktree add`もこのフックを起こす。
