@@ -5462,3 +5462,46 @@ describeForCallers(
     });
   },
 );
+
+// ページャーを起動できる読み取りの道具のオプションは、最上位でも前置きの文字列の中でも、実行を委ねる形として扱う。
+describeForCallers(
+  "bash-guard denies holds or freezes written through the pager of a reading tool",
+  (subagent) => {
+    test.each([
+      [
+        "a pager option of a viewer",
+        "bat --paging=always --pager='bun scripts/hold.ts release 1' README.md",
+      ],
+      [
+        "a pager option of a search tool",
+        "ag --pager 'bun scripts/freeze.ts release 1' x",
+      ],
+      [
+        "an initial command of a pager inside a prefix string",
+        `script -qc "less '+!bun scripts/hold.ts release 1' README.md" /dev/null`,
+      ],
+      [
+        "an initial command of a pager at the top",
+        "less '+!bun scripts/freeze.ts reset' README.md",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows reading tools that start no pager",
+  (subagent) => {
+    test.each([
+      "bat scripts/hold.ts",
+      "bat -r 1:10 scripts/hold.ts",
+      "less scripts/hold.ts",
+      "rg hold scripts/",
+      "cat scripts/hold.ts",
+      `script -qc "less scripts/hold.ts" /dev/null`,
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
