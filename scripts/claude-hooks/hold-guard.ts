@@ -876,21 +876,52 @@ function chainInputs(
   };
 }
 
-/** 標準入力をコードとして読む形のオペランド。 */
-const STDIN_OPERANDS: ReadonlySet<string> = new Set([
+/** 標準入力をコードとして読む形のオペランド。globとブレースの範囲が当たりうるかを見る対象である。 */
+const STDIN_OPERANDS: readonly string[] = [
   "-",
   "/dev/stdin",
   "/dev/fd/0",
   "/proc/self/fd/0",
-]);
+];
 
-/** 標準入力のオペランドの綴りを、重ねたスラッシュ、`/./`、`/../`をまとめた形にする。`/`で始まらない語は変えない。 */
+/** まとめた綴りが標準入力を指すパス。記述子の番号は、前に0を重ねた綴りも当たる。 */
+const STDIN_PATH = /^\/(?:dev\/stdin|dev\/fd\/0+|proc\/self\/fd\/0+)$/;
+
+/**
+ * オペランドの綴りを、重ねたスラッシュ、`/./`、`/../`をまとめた絶対パスの形にする。`-`は変えない。
+ * 相対パスは、先頭の`..`を除いて根からのパスとみなす。`..`を重ねれば根に届くためである。
+ */
 function stdinOperandForm(text: string): string {
-  return text.startsWith("/") ? posix.normalize(text) : text;
+  if (text === "-") return text;
+  const normal = posix.normalize(text);
+  if (text.startsWith("/")) return normal;
+  return `/${normal.replace(/^(?:\.\.(?:\/|$))+/, "")}`;
+}
+
+/**
+ * 語が、標準入力をコードとして読む形のオペランドなら真。
+ * まとめた綴りが標準入力を指す語、実行時に決まる語、標準入力の綴りに当たりうるglobとブレースの語である。
+ */
+function readsStdinOperand(word: Word): boolean {
+  if (word.dynamic) return true;
+  return spellings(word).some((text) => {
+    const form = stdinOperandForm(text);
+    if (form === "-" || STDIN_PATH.test(form)) return true;
+    const ranged = rangeAsGlob(text);
+    const globs = [
+      ...(word.glob ? [text] : []),
+      ...(ranged === null ? [] : [ranged]),
+    ];
+    return globs.some((glob) =>
+      [glob, stdinOperandForm(glob)].some((pattern) =>
+        STDIN_OPERANDS.some((operand) => globMatches(pattern, operand)),
+      ),
+    );
+  });
 }
 
 function readsCodeFromStdin(args: readonly Word[]): boolean {
-  return args.some((word) => STDIN_OPERANDS.has(stdinOperandForm(word.text)));
+  return args.some(readsStdinOperand);
 }
 
 /** パイプの前に置いてよい、中身を語から読めるプログラム。 */
@@ -943,10 +974,13 @@ function stdinCodeFinding(
     }
   }
   if (literal.some((text) => FREEZE_MENTION.test(text))) {
-    const dash = args.findIndex((word) =>
-      STDIN_OPERANDS.has(stdinOperandForm(word.text)),
-    );
-    return freezeSubcommandFinding(args.slice(dash + 1));
+    // 標準入力とみなすオペランドが複数あるときは、どれが標準入力かを決めないので、それぞれの後ろを副コマンドとして判定する。
+    let found: HoldFinding | null = null;
+    for (const [at, word] of args.entries()) {
+      if (!readsStdinOperand(word)) continue;
+      found = stronger(found, freezeSubcommandFinding(args.slice(at + 1)));
+    }
+    return found;
   }
   return null;
 }
