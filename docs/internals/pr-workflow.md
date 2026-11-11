@@ -1777,7 +1777,7 @@ CIの失敗を直す回では、監視がこの理由を保留`fix_stopped`に�
   - 部品: `lib/metadata_{hash,precheck,signature,git_ports}`の`.ts`と`.script.yaml`
   - 配線: `lib/ci_metadata_rehash`の`.ts`と`.script.yaml`
 - ホストの実行役が実行するファイル
-  - 入口と導入: `scripts/host-apply.*`、`scripts/host-install.sh`
+  - 入口と導入: `scripts/host-apply.*`、まだ存在しない`scripts/host-install.sh`
   - 版の確認と記録: `scripts/check-docker-version.sh`、`scripts/record-host-applied.sh`
   - 実行中の仕事の確認: `scripts/check-idle.ts`と`tests/scripts/check-idle.test.ts`
   - 診断と初期化: `scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/custom-tags.ts`

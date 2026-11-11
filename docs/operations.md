@@ -2335,7 +2335,7 @@ Consoleを使えないときは、Windmillで`f/factory/approval_decide`を実�
 ### 修正を再実行する
 
 失敗(`failed`)、人の対応待ち、ブロック(`blocked`)で終わった修正は、`retry_work_item`で再実行できる。
-ただしCIの失敗を直す回は除く([PRワークフロー](internals/pr-workflow.md#CIの失敗を直す回))。
+ただしCIの失敗を直す回は除く([PRワークフロー](internals/pr-workflow.md#ciの失敗を直す回))。
 実行のしかたは[失敗した作業を再実行する](#失敗した作業を再実行する)にある。
 
 修正がpushに成功するか、要件定義へ差し戻すまでは、処理済みの位置が進まない。そのため、それ以外で終わった修正を再実行すると、前回と同じ指摘を集め直す。
@@ -2783,7 +2783,7 @@ PATの権限の不足とは限らないので、表の候補の404と403は、�
 
 設定`pr_ci_fix_enabled`を`true`にすると、`watch_pr_ci`が失敗したheadを直す作業項目を起動する。
 既定は`false`で、偽の間は何も起動しない。
-起動した作業項目は、失敗した実行のログの抜粋をClaudeに渡して直し、PRのブランチにpushする([PRワークフロー](internals/pr-workflow.md#CIの失敗を直す回))。
+起動した作業項目は、失敗した実行のログの抜粋をClaudeに渡して直し、PRのブランチにpushする([PRワークフロー](internals/pr-workflow.md#ciの失敗を直す回))。
 自動で直す対象の失敗は、見つけた時点では通知しない。直せるかが決まってから、通知`pr_ci_failed`を1件残し、Discordにも届ける。
 直せたときは、通知は出ない。
 通知が出るのは、次のどれかのときである。
@@ -6370,7 +6370,7 @@ PR修正の`blocked`はConsoleの**要対応**の失敗に出ないので、こ�
 対処は、ホストのcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。
 通知の本文に反映した版が載っていれば、ホストがその版以降で`mise run up`したときに、自己更新が自動で解決する。
 通知が自動で解決されると、止まった実装とPR修正を、自己更新が自動で再開する([実装フローの仕様](internals/implement.md#イメージが古くて止まったとき))。
-CIの失敗を直す回は除く([PRワークフロー](internals/pr-workflow.md#CIの失敗を直す回))。
+CIの失敗を直す回は除く([PRワークフロー](internals/pr-workflow.md#ciの失敗を直す回))。
 人の再実行は要らない。
 同じ作業項目の自動の再開は3回までで、上限に達したときは、止まった作業項目をWindmillの`f/factory/retry_work_item`で再実行する。
 版が載らない通知は自動では解決されず、自動の再開も起きないので、`mise run up`の後に人が解決し、止まった作業項目を`retry_work_item`で再実行する。
