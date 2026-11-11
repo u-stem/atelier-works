@@ -455,9 +455,9 @@ export async function main(
 ): Promise<number> {
   const { linksOnly, paths } = parseArgs(args);
   const readDoc = createDocReader(root);
-  const files = listRepoFiles(root);
+  // 一覧の取得の失敗も、リンクの検査の1件の問題として扱う。ほかの検査の結果を出すためである。
   const linkProblems = guardCheck("document links", () =>
-    lintAllDocLinks(files, readDoc),
+    lintAllDocLinks(listRepoFiles(root), readDoc),
   );
 
   if (linksOnly) {
