@@ -65,7 +65,8 @@ function errorMessage(error: unknown): string {
   if (isRecord(error) && isString(error.message)) return error.message;
   if (typeof error === "string") return error;
   try {
-    return JSON.stringify(error);
+    // `JSON.stringify(undefined)`は文字列ではなく`undefined`を返すので、`String`で文字列にする。
+    return JSON.stringify(error) ?? String(error);
   } catch {
     return String(error);
   }
