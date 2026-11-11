@@ -5654,6 +5654,14 @@ describeForCallers(
         "git grep -nO'bun scripts/freeze.ts release 1' x",
       ],
       [
+        "a one-letter abbreviation of a send-side program",
+        "git ls-remote --u='bun scripts/hold.ts release 1' origin",
+      ],
+      [
+        "a bundle of short options with a send-side program",
+        "git ls-remote -qu'bun scripts/freeze.ts release 1' origin",
+      ],
+      [
         "a gh setting written with a valued flag before the action",
         "gh config -h github.com set pager 'bun scripts/hold.ts release 1'",
       ],
@@ -5724,6 +5732,14 @@ describeForCallers(
         "git grep --ope='mise run stop:restore' x",
       ],
       ["a bundle of short grep options", "git grep -nO'mise run stop' x"],
+      [
+        "a one-letter abbreviation of a send-side program",
+        "git ls-remote --u='mise run stop' origin",
+      ],
+      [
+        "a bundle of short options with a send-side program",
+        "git ls-remote -qu'mise run stop:release' origin",
+      ],
       [
         "a gh setting written with a valued flag before the action",
         "gh config -h github.com set browser 'mise run stop'",
