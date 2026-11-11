@@ -37,6 +37,9 @@
 // 全停止の入口は、プログラムの種類を問わず、どの語(`script -c`などのコマンド文字列の中も含む)に現れても拒否する。
 // `script`、`unbuffer`、`caffeinate`のような前置きの後ろでも止める。
 // 読み取りのプログラム(`NON_EXECUTING_PROGRAMS`)と検査の道具は、入口の名前が語にあっても通す。
+// ただし、読み取りのプログラムでも、実行を委ねる形(`delegatesExecution`)は通さず、委ねる先を字面でも見る。
+// 語と標準入力の文字列に、全停止のCLIを指す語か、`mise`と全停止のタスク名が並ぶ字面があれば拒否する。
+// 語の値の部分(`--opt=<値>`、`<キー>=<値>`、`+…!<値>`、`!<値>`)も、値を語として判定する。
 //
 // 保留と凍結の判定は、語の字面で行う。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
@@ -2423,6 +2426,14 @@ const STOP_ALL_TASK_WORDING = new RegExp(
 /** `mise`を、区切られた語として含む字面。 */
 const MISE_WORDING = /(?:^|[^\w-])mise(?![\w-])/;
 
+/** 文字列が、全停止のCLIを指す字面か、`mise`と全停止のタスク名が並ぶ字面を持つなら真。 */
+function stopAllWording(text: string): boolean {
+  return (
+    STOP_ALL_MENTION.test(text) ||
+    (MISE_WORDING.test(text) && STOP_ALL_TASK_WORDING.test(text))
+  );
+}
+
 /**
  * 読めない文字列と、入れ子が深さの上限を超えた文字列の字面が、全停止を指すなら真。
  * 全停止のCLIを指す語か、`mise`と全停止のタスク名が並ぶ字面である。
@@ -2430,9 +2441,7 @@ const MISE_WORDING = /(?:^|[^\w-])mise(?![\w-])/;
  */
 function unreadableTextStopAll(word: Word): boolean {
   if (pointsAtStopAllCode(word)) return true;
-  return spellings(word).some(
-    (text) => MISE_WORDING.test(text) && STOP_ALL_TASK_WORDING.test(text),
-  );
+  return spellings(word).some(stopAllWording);
 }
 
 /** 空白を含む語が、中に全停止の入口を実行する形を持つか。読めない文字列は、字面で判定する。 */
@@ -2450,12 +2459,18 @@ function textStopAllCall(
   });
 }
 
-/** 語が全停止のCLIを指すか、空白を含む語なら中のコマンドが全停止の入口を実行する形なら真。 */
+/**
+ * 語が全停止のCLIを指すか、空白を含む語なら中のコマンドが全停止の入口を実行する形なら真。
+ * 語の値の部分(`commandValue`)も、同じ規則で判定する。値は元の語より短いので、再帰は語の長さで止まる。
+ */
 function wordStopAllCall(
   word: Word,
   inputs: () => readonly string[] | null,
   depth: number,
 ): boolean {
+  // 語の`=`より後ろと、`+…!`や`!`の後ろは、コマンドとして実行されうるので、値も判定する。
+  const value = commandValue(word);
+  if (value !== null && wordStopAllCall(value, inputs, depth)) return true;
   if (/\s/.test(word.text)) return textStopAllCall(word, inputs, depth);
   // 全停止の変数のパスは、読み取りの引数にも現れる。書き込みは変数の判定(`findConsoleReleaseCall`)が止める。
   return pointsAtStopAllCode(word) && !STOP_ALL_VARIABLE_PATH.test(word.text);
@@ -2469,8 +2484,21 @@ function stopAllCallAt(
   const program = baseName(words[0]?.text ?? "");
   if (program === "mise") return miseStopAllCall(words, inputs);
   if (RUNNERS.has(program)) return runnerStopAllCall(words.slice(1), inputs);
-  if (readerKind(program, words) !== null || INSPECTION_TOOLS.has(program)) {
+  // 読み取りのプログラムでも、別のコマンドの実行を委ねる形は免除しない。
+  // 免除をパスの形だけを通す規則(`isReadOnlyProgram`)に置き換えないのは、`bat -r 1:10 <パス>`のような読み取りを止めないためである。
+  const delegates = delegatesExecution(program, words.slice(1));
+  if (
+    !delegates &&
+    (readerKind(program, words) !== null || INSPECTION_TOOLS.has(program))
+  ) {
     return false;
+  }
+  // 委ねる先は読めない形が多いので、語と標準入力の文字列に全停止を指す字面があれば拒否する。
+  if (
+    delegates &&
+    (words.some(unreadableTextStopAll) || (inputs() ?? []).some(stopAllWording))
+  ) {
+    return true;
   }
   // `script`や`caffeinate`のような前置きの後ろに`mise`か実行系が続く形は、その位置から判定する。
   const launcherAt = words.findIndex((word, index) => {
@@ -2499,6 +2527,7 @@ function stopAllCallAt(
  * プログラムの種類は問わない。`script`、`unbuffer`、`caffeinate`のような前置きの後ろの語と、
  * `script -c`のようなコマンド文字列の中も、同じ規則で見る。
  * 検査の道具(`bun test`、`biome`など)の引数と、読み取りのプログラム(`cat`、`git`、`rg`など)は、実行ではないので通す。
+ * 読み取りのプログラムでも、別のコマンドの実行を委ねる形(`delegatesExecution`)は通さず、委ねる先を字面でも見る。
  * ベストエフォートの規則で、変数や連結で組み立てた名前と、別名の呼び出しは止めない。
  */
 export function findStopAllCall(
