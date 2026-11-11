@@ -237,7 +237,7 @@ describe("findSentenceBreaks", () => {
   });
 
   test("keeps a closing emphasis with the sentence it closes", () => {
-    expect(cut("**A。**B\n")).toEqual(["**A。**|B\n"]);
+    expect(cut("**A。** B\n")).toEqual(["**A。**|B\n"]);
   });
 
   test("keeps a footnote reference with the sentence it follows", () => {
