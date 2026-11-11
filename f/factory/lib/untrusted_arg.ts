@@ -6,7 +6,7 @@
 // 戻せない値は、値を載せずに例外にする。決まった失敗なので、flowの再試行の印を付ける。
 
 import { NO_FLOW_RETRY_MARKER } from "./flow_retry_marker.ts";
-import { isNumber, isRecord } from "./types.ts";
+import { isNumber, isRecord, isString } from "./types.ts";
 
 /** 値を型`T`に絞り込む型ガード。 */
 export type Guard<T> = (value: unknown) => value is T;
@@ -72,9 +72,7 @@ export function isLiteral<T extends string>(expected: T): Guard<T> {
 export const isNumberOrNull: Guard<number | null> = isNullOr(isNumber);
 
 /** 文字列か`null`。 */
-export const isStringOrNull: Guard<string | null> = isNullOr(
-  (value): value is string => typeof value === "string",
-);
+export const isStringOrNull: Guard<string | null> = isNullOr(isString);
 
 type GuardedType<G> = G extends Guard<infer T> ? T : never;
 
