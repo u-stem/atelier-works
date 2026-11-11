@@ -26,11 +26,17 @@ function noticeOf(
 function render(
   notice: SummaryNotice,
   failureIds: ReadonlySet<number> = new Set(),
+  onOpenFailure: ((workItemId: number) => void) | null = () => undefined,
 ): string {
   return renderToStaticMarkup(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>
-        <NoticeDetail notice={notice} now={NOW} failureIds={failureIds} />
+        <NoticeDetail
+          notice={notice}
+          now={NOW}
+          failureIds={failureIds}
+          {...(onOpenFailure === null ? {} : { onOpenFailure })}
+        />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -92,19 +98,26 @@ describe("NoticeDetail button to the failure of the named work item", () => {
   const MESSAGE = "o/r#2 (work item 42): 実装フローが止まりました。";
   const FAILURES = new Set([42]);
 
-  test("links to the failure of the work item the notice names", () => {
+  // 移る先は同じ画面の別の項目なので、画面が履歴、チップ、フォーカスを決める。部品は遷移を自分で起こさない。
+  test("offers a button for the failure of the work item the notice names", () => {
     expect(
       render(noticeOf("implement_needs_human", { message: MESSAGE }), FAILURES),
-    ).toMatch(/<a [^>]*href="\/\?failure=42"[^>]*>作業項目 #42の失敗へ<\/a>/);
+    ).toMatch(/<button [^>]*>作業項目 #42の失敗へ<\/button>/);
   });
 
-  test("links a failed launch notice the same way", () => {
+  test("does not offer a link that would navigate without the screen", () => {
+    expect(
+      render(noticeOf("implement_needs_human", { message: MESSAGE }), FAILURES),
+    ).not.toContain("failure=");
+  });
+
+  test("offers the button for a failed launch notice the same way", () => {
     expect(
       render(
         noticeOf("implement_launch_failed", { message: MESSAGE }),
         FAILURES,
       ),
-    ).toContain('href="/?failure=42"');
+    ).toContain("作業項目 #42の失敗へ");
   });
 
   test("shows no button when the failure is not in the list", () => {
@@ -113,13 +126,23 @@ describe("NoticeDetail button to the failure of the named work item", () => {
         noticeOf("implement_needs_human", { message: MESSAGE }),
         new Set([5]),
       ),
-    ).not.toContain("failure=");
+    ).not.toContain("の失敗へ");
   });
 
   test("shows no button without the list of failures", () => {
     expect(
       render(noticeOf("implement_needs_human", { message: MESSAGE })),
-    ).not.toContain("failure=");
+    ).not.toContain("の失敗へ");
+  });
+
+  test("shows no button without a way to open the failure", () => {
+    expect(
+      render(
+        noticeOf("implement_needs_human", { message: MESSAGE }),
+        FAILURES,
+        null,
+      ),
+    ).not.toContain("の失敗へ");
   });
 
   test("shows no button once the notice is resolved", () => {
@@ -128,7 +151,7 @@ describe("NoticeDetail button to the failure of the named work item", () => {
         noticeOf("implement_needs_human", { message: MESSAGE, resolved: true }),
         FAILURES,
       ),
-    ).not.toContain("failure=");
+    ).not.toContain("の失敗へ");
   });
 
   test("shows no button for a kind that does not name a work item to retry", () => {
@@ -137,7 +160,7 @@ describe("NoticeDetail button to the failure of the named work item", () => {
         noticeOf("approval_comment_failed", { message: MESSAGE }),
         FAILURES,
       ),
-    ).not.toContain("failure=");
+    ).not.toContain("の失敗へ");
   });
 
   test("shows no button when the message does not start with the work item", () => {
@@ -146,7 +169,7 @@ describe("NoticeDetail button to the failure of the named work item", () => {
         noticeOf("implement_needs_human", { message: `理由 ${MESSAGE}` }),
         FAILURES,
       ),
-    ).not.toContain("failure=");
+    ).not.toContain("の失敗へ");
   });
 
   test("puts the button after the text of the action", () => {
@@ -155,8 +178,8 @@ describe("NoticeDetail button to the failure of the named work item", () => {
       FAILURES,
     );
 
-    expect(html.indexOf("failure=42")).toBeGreaterThan(
-      html.indexOf("要対応の失敗で再実行を押してください"),
+    expect(html.indexOf("作業項目 #42の失敗へ")).toBeGreaterThan(
+      html.indexOf("そこで再実行を押してください"),
     );
   });
 });
