@@ -6309,6 +6309,22 @@ describeForCallers(
         "a hold path in a pager setting",
         `git -c core.pager="case x in x) bun scripts/ho''ld.ts place;; esac" log`,
       ],
+      [
+        "a hold path split by an empty ANSI-C quote",
+        `ssh host "case x in x) bun scripts/ho$''ld.ts place;; esac"`,
+      ],
+      [
+        "a hold path split by an empty locale quote",
+        `ssh host 'case x in x) bun scripts/ho$""ld.ts place;; esac'`,
+      ],
+      [
+        "a stop path split by an empty ANSI-C quote",
+        `ssh host "case x in x) bun scripts/stop_al$''l.ts;; esac"`,
+      ],
+      [
+        "a stop task split by an empty locale quote",
+        `ssh host 'case x in x) mise run st$""op;; esac'`,
+      ],
     ])("denies %s", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
