@@ -161,9 +161,7 @@ export function lintAllDocLinks(
   return [...new Set(files)]
     .filter(isTargetDoc)
     .sort()
-    .flatMap((path) =>
-      resolver.indexOf(path) === undefined ? [] : lintDocLinks(path, resolver),
-    );
+    .flatMap((path) => lintDocLinks(path, resolver));
 }
 
 /**

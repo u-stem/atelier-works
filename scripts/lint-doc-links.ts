@@ -8,16 +8,21 @@
 //
 // 見るもの:
 // - 相対パスのリンク先のファイルかディレクトリがあること。
-//   「ある」は、gitが管理しているファイルの一覧に載っていること。
-//   無視されたファイルや、大文字小文字だけが違うパスは「ない」とする。
+//   「ある」は、gitが追跡しているファイルの一覧(インデックスを含む)に載っていること。
+//   未追跡のファイル、無視されたファイル、大文字小文字だけが違うパスは「ない」とする。
+//   末尾が`/`のリンク先は、ディレクトリとしてだけ「ある」と判定する。
 // - `.md`のリンク先にアンカーがあるとき、その文書の見出し(`github-slugger`の作る文字列)か、
 //   HTMLの`id`・`name`属性に解決すること。同じ文書の`#アンカー`も見る。
 //   同じ文書の`#top`はGitHubの組み込みのアンカーなので通す。
 //
 // 見ないもの:
 // - スキーム付きのURL(`https`、`http`、`mailto`など)。
-// - 画像の参照先と、HTMLの`href`。
-// - `.md`以外のファイルへのアンカー(`#L10`のような行の指定)。
+// - 画像の参照先と、画像だけが使う参照定義、HTMLの`href`。
+// - `.md`以外のファイルへのアンカー。
+// - ディレクトリへのリンクのアンカー。
+// - クエリつきのリンクのアンカー(`file.md?plain=1#L10`)。
+// - 行の指定(`#L10`、`#L10-L20`)と脚注(`#user-content-fn-...`、`#user-content-fnref-...`)のアンカー。
+//   いずれもファイルの有無は見る。
 //
 // アンカーの大文字小文字は区別する。GitHubが小文字の見出しへ移るかを当てにしない。
 
@@ -45,7 +50,10 @@ export type DocIndex = {
 
 /** リンク先の存在と文書の中身を調べる口。パスはリポジトリの根からの相対パス。 */
 export type LinkResolver = {
+  /** ファイルかディレクトリがあるか。 */
   exists(path: string): boolean;
+  /** ディレクトリとしてあるか。ファイルだけの名前は`false`。 */
+  isDirectory(path: string): boolean;
   /** 管理下のMarkdownを読んだ結果。Markdownでない、無い、読めないときは`undefined`。 */
   indexOf(path: string): DocIndex | undefined;
 };
@@ -93,7 +101,9 @@ export function indexDoc(markdown: string): DocIndex {
     mdastExtensions: [gfmFromMarkdown(), frontmatterFromMarkdown()],
   });
   const slugger = new GithubSlugger();
-  const links: DocLink[] = [];
+  const candidates: (DocLink & { readonly identifier?: string })[] = [];
+  const linkReferenced = new Set<string>();
+  const imageReferenced = new Set<string>();
   const anchors = new Set<string>();
   visit(tree, (node) => {
     switch (node.type) {
@@ -112,18 +122,41 @@ export function indexDoc(markdown: string): DocIndex {
         for (const id of htmlIds(node.value)) anchors.add(id);
         break;
       case "link":
-      case "definition":
         if (node.url !== "") {
-          links.push({
+          candidates.push({
             line: node.position?.start.line ?? 1,
             target: node.url,
           });
         }
         break;
+      case "definition":
+        if (node.url !== "") {
+          candidates.push({
+            line: node.position?.start.line ?? 1,
+            target: node.url,
+            identifier: node.identifier,
+          });
+        }
+        break;
+      case "linkReference":
+        linkReferenced.add(node.identifier);
+        break;
+      case "imageReference":
+        imageReferenced.add(node.identifier);
+        break;
       default:
         break;
     }
   });
+  // 画像だけが使う参照定義は、インラインの画像と同じく見ない。
+  const links = candidates
+    .filter(
+      ({ identifier }) =>
+        identifier === undefined ||
+        linkReferenced.has(identifier) ||
+        !imageReferenced.has(identifier),
+    )
+    .map(({ line, target }) => ({ line, target }));
   return { links, anchors };
 }
 
@@ -180,6 +213,7 @@ export function createLinkResolver(
   const indexes = new Map<string, DocIndex | undefined>();
   return {
     exists: (path) => fileSet.has(path) || directories.has(path),
+    isDirectory: (path) => directories.has(path),
     indexOf: (path) => {
       if (indexes.has(path)) return indexes.get(path);
       const markdown =
@@ -191,30 +225,50 @@ export function createLinkResolver(
   };
 }
 
-/** 文書`path`のリンクを検査し、`path:line: [link] 内容`の形で返す。 */
+/** GitHubが行の指定として読む`#L10`、`#L10-L20`、`#L10C5-L20C8`。 */
+const LINE_ANCHOR = /^L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?$/;
+
+/** GitHubが脚注の本文と戻り先に付ける`user-content-fn-`、`user-content-fnref-`の`id`。 */
+const FOOTNOTE_ANCHOR = /^user-content-fn(?:ref)?-/;
+
+/**
+ * 文書`path`のリンクを検査し、`path:line: [link] 内容`の形で返す。
+ * `path`が読めない文書は、検査せずに空の結果を返す。
+ */
 export function lintDocLinks(path: string, resolver: LinkResolver): string[] {
   const own = resolver.indexOf(path);
-  if (own === undefined)
-    return [`${path}:1: [link] document could not be read`];
+  if (own === undefined) return [];
   const problems: string[] = [];
   for (const { line, target } of own.links) {
     if (isExternal(target)) continue;
     const hash = target.indexOf("#");
-    const rawPath = (hash === -1 ? target : target.slice(0, hash)).replace(
-      /\?.*$/,
-      "",
-    );
+    const beforeHash = hash === -1 ? target : target.slice(0, hash);
+    const hasQuery = beforeHash.includes("?");
+    const rawPath = beforeHash.replace(/\?.*$/, "");
     const anchor = hash === -1 ? "" : decode(target.slice(hash + 1));
+    const decodedPath = decode(rawPath);
     const resolved =
-      rawPath === "" ? path : resolveTargetPath(path, decode(rawPath));
+      rawPath === "" ? path : resolveTargetPath(path, decodedPath);
     const report = (reason: string): void => {
       problems.push(`${path}:${line}: [link] ${reason}: ${target}`);
     };
-    if (resolved === undefined || !resolver.exists(resolved)) {
+    // 末尾が`/`のリンク先は、ディレクトリとしてだけ「ある」と判定する。
+    const asDirectory = decodedPath.endsWith("/");
+    if (
+      resolved === undefined ||
+      !(asDirectory
+        ? resolver.isDirectory(resolved)
+        : resolver.exists(resolved))
+    ) {
       report("file not found");
       continue;
     }
-    if (anchor === "" || !resolved.endsWith(".md")) continue;
+    // ディレクトリへのリンクのアンカーは照合しない。
+    if (anchor === "" || asDirectory || !resolved.endsWith(".md")) continue;
+    // クエリつきのリンクは`?plain=1#L10`のように、見出しでない先を指す。
+    if (hasQuery || LINE_ANCHOR.test(anchor) || FOOTNOTE_ANCHOR.test(anchor)) {
+      continue;
+    }
     if (anchor === "top" && resolved === path) continue;
     const anchors = resolver.indexOf(resolved)?.anchors;
     if (anchors !== undefined && !anchors.has(anchor)) {
