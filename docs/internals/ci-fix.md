@@ -1838,9 +1838,7 @@ bunfigの`ignoreScripts`が止めるのは、依存のinstall scriptである。
 Bunのmacroと、Pythonのsdistのビルドは、bunfigでは止まらない。
 再生成の中でこれらが動くかは、確かめていない。
 
-残るリスクとして、Bunのmacroとsdistのビルドが動いても、被害は次の理由で限られるので受け入れる。
-ランナーに本番の秘密は無く、ジョブの権限は`contents: read`だけである。
-さらに、受け取る側の内容の制限が、パッチの影響を絞る。
+残るリスクは[R-CIF-01](../security-risks.md#ciのメタデータの再生成)である。
 
 次は確かめていない。
 

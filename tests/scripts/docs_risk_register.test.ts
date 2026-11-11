@@ -16,7 +16,7 @@ const ID_PATTERN = /^R-[A-Z]+-\d{2}$/;
 // 確かめていない前提、後の作業、安全策の説明は表に載せず元の節に残すので、0にはならない。
 // 表を通さない残るリスクを新しく増やさないために置き、表へ移したら下げる。
 // 数え方は countUnregisteredRiskBullets にある。
-const UNREGISTERED_RISK_BULLETS_LIMIT = 363;
+const UNREGISTERED_RISK_BULLETS_LIMIT = 45;
 
 // 一覧を導く文。この文の直後の箇条書きを、残るリスクの束として数える。
 const RISK_INTRO =
