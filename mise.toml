@@ -229,6 +229,10 @@ run = "bun run scripts/lint-docs.ts"
 description = "Regenerate the generated blocks in the documents and the flow graph data for the console"
 run = "bun run scripts/docs-gen.ts"
 
+[tasks."docs:format"]
+description = "Split the sentences that share a line in the documents, one sentence per line (pass files after --)"
+run = "bun run scripts/format-one-sentence-per-line.ts"
+
 [tasks.check]
 description = "Run lint, lint:docs, typecheck, test, and the console checks in order"
 run = """

@@ -106,6 +106,7 @@ Discordからの操作は受け付けない。
 | `mise run lint` | biome、`wmill lint`、型アサーションと`§`の検出を実行する |
 | `mise run lint:docs` | Markdownの文書を検査する |
 | `mise run docs:gen` | 文書の中の生成した範囲と、Consoleに出すflowごとの図のデータ(`console/src/generated/flows.json`)を作り直す |
+| `mise run docs:format` | 1行に複数の文がある地の文を、「。」の後で改行して直す。`--`の後にファイルを渡すと、そのファイルだけを直す。分けると文書の構造が変わるファイルは書かない |
 | `mise run typecheck` | `tsc --noEmit`で型を検査する |
 | `mise run test` | `bun test --parallel`でsmallのテストを並列に実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
 | `mise run test:all` | カバレッジを測らずに、`console/`を除く全件のテストを並列に実行する。`test:changed`が、importから選べない差分で呼ぶ |
