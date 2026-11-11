@@ -1221,7 +1221,7 @@ export function configuredRepos(
  * (キーの照合は`checkCommandsFor`と同じ)、無ければ`[]`を返す。
  * `allowed_check_commands`は決して使わない。
  * 検査コマンドはClaudeが書いたコード(テストやソース)を、workerのコンテナの中で非特権のuidとして、コンテナの分離なしに実行するため、
- * リポジトリごとに名前を挙げて有効にさせる(docs/security.md)。
+ * リポジトリごとに名前を挙げて有効にさせる(docs/internals/implement.mdの「検査コマンドを明示したリポジトリだけで実行する」)。
  */
 export function implementCheckCommandsFor(
   config: Pick<FactoryConfig, "check_commands_by_repo">,

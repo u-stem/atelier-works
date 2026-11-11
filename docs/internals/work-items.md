@@ -440,7 +440,7 @@ Windmillで`retry_work_item`を直接実行したときは、実行結果(`ok: f
 他の移り先では、現在の値のままにする。
 どちらの更新も、保護されたテスト`tests/scripts/profile_gate.test.ts`が`lib/db.ts`の走査で固定する。
 登録の`INSERT`は`profile`を名指しせず、新しい行は、すべて既定の`standard`になる。
-受け付ける進め方は`standard`と、承認を省く3つ(`direct`、`bugfix`、`docs`)で、入口は他の値を断る([進め方ごとの承認](../security.md#進め方ごとの承認))。
+受け付ける進め方は`standard`と、承認を省く3つ(`direct`、`bugfix`、`docs`)で、入口は他の値を断る([進め方ごとの承認](implement.md#進め方ごとの承認))。
 `profile`を書いて挿入するのは、手動投入の登録だけである。
 他の挿入は、`profile`を省いて既定の`standard`にする。
 
