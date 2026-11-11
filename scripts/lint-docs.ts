@@ -2,7 +2,8 @@
 // リポジトリのMarkdown文書を`docs/writing-guidelines.md`の規則で検査する。
 // 次の6つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
 // - このリポジトリの規則(`f/factory/lib/prose_check.ts`の`REPO_DOC_RULES`)
-// - 「1文は1行」(`scripts/lint-one-sentence-per-line.ts`)。`.claude/`の文書は対象にしない(`isOneSentencePerLineTarget`)
+// - 「1文は1行」(`scripts/lint-one-sentence-per-line.ts`)。
+//   保護パスの文書(`.claude/`)は、この検査の対象にしていない(`isOneSentencePerLineTarget`)。
 // - 文書の間のリンクとアンカー(`scripts/lint-doc-links.ts`)
 // - markdownlint(`.markdownlint-cli2.jsonc`)
 // - textlint(`.textlintrc.json`)
@@ -43,7 +44,10 @@ import {
   lintDocLinks,
   type ReadDoc,
 } from "./lint-doc-links.ts";
-import { lintOneSentencePerLine } from "./lint-one-sentence-per-line.ts";
+import {
+  findSentenceViolationLines,
+  formatSentenceViolation,
+} from "./lint-one-sentence-per-line.ts";
 
 /** 自作のスキル。これ以外の`.claude/skills/`は`wmill`の管理スキルか取り込んだもの。 */
 const OWN_SKILL_PATTERN =
@@ -90,7 +94,7 @@ export function blankFrontmatter(markdown: string): string {
 
 /**
  * 「1文は1行」の検査をかける文書かを、パスだけで判定する。
- * `.claude/`は保護パスで、変更に人の承認が要るので、この検査の対象にしない。
+ * 保護パスの文書(`.claude/`)は、この検査の対象にしていない。
  */
 export function isOneSentencePerLineTarget(path: string): boolean {
   const normalized = path.startsWith("./") ? path.slice(2) : path;
@@ -99,16 +103,23 @@ export function isOneSentencePerLineTarget(path: string): boolean {
 
 /**
  * `markdown`をこのリポジトリの規則で検査し、`path:line: [rule] 内容`の形で返す。
- * 文章の規則(`prose_check.ts`)の指摘に、「1文は1行」の指摘(`lint-one-sentence-per-line.ts`)を続ける。
+ * 文章の規則(`prose_check.ts`)の指摘と、「1文は1行」の指摘(`lint-one-sentence-per-line.ts`)を、行番号の順に並べる。
+ * 同じ行の指摘は、文章の規則を先にする。
  */
 export function lintDocText(path: string, markdown: string): string[] {
-  const prose = checkProse(blankFrontmatter(markdown), REPO_DOC_RULES).map(
-    (issue) => `${path}:${issue.line}: [${issue.rule}] ${issue.message}`,
+  const issues = checkProse(blankFrontmatter(markdown), REPO_DOC_RULES).map(
+    (issue) => ({
+      line: issue.line,
+      text: `${path}:${issue.line}: [${issue.rule}] ${issue.message}`,
+    }),
   );
-  const sentences = isOneSentencePerLineTarget(path)
-    ? lintOneSentencePerLine(path, markdown)
-    : [];
-  return [...prose, ...sentences];
+  if (isOneSentencePerLineTarget(path)) {
+    for (const line of findSentenceViolationLines(markdown)) {
+      issues.push({ line, text: formatSentenceViolation(path, line) });
+    }
+  }
+  // 配列の`sort`は安定なので、同じ行では文章の規則が先に残る。
+  return issues.sort((a, b) => a.line - b.line).map((issue) => issue.text);
 }
 
 /**
