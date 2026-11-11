@@ -2314,13 +2314,24 @@ function aimsAtName(file: string): boolean {
   return file.replace(/\[[^\]]*\]/g, "").replace(/[^A-Za-z_]/g, "").length >= 3;
 }
 
-/** 文字列が、解除scriptの名前を含むか、globがファイル名に当たりうるなら真。 */
+/**
+ * 文字列が、解除scriptの名前を含むか、globかブレースの範囲がファイル名に当たりうるなら真。
+ * ファイル名の部分の範囲は、展開される字の集合(`rangeAsGlob`)に置き換えて照合し、`aimsAtName`の条件を掛けない。
+ * 展開される字が分かるので、名前を狙った書き方かを字の数で見なくてよいためである。数の範囲は英字の名前に当たらない。
+ */
 function mentionsRelease(text: string): boolean {
   return releaseForms(text).some(
     (form) =>
       RELEASE_SCRIPT_NAME.test(form) ||
       patternTokens(form).some((token) => {
         const file = token.slice(token.lastIndexOf("/") + 1);
+        const ranged = rangeAsGlob(file);
+        if (
+          ranged !== null &&
+          RELEASE_FILE_NAMES.some((name) => globMatches(ranged, name))
+        ) {
+          return true;
+        }
         return (
           GLOB_CHARACTERS.test(file) &&
           aimsAtName(file) &&
