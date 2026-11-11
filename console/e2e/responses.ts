@@ -17,6 +17,7 @@ import {
   JOB,
   JOB_DETAIL_NORMAL,
   jobList,
+  NOTICES_NORMAL,
   PIPELINE_ROW,
   REQUIREMENTS_DOC_NORMAL,
   REQUIREMENTS_ROW,
@@ -110,8 +111,9 @@ function queryReply(args: unknown, mode: Mode): Reply | null {
       return pick(mode, INTAKE_TARGETS, []);
     case "inbox":
       return pick(mode, [INBOX_PROPOSAL], []);
-    case "deployments":
     case "notices":
+      return pick(mode, NOTICES_NORMAL, []);
+    case "deployments":
     case "audit_index":
     case "agent_cost_daily":
     case "approval_stats":

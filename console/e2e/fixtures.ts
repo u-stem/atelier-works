@@ -218,11 +218,13 @@ export const SUMMARY_NORMAL: ConsoleSummary = {
       occurred_at: STAMP,
     },
   ],
+  // summaryに載るのは重要度が要対応の通知だけである。作業項目を名指しする種類のうち、
+  // `implement_launch_failed`は要対応で載り、`implement_needs_human`は情報で載らない。
   notices: [
     {
       notice_id: 1,
-      kind: "implement_needs_human",
-      message: "o/r#2 (work item 2): 実装フローが止まりました。",
+      kind: "implement_launch_failed",
+      message: "o/r#2 (work item 2): 実装フローへ進める処理が失敗しました。",
       resolved: false,
       created_at: STAMP,
       severity: "action",
@@ -230,6 +232,23 @@ export const SUMMARY_NORMAL: ConsoleSummary = {
     },
   ],
 };
+
+/** summaryに載らない情報の通知のID。`?notice=<id>`で開くと、未解決の通知の取得から探して出す。 */
+export const INFO_NOTICE_ID = 2;
+
+/** 未解決の通知の取得(`notices`のview)の応答。summaryの通知に加えて、summaryに載らない情報の通知を持つ。 */
+export const NOTICES_NORMAL: ConsoleSummary["notices"] = [
+  ...SUMMARY_NORMAL.notices,
+  {
+    notice_id: INFO_NOTICE_ID,
+    kind: "implement_needs_human",
+    message: "o/r#2 (work item 2): 実装フローが止まりました。",
+    resolved: false,
+    created_at: STAMP,
+    severity: "info",
+    resolvable: true,
+  },
+];
 
 export const SUMMARY_EMPTY: ConsoleSummary = {
   counts: { approvals: 0, failures: 0, notices: 0 },
