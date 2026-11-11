@@ -6379,7 +6379,7 @@ describeForCallers(
   },
 );
 
-// 全停止も、先頭の代入の値を字面で判定する。ページャーなどの環境変数は、値をコマンドとして実行できるためである。
+// 全停止も、空白などで語に分かれる先頭の代入の値を字面で判定する。ページャーなどの環境変数は、値をコマンドとして実行できるためである。
 describeForCallers(
   "bash-guard denies stops written in the values of leading assignments",
   (subagent) => {
@@ -6400,6 +6400,7 @@ describeForCallers(
   },
 );
 
+// 値が1語の代入は、引数を渡せないので判定しない。全停止のコードのパスや名前を変数に入れて読む形は通る。
 describeForCallers(
   "bash-guard allows leading assignments without stop wording",
   (subagent) => {
@@ -6407,6 +6408,9 @@ describeForCallers(
       "GIT_PAGER=cat git log",
       "FOO=stop git status",
       "LESS=-R git log",
+      "F=scripts/stop_all.ts; wc -l $F",
+      "F=scripts/stop_all.ts wc -l scripts/x.ts",
+      "NAME=stop_all git status",
     ])("allows %s", async (command) => {
       expect(await decide(command, { subagent })).toBe("allow");
     });
