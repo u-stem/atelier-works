@@ -2351,18 +2351,53 @@ const GH_EXTENSION_GROUPS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * `gh`の、読み取りと日常の操作のグループ。別名、設定、extension、codespace、秘密値と変数のグループは入れない。
+ * 位置引数に実行時に決まる語があっても、最初の位置引数がこの一覧にあれば、グループが決まったものとして扱う。
+ */
+const GH_INERT_GROUPS: ReadonlySet<string> = new Set([
+  "pr",
+  "issue",
+  "api",
+  "run",
+  "repo",
+  "release",
+  "workflow",
+  "search",
+  "label",
+  "status",
+  "browse",
+  "cache",
+  "gist",
+  "auth",
+  "ruleset",
+  "project",
+  "org",
+]);
+
+/**
  * `gh`の呼び出しが、別名、extension、設定の書き込み、gitへ渡す引数で、コマンドを足すか実行するものなら真。
  * 値を取るフラグが副コマンドの前にも置けるので、位置引数の位置は見ず、語の有無で見る。
  * 設定は、キーを問わず書き込みを委ねる形にする。後から別のコマンドが値を実行するキーがあるためである。
  * `--`の後ろは、`repo clone`や`repo fork`がgitへ渡すので、グループを問わず委ねる形にする。
- * 位置引数が実行時に決まる語かglobなら、グループが決まらないので委ねる形にする。
+ * 位置引数に実行時に決まる語かglobがあれば、その語が別名や設定を表しうる。
+ * 最初の位置引数が読み取りと日常の操作のグループ(`GH_INERT_GROUPS`)に無いか、設定する語か取り込む語があるときは、委ねる形にする。
+ * 最初の位置引数は値を取るフラグの値のこともあるが、そのときも設定する語か取り込む語があれば委ねる形になる。
  */
 function ghExecutes(args: readonly Word[]): boolean {
   const positional = args.filter((word) => !word.text.startsWith("-"));
-  if (positional.some((word) => word.dynamic || word.glob)) return true;
   const texts = new Set(positional.map((word) => word.text));
+  const writes = texts.has("set") || texts.has("import");
+  if (positional.some((word) => word.dynamic || word.glob)) {
+    const first = positional[0];
+    const inertGroup =
+      first !== undefined &&
+      !first.dynamic &&
+      !first.glob &&
+      GH_INERT_GROUPS.has(first.text);
+    if (!inertGroup || writes) return true;
+  }
   return (
-    (texts.has("alias") && (texts.has("set") || texts.has("import"))) ||
+    (texts.has("alias") && writes) ||
     (texts.has("config") && texts.has("set")) ||
     [...GH_EXTENSION_GROUPS].some((group) => texts.has(group)) ||
     args.some((word) => word.text === "--")
