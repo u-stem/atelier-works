@@ -25,7 +25,6 @@ import {
   type StepDetails,
   stepTargets,
 } from "../lib/activeSteps.ts";
-import { useIdle } from "../lib/idleTracker.ts";
 import type { JobsTabId } from "../lib/jobsTabs.ts";
 import { isActiveJobState, isFinishedJobState } from "../lib/jobsView.ts";
 import { ApiFailure } from "./errors.ts";
@@ -356,8 +355,14 @@ export type DetailParams = {
 /** 実行中のジョブの状態を取り直す間隔。 */
 export const JOB_DETAIL_REFRESH_MS = 15_000;
 
-/** 一覧が新しいとみなす間隔。自動では取り直さず、更新の操作で取り直す。 */
+/** 一覧が新しいとみなす間隔。履歴とスケジュールの一覧は自動では取り直さず、更新の操作で取り直す。 */
 export const JOBS_LIST_STALE_MS = 60_000;
+
+/**
+ * 実行中と待ちの一覧を取り直す間隔。
+ * 新しいとみなす間隔(`JOBS_LIST_STALE_MS`)とは意味が違うので、別の定数にする。
+ */
+export const ACTIVE_LIST_REFRESH_MS = 60_000;
 
 export const jobsActiveQueryKey = ["console", "jobs", "active"] as const;
 export const schedulesQueryKey = ["console", "schedules"] as const;
@@ -490,13 +495,47 @@ const LIST_POLICY = {
   staleTime: JOBS_LIST_STALE_MS,
 } as const;
 
-/** 実行中と待ちのジョブの取得の設定。自動では取り直さない。 */
+/**
+ * 実行中と待ちのジョブの取得の設定。自動では取り直さない。
+ * 先読みと更新の操作が使う。画面の購読が自動で取り直す設定は、`activeListQueryOptions`が重ねる。
+ */
 export function jobsActiveQueryOptions() {
   return {
     queryKey: jobsActiveQueryKey,
     queryFn: ({ signal }: { signal: AbortSignal }) =>
       fetchActiveJobs({ signal }),
     ...LIST_POLICY,
+  };
+}
+
+/** 実行中と待ちの一覧を、いま取り直すかを決める入力。 */
+export type ActiveListPolling = {
+  readonly selectedTab: JobsTabId;
+  readonly idle: boolean;
+};
+
+/**
+ * 実行中と待ちの一覧を取り直す間隔。
+ * 実行中と待ちのタブを選んでいて、画面が操作されているときだけ60秒ごとに取り直す。
+ * 文書が見えているかは、`refetchIntervalInBackground`が決める。
+ */
+export function activeListRefetchInterval(
+  polling: ActiveListPolling,
+): number | false {
+  return polling.selectedTab === "active" && !polling.idle
+    ? ACTIVE_LIST_REFRESH_MS
+    : false;
+}
+
+/**
+ * 画面が購読する、実行中と待ちの一覧の取得の設定。
+ * 先読みの設定に、条件つきの取り直しを重ねる。文書が見えない間は取り直しを止める。
+ */
+export function activeListQueryOptions(polling: ActiveListPolling) {
+  return {
+    ...jobsActiveQueryOptions(),
+    refetchInterval: activeListRefetchInterval(polling),
+    refetchIntervalInBackground: false,
   };
 }
 
@@ -628,11 +667,15 @@ export function currentSteps(
   return currentDetail(output, status)?.steps ?? [];
 }
 
-/** 実行中と待ちのジョブを取る。`enabled`が偽の間は取らない(開いていないタブの取得を避ける)。 */
+/**
+ * 実行中と待ちのジョブを取る。`enabled`が偽の間は取らない(開いていないタブの取得を避ける)。
+ * 実行中と待ちのタブを選んでいて、画面が操作されているあいだは、60秒ごとに取り直す。
+ */
 export function useActiveJobs(
   enabled: boolean,
+  polling: ActiveListPolling,
 ): UseQueryResult<JobListView, Error> {
-  return useQuery({ ...jobsActiveQueryOptions(), enabled });
+  return useQuery({ ...activeListQueryOptions(polling), enabled });
 }
 
 /** scheduleの状態を取る。`enabled`が偽の間は取らない。 */
@@ -858,16 +901,22 @@ export async function refreshActiveThenSteps(reads: {
 /**
  * 今のステップの取得の設定。
  * 実行中と待ちのタブを選んでいて、画面が操作されていて、読むflowがあるときだけ読む。
+ * 一覧を取っている間は読まない。2つの取得をworkerの枠で重ねないためである。
+ * 一覧が取り直されると読むジョブのキーが変わるので、ステップは一覧の後に取られる。
  */
 export function activeStepsOptions(
   list: JobListView | undefined,
   selectedTab: JobsTabId,
   idle: boolean,
+  listFetching = false,
 ) {
   const ids = stepTargets(list?.jobs ?? []);
   return {
     ...activeStepsQueryOptions(ids),
-    enabled: ids.length > 0 && activeStepsEnabled({ selectedTab, idle }),
+    enabled:
+      ids.length > 0 &&
+      !listFetching &&
+      activeStepsEnabled({ selectedTab, idle }),
   };
 }
 
@@ -939,16 +988,20 @@ const NO_DETAILS: StepDetails = new Map();
 /**
  * 実行中のflowのルートのうち古い2件の、今のステップを読む。
  * 実行中と待ちのタブを選んでいて、画面が操作されているときだけ読み、文書が見えない間は止まる。
+ * 一覧を取っている間は読まない。
+ * 操作の有無は、一覧の取得と同じ値を画面から受ける。
  * 詳細が終了を返したジョブがあれば、購読のある一覧を1回だけ取り直す。
  * 同じ周期に複数が終わっても、まとめて1回にする。
  */
 export function useActiveJobSteps(
   list: JobListView | undefined,
   selectedTab: JobsTabId,
+  state: { readonly idle: boolean; readonly listFetching: boolean },
 ): ActiveJobStepsView {
   const client = useQueryClient();
-  const idle = useIdle();
-  const query = useQuery(activeStepsOptions(list, selectedTab, idle));
+  const query = useQuery(
+    activeStepsOptions(list, selectedTab, state.idle, state.listFetching),
+  );
   const details = query.data ?? NO_DETAILS;
 
   const watch = useMemo(() => createFinishWatcher(client), [client]);
