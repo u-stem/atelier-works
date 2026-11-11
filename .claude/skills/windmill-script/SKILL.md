@@ -11,9 +11,12 @@ description: 本リポジトリ(atelier-works)でWindmillのscript / flow / migr
 
 ## 配置場所
 
-- Windmill資産(script / flow / resource / variable / schedule)は、すべて`f/factory/`の配下に置く。wmillのsyncのルートはリポジトリの直下である。
-- Data Tableのmigrationは`migrations/datatable/main/`の配下に置く。形式は`wmill datatable migrate new <name>`が生成するものに従う。
-- フローのステップは、inline scriptではなくPathScript(`f/factory/steps/<flow>_<step>.ts`)に統一する。フロー定義(`.flow/`)自体はロジックを持たず、各ステップが対応するPathScriptを呼ぶ。
+- Windmill資産(script / flow / resource / variable / schedule)は、すべて`f/factory/`の配下に置く。
+  wmillのsyncのルートはリポジトリの直下である。
+- Data Tableのmigrationは`migrations/datatable/main/`の配下に置く。
+  形式は`wmill datatable migrate new <name>`が生成するものに従う。
+- フローのステップは、inline scriptではなくPathScript(`f/factory/steps/<flow>_<step>.ts`)に統一する。
+  フロー定義(`.flow/`)自体はロジックを持たず、各ステップが対応するPathScriptを呼ぶ。
 - libのimportはステップ側のscriptに閉じ、フロー定義から直接libを参照しない。
 
 ### 共有モジュール
@@ -26,9 +29,12 @@ scriptからは相対importで読み込む(例: `import { runClaude } from "./li
 
 ## native runtimeは使わない
 
-- このリポジトリのscriptは、`child_process`や`fs`で`git` / `gh` / `claude` / `wmill`をサブプロセスとして起動する。そのため、native runtime(`//native`の指定)は使わない。
-- 管理スキルがnativeを推奨していても、このリポジトリでは通常のbun runtimeを使う。先頭に`//native`を書かない。
-- `windmill_worker_native`コンテナは、nativeのジョブのために残っている。factoryのscriptは、そこでは動かさない前提で書く。
+- このリポジトリのscriptは、`child_process`や`fs`で`git` / `gh` / `claude` / `wmill`をサブプロセスとして起動する。
+  そのため、native runtime(`//native`の指定)は使わない。
+- 管理スキルがnativeを推奨していても、このリポジトリでは通常のbun runtimeを使う。
+  先頭に`//native`を書かない。
+- `windmill_worker_native`コンテナは、nativeのジョブのために残っている。
+  factoryのscriptは、そこでは動かさない前提で書く。
 
 ## シークレットの扱い
 
@@ -40,7 +46,8 @@ scriptからは相対importで読み込む(例: `import { runClaude } from "./li
 - 取得した値は、子プロセスの環境変数(例: `GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`)としてだけ渡す。
 - 例外は、[セキュリティ](../../../docs/security.md)の「親プロセスが`fetch`で使う秘密値」に挙げた箇所だけである。
   `github_read_tokens`を使うのは`collect_github`(`lib/gh_graphql.ts`)だけで、宛先を`https://api.github.com/graphql`に固定した`fetch`の`Authorization`ヘッダで渡す。
-  `heartbeat_url`を使うのは`detect_schedule_failures`(`lib/heartbeat.ts`)だけで、`fetch`の宛先のURLそのものにする。`https:`以外は叩かず、リダイレクトは追わない。
+  `heartbeat_url`を使うのは`detect_schedule_failures`(`lib/heartbeat.ts`)だけで、`fetch`の宛先のURLそのものにする。
+  `https:`以外は叩かず、リダイレクトは追わない。
   例外を足すときは、同じ変更で`docs/security.md`と本スキルの両方を直す。
 - シークレットは、コマンドラインの引数、URL、ログ出力、DBのカラムのどれにも絶対に書かない。
 - エラーメッセージに含まれうる箇所は、`f/factory/lib/log.ts`のマスク関数(`maskSecrets`)を通して事前にマスクする。
@@ -48,9 +55,13 @@ scriptからは相対importで読み込む(例: `import { runClaude } from "./li
 ## 設定の取得
 
 - 可変だが秘密ではない設定は、resource `f/factory/factory_config`(resource type `c_factory_config`)から取得する。
-- 型には、`rt.d.ts`の`RT.CFactoryConfig`を使う。`rt.d.ts`は、`wmill generate-metadata`か`wmill resource-type generate-namespace`が生成する。
-- `rt.d.ts`はtsconfigの`include`に入るアンビエントの型定義ファイルで、`RT`はグローバルの名前空間として提供される。import文は要らない。これは管理スキル`write-script-bun`の「Resource Types」節と同じ扱いである。
-- `windmill-client`のimportでは、バージョンをWindmillサーバーに合わせて固定する。固定しないと、lockの版がずれる。
+- 型には、`rt.d.ts`の`RT.CFactoryConfig`を使う。
+  `rt.d.ts`は、`wmill generate-metadata`か`wmill resource-type generate-namespace`が生成する。
+- `rt.d.ts`はtsconfigの`include`に入るアンビエントの型定義ファイルで、`RT`はグローバルの名前空間として提供される。
+  import文は要らない。
+  これは管理スキル`write-script-bun`の「Resource Types」節と同じ扱いである。
+- `windmill-client`のimportでは、バージョンをWindmillサーバーに合わせて固定する。
+  固定しないと、lockの版がずれる。
   - 例: `import * as wmill from "windmill-client@1.817.0"`
 
 ```ts
@@ -78,7 +89,8 @@ import wmillDefault, * as wmill from "windmill-client@1.817.0";
 ## TypeScriptの規約
 
 - `strict: true`にする。
-- `as`によるキャストは禁止する。`<T>expr`の形も含み、`as const`は許可する。
+- `as`によるキャストは禁止する。
+  `<T>expr`の形も含み、`as const`は許可する。
 - 外部由来のJSON(Issue APIのレスポンス、Claudeのstdoutなど)は、型ガード関数でパースしてから使う(parse, don't validate)。
 
 例は次のとおり。
@@ -108,8 +120,10 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
 ## TDD
 
 - `f/factory/lib/**`は、`bun test`でTDDする(Red → Green → Refactor)。
-- 外部プロセスの起動(`child_process.spawn`など)と`fetch`は関数の引数として注入し、テストではダミーの実装に差し替える。実プロセスや実HTTPを叩くテストは書かない。
-- 1テスト1振る舞い、Arrange-Act-Assertの構成にする。基準は[テストの基準](../../../docs/testing-guidelines.md)に従う。
+- 外部プロセスの起動(`child_process.spawn`など)と`fetch`は関数の引数として注入し、テストではダミーの実装に差し替える。
+  実プロセスや実HTTPを叩くテストは書かない。
+- 1テスト1振る舞い、Arrange-Act-Assertの構成にする。
+  基準は[テストの基準](../../../docs/testing-guidelines.md)に従う。
 
 ## メタデータとデプロイ
 
@@ -117,9 +131,12 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
 - AGENTS.mdの「Metadata: auto」に従い、pre-commitフックが`wmill generate-metadata`を実行して生成物をステージする。
 - 実装者(implementer)は、lockのバージョンの変化(差分)を、レビューを依頼する前に報告する。
 - libの`.script.yaml`と`.lock`も、生成物としてコミットする。
-- デプロイは`mise run push`で行う。内部では`wmill sync push --yes --keep-deleted`を実行する。
+- デプロイは`mise run push`で行う。
+  内部では`wmill sync push --yes --keep-deleted`を実行する。
 - `--keep-deleted`は、UIで作成途中のものなど、リポジトリに未反映のリモートの項目を誤って消さないために付ける。
-- リモートの項目を自動で削除しない。削除が必要な場合は、人が`mise run push:prune`で行う。通常の`push`タスクには削除を含めない。
+- リモートの項目を自動で削除しない。
+  削除が必要な場合は、人が`mise run push:prune`で行う。
+  通常の`push`タスクには削除を含めない。
 
 ## 外部サービスの契約と実装上の注意
 
@@ -128,7 +145,8 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
 `f/factory/lib/*`をpushすると、それを相対importするscriptを、Windmillがバックグラウンドのdependency jobで非同期に再デプロイする。
 push完了の直後は、importerが古いバンドルで動く。
 動作確認は、pushの数十秒後にdependency jobの完了を待ってから行う。
-`wmill job list`は既定ではkind `dependencies`を表示しない。確認には、UIのRunsか、CLIの`wmill job list --job-kinds dependencies`を使う。
+`wmill job list`は既定ではkind `dependencies`を表示しない。
+確認には、UIのRunsか、CLIの`wmill job list --job-kinds dependencies`を使う。
 
 ### datatableの型安全性
 
@@ -143,7 +161,8 @@ nullになりうる非textの列には、明示のキャストを必ず付ける
 スケジュールの一覧は[docs/architecture.md](../../../docs/architecture.md)にあり、`*.schedule.yaml`から生成している。
 ここには一覧を書かず、スケジュールを追加・変更するときの規則だけを書く。
 
-- `timezone`は`Asia/Tokyo`にする。cronはWindmillの6フィールド形式(秒から始まる)で書く。
+- `timezone`は`Asia/Tokyo`にする。
+  cronはWindmillの6フィールド形式(秒から始まる)で書く。
 - Consoleが呼ぶscriptにだけ、`.script.yaml`に`tag: console`を付ける。
   Console用worker(ワーカーグループ`console`)がこのtagを受ける。
   対象は次の22本である。
@@ -177,28 +196,37 @@ nullになりうる非textの列には、明示のキャストを必ず付ける
   Console用workerの枠は1つしかなく、DBのロック待ちなどで1件止まると、ほかのジョブが待つためである。
   22本の値は`tests/scripts/console_script_tags.test.ts`が固定する。
   `wmill generate-metadata`は`tag`と`timeout`を消さない。
-- 多重実行の防止にadvisory lockは使わない。各`*.schedule.yaml`に`no_flow_overlap: true`を設定し、前回の実行中はスキップさせる。
+- 多重実行の防止にadvisory lockは使わない。
+  各`*.schedule.yaml`に`no_flow_overlap: true`を設定し、前回の実行中はスキップさせる。
 - 複数のインスタンスを同時に運用する場合の排他は、Windmill側ではなくGitHub側のclaimで行う。
   IssueとPRは、トリガーラベルを外す要求が成功した時点で所有を決める。
   Issueでは、ラベルを外す要求が応答の無い失敗かサーバーエラーで終わったときに、Issueの読み直しとタイムラインで、ラベルを外したのが自分かを確かめる。
   これはベストエフォートで、最後の防御はDBの部分一意インデックス`work_items_active_issue_key`である。
   Issueの作業項目は`insertIssueWorkItemUnlessActive`で挿入し、競合したら取得を失ったものとして引く。
   DBを分けた複数のインスタンスが同じリポジトリを扱う構成は対象外である。
-- scheduleに`on_failure`は付けない。このWindmillはscheduleの失敗時の呼び出しを呼ばず、付けると通知されるという誤った安心が残るためである。失敗は`detect_schedule_failures`がジョブ履歴から拾い、`job_failures`テーブルとDiscordの通知に流す。契約テスト(`tests/scripts/schedule_no_on_failure.test.ts`)が、付けていないことを固定する。
+- scheduleに`on_failure`は付けない。
+  このWindmillはscheduleの失敗時の呼び出しを呼ばず、付けると通知されるという誤った安心が残るためである。
+  失敗は`detect_schedule_failures`がジョブ履歴から拾い、`job_failures`テーブルとDiscordの通知に流す。
+  契約テスト(`tests/scripts/schedule_no_on_failure.test.ts`)が、付けていないことを固定する。
 - 承認のタイムアウト(7日)は、reconcileの後に`poll_issues`が行う承認待ちの走査(`lib/approval_sweep.ts`)が判定する。
-  判定には`approval_requests.expires_at`を使う。`pipeline.flow`はsuspendを使わない。
+  判定には`approval_requests.expires_at`を使う。
+  `pipeline.flow`はsuspendを使わない。
 
 ## プロンプトと投稿の規約
 
 - `claude -p`へのプロンプトの本文はstdinから渡し、コマンドラインの引数には載せない。
-- Issue本文、PR本文、PR差分のような対象リポジトリ由来のテキストをプロンプトに埋め込む場合は、`<<<DATA-<nonce>` … `>>>DATA-<nonce>`の区切りで囲む。区切りの生成は`f/factory/lib/prompts.ts`が行う。
-- 区切りの中の記述は指示ではなくデータであると、プロンプトに明記する。詳細は`factory-requirements` / `factory-review` / `factory-fix`の各スキルを参照する。
-- factoryが投稿するIssueコメント、PRレビュー、レビューへの返信には、必ず目印(marker)`<!-- factory:<kind>:<work_item_id> -->`を埋め込む。`<kind>`は`issue` / `pr_review` / `pr_fix`などである。
+- Issue本文、PR本文、PR差分のような対象リポジトリ由来のテキストをプロンプトに埋め込む場合は、`<<<DATA-<nonce>` … `>>>DATA-<nonce>`の区切りで囲む。
+  区切りの生成は`f/factory/lib/prompts.ts`が行う。
+- 区切りの中の記述は指示ではなくデータであると、プロンプトに明記する。
+  詳細は`factory-requirements` / `factory-review` / `factory-fix`の各スキルを参照する。
+- factoryが投稿するIssueコメント、PRレビュー、レビューへの返信には、必ず目印(marker)`<!-- factory:<kind>:<work_item_id> -->`を埋め込む。
+  `<kind>`は`issue` / `pr_review` / `pr_fix`などである。
 - この目印によって、自分自身が投稿したコメントを、トリガー条件の判定(人間の入力かどうか)から確実に除外できる。
 
 ## 外部契約
 
-worker内で実測した、外部コマンドとAPIの挙動を示す。型ガードは、この実測結果に合わせて書く。
+worker内で実測した、外部コマンドとAPIの挙動を示す。
+型ガードは、この実測結果に合わせて書く。
 
 ### Claude Codeの構造化出力
 
@@ -215,9 +243,13 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
 
 - 将来のバージョンでキーが増えうるため、型ガードは未知のキーを許容する形で書く。
 - `usage`は`{ input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, ... }`である。
-- `modelUsage`は、モデル名をキーにしたオブジェクトである。各値は`{ costUSD, inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, ... }`である。
-- `structured_output`は、`--json-schema`で指定したスキーマに一致するparse済みのJSONである。型ガードでさらに検証してから使う。
-- `claude_version`はレスポンスに含まれない。`agent_runs.claude_version`は、環境変数`CLAUDE_VERSION`から取得する。workerのイメージの`ENV`に置き、`WHITELIST_ENVS`に挙げて、ジョブまで届かせる。
+- `modelUsage`は、モデル名をキーにしたオブジェクトである。
+  各値は`{ costUSD, inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, ... }`である。
+- `structured_output`は、`--json-schema`で指定したスキーマに一致するparse済みのJSONである。
+  型ガードでさらに検証してから使う。
+- `claude_version`はレスポンスに含まれない。
+  `agent_runs.claude_version`は、環境変数`CLAUDE_VERSION`から取得する。
+  workerのイメージの`ENV`に置き、`WHITELIST_ENVS`に挙げて、ジョブまで届かせる。
 - 参考のコストは、最小限の呼び出し(短いプロンプト、少ない構造化出力)で約0.002 USDである。
 
 ### worktreeの作成
@@ -225,14 +257,18 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
 `git gtr new <branch> --porcelain --yes`の挙動は次のとおり。
 
 - 成功すると、stdoutにTAB区切りの次の3行が出る: `path\t<worktree のディレクトリ>`、`branch\t<ブランチ名>`、`hook_status\tnone`。
-- `origin`リモートの無いリポジトリでは、`fatal: invalid reference: origin/main`を出してexit code 1で終わる。対象のリポジトリに`origin`があることを前提にする。
-- worktreeの一覧は`git worktree list --porcelain -z`(NUL区切り、git 2.36以上)で確かめる。`git gtr`独自のリスト機能には頼らない。
+- `origin`リモートの無いリポジトリでは、`fatal: invalid reference: origin/main`を出してexit code 1で終わる。
+  対象のリポジトリに`origin`があることを前提にする。
+- worktreeの一覧は`git worktree list --porcelain -z`(NUL区切り、git 2.36以上)で確かめる。
+  `git gtr`独自のリスト機能には頼らない。
 
 ### GitHub CLIのAPI呼び出し
 
 - `gh api -i`は、stdoutに、CRLF終端のHTTPステータス行、ヘッダ、空行、bodyを出す。
-- `gh`自身のエラーの要約(例: `gh: Not Found (HTTP 404)`)はstderrに出て、exit code 1になる。stdoutとstderrの両方を見る必要がある。
-- `gh api rate_limit`は、`resources`(複数形)キーの下に`resources.core = { limit, used, remaining, reset }`を返す。`reset`はepoch秒である。
+- `gh`自身のエラーの要約(例: `gh: Not Found (HTTP 404)`)はstderrに出て、exit code 1になる。
+  stdoutとstderrの両方を見る必要がある。
+- `gh api rate_limit`は、`resources`(複数形)キーの下に`resources.core = { limit, used, remaining, reset }`を返す。
+  `reset`はepoch秒である。
 
 ### Data Tableのクエリ結果
 
@@ -240,25 +276,35 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
 
 ### libの相対import
 
-- `f/factory/lib/*.ts`(`main`を持たないhelper module)は、wmillがscriptとして扱う。`wmill script run`で実行したとき、相対importが実行時に解決される。
-- `wmill generate-metadata`は、各libファイルに対しても空のスキーマの`.script.yaml`と`.lock`を生成する。どちらもコミットの対象である。
-- `wmill.yaml`の`codebases`バンドルは要らない。相対importのままで問題ない。
+- `f/factory/lib/*.ts`(`main`を持たないhelper module)は、wmillがscriptとして扱う。
+  `wmill script run`で実行したとき、相対importが実行時に解決される。
+- `wmill generate-metadata`は、各libファイルに対しても空のスキーマの`.script.yaml`と`.lock`を生成する。
+  どちらもコミットの対象である。
+- `wmill.yaml`の`codebases`バンドルは要らない。
+  相対importのままで問題ない。
 
 ### 承認待ち
 
 承認待ちは、Windmillのsuspendステップを使わず、`factory.approval_requests`テーブルの`pending`行で表す。
 `wmill.getResumeUrls()`が返すresumeとcancelのURLにJSONをPOSTしても、POSTした本文は後続のステップに渡らないためである。
-後続のステップが受け取るのは、suspendステップ自身の戻り値`{ resume, cancel, approvalPage }`だけである。これは`resume_form`の有無に関わらず、実フローで確かめている。
+後続のステップが受け取るのは、suspendステップ自身の戻り値`{ resume, cancel, approvalPage }`だけである。
+これは`resume_form`の有無に関わらず、実フローで確かめている。
 
-- `pipeline_request_approval`は`pending`行を記録して、すぐにフローを終える。以降、フローは待機しない。
-- 人がConsoleから承認か却下をすると、`approval_decide`が決定を`approval_requests`に記録する。記録には、`decideApprovalRequestIfPending`(`WHERE status = 'pending'`の楽観ロック)を使う。
-- 要件定義を承認するときは、記録の前に、現在のIssueが取り込み時点と同じかを確かめる。`approval_decide`の中で、`github_token`を`Authorization`ヘッダだけに載せ、GitHubのREST APIを`fetch`で読む。別のscriptに頼むと、defaultのworkerの待ち行列に並ぶ間、Console用workerの枠を塞ぐためである。
-- 続けて`approval_decide`は、`kind`に応じたapplyスクリプトを`wmill.runScriptByPathAsync`で起動する。実際の反映はapplyスクリプトが行う。
+- `pipeline_request_approval`は`pending`行を記録して、すぐにフローを終える。
+  以降、フローは待機しない。
+- 人がConsoleから承認か却下をすると、`approval_decide`が決定を`approval_requests`に記録する。
+  記録には、`decideApprovalRequestIfPending`(`WHERE status = 'pending'`の楽観ロック)を使う。
+- 要件定義を承認するときは、記録の前に、現在のIssueが取り込み時点と同じかを確かめる。
+  `approval_decide`の中で、`github_token`を`Authorization`ヘッダだけに載せ、GitHubのREST APIを`fetch`で読む。
+  別のscriptに頼むと、defaultのworkerの待ち行列に並ぶ間、Console用workerの枠を塞ぐためである。
+- 続けて`approval_decide`は、`kind`に応じたapplyスクリプトを`wmill.runScriptByPathAsync`で起動する。
+  実際の反映はapplyスクリプトが行う。
   - `requirements`: `steps/requirements_apply`
   - `issue_proposal`: `steps/issue_proposal_apply`
   - `design`: `steps/design_apply`
 - タイムアウト(7日)は、`poll_issues`がreconcileの後に行う承認待ちの走査が`approval_requests.expires_at`を見て判定する。
-  - 最新の依頼なら、作業項目を先に`expired`へ動かす。続けて`expireApprovalRequestIfPending`で依頼を期限切れにし、最後に通知する。
+  - 最新の依頼なら、作業項目を先に`expired`へ動かす。
+    続けて`expireApprovalRequestIfPending`で依頼を期限切れにし、最後に通知する。
   - 最新でない依頼は、作業項目を動かさず、依頼だけを期限切れにする。
 - 同じ走査が、決定済みなのに作業項目へ反映されなかった依頼の処理先(`requirements_apply`か`design_apply`)を起動し直す。
 
@@ -267,16 +313,19 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
 `commentIssue`の目印(`<!-- factory:<kind>:<work_item_id> -->`)による冪等性は、`(kind, work_item_id)`単位のfirst-winsである。
 先に投稿された1件だけが有効で、以降の同じ`kind`での投稿は黙ってno-opになる。
 
-- attemptごとに再投稿しうるコメントは、`kind`にattemptを含めて分ける(例: `issue-approved-<attempt>`)。同じ`kind`を使い回すと、2件目以降が投稿されない。
+- attemptごとに再投稿しうるコメントは、`kind`にattemptを含めて分ける(例: `issue-approved-<attempt>`)。
+  同じ`kind`を使い回すと、2件目以降が投稿されない。
 - GitHubに投稿するのは、成果物(承認済みの要件定義へのリンク、PRレビューの本体、レビューへの返信)だけにする。
 - 着手、承認待ち、失敗、期限切れ、要人手のような運用の通知は、IssueやPRに書かず、DiscordとConsoleで伝える。
 
 ## トリガーラベルの消費
 
 Issueの`factory`ラベルと、PRの`factory:review` / `factory:fix`ラベルは、いずれもclaim時に一度だけ消費する(外す)。
-Issueでは、assigneeを追加してからラベルを外す。claim時は、IssueとPRのどちらも、ラベルを外す要求が成功した時点である。
+Issueでは、assigneeを追加してからラベルを外す。
+claim時は、IssueとPRのどちらも、ラベルを外す要求が成功した時点である。
 
-以降は、どの状態遷移でもIssueとPRのラベルを付け外ししない。終端の状態への遷移も含む。
+以降は、どの状態遷移でもIssueとPRのラベルを付け外ししない。
+終端の状態への遷移も含む。
 
 | 対象 | 終端の状態 |
 | --- | --- |
@@ -299,4 +348,5 @@ GitHubのラベルは、人からFactoryへのトリガーの役割に限る。
 - `tracked_pr_days`以内に更新されている
 - PRごとの最新の行で、閉じた印(`pr_closed_at`)が有効でない
 
-最初からやり直すには、人がトリガーラベルを付け直す。これが新しいcycleになる。
+最初からやり直すには、人がトリガーラベルを付け直す。
+これが新しいcycleになる。

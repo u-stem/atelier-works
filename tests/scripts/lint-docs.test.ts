@@ -108,9 +108,20 @@ describe("lintDocText", () => {
     expect(lintDocText("docs/a.md", "再実行する。\n確認する。\n")).toEqual([]);
   });
 
-  test("does not check one-sentence-per-line in the protected skill directory", () => {
+  test("checks one-sentence-per-line in a skill the repository writes itself", () => {
     const problems = lintDocText(
       ".claude/skills/hold/SKILL.md",
+      "再実行する。確認する。\n",
+    );
+
+    expect(problems.map((problem) => problem.split(": ")[0])).toEqual([
+      ".claude/skills/hold/SKILL.md:1",
+    ]);
+  });
+
+  test("does not check one-sentence-per-line in a skill managed by wmill", () => {
+    const problems = lintDocText(
+      ".claude/skills/write-script-bun/SKILL.md",
       "再実行する。確認する。\n",
     );
 
@@ -122,8 +133,12 @@ describe("isOneSentencePerLineTarget", () => {
   test.each([
     ["README.md", true],
     ["docs/operations.md", true],
-    [".claude/skills/hold/SKILL.md", false],
-    [".claude/skills/factory-fix/SKILL.md", false],
+    [".claude/skills/hold/SKILL.md", true],
+    [".claude/skills/factory-fix/SKILL.md", true],
+    [".claude/skills/factory-requirements/template.md", false],
+    [".claude/skills/write-script-bun/SKILL.md", false],
+    [".claude/skills/yomiyasu/SKILL.md", false],
+    [".claude/agents/code-reviewer.md", false],
     ["tests/fixtures/audit/valid.md", false],
     ["docs/notes.txt", false],
   ])("%s -> %p", (path, expected) => {
