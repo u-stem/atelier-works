@@ -6234,3 +6234,30 @@ describeForCallers(
     });
   },
 );
+
+// 名前を引用した代入の形の語と、前置きの後ろの代入の形の語は、シェルがコマンドの名前として実行するので、その名前で判定する。
+describe("bash-guard denies pushes to main through an assignment-shaped command name", () => {
+  test.each([
+    ["a quoted name", "'a=/x/git' push origin main"],
+    ["a name with a backslash", "a\\=/x/git push origin main"],
+    ["a name after a niceness prefix", "nice a=/x/git push origin main"],
+    ["a name after the command builtin", "command a=/x/git push origin main"],
+    ["a name after a timeout prefix", "timeout 5 a=/x/git push origin main"],
+  ])("denies %s", async (_kind, command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard allows leading assignments in front of reads", () => {
+  test.each([
+    "FOO=1 git status",
+    "FOO='a b' git status",
+    "env FOO=1 git status",
+    "sudo FOO=1 ls",
+    "if FOO=1 true; then echo ok; fi",
+    "time FOO=1 git status",
+    "LANG=C rg -n x",
+  ])("allows %s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});

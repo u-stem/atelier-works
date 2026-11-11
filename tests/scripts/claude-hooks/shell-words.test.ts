@@ -608,6 +608,38 @@ describe("stripWrappers options", () => {
   });
 });
 
+describe("stripWrappers keeps assignment-shaped words that the shell runs as command names", () => {
+  const firstWords = (line: string): string[] => {
+    const parsed = parseCommandLine(line);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const [first] = parsed.commands;
+    if (first === undefined) throw new Error("no command");
+    return stripWrappers(first.words).words.map((word) => word.text);
+  };
+
+  test.each([
+    ["a single-quoted name", "'a=/x/git' push", "a=/x/git"],
+    ["a double-quoted name", '"a"=/x/git push', "a=/x/git"],
+    ["a backslash before the equals sign", "a\\=/x/git push", "a=/x/git"],
+    ["a name after a niceness prefix", "nice a=/x/git push", "a=/x/git"],
+    ["a name after a timeout prefix", "timeout 5 a=/x/git push", "a=/x/git"],
+    ["a name after the command builtin", "command a=/x/git push", "a=/x/git"],
+    ["a name after nohup", "nohup a=/x/git push", "a=/x/git"],
+  ])("keeps %s as the command name", (_kind, line, name) => {
+    expect(firstWords(line)[0]).toBe(name);
+  });
+
+  test.each([
+    ["a leading assignment", "FOO=1 git status"],
+    ["a quoted value", "FOO='a b' git status"],
+    ["an assignment after env", "env FOO=1 git status"],
+    ["an assignment after sudo", "sudo FOO=1 git status"],
+    ["an assignment after time", "time FOO=1 git status"],
+  ])("strips %s", (_kind, line) => {
+    expect(firstWords(line)[0]).toBe("git");
+  });
+});
+
 describe("stripWrappers with mise exec", () => {
   test("reads the command of a form without --", () => {
     const stripped = stripWrappers(
