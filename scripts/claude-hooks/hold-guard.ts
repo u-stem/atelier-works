@@ -747,7 +747,7 @@ function firstOperandAt(words: readonly Word[], from: number): number {
  * 標準入力のコード、`-e`などの直後の文字列、空白かシェルが語を分けるか展開する字を含む語は、
  * 凍結のCLIを指しながら`release`、`deploy`、`reset`、`prune`を含めば拒否する。
  * 最後の種類の語は、コードを取るオプションの一覧に無いオプションの値を読むためである。凍結のCLIの理由の値は読まない。
- * 最初のオペランドが検査の道具なら、標準入力のコードと`-e`などの直後の文字列のほかは見ない。
+ * 最初のオペランドが検査の道具なら、最後の種類の語は見ない。凍結のCLIを指す語の次の語は、検査の道具の後ろでも副コマンドとして読む。
  */
 function freezeCliFinding(
   args: readonly Word[],
@@ -755,8 +755,8 @@ function freezeCliFinding(
 ): HoldFinding | null {
   const codes = [...(inputs() ?? []), ...codeStrings(args)];
   if (codes.some(codeTouchesFreezeRelease)) return "operation";
-  if (startsWithInspectionTool(args)) return null;
   if (
+    !startsWithInspectionTool(args) &&
     args.some(
       (word, index) =>
         splitsIntoWords(word.text) &&
