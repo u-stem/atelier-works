@@ -441,7 +441,9 @@ export function createProductionDeps(root: string): LintDeps {
 }
 
 /**
- * `root`のリポジトリを検査し、問題があれば1、なければ0を返す。報告は1行ずつ`report`に渡す。
+ * `root`のリポジトリを検査し、問題があれば1、なければ0を返す。
+ * 規則とリンクの問題は1行ずつ`report`に渡す。markdownlintとtextlintの出力は標準エラーに書く。
+ * 生成範囲の検査(`runDocsGen`)は、`root`ではなくカレントディレクトリを基準に読む。
  * `args`はコマンドラインの引数、`cwd`は相対パスの引数を解決する基準。
  * 実際の根は実行の入口だけが渡す。
  */
