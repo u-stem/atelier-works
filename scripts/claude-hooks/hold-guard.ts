@@ -94,7 +94,7 @@
 //       コマンド文字列は4段の入れ子まで読む。段を超えた文字列と読めない文字列は、字面で判定する。
 //       標準入力の文字列の字面は、保留か凍結のコードを指す字面と書き込みの語が並ぶときだけ拒否する。
 //       読む文字列の数と長さの合計にも上限を置き、超えたら拒否する。フックのタイムアウトの中で終えるためである。
-//       語の値の部分(`--opt=<値>`、`<キー>=<値>`、ページャーの初期コマンドの`+…!<値>`、シェルの別名の`!<値>`)も、値を先頭の語として判定する。
+//       語の値の部分(`--opt=<値>`、`<キー>=<値>`、ページャーの初期コマンドの`+…!<値>`、シェルの別名の`!<値>`)も、値が空白を含めばコマンドとして読む。
 //       起動語が前の部分に隠れると、(b)が当たらないためである。
 //   前置きの後ろでは、実行の字面が引数にある形(`git commit -m "… hold.ts release …"`)や、シェルを使う正当な作業も拒否する。
 //   実行と区別できないためである。
@@ -1299,27 +1299,28 @@ function assignmentValue(assignment: Word): Word {
 /**
  * 語の中で、コマンドとして実行されうる値の前に付く部分。
  * `--opt=`、`<キー>=`(`-c`の値と`-c<キー>=`を含む)、ページャーの初期コマンドの`+…!`、シェルの別名の`!`である。
+ * キーは、空白と`=`以外の字の並びとする。設定のキーのサブセクションは、`/`や`:`を含みうる。
  * 短いオプションのまとめ書きの、コマンドを値にくっつけて取る文字(`git grep`の`O`と`git ls-remote`の`u`)までも、前の部分として外す。
  * どの文字が値を取るかはプログラムで決まるので、最初に現れた文字までを外す。外しすぎても、判定する値が増えるだけである。
  */
 const COMMAND_VALUE_PREFIX =
-  /^(?:-{0,2}[A-Za-z_][\w.-]*=|\+[^\s!]*!|!|-[A-Za-z0-9]*?O|-[A-Za-z0-9]*?u)/;
+  /^(?:\+[^\s!]*!|!|[^\s=]+=|-[A-Za-z0-9]*?O|-[A-Za-z0-9]*?u)/;
 
 /** シェルの変数代入の形の前の部分。 */
 const SHELL_ASSIGNMENT_PREFIX = /^[A-Za-z_]\w*=/;
 
 /**
- * 語に値の部分があれば、前の部分を外した値を語として返す。無いか、値が空ならnullを返す。
+ * 語に値の部分があり、値が空白を含めば、前の部分を外した値を語として返す。そうでなければnullを返す。
+ * 1語だけの値は、引数を渡せず、起動語を判定しても日常の値(`--reporter=watch`など)を拒否するだけなので、取り出さない。
  * `assignmentValue`と同じく、NULを除いた綴りからも前の部分を外し、`dynamic`と`glob`を引き継ぐ。
- * 空白を含み、シェルの変数代入の形で始まる語(`LANG=C rg …`)は、nullを返す。
+ * シェルの変数代入の形で始まる語(`LANG=C rg …`)は、nullを返す。
  * その語はコマンドとして読むときに代入として外れ、値は代入の判定が空白までを見るので、後ろのコマンドまで値に含めない。
  */
 function commandValue(word: Word): Word | null {
+  if (!/\s/.test(word.text)) return null;
   const prefix = COMMAND_VALUE_PREFIX.exec(word.text)?.[0];
   if (prefix === undefined || prefix.length === word.text.length) return null;
-  if (/\s/.test(word.text) && SHELL_ASSIGNMENT_PREFIX.test(prefix)) {
-    return null;
-  }
+  if (SHELL_ASSIGNMENT_PREFIX.test(prefix)) return null;
   const cut = (text: string) =>
     text.slice(COMMAND_VALUE_PREFIX.exec(text)?.[0].length ?? 0);
   return {
@@ -1386,7 +1387,7 @@ function isReadOnlyProgram(program: string, words: readonly Word[]): boolean {
  * 前置き自身が先頭のときは1、前置きの後ろの文字列から読んだコマンドは0である。
  * 1. 語を足すコマンド、シェル、読めない標準入力があれば、指す語の有無によらず`dynamic`で拒否する。
  * 2. 空白を含む語(`script -c`や`ssh`の文字列)と、標準入力の文字列は、コマンドとして読んで判定し直す。
- *    語の値の部分(`--opt=<値>`、`<キー>=<値>`、`+…!<値>`、`!<値>`)も、値を先頭の語として判定する。
+ *    語の値の部分(`--opt=<値>`、`<キー>=<値>`、`+…!<値>`、`!<値>`)も、値が空白を含めばコマンドとして読む。
  * 3. 前置きの後ろの起動語は、既存の分岐で判定し直す。
  * 4. 語は、共起で見る。
  * 文字列から読んだコマンドが読み取りの道具なら、通す。
@@ -1413,17 +1414,14 @@ function underPrefixFinding(
     found = stronger(found, textFinding(word.text, context, "string"));
     if (found === "operation") return found;
   }
-  // 語の`=`より後ろと、`+…!`や`!`の後ろは、コマンドとして実行されうる。起動語が前の部分に隠れないよう、値を先頭の語として判定する。
+  // 語の`=`より後ろと、`+…!`や`!`の後ろは、コマンドとして実行されうる。起動語が前の部分に隠れないよう、値をコマンドとして読む。
   // 値ごとの判定は、解析の回数に数える。
   for (const word of words.slice(from)) {
     const value = commandValue(word);
     if (value === null) continue;
     context.budget.parses += 1;
     if (context.budget.parses > HOLD_MAX_PARSES) return "dynamic";
-    found = stronger(found, holdOperationAt([value], context));
-    if (/\s/.test(value.text)) {
-      found = stronger(found, textFinding(value.text, context, "string"));
-    }
+    found = stronger(found, textFinding(value.text, context, "string"));
     if (found === "operation") return found;
   }
   for (const text of context.own() ?? []) {
@@ -1973,6 +1971,7 @@ const GIT_DELEGATING_SHORT_OPTIONS: ReadonlyMap<string, string> = new Map([
 /**
  * `git -c`で付けても、値がコマンドとして実行されないキー(小文字で比べる)。一覧の外のキーは、実行を委ねる形として扱う。
  * 値が実行されるキーは、版ごとに増える開いた集合なので、拒否する側ではなく許す側を閉じた一覧にする。
+ * 値が実行されなくても、他の所有者のリポジトリの設定を有効にするキーは入れない。その設定の中の、値が実行されるキーが効くためである。
  */
 const GIT_INERT_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "user.name",
@@ -1985,7 +1984,6 @@ const GIT_INERT_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "init.defaultbranch",
   "commit.gpgsign",
   "tag.gpgsign",
-  "safe.directory",
 ]);
 
 /** 下の名前を問わず、値がコマンドとして実行されないキーの接頭辞。 */
@@ -2619,7 +2617,8 @@ function textStopAllCall(
 
 /**
  * 語が全停止のCLIを指すか、空白を含む語なら中のコマンドが全停止の入口を実行する形なら真。
- * 語の値の部分(`commandValue`)も、同じ規則で判定する。値は元の語より短いので、再帰は語の長さで止まる。
+ * 語の値の部分(`commandValue`)も、入れ子を1段深くして同じ規則で判定する。
+ * 深さの上限に達したら、値を取り出さずに語の字面で判定する。値の中の値を重ねた語でも、上限の段数で終わる。
  */
 function wordStopAllCall(
   word: Word,
@@ -2628,7 +2627,13 @@ function wordStopAllCall(
 ): boolean {
   // 語の`=`より後ろと、`+…!`や`!`の後ろは、コマンドとして実行されうるので、値も判定する。
   const value = commandValue(word);
-  if (value !== null && wordStopAllCall(value, inputs, depth)) return true;
+  if (value !== null) {
+    if (depth >= COMMAND_TEXT_MAX_DEPTH) {
+      if (unreadableTextStopAll(word)) return true;
+    } else if (wordStopAllCall(value, inputs, depth + 1)) {
+      return true;
+    }
+  }
   if (/\s/.test(word.text)) return textStopAllCall(word, inputs, depth);
   // 全停止の変数のパスは、読み取りの引数にも現れる。書き込みは変数の判定(`findConsoleReleaseCall`)が止める。
   return pointsAtStopAllCode(word) && !STOP_ALL_VARIABLE_PATH.test(word.text);
