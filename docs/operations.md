@@ -4200,13 +4200,14 @@ Sonnetを既定にするには、Windmillの画面で`f/factory/factory_config`�
 
 Claudeのバージョンとモデルごとの使用量は、viewの`v_agent_usage_daily`で見る。
 viewは、日、モデル、Claudeのバージョン(`claude_version`)、工程ごとに、実行の数、費用、入力と出力とキャッシュ読み出しのトークン数、ターン数を合計し、実行時間の平均を出す。
-`day`は、既存の`v_agent_cost_daily`と同じく、データベースの時間帯の設定で日を切る。設定が既定のままならUTCである。
-JSTで日を切りたいときは、viewではなく`factory.agent_runs`を、`created_at AT TIME ZONE 'Asia/Tokyo'`で日に切って集計する。
+`day`は、`v_agent_cost_daily`と同じく、日本時間の0時で日を切る。
+値は日本時間の0時の時刻で、UTCでは前日の15時になる。
+日付として読みたいときは、`AT TIME ZONE 'Asia/Tokyo'`で日本時間に直して日付にする。
 
 ```sql
-SELECT date_trunc('day', created_at AT TIME ZONE 'Asia/Tokyo') AS day_jst,
-       claude_version, model, count(*) AS runs, sum(cost_usd) AS cost_usd
-FROM factory.agent_runs
+SELECT (day AT TIME ZONE 'Asia/Tokyo')::date AS day_jst,
+       claude_version, model, sum(run_count) AS runs, sum(total_cost_usd) AS cost_usd
+FROM factory.v_agent_usage_daily
 GROUP BY 1, 2, 3
 ORDER BY 1, 2, 3;
 ```
@@ -4369,6 +4370,7 @@ Claudeが結果を返さなかった実行と、この列を足す前の実行�
 一部の要素だけを残すと、実行全体の費用と内訳の合計が食い違うためである。
 
 viewは、日、実際に使われたモデル、Claudeのバージョン、工程ごとに、実行の数、費用、トークン数(入力、出力、キャッシュ読み出し、キャッシュ作成)を合計する。
+`day`は`v_agent_usage_daily`と同じく、日本時間の0時で切る。
 1回の実行が複数のモデルを使ったときは、それぞれのモデルに1回ずつ数える。
 `model_usage`が空の実行は、渡した値と実行全体の値で1行として数え、`total_cache_creation_tokens`には入らない。
 内訳を持つ実行と持たない実行が同じ行に混ざると、`total_cache_creation_tokens`は内訳を持つ実行だけの合計で、実際より小さい。
