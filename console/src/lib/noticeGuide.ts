@@ -66,6 +66,13 @@ const WORK_ITEM_RETRY_KINDS: ReadonlySet<string> = new Set([
   "implement_launch_failed",
 ]);
 
+/**
+ * 止まった作業項目の再実行の手順。作業項目を止める4種類の案内が、同じ言い回しで使う。
+ * 失敗の一覧は件数の上限で切られ、古い作業項目が載らないことがあるので、Windmillで実行する手順も残す。
+ */
+const RETRY_FROM_FAILURES =
+  "作業項目が要対応の失敗に出ているときは、そこで再実行を押してください。出ていないときは、Windmillでf/factory/retry_work_itemを作業項目のIDで実行してください。";
+
 /** 移動のボタンの名前。区画ごとに決まる。 */
 const TARGET_LABELS: Readonly<Record<SystemSectionId, string>> = {
   "deploy-approvals": "システムの画面の反映の承認待ちへ",
@@ -166,7 +173,7 @@ const GUIDES_BY_KIND: ReadonlyMap<string, NoticeGuide> = new Map([
     "implement_needs_human",
     guide(
       "実装フローが人の対応待ちで止まりました。",
-      "作業項目の状態を確かめ、原因を取り除いてから、要対応の失敗で再実行を押してください。",
+      `作業項目の状態を確かめ、原因を取り除いてください。${RETRY_FROM_FAILURES}`,
     ),
   ],
   [
@@ -208,7 +215,7 @@ const GUIDES_BY_KIND: ReadonlyMap<string, NoticeGuide> = new Map([
     "implement_launch_failed",
     guide(
       "承認の後、実装フローへ進める処理がDBの失敗で例外になりました。",
-      "作業項目が要対応の失敗に出ているときは、そこで再実行を押して再開してください。出ていないときは、Windmillでf/factory/retry_work_itemを作業項目のIDで実行して再開してください。",
+      RETRY_FROM_FAILURES,
     ),
   ],
   [
@@ -288,7 +295,7 @@ const GUIDES_BY_KIND: ReadonlyMap<string, NoticeGuide> = new Map([
     "host_action_required",
     guide(
       "自己更新が反映した版に、worker自身では反映できない変更(infra/、mise.tomlの[tools]・[env])が含まれています。ホストで作業するまで、新しい構成は動きません。実装、PR修正、作業領域の掃除が、workerのイメージが古くて検査コマンドを実行できないと分かったときにも出ます。そのときは、検査コマンドのある作業項目は進みません。",
-      "ホストのcheckoutで、次のコマンドを順に実行してください。mise run upは、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡します。イメージが古くて止まった作業項目は、mise run upの後に通知が自動で解決されると、自動で再開します。自動の再開が3回の上限に達したときと、版が載らない通知のときだけ、止まった作業項目を要対応の失敗で再実行してください。",
+      `ホストのcheckoutで、次のコマンドを順に実行してください。mise run upは、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡します。イメージが古くて止まった作業項目は、mise run upの後に通知が自動で解決されると、自動で再開します。自動の再開が3回の上限に達したときと、版が載らない通知のときだけ、止まった作業項目を再実行してください。${RETRY_FROM_FAILURES}`,
       {
         commands: ["git pull", "mise install", "mise run up"],
         note: "通知の版がホストのHEADと同じか祖先なら、自己更新(2分ごと)が自動で解決します。HEADを書けなかったときと、版が載らない通知(イメージが古いと分かったときに、反映した版を読めなかったもの)は自動では解決されないので、mise run upが済んでいれば人が解決してかまいません。",
@@ -347,7 +354,7 @@ const GUIDES_BY_KIND: ReadonlyMap<string, NoticeGuide> = new Map([
     "check_runtime_unsafe",
     guide(
       "稼働中のworkerに、誰でも書き込めるパスができたか、それを確かめられなかったため、検査コマンドを非特権のユーザーで実行できません。本文にパスか確かめられなかった理由が載ります。直すまで、検査コマンドのある実装とPR修正は止まります。",
-      "本文のパスを、ホストのcheckoutから次の1つ目のコマンドで閉じるか、2つ目のコマンドでworkerを作り直してください。作り直すと、そのとき動いているジョブも止まります。/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、1つ目のコマンドで閉じてください。直したら、止まった作業項目を要対応の失敗で再実行し、この通知を解決してください。",
+      `本文のパスを、ホストのcheckoutから次の1つ目のコマンドで閉じるか、2つ目のコマンドでworkerを作り直してください。作り直すと、そのとき動いているジョブも止まります。/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、1つ目のコマンドで閉じてください。直したら、止まった作業項目を再実行し、この通知を解決してください。${RETRY_FROM_FAILURES}`,
       {
         commands: [
           "mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>",
