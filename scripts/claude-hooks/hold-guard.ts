@@ -39,7 +39,7 @@
 // 読み取りのプログラム(`NON_EXECUTING_PROGRAMS`)と検査の道具は、入口の名前が語にあっても通す。
 // ただし、読み取りのプログラムでも、実行を委ねる形(`delegatesExecution`)は通さず、委ねる先を字面でも見る。
 // 語と標準入力の文字列に、全停止のCLIを指す語か、`mise`と全停止のタスク名が並ぶ字面があれば拒否する。
-// 語の値の部分(`--opt=<値>`、`<キー>=<値>`、`+…!<値>`、`!<値>`)も、値を語として判定する。
+// 語の値の部分(`--opt=<値>`、`<キー>=<値>`、ページャーの初期コマンド、`!<値>`)も、値を語として判定する。
 //
 // 保留と凍結の判定は、語の字面で行う。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
@@ -84,7 +84,7 @@
 //       指す語があり、ほかに実行時に決まる語、glob、ブレースがあれば、拒否する。
 //       凍結の`place`と`deploy`は共起の語に数えず、`--scope`の値を別に判定する。
 //       スケジュールの凍結を置く形(`freeze:place -- --target a/b`)と、`list --scope deploy`は通す。
-//   (d) 空白を含む語(`script -c`や`ssh`の文字列)と標準入力の文字列は、コマンドとして読み、内側のコマンドごとに判定し直す。
+//   (d) 空白か、シェルが語を分けるか展開する字を含む語(`script -c`や`ssh`の文字列など)と標準入力の文字列は、コマンドとして読み、内側のコマンドごとに判定し直す。
 //       結果は足し合わせない。内側が読み取りの道具(`rg -n release scripts/hold.ts`)なら通す。
 //       内側の先頭が`mise`、実行系、`docker`、`psql`でも、語を足すコマンドとシェルの規則は重ねて当てる。
 //       内側の先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうるので、値を先頭の語として判定する。
@@ -94,7 +94,8 @@
 //       コマンド文字列は4段の入れ子まで読む。段を超えた文字列と読めない文字列は、字面で判定する。
 //       標準入力の文字列の字面は、保留か凍結のコードを指す字面と書き込みの語が並ぶときだけ拒否する。
 //       読む文字列の数と長さの合計にも上限を置き、超えたら拒否する。フックのタイムアウトの中で終えるためである。
-//       語の値の部分(`--opt=<値>`、`<キー>=<値>`、ページャーの初期コマンドの`+…!<値>`、シェルの別名の`!<値>`)も、値が空白を含めばコマンドとして読む。
+//       語の値の部分(`--opt=<値>`、`<キー>=<値>`、ページャーの初期コマンド、シェルの別名の`!<値>`)も、語が同じ字を含めばコマンドとして読む。
+//       字は、空白、`$`、バッククォート、`;`、`|`、`&`、`<`、`>`と、`{`と`}`の間に`,`か`..`がある形である。
 //       起動語が前の部分に隠れると、(b)が当たらないためである。
 //   前置きの後ろでは、実行の字面が引数にある形(`git commit -m "… hold.ts release …"`)や、シェルを使う正当な作業も拒否する。
 //   実行と区別できないためである。
@@ -1298,26 +1299,44 @@ function assignmentValue(assignment: Word): Word {
 
 /**
  * 語の中で、コマンドとして実行されうる値の前に付く部分。
- * `--opt=`、`<キー>=`(`-c`の値と`-c<キー>=`を含む)、ページャーの初期コマンドの`+…!`、シェルの別名の`!`である。
+ * `--opt=`、`<キー>=`(`-c`の値と`-c<キー>=`を含む)、シェルの別名の`!`と、ページャーの初期コマンドの前の部分である。
+ * ページャーの初期コマンドは、`+`の後ろの`!`(シェルのコマンド)か`|`と印の1字(パイプのコマンド)までを外す。
+ * `+`と`!`の間の空白と、短いオプションのまとめ書きの後ろの`+`も含める。`!`と`|`は、先に現れた方で切る。
  * キーは、空白と`=`以外の字の並びとする。設定のキーのサブセクションは、`/`や`:`を含みうる。
  * 短いオプションのまとめ書きの、コマンドを値にくっつけて取る文字(`git grep`の`O`と`git ls-remote`の`u`)までも、前の部分として外す。
  * どの文字が値を取るかはプログラムで決まるので、最初に現れた文字までを外す。外しすぎても、判定する値が増えるだけである。
  */
 const COMMAND_VALUE_PREFIX =
-  /^(?:\+[^\s!]*!|!|[^\s=]+=|-[A-Za-z0-9]*?O|-[A-Za-z0-9]*?u)/;
+  /^(?:(?:-[A-Za-z0-9]*)?\+[^!|]*(?:!|\|.)|!|[^\s=]+=|-[A-Za-z0-9]*?O|-[A-Za-z0-9]*?u)/s;
 
 /** シェルの変数代入の形の前の部分。 */
 const SHELL_ASSIGNMENT_PREFIX = /^[A-Za-z_]\w*=/;
 
+/** シェルが語を分けるか展開する字。空白、`$`、バッククォート、`;`、`|`、`&`、`<`、`>`である。 */
+const SHELL_SPLITTING_CHARACTERS = /[\s$`;|&<>]/;
+
 /**
- * 語に値の部分があり、値が空白を含めば、前の部分を外した値を語として返す。そうでなければnullを返す。
- * 1語だけの値は、引数を渡せず、起動語を判定しても日常の値(`--reporter=watch`など)を拒否するだけなので、取り出さない。
+ * 文字列が、シェルが語を分けるか展開する字を含むか、`{`と`}`の間に`,`か`..`を持つ(ブレースの並びの形)なら真。
+ * ブレースの並びは、最初の`{`と最後の`}`の間で見る。どの組の間にあっても、その範囲に入るためである。
+ */
+function splitsIntoWords(text: string): boolean {
+  if (SHELL_SPLITTING_CHARACTERS.test(text)) return true;
+  const open = text.indexOf("{");
+  const close = text.lastIndexOf("}");
+  if (open === -1 || close <= open) return false;
+  const inner = text.slice(open + 1, close);
+  return inner.includes(",") || inner.includes("..");
+}
+
+/**
+ * 語に値の部分があり、語がシェルの語を分けるか展開する字を含めば(`splitsIntoWords`)、前の部分を外した値を語として返す。そうでなければnullを返す。
+ * そうした字の無い値は、1語のまま渡り引数を渡せず、起動語を判定しても日常の値(`--reporter=watch`など)を拒否するだけなので、取り出さない。
  * `assignmentValue`と同じく、NULを除いた綴りからも前の部分を外し、`dynamic`と`glob`を引き継ぐ。
  * シェルの変数代入の形で始まる語(`LANG=C rg …`)は、nullを返す。
  * その語はコマンドとして読むときに代入として外れ、値は代入の判定が空白までを見るので、後ろのコマンドまで値に含めない。
  */
 function commandValue(word: Word): Word | null {
-  if (!/\s/.test(word.text)) return null;
+  if (!splitsIntoWords(word.text)) return null;
   const prefix = COMMAND_VALUE_PREFIX.exec(word.text)?.[0];
   if (prefix === undefined || prefix.length === word.text.length) return null;
   if (SHELL_ASSIGNMENT_PREFIX.test(prefix)) return null;
@@ -1386,8 +1405,8 @@ function isReadOnlyProgram(program: string, words: readonly Word[]): boolean {
  * 前置きの後ろの判定。`words`の`from`番目から後ろを見る。
  * 前置き自身が先頭のときは1、前置きの後ろの文字列から読んだコマンドは0である。
  * 1. 語を足すコマンド、シェル、読めない標準入力があれば、指す語の有無によらず`dynamic`で拒否する。
- * 2. 空白を含む語(`script -c`や`ssh`の文字列)と、標準入力の文字列は、コマンドとして読んで判定し直す。
- *    語の値の部分(`--opt=<値>`、`<キー>=<値>`、`+…!<値>`、`!<値>`)も、値が空白を含めばコマンドとして読む。
+ * 2. 空白か、シェルが語を分けるか展開する字を含む語(`script -c`や`ssh`の文字列など)と、標準入力の文字列は、コマンドとして読んで判定し直す。
+ *    語の値の部分(`--opt=<値>`、`<キー>=<値>`、ページャーの初期コマンド、`!<値>`)も、語が同じ字を含めばコマンドとして読む。
  * 3. 前置きの後ろの起動語は、既存の分岐で判定し直す。
  * 4. 語は、共起で見る。
  * 文字列から読んだコマンドが読み取りの道具なら、通す。
@@ -1408,13 +1427,14 @@ function underPrefixFinding(
   );
   if (readsStdin && hasUnreadableStdin(context)) return "prefix";
   let found: HoldFinding | null = null;
+  // 語を分けるか展開する字を含む語は、受け取った側が文字列としてシェルに渡すと複数の語になるので、コマンドとして読む。
   for (let at = from; at < words.length; at += 1) {
     const word = words[at];
-    if (word === undefined || !/\s/.test(word.text)) continue;
+    if (word === undefined || !splitsIntoWords(word.text)) continue;
     found = stronger(found, textFinding(word.text, context, "string"));
     if (found === "operation") return found;
   }
-  // 語の`=`より後ろと、`+…!`や`!`の後ろは、コマンドとして実行されうる。起動語が前の部分に隠れないよう、値をコマンドとして読む。
+  // 語の`=`より後ろと、ページャーの初期コマンドや`!`の後ろは、コマンドとして実行されうる。起動語が前の部分に隠れないよう、値をコマンドとして読む。
   // 値ごとの判定は、解析の回数に数える。
   for (const word of words.slice(from)) {
     const value = commandValue(word);
@@ -1921,6 +1941,9 @@ const GIT_OPTIONS_WITH_ATTACHED_VALUE: readonly string[] = [
 /**
  * 副コマンドの後ろで、実行するコマンドを受け取るか、設定のコマンドを起動する`git`の長いオプションの名前。
  * gitは長いオプションの一意な省略形を受け付けるので、名前の前方一致で見る(`isDelegatingLongOption`)。
+ * 委ねない副コマンドの一覧(`GIT_INERT_SUBCOMMANDS`)の中の副コマンドが受け付けるものだけを置く。
+ * 一覧の外の副コマンドだけが受け付けるもの(送信の副コマンドのオプションなど)は、副コマンドの判定で委ねる形になるので置かない。
+ * 置くと、前方が重なる読み取りのオプションまで委ねる形にするためである。
  */
 const GIT_DELEGATING_LONG_OPTIONS: readonly string[] = [
   "--upload-pack",
@@ -1929,11 +1952,6 @@ const GIT_DELEGATING_LONG_OPTIONS: readonly string[] = [
   "--ext-diff",
   "--open-files-in-pager",
   "--textconv",
-  "--run",
-  "--to-cmd",
-  "--cc-cmd",
-  "--sendmail-cmd",
-  "--smtp-server",
 ];
 
 /**
@@ -2660,7 +2678,7 @@ function wordStopAllCall(
   inputs: () => readonly string[] | null,
   depth: number,
 ): boolean {
-  // 語の`=`より後ろと、`+…!`や`!`の後ろは、コマンドとして実行されうるので、値も判定する。
+  // 語の`=`より後ろと、ページャーの初期コマンドや`!`の後ろは、コマンドとして実行されうるので、値も判定する。
   const value = commandValue(word);
   if (value !== null) {
     if (depth >= COMMAND_TEXT_MAX_DEPTH) {
