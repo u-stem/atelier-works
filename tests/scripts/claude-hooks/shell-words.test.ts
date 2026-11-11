@@ -186,6 +186,28 @@ describe("stripWrappers", () => {
     expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
   });
 
+  test.each([
+    ["behind another assignment", ["env", "a=1", "-b=2", "git", "push"]],
+    ["behind the end of the options", ["env", "--", "-b=2", "git", "push"]],
+  ])(
+    "removes an env assignment that starts with a hyphen %s",
+    (_form, texts) => {
+      const stripped = stripWrappers(words(...texts));
+      expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+    },
+  );
+
+  test("keeps a word with an equals sign behind env and another wrapper as the command", () => {
+    const stripped = stripWrappers(
+      words("env", "nice", "a-b=1", "git", "push"),
+    );
+    expect(stripped.words.map((word) => word.text)).toEqual([
+      "a-b=1",
+      "git",
+      "push",
+    ]);
+  });
+
   test("removes several env assignments in a row", () => {
     const stripped = stripWrappers(
       words("env", "a-b=1", "c.d=2", "git", "push"),
@@ -2745,6 +2767,15 @@ describe("a bracket opened inside a word must close in the same word", () => {
       "a substitution nested in an arithmetic expansion",
       "echo $(( $(a[ 1 ]=1 echo x) ))",
     ],
+    ["a command behind a subscripted assignment", "a[1]=1 echo x"],
+    ["a command behind an appending subscripted assignment", "a[1]+=1 echo x"],
+    ["a command behind a quoted subscripted assignment", "'a[1]=1' echo x"],
+    ["a command behind an escaped subscripted assignment", "a\\[1]=1 echo x"],
+    [
+      "a command behind a wrapper and a subscripted assignment",
+      "nice a[1]=1 echo x",
+    ],
+    ["an escaped opening bracket in front of a bracket", "\\[[ x"],
     ["a character class that holds an opening bracket", "ls x[[]"],
     ["an option value that is an opening bracket", "cut -d[ -f2 file"],
     ["a line continuation before the bracket", "a\\\n[ # ]=1; echo x"],
@@ -2771,6 +2802,8 @@ describe("a bracket opened inside a word must close in the same word", () => {
 
   test.each([
     ["a closed subscript", "a[1]=x"],
+    ["two subscripted assignments without a command", "a[0]=x a[1]=y"],
+    ["a subscripted assignment in front of a separator", "a[1]=x; echo y"],
     ["a variable subscript", "a[$i]=x"],
     ["a length subscript", `a[${OPEN}#a[@]}]=x`],
     ["an arithmetic subscript", "a[$((i+1))]=x"],
