@@ -1,6 +1,6 @@
-import { toast } from "sonner";
 import { useWriteMutation } from "../../api/mutations.ts";
 import { retryWorkItem } from "../../api/writes.ts";
+import { announce } from "../../components/announce.ts";
 import { workItemRef } from "../../lib/labels.ts";
 import {
   describeRetryOutcome,
@@ -15,21 +15,7 @@ import { STALE_LIST_NOTICE } from "../../lib/writeNotices.ts";
  * 行ごとの再実行は別々に終わるので、知らせだけでは、どの行の結果か分からないためである。
  */
 function showNotice(notice: RetryNotice, input: RetryInput): void {
-  const options = { description: workItemRef(input.workItemId) };
-  switch (notice.tone) {
-    case "success":
-      toast.success(notice.message, options);
-      return;
-    case "info":
-      toast.info(notice.message, options);
-      return;
-    case "warning":
-      toast.warning(notice.message, options);
-      return;
-    case "error":
-      toast.error(notice.message, options);
-      return;
-  }
+  announce(notice, workItemRef(input.workItemId));
 }
 
 /**

@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { toast } from "sonner";
 import type {
   JobCancelResult,
   JobRerunResult,
@@ -14,6 +13,7 @@ import {
 import { useWriteMutation } from "../../api/mutations.ts";
 import type { WriteRunnerConfig } from "../../api/writeRunner.ts";
 import { cancelJob, rerunJob } from "../../api/writes.ts";
+import { announce } from "../../components/announce.ts";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { cn } from "../../lib/cn.ts";
@@ -30,27 +30,9 @@ import { safeText } from "../../lib/safeText.ts";
 import {
   describeJobCancelResult,
   describeJobRerunResult,
-  type ReleaseNotice,
   releaseNotice,
   STALE_LIST_NOTICE,
 } from "../../lib/writeNotices.ts";
-
-function announce(notice: ReleaseNotice): void {
-  switch (notice.tone) {
-    case "success":
-      toast.success(notice.message);
-      return;
-    case "info":
-      toast.info(notice.message);
-      return;
-    case "warning":
-      toast.warning(notice.message);
-      return;
-    case "error":
-      toast.error(notice.message);
-      return;
-  }
-}
 
 function Field({
   label,

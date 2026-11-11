@@ -4,7 +4,7 @@ import {
   stopAllConfig,
   stopAllReleaseConfig,
 } from "../../api/stopAllConfig.ts";
-import { announce } from "./useRelease.ts";
+import { announce } from "../../components/announce.ts";
 
 /** 全停止を置く。二重の送信はロックで止め、結果はトーストで知らせる。 */
 export function useStopAll() {

@@ -1,30 +1,11 @@
 import { useMemo } from "react";
-import { toast } from "sonner";
 import { useWriteMutation } from "../../api/mutations.ts";
 import {
   deployDecideConfig,
   freezeReleaseConfig,
   holdReleaseConfig,
 } from "../../api/releaseConfig.ts";
-import type { ReleaseNotice } from "../../lib/writeNotices.ts";
-
-/** 結果の知らせをトーストで出す。保留と凍結の解除と、全停止の操作が共有する。 */
-export function announce(notice: ReleaseNotice): void {
-  switch (notice.tone) {
-    case "success":
-      toast.success(notice.message);
-      return;
-    case "info":
-      toast.info(notice.message);
-      return;
-    case "warning":
-      toast.warning(notice.message);
-      return;
-    case "error":
-      toast.error(notice.message);
-      return;
-  }
-}
+import { announce } from "../../components/announce.ts";
 
 /** 保留の解除。同じ保留の二重の送信はロックで止め、結果はトーストで知らせる。 */
 export function useReleaseHold() {

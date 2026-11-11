@@ -1,7 +1,6 @@
 import { CircleCheck, ExternalLink, Info, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import { toast } from "sonner";
 import type { WriteOutcome } from "../../api/executeWrite.ts";
 import type { SummaryNotice } from "../../api/guards/summary.ts";
 import type { NoticeResolveResult } from "../../api/guards/writeResults.ts";
@@ -9,6 +8,7 @@ import { useWriteMutation } from "../../api/mutations.ts";
 import { NOTICE_RESOLVE_INVALIDATES } from "../../api/noticeQueries.ts";
 import { writeTargetKey } from "../../api/writeLocks.ts";
 import { resolveNotice } from "../../api/writes.ts";
+import { announce } from "../../components/announce.ts";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
@@ -17,6 +17,7 @@ import { formatAbsoluteWithRelative } from "../../lib/relativeTime.ts";
 import { systemSectionPath } from "../../lib/systemSections.ts";
 import {
   describeNoticeResult,
+  releaseNotice,
   STALE_LIST_NOTICE,
 } from "../../lib/writeNotices.ts";
 import { NoticeMessageText } from "./NoticeMessageText.tsx";
@@ -30,23 +31,6 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function announce(notice: {
-  readonly tone: "success" | "info" | "warning";
-  readonly message: string;
-}): void {
-  switch (notice.tone) {
-    case "success":
-      toast.success(notice.message);
-      return;
-    case "info":
-      toast.info(notice.message);
-      return;
-    case "warning":
-      toast.warning(notice.message);
-      return;
-  }
-}
-
 /**
  * 通知の解決。確認のダイアログは出さない。
  * 解決した通知は履歴に残り、状況が続けば新しい通知が出るので、取り返しのつかない操作ではない。
@@ -58,11 +42,7 @@ const RESOLVE_CONFIG = {
   run: (noticeId: number): Promise<NoticeResolveResult> =>
     resolveNotice(noticeId),
   onOutcome: (outcome: WriteOutcome<NoticeResolveResult>): void => {
-    if (outcome.kind === "done") {
-      announce(describeNoticeResult(outcome.result));
-    } else {
-      toast.error(outcome.message);
-    }
+    announce(releaseNotice(outcome, describeNoticeResult));
   },
   onStale: (): void => {
     announce(STALE_LIST_NOTICE);
