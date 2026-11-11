@@ -5636,6 +5636,10 @@ describeForCallers(
         "a bisect start with a path",
         "git bisect start HEAD v1 -- scripts/stop_all.ts",
       ],
+      [
+        "a reading option that shares a prefix with the conversion option",
+        "git diff --text -- scripts/stop_all.ts",
+      ],
     ])("denies %s", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
     });
@@ -5890,6 +5894,8 @@ describeForCallers(
       "caffeinate bun test --reporter=watch",
       "git clone --branch=watch https://example.com/r.git",
       "git -c core.pager=cat log --output=scripts/hold.ts",
+      "git log --format=%h -1",
+      "git -c core.pager=cat log --output=x.txt",
     ])("allows %s", async (command) => {
       expect(await decide(command, { subagent })).toBe("allow");
     });
@@ -5937,6 +5943,71 @@ describeForCallers(
       ],
     ])("denies %s", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 語の値は、空白のほか、シェルが語を分けたり展開したりする字を含むときも、コマンドとして読む。
+describeForCallers(
+  "bash-guard denies holds or freezes written through values that the shell splits or expands",
+  (subagent) => {
+    test.each([
+      [
+        "a setting value split by a variable expansion",
+        `git -c core.pager=bun${OPEN}IFS}scripts/hold.ts${OPEN}IFS}release${OPEN}IFS}1 log`,
+      ],
+      [
+        "a setting value written as a brace list",
+        "git -c core.pager={bun,scripts/hold.ts,release,1} log",
+      ],
+      [
+        "a send-side program value written as a brace list",
+        "git fetch --upload-pack={bun,scripts/freeze.ts,release,1} origin",
+      ],
+      [
+        "a positional setting value split by a variable expansion",
+        `git config core.pager bun${OPEN}IFS}scripts/hold.ts${OPEN}IFS}release${OPEN}IFS}1`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// ページャーの初期コマンドの値は、まとめ書きの中、`+`と`!`の間に空白がある形、パイプのコマンドからも取り出す。
+describeForCallers(
+  "bash-guard denies holds written through a launcher hidden in an initial command of a pager",
+  (subagent) => {
+    test.each([
+      [
+        "inside a bundle of pager options",
+        String.raw`less -N+'!bun -e "import(\"./scripts/hold.ts\")"' README.md`,
+      ],
+      [
+        "after a space between the plus and the bang",
+        String.raw`less '+G !bun -e "import(\"./scripts/hold.ts\")"' README.md`,
+      ],
+      [
+        "in a pipe command",
+        String.raw`less '+|.bun -e "import(\"./scripts/hold.ts\")"' README.md`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 送信の副コマンドだけが受け付けるオプションは、委ねる長いオプションの一覧に置かない。前方が重なる読み取りのオプションを止めないためである。
+// 値を取るグローバルのオプションの値が実行時に決まる語でも、委ねる形にしない。
+describeForCallers(
+  "bash-guard allows git reads whose options share a prefix only with options of the send subcommand",
+  (subagent) => {
+    test.each([
+      "git log --cc -- scripts/stop_all.ts",
+      "git show --cc HEAD -- scripts/stop_all.ts",
+      "git -C $W log",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
     });
   },
 );
