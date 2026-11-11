@@ -40,7 +40,7 @@ schema:
       default: null
     untrusted:
       type: string
-      description: レビューの総評、判定、指摘、スレッドへの答え、変更ファイルとバイナリのパスを、JSONの文字列に包んだもの。
+      description: レビューの総評、判定、指摘、スレッドへの答え、変更ファイルとバイナリのパス、変更の範囲を、JSONの文字列に包んだもの。
       default: null
       originalType: string
     work_item_id:
