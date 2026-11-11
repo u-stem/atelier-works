@@ -1154,6 +1154,11 @@ function mentionsCodeWrite(text: string): boolean {
   );
 }
 
+/** 引用符とバックスラッシュを除いた綴り。読めない文字列の中で、語の途中の空の引用で名前を分けた形を照合するためである。 */
+function unquotedText(text: string): string {
+  return text.replace(/['"\\]/g, "");
+}
+
 /** 語に、実行時に決まる部分、glob、ブレースのどれかがあり、綴りが決まらないなら真。 */
 function isUnreadable(word: Word): boolean {
   return (
@@ -1337,7 +1342,9 @@ function textFinding(
   context: HoldContext,
   kind: "string" | "stdin",
 ): HoldFinding | null {
-  const literal = kind === "stdin" ? mentionsCodeWrite : mentionsHoldOrFreeze;
+  const base = kind === "stdin" ? mentionsCodeWrite : mentionsHoldOrFreeze;
+  // 読めない文字列は、語の途中の空の引用で名前を分けた形も見るため、引用符とバックスラッシュを除いた綴りでも判定する。
+  const literal = (t: string) => base(t) || base(unquotedText(t));
   if (context.depth >= COMMAND_TEXT_MAX_DEPTH) {
     return literal(text) ? "operation" : null;
   }
@@ -2754,10 +2761,13 @@ function stopAllWording(text: string): boolean {
  * 読めない文字列と、入れ子が深さの上限を超えた文字列の字面が、全停止を指すなら真。
  * 全停止のCLIを指す語か、`mise`と全停止のタスク名が並ぶ字面である。
  * 読めない文字列を一律に拒否すると、SQLやJSONの引数のような読み取りまで止まるので、字面で絞る。
+ * 引用符とバックスラッシュを除いた綴りでも判定する。語の途中の空の引用で名前を分けた形を見落とさないためである。
  */
 function unreadableTextStopAll(word: Word): boolean {
   if (pointsAtStopAllCode(word)) return true;
-  return spellings(word).some(stopAllWording);
+  return spellings(word).some(
+    (text) => stopAllWording(text) || stopAllWording(unquotedText(text)),
+  );
 }
 
 /** 空白を含む語が、中に全停止の入口を実行する形を持つか。読めない文字列は、字面で判定する。 */
