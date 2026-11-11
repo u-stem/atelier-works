@@ -34,12 +34,22 @@ import {
 } from "../lib/repo_owner_gate.ts";
 import {
   type FileDiffHunks,
+  isNumber,
   isOneOf,
+  isString,
+  isStringArray,
   type ReviewFinding,
   type ReviewPostMode,
   type ReviewVerdict,
   type ThreadResponse,
 } from "../lib/types.ts";
+import {
+  isArrayOf,
+  isNullOr,
+  isShape,
+  isStringOrNull,
+  parseUntrustedArg,
+} from "../lib/untrusted_arg.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import { blockReview } from "./pr_review_prepare.ts";
 import {
@@ -49,6 +59,8 @@ import {
   countOpenThreads,
   decideReviewBodyMode,
   findPostedReviewId,
+  isReviewFindingShape,
+  isThreadResponseShape,
   mapFindingsToReviewComments,
   renderReviewSummary,
   renderThreadReply,
@@ -162,9 +174,29 @@ const SKIPPED_POST: PrReviewPostResult = {
   posted_review_id: null,
 };
 
+const isFileDiffHunksShape = isShape({
+  path: isString,
+  hunks: isNullOr(isArrayOf(isShape({ start: isNumber, end: isNumber }))),
+});
+
+/**
+ * 生成のstepの結果のうち、Claudeの出力とPRのファイルのパスを含む値。
+ * Windmillは引数の`$var:`で始まる文字列を解決するので、flowが1つのJSONの文字列に包んで渡す。
+ */
+const isPrReviewUntrusted = isShape({
+  summary: isString,
+  verdict: isStringOrNull,
+  findings: isArrayOf(isReviewFindingShape),
+  thread_responses: isArrayOf(isThreadResponseShape),
+  pr_files: isStringArray,
+  pr_file_hunks: isNullOr(isArrayOf(isFileDiffHunksShape)),
+  binary_files: isStringArray,
+});
+
 /**
  * `main`の引数で`runPrReviewPost`を呼ぶ。
  * Windmillは`main`の引数から入力のスキーマを作るので、差し替えられる依存は`runPrReviewPost`に分けている。
+ * `untrusted`は、`isPrReviewUntrusted`の形の値をJSONの文字列にしたもの。
  */
 export async function main(
   work_item_id: number,
@@ -173,17 +205,16 @@ export async function main(
   repo: string,
   pr_number: number,
   review_sha: string,
-  summary: string,
-  verdict: string | null,
-  findings: ReviewFinding[],
-  thread_responses: ThreadResponse[],
-  pr_files: string[],
-  pr_file_hunks: FileDiffHunks[],
-  binary_files: string[],
+  untrusted: string,
   binary_unlisted_count: number,
   worktree_dir: string,
   repo_dir: string,
 ): Promise<PrReviewPostResult> {
+  const generated = parseUntrustedArg(
+    untrusted,
+    "pr_review_post",
+    isPrReviewUntrusted,
+  );
   return runPrReviewPost(
     {
       work_item_id,
@@ -192,13 +223,7 @@ export async function main(
       repo,
       pr_number,
       review_sha,
-      summary,
-      verdict,
-      findings,
-      thread_responses,
-      pr_files,
-      pr_file_hunks,
-      binary_files,
+      ...generated,
       binary_unlisted_count,
       worktree_dir,
       repo_dir,

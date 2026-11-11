@@ -6,11 +6,6 @@ schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    summary:
-      type: string
-      description: 処理内容の要約。
-      default: null
-      originalType: string
     auto_tree_sha:
       type: string
       description: ''
@@ -35,43 +30,10 @@ schema:
       type: number
       description: ''
       default: null
-    comments:
-      type: array
-      description: 収集したPRコメントの一覧。
-      default: null
-      items:
-        type: resource
-        resourceType: collected_comment
-      originalType: resource[]
-    commit_body:
-      type: string
-      description: 適用した変更に付けるコミットメッセージの本文(任意)。
-      default: null
-      originalType: string
-    commit_subject:
-      type: string
-      description: 適用した変更に付けるコミットメッセージの件名。
-      default: null
-      originalType: string
-    conflict_blobs:
-      type: array
-      description: ''
-      default: null
-      items:
-        type: resource
-        resourceType: conflict_blobs
-      originalType: resource[]
     conflict_check_id:
       type: number
       description: ''
       default: null
-    conflicted_paths:
-      type: array
-      description: ''
-      default: null
-      items:
-        type: string
-      originalType: string[]
     fix_round:
       type: number
       description: このPRに対する修正の試行回数。
@@ -111,19 +73,6 @@ schema:
       type: number
       description: 対象PRの番号。
       default: null
-    reason:
-      type: string
-      description: 処理結果の理由。
-      default: null
-      originalType: string
-    replies:
-      type: array
-      description: 各指摘への対応内容の一覧。
-      default: null
-      items:
-        type: resource
-        resourceType: fix_reply
-      originalType: resource[]
     repo:
       type: string
       description: 対象リポジトリ名。
@@ -134,14 +83,6 @@ schema:
       description: 対象リポジトリを展開した作業ディレクトリのパス。
       default: null
       originalType: string
-    reviews:
-      type: array
-      description: 収集したPRレビューの一覧。
-      default: null
-      items:
-        type: resource
-        resourceType: collected_review
-      originalType: resource[]
     trigger_review_ids:
       type: array
       description: 今回の修正のきっかけになったレビューのID一覧。
@@ -149,6 +90,11 @@ schema:
       items:
         type: number
       originalType: number[]
+    untrusted:
+      type: string
+      description: 修正の結果、指摘とコメントの本文、競合したファイルのパスと中身を、JSONの文字列に包んだもの。
+      default: null
+      originalType: string
     verified_tree_sha:
       type: string
       description: ''
@@ -171,8 +117,7 @@ schema:
   required:
     - work_item_id
     - outcome
-    - summary
-    - replies
+    - untrusted
     - owner
     - repo
     - pr_number
@@ -180,8 +125,6 @@ schema:
     - repo_dir
     - head_sha
     - fix_round
-    - reviews
-    - comments
     - trigger_review_ids
     - max_review_id
     - max_comment_id

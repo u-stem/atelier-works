@@ -90,25 +90,32 @@ import {
   FIX_SCHEMA_WITH_DESIGN_GAP,
   fixPrompt,
 } from "../lib/prompts.ts";
-import type { FixOutcome, FixReply } from "../lib/types.ts";
+import { type FixOutcome, type FixReply, isString } from "../lib/types.ts";
+import {
+  isArrayOf,
+  isNullOr,
+  isShape,
+  isStringOrNull,
+  parseUntrustedArg,
+} from "../lib/untrusted_arg.ts";
 import {
   assertWorktreeGitPointer,
   type CommandRunner,
-  type ConflictBlobs,
   removeIgnoredFiles,
   runCommand,
   worktreeGitPointerMatches,
 } from "../lib/workspace.ts";
 import {
-  type CollectedComment,
-  type CollectedReview,
   claudeBlockedReason,
   type FixClaudeOutput,
   type ForbiddenChangeResult,
   inspectUncommittedChanges,
   isCiFixClaudeOutput,
+  isConflictBlobsShape,
   isFixClaudeOutput,
+  isFixReplyShape,
   localHeadStopReason,
+  PR_FIX_COLLECTED_SHAPE,
   PR_HEAD_NOT_RECORDED_REASON,
   recordedGitPointerStopReason,
   WORKTREE_GIT_POINTER_NOT_RECORDED_REASON,
@@ -678,17 +685,11 @@ export async function main(
   repo: string,
   pr_number: number,
   apply_outcome: FixOutcome,
-  apply_reason: string | null,
-  apply_summary: string,
-  apply_replies: FixReply[],
-  apply_commit_subject: string | null,
-  apply_commit_body: string | null,
+  untrusted: string,
   worktree_dir: string,
   factory_clone_dir: string,
   parent_work_item_id: number | null,
   attempt: number,
-  reviews: CollectedReview[],
-  comments: CollectedComment[],
   worktree_git_pointer: string | null = null,
   head_sha: string | null = null,
   branch: string | null = null,
@@ -697,9 +698,31 @@ export async function main(
   baseline_sha: string | null = null,
   base_sha: string | null = null,
   auto_tree_sha: string | null = null,
-  conflicted_paths: string[] | null = null,
-  conflict_blobs: ConflictBlobs[] | null = null,
 ): Promise<PrFixVerifyResult> {
+  // 修正の結果(Claudeの出力)と、外から来た文字列は、flowがJSONの文字列に包んで渡す。
+  const {
+    apply_reason,
+    apply_summary,
+    apply_replies,
+    apply_commit_subject,
+    apply_commit_body,
+    reviews,
+    comments,
+    conflicted_paths,
+    conflict_blobs,
+  } = parseUntrustedArg(
+    untrusted,
+    "pr_fix_verify",
+    isShape({
+      ...PR_FIX_COLLECTED_SHAPE,
+      apply_reason: isStringOrNull,
+      apply_summary: isString,
+      apply_replies: isArrayOf(isFixReplyShape),
+      apply_commit_subject: isStringOrNull,
+      apply_commit_body: isStringOrNull,
+      conflict_blobs: isNullOr(isArrayOf(isConflictBlobsShape)),
+    }),
+  );
   const lockedRun = withWorktreeProcessLock(
     runCommand,
     worktreeLockFor(worktree_dir),

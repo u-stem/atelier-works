@@ -6,50 +6,15 @@ schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    summary:
-      type: string
-      description: 処理内容の要約。
-      default: null
-      originalType: string
-    binary_files:
-      type: array
-      description: 差分に内容が出ないバイナリのファイルの一覧。
-      default: null
-      items:
-        type: string
-      originalType: string[]
     binary_unlisted_count:
       type: number
       description: パスを変更ファイルと照合できず、一覧に載せなかったバイナリのファイルの件数。
       default: null
-    findings:
-      type: array
-      description: レビューで見つかった指摘の一覧。
-      default: null
-      items:
-        type: resource
-        resourceType: review_finding
-      originalType: resource[]
     owner:
       type: string
       description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
       default: null
       originalType: string
-    pr_file_hunks:
-      type: array
-      description: 変更されたファイルごとの、行コメントを付けられる新しい側の行の範囲。
-      default: null
-      items:
-        type: resource
-        resourceType: file_diff_hunks
-      originalType: resource[]
-    pr_files:
-      type: array
-      description: PRで変更されたファイルの一覧。
-      default: null
-      items:
-        type: string
-      originalType: string[]
     pr_number:
       type: number
       description: 対象PRの番号。
@@ -73,17 +38,9 @@ schema:
       type: boolean
       description: このステップの処理を省略するかどうか。
       default: null
-    thread_responses:
-      type: array
-      description: 再レビューが既存のスレッドに出した答えの一覧。
-      default: null
-      items:
-        type: resource
-        resourceType: thread_response
-      originalType: resource[]
-    verdict:
+    untrusted:
       type: string
-      description: レビューの総合判定。
+      description: レビューの総評、判定、指摘、スレッドへの答え、変更ファイルとバイナリのパスを、JSONの文字列に包んだもの。
       default: null
       originalType: string
     work_item_id:
@@ -102,12 +59,7 @@ schema:
     - repo
     - pr_number
     - review_sha
-    - summary
-    - findings
-    - thread_responses
-    - pr_files
-    - pr_file_hunks
-    - binary_files
+    - untrusted
     - binary_unlisted_count
     - worktree_dir
     - repo_dir

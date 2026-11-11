@@ -204,9 +204,9 @@ describe("pr_review flow.yaml", () => {
     expect(moduleTimeoutSec(PR_REVIEW_FLOW, "pr_review_post")).toBe(5400);
   });
 
-  test("passes the binary files of the generate step to the post step", () => {
+  test("passes the binary files of the generate step to the post step inside the sealed argument", () => {
     expect(moduleBlock(PR_REVIEW_FLOW, "pr_review_post")).toContain(
-      "          binary_files:\n            type: javascript\n            expr: results.pr_review_generate?.binary_files ?? []\n",
+      "              binary_files: results.pr_review_generate?.binary_files ?? []\n",
     );
   });
 
@@ -216,18 +216,18 @@ describe("pr_review flow.yaml", () => {
     );
   });
 
-  test("passes the diff hunks of the generate step to the post step", () => {
+  test("passes the diff hunks of the generate step to the post step inside the sealed argument", () => {
     expect(moduleBlock(PR_REVIEW_FLOW, "pr_review_post")).toContain(
-      "          pr_file_hunks:\n            type: javascript\n            expr: results.pr_review_generate?.pr_file_hunks ?? null\n",
+      "              pr_file_hunks: results.pr_review_generate?.pr_file_hunks ?? null,\n",
     );
   });
 
-  test("declares pr_file_hunks in the schema of the post step", () => {
+  test("declares the sealed argument in the schema of the post step", () => {
     const schema = readFileSync(
       join(import.meta.dir, "../../f/factory/steps/pr_review_post.script.yaml"),
       "utf8",
     );
-    expect(schema).toContain("    pr_file_hunks:\n      type: array\n");
+    expect(schema).toContain("    untrusted:\n      type: string\n");
   });
 
   test("declares binary_unlisted_count in the schema of the post step", () => {
@@ -238,14 +238,6 @@ describe("pr_review flow.yaml", () => {
     expect(schema).toContain(
       "    binary_unlisted_count:\n      type: number\n",
     );
-  });
-
-  test("declares binary_files in the schema of the post step", () => {
-    const schema = readFileSync(
-      join(import.meta.dir, "../../f/factory/steps/pr_review_post.script.yaml"),
-      "utf8",
-    );
-    expect(schema).toContain("    binary_files:\n      type: array\n");
   });
 
   test("puts no timeout on the failure module", () => {

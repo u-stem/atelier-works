@@ -106,12 +106,18 @@ import {
   repoOwnerGateDeps,
   repoOwnerStopReason,
 } from "../lib/repo_owner_gate.ts";
-import { type FixReply, isOneOf, type WorkItemStatus } from "../lib/types.ts";
+import { isOneOf, isString, type WorkItemStatus } from "../lib/types.ts";
+import {
+  isArrayOf,
+  isNullOr,
+  isShape,
+  isStringOrNull,
+  parseUntrustedArg,
+} from "../lib/untrusted_arg.ts";
 import {
   assertWorktreeGitPointer,
   type CommitAndPushResult,
   CommitBlockedError,
-  type ConflictBlobs,
   commitAndPush,
   type PushMergeCommitResult,
   pushMergeCommit,
@@ -123,8 +129,6 @@ import {
 import {
   buildIssueProposalReason,
   buildReplyPostFailedNotice,
-  type CollectedComment,
-  type CollectedReview,
   composeCommitMessage,
   decideFixFinishAction,
   decideNothingToCommitEnd,
@@ -135,10 +139,13 @@ import {
   fixOutputProseIssues,
   hasSkipOnFactoryThread,
   inspectStagedChanges,
+  isConflictBlobsShape,
+  isFixReplyShape,
   matchReviewThreadForComment,
   needsSkipRereviewLabel,
   nextActionFor,
   nextActionForPrFix,
+  PR_FIX_COLLECTED_SHAPE,
   PR_FIX_DESIGN_GAP_DISABLED_REASON,
   PR_FIX_DESIGN_GAP_EXHAUSTED_REASON,
   PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON,
@@ -452,11 +459,7 @@ export async function runConflictPush(
 export async function main(
   work_item_id: number,
   outcome: string,
-  reason: string | null,
-  summary: string,
-  replies: FixReply[],
-  commit_subject: string | null,
-  commit_body: string | null,
+  untrusted: string,
   owner: string,
   repo: string,
   pr_number: number,
@@ -465,8 +468,6 @@ export async function main(
   head_sha: string,
   parent_work_item_id: number | null,
   fix_round: number,
-  reviews: CollectedReview[],
-  comments: CollectedComment[],
   trigger_review_ids: number[],
   max_review_id: number,
   max_comment_id: number,
@@ -478,10 +479,32 @@ export async function main(
   baseline_sha: string | null = null,
   base_sha: string | null = null,
   auto_tree_sha: string | null = null,
-  conflicted_paths: string[] | null = null,
-  conflict_blobs: ConflictBlobs[] | null = null,
   verified_tree_sha: string | null = null,
 ): Promise<PrFixFinishResult> {
+  // 修正の結果(Claudeの出力)と、外から来た文字列は、flowがJSONの文字列に包んで渡す。
+  const {
+    reason,
+    summary,
+    replies,
+    commit_subject,
+    commit_body,
+    reviews,
+    comments,
+    conflicted_paths,
+    conflict_blobs,
+  } = parseUntrustedArg(
+    untrusted,
+    "pr_fix_finish",
+    isShape({
+      ...PR_FIX_COLLECTED_SHAPE,
+      reason: isStringOrNull,
+      summary: isString,
+      replies: isArrayOf(isFixReplyShape),
+      commit_subject: isStringOrNull,
+      commit_body: isStringOrNull,
+      conflict_blobs: isNullOr(isArrayOf(isConflictBlobsShape)),
+    }),
+  );
   if (!isOneOf(outcome, ALL_OUTCOMES)) {
     throw new Error(`pr_fix_finish: unexpected outcome "${outcome}"`);
   }

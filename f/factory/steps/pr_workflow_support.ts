@@ -99,6 +99,7 @@ import {
   isOneOf,
   isRecord,
   isString,
+  isStringArray,
   type LabelerAssociation,
   type NoticeRecord,
   type ReviewFinding,
@@ -114,6 +115,12 @@ import {
   type WorkItemKind,
   type WorkItemStatus,
 } from "../lib/types.ts";
+import {
+  isArrayOf,
+  isNullOr,
+  isNumberOrNull,
+  isShape,
+} from "../lib/untrusted_arg.ts";
 import {
   assertOutputComplete,
   buildGitArgv,
@@ -383,14 +390,14 @@ const THREAD_RESPONSE_DECISIONS: readonly ThreadResponseDecision[] = [
   "answered",
 ];
 
-function isThreadResponseShape(value: unknown): value is ThreadResponse {
+export function isThreadResponseShape(value: unknown): value is ThreadResponse {
   if (!isRecord(value)) return false;
   if (!isNumber(value.thread_id)) return false;
   if (!isOneOf(value.decision, THREAD_RESPONSE_DECISIONS)) return false;
   return isString(value.body);
 }
 
-function isReviewFindingShape(value: unknown): value is ReviewFinding {
+export function isReviewFindingShape(value: unknown): value is ReviewFinding {
   if (!isRecord(value)) return false;
   if (!isString(value.path)) return false;
   if (value.line !== null && !isNumber(value.line)) return false;
@@ -2137,6 +2144,38 @@ export type CollectedComment = {
   readonly author: string;
 };
 
+// 次のstepへ包んで渡した値を戻すときの型ガード(`lib/untrusted_arg.ts`)。
+export const isCollectedReviewShape = isShape({
+  id: isNumber,
+  body: isString,
+  author: isString,
+});
+
+export const isCollectedCommentShape = isShape({
+  id: isNumber,
+  path: isString,
+  line: isNumberOrNull,
+  body: isString,
+  author: isString,
+});
+
+export const isConflictBlobsShape = isShape({
+  path: isString,
+  baseBlob: isString,
+  oursBlob: isString,
+  theirsBlob: isString,
+});
+
+/**
+ * 修正の適用、検証、完了の3つのstepが、包んだ引数(`untrusted`)から戻す値のうち、3つに共通するもの。
+ * 競合の回の`conflicted_paths`は、`null`か、外から来たファイルのパスの一覧である。
+ */
+export const PR_FIX_COLLECTED_SHAPE = {
+  reviews: isArrayOf(isCollectedReviewShape),
+  comments: isArrayOf(isCollectedCommentShape),
+  conflicted_paths: isNullOr(isStringArray),
+};
+
 /**
  * `selectNew*`の結果。すべての条件を通った項目と、
  * `author_association`が`allowed_labeler_associations`に無いという理由だけで
@@ -2325,7 +2364,7 @@ function isIssueProposalDraftShape(
  * それ以外の`decision`では、`undefined`も`null`と同じに扱う。
  * このフィールドが無かった頃に記録された返信とも互換を保つため。
  */
-function isFixReplyShape(value: unknown): value is FixReply {
+export function isFixReplyShape(value: unknown): value is FixReply {
   if (
     !isRecord(value) ||
     !isNumber(value.review_comment_id) ||
