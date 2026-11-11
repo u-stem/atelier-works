@@ -5505,3 +5505,116 @@ describeForCallers(
     });
   },
 );
+
+// 全停止は、読み取りのプログラムでも、別のコマンドの実行を委ねる形なら通さない。委ねる先は字面でも見る。
+describeForCallers(
+  "bash-guard denies the stop-all through a command that a reading program runs",
+  (subagent) => {
+    test.each([
+      ["a bisect run of the task", "git bisect run mise run stop"],
+      ["a bisect run of the CLI", "git bisect run bun scripts/stop_all.ts"],
+      [
+        "a rebase exec with an equals sign",
+        "git rebase --exec='mise run stop' origin/main",
+      ],
+      ["a rebase exec", "git rebase -x 'mise run stop:release' origin/main"],
+      ["a difftool command", "git difftool -x 'mise run stop:restore' HEAD"],
+      ["a pager setting", "git -c core.pager='mise run stop' log"],
+      [
+        "an external diff setting",
+        "git -c diff.external='bun scripts/stop_all.ts' diff",
+      ],
+      [
+        "a send command",
+        "git send-email --sendmail-cmd='mise run stop' x.patch",
+      ],
+      [
+        "a setting written for later",
+        "git config --global sequence.editor 'mise run stop'",
+      ],
+      [
+        "an executable path",
+        "git --exec-path=/tmp/x log -- scripts/stop_all.ts",
+      ],
+      ["a bang gh alias", "gh alias set x '!mise run stop'"],
+      ["a shell gh alias", "gh alias set x --shell 'mise run stop:release'"],
+      [
+        "an imported gh alias",
+        "gh alias import - <<'X'\nx: '!mise run stop'\nX\n",
+      ],
+      [
+        "a gh setting written for later",
+        "gh config set browser 'mise run stop:restore'",
+      ],
+      ["a pager option of a viewer", "bat --pager='mise run stop' README.md"],
+      ["a pager option of a search tool", "ag --pager='mise run stop' x"],
+      [
+        "a pager option behind a prefix",
+        "script -q /dev/null bat --pager='mise run stop' README.md",
+      ],
+      [
+        "an initial command of a pager inside a prefix string",
+        `script -qc "less '+!mise run stop' README.md" /dev/null`,
+      ],
+      [
+        "an initial command of a pager behind a prefix",
+        "script -q /dev/null more '+!mise run stop' README.md",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test("the reason is the stop-all reason", async () => {
+      expect(
+        await denyReason("git bisect run mise run stop", { subagent }),
+      ).toContain("stop-all");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows reading programs near the stop-all that run nothing",
+  (subagent) => {
+    test.each([
+      "git log -p -- scripts/stop_all.ts",
+      "git show HEAD:scripts/stop_all.ts",
+      "git diff -- scripts/stop_all.ts",
+      "git grep stop_all",
+      "git rebase origin/main",
+      "git rebase -x 'bun test' origin/main",
+      "git bisect run bun test",
+      "git -c color.ui=always log -p -- scripts/stop_all.ts",
+      "git config --get core.pager",
+      "gh alias list",
+      "rg stop_all scripts/",
+      "bat scripts/stop_all.ts",
+      "bat -r 1:10 scripts/stop_all.ts",
+      "bat --style=plain scripts/stop_all.ts",
+      "less scripts/stop_all.ts",
+      "sed -n '1,20p' scripts/stop_all.ts",
+      `script -qc "less scripts/stop_all.ts" /dev/null`,
+      "git commit -m 'feat: mise run stop を足す'",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 受け入れる誤検知: 委ねる呼び出しの語に、全停止のCLIを指す語がある読み取り。
+describeForCallers(
+  "bash-guard rejects reading programs that delegate execution and name the stop-all",
+  (subagent) => {
+    test.each([
+      [
+        "a pager setting outside the inert keys",
+        "git -c core.pager=cat log -p -- scripts/stop_all.ts",
+      ],
+      [
+        "a bisect start with a path",
+        "git bisect start HEAD v1 -- scripts/stop_all.ts",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
