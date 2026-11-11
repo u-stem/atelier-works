@@ -23,7 +23,7 @@
 // 書き込みのscriptの名前を軸に、拒否を既定にする。プログラムの種類を問わず、語、変数代入の値、標準入力の文字列に、
 // 名前、名前に当たりうるglob、ブレースの形があれば拒否する。標準入力の文字列は、パイプの連鎖の上流まで辿る。
 // 読み取りなどのプログラム(`git`、`grep`、`cat`など)は、名前だけでは通す。同じコマンドに実行を表す語(`wmill`、`curl`、`npx`、`sh`など)が
-// 並ぶとき、実行を委ねるオプション(`git -c`、`rebase`、`gh alias set`、`rg --pre`)があるとき、変数代入の値に名前があるときは拒否する。
+// 並ぶとき、実行を委ねるオプション(一覧の外のキーの`git -c`、`rebase`、`gh alias set`、`rg --pre`)があるとき、変数代入の値に名前があるときは拒否する。
 // `wmill`が解除scriptを実行せずに読む・配る副コマンド(`script get`、`job list`、`script push`など)は通す。
 // パイプの上流の語にある名前は、`xargs`が受ける読み取りのプログラムと、`wmill`と、実行するプログラムに当てる。
 // `wmill jobs push`は、待ち行列のファイルからジョブを積み、名前が語に現れないので、名前なしで拒否する。
@@ -40,7 +40,7 @@
 //
 // 保留と凍結の判定は、語の字面で行う。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
-// 先頭の語で、次の4つの規則のどれかに分ける。どれにも当たらない先頭の呼び出しは、判定の対象にしない。
+// 先頭の語で、次の5つの規則のどれかに分ける。どれにも当たらない先頭の呼び出しは、判定の対象にしない。
 //
 // - 実行系(`bun`、`bunx`、`node`、`tsx`、`ts-node`、`deno`、`npx`、`npm`、`pnpm`、`pnpx`、`yarn`)と、
 //   スクリプトを直接実行する形: 語のどれかが保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省略できる)を指していれば拒否する。
@@ -91,9 +91,15 @@
 //       コマンド文字列は4段の入れ子まで読む。段を超えた文字列と読めない文字列は、字面で判定する。
 //       標準入力の文字列の字面は、保留か凍結のコードを指す字面と書き込みの語が並ぶときだけ拒否する。
 //       読む文字列の数と長さの合計にも上限を置き、超えたら拒否する。フックのタイムアウトの中で終えるためである。
+//       語の値の部分(`--opt=<値>`、`<キー>=<値>`、ページャーの初期コマンドの`+…!<値>`、シェルの別名の`!<値>`)も、値を先頭の語として判定する。
+//       起動語が前の部分に隠れると、(b)が当たらないためである。
 //   前置きの後ろでは、実行の字面が引数にある形(`git commit -m "… hold.ts release …"`)や、シェルを使う正当な作業も拒否する。
 //   実行と区別できないためである。
-//   前置きの無い形は、上の3つの規則と、次の2つの規則に当たらない限り、判定の対象にしない。
+// - 実行を委ねる呼び出し: 先頭が読み取りの道具で、別のコマンドの実行を委ねる副コマンド、設定、オプションを持つ形(`delegatesExecution`)。
+//   前置きと同じ規則で、先頭の次の語から調べる。実行の字面が引数にある形を拒否するのも、前置きと同じである。
+//   `git -c`は、値がコマンドとして実行されないキーの閉じた一覧だけを委ねない形とし、一覧の外のキーは委ねる形とする。
+//   委ねる形でも、保留と凍結を指す語が無ければ通す。
+//   前置きの無い形は、上の4つの規則と、次の2つの規則に当たらない限り、判定の対象にしない。
 //
 // 前置きの無い形に当てる2つの規則は、先頭のプログラムが何でも当てる。
 // 語を足す文脈は、指す語の有無を見ずに拒否する。代入の値は、値の字面だけを見る。
@@ -1287,6 +1293,39 @@ function assignmentValue(assignment: Word): Word {
 }
 
 /**
+ * 語の中で、コマンドとして実行されうる値の前に付く部分。
+ * `--opt=`、`<キー>=`(`-c`の値と`-c<キー>=`を含む)、ページャーの初期コマンドの`+…!`、シェルの別名の`!`である。
+ */
+const COMMAND_VALUE_PREFIX = /^(?:-{0,2}[A-Za-z_][\w.-]*=|\+[^\s!]*!|!)/;
+
+/** シェルの変数代入の形の前の部分。 */
+const SHELL_ASSIGNMENT_PREFIX = /^[A-Za-z_]\w*=/;
+
+/**
+ * 語に値の部分があれば、前の部分を外した値を語として返す。無いか、値が空ならnullを返す。
+ * `assignmentValue`と同じく、NULを除いた綴りからも前の部分を外し、`dynamic`と`glob`を引き継ぐ。
+ * 空白を含み、シェルの変数代入の形で始まる語(`LANG=C rg …`)は、nullを返す。
+ * その語はコマンドとして読むときに代入として外れ、値は代入の判定が空白までを見るので、後ろのコマンドまで値に含めない。
+ */
+function commandValue(word: Word): Word | null {
+  const prefix = COMMAND_VALUE_PREFIX.exec(word.text)?.[0];
+  if (prefix === undefined || prefix.length === word.text.length) return null;
+  if (/\s/.test(word.text) && SHELL_ASSIGNMENT_PREFIX.test(prefix)) {
+    return null;
+  }
+  const cut = (text: string) =>
+    text.slice(COMMAND_VALUE_PREFIX.exec(text)?.[0].length ?? 0);
+  return {
+    text: word.text.slice(prefix.length),
+    dynamic: word.dynamic,
+    glob: word.glob,
+    ...(word.variants === undefined
+      ? {}
+      : { variants: word.variants.map(cut) }),
+  };
+}
+
+/**
  * 前置きの後ろの起動語(`mise`、実行系、`docker`と`psql`)を、その位置から先頭のときと同じ規則で判定し直す。
  * 起動語が複数あれば、すべて調べる。数に上限を置き、超えたら拒否する。
  */
@@ -1340,9 +1379,11 @@ function isReadOnlyProgram(program: string, words: readonly Word[]): boolean {
  * 前置き自身が先頭のときは1、前置きの後ろの文字列から読んだコマンドは0である。
  * 1. 語を足すコマンド、シェル、読めない標準入力があれば、指す語の有無によらず`dynamic`で拒否する。
  * 2. 空白を含む語(`script -c`や`ssh`の文字列)と、標準入力の文字列は、コマンドとして読んで判定し直す。
+ *    語の値の部分(`--opt=<値>`、`<キー>=<値>`、`+…!<値>`、`!<値>`)も、値を先頭の語として判定する。
  * 3. 前置きの後ろの起動語は、既存の分岐で判定し直す。
  * 4. 語は、共起で見る。
  * 文字列から読んだコマンドが読み取りの道具なら、通す。
+ * 読み取りの道具が別のコマンドの実行を委ねる呼び出し(`delegatesExecution`)も、`from`を1にしてこの判定に通す。
  */
 function underPrefixFinding(
   words: readonly Word[],
@@ -1363,6 +1404,19 @@ function underPrefixFinding(
     const word = words[at];
     if (word === undefined || !/\s/.test(word.text)) continue;
     found = stronger(found, textFinding(word.text, context, "string"));
+    if (found === "operation") return found;
+  }
+  // 語の`=`より後ろと、`+…!`や`!`の後ろは、コマンドとして実行されうる。起動語が前の部分に隠れないよう、値を先頭の語として判定する。
+  // 値ごとの判定は、解析の回数に数える。
+  for (const word of words.slice(from)) {
+    const value = commandValue(word);
+    if (value === null) continue;
+    context.budget.parses += 1;
+    if (context.budget.parses > HOLD_MAX_PARSES) return "dynamic";
+    found = stronger(found, holdOperationAt([value], context));
+    if (/\s/.test(value.text)) {
+      found = stronger(found, textFinding(value.text, context, "string"));
+    }
     if (found === "operation") return found;
   }
   for (const text of context.own() ?? []) {
@@ -1569,6 +1623,7 @@ function holdOperationAt(
 
 /**
  * 先頭が`mise`、実行系、`docker`と`psql`、保留や凍結のCLIの直接実行のとき、その分岐の判定を返す。
+ * 先頭が読み取りの道具で、別のコマンドの実行を委ねる形(`delegatesExecution`)なら、前置きの後ろと同じ規則で判定する。
  * どれでもなければnullを返す。
  */
 function launchedFinding(
@@ -1592,6 +1647,10 @@ function launchedFinding(
       ? null
       : "operation";
   }
+  // 読み取りの道具が別のコマンドの実行を委ねる形は、前置きの後ろと同じ規則で、次の語から調べる。
+  if (delegatesExecution(program, words.slice(1))) {
+    return underPrefixFinding(words, 1, context);
+  }
   return null;
 }
 
@@ -1604,6 +1663,7 @@ function launchedFinding(
  * 実行系が標準入力をコードとして読む形で、出どころが保留か凍結のコード、または読めないものなら拒否する。
  * 先頭が`mise`、実行系、`docker`と`psql`、保留や凍結のCLIの直接実行なら、その引数を調べる。
  * 先頭が前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`)なら、前置きの規則で調べる。
+ * 先頭が読み取りの道具で、別のコマンドの実行を委ねる形(`git rebase`、`gh alias set`など)も、前置きの規則で調べる。
  * 前置きの無い語を足す文脈(`xargs`、`find`の実行系の式、`parallel`、`watch`、`strace`)は、
  * 実行される側が読み取りの閉じた集合に入らなければ拒否する。
  * 先頭の変数代入(`assignments`)の値が保留や凍結のコードを指していれば、実行する側によらず拒否する。
@@ -1779,6 +1839,50 @@ const GIT_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set([
   "--namespace",
   "--exec-path",
 ]);
+
+/**
+ * `git -c`で付けても、値がコマンドとして実行されないキー(小文字で比べる)。一覧の外のキーは、実行を委ねる形として扱う。
+ * 値が実行されるキーは、版ごとに増える開いた集合なので、拒否する側ではなく許す側を閉じた一覧にする。
+ */
+const GIT_INERT_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  "user.name",
+  "user.email",
+  "core.quotepath",
+  "core.autocrlf",
+  "core.safecrlf",
+  "core.abbrev",
+  "core.filemode",
+  "init.defaultbranch",
+  "commit.gpgsign",
+  "tag.gpgsign",
+  "safe.directory",
+]);
+
+/** 下の名前を問わず、値がコマンドとして実行されないキーの接頭辞。 */
+const GIT_INERT_CONFIG_PREFIXES: readonly string[] = ["color.", "advice."];
+
+/** `<キー>=<値>`か`<キー>`の文字列のキーが、値を実行しない一覧にあるなら真。 */
+function isInertGitConfigText(text: string): boolean {
+  const equals = text.indexOf("=");
+  const key = (equals === -1 ? text : text.slice(0, equals)).toLowerCase();
+  return (
+    GIT_INERT_CONFIG_KEYS.has(key) ||
+    GIT_INERT_CONFIG_PREFIXES.some((prefix) => key.startsWith(prefix))
+  );
+}
+
+/**
+ * `git -c`の値の語の、先頭の`skip`文字より後ろのキーが、値を実行しない一覧にあるなら真。
+ * `skip`は、くっついた形(`-c<キー>=<値>`)の`-c`を外すために使う。
+ * 語が無いか、実行時に決まるかglobなら、キーが決まらないので偽にする。
+ * NULを除いた綴りも、すべて一覧に当たるときだけ真にする。
+ */
+function isInertGitConfig(word: Word | undefined, skip = 0): boolean {
+  if (word === undefined || word.dynamic || word.glob) return false;
+  return [word.text, ...(word.variants ?? [])].every((text) =>
+    isInertGitConfigText(text.slice(skip)),
+  );
+}
 
 /** `find`が別のコマンドを実行する式。 */
 const FIND_EXECUTION = /^-(?:exec|execdir|ok|okdir)$/;
@@ -2057,8 +2161,14 @@ function gitExecutes(args: readonly Word[]): boolean {
   for (let index = 0; index < args.length; index += 1) {
     const text = args[index]?.text ?? "";
     if (subcommand === null) {
-      if (text.startsWith("-c") || text.startsWith("--config-env")) return true;
-      if (GIT_OPTIONS_WITH_VALUE.has(text)) {
+      // 値が環境変数から来る設定は、キーも値も字面から読めない。
+      if (text.startsWith("--config-env")) return true;
+      if (text === "-c") {
+        index += 1;
+        if (!isInertGitConfig(args[index])) return true;
+      } else if (text.startsWith("-c")) {
+        if (!isInertGitConfig(args[index], 2)) return true;
+      } else if (GIT_OPTIONS_WITH_VALUE.has(text)) {
         index += 1;
       } else if (!text.startsWith("-")) {
         subcommand = text;
@@ -2139,7 +2249,7 @@ function readerRefuses(
  * 名前、名前に当たりうるglob、ブレースの形があれば`script`を返す。名前を標準入力で受ける`xargs`も同じである。
  * 例外は次のとおりである。
  * - 読み取りなどのプログラム(`NON_EXECUTING_PROGRAMS`と、`bun test`などの検査の道具)。名前と実行を表す語が並ぶとき、
- *   実行を委ねるオプション(`git -c`、`rebase`、`gh alias set`、`rg --pre`など)があるとき、変数代入の値に名前があるときは拒否する。
+ *   実行を委ねるオプション(一覧の外のキーの`git -c`、`rebase`、`gh alias set`、`rg --pre`など)があるとき、変数代入の値に名前があるときは拒否する。
  * - `sed`、`bat`、`ag`。名前がファイルのパスの形の語にあるときだけ通す。
  * - シェル。起動オプションを読んで決まった`-c`の文字列は再帰で別に調べるので、それ以外の語と標準入力の文字列に名前があるときだけ拒否する。
  * - `wmill`が解除scriptを実行せずに読む・配る副コマンド(`script get`、`job list`、`script push`など)。
