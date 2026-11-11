@@ -5403,3 +5403,62 @@ describeForCallers(
     });
   },
 );
+
+// 送信のコマンド、副コマンドの実体の置き場所、設定を書く副コマンド、取り込み、gitへ渡す引数も、実行を委ねる形として扱う。
+describeForCallers(
+  "bash-guard denies holds or freezes written through more ways that git or gh runs a command",
+  (subagent) => {
+    test.each([
+      [
+        "a send command",
+        "git send-email --to-cmd='bun scripts/hold.ts release 1' x.patch",
+      ],
+      [
+        "a web server command",
+        "git instaweb --httpd='bun scripts/freeze.ts release 1'",
+      ],
+      [
+        "a clone setting",
+        "git clone -c core.fsmonitor='bun scripts/hold.ts release 1' https://example.com/r.git",
+      ],
+      [
+        "a setting written for later",
+        "git config core.pager 'bun scripts/hold.ts release 1'",
+      ],
+      [
+        "a global setting written for later",
+        "git config --global sequence.editor 'bun scripts/freeze.ts reset'",
+      ],
+      [
+        "a gh setting written for later",
+        "gh config set pager 'bun scripts/freeze.ts release 1'",
+      ],
+      [
+        "an imported gh alias",
+        "gh alias import - <<'X'\nx: '!bun scripts/hold.ts release 1'\nX\n",
+      ],
+      ["a bang gh alias", "gh alias set x '!bun scripts/hold.ts place'"],
+      [
+        "git arguments after gh",
+        "gh repo clone o/r -- --upload-pack='bun scripts/hold.ts release 1'",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows git and gh settings that touch no holds or freezes",
+  (subagent) => {
+    test.each([
+      "git config user.name x",
+      "git config --get core.pager",
+      "gh config get pager",
+      "gh config set git_protocol ssh",
+      "gh repo clone o/r -- --depth=1",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
