@@ -6261,3 +6261,42 @@ describe("bash-guard allows leading assignments in front of reads", () => {
     expect(await decide(command, { subagent: true })).toBe("allow");
   });
 });
+
+// 読めない入れ子の文字列は、引用符とバックスラッシュを除いた綴りでも字面を判定する。語の途中の空の引用で名前を分けた形を見落とさないためである。
+describeForCallers(
+  "bash-guard denies guarded names split by empty quotes inside unreadable nested strings",
+  (subagent) => {
+    test.each([
+      [
+        "a hold path in a remote case",
+        `ssh host "case x in x) bun scripts/ho''ld.ts place;; esac"`,
+      ],
+      [
+        "a stop path in a remote case",
+        `ssh host "case x in x) bun scripts/stop_al''l.ts;; esac"`,
+      ],
+      [
+        "a stop task in a remote case",
+        `ssh host "case x in x) mise run st''op;; esac"`,
+      ],
+      [
+        "a hold path in a pager setting",
+        `git -c core.pager="case x in x) bun scripts/ho''ld.ts place;; esac" log`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows unreadable nested strings without guarded names",
+  (subagent) => {
+    test.each([`ssh host "case x in x) echo hi;; esac"`])(
+      "allows %s",
+      async (command) => {
+        expect(await decide(command, { subagent })).toBe("allow");
+      },
+    );
+  },
+);
