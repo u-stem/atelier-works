@@ -6,18 +6,15 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Locator, Page } from "@playwright/test";
 import { isRecord } from "../src/api/guards/primitives.ts";
+import { THEMES, WCAG_TAGS } from "./axeScope.ts";
+import { RUNNING_FLOW_JOB } from "./fixtures.ts";
 import type { MockApi } from "./mockApi.ts";
-import { expect, openScreen, type Theme, test } from "./support.ts";
+import { WRITE_SCRIPT, type WriteScript } from "./responses.ts";
+import { expect, openScreen, test } from "./support.ts";
 
 const QUERY = "f/factory/steps/console_query";
 const HOLDS = "f/factory/console_holds";
 const JOBS = "f/factory/console_jobs";
-const APPROVAL = "f/factory/approval_decide";
-const CANCEL = "f/factory/console_job_cancel";
-const PLACE = "f/factory/console_hold_place";
-const STOP_ALL = "f/factory/console_stop_all";
-
-const RUNNING_JOB_ID = "0190a1b2-c3d4-7e5f-8a9b-000000000002";
 
 /** トーストの閉じるボタンの名前。 */
 const CLOSE_LABEL = "知らせを閉じる";
@@ -28,8 +25,6 @@ const UNKNOWN_RESULT = "結果が分かりません。";
 const APPROVAL_REFUSAL =
   "この依頼には、別の決定が記録済みか、期限が切れています。";
 
-const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
-
 /** 文を含むトースト。 */
 function toastWith(page: Page, text: string): Locator {
   return page.locator("[data-sonner-toast]").filter({ hasText: text });
@@ -39,18 +34,20 @@ function closeButtonOf(toast: Locator): Locator {
   return toast.getByRole("button", { name: CLOSE_LABEL });
 }
 
-/** 受け口が応答した呼び出しのうち、scriptと引数の一部が合うものの件数。読み直しを確かめるのに使う。 */
-function callsOf(
-  mock: MockApi,
-  script: string,
-  args: Readonly<Record<string, unknown>> = {},
-): number {
+/** 書き込みの後に読み直す取得。scriptと、引数の一部で指す。 */
+type Read = {
+  readonly script: string;
+  readonly args: Readonly<Record<string, unknown>>;
+};
+
+/** 受け口が応答した呼び出しのうち、取得に合うものの件数。読み直しを確かめるのに使う。 */
+function callsOf(mock: MockApi, read: Read): number {
   return mock.calls.filter((call) => {
     const sent = call.args;
     return (
-      call.script === script &&
+      call.script === read.script &&
       isRecord(sent) &&
-      Object.entries(args).every(([key, value]) => sent[key] === value)
+      Object.entries(read.args).every(([key, value]) => sent[key] === value)
     );
   }).length;
 }
@@ -80,6 +77,14 @@ async function overlaps(first: Locator, second: Locator): Promise<boolean> {
   const b = await second.boundingBox();
   if (a === null || b === null) return true;
   return a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+/** フォーカスの輪郭を描く計算値。輪郭(`outline`)と影(`box-shadow`)である。 */
+function focusRingOf(toast: Locator): Promise<string> {
+  return toast.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return `${style.outlineStyle} ${style.outlineWidth} | ${style.boxShadow}`;
+  });
 }
 
 /** 確認のダイアログの確認のボタンを押す。 */
@@ -126,279 +131,154 @@ async function stopAll(page: Page): Promise<void> {
 }
 
 const INBOX_APPROVAL = "?approval=1";
-const JOB_DETAIL = `jobs/${RUNNING_JOB_ID}`;
 const SYSTEM = "system";
 
-test.describe("approve", () => {
-  test.describe("success", () => {
-    test.use({ writes: { [APPROVAL]: "success" } });
+const SUMMARY: Read = { script: QUERY, args: { view: "summary" } };
 
-    test("approve: a success shows a success toast and reads the summary again", async ({
-      page,
-      mock,
-    }) => {
-      await openScreen(page, INBOX_APPROVAL);
-      const before = callsOf(mock, QUERY, { view: "summary" });
-      await approve(page);
+/** 書き込みの操作と、結果ごとに期待する表示。 */
+type Operation = {
+  readonly name: string;
+  /** 操作する画面の経路(`/console/`の下)。 */
+  readonly path: string;
+  readonly script: WriteScript;
+  /** ボタンを押し、確認を通して送る。 */
+  readonly act: (page: Page) => Promise<void>;
+  /** 成功のトーストの文。 */
+  readonly success: string;
+  /** 成功の後に読み直す取得と、その名前。 */
+  readonly rereads: { readonly name: string; readonly reads: readonly Read[] };
+  /** 断りのトーストの文と色。 */
+  readonly refusal: { readonly message: string; readonly type: string };
+};
 
-      await expect(toastWith(page, "承認しました。")).toHaveAttribute(
-        "data-type",
-        "success",
-      );
-      await expect
-        .poll(() => callsOf(mock, QUERY, { view: "summary" }))
-        .toBeGreaterThan(before);
+const OPERATIONS: readonly Operation[] = [
+  {
+    name: "approve",
+    path: INBOX_APPROVAL,
+    script: WRITE_SCRIPT.approval,
+    act: approve,
+    success: "承認しました。",
+    rereads: { name: "the summary", reads: [SUMMARY] },
+    refusal: { message: APPROVAL_REFUSAL, type: "error" },
+  },
+  {
+    name: "reject",
+    path: INBOX_APPROVAL,
+    script: WRITE_SCRIPT.approval,
+    act: reject,
+    success: "却下しました。",
+    rereads: { name: "the summary", reads: [SUMMARY] },
+    refusal: { message: APPROVAL_REFUSAL, type: "error" },
+  },
+  {
+    name: "cancel",
+    path: `jobs/${RUNNING_FLOW_JOB.id}`,
+    script: WRITE_SCRIPT.cancel,
+    act: cancel,
+    success: "ジョブを中止しました。",
+    rereads: {
+      name: "the job",
+      reads: [{ script: JOBS, args: { view: "detail", include_output: true } }],
+    },
+    refusal: { message: "すでに終わっています。", type: "info" },
+  },
+  {
+    name: "hold",
+    path: SYSTEM,
+    script: WRITE_SCRIPT.place,
+    act: placeHold,
+    success: "マージの保留を置きました。",
+    rereads: {
+      name: "the holds",
+      reads: [
+        { script: HOLDS, args: {} },
+        { script: QUERY, args: { view: "system_status" } },
+      ],
+    },
+    refusal: { message: "有効な保留か凍結がすでにあります。", type: "info" },
+  },
+  {
+    name: "stop all",
+    path: SYSTEM,
+    script: WRITE_SCRIPT.stopAll,
+    act: stopAll,
+    success: "全停止しました。",
+    rereads: { name: "the holds", reads: [{ script: HOLDS, args: {} }] },
+    refusal: { message: "全停止の状態を読めません。", type: "info" },
+  },
+];
+
+for (const operation of OPERATIONS) {
+  const { name, path, script, act, success, rereads, refusal } = operation;
+
+  test.describe(name, () => {
+    test.describe("success", () => {
+      test.use({ writes: { [script]: "success" } });
+
+      test(`${name}: a success shows a success toast`, async ({ page }) => {
+        await openScreen(page, path);
+        await act(page);
+
+        await expect(toastWith(page, success)).toHaveAttribute(
+          "data-type",
+          "success",
+        );
+      });
+
+      test(`${name}: a success reads ${rereads.name} again`, async ({
+        page,
+        mock,
+      }) => {
+        await openScreen(page, path);
+        const counts = () => rereads.reads.map((read) => callsOf(mock, read));
+        const before = counts();
+        await act(page);
+
+        await expect
+          .poll(() =>
+            counts().every((count, index) => count > (before[index] ?? 0)),
+          )
+          .toBe(true);
+      });
+    });
+
+    test.describe("refusal", () => {
+      test.use({ writes: { [script]: "refused" } });
+
+      test(`${name}: a refusal shows a toast with a close button`, async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        await act(page);
+        const toast = toastWith(page, refusal.message);
+
+        await expect(toast).toHaveAttribute("data-type", refusal.type);
+        await expect(closeButtonOf(toast)).toBeVisible();
+      });
+    });
+
+    test.describe("server error", () => {
+      test.use({ writes: { [script]: "server_error" } });
+
+      test(`${name}: a server error shows a failure toast with a close button`, async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        await act(page);
+        const toast = toastWith(page, UNKNOWN_RESULT);
+
+        await expect(toast).toHaveAttribute("data-type", "error");
+        await expect(closeButtonOf(toast)).toBeVisible();
+      });
     });
   });
-
-  test.describe("refusal", () => {
-    test.use({ writes: { [APPROVAL]: "refused" } });
-
-    test("approve: a refusal shows a toast with a close button", async ({
-      page,
-    }) => {
-      await openScreen(page, INBOX_APPROVAL);
-      await approve(page);
-      const toast = toastWith(page, APPROVAL_REFUSAL);
-
-      await expect(toast).toHaveAttribute("data-type", "error");
-      await expect(closeButtonOf(toast)).toBeVisible();
-    });
-  });
-
-  test.describe("server error", () => {
-    test.use({ writes: { [APPROVAL]: "server_error" } });
-
-    test("approve: a server error shows a failure toast with a close button", async ({
-      page,
-    }) => {
-      await openScreen(page, INBOX_APPROVAL);
-      await approve(page);
-      const toast = toastWith(page, UNKNOWN_RESULT);
-
-      await expect(toast).toHaveAttribute("data-type", "error");
-      await expect(closeButtonOf(toast)).toBeVisible();
-    });
-  });
-});
-
-test.describe("reject", () => {
-  test.describe("success", () => {
-    test.use({ writes: { [APPROVAL]: "success" } });
-
-    test("reject: a success shows a success toast and reads the summary again", async ({
-      page,
-      mock,
-    }) => {
-      await openScreen(page, INBOX_APPROVAL);
-      const before = callsOf(mock, QUERY, { view: "summary" });
-      await reject(page);
-
-      await expect(toastWith(page, "却下しました。")).toHaveAttribute(
-        "data-type",
-        "success",
-      );
-      await expect
-        .poll(() => callsOf(mock, QUERY, { view: "summary" }))
-        .toBeGreaterThan(before);
-    });
-  });
-
-  test.describe("refusal", () => {
-    test.use({ writes: { [APPROVAL]: "refused" } });
-
-    test("reject: a refusal shows a toast with a close button", async ({
-      page,
-    }) => {
-      await openScreen(page, INBOX_APPROVAL);
-      await reject(page);
-      const toast = toastWith(page, APPROVAL_REFUSAL);
-
-      await expect(toast).toHaveAttribute("data-type", "error");
-      await expect(closeButtonOf(toast)).toBeVisible();
-    });
-  });
-
-  test.describe("server error", () => {
-    test.use({ writes: { [APPROVAL]: "server_error" } });
-
-    test("reject: a server error shows a failure toast with a close button", async ({
-      page,
-    }) => {
-      await openScreen(page, INBOX_APPROVAL);
-      await reject(page);
-      const toast = toastWith(page, UNKNOWN_RESULT);
-
-      await expect(toast).toHaveAttribute("data-type", "error");
-      await expect(closeButtonOf(toast)).toBeVisible();
-    });
-  });
-});
-
-test.describe("cancel", () => {
-  test.describe("success", () => {
-    test.use({ writes: { [CANCEL]: "success" } });
-
-    test("cancel: a success shows a success toast and reads the job again", async ({
-      page,
-      mock,
-    }) => {
-      await openScreen(page, JOB_DETAIL);
-      const detail = { view: "detail", include_output: true };
-      const before = callsOf(mock, JOBS, detail);
-      await cancel(page);
-
-      await expect(toastWith(page, "ジョブを中止しました。")).toHaveAttribute(
-        "data-type",
-        "success",
-      );
-      await expect
-        .poll(() => callsOf(mock, JOBS, detail))
-        .toBeGreaterThan(before);
-    });
-  });
-
-  test.describe("refusal", () => {
-    test.use({ writes: { [CANCEL]: "refused" } });
-
-    test("cancel: a refusal shows a toast with a close button", async ({
-      page,
-    }) => {
-      await openScreen(page, JOB_DETAIL);
-      await cancel(page);
-      const toast = toastWith(page, "すでに終わっています。");
-
-      await expect(toast).toHaveAttribute("data-type", "info");
-      await expect(closeButtonOf(toast)).toBeVisible();
-    });
-  });
-
-  test.describe("server error", () => {
-    test.use({ writes: { [CANCEL]: "server_error" } });
-
-    test("cancel: a server error shows a failure toast with a close button", async ({
-      page,
-    }) => {
-      await openScreen(page, JOB_DETAIL);
-      await cancel(page);
-      const toast = toastWith(page, UNKNOWN_RESULT);
-
-      await expect(toast).toHaveAttribute("data-type", "error");
-      await expect(closeButtonOf(toast)).toBeVisible();
-    });
-  });
-});
-
-test.describe("hold", () => {
-  test.describe("success", () => {
-    test.use({ writes: { [PLACE]: "success" } });
-
-    test("hold: a success shows a success toast and reads the holds again", async ({
-      page,
-      mock,
-    }) => {
-      await openScreen(page, SYSTEM);
-      const holds = callsOf(mock, HOLDS);
-      const status = callsOf(mock, QUERY, { view: "system_status" });
-      await placeHold(page);
-
-      await expect(
-        toastWith(page, "マージの保留を置きました。"),
-      ).toHaveAttribute("data-type", "success");
-      await expect.poll(() => callsOf(mock, HOLDS)).toBeGreaterThan(holds);
-      await expect
-        .poll(() => callsOf(mock, QUERY, { view: "system_status" }))
-        .toBeGreaterThan(status);
-    });
-  });
-
-  test.describe("refusal", () => {
-    test.use({ writes: { [PLACE]: "refused" } });
-
-    test("hold: a refusal shows a toast with a close button", async ({
-      page,
-    }) => {
-      await openScreen(page, SYSTEM);
-      await placeHold(page);
-      const toast = toastWith(page, "有効な保留か凍結がすでにあります。");
-
-      await expect(toast).toHaveAttribute("data-type", "info");
-      await expect(closeButtonOf(toast)).toBeVisible();
-    });
-  });
-
-  test.describe("server error", () => {
-    test.use({ writes: { [PLACE]: "server_error" } });
-
-    test("hold: a server error shows a failure toast with a close button", async ({
-      page,
-    }) => {
-      await openScreen(page, SYSTEM);
-      await placeHold(page);
-      const toast = toastWith(page, UNKNOWN_RESULT);
-
-      await expect(toast).toHaveAttribute("data-type", "error");
-      await expect(closeButtonOf(toast)).toBeVisible();
-    });
-  });
-});
-
-test.describe("stop all", () => {
-  test.describe("success", () => {
-    test.use({ writes: { [STOP_ALL]: "success" } });
-
-    test("stop all: a success shows a success toast and reads the holds again", async ({
-      page,
-      mock,
-    }) => {
-      await openScreen(page, SYSTEM);
-      const before = callsOf(mock, HOLDS);
-      await stopAll(page);
-
-      await expect(toastWith(page, "全停止しました。")).toHaveAttribute(
-        "data-type",
-        "success",
-      );
-      await expect.poll(() => callsOf(mock, HOLDS)).toBeGreaterThan(before);
-    });
-  });
-
-  test.describe("refusal", () => {
-    test.use({ writes: { [STOP_ALL]: "refused" } });
-
-    test("stop all: a refusal shows a toast with a close button", async ({
-      page,
-    }) => {
-      await openScreen(page, SYSTEM);
-      await stopAll(page);
-      const toast = toastWith(page, "全停止の状態を読めません。");
-
-      await expect(toast).toHaveAttribute("data-type", "info");
-      await expect(closeButtonOf(toast)).toBeVisible();
-    });
-  });
-
-  test.describe("server error", () => {
-    test.use({ writes: { [STOP_ALL]: "server_error" } });
-
-    test("stop all: a server error shows a failure toast with a close button", async ({
-      page,
-    }) => {
-      await openScreen(page, SYSTEM);
-      await stopAll(page);
-      const toast = toastWith(page, UNKNOWN_RESULT);
-
-      await expect(toast).toHaveAttribute("data-type", "error");
-      await expect(closeButtonOf(toast)).toBeVisible();
-    });
-  });
-});
+}
 
 test.describe("a toast that stays", () => {
   test.describe("after a failure", () => {
-    test.use({ writes: { [STOP_ALL]: "server_error" } });
+    test.use({ writes: { [WRITE_SCRIPT.stopAll]: "server_error" } });
 
-    test("a failure outlasts the lifetime of a success toast and goes with its close button", async ({
+    test("a failure outlasts the lifetime of a success toast", async ({
       page,
     }) => {
       await openScreen(page, SYSTEM);
@@ -409,7 +289,14 @@ test.describe("a toast that stays", () => {
       await page.waitForTimeout(6_000);
 
       await expect(toast).toBeVisible();
+    });
+
+    test("a failure goes with its close button", async ({ page }) => {
+      await openScreen(page, SYSTEM);
+      await stopAll(page);
+      const toast = toastWith(page, UNKNOWN_RESULT);
       await closeButtonOf(toast).click();
+
       await expect(toast).toHaveCount(0);
     });
 
@@ -429,10 +316,42 @@ test.describe("a toast that stays", () => {
       await page.keyboard.press("Enter");
       await expect(toast).toHaveCount(0);
     });
+
+    test("a toast focused with the keyboard shows a ring", async ({ page }) => {
+      await openScreen(page, SYSTEM);
+      await stopAll(page);
+      const toast = toastWith(page, UNKNOWN_RESULT);
+      await expect(toast).toBeVisible();
+      const unfocused = await focusRingOf(toast);
+      await page.keyboard.press("Alt+KeyT");
+      await page.keyboard.press("Tab");
+      await expect(toast).toBeFocused();
+
+      // 影はフォーカスが無くても付くので、計算値が`none`でないだけでなく、フォーカスで変わることを見る。
+      await expect.poll(() => focusRingOf(toast)).not.toBe(unfocused);
+    });
+  });
+
+  test.describe("after a success", () => {
+    test.use({ writes: { [WRITE_SCRIPT.stopAll]: "success" } });
+
+    test("a success toast has a close button too", async ({ page }) => {
+      await openScreen(page, SYSTEM);
+      await stopAll(page);
+
+      await expect(
+        closeButtonOf(toastWith(page, "全停止しました。")),
+      ).toBeVisible();
+    });
   });
 
   test.describe("after two refusals", () => {
-    test.use({ writes: { [PLACE]: "refused", [STOP_ALL]: "refused" } });
+    test.use({
+      writes: {
+        [WRITE_SCRIPT.place]: "refused",
+        [WRITE_SCRIPT.stopAll]: "refused",
+      },
+    });
 
     test("two toasts that stay can both be read", async ({ page }) => {
       const hold = toastWith(page, "有効な保留か凍結がすでにあります。");
@@ -454,11 +373,9 @@ test.describe("a toast that stays", () => {
   });
 });
 
-const THEMES: readonly Theme[] = ["light", "dark"];
-
 for (const theme of THEMES) {
   test.describe(`axe with a toast that stays (${theme})`, () => {
-    test.use({ writes: { [STOP_ALL]: "server_error" }, theme });
+    test.use({ writes: { [WRITE_SCRIPT.stopAll]: "server_error" }, theme });
 
     test(`a toast that stays passes axe (${theme})`, async ({ page }) => {
       await openScreen(page, SYSTEM);
@@ -468,12 +385,12 @@ for (const theme of THEMES) {
       ).toBeVisible();
 
       const results = await new AxeBuilder({ page })
-        .withTags(WCAG_TAGS)
+        .withTags([...WCAG_TAGS])
         .analyze();
       // トーストの文の色が測られずに通る事態を防ぐため、トーストだけを測った結果も見る。
       const toaster = await new AxeBuilder({ page })
         .include("[data-sonner-toaster]")
-        .withTags(WCAG_TAGS)
+        .withTags([...WCAG_TAGS])
         .analyze();
 
       expect(results.violations.map((violation) => violation.id)).toEqual([]);

@@ -36,12 +36,14 @@ import { canCancelJob } from "../src/lib/jobActions.ts";
 import {
   APPROVAL_DESIGN_DOC_NORMAL,
   APPROVAL_DESIGN_DOC_TRUNCATED_ITEM,
+  RUNNING_FLOW_JOB,
 } from "./fixtures.ts";
 import {
   type Mode,
   type Reply,
   replyFor,
   scriptOfPath,
+  WRITE_SCRIPT,
   type WriteResult,
   type WriteScript,
 } from "./responses.ts";
@@ -193,17 +195,17 @@ describe("requests the checks do not expect", () => {
   });
 });
 
-const APPROVAL = "f/factory/approval_decide";
-const CANCEL = "f/factory/console_job_cancel";
-const PLACE = "f/factory/console_hold_place";
-const STOP_ALL = "f/factory/console_stop_all";
+const APPROVAL = WRITE_SCRIPT.approval;
+const CANCEL = WRITE_SCRIPT.cancel;
+const PLACE = WRITE_SCRIPT.place;
+const STOP_ALL = WRITE_SCRIPT.stopAll;
 
 const APPROVE_ARGS = {
   approval_request_id: 1,
   decision: "approve",
   reason: "",
 };
-const CANCEL_ARGS = { job_id: "0190a1b2-c3d4-7e5f-8a9b-000000000002" };
+const CANCEL_ARGS = { job_id: RUNNING_FLOW_JOB.id };
 const PLACE_ARGS = { kind: "merge", target: "o/r", minutes: 60, reason: "x" };
 const STOP_ALL_ARGS = { reason: "x" };
 

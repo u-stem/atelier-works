@@ -150,14 +150,16 @@ function jobsReply(args: unknown, mode: Mode): Reply | null {
 export type WriteResult = "success" | "refused" | "server_error";
 
 /** 検査が応答させうる書き込みのscript。ここに無い書き込みのscriptには、結果を選んでも応答しない。 */
-export const WRITE_SCRIPTS = [
-  "f/factory/approval_decide",
-  "f/factory/console_job_cancel",
-  "f/factory/console_hold_place",
-  "f/factory/console_stop_all",
-] as const;
+export const WRITE_SCRIPT = {
+  approval: "f/factory/approval_decide",
+  cancel: "f/factory/console_job_cancel",
+  place: "f/factory/console_hold_place",
+  stopAll: "f/factory/console_stop_all",
+} as const;
 
-export type WriteScript = (typeof WRITE_SCRIPTS)[number];
+export type WriteScript = (typeof WRITE_SCRIPT)[keyof typeof WRITE_SCRIPT];
+
+const WRITE_SCRIPTS: readonly WriteScript[] = Object.values(WRITE_SCRIPT);
 
 /** scriptごとに選んだ結果。空なら、書き込みには応答しない(既定)。 */
 export type WriteReplies = Readonly<Partial<Record<WriteScript, WriteResult>>>;

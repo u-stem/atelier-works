@@ -6,6 +6,7 @@
 
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
+import { THEMES, WCAG_TAGS } from "./axeScope.ts";
 import { INTAKE_STATES } from "./intakeStates.ts";
 import {
   expect,
@@ -16,14 +17,6 @@ import {
   test,
 } from "./support.ts";
 
-const WCAG_TAGS: readonly string[] = [
-  "wcag2a",
-  "wcag2aa",
-  "wcag21a",
-  "wcag21aa",
-];
-
-const THEMES: readonly Theme[] = ["light", "dark"];
 const MODES: readonly Mode[] = ["normal", "empty"];
 
 /**

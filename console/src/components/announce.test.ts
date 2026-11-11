@@ -3,7 +3,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { ExternalToast } from "sonner";
 import type { ReleaseNotice } from "../lib/writeNotices.ts";
-import { announceWith, type Toaster } from "./announce.ts";
+import {
+  type AnnounceOptions,
+  announceWith,
+  type Toaster,
+} from "./announce.ts";
 
 type Call = {
   readonly tone: ReleaseNotice["tone"];
@@ -12,7 +16,7 @@ type Call = {
 };
 
 /** 知らせを出して、トーストの呼び出しを記録する。 */
-function announced(notice: ReleaseNotice, description?: string): Call[] {
+function announced(notice: ReleaseNotice, options?: AnnounceOptions): Call[] {
   const calls: Call[] = [];
   const toaster: Toaster = {
     success: (message, data) => calls.push({ tone: "success", message, data }),
@@ -20,7 +24,7 @@ function announced(notice: ReleaseNotice, description?: string): Call[] {
     warning: (message, data) => calls.push({ tone: "warning", message, data }),
     error: (message, data) => calls.push({ tone: "error", message, data }),
   };
-  announceWith(toaster, notice, description);
+  announceWith(toaster, notice, options);
   return calls;
 }
 
@@ -42,27 +46,45 @@ describe("announceWith", () => {
     ).toBeUndefined();
   });
 
-  test("gives a success no close button", () => {
-    expect(
-      announced({ tone: "success", message: "m" })[0]?.data?.closeButton,
-    ).toBeUndefined();
-  });
-
   test.each(NOT_SUCCESS)("keeps a %s notice until it is closed", (tone) => {
     expect(announced({ tone, message: "m" })[0]?.data?.duration).toBe(
       Number.POSITIVE_INFINITY,
     );
   });
 
-  test.each(NOT_SUCCESS)("gives a %s notice a close button", (tone) => {
-    expect(announced({ tone, message: "m" })[0]?.data?.closeButton).toBe(true);
-  });
+  test.each(NOT_SUCCESS)(
+    "lets a transient %s notice close by itself",
+    (tone) => {
+      expect(
+        announced({ tone, message: "m" }, { transient: true })[0]?.data
+          ?.duration,
+      ).toBeUndefined();
+    },
+  );
 
   test("adds the description under the message", () => {
     expect(
-      announced({ tone: "warning", message: "m" }, "作業項目 #7")[0]?.data
-        ?.description,
+      announced(
+        { tone: "warning", message: "m" },
+        { description: "作業項目 #7" },
+      )[0]?.data?.description,
     ).toBe("作業項目 #7");
+  });
+
+  test("puts the next step under the message", () => {
+    expect(
+      announced({ tone: "info", message: "m", nextStep: "n" })[0]?.data
+        ?.description,
+    ).toBe("n");
+  });
+
+  test("puts the next step after the description", () => {
+    expect(
+      announced(
+        { tone: "info", message: "m", nextStep: "n" },
+        { description: "作業項目 #7" },
+      )[0]?.data?.description,
+    ).toBe("作業項目 #7 n");
   });
 });
 
@@ -79,13 +101,12 @@ function filesImportingSonner(): string[] {
 }
 
 // 書き込みの結果のトーストは`announce`から出す。直にトーストを出してよいのは、次のファイルだけである。
-// 置き場の部品、版の複製の知らせ、確認が消えたことの知らせ、設定のタブの知らせ(閉じるまで残す知らせは別に置く)。
+// 置き場の部品、版の複製の知らせ、確認が消えたことの知らせ。
 const ALLOWED_SONNER_IMPORTERS = [
   "components/announce.ts",
   "components/ui/sonner.tsx",
   "screens/inbox/FailureOverview.tsx",
   "screens/inbox/NoticeMessageText.tsx",
-  "screens/system/useConfigChange.ts",
 ];
 
 describe("the toasts of the writes", () => {
