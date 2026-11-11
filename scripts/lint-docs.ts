@@ -12,15 +12,18 @@
 // ファイルの大きさが偏らないように振り分け、1つでも失敗かシグナルで終われば全体を失敗にする。
 // textlintの規則は文書の単位で働くので、分けても指摘の集合は変わらない。
 //
-// 対象は、gitが追跡している(インデックスを含む)`.md`のうち、`isTargetDoc`が選ぶもの。
-// 未追跡のファイルと無視されたファイルは見ない。下書きの壊れたリンクで、無関係なコミットを止めないため。
-// 作業ツリーで消えていて、インデックスに残るファイルは、読めないので飛ばす。
+// 対象は、`isTargetDoc`が選ぶ`.md`。ただし、集め方が検査によって違う。
+// - 規則、markdownlint、textlintは、gitが追跡している`.md`と、未追跡で無視されていない`.md`を見る(`listDocCandidates`)。
+//   `git add`する前の新しい文書にも検査をかけるため。
+// - リンクの検査は、gitが追跡している(インデックスを含む)ファイルだけを見る(`listRepoFiles`)。
+//   未追跡の下書きの壊れたリンクで、無関係なコミットを止めないため。
+// どちらも、作業ツリーで消えていてインデックスに残るファイルは、読めないので飛ばす。
 // `wmill`が生成するファイルと外から取り込んだスキルは、自分で書き直さないので対象外にする。
 //
 // 使い方: bun run scripts/lint-docs.ts [--links-only] [file...]
 // 引数があれば、規則、markdownlint、textlintは、そのうち対象のファイルだけを検査する(pre-commitで使う)。
 // 相対パスの引数は、カレントディレクトリから解決する。読めない、または対象外のファイルは飛ばす。
-// リンクの検査は引数にかかわらず対象の全文書を見る。
+// リンクの検査は引数にかかわらず、追跡している対象の全文書を見る。
 // 見出しを変えると、変えていない文書からのリンクが壊れるため。
 // `--links-only`は、リンクの検査だけを実行する(約1秒)。
 // リンク先や文書の削除、`.md`以外のファイルの改名による壊れたリンクを、文書を変えていないコミットでも止めるために使う。
@@ -152,8 +155,8 @@ export function createDocReader(root: string): ReadDoc {
   };
 }
 
-function gitFiles(root: string, option: string): string[] {
-  const result = Bun.spawnSync(["git", "ls-files", "-z", option], {
+function gitFiles(root: string, ...args: string[]): string[] {
+  const result = Bun.spawnSync(["git", "ls-files", "-z", ...args], {
     cwd: root,
   });
   if (result.exitCode !== 0) {
@@ -174,6 +177,23 @@ function gitFiles(root: string, option: string): string[] {
 export function listRepoFiles(root: string): string[] {
   const deleted = new Set(gitFiles(root, "--deleted"));
   return gitFiles(root, "--cached").filter((path) => !deleted.has(path));
+}
+
+/**
+ * 規則とツールで検査する`.md`の候補を、`root`からの相対パスで返す。
+ * gitが追跡しているファイルに加え、未追跡で無視されていないファイルも含める。
+ * `git add`する前の新しい文書にも検査をかけるため。
+ * 作業ツリーで消えていて、インデックスに残るファイルも含むので、読めるかは呼び出し側が確かめる。
+ */
+export function listDocCandidates(root: string): string[] {
+  return gitFiles(
+    root,
+    "--cached",
+    "--others",
+    "--exclude-standard",
+    "--",
+    "*.md",
+  );
 }
 
 /**
@@ -401,46 +421,52 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-const REPO_ROOT = join(import.meta.dir, "..");
-
-/** 本番の`deps`。子プロセスはリポジトリの根で、環境変数を引き継いで起動する。 */
-export function createProductionDeps(): LintDeps {
+/** 本番の`deps`。子プロセスは`root`で、環境変数を引き継いで起動する。 */
+export function createProductionDeps(root: string): LintDeps {
   return {
     spawn: (argv) =>
       Bun.spawn([...argv], {
-        cwd: REPO_ROOT,
+        cwd: root,
         env: process.env,
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
       }),
     cpuCount: availableParallelism(),
-    sizeOf: (path) => statSync(resolve(REPO_ROOT, path)).size,
+    sizeOf: (path) => statSync(resolve(root, path)).size,
     write: (text) => {
       process.stderr.write(text);
     },
   };
 }
 
-async function main(): Promise<void> {
-  const { linksOnly, paths } = parseArgs(process.argv.slice(2));
-  const readDoc = createDocReader(REPO_ROOT);
-  const files = listRepoFiles(REPO_ROOT);
+/**
+ * `root`のリポジトリを検査し、問題があれば1、なければ0を返す。報告は1行ずつ`report`に渡す。
+ * `args`はコマンドラインの引数、`cwd`は相対パスの引数を解決する基準。
+ * 実際の根は実行の入口だけが渡す。
+ */
+export async function main(
+  root: string,
+  args: readonly string[],
+  cwd: string,
+  report: (line: string) => void = (line) => console.error(line),
+): Promise<number> {
+  const { linksOnly, paths } = parseArgs(args);
+  const readDoc = createDocReader(root);
+  const files = listRepoFiles(root);
   const linkProblems = guardCheck("document links", () =>
     lintAllDocLinks(files, readDoc),
   );
 
   if (linksOnly) {
-    for (const problem of linkProblems) console.error(problem);
-    if (linkProblems.length > 0) process.exitCode = 1;
-    return;
+    for (const problem of linkProblems) report(problem);
+    return linkProblems.length > 0 ? 1 : 0;
   }
 
-  const cwd = process.cwd();
   const candidates =
     paths.length > 0
-      ? paths.map((path) => toRepoPath(REPO_ROOT, path, cwd))
-      : files.filter((path) => path.endsWith(".md"));
+      ? paths.map((path) => toRepoPath(root, path, cwd))
+      : listDocCandidates(root);
   const targets = [...new Set(candidates)]
     .filter((path) => isTargetDoc(path) && readDoc(path) !== undefined)
     .sort();
@@ -451,22 +477,25 @@ async function main(): Promise<void> {
     if (markdown !== undefined) problems.push(...lintDocText(path, markdown));
   }
   problems.push(...linkProblems);
-  for (const problem of problems) console.error(problem);
+  for (const problem of problems) report(problem);
 
-  const toolsOk = await lintWithTools(targets, createProductionDeps());
+  const toolsOk = await lintWithTools(targets, createProductionDeps(root));
 
   const genProblems = runDocsGen(false);
-  for (const problem of genProblems) console.error(problem);
+  for (const problem of genProblems) report(problem);
 
-  // `process.exit`で打ち切ると、書き込み中の出力が欠けうる。終了コードだけを設定する。
-  if (problems.length > 0 || !toolsOk || genProblems.length > 0) {
-    process.exitCode = 1;
-  }
+  return problems.length > 0 || !toolsOk || genProblems.length > 0 ? 1 : 0;
 }
 
 if (import.meta.main) {
-  main().catch((error: unknown) => {
-    console.error(`lint-docs: ${errorMessage(error)}`);
-    process.exitCode = 1;
-  });
+  // `process.exit`で打ち切ると、書き込み中の出力が欠けうる。終了コードだけを設定する。
+  main(join(import.meta.dir, ".."), process.argv.slice(2), process.cwd()).then(
+    (exitCode) => {
+      process.exitCode = exitCode;
+    },
+    (error: unknown) => {
+      console.error(`lint-docs: ${errorMessage(error)}`);
+      process.exitCode = 1;
+    },
+  );
 }
