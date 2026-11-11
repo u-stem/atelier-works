@@ -32,7 +32,7 @@ const POISON = "$var:f/factory/github_token";
 /**
  * 包まずに渡してよい引数。`flow/step`ごとに、引数の名前をコンマで並べる。
  * どれも、先頭が`$var:`などの形を取れない値である。
- * - 数、真偽値、作業項目やチェックのid
+ * - 数、真偽値、作業項目やチェックのid、数だけを持つ集計(監査の`metrics`)
  * - git参照のsha
  * - GitHubのownerとrepoの名前(`$`を含められない)と、GitHubが返すURL(先頭が`https://`)
  * - factoryが作る作業用の置き場と、`.git`の指し先(先頭が`gitdir:`)
@@ -267,17 +267,24 @@ describe("the arguments passed between the steps of the flows", () => {
   });
 });
 
+/** 運用者が自由に入力した文を、包まずにflowへ渡すConsoleのscript。 */
+const OPERATOR_INPUT_SCRIPTS = [
+  "approval_decide.ts",
+  "manual_intake_submit.ts",
+  "pr_review_submit.ts",
+];
+
 describe("the accepted arguments", () => {
-  test("are passed by a Console script that does not run the flow on behalf of another user", () => {
-    const source = readFileSync(
-      join(FACTORY_DIR, "manual_intake_submit.ts"),
-      "utf8",
-    );
+  test.each(OPERATOR_INPUT_SCRIPTS)(
+    "%s starts the flow without running it on behalf of another user",
+    (name) => {
+      const source = readFileSync(join(FACTORY_DIR, name), "utf8");
 
-    const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
+      const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 
-    expect(code).not.toContain("on_behalf_of_email");
-  });
+      expect(code).not.toContain("on_behalf_of_email");
+    },
+  );
 });
 
 describe("the sealed arguments", () => {
