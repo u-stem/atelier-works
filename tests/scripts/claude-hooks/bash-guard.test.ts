@@ -6336,3 +6336,37 @@ describeForCallers(
     });
   },
 );
+
+// 全停止も、先頭の代入の値を字面で判定する。ページャーなどの環境変数は、値をコマンドとして実行できるためである。
+describeForCallers(
+  "bash-guard denies stops written in the values of leading assignments",
+  (subagent) => {
+    test.each([
+      ["a pager of git", "GIT_PAGER='bun scripts/stop_all.ts' git log"],
+      [
+        "an input preprocessor of a pager",
+        "LESSOPEN='|bun scripts/stop_all.ts %s' less README.md",
+      ],
+      ["a pager of gh with a stop task", "PAGER='mise run stop' gh pr view 1"],
+      [
+        "an external diff of git with a stop task",
+        "GIT_EXTERNAL_DIFF='mise run stop' git diff",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows leading assignments without stop wording",
+  (subagent) => {
+    test.each([
+      "GIT_PAGER=cat git log",
+      "FOO=stop git status",
+      "LESS=-R git log",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
