@@ -15,6 +15,7 @@ import {
   createDocReader,
   createProductionDeps,
   guardCheck,
+  isOneSentencePerLineTarget,
   isTargetDoc,
   type LintDeps,
   lintAllDocLinks,
@@ -69,6 +70,42 @@ describe("lintDocText", () => {
     const problems = lintDocText("docs/a.md", "# 見出し\n\n再実行します。\n");
 
     expect(problems[0]).toStartWith("docs/a.md:3: [register] ");
+  });
+
+  test("reports a second sentence on the same line as one-sentence-per-line", () => {
+    const problems = lintDocText(
+      "docs/a.md",
+      "# 見出し\n\n再実行する。確認する。\n",
+    );
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toStartWith("docs/a.md:3: [one-sentence-per-line] ");
+  });
+
+  test("accepts a document that writes one sentence per line", () => {
+    expect(lintDocText("docs/a.md", "再実行する。\n確認する。\n")).toEqual([]);
+  });
+
+  test("does not check one-sentence-per-line in the protected skill directory", () => {
+    const problems = lintDocText(
+      ".claude/skills/hold/SKILL.md",
+      "再実行する。確認する。\n",
+    );
+
+    expect(problems).toEqual([]);
+  });
+});
+
+describe("isOneSentencePerLineTarget", () => {
+  test.each([
+    ["README.md", true],
+    ["docs/operations.md", true],
+    [".claude/skills/hold/SKILL.md", false],
+    [".claude/skills/factory-fix/SKILL.md", false],
+    ["tests/fixtures/audit/valid.md", false],
+    ["docs/notes.txt", false],
+  ])("%s -> %p", (path, expected) => {
+    expect(isOneSentencePerLineTarget(path)).toBe(expected);
   });
 });
 

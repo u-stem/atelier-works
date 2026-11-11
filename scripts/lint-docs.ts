@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 // リポジトリのMarkdown文書を`docs/writing-guidelines.md`の規則で検査する。
-// 次の5つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
+// 次の6つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
 // - このリポジトリの規則(`f/factory/lib/prose_check.ts`の`REPO_DOC_RULES`)
+// - 「1文は1行」(`scripts/lint-one-sentence-per-line.ts`)。`.claude/`の文書は対象にしない(`isOneSentencePerLineTarget`)
 // - 文書の間のリンクとアンカー(`scripts/lint-doc-links.ts`)
 // - markdownlint(`.markdownlint-cli2.jsonc`)
 // - textlint(`.textlintrc.json`)
@@ -42,6 +43,7 @@ import {
   lintDocLinks,
   type ReadDoc,
 } from "./lint-doc-links.ts";
+import { lintOneSentencePerLine } from "./lint-one-sentence-per-line.ts";
 
 /** 自作のスキル。これ以外の`.claude/skills/`は`wmill`の管理スキルか取り込んだもの。 */
 const OWN_SKILL_PATTERN =
@@ -86,11 +88,27 @@ export function blankFrontmatter(markdown: string): string {
   );
 }
 
-/** `markdown`をこのリポジトリの規則で検査し、`path:line: [rule] 内容`の形で返す。 */
+/**
+ * 「1文は1行」の検査をかける文書かを、パスだけで判定する。
+ * `.claude/`は保護パスで、変更に人の承認が要るので、この検査の対象にしない。
+ */
+export function isOneSentencePerLineTarget(path: string): boolean {
+  const normalized = path.startsWith("./") ? path.slice(2) : path;
+  return isTargetDoc(normalized) && !normalized.startsWith(".claude/");
+}
+
+/**
+ * `markdown`をこのリポジトリの規則で検査し、`path:line: [rule] 内容`の形で返す。
+ * 文章の規則(`prose_check.ts`)の指摘に、「1文は1行」の指摘(`lint-one-sentence-per-line.ts`)を続ける。
+ */
 export function lintDocText(path: string, markdown: string): string[] {
-  return checkProse(blankFrontmatter(markdown), REPO_DOC_RULES).map(
+  const prose = checkProse(blankFrontmatter(markdown), REPO_DOC_RULES).map(
     (issue) => `${path}:${issue.line}: [${issue.rule}] ${issue.message}`,
   );
+  const sentences = isOneSentencePerLineTarget(path)
+    ? lintOneSentencePerLine(path, markdown)
+    : [];
+  return [...prose, ...sentences];
 }
 
 /**
