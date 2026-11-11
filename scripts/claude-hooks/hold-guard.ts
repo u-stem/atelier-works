@@ -1821,7 +1821,11 @@ const EXECUTION_FRAGMENTS: readonly string[] = [
   "/jobs/run",
 ];
 
-/** `git`が別のコマンドを実行する副コマンド。名前が当たるときは通さない。 */
+/**
+ * `git`が別のコマンドを実行するか、実行される設定を書く副コマンド。名前が当たるときは通さない。
+ * `config`は、後から別のコマンドが値を実行する設定を書ける。
+ * `clone`、`send-email`、`instaweb`は、実行するコマンドや新しいリポジトリの設定を渡すオプションを追わず、副コマンドごと扱う。
+ */
 const GIT_EXECUTING_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "rebase",
   "bisect",
@@ -1829,6 +1833,10 @@ const GIT_EXECUTING_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "difftool",
   "mergetool",
   "filter-branch",
+  "config",
+  "clone",
+  "send-email",
+  "instaweb",
 ]);
 
 /** `git`の、値を次の語に取るグローバルのオプション。 */
@@ -2162,7 +2170,10 @@ function gitExecutes(args: readonly Word[]): boolean {
     const text = args[index]?.text ?? "";
     if (subcommand === null) {
       // 値が環境変数から来る設定は、キーも値も字面から読めない。
-      if (text.startsWith("--config-env")) return true;
+      // `--exec-path=`は、副コマンドの実体を別のディレクトリから探す。
+      if (text.startsWith("--config-env") || text.startsWith("--exec-path=")) {
+        return true;
+      }
       if (text === "-c") {
         index += 1;
         if (!isInertGitConfig(args[index])) return true;
@@ -2188,13 +2199,20 @@ function gitExecutes(args: readonly Word[]): boolean {
   return false;
 }
 
-/** `gh`の呼び出しが、別名やextensionでコマンドを足すものなら真。 */
+/**
+ * `gh`の呼び出しが、別名、extension、設定の書き込み、gitへ渡す引数で、コマンドを足すか実行するものなら真。
+ * 設定は、キーを問わず書き込みを委ねる形にする。後から別のコマンドが値を実行するキーがあるためである。
+ * `--`の後ろは、`repo clone`や`repo fork`がgitへ渡すので、グループを問わず委ねる形にする。
+ */
 function ghExecutes(args: readonly Word[]): boolean {
   const positional = wmillPositional(args);
+  const [group, action] = positional;
   return (
-    (positional[0] === "alias" && positional[1] === "set") ||
-    positional[0] === "extension" ||
-    positional[0] === "ext"
+    (group === "alias" && (action === "set" || action === "import")) ||
+    (group === "config" && action === "set") ||
+    group === "extension" ||
+    group === "ext" ||
+    args.some((word) => word.text === "--")
   );
 }
 
