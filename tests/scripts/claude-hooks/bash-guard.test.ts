@@ -6441,7 +6441,6 @@ describeForCallers(
       ["a character class", "cat scripts/hold.ts | bun /dev/std[i]n place"],
       ["a brace", "cat scripts/hold.ts | bun /dev/{stdin,x} place"],
       ["a brace range", "cat scripts/hold.ts | bun /dev/fd/{0..0} place"],
-      ["a variable", "cat scripts/hold.ts | bun $IN place"],
       [
         "a descriptor number with a leading zero",
         "cat scripts/hold.ts | bun /dev/fd/00 place",
@@ -6461,6 +6460,38 @@ describeForCallers(
       "cat README.md | bun run check",
       "cat README.md | bun $IN",
     ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 実行時に決まる語のオペランドは、標準入力とみなさない。変数のパスのスクリプトと、変数の値を取るオプションは日常の形である。
+describeForCallers(
+  "bash-guard allows runners given variable operands",
+  (subagent) => {
+    test.each([
+      [
+        "a diff piped into a script with a variable argument",
+        "git diff | bun scripts/x.ts $F",
+      ],
+      [
+        "a diff piped into a variable script",
+        "git diff origin/main | bun $S/review.ts --base $B",
+      ],
+      [
+        "a variable script writing to a variable log",
+        "bun $S/x.ts > $S/out.log",
+      ],
+      ["a variable working directory", "bun --cwd $W run build > $S/build.log"],
+      [
+        "a variable working directory joined by an equals sign",
+        "bun --cwd=$W test > $S/test.log",
+      ],
+      [
+        "a variable script reading a variable input after writing it with cat",
+        `cat > $S/probe.ts <<'EOF'\nimport { decide } from "./scripts/hold.ts";\nEOF\nbun run $S/probe.ts < $S/in.txt`,
+      ],
+    ])("allows %s", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("allow");
     });
   },
