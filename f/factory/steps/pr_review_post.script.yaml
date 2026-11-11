@@ -35,6 +35,14 @@ schema:
       description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
       default: null
       originalType: string
+    pr_file_hunks:
+      type: array
+      description: 変更されたファイルごとの、行コメントを付けられる新しい側の行の範囲。
+      default: null
+      items:
+        type: resource
+        resourceType: file_diff_hunks
+      originalType: resource[]
     pr_files:
       type: array
       description: PRで変更されたファイルの一覧。
@@ -98,6 +106,7 @@ schema:
     - findings
     - thread_responses
     - pr_files
+    - pr_file_hunks
     - binary_files
     - binary_unlisted_count
     - worktree_dir

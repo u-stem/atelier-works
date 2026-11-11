@@ -4423,8 +4423,53 @@ describe("getPrFiles", () => {
         additions: 3,
         deletions: 1,
         changes: 4,
+        patch: null,
       },
     ]);
+  });
+
+  test("keeps the patch of a file", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          filename: "src/a.ts",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          changes: 1,
+          patch: "@@ -1 +1,2 @@\n a\n+b",
+        },
+      ]),
+    ]);
+    const files = await getPrFiles(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(files[0]?.patch).toBe("@@ -1 +1,2 @@\n a\n+b");
+  });
+
+  test("treats a patch that is not a string as missing", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          filename: "src/a.ts",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          changes: 1,
+          patch: 5,
+        },
+      ]),
+    ]);
+    const files = await getPrFiles(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(files[0]?.patch).toBeNull();
   });
 
   test("follows the link header's rel=next page and combines both pages' files", async () => {
