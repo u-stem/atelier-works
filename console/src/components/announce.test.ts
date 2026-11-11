@@ -102,7 +102,9 @@ describe("announceStaleListWith", () => {
       warning: record("warning"),
       error: record("error"),
     });
-    expect(calls[0]?.data?.duration).toBeUndefined();
+    expect(
+      calls.map((call) => [call.tone, call.data?.duration ?? null]),
+    ).toEqual([["warning", null]]);
   });
 });
 
