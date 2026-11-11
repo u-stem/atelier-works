@@ -12,8 +12,6 @@ import { announce, announceStaleList } from "../../components/announce.ts";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
-import { withSelection } from "../../lib/inboxSelection.ts";
-import { INBOX_PATH } from "../../lib/inboxView.ts";
 import { workItemRef } from "../../lib/labels.ts";
 import { describeNotice } from "../../lib/noticeView.ts";
 import { noticeWorkItemId } from "../../lib/noticeWorkItem.ts";
@@ -61,12 +59,14 @@ const RESOLVE_CONFIG = {
  * 対応をシステムの画面の区画で行う種類は、未解決のときだけ、次の操作の文の下に、その区画へ移るボタンを出す。
  * 本文が作業項目を名指しする種類は、未解決で、その作業項目の失敗が一覧にあるときだけ、同じ位置に、その失敗へ移るボタンを出す。
  * 一覧に無い失敗へ移ると、選んだ項目が一覧に無いという行き止まりになるためである。
+ * ボタンは遷移を自分で起こさず、`onOpenFailure`を呼ぶ。履歴、種類のチップ、フォーカスは、一覧を持つ画面が決める。
  */
 export function NoticeDetail({
   notice,
   now,
   source = "summary",
   failureIds = NO_FAILURES,
+  onOpenFailure,
 }: {
   notice: SummaryNotice;
   now: number;
@@ -74,6 +74,8 @@ export function NoticeDetail({
   source?: "summary" | "full";
   /** 一覧にある失敗の作業項目のID。 */
   failureIds?: ReadonlySet<number>;
+  /** 名指しされた作業項目の失敗を開く。渡さなければ、その失敗へ移るボタンを出さない。 */
+  onOpenFailure?: (workItemId: number) => void;
 }) {
   const description = describeNotice(notice, source);
   const { submit, isLocked } = useWriteMutation(RESOLVE_CONFIG);
@@ -82,14 +84,16 @@ export function NoticeDetail({
   const namedWorkItemId = guide.retriesWorkItem
     ? noticeWorkItemId(notice.message)
     : null;
-  const failureLink =
+  const failureTarget =
+    onOpenFailure === undefined ||
     description.resolved ||
     namedWorkItemId === null ||
     !failureIds.has(namedWorkItemId)
       ? null
       : {
-          pathname: INBOX_PATH,
-          search: `?${withSelection(new URLSearchParams(), { type: "failure", id: namedWorkItemId }).toString()}`,
+          open: () => {
+            onOpenFailure(namedWorkItemId);
+          },
           label: `${workItemRef(namedWorkItemId)}の失敗へ`,
         };
   return (
@@ -179,17 +183,10 @@ export function NoticeDetail({
               </Button>
             </div>
           )}
-          {failureLink === null ? null : (
+          {failureTarget === null ? null : (
             <div className="mt-1">
-              <Button asChild variant="outline" size="sm">
-                <Link
-                  to={{
-                    pathname: failureLink.pathname,
-                    search: failureLink.search,
-                  }}
-                >
-                  {failureLink.label}
-                </Link>
+              <Button variant="outline" size="sm" onClick={failureTarget.open}>
+                {failureTarget.label}
               </Button>
             </div>
           )}

@@ -135,6 +135,7 @@ const INBOX_REFRESH_LABEL = "一覧を更新";
  * 項目を選ぶ操作だけは履歴に印を付けて積む。ブラウザの戻る操作と、詳細の「一覧へ戻る」は、印のある履歴を戻って取り除く。
  * 選択つきのURLを直接開いたときは、「一覧へ戻る」が選択を外して置き換える。
  * 面が切り替わると、新しく出た面へフォーカスを移す。一覧へ戻るときは、スクロール位置と直前に選んでいた行を戻す。
+ * 通知の詳細から、名指しされた作業項目の失敗を開く操作は、履歴を置き換え、種類のチップが失敗を隠すときは「すべて」に戻し、詳細のペインへフォーカスを移す。
  * 一覧と詳細は別々にスクロールする。一覧の行は選ぶだけで、承認・却下、再実行、通知の解決などの操作は詳細のペインに置く。
  */
 export function InboxScreen() {
@@ -232,6 +233,22 @@ export function InboxScreen() {
     } else {
       select(null);
     }
+  };
+
+  // 通知の詳細から、名指しされた作業項目の失敗を開く。詳細から詳細への切り替えで、面は変わらない。
+  const openFailure = (workItemId: number): void => {
+    const next: InboxSelection = { type: "failure", id: workItemId };
+    // 種類のチップが失敗を隠すときは「すべて」に戻す。隠れた項目の詳細を出したままにしないためである。
+    if (selectionAfterFilter(next, activeChip) === null) {
+      setChip("all");
+    }
+    // 履歴は置き換える。戻る操作で通知の詳細に戻らず、狭い幅で一覧から来た印は引き継いで、一覧へ戻る操作を1回で済ませる。
+    setSearchParams(withSelection(searchParams, next), {
+      replace: true,
+      state: selectionHistoryState(false, location.state),
+    });
+    // 押したボタンは詳細の差し替えで消えるので、フォーカスがbodyに落ちる前に詳細のペインへ移す。
+    detailRef.current?.focus();
   };
 
   // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
@@ -352,6 +369,7 @@ export function InboxScreen() {
               selection={selection}
               now={now}
               failureIds={failureIds}
+              onOpenFailure={openFailure}
             />
           </div>
         </section>
