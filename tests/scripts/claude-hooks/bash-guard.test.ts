@@ -5310,3 +5310,96 @@ describeForCallers(
     });
   },
 );
+
+// gitとghが別のコマンドの実行を委ねる呼び出しは、前置きの後ろと同じ規則で、保留と凍結の書き込みを拒否する。
+describeForCallers(
+  "bash-guard denies a caller that writes holds or freezes through a command that git or gh runs",
+  (subagent) => {
+    test.each([
+      ["a bisect run", "git bisect run bun scripts/hold.ts release 1"],
+      [
+        "a rebase exec",
+        "git rebase -x 'bun scripts/freeze.ts release 1' origin/main",
+      ],
+      [
+        "a rebase exec with an equals sign",
+        "git rebase --exec='bun scripts/hold.ts release 1' origin/main",
+      ],
+      [
+        "a submodule foreach",
+        "git submodule foreach 'mise run hold:release -- 1'",
+      ],
+      [
+        "a difftool command",
+        "git difftool -x 'bun scripts/hold.ts place' HEAD",
+      ],
+      [
+        "a filter-branch filter",
+        "git filter-branch --tree-filter 'bun scripts/freeze.ts reset' HEAD",
+      ],
+      [
+        "a pager setting",
+        "git -c core.pager='bun scripts/hold.ts release 1' log",
+      ],
+      [
+        "a monitor setting",
+        "git -c core.fsmonitor='bun scripts/freeze.ts release 1' status",
+      ],
+      [
+        "an attached setting",
+        "git -ccore.sshCommand='bun scripts/hold.ts release 1' fetch",
+      ],
+      [
+        "a launcher hidden behind an equals sign",
+        String.raw`git rebase --exec='bun -e "import(\"./scripts/hold.ts\")"' origin/main`,
+      ],
+      [
+        "a shell alias",
+        "gh alias set x --shell 'bun scripts/hold.ts release 1'",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+
+    test.skipIf(!subagent)("the reason is the hold reason", async () => {
+      expect(
+        await denyReason("git bisect run bun scripts/hold.ts release 1", {
+          subagent,
+        }),
+      ).toContain("main session");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows git and gh calls that run nothing that touches holds or freezes",
+  (subagent) => {
+    test.each([
+      "git log -p",
+      "git show",
+      "git show HEAD:scripts/hold.ts",
+      "git grep hold",
+      "git grep -n 'hold release'",
+      "git diff -- scripts/hold.ts",
+      "git log -p -- scripts/freeze.ts",
+      "git rebase origin/main",
+      "git rebase -i HEAD~3",
+      "git rebase -x 'bun test' origin/main",
+      "git rebase --exec='mise run check' origin/main",
+      "git bisect start",
+      "git bisect run bun test",
+      "git submodule status",
+      "git submodule update --init",
+      "git -c user.name=x commit -m 'fix: hold release の判定'",
+      "git -c core.quotepath=false status",
+      "git -c advice.detachedHead=false checkout x",
+      "git -c color.ui=always log",
+      "git -c core.pager=cat log",
+      "gh pr view 1",
+      "gh alias list",
+      "gh repo clone o/r",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
