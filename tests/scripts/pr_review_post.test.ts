@@ -22,6 +22,7 @@ import type {
 import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   findPostedReview,
+  main,
   normalizeBinaryInput,
   normalizeThreadResponses,
   type PostReviewTarget,
@@ -753,11 +754,28 @@ describe("thread responses wiring", () => {
       new URL("../../f/factory/pr_review__flow/flow.yaml", import.meta.url),
     ).text();
     expect(flow).toContain(
-      "results.pr_review_generate?.thread_responses ?? []",
+      "thread_responses: results.pr_review_generate?.thread_responses ?? []",
     );
   });
 
-  test("describes the responses in the script schema", async () => {
+  test("rejects an argument that is not the sealed text before it posts anything", async () => {
+    await expect(
+      main(
+        1,
+        false,
+        "acme",
+        "widgets",
+        7,
+        "a".repeat(40),
+        "$var:f/factory/github_token",
+        0,
+        "",
+        "",
+      ),
+    ).rejects.toThrow("pr_review_post: the sealed text is not valid JSON");
+  });
+
+  test("describes the responses in the schema of the sealed argument", async () => {
     const schema = await Bun.file(
       new URL(
         "../../f/factory/steps/pr_review_post.script.yaml",
@@ -765,7 +783,7 @@ describe("thread responses wiring", () => {
       ),
     ).text();
     expect(schema).toContain(
-      "thread_responses:\n      type: array\n      description: 再レビューが既存のスレッドに出した答えの一覧。\n",
+      "untrusted:\n      type: string\n      description: レビューの総評、判定、指摘、スレッドへの答え、",
     );
   });
 });
