@@ -52,6 +52,7 @@
 //   引用符の外のglob(`scripts/hol?.ts`、`scripts/hol[d].ts`、`scripts/*`)は、ファイル名の部分が保留のコードの名前に当たりうれば拒否する。
 //   ディレクトリは見ない。POSIXの文字クラス(`[[:lower:]]`)は読み解かず、当たりうるものとして扱う。
 //   ブレース(`{hold.ts,place}`)は、展開した綴りと、空白に置き換えた綴りの両方で判定する。
+//   カンマの無いブレースの範囲(`{o..o}`)は、`*`に置き換えてglobと同じに照合する。括弧の外に英字が3字未満の語は当てない。
 //   NULを含む`$'...'`の語は、切り詰めた綴りと、切り詰めない綴り(`variants`)の両方で判定する。
 //   `-e`などの文字列と標準入力で渡すコードに含まれる場合も同じである。
 //   許すのは次の2つだけである。
@@ -417,15 +418,51 @@ function spellings(word: Word): readonly string[] {
 /** 語ごとの綴りの記録。同じ語を前置きの判定と起動語の判定で何度も見るので、ブレースの展開は1回にする。 */
 const SPELLINGS = new WeakMap<Word, readonly string[]>();
 
-/** 語が保留のコードを指すか、引用符の外のglobが保留のコードの名前に当たりうるなら真。ディレクトリは問わない。 */
-function pointsAtHoldCode(word: Word): boolean {
+/** カンマの無いブレースの範囲(`{a..c}`、`{1..9..2}`)。シェルは字や数の並びに展開する。 */
+const BRACE_RANGE = /\{[^{},\s]*\.\.[^{},\s]*\}/;
+const BRACE_RANGES = /\{[^{},\s]*\.\.[^{},\s]*\}/g;
+
+/**
+ * 範囲を`*`に置き換えた綴りを返す。範囲が無ければnullを返す。
+ * 展開した字は決まらないものとして扱い、globと同じ照合に通す。範囲の展開を読み解かないためである。
+ */
+function rangeAsGlob(text: string): string | null {
+  return BRACE_RANGE.test(text) ? text.replace(BRACE_RANGES, "*") : null;
+}
+
+/**
+ * 語が`mention`に当たるか、引用符の外のglobかブレースの範囲が`names`に当たりうるなら真。ディレクトリは問わない。
+ * 範囲だけの語は、括弧の外に英字と`_`が3字以上あるときだけ当てる(`aimsAtName`)。`{1..3}`のような日常の範囲を止めないためである。
+ */
+function pointsAtCode(
+  word: Word,
+  mention: RegExp,
+  names: readonly string[],
+): boolean {
   const all = spellings(word);
-  if (all.some((text) => HOLD_MENTION.test(text))) return true;
-  if (!word.glob) return false;
+  if (all.some((text) => mention.test(text))) return true;
+  const fileOf = (text: string) => text.slice(text.lastIndexOf("/") + 1);
+  if (
+    word.glob &&
+    all.some((text) =>
+      names.some((name) => globMatches(fileOf(text), name, true)),
+    )
+  ) {
+    return true;
+  }
   return all.some((text) => {
-    const file = text.slice(text.lastIndexOf("/") + 1);
-    return HOLD_FILE_NAMES.some((name) => globMatches(file, name, true));
+    const ranged = rangeAsGlob(text);
+    if (ranged === null) return false;
+    const file = fileOf(ranged);
+    return (
+      aimsAtName(file) && names.some((name) => globMatches(file, name, true))
+    );
   });
+}
+
+/** 語が保留のコードを指すか、引用符の外のglobかブレースの範囲が保留のコードの名前に当たりうるなら真。ディレクトリは問わない。 */
+function pointsAtHoldCode(word: Word): boolean {
+  return pointsAtCode(word, HOLD_MENTION, HOLD_FILE_NAMES);
 }
 
 /** miseのコマンド行の語が、置く・解除するタスクを名前で指すなら真。 */
@@ -571,17 +608,11 @@ const FREEZE_FILE_NAMES: readonly string[] = [
 ];
 
 /**
- * 語が凍結のCLIを指すか、引用符の外のglobが凍結のコードの名前に当たりうるなら真。
+ * 語が凍結のCLIを指すか、引用符の外のglobかブレースの範囲が凍結のコードの名前に当たりうるなら真。
  * 保留のコードと同じく、ファイル名の部分だけを見て、ディレクトリは問わない。
  */
 function pointsAtFreezeCode(word: Word): boolean {
-  const all = spellings(word);
-  if (all.some((text) => FREEZE_MENTION.test(text))) return true;
-  if (!word.glob) return false;
-  return all.some((text) => {
-    const file = text.slice(text.lastIndexOf("/") + 1);
-    return FREEZE_FILE_NAMES.some((name) => globMatches(file, name, true));
-  });
+  return pointsAtCode(word, FREEZE_MENTION, FREEZE_FILE_NAMES);
 }
 
 /**
@@ -2100,10 +2131,13 @@ export type ReleaseCallContext = {
 /**
  * 文字列の綴り。ブレースは、展開した形に加えて、括弧だけを外した形も足す。
  * カンマの無い`{x}`は、シェルは展開しないが、curlは外して読むためである。
+ * ブレースの範囲は、`*`に置き換えた形も足す。展開した字が決まらないものとして、globと同じに照合するためである。
  */
 function releaseForms(text: string): string[] {
   const forms = [text, ...expandBraces(text)];
-  return [...forms, ...forms.map((form) => form.replace(/[{}]/g, ""))];
+  const ranged = forms.flatMap((form) => rangeAsGlob(form) ?? []);
+  const all = [...forms, ...ranged];
+  return [...all, ...all.map((form) => form.replace(/[{}]/g, ""))];
 }
 
 /** 語の綴りをすべて返す。NULを除いた綴りとブレースの形を含む。 */
@@ -2589,15 +2623,9 @@ const STOP_ALL_TASKS: readonly string[] = [
   "stop:restore",
 ];
 
-/** 語が全停止のCLIを指すか、引用符の外のglobが全停止のCLIの名前に当たりうるなら真。ディレクトリは問わない。 */
+/** 語が全停止のCLIを指すか、引用符の外のglobかブレースの範囲が全停止のCLIの名前に当たりうるなら真。ディレクトリは問わない。 */
 function pointsAtStopAllCode(word: Word): boolean {
-  const all = spellings(word);
-  if (all.some((text) => STOP_ALL_MENTION.test(text))) return true;
-  if (!word.glob) return false;
-  return all.some((text) => {
-    const file = text.slice(text.lastIndexOf("/") + 1);
-    return STOP_ALL_FILE_NAMES.some((name) => globMatches(file, name, true));
-  });
+  return pointsAtCode(word, STOP_ALL_MENTION, STOP_ALL_FILE_NAMES);
 }
 
 /** 実行系の引数が、全停止のCLIを実行する形なら真。検査の道具が最初のオペランドなら、実行ではないので通す。 */
