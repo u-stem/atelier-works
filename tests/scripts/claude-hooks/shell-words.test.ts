@@ -2706,6 +2706,12 @@ describe("a bracket opened inside a word must close in the same word", () => {
     ["a second bracket after a closed one", "a[1]b[ # ]"],
     ["an argument position", "echo a[ # ]"],
     ["a subscript with spaces", "arr[i + 1]=x"],
+    [
+      "an arithmetic command that a shell may read as nested subshells",
+      "((a[ 1 ]=1 echo x) )",
+    ],
+    ["a spaced subscript in an arithmetic command", "(( a[ 1 ] ))"],
+    ["a spaced subscript in an arithmetic expansion", "echo $(( a[i + 1] ))"],
   ])("rejects %s", (_form, line) => {
     expect(parses(line)).toBe(false);
   });
@@ -2728,8 +2734,8 @@ describe("a bracket opened inside a word must close in the same word", () => {
     ["brackets in double quotes", 'echo "a[ # ]"'],
     ["brackets in single quotes", "echo 'a[ x'"],
     ["a jq filter", "jq '.a[ 0 ]'"],
-    ["a spaced subscript in an arithmetic command", "(( a[ 1 ] ))"],
-    ["a spaced subscript in an arithmetic expansion", "echo $(( a[i + 1] ))"],
+    ["a closed subscript in an arithmetic command", "(( a[1] += 2 ))"],
+    ["a closed subscript in an arithmetic expansion", "echo $(( a[i+1] ))"],
   ])("accepts %s", (_form, line) => {
     expect(parses(line)).toBe(true);
   });
