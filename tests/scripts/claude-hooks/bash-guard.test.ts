@@ -6055,10 +6055,10 @@ describeForCallers(
   },
 );
 
-// 凍結のコード文字列は、コードを取るオプションの種類を問わず、語の中にCLIのパスと書き込みの語が並べば拒否する。
-// 凍結のCLIを指す語があれば、書き込みの語は副コマンドの位置でなくても数える。
+// 凍結のコード文字列は、コードを取るオプションの値と、空白などで語に分かれる語の全部で、CLIを指す字面と書き込みの語が並べば拒否する。
+// 字面は、パスの形でなく名前だけで指す形とタスク名も含む。標準入力のコードも同じに見る。
 describeForCallers(
-  "bash-guard denies freeze writes in code strings of any option and after options before the subcommand",
+  "bash-guard denies freeze writes in code strings of any option",
   (subagent) => {
     test.each([
       [
@@ -6078,8 +6078,16 @@ describeForCallers(
         `yarn exec "bun scripts/freeze.ts reset"`,
       ],
       [
-        "an option before the subcommand",
-        "bun scripts/freeze.ts --verbose release",
+        "a freeze task inside runner code",
+        `bun -e 'Bun.spawnSync(["mise","run","freeze:release"])'`,
+      ],
+      [
+        "a module named without a path inside runner code",
+        `bun -e "process.chdir('scripts'); require('./freeze').release()"`,
+      ],
+      [
+        "a module named without a path in standard input code",
+        `echo "process.chdir('scripts'); require('./freeze').release()" | bun -`,
       ],
     ])("denies %s", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
@@ -6087,6 +6095,8 @@ describeForCallers(
   },
 );
 
+// 凍結のCLIは副コマンドを最初の引数として読むので、読み取りの副コマンドの後ろの語は書き込みの語と同じ綴りでも通す。
+// 理由の値は、凍結のCLIの`--reason`の値なら、コードの文字列として読まない。
 describeForCallers(
   "bash-guard allows freeze reads, schedule freezes, and inspections",
   (subagent) => {
@@ -6098,8 +6108,26 @@ describeForCallers(
       "bun scripts/freeze.ts push --dry-run",
       'bun test -t "freeze release"',
       "bunx biome check scripts/freeze.ts",
+      "bun scripts/freeze.ts list release",
+      "bun scripts/freeze.ts list --target release",
+      "bun scripts/freeze.ts place --target a/b --reason release",
+      "bun scripts/freeze.ts place --target a/b --reason=release",
     ])("allows %s", async (command) => {
       expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 保留か凍結のコードに当たりうるglobを実行系に渡す形は、検査の道具の外なら拒否する。
+describeForCallers(
+  "bash-guard denies runners given a glob that can match guarded code",
+  (subagent) => {
+    test.each([
+      ["a glob as the script", "bun scripts/*.ts"],
+      ["a glob after the script", "bun x.ts scripts/*.ts"],
+      ["a glob given to a package runner", "npx tsx scripts/*.ts"],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
     });
   },
 );
