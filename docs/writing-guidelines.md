@@ -21,7 +21,7 @@ Claudeが生成する文章(要件定義書、監査レポートと改善提案�
 | --- | --- | --- |
 | 入口 | 初めて来た人が、何のリポジトリで、どこから読むかを知る | README |
 | 手順 | 運用する人が、何をすればよいか、失敗したらどうするかを知る | `docs/setup.md`、`docs/operations.md` |
-| 説明 | 構成と、その構成をとる理由を理解する。安全策の理由と残るリスクは、横断のものを`docs/security.md`に、フローごとのものを`docs/internals/`の各文書に書く | `docs/architecture.md`、`docs/security.md` |
+| 説明 | 構成と、その構成をとる理由を理解する。安全策の理由は、横断のものを`docs/security.md`に、フローごとのものを`docs/internals/`の各文書に書く。受け入れた残るリスクは`docs/security-risks.md`の表に書き、各文書の節からは表の行のIDでリンクする | `docs/architecture.md`、`docs/security.md`、`docs/security-risks.md` |
 | 仕様 | 変更する人が、内部の挙動と設定値と、フローごとの安全策を確かめる | `docs/internals/` |
 | 規約 | 書く人が、守ることを確かめる | `docs/coding-guidelines.md`、`docs/console-display.md`、この文書 |
 | エージェント向けの指示 | Claudeが、作業の決まりを知る | AGENTS.md、`.claude/skills/` |
@@ -74,6 +74,7 @@ PR本文、コミットメッセージ、要件定義書の「変更履歴」章
 | Claudeが生成する文章の書き方 | `factory-writing`スキル |
 | 秘密値の投入コマンド | `docs/setup.md` |
 | 資格情報の取得手順(PAT、OAuthトークン、Webhook) | `docs/security.md` |
+| 受け入れた残るリスク | `docs/security-risks.md` |
 | miseタスクの一覧 | README(`mise.toml`のタスクと過不足が無いかを検査する) |
 | スケジュールの一覧 | `docs/architecture.md`(`*.schedule.yaml`から生成) |
 | script・flow・appのpathとsummaryの一覧 | `docs/architecture.md`(各`*.yaml`から生成) |
