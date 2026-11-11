@@ -65,6 +65,7 @@ import {
   fixPrompt,
 } from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
+import { isShape, parseUntrustedArg } from "../lib/untrusted_arg.ts";
 import {
   assertWorktreeGitPointer,
   MERGE_COMMIT_MESSAGE,
@@ -72,12 +73,11 @@ import {
   worktreeGitPointerMatches,
 } from "../lib/workspace.ts";
 import {
-  type CollectedComment,
-  type CollectedReview,
   claudeBlockedReason,
   type FixClaudeOutput,
   isCiFixClaudeOutput,
   isFixClaudeOutput,
+  PR_FIX_COLLECTED_SHAPE,
   recordedGitPointerStopReason,
   WORKTREE_GIT_POINTER_NOT_RECORDED_REASON,
 } from "./pr_workflow_support.ts";
@@ -90,6 +90,9 @@ export type PrFixApplyResult = {
   readonly commit_subject: string | null;
   readonly commit_body: string | null;
 };
+
+/** 包んだ引数(`untrusted`)の形。flow.yamlの式のキーと一致する。 */
+export const PR_FIX_APPLY_UNTRUSTED = isShape(PR_FIX_COLLECTED_SHAPE);
 
 /**
  * factory-fixスキルでClaude Codeを実行し、修正の結果
@@ -120,15 +123,19 @@ export async function main(
   factory_clone_dir: string,
   parent_work_item_id: number | null,
   attempt: number,
-  reviews: CollectedReview[],
-  comments: CollectedComment[],
+  untrusted: string,
   worktree_git_pointer: string | null = null,
   ci_check_id: number | null = null,
   conflict_check_id: number | null = null,
   base_sha: string | null = null,
-  conflicted_paths: string[] | null = null,
 ): Promise<PrFixApplyResult> {
   const log = logger("pr_fix_apply");
+  // 外から来た文字列(指摘とコメントの本文、競合したファイルのパス)は、flowがJSONの文字列に包んで渡す。
+  const { reviews, comments, conflicted_paths } = parseUntrustedArg(
+    untrusted,
+    "pr_fix_apply",
+    PR_FIX_APPLY_UNTRUSTED,
+  );
 
   // Claudeは起動時にcwdでgitを実行しうるので、起動の前に`.git`を準備ステップの記録と比べる。
   // このステップの再試行(flow.yamlの`retry`)では、前の試行のClaudeが`.git`を書き換えた後でありうる。

@@ -1,0 +1,9 @@
+summary: '[LIB] stepの間で包んで渡す値の型ガード'
+description: 内部ライブラリです。直接実行するものではありません。Claudeの出力や外から来た文字列を含む値を、flowの式でJSONの文字列に包んで次のstepへ渡し、受け取るstepで型ガードを通して戻します。
+lock: '!inline f/factory/lib/untrusted_arg.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

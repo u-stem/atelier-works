@@ -30,14 +30,13 @@ import {
   type ChangeInspection,
   docDirGuardFor,
   GITLEAKS_TIMEOUT_MS,
-  IMPLEMENT_CLAUDE_ROUND_KINDS,
   IMPLEMENT_SKILL_NAME,
-  type ImplementClaudeRound,
-  type ImplementContext,
   type ImplementLoopResult,
   implementContextHasDesign,
   implementOutputContractNote,
   implementPromptInput,
+  isImplementClaudeRoundShape,
+  isImplementContextShape,
   ranClaude,
   runDocDirGuardedRound,
   runImplementClaudeRound,
@@ -54,7 +53,7 @@ import {
   worktreeLockFor,
 } from "../lib/process_lock.ts";
 import { implementFixPrompt } from "../lib/prompts.ts";
-import { isOneOf } from "../lib/types.ts";
+import { isShape, parseUntrustedArg } from "../lib/untrusted_arg.ts";
 import {
   assertWorktreeGitPointer,
   removeIgnoredFiles,
@@ -106,6 +105,15 @@ async function inspectChanges(
 }
 
 /**
+ * 包んだ引数(`untrusted`)の形。flow.yamlの式のキーと一致する。
+ * 文脈はIssueの題名と本文を、ラウンドの結果はClaudeの出力を含むので、JSONの文字列に包んで受け取る。
+ */
+export const IMPLEMENT_VERIFY_UNTRUSTED = isShape({
+  context: isImplementContextShape,
+  first_round: isImplementClaudeRoundShape,
+});
+
+/**
  * 実装の検証ループを回し、その結果を返す。
  * 各ラウンドで、worktreeに触れる前にリースを確かめ(失っていれば止める)、
  * worktreeの`.git`ポインタが`context.worktree_git_pointer`と一致するかを確かめ、`context.base_sha`(デフォルトブランチとのmerge-base)
@@ -121,18 +129,17 @@ async function inspectChanges(
  * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。workerが検査の前提を満たさず検査を実行できなかったラウンドは記録しない。
  * 検査コマンドがあるときは、コンテナの分離なしで非特権のuidにより実行することを
  * noticeとして記録する。
- * `first_round.kind`が想定外なら例外を投げる。
+ * 包んだ引数の`first_round.kind`が想定外なら、型ガードが断って例外を投げる。
  */
 export async function main(
   work_item_id: number,
-  context: ImplementContext,
-  first_round: ImplementClaudeRound,
+  untrusted: string,
 ): Promise<ImplementLoopResult> {
-  if (!isOneOf(first_round.kind, IMPLEMENT_CLAUDE_ROUND_KINDS)) {
-    throw new Error(
-      `implement_verify: unexpected round kind "${String(first_round.kind)}"`,
-    );
-  }
+  const { context, first_round } = parseUntrustedArg(
+    untrusted,
+    "implement_verify",
+    IMPLEMENT_VERIFY_UNTRUSTED,
+  );
   // generateがリースを失っているか、要件定義の照合で止めていたら、ループは何もせずに止まるので、期限は検証しない。
   const deadlineAt = ranClaude(first_round)
     ? requireDeadlineAt(context.deadline_at, Date.now())

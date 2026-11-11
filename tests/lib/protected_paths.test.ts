@@ -2216,6 +2216,12 @@ describe("safety boundary files", () => {
     "f/factory/lib/flow_retry_marker.ts",
     "f/factory/lib/flow_retry_marker.script.yaml",
     "tests/scripts/claude_flow_retry.test.ts",
+    "f/factory/lib/untrusted_arg.ts",
+    "f/factory/lib/untrusted_arg.script.yaml",
+    "tests/lib/untrusted_arg.test.ts",
+    "tests/lib/untrustedArgSupport.ts",
+    "tests/lib/flowExpressions.ts",
+    "tests/scripts/flow_untrusted_args.test.ts",
     "f/factory/lib/stop_all.ts",
     "f/factory/lib/stop_all.script.yaml",
     "f/factory/lib/stop_check.ts",
@@ -2282,6 +2288,7 @@ describe("safety boundary files", () => {
   test.each([
     "f/factory/lib/claude_flow_failure.script.lock",
     "f/factory/lib/flow_retry_marker.script.lock",
+    "f/factory/lib/untrusted_arg.script.lock",
   ])("does not protect the lock %s of the cost and retry libs", (path) => {
     expect(matchesForbiddenPath(path)).toBe(false);
   });

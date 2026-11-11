@@ -34,12 +34,22 @@ import {
 } from "../lib/repo_owner_gate.ts";
 import {
   type FileDiffHunks,
+  isNumber,
   isOneOf,
+  isString,
+  isStringArray,
   type ReviewFinding,
   type ReviewPostMode,
   type ReviewVerdict,
   type ThreadResponse,
 } from "../lib/types.ts";
+import {
+  isArrayOf,
+  isNullOr,
+  isShape,
+  isStringOrNull,
+  parseUntrustedArg,
+} from "../lib/untrusted_arg.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import { blockReview } from "./pr_review_prepare.ts";
 import {
@@ -49,6 +59,8 @@ import {
   countOpenThreads,
   decideReviewBodyMode,
   findPostedReviewId,
+  isReviewFindingShape,
+  isThreadResponseShape,
   mapFindingsToReviewComments,
   renderReviewSummary,
   renderThreadReply,
@@ -75,43 +87,17 @@ export type PrReviewPostResult = {
 };
 
 /**
- * 古いflow定義が新しいscriptを呼ぶと、`binary_files`と`binary_unlisted_count`が
- * undefinedかnullで届く。そのときは、バイナリが無いものとして旧来の総評にする。
- */
-export function normalizeBinaryInput(
-  binaryFiles: readonly string[] | null | undefined,
-  binaryUnlistedCount: number | null | undefined,
-): { binaryFiles: string[]; binaryUnlistedCount: number } {
-  return {
-    binaryFiles: [...(binaryFiles ?? [])],
-    binaryUnlistedCount: binaryUnlistedCount ?? 0,
-  };
-}
-
-/**
- * 古いflow定義が新しいscriptを呼ぶと、`thread_responses`がundefinedかnullで届く。
- * そのときは、答えが無いものとして扱う。
- */
-export function normalizeThreadResponses(
-  value: readonly ThreadResponse[] | null | undefined,
-): ThreadResponse[] {
-  return [...(value ?? [])];
-}
-
-/**
- * 古いflow定義が新しいscriptを呼ぶと、`pr_file_hunks`がundefinedかnullで届く。
- * 空の配列で、変更ファイルが1件以上あるときも同じである。flowの既定値が空の配列のとき、
- * 変更ファイルが0件という意味に読むと、すべての指摘を総評へ落としてしまうため。
- * そのときは、変更ファイルごとに範囲が分からないものとして扱い、指摘を確かめずに行コメントにする。
+ * `pr_file_hunks`が`null`のとき(生成の結果が無いとき)と、空の配列で変更ファイルが1件以上あるときは、
+ * 変更ファイルごとに範囲が分からないものとして扱い、指摘を確かめずに行コメントにする。
+ * 空の配列を、変更ファイルが0件という意味に読むと、すべての指摘を総評へ落としてしまうため。
  * 差分の外の行は、GitHubに拒否されたときの総評への退避で受ける。
  */
 export function normalizePrFileHunks(
-  prFileHunks: readonly FileDiffHunks[] | null | undefined,
+  prFileHunks: readonly FileDiffHunks[] | null,
   prFiles: readonly string[],
 ): FileDiffHunks[] {
   if (
     prFileHunks === null ||
-    prFileHunks === undefined ||
     (prFileHunks.length === 0 && prFiles.length > 0)
   ) {
     return prFiles.map((path) => ({ path, hunks: null }));
@@ -130,11 +116,11 @@ export type PrReviewPostInput = {
   readonly summary: string;
   readonly verdict: string | null;
   readonly findings: ReviewFinding[];
-  readonly thread_responses: ThreadResponse[] | null | undefined;
+  readonly thread_responses: ThreadResponse[];
   readonly pr_files: string[];
-  readonly pr_file_hunks: FileDiffHunks[] | null | undefined;
-  readonly binary_files: string[] | null | undefined;
-  readonly binary_unlisted_count: number | null | undefined;
+  readonly pr_file_hunks: FileDiffHunks[] | null;
+  readonly binary_files: string[];
+  readonly binary_unlisted_count: number;
   readonly worktree_dir: string;
   readonly repo_dir: string;
 };
@@ -162,9 +148,108 @@ const SKIPPED_POST: PrReviewPostResult = {
   posted_review_id: null,
 };
 
+const isFileDiffHunksShape = isShape({
+  path: isString,
+  hunks: isNullOr(isArrayOf(isShape({ start: isNumber, end: isNumber }))),
+});
+
 /**
- * `main`の引数で`runPrReviewPost`を呼ぶ。
- * Windmillは`main`の引数から入力のスキーマを作るので、差し替えられる依存は`runPrReviewPost`に分けている。
+ * 生成のstepの結果のうち、Claudeの出力とPRのファイルのパスを含む値。
+ * Windmillは引数の`$var:`で始まる文字列を解決するので、flowが1つのJSONの文字列に包んで渡す。
+ */
+export const PR_REVIEW_POST_UNTRUSTED = isShape({
+  summary: isString,
+  verdict: isStringOrNull,
+  findings: isArrayOf(isReviewFindingShape),
+  thread_responses: isArrayOf(isThreadResponseShape),
+  pr_files: isStringArray,
+  pr_file_hunks: isNullOr(isArrayOf(isFileDiffHunksShape)),
+  binary_files: isStringArray,
+});
+
+/** `main`の引数のうち、包まずに受け取る値と、包んだ引数(`untrusted`)。 */
+export type SealedPrReviewPostArgs = Omit<
+  PrReviewPostInput,
+  | "summary"
+  | "verdict"
+  | "findings"
+  | "thread_responses"
+  | "pr_files"
+  | "pr_file_hunks"
+  | "binary_files"
+> & { readonly untrusted: string };
+
+/** `worktree_dir`が空でなければreviewのworktreeを消す。消せなくても警告を記録するだけで投げない。 */
+async function removeReviewWorktreeQuietly(
+  repoDir: string,
+  worktreeDir: string,
+  deps: PrReviewPostDeps,
+): Promise<void> {
+  if (worktreeDir === "") return;
+  try {
+    await deps.removeReviewWorktree(repoDir, worktreeDir);
+  } catch (err) {
+    deps.log.warn("failed to remove review worktree", {
+      worktree_dir: worktreeDir,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+}
+
+async function readGeneratedOrCleanUp(
+  args: SealedPrReviewPostArgs,
+  deps: PrReviewPostDeps,
+) {
+  try {
+    return parseUntrustedArg(
+      args.untrusted,
+      "pr_review_post",
+      PR_REVIEW_POST_UNTRUSTED,
+    );
+  } catch (err) {
+    await removeReviewWorktreeQuietly(args.repo_dir, args.worktree_dir, deps);
+    throw err;
+  }
+}
+
+/**
+ * 包んだ引数を戻してから`runPrReviewPost`を呼ぶ。
+ * 戻せないときも、`worktree_dir`が空でなければreviewのworktreeを消してから投げる。
+ * 残ると同じshaを再実行したときに、worktreeを作れず止まるためである。
+ * 包んだ値から取るキーは明示する。包んだ値が、包まずに受け取る値(`owner`や`worktree_dir`など)を上書きしないためである。
+ */
+export async function runSealedPrReviewPost(
+  args: SealedPrReviewPostArgs,
+  deps: PrReviewPostDeps,
+): Promise<PrReviewPostResult> {
+  const generated = await readGeneratedOrCleanUp(args, deps);
+  return runPrReviewPost(
+    {
+      work_item_id: args.work_item_id,
+      skip: args.skip,
+      owner: args.owner,
+      repo: args.repo,
+      pr_number: args.pr_number,
+      review_sha: args.review_sha,
+      summary: generated.summary,
+      verdict: generated.verdict,
+      findings: generated.findings,
+      thread_responses: generated.thread_responses,
+      pr_files: generated.pr_files,
+      pr_file_hunks: generated.pr_file_hunks,
+      binary_files: generated.binary_files,
+      binary_unlisted_count: args.binary_unlisted_count,
+      worktree_dir: args.worktree_dir,
+      repo_dir: args.repo_dir,
+    },
+    deps,
+  );
+}
+
+/**
+ * `main`の引数で`runSealedPrReviewPost`を呼ぶ。
+ * Windmillは`main`の引数から入力のスキーマを作るので、差し替えられる依存は`runSealedPrReviewPost`に分けている。
+ * `untrusted`は、`PR_REVIEW_POST_UNTRUSTED`の形の値をJSONの文字列にしたもの。
  */
 export async function main(
   work_item_id: number,
@@ -173,18 +258,12 @@ export async function main(
   repo: string,
   pr_number: number,
   review_sha: string,
-  summary: string,
-  verdict: string | null,
-  findings: ReviewFinding[],
-  thread_responses: ThreadResponse[],
-  pr_files: string[],
-  pr_file_hunks: FileDiffHunks[],
-  binary_files: string[],
+  untrusted: string,
   binary_unlisted_count: number,
   worktree_dir: string,
   repo_dir: string,
 ): Promise<PrReviewPostResult> {
-  return runPrReviewPost(
+  return runSealedPrReviewPost(
     {
       work_item_id,
       skip,
@@ -192,13 +271,7 @@ export async function main(
       repo,
       pr_number,
       review_sha,
-      summary,
-      verdict,
-      findings,
-      thread_responses,
-      pr_files,
-      pr_file_hunks,
-      binary_files,
+      untrusted,
       binary_unlisted_count,
       worktree_dir,
       repo_dir,
@@ -275,16 +348,7 @@ export async function runPrReviewPost(
     // GitHubの一時的な失敗には印を付け、自動の再開に回す。
     throw markTransientGitHubFailure(err);
   } finally {
-    if (input.worktree_dir !== "") {
-      try {
-        await deps.removeReviewWorktree(input.repo_dir, input.worktree_dir);
-      } catch (err) {
-        deps.log.warn("failed to remove review worktree", {
-          worktree_dir: input.worktree_dir,
-          error: maskSecrets(err instanceof Error ? err.message : String(err)),
-        });
-      }
-    }
+    await removeReviewWorktreeQuietly(input.repo_dir, input.worktree_dir, deps);
   }
 }
 
@@ -818,10 +882,8 @@ async function postReview(
     findings,
     pr_files,
   } = input;
-  const { binaryFiles, binaryUnlistedCount } = normalizeBinaryInput(
-    input.binary_files,
-    input.binary_unlisted_count,
-  );
+  const binaryFiles = input.binary_files;
+  const binaryUnlistedCount = input.binary_unlisted_count;
 
   if (skip || verdict === null) {
     return SKIPPED_POST;
@@ -898,7 +960,7 @@ async function postReview(
           repo,
           repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
         ),
-      threadResponses: normalizeThreadResponses(input.thread_responses),
+      threadResponses: input.thread_responses,
       isAllowedReplier: (login, id) =>
         isAllowedLabeler(login, labelerPolicy, id),
     },

@@ -321,6 +321,13 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 再試行の判定を各flowへ配線する`retry_if`のテスト(`tests/scripts/claude_flow_retry.test.ts`)も守る。
  * flowの定義(`*__flow/flow.yaml`)は日常的に直すので守らない。`retry_if`を消すと、保護されたこのテストが落ちるので、検査を通せず、人の承認に回る。
  * 2つのlibのlockは、上のlibのlockと同じ扱いで守らない。
+ * stepの間で包んで渡した値を戻す部品(`lib/untrusted_arg.ts`)と、その`.script.yaml`も守る。
+ * 外から来た文字列とClaudeの出力が、変数やresourceの参照として解決される経路を閉じる部品なので、書き換えられると、秘密値が引数に入る。
+ * 包まずに渡してよい引数と、包む式を、すべてのflowから検査するテスト(`tests/scripts/flow_untrusted_args.test.ts`)も守る。
+ * flowの定義(`*__flow/flow.yaml`)は日常的に直すので守らない。包む式を外すと、保護されたこのテストが落ちるので、検査を通せず、人の承認に回る。
+ * 部品の単体テスト(`tests/lib/untrusted_arg.test.ts`)と、式を評価するテストの補助(`tests/lib/flowExpressions.ts`、`tests/lib/untrustedArgSupport.ts`)も守る。
+ * 補助を書き換えると、式の評価を変えて検査をすり抜けさせられるためである。
+ * `lib/untrusted_arg.script.lock`は、依存の無いlibのlockと同じ扱いで守らない。
  * 保護パスに触れた変更の反映を人の承認まで止める仕組みも守る。承認の表を作るmigration2本、表の唯一の読み書き(`lib/deploy_approvals.ts`)と
  * その`.script.yaml`、表の部品の単体テストと参照の検出(`tests/lib/deploy_approvals.test.ts`、`tests/scripts/deploy_approvals_wiring.test.ts`)、
  * 実DBの検査(`scripts/test-db-deploy-approvals.ts`)である。書き換えられると、承認の無い版が承認済みとして読まれ、保護パスの変更が人の確認なしに反映される。
@@ -621,6 +628,12 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/flow_retry_marker.ts",
   "f/factory/lib/flow_retry_marker.script.yaml",
   "tests/scripts/claude_flow_retry.test.ts",
+  "f/factory/lib/untrusted_arg.ts",
+  "f/factory/lib/untrusted_arg.script.yaml",
+  "tests/lib/untrusted_arg.test.ts",
+  "tests/lib/untrustedArgSupport.ts",
+  "tests/lib/flowExpressions.ts",
+  "tests/scripts/flow_untrusted_args.test.ts",
   "f/factory/lib/check_sandbox.ts",
   "f/factory/lib/check_sandbox.script.yaml",
   "f/factory/lib/check_runner.ts",

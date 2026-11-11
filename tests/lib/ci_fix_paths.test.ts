@@ -896,6 +896,10 @@ describe("dependencies of the denied safety files", () => {
     expect(denied).toEqual([]);
   });
 
+  test("untrusted_arg.ts is denied, because it decides which values reach a step", () => {
+    expect(isDeniedPath("f/factory/lib/untrusted_arg.ts")).toBe(true);
+  });
+
   test("owner_id_notice.ts is not denied, so the collection can read it", () => {
     expect(isDeniedPath("f/factory/lib/owner_id_notice.ts")).toBe(false);
   });

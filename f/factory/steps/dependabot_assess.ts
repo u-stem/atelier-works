@@ -49,6 +49,7 @@ import {
   type FactoryConfig,
   isRecord,
 } from "../lib/types.ts";
+import { isShape, parseUntrustedArg } from "../lib/untrusted_arg.ts";
 import {
   assertWorktreeGitPointer,
   buildGitArgv,
@@ -778,13 +779,24 @@ export async function runDependabotAssess(
 // ---- 結線 ----
 
 /**
+ * 包んだ引数(`untrusted`)の形。flow.yamlの式のキーと一致する。
+ * 準備の結果は、PRの題名と本文、変更履歴を無害化した文を含む。中身の形は`readPrepareResult`が確かめる。
+ */
+export const DEPENDABOT_ASSESS_UNTRUSTED = isShape({ prepare: isRecord });
+
+/**
  * dependabotの作業項目の影響調査をする(`runDependabotAssess`)。
- * `prepare`は準備ステップ(`dependabot_prepare`)の戻り値をそのまま受け取る。
+ * `untrusted`は、準備ステップ(`dependabot_prepare`)の戻り値をJSONの文字列に包んだもの。
  */
 export async function main(
   work_item_id: number,
-  prepare: object,
+  untrusted: string,
 ): Promise<DependabotAssessResult> {
+  const { prepare } = parseUntrustedArg(
+    untrusted,
+    "dependabot_assess",
+    DEPENDABOT_ASSESS_UNTRUSTED,
+  );
   const log = logger("dependabot_assess");
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),

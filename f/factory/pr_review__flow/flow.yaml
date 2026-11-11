@@ -67,27 +67,12 @@ value:
       value:
         type: script
         input_transforms:
-          summary:
-            type: javascript
-            expr: results.pr_review_generate?.summary ?? ""
-          binary_files:
-            type: javascript
-            expr: results.pr_review_generate?.binary_files ?? []
           binary_unlisted_count:
             type: javascript
             expr: results.pr_review_generate?.binary_unlisted_count ?? 0
-          findings:
-            type: javascript
-            expr: results.pr_review_generate?.findings ?? []
           owner:
             type: javascript
             expr: results.pr_review_prepare.owner
-          pr_file_hunks:
-            type: javascript
-            expr: results.pr_review_generate?.pr_file_hunks ?? null
-          pr_files:
-            type: javascript
-            expr: results.pr_review_generate?.pr_files ?? []
           pr_number:
             type: javascript
             expr: results.pr_review_prepare.pr_number
@@ -103,12 +88,18 @@ value:
           skip:
             type: javascript
             expr: results.pr_review_prepare.skip
-          thread_responses:
+          untrusted:
             type: javascript
-            expr: results.pr_review_generate?.thread_responses ?? []
-          verdict:
-            type: javascript
-            expr: results.pr_review_generate?.verdict ?? null
+            expr: >-
+              JSON.stringify({
+              summary: results.pr_review_generate?.summary ?? "",
+              verdict: results.pr_review_generate?.verdict ?? null,
+              findings: results.pr_review_generate?.findings ?? [],
+              thread_responses: results.pr_review_generate?.thread_responses ?? [],
+              pr_files: results.pr_review_generate?.pr_files ?? [],
+              pr_file_hunks: results.pr_review_generate?.pr_file_hunks ?? null,
+              binary_files: results.pr_review_generate?.binary_files ?? []
+              }).replace(/\$/g, "\\u0024")
           work_item_id:
             type: javascript
             expr: flow_input.work_item_id
@@ -128,7 +119,7 @@ value:
       input_transforms:
         error:
           type: javascript
-          expr: error
+          expr: JSON.stringify(error ?? null).replace(/\$/g, "\\u0024")
         path:
           type: static
           value: f/factory/pr_review

@@ -25,11 +25,13 @@ import {
   assertBranchName,
   type FactoryConfig,
   type ImplementRoundOutcome,
+  isBoolean,
   isOneOf,
   isRecord,
   isString,
   isStringArray,
 } from "./types.ts";
+import { isArrayOf, isLiteral, isShape } from "./untrusted_arg.ts";
 import { withCommitTrailers } from "./workspace.ts";
 
 export { parseImplementBranchWorkItemId } from "./types.ts";
@@ -707,6 +709,22 @@ export type ImplementCheckSummary =
       }[];
     }
   | { readonly kind: "skipped"; readonly reason: string };
+
+const isRanCheckSummary = isShape({
+  kind: isLiteral("ran"),
+  results: isArrayOf(isShape({ command: isString, ok: isBoolean })),
+});
+const isSkippedCheckSummary = isShape({
+  kind: isLiteral("skipped"),
+  reason: isString,
+});
+
+/** 値が`ImplementCheckSummary`の形か。flowのstepの間で包んで渡した値を戻すときに使う。 */
+export function isImplementCheckSummary(
+  value: unknown,
+): value is ImplementCheckSummary {
+  return isRanCheckSummary(value) || isSkippedCheckSummary(value);
+}
 
 /**
  * PR本文の仕様の欄。`requirements`は承認済みの要件定義、`issue`は承認を省く進め方で、

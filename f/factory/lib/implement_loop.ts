@@ -29,6 +29,7 @@ import {
   IMPLEMENT_CHECK_SKIP_REASONS,
   type ImplementCheckSummary,
   type ImplementClaudeOutput,
+  isImplementCheckSummary,
   isImplementClaudeOutput,
   roundIsStalled,
   roundOutcomeForExit,
@@ -38,7 +39,7 @@ import {
   validateImplementOutput,
 } from "./implement_support.ts";
 import { jobTmpBase } from "./job_tmp.ts";
-import { escapeReasonSeparator, logger } from "./log.ts";
+import { escapeReasonSeparator } from "./log.ts";
 import { modelFor } from "./model_policy.ts";
 import {
   type CheckFailure,
@@ -48,14 +49,29 @@ import {
   type ImplementSpecKind,
 } from "./prompts.ts";
 import type { ChangedPath } from "./protected_paths.ts";
-import type {
-  AgentRunRecord,
-  Diagram,
-  FactoryConfig,
-  ImplementDiffStat,
-  ImplementRoundMode,
-  ImplementRoundRecord,
+import {
+  type AgentRunRecord,
+  type Diagram,
+  type FactoryConfig,
+  type ImplementDiffStat,
+  type ImplementRoundMode,
+  type ImplementRoundRecord,
+  isBoolean,
+  isImplementDiffStat,
+  isNumber,
+  isOneOf,
+  isString,
+  isStringArray,
 } from "./types.ts";
+import {
+  type Guard,
+  isArrayOf,
+  isLiteral,
+  isNullOr,
+  isNumberOrNull,
+  isShape,
+  isStringOrNull,
+} from "./untrusted_arg.ts";
 import {
   type CommandRunner,
   type GitleaksScan,
@@ -126,12 +142,10 @@ export type ImplementContext = {
   /**
    * 仕様の出どころ。`requirements`は人が承認した要件定義、`issue`は承認を省く進め方で、
    * 取り込み時点のIssueの題名と本文(`issue_title`、`issue_body`)が仕様になる。
-   * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`implementContextSpecKind`を通す。
    */
   readonly spec_kind: ImplementSpecKind;
   /**
    * 作業項目の進め方。`spec_kind`が`issue`のとき、プロンプトの進め方ごとの指示とPR本文の注記が読む。
-   * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も許す。
    */
   readonly profile: string;
   /** 承認済みの要件定義の本文。`spec_kind`が`issue`のときは`null`。 */
@@ -148,14 +162,12 @@ export type ImplementContext = {
    * 承認済みの下書きの`doc_hash`(承認時に保存したディレクトリの内容のハッシュ)。
    * Claudeの実行ごとの複製の前後に、`requirements_doc_dir`の現在のハッシュをこれと比べる。
    * 基準値が無い下書きでは`null`で、照合は飛ばす。
-   * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も基準値なしとして扱い、複製の側が警告を出す。
    */
   readonly requirements_doc_hash: string | null;
   /**
    * 承認済みの設計書の本文。`designGate`が整えた(制御文字と書式文字を除き、秘密をマスクし、長さを絞った)ものである。
    * HTMLとリンク参照定義は除かず、文字としてそのまま渡す。
    * 設計が無効なら`null`。設計書の図とディレクトリは文脈に載せない。
-   * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も`null`として扱う。
    */
   readonly design_markdown: string | null;
   /** 承認済みの要件定義を開くConsoleのリンク。`spec_kind`が`issue`のときは`null`。 */
@@ -181,6 +193,49 @@ export type ImplementContext = {
   readonly deadline_at: number;
 };
 
+const IMPLEMENT_SPEC_KINDS: readonly ImplementSpecKind[] = [
+  "requirements",
+  "issue",
+];
+
+const isImplementSpecKind = (value: unknown): value is ImplementSpecKind =>
+  isOneOf(value, IMPLEMENT_SPEC_KINDS);
+
+/**
+ * 値が`ImplementContext`の形か。stepの間で包んで渡した文脈を戻すときに使う。
+ * 文脈は、Issueの題名と本文を含む。
+ */
+export const isImplementContextShape = isShape({
+  owner: isString,
+  repo: isString,
+  issue_number: isNumber,
+  issue_url: isString,
+  issue_title: isString,
+  issue_body: isString,
+  branch: isString,
+  base_branch: isString,
+  base_sha: isString,
+  repo_dir: isString,
+  worktree_dir: isString,
+  factory_clone_dir: isString,
+  expected_head_sha: isString,
+  existing_pr_number: isNumberOrNull,
+  existing_pr_url: isStringOrNull,
+  has_previous_implementation: isBoolean,
+  attempt: isNumber,
+  spec_kind: isImplementSpecKind,
+  profile: isString,
+  requirements_markdown: isStringOrNull,
+  requirements_diagrams: isArrayOf(isShape({ name: isString, file: isString })),
+  requirements_doc_dir: isStringOrNull,
+  requirements_doc_hash: isStringOrNull,
+  design_markdown: isStringOrNull,
+  requirements_console_url: isStringOrNull,
+  is_factory_repo: isBoolean,
+  worktree_git_pointer: isString,
+  deadline_at: isNumber,
+});
+
 /**
  * `implementPrompt`と`implementFixPrompt`が共有する入力を作る。
  * 承認済みのMarkdownはプロンプトがコードフェンスで囲んで埋め込む。
@@ -189,19 +244,12 @@ export type ImplementContext = {
  * プロンプトが示すパスであり、`addDirs`で渡すパスでもある。
  */
 export function implementPromptInput(
-  context: Omit<
-    ImplementContext,
-    "design_markdown" | "spec_kind" | "profile"
-  > & {
-    readonly design_markdown?: string | null;
-    readonly spec_kind?: ImplementSpecKind;
-    readonly profile?: string;
-  },
+  context: ImplementContext,
   docDir: string | null,
 ): ImplementPromptInput {
   return {
-    specKind: implementContextSpecKind(context),
-    profile: context.profile ?? null,
+    specKind: context.spec_kind,
+    profile: context.profile,
     issue: {
       owner: context.owner,
       repo: context.repo,
@@ -217,29 +265,16 @@ export function implementPromptInput(
     },
     worktreeDir: context.worktree_dir,
     branch: context.branch,
-    design: context.design_markdown ?? null,
+    design: context.design_markdown,
     hasPreviousImplementation: context.has_previous_implementation,
   };
 }
 
-/**
- * 文脈の仕様の出どころを返す。
- * `spec_kind`を足す前の準備ステップが作った文脈には項目が無いので、`undefined`は要件定義として扱う。
- */
-export function implementContextSpecKind(context: {
-  readonly spec_kind?: ImplementSpecKind;
-}): ImplementSpecKind {
-  return context.spec_kind ?? "requirements";
-}
-
-/**
- * 文脈が設計書を持つかを返す。設計書を持つ実行だけが、`design_gap`を返せる。
- * `design_markdown`を足す前の準備ステップが作った文脈には項目が無いので、`undefined`は設計書なしとして扱う。
- */
+/** 文脈が設計書を持つかを返す。設計書を持つ実行だけが、`design_gap`を返せる。 */
 export function implementContextHasDesign(context: {
-  readonly design_markdown?: string | null;
+  readonly design_markdown: string | null;
 }): boolean {
-  return (context.design_markdown ?? null) !== null;
+  return context.design_markdown !== null;
 }
 
 // ---------------------------------------------------------------------------
@@ -390,10 +425,8 @@ export type DocDirGuard = {
   /**
    * 承認時に保存した基準値。
    * `null`か空なら、基準値が無い下書きなので照合を黙って飛ばす。警告は準備のステップが1回だけ出す。
-   * `undefined`は、基準値の項目を足す前の準備ステップが作った文脈で、準備のステップが警告を出していない。
-   * このときは、複製の呼び出しごとに1回警告を出して照合を飛ばす。
    */
-  readonly baseline: string | null | undefined;
+  readonly baseline: string | null;
   /** ディレクトリの内容のハッシュ。ディレクトリが無ければ`null`。 */
   readonly hashTree: (dir: string) => Promise<string | null>;
   /**
@@ -409,25 +442,17 @@ export type DocDirGuard = {
   ) => Promise<string | null>;
   /** 照合が合わないときの理由。省略すると要件定義の理由を使う。 */
   readonly reasons?: DocDirGuardReasons;
-  /** 基準値の項目が無い文脈の警告の出力先。省略すると警告を出さない。 */
-  readonly warn?: (message: string, fields: Record<string, unknown>) => void;
 };
 
-/**
- * 文脈の基準値と本番のハッシュ関数から、複製の照合の設定を作る。
- * 基準値の項目が無い文脈(`undefined`)は、基準値が`null`の文脈と区別して渡す。
- * 前者だけが複製の側で警告を出すためである。
- */
+/** 文脈の基準値と本番のハッシュ関数から、複製の照合の設定を作る。 */
 export function docDirGuardFor(context: {
-  readonly requirements_doc_hash?: string | null;
+  readonly requirements_doc_hash: string | null;
 }): DocDirGuard {
-  const log = logger("implement_loop");
   return {
     baseline: context.requirements_doc_hash,
     hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
     copyAndHash: (source, destination) =>
       copyDirectoryTreeWithHash(source, destination),
-    warn: (message, fields) => log.warn(message, fields),
   };
 }
 
@@ -443,7 +468,6 @@ export function docDirGuardFor(context: {
  * 複製の後に複製のディレクトリを読み直したハッシュとは比べない。複製はシンボリックリンクと特殊ファイルを落とすので、元の内容と一致しないためである。
  * 違うか、ディレクトリが無ければ、`fn`を呼ばずに`RequirementsUntrustedError`を投げる。理由は`guard.reasons`で、省略すると要件定義の理由になる。
  * 基準値が無ければ、照合を飛ばし、ディスクに無いときは複製せずに`null`を渡す。
- * 基準値の項目自体が無い(`undefined`)ときは、この呼び出しで1回、`guard.warn`に警告を渡す。
  */
 export async function withReadOnlyDocDirCopy<T>(
   docDir: string | null,
@@ -452,18 +476,9 @@ export async function withReadOnlyDocDirCopy<T>(
   guard?: DocDirGuard,
 ): Promise<T> {
   if (docDir === null) return fn(null);
-  if (guard !== undefined && guard.baseline === undefined) {
-    guard.warn?.(
-      "the context has no baseline item for the approved requirements; skipping the comparison",
-      { doc_dir: docDir },
-    );
-  }
   const reasons = guard?.reasons ?? REQUIREMENTS_GUARD_REASONS;
   const hasBaseline =
-    guard !== undefined &&
-    guard.baseline !== null &&
-    guard.baseline !== undefined &&
-    guard.baseline.length > 0;
+    guard !== undefined && guard.baseline !== null && guard.baseline.length > 0;
   const throwUnlessMatch = (verdict: DocHashCheck): void => {
     if (verdict === "missing")
       throw new RequirementsUntrustedError(reasons.missing);
@@ -566,6 +581,58 @@ export const IMPLEMENT_CLAUDE_ROUND_KINDS: readonly ImplementClaudeRound["kind"]
     "lease_lost",
     "requirements_modified",
   ];
+
+const isOutputRound = isShape({
+  kind: isLiteral("output"),
+  output: isImplementClaudeOutput,
+  agent_run_id: isNumber,
+  cost_usd: isNumber,
+});
+const isInvalidOutputRound = isShape({
+  kind: isLiteral("invalid_output"),
+  output: isImplementClaudeOutput,
+  reason: isString,
+  agent_run_id: isNumber,
+  cost_usd: isNumber,
+});
+const isClaudeFailedRound = isShape({
+  kind: isLiteral("claude_failed"),
+  reason: isString,
+  detail: isString,
+  agent_run_id: isNumber,
+  cost_usd: isNumber,
+});
+const isLeaseLostRound = isShape({ kind: isLiteral("lease_lost") });
+const isRequirementsModifiedRound = isShape({
+  kind: isLiteral("requirements_modified"),
+  reason: isString,
+});
+
+/**
+ * ラウンドの種類ごとの型ガード。`ImplementClaudeRound`に種類を足すと、この表が型で足りなくなる。
+ * 型ガードの足し忘れは、型検査が止める。
+ */
+const ROUND_GUARDS: {
+  readonly [K in ImplementClaudeRound["kind"]]: Guard<
+    Extract<ImplementClaudeRound, { readonly kind: K }>
+  >;
+} = {
+  output: isOutputRound,
+  invalid_output: isInvalidOutputRound,
+  claude_failed: isClaudeFailedRound,
+  lease_lost: isLeaseLostRound,
+  requirements_modified: isRequirementsModifiedRound,
+};
+
+/**
+ * 値が`ImplementClaudeRound`の形か。stepの間で包んで渡した1回目のラウンドを戻すときに使う。
+ * ラウンドは、Claudeの出力と、失敗の詳細を含む。
+ */
+export function isImplementClaudeRoundShape(
+  value: unknown,
+): value is ImplementClaudeRound {
+  return Object.values(ROUND_GUARDS).some((guard) => guard(value));
+}
 
 /** Claudeを実際に実行したラウンド(`lease_lost`と`requirements_modified`以外)。 */
 export type ImplementClaudeRunRound = Exclude<
@@ -800,6 +867,25 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
   "claude_error",
   "lease_lost",
 ];
+
+/**
+ * 値が`ImplementLoopResult`の形か。stepの間で包んで渡したループの結果を戻すときに使う。
+ * 結果は、Claudeの出力と、変更したファイルのパスを含む。
+ */
+export const isImplementLoopResultShape = isShape({
+  exit: (value): value is ImplementLoopExit =>
+    isOneOf(value, IMPLEMENT_LOOP_EXITS),
+  reason: isStringOrNull,
+  gap_report: isStringOrNull,
+  rounds: isNumber,
+  total_cost_usd: isNumber,
+  final_output: isNullOr(isImplementClaudeOutput),
+  protected_changes: isStringArray,
+  checks: isNullOr(isImplementCheckSummary),
+  diff_stat: isNullOr(isImplementDiffStat),
+  changed_paths: isStringArray,
+  verified_tree_sha: isStringOrNull,
+});
 
 export const GITLEAKS_TIMEOUT_MS = 5 * 60_000;
 

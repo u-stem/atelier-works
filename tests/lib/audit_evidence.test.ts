@@ -439,6 +439,12 @@ describe("metricsOf", () => {
     };
     expect(metricsOf(evidence).needs_human_count).toBe(52);
   });
+
+  test("holds only numbers, because the flow passes it to the next step as it is", () => {
+    const values = Object.values(metricsOf(EMPTY_EVIDENCE));
+
+    expect(values.every((value) => typeof value === "number")).toBe(true);
+  });
 });
 
 describe("collectAuditEvidence", () => {

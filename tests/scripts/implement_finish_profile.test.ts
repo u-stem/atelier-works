@@ -40,7 +40,7 @@ describe("the protected path reroute in implement_finish", () => {
 
   test("decides from the kind of the specification and the protected changes of the loop", async () => {
     expect(await source()).toMatch(
-      /decideProtectedPathReroute\(\{\s*specKind: implementContextSpecKind\(context\),\s*protectedChanges: loop_result\.protected_changes,\s*\}\)/,
+      /decideProtectedPathReroute\(\{\s*specKind: context\.spec_kind,\s*protectedChanges: loop_result\.protected_changes,\s*\}\)/,
     );
   });
 
@@ -130,7 +130,7 @@ describe("the partial push in implement_finish", () => {
 
   test("withholds the partial work that touches a protected path of the issue specification", async () => {
     expect(await source()).toMatch(
-      /shouldWithholdPartialPush\(\{\s*specKind: implementContextSpecKind\(ctx\),\s*protectedChanges: loop_result\?\.protected_changes \?\? \[\],\s*\}\)/,
+      /shouldWithholdPartialPush\(\{\s*specKind: ctx\.spec_kind,\s*protectedChanges: loop_result\?\.protected_changes \?\? \[\],\s*\}\)/,
     );
   });
 
@@ -146,7 +146,7 @@ describe("the pull request body in implement_finish", () => {
 
   test("hands the warnings of the diff for the issue specification", async () => {
     expect(await source()).toMatch(
-      /profileWarnings:\s*implementContextSpecKind\(ctx\) === "issue"\s*\?\s*profileDiffWarnings\(ctx\.profile, loop\.changed_paths\)\s*:\s*\[\],/,
+      /profileWarnings:\s*ctx\.spec_kind === "issue"\s*\?\s*profileDiffWarnings\(ctx\.profile, loop\.changed_paths\)\s*:\s*\[\],/,
     );
   });
 });
@@ -160,7 +160,7 @@ describe("the check of the staged tree before the partial push in implement_fini
 
   test("classifies the issue specification against the base of the branch", async () => {
     expect(await source()).toMatch(
-      /protectedPartialPushStopReasons\(\{\s*specKind: implementContextSpecKind\(ctx\),\s*listStagedChanges: \(\) =>\s*listChangedPaths\(\s*runCommand,\s*ctx\.worktree_dir,\s*ctx\.base_sha,?\s*\),?\s*\}\)/,
+      /protectedPartialPushStopReasons\(\{\s*specKind: ctx\.spec_kind,\s*listStagedChanges: \(\) =>\s*listChangedPaths\(\s*runCommand,\s*ctx\.worktree_dir,\s*ctx\.base_sha,?\s*\),?\s*\}\)/,
     );
   });
 });
