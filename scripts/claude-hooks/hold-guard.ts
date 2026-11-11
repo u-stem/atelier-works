@@ -13,7 +13,8 @@
 // 一覧と検査(`list`、`check`)と、削除を確定しない押し出し(`push`、`push --dry-run`)は許す。
 // `--scope`の値が実行時に決まる形(変数、コマンド置換、glob)は、`deploy`かを判定できないので拒否する。
 // 凍結のCLIを指す語は、直後の`--`を読み飛ばして副コマンドを決め、globは凍結のファイル名に当たるかで判定する。
-// `-e`の直後の文字列と標準入力のコードは、凍結のCLIを指しながら`release`、`deploy`、`reset`、`prune`を含めば拒否する。
+// 凍結のCLIを指す語があれば、書き込みの語を位置を問わず数える。
+// 語のどれかの中と標準入力のコードに、凍結のCLIのパスと`release`、`deploy`、`reset`、`prune`が並べば、コードを取るオプションの種類を問わず拒否する。
 // 標準入力へ流し込むファイル(`bun run - < scripts/freeze.ts`)が保留か凍結のコードなら拒否する。
 //
 // Consoleの書き込みのscript(`console-scripts.ts`の一覧。保留と凍結の解除、ジョブの取消など)を1コマンドで呼ぶ形は、
@@ -204,6 +205,14 @@ const HOLD_MENTION =
  */
 const FREEZE_MENTION =
   /(?<![A-Za-z0-9_.-])freeze(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
+
+/**
+ * 保留と凍結のコードを、パスの形で指す字面。`scripts/<名前>`か、拡張子の付いた`<名前>.ts`の形である。
+ * 正規表現の区切りの`/hold|release/`のように、名前の字だけが出るパターンには当たらない。
+ * コードの文字列の中で、書き込みの語と並ぶかを見るために使う。
+ */
+const CODE_PATH_MENTION =
+  /(?<![A-Za-z0-9_.-])(?:scripts\/(?:hold|hold_psql|holds|freeze)(?:\.[cm]?[jt]sx?)?|(?:hold|hold_psql|holds|freeze)\.[cm]?[jt]sx?)(?![A-Za-z0-9_.-])/i;
 
 /** `hold`だけを指すパス(`hold_psql`と`holds`は含まない)。 */
 const HOLD_CLI = /^(?:.*\/)?hold(?:\.[cm]?[jt]sx?)?$/i;
@@ -575,41 +584,13 @@ function pointsAtFreezeCode(word: Word): boolean {
   });
 }
 
-/** 次の語をコードとして実行する実行系のオプションと副コマンド。 */
-const CODE_FLAGS: ReadonlySet<string> = new Set([
-  "-e",
-  "--eval",
-  "-p",
-  "--print",
-  "-c",
-  "--command",
-  "eval",
-]);
-
 /**
- * 実行系の引数のうち、コードとして実行される文字列。
- * `-e`などの直後の語と、`--eval=<コード>`の値である。
- * `-t`の値や凍結のCLIの`--reason`の値のように、コードでない文字列は読まない。
+ * 文字列が、保留か凍結のコードをパスの形で指しながら、端末の確認を通る書き込みかdeployの保留を書いているなら真。
+ * パスの形の言及に限るのは、`--reason "freeze for release"`のような理由の文字列を止めないためである。
  */
-function codeStrings(args: readonly Word[]): string[] {
-  const codes: string[] = [];
-  for (const [index, word] of args.entries()) {
-    for (const text of spellings(word)) {
-      const inline = /^--(?:eval|print|command)=([\s\S]*)$/.exec(text);
-      if (inline?.[1] !== undefined) codes.push(inline[1]);
-    }
-    if (CODE_FLAGS.has(word.text)) {
-      const next = args[index + 1];
-      if (next !== undefined) codes.push(...spellings(next));
-    }
-  }
-  return codes;
-}
-
-/** コードの文字列が、凍結のCLIを指しながら、端末の確認を通る書き込みかdeployの保留を書いているなら真。 */
 function codeTouchesFreezeRelease(text: string): boolean {
   return (
-    FREEZE_MENTION.test(text) &&
+    CODE_PATH_MENTION.test(text) &&
     /\b(?:release|deploy|reset|prune)\b/i.test(text)
   );
 }
@@ -670,24 +651,60 @@ function firstOperandAt(words: readonly Word[], from: number): number {
 
 /**
  * 実行系の引数が、凍結のCLI(`scripts/freeze.ts`)で、端末の確認を通る書き込みか、deployの保留を置く形なら拒否の種類を返す。
- * 凍結のCLIを指す語は、すべて調べる。直後の語が副コマンドである。
- * 実行時に決まるときは判定できないので`dynamic`を返す。
- * `-e`などの直後の文字列と標準入力で渡すコードは、凍結のCLIを指しながら`release`、`deploy`、`reset`、`prune`を含めば拒否する。
+ * 標準入力の文字列と語のどれかの中に、凍結のCLIのパスと`release`、`deploy`、`reset`、`prune`が並べば拒否する。
+ * コードを取るオプションの種類は問わない。一覧を読む方式は、一覧に無いオプションで破られるためである。
+ * 凍結のCLIを指す語があれば、書き込みの語を位置を問わず数える。副コマンドの前のオプションで破られないためである。
+ * 凍結のCLIを指す語の後ろの副コマンドが実行時に決まるときは、判定できないので`dynamic`を返す。
+ * 最初のオペランドが検査の道具なら、標準入力の文字列のほかは見ない。
  */
 function freezeCliFinding(
   args: readonly Word[],
   inputs: () => readonly string[] | null,
 ): HoldFinding | null {
-  const codes = [...(inputs() ?? []), ...codeStrings(args)];
-  if (codes.some(codeTouchesFreezeRelease)) return "operation";
+  if ((inputs() ?? []).some(codeTouchesFreezeRelease)) return "operation";
+  if (startsWithInspectionTool(args)) return null;
+  if (
+    args.some(
+      (word, index) =>
+        !isReasonValue(args, index) &&
+        spellings(word).some(codeTouchesFreezeRelease),
+    )
+  ) {
+    return "operation";
+  }
+  if (!args.some(pointsAtFreezeCode)) return null;
+  if (
+    args.some((word) =>
+      FREEZE_WRITE_WORDS.some((target) => hasSpelling(word, target)),
+    )
+  ) {
+    return "operation";
+  }
   let found: HoldFinding | null = null;
+  const placeAt = args.findIndex((word) => hasSpelling(word, "place"));
+  if (placeAt !== -1) {
+    found = deployScopeFinding(
+      args.slice(placeAt + 1).filter((word) => word.text !== "--"),
+    );
+  }
   for (const [at, word] of args.entries()) {
     if (!pointsAtFreezeCode(word)) continue;
-    const finding = freezeSubcommandAt(args, at + 1);
-    if (finding === "operation") return finding;
-    found = found ?? finding;
+    found = stronger(found, freezeSubcommandAt(args, at + 1));
   }
   return found;
+}
+
+/**
+ * `index`番目の語が、凍結のCLIの`--reason`の値(直後の語か、`--reason=`の形)なら真。
+ * 理由の文字列はコードとして実行されないので、CLIのパスと書き込みの語が並ぶ文字列の判定から外す。
+ * 書き込みの語の完全一致と、副コマンドの判定は、理由の値にも当てる。
+ */
+function isReasonValue(args: readonly Word[], index: number): boolean {
+  const word = args[index];
+  if (word === undefined) return false;
+  return (
+    word.text.startsWith("--reason=") || args[index - 1]?.text === "--reason"
+  );
 }
 
 /** 先頭の語が凍結のコードを指すなら真。 */
