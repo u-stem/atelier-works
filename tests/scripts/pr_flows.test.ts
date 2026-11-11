@@ -12,6 +12,13 @@ import {
   PR_FIX_VERIFY_STEP_TIMEOUT_SEC,
   PR_REVIEW_GENERATE_STEP_TIMEOUT_SEC,
 } from "../../f/factory/steps/pr_workflow_support.ts";
+import { evaluateSealed } from "../lib/flowExpressions.ts";
+
+function field(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null
+    ? Reflect.get(value, key)
+    : undefined;
+}
 
 function readFlow(name: string): string {
   return readFileSync(
@@ -107,10 +114,12 @@ describe("pr_fix flow.yaml", () => {
     );
   });
 
-  test("passes the PR branch recorded by prepare to the verify step", () => {
-    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_verify")).toContain(
-      "          branch:\n            type: javascript\n            expr: results.pr_fix_prepare.branch ?? null\n",
-    );
+  test("passes the PR branch recorded by prepare to the verify step inside the sealed argument", () => {
+    const sealed = evaluateSealed("pr_fix", "pr_fix_verify", {
+      results: { pr_fix_apply: {}, pr_fix_prepare: { branch: "$topic" } },
+    });
+
+    expect(field(sealed, "branch")).toBe("$topic");
   });
 
   test("passes the PR head recorded by prepare to the verify step", () => {
@@ -119,10 +128,12 @@ describe("pr_fix flow.yaml", () => {
     );
   });
 
-  test("passes the PR branch recorded by prepare to the finish step", () => {
-    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_finish")).toContain(
-      "          branch:\n            type: javascript\n            expr: results.pr_fix_prepare.branch ?? null\n",
-    );
+  test("passes the PR branch recorded by prepare to the finish step inside the sealed argument", () => {
+    const sealed = evaluateSealed("pr_fix", "pr_fix_finish", {
+      results: { pr_fix_prepare: { branch: "$topic" } },
+    });
+
+    expect(field(sealed, "branch")).toBe("$topic");
   });
 
   for (const step of ["pr_fix_apply", "pr_fix_verify", "pr_fix_finish"]) {
@@ -205,9 +216,19 @@ describe("pr_review flow.yaml", () => {
   });
 
   test("passes the binary files of the generate step to the post step inside the sealed argument", () => {
-    expect(moduleBlock(PR_REVIEW_FLOW, "pr_review_post")).toContain(
-      "              binary_files: results.pr_review_generate?.binary_files ?? []\n",
-    );
+    const sealed = evaluateSealed("pr_review", "pr_review_post", {
+      results: { pr_review_generate: { binary_files: ["a.png"] } },
+    });
+
+    expect(field(sealed, "binary_files")).toEqual(["a.png"]);
+  });
+
+  test("seals no binary files when the generate step did not run", () => {
+    const sealed = evaluateSealed("pr_review", "pr_review_post", {
+      results: {},
+    });
+
+    expect(field(sealed, "binary_files")).toEqual([]);
   });
 
   test("passes the unlisted binary count of the generate step to the post step", () => {
@@ -217,9 +238,20 @@ describe("pr_review flow.yaml", () => {
   });
 
   test("passes the diff hunks of the generate step to the post step inside the sealed argument", () => {
-    expect(moduleBlock(PR_REVIEW_FLOW, "pr_review_post")).toContain(
-      "              pr_file_hunks: results.pr_review_generate?.pr_file_hunks ?? null,\n",
-    );
+    const hunks = [{ path: "a.ts", hunks: [{ start: 1, end: 2 }] }];
+    const sealed = evaluateSealed("pr_review", "pr_review_post", {
+      results: { pr_review_generate: { pr_file_hunks: hunks } },
+    });
+
+    expect(field(sealed, "pr_file_hunks")).toEqual(hunks);
+  });
+
+  test("seals no diff hunks as null when the generate step did not run", () => {
+    const sealed = evaluateSealed("pr_review", "pr_review_post", {
+      results: {},
+    });
+
+    expect(field(sealed, "pr_file_hunks")).toBeNull();
   });
 
   test("declares the sealed argument in the schema of the post step", () => {

@@ -23,8 +23,6 @@ import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   findPostedReview,
   main,
-  normalizeBinaryInput,
-  normalizeThreadResponses,
   type PostReviewTarget,
   type PrReviewPostInput,
   type PublishReviewInput,
@@ -33,6 +31,7 @@ import {
   reviewedNotifyEvent,
   reviewTransitionNotice,
   runPrReviewPost,
+  runSealedPrReviewPost,
   sendReviewedNotification,
   shouldPostReview,
 } from "../../f/factory/steps/pr_review_post.ts";
@@ -53,6 +52,7 @@ import {
   selectThreadsToResolve,
   withReviewMarkers,
 } from "../../f/factory/steps/pr_workflow_support.ts";
+import { evaluateSealed } from "../lib/flowExpressions.ts";
 import {
   createFakeCommandRunner,
   type FakeCall,
@@ -60,6 +60,7 @@ import {
   ghApiStdout,
   ok,
 } from "../lib/testSupport.ts";
+import { sealUntrustedArg } from "../lib/untrustedArgSupport.ts";
 
 function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   return {
@@ -701,61 +702,13 @@ describe("renderReviewSummary with binary paths as code spans", () => {
   });
 });
 
-describe("normalizeBinaryInput", () => {
-  const plain = renderReviewSummary("alice", 0, "first_clean", [], 0);
-  const render = (input: ReturnType<typeof normalizeBinaryInput>) =>
-    renderReviewSummary(
-      "alice",
-      0,
-      "first_clean",
-      [],
-      0,
-      input.binaryFiles,
-      input.binaryUnlistedCount,
-    );
-
-  test("gives the old summary when both values are undefined", () => {
-    expect(render(normalizeBinaryInput(undefined, undefined))).toBe(plain);
-  });
-
-  test("gives the old summary when both values are null", () => {
-    expect(render(normalizeBinaryInput(null, null))).toBe(plain);
-  });
-
-  test("gives the old summary when only the files are null", () => {
-    expect(render(normalizeBinaryInput(null, 0))).toBe(plain);
-  });
-
-  test("gives the old summary when only the count is undefined", () => {
-    expect(render(normalizeBinaryInput([], undefined))).toBe(plain);
-  });
-
-  test("keeps the files and the count when they are given", () => {
-    expect(normalizeBinaryInput(["a.png"], 2)).toEqual({
-      binaryFiles: ["a.png"],
-      binaryUnlistedCount: 2,
-    });
-  });
-});
-
-describe("normalizeThreadResponses", () => {
-  test("treats undefined as no responses", () => {
-    expect(normalizeThreadResponses(undefined)).toEqual([]);
-  });
-
-  test("treats null as no responses", () => {
-    expect(normalizeThreadResponses(null)).toEqual([]);
-  });
-});
-
 describe("thread responses wiring", () => {
-  test("passes the responses from generate to post in the flow", async () => {
-    const flow = await Bun.file(
-      new URL("../../f/factory/pr_review__flow/flow.yaml", import.meta.url),
-    ).text();
-    expect(flow).toContain(
-      "thread_responses: results.pr_review_generate?.thread_responses ?? []",
-    );
+  test("passes the responses from generate to post in the flow", () => {
+    const responses = [{ thread_id: 1, decision: "answered", body: "ok" }];
+    const sealed = evaluateSealed("pr_review", "pr_review_post", {
+      results: { pr_review_generate: { thread_responses: responses } },
+    });
+    expect(Reflect.get(Object(sealed), "thread_responses")).toEqual(responses);
   });
 
   test("rejects an argument that is not the sealed text before it posts anything", async () => {
@@ -785,19 +738,6 @@ describe("thread responses wiring", () => {
     expect(schema).toContain(
       "untrusted:\n      type: string\n      description: レビューの総評、判定、指摘、スレッドへの答え、",
     );
-  });
-});
-
-// `postReview`はWindmillとDBを直接使うので、配線はソースの並びで確かめる。
-describe("binary input wiring in the post step", () => {
-  const SOURCE = Bun.file(
-    new URL("../../f/factory/steps/pr_review_post.ts", import.meta.url),
-  ).text();
-
-  test("normalizes the binary input once before publishing", async () => {
-    const needle =
-      "normalizeBinaryInput(\n    input.binary_files,\n    input.binary_unlisted_count,\n  )";
-    expect((await SOURCE).split(needle).length - 1).toBe(1);
   });
 });
 
@@ -1741,6 +1681,99 @@ describe("runPrReviewPost worktree cleanup", () => {
       log: SILENT,
     }).catch(() => {});
     expect(remover.calls).toEqual([[REPO_DIR, WORKTREE_DIR]]);
+  });
+});
+
+describe("runSealedPrReviewPost", () => {
+  const REPO_DIR = "/workspaces/acme/widgets/main";
+  const WORKTREE_DIR = "/workspaces/acme/widgets/review-1-abc1234";
+  const SILENT = logger("pr_review_post", { sink: () => {} });
+  const GENERATED = {
+    summary: "all good",
+    verdict: "comment",
+    findings: [],
+    thread_responses: [],
+    pr_files: [],
+    pr_file_hunks: null,
+    binary_files: [],
+  };
+
+  function argsFor(untrusted: string) {
+    return {
+      work_item_id: 1,
+      skip: false,
+      owner: "acme",
+      repo: "widgets",
+      pr_number: 1,
+      review_sha: "abc1234",
+      untrusted,
+      binary_unlisted_count: 0,
+      worktree_dir: WORKTREE_DIR,
+      repo_dir: REPO_DIR,
+    };
+  }
+
+  function recording() {
+    const removed: [string, string][] = [];
+    const posted: PrReviewPostInput[] = [];
+    return {
+      removed,
+      posted,
+      deps: {
+        removeReviewWorktree: async (repoDir: string, dir: string) => {
+          removed.push([repoDir, dir]);
+        },
+        log: SILENT,
+        postReview: async (input: PrReviewPostInput) => {
+          posted.push(input);
+          return { skip: false, posted: true, posted_review_id: "9" };
+        },
+      },
+    };
+  }
+
+  test("removes the review worktree when the sealed text cannot be read", async () => {
+    const run = recording();
+    await runSealedPrReviewPost(argsFor("not json"), run.deps).catch(() => {});
+
+    expect(run.removed).toEqual([[REPO_DIR, WORKTREE_DIR]]);
+  });
+
+  test("throws without posting when the sealed text cannot be read", async () => {
+    const run = recording();
+    await runSealedPrReviewPost(argsFor("not json"), run.deps).catch(() => {});
+
+    expect(run.posted).toEqual([]);
+  });
+
+  test("marks the failure to read the sealed text as not worth a retry", async () => {
+    const run = recording();
+
+    await expect(
+      runSealedPrReviewPost(argsFor("not json"), run.deps),
+    ).rejects.toThrow("[no-flow-retry] pr_review_post:");
+  });
+
+  test("posts the sealed values", async () => {
+    const run = recording();
+    await runSealedPrReviewPost(argsFor(sealUntrustedArg(GENERATED)), run.deps);
+
+    expect(run.posted[0]?.summary).toBe("all good");
+  });
+
+  test("keeps the trusted values when the sealed text carries the same keys", async () => {
+    const run = recording();
+    await runSealedPrReviewPost(
+      argsFor(
+        sealUntrustedArg({ ...GENERATED, owner: "evil", worktree_dir: "/etc" }),
+      ),
+      run.deps,
+    );
+
+    expect([run.posted[0]?.owner, run.posted[0]?.worktree_dir]).toEqual([
+      "acme",
+      WORKTREE_DIR,
+    ]);
   });
 });
 

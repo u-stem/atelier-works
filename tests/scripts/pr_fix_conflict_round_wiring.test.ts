@@ -17,6 +17,7 @@ import { MERGE_COMMIT_MESSAGE } from "../../f/factory/lib/workspace.ts";
 import { conflictApplyResult } from "../../f/factory/steps/pr_fix_apply.ts";
 import { fixedFeedbackCollectResult } from "../../f/factory/steps/pr_fix_collect.ts";
 import { stopBeforeCommitTerminal } from "../../f/factory/steps/pr_workflow_support.ts";
+import { evaluateSealed } from "../lib/flowExpressions.ts";
 
 const STEPS_DIR = new URL("../../f/factory/steps/", import.meta.url);
 const LIB_DIR = new URL("../../f/factory/lib/", import.meta.url);
@@ -716,10 +717,20 @@ describe("the flow of a conflict round", () => {
 
   for (const [step, keys] of Object.entries(SEALED_CONFLICT_VALUES)) {
     for (const key of keys) {
-      test(`passes ${key} of the prepare step to ${step} inside the sealed argument, with null as the default`, () => {
-        expect(moduleBlock(step)).toContain(
-          `              ${key}: results.pr_fix_prepare.${key} ?? null`,
-        );
+      test(`passes ${key} of the prepare step to ${step} inside the sealed argument`, () => {
+        const sealed = evaluateSealed("pr_fix", step, {
+          results: { pr_fix_apply: {}, pr_fix_prepare: { [key]: ["x"] } },
+        });
+
+        expect(Reflect.get(Object(sealed), key)).toEqual(["x"]);
+      });
+
+      test(`passes null for ${key} to ${step} inside the sealed argument when the prepare step has none`, () => {
+        const sealed = evaluateSealed("pr_fix", step, {
+          results: { pr_fix_apply: {}, pr_fix_prepare: {} },
+        });
+
+        expect(Reflect.get(Object(sealed), key)).toBeNull();
       });
     }
   }
