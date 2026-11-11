@@ -1610,7 +1610,8 @@ class Parser {
       case "[":
         this.glob = true;
         // 語頭から続く`[`の列(`[`コマンドと`[[`)は数えない。語の途中で開いた`[`だけを数える。
-        if (this.inWord && !this.restricted && !/^\[*$/.test(this.text)) {
+        // 算術の領域の中も数える。閉じ方によって、シェルが領域を入れ子のサブシェルとして読むためである。
+        if (this.inWord && !/^\[*$/.test(this.text)) {
           this.openBrackets += 1;
         }
         break;
