@@ -16,14 +16,22 @@
 // `wmill`が生成するファイルと外から取り込んだスキルは、自分で書き直さないので対象外にする。
 //
 // 使い方: bun run scripts/lint-docs.ts [file...]
-// 引数があれば、そのうち対象のファイルだけを検査する(pre-commitで使う)。
+// 引数があれば、規則、markdownlint、textlintは、そのうち対象のファイルだけを検査する(pre-commitで使う)。
+// リンクの検査は引数にかかわらず対象の全文書を見る。
+// 見出しを変えると、変えていない文書からのリンクが壊れるため。
+//
+// パスはすべてリポジトリの根を基準に読む。実行するときのカレントディレクトリには依存しない。
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { availableParallelism } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { checkProse, REPO_DOC_RULES } from "../f/factory/lib/prose_check.ts";
 import { runDocsGen } from "./docs-gen.ts";
-import { lintDocLinkFiles } from "./lint-doc-links.ts";
+import {
+  createLinkResolver,
+  lintDocLinks,
+  type ReadDoc,
+} from "./lint-doc-links.ts";
 
 /** 自作のスキル。これ以外の`.claude/skills/`は`wmill`の管理スキルか取り込んだもの。 */
 const OWN_SKILL_PATTERN =
@@ -84,17 +92,54 @@ export function toToolPath(path: string): string {
   return `./${path}`;
 }
 
-function listCandidateDocs(): string[] {
-  const result = Bun.spawnSync([
-    "git",
-    "ls-files",
-    "-z",
-    "--cached",
-    "--others",
-    "--exclude-standard",
-    "--",
-    "*.md",
-  ]);
+/**
+ * 引数のパスを、`root`からの相対パスにする。先頭の`./`は落とす。
+ * `root`の外を指す絶対パスは、そのまま返す。
+ */
+export function toRepoPath(root: string, path: string): string {
+  const relativePath = isAbsolute(path) ? relative(root, path) : path;
+  if (relativePath === ".." || relativePath.startsWith("../")) return path;
+  return relativePath.startsWith("./") ? relativePath.slice(2) : relativePath;
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ENOENT" ||
+      error.code === "ENOTDIR" ||
+      error.code === "EISDIR")
+  );
+}
+
+/**
+ * `root`からの相対パスの文書を読む`ReadDoc`を作る。
+ * 同じパスは1回だけディスクから読み、以後は同じ本文を返す。無い、またはファイルでないパスは`undefined`。
+ */
+export function createDocReader(root: string): ReadDoc {
+  const cache = new Map<string, string | undefined>();
+  return (path) => {
+    if (cache.has(path)) return cache.get(path);
+    let body: string | undefined;
+    try {
+      body = readFileSync(resolve(root, path), "utf8");
+    } catch (error) {
+      if (!isMissingFile(error)) throw error;
+    }
+    cache.set(path, body);
+    return body;
+  };
+}
+
+/**
+ * gitが管理しているファイルと、管理外で無視もされていないファイルを、`root`からの相対パスで返す。
+ * 無視されたファイルは含めない。`git ls-files`を1回だけ呼ぶ。
+ */
+export function listRepoFiles(root: string): string[] {
+  const result = Bun.spawnSync(
+    ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    { cwd: root },
+  );
   if (result.exitCode !== 0) {
     throw new Error(`git ls-files failed: ${result.stderr.toString().trim()}`);
   }
@@ -102,6 +147,35 @@ function listCandidateDocs(): string[] {
     .toString()
     .split("\0")
     .filter((path) => path !== "");
+}
+
+/**
+ * `files`のうち対象の全文書のリンクを検査する。
+ * リンク先の有無は`files`で、アンカーは`readDoc`が返す本文で調べる。読めない文書は飛ばす。
+ */
+export function lintAllDocLinks(
+  files: readonly string[],
+  readDoc: ReadDoc,
+): string[] {
+  const resolver = createLinkResolver(files, readDoc);
+  return [...new Set(files)]
+    .filter(isTargetDoc)
+    .sort()
+    .flatMap((path) =>
+      resolver.indexOf(path) === undefined ? [] : lintDocLinks(path, resolver),
+    );
+}
+
+/**
+ * 検査`run`が例外を出したら、検査の名前を付けた1件の問題にする。
+ * 1つの検査の失敗で、ほかの検査の結果を出せなくならないようにする。
+ */
+export function guardCheck(name: string, run: () => string[]): string[] {
+  try {
+    return run();
+  } catch (error) {
+    return [`lint-docs: ${name} failed: ${errorMessage(error)}`];
+  }
 }
 
 export const MARKDOWNLINT_BIN = "node_modules/.bin/markdownlint-cli2";
@@ -302,20 +376,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const REPO_ROOT = join(import.meta.dir, "..");
+
 /** 本番の`deps`。子プロセスはリポジトリの根で、環境変数を引き継いで起動する。 */
 export function createProductionDeps(): LintDeps {
-  const root = join(import.meta.dir, "..");
   return {
     spawn: (argv) =>
       Bun.spawn([...argv], {
-        cwd: root,
+        cwd: REPO_ROOT,
         env: process.env,
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
       }),
     cpuCount: availableParallelism(),
-    sizeOf: (path) => statSync(path).size,
+    sizeOf: (path) => statSync(resolve(REPO_ROOT, path)).size,
     write: (text) => {
       process.stderr.write(text);
     },
@@ -323,17 +398,28 @@ export function createProductionDeps(): LintDeps {
 }
 
 async function main(): Promise<void> {
-  const argv = process.argv.slice(2);
-  const candidates = argv.length > 0 ? argv : listCandidateDocs();
+  const readDoc = createDocReader(REPO_ROOT);
+  let repoFiles: string[] | undefined;
+  const files = (): string[] => {
+    repoFiles ??= listRepoFiles(REPO_ROOT);
+    return repoFiles;
+  };
+
+  const argv = process.argv.slice(2).map((path) => toRepoPath(REPO_ROOT, path));
+  const candidates =
+    argv.length > 0 ? argv : files().filter((path) => path.endsWith(".md"));
   const targets = [...new Set(candidates)]
-    .filter((path) => isTargetDoc(path) && existsSync(path))
+    .filter((path) => isTargetDoc(path) && readDoc(path) !== undefined)
     .sort();
 
   const problems: string[] = [];
   for (const path of targets) {
-    problems.push(...lintDocText(path, readFileSync(path, "utf8")));
+    const markdown = readDoc(path);
+    if (markdown !== undefined) problems.push(...lintDocText(path, markdown));
   }
-  problems.push(...lintDocLinkFiles(targets, join(import.meta.dir, "..")));
+  problems.push(
+    ...guardCheck("document links", () => lintAllDocLinks(files(), readDoc)),
+  );
   for (const problem of problems) console.error(problem);
 
   const toolsOk = await lintWithTools(targets, createProductionDeps());
