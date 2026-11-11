@@ -6011,3 +6011,37 @@ describeForCallers(
     });
   },
 );
+
+// 言及の直前の字は、名前の字(英数字、`_`、`.`、`-`)でなければ区切りとして読む。バッククォートや`,`の直後の名前も指す語である。
+describeForCallers(
+  "bash-guard denies holds, freezes, and stops named right after a backquote or a comma inside code",
+  (subagent) => {
+    test.each([
+      [
+        "a hold after a backquote",
+        'bun -e \'Bun.spawnSync(["bun",`hold.ts`,"place"])\'',
+      ],
+      ["a hold after a comma", "bun -e 'x=[1,hold.ts]' place"],
+      [
+        "a stop after a backquote",
+        "bun -e 'Bun.spawnSync([\"bun\",`stop_all.ts`])'",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows names that only share letters with the guarded code",
+  (subagent) => {
+    test.each([
+      "bun -e 'console.log(\"hold_released\")'",
+      "bun scripts/lint-docs.ts docs/internals/holds.md",
+      "bun test tests/scripts/freeze.test.ts",
+      "bun -e 'console.log(1)' -- --stop_all_x",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
