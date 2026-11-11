@@ -93,7 +93,10 @@ export const CURRENT_BRANCH_SUBSTITUTIONS: readonly string[] = [
 /**
  * 変数代入の語(`NAME=value`と、追記の`NAME+=value`)。
  * `stripWrappers`は、コマンドの先頭と、予約語と`time`の直後の語だけを代入として外す。
- * 名前か`=`を引用した語(`quotedName`)と、前置きのコマンドの後ろの語は、シェルがコマンドの名前として実行するので外さない。
+ * 名前か`=`を引用した語(`quotedName`)は、シェルがコマンドの名前として実行するので外さない。
+ * 前置きのコマンドの後ろの語も外さない。前置きのプログラムは、語をそのままコマンドの名前として実行するためである。
+ * `env`の後ろの語は、`env`が代入として読むので外す。
+ * `sudo`の後ろの語は、代入として読むかを確かめていないので、後ろに語が続く形を`Parser`が読めない構文にする。
  */
 export const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 
@@ -102,7 +105,8 @@ export const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
  * bash、zsh、kshは、この語を先頭の代入として外し、後ろの語をコマンドとして実行する。
  * 添字は最後の`]`まで広く取る。
  * 名前を引用した語と、前置きの後ろの語は、`ASSIGNMENT`と同じく代入として外さず、コマンドの名前として残す。
- * 代入として外した語の後ろに語が続く形は、`Parser`が読めない構文にする。
+ * 代入として外したか、コマンドの名前として残したかによらず、後ろに語が続く形は`Parser`が読めない構文にする。
+ * 添字の中だけを引用した語(名前は裸)を、シェルは代入として読むが、名前の引用の印からは区別しないためである。
  * `env`の後ろの語は代入に決まるが、同じ字面なので区別せずに拒否する。
  * 添字の後ろに字が続く語(最初の`]`の後ろが`=`でない語)も、ここでは代入として外れる。
  * その語が1語だけの行では、シェルは語をコマンドの名前として探すが、引数を渡せないので受け入れる。
@@ -917,12 +921,12 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
   let xargsCommandUnknown = false;
   let unreadable = false;
   let seenXargs = false;
-  /** 直前に`env`か`sudo`とそのオプションを読み終え、まだその代入の並びの中なら真。 */
+  /** 直前に`env`とそのオプションを読み終え、まだ`env`の代入の並びの中なら真。 */
   let afterEnv = false;
   /**
    * 代入の形の語を代入として外してよい位置なら真。コマンドの先頭と、予約語と`time`の直後だけである。
    * 前置きのコマンド(`nice`、`timeout`、`command`、`exec`、`nohup`、`xargs`、`mise exec`など)の後ろでは、
-   * シェルは代入として読まず、語をコマンドの名前として実行する。`env`と`sudo`の後ろは、それぞれが代入として読む(`afterEnv`)。
+   * 前置きのプログラムが語をそのままコマンドの名前として実行する。`env`の後ろは、`env`が代入として読む(`afterEnv`)。
    */
   let assignable = true;
   const assignments: Word[] = [];
@@ -967,7 +971,7 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
       const skipped = skipWrapperOptions(words, index + 1, name);
       xargsCommandUnknown ||= skipped.xargsCommandUnknown;
       seenXargs ||= name === "xargs";
-      afterEnv = name === "env" || name === "sudo";
+      afterEnv = name === "env";
       index = skipped.next;
     } else if (name === "mise" && miseExecAt(words, index) !== -1) {
       assignable = false;
@@ -1828,11 +1832,25 @@ class Parser {
     if (program === undefined) return;
     // 添字つきの代入の形の語は、シェルと引用の有無によって、代入にもコマンドの名前にもなる。
     // 後ろにコマンドの語が続く形は、どちらが実行されるかを決められない。
+    // 代入として外した語と、コマンドの名前として残した語の両方を見る。
     if (
-      stripped.assignments.some((word) => SUBSCRIPT_ASSIGNMENT.test(word.text))
+      stripped.assignments.some((word) =>
+        SUBSCRIPT_ASSIGNMENT.test(word.text),
+      ) ||
+      (SUBSCRIPT_ASSIGNMENT.test(program.text) && words.length > 1)
     ) {
       throw new ShellSyntaxError(
         "a subscripted assignment in front of a command; run the assignment and the command separately",
+      );
+    }
+    // `sudo`が後ろの代入の形の語を代入として読むかは確かめていない。後ろに語が続く形は、何が実行されるかを決められない。
+    if (
+      stripped.wrappers[stripped.wrappers.length - 1] === "sudo" &&
+      ASSIGNMENT.test(program.text) &&
+      words.length > 1
+    ) {
+      throw new ShellSyntaxError(
+        "an assignment after sudo in front of a command; pass the variable with env instead",
       );
     }
     const name = baseName(program.text);
