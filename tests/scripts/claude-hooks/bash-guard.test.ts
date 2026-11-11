@@ -6144,8 +6144,29 @@ describeForCallers(
       "bun scripts/freeze.ts list --target release",
       "bun scripts/freeze.ts place --target a/b --reason release",
       "bun scripts/freeze.ts place --target a/b --reason=release",
+      'bun scripts/freeze.ts place --target a/b --reason "see scripts/freeze.ts release notes"',
+      'bun run scripts/freeze.ts place --target a/b --reason "see scripts/freeze.ts release notes"',
     ])("allows %s", async (command) => {
       expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
+
+// 理由の値を読まないのは、凍結のCLIが実行系の最初のオペランドにあるときだけである。ほかのスクリプトの引数の後ろの`--reason`の値は読む。
+describeForCallers(
+  "bash-guard denies freeze write strings in reason values of other scripts",
+  (subagent) => {
+    test.each([
+      [
+        "a value after the option",
+        `bun scripts/x.ts scripts/freeze.ts --reason "bun scripts/freeze.ts release"`,
+      ],
+      [
+        "a value joined by an equals sign",
+        `bun scripts/x.ts scripts/freeze.ts --reason="bun scripts/freeze.ts reset"`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
     });
   },
 );
