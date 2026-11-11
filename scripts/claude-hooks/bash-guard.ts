@@ -737,7 +737,12 @@ function checkSimpleCommand(
   ) {
     return deny(REASONS.consoleRelease);
   }
-  if (findStopAllCall(words, () => literalShellInputs(command))) {
+  if (
+    findStopAllCall(words, () => literalShellInputs(command), [
+      ...assignments,
+      ...declared,
+    ])
+  ) {
     return deny(REASONS.stopAll);
   }
   const main = scope.input.agentId === null;
