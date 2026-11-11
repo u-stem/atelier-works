@@ -333,6 +333,17 @@ describe("selectListedBinaryFiles", () => {
   });
 });
 
+describe("diff hunks wiring in the generate step", () => {
+  test("returns the diff hunks of every changed file in the result", async () => {
+    const source = await Bun.file(
+      new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),
+    ).text();
+    expect(source).toContain(
+      "      pr_file_hunks: prFileEntries.map(fileDiffHunksOf),\n",
+    );
+  });
+});
+
 // `main()`はWindmillとDBを直接使うので、配線はソースの並びで確かめる。
 // 文字列の一致は、その行が1か所にあることだけを保証する。整形や変数名の変更で落ちたら、配線が変わっていないかを確かめて文字列を直す。
 describe("binary files wiring in the generate step", () => {

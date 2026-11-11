@@ -216,6 +216,20 @@ describe("pr_review flow.yaml", () => {
     );
   });
 
+  test("passes the diff hunks of the generate step to the post step", () => {
+    expect(moduleBlock(PR_REVIEW_FLOW, "pr_review_post")).toContain(
+      "          pr_file_hunks:\n            type: javascript\n            expr: results.pr_review_generate?.pr_file_hunks ?? []\n",
+    );
+  });
+
+  test("declares pr_file_hunks in the schema of the post step", () => {
+    const schema = readFileSync(
+      join(import.meta.dir, "../../f/factory/steps/pr_review_post.script.yaml"),
+      "utf8",
+    );
+    expect(schema).toContain("    pr_file_hunks:\n      type: array\n");
+  });
+
   test("declares binary_unlisted_count in the schema of the post step", () => {
     const schema = readFileSync(
       join(import.meta.dir, "../../f/factory/steps/pr_review_post.script.yaml"),

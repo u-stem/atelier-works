@@ -12,6 +12,7 @@ import {
   decideReviewScope,
   hasBodyOnlyMustFinding,
   isFixedFixReply,
+  renderReattachedInlineComment,
   renderThreadReply,
   resolvesThread,
   reviewDeltaFromSha,
@@ -1199,6 +1200,17 @@ describe("hasBodyOnlyMustFinding", () => {
       hasBodyOnlyMustFinding(
         [finding()],
         [thread({ firstCommentBody: POSTED, isResolved: true })],
+        VIEWER,
+      ),
+    ).toBe(false);
+  });
+
+  test("matches a finding posted on a nearby line because its own line was outside the diff", () => {
+    const moved = finding({ line: 30, suggested_code: "const a = 1;" });
+    expect(
+      hasBodyOnlyMustFinding(
+        [moved],
+        [thread({ firstCommentBody: renderReattachedInlineComment(moved) })],
         VIEWER,
       ),
     ).toBe(false);
