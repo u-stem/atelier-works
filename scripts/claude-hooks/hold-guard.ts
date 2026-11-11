@@ -453,8 +453,10 @@ function rangeGlob(inner: string): string | null {
 /**
  * 範囲を展開される字の集合(`rangeGlob`)に置き換えた綴りを返す。置き換える範囲が無ければnullを返す。
  * 置き換えた綴りは、globと同じ照合に通す。
+ * 範囲は`{`を含むので、`{`の無い綴りは正規表現の置き換えに通さない。共起の判定で、語ごとに何度も呼ばれるためである。
  */
 function rangeAsGlob(text: string): string | null {
+  if (!text.includes("{")) return null;
   let replaced = false;
   const glob = text.replace(BRACE_RANGES, (whole: string, inner: string) => {
     const set = rangeGlob(inner);
@@ -474,23 +476,20 @@ function pointsAtCode(
   mention: RegExp,
   names: readonly string[],
 ): boolean {
-  const all = spellings(word);
-  if (all.some((text) => mention.test(text))) return true;
-  const fileOf = (text: string) => text.slice(text.lastIndexOf("/") + 1);
-  if (
-    word.glob &&
-    all.some((text) =>
-      names.some((name) => globMatches(fileOf(text), name, true)),
-    )
-  ) {
-    return true;
-  }
-  return all.some((text) => {
+  // 共起の判定で語ごとに何度も呼ばれるので、綴りを1回の走査で見る。
+  for (const text of spellings(word)) {
+    if (mention.test(text)) return true;
+    if (word.glob && namesMatchFile(text, names)) return true;
     const ranged = rangeAsGlob(text);
-    if (ranged === null) return false;
-    const file = fileOf(ranged);
-    return names.some((name) => globMatches(file, name, true));
-  });
+    if (ranged !== null && namesMatchFile(ranged, names)) return true;
+  }
+  return false;
+}
+
+/** パスの形のglobの、ファイル名の部分が`names`のどれかに当たりうるなら真。 */
+function namesMatchFile(pattern: string, names: readonly string[]): boolean {
+  const file = pattern.slice(pattern.lastIndexOf("/") + 1);
+  return names.some((name) => globMatches(file, name, true));
 }
 
 /** 語が保留のコードを指すか、引用符の外のglobかブレースの範囲が保留のコードの名前に当たりうるなら真。ディレクトリは問わない。 */
@@ -2305,8 +2304,10 @@ export type ReleaseCallContext = {
  */
 function releaseForms(text: string): string[] {
   const forms = [text, ...expandBraces(text)];
-  const ranged = forms.flatMap((form) => rangeAsGlob(form) ?? []);
-  const all = [...forms, ...ranged];
+  // `{`の無い文字列は、展開した形にも範囲が無いので、置き換えを探さない。
+  const all = text.includes("{")
+    ? [...forms, ...forms.flatMap((form) => rangeAsGlob(form) ?? [])]
+    : forms;
   return [...all, ...all.map((form) => form.replace(/[{}]/g, ""))];
 }
 
