@@ -1,4 +1,3 @@
-import { FileQuestion } from "lucide-react";
 import { useLocation, useParams, useSearchParams } from "react-router";
 import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { useWorkItemDetail } from "../../api/workItemDetailQueries.ts";
@@ -13,6 +12,7 @@ import {
   SkeletonSection,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
+import { MissingMessage } from "../../components/MissingMessage.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { itemDetailCrumbs, parseItemsBack } from "../../lib/breadcrumbs.ts";
 import {
@@ -37,17 +37,6 @@ import { OverviewTab } from "./detail/OverviewTab.tsx";
 import { RequirementsTab } from "./detail/RequirementsTab.tsx";
 import { RoundsTab } from "./detail/RoundsTab.tsx";
 import { QueryFailure } from "./QueryFailure.tsx";
-
-function Message({ children }: { children: string }) {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-      <span className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-subtle">
-        <FileQuestion aria-hidden="true" className="size-6" />
-      </span>
-      <p className="max-w-sm text-small text-muted-foreground">{children}</p>
-    </div>
-  );
-}
 
 /**
  * 読み込み中の形。実物と同じく、タブの帯と、タブの本体(概要の表と、進行の節)を並べる。
@@ -137,7 +126,7 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
         <PageHeader title={workItemRef(workItemId)} refresh={refresh}>
           <Breadcrumb items={itemDetailCrumbs(workItemId, back)} />
         </PageHeader>
-        <Message>{`${workItemRef(workItemId)}は見つかりませんでした。番号を確かめてください。`}</Message>
+        <MissingMessage>{`${workItemRef(workItemId)}は見つかりませんでした。番号を確かめてください。`}</MissingMessage>
       </>
     );
   }
@@ -189,7 +178,7 @@ export function ItemDetailScreen() {
         <PageHeader title="作業項目">
           <Breadcrumb items={itemDetailCrumbs(null)} />
         </PageHeader>
-        <Message>作業項目の番号が正しくありません。</Message>
+        <MissingMessage>作業項目の番号が正しくありません。</MissingMessage>
       </>
     );
   }

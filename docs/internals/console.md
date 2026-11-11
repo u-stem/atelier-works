@@ -2543,6 +2543,7 @@ Markdownの文字は、HTMLのコメントとリンク参照定義も文字で�
 `audit_doc`は本文の重い列を持つので、一覧とは分けて、画面を開いたときに取る。
 番号が正の整数でないときと、レポートが無いときは、その旨を出す。
 レポートが無いのは、監査がまだ終わっていないか、監査の作業項目でないときである。
+どちらも、作業項目の詳細の画面の同じ場面と同じ部品(`MissingMessage`)で出す。
 
 本文のMarkdownは`AuditMarkdown`(`src/screens/reports/AuditMarkdown.tsx`)が描く。
 `react-markdown`と`remark-gfm`で描く。

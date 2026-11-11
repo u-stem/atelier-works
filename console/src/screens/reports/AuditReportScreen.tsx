@@ -5,12 +5,12 @@ import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { PageHeader, subtitlePendingOf } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
-import { ComingSoon } from "../../components/ComingSoon.tsx";
 import {
   LoadingBody,
   type LoadingShape,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
+import { MissingMessage } from "../../components/MissingMessage.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
@@ -41,7 +41,7 @@ export function AuditReportScreen() {
         <PageHeader title="監査レポート">
           <Breadcrumb items={auditReportCrumbs(null)} />
         </PageHeader>
-        <ComingSoon>作業項目の番号が正しくありません。</ComingSoon>
+        <MissingMessage>作業項目の番号が正しくありません。</MissingMessage>
       </>
     );
   }
@@ -110,9 +110,9 @@ function AuditReportView({ workItemId }: { workItemId: number }) {
         >
           <Breadcrumb items={auditReportCrumbs(workItemId)} />
         </PageHeader>
-        <ComingSoon>
+        <MissingMessage>
           この作業項目の監査レポートは見つかりません。監査がまだ終わっていないか、監査の作業項目ではありません。
-        </ComingSoon>
+        </MissingMessage>
       </>
     );
   }

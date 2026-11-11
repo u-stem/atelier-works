@@ -1,4 +1,3 @@
-import { FileQuestion } from "lucide-react";
 import { useMemo } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useDesignDoc } from "../../api/queries.ts";
@@ -10,6 +9,7 @@ import {
   LoadingBody,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
+import { MissingMessage } from "../../components/MissingMessage.tsx";
 import { itemDesignCrumbs } from "../../lib/breadcrumbs.ts";
 import {
   designName,
@@ -23,17 +23,6 @@ import { SCROLL_ROOT_PROPS } from "../../lib/scrollRoot.ts";
 import { DesignDocumentView } from "./DesignDocumentView.tsx";
 import { REQUIREMENTS_DOC_LOADING_SHAPE } from "./ItemRequirementsScreen.tsx";
 import { QueryFailure } from "./QueryFailure.tsx";
-
-function Message({ children }: { children: string }) {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-      <span className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-subtle">
-        <FileQuestion aria-hidden="true" className="size-6" />
-      </span>
-      <p className="max-w-sm text-small text-muted-foreground">{children}</p>
-    </div>
-  );
-}
 
 /** 設計書が無いときと、設計書の番号が正しくないときの文。 */
 const NOT_FOUND = "この設計書は見つかりません。";
@@ -89,7 +78,7 @@ function ItemDesign({
         <PageHeader title={requested} refresh={refresh}>
           <Breadcrumb items={itemDesignCrumbs(workItemId)} />
         </PageHeader>
-        <Message>{NOT_FOUND}</Message>
+        <MissingMessage>{NOT_FOUND}</MissingMessage>
       </>
     );
   }
@@ -124,7 +113,7 @@ export function ItemDesignScreen() {
         <PageHeader title="設計書">
           <Breadcrumb items={itemDesignCrumbs(null)} />
         </PageHeader>
-        <Message>作業項目の番号が正しくありません。</Message>
+        <MissingMessage>作業項目の番号が正しくありません。</MissingMessage>
       </>
     );
   }
@@ -134,7 +123,7 @@ export function ItemDesignScreen() {
         <PageHeader title="設計書">
           <Breadcrumb items={itemDesignCrumbs(workItemId)} />
         </PageHeader>
-        <Message>{NOT_FOUND}</Message>
+        <MissingMessage>{NOT_FOUND}</MissingMessage>
       </>
     );
   }
