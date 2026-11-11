@@ -1,4 +1,3 @@
-import { FileQuestion } from "lucide-react";
 import { useLocation, useParams } from "react-router";
 import {
   currentJob,
@@ -20,6 +19,7 @@ import {
   SkeletonSection,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
+import { MissingMessage } from "../../components/MissingMessage.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { jobDetailCrumbs } from "../../lib/breadcrumbs.ts";
 import { isJobId } from "../../lib/jobLink.ts";
@@ -51,14 +51,9 @@ function NotFound({ back }: { back: string | null }) {
       <PageHeader title="ジョブの詳細">
         <Breadcrumb items={jobDetailCrumbs(back)} />
       </PageHeader>
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-        <span className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-subtle">
-          <FileQuestion aria-hidden="true" className="size-6" />
-        </span>
-        <p className="max-w-sm text-small text-muted-foreground">
-          {`ジョブが見つかりません。保持期間(${JOB_RETENTION_DAYS}日)を過ぎたか、IDが違います。`}
-        </p>
-      </div>
+      <MissingMessage>
+        {`ジョブが見つかりません。保持期間(${JOB_RETENTION_DAYS}日)を過ぎたか、IDが違います。`}
+      </MissingMessage>
     </>
   );
 }
