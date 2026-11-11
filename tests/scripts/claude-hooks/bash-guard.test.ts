@@ -6014,7 +6014,7 @@ describeForCallers(
 
 // 言及の直前の区切りは、閉じた字の集合で読む。バッククォート、`,`、`[`、`{`の直後の名前も指す語である。
 describeForCallers(
-  "bash-guard denies holds, freezes, and stops named right after a backquote or a comma inside code",
+  "bash-guard denies holds and stops named right after a backquote, a comma, or an opening bracket inside code",
   (subagent) => {
     test.each([
       [
@@ -6055,10 +6055,10 @@ describeForCallers(
   },
 );
 
-// 凍結のコード文字列は、コードを取るオプションの値と、空白などで語に分かれる語の全部で、CLIを指す字面と書き込みの語が並べば拒否する。
-// 字面は、パスの形でなく名前だけで指す形とタスク名も含む。標準入力のコードも同じに見る。
+// コードを取るオプションの値と標準入力のコードは、凍結のCLIを指す字面と書き込みの語が並べば拒否する。字面は、名前だけで指す形とタスク名も含む。
+// 空白などで語に分かれる語は、パスの形かタスク名で凍結を指し、書き込みの語が並べば拒否する。
 describeForCallers(
-  "bash-guard denies freeze writes in code strings of any option",
+  "bash-guard denies freeze writes in code strings and in option values that split into words",
   (subagent) => {
     test.each([
       [
@@ -6128,9 +6128,9 @@ describeForCallers(
 );
 
 // 凍結のCLIは副コマンドを最初の引数として読むので、読み取りの副コマンドの後ろの語は書き込みの語と同じ綴りでも通す。
-// 理由の値は、凍結のCLIの`--reason`の値なら、コードの文字列として読まない。
+// 理由の値は、実行系の最初のオペランドの凍結のCLIの`--reason`の値なら、コードの文字列として読まない。
 describeForCallers(
-  "bash-guard allows freeze reads, schedule freezes, and inspections",
+  "bash-guard allows freeze reads, schedule freezes, inspections, and reason values",
   (subagent) => {
     test.each([
       "bun scripts/freeze.ts list",
@@ -6504,7 +6504,7 @@ describeForCallers(
 
 // 値が1語の代入は、引数を渡せないので判定しない。全停止のコードのパスや名前を変数に入れて読む形は通る。
 describeForCallers(
-  "bash-guard allows leading assignments without stop wording",
+  "bash-guard allows leading assignments whose values are single words",
   (subagent) => {
     test.each([
       "GIT_PAGER=cat git log",
@@ -6553,9 +6553,9 @@ describeForCallers(
   },
 );
 
-// 読めない綴りのオペランドを標準入力とみなしても、上流が保留と凍結のコードでなければ止めない。
+// 根からのパスのスクリプトは、標準入力の綴りに当たらない。上流が保留と凍結のコードでなければ、パイプで読む形も止めない。
 describeForCallers(
-  "bash-guard allows runners given absolute script paths",
+  "bash-guard allows runners given absolute script paths or piped other files",
   (subagent) => {
     test.each([
       "bun /repo/scripts/x.ts",
