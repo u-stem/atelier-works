@@ -3,10 +3,11 @@
 // 違反の判定は`scripts/lint-one-sentence-per-line.ts`の`findSentenceBreaks`と同じで、違反の行だけを分ける。
 // 文を書き換えず、違反でない行は触らない。
 //
-// 分けた次の行の先頭には、段落の最初の行と同じ位置にそろえる字下げと引用の印を付ける。
-// - 箇条書きの項目は、項目の本文の位置まで字下げする。番号つきと入れ子の項目も同じ。
-// - 引用は、行頭に引用の印(`>`)を付ける。
-// - タスクの箇条書きの`[ ]`は、字下げの幅に数えない。
+// 分けた次の行の先頭には、字下げと引用の印を付ける。
+// - 段落の最初の行で分けるときは、本文より前の部分と同じ幅にそろえる。
+//   箇条書きの項目は項目の本文の位置まで字下げし、番号つきと入れ子の項目も同じ。
+//   引用は行頭に引用の印(`>`)を付ける。タスクの箇条書きの`[ ]`は、字下げの幅に数えない。
+// - 2行目以降で分けるときは、その行の行頭の字下げと引用の印をそのまま使う。
 // 行末は、文書がすでに使っている`\r\n`か`\n`にそろえる。
 //
 // 書く前に、整形の前後で次の3つが一致することを確かめる(`compareDocuments`)。
@@ -20,9 +21,10 @@
 // 使い方: bun run scripts/format-one-sentence-per-line.ts [file...]
 // 引数が無ければ、`scripts/lint-docs.ts`が「1文は1行」を検査する全文書を整形する。
 // 相対パスの引数は、カレントディレクトリから解決する。検査の対象でないファイルは飛ばす。
+// リポジトリの外を指す引数は、読み書きせずに報告し、終了コード1にする。
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { Nodes } from "mdast";
 import {
   isOneSentencePerLineTarget,
@@ -55,12 +57,20 @@ const NODE_ATTRIBUTES = [
 
 /**
  * 続きの行の先頭に付ける字下げと引用の印。
- * 段落の最初の行で、本文の前にある部分から作る。空白と`>`は残し、箇条書きの記号などは同じ幅の空白にする。
+ * 切れ目が段落の2行目以降にあるときは、その行の行頭の字下げと引用の印をそのまま使う。
+ * 引用の怠惰な続きの行のように、1行目と形が違う行でも、その行の形にそろう。
+ * 切れ目が段落の最初の行にあるときは、本文の前にある部分から作る。
+ * 空白と`>`は残し、箇条書きの記号などは同じ幅の空白にする。
  */
-function continuationPrefix(markdown: string, contentStart: number): string {
-  const lineStart = markdown.lastIndexOf("\n", contentStart - 1) + 1;
+function continuationPrefix(markdown: string, found: SentenceBreak): string {
+  const breakLineStart = markdown.lastIndexOf("\n", found.end - 1) + 1;
+  if (breakLineStart > found.contentStart) {
+    const lead = /^[ \t>]*/.exec(markdown.slice(breakLineStart, found.end));
+    return lead?.[0] ?? "";
+  }
+  const lineStart = markdown.lastIndexOf("\n", found.contentStart - 1) + 1;
   const before = markdown
-    .slice(lineStart, contentStart)
+    .slice(lineStart, found.contentStart)
     .replace(/\[[ xX]\][ \t]*$/, "");
   let prefix = "";
   for (const char of before) {
@@ -78,7 +88,7 @@ function applyBreaks(
   let result = markdown;
   // 後ろの切れ目から直し、前の切れ目の位置がずれないようにする。
   for (const found of [...breaks].sort((a, b) => b.end - a.end)) {
-    const prefix = continuationPrefix(markdown, found.contentStart);
+    const prefix = continuationPrefix(markdown, found);
     result =
       result.slice(0, found.end) + eol + prefix + result.slice(found.next);
   }
@@ -168,7 +178,7 @@ export function formatDocument(markdown: string): FormatResult {
 
 function readOrUndefined(root: string, path: string): string | undefined {
   try {
-    return readFileSync(join(root, path), "utf8");
+    return readFileSync(resolve(root, path), "utf8");
   } catch {
     return undefined;
   }
@@ -191,6 +201,12 @@ export function main(
     : listDocCandidates(root);
   let failed = false;
   for (const path of [...new Set(candidates)].sort()) {
+    // `toRepoPath`は、リポジトリの外を指すパスを絶対パスで返す。読み書きせずに失敗にする。
+    if (isAbsolute(path)) {
+      report(`${path}: outside the repository`);
+      failed = true;
+      continue;
+    }
     if (!isOneSentencePerLineTarget(path)) continue;
     const markdown = readOrUndefined(root, path);
     if (markdown === undefined) {
@@ -208,7 +224,7 @@ export function main(
       continue;
     }
     if (result.splits > 0) {
-      writeFileSync(join(root, path), result.formatted);
+      writeFileSync(resolve(root, path), result.formatted);
       report(`${path}: split ${result.splits} sentences`);
     }
   }

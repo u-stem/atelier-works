@@ -1,6 +1,6 @@
-#!/usr/bin/env bun
 // Markdown文書の地の文が「1文は1行に書き、『。』の後で改行する」に従うかを検査する。
-// 検査の本体は`lintOneSentencePerLine`で、`scripts/lint-docs.ts`から全文書に対して呼ばれる。
+// 検査の本体は`findSentenceBreaks`で、`findSentenceViolationLines`が違反の行を集める。
+// `scripts/lint-docs.ts`の`lintDocText`が、この行を`formatSentenceViolation`で報告の形にする。
 // 違反の行を直す道具は`scripts/format-one-sentence-per-line.ts`で、同じ判定(`findSentenceBreaks`)を使う。
 //
 // Markdownは構文木(CommonMarkとGFM、先頭のfrontmatter。`scripts/markdown-tree.ts`)として読む。
@@ -243,7 +243,7 @@ export function findSentenceBreaks(markdown: string): SentenceBreak[] {
   return found;
 }
 
-/** 違反のある行の番号を、小さい順に重複なく返す。 */
+/** 違反のある行の番号を、小さい順に重複なく返す。1行の違反は、切れ目の数にかかわらず1件にする。 */
 export function findSentenceViolationLines(markdown: string): number[] {
   const lines = new Set(
     findSentenceBreaks(markdown).map((found) => found.line),
@@ -254,17 +254,4 @@ export function findSentenceViolationLines(markdown: string): number[] {
 /** 文書`path`の`line`行の違反を、`path:line: [one-sentence-per-line] 内容`の形にする。 */
 export function formatSentenceViolation(path: string, line: number): string {
   return `${path}:${line}: [one-sentence-per-line] 「。」の後ろに同じ行で文が続いています。「。」の後で改行してください`;
-}
-
-/**
- * 文書`path`の本文`markdown`を検査し、違反を`formatSentenceViolation`の形で返す。
- * 1行の違反は、切れ目の数にかかわらず1件にする。
- */
-export function lintOneSentencePerLine(
-  path: string,
-  markdown: string,
-): string[] {
-  return findSentenceViolationLines(markdown).map((line) =>
-    formatSentenceViolation(path, line),
-  );
 }

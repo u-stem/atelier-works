@@ -107,14 +107,14 @@ export function isOneSentencePerLineTarget(path: string): boolean {
  * 同じ行の指摘は、文章の規則を先にする。
  */
 export function lintDocText(path: string, markdown: string): string[] {
-  const issues = checkProse(blankFrontmatter(markdown), REPO_DOC_RULES).map(
-    (issue) => ({
-      line: issue.line,
-      text: `${path}:${issue.line}: [${issue.rule}] ${issue.message}`,
-    }),
-  );
+  // 2つの検査に同じ本文を渡す。frontmatterを空行にしても行番号は変わらない。
+  const body = blankFrontmatter(markdown);
+  const issues = checkProse(body, REPO_DOC_RULES).map((issue) => ({
+    line: issue.line,
+    text: `${path}:${issue.line}: [${issue.rule}] ${issue.message}`,
+  }));
   if (isOneSentencePerLineTarget(path)) {
-    for (const line of findSentenceViolationLines(markdown)) {
+    for (const line of findSentenceViolationLines(body)) {
       issues.push({ line, text: formatSentenceViolation(path, line) });
     }
   }
