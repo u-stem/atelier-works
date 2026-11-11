@@ -86,6 +86,10 @@ describe("the headings of the daily cost charts", () => {
   test("name the day column of the table", () => {
     expect(cost).toMatch(/<th[^>]*>日<\/th>/);
   });
+
+  test("show the day key of the table as it is", () => {
+    expect(cost).toMatch(/<td[^>]*>2026-10-08<\/td>/);
+  });
 });
 
 describe("the skeletons of the analytics sections", () => {
