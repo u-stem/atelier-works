@@ -101,7 +101,8 @@
 // - 実行を委ねる呼び出し: 先頭が読み取りの道具で、別のコマンドの実行を委ねる副コマンド、設定、オプションを持つ形(`delegatesExecution`)。
 //   前置きと同じ規則で、先頭の次の語から調べる。実行の字面が引数にある形を拒否するのも、前置きと同じである。
 //   `git -c`は、値がコマンドとして実行されないキーの閉じた一覧だけを委ねない形とし、一覧の外のキーは委ねる形とする。
-//   委ねる形でも、保留と凍結を指す語が無ければ通す。
+//   gitの副コマンドとグローバルのオプションも、委ねないと分かっている閉じた一覧の外は委ねる形とする。オプションは省略形を前方一致で見る。
+//   委ねる形でも、語を足すコマンドやシェルの名前で終わる語が無く、保留と凍結を指す語が無ければ通す。
 //   前置きの無い形は、上の4つの規則と、次の2つの規則に当たらない限り、判定の対象にしない。
 //
 // 前置きの無い形に当てる2つの規則は、先頭のプログラムが何でも当てる。
@@ -1298,8 +1299,11 @@ function assignmentValue(assignment: Word): Word {
 /**
  * 語の中で、コマンドとして実行されうる値の前に付く部分。
  * `--opt=`、`<キー>=`(`-c`の値と`-c<キー>=`を含む)、ページャーの初期コマンドの`+…!`、シェルの別名の`!`である。
+ * 短いオプションのまとめ書きの、コマンドを値にくっつけて取る文字(`git grep`の`O`と`git ls-remote`の`u`)までも、前の部分として外す。
+ * どの文字が値を取るかはプログラムで決まるので、最初に現れた文字までを外す。外しすぎても、判定する値が増えるだけである。
  */
-const COMMAND_VALUE_PREFIX = /^(?:-{0,2}[A-Za-z_][\w.-]*=|\+[^\s!]*!|!)/;
+const COMMAND_VALUE_PREFIX =
+  /^(?:-{0,2}[A-Za-z_][\w.-]*=|\+[^\s!]*!|!|-[A-Za-z0-9]*?O|-[A-Za-z0-9]*?u)/;
 
 /** シェルの変数代入の形の前の部分。 */
 const SHELL_ASSIGNMENT_PREFIX = /^[A-Za-z_]\w*=/;
@@ -1826,30 +1830,144 @@ const EXECUTION_FRAGMENTS: readonly string[] = [
 ];
 
 /**
- * `git`が別のコマンドを実行するか、実行される設定を書く副コマンド。名前が当たるときは通さない。
- * `config`は、後から別のコマンドが値を実行する設定を書ける。
- * `clone`、`send-email`、`instaweb`は、実行するコマンドや新しいリポジトリの設定を渡すオプションを追わず、副コマンドごと扱う。
+ * `git`の、別のコマンドの実行を委ねないと分かっている副コマンド。一覧の外の副コマンドと別名は、実行を委ねる形として扱う。
+ * 別のコマンドを実行する副コマンド、設定を書く副コマンド、引数を別のリポジトリのgitへ渡す副コマンドは、版ごとに増える開いた集合なので、許す側を閉じた一覧にする。
+ * 一覧の中の副コマンドでも、実行を委ねるオプション(`GIT_DELEGATING_LONG_OPTIONS`など)があれば委ねる形として扱う。
  */
-const GIT_EXECUTING_SUBCOMMANDS: ReadonlySet<string> = new Set([
-  "rebase",
-  "bisect",
-  "submodule",
-  "difftool",
-  "mergetool",
-  "filter-branch",
-  "config",
-  "clone",
-  "send-email",
-  "instaweb",
+const GIT_INERT_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "add",
+  "am",
+  "apply",
+  "archive",
+  "blame",
+  "branch",
+  "cat-file",
+  "check-ignore",
+  "checkout",
+  "cherry-pick",
+  "clean",
+  "commit",
+  "describe",
+  "diff",
+  "diff-tree",
+  "fetch",
+  "for-each-ref",
+  "grep",
+  "init",
+  "log",
+  "ls-files",
+  "ls-remote",
+  "ls-tree",
+  "merge",
+  "merge-base",
+  "mv",
+  "name-rev",
+  "pull",
+  "push",
+  "reflog",
+  "remote",
+  "reset",
+  "restore",
+  "rev-list",
+  "rev-parse",
+  "revert",
+  "rm",
+  "shortlog",
+  "show",
+  "show-ref",
+  "stash",
+  "status",
+  "switch",
+  "symbolic-ref",
+  "tag",
+  "worktree",
+  "version",
+  "help",
 ]);
 
-/** `git`の、値を次の語に取るグローバルのオプション。 */
+/** `git`の、値を取らず、別のコマンドの実行を委ねないグローバルのオプション。一覧の外のオプションは、実行を委ねる形として扱う。 */
+const GIT_INERT_GLOBAL_FLAGS: ReadonlySet<string> = new Set([
+  "-p",
+  "--paginate",
+  "-P",
+  "--no-pager",
+  "--bare",
+  "--no-replace-objects",
+  "--literal-pathspecs",
+  "--glob-pathspecs",
+  "--noglob-pathspecs",
+  "--icase-pathspecs",
+  "--no-optional-locks",
+  "--no-lazy-fetch",
+  "--version",
+  "--help",
+  "-h",
+]);
+
+/** `git`の、値を次の語に取り、別のコマンドの実行を委ねないグローバルのオプション。 */
 const GIT_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set([
   "-C",
   "--git-dir",
   "--work-tree",
   "--namespace",
-  "--exec-path",
+  "--super-prefix",
+]);
+
+/** `git`の、値を`=`でくっつけて取り、別のコマンドの実行を委ねないグローバルのオプションの前の部分。 */
+const GIT_OPTIONS_WITH_ATTACHED_VALUE: readonly string[] = [
+  "--git-dir=",
+  "--work-tree=",
+  "--namespace=",
+];
+
+/**
+ * 副コマンドの後ろで、実行するコマンドを受け取るか、設定のコマンドを起動する`git`の長いオプションの名前。
+ * gitは長いオプションの一意な省略形を受け付けるので、名前の前方一致で見る(`isDelegatingLongOption`)。
+ */
+const GIT_DELEGATING_LONG_OPTIONS: readonly string[] = [
+  "--upload-pack",
+  "--receive-pack",
+  "--exec",
+  "--ext-diff",
+  "--open-files-in-pager",
+  "--textconv",
+  "--run",
+  "--to-cmd",
+  "--cc-cmd",
+  "--sendmail-cmd",
+  "--smtp-server",
+];
+
+/**
+ * 語が、`options`のどれかの長いオプションか、その省略形なら真。
+ * 語の`=`より前を名前とし、`--`の後ろに`minimum`字以上あって、どれかのオプションの名前がその名前で始まるか、その名前がオプションの名前で始まるときである。
+ * 一意かは確かめない。ほかのオプションの省略形と重なっても、委ねる側に倒れるだけである。
+ */
+function isDelegatingLongOption(
+  text: string,
+  options: readonly string[],
+  minimum: number,
+): boolean {
+  if (!text.startsWith("--")) return false;
+  const equals = text.indexOf("=");
+  const name = equals === -1 ? text : text.slice(0, equals);
+  if (name.length < 2 + minimum) return false;
+  return options.some(
+    (option) => option.startsWith(name) || name.startsWith(option),
+  );
+}
+
+/** 語が、`-`で始まり`--`で始まらない短いオプションのまとめ書きで、`letter`を含むなら真。 */
+function hasShortOption(text: string, letter: string): boolean {
+  return (
+    text.startsWith("-") && !text.startsWith("--") && text.includes(letter)
+  );
+}
+
+/** 短いオプションの文字で、実行するコマンドを受け取る`git`の副コマンド。`grep`のページャーと、`ls-remote`の送信側のプログラムである。 */
+const GIT_DELEGATING_SHORT_OPTIONS: ReadonlyMap<string, string> = new Map([
+  ["grep", "O"],
+  ["ls-remote", "u"],
 ]);
 
 /**
@@ -2167,61 +2285,91 @@ function readerKind(
     : null;
 }
 
-/** `git`の呼び出しが、別のコマンドを実行する設定、副コマンド、オプションを持つなら真。 */
-function gitExecutes(args: readonly Word[]): boolean {
-  let subcommand: string | null = null;
+/**
+ * 副コマンドより前の語(グローバルのオプション)を読む。
+ * 副コマンドの位置を返す。実行を委ねる形か、閉じた一覧の外のオプションがあれば`delegates`を返す。副コマンドが無ければnullを返す。
+ * `-c`のキーは、値がコマンドとして実行されないキーの一覧だけを通す。
+ */
+function gitSubcommandAt(args: readonly Word[]): number | "delegates" | null {
   for (let index = 0; index < args.length; index += 1) {
-    const text = args[index]?.text ?? "";
-    if (subcommand === null) {
-      // 値が環境変数から来る設定は、キーも値も字面から読めない。
-      // `--exec-path=`は、副コマンドの実体を別のディレクトリから探す。
-      if (text.startsWith("--config-env") || text.startsWith("--exec-path=")) {
-        return true;
-      }
-      if (text === "-c") {
-        index += 1;
-        if (!isInertGitConfig(args[index])) return true;
-      } else if (text.startsWith("-c")) {
-        if (!isInertGitConfig(args[index], 2)) return true;
-      } else if (GIT_OPTIONS_WITH_VALUE.has(text)) {
-        index += 1;
-      } else if (!text.startsWith("-")) {
-        subcommand = text;
-        if (GIT_EXECUTING_SUBCOMMANDS.has(text)) return true;
-      }
-      continue;
-    }
-    if (
-      /^--(?:ext-diff|upload-pack|receive-pack|exec|open-files-in-pager)/.test(
-        text,
-      )
+    const word = args[index];
+    if (word === undefined) break;
+    const { text } = word;
+    if (text === "-c") {
+      index += 1;
+      if (!isInertGitConfig(args[index])) return "delegates";
+    } else if (text.startsWith("-c")) {
+      if (!isInertGitConfig(word, 2)) return "delegates";
+    } else if (GIT_OPTIONS_WITH_VALUE.has(text)) {
+      index += 1;
+    } else if (
+      GIT_INERT_GLOBAL_FLAGS.has(text) ||
+      GIT_OPTIONS_WITH_ATTACHED_VALUE.some((prefix) => text.startsWith(prefix))
     ) {
-      return true;
+      // 値を取らないか、値を`=`でくっつけた、委ねないオプション。
+    } else if (text.startsWith("-")) {
+      // 環境変数から読む設定、副コマンドの実体の置き場所、知らないオプションは、委ねる形に倒す。
+      return "delegates";
+    } else {
+      return index;
     }
-    if (subcommand === "grep" && text.startsWith("-O")) return true;
   }
-  return false;
+  return null;
 }
 
 /**
+ * `git`の呼び出しが、別のコマンドを実行する設定、副コマンド、オプションを持つなら真。
+ * 副コマンドは閉じた一覧(`GIT_INERT_SUBCOMMANDS`)の中だけを委ねない形とし、一覧の外と、実行時に決まる語とglobは委ねる形とする。
+ * 一覧の中の副コマンドでも、後ろの語に実行を委ねるオプションか、その省略形があれば委ねる形とする。
+ */
+function gitExecutes(args: readonly Word[]): boolean {
+  const at = gitSubcommandAt(args);
+  if (at === null) return false;
+  if (at === "delegates") return true;
+  const subcommand = args[at];
+  if (
+    subcommand === undefined ||
+    subcommand.dynamic ||
+    subcommand.glob ||
+    !GIT_INERT_SUBCOMMANDS.has(subcommand.text)
+  ) {
+    return true;
+  }
+  const letter = GIT_DELEGATING_SHORT_OPTIONS.get(subcommand.text);
+  return args
+    .slice(at + 1)
+    .some(
+      (word) =>
+        isDelegatingLongOption(word.text, GIT_DELEGATING_LONG_OPTIONS, 1) ||
+        (letter !== undefined && hasShortOption(word.text, letter)),
+    );
+}
+
+/** `gh`の、extensionを扱うグループの名前。 */
+const GH_EXTENSION_GROUPS: ReadonlySet<string> = new Set([
+  "extension",
+  "extensions",
+  "ext",
+]);
+
+/**
  * `gh`の呼び出しが、別名、extension、設定の書き込み、gitへ渡す引数で、コマンドを足すか実行するものなら真。
+ * 値を取るフラグが副コマンドの前にも置けるので、位置引数の位置は見ず、語の有無で見る。
  * 設定は、キーを問わず書き込みを委ねる形にする。後から別のコマンドが値を実行するキーがあるためである。
  * `--`の後ろは、`repo clone`や`repo fork`がgitへ渡すので、グループを問わず委ねる形にする。
+ * 位置引数が実行時に決まる語かglobなら、グループが決まらないので委ねる形にする。
  */
 function ghExecutes(args: readonly Word[]): boolean {
-  const positional = wmillPositional(args);
-  const [group, action] = positional;
+  const positional = args.filter((word) => !word.text.startsWith("-"));
+  if (positional.some((word) => word.dynamic || word.glob)) return true;
+  const texts = new Set(positional.map((word) => word.text));
   return (
-    (group === "alias" && (action === "set" || action === "import")) ||
-    (group === "config" && action === "set") ||
-    group === "extension" ||
-    group === "ext" ||
+    (texts.has("alias") && (texts.has("set") || texts.has("import"))) ||
+    (texts.has("config") && texts.has("set")) ||
+    [...GH_EXTENSION_GROUPS].some((group) => texts.has(group)) ||
     args.some((word) => word.text === "--")
   );
 }
-
-/** `--pager`で、出力を渡すページャーのコマンドを受け取る読み取りの道具。 */
-const PAGER_OPTION_PROGRAMS: ReadonlySet<string> = new Set(["ag", "bat"]);
 
 /**
  * `+`で始まる語を、起動したときに実行する初期コマンドとして受け取るページャー。
@@ -2239,15 +2387,25 @@ function hasOption(args: readonly Word[], name: string): boolean {
 /**
  * 何も実行しないはずのプログラムが、副コマンド、設定、オプションで別のコマンドの実行を委ねる形なら真。
  * gitとghの副コマンドと設定、`rg`の前処理、`ag`と`bat`のページャー、`less`と`more`の初期コマンドである。
+ * `ag`は長いオプションの一意な省略形を受け付けるので、ページャーのオプションを前方一致で見る。`bat`は省略形を受け付けない。
+ * `less`と`more`の初期コマンドは、短いオプションのまとめ書きの中の`+`も数える。
  * 保留・凍結、全停止、Consoleのscriptの判定が、この関数で委ねる形を見分ける。
  */
 function delegatesExecution(program: string, args: readonly Word[]): boolean {
   if (program === "git") return gitExecutes(args);
   if (program === "gh") return ghExecutes(args);
   if (program === "rg") return hasOption(args, "--pre");
-  if (PAGER_OPTION_PROGRAMS.has(program)) return hasOption(args, "--pager");
+  if (program === "bat") return hasOption(args, "--pager");
+  if (program === "ag") {
+    // `--pa`は、ほかのオプションと重なって一意にならない。
+    return args.some((word) =>
+      isDelegatingLongOption(word.text, ["--pager"], 3),
+    );
+  }
   if (INITIAL_COMMAND_PROGRAMS.has(program)) {
-    return args.some((word) => word.text.startsWith("+"));
+    return args.some(
+      (word) => word.text.startsWith("+") || hasShortOption(word.text, "+"),
+    );
   }
   return false;
 }
