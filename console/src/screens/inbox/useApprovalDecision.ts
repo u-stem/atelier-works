@@ -3,14 +3,13 @@ import type { ApprovalDecideResult } from "../../api/guards/writeResults.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
 import { writeTargetKey } from "../../api/writeLocks.ts";
 import { decideApproval } from "../../api/writes.ts";
-import { announce } from "../../components/announce.ts";
+import { announce, announceStaleList } from "../../components/announce.ts";
 import { approvalOutcomeNotice } from "../../lib/approvalNotice.ts";
 import {
   classifyDecisionRefusal,
   type DecisionRefusal,
 } from "../../lib/approvalRefusal.ts";
 import { redoCooldowns } from "../../lib/redoCooldown.ts";
-import { STALE_LIST_NOTICE } from "../../lib/writeNotices.ts";
 
 export type DecisionInput = {
   readonly approvalRequestId: number;
@@ -64,7 +63,7 @@ export function useApprovalDecision(mode: "decide" | "redo"): {
       announce(approvalOutcomeNotice(outcome, mode, input.kind));
     },
     onStale: () => {
-      announce(STALE_LIST_NOTICE, { transient: true });
+      announceStaleList();
     },
   });
   return {

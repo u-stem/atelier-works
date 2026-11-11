@@ -8,18 +8,14 @@ import { useWriteMutation } from "../../api/mutations.ts";
 import { NOTICE_RESOLVE_INVALIDATES } from "../../api/noticeQueries.ts";
 import { writeTargetKey } from "../../api/writeLocks.ts";
 import { resolveNotice } from "../../api/writes.ts";
-import { announce } from "../../components/announce.ts";
+import { announce, announceStaleList } from "../../components/announce.ts";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { describeNotice } from "../../lib/noticeView.ts";
 import { formatAbsoluteWithRelative } from "../../lib/relativeTime.ts";
 import { systemSectionPath } from "../../lib/systemSections.ts";
-import {
-  describeNoticeResult,
-  releaseNotice,
-  STALE_LIST_NOTICE,
-} from "../../lib/writeNotices.ts";
+import { describeNoticeResult, releaseNotice } from "../../lib/writeNotices.ts";
 import { NoticeMessageText } from "./NoticeMessageText.tsx";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -45,7 +41,7 @@ const RESOLVE_CONFIG = {
     announce(releaseNotice(outcome, describeNoticeResult));
   },
   onStale: (): void => {
-    announce(STALE_LIST_NOTICE, { transient: true });
+    announceStaleList();
   },
   invalidates: NOTICE_RESOLVE_INVALIDATES,
 } as const;

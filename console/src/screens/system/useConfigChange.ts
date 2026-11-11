@@ -5,7 +5,7 @@ import { configQueryKey } from "../../api/jobsQueries.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
 import type { WriteRunnerConfig } from "../../api/writeRunner.ts";
 import { type ConfigUpdateInput, updateConfig } from "../../api/writes.ts";
-import { announce } from "../../components/announce.ts";
+import { announce, announceStaleList } from "../../components/announce.ts";
 import {
   type ChangeOffer,
   parseNewElement,
@@ -16,7 +16,6 @@ import {
   describeConfigUpdateResult,
   type ReleaseNotice,
   releaseNotice,
-  STALE_LIST_NOTICE,
   staysUntilClosed,
 } from "../../lib/writeNotices.ts";
 
@@ -60,7 +59,7 @@ const CONFIG_UPDATE: WriteRunnerConfig<ConfigUpdateInput, ConfigUpdateResult> =
       });
     },
     onStale: () => {
-      announce(STALE_LIST_NOTICE, { transient: true });
+      announceStaleList();
     },
   };
 

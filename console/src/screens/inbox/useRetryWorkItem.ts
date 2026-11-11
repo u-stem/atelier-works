@@ -1,6 +1,6 @@
 import { useWriteMutation } from "../../api/mutations.ts";
 import { retryWorkItem } from "../../api/writes.ts";
-import { announce } from "../../components/announce.ts";
+import { announce, announceStaleList } from "../../components/announce.ts";
 import { workItemRef } from "../../lib/labels.ts";
 import {
   describeRetryOutcome,
@@ -8,22 +8,13 @@ import {
   type RetryNotice,
   retryTargetKey,
 } from "../../lib/retryView.ts";
-import { STALE_LIST_NOTICE } from "../../lib/writeNotices.ts";
 
 /**
  * 知らせを画面に出す。どの作業項目の知らせかを添える。
  * 行ごとの再実行は別々に終わるので、知らせだけでは、どの行の結果か分からないためである。
- * 一覧を読み直せなかった警告は、閉じるまで残さない(`transient`)。
  */
-function showNotice(
-  notice: RetryNotice,
-  input: RetryInput,
-  options: { readonly transient?: boolean } = {},
-): void {
-  announce(notice, {
-    ...options,
-    description: workItemRef(input.workItemId),
-  });
+function showNotice(notice: RetryNotice, input: RetryInput): void {
+  announce(notice, { description: workItemRef(input.workItemId) });
 }
 
 /**
@@ -38,7 +29,7 @@ export function useRetryWorkItem() {
       showNotice(describeRetryOutcome(outcome), input);
     },
     onStale: (input) => {
-      showNotice(STALE_LIST_NOTICE, input, { transient: true });
+      announceStaleList({ description: workItemRef(input.workItemId) });
     },
   });
 }

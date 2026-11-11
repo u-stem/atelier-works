@@ -13,7 +13,7 @@ import {
   placeHold,
   stopSchedule,
 } from "../../api/writes.ts";
-import { announce } from "../../components/announce.ts";
+import { announce, announceStaleList } from "../../components/announce.ts";
 import {
   checkPlaceForm,
   type PlaceForm,
@@ -24,7 +24,6 @@ import {
   describeHoldPlaceResult,
   describeScheduleStopResult,
   releaseNotice,
-  STALE_LIST_NOTICE,
 } from "../../lib/writeNotices.ts";
 import { useReleaseFreeze } from "./useRelease.ts";
 
@@ -40,7 +39,7 @@ export const PLACE_HOLD: WriteRunnerConfig<HoldPlaceInput, HoldPlaceResult> = {
     announce(releaseNotice(outcome, describeHoldPlaceResult));
   },
   onStale: () => {
-    announce(STALE_LIST_NOTICE, { transient: true });
+    announceStaleList();
   },
 };
 
@@ -53,7 +52,7 @@ export const STOP_SCHEDULE: WriteRunnerConfig<string, ScheduleStopResult> = {
     announce(releaseNotice(outcome, describeScheduleStopResult));
   },
   onStale: () => {
-    announce(STALE_LIST_NOTICE, { transient: true });
+    announceStaleList();
   },
 };
 

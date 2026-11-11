@@ -13,7 +13,7 @@ import {
 import { useWriteMutation } from "../../api/mutations.ts";
 import type { WriteRunnerConfig } from "../../api/writeRunner.ts";
 import { cancelJob, rerunJob } from "../../api/writes.ts";
-import { announce } from "../../components/announce.ts";
+import { announce, announceStaleList } from "../../components/announce.ts";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { cn } from "../../lib/cn.ts";
@@ -31,7 +31,6 @@ import {
   describeJobCancelResult,
   describeJobRerunResult,
   releaseNotice,
-  STALE_LIST_NOTICE,
 } from "../../lib/writeNotices.ts";
 
 function Field({
@@ -202,7 +201,7 @@ function cancelConfig(
       announce(releaseNotice(outcome, describeJobCancelResult));
     },
     onStale: () => {
-      announce(STALE_LIST_NOTICE, { transient: true });
+      announceStaleList();
     },
   };
 }
@@ -232,7 +231,7 @@ function rerunConfig(
       }
     },
     onStale: () => {
-      announce(STALE_LIST_NOTICE, { transient: true });
+      announceStaleList();
     },
   };
 }

@@ -1,7 +1,11 @@
 // 書き込みの結果の知らせを、トーストで出す。書き込みの結果のトーストは、すべてここから出す。
 
 import { type ExternalToast, toast } from "sonner";
-import { type ReleaseNotice, staysUntilClosed } from "../lib/writeNotices.ts";
+import {
+  type ReleaseNotice,
+  STALE_LIST_NOTICE,
+  staysUntilClosed,
+} from "../lib/writeNotices.ts";
 
 /** トーストを出す口。調子ごとに1つずつある。sonnerの`toast`が満たす。 */
 export type Toaster = Readonly<
@@ -48,10 +52,25 @@ export function announceWith(
   toaster[notice.tone](notice.message, optionsOf(notice, options));
 }
 
+/** 一覧を読み直せなかった警告を、`toaster`の数秒で消えるトーストで出す。 */
+export function announceStaleListWith(
+  toaster: Toaster,
+  options?: Pick<AnnounceOptions, "description">,
+): void {
+  announceWith(toaster, STALE_LIST_NOTICE, { ...options, transient: true });
+}
+
 /** 書き込みの結果の知らせを、画面のトーストで出す。 */
 export function announce(
   notice: ReleaseNotice,
   options: AnnounceOptions = {},
 ): void {
   announceWith(toast, notice, options);
+}
+
+/** 一覧を読み直せなかった警告を、数秒で消えるトーストで出す。 */
+export function announceStaleList(
+  options?: Pick<AnnounceOptions, "description">,
+): void {
+  announceStaleListWith(toast, options);
 }
