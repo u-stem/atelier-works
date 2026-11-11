@@ -4815,6 +4815,29 @@ describeForCallers(
 );
 
 describeForCallers(
+  "bash-guard denies a bracket opened inside a word and not closed in it",
+  (subagent) => {
+    test("denies a spaced subscript that hides a comment start", async () => {
+      expect(await decide("a[ # ]=1; mise run stop", { subagent })).toBe(
+        "deny",
+      );
+    });
+
+    test("denies a push to main behind a subscripted assignment", async () => {
+      expect(await decide("a[1]=1 git push origin main", { subagent })).toBe(
+        "deny",
+      );
+    });
+
+    test("denies a push to main behind an env assignment with a free name", async () => {
+      expect(await decide("env a-b=1 git push origin main", { subagent })).toBe(
+        "deny",
+      );
+    });
+  },
+);
+
+describeForCallers(
   "bash-guard denies an array assignment opened in a nested reader",
   (subagent) => {
     test.each([
