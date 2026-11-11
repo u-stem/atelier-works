@@ -6346,7 +6346,7 @@ miseの自動インストールが`mise run`の前に不足分を入れるかは
 そのため、通知の手順に`mise install`を含める。
 
 `mise.toml`の`windmill-cli`の版を上げる変更では、反映の前に`mise run push:dry`を実行し、`deployed_sha`と凍結中のスケジュールが変更に出ないことを確かめる。
-凍結の除外は、CLIの`--excludes`の挙動に依存するためである([凍結とdeployの保留の内部仕様](internals/freezes.md#凍結とdeployの保留)の「凍結とdeployの保留」)。
+凍結の除外は、CLIの`--excludes`の挙動に依存するためである([凍結とdeployの保留の内部仕様の「凍結とdeployの保留」](internals/freezes.md#凍結とdeployの保留))。
 
 workerのメモリの上限のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
 マウントの変更では、該当するコンテナが作り直される。
@@ -7408,7 +7408,7 @@ Issueの取り込みの保留は、読む処理が無いので置けない。
 
 解除は、同じ画面の一覧の「解除」で行う。
 期限が来ても終わる。
-仕様と残るリスクは、[保留の内部仕様](internals/holds.md)と[凍結とdeployの保留の内部仕様](internals/freezes.md)、[Consoleの安全策の内部仕様](internals/console/security.md#保留と凍結を置く)の「保留と凍結を置く」にある。
+仕様と残るリスクは、[保留の内部仕様](internals/holds.md)と[凍結とdeployの保留の内部仕様](internals/freezes.md)、[Consoleの安全策の内部仕様の「保留と凍結を置く」](internals/console/security.md#保留と凍結を置く)にある。
 
 ### Consoleでスケジュールを止める
 
@@ -7478,7 +7478,7 @@ Windmillの画面で、スケジュールを有効に戻す。
 `mise run freeze:reset`で変数を空にした後も、Consoleで止めたスケジュールは、次の反映まで戻らない。
 Windmillの画面で、スケジュールを有効に戻す。
 `reset`は、この旨を表示する。
-仕様と残るリスクは、[凍結とdeployの保留の内部仕様](internals/freezes.md)と[Consoleの安全策の内部仕様](internals/console/security.md#スケジュールを止める)の「スケジュールを止める」にある。
+仕様と残るリスクは、[凍結とdeployの保留の内部仕様](internals/freezes.md)と[Consoleの安全策の内部仕様の「スケジュールを止める」](internals/console/security.md#スケジュールを止める)にある。
 
 ### 凍結と合わせて確かめる
 

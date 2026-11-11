@@ -800,7 +800,7 @@ Console用workerのscriptが読むsecret変数は、`tests/scripts/console_worke
 ジョブの画面とシステムの画面が読む3つのscriptは、読み取り専用である。
 型と型ガード、取得、クエリのキーと設定は`src/api/jobsQueries.ts`にある。
 backendの型との一致は、`tests/scripts/console_jobs_contract.test.ts`が確かめる。
-返す項目の絞り方と、ログと結果の伏せ字は、[Consoleの安全策の内部仕様](console/security.md#ジョブのログと結果の読み取り)の「ジョブのログと結果の読み取り」に書く。
+返す項目の絞り方と、ログと結果の伏せ字は、[Consoleの安全策の内部仕様の「ジョブのログと結果の読み取り」](console/security.md#ジョブのログと結果の読み取り)に書く。
 
 | script | 入力 | 戻り |
 | --- | --- | --- |
@@ -2098,7 +2098,7 @@ scriptは、次のときに再実行を断る。
 プレビューを表示した状態は、`data-preview`の属性で示す。
 `Markdown`の描画は重いので、`memo`で包んだ部品の入力は、同じ参照を渡し続ける。
 
-この方針の根拠と残るリスクは、[Consoleの安全策の内部仕様](console/security.md#取り込み時点のissueと提案の描画)の「取り込み時点のIssueと提案の描画」に書く。
+この方針の根拠と残るリスクは、[Consoleの安全策の内部仕様の「取り込み時点のIssueと提案の描画」](console/security.md#取り込み時点のissueと提案の描画)に書く。
 
 ### 承認バー
 
@@ -2367,7 +2367,7 @@ HTMLとリンク参照定義は解釈せず、文字として出す。
 承認画面のファイル(`DesignReview.tsx`)自体も保護パスにある。
 全文を描く部分、止める判定への入力の渡し方、プレビュー中の停止の式、行数と終わりの印を、1つのファイルに持つためである。
 保護しない祖先の部品、共有のパネル、全体のCSSから一部の行を隠す手は、ファイル単位の保護では閉じられない。
-この経路と残るリスクは、[Consoleの安全策の内部仕様](console/security.md#設計の承認画面の保護)の「設計の承認画面の保護」に書く。
+この経路と残るリスクは、[Consoleの安全策の内部仕様の「設計の承認画面の保護」](console/security.md#設計の承認画面の保護)に書く。
 
 ### Issue提案の本文
 
@@ -2578,7 +2578,7 @@ Issueの内容に由来する信頼できない入力なので、次のように
   枠には`tabindex="0"`と名前「表」を付ける。
   リンクを含まない表でも、スクロールする領域の規則(`scrollable-region-focusable`)を満たすためである。
 
-理由は[Consoleの安全策の内部仕様](console/security.md#要件定義書のリンク)の「要件定義書のリンク」にある。
+理由は[Consoleの安全策の内部仕様の「要件定義書のリンク」](console/security.md#要件定義書のリンク)にある。
 
 目次は、行頭から始まる`##`と`###`の見出しである。
 コードの囲みの中の行は、見出しに数えない。
@@ -2786,7 +2786,7 @@ Markdownの文字は、HTMLのコメントとリンク参照定義も文字で�
 `rehype-sanitize`は、変換後の要素と属性を絞る二重の防御である。
 `dangerouslySetInnerHTML`は使わない。
 描く前に、`displayableIssueText`で見えない文字を代替文字に置き換える。
-リンクと画像の扱いは、[Consoleの安全策の内部仕様](console/security.md#監査レポートの本文)の「監査レポートの本文」にある。
+リンクと画像の扱いは、[Consoleの安全策の内部仕様の「監査レポートの本文」](console/security.md#監査レポートの本文)にある。
 
 ### 手動の起動
 
@@ -5968,7 +5968,7 @@ IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
 ## draw.ioの図
 
 要件定義書の図は、最上位のページではなく、隔離したiframeの中で描く。
-何を守るかは、[Consoleの安全策の内部仕様](console/security.md#drawioの図の描画)の「draw.ioの図の描画」にある。
+何を守るかは、[Consoleの安全策の内部仕様の「draw.ioの図の描画」](console/security.md#drawioの図の描画)にある。
 要件定義書の画面が、本文の図ごとに`DrawioFrame`で描く。
 flowの図は、このiframeを使わず、自前のSVGで描く([flowの図の画面](#flowの図の画面))。
 
@@ -6021,7 +6021,7 @@ raw.githubusercontent.comの障害で取得に失敗したら、失敗したワ�
 固定の更新は、Windmillの`f/factory/drawio_viewer_bump`が毎週月曜の10:00(Asia/Tokyo)に行う。
 新しい版があれば、固定を書き換えるPRを作る。
 人が固定のファイルを手で直す必要はない。
-どこで動かすかと、何を守るかは、[Consoleの安全策の内部仕様](console/security.md#ビューアの更新)の「ビューアの更新」にある。
+どこで動かすかと、何を守るかは、[Consoleの安全策の内部仕様の「ビューアの更新」](console/security.md#ビューアの更新)にある。
 
 | ファイル | 役割 |
 | --- | --- |
@@ -6031,7 +6031,7 @@ raw.githubusercontent.comの障害で取得に失敗したら、失敗したワ�
 | `f/factory/lib/drawio_viewer_observations.ts` | タグごとに、最初に見たcommitと時刻を記録する |
 | `migrations/datatable/main/20261011153000_drawio_viewer_observations.up.sql` | 記録の表`factory.drawio_viewer_observations` |
 
-保護パスの一覧は、[PRワークフローの仕様](pr-workflow.md#保護パスの変更を止める)の「保護パスの変更を止める」にある。
+保護パスの一覧は、[PRワークフローの仕様の「保護パスの変更を止める」](pr-workflow.md#保護パスの変更を止める)にある。
 
 処理は次の順に進む。
 
