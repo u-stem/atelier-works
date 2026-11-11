@@ -1,26 +1,35 @@
 # コーディング規約
 
-このリポジトリのコードを書くときの決まりを定める。コードを変更する人と、Claudeが読む。文書の書き方は[文書の書き方](writing-guidelines.md)にある。
+このリポジトリのコードを書くときの決まりを定める。
+コードを変更する人と、Claudeが読む。
+文書の書き方は[文書の書き方](writing-guidelines.md)にある。
 
 ## 言語
 
-- 文書とコメントは日本語で書く。日本語の書き方は[文書の書き方](writing-guidelines.md)に従う。
+- 文書とコメントは日本語で書く。
+  日本語の書き方は[文書の書き方](writing-guidelines.md)に従う。
 - 識別子、テスト名、ログとエラーのメッセージ、Claudeへのプロンプトの文字列は英語のままにする。
-- コミットメッセージの1行目は`<type>: <日本語の説明>`の形にする。typeは`feat`、`fix`、`docs`、`refactor`、`test`、`chore`のどれかで、commit-msgのフックが検査する。
+- コミットメッセージの1行目は`<type>: <日本語の説明>`の形にする。
+  typeは`feat`、`fix`、`docs`、`refactor`、`test`、`chore`のどれかで、commit-msgのフックが検査する。
 
 ## コメント
 
 コメントは、コードを読んでも分からないことだけを書く。
 
-- 関数・型・定数のコメントは、宣言の直前に`/** */`で書く。書くのは次の2つに限る。
+- 関数・型・定数のコメントは、宣言の直前に`/** */`で書く。
+  書くのは次の2つに限る。
   - 契約: 何をするか、何を返すか、どういうときに失敗するか、どんな副作用があるか。
   - 理由: その実装を選んだ理由や、守らないと壊れる前提のうち、コードから読み取れないもの。
 - ファイル冒頭のコメントには、そのファイルの役割を1〜3文で書く。
-- 行内のコメントは、その行だけでは意図が分からない箇所に限って書く。コードをそのまま言い換えたコメントは書かない。
+- 行内のコメントは、その行だけでは意図が分からない箇所に限って書く。
+  コードをそのまま言い換えたコメントは書かない。
 - 次のものは書かない。
-  - `§`などのセクション記号と、設計文書・計画書の章番号やファイル名。リポジトリの外にある文書は読み手が辿れない。
-  - 変更の経緯(「〜から移した」「PR #Nで追加」など)。経緯はコミットとPRに残す。
-  - TODO。今やるかIssueにする。
+  - `§`などのセクション記号と、設計文書・計画書の章番号やファイル名。
+    リポジトリの外にある文書は読み手が辿れない。
+  - 変更の経緯(「〜から移した」「PR #Nで追加」など)。
+    経緯はコミットとPRに残す。
+  - TODO。
+    今やるかIssueにする。
 - 既知の制限を説明するためにIssue番号を書くのはよい(例: 「検査コマンドはworkerと同じコンテナで動き、networkを分離しない(#146)」)。
 
 ```ts
@@ -39,11 +48,13 @@ export function jstMidnightTodayIso(now: Date): string {
 ## TypeScript
 
 - `tsconfig.json`は`strict: true`を必須とする。
-- 型アサーション`as`(`<T>expr`形式含む)は禁止する。例外は次の2つに限る。
+- 型アサーション`as`(`<T>expr`形式含む)は禁止する。
+  例外は次の2つに限る。
   - `as const`
   - 型ガード関数の内部での絞り込み
 - `any`は使わない(biomeの`noExplicitAny`で強制する)。
-- 外部から来た値(HTTPの応答、`JSON.parse`の結果、サブプロセスのstdoutなど)は、parse, don't validateの原則で扱う。型があると決め打ちしてアクセスせず、型ガード関数でパースしてから使う。
+- 外部から来た値(HTTPの応答、`JSON.parse`の結果、サブプロセスのstdoutなど)は、parse, don't validateの原則で扱う。
+  型があると決め打ちしてアクセスせず、型ガード関数でパースしてから使う。
 
 ```ts
 // 悪い例: 決め打ちでアクセスする(`as`で黙らせている)
@@ -65,15 +76,20 @@ if (!isClaudeResult(parsed)) {
 // ここから先は`parsed`を`ClaudeResult`として扱える
 ```
 
-型ガード関数の内部で、オブジェクトの形を確かめるために絞り込むことは許す。ただし、その箇所も`lint-no-type-assertions`の検査の対象になる。判定は`typeof`、`in`、配列の確認などで組み立てる。
+型ガード関数の内部で、オブジェクトの形を確かめるために絞り込むことは許す。
+ただし、その箇所も`lint-no-type-assertions`の検査の対象になる。
+判定は`typeof`、`in`、配列の確認などで組み立てる。
 
 `as`の検出(`scripts/lint-no-type-assertions.ts`)は、`console/`を含めて`.ts`と`.tsx`を検査する。
 完全な構文解析ではなくトークン単位で読むので、まれな入力では誤検知や見逃しが起こる。
 `.tsx`ではJSXを読み分けるが、コードをJSXと読み違えることがある。
 
 - 読み違える例は、型の位置の呼び出しシグネチャ`{ <T>(x: T): T }`と、キーワードと同じ綴りの変数を`<`で比べる`from < max`である。
-- 読み違えた要素はたいていファイルの終わりまで閉じない。そのときは`UnclosedJsxError`として`file:line:column`を出し、エラーで止まる。書き方を変えて避ける。
-- 後ろの文字列リテラルなどにある`</`(`"</a>"`)が、読み違えた要素を閉じることがある。そのときは、間のコードが黙って検査から漏れる。
+- 読み違えた要素はたいていファイルの終わりまで閉じない。
+  そのときは`UnclosedJsxError`として`file:line:column`を出し、エラーで止まる。
+  書き方を変えて避ける。
+- 後ろの文字列リテラルなどにある`</`(`"</a>"`)が、読み違えた要素を閉じることがある。
+  そのときは、間のコードが黙って検査から漏れる。
 
 ## リモート追跡ref
 
@@ -82,8 +98,10 @@ if (!isClaudeResult(parsed)) {
 対象リポジトリの検査コマンドはこれらを作れるので、追跡refとは別のcommitを読まされる。
 
 - 追跡refの名前は、`refs/remotes/origin/<branch>`の完全な名前を`remoteTrackingRef`で作る。
-- shaは`readExactRef`(`git show-ref --verify`)で読む。`git rev-parse`は、完全な名前でもrefが無いと別のrefへ解決し直すため使わない。
-- `scripts/lint-no-short-remote-ref.ts`が、`f/factory/`のTypeScriptで先頭が`origin/`の文字列リテラルとテンプレートリテラルを検出する。コメントは見ない。
+- shaは`readExactRef`(`git show-ref --verify`)で読む。
+  `git rev-parse`は、完全な名前でもrefが無いと別のrefへ解決し直すため使わない。
+- `scripts/lint-no-short-remote-ref.ts`が、`f/factory/`のTypeScriptで先頭が`origin/`の文字列リテラルとテンプレートリテラルを検出する。
+  コメントは見ない。
 
 この検出もトークン単位で読むので、まれな入力では誤検知や見逃しが起こる。
 文字列の連結、変数、テンプレートリテラルの中間部に書かれた`origin/`は検出できない。
@@ -150,7 +168,8 @@ superpowersが使えない環境では、同じ流れ(計画、実装、別のsu
   確かめ方は「前提の検証」にある。
 - テストの書き方は[テストの基準](testing-guidelines.md#テストの書き方)に従う。
 - 外部プロセス起動や`fetch`は引数として注入し、テストではダミー実装に差し替える(実プロセス・実HTTPを叩くテストは書かない)。
-- ただし、判定がgit自身の出力の形(パスの引用、未追跡ディレクトリのまとめ方、pathspecの解釈など)で決まるときは、一時ディレクトリに作ったリポジトリで実際のgitを実行するテストを書いてよい。`HOME`を一時ディレクトリに向けるなどして利用者の設定を読ませず、終わったらディレクトリを消す(`runCommand`で`echo`を実行するテストや、実際のflockを使うテストと同じ扱い)。
+- ただし、判定がgit自身の出力の形(パスの引用、未追跡ディレクトリのまとめ方、pathspecの解釈など)で決まるときは、一時ディレクトリに作ったリポジトリで実際のgitを実行するテストを書いてよい。
+  `HOME`を一時ディレクトリに向けるなどして利用者の設定を読ませず、終わったらディレクトリを消す(`runCommand`で`echo`を実行するテストや、実際のflockを使うテストと同じ扱い)。
 
 ## テストの分類
 
@@ -162,18 +181,24 @@ Windmillの資産の配置、secretとconfigの取得、`//native`を使わな�
 
 ## Windmill datatableの型安全性
 
-`wmill.datatable()`のタグ付きテンプレートに`null`を渡すと、Windmillはその値を`text`型で束縛する。そのため、textでない列(bigint、integer、numeric、boolean、jsonbなど)にnullを入れると失敗する。エラーは`column is of type bigint but expression is of type text`の形になる。
+`wmill.datatable()`のタグ付きテンプレートに`null`を渡すと、Windmillはその値を`text`型で束縛する。
+そのため、textでない列(bigint、integer、numeric、boolean、jsonbなど)にnullを入れると失敗する。
+エラーは`column is of type bigint but expression is of type text`の形になる。
 
-`lib/db.ts`では、nullになりうるtextでない値には必ず明示的なキャスト(`::bigint`や`::boolean`など)を付ける。キャストが効くことはテストで確かめる。
+`lib/db.ts`では、nullになりうるtextでない値には必ず明示的なキャスト(`::bigint`や`::boolean`など)を付ける。
+キャストが効くことはテストで確かめる。
 
 ### 行の列の定義
 
 テーブルの行を読む関数は、列の名前を1か所に定義し、行の型、変換、SELECT句と食い違わないようにする。
 `pr_ci_checks`の`PR_CI_CHECK_COLUMNS`が最初の例である。
 
-- 定義は、列の名前の`as const`の配列にする。行の型に無い列は、`satisfies`で型検査が止める。
-- 行の変換は、定義の列だけを持つ入力の型(`PrCiCheckSqlRow`)を受ける。定義に無い列を読むと、型検査が失敗する。
-- SELECT句は、テンプレートに直接書く。テンプレートに埋め込んだ値は、識別子ではなくパラメータとして束縛されるためである。
+- 定義は、列の名前の`as const`の配列にする。
+  行の型に無い列は、`satisfies`で型検査が止める。
+- 行の変換は、定義の列だけを持つ入力の型(`PrCiCheckSqlRow`)を受ける。
+  定義に無い列を読むと、型検査が失敗する。
+- SELECT句は、テンプレートに直接書く。
+  テンプレートに埋め込んだ値は、識別子ではなくパラメータとして束縛されるためである。
   定義との一致は、`tests/lib/db.test.ts`の一覧にある、行を読む関数ごとに確かめる。
   一覧が、`toPrCiCheck`を呼ぶ関数と同じ数であることも、同じテストで確かめる。
 - INSERTの列と、UPDATEの代入先の列が定義にあることは、同じテストの一覧にある、書き込む関数ごとに確かめる。
@@ -182,39 +207,55 @@ Windmillの資産の配置、secretとconfigの取得、`//native`を使わな�
   - UPDATEの代入式の中身と、WHERE、ORDER BY、JOINに書く列。
   - `RETURNING`の列と、CTEの中で別のテーブルへ書く列(`claimPrCiCheckForFix`の`work_items`への挿入)。
   - DELETE。
-- 列を足すときは、定義、行の型、変換、SELECT句をそろえる。食い違いは、`test:db`を待たず、型検査か単体テストで見つかる。
+- 列を足すときは、定義、行の型、変換、SELECT句をそろえる。
+  食い違いは、`test:db`を待たず、型検査か単体テストで見つかる。
 - 別のテーブルへ広げるときは、型の主張(`as`)を使わない同じ形で書く。
 
 ## 検証コマンド
 
 `mise run check`は、`lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する。
 PRを出す前に必ず通す。
-gitのpre-pushは全体の`check`を実行しない。理由は[セットアップ](setup.md#gitのフック)にある。
+gitのpre-pushは全体の`check`を実行しない。
+理由は[セットアップ](setup.md#gitのフック)にある。
 
 - `lint`はbiome、`wmill lint f`、型アサーションと`§`の検出を含む。
-- `test`は`bun test --parallel`で、`console/`を除く。カバレッジを`coverage/lcov.info`に出す。`check`は、その後に`bun ./scripts/check-coverage.ts`で、全体と層ごとの行カバレッジの下限と、lcovに出ない対象を確かめる。
-- `test:changed`は、`scripts/check-changed.ts`が`origin/main`との差分(削除を含む)から、実行するテストを選ぶ。全件の確認はCIが行う。
+- `test`は`bun test --parallel`で、`console/`を除く。
+  カバレッジを`coverage/lcov.info`に出す。
+  `check`は、その後に`bun ./scripts/check-coverage.ts`で、全体と層ごとの行カバレッジの下限と、lcovに出ない対象を確かめる。
+- `test:changed`は、`scripts/check-changed.ts`が`origin/main`との差分(削除を含む)から、実行するテストを選ぶ。
+  全件の確認はCIが行う。
   `bun test --changed`はimportの解析で選ぶので、コードから読まないファイルの変更は拾えない。
   そのため、`console/`の外の差分に、`.ts`、`.tsx`、`.js`、`.mjs`以外が1つでもあれば、`test:all`で全件を実行する。
   `.sh`、`.yaml`、`.sql`、`.json`、`.toml`、拡張子の無いファイルが該当する。
   差分がコードだけなら、変更に絞って実行する。
   削除されたコードは、importのグラフに現れず、消したモジュールをまだ読むテストを選べない。
-  そのため、削除された`.ts`、`.tsx`、`.js`、`.mjs`が1つでもあれば、全件を実行する。削除された`.md`と、`console/`の下の削除は、全件にしない。
+  そのため、削除された`.ts`、`.tsx`、`.js`、`.mjs`が1つでもあれば、全件を実行する。
+  削除された`.md`と、`console/`の下の削除は、全件にしない。
   差分のMarkdown(削除と名前の変更を含む)のパスを`tests/`の中に書いているテストも、`git grep`で集めて実行する。
-  スキルの文書が含まれるときは、全スキルを読む`tests/scripts/claude-config.test.ts`と`tests/lib/commit_message_style.test.ts`も足す。パスを変数で組み立てるテストは、`git grep`に当たらないためである。
+  スキルの文書が含まれるときは、全スキルを読む`tests/scripts/claude-config.test.ts`と`tests/lib/commit_message_style.test.ts`も足す。
+  パスを変数で組み立てるテストは、`git grep`に当たらないためである。
   メタデータのフックが作るファイルは、対応するコードが同じ差分にあるときだけ、全件の判定から外す。
-  `<名前>.script.yaml`と`<名前>.script.lock`は`<名前>.ts`があるとき、`wmill-lock.yaml`は`f/`の下の`.ts`があるときである。コードを変えるたびに作り直され、全件が常態になるためである。
-  `.script.yaml`は`tag`や`timeout`を人が手で直し、テストがパスで読む。コードの無い単独の変更は全件にするが、コードと一緒に手で直した変更は拾えない。
-  コードと一緒の差分では、新しいスクリプトの追加で、全`.script.yaml`の`tag`を読む`console_script_tags.test.ts`が選ばれない。生成物の形を検査する`script_yaml_lock_contract.test.ts`も走らない。どちらもCIの全件が拾う。名前の変更は、元のパスを削除として数えるので全件になる。
+  `<名前>.script.yaml`と`<名前>.script.lock`は`<名前>.ts`があるとき、`wmill-lock.yaml`は`f/`の下の`.ts`があるときである。
+  コードを変えるたびに作り直され、全件が常態になるためである。
+  `.script.yaml`は`tag`や`timeout`を人が手で直し、テストがパスで読む。
+  コードの無い単独の変更は全件にするが、コードと一緒に手で直した変更は拾えない。
+  コードと一緒の差分では、新しいスクリプトの追加で、全`.script.yaml`の`tag`を読む`console_script_tags.test.ts`が選ばれない。
+  生成物の形を検査する`script_yaml_lock_contract.test.ts`も走らない。
+  どちらもCIの全件が拾う。
+  名前の変更は、元のパスを削除として数えるので全件になる。
   `bun test --changed`の基点は、差分を数えるマージ基点のコミットにそろえる。
   `console/`の下は`console:check`が担うので、全件にしない。
-- `test:all`は、カバレッジを測らずに全件を実行する。`test:changed`が、全件を要する差分で呼ぶ。
-- `check:changed`は、`scripts/check-changed.ts`が差分のパスから実行する検査を決める。重いのは`lint:docs`なので、差分のMarkdownだけを検査する。
-  文書の間のリンクは、差分に文書が無くても、全文書を検査する(`scripts/lint-docs.ts --links-only`)。リンク先や文書の削除、`.md`以外のファイルの改名で壊れるためである。
+- `test:all`は、カバレッジを測らずに全件を実行する。
+  `test:changed`が、全件を要する差分で呼ぶ。
+- `check:changed`は、`scripts/check-changed.ts`が差分のパスから実行する検査を決める。
+  重いのは`lint:docs`なので、差分のMarkdownだけを検査する。
+  文書の間のリンクは、差分に文書が無くても、全文書を検査する(`scripts/lint-docs.ts --links-only`)。
+  リンク先や文書の削除、`.md`以外のファイルの改名で壊れるためである。
   テストは、`test:changed`と同じ規則で選ぶ。
   絞り方を変えるときは`tests/scripts/check-changed.test.ts`と`tests/scripts/check-changed-git.test.ts`を直す。
 - `console:check`は、Console(`console/`)のlockfileの方針を検査し、型検査、テスト、組み立てを行う。
-- `console:a11y`は、組み立てたConsoleをChromiumで検査する。ブラウザの取得が要るので`check`に含めず、CIの`console-a11y`ジョブが動かす。
+- `console:a11y`は、組み立てたConsoleをChromiumで検査する。
+  ブラウザの取得が要るので`check`に含めず、CIの`console-a11y`ジョブが動かす。
 
 依存は、ルートの`bun.lock`と、Console(`console/`)の`console/bun.lock`に分けて固定する。
 
@@ -284,14 +325,16 @@ Generated-By: Software Factory (<instance_name>)
 `/code-review high`は親のセッションのモデルで動き、モデルを上げない。
 指摘は検証段を通っていないので、コードで確かめてから直す。
 
-`.claude/settings.json`の`model`は`opusplan`にしている。計画モードだけがOpusで、実装はSonnetで動く。
+`.claude/settings.json`の`model`は`opusplan`にしている。
+計画モードだけがOpusで、実装はSonnetで動く。
 Opusで行う作業は、Agentツールの`model`に`opus`を指定したsubagentに任せる。
 人が見ているセッションでは、人が`/model opus`に切り替える。
 `/model`は人が打つコマンドで、Claudeの親のセッションは自分で切り替えられないため。
 
 Factoryも同じ方針で、`f/factory/factory_config`の`model`(既定はSonnet)と`heavy_model`(既定はOpus)を使い分ける。
 実装とPR修正は、同じ作業でSonnetが続けて2回失敗したら、`heavy_model`で動く。
-Sonnetが成功すれば、失敗の数を数え直す。PR修正は、再レビューが続いて3ラウンド目に入っても`heavy_model`で動く。
+Sonnetが成功すれば、失敗の数を数え直す。
+PR修正は、再レビューが続いて3ラウンド目に入っても`heavy_model`で動く。
 FactoryのPRのレビューは、失敗の数にかかわらず`heavy_model`で動く。
 工程ごとの割り当てと、既存のリソースの書き換えは[運用](operations.md)の「モデルを使い分ける」にある。
 

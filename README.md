@@ -1,6 +1,8 @@
 # atelier-works
 
-GitHubのIssueを起点に、要件定義、実装、PR、マージ後の監視、自己改善までをWindmillのフローとして自動化するSoftware Factoryである。このリポジトリをcloneして手順どおりに実行すれば動き、グローバルの設定やほかのリポジトリには依存しない。初めて来た人は、この文書の後に[セットアップ](docs/setup.md)を読む。
+GitHubのIssueを起点に、要件定義、実装、PR、マージ後の監視、自己改善までをWindmillのフローとして自動化するSoftware Factoryである。
+このリポジトリをcloneして手順どおりに実行すれば動き、グローバルの設定やほかのリポジトリには依存しない。
+初めて来た人は、この文書の後に[セットアップ](docs/setup.md)を読む。
 
 ## 工程
 
@@ -22,7 +24,8 @@ Factoryは次の5つの工程で動く。
 - ダッシュボード(Factory Console。`/console/`で開く)
 - 自己更新と、失敗したジョブの通知
 
-Discordには通知だけを送る。Discordからの操作は受け付けない。
+Discordには通知だけを送る。
+Discordからの操作は受け付けない。
 
 ## 10分で動かす
 
@@ -37,7 +40,10 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
    mise run setup
    ```
 
-2. 秘密値を投入する。キーと取得の手順は[セットアップ](docs/setup.md)の「資格情報を用意する」にある。zshでは次のようにキーごとに実行する。bashのコマンドは[セットアップ](docs/setup.md)の「秘密値を投入する」にある。
+2. 秘密値を投入する。
+   キーと取得の手順は[セットアップ](docs/setup.md)の「資格情報を用意する」にある。
+   zshでは次のようにキーごとに実行する。
+   bashのコマンドは[セットアップ](docs/setup.md)の「秘密値を投入する」にある。
 
    ```bash
    IFS= read -rs 'v?DB_PASSWORD: ' && printf '%s' "$v" | mise set -E local --stdin DB_PASSWORD; unset v
@@ -52,7 +58,8 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
    ```
 
 4. ブラウザで`http://127.0.0.1:8080`を開き、`admin@windmill.dev`と`WM_ADMIN_PASSWORD`の値でログインする。
-5. Windmillの画面で`f/factory/factory_config`を開き、`owners`(対象リポジトリの所有者)と`instance_name`を設定する。この2つはgitで管理せず、`bootstrap`は空のまま作る。
+5. Windmillの画面で`f/factory/factory_config`を開き、`owners`(対象リポジトリの所有者)と`instance_name`を設定する。
+   この2つはgitで管理せず、`bootstrap`は空のまま作る。
 
 動作の確かめ方とトラブルシュートは[セットアップ](docs/setup.md)にある。
 
@@ -99,6 +106,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run lint` | biome、`wmill lint`、型アサーションと`§`の検出を実行する |
 | `mise run lint:docs` | Markdownの文書を検査する |
 | `mise run docs:gen` | 文書の中の生成した範囲と、Consoleに出すflowごとの図のデータ(`console/src/generated/flows.json`)を作り直す |
+| `mise run docs:format` | 1行に複数の文がある地の文を、「。」の後で改行して直す。`--`の後にファイルを渡すと、そのファイルだけを直す。分けると文書の構造が変わるファイルは書かない |
 | `mise run typecheck` | `tsc --noEmit`で型を検査する |
 | `mise run test` | `bun test --parallel`でsmallのテストを並列に実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
 | `mise run test:all` | カバレッジを測らずに、`console/`を除く全件のテストを並列に実行する。`test:changed`が、importから選べない差分で呼ぶ |

@@ -1,6 +1,7 @@
 # セットアップ
 
-このリポジトリをcloneしてから、ローカルのWindmillでSoftware Factoryを動かすまでの手順を書く。初めて環境を作る人と、作り直す人が読む。
+このリポジトリをcloneしてから、ローカルのWindmillでSoftware Factoryを動かすまでの手順を書く。
+初めて環境を作る人と、作り直す人が読む。
 
 ## 前提
 
@@ -11,22 +12,28 @@
 プラグインの版は固定できないので、更新で流れが変わったときは[コーディング規約](coding-guidelines.md)の「開発の流れ」を直す。
 無い環境では、[コーディング規約](coding-guidelines.md)の「開発の流れ」を手で行う。
 
-ホストに要るのは、Docker(Docker DesktopかOrbStack)とmiseだけである。node、bun、gh、windmill-cliなどほかのツールは、`mise run setup`の中の`mise install`で入る。
+ホストに要るのは、Docker(Docker DesktopかOrbStack)とmiseだけである。
+node、bun、gh、windmill-cliなどほかのツールは、`mise run setup`の中の`mise install`で入る。
 テストを動かすホストのgitと、workerのgitは、2.44以上が要る([実装フローの仕様](internals/implement.md)を参照)。
 
 Dockerは、Engineを26.0以上(API 1.45以上)、Composeを2.26.0以上にする。
 Console用のworkerが、ボリュームのサブパスをマウントするためである。
 Composeが2.26.0以上でEngineが26.0未満だと、Engineがサブパスを気づかないうちに無視し、`factory_state`のボリューム全体がマウントされうる。
 そのため`mise run up`と`mise run deploy`は、起動の前に版を確かめ、満たさなければ止まる。
-この強制が止めるのは、この2つのタスクを通した起動だけである。`mise exec -- docker compose ... up`を直接実行した場合や、restart policyによる再起動は止めない。
+この強制が止めるのは、この2つのタスクを通した起動だけである。
+`mise exec -- docker compose ... up`を直接実行した場合や、restart policyによる再起動は止めない。
 `mise run doctor`も同じ検査を報告する。
 Podmanは対象外である。
 
-設定に`.env`系のファイルは使わない。`infra/.env`と`infra/secrets.env`は存在しない。秘密でない設定は`mise.toml`の`[env]`に、秘密値はgitignore済みの`mise.local.toml`に置く。理由は[セキュリティ](security.md)の「シークレットの扱い」にある。
+設定に`.env`系のファイルは使わない。
+`infra/.env`と`infra/secrets.env`は存在しない。
+秘密でない設定は`mise.toml`の`[env]`に、秘密値はgitignore済みの`mise.local.toml`に置く。
+理由は[セキュリティ](security.md)の「シークレットの扱い」にある。
 
 ## 資格情報を用意する
 
-`mise.local.toml`に入れる秘密値は次の7つである。キーの一覧は`mise.local.toml.example`にもある。
+`mise.local.toml`に入れる秘密値は次の7つである。
+キーの一覧は`mise.local.toml.example`にもある。
 
 | キー | 用意の仕方 |
 | --- | --- |
@@ -88,7 +95,8 @@ IFS= read -rs -p 'KEY: ' v && printf '%s' "$v" | mise set -E local --stdin KEY; 
 入力を空のまま確定すると、既にある値が空文字で上書きされる。
 入れ直すときは、値を貼り付けてから確定する。
 
-値は`mise.local.toml`の`[env]`に書き込まれる。`-E local`を付けなくても、以降の`mise run`と`mise exec`に反映される。
+値は`mise.local.toml`の`[env]`に書き込まれる。
+`-E local`を付けなくても、以降の`mise run`と`mise exec`に反映される。
 
 読み取りトークンは、所有者ごとに、`KEY`を`GITHUB_READ_TOKEN_<OWNER>`にして実行する。
 入れた後に`mise run bootstrap`を実行する。
@@ -102,12 +110,14 @@ IFS= read -rs -p 'KEY: ' v && printf '%s' "$v" | mise set -E local --stdin KEY; 
 mise run doctor
 ```
 
-環境変数の項目が、未設定のキーの名前を示す。値は表示しない。
+環境変数の項目が、未設定のキーの名前を示す。
+値は表示しない。
 
 > [!WARNING]
 > `mise set -E local KEY=value`のように値を引数に書かない。
 > 値がシェルの履歴に残り、実行中は`ps`の出力にも現れる。
-> `mise set --prompt`も使わない。入力した値が画面にそのまま表示される。
+> `mise set --prompt`も使わない。
+> 入力した値が画面にそのまま表示される。
 
 ## 起動する
 
@@ -133,31 +143,38 @@ mise run doctor
    mise run doctor
    ```
 
-5. Docker Composeでスタックを起動する。イメージのビルドも行う。
+5. Docker Composeでスタックを起動する。
+   イメージのビルドも行う。
 
    ```bash
    mise run up
    ```
 
-6. ワークスペースを作り、secret変数を投入し、インスタンスのカスタムtagに`console`を足し、`wmill sync push`とmigrationを実行する。何度実行しても結果は同じになる。
+6. ワークスペースを作り、secret変数を投入し、インスタンスのカスタムtagに`console`を足し、`wmill sync push`とmigrationを実行する。
+   何度実行しても結果は同じになる。
 
    ```bash
    mise run bootstrap
    ```
 
 7. ブラウザで`http://127.0.0.1:8080`を開き、`WM_ADMIN_EMAIL`と`WM_ADMIN_PASSWORD`でログインする。
-8. Windmillの画面で`f/factory/factory_config`を開き、`owners`(対象リポジトリの所有者)と`instance_name`を設定する。この2つはgitで管理せず、`bootstrap`は空のまま作る。
+8. Windmillの画面で`f/factory/factory_config`を開き、`owners`(対象リポジトリの所有者)と`instance_name`を設定する。
+   この2つはgitで管理せず、`bootstrap`は空のまま作る。
 
 ログインのセッションの有効期間は30日である(Windmillの既定は3日)。
-期間は`WM_SESSION_VALIDITY_SECONDS`で決める。値は秒数で、`mise.toml`の`[env]`にある。
+期間は`WM_SESSION_VALIDITY_SECONDS`で決める。
+値は秒数で、`mise.toml`の`[env]`にある。
 変えるときは、`mise.local.toml`などmiseの設定で`WM_SESSION_VALIDITY_SECONDS`を上書きし、`mise run up`をやり直す。
 その後、各ブラウザでログアウトしてからログインし直す。
 すでにあるセッションに新しい値が効くかは、確かめていない。
 この値は`windmill_server`にだけ渡す。
 
-`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`が空でも、`bootstrap`は完了する。対応するWindmillの変数が空で作られる。`doctor`はこれらが空だとNGを報告するので、運用を始める前に値を投入する。
+`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`が空でも、`bootstrap`は完了する。
+対応するWindmillの変数が空で作られる。
+`doctor`はこれらが空だとNGを報告するので、運用を始める前に値を投入する。
 
-`bootstrap`は、ワークスペースのIDを小文字の`factory`のままにし、表示名だけを`Factory`にする。表示名はダッシュボード(Factory Console)などの表記にそろえる。
+`bootstrap`は、ワークスペースのIDを小文字の`factory`のままにし、表示名だけを`Factory`にする。
+表示名はダッシュボード(Factory Console)などの表記にそろえる。
 
 `bootstrap`と`mise run instance:tags`は、管理者の資格情報を`http://127.0.0.1:${WM_HTTP_PORT}`にだけ送る。
 `WM_BASE_URL`は読まない。
@@ -190,7 +207,8 @@ mise run instance:tags
 
 ## gitのフック
 
-`mise run setup`は、lefthookでgitのフックを入れる。フックは`--no-verify`で飛ばさない。
+`mise run setup`は、lefthookでgitのフックを入れる。
+フックは`--no-verify`で飛ばさない。
 
 | フック | 実行するもの |
 | --- | --- |
@@ -204,9 +222,12 @@ CIの`check`ジョブと`check-docs`ジョブが同じ検査を動かし、管�
 必須チェックと迂回は[セキュリティ](security.md#mainの保護とリポジトリの公開)に書く。
 クラウドやheadlessの実行は、CIを待たずに壊れた変更を見つけるため、pushの前に`mise run check`を実行する。
 
-メタデータの作り直しと検査は、ローカルのWindmillに接続する。`mise run up`でスタックを起動しておく。手で実行するときは`mise run metadata`と`mise run metadata:check`を使う。
+メタデータの作り直しと検査は、ローカルのWindmillに接続する。
+`mise run up`でスタックを起動しておく。
+手で実行するときは`mise run metadata`と`mise run metadata:check`を使う。
 
-Windmillを起動できないときは、メタデータのフックだけを飛ばせる。次のように実行する。
+Windmillを起動できないときは、メタデータのフックだけを飛ばせる。
+次のように実行する。
 
 ```bash
 LEFTHOOK_EXCLUDE=wmill-metadata git commit
@@ -322,15 +343,18 @@ Consoleの配布物は`ci.yml`ではなく、`console-dist.yml`が`main`へのpu
 `check`ジョブと`check-docs`ジョブは常に動かす。
 `check`ジョブは、lint、型検査、テスト、カバレッジの下限、Consoleの検査、秘密情報の走査を、ステップに分けて動かす。
 `check-docs`ジョブは、文書の検査(`mise run lint:docs`)を動かす。
-`check-worker`ジョブは、workerイメージをビルドし、イメージの中で2つの検査を動かす。`worker`が偽のときは飛ばす。
+`check-worker`ジョブは、workerイメージをビルドし、イメージの中で2つの検査を動かす。
+`worker`が偽のときは飛ばす。
 3つのジョブは並列に動き、どれも必須チェックである。
-検査のステップには、`if`と`continue-on-error`を付けない。付けると、検査が気づかないうちに外れるためである。
+検査のステップには、`if`と`continue-on-error`を付けない。
+付けると、検査が気づかないうちに外れるためである。
 
 変更したパスは、次の順に規則を当てて、動かすジョブを決める。
 
 1. 個別の規則: 先に当たった規則だけを使う。
 2. 入力が決まっているパスの規則: 当たった規則のジョブをすべて動かす。
-3. 許可リスト: `check`と`check-docs`の検査だけで足りるパス。どのジョブも動かさない。
+3. 許可リスト: `check`と`check-docs`の検査だけで足りるパス。
+   どのジョブも動かさない。
 4. どれにも当たらないパス: すべてのフラグを真にする。
 
 どれにも当たらないパスは、読むジョブが分からない。
@@ -453,7 +477,8 @@ OSやrootの有無で、動くテストが分かれるためである。
 ### 下限を割ったとき
 
 失敗の出力が示す割った層の、未実行の行が多いファイルにテストを足す。
-`main`で割ったときも同じである。下限の定数は、割った原因を直すまで下げない。
+`main`で割ったときも同じである。
+下限の定数は、割った原因を直すまで下げない。
 
 ### 未読み込みで失敗したとき
 
@@ -515,7 +540,8 @@ EnterWorktree、`claude --worktree`、subagentの`isolation: "worktree"`が作�
 
 - フックの`name`からブランチ名を決める。
   `feat-foo`のように先頭が`type`と`-`の名前は`feat/foo`、それ以外は`worktree-<名前>`になる。
-- `worktree.baseRef`が`head`なら、`HEAD`から作る。それ以外は`origin/main`から作る。
+- `worktree.baseRef`が`head`なら、`HEAD`から作る。
+  それ以外は`origin/main`から作る。
   読む順は、メインのcheckoutの`.claude/settings.local.json`、`.claude/settings.json`、ユーザーのClaude Code設定である。
   最初に値があったファイルに従う。
 - 同名のworktreeを再利用するのは、登録済みで期待するブランチのときだけである。
@@ -547,10 +573,14 @@ worktreeの外へ出るコマンドを通さないためである。
 サンドボックスを外す引数や、許可の追加は、直し方に使わない。
 拒否されやすい書き方は、次のとおりである。
 
-- `cd`。セッションはworktreeで始まるので、移らずに、絶対パスで書くか、`bun run --cwd <dir>`を使う。
-- 複数のコマンドを1回につなぐ書き方。`&&`、`;`、コマンド置換(`$(...)`)、heredoc、複数行がこれに当たり、1回に1つの単純なコマンドへ分ける。
-- `git -C`と`mise --cd`。作業ディレクトリがworktreeなので、付けずに実行する。
-- 引用符で囲まない、実行時に決まる値をオプションの位置に置く書き方。`sed`や`grep`で出るので、値を引用符で囲むか、`--`の後ろに置く。
+- `cd`。
+  セッションはworktreeで始まるので、移らずに、絶対パスで書くか、`bun run --cwd <dir>`を使う。
+- 複数のコマンドを1回につなぐ書き方。
+  `&&`、`;`、コマンド置換(`$(...)`)、heredoc、複数行がこれに当たり、1回に1つの単純なコマンドへ分ける。
+- `git -C`と`mise --cd`。
+  作業ディレクトリがworktreeなので、付けずに実行する。
+- 引用符で囲まない、実行時に決まる値をオプションの位置に置く書き方。
+  `sed`や`grep`で出るので、値を引用符で囲むか、`--`の後ろに置く。
 
 ファイルを書き換えるときは、`sed -i`やheredocの代わりに、`Edit`と`Write`のツールを使う。
 
@@ -711,13 +741,19 @@ URLは秘密として扱う。
 
 ## 自己更新の設定
 
-`factory_config`の`factory_branch`には、`self_update`が追跡するこのリポジトリのブランチの名前を書く。既定値は`main`である。forkやfeatureブランチで運用するときは、Windmillの画面でこの値を変える。
+`factory_config`の`factory_branch`には、`self_update`が追跡するこのリポジトリのブランチの名前を書く。
+既定値は`main`である。
+forkやfeatureブランチで運用するときは、Windmillの画面でこの値を変える。
 
-この値が効くのは、workerの中にself cloneをまだ作っていないときだけである。既にあるself cloneに反映するには、workerコンテナの中の`/workspaces/factory/atelier-works`を消して作り直させる。
+この値が効くのは、workerの中にself cloneをまだ作っていないときだけである。
+既にあるself cloneに反映するには、workerコンテナの中の`/workspaces/factory/atelier-works`を消して作り直させる。
 
-`f/factory/deployed_sha`は、直近でWindmillに反映したコミットのSHAを持つ、秘密でない変数である。`self_update`が更新するので、普段は人が編集しない。値を戻したいときは、Windmillの画面で直接編集する。
+`f/factory/deployed_sha`は、直近でWindmillに反映したコミットのSHAを持つ、秘密でない変数である。
+`self_update`が更新するので、普段は人が編集しない。
+値を戻したいときは、Windmillの画面で直接編集する。
 
-この変数は`factory_config`と同じく同期の対象外である。`bootstrap`は、変数が無いときだけ空の値で作り、あれば値を変えない。
+この変数は`factory_config`と同じく同期の対象外である。
+`bootstrap`は、変数が無いときだけ空の値で作り、あれば値を変えない。
 
 ## バックアップを有効にする
 
@@ -733,13 +769,16 @@ URLは秘密として扱う。
    mise run up
    ```
 
-2. `mise.local.toml`の`DB_PASSWORD`から`f/factory/db_backup_url`を組み立てて入れる。新しい秘密値を用意する必要は無い。
+2. `mise.local.toml`の`DB_PASSWORD`から`f/factory/db_backup_url`を組み立てて入れる。
+   新しい秘密値を用意する必要は無い。
 
    ```bash
    mise run bootstrap
    ```
 
-3. 更新を反映した後に、隔離の測定を1回実行する。読み出しの拒否の一覧が変わって隔離の指紋が変わり、測定が通るまで調査の工程は閉じたままのためである。手順は[運用](operations.md#隔離の測定を実行する)にある。
+3. 更新を反映した後に、隔離の測定を1回実行する。
+   読み出しの拒否の一覧が変わって隔離の指紋が変わり、測定が通るまで調査の工程は閉じたままのためである。
+   手順は[運用](operations.md#隔離の測定を実行する)にある。
 
 動作は、Windmillの画面で`f/factory/backup`を実行して確かめる。
 控えの扱いは[運用](operations.md#バックアップ)にある。
@@ -821,4 +860,5 @@ Playwrightでは、まず`http://127.0.0.1:8080/user/login`にログインする
 | ホストのCPUアーキテクチャが合うか気になる | 対応は要らない。Windmillの公式イメージとworkerのイメージは、arm64とamd64の両方に対応している |
 
 > [!WARNING]
-> `mise exec -- docker compose -f infra/docker-compose.yml down -v`は、`db_data`を含むすべてのvolumeを消す。Windmillのデータは元に戻せない。
+> `mise exec -- docker compose -f infra/docker-compose.yml down -v`は、`db_data`を含むすべてのvolumeを消す。
+> Windmillのデータは元に戻せない。

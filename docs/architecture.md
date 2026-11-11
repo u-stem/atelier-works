@@ -1,12 +1,14 @@
 # アーキテクチャ
 
-Software Factoryの構成と、作業がどの順に流れるかを説明する。Factoryを変更する人が、全体の地図として最初に読む文書である。
+Software Factoryの構成と、作業がどの順に流れるかを説明する。
+Factoryを変更する人が、全体の地図として最初に読む文書である。
 内部の挙動と設定値は、[作業項目の状態とリース](internals/work-items.md)などの内部仕様の文書に書く。
 文書の一覧は[README](../README.md)の「文書」にある。
 
 ## 概要
 
-Software FactoryはGitHub Issueを起点に、要件定義から自己改善までをWindmill上のフローで自動化する。入力は`factory`ラベルが付いたIssueと、`factory:review`か`factory:fix`のラベルが付いたPRである。
+Software FactoryはGitHub Issueを起点に、要件定義から自己改善までをWindmill上のフローで自動化する。
+入力は`factory`ラベルが付いたIssueと、`factory:review`か`factory:fix`のラベルが付いたPRである。
 
 | コンポーネント | 役割 |
 | --- | --- |
@@ -51,7 +53,8 @@ tag`periodic`を付けるのは、ファイル、独自イメージの道具、c
 依存するジョブは、defaultのworkerで動かす。
 tag`periodic`のジョブが13分以上待つと、defaultのworkerで動く`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
 逆に、defaultのworkerが止まったことは、このworkerで動く`default_worker_watch`が5分ごとに検知して通知する([運用](operations.md#defaultのworkerの検知を確かめる))。
-止まったworkerの中のscriptは動かないので、片方だけが止まるときは、もう一方のworkerで動くscriptが拾う。両方が止まる障害は拾えない。
+止まったworkerの中のscriptは動かないので、片方だけが止まるときは、もう一方のworkerで動くscriptが拾う。
+両方が止まる障害は拾えない。
 scheduleの失敗を拾う検出器(`detect_schedule_failures`)も、このworkerで動かす。
 defaultのworkerで動かすと、長いジョブが枠を塞ぐ間、失敗の検知が止まるためである。
 検出器が止まったことは、`default_worker_watch`が同じ回で検知して通知する([運用](operations.md#scheduleの失敗の検出))。
@@ -62,7 +65,8 @@ defaultのworkerで動かすと、長いジョブが枠を塞ぐ間、失敗の�
 
 ## パイプライン
 
-作業は工程1から工程5の順に進む。工程番号はWindmillの資産のsummaryにも使う(下の命名規則を参照)。
+作業は工程1から工程5の順に進む。
+工程番号はWindmillの資産のsummaryにも使う(下の命名規則を参照)。
 
 | 工程 | 内容 |
 | --- | --- |
@@ -74,7 +78,8 @@ defaultのworkerで動かすと、長いジョブが枠を塞ぐ間、失敗の�
 | 4. PRのCI監視 | Factoryが作ったPRのCIをheadのコミット単位で監視し、失敗を通知する。設定で有効にしたときは、失敗を直す作業項目も起動する |
 | 5. 自己改善 | 運用記録を週次で監査し、レポートと改善提案を作る |
 
-工程3の実装フロー(`implement`)は、`factory_config`の`implement_enabled`を`true`にしたときだけ動く。既定値は`false`で、その間は要件定義を承認した作業項目が承認済み(`approved`)のまま残る。
+工程3の実装フロー(`implement`)は、`factory_config`の`implement_enabled`を`true`にしたときだけ動く。
+既定値は`false`で、その間は要件定義を承認した作業項目が承認済み(`approved`)のまま残る。
 
 工程をまたいで、Factory Console、自己更新(`self_update`)、フローの失敗ハンドラ、スケジュールの失敗の検出器が動く。
 
@@ -96,7 +101,9 @@ flowchart TD
     E -->|7日たっても未決| I[expired]
 ```
 
-承認はWindmillのsuspendではなく、承認依頼のテーブルの行で待つ。pipelineフローは承認依頼を記録した時点で終わり、人の決定は別のscriptが反映する。仕組みは[要件定義の生成と承認](internals/requirements.md)に書く。
+承認はWindmillのsuspendではなく、承認依頼のテーブルの行で待つ。
+pipelineフローは承認依頼を記録した時点で終わり、人の決定は別のscriptが反映する。
+仕組みは[要件定義の生成と承認](internals/requirements.md)に書く。
 設計フロー(`f/factory/design`)は、承認済みの要件定義から設計書を作り、同じ形で承認依頼を記録して終わる。
 人の決定は、`design_apply`が作業項目に反映する。
 放置された依頼の期限切れと、反映されなかった決定の起動し直しは、`poll_issues`の承認待ちの走査(`approval_sweep`)が行う。
@@ -132,7 +139,8 @@ flowchart TD
 
 ## 状態遷移
 
-作業項目(`work_items`)の状態は`status`列だけが持つ。GitHubのラベルは人からFactoryへのトリガーに限り、状態を表さない。
+作業項目(`work_items`)の状態は`status`列だけが持つ。
+GitHubのラベルは人からFactoryへのトリガーに限り、状態を表さない。
 
 ### 状態の一覧
 
@@ -165,7 +173,9 @@ dependabotのセキュリティ更新PRは`dependabot`、実装せずに調べ�
 | `investigating` | 調べている | investigate | |
 | `investigated` | 調べ終えた | investigate | 終端 |
 
-pr_fixの作業項目は、Issue化の提案がある間は人の対応待ち(`needs_human`)で待つ。提案がすべて決定すると、レビュー済み(`reviewed`)か再レビュー依頼(`rereview_requested`)へ移る。監査の作業項目は、承認待ち(`awaiting_approval`)で提案の決定を待つ。
+pr_fixの作業項目は、Issue化の提案がある間は人の対応待ち(`needs_human`)で待つ。
+提案がすべて決定すると、レビュー済み(`reviewed`)か再レビュー依頼(`rereview_requested`)へ移る。
+監査の作業項目は、承認待ち(`awaiting_approval`)で提案の決定を待つ。
 
 設計工程の2状態(`designing`、`awaiting_design_approval`)について、次のコードが入っている。
 
@@ -178,7 +188,8 @@ pr_fixの作業項目は、Issue化の提案がある間は人の対応待ち(`n
 そのため、下の状態遷移の図に載せない。
 設計フローは[設計書の生成](internals/design.md)に書く。
 
-終端の一覧はコードとDBのviewの2か所にある。そろえ方は[作業項目の状態とリース](internals/work-items.md)に書く。
+終端の一覧はコードとDBのviewの2か所にある。
+そろえ方は[作業項目の状態とリース](internals/work-items.md)に書く。
 
 ### Issueの作業項目
 
@@ -260,11 +271,15 @@ Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取
 許されるのは、PRがマージされたとき、作者以外の人が閉じたとき、作者が閉じて作者の関係が許可する関係(`allowed_labeler_associations`)に当たるときである。
 Botが閉じたときは取り消さない。
 
-終端の作業項目は、Consoleからの再実行で再び動き出す。監査とdependabotと調査の作業項目は再実行できない。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
+終端の作業項目は、Consoleからの再実行で再び動き出す。
+監査とdependabotと調査の作業項目は再実行できない。
+遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
 
 ## データモデル
 
-Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、列やテーブルの名前は変えない。列の定義はmigrationのファイル(`migrations/datatable/main/`)を参照する。
+Data Tablesはスキーマ`factory`に置く。
+migrationは追加だけにし、列やテーブルの名前は変えない。
+列の定義はmigrationのファイル(`migrations/datatable/main/`)を参照する。
 
 ### テーブル
 
@@ -300,12 +315,18 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `manual_intake_keys` | 手動投入の冪等キー。キー、投入の内容のハッシュ、作ったIssueの所有者とリポジトリと番号、予約したジョブのID、予約した時刻を持つ。作業項目とは外部キーを持たない。手動投入のIssue作成が、再送の判定に読み書きする。期限を過ぎた行はDBの掃除が消す([作業項目の状態とリース](internals/work-items.md#手動投入の冪等キー)) |
 | `holds` | 共通の保留。対象を進めないことを、期限つきで伝える。範囲は自動マージ(`merge`、主体ごとに重ねられる)とIssueの取り込み(`claim`、排他、読み手なし)で、置いた主体の名乗り、期限、閉じた時刻と閉じた理由を持つ。作業項目とは独立した記録で、外部キーを持たない。行は消さず履歴として残す([保留の内部仕様](internals/holds.md)) |
 
-`work_items`の列は種別によって使うものが違う。実装ブランチ(`branch`)と作成したPRのURL(`pr_url`)はIssueの作業項目だけが持ち、PR番号(`pr_number`)はPRの作業項目だけが持つ。PR番号をIssueの作業項目に入れないのは、PRの作業項目の束ね方がこの列で決まるためである。実装ブランチの名前は`factory/issue-<N>-wi-<id>`である。
+`work_items`の列は種別によって使うものが違う。
+実装ブランチ(`branch`)と作成したPRのURL(`pr_url`)はIssueの作業項目だけが持ち、PR番号(`pr_number`)はPRの作業項目だけが持つ。
+PR番号をIssueの作業項目に入れないのは、PRの作業項目の束ね方がこの列で決まるためである。
+実装ブランチの名前は`factory/issue-<N>-wi-<id>`である。
 
-`agent_runs`には、Claudeの不正な出力を再試行したときに捨てた最初の試行も、同じattemptの別の行として記録する。費用が分かるときは、その費用も日次予算の集計とコストの分析に含める。出力がJSONとして読めないときは費用が分からない。
+`agent_runs`には、Claudeの不正な出力を再試行したときに捨てた最初の試行も、同じattemptの別の行として記録する。
+費用が分かるときは、その費用も日次予算の集計とコストの分析に含める。
+出力がJSONとして読めないときは費用が分からない。
 アプリ側のtimeoutで打ち切った実行、シグナルで終わった実行、全停止で止めた実行は、標準出力に費用があればその値を、無ければ`--max-budget-usd`の値を費用として記録する。
 
-`implement_rounds`の主な列は次のとおり。行は作業項目の削除にあわせて消える。
+`implement_rounds`の主な列は次のとおり。
+行は作業項目の削除にあわせて消える。
 
 | 列 | 内容 |
 | --- | --- |
@@ -318,7 +339,9 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 
 ほかに`summary`、`gap_report`、`checks_skipped_reason`、`agent_run_id`を持つ。
 
-`issue_proposals`は提案の題名、本文、レビューコメントのID、スレッドのIDを持つ唯一の場所で、`approval_requests`はこれらを複製しない。提案の出どころ(`origin`)は`pr_fix`か`audit`である。監査の提案は`audit_report_id`と`position`でレポートに結びつき、レビューコメントのIDは持たない。
+`issue_proposals`は提案の題名、本文、レビューコメントのID、スレッドのIDを持つ唯一の場所で、`approval_requests`はこれらを複製しない。
+提案の出どころ(`origin`)は`pr_fix`か`audit`である。
+監査の提案は`audit_report_id`と`position`でレポートに結びつき、レビューコメントのIDは持たない。
 
 `audit_reports`は本文を`markdown`列に持ち、証跡の数値を`metrics`列に持つ。
 
@@ -343,11 +366,13 @@ Consoleの一覧と集計は次のviewを読む。
 | `v_reviews` | PRレビューの一覧 |
 | `v_fix_rounds` | PR修正の一覧 |
 
-要件定義書と監査レポートの詳細表示では、Consoleのbackend(`f/factory/steps/console_query.ts`)がテーブルを直接読む。読むのは`requirement_drafts`、`design_drafts`、`audit_reports`、`approval_requests`、`issue_proposals`、`work_items`である。
+要件定義書と監査レポートの詳細表示では、Consoleのbackend(`f/factory/steps/console_query.ts`)がテーブルを直接読む。
+読むのは`requirement_drafts`、`design_drafts`、`audit_reports`、`approval_requests`、`issue_proposals`、`work_items`である。
 設計の承認依頼が指す設計書は、`approval_design_doc`viewが`approval_requests`と`design_drafts`を結合して読み、実装に渡すのと同じ整形を通して返す。
 設計書の本文の画面は、`design_doc`viewが`design_drafts`と`approval_requests`を読み、本文を承認画面と同じ整形に通して返し、図だけをディスクから読む。
 
-更新履歴の表示では、`console_query`の`deployments`viewが`deployments`テーブルを新しい順に読む。選ぶのは、版、結果、ホストの作業の要否、時刻、含まれるPR、失敗の理由で、変更したパスの一覧は選ばない。
+更新履歴の表示では、`console_query`の`deployments`viewが`deployments`テーブルを新しい順に読む。
+選ぶのは、版、結果、ホストの作業の要否、時刻、含まれるPR、失敗の理由で、変更したパスの一覧は選ばない。
 
 `console_query`は、行の配列を返すviewのほかに、1つのオブジェクトを返す3つのviewを持つ。
 
@@ -415,14 +440,22 @@ Consoleの一覧と集計は次のviewを読む。
 別名の変数で呼ぶ起動、`wmill.`を付けない呼び出し、包みの関数だけでflowを起動するscriptは、見落とす。
 そのような起動を足したときは、人が表を確かめる。
 
-- `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの工程を始める。通常の進め方は要件定義を始め、承認を省く進め方は承認の行を作らずに実装を始める。冪等キーで最初の投入のIssueを再利用したときは、通常の進め方では何もせず、承認を省く進め方ではそのIssueに作業項目が無いときだけ登録する。
-- `pr_fix_finish`と`implement_finish`は、pr_fixとimplementの最後のステップで、要件の不足を見つけたときに要件定義へ差し戻す。`implement_finish`と`pr_fix_finish`は、設計書が渡された実行の設計の不足も設計へ戻す。設計書が渡されるのは設計工程が有効なときだけなので、設計工程が無効の間は設計へ戻さない。
+- `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの工程を始める。
+  通常の進め方は要件定義を始め、承認を省く進め方は承認の行を作らずに実装を始める。
+  冪等キーで最初の投入のIssueを再利用したときは、通常の進め方では何もせず、承認を省く進め方ではそのIssueに作業項目が無いときだけ登録する。
+- `pr_fix_finish`と`implement_finish`は、pr_fixとimplementの最後のステップで、要件の不足を見つけたときに要件定義へ差し戻す。
+  `implement_finish`と`pr_fix_finish`は、設計書が渡された実行の設計の不足も設計へ戻す。
+  設計書が渡されるのは設計工程が有効なときだけなので、設計工程が無効の間は設計へ戻さない。
 - `auto_retry_stale_image`は、`self_update`が起動する。
-- `requirements_apply`と`design_apply`は、`approval_decide`が承認か却下を記録した後に起動する。`design_apply`は、`design_request_approval`と承認待ちの走査も、反映されなかった決定に対して起動する。
+- `requirements_apply`と`design_apply`は、`approval_decide`が承認か却下を記録した後に起動する。
+  `design_apply`は、`design_request_approval`と承認待ちの走査も、反映されなかった決定に対して起動する。
 
-承認、却下、期限切れの分岐はフローの外にある。人の決定は`approval_decide`が記録し、期限切れは`poll_issues`の承認待ちの走査が判定する。
+承認、却下、期限切れの分岐はフローの外にある。
+人の決定は`approval_decide`が記録し、期限切れは`poll_issues`の承認待ちの走査が判定する。
 
-フローが失敗すると、各フローの失敗時のステップ(`failure_module`)が`on_error_flow`を呼ぶ。`on_error_flow`は失敗を`job_failures`に記録し、作業項目を失敗にして、Discordに通知する。IssueやPRには何も書かず、ラベルにも触れない。
+フローが失敗すると、各フローの失敗時のステップ(`failure_module`)が`on_error_flow`を呼ぶ。
+`on_error_flow`は失敗を`job_failures`に記録し、作業項目を失敗にして、Discordに通知する。
+IssueやPRには何も書かず、ラベルにも触れない。
 
 ### スケジュール
 
@@ -450,7 +483,8 @@ Consoleの一覧と集計は次のviewを読む。
 | watch_pr_conflicts | `30 */5 * * * *` | `f/factory/watch_pr_conflicts` | 5分ごとに実行します。Factoryが作ったPRにマージの競合があるかを調べ、競合したPRは要対応の通知とDiscordで知らせます。競合が解けたら通知を自動で解決し、閉じたPRの記録は整理します。設定で有効にしたときだけ動き、無効のときはGitHubもDBも読みません。PRには書き込みません。競合を直す設定が有効なときは、通知の前に、競合を直す作業項目を起動します。競合を直す作業項目が結ばれた行を戻す回復は、競合を直す設定に依らず、毎回行います。 |
 <!-- /generated:schedules -->
 
-cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。
+cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。
+各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。
 このWindmillはスケジュールの失敗時の呼び出し(`on_failure`)を呼ばないので、どのスケジュールにも`on_failure`を設定しない。
 スケジュールの失敗は、`detect_schedule_failures`がジョブ履歴から拾って記録し、通知する([運用](operations.md#scheduleの失敗の検出))。
 
@@ -495,7 +529,8 @@ dependabotの`work_items_active_dependabot_key`([dependabotの更新の内部仕
 
 ## 命名規則
 
-WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタグを付ける。pathは英数字だけにし、一度決めたら変えない。
+WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタグを付ける。
+pathは英数字だけにし、一度決めたら変えない。
 
 | タグの形式 | 対象 |
 | --- | --- |
@@ -505,7 +540,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `[SYS-<順>] <日本語>` | 基盤と運用の自動処理 |
 | `[LIB] <日本語>` | 共有ライブラリ |
 
-工程番号は、1が作業を拾う、2が要件定義、3が実装とPR、4がCI監視、5が自己改善である。Consoleは工程0として扱う。
+工程番号は、1が作業を拾う、2が要件定義、3が実装とPR、4がCI監視、5が自己改善である。
+Consoleは工程0として扱う。
 
 ### 資産の一覧
 
@@ -758,27 +794,33 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 
 ## PRワークフロー
 
-工程1から工程2のIssueの流れとは別に、既存のPRをレビューし修正するワークフローがある。対象は人が作ったPRと、実装フローが作ったPRである。
+工程1から工程2のIssueの流れとは別に、既存のPRをレビューし修正するワークフローがある。
+対象は人が作ったPRと、実装フローが作ったPRである。
 
 | ワークフロー | 起動の条件 | 終わり方 |
 | --- | --- | --- |
 | PRレビュー(`pr_review`) | `factory:review`ラベルが付く。または、このインスタンスのアカウントがレビューを依頼されているかassigneeで、未処理のcommitがある | レビューを常にCOMMENTとして投稿し、レビュー済みになる |
 | PR修正(`pr_fix`) | `factory:fix`ラベルが付く | 修正をpushし、各コメントに返信して再レビューを依頼する |
 
-PR修正への指示は、ラベルを付ける前にPRへ通常のコメントとして書く。PR修正は、ほかの人のコメントと同じくそのコメントを指摘として集める。
+PR修正への指示は、ラベルを付ける前にPRへ通常のコメントとして書く。
+PR修正は、ほかの人のコメントと同じくそのコメントを指摘として集める。
 
-要件の変更が必要なとき、PR修正は要件や設計を書き換えずに中断する。元のIssueの作業項目(`parent_work_item_id`で結びつく)を、試行回数を1つ増やして要件定義に戻す。
+要件の変更が必要なとき、PR修正は要件や設計を書き換えずに中断する。
+元のIssueの作業項目(`parent_work_item_id`で結びつく)を、試行回数を1つ増やして要件定義に戻す。
 
-PRに書くのは、レビューの指摘と総評、修正の返信だけである。失敗、要対応、ブロック、差し戻しといった運用上の出来事はDiscordに通知する。
+PRに書くのは、レビューの指摘と総評、修正の返信だけである。
+失敗、要対応、ブロック、差し戻しといった運用上の出来事はDiscordに通知する。
 
-作業ディレクトリは次のとおり使い分ける。`/workspaces/<owner>/<repo>/main`はfetch専用で、working treeをcheckoutしない。
+作業ディレクトリは次のとおり使い分ける。
+`/workspaces/<owner>/<repo>/main`はfetch専用で、working treeをcheckoutしない。
 
 | ワークフロー | worktree |
 | --- | --- |
 | PRレビュー | `/workspaces/<owner>/<repo>/review-<pr>-<sha7>`にPRのcommitをdetachedで置き、終わったら消す |
 | PR修正 | `git gtr new`で作るPRブランチのworktree |
 
-Factoryの投稿の見分け方、総評の組み立て、スレッドの解決、Issue化の提案、処理済みの位置(watermark)は[PRワークフローの内部仕様](internals/pr-workflow.md)に書く。安全策は[セキュリティ](security.md)に書く。
+Factoryの投稿の見分け方、総評の組み立て、スレッドの解決、Issue化の提案、処理済みの位置(watermark)は[PRワークフローの内部仕様](internals/pr-workflow.md)に書く。
+安全策は[セキュリティ](security.md)に書く。
 
 ## 自己更新
 
@@ -799,13 +841,16 @@ IDの食い違い、リポジトリが無い(404)、URLを読めない場合は�
 `factory_repo_id`が無ければ照合せず、名前だけで取得する。
 設定と限界は[運用](operations.md)の「Factory自身のリポジトリの数値IDを固定する」に書く。
 
-1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
-2. 反映が要る回と、凍結が終わった後の追従の回で、deployの保留が有効なら、3から6を見送る。`deployed_sha`は進めず、保留が切れた最初の回が同じ範囲を反映する([凍結とdeployの保留の内部仕様](internals/freezes.md))。
+1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。
+   HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
+2. 反映が要る回と、凍結が終わった後の追従の回で、deployの保留が有効なら、3から6を見送る。
+   `deployed_sha`は進めず、保留が切れた最初の回が同じ範囲を反映する([凍結とdeployの保留の内部仕様](internals/freezes.md))。
 3. 反映が要る回で、`deployed_sha`が空でなければ、`deployed_sha..HEAD`の変更を確かめる。
    migrationか、`f/`の下と`wmill.yaml`の保護パスのファイルか新しい`*.sh`があれば、HEADの版が承認されるまで4から6を見送る。
    `wmill-lock.yaml`と`*.script.lock`は除く。
    見送る回は、要対応の通知とDiscordで知らせ、`deployed_sha`を進めない([反映の承認の内部仕様](internals/deploy-approvals.md))。
-4. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
+4. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。
+   依存のinstall scriptは動かさない。
    凍結中のスケジュールはpushから除く。
    凍結が終わった回は、shaが変わらなくても、このpushだけをやり直す。
 5. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
@@ -829,12 +874,18 @@ GitHubのAPIは呼ばないので、Console用のworkerのネットワークと�
 ownerがFactoryのリポジトリと同じで、実装ブランチ(`factory/issue-<N>-wi-<id>`)の形のブランチなら`factory`、それ以外のブランチなら`human`にする。
 squashでマージされて件名の末尾が`(#<N>)`の形のPRは、ブランチが分からないので`unknown`にする。
 前回の反映が無い初回は、履歴の全体を数えないよう、PRを記録しない。
-題名の取り出しは、GitHubのUIでマージしたコミットの形(本文の1行目がPRの題名)を前提にする。別の形でマージしたコミットは、題名が空になるか、PRとして記録されない。
-記録するPRは1回の反映で100件までで、超えた分は残らない。100件に達した反映には、画面が、これより古いPRは表示していない場合があると添える。
-`git log`の出力が4MiBを超えたときは、中間の要素を失う。新しい側の要素は保たれる。印をまたぐ要素は壊れているので、使わない。
-PRを取り出せなくても、反映の成功は変えない。その反映のPRは空で記録するので、画面では「PRが無い」反映と同じ表示になる。
+題名の取り出しは、GitHubのUIでマージしたコミットの形(本文の1行目がPRの題名)を前提にする。
+別の形でマージしたコミットは、題名が空になるか、PRとして記録されない。
+記録するPRは1回の反映で100件までで、超えた分は残らない。
+100件に達した反映には、画面が、これより古いPRは表示していない場合があると添える。
+`git log`の出力が4MiBを超えたときは、中間の要素を失う。
+新しい側の要素は保たれる。
+印をまたぐ要素は壊れているので、使わない。
+PRを取り出せなくても、反映の成功は変えない。
+その反映のPRは空で記録するので、画面では「PRが無い」反映と同じ表示になる。
 
-`infra/**`の変更と、`mise.toml`の`[tools]`か`[env]`の変更は、worker自身では反映できない。`self_update`は`deployments.needs_host_action`を`true`にして記録し、要対応の通知`host_action_required`とDiscordで知らせる。
+`infra/**`の変更と、`mise.toml`の`[tools]`か`[env]`の変更は、worker自身では反映できない。
+`self_update`は`deployments.needs_host_action`を`true`にして記録し、要対応の通知`host_action_required`とDiscordで知らせる。
 これらはホスト側のcheckoutをpullしたうえで、`mise run up`で起動したときに反映される。
 `mise run up`は、Caddyの確認の後に、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
 その後に、ラベルを付けた自前ビルドの使われていない旧イメージを消す([旧イメージの掃除](operations.md#旧イメージの掃除))。
@@ -855,7 +906,8 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 `deployed_sha`の更新より後の失敗は、反映が済んでいるので失敗の行を足さず、ログとジョブの失敗だけを残す。
 失敗の行を足すと、反映が済んでいるのに失敗が残り、`deployed_sha_mismatch`の原因の候補が実態と食い違うためである。
 成功の行の記録が失敗したときは、`deployments`に行が残らない履歴の欠落を受け入れる。
-更新は変更パスの列挙より先に行う。`deployed_sha`が誤った値のとき、列挙が失敗し続けて反映が繰り返されるのを避けるためである。
+更新は変更パスの列挙より先に行う。
+`deployed_sha`が誤った値のとき、列挙が失敗し続けて反映が繰り返されるのを避けるためである。
 更新の後に列挙が失敗すると、その回の`changed_paths`と、ホスト側の作業の通知が欠ける。
 失敗の行には、ログに出す失敗の文と同じ伏せ字処理を通した理由を、2000字までに切り詰めて`deployments.error`に入れる。
 `error`の列を足すmigrationがまだ当たっていないときは、理由を持たない行として記録し直す。
@@ -892,7 +944,8 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 | 全停止の確認 | 1 | 5秒 | なし | 5秒 |
 
 gitの11回は、cloneの更新で5回、HEADとブランチの確認で2回、変更パスの列挙で1回、反映に含まれるPRの列挙で1回、`mise.toml`の比較で最大2回である。
-PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒)で区切る。`withCallTimeout`で区切るのはWindmillのSDKとDBの呼び出しである。
+PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒)で区切る。
+`withCallTimeout`で区切るのはWindmillのSDKとDBの呼び出しである。
 凍結の2段は、凍結の変数とファイルの読み取りと、終わった行を消す書き込みである。
 各段は1つの上限10秒で包み、区切った呼び出しの回数には数えない。
 設計の有効化の通知の処理も、更新の前に全体を1つの上限5秒で包み、区切った呼び出しの回数には数えない。
@@ -928,8 +981,10 @@ Console用のworkerの確認では、stateの読みと書き、noticeの挿入�
 `timeout`は子プロセスが残るのを防ぐ最後の打ち切りなので、延ばさない。
 そこで、次の2つが成り立つときだけ、8か所を確認全体の30秒に含めて数える。
 
-- 確認の呼び出しが`finally`の最後の文である。呼び出し元が30秒で戻った後に、背景の処理の後ろで待たされる呼び出しも、背景の処理と競合する後続の処理も無い。
-- 確認が子プロセスを起動しない。背景の処理が子プロセスを持たなければ、`timeout`で打ち切られても残るものが無い。
+- 確認の呼び出しが`finally`の最後の文である。
+  呼び出し元が30秒で戻った後に、背景の処理の後ろで待たされる呼び出しも、背景の処理と競合する後続の処理も無い。
+- 確認が子プロセスを起動しない。
+  背景の処理が子プロセスを持たなければ、`timeout`で打ち切られても残るものが無い。
 
 確認の呼び出しは30秒で戻るが、中の処理は中断されず、背景で続きうる。
 この背景の処理は、ほかの時間切れの後の処理と同じく、合計に含めない。
@@ -973,7 +1028,9 @@ Console用のworkerの確認も、受けていない通知は上限の10秒の�
 `classifyChangedPaths`は`console/`の変更を`console_paths`として分けて返し、実装フローはPR本文の「Windmillへの反映」に印を付ける。
 仕組みは[Consoleの仕様](internals/console.md)に書く。
 
-Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself cloneから読む。そのためpullの直後の実行から反映される。初回の反映(スケジュールの登録と最初のpush)は、ホストから`scripts/bootstrap.sh`が行う。
+Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself cloneから読む。
+そのためpullの直後の実行から反映される。
+初回の反映(スケジュールの登録と最初のpush)は、ホストから`scripts/bootstrap.sh`が行う。
 
 ## dependabotの更新の自動マージ
 
@@ -1002,25 +1059,37 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 設定`pr_ci_watch_human_prs`が`true`のときは、許可された人が作ったPRも対象にする。
 対象は、開いていて下書きでなく、forkでなく、Factoryが作っていないものである。
 人のPRは、失敗の通知だけを行い、直す作業項目は起動しない。
-記録は`pr_ci_checks`に残す。PRとリポジトリへの書き込みと、ログの読み取りはしない。
-設定`pr_ci_fix_enabled`が`true`のときは、失敗したheadを直す作業項目(`pr_fix`のCI回)も起動する。ログを読んで直すのは、起動した作業項目である。
-失敗したheadは要対応の通知とDiscordで知らせる。自動で直す対象の失敗は、直せるかが決まってから知らせる。
+記録は`pr_ci_checks`に残す。
+PRとリポジトリへの書き込みと、ログの読み取りはしない。
+設定`pr_ci_fix_enabled`が`true`のときは、失敗したheadを直す作業項目(`pr_fix`のCI回)も起動する。
+ログを読んで直すのは、起動した作業項目である。
+失敗したheadは要対応の通知とDiscordで知らせる。
+自動で直す対象の失敗は、直せるかが決まってから知らせる。
 同じheadの再実行か新しいheadが通ったときと、PRが閉じたときに、通知を自動で解決する。
-1回の実行は、発見、回復、判定、起動、人のPRの発見、保留した失敗の通知の順に進む。監視を無効にしたときは、回復と保留した失敗の通知だけが動く。
+1回の実行は、発見、回復、判定、起動、人のPRの発見、保留した失敗の通知の順に進む。
+監視を無効にしたときは、回復と保留した失敗の通知だけが動く。
 GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md#githubのpat))。
 判定の順序、通知、自動解決、既知の限界は[PRのCI監視の仕様](internals/pr-ci.md)に書く。
 
 ## 工程4のPRの競合の検知
 
 `watch_pr_conflicts`が5分ごとに、Factoryが作ったPRにマージの競合があるかを確かめる。
-対象は、Factoryがブランチ`factory/issue-<N>-wi-<id>`に作った、開いていて下書きでなく、forkでないPRである。PATのアカウントが作ったPRだけを見る。人が作ったPRと、draw.ioのビューアを上げるPRは対象にしない。
-作業項目は`cleanup_db`が消すので、判定に使わない。作業項目、競合の記録、設定が示すリポジトリ、収集の表で見つけたリポジトリの、開いているPRを見つける。検索は使わない。
-それらに入らず、表の記録も古いリポジトリの古いPRは見つけられない。限界は[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
+対象は、Factoryがブランチ`factory/issue-<N>-wi-<id>`に作った、開いていて下書きでなく、forkでないPRである。
+PATのアカウントが作ったPRだけを見る。
+人が作ったPRと、draw.ioのビューアを上げるPRは対象にしない。
+作業項目は`cleanup_db`が消すので、判定に使わない。
+作業項目、競合の記録、設定が示すリポジトリ、収集の表で見つけたリポジトリの、開いているPRを見つける。
+検索は使わない。
+それらに入らず、表の記録も古いリポジトリの古いPRは見つけられない。
+限界は[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
 競合とみなすのは、GitHubのマージ可否が偽で、その状態が`dirty`のときだけである。
 計算前のPRは、次の回に判定し直す。
-競合したPRは、要対応の通知とDiscordで知らせる。通知は競合の1回につき1回で、headが進んでも重ねない。
-競合が解けたときと、PRが閉じたときに、通知を自動で解決する。PATがPRを読めなくなっただけでは、解決しない。
-記録は`pr_conflict_checks`に残す。`watch_pr_conflicts`自身は、PRとリポジトリへ書き込まない。
+競合したPRは、要対応の通知とDiscordで知らせる。
+通知は競合の1回につき1回で、headが進んでも重ねない。
+競合が解けたときと、PRが閉じたときに、通知を自動で解決する。
+PATがPRを読めなくなっただけでは、解決しない。
+記録は`pr_conflict_checks`に残す。
+`watch_pr_conflicts`自身は、PRとリポジトリへ書き込まない。
 有効にするのは設定`pr_conflict_watch_enabled`で、CIの監視とは別に切り替える。
 既定は`false`で、偽の間はGitHubとDBを読まない。
 設定`pr_conflict_fix_enabled`(既定は`false`)が真のときは、競合した行に、`pr_fix`の競合回の作業項目を起動する。
@@ -1045,33 +1114,47 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 記録を読むのは、`self_update`、`poll_dependabot`、`watch_pr_conflicts`、`poll_issues`、`poll_prs`、`watch_pr_ci`の6つである。
 `self_update`は、収集が続けて成功しているかを確かめて、止まっていれば通知する。
 `repo_allowlist`が空で`owners`に所有者がいるときは、設定で止めていても通知する。
-`poll_dependabot`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、候補のPRを表から読む。表を使えないリポジトリは、RESTの開いているPRの一覧に戻す。
-`watch_pr_conflicts`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、リポジトリの発見とPRの列挙を表から読む。検索は使わない。
+`poll_dependabot`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、候補のPRを表から読む。
+表を使えないリポジトリは、RESTの開いているPRの一覧に戻す。
+`watch_pr_conflicts`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、リポジトリの発見とPRの列挙を表から読む。
+検索は使わない。
 作業項目、競合の行、設定で明示したリポジトリは、表を使えないとき、RESTのPRの一覧で読む。
 どれにも入らず、記録が古いリポジトリは見送る。
-`poll_issues`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、トリガーラベル付きのIssueを表から見つける。検索は使わない。
-記録が古い明示でないリポジトリは見送る。設定で明示したリポジトリは、表を使えないとき、RESTのIssueの一覧で読む。
+`poll_issues`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、トリガーラベル付きのIssueを表から見つける。
+検索は使わない。
+記録が古い明示でないリポジトリは見送る。
+設定で明示したリポジトリは、表を使えないとき、RESTのIssueの一覧で読む。
 候補は、表の行も一覧の番号も、`getIssue`で開いていることとトリガーラベルを確かめてから使う。
-`poll_prs`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、ラベル、レビューの依頼、assigneeのPRを表から見つける。検索は使わない。
-記録が古い明示でないリポジトリは見送る。設定で明示したリポジトリは、表を使えないとき、RESTのPRの一覧で読む。
-チーム宛てのレビューの依頼は、`GET /user/teams`のチームの数値IDと照合して判定する。チームを使えない組織では、見送る。
+`poll_prs`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、ラベル、レビューの依頼、assigneeのPRを表から見つける。
+検索は使わない。
+記録が古い明示でないリポジトリは見送る。
+設定で明示したリポジトリは、表を使えないとき、RESTのPRの一覧で読む。
+チーム宛てのレビューの依頼は、`GET /user/teams`のチームの数値IDと照合して判定する。
+チームを使えない組織では、見送る。
 候補は、表の行も一覧の要素も、`getPr`と`getIssue`で開いていることと今も対象であることを確かめてから使う。
-`watch_pr_ci`は、設定`pr_ci_watch_human_prs`が`true`で、収集の2つの設定が真のとき、許可された人のPRの候補を表から見つける。検索は使わない。
-記録が古い明示でないリポジトリは見送る。設定で明示したリポジトリは、表を使えないとき、RESTのPRの一覧で読む。
+`watch_pr_ci`は、設定`pr_ci_watch_human_prs`が`true`で、収集の2つの設定が真のとき、許可された人のPRの候補を表から見つける。
+検索は使わない。
+記録が古い明示でないリポジトリは見送る。
+設定で明示したリポジトリは、表を使えないとき、RESTのPRの一覧で読む。
 `owners`に無い所有者の`factory_repo`も、一覧で読む。
 候補は、表の行も一覧の要素も、PRを読み直して作者、fork、ブランチを確かめてから記録する。
 トークンの作り方と扱いは[セキュリティ](security.md#収集用の読み取りトークン)に、運用は[運用](operations.md#収集の運用)に、記録の意味と限界は[GitHubの収集](internals/github-collect.md)に書く。
 
 ## 工程5の監査
 
-`audit_kickoff`が毎週月曜09:30に、前回の監査以降の運用記録を確かめる。行動につながる記録があれば、監査の作業項目を作って`audit`フローを起動する。Consoleの**レポート**の**今すぐ監査**からも起動できる。
+`audit_kickoff`が毎週月曜09:30に、前回の監査以降の運用記録を確かめる。
+行動につながる記録があれば、監査の作業項目を作って`audit`フローを起動する。
+Consoleの**レポート**の**今すぐ監査**からも起動できる。
 
-`audit`フローは、証跡をまとめた資料(証跡パック)を作り、headless Claudeに監査レポートと改善提案を書かせる。提案は人が承認したものだけが、Factory自身のリポジトリ(`factory_repo`)にIssueとして起票される。起動の条件、期間、検査は[監査の内部仕様](internals/audit.md)に書く。
+`audit`フローは、証跡をまとめた資料(証跡パック)を作り、headless Claudeに監査レポートと改善提案を書かせる。
+提案は人が承認したものだけが、Factory自身のリポジトリ(`factory_repo`)にIssueとして起票される。
+起動の条件、期間、検査は[監査の内部仕様](internals/audit.md)に書く。
 
 ## 調査
 
 調査(`investigate`)は、実装せずにリポジトリを調べて、結果を依頼したIssueのコメントで返す。
-`investigate`フローは、運用者がWindmillから直接実行する。入口を開ける設定`investigate_enabled`の既定は偽である。
+`investigate`フローは、運用者がWindmillから直接実行する。
+入口を開ける設定`investigate_enabled`の既定は偽である。
 
 フローは4つのstepで進む。
 
@@ -1085,9 +1168,13 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 ## 未実装の機能
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
-- ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
-- ホストの実行役の導入スクリプト`scripts/host-install.sh`。保護パスの一覧には載るが、ファイルはまだ無い
-- CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
-- 調査(`investigate`)の、新規投入の入口、Consoleの投入フォームと表示と取り消し、置き場の定期的な掃除、孤児の扱いの拡張、隔離の測定の定期実行。Windmillから直接実行するフロー`f/factory/investigate`だけがある([調査を実行する](operations.md#調査を実行する)、[調査の隔離](security.md#調査の隔離))
+- ホストの実行役による反映。
+  判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
+- ホストの実行役の導入スクリプト`scripts/host-install.sh`。
+  保護パスの一覧には載るが、ファイルはまだ無い
+- CIが出したメタデータのパッチ(`metadata-patch`)の適用。
+  `metadata`ジョブがartifactのIDとdigestを出す処理も含む
+- 調査(`investigate`)の、新規投入の入口、Consoleの投入フォームと表示と取り消し、置き場の定期的な掃除、孤児の扱いの拡張、隔離の測定の定期実行。
+  Windmillから直接実行するフロー`f/factory/investigate`だけがある([調査を実行する](operations.md#調査を実行する)、[調査の隔離](security.md#調査の隔離))
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。
