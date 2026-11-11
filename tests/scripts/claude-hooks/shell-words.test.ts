@@ -2775,6 +2775,10 @@ describe("a bracket opened inside a word must close in the same word", () => {
       "a command behind a wrapper and a subscripted assignment",
       "nice a[1]=1 echo x",
     ],
+    [
+      "a command behind an env assignment with a subscript",
+      "env a[1]=1 echo x",
+    ],
     ["an escaped opening bracket in front of a bracket", "\\[[ x"],
     ["a character class that holds an opening bracket", "ls x[[]"],
     ["an option value that is an opening bracket", "cut -d[ -f2 file"],
