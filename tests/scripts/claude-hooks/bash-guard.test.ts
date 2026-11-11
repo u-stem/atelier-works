@@ -6268,12 +6268,23 @@ describe("bash-guard allows leading assignments in front of reads", () => {
     "FOO=1 git status",
     "FOO='a b' git status",
     "env FOO=1 git status",
-    "sudo FOO=1 ls",
     "if FOO=1 true; then echo ok; fi",
     "time FOO=1 git status",
     "LANG=C rg -n x",
   ])("allows %s", async (command) => {
     expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+// 添字つきの代入の形の語は、名前の引用と位置によらず、後ろに語が続けば読めない構文として拒否する。`sudo`の後ろの代入の形の語も同じである。
+describe("bash-guard denies subscripted assignment-shaped words and assignments after sudo in front of a command", () => {
+  test.each([
+    ["a quoted subscripted name", "'a[1]=1' git status"],
+    ["a quoted subscript", "a['1']=1 git status"],
+    ["a subscripted name after a prefix", "nice a[1]=1 git status"],
+    ["an assignment after sudo", "sudo FOO=1 ls"],
+  ])("denies %s", async (_kind, command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
   });
 });
 

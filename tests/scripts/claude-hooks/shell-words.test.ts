@@ -625,9 +625,7 @@ describe("stripWrappers keeps assignment-shaped words that the shell runs as com
     ["a name after a timeout prefix", "timeout 5 a=/x/git push", "a=/x/git"],
     ["a name after the command builtin", "command a=/x/git push", "a=/x/git"],
     ["a name after nohup", "nohup a=/x/git push", "a=/x/git"],
-    ["a quoted subscripted name", "'a[1]=1' echo x", "a[1]=1"],
-    ["an escaped subscripted name", "a\\[1]=1 echo x", "a[1]=1"],
-    ["a subscripted name after a prefix", "nice a[1]=1 echo x", "a[1]=1"],
+    ["a path with an equals sign after sudo", "sudo /x=y/git push", "/x=y/git"],
   ])("keeps %s as the command name", (_kind, line, name) => {
     expect(firstWords(line)[0]).toBe(name);
   });
@@ -636,10 +634,19 @@ describe("stripWrappers keeps assignment-shaped words that the shell runs as com
     ["a leading assignment", "FOO=1 git status"],
     ["a quoted value", "FOO='a b' git status"],
     ["an assignment after env", "env FOO=1 git status"],
-    ["an assignment after sudo", "sudo FOO=1 git status"],
     ["an assignment after time", "time FOO=1 git status"],
   ])("strips %s", (_kind, line) => {
     expect(firstWords(line)[0]).toBe("git");
+  });
+});
+
+// `sudo`が後ろの代入の形の語を代入として読むかは確かめていないので、後ろに語が続く形は読めない構文にする。
+describe("an assignment-shaped word after sudo in front of a command is unreadable", () => {
+  test.each([
+    ["an assignment right after sudo", "sudo FOO=1 git status"],
+    ["an assignment after an option of sudo", "sudo -n FOO=1 git status"],
+  ])("rejects %s", (_kind, line) => {
+    expect(parseCommandLine(line).ok).toBe(false);
   });
 });
 
@@ -2804,6 +2811,16 @@ describe("a bracket opened inside a word must close in the same word", () => {
     ],
     ["a command behind a subscripted assignment", "a[1]=1 echo x"],
     ["a command behind an appending subscripted assignment", "a[1]+=1 echo x"],
+    ["a command behind a quoted subscripted assignment", "'a[1]=1' echo x"],
+    [
+      "a command behind an assignment with a quoted subscript",
+      "a['1']=1 echo x",
+    ],
+    ["a command behind an escaped subscripted assignment", "a\\[1]=1 echo x"],
+    [
+      "a command behind a wrapper and a subscripted assignment",
+      "nice a[1]=1 echo x",
+    ],
     [
       "a command behind an env assignment with a subscript",
       "env a[1]=1 echo x",
