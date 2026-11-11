@@ -470,8 +470,16 @@ for (const theme of THEMES) {
       const results = await new AxeBuilder({ page })
         .withTags(WCAG_TAGS)
         .analyze();
+      // トーストの文の色が測られずに通る事態を防ぐため、トーストだけを測った結果も見る。
+      const toaster = await new AxeBuilder({ page })
+        .include("[data-sonner-toaster]")
+        .withTags(WCAG_TAGS)
+        .analyze();
 
       expect(results.violations.map((violation) => violation.id)).toEqual([]);
+      expect(toaster.passes.some((rule) => rule.id === "color-contrast")).toBe(
+        true,
+      );
     });
   });
 }
