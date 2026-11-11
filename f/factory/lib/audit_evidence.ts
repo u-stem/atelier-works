@@ -1072,8 +1072,9 @@ function sumBy<T>(items: readonly T[], pick: (item: T) => number): number {
 /**
  * 収集済みの`AuditEvidence`から、`factory.audit_reports.metrics`(jsonb)に
  * 入れる集計値を計算する。
+ * 値は数だけである。flowが文字列を含まない値として次のstepへ包まずに渡すので、型で数に限る。
  */
-export function metricsOf(evidence: AuditEvidence): Record<string, unknown> {
+export function metricsOf(evidence: AuditEvidence): Record<string, number> {
   return {
     run_count: sumBy(evidence.agent_runs, (stat) => stat.run_count),
     failure_count: sumBy(evidence.agent_runs, (stat) => stat.failure_count),
