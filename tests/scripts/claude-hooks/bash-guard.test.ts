@@ -6045,3 +6045,52 @@ describeForCallers(
     });
   },
 );
+
+// 凍結のコード文字列は、コードを取るオプションの種類を問わず、語の中にCLIのパスと書き込みの語が並べば拒否する。
+// 凍結のCLIを指す語があれば、書き込みの語は副コマンドの位置でなくても数える。
+describeForCallers(
+  "bash-guard denies freeze writes in code strings of any option and after options before the subcommand",
+  (subagent) => {
+    test.each([
+      [
+        "a print-and-eval bundle",
+        `node -pe "require('child_process').execSync('bun scripts/freeze.ts release')"`,
+      ],
+      [
+        "a call option of a package runner",
+        `npx --call "bun scripts/freeze.ts release"`,
+      ],
+      [
+        "a shell option of a package manager",
+        `pnpm -c exec "bun scripts/freeze.ts release"`,
+      ],
+      [
+        "an exec subcommand of a package manager",
+        `yarn exec "bun scripts/freeze.ts reset"`,
+      ],
+      [
+        "an option before the subcommand",
+        "bun scripts/freeze.ts --verbose release",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows freeze reads, schedule freezes, and inspections",
+  (subagent) => {
+    test.each([
+      "bun scripts/freeze.ts list",
+      "bun scripts/freeze.ts list --scope deploy",
+      "bun scripts/freeze.ts place --target a/b",
+      'bun scripts/freeze.ts place --target a/b --reason "freeze for release"',
+      "bun scripts/freeze.ts push --dry-run",
+      'bun test -t "freeze release"',
+      "bunx biome check scripts/freeze.ts",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
