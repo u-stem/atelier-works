@@ -5,6 +5,7 @@ import type { ExternalToast } from "sonner";
 import type { ReleaseNotice } from "../lib/writeNotices.ts";
 import {
   type AnnounceOptions,
+  announceStaleListWith,
   announceWith,
   type Toaster,
 } from "./announce.ts";
@@ -88,6 +89,23 @@ describe("announceWith", () => {
   });
 });
 
+describe("announceStaleListWith", () => {
+  test("lets the stale list warning close by itself", () => {
+    const calls: Call[] = [];
+    const record =
+      (tone: ReleaseNotice["tone"]) =>
+      (message: string, data?: ExternalToast) =>
+        calls.push({ tone, message, data });
+    announceStaleListWith({
+      success: record("success"),
+      info: record("info"),
+      warning: record("warning"),
+      error: record("error"),
+    });
+    expect(calls[0]?.data?.duration).toBeUndefined();
+  });
+});
+
 const SRC = resolve(import.meta.dir, "..");
 
 /** `src`の下で、`sonner`を直に読み込むファイル。テストは除く。 */
@@ -95,7 +113,9 @@ function filesImportingSonner(): string[] {
   return readdirSync(SRC, { recursive: true, encoding: "utf8" })
     .filter((path) => /\.(ts|tsx)$/.test(path) && !/\.test\.tsx?$/.test(path))
     .filter((path) =>
-      /from\s+"sonner"/.test(readFileSync(join(SRC, path), "utf8")),
+      /(from\s+|import\s*\(\s*)["']sonner["']/.test(
+        readFileSync(join(SRC, path), "utf8"),
+      ),
     )
     .sort();
 }
