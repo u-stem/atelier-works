@@ -1435,12 +1435,10 @@ function underPrefixFinding(
     if (found === "operation") return found;
   }
   // 語の`=`より後ろと、ページャーの初期コマンドや`!`の後ろは、コマンドとして実行されうる。起動語が前の部分に隠れないよう、値をコマンドとして読む。
-  // 値ごとの判定は、解析の回数に数える。
+  // 解析の回数は、値を読む`textFinding`が数える。
   for (const word of words.slice(from)) {
     const value = commandValue(word);
     if (value === null) continue;
-    context.budget.parses += 1;
-    if (context.budget.parses > HOLD_MAX_PARSES) return "dynamic";
     found = stronger(found, textFinding(value.text, context, "string"));
     if (found === "operation") return found;
   }
@@ -1871,6 +1869,7 @@ const GIT_INERT_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "fetch",
   "for-each-ref",
   "grep",
+  "help",
   "init",
   "log",
   "ls-files",
@@ -1898,9 +1897,8 @@ const GIT_INERT_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "switch",
   "symbolic-ref",
   "tag",
-  "worktree",
   "version",
-  "help",
+  "worktree",
 ]);
 
 /** `git`の、値を取らず、別のコマンドの実行を委ねないグローバルのオプション。一覧の外のオプションは、実行を委ねる形として扱う。 */

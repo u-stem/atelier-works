@@ -5836,7 +5836,7 @@ describeForCallers(
 );
 
 // 他の所有者のリポジトリの設定を有効にするキーは、値が実行されなくても、委ねない形の一覧に入れない。
-// 語の値は、空白を含むときだけコマンドとして読む。設定のキーは、サブセクションの区切りの字も含めて読む。
+// 語の値は、空白か、シェルが語を分けるか展開する字を含むときだけコマンドとして読む。設定のキーは、サブセクションの区切りの字も含めて読む。
 describeForCallers(
   "bash-guard denies holds or freezes written through setting keys and values that the value rule reads",
   (subagent) => {
