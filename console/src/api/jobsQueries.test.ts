@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   focusManager,
   QueryClient,
@@ -32,6 +33,7 @@ import {
   isLaterHistoryPage,
   isSchedulesSnapshot,
   JOB_DETAIL_REFRESH_MS,
+  JOBS_LIST_STALE_MS,
   type JobDetailView,
   type JobListView,
   type JobSummaryView,
@@ -49,6 +51,7 @@ import {
   seedJobStatus,
   shouldPollJobStatus,
   shouldRefetchOutputAfterFinish,
+  shouldRefetchStaleList,
   shouldStartOutputRefetch,
 } from "./jobsQueries.ts";
 import type { FetchLike } from "./windmill.ts";
@@ -649,6 +652,71 @@ describe("the refresh of the active list", () => {
     expect(
       activeListQueryOptions({ selectedTab: "active", idle: false }).queryKey,
     ).toEqual(jobsActiveQueryKey);
+  });
+});
+
+describe("shouldRefetchStaleList", () => {
+  const NOW = 1_000_000;
+
+  test("refetches at once when the refresh resumes on a list older than the stale age", () => {
+    expect(
+      shouldRefetchStaleList({
+        resumed: true,
+        dataUpdatedAt: NOW - JOBS_LIST_STALE_MS - 1,
+        now: NOW,
+      }),
+    ).toBe(true);
+  });
+
+  test("refetches when the list is exactly as old as the stale age", () => {
+    expect(
+      shouldRefetchStaleList({
+        resumed: true,
+        dataUpdatedAt: NOW - JOBS_LIST_STALE_MS,
+        now: NOW,
+      }),
+    ).toBe(true);
+  });
+
+  test("does not refetch when the refresh resumes on a list that is still fresh", () => {
+    expect(
+      shouldRefetchStaleList({
+        resumed: true,
+        dataUpdatedAt: NOW - JOBS_LIST_STALE_MS + 1,
+        now: NOW,
+      }),
+    ).toBe(false);
+  });
+
+  test("does not refetch an old list while the refresh did not resume", () => {
+    expect(
+      shouldRefetchStaleList({
+        resumed: false,
+        dataUpdatedAt: NOW - JOBS_LIST_STALE_MS * 10,
+        now: NOW,
+      }),
+    ).toBe(false);
+  });
+
+  test("refetches when the refresh resumes before any list was read", () => {
+    expect(
+      shouldRefetchStaleList({ resumed: true, dataUpdatedAt: 0, now: NOW }),
+    ).toBe(true);
+  });
+});
+
+describe("the wiring of the refetch on resume", () => {
+  const SOURCE = readFileSync(new URL("./jobsQueries.ts", import.meta.url), {
+    encoding: "utf8",
+  });
+  const HOOK = SOURCE.slice(SOURCE.indexOf("export function useActiveJobs"));
+
+  test("the subscription of the active list checks the age of the list", () => {
+    expect(HOOK).toContain("shouldRefetchStaleList(");
+  });
+
+  test("the subscription does not start a fetch while one is running", () => {
+    expect(HOOK).toContain("!isFetching");
   });
 });
 
