@@ -93,7 +93,7 @@
 //       結果は足し合わせない。内側が読み取りの道具(`rg -n release scripts/hold.ts`)なら通す。
 //       内側の先頭が`mise`、実行系、`docker`、`psql`でも、語を足すコマンドとシェルの規則は重ねて当てる。
 //       内側の先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうるので、値を先頭の語として判定する。
-//       値が保留か凍結のコードを指すときだけ、後ろの語を引数として付ける。
+//       値が保留か凍結のコードを指すときと、起動語(実行系、`mise`、`docker`と`psql`、前置き、シェル)のときに、後ろの語を引数として付ける。全停止も同じである。
 //       内側の`xargs`が足す語は、先頭が何でも読めないので拒否する。
 //       標準入力の文字列は、最上位でも入れ子でも同じに判定する。
 //       コマンド文字列は4段の入れ子まで読む。段を超えた文字列と読めない文字列は、字面で判定する。
@@ -1381,13 +1381,16 @@ function textFinding(
     };
     found = stronger(found, holdOperationAt(stripped.words, inner));
     // 先頭の変数代入は前置きとして外れるが、値がコマンドとして実行されうる(`ProxyCommand=…`、`LESSOPEN=…`)。値を先頭の語として判定する。
-    // 値が保留や凍結のCLIを指すときだけ、後ろの語を引数として付ける。実際に実行される語は上で判定している。
+    // 値が保留や凍結のCLIを指すときと、起動語のときに、後ろの語を引数として付ける。実際に実行される語は上で判定している。
     // 代入ごとの判定は、解析の回数に数える。
     for (const assignment of stripped.assignments) {
       budget.parses += 1;
       if (budget.parses > HOLD_MAX_PARSES) return "dynamic";
       const value = assignmentValue(assignment);
-      const pointing = pointsAtHoldCode(value) || pointsAtFreezeCode(value);
+      const pointing =
+        pointsAtHoldCode(value) ||
+        pointsAtFreezeCode(value) ||
+        launchesWithArguments(value);
       found = stronger(
         found,
         holdOperationAt(pointing ? [value, ...stripped.words] : [value], inner),
@@ -1412,6 +1415,21 @@ function assignmentValue(assignment: Word): Word {
       ? {}
       : { variants: assignment.variants.map(cut) }),
   };
+}
+
+/**
+ * 値の先頭の語が、後ろの語を引数として受ける起動語なら真。
+ * 実行系と`mise`、`docker`と`psql`、前置き、シェルの閉じた集合である。
+ * 名前だけの代入の形で始まる文字列(リモートの道具のオプションの値)は、値と後ろの語の組がコマンドとして実行されるためである。
+ */
+function launchesWithArguments(value: Word): boolean {
+  const name = baseName(value.text);
+  return (
+    isLauncherName(name) ||
+    SQL_PROGRAMS.has(name) ||
+    PREFIX_PROGRAMS.has(name) ||
+    SHELLS.has(name)
+  );
 }
 
 /**
@@ -2780,8 +2798,16 @@ function textStopAllCall(
     depth >= COMMAND_TEXT_MAX_DEPTH ? null : parseCommandLine(word.text);
   if (parsed === null || !parsed.ok) return unreadableTextStopAll(word);
   return parsed.commands.some((command) => {
-    const inner = stripWrappers(command.words).words;
-    return inner.length > 0 && stopAllCallAt(inner, inputs, depth + 1);
+    const stripped = stripWrappers(command.words);
+    const inner = stripped.words;
+    // 起動語を値に持つ代入の形の語は、値と後ろの語の組がコマンドとして実行されうる。
+    const launched = stripped.assignments
+      .map(assignmentValue)
+      .filter(launchesWithArguments)
+      .some((value) => stopAllCallAt([value, ...inner], inputs, depth + 1));
+    return (
+      launched || (inner.length > 0 && stopAllCallAt(inner, inputs, depth + 1))
+    );
   });
 }
 
