@@ -14,7 +14,7 @@ describe("the wiring of the job list screen", () => {
   test("fetches a tab only after it was opened", () => {
     expect(
       [
-        'useActiveJobs(visited.has("active"))',
+        'useActiveJobs(visited.has("active"), {',
         'useSchedules(visited.has("schedules"))',
       ].every((call) => BODY.includes(call)),
     ).toBe(true);
@@ -35,7 +35,15 @@ describe("the wiring of the job list screen", () => {
 
 describe("the wiring of the current steps", () => {
   test("reads the steps of the running flows of the active list", () => {
-    expect(BODY).toContain("useActiveJobSteps(active.data, tab)");
+    expect(BODY).toContain("useActiveJobSteps(active.data, tab, {");
+  });
+
+  test("holds the steps while the active list is being fetched", () => {
+    expect(BODY).toContain("listFetching: active.isFetching");
+  });
+
+  test("shares one idle state between the list and the steps", () => {
+    expect(BODY.split("useIdle()").length - 1).toBe(1);
   });
 
   test("refreshes the active list before the steps", () => {
