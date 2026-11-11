@@ -2810,16 +2810,22 @@ function stopAllWording(text: string): boolean {
 }
 
 /**
+ * 元の綴りと、引用符とバックスラッシュを除いた綴り(`unquotedText`)のどちらかが、全停止を指す字面(`stopAllWording`)を持つなら真。
+ * 語の途中の空の引用で名前を分けた形を見落とさないためである。
+ */
+function stopAllWordingUnquoted(text: string): boolean {
+  return stopAllWording(text) || stopAllWording(unquotedText(text));
+}
+
+/**
  * 読めない文字列と、入れ子が深さの上限を超えた文字列の字面が、全停止を指すなら真。
  * 全停止のCLIを指す語か、`mise`と全停止のタスク名が並ぶ字面である。
  * 読めない文字列を一律に拒否すると、SQLやJSONの引数のような読み取りまで止まるので、字面で絞る。
- * 引用符とバックスラッシュを除いた綴りでも判定する。語の途中の空の引用で名前を分けた形を見落とさないためである。
+ * 引用符とバックスラッシュを除いた綴りでも判定する。
  */
 function unreadableTextStopAll(word: Word): boolean {
   if (pointsAtStopAllCode(word)) return true;
-  return spellings(word).some(
-    (text) => stopAllWording(text) || stopAllWording(unquotedText(text)),
-  );
+  return spellings(word).some(stopAllWordingUnquoted);
 }
 
 /** 空白を含む語が、中に全停止の入口を実行する形を持つか。読めない文字列は、字面で判定する。 */
@@ -2935,10 +2941,6 @@ export function findStopAllCall(
   const assigned = assignments
     .map(assignmentValue)
     .filter((value) => splitsIntoWords(value.text))
-    .some((value) =>
-      spellings(value).some(
-        (text) => stopAllWording(text) || stopAllWording(unquotedText(text)),
-      ),
-    );
+    .some((value) => spellings(value).some(stopAllWordingUnquoted));
   return assigned || stopAllCallAt(words, inputs, 0);
 }
