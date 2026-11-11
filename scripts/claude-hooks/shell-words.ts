@@ -1376,6 +1376,8 @@ class Parser {
   /** NULを含む`$'...'`を読んだ語の、別の綴り。無ければnull。 */
   private variantText: string | null = null;
   private inWord = false;
+  /** 今の語の中で開いたまま閉じていない`[`の数。 */
+  private openBrackets = 0;
   private dynamic = false;
   private glob = false;
   private inputs: Word[] = [];
@@ -1603,8 +1605,17 @@ class Parser {
         return;
       case "*":
       case "?":
+        this.glob = true;
+        break;
       case "[":
         this.glob = true;
+        // 語頭から続く`[`の列(`[`コマンドと`[[`)は数えない。語の途中で開いた`[`だけを数える。
+        if (this.inWord && !this.restricted && !/^\[*$/.test(this.text)) {
+          this.openBrackets += 1;
+        }
+        break;
+      case "]":
+        if (this.openBrackets > 0) this.openBrackets -= 1;
         break;
     }
     this.append(char);
@@ -1666,10 +1677,18 @@ class Parser {
     this.inWord = false;
     this.dynamic = false;
     this.glob = false;
+    this.openBrackets = 0;
   }
 
   private endWord(): void {
     if (!this.inWord) return;
+    // bashとkshは、コマンドの位置の`名前[`を対応する`]`までの添字の対として読み、間の空白、`#`、`;`、改行で語を区切らない。
+    // フックは区切るので、同じ語の中で閉じない`[`は、位置や前置きを問わず読めない構文にする。
+    if (this.openBrackets > 0) {
+      throw new ShellSyntaxError(
+        "a bracket opened inside a word is not closed in the same word",
+      );
+    }
     const word: Word = {
       text: this.text,
       // 今のブランチ名になる置換だけの語は、値が決まっているものとして扱う。
