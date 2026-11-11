@@ -6300,3 +6300,39 @@ describeForCallers(
     );
   },
 );
+
+// 名前だけの代入の形で始まる文字列は、値が起動語なら、値と後ろの語の組をコマンドとして判定する。
+describeForCallers(
+  "bash-guard denies launchers given as the value of an assignment-shaped string",
+  (subagent) => {
+    test.each([
+      [
+        "a database client touching holds",
+        `ssh -o 'ProxyCommand=psql -c "delete from holds"' host`,
+      ],
+      [
+        "a runner given a hold path",
+        `ssh host 'X=bun -e "import(\\"./x\\")" scripts/hold.ts'`,
+      ],
+      [
+        "a task runner given a stop task",
+        "ssh -o 'ProxyCommand=mise run stop' host",
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+describeForCallers(
+  "bash-guard allows assignment-shaped strings whose values are not launchers",
+  (subagent) => {
+    test.each([
+      "ssh host 'LANG=C rg -n release scripts/hold.ts'",
+      "ssh -o 'ProxyCommand=nc %h %p' host",
+      "ssh host 'FOO=1 bun test'",
+    ])("allows %s", async (command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
+    });
+  },
+);
