@@ -1435,3 +1435,27 @@ Discordの説明には、閾値、最後の成功(JST)、最新の実行の原�
 - ラベルが100件を超えるPRは、ラベルの真偽が`NULL`になる。
 - `last_collected_at`は、workerの時計で書く。
   workerとDBを別のホストに分けるときは、時計の前提を見直す。
+
+## RESTの検索の拒否
+
+`callGhApi`は、RESTの検索APIのendpointを、`gh`を起動せずに拒む。
+検索の枠は小さく、5分の境目に呼びが重なると拒まれる。
+下流が検索を使わない設計を、後の変更で破らせないための防止である。
+仕様は[通知とrate limitの仕様](notifications.md#restの検索の拒否)にある。
+残るリスクは次のとおりである。
+
+- 拒否は、`callGhApi`を通る呼び出しにだけ効く。
+  argv配列で`gh`を起動するのは`github.ts`だけである。
+  `workspace.ts`のgit credential helperの`gh auth git-credential`は除く。
+  静的テストが、argvの先頭に`gh`を置く配列を書くファイルが`github.ts`だけであることを確かめる。
+- `fetch`でRESTを呼ぶ経路は、`callGhApi`を通らず、実行時の拒否が効かない。
+  経路は、`github.ts`の`fetchIssueObject`、`lib/metadata_patch_download.ts`、GraphQLの`gh_graphql.ts`である。
+  字面の`search/`だけを静的テストが止める。
+  宛先は固定で、実害は無い。
+- `gh search`、`--search`、argvの`gh`と`search`の並びも、静的テストが字面で走査して止める。
+- GraphQLの`search`のフィールドは拒まない。
+  使う変更は、枠の消費を設計から見直す。
+- endpointを文字列の組み立てで作る呼び出しは、静的テストが見つけられない。
+  `callGhApi`を通る呼び出しなら、実行時の拒否が止める。
+- 実行時の拒否が正規化するのは、先頭の`/`、大文字、絶対URLの3種類だけである。
+  ドットセグメントとパーセントエンコードは対象外で、呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通る。
