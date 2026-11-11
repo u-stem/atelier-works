@@ -1,19 +1,15 @@
 import { useState } from "react";
-import { toast } from "sonner";
 import type { ApprovalDecideResult } from "../../api/guards/writeResults.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
 import { writeTargetKey } from "../../api/writeLocks.ts";
 import { decideApproval } from "../../api/writes.ts";
-import {
-  approvalOutcomeNotice,
-  type ToastNotice,
-} from "../../lib/approvalNotice.ts";
+import { announce, announceStaleList } from "../../components/announce.ts";
+import { approvalOutcomeNotice } from "../../lib/approvalNotice.ts";
 import {
   classifyDecisionRefusal,
   type DecisionRefusal,
 } from "../../lib/approvalRefusal.ts";
 import { redoCooldowns } from "../../lib/redoCooldown.ts";
-import { STALE_LIST_NOTICE } from "../../lib/writeNotices.ts";
 
 export type DecisionInput = {
   readonly approvalRequestId: number;
@@ -39,26 +35,10 @@ function run(input: DecisionInput): Promise<ApprovalDecideResult> {
   });
 }
 
-function showToast(notice: ToastNotice): void {
-  switch (notice.tone) {
-    case "success":
-      toast.success(notice.message);
-      return;
-    case "info":
-      toast.info(notice.message);
-      return;
-    case "warning":
-      toast.warning(notice.message);
-      return;
-    case "error":
-      toast.error(notice.message);
-      return;
-  }
-}
-
 /**
  * 承認と却下の呼び出しを、ロックと読み直しに載せるフック。
- * scriptが確定して断ったときは、断りの説明を返す。トーストは消えるので、承認バーの中に残して出すためである。
+ * scriptが確定して断ったときは、断りの説明を返す。承認バーは、操作した場所で断りを示すために、それを出す。
+ * トーストにも同じ断りを出す。項目が一覧から外れてバーごと消えても、断りが残るためである。
  * `redo`は、承認済みの提案のIssue作成をやり直す呼び出しで、結果の文が違う。
  * やり直しが成功したら、その依頼のボタンを一定時間止める(`redoCooldowns`)。
  */
@@ -80,10 +60,10 @@ export function useApprovalDecision(mode: "decide" | "redo"): {
           ? classifyDecisionRefusal(outcome.error, input.kind)
           : null,
       );
-      showToast(approvalOutcomeNotice(outcome, mode, input.kind));
+      announce(approvalOutcomeNotice(outcome, mode, input.kind));
     },
     onStale: () => {
-      showToast(STALE_LIST_NOTICE);
+      announceStaleList();
     },
   });
   return {

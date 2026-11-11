@@ -1,7 +1,6 @@
 import { CircleCheck, ExternalLink, Info, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import { toast } from "sonner";
 import type { WriteOutcome } from "../../api/executeWrite.ts";
 import type { SummaryNotice } from "../../api/guards/summary.ts";
 import type { NoticeResolveResult } from "../../api/guards/writeResults.ts";
@@ -9,16 +8,14 @@ import { useWriteMutation } from "../../api/mutations.ts";
 import { NOTICE_RESOLVE_INVALIDATES } from "../../api/noticeQueries.ts";
 import { writeTargetKey } from "../../api/writeLocks.ts";
 import { resolveNotice } from "../../api/writes.ts";
+import { announce, announceStaleList } from "../../components/announce.ts";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { describeNotice } from "../../lib/noticeView.ts";
 import { formatAbsoluteWithRelative } from "../../lib/relativeTime.ts";
 import { systemSectionPath } from "../../lib/systemSections.ts";
-import {
-  describeNoticeResult,
-  STALE_LIST_NOTICE,
-} from "../../lib/writeNotices.ts";
+import { describeNoticeResult, releaseNotice } from "../../lib/writeNotices.ts";
 import { NoticeMessageText } from "./NoticeMessageText.tsx";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -28,23 +25,6 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
       <dd className="min-w-0 text-body text-foreground">{children}</dd>
     </div>
   );
-}
-
-function announce(notice: {
-  readonly tone: "success" | "info" | "warning";
-  readonly message: string;
-}): void {
-  switch (notice.tone) {
-    case "success":
-      toast.success(notice.message);
-      return;
-    case "info":
-      toast.info(notice.message);
-      return;
-    case "warning":
-      toast.warning(notice.message);
-      return;
-  }
 }
 
 /**
@@ -58,14 +38,10 @@ const RESOLVE_CONFIG = {
   run: (noticeId: number): Promise<NoticeResolveResult> =>
     resolveNotice(noticeId),
   onOutcome: (outcome: WriteOutcome<NoticeResolveResult>): void => {
-    if (outcome.kind === "done") {
-      announce(describeNoticeResult(outcome.result));
-    } else {
-      toast.error(outcome.message);
-    }
+    announce(releaseNotice(outcome, describeNoticeResult));
   },
   onStale: (): void => {
-    announce(STALE_LIST_NOTICE);
+    announceStaleList();
   },
   invalidates: NOTICE_RESOLVE_INVALIDATES,
 } as const;

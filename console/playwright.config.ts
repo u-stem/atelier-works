@@ -1,6 +1,6 @@
-// ビルド済みのConsole(`dist/`)をブラウザで開いて、アクセシビリティを検査する設定。
+// ビルド済みのConsole(`dist/`)をブラウザで開いて、アクセシビリティと書き込みの操作を検査する設定。
 // 配信は`scripts/console-branch-server.ts`で行う。本番のCaddyと同じCSPなどのヘッダーを付けるため、
-// CSPの下でも検査が動くことを確かめられる。APIは各検査が固定の値で受けるので、中継先には繋がない。
+// CSPの下でも検査が動くことを確かめられる。APIは、書き込みも含めて各検査が固定の値で受けるので、中継先には繋がない。
 // 検査の起動は`bun run test:a11y`。先に`bun run build`が要る。
 
 import { defineConfig, devices } from "@playwright/test";
@@ -10,8 +10,8 @@ const inCi = process.env.CI !== undefined && process.env.CI !== "";
 
 export default defineConfig({
   testDir: "e2e",
-  // `bun test`が拾わないよう、検査の名前は`*.a11y.ts`にする。
-  testMatch: "**/*.a11y.ts",
+  // 検査の名前は、`bun test`が拾わない名前(`*.a11y.ts`と`*.e2e.ts`)にする。
+  testMatch: ["**/*.a11y.ts", "**/*.e2e.ts"],
   fullyParallel: true,
   // 検査はaxeの解析でCPUを使うので、CIでは論理コアの数だけ並列にする。
   // ローカルはPlaywrightの既定(論理コアの半分)のままにする。

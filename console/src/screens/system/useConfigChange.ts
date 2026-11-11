@@ -1,11 +1,11 @@
 import { useState, useSyncExternalStore } from "react";
-import { toast } from "sonner";
 import type { WriteOutcome } from "../../api/executeWrite.ts";
 import type { ConfigUpdateResult } from "../../api/guards/writeResults.ts";
 import { configQueryKey } from "../../api/jobsQueries.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
 import type { WriteRunnerConfig } from "../../api/writeRunner.ts";
 import { type ConfigUpdateInput, updateConfig } from "../../api/writes.ts";
+import { announce, announceStaleList } from "../../components/announce.ts";
 import {
   type ChangeOffer,
   parseNewElement,
@@ -16,26 +16,8 @@ import {
   describeConfigUpdateResult,
   type ReleaseNotice,
   releaseNotice,
-  STALE_LIST_NOTICE,
   staysUntilClosed,
 } from "../../lib/writeNotices.ts";
-
-function announce(notice: ReleaseNotice): void {
-  switch (notice.tone) {
-    case "success":
-      toast.success(notice.message);
-      return;
-    case "info":
-      toast.info(notice.message);
-      return;
-    case "warning":
-      toast.warning(notice.message);
-      return;
-    case "error":
-      toast.error(notice.message);
-      return;
-  }
-}
 
 /**
  * 閉じるまで残す知らせの置き場。設定のタブが1つだけ読む。
@@ -77,7 +59,7 @@ const CONFIG_UPDATE: WriteRunnerConfig<ConfigUpdateInput, ConfigUpdateResult> =
       });
     },
     onStale: () => {
-      announce(STALE_LIST_NOTICE);
+      announceStaleList();
     },
   };
 

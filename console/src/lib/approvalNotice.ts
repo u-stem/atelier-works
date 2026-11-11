@@ -4,12 +4,7 @@
 import type { WriteOutcome } from "../api/executeWrite.ts";
 import type { ApprovalDecideResult } from "../api/guards/writeResults.ts";
 import { classifyDecisionRefusal } from "./approvalRefusal.ts";
-import { describeApprovalResult } from "./writeNotices.ts";
-
-export type ToastNotice = {
-  readonly tone: "success" | "info" | "warning" | "error";
-  readonly message: string;
-};
+import { describeApprovalResult, type ReleaseNotice } from "./writeNotices.ts";
 
 /**
  * 承認・却下の結果の知らせ。`redo`は、承認済みの提案のIssue作成をやり直した結果である。
@@ -19,7 +14,7 @@ export function approvalOutcomeNotice(
   outcome: WriteOutcome<ApprovalDecideResult>,
   mode: "decide" | "redo" = "decide",
   kind?: string,
-): ToastNotice {
+): ReleaseNotice {
   if (outcome.kind === "done") {
     return mode === "redo"
       ? { tone: "success", message: "Issueの作成のやり直しを始めました。" }

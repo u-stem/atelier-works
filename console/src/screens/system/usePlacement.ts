@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { toast } from "sonner";
 import type {
   HoldPlaceResult,
   ScheduleStopResult,
@@ -14,6 +13,7 @@ import {
   placeHold,
   stopSchedule,
 } from "../../api/writes.ts";
+import { announce, announceStaleList } from "../../components/announce.ts";
 import {
   checkPlaceForm,
   type PlaceForm,
@@ -23,28 +23,9 @@ import {
 import {
   describeHoldPlaceResult,
   describeScheduleStopResult,
-  type ReleaseNotice,
   releaseNotice,
-  STALE_LIST_NOTICE,
 } from "../../lib/writeNotices.ts";
 import { useReleaseFreeze } from "./useRelease.ts";
-
-function announce(notice: ReleaseNotice): void {
-  switch (notice.tone) {
-    case "success":
-      toast.success(notice.message);
-      return;
-    case "info":
-      toast.info(notice.message);
-      return;
-    case "warning":
-      toast.warning(notice.message);
-      return;
-    case "error":
-      toast.error(notice.message);
-      return;
-  }
-}
 
 /**
  * 保留と凍結を置く操作を、共通の書き込みの流れに載せる設定。種類と対象ごとにロックし、置いた後は保留と状態の取得を読み直す。
@@ -58,7 +39,7 @@ export const PLACE_HOLD: WriteRunnerConfig<HoldPlaceInput, HoldPlaceResult> = {
     announce(releaseNotice(outcome, describeHoldPlaceResult));
   },
   onStale: () => {
-    announce(STALE_LIST_NOTICE);
+    announceStaleList();
   },
 };
 
@@ -71,7 +52,7 @@ export const STOP_SCHEDULE: WriteRunnerConfig<string, ScheduleStopResult> = {
     announce(releaseNotice(outcome, describeScheduleStopResult));
   },
   onStale: () => {
-    announce(STALE_LIST_NOTICE);
+    announceStaleList();
   },
 };
 
