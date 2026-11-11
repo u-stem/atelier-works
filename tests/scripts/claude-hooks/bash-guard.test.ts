@@ -6248,6 +6248,22 @@ describeForCallers("bash-guard allows daily brace ranges", (subagent) => {
   });
 });
 
+// Consoleの書き込みのscriptの名前も、範囲を展開される字の集合に置き換えた形は、括弧の外の英字の数を問わずに照合する。
+describe("bash-guard denies Console write scripts named only through brace ranges", () => {
+  test.each([
+    [
+      "a script run",
+      "wmill script run f/factory/{h..h}{o..o}{l..l}{d..d}_{r..r}{e..e}{l..l}{e..e}{a..a}{s..s}{e..e}",
+    ],
+    [
+      "a job URL",
+      "curl -X POST http://localhost:8000/api/w/factory/jobs/run_wait_result/p/f/factory/{f..f}{r..r}{e..e}{e..e}{z..z}{e..e}_{r..r}{e..e}{l..l}{e..e}{a..a}{s..s}{e..e} -d {}",
+    ],
+  ])("denies %s", async (_kind, command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+});
+
 // `mise tasks`の後ろの語は、miseのオプションとその値を読み飛ばした最初の語が、実行の語に当たりうるglobかブレースか、実行時に決まる語なら実行の語として扱う。
 describeForCallers(
   "bash-guard denies task runs whose run word after the tasks subcommand is not literal",
