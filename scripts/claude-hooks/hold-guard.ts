@@ -706,9 +706,12 @@ function codeTouchesFreezeRelease(text: string): boolean {
 const FREEZE_PATH_MENTION =
   /(?:scripts\/freeze(?:\.[cm]?[jt]sx?)?|(?:^|[/'"`\s(=,[{])freeze\.[cm]?[jt]sx?)(?![A-Za-z0-9_.-])/i;
 
-/** 凍結の書き込みのタスク名の字面。`freeze:place`は、`deploy`の語と並ぶときだけ書き込みに数える。 */
+/**
+ * 凍結の書き込みのタスク名の字面。削除を確定する押し出しのタスク名も数える。
+ * `freeze:place`は、書き込みの語(`deploy`など)と並ぶときだけ書き込みに数える。
+ */
 const FREEZE_TASK_MENTION =
-  /(?:^|[^\w:-])freeze:(?:place|release|reset)(?![\w-])/i;
+  /(?:^|[^\w:-])(?:freeze:(?:place|release|reset)|push:prune)(?![\w-])/i;
 
 /**
  * 語に分かれる語が、凍結のコードをパスの形で指す字面か凍結の書き込みのタスク名と、書き込みの語を持つなら真。
@@ -918,9 +921,11 @@ function chainInputs(
   };
 }
 
-/** 標準入力をコードとして読む形のオペランド。globとブレースの範囲が当たりうるかを見る対象である。 */
+/**
+ * 標準入力をコードとして読む形のパス。globとブレースの範囲が当たりうるかを見る対象である。
+ * `-`は入れない。`-`に当たるglobは、1字の名前のファイルに展開される引数と区別できないためである。
+ */
 const STDIN_OPERANDS: readonly string[] = [
-  "-",
   "/dev/stdin",
   "/dev/fd/0",
   "/proc/self/fd/0",
@@ -2894,13 +2899,19 @@ function textStopAllCall(
   return parsed.commands.some((command) => {
     const stripped = stripWrappers(command.words);
     const inner = stripped.words;
+    const values = stripped.assignments.map(assignmentValue);
+    // 語に分かれる値は、最上位と同じく字面で判定する。
+    const worded = values
+      .filter((value) => splitsIntoWords(value.text))
+      .some((value) => spellings(value).some(stopAllWordingUnquoted));
     // 起動語を値に持つ代入の形の語は、値と後ろの語の組がコマンドとして実行されうる。
-    const launched = stripped.assignments
-      .map(assignmentValue)
+    const launched = values
       .filter(launchesWithArguments)
       .some((value) => stopAllCallAt([value, ...inner], inputs, depth + 1));
     return (
-      launched || (inner.length > 0 && stopAllCallAt(inner, inputs, depth + 1))
+      worded ||
+      launched ||
+      (inner.length > 0 && stopAllCallAt(inner, inputs, depth + 1))
     );
   });
 }
