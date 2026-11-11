@@ -272,7 +272,7 @@ function restoreFromScreen(html: string): string {
 // 承認者が見る文字は、実装に渡る文字の全部でなければならない。一部しか描かない変更は、承認者を欺く。
 // この検査は、承認画面(DesignReview.tsx)自身が、固定した入力の全文を描き切ることを確かめる。
 // 印の要素は、見える文字ではなく元の文字列を持つ属性から戻す。
-// 保護しない祖先や共有のパネルが描画を差し替える手は、この検査では捕まえない(docs/securityの残るリスク)。
+// 保護しない祖先や共有のパネルが描画を差し替える手は、この検査では捕まえない(docs/internals/console/security.mdの「設計の承認画面の保護」の残るリスク)。
 describe("the whole text that the approval screen draws", () => {
   // 上限(8000コードポイント)ちょうどの1行と、数千行の本文。
   const LONG = `${"設".repeat(DESIGN_TEXT_MAX_CODE_POINTS - 1)}\n`;

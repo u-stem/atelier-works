@@ -3,7 +3,7 @@
 // 次の6つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
 // - このリポジトリの規則(`f/factory/lib/prose_check.ts`の`REPO_DOC_RULES`)
 // - 「1文は1行」(`scripts/lint-one-sentence-per-line.ts`)。
-//   保護パスの文書(`.claude/`)は、この検査の対象にしていない(`isOneSentencePerLineTarget`)。
+//   対象は他の検査と同じ文書(`isOneSentencePerLineTarget`)で、`.claude/`の自作のスキルの文書も入る。
 // - 文書の間のリンクとアンカー(`scripts/lint-doc-links.ts`)
 // - markdownlint(`.markdownlint-cli2.jsonc`)
 // - textlint(`.textlintrc.json`)
@@ -94,11 +94,10 @@ export function blankFrontmatter(markdown: string): string {
 
 /**
  * 「1文は1行」の検査をかける文書かを、パスだけで判定する。
- * 保護パスの文書(`.claude/`)は、この検査の対象にしていない。
+ * 検査の対象の文書(`isTargetDoc`)と同じで、`.claude/`では自作のスキルの文書が入る。
  */
 export function isOneSentencePerLineTarget(path: string): boolean {
-  const normalized = path.startsWith("./") ? path.slice(2) : path;
-  return isTargetDoc(normalized) && !normalized.startsWith(".claude/");
+  return isTargetDoc(path);
 }
 
 /**

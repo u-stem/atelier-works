@@ -16,7 +16,7 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 
 PRのマージの競合を直す回(競合回)の部品も、同じ考え方で作るので、この文書の「競合回のgit操作と検査」に書く。
 競合回が`pr_fix`の各ステップでどう動くかは[PRワークフローの仕様](pr-workflow.md#マージの競合を解く回)に書く。
-残る危険は[セキュリティ](../security.md)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
+安全策と残る危険は[PRワークフローの仕様](pr-workflow.md#pr修正の安全策)と[この文書の「CIのメタデータの再生成」](#ciのメタデータの再生成)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
 ## 方針
 
@@ -794,7 +794,7 @@ PRが基点の行を一部だけ変えていても、PRが足した行の修正�
 
 PRのブランチが既定のブランチ(base)と競合するときに、baseをmergeして、競合をClaudeに解かせる部品である。
 git操作は`lib/workspace.ts`に、判定と検査は`lib/conflict_fix_round.ts`にある。
-安全策の理由は[セキュリティ](../security.md#マージの競合を解く回)にある。
+安全策の理由は[PRワークフローの仕様](pr-workflow.md#マージの競合を解く回pr修正の安全策)にある。
 
 ### mergeして基準コミットを作る
 
@@ -848,7 +848,7 @@ gitの2.54では、`--`の有無で動作が変わらないことを確かめた
 
 親の照合を偽らせないため、すべてのgitで`core.commitGraph=false`と`GIT_GRAFT_FILE=/dev/null`を固定する。
 署名の検証でプログラムを動かさないよう、`gpg.program`も空に固定し、`merge`には`--no-verify-signatures`を付ける。
-理由は[セキュリティ](../security.md#マージの競合を解く回)にある。
+理由は[PRワークフローの仕様](pr-workflow.md#マージの競合を解く回pr修正の安全策)にある。
 
 必要なgitの版は、使うオプションで決まる。
 `check-attr --source`は2.40以降、`merge-file --object-id`は2.43以降、`merge-file --diff-algorithm`は2.44以降である。
@@ -1162,7 +1162,7 @@ workerが検査の前提を満たさないとき(イメージが古いなど)だ
 
 CIの`metadata`ジョブが出すパッチ(artifact)を、取得し、検査し、書き込む内容の一覧にする部品である。
 artifactはPRの作者が完全に決められるので、安全は内容の制限で成り立たせる。
-取り決めは[セキュリティ](../security.md#受け取る側が必ず確かめること)にある。
+取り決めは[この文書の「受け取る側が必ず確かめること」](#受け取る側が必ず確かめること)にある。
 
 | ファイル | 責務 |
 | --- | --- |
@@ -1196,7 +1196,7 @@ zipは`fetch`で取得する。
 `readMetadataPatchZip`は、中央ディレクトリを自前で読み、`inflateRawSync`で展開する。
 結果は`{ ok: true, files }`か`{ ok: false, reason }`で、`reason`は固定の種別である。
 zipの中の文字列は、`reason`に載せない。
-断る内容は、[セキュリティ](../security.md#zipの内容の制限)にある。
+断る内容は、[この文書の「zipの内容の制限」](#zipの内容の制限)にある。
 
 ### importの読み取り
 
@@ -1262,7 +1262,7 @@ PRの差分(`PrFacts.diff`)は、`base...head`の全件でなければならな�
 呼び出し側は、APIの件数の上限で切れたときに`diffTruncated`を真にする。
 真のときは、許可リストの外のパスを見落とすので、検査はパッチを断る。
 
-ファイルごとの検査の条件は、[セキュリティ](../security.md#lockの制限)にある。
+ファイルごとの検査の条件は、[この文書の「lockの制限」](#lockの制限)にある。
 
 成功の結果は、書き込む内容の一覧(`writes`)である。
 書き込む側は、headの木のsymlinkをたどって木の外へ書かないよう、書き込む前に確かめる。
@@ -1394,7 +1394,7 @@ wmill CLIとバックエンドを使わずに、Factory自身が`wmill-lock.yaml
 artifactを経由しないので、取得、zip、出どころ、manifestの検査は要らない。
 未信頼のPRのheadを読むだけで、scriptの実行も、wmill CLIの起動もしない。
 事前検査は、悪意のあるPRに対する境界ではなく、悪意のないPRで古い`schema`やlockが最新のように書き直されるのを防ぐ、正しさの検査である。
-取り決めは[セキュリティ](../security.md#hashの再計算)にある。
+取り決めは[この文書の「hashの再計算」](#hashの再計算)にある。
 
 ### 再計算の部品
 
@@ -1531,7 +1531,7 @@ Windmillのトリガーのファイル名は`*.http_trigger.yaml`などの形で
 ただし、実行時に残るimportだけを数える(`runtimeOnly`)。
 型だけのimport、型だけのexport、型の位置でしか使わないimport、使われないimportは、トランスパイラが省くので数えない。
 読み方は、`trimUnusedImports`を有効にした`Bun.Transpiler`の`scanImports`だけである。
-実行しない読み方だけを使う理由は、[セキュリティ](../security.md#hashの再計算)にある。
+実行しない読み方だけを使う理由は、[この文書の「hashの再計算」](#hashの再計算)にある。
 マクロの実測の根拠は、`tests/lib/metadata_patch_imports_runtime.test.ts`にある。
 閉包の実測の根拠は、リポジトリの全scriptで閉包のパッケージ名と`.script.lock`の`dependencies`のキーが一致するテストにある。
 値のimportに書き換えて本体で使い始める変更は、省かれていたimportが現れるので、依存の変化として人の手に回る。
@@ -1772,3 +1772,413 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
 - 競合回の差分の大きさの上限(`max_fix_changed_files`と`max_fix_diff_lines`)は、基準コミットから解消後の作業ツリーまでの編集にかかる。
   baseがPRに持ち込む差(PRのheadから基準コミットまで)には、かけない。
   baseの側の変更は、すでにレビューとマージを経ているためである。
+
+## CIのメタデータの再生成
+
+`metadata`ジョブは、検査が失敗したときに、使い捨てのWindmillでメタデータを作り直し、結果をartifact(`metadata-patch`)に出す。
+動かす条件、手順、artifactの形は[セットアップ](../setup.md#ciのメタデータの検査)にある。
+ここでは、権限と前提を書く。
+
+### 権限と条件
+
+ジョブの権限は`contents: read`のままで、書き込みの権限を足さない。
+artifactの書き込みは、ランナーの実行用の資格情報で行うため、`GITHUB_TOKEN`の権限は要らない。
+ジョブにsecretsを渡さず、作り直しの結果をPRやブランチに書き込まない。
+
+作り直しは、同じリポジトリのPRで、ブランチ名が`factory/`で始まるときだけ動かす。
+PRのコードが動く作り直しを、forkと人のブランチに広げないためである。
+条件の式は、ジョブの環境変数で1度だけ評価する。
+各ステップの`if`はその環境変数を読み、`run`のシェルには式を展開しない。
+ブランチ名がシェルに渡らないので、ブランチ名による注入は起こらない。
+
+`startsWith`は大文字小文字を区別しないので、`Factory/`で始まるブランチも対象になる。
+受け取る側は、PRの番号と`head_repository`で判定するので、この条件は境界ではない。
+
+### 使い捨ての環境
+
+Windmillのサーバーとworkerは、ジョブの中のコンテナだけで動く。
+サーバーは`127.0.0.1`にだけ公開し、workerはポートを公開しない。
+資格情報は、公開されている既定の管理者とダミーのデータベースのパスワードだけで、本番の秘密は届かない。
+そのため、PRの依存の解決が悪用されても、被害は使い捨ての環境と、読み取りだけのトークンに限られる。
+
+ネットワークは分離しない。
+作り直しで増えるのは、次の2点である。
+
+- レジストリからの依存の取得。
+  取得する依存は、PRのブランチのscriptが決める。
+- PRで書き換えた`mise.toml`の`metadata`タスクの実行。
+
+### install script
+
+bunは、依存のinstall scriptを、既定で信頼する一覧(trustedDependencies)にあるパッケージについて実行する。
+bunは`NPM_CONFIG_IGNORE_SCRIPTS`を読まない。
+そのため、`windmill_worker_ci`は次の2つで止める。
+
+- bunfigの`ignoreScripts = true`を、workerの`/root/.bunfig.toml`に読み取り専用でマウントする(`infra/ci-worker-bunfig.toml`)。
+- `NPM_CONFIG_IGNORE_SCRIPTS=true`を渡す。
+  npmを使う経路があっても、install scriptを動かさないための備えである。
+
+workerは、依存の解決のプロセスの環境を絞る。
+`NPM_CONFIG_IGNORE_SCRIPTS`を`WHITELIST_ENVS`にも挙げて、`bun install`まで届かせる。
+
+確かめた版はWindmill 1.817.0(`mise.toml`の`WM_VERSION`)で、ローカルのdocker composeで次を確かめた。
+
+| 確かめたこと | 結果 |
+| --- | --- |
+| `WHITELIST_ENVS`に挙げたとき、`bun install`の環境に変数があるか | ある |
+| `WHITELIST_ENVS`に挙げないとき | ない |
+| 環境変数だけで、ルートと信頼した依存のinstall scriptが止まるか(workerのbunとホストのbun) | 止まらない |
+| bunfigを置くと、同じ試験のscriptが止まるか(workerのコンテナ) | 止まる |
+| bunfigを置いたworkerで、`wmill generate-metadata --yes`が依存を解決できるか | できる |
+| 上流のworkerのイメージ(1.817.0)にHEALTHCHECKがあるか | ない(`docker image inspect`で空、コンテナの`State.Health`も無い) |
+| `docker compose up --wait`は、HEALTHCHECKの無いworkerを何で待つか | コンテナが動き始めるまで(登録は待たない) |
+| 認証したAPIの`/api/workers/list`に、workerが現れるか | 現れ、`custom_tags`に`dependency`を含む |
+
+bunfigの`ignoreScripts`が止めるのは、依存のinstall scriptである。
+Bunのmacroと、Pythonのsdistのビルドは、bunfigでは止まらない。
+再生成の中でこれらが動くかは、確かめていない。
+
+残るリスクとして、Bunのmacroとsdistのビルドが動いても、被害は次の理由で限られるので受け入れる。
+ランナーに本番の秘密は無く、ジョブの権限は`contents: read`だけである。
+さらに、受け取る側の内容の制限が、パッチの影響を絞る。
+
+次は確かめていない。
+
+- GitHub Actionsのランナーでの動作。
+- レジストリのパッケージでのinstall scriptの停止。
+  試験に使ったのは、ローカルの`file:`の依存である。
+- Windmillがnpmを呼ぶ経路が実在するか。
+- Windmillの版を上げたときの、環境の絞り方とbunfigの読み方の変化。
+  `mise.toml`の`WM_VERSION`を上げたときは、上の表を確かめ直す。
+
+### artifactの扱い
+
+artifactの内容は、PRのブランチにある`scripts/metadata-patch.ts`が書く。
+PRの作者が書き換えられるので、受け取る側は内容を信用しない。
+artifactに秘密は入らない。
+入るのは、リポジトリにあるファイルの再生成結果だけである。
+保持は7日に絞り、古いパッチが長く残らないようにする。
+
+manifestは、PRのheadのsha(`headSha`)、baseのsha(`baseSha`)、作り直したmerge木のcommit(`mergeSha`)を持つ。
+再生成はmerge木で行うので、パッチを適用してよいのは、`headSha`と`baseSha`が今も変わっていないときだけである。
+
+### 受け取る側が必ず確かめること
+
+artifactの中身は、攻撃者が完全に決められるものとして扱う。
+安全は、内容の制限だけで成り立たせる。
+出どころの確認は、無関係な第三者のartifactを避けるための補助にとどまる。
+同じ実行の別のジョブ(`check`、`check-docs`、`check-worker`など)で動くPRのコードは、ランナーのトークンを使って、同名のartifactを上げ直せる。
+ブランチやworkflowのパスの照合では、これを防げない。
+publicなリポジトリでは、forkのPRが`ci.yml`を書き換えて、同名のartifactを上げることもできる。
+そのため、受け取る側はartifactを信用しない前提で扱い、次のすべてを守る。
+確かめるコードは`f/factory/lib/`の`metadata_patch_*.ts`にまとめ、判定を1か所に置く。
+各部品の責務は[メタデータのパッチの受け取り](#メタデータのパッチの受け取り)にある。
+
+| 取り決め | 実装 |
+| --- | --- |
+| artifactの一覧 | `github.ts`の`listWorkflowRunArtifacts` |
+| artifactの取得 | `metadata_patch_download.ts`の`downloadArtifactZip` |
+| zipの内容の制限 | `metadata_patch_zip.ts`の`readMetadataPatchZip` |
+| 出どころ、再検証、適用先、新規script | `metadata_patch_verify.ts`の`verifyMetadataPatch` |
+| パスの許可リスト、manifest | `metadata_patch_manifest.ts`の`isAllowedMetadataPath`、`parseManifest` |
+| 依存の変化の検出 | `metadata_patch_imports.ts`の`traceBareImports` |
+| `.script.yaml`と`wmill-lock.yaml`の制限 | `metadata_patch_yaml.ts`の`checkScriptYaml`、`parseWmillLock` |
+
+#### 出どころ
+
+artifactを取る実行は、次をすべて満たすものに限る。
+
+- workflowのパスが`.github/workflows/ci.yml`である。
+- イベントが`pull_request`である。
+- `head_repository.full_name`が、このリポジトリである。
+- 実行の`pull_requests`に、対象のPRの番号がある。
+- 実行の`head_sha`が、PRの今のheadと一致する。
+- 実行の結論が`failure`で、原因が`metadata`ジョブの失敗である。
+- PRの差分(`base...head`)が、`f/**`、`migrations/**`、`docs/**`、`tests/**`のパスと、ルートの`wmill-lock.yaml`だけである。
+- PRの差分を、全件読めている。
+  APIの件数の上限で切れた差分は、許可リストの外を隠しうるので断る。
+
+差分の条件は、これら以外に触れていれば、パッチを適用しない。
+該当するのは、次のようなパスである。
+
+- 設定: `bunfig.toml`、`mise*.toml`、`.mise*`、`.config/mise*`、`.tool-versions`、`wmill.yaml`、`package.json`、`tsconfig.json`
+- CIと実行の定義: `.github/`、`infra/`、`scripts/`
+
+収集のステップが読む設定は多く、拒否リストでは漏れるため、許可リストにする。
+プロンプトを注入されたimplementフローは、これらを書き換えうる。
+書き換えられると、artifactの中身も実行の条件も、PRが決められる。
+
+`metadata`ジョブは、パッチを出した後も失敗で終わる。
+そのため、成功した実行だけを探すと、パッチが見つからない。
+同じPRに複数の実行があるときは、`metadata`ジョブが`failure`の実行のうち、最新のものを選ぶ。
+
+artifactは、その実行のIDに紐づくものだけを取る。
+ブランチ名やartifact名だけで実行を探さない。
+
+適用する側は、取ったartifactのIDとdigestを、`metadata`ジョブが出した値と照合する。
+照合できないときは、パッチを適用しない。
+別のジョブが上げ直したartifactは、IDとdigestが違うため、見分けられる。
+`ci.yml`がIDとdigestを出す処理は、まだ無い。
+追加は保護パスの変更として、別に行う。
+それまでは、パッチを適用しない。
+
+出どころの検査(`checkProvenance`)は、実行の事実とPRの差分だけを見る。
+適用する側は、artifactの一覧の取得とダウンロードの前に呼び、出どころで断れるものは、ダウンロードと展開をしない。
+
+#### 適用先と方式
+
+パッチは、merge木に対する再生成の結果である。
+適用してよいのは、PRのheadが、baseブランチの今の先端を祖先に含むとき(`git merge-base --is-ancestor`)だけである。
+含まないときは、パッチを捨てる。
+Factoryが`main`を取り込み、CIが再実行されるのを待つ。
+依存の比較の相手が先に進んでいるのに、人の手に回さないためである。
+
+含むときは、merge木とheadの`f/`と`wmill-lock.yaml`が一致する。
+そのため、パッチはファイル単位で置き換えてよい。
+
+`baseSha`は、merge commitの第1親、つまりbaseの先端である。
+イベントのペイロードの`pull_request.base.sha`ではなく、merge木を作った時点の値を、CIがmerge commitから読んで書く。
+`baseSha`は、merge-baseではない。
+
+#### 再検証
+
+PRの版の`scripts/metadata-patch.ts`が出した結果は、信用しない。
+
+- `main`の版の`isAllowedMetadataPath`と`parseManifest`で、manifestの全項目を再検査する。
+- `headSha`と`sha256`を照合する。
+- `baseSha`が、PRのbaseの今のshaの祖先であること(`--is-ancestor`)を確かめる。
+- PRのheadが、baseの今の先端を祖先に含むことを確かめる。
+  `baseSha`がheadの祖先であることは、この2つから従う。
+- `mergeSha`のcommitをAPIで取得し、第1親が`baseSha`、第2親が`headSha`に一致することを確かめる。
+  取得できないときは拒否する。
+
+`baseSha`の照合を、一致ではなく祖先にする。
+一致を求めると、`main`が進むたびに適用が先送りされるためである。
+headがbaseの今の先端を含めば、merge木とheadの木は同じで、パッチはheadに対して正しいままである。
+
+#### zipの内容の制限
+
+zipは、展開の前に宣言された大きさとパスを検査し、展開の間は宣言された大きさで打ち切る。
+次を拒否する。
+
+- 展開後の合計、1ファイル、エントリ数が上限を超えるもの(zip bomb)
+- 宣言された大きさと、展開した実際の長さが違うもの
+- symlinkと特殊ファイル
+- `..`、絶対パス、バックスラッシュ、制御文字を含むパス(zip slip)
+- 同じ名前と、大文字小文字だけが違う名前(区間は小文字にそろえて照合する)
+- stored、deflate以外の圧縮方式、暗号化、zip64
+- manifestの`size`と実際の長さが違うもの、`files/`にあってmanifestに無いファイル、削除の項目に対応する`files/`のファイル
+
+取得の制限(トークンの渡し先、取得先、受け取るバイト数の上限)は、[パッチの取得](#パッチの取得)にある。
+
+#### パスと削除の制限
+
+- 保護パス(`f/factory/lib/protected_paths.ts`の`matchesForbiddenPath`)に当たるパスを拒否する。
+- 削除を拒否する。
+- `*.script.yaml`は、`schema`以外のキー(`tag`、`timeout`、`lock`の参照先など)が、headの今の版と違えば拒否する。
+  summaryなどを正当に変えたPRを、拒否しないためである。
+- `schema`は、許可リストの範囲に収める。
+  `\`、`!`、`&`、`*`、`%`、タブ、`$`を含むものと、`x-windmill`を含むキーを拒否する。
+  `$`で始まる値(`$var:`、`$res:`)は実行者の権限で解決され、`x-windmill`のキーはフォームの挙動を変えるためである。
+  エスケープやタグで綴りを変えられると、復号しない検査では見分けられないので、それらの文字ごと拒む。
+  例外は、wmillが先頭に書く`$schema: https://json-schema.org/draft/2020-12/schema`の1行だけである。
+- `schema`のスキーマの語彙のキーは、許可リスト(`ALLOWED_SCHEMA_KEYWORDS`)に限る。
+  リストは、リポジトリのすべての`.script.yaml`の`schema`で使われているキーの和集合である。
+  `showExpr`や`customErrorMessage`のように、式の評価やUIの挙動に関わるキーは、使われていないので拒否する。
+  `properties`の直下のキー(引数の名前)と、`default`や`enum`などの中身は、語彙として読まない。
+  `properties`と`items`の中身が、同じ行の`{...}`で書かれているものは、キーを隠せるので拒否する。
+
+#### lockの制限
+
+自動で適用するのは、依存が変わらない再生成だけである。
+lockの意味(版の範囲、パッケージの入れ子、取得元、integrity、公開からの日数)を、受け取る側で解釈しない。
+解釈を再実装すると、見落としが残りやすいためである。
+依存が変わるPRは、受け取る側が断り、人が手元で`mise run metadata`を実行して直す。
+依存が変わる再生成は、自動化の対象外で、別の仕組みで扱う。
+
+- `*.script.lock`を変えてよいのは、PRの差分で`f/**/*.ts`が変わったscriptと、それをimportするscriptに限る。
+  importするscriptの範囲は、PRのheadの木のコードで、局所importの推移閉包を計算して決める。
+- 対応する`.ts`が保護パスに当たるscriptのlockは、lock自身が保護パスでなくても拒否する(例: `steps/dependabot_*.ts`)。
+- 閉包に入るすべてのscriptについて、局所importをたどって集めた裸のimport指定子(版つき)の集合を、baseの先端の木とheadの木で比べる。
+  1つでも違えば、manifestの内容と無関係に、パッチ全体を拒否する。
+  依存の変更は、パッチの`.script.lock`を見なくても、コードのimportに現れるためである。
+- 局所importは、Windmillの解決に合わせて読む。
+  追えないimportは拒否する。
+  import属性は、キーワードとの間にコメントを挟んだ形も含む。
+  一覧は[importの読み取り](#importの読み取り)にある。
+  閉包を求める解決と、依存の集合をたどる解決は、同じ関数を使う。
+  食い違うと、閉包の外のscriptに、依存を隠せるためである。
+- 既存のscript(headの木にlockがある)のlockは、headの木のlockとバイト列まで同一であること。
+  適用しても変わらない。
+  加えて、閉包の既存のscriptのlockは、baseの先端の木のlockとも同一であること。
+  PRの作者がlockを手で変えた形と、古いlockに新しいhashが残る形を、断るためである。
+  比べる相手はheadの木とbaseの先端の木で、manifestの`baseSha`は出どころの照合にだけ使い、内容の比較には使わない。
+  過去のcommitを選ばれて、比較の相手を変えられないためである。
+- 新しいscriptは、同じPRで`.ts`を追加したものに限る。
+  裸のimportの集合が空であること。
+  baseの先端が同じ内容を持つときも、空であることを求める。
+  lockは、baseの先端の木にある依存の無いlib(`f/factory/lib/metadata_patch_manifest.script.lock`)のlockと同一であること。
+  参照のlockは、前半の`dependencies`が空で、後半が`<empty>`であることを、検査の中で確かめる。
+  lockと`.script.yaml`の両方が、パッチが運ぶか、headの木にすでにあること。
+  lockの無い新しいscriptは拒否する。
+- `*.script.yaml`を変えてよいのは、`.ts`自身が変わったscriptに限る。
+  入力のスキーマは、そのscript自身の`main`の引数からしか決まらないためである。
+- 空のlockを固定の値として埋め込まない。
+  lockの書式がwmillの版で変わっても、リポジトリの実物と比べるためである。
+- headの木かbaseの木のファイルを読めないときは拒否する。
+- headの木の`f/`の下の`.ts`が5000件を超えるときは拒否する。
+  閉包の計算を有界にするためである。
+
+#### ロックのハッシュの制限
+
+`wmill-lock.yaml`は、完全なYAMLとして解析しない。
+wmillが書く決まった形に1行ずつ合わせて読み、外れるものは断る。
+
+- 変わったキーが、許可したscriptのものに限られることを確かめる。
+  許可するのは、閉包に入るscriptである。
+  hashはimportする先のコードにも依存するためである。
+  この範囲では、hashを任意の値にできる。
+  ただし、lockの内容は変えられないので、依存の解決には影響しない。
+- 値が64桁の小文字の16進数であることを確かめる。
+- キーの削除と、未知の`version`を拒否する。
+
+#### 新規scriptの制限
+
+- `.script.yaml`の追加を許すのは、同じPRで`.ts`を追加したscriptだけである。
+- キーは、許可リスト(`summary`、`description`、`lock`、`kind`、`schema`)に限る。
+- `lock`は、フルパスの`'!inline f/<dir>/<name>.script.lock'`に固定する。
+- `tag`、`timeout`、`concurrency`などのキーは拒否する。
+- 対応する`.ts`が無い`.script.lock`と`.script.yaml`の追加を拒否する。
+- lockの条件は、[lockの制限](#lockの制限)にある。
+
+#### 層の関係
+
+内容の制限と再検証は、攻撃者が決めたartifactでも被害を限るための層で、安全はこの層だけで成り立たせる。
+出どころの確認は、無関係な第三者のartifactを避けるための補助である。
+出どころが破られうる前提なので、出どころの確認を理由に、内容の制限を緩めない。
+
+#### 受け入れる残りのリスク
+
+`windmill_worker_ci`の上流イメージは、タグ(`WM_VERSION`)で固定していて、digestでは固定していない。
+既存のserverと同じ固定の仕方である。
+ランナーに秘密が無く、受け取る側が依存の変わるlockを断るため、このリスクは受け入れる。
+
+#### 受け取る側の実装で決めること
+
+artifactの適用で残る論点は、[この文書の「artifactの適用で残る論点」](#artifactの適用で残る論点)にまとめる。
+この節は、それらを前提にせず、内容の制限を定める。
+
+### hashの再計算
+
+artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し直す部品がある。
+構成は[メタデータのhashの再計算](#メタデータのhashの再計算)にある。
+ここでは、未信頼のPRのheadを扱う前提を書く。
+
+- PRのheadは、読むだけである。
+  scriptを実行せず、wmill CLIも動かさない。
+  PRの作者が決めるコードを、Factoryのworkerで動かさないためである。
+- importを読むときも、コードを実行しない。
+  Bunの`transformSync`は、マクロを指定したimport属性のimportを、読む側のプロセスで実行する。
+  空白、改行、コメントを挟んだ形でも実行されることを、Bun 1.4.0(worker)と1.4.3で確かめた。
+  挟んだ文字の一覧は、`tests/lib/metadata_patch_imports_runtime.test.ts`にある。
+  そのため、`transformSync`は使わず、実行しない`scanImports`だけで読む。
+  `scanImports`は、同じ入力でマクロを実行しないことを、両方の版で確かめた。
+  加えて、import属性の検出は、JavaScriptの空白と行区切りをすべて数える。
+- 読み取りのポートは、gitのオブジェクトから実装し、作業ツリーのファイルは開かない。
+  作業ツリーには、検査コマンドやClaudeが書いた、gitの管理外の内容が入りうるためである。
+  読んだ内容と木の`oid`を照合するので、別のrefや作業ツリーを読んだ実装は断られる。
+  ポートの値の検査は、[事前検査](#事前検査)にある。
+- `f/`、`wmill.yaml`、`wmill-lock.yaml`、`dependencies/`にsymlinkとsubmoduleがあれば、人の手に回す。
+  読むと、木の外のファイルを指しうるためである。
+- 計算するのはhashだけで、`.script.lock`と`schema`は書かない。
+  lockを書くには依存の解決が要り、解決はPRのコードが決めたimportに従って、外部のレジストリへ取りに行くためである。
+- 自動で直すのは、依存が変わらないPRに限る。
+  判定は[事前検査](#事前検査)にあり、判断できないときは通さずに人の手に回す。
+  依存の比較は、実行時に残るimportで行う。
+  Windmillのlockが、型だけのimportと使われないimportの先の依存を含めないためである。
+- baseの先端のメタデータが最新でないときは、人の手に回す。
+  メタデータの生成を飛ばしたcommitが`main`に入りうるので、PRと関係の無い古い`schema`やlockを、最新のように書き直さないためである。
+  また、hashが変わるのは、PRが`.ts`を変えたscriptと、baseの先端の値に戻すキーだけに限る。
+- 置き換えるのは、既存のキーのhashだけである。
+  キーの追加と削除を許さないので、lockの対象を増やせない。
+- 1ファイルの大きさ、`f/`のファイル数、1scriptがたどるファイル数、訪問と解決の合計、読むバイト数の合計、型宣言の字句の数に上限を置く。
+  PRの作者が大きな入力を作って、workerの時間とメモリを使わせるのを防ぐためである。
+  定数は[事前検査](#事前検査)にあり、上限が覆わない範囲は[既知の限界](#既知の限界)にある。
+  閉包をたどる間は、読んだ内容を保持せず、必要なら読み直す。
+  型宣言の仕事量は、範囲を探すために進めた字句と、宣言のダイジェストのために読んだ字句を、あわせて数える。
+  宣言は文字列として持たず、固定の長さのダイジェストだけを持つ。
+  範囲が重なる宣言で、同じ大きな本体を何度も保持しないためである。
+- Windmillの注釈、`preprocessor`、flowの定義、インラインscriptを持つflowは、人の手に回す。
+  これらは、依存の解決、workerの種類、`.script.yaml`の項目を変えうるのに、hashだけを直しても追いつけないためである。
+- ポートが返す値と上限の値は、入口で検査し、正しくないときは断る。
+  上限の値は正の整数だけを通す。
+  NaNで上限が外れるのを防ぐためである。
+
+`metadata`ジョブだけが落ちたCI回の再計算の経路は、次で守る。
+流れは[metadataジョブの失敗を直す経路](#metadataジョブの失敗を直す経路)にある。
+
+- Claudeを起動しない。
+  失敗のログは、通知にも載せない。
+  外部入力で動くのは、事前検査の字句の読み取りと、整合のテストだけの失敗かを決めるためのログの読み取りである。
+  ログは、成否の判断にだけ使い、どこにも残さない。
+  判断は、形を照合する純関数(`isLockIntegrityOnlyLog`)で行う。
+  ログの内容を実行や解釈に使わない。
+- 書き込む先は、worktreeの根の`wmill-lock.yaml`だけで、パスはコードが決める。
+  `O_NOFOLLOW`と`O_NONBLOCK`で開き、FIFOで止まらない。
+  通常のファイルでないとき、ほかにhard linkがあるときは書かない。
+  無いファイルは作らない。
+- 検証と完了のステップは、修正のステップの出力を信用しない。
+  worktreeの変更が、根の`wmill-lock.yaml`1件の`modified`(モード`100644`)で、本文がPRのheadの木からの再計算とバイト列まで同じときに限り、許す。
+  許可リスト方式の検査(`checkCiFixChanges`)は変えず、例外は呼び出し側の`inspectCiFixChanges`だけに置く。
+  次のものは、保護パスの一覧に入れない。
+  日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
+  - 例外を開くコールバックの本体(`pr_fix_verify.ts`、`pr_fix_finish.ts`)。
+  - `ci_fix_round.ts`の`isLockOnlyChange`、`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、`readCiFailure`。
+  - `ci_fix_round.ts`の`isLockIntegrityOnlyFailure`。
+  - `pr_ci_fix_claim.ts`の`decideFixClaim`で、整合のテストだけの失敗を切り替える分岐(`upgradeToRehash`)。
+  - `ci_fix_classify.ts`の`classifyCiFailure`と`isLockIntegrityOnlyLog`。
+    判定に使う`LOCK_INTEGRITY_TESTS`と`LOCK_INTEGRITY_ANCHOR`も同じである。
+    この結果が、再計算で直す回(`metadata_only`)を決め、起動の判断で予算とマーカーの確認を免除する。
+    `isLockIntegrityOnlyLog`は、外部由来のCIのログで免除を決めるので、判定の誤りは、予算を使わない再計算の回に入る誤りになる。
+  - `workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)。
+    再計算が読むgitの動き方を決める。
+
+  これらを書き換えて条件を緩める変更は、マージ前の人のレビューで止める。
+  CI回のClaudeには、CI回の拒否が別に止める。
+  本文が再計算と違うときと、確認できないときは、保護パスの違反として拒否する。
+  再試行しても直らない理由で再計算できないときは、再計算の回に限り、固定の理由を返し、保護パスの違反にはしない。
+  回の種類は、CIの実行から読み直して決める。
+  Claudeの回では、保護パスの違反として拒否する。
+  一時的な失敗は、拒否せず、例外にして再試行する。
+- 比べるのは、文字列ではなくバイト列である。
+  文字列に復号すると、先頭のBOMが落ち、不正なUTF-8が置き換わって、違う内容が同じに見えるためである。
+- baseの先端のcommitは、shaを指定して取り込み、追跡refを動かさない。
+  リポジトリのロックの外から追跡refを更新して、`commitAndPush`と衝突することを避けるためである。
+- 完了のステップの既存の関門は、すべて通る。
+  秘密値の検査、検査したツリーとの照合、保護パスの検査、PRの状態とheadの確認、オーナーの数値IDの照合である。
+- commitの親は、`head_sha`に固定する。
+  pushは強制しない。
+  ブランチの先端が動いていればpushは拒否され、動いた回は、新しい失敗として判定し直される。
+- baseの先端は、PRのAPIの`base.sha`ではなく、baseブランチの今の先端をAPIで読んで使う。
+  照合の中と、pushの直前に読み直し、動いていれば新しい先端で確かめ直す。
+- 人の手に回す理由は、次の固定の語彙だけである。
+  事前検査の種別、`lock_up_to_date`、`lock_not_writable`である。
+  pushの直前に、baseの先端が動いて本文が合わなくなった場合(`CI_ROUND_REHASH_STALE_REASON`)も含む。
+  一時的な失敗(`port_error`、`ancestry_unknown`)は、人の手に回さず、例外にして再試行する。
+  再試行で直らない失敗(想定外の例外の`internal_error`、自己検査の`scan_unavailable`、木の一覧が読めない`tree_unreadable`)は、人の手に回す。
+  PRの作者が決めるパスは、通知にも作業項目の理由にも載せない。
+  補足は、`scan_unavailable`のworkerのBunの版(`bun <版>`)と、`internal_error`の例外の種類(標準のエラーの名前だけ)に限る。
+- 検査コマンドは、この形のとき実行しない。
+  hashだけを書き換えた変更に、対象リポジトリのコードを実行する意味が無いためである。
+
+事前検査は、悪意のあるPRに対する境界ではない。
+hashは`.script.lock`の中身を含まない。
+`wmill-lock.yaml`は、implementフローの保護パスではない。
+そのため、悪意のあるPRは、Factoryを通さなくても、古いメタデータと合うhashを自分で書ける。
+事前検査が防ぐのは、悪意のないPRで、古い`schema`やlockが最新のように書き直されることである。
+字句の近似の読み違いで、検査を敵対的に避けられる余地は、この前提で受け入れる。
+悪意のあるPRは、人のレビューで止める。
+
+算法は、`mise.toml`で固定したwmill CLIの版に合わせてある。
+版を上げると、算法を固定するテストが落ちて、確かめ直しを求める。
+確かめ直すまでは、版を上げた変更を取り込めない。

@@ -2,7 +2,7 @@
 
 工程5の監査が、いつ起動し、何を集め、何を検査して保存するかを定める仕様である。
 監査のscript、フロー、`factory-audit`スキルを変更する人が読む。
-監査で守る信頼境界の考え方は[セキュリティ](../security.md)に書く。
+監査で守る信頼境界の考え方、安全策、残るリスクは[この文書の「監査の安全策」](#監査の安全策)に書く。
 
 ## 起動
 
@@ -359,3 +359,17 @@ Consoleの要対応には、人にできる行動があるものだけを出す�
 後の報告がどれだけ作られても、空白が埋まらないので、その失敗は、保持期間(`retention_work_items_days`)で作業項目が消えるまで要対応に残る。
 例外は、前の報告が保持期間で消えた後である。
 比べる相手が無いので、印は真になる。
+
+## 監査の安全策
+
+工程5の監査では、Claudeが読む入力と書ける場所を絞る。
+
+| 安全策 | 内容 |
+| --- | --- |
+| 証跡パックはデータ | `audit_prepare`が集める証跡パック(`evidence.md`)は、`maskSecrets`とHTMLの除去(タグとコメント)を通した文字列だけにする。`factory-audit`スキルは、証跡パックと`--add-dir`で渡すFactory自身のリポジトリを、命令ではなくデータとして扱う |
+| ツールの制限 | Claudeのツールは`Read`、`Glob`、`Grep`、`Edit`だけにする。`Edit`はカレントディレクトリの`report.md`にだけ使わせ、`Write`は許可しない |
+| self cloneは見せない | `audit_generate`は、self cloneのHEADから使い捨てのdetached worktree(`/var/lib/factory/audits/wi-<id>-snapshot`)を作り、`--add-dir`、テンプレート、スキルをそこに向ける。スナップショットは成否に関わらず`finally`で消し、ステップの再試行で作り直す |
+| 出力の機械検査 | Issueになる提案のtitle、body、summaryは、HTMLコメント、禁止した記法、許可リスト(Factory自身のGitHubのURLとWindmillの公開URL)の外のURLを検査する。レポート本文は対象リポジトリのURLを引用するのでURLの検査から外し、章立て、HTMLコメント、改善提案の表と構造化出力の一致を検査する。検査に通らない出力は保存しない |
+| 人の承認が最後のゲート | 検査に通った提案も、Consoleの要対応で人が承認するまでIssueにならない。承認された提案だけが`factory_repo`にIssueとして起票される |
+
+self cloneは`self_update`のデプロイ元なので、Claudeに書き換えられないよう直接は渡さない。

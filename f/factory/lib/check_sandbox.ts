@@ -112,7 +112,7 @@ export const REQUIRED_TOOL_PATHS = [
  * カーネルは実uidごとに数えるので、枠ごとの上限になる。
  * nativeでないworkerは検査を1つずつ動かすので、検査1つが上限まで使っても、検査の外に768が残る。
  * 残りは、片付けられず飛ばした枠のプロセスの分に回る。
- * 冷えたキャッシュの`go build`は12コアで約110まで増え、コア数とともに増えるので、それが収まる値にする。根拠は`docs/security.md`にある。
+ * 冷えたキャッシュの`go build`は12コアで約110まで増え、コア数とともに増えるので、それが収まる値にする。根拠は`docs/internals/check-sandbox.md`の「プロセス数の上限の決め方」にある。
  */
 export const CHECK_NPROC_LIMIT = 256;
 /**
