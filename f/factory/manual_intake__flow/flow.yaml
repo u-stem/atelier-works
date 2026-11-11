@@ -76,7 +76,7 @@ value:
       input_transforms:
         error:
           type: javascript
-          expr: error.message
+          expr: JSON.stringify(error ?? null).replace(/\$/g, "\\u0024")
         path:
           type: static
           value: f/factory/manual_intake

@@ -26,10 +26,50 @@ import {
   failureNextAction,
   failureWorkItemRef,
   handleFlowFailure,
+  readFailureError,
   shouldMarkFailed,
   UNKNOWN_INSTANCE_NAME,
 } from "../../f/factory/on_error_flow.ts";
 import { nextActionFor } from "../../f/factory/steps/pr_workflow_support.ts";
+import { sealUntrustedArg } from "../lib/untrustedArgSupport.ts";
+
+describe("readFailureError", () => {
+  const ERROR = { message: "step failed", step_id: "a", name: "Error" };
+
+  test("restores the error that the flow sealed", () => {
+    expect(readFailureError(sealUntrustedArg(ERROR))).toEqual(ERROR);
+  });
+
+  test("restores a message that starts with a reference", () => {
+    const sealed = sealUntrustedArg({ message: "$var:f/factory/x" });
+
+    expect(readFailureError(sealed)).toEqual({ message: "$var:f/factory/x" });
+  });
+
+  test("restores the text when the flow sealed an error that is a string", () => {
+    expect(readFailureError(sealUntrustedArg("step failed"))).toBe(
+      "step failed",
+    );
+  });
+
+  test("restores a sealed text that starts with a reference", () => {
+    expect(readFailureError(sealUntrustedArg("$var:f/factory/x"))).toBe(
+      "$var:f/factory/x",
+    );
+  });
+
+  test("passes an error object through", () => {
+    expect(readFailureError(ERROR)).toEqual(ERROR);
+  });
+
+  test("keeps a plain message that is not JSON", () => {
+    expect(readFailureError("step failed")).toBe("step failed");
+  });
+
+  test("keeps the text when it cannot be read as an error", () => {
+    expect(readFailureError("{broken")).toBe("{broken");
+  });
+});
 
 const IMPLEMENT = "f/factory/implement";
 const PR_FIX_FLOW = "f/factory/pr_fix";
@@ -213,6 +253,47 @@ function jobFailed(
   }
   return undefined;
 }
+
+describe("handleFlowFailure with every form of the error that the flow can pass", () => {
+  const FORMS: ReadonlyArray<readonly [string, unknown]> = [
+    ["a sealed object", sealUntrustedArg({ message: "[no-flow-retry] a: b" })],
+    ["a sealed string", sealUntrustedArg("[no-flow-retry] a: b")],
+    ["a plain object of an old flow", { message: "[no-flow-retry] a: b" }],
+    ["a plain string of an old flow", "[no-flow-retry] a: b"],
+  ];
+
+  test.each(FORMS)("records the message from %s", async (_name, error) => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(
+      fake.deps,
+      failureInput({ error: readFailureError(error) }),
+    );
+    expect(fake.failures[0]?.error).toBe("a: b");
+  });
+
+  test.each(FORMS)("moves the work item from %s", async (_name, error) => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(
+      fake.deps,
+      failureInput({ error: readFailureError(error) }),
+    );
+    expect(fake.statusCalls[0]?.note).toBe("a: b");
+  });
+});
+
+describe("handleFlowFailure without an error", () => {
+  test("records the failure", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput({ error: undefined }));
+    expect(fake.failures).toHaveLength(1);
+  });
+
+  test("moves the work item", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput({ error: undefined }));
+    expect(fake.statusCalls).toHaveLength(1);
+  });
+});
 
 describe("handleFlowFailure with the marker that stops the flow retry", () => {
   const MARKED = {

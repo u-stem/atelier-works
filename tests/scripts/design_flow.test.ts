@@ -164,9 +164,13 @@ describe("the design flow", () => {
     expect(inputs(failure).work_item_id).toBe("flow_input.work_item_id");
   });
 
-  test("passes the error to the failure handler", () => {
+  test("passes the sealed error to the failure handler", () => {
     const failure = field(field(FLOW, "value"), "failure_module");
-    expect(inputs(failure).error).toBe("error");
+    const expr = inputs(failure).error;
+    const error = { message: "step failed" };
+    const run = new Function("error", `return (${String(expr)});`);
+
+    expect(JSON.parse(run(error))).toEqual(error);
   });
 
   test("takes exactly the inputs that the launcher sends", () => {

@@ -56,7 +56,8 @@ import {
   repoOwnerGateDeps,
   repoOwnerStopReason,
 } from "../lib/repo_owner_gate.ts";
-import type { WorkItem } from "../lib/types.ts";
+import { isRecord, type WorkItem } from "../lib/types.ts";
+import { isShape, parseUntrustedArg } from "../lib/untrusted_arg.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import {
   coverageEscalationsOf,
@@ -853,17 +854,28 @@ export async function runDependabotFinish(
 
 // ---- 結線 ----
 
+/** 包んだ引数(`untrusted`)の形。flow.yamlの式のキーと一致する。 */
+export const DEPENDABOT_FINISH_UNTRUSTED = isShape({
+  prepare: isRecord,
+  assess: isRecord,
+});
+
 /**
  * dependabotの作業項目を終える(`runDependabotFinish`)。
- * `prepare`と`assess`は、準備ステップと影響調査ステップの戻り値をそのまま受け取る。
+ * `untrusted`は、準備ステップと影響調査ステップの戻り値をJSONの文字列に包んだもの。
+ * 影響調査の結果は、Claudeの出力を含む。中身の形は`readFinishInput`が確かめる。
  * 入力の形は、設定と秘密値を読む前に確かめる。設定を読めないときは、どの外部の操作もせずに例外で終わる
  * (作業ツリーは片付けが消し、作業項目はフローの失敗の扱いで終端になる)。
  */
 export async function main(
   work_item_id: number,
-  prepare: object,
-  assess: object,
+  untrusted: string,
 ): Promise<DependabotFinishResult> {
+  const { prepare, assess } = parseUntrustedArg(
+    untrusted,
+    "dependabot_finish",
+    DEPENDABOT_FINISH_UNTRUSTED,
+  );
   const input = readFinishInput(prepare, assess, work_item_id);
   const log = logger("dependabot_finish");
   const config = await loadConfig(() =>

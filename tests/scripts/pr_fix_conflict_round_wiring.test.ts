@@ -17,6 +17,7 @@ import { MERGE_COMMIT_MESSAGE } from "../../f/factory/lib/workspace.ts";
 import { conflictApplyResult } from "../../f/factory/steps/pr_fix_apply.ts";
 import { fixedFeedbackCollectResult } from "../../f/factory/steps/pr_fix_collect.ts";
 import { stopBeforeCommitTerminal } from "../../f/factory/steps/pr_workflow_support.ts";
+import { evaluateSealed } from "../lib/flowExpressions.ts";
 
 const STEPS_DIR = new URL("../../f/factory/steps/", import.meta.url);
 const LIB_DIR = new URL("../../f/factory/lib/", import.meta.url);
@@ -682,22 +683,18 @@ describe("the flow of a conflict round", () => {
   );
 
   const CONFLICT_VALUES: Record<string, readonly string[]> = {
-    pr_fix_apply: ["conflict_check_id", "base_sha", "conflicted_paths"],
+    pr_fix_apply: ["conflict_check_id", "base_sha"],
     pr_fix_verify: [
       "conflict_check_id",
       "baseline_sha",
       "base_sha",
       "auto_tree_sha",
-      "conflicted_paths",
-      "conflict_blobs",
     ],
     pr_fix_finish: [
       "conflict_check_id",
       "baseline_sha",
       "base_sha",
       "auto_tree_sha",
-      "conflicted_paths",
-      "conflict_blobs",
     ],
   };
 
@@ -707,6 +704,33 @@ describe("the flow of a conflict round", () => {
         expect(moduleBlock(step)).toContain(
           `          ${key}:\n            type: javascript\n            expr: results.pr_fix_prepare.${key} ?? null\n`,
         );
+      });
+    }
+  }
+
+  // 競合したファイルのパスと中身は外から来るので、包んだ引数(`untrusted`)の中で渡す。
+  const SEALED_CONFLICT_VALUES: Record<string, readonly string[]> = {
+    pr_fix_apply: ["conflicted_paths"],
+    pr_fix_verify: ["conflicted_paths", "conflict_blobs"],
+    pr_fix_finish: ["conflicted_paths", "conflict_blobs"],
+  };
+
+  for (const [step, keys] of Object.entries(SEALED_CONFLICT_VALUES)) {
+    for (const key of keys) {
+      test(`passes ${key} of the prepare step to ${step} inside the sealed argument`, () => {
+        const sealed = evaluateSealed("pr_fix", step, {
+          results: { pr_fix_apply: {}, pr_fix_prepare: { [key]: ["x"] } },
+        });
+
+        expect(Reflect.get(Object(sealed), key)).toEqual(["x"]);
+      });
+
+      test(`passes null for ${key} to ${step} inside the sealed argument when the prepare step has none`, () => {
+        const sealed = evaluateSealed("pr_fix", step, {
+          results: { pr_fix_apply: {}, pr_fix_prepare: {} },
+        });
+
+        expect(Reflect.get(Object(sealed), key)).toBeNull();
       });
     }
   }

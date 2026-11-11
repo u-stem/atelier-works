@@ -22,7 +22,7 @@ export type AuditPrepareResult = {
   readonly skip: boolean;
   readonly reason: string | null;
   readonly evidence_markdown: string;
-  readonly metrics: Record<string, unknown>;
+  readonly metrics: Record<string, number>;
   readonly factory_clone_dir: string;
 };
 

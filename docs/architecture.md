@@ -605,6 +605,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/schedule_detector_heartbeat` | script | [LIB] scheduleの失敗の検出器の心拍 |
 | `f/factory/lib/schedule_failure_report` | script | [LIB] scheduleの失敗の記録 |
 | `f/factory/lib/schedule_failure_scan` | script | [LIB] scheduleの失敗の走査 |
+| `f/factory/lib/untrusted_arg` | script | [LIB] stepの間で包んで渡す値の型ガード |
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
 | `f/factory/lib/job_state` | script | [LIB] Windmillのジョブの状態の読み替え |
 | `f/factory/lib/worker_load_support` | script | [LIB] workerの負荷の記録の部品 |

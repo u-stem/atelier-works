@@ -31,6 +31,19 @@ const CONSOLE_SCRIPTS: Readonly<Record<string, number>> = {
   "f/factory/console_stop_all_release": 60,
 };
 
+/**
+ * 定義(YAMLを読んだ値)の中の、名前が`on_behalf_of`で始まるキーを、入れ子も含めてすべて返す。
+ * 引用符つきのキーや、flow styleのキーも、読んだ後の名前で見つける。
+ */
+function delegatingKeys(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(delegatingKeys);
+  if (typeof value !== "object" || value === null) return [];
+  return Object.entries(value).flatMap(([key, child]) => [
+    ...(key.startsWith("on_behalf_of") ? [key] : []),
+    ...delegatingKeys(child),
+  ]);
+}
+
 async function scriptYaml(path: string): Promise<string> {
   return Bun.file(`${path}.script.yaml`).text();
 }
@@ -86,7 +99,9 @@ describe("console scripts", () => {
   test("no console script runs on behalf of another user", async () => {
     const delegating: string[] = [];
     for (const path of Object.keys(CONSOLE_SCRIPTS)) {
-      if (/on_behalf_of/.test(await scriptYaml(path))) delegating.push(path);
+      if (delegatingKeys(Bun.YAML.parse(await scriptYaml(path))).length > 0) {
+        delegating.push(path);
+      }
     }
     expect(delegating).toEqual([]);
   });
@@ -95,6 +110,83 @@ describe("console scripts", () => {
     const paths = await allScriptYamlPaths();
     expect(
       Object.keys(CONSOLE_SCRIPTS).filter((path) => !paths.includes(path)),
+    ).toEqual([]);
+  });
+});
+
+// `on_behalf_of_email`は、flowとscriptの定義に置く値で、実行する主体を別の主体にする。
+// 運用者が入力した文を包まずに受け入れる根拠(`flow_untrusted_args.test.ts`)は、
+// どの定義も呼び出した主体の権限で動くことに頼る。
+describe("the definitions under f/factory", () => {
+  const DEFINITION_GLOB = "f/factory/**/{flow,*.script,*.schedule}.yaml";
+
+  async function definitionsThatDelegate(): Promise<string[]> {
+    const delegating: string[] = [];
+    for await (const file of new Glob(DEFINITION_GLOB).scan(".")) {
+      if (delegatingKeys(Bun.YAML.parse(await Bun.file(file).text())).length) {
+        delegating.push(file);
+      }
+    }
+    return delegating.sort();
+  }
+
+  test("none runs on behalf of another user", async () => {
+    expect(await definitionsThatDelegate()).toEqual([]);
+  });
+
+  test.each([
+    "f/factory/steps/requirements_apply.script.yaml",
+    "f/factory/steps/design_apply.script.yaml",
+    "f/factory/approval_decide.script.yaml",
+    "f/factory/manual_intake_submit.script.yaml",
+    "f/factory/pr_review_submit.script.yaml",
+    "f/factory/pipeline__flow/flow.yaml",
+    "f/factory/design__flow/flow.yaml",
+  ])("%s is among the definitions that are checked", async (file) => {
+    const checked: string[] = [];
+    for await (const found of new Glob(DEFINITION_GLOB).scan(".")) {
+      checked.push(found);
+    }
+    expect(checked).toContain(file);
+  });
+
+  test("the check finds a plain key", () => {
+    expect(delegatingKeys(Bun.YAML.parse("on_behalf_of_email: a@b\n"))).toEqual(
+      ["on_behalf_of_email"],
+    );
+  });
+
+  test("the check finds a key in double quotes", () => {
+    expect(
+      delegatingKeys(Bun.YAML.parse('"on_behalf_of_email": a@b\n')),
+    ).toEqual(["on_behalf_of_email"]);
+  });
+
+  test("the check finds a key in single quotes", () => {
+    expect(delegatingKeys(Bun.YAML.parse("'on_behalf_of': a@b\n"))).toEqual([
+      "on_behalf_of",
+    ]);
+  });
+
+  test("the check finds a key in a flow style mapping", () => {
+    expect(
+      delegatingKeys(Bun.YAML.parse("{ on_behalf_of_email: a }\n")),
+    ).toEqual(["on_behalf_of_email"]);
+  });
+
+  test("the check finds a key nested in a list of modules", () => {
+    const yaml =
+      "value:\n  modules:\n    - id: a\n      on_behalf_of_email: b\n";
+    expect(delegatingKeys(Bun.YAML.parse(yaml))).toEqual([
+      "on_behalf_of_email",
+    ]);
+  });
+
+  test("the check ignores a value that only mentions the key", () => {
+    expect(
+      delegatingKeys(
+        Bun.YAML.parse("description: on_behalf_of_email is off\n"),
+      ),
     ).toEqual([]);
   });
 });

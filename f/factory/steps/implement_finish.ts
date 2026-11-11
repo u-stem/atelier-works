@@ -89,11 +89,11 @@ import {
 import {
   GITLEAKS_TIMEOUT_MS,
   gitPointerStopReason,
-  IMPLEMENT_LOOP_EXITS,
   IMPLEMENT_PREPARE_OUTCOMES,
   type ImplementContext,
   type ImplementLoopResult,
-  implementContextSpecKind,
+  isImplementContextShape,
+  isImplementLoopResultShape,
 } from "../lib/implement_loop.ts";
 import {
   buildImplementCommitMessage,
@@ -117,6 +117,12 @@ import {
   repoOwnerStopReason,
 } from "../lib/repo_owner_gate.ts";
 import { isOneOf, type WorkItemStatus } from "../lib/types.ts";
+import {
+  isNullOr,
+  isShape,
+  isStringOrNull,
+  parseUntrustedArg,
+} from "../lib/untrusted_arg.ts";
 import {
   assertWorktreeGitPointer,
   type CommitAndPushOptions,
@@ -215,6 +221,13 @@ type PrAttempt =
     }
   | { readonly ok: false; readonly reason: string };
 
+/** 包んだ引数(`untrusted`)の形。flow.yamlの式のキーと一致する。 */
+export const IMPLEMENT_FINISH_UNTRUSTED = isShape({
+  prepare_reason: isStringOrNull,
+  context: isNullOr(isImplementContextShape),
+  loop_result: isNullOr(isImplementLoopResultShape),
+});
+
 /**
  * 準備ステップの結果と検証ループの結果から行き先を決め、
  * 作業項目を遷移させて、その状態と通知文を返す。
@@ -272,14 +285,20 @@ type PrAttempt =
  * PRの作成と更新、`pr_url`の記録、ラベル)の直前には、作業項目を読み直してリースを確かめる
  * (`assertImplementLease`)。失っていれば、最初の確認と同じく何もせずに終える。
  * 取り消しや差し戻しでリースが移った後に、古い実行がpushやPRの操作を続けないため。
+ *
+ * 文脈(Issueの題名と本文を含む)、ループの結果(Claudeの出力を含む)、準備の理由は、
+ * flowがJSONの文字列に包んで渡す(`IMPLEMENT_FINISH_UNTRUSTED`)。
  */
 export async function main(
   work_item_id: number,
   prepare_outcome: string,
-  prepare_reason: string | null,
-  context: ImplementContext | null,
-  loop_result: ImplementLoopResult | null,
+  untrusted: string,
 ): Promise<ImplementFinishResult> {
+  const { prepare_reason, context, loop_result } = parseUntrustedArg(
+    untrusted,
+    "implement_finish",
+    IMPLEMENT_FINISH_UNTRUSTED,
+  );
   try {
     return await finishImplement(
       work_item_id,
@@ -315,14 +334,6 @@ async function finishImplement(
   if (!isOneOf(prepare_outcome, IMPLEMENT_PREPARE_OUTCOMES)) {
     throw new Error(
       `implement_finish: unexpected prepare outcome "${prepare_outcome}"`,
-    );
-  }
-  if (
-    loop_result !== null &&
-    !isOneOf(loop_result.exit, IMPLEMENT_LOOP_EXITS)
-  ) {
-    throw new Error(
-      `implement_finish: unexpected loop exit "${String(loop_result.exit)}"`,
     );
   }
   const outcome = mergeImplementOutcome(
@@ -509,7 +520,7 @@ async function finishImplement(
           });
           if (changed.length > 0) return changed;
           return protectedPartialPushStopReasons({
-            specKind: implementContextSpecKind(ctx),
+            specKind: ctx.spec_kind,
             listStagedChanges: () =>
               listChangedPaths(runCommand, ctx.worktree_dir, ctx.base_sha),
           });
@@ -524,7 +535,7 @@ async function finishImplement(
     ctx: ImplementContext,
   ): Promise<string[]> =>
     shouldWithholdPartialPush({
-      specKind: implementContextSpecKind(ctx),
+      specKind: ctx.spec_kind,
       protectedChanges: loop_result?.protected_changes ?? [],
     })
       ? [PROTECTED_WORK_NOT_PUSHED_REASON]
@@ -694,7 +705,7 @@ async function finishImplement(
   const protectedReroute =
     action.kind === "open_pr"
       ? decideProtectedPathReroute({
-          specKind: implementContextSpecKind(context),
+          specKind: context.spec_kind,
           protectedChanges: loop_result.protected_changes,
         })
       : null;
@@ -920,7 +931,7 @@ async function finishImplement(
         summary: claudeText(output.summary),
         spec: prBodySpecFor(ctx),
         profileWarnings:
-          implementContextSpecKind(ctx) === "issue"
+          ctx.spec_kind === "issue"
             ? profileDiffWarnings(ctx.profile, loop.changed_paths)
             : [],
         checks,
