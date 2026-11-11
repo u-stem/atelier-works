@@ -6598,3 +6598,48 @@ describeForCallers(
     });
   },
 );
+
+// 入れ子の文字列の中の代入の値も、最上位と同じく、語に分かれる値の字面で全停止を見る。
+describeForCallers(
+  "bash-guard denies the stop-all written in an assignment value inside a nested string",
+  (subagent) => {
+    test.each([
+      [
+        "a pager of git in a remote command",
+        `ssh host "GIT_PAGER='bun scripts/stop_all.ts' git log"`,
+      ],
+      [
+        "a pager with a stop task in a remote command",
+        `ssh host "PAGER='mise run stop' man ls"`,
+      ],
+    ])("denies %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 削除を確定する押し出しのタスク名も、語に分かれる語の中の凍結の書き込みとして数える。
+describeForCallers(
+  "bash-guard denies a pruning push task named in a word that splits into words",
+  (subagent) => {
+    test("denies a run option of another tool", async () => {
+      expect(
+        await decide('bunx some-cli --run "mise run push:prune"', { subagent }),
+      ).toBe("deny");
+    });
+  },
+);
+
+// 1字に当たるglobだけの引数は、標準入力のオペランドとして読まない。
+describeForCallers(
+  "bash-guard allows a lone glob argument behind piped hold code",
+  (subagent) => {
+    test("allows a single-character glob argument", async () => {
+      expect(
+        await decide("cat scripts/hold.ts | bun scripts/x.ts ? list", {
+          subagent,
+        }),
+      ).toBe("allow");
+    });
+  },
+);
