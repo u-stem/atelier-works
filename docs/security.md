@@ -34,8 +34,7 @@ headless Claudeはこれらをデータとして読むだけで、内容に書�
 要件定義の生成のworktreeは、承認と掃除で消す。
 監査のスナップショットは、実行のたびに作り直して消す。
 
-残るリスクとして、要件定義の生成のworktreeは、既定ブランチの先頭が同じ間は次の試行でも使い回す。
-そのため、Claudeが書き込んだ内容を、同じIssueの次の試行のClaudeが読みうる。
+残るリスクは[R-TB-01](security-risks.md#書き込める範囲)である。
 
 headless Claudeの起動には、次のフラグと環境変数で防御を足す。
 
@@ -155,14 +154,9 @@ PATが`main`へのマージの権限を持つかは確かめていない。
 atelier-worksのCIは、gitleaksでPRのコミットを走査する。
 走査されないコミットが、次の2つの場合に残る。
 
-残るリスクとして、PRのCIの実行は、同じPRの新しい実行が始まると`cancel-in-progress`で止まる。
-秘密値を含むコミットを、実行の途中でforce pushにより置き換えると、置き換えられたコミットはCIのgitleaksで走査されない。
-置き換えられるのは、PRの履歴から外れたコミットなので、受け入れる。
-手前の防御として、lefthookのpre-commitのgitleaksと、Factoryのpush前の走査がある。
+残るリスクは[R-TB-02](security-risks.md#ciで走査されないコミット)である。
 
-残るリスクとして、`push`は`main`だけで動くので、PRを作るまで、人がpushしたブランチのコミットはCIで走査されない。
-実行されるのはlefthookのpre-commitのgitleaksだけで、ローカルで飛ばせる。
-PRを作ればCIが走査し、Factoryは実装ブランチのpushの前に走査するので、受け入れる。
+残るリスクは[R-TB-03](security-risks.md#ciで走査されないコミット)である。
 
 ### CIのトークンの権限
 
@@ -185,10 +179,7 @@ PRを作ればCIが走査し、Factoryは実装ブランチのpushの前に走�
 
 ### CIの実行の範囲の判定
 
-残るリスクとして、PRの実行の判定は、PRの版の`scripts/ci-scope.ts`で行う。
-判定を書き換える変更は、保護パスとして`pr_fix`が止める。
-`implement`は止めず、記録して検査を省き、PRの「確認して欲しい点」に載せる。
-人が書いたPRは`ci.yml`も書き換えられるので、レビューで確かめる。
+残るリスクは[R-TB-04](security-risks.md#ciの実行の範囲の判定)である。
 
 判定の`DB_DEPENDENCY_FILES`には、`test:db`が実行するコードの依存を列挙する。
 `console_query.ts`が`lib/config.ts`を読むので、`f/factory/lib/config.ts`を入れている。
@@ -216,42 +207,19 @@ worktreeを作るフックと、既存のブランチを使う経路(worktreeの
 
 残るリスクは次のとおりである。
 
-- 許可済みの`mise run worktree:new`とWorktreeCreateフックから、確認なしで削除が起動する。
-  手動の`--apply`にある確認の門を、自動の経路に限って外している。
-  `--auto`を手で起動する入口は、許可リストに足さない。
-  消えるのは、実行している`worktree-new.sh`と同じリポジトリのworktreeに限る。
-  `origin/main`に入っていなくても、作ったまま独自のコミットが無く、別のrefがHEADのコミットを含む放置されたもの(`abandoned`)は消える。
-- エディタで開いているだけのworktreeは、cwdを持つプロセスが無いので、消えうる。
-  `recent`が守るのは、直近120分以内に更新したファイルがあるときだけである。
-- subagentのBashのシェルは、コマンドを実行している間だけcwdを持つ。
-  コマンドの合間は、`in use`に見えない。
-- 削除の途中で止まった、変更のあるworktreeは残り続ける。
-  人が手で片付ける。
-- worktreeを作らない日は、自動の片付けが走らない。
-- 失敗の警告は標準エラーだけに出る。
-  運用者に見えるかは、実機で確かめていない。
-  当面は`log`を見る前提にする。
-  確かめるには、`failures`を2以上にした状態で`worktree:new`を実行し、標準エラーを見る。
-- 再検査から削除までに、短い時間差がある。
-  `lsof`を取り直して`git worktree remove`の直前に寄せているが、時間差はゼロではない。
-- 許可済みの`mise run worktree:new`とWorktreeCreateフックは、そのチェックアウトにある`worktree-prune.sh`を、確認なしの削除として起動する。
-  編集中やレビュー前の版も、無人で走る。
-  止める手段は、セッションの起動時に`WORKTREE_AUTO_PRUNE=0`をexportしておくことだけである。
-  コマンドへの前置きは、許可の確認を求められる場合がある。
-  当たるかは確かめていない。
-  スクリプトを編集して許可済みのコマンドで実行する能力は、この機能の有無によらず持つので、新しい権限ではない。
-- 最上位の`.yomiyasu/`の下で、無視されたファイルとして出るものは、確認なしで消える。
-  無視の元は問わない。
-  中の`.gitignore`(`*`)は、置いたものを中身にかかわらず無視させる。
-  yomiyasuが置く最終稿の写し(`exports/`)と入力の写し(`inputs/`)も消えるので、残したい原文と最終稿はworktreeの外に写す。
-- gitが入れ子のリポジトリと認めたものは、末尾が`/`の1行で出るので残す。
-  認めないもの(bareのリポジトリ、指す先の無いgitfile)は消える。
-- `.yomiyasu`を`.git/info/exclude`やユーザーの除外の設定に足すと、中に`.gitignore`の無い`.yomiyasu/`も消える側に移る。
-  足さない。
-- 既定の場所で`yomiyasu_check.py`を実行すると、`.gitignore`と`state.json`のどちらも無い既存の`.yomiyasu/`には、`.gitignore`(`*`)が足される。
-  中のファイルは`??`から`!!`に変わり、`dirty`で残っていたものが消える側に移る。
-- メインのcheckoutの`.yomiyasu/`は片付けの範囲外で、写しが溜まる。
-  コミットには入らない。
+- [R-TB-05](security-risks.md#worktreeの自動の片付け)
+- [R-TB-06](security-risks.md#worktreeの自動の片付け)
+- [R-TB-07](security-risks.md#worktreeの自動の片付け)
+- [R-TB-08](security-risks.md#worktreeの自動の片付け)
+- [R-TB-09](security-risks.md#worktreeの自動の片付け)
+- [R-TB-10](security-risks.md#worktreeの自動の片付け)
+- [R-TB-11](security-risks.md#worktreeの自動の片付け)
+- [R-TB-12](security-risks.md#worktreeの自動の片付け)
+- [R-TB-13](security-risks.md#worktreeの自動の片付け)
+- [R-TB-14](security-risks.md#worktreeの自動の片付け)
+- [R-TB-15](security-risks.md#worktreeの自動の片付け)
+- [R-TB-16](security-risks.md#worktreeの自動の片付け)
+- [R-TB-17](security-risks.md#worktreeの自動の片付け)
 
 ### 状態の理由の区切り
 
@@ -261,8 +229,7 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 区切りを差し込んで、別の理由の訳文を表示させたり、既知の理由を足して次の操作を選ばせたりできないようにするためである。
 置き換える詳細の範囲は[通知とrate limit](internals/notifications.md)にある。
 
-残るリスクとして、Claudeは`blocked_reason`の全体を既知の理由と同じ文にできる。
-そのときは、その理由の訳文と次の操作が表示される。
+残るリスクは[R-TB-18](security-risks.md#状態の理由の区切り)である。
 
 ### 自己更新の通知の状態
 
@@ -270,12 +237,10 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 通知は、今の`deployed_sha`への反映が成功した記録(`factory.deployments`)のうち最も新しいものより前に作られたものだけが、自動で解決される。
 残るリスクは次のとおりである。
 
-- stateを書けるWindmillの利用者は、`deployed_sha_mismatch`の通知を遅らせられる。
-  `deployed_sha`を書ける者と同じ範囲である。
+- [R-TB-19](security-risks.md#自己更新の通知の状態)
 - stateや`deployed_sha`を書き換えても、通知より新しい反映の成功の記録が無い限り、通知は解決されない。
-- `deployed_sha`を今のHEADに書き換えると、版が一致するので、自己更新もそれを反映済みとみなす。
-  これは通知の仕組みより前からある性質である。
-- `factory.deployments`に書けるDBの利用者は、この判定も動かせる。
+- [R-TB-20](security-risks.md#自己更新の通知の状態)
+- [R-TB-21](security-risks.md#自己更新の通知の状態)
 
 ### Factory自身のリポジトリの照合
 
@@ -285,13 +250,11 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 
 残るリスクは次のとおりである。
 
-- 照合の応答を読んでからfetchの接続までの短い間は、リポジトリが入れ替わる余地として残る。
-  照合はcloneのロックの中で行うので、この間にロックの待ちは入らない。
-- `factory_repo_id`が未設定の間は、名前の再取得から守られない。
-  未設定のときは、照合せず、通知も出さない。
-- `isRepoAllowed`は`factory_repo`を名前で許すので、自己改善の起票と候補への採用は名前のままである。
-- Consoleの配信物を取り込む処理と、ホストの`git pull`は、`factory_repo_id`を照合しない。
-- 監査のスナップショットのworktreeが、self cloneに既にあるshaを取るfetchは、照合しない。
+- [R-TB-22](security-risks.md#factory自身のリポジトリの照合)
+- [R-TB-23](security-risks.md#factory自身のリポジトリの照合)
+- [R-TB-24](security-risks.md#factory自身のリポジトリの照合)
+- [R-TB-25](security-risks.md#factory自身のリポジトリの照合)
+- [R-TB-26](security-risks.md#factory自身のリポジトリの照合)
 
 ### オーナーの数値IDの照合
 
@@ -332,33 +295,14 @@ cloneを開くステップでは、`openFactoryClone`の照合も重なるので
 
 残るリスクは次のとおりである。
 
-- `id`の無いオーナーは、名前だけで動く。
-- dependabotを除く準備のステップ、フォームからのIssueの作成、Issue化の提案の承認は、処理の始めに照合する。
-  Issue化の提案の却下だけは、判断を記録した後に照合する。
-  照合の後に名前が入れ替わっても、その実行は検知しない。
-- `allowed_labeler_ids`にIDを入れないアカウントは、名前だけで判定する。
-  `allowed_labeler_logins`に古い名前が残ると、その名前を取得した人が、許可された付与者とPRの作成者になりうる。
-  IDを入れたアカウントは、IDも一致するときだけ許可する。
-- 保存済みの名前でGitHubを読み書きする処理は、ほかにもある。
-  Issueの状態の確認と整理、承認後のIssueへのコメント、PRへの返信は、名前のままである。
-  取り消された作業項目を再開する前の状態の確認と、要件定義を作り直す再実行の前の取り込みも、名前のままである。
-  これらはcloneも検査コマンドの実行もしない。
-  投稿の内容は、名前を取得した人の目に触れうる。
-- 監視が無効の間の`watch_pr_ci`の回復は、オーナーの照合をせずに、名前でPRの状態とheadを読む。
-  書き込みは、FactoryのDBと、Discordへの固定文に限る。
-  DBへの書き込みは、行を戻すこと、行を`superseded`にすること、noticeを足すこと、noticeを解決することである。
-  保留した失敗の通知として、noticeの登録と、通知した理由コードの記録も行う。
-  通知の本文は、固定文と語彙のコードだけで作り、GitHubから読んだ文字列を入れない。
-  GitHubへの書き込みも、Claudeへの入力も、cloneや検査コマンドの実行もしない。
-  監視を有効に戻せば、照合が働く。
-- 書き込みの直前の照合と書き込みの間は、入れ替わる余地として残る。
-  実装のPR作成とラベル付与、PR修正の返信は、直前の照合の後にpushと続けて行うので、個別には照合しない。
-  dependabotの終了処理も、所見の投稿の後のラベルの付与と、baseの読み直しの後のマージを、個別には照合しない。
-- dependabotの準備は、照合からcloneまでの短い間が、入れ替わる余地として残る。
-- `drawio_viewer_bump`は、`factory_repo_id`があれば、書き込みの直前の照合で止まる。
-  残る余地は、照合からブランチの作成までの間だけである。
-  `factory_repo_id`が未設定のときは照合せず、名前だけでブランチとPRを作る。
-  送る内容は公開物である。
+- [R-TB-27](security-risks.md#オーナーの数値idの照合)
+- [R-TB-28](security-risks.md#オーナーの数値idの照合)
+- [R-TB-29](security-risks.md#オーナーの数値idの照合)
+- [R-TB-30](security-risks.md#オーナーの数値idの照合)
+- [R-TB-31](security-risks.md#オーナーの数値idの照合)
+- [R-TB-32](security-risks.md#オーナーの数値idの照合)
+- [R-TB-33](security-risks.md#オーナーの数値idの照合)
+- [R-TB-34](security-risks.md#オーナーの数値idの照合)
 
 ### migrationを戻した日の日次予算
 
@@ -581,15 +525,12 @@ ActionsをRead-onlyにするのは、次の3つを読むためである。
 FactoryのPRの判定と起動は発見より前に終わるので、この超過に巻き込まれない。
 条件は、対象のリポジトリが明示リポジトリで、公開されていることなので、受け入れる。
 検索へ戻す設定は無い。
+残るリスクの表の[R-CRED-01](security-risks.md#資格情報の取得)にあたる。
 人のPRには、直す作業項目を起動せず、PRとリポジトリへの書き込みもしない。
 通知の文は、FactoryのPRと同じ固定文である。
 forkのPRの実行と、別のPRの実行は、判定に使わず捨てる。
 headのリポジトリのIDがベースと違う実行と、結び付いたPRの番号が違う実行を使うと、forkや別のPRの結果を、FactoryのPRの結果として扱ってしまうためである。
-Actions: Read-onlyでは、実行の一覧だけでなく、選んだ全リポジトリの実行のログとartifactも読める。
-`github_token`は、Console用workerの`approval_decide`と`retry_work_item`も読む。
-そのため、漏れたときの影響は、Contentsの読み書きに加えて、ログとartifactを読まれる分だけ広がる。
-ログとartifactには秘密値を入れない。
-漏れたときの影響が広がる分は、残るリスクとして受け入れる。
+残るリスクは[R-CRED-02](security-risks.md#資格情報の取得)である。
 
 PRのマージの競合を検知するscript`watch_pr_conflicts`は、Pull requestsの読み取りだけを使い、開いているPRの一覧とPRの状態を読む。
 読む範囲は、許可リストに合うリポジトリの開いているPRで、作者を問わない。
@@ -621,20 +562,7 @@ PRのマージの競合を検知するscript`watch_pr_conflicts`は、Pull reque
 外部の文字列は載せない。
 通知とDiscordの文には、PRの題名やブランチ名を載せない。
 リポジトリへ書ける人が決める文字列を、通知を介して人やClaudeへ渡させないためである。
-残るリスクとして、トレーラーはcommit本文の照合なので、リポジトリへ書ける人は偽れる。
-偽ったcommitだけのPRは、「Factoryが作ったPR」として自動で直す対象になりうる。
-対象のPRは、PATのアカウントが作った、Factoryのブランチの形のPRに限る。
-書き込める人は、ほかの手段でも同じPRを書き換えられるので、受け入れる。
-残るリスクとして、第三者が1000件超のPRで、REST一覧を読むリポジトリを埋めることがある。
-REST一覧を読むのは、表の記録が新しくない間の作業項目、競合の行、明示リポジトリと、収集が止まっている間である。
-このとき5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。
-1回の実行に、1リポジトリ10ページ、予算120秒、rate limitでの停止という上限がある。
-条件は、対象のリポジトリが作業項目、競合の行、明示リポジトリのどれかに入り、公開されていることなので、受け入れる。
-明示リポジトリは、運用者本人のPRが無くてもREST一覧で読まれる。
-残るリスクとして、次のPRを拾えなくなる。
-作業項目も競合の行も無く、表も古い、明示でないリポジトリにあるFactoryのPRである。
-読めない間は、収集の鮮度の監視が通知するまで、黙って見送る。
-検索へ戻す設定は無い。
+残るリスクは[R-CRED-03](security-risks.md#資格情報の取得)、[R-CRED-04](security-risks.md#資格情報の取得)、[R-CRED-05](security-risks.md#資格情報の取得)である。
 
 fine-grained PATは、トークンの値を変えずに権限の設定だけを変えられる。
 権限を変えるときは既存のトークンを更新すればよく、再発行は要らない。
@@ -657,9 +585,7 @@ PRは除くが、ページは消費する。
 走査の所要時間に、実時間の予算は置かない。
 残るリスクは次のとおりである。
 
-- 人がIssueの末尾に書き足すと、目印が最後の行でなくなり、再試行のときに見つからず、Issueが重複して起票される。
-  書き足せるのは、リポジトリのIssueを編集できる人に限る。
-  受け入れる。
+- [R-CRED-06](security-risks.md#資格情報の取得)
 - 目印を偽造して、作成済みのIssueとして再利用させる経路がある。
   外の人が、PATと同じアカウントのIssueの最後の行に、目印を書く経路は無い。
   一覧を作成者で絞ること、Factoryが作るIssueの最後の行が`appendIssueProposalMarker`の目印に固定されることが、その根拠である。
@@ -675,16 +601,10 @@ PRは除くが、ページは消費する。
   そのため、実際には付いていないラベルが付いた扱いになりうる。
   受け入れる。
   偽造できる人は、Factoryのリポジトリに書き込める人で、その人はIssueやPRを直接操作できるためである。
-- 提案の作成の1時間前から承認までの間に、PATのアカウントが作ったIssueとPRが1000件を超えると、その提案の承認は通らない。
-  承認は保留のまま残り、再度承認しても通らないので、却下して起票し直すしかない。
-  受け入れる。
-  長く保留した提案だけで起き、却下して起票し直せば復旧できるためである。
-- 走査と作成が、Issueを作る処理の印の有効期間(15分)を超えて続く障害では、印を取り直した別の呼び出しと重なり、Issueが重複して起票されうる。
-  受け入れる。
-  Consoleの残るリスクにある「期限を超える処理と取り直した処理は、理論上は重なりうる」と同じ内容である。
-- 再試行の前にPATのアカウントが替わると、前のアカウントが作ったIssueは作成者で絞った一覧に出ず、取りこぼして重複して起票される。
-  受け入れる。
-  再試行の前にPATを替える運用は想定しないためである。
+  残るリスクの表の[R-CRED-07](security-risks.md#資格情報の取得)にあたる。
+- [R-CRED-08](security-risks.md#資格情報の取得)
+- [R-CRED-09](security-risks.md#資格情報の取得)
+- [R-CRED-10](security-risks.md#資格情報の取得)
 
 有効期限は最長で1年である。
 `poll_issues`は冒頭で`GET /user`を呼び、トークンが失効していればジョブを失敗させる。
@@ -832,11 +752,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 
 残るリスクは次のとおりである。
 
-- 許可リストと型付きの関数が防ぐのは、Console自身の誤りだけである。
-  ConsoleのXSSや、運用者のCookieを持つ攻撃者は防げない。
-  Cookieがあれば、許可リストの外のscriptも、Windmillのapiから直に呼べる。
-  ログインのセッションの有効期間は30日で、Windmillの既定の3日より長い。
-  運用者のブラウザが管理者のCookieを持つ時間も、そのぶん長い。
+- [R-DLV-01](security-risks.md#consoleの配信)
 - 新規投入の再送は、冪等キーで止める。
   画面は、投入の1回ごとにキーを作り、メモリだけに持つ。
   リロードをまたぐ保持は持たない。
@@ -863,6 +779,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
     重なったIssueとPRは、人がマージするまで反映されず、人が閉じられる。
     損なわれるのは手間で、データと権限は損なわれない。
     入力とキーをタブのメモリだけに置く方針を保つため、リロードをまたぐ保持は持たない。
+    残るリスクの表の[R-DLV-02](security-risks.md#consoleの配信)にあたる。
   - 同じキーで内容が違う投入は、黙って捨てず、`intake_key_conflict`で失敗させて通知に出す。
   - 作成の途中で別のジョブが同じキーを予約しているときは、成功で返さず、`intake_key_in_flight`で失敗させて通知に出す。
     成功で返すと、作成が失敗したときに、Issueの無い投入が成功に見えるためである。
@@ -887,6 +804,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
     取り直しの前に探索する順にすると設計が変わるので、受け入れる。
     承認を省く進め方では、重複したIssueが承認で止まらない。
     ラベルも作業項目も無い孤立したIssueとして残り、人が閉じる。
+    残るリスクの表の[R-DLV-03](security-risks.md#consoleの配信)にあたる。
   - 承認を省く進め方では、キーが必須である。
     検証(`validateManualIntake`)、Issueの作成、登録の3か所が、副作用の前に断る。
     キーを扱う3つのファイルと、キーの表のmigrationは、保護パスに入れる([進め方ごとの承認](internals/implement.md#進め方ごとの承認))。
@@ -903,14 +821,9 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
   期限を過ぎて走り続けた呼び出しが失敗して戻すとき、印を取り直した別の呼び出しがIssueを作っている最中でも、次の承認と重ならないようにするためである。
   印に持ち主の識別子は無い。
   期限を超える処理と取り直した処理は、理論上は重なりうる。
-- `main`へのマージは、承認0件のPRで済む。
-  PRの必須チェックは通る必要があるが、人のレビューは強制されない。
-  FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開))。
-  そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。
-  Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
-  保護パスの反映の承認は、Consoleの配信物(`console/`)を止めない([反映の承認](internals/deploy-approvals.md#反映の承認))。
-- CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。
-  `digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
+  残るリスクの表の[R-DLV-04](security-risks.md#consoleの配信)にあたる。
+- [R-DLV-05](security-risks.md#consoleの配信)
+- [R-DLV-06](security-risks.md#consoleの配信)
 - `ci.yml`の`console-a11y`ジョブが使うPlaywrightのブラウザは、ハッシュで照合しない。
   HTTPSで公式の取得元(`cdn.playwright.dev`、予備に`playwright.download.prss.microsoft.com`)から取る。
   取得元かその通信が侵害されると、改ざんされたブラウザが動く。
@@ -920,86 +833,37 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
   `main`の実行では、このジョブを飛ばす。
   ブラウザはキャッシュせず、毎回取得する。
   照合しないキャッシュを、`main`の実行が書いてPRの実行が読む経路を作らないためである。
-- e2eの依存(`@playwright/test`、`@axe-core/playwright`、`axe-core`)は、`console/package.json`にある。
-  そのため、配信するジョブ(`console-dist.yml`と`ci.yml`の`console`ジョブ)の`node_modules`に入る。
-  インストールは`--ignore-scripts`で行うので、install scriptは動かない。
-  `vite build`はこの3つを読み込まないので、配布物には入らない。
-  別の`package.json`に分けると、lockfileの検査とdependabotの設定が二重になる。
-  そのため、分けない。
-- 信頼の境界は`console-dist.yml`の1つのジョブと、そこで動くツールや依存に及ぶ。
-  `ci.yml`のジョブは同名の成果物を上げても、取り込み先の実行(`console-dist.yml`)に入らない。
-  組み立ての手順は`console-dist.yml`に直接書き、composite actionに分けない。
-  `console-dist.yml`を書き換える変更は、`main`へのマージで反映されるので、マージ前のレビューが唯一の防御である。
-- 同じ実行の中では、成果物を`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。
-  `console-dist.yml`のジョブは1つなので、同じ実行にほかの上げ手はいない。
-- `console-dist.yml`の成功が示すのは、組み立てが通ったことだけである。
-  型検査、lint、テストを担う`ci.yml`の成功も、同じcommitについて取り込みの条件にする。
-  `ci.yml`が実行中のcommitは、成功するまで取り込まない。
-- `main`という名前のタグの実行は、ブランチ名が`main`で現れる。
-  `console_fetcher`は同じcommitで、`console-dist.yml`と`ci.yml`のどちらも`main`へのpushとして成功していることを求める。
-  FactoryのPATはWorkflowsの権限が無く、ワークフローのファイルを書き換えたcommitを作れない。
-  現在のワークフローは`main`のブランチのpushでしか動かないので、PATによるタグでは実行が作られない。
-- 両方のワークフローを書き換えたcommitに`main`というタグを付けられる人は、この照合を通せる。
-  タグの作成と更新は、rulesetの`protect-tags`で管理者に限っている。
-  管理者は迂回できるので、管理者のアカウントの侵害は防げない。
-  取り込むcommitが`main`の履歴に含まれるかは、確かめていない。
-- draw.ioのビューアも、この成果物の差し替えの範囲に入る。
-  ビューアは`console-dist.yml`が取得して、同じ成果物に入れるためである。
-- `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけである。
-  `WM_BIND`を外向きにしてHTTPで公開すると、この防御は効かない。
-  外向きにするならHTTPSで公開する。
-- `Origin`の検査が比べる相手は、要求の`Host`ヘッダーから作ったオリジンである。
-  DNSリバインディングで`Host`が攻撃者のホスト名になると、`Origin`も一致して通る。
-  ただしCookieはホスト名ごとに付くので、運用者のCookieは付かない。
-- `Origin`の検査が補えるのは、GETとHEAD以外のブラウザの要求だけである。
-  ナビゲーションや`<img>`のGETには`Origin`が付かず、Firefox 70未満はフォームのPOSTにも付けない。
-  この検査は、HTTPで公開してもブラウザが送るので、`Sec-Fetch-Site`の弱点を補う。
+  残るリスクの表の[R-DLV-07](security-risks.md#consoleの配信)にあたる。
+- [R-DLV-08](security-risks.md#consoleの配信)
+- [R-DLV-09](security-risks.md#consoleの配信)
+- [R-DLV-10](security-risks.md#consoleの配信)
+- [R-DLV-11](security-risks.md#consoleの配信)
+- [R-DLV-12](security-risks.md#consoleの配信)
+- [R-DLV-13](security-risks.md#consoleの配信)
+- [R-DLV-14](security-risks.md#consoleの配信)
+- [R-DLV-15](security-risks.md#consoleの配信)
+- [R-DLV-16](security-risks.md#consoleの配信)
+- [R-DLV-17](security-risks.md#consoleの配信)
 - 前段でTLSを終端するときは、プロキシが`Host`をポートを含めて保つ(nginxなら`proxy_set_header Host $http_host`)。
   nginxの既定は`Host`を書き換え、`$host`はポートを落とす。
   どちらも`Origin`と合わず、ログインを含む書き込みがすべて403になる。
-- スキームを問わず許すので、HTTPS公開のときも、同じホスト名とポートの`http://`の`Origin`が通る。
-  `Sec-Fetch-*`を送るブラウザは、`Sec-Fetch-Site`の規則が止める。
-  止められないのは、`Sec-Fetch-*`を送らないブラウザだけである。
-- GETでも副作用のあるAPIは、`Sec-Fetch-Site`と`Origin`では止まらない。
-  同じオリジンの`<img>`やリンクから、Cookieの持ち主の権限でジョブを起動できる。
-  そのため、副作用のあるGETの経路を洗い出し、fetchとXHR以外を403にしている。
-  洗い出しの一覧は[Consoleの仕様](internals/console.md)にある。
-  洗い出したのは`windmill-client`の型定義にあるAPIまでで、サーバーの全経路ではない。
-  HTTPトリガー(`/api/r/*`)を足すときは、GETでジョブを起動する経路にならないかを確かめる。
-- 古いブラウザと、HTTPで公開したブラウザは、`Sec-Fetch-Dest`を送らない。
-  `Sec-Fetch-*`は、localhostかHTTPSのオリジンにだけ付くためである。
-  この場合、副作用のあるGETは`Cookie`を持つときだけ止める。
-  WindmillのフロントエンドがこれらのGETを使うと、その環境では403になる。
-- 注入された`<form method="post">`のクリックは、`Sec-Fetch-Mode: navigate`で止める。
-  `Sec-Fetch-Mode`を送らないブラウザは止めない。
-  止めるとfetchの書き込みまで巻き込むためである。
-- `<link rel="prefetch">`、`<link rel="preload">`、`<a ping>`は、`Sec-Fetch-Dest: empty`などで、副作用のあるGETを送りうる。
-  どれも生のHTMLの注入が要り、サニタイザが落とすので、止めていない。
-- この4つの規則が効くのは`/api/*`だけである。
-  `windmill_extra`の経路(`/ws/*`、`/ws_mp/*`、`/ws_debug/*`)には、`Origin`の検査も含めて効かない。
-  `handle @extra`が先に当たるためである。
+- [R-DLV-18](security-risks.md#consoleの配信)
+- [R-DLV-19](security-risks.md#consoleの配信)
+- [R-DLV-20](security-risks.md#consoleの配信)
+- [R-DLV-21](security-risks.md#consoleの配信)
+- [R-DLV-22](security-risks.md#consoleの配信)
+- [R-DLV-23](security-risks.md#consoleの配信)
 - 旧Consoleへの規則は、過去のDiscordの通知、Issueのコメント、PRの本文に残るリンクのために、旧Consoleを削除した後も残す。
   飛ばすのは閲覧の`/apps/get/`と`/apps_raw/get/`だけで、編集画面やAPIには触れない。
   フラグメントはブラウザがリダイレクトを越えて保ち、新しいConsoleが読み替える。
   読み替えるのは、正の整数のidを持つ要件定義書と監査レポートの形だけで、ほかのフラグメントは入口に着く。
-- 共有の`assets/`には古い版のファイルも残る。
-  その間は`script-src`で読み込めるので、XSSの足がかり(script gadget)に使われうる。
-- Trusted TypesのReport-Onlyの方針には報告先が無い。
-  違反はブラウザの開発者ツールのコンソールにしか出ない。
-- `console_fetcher`の外への通信はnetworkでは絞れない。
-  コードが侵害されれば、任意の宛先へ出られる。
-- `console_egress`は通常のbridgeで、ホストのloopbackから切り離されない。
-  既定の`WM_BIND=127.0.0.1`のままでも、`host.docker.internal`経由でホストのCaddy、つまりWindmillに届く(OrbStackで確認)。
-  `WM_BIND`を外向きにすると、ホストのゲートウェイのIP経由でも届く。
-  `console_fetcher`はWindmillの資格情報を持たないが、認証の要らない経路には届く。
-- `CONSOLE_GITHUB_TOKEN`は、ホストのdockerを使える人には`docker inspect`で見える。
-- 成果物を取りに行くリポジトリ`CONSOLE_GITHUB_REPO`は、コミットされた`mise.toml`にある。
-  これを書き換える変更がマージされると、任意のpublicリポジトリの成果物を取り込みうる。
-  `mise.toml`は保護パスで、マージは人が行うことで抑えている。
-  ただしPATのマージ権限は未確認である。
-- 成果物の保持は30日である。
-  30日以上`main`へのpushが無いと、新しく立ち上げた環境は取り込めない。
-  そのときは`main`に何かをマージしてCIを動かす。
+- [R-DLV-24](security-risks.md#consoleの配信)
+- [R-DLV-25](security-risks.md#consoleの配信)
+- [R-DLV-26](security-risks.md#consoleの配信)
+- [R-DLV-27](security-risks.md#consoleの配信)
+- [R-DLV-28](security-risks.md#consoleの配信)
+- [R-DLV-29](security-risks.md#consoleの配信)
+- [R-DLV-30](security-risks.md#consoleの配信)
 - 検証用サーバー(`scripts/console-branch-server.ts`)は、ブランチ版のConsoleに、運用者のCookieで本物のWindmillのAPIを呼ばせる。
   ブランチの変更は人のレビューの前なので、悪意のあるConsoleのコードは、運用者のCookieで管理者の操作を呼べる。
   そのため、既定は読み取りだけにする。
@@ -1009,20 +873,9 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
   Originは自身のオリジンに限り、`Sec-Fetch-Site`が`cross-site`か`same-site`の要求は断る。
   転送元を名乗るヘッダーとhop-by-hopのヘッダーは、中継先へ渡さない。
   書き込みは、人が`--allow-writes`を付け、端末で「yes」と入力したときだけ届く。
-- 検証用サーバーを受け入れる理由は、マージ前の画面を本物のデータで確かめないと、画面のレビューが差し替えたデータだけに頼るためである。
-  読み取りの5つが読み取り専用であることは、相対importで辿るファイルと、取り込む名前と、呼ぶ関数の本文をテストで固定して守る。
-  ブランチ版のConsoleは、読み取りのscriptが返す内容を読む。
-  これが残るリスクである。
-  内容は、運用者が今の画面で読める範囲に限られる。
-  ログと結果の伏せ字は、script側で行っている。
-- 検証用サーバーは、検証をする人のマシンで動く。
-  `--allow-writes`を付けた人は、マージ前のコードに書き込みを許す。
-  付けるかどうかは、人の判断に任せ、`mise.toml`のタスクは付けない。
-  agentが確認なしに付けられないよう、標準入力が端末でなければ起動に失敗させ、端末では「yes」の入力を求める。
-  有効な間は、全応答に`x-branch-server-writes: on`を付ける。
-- 許可リストにある`/api/`のGETは、WindmillのUIの経路の一部だけである。
-  Windmillの画面が許可リスト外のGETを使うと、ブランチ版のConsoleから開いた画面の一部が403になる。
-  その場合は、8080で直接開く。
+- [R-DLV-31](security-risks.md#consoleの配信)
+- [R-DLV-32](security-risks.md#consoleの配信)
+- [R-DLV-33](security-risks.md#consoleの配信)
 
 ## workerコンテナの権限
 
@@ -1100,14 +953,9 @@ scriptはURLを読み解き、接続の情報を環境変数(`PGPASSWORD`など)
 
 ### 控えの残るリスク
 
-- `db_backup_url`は秘密の変数で、ワークスペースのどのscriptも読める。
-  defaultのworkerのジョブはrootで動き、workerの環境変数`DATABASE_URL`からも同じ接続先に届くので、新しい経路ではない。
-- 控えは暗号化しない。
-  控えの容量も監視しない。
-- `mise run backup:restore`は、クラスタ全体の複製を、使い捨てのプロジェクトの`factory-restore_*`のvolumeに残す。
-  複製は、Windmillの秘密を復号する鍵を含む。
-  `db`は`restart: unless-stopped`で動き続け、人が最後に出る`down -v`のコマンドを実行するまで残る。
-  残っていることを追う仕組みはない。
+- [R-BAK-01](security-risks.md#バックアップの控え)
+- [R-BAK-02](security-risks.md#バックアップの控え)
+- [R-BAK-03](security-risks.md#バックアップの控え)
 
 ## Console用workerの境界
 
@@ -1486,46 +1334,22 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
 
 収集のトークンについて、次を受け入れている。
 
-- 書き込み権限を持つfine-grained PATを、読み取り用として入れても、`bootstrap.sh`は見分けられない。
-  見るのは、`github_pat_`の接頭辞と、`GITHUB_TOKEN`と`CONSOLE_GITHUB_TOKEN`との一致だけである。
-- 「All repositories」のトークンは、所有者の全リポジトリの内容を読める。
-  集める範囲は設定で絞るが、トークンの読める範囲は絞られない。
-- 全部の所有者のトークンが、1つの変数に集まる。
-- `repo_allowlist`が空のとき、見えないリポジトリを`not_visible`として検出できない。
-  反映後に、人が件数を確かめる([収集の運用](operations.md#収集の運用))。
-- loginに`_`を含む所有者(EMUのアカウント)は集めない。
-- 先頭が`.`のリポジトリ名(`.github`など)は集めない。
-  GitHubの名前の述語は、シェルとパスに渡す名前の守りと共通なので、収集のために緩めると、その守りも緩む。
-- 締め切りやGitHubの失敗が続くと、リポジトリの状態が前回のまま凍る。
-  `gone`の行は消えない。
-- 詳細の行のブランチ名と作者は、forkのPRを含めて、外の人が決められる。
-  収集は、書くときと読むときに形を検査し、通らない値を`NULL`にする。
-  下流は、DBの値だけでGitHubへ作用する操作に進まない([下流が守る不変条件](internals/github-collect.md#下流が守る不変条件))。
-- 開いたPRが90件を超えるリポジトリは、詳細が打ち切られ続ける。
-  公開リポジトリでは、外の人がPRを開けて、そのリポジトリの詳細を古いままにできる。
-  打ち切りや失敗のリポジトリの古い行は、`usable`が真のまま残る。
-  最初に詳細の行を読む処理は、閾値で判断を止める判定を備えなければならない([下流が守る不変条件](internals/github-collect.md#下流が守る不変条件))。
-- `poll_issues`は、明示でないリポジトリの記録が古い間、そのリポジトリのIssueを見つけない。
-  鮮度の監視が通知するまでの時間は、黙って見送る。
-  最大の時間は[GitHubの収集](internals/github-collect.md#鮮度の足りないリポジトリ)にある。
-- `poll_issues`が検索を使わないので、発見の経路を設定だけで検索へ戻す手段は無い。
-- `poll_issues`が明示リポジトリを一覧で読むとき、トリガーラベルの付いた開いたIssueとPRが合わせて1000件を超えると、一覧が失敗し続ける。
-  トリガーラベルはIssueフォームに設定しない方針なので、外の人が埋めるのは難しい。
-  失敗は`list_labeled_issues`の段に残る。
-- `poll_prs`は、明示でないリポジトリの記録が古い間、そのリポジトリのPRを見つけない。
-  鮮度の監視が通知するまでの時間は、黙って見送る。
-  最大の時間は[GitHubの収集](internals/github-collect.md#鮮度の足りないリポジトリ)にある。
-- `poll_prs`が検索を使わないので、発見の経路を設定だけで検索へ戻す手段は無い。
-- `poll_prs`が明示リポジトリを一覧で読むとき、開いたPRが1000件を超えると、一覧が失敗し続ける。
-  公開リポジトリでは、外の人がforkからPRを開けて、一覧を失敗させ続けられる。
-  失敗は`list_open_prs`の段に残り、通知は出ない。
-  記録が新しい間は表から読むので、一覧に当たるのは、収集が止まっている間と、収集が集めない明示リポジトリである。
-  開いたPRが90件を超えて収集が打ち切られている明示リポジトリも、一覧に当たる。
-  外の人が自分でそこへ到達できるので、1000件を超えると、通知なしに失敗が続く。
-- `poll_prs`は、組織の所有者のPRのチーム宛てのレビューの依頼を、`GET /user/teams`のチームの数値IDで照合する。
-  チームへの依頼は、作者が許可された人のPRだけ、候補にする。
-  個人の所有者のリポジトリには、チーム宛ての依頼が付かないので、現在の構成では起きない。
-  個人の所有者の行は、直接の依頼だけで判定する。
+- [R-PER-01](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-02](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-03](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-04](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-05](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-06](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-07](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-08](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-09](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-10](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-11](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-12](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-13](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-14](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-15](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-16](security-risks.md#定期ジョブ用workerの境界)
 - 組織の所有者での次の4つは、実機で確かめていない。
   所有者が個人で、確かめる手段が無いためである。
   - `GET /user/teams`に必要なPATの権限。
@@ -1536,8 +1360,7 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
   組織の所有者を足すときは、先に[運用](operations.md#組織の所有者を足す前の確認)の手順で確かめる。
   権限が要ると分かったときは、同じ変更で[PATの権限](#githubのpat)の表に足し、種類をセキュリティとして監査を通す。
   今は、PATに権限を足していない。
-- 組織の所有者で`GET /user/teams`を使えない間は、チーム宛てだけの依頼のレビューが起動しない。
-  通知は出ず、組織ごとの固定の文の失敗が、`job_failures`に毎周回残る。
+- [R-PER-17](security-risks.md#定期ジョブ用workerの境界)
 - `poll_prs`は、チームを使えて照合の結果対象でなかったPRを、1時間は確かめ直さない。
   次の場合に、最大で1時間気づかない。
   - 同じheadのまま、別のチームが依頼されたとき。
@@ -1545,17 +1368,12 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
   - 表の依頼先が`NULL`のまま、同じheadで直接の依頼が足されたとき。
   - 作者を`allowed_labeler_logins`か`allowed_labeler_ids`に足したとき。
     作者が許可されていないために対象でなかったPRも、覚えているためである。
-- `poll_prs`は、stateを書けない間、チームへの依頼の確認を毎周回先頭から選ぶ。
-  先頭の候補が枠を使うので、後ろの候補を確かめられないことがある。
-- `poll_prs`は、チーム宛ての確認が要る行を、1周回に20件までRESTで確かめる。
-  超えた分は、結果の`team_capped`に出る。
-  前の周回の続きから選ぶので、次の周回以降に確かめられる。
-- 許可されていない作者のPRも、1周回20件のチーム宛ての確認の枠を使う。
-  外の人がheadを変え続けると、許可された作者のチーム依頼の確認が数周回遅れうる。
-  止まらない。
-- `listPrReviews`と`listPrReviewComments`にはページの上限が無い。
-  許可された作者のPRや直接の依頼のPRに、外の人がコメントを増やせる経路は、以前からある。
-  この変更の範囲外の記録である。
+
+  残るリスクの表の[R-PER-18](security-risks.md#定期ジョブ用workerの境界)にあたる。
+- [R-PER-19](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-20](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-21](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-22](security-risks.md#定期ジョブ用workerの境界)
 
 ## ホストの実行役の境界
 
@@ -1632,12 +1450,9 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 
 残るリスクは次のとおりである。
 
-- Windmillが全体の上限でジョブを打ち切るときに、子プロセスが止まるかを確かめていない。
-  子(`wmill sync push`、`wmill datatable migrate up`、git)は別のセッションで起動する。
-  子の上限はworkerの中のタイマーなので、ジョブごと止まると子は上限なしで残りうる。
-- 残った`wmill sync push`が、次の回が更新する作業ツリーを読み続けると、新旧の混ざった内容をpushしうる。
-  作業ツリーのロックは、cloneの更新の間しか取らず、pushの間は守らない。
-- 残った`wmill datatable migrate up`が、次の回の同じ処理と並行しうる。
+- [R-UPD-01](security-risks.md#自己更新の打ち切り)
+- [R-UPD-02](security-risks.md#自己更新の打ち切り)
+- [R-UPD-03](security-risks.md#自己更新の打ち切り)
 - 打ち切りが子の実行中に当たるのは、内側の上限が働く前に全体の上限に達したときだけである。
   区切った呼び出しが30秒で終わるので、通常は当たらない。
 - 残ったプロセスの見つけ方と、打ち切りが子を止めるかの確かめ方は[運用](operations.md)の「自己更新の打ち切りを確かめる」にある。
@@ -1782,12 +1597,7 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 投入は人が行う。
 フックは書き込みを止めないので、Claudeがこの形を実行すると、既にある値が空文字で上書きされうる。
 
-フックが`mise`で拒否するのは、ここまでの形にとどめる。
-許可リスト方式の全面化は採らず、層を新しく足さない縮小版にとどめて受け入れる。
-`mise`のサブコマンドを許可リストで絞って、一覧を出すあらゆる形を拒否することはしない。
-一覧を出す経路は列挙しきれないためである。
-許可リストを広げるほど、前置きのオプション、`mise run`のシェル指定、`MISE_*`の環境変数、`xargs`、書き込み先といった新しい迂回が見つかる。
-秘密値を会話に出さない設計にも広げず、会話への露出は残るリスクとして受け入れる。
+残るリスクは[R-DENY-01](security-risks.md#claude-codeの拒否ルール)である。
 
 守りは、守る対象ごとに次のとおり分かれる。
 
@@ -1807,6 +1617,7 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 デバッグ中の誤操作でも打つ形(`mise -E local env`、`mise hook-env`など)が残り、これを残るリスクとして「判定しないもの」に挙げて受け入れる。
 会話に出た値は、APIへ送られ、手元の記録にも残る。
 漏れた値は失効して再投入する。
+残るリスクの表の[R-DENY-02](security-risks.md#claude-codeの拒否ルール)にあたる。
 [運用](operations.md)の「秘密をローテーションする」が扱うのは、`GITHUB_TOKEN`、`CONSOLE_GITHUB_TOKEN`、OAuthトークンだけである。
 所有者ごとの読み取りPAT、`DISCORD_WEBHOOK_URL`、`DB_PASSWORD`、`WM_ADMIN_PASSWORD`には、手順が無い。
 `DB_PASSWORD`と`WM_ADMIN_PASSWORD`は、再投入だけでは壊れるので、先にPostgresと管理者のパスワードを変える。
@@ -1827,7 +1638,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
 | deployの保留を置く操作(`freeze:place`の`--scope deploy`、`scripts/freeze.ts place --scope deploy`)、凍結の解除(`freeze:release`、`scripts/freeze.ts release`)、凍結の全消去(`freeze:reset`、`scripts/freeze.ts reset`)、削除を確定する押し出し(`push:prune`、`scripts/freeze.ts push --prune`)。前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`)の後ろも拒否する。`--scope`の値が実行時に決まる形も拒否する | deployの保留は反映全体を止める。解除と全消去は保留を外せる。削除を確定する押し出しは、リモートだけの項目を消す。どれも人の端末の確認を通る操作で、subagentには確認する相手がいない。主セッションには、単独の`mise run <タスク>`の行(`freeze:place`と`freeze:release`)だけ許す。スケジュールの凍結を置くことと一覧は、両方に許す |
-| 主セッションを含むすべてのClaudeのセッションの、Consoleの書き込みのscriptを呼びうる操作。コマンドの語か標準入力の文字列に、書き込みのscript(`scripts/claude-hooks/console-scripts.ts`の一覧。解除の`hold_release`と`freeze_release`、取消の`console_job_cancel`、再実行の`console_job_rerun`、設定変更の`console_config_update`、`approval_decide`、`retry_work_item`など)の名前、名前に当たりうるglob、ブレースの形があるもの。読み取りのプログラムと`wmill`の読み取りの副コマンドは、実行を表す語が並ばない限り除く。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる |
+| 主セッションを含むすべてのClaudeのセッションの、Consoleの書き込みのscriptを呼びうる操作。コマンドの語か標準入力の文字列に、書き込みのscript(`scripts/claude-hooks/console-scripts.ts`の一覧。解除の`hold_release`と`freeze_release`、取消の`console_job_cancel`、再実行の`console_job_rerun`、設定変更の`console_config_update`、`approval_decide`、`retry_work_item`など)の名前、名前に当たりうるglob、ブレースの形があるもの。読み取りのプログラムと`wmill`の読み取りの副コマンドは、実行を表す語が並ばない限り除く。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる([R-HOOK-01](security-risks.md#claude-codeのフック)) |
 | 保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する。前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`)の後ろの同じ形と、コマンド文字列の中の同じ形、語を足すコマンドとシェルを伴う形も拒否する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。主セッションには、単独の`mise run hold:place`と`mise run hold:release`の行だけ許す。一覧(`list`)は両方に許す |
 | `gh pr`と`gh api`のうち、読み取りか編集と確かめられた形以外(`gh pr merge`、書き込みのメソッドの`gh api`、GraphQLのマージのmutationなど)と、マージを含む`gh alias`。対象のリポジトリのマージの保留が有効なときと、保留を読めないとき。リポジトリが決まらないものは、どのリポジトリの保留でも拒否する | 保留は、期限つきでマージを止める。綴りの列挙は漏れるので、確かめられた形以外を対象にする。読めないときに通すと、保留を置いた意味が外れる |
 | `wmill datatable migrate up`と`migrate down`(deployの保留が有効か、読めないとき)。`--dry-run`の無い`wmill sync push`(deployの保留かスケジュールの凍結が有効か、読めないとき) | deployの保留は反映全体を止める。除外を付けない手動のpushは、凍結中のスケジュールを上書きする |
@@ -1854,14 +1665,13 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 予備として、`.claude/settings.json`の`permissions.deny`にも、行頭の代入を置く。
 残るリスクとして、次の回避は塞がない。
 
-- 変数名の組み立てと、スクリプトファイルを経由した代入。
-- 代入以外で変数を設定する組み込み(`read`、`printf -v`、`declare -n`)と、`set -a`に続く`source`。
-- ブレース展開(`CHECK_IDLE_FORCE{,}=1`)。
-- フックが外さない前置き(`stdbuf`、`caffeinate`、`bunx`、`npx cross-env`など)。
-- 標準入力から渡る値(`xargs`)。
-- miseの設定ファイルへの書き込みと、`docker compose up`の直接実行。
-- `mise set CHECK_IDLE_FORCE=1`による`mise.toml`の`[env]`への書き込み。
-  `mise.toml`は保護パスなので、差分はレビューされる。
+- [R-HOOK-02](security-risks.md#claude-codeのフック)
+- [R-HOOK-03](security-risks.md#claude-codeのフック)
+- [R-HOOK-04](security-risks.md#claude-codeのフック)
+- [R-HOOK-05](security-risks.md#claude-codeのフック)
+- [R-HOOK-06](security-risks.md#claude-codeのフック)
+- [R-HOOK-07](security-risks.md#claude-codeのフック)
+- [R-HOOK-08](security-risks.md#claude-codeのフック)
 
 添字付きの代入をコマンドの前に置く形(`CHECK_IDLE_FORCE[1]=1`、`LEFTHOOK[1]=0`)は、読めない構文として拒否する。
 `env -S`の文字列は、`env`と同じ規則で語に分けて判定する。
@@ -2341,31 +2151,15 @@ forkの内容は第三者が書いたもので、信頼してレビューに渡�
 
 次のリスクは、受け入れている。
 
-- 作成者が許可されたアカウントのPRに、書き込み権限のある共同作業者がpushすると、ラベル無しの再レビューが起動する。
-  書き込み権限を持つ人は、信頼された共同作業者とみなす。
-  Factory自身のpushは`setHeadSha`で記録されるので、起動しない。
-- ラベルを付けた後から、いずれかの却下までの間に、起票者がIssueの本文を編集できる。
-  取得の時点の本文が`work_items.body`に保存されるので、取得までの編集は要件定義の入力になる。
-  却下や再実行による作り直しでは、その時点のIssueの内容が取り込み直されるので、窓は取得までから、却下までに広がる。
-  起票者を信頼せず、ラベルを付ける人が内容を確かめる前提は、却下を挟むと弱まる。
-  更新を承認者に知らせる通知(Discordとnotice)、Consoleの承認画面の警告、PR本文の注記で緩和している。
-- 却下の理由が`intake refreshed from the current issue`で始まると、更新していなくても、取り込み直しの印として数えられ、警告とPR本文の注記が出る。
-  警告が増える方向だけの誤りなので、許容する。
-- 起票者がIssueを書き換え続けると、承認を止め続けられる。
-  書き換えのたびに承認が断られ、却下で作り直すとClaudeの実行と試行が1回ずつ減り、`max_attempts`に達すると人の対応待ちになる。
-  起票者を信頼できないリポジトリ、特に公開リポジトリを対象とする前には、ラベルを付けた後のIssueをロックし、編集を止める運用を決める。
-  Issueの「Lock conversation」が起票者の本文の編集を止めるかは未確認である。
-  採用の前に確かめる。
-- 確認からラベルを外すまでの窓は数百ミリ秒である。
-  付け直しを成功させるには、狙ったタイミングが要る。
-- 書き込み権限のある人がラベルを改名すると、過去の付与が現在のトリガーラベルの付与として数えられる。
-  書き込み権限を持つ人は、元から信頼する前提である。
-- ラベルを付け外しできる権限で動く自動化が、第三者の入力に応じてイベントを積むと、判定不能が続く。
-  判定不能は拒否に倒れるので、作業は始まらない。
-- 拒否したトリガーラベルはPRに残る。
-  人がラベルを外すまで、そのPRはラベルを介さないレビューの自動検出も止まる。
-- Factory自身のPRで拒否したラベルのせいでサイクルが止まっても、気づく手段は「情報」のnoticeだけである。
-  人がラベルを外すと、サイクルが再開する。
+- [R-LBL-01](security-risks.md#ラベル付与の制限)
+- [R-LBL-02](security-risks.md#ラベル付与の制限)
+- [R-LBL-03](security-risks.md#ラベル付与の制限)
+- [R-LBL-04](security-risks.md#ラベル付与の制限)
+- [R-LBL-05](security-risks.md#ラベル付与の制限)
+- [R-LBL-06](security-risks.md#ラベル付与の制限)
+- [R-LBL-07](security-risks.md#ラベル付与の制限)
+- [R-LBL-08](security-risks.md#ラベル付与の制限)
+- [R-LBL-09](security-risks.md#ラベル付与の制限)
 
 ### 投稿者の関係の確認
 
@@ -2412,13 +2206,9 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
 
 残るリスクは次のとおり。
 
-- PRのheadブランチやforkを消してPRが閉じたときの`closed_by`は、実機で確かめる。
-  作者と別のアカウントが消すと、作者以外の人が閉じた扱いで取り消されうる。
-- 人のアカウント(`type`が`User`)のPATで閉じる自動化は、Botとして扱われない。
-  作者と別のアカウントなら、作者以外の人が閉じた扱いになり、取り消される。
-  第三者のイベントで閉じる自動化は、`GITHUB_TOKEN`かGitHub Appのinstallation tokenで動かす。
-- 判定は、要対応の一覧の取り消しにだけかかる。
-  承認待ちなど終端でない作業項目は、既存のreconcileが閉じた人を確かめずに取り消す。
+- [R-CLS-01](security-risks.md#閉じた人の確認)
+- [R-CLS-02](security-risks.md#閉じた人の確認)
+- [R-CLS-03](security-risks.md#閉じた人の確認)
 
 ## 各フローの安全策の置き場
 
