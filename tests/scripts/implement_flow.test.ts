@@ -6,6 +6,7 @@ import {
   IMPLEMENT_OVERRUN_BASE_SEC,
   IMPLEMENT_STEP_TIMEOUT_SEC,
 } from "../../f/factory/lib/implement_support.ts";
+import { evaluateSealed } from "../lib/flowExpressions.ts";
 
 const FLOW = readFileSync(
   join(import.meta.dir, "../../f/factory/implement__flow/flow.yaml"),
@@ -74,26 +75,55 @@ describe("implement flow.yaml", () => {
     expect(FLOW).toContain("path: f/factory/on_error_flow");
   });
 
-  test("passes the loop result only when prepare proceeded", () => {
-    expect(moduleBlock("implement_finish")).toContain(
-      "expr: 'results.implement_prepare.outcome === \"proceed\" ? results.implement_verify : null'",
-    );
+  test("passes the loop result when prepare proceeded", () => {
+    const loopResult = { exit: "checks_passed" };
+    const sealed = evaluateSealed("implement", "implement_finish", {
+      results: {
+        implement_prepare: { outcome: "proceed", context: {} },
+        implement_verify: loopResult,
+      },
+    });
+
+    expect(Reflect.get(Object(sealed), "loop_result")).toEqual(loopResult);
   });
 
-  test("gives the finish step exactly its five inputs", () => {
+  test("passes no loop result when prepare did not proceed", () => {
+    const sealed = evaluateSealed("implement", "implement_finish", {
+      results: {
+        implement_prepare: { outcome: "skip", reason: "closed", context: null },
+        implement_verify: { exit: "checks_passed" },
+      },
+    });
+
+    expect(Reflect.get(Object(sealed), "loop_result")).toBeNull();
+  });
+
+  test("passes the reason of prepare to the finish step inside the sealed argument", () => {
+    const sealed = evaluateSealed("implement", "implement_finish", {
+      results: { implement_prepare: { outcome: "skip", reason: "closed" } },
+    });
+
+    expect(Reflect.get(Object(sealed), "prepare_reason")).toBe("closed");
+  });
+
+  test("gives the finish step exactly its three inputs", () => {
     expect(inputKeys("implement_finish")).toEqual([
-      "context",
-      "loop_result",
       "prepare_outcome",
-      "prepare_reason",
+      "untrusted",
       "work_item_id",
     ]);
   });
 
-  test("gives the verify step exactly its three inputs", () => {
+  test("gives the verify step exactly its two inputs", () => {
     expect(inputKeys("implement_verify")).toEqual([
-      "context",
-      "first_round",
+      "untrusted",
+      "work_item_id",
+    ]);
+  });
+
+  test("gives the generate step exactly its two inputs", () => {
+    expect(inputKeys("implement_generate")).toEqual([
+      "untrusted",
       "work_item_id",
     ]);
   });

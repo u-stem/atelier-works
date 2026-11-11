@@ -7,9 +7,10 @@ schema:
   type: object
   properties:
     error:
-      type: ''
-      description: 失敗の内容(エラー情報)。
+      type: string
+      description: 失敗の内容(エラー情報)を、JSONの文字列に包んだもの。
       default: null
+      originalType: string
     job_id:
       type: string
       description: 失敗したジョブのID。

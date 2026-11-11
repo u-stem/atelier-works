@@ -93,7 +93,7 @@ value:
       input_transforms:
         error:
           type: javascript
-          expr: error
+          expr: JSON.stringify(error ?? null).replace(/\$/g, "\\u0024")
         path:
           type: static
           value: f/factory/investigate

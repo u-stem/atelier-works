@@ -19,9 +19,12 @@ value:
       value:
         type: script
         input_transforms:
-          context:
+          untrusted:
             type: javascript
-            expr: results.implement_prepare.context
+            expr: >-
+              JSON.stringify({
+              context: results.implement_prepare.context
+              }).replace(/\$/g, "\\u0024")
           work_item_id:
             type: javascript
             expr: flow_input.work_item_id
@@ -36,12 +39,13 @@ value:
       value:
         type: script
         input_transforms:
-          context:
+          untrusted:
             type: javascript
-            expr: results.implement_prepare.context
-          first_round:
-            type: javascript
-            expr: results.implement_generate
+            expr: >-
+              JSON.stringify({
+              context: results.implement_prepare.context,
+              first_round: results.implement_generate
+              }).replace(/\$/g, "\\u0024")
           work_item_id:
             type: javascript
             expr: flow_input.work_item_id
@@ -56,18 +60,17 @@ value:
       value:
         type: script
         input_transforms:
-          context:
-            type: javascript
-            expr: results.implement_prepare.context
-          loop_result:
-            type: javascript
-            expr: 'results.implement_prepare.outcome === "proceed" ? results.implement_verify : null'
           prepare_outcome:
             type: javascript
             expr: results.implement_prepare.outcome
-          prepare_reason:
+          untrusted:
             type: javascript
-            expr: results.implement_prepare.reason
+            expr: >-
+              JSON.stringify({
+              context: results.implement_prepare.context ?? null,
+              loop_result: (results.implement_prepare.outcome === "proceed" ? results.implement_verify : null) ?? null,
+              prepare_reason: results.implement_prepare.reason ?? null
+              }).replace(/\$/g, "\\u0024")
           work_item_id:
             type: javascript
             expr: flow_input.work_item_id
@@ -82,7 +85,7 @@ value:
       input_transforms:
         error:
           type: javascript
-          expr: error
+          expr: JSON.stringify(error ?? null).replace(/\$/g, "\\u0024")
         path:
           type: static
           value: f/factory/implement

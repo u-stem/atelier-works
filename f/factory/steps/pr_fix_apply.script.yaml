@@ -19,25 +19,10 @@ schema:
       type: number
       description: ''
       default: null
-    comments:
-      type: array
-      description: 収集したPRコメントの一覧。
-      default: null
-      items:
-        type: resource
-        resourceType: collected_comment
-      originalType: resource[]
     conflict_check_id:
       type: number
       description: ''
       default: null
-    conflicted_paths:
-      type: array
-      description: ''
-      default: null
-      items:
-        type: string
-      originalType: string[]
     factory_clone_dir:
       type: string
       description: Software Factory自身の複製を置いた作業ディレクトリのパス。
@@ -66,14 +51,11 @@ schema:
       description: 対象リポジトリ名。
       default: null
       originalType: string
-    reviews:
-      type: array
-      description: 収集したPRレビューの一覧。
+    untrusted:
+      type: string
+      description: 指摘とコメントの本文、競合したファイルのパスを、JSONの文字列に包んだもの。
       default: null
-      items:
-        type: resource
-        resourceType: collected_review
-      originalType: resource[]
+      originalType: string
     work_item_id:
       type: number
       description: 対象の作業項目のID。
@@ -97,5 +79,4 @@ schema:
     - worktree_dir
     - factory_clone_dir
     - attempt
-    - reviews
-    - comments
+    - untrusted

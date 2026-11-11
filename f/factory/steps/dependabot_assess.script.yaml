@@ -6,15 +6,15 @@ schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    prepare:
-      type: object
-      description: 準備ステップの結果(影響調査に渡す入力を含む)。
+    untrusted:
+      type: string
+      description: 準備ステップの結果を、JSONの文字列に包んだもの。
       default: null
-      properties: {}
+      originalType: string
     work_item_id:
       type: number
       description: 対象の作業項目のID。
       default: null
   required:
     - work_item_id
-    - prepare
+    - untrusted

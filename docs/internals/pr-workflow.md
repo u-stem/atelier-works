@@ -1729,6 +1729,25 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 `--restricted`はネットワークを遮断しない。PRレビューのClaudeには、読み取り専用のツールだけを渡す。
 
+### stepの間で渡す引数
+
+PRレビューとPR修正のflowは、Claudeの出力やPRの本文とパスを含む値を、前のstepの結果のまま次のstepの引数にしない。
+Windmillが、引数の文字列が参照の形で始まると、実行者の権限で値に置き換えるためである。
+値は1つのJSONの文字列(`untrusted`)に封じて渡す。
+flow.yamlの式が`JSON.stringify(...)`で作り、受け取るstepが`parseUntrustedArg`で戻す。
+
+次の4つのstepの境目が、この形で渡す。
+
+| 受け取るstep | `untrusted`に入れる値 |
+| --- | --- |
+| `pr_review_post` | 総評、判定、指摘、スレッドへの答え、変更ファイルのパス、変更の範囲、バイナリのパス |
+| `pr_fix_apply` | 指摘、コメント、競合したファイルのパス |
+| `pr_fix_verify` | 修正の理由、要約、返信、コミットの件名と本文、指摘、コメント、競合したファイルのパスと3つのblobのsha、PRのheadのブランチ名 |
+| `pr_fix_finish` | 理由、要約、返信、コミットの件名と本文、指摘、コメント、競合したファイルのパスと3つのblobのsha、PRのheadのブランチ名 |
+
+数、sha、GitHubの名前、作業用の置き場など、参照の形を取れない値は、包まずに渡す。
+封じ方、包まない値の基準、検査するテストは、[stepの間で渡す引数](../security.md#stepの間で渡す引数)にある。
+
 ### 検査コマンドの実行
 
 対象リポジトリの検査(lint、typecheck、testに当たるもの)は、Claudeではなく検証のステップが実行する。実行するのは`factory_config.allowed_check_commands`に書いたコマンドで、例えば`["mise run check"]`である。結果は、Claudeの2回目の実行(修正)への入力にする。

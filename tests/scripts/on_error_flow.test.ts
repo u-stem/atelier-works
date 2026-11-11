@@ -26,10 +26,38 @@ import {
   failureNextAction,
   failureWorkItemRef,
   handleFlowFailure,
+  readFailureError,
   shouldMarkFailed,
   UNKNOWN_INSTANCE_NAME,
 } from "../../f/factory/on_error_flow.ts";
 import { nextActionFor } from "../../f/factory/steps/pr_workflow_support.ts";
+import { sealUntrustedArg } from "../lib/untrustedArgSupport.ts";
+
+describe("readFailureError", () => {
+  const ERROR = { message: "step failed", step_id: "a", name: "Error" };
+
+  test("restores the error that the flow sealed", () => {
+    expect(readFailureError(sealUntrustedArg(ERROR))).toEqual(ERROR);
+  });
+
+  test("restores a message that starts with a reference", () => {
+    const sealed = sealUntrustedArg({ message: "$var:f/factory/x" });
+
+    expect(readFailureError(sealed)).toEqual({ message: "$var:f/factory/x" });
+  });
+
+  test("passes an error object through", () => {
+    expect(readFailureError(ERROR)).toEqual(ERROR);
+  });
+
+  test("keeps a plain message that is not JSON", () => {
+    expect(readFailureError("step failed")).toBe("step failed");
+  });
+
+  test("keeps the text when it cannot be read as an error", () => {
+    expect(readFailureError("{broken")).toBe("{broken");
+  });
+});
 
 const IMPLEMENT = "f/factory/implement";
 const PR_FIX_FLOW = "f/factory/pr_fix";

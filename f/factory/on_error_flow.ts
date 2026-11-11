@@ -431,8 +431,24 @@ export async function handleFlowFailure(
   }
 }
 
+/**
+ * 失敗のflowが渡した`error`を戻す。
+ * flowは`error`(例外の文を含む)をJSONの文字列に包んで渡す(`lib/untrusted_arg.ts`)ので、オブジェクトとして読めれば、そのオブジェクトを返す。
+ * 失敗の処理は、読めないことで止まってはならないので、ここでは例外にしない。
+ * オブジェクトでも、JSONとして読めない文字列でもないものは、そのまま返す。
+ */
+export function readFailureError(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) ? parsed : raw;
+  } catch {
+    return raw;
+  }
+}
+
 export async function main(
-  error: unknown,
+  error: string,
   work_item_id?: number,
   path?: string,
   job_id?: string,
@@ -456,7 +472,7 @@ export async function main(
       log: logger("on_error_flow"),
     },
     {
-      error,
+      error: readFailureError(error),
       workItemId: work_item_id,
       path,
       jobId: job_id,

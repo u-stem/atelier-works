@@ -52,15 +52,9 @@ value:
           ci_check_id:
             type: javascript
             expr: results.pr_fix_prepare.ci_check_id ?? null
-          comments:
-            type: javascript
-            expr: results.pr_fix_collect?.comments ?? []
           conflict_check_id:
             type: javascript
             expr: results.pr_fix_prepare.conflict_check_id ?? null
-          conflicted_paths:
-            type: javascript
-            expr: results.pr_fix_prepare.conflicted_paths ?? null
           factory_clone_dir:
             type: javascript
             expr: results.pr_fix_prepare.factory_clone_dir
@@ -79,9 +73,14 @@ value:
           repo:
             type: javascript
             expr: results.pr_fix_prepare.repo
-          reviews:
+          untrusted:
             type: javascript
-            expr: results.pr_fix_collect?.reviews ?? []
+            expr: >-
+              JSON.stringify({
+              reviews: results.pr_fix_collect?.reviews ?? [],
+              comments: results.pr_fix_collect?.comments ?? [],
+              conflicted_paths: results.pr_fix_prepare.conflicted_paths ?? null
+              }).replace(/\$/g, "\\u0024")
           work_item_id:
             type: javascript
             expr: flow_input.work_item_id
@@ -109,24 +108,9 @@ value:
       value:
         type: script
         input_transforms:
-          apply_commit_body:
-            type: javascript
-            expr: results.pr_fix_apply.commit_body
-          apply_commit_subject:
-            type: javascript
-            expr: results.pr_fix_apply.commit_subject
           apply_outcome:
             type: javascript
             expr: results.pr_fix_apply.outcome
-          apply_reason:
-            type: javascript
-            expr: results.pr_fix_apply.reason
-          apply_replies:
-            type: javascript
-            expr: results.pr_fix_apply.replies
-          apply_summary:
-            type: javascript
-            expr: results.pr_fix_apply.summary
           attempt:
             type: javascript
             expr: results.pr_fix_prepare.attempt
@@ -139,24 +123,12 @@ value:
           baseline_sha:
             type: javascript
             expr: results.pr_fix_prepare.baseline_sha ?? null
-          branch:
-            type: javascript
-            expr: results.pr_fix_prepare.branch ?? null
           ci_check_id:
             type: javascript
             expr: results.pr_fix_prepare.ci_check_id ?? null
-          comments:
-            type: javascript
-            expr: results.pr_fix_collect?.comments ?? []
-          conflict_blobs:
-            type: javascript
-            expr: results.pr_fix_prepare.conflict_blobs ?? null
           conflict_check_id:
             type: javascript
             expr: results.pr_fix_prepare.conflict_check_id ?? null
-          conflicted_paths:
-            type: javascript
-            expr: results.pr_fix_prepare.conflicted_paths ?? null
           factory_clone_dir:
             type: javascript
             expr: results.pr_fix_prepare.factory_clone_dir
@@ -175,9 +147,21 @@ value:
           repo:
             type: javascript
             expr: results.pr_fix_prepare.repo
-          reviews:
+          untrusted:
             type: javascript
-            expr: results.pr_fix_collect?.reviews ?? []
+            expr: >-
+              JSON.stringify({
+              apply_reason: results.pr_fix_apply.reason ?? null,
+              apply_summary: results.pr_fix_apply.summary ?? "",
+              apply_replies: results.pr_fix_apply.replies ?? [],
+              apply_commit_subject: results.pr_fix_apply.commit_subject ?? null,
+              apply_commit_body: results.pr_fix_apply.commit_body ?? null,
+              reviews: results.pr_fix_collect?.reviews ?? [],
+              comments: results.pr_fix_collect?.comments ?? [],
+              conflicted_paths: results.pr_fix_prepare.conflicted_paths ?? null,
+              conflict_blobs: results.pr_fix_prepare.conflict_blobs ?? null,
+              branch: results.pr_fix_prepare.branch ?? null
+              }).replace(/\$/g, "\\u0024")
           work_item_id:
             type: javascript
             expr: flow_input.work_item_id
@@ -199,9 +183,6 @@ value:
       value:
         type: script
         input_transforms:
-          summary:
-            type: javascript
-            expr: results.pr_fix_verify?.summary ?? ""
           auto_tree_sha:
             type: javascript
             expr: results.pr_fix_prepare.auto_tree_sha ?? null
@@ -211,30 +192,12 @@ value:
           baseline_sha:
             type: javascript
             expr: results.pr_fix_prepare.baseline_sha ?? null
-          branch:
-            type: javascript
-            expr: results.pr_fix_prepare.branch ?? null
           ci_check_id:
             type: javascript
             expr: results.pr_fix_prepare.ci_check_id ?? null
-          comments:
-            type: javascript
-            expr: results.pr_fix_collect?.comments ?? []
-          commit_body:
-            type: javascript
-            expr: results.pr_fix_verify?.commit_body ?? null
-          commit_subject:
-            type: javascript
-            expr: results.pr_fix_verify?.commit_subject ?? null
-          conflict_blobs:
-            type: javascript
-            expr: results.pr_fix_prepare.conflict_blobs ?? null
           conflict_check_id:
             type: javascript
             expr: results.pr_fix_prepare.conflict_check_id ?? null
-          conflicted_paths:
-            type: javascript
-            expr: results.pr_fix_prepare.conflicted_paths ?? null
           fix_round:
             type: javascript
             expr: results.pr_fix_prepare.fix_round
@@ -264,25 +227,30 @@ value:
           pr_number:
             type: javascript
             expr: results.pr_fix_prepare.pr_number
-          reason:
-            type: javascript
-            expr: 'results.pr_fix_verify == null ? (results.pr_fix_collect == null
-              ? results.pr_fix_prepare.reason : results.pr_fix_collect.reason) : results.pr_fix_verify.reason'
-          replies:
-            type: javascript
-            expr: results.pr_fix_verify?.replies ?? []
           repo:
             type: javascript
             expr: results.pr_fix_prepare.repo
           repo_dir:
             type: javascript
             expr: results.pr_fix_prepare.repo_dir
-          reviews:
-            type: javascript
-            expr: results.pr_fix_collect?.reviews ?? []
           trigger_review_ids:
             type: javascript
             expr: results.pr_fix_collect?.trigger_review_ids ?? []
+          untrusted:
+            type: javascript
+            expr: >-
+              JSON.stringify({
+              reason: (results.pr_fix_verify == null ? (results.pr_fix_collect == null ? results.pr_fix_prepare.reason : results.pr_fix_collect.reason) : results.pr_fix_verify.reason) ?? null,
+              summary: results.pr_fix_verify?.summary ?? "",
+              replies: results.pr_fix_verify?.replies ?? [],
+              commit_subject: results.pr_fix_verify?.commit_subject ?? null,
+              commit_body: results.pr_fix_verify?.commit_body ?? null,
+              reviews: results.pr_fix_collect?.reviews ?? [],
+              comments: results.pr_fix_collect?.comments ?? [],
+              conflicted_paths: results.pr_fix_prepare.conflicted_paths ?? null,
+              conflict_blobs: results.pr_fix_prepare.conflict_blobs ?? null,
+              branch: results.pr_fix_prepare.branch ?? null
+              }).replace(/\$/g, "\\u0024")
           verified_tree_sha:
             type: javascript
             expr: results.pr_fix_verify?.verified_tree_sha ?? null
@@ -306,7 +274,7 @@ value:
       input_transforms:
         error:
           type: javascript
-          expr: error
+          expr: JSON.stringify(error ?? null).replace(/\$/g, "\\u0024")
         path:
           type: static
           value: f/factory/pr_fix

@@ -499,20 +499,13 @@ describe("normalizePrFileHunks", () => {
     expect(normalizePrFileHunks([TWO_HUNKS], ["a.ts"])).toEqual([TWO_HUNKS]);
   });
 
-  test("treats missing hunks as unknown for every changed file", () => {
-    expect(normalizePrFileHunks(undefined, ["a.ts", "b.ts"])).toEqual([
+  test("treats null hunks as unknown for every changed file", () => {
+    expect(normalizePrFileHunks(null, ["a.ts", "b.ts"])).toEqual([
       { path: "a.ts", hunks: null },
       { path: "b.ts", hunks: null },
     ]);
   });
 
-  test("treats null hunks as unknown for every changed file", () => {
-    expect(normalizePrFileHunks(null, ["a.ts"])).toEqual([
-      { path: "a.ts", hunks: null },
-    ]);
-  });
-
-  // フローの既定値が空の配列だったときも、変更ファイルが0件という意味にしない。
   test("treats an empty list as unknown when the PR has changed files", () => {
     expect(normalizePrFileHunks([], ["a.ts"])).toEqual([
       { path: "a.ts", hunks: null },
