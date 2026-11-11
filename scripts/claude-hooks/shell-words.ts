@@ -87,7 +87,9 @@ export const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 /**
  * 添字つきの変数代入の語(`NAME[添字]=value`と、追記の形)。
  * bash、zsh、kshは、この語を先頭の代入として外し、後ろの語をコマンドとして実行する。
- * 添字は最後の`]`まで広く取る。代入でない語を代入として外しても、後ろの語を判定するだけである。
+ * 添字は最後の`]`まで広く取る。
+ * 名前を引用した語や、前置きの後ろの語は、同じ字面でもコマンドの名前として実行される。
+ * どちらかを決められないので、後ろに語が続く形は`Parser`が読めない構文にする。
  */
 const SUBSCRIPT_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\[.*\]\+?=/s;
 
@@ -908,8 +910,7 @@ function stripWrappersOf(input: readonly Word[]): StrippedCommand {
     const name = baseName(text);
     const transparent = TRANSPARENT_OPTIONS.get(text);
     // `env`は、`=`を含む語を、名前の字を問わず代入として読む。`env`のオプションを読み終えた直後の並びだけが当たる。
-    const envAssignment =
-      afterEnv && !text.startsWith("-") && text.includes("=");
+    const envAssignment = afterEnv && text.includes("=");
     const assignment =
       ASSIGNMENT.test(text) || SUBSCRIPT_ASSIGNMENT.test(text) || envAssignment;
     if (!assignment) afterEnv = false;
@@ -1780,6 +1781,15 @@ class Parser {
     const { words } = stripped;
     const program = words[0];
     if (program === undefined) return;
+    // 添字つきの代入の形の語は、シェルと引用の有無によって、代入にもコマンドの名前にもなる。
+    // 後ろにコマンドの語が続く形は、どちらが実行されるかを決められない。
+    if (
+      stripped.assignments.some((word) => SUBSCRIPT_ASSIGNMENT.test(word.text))
+    ) {
+      throw new ShellSyntaxError(
+        "a subscripted assignment in front of a command; run the assignment and the command separately",
+      );
+    }
     const name = baseName(program.text);
     const invocation = shellInvocation(words);
     if (invocation !== null) {
