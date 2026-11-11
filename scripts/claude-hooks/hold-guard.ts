@@ -533,14 +533,26 @@ function inspectionOperand(
   args: readonly Word[],
   subcommands: ReadonlySet<string> = RUNNER_SUBCOMMANDS,
 ): string | null {
+  const index = runnerOperandAt(args, subcommands);
+  const first = (args[index]?.text ?? "").replace(VERSION_SUFFIX, "");
+  return INSPECTION_TOOLS.has(first) || LINT_SCRIPT.test(first) ? first : null;
+}
+
+/**
+ * 実行系の引数の、最初のオペランド(実行するスクリプトか道具の位置)の添字を返す。
+ * 実行系のオプション(`--bun`、`--yes`、`-y`)と`subcommands`の語を、4語まで読み飛ばす。
+ */
+function runnerOperandAt(
+  args: readonly Word[],
+  subcommands: ReadonlySet<string> = RUNNER_SUBCOMMANDS,
+): number {
   let index = 0;
   while (index < 4) {
     const text = args[index]?.text ?? "";
     if (!RUNNER_FLAGS.has(text) && !subcommands.has(text)) break;
     index += 1;
   }
-  const first = (args[index]?.text ?? "").replace(VERSION_SUFFIX, "");
-  return INSPECTION_TOOLS.has(first) || LINT_SCRIPT.test(first) ? first : null;
+  return index;
 }
 
 /** 保留のコードを指す語が、すべて`hold`の直後に`list`を置く形なら真。 */
@@ -802,9 +814,10 @@ function freezeCliFinding(
 }
 
 /**
- * `index`番目の語が、凍結のCLIを指す語より後ろにある`--reason`の値(直後の語か、`--reason=`の形)なら真。
+ * `index`番目の語が、実行される凍結のCLIの`--reason`の値(直後の語か、`--reason=`の形)なら真。
+ * 凍結のCLIが実行系の最初のオペランド(実行するスクリプトの位置)にあり、オプションがその後ろにあるときだけである。
  * 理由の文字列はコードとして実行されないので、CLIを指す字面と書き込みの語が並ぶ文字列の判定から外す。
- * ほかのプログラムの同じ名前のオプションの値は、コードとして読まれうるので外さない。
+ * ほかのスクリプトやプログラムの同じ名前のオプションの値は、コードとして読まれうるので外さない。
  */
 function isReasonValue(args: readonly Word[], index: number): boolean {
   const word = args[index];
@@ -812,7 +825,11 @@ function isReasonValue(args: readonly Word[], index: number): boolean {
   const inline = word.text.startsWith("--reason=");
   if (!inline && args[index - 1]?.text !== "--reason") return false;
   const optionAt = inline ? index : index - 1;
-  return args.slice(0, optionAt).some(pointsAtFreezeCode);
+  const scriptAt = runnerOperandAt(args);
+  const script = args[scriptAt];
+  return (
+    script !== undefined && scriptAt < optionAt && pointsAtFreezeCode(script)
+  );
 }
 
 /** 先頭の語が凍結のコードを指すなら真。 */
