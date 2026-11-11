@@ -266,6 +266,32 @@ describe("indexDoc links", () => {
     ]);
   });
 
+  test("ignores a reference definition that only an image uses", () => {
+    expect(indexDoc("![図][fig]\n\n[fig]: none.png\n").links).toEqual([]);
+  });
+
+  test("ignores a reference definition that only a collapsed or shortcut image uses", () => {
+    expect(
+      indexDoc("![fig][]と![fig2]\n\n[fig]: a.png\n[fig2]: b.png\n").links,
+    ).toEqual([]);
+  });
+
+  test("matches an image reference to its definition regardless of case", () => {
+    expect(indexDoc("![図][FIG]\n\n[fig]: none.png\n").links).toEqual([]);
+  });
+
+  test("reads a reference definition that a link and an image both use", () => {
+    expect(indexDoc("[a][r]と![図][r]\n\n[r]: a.md\n").links).toEqual([
+      { line: 3, target: "a.md" },
+    ]);
+  });
+
+  test("reads a reference definition that nothing uses", () => {
+    expect(indexDoc("[r]: a.md\n").links).toEqual([
+      { line: 1, target: "a.md" },
+    ]);
+  });
+
   test("ignores a footnote definition", () => {
     expect(targetsOf("本文[^1]\n\n[^1]: 注\n")).toEqual([]);
   });
@@ -489,9 +515,80 @@ describe("lintDocLinks", () => {
     ).toEqual([]);
   });
 
-  test("reports a document that the resolver cannot read", () => {
-    expect(lintDocLinks("missing.md", fakeResolver({}))).toEqual([
-      "missing.md:1: [link] document could not be read",
+  test("returns nothing for a document that the resolver cannot read", () => {
+    expect(lintDocLinks("missing.md", fakeResolver({}))).toEqual([]);
+  });
+
+  test("reports a link that ends with a slash to a file", () => {
+    expect(lintIn("README.md", "[a](docs/a.md/)\n")).toEqual([
+      "README.md:1: [link] file not found: docs/a.md/",
+    ]);
+  });
+
+  test("reports a link that ends with a slash to a path that does not exist", () => {
+    expect(lintIn("README.md", "[a](docs/none/)\n")).toEqual([
+      "README.md:1: [link] file not found: docs/none/",
+    ]);
+  });
+
+  test("accepts a link to the root directory", () => {
+    expect(lintIn("docs/a.md", "[root](/)と[up](../)\n")).toEqual([]);
+  });
+
+  test("does not check the anchor of a link to a directory", () => {
+    expect(lintIn("README.md", "[f](f/factory/#無い)\n")).toEqual([]);
+  });
+
+  test("does not check the anchor of a link with a query", () => {
+    expect(lintIn("README.md", "[a](docs/a.md?plain=1#L10)\n")).toEqual([]);
+  });
+
+  test("does not check a missing heading anchor of a link with a query", () => {
+    expect(lintIn("README.md", "[a](docs/a.md?plain=1#無い)\n")).toEqual([]);
+  });
+
+  test("still reports a file that does not exist when the link has a query", () => {
+    expect(lintIn("README.md", "[a](docs/none.md?plain=1#L10)\n")).toEqual([
+      "README.md:1: [link] file not found: docs/none.md?plain=1#L10",
+    ]);
+  });
+
+  test.each([
+    ["a single line", "#L10"],
+    ["a range of lines", "#L10-L20"],
+    ["a range with columns", "#L10C5-L20C8"],
+  ])("does not check %s as an anchor", (_, anchor) => {
+    expect(lintIn("README.md", `[a](docs/a.md${anchor})\n`)).toEqual([]);
+  });
+
+  test("does not check a line anchor of the same file", () => {
+    expect(lintIn("docs/a.md", "[l](#L10)\n")).toEqual([]);
+  });
+
+  test("checks an anchor that only starts like a line anchor", () => {
+    expect(lintIn("README.md", "[a](docs/a.md#L10x)\n")).toEqual([
+      "README.md:1: [link] anchor not found: docs/a.md#L10x",
+    ]);
+  });
+
+  test.each([
+    ["a footnote", "#user-content-fn-1"],
+    ["a footnote reference", "#user-content-fnref-1"],
+  ])("does not check %s as an anchor", (_, anchor) => {
+    expect(lintIn("README.md", `[a](docs/a.md${anchor})\n`)).toEqual([]);
+  });
+
+  test("still reports a file that does not exist when the link points at a footnote", () => {
+    expect(
+      lintIn("README.md", "[a](docs/none.md#user-content-fn-1)\n"),
+    ).toEqual([
+      "README.md:1: [link] file not found: docs/none.md#user-content-fn-1",
+    ]);
+  });
+
+  test("does not skip an anchor that only contains user-content-", () => {
+    expect(lintIn("README.md", "[a](docs/a.md#user-content-x)\n")).toEqual([
+      "README.md:1: [link] anchor not found: docs/a.md#user-content-x",
     ]);
   });
 });
@@ -514,6 +611,17 @@ describe("createLinkResolver", () => {
       resolver.exists("docs/A.md"),
       resolver.exists("docs/none.md"),
     ]).toEqual([false, false]);
+  });
+
+  test("tells a directory from a file", () => {
+    const resolver = fakeResolver(REPO);
+
+    expect([
+      resolver.isDirectory("docs/internals"),
+      resolver.isDirectory("."),
+      resolver.isDirectory("docs/a.md"),
+      resolver.isDirectory("docs/none"),
+    ]).toEqual([true, true, false, false]);
   });
 
   test("returns the anchors of a tracked Markdown file", () => {
