@@ -694,7 +694,7 @@ describe("publishing findings when some point outside the diff", () => {
       );
       expect(posts[2]).toMatchObject({
         comments: [],
-        body: expect.stringContaining("`a.ts:15`: problem"),
+        body: expect.stringContaining("`a.ts:15`: inside the diff"),
       });
     });
 

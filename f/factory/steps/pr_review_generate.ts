@@ -54,7 +54,6 @@ import {
   buildReviewDiffText,
   decideReviewScope,
   describeReason,
-  fileDiffHunksOf,
   hasBodyOnlyMustFinding,
   isReviewClaudeOutput,
   listReviewThreadsBestEffort,
@@ -69,6 +68,7 @@ import {
   selectListedBinaryFiles,
   settleReviewFindings,
   settleThreadResponses,
+  splitChangedFiles,
   withTrustedResolution,
 } from "./pr_workflow_support.ts";
 
@@ -190,10 +190,17 @@ export async function main(
   // スレッドの一覧は、再レビューで重複を避けるプロンプトの材料にすぎない。
   // 読めないとき(1000件超、形の不一致など)に生成を止めると、再試行しても直らずレビューが投稿されない。
   // 空で続けても、未解決の`[MUST]`の誤判定は投稿ステップが一覧を読み直して防ぐ。
-  const [pr, prDiff, prFileEntries, viewer, listedThreads] = await Promise.all([
+  // 変更ファイルの一覧は、`patch`の文字列を持たない形に分けて受ける。Claudeの実行のあいだ、大きな文字列を持たないためである。
+  const [
+    pr,
+    prDiff,
+    { entries: prFileEntries, hunks: prFileHunks },
+    viewer,
+    listedThreads,
+  ] = await Promise.all([
     getPr(client, owner, repo, pr_number),
     getPrDiff(client, owner, repo, pr_number, config.diff_max_lines),
-    getPrFiles(client, owner, repo, pr_number),
+    getPrFiles(client, owner, repo, pr_number).then(splitChangedFiles),
     getViewer(client),
     listReviewThreadsBestEffort(
       () => listReviewThreads(client, owner, repo, pr_number),
@@ -394,7 +401,7 @@ export async function main(
       findings,
       thread_responses: settleThreadResponses(output.thread_responses, scope),
       pr_files: prFiles,
-      pr_file_hunks: prFileEntries.map(fileDiffHunksOf),
+      pr_file_hunks: prFileHunks,
       binary_files: binaryFiles,
       binary_unlisted_count: binaryUnlistedCount,
     };

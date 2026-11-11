@@ -460,16 +460,62 @@ export function parseNewSideHunks(patch: string): DiffHunkRange[] {
  * `patch`が無いときは、変わった行が無い(`changes`が0。バイナリや中身の変わらない名前の変更)ならば範囲なし、
  * 変わった行があるならば範囲が分からない(`null`)として扱う。
  * 後者はGitHubが大きすぎる差分の`patch`を省いたときで、範囲を決めつけると、差分の中の指摘まで外へ移してしまうため。
+ * 削除されたファイル(`status`が`removed`)は、`patch`が無くても新しい側の行が無いので、範囲なしにする。
  */
 export function fileDiffHunksOf(file: {
   readonly filename: string;
   readonly patch: string | null;
   readonly changes: number;
+  readonly status: string;
 }): FileDiffHunks {
   if (file.patch !== null) {
     return { path: file.filename, hunks: parseNewSideHunks(file.patch) };
   }
-  return { path: file.filename, hunks: file.changes === 0 ? [] : null };
+  const noNewSideLines = file.changes === 0 || file.status === "removed";
+  return { path: file.filename, hunks: noNewSideLines ? [] : null };
+}
+
+/**
+ * 変更ファイルの一覧を、`readReviewDelta`に渡すパスの元になる一覧と、行コメントを付けられる範囲に分ける。
+ * `patch`の文字列は大きいので、一覧を読んだ場所で範囲だけにして、Claudeの実行のあいだ持たないようにする。
+ */
+export function splitChangedFiles(
+  files: readonly {
+    readonly filename: string;
+    readonly previous_filename: string | null;
+    readonly patch: string | null;
+    readonly changes: number;
+    readonly status: string;
+  }[],
+): {
+  readonly entries: { filename: string; previous_filename: string | null }[];
+  readonly hunks: FileDiffHunks[];
+} {
+  return {
+    entries: files.map((file) => ({
+      filename: file.filename,
+      previous_filename: file.previous_filename,
+    })),
+    hunks: files.map(fileDiffHunksOf),
+  };
+}
+
+/**
+ * 範囲の指摘(`line`から`lastLine`まで)のうち、hunkと重なる部分を返す。重ならなければ`null`。
+ * 複数のhunkと重なるときは、先のhunkの部分を返す。
+ * 複数のhunkにまたがる範囲を、GitHubは受け付けないため、1つのhunkの中に切り詰める。
+ */
+function clipToHunk(
+  line: number,
+  lastLine: number,
+  hunks: readonly DiffHunkRange[],
+): DiffHunkRange | null {
+  for (const hunk of hunks) {
+    const start = Math.max(line, hunk.start);
+    const end = Math.min(lastLine, hunk.end);
+    if (start <= end) return { start, end };
+  }
+  return null;
 }
 
 /**
@@ -500,8 +546,13 @@ export type MappedReviewComments = {
   readonly comments: ReviewCommentLike[];
   /** 行コメントにできず、総評に並べる指摘。 */
   readonly droppedFindings: ReviewFinding[];
-  /** 位置が差分の外だったため、最も近い差分の行に付け替えて`comments`に入れた指摘。 */
+  /** 位置が差分の外だったため、差分の行に付け替えるか切り詰めて`comments`に入れた指摘。 */
   readonly reattachedFindings: ReviewFinding[];
+  /**
+   * 差分の範囲が分からないファイルの指摘で、確かめずに`comments`に入れたもの。
+   * GitHubに拒否されたときに、まず総評へ移す対象になる。
+   */
+  readonly unverifiedFindings: ReviewFinding[];
 };
 
 /**
@@ -512,10 +563,13 @@ export type MappedReviewComments = {
  *
  * - 指摘の行(範囲の指摘は最初から最後の行まで)が1つのhunkに収まれば、その位置に付ける。
  *   複数のhunkにまたがる範囲を、GitHubは受け付けない。
- * - 収まらなければ、同じファイルで最も近い差分の行に、1行のコメントとして付け替える。
- *   本文には元の位置を添え、提案のブロックは通常のコードに変える(`renderReattachedInlineComment`)。
+ * - 範囲の指摘がhunkの端をまたぐときは、先に重なるhunkの、重なる部分に範囲を切り詰める。
+ *   1行だけが重なるときは、1行のコメントにする。
+ * - 重なるhunkが無ければ(1行の指摘を含む)、同じファイルで最も近い差分の行に、1行のコメントとして付け替える。
+ * - 切り詰めた指摘と付け替えた指摘は、本文に元の位置を添え、提案のブロックは通常のコードに変える
+ *   (`renderReattachedInlineComment`)。
  * - ファイルの`hunks`が`null`のときは範囲が分からないので、確かめずにそのまま付ける。
- *   拒否されたときは、投稿の側が総評に移して投稿し直す。
+ *   その指摘は`unverifiedFindings`にも返す。拒否されたときは、投稿の側が先にこれらだけを総評に移して投稿し直す。
  * - 次の指摘は付け替えず、除いて総評に載せる。`path`がPRの変更ファイルに無いもの、
  *   変更ファイルに新しい側の行が無いもの、`line`で位置を決められないもの(`null`か0以下)。
  *   黙って捨てずに、件数だけでなく指摘そのものも返す。
@@ -537,6 +591,7 @@ export function mapFindingsToReviewComments(
   const comments: ReviewCommentLike[] = [];
   const droppedFindings: ReviewFinding[] = [];
   const reattachedFindings: ReviewFinding[] = [];
+  const unverifiedFindings: ReviewFinding[] = [];
   for (const finding of findings) {
     const line = finding.line;
     if (line === null || line <= 0 || !hunksByPath.has(finding.path)) {
@@ -547,19 +602,31 @@ export function mapFindingsToReviewComments(
       finding.end_line !== null && finding.end_line > line
         ? finding.end_line
         : line;
-    const range =
-      lastLine > line ? { start_line: line, line: lastLine } : { line };
     const hunks = hunksByPath.get(finding.path) ?? null;
     if (
       hunks === null ||
       hunks.some((hunk) => hunk.start <= line && lastLine <= hunk.end)
     ) {
+      if (hunks === null) unverifiedFindings.push(finding);
       comments.push({
         path: finding.path,
         side: "RIGHT",
-        ...range,
+        ...(lastLine > line ? { start_line: line, line: lastLine } : { line }),
         body: renderInlineComment(finding),
       });
+      continue;
+    }
+    const clipped = lastLine > line ? clipToHunk(line, lastLine, hunks) : null;
+    if (clipped !== null) {
+      comments.push({
+        path: finding.path,
+        side: "RIGHT",
+        ...(clipped.end > clipped.start
+          ? { start_line: clipped.start, line: clipped.end }
+          : { line: clipped.start }),
+        body: renderReattachedInlineComment(finding, "clipped"),
+      });
+      reattachedFindings.push(finding);
       continue;
     }
     const nearest = nearestDiffLine(line, hunks);
@@ -571,11 +638,11 @@ export function mapFindingsToReviewComments(
       path: finding.path,
       side: "RIGHT",
       line: nearest,
-      body: renderReattachedInlineComment(finding),
+      body: renderReattachedInlineComment(finding, "nearest"),
     });
     reattachedFindings.push(finding);
   }
-  return { comments, droppedFindings, reattachedFindings };
+  return { comments, droppedFindings, reattachedFindings, unverifiedFindings };
 }
 
 const REVIEW_FINDING_KIND_PREFIXES: Record<ReviewFindingKind, string> = {
@@ -604,12 +671,13 @@ export function fenceFor(code: string): string {
 }
 
 /**
- * `code`を` ```suggestion `のブロックとして描画する。
+ * `code`をフェンスつきのコードブロックとして描画する。直前に空行を置く。
+ * `info`が`suggestion`ならGitHubのsuggestionブロック、空なら通常のコードブロックになる。
  * フェンスは`fenceFor`で決めるので、`code`がどんな連続バッククォートを含んでも崩れない。
  */
-function renderSuggestionBlock(code: string): string {
+function renderCodeBlock(code: string, info: "suggestion" | ""): string {
   const fence = fenceFor(code);
-  return `\n\n${fence}suggestion\n${code}\n${fence}`;
+  return `\n\n${fence}${info}\n${code}\n${fence}`;
 }
 
 /**
@@ -711,40 +779,64 @@ export function renderInlineComment(finding: ReviewFinding): string {
   const codeBlock =
     finding.suggested_code === null
       ? ""
-      : renderSuggestionBlock(finding.suggested_code);
-  return `${renderInlineCommentText(finding)}${codeBlock}`;
+      : renderCodeBlock(finding.suggested_code, "suggestion");
+  return `${renderInlineCommentText(finding, null)}${codeBlock}`;
 }
 
-/** 役割タグ、`kind`の接頭辞と`message`、あれば`suggestion`の注記まで。コードのブロックは含まない。 */
-function renderInlineCommentText(finding: ReviewFinding): string {
+/**
+ * 役割タグ、`kind`の接頭辞と`message`、あれば`suggestion`の注記まで。コードのブロックは含まない。
+ * `originNote`があれば、接頭辞の直後、`message`の前に置く。
+ */
+function renderInlineCommentText(
+  finding: ReviewFinding,
+  originNote: string | null,
+): string {
   const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
   const message = postedFindingText(finding.message);
   const suggestionText =
     finding.suggestion !== null
       ? `\n\n提案: ${postedFindingText(finding.suggestion)}`
       : "";
-  return `${ROLE_TAGS.pr_review}\n${prefix} ${message}${suggestionText}`;
+  const head =
+    originNote === null ? `${prefix} ` : `${prefix} ${originNote}\n\n`;
+  return `${ROLE_TAGS.pr_review}\n${head}${message}${suggestionText}`;
 }
 
+/** 付け替えた指摘が、差分のどの行に付いたか。 */
+export type ReattachedPlacement =
+  /** 元の位置が差分の外で、最も近い差分の行に付けた。 */
+  | "nearest"
+  /** 範囲の指摘が差分の端をまたぐので、差分に収まる行だけに付けた。 */
+  | "clipped";
+
 /**
- * 位置が差分の外だったため、最も近い差分の行に付け替える指摘のインラインコメントの本文にする。
- * 役割タグ、`kind`の接頭辞と`message`、`suggestion`の注記は`renderInlineComment`と同じで、
- * 続けて元の位置(`path:line`、範囲の指摘は`path:line-end_line`)を添える。
+ * 位置が差分の外だったため、差分の行に付け替えた指摘のインラインコメントの本文にする。
+ * 付け替えた先の行番号は、`pr_fix`と再レビューが指摘の位置として読む。
+ * そのため、元の位置(`path:line`、範囲の指摘は`path:line-end_line`)と付け替えた旨を、
+ * 接頭辞の直後、`message`の前に置く。読む側が、最初に元の位置を知るためである。
+ * 役割タグと接頭辞の行、`message`、`suggestion`の注記は`renderInlineComment`と同じ。
  *
  * `suggested_code`は、GitHubのsuggestionブロックにしない。
- * suggestionブロックは、コメントを付けた行を置き換えるので、付け替えると別の行を壊す提案になる。
- * 通常のコードのブロックにして、元の位置の行を置き換える内容だと書く。
+ * suggestionブロックは、コメントを付けた行(範囲)を置き換えるので、付け替えると別の行を壊す提案になる。
+ * 通常のコードのブロックにして、元の位置を置き換える内容だと書く。
  * 総評に移さないのは、提案をスレッドに残し、`pr_fix`と再レビューが他の指摘と同じように扱えるようにするため。
- * 本文は`finding`だけから決まるので、`hasBodyOnlyMustFinding`が投稿済みのスレッドと突き合わせられる。
+ * 本文は`finding`と`placement`だけから決まるので、`hasBodyOnlyMustFinding`が投稿済みのスレッドと突き合わせられる。
  */
-export function renderReattachedInlineComment(finding: ReviewFinding): string {
-  const origin = `\n\n元の位置は${findingLocation(finding)}です。\n差分に収まらないため、最も近い差分の行に付けています。`;
+export function renderReattachedInlineComment(
+  finding: ReviewFinding,
+  placement: ReattachedPlacement = "nearest",
+): string {
+  const reason =
+    placement === "nearest"
+      ? "差分に収まらないため、最も近い差分の行に付けています。"
+      : "差分に収まる行だけに付けています。";
+  const originNote = `元の位置は${findingLocation(finding)}です。\n${reason}`;
   const code = finding.suggested_code;
   const codeBlock =
     code === null
       ? ""
-      : `\n\n次のコードは、元の位置の行を置き換える提案です。\n\n${fenceFor(code)}\n${code}\n${fenceFor(code)}`;
-  return `${renderInlineCommentText(finding)}${origin}${codeBlock}`;
+      : `\n\n次のコードは、元の位置を置き換える提案です。${renderCodeBlock(code, "")}`;
+  return `${renderInlineCommentText(finding, originNote)}${codeBlock}`;
 }
 
 /**
@@ -823,6 +915,9 @@ export function decideReviewBodyMode(
  * これもすでに確認を求めているので、免責を付けない。
  * ここの文字列はすべて、英数字と日本語の間に半角スペースを入れない規約に従う
  * (`docs/coding-guidelines.md`)。
+ *
+ * `movedFindings`は、行コメントにするはずだった指摘を、総評へ移したものである。
+ * 行に紐づけられなかった指摘と同じ一覧に、位置(`path:line`)を添えて、先に並べる。
  */
 export function renderReviewSummary(
   authorLogin: string,
@@ -832,6 +927,7 @@ export function renderReviewSummary(
   openThreadCount: number | null,
   binaryFiles: readonly string[] = [],
   binaryUnlistedCount = 0,
+  movedFindings: readonly ReviewFinding[] = [],
 ): string {
   const lines = [`${ROLE_TAGS.pr_review} @${authorLogin}`];
   const hasBinary = binaryFiles.length + binaryUnlistedCount > 0;
@@ -865,7 +961,7 @@ export function renderReviewSummary(
       break;
   }
   lines.push(...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount));
-  lines.push(...renderUnanchoredFindingLines(droppedFindings));
+  lines.push(...renderUnanchoredFindingLines(droppedFindings, movedFindings));
   return lines.join("\n");
 }
 
@@ -6413,10 +6509,11 @@ export function hasBodyOnlyMustFinding(
   return findings
     .filter((finding) => finding.kind === "must")
     .some((finding) => {
-      // 位置が差分の外で、近い行に付け替えて投稿したスレッドも、投稿済みとみなす。
+      // 位置が差分の外で、差分の行に付け替えるか切り詰めて投稿したスレッドも、投稿済みとみなす。
       const expected = [
         comparable(renderInlineComment(finding)),
-        comparable(renderReattachedInlineComment(finding)),
+        comparable(renderReattachedInlineComment(finding, "nearest")),
+        comparable(renderReattachedInlineComment(finding, "clipped")),
       ];
       return !posted.some(
         (thread) =>

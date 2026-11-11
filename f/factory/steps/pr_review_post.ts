@@ -100,6 +100,8 @@ export function normalizeThreadResponses(
 
 /**
  * 古いflow定義が新しいscriptを呼ぶと、`pr_file_hunks`がundefinedかnullで届く。
+ * 空の配列で、変更ファイルが1件以上あるときも同じである。flowの既定値が空の配列のとき、
+ * 変更ファイルが0件という意味に読むと、すべての指摘を総評へ落としてしまうため。
  * そのときは、変更ファイルごとに範囲が分からないものとして扱い、指摘を確かめずに行コメントにする。
  * 差分の外の行は、GitHubに拒否されたときの総評への退避で受ける。
  */
@@ -107,7 +109,11 @@ export function normalizePrFileHunks(
   prFileHunks: readonly FileDiffHunks[] | null | undefined,
   prFiles: readonly string[],
 ): FileDiffHunks[] {
-  if (prFileHunks === null || prFileHunks === undefined) {
+  if (
+    prFileHunks === null ||
+    prFileHunks === undefined ||
+    (prFileHunks.length === 0 && prFiles.length > 0)
+  ) {
     return prFiles.map((path) => ({ path, hunks: null }));
   }
   return [...prFileHunks];
@@ -320,6 +326,16 @@ export async function findPostedReview(
 export type PostMarkedReviewOptions = {
   /** 422で投稿し直すときの本文。省くと`summaryBody`を使う。 */
   readonly fallbackBody?: string;
+  /**
+   * 範囲が分からないファイルの指摘だけを総評へ移し、残りの行コメントで投稿し直すときの本文と行コメント。
+   * 省くか、移す指摘が無いときは、この段を飛ばして全件の退避に進む。
+   */
+  readonly withoutUnverified?:
+    | {
+        readonly body: string;
+        readonly comments: readonly ReviewComment[];
+      }
+    | undefined;
   /** 投稿し直すときの警告の出力先。 */
   readonly log?: Logger;
 };
@@ -329,14 +345,20 @@ export type PostMarkedReviewOptions = {
  * 本文は`summaryBody`に`withReviewMarkers`で目印を足したもの。
  *
  * 行に紐づけたコメントが1件でもGitHubのdiffに解決できないと、レビュー全体が422で拒否される。
- * 同じ入力を繰り返しても同じ行で落ちるので、422を受けたら一度だけ、行コメントを付けずに
- * `fallbackBody`(行コメントの指摘を総評に並べた本文)で投稿し直す。
+ * 同じ入力を繰り返しても同じ行で落ちるので、422を受けたら投稿し直す。
+ * 投稿し直しは、次の順に、拒否されたときだけ次へ進む。
+ * 1. `withoutUnverified`があれば、確かめていない指摘だけを総評に移し、確かめた行コメントで投稿し直す。
+ *    拒否の原因は、確かめていない指摘のうちの1件であることが多く、確かめた行コメントまで巻き添えにしないため。
+ * 2. 行コメントを付けず、`fallbackBody`(行コメントの指摘をすべて総評に並べた本文)で投稿し直す。
+ *
  * 対象は行の解決に限らない、すべての422である。
  * 422の文言はGitHub側で変わりうるので、文言で絞ると復旧できなくなるためである。
- * 行コメントと無関係な422でも、投稿し直しは1回だけで、失敗すればそのまま例外になる。
+ * 行コメントと無関係な422でも、最後の投稿し直しが失敗すれば、そのまま例外になる。
  * 受けた422のメッセージはログに残し、原因を切り分けられるようにする。
- * 行コメントが無いときと、投稿し直しも失敗したときは、そのまま例外を投げる。
+ * 行コメントが無いときと、422以外のエラーは、投稿し直さずにそのまま例外を投げる。
  * 422を受けた投稿はGitHub側で拒否されているので、投稿し直しでレビューが二重になることは無い。
+ * どの投稿も同じ目印を持つので、422以外で落ちて再実行されたときは、
+ * 先に成功していた投稿を`findPostedReview`が見つけて、二重に投稿しない。
  */
 export async function postMarkedReview(
   client: GhClient,
@@ -345,7 +367,17 @@ export async function postMarkedReview(
   comments: readonly ReviewComment[],
   options: PostMarkedReviewOptions = {},
 ): Promise<number> {
-  const { fallbackBody = summaryBody, log } = options;
+  const { fallbackBody = summaryBody, withoutUnverified, log } = options;
+  const isRejection = (err: unknown): err is GitHubHttpError =>
+    err instanceof GitHubHttpError && err.status === 422;
+  const warnRejection = (message: string, err: GitHubHttpError): void => {
+    log?.warn(message, {
+      owner: target.owner,
+      repo: target.repo,
+      number: target.pr_number,
+      github_message: maskSecrets(err.message),
+    });
+  };
   const post = async (
     body: string,
     inline: readonly ReviewComment[],
@@ -366,21 +398,30 @@ export async function postMarkedReview(
   try {
     return await post(summaryBody, comments);
   } catch (err) {
-    if (
-      !(err instanceof GitHubHttpError) ||
-      err.status !== 422 ||
-      comments.length === 0
-    ) {
+    if (!isRejection(err) || comments.length === 0) {
       throw err;
     }
-    log?.warn(
+    if (withoutUnverified !== undefined) {
+      warnRejection(
+        "received 422; posting the review again without the unverified inline comments",
+        err,
+      );
+      try {
+        return await post(withoutUnverified.body, withoutUnverified.comments);
+      } catch (second) {
+        if (!isRejection(second)) {
+          throw second;
+        }
+        warnRejection(
+          "received 422 again; posting the review without inline comments",
+          second,
+        );
+        return post(fallbackBody, []);
+      }
+    }
+    warnRejection(
       "received 422; posting the review again without inline comments",
-      {
-        owner: target.owner,
-        repo: target.repo,
-        number: target.pr_number,
-        github_message: maskSecrets(err.message),
-      },
+      err,
     );
     return post(fallbackBody, []);
   }
@@ -394,6 +435,8 @@ export type PublishReviewInput = {
   readonly comments: readonly ReviewComment[];
   /** `comments`になった指摘。同じ順で並ぶ。GitHubが行を解決できないときに、総評へ移す。 */
   readonly commentedFindings: readonly ReviewFinding[];
+  /** `commentedFindings`のうち、差分の範囲が分からないファイルの指摘。拒否されたとき、先に総評へ移す。 */
+  readonly unverifiedFindings: readonly ReviewFinding[];
   /** 行に紐づけられず、総評に並べる指摘。 */
   readonly droppedFindings: readonly ReviewFinding[];
   /** 差分に内容が出ないバイナリのファイル。モードによらず、総評に固定の文で並べる。 */
@@ -626,12 +669,42 @@ export async function publishReview(
     input.binaryFiles,
     input.binaryUnlistedCount,
   );
+  // 拒否されたら、まず範囲が分からないファイルの指摘だけを総評へ移して、残りの行コメントで投稿し直す。
+  // 移す指摘が無いか、行コメントがすべて移す指摘のときは、この段を飛ばす。
+  const { unverifiedFindings } = input;
+  const verifiedComments = comments.filter((_, index) => {
+    const commented = input.commentedFindings[index];
+    return commented === undefined || !unverifiedFindings.includes(commented);
+  });
+  const withoutUnverified =
+    unverifiedFindings.length > 0 &&
+    verifiedComments.length > 0 &&
+    verifiedComments.length < comments.length
+      ? {
+          comments: verifiedComments,
+          body: renderReviewSummary(
+            input.prAuthorLogin,
+            verifiedComments.length,
+            decideReviewBodyMode(
+              verifiedComments.length,
+              droppedFindings.length + unverifiedFindings.length,
+              priorReview,
+              openThreadCount,
+            ),
+            droppedFindings,
+            openThreadCount,
+            input.binaryFiles,
+            input.binaryUnlistedCount,
+            unverifiedFindings,
+          ),
+        }
+      : undefined;
   const postedReviewId = await postMarkedReview(
     client,
     target,
     summaryBody,
     comments,
-    { fallbackBody, log },
+    { fallbackBody, withoutUnverified, log },
   );
 
   return {
@@ -775,13 +848,13 @@ async function postReview(
     return { skip: true, posted: false, posted_review_id: null };
   }
 
-  const { comments, droppedFindings, reattachedFindings } =
+  const { comments, droppedFindings, reattachedFindings, unverifiedFindings } =
     mapFindingsToReviewComments(
       findings,
       normalizePrFileHunks(input.pr_file_hunks, pr_files),
     );
   if (reattachedFindings.length > 0) {
-    log.info("moved findings outside the diff to the nearest diff line", {
+    log.info("moved findings outside the diff onto lines of the diff", {
       work_item_id,
       count: reattachedFindings.length,
     });
@@ -812,6 +885,7 @@ async function postReview(
       prAuthorLogin: pr.authorLogin,
       comments,
       commentedFindings: commentedFindingsOf(findings, droppedFindings),
+      unverifiedFindings,
       droppedFindings,
       binaryFiles,
       binaryUnlistedCount,
