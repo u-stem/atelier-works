@@ -52,7 +52,7 @@
 //   引用符の外のglob(`scripts/hol?.ts`、`scripts/hol[d].ts`、`scripts/*`)は、ファイル名の部分が保留のコードの名前に当たりうれば拒否する。
 //   ディレクトリは見ない。POSIXの文字クラス(`[[:lower:]]`)は読み解かず、当たりうるものとして扱う。
 //   ブレース(`{hold.ts,place}`)は、展開した綴りと、空白に置き換えた綴りの両方で判定する。
-//   カンマの無いブレースの範囲(`{o..o}`)は、`*`に置き換えてglobと同じに照合する。括弧の外に英字が3字未満の語は当てない。
+//   カンマの無いブレースの範囲(`{o..o}`)は、展開される字の集合(英字は`[o-o]`、数は`[0-9]*`)に置き換えてglobと同じに照合する。
 //   NULを含む`$'...'`の語は、切り詰めた綴りと、切り詰めない綴り(`variants`)の両方で判定する。
 //   `-e`などの文字列と標準入力で渡すコードに含まれる場合も同じである。
 //   許すのは次の2つだけである。
@@ -438,21 +438,42 @@ function spellings(word: Word): readonly string[] {
 /** 語ごとの綴りの記録。同じ語を前置きの判定と起動語の判定で何度も見るので、ブレースの展開は1回にする。 */
 const SPELLINGS = new WeakMap<Word, readonly string[]>();
 
-/** カンマの無いブレースの範囲(`{a..c}`、`{1..9..2}`)。シェルは字や数の並びに展開する。 */
-const BRACE_RANGE = /\{[^{},\s]*\.\.[^{},\s]*\}/;
-const BRACE_RANGES = /\{[^{},\s]*\.\.[^{},\s]*\}/g;
+/** カンマの無いブレースの範囲(`{a..c}`、`{1..9..2}`)。括弧の中を取り出す。シェルは字や数の並びに展開する。 */
+const BRACE_RANGES = /\{([^{},\s]*\.\.[^{},\s]*)\}/g;
 
 /**
- * 範囲を`*`に置き換えた綴りを返す。範囲が無ければnullを返す。
- * 展開した字は決まらないものとして扱い、globと同じ照合に通す。範囲の展開を読み解かないためである。
+ * 範囲の括弧の中を、展開される字の集合のglobにする。英字の範囲は`[x-y]`、数の範囲は桁数が決まらないので`[0-9]*`である。
+ * 増分(`..2`)は読まず、端点の間の字を全部含める。シェルが範囲として展開しない形はnullを返す。
+ */
+function rangeGlob(inner: string): string | null {
+  const letters = /^([A-Za-z])\.\.([A-Za-z])(?:\.\.[-+]?\d+)?$/.exec(inner);
+  if (letters?.[1] !== undefined && letters[2] !== undefined) {
+    const [low, high] = [letters[1], letters[2]].sort();
+    return `[${low}-${high}]`;
+  }
+  return /^[-+]?\d+\.\.[-+]?\d+(?:\.\.[-+]?\d+)?$/.test(inner)
+    ? "[0-9]*"
+    : null;
+}
+
+/**
+ * 範囲を展開される字の集合(`rangeGlob`)に置き換えた綴りを返す。置き換える範囲が無ければnullを返す。
+ * 置き換えた綴りは、globと同じ照合に通す。
  */
 function rangeAsGlob(text: string): string | null {
-  return BRACE_RANGE.test(text) ? text.replace(BRACE_RANGES, "*") : null;
+  let replaced = false;
+  const glob = text.replace(BRACE_RANGES, (whole: string, inner: string) => {
+    const set = rangeGlob(inner);
+    if (set === null) return whole;
+    replaced = true;
+    return set;
+  });
+  return replaced ? glob : null;
 }
 
 /**
  * 語が`mention`に当たるか、引用符の外のglobかブレースの範囲が`names`に当たりうるなら真。ディレクトリは問わない。
- * 範囲だけの語は、括弧の外に英字と`_`が3字以上あるときだけ当てる(`aimsAtName`)。`{1..3}`のような日常の範囲を止めないためである。
+ * 範囲は展開される字の集合に置き換えるので、数の範囲(`{1..3}`)は英字の名前に当たらない。
  */
 function pointsAtCode(
   word: Word,
@@ -474,9 +495,7 @@ function pointsAtCode(
     const ranged = rangeAsGlob(text);
     if (ranged === null) return false;
     const file = fileOf(ranged);
-    return (
-      aimsAtName(file) && names.some((name) => globMatches(file, name, true))
-    );
+    return names.some((name) => globMatches(file, name, true));
   });
 }
 
@@ -2204,7 +2223,7 @@ export type ReleaseCallContext = {
 /**
  * 文字列の綴り。ブレースは、展開した形に加えて、括弧だけを外した形も足す。
  * カンマの無い`{x}`は、シェルは展開しないが、curlは外して読むためである。
- * ブレースの範囲は、`*`に置き換えた形も足す。展開した字が決まらないものとして、globと同じに照合するためである。
+ * ブレースの範囲は、展開される字の集合(`rangeAsGlob`)に置き換えた形も足す。globと同じに照合するためである。
  */
 function releaseForms(text: string): string[] {
   const forms = [text, ...expandBraces(text)];
