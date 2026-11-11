@@ -1,11 +1,13 @@
 // 分析の画面が表示する値の集計と整形。取得した行を、グラフと表に出す形にする。
-// 日は、view側が日付で丸めた時刻(UTC)をそのまま使う。端末のタイムゾーンで読み替えると日がずれる。
+// 日は、viewが日本時間の0時で丸めた時刻を、日本時間の日付として読む。
+// 日本時間は夏時間を持たないので、9時間を足してUTCの日付として読む。端末のタイムゾーンで読むと日がずれる。
 
 import type {
   AgentCostDailyRow,
   ApprovalStatsRow,
   LeadTimeRow,
 } from "../api/guards/analytics.ts";
+import { JST_OFFSET_MS } from "./jst.ts";
 import { SELECTED_STYLE } from "./selectedStyle.ts";
 
 /** 集計の期間(日)の選択肢。 */
@@ -20,7 +22,7 @@ export function periodButtonClass(selected: boolean): string {
   return selected ? SELECTED_STYLE : "";
 }
 
-/** 1日分の費用と実行件数。`day`は`YYYY-MM-DD`(UTC)。 */
+/** 1日分の費用と実行件数。`day`は日本時間の日付の`YYYY-MM-DD`。 */
 export type DailyTotal = {
   readonly day: string;
   readonly costUsd: number;
@@ -45,10 +47,16 @@ export function hitsRowLimit(rowCount: number, limit: number): boolean {
   return rowCount >= limit;
 }
 
-/** ISO文字列の日付部分(UTC)。読めない値は元の文字列を返す。 */
+/**
+ * 時刻の日本時間の日付(`YYYY-MM-DD`)。読めない値は元の文字列を返す。
+ * 日本時間の0時の時刻と、migrationの反映前のviewが返すUTCの0時の時刻は、どちらも同じ日付になる。
+ */
 function dayKey(iso: string): string {
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toISOString().slice(0, 10);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+  return new Date(date.getTime() + JST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 /**
@@ -77,7 +85,10 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  */
 const MAX_EXTENSION_DAYS = 3;
 
-/** `YYYY-MM-DD`(UTC)を、その日の0時の時刻(ms)にする。日付として読めない値は`null`。 */
+/**
+ * 日付のキー(`YYYY-MM-DD`)を、UTCの0時の時刻(ms)にする。日付として読めない値は`null`。
+ * 日付のキーを並べて数えるための軸で、日本時間の0時の時刻ではない。
+ */
 function dayStartMs(day: string): number | null {
   const time = Date.parse(`${day}T00:00:00.000Z`);
   return Number.isNaN(time) ? null : time;
@@ -85,7 +96,7 @@ function dayStartMs(day: string): number | null {
 
 /**
  * 実行の無い日を値0で補い、期間の全日を古い日から新しい日の順に並べる。
- * 期間は`now`の日(UTC)を最後とする`days`日で、棒の間隔を日数に比例させるために使う。
+ * 期間は`now`の日本時間の日を最後とする`days`日で、棒の間隔を日数に比例させるために使う。
  * 期間の前後`MAX_EXTENSION_DAYS`日以内の日は、範囲を広げて含める。端末の時計とbackendの時刻が少しずれても、行を捨てないためである。
  * それより遠い日は並べない。並べる日数は、`days`に`MAX_EXTENSION_DAYS`の2倍を足した値までに収まる。
  * 日付として読めない日は、並べる位置が決まらないので除く。
@@ -99,7 +110,9 @@ export function fillDailyTotals(
   now: Date,
   truncated = false,
 ): DailyTotal[] {
-  const today = Math.floor(now.getTime() / MS_PER_DAY) * MS_PER_DAY;
+  // `now`の日本時間の日付を、日付のキーと同じ軸(UTCの0時)に置く。
+  const today =
+    Math.floor((now.getTime() + JST_OFFSET_MS) / MS_PER_DAY) * MS_PER_DAY;
   const windowStart = today - (days - 1) * MS_PER_DAY;
   const earliest = windowStart - MAX_EXTENSION_DAYS * MS_PER_DAY;
   const latest = today + MAX_EXTENSION_DAYS * MS_PER_DAY;
@@ -244,18 +257,16 @@ export function leadTimeByStatus(
     );
 }
 
-/** グラフの横軸に出す「10/8」の形(UTC)。日付として読めない値は、そのまま返す。 */
-export function formatMonthDay(iso: string): string {
-  const date = new Date(iso);
+/**
+ * グラフの横軸に出す「10/8」の形。日付のキー(`YYYY-MM-DD`)を受け、キーの月日をそのまま出す。
+ * 日付として読めない値は、そのまま返す。
+ */
+export function formatMonthDay(day: string): string {
+  const date = new Date(day);
   if (Number.isNaN(date.getTime())) {
-    return iso;
+    return day;
   }
   return `${date.getUTCMonth() + 1}/${date.getUTCDate()}`;
-}
-
-/** 表に出す「2026-10-08」の形(UTC)。日付として読めない値は、そのまま返す。 */
-export function formatIsoDate(iso: string): string {
-  return dayKey(iso);
 }
 
 export function formatUsd(value: number): string {

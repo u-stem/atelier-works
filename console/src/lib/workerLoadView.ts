@@ -2,6 +2,7 @@
 // 値は数だけで、外部の文字列を含まない。読めなかった値は「不明」と出す。
 
 import type { WorkerLoad } from "../api/guards/workerLoad.ts";
+import { JST_OFFSET_MS } from "./jst.ts";
 
 const BYTES_PER_MIB = 1024 * 1024;
 
@@ -32,8 +33,6 @@ function percent(ratio: number): string {
     ? `${(ratio * 100).toFixed(1)}%`
     : `${String(rounded)}%`;
 }
-
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /** ISO文字列の時刻を、JSTの`HH:MM`で返す。 */
 function jstClock(iso: string): string {

@@ -3,29 +3,36 @@
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_jobs_contract.test.ts`が落ちる。
 //
-// 一覧は、開いたときと更新の操作のときだけ取る。自動の取り直しはしない。
+// 履歴とスケジュールの一覧は、開いたときと更新の操作のときだけ取る。自動の取り直しはしない。
 // Console用workerの枠が1つで、ジョブの一覧の取得が承認などの呼び出しを待たせるため。
+// 実行中と待ちの一覧は、そのタブを選んでいて、文書が見えていて、画面が15分以内に操作されたあいだだけ、60秒ごとに取り直す。
 // 詳細は、ログと結果を含む取得を1回だけ行い、実行中のジョブの状態だけを15秒ごとに取り直す。
 // ログと結果は、フォーカスや再接続、画面を開き直したときにも取り直さない。操作と、終了の検知のときだけ取り直す。
-// 例外が、実行中と待ちのタブの「今のステップ」である。実行中のflowのルートのうち古い2件の詳細(ログと結果なし)を、
-// 1件ずつ30秒ごとに取り直す。選んでいるタブが実行中と待ちで、文書が見えていて、画面が15分以内に操作されたときだけ取る。
+// 実行中と待ちのタブの「今のステップ」は、実行中のflowのルートのうち古い2件の詳細(ログと結果なし)を、
+// 1件ずつ30秒ごとに取り直す。止める条件は実行中と待ちの一覧と同じである。
 // 取得のたびにWindmillのジョブが1件できるので、止める条件を絞っている。
 
 import {
+  focusManager,
   keepPreviousData,
   type QueryClient,
   type UseQueryResult,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import {
   activeStepsEnabled,
   newlyFinished,
   type StepDetails,
   stepTargets,
 } from "../lib/activeSteps.ts";
-import { useIdle } from "../lib/idleTracker.ts";
 import type { JobsTabId } from "../lib/jobsTabs.ts";
 import { isActiveJobState, isFinishedJobState } from "../lib/jobsView.ts";
 import { ApiFailure } from "./errors.ts";
@@ -356,8 +363,14 @@ export type DetailParams = {
 /** 実行中のジョブの状態を取り直す間隔。 */
 export const JOB_DETAIL_REFRESH_MS = 15_000;
 
-/** 一覧が新しいとみなす間隔。自動では取り直さず、更新の操作で取り直す。 */
+/** 一覧が新しいとみなす間隔。履歴とスケジュールの一覧は自動では取り直さず、更新の操作で取り直す。 */
 export const JOBS_LIST_STALE_MS = 60_000;
+
+/**
+ * 実行中と待ちの一覧を取り直す間隔。
+ * 新しいとみなす間隔(`JOBS_LIST_STALE_MS`)とは意味が違うので、別の定数にする。
+ */
+export const ACTIVE_LIST_REFRESH_MS = 60_000;
 
 export const jobsActiveQueryKey = ["console", "jobs", "active"] as const;
 export const schedulesQueryKey = ["console", "schedules"] as const;
@@ -490,13 +503,47 @@ const LIST_POLICY = {
   staleTime: JOBS_LIST_STALE_MS,
 } as const;
 
-/** 実行中と待ちのジョブの取得の設定。自動では取り直さない。 */
+/**
+ * 実行中と待ちのジョブの取得の設定。自動では取り直さない。
+ * 先読みと更新の操作が使う。画面の購読が自動で取り直す設定は、`activeListQueryOptions`が重ねる。
+ */
 export function jobsActiveQueryOptions() {
   return {
     queryKey: jobsActiveQueryKey,
     queryFn: ({ signal }: { signal: AbortSignal }) =>
       fetchActiveJobs({ signal }),
     ...LIST_POLICY,
+  };
+}
+
+/** 実行中と待ちの一覧を、いま取り直すかを決める入力。 */
+export type ActiveListPolling = {
+  readonly selectedTab: JobsTabId;
+  readonly idle: boolean;
+};
+
+/**
+ * 実行中と待ちの一覧を取り直す間隔。
+ * 実行中と待ちのタブを選んでいて、画面が操作されているときだけ60秒ごとに取り直す。
+ * 文書が見えているかは、`refetchIntervalInBackground`が決める。
+ */
+export function activeListRefetchInterval(
+  polling: ActiveListPolling,
+): number | false {
+  return polling.selectedTab === "active" && !polling.idle
+    ? ACTIVE_LIST_REFRESH_MS
+    : false;
+}
+
+/**
+ * 画面が購読する、実行中と待ちの一覧の取得の設定。
+ * 先読みの設定に、条件つきの取り直しを重ねる。文書が見えない間は取り直しを止める。
+ */
+export function activeListQueryOptions(polling: ActiveListPolling) {
+  return {
+    ...jobsActiveQueryOptions(),
+    refetchInterval: activeListRefetchInterval(polling),
+    refetchIntervalInBackground: false,
   };
 }
 
@@ -628,11 +675,89 @@ export function currentSteps(
   return currentDetail(output, status)?.steps ?? [];
 }
 
-/** 実行中と待ちのジョブを取る。`enabled`が偽の間は取らない(開いていないタブの取得を避ける)。 */
+/**
+ * 実行中と待ちの一覧が、いま自動で取り直されているか。
+ * 実行中と待ちのタブを選んでいて、画面が操作されていて、文書が見えているときだけ真になる。
+ */
+export function activeListRefreshing(
+  polling: ActiveListPolling,
+  documentVisible: boolean,
+): boolean {
+  return documentVisible && activeListRefetchInterval(polling) !== false;
+}
+
+/**
+ * 取り直しが止まっていた状態から再開したとき、一覧をすぐ取り直すか。
+ * 操作の再開、実行中と待ちのタブへの切り替え、文書が見える状態への復帰では、次の取り直しまで最大60秒かかる。
+ * その間、見出しは自動更新と出したまま、古い一覧が残るのを避けるためである。
+ * 新しいとみなす間隔(`JOBS_LIST_STALE_MS`)より古いときだけ取り直す。取得中は始めない。
+ */
+export function shouldRefetchOnResume(input: {
+  /** 開いているタブか。開いていないタブは取らない。 */
+  readonly enabled: boolean;
+  /** 前回の描画で取り直していたか。 */
+  readonly wasRefreshing: boolean;
+  /** 今回の描画で取り直しているか。 */
+  readonly refreshing: boolean;
+  readonly isFetching: boolean;
+  /** 最後の取得の時刻(ミリ秒)。まだ取っていなければ0。 */
+  readonly dataUpdatedAt: number;
+  readonly now: number;
+}): boolean {
+  const resumed = input.refreshing && !input.wasRefreshing;
+  return (
+    input.enabled &&
+    resumed &&
+    !input.isFetching &&
+    input.now - input.dataUpdatedAt >= JOBS_LIST_STALE_MS
+  );
+}
+
+/** 文書が見えているか。見えない間は、`refetchIntervalInBackground`が偽の取り直しが止まる。 */
+function useDocumentVisible(): boolean {
+  return useSyncExternalStore(
+    subscribeDocumentVisible,
+    readDocumentVisible,
+    () => true,
+  );
+}
+
+// 購読の関数は、描画のたびに作り直さない。作り直すと、Reactが購読を解いて張り直すためである。
+function subscribeDocumentVisible(onChange: () => void): () => void {
+  return focusManager.subscribe(onChange);
+}
+
+function readDocumentVisible(): boolean {
+  return focusManager.isFocused();
+}
+
+/**
+ * 実行中と待ちのジョブを取る。`enabled`が偽の間は取らない(開いていないタブの取得を避ける)。
+ * 実行中と待ちのタブを選んでいて、画面が操作されていて、文書が見えているあいだは、60秒ごとに取り直す。
+ * 取り直しが再開したとき、一覧が古ければすぐ1回取り直す。
+ */
 export function useActiveJobs(
   enabled: boolean,
+  polling: ActiveListPolling,
 ): UseQueryResult<JobListView, Error> {
-  return useQuery({ ...jobsActiveQueryOptions(), enabled });
+  const query = useQuery({ ...activeListQueryOptions(polling), enabled });
+  const visible = useDocumentVisible();
+  const refreshing = activeListRefreshing(polling, visible);
+  const wasRefreshing = useRef(refreshing);
+  const { refetch, isFetching, dataUpdatedAt } = query;
+  useEffect(() => {
+    const resume = shouldRefetchOnResume({
+      enabled,
+      wasRefreshing: wasRefreshing.current,
+      refreshing,
+      isFetching,
+      dataUpdatedAt,
+      now: Date.now(),
+    });
+    wasRefreshing.current = refreshing;
+    if (resume) void refetch();
+  }, [enabled, refreshing, isFetching, dataUpdatedAt, refetch]);
+  return query;
 }
 
 /** scheduleの状態を取る。`enabled`が偽の間は取らない。 */
@@ -858,6 +983,9 @@ export async function refreshActiveThenSteps(reads: {
 /**
  * 今のステップの取得の設定。
  * 実行中と待ちのタブを選んでいて、画面が操作されていて、読むflowがあるときだけ読む。
+ * 一覧の取得中かどうかは、`enabled`に入れない。
+ * `enabled`が切り替わるたびに、取り直しのタイマーが張り直され、間隔が延びるためである。
+ * 一覧の取得と重なることは受け入れる。待ちは最大でも詳細2件分で小さい。
  */
 export function activeStepsOptions(
   list: JobListView | undefined,
@@ -874,7 +1002,8 @@ export function activeStepsOptions(
 /**
  * ジョブが終わったと分かったとき、一覧を順に取り直す。取り直すのは購読のある取得だけである。
  * 開いていないタブの取得は古いと印を付けるだけで、走らせない。
- * 一覧は自動では取り直さないので、終わったジョブが実行中のまま残らないよう、
+ * 実行中と待ちの一覧の自動の取り直しは60秒ごと、scheduleと履歴は自動では取り直さない。
+ * 終わったジョブが次の取り直しまで実行中のまま残らないよう、
  * 実行中と待ち、scheduleの直近の実行、履歴の順に取り直す。
  * Console用workerの枠が1つなので、重ねずに1つずつ取る。
  */
@@ -939,15 +1068,16 @@ const NO_DETAILS: StepDetails = new Map();
 /**
  * 実行中のflowのルートのうち古い2件の、今のステップを読む。
  * 実行中と待ちのタブを選んでいて、画面が操作されているときだけ読み、文書が見えない間は止まる。
+ * 操作の有無は、一覧の取得と同じ値を画面から受ける。
  * 詳細が終了を返したジョブがあれば、購読のある一覧を1回だけ取り直す。
  * 同じ周期に複数が終わっても、まとめて1回にする。
  */
 export function useActiveJobSteps(
   list: JobListView | undefined,
   selectedTab: JobsTabId,
+  idle: boolean,
 ): ActiveJobStepsView {
   const client = useQueryClient();
-  const idle = useIdle();
   const query = useQuery(activeStepsOptions(list, selectedTab, idle));
   const details = query.data ?? NO_DETAILS;
 

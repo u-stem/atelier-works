@@ -20,7 +20,6 @@ import {
   dailyTotals,
   firstTryApprovalRate,
   formatHours,
-  formatIsoDate,
   formatPercent,
   formatUsd,
   hitsRowLimit,
@@ -82,17 +81,17 @@ function CostReport({
   return (
     <>
       <TruncationNote rowCount={rows.length} />
-      <ChartBlock title="日別コスト(USD・UTC)">
+      <ChartBlock title="日別コスト(USD)">
         <BarChart
-          title="日別コスト(UTC)"
+          title="日別コスト"
           data={costData}
           axis="sequence"
           formatValue={formatUsd}
         />
       </ChartBlock>
-      <ChartBlock title="日別実行件数(UTC)">
+      <ChartBlock title="日別実行件数">
         <BarChart
-          title="日別実行件数(UTC)"
+          title="日別実行件数"
           data={countData}
           axis="sequence"
           formatValue={formatCount}
@@ -100,11 +99,11 @@ function CostReport({
       </ChartBlock>
       <DataTable
         caption="日別のコストと実行件数"
-        columns={["日(UTC)", "コスト(USD)", "実行件数"]}
+        columns={["日", "コスト(USD)", "実行件数"]}
         rows={totals.map((total) => ({
           key: total.day,
           cells: [
-            formatIsoDate(total.day),
+            total.day,
             formatUsd(total.costUsd),
             formatCount(total.runCount),
           ],

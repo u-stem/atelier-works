@@ -42,10 +42,16 @@ export function NoticeLookup({
   noticeId,
   now,
   missing,
+  failureIds,
+  onOpenFailure,
 }: {
   noticeId: number;
   now: number;
   missing: string;
+  /** 一覧にある失敗の作業項目のID。詳細が、名指しされた作業項目の失敗へ移るボタンを出すかを決める。 */
+  failureIds: ReadonlySet<number>;
+  /** 名指しされた作業項目の失敗を開く。 */
+  onOpenFailure: (workItemId: number) => void;
 }) {
   const notices = useNotices();
   // 取得中は、前に読んだ一覧を使わない。解決した通知を、未解決のまま出さないためである。
@@ -73,6 +79,12 @@ export function NoticeLookup({
   return notice === undefined ? (
     <Message>{missing}</Message>
   ) : (
-    <NoticeDetail notice={notice} now={now} source="full" />
+    <NoticeDetail
+      notice={notice}
+      now={now}
+      source="full"
+      failureIds={failureIds}
+      onOpenFailure={onOpenFailure}
+    />
   );
 }

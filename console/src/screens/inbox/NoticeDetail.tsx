@@ -12,7 +12,9 @@ import { announce, announceStaleList } from "../../components/announce.ts";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
+import { workItemRef } from "../../lib/labels.ts";
 import { describeNotice } from "../../lib/noticeView.ts";
+import { noticeWorkItemId } from "../../lib/noticeWorkItem.ts";
 import { formatAbsoluteWithRelative } from "../../lib/relativeTime.ts";
 import { systemSectionPath } from "../../lib/systemSections.ts";
 import { describeNoticeResult, releaseNotice } from "../../lib/writeNotices.ts";
@@ -52,21 +54,44 @@ const RESOLVE_CONFIG = {
  * 解決のボタンは、未解決でConsoleから解決できる種類のときだけ出す。
  * 解決できない種類には、ボタンの代わりに理由を出す。
  * 対応をシステムの画面の区画で行う種類は、未解決のときだけ、次の操作の文の下に、その区画へ移るボタンを出す。
+ * 本文が作業項目を名指しする種類は、未解決で、その作業項目の失敗が一覧にあるときだけ、同じ位置に、その失敗へ移るボタンを出す。
+ * 一覧に無い失敗へ移ると、選んだ項目が一覧に無いという行き止まりになるためである。
+ * ボタンは遷移を自分で起こさず、`onOpenFailure`を呼ぶ。履歴、種類のチップ、フォーカスは、一覧を持つ画面が決める。
  */
 export function NoticeDetail({
   notice,
   now,
   source = "summary",
+  failureIds,
+  onOpenFailure,
 }: {
   notice: SummaryNotice;
   now: number;
   /** 通知の出どころ。summaryの本文は上限で切れているので、切れた旨を添える。 */
   source?: "summary" | "full";
+  /** 一覧にある失敗の作業項目のID。 */
+  failureIds: ReadonlySet<number>;
+  /** 名指しされた作業項目の失敗を開く。 */
+  onOpenFailure: (workItemId: number) => void;
 }) {
   const description = describeNotice(notice, source);
   const { submit, isLocked } = useWriteMutation(RESOLVE_CONFIG);
   const locked = isLocked(notice.notice_id);
   const { guide } = description;
+  const namedWorkItemId = guide.retriesWorkItem
+    ? noticeWorkItemId(notice.message)
+    : null;
+  const failureTarget =
+    description.resolved ||
+    namedWorkItemId === null ||
+    !failureIds.has(namedWorkItemId)
+      ? null
+      : {
+          open: () => {
+            onOpenFailure(namedWorkItemId);
+          },
+          label: `${workItemRef(namedWorkItemId)}の失敗へ`,
+        };
   return (
     <article className="flex max-w-[47.5rem] flex-col gap-6 p-4 md:p-8">
       <header className="flex flex-col gap-3">
@@ -151,6 +176,13 @@ export function NoticeDetail({
                 <Link to={systemSectionPath(guide.target.section)}>
                   {guide.target.label}
                 </Link>
+              </Button>
+            </div>
+          )}
+          {failureTarget === null ? null : (
+            <div className="mt-1">
+              <Button variant="outline" size="sm" onClick={failureTarget.open}>
+                {failureTarget.label}
               </Button>
             </div>
           )}

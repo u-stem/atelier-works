@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
 import { HISTORY_FILTER_PATHS } from "../../../../f/factory/lib/console_known_paths.ts";
 import {
+  activeListRefetchInterval,
   jobsHoldsQueryOptions,
   refreshActiveThenSteps,
   useActiveJobSteps,
@@ -16,6 +17,7 @@ import {
 } from "../../app/refreshStatus.ts";
 import { TabPanel } from "../../components/TabPanel.tsx";
 import { Tabs } from "../../components/Tabs.tsx";
+import { useIdle } from "../../lib/idleTracker.ts";
 import {
   JOBS_TABS,
   type JobsTabId,
@@ -45,8 +47,9 @@ import { ScheduleList } from "./ScheduleList.tsx";
  * 開くタブはURLの`?tab=`に、履歴の絞り込みは`?status=`と`?script=`に持ち、選び直しても履歴を積まない。
  * scriptの値はURLから来るので、履歴に出るscriptとフローの集合と照合し、知らない値は無視する。
  * 集合は、ルートのジョブとして動くものだけである。フローのステップや、Consoleの呼び出しを選んでも、常に0件になるためである。
- * どの一覧も自動では取り直さない。Console用workerの枠が1つで、一覧の取得が承認などの呼び出しを待たせるためである。
- * 例外は、実行中のflowの行に添える今のステップである。実行中と待ちのタブを選んでいる間だけ、30秒ごとに取り直す。
+ * 履歴とスケジュールの一覧は自動では取り直さない。Console用workerの枠が1つで、一覧の取得が承認などの呼び出しを待たせるためである。
+ * 実行中と待ちの一覧は、そのタブを選んでいて、画面が操作されているあいだだけ60秒ごとに取り直す。文書が見えない間は止まる。
+ * 実行中のflowの行に添える今のステップも、同じ条件で30秒ごとに取り直す。一覧の取得とは独立に動き、重なることがある。
  * 取得は、タブを初めて開いたときに始める。見出しの更新ボタンは、今開いているタブの取得だけを取り直す。
  * 実行中と待ちの更新は、一覧を取ってから今のステップを取る。
  * スケジュールの凍結の突き合わせに使う保留と凍結の取得は、定期の取り直しをせず、そのタブの更新で取り直す。
@@ -62,7 +65,11 @@ export function JobsScreen() {
   const visited = useVisitedTabs(tab);
   const scroll = useTabScroll(tab);
 
-  const active = useActiveJobs(visited.has("active"));
+  const idle = useIdle();
+  const active = useActiveJobs(visited.has("active"), {
+    selectedTab: tab,
+    idle,
+  });
   const history = useJobHistory(
     {
       ...(status === undefined ? {} : { status }),
@@ -70,7 +77,7 @@ export function JobsScreen() {
     },
     visited.has("history"),
   );
-  const steps = useActiveJobSteps(active.data, tab);
+  const steps = useActiveJobSteps(active.data, tab, idle);
   const schedules = useSchedules(visited.has("schedules"));
   const holds = useQuery({
     ...jobsHoldsQueryOptions(),
@@ -91,19 +98,27 @@ export function JobsScreen() {
     },
   ]);
   // 実行中と待ちの更新は、一覧を取ってから今のステップを取る。2つの取得を重ねない。
-  const activeRefresh = refreshStatusOfAll([
-    {
-      dataUpdatedAt: active.dataUpdatedAt,
-      isFetching: active.isFetching || steps.isFetching,
-      isError: active.isError,
-      error: active.error,
-      refetch: () =>
-        refreshActiveThenSteps({
-          active: () => active.refetch().then((result) => result.data),
-          steps: (list) => steps.refetch(list),
-        }),
-    },
-  ]);
+  // 自動更新の間隔は、取り直しが動いているあいだだけ見出しに出す。止まっている間に出すと、更新されているように読める。
+  const activeInterval = activeListRefetchInterval({
+    selectedTab: tab,
+    idle,
+  });
+  const activeRefresh = refreshStatusOfAll(
+    [
+      {
+        dataUpdatedAt: active.dataUpdatedAt,
+        isFetching: active.isFetching || steps.isFetching,
+        isError: active.isError,
+        error: active.error,
+        refetch: () =>
+          refreshActiveThenSteps({
+            active: () => active.refetch().then((result) => result.data),
+            steps: (list) => steps.refetch(list),
+          }),
+      },
+    ],
+    activeInterval === false ? {} : { autoRefreshMs: activeInterval },
+  );
   const refresh =
     tab === "history"
       ? historyRefresh

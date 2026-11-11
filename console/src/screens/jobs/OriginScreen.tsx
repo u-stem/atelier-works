@@ -1,10 +1,10 @@
-import { FileQuestion } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Navigate, useLocation, useParams } from "react-router";
 import { useSchedules } from "../../api/jobsQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { useNow } from "../../app/useNow.ts";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
+import { MissingMessage } from "../../components/MissingMessage.tsx";
 import { originDiagramCrumbs } from "../../lib/breadcrumbs.ts";
 import {
   FLOWS_DATA,
@@ -37,12 +37,7 @@ function Notice({ back, text }: { back: string | null; text: string }) {
           ]}
         />
       </PageHeader>
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-        <span className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-subtle">
-          <FileQuestion aria-hidden="true" className="size-6" />
-        </span>
-        <p className="max-w-sm text-small text-muted-foreground">{text}</p>
-      </div>
+      <MissingMessage>{text}</MissingMessage>
     </>
   );
 }

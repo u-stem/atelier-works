@@ -23,11 +23,19 @@ function noticeOf(
   };
 }
 
-function render(notice: SummaryNotice): string {
+function render(
+  notice: SummaryNotice,
+  failureIds: ReadonlySet<number> = new Set(),
+): string {
   return renderToStaticMarkup(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>
-        <NoticeDetail notice={notice} now={NOW} />
+        <NoticeDetail
+          notice={notice}
+          now={NOW}
+          failureIds={failureIds}
+          onOpenFailure={() => undefined}
+        />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -82,5 +90,85 @@ describe("NoticeDetail move button", () => {
     const button = html.indexOf("/system?section=holds");
 
     expect(button >= 0 && button < html.indexOf("<code")).toBe(true);
+  });
+});
+
+describe("NoticeDetail button to the failure of the named work item", () => {
+  const MESSAGE = "o/r#2 (work item 42): 実装フローが止まりました。";
+  const FAILURES = new Set([42]);
+
+  // 移る先は同じ画面の別の項目なので、画面が履歴、チップ、フォーカスを決める。部品は遷移を自分で起こさない。
+  test("offers a button for the failure of the work item the notice names", () => {
+    expect(
+      render(noticeOf("implement_needs_human", { message: MESSAGE }), FAILURES),
+    ).toMatch(/<button [^>]*>作業項目 #42の失敗へ<\/button>/);
+  });
+
+  test("does not offer a link that would navigate without the screen", () => {
+    expect(
+      render(noticeOf("implement_needs_human", { message: MESSAGE }), FAILURES),
+    ).not.toContain("failure=");
+  });
+
+  test("offers the button for a failed launch notice the same way", () => {
+    expect(
+      render(
+        noticeOf("implement_launch_failed", { message: MESSAGE }),
+        FAILURES,
+      ),
+    ).toContain("作業項目 #42の失敗へ");
+  });
+
+  test("shows no button when the failure is not in the list", () => {
+    expect(
+      render(
+        noticeOf("implement_needs_human", { message: MESSAGE }),
+        new Set([5]),
+      ),
+    ).not.toContain("の失敗へ");
+  });
+
+  test("shows no button when the list of failures is empty", () => {
+    expect(
+      render(noticeOf("implement_needs_human", { message: MESSAGE })),
+    ).not.toContain("の失敗へ");
+  });
+
+  test("shows no button once the notice is resolved", () => {
+    expect(
+      render(
+        noticeOf("implement_needs_human", { message: MESSAGE, resolved: true }),
+        FAILURES,
+      ),
+    ).not.toContain("の失敗へ");
+  });
+
+  test("shows no button for a kind that does not name a work item to retry", () => {
+    expect(
+      render(
+        noticeOf("approval_comment_failed", { message: MESSAGE }),
+        FAILURES,
+      ),
+    ).not.toContain("の失敗へ");
+  });
+
+  test("shows no button when the message does not start with the work item", () => {
+    expect(
+      render(
+        noticeOf("implement_needs_human", { message: `理由 ${MESSAGE}` }),
+        FAILURES,
+      ),
+    ).not.toContain("の失敗へ");
+  });
+
+  test("puts the button after the text of the action", () => {
+    const html = render(
+      noticeOf("implement_needs_human", { message: MESSAGE }),
+      FAILURES,
+    );
+
+    expect(html.indexOf("作業項目 #42の失敗へ")).toBeGreaterThan(
+      html.indexOf("そこで再実行を押してください"),
+    );
   });
 });

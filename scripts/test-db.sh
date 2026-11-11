@@ -1401,6 +1401,24 @@ for view in "${views[@]}"; do
 done
 log "all ${#views[@]} views selected successfully"
 
+# 日別のビューが、日本時間の0時で日を切ることを確かめる。
+# 日本時間の10月7日の最後の1秒と10月8日の最初の1秒の実行を入れ、別の日に数えることを見る。
+# 接続の時刻帯をUTCから離れた値にして読み、時刻帯の設定に左右されないことも確かめる。
+jst_rows="$(printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (1, 'issue', 'issue', 'jstprobe', 'r', 1, 'https://github.com/jstprobe/r/issues/1', 't', 'failed');
+INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, created_at)
+SELECT id, 'implement', a.attempt, 'jst-probe', a.created_at::timestamptz
+FROM factory.work_items, (VALUES (1, '2026-10-07T14:59:59Z'), (2, '2026-10-07T15:00:00Z')) AS a (attempt, created_at)
+WHERE owner = 'jstprobe';
+SET TIME ZONE 'America/Los_Angeles';
+SELECT to_char(day AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD') || '=' || run_count
+FROM factory.v_agent_cost_daily WHERE model = 'jst-probe' ORDER BY day;\n" \
+  | psql_exec "${SCRATCH_DB}" -q -t -A | grep -v -e '^INSERT' -e '^SET' | paste -sd ',' -)" \
+  || die "could not read v_agent_cost_daily"
+[ "${jst_rows}" = "2026-10-07=1,2026-10-08=1" ] \
+  || die "unexpected v_agent_cost_daily days: '${jst_rows}'"
+printf "DELETE FROM factory.work_items WHERE owner = 'jstprobe';\n" | psql_exec "${SCRATCH_DB}" -q >/dev/null
+log "v_agent_cost_daily cuts the day at Japan time regardless of the session time zone"
+
 # バージョン別の使用量のビューが、版の違う実行を別の行にし、版の記録が無い実行をNULLのまま1つにまとめることを確かめる。
 usage_rows="$(printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (1, 'issue', 'issue', 'usageprobe', 'r', 1, 'https://github.com/usageprobe/r/issues/1', 't', 'failed');
 INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, claude_version, input_tokens, output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms)

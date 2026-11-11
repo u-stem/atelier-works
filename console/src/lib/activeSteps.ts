@@ -54,7 +54,7 @@ export function activeStepsEnabled(input: {
 
 /**
  * 一覧のジョブの状態を、詳細が読めているものは詳細の値にする。
- * 詳細は一覧より新しい。一覧は自動で取り直さないので、終わったジョブを実行中のまま見せないためである。
+ * 詳細は一覧より新しい。一覧の取り直しは60秒ごとなので、その間に終わったジョブを実行中のまま見せないためである。
  */
 export function preferDetailState(
   jobs: readonly JobSummaryView[],

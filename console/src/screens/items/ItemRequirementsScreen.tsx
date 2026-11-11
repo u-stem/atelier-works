@@ -1,4 +1,3 @@
-import { FileQuestion } from "lucide-react";
 import { useMemo } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useRequirementsDoc, useRequirementsIndex } from "../../api/queries.ts";
@@ -11,6 +10,7 @@ import {
   type LoadingShape,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
+import { MissingMessage } from "../../components/MissingMessage.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { itemRequirementsCrumbs } from "../../lib/breadcrumbs.ts";
 import { attemptRef, workItemRef } from "../../lib/labels.ts";
@@ -27,17 +27,6 @@ import { parseIdParam } from "../../lib/routeParams.ts";
 import { SCROLL_ROOT_PROPS } from "../../lib/scrollRoot.ts";
 import { QueryFailure } from "./QueryFailure.tsx";
 import { RequirementsDocumentView } from "./RequirementsDocumentView.tsx";
-
-function Message({ children }: { children: string }) {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-      <span className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-subtle">
-        <FileQuestion aria-hidden="true" className="size-6" />
-      </span>
-      <p className="max-w-sm text-small text-muted-foreground">{children}</p>
-    </div>
-  );
-}
 
 /**
  * 読み込み中の形。実物と同じ枠(本文と、右の目次の2列)に、状態の行、要約、本文の塊を置く。
@@ -121,7 +110,7 @@ function ItemRequirements({
         <PageHeader title={requested} refresh={refresh}>
           <Breadcrumb items={itemRequirementsCrumbs(workItemId)} />
         </PageHeader>
-        <Message>{`${requested}は見つかりませんでした。`}</Message>
+        <MissingMessage>{`${requested}は見つかりませんでした。`}</MissingMessage>
       </>
     );
   }
@@ -166,7 +155,7 @@ export function ItemRequirementsScreen() {
         <PageHeader title="要件定義">
           <Breadcrumb items={itemRequirementsCrumbs(null)} />
         </PageHeader>
-        <Message>作業項目の番号が正しくありません。</Message>
+        <MissingMessage>作業項目の番号が正しくありません。</MissingMessage>
       </>
     );
   }
@@ -176,7 +165,7 @@ export function ItemRequirementsScreen() {
         <PageHeader title="要件定義">
           <Breadcrumb items={itemRequirementsCrumbs(workItemId)} />
         </PageHeader>
-        <Message>試行の番号が正しくありません。</Message>
+        <MissingMessage>試行の番号が正しくありません。</MissingMessage>
       </>
     );
   }

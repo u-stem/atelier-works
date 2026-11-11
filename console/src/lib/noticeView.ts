@@ -25,11 +25,21 @@ export type NoticeTarget = {
 export const MAX_NOTICE_TARGETS = 5;
 
 /**
- * 本文の`owner/repo#番号`。ownerとrepoの形はGitHubの規則に合わせる。
+ * 本文の`owner/repo#番号`を作る正規表現の断片。ownerとrepoの形はGitHubの規則に合わせる。
+ * 作業項目を名指しする先頭の読み取り(`noticeWorkItem.ts`)も、同じ断片を使う。
+ */
+export const OWNER_SOURCE = "[A-Za-z0-9][A-Za-z0-9_-]{0,38}";
+export const REPO_SOURCE = "[A-Za-z0-9._-]{1,100}";
+export const ISSUE_NUMBER_SOURCE = "[1-9][0-9]{0,8}";
+
+/**
+ * 本文の`owner/repo#番号`。
  * 直前が名前やパスに使う文字のときは、別の語の一部なので拾わない。
  */
-const TARGET_PATTERN =
-  /(?<![A-Za-z0-9._/-])([A-Za-z0-9][A-Za-z0-9_-]{0,38})\/([A-Za-z0-9._-]{1,100})#([1-9][0-9]{0,8})(?![0-9])/g;
+const TARGET_PATTERN = new RegExp(
+  `(?<![A-Za-z0-9._/-])(${OWNER_SOURCE})/(${REPO_SOURCE})#(${ISSUE_NUMBER_SOURCE})(?![0-9])`,
+  "g",
+);
 
 /**
  * summaryが本文を切る文字数(コードポイント)。`console_query`の`SUMMARY_TEXT_LIMIT`に合わせる。

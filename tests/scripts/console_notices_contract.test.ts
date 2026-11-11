@@ -7,12 +7,14 @@ import {
   GENERIC_NOTICE_GUIDE,
   noticeGuide,
 } from "../../console/src/lib/noticeGuide.ts";
+import { noticeWorkItemId } from "../../console/src/lib/noticeWorkItem.ts";
 import {
   NOTICE_SEVERITY,
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../../f/factory/lib/console_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import { runConsoleQuery } from "../../f/factory/steps/console_query.ts";
+import { buildImplementLaunchNoticeMessage } from "../../f/factory/steps/requirements_apply.ts";
 
 function sqlReturning(rows: SqlRow[]): SqlClient {
   return () => ({
@@ -81,5 +83,22 @@ describe("notices contract between console_query and the console guard", () => {
 describe("notice guide covers the backend kinds", () => {
   test.each(Object.keys(NOTICE_SEVERITY))("explains notice kind %s", (kind) => {
     expect(noticeGuide(kind)).not.toBe(GENERIC_NOTICE_GUIDE);
+  });
+});
+
+describe("the work item a notice message names", () => {
+  test("reads the work item from the message of a failed launch", () => {
+    const message = buildImplementLaunchNoticeMessage(
+      { owner: "my-org", repo: "my.repo", issue_number: 12, work_item_id: 345 },
+      "cas_failed",
+    );
+    expect(noticeWorkItemId(message)).toBe(345);
+  });
+
+  test("builds the message of a work item left for a person in the same form", async () => {
+    const source = await Bun.file("f/factory/steps/implement_finish.ts").text();
+    expect(source).toMatch(
+      /\$\{owner\}\/\$\{repo\}#\$\{String\(issueNumber\)\} \(work item \$\{String\(work_item_id\)\}\): \$\{described\}/,
+    );
   });
 });

@@ -399,9 +399,9 @@ describe("noticeGuide", () => {
     );
   });
 
-  test("names the script to rerun by hand", () => {
+  test("tells to rerun the stopped work items by hand", () => {
     expect(noticeGuide("host_action_required").action).toContain(
-      "f/factory/retry_work_item",
+      "止まった作業項目を再実行してください",
     );
   });
 
@@ -411,9 +411,9 @@ describe("noticeGuide", () => {
     );
   });
 
-  test("tells how to rerun a work item stopped for a person", () => {
+  test("tells to remove the cause of a work item stopped for a person", () => {
     expect(noticeGuide("implement_needs_human").action).toContain(
-      "f/factory/retry_work_item",
+      "原因を取り除いてください",
     );
   });
 
@@ -641,4 +641,56 @@ describe("the target in the system screen", () => {
       ),
     ).toBe(true);
   });
+});
+
+describe("the retry of the work item a notice names", () => {
+  test.each(["implement_needs_human", "implement_launch_failed"])(
+    "lets the notice of kind %s name the work item to retry",
+    (kind) => {
+      expect(noticeGuide(kind).retriesWorkItem).toBe(true);
+    },
+  );
+
+  test.each([
+    "host_action_required",
+    "check_runtime_unsafe",
+    "cleanup_db_failed",
+    "approval_comment_failed",
+  ])("does not let the notice of kind %s name a work item", (kind) => {
+    expect(noticeGuide(kind).retriesWorkItem).toBe(false);
+  });
+
+  test("does not name a work item in the generic guide", () => {
+    expect(GENERIC_NOTICE_GUIDE.retriesWorkItem).toBe(false);
+  });
+
+  test("does not name a work item for a kind that is not in the table", () => {
+    expect(noticeGuide("future_kind").retriesWorkItem).toBe(false);
+  });
+
+  const RETRY_KINDS = [
+    "implement_needs_human",
+    "implement_launch_failed",
+    "host_action_required",
+    "check_runtime_unsafe",
+  ];
+
+  test.each(RETRY_KINDS)(
+    "tells to press the rerun in the failures of the inbox for %s",
+    (kind) => {
+      expect(noticeGuide(kind).action).toContain(
+        "作業項目が要対応の失敗に出ているときは、そこで再実行を押してください。",
+      );
+    },
+  );
+
+  // 失敗の一覧は件数の上限で切られ、古い作業項目が載らないことがあるので、Windmillの手順を残す。
+  test.each(RETRY_KINDS)(
+    "keeps the script of Windmill for %s when the work item is not in the failures",
+    (kind) => {
+      expect(noticeGuide(kind).action).toContain(
+        "出ていないときは、Windmillでf/factory/retry_work_itemを作業項目のIDで実行してください。",
+      );
+    },
+  );
 });

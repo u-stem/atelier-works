@@ -6,7 +6,12 @@ import {
 } from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
 import {
+  ACTIVE_LIST_REFRESH_MS,
   ACTIVE_STEPS_REFRESH_MS,
+  activeListQueryOptions,
+  activeListRefetchInterval,
+  activeListRefreshing,
+  activeStepsOptions,
   activeStepsQueryKey,
   activeStepsQueryOptions,
   type ConfigSnapshotView,
@@ -28,6 +33,7 @@ import {
   isLaterHistoryPage,
   isSchedulesSnapshot,
   JOB_DETAIL_REFRESH_MS,
+  JOBS_LIST_STALE_MS,
   type JobDetailView,
   type JobListView,
   type JobSummaryView,
@@ -44,6 +50,7 @@ import {
   schedulesQueryOptions,
   seedJobStatus,
   shouldPollJobStatus,
+  shouldRefetchOnResume,
   shouldRefetchOutputAfterFinish,
   shouldStartOutputRefetch,
 } from "./jobsQueries.ts";
@@ -597,8 +604,154 @@ describe("the query keys", () => {
   });
 });
 
+describe("the refresh of the active list", () => {
+  test("the interval is 60 seconds", () => {
+    expect(ACTIVE_LIST_REFRESH_MS).toBe(60_000);
+  });
+
+  test("refreshes every 60 seconds while the active tab is used", () => {
+    expect(
+      activeListRefetchInterval({ selectedTab: "active", idle: false }),
+    ).toBe(ACTIVE_LIST_REFRESH_MS);
+  });
+
+  test("does not refresh while the history tab is selected", () => {
+    expect(
+      activeListRefetchInterval({ selectedTab: "history", idle: false }),
+    ).toBe(false);
+  });
+
+  test("does not refresh while the screen is idle", () => {
+    expect(
+      activeListRefetchInterval({ selectedTab: "active", idle: true }),
+    ).toBe(false);
+  });
+
+  test("the subscription takes the interval of the active tab", () => {
+    expect(
+      activeListQueryOptions({ selectedTab: "active", idle: false })
+        .refetchInterval,
+    ).toBe(ACTIVE_LIST_REFRESH_MS);
+  });
+
+  test("the subscription stops while the document is hidden", () => {
+    expect(
+      activeListQueryOptions({ selectedTab: "active", idle: false })
+        .refetchIntervalInBackground,
+    ).toBe(false);
+  });
+
+  test("the subscription does not refresh when the window gets the focus", () => {
+    expect(
+      activeListQueryOptions({ selectedTab: "active", idle: false })
+        .refetchOnWindowFocus,
+    ).toBe(false);
+  });
+
+  test("the subscription keeps the key of the prefetch", () => {
+    expect(
+      activeListQueryOptions({ selectedTab: "active", idle: false }).queryKey,
+    ).toEqual(jobsActiveQueryKey);
+  });
+});
+
+describe("activeListRefreshing", () => {
+  test("refreshes while the active tab is used and the document is visible", () => {
+    expect(
+      activeListRefreshing({ selectedTab: "active", idle: false }, true),
+    ).toBe(true);
+  });
+
+  test("does not refresh while the document is hidden", () => {
+    expect(
+      activeListRefreshing({ selectedTab: "active", idle: false }, false),
+    ).toBe(false);
+  });
+
+  test("does not refresh while the screen is idle", () => {
+    expect(
+      activeListRefreshing({ selectedTab: "active", idle: true }, true),
+    ).toBe(false);
+  });
+
+  test("does not refresh while the history tab is selected", () => {
+    expect(
+      activeListRefreshing({ selectedTab: "history", idle: false }, true),
+    ).toBe(false);
+  });
+});
+
+describe("shouldRefetchOnResume", () => {
+  const NOW = 1_000_000;
+  const RESUMED = {
+    enabled: true,
+    wasRefreshing: false,
+    refreshing: true,
+    isFetching: false,
+    dataUpdatedAt: NOW - JOBS_LIST_STALE_MS - 1,
+    now: NOW,
+  };
+
+  test("refetches at once when the refresh resumes on a list older than the stale age", () => {
+    expect(shouldRefetchOnResume(RESUMED)).toBe(true);
+  });
+
+  test("refetches when the list is exactly as old as the stale age", () => {
+    expect(
+      shouldRefetchOnResume({
+        ...RESUMED,
+        dataUpdatedAt: NOW - JOBS_LIST_STALE_MS,
+      }),
+    ).toBe(true);
+  });
+
+  test("does not refetch when the refresh resumes on a list that is still fresh", () => {
+    expect(
+      shouldRefetchOnResume({
+        ...RESUMED,
+        dataUpdatedAt: NOW - JOBS_LIST_STALE_MS + 1,
+      }),
+    ).toBe(false);
+  });
+
+  test("does not refetch an old list while the refresh keeps running", () => {
+    expect(shouldRefetchOnResume({ ...RESUMED, wasRefreshing: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not refetch an old list while the refresh stays stopped", () => {
+    expect(shouldRefetchOnResume({ ...RESUMED, refreshing: false })).toBe(
+      false,
+    );
+  });
+
+  test("refetches when the refresh resumes before any list was read", () => {
+    expect(shouldRefetchOnResume({ ...RESUMED, dataUpdatedAt: 0 })).toBe(true);
+  });
+
+  test("does not start a fetch while one is running", () => {
+    expect(shouldRefetchOnResume({ ...RESUMED, isFetching: true })).toBe(false);
+  });
+
+  test("does not fetch a tab that is not open", () => {
+    expect(shouldRefetchOnResume({ ...RESUMED, enabled: false })).toBe(false);
+  });
+
+  test("refetches when the document becomes visible again after a long stop", () => {
+    const polling = { selectedTab: "active", idle: false } as const;
+    expect(
+      shouldRefetchOnResume({
+        ...RESUMED,
+        wasRefreshing: activeListRefreshing(polling, false),
+        refreshing: activeListRefreshing(polling, true),
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("the query options", () => {
-  test("the lists do not refresh by themselves", () => {
+  test("the prefetched lists do not refresh by themselves", () => {
     expect(
       [
         jobsActiveQueryOptions(),
@@ -1261,6 +1414,17 @@ describe("activeJobSteps", () => {
     expect(activeStepsQueryKey([A])).not.toEqual(
       jobDetailQueryKey(A, { includeOutput: false }),
     );
+  });
+
+  // `enabled`が切り替わるたびに、取り直しのタイマーが張り直される。
+  // 一覧の取得の状態を入力にしないので、30秒の間隔は一覧の取り直しに邪魔されない。
+  test("keeps reading the steps whatever the state of the list fetch is", () => {
+    const runningFlow: JobListView = {
+      ...LIST,
+      view: "active",
+      jobs: [{ ...JOB, state: "running", job_kind: "flow" }],
+    };
+    expect(activeStepsOptions(runningFlow, "active", false).enabled).toBe(true);
   });
 
   test("refresh button reads active before details", async () => {

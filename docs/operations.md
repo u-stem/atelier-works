@@ -4200,13 +4200,14 @@ Sonnetを既定にするには、Windmillの画面で`f/factory/factory_config`�
 
 Claudeのバージョンとモデルごとの使用量は、viewの`v_agent_usage_daily`で見る。
 viewは、日、モデル、Claudeのバージョン(`claude_version`)、工程ごとに、実行の数、費用、入力と出力とキャッシュ読み出しのトークン数、ターン数を合計し、実行時間の平均を出す。
-`day`は、既存の`v_agent_cost_daily`と同じく、データベースの時間帯の設定で日を切る。設定が既定のままならUTCである。
-JSTで日を切りたいときは、viewではなく`factory.agent_runs`を、`created_at AT TIME ZONE 'Asia/Tokyo'`で日に切って集計する。
+`day`は、`v_agent_cost_daily`と同じく、日本時間の0時で日を切る。
+値は日本時間の0時の時刻で、UTCでは前日の15時になる。
+日付として読みたいときは、`AT TIME ZONE 'Asia/Tokyo'`で日本時間に直して日付にする。
 
 ```sql
-SELECT date_trunc('day', created_at AT TIME ZONE 'Asia/Tokyo') AS day_jst,
-       claude_version, model, count(*) AS runs, sum(cost_usd) AS cost_usd
-FROM factory.agent_runs
+SELECT (day AT TIME ZONE 'Asia/Tokyo')::date AS day_jst,
+       claude_version, model, sum(run_count) AS runs, sum(total_cost_usd) AS cost_usd
+FROM factory.v_agent_usage_daily
 GROUP BY 1, 2, 3
 ORDER BY 1, 2, 3;
 ```
@@ -4369,6 +4370,7 @@ Claudeが結果を返さなかった実行と、この列を足す前の実行�
 一部の要素だけを残すと、実行全体の費用と内訳の合計が食い違うためである。
 
 viewは、日、実際に使われたモデル、Claudeのバージョン、工程ごとに、実行の数、費用、トークン数(入力、出力、キャッシュ読み出し、キャッシュ作成)を合計する。
+`day`は`v_agent_usage_daily`と同じく、日本時間の0時で切る。
 1回の実行が複数のモデルを使ったときは、それぞれのモデルに1回ずつ数える。
 `model_usage`が空の実行は、渡した値と実行全体の値で1行として数え、`total_cache_creation_tokens`には入らない。
 内訳を持つ実行と持たない実行が同じ行に混ざると、`total_cache_creation_tokens`は内訳を持つ実行だけの合計で、実際より小さい。
@@ -4587,12 +4589,12 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `approval_notify_failed` | 承認待ちの通知がDiscordに届かなかった | 承認依頼は記録済みなので、Consoleの**要対応**で判断する |
 | `intake_refreshed` | 却下や再実行による作り直しで、Issueが取り込み後に書き換えられていたので、取り込み内容を現在のIssueで更新した | Consoleの**要対応**で更新後の内容を確かめてから、承認する。確かめたら解決する |
 | `approval_comment_failed` | 承認のコメントをIssueに投稿できなかった | 承認と実装の起動は進んでいる。必要ならnoticeのリンクを載せたコメントを人がIssueに投稿する |
-| `implement_launch_failed` | 承認の後、実装フローへ進める処理がDBの失敗で例外になった | Windmillで`f/factory/retry_work_item`を作業項目のIDで実行して再開する |
-| `implement_needs_human` | 実装フローが人の対応待ちで止まった。作業項目はConsoleの**要対応**の失敗に出る | [人の対応待ちになったら](#人の対応待ちになったら)で原因を取り除いてから、**要対応**の失敗で**再実行**を押す |
+| `implement_launch_failed` | 承認の後、実装フローへ進める処理がDBの失敗で例外になった | 作業項目がConsoleの**要対応**の失敗に出ているときは、そこで**再実行**を押す。出ていないときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行する |
+| `implement_needs_human` | 実装フローが人の対応待ちで止まった。作業項目はConsoleの**要対応**の失敗に出る | [人の対応待ちになったら](#人の対応待ちになったら)で原因を取り除く。作業項目がConsoleの**要対応**の失敗に出ているときは、そこで**再実行**を押す。出ていないときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行する |
 | `unsandboxed_check_commands` | 検査コマンドをコンテナの分離なしで実行した | 設定が意図どおりか確かめる |
 | `check_slot_skipped` | 検査の枠を、前の実行の残り(止まらないプロセス、消せないファイルやIPC、取り戻せないworktree)を片付けられないため手放し、次の枠で検査した。本文に枠のユーザーと理由が載る。同じ本文の未解決のnoticeがあれば足さない。すべての枠で片付けに失敗したときだけ、検査が失敗する | 理由が止まらないプロセスなら、workerを再起動する。残ったファイルなら、本文のパスを確かめて消す。worktreeを取り戻せないなら、[検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で、記録を確かめ、worktreeが枠のユーザーの所有のままならrootに戻す。片付くまで、その枠は検査のたびに手放される |
 | `check_slot_record_unreadable` | 検査の枠の記録が読めないため、記録を退避して、その枠の片付けを続けた。本文に枠のユーザーと退避した先のパスが載る | [検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で、退避した記録が指すworktreeとHOMEを片付け、退避した記録を消す |
-| `check_runtime_unsafe` | 実装、PR修正、作業領域の掃除、CIの失敗を直す回の監視が、稼働中のworkerに誰でも書き込めるパスができたか、それを確かめられなかったと分かった。本文にパスか、確かめられなかった理由が載る。検査コマンドのある作業項目は、その間進まない。CIの失敗を直す回は、止まった作業項目ではなく保留になり、環境を直せば次の巡回で自動で外れる。監視は、問題が稼働中のworkerのパスの列挙の失敗だけで実在するパスが1件も無い回には、この通知を残さない | [稼働中のworkerが検査の前提を満たさないとき](#稼働中のworkerが検査の前提を満たさないとき)の手順で、パスを閉じるかworkerを作り直し、止まった作業項目を`retry_work_item`で再実行してから、通知を解決する。自動では解決されない |
+| `check_runtime_unsafe` | 実装、PR修正、作業領域の掃除、CIの失敗を直す回の監視が、稼働中のworkerに誰でも書き込めるパスができたか、それを確かめられなかったと分かった。本文にパスか、確かめられなかった理由が載る。検査コマンドのある作業項目は、その間進まない。CIの失敗を直す回は、止まった作業項目ではなく保留になり、環境を直せば次の巡回で自動で外れる。監視は、問題が稼働中のworkerのパスの列挙の失敗だけで実在するパスが1件も無い回には、この通知を残さない | [稼働中のworkerが検査の前提を満たさないとき](#稼働中のworkerが検査の前提を満たさないとき)の手順で、パスを閉じるかworkerを作り直し、止まった作業項目を再実行してから、通知を解決する。作業項目がConsoleの**要対応**の失敗に出ているときは、そこで**再実行**を押す。出ていないときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行する。自動では解決されない |
 | `fix_reply_post_failed` | 修正の返信の投稿に失敗した | PRで人が返信する |
 | `pr_fix_reviewer_request_failed` | 再レビューの依頼のAPIが失敗した。PRの取得の失敗と、Botや削除済みの作成者の名前で依頼を組み立てられない場合を含む | GitHubのPRで人がレビュアーを依頼する |
 | `issue_proposal_record_failed` | Issue化の提案を記録できなかった | PRのスレッドを確かめ、必要なら人がIssueを起票する |
@@ -4607,7 +4609,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `claim_assignee_missing` | Issueを取得したが、FactoryのGitHubユーザーをassigneeにできなかった。作業は続く | そのユーザーがリポジトリのpush権限を持つcollaboratorか確かめる |
 | `supersede_failed` | 新しいサイクルを始めたが、古い承認済みの作業項目を取り消せなかった | なし。古い承認は再開できず、次の新しいサイクルで取り消される |
 | `deployed_sha_mismatch` | 自己更新が反映した版(`f/factory/deployed_sha`)が、self cloneのHEADに30分を超えて追いついていない。mergeの直後に反映を待つ間は通知しない。本文に、直近の反映の記録から読んだ原因の候補が付く。Windmillのdefaultのworkerが埋まって自己更新が待たされたときや、自己更新の実行が長引いて次の回が飛ばされたときは、反映が遅れただけでも通知されうる | 自己更新のジョブのログを確かめる。自己更新が反映に成功すると、その記録より前に作られたnoticeを、`poll_issues`が自動で解決する。人が解決しても、反映が止まっている限り、次の`poll_issues`で再び残る。本文が名指しする版が今の`f/factory/deployed_sha`と違い、自己更新が成功しているときは、反映と判定が重なって残ったnoticeなので、人が解決してよい。人が`f/factory/deployed_sha`を今のHEADへ手で書き換えて版を一致させたときや、自己更新が変数を更新した後に失敗して成功の行が作られなかったときも、止まっていた版を名指しするnoticeは自動では解決されないので、人が解決してよい([通知](internals/notifications.md)) |
-| `host_action_required` | 自己更新が反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。本文に、反映した版と変わったパスが載る。ホストで作業するまで、新しい構成は動かない。実装、PR修正、作業領域の掃除、CIの失敗を直す回の監視が、workerのイメージが古くて検査コマンドを実行できないと分かったときにも残す。そのときは本文に、イメージの満たさない前提(足りない道具、枠のユーザー、ベースのイメージが開いたままのパス)が載る。検査コマンドのある作業項目は、その間進まない([f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)) | ホスト側のcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。`mise run up`は、Caddyを再起動したうえで、そのcheckoutのHEADをworkerへ渡す。自己更新(2分ごと)が、通知の版がそのHEADと同じか祖先なら、または`infra/`と`mise.toml`の内容がそのHEADと同じなら、通知を自動で解決する。HEADを書けなかったとき(警告が出る)と、このスクリプトを持たない版から`mise run deploy`で取り込む最初の1回(`mise run deploy`はpullの前のタスク定義で動く)は、自動では解決されない。`mise run up`が済んでいれば人が解決してよい([ホスト側で反映するもの](#ホスト側で反映するもの))。イメージが古くて止まった作業項目は、通知が自動で解決されると自動で再開する。本文に反映した版が載らない通知は自動では解決されず再開もしないので、人が解決し、止まった作業項目を`retry_work_item`で再実行する |
+| `host_action_required` | 自己更新が反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。本文に、反映した版と変わったパスが載る。ホストで作業するまで、新しい構成は動かない。実装、PR修正、作業領域の掃除、CIの失敗を直す回の監視が、workerのイメージが古くて検査コマンドを実行できないと分かったときにも残す。そのときは本文に、イメージの満たさない前提(足りない道具、枠のユーザー、ベースのイメージが開いたままのパス)が載る。検査コマンドのある作業項目は、その間進まない([f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)) | ホスト側のcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。`mise run up`は、Caddyを再起動したうえで、そのcheckoutのHEADをworkerへ渡す。自己更新(2分ごと)が、通知の版がそのHEADと同じか祖先なら、または`infra/`と`mise.toml`の内容がそのHEADと同じなら、通知を自動で解決する。HEADを書けなかったとき(警告が出る)と、このスクリプトを持たない版から`mise run deploy`で取り込む最初の1回(`mise run deploy`はpullの前のタスク定義で動く)は、自動では解決されない。`mise run up`が済んでいれば人が解決してよい([ホスト側で反映するもの](#ホスト側で反映するもの))。イメージが古くて止まった作業項目は、通知が自動で解決されると自動で再開する。本文に反映した版が載らない通知は自動では解決されず再開もしないので、人が解決し、止まった作業項目を再実行する。作業項目がConsoleの**要対応**の失敗に出ているときは、そこで**再実行**を押す。出ていないときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行する |
 | `deploy_approval_required` | 自己更新が、前回の反映からの変更に、Windmillへ反映する保護パスのファイルかmigrationを見つけ、人の承認まで反映を止めた。本文に、待っている版と、止めたファイルの件数が載る。`infra/`、`.github/`、`.claude/`、`scripts/`、lockfileの変更では出ない。保留は期限で解けない | [保護パスの変更の反映を承認する](#保護パスの変更の反映を承認する)に従い、Consoleのシステムの画面の「反映の承認待ち」で承認か却下をする。承認、新しい版への置き換え、反映の成功で自動で解決する。却下するとこの通知は残り、mainへ戻すPRの反映で解決される。Consoleから解決することはできない |
 | `deploy_approval_decided` | 保護パスの変更を含む反映を、人がConsoleで承認か却下した。本文に版と操作者が載る | なし。却下したときは、mainへ戻すPRをマージするまで反映は止まる |
 | `cleanup_db_failed` | 保持期間を過ぎたレコードの削除に失敗した | 内容を確かめる。次の日の掃除でやり直す |

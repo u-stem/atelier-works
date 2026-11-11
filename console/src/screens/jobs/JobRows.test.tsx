@@ -237,7 +237,7 @@ describe("ActiveJobs", () => {
     ).not.toContain("読み込み中");
   });
 
-  test("does not repeat that the list is not refreshed by itself, which the header time tells", () => {
+  test("does not repeat the refresh note, which the header tells", () => {
     expect(render(<ActiveJobs query={freshQuery(list([]))} />)).not.toContain(
       "自動では更新しません",
     );
