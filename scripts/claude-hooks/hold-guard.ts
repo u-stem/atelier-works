@@ -2887,7 +2887,9 @@ function stopAllCallAt(
  * `script -c`のようなコマンド文字列の中も、同じ規則で見る。
  * 検査の道具(`bun test`、`biome`など)の引数と、読み取りのプログラム(`cat`、`git`、`rg`など)は、実行ではないので通す。
  * 読み取りのプログラムでも、別のコマンドの実行を委ねる形(`delegatesExecution`)は通さず、委ねる先を字面でも見る。
- * 先頭の代入の値(`assignments`)も、字面で判定する。全停止のCLIを指す字面か、`mise`と全停止のタスク名が並ぶ字面があれば真を返す。
+ * 先頭の代入の値(`assignments`)のうち、空白か、シェルが語を分けるか展開する字を含む値も、字面で判定する。
+ * 全停止のCLIを指す字面か、`mise`と全停止のタスク名が並ぶ字面があれば真を返す。
+ * 値が1語の代入は判定しない。引数を渡せず、ファイルのパスを変数に入れて読む日常の形を止めないためである。
  * ベストエフォートの規則で、変数や連結で組み立てた名前と、別名の呼び出しは止めない。
  */
 export function findStopAllCall(
@@ -2896,10 +2898,13 @@ export function findStopAllCall(
   assignments: readonly Word[] = [],
 ): boolean {
   // 先頭の代入の値は、ページャーなどの環境変数としてコマンドに実行されうる。実行する側によらず、字面で判定する。
-  const assigned = assignments.some((assignment) =>
-    spellings(assignmentValue(assignment)).some(
-      (text) => stopAllWording(text) || stopAllWording(unquotedText(text)),
-    ),
-  );
+  const assigned = assignments
+    .map(assignmentValue)
+    .filter((value) => splitsIntoWords(value.text))
+    .some((value) =>
+      spellings(value).some(
+        (text) => stopAllWording(text) || stopAllWording(unquotedText(text)),
+      ),
+    );
   return assigned || stopAllCallAt(words, inputs, 0);
 }
