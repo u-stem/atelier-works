@@ -26,7 +26,6 @@ function noticeOf(
 function render(
   notice: SummaryNotice,
   failureIds: ReadonlySet<number> = new Set(),
-  onOpenFailure: ((workItemId: number) => void) | null = () => undefined,
 ): string {
   return renderToStaticMarkup(
     <QueryClientProvider client={new QueryClient()}>
@@ -35,7 +34,7 @@ function render(
           notice={notice}
           now={NOW}
           failureIds={failureIds}
-          {...(onOpenFailure === null ? {} : { onOpenFailure })}
+          onOpenFailure={() => undefined}
         />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -129,19 +128,9 @@ describe("NoticeDetail button to the failure of the named work item", () => {
     ).not.toContain("の失敗へ");
   });
 
-  test("shows no button without the list of failures", () => {
+  test("shows no button when the list of failures is empty", () => {
     expect(
       render(noticeOf("implement_needs_human", { message: MESSAGE })),
-    ).not.toContain("の失敗へ");
-  });
-
-  test("shows no button without a way to open the failure", () => {
-    expect(
-      render(
-        noticeOf("implement_needs_human", { message: MESSAGE }),
-        FAILURES,
-        null,
-      ),
     ).not.toContain("の失敗へ");
   });
 

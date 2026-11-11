@@ -20,9 +20,6 @@ import { systemSectionPath } from "../../lib/systemSections.ts";
 import { describeNoticeResult, releaseNotice } from "../../lib/writeNotices.ts";
 import { NoticeMessageText } from "./NoticeMessageText.tsx";
 
-/** 失敗の一覧を渡されないときの既定。ボタンを出さない。 */
-const NO_FAILURES: ReadonlySet<number> = new Set();
-
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[7rem_1fr] items-baseline gap-x-4 px-5 py-3">
@@ -65,7 +62,7 @@ export function NoticeDetail({
   notice,
   now,
   source = "summary",
-  failureIds = NO_FAILURES,
+  failureIds,
   onOpenFailure,
 }: {
   notice: SummaryNotice;
@@ -73,9 +70,9 @@ export function NoticeDetail({
   /** 通知の出どころ。summaryの本文は上限で切れているので、切れた旨を添える。 */
   source?: "summary" | "full";
   /** 一覧にある失敗の作業項目のID。 */
-  failureIds?: ReadonlySet<number>;
-  /** 名指しされた作業項目の失敗を開く。渡さなければ、その失敗へ移るボタンを出さない。 */
-  onOpenFailure?: (workItemId: number) => void;
+  failureIds: ReadonlySet<number>;
+  /** 名指しされた作業項目の失敗を開く。 */
+  onOpenFailure: (workItemId: number) => void;
 }) {
   const description = describeNotice(notice, source);
   const { submit, isLocked } = useWriteMutation(RESOLVE_CONFIG);
@@ -85,7 +82,6 @@ export function NoticeDetail({
     ? noticeWorkItemId(notice.message)
     : null;
   const failureTarget =
-    onOpenFailure === undefined ||
     description.resolved ||
     namedWorkItemId === null ||
     !failureIds.has(namedWorkItemId)
