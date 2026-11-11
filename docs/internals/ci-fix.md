@@ -677,7 +677,7 @@ gitは呼ばない。
   - `f/factory/lib/`の`pr_fix_launch`、`pr_fix_design`、`branch_hold`
   - `f/factory/lib/`の`metadata_`
   - `f/factory/lib/`の`approval_gate`、`doc_tree_hash`、`model_text`
-  - `f/factory/lib/`の`claude_flow_failure`、`flow_retry_marker`
+  - `f/factory/lib/`の`claude_flow_failure`、`flow_retry_marker`、`untrusted_arg`
   - `f/factory/steps/`の`pr_fix_`と`pr_workflow_support`
   - `f/factory/`の`watch_pr_ci`、`watch_pr_conflicts`、`watch_main_ci`
 
