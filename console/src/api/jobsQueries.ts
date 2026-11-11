@@ -13,13 +13,20 @@
 // 取得のたびにWindmillのジョブが1件できるので、止める条件を絞っている。
 
 import {
+  focusManager,
   keepPreviousData,
   type QueryClient,
   type UseQueryResult,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import {
   activeStepsEnabled,
   newlyFinished,
@@ -669,44 +676,77 @@ export function currentSteps(
 }
 
 /**
- * 取り直しが止まっていた状態から再開したとき、一覧をすぐ取り直すか。
- * 操作の再開と、実行中と待ちのタブへの切り替えでは、次の取り直しまで最大60秒かかる。
- * その間、見出しは自動更新と出したまま、古い一覧が残るのを避けるためである。
- * 新しいとみなす間隔(`JOBS_LIST_STALE_MS`)より古いときだけ取り直す。
+ * 実行中と待ちの一覧が、いま自動で取り直されているか。
+ * 実行中と待ちのタブを選んでいて、画面が操作されていて、文書が見えているときだけ真になる。
  */
-export function shouldRefetchStaleList(input: {
-  /** 取り直しが、止まっていた状態から有効になったか。 */
-  readonly resumed: boolean;
+export function activeListRefreshing(
+  polling: ActiveListPolling,
+  documentVisible: boolean,
+): boolean {
+  return documentVisible && activeListRefetchInterval(polling) !== false;
+}
+
+/**
+ * 取り直しが止まっていた状態から再開したとき、一覧をすぐ取り直すか。
+ * 操作の再開、実行中と待ちのタブへの切り替え、文書が見える状態への復帰では、次の取り直しまで最大60秒かかる。
+ * その間、見出しは自動更新と出したまま、古い一覧が残るのを避けるためである。
+ * 新しいとみなす間隔(`JOBS_LIST_STALE_MS`)より古いときだけ取り直す。取得中は始めない。
+ */
+export function shouldRefetchOnResume(input: {
+  /** 開いているタブか。開いていないタブは取らない。 */
+  readonly enabled: boolean;
+  /** 前回の描画で取り直していたか。 */
+  readonly wasRefreshing: boolean;
+  /** 今回の描画で取り直しているか。 */
+  readonly refreshing: boolean;
+  readonly isFetching: boolean;
   /** 最後の取得の時刻(ミリ秒)。まだ取っていなければ0。 */
   readonly dataUpdatedAt: number;
   readonly now: number;
 }): boolean {
-  return input.resumed && input.now - input.dataUpdatedAt >= JOBS_LIST_STALE_MS;
+  const resumed = input.refreshing && !input.wasRefreshing;
+  return (
+    input.enabled &&
+    resumed &&
+    !input.isFetching &&
+    input.now - input.dataUpdatedAt >= JOBS_LIST_STALE_MS
+  );
+}
+
+/** 文書が見えているか。見えない間は、`refetchIntervalInBackground`が偽の取り直しが止まる。 */
+function useDocumentVisible(): boolean {
+  return useSyncExternalStore(
+    (onChange) => focusManager.subscribe(onChange),
+    () => focusManager.isFocused(),
+    () => true,
+  );
 }
 
 /**
  * 実行中と待ちのジョブを取る。`enabled`が偽の間は取らない(開いていないタブの取得を避ける)。
- * 実行中と待ちのタブを選んでいて、画面が操作されているあいだは、60秒ごとに取り直す。
- * 取り直しが再開したとき、一覧が古ければすぐ1回取り直す。取得中は始めない。
+ * 実行中と待ちのタブを選んでいて、画面が操作されていて、文書が見えているあいだは、60秒ごとに取り直す。
+ * 取り直しが再開したとき、一覧が古ければすぐ1回取り直す。
  */
 export function useActiveJobs(
   enabled: boolean,
   polling: ActiveListPolling,
 ): UseQueryResult<JobListView, Error> {
   const query = useQuery({ ...activeListQueryOptions(polling), enabled });
-  const refreshing = activeListRefetchInterval(polling) !== false;
+  const visible = useDocumentVisible();
+  const refreshing = activeListRefreshing(polling, visible);
   const wasRefreshing = useRef(refreshing);
   const { refetch, isFetching, dataUpdatedAt } = query;
   useEffect(() => {
-    const resumed = refreshing && !wasRefreshing.current;
+    const resume = shouldRefetchOnResume({
+      enabled,
+      wasRefreshing: wasRefreshing.current,
+      refreshing,
+      isFetching,
+      dataUpdatedAt,
+      now: Date.now(),
+    });
     wasRefreshing.current = refreshing;
-    if (
-      enabled &&
-      !isFetching &&
-      shouldRefetchStaleList({ resumed, dataUpdatedAt, now: Date.now() })
-    ) {
-      void refetch();
-    }
+    if (resume) void refetch();
   }, [enabled, refreshing, isFetching, dataUpdatedAt, refetch]);
   return query;
 }
