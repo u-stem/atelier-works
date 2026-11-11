@@ -10,7 +10,7 @@ test("a notice that names a work item leads to the failure of that work item", a
 
   await page.getByRole("link", { name: "作業項目 #2の失敗へ" }).click();
 
-  await expect(page).toHaveURL(/\/console\/\?failure=2$/);
+  await expect(page).toHaveURL(/\/console\/?\?failure=2$/);
 });
 
 test("the failure the button leads to has the retry button", async ({
