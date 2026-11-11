@@ -625,6 +625,9 @@ describe("stripWrappers keeps assignment-shaped words that the shell runs as com
     ["a name after a timeout prefix", "timeout 5 a=/x/git push", "a=/x/git"],
     ["a name after the command builtin", "command a=/x/git push", "a=/x/git"],
     ["a name after nohup", "nohup a=/x/git push", "a=/x/git"],
+    ["a quoted subscripted name", "'a[1]=1' echo x", "a[1]=1"],
+    ["an escaped subscripted name", "a\\[1]=1 echo x", "a[1]=1"],
+    ["a subscripted name after a prefix", "nice a[1]=1 echo x", "a[1]=1"],
   ])("keeps %s as the command name", (_kind, line, name) => {
     expect(firstWords(line)[0]).toBe(name);
   });
@@ -2801,12 +2804,6 @@ describe("a bracket opened inside a word must close in the same word", () => {
     ],
     ["a command behind a subscripted assignment", "a[1]=1 echo x"],
     ["a command behind an appending subscripted assignment", "a[1]+=1 echo x"],
-    ["a command behind a quoted subscripted assignment", "'a[1]=1' echo x"],
-    ["a command behind an escaped subscripted assignment", "a\\[1]=1 echo x"],
-    [
-      "a command behind a wrapper and a subscripted assignment",
-      "nice a[1]=1 echo x",
-    ],
     [
       "a command behind an env assignment with a subscript",
       "env a[1]=1 echo x",
