@@ -82,6 +82,17 @@ describe("lintDocText", () => {
     expect(problems[0]).toStartWith("docs/a.md:3: [one-sentence-per-line] ");
   });
 
+  test("orders the issues of both checks by line number", () => {
+    const problems = lintDocText(
+      "docs/a.md",
+      "再実行する。確認する。\n\n再実行します。\n\n確認する。実行する。\n",
+    );
+
+    expect(problems.map((problem) => Number(problem.split(":")[1]))).toEqual([
+      1, 3, 5,
+    ]);
+  });
+
   test("accepts a document that writes one sentence per line", () => {
     expect(lintDocText("docs/a.md", "再実行する。\n確認する。\n")).toEqual([]);
   });

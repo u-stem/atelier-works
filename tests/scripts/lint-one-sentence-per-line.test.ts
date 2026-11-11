@@ -261,4 +261,86 @@ describe("findSentenceBreaks", () => {
   test("returns no break when no line has a second sentence", () => {
     expect(findSentenceBreaks("A。\nB。\n")).toEqual([]);
   });
+
+  test("keeps a closing tag with the sentence it closes", () => {
+    expect(cut("<b>A。</b>B\n")).toEqual(["<b>A。</b>|B\n"]);
+  });
+
+  test("starts the next sentence at an opening tag", () => {
+    expect(cut("A。<b>B</b>\n")).toEqual(["A。|<b>B</b>\n"]);
+  });
+
+  test("starts the next sentence at a self-closing tag", () => {
+    expect(cut('A。<img src="b.png" />B\n')).toEqual([
+      'A。|<img src="b.png" />B\n',
+    ]);
+  });
+
+  test("keeps a line break tag with the sentence it follows", () => {
+    expect(cut("A。<br>B\n")).toEqual(["A。<br>|B\n"]);
+  });
+});
+
+describe("lintOneSentencePerLine inline HTML after the full stop", () => {
+  test("accepts a closing tag at the end of a line", () => {
+    expect(violatingLines("<b>A。</b>\n")).toEqual([]);
+  });
+
+  test("accepts a line break tag at the end of a line", () => {
+    expect(violatingLines("A。<br>\n")).toEqual([]);
+  });
+
+  test("accepts a self-closing line break tag at the end of a line", () => {
+    expect(violatingLines("A。<br />\n")).toEqual([]);
+  });
+
+  test("reports an opening tag that follows the full stop", () => {
+    expect(violatingLines("A。<b>B</b>\n")).toEqual([1]);
+  });
+});
+
+describe("lintOneSentencePerLine brackets that are never closed", () => {
+  test("reports the later sentences of a paragraph with an unclosed bracket", () => {
+    expect(violatingLines("区間(0, 1]を使う。次。もう1つ。\n")).toEqual([1]);
+  });
+
+  test("reports a sentence inside a quotation when the paragraph has an unclosed bracket", () => {
+    expect(violatingLines("(例\n「A。B」と書く。\n")).toEqual([2]);
+  });
+
+  test("does not carry an unclosed bracket into the next paragraph", () => {
+    expect(violatingLines("区間(0, 1]を使う。\n\n「A。B」と書く。\n")).toEqual(
+      [],
+    );
+  });
+
+  test("keeps ignoring a full stop inside a bracket that is closed", () => {
+    expect(violatingLines("A（B。C）と書く。\n")).toEqual([]);
+  });
+});
+
+describe("lintOneSentencePerLine with CRLF line endings", () => {
+  test("accepts one sentence per line", () => {
+    expect(violatingLines("A。\r\nB。\r\n")).toEqual([]);
+  });
+
+  test("accepts a full stop at the end of the last line", () => {
+    expect(violatingLines("A。\r\n")).toEqual([]);
+  });
+
+  test("accepts a backslash line break", () => {
+    expect(violatingLines("A。\\\r\nB。\r\n")).toEqual([]);
+  });
+
+  test("accepts trailing spaces before the line ending", () => {
+    expect(violatingLines("A。  \r\nB。\r\n")).toEqual([]);
+  });
+
+  test("reports a second sentence on the same line", () => {
+    expect(violatingLines("A。B\r\nC。\r\n")).toEqual([1]);
+  });
+
+  test("numbers the lines of a document with CRLF", () => {
+    expect(violatingLines("A。\r\nB。C\r\n")).toEqual([2]);
+  });
 });
