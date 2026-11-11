@@ -6089,8 +6089,40 @@ describeForCallers(
         "a module named without a path in standard input code",
         `echo "process.chdir('scripts'); require('./freeze').release()" | bun -`,
       ],
+      [
+        "a freeze task in a call option of a package runner",
+        `npx --call "mise run freeze:release"`,
+      ],
+      [
+        "a freeze path with an extension in an option value",
+        `bunx some-cli --run "bun freeze.ts reset"`,
+      ],
     ])("denies %s", async (_kind, command) => {
       expect(await decide(command, { subagent })).toBe("deny");
+    });
+  },
+);
+
+// 語に分かれる語は、凍結のコードをパスの形で指す字面か、凍結の書き込みのタスク名があるときだけ拒否する。
+// 凍結を指す裸の語と書き込みの語が並ぶだけの文章の引数は通す。
+describeForCallers(
+  "bash-guard allows sentences that only name freezes and write words",
+  (subagent) => {
+    test.each([
+      [
+        "a description given to a script",
+        `bun scripts/x.ts "fix freeze release notes"`,
+      ],
+      [
+        "an argument of an inspection task",
+        `bun run check -- "freeze release"`,
+      ],
+      [
+        "a message option of another tool",
+        `bunx some-cli --message "freeze reset notes"`,
+      ],
+    ])("allows %s", async (_kind, command) => {
+      expect(await decide(command, { subagent })).toBe("allow");
     });
   },
 );
