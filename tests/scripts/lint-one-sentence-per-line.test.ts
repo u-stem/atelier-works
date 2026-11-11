@@ -32,7 +32,7 @@ describe("findSentenceViolationLines report", () => {
   });
 });
 
-describe("findSentenceViolationLinesparagraphs", () => {
+describe("findSentenceViolationLines paragraphs", () => {
   test("accepts one sentence per line", () => {
     expect(violatingLines("A。\nB。\nC。\n")).toEqual([]);
   });
@@ -58,7 +58,7 @@ describe("findSentenceViolationLinesparagraphs", () => {
   });
 });
 
-describe("findSentenceViolationLinesclosers after the full stop", () => {
+describe("findSentenceViolationLines closers after the full stop", () => {
   test("accepts a closing bracket after the full stop at the end of a line", () => {
     expect(violatingLines("これは「A」である。）\n")).toEqual([]);
   });
@@ -88,7 +88,7 @@ describe("findSentenceViolationLinesclosers after the full stop", () => {
   });
 });
 
-describe("findSentenceViolationLinesspans that hide a full stop", () => {
+describe("findSentenceViolationLines spans that hide a full stop", () => {
   test("ignores a full stop inside an inline code span", () => {
     expect(violatingLines("`a。b`と書く。\n")).toEqual([]);
   });
@@ -142,7 +142,7 @@ describe("findSentenceViolationLinesspans that hide a full stop", () => {
   });
 });
 
-describe("findSentenceViolationLinesblocks", () => {
+describe("findSentenceViolationLines blocks", () => {
   test("reports a violation in a bullet item", () => {
     expect(violatingLines("- A。B。\n")).toEqual([1]);
   });
@@ -285,7 +285,7 @@ describe("findSentenceBreaks", () => {
   });
 });
 
-describe("findSentenceViolationLinesinline HTML after the full stop", () => {
+describe("findSentenceViolationLines inline HTML after the full stop", () => {
   test("accepts a closing tag at the end of a line", () => {
     expect(violatingLines("<b>A。</b>\n")).toEqual([]);
   });
@@ -303,7 +303,7 @@ describe("findSentenceViolationLinesinline HTML after the full stop", () => {
   });
 });
 
-describe("findSentenceViolationLinesbrackets that are never closed", () => {
+describe("findSentenceViolationLines brackets that are never closed", () => {
   test("reports the later sentences of a paragraph with an unclosed bracket", () => {
     expect(violatingLines("区間(0, 1]を使う。次。もう1つ。\n")).toEqual([1]);
   });
@@ -323,7 +323,7 @@ describe("findSentenceViolationLinesbrackets that are never closed", () => {
   });
 });
 
-describe("findSentenceViolationLineswith CRLF line endings", () => {
+describe("findSentenceViolationLines with CRLF line endings", () => {
   test("accepts one sentence per line", () => {
     expect(violatingLines("A。\r\nB。\r\n")).toEqual([]);
   });
