@@ -267,11 +267,6 @@ describe("implementPromptInput", () => {
     expect(implementPromptInput(CONTEXT, null).design).toBeNull();
   });
 
-  test("reads a context made before the field existed as having no design", () => {
-    const { design_markdown: _omitted, ...older } = CONTEXT;
-    expect(implementPromptInput(older, null).design).toBeNull();
-  });
-
   test("hands Claude only the copy of the requirements directory even with a design", () => {
     expect(
       implementPromptInput(
@@ -285,10 +280,6 @@ describe("implementPromptInput", () => {
 describe("implementContextSpecKind", () => {
   test("reads the kind the preparation recorded", () => {
     expect(implementContextSpecKind({ spec_kind: "issue" })).toBe("issue");
-  });
-
-  test("reads a context made before the field existed as the requirements", () => {
-    expect(implementContextSpecKind({})).toBe("requirements");
   });
 });
 
@@ -322,11 +313,6 @@ describe("implementPromptInput with the issue as the specification", () => {
     expect(implementPromptInput(ISSUE_SPEC, null).requirements.doc_dir).toBe(
       null,
     );
-  });
-
-  test("marks the requirements as the specification for a context made before the field existed", () => {
-    const { spec_kind: _omitted, ...older } = CONTEXT;
-    expect(implementPromptInput(older, null).specKind).toBe("requirements");
   });
 });
 
@@ -673,7 +659,9 @@ describe("withReadOnlyDocDirCopy and the hash of the copied bytes", () => {
   test("copies the real directory and hands fn the same bytes that the baseline names", async () => {
     const source = mkdtempSync(join(tmpdir(), "guard-source-"));
     writeFileSync(join(source, "requirements.md"), "R");
-    const baseline = await docDirGuardFor({}).hashTree(source);
+    const baseline = await docDirGuardFor({
+      requirements_doc_hash: null,
+    }).hashTree(source);
     const seen = await withReadOnlyDocDirCopy(
       source,
       async (copy) =>
@@ -683,85 +671,6 @@ describe("withReadOnlyDocDirCopy and the hash of the copied bytes", () => {
     );
     rmSync(source, { recursive: true, force: true });
     expect(seen).toBe("R");
-  });
-});
-
-describe("withReadOnlyDocDirCopy and a context that has no baseline item", () => {
-  const deps: DocDirCopyDeps = {
-    pathExists: async () => true,
-    makeTempDir: async () => "/tmp/fake-req",
-    copyDir: async () => {},
-    removeDir: async () => {},
-  };
-
-  /** 警告を控える照合の設定。`baseline`が`undefined`なら項目が無い文脈を表す。 */
-  function guardOf(
-    baseline: string | null | undefined,
-    hash: string | null = null,
-  ) {
-    const warnings: string[] = [];
-    const guard: DocDirGuard = {
-      baseline,
-      hashTree: async () => hash,
-      warn: (message) => {
-        warnings.push(message);
-      },
-    };
-    return { guard, warnings };
-  }
-
-  test("warns once per call when the context has no baseline item", async () => {
-    const g = guardOf(undefined);
-    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
-    expect(g.warnings).toHaveLength(1);
-  });
-
-  test("warns once for each call, not once for the guard", async () => {
-    const g = guardOf(undefined);
-    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
-    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
-    expect(g.warnings).toHaveLength(2);
-  });
-
-  test("still runs fn when the context has no baseline item", async () => {
-    const g = guardOf(undefined);
-    expect(
-      await withReadOnlyDocDirCopy(DOC_DIR, async () => "ran", deps, g.guard),
-    ).toBe("ran");
-  });
-
-  test("stays silent for a null baseline, which the prepare step already warned about", async () => {
-    const g = guardOf(null);
-    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
-    expect(g.warnings).toHaveLength(0);
-  });
-
-  test("stays silent for an empty baseline", async () => {
-    const g = guardOf("");
-    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
-    expect(g.warnings).toHaveLength(0);
-  });
-
-  test("stays silent for a baseline that is set", async () => {
-    const g = guardOf("a".repeat(64), "a".repeat(64));
-    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
-    expect(g.warnings).toHaveLength(0);
-  });
-
-  test("does not need a warn function", async () => {
-    const guard: DocDirGuard = {
-      baseline: undefined,
-      hashTree: async () => null,
-    };
-    expect(
-      await withReadOnlyDocDirCopy(DOC_DIR, async () => "ran", deps, guard),
-    ).toBe("ran");
-  });
-
-  test("does not warn when the directory is not copied at all", async () => {
-    const g = guardOf(undefined);
-    await withReadOnlyDocDirCopy(null, async () => "x", deps, g.guard);
-    expect(g.warnings).toHaveLength(0);
   });
 });
 
@@ -972,23 +881,13 @@ describe("docDirGuardFor", () => {
     expect(await guard.hashTree("/does/not/exist/anywhere")).toBeNull();
   });
 
-  test("keeps a context from before the baseline existed apart from a null baseline", () => {
-    const guard = docDirGuardFor({});
-    expect(guard.baseline).toBeUndefined();
-  });
-
   test("keeps a null baseline of the context as null", () => {
     const guard = docDirGuardFor({ requirements_doc_hash: null });
     expect(guard.baseline).toBeNull();
   });
 
-  test("hands over a function that logs the warning", () => {
-    const guard = docDirGuardFor({});
-    expect(typeof guard.warn).toBe("function");
-  });
-
   test("hands over a copy that hashes the bytes it writes", () => {
-    const guard = docDirGuardFor({});
+    const guard = docDirGuardFor(CONTEXT);
     expect(typeof guard.copyAndHash).toBe("function");
   });
 
@@ -2755,10 +2654,6 @@ describe("implementContextHasDesign", () => {
 
   test("is false for a null design", () => {
     expect(implementContextHasDesign({ design_markdown: null })).toBe(false);
-  });
-
-  test("is false for a context made before the design was added", () => {
-    expect(implementContextHasDesign({})).toBe(false);
   });
 });
 

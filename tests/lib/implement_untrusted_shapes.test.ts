@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  IMPLEMENT_CLAUDE_ROUND_KINDS,
   type ImplementClaudeRound,
   type ImplementContext,
   type ImplementLoopResult,
@@ -87,6 +88,17 @@ describe("isImplementContextShape", () => {
     );
   });
 
+  test.each([
+    "spec_kind",
+    "profile",
+    "requirements_doc_hash",
+    "design_markdown",
+  ])("rejects a context without %s", (key) => {
+    expect(isImplementContextShape({ ...CONTEXT, [key]: undefined })).toBe(
+      false,
+    );
+  });
+
   test("rejects a diagram without a file", () => {
     expect(
       isImplementContextShape({
@@ -98,27 +110,34 @@ describe("isImplementContextShape", () => {
 });
 
 describe("isImplementClaudeRoundShape", () => {
-  const ROUNDS: readonly ImplementClaudeRound[] = [
-    { kind: "output", output: OUTPUT, agent_run_id: 1, cost_usd: 0.5 },
-    {
+  // 種類を足すと、この表が型で足りなくなる。表の値が、種類ごとにガードを通ることを確かめる。
+  const ROUNDS: Record<ImplementClaudeRound["kind"], ImplementClaudeRound> = {
+    output: { kind: "output", output: OUTPUT, agent_run_id: 1, cost_usd: 0.5 },
+    invalid_output: {
       kind: "invalid_output",
       output: OUTPUT,
       reason: "bad",
       agent_run_id: 1,
       cost_usd: 0.5,
     },
-    {
+    claude_failed: {
       kind: "claude_failed",
       reason: "timeout",
       detail: "d",
       agent_run_id: 1,
       cost_usd: 0.5,
     },
-    { kind: "lease_lost" },
-    { kind: "requirements_modified", reason: "changed" },
-  ];
+    lease_lost: { kind: "lease_lost" },
+    requirements_modified: { kind: "requirements_modified", reason: "changed" },
+  };
 
-  test.each(ROUNDS.map((round) => [round.kind, round]))(
+  test("lists every kind of the round", () => {
+    expect(Object.keys(ROUNDS).sort()).toEqual(
+      [...IMPLEMENT_CLAUDE_ROUND_KINDS].sort(),
+    );
+  });
+
+  test.each(IMPLEMENT_CLAUDE_ROUND_KINDS.map((kind) => [kind, ROUNDS[kind]]))(
     "accepts a %s round",
     (_kind, round) => {
       expect(isImplementClaudeRoundShape(roundTrip(round))).toBe(true);

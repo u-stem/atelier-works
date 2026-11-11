@@ -89,7 +89,6 @@ import {
 import {
   GITLEAKS_TIMEOUT_MS,
   gitPointerStopReason,
-  IMPLEMENT_LOOP_EXITS,
   IMPLEMENT_PREPARE_OUTCOMES,
   type ImplementContext,
   type ImplementLoopResult,
@@ -336,14 +335,6 @@ async function finishImplement(
   if (!isOneOf(prepare_outcome, IMPLEMENT_PREPARE_OUTCOMES)) {
     throw new Error(
       `implement_finish: unexpected prepare outcome "${prepare_outcome}"`,
-    );
-  }
-  if (
-    loop_result !== null &&
-    !isOneOf(loop_result.exit, IMPLEMENT_LOOP_EXITS)
-  ) {
-    throw new Error(
-      `implement_finish: unexpected loop exit "${String(loop_result.exit)}"`,
     );
   }
   const outcome = mergeImplementOutcome(

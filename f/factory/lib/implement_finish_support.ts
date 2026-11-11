@@ -604,16 +604,15 @@ export const PROTECTED_WORK_NOT_PUSHED_REASON =
 
 /**
  * 文脈から、PR本文の仕様の欄を作る。
- * `spec_kind`を足す前の準備ステップが作った文脈には項目が無いので、要件定義として扱う。
  */
 export function prBodySpecFor(context: {
-  readonly spec_kind?: ImplementSpecKind;
-  readonly profile?: string;
+  readonly spec_kind: ImplementSpecKind;
+  readonly profile: string;
   readonly requirements_markdown: string | null;
   readonly requirements_console_url: string | null;
 }): ImplementPrBodySpec {
   if (implementContextSpecKind(context) === "issue") {
-    return { kind: "issue", profile: context.profile ?? "" };
+    return { kind: "issue", profile: context.profile };
   }
   return {
     kind: "requirements",

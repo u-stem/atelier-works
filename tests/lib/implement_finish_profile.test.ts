@@ -51,15 +51,6 @@ describe("prBodySpecFor", () => {
       requirementsConsoleUrl: CONSOLE_URL,
     });
   });
-
-  test("reads a context made before the field existed as the requirements", () => {
-    expect(
-      prBodySpecFor({
-        requirements_markdown: "# 要件定義",
-        requirements_console_url: CONSOLE_URL,
-      }).kind,
-    ).toBe("requirements");
-  });
 });
 
 describe("decideProtectedPathReroute", () => {
