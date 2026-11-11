@@ -670,6 +670,21 @@ export async function runConflictFixVerify(
 }
 
 /**
+ * 包んだ引数(`untrusted`)の形。flow.yamlの式のキーと一致する。
+ * `branch`はPRのheadのブランチ名で、gitは`$`で始まる名前を許すので、包む側に入れる。
+ */
+export const PR_FIX_VERIFY_UNTRUSTED = isShape({
+  ...PR_FIX_COLLECTED_SHAPE,
+  apply_reason: isStringOrNull,
+  apply_summary: isString,
+  apply_replies: isArrayOf(isFixReplyShape),
+  apply_commit_subject: isStringOrNull,
+  apply_commit_body: isStringOrNull,
+  conflict_blobs: isNullOr(isArrayOf(isConflictBlobsShape)),
+  branch: isStringOrNull,
+});
+
+/**
  * `pr_fix_apply.ts`が"done"を返したとき、修正をpushしてよいかを`runPrFixVerify`で検証して結果を返す。
  * 検査コマンドは最小限の環境変数で、秘密情報を渡さず、`mise trust`もせずに実行する。
  * `pr_fix_apply.ts`がrequirements_gapかblockedを返したときは、
@@ -692,7 +707,6 @@ export async function main(
   attempt: number,
   worktree_git_pointer: string | null = null,
   head_sha: string | null = null,
-  branch: string | null = null,
   ci_check_id: number | null = null,
   conflict_check_id: number | null = null,
   baseline_sha: string | null = null,
@@ -710,19 +724,8 @@ export async function main(
     comments,
     conflicted_paths,
     conflict_blobs,
-  } = parseUntrustedArg(
-    untrusted,
-    "pr_fix_verify",
-    isShape({
-      ...PR_FIX_COLLECTED_SHAPE,
-      apply_reason: isStringOrNull,
-      apply_summary: isString,
-      apply_replies: isArrayOf(isFixReplyShape),
-      apply_commit_subject: isStringOrNull,
-      apply_commit_body: isStringOrNull,
-      conflict_blobs: isNullOr(isArrayOf(isConflictBlobsShape)),
-    }),
-  );
+    branch,
+  } = parseUntrustedArg(untrusted, "pr_fix_verify", PR_FIX_VERIFY_UNTRUSTED);
   const lockedRun = withWorktreeProcessLock(
     runCommand,
     worktreeLockFor(worktree_dir),

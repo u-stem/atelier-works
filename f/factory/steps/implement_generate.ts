@@ -25,9 +25,9 @@ import {
   docDirGuardFor,
   IMPLEMENT_SKILL_NAME,
   type ImplementClaudeRound,
-  type ImplementContext,
   implementContextHasDesign,
   implementPromptInput,
+  isImplementContextShape,
   runDocDirGuardedRound,
   runImplementClaudeRound,
   runImplementGenerateRound,
@@ -38,12 +38,26 @@ import {
   worktreeLockFor,
 } from "../lib/process_lock.ts";
 import { implementPrompt } from "../lib/prompts.ts";
+import { isShape, parseUntrustedArg } from "../lib/untrusted_arg.ts";
 import { runCommand, worktreeGitPointerMatches } from "../lib/workspace.ts";
+
+/**
+ * 包んだ引数(`untrusted`)の形。flow.yamlの式のキーと一致する。
+ * 文脈は、取り込んだIssueの題名と本文を含むので、JSONの文字列に包んで受け取る。
+ */
+export const IMPLEMENT_GENERATE_UNTRUSTED = isShape({
+  context: isImplementContextShape,
+});
 
 export async function main(
   work_item_id: number,
-  context: ImplementContext,
+  untrusted: string,
 ): Promise<ImplementClaudeRound> {
+  const { context } = parseUntrustedArg(
+    untrusted,
+    "implement_generate",
+    IMPLEMENT_GENERATE_UNTRUSTED,
+  );
   const leaseJobId = rootFlowJobId(process.env);
   return runImplementGenerateRound({
     holdsLease: () =>

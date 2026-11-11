@@ -123,9 +123,6 @@ value:
           baseline_sha:
             type: javascript
             expr: results.pr_fix_prepare.baseline_sha ?? null
-          branch:
-            type: javascript
-            expr: results.pr_fix_prepare.branch ?? null
           ci_check_id:
             type: javascript
             expr: results.pr_fix_prepare.ci_check_id ?? null
@@ -162,7 +159,8 @@ value:
               reviews: results.pr_fix_collect?.reviews ?? [],
               comments: results.pr_fix_collect?.comments ?? [],
               conflicted_paths: results.pr_fix_prepare.conflicted_paths ?? null,
-              conflict_blobs: results.pr_fix_prepare.conflict_blobs ?? null
+              conflict_blobs: results.pr_fix_prepare.conflict_blobs ?? null,
+              branch: results.pr_fix_prepare.branch ?? null
               }).replace(/\$/g, "\\u0024")
           work_item_id:
             type: javascript
@@ -194,9 +192,6 @@ value:
           baseline_sha:
             type: javascript
             expr: results.pr_fix_prepare.baseline_sha ?? null
-          branch:
-            type: javascript
-            expr: results.pr_fix_prepare.branch ?? null
           ci_check_id:
             type: javascript
             expr: results.pr_fix_prepare.ci_check_id ?? null
@@ -253,7 +248,8 @@ value:
               reviews: results.pr_fix_collect?.reviews ?? [],
               comments: results.pr_fix_collect?.comments ?? [],
               conflicted_paths: results.pr_fix_prepare.conflicted_paths ?? null,
-              conflict_blobs: results.pr_fix_prepare.conflict_blobs ?? null
+              conflict_blobs: results.pr_fix_prepare.conflict_blobs ?? null,
+              branch: results.pr_fix_prepare.branch ?? null
               }).replace(/\$/g, "\\u0024")
           verified_tree_sha:
             type: javascript
@@ -278,7 +274,7 @@ value:
       input_transforms:
         error:
           type: javascript
-          expr: error
+          expr: JSON.stringify(error ?? null).replace(/\$/g, "\\u0024")
         path:
           type: static
           value: f/factory/pr_fix

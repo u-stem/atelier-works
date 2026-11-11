@@ -6,24 +6,14 @@ schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    context:
-      type: object
-      description: 準備ステップが用意した実装の前提情報(準備で止まった場合は空)。
-      default: null
-      format: resource-implement_context
-    loop_result:
-      type: object
-      description: 検証ループの結果(準備で止まった場合は空)。
-      default: null
-      format: resource-implement_loop_result
     prepare_outcome:
       type: string
       description: 準備ステップの結果。
       default: null
       originalType: string
-    prepare_reason:
+    untrusted:
       type: string
-      description: 準備ステップが止まった理由。
+      description: ''
       default: null
       originalType: string
     work_item_id:
@@ -33,3 +23,4 @@ schema:
   required:
     - work_item_id
     - prepare_outcome
+    - untrusted

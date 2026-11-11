@@ -29,6 +29,7 @@ import {
   IMPLEMENT_CHECK_SKIP_REASONS,
   type ImplementCheckSummary,
   type ImplementClaudeOutput,
+  isImplementCheckSummary,
   isImplementClaudeOutput,
   roundIsStalled,
   roundOutcomeForExit,
@@ -48,14 +49,28 @@ import {
   type ImplementSpecKind,
 } from "./prompts.ts";
 import type { ChangedPath } from "./protected_paths.ts";
-import type {
-  AgentRunRecord,
-  Diagram,
-  FactoryConfig,
-  ImplementDiffStat,
-  ImplementRoundMode,
-  ImplementRoundRecord,
+import {
+  type AgentRunRecord,
+  type Diagram,
+  type FactoryConfig,
+  type ImplementDiffStat,
+  type ImplementRoundMode,
+  type ImplementRoundRecord,
+  isBoolean,
+  isImplementDiffStat,
+  isNumber,
+  isOneOf,
+  isString,
+  isStringArray,
 } from "./types.ts";
+import {
+  isArrayOf,
+  isLiteral,
+  isNullOr,
+  isNumberOrNull,
+  isShape,
+  isStringOrNull,
+} from "./untrusted_arg.ts";
 import {
   type CommandRunner,
   type GitleaksScan,
@@ -180,6 +195,49 @@ export type ImplementContext = {
    */
   readonly deadline_at: number;
 };
+
+const IMPLEMENT_SPEC_KINDS: readonly ImplementSpecKind[] = [
+  "requirements",
+  "issue",
+];
+
+const isImplementSpecKind = (value: unknown): value is ImplementSpecKind =>
+  isOneOf(value, IMPLEMENT_SPEC_KINDS);
+
+/**
+ * 値が`ImplementContext`の形か。stepの間で包んで渡した文脈を戻すときに使う。
+ * 文脈は、Issueの題名と本文を含む。
+ */
+export const isImplementContextShape = isShape({
+  owner: isString,
+  repo: isString,
+  issue_number: isNumber,
+  issue_url: isString,
+  issue_title: isString,
+  issue_body: isString,
+  branch: isString,
+  base_branch: isString,
+  base_sha: isString,
+  repo_dir: isString,
+  worktree_dir: isString,
+  factory_clone_dir: isString,
+  expected_head_sha: isString,
+  existing_pr_number: isNumberOrNull,
+  existing_pr_url: isStringOrNull,
+  has_previous_implementation: isBoolean,
+  attempt: isNumber,
+  spec_kind: isImplementSpecKind,
+  profile: isString,
+  requirements_markdown: isStringOrNull,
+  requirements_diagrams: isArrayOf(isShape({ name: isString, file: isString })),
+  requirements_doc_dir: isStringOrNull,
+  requirements_doc_hash: isStringOrNull,
+  design_markdown: isStringOrNull,
+  requirements_console_url: isStringOrNull,
+  is_factory_repo: isBoolean,
+  worktree_git_pointer: isString,
+  deadline_at: isNumber,
+});
 
 /**
  * `implementPrompt`と`implementFixPrompt`が共有する入力を作る。
@@ -567,6 +625,48 @@ export const IMPLEMENT_CLAUDE_ROUND_KINDS: readonly ImplementClaudeRound["kind"]
     "requirements_modified",
   ];
 
+const isOutputRound = isShape({
+  kind: isLiteral("output"),
+  output: isImplementClaudeOutput,
+  agent_run_id: isNumber,
+  cost_usd: isNumber,
+});
+const isInvalidOutputRound = isShape({
+  kind: isLiteral("invalid_output"),
+  output: isImplementClaudeOutput,
+  reason: isString,
+  agent_run_id: isNumber,
+  cost_usd: isNumber,
+});
+const isClaudeFailedRound = isShape({
+  kind: isLiteral("claude_failed"),
+  reason: isString,
+  detail: isString,
+  agent_run_id: isNumber,
+  cost_usd: isNumber,
+});
+const isLeaseLostRound = isShape({ kind: isLiteral("lease_lost") });
+const isRequirementsModifiedRound = isShape({
+  kind: isLiteral("requirements_modified"),
+  reason: isString,
+});
+
+/**
+ * 値が`ImplementClaudeRound`の形か。stepの間で包んで渡した1回目のラウンドを戻すときに使う。
+ * ラウンドは、Claudeの出力と、失敗の詳細を含む。
+ */
+export function isImplementClaudeRoundShape(
+  value: unknown,
+): value is ImplementClaudeRound {
+  return (
+    isOutputRound(value) ||
+    isInvalidOutputRound(value) ||
+    isClaudeFailedRound(value) ||
+    isLeaseLostRound(value) ||
+    isRequirementsModifiedRound(value)
+  );
+}
+
 /** Claudeを実際に実行したラウンド(`lease_lost`と`requirements_modified`以外)。 */
 export type ImplementClaudeRunRound = Exclude<
   ImplementClaudeRound,
@@ -800,6 +900,25 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
   "claude_error",
   "lease_lost",
 ];
+
+/**
+ * 値が`ImplementLoopResult`の形か。stepの間で包んで渡したループの結果を戻すときに使う。
+ * 結果は、Claudeの出力と、変更したファイルのパスを含む。
+ */
+export const isImplementLoopResultShape = isShape({
+  exit: (value): value is ImplementLoopExit =>
+    isOneOf(value, IMPLEMENT_LOOP_EXITS),
+  reason: isStringOrNull,
+  gap_report: isStringOrNull,
+  rounds: isNumber,
+  total_cost_usd: isNumber,
+  final_output: isNullOr(isImplementClaudeOutput),
+  protected_changes: isStringArray,
+  checks: isNullOr(isImplementCheckSummary),
+  diff_stat: isNullOr(isImplementDiffStat),
+  changed_paths: isStringArray,
+  verified_tree_sha: isStringOrNull,
+});
 
 export const GITLEAKS_TIMEOUT_MS = 5 * 60_000;
 

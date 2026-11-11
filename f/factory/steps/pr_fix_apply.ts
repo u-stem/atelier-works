@@ -91,6 +91,9 @@ export type PrFixApplyResult = {
   readonly commit_body: string | null;
 };
 
+/** 包んだ引数(`untrusted`)の形。flow.yamlの式のキーと一致する。 */
+export const PR_FIX_APPLY_UNTRUSTED = isShape(PR_FIX_COLLECTED_SHAPE);
+
 /**
  * factory-fixスキルでClaude Codeを実行し、修正の結果
  * (outcome、理由、要約、各コメントへの返信、コミットの件名と本文)を返す。
@@ -131,7 +134,7 @@ export async function main(
   const { reviews, comments, conflicted_paths } = parseUntrustedArg(
     untrusted,
     "pr_fix_apply",
-    isShape(PR_FIX_COLLECTED_SHAPE),
+    PR_FIX_APPLY_UNTRUSTED,
   );
 
   // Claudeは起動時にcwdでgitを実行しうるので、起動の前に`.git`を準備ステップの記録と比べる。

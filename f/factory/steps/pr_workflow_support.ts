@@ -95,6 +95,7 @@ import {
   type FixReply,
   type FixReplyDecision,
   type IssueProposalStatus,
+  isGitSha,
   isNumber,
   isOneOf,
   isRecord,
@@ -2159,11 +2160,12 @@ export const isCollectedCommentShape = isShape({
   author: isString,
 });
 
+// `path`は競合したファイルのパスで、外から来る。3つのblobは、gitが返すオブジェクトのshaである。
 export const isConflictBlobsShape = isShape({
   path: isString,
-  baseBlob: isString,
-  oursBlob: isString,
-  theirsBlob: isString,
+  baseBlob: isGitSha,
+  oursBlob: isGitSha,
+  theirsBlob: isGitSha,
 });
 
 /**

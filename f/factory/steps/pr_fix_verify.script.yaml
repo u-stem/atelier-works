@@ -30,11 +30,6 @@ schema:
       description: ''
       default: null
       originalType: string
-    branch:
-      type: string
-      description: ''
-      default: null
-      originalType: string
     ci_check_id:
       type: number
       description: ''
@@ -73,7 +68,7 @@ schema:
       originalType: string
     untrusted:
       type: string
-      description: 修正の結果、指摘とコメントの本文、競合したファイルのパスと中身を、JSONの文字列に包んだもの。
+      description: 修正の結果、指摘とコメントの本文、競合したファイルのパスと3つのblobのsha、PRのheadのブランチ名を、JSONの文字列に包んだもの。
       default: null
       originalType: string
     work_item_id:

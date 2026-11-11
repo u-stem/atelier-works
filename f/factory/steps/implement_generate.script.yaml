@@ -6,15 +6,15 @@ schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    context:
-      type: object
-      description: 準備ステップが用意した実装の前提情報(対象リポジトリ、ブランチ、worktree、承認済みの要件定義など)。
+    untrusted:
+      type: string
+      description: ''
       default: null
-      format: resource-implement_context
+      originalType: string
     work_item_id:
       type: number
       description: 実装する作業項目のID。
       default: null
   required:
     - work_item_id
-    - context
+    - untrusted

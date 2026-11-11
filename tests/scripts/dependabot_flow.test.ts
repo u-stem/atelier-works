@@ -201,17 +201,27 @@ function scope(prepare: unknown, assess?: unknown): Scope {
   };
 }
 
-/** finishのステップが受け取る3つの引数を、flow.yamlの式から作る。 */
+/** 包んだ引数(`untrusted`)の式を評価して、JSONとして戻す。 */
+function sealedArg(id: string, s: Scope): unknown {
+  const text = evaluate(inputExpr(moduleById(id), "untrusted"), s);
+  if (typeof text !== "string") throw new Error("untrusted is not text");
+  return JSON.parse(text);
+}
+
+/** finishのステップが受け取る引数を、flow.yamlの式から作る。 */
 function finishArgs(s: Scope): {
   workItemId: unknown;
   prepare: unknown;
   assess: unknown;
 } {
-  const finish = moduleById("dependabot_finish");
+  const sealed = sealedArg("dependabot_finish", s);
   return {
-    workItemId: evaluate(inputExpr(finish, "work_item_id"), s),
-    prepare: evaluate(inputExpr(finish, "prepare"), s),
-    assess: evaluate(inputExpr(finish, "assess"), s),
+    workItemId: evaluate(
+      inputExpr(moduleById("dependabot_finish"), "work_item_id"),
+      s,
+    ),
+    prepare: field(sealed, "prepare"),
+    assess: field(sealed, "assess"),
   };
 }
 
@@ -258,14 +268,16 @@ describe("dependabot flow.yaml modules", () => {
     expect(inputKeys("dependabot_prepare")).toEqual(["work_item_id"]);
   });
 
-  test("gives the assess step the work item id and the prepare result", () => {
-    expect(inputKeys("dependabot_assess")).toEqual(["prepare", "work_item_id"]);
+  test("gives the assess step the work item id and the sealed prepare result", () => {
+    expect(inputKeys("dependabot_assess")).toEqual([
+      "untrusted",
+      "work_item_id",
+    ]);
   });
 
-  test("gives the finish step the work item id and both results", () => {
+  test("gives the finish step the work item id and the sealed results", () => {
     expect(inputKeys("dependabot_finish")).toEqual([
-      "assess",
-      "prepare",
+      "untrusted",
       "work_item_id",
     ]);
   });
@@ -285,10 +297,7 @@ describe("dependabot flow.yaml modules", () => {
   test("passes the whole prepare result to the assess step", () => {
     expect(
       readPrepareResult(
-        evaluate(
-          inputExpr(moduleById("dependabot_assess"), "prepare"),
-          scope(PROCEEDING),
-        ),
+        field(sealedArg("dependabot_assess", scope(PROCEEDING)), "prepare"),
         WORK_ITEM_ID,
       ).kind,
     ).toBe("proceed");
@@ -345,7 +354,7 @@ describe("dependabot flow.yaml wiring between the steps", () => {
   });
 
   test("passes the assess result itself when prepare proceeds", () => {
-    expect(finishArgs(scope(PROCEEDING, ASSESSED)).assess).toBe(ASSESSED);
+    expect(finishArgs(scope(PROCEEDING, ASSESSED)).assess).toEqual(ASSESSED);
   });
 
   test("fails the flow at the finish step when the prepare result is malformed", () => {
@@ -408,8 +417,14 @@ describe("dependabot flow.yaml failure module", () => {
     ).toBe(WORK_ITEM_ID);
   });
 
-  test("passes the error to the failure handler", () => {
-    expect(inputExpr(failureModule(), "error")).toBe("error");
+  test("passes the sealed error to the failure handler", () => {
+    const error = { message: "step failed", step_id: "dependabot_prepare" };
+    const run = new Function(
+      "error",
+      `return (${inputExpr(failureModule(), "error")});`,
+    );
+
+    expect(JSON.parse(run(error))).toEqual(error);
   });
 
   test("never merges from the failure handler", () => {

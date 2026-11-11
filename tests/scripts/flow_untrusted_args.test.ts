@@ -274,7 +274,9 @@ describe("the accepted arguments", () => {
       "utf8",
     );
 
-    expect(source).not.toContain("on_behalf_of_email");
+    const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
+
+    expect(code).not.toContain("on_behalf_of_email");
   });
 });
 

@@ -19,9 +19,12 @@ value:
       value:
         type: script
         input_transforms:
-          prepare:
+          untrusted:
             type: javascript
-            expr: results.dependabot_prepare
+            expr: >-
+              JSON.stringify({
+              prepare: results.dependabot_prepare
+              }).replace(/\$/g, "\\u0024")
           work_item_id:
             type: javascript
             expr: flow_input.work_item_id
@@ -36,14 +39,13 @@ value:
       value:
         type: script
         input_transforms:
-          assess:
+          untrusted:
             type: javascript
-            expr: 'results.dependabot_prepare.proceed === true ? results.dependabot_assess :
-              { kind: "skipped", workItemId: flow_input.work_item_id, reason:
-              results.dependabot_prepare.reason }'
-          prepare:
-            type: javascript
-            expr: results.dependabot_prepare
+            expr: >-
+              JSON.stringify({
+              assess: results.dependabot_prepare.proceed === true ? results.dependabot_assess : { kind: "skipped", workItemId: flow_input.work_item_id, reason: results.dependabot_prepare.reason },
+              prepare: results.dependabot_prepare
+              }).replace(/\$/g, "\\u0024")
           work_item_id:
             type: javascript
             expr: flow_input.work_item_id
@@ -58,7 +60,7 @@ value:
       input_transforms:
         error:
           type: javascript
-          expr: error
+          expr: JSON.stringify(error ?? null).replace(/\$/g, "\\u0024")
         path:
           type: static
           value: f/factory/dependabot

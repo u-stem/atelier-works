@@ -7,9 +7,10 @@ schema:
   type: object
   properties:
     error:
-      type: ''
+      type: string
       description: 失敗の内容(エラー情報)。
       default: null
+      originalType: string
     job_id:
       type: string
       description: 失敗したジョブのID。

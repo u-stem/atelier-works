@@ -410,6 +410,21 @@ export async function runConflictPush(
 }
 
 /**
+ * 包んだ引数(`untrusted`)の形。flow.yamlの式のキーと一致する。
+ * `branch`はPRのheadのブランチ名で、gitは`$`で始まる名前を許すので、包む側に入れる。
+ */
+export const PR_FIX_FINISH_UNTRUSTED = isShape({
+  ...PR_FIX_COLLECTED_SHAPE,
+  reason: isStringOrNull,
+  summary: isString,
+  replies: isArrayOf(isFixReplyShape),
+  commit_subject: isStringOrNull,
+  commit_body: isStringOrNull,
+  conflict_blobs: isNullOr(isArrayOf(isConflictBlobsShape)),
+  branch: isStringOrNull,
+});
+
+/**
  * `outcome`に応じて作業項目を遷移させ、遷移先と通知文を返す。
  * 修正があればcommitしてpushし、レビューコメントへ返信して再レビューを依頼する。
  * commitの前に、worktreeのロックを持つプロセスが無いこと、`.git`が`worktree_git_pointer`(準備ステップの記録)と一致すること、
@@ -473,7 +488,6 @@ export async function main(
   max_comment_id: number,
   max_review_comment_id: number,
   worktree_git_pointer: string | null = null,
-  branch: string | null = null,
   ci_check_id: number | null = null,
   conflict_check_id: number | null = null,
   baseline_sha: string | null = null,
@@ -492,19 +506,8 @@ export async function main(
     comments,
     conflicted_paths,
     conflict_blobs,
-  } = parseUntrustedArg(
-    untrusted,
-    "pr_fix_finish",
-    isShape({
-      ...PR_FIX_COLLECTED_SHAPE,
-      reason: isStringOrNull,
-      summary: isString,
-      replies: isArrayOf(isFixReplyShape),
-      commit_subject: isStringOrNull,
-      commit_body: isStringOrNull,
-      conflict_blobs: isNullOr(isArrayOf(isConflictBlobsShape)),
-    }),
-  );
+    branch,
+  } = parseUntrustedArg(untrusted, "pr_fix_finish", PR_FIX_FINISH_UNTRUSTED);
   if (!isOneOf(outcome, ALL_OUTCOMES)) {
     throw new Error(`pr_fix_finish: unexpected outcome "${outcome}"`);
   }

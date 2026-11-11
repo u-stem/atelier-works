@@ -5,6 +5,7 @@ import { NO_FLOW_RETRY_MARKER } from "../../f/factory/lib/flow_retry_marker.ts";
 import { isNumber, isString } from "../../f/factory/lib/types.ts";
 import {
   isArrayOf,
+  isLiteral,
   isNullOr,
   isNumberOrNull,
   isShape,
@@ -102,6 +103,14 @@ describe("the guards", () => {
     isArrayOf(guard)(["a", "b"]);
 
     expect(extraArguments).toEqual([0, 0]);
+  });
+
+  test("isLiteral accepts the same string", () => {
+    expect(isLiteral("ran")("ran")).toBe(true);
+  });
+
+  test("isLiteral rejects another string", () => {
+    expect(isLiteral("ran")("skipped")).toBe(false);
   });
 
   test("isNullOr accepts null", () => {
