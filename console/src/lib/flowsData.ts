@@ -1,6 +1,7 @@
 // flowごとの図のデータの型と、その検査。
 // データは`scripts/docs-gen.ts`が`src/generated/flows.json`に書き、CIが古さを検査する。
 
+import { isRecord } from "../api/guards/primitives.ts";
 import flowsJson from "../generated/flows.json";
 
 /** flowのステップ。定義(`flow.yaml`の`modules[]`)の順に並ぶ。 */
@@ -80,10 +81,6 @@ export type FlowsData = {
 const NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 const FACTORY_PREFIX = "f/factory/";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isVia(value: unknown): value is ExitVia {
   return (

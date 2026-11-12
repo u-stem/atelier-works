@@ -1,6 +1,8 @@
 // 開いたままのタブが、自分の版がまだ配信中かを判定する純粋関数。
 // ネットワークとDOMには触れない。取得は releaseCheck.ts、周期の管理は useReleaseWatch が行う。
 
+import { isRecord } from "../api/guards/primitives.ts";
+
 /** 画面に出す案内の強さ。none は何も出さない。 */
 export type ReleaseNotice = "none" | "suggest" | "urge";
 
@@ -51,10 +53,6 @@ export function ownAssetPaths(
     }
   }
   return names;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
