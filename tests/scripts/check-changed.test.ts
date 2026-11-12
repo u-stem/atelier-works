@@ -66,6 +66,28 @@ describe("decideChecks", () => {
     expect(decideChecks(["docs/setup.md"]).console).toBe(false);
   });
 
+  test("a change to the console spec runs the console check that reads it", () => {
+    expect(decideChecks(["docs/internals/console.md"]).console).toBe(true);
+  });
+
+  test("a change to a document under docs/internals/console/ runs the console check", () => {
+    expect(decideChecks(["docs/internals/console/system.md"]).console).toBe(
+      true,
+    );
+  });
+
+  test("a deleted document under docs/internals/console/ runs the console check", () => {
+    expect(decideChecks([], ["docs/internals/console/old.md"]).console).toBe(
+      true,
+    );
+  });
+
+  test("a document whose name only starts with console skips the console check", () => {
+    expect(decideChecks(["docs/internals/console-notes.md"]).console).toBe(
+      false,
+    );
+  });
+
   test("a document-only change skips the test run", () => {
     expect(decideChecks(["docs/setup.md"]).test).toBe(false);
   });
