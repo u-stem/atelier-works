@@ -4,7 +4,7 @@
 // fetchだけを行うmainのcloneと、PRのheadコミットを指すdetachedのworktreeを用意する。
 // pr_reviewはmainのcloneでは作業ツリーをcheckoutしない。
 // worktreeを作る間にheadのshaが動いていないかを、最後にもう一度確かめる。
-// worktreeの名前には実行ごとの識別子を付けるので、前の実行の残りがあっても作成は衝突しない。
+// worktreeの名前には、このstepの実行ごとに乱数から作る識別子を付けるので、残りがあっても作成は衝突しない。
 
 import * as wmill from "windmill-client@1.817.0";
 import { isDesignStage, readBranchItemStatus } from "../lib/branch_hold.ts";
@@ -34,6 +34,7 @@ import {
   addDetachedWorktree,
   ensureRepo,
   fetchPrHeadRef,
+  isReviewRunId,
   removeWorktree,
   runCommand,
 } from "../lib/workspace.ts";
@@ -60,16 +61,12 @@ export type PrReviewPrepareResult = {
   readonly attempt: number;
 };
 
-/** 実行の識別子の形。小文字の16進数の8桁。 */
-const RUN_ID_PATTERN = /^[0-9a-f]{8}$/;
-
 /**
  * PRの1コミットをレビューするためのdetachedのworktreeのパスを返す。
  * `sha7`はレビュー対象コミットのshaの先頭7文字。
- * `runId`はこの実行を表す識別子(`reviewRunId`)で、パスの末尾に付く。
- * 同じPRの同じheadでも、実行ごとに別のパスになるので、前の実行の残りと衝突しない。
- * `null`は、識別子が付く前の古い形の名前を表す。`cleanup_workspaces.ts`が残りを探すときだけ使う。
- * 形に合わない識別子は、パスに入れずに例外を投げる。
+ * `runId`はこのstepの実行を表す識別子(`reviewRunId`)で、パスの末尾に付く。
+ * 同じPRの同じheadでも、実行ごとに別のパスになるので、残りのworktreeと衝突しない。
+ * 識別子の形はここで確かめ、合わなければ、パスに入れずに例外を投げる。
  */
 export function buildReviewWorktreeDir(
   repoDir: string,
@@ -77,7 +74,7 @@ export function buildReviewWorktreeDir(
   sha7: string,
   runId: string,
 ): string {
-  if (!RUN_ID_PATTERN.test(runId)) {
+  if (!isReviewRunId(runId)) {
     throw new Error(
       `pr_review_prepare: run id must be 8 lowercase hex digits: ${JSON.stringify(runId)}`,
     );
@@ -85,11 +82,18 @@ export function buildReviewWorktreeDir(
   return `${repoDir.replace(/\/main$/, "")}/review-${String(prNumber)}-${sha7}-${runId}`;
 }
 
-/** 実行の識別子を返す。 */
+/**
+ * このstepの実行ごとの識別子を、乱数から作って返す。
+ * `randomUuid`の値から英数字以外を除いた末尾8桁である。
+ * flowのジョブIDは、時刻順で先頭の桁が長く変わらず、同じジョブの再実行では値も同じになるため、使わない。
+ * 形の検証は、パスを組む`buildReviewWorktreeDir`が行う。
+ */
 export function reviewRunId(
-  _randomUuid: () => string = () => crypto.randomUUID(),
+  randomUuid: () => string = () => crypto.randomUUID(),
 ): string {
-  return "00000000";
+  return randomUuid()
+    .replace(/[^0-9A-Za-z]/g, "")
+    .slice(-8);
 }
 
 const SKIPPED_BASE = {

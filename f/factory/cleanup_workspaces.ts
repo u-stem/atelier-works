@@ -19,6 +19,8 @@
 // dependabotの作業ツリー(`dependabot-<PR番号>-<sha7>`)は、期限を待たず、終端でないdependabotの作業項目が
 // 使っていなければ消す(`removeDependabotWorktrees`)。信頼していない依存をインストールした作業ツリーで、
 // 調べ直すときは準備のステップが作り直すので、残しておく理由が無いためである。
+// レビュー用の作業ツリー(`review-<PR番号>-<sha7>-<識別子>`)は、期限を過ぎた終端の`pr_review`のPR番号で選ぶ。
+// 同じPRに終端でない`pr_review`がある間は消さない(`selectReviewWorktreesToRemove`、`removeReviewWorktrees`)。
 
 import * as wmill from "windmill-client@1.817.0";
 import { readdir } from "node:fs/promises";
@@ -44,6 +46,7 @@ import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
   listActive,
+  listActivePrReviewWorkItems,
   listStaleTerminalWorkItems,
   recordWorkspaceDiskUsageNotice,
 } from "./lib/db.ts";
@@ -61,6 +64,7 @@ import {
 } from "./lib/process_lock.ts";
 import { assertGitHubName, type WorkItem } from "./lib/types.ts";
 import {
+  isReviewWorktreeOf,
   listWorktrees,
   pathExists,
   pruneWorktrees,
@@ -106,29 +110,119 @@ async function recordBusyWorktreeNotice(
   }
 }
 
-type ActiveReviewItem = Pick<WorkItem, "kind" | "owner" | "repo" | "pr_number">;
-
-/** 同じPRに終端でない`pr_review`があるかを返す。 */
-export function hasActivePrReview(
-  _repoDir: string,
-  _prNumber: number,
-  _activeItems: readonly ActiveReviewItem[],
-): boolean {
-  return false;
+/**
+ * 作業ツリー`targetDir`を使う生き残りのプロセスがいないかを確かめ、消してよければ`true`を返す。
+ * 生き残りのプロセス(ロックの保持者か、このロックファイルのタグを持つ残り)がいるときは、
+ * 飛ばした作業ツリーとして`skippedBusyDirs`に足し、警告とnoticeを残して`false`を返す。
+ * 対象は終端状態で待つ処理が無く、翌日また試せる。止めるのは、持ち主タグとリースで根拠がある実装フローの準備だけにする。
+ * ロックファイルのパスを作れない(親が無い)ときなど、それ以外の例外はそのまま投げる。
+ */
+async function worktreeIsFreeToRemove(
+  input: {
+    readonly targetDir: string;
+    readonly workItemId: number;
+    readonly owner: string;
+    readonly repo: string;
+  },
+  skippedBusyDirs: Set<string>,
+  log: Logger,
+): Promise<boolean> {
+  const { targetDir, workItemId, owner, repo } = input;
+  try {
+    await ensureWorktreeLockFree({
+      run: runCommand,
+      lock: worktreeLockFor(targetDir),
+      policy: null,
+      deps: defaultLockReleaseDeps(),
+    });
+    return true;
+  } catch (err) {
+    // 枠の記録が指すworktreeを、workerが検査の前提を満たさないので取り戻せない。消すと記録だけが残るので、前提を満たすまで飛ばす。
+    if (err instanceof CheckEnvironmentError) {
+      skippedBusyDirs.add(targetDir);
+      log.warn("cleanup: skipping a worktree the worker cannot take back now", {
+        work_item_id: workItemId,
+        owner,
+        repo,
+        worktree_dir: targetDir,
+        reason: err.message,
+      });
+      await recordCheckEnvironmentNotice(
+        {
+          readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
+          addNotice: addNoticeUnlessUnresolved,
+          log,
+        },
+        err,
+      );
+      return false;
+    }
+    if (!(err instanceof WorktreeBusyError)) throw err;
+    skippedBusyDirs.add(targetDir);
+    log.warn("cleanup: skipping a worktree still used by processes", {
+      work_item_id: workItemId,
+      owner,
+      repo,
+      worktree_dir: targetDir,
+      reason: err.message,
+    });
+    await recordBusyWorktreeNotice(
+      {
+        owner,
+        repo,
+        workItemId,
+        worktreeDir: targetDir,
+        reason: maskSecrets(err.message),
+      },
+      log,
+    );
+    return false;
+  }
 }
 
-/** 消してよいレビュー用の作業ツリーのパスを返す。 */
+type ActiveReviewItem = Pick<WorkItem, "kind" | "owner" | "repo" | "pr_number">;
+
+/** `repoDir`のリポジトリの、PR番号`prNumber`に終端でない`pr_review`の作業項目が`activeItems`にあるかを返す。 */
+export function hasActivePrReview(
+  repoDir: string,
+  prNumber: number,
+  activeItems: readonly ActiveReviewItem[],
+): boolean {
+  return activeItems.some(
+    (active) =>
+      active.kind === "pr_review" &&
+      active.pr_number === prNumber &&
+      mainRepoDir(active.owner, active.repo) === repoDir,
+  );
+}
+
+/**
+ * 期限を過ぎた終端の`pr_review`の作業項目`item`のPRについて、消してよいレビュー用の作業ツリーのパスを返す。
+ * 対象は、`isReviewWorktreeOf`が選ぶ、そのPR番号のレビュー用の作業ツリーのすべてである。
+ * 作業ツリーの名前のshaは準備の時点のheadで決まり、作業項目の`head_sha`と食い違うことがあるので、shaでは絞らない。
+ * 終端の作業項目のflowは作業ツリーを使わないので、同じPRのほかの終端の作業項目の残りも、一緒に消してよい。
+ * 同じPRに終端でない`pr_review`の作業項目が`activeItems`にあるときは、何も選ばない。
+ * 同じPRを見直している最中の作業ツリーを、古い作業項目の期限で消さないためである。
+ */
 export function selectReviewWorktreesToRemove(
-  _repoDir: string,
-  _worktrees: readonly Pick<WorktreeEntry, "path" | "detached">[],
-  _item: Pick<WorkItem, "pr_number">,
-  _activeItems: readonly ActiveReviewItem[],
+  repoDir: string,
+  worktrees: readonly Pick<WorktreeEntry, "path" | "detached">[],
+  item: Pick<WorkItem, "pr_number">,
+  activeItems: readonly ActiveReviewItem[],
 ): string[] {
-  return [];
+  const prNumber = item.pr_number;
+  if (prNumber === null || hasActivePrReview(repoDir, prNumber, activeItems)) {
+    return [];
+  }
+  return worktrees
+    .filter((worktree) => isReviewWorktreeOf(repoDir, prNumber, worktree))
+    .map((worktree) => worktree.path);
 }
 
 export type ReviewWorktreeRemovalDeps = {
+  /** 作業ツリーを使う生き残りのプロセスがいなければ`true`を返す。使用中で飛ばすときは`false`を返す。 */
   readonly ensureFree: (dir: string) => Promise<boolean>;
+  /** いま終端でない、同じPRの`pr_review`の作業項目を返す。 */
   readonly listActiveReviews: () => Promise<readonly ActiveReviewItem[]>;
   readonly removeWorktree: (dir: string) => Promise<void>;
   readonly warn: (message: string, fields: LogFields) => void;
@@ -138,17 +232,51 @@ export type ReviewWorktreeRemovalInput = {
   readonly repoDir: string;
   readonly prNumber: number;
   readonly targetDirs: readonly string[];
+  /** この掃除の実行ですでに扱った作業ツリー。消したものと、消さずに飛ばしたもの(失敗、使用中、見直しの開始)。 */
   readonly visited: {
     readonly removed: Set<string>;
     readonly skipped: Set<string>;
   };
 };
 
-/** レビュー用の作業ツリーを消す。 */
+/**
+ * `targetDirs`のレビュー用の作業ツリーを、1つずつ消す。
+ * 消す直前に、同じPRに終端でない`pr_review`が始まっていないかを読み直し、始まっていれば残りも含めて消さない。
+ * 1つの作業ツリーの失敗は警告に残して次へ進む。失敗したものと飛ばしたものは、同じ実行の中でもう試さない。
+ */
 export async function removeReviewWorktrees(
-  _input: ReviewWorktreeRemovalInput,
-  _deps: ReviewWorktreeRemovalDeps,
-): Promise<void> {}
+  input: ReviewWorktreeRemovalInput,
+  deps: ReviewWorktreeRemovalDeps,
+): Promise<void> {
+  const { repoDir, prNumber, visited } = input;
+  const pending = dirsNotYetVisited(input.targetDirs, {
+    removed: visited.removed,
+    skippedBusy: visited.skipped,
+  });
+  for (const [index, dir] of pending.entries()) {
+    try {
+      if (!(await deps.ensureFree(dir))) {
+        visited.skipped.add(dir);
+        continue;
+      }
+      if (
+        hasActivePrReview(repoDir, prNumber, await deps.listActiveReviews())
+      ) {
+        for (const rest of pending.slice(index)) visited.skipped.add(rest);
+        return;
+      }
+      await deps.removeWorktree(dir);
+      visited.removed.add(dir);
+    } catch (err) {
+      visited.skipped.add(dir);
+      deps.warn("cleanup: failed to remove a review worktree", {
+        repo_dir: repoDir,
+        worktree_dir: dir,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+}
 
 async function removeStaleWorktreesForRepo(
   owner: string,
@@ -194,12 +322,43 @@ async function removeStaleWorktreesForRepo(
         )?.path;
         targetDirs = dir === undefined ? [] : [dir];
       } else if (item.kind === "pr_review") {
-        targetDirs = selectReviewWorktreesToRemove(
-          repoDir,
-          worktrees,
-          item,
-          activeItems,
-        );
+        // レビュー用の作業ツリーは、1つの作業項目から複数選ばれる。1つの失敗で残りを止めないよう、専用の関数で消す。
+        // どの作業項目やブランチの持ち主にも結び付かない(detachedで`req-*`でもない)ので、持ち主による除外は要らない。
+        const prNumber = item.pr_number;
+        if (prNumber !== null) {
+          await removeReviewWorktrees(
+            {
+              repoDir,
+              prNumber,
+              targetDirs: selectReviewWorktreesToRemove(
+                repoDir,
+                worktrees,
+                item,
+                activeItems,
+              ),
+              visited: { removed: removedDirs, skipped: skippedBusyDirs },
+            },
+            {
+              ensureFree: (dir) =>
+                worktreeIsFreeToRemove(
+                  { targetDir: dir, workItemId: item.id, owner, repo },
+                  skippedBusyDirs,
+                  log,
+                ),
+              listActiveReviews: () =>
+                listActivePrReviewWorkItems(owner, repo, prNumber),
+              removeWorktree: (dir) =>
+                removeWorktree({
+                  run: runCommand,
+                  repoDir,
+                  dir,
+                  force: true,
+                }),
+              warn: (message, fields) => log.warn(message, fields),
+            },
+          );
+        }
+        continue;
       }
 
       // 1つの作業項目が選ぶworktreeは互いに異なるので、作業項目ごとに除けば足りる。
@@ -207,72 +366,13 @@ async function removeStaleWorktreesForRepo(
         excludeActiveWorktrees(targetDirs, holders, worktrees, owner, repo),
         { removed: removedDirs, skippedBusy: skippedBusyDirs },
       )) {
-        // 生き残りのプロセス(ロックの保持者か、このロックファイルのタグを持つ残り)がいるworktreeは消さない。
-        // 対象は終端状態で待つ処理が無く、翌日また試せる。止めるのは、持ち主タグとリースで根拠がある実装フローの準備だけにする。
         // ロックファイルのパスを作れない(親が無い)ときの例外は、項目ごとの例外処理が受けて消さずに進む。
-        try {
-          await ensureWorktreeLockFree({
-            run: runCommand,
-            lock: worktreeLockFor(targetDir),
-            policy: null,
-            deps: defaultLockReleaseDeps(),
-          });
-        } catch (err) {
-          // 枠の記録が指すworktreeを、workerが検査の前提を満たさないので取り戻せない。消すと記録だけが残るので、前提を満たすまで飛ばす。
-          if (err instanceof CheckEnvironmentError) {
-            skippedBusyDirs.add(targetDir);
-            log.warn(
-              "cleanup: skipping a worktree the worker cannot take back now",
-              {
-                work_item_id: item.id,
-                owner,
-                repo,
-                worktree_dir: targetDir,
-                reason: err.message,
-              },
-            );
-            await recordCheckEnvironmentNotice(
-              {
-                readDeployedSha: () =>
-                  wmill.getVariable("f/factory/deployed_sha"),
-                addNotice: addNoticeUnlessUnresolved,
-                log,
-              },
-              err,
-            );
-            continue;
-          }
-          if (!(err instanceof WorktreeBusyError)) throw err;
-          skippedBusyDirs.add(targetDir);
-          log.warn("cleanup: skipping a worktree still used by processes", {
-            work_item_id: item.id,
-            owner,
-            repo,
-            worktree_dir: targetDir,
-            reason: err.message,
-          });
-          await recordBusyWorktreeNotice(
-            {
-              owner,
-              repo,
-              workItemId: item.id,
-              worktreeDir: targetDir,
-              reason: maskSecrets(err.message),
-            },
-            log,
-          );
-          continue;
-        }
-        // 一覧を読んでから今までに、同じPRのレビューが始まっているかもしれない。消す直前に読み直し、
-        // 始まっていれば、そのレビューが作った作業ツリーを消さない。
         if (
-          item.kind === "pr_review" &&
-          !selectReviewWorktreesToRemove(
-            repoDir,
-            [{ path: targetDir, detached: true }],
-            item,
-            await listActive(),
-          ).includes(targetDir)
+          !(await worktreeIsFreeToRemove(
+            { targetDir, workItemId: item.id, owner, repo },
+            skippedBusyDirs,
+            log,
+          ))
         ) {
           continue;
         }

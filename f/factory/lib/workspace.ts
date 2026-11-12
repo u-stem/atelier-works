@@ -1919,11 +1919,18 @@ export type WorktreeEntry = {
   readonly detached: boolean;
 };
 
+/** レビューのworktreeの名前に付く、実行の識別子の形。小文字の16進数の8桁。 */
+const REVIEW_RUN_ID_SOURCE = "[0-9a-f]{8}";
+
+/** `value`が、レビューのworktreeの名前に付けてよい実行の識別子かを返す。 */
+export function isReviewRunId(value: string): boolean {
+  return new RegExp(`^${REVIEW_RUN_ID_SOURCE}$`).test(value);
+}
+
 /**
  * `entry`が、PR番号`prNumber`のレビューのworktree(`buildReviewWorktreeDir`が作るパス)かを返す。
  * `repoDir`と同じ親の直下にある、detachedのworktreeだけを対象にする。
- * 名前は`review-<PR番号>-<sha7>-<実行の識別子>`と、識別子が付く前の古い形の`review-<PR番号>-<sha7>`の両方に合わせる。
- * 識別子は小文字の16進数の8桁である。
+ * 名前は`review-<PR番号>-<sha7>-<実行の識別子>`と、識別子の無い`review-<PR番号>-<sha7>`の両方に合わせる。
  * パスの一部が一致しただけで選ぶと、別の場所のdirectoryやブランチのworktreeまで消しうるためである。
  * パスは文字列の前方一致で比べるので、列挙されたパスと`repoDir`が同じ綴りでなければ、
  * 何も選ばれない。workerの`/workspaces`はボリュームのマウント先そのものでsymlinkを挟まないので、
@@ -1939,7 +1946,7 @@ export function isReviewWorktreeOf(
   if (!entry.path.startsWith(prefix)) return false;
   const name = entry.path.slice(prefix.length);
   return new RegExp(
-    `^review-${String(prNumber)}-[0-9a-f]{7}(-[0-9a-f]{8})?$`,
+    `^review-${String(prNumber)}-[0-9a-f]{7}(-${REVIEW_RUN_ID_SOURCE})?$`,
   ).test(name);
 }
 

@@ -344,7 +344,7 @@ async function getJobState(
 
 /**
  * 閉じた・マージされたPRについて、pr_reviewのdetachedなworktree
- * (`/workspaces/<owner>/<repo>/review-<pr>-<sha7>-<実行の識別子>`と、識別子が付く前の古い形)を削除する。
+ * (`/workspaces/<owner>/<repo>/review-<pr>-<sha7>-<実行の識別子>`と、識別子の無い`review-<pr>-<sha7>`)を削除する。
  * 失敗はログに残すだけで例外を投げない。
  * pr_fixの`git gtr`のworktreeはPRのブランチ名で決まり、reconcileは
  * ブランチ名を追っていないので、ここでは消さない。
