@@ -50,17 +50,13 @@ Consoleは管理者のCookieで動くので、呼べる範囲を固定する。
 `runScript`は例外を投げず、応答を`classifyRunResponse`で分類して返す。
 中断(`AbortSignal`)だけは、取り消しとして扱えるよう例外を再び投げる。
 
-| 応答 | 分類 |
-| --- | --- |
-| 2xxで本文がJSON | 成功 |
-| 2xxで本文がJSONでない | `invalid_response` |
-| 401 | `unauthorized` |
-| 403 | `forbidden` |
-| 408、504 | `timeout_or_unknown` |
-| 500 | `job_failed`。本文から取り出した文(`message`)を500字まで持つ。スタックは持たない |
-| 500で、本文の文が待ちの上限の定型文(文頭の`timeout after <数>`)に合う | `timeout_or_unknown` |
-| その他の状態 | `http`。状態の番号と、4xxなら本文から取り出した文を500字まで持つ |
-| 通信の失敗 | `network` |
+分類は、成功、`invalid_response`、`unauthorized`、`forbidden`、`timeout_or_unknown`、`job_failed`、`http`、`network`である。
+応答の状態と本文から分類を決める規則は、[`console/src/api/errors.ts`](../../../console/src/api/errors.ts)の`classifyRunResponse`が定める。
+状態ごとの分類は[`classifyRunResponse on failure statuses`](../../../console/src/api/errors.test.ts)で確かめる。
+ジョブの失敗(500)は[`classifyRunResponse on a failed job (500)`](../../../console/src/api/errors.test.ts)で確かめる。
+待ちの上限の定型文は[`classifyRunResponse on a timeout message`](../../../console/src/api/errors.test.ts)で確かめる。
+本文から取り出して持つ文の長さの上限は、同じファイルの`MAX_MESSAGE_LENGTH`と`MAX_DETAIL_LENGTH`が定める。
+ジョブの失敗の分類は、スタックを持たない。
 
 本文はContent-Typeを見ずに読む。
 失敗の本文は、JSONの`error.message`、`message`、文字列の`error`の順に探し、JSONでなければ本文のテキストを使う。
@@ -206,14 +202,15 @@ backendが先に新しい値を反映した間や、配信を前の版に固定�
 二重の送信は、画面側で止める。
 
 PRのレビューを投入する`pr_review_submit`の型付きの関数は`submitPrReview`で、引数は`owner`、`repo`、`prNumber`である。
-戻りの型ガードは`isPrReviewSubmitResult`で、断りの符号は`PR_REVIEW_SUBMIT_REFUSAL_REASONS`の6つである。
+戻りの型ガードは`isPrReviewSubmitResult`である。
+断りの符号は[`src/api/guards/writeResults.ts`](../../../console/src/api/guards/writeResults.ts)の`PR_REVIEW_SUBMIT_REFUSAL_REASONS`が定める。
 `already_reviewing`は、同じPRの稼働中のレビューがあることを、同期に返す。
-投入のフローの登録のステップが断る8つの符号は、`PR_REVIEW_REGISTER_REFUSAL_REASONS`と、型ガード`isPrReviewRegisterResult`にある。
+投入のフローの登録のステップが断る符号は、同じファイルの`PR_REVIEW_REGISTER_REFUSAL_REASONS`と、型ガード`isPrReviewRegisterResult`にある。
 この符号は、起動したフローのジョブの結果に現れる。
 画面は[PRレビューの投入の画面](work-items.md#prレビューの投入の画面)で、2つの符号の表を日本語の固定文に直す。
 仕組みは[PRワークフローの仕様](../pr-workflow.md#consoleからの投入)にある。
 
-却下の理由は、4000文字までにする(`MAX_REASON_LENGTH`)。
+却下の理由の長さの上限は、[`src/api/writes.ts`](../../../console/src/api/writes.ts)の`MAX_REASON_LENGTH`が定める。
 文字はコードポイントで数える。
 `decideApproval`は、上限を超える理由を送らず、`RangeError`で断る。
 画面は、送る前に長さを確かめて入力欄で知らせる。
