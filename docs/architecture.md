@@ -820,8 +820,9 @@ PRに書くのは、レビューの指摘と総評、修正の返信だけであ
 | PRレビュー | `/workspaces/<owner>/<repo>/review-<pr>-<sha7>-<run>`にPRのcommitをdetachedで置き、終わったら消す |
 | PR修正 | `git gtr new`で作るPRブランチのworktree |
 
-Factoryの投稿の見分け方、総評の組み立て、スレッドの解決、Issue化の提案、処理済みの位置(watermark)は[PRワークフローの内部仕様](internals/pr-workflow.md)に書く。
-安全策は[PRワークフローの内部仕様](internals/pr-workflow.md#pr修正の安全策)に書く。
+Factoryの投稿の見分け方、Issue化の提案、処理済みの位置(watermark)は[PRワークフローの内部仕様](internals/pr-workflow.md)に書く。
+総評の組み立てとスレッドの解決は[PRワークフローのレビューの仕様](internals/pr-workflow/review.md)に書く。
+安全策は[PRワークフローの安全策の内部仕様](internals/pr-workflow/security.md#pr修正の安全策)に書く。
 
 ## 自己更新
 

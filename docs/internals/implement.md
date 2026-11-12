@@ -893,7 +893,7 @@ worktreeに残った途中の変更は、次の実行の準備で捨てる。
 ## 安全策の実装
 
 実装フローはPR修正と同じくClaudeに書き込みのツールを渡す。
-PR修正と共通の仕組みは[PRワークフロー](pr-workflow.md)にも書く。
+PR修正と共通の仕組みは[PRワークフローの安全策の内部仕様の「安全策の実装」](pr-workflow/security.md#安全策の実装)と、[PRワークフローの仕様の「検査コマンドの実行」](pr-workflow.md#検査コマンドの実行)にも書く。
 
 ### Claudeに渡すツールの制限
 
@@ -1034,7 +1034,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 - ほかの作業項目のプロセス
 
 理由には、保持者のpid、経過秒、持ち主、コマンドを載せる。
-PR修正の準備の扱いは[PRワークフロー](pr-workflow.md)に書く。
+PR修正の準備の扱いは[PRワークフローのタイムアウトと再実行の仕様の「再実行と中断」](pr-workflow/retries.md#再実行と中断)に書く。
 
 fdを閉じる子孫は珍しくない。
 例えばPythonの`subprocess`は既定で`close_fds`を有効にする。
@@ -1189,7 +1189,7 @@ Claudeが書き換えた`mise.toml`や`package.json`のscriptsをworkerで実行
 
 - ディレクトリ: `IMPLEMENT_PROTECTED_PATH_PREFIXES`
 - 個別のファイル: `IMPLEMENT_PROTECTED_EXACT_PATHS`。
-  PR修正の一覧と同じで、[PRワークフロー](pr-workflow.md)の[禁止パスによる停止](pr-workflow.md#禁止パスによる停止)にある。
+  PR修正の一覧と同じで、[PRワークフローの安全策の内部仕様の「禁止パスによる停止」](pr-workflow/security.md#禁止パスによる停止)にある。
 - ファイル名: `IMPLEMENT_PROTECTED_BASENAME_PATTERNS`
 
 ディレクトリとファイル名は、PR修正の一覧に次を加えたものである。
@@ -1204,7 +1204,7 @@ Claudeが書き換えた`mise.toml`や`package.json`のscriptsをworkerで実行
 | タスクランナーなど | `Makefile`、`Justfile`、`Taskfile.yml`、`turbo.json`、`nx.json`、`deno.json`、`CODEOWNERS`、`.pre-commit-config.yaml` |
 | JavaScript以外のlockfileとmanifest | `uv.lock`、`poetry.lock`、`Pipfile`、`pyproject.toml`、`setup.py`、`setup.cfg`、`requirements*.txt`、`Cargo.toml`、`Cargo.lock`、`go.mod`、`go.sum`、`Gemfile`、`composer.json`、`composer.lock` |
 
-PR修正の一覧そのものの中身は、[PRワークフロー](pr-workflow.md)の[禁止パスによる停止](pr-workflow.md#禁止パスによる停止)にある。
+PR修正の一覧そのものの中身は、[PRワークフローの安全策の内部仕様の「禁止パスによる停止」](pr-workflow/security.md#禁止パスによる停止)にある。
 markdownlint-cli2とtextlintの設定は、PR修正の一覧に含まれる。
 
 `infra/`を加えるのは、workerのイメージとcomposeの定義の変更が、次にホストで`mise run up`するまで反映されないからである。

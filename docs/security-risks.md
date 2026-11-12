@@ -36,7 +36,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | DES | [設計書の生成の安全策](#設計書の生成の安全策) | [設計書の生成](internals/design.md) | 46 |
 | HOLD | [保留](#保留) | [保留の内部仕様](internals/holds.md) | 32 |
 | FRZ | [凍結とdeployの保留](#凍結とdeployの保留) | [凍結とdeployの保留の内部仕様](internals/freezes.md) | 29 |
-| FIX | [PR修正の安全策](#pr修正の安全策) | [PRワークフロー](internals/pr-workflow.md) | 28 |
+| FIX | [PR修正の安全策](#pr修正の安全策) | [PRワークフローの安全策の内部仕様](internals/pr-workflow/security.md) | 28 |
 | CHK | [検査コマンドの権限](#検査コマンドの権限) | [検査コマンドの実行と権限の内部仕様](internals/check-sandbox.md) | 15 |
 | DEP | [dependabotの更新の自動マージ](#dependabotの更新の自動マージ) | [dependabotの更新の内部仕様](internals/dependabot.md) | 15 |
 | DAP | [反映の承認](#反映の承認) | [反映の承認の内部仕様](internals/deploy-approvals.md) | 05 |
@@ -480,7 +480,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-dio-12"></a>R-DIO-12 | 最初に動かした週と記録が消えたときは、待ちを数え直すので、14日間はどの版も上がらない。 | [ビューアの更新](internals/console/security.md#ビューアの更新) |
 | <a id="r-dio-13"></a>R-DIO-13 | 最新の版を保留している間は、それより古い版も上がらない。保留の理由はnoticeに出る。 | [ビューアの更新](internals/console/security.md#ビューアの更新) |
 | <a id="r-dio-14"></a>R-DIO-14 | 保護するのは更新に専用の部品である。汎用の層(`github.ts`、`db.ts`、`types.ts`、`workspace.ts`)は保護していない。更新はこれらの関数を呼ぶので、挙動を変える変更は通常のレビューで確かめる。 | [ビューアの更新](internals/console/security.md#ビューアの更新) |
-| <a id="r-dio-15"></a>R-DIO-15 | script定義とlockのうち、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は保護しない。`windmill-client`の版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。部品のscript定義を保護し、部品の依存の無いlockを保護しない(理由は[保護パスの変更を止める](internals/pr-workflow.md#保護パスの変更を止める)の「libのlockを保護しない理由」)。 | [ビューアの更新](internals/console/security.md#ビューアの更新) |
+| <a id="r-dio-15"></a>R-DIO-15 | script定義とlockのうち、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は保護しない。`windmill-client`の版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。部品のscript定義を保護し、部品の依存の無いlockを保護しない(理由は[保護パスの変更を止める](internals/pr-workflow/security.md#保護パスの変更を止める)の「libのlockを保護しない理由」)。 | [ビューアの更新](internals/console/security.md#ビューアの更新) |
 | <a id="r-dio-16"></a>R-DIO-16 | ブランチ名が`factory/drawio-viewer-`で始まる未完了のPRが残ると、更新は止まる。そのPRを閉じるかマージすると、次の週に再開する。 | [ビューアの更新](internals/console/security.md#ビューアの更新) |
 
 ## 調査の隔離
@@ -671,53 +671,53 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
-| <a id="r-fix-02"></a>R-FIX-02 | PRの修正の一覧が、実装の一覧より狭いことは、設計の理由では説明できない。この差は、残るリスクとして受け入れる。 | [修正と実装で範囲が違う理由](internals/pr-workflow.md#修正と実装で範囲が違う理由) |
-| <a id="r-fix-28"></a>R-FIX-28 | 通常の修正の回は、無視されたファイルを`FORBIDDEN_*`の判定に入れない。Claudeが`.gitignore`に無視の規則を足せば、新しく作る`.env`や`bunfig.toml`も、検査が読むまで止まらず、PRに跡が残らない。Claudeが読む文には運用者以外の文が入りうるが、この差を守る条件は置かずに受け入れる。Claudeが書いたソースとテストも検査で実行されるので、判定を広げて減る実行は、lockfileなどが取得する依存の中身に限られ、そのために通常の回を止める費用は、個人のローカル運用では見合わないためである。 | [修正と実装で範囲が違う理由](internals/pr-workflow.md#修正と実装で範囲が違う理由) |
+| <a id="r-fix-02"></a>R-FIX-02 | PRの修正の一覧が、実装の一覧より狭いことは、設計の理由では説明できない。この差は、残るリスクとして受け入れる。 | [修正と実装で範囲が違う理由](internals/pr-workflow/security.md#修正と実装で範囲が違う理由) |
+| <a id="r-fix-28"></a>R-FIX-28 | 通常の修正の回は、無視されたファイルを`FORBIDDEN_*`の判定に入れない。Claudeが`.gitignore`に無視の規則を足せば、新しく作る`.env`や`bunfig.toml`も、検査が読むまで止まらず、PRに跡が残らない。Claudeが読む文には運用者以外の文が入りうるが、この差を守る条件は置かずに受け入れる。Claudeが書いたソースとテストも検査で実行されるので、判定を広げて減る実行は、lockfileなどが取得する依存の中身に限られ、そのために通常の回を止める費用は、個人のローカル運用では見合わないためである。 | [修正と実装で範囲が違う理由](internals/pr-workflow/security.md#修正と実装で範囲が違う理由) |
 
 ### gitが読む設定を限る
 
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
-| <a id="r-fix-03"></a>R-FIX-03 | 固定していないgitの設定(`url.*.insteadOf`、`filter.*`、`merge.*.driver`、`core.alternateRefsCommand`、`core.worktree`など)は、そのまま読まれ、プログラムを実行したり作業ツリーを変えたりしうる。`git gtr new`のcheckoutは`GH_TOKEN`を持つ環境で動くので、`.git/config`の`filter.<名前>.smudge`や`process`を、PRの内容の`.gitattributes`が指名すると、`GH_TOKEN`を読めるプログラムが動く。検査コマンドは検査用のユーザーで動き、main cloneの`.git`に書き込めないので、検査コマンドが`.git/config`を書き換えて、`GH_TOKEN`を持つgitにプログラムを実行させる経路は無い。根本の対処は、ネットワーク操作とcheckoutを分け、checkoutを`localGitEnv`で行うことである。 | [gitが読む設定を限る](internals/pr-workflow.md#gitが読む設定を限る) |
+| <a id="r-fix-03"></a>R-FIX-03 | 固定していないgitの設定(`url.*.insteadOf`、`filter.*`、`merge.*.driver`、`core.alternateRefsCommand`、`core.worktree`など)は、そのまま読まれ、プログラムを実行したり作業ツリーを変えたりしうる。`git gtr new`のcheckoutは`GH_TOKEN`を持つ環境で動くので、`.git/config`の`filter.<名前>.smudge`や`process`を、PRの内容の`.gitattributes`が指名すると、`GH_TOKEN`を読めるプログラムが動く。検査コマンドは検査用のユーザーで動き、main cloneの`.git`に書き込めないので、検査コマンドが`.git/config`を書き換えて、`GH_TOKEN`を持つgitにプログラムを実行させる経路は無い。根本の対処は、ネットワーク操作とcheckoutを分け、checkoutを`localGitEnv`で行うことである。 | [gitが読む設定を限る](internals/pr-workflow/security.md#gitが読む設定を限る) |
 
 ### PRの状態とheadの確認
 
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
-| <a id="r-fix-04"></a>R-FIX-04 | 残るリスクとして、準備からpushまでの間に、PRのauto-mergeを有効にされたり、headのブランチを保護されたりする窓が残る。pushの直前に確かめ直すのはheadのshaだけで、auto-mergeと保護は読み直さないためである。窓は修正の実行時間ほどの長さになる。auto-mergeの有効化にもGitHubの書き込み権限が要るので、受け入れる。 | [PRの状態とheadの確認](internals/pr-workflow.md#prの状態とheadの確認) |
+| <a id="r-fix-04"></a>R-FIX-04 | 残るリスクとして、準備からpushまでの間に、PRのauto-mergeを有効にされたり、headのブランチを保護されたりする窓が残る。pushの直前に確かめ直すのはheadのshaだけで、auto-mergeと保護は読み直さないためである。窓は修正の実行時間ほどの長さになる。auto-mergeの有効化にもGitHubの書き込み権限が要るので、受け入れる。 | [PRの状態とheadの確認](internals/pr-workflow/security.md#prの状態とheadの確認) |
 
 ### CIのログの扱い
 
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
-| <a id="r-fix-05"></a>R-FIX-05 | 切り口にかかった秘密値の一部は、トークンの形の文字列を切る前に伏せることで緩和している。この緩和が効くのは、接頭辞が分かる形の秘密値に限る。全文のgitleaksの検査は、伏せる前に行うので、本物の秘密値はここで止まる。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-06"></a>R-FIX-06 | 生のログの先頭と末尾を残す境目では、秘密値が分断される。分断された後半は接頭辞を持たないので、伏せられず、gitleaksにも検出されない可能性がある。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-07"></a>R-FIX-07 | base64などで符号化された秘密値と、複数の行に分割された秘密値は、gitleaksと`maskSecrets`で検出できない可能性がある。Actionsが自動で伏せる範囲に頼る部分が残る。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-08"></a>R-FIX-08 | 抑制の記述の検出は文字列の照合なので、別の書き方で検査を無効にする変更は検出できない。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-09"></a>R-FIX-09 | CI回のテストの期待値の書き換えは機械では判定できず、再レビューに頼る。PRが足した行の書き換え、同じhunkの中で別の行へ置き換える変更、何もしない行(`void 0;`、`;`、`if (false) ...`など)への置き換えも検出できない。再レビューは、PR全体の差分を読み、CI回のcommit単体の差分(書き換え前後の行)は入力に無い。書き換えは、最終の形が新しいコードとして読まれ、気づかれない可能性が残る。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い)、[既知の限界](internals/ci-fix.md#既知の限界) |
-| <a id="r-fix-10"></a>R-FIX-10 | 空白を無視した差分で行の位置がずれることについて、次の2点を受け入れている。隣り合う同じ内容の行は、どちらがPRの追加かを決められず、基点の行がPRの追加に見えることがある。字下げだけが違う複製の行は、同じ行と見なされる。字下げに意味がある言語のテストでは、基点の行がすり替わりうる。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-11"></a>R-FIX-11 | どのファイルへでも、PRが移した行はPRの追加に見える。基点のテストの行を消して別のファイル(新しいファイルを含む)へ移したPRでは、移した行を1行ずつ書き換える変更が通る。名前の変更も検出しない。行を削る変更は、意味のある追加行より多く減らせないので通らない。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い)、[既知の限界](internals/ci-fix.md#既知の限界) |
-| <a id="r-fix-12"></a>R-FIX-12 | CIのログは、`gh`が署名付きURLへの302を内部でたどって取得する。認証情報が別のホストへ渡らないことは、`gh`の挙動に頼る。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い)、[ログの取得](internals/ci-fix.md#ログの取得)、[既知の限界](internals/ci-fix.md#既知の限界) |
-| <a id="r-fix-13"></a>R-FIX-13 | 拒否した安全装置が直接importするモジュールのうち、`db`、`discord`、`poll_support`、`implement_*`などの共有モジュールは、拒否せずに受け入れている。CI回のClaudeが、PRがすでに変更していればこれらを書き換えられる。受け入れた一覧と理由は、テストが固定する。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-14"></a>R-FIX-14 | 受け入れた共有モジュールに`approver.ts`がある。31行で安定しており、承認の`approval_decide`が以前から同じ依存を持つ。CI回が変えても影響は操作者の名前に限られ、Consoleの解除は導けないときに拒否する。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-15"></a>R-FIX-15 | ルートの`AGENTS.md`、`CLAUDE.md`、`AGENTS.wmill.md`、`.gitignore`と、安全装置以外の`*.script.yaml`は、拒否の一覧に無い。PRがすでに変更していれば、CI回のClaudeが書き換えられる。影響は、マージの後か、人の対話セッションで読まれたときに現れる。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-16"></a>R-FIX-16 | `github.ts`は、CI回のClaudeが変更できない。Factory自身の修正PRのCIが`github.ts`の不具合で落ちても、CI回は直せずに人へ渡す。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-27"></a>R-FIX-27 | テストの行がPRの足した行かを行の位置で判定するとき、整形で1行が複数行に分かれると、分かれた行がPRの追加になる。この扱いは受け入れている。CIの自動修正の回の、削除された行の数え方も同じである。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い)、[検証のステップ](internals/ci-fix.md#検証のステップ) |
+| <a id="r-fix-05"></a>R-FIX-05 | 切り口にかかった秘密値の一部は、トークンの形の文字列を切る前に伏せることで緩和している。この緩和が効くのは、接頭辞が分かる形の秘密値に限る。全文のgitleaksの検査は、伏せる前に行うので、本物の秘密値はここで止まる。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
+| <a id="r-fix-06"></a>R-FIX-06 | 生のログの先頭と末尾を残す境目では、秘密値が分断される。分断された後半は接頭辞を持たないので、伏せられず、gitleaksにも検出されない可能性がある。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
+| <a id="r-fix-07"></a>R-FIX-07 | base64などで符号化された秘密値と、複数の行に分割された秘密値は、gitleaksと`maskSecrets`で検出できない可能性がある。Actionsが自動で伏せる範囲に頼る部分が残る。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
+| <a id="r-fix-08"></a>R-FIX-08 | 抑制の記述の検出は文字列の照合なので、別の書き方で検査を無効にする変更は検出できない。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
+| <a id="r-fix-09"></a>R-FIX-09 | CI回のテストの期待値の書き換えは機械では判定できず、再レビューに頼る。PRが足した行の書き換え、同じhunkの中で別の行へ置き換える変更、何もしない行(`void 0;`、`;`、`if (false) ...`など)への置き換えも検出できない。再レビューは、PR全体の差分を読み、CI回のcommit単体の差分(書き換え前後の行)は入力に無い。書き換えは、最終の形が新しいコードとして読まれ、気づかれない可能性が残る。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い)、[既知の限界](internals/ci-fix.md#既知の限界) |
+| <a id="r-fix-10"></a>R-FIX-10 | 空白を無視した差分で行の位置がずれることについて、次の2点を受け入れている。隣り合う同じ内容の行は、どちらがPRの追加かを決められず、基点の行がPRの追加に見えることがある。字下げだけが違う複製の行は、同じ行と見なされる。字下げに意味がある言語のテストでは、基点の行がすり替わりうる。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
+| <a id="r-fix-11"></a>R-FIX-11 | どのファイルへでも、PRが移した行はPRの追加に見える。基点のテストの行を消して別のファイル(新しいファイルを含む)へ移したPRでは、移した行を1行ずつ書き換える変更が通る。名前の変更も検出しない。行を削る変更は、意味のある追加行より多く減らせないので通らない。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い)、[既知の限界](internals/ci-fix.md#既知の限界) |
+| <a id="r-fix-12"></a>R-FIX-12 | CIのログは、`gh`が署名付きURLへの302を内部でたどって取得する。認証情報が別のホストへ渡らないことは、`gh`の挙動に頼る。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い)、[ログの取得](internals/ci-fix.md#ログの取得)、[既知の限界](internals/ci-fix.md#既知の限界) |
+| <a id="r-fix-13"></a>R-FIX-13 | 拒否した安全装置が直接importするモジュールのうち、`db`、`discord`、`poll_support`、`implement_*`などの共有モジュールは、拒否せずに受け入れている。CI回のClaudeが、PRがすでに変更していればこれらを書き換えられる。受け入れた一覧と理由は、テストが固定する。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
+| <a id="r-fix-14"></a>R-FIX-14 | 受け入れた共有モジュールに`approver.ts`がある。31行で安定しており、承認の`approval_decide`が以前から同じ依存を持つ。CI回が変えても影響は操作者の名前に限られ、Consoleの解除は導けないときに拒否する。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
+| <a id="r-fix-15"></a>R-FIX-15 | ルートの`AGENTS.md`、`CLAUDE.md`、`AGENTS.wmill.md`、`.gitignore`と、安全装置以外の`*.script.yaml`は、拒否の一覧に無い。PRがすでに変更していれば、CI回のClaudeが書き換えられる。影響は、マージの後か、人の対話セッションで読まれたときに現れる。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
+| <a id="r-fix-16"></a>R-FIX-16 | `github.ts`は、CI回のClaudeが変更できない。Factory自身の修正PRのCIが`github.ts`の不具合で落ちても、CI回は直せずに人へ渡す。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
+| <a id="r-fix-27"></a>R-FIX-27 | テストの行がPRの足した行かを行の位置で判定するとき、整形で1行が複数行に分かれると、分かれた行がPRの追加になる。この扱いは受け入れている。CIの自動修正の回の、削除された行の数え方も同じである。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い)、[検証のステップ](internals/ci-fix.md#検証のステップ) |
 
 ### マージの競合を解く回(PR修正の安全策)の残るリスク
 
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
-| <a id="r-fix-17"></a>R-FIX-17 | 意味的に誤った解消(片側を丸ごと採るなど)は、検査では検出しきれない。後続の自動レビューと人のレビューが止める。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策) |
-| <a id="r-fix-18"></a>R-FIX-18 | ローカルのブランチは、基準コミットを作ってから、pushが済んだ後も、衝突マーカー入りのコミットを指す。通常の回の`commitAndPush`は、`requireLocalHeadAtExpected`でローカルのHEADを確かめて止める。戻すのは、次にworktreeを使うときの`reset --hard`である。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策) |
-| <a id="r-fix-19"></a>R-FIX-19 | mergeが始まった後に例外が出ると、`merge --abort`をベストエフォートで行う。取り消しが失敗したworktreeは、mergeの途中のまま残りうる。呼び出し側は、次にworktreeを使うときの`reset --hard`と`clean -fd`で戻す。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策) |
-| <a id="r-fix-20"></a>R-FIX-20 | 署名の変更や、自動でmergeされた箇所に足した呼び出しの食い違いは、検査では見つからない。検査コマンドの失敗として現れる。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策) |
-| <a id="r-fix-21"></a>R-FIX-21 | 新しく足した行の検査は、JavaScriptとTypeScriptの記法だけを見る。ほかの言語の読み込みや抑制の記述は、検査を通る。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策) |
-| <a id="r-fix-22"></a>R-FIX-22 | マージの競合を解く回は、`git merge`を呼ぶ経路を新しく足す。`merge.<名前>.driver`は、`.gitattributes`が名前を指名し、`.git/config`の定義がプログラムを動かす。名前が対象ごとに変わるので、名前で固定して潰せない。定義を置けるのはmain cloneの`.git/config`で、検査コマンドは書き込めない([検査コマンドの権限](internals/check-sandbox.md#検査コマンドの権限))。この前提で抑え、書き込める経路が増えたときは残るリスクになる。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策) |
-| <a id="r-fix-23"></a>R-FIX-23 | mergeコミットのpushの直前の照合とpushの間に、人がブランチを祖先へ巻き戻す窓が残る。巻き戻されたブランチへも、pushは通る。`commitAndPush`と同じ窓として受け入れる。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策) |
-| <a id="r-fix-24"></a>R-FIX-24 | 属性の検査は、競合ファイルだけにかける。両側が変えたが競合しなかったパスの属性は調べない。そのパスの自動のmergeでも、属性の指名したドライバが動きうる。`merge.<名前>.driver`の項([R-FIX-22](#r-fix-22))と同じ前提で抑える。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策) |
-| <a id="r-fix-25"></a>R-FIX-25 | 差分の大きさの上限(`max_fix_changed_files`と`max_fix_diff_lines`)は、基準コミットから解消後の作業ツリーまでの編集にかける。baseがPRに持ち込む差には、かけない。baseの側の変更はレビューとマージを経ているので、受け入れる。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策) |
-| <a id="r-fix-26"></a>R-FIX-26 | 競合回の完了ステップは失敗をDiscordとnoticeに通知しないので、完了のステップで検出したイメージの古さは、行の起動の回数の上限に達して`rounds_exhausted`になるまで、通知が無い。通知を競合の行の側に集めるためである。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow.md#マージの競合を解く回pr修正の安全策) |
+| <a id="r-fix-17"></a>R-FIX-17 | 意味的に誤った解消(片側を丸ごと採るなど)は、検査では検出しきれない。後続の自動レビューと人のレビューが止める。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
+| <a id="r-fix-18"></a>R-FIX-18 | ローカルのブランチは、基準コミットを作ってから、pushが済んだ後も、衝突マーカー入りのコミットを指す。通常の回の`commitAndPush`は、`requireLocalHeadAtExpected`でローカルのHEADを確かめて止める。戻すのは、次にworktreeを使うときの`reset --hard`である。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
+| <a id="r-fix-19"></a>R-FIX-19 | mergeが始まった後に例外が出ると、`merge --abort`をベストエフォートで行う。取り消しが失敗したworktreeは、mergeの途中のまま残りうる。呼び出し側は、次にworktreeを使うときの`reset --hard`と`clean -fd`で戻す。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
+| <a id="r-fix-20"></a>R-FIX-20 | 署名の変更や、自動でmergeされた箇所に足した呼び出しの食い違いは、検査では見つからない。検査コマンドの失敗として現れる。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
+| <a id="r-fix-21"></a>R-FIX-21 | 新しく足した行の検査は、JavaScriptとTypeScriptの記法だけを見る。ほかの言語の読み込みや抑制の記述は、検査を通る。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
+| <a id="r-fix-22"></a>R-FIX-22 | マージの競合を解く回は、`git merge`を呼ぶ経路を新しく足す。`merge.<名前>.driver`は、`.gitattributes`が名前を指名し、`.git/config`の定義がプログラムを動かす。名前が対象ごとに変わるので、名前で固定して潰せない。定義を置けるのはmain cloneの`.git/config`で、検査コマンドは書き込めない([検査コマンドの権限](internals/check-sandbox.md#検査コマンドの権限))。この前提で抑え、書き込める経路が増えたときは残るリスクになる。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
+| <a id="r-fix-23"></a>R-FIX-23 | mergeコミットのpushの直前の照合とpushの間に、人がブランチを祖先へ巻き戻す窓が残る。巻き戻されたブランチへも、pushは通る。`commitAndPush`と同じ窓として受け入れる。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
+| <a id="r-fix-24"></a>R-FIX-24 | 属性の検査は、競合ファイルだけにかける。両側が変えたが競合しなかったパスの属性は調べない。そのパスの自動のmergeでも、属性の指名したドライバが動きうる。`merge.<名前>.driver`の項([R-FIX-22](#r-fix-22))と同じ前提で抑える。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
+| <a id="r-fix-25"></a>R-FIX-25 | 差分の大きさの上限(`max_fix_changed_files`と`max_fix_diff_lines`)は、基準コミットから解消後の作業ツリーまでの編集にかける。baseがPRに持ち込む差には、かけない。baseの側の変更はレビューとマージを経ているので、受け入れる。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
+| <a id="r-fix-26"></a>R-FIX-26 | 競合回の完了ステップは失敗をDiscordとnoticeに通知しないので、完了のステップで検出したイメージの古さは、行の起動の回数の上限に達して`rounds_exhausted`になるまで、通知が無い。通知を競合の行の側に集めるためである。 | [マージの競合を解く回(PR修正の安全策)](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
 
 ## 検査コマンドの権限
 
