@@ -4,7 +4,29 @@ import {
   indexDoc,
   type LinkResolver,
   lintDocLinks,
+  resolveLinkTarget,
 } from "../../scripts/lint-doc-links.ts";
+
+describe("resolveLinkTarget", () => {
+  test("resolves a relative path from the document and decodes the anchor", () => {
+    expect(
+      resolveLinkTarget("docs/internals/a.md", "../b.md#%E6%AE%8B%E3%82%8B"),
+    ).toEqual({ path: "docs/b.md", anchor: "残る" });
+  });
+
+  test("resolves an empty path to the document itself", () => {
+    expect(resolveLinkTarget("docs/a.md", "#x")).toEqual({
+      path: "docs/a.md",
+      anchor: "x",
+    });
+  });
+
+  test("returns undefined for an external URL", () => {
+    expect(resolveLinkTarget("docs/a.md", "https://example.com/a.md#x")).toBe(
+      undefined,
+    );
+  });
+});
 
 function anchorsOf(markdown: string): string[] {
   return [...indexDoc(markdown).anchors];
