@@ -566,7 +566,13 @@ describe("doctor.sh owners that the collection cannot handle", () => {
     symlinkSync(process.execPath, join(dir, "bun"));
   }
 
-  async function ownerLines(port: number): Promise<string[]> {
+  interface OwnerRun {
+    lines: string[];
+    // 警告の行が無いときに、原因をたどるための終了コードと標準エラーの末尾。
+    diagnostics: string;
+  }
+
+  async function ownerRun(port: number): Promise<OwnerRun> {
     const proc = Bun.spawn([BASH, SCRIPT], {
       env: {
         PATH: `${dir}:/usr/bin:/bin`,
@@ -578,12 +584,19 @@ describe("doctor.sh owners that the collection cannot handle", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [stdout] = await Promise.all([
+    const [stdout, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
     ]);
-    await proc.exited;
-    return stdout.split("\n").filter((l) => l.includes("収集の対象外"));
+    const exitCode = await proc.exited;
+    return {
+      lines: stdout.split("\n").filter((l) => l.includes("収集の対象外")),
+      diagnostics: `exit code: ${exitCode}, stderr tail: ${JSON.stringify(stderr.slice(-500))}`,
+    };
+  }
+
+  async function ownerLines(port: number): Promise<string[]> {
+    return (await ownerRun(port)).lines;
   }
 
   test("warns with the name of an owner whose login has an underscore", async () => {
@@ -592,10 +605,13 @@ describe("doctor.sh owners that the collection cannot handle", () => {
       owners: [{ name: "acme" }, { name: "emu_user" }],
     });
 
-    const lines = await ownerLines(server.port ?? 0);
+    const { lines, diagnostics } = await ownerRun(server.port ?? 0);
 
     server.stop(true);
-    expect(lines[0]).toMatch(/^\s+WARN\s.*emu_user/);
+    // 行が無いときは、期待値との差に終了コードと標準エラーが載るようにする。
+    expect(lines[0] ?? `no warning line (${diagnostics})`).toMatch(
+      /^\s+WARN\s.*emu_user/,
+    );
   });
 
   test("does not mention an owner whose login has no underscore", async () => {
