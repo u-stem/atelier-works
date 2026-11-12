@@ -964,12 +964,7 @@ export const defaultLockFs: LockFs = {
 
 type LockFileContent = { readonly token: string };
 
-/**
- * `value`がロックファイルの中身の形かを返す。
- * 述語の型は、その場のオブジェクトリテラルの型ではなく名前を付けた別名にする。
- * `scripts/lint-no-type-assertions.ts`は波括弧の深さで型ガードの範囲を推定するため、
- * リテラルの型だと、関数本体ではなくリテラルの`}`で型ガードの範囲が終わったと誤認する。
- */
+/** `value`がロックファイルの中身の形かを返す。 */
 function isLockFileContent(value: unknown): value is LockFileContent {
   if (typeof value !== "object" || value === null) return false;
   if (!("token" in value)) return false;

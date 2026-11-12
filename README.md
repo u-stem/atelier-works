@@ -103,7 +103,7 @@ Discordからの操作は受け付けない。
 | `mise run check` | `lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する。`test`の後に、全体と層ごとの行カバレッジが下限を割っていないかと、lcovに出ない対象が無いかを確かめる |
 | `mise run check:changed` | `origin/main`との差分に応じて検査を絞って実行する。`lint`と`typecheck`は常に、`lint:docs`は差分のMarkdownだけ(文書の間のリンクは差分に文書が無くても全文書を検査する)、テストは`test:changed`と同じ規則で選び、`console:check`はConsole、共有のlib、Consoleの仕様の文書(`docs/internals/console.md`と`docs/internals/console/`)に触れたときだけ実行する。日常の確認用で、全件の確認はCIが行う |
 | `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査、テスト、組み立てを行う |
-| `mise run lint` | biome、`wmill lint`、型アサーションと`§`の検出を実行する |
+| `mise run lint` | biome(型アサーションの検出を含む)、`wmill lint`、`§`の検出を実行する |
 | `mise run lint:docs` | Markdownの文書を検査する |
 | `mise run docs:gen` | 文書の中の生成した範囲と、Consoleに出すflowごとの図のデータ(`console/src/generated/flows.json`)を作り直す |
 | `mise run docs:format` | 1行に複数の文がある地の文を、「。」の後で改行して直す。`--`の後にファイルを渡すと、そのファイルだけを直す。分けると文書の構造が変わるファイルは書かない |
