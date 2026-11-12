@@ -9,6 +9,8 @@
 // どちらの部分も、Windmillが書く欄だけを許す。
 // `trustedDependencies`や`overrides`のように、照合の外で取得やinstallの動きを変える欄を混ぜさせないため。
 // どちらの部分も、同じオブジェクトに同じキーがあれば、値を照らす前に止める。
+// どちらの部分も厳密な書式だけを認め、コメントや単一引用符などで読めない形は止める。
+// 検査の解析と`bun install`の解析が食い違い、照合した値とinstallの使う値がずれるためである。
 // 使い方: bun run scripts/check-script-locks.ts [path](既定はbun.lock)
 // 違反を`path: key: reason`の形で出力して終了コード1、無ければ0。
 
@@ -49,7 +51,8 @@ export const WORKER_DEPENDENCIES: ReadonlySet<string> = new Set([
 
 const SEPARATOR = "\n//bun.lock\n";
 
-const EMPTY_LOCK = "<empty>";
+/** 依存の無いscriptのbun.lockの部分。後ろにはJSONの空白だけを許す。 */
+const EMPTY_LOCK_TEXT = /^<empty>[ \t\n\r]*$/;
 
 /** `f/`の下の、検査する`.script.lock`。 */
 const SCRIPT_LOCK_GLOB = "f/**/*.script.lock";
@@ -112,158 +115,217 @@ export type StrictScan =
   | { readonly ok: true; readonly duplicates: readonly DuplicateKey[] }
   | { readonly ok: false; readonly problem: string };
 
-/** 本文を厳密なJSONとして読み、重複したキーを返す(未実装)。 */
-export function scanStrictJson(
-  _text: string,
-  _allowTrailingComma: boolean,
-): StrictScan {
-  return { ok: true, duplicates: [] };
-}
+/** 厳密なJSONとして読めない本文で、走査を止めるための例外。理由を持つ。 */
+class NotStrictJson extends Error {}
 
-type Token =
-  | { readonly kind: "punct"; readonly value: string }
-  | { readonly kind: "string"; readonly raw: string }
-  | { readonly kind: "literal" };
+/** JSONの空白。BOM、NBSP、U+2028などの、ほかの空白は認めない。 */
+const JSON_WHITESPACE: ReadonlySet<string> = new Set([" ", "\t", "\n", "\r"]);
 
-/** 形の読めない本文で、走査を止めるための例外。 */
-class MalformedJsonc extends Error {}
+/** `\`の後に続けてよい文字。`u`は、後に4桁の16進数を求める。 */
+const JSON_ESCAPES: ReadonlySet<string> = new Set([
+  '"',
+  "\\",
+  "/",
+  "b",
+  "f",
+  "n",
+  "r",
+  "t",
+]);
 
-/**
- * JSONCの本文を字句に分ける。
- * 空白、行のコメント(`//`)、範囲のコメント(`/* *\/`)は読み飛ばす。
- * 文字列は、`\`の後の1文字を含めて読み、閉じの`"`までを1つの字句にする。
- * 数、`true`、`false`、`null`は、区切りの文字までを1つの字句にする。
- */
-function tokenize(text: string): Token[] {
-  const tokens: Token[] = [];
-  let index = 0;
-  while (index < text.length) {
-    const char = text[index];
-    if (char === undefined) break;
-    if (/\s/.test(char)) {
-      index += 1;
-    } else if (text.startsWith("//", index)) {
-      const end = text.indexOf("\n", index);
-      index = end === -1 ? text.length : end + 1;
-    } else if (text.startsWith("/*", index)) {
-      const end = text.indexOf("*/", index + 2);
-      if (end === -1) throw new MalformedJsonc();
-      index = end + 2;
-    } else if ("{}[]:,".includes(char)) {
-      tokens.push({ kind: "punct", value: char });
-      index += 1;
-    } else if (char === '"') {
-      let end = index + 1;
-      while (end < text.length && text[end] !== '"') {
-        end += text[end] === "\\" ? 2 : 1;
-      }
-      if (end >= text.length) throw new MalformedJsonc();
-      tokens.push({ kind: "string", raw: text.slice(index, end + 1) });
-      index = end + 1;
-    } else {
-      let end = index;
-      while (end < text.length && !/[\s{}[\]:,"/]/.test(text[end] ?? "")) {
-        end += 1;
-      }
-      if (end === index) throw new MalformedJsonc();
-      tokens.push({ kind: "literal" });
-      index = end;
-    }
-  }
-  return tokens;
-}
+const JSON_NUMBER = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
 
-/** 字句の文字列を、JSONと同じ規則でエスケープを解いた値にする。`"packages"`は`packages`と同じキーになる。 */
-function decodeString(raw: string): string {
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (typeof value === "string") return value;
-  } catch {
-    // 解けないエスケープは、形の読めない本文として扱う。
-  }
-  throw new MalformedJsonc();
+const HEX4 = /^[0-9A-Fa-f]{4}$/;
+
+/** 文字を、違反の理由に書く`U+XXXX`の形にする。 */
+function codePointLabel(char: string): string {
+  const code = char.codePointAt(0) ?? 0;
+  return `U+${code.toString(16).toUpperCase().padStart(4, "0")}`;
 }
 
 /**
- * JSONCの本文から、同じオブジェクトに2回現れたキーを、どの深さでも返す。
+ * 本文を厳密なJSONとして読み、同じオブジェクトに2回現れたキーを、どの深さでも返す。
  * `Bun.JSONC.parse`は後の値を採り、`bun install`は前の値を採るので、重複を読み分けずに照合すると、
  * 検査が見る値とinstallが使う値が食い違う。そのため、値を読む前に重複を探す。
- * 配列の中のオブジェクトの位置は、添字を文字列にして表す。末尾のカンマは許す。
- * 形の読めない本文では、そこまでに見つけた重複だけを返す。形の誤りは、後の解析が違反にする。
+ * 2つの読み手が受け付ける書式の差(単一引用符、JSONに無いエスケープ、コメントの終わりの文字など)で
+ * 重複を見逃さないよう、書式を厳密なJSONに絞り、読めなければ`ok: false`を返す。
+ * 認めるのは、JSONの値、二重引用符の文字列とJSONのエスケープ、空白の4文字だけである。
+ * `allowTrailingComma`が真のときだけ、オブジェクトと配列の末尾のカンマを認める(bun.lockの書式)。
+ * 配列の中のオブジェクトの位置は、添字を文字列にして表す。
  */
-export function findDuplicateKeys(text: string): DuplicateKey[] {
+export function scanStrictJson(
+  text: string,
+  allowTrailingComma: boolean,
+): StrictScan {
   const duplicates: DuplicateKey[] = [];
-  let tokens: Token[];
-  try {
-    tokens = tokenize(text);
-  } catch {
-    return duplicates;
-  }
-  let position = 0;
-  const next = (): Token => {
-    const token = tokens[position];
-    if (token === undefined) throw new MalformedJsonc();
-    position += 1;
-    return token;
+  let index = 0;
+
+  const fail = (problem: string): never => {
+    throw new NotStrictJson(problem);
   };
-  const peekPunct = (value: string): boolean => {
-    const token = tokens[position];
-    return token?.kind === "punct" && token.value === value;
+  const current = (): string => {
+    const char = text[index];
+    if (char === undefined) return fail("the text ends early");
+    return char;
   };
-  const expectPunct = (value: string): void => {
-    const token = next();
-    if (token.kind !== "punct" || token.value !== value) {
-      throw new MalformedJsonc();
+  const skipWhitespace = (): void => {
+    while (index < text.length) {
+      const char = text[index] ?? "";
+      if (JSON_WHITESPACE.has(char)) {
+        index += 1;
+      } else {
+        if (char === "/") fail("a comment");
+        return;
+      }
+    }
+  };
+  const expect = (char: string, problem: string): void => {
+    skipWhitespace();
+    if (current() !== char) fail(problem);
+    index += 1;
+  };
+
+  /** 二重引用符の文字列を読み、エスケープを解いた値を返す。`index`は開きの`"`にある。 */
+  const readString = (): string => {
+    const start = index;
+    index += 1;
+    while (true) {
+      const char = current();
+      if (char === '"') break;
+      if (char.charCodeAt(0) < 0x20) {
+        fail("a raw control character in a string");
+      }
+      if (char === "\\") {
+        const escaped = text[index + 1];
+        if (escaped === "u") {
+          if (!HEX4.test(text.slice(index + 2, index + 6))) {
+            fail("an escape that JSON does not allow");
+          }
+          index += 6;
+          continue;
+        }
+        if (escaped === undefined) fail("the text ends early");
+        if (!JSON_ESCAPES.has(escaped ?? "")) {
+          fail("an escape that JSON does not allow");
+        }
+        index += 2;
+        continue;
+      }
+      index += 1;
+    }
+    index += 1;
+    const value: unknown = JSON.parse(text.slice(start, index));
+    return typeof value === "string" ? value : fail("an unreadable string");
+  };
+
+  /** 値の頭の文字から、値の種類を決めて読む。 */
+  const readValue = (path: readonly string[]): void => {
+    skipWhitespace();
+    const char = current();
+    if (char === "{") {
+      readObject(path);
+    } else if (char === "[") {
+      readArray(path);
+    } else if (char === '"') {
+      readString();
+    } else if (char === "'") {
+      fail("a single-quoted string");
+    } else if (char === "-" || (char >= "0" && char <= "9")) {
+      JSON_NUMBER.lastIndex = index;
+      if (!JSON_NUMBER.test(text)) fail("an unreadable number");
+      index = JSON_NUMBER.lastIndex;
+    } else {
+      const literal = ["true", "false", "null"].find((word) =>
+        text.startsWith(word, index),
+      );
+      if (literal === undefined) {
+        fail(`an unexpected character ${codePointLabel(char)}`);
+      } else {
+        index += literal.length;
+      }
     }
   };
 
-  const readValue = (path: readonly string[]): void => {
-    const token = next();
-    if (token.kind !== "punct") return;
-    if (token.value === "{") readObject(path);
-    else if (token.value === "[") readArray(path);
-    else throw new MalformedJsonc();
+  /** カンマの後の閉じを、末尾のカンマとして扱ってよいかを確かめる。 */
+  const closesAfterComma = (close: string): boolean => {
+    skipWhitespace();
+    if (current() !== close) return false;
+    if (!allowTrailingComma) fail("a trailing comma");
+    return true;
   };
+
   const readObject = (path: readonly string[]): void => {
+    index += 1;
     const keys = new Set<string>();
-    while (!peekPunct("}")) {
-      const token = next();
-      if (token.kind !== "string") throw new MalformedJsonc();
-      const key = decodeString(token.raw);
+    skipWhitespace();
+    if (current() === "}") {
+      index += 1;
+      return;
+    }
+    while (true) {
+      skipWhitespace();
+      const char = current();
+      if (char === "'") fail("a single-quoted string");
+      if (char !== '"') fail("a key that is not a double-quoted string");
+      const key = readString();
       if (keys.has(key)) duplicates.push({ path, key });
       keys.add(key);
-      expectPunct(":");
+      expect(":", "a missing colon after a key");
       readValue([...path, key]);
-      if (!peekPunct(",")) break;
-      expectPunct(",");
+      skipWhitespace();
+      if (current() === "}") break;
+      expect(",", "a missing comma between members");
+      if (closesAfterComma("}")) break;
     }
-    expectPunct("}");
+    index += 1;
   };
+
   const readArray = (path: readonly string[]): void => {
+    index += 1;
+    skipWhitespace();
+    if (current() === "]") {
+      index += 1;
+      return;
+    }
     let item = 0;
-    while (!peekPunct("]")) {
+    while (true) {
       readValue([...path, String(item)]);
       item += 1;
-      if (!peekPunct(",")) break;
-      expectPunct(",");
+      skipWhitespace();
+      if (current() === "]") break;
+      expect(",", "a missing comma between items");
+      if (closesAfterComma("]")) break;
     }
-    expectPunct("]");
+    index += 1;
   };
 
   try {
     readValue([]);
-  } catch {
-    // 形の読めない本文は、そこまでに見つけた重複だけを返す。
+    skipWhitespace();
+    if (index < text.length) fail("text after the value");
+  } catch (error) {
+    if (error instanceof NotStrictJson) {
+      return { ok: false, problem: error.message };
+    }
+    throw error;
   }
-  return duplicates;
+  return { ok: true, duplicates };
 }
 
-/** 重複したキーを、どの部分のどのキーかが分かる違反にする。 */
-function duplicateViolations(
+/**
+ * 1つの部分を厳密なJSONとして読み、書式の違反か、重複したキーの違反を返す。
+ * 走査を終えて重複が無いときだけ、空を返す。どの部分のどのキーかが分かる形にする。
+ */
+function strictViolations(
   part: string,
   text: string,
+  allowTrailingComma: boolean,
 ): ScriptLockViolation[] {
-  return findDuplicateKeys(text).map(({ path, key }) => ({
+  const scan = scanStrictJson(text, allowTrailingComma);
+  if (!scan.ok) {
+    return [{ key: part, reason: `lock is not strict JSON: ${scan.problem}` }];
+  }
+  return scan.duplicates.map(({ path, key }) => ({
     key: part,
     reason:
       path.length === 0
@@ -484,14 +546,14 @@ export function checkScriptLock(
     return [{ key: "<root>", reason: "lock has no single //bun.lock line" }];
   }
   const [front = "", back = ""] = parts;
-  // 重複したキーがあれば、`parseJsonc`の値は`bun install`が使う値と食い違いうるので、値を照らさずに止める。
-  const duplicates = [
-    ...duplicateViolations("manifest", front),
-    ...(back.trim() === EMPTY_LOCK
-      ? []
-      : duplicateViolations("bun.lock", back)),
+  // 厳密に読めないか、重複したキーがあれば、`parseJsonc`の値は`bun install`が使う値と食い違いうるので、値を照らさずに止める。
+  // package.jsonの部分は厳密なJSONで、bun.lockの部分だけが末尾のカンマを持つ。
+  const isEmpty = EMPTY_LOCK_TEXT.test(back);
+  const strict = [
+    ...strictViolations("manifest", front, false),
+    ...(isEmpty ? [] : strictViolations("bun.lock", back, true)),
   ];
-  if (duplicates.length > 0) return duplicates;
+  if (strict.length > 0) return strict;
   const manifest = parseJsonc(front);
   if (!isRecord(manifest) || !isRecord(manifest.dependencies)) {
     return [{ key: "dependencies", reason: "dependencies is malformed" }];
@@ -502,7 +564,7 @@ export function checkScriptLock(
     "",
     "field is not allowed in the script manifest",
   );
-  if (back.trim() === EMPTY_LOCK) {
+  if (isEmpty) {
     if (Object.keys(manifest.dependencies).length > 0) {
       violations.push({
         key: "bun.lock",

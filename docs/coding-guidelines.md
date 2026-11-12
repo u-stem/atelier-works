@@ -283,6 +283,9 @@ workerのscriptが宣言してよい依存は、`scripts/check-script-locks.ts`�
 `.script.lock`は、Windmillが書く欄だけを持ち、`trustedDependencies`や`overrides`のような欄を持つと止まる。
 同じオブジェクトに同じキーを2回書いたlockも止まる。
 検査の解析は後の値を採り、`bun install`は前の値を採るので、照合した値とinstallの使う値が食い違うためである。
+`.script.lock`は厳密な書式だけを認め、コメントや単一引用符などで読めない形は止める。
+検査の解析と`bun install`の解析が食い違い、照合した値とinstallの使う値がずれるためである。
+認めるのは厳密なJSONで、bun.lockの部分だけに末尾のカンマを認める。
 CIの`bun audit`(`.github/workflows/audit.yml`)は、`main`に対する定期と手動の実行だけで、PRでは動かない。
 PRでは、この`lint`の検査がworkerの依存をルートにそろえる。
 
