@@ -2,7 +2,9 @@
 
 工程3の実装フロー(`f/factory/implement`)の内部の挙動、設定値、安全策の仕組みをまとめる。
 実装フローのコードを変更する人が読む。
-運用の手順は[運用](../operations.md)に、作業項目の状態と実装フローのリースは[作業項目](work-items.md)に書く。
+実装フローを有効にして使う手順と、人の対応待ちへの対処は[設計工程と実装フローの運用](../operations/stages.md#実装フローを有効にして使う)に書く。
+失敗した作業の再実行、起動前の処理の失敗、検査の枠の記録の片付けの手順は[運用](../operations.md)に書く。
+作業項目の状態と実装フローのリースは[作業項目](work-items.md)に書く。
 安全策と残るリスクは、[この文書の「実装の安全策」](#実装の安全策)に書く。
 
 ## 全体の流れ
@@ -428,9 +430,9 @@ Claudeが直せる検査の失敗ではないので、修正のラウンドに�
 
 | 原因 | 理由の先頭 | 要対応の通知 |
 | --- | --- | --- |
-| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
-| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
-| 検査コマンドの実行ファイルを起動できない | `check command could not run:` | `implement_needs_human`([運用](../operations.md#人の対応待ちになったら)) |
+| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([更新の反映の運用](../operations/deploy.md#fとworkerのイメージを両方変えたとき)) |
+| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([更新の反映の運用](../operations/deploy.md#稼働中のworkerが検査の前提を満たさないとき)) |
+| 検査コマンドの実行ファイルを起動できない | `check command could not run:` | `implement_needs_human`([設計工程と実装フローの運用](../operations/stages.md#人の対応待ちになったら)) |
 
 イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
 `host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
@@ -769,11 +771,11 @@ PR修正が親を差し戻すときも同じである。
 `error`と`check_failed`には、トークンの失効やAPIの障害、期限切れ、`.git`ポインタの不一致など、モデルの失敗でないものも入るので、基盤の失敗が2回続くと`heavy_model`に上がる。
 損失の上限は`implement_max_rounds`と予算で決まる。
 停滞したラウンドの扱いは「[ループの終わり方](#ループの終わり方)」にある。
-数え方の全体は[運用](../operations.md)の「モデルを使い分ける」にある。
+数え方の全体は[機能ごとの運用の「モデルを使い分ける」](../operations/features.md#モデルを使い分ける)にある。
 
 `check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。
 workerで直接動く例は`bunx --no-install --bun tsc --noEmit`や`bunx --no-install --bun biome check .`である。
-`--no-install`は、lockfileから入れていない実行ファイルをレジストリから取得しないための指定で、理由は[運用](../operations.md#検査コマンドを設定する)にある。
+`--no-install`は、lockfileから入れていない実行ファイルをレジストリから取得しないための指定で、理由は[設計工程と実装フローの運用](../operations/stages.md#検査コマンドを設定する)にある。
 workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く。
 実装フローは`allowed_check_commands`を使わない。
 

@@ -1917,7 +1917,7 @@ export type FactoryConfig = {
    */
   max_lookback_days: number;
   // 工程3(implementフロー)。リソース型ではすべて省略可能で、既定値がある。
-  // `implement_enabled`だけは既定が`false`で、有効にする前提は`docs/operations.md`にある。
+  // `implement_enabled`だけは既定が`false`で、有効にする前提は`docs/operations/stages.md`の「実装フローを有効にして使う」にある。
   /** 承認後に`requirements_apply`がimplementフローを起動するか。 */
   implement_enabled: boolean;
   /** `implement_verify`のラウンド数の上限(implement 1回とfix N-1回)。 */

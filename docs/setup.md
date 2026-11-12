@@ -778,7 +778,7 @@ forkやfeatureブランチで運用するときは、Windmillの画面でこの�
 
 3. 更新を反映した後に、隔離の測定を1回実行する。
    読み出しの拒否の一覧が変わって隔離の指紋が変わり、測定が通るまで調査の工程は閉じたままのためである。
-   手順は[運用](operations.md#隔離の測定を実行する)にある。
+   手順は[機能ごとの運用](operations/features.md#隔離の測定を実行する)にある。
 
 動作は、Windmillの画面で`f/factory/backup`を実行して確かめる。
 控えの扱いは[運用](operations.md#バックアップ)にある。
@@ -852,7 +852,7 @@ Playwrightでは、まず`http://127.0.0.1:8080/user/login`にログインする
 | `bootstrap`が「refused to push」と出て止まる | 手順13で、凍結の変数を読めないか、壊れているか、`wmill.yaml`の`excludes`が欠けている。理由は同じ行に出る。読めないだけなら実行し直す。壊れているなら、人が`mise run freeze:reset`を実行してから実行し直す。詳細は[凍結とdeployの保留の内部仕様](internals/freezes.md)の「失敗の回復」にある |
 | `doctor`が「カスタムtag」でNGになる | インスタンスがtag`console`か`periodic`を許可していない。`mise run instance:tags`を実行する |
 | `doctor`が「カスタムtag」でWARNになる | 許可の有無を確かめられていない。行に添えられた理由を見る。ログインが拒まれたなら、`WM_ADMIN_PASSWORD`が実際のパスワードと合っているかを確かめる。`doctor`は`WM_HTTP_PORT`のポートにだけ資格情報を送り、Windmillの応答でなければ送らない |
-| `mise run up`が「Docker Engine API ... is older than 1.45」か「Docker Compose ... is older than 2.26.0」と出て止まる | DockerのEngineかComposeが下限に届いていない。Docker DesktopかOrbStackを更新するか、Engineを26.0以上、Composeを2.26.0以上にする。更新した後で`mise run up`を実行し直し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`でConsole用workerを作り直す。Dockerの更新で止まったworkerはrestart policyで元のマウントのまま起動し直し、`mise run up`は設定の変わらないworkerを作り直さないためである。その後で`mise run doctor`を実行し、`docker version`と`console worker mount`の行が`OK`になることを確かめる(手順は[運用](operations.md#console用workerを確かめる)) |
+| `mise run up`が「Docker Engine API ... is older than 1.45」か「Docker Compose ... is older than 2.26.0」と出て止まる | DockerのEngineかComposeが下限に届いていない。Docker DesktopかOrbStackを更新するか、Engineを26.0以上、Composeを2.26.0以上にする。更新した後で`mise run up`を実行し直し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`でConsole用workerを作り直す。Dockerの更新で止まったworkerはrestart policyで元のマウントのまま起動し直し、`mise run up`は設定の変わらないworkerを作り直さないためである。その後で`mise run doctor`を実行し、`docker version`と`console worker mount`の行が`OK`になることを確かめる(手順は[更新の反映の運用](operations/deploy.md#console用workerを確かめる)) |
 | `doctor`が「初期パスワード」でNGになる | パスワードが`changeme`のままである。`mise run bootstrap`がログインした後にパスワードを変える |
 | `required variable ... is missing a value: run via mise`と出る | `docker compose`を`mise run`を通さずに実行している。composeの環境変数はmiseからしか渡らないので、`mise run <task>`か`mise exec -- docker compose ...`で実行する。スタックの起動には、版の検査を通る`mise run up`を使う |
 | workerのイメージを作り直したい | `mise run build`で、`windmill_worker`のサービスだけを作り直す |

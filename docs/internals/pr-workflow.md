@@ -2,7 +2,9 @@
 
 PRのレビュー(`f/factory/pr_review`)とPRの修正(`f/factory/pr_fix`)のフローの内部の挙動、設定値、安全策の仕組みをまとめる。
 これらのフローのコードを変更する人が読む。
-運用の手順は[運用](../operations.md)に、作業項目の状態の一覧は[作業項目](work-items.md)に書く。
+PRのレビューと修正を使う手順は[PRのレビューとCIの運用](../operations/pr.md#prでレビューと修正を使う)に書く。
+トリガーラベルが外れたままのPRと、検査の枠の記録の片付けの手順は[運用](../operations.md)に書く。
+作業項目の状態の一覧は[作業項目](work-items.md)に書く。
 安全策と残るリスクは、[この文書の「PR修正の安全策」](#pr修正の安全策)に書く。
 
 ## 全体の流れ
@@ -1577,7 +1579,7 @@ CIの失敗を直す作業項目(`ci_check_id`を持つもの)と、競合を直
 - 作業項目の`fix_round`から1を引いた値。
   毎回`done`で終えても再レビューが続くと、失敗の記録が残らないためである。
 
-除く条件と数の理由は、[運用](../operations.md)の「モデルを使い分ける」にある。
+除く条件と数の理由は、[機能ごとの運用の「モデルを使い分ける」](../operations/features.md#モデルを使い分ける)にある。
 
 PR修正のラウンドが`max_fix_rounds`を超えると、準備のステップが止め、作業項目は人の対応待ちになる。
 ラウンドの番号(`fix_round`)は、`poll_prs`が作業項目を作るときに入れる。
@@ -2013,8 +2015,8 @@ Claudeが直せる検査の失敗ではないので、Sonnetの失敗として�
 
 | 原因 | 理由の先頭 | 要対応の通知 |
 | --- | --- | --- |
-| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
-| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
+| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([更新の反映の運用](../operations/deploy.md#fとworkerのイメージを両方変えたとき)) |
+| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([更新の反映の運用](../operations/deploy.md#稼働中のworkerが検査の前提を満たさないとき)) |
 
 イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
 `host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
@@ -2638,7 +2640,7 @@ lockfileや`package.json`の`trustedDependencies`も、人がinstallしたとき
   検査をしていない修正を、既存のPRのheadへpushする。
 
 保護パスで止まった回の集計は、この差の根拠にしない。
-通常の回について、集計が数えるのは`FORBIDDEN_*`に当たって止めた回で、lockfileやツールの設定を書き換えて通った回は数えない([保護パスで止まった回数を数える](../operations.md#保護パスで止まった回数を数える))。
+通常の回について、集計が数えるのは`FORBIDDEN_*`に当たって止めた回で、lockfileやツールの設定を書き換えて通った回は数えない([保護パスで止まった回数を数える](../operations/pr.md#保護パスで止まった回数を数える))。
 
 CIの修正と競合の修正は、実装の一覧を使うので、この差を持たない。
 

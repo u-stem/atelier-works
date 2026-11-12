@@ -5,7 +5,8 @@
 Factoryが作ったPRのマージの競合を検知する`watch_pr_conflicts`も、[競合の検知](#競合の検知)に定める。
 `watch_pr_ci`、`lib/pr_ci_watch.ts`、`lib/pr_ci_support.ts`、`lib/pr_ci_fix_claim.ts`を変更する人が読む。
 人のPRの判定は`lib/pr_ci_human_support.ts`にある。
-必要な権限は[セキュリティ](../security.md)に、通知を受けた人がすることは[運用](../operations.md)に書く。
+必要な権限は[セキュリティ](../security.md)に、通知を受けた人がすることは[運用の「通知の種類」](../operations.md#通知の種類)の表に書く。
+監視と失敗の自動修正の手順は[PRのレビューとCIの運用](../operations/pr.md#prのciを監視する)に書く。
 mainのCIは[mainのCI監視の仕様](main-ci.md)に分けて書く。
 失敗のログを整形してClaudeに渡す部品は、[CIの失敗を直す部品の仕様](ci-fix.md)に分けて書く。
 
@@ -1930,7 +1931,7 @@ rate limitに当たったリポジトリ、PR、行そのものも、読み残�
   archive済みのリポジトリのPRにはpushできないので、競合を見つけても直せない。
 - `repo_allowlist`が空の構成では、表から読むと、`gh_repos`に行の無いリポジトリのPRを見つけない。
   `repo_allowlist`が空でないとき、対象のリポジトリはすべて設定で明示されるので、REST一覧で列挙する。
-  空の構成では、突き合わせで、行の無いリポジトリにPRが無いことを確かめる([運用](../operations.md#競合の監視の発見の元を確かめる))。
+  空の構成では、突き合わせで、行の無いリポジトリにPRが無いことを確かめる([PRのレビューとCIの運用](../operations/pr.md#競合の監視の発見の元を確かめる))。
 - 作者の確認にPATのアカウントを使う。
   PATのアカウントが変わると、変わる前のアカウントが作ったPRは見つけられない。
 - 計算前のPRが続くと、競合に気づくのが遅れる。

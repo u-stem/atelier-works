@@ -459,7 +459,7 @@ describe("the lock integrity tests", () => {
   });
 
   test("count eleven, as the documents say", () => {
-    // 件数を変えるときは、`docs/internals/ci-fix.md`と`docs/operations.md`の「11件」も直す。
+    // 件数を変えるときは、`docs/internals/ci-fix.md`と`docs/operations/pr.md`の「11件」も直す。
     expect(LOCK_INTEGRITY_TESTS.length).toBe(11);
   });
 

@@ -11,7 +11,7 @@
 - `f/factory/poll_issues.ts`
 - `migrations/datatable/main/20261105100000_deploy_approvals.up.sql`
 
-運用の手順は[運用](../operations.md)の「保護パスの変更の反映を承認する」にある。
+運用の手順は[更新の反映の運用の「保護パスの変更の反映を承認する」](../operations/deploy.md#保護パスの変更の反映を承認する)にある。
 安全策と残るリスクは[この文書の「反映の承認」](#反映の承認)に書く。
 
 ## 方針

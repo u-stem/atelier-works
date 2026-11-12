@@ -93,7 +93,7 @@ Discordからの操作は受け付けない。
 | `mise run hold:release` | 保留を解除する。`-- <id>`を渡す |
 | `mise run stop` | Factory全体を止める。Windmillのscriptで全停止を置き、30秒待ってから実行中のジョブを中止し、workerに残ったClaudeと検査のプロセスを止める。`-- --reason <text>`を渡す。Windmillが落ちているときは`-- --kill-only`で、workerのプロセスだけを止める。人が端末で`yes`を入力して確かめる |
 | `mise run stop:release` | 全停止を解除し、リポジトリのスケジュールを有効に戻す。`*_enabled`の設定は止まったままで、機能は動き出さない。人が端末で`yes`を入力して確かめる |
-| `mise run stop:restore` | 全停止が止めて記録した`*_enabled`を、設定の検査を通る範囲で戻し、記録を消す。戻す名前と戻さない名前を表示し、人が端末で`yes`を入力して確かめる。`-- --except <名前>`で、原因の機能だけを止めたままにする([記録した設定を戻す](docs/operations.md#記録した設定を戻す)) |
+| `mise run stop:restore` | 全停止が止めて記録した`*_enabled`を、設定の検査を通る範囲で戻し、記録を消す。戻す名前と戻さない名前を表示し、人が端末で`yes`を入力して確かめる。`-- --except <名前>`で、原因の機能だけを止めたままにする([記録した設定を戻す](docs/operations/stop.md#記録した設定を戻す)) |
 | `mise run backup:export` | 夜間のバックアップの最新の世代を、workerからホストの`<保存先>/<世代>/`に写す。`-- <保存先>`を渡す。別の媒体に移すのは人が行う([バックアップ](docs/operations.md#バックアップ)) |
 | `mise run backup:restore` | バックアップの世代を、使い捨てのcomposeのプロジェクト`factory-restore`に戻し、行数とファイル数を出す。`-- <世代のディレクトリ>`を渡す。本番のvolumeには触れない |
 | `mise run pull` | `wmill sync pull`で、Windmillの状態をローカルに取り込む |
@@ -147,7 +147,14 @@ atelier-works/
 | 文書 | 内容 |
 | --- | --- |
 | [セットアップ](docs/setup.md) | 前提、秘密値の投入、起動、動作の確認、トラブルシュート |
-| [運用](docs/operations.md) | 日常の運用、更新の反映、秘密値のローテーション、バックアップ |
+| [運用](docs/operations.md) | 日常の運用、通知への対応、再実行、秘密値のローテーション、バックアップと、目的ごとの手順の置き場 |
+| [GitHubの収集の運用](docs/operations/collect.md) | 収集を有効にして見守る手順、IssueとPRの発見の元の確かめ方 |
+| [設計工程と実装フローの運用](docs/operations/stages.md) | 設計工程と実装フローを有効にして使う手順、止まったときの対処、設計工程のmigrationの戻し方 |
+| [PRのレビューとCIの運用](docs/operations/pr.md) | PRのレビューと修正、mainとPRのCIの監視、PRの競合の検知 |
+| [機能ごとの運用](docs/operations/features.md) | 監査、dependabotの更新、調査とそのmigrationの戻し方、隔離の測定、モデルの使い分け |
+| [workerとスケジュールの監視の運用](docs/operations/monitoring.md) | workerの検知と負荷の記録、スケジュールの失敗の検出、自己更新の打ち切りの確かめ方 |
+| [更新の反映の運用](docs/operations/deploy.md) | 変更の反映、反映の承認、Consoleの反映と戻し |
+| [保留と全停止の運用](docs/operations/stop.md) | 保留の確かめ方、全停止と解除、設定を止める向きに変える操作 |
 | [アーキテクチャ](docs/architecture.md) | 全体の構成、状態の遷移、データモデル、フロー |
 | [セキュリティ](docs/security.md) | 信頼境界、秘密値の扱い、資格情報の取得手順、フローをまたぐ脅威と、各フローの安全策の置き場 |
 | [残るリスク](docs/security-risks.md) | 受け入れた残るリスクの領域ごとの表 |

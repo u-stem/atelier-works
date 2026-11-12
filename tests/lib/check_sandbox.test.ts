@@ -944,7 +944,7 @@ describe("shared temporary directories", () => {
       .map((arg) => (/^[\w./=:-]+$/.test(arg) ? arg : `'${arg}'`))
       .join(" ");
     const guide = readFileSync(
-      join(import.meta.dir, "../../docs/operations.md"),
+      join(import.meta.dir, "../../docs/operations/deploy.md"),
       "utf8",
     ).replace(/ \\\n\s*/g, " ");
     expect(guide).toContain(`exec windmill_worker ${quoted}`);

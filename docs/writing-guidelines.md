@@ -20,7 +20,7 @@ Claudeが生成する文章(要件定義書、監査レポートと改善提案�
 | 種類 | 読み手と目的 | 置き場所 |
 | --- | --- | --- |
 | 入口 | 初めて来た人が、何のリポジトリで、どこから読むかを知る | README |
-| 手順 | 運用する人が、何をすればよいか、失敗したらどうするかを知る | `docs/setup.md`、`docs/operations.md` |
+| 手順 | 運用する人が、何をすればよいか、失敗したらどうするかを知る | `docs/setup.md`、`docs/operations.md`、`docs/operations/` |
 | 説明 | 構成と、その構成をとる理由を理解する。安全策の理由は、横断のものを`docs/security.md`に、フローごとのものを`docs/internals/`の各文書に書く。受け入れた残るリスクは`docs/security-risks.md`の表に書き、各文書の節からは表の行のIDでリンクする | `docs/architecture.md`、`docs/security.md`、`docs/security-risks.md` |
 | 仕様 | 変更する人が、内部の挙動と設定値と、フローごとの安全策を確かめる | `docs/internals/` |
 | 規約 | 書く人が、守ることを確かめる | `docs/coding-guidelines.md`、`docs/console-display.md`、この文書 |
