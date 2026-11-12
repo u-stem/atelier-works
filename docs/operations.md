@@ -24,52 +24,52 @@ Consoleの通知の詳細にある「運用の文書で手順を読む」のリ�
 | 症状か通知の種類 | 見る場所 | 手順 |
 | --- | --- | --- |
 | Discordに通知が届いた | Discord | [Discordの通知](#discordの通知) |
-| Consoleに通知が出た | Consoleの要対応の通知の詳細。情報の通知は、システムの画面の「情報の通知」 | [通知の種類](#通知の種類)の表の、その種類の行 |
+| Consoleに通知が出た | Consoleの**要対応**の通知の詳細。情報の通知は、**システム**の「情報の通知」 | [通知の種類](#通知の種類)の表の、その種類の行 |
 | 日次サマリーのworkerの負荷の欄を読む | Discordの日次サマリー | [日次のまとめでの見方](#日次のまとめでの見方) |
 | 日次サマリーが届かなかった日がある | Discordの日次サマリー | [日次のまとめの追い付き](#日次のまとめの追い付き) |
-| workerのメモリの通知(`worker_load_high`)が出た | Consoleの要対応、システムの画面の「workerの負荷」 | [閾値の通知](#閾値の通知) |
-| 資格情報の期限の通知(`credential_expiring`)が出た | Discord、Consoleの要対応 | [資格情報の期限の通知](#資格情報の期限の通知)、[秘密をローテーションする](#秘密をローテーションする) |
-| 作業項目が失敗した、人の対応待ちか期限切れになった | Consoleの要対応の失敗 | [失敗した作業を再実行する](#失敗した作業を再実行する) |
+| workerのメモリの通知(`worker_load_high`)が出た | Consoleの**要対応**、**システム**の「workerの負荷」 | [閾値の通知](#閾値の通知) |
+| 資格情報の期限の通知(`credential_expiring`)が出た | Discord、Consoleの**要対応** | [資格情報の期限の通知](#資格情報の期限の通知)、[秘密をローテーションする](#秘密をローテーションする) |
+| 作業項目が失敗した、人の対応待ちか期限切れになった | Consoleの**要対応**の失敗 | [失敗した作業を再実行する](#失敗した作業を再実行する) |
 | 再実行が拒否された | 再実行の断りの理由 | [再実行が拒否される場合](#再実行が拒否される場合) |
-| 閉じたIssueやPRの失敗が要対応に残っている | Consoleの要対応の一覧 | [閉じたIssueやPRの失敗](#閉じたissueやprの失敗) |
+| 閉じたIssueやPRの失敗が要対応に残っている | Consoleの**要対応**の一覧 | [閉じたIssueやPRの失敗](#閉じたissueやprの失敗) |
 | 動いているジョブを止めたい | Consoleのジョブの詳細 | [動いているジョブを中止する](#動いているジョブを中止する) |
 | 定期ジョブが失敗した | Consoleのジョブの詳細 | [失敗した定期ジョブを再実行する](#失敗した定期ジョブを再実行する) |
-| 中止した作業項目が、10分たっても進行中のまま変わらない | Consoleの作業項目 | [照合が動いていないとき](#照合が動いていないとき) |
-| 作業項目がGitHubのrate limit(`GitHubRateLimitError`)で失敗した | Consoleの要対応の失敗 | [GitHubのrate limitで失敗したとき](#githubのrate-limitで失敗したとき) |
-| Claudeの実行が使用上限で失敗した | Consoleの要対応(`claude_usage_limit`) | [Claudeの実行が上限で失敗したとき](#claudeの実行が上限で失敗したとき) |
+| 中止した作業項目が、10分たっても進行中のまま変わらない | Consoleの**作業項目** | [照合が動いていないとき](#照合が動いていないとき) |
+| 作業項目がGitHubのrate limit(`GitHubRateLimitError`)で失敗した | Consoleの**要対応**の失敗 | [GitHubのrate limitで失敗したとき](#githubのrate-limitで失敗したとき) |
+| Claudeの実行が使用上限で失敗した | Consoleの**要対応**(`claude_usage_limit`) | [Claudeの実行が上限で失敗したとき](#claudeの実行が上限で失敗したとき) |
 | 実装フローの準備が、既定のブランチの食い違いで失敗する | 実装フローのジョブのエラー | [既定のブランチが食い違って実装フローが失敗するとき](#既定のブランチが食い違って実装フローが失敗するとき) |
-| 検査の枠の記録やworktreeが残っている | Consoleの要対応(`check_slot_skipped`、`check_slot_record_unreadable`、`cleanup_worktree_busy`) | [検査の枠の記録を片付ける](#検査の枠の記録を片付ける) |
+| 検査の枠の記録やworktreeが残っている | Consoleの**要対応**(`check_slot_skipped`、`check_slot_record_unreadable`、`cleanup_worktree_busy`) | [検査の枠の記録を片付ける](#検査の枠の記録を片付ける) |
 | Consoleを使えないまま作業を投入したい | Windmill | [Consoleを使えない障害のとき](#consoleを使えない障害のとき) |
-| Issueについて、Discordに「人による対応が必要です: Issue #<番号>」が届いた | Discord、システムの画面の「作業項目に紐づかない失敗」 | [ラベルを外した結果が分からないとき](#ラベルを外した結果が分からないとき)、[取得の後に登録が失敗したとき](#取得の後に登録が失敗したとき) |
-| PRのトリガーラベルが外れたままで、作業項目も無い | Consoleの要対応(`pr_trigger_label_left_removed`) | [PRのトリガーラベルが外れたままになったとき](#prのトリガーラベルが外れたままになったとき) |
-| Issueにassigneeが付かない | Consoleの要対応(`claim_assignee_missing`) | [assigneeが付かなかったとき](#assigneeが付かなかったとき) |
+| Issueについて、Discordに「人による対応が必要です: Issue #<番号>」が届いた | Discord、**システム**の「作業項目に紐づかない失敗」 | [ラベルを外した結果が分からないとき](#ラベルを外した結果が分からないとき)、[取得の後に登録が失敗したとき](#取得の後に登録が失敗したとき) |
+| PRのトリガーラベルが外れたままで、作業項目も無い | Consoleの**要対応**(`pr_trigger_label_left_removed`) | [PRのトリガーラベルが外れたままになったとき](#prのトリガーラベルが外れたままになったとき) |
+| Issueにassigneeが付かない | Consoleの**要対応**(`claim_assignee_missing`) | [assigneeが付かなかったとき](#assigneeが付かなかったとき) |
 | 要件定義の作り直しを起動できなかった | Discordのジョブ失敗、作業項目の人の対応待ちの理由 | [要件定義の作り直しを起動できなかったとき](#要件定義の作り直しを起動できなかったとき) |
-| 承認済みの要件定義が書き換わって止まった | Consoleの要対応の失敗 | [承認済みの要件定義が書き換わって止まったとき](#承認済みの要件定義が書き換わって止まったとき) |
-| 承認の後に実装フローへ進まない | Consoleの要対応(`implement_launch_failed`) | [実装フローの起動前の処理が失敗したとき](#実装フローの起動前の処理が失敗したとき) |
+| 承認済みの要件定義が書き換わって止まった | Consoleの**要対応**の失敗 | [承認済みの要件定義が書き換わって止まったとき](#承認済みの要件定義が書き換わって止まったとき) |
+| 承認の後に実装フローへ進まない | Consoleの**要対応**(`implement_launch_failed`) | [実装フローの起動前の処理が失敗したとき](#実装フローの起動前の処理が失敗したとき) |
 | 実装フローが人の対応待ちになった | Discordの通知の「次の操作」 | [人の対応待ちになったら](operations/stages.md#人の対応待ちになったら) |
-| 設計の承認の反映で止まった | Discordの人の対応待ちの通知、Consoleの要対応 | [設計の承認の反映で止まったとき](operations/stages.md#設計の承認の反映で止まったとき) |
+| 設計の承認の反映で止まった | Discordの人の対応待ちの通知、Consoleの**要対応** | [設計の承認の反映で止まったとき](operations/stages.md#設計の承認の反映で止まったとき) |
 | PR修正が設計の不足を返して止まった | 人の対応待ちの通知の理由 | [PR修正が設計の不足を返して止まったとき](operations/stages.md#pr修正が設計の不足を返して止まったとき) |
 | PR修正が秘密情報を見つけてpushしなかった | 作業項目の人の対応待ちの理由(`secrets detected, changes not pushed`) | [修正の差分に秘密情報が見つかったとき](operations/pr.md#修正の差分に秘密情報が見つかったとき) |
 | PR修正が要件の不足を報告した | Discord | [修正が要件の不足を報告したとき](operations/pr.md#修正が要件の不足を報告したとき) |
-| mainのCIが失敗した | Discord、Consoleの要対応(`main_ci_failed`) | [mainのCIを監視する](operations/pr.md#mainのciを監視する) |
-| PRのCIが失敗した | Discord、Consoleの要対応(`pr_ci_failed`) | [PRのCIを監視する](operations/pr.md#prのciを監視する) |
-| PRがベースブランチと競合した | Discord、Consoleの要対応(`pr_conflict`) | [PRの競合を検知する](operations/pr.md#prの競合を検知する) |
+| mainのCIが失敗した | Discord、Consoleの**要対応**(`main_ci_failed`) | [mainのCIを監視する](operations/pr.md#mainのciを監視する) |
+| PRのCIが失敗した | Discord、Consoleの**要対応**(`pr_ci_failed`) | [PRのCIを監視する](operations/pr.md#prのciを監視する) |
+| PRがベースブランチと競合した | Discord、Consoleの**要対応**(`pr_conflict`) | [PRの競合を検知する](operations/pr.md#prの競合を検知する) |
 | dependabotの更新が人に回った | 通知のリンクのPR | [人に回ったとき](operations/features.md#人に回ったとき) |
-| GitHubの収集が止まった | Discord、Consoleの要対応(`github_collect_stale`) | [収集が止まったときの通知](operations/collect.md#収集が止まったときの通知) |
-| 調査が止まった | Discord、Consoleの要対応 | [調査が止まったとき](operations/features.md#調査が止まったとき) |
+| GitHubの収集が止まった | Discord、Consoleの**要対応**(`github_collect_stale`) | [収集が止まったときの通知](operations/collect.md#収集が止まったときの通知) |
+| 調査が止まった | Discord、Consoleの**要対応** | [調査が止まったとき](operations/features.md#調査が止まったとき) |
 | 隔離の測定が不合格になった | 測定のジョブの結果 | [不合格のときの扱い](operations/features.md#不合格のときの扱い) |
-| scheduleの失敗の検出器が止まった | Discord、Consoleの要対応(`schedule_detector_stale`) | [検出器が止まったとき](operations/monitoring.md#検出器が止まったとき) |
+| scheduleの失敗の検出器が止まった | Discord、Consoleの**要対応**(`schedule_detector_stale`) | [検出器が止まったとき](operations/monitoring.md#検出器が止まったとき) |
 | 自己更新が繰り返し打ち切られる | 自己更新のジョブの一覧とログ | [自己更新が繰り返し打ち切られるとき](operations/monitoring.md#自己更新が繰り返し打ち切られるとき) |
 | 自己更新の区切った呼び出しが時間切れになった | Discordのジョブ失敗(`job_failed`)と`schedule_failing` | [区切った呼び出しが時間切れになったとき](operations/monitoring.md#区切った呼び出しが時間切れになったとき) |
-| 保護パスの変更の反映が承認待ちで止まった | Consoleのシステムの画面の「反映の承認待ち」 | [保護パスの変更の反映を承認する](operations/deploy.md#保護パスの変更の反映を承認する) |
+| 保護パスの変更の反映が承認待ちで止まった | Consoleの**システム**の「反映の承認待ち」 | [保護パスの変更の反映を承認する](operations/deploy.md#保護パスの変更の反映を承認する) |
 | 反映の承認で自己更新が失敗し続ける | 自己更新のジョブのログ | [反映の承認で自己更新が失敗し続けるとき](operations/deploy.md#反映の承認で自己更新が失敗し続けるとき) |
-| ホスト側の作業が要る | Consoleの要対応(`host_action_required`) | [ホスト側で反映するもの](operations/deploy.md#ホスト側で反映するもの) |
-| 稼働中のworkerが検査の前提を満たさない | Consoleの要対応(`check_runtime_unsafe`) | [稼働中のworkerが検査の前提を満たさないとき](operations/deploy.md#稼働中のworkerが検査の前提を満たさないとき) |
+| ホスト側の作業が要る | Consoleの**要対応**(`host_action_required`) | [ホスト側で反映するもの](operations/deploy.md#ホスト側で反映するもの) |
+| 稼働中のworkerが検査の前提を満たさない | Consoleの**要対応**(`check_runtime_unsafe`) | [稼働中のworkerが検査の前提を満たさないとき](operations/deploy.md#稼働中のworkerが検査の前提を満たさないとき) |
 | すべてのジョブが`errno=11`(EAGAIN)で失敗する | ジョブのログ | [workerがプロセスを作れなくなったとき](operations/deploy.md#workerがプロセスを作れなくなったとき) |
 | マージや`wmill sync push`が保留で拒否された | 拒否されたコマンドの出力 | [保留でマージや反映が止められたとき](operations/stop.md#保留でマージや反映が止められたとき) |
-| Factoryが全停止している | Consoleのシステムの画面の全停止の区画、Discord(`stop_all_active`) | [全停止を解除する](operations/stop.md#全停止を解除する) |
-| システムの画面に、全停止の変数が壊れていると出る | Consoleのシステムの画面 | [全停止の変数を読めないとき](operations/stop.md#全停止の変数を読めないとき) |
-| 夜間のバックアップが失敗した | Consoleの要対応(`backup_failed`)、Discordのジョブ失敗 | [バックアップの「失敗したとき」](#失敗したとき) |
+| Factoryが全停止している | Consoleの**システム**の全停止の区画、Discord(`stop_all_active`) | [全停止を解除する](operations/stop.md#全停止を解除する) |
+| システムの画面に、全停止の変数が壊れていると出る | Consoleの**システム** | [全停止の変数を読めないとき](operations/stop.md#全停止の変数を読めないとき) |
+| 夜間のバックアップが失敗した | Consoleの**要対応**(`backup_failed`)、Discordのジョブ失敗 | [バックアップの「失敗したとき」](#失敗したとき) |
 
 ## 運用の決まり
 
