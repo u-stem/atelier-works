@@ -7222,6 +7222,68 @@ describe("worktree locks with real git", () => {
     expect((await s.list()).map((item) => item.path)).not.toContain(s.first);
   });
 
+  test("removes the registration of a locked worktree whose .git file is missing with forceLocked", async () => {
+    const s = await setup();
+    await s.git(s.repo, [
+      "worktree",
+      "lock",
+      "--reason",
+      INITIALIZING_LOCK_REASON,
+      s.first,
+    ]);
+    rmSync(join(s.first, ".git"));
+    await removeWorktree({
+      run: runCommand,
+      repoDir: s.repo,
+      dir: s.first,
+      force: true,
+      forceLocked: true,
+      home: s.home,
+    });
+    expect((await s.list()).map((item) => item.path)).not.toContain(s.first);
+  });
+
+  test("removes the directory of a locked worktree whose .git file is missing with forceLocked", async () => {
+    const s = await setup();
+    await s.git(s.repo, [
+      "worktree",
+      "lock",
+      "--reason",
+      INITIALIZING_LOCK_REASON,
+      s.first,
+    ]);
+    rmSync(join(s.first, ".git"));
+    await removeWorktree({
+      run: runCommand,
+      repoDir: s.repo,
+      dir: s.first,
+      force: true,
+      forceLocked: true,
+      home: s.home,
+    });
+    expect(existsSync(s.first)).toBe(false);
+  });
+
+  test("keeps the registration of an unverified locked worktree without forceLocked", async () => {
+    const s = await setup();
+    await s.git(s.repo, [
+      "worktree",
+      "lock",
+      "--reason",
+      INITIALIZING_LOCK_REASON,
+      s.first,
+    ]);
+    rmSync(join(s.first, ".git"));
+    await removeWorktree({
+      run: runCommand,
+      repoDir: s.repo,
+      dir: s.first,
+      force: true,
+      home: s.home,
+    });
+    expect((await s.list()).map((item) => item.path)).toContain(s.first);
+  });
+
   test("leaves a worktree locked for another reason when only force is given", async () => {
     const s = await setup();
     await s.git(s.repo, [

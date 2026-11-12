@@ -3,8 +3,20 @@
 // 終端でない`pr_review`の作業項目があれば何も消さず、使用中の確認もしない。
 // 無ければ、ディレクトリの更新が期限より古い作業ツリーだけを、shaを問わず消す。
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  directoryModifiedAtMs,
   type ReviewWorktreeRemovalDeps,
   type ReviewWorktreeSweepDeps,
   type ReviewWorktreeTarget,
@@ -306,10 +318,14 @@ describe("removeStaleReviewWorktrees", () => {
   function sweep(
     worktrees: readonly WorktreeEntry[],
     perPr: (prNumber: number) => Setup,
+    pruneFails = false,
   ) {
     const removed: string[] = [];
     const warnings: string[] = [];
     const seenPrs: number[] = [];
+    /** 消す、prune、ロックファイルの片付けの順を残す。 */
+    const events: string[] = [];
+    const lockCleanupLists: (readonly WorktreeEntry[])[] = [];
     const deps: ReviewWorktreeSweepDeps = {
       findMainRepoDirs: async () => [REPO_DIR],
       listWorktrees: async () => worktrees,
@@ -321,8 +337,17 @@ describe("removeStaleReviewWorktrees", () => {
           removeWorktree: async (dir, removal) => {
             await inner.deps.removeWorktree(dir, removal);
             removed.push(dir);
+            events.push("remove");
           },
         };
+      },
+      pruneWorktrees: async () => {
+        events.push("prune");
+        if (pruneFails) throw new Error("prune broke");
+      },
+      removeOrphanLockFiles: async (_repoDir, listed) => {
+        events.push("locks");
+        lockCleanupLists.push(listed);
       },
       warn: (message) => warnings.push(message),
     };
@@ -331,6 +356,8 @@ describe("removeStaleReviewWorktrees", () => {
       removed,
       warnings,
       seenPrs,
+      events,
+      lockCleanupLists,
     };
   }
 
@@ -388,6 +415,48 @@ describe("removeStaleReviewWorktrees", () => {
     expect(s.seenPrs).toEqual([]);
   });
 
+  test("prunes and then cleans up the lock files once after removing the worktrees of many prs", async () => {
+    const s = sweep([entry(OLD_A), entry(OLD_B), entry(OTHER_PR)], () => ({
+      mtimes: { [OLD_A]: OLD, [OLD_B]: OLD, [OTHER_PR]: OLD },
+    }));
+    await s.run();
+    expect(s.events).toEqual(["remove", "remove", "remove", "prune", "locks"]);
+  });
+
+  test("cleans up the lock files with the listing from before the removal", async () => {
+    const listed = [MAIN_ENTRY, entry(OLD_A)];
+    const s = sweep(listed, () => ({ mtimes: { [OLD_A]: OLD } }));
+    await s.run();
+    expect(s.lockCleanupLists).toEqual([listed]);
+  });
+
+  test("prunes and cleans up the lock files even when nothing was removed", async () => {
+    const s = sweep([entry(OLD_A)], () => ({
+      active: [true],
+      mtimes: { [OLD_A]: OLD },
+    }));
+    await s.run();
+    expect(s.events).toEqual(["prune", "locks"]);
+  });
+
+  test("does not prune or clean up the lock files of a repository without review worktrees", async () => {
+    const s = sweep([MAIN_ENTRY], () => ({}));
+    await s.run();
+    expect(s.events).toEqual([]);
+  });
+
+  test("cleans up the lock files even when pruning fails", async () => {
+    const s = sweep([entry(OLD_A)], () => ({ mtimes: { [OLD_A]: OLD } }), true);
+    await s.run();
+    expect(s.events).toEqual(["remove", "prune", "locks"]);
+  });
+
+  test("warns when pruning fails", async () => {
+    const s = sweep([entry(OLD_A)], () => ({ mtimes: { [OLD_A]: OLD } }), true);
+    await s.run();
+    expect(s.warnings).toEqual(["cleanup: git worktree prune failed"]);
+  });
+
   test("returns the number of removed worktrees", async () => {
     const s = sweep([entry(OLD_A), entry(OLD_B)], () => ({
       mtimes: { [OLD_A]: OLD, [OLD_B]: OLD },
@@ -413,6 +482,8 @@ describe("removeStaleReviewWorktrees", () => {
           },
         };
       },
+      pruneWorktrees: async () => undefined,
+      removeOrphanLockFiles: async () => undefined,
       warn: (message) => warnings.push(message),
     };
     await removeStaleReviewWorktrees(deps, CUTOFF);
@@ -420,5 +491,52 @@ describe("removeStaleReviewWorktrees", () => {
       [OLD_A],
       ["cleanup: failed to list worktrees for review"],
     ]);
+  });
+});
+
+describe("directoryModifiedAtMs", () => {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  });
+
+  function makeRoot(): string {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "review-mtime-")));
+    roots.push(root);
+    return root;
+  }
+
+  test("returns the modification time of a directory", async () => {
+    const root = makeRoot();
+    const dir = join(root, "review-42-aaaaaaa-0a1b2c3d");
+    mkdirSync(dir);
+    expect(await directoryModifiedAtMs(dir)).toBe(lstatSync(dir).mtimeMs);
+  });
+
+  test("refuses a symbolic link to a directory", async () => {
+    const root = makeRoot();
+    const dir = join(root, "real");
+    const link = join(root, "review-42-aaaaaaa-0a1b2c3d");
+    mkdirSync(dir);
+    symlinkSync(dir, link);
+    await expect(directoryModifiedAtMs(link)).rejects.toThrow(
+      "not a directory",
+    );
+  });
+
+  test("refuses a regular file", async () => {
+    const root = makeRoot();
+    const file = join(root, "review-42-aaaaaaa-0a1b2c3d");
+    writeFileSync(file, "x");
+    await expect(directoryModifiedAtMs(file)).rejects.toThrow(
+      "not a directory",
+    );
+  });
+
+  test("throws when the path does not exist", async () => {
+    const root = makeRoot();
+    await expect(
+      directoryModifiedAtMs(join(root, "missing")),
+    ).rejects.toThrow();
   });
 });

@@ -14,6 +14,7 @@ import {
   recordDiskUsage,
   requirementsWorktreeDir,
   selectOrphanClaudePids,
+  staleItemsForWorktreeSweep,
   terminateOrphans,
   unresolvedHoldersNoticeMessage,
 } from "../../f/factory/lib/cleanup_support.ts";
@@ -505,6 +506,29 @@ describe("dirsNotYetVisited", () => {
         skippedBusy: new Set(["/w/b"]),
       }),
     ).toEqual(["/w/a"]);
+  });
+});
+
+describe("staleItemsForWorktreeSweep", () => {
+  test("drops the pr_review work items, which the review sweep handles from the worktree list", () => {
+    const items = [
+      { kind: "issue" },
+      { kind: "pr_review" },
+      { kind: "pr_fix" },
+    ];
+    expect(staleItemsForWorktreeSweep(items)).toEqual([
+      { kind: "issue" },
+      { kind: "pr_fix" },
+    ]);
+  });
+
+  test("keeps every other kind", () => {
+    const items = [
+      { kind: "issue" },
+      { kind: "investigate" },
+      { kind: "pr_fix" },
+    ];
+    expect(staleItemsForWorktreeSweep(items)).toEqual(items);
   });
 });
 

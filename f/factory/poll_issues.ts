@@ -136,6 +136,7 @@ import {
   reviewWorktreeRemoval,
   runCommand,
   selectReviewWorktreesOfPr,
+  type WorktreeEntry,
 } from "./lib/workspace.ts";
 import { describeReason, nextActionFor } from "./steps/pr_workflow_support.ts";
 
@@ -359,8 +360,47 @@ async function removePrWorktrees(
 ): Promise<void> {
   const repoDir = `/workspaces/${owner}/${repo}/main`;
   if (!(await pathExists(repoDir))) return;
+  await removeReviewWorktreesOfClosedPr(
+    repoDir,
+    prNumber,
+    {
+      listWorktrees: (dir) => listWorktrees({ run: runCommand, repoDir: dir }),
+      removeWorktree: (dir, target, options) =>
+        removeWorktree({
+          run: runCommand,
+          repoDir: dir,
+          dir: target,
+          ...options,
+        }),
+    },
+    log,
+  );
+}
+
+export type ClosedPrWorktreeDeps = {
+  readonly listWorktrees: (
+    repoDir: string,
+  ) => Promise<readonly WorktreeEntry[]>;
+  readonly removeWorktree: (
+    repoDir: string,
+    dir: string,
+    options: { readonly force: true; readonly forceLocked: boolean },
+  ) => Promise<void>;
+};
+
+/**
+ * `repoDir`のPR番号`prNumber`のレビュー用のworktreeを、期限を待たずに消す。
+ * 選び方と消し方(ロックの扱い)は、定期の片付けと同じ関数を使う。
+ * 失敗はログに残すだけで、例外を投げない。
+ */
+export async function removeReviewWorktreesOfClosedPr(
+  repoDir: string,
+  prNumber: number,
+  deps: ClosedPrWorktreeDeps,
+  log: Logger,
+): Promise<void> {
   try {
-    const entries = await listWorktrees({ run: runCommand, repoDir });
+    const entries = await deps.listWorktrees(repoDir);
     if (!entries.some((entry) => entry.path === repoDir)) {
       // 列挙されたパスが`repoDir`と違う綴りだと、レビューのworktreeを1つも選べず、無言で残る。
       log.warn(
@@ -383,12 +423,7 @@ async function removePrWorktrees(
           });
           continue;
         }
-        await removeWorktree({
-          run: runCommand,
-          repoDir,
-          dir: target.path,
-          ...removal,
-        });
+        await deps.removeWorktree(repoDir, target.path, removal);
       } catch (err) {
         log.warn("reconcile: failed to remove pr worktree", {
           path: target.path,

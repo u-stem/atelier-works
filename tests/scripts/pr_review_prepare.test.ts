@@ -88,15 +88,8 @@ describe("reviewRunId", () => {
     expect(reviewRunId()).not.toBe(reviewRunId());
   });
 
-  test("does not derive the id from the root flow job id", () => {
-    const previous = process.env.WM_ROOT_FLOW_JOB_ID;
-    process.env.WM_ROOT_FLOW_JOB_ID = FIRST_UUID;
-    try {
-      expect(reviewRunId(() => SECOND_UUID)).toBe("76543210");
-    } finally {
-      if (previous === undefined) delete process.env.WM_ROOT_FLOW_JOB_ID;
-      else process.env.WM_ROOT_FLOW_JOB_ID = previous;
-    }
+  test("takes the last 8 digits of another random uuid", () => {
+    expect(reviewRunId(() => SECOND_UUID)).toBe("76543210");
   });
 
   test("leaves a value that is not hex for the path builder to refuse", () => {

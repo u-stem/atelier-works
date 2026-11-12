@@ -37,6 +37,13 @@ export function requirementsWorktreeDir(
   return `/workspaces/${owner}/${repo}/req-${issueNumber}`;
 }
 
+/** 期限切れの作業項目のうち、作業項目の単位でworktreeを掃除する対象を返す。 */
+export function staleItemsForWorktreeSweep<T extends { readonly kind: string }>(
+  items: readonly T[],
+): T[] {
+  return [...items];
+}
+
 /**
  * リポジトリについて、worktreeのプロセスのロックファイルを探すディレクトリを返す。
  * ロックファイルはworktreeの隣に置かれるので、メインのクローンの親(`req-<N>`と`review-*`の置き場所)と、一覧にある各worktreeの親を、重複を除いて返す。

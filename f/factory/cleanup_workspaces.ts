@@ -38,6 +38,7 @@ import {
   partitionRepoGroups,
   recordDiskUsage,
   selectOrphanClaudePids,
+  staleItemsForWorktreeSweep,
   terminateOrphans,
   unresolvedHoldersNoticeMessage,
   type WorktreeHolder,
@@ -752,8 +753,23 @@ export type ReviewWorktreeSweepDeps = {
     repoDir: string,
     prNumber: number,
   ) => ReviewWorktreeRemovalDeps;
+  /** 消した後に、なくなった作業ツリーの管理情報を片付ける。 */
+  readonly pruneWorktrees: (repoDir: string) => Promise<void>;
+  /** 消す前の一覧から、なくなった作業ツリーのプロセスのロックファイルを片付ける。 */
+  readonly removeOrphanLockFiles: (
+    repoDir: string,
+    worktrees: readonly WorktreeEntry[],
+  ) => Promise<void>;
   readonly warn: (message: string, fields: LogFields) => void;
 };
+
+/**
+ * 作業ツリーのディレクトリの更新の時刻(ミリ秒)を返す。
+ * シンボリックリンクはたどらず、ディレクトリでなければ例外を投げる。
+ */
+export async function directoryModifiedAtMs(dir: string): Promise<number> {
+  return (await stat(dir)).mtimeMs;
+}
 
 /**
  * 全リポジトリのレビュー用の作業ツリーを、PR番号ごとに消し、消した数を返す。
@@ -835,13 +851,24 @@ async function removeStaleReviewWorktreesSafe(
             hasActiveReview: async () =>
               (await listActivePrReviewWorkItems(owner, repo, prNumber))
                 .length > 0,
-            modifiedAtMs: async (dir) => (await stat(dir)).mtimeMs,
+            modifiedAtMs: directoryModifiedAtMs,
             ensureFree: (dir) =>
               worktreeIsFreeToRemove({ targetDir: dir, owner, repo }, log),
             removeWorktree: (dir, options) =>
               removeWorktree({ run: runCommand, repoDir, dir, ...options }),
             warn: (message, fields) => log.warn(message, fields),
           };
+        },
+        pruneWorktrees: (repoDir) =>
+          pruneWorktrees({ run: runCommand, repoDir }),
+        removeOrphanLockFiles: (repoDir, worktrees) => {
+          const { owner, repo } = ownerAndRepoOf(repoDir);
+          return removeOrphanLockFilesForRepo(
+            owner,
+            repo,
+            lockFileDirs(repoDir, worktrees),
+            log,
+          ).then(() => undefined);
         },
         warn: (message, fields) => log.warn(message, fields),
       },
@@ -949,7 +976,11 @@ export async function main(): Promise<CleanupWorkspacesResult> {
     Date.now() - config.worktree_ttl_days * 24 * 60 * 60 * 1000,
   );
   const staleItems = await listStaleTerminalWorkItems(cutoff);
-  const removed = await removeStaleWorktrees(staleItems, ghToken, log);
+  const removed = await removeStaleWorktrees(
+    staleItemsForWorktreeSweep(staleItems),
+    ghToken,
+    log,
+  );
   const removedReview = await removeStaleReviewWorktreesSafe(cutoff, log);
   const removedDependabot = await removeDependabotWorktreesSafe(log);
 
