@@ -5,7 +5,7 @@
 Factoryが作ったPRのマージの競合を検知する`watch_pr_conflicts`も、[競合の検知](#競合の検知)に定める。
 `watch_pr_ci`、`lib/pr_ci_watch.ts`、`lib/pr_ci_support.ts`、`lib/pr_ci_fix_claim.ts`を変更する人が読む。
 人のPRの判定は`lib/pr_ci_human_support.ts`にある。
-必要な権限は[セキュリティ](../security.md)に、通知を受けた人がすることは[運用](../operations.md)の通知の表に書く。
+必要な権限は[セキュリティ](../security.md)に、通知を受けた人がすることは[運用の「通知の種類」](../operations.md#通知の種類)の表に書く。
 監視と失敗の自動修正の手順は[PRのレビューとCIの運用](../operations/pr.md#prのciを監視する)に書く。
 mainのCIは[mainのCI監視の仕様](main-ci.md)に分けて書く。
 失敗のログを整形してClaudeに渡す部品は、[CIの失敗を直す部品の仕様](ci-fix.md)に分けて書く。

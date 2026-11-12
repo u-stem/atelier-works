@@ -2,7 +2,7 @@
 
 工程4の`watch_main_ci`が、何を読み、どう判定し、何を通知するかを定める仕様である。
 `watch_main_ci`、`lib/main_ci_watch.ts`、`lib/main_ci_support.ts`を変更する人が読む。
-必要な権限は[セキュリティ](../security.md)に、通知を受けた人がすることは[運用](../operations.md)の通知の表に書く。
+必要な権限は[セキュリティ](../security.md)に、通知を受けた人がすることは[運用の「通知の種類」](../operations.md#通知の種類)の表に書く。
 監視の手順は[PRのレビューとCIの運用の「mainのCIを監視する」](../operations/pr.md#mainのciを監視する)に書く。
 
 ## 方針
