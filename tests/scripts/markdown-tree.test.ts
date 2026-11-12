@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { ListItem, Nodes } from "mdast";
-import { parseMarkdown, visit } from "../../scripts/markdown-tree.ts";
+import {
+  createTreeReader,
+  parseMarkdown,
+  visit,
+} from "../../scripts/markdown-tree.ts";
 
 function nodesOf(markdown: string): Nodes[] {
   const nodes: Nodes[] = [];
@@ -41,5 +45,27 @@ describe("visit", () => {
       "paragraph",
       "text",
     ]);
+  });
+});
+
+describe("createTreeReader", () => {
+  test("parses a document once and returns the same tree on the next read", () => {
+    const read = createTreeReader(() => "# a\n");
+    expect(read("a.md")).toBe(read("a.md"));
+  });
+
+  test("reads a document only once", () => {
+    let reads = 0;
+    const read = createTreeReader(() => {
+      reads++;
+      return "# a\n";
+    });
+    read("a.md");
+    read("a.md");
+    expect(reads).toBe(1);
+  });
+
+  test("returns undefined for a document that cannot be read", () => {
+    expect(createTreeReader(() => undefined)("a.md")).toBeUndefined();
   });
 });
