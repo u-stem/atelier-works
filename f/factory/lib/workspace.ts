@@ -1766,6 +1766,7 @@ async function discardUnverifiedWorktree(opts: {
   readonly run: CommandRunner;
   readonly repoDir: string;
   readonly dir: string;
+  readonly forceLocked?: boolean;
   readonly home?: string;
   readonly path?: string;
   readonly fs: WorktreeFsDeps | undefined;
@@ -1794,6 +1795,19 @@ async function discardUnverifiedWorktree(opts: {
     opts.fs?.removeDir ??
     ((path: string) => rm(path, { recursive: true, force: true }));
   await removeDir(opts.dir);
+  // `git worktree prune`は、gitがロックした管理情報を消さない。
+  // ロックを外せるのは、呼び出し側が`forceLocked`で消すと決めたときの、ロックされた登録だけにする。
+  // ディレクトリを消した後の登録にも、`unlock`は効く。
+  const registered = entries.find((entry) => entry.path === opts.dir);
+  if (opts.forceLocked === true && registered?.lock !== undefined) {
+    const unlock = await opts.run(
+      buildGitArgv(["worktree", "unlock", "--", opts.dir]),
+      { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
+    );
+    if (unlock.exitCode !== 0) {
+      throw gitError("git worktree unlock failed", unlock);
+    }
+  }
   const prune = await opts.run(buildGitArgv(["worktree", "prune"]), {
     cwd: opts.repoDir,
     env: localGitEnv(opts.home, opts.path),
@@ -1808,6 +1822,8 @@ export type RemoveWorktreeOptions = {
   readonly repoDir: string;
   readonly dir: string;
   readonly force?: boolean;
+  /** gitがロックしたworktreeも消す(`--force`を2回)。`force`より優先する。 */
+  readonly forceLocked?: boolean;
   readonly home?: string;
   readonly path?: string;
   readonly lockFs?: LockFs;
@@ -1845,19 +1861,21 @@ export async function removeWorktree(
           run: opts.run,
           repoDir: opts.repoDir,
           dir: opts.dir,
+          ...(opts.forceLocked === true ? { forceLocked: true } : {}),
           ...(opts.home !== undefined ? { home: opts.home } : {}),
           ...(opts.path !== undefined ? { path: opts.path } : {}),
           fs: opts.fs,
         });
         return;
       }
-      const args = [
-        "worktree",
-        "remove",
-        ...(opts.force === true ? ["--force"] : []),
-        "--",
-        opts.dir,
-      ];
+      // `--force`を2回渡すと、gitがロックしたworktreeも消す。
+      const forceArgs =
+        opts.forceLocked === true
+          ? ["--force", "--force"]
+          : opts.force === true
+            ? ["--force"]
+            : [];
+      const args = ["worktree", "remove", ...forceArgs, "--", opts.dir];
       const result = await opts.run(buildGitArgv(args), {
         cwd: opts.repoDir,
         env: localGitEnv(opts.home, opts.path),
@@ -1917,26 +1935,90 @@ export type WorktreeEntry = {
   readonly branch: string | null;
   readonly bare: boolean;
   readonly detached: boolean;
+  /** gitがロックしているときだけ持つ。`reason`は`git worktree lock --reason`の文で、理由が無いロックは`null`。 */
+  readonly lock?: { readonly reason: string | null };
 };
 
 /**
- * `entry`が、PR番号`prNumber`のレビューのworktree(`buildReviewWorktreeDir`が作るパス)かを返す。
- * `repoDir`と同じ親の直下にある`review-<PR番号>-<sha7>`というdetachedのworktreeだけを対象にする。
+ * 作成の途中で止まったworktreeに、gitが付けるロックの理由。
+ * gitは理由を翻訳して書くが、`spawnProcess`は渡した環境変数だけで子プロセスを起動し、
+ * `localGitEnv`は`LANG`・`LC_ALL`を渡さず、workerのDockerfileも設定しないので、gitはCロケールで動き、理由は英語のままである。
+ */
+export const INITIALIZING_LOCK_REASON = "initializing";
+
+/** レビューのworktreeの名前に付く、実行の識別子の形。小文字の16進数の8桁。 */
+const REVIEW_RUN_ID_SOURCE = "[0-9a-f]{8}";
+const REVIEW_RUN_ID = new RegExp(`^${REVIEW_RUN_ID_SOURCE}$`);
+
+/**
+ * レビューのworktreeの名前の形。
+ * `review-<PR番号>-<sha7>-<実行の識別子>`と、識別子の無い`review-<PR番号>-<sha7>`の両方に合わせる。
+ * 1つ目の括弧がPR番号である。
+ */
+const REVIEW_WORKTREE_NAME = new RegExp(
+  `^review-([1-9][0-9]*)-[0-9a-f]{7}(?:-${REVIEW_RUN_ID_SOURCE})?$`,
+);
+
+/** `value`が、レビューのworktreeの名前に付けてよい実行の識別子かを返す。 */
+export function isReviewRunId(value: string): boolean {
+  return REVIEW_RUN_ID.test(value);
+}
+
+/**
+ * `entry`がレビューのworktree(`buildReviewWorktreeDir`が作るパス)なら、そのPR番号を返す。そうでなければ`null`を返す。
+ * `repoDir`と同じ親の直下にある、detachedのworktreeだけを対象にする。
  * パスの一部が一致しただけで選ぶと、別の場所のdirectoryやブランチのworktreeまで消しうるためである。
  * パスは文字列の前方一致で比べるので、列挙されたパスと`repoDir`が同じ綴りでなければ、
  * 何も選ばれない。workerの`/workspaces`はボリュームのマウント先そのものでsymlinkを挟まないので、
  * `/workspaces/<owner>/<repo>/main`のcloneのworktreeは、同じ綴りで列挙される。
  */
+export function reviewWorktreePrNumber(
+  repoDir: string,
+  entry: Pick<WorktreeEntry, "path" | "detached">,
+): number | null {
+  if (!entry.detached) return null;
+  const prefix = `${repoDir.replace(/\/main$/, "")}/`;
+  if (!entry.path.startsWith(prefix)) return null;
+  const match = entry.path.slice(prefix.length).match(REVIEW_WORKTREE_NAME);
+  const prNumber = match?.[1];
+  return prNumber === undefined ? null : Number(prNumber);
+}
+
+/** `entry`が、PR番号`prNumber`のレビューのworktreeかを返す。 */
 export function isReviewWorktreeOf(
   repoDir: string,
   prNumber: number,
   entry: Pick<WorktreeEntry, "path" | "detached">,
 ): boolean {
-  if (!entry.detached) return false;
-  const prefix = `${repoDir.replace(/\/main$/, "")}/`;
-  if (!entry.path.startsWith(prefix)) return false;
-  const name = entry.path.slice(prefix.length);
-  return new RegExp(`^review-${String(prNumber)}-[0-9a-f]{7}$`).test(name);
+  return reviewWorktreePrNumber(repoDir, entry) === prNumber;
+}
+
+/**
+ * PR番号`prNumber`のレビューのworktreeを、すべて返す。
+ * 名前のshaでは絞らない。名前のshaは準備の時点のheadで決まり、作業項目の`head_sha`と食い違うことがあるためである。
+ * 定期の片付けと、PRが閉じたときの片付けが、同じ選び方を使う。
+ */
+export function selectReviewWorktreesOfPr<
+  T extends Pick<WorktreeEntry, "path" | "detached">,
+>(repoDir: string, worktrees: readonly T[], prNumber: number): T[] {
+  return worktrees.filter((worktree) =>
+    isReviewWorktreeOf(repoDir, prNumber, worktree),
+  );
+}
+
+/**
+ * レビューのworktreeを消すときの`removeWorktree`の指定を返す。消さないときは`null`を返す。
+ * ロックの無いものは`--force`で、理由が`initializing`のロックは作成の途中で止まった残骸なので`--force`を2回で消す。
+ * 理由が別のロックと、理由の無いロックは、誰かが意図して付けた可能性があるので消さない。
+ */
+export function reviewWorktreeRemoval(
+  entry: Pick<WorktreeEntry, "lock">,
+): { readonly force: true; readonly forceLocked: boolean } | null {
+  if (entry.lock === undefined) return { force: true, forceLocked: false };
+  if (entry.lock.reason === INITIALIZING_LOCK_REASON) {
+    return { force: true, forceLocked: true };
+  }
+  return null;
 }
 
 /**
@@ -1988,6 +2070,7 @@ function parseWorktreeRecord(lines: readonly string[]): WorktreeEntry {
   let branch: string | null = null;
   let bare = false;
   let detached = false;
+  let lock: { readonly reason: string | null } | undefined;
 
   for (const line of lines) {
     if (line.startsWith("worktree ")) {
@@ -2003,6 +2086,10 @@ function parseWorktreeRecord(lines: readonly string[]): WorktreeEntry {
       bare = true;
     } else if (line === "detached") {
       detached = true;
+    } else if (line === "locked") {
+      lock = { reason: null };
+    } else if (line.startsWith("locked ")) {
+      lock = { reason: line.slice("locked ".length) };
     }
   }
 
@@ -2011,7 +2098,14 @@ function parseWorktreeRecord(lines: readonly string[]): WorktreeEntry {
       `unexpected 'git worktree list --porcelain -z' record: ${lines.join(" | ")}`,
     );
   }
-  return { path, headSha, branch, bare, detached };
+  return {
+    path,
+    headSha,
+    branch,
+    bare,
+    detached,
+    ...(lock === undefined ? {} : { lock }),
+  };
 }
 
 /**

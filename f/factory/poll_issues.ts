@@ -130,11 +130,13 @@ import {
 } from "./lib/types.ts";
 import {
   type CommandRunner,
-  isReviewWorktreeOf,
   listWorktrees,
   pathExists,
   removeWorktree,
+  reviewWorktreeRemoval,
   runCommand,
+  selectReviewWorktreesOfPr,
+  type WorktreeEntry,
 } from "./lib/workspace.ts";
 import { describeReason, nextActionFor } from "./steps/pr_workflow_support.ts";
 
@@ -344,7 +346,7 @@ async function getJobState(
 
 /**
  * 閉じた・マージされたPRについて、pr_reviewのdetachedなworktree
- * (`/workspaces/<owner>/<repo>/review-<pr>-<sha7>`)を削除する。
+ * (`/workspaces/<owner>/<repo>/review-<pr>-<sha7>-<実行の識別子>`と、識別子の無い`review-<pr>-<sha7>`)を削除する。
  * 失敗はログに残すだけで例外を投げない。
  * pr_fixの`git gtr`のworktreeはPRのブランチ名で決まり、reconcileは
  * ブランチ名を追っていないので、ここでは消さない。
@@ -358,8 +360,47 @@ async function removePrWorktrees(
 ): Promise<void> {
   const repoDir = `/workspaces/${owner}/${repo}/main`;
   if (!(await pathExists(repoDir))) return;
+  await removeReviewWorktreesOfClosedPr(
+    repoDir,
+    prNumber,
+    {
+      listWorktrees: (dir) => listWorktrees({ run: runCommand, repoDir: dir }),
+      removeWorktree: (dir, target, options) =>
+        removeWorktree({
+          run: runCommand,
+          repoDir: dir,
+          dir: target,
+          ...options,
+        }),
+    },
+    log,
+  );
+}
+
+export type ClosedPrWorktreeDeps = {
+  readonly listWorktrees: (
+    repoDir: string,
+  ) => Promise<readonly WorktreeEntry[]>;
+  readonly removeWorktree: (
+    repoDir: string,
+    dir: string,
+    options: { readonly force: true; readonly forceLocked: boolean },
+  ) => Promise<void>;
+};
+
+/**
+ * `repoDir`のPR番号`prNumber`のレビュー用のworktreeを、期限を待たずに消す。
+ * 選び方と消し方(ロックの扱い)は、定期の片付けと同じ関数を使う。
+ * 失敗はログに残すだけで、例外を投げない。
+ */
+export async function removeReviewWorktreesOfClosedPr(
+  repoDir: string,
+  prNumber: number,
+  deps: ClosedPrWorktreeDeps,
+  log: Logger,
+): Promise<void> {
   try {
-    const entries = await listWorktrees({ run: runCommand, repoDir });
+    const entries = await deps.listWorktrees(repoDir);
     if (!entries.some((entry) => entry.path === repoDir)) {
       // 列挙されたパスが`repoDir`と違う綴りだと、レビューのworktreeを1つも選べず、無言で残る。
       log.warn(
@@ -367,17 +408,22 @@ async function removePrWorktrees(
         { repo_dir: repoDir },
       );
     }
-    const targets = entries.filter((entry) =>
-      isReviewWorktreeOf(repoDir, prNumber, entry),
-    );
-    for (const target of targets) {
+    for (const target of selectReviewWorktreesOfPr(
+      repoDir,
+      entries,
+      prNumber,
+    )) {
       try {
-        await removeWorktree({
-          run: runCommand,
-          repoDir,
-          dir: target.path,
-          force: true,
-        });
+        // gitがロックしたものは、作成の途中で止まった残骸(`initializing`)だけを消す。
+        const removal = reviewWorktreeRemoval(target);
+        if (removal === null) {
+          log.warn("reconcile: kept a pr worktree locked by git", {
+            path: target.path,
+            reason: target.lock?.reason ?? null,
+          });
+          continue;
+        }
+        await deps.removeWorktree(repoDir, target.path, removal);
       } catch (err) {
         log.warn("reconcile: failed to remove pr worktree", {
           path: target.path,

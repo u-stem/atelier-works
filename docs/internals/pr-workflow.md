@@ -323,16 +323,26 @@ Factory自身のPRレビューと、その未解決のインラインの指摘�
 
 対象リポジトリのメインのクローン(`/workspaces/<owner>/<repo>/main`)はfetchだけに使い、working treeをcheckoutしない。
 
-PRレビューは、PRごとにdetachedのworktreeを作り、投稿のステップで消す。
+PRレビューは、PRごと・実行ごとにdetachedのworktreeを作り、投稿のステップで消す。
 
 ```bash
-git worktree add --detach /workspaces/<owner>/<repo>/review-<pr>-<sha7> <sha>
+git worktree add --detach /workspaces/<owner>/<repo>/review-<pr>-<sha7>-<run> <sha>
 ```
 
 `<sha7>`はレビューするコミットのshaの先頭7文字である。
+`<run>`は、準備のステップが実行のたびに乱数から作る8桁の小文字の16進数である。
+flowのジョブIDは、先頭の桁が長く変わらず、同じジョブの再実行では値も同じになるので使わない。
+実行ごとに名前が変わるので、残りがあっても作成は衝突せず、準備のステップは残りを消さない。
 準備のステップは、worktreeを作る間にheadのshaが動いていないかを最後にもう一度確かめる。
+作った後の確認が失敗したときは、そのステップが作ったworktreeだけを消して、元の例外を投げる。
 生成のステップが早く抜けて投稿しなかったときも、投稿のステップがworktreeを消す。
-worktreeが残ると、同じshaを再実行したときに`git worktree add`が既存のパスで失敗するためである。
+生成のステップが失敗して残ったworktreeは、やり直しを妨げず、失敗した実行の数だけ残る。
+残りは、PR番号で選んで消す(shaは問わず、`<run>`の無い名前も含む)。
+PRが閉じたとき(`poll_issues`)は、期限を待たずに消す。
+`cleanup_workspaces`は、作業ツリーの一覧からPRごとに扱う。
+そのPRに終端でない`pr_review`があれば、見直している最中なので、何も消さない。
+無ければ、ディレクトリの更新が`worktree_ttl_days`より古いものだけを消す(作業項目の行が消えたPRも同じ)。
+gitが`initializing`でロックした残りは`--force`を2回で消し、ほかの理由のロックは消さずに警告を残す。
 
 PR修正は、`git gtr new`で作るPRのブランチのworktreeを使う。
 PR修正の完了のステップはworktreeを消さず、後で`cleanup_workspaces`が片付ける。
