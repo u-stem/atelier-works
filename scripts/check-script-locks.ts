@@ -107,6 +107,19 @@ export type DuplicateKey = {
   readonly key: string;
 };
 
+/** 厳密なJSONとして読んだ結果。読めたときは重複したキーを、読めないときは理由を持つ。 */
+export type StrictScan =
+  | { readonly ok: true; readonly duplicates: readonly DuplicateKey[] }
+  | { readonly ok: false; readonly problem: string };
+
+/** 本文を厳密なJSONとして読み、重複したキーを返す(未実装)。 */
+export function scanStrictJson(
+  _text: string,
+  _allowTrailingComma: boolean,
+): StrictScan {
+  return { ok: true, duplicates: [] };
+}
+
 type Token =
   | { readonly kind: "punct"; readonly value: string }
   | { readonly kind: "string"; readonly raw: string }

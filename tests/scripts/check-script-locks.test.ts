@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   checkScriptLock,
-  findDuplicateKeys,
   indexRootLock,
   type RootIndex,
+  type ScriptLockViolation,
+  scanStrictJson,
   WORKER_DEPENDENCIES,
 } from "../../scripts/check-script-locks.ts";
 
@@ -435,42 +436,179 @@ describe("checkScriptLock with duplicate keys", () => {
     );
     expect(checkScriptLock(lock, rootIndex())).toEqual([]);
   });
+});
 
-  test("does not count a key inside a comment", () => {
+/**
+ * 通常の厳密なbun.lockの部分の、`packages`の前に`before`を差し込んだlockを組み立てる。
+ * `before`には、重複したキーや、厳密でない書式を書く。
+ */
+function lockWithBefore(before: string, manifest: string = MANIFEST): string {
+  return rawLock(
+    manifest,
+    `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  ${WORKSPACES}
+  ${before}"packages": {
+    ${CLIENT_ENTRY}
+  },
+}`,
+  );
+}
+
+function notStrict(part: string, problem: string): ScriptLockViolation[] {
+  return [{ key: part, reason: `lock is not strict JSON: ${problem}` }];
+}
+
+describe("checkScriptLock with a lock that is not strict JSON", () => {
+  test("accepts a strict lock", () => {
+    expect(checkScriptLock(lockWithBefore(""), rootIndex())).toEqual([]);
+  });
+
+  test("accepts trailing commas in the bun.lock part", () => {
     const lock = rawLock(
       MANIFEST,
       `{
   "lockfileVersion": 2,
-  // "packages": {},
   "configVersion": 1,
-  /* "packages": {} */
   ${WORKSPACES}
   "packages": {
-    ${CLIENT_ENTRY}
-  }
+    "windmill-client": ["windmill-client@1.817.0", "", {}, "${CLIENT_INTEGRITY}",],
+  },
 }`,
     );
     expect(checkScriptLock(lock, rootIndex())).toEqual([]);
   });
+
+  test("reports a trailing comma in the manifest part", () => {
+    const manifest =
+      '{\n  "dependencies": {\n    "windmill-client": "1.817.0",\n  }\n}';
+    expect(checkScriptLock(lockWithBefore("", manifest), rootIndex())).toEqual(
+      notStrict("manifest", "a trailing comma"),
+    );
+  });
+
+  test("reports a duplicate written with a single-quoted key", () => {
+    expect(
+      checkScriptLock(
+        lockWithBefore("\"packages\": {},\n  'packages': {},\n  "),
+        rootIndex(),
+      ),
+    ).toEqual(notStrict("bun.lock", "a single-quoted string"));
+  });
+
+  test("reports a single-quoted key before a duplicate", () => {
+    expect(
+      checkScriptLock(
+        lockWithBefore("'x': 1,\n  \"packages\": {},\n  "),
+        rootIndex(),
+      ),
+    ).toEqual(notStrict("bun.lock", "a single-quoted string"));
+  });
+
+  test("reports a key written with a hexadecimal escape", () => {
+    const manifest =
+      '{\n  "\\x64ependencies": {},\n  "dependencies": {\n    "windmill-client": "1.817.0"\n  }\n}';
+    expect(checkScriptLock(lockWithBefore("", manifest), rootIndex())).toEqual(
+      notStrict("manifest", "an escape that JSON does not allow"),
+    );
+  });
+
+  test("reports a vertical tab escape", () => {
+    expect(
+      checkScriptLock(lockWithBefore('"note": "a\\vb",\n  '), rootIndex()),
+    ).toEqual(notStrict("bun.lock", "an escape that JSON does not allow"));
+  });
+
+  test("reports a raw tab inside a string", () => {
+    expect(
+      checkScriptLock(lockWithBefore('"note": "a\tb",\n  '), rootIndex()),
+    ).toEqual(notStrict("bun.lock", "a raw control character in a string"));
+  });
+
+  test("reports a line comment that ends with a carriage return", () => {
+    expect(
+      checkScriptLock(
+        lockWithBefore('"packages": {}, // c\r  "packages": {},\n  '),
+        rootIndex(),
+      ),
+    ).toEqual(notStrict("bun.lock", "a comment"));
+  });
+
+  test("reports a line comment that ends with a line separator", () => {
+    expect(
+      checkScriptLock(
+        lockWithBefore('"packages": {}, // c   "packages": {},\n  '),
+        rootIndex(),
+      ),
+    ).toEqual(notStrict("bun.lock", "a comment"));
+  });
+
+  test("reports a line comment that ends with a newline", () => {
+    expect(
+      checkScriptLock(lockWithBefore('// "packages": {},\n  '), rootIndex()),
+    ).toEqual(notStrict("bun.lock", "a comment"));
+  });
+
+  test("reports a block comment", () => {
+    expect(
+      checkScriptLock(lockWithBefore('/* "packages": {} */\n  '), rootIndex()),
+    ).toEqual(notStrict("bun.lock", "a comment"));
+  });
+
+  test("reports a byte order mark", () => {
+    const lock = lockWithBefore("").replace("//bun.lock\n{", "//bun.lock\n﻿{");
+    expect(checkScriptLock(lock, rootIndex())).toEqual(
+      notStrict("bun.lock", "an unexpected character U+FEFF"),
+    );
+  });
+
+  test("reports a no-break space between tokens", () => {
+    expect(
+      checkScriptLock(lockWithBefore('"note": 1,\n  '), rootIndex()),
+    ).toEqual(notStrict("bun.lock", "an unexpected character U+00A0"));
+  });
+
+  test("reports a bare word in the key position", () => {
+    expect(
+      checkScriptLock(lockWithBefore("packages: {},\n  "), rootIndex()),
+    ).toEqual(
+      notStrict("bun.lock", "a key that is not a double-quoted string"),
+    );
+  });
+
+  test("reports a bun.lock part that ends early", () => {
+    expect(
+      checkScriptLock(`${MANIFEST}\n//bun.lock\n{"packages": `, rootIndex()),
+    ).toEqual(notStrict("bun.lock", "the text ends early"));
+  });
 });
 
-describe("findDuplicateKeys", () => {
-  test("counts a key written with an escape as the same key", () => {
-    expect(findDuplicateKeys('{"packages": {}, "pack\\u0061ges": {}}')).toEqual(
-      [{ path: [], key: "packages" }],
-    );
+describe("scanStrictJson", () => {
+  test("counts a key written with a unicode escape as the same key", () => {
+    expect(
+      scanStrictJson('{"packages": {}, "pack\\u0061ges": {}}', false),
+    ).toEqual({ ok: true, duplicates: [{ path: [], key: "packages" }] });
   });
 
   test("reads an escaped quote inside a string without ending it", () => {
     expect(
-      findDuplicateKeys('{"a": "x\\", \\"a\\": ", "b": [1, {"c": 1}]}'),
-    ).toEqual([]);
+      scanStrictJson('{"a": "x\\", \\"a\\": ", "b": [1, {"c": 1}]}', false),
+    ).toEqual({ ok: true, duplicates: [] });
   });
 
   test("reports a duplicate key inside an object in an array", () => {
-    expect(findDuplicateKeys('[{"c": 1, "c": 2,},]')).toEqual([
-      { path: ["0"], key: "c" },
-    ]);
+    expect(scanStrictJson('[{"c": 1, "c": 2,},]', true)).toEqual({
+      ok: true,
+      duplicates: [{ path: ["0"], key: "c" }],
+    });
+  });
+
+  test("reports text after the value", () => {
+    expect(scanStrictJson('{"a": 1} {"a": 2}', false)).toEqual({
+      ok: false,
+      problem: "text after the value",
+    });
   });
 });
 
