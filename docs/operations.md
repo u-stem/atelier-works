@@ -2136,7 +2136,7 @@ PRの修正のプロセスや、持ち主の分からないプロセスがworktr
 mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker kill <pid>
 ```
 
-残ったプロセスが終端の作業項目のworktreeを使っていると、作業領域の掃除はそのworktreeを消さずに飛ばす。
+残ったプロセスが掃除の対象のworktreeを使っていると、作業領域の掃除はそのworktreeを消さずに飛ばす。
 このときConsoleの**要対応**に`cleanup_worktree_busy`が残る。
 載ったプロセスを止めれば、次の掃除で消える。
 

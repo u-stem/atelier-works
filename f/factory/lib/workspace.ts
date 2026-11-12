@@ -1766,6 +1766,7 @@ async function discardUnverifiedWorktree(opts: {
   readonly run: CommandRunner;
   readonly repoDir: string;
   readonly dir: string;
+  readonly forceLocked?: boolean;
   readonly home?: string;
   readonly path?: string;
   readonly fs: WorktreeFsDeps | undefined;
@@ -1794,6 +1795,19 @@ async function discardUnverifiedWorktree(opts: {
     opts.fs?.removeDir ??
     ((path: string) => rm(path, { recursive: true, force: true }));
   await removeDir(opts.dir);
+  // `git worktree prune`は、gitがロックした管理情報を消さない。
+  // ロックを外せるのは、呼び出し側が`forceLocked`で消すと決めたときの、ロックされた登録だけにする。
+  // ディレクトリを消した後の登録にも、`unlock`は効く。
+  const registered = entries.find((entry) => entry.path === opts.dir);
+  if (opts.forceLocked === true && registered?.lock !== undefined) {
+    const unlock = await opts.run(
+      buildGitArgv(["worktree", "unlock", "--", opts.dir]),
+      { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
+    );
+    if (unlock.exitCode !== 0) {
+      throw gitError("git worktree unlock failed", unlock);
+    }
+  }
   const prune = await opts.run(buildGitArgv(["worktree", "prune"]), {
     cwd: opts.repoDir,
     env: localGitEnv(opts.home, opts.path),
@@ -1847,6 +1861,7 @@ export async function removeWorktree(
           run: opts.run,
           repoDir: opts.repoDir,
           dir: opts.dir,
+          ...(opts.forceLocked === true ? { forceLocked: true } : {}),
           ...(opts.home !== undefined ? { home: opts.home } : {}),
           ...(opts.path !== undefined ? { path: opts.path } : {}),
           fs: opts.fs,
@@ -1924,7 +1939,11 @@ export type WorktreeEntry = {
   readonly lock?: { readonly reason: string | null };
 };
 
-/** 作成の途中で止まったworktreeに、gitが付けるロックの理由。 */
+/**
+ * 作成の途中で止まったworktreeに、gitが付けるロックの理由。
+ * gitは理由を翻訳して書くが、`spawnProcess`は渡した環境変数だけで子プロセスを起動し、
+ * `localGitEnv`は`LANG`・`LC_ALL`を渡さず、workerのDockerfileも設定しないので、gitはCロケールで動き、理由は英語のままである。
+ */
 export const INITIALIZING_LOCK_REASON = "initializing";
 
 /** レビューのworktreeの名前に付く、実行の識別子の形。小文字の16進数の8桁。 */

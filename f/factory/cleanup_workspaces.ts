@@ -23,7 +23,7 @@
 // そのPRに終端でない`pr_review`があれば消さず、無ければディレクトリの更新が期限より古いものだけを消す。
 
 import * as wmill from "windmill-client@1.817.0";
-import { readdir, stat } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { basename } from "node:path";
 import { CheckEnvironmentError } from "./lib/check_sandbox.ts";
 import {
@@ -766,9 +766,12 @@ export type ReviewWorktreeSweepDeps = {
 /**
  * 作業ツリーのディレクトリの更新の時刻(ミリ秒)を返す。
  * シンボリックリンクはたどらず、ディレクトリでなければ例外を投げる。
+ * リンクの先の更新の時刻で、リンク自身の古さを偽らせないためである。
  */
 export async function directoryModifiedAtMs(dir: string): Promise<number> {
-  return (await stat(dir)).mtimeMs;
+  const info = await lstat(dir);
+  if (!info.isDirectory()) throw new Error(`not a directory: ${dir}`);
+  return info.mtimeMs;
 }
 
 /**
@@ -815,6 +818,25 @@ export async function removeStaleReviewWorktrees(
           error: maskSecrets(err instanceof Error ? err.message : String(err)),
         });
       }
+    }
+    if (prNumbers.size === 0) continue;
+    // 使用中の確認は、作業ツリーごとのプロセスのロックファイルを作る。消した後に、管理情報とロックファイルを片付ける。
+    // ロックファイルの親は、消す前の一覧から集める。
+    try {
+      await deps.pruneWorktrees(repoDir);
+    } catch (err) {
+      deps.warn("cleanup: git worktree prune failed", {
+        repo_dir: repoDir,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+    try {
+      await deps.removeOrphanLockFiles(repoDir, worktrees);
+    } catch (err) {
+      deps.warn("cleanup: failed to remove orphaned process lock files", {
+        repo_dir: repoDir,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
     }
   }
   return removed;

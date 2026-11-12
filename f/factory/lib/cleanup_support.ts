@@ -37,11 +37,14 @@ export function requirementsWorktreeDir(
   return `/workspaces/${owner}/${repo}/req-${issueNumber}`;
 }
 
-/** 期限切れの作業項目のうち、作業項目の単位でworktreeを掃除する対象を返す。 */
+/**
+ * 期限切れの作業項目のうち、作業項目の単位でworktreeを掃除する対象を返す。
+ * `pr_review`は含めない。レビュー用のworktreeは、作業項目ではなくworktreeの一覧からPRごとに掃除する。
+ */
 export function staleItemsForWorktreeSweep<T extends { readonly kind: string }>(
   items: readonly T[],
 ): T[] {
-  return [...items];
+  return items.filter((item) => item.kind !== "pr_review");
 }
 
 /**
