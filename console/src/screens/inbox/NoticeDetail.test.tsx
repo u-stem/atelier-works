@@ -198,6 +198,8 @@ describe("NoticeDetail link to the procedure", () => {
   test("puts the link after the commands of the action", () => {
     const html = render(noticeOf("host_action_required"), new Set(), CONFIG);
 
+    // 前提: この種類はコマンドを持つ。無いと、比べる位置が-1になって素通りする。
+    expect(html.lastIndexOf("<code")).toBeGreaterThan(-1);
     expect(html.indexOf(`href="${DOC}#`)).toBeGreaterThan(
       html.lastIndexOf("<code"),
     );

@@ -19,9 +19,12 @@ import {
 /** `docs/operations.md`の本文。ファイルの読み込みは1回にする。 */
 const OPERATIONS_DOC = await Bun.file("docs/operations.md").text();
 
-/** `heading`の行から、`next`に合う次の見出しの前までを返す。 */
+/** `heading`の行から、`next`に合う次の見出しの前までを返す。見出しが無ければ例外を投げる。 */
 function sectionOf(heading: string, next: RegExp): string {
   const start = OPERATIONS_DOC.indexOf(heading);
+  if (start === -1) {
+    throw new Error(`docs/operations.md has no heading: ${heading}`);
+  }
   const rest = OPERATIONS_DOC.slice(start + 1);
   const end = rest.search(next);
   return end === -1 ? rest : rest.slice(0, end);
