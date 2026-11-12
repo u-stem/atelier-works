@@ -745,6 +745,7 @@ export const IMPLEMENT_PROTECTED_EXACT_PATHS: readonly string[] = [
  * (gitleaksの設定、ほかのランタイム・ツールチェーンのバージョン指定、
  * パッケージマネージャーの設定とロックファイル、ツールの設定モジュールとrcファイル、
  * タスクランナー、`scripts`に限らず`package.json`全体)。
+ * Biomeの設定(`biome.json`、`biome.jsonc`)も加える。型アサーションの禁止を含むlintの規則を決めるため。
  */
 export const IMPLEMENT_PROTECTED_BASENAME_PATTERNS: readonly RegExp[] = [
   ...FORBIDDEN_BASENAME_PATTERNS,
@@ -759,6 +760,7 @@ export const IMPLEMENT_PROTECTED_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.(eslintrc|babelrc|prettierrc)(\..*)?$/,
   /^(Makefile|[Jj]ustfile|Taskfile\.ya?ml|turbo\.json|nx\.json|deno\.jsonc?|CODEOWNERS|\.pre-commit-config\.yaml)$/,
   /^package\.json$/,
+  /^biome\.jsonc?$/,
   // JS以外のロックファイルとマニフェスト。インストール時に、記載された
   // ビルドスクリプトや`setup.py`が実行され、固定したものが取得される。
   /^(uv|poetry)\.lock$/,

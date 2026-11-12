@@ -1200,7 +1200,7 @@ Claudeが書き換えた`mise.toml`や`package.json`のscriptsをworkerで実行
 | gitleaks | `.gitleaksignore`、`.gitleaks.toml` |
 | ランタイムのバージョン | `.python-version`、`.nvmrc`、`rust-toolchain` |
 | パッケージマネージャー | `.yarnrc`、`.pnpmfile.cjs`、JavaScriptのlockfile、すべての`package.json` |
-| ツールの設定 | `*.config.[cm][jt]s`、`.eslintrc`、`.babelrc`、`.prettierrc` |
+| ツールの設定 | `*.config.[cm][jt]s`、`.eslintrc`、`.babelrc`、`.prettierrc`、`biome.json`、`biome.jsonc` |
 | タスクランナーなど | `Makefile`、`Justfile`、`Taskfile.yml`、`turbo.json`、`nx.json`、`deno.json`、`CODEOWNERS`、`.pre-commit-config.yaml` |
 | JavaScript以外のlockfileとmanifest | `uv.lock`、`poetry.lock`、`Pipfile`、`pyproject.toml`、`setup.py`、`setup.cfg`、`requirements*.txt`、`Cargo.toml`、`Cargo.lock`、`go.mod`、`go.sum`、`Gemfile`、`composer.json`、`composer.lock` |
 
