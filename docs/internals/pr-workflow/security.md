@@ -87,6 +87,10 @@ flow.yamlの式が`JSON.stringify(...)`で作り、受け取るstepが`parseUntr
 - draw.ioのビューアの固定: `console/drawio-viewer.json`
 - 固定を書き換えるPRを作る側: `f/factory/drawio_viewer_bump*`と、それが使う`f/factory/lib/`の3ファイル
 - 固定を強制し、配信物を作って検査する側: `console/scripts/`の一部、`console/vite.config.ts`、`scripts/check-console-lockfile.ts`
+- workerの依存をルートの監査にそろえる検査: `scripts/check-script-locks.ts`。
+  書き換えられると、`.script.lock`がルートの`bun.lock`からずれても止まらず、workerの依存が監査から外れるため
+- dependabotの設定: `.github/dependabot.yml`と別名の`.github/dependabot.yaml`。
+  `ignore`を書き換えられると、更新のPRが開かれなくなるため
 - 配信の設定: `infra/Caddyfile`
 - 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
 - scriptの定義の`lock`の参照先を固定する契約テスト: `tests/lib/script_yaml_lock_contract.test.ts`
@@ -536,7 +540,7 @@ PRの修正は、すでにあるPRのheadにpushするので、当たったらpu
 
 | 項目 | 理由 |
 | --- | --- |
-| `.github/`の全体 | workflowに加え、dependabotの更新元とレビューの担当(CODEOWNERS)を決めるため。PRの修正の一覧は、workflowsとactionsだけを止める |
+| `.github/`の全体 | workflowに加え、dependabotの更新元とレビューの担当(CODEOWNERS)を決めるため。PRの修正の一覧は、workflowsとactionsと、dependabotの設定(`.github/dependabot.yml`と`.github/dependabot.yaml`)だけを止める |
 | `infra/`の全体 | workerのイメージとcomposeの定義で、変更はホスト側で`mise run up`するまで反映されない。レビューする人が反映の要否を知る必要があるため |
 | gitフックと`.yarn/`と`.devcontainer/` | 検査コマンドや開発環境が何を実行するかを決めるため |
 | lockfile、`package.json`の全体、ツールの設定、`.env`系、バージョン指定 | 検査コマンドがインストールや設定の読み込みで実行し、信頼するものを決めるため。PRの修正の一覧は、`package.json`の`scripts`だけを止める |
@@ -567,7 +571,7 @@ dependabotの所見に入るnpm公開者の文と、PRの本文や差分がそ�
 この差の残るリスクは[R-FIX-28](../../security-risks.md#r-fix-28)である。
 
 実装の一覧だけに当たる変更は、通常の回では返信と通知のどちらにも載らない。
-例は、`.github/`のdependabotの設定、`infra/`のCI用のファイル、lockfileである。
+例は、`.github/`のCODEOWNERS、`infra/`のCI用のファイル、lockfileである。
 マージの前に見る人へ、変更が伝わらない分も、この差に含まれる。
 `.devcontainer/`、gitフック、`.yarn/`のように、人の開発環境が開くか操作したときに実行するものは、レビューの前にその人の環境で実行されうる。
 lockfileや`package.json`の`trustedDependencies`も、人がinstallしたときに依存のlifecycle scriptを実行させうる。

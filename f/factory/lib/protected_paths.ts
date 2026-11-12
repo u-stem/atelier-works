@@ -84,6 +84,9 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 依存の無い`lib/`のlockも守らない(後述の「libのlockは入れない」)。
  * 固定を強制する側も同じ理由で守る。ビューアの照合と取得、配信物の一覧(manifest.json)の作成、
  * lockfileの検査のスクリプトは、書き換えられると検査をすり抜けて配信物に混ざる。
+ * `.script.lock`をルートのbun.lockと照らす検査(`scripts/check-script-locks.ts`)も、書き換えられると
+ * workerの依存がルートの監査から外れるので守る。
+ * dependabotの設定(`.github/dependabot.yml`と別名の`.yaml`)も守る。`ignore`を書き換えられると、更新のPRが開かれなくなる。
  * `asset-name.ts`は照合したビューアの書き込み先の名前を決め、`vite.config.ts`は
  * 組み立ての途中で任意のコードを動かして配信物に書ける。
  * `scripts/ci-scope.ts`は、CIがどのジョブを動かすかを決める。書き換えられると、検査のジョブを
@@ -359,6 +362,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/scripts/manifest.ts",
   "console/scripts/write-manifest.ts",
   "scripts/check-console-lockfile.ts",
+  "scripts/check-script-locks.ts",
+  ".github/dependabot.yml",
+  ".github/dependabot.yaml",
   "scripts/ci-scope.ts",
   "scripts/check-coverage.ts",
   "tests/scripts/check_coverage.test.ts",
