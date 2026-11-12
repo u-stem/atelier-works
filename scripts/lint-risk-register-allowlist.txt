@@ -8,6 +8,7 @@
 AGENTS.md 1da5b2ab208f8724 pointer 受け入れたセキュリティのリスクは、PR本文の「残るリスク」に理由を1文で書く。 
 docs/architecture.md dc7e5a91e0da599e pointer poll_dependabotが10分ごとに、dependabotが開いた依存の
 docs/coding-guidelines.md 0fa9cd8e04d2c28c pointer ファイルを問わず、禁止、止める基準、確認の省略の範囲を緩める文言を足すか変えた。
+docs/coding-guidelines.md 0ab576bf14c81318 pointer check:changedは、scripts/check-changed.tsが
 docs/internals/audit.md 9aa4fc2412f525fe pointer 工程5の監査が、いつ起動し、何を集め、何を検査して保存するかを定める仕様である。
 docs/internals/check-sandbox.md 7f46256d96a7ccc6 mechanism 前提の確かめは、findで/と/dev/shmからたどり、誰でも書き込めるもの(
 docs/internals/check-sandbox.md cd9984062d344779 operational 枠を持たない走査のランダムな名前(scan-<uuid>.linksとscan-
@@ -51,10 +52,10 @@ docs/internals/github-collect.md d5d3d6117bb98866 mechanism gh search、--search
 docs/internals/holds.md 123dd5b35b17c2e0 pointer 安全策と残るリスクはこの文書の「保留」に書く。
 docs/internals/holds.md 9b98c0759e3e1460 safe-side コメントの投稿などの書き込みのメソッドも、保留が有効な間は止まる。 安全側に倒す
 docs/internals/holds.md a812c4dbc1b6219e pointer 迂回のための環境変数は設けない。 残るリスクはこの文書の「保留」に書く。
-docs/internals/holds.md 9ee9de65b168eece mechanism findの実行される側は、各実行系の式の、;か+までの区間の先頭の語である。 式
+docs/internals/holds.md 8ff2897723fd42ac mechanism findの実行される側は、各実行系の式の、;か+までの区間の先頭の語である。 式
 docs/internals/holds.md 90d7ba3159a869c6 safe-side この2つの規則は、次の分類を誤検知として受け入れる。 語を足す文脈の後ろの、集合
 docs/internals/holds.md b755ddae4da5e57f pointer 検出は文字列を読むヒューリスティックで、まれな入力では見逃しが起こる。 見逃しの
-docs/internals/holds.md ed8be7d7d0e8f878 safe-side 保留の操作と、凍結のCLIでの端末の確認を通る書き込みは、scripts/cla
+docs/internals/holds.md b7d2d11e8a95081d safe-side 保留の操作と、凍結のCLIでの端末の確認を通る書き込みは、scripts/cla
 docs/internals/host-apply.md 2d93c0c3ce0fe1ae pointer 親のディレクトリの鎖とACLの扱いは、置き場の残るリスクにある。
 docs/internals/host-apply.md cff9ee08e1363b40 pointer lockは消さない常設のファイルで、人も移さない・消さない(復旧できないunsa
 docs/internals/host-apply.md 00929355fdf00910 pointer 取得の引数は、protocol.allowをneverにしたうえで、protoc

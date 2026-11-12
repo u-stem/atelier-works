@@ -139,7 +139,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-cred-01"></a>R-CRED-01 | 記録が古い明示でないリポジトリの人のPRは、収集の鮮度の監視が通知するまで見つからず、`gh_repos`に行が無い明示でないリポジトリの人のPRは、通知なしに見送る。第三者が1000件超のPRで一覧を読む明示リポジトリを埋めると、5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。第三者が埋める経路が当たる条件は、対象のリポジトリが明示リポジトリで、公開されていることなので、受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-02"></a>R-CRED-02 | Actions: Read-onlyの権限は選んだ全リポジトリの実行のログとartifactも読め、`github_token`はConsole用workerも読むので、漏れたときの影響は、Contentsの読み書きに加えて、ログとartifactを読まれる分だけ広がる。ログとartifactには秘密値を入れない。漏れたときの影響が広がる分は、残るリスクとして受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-03"></a>R-CRED-03 | 残るリスクとして、トレーラーはcommit本文の照合なので、リポジトリへ書ける人は偽れる。偽ったcommitだけのPRは、「Factoryが作ったPR」として自動で直す対象になりうる。対象のPRは、PATのアカウントが作った、Factoryのブランチの形のPRに限る。書き込める人は、ほかの手段でも同じPRを書き換えられるので、受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
-| <a id="r-cred-04"></a>R-CRED-04 | 残るリスクとして、第三者が1000件超のPRで、REST一覧を読むリポジトリを埋めることがある。REST一覧を読む間は、毎回10ページを読み、PATのrate limitの枠を1リポジトリにつき1時間で約120リクエスト使う。1回の実行は、10ページ、予算120秒、rate limitでの停止で区切る。条件は、対象のリポジトリが作業項目、競合の行、明示リポジトリのどれかに入り、公開されていることなので、受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
+| <a id="r-cred-04"></a>R-CRED-04 | 残るリスクとして、第三者が1000件超のPRで、REST一覧を読むリポジトリを埋めることがある。このとき5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。1回の実行に、1リポジトリ10ページ、予算120秒、rate limitでの停止という上限がある。条件は、対象のリポジトリが作業項目、競合の行、明示リポジトリのどれかに入り、公開されていることなので、受け入れる。1回の実行の上限(10ページ、予算120秒、rate limitでの停止)があるので、受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-05"></a>R-CRED-05 | 残るリスクとして、次のPRを拾えなくなる。作業項目も競合の行も無く、表も古い、明示でないリポジトリにあるFactoryのPRである。読めない間は、収集の鮮度の監視が通知するまで、知らせずに見送る。検索へ戻す設定は無い。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-06"></a>R-CRED-06 | 人がIssueの末尾に書き足すと、目印が最後の行でなくなり、再試行のときに見つからず、Issueが重複して起票される。書き足せるのは、リポジトリのIssueを編集できる人に限る。受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-07"></a>R-CRED-07 | 目印を偽造して、作成済みのIssueとして再利用させる経路があり、実際には付いていないラベルが付いた扱いになりうる。偽造できるのは、PATのアカウントとしてIssueを作る人と、書き込み権限のある協力者のIssueの書き換えに限る。PATのアカウントとしてIssueを作る経路は、運用者と、親のセッションが同じアカウントで`gh issue create`する経路、`manual_intake_create_issue`である。親のセッションの経路と`manual_intake_create_issue`には、信頼できない文が入りうるので、その文に目印が書かれると偽造になる。受け入れる。偽造できる人は、Factoryのリポジトリに書き込める人で、その人はIssueやPRを直接操作できるためである。 | [GitHubのPAT](security.md#githubのpat) |
@@ -289,7 +289,6 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-host-09"></a>R-HOST-09 | ページ送りは論理行単位である。1行が極端に長い入力は、画面の外へ流れる。 | [承認の門](internals/host-apply.md#承認の門) |
 | <a id="r-host-10"></a>R-HOST-10 | パスが`-`で始まる承認の対象は、gitの引数に渡せないので、`approve`が終了コード1で止まる。 | [承認の門](internals/host-apply.md#承認の門) |
 | <a id="r-host-11"></a>R-HOST-11 | 承認は1回に1件で、前の記録を置き換える。 | [承認の門](internals/host-apply.md#承認の門) |
-| <a id="r-host-56"></a>R-HOST-56 | workerを作り直す前の確認は、dry-runが作り直しを示さない変更を見逃す。イメージだけが変わる更新で、dry-runが`Recreate`を示すかは、確かめていない。示さなければ、workerは確認なしで作り直される。イメージを取得した直後に`mise exec -- bun ./scripts/check-idle.ts`を手で実行すると、dry-runに頼らず確認できる。 | [workerを作り直す前の確認](operations.md#workerを作り直す前の確認) |
 
 ### 置き場の残るリスク
 
@@ -346,6 +345,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-host-50"></a>R-HOST-50 | `plan`はCIを確認しない。`would_converge`は、CIの通過を含まない判定である。 | [ホストの実行役の境界](internals/host-apply.md#ホストの実行役の境界) |
 | <a id="r-host-51"></a>R-HOST-51 | `mise run up`の許可は、自前でビルドした旧イメージの削除を含む。`mise run up`と`mise run deploy`は、終わりに`docker image prune -f --filter label=com.atelier-works.prune=true`を実行する。消えるのは、ラベルが付いた、タグの無いイメージだけで、他のイメージ、ボリューム、コンテナ、ビルドキャッシュには触れない。コマンドは固定で引数を受けないが、ラベルを付けるのは`infra/docker-compose.yml`の`build.labels`なので、守りは保護パスと人のマージである。 | [ホストの実行役の境界](internals/host-apply.md#ホストの実行役の境界) |
 | <a id="r-host-52"></a>R-HOST-52 | 取得した浮動タグのイメージ(`postgres:18`など)の旧版と、ビルドキャッシュは、掃除の対象外である。ラベルを持たないイメージを、`mise run up`は消さないためである。ラベルを足す前にビルドした旧イメージと、ラベルを足した最初のビルドで置き換わる1つ前の版も、ラベルが無いので対象外である。ディスクを使い続けるので、増えたときは人が手で掃除する。 | [ホストの実行役の境界](internals/host-apply.md#ホストの実行役の境界) |
+| <a id="r-host-56"></a>R-HOST-56 | workerを作り直す前の確認は、dry-runが作り直しを示さない変更を見逃す。イメージだけが変わる更新で、dry-runが`Recreate`を示すかは、確かめていない。示さなければ、workerは確認なしで作り直される。 | [workerを作り直す前の確認](operations.md#workerを作り直す前の確認) |
 
 ### ホストの反映の印
 
@@ -512,7 +512,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-inv-16"></a>R-INV-16 | 観測の中の予定外の読み出しは、実行が終わってから、transcriptで見つける。1回の実行の途中で止める手段は無い。本物の秘密を読ませない保証は、次の3つに頼る。固定のプロンプト、読み出しを塞ぐ一覧、実行の後に止める検査である。 | [調査の隔離](internals/investigate.md#調査の隔離) |
 | <a id="r-inv-17"></a>R-INV-17 | 出力用のツール名の綴りに、秘密の断片が載りうる。目印の値と名前、32桁以上の16進の並び、既知の秘密の形は置き換えるが、それ以外の短い断片は、名前の形に合えば残る。断片を載せるには、モデルが先に予定外の`tool_use`で秘密を読む必要がある。その場合は、名前を結果に並べないので、断片は残らない。外に触れる判定を抜けた読み出しがあると、この前提が崩れる。 | [調査の隔離](internals/investigate.md#調査の隔離) |
 | <a id="r-inv-18"></a>R-INV-18 | 測定は1時点の結果である。Claude Codeの版か起動の形が変われば、関門が閉じ、測り直しになる。worker imageと、マウントの変更は、証拠に入らないので、測り直しにならない。 | [調査の隔離](internals/investigate.md#調査の隔離) |
-| <a id="r-inv-19"></a>R-INV-19 | 古い版の測定のscriptをハッシュで実行すれば、合格のジョブの記録を作れる。デプロイできる者と、rootで動くジョブ(superuserのDB接続を持つ)も、ジョブの記録を作れる。uidを分けるまでは、デプロイ済みのコード全体と同じ信頼の範囲に含める。scriptのハッシュの照合は入れない。受け入れる。 | [調査の隔離](internals/investigate.md#調査の隔離) |
+| <a id="r-inv-19"></a>R-INV-19 | 古い版の測定のscriptをハッシュで実行すれば、合格のジョブの記録を作れる。デプロイできる者と、rootで動くジョブ(superuserのDB接続を持つ)も、ジョブの記録を作れる。uidを分けるまでは、デプロイ済みのコード全体と同じ信頼の範囲に含める。scriptのハッシュの照合は入れない。 | [調査の隔離](internals/investigate.md#調査の隔離) |
 | <a id="r-inv-20"></a>R-INV-20 | 測定を動かす主体と、関門を呼ぶ主体が、同じ範囲のジョブの記録を読めることを前提にする。見える範囲が違うと、閉じる理由が`proof_unreadable`か`proof_missing`になる。 | [調査の隔離](internals/investigate.md#調査の隔離) |
 | <a id="r-inv-21"></a>R-INV-21 | ジョブの記録の保持期間(約30日)が切れると、測定のジョブが見えなくなり、関門が閉じる。閉じるのは安全な側である。 | [調査の隔離](internals/investigate.md#調査の隔離) |
 | <a id="r-inv-22"></a>R-INV-22 | 関門が塞ぐのは、`runInvestigateClaude`を通る起動だけである。`runClaude`を直接呼ぶ経路は`lib/claude.ts`にあり、合格の証拠の関門では塞がない。`lib/claude.ts`は保護パスなので、変更には人の承認が要る。調査の4つのstepと支援のlibが`runClaude`を名指ししないことは、保護されたテストが固定する。別のファイルから名指しする経路は、このテストでは見つからないので、PRのレビューで見る。 | [調査の隔離](internals/investigate.md#調査の隔離) |
@@ -627,7 +627,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-hold-27"></a>R-HOLD-27 | `.claude/settings.local.json`の`disableAllHooks`は、`merge-guard`を含むすべてのフックを止める。ファイルはgitignore済みで、置くのは人である。範囲外の既存の穴として受け入れる。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-28"></a>R-HOLD-28 | ホストの実行役(`scripts/host_apply/`)の反映は、`merge-guard`が覆わない。実行役は承認の門を別に持つため、受け入れる。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-29"></a>R-HOLD-29 | `merge-guard`の読みは、`mise exec`で包んだ子プロセスを使う。子の環境で自動インストールを止めるので、ネットワークには出ない。`mise`のツールが入っていなければ、読めないものとして拒否される。 | [保留](internals/holds.md#保留) |
-| <a id="r-hold-30"></a>R-HOLD-30 | 保留の操作と、凍結のCLIでの端末の確認を通る書き込みを止める`hold-guard.ts`の拒否は、語の字面で判定するので、実行時に組んだ名前、別名、変数で組んだパス、前置きの無いシェルやインタプリタが受け取るコード、保留のコードを書き換えてから起動する形などは止めず、受け入れる誤検知も残る。止めるのは、誤操作と、拒否を知らない呼び出しで、境界ではない。保留は、BashとDockerを持つ主体がpsqlで直接書ける。 | [保留](internals/holds.md#保留) |
+| <a id="r-hold-30"></a>R-HOLD-30 | 保留の操作と、凍結のCLIでの端末の確認を通る書き込みを止める`hold-guard.ts`の拒否は、語の字面で判定するので、実行時に組んだ名前、別名、変数で組んだパス、前置きの無いシェルやインタプリタが受け取るコード、保留のコードを書き換えてから起動する形などは止めず、受け入れる誤検知も残る。`find`の後ろの`node`、`tsx`、`ts-node`、`deno`は最初のオペランドをファイルとして実行するので、探索先に検査の道具と同じ名前のファイルがあると、それが実行され、この形も新しいファイルを書いて実行する形として受け入れる。フックの時点では、名前からしか実体を判定できないので、`sh`の実体がzshに設定された環境、`ksh`がmkshやpdkshの環境、Linuxの実体では、判定が食い違いうる。止めるのは、誤操作と、拒否を知らない呼び出しで、境界ではない。保留は、BashとDockerを持つ主体がpsqlで直接書ける。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-31"></a>R-HOLD-31 | 保留の`reason`と`holder`は、psqlのプロセスの引数に現れ、一覧に表示される。秘密を書かない前提である。一覧は、`target`、`reason`、`holder`の制御文字を空白にして表示する。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-32"></a>R-HOLD-32 | 保留で待つPRが増えても取得の通知は周回ごとに種類ごとの1件に保つが、監視の対象から外れたリポジトリの通知は、読まないので解決しない。保留は1行が最長24時間なので、受け入れる。 | [保留](internals/holds.md#保留) |
 
@@ -684,7 +684,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
-| <a id="r-fix-03"></a>R-FIX-03 | 固定していないgitの設定(`url.*.insteadOf`、`filter.*`、`merge.*.driver`、`core.alternateRefsCommand`、`core.worktree`など)は、そのまま読まれ、プログラムを実行したり作業ツリーを変えたりしうる。`git gtr new`のcheckoutは`GH_TOKEN`を持つ環境で動くので、`.git/config`の`filter.<名前>.smudge`や`process`を、PRの内容の`.gitattributes`が指名すると、`GH_TOKEN`を読めるプログラムが動く。検査コマンドは検査用のユーザーで動き、main cloneの`.git`に書き込めないので、検査コマンドが`.git/config`を書き換えて、`GH_TOKEN`を持つgitにプログラムを実行させる経路は無い。根本の対処は、ネットワーク操作とcheckoutを分け、checkoutを`localGitEnv`で行うことで、この対処はまだ入れていない。 | [gitが読む設定を限る](internals/pr-workflow.md#gitが読む設定を限る) |
+| <a id="r-fix-03"></a>R-FIX-03 | 固定していないgitの設定(`url.*.insteadOf`、`filter.*`、`merge.*.driver`、`core.alternateRefsCommand`、`core.worktree`など)は、そのまま読まれ、プログラムを実行したり作業ツリーを変えたりしうる。`git gtr new`のcheckoutは`GH_TOKEN`を持つ環境で動くので、`.git/config`の`filter.<名前>.smudge`や`process`を、PRの内容の`.gitattributes`が指名すると、`GH_TOKEN`を読めるプログラムが動く。検査コマンドは検査用のユーザーで動き、main cloneの`.git`に書き込めないので、検査コマンドが`.git/config`を書き換えて、`GH_TOKEN`を持つgitにプログラムを実行させる経路は無い。根本の対処は、ネットワーク操作とcheckoutを分け、checkoutを`localGitEnv`で行うことである。 | [gitが読む設定を限る](internals/pr-workflow.md#gitが読む設定を限る) |
 
 ### PRの状態とheadの確認
 
