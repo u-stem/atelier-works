@@ -698,7 +698,7 @@ IDが一致したことを確かめたい処理は、`id_checked`を見る。
 ### 読む側の判定
 
 詳細の行を読む処理は、閾値で判断を止める判定を備えなければならない。
-残るリスクは[R-PER-09](../security-risks.md#r-per-09)である。
+打ち切りや失敗のリポジトリの古い行は、`usable`が真のまま残るためである。
 判定は`lib/gh_collect_read.ts`が持つ。
 通信とDBを持たない純粋関数で、`poll_dependabot`、`watch_pr_conflicts`、`poll_issues`、`poll_prs`、`watch_pr_ci`が使う。
 
@@ -1260,7 +1260,7 @@ Discordの説明には、閾値、最後の成功(JST)、最新の実行の原�
 ## 既知の限界
 
 - `repo_allowlist`が空のとき、見えないリポジトリを検出できない。
-- 締め切りやGitHubの失敗が続くときの残るリスクは、[R-PER-07](../security-risks.md#r-per-07)である。
+- 締め切りやGitHubの失敗が続くと、リポジトリの記録が前回のまま凍る。
 - 「All repositories」のトークンは、集める範囲より広く読める。
 - loginに`_`を含む所有者は集めない。
 - 先頭が`.`のリポジトリ名(`.github`など)は集めない。

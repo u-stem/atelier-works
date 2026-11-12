@@ -182,7 +182,7 @@ symlinkはたどらずリンク自体を消し、`.git`を持たない項目や�
 作業ディレクトリの検査より前なので、証拠が無いときは、ほかの検査にも進まない。
 `runClaude`を直接呼ぶ経路は`lib/claude.ts`にあり、この証拠では塞がない。
 `lib/claude.ts`は保護パスで、変更は人の承認を経て反映される。
-残るリスクは[R-INV-22](../security-risks.md#r-inv-22)である。
+調査の4つのstepと支援のlib(`lib/investigate_flow.ts`)が`runClaude`を名指ししないことは、保護されたテストが固定する。
 テストは`tests/scripts/investigate_flow.test.ts`である。
 
 証拠の型は`lib/isolation_proof.ts`にある。
@@ -957,6 +957,8 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   測定は、始める前に稼働中の調査をDBで確かめ、あれば断る。
   調査の側は、登録のstepと生成のstepが、測定のジョブが待ちか実行中でないことを確かめ、あれば断る。
   確認は、測定の開始時と、調査の登録と生成の開始時に、1回ずつである。
+  確認と掃除の間に相手が始まる競合は残る。
+  受け入れる。
   残るリスクの表の[R-INV-26](../security-risks.md#r-inv-26)にあたる。
 - [R-INV-27](../security-risks.md#r-inv-27)
 - [R-INV-28](../security-risks.md#r-inv-28)
