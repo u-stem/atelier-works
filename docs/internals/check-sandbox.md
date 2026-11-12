@@ -80,8 +80,8 @@ workerの同時実行数(nativeでないworkerは1)に、片付けられず飛�
 前提を満たさずに止まった実行は、検査の失敗として数えず、ラウンドも記録しない。
 PR修正の完了のステップが、commitの前に同じ理由で止まったときも、ラウンドを記録しない。
 実装は人の対応待ち、PR修正は`blocked`で止まる。
-イメージの問題なら、要対応の通知`host_action_required`で`mise run up`を求める([運用](../operations/deploy.md#fとworkerのイメージを両方変えたとき))。
-稼働中のworkerの問題なら、要対応の通知`check_runtime_unsafe`で、パスを閉じるか、workerのコンテナを作り直すよう求める([運用](../operations/deploy.md#稼働中のworkerが検査の前提を満たさないとき))。
+イメージの問題なら、要対応の通知`host_action_required`で`mise run up`を求める([更新の反映の運用](../operations/deploy.md#fとworkerのイメージを両方変えたとき))。
+稼働中のworkerの問題なら、要対応の通知`check_runtime_unsafe`で、パスを閉じるか、workerのコンテナを作り直すよう求める([更新の反映の運用](../operations/deploy.md#稼働中のworkerが検査の前提を満たさないとき))。
 確かめた結果は、1回の実行の間だけ覚える。
 
 9で共有の一時ディレクトリを消し切れなくても、検査は失敗にしない。
@@ -558,7 +558,7 @@ main cloneの`.git`はrootが所有する。
   手順は[運用](../operations.md#検査の枠の記録を片付ける)にある。
 - 検査を枠のユーザーで動かす前にrootが作った、誰でも書けるworktreeやファイルが、`/workspaces`と`/var/lib/factory`に残っていない。
   実行時の前提の確かめはボリュームの中に入らないので、残っていても止まらず、検査用のユーザーがそこへ書き込めるためである。
-  導入のときに、イメージを作り直す前と後に、ボリュームの中を走査して閉じる([運用](../operations/deploy.md#稼働中のworkerの状態の確かめ方))。
+  導入のときに、イメージを作り直す前と後に、ボリュームの中を走査して閉じる([更新の反映の運用](../operations/deploy.md#稼働中のworkerの状態の確かめ方))。
 
 残るリスクは次のとおりである。
 

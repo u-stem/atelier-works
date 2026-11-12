@@ -51,13 +51,13 @@ tag`periodic`を付けるのは、ファイル、独自イメージの道具、c
 検出器(`detect_schedule_failures`)は、外部の死活監視に生存を報告するため、`heartbeat_url`も読む。
 `claude_oauth_token`、`github_token`、`wmill_token`は届かせない。
 依存するジョブは、defaultのworkerで動かす。
-tag`periodic`のジョブが13分以上待つと、defaultのworkerで動く`self_update`が検知して通知する([運用](operations/monitoring.md#定期ジョブ用のworkerの検知を確かめる))。
-逆に、defaultのworkerが止まったことは、このworkerで動く`default_worker_watch`が5分ごとに検知して通知する([運用](operations/monitoring.md#defaultのworkerの検知を確かめる))。
+tag`periodic`のジョブが13分以上待つと、defaultのworkerで動く`self_update`が検知して通知する([workerとスケジュールの監視の運用](operations/monitoring.md#定期ジョブ用のworkerの検知を確かめる))。
+逆に、defaultのworkerが止まったことは、このworkerで動く`default_worker_watch`が5分ごとに検知して通知する([workerとスケジュールの監視の運用](operations/monitoring.md#defaultのworkerの検知を確かめる))。
 止まったworkerの中のscriptは動かないので、片方だけが止まるときは、もう一方のworkerで動くscriptが拾う。
 両方が止まる障害は拾えない。
 scheduleの失敗を拾う検出器(`detect_schedule_failures`)も、このworkerで動かす。
 defaultのworkerで動かすと、長いジョブが枠を塞ぐ間、失敗の検知が止まるためである。
-検出器が止まったことは、`default_worker_watch`が同じ回で検知して通知する([運用](operations/monitoring.md#scheduleの失敗の検出))。
+検出器が止まったことは、`default_worker_watch`が同じ回で検知して通知する([workerとスケジュールの監視の運用](operations/monitoring.md#scheduleの失敗の検出))。
 上流のWindmillイメージで動き、nativeでないworkerなので、同時に動かすジョブは1つである。
 1件のジョブが止まっている間は、ほかのジョブが待つため、このworkerで動かすscriptには`timeout`を付ける。
 メモリの上限は1024Mである。
@@ -108,7 +108,7 @@ pipelineフローは承認依頼を記録した時点で終わり、人の決定
 人の決定は、`design_apply`が作業項目に反映する。
 放置された依頼の期限切れと、反映されなかった決定の起動し直しは、`poll_issues`の承認待ちの走査(`approval_sweep`)が行う。
 設計工程は既定で無効で、設定で開ける。
-開け方は[運用](operations.md)の「設計工程を有効にする」に書く。
+開け方は[設計工程と実装フローの運用の「設計工程を有効にする」](operations/stages.md#設計工程を有効にする)に書く。
 仕組みは[設計書の生成](internals/design.md)に書く。
 
 ```mermaid
@@ -486,7 +486,7 @@ IssueやPRには何も書かず、ラベルにも触れない。
 cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。
 各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。
 このWindmillはスケジュールの失敗時の呼び出し(`on_failure`)を呼ばないので、どのスケジュールにも`on_failure`を設定しない。
-スケジュールの失敗は、`detect_schedule_failures`がジョブ履歴から拾って記録し、通知する([運用](operations/monitoring.md#scheduleの失敗の検出))。
+スケジュールの失敗は、`detect_schedule_failures`がジョブ履歴から拾って記録し、通知する([workerとスケジュールの監視の運用](operations/monitoring.md#scheduleの失敗の検出))。
 
 生成した表の内容欄より細かい処理の対象は次のとおり。
 
@@ -865,7 +865,7 @@ Windmillのジョブの環境変数に`WM_SCHEDULE_PATH`があれば`schedule`�
 スケジュールのパス(`schedule_path`)は値を出す。
 `WM_JOB_KIND`、`WM_PARENT_JOB`、`WM_ROOT_FLOW_JOB_ID`は、値の有無だけを出す。
 出す名前は`has_job_kind`、`has_parent_job`、`has_root_flow_job`である。
-起動の種類は`deployments`には残さず、判定が実機で正しいかの確かめ方は[運用](operations.md)の「自己更新の起動の種類を確かめる」に書く。
+起動の種類は`deployments`には残さず、判定が実機で正しいかの確かめ方は[workerとスケジュールの監視の運用の「自己更新の起動の種類を確かめる」](operations/monitoring.md#自己更新の起動の種類を確かめる)に書く。
 
 記録には、前回の版から今回の版までの間にmainへマージされたPRの番号、題名、作り手、リンクを含める。
 PRは、self cloneの`git log --first-parent`にあるマージのコミットから取り出す。
@@ -1021,7 +1021,7 @@ Console用のworkerの確認も、受けていない通知は上限の10秒の�
 - 検出器が、打ち切られた回をジョブ履歴で`canceled_by`が`timeout`の取り消しとみなして失敗に数え、最大5分遅れてDiscordの`job_failed`で知らせる。
   3回続くと要対応の`schedule_failing`に残す。
   人が止めた回は数えない。
-  `canceled_by`が`timeout`になるかは確かめていない([運用](operations.md)の「自己更新の打ち切りを確かめる」)。
+  `canceled_by`が`timeout`になるかは確かめていない([workerとスケジュールの監視の運用の「自己更新の打ち切りを確かめる」](operations/monitoring.md#自己更新の打ち切りを確かめる))。
 - ユーザー名が`timeout`の人が取り消した回は、時間切れと見分けられず、失敗に数えられる。
 
 `console/`の変更は`self_update`の対象ではない。
@@ -1139,7 +1139,7 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 設定で明示したリポジトリは、表を使えないとき、RESTのPRの一覧で読む。
 `owners`に無い所有者の`factory_repo`も、一覧で読む。
 候補は、表の行も一覧の要素も、PRを読み直して作者、fork、ブランチを確かめてから記録する。
-トークンの作り方と扱いは[セキュリティ](security.md#収集用の読み取りトークン)に、運用は[運用](operations/collect.md#収集の運用)に、記録の意味と限界は[GitHubの収集](internals/github-collect.md)に書く。
+トークンの作り方と扱いは[セキュリティ](security.md#収集用の読み取りトークン)に、運用は[GitHubの収集の運用](operations/collect.md#収集の運用)に、記録の意味と限界は[GitHubの収集](internals/github-collect.md)に書く。
 
 ## 工程5の監査
 
@@ -1164,7 +1164,7 @@ Consoleの**レポート**の**今すぐ監査**からも起動できる。
 3. 生成: 隔離の関門を確かめて、読み出し専用のClaudeで調べ、結果から投稿する本文を作る。
 4. 投稿: 本文に秘密値の検査をもう一度掛けて、Issueへ投稿する。
 
-手順は[運用](operations/features.md#調査を実行する)に、隔離と本文の検査は[調査の隔離の内部仕様](internals/investigate.md#調査の入口)に、状態の動きは[作業項目の状態とリース](internals/work-items.md#調査の作業項目)に書く。
+手順は[機能ごとの運用](operations/features.md#調査を実行する)に、隔離と本文の検査は[調査の隔離の内部仕様](internals/investigate.md#調査の入口)に、状態の動きは[作業項目の状態とリース](internals/work-items.md#調査の作業項目)に書く。
 
 ## 未実装の機能
 

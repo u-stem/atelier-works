@@ -85,7 +85,7 @@ Consoleの設定タブは、`console_config`の返り値の`design_stage`で、�
 `design_enabled`の参照が、文字列やオブジェクトなど真偽値でない値に解決されると、設定を読む処理は例外で止まる。
 `design_enabled_since`の参照が、日時として読めない値に解決されても、例外にならない。
 その場合は、設計工程が閉じたまま、`design_enabled_ignored`の通知が出る。
-運用の手順は[運用](../operations.md)の「設計工程を有効にする」にある。
+運用の手順は[設計工程と実装フローの運用の「設計工程を有効にする」](../operations/stages.md#設計工程を有効にする)にある。
 
 `design_enabled`が真偽値でないときと、`max_design_attempts`が範囲外のときは、例外にする。
 `max_design_attempts`の範囲は、`design_enabled`が`false`でも検査する。
@@ -923,10 +923,10 @@ Consoleで閉じた`design_enabled`は、全停止の記録に載らないので
 閉じる書き込みは、他の真偽の項目と同じく、`design_enabled`の1キーだけを書く。
 `design_enabled_since`は読んだ値のまま残る。
 残った日時が読めるので、後で人が`design_enabled`だけを`true`に戻すと、日時を書き直す操作なしに設計工程が開く。
-この注意は、確認のダイアログと[運用](../operations.md)の「設計工程を有効にする」が伝える。
+この注意は、確認のダイアログと、運用の手順の[設計工程を有効にする](../operations/stages.md#設計工程を有効にする)が伝える。
 再び開くときは、人が`design_enabled`を`true`にし、`design_enabled_since`に新しい時刻を書く。
 
-subagentと背景のセッションは、この2つを書かない([運用](../operations.md)の「設計工程を有効にする」)。
+subagentと背景のセッションは、この2つを書かない([設計工程と実装フローの運用の「設計工程を有効にする」](../operations/stages.md#設計工程を有効にする))。
 
 安全策には、次の案がある。
 
@@ -1056,7 +1056,7 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   4つとも、画面とテストが入ったので満たしている。
   プレビューの限界は、[設計書のプレビュー](console/security.md#設計書のプレビュー)に書く。
   開けるのは、これらに加えて、運用者が`design_enabled_since`を書いたときだけである。
-  開ける前の実機の確認は、[運用](../operations.md)の「設計工程を有効にする」の手順にある。
+  開ける前の実機の確認は、[設計工程と実装フローの運用の「設計工程を有効にする」](../operations/stages.md#設計工程を有効にする)の手順にある。
   残るリスクの表の[R-DES-29](../security-risks.md#r-des-29)にあたる。
 - Consoleを読める人は、全作業項目の設計書を読める。
   本文は秘密値をマスクした後の文字で、図のXMLはマスクしていない。

@@ -2,6 +2,8 @@
 
 Factoryを動かす人が、日々の作業で何をすればよいかと、通知や失敗にどう対応するかをまとめた手順書である。
 構成と仕組みは[アーキテクチャ](architecture.md)、内部の挙動は`docs/internals/`の各文書を参照する。
+目的ごとの手順の一部は、`docs/operations/`の各文書にある。
+置き場は、末尾の[手順の置き場](#手順の置き場)の表から引ける。
 
 画面の操作は、Factory Console(`/console/`)で行う。
 左のサイドバーの入口は、**要対応**、**作業項目**、**レポート**、**システム**の4つである。
@@ -1496,7 +1498,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](operations/deploy.md#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(2分ごと)が検知し、Discordにも届く |
-| `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が、最初に確かめられなかった時刻から1時間続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
+| `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が、最初に確かめられなかった時刻から1時間続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、[Console用のworkerの検知を確かめる](operations/monitoring.md#console用のworkerの検知を確かめる)の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
 | `periodic_worker_missing` | tag `periodic`のジョブが、予定時刻から13分以上実行されずに待っている。定期ジョブ用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、tag `periodic`を付けた定期ジョブが動かない。Discordにも届く | `docker compose ps windmill_worker_periodic`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run doctor`のカスタムtagが許可されているかを確かめ、`NG`なら`mise run instance:tags`を実行する。許可されていれば、Windmillの画面でtag `periodic`の実行中のジョブとワーカーグループのtagを確かめる。待ちが解けると、自己更新(2分ごと)が自動で解決する |
 | `github_collect_stale` | 設定の所有者の収集が、閾値(`owners`が2人までは25分)を超えて成功していない。本文は`<所有者>:`と空白で始まり、所有者ごとに1件残る。または、所有者の収集は成功していて、一部のリポジトリの記録が閾値を超えて古い。本文は`<所有者>のリポジトリ:`と空白で始まり、所有者ごとに1件残る。または、`repo_allowlist`が空で、`gh_collect_enabled`か`gh_collect_detail_enabled`が`false`である。本文は`<所有者>の収集の無効:`と空白で始まり、所有者ごとに1件残る。Discordにも届く | 通知の説明と、Discordの「次の操作」に従い、[実行の記録の読み方](#実行の記録の読み方)の対処をする。収集が成功するか、`owners`から外すと、自動で解決される。`gh_collect_enabled`を`false`にしたときは、`repo_allowlist`が空でなければ解決される。リポジトリの古さの通知は、対象のリポジトリがすべて、下流が記録を使う閾値の内に戻ると解決される。収集の無効の通知は、両方の設定を`true`に戻すか、`repo_allowlist`に並べると解決される。重なる通知は[収集が止まったときの通知](operations/collect.md#収集が止まったときの通知)にある |
 | `default_worker_missing` | defaultのworkerのqueueに、予定時刻から10分以上実行されずに待つジョブがあり、defaultで動いているジョブが1つも無い。defaultのworkerが居ないか、ジョブを受けられない状態で、flowとscriptが動かない。長いジョブが枠を埋めて後ろのジョブが待つだけのときは出ない。Discordにも届く | `docker compose ps windmill_worker`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、Windmillの画面のWorkers画面で、ワーカーグループdefaultのworkerが生きているかを確かめる。生きていなければ、`docker compose logs windmill_worker`でエラーを確かめる。受けるようになると、定期ジョブ用のworkerで動く確認(5分ごと)が自動で解決する |
@@ -2008,3 +2010,139 @@ workerの`/var/lib/factory/requirements/<owner>/<repo>/issue-<N>/wi-<id>/`以下
 同じIssueの作業項目がすべて消えた後にそのIssueを拾い直すと、サイクルの番号は1から振り直す。
 番号は残っている行の最大値から決めるためである。
 過去の通知やDiscordの履歴にあるサイクルの番号と重なることがある。
+
+## 手順の置き場
+
+目的ごとの手順の一部は、`docs/operations/`の次の文書にある。
+
+| 文書 | 手順 |
+| --- | --- |
+| [GitHubの収集の運用](operations/collect.md) | 収集を有効にして見守る手順と、IssueとPRの発見の元を確かめる手順 |
+| [設計工程と実装フローの運用](operations/stages.md) | 設計工程と実装フローを有効にして使う手順と、止まったときの対処 |
+| [PRのレビューとCIの運用](operations/pr.md) | PRのレビューと修正、mainとPRのCIの監視、PRの競合の検知 |
+| [機能ごとの運用](operations/features.md) | 監査、dependabotの更新、調査、隔離の測定、モデルの使い分け |
+| [workerとスケジュールの監視の運用](operations/monitoring.md) | workerの検知と負荷の記録、スケジュールの失敗の検出、自己更新の打ち切りの確かめ方 |
+| [更新の反映の運用](operations/deploy.md) | 変更の反映、反映の承認、Consoleの反映と戻し |
+| [保留と全停止の運用](operations/stop.md) | 保留の確かめ方、全停止と解除、設定を止める向きに変える操作 |
+
+次の表は、節の名前から置き場を引くためのものである。
+
+| 節 | 置き場 |
+| --- | --- |
+| Issueの発見の元を確かめる | [GitHubの収集の運用の「Issueの発見の元を確かめる」](operations/collect.md#issueの発見の元を確かめる) |
+| PRの発見の元を確かめる | [GitHubの収集の運用の「PRの発見の元を確かめる」](operations/collect.md#prの発見の元を確かめる) |
+| 組織の所有者を足す前の確認 | [GitHubの収集の運用の「組織の所有者を足す前の確認」](operations/collect.md#組織の所有者を足す前の確認) |
+| 設計工程を有効にする | [設計工程と実装フローの運用の「設計工程を有効にする」](operations/stages.md#設計工程を有効にする) |
+| 有効にする前に確かめること | [設計工程と実装フローの運用の「有効にする前に確かめること」](operations/stages.md#有効にする前に確かめること) |
+| 有効にする手順 | [設計工程と実装フローの運用の「有効にする手順」](operations/stages.md#有効にする手順) |
+| 無効にする手順 | [設計工程と実装フローの運用の「無効にする手順」](operations/stages.md#無効にする手順) |
+| 設計の上限と設定の書き損じ | [設計工程と実装フローの運用の「設計の上限と設定の書き損じ」](operations/stages.md#設計の上限と設定の書き損じ) |
+| 設計の承認の反映で止まったとき | [設計工程と実装フローの運用の「設計の承認の反映で止まったとき」](operations/stages.md#設計の承認の反映で止まったとき) |
+| PR修正が設計の不足を返して止まったとき | [設計工程と実装フローの運用の「PR修正が設計の不足を返して止まったとき」](operations/stages.md#pr修正が設計の不足を返して止まったとき) |
+| 実装フローを有効にして使う | [設計工程と実装フローの運用の「実装フローを有効にして使う」](operations/stages.md#実装フローを有効にして使う) |
+| 検査コマンドを設定する | [設計工程と実装フローの運用の「検査コマンドを設定する」](operations/stages.md#検査コマンドを設定する) |
+| 検査枠の走査時間を測る | [設計工程と実装フローの運用の「検査枠の走査時間を測る」](operations/stages.md#検査枠の走査時間を測る) |
+| 取り戻しのACLの一括確認が頼る挙動を確かめる | [設計工程と実装フローの運用の「取り戻しのACLの一括確認が頼る挙動を確かめる」](operations/stages.md#取り戻しのaclの一括確認が頼る挙動を確かめる) |
+| PRができたら | [設計工程と実装フローの運用の「PRができたら」](operations/stages.md#prができたら) |
+| 人の対応待ちになったら | [設計工程と実装フローの運用の「人の対応待ちになったら」](operations/stages.md#人の対応待ちになったら) |
+| 実装フローを再実行するとき | [設計工程と実装フローの運用の「実装フローを再実行するとき」](operations/stages.md#実装フローを再実行するとき) |
+| 実装フローの実行中に避けること | [設計工程と実装フローの運用の「実装フローの実行中に避けること」](operations/stages.md#実装フローの実行中に避けること) |
+| workerを作り直す前の確認 | [設計工程と実装フローの運用の「workerを作り直す前の確認」](operations/stages.md#workerを作り直す前の確認) |
+| PRでレビューと修正を使う | [PRのレビューとCIの運用の「PRでレビューと修正を使う」](operations/pr.md#prでレビューと修正を使う) |
+| レビューを起動する | [PRのレビューとCIの運用の「レビューを起動する」](operations/pr.md#レビューを起動する) |
+| レビューを投入する | [PRのレビューとCIの運用の「レビューを投入する」](operations/pr.md#レビューを投入する) |
+| 修正を起動する | [PRのレビューとCIの運用の「修正を起動する」](operations/pr.md#修正を起動する) |
+| 修正の返信の判断 | [PRのレビューとCIの運用の「修正の返信の判断」](operations/pr.md#修正の返信の判断) |
+| Issue化の提案を承認・却下する | [PRのレビューとCIの運用の「Issue化の提案を承認・却下する」](operations/pr.md#issue化の提案を承認却下する) |
+| 修正を再実行する | [PRのレビューとCIの運用の「修正を再実行する」](operations/pr.md#修正を再実行する) |
+| 修正の差分に秘密情報が見つかったとき | [PRのレビューとCIの運用の「修正の差分に秘密情報が見つかったとき」](operations/pr.md#修正の差分に秘密情報が見つかったとき) |
+| 修正が要件の不足を報告したとき | [PRのレビューとCIの運用の「修正が要件の不足を報告したとき」](operations/pr.md#修正が要件の不足を報告したとき) |
+| PRの状態と人がすること | [PRのレビューとCIの運用の「PRの状態と人がすること」](operations/pr.md#prの状態と人がすること) |
+| ラベルを外した後の追跡 | [PRのレビューとCIの運用の「ラベルを外した後の追跡」](operations/pr.md#ラベルを外した後の追跡) |
+| 人が作ったPRを要件と紐づける | [PRのレビューとCIの運用の「人が作ったPRを要件と紐づける」](operations/pr.md#人が作ったprを要件と紐づける) |
+| 保護パスで止まった回数を数える | [PRのレビューとCIの運用の「保護パスで止まった回数を数える」](operations/pr.md#保護パスで止まった回数を数える) |
+| mainのCIを監視する | [PRのレビューとCIの運用の「mainのCIを監視する」](operations/pr.md#mainのciを監視する) |
+| PRのCIを監視する | [PRのレビューとCIの運用の「PRのCIを監視する」](operations/pr.md#prのciを監視する) |
+| 人のPRの失敗を通知する | [PRのレビューとCIの運用の「人のPRの失敗を通知する」](operations/pr.md#人のprの失敗を通知する) |
+| 人のPRの発見の元を確かめる | [PRのレビューとCIの運用の「人のPRの発見の元を確かめる」](operations/pr.md#人のprの発見の元を確かめる) |
+| 失敗の自動修正を有効にする | [PRのレビューとCIの運用の「失敗の自動修正を有効にする」](operations/pr.md#失敗の自動修正を有効にする) |
+| PRの競合を検知する | [PRのレビューとCIの運用の「PRの競合を検知する」](operations/pr.md#prの競合を検知する) |
+| 競合の監視の発見の元を確かめる | [PRのレビューとCIの運用の「競合の監視の発見の元を確かめる」](operations/pr.md#競合の監視の発見の元を確かめる) |
+| 競合の自動修正を有効にする | [PRのレビューとCIの運用の「競合の自動修正を有効にする」](operations/pr.md#競合の自動修正を有効にする) |
+| 収集の運用 | [GitHubの収集の運用の「収集の運用」](operations/collect.md#収集の運用) |
+| 収集を有効にする | [GitHubの収集の運用の「収集を有効にする」](operations/collect.md#収集を有効にする) |
+| 詳細の収集を有効にする | [GitHubの収集の運用の「詳細の収集を有効にする」](operations/collect.md#詳細の収集を有効にする) |
+| 収集が止まったときの通知 | [GitHubの収集の運用の「収集が止まったときの通知」](operations/collect.md#収集が止まったときの通知) |
+| 設定で止めた収集の通知 | [GitHubの収集の運用の「設定で止めた収集の通知」](operations/collect.md#設定で止めた収集の通知) |
+| 許可リストが空のときの件数の確かめ方 | [GitHubの収集の運用の「許可リストが空のときの件数の確かめ方」](operations/collect.md#許可リストが空のときの件数の確かめ方) |
+| 収集を止める | [GitHubの収集の運用の「収集を止める」](operations/collect.md#収集を止める) |
+| 設計工程のmigrationを戻す | [GitHubの収集の運用の「設計工程のmigrationを戻す」](operations/collect.md#設計工程のmigrationを戻す) |
+| 調査のmigrationを戻す | [GitHubの収集の運用の「調査のmigrationを戻す」](operations/collect.md#調査のmigrationを戻す) |
+| 監査を使う | [機能ごとの運用の「監査を使う」](operations/features.md#監査を使う) |
+| dependabotの更新を設定する | [機能ごとの運用の「dependabotの更新を設定する」](operations/features.md#dependabotの更新を設定する) |
+| 有効にする | [機能ごとの運用の「有効にする」](operations/features.md#有効にする) |
+| グループの更新を有効にする | [機能ごとの運用の「グループの更新を有効にする」](operations/features.md#グループの更新を有効にする) |
+| 候補の元を確かめる | [機能ごとの運用の「候補の元を確かめる」](operations/features.md#候補の元を確かめる) |
+| 初回の実機で確かめること | [機能ごとの運用の「初回の実機で確かめること」](operations/features.md#初回の実機で確かめること) |
+| 無効にする | [機能ごとの運用の「無効にする」](operations/features.md#無効にする) |
+| 人に回ったとき | [機能ごとの運用の「人に回ったとき」](operations/features.md#人に回ったとき) |
+| 調査を実行する | [機能ごとの運用の「調査を実行する」](operations/features.md#調査を実行する) |
+| 調査の入口を開ける設定 | [機能ごとの運用の「調査の入口を開ける設定」](operations/features.md#調査の入口を開ける設定) |
+| 調査を実行する手順 | [機能ごとの運用の「調査を実行する手順」](operations/features.md#調査を実行する手順) |
+| 調査が止まったとき | [機能ごとの運用の「調査が止まったとき」](operations/features.md#調査が止まったとき) |
+| 隔離の測定を実行する | [機能ごとの運用の「隔離の測定を実行する」](operations/features.md#隔離の測定を実行する) |
+| 不合格のときの扱い | [機能ごとの運用の「不合格のときの扱い」](operations/features.md#不合格のときの扱い) |
+| モデルを使い分ける | [機能ごとの運用の「モデルを使い分ける」](operations/features.md#モデルを使い分ける) |
+| バージョンごとの使用量 | [機能ごとの運用の「バージョンごとの使用量」](operations/features.md#バージョンごとの使用量) |
+| 実際に使われたモデルごとの使用量 | [機能ごとの運用の「実際に使われたモデルごとの使用量」](operations/features.md#実際に使われたモデルごとの使用量) |
+| PR修正の連続した失敗 | [機能ごとの運用の「PR修正の連続した失敗」](operations/features.md#pr修正の連続した失敗) |
+| ラウンドの数を下限にする理由 | [機能ごとの運用の「ラウンドの数を下限にする理由」](operations/features.md#ラウンドの数を下限にする理由) |
+| 数えるものの粗さ | [機能ごとの運用の「数えるものの粗さ」](operations/features.md#数えるものの粗さ) |
+| Console用のworkerの検知を確かめる | [workerとスケジュールの監視の運用の「Console用のworkerの検知を確かめる」](operations/monitoring.md#console用のworkerの検知を確かめる) |
+| 定期ジョブ用のworkerの検知を確かめる | [workerとスケジュールの監視の運用の「定期ジョブ用のworkerの検知を確かめる」](operations/monitoring.md#定期ジョブ用のworkerの検知を確かめる) |
+| defaultのworkerの検知を確かめる | [workerとスケジュールの監視の運用の「defaultのworkerの検知を確かめる」](operations/monitoring.md#defaultのworkerの検知を確かめる) |
+| カスタムtagの許可を確かめる | [workerとスケジュールの監視の運用の「カスタムtagの許可を確かめる」](operations/monitoring.md#カスタムtagの許可を確かめる) |
+| workerの負荷の記録を確かめる | [workerとスケジュールの監視の運用の「workerの負荷の記録を確かめる」](operations/monitoring.md#workerの負荷の記録を確かめる) |
+| scheduleの失敗の検出 | [workerとスケジュールの監視の運用の「scheduleの失敗の検出」](operations/monitoring.md#scheduleの失敗の検出) |
+| 続けて失敗するスケジュールの検知を確かめる | [workerとスケジュールの監視の運用の「続けて失敗するスケジュールの検知を確かめる」](operations/monitoring.md#続けて失敗するスケジュールの検知を確かめる) |
+| 自己更新の打ち切りを確かめる | [workerとスケジュールの監視の運用の「自己更新の打ち切りを確かめる」](operations/monitoring.md#自己更新の打ち切りを確かめる) |
+| 打ち切りで残ったプロセスを確かめる | [workerとスケジュールの監視の運用の「打ち切りで残ったプロセスを確かめる」](operations/monitoring.md#打ち切りで残ったプロセスを確かめる) |
+| 自己更新が繰り返し打ち切られるとき | [workerとスケジュールの監視の運用の「自己更新が繰り返し打ち切られるとき」](operations/monitoring.md#自己更新が繰り返し打ち切られるとき) |
+| 自己更新の起動の種類を確かめる | [workerとスケジュールの監視の運用の「自己更新の起動の種類を確かめる」](operations/monitoring.md#自己更新の起動の種類を確かめる) |
+| 区切った呼び出しが時間切れになったとき | [workerとスケジュールの監視の運用の「区切った呼び出しが時間切れになったとき」](operations/monitoring.md#区切った呼び出しが時間切れになったとき) |
+| 打ち切られた回の記録を確かめる | [workerとスケジュールの監視の運用の「打ち切られた回の記録を確かめる」](operations/monitoring.md#打ち切られた回の記録を確かめる) |
+| 更新を反映する | [更新の反映の運用の「更新を反映する」](operations/deploy.md#更新を反映する) |
+| 自動で反映されるもの | [更新の反映の運用の「自動で反映されるもの」](operations/deploy.md#自動で反映されるもの) |
+| ホスト側で反映するもの | [更新の反映の運用の「ホスト側で反映するもの」](operations/deploy.md#ホスト側で反映するもの) |
+| migrationの前にdeployを保留する | [更新の反映の運用の「migrationの前にdeployを保留する」](operations/deploy.md#migrationの前にdeployを保留する) |
+| 保護パスの変更の反映を承認する | [更新の反映の運用の「保護パスの変更の反映を承認する」](operations/deploy.md#保護パスの変更の反映を承認する) |
+| 反映の承認で自己更新が失敗し続けるとき | [更新の反映の運用の「反映の承認で自己更新が失敗し続けるとき」](operations/deploy.md#反映の承認で自己更新が失敗し続けるとき) |
+| 反映の計画を確かめる | [更新の反映の運用の「反映の計画を確かめる」](operations/deploy.md#反映の計画を確かめる) |
+| 変更を承認する | [更新の反映の運用の「変更を承認する」](operations/deploy.md#変更を承認する) |
+| f/とworkerのイメージを両方変えたとき | [更新の反映の運用の「f/とworkerのイメージを両方変えたとき」](operations/deploy.md#fとworkerのイメージを両方変えたとき) |
+| 稼働中のworkerが検査の前提を満たさないとき | [更新の反映の運用の「稼働中のworkerが検査の前提を満たさないとき」](operations/deploy.md#稼働中のworkerが検査の前提を満たさないとき) |
+| mise run upで反映されないもの | [更新の反映の運用の「mise run upで反映されないもの」](operations/deploy.md#mise-run-upで反映されないもの) |
+| workerのツールのバージョン | [更新の反映の運用の「workerのツールのバージョン」](operations/deploy.md#workerのツールのバージョン) |
+| 同期されない変数とリソース | [更新の反映の運用の「同期されない変数とリソース」](operations/deploy.md#同期されない変数とリソース) |
+| リポジトリから消したものをWindmillから消す | [更新の反映の運用の「リポジトリから消したものをWindmillから消す」](operations/deploy.md#リポジトリから消したものをwindmillから消す) |
+| Console(console/)を反映する・戻す | [更新の反映の運用の「Console(console/)を反映する・戻す」](operations/deploy.md#consoleconsoleを反映する戻す) |
+| タグのrulesetを確かめる | [更新の反映の運用の「タグのrulesetを確かめる」](operations/deploy.md#タグのrulesetを確かめる) |
+| Console用workerを確かめる | [更新の反映の運用の「Console用workerを確かめる」](operations/deploy.md#console用workerを確かめる) |
+| adminsワークスペースの組み込み項目 | [更新の反映の運用の「adminsワークスペースの組み込み項目」](operations/deploy.md#adminsワークスペースの組み込み項目) |
+| workerがプロセスを作れなくなったとき | [更新の反映の運用の「workerがプロセスを作れなくなったとき」](operations/deploy.md#workerがプロセスを作れなくなったとき) |
+| 保留を確かめる | [保留と全停止の運用の「保留を確かめる」](operations/stop.md#保留を確かめる) |
+| 保留で止まったdependabotのPRを再開する | [保留と全停止の運用の「保留で止まったdependabotのPRを再開する」](operations/stop.md#保留で止まったdependabotのprを再開する) |
+| 保留でマージや反映が止められたとき | [保留と全停止の運用の「保留でマージや反映が止められたとき」](operations/stop.md#保留でマージや反映が止められたとき) |
+| 保留を置くときの注意 | [保留と全停止の運用の「保留を置くときの注意」](operations/stop.md#保留を置くときの注意) |
+| Consoleから保留と凍結を置く | [保留と全停止の運用の「Consoleから保留と凍結を置く」](operations/stop.md#consoleから保留と凍結を置く) |
+| Consoleでスケジュールを止める | [保留と全停止の運用の「Consoleでスケジュールを止める」](operations/stop.md#consoleでスケジュールを止める) |
+| 凍結と合わせて確かめる | [保留と全停止の運用の「凍結と合わせて確かめる」](operations/stop.md#凍結と合わせて確かめる) |
+| 全停止する | [保留と全停止の運用の「全停止する」](operations/stop.md#全停止する) |
+| 全停止の間に起きること | [保留と全停止の運用の「全停止の間に起きること」](operations/stop.md#全停止の間に起きること) |
+| Consoleから全停止する | [保留と全停止の運用の「Consoleから全停止する」](operations/stop.md#consoleから全停止する) |
+| ホストから全停止する | [保留と全停止の運用の「ホストから全停止する」](operations/stop.md#ホストから全停止する) |
+| 全停止を解除する | [保留と全停止の運用の「全停止を解除する」](operations/stop.md#全停止を解除する) |
+| 記録した設定を戻す | [保留と全停止の運用の「記録した設定を戻す」](operations/stop.md#記録した設定を戻す) |
+| 全停止の変数を読めないとき | [保留と全停止の運用の「全停止の変数を読めないとき」](operations/stop.md#全停止の変数を読めないとき) |
+| 全停止の実機の確認の記録 | [保留と全停止の運用の「全停止の実機の確認の記録」](operations/stop.md#全停止の実機の確認の記録) |
+| 設定を止める向きに変える | [保留と全停止の運用の「設定を止める向きに変える」](operations/stop.md#設定を止める向きに変える) |

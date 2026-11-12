@@ -132,7 +132,7 @@ Factory自身のリポジトリのPRは、rulesetでなく、Factory内部の固
 `protect-tags`は、このタグを経由してConsoleの配布物(`console-dist`)をすり替える経路を塞ぐ。
 このリポジトリはタグを使わないので、運用には影響しない。
 タグを使うようにするときは、rulesetを見直す。
-設定の確認は[運用](operations.md)の「タグのrulesetを確かめる」にある。
+設定の確認は[更新の反映の運用の「タグのrulesetを確かめる」](operations/deploy.md#タグのrulesetを確かめる)にある。
 
 公開に伴い、外部からの操作は次のように絞る。
 
@@ -1351,7 +1351,7 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
   - `GET /user/teams`が、PATのアカウントのチームを返すか。
   - 親チーム経由の依頼の扱い。
   - `requested_teams`と`/user/teams`の応答の形。
-  組織の所有者を足すときは、先に[運用](operations/collect.md#組織の所有者を足す前の確認)の手順で確かめる。
+  組織の所有者を足すときは、先に[GitHubの収集の運用](operations/collect.md#組織の所有者を足す前の確認)の手順で確かめる。
   権限が要ると分かったときは、同じ変更で[PATの権限](#githubのpat)の表に足し、種類をセキュリティとして監査を通す。
   今は、PATに権限を足していない。
 - [R-PER-17](security-risks.md#r-per-17)
@@ -1446,7 +1446,7 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 - [R-UPD-01](security-risks.md#r-upd-01)
 - [R-UPD-02](security-risks.md#r-upd-02)
 - [R-UPD-03](security-risks.md#r-upd-03)
-- 残ったプロセスの見つけ方と、打ち切りが子を止めるかの確かめ方は[運用](operations.md)の「自己更新の打ち切りを確かめる」にある。
+- 残ったプロセスの見つけ方と、打ち切りが子を止めるかの確かめ方は[workerとスケジュールの監視の運用の「自己更新の打ち切りを確かめる」](operations/monitoring.md#自己更新の打ち切りを確かめる)にある。
 
 ## 凍結とdeployの保留
 
@@ -1459,7 +1459,7 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 ## 全停止
 
 全停止は、Factory全体を1つの操作で止める仕組みである。
-手順は[運用](operations/stop.md#全停止する)にある。
+手順は[保留と全停止の運用](operations/stop.md#全停止する)にある。
 止める働きは、Windmillの秘密でない変数`f/factory/stop_all`と、それを読む各所にある。
 
 - 変数を書くのは、Consoleの2つのscript(全停止と解除)と、それを`wmill script run`で呼ぶ`mise run stop`だけである。

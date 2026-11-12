@@ -337,7 +337,7 @@ Factoryも同じ方針で、`f/factory/factory_config`の`model`(既定はSonnet
 Sonnetが成功すれば、失敗の数を数え直す。
 PR修正は、再レビューが続いて3ラウンド目に入っても`heavy_model`で動く。
 FactoryのPRのレビューは、失敗の数にかかわらず`heavy_model`で動く。
-工程ごとの割り当てと、既存のリソースの書き換えは[運用](operations.md)の「モデルを使い分ける」にある。
+工程ごとの割り当てと、既存のリソースの書き換えは[機能ごとの運用の「モデルを使い分ける」](operations/features.md#モデルを使い分ける)にある。
 
 ## PRチェックリスト
 
