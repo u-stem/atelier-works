@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { noticeDocAnchor } from "../../console/src/lib/noticeDocLink.ts";
 import {
   ACTIONABLE_WORK_ITEM_STATUSES,
   countHiddenCharacters,
@@ -12,14 +13,29 @@ import {
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../../f/factory/lib/console_support.ts";
 
-/** `docs/operations.md`の「通知の種類」の表から、種類の列を取り出す。 */
-async function documentedNoticeKinds(): Promise<string[]> {
+/** `docs/operations.md`の「通知の種類」の節。次の`##`か`###`の見出しの前までである。 */
+async function noticeKindsSection(): Promise<string> {
   const doc = await Bun.file("docs/operations.md").text();
   const start = doc.indexOf("### 通知の種類");
   const rest = doc.slice(start + 1);
   const end = rest.search(/\n#{2,3} /);
-  const section = end === -1 ? rest : rest.slice(0, end);
-  return [...section.matchAll(/^\| `([a-z_]+)` \|/gm)].map((m) => m[1] ?? "");
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+/** 通知の表の1行。種類の列の先頭にアンカーが無い行は、`anchor`が`null`である。 */
+type NoticeTableRow = { readonly anchor: string | null; readonly kind: string };
+
+/** 「通知の種類」の表から、行ごとのアンカーと種類を取り出す。 */
+async function documentedNoticeRows(): Promise<NoticeTableRow[]> {
+  const section = await noticeKindsSection();
+  return [
+    ...section.matchAll(/^\| (?:<a id="([^"]*)"><\/a>)?`([a-z_]+)` \|/gm),
+  ].map((m) => ({ anchor: m[1] ?? null, kind: m[2] ?? "" }));
+}
+
+/** `docs/operations.md`の「通知の種類」の表から、種類の列を取り出す。 */
+async function documentedNoticeKinds(): Promise<string[]> {
+  return (await documentedNoticeRows()).map((row) => row.kind);
 }
 
 describe("noticeSeverity", () => {
@@ -277,6 +293,42 @@ describe("operations.md notice table", () => {
   test("documents no kind that NOTICE_SEVERITY lacks", async () => {
     const documented = await documentedNoticeKinds();
     expect(documented.filter((kind) => !(kind in NOTICE_SEVERITY))).toEqual([]);
+  });
+});
+
+// Consoleの通知の詳細は、種類から`docs/operations.md#notice-<種類>`を決めてリンクする。
+// 表のアンカーは`notice-<種類>`の名前で確かめ、Consoleの規則(`noticeDocAnchor`)が同じ名前を作ることを先頭のテストで確かめる。
+describe("operations.md notice anchors", () => {
+  test("names the Console anchor of every kind in NOTICE_SEVERITY after the kind as it is", () => {
+    expect(
+      Object.keys(NOTICE_SEVERITY).filter(
+        (kind) => noticeDocAnchor(kind) !== `notice-${kind}`,
+      ),
+    ).toEqual([]);
+  });
+
+  test("has the anchor of every kind in NOTICE_SEVERITY", async () => {
+    const anchors = (await documentedNoticeRows()).map((row) => row.anchor);
+    expect(
+      Object.keys(NOTICE_SEVERITY).filter(
+        (kind) => !anchors.includes(`notice-${kind}`),
+      ),
+    ).toEqual([]);
+  });
+
+  test("puts each anchor in the row of its own kind", async () => {
+    expect(
+      (await documentedNoticeRows()).filter(
+        (row) => row.anchor !== `notice-${row.kind}`,
+      ),
+    ).toEqual([]);
+  });
+
+  test("has as many anchors in the section as there are kinds", async () => {
+    const section = await noticeKindsSection();
+    expect([...section.matchAll(/<a id="/g)].length).toBe(
+      Object.keys(NOTICE_SEVERITY).length,
+    );
   });
 });
 

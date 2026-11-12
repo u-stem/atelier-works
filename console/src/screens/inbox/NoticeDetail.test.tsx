@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import type { SummaryNotice } from "../../api/guards/summary.ts";
+import { OPERATIONS_DOC_URL } from "../../lib/noticeDocLink.ts";
 import { NoticeDetail } from "./NoticeDetail.tsx";
 
 const NOW = Date.parse("2026-11-08T01:00:00.000Z");
@@ -90,6 +91,64 @@ describe("NoticeDetail move button", () => {
     const button = html.indexOf("/system?section=holds");
 
     expect(button >= 0 && button < html.indexOf("<code")).toBe(true);
+  });
+});
+
+/** 運用の文書を指す`<a>`の開きタグ。無ければ空。 */
+function procedureLinkTag(html: string): string {
+  return (
+    new RegExp(`<a [^>]*href="${OPERATIONS_DOC_URL}#[^"]*"[^>]*>`).exec(
+      html,
+    )?.[0] ?? ""
+  );
+}
+
+describe("NoticeDetail link to the procedure", () => {
+  test("links the notice to the row of its kind in the operations document", () => {
+    expect(
+      render(noticeOf("cleanup_db_failed", { resolvable: true })),
+    ).toContain(`href="${OPERATIONS_DOC_URL}#notice-cleanup_db_failed"`);
+  });
+
+  test("names the link after reading the procedure", () => {
+    expect(render(noticeOf("cleanup_db_failed", { resolvable: true }))).toMatch(
+      /<a [^>]*>運用の文書で手順を読む/,
+    );
+  });
+
+  test("opens the document in a new tab", () => {
+    expect(
+      procedureLinkTag(
+        render(noticeOf("cleanup_db_failed", { resolvable: true })),
+      ),
+    ).toContain('target="_blank"');
+  });
+
+  test("gives the document neither the opener nor the referrer", () => {
+    expect(
+      procedureLinkTag(
+        render(noticeOf("cleanup_db_failed", { resolvable: true })),
+      ),
+    ).toContain('rel="noopener noreferrer"');
+  });
+
+  test("links a kind that the guide does not explain yet", () => {
+    expect(render(noticeOf("future_kind"))).toContain(
+      `href="${OPERATIONS_DOC_URL}#notice-future_kind"`,
+    );
+  });
+
+  test("shows no link for a kind that cannot be an anchor", () => {
+    expect(render(noticeOf("future kind"))).not.toContain(OPERATIONS_DOC_URL);
+  });
+
+  // 手順の文書は、通知の詳細の操作を読んだ後に開く補足なので、次の操作の欄の末尾に置く。
+  test("puts the link after the commands of the action", () => {
+    const html = render(noticeOf("host_action_required"));
+
+    expect(html.indexOf(OPERATIONS_DOC_URL)).toBeGreaterThan(
+      html.lastIndexOf("<code"),
+    );
   });
 });
 
