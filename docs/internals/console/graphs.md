@@ -127,6 +127,7 @@ PR経由の関係と戻りは、起動しない理由が人のラベルとCIの�
 線は隣り合う列と行の間だけを引くので、他の箱の上を通らない。
 出口は、つくステップの真下に置き、同じ行で重なるときは右へずらす。
 出口が右へ広がるpipeline、pr_fix、designは、ジョブの画面の本文の最大の幅(1152px)からカードの分を引いた幅を超え、横にスクロールする枠で出す。
+カードの分は、[`src/lib/flowGraphFit.ts`](../../../console/src/lib/flowGraphFit.ts)の`FIT_CHROME_WIDTH`が定める。
 ほかのflowは、その幅に収まる。
 
 図は自前のSVGで描く(`src/screens/jobs/FlowDiagram.tsx`)。
