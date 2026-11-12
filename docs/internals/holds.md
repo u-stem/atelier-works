@@ -1406,9 +1406,9 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 見逃しの例と、残るリスクは次のとおりである。
 いずれも受け入れる。
 
-- [R-HOLD-01](../security-risks.md#保留)
-- [R-HOLD-02](../security-risks.md#保留)
-- [R-HOLD-03](../security-risks.md#保留)
+- [R-HOLD-01](../security-risks.md#r-hold-01)
+- [R-HOLD-02](../security-risks.md#r-hold-02)
+- [R-HOLD-03](../security-risks.md#r-hold-03)
 - 検出するのは次の参照である。
   `factory.holds`の名前(コメントや引用符を挟んだ形と3部の名前を含む)、`search_path`、`SET SCHEMA`。
   `DROP SCHEMA factory`(スキーマを何個並べても検出する)、`DROP OWNED BY`、`DROP DATABASE`。
@@ -1416,34 +1416,35 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   `datatable`の名前が`:factory`で終わる指定。
   実行時に`SET search_path`が足され、スキーマの付かない名前で書けるためである。
   動詞の直後のスキーマの付かない`holds`は、SQLの構造が続くときだけ検出する。
-- [R-HOLD-04](../security-risks.md#保留)
-- [R-HOLD-05](../security-risks.md#保留)
+- [R-HOLD-04](../security-risks.md#r-hold-04)
+- [R-HOLD-05](../security-risks.md#r-hold-05)
 - `wmill.datatable()`の接続の既定の`search_path`は`"$user", public`で、`factory`は入っていない。
   mainの`9dae4761`を反映したスタックで確かめた。
   スキーマ無しの`holds`は解決しない。
   入っていれば、スキーマ無しの`holds`が`factory.holds`を指す。
   参照の検出の動詞の規則は、その場合も働く。
-- [R-HOLD-06](../security-risks.md#保留)
-- [R-HOLD-07](../security-risks.md#保留)
-- [R-HOLD-08](../security-risks.md#保留)
-- [R-HOLD-09](../security-risks.md#保留)
-- [R-HOLD-10](../security-risks.md#保留)
-- [R-HOLD-11](../security-risks.md#保留)
-- [R-HOLD-12](../security-risks.md#保留)
-- [R-HOLD-13](../security-risks.md#保留)
-- [R-HOLD-14](../security-risks.md#保留)
+- [R-HOLD-06](../security-risks.md#r-hold-06)
+- [R-HOLD-07](../security-risks.md#r-hold-07)
+- [R-HOLD-08](../security-risks.md#r-hold-08)
+- [R-HOLD-09](../security-risks.md#r-hold-09)
+- [R-HOLD-10](../security-risks.md#r-hold-10)
+- [R-HOLD-11](../security-risks.md#r-hold-11)
+- [R-HOLD-12](../security-risks.md#r-hold-12)
+- [R-HOLD-13](../security-risks.md#r-hold-13)
+- [R-HOLD-14](../security-risks.md#r-hold-14)
 - Consoleの解除は、`f/`で`releaseHold`を読み込める唯一のファイルである(`HOLD_RELEASERS`)。
   `placeHold`を読み込むファイルは、`f/`のどこにも無い。
   表示だけの読み手(`HOLD_VIEWERS`)は`listActiveHolds`だけを読み込み、読んで止まる主体の一覧(`HOLD_READERS`)には入れない。
   3つの分類は、読み込む名前の一覧が、実際のimportと一致することで固定する。
   解除のscriptとその部品、テストは保護パスに入れる。
   書き換えられると、他の主体の保留を無条件に外せるためである。
-- [R-HOLD-15](../security-risks.md#保留)
-- [R-HOLD-16](../security-risks.md#保留)
-- [R-HOLD-17](../security-risks.md#保留)
-- [R-HOLD-18](../security-risks.md#保留)
-- [R-HOLD-19](../security-risks.md#保留)
+- [R-HOLD-15](../security-risks.md#r-hold-15)
+- [R-HOLD-16](../security-risks.md#r-hold-16)
+- [R-HOLD-17](../security-risks.md#r-hold-17)
+- [R-HOLD-18](../security-risks.md#r-hold-18)
+- [R-HOLD-19](../security-risks.md#r-hold-19)
 - ローカルのセッションの`gh pr merge`などは、`scripts/claude-hooks/merge-guard.ts`が、保留が有効な間と読めないときに止める。
+  残るリスクの表の[R-HOLD-20](../security-risks.md#r-hold-20)にあたる。
   仕様は[この文書の「ローカルのセッションのフック」](#ローカルのセッションのフック)にある。
   次のマージは止まらない。
   - 人の端末(プロンプトの`!`)、GitHubのWeb UI、他の人のマージ。
@@ -1453,22 +1454,21 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   - 追わない形(別名、変数で組んだ語、`curl`、`hub`、スクリプトのファイルの中の呼び出し)。
   端末は人が意図して実行する経路で、止めると復旧の手段を失うため、受け入れる。
   ほかは、保留は止めるだけの補助で、元の保護(レビューとゲート)が残るため、受け入れる。
-  残るリスクの表の[R-HOLD-20](../security-risks.md#保留)にあたる。
-- [R-HOLD-21](../security-risks.md#保留)
-- [R-HOLD-22](../security-risks.md#保留)
+- [R-HOLD-21](../security-risks.md#r-hold-21)
+- [R-HOLD-22](../security-risks.md#r-hold-22)
 - 判定は、安全と確かめられた形を対象外にし、それ以外をマージか反映として扱う。
+  残るリスクの表の[R-HOLD-23](../security-risks.md#r-hold-23)にあたる。
   確かめられない形は、次のどれかである。
   - `gh`のグループの前に、`--help`と`--version`以外のオプションがある。
   - 値を付けた`--help=false`や`--disable-auto=0`のような真偽値のオプション。
   - 前置きを外し切れず、残った語に`gh`か`wmill`がある。
   新しい迂回が見つかっても、列挙を足し続けず、残るリスクとして書いて受け入れる。
-  残るリスクの表の[R-HOLD-23](../security-risks.md#保留)にあたる。
-- [R-HOLD-24](../security-risks.md#保留)
-- [R-HOLD-25](../security-risks.md#保留)
-- [R-HOLD-26](../security-risks.md#保留)
-- [R-HOLD-27](../security-risks.md#保留)
-- [R-HOLD-28](../security-risks.md#保留)
-- [R-HOLD-29](../security-risks.md#保留)
+- [R-HOLD-24](../security-risks.md#r-hold-24)
+- [R-HOLD-25](../security-risks.md#r-hold-25)
+- [R-HOLD-26](../security-risks.md#r-hold-26)
+- [R-HOLD-27](../security-risks.md#r-hold-27)
+- [R-HOLD-28](../security-risks.md#r-hold-28)
+- [R-HOLD-29](../security-risks.md#r-hold-29)
 - 保留の操作と、凍結のCLIでの端末の確認を通る書き込みは、`scripts/claude-hooks/hold-guard.ts`が拒否する。
   `bash-guard`が、subagentと主セッションに同じ判定を当てる。
   `agent_id`の無い呼び出しは、`claude -p`を含めてすべて主セッションとして扱う。
@@ -1784,8 +1784,9 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   フックのディレクトリは保護パスなので、拒否を外す変更はPRの差分で見える。
   miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)の保護は、Factoryのpr_fixとimplementのフローにだけ効く。
   ローカルのsubagentが、そこに書いて実行する形は止めない。
-  残るリスクの表の[R-HOLD-30](../security-risks.md#保留)にあたる。
+  残るリスクの表の[R-HOLD-30](../security-risks.md#r-hold-30)にあたる。
 - Consoleの書き込みのscriptを1コマンドで呼ぶ形は、`hold-guard.ts`が、主セッションを含むすべてのセッションで拒否する。
+  残るリスクの表の[R-HOOK-01](../security-risks.md#r-hook-01)にあたる。
   書き込みのscriptは、tag`console`のscriptのうち、読み取りの一覧に無いものすべてである。
   一覧は`scripts/claude-hooks/console-scripts.ts`の1か所に置き、拒否する名前はこの一覧から導く。
   tag`console`の新しいscriptがどちらの一覧にも無い間は、`tests/scripts/claude-hooks/console-scripts.test.ts`が落ちる。
@@ -1833,8 +1834,6 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
     名前を含むURLの取得は、読み取りでも拒否する。
   解除は、人がConsoleの画面で行う。
     ログイン済みのブラウザの自動操作は、Bashのフックの外で解除のボタンを押せるので、実機の解除の操作は人が行う。
-
-  残るリスクの表の[R-HOLD-31](../security-risks.md#保留)にあたる。
 - `mise run hold:list -- '<文字列>'`で余分な引数を渡しても、シェルの文としては解釈されない。
   実機で確かめた。
   miseは追加の引数を引用符で囲んでコマンドに続け、CLIは`list`の後ろの引数を拒否する。
@@ -1842,7 +1841,7 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 - CLIの接続先のデータベースは、`scripts/hold.ts`の定数だけに書く。
   実DBの検査は、使い捨てのデータベースだけを渡す。
   テストが、この2つを固定する。
-- [R-HOLD-32](../security-risks.md#保留)
+- [R-HOLD-32](../security-risks.md#r-hold-32)
 - 保留で待つPRが増えても、取得の通知は周回ごとに種類ごとの1件に保つ。
   本文にPRの数を載せないので、数が変わっても別の行は並ばない。
   保留を読めない通知は、保留を読めた周回に解決する。
@@ -1851,7 +1850,7 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   候補のPRが無い周回も、未解決の通知があれば保留を読んで解決を試みる。
   監視の対象から外れたリポジトリの通知は、読まないので解決しない。
   保留は1行が最長24時間なので、受け入れる。
-  残るリスクの表の[R-HOLD-33](../security-risks.md#保留)にあたる。
+  残るリスクの表の[R-HOLD-33](../security-risks.md#r-hold-33)にあたる。
 - 止め方が、凍結とdeployの保留(変数)と、保留(表)に分かれる。
   範囲が違うので、同じ対象に二重にはならない。
   確かめる手順は[運用](../operations.md)に書く。

@@ -306,9 +306,10 @@ modeだけの変更も、ヘッダーの`old mode`と`new mode`の行で見え�
 
 #### 承認の門の残るリスク
 
-- [R-HOST-01](../security-risks.md#承認の門の残るリスク)
-- [R-HOST-02](../security-risks.md#承認の門の残るリスク)
+- [R-HOST-01](../security-risks.md#r-host-01)
+- [R-HOST-02](../security-risks.md#r-host-02)
 - コードの出どころの検査は、書き換えた側が迂回できる。
+  残るリスクの表の[R-HOST-03](../security-risks.md#r-host-03)にあたる。
   - Bunの読み込み: `~/.bunfig.toml`と`$XDG_CONFIG_HOME/.bunfig.toml`の`preload`、`BUN_OPTIONS`。
     リポジトリの外にある親ディレクトリの`tsconfig.json`は、照合できない。
     カレントディレクトリの`bunfig.toml`の`preload`は、`--no-env-file`とカレントディレクトリの検査では防げない。
@@ -319,16 +320,14 @@ modeだけの変更も、ヘッダーの`old mode`と`new mode`の行で見え�
     `--applied`と`HEAD`を揃える案は、人が先に`git pull`した場合の拒否を招くので採らない。
   - `mise activate`を使うシェルでは、`mise.local.toml`の`[env]`が環境に入りうる。
     gitの子プロセスの環境は固定するので、実害は小さい。
-
-  残るリスクの表の[R-HOST-03](../security-risks.md#承認の門の残るリスク)にあたる。
-- [R-HOST-04](../security-risks.md#承認の門の残るリスク)
-- [R-HOST-05](../security-risks.md#承認の門の残るリスク)
-- [R-HOST-06](../security-risks.md#承認の門の残るリスク)
-- [R-HOST-07](../security-risks.md#承認の門の残るリスク)
-- [R-HOST-08](../security-risks.md#承認の門の残るリスク)
-- [R-HOST-09](../security-risks.md#承認の門の残るリスク)
-- [R-HOST-10](../security-risks.md#承認の門の残るリスク)
-- [R-HOST-11](../security-risks.md#承認の門の残るリスク)
+- [R-HOST-04](../security-risks.md#r-host-04)
+- [R-HOST-05](../security-risks.md#r-host-05)
+- [R-HOST-06](../security-risks.md#r-host-06)
+- [R-HOST-07](../security-risks.md#r-host-07)
+- [R-HOST-08](../security-risks.md#r-host-08)
+- [R-HOST-09](../security-risks.md#r-host-09)
+- [R-HOST-10](../security-risks.md#r-host-10)
+- [R-HOST-11](../security-risks.md#r-host-11)
 
 ### 状態の置き場
 
@@ -595,22 +594,22 @@ pgidの再利用で、無関係のグループを殺しうるためである。
 
 #### 置き場の残るリスク
 
-- [R-HOST-12](../security-risks.md#置き場の残るリスク)
-- [R-HOST-13](../security-risks.md#置き場の残るリスク)
-- [R-HOST-14](../security-risks.md#置き場の残るリスク)
-- [R-HOST-15](../security-risks.md#置き場の残るリスク)
-- [R-HOST-16](../security-risks.md#置き場の残るリスク)
-- [R-HOST-17](../security-risks.md#置き場の残るリスク)
-- [R-HOST-18](../security-risks.md#置き場の残るリスク)
-- [R-HOST-19](../security-risks.md#置き場の残るリスク)
-- [R-HOST-20](../security-risks.md#置き場の残るリスク)
-- [R-HOST-21](../security-risks.md#置き場の残るリスク)
-- [R-HOST-22](../security-risks.md#置き場の残るリスク)
-- [R-HOST-23](../security-risks.md#置き場の残るリスク)
-- [R-HOST-24](../security-risks.md#置き場の残るリスク)
-- [R-HOST-25](../security-risks.md#置き場の残るリスク)
-- [R-HOST-26](../security-risks.md#置き場の残るリスク)
-- [R-HOST-27](../security-risks.md#置き場の残るリスク)
+- [R-HOST-12](../security-risks.md#r-host-12)
+- [R-HOST-13](../security-risks.md#r-host-13)
+- [R-HOST-14](../security-risks.md#r-host-14)
+- [R-HOST-15](../security-risks.md#r-host-15)
+- [R-HOST-16](../security-risks.md#r-host-16)
+- [R-HOST-17](../security-risks.md#r-host-17)
+- [R-HOST-18](../security-risks.md#r-host-18)
+- [R-HOST-19](../security-risks.md#r-host-19)
+- [R-HOST-20](../security-risks.md#r-host-20)
+- [R-HOST-21](../security-risks.md#r-host-21)
+- [R-HOST-22](../security-risks.md#r-host-22)
+- [R-HOST-23](../security-risks.md#r-host-23)
+- [R-HOST-24](../security-risks.md#r-host-24)
+- [R-HOST-25](../security-risks.md#r-host-25)
+- [R-HOST-26](../security-risks.md#r-host-26)
+- [R-HOST-27](../security-risks.md#r-host-27)
 
 ### composeの方針
 
@@ -960,19 +959,19 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 
 #### 外部コマンドの残るリスク
 
-- [R-HOST-28](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-29](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-30](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-31](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-32](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-33](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-34](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-35](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-36](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-37](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-38](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-39](../security-risks.md#外部コマンドの残るリスク)
-- [R-HOST-40](../security-risks.md#外部コマンドの残るリスク)
+- [R-HOST-28](../security-risks.md#r-host-28)
+- [R-HOST-29](../security-risks.md#r-host-29)
+- [R-HOST-30](../security-risks.md#r-host-30)
+- [R-HOST-31](../security-risks.md#r-host-31)
+- [R-HOST-32](../security-risks.md#r-host-32)
+- [R-HOST-33](../security-risks.md#r-host-33)
+- [R-HOST-34](../security-risks.md#r-host-34)
+- [R-HOST-35](../security-risks.md#r-host-35)
+- [R-HOST-36](../security-risks.md#r-host-36)
+- [R-HOST-37](../security-risks.md#r-host-37)
+- [R-HOST-38](../security-risks.md#r-host-38)
+- [R-HOST-39](../security-risks.md#r-host-39)
+- [R-HOST-40](../security-risks.md#r-host-40)
 - `git fetch`が`GIT_DIR`と作業ディレクトリの組で動くことは、実機で確かめていない。
 
 ### 子プロセスの環境とログ
@@ -1080,7 +1079,7 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
 
 ### 残るリスク
 
-- [R-HOST-41](../security-risks.md#ホストの実行役の境界の残るリスク)
+- [R-HOST-41](../security-risks.md#r-host-41)
 - composeの`image`と環境変数の参照は、表と照らす([composeのimageと秘密値の表](#composeのimageと秘密値の表))。
   ただし、違反は`plan`の判定に使っていない。
   そのため、表の外のリポジトリや、表の外のサービスへの`DB_PASSWORD`の受け渡しは、`would_converge`と判定される。
@@ -1089,16 +1088,16 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
   承認の記録は後続の段階で足す。
   それまでの防ぎは、保護パス(`infra/docker-compose.yml`)と人のマージで、mainは承認0件でマージできるため、補助にとどまる。
   受け入れる理由は、実行役がまだ反映しないためである。
-  残るリスクの表の[R-HOST-42](../security-risks.md#ホストの実行役の境界の残るリスク)にあたる。
-- [R-HOST-43](../security-risks.md#ホストの実行役の境界の残るリスク)
-- [R-HOST-44](../security-risks.md#ホストの実行役の境界の残るリスク)
-- [R-HOST-45](../security-risks.md#ホストの実行役の境界の残るリスク)
-- [R-HOST-46](../security-risks.md#ホストの実行役の境界の残るリスク)
+  残るリスクの表の[R-HOST-42](../security-risks.md#r-host-42)にあたる。
+- [R-HOST-43](../security-risks.md#r-host-43)
+- [R-HOST-44](../security-risks.md#r-host-44)
+- [R-HOST-45](../security-risks.md#r-host-45)
+- [R-HOST-46](../security-risks.md#r-host-46)
 - 反映する側は、`docker compose`を、必ず`-f infra/docker-compose.yml`と`--project-directory`を明示して呼ぶ。
   省くと、overrideファイルを自動で読む場所が変わる。
 - 反映に使うチェックアウトのgitには、`GIT_CONFIG_GLOBAL=/dev/null`と`GIT_CONFIG_NOSYSTEM=1`を付ける。
   利用者とシステムのgit設定を読ませないためである。
-- [R-HOST-47](../security-risks.md#ホストの実行役の境界の残るリスク)
+- [R-HOST-47](../security-risks.md#r-host-47)
 - 設計は`mise`コマンドを使わないと定めるが、`scripts/doctor.sh`は`mise exec`を使う。
   反映する段階の設計で見直す。
 - composeとYAMLの重複キーの解釈の差と、`package.json`の重複キーの解釈の差（compose-goとbun）は、`docker compose config`との突き合わせで確かめる。
@@ -1114,16 +1113,16 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
   - `Bun.YAML.parse`は、重複したキーを最後の値で上書きし、エラーにしない。
     `__proto__`は通常のキーとして残る。
   - composeの解釈とYAMLの重複キーの扱いが違うかは、`docker compose config`と突き合わせて確かめる。
-- [R-HOST-48](../security-risks.md#ホストの実行役の境界の残るリスク)
-- [R-HOST-49](../security-risks.md#ホストの実行役の境界の残るリスク)
-- [R-HOST-50](../security-risks.md#ホストの実行役の境界の残るリスク)
+- [R-HOST-48](../security-risks.md#r-host-48)
+- [R-HOST-49](../security-risks.md#r-host-49)
+- [R-HOST-50](../security-risks.md#r-host-50)
 - `docker compose up --dry-run`の出力のうち、`Creating`などの行の形は実測した。
   `Running`と`Recreate`の行の形は、同じ3列と見なした推定で、実機の出力では確かめていない。
-- [R-HOST-51](../security-risks.md#ホストの実行役の境界の残るリスク)
+- [R-HOST-51](../security-risks.md#r-host-51)
 - 掃除は使われていない旧版を次に成功した時点で消すので、ホストの実行役の巻き戻しとの関係が決まっていない。
   `scripts/host_apply/state.ts`は、反映の前の版のイメージのIDを控える設計だが、巻き戻しはまだ配線されていない。
   配線する変更が、控えたIDにタグを付けて掃除から守るか、再ビルドで戻すかを決める。
-- [R-HOST-52](../security-risks.md#ホストの実行役の境界の残るリスク)
+- [R-HOST-52](../security-risks.md#r-host-52)
 
 ## ホストの反映の印
 
@@ -1138,8 +1137,8 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
 
 残るリスクは次のとおりである。
 
-- [R-HOST-53](../security-risks.md#ホストの反映の印)
-- [R-HOST-54](../security-risks.md#ホストの反映の印)
+- [R-HOST-53](../security-risks.md#r-host-53)
+- [R-HOST-54](../security-risks.md#r-host-54)
 - ホストの書き込み(`docker compose exec`)は、ジョブと同じ権限で動く。
   同じディレクトリに、`mktemp`のランダムな名前の一時ファイルを排他的に作って書き、`mv -fT`で置き換える。
   印のパスがsymlinkでも、その先は上書きされず、置き換わるのはsymlink自体である。
@@ -1148,4 +1147,4 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
   一時ファイルの名前は予測できないので、ジョブがFIFOなどを先回りして置くことはできない。
   それでも止まらないよう、書き込みは`timeout 10`で包む。
   ホストのスクリプトが得る権限はジョブと同じで、権限は広がらない。
-  残るリスクの表の[R-HOST-55](../security-risks.md#ホストの反映の印)にあたる。
+  残るリスクの表の[R-HOST-55](../security-risks.md#r-host-55)にあたる。

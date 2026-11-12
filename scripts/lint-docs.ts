@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 // リポジトリのMarkdown文書を`docs/writing-guidelines.md`の規則で検査する。
-// 次の6つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
+// 次の7つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
 // - このリポジトリの規則(`f/factory/lib/prose_check.ts`の`REPO_DOC_RULES`)
 // - 「1文は1行」(`scripts/lint-one-sentence-per-line.ts`)。
 //   対象は他の検査と同じ文書(`isOneSentencePerLineTarget`)で、`.claude/`の自作のスキルの文書も入る。
 // - 文書の間のリンクとアンカー(`scripts/lint-doc-links.ts`)
+// - 残るリスクの表と、各節からの行へのリンク(`scripts/lint-risk-register.ts`)。
+//   `--links-only`では走らせない。
 // - markdownlint(`.markdownlint-cli2.jsonc`)
 // - textlint(`.textlintrc.json`)
 // - 生成範囲とmiseタスクの表の確認(`scripts/docs-gen.ts --check`)
@@ -48,6 +50,7 @@ import {
   findSentenceViolationLines,
   formatSentenceViolation,
 } from "./lint-one-sentence-per-line.ts";
+import { lintRiskRegister } from "./lint-risk-register.ts";
 
 /** 自作のスキル。これ以外の`.claude/skills/`は`wmill`の管理スキルか取り込んだもの。 */
 const OWN_SKILL_PATTERN =
@@ -487,6 +490,11 @@ export async function main(
   const linkProblems = guardCheck("document links", () =>
     lintAllDocLinks(listRepoFiles(root), readDoc),
   );
+  // 残るリスクの表は、リンクの検査と同じく、追跡している対象の全文書を見る。
+  const riskProblems = () =>
+    guardCheck("risk register", () =>
+      lintRiskRegister(listRepoFiles(root).filter(isTargetDoc).sort(), readDoc),
+    );
 
   if (linksOnly) {
     for (const problem of linkProblems) report(problem);
@@ -507,6 +515,7 @@ export async function main(
     if (markdown !== undefined) problems.push(...lintDocText(path, markdown));
   }
   problems.push(...linkProblems);
+  problems.push(...riskProblems());
   for (const problem of problems) report(problem);
 
   const toolsOk = await lintWithTools(targets, createProductionDeps(root));

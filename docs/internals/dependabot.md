@@ -641,16 +641,16 @@ Claudeのバージョンが変わったときは、同じ実験をやり直す�
 
 ### 残るリスク
 
-- [R-DEP-01](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-02](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-03](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-04](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-05](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-06](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-07](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-08](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-09](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-10](../security-risks.md#dependabotの更新の自動マージ)
+- [R-DEP-01](../security-risks.md#r-dep-01)
+- [R-DEP-02](../security-risks.md#r-dep-02)
+- [R-DEP-03](../security-risks.md#r-dep-03)
+- [R-DEP-04](../security-risks.md#r-dep-04)
+- [R-DEP-05](../security-risks.md#r-dep-05)
+- [R-DEP-06](../security-risks.md#r-dep-06)
+- [R-DEP-07](../security-risks.md#r-dep-07)
+- [R-DEP-08](../security-risks.md#r-dep-08)
+- [R-DEP-09](../security-risks.md#r-dep-09)
+- [R-DEP-10](../security-risks.md#r-dep-10)
 - 他のリポジトリを処理する条件を外す前に、次を決める。
   これを決めるまで、他のリポジトリはマージの経路に入れない。
   - 古典的なブランチ保護の必須チェックの読み方(権限と、404の曖昧さ)と、併用するリポジトリの扱い。
@@ -661,11 +661,11 @@ Claudeのバージョンが変わったときは、同じ実験をやり直す�
     今は保護パスの外の`config.ts`にある。
     保護パスの定数にするか、リソースに明示されたときだけ有効にする。
   - インストールを使わない変更履歴と同一性の確認(5b)。
-- [R-DEP-11](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-12](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-13](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-14](../security-risks.md#dependabotの更新の自動マージ)
-- [R-DEP-15](../security-risks.md#dependabotの更新の自動マージ)
+- [R-DEP-11](../security-risks.md#r-dep-11)
+- [R-DEP-12](../security-risks.md#r-dep-12)
+- [R-DEP-13](../security-risks.md#r-dep-13)
+- [R-DEP-14](../security-risks.md#r-dep-14)
+- [R-DEP-15](../security-risks.md#r-dep-15)
 - ルートと`console/`で別々のパッケージが上がるグループは、人に回る([グループの更新](#グループの更新))。
 - 変更履歴、マニフェストの差分、ロックファイルの要約が切り詰められたときは、単独の更新でも未確認にして人に回す。
   切り詰めた部分に、破壊的変更が残りうるためである。

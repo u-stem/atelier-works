@@ -938,7 +938,12 @@ subagentと背景のセッションは、この2つを書かない([運用](../o
 | `design_enabled_since`を現在時刻以前に限る | 採らない | 未来の日時を禁じても、現在の日時を書けば開くので、守りにならない |
 | 受け入れる | 採る | 下の項のとおり |
 
-残るリスクは[R-DES-01](../security-risks.md#設計工程を有効にする操作)である。
+受け入れる理由は、設定をローカルのClaudeのセッションが直接書ける経路と同じだからである([設定の変更](console/security.md#設定の変更)の残るリスク)。
+運用者の資格で`wmill resource push`を呼ぶ経路は、許可表も、比較交換も、操作の記録も通らない。
+設計工程の入口も、この経路に含まれる。
+代わりに、設定タブの**設計工程(実際の状態)**の行が効いている値を出すので、開いたことは見える。
+ただし、`design_enabled`か`design_enabled_since`が参照で書かれているときは、行が「判定できない」と出すので、開いたことは設定タブから見えない。
+残るリスクは[R-DES-01](../security-risks.md#r-des-01)である。
 
 ### 実装に渡す設計書
 
@@ -968,8 +973,8 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
 
 ### 残るリスク
 
-- [R-DES-02](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-03](../security-risks.md#設計書の生成の安全策の残るリスク)
+- [R-DES-02](../security-risks.md#r-des-02)
+- [R-DES-03](../security-risks.md#r-des-03)
 - Issueに仕込んだ指示で、設計書を受け取った実装が毎回`design_gap`を返すと、設計と実装の繰り返しが上限まで続く。
   実装が戻すたびに、worktreeと、PRが無ければ実装ブランチを、リモートとローカルの両方で片付ける。
   実装の作業は捨てられる。
@@ -980,7 +985,7 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   人が再実行すれば、上限の後も設計を作り直せる。
   再実行は数えないので、仕込みが続くかぎり、人の操作のたびに同じ繰り返しが1周する。
   設計工程が無効の間は、設計書が実装に渡らないので起きない。
-  残るリスクの表の[R-DES-04](../security-risks.md#設計書の生成の安全策の残るリスク)にあたる。
+  残るリスクの表の[R-DES-04](../security-risks.md#r-des-04)にあたる。
 - Issueに仕込んだ指示や、レビューの指摘の文が、PR修正のClaudeに`design_gap`を返させうる。
   指摘の文は、許可された投稿者のコメントか、Factory自身のPRレビューの出力である。
   返させると、人が承認した設計を戻し、人の却下と共有する上限(`max_design_attempts`)を減らす。
@@ -989,8 +994,8 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   この影響は、残るリスクとして受け入れる。
   軽減として、返してよい条件を「設計どおりに直すと要件か受入条件を満たせないとき」に狭め、設計と食い違うだけなら見送らせる。
   設計工程が無効の間は、設計書がPR修正に渡らないので起きない。
-  残るリスクの表の[R-DES-05](../security-risks.md#設計書の生成の安全策の残るリスク)にあたる。
-- [R-DES-06](../security-risks.md#設計書の生成の安全策の残るリスク)
+  残るリスクの表の[R-DES-05](../security-risks.md#r-des-05)にあたる。
+- [R-DES-06](../security-risks.md#r-des-06)
 - PR修正の設計への戻しは、書き込みが途中で失敗しうる。
   設計の起動の後に、処理済みの位置か修正のブロックの書き込みが失敗すると、PR修正は失敗になり、位置が進まない。
   再実行は、親が設計の段階の間は準備の確認が止める。
@@ -999,11 +1004,11 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   処理済みの位置が進んでいると、次のPR修正の行は位置を引き継ぐので、元の指摘は二度と集まらない。
   指摘は、絞った要約として設計に届くだけで、PRには返信しない。
   位置が進んでいないときに限り、人がPR修正を再実行するかラベルを付け直すと、元の指摘が集め直される。
-  残るリスクの表の[R-DES-07](../security-risks.md#設計書の生成の安全策の残るリスク)にあたる。
-- [R-DES-08](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-09](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-10](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-11](../security-risks.md#設計書の生成の安全策の残るリスク)
+  残るリスクの表の[R-DES-07](../security-risks.md#r-des-07)にあたる。
+- [R-DES-08](../security-risks.md#r-des-08)
+- [R-DES-09](../security-risks.md#r-des-09)
+- [R-DES-10](../security-risks.md#r-des-10)
+- [R-DES-11](../security-risks.md#r-des-11)
 - 設計の段階の間、PRのブランチへ別の回がpushしないよう、回ごとに止める。
   設計の承認の後に、実装がPRを引き継ぐためである。
   親の行を持つPR修正の依頼は、準備の親の状態の確認が`guard_blocked`で止まる。
@@ -1018,7 +1023,7 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   設計と実装がpushなしに止まった後は、次の巡回が同じheadのレビューを検出し直す。
   レビュー回には設計書が渡らないので、設計の不足は返らない。
   ブランチ名から作業項目を引けないとき(形が違う、削除済み、別のリポジトリ)は、どの回も止めない。
-  残るリスクの表の[R-DES-12](../security-risks.md#設計書の生成の安全策の残るリスク)にあたる。
+  残るリスクの表の[R-DES-12](../security-risks.md#r-des-12)にあたる。
 - 起動の判断が作業項目の状態を読んでから、回の準備が動くまでの間に承認が入ると、回が終わらないうちに実装の準備が動く。
   準備は、PRに終端でない回があることを見つけて、人の対応待ちで止まる。
   理由は、PRに動いている修正があることである。
@@ -1030,22 +1035,22 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   古い止まりは人が再実行する。
   終端でない回を探す範囲は、作業項目が記録したPRのURLと、作業項目を親とする回に限る。
   それ以外の回が残っていたときは、再開した準備が止め直し、再開の回数を1回使う。
-  残るリスクの表の[R-DES-13](../security-risks.md#設計書の生成の安全策の残るリスク)にあたる。
-- [R-DES-14](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-15](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-16](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-17](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-18](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-19](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-20](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-21](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-22](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-23](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-24](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-25](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-26](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-27](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-28](../security-risks.md#設計書の生成の安全策の残るリスク)
+  残るリスクの表の[R-DES-13](../security-risks.md#r-des-13)にあたる。
+- [R-DES-14](../security-risks.md#r-des-14)
+- [R-DES-15](../security-risks.md#r-des-15)
+- [R-DES-16](../security-risks.md#r-des-16)
+- [R-DES-17](../security-risks.md#r-des-17)
+- [R-DES-18](../security-risks.md#r-des-18)
+- [R-DES-19](../security-risks.md#r-des-19)
+- [R-DES-20](../security-risks.md#r-des-20)
+- [R-DES-21](../security-risks.md#r-des-21)
+- [R-DES-22](../security-risks.md#r-des-22)
+- [R-DES-23](../security-risks.md#r-des-23)
+- [R-DES-24](../security-risks.md#r-des-24)
+- [R-DES-25](../security-risks.md#r-des-25)
+- [R-DES-26](../security-risks.md#r-des-26)
+- [R-DES-27](../security-risks.md#r-des-27)
+- [R-DES-28](../security-risks.md#r-des-28)
 - 設計書は信頼できない入力で、HTMLとリンク参照定義を除かずに、文字として実装に渡す。
   人が見る内容と実装が受け取る内容は、承認画面が同じ文字を文字として描くときだけ一致する。
   要素や定義として描くと、ずれる。
@@ -1066,7 +1071,7 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   プレビューの限界は、[設計書のプレビュー](console/security.md#設計書のプレビュー)に書く。
   開けるのは、これらに加えて、運用者が`design_enabled_since`を書いたときだけである。
   開ける前の実機の確認は、[運用](../operations.md)の「設計工程を有効にする」の手順にある。
-  残るリスクの表の[R-DES-29](../security-risks.md#設計書の生成の安全策の残るリスク)にあたる。
+  残るリスクの表の[R-DES-29](../security-risks.md#r-des-29)にあたる。
 - Consoleを読める人は、全作業項目の設計書を読める。
   本文は秘密値をマスクした後の文字で、図のXMLはマスクしていない。
   `approval_design_doc`は、承認依頼のidだけで設計書を返し、依頼の持ち主を確かめない。
@@ -1079,7 +1084,7 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   図のXMLは、文字参照などで秘密の形を分けられ、どのマスクも合わないので、秘密値が残りうる。
   マスクしていない図のXMLは、`console_query`のジョブ結果としてWindmillに残る。
   この影響は、残るリスクとして受け入れる。
-  残るリスクの表の[R-DES-30](../security-risks.md#設計書の生成の安全策の残るリスク)にあたる。
+  残るリスクの表の[R-DES-30](../security-risks.md#r-des-30)にあたる。
 - 承認した後の実装が読む文字と、画面が見せた文字は、同じ依頼ならコードポイントとして同じになる。
   設計書の下書きは挿入だけで書き換えず、整形は同じ入力に同じ出力を返すためである。
   ただし、見た目まで同じになるとは限らない。
@@ -1093,9 +1098,9 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   承認画面は、`safeText`を通さずに不可視文字を表記にするので、この食い違いを塞ぐ。
   有効にすると、この食い違いは実際に起こりうる。
   有効にする3つ目と4つ目の条件が、この食い違いを塞ぐ根拠である。
-  残るリスクの表の[R-DES-31](../security-risks.md#設計書の生成の安全策の残るリスク)にあたる。
-- [R-DES-32](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-33](../security-risks.md#設計書の生成の安全策の残るリスク)
+  残るリスクの表の[R-DES-31](../security-risks.md#r-des-31)にあたる。
+- [R-DES-32](../security-risks.md#r-des-32)
+- [R-DES-33](../security-risks.md#r-des-33)
 - 再実行の行き先の分類は、遷移の注記の文面に依る。
   読む文面は次のとおりである。
   差し戻しの注記の先頭の`gap:`と`design gap:`。
@@ -1104,12 +1109,12 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   改ざんと欠落の理由。
   文面を変える前に止まった作業項目は分類できず、要件定義の生成へ戻る行に当たらない。
   設計が有効なら設計、無効なら実装で再開するが、実装の関門が最後に止める。
-  残るリスクの表の[R-DES-34](../security-risks.md#設計書の生成の安全策の残るリスク)にあたる。
-- [R-DES-35](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-36](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-37](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-38](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-39](../security-risks.md#設計書の生成の安全策の残るリスク)
+  残るリスクの表の[R-DES-34](../security-risks.md#r-des-34)にあたる。
+- [R-DES-35](../security-risks.md#r-des-35)
+- [R-DES-36](../security-risks.md#r-des-36)
+- [R-DES-37](../security-risks.md#r-des-37)
+- [R-DES-38](../security-risks.md#r-des-38)
+- [R-DES-39](../security-risks.md#r-des-39)
 - `design_enabled`を偽から真にする時点で止まっている作業項目は、有効にしても自動では再開されない。
   対象は、承認済み(`approved`)、実装中(`implementing`)、自動で再開する理由を持つ人の対応待ちである。
   人が再実行すると、設計から始まる。
@@ -1119,10 +1124,10 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
   `design_enabled_since`は、除外の境に使わない。
   開ける前にPRを出していた作業項目で`design_gap`が出ると、設計へ差し戻される。
   差し戻しは、上限と人の承認で抑えられるため、受け入れる。
-  残るリスクの表の[R-DES-40](../security-risks.md#設計書の生成の安全策の残るリスク)にあたる。
-- [R-DES-41](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-42](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-43](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-44](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-45](../security-risks.md#設計書の生成の安全策の残るリスク)
-- [R-DES-46](../security-risks.md#設計書の生成の安全策の残るリスク)
+  残るリスクの表の[R-DES-40](../security-risks.md#r-des-40)にあたる。
+- [R-DES-41](../security-risks.md#r-des-41)
+- [R-DES-42](../security-risks.md#r-des-42)
+- [R-DES-43](../security-risks.md#r-des-43)
+- [R-DES-44](../security-risks.md#r-des-44)
+- [R-DES-45](../security-risks.md#r-des-45)
+- [R-DES-46](../security-risks.md#r-des-46)

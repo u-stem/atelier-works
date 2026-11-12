@@ -123,7 +123,10 @@ ownerとrepoは小文字にして比べる。
 どちらも失敗に数えない。
 同じ巡回で`factory:fix`も付いているPRは、レビューの見送りの後に、修正の判定へ進む。
 
-残るリスクは[R-FIX-01](../security-risks.md#prの発見)である。
+インデックスを足すmigrationは、重なった古い行を`cancelled`にする。
+`pr_review`はリースを使わないので、取り消された行のフローは自分では止まらない。
+止めるのは、投稿の直前に作業項目が`reviewing`かを確かめる処理で、そうでなければ投稿しない。
+残るリスクは[R-FIX-01](../security-risks.md#r-fix-01)である。
 
 修正への指示は、ラベルを付ける前に、PRへ通常のコメントとして書く。
 `pr_fix_collect`が、ほかの人のコメントと同じくフィードバックとして集める。
@@ -2588,7 +2591,7 @@ PRの修正は、すでにあるPRのheadにpushするので、当たったらpu
 | gitフックと`.yarn/`と`.devcontainer/` | 検査コマンドや開発環境が何を実行するかを決めるため |
 | lockfile、`package.json`の全体、ツールの設定、`.env`系、バージョン指定 | 検査コマンドがインストールや設定の読み込みで実行し、信頼するものを決めるため。PRの修正の一覧は、`package.json`の`scripts`だけを止める |
 
-残るリスクは[R-FIX-02](../security-risks.md#修正と実装で範囲が違う理由)である。
+残るリスクは[R-FIX-02](../security-risks.md#r-fix-02)である。
 
 通常の回は、`allowed_check_commands`が空でない間、pushと人の確認より前に検査コマンドを実行する。
 対象は、Factoryが扱うすべてのリポジトリである。
@@ -2715,7 +2718,7 @@ Factoryのリポジトリにsymlinkを足すと、self cloneでは普通のフ�
 検査コマンドは検査用のユーザーで動き、main cloneの`.git`に書き込めない([検査コマンドの権限](check-sandbox.md#検査コマンドの権限))。
 そのため、検査コマンドが`.git/config`を書き換えて、`GH_TOKEN`を持つgitにプログラムを実行させる経路は無い。
 検査コマンドが書き換えられるworktreeの`.git`ファイルは、記録との照合で止める。
-残るリスクの表の[R-FIX-03](../security-risks.md#gitが読む設定を限る)にあたる。
+残るリスクの表の[R-FIX-03](../security-risks.md#r-fix-03)にあたる。
 
 ### コミットの直前の再検査
 
@@ -2771,7 +2774,7 @@ ruleの種類は問わずに止める。
 headのブランチの状態を読めなかったときは、例外になって作業項目が失敗(`failed`)になり、`job_failed`で通知する。
 どの場合も、worktreeを作る前に止まる。
 
-残るリスクは[R-FIX-04](../security-risks.md#prの状態とheadの確認)である。
+残るリスクは[R-FIX-04](../security-risks.md#r-fix-04)である。
 
 pushの直前には、PRのheadが準備のときから変わっていないことだけを確かめ直す。
 変わっていれば、pushせずにブロックで止める。
@@ -2836,10 +2839,10 @@ CIの失敗を直す回の部品は、Actionsのログを取り込んでClaude�
 
 残るリスクは次のとおりである。
 
-- [R-FIX-05](../security-risks.md#ciのログの扱い)
-- [R-FIX-06](../security-risks.md#ciのログの扱い)
-- [R-FIX-07](../security-risks.md#ciのログの扱い)
-- [R-FIX-08](../security-risks.md#ciのログの扱い)
+- [R-FIX-05](../security-risks.md#r-fix-05)
+- [R-FIX-06](../security-risks.md#r-fix-06)
+- [R-FIX-07](../security-risks.md#r-fix-07)
+- [R-FIX-08](../security-risks.md#r-fix-08)
 - テストの期待値の書き換えは機械では判定できない。
   再レビューに頼る。
   PRが足した行の書き換えを許すので、この限界はPRが足した行にも及ぶ。
@@ -2848,20 +2851,19 @@ CIの失敗を直す回の部品は、Actionsのログを取り込んでClaude�
   `void 0;`、`;`、`if (false) ...`のような、何もしない行への置き換えは検出できない。
   再レビューは、PR全体の差分を読み、CI回のcommit単体の差分(書き換え前後の行)は入力に無い。
   書き換えは、最終の形が新しいコードとして読まれ、気づかれない可能性が残る。
-  残るリスクの表の[R-FIX-09](../security-risks.md#ciのログの扱い)にあたる。
+  残るリスクの表の[R-FIX-09](../security-risks.md#r-fix-09)にあたる。
 - 空白を無視した差分では、行の位置がずれる。
+  残るリスクの表の[R-FIX-10](../security-risks.md#r-fix-10)にあたる。
   次の2点は受け入れている。
   - 隣り合う同じ内容の行は、どちらがPRの追加かを決められず、基点の行がPRの追加に見えることがある。
   - 字下げだけが違う複製の行は、同じ行と見なされる。
     字下げに意味がある言語のテストでは、基点の行がすり替わりうる。
-
-  残るリスクの表の[R-FIX-10](../security-risks.md#ciのログの扱い)にあたる。
-- [R-FIX-11](../security-risks.md#ciのログの扱い)
-- [R-FIX-12](../security-risks.md#ciのログの扱い)
-- [R-FIX-13](../security-risks.md#ciのログの扱い)
-- [R-FIX-14](../security-risks.md#ciのログの扱い)
-- [R-FIX-15](../security-risks.md#ciのログの扱い)
-- [R-FIX-16](../security-risks.md#ciのログの扱い)
+- [R-FIX-11](../security-risks.md#r-fix-11)
+- [R-FIX-12](../security-risks.md#r-fix-12)
+- [R-FIX-13](../security-risks.md#r-fix-13)
+- [R-FIX-14](../security-risks.md#r-fix-14)
+- [R-FIX-15](../security-risks.md#r-fix-15)
+- [R-FIX-16](../security-risks.md#r-fix-16)
 
 ### マージの競合を解く回(PR修正の安全策)
 
@@ -2952,15 +2954,15 @@ gitの2.54で、graftsが効くことと、この指定で無効になること�
 
 #### 残るリスク
 
-- [R-FIX-17](../security-risks.md#マージの競合を解く回pr修正の安全策の残るリスク)
-- [R-FIX-18](../security-risks.md#マージの競合を解く回pr修正の安全策の残るリスク)
-- [R-FIX-19](../security-risks.md#マージの競合を解く回pr修正の安全策の残るリスク)
-- [R-FIX-20](../security-risks.md#マージの競合を解く回pr修正の安全策の残るリスク)
-- [R-FIX-21](../security-risks.md#マージの競合を解く回pr修正の安全策の残るリスク)
-- [R-FIX-22](../security-risks.md#マージの競合を解く回pr修正の安全策の残るリスク)
-- [R-FIX-23](../security-risks.md#マージの競合を解く回pr修正の安全策の残るリスク)
-- [R-FIX-24](../security-risks.md#マージの競合を解く回pr修正の安全策の残るリスク)
-- [R-FIX-25](../security-risks.md#マージの競合を解く回pr修正の安全策の残るリスク)
+- [R-FIX-17](../security-risks.md#r-fix-17)
+- [R-FIX-18](../security-risks.md#r-fix-18)
+- [R-FIX-19](../security-risks.md#r-fix-19)
+- [R-FIX-20](../security-risks.md#r-fix-20)
+- [R-FIX-21](../security-risks.md#r-fix-21)
+- [R-FIX-22](../security-risks.md#r-fix-22)
+- [R-FIX-23](../security-risks.md#r-fix-23)
+- [R-FIX-24](../security-risks.md#r-fix-24)
+- [R-FIX-25](../security-risks.md#r-fix-25)
 - 競合回の完了ステップは、失敗をDiscordとnoticeに通知しない。
   通知を競合の行の側に集めるためである。
   失敗は、作業項目の状態と注記としてConsoleに残る。
@@ -2970,4 +2972,4 @@ gitの2.54で、graftsが効くことと、この指定で無効になること�
   その場合は、行の起動の回数の上限に達して`rounds_exhausted`になるまで、通知が無い。
   上限に達するまでの時間は、上限の回数に巡回間隔の5分を掛けた程度である。
   詳細は[完了の結果](#完了の結果)にある。
-  残るリスクの表の[R-FIX-26](../security-risks.md#マージの競合を解く回pr修正の安全策の残るリスク)にあたる。
+  残るリスクの表の[R-FIX-26](../security-risks.md#r-fix-26)にあたる。

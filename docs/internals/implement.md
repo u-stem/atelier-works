@@ -1770,7 +1770,7 @@ DBには、秘密値をマスクした出力を16KB以内で保存する。
 
 残るリスクは次のとおりである。
 
-- [R-IMP-01](../security-risks.md#実装の安全策)
-- [R-IMP-02](../security-risks.md#実装の安全策)
-- [R-IMP-03](../security-risks.md#実装の安全策)
-- [R-IMP-04](../security-risks.md#実装の安全策)
+- [R-IMP-01](../security-risks.md#r-imp-01)
+- [R-IMP-02](../security-risks.md#r-imp-02)
+- [R-IMP-03](../security-risks.md#r-imp-03)
+- [R-IMP-04](../security-risks.md#r-imp-04)

@@ -535,7 +535,10 @@ transcriptと設定の置き場は、実行のたびに消す。
 
 #### 残るリスク
 
-残るリスクは[R-INV-01](../security-risks.md#隔離の測定と判定の残るリスク)である。
+予定外の`tool_use`の検査は、起動が終わった後にtranscriptを読む、事後の検出である。
+外れた呼び出しの`tool_result`は、検出より前にモデル(API)へ送られている。
+検査が止めるのは、残りの実行である。
+残るリスクは[R-INV-01](../security-risks.md#r-inv-01)である。
 
 呼び出しそのものを防ぐのは、次の3つである。
 
@@ -907,14 +910,14 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
 
 ### 残るリスク(調査の隔離)
 
-- [R-INV-02](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-03](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-04](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-05](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-06](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-07](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-08](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-09](../security-risks.md#調査の隔離の残るリスク)
+- [R-INV-02](../security-risks.md#r-inv-02)
+- [R-INV-03](../security-risks.md#r-inv-03)
+- [R-INV-04](../security-risks.md#r-inv-04)
+- [R-INV-05](../security-risks.md#r-inv-05)
+- [R-INV-06](../security-risks.md#r-inv-06)
+- [R-INV-07](../security-risks.md#r-inv-07)
+- [R-INV-08](../security-risks.md#r-inv-08)
+- [R-INV-09](../security-risks.md#r-inv-09)
 - 測定のscriptが、結果を自己申告する。
   信頼の根は、測定のscriptの保護(`f/factory/investigate_isolation_probe.`の前方一致)にある。
   関門が読むのは、Windmillに置かれた`f/factory/investigate_isolation_probe`の完了ジョブである。
@@ -925,12 +928,12 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   この偽造できる主体は、デプロイできる者であり、デプロイ済みのコード全体と同じ信頼の範囲に含める。
   scriptのハッシュの照合は入れない。
   受け入れる。
-  残るリスクの表の[R-INV-10](../security-risks.md#調査の隔離の残るリスク)にあたる。
-- [R-INV-11](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-12](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-13](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-14](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-15](../security-risks.md#調査の隔離の残るリスク)
+  残るリスクの表の[R-INV-10](../security-risks.md#r-inv-10)にあたる。
+- [R-INV-11](../security-risks.md#r-inv-11)
+- [R-INV-12](../security-risks.md#r-inv-12)
+- [R-INV-13](../security-risks.md#r-inv-13)
+- [R-INV-14](../security-risks.md#r-inv-14)
+- [R-INV-15](../security-risks.md#r-inv-15)
 - 公開の関門`checkIsolationProof`と、調査のClaudeを起動する公開の`runInvestigateClaude`を名指しする本番のファイルは、2種類に限る。
   1つは定義元で、もう1つは調査の生成のstep(`steps/investigate_generate.ts`)である。
   生成のstepでは、importと、依存の初期値として渡す箇所の2回ずつ現れる。
@@ -938,19 +941,18 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   `tests/lib/investigate_isolation_gate.test.ts`と`tests/lib/investigate_claude.test.ts`が、`f`の下のファイルを走査する。
   走査の許可の一覧を直す変更は、必ず保護パスに触れる。
   上の信頼の穴の扱いは、[入口の前提の扱い](#入口の前提の扱い)にある。
-- [R-INV-16](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-17](../security-risks.md#調査の隔離の残るリスク)
-- 観測は、`Glob`と`Grep`が祖先のディレクトリから目印を見つけるか、設定の層が読まれないか、指示文書の`@`の取り込みが起きないかを測らない。
-- [R-INV-18](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-19](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-20](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-21](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-22](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-23](../security-risks.md#調査の隔離の残るリスク)
-- 拒否の規則は、`Read`、`Glob`、`Grep`の組み込みのツールに効く設定である。
-  対象リポジトリの設定を読まないこと(設定の層を`user`だけにしたこと)が、実際に文脈へ入らないことも、実機で確かめていない。
-- [R-INV-24](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-25](../security-risks.md#調査の隔離の残るリスク)
+- [R-INV-16](../security-risks.md#r-inv-16)
+- [R-INV-17](../security-risks.md#r-inv-17)
+- [R-INV-39](../security-risks.md#r-inv-39)
+- [R-INV-18](../security-risks.md#r-inv-18)
+- [R-INV-19](../security-risks.md#r-inv-19)
+- [R-INV-20](../security-risks.md#r-inv-20)
+- [R-INV-21](../security-risks.md#r-inv-21)
+- [R-INV-22](../security-risks.md#r-inv-22)
+- [R-INV-23](../security-risks.md#r-inv-23)
+- [R-INV-40](../security-risks.md#r-inv-40)
+- [R-INV-24](../security-risks.md#r-inv-24)
+- [R-INV-25](../security-risks.md#r-inv-25)
 - 置き場をworker imageが作ること、置き場の検査、`git worktree add`が置き場の下に作れることは、実機で確かめていない。
   image(`mise run up`)の反映の後でないと確かめられない。
 - 掃除は、置き場の下の自分以外の項目をすべて消す。
@@ -965,19 +967,19 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   確認と掃除の間に相手が始まる競合は残る。
   受け入れる。
   workerを増やす変更や、調査を並行させる変更では、この前提を見直す。
-  残るリスクの表の[R-INV-26](../security-risks.md#調査の隔離の残るリスク)にあたる。
-- [R-INV-27](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-28](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-29](../security-risks.md#調査の隔離の残るリスク)
+  残るリスクの表の[R-INV-26](../security-risks.md#r-inv-26)にあたる。
+- [R-INV-27](../security-risks.md#r-inv-27)
+- [R-INV-28](../security-risks.md#r-inv-28)
+- [R-INV-29](../security-risks.md#r-inv-29)
 - 生成のstepの結果には、生の構造化出力を残さない。
   失敗の詳細も、結果と注記のどちらにも載せない。
   秘密値を検出した出力は、どこにも残らない。
   検出の通知は、確かめる先を案内せず、秘密の入れ替えを案内する。
-- [R-INV-30](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-31](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-32](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-33](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-34](../security-risks.md#調査の隔離の残るリスク)
+- [R-INV-30](../security-risks.md#r-inv-30)
+- [R-INV-31](../security-risks.md#r-inv-31)
+- [R-INV-32](../security-risks.md#r-inv-32)
+- [R-INV-33](../security-risks.md#r-inv-33)
+- [R-INV-34](../security-risks.md#r-inv-34)
 - 本文の検査の経路は、保護の外にある。
   対象は5つのファイルである。
   `lib/ci_fix_round.ts`の`ciTextScanner`、`lib/workspace.ts`の`runGitleaksOnText`と`runGitleaksStdin`がある。
@@ -987,13 +989,12 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   保護されたテストは、検査器を偽物に差し替えて順序と分岐を確かめるので、この5つのファイルが緩められても落ちない。
   検査と目印の付け方の変更は、PRのレビューで見る。
   そのため、検査が出力の秘密値を止めることは、保証でなく、第2層の守りとして扱う。
-  残るリスクの表の[R-INV-35](../security-risks.md#調査の隔離の残るリスク)にあたる。
-- [R-INV-36](../security-risks.md#調査の隔離の残るリスク)
-- [R-INV-37](../security-risks.md#調査の隔離の残るリスク)
-- 隔離の測定のジョブの有無を、調査の登録と生成が、ジョブのトークンの権限で見られるかは、実機で確かめる。
-  見えないと、確認が空の一覧になり、測定が動いていても調査を始めうる。
+  残るリスクの表の[R-INV-35](../security-risks.md#r-inv-35)にあたる。
+- [R-INV-36](../security-risks.md#r-inv-36)
+- [R-INV-37](../security-risks.md#r-inv-37)
+- [R-INV-41](../security-risks.md#r-inv-41)
 - 依頼文の`@`が、プロンプトの展開で取り込みにならないことは、実装でなく実機の確認に回した。
-- [R-INV-38](../security-risks.md#調査の隔離の残るリスク)
+- [R-INV-38](../security-risks.md#r-inv-38)
 
 ### 入口の前提の扱い
 

@@ -1445,9 +1445,9 @@ Discordの説明には、閾値、最後の成功(JST)、最新の実行の原�
 仕様は[通知とrate limitの仕様](notifications.md#restの検索の拒否)にある。
 残るリスクは次のとおりである。
 
-- [R-GHC-01](../security-risks.md#restの検索の拒否)
-- [R-GHC-02](../security-risks.md#restの検索の拒否)
+- [R-GHC-01](../security-risks.md#r-ghc-01)
+- [R-GHC-02](../security-risks.md#r-ghc-02)
 - `gh search`、`--search`、argvの`gh`と`search`の並びも、静的テストが字面で走査して止める。
-- [R-GHC-03](../security-risks.md#restの検索の拒否)
-- [R-GHC-04](../security-risks.md#restの検索の拒否)
-- [R-GHC-05](../security-risks.md#restの検索の拒否)
+- [R-GHC-03](../security-risks.md#r-ghc-03)
+- [R-GHC-04](../security-risks.md#r-ghc-04)
+- [R-GHC-05](../security-risks.md#r-ghc-05)

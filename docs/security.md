@@ -35,7 +35,7 @@ headless Claudeはこれらをデータとして読むだけで、内容に書�
 要件定義の生成のworktreeは、承認と掃除で消す。
 監査のスナップショットは、実行のたびに作り直して消す。
 
-残るリスクは[R-TB-01](security-risks.md#書き込める範囲)である。
+残るリスクは[R-TB-01](security-risks.md#r-tb-01)である。
 
 headless Claudeの起動には、次のフラグと環境変数で防御を足す。
 
@@ -146,18 +146,20 @@ Factory自身のリポジトリのPRは、rulesetでなく、Factory内部の固
 
 FactoryはPAT(`f/factory/github_token`)で、人と同じアカウントとしてGitHubを操作する。
 PRをマージするAPIを呼ぶのは、dependabotの更新のフローだけで、既定では無効である([dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ))。
-PATが`main`へのマージの権限を持つかは確かめていない。
-承認が0件なので、PATで開いたPRを人の確認なしにマージできるかも確かめていない。
-どちらも確かめるまでは、残るリスクとして扱う。
+残るリスクは[R-TB-35](security-risks.md#r-tb-35)である。
 
 ### CIで走査されないコミット
 
 atelier-worksのCIは、gitleaksでPRのコミットを走査する。
 走査されないコミットが、次の2つの場合に残る。
 
-残るリスクは[R-TB-02](security-risks.md#ciで走査されないコミット)である。
+残るリスクとして、PRのCIの実行は、同じPRの新しい実行が始まると`cancel-in-progress`で止まる。
+秘密値を含むコミットを、実行の途中でforce pushにより置き換えると、置き換えられたコミットはCIのgitleaksで走査されない。
+残るリスクは[R-TB-02](security-risks.md#r-tb-02)である。
 
-残るリスクは[R-TB-03](security-risks.md#ciで走査されないコミット)である。
+残るリスクとして、`push`は`main`だけで動くので、PRを作るまで、人がpushしたブランチのコミットはCIで走査されない。
+実行されるのはlefthookのpre-commitのgitleaksだけで、ローカルで飛ばせる。
+残るリスクは[R-TB-03](security-risks.md#r-tb-03)である。
 
 ### CIのトークンの権限
 
@@ -180,7 +182,11 @@ atelier-worksのCIは、gitleaksでPRのコミットを走査する。
 
 ### CIの実行の範囲の判定
 
-残るリスクは[R-TB-04](security-risks.md#ciの実行の範囲の判定)である。
+残るリスクとして、PRの実行の判定は、PRの版の`scripts/ci-scope.ts`で行う。
+判定を書き換える変更は、保護パスとして`pr_fix`が止める。
+`implement`は止めず、記録して検査を省き、PRの「確認して欲しい点」に載せる。
+人が書いたPRは`ci.yml`も書き換えられるので、レビューで確かめる。
+残るリスクは[R-TB-04](security-risks.md#r-tb-04)である。
 
 判定の`DB_DEPENDENCY_FILES`には、`test:db`が実行するコードの依存を列挙する。
 `console_query.ts`が`lib/config.ts`を読むので、`f/factory/lib/config.ts`を入れている。
@@ -208,19 +214,19 @@ worktreeを作るフックと、既存のブランチを使う経路(worktreeの
 
 残るリスクは次のとおりである。
 
-- [R-TB-05](security-risks.md#worktreeの自動の片付け)
-- [R-TB-06](security-risks.md#worktreeの自動の片付け)
-- [R-TB-07](security-risks.md#worktreeの自動の片付け)
-- [R-TB-08](security-risks.md#worktreeの自動の片付け)
-- [R-TB-09](security-risks.md#worktreeの自動の片付け)
-- [R-TB-10](security-risks.md#worktreeの自動の片付け)
-- [R-TB-11](security-risks.md#worktreeの自動の片付け)
-- [R-TB-12](security-risks.md#worktreeの自動の片付け)
-- [R-TB-13](security-risks.md#worktreeの自動の片付け)
-- [R-TB-14](security-risks.md#worktreeの自動の片付け)
-- [R-TB-15](security-risks.md#worktreeの自動の片付け)
-- [R-TB-16](security-risks.md#worktreeの自動の片付け)
-- [R-TB-17](security-risks.md#worktreeの自動の片付け)
+- [R-TB-05](security-risks.md#r-tb-05)
+- [R-TB-06](security-risks.md#r-tb-06)
+- [R-TB-07](security-risks.md#r-tb-07)
+- [R-TB-08](security-risks.md#r-tb-08)
+- [R-TB-09](security-risks.md#r-tb-09)
+- [R-TB-10](security-risks.md#r-tb-10)
+- [R-TB-11](security-risks.md#r-tb-11)
+- [R-TB-12](security-risks.md#r-tb-12)
+- [R-TB-13](security-risks.md#r-tb-13)
+- [R-TB-14](security-risks.md#r-tb-14)
+- [R-TB-15](security-risks.md#r-tb-15)
+- [R-TB-16](security-risks.md#r-tb-16)
+- [R-TB-17](security-risks.md#r-tb-17)
 
 ### 状態の理由の区切り
 
@@ -230,7 +236,7 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 区切りを差し込んで、別の理由の訳文を表示させたり、既知の理由を足して次の操作を選ばせたりできないようにするためである。
 置き換える詳細の範囲は[通知とrate limit](internals/notifications.md)にある。
 
-残るリスクは[R-TB-18](security-risks.md#状態の理由の区切り)である。
+残るリスクは[R-TB-18](security-risks.md#r-tb-18)である。
 
 ### 自己更新の通知の状態
 
@@ -238,10 +244,10 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 通知は、今の`deployed_sha`への反映が成功した記録(`factory.deployments`)のうち最も新しいものより前に作られたものだけが、自動で解決される。
 残るリスクは次のとおりである。
 
-- [R-TB-19](security-risks.md#自己更新の通知の状態)
+- [R-TB-19](security-risks.md#r-tb-19)
 - stateや`deployed_sha`を書き換えても、通知より新しい反映の成功の記録が無い限り、通知は解決されない。
-- [R-TB-20](security-risks.md#自己更新の通知の状態)
-- [R-TB-21](security-risks.md#自己更新の通知の状態)
+- [R-TB-20](security-risks.md#r-tb-20)
+- [R-TB-21](security-risks.md#r-tb-21)
 
 ### Factory自身のリポジトリの照合
 
@@ -251,11 +257,11 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 
 残るリスクは次のとおりである。
 
-- [R-TB-22](security-risks.md#factory自身のリポジトリの照合)
-- [R-TB-23](security-risks.md#factory自身のリポジトリの照合)
-- [R-TB-24](security-risks.md#factory自身のリポジトリの照合)
-- [R-TB-25](security-risks.md#factory自身のリポジトリの照合)
-- [R-TB-26](security-risks.md#factory自身のリポジトリの照合)
+- [R-TB-22](security-risks.md#r-tb-22)
+- [R-TB-23](security-risks.md#r-tb-23)
+- [R-TB-24](security-risks.md#r-tb-24)
+- [R-TB-25](security-risks.md#r-tb-25)
+- [R-TB-26](security-risks.md#r-tb-26)
 
 ### オーナーの数値IDの照合
 
@@ -296,14 +302,14 @@ cloneを開くステップでは、`openFactoryClone`の照合も重なるので
 
 残るリスクは次のとおりである。
 
-- [R-TB-27](security-risks.md#オーナーの数値idの照合)
-- [R-TB-28](security-risks.md#オーナーの数値idの照合)
-- [R-TB-29](security-risks.md#オーナーの数値idの照合)
-- [R-TB-30](security-risks.md#オーナーの数値idの照合)
-- [R-TB-31](security-risks.md#オーナーの数値idの照合)
-- [R-TB-32](security-risks.md#オーナーの数値idの照合)
-- [R-TB-33](security-risks.md#オーナーの数値idの照合)
-- [R-TB-34](security-risks.md#オーナーの数値idの照合)
+- [R-TB-27](security-risks.md#r-tb-27)
+- [R-TB-28](security-risks.md#r-tb-28)
+- [R-TB-29](security-risks.md#r-tb-29)
+- [R-TB-30](security-risks.md#r-tb-30)
+- [R-TB-31](security-risks.md#r-tb-31)
+- [R-TB-32](security-risks.md#r-tb-32)
+- [R-TB-33](security-risks.md#r-tb-33)
+- [R-TB-34](security-risks.md#r-tb-34)
 
 ### migrationを戻した日の日次予算
 
@@ -526,12 +532,14 @@ ActionsをRead-onlyにするのは、次の3つを読むためである。
 FactoryのPRの判定と起動は発見より前に終わるので、この超過に巻き込まれない。
 条件は、対象のリポジトリが明示リポジトリで、公開されていることなので、受け入れる。
 検索へ戻す設定は無い。
-残るリスクの表の[R-CRED-01](security-risks.md#資格情報の取得)にあたる。
+残るリスクの表の[R-CRED-01](security-risks.md#r-cred-01)にあたる。
 人のPRには、直す作業項目を起動せず、PRとリポジトリへの書き込みもしない。
 通知の文は、FactoryのPRと同じ固定文である。
 forkのPRの実行と、別のPRの実行は、判定に使わず捨てる。
 headのリポジトリのIDがベースと違う実行と、結び付いたPRの番号が違う実行を使うと、forkや別のPRの結果を、FactoryのPRの結果として扱ってしまうためである。
-残るリスクは[R-CRED-02](security-risks.md#資格情報の取得)である。
+Actions: Read-onlyでは、実行の一覧だけでなく、選んだ全リポジトリの実行のログとartifactも読める。
+`github_token`は、Console用workerの`approval_decide`と`retry_work_item`も読む。
+残るリスクは[R-CRED-02](security-risks.md#r-cred-02)である。
 
 PRのマージの競合を検知するscript`watch_pr_conflicts`は、Pull requestsの読み取りだけを使い、開いているPRの一覧とPRの状態を読む。
 読む範囲は、許可リストに合うリポジトリの開いているPRで、作者を問わない。
@@ -563,7 +571,12 @@ PRのマージの競合を検知するscript`watch_pr_conflicts`は、Pull reque
 外部の文字列は載せない。
 通知とDiscordの文には、PRの題名やブランチ名を載せない。
 リポジトリへ書ける人が決める文字列を、通知を介して人やClaudeへ渡させないためである。
-残るリスクは[R-CRED-03](security-risks.md#資格情報の取得)、[R-CRED-04](security-risks.md#資格情報の取得)、[R-CRED-05](security-risks.md#資格情報の取得)である。
+残るリスクは[R-CRED-03](security-risks.md#r-cred-03)、[R-CRED-04](security-risks.md#r-cred-04)である。
+REST一覧を読むのは、表の記録が新しくない間の作業項目、競合の行、明示リポジトリと、収集が止まっている間である。
+このとき5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。
+1回の実行に、1リポジトリ10ページ、予算120秒、rate limitでの停止という上限がある。
+明示リポジトリは、運用者本人のPRが無くてもREST一覧で読まれる。
+残るリスクは[R-CRED-05](security-risks.md#r-cred-05)である。
 
 fine-grained PATは、トークンの値を変えずに権限の設定だけを変えられる。
 権限を変えるときは既存のトークンを更新すればよく、再発行は要らない。
@@ -586,7 +599,7 @@ PRは除くが、ページは消費する。
 走査の所要時間に、実時間の予算は置かない。
 残るリスクは次のとおりである。
 
-- [R-CRED-06](security-risks.md#資格情報の取得)
+- [R-CRED-06](security-risks.md#r-cred-06)
 - 目印を偽造して、作成済みのIssueとして再利用させる経路がある。
   外の人が、PATと同じアカウントのIssueの最後の行に、目印を書く経路は無い。
   一覧を作成者で絞ること、Factoryが作るIssueの最後の行が`appendIssueProposalMarker`の目印に固定されることが、その根拠である。
@@ -602,10 +615,10 @@ PRは除くが、ページは消費する。
   そのため、実際には付いていないラベルが付いた扱いになりうる。
   受け入れる。
   偽造できる人は、Factoryのリポジトリに書き込める人で、その人はIssueやPRを直接操作できるためである。
-  残るリスクの表の[R-CRED-07](security-risks.md#資格情報の取得)にあたる。
-- [R-CRED-08](security-risks.md#資格情報の取得)
-- [R-CRED-09](security-risks.md#資格情報の取得)
-- [R-CRED-10](security-risks.md#資格情報の取得)
+  残るリスクの表の[R-CRED-07](security-risks.md#r-cred-07)にあたる。
+- [R-CRED-08](security-risks.md#r-cred-08)
+- [R-CRED-09](security-risks.md#r-cred-09)
+- [R-CRED-10](security-risks.md#r-cred-10)
 
 有効期限は最長で1年である。
 `poll_issues`は冒頭で`GET /user`を呼び、トークンが失効していればジョブを失敗させる。
@@ -753,7 +766,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 
 残るリスクは次のとおりである。
 
-- [R-DLV-01](security-risks.md#consoleの配信)
+- [R-DLV-01](security-risks.md#r-dlv-01)
 - 新規投入の再送は、冪等キーで止める。
   画面は、投入の1回ごとにキーを作り、メモリだけに持つ。
   リロードをまたぐ保持は持たない。
@@ -780,7 +793,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
     重なったIssueとPRは、人がマージするまで反映されず、人が閉じられる。
     損なわれるのは手間で、データと権限は損なわれない。
     入力とキーをタブのメモリだけに置く方針を保つため、リロードをまたぐ保持は持たない。
-    残るリスクの表の[R-DLV-02](security-risks.md#consoleの配信)にあたる。
+    残るリスクの表の[R-DLV-02](security-risks.md#r-dlv-02)にあたる。
   - 同じキーで内容が違う投入は、黙って捨てず、`intake_key_conflict`で失敗させて通知に出す。
   - 作成の途中で別のジョブが同じキーを予約しているときは、成功で返さず、`intake_key_in_flight`で失敗させて通知に出す。
     成功で返すと、作成が失敗したときに、Issueの無い投入が成功に見えるためである。
@@ -805,7 +818,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
     取り直しの前に探索する順にすると設計が変わるので、受け入れる。
     承認を省く進め方では、重複したIssueが承認で止まらない。
     ラベルも作業項目も無い孤立したIssueとして残り、人が閉じる。
-    残るリスクの表の[R-DLV-03](security-risks.md#consoleの配信)にあたる。
+    残るリスクの表の[R-DLV-03](security-risks.md#r-dlv-03)にあたる。
   - 承認を省く進め方では、キーが必須である。
     検証(`validateManualIntake`)、Issueの作成、登録の3か所が、副作用の前に断る。
     キーを扱う3つのファイルと、キーの表のmigrationは、保護パスに入れる([進め方ごとの承認](internals/implement.md#進め方ごとの承認))。
@@ -822,9 +835,9 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
   期限を過ぎて走り続けた呼び出しが失敗して戻すとき、印を取り直した別の呼び出しがIssueを作っている最中でも、次の承認と重ならないようにするためである。
   印に持ち主の識別子は無い。
   期限を超える処理と取り直した処理は、理論上は重なりうる。
-  残るリスクの表の[R-DLV-04](security-risks.md#consoleの配信)にあたる。
-- [R-DLV-05](security-risks.md#consoleの配信)
-- [R-DLV-06](security-risks.md#consoleの配信)
+  残るリスクの表の[R-DLV-04](security-risks.md#r-dlv-04)にあたる。
+- [R-DLV-05](security-risks.md#r-dlv-05)
+- [R-DLV-06](security-risks.md#r-dlv-06)
 - `ci.yml`の`console-a11y`ジョブが使うPlaywrightのブラウザは、ハッシュで照合しない。
   HTTPSで公式の取得元(`cdn.playwright.dev`、予備に`playwright.download.prss.microsoft.com`)から取る。
   取得元かその通信が侵害されると、改ざんされたブラウザが動く。
@@ -834,37 +847,37 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
   `main`の実行では、このジョブを飛ばす。
   ブラウザはキャッシュせず、毎回取得する。
   照合しないキャッシュを、`main`の実行が書いてPRの実行が読む経路を作らないためである。
-  残るリスクの表の[R-DLV-07](security-risks.md#consoleの配信)にあたる。
-- [R-DLV-08](security-risks.md#consoleの配信)
-- [R-DLV-09](security-risks.md#consoleの配信)
-- [R-DLV-10](security-risks.md#consoleの配信)
-- [R-DLV-11](security-risks.md#consoleの配信)
-- [R-DLV-12](security-risks.md#consoleの配信)
-- [R-DLV-13](security-risks.md#consoleの配信)
-- [R-DLV-14](security-risks.md#consoleの配信)
-- [R-DLV-15](security-risks.md#consoleの配信)
-- [R-DLV-16](security-risks.md#consoleの配信)
-- [R-DLV-17](security-risks.md#consoleの配信)
+  残るリスクの表の[R-DLV-07](security-risks.md#r-dlv-07)にあたる。
+- [R-DLV-08](security-risks.md#r-dlv-08)
+- [R-DLV-09](security-risks.md#r-dlv-09)
+- [R-DLV-10](security-risks.md#r-dlv-10)
+- [R-DLV-11](security-risks.md#r-dlv-11)
+- [R-DLV-12](security-risks.md#r-dlv-12)
+- [R-DLV-13](security-risks.md#r-dlv-13)
+- [R-DLV-14](security-risks.md#r-dlv-14)
+- [R-DLV-15](security-risks.md#r-dlv-15)
+- [R-DLV-16](security-risks.md#r-dlv-16)
+- [R-DLV-17](security-risks.md#r-dlv-17)
 - 前段でTLSを終端するときは、プロキシが`Host`をポートを含めて保つ(nginxなら`proxy_set_header Host $http_host`)。
   nginxの既定は`Host`を書き換え、`$host`はポートを落とす。
   どちらも`Origin`と合わず、ログインを含む書き込みがすべて403になる。
-- [R-DLV-18](security-risks.md#consoleの配信)
-- [R-DLV-19](security-risks.md#consoleの配信)
-- [R-DLV-20](security-risks.md#consoleの配信)
-- [R-DLV-21](security-risks.md#consoleの配信)
-- [R-DLV-22](security-risks.md#consoleの配信)
-- [R-DLV-23](security-risks.md#consoleの配信)
+- [R-DLV-18](security-risks.md#r-dlv-18)
+- [R-DLV-19](security-risks.md#r-dlv-19)
+- [R-DLV-20](security-risks.md#r-dlv-20)
+- [R-DLV-21](security-risks.md#r-dlv-21)
+- [R-DLV-22](security-risks.md#r-dlv-22)
+- [R-DLV-23](security-risks.md#r-dlv-23)
 - 旧Consoleへの規則は、過去のDiscordの通知、Issueのコメント、PRの本文に残るリンクのために、旧Consoleを削除した後も残す。
   飛ばすのは閲覧の`/apps/get/`と`/apps_raw/get/`だけで、編集画面やAPIには触れない。
   フラグメントはブラウザがリダイレクトを越えて保ち、新しいConsoleが読み替える。
   読み替えるのは、正の整数のidを持つ要件定義書と監査レポートの形だけで、ほかのフラグメントは入口に着く。
-- [R-DLV-24](security-risks.md#consoleの配信)
-- [R-DLV-25](security-risks.md#consoleの配信)
-- [R-DLV-26](security-risks.md#consoleの配信)
-- [R-DLV-27](security-risks.md#consoleの配信)
-- [R-DLV-28](security-risks.md#consoleの配信)
-- [R-DLV-29](security-risks.md#consoleの配信)
-- [R-DLV-30](security-risks.md#consoleの配信)
+- [R-DLV-24](security-risks.md#r-dlv-24)
+- [R-DLV-25](security-risks.md#r-dlv-25)
+- [R-DLV-26](security-risks.md#r-dlv-26)
+- [R-DLV-27](security-risks.md#r-dlv-27)
+- [R-DLV-28](security-risks.md#r-dlv-28)
+- [R-DLV-29](security-risks.md#r-dlv-29)
+- [R-DLV-30](security-risks.md#r-dlv-30)
 - 検証用サーバー(`scripts/console-branch-server.ts`)は、ブランチ版のConsoleに、運用者のCookieで本物のWindmillのAPIを呼ばせる。
   ブランチの変更は人のレビューの前なので、悪意のあるConsoleのコードは、運用者のCookieで管理者の操作を呼べる。
   そのため、既定は読み取りだけにする。
@@ -874,9 +887,9 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
   Originは自身のオリジンに限り、`Sec-Fetch-Site`が`cross-site`か`same-site`の要求は断る。
   転送元を名乗るヘッダーとhop-by-hopのヘッダーは、中継先へ渡さない。
   書き込みは、人が`--allow-writes`を付け、端末で「yes」と入力したときだけ届く。
-- [R-DLV-31](security-risks.md#consoleの配信)
-- [R-DLV-32](security-risks.md#consoleの配信)
-- [R-DLV-33](security-risks.md#consoleの配信)
+- [R-DLV-31](security-risks.md#r-dlv-31)
+- [R-DLV-32](security-risks.md#r-dlv-32)
+- [R-DLV-33](security-risks.md#r-dlv-33)
 
 ## workerコンテナの権限
 
@@ -954,9 +967,9 @@ scriptはURLを読み解き、接続の情報を環境変数(`PGPASSWORD`など)
 
 ### 控えの残るリスク
 
-- [R-BAK-01](security-risks.md#バックアップの控え)
-- [R-BAK-02](security-risks.md#バックアップの控え)
-- [R-BAK-03](security-risks.md#バックアップの控え)
+- [R-BAK-01](security-risks.md#r-bak-01)
+- [R-BAK-02](security-risks.md#r-bak-02)
+- [R-BAK-03](security-risks.md#r-bak-03)
 
 ## Console用workerの境界
 
@@ -1335,22 +1348,22 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
 
 収集のトークンについて、次を受け入れている。
 
-- [R-PER-01](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-02](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-03](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-04](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-05](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-06](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-07](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-08](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-09](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-10](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-11](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-12](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-13](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-14](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-15](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-16](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-01](security-risks.md#r-per-01)
+- [R-PER-02](security-risks.md#r-per-02)
+- [R-PER-03](security-risks.md#r-per-03)
+- [R-PER-04](security-risks.md#r-per-04)
+- [R-PER-05](security-risks.md#r-per-05)
+- [R-PER-06](security-risks.md#r-per-06)
+- [R-PER-07](security-risks.md#r-per-07)
+- [R-PER-08](security-risks.md#r-per-08)
+- [R-PER-09](security-risks.md#r-per-09)
+- [R-PER-10](security-risks.md#r-per-10)
+- [R-PER-11](security-risks.md#r-per-11)
+- [R-PER-12](security-risks.md#r-per-12)
+- [R-PER-13](security-risks.md#r-per-13)
+- [R-PER-14](security-risks.md#r-per-14)
+- [R-PER-15](security-risks.md#r-per-15)
+- [R-PER-16](security-risks.md#r-per-16)
 - 組織の所有者での次の4つは、実機で確かめていない。
   所有者が個人で、確かめる手段が無いためである。
   - `GET /user/teams`に必要なPATの権限。
@@ -1361,20 +1374,19 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
   組織の所有者を足すときは、先に[運用](operations.md#組織の所有者を足す前の確認)の手順で確かめる。
   権限が要ると分かったときは、同じ変更で[PATの権限](#githubのpat)の表に足し、種類をセキュリティとして監査を通す。
   今は、PATに権限を足していない。
-- [R-PER-17](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-17](security-risks.md#r-per-17)
 - `poll_prs`は、チームを使えて照合の結果対象でなかったPRを、1時間は確かめ直さない。
+  残るリスクの表の[R-PER-18](security-risks.md#r-per-18)にあたる。
   次の場合に、最大で1時間気づかない。
   - 同じheadのまま、別のチームが依頼されたとき。
   - PATのアカウントが、依頼されたチームに足されたとき。
   - 表の依頼先が`NULL`のまま、同じheadで直接の依頼が足されたとき。
   - 作者を`allowed_labeler_logins`か`allowed_labeler_ids`に足したとき。
     作者が許可されていないために対象でなかったPRも、覚えているためである。
-
-  残るリスクの表の[R-PER-18](security-risks.md#定期ジョブ用workerの境界)にあたる。
-- [R-PER-19](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-20](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-21](security-risks.md#定期ジョブ用workerの境界)
-- [R-PER-22](security-risks.md#定期ジョブ用workerの境界)
+- [R-PER-19](security-risks.md#r-per-19)
+- [R-PER-20](security-risks.md#r-per-20)
+- [R-PER-21](security-risks.md#r-per-21)
+- [R-PER-22](security-risks.md#r-per-22)
 
 ## ホストの実行役の境界
 
@@ -1451,9 +1463,9 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 
 残るリスクは次のとおりである。
 
-- [R-UPD-01](security-risks.md#自己更新の打ち切り)
-- [R-UPD-02](security-risks.md#自己更新の打ち切り)
-- [R-UPD-03](security-risks.md#自己更新の打ち切り)
+- [R-UPD-01](security-risks.md#r-upd-01)
+- [R-UPD-02](security-risks.md#r-upd-02)
+- [R-UPD-03](security-risks.md#r-upd-03)
 - 打ち切りが子の実行中に当たるのは、内側の上限が働く前に全体の上限に達したときだけである。
   区切った呼び出しが30秒で終わるので、通常は当たらない。
 - 残ったプロセスの見つけ方と、打ち切りが子を止めるかの確かめ方は[運用](operations.md)の「自己更新の打ち切りを確かめる」にある。
@@ -1598,7 +1610,7 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 投入は人が行う。
 フックは書き込みを止めないので、Claudeがこの形を実行すると、既にある値が空文字で上書きされうる。
 
-残るリスクは[R-DENY-01](security-risks.md#claude-codeの拒否ルール)である。
+残るリスクは[R-DENY-01](security-risks.md#r-deny-01)である。
 
 守りは、守る対象ごとに次のとおり分かれる。
 
@@ -1618,7 +1630,7 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 デバッグ中の誤操作でも打つ形(`mise -E local env`、`mise hook-env`など)が残り、これを残るリスクとして「判定しないもの」に挙げて受け入れる。
 会話に出た値は、APIへ送られ、手元の記録にも残る。
 漏れた値は失効して再投入する。
-残るリスクの表の[R-DENY-02](security-risks.md#claude-codeの拒否ルール)にあたる。
+残るリスクの表の[R-DENY-02](security-risks.md#r-deny-02)にあたる。
 [運用](operations.md)の「秘密をローテーションする」が扱うのは、`GITHUB_TOKEN`、`CONSOLE_GITHUB_TOKEN`、OAuthトークンだけである。
 所有者ごとの読み取りPAT、`DISCORD_WEBHOOK_URL`、`DB_PASSWORD`、`WM_ADMIN_PASSWORD`には、手順が無い。
 `DB_PASSWORD`と`WM_ADMIN_PASSWORD`は、再投入だけでは壊れるので、先にPostgresと管理者のパスワードを変える。
@@ -1639,7 +1651,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
 | deployの保留を置く操作(`freeze:place`の`--scope deploy`、`scripts/freeze.ts place --scope deploy`)、凍結の解除(`freeze:release`、`scripts/freeze.ts release`)、凍結の全消去(`freeze:reset`、`scripts/freeze.ts reset`)、削除を確定する押し出し(`push:prune`、`scripts/freeze.ts push --prune`)。前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`)の後ろも拒否する。`--scope`の値が実行時に決まる形も拒否する | deployの保留は反映全体を止める。解除と全消去は保留を外せる。削除を確定する押し出しは、リモートだけの項目を消す。どれも人の端末の確認を通る操作で、subagentには確認する相手がいない。主セッションには、単独の`mise run <タスク>`の行(`freeze:place`と`freeze:release`)だけ許す。スケジュールの凍結を置くことと一覧は、両方に許す |
-| 主セッションを含むすべてのClaudeのセッションの、Consoleの書き込みのscriptを呼びうる操作。コマンドの語か標準入力の文字列に、書き込みのscript(`scripts/claude-hooks/console-scripts.ts`の一覧。解除の`hold_release`と`freeze_release`、取消の`console_job_cancel`、再実行の`console_job_rerun`、設定変更の`console_config_update`、`approval_decide`、`retry_work_item`など)の名前、名前に当たりうるglob、ブレースの形があるもの。読み取りのプログラムと`wmill`の読み取りの副コマンドは、実行を表す語が並ばない限り除く。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる([R-HOOK-01](security-risks.md#claude-codeのフック)) |
+| 主セッションを含むすべてのClaudeのセッションの、Consoleの書き込みのscriptを呼びうる操作。コマンドの語か標準入力の文字列に、書き込みのscript(`scripts/claude-hooks/console-scripts.ts`の一覧。解除の`hold_release`と`freeze_release`、取消の`console_job_cancel`、再実行の`console_job_rerun`、設定変更の`console_config_update`、`approval_decide`、`retry_work_item`など)の名前、名前に当たりうるglob、ブレースの形があるもの。読み取りのプログラムと`wmill`の読み取りの副コマンドは、実行を表す語が並ばない限り除く。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる([R-HOOK-01](security-risks.md#r-hook-01)) |
 | 保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する。前置き(`script`、`unbuffer`、`caffeinate`、`/usr/bin/time`、`ssh`)の後ろの同じ形と、コマンド文字列の中の同じ形、語を足すコマンドとシェルを伴う形も拒否する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。主セッションには、単独の`mise run hold:place`と`mise run hold:release`の行だけ許す。一覧(`list`)は両方に許す |
 | `gh pr`と`gh api`のうち、読み取りか編集と確かめられた形以外(`gh pr merge`、書き込みのメソッドの`gh api`、GraphQLのマージのmutationなど)と、マージを含む`gh alias`。対象のリポジトリのマージの保留が有効なときと、保留を読めないとき。リポジトリが決まらないものは、どのリポジトリの保留でも拒否する | 保留は、期限つきでマージを止める。綴りの列挙は漏れるので、確かめられた形以外を対象にする。読めないときに通すと、保留を置いた意味が外れる |
 | `wmill datatable migrate up`と`migrate down`(deployの保留が有効か、読めないとき)。`--dry-run`の無い`wmill sync push`(deployの保留かスケジュールの凍結が有効か、読めないとき) | deployの保留は反映全体を止める。除外を付けない手動のpushは、凍結中のスケジュールを上書きする |
@@ -1666,13 +1678,13 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 予備として、`.claude/settings.json`の`permissions.deny`にも、行頭の代入を置く。
 残るリスクとして、次の回避は塞がない。
 
-- [R-HOOK-02](security-risks.md#claude-codeのフック)
-- [R-HOOK-03](security-risks.md#claude-codeのフック)
-- [R-HOOK-04](security-risks.md#claude-codeのフック)
-- [R-HOOK-05](security-risks.md#claude-codeのフック)
-- [R-HOOK-06](security-risks.md#claude-codeのフック)
-- [R-HOOK-07](security-risks.md#claude-codeのフック)
-- [R-HOOK-08](security-risks.md#claude-codeのフック)
+- [R-HOOK-02](security-risks.md#r-hook-02)
+- [R-HOOK-03](security-risks.md#r-hook-03)
+- [R-HOOK-04](security-risks.md#r-hook-04)
+- [R-HOOK-05](security-risks.md#r-hook-05)
+- [R-HOOK-06](security-risks.md#r-hook-06)
+- [R-HOOK-07](security-risks.md#r-hook-07)
+- [R-HOOK-08](security-risks.md#r-hook-08)
 
 添字付きの代入をコマンドの前に置く形(`CHECK_IDLE_FORCE[1]=1`、`LEFTHOOK[1]=0`)は、読めない構文として拒否する。
 `env -S`の文字列は、`env`と同じ規則で語に分けて判定する。
@@ -2261,15 +2273,15 @@ forkの内容は第三者が書いたもので、信頼してレビューに渡�
 
 次のリスクは、受け入れている。
 
-- [R-LBL-01](security-risks.md#ラベル付与の制限)
-- [R-LBL-02](security-risks.md#ラベル付与の制限)
-- [R-LBL-03](security-risks.md#ラベル付与の制限)
-- [R-LBL-04](security-risks.md#ラベル付与の制限)
-- [R-LBL-05](security-risks.md#ラベル付与の制限)
-- [R-LBL-06](security-risks.md#ラベル付与の制限)
-- [R-LBL-07](security-risks.md#ラベル付与の制限)
-- [R-LBL-08](security-risks.md#ラベル付与の制限)
-- [R-LBL-09](security-risks.md#ラベル付与の制限)
+- [R-LBL-01](security-risks.md#r-lbl-01)
+- [R-LBL-02](security-risks.md#r-lbl-02)
+- [R-LBL-03](security-risks.md#r-lbl-03)
+- [R-LBL-04](security-risks.md#r-lbl-04)
+- [R-LBL-05](security-risks.md#r-lbl-05)
+- [R-LBL-06](security-risks.md#r-lbl-06)
+- [R-LBL-07](security-risks.md#r-lbl-07)
+- [R-LBL-08](security-risks.md#r-lbl-08)
+- [R-LBL-09](security-risks.md#r-lbl-09)
 
 ### 投稿者の関係の確認
 
@@ -2316,19 +2328,21 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
 
 残るリスクは次のとおり。
 
-- [R-CLS-01](security-risks.md#閉じた人の確認)
-- [R-CLS-02](security-risks.md#閉じた人の確認)
-- [R-CLS-03](security-risks.md#閉じた人の確認)
+- [R-CLS-01](security-risks.md#r-cls-01)
+- [R-CLS-02](security-risks.md#r-cls-02)
+- [R-CLS-03](security-risks.md#r-cls-03)
 
 ## 残るリスク
 
 受け入れた残るリスクは、[残るリスクの表](security-risks.md)に、領域ごとにまとめる。
-この文書と`docs/internals/`の各文書の残るリスクの箇所は、表の行のIDでリンクする。
-確かめていない前提と、後の作業で見直すものは、表に載せず、元の節に書く。
+この文書と`docs/internals/`の各文書は、残るリスクの箇所から、表の行のIDでリンクする。
+受け入れたリスクに結び付く未確認の点と、見直しの条件は、その行の文に含めて表に置く。
+受け入れたリスクに結び付かない未確認の前提と後続の作業は、各文書の節に置く。
 
 ## 各フローの安全策の置き場
 
-各フローの安全策と残るリスクは、フローごとの内部仕様の文書にある。
+各フローの安全策は、フローごとの内部仕様の文書にある。
+受け入れた残るリスクは、[残るリスクの表](security-risks.md)にある。
 次の表は、節の名前から置き場を引くためのものである。
 
 | 節 | 置き場 |
@@ -2362,7 +2376,7 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
 | 子プロセスの環境とログ | [ホストの実行役の内部仕様の「子プロセスの環境とログ」](internals/host-apply.md#子プロセスの環境とログ) |
 | CIの確認 | [ホストの実行役の内部仕様の「CIの確認」](internals/host-apply.md#ciの確認) |
 | 保護パスとその限界 | [ホストの実行役の内部仕様の「保護パスとその限界」](internals/host-apply.md#保護パスとその限界) |
-| 残るリスク(ホストの実行役の境界) | [ホストの実行役の内部仕様の「残るリスク」](internals/host-apply.md#残るリスク) |
+| 残るリスク(ホストの実行役の境界) | [残るリスクの表の「ホストの実行役の境界」](security-risks.md#ホストの実行役の境界) |
 | 反映の承認 | [反映の承認の内部仕様の「反映の承認」](internals/deploy-approvals.md#反映の承認) |
 | 凍結とdeployの保留 | [凍結とdeployの保留の内部仕様の「凍結とdeployの保留」](internals/freezes.md#凍結とdeployの保留) |
 | 保留 | [保留の内部仕様の「保留」](internals/holds.md#保留) |
@@ -2421,7 +2435,7 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
 | 設計工程の門の固定 | [設計書の生成の仕様の「設計工程の門の固定」](internals/design.md#設計工程の門の固定) |
 | 設計工程を有効にする操作 | [設計書の生成の仕様の「設計工程を有効にする操作」](internals/design.md#設計工程を有効にする操作) |
 | 実装に渡す設計書 | [設計書の生成の仕様の「実装に渡す設計書」](internals/design.md#実装に渡す設計書) |
-| 残るリスク(設計書の生成の安全策) | [設計書の生成の仕様の「残るリスク」](internals/design.md#残るリスク) |
+| 残るリスク(設計書の生成の安全策) | [残るリスクの表の「設計書の生成の安全策」](security-risks.md#設計書の生成の安全策) |
 | 調査の隔離 | [調査の隔離の内部仕様の「調査の隔離」](internals/investigate.md#調査の隔離) |
 | 起動の引数の固定 | [調査の隔離の内部仕様の「起動の引数の固定」](internals/investigate.md#起動の引数の固定) |
 | 読み出しの拒否の固定の一覧 | [調査の隔離の内部仕様の「読み出しの拒否の固定の一覧」](internals/investigate.md#読み出しの拒否の固定の一覧) |
@@ -2434,7 +2448,7 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
 | 調査の入口を開ける門 | [調査の隔離の内部仕様の「調査の入口を開ける門」](internals/investigate.md#調査の入口を開ける門) |
 | 調査の入口 | [調査の隔離の内部仕様の「調査の入口」](internals/investigate.md#調査の入口) |
 | 保護パス | [調査の隔離の内部仕様の「保護パス」](internals/investigate.md#保護パス) |
-| 残るリスク(調査の隔離) | [調査の隔離の内部仕様の「残るリスク(調査の隔離)」](internals/investigate.md#残るリスク調査の隔離) |
+| 残るリスク(調査の隔離) | [残るリスクの表の「調査の隔離」](security-risks.md#調査の隔離) |
 | 入口の前提の扱い | [調査の隔離の内部仕様の「入口の前提の扱い」](internals/investigate.md#入口の前提の扱い) |
 | 監査の安全策 | [監査の内部仕様の「監査の安全策」](internals/audit.md#監査の安全策) |
 | dependabotの更新の自動マージ | [dependabotの更新の内部仕様の「dependabotの更新の自動マージ」](internals/dependabot.md#dependabotの更新の自動マージ) |
@@ -2448,4 +2462,4 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
 | PATのマージ権限 | [dependabotの更新の内部仕様の「PATのマージ権限」](internals/dependabot.md#patのマージ権限) |
 | 守る部品と守らない部品 | [dependabotの更新の内部仕様の「守る部品と守らない部品」](internals/dependabot.md#守る部品と守らない部品) |
 | 有効化の前の確認 | [dependabotの更新の内部仕様の「有効化の前の確認」](internals/dependabot.md#有効化の前の確認) |
-| 残るリスク(dependabotの更新の自動マージ) | [dependabotの更新の内部仕様の「残るリスク」](internals/dependabot.md#残るリスク) |
+| 残るリスク(dependabotの更新の自動マージ) | [残るリスクの表の「dependabotの更新の自動マージ」](security-risks.md#dependabotの更新の自動マージ) |

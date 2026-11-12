@@ -32,7 +32,9 @@ Console用workerの境界の全体は、[セキュリティ](../../security.md#c
 保護パスの外のファイルをたどれるようにすると、そのファイルの変更が人のレビューを経ずに、走査をすり抜けるためである。
 契約テストは、たどれるファイルの集合が保護パスに収まることを確かめる。
 
-残るリスクは[R-CON-01](../../security-risks.md#ジョブのログと結果の読み取り)である。
+3つのscriptの`.script.lock`は、保護パスの外にある。
+`windmill-client`の版を上げる変更が、全scriptのlockと一緒に書き換わるので、守るとその変更を止めてしまうためである。
+残るリスクは[R-CON-01](../../security-risks.md#r-con-01)である。
 
 走査は、許可表のほかに、次の形を禁じる。
 
@@ -198,11 +200,11 @@ PRが開いていることも確かめ、GitHubが返す正規のリポジトリ
 
 残るリスクがある。
 
-- [R-CON-02](../../security-risks.md#prレビューの投入)
-- [R-CON-03](../../security-risks.md#prレビューの投入)
-- [R-CON-04](../../security-risks.md#prレビューの投入)
-- [R-CON-05](../../security-risks.md#prレビューの投入)
-- [R-CON-06](../../security-risks.md#prレビューの投入)
+- [R-CON-02](../../security-risks.md#r-con-02)
+- [R-CON-03](../../security-risks.md#r-con-03)
+- [R-CON-04](../../security-risks.md#r-con-04)
+- [R-CON-05](../../security-risks.md#r-con-05)
+- [R-CON-06](../../security-risks.md#r-con-06)
 
 ## ジョブの取消
 
@@ -620,7 +622,7 @@ PRレビューの投入の記録に入れるのは、`owner`、`repo`、`pr_numb
 契約テストが`screens/jobs/`の全体と設定の節を走査するので、部品を保護しても、上乗せの保証が小さい。
 後続のPRで必ず直す部品なので、保護すると、毎回人の確認が要るためである。
 
-残るリスクは[R-CON-07](../../security-risks.md#ジョブの画面の描画)である。
+残るリスクは[R-CON-07](../../security-risks.md#r-con-07)である。
 
 ## 設計書の読み返しの画面
 
@@ -652,8 +654,8 @@ Markdownの文字は、見えない文字の表し方、改行と空白の扱い
 
 残るリスクは次のとおりである。
 
-- [R-CON-08](../../security-risks.md#設計書の読み返しの画面)
-- [R-CON-09](../../security-risks.md#設計書の読み返しの画面)
+- [R-CON-08](../../security-risks.md#r-con-08)
+- [R-CON-09](../../security-risks.md#r-con-09)
 
 ## 取り込み時点のIssueと提案の描画
 
@@ -687,12 +689,12 @@ Markdownの文字は、見えない文字の表し方、改行と空白の扱い
 
 残るリスクがある。
 
-- [R-CON-10](../../security-risks.md#取り込み時点のissueと提案の描画)
-- [R-CON-11](../../security-risks.md#取り込み時点のissueと提案の描画)
-- [R-CON-12](../../security-risks.md#取り込み時点のissueと提案の描画)
-- [R-CON-13](../../security-risks.md#取り込み時点のissueと提案の描画)
-- [R-CON-14](../../security-risks.md#取り込み時点のissueと提案の描画)
-- [R-CON-15](../../security-risks.md#取り込み時点のissueと提案の描画)
+- [R-CON-10](../../security-risks.md#r-con-10)
+- [R-CON-11](../../security-risks.md#r-con-11)
+- [R-CON-12](../../security-risks.md#r-con-12)
+- [R-CON-13](../../security-risks.md#r-con-13)
+- [R-CON-14](../../security-risks.md#r-con-14)
+- [R-CON-15](../../security-risks.md#r-con-15)
 
 ## 設計の承認画面の保護
 
@@ -809,13 +811,13 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
 
 残るリスクがある。
 
-- [R-CON-16](../../security-risks.md#設計の承認画面の保護)
-- [R-CON-17](../../security-risks.md#設計の承認画面の保護)
-- [R-CON-18](../../security-risks.md#設計の承認画面の保護)
-- [R-CON-19](../../security-risks.md#設計の承認画面の保護)
-- [R-CON-20](../../security-risks.md#設計の承認画面の保護)
-- [R-CON-21](../../security-risks.md#設計の承認画面の保護)
-- [R-CON-22](../../security-risks.md#設計の承認画面の保護)
+- [R-CON-16](../../security-risks.md#r-con-16)
+- [R-CON-17](../../security-risks.md#r-con-17)
+- [R-CON-18](../../security-risks.md#r-con-18)
+- [R-CON-19](../../security-risks.md#r-con-19)
+- [R-CON-20](../../security-risks.md#r-con-20)
+- [R-CON-21](../../security-risks.md#r-con-21)
+- [R-CON-22](../../security-risks.md#r-con-22)
 - 保護しない祖先の部品と共有の部品から、全文の一部の行だけを隠せる。
   祖先の部品は`ApprovalOverview.tsx`と`InboxDetail.tsx`、共有の部品は`ReviewPanel.tsx`の`PanelShell`である。
   手段は、Tailwindの子孫セレクタ、`visibility`の継承、上に重ねて覆う要素、子として渡された描画を別の描画に差し替えることである。
@@ -824,9 +826,9 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
   承認画面が読み込む保護しない部品(`LoadingState`、`QueryFailure`、`queries.ts`)の変更でも、描画は変わる。
   守る範囲は、承認画面のファイルの中に限る。
   この経路は、承認の詳細を含むConsoleのPRのレビューで確かめる。
-  残るリスクの表の[R-CON-23](../../security-risks.md#設計の承認画面の保護)にあたる。
-- [R-CON-24](../../security-risks.md#設計の承認画面の保護)
-- [R-CON-25](../../security-risks.md#設計の承認画面の保護)
+  残るリスクの表の[R-CON-23](../../security-risks.md#r-con-23)にあたる。
+- [R-CON-24](../../security-risks.md#r-con-24)
+- [R-CON-25](../../security-risks.md#r-con-25)
 - 承認を止める連鎖は、承認画面のほかは保護しない。
   連鎖は、次の4つである。
   判定を呼ぶ`designBlockedReason`。
@@ -837,11 +839,11 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
   分岐の条件が、テストの固定値に当たらないときである。
   `ApprovalOverview.tsx`と`ReviewPanel.tsx`の入力によって動く差し替えも、同じく検査を通る。
   呼ぶ側が判定を迂回する変更は、レビューで差分から確かめる。
-  残るリスクの表の[R-CON-26](../../security-risks.md#設計の承認画面の保護)にあたる。
-- [R-CON-27](../../security-risks.md#設計の承認画面の保護)
-- [R-CON-28](../../security-risks.md#設計の承認画面の保護)
-- [R-CON-29](../../security-risks.md#設計の承認画面の保護)
-- [R-CON-30](../../security-risks.md#設計の承認画面の保護)
+  残るリスクの表の[R-CON-26](../../security-risks.md#r-con-26)にあたる。
+- [R-CON-27](../../security-risks.md#r-con-27)
+- [R-CON-28](../../security-risks.md#r-con-28)
+- [R-CON-29](../../security-risks.md#r-con-29)
+- [R-CON-30](../../security-risks.md#r-con-30)
 
 ## 設計書のプレビュー
 
@@ -935,8 +937,8 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
 
 残るリスクがある。
 
-- [R-CON-31](../../security-risks.md#設計書のプレビュー)
-- [R-CON-32](../../security-risks.md#設計書のプレビュー)
+- [R-CON-31](../../security-risks.md#r-con-31)
+- [R-CON-32](../../security-risks.md#r-con-32)
 - mountの後の確認のチェックの扱いは、すべて保護の外の`ApprovalBar.tsx`と`approvalDecision.ts`にある。
   求めるか、出すか、付けた後に強制するかを決める処理である。
   `previewChecked`の持ち越しと、`approveGateProblem`の判定の順もここである。
@@ -946,11 +948,12 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
   `approveGateProblem`の判定の順を入れ替えて、プレビューの確認を後回しにする変更も当たる。
   チェックを付けた後の挙動を確かめるのは、保護の外のe2eだけである。
   この経路は、要件定義とIssue提案の承認画面と同じ水準で受け入れる。
-  残るリスクの表の[R-CON-33](../../security-risks.md#設計書のプレビュー)にあたる。
-- [R-CON-34](../../security-risks.md#設計書のプレビュー)
-- [R-CON-35](../../security-risks.md#設計書のプレビュー)
-- [R-CON-36](../../security-risks.md#設計書のプレビュー)
+  残るリスクの表の[R-CON-33](../../security-risks.md#r-con-33)にあたる。
+- [R-CON-34](../../security-risks.md#r-con-34)
+- [R-CON-35](../../security-risks.md#r-con-35)
+- [R-CON-36](../../security-risks.md#r-con-36)
 - ソースの走査は、文字列の形だけを見る。
+  残るリスクの表の[R-CON-37](../../security-risks.md#r-con-37)にあたる。
   たとえば、次の書き方は検査を通る。
   この列挙は網羅ではない。
   - 許可リストのフックだけでも、mountの後に表示の形式と承認の判定をずらせる。
@@ -989,8 +992,7 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
   検査は、これ以上足さずに受け入れる。
   足し続けると、迂回を1つずつ塞ぐ競争になるためである。
   保護の外のモジュールを経由する経路は、構文木を調べても塞げない。
-  残るリスクの表の[R-CON-37](../../security-risks.md#設計書のプレビュー)にあたる。
-- [R-CON-38](../../security-risks.md#設計書のプレビュー)
+- [R-CON-38](../../security-risks.md#r-con-38)
 
 ## draw.ioの図の描画
 
@@ -1131,7 +1133,7 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 図のデータ(`console/src/generated/flows.json`)はリポジトリのコードから作ったバンドルの静的なJSONで、信用できない入力を含まない。
 重ねるジョブのステップのidと状態はサーバー由来なので、見えない文字を代替文字にしてから描く。
 子のジョブへのリンクに入れるidは、UUIDの形のときだけhrefに入れる。
-残るリスクは[R-DIO-01](../../security-risks.md#隔離したiframeで描く)である。
+残るリスクは[R-DIO-01](../../security-risks.md#r-dio-01)である。
 
 | 守ること | 内容 |
 | --- | --- |
@@ -1151,7 +1153,8 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 XMLをiframeへ送るときの`targetOrigin`は`"*"`にする。
 不透明なオリジンには、送り先のオリジンを指定する方法が他に無いためである。
 送るのは図のXMLだけなので、宛先を絞れなくても許容する。
-残るリスクは[R-DIO-02](../../security-risks.md#隔離したiframeで描く)である。
+設計の図のXMLには、秘密値のマスクをかけない。
+残るリスクは[R-DIO-02](../../security-risks.md#r-dio-02)である。
 XMLをpostMessageで送る先は、このsandboxのiframeだけである。
 XMLそのものは、`console_query`のジョブ結果としてWindmillに残り、Consoleの最上位のページにも渡る。
 
@@ -1164,8 +1167,9 @@ iframeの中で動くscriptが取れるのは、そのiframeが受け取った�
 
 残るリスクは次のとおりである。
 
-- [R-DIO-03](../../security-risks.md#隔離したiframeで描く)
+- [R-DIO-03](../../security-risks.md#r-dio-03)
 - `'unsafe-eval'`は許さない。
+  残るリスクの表の[R-DIO-04](../../security-risks.md#r-dio-04)にあたる。
   根拠は、32.4.1のビューアのコードの読解と、ヘッドレスのChromeでの確認である。
   自動で上げた版は、この調査を経ていない。
   `eval`が要る版は、図が描かれなくなるだけで、CSPが評価を止める。
@@ -1175,9 +1179,7 @@ iframeの中で動くscriptが取れるのは、そのiframeが受け取った�
     `new Function`は無い。
   - `'unsafe-eval'`を付けずに、普通の図と、リンク、外部の画像、フォント、図形ライブラリ、評価を許す式を含む図を描いた。
     `eval`の違反は出なかった。
-
-  残るリスクの表の[R-DIO-04](../../security-risks.md#隔離したiframeで描く)にあたる。
-- [R-DIO-05](../../security-risks.md#隔離したiframeで描く)
+- [R-DIO-05](../../security-risks.md#r-dio-05)
 
 ### 親の部品が守ること
 
@@ -1227,8 +1229,8 @@ ConsoleのSPAの親のページは、iframeから高さと失敗の種類だけ�
 
 残るリスクは次のとおりである。
 
-- [R-DIO-06](../../security-risks.md#保護パス)
-- [R-DIO-07](../../security-risks.md#保護パス)
+- [R-DIO-06](../../security-risks.md#r-dio-06)
+- [R-DIO-07](../../security-risks.md#r-dio-07)
 
 実機でしか確かめられない点は次のとおりである。
 
@@ -1266,15 +1268,15 @@ Windmillは、実装とPR修正が使う`f/factory/github_token`で足りる。
 
 残るリスクは次のとおりである。
 
-- [R-DIO-08](../../security-risks.md#ビューアの更新)
-- [R-DIO-09](../../security-risks.md#ビューアの更新)
-- [R-DIO-10](../../security-risks.md#ビューアの更新)
-- [R-DIO-11](../../security-risks.md#ビューアの更新)
-- [R-DIO-12](../../security-risks.md#ビューアの更新)
-- [R-DIO-13](../../security-risks.md#ビューアの更新)
-- [R-DIO-14](../../security-risks.md#ビューアの更新)
-- [R-DIO-15](../../security-risks.md#ビューアの更新)
-- [R-DIO-16](../../security-risks.md#ビューアの更新)
+- [R-DIO-08](../../security-risks.md#r-dio-08)
+- [R-DIO-09](../../security-risks.md#r-dio-09)
+- [R-DIO-10](../../security-risks.md#r-dio-10)
+- [R-DIO-11](../../security-risks.md#r-dio-11)
+- [R-DIO-12](../../security-risks.md#r-dio-12)
+- [R-DIO-13](../../security-risks.md#r-dio-13)
+- [R-DIO-14](../../security-risks.md#r-dio-14)
+- [R-DIO-15](../../security-risks.md#r-dio-15)
+- [R-DIO-16](../../security-risks.md#r-dio-16)
 
 ## 要件定義書のリンク
 

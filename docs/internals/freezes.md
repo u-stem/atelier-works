@@ -529,33 +529,34 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
 残るリスクは次のとおりである。
 いずれも受け入れる。
 
-- [R-FRZ-01](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-02](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-03](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-04](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-05](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-06](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-07](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-08](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-09](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-10](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-11](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-12](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-13](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-14](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-15](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-16](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-17](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-18](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-19](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-20](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-21](../security-risks.md#凍結とdeployの保留)
+- [R-FRZ-01](../security-risks.md#r-frz-01)
+- [R-FRZ-02](../security-risks.md#r-frz-02)
+- [R-FRZ-03](../security-risks.md#r-frz-03)
+- [R-FRZ-04](../security-risks.md#r-frz-04)
+- [R-FRZ-05](../security-risks.md#r-frz-05)
+- [R-FRZ-06](../security-risks.md#r-frz-06)
+- [R-FRZ-07](../security-risks.md#r-frz-07)
+- [R-FRZ-08](../security-risks.md#r-frz-08)
+- [R-FRZ-09](../security-risks.md#r-frz-09)
+- [R-FRZ-10](../security-risks.md#r-frz-10)
+- [R-FRZ-11](../security-risks.md#r-frz-11)
+- [R-FRZ-12](../security-risks.md#r-frz-12)
+- [R-FRZ-13](../security-risks.md#r-frz-13)
+- [R-FRZ-14](../security-risks.md#r-frz-14)
+- [R-FRZ-15](../security-risks.md#r-frz-15)
+- [R-FRZ-16](../security-risks.md#r-frz-16)
+- [R-FRZ-17](../security-risks.md#r-frz-17)
+- [R-FRZ-18](../security-risks.md#r-frz-18)
+- [R-FRZ-19](../security-risks.md#r-frz-19)
+- [R-FRZ-20](../security-risks.md#r-frz-20)
+- [R-FRZ-21](../security-risks.md#r-frz-21)
 - Consoleから凍結とdeployの保留を置ける。
   置く道と守りは、[保留と凍結を置く](console/security.md#保留と凍結を置く)にある。
   凍結を置くと、スケジュールを止める操作に進める([スケジュールを止める](console/security.md#スケジュールを止める))。
   止めたscheduleは、凍結が終わった後の追従で、リポジトリの定義に戻る。
-- [R-FRZ-22](../security-risks.md#凍結とdeployの保留)
+- [R-FRZ-22](../security-risks.md#r-frz-22)
 - `freeze_release`は、書いた後に変数を読み直す。
+  残るリスクの表の[R-FRZ-23](../security-risks.md#r-frz-23)にあたる。
   解除が残っていないとき、または書いた時点で有効だった行が欠けているときは、確認できなかったと返す。
   変数の読み直しと書き込みは排他しない。
   Console用のworkerは1つ(`replicas: 1`)で動くので、Consoleのジョブ同士は重ならない。
@@ -564,8 +565,8 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
   - CLIの`place`が、Consoleの読みの後に、読み直しより前の状態を書き、Consoleが最後に書く。
   - Consoleの読み直しの後に、別の書き手が書いて、解除が巻き戻る。
   窓は秒単位で、運用手順に止める直前の`freeze:list`による確認を置いているため、受け入れる。
-  残るリスクの表の[R-FRZ-23](../security-risks.md#凍結とdeployの保留)にあたる。
 - `session`は、deployの保留を確認なしで置ける。
+  残るリスクの表の[R-FRZ-24](../security-risks.md#r-frz-24)にあたる。
   上限は120分で、この区別は誤操作を防ぐためのもので、境界ではない。
   subagentは、`hold-guard.ts`が`freeze:place`の`--scope deploy`、`freeze:release`、`freeze:reset`、`push:prune`を拒否する。
   ベストエフォートの規則で、保留の拒否と同じ限界を持つ。
@@ -584,9 +585,8 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
   実行系が実行時に決まるプロセス置換(`< <(...)`)を入力にすると、`-`が無くても拒否する。
   `git diff | bunx prettier --stdin-filepath a.ts -`のように、標準入力をコードでなく入力として読む正当な形も、`-`とパイプで拒否する。
   誤拒否になるが、コードとの区別が語からは付かないため、受け入れる。
-  残るリスクの表の[R-FRZ-24](../security-risks.md#凍結とdeployの保留)にあたる。
-- [R-FRZ-25](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-26](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-27](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-28](../security-risks.md#凍結とdeployの保留)
-- [R-FRZ-29](../security-risks.md#凍結とdeployの保留)
+- [R-FRZ-25](../security-risks.md#r-frz-25)
+- [R-FRZ-26](../security-risks.md#r-frz-26)
+- [R-FRZ-27](../security-risks.md#r-frz-27)
+- [R-FRZ-28](../security-risks.md#r-frz-28)
+- [R-FRZ-29](../security-risks.md#r-frz-29)

@@ -156,11 +156,11 @@ Consoleの判断のscript(`console_deploy_decide`)は、ローカルのClaudeの
 
 残るリスクは次のとおりである。
 
-- [R-DAP-01](../security-risks.md#反映の承認)
-- [R-DAP-02](../security-risks.md#反映の承認)
-- [R-DAP-03](../security-risks.md#反映の承認)
-- [R-DAP-04](../security-risks.md#反映の承認)
-- [R-DAP-05](../security-risks.md#反映の承認)
+- [R-DAP-01](../security-risks.md#r-dap-01)
+- [R-DAP-02](../security-risks.md#r-dap-02)
+- [R-DAP-03](../security-risks.md#r-dap-03)
+- [R-DAP-04](../security-risks.md#r-dap-04)
+- [R-DAP-05](../security-risks.md#r-dap-05)
 - 要対応の通知は、止めるたびに残し、重複はしない。
   書き込みに失敗しても、次の回が残す。
   Consoleの「反映の承認待ち」の一覧が受け皿で、通知が無くても承認できる。

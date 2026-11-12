@@ -562,10 +562,10 @@ main cloneの`.git`はrootが所有する。
 
 残るリスクは次のとおりである。
 
-- [R-CHK-01](../security-risks.md#検査コマンドの権限)
-- [R-CHK-02](../security-risks.md#検査コマンドの権限)
-- [R-CHK-03](../security-risks.md#検査コマンドの権限)
-- [R-CHK-04](../security-risks.md#検査コマンドの権限)
+- [R-CHK-01](../security-risks.md#r-chk-01)
+- [R-CHK-02](../security-risks.md#r-chk-02)
+- [R-CHK-03](../security-risks.md#r-chk-03)
+- [R-CHK-04](../security-risks.md#r-chk-04)
 - 検査のプロセス自身は、worktree、`HOME`、共有の一時ディレクトリの外に書けない。
   ただし、検査がworktreeの中身を書き換えた結果は、次のラウンドでrootの処理に影響しうる。
   例えば、gitが無視するパス(`node_modules/`など)に、worktreeの外を指すsymlinkを置ける。
@@ -575,13 +575,14 @@ main cloneの`.git`はrootが所有する。
   取り戻しが失敗した実行と、取り消された実行は検出まで進まない。
   その場合は、回復の経路が取り戻した後に、絶対パスか`..`を含むsymlinkをすべて消す。
   実装フローは、次の検査の前の`git clean -fdX`で、無視されるパスのsymlinkを消す。
-  残るリスクの表の[R-CHK-05](../security-risks.md#検査コマンドの権限)にあたる。
-- [R-CHK-06](../security-risks.md#検査コマンドの権限)
-- [R-CHK-07](../security-risks.md#検査コマンドの権限)
-- [R-CHK-08](../security-risks.md#検査コマンドの権限)
-- [R-CHK-09](../security-risks.md#検査コマンドの権限)
-- [R-CHK-10](../security-risks.md#検査コマンドの権限)
+  残るリスクの表の[R-CHK-05](../security-risks.md#r-chk-05)にあたる。
+- [R-CHK-06](../security-risks.md#r-chk-06)
+- [R-CHK-07](../security-risks.md#r-chk-07)
+- [R-CHK-08](../security-risks.md#r-chk-08)
+- [R-CHK-09](../security-risks.md#r-chk-09)
+- [R-CHK-10](../security-risks.md#r-chk-10)
 - workerのジョブは`HOME`が`/root`で、`TMPDIR`が無い。
+  残るリスクの表の[R-CHK-11](../security-risks.md#r-chk-11)にあたる。
   共有の`/tmp`に作られる一時ファイルは、まだ無い名前なら検査用のユーザーが先に作れ、その後でrootのジョブがそれを使いうる。
   そのため、ジョブごとに`/run/factory-tmp/fj-<ジョブID>`を0700で作り、一時ファイルをそこへ向ける。
   親は、Windmillが管理する`/tmp/windmill`ではなく、rootが所有して他のユーザーが書けない`/run`の下に置く。
@@ -606,9 +607,7 @@ main cloneの`.git`はrootが所有する。
   - ClaudeのBashツールが固定の名前で`/tmp`の下に書く場合は、`TMPDIR`では塞げない。
   - 検査の準備が`lockDownRuntimeDir`で閉じるのは`/tmp/windmill`だけで、`/run/factory-tmp`には触れない。
   - 検査用のユーザーが共有の`/tmp`に作ったものは、枠を取るときと手放すときに消える。
-
-  残るリスクの表の[R-CHK-11](../security-risks.md#検査コマンドの権限)にあたる。
-- [R-CHK-12](../security-risks.md#検査コマンドの権限)
+- [R-CHK-12](../security-risks.md#r-chk-12)
 - 所有権の受け渡しと取り戻しは、ディレクトリの数に比例して時間がかかる。
   取り戻しは常に一括で、受け渡しもハードリンクが無ければ一括なので、約9,300個のディレクトリで`chown -R`は約0.1秒、約9万3千個で約2秒である。
   残りは`find`と`getfacl`がたどる時間で、1回に、約9,300個なら約0.1秒、約9万3千個なら1〜2秒かかる。
@@ -623,9 +622,9 @@ main cloneの`.git`はrootが所有する。
   この数は余裕を含まない切れる点なので、負荷のあるworkerでは手前で切れうる。
   測り方は[検査枠の走査時間を測る](../operations.md#検査枠の走査時間を測る)にある。
   打ち切られると記録が残り、次にその枠を取る実行と、そのworktreeを次に使うステップの片付けも、同じ上限で失敗し続ける。
-  残るリスクの表の[R-CHK-13](../security-risks.md#検査コマンドの権限)にあたる。
-- [R-CHK-14](../security-risks.md#検査コマンドの権限)
-- [R-CHK-15](../security-risks.md#検査コマンドの権限)
+  残るリスクの表の[R-CHK-13](../security-risks.md#r-chk-13)にあたる。
+- [R-CHK-14](../security-risks.md#r-chk-14)
+- [R-CHK-15](../security-risks.md#r-chk-15)
 
 これらは、検査コマンドを別のコンテナで、networkなしに動かすまで残る。
 `scripts/verify-check-sandbox.sh`(`mise run test:check-sandbox`)が、上の表の項目を確かめる。

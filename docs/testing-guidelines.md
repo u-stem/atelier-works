@@ -294,7 +294,11 @@ CIは成功したときも各層の値を出すので、ログで確かめる。
 
 ## 残るリスク
 
-残るリスクは[R-COV-01](security-risks.md#カバレッジの検査)である。
+下限の定数と対象の定義は、implementフローのClaudeが書き換えられる。
+implementフローは、保護パスの変更を記録するだけで、止めない。
+下限を下げたり、対象を狭めたりする変更が、検査を通りうる。
+人のレビューが、最後の関門になる。
+残るリスクは[R-COV-01](security-risks.md#r-cov-01)である。
 
 そのため、`scripts/check-coverage.ts`とそのテストは、保護パスに入れている。
 保護パスの変更は、人が書くPRでは「保護パスの変更」の節に、Factoryが作るimplementのPRでは「確認して欲しい点」の`保護パスを変更: <path>`の行に書く。
@@ -302,11 +306,11 @@ CIは成功したときも各層の値を出すので、ログで確かめる。
 
 検査を緩める経路が残る。
 
-- [R-COV-02](security-risks.md#カバレッジの検査)
-- [R-COV-03](security-risks.md#カバレッジの検査)
-- [R-COV-04](security-risks.md#カバレッジの検査)
+- [R-COV-02](security-risks.md#r-cov-02)
+- [R-COV-03](security-risks.md#r-cov-03)
+- [R-COV-04](security-risks.md#r-cov-04)
 
-残るリスクは[R-COV-05](security-risks.md#カバレッジの検査)である。
+残るリスクは[R-COV-05](security-risks.md#r-cov-05)である。
 
 テストを消すimplementのPRは、人のレビューで見る。
 保護パスの行が無くても、差分でテストの削除を確かめるためである。
