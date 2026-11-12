@@ -1808,7 +1808,7 @@ export type RemoveWorktreeOptions = {
   readonly repoDir: string;
   readonly dir: string;
   readonly force?: boolean;
-  /** gitがロックしたworktreeも消す(`--force`を2回)。 */
+  /** gitがロックしたworktreeも消す(`--force`を2回)。`force`より優先する。 */
   readonly forceLocked?: boolean;
   readonly home?: string;
   readonly path?: string;
@@ -1853,13 +1853,14 @@ export async function removeWorktree(
         });
         return;
       }
-      const args = [
-        "worktree",
-        "remove",
-        ...(opts.force === true ? ["--force"] : []),
-        "--",
-        opts.dir,
-      ];
+      // `--force`を2回渡すと、gitがロックしたworktreeも消す。
+      const forceArgs =
+        opts.forceLocked === true
+          ? ["--force", "--force"]
+          : opts.force === true
+            ? ["--force"]
+            : [];
+      const args = ["worktree", "remove", ...forceArgs, "--", opts.dir];
       const result = await opts.run(buildGitArgv(args), {
         cwd: opts.repoDir,
         env: localGitEnv(opts.home, opts.path),
@@ -2050,6 +2051,7 @@ function parseWorktreeRecord(lines: readonly string[]): WorktreeEntry {
   let branch: string | null = null;
   let bare = false;
   let detached = false;
+  let lock: { readonly reason: string | null } | undefined;
 
   for (const line of lines) {
     if (line.startsWith("worktree ")) {
@@ -2065,6 +2067,10 @@ function parseWorktreeRecord(lines: readonly string[]): WorktreeEntry {
       bare = true;
     } else if (line === "detached") {
       detached = true;
+    } else if (line === "locked") {
+      lock = { reason: null };
+    } else if (line.startsWith("locked ")) {
+      lock = { reason: line.slice("locked ".length) };
     }
   }
 
@@ -2073,7 +2079,14 @@ function parseWorktreeRecord(lines: readonly string[]): WorktreeEntry {
       `unexpected 'git worktree list --porcelain -z' record: ${lines.join(" | ")}`,
     );
   }
-  return { path, headSha, branch, bare, detached };
+  return {
+    path,
+    headSha,
+    branch,
+    bare,
+    detached,
+    ...(lock === undefined ? {} : { lock }),
+  };
 }
 
 /**

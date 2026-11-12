@@ -130,11 +130,12 @@ import {
 } from "./lib/types.ts";
 import {
   type CommandRunner,
-  isReviewWorktreeOf,
   listWorktrees,
   pathExists,
   removeWorktree,
+  reviewWorktreeRemoval,
   runCommand,
+  selectReviewWorktreesOfPr,
 } from "./lib/workspace.ts";
 import { describeReason, nextActionFor } from "./steps/pr_workflow_support.ts";
 
@@ -367,16 +368,26 @@ async function removePrWorktrees(
         { repo_dir: repoDir },
       );
     }
-    const targets = entries.filter((entry) =>
-      isReviewWorktreeOf(repoDir, prNumber, entry),
-    );
-    for (const target of targets) {
+    for (const target of selectReviewWorktreesOfPr(
+      repoDir,
+      entries,
+      prNumber,
+    )) {
       try {
+        // gitがロックしたものは、作成の途中で止まった残骸(`initializing`)だけを消す。
+        const removal = reviewWorktreeRemoval(target);
+        if (removal === null) {
+          log.warn("reconcile: kept a pr worktree locked by git", {
+            path: target.path,
+            reason: target.lock?.reason ?? null,
+          });
+          continue;
+        }
         await removeWorktree({
           run: runCommand,
           repoDir,
           dir: target.path,
-          force: true,
+          ...removal,
         });
       } catch (err) {
         log.warn("reconcile: failed to remove pr worktree", {

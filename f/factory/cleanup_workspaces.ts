@@ -68,7 +68,10 @@ import {
   pathExists,
   pruneWorktrees,
   removeWorktree,
+  reviewWorktreePrNumber,
+  reviewWorktreeRemoval,
   runCommand,
+  selectReviewWorktreesOfPr,
   type WorktreeEntry,
 } from "./lib/workspace.ts";
 // dependabotの作業ツリーのパスは、作る側(`dependabot_prepare`)の関数で求める。
@@ -645,12 +648,98 @@ export type ReviewWorktreeRemovalInput = {
   readonly cutoff: Date;
 };
 
-/** 1つのPRのレビュー用の作業ツリーを消し、消した数を返す。 */
+/**
+ * 1つのPRのレビュー用の作業ツリーを消し、消した数を返す。
+ * 判定は作業ツリーごとに行う。PRの作業項目の更新の時刻は、動きの多いPRでは常に期限の内になり、
+ * 長い生成の最中の作業項目は更新が止まるので、PR単位では、残りが溜まるか、使用中のものを消してしまう。
+ * 1. そのPRに終端でない`pr_review`があれば、何も消さず、使用中の確認もしない。
+ * 2. 無ければ、ディレクトリの更新が`cutoff`より古いものだけを対象にする。
+ *    detachedのcheckoutの後、生成のClaudeは`Read`・`Glob`・`Grep`だけで書き込まないので、更新の時刻は作成の時刻に近い。
+ *    読めないものは消さずに警告にする。
+ * 3. ロックの理由が`initializing`でなければ、gitがロックしたものは消さずに警告にする。
+ * 4. 使用中のものを除き、消す直前に1を1回だけ読み直す。
+ * 確認が失敗したときは、原因が分かる警告を1件残し、このPRの残りは扱わない。
+ * 1つの作業ツリーの失敗は警告に残して次へ進む。
+ */
 export async function removeReviewWorktrees(
-  _input: ReviewWorktreeRemovalInput,
-  _deps: ReviewWorktreeRemovalDeps,
+  input: ReviewWorktreeRemovalInput,
+  deps: ReviewWorktreeRemovalDeps,
 ): Promise<number> {
-  return 0;
+  const { repoDir, prNumber } = input;
+  const describe = (err: unknown) =>
+    maskSecrets(err instanceof Error ? err.message : String(err));
+  /** 消してはいけない(終端でない`pr_review`がある)か、確認できなかったときに`true`を返す。 */
+  const mustKeep = async (message: string): Promise<boolean> => {
+    try {
+      return await deps.hasActiveReview();
+    } catch (err) {
+      deps.warn(message, {
+        repo_dir: repoDir,
+        pr_number: prNumber,
+        error: describe(err),
+      });
+      return true;
+    }
+  };
+
+  if (await mustKeep("cleanup: failed to check active pr_review")) return 0;
+
+  const free: {
+    readonly dir: string;
+    readonly removal: NonNullable<ReturnType<typeof reviewWorktreeRemoval>>;
+  }[] = [];
+  for (const target of input.targets) {
+    const dir = target.path;
+    try {
+      if ((await deps.modifiedAtMs(dir)) >= input.cutoff.getTime()) continue;
+    } catch (err) {
+      deps.warn(
+        "cleanup: failed to read the modification time of a review worktree",
+        {
+          repo_dir: repoDir,
+          worktree_dir: dir,
+          error: describe(err),
+        },
+      );
+      continue;
+    }
+    const removal = reviewWorktreeRemoval(target);
+    if (removal === null) {
+      deps.warn("cleanup: skipping a review worktree locked by git", {
+        repo_dir: repoDir,
+        worktree_dir: dir,
+        reason: target.lock?.reason ?? null,
+      });
+      continue;
+    }
+    try {
+      if (await deps.ensureFree(dir)) free.push({ dir, removal });
+    } catch (err) {
+      deps.warn("cleanup: failed to check the use of a review worktree", {
+        repo_dir: repoDir,
+        worktree_dir: dir,
+        error: describe(err),
+      });
+    }
+  }
+  if (free.length === 0) return 0;
+
+  if (await mustKeep("cleanup: failed to re-check active pr_review")) return 0;
+
+  let removed = 0;
+  for (const { dir, removal } of free) {
+    try {
+      await deps.removeWorktree(dir, removal);
+      removed += 1;
+    } catch (err) {
+      deps.warn("cleanup: failed to remove a review worktree", {
+        repo_dir: repoDir,
+        worktree_dir: dir,
+        error: describe(err),
+      });
+    }
+  }
+  return removed;
 }
 
 export type ReviewWorktreeSweepDeps = {
@@ -666,12 +755,53 @@ export type ReviewWorktreeSweepDeps = {
   readonly warn: (message: string, fields: LogFields) => void;
 };
 
-/** 全リポジトリのレビュー用の作業ツリーを、PRごとに消し、消した数を返す。 */
+/**
+ * 全リポジトリのレビュー用の作業ツリーを、PR番号ごとに消し、消した数を返す。
+ * 起点は作業項目ではなく作業ツリーの一覧なので、作業項目の行が消えたPRも扱う。
+ * 1つのPRや1つのリポジトリの失敗は警告に残して次へ進む。
+ */
 export async function removeStaleReviewWorktrees(
-  _deps: ReviewWorktreeSweepDeps,
-  _cutoff: Date,
+  deps: ReviewWorktreeSweepDeps,
+  cutoff: Date,
 ): Promise<number> {
-  return 0;
+  let removed = 0;
+  for (const repoDir of await deps.findMainRepoDirs()) {
+    let worktrees: readonly WorktreeEntry[];
+    try {
+      worktrees = await deps.listWorktrees(repoDir);
+    } catch (err) {
+      deps.warn("cleanup: failed to list worktrees for review", {
+        repo_dir: repoDir,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+      continue;
+    }
+    const prNumbers = new Set<number>();
+    for (const worktree of worktrees) {
+      const prNumber = reviewWorktreePrNumber(repoDir, worktree);
+      if (prNumber !== null) prNumbers.add(prNumber);
+    }
+    for (const prNumber of prNumbers) {
+      try {
+        removed += await removeReviewWorktrees(
+          {
+            repoDir,
+            prNumber,
+            targets: selectReviewWorktreesOfPr(repoDir, worktrees, prNumber),
+            cutoff,
+          },
+          deps.removalDeps(repoDir, prNumber),
+        );
+      } catch (err) {
+        deps.warn("cleanup: failed to sweep the review worktrees of a pr", {
+          repo_dir: repoDir,
+          pr_number: prNumber,
+          error: maskSecrets(err instanceof Error ? err.message : String(err)),
+        });
+      }
+    }
+  }
+  return removed;
 }
 
 /** `/workspaces/<owner>/<repo>/main`から、ownerとrepoを返す。 */
