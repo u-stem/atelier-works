@@ -308,7 +308,12 @@ describe("lintRiskRegister allowlist", () => {
   }
 
   test("reports a missing allowlist as one problem", () => {
-    expect(problemsOf(files, undefined)).toEqual([
+    const missing = lintRiskRegister(
+      Object.keys(files).sort(),
+      createTreeReader((path) => files[path]),
+      undefined,
+    );
+    expect(missing.problems).toEqual([
       "docs/security-risks.md: [risk] allowlist not found: scripts/lint-risk-register-allowlist.txt",
     ]);
   });
