@@ -338,7 +338,7 @@ fi
 # 15. 収集が扱えない所有者(Windmillが応答している場合だけ)
 # loginに`_`を含む所有者(EMUのアカウントなど)は、環境変数の名前の`_`が`-`に直るので、
 # 読み取り用のトークンの対応表のキーに合わず、収集の対象外になる。`factory_config`の`owners`を管理者のログインで読み、
-# 該当する所有者の名前だけを出す。読めないときはこの検査を飛ばし、飛ばしたことを終了コードと理由つきで出す。
+# 該当する所有者の名前だけを出す。読めないときはこの検査を飛ばし、飛ばしたことを終了コードと理由つきの警告で出す(失敗には数えない)。
 # 理由は`factory-owners.ts`の標準エラーのうち`factory-owners: `で始まる最初の行で、無ければ先頭行にする。
 # miseなどの別の警告が先に出ても、理由を拾うため。拾った行は、パスワードを伏せてから200文字に切り詰める。
 # 標準エラーは一時ファイルで受け、途中で終了しても消えるよう、EXITのtrapで消す。
@@ -360,7 +360,7 @@ if [[ "${windmill_is_up}" -eq 1 ]] && command -v mise >/dev/null 2>&1; then
       owners_reason="${owners_reason//"${WM_ADMIN_PASSWORD}"/***}"
     fi
     owners_reason="$(printf '%s' "${owners_reason}" | cut -c1-200)"
-    report "収集の対象外" ok "確認できませんでした(終了コード: ${owners_status}${owners_reason:+、${owners_reason}})。この検査はスキップしました"
+    warn "収集の対象外" "確認できませんでした(終了コード: ${owners_status}${owners_reason:+、${owners_reason}})。この検査はスキップしました"
   elif [[ -n "${underscore_owners}" ]]; then
     warn "収集の対象外" "loginに_を含む所有者は収集しません: $(printf '%s' "${underscore_owners}" | tr '\n' ' ')"
   fi
