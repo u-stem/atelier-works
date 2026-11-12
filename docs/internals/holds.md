@@ -172,7 +172,7 @@ psqlで送るときも、`-c`に2つの文を渡すと1つのトランザクシ�
 
 ### Consoleからの解除
 
-人は、Consoleのシステムの画面の「保留と凍結」から、確認のダイアログを通して解除できる([Consoleの仕様](console.md)の「保留と凍結」)。
+人は、Consoleのシステムの画面の「保留と凍結」から、確認のダイアログを通して解除できる([Consoleのシステムの画面の仕様の「保留と凍結」](console/system.md#保留と凍結))。
 `f/factory/hold_release`が保留を、`f/factory/freeze_release`が凍結とdeployの保留([凍結とdeployの保留の内部仕様](freezes.md))を解除する。
 どちらもtag`console`のscriptで、Console用のworkerで動く。
 読み取りは`f/factory/console_holds`が行い、保留の表と凍結の変数と、反映の承認待ちを別々に読む。
@@ -222,7 +222,7 @@ Consoleのscriptは、その確認を通らずに他の主体の保留を外せ�
 
 ### Consoleからの置く操作
 
-人は、Consoleのシステムの画面から、マージの保留を置ける([Consoleの仕様](console.md)の「保留と凍結」)。
+人は、Consoleのシステムの画面から、マージの保留を置ける([Consoleのシステムの画面の仕様の「保留と凍結」](console/system.md#保留と凍結))。
 `f/factory/console_hold_place`は、マージの保留と、スケジュールの凍結とdeployの保留([凍結とdeployの保留の内部仕様](freezes.md))を置く。
 tag`console`のscriptで、Console用のworkerで動く。
 `placeHold`を読み込んでよい`f/`のファイルは、このscriptだけである。

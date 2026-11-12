@@ -787,7 +787,7 @@ forkやfeatureブランチで運用するときは、Windmillの画面でこの�
 
 マージ前のConsoleの変更を、ローカルのWindmillに繋いで開く。
 検証用サーバーが、ブランチ版のConsoleを`/console/`で配信し、Windmillのコンソールを同じオリジンに見せる。
-サーバーの仕様は、[Consoleの仕様](internals/console.md#ブランチ版の確認)にある。
+サーバーの仕様は、[Consoleの仕様の「ブランチ版の確認」](internals/console.md#ブランチ版の確認)にある。
 確認の観点は、[Consoleの画面の表示の原則](console-display.md#毎日見る目での確認)にある。
 
 > [!IMPORTANT]

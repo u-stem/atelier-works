@@ -101,7 +101,7 @@ Discordからの操作は受け付けない。
 | `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |
 | `mise run metadata:check` | Windmillのメタデータが古ければ失敗する |
 | `mise run check` | `lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する。`test`の後に、全体と層ごとの行カバレッジが下限を割っていないかと、lcovに出ない対象が無いかを確かめる |
-| `mise run check:changed` | `origin/main`との差分に応じて検査を絞って実行する。`lint`と`typecheck`は常に、`lint:docs`は差分のMarkdownだけ(文書の間のリンクは差分に文書が無くても全文書を検査する)、テストは`test:changed`と同じ規則で選び、`console:check`はConsoleと共有のlibに触れたときだけ実行する。日常の確認用で、全件の確認はCIが行う |
+| `mise run check:changed` | `origin/main`との差分に応じて検査を絞って実行する。`lint`と`typecheck`は常に、`lint:docs`は差分のMarkdownだけ(文書の間のリンクは差分に文書が無くても全文書を検査する)、テストは`test:changed`と同じ規則で選び、`console:check`はConsole、共有のlib、Consoleの仕様の文書(`docs/internals/console.md`と`docs/internals/console/`)に触れたときだけ実行する。日常の確認用で、全件の確認はCIが行う |
 | `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査、テスト、組み立てを行う |
 | `mise run lint` | biome、`wmill lint`、型アサーションと`§`の検出を実行する |
 | `mise run lint:docs` | Markdownの文書を検査する |
@@ -175,7 +175,15 @@ atelier-works/
 | [反映の承認の内部仕様](docs/internals/deploy-approvals.md) | 保護パスに触れた変更の反映を、HEADの版ごとに人の承認まで止める表、判定の流れ、通知、Console、安全策 |
 | [CIの失敗を直す部品の仕様](docs/internals/ci-fix.md) | CIのログの取得、整形、検査、変更するファイルの検査と、CI回の流れ、安全策 |
 | [PRのCI監視の仕様](docs/internals/pr-ci.md) | PRのCIの判定、通知、失敗を直す作業項目の起動 |
-| [Consoleの仕様](docs/internals/console.md) | Consoleのアプリの構成と、成果物を配信する仕組み |
+| [Consoleの仕様](docs/internals/console.md) | Consoleのアプリの構成、見た目の体系、画面をまたぐ仕様と、画面ごとの仕様の置き場 |
+| [ConsoleのAPI層の仕様](docs/internals/console/api.md) | API層、ログイン切れの扱い、Windmillに届かないとき |
+| [Consoleの要対応の画面の仕様](docs/internals/console/attention.md) | 要対応の画面(承認、失敗と再実行、通知) |
+| [Consoleの文書の画面の仕様](docs/internals/console/documents.md) | 要件定義書、設計書、レポートの画面 |
+| [Consoleのシステムの画面の仕様](docs/internals/console/system.md) | システムの画面(反映の状態、保留と凍結、通知の履歴、設定) |
+| [Consoleの作業項目と投入の画面の仕様](docs/internals/console/work-items.md) | 分析、作業項目、作業項目の詳細、新規投入、PRレビューの投入の画面 |
+| [Consoleのジョブの画面の仕様](docs/internals/console/jobs.md) | ジョブの画面と、ジョブの詳細の画面 |
+| [Consoleの図の画面の仕様](docs/internals/console/graphs.md) | flowの図と起動の図の画面 |
+| [Consoleの配信の仕様](docs/internals/console/delivery.md) | 成果物を組み立てて配信する仕組み、ブラウザ側の制限、draw.ioの図の取り込み |
 | [Consoleの安全策の内部仕様](docs/internals/console/security.md) | Console用workerの操作ごとの守り、draw.ioの図の描画、要件定義書のリンク、更新履歴のPR |
 | [ホストの実行役の内部仕様](docs/internals/host-apply.md) | ホストの実行役の承認の門、状態の置き場、composeの方針、外部コマンドの許可表 |
 | [調査の隔離の内部仕様](docs/internals/investigate.md) | 調査のClaudeの起動の固定、隔離の測定と判定、調査の入口の安全策 |

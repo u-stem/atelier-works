@@ -254,6 +254,7 @@ Claudeは書かれていることをすべて今のルールとして扱うの�
 | 日本語の文章 | textlint(`.textlintrc.json`) | 文の長さ、読点の数、文体の混在、表記の揺れなど |
 | このリポジトリの規則 | `scripts/lint-docs.ts` | 経緯の語と日付、見出しのコード表記、300字を超える行(1文を1行に書くので、1文の長さ) |
 | 1文は1行 | `scripts/lint-one-sentence-per-line.ts`(`scripts/lint-docs.ts`から呼ぶ) | 地の文で、「。」の後ろに同じ行で文が続くこと |
+| 文書の行数 | `scripts/lint-doc-length.ts`(`scripts/lint-docs.ts`から呼ぶ) | 1文書が3,000行を超えること。超えた文書は目的ごとの文書に分ける |
 | 文書の間のリンク | `scripts/lint-doc-links.ts`(`scripts/lint-docs.ts`から呼ぶ) | 相対パスのリンク先が、gitが追跡しているファイルの一覧にあること。`#アンカー`が、リンク先の見出しか、HTMLの`id`・`name`属性に解決すること |
 | 残るリスクの表 | `scripts/lint-risk-register.ts`(`scripts/lint-docs.ts`から呼ぶ) | `docs/security-risks.md`の行のIDの形と一意性、領域の略号、使った最大の番号までの欠番、行のアンカー、各IDへのリンク。行へのリンクを含まない文に「残るリスク」や受け入れの語を持つ段落と箇条書きが、許可リスト(`scripts/lint-risk-register-allowlist.txt`)とちょうど一致し、許可の種類が表の値であること |
 | 生成した範囲 | `scripts/docs-gen.ts --check` | 生成し直した結果との差 |
@@ -264,8 +265,8 @@ Claudeは書かれていることをすべて今のルールとして扱うの�
 「1文は1行」の検査は、リポジトリの文書を検査する`scripts/`に置く。
 `factory-writing`スキルは、Factoryが生成する文章にも同じ規則を課す。
 ただし、生成物の側の検査には、この規則がまだ無い。
-文書の間のリンクの検査も、リポジトリの文書だけを対象にするので、`scripts/`に置く。
-この2つを変えるときは、`scripts/`の検査を直す。
+文書の間のリンクの検査と文書の行数の検査も、リポジトリの文書だけを対象にするので、`scripts/`に置く。
+この3つを変えるときは、`scripts/`の検査を直す。
 
 「1文は1行」の検査は、Markdownを構文木として読み、段落の行だけを見る。
 箇条書きの項目と引用の中の段落も、段落として見る。

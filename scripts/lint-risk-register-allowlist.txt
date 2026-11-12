@@ -19,13 +19,13 @@ docs/internals/check-sandbox.md 08da63317e915347 pointer 次の変更の前に�
 docs/internals/check-sandbox.md d03a1e8031548ae0 mechanism 検査を枠のユーザーで動かす前にrootが作った、誰でも書けるworktreeやフ
 docs/internals/ci-fix.md 7b27554d348143e8 mechanism mergeShaを本物のPRのmerge commitに結び付けること。 適用の
 docs/internals/ci-fix.md 84772b77063798d6 operational 再レビューでCI回の差分を重点的に見る固定文(競合回用の固定文も同じ)は、回のp
-docs/internals/console.md eeda07798a2d129b pointer Consoleのアプリ(console/)の構成と、成果物を配信する仕組みを書く
+docs/internals/console.md ec937d4d26214bcf pointer Consoleのアプリ(console/)の構成と、画面をまたぐ仕様を書く。 画
 docs/internals/console.md 683cc89ed998dabd operational data-themeとdata-theme-preferenceは、描画の前にp
-docs/internals/console.md dd7b9924b560fb68 pointer この方針の根拠と残るリスクは、Consoleの安全策の内部仕様の「取り込み時点の
-docs/internals/console.md fecd644ff19407d2 pointer 承認画面のファイル(DesignReview.tsx)自体も保護パスにある。 全
-docs/internals/console.md c5220b4897f0aa4f operational 設計タブの一覧は、work_item_detailのdesign_attempt
-docs/internals/console.md c632a0920e7e9691 pointer プレビューは、生のHTMLとリンク参照定義を描かず、見えない文字を置き換え、長さ
-docs/internals/console.md 9d18f47bf815b2c4 operational 履歴とスケジュールの一覧は、自動で取り直さない。 Console用workerの
+docs/internals/console/attention.md dd7b9924b560fb68 pointer この方針の根拠と残るリスクは、Consoleの安全策の内部仕様の「取り込み時点の
+docs/internals/console/attention.md fecd644ff19407d2 pointer 承認画面のファイル(DesignReview.tsx)自体も保護パスにある。 全
+docs/internals/console/documents.md c5220b4897f0aa4f operational 設計タブの一覧は、work_item_detailのdesign_attempt
+docs/internals/console/documents.md c632a0920e7e9691 pointer プレビューは、生のHTMLとリンク参照定義を描かず、見えない文字を置き換え、長さ
+docs/internals/console/jobs.md 9d18f47bf815b2c4 operational 履歴とスケジュールの一覧は、自動で取り直さない。 Console用workerの
 docs/internals/console/security.md 16959bce02d309bd safe-side 過剰に伏せることは許容する。 伏せた箇所があるときは、戻りのmaskedで画面に
 docs/internals/console/security.md 7854155a93bb2964 pointer ジョブを取り消すconsole_job_cancelは、tagconsoleで動
 docs/internals/console/security.md 5b75d36008f68ce3 pointer 図のXMLは、マスクを通さない。 残るリスクはdraw.ioの図の描画に書く。

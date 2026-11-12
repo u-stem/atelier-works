@@ -191,7 +191,7 @@ PRのレビューは、`factory:review`ラベルのほかに、投入からも�
 入口は2つある。
 1つは、Console用workerの`pr_review_submit`である。
 もう1つは、通常のworkerで動くフロー`pr_review_intake`の登録のステップ(`pr_review_intake_register`)である。
-Consoleの「PRレビューの投入」の画面が、この入口を呼ぶ([PRレビューの投入の画面](console.md#prレビューの投入の画面))。
+Consoleの「PRレビューの投入」の画面が、この入口を呼ぶ([PRレビューの投入の画面](console/work-items.md#prレビューの投入の画面))。
 Windmillから`pr_review_submit`かフローを実行しても投入できる。
 
 `pr_review_submit`は、引数が`owner`、`repo`、`pr_number`だけである。

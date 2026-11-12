@@ -3,7 +3,7 @@
 // lintと型検査は数秒で終わるので常に実行する。重い検査だけを、差分が触れたときに実行する。
 // - 文書の検査: 差分にあるMarkdownだけを検査する。差分に無くても、生成範囲の確認は行う。
 //   リンクの検査と残るリスクの表の検査は、差分に文書が無くても、全文書に対して実行する(`lint-docs.ts --links-only`)。
-// - Consoleの検査: Console、共有のlib、ルートの設定に触れたときだけ実行する。
+// - Consoleの検査: Console、共有のlib、ルートの設定、Consoleの仕様の文書に触れたときだけ実行する。
 // - テスト: 差分(削除を含む)の`console/`の外にある非Markdownのパスで決める。
 //   すべてがimportの解析で扱える拡張子(`.ts`、`.tsx`、`.js`、`.mjs`)なら、変更に絞って実行する。
 //   それ以外(`.sh`、`.yaml`、`.sql`、`.json`、`.toml`、拡張子の無いファイルなど)が1つでもあれば、
@@ -36,10 +36,14 @@ type Plan = {
   readonly fullTest: boolean;
 };
 
-/** Consoleの検査に影響するパス。Consoleのテストが`f/factory/lib/`を読むため、共有のlibも含める。 */
+/**
+ * Consoleの検査に影響するパス。Consoleのテストが`f/factory/lib/`を読むため、共有のlibも含める。
+ * `console/src/docs.test.ts`がConsoleの仕様の文書を読むため、その文書も含める。
+ */
 const CONSOLE_AFFECTING = [
   /^console\//,
   /^f\/factory\/lib\//,
+  /^docs\/internals\/console(?:\.md$|\/)/,
   /^scripts\/check-console-lockfile\.ts$/,
   /^(mise\.toml|package\.json|bun\.lock|tsconfig[^/]*\.json|biome\.json)$/,
 ];

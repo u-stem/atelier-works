@@ -728,7 +728,7 @@ Caddyは`WM_BIND`のアドレスにだけバインドする。
 Consoleは、Windmillと同じオリジンの`/console/`で配信する。
 ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者として呼べる。
 そのため、配信物の完全性とブラウザ側の制限を次のように守る。
-仕組みの詳細は[Consoleの仕様](internals/console.md)にある。
+仕組みの詳細は[Consoleの配信の仕様](internals/console/delivery.md)にある。
 
 | 守ること | 内容 |
 | --- | --- |

@@ -1027,7 +1027,7 @@ Console用のworkerの確認も、受けていない通知は上限の10秒の�
 `console/`の変更は`self_update`の対象ではない。
 マージ後に`console-dist.yml`が成果物`console-dist`を作り、`console_fetcher`が数分で取り込む。
 `classifyChangedPaths`は`console/`の変更を`console_paths`として分けて返し、実装フローはPR本文の「Windmillへの反映」に印を付ける。
-仕組みは[Consoleの仕様](internals/console.md)に書く。
+仕組みは[Consoleの配信の仕様](internals/console/delivery.md)に書く。
 
 Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself cloneから読む。
 そのためpullの直後の実行から反映される。
