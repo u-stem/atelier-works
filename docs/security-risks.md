@@ -36,7 +36,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | DES | [設計書の生成の安全策](#設計書の生成の安全策) | [設計書の生成](internals/design.md) | 46 |
 | HOLD | [保留](#保留) | [保留の内部仕様](internals/holds.md) | 32 |
 | FRZ | [凍結とdeployの保留](#凍結とdeployの保留) | [凍結とdeployの保留の内部仕様](internals/freezes.md) | 29 |
-| FIX | [PR修正の安全策](#pr修正の安全策) | [PRワークフロー](internals/pr-workflow.md) | 28 |
+| FIX | [PR修正の安全策](#pr修正の安全策) | [PRワークフローの安全策の内部仕様](internals/pr-workflow/security.md) | 28 |
 | CHK | [検査コマンドの権限](#検査コマンドの権限) | [検査コマンドの実行と権限の内部仕様](internals/check-sandbox.md) | 15 |
 | DEP | [dependabotの更新の自動マージ](#dependabotの更新の自動マージ) | [dependabotの更新の内部仕様](internals/dependabot.md) | 15 |
 | DAP | [反映の承認](#反映の承認) | [反映の承認の内部仕様](internals/deploy-approvals.md) | 05 |

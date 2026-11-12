@@ -1,11 +1,13 @@
 # PRワークフロー
 
-PRのレビュー(`f/factory/pr_review`)とPRの修正(`f/factory/pr_fix`)のフローの内部の挙動、設定値、安全策の仕組みをまとめる。
+PRのレビュー(`f/factory/pr_review`)とPRの修正(`f/factory/pr_fix`)のフローの全体、起動条件、修正の回、差し戻し、設定値をまとめる。
 これらのフローのコードを変更する人が読む。
+レビューの投稿、タイムアウトと再実行、安全策は、`docs/internals/pr-workflow/`の各文書にある。
+置き場は、末尾の[仕様の置き場](#仕様の置き場)の表から引ける。
 PRのレビューと修正を使う手順は[PRのレビューとCIの運用](../operations/pr.md#prでレビューと修正を使う)に書く。
 トリガーラベルが外れたままのPRと、検査の枠の記録の片付けの手順は[運用](../operations.md)に書く。
 作業項目の状態の一覧は[作業項目](work-items.md)に書く。
-安全策と残るリスクは、[この文書の「PR修正の安全策」](pr-workflow/security.md#pr修正の安全策)に書く。
+安全策と残るリスクは、[PRワークフローの安全策の内部仕様の「PR修正の安全策」](pr-workflow/security.md#pr修正の安全策)に書く。
 
 ## 全体の流れ
 
@@ -602,7 +604,7 @@ PRにpushしてheadが変わると、新しい失敗として判定される。
 `pr_fix`のフローを、作業項目の`conflict_check_id`が非NULLのときだけ、次のように変えて動かす。
 `conflict_check_id`は、直す競合の行(`pr_conflict_checks`)のIDである。
 作業項目は、競合の回(`conflict_episode`)も持つ。
-git操作と検査の部品は[CIの失敗を直す部品の仕様](ci-fix.md#競合回のgit操作と検査)に、安全策の理由は[この文書の「マージの競合を解く回(PR修正の安全策)」](pr-workflow/security.md#マージの競合を解く回pr修正の安全策)に書く。
+git操作と検査の部品は[CIの失敗を直す部品の仕様](ci-fix.md#競合回のgit操作と検査)に、安全策の理由は[PRワークフローの安全策の内部仕様の「マージの競合を解く回(PR修正の安全策)」](pr-workflow/security.md#マージの競合を解く回pr修正の安全策)に書く。
 
 ### 通常の回との違い
 
@@ -1163,3 +1165,84 @@ headの状態は、GitHubのAPIで読む。
 親の行を持たない修正(競合回と、本文から閉じるIssueが消えたレビュー回)も、この確認で止まる([設計の最中のPR](#設計の最中のpr))。
 
 worktreeを使っているプロセスがいるときもブロックにする([再実行と中断](pr-workflow/retries.md#再実行と中断))。
+
+## 仕様の置き場
+
+レビューの投稿、タイムアウトと再実行、安全策は、`docs/internals/pr-workflow/`の次の文書にある。
+
+| 文書 | 仕様 |
+| --- | --- |
+| [PRワークフローのレビューの仕様](pr-workflow/review.md) | レビューの入力と範囲、差分の取得、投稿の形、通知の判定、総評のパターン、スレッドへの答えと解決、投稿の冪等性 |
+| [PRワークフローのタイムアウトと再実行の仕様](pr-workflow/retries.md) | 各ステップのtimeout、時間設定の確認、Windmillの再試行、rate limitを待てないとき、再実行と中断、一時的な失敗の自動の再開 |
+| [PRワークフローの安全策の内部仕様](pr-workflow/security.md) | 安全策の実装(ツールの制限、stepの間で渡す引数、禁止パス、変更とHEADの確かめ)と、PR修正の安全策 |
+
+次の表は、節の名前から置き場を引くためのものである。
+
+| 節 | 置き場 |
+| --- | --- |
+| <a id="レビュー"></a>レビュー | [PRワークフローのレビューの仕様の「レビュー」](pr-workflow/review.md#レビュー) |
+| <a id="レビューの範囲"></a>レビューの範囲 | [PRワークフローのレビューの仕様の「レビューの範囲」](pr-workflow/review.md#レビューの範囲) |
+| <a id="差分の取得"></a>差分の取得 | [PRワークフローのレビューの仕様の「差分の取得」](pr-workflow/review.md#差分の取得) |
+| <a id="投稿の形"></a>投稿の形 | [PRワークフローのレビューの仕様の「投稿の形」](pr-workflow/review.md#投稿の形) |
+| <a id="通知の判定"></a>通知の判定 | [PRワークフローのレビューの仕様の「通知の判定」](pr-workflow/review.md#通知の判定) |
+| <a id="総評のパターン"></a>総評のパターン | [PRワークフローのレビューの仕様の「総評のパターン」](pr-workflow/review.md#総評のパターン) |
+| <a id="差分の外の行を指す指摘"></a>差分の外の行を指す指摘 | [PRワークフローのレビューの仕様の「差分の外の行を指す指摘」](pr-workflow/review.md#差分の外の行を指す指摘) |
+| <a id="拒否されたときの退避"></a>拒否されたときの退避 | [PRワークフローのレビューの仕様の「拒否されたときの退避」](pr-workflow/review.md#拒否されたときの退避) |
+| <a id="スレッドへの答え"></a>スレッドへの答え | [PRワークフローのレビューの仕様の「スレッドへの答え」](pr-workflow/review.md#スレッドへの答え) |
+| <a id="スレッドの解決"></a>スレッドの解決 | [PRワークフローのレビューの仕様の「スレッドの解決」](pr-workflow/review.md#スレッドの解決) |
+| <a id="投稿の冪等性"></a>投稿の冪等性 | [PRワークフローのレビューの仕様の「投稿の冪等性」](pr-workflow/review.md#投稿の冪等性) |
+| <a id="投稿済みのレビューを再利用するとき"></a>投稿済みのレビューを再利用するとき | [PRワークフローのレビューの仕様の「投稿済みのレビューを再利用するとき」](pr-workflow/review.md#投稿済みのレビューを再利用するとき) |
+| <a id="投稿のステップの失敗"></a>投稿のステップの失敗 | [PRワークフローのレビューの仕様の「投稿のステップの失敗」](pr-workflow/review.md#投稿のステップの失敗) |
+| <a id="タイムアウト"></a>タイムアウト | [PRワークフローのタイムアウトと再実行の仕様の「タイムアウト」](pr-workflow/retries.md#タイムアウト) |
+| <a id="時間設定の確認"></a>時間設定の確認 | [PRワークフローのタイムアウトと再実行の仕様の「時間設定の確認」](pr-workflow/retries.md#時間設定の確認) |
+| <a id="windmillの再試行"></a>Windmillの再試行 | [PRワークフローのタイムアウトと再実行の仕様の「Windmillの再試行」](pr-workflow/retries.md#windmillの再試行) |
+| <a id="windmillのtimeoutで打ち切られたとき"></a>Windmillのtimeoutで打ち切られたとき | [PRワークフローのタイムアウトと再実行の仕様の「Windmillのtimeoutで打ち切られたとき」](pr-workflow/retries.md#windmillのtimeoutで打ち切られたとき) |
+| <a id="rate-limitを待てないとき"></a>rate limitを待てないとき | [PRワークフローのタイムアウトと再実行の仕様の「rate limitを待てないとき」](pr-workflow/retries.md#rate-limitを待てないとき) |
+| <a id="rate-limitで止まったprレビューの扱い"></a>rate limitで止まったPRレビューの扱い | [PRワークフローのタイムアウトと再実行の仕様の「rate limitで止まったPRレビューの扱い」](pr-workflow/retries.md#rate-limitで止まったprレビューの扱い) |
+| <a id="再実行と中断"></a>再実行と中断 | [PRワークフローのタイムアウトと再実行の仕様の「再実行と中断」](pr-workflow/retries.md#再実行と中断) |
+| <a id="一時的な失敗の自動の再開"></a>一時的な失敗の自動の再開 | [PRワークフローのタイムアウトと再実行の仕様の「一時的な失敗の自動の再開」](pr-workflow/retries.md#一時的な失敗の自動の再開) |
+| <a id="再開で生成をやり直す費用"></a>再開で生成をやり直す費用 | [PRワークフローのタイムアウトと再実行の仕様の「再開で生成をやり直す費用」](pr-workflow/retries.md#再開で生成をやり直す費用) |
+| <a id="費用の上限"></a>費用の上限 | [PRワークフローのタイムアウトと再実行の仕様の「費用の上限」](pr-workflow/retries.md#費用の上限) |
+| <a id="許容の根拠"></a>許容の根拠 | [PRワークフローのタイムアウトと再実行の仕様の「許容の根拠」](pr-workflow/retries.md#許容の根拠) |
+| <a id="頻度の確認"></a>頻度の確認 | [PRワークフローのタイムアウトと再実行の仕様の「頻度の確認」](pr-workflow/retries.md#頻度の確認) |
+| <a id="再利用を入れない理由"></a>再利用を入れない理由 | [PRワークフローのタイムアウトと再実行の仕様の「再利用を入れない理由」](pr-workflow/retries.md#再利用を入れない理由) |
+| <a id="見直しの基準"></a>見直しの基準 | [PRワークフローのタイムアウトと再実行の仕様の「見直しの基準」](pr-workflow/retries.md#見直しの基準) |
+| <a id="安全策の実装"></a>安全策の実装 | [PRワークフローの安全策の内部仕様の「安全策の実装」](pr-workflow/security.md#安全策の実装) |
+| <a id="claudeに渡すツールの制限"></a>Claudeに渡すツールの制限 | [PRワークフローの安全策の内部仕様の「Claudeに渡すツールの制限」](pr-workflow/security.md#claudeに渡すツールの制限) |
+| <a id="stepの間で渡す引数"></a>stepの間で渡す引数 | [PRワークフローの安全策の内部仕様の「stepの間で渡す引数」](pr-workflow/security.md#stepの間で渡す引数) |
+| <a id="禁止パスによる停止"></a>禁止パスによる停止 | [PRワークフローの安全策の内部仕様の「禁止パスによる停止」](pr-workflow/security.md#禁止パスによる停止) |
+| <a id="変更パスの取得"></a>変更パスの取得 | [PRワークフローの安全策の内部仕様の「変更パスの取得」](pr-workflow/security.md#変更パスの取得) |
+| <a id="symlinkと特殊なファイルの検出"></a>symlinkと特殊なファイルの検出 | [PRワークフローの安全策の内部仕様の「symlinkと特殊なファイルの検出」](pr-workflow/security.md#symlinkと特殊なファイルの検出) |
+| <a id="変更を調べる時点"></a>変更を調べる時点 | [PRワークフローの安全策の内部仕様の「変更を調べる時点」](pr-workflow/security.md#変更を調べる時点) |
+| <a id="headとブランチの確認"></a>HEADとブランチの確認 | [PRワークフローの安全策の内部仕様の「HEADとブランチの確認」](pr-workflow/security.md#headとブランチの確認) |
+| <a id="worktreeのgitの検証"></a>worktreeの.gitの検証 | [PRワークフローの安全策の内部仕様の「worktreeの.gitの検証」](pr-workflow/security.md#worktreeのgitの検証) |
+| <a id="コミットの前の再確認"></a>コミットの前の再確認 | [PRワークフローの安全策の内部仕様の「コミットの前の再確認」](pr-workflow/security.md#コミットの前の再確認) |
+| <a id="サブモジュールと置換オブジェクトの扱い"></a>サブモジュールと置換オブジェクトの扱い | [PRワークフローの安全策の内部仕様の「サブモジュールと置換オブジェクトの扱い」](pr-workflow/security.md#サブモジュールと置換オブジェクトの扱い) |
+| <a id="差分の大きさの上限"></a>差分の大きさの上限 | [PRワークフローの安全策の内部仕様の「差分の大きさの上限」](pr-workflow/security.md#差分の大きさの上限) |
+| <a id="pushの直前の確認"></a>pushの直前の確認 | [PRワークフローの安全策の内部仕様の「pushの直前の確認」](pr-workflow/security.md#pushの直前の確認) |
+| <a id="コミットの作成者情報"></a>コミットの作成者情報 | [PRワークフローの安全策の内部仕様の「コミットの作成者情報」](pr-workflow/security.md#コミットの作成者情報) |
+| <a id="pr修正の安全策"></a>PR修正の安全策 | [PRワークフローの安全策の内部仕様の「PR修正の安全策」](pr-workflow/security.md#pr修正の安全策) |
+| <a id="factory自身の投稿の判定"></a>Factory自身の投稿の判定 | [PRワークフローの安全策の内部仕様の「Factory自身の投稿の判定」](pr-workflow/security.md#factory自身の投稿の判定) |
+| <a id="ツールの制限"></a>ツールの制限 | [PRワークフローの安全策の内部仕様の「ツールの制限」](pr-workflow/security.md#ツールの制限) |
+| <a id="対象リポジトリの設定を信頼しない"></a>対象リポジトリの設定を信頼しない | [PRワークフローの安全策の内部仕様の「対象リポジトリの設定を信頼しない」](pr-workflow/security.md#対象リポジトリの設定を信頼しない) |
+| <a id="保護パスの変更を止める"></a>保護パスの変更を止める | [PRワークフローの安全策の内部仕様の「保護パスの変更を止める」](pr-workflow/security.md#保護パスの変更を止める) |
+| <a id="libのlockを保護しない理由"></a>libのlockを保護しない理由 | [PRワークフローの安全策の内部仕様の「libのlockを保護しない理由」](pr-workflow/security.md#libのlockを保護しない理由) |
+| <a id="修正と実装で範囲が違う理由"></a>修正と実装で範囲が違う理由 | [PRワークフローの安全策の内部仕様の「修正と実装で範囲が違う理由」](pr-workflow/security.md#修正と実装で範囲が違う理由) |
+| <a id="symlinkと特殊なファイルを止める"></a>symlinkと特殊なファイルを止める | [PRワークフローの安全策の内部仕様の「symlinkと特殊なファイルを止める」](pr-workflow/security.md#symlinkと特殊なファイルを止める) |
+| <a id="headとブランチの確認pr修正の安全策"></a>HEADとブランチの確認(PR修正の安全策) | [PRワークフローの安全策の内部仕様の「HEADとブランチの確認(PR修正の安全策)」](pr-workflow/security.md#headとブランチの確認pr修正の安全策) |
+| <a id="worktreeのgitファイルの書き換えを止める"></a>worktreeの.gitファイルの書き換えを止める | [PRワークフローの安全策の内部仕様の「worktreeの.gitファイルの書き換えを止める」](pr-workflow/security.md#worktreeのgitファイルの書き換えを止める) |
+| <a id="gitが読む設定を限る"></a>gitが読む設定を限る | [PRワークフローの安全策の内部仕様の「gitが読む設定を限る」](pr-workflow/security.md#gitが読む設定を限る) |
+| <a id="コミットの直前の再検査"></a>コミットの直前の再検査 | [PRワークフローの安全策の内部仕様の「コミットの直前の再検査」](pr-workflow/security.md#コミットの直前の再検査) |
+| <a id="差し替えとサブモジュールに惑わされない"></a>差し替えとサブモジュールに惑わされない | [PRワークフローの安全策の内部仕様の「差し替えとサブモジュールに惑わされない」](pr-workflow/security.md#差し替えとサブモジュールに惑わされない) |
+| <a id="差分の大きさの上限pr修正の安全策"></a>差分の大きさの上限(PR修正の安全策) | [PRワークフローの安全策の内部仕様の「差分の大きさの上限(PR修正の安全策)」](pr-workflow/security.md#差分の大きさの上限pr修正の安全策) |
+| <a id="prの状態とheadの確認"></a>PRの状態とheadの確認 | [PRワークフローの安全策の内部仕様の「PRの状態とheadの確認」](pr-workflow/security.md#prの状態とheadの確認) |
+| <a id="コミットの作成者情報pr修正の安全策"></a>コミットの作成者情報(PR修正の安全策) | [PRワークフローの安全策の内部仕様の「コミットの作成者情報(PR修正の安全策)」](pr-workflow/security.md#コミットの作成者情報pr修正の安全策) |
+| <a id="ciのログの扱い"></a>CIのログの扱い | [PRワークフローの安全策の内部仕様の「CIのログの扱い」](pr-workflow/security.md#ciのログの扱い) |
+| <a id="マージの競合を解く回pr修正の安全策"></a>マージの競合を解く回(PR修正の安全策) | [PRワークフローの安全策の内部仕様の「マージの競合を解く回(PR修正の安全策)」](pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
+| <a id="baseの決め方"></a>baseの決め方 | [PRワークフローの安全策の内部仕様の「baseの決め方」](pr-workflow/security.md#baseの決め方) |
+| <a id="workflowスコープを付けない"></a>workflowスコープを付けない | [PRワークフローの安全策の内部仕様の「workflowスコープを付けない」](pr-workflow/security.md#workflowスコープを付けない) |
+| <a id="mergeコミットのpush"></a>mergeコミットのpush | [PRワークフローの安全策の内部仕様の「mergeコミットのpush」](pr-workflow/security.md#mergeコミットのpush) |
+| <a id="baseの側の変更"></a>baseの側の変更 | [PRワークフローの安全策の内部仕様の「baseの側の変更」](pr-workflow/security.md#baseの側の変更) |
+| <a id="衝突ブロックの照合"></a>衝突ブロックの照合 | [PRワークフローの安全策の内部仕様の「衝突ブロックの照合」](pr-workflow/security.md#衝突ブロックの照合) |
+| <a id="git操作の守り"></a>git操作の守り | [PRワークフローの安全策の内部仕様の「git操作の守り」](pr-workflow/security.md#git操作の守り) |
+| <a id="残るリスク"></a>残るリスク | [PRワークフローの安全策の内部仕様の「残るリスク」](pr-workflow/security.md#残るリスク) |

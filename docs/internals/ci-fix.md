@@ -16,7 +16,7 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 
 PRのマージの競合を直す回(競合回)の部品も、同じ考え方で作るので、この文書の「競合回のgit操作と検査」に書く。
 競合回が`pr_fix`の各ステップでどう動くかは[PRワークフローの仕様](pr-workflow.md#マージの競合を解く回)に書く。
-安全策と残る危険は[PRワークフローの仕様](pr-workflow/security.md#pr修正の安全策)と[この文書の「CIのメタデータの再生成」](#ciのメタデータの再生成)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
+安全策と残る危険は[PRワークフローの安全策の内部仕様](pr-workflow/security.md#pr修正の安全策)と[この文書の「CIのメタデータの再生成」](#ciのメタデータの再生成)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
 ## 方針
 
@@ -793,7 +793,7 @@ PRが基点の行を一部だけ変えていても、PRが足した行の修正�
 
 PRのブランチが既定のブランチ(base)と競合するときに、baseをmergeして、競合をClaudeに解かせる部品である。
 git操作は`lib/workspace.ts`に、判定と検査は`lib/conflict_fix_round.ts`にある。
-安全策の理由は[PRワークフローの仕様](pr-workflow/security.md#マージの競合を解く回pr修正の安全策)にある。
+安全策の理由は[PRワークフローの安全策の内部仕様](pr-workflow/security.md#マージの競合を解く回pr修正の安全策)にある。
 
 ### mergeして基準コミットを作る
 
@@ -847,7 +847,7 @@ gitの2.54では、`--`の有無で動作が変わらないことを確かめた
 
 親の照合を偽らせないため、すべてのgitで`core.commitGraph=false`と`GIT_GRAFT_FILE=/dev/null`を固定する。
 署名の検証でプログラムを動かさないよう、`gpg.program`も空に固定し、`merge`には`--no-verify-signatures`を付ける。
-理由は[PRワークフローの仕様](pr-workflow/security.md#マージの競合を解く回pr修正の安全策)にある。
+理由は[PRワークフローの安全策の内部仕様](pr-workflow/security.md#マージの競合を解く回pr修正の安全策)にある。
 
 必要なgitの版は、使うオプションで決まる。
 `check-attr --source`は2.40以降、`merge-file --object-id`は2.43以降、`merge-file --diff-algorithm`は2.44以降である。

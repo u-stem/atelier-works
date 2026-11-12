@@ -89,7 +89,7 @@ docs/internals/notifications.md cdff7acd217c14ce operational レビューの記�
 docs/internals/notifications.md 525e8905b4537ef4 operational 設定を切り替えた瞬間は、日次サマリーの数字とモードがずれる。 サマリーは、実行時
 docs/internals/notifications.md dce7a32b87482420 operational gatedを意図して続けると、人がnoticeを解決しても、翌日の実行で出直す。
 docs/internals/notifications.md fd219ac737490b0a operational self_updateは、wmill sync pushを先に、wmill da
-docs/internals/pr-workflow.md be08d7030934845e pointer PRのレビュー(f/factory/pr_review)とPRの修正(f/fac
+docs/internals/pr-workflow.md 99ecdf57a0d205cd pointer PRのレビュー(f/factory/pr_review)とPRの修正(f/fac
 docs/internals/pr-workflow/review.md f869be0900d1a588 operational 正当な文字も置き換わる。 絵文字を結合するZWJ、絵文字の異体字選択子(U+FE
 docs/internals/pr-workflow/review.md f3e047c3e5863b47 operational 次の2つの挙動は、受け入れている。
 docs/internals/pr-workflow/review.md 35d302c1b9c8e27e operational 修正の終わりでは、形の合わないスレッドが1つあるだけで一覧が空になり、全提案のス

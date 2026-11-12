@@ -1938,7 +1938,7 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 
 ## PR修正の安全策
 
-この節の内容は[PRワークフローの仕様の「PR修正の安全策」](internals/pr-workflow/security.md#pr修正の安全策)と、[検査コマンドの実行と権限の「検査コマンドはフローが実行する」](internals/check-sandbox.md#検査コマンドはフローが実行する)と[「検査コマンドの権限」](internals/check-sandbox.md#検査コマンドの権限)にある。
+この節の内容は[PRワークフローの安全策の内部仕様の「PR修正の安全策」](internals/pr-workflow/security.md#pr修正の安全策)と、[検査コマンドの実行と権限の「検査コマンドはフローが実行する」](internals/check-sandbox.md#検査コマンドはフローが実行する)と[「検査コマンドの権限」](internals/check-sandbox.md#検査コマンドの権限)にある。
 
 ## 実装の安全策
 
@@ -2362,24 +2362,24 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
 | 要件定義書のリンク | [Consoleの安全策の内部仕様の「要件定義書のリンク」](internals/console/security.md#要件定義書のリンク) |
 | 監査レポートの本文 | [Consoleの安全策の内部仕様の「監査レポートの本文」](internals/console/security.md#監査レポートの本文) |
 | 更新履歴のPR | [Consoleの安全策の内部仕様の「更新履歴のPR」](internals/console/security.md#更新履歴のpr) |
-| PR修正の安全策 | [PRワークフローの仕様の「PR修正の安全策」](internals/pr-workflow/security.md#pr修正の安全策) |
-| Factory自身の投稿の判定 | [PRワークフローの仕様の「Factory自身の投稿の判定」](internals/pr-workflow/security.md#factory自身の投稿の判定) |
-| ツールの制限 | [PRワークフローの仕様の「ツールの制限」](internals/pr-workflow/security.md#ツールの制限) |
+| PR修正の安全策 | [PRワークフローの安全策の内部仕様の「PR修正の安全策」](internals/pr-workflow/security.md#pr修正の安全策) |
+| Factory自身の投稿の判定 | [PRワークフローの安全策の内部仕様の「Factory自身の投稿の判定」](internals/pr-workflow/security.md#factory自身の投稿の判定) |
+| ツールの制限 | [PRワークフローの安全策の内部仕様の「ツールの制限」](internals/pr-workflow/security.md#ツールの制限) |
 | 検査コマンドはフローが実行する | [検査コマンドの実行と権限の内部仕様の「検査コマンドはフローが実行する」](internals/check-sandbox.md#検査コマンドはフローが実行する) |
 | 検査コマンドの権限 | [検査コマンドの実行と権限の内部仕様の「検査コマンドの権限」](internals/check-sandbox.md#検査コマンドの権限) |
-| 対象リポジトリの設定を信頼しない | [PRワークフローの仕様の「対象リポジトリの設定を信頼しない」](internals/pr-workflow/security.md#対象リポジトリの設定を信頼しない) |
-| 保護パスの変更を止める | [PRワークフローの仕様の「保護パスの変更を止める」](internals/pr-workflow/security.md#保護パスの変更を止める) |
-| symlinkと特殊なファイルを止める | [PRワークフローの仕様の「symlinkと特殊なファイルを止める」](internals/pr-workflow/security.md#symlinkと特殊なファイルを止める) |
-| HEADとブランチの確認 | [PRワークフローの仕様の「HEADとブランチの確認(PR修正の安全策)」](internals/pr-workflow/security.md#headとブランチの確認pr修正の安全策) |
-| worktreeの.gitファイルの書き換えを止める | [PRワークフローの仕様の「worktreeの.gitファイルの書き換えを止める」](internals/pr-workflow/security.md#worktreeのgitファイルの書き換えを止める) |
-| gitが読む設定を限る | [PRワークフローの仕様の「gitが読む設定を限る」](internals/pr-workflow/security.md#gitが読む設定を限る) |
-| コミットの直前の再検査 | [PRワークフローの仕様の「コミットの直前の再検査」](internals/pr-workflow/security.md#コミットの直前の再検査) |
-| 差し替えとサブモジュールに惑わされない | [PRワークフローの仕様の「差し替えとサブモジュールに惑わされない」](internals/pr-workflow/security.md#差し替えとサブモジュールに惑わされない) |
-| 差分の大きさの上限(PR修正の安全策) | [PRワークフローの仕様の「差分の大きさの上限(PR修正の安全策)」](internals/pr-workflow/security.md#差分の大きさの上限pr修正の安全策) |
-| PRの状態とheadの確認 | [PRワークフローの仕様の「PRの状態とheadの確認」](internals/pr-workflow/security.md#prの状態とheadの確認) |
-| コミットの作成者情報 | [PRワークフローの仕様の「コミットの作成者情報(PR修正の安全策)」](internals/pr-workflow/security.md#コミットの作成者情報pr修正の安全策) |
-| CIのログの扱い | [PRワークフローの仕様の「CIのログの扱い」](internals/pr-workflow/security.md#ciのログの扱い) |
-| マージの競合を解く回 | [PRワークフローの仕様の「マージの競合を解く回(PR修正の安全策)」](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
+| 対象リポジトリの設定を信頼しない | [PRワークフローの安全策の内部仕様の「対象リポジトリの設定を信頼しない」](internals/pr-workflow/security.md#対象リポジトリの設定を信頼しない) |
+| 保護パスの変更を止める | [PRワークフローの安全策の内部仕様の「保護パスの変更を止める」](internals/pr-workflow/security.md#保護パスの変更を止める) |
+| symlinkと特殊なファイルを止める | [PRワークフローの安全策の内部仕様の「symlinkと特殊なファイルを止める」](internals/pr-workflow/security.md#symlinkと特殊なファイルを止める) |
+| HEADとブランチの確認 | [PRワークフローの安全策の内部仕様の「HEADとブランチの確認(PR修正の安全策)」](internals/pr-workflow/security.md#headとブランチの確認pr修正の安全策) |
+| worktreeの.gitファイルの書き換えを止める | [PRワークフローの安全策の内部仕様の「worktreeの.gitファイルの書き換えを止める」](internals/pr-workflow/security.md#worktreeのgitファイルの書き換えを止める) |
+| gitが読む設定を限る | [PRワークフローの安全策の内部仕様の「gitが読む設定を限る」](internals/pr-workflow/security.md#gitが読む設定を限る) |
+| コミットの直前の再検査 | [PRワークフローの安全策の内部仕様の「コミットの直前の再検査」](internals/pr-workflow/security.md#コミットの直前の再検査) |
+| 差し替えとサブモジュールに惑わされない | [PRワークフローの安全策の内部仕様の「差し替えとサブモジュールに惑わされない」](internals/pr-workflow/security.md#差し替えとサブモジュールに惑わされない) |
+| 差分の大きさの上限(PR修正の安全策) | [PRワークフローの安全策の内部仕様の「差分の大きさの上限(PR修正の安全策)」](internals/pr-workflow/security.md#差分の大きさの上限pr修正の安全策) |
+| PRの状態とheadの確認 | [PRワークフローの安全策の内部仕様の「PRの状態とheadの確認」](internals/pr-workflow/security.md#prの状態とheadの確認) |
+| コミットの作成者情報 | [PRワークフローの安全策の内部仕様の「コミットの作成者情報(PR修正の安全策)」](internals/pr-workflow/security.md#コミットの作成者情報pr修正の安全策) |
+| CIのログの扱い | [PRワークフローの安全策の内部仕様の「CIのログの扱い」](internals/pr-workflow/security.md#ciのログの扱い) |
+| マージの競合を解く回 | [PRワークフローの安全策の内部仕様の「マージの競合を解く回(PR修正の安全策)」](internals/pr-workflow/security.md#マージの競合を解く回pr修正の安全策) |
 | 実装の安全策 | [実装フローの仕様の「実装の安全策」](internals/implement.md#実装の安全策) |
 | ツールの制限と検査の分担 | [実装フローの仕様の「ツールの制限と検査の分担」](internals/implement.md#ツールの制限と検査の分担) |
 | 取り込み後のIssueの書き換え | [実装フローの仕様の「取り込み後のIssueの書き換え」](internals/implement.md#取り込み後のissueの書き換え) |
