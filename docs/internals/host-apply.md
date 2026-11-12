@@ -1041,7 +1041,7 @@ mainは承認0件でマージでき、管理者は失敗したチェックを無
 - 実行役のテストと、それが使う一時リポジトリの補助(`tests/fixtures/host_apply_repo.ts`)。
 - `.tool-versions`、`.env`系、`.node-version`、`.bun-version`。
 
-一覧は`f/factory/lib/protected_paths.ts`にあり、[禁止パスによる停止](pr-workflow.md#禁止パスによる停止)に説明がある。
+一覧は`f/factory/lib/protected_paths.ts`にあり、[禁止パスによる停止](pr-workflow/security.md#禁止パスによる停止)に説明がある。
 実行役のテストはファイル名で列挙し、足した実行役のテストを列挙し忘れると、`tests/lib/protected_paths.test.ts`が失敗する。
 保護パスの照合は、大文字小文字とUnicodeの別名を区別しない。
 パスからゼロ幅文字などの無視される文字を除き、NFKCで正規化し、小文字、大文字、小文字の順に変換して畳み込み、畳み込んだ一覧と比べる。

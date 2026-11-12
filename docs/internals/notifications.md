@@ -844,7 +844,7 @@ RESTのrate limitでは、解除まで待って1回だけ再試行する。
 
 失敗した作業項目と人の対応待ちの作業項目は、解除を待ってからConsoleの**要対応**で再実行する。
 人の対応待ちの通知でも、rate limitが原因のときは、次の操作に解除を待ってから再実行するよう表示する。
-rate limitで失敗したときに各ステップが何を済ませているかは、[実装フローの仕様](implement.md)と[PRワークフローの仕様](pr-workflow.md)にある。
+rate limitで失敗したときに各ステップが何を済ませているかは、[実装フローの仕様](implement.md)と[PRワークフローのタイムアウトと再実行の仕様の「rate limitを待てないとき」](pr-workflow/retries.md#rate-limitを待てないとき)にある。
 
 ### RESTの検索の拒否
 

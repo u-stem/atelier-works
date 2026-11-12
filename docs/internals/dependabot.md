@@ -590,7 +590,7 @@ PATの持ち主がrulesetを迂回できる管理者だと、マージのAPIが�
 ### 守る部品と守らない部品
 
 関門、収集、registryの取得、プロンプト、フローの支援関数、取得のscript、3つのステップ、フローの定義は保護パスにする。
-一覧は[保護パスの変更を止める](pr-workflow.md#保護パスの変更を止める)にある。
+一覧は[保護パスの変更を止める](pr-workflow/security.md#保護パスの変更を止める)にある。
 共有のモジュールは守らない。
 対象は、`lib/`の`dependabot_*`以外のモジュールと`steps/pr_workflow_support.ts`である。
 たとえば`lib/github.ts`、`lib/db.ts`、`lib/workspace.ts`が含まれる。
