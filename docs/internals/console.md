@@ -156,8 +156,7 @@ Enterは、送信中かどうかによらず止める。
 
 `aria-disabled`のボタンは、hoverの見た目を出さない。
 `Button`は、variantごとのhoverの指定をそのまま持ち、`aria-disabled:hover:`で元の面と文字へ戻す。
-戻す値は[`src/components/ui/button.tsx`](../../console/src/components/ui/button.tsx)の`buttonVariants`が定める。
-戻す値は[`cancels the hover style of %s`](../../console/src/components/ui/button.test.ts)で確かめる。
+戻す値は[`src/components/ui/button.tsx`](../../console/src/components/ui/button.tsx)の`buttonVariants`が定め、[`cancels the hover style of %s`](../../console/src/components/ui/button.test.ts)で確かめる。
 hoverで変わる性質のすべてを戻すことは、[`pairs every hover property of %s with a cancel`](../../console/src/components/ui/button.test.ts)で確かめる。
 `outline`と`ghost`の文字を`text-current`に戻すのは、`outline`と`ghost`が文字の色を持たず、親から継ぐためである。
 `not-aria-disabled:`は使わない。
@@ -233,8 +232,7 @@ Enterの押し間違いで実行させないためである。
 
 ### 動きのトークン
 
-動きの長さとイージングは、`src/index.css`のトークンで決める。
-値は[`src/index.css`](../../console/src/index.css)の`@theme`が定め、3つのトークンがあることは[`index.css defines %s`](../../console/src/motion.test.ts)で確かめる。
+動きの長さとイージングは、[`src/index.css`](../../console/src/index.css)の`@theme`のトークンが定め、3つのトークンがあることは[`index.css defines %s`](../../console/src/motion.test.ts)で確かめる。
 
 | トークン | 使う所 |
 | --- | --- |
@@ -847,7 +845,7 @@ axe-coreの検査(`axe.a11y.ts`)は、次の組み合わせを開く。
 - flowの図は、`implement`、`pr_review`、`pr_fix`を開く。
 - 起動の図は、見出しを1つずつ開いて検査する。
   開いたときだけ描かれる要素(ステップの行、リンク)を、検査の対象に入れるためである。
-  640px未満の一覧でも、1つずつ開いて検査する。
+  図が一覧に替わる幅([Consoleの図の画面の仕様の「幅」](console/graphs.md#幅))の一覧でも、1つずつ開いて検査する。
 - データは、有る状態と無い状態の両方。
 - ダイアログは、パレット、ヘルプ、再実行の確認を開いた状態。
 - 投入の2画面は、入力の操作で出せる状態も開く(`intakeStates.ts`)。
@@ -900,7 +898,7 @@ Tabの順序のスナップショットは取らない。
   ページはスクロールしない。
 - 起動の図で開いた見出しの次のTabは、同じflowの「flowの図」のリンクへ移る。
   リンクをEnterで開くと、flowの図へ移る。
-- 起動の図は、幅が640pxをまたいで図と一覧が入れ替わっても、開いたflowが開いたまま残る。
+- 起動の図は、図が一覧に替わる幅([Consoleの図の画面の仕様の「幅」](console/graphs.md#幅))をまたいで図と一覧が入れ替わっても、開いたflowが開いたまま残る。
 - 投入の2画面は、一覧へ戻るリンクの次から、入力欄とボタンに、画面の順でTabが止まる。
   止まった要素の名前は、ラベルと一致する。
   進め方のラジオは、選んでいる1つにだけ止まる。
@@ -1448,7 +1446,7 @@ Consoleの開発サーバー(`bun run --cwd console dev`、`http://localhost:517
 - 保留の表が無い、保留を読めない、保留の表が壊れている、凍結の変数を読めない表示
 - `<a href>`を含む理由と、書字方向を変える制御文字を含む置いた主体が、文字のまま出ること
 - 長い理由と長い対象の折り返し
-- 期限が数十秒後の行が、画面の時計の更新(30秒ごと)で「期限切れ」に変わること
+- 期限が数十秒後の行が、画面の時計の更新(間隔は[`src/app/clock.ts`](../../console/src/app/clock.ts)の`CLOCK_TICK_MS`)で「期限切れ」に変わること
 - 401のときの、ログインを促す文
 - ライト、ダーク、狭い幅
 - 確認のダイアログと、開いた直後のフォーカスが「取り消す」にあること
