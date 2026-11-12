@@ -175,6 +175,25 @@ function resolveTargetPath(
 }
 
 /**
+ * 文書`docPath`のリンク先`target`を、根からの相対パスと、復号したアンカーにする。
+ * パスとアンカーの読み方は`lintDocLinks`と同じで、クエリは落とす。
+ * 外部のURLと、根の外へ出るパスは`undefined`を返す。
+ */
+export function resolveLinkTarget(
+  docPath: string,
+  target: string,
+): { readonly path: string; readonly anchor: string } | undefined {
+  if (isExternal(target)) return undefined;
+  const hash = target.indexOf("#");
+  const beforeHash = hash === -1 ? target : target.slice(0, hash);
+  const rawPath = beforeHash.replace(/\?.*$/, "");
+  const anchor = hash === -1 ? "" : decode(target.slice(hash + 1));
+  const path =
+    rawPath === "" ? docPath : resolveTargetPath(docPath, decode(rawPath));
+  return path === undefined ? undefined : { path, anchor };
+}
+
+/**
  * 管理下のファイルの一覧`files`から`LinkResolver`を作る。
  * ファイルの上にあるディレクトリは「ある」として扱う。
  * 文書は、最初に尋ねられたときに1回だけ読んで解析する。
