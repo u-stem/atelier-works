@@ -265,6 +265,10 @@ describe("matchesForbiddenPath", () => {
     );
   });
 
+  test("matches scripts/check-script-locks.ts", () => {
+    expect(matchesForbiddenPath("scripts/check-script-locks.ts")).toBe(true);
+  });
+
   test("matches scripts/ci-scope.ts", () => {
     expect(matchesForbiddenPath("scripts/ci-scope.ts")).toBe(true);
   });
@@ -393,6 +397,12 @@ describe("matchesImplementProtectedPath", () => {
     expect(
       matchesImplementProtectedPath("scripts/check-console-lockfile.ts"),
     ).toBe(true);
+  });
+
+  test("matches scripts/check-script-locks.ts", () => {
+    expect(matchesImplementProtectedPath("scripts/check-script-locks.ts")).toBe(
+      true,
+    );
   });
 
   test("matches scripts/ci-scope.ts", () => {
@@ -533,8 +543,18 @@ describe("matchesImplementProtectedPath", () => {
     expect(matchesImplementProtectedPath("src/config.ts")).toBe(false);
   });
 
-  test("leaves pr_fix's matching of .github/ outside workflows unchanged", () => {
-    expect(matchesForbiddenPath(".github/dependabot.yml")).toBe(false);
+  test("matches .github/dependabot.yml for pr_fix too", () => {
+    expect(matchesForbiddenPath(".github/dependabot.yml")).toBe(true);
+  });
+
+  test("matches .github/dependabot.yaml for pr_fix too", () => {
+    expect(matchesForbiddenPath(".github/dependabot.yaml")).toBe(true);
+  });
+
+  test("leaves pr_fix's matching of .github/ outside workflows and dependabot unchanged", () => {
+    expect(matchesForbiddenPath(".github/PULL_REQUEST_TEMPLATE.md")).toBe(
+      false,
+    );
   });
 
   test("leaves pr_fix's matching of package.json unchanged", () => {

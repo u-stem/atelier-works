@@ -7,7 +7,9 @@ import {
 
 const CLIENT_INTEGRITY = "sha512-AbCd+/0123456789==";
 const SCOPED_INTEGRITY = "sha512-EfGh+/9876543210==";
+const TRANSITIVE_INTEGRITY = "sha512-IjKl+/1357924680==";
 
+// `fast-uri`は、ルートのpackage.jsonが宣言しない推移的な依存として置く。
 const ROOT_LOCK = `{
   "lockfileVersion": 2,
   "configVersion": 1,
@@ -23,28 +25,31 @@ const ROOT_LOCK = `{
   "packages": {
     "windmill-client": ["windmill-client@1.817.0", "", {}, "${CLIENT_INTEGRITY}"],
     "@scope/x": ["@scope/x@2.0.0", "", {}, "${SCOPED_INTEGRITY}"],
+    "fast-uri": ["fast-uri@3.1.9", "", {}, "${TRANSITIVE_INTEGRITY}"],
   }
 }
 `;
 
 const EMPTY_LOCK = '{\n  "dependencies": {}\n}\n//bun.lock\n<empty>';
 
-/** windmill-clientに依存するscriptの`.script.lock`を、bun.lockの`packages`の中身から組み立てる。 */
-function scriptLock(packages: string): string {
-  return `{
-  "dependencies": {
-    "windmill-client": "1.817.0"
-  }
-}
+const CLIENT_ENTRY = `"windmill-client": ["windmill-client@1.817.0", "", {}, "${CLIENT_INTEGRITY}"],`;
+
+/**
+ * scriptの`.script.lock`を、宣言する依存と、bun.lockの`packages`の中身から組み立てる。
+ * 宣言の既定は、windmill-clientだけである。
+ */
+function scriptLock(
+  packages: string,
+  dependencies: Record<string, string> = { "windmill-client": "1.817.0" },
+): string {
+  return `${JSON.stringify({ dependencies }, null, 2)}
 //bun.lock
 {
   "lockfileVersion": 2,
   "configVersion": 1,
   "workspaces": {
     "": {
-      "dependencies": {
-        "windmill-client": "1.817.0",
-      },
+      "dependencies": ${JSON.stringify(dependencies)},
     },
   },
   "packages": {
@@ -61,15 +66,13 @@ function rootIndex(text: string = ROOT_LOCK): RootIndex {
 
 describe("checkScriptLock", () => {
   test("accepts a package with the same version and integrity as the root", () => {
-    const lock = scriptLock(
-      `"windmill-client": ["windmill-client@1.817.0", "", {}, "${CLIENT_INTEGRITY}"],`,
-    );
-    expect(checkScriptLock(lock, rootIndex())).toEqual([]);
+    expect(checkScriptLock(scriptLock(CLIENT_ENTRY), rootIndex())).toEqual([]);
   });
 
   test("accepts a scoped package with the same version and integrity as the root", () => {
     const lock = scriptLock(
       `"@scope/x": ["@scope/x@2.0.0", "", {}, "${SCOPED_INTEGRITY}"],`,
+      { "@scope/x": "2.0.0" },
     );
     expect(checkScriptLock(lock, rootIndex())).toEqual([]);
   });
@@ -100,7 +103,7 @@ describe("checkScriptLock", () => {
 
   test("reports a package that the root does not have", () => {
     const lock = scriptLock(
-      `"left-pad": ["left-pad@1.3.0", "", {}, "${CLIENT_INTEGRITY}"],`,
+      `${CLIENT_ENTRY}\n    "left-pad": ["left-pad@1.3.0", "", {}, "${CLIENT_INTEGRITY}"],`,
     );
     expect(checkScriptLock(lock, rootIndex())).toEqual([
       {
@@ -122,6 +125,60 @@ describe("checkScriptLock", () => {
     ]);
   });
 
+  test("reports a malformed package entry", () => {
+    const lock = scriptLock(`"windmill-client": "windmill-client@1.817.0",`);
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client",
+        reason: "package entry is malformed",
+      },
+    ]);
+  });
+
+  test("reports a declared dependency when the packages are empty", () => {
+    expect(checkScriptLock(scriptLock(""), rootIndex())).toEqual([
+      {
+        key: "dependencies.windmill-client",
+        reason: "dependency has no package in the bun.lock part",
+      },
+    ]);
+  });
+
+  test("reports a declared dependency that only another package stands for", () => {
+    const lock = scriptLock(
+      `"@scope/x": ["@scope/x@2.0.0", "", {}, "${SCOPED_INTEGRITY}"],`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "dependencies.windmill-client",
+        reason: "dependency has no package in the bun.lock part",
+      },
+    ]);
+  });
+
+  test("reports a declared version that differs from the root package.json", () => {
+    const lock = scriptLock(CLIENT_ENTRY, { "windmill-client": "1.818.0" });
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "dependencies.windmill-client",
+        reason: "declared version differs from the root package.json",
+      },
+    ]);
+  });
+
+  test("reports a declared dependency that the root package.json does not declare", () => {
+    const lock = scriptLock(
+      `"fast-uri": ["fast-uri@3.1.9", "", {}, "${TRANSITIVE_INTEGRITY}"],`,
+      { "fast-uri": "3.1.9" },
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "dependencies.fast-uri",
+        reason: "dependency is not declared in the root package.json",
+      },
+    ]);
+  });
+
   test("accepts an empty lock of a script without dependencies", () => {
     expect(checkScriptLock(EMPTY_LOCK, rootIndex())).toEqual([]);
   });
@@ -132,6 +189,14 @@ describe("checkScriptLock", () => {
     expect(
       checkScriptLock(lock, rootIndex()).map((violation) => violation.key),
     ).toEqual(["bun.lock"]);
+  });
+
+  test("reports a manifest without dependencies", () => {
+    expect(
+      checkScriptLock("{}\n//bun.lock\n<empty>", rootIndex()).map(
+        (violation) => violation.key,
+      ),
+    ).toEqual(["dependencies"]);
   });
 
   test("reports a lock without the bun.lock separator", () => {
