@@ -23,6 +23,9 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
+      "nursery": {
+        "noUnsafeTypeAssertion": "error"
+      },
       "suspicious": {
         "noExplicitAny": "error"
       },
