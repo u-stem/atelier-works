@@ -276,7 +276,10 @@ workerのscriptの依存は、scriptごとの`.script.lock`が固定する。
 `bun audit`はルートの`bun.lock`しか読まないので、`.script.lock`の依存は、ルートの`bun.lock`と同じ版・同じintegrityにそろえる。
 そろっていれば、ルートの監査がworkerの依存も覆う。
 `lint`の`scripts/check-script-locks.ts`が、版とintegrityの食い違いと、ルートに無い依存を止める。
+`.script.lock`が宣言する依存も、ルートの`package.json`が同じ版で宣言し、`.script.lock`のbun.lockの部分に項目があることを確かめる。
 workerのscriptに依存を足すときは、ルートの`package.json`にも同じ版で足す。
+CIの`bun audit`(`.github/workflows/audit.yml`)は、`main`に対する定期と手動の実行だけで、PRでは動かない。
+PRでは、この`lint`の検査がworkerの依存をルートにそろえる。
 
 ルートで`bun audit`を実行し、指摘が出たら更新で解消できるかを先に確かめる。
 修正版が出ているのに親のパッケージが古い版を求めるときは、ルートの`package.json`の`overrides`で修正版に固定する。
@@ -291,7 +294,7 @@ workerのscriptに依存を足すときは、ルートの`package.json`にも同
 | `markdown-it` | markdownlint-cli2が15.0.1に厳密固定している |
 | `smol-toml` | markdownlint-cli2が1.8.0に厳密固定している |
 
-修正版が無い指摘の受け入れと、その確認の手順は[セキュリティ](security.md#依存の脆弱性)に書く。
+親の求める範囲に修正版が無い指摘の受け入れと、その確認の手順は[セキュリティ](security.md#依存の脆弱性)に書く。
 
 ## PRとコミット
 

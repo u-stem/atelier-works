@@ -48,13 +48,27 @@ dependabotが開いた依存の更新PRを、Factoryがどう選び、どう評�
 | `bun-types` | `mise.toml`のbunの版にそろえる |
 | メジャー版の更新 | 関門が人に回すので、PRを開いても自動では進まない |
 
-`ignore`は、セキュリティ更新にも効く。
-対象外にした依存の指摘は、定期の監査(`.github/workflows/audit.yml`)が拾う。
-監査は毎週と、依存の宣言かlockfileを変えるPRで動き、high以上の指摘で失敗する。
-必須チェックではないので、失敗はマージを止めない。
-失敗したときの確かめ方は[セキュリティの「依存の脆弱性」](../security.md#依存の脆弱性)にある。
+`ignore`のメジャー版は、dependabotのsemverの判定に従う。
+そのため、0.x系のminorの上げ(`markdownlint-cli2`の0.23から0.24など)は止まらず、dependabotはminorの更新としてPRを開く。
+関門は、0.x系のminorの変更と0.0.x系のpatchの変更を破壊的変更を含みうるものとしてmajorとみなし、人に回す。
 
-`github-actions`の更新は、ワークフロー(保護パス)を変えるので、関門が人に回す。
+`ignore`は、セキュリティ更新にも効く。
+対象外にした依存のhigh以上の指摘は、定期の監査(`.github/workflows/audit.yml`)が拾う。
+監査は`main`に対して毎週と手動の実行で動き、PRでは動かない。
+定期の実行の失敗は、Factoryが通知しない([R-TB-37](../security-risks.md#r-tb-37))。
+moderate以下の指摘は、GitHubのDependabot alertsの画面で確かめる([R-TB-39](../security-risks.md#r-tb-39))。
+確かめ方は[セキュリティの「依存の脆弱性」](../security.md#依存の脆弱性)にある。
+
+`github-actions`の更新は、変わるファイルがワークフローで、関門の`ALLOWED_PATHS`の外にあるので、人に回る。
+
+### 版の更新がフローに加える負荷
+
+版の更新を有効にすると、フローの扱うPRが増える。
+
+- 関門を通ったPRには、毎回Claudeの影響調査が走り、その費用がかかる。
+  開いたPRの上限はディレクトリごとに3件で、dependabotは毎週新しいPRを開く。
+- `dependabot_merge_enabled`が偽の間は、関門と影響調査を通ったPRも、すべて人に回る。
+- 0.x系のminorの上げは、上のとおり関門が人に回すので、影響調査を待たずに人の手元へ届く。
 
 ## PRの選び方
 

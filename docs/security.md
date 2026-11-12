@@ -1404,6 +1404,8 @@ Windmillの資産のうちnpmの依存を入れるのは、dependabotの更新�
 本番のコードからは読まれない。
 `windmill-client`はworkerのscriptが読む。
 scriptの`.script.lock`は、ルートの`bun.lock`と同じ版・同じintegrityであることを`lint`が確かめるので、ルートの監査がworkerの依存も覆う([コーディング規約](coding-guidelines.md#依存の脆弱性))。
+`windmill-client`の指摘は、受け入れの表に入れない。
+修正版の無いhighの指摘が出たときの残るリスクは[R-TB-38](security-risks.md#r-tb-38)である。
 ただし、このリポジトリを対象に`check_commands_by_repo`か`allowed_check_commands`を設定すると、検査がworkerのコンテナの中で走る。
 そのとき`bun install`で入る依存は、workerのコンテナの中で動く。
 設定の詳細は[実装フローの仕様](internals/implement.md)と[PRワークフローの仕様](internals/pr-workflow.md)にある。
@@ -1413,29 +1415,37 @@ scriptの`.script.lock`は、ルートの`bun.lock`と同じ版・同じintegrit
 | パッケージ | 重大度 | 経路 | 受け入れる理由 |
 | --- | --- | --- | --- |
 | `glob` | moderate | textlint > glob | 指摘は、取り消しの合図(AbortSignal)を渡した呼び出しだけに当たる。textlintは合図を渡さずに`glob`を呼ぶ |
-| `minimatch` | moderate | textlint > glob > minimatch | `scripts/lint-docs.ts`がtextlintに渡すパターンは、gitが追跡しているMarkdownのパスから作る。届くのはリポジトリにコミットできる者だけで、影響は文書の検査の遅れにとどまり、本番には及ばない |
+| `minimatch` | moderate | textlint > glob > minimatch | `scripts/lint-docs.ts`がtextlintに渡すパターンは、検査の対象のMarkdown(gitが追跡しているものと、未追跡で無視されていないもの)のパスから作る。届くのは、コミットできる者か、作業ツリーにファイルを置ける者だけで、影響は文書の検査の遅れにとどまり、本番には及ばない |
 
 どちらも、修正版は親の求める範囲の外にあるメジャー版である。
 `overrides`でメジャー版を越えて固定すると、textlintの動作を保証できないため、固定しない。
 
 ### 定期の監査
 
-`.github/workflows/audit.yml`が、ルートとConsoleの`bun.lock`を、`bun audit --audit-level=high`で監査する。
-毎週月曜の9時(JST)と、手動の実行と、依存の宣言かlockfileを変えるPRで動く。
+`.github/workflows/audit.yml`が、`main`のルートとConsoleの`bun.lock`を、`bun audit --audit-level=high`で監査する。
+毎週月曜の9時(JST)と、手動の実行で動く。
 権限は`contents: read`だけで、依存は入れない。
-必須チェックにはしない。
-親の求める範囲に修正版の無い指摘が、無関係なPRとdependabotのPRを止めないためである。
+PRでは動かさず、必須チェックにもしない。
+PRで落ちると、FactoryのPRのCIの監視が直せる失敗とみなし、lockfileを直せない自動の修正を起動するためである。
+PRでは、`.script.lock`のずれを`mise run lint`の`scripts/check-script-locks.ts`が止め、workerの依存をルートの監査にそろえる。
 moderate以下の指摘では失敗しないので、上の表の指摘は、次の確認で見る。
-失敗はActionsの実行の結果に残り、Factoryは通知しない。
+定期の実行の失敗はFactoryが通知しないので、Actionsの実行の一覧で見る。
+`main`のCIの監視は、pushの実行だけを読むためである。
+この残るリスクは[R-TB-37](security-risks.md#r-tb-37)である。
+
+dependabotの自動マージの関門は、この監査の結果を見ない。
+自動マージの有効化の前に足す条件と、その残るリスクは[R-TB-40](security-risks.md#r-tb-40)である。
 
 ### 修正版が出たときの確認
 
 監査が失敗したとき、依存を更新するPRの前、指摘の報告を受けたときに、人かClaudeが次の順で確かめる。
 
 1. ルートとConsoleで`bun audit`を実行する。
-2. 受け入れている指摘に修正版が出ていれば、`bun update`か`overrides`で解消し、上の表から外す。
-3. `overrides`で固定しているパッケージの親が修正版を取り込んでいれば、`overrides`を外す。
-4. `mise run lint:docs`が通ることを確かめる。
+2. GitHubのDependabot alertsの画面で、`windmill-client`の指摘を確かめる。
+   moderate以下の指摘は、定期の監査もセキュリティ更新のPRも拾わないためである([R-TB-39](security-risks.md#r-tb-39))。
+3. 受け入れている指摘に修正版が出ていれば、`bun update`か`overrides`で解消し、上の表から外す。
+4. `overrides`で固定しているパッケージの親が修正版を取り込んでいれば、`overrides`を外す。
+5. `mise run lint:docs`が通ることを確かめる。
 
 ## 依存の変更のレビュー
 

@@ -1,33 +1,28 @@
 name: Audit
 
-# ルートとConsoleのbun.lockを、`bun audit`で定期に監査する。
+# mainのルートとConsoleのbun.lockを、`bun audit`で定期に監査する。
 # workerのscriptの依存は、`.script.lock`がルートのbun.lockと同じ版にそろうことを`mise run lint`が確かめるので、ルートの監査が覆う。
-# 必須チェックにはしない。親の範囲に修正版の無い指摘が、無関係なPRとdependabotのPRを止めないようにするため。
+# PRでは動かさない。PRの実行が落ちると、FactoryのPRのCIの監視が直せる失敗とみなし、
+# lockfileを直せない自動の修正を起動してしまうため。
+# 定期の実行の失敗は、Factoryが通知しない。失敗はActionsの実行の一覧で見る。
 # 失敗したときの確かめ方は、docs/security.mdの「依存の脆弱性」にある。
 on:
   schedule:
     # 毎週月曜の9時(JST)に動かす。cronはUTCで書く。
     - cron: "0 0 * * 1"
   workflow_dispatch:
-  # 依存の宣言かlockfileを変えるPRでも動かす。
-  pull_request:
-    paths:
-      - "package.json"
-      - "bun.lock"
-      - "console/package.json"
-      - "console/bun.lock"
 
-# 同じ参照の古いPRの実行は止める。定期と手動の実行は、実行ごとに別のグループにする。
+# 実行ごとに別のグループにする。
 concurrency:
-  group: audit-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: audit-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   # ジョブの名前を、mainの必須チェックの名前と重ねない。
-  # 重なると、dependabotの自動マージの関門がこのジョブの結果も求めるため。
+  # 重なる名前のチェックがPRのheadに付くと、dependabotの自動マージの関門がその結果も求めるため。
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -1,7 +1,7 @@
 # dependabotの版の更新の設定。セキュリティ更新は、リポジトリの設定で有効にする。
 # 版の更新のPRも、セキュリティ更新のPRと同じく、Factoryのdependabotのフローが同じ関門で扱う。
 # 対象外にする依存と、その理由は、docs/internals/dependabot.mdの「dependabotの設定」にある。
-# `ignore`はセキュリティ更新にも効く。対象外にした依存の指摘は、定期の監査(.github/workflows/audit.yml)が拾う。
+# `ignore`はセキュリティ更新にも効く。対象外にした依存のhigh以上の指摘は、定期の監査(.github/workflows/audit.yml)が拾う。
 version: 2
 updates:
   - package-ecosystem: "bun"
@@ -21,6 +21,7 @@ updates:
       # `mise.toml`のbunの版にそろえる。
       - dependency-name: "bun-types"
       # メジャー版の更新は、自動マージの関門が人に回すので、PRを開かない。
+      # 0.x系のminorの上げは、dependabotがminorとみなすので止まらず、関門がmajorとみなして人に回す。
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
@@ -39,7 +40,7 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
-  # ワークフローは保護パスなので、このPRは自動マージの関門が人に回す。
+  # ワークフローは自動マージの関門が許すファイルの外にあるので、このPRは人に回る。
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
