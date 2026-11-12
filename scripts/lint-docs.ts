@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 // リポジトリのMarkdown文書を`docs/writing-guidelines.md`の規則で検査する。
-// 次の7つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
+// 次の8つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
 // - このリポジトリの規則(`f/factory/lib/prose_check.ts`の`REPO_DOC_RULES`)
 // - 「1文は1行」(`scripts/lint-one-sentence-per-line.ts`)。
 //   対象は他の検査と同じ文書(`isOneSentencePerLineTarget`)で、`.claude/`の自作のスキルの文書も入る。
+// - 1文書の行数の上限(`scripts/lint-doc-length.ts`)
 // - 文書の間のリンクとアンカー(`scripts/lint-doc-links.ts`)
 // - 残るリスクの表と、各節からの行へのリンク(`scripts/lint-risk-register.ts`)。
 //   表を通さない箇所は、許可リスト(`scripts/lint-risk-register-allowlist.txt`)と照らす。
@@ -42,6 +43,7 @@ import { availableParallelism } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { checkProse, REPO_DOC_RULES } from "../f/factory/lib/prose_check.ts";
 import { runDocsGen } from "./docs-gen.ts";
+import { findDocLengthViolation, MAX_DOC_LINES } from "./lint-doc-length.ts";
 import {
   createLinkResolver,
   lintDocLinks,
@@ -107,7 +109,8 @@ export function isOneSentencePerLineTarget(path: string): boolean {
 
 /**
  * `markdown`をこのリポジトリの規則で検査し、`path:line: [rule] 内容`の形で返す。
- * 文章の規則(`prose_check.ts`)の指摘と、「1文は1行」の指摘(`lint-one-sentence-per-line.ts`)を、行番号の順に並べる。
+ * 文章の規則(`prose_check.ts`)の指摘と、「1文は1行」の指摘(`lint-one-sentence-per-line.ts`)と、
+ * 行数の上限の指摘(`lint-doc-length.ts`)を、行番号の順に並べる。
  * 同じ行の指摘は、文章の規則を先にする。
  */
 export function lintDocText(path: string, markdown: string): string[] {
@@ -120,6 +123,12 @@ export function lintDocText(path: string, markdown: string): string[] {
   if (isOneSentencePerLineTarget(path)) {
     for (const line of findSentenceViolationLines(body)) {
       issues.push({ line, text: formatSentenceViolation(path, line) });
+    }
+  }
+  if (isTargetDoc(path)) {
+    const tooLong = findDocLengthViolation(path, body);
+    if (tooLong !== undefined) {
+      issues.push({ line: MAX_DOC_LINES + 1, text: tooLong });
     }
   }
   // 配列の`sort`は安定なので、同じ行では文章の規則が先に残る。
