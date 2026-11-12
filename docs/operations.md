@@ -152,7 +152,7 @@ gh api users/<名前> --jq .id
 `id`があるオーナーは、`poll_issues`と`poll_prs`が発見の前にGitHubの現在のIDを取得して照合する。
 IDが一致すれば、そのオーナーのIssueとPRを発見する。
 食い違うか、IDを取得できないオーナーは、その回の発見を飛ばし、失敗として記録する。
-`id`の無いオーナーは、名前だけで動く。
+`id`の無いオーナーが名前だけで動く残るリスクは、[R-TB-27](security-risks.md#r-tb-27)である。
 DBから見つけ直す追跡中のPRも、`owners`にあって照合を通ったオーナーのものだけを候補に残す。
 飛ばしたオーナーと、`owners`に無い旧名のオーナーのPRは、候補から外れる。
 `factory_repo`のPRは、オーナーによらず残る。
@@ -409,8 +409,8 @@ originは取得の前にそのURLへ付け替わるので、古い名前のclone
 - ロックを持つ時間は、照合の1往復の分だけ延びる。
 - `isRepoAllowed`は`factory_repo`を名前で常に許す。
   自己改善の起票と、`factory_repo`のPRの候補への採用は、名前のままである。
-- 監査のスナップショットのworktreeが、self cloneに既にあるshaを取るfetchは、照合しない。
-- Consoleの配信物を取り込む処理と、ホストの`git pull`は、`factory_repo_id`を照合しない。
+- [R-TB-26](security-risks.md#r-tb-26)
+- [R-TB-25](security-risks.md#r-tb-25)
 
 前回反映したshaが新しいHEADの祖先であることは、force pushで巻き戻す正規の運用が止まるので、反映の条件にしない。
 
@@ -1624,7 +1624,7 @@ Consoleの設定タブは、`design_enabled`が`true`のとき**止める**を�
    `needs_human`のうち、自動で再開する理由(workerのイメージが古い、PRに動いている修正がある)を持つ項目も、同じ扱いになる。
    Consoleの要対応で理由を確かめる。
    `implementing`の項目は、終わってから有効にする。
-   0にできない分は、再実行が設計へ回ることを受け入れる。
+   0にできない分の残るリスクは、[R-DES-40](security-risks.md#r-des-40)である。
 4. 本番の過去の要件定義書で、承認画面が止める条件に当たる割合を確かめる。
    設計書はまだ本番に無いので、要件定義書で近似する。
    次のコマンドは読み取りだけで、書き込まない。

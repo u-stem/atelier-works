@@ -535,9 +535,6 @@ transcriptと設定の置き場は、実行のたびに消す。
 
 #### 残るリスク
 
-予定外の`tool_use`の検査は、起動が終わった後にtranscriptを読む、事後の検出である。
-外れた呼び出しの`tool_result`は、検出より前にモデル(API)へ送られている。
-検査が止めるのは、残りの実行である。
 残るリスクは[R-INV-01](../security-risks.md#r-inv-01)である。
 
 呼び出しそのものを防ぐのは、次の3つである。
@@ -814,7 +811,7 @@ workerの秘密値の流出を疑い、[秘密の入れ替え](../security.md#�
 形が秘密値でない本文や、値を変えて書かれた秘密値は消せない。
 最後に投稿を止める守りは、投稿のstepの直前のgitleaks検査である。
 この検査の経路は保護の外にある。
-[残るリスク](#残るリスク調査の隔離)に書く。
+残るリスクは[R-INV-35](../security-risks.md#r-inv-35)である。
 
 コメントは、先頭にタグ`[investigate 自動調査]`、末尾に目印`<!-- factory:investigate:<id> -->`を付けて投稿する。
 目印は、Factory自身のアカウントのコメントにあるものだけを、投稿済みとみなす。
@@ -925,9 +922,6 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   Windmillの画面か、どのブランチからでも`wmill sync push`でそのpathを書き換えられる主体は、合格を偽造できる。
   測定は、判定と観測のモジュールを相対のimportで読み、Windmillはこのimportを実行のときに解決する。
   そのため、判定と観測のモジュールのpathと、測定が起動に使う`lib/claude.ts`のpathも、同じ理由で書き換えの対象になる。
-  この偽造できる主体は、デプロイできる者であり、デプロイ済みのコード全体と同じ信頼の範囲に含める。
-  scriptのハッシュの照合は入れない。
-  受け入れる。
   残るリスクの表の[R-INV-10](../security-risks.md#r-inv-10)にあたる。
 - [R-INV-11](../security-risks.md#r-inv-11)
 - [R-INV-12](../security-risks.md#r-inv-12)
@@ -956,7 +950,6 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
 - 置き場をworker imageが作ること、置き場の検査、`git worktree add`が置き場の下に作れることは、実機で確かめていない。
   image(`mise run up`)の反映の後でないと確かめられない。
 - 掃除は、置き場の下の自分以外の項目をすべて消す。
-  workerが調査を1件ずつ動かす前提(`replicas`が1)に立つ。
   flowの段と段の間には別の調査のジョブが入りうる。
   そのため、稼働中(`investigating`)の調査は、部分一意インデックス`work_items_active_investigate_singleton`で全体1件に直列化する。
   登録(`insertInvestigateWorkItemUnlessActive`)は、稼働中の調査があれば断る。
@@ -966,7 +959,6 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   確認は、測定の開始時と、調査の登録と生成の開始時に、1回ずつである。
   確認と掃除の間に相手が始まる競合は残る。
   受け入れる。
-  workerを増やす変更や、調査を並行させる変更では、この前提を見直す。
   残るリスクの表の[R-INV-26](../security-risks.md#r-inv-26)にあたる。
 - [R-INV-27](../security-risks.md#r-inv-27)
 - [R-INV-28](../security-risks.md#r-inv-28)
@@ -985,7 +977,6 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   `lib/ci_fix_round.ts`の`ciTextScanner`、`lib/workspace.ts`の`runGitleaksOnText`と`runGitleaksStdin`がある。
   `lib/log.ts`の`SECRET_PATTERNS`、`lib/github.ts`の`commentIssue`と`withMarker`もある。
   `lib/gh_collect_support.ts`の`parseTokenVariable`は、マスクする読み取りトークンの集め方を決める。
-  ほかのフローも日常的に直すファイルなので、保護しない。
   保護されたテストは、検査器を偽物に差し替えて順序と分岐を確かめるので、この5つのファイルが緩められても落ちない。
   検査と目印の付け方の変更は、PRのレビューで見る。
   そのため、検査が出力の秘密値を止めることは、保証でなく、第2層の守りとして扱う。

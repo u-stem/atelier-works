@@ -151,15 +151,10 @@ PRをマージするAPIを呼ぶのは、dependabotの更新のフローだけ�
 ### CIで走査されないコミット
 
 atelier-worksのCIは、gitleaksでPRのコミットを走査する。
-走査されないコミットが、次の2つの場合に残る。
+走査されないコミットが残る場合は、次の2つの残るリスクである。
 
-残るリスクとして、PRのCIの実行は、同じPRの新しい実行が始まると`cancel-in-progress`で止まる。
-秘密値を含むコミットを、実行の途中でforce pushにより置き換えると、置き換えられたコミットはCIのgitleaksで走査されない。
-残るリスクは[R-TB-02](security-risks.md#r-tb-02)である。
-
-残るリスクとして、`push`は`main`だけで動くので、PRを作るまで、人がpushしたブランチのコミットはCIで走査されない。
-実行されるのはlefthookのpre-commitのgitleaksだけで、ローカルで飛ばせる。
-残るリスクは[R-TB-03](security-risks.md#r-tb-03)である。
+- [R-TB-02](security-risks.md#r-tb-02)
+- [R-TB-03](security-risks.md#r-tb-03)
 
 ### CIのトークンの権限
 
@@ -182,10 +177,7 @@ atelier-worksのCIは、gitleaksでPRのコミットを走査する。
 
 ### CIの実行の範囲の判定
 
-残るリスクとして、PRの実行の判定は、PRの版の`scripts/ci-scope.ts`で行う。
-判定を書き換える変更は、保護パスとして`pr_fix`が止める。
-`implement`は止めず、記録して検査を省き、PRの「確認して欲しい点」に載せる。
-人が書いたPRは`ci.yml`も書き換えられるので、レビューで確かめる。
+PRの実行の判定は、PRの版の`scripts/ci-scope.ts`で行う。
 残るリスクは[R-TB-04](security-risks.md#r-tb-04)である。
 
 判定の`DB_DEPENDENCY_FILES`には、`test:db`が実行するコードの依存を列挙する。
@@ -605,16 +597,12 @@ PRは除くが、ページは消費する。
   一覧を作成者で絞ること、Factoryが作るIssueの最後の行が`appendIssueProposalMarker`の目印に固定されることが、その根拠である。
   `pr_fix`の提案では、外の人が書いたレビューのコメントの文が、Issueの本文に入りうる。
   その文の後ろに目印が付くので、外の人の文が最後の行になることは無い。
-  偽造できるのは、PATのアカウントとしてIssueを作る人と、書き込み権限のある協力者のIssueの書き換えに限る。
-  PATのアカウントとしてIssueを作る経路は、運用者と、親のセッションが同じアカウントで`gh issue create`する経路、`manual_intake_create_issue`である。
-  親のセッションの経路と`manual_intake_create_issue`には、信頼できない文が入りうるので、その文に目印が書かれると偽造になる。
   偽の目印は、作成済みのIssueとして再利用される。
   新しいIssueは作られず、再利用されたIssueの番号が`setIssueProposalCreatedIssue`で提案に記録される。
   `pr_fix`の提案では、PRのスレッドにその番号で返信して、スレッドを解決する。
   ラベルは再利用のとき付け直さず、記録済みの選択をそのまま付けた扱いにする(`issue_proposal_apply.ts`の`labelApplied`)。
   そのため、実際には付いていないラベルが付いた扱いになりうる。
   受け入れる。
-  偽造できる人は、Factoryのリポジトリに書き込める人で、その人はIssueやPRを直接操作できるためである。
   残るリスクの表の[R-CRED-07](security-risks.md#r-cred-07)にあたる。
 - [R-CRED-08](security-risks.md#r-cred-08)
 - [R-CRED-09](security-risks.md#r-cred-09)
@@ -791,7 +779,6 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
     承認を省く投入ができるのは、フォルダ`f/factory`のscriptを実行できる管理者に限られる。
     リロードの後や、入力を変えた後の再送では、承認を省く投入が重なりうる。
     重なったIssueとPRは、人がマージするまで反映されず、人が閉じられる。
-    損なわれるのは手間で、データと権限は損なわれない。
     入力とキーをタブのメモリだけに置く方針を保つため、リロードをまたぐ保持は持たない。
     残るリスクの表の[R-DLV-02](security-risks.md#r-dlv-02)にあたる。
   - 同じキーで内容が違う投入は、黙って捨てず、`intake_key_conflict`で失敗させて通知に出す。
@@ -815,7 +802,6 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
     取り直した試行の目印の探索が、タイムアウトやレート制限、一覧の件数の上限で失敗すると、予約の時刻だけが先へ進む。
     探索の窓は予約の時刻から始まるので、次の取り直しは最初の試行が作ったIssueを見つけられず、Issueが二重になりうる。
     被害はIssue1件の重複で、重複したpipelineは承認で止まる。
-    取り直しの前に探索する順にすると設計が変わるので、受け入れる。
     承認を省く進め方では、重複したIssueが承認で止まらない。
     ラベルも作業項目も無い孤立したIssueとして残り、人が閉じる。
     残るリスクの表の[R-DLV-03](security-risks.md#r-dlv-03)にあたる。
@@ -841,7 +827,6 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 - `ci.yml`の`console-a11y`ジョブが使うPlaywrightのブラウザは、ハッシュで照合しない。
   HTTPSで公式の取得元(`cdn.playwright.dev`、予備に`playwright.download.prss.microsoft.com`)から取る。
   取得元かその通信が侵害されると、改ざんされたブラウザが動く。
-  受け入れる理由は、このジョブが`contents: read`の権限だけを持ち、秘密値と配信物を扱わず、PRの実行だけで動くためである。
   キャッシュのトークン(`ACTIONS_RUNTIME_TOKEN`)は、`permissions`と関係なく全ジョブに渡る。
   そのため、`main`のpushで動かすと、`main`の範囲のキャッシュ(`console-dist.yml`が復元するビューアのキャッシュ)へ書く経路ができる。
   `main`の実行では、このジョブを飛ばす。
@@ -1412,7 +1397,7 @@ Windmillの資産のうちnpmの依存を入れるのは、dependabotの更新�
 
 ## 依存の脆弱性
 
-ルートの`bun audit`の指摘のうち、修正版が無いものを受け入れる。
+ルートの`bun audit`の指摘のうち、修正版が無いものの残るリスクは[R-TB-36](security-risks.md#r-tb-36)である。
 `overrides`で解消できるものは[コーディング規約](coding-guidelines.md#依存の脆弱性)の手順で固定する。
 
 ルートの依存はすべて開発用で、文書の検査(markdownlint-cli2、textlint)、型検査、整形に使う。
@@ -1466,8 +1451,6 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 - [R-UPD-01](security-risks.md#r-upd-01)
 - [R-UPD-02](security-risks.md#r-upd-02)
 - [R-UPD-03](security-risks.md#r-upd-03)
-- 打ち切りが子の実行中に当たるのは、内側の上限が働く前に全体の上限に達したときだけである。
-  区切った呼び出しが30秒で終わるので、通常は当たらない。
 - 残ったプロセスの見つけ方と、打ち切りが子を止めるかの確かめ方は[運用](operations.md)の「自己更新の打ち切りを確かめる」にある。
 
 ## 凍結とdeployの保留
@@ -2232,15 +2215,13 @@ IDを入れないアカウントは名前だけで照合するので、名前を
 そのため、ラベルを付けられる人は、承認の取り消しも起こせる。
 許可するアカウントを増やすときは、この影響も含めて決める。
 
-許可されていない人の操作を運用者に見せるnotice(`labeler_denied`)は、運用者が確かめないまま解決済みになることがある。
-このnoticeは重要度が「情報」なので、要対応の一覧には出ず、Consoleのシステム画面に7日だけ出る。
-その間に、許可された人がラベルを付け直してIssueかPRを取得すると、同じ対象の未解決のnoticeが解決済みになる。
-対象の範囲は[通知とrate limit](internals/notifications.md)にある。
-解決しなかったnoticeも、作成から`retention_logs_days`(既定30日)を過ぎると、DBの掃除が解決済みにする。
+許可されていない人の操作を運用者に見せるnotice(`labeler_denied`)は、重要度が「情報」なので、要対応の一覧には出ず、Consoleのシステム画面に7日だけ出る。
+noticeは、許可された人が同じ対象を取得したときと、作成から`retention_logs_days`(既定30日)を過ぎたときに、解決済みになる。
+取得による解決の範囲は[通知とrate limit](internals/notifications.md)にある。
 どちらの場合も行は残り、解決の時刻から同じ期間の掃除までは、解決済みの履歴として読める。
 許可されていない人は、取得の条件である最後のラベル付与者が許可された人であることを満たせない。
-そのため、この解決を起こせない。
-Consoleからは解決できない種類だが、人の介在を減らすため、この自動の解決を受け入れる。
+そのため、取得による解決を起こせない。
+運用者が確かめないまま解決済みになる残るリスクは[R-LBL-10](security-risks.md#r-lbl-10)である。
 
 ### 確認しない経路
 
@@ -2334,10 +2315,8 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
 
 ## 残るリスク
 
-受け入れた残るリスクは、[残るリスクの表](security-risks.md)に、領域ごとにまとめる。
-この文書と`docs/internals/`の各文書は、残るリスクの箇所から、表の行のIDでリンクする。
-受け入れたリスクに結び付く未確認の点と、見直しの条件は、その行の文に含めて表に置く。
-受け入れたリスクに結び付かない未確認の前提と後続の作業は、各文書の節に置く。
+受け入れた残るリスクは、領域ごとに[残るリスクの表](security-risks.md)へまとめ、この文書と`docs/internals/`の各文書の節からは、表の行のIDでリンクする。
+表と節に書き分ける決まりは、[文書の書き方の「残るリスクを書く」](writing-guidelines.md#残るリスクを書く)にある。
 
 ## 各フローの安全策の置き場
 

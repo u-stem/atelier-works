@@ -1087,7 +1087,6 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
   拒否になる形は、[composeの方針](#composeの方針)と[composeのimageと秘密値の表](#composeのimageと秘密値の表)に挙げた。
   承認の記録は後続の段階で足す。
   それまでの防ぎは、保護パス(`infra/docker-compose.yml`)と人のマージで、mainは承認0件でマージできるため、補助にとどまる。
-  受け入れる理由は、実行役がまだ反映しないためである。
   残るリスクの表の[R-HOST-42](../security-risks.md#r-host-42)にあたる。
 - [R-HOST-43](../security-risks.md#r-host-43)
 - [R-HOST-44](../security-risks.md#r-host-44)
@@ -1146,5 +1145,4 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
   その場合、記録は警告で終わる。
   一時ファイルの名前は予測できないので、ジョブがFIFOなどを先回りして置くことはできない。
   それでも止まらないよう、書き込みは`timeout 10`で包む。
-  ホストのスクリプトが得る権限はジョブと同じで、権限は広がらない。
   残るリスクの表の[R-HOST-55](../security-risks.md#r-host-55)にあたる。

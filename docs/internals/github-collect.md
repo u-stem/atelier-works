@@ -1372,7 +1372,7 @@ Discordの説明には、閾値、最後の成功(JST)、最新の実行の原�
   - 作者を`allowed_labeler_logins`か`allowed_labeler_ids`に足したとき。
     作者が許可されていないために対象でなかったPRも、覚えているためである。
 - stateを書けない間は、チームへの依頼の確認を毎周回先頭から選ぶ。
-  先頭の候補が枠を使うので、後ろの候補を確かめられないことがある。
+  後ろの候補を確かめられないことは、[R-PER-19](../security-risks.md#r-per-19)にあたる。
 - `repo_allowlist`が空の構成では、`poll_prs`は`gh_repos`に行の無いリポジトリのPRを、見つけない。
   `repo_allowlist`が空でないときは、対象は明示リポジトリだけなので、行が無くてもRESTの一覧で読み、見落とさない。
 - archive済みのリポジトリのPRは、`poll_prs`が読まない。

@@ -567,8 +567,6 @@ main cloneの`.git`はrootが所有する。
 - [R-CHK-03](../security-risks.md#r-chk-03)
 - [R-CHK-04](../security-risks.md#r-chk-04)
 - 検査のプロセス自身は、worktree、`HOME`、共有の一時ディレクトリの外に書けない。
-  ただし、検査がworktreeの中身を書き換えた結果は、次のラウンドでrootの処理に影響しうる。
-  例えば、gitが無視するパス(`node_modules/`など)に、worktreeの外を指すsymlinkを置ける。
   取り戻しはsymlinkの所有者をrootに戻すが、symlink自体は消さない。
   そのため、取り戻しの後に、worktreeの外を指すsymlinkを調べて消す([検査が置いたsymlinkの検出](#検査が置いたsymlinkの検出))。
   失敗にするのは、検出が不完全だったときと、追跡されているsymlinkが書き換えられたときだけである。
@@ -583,7 +581,6 @@ main cloneの`.git`はrootが所有する。
 - [R-CHK-10](../security-risks.md#r-chk-10)
 - workerのジョブは`HOME`が`/root`で、`TMPDIR`が無い。
   残るリスクの表の[R-CHK-11](../security-risks.md#r-chk-11)にあたる。
-  共有の`/tmp`に作られる一時ファイルは、まだ無い名前なら検査用のユーザーが先に作れ、その後でrootのジョブがそれを使いうる。
   そのため、ジョブごとに`/run/factory-tmp/fj-<ジョブID>`を0700で作り、一時ファイルをそこへ向ける。
   親は、Windmillが管理する`/tmp/windmill`ではなく、rootが所有して他のユーザーが書けない`/run`の下に置く。
   `/tmp/windmill`の権限はWindmillがジョブの途中で戻しうるので、それに頼らない。
@@ -603,8 +600,6 @@ main cloneの`.git`はrootが所有する。
     ジョブ用のディレクトリが他のユーザーの所有か、他のユーザーに開いているときも、rootでは消さずに失敗として残す。
     3日は、`claude_timeout_sec`と`implement_timeout_sec`の既定値より十分長い。
     設定がこの3日を超える値は、設定の検証が拒否する。
-  - `TMPDIR`を渡さないworkerのプロセス自身(Windmillとbunの依存の取得など)は、共有の`/tmp`を使う。
-  - ClaudeのBashツールが固定の名前で`/tmp`の下に書く場合は、`TMPDIR`では塞げない。
   - 検査の準備が`lockDownRuntimeDir`で閉じるのは`/tmp/windmill`だけで、`/run/factory-tmp`には触れない。
   - 検査用のユーザーが共有の`/tmp`に作ったものは、枠を取るときと手放すときに消える。
 - [R-CHK-12](../security-risks.md#r-chk-12)
@@ -618,10 +613,7 @@ main cloneの`.git`はrootが所有する。
   `setfacl`の時間は、ACLの無い木での実測で、ACLのあるエントリの書き換えは含まない。
   ハードリンクのあるファイルがあるworktreeでは、受け渡しがディレクトリごとになり、9,000個で約5秒、9万個で約1分かかる。
   1回の上限は300秒なので、超えると打ち切られて検査が失敗する。
-  ディレクトリごとの受け渡しでは、1個あたり約0.6ミリ秒なので、約50万個で上限に達する。
-  この数は余裕を含まない切れる点なので、負荷のあるworkerでは手前で切れうる。
   測り方は[検査枠の走査時間を測る](../operations.md#検査枠の走査時間を測る)にある。
-  打ち切られると記録が残り、次にその枠を取る実行と、そのworktreeを次に使うステップの片付けも、同じ上限で失敗し続ける。
   残るリスクの表の[R-CHK-13](../security-risks.md#r-chk-13)にあたる。
 - [R-CHK-14](../security-risks.md#r-chk-14)
 - [R-CHK-15](../security-risks.md#r-chk-15)

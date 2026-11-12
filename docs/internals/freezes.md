@@ -527,7 +527,6 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
 状態は秘密でない変数に置き、置く主体は環境変数`CLAUDECODE`と端末(TTY)で分ける。
 
 残るリスクは次のとおりである。
-いずれも受け入れる。
 
 - [R-FRZ-01](../security-risks.md#r-frz-01)
 - [R-FRZ-02](../security-risks.md#r-frz-02)
@@ -564,7 +563,6 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
   読み直しで気づけない順序が2つある。
   - CLIの`place`が、Consoleの読みの後に、読み直しより前の状態を書き、Consoleが最後に書く。
   - Consoleの読み直しの後に、別の書き手が書いて、解除が巻き戻る。
-  窓は秒単位で、運用手順に止める直前の`freeze:list`による確認を置いているため、受け入れる。
 - `session`は、deployの保留を確認なしで置ける。
   残るリスクの表の[R-FRZ-24](../security-risks.md#r-frz-24)にあたる。
   上限は120分で、この区別は誤操作を防ぐためのもので、境界ではない。
@@ -583,8 +581,6 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
   - 入力が凍結のCLIを指し、`-`の後ろの副コマンドが`release`か`place --scope deploy`である。
   `echo`や静的なファイルの`cat`で無害なコードを流す形は許す。
   実行系が実行時に決まるプロセス置換(`< <(...)`)を入力にすると、`-`が無くても拒否する。
-  `git diff | bunx prettier --stdin-filepath a.ts -`のように、標準入力をコードでなく入力として読む正当な形も、`-`とパイプで拒否する。
-  誤拒否になるが、コードとの区別が語からは付かないため、受け入れる。
 - [R-FRZ-25](../security-risks.md#r-frz-25)
 - [R-FRZ-26](../security-risks.md#r-frz-26)
 - [R-FRZ-27](../security-risks.md#r-frz-27)
