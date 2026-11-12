@@ -17,7 +17,8 @@ Claudeの実行のコスト、承認の統計、リードタイムを、グラ�
 選択肢と初期値は、[`src/lib/analytics.ts`](../../../console/src/lib/analytics.ts)の`ANALYTICS_PERIOD_DAYS`と`DEFAULT_ANALYTICS_DAYS`が定める。
 期間はキャッシュのキーに含めるので、切り替えている間に別の期間の値は出ない。
 定期には取り直さない。
-取得から60秒を過ぎた値は、タブに戻ったときと画面を開き直したときに取り直す。
+取得から決まった時間を過ぎた値は、タブに戻ったときと画面を開き直したときに取り直す。
+時間は[`src/api/analyticsQueries.ts`](../../../console/src/api/analyticsQueries.ts)の`ANALYTICS_STALE_MS`が定める。
 分析の取得と期間は、レポートの画面が持つ。
 見出しの更新のボタンは、監査の一覧と合わせた4つを取り直す。
 行数の上限は2000件で、backendが受け付ける最大にしてある。
@@ -347,7 +348,8 @@ backendは、失敗、状態の遷移、PRのレビュー、PRの修正の履歴
 
 図の見せ方は、図を包む要素の実際の幅から、[flowの図の画面の幅](graphs.md#幅)と同じ規則で選ぶ。
 入口の列が無いので、図の幅はその分狭い。
-本文の幅が760pxのとき、図をそのまま出すflowは、audit、dependabot、manual_intake、pr_reviewである。
+本文の幅が上限のとき、図をそのまま出すflowは、audit、dependabot、manual_intake、pr_reviewである。
+上限の幅は、[`src/lib/flowDiagram.test.ts`](../../../console/src/lib/flowDiagram.test.ts)の`ITEM_BODY_WIDTH`が持つ。
 pipeline、pr_fix、design、implementは、横にスクロールする枠で出す。
 `src/lib/flowDiagram.test.ts`が、実際のflowごとの見せ方を固定する。
 スクロールする枠は、開いたとき、実行中か失敗したステップが見える位置へ寄せる。
