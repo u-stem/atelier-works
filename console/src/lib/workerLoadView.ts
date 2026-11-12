@@ -2,7 +2,7 @@
 // 値は数だけで、外部の文字列を含まない。読めなかった値は「不明」と出す。
 
 import type { WorkerLoad } from "../api/guards/workerLoad.ts";
-import { JST_OFFSET_MS } from "./jst.ts";
+import { formatJstClock } from "./jst.ts";
 
 const BYTES_PER_MIB = 1024 * 1024;
 
@@ -34,12 +34,10 @@ function percent(ratio: number): string {
     : `${String(rounded)}%`;
 }
 
-/** ISO文字列の時刻を、JSTの`HH:MM`で返す。 */
+/** ISO文字列の時刻を、JSTの`HH:MM`で返す。読めなければ「不明」。 */
 function jstClock(iso: string): string {
-  const shifted = new Date(Date.parse(iso) + JST_OFFSET_MS);
-  const hours = String(shifted.getUTCHours()).padStart(2, "0");
-  const minutes = String(shifted.getUTCMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
+  const epochMs = Date.parse(iso);
+  return Number.isNaN(epochMs) ? UNKNOWN : formatJstClock(epochMs);
 }
 
 function jobs(count: number | null): string {
