@@ -2,7 +2,7 @@
 
 ConsoleがWindmillのAPIとscriptを呼ぶ層と、ログイン切れとWindmillに届かないときの扱いを書く。
 API層と、取得と書き込みの経路を変更する人が読む。
-画面をまたぐ仕様と、ほかの画面の仕様の置き場は、[Consoleの仕様](../console.md)にある。
+画面をまたぐ仕様と、画面ごとの仕様の置き場は、[Consoleの仕様](../console.md)にある。
 
 ## API層
 
