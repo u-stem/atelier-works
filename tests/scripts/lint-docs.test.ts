@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MAX_DOC_LINES } from "../../scripts/lint-doc-length.ts";
 import {
   blankFrontmatter,
   buildPlan,
@@ -124,6 +125,35 @@ describe("lintDocText", () => {
     const problems = lintDocText(
       ".claude/skills/write-script-bun/SKILL.md",
       "再実行する。確認する。\n",
+    );
+
+    expect(problems).toEqual([]);
+  });
+
+  test("reports a document over the line limit as max-lines", () => {
+    const problems = lintDocText(
+      "docs/a.md",
+      "再実行する。\n".repeat(MAX_DOC_LINES + 1),
+    );
+
+    expect(problems).toEqual([
+      expect.stringMatching(/^docs\/a\.md:\d+: \[max-lines\] /),
+    ]);
+  });
+
+  test("accepts a document of exactly the line limit", () => {
+    const problems = lintDocText(
+      "docs/a.md",
+      "再実行する。\n".repeat(MAX_DOC_LINES),
+    );
+
+    expect(problems).toEqual([]);
+  });
+
+  test("does not check the line limit in a skill managed by wmill", () => {
+    const problems = lintDocText(
+      ".claude/skills/write-script-bun/SKILL.md",
+      "再実行する。\n".repeat(MAX_DOC_LINES + 1),
     );
 
     expect(problems).toEqual([]);
