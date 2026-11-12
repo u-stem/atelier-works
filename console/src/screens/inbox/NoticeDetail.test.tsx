@@ -3,10 +3,28 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import type { SummaryNotice } from "../../api/guards/summary.ts";
-import { OPERATIONS_DOC_URL } from "../../lib/noticeDocLink.ts";
+import {
+  type ConfigSnapshotView,
+  configQueryKey,
+} from "../../api/jobsQueries.ts";
 import { NoticeDetail } from "./NoticeDetail.tsx";
 
 const NOW = Date.parse("2026-11-08T01:00:00.000Z");
+
+const DOC =
+  "https://github.com/octo-owner/atelier-works/blob/main/docs/operations.md";
+
+/** `factory_repo`を持つ設定の取得の結果。 */
+function configWith(factoryRepo: unknown): ConfigSnapshotView {
+  return {
+    path: "f/factory/factory_config",
+    items: [
+      { key: "factory_repo", kind: "value", value: factoryRepo, masked: false },
+    ],
+  };
+}
+
+const CONFIG = configWith("https://github.com/octo-owner/atelier-works");
 
 function noticeOf(
   kind: string,
@@ -24,12 +42,18 @@ function noticeOf(
   };
 }
 
+/** 通知の詳細を描く。`config`を渡すと、設定の取得を済ませた状態で描く。 */
 function render(
   notice: SummaryNotice,
   failureIds: ReadonlySet<number> = new Set(),
+  config?: ConfigSnapshotView,
 ): string {
+  const client = new QueryClient();
+  if (config !== undefined) {
+    client.setQueryData(configQueryKey, config);
+  }
   return renderToStaticMarkup(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={client}>
       <MemoryRouter>
         <NoticeDetail
           notice={notice}
@@ -94,32 +118,44 @@ describe("NoticeDetail move button", () => {
   });
 });
 
-/** 運用の文書を指す`<a>`の開きタグ。無ければ空。 */
+/** 運用の文書を指す`<a>`の開きタグ。無ければ空。URLは正規表現にせず、部分文字列で探す。 */
 function procedureLinkTag(html: string): string {
-  return (
-    new RegExp(`<a [^>]*href="${OPERATIONS_DOC_URL}#[^"]*"[^>]*>`).exec(
-      html,
-    )?.[0] ?? ""
-  );
+  const at = html.indexOf(`href="${DOC}#`);
+  if (at === -1) return "";
+  const start = html.lastIndexOf("<a ", at);
+  const end = html.indexOf(">", at);
+  return start === -1 || end === -1 ? "" : html.slice(start, end + 1);
 }
 
 describe("NoticeDetail link to the procedure", () => {
-  test("links the notice to the row of its kind in the operations document", () => {
+  test("links the notice to the row of its kind in the operations document of factory_repo", () => {
     expect(
-      render(noticeOf("cleanup_db_failed", { resolvable: true })),
-    ).toContain(`href="${OPERATIONS_DOC_URL}#notice-cleanup_db_failed"`);
+      render(
+        noticeOf("cleanup_db_failed", { resolvable: true }),
+        new Set(),
+        CONFIG,
+      ),
+    ).toContain(`href="${DOC}#notice-cleanup_db_failed"`);
   });
 
   test("names the link after reading the procedure", () => {
-    expect(render(noticeOf("cleanup_db_failed", { resolvable: true }))).toMatch(
-      /<a [^>]*>運用の文書で手順を読む/,
-    );
+    expect(
+      render(
+        noticeOf("cleanup_db_failed", { resolvable: true }),
+        new Set(),
+        CONFIG,
+      ),
+    ).toMatch(/<a [^>]*>運用の文書で手順を読む/);
   });
 
   test("opens the document in a new tab", () => {
     expect(
       procedureLinkTag(
-        render(noticeOf("cleanup_db_failed", { resolvable: true })),
+        render(
+          noticeOf("cleanup_db_failed", { resolvable: true }),
+          new Set(),
+          CONFIG,
+        ),
       ),
     ).toContain('target="_blank"');
   });
@@ -127,26 +163,42 @@ describe("NoticeDetail link to the procedure", () => {
   test("gives the document neither the opener nor the referrer", () => {
     expect(
       procedureLinkTag(
-        render(noticeOf("cleanup_db_failed", { resolvable: true })),
+        render(
+          noticeOf("cleanup_db_failed", { resolvable: true }),
+          new Set(),
+          CONFIG,
+        ),
       ),
     ).toContain('rel="noopener noreferrer"');
   });
 
-  test("links a kind that the guide does not explain yet", () => {
-    expect(render(noticeOf("future_kind"))).toContain(
-      `href="${OPERATIONS_DOC_URL}#notice-future_kind"`,
+  test("links a kind that the Console does not know to the section of the kinds", () => {
+    expect(render(noticeOf("future_kind"), new Set(), CONFIG)).toContain(
+      `href="${DOC}#通知の種類"`,
     );
   });
 
-  test("shows no link for a kind that cannot be an anchor", () => {
-    expect(render(noticeOf("future kind"))).not.toContain(OPERATIONS_DOC_URL);
+  test("shows no link before the config is fetched", () => {
+    expect(
+      render(noticeOf("cleanup_db_failed", { resolvable: true })),
+    ).not.toContain("docs/operations.md");
+  });
+
+  test("shows no link when factory_repo is not a GitHub repository URL", () => {
+    expect(
+      render(
+        noticeOf("cleanup_db_failed", { resolvable: true }),
+        new Set(),
+        configWith("not a url"),
+      ),
+    ).not.toContain("docs/operations.md");
   });
 
   // 手順の文書は、通知の詳細の操作を読んだ後に開く補足なので、次の操作の欄の末尾に置く。
   test("puts the link after the commands of the action", () => {
-    const html = render(noticeOf("host_action_required"));
+    const html = render(noticeOf("host_action_required"), new Set(), CONFIG);
 
-    expect(html.indexOf(OPERATIONS_DOC_URL)).toBeGreaterThan(
+    expect(html.indexOf(`href="${DOC}#`)).toBeGreaterThan(
       html.lastIndexOf("<code"),
     );
   });

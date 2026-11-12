@@ -188,6 +188,6 @@ export function describeNotice(
     shas,
     targets: noticeTargets(message.text, truncated),
     guide: noticeGuide(notice.kind),
-    procedureUrl: noticeDocUrl(notice.kind),
+    procedureUrl: noticeDocUrl(notice.kind, null),
   };
 }
