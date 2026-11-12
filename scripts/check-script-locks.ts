@@ -100,6 +100,17 @@ function readPackageEntry(entry: unknown): {
   };
 }
 
+/** 同じオブジェクトに2回現れたキーと、そのオブジェクトの位置。 */
+export type DuplicateKey = {
+  readonly path: readonly string[];
+  readonly key: string;
+};
+
+/** JSONCの本文から、重複したキーを返す(未実装)。 */
+export function findDuplicateKeys(_text: string): DuplicateKey[] {
+  return [];
+}
+
 function parseJsonc(text: string): unknown {
   try {
     return Bun.JSONC.parse(text);

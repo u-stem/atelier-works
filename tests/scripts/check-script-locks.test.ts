@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   checkScriptLock,
+  findDuplicateKeys,
   indexRootLock,
   type RootIndex,
   WORKER_DEPENDENCIES,
@@ -310,6 +311,165 @@ describe("checkScriptLock", () => {
   test("reports a bun.lock part that is not valid JSONC", () => {
     expect(keysOf('{"dependencies": {}}\n//bun.lock\n{"packages": ')).toEqual([
       "bun.lock",
+    ]);
+  });
+});
+
+const MANIFEST =
+  '{\n  "dependencies": {\n    "windmill-client": "1.817.0"\n  }\n}';
+
+const WORKSPACES = `"workspaces": {
+    "": {
+      "dependencies": {
+        "windmill-client": "1.817.0",
+      },
+    },
+  },`;
+
+/** 前半と後半の本文から、`.script.lock`をそのまま組み立てる。重複したキーを書くためである。 */
+function rawLock(manifest: string, lock: string): string {
+  return `${manifest}\n//bun.lock\n${lock}`;
+}
+
+describe("checkScriptLock with duplicate keys", () => {
+  test("reports a duplicate top-level packages key in the bun.lock part", () => {
+    const lock = rawLock(
+      MANIFEST,
+      `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  ${WORKSPACES}
+  "packages": {
+    "windmill-client": ["windmill-client@1.818.0", "", {}, "${SCOPED_INTEGRITY}"],
+  },
+  "packages": {
+    ${CLIENT_ENTRY}
+  }
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "bun.lock",
+        reason: 'duplicate key "packages" at the top level',
+      },
+    ]);
+  });
+
+  test("reports a duplicate nested dependencies key in the bun.lock workspace", () => {
+    const lock = rawLock(
+      MANIFEST,
+      `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "dependencies": {
+        "left-pad": "1.3.0",
+      },
+      "dependencies": {
+        "windmill-client": "1.817.0",
+      },
+    },
+  },
+  "packages": {
+    ${CLIENT_ENTRY}
+  }
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "bun.lock",
+        reason: 'duplicate key "dependencies" in workspaces.""',
+      },
+    ]);
+  });
+
+  test("reports a duplicate dependencies key in the manifest part", () => {
+    const manifest =
+      '{\n  "dependencies": {\n    "left-pad": "1.3.0"\n  },\n  "dependencies": {\n    "windmill-client": "1.817.0"\n  }\n}';
+    const lock = rawLock(
+      manifest,
+      `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  ${WORKSPACES}
+  "packages": {
+    ${CLIENT_ENTRY}
+  }
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "manifest",
+        reason: 'duplicate key "dependencies" at the top level',
+      },
+    ]);
+  });
+
+  test("accepts a lock without duplicate keys", () => {
+    const lock = rawLock(
+      MANIFEST,
+      `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  ${WORKSPACES}
+  "packages": {
+    ${CLIENT_ENTRY}
+  }
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([]);
+  });
+
+  test("does not count a string value that equals a key in the same object", () => {
+    const lock = rawLock(
+      MANIFEST,
+      `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  ${WORKSPACES}
+  "packages": {
+    "windmill-client": ["windmill-client@1.817.0", "", { "bin": "os", "os": "linux" }, "${CLIENT_INTEGRITY}"],
+  }
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([]);
+  });
+
+  test("does not count a key inside a comment", () => {
+    const lock = rawLock(
+      MANIFEST,
+      `{
+  "lockfileVersion": 2,
+  // "packages": {},
+  "configVersion": 1,
+  /* "packages": {} */
+  ${WORKSPACES}
+  "packages": {
+    ${CLIENT_ENTRY}
+  }
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([]);
+  });
+});
+
+describe("findDuplicateKeys", () => {
+  test("counts a key written with an escape as the same key", () => {
+    expect(findDuplicateKeys('{"packages": {}, "pack\\u0061ges": {}}')).toEqual(
+      [{ path: [], key: "packages" }],
+    );
+  });
+
+  test("reads an escaped quote inside a string without ending it", () => {
+    expect(
+      findDuplicateKeys('{"a": "x\\", \\"a\\": ", "b": [1, {"c": 1}]}'),
+    ).toEqual([]);
+  });
+
+  test("reports a duplicate key inside an object in an array", () => {
+    expect(findDuplicateKeys('[{"c": 1, "c": 2,},]')).toEqual([
+      { path: ["0"], key: "c" },
     ]);
   });
 });
