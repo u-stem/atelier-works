@@ -207,7 +207,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 保護しないと、渡す全文を作り替える変更や、判定に別の値を渡す変更が、人のレビューを経ずに入る。
  * 判定を呼ぶ`designBlockedReason`(`console/src/lib/approvalDecision.ts`)と、確認文、トースト、型ガードは、
  * 日常的に直す部品なので守る一覧に入れない。判定の本体は`visibleText.ts`にある。
- * 保護しない祖先の部品や全体のCSSから、全文の一部を隠す手は、ファイル単位の保護では閉じられない。`docs/internals/console/security.md`の「設計の承認画面の保護」の残るリスクに書く。
+ * 保護しない祖先の部品や全体のCSSから、全文の一部を隠す手は、ファイル単位の保護では閉じられない。残るリスクとして`docs/security-risks.md`のR-CON-23に書く。
  * ジョブを取り消すscript(`console_job_cancel.ts`)と、操作の記録を足した既存の書き込みのscript(`retry_work_item.ts`、
  * `manual_intake_submit.ts`。`hold_release.ts`と`freeze_release.ts`は上で守っている)も、それぞれの`.script.yaml`とともに守る。
  * 取消の許可表(取り消せるフローの名前)と、記録の順序は、書き換えられると、取り消せる対象が増えたり、記録なしで操作できたりする。
@@ -228,7 +228,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 取消の画面の部品(`console/src/lib/jobActions.ts`、`console/src/screens/jobs/JobActions.tsx`)とそのテストも守らない。
  * 再実行と設定変更の画面の部品(`console/src/lib/configChange.ts`、`console/src/screens/system/ConfigChangeDialog.tsx`など)も同じ理由で守らない。
  * 守ると毎回人の確認が要り、書き換えられた被害は、確認のダイアログを飛ばして呼ぶことに限られるためである。
- * 絞り込みと記録は守ったscript側にある(`docs/security.md`の「ジョブの取消」)。
+ * 絞り込みと記録は守ったscript側にある(`docs/internals/console/security.md`の「ジョブの取消」)。
  * 描画の部品(`JobDetailParts.tsx`、`ConfigSection.tsx`)も、同じ理由で守らない。
  * 契約テストが画面のソース全体を走査するので、守っても保証の上乗せが小さい。
  * これらのlock(`console_jobs.script.lock`など)は、`windmill-client`を含み、その版を上げる変更で全scriptのlockと

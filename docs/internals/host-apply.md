@@ -306,11 +306,10 @@ modeだけの変更も、ヘッダーの`old mode`と`new mode`の行で見え�
 
 #### 承認の門の残るリスク
 
-- 同じホストユーザーのプロセスは、`approved.json`を直接書ける。
-  ファイルの権限では防げない。
-- agentが環境変数を消し、疑似端末で文言を入力すれば、`approve`を通せる。
-  起動を拒否ルールで止めるかは、運用者の判断である。
+- [R-HOST-01](../security-risks.md#r-host-01)
+- [R-HOST-02](../security-risks.md#r-host-02)
 - コードの出どころの検査は、書き換えた側が迂回できる。
+  残るリスクの表の[R-HOST-03](../security-risks.md#r-host-03)にあたる。
   - Bunの読み込み: `~/.bunfig.toml`と`$XDG_CONFIG_HOME/.bunfig.toml`の`preload`、`BUN_OPTIONS`。
     リポジトリの外にある親ディレクトリの`tsconfig.json`は、照合できない。
     カレントディレクトリの`bunfig.toml`の`preload`は、`--no-env-file`とカレントディレクトリの検査では防げない。
@@ -321,25 +320,14 @@ modeだけの変更も、ヘッダーの`old mode`と`new mode`の行で見え�
     `--applied`と`HEAD`を揃える案は、人が先に`git pull`した場合の拒否を招くので採らない。
   - `mise activate`を使うシェルでは、`mise.local.toml`の`[env]`が環境に入りうる。
     gitの子プロセスの環境は固定するので、実害は小さい。
-- 承認の表示を作るコードの変更は、`origin/main`へのマージ時の人のレビューにだけ守られる。
-  mainは承認0件でマージできる。
-  Windmillへの反映の承認は、ホストの実行役のコードを止めない([反映の承認](deploy-approvals.md#反映の承認))。
-- 許可した日本語の文字の中にある同形異字は、検出しない。
-  ASCIIの記号に似る`一`、`ー`、`〜`は、許可した文字なので通る。
-- `origin/main`のrefは、人が`git fetch`で更新する。
-  古い参照は拒否側に倒れる。
-  偽の参照は、表示した先端のshaをGitHubと照合して見分ける。
-- 適用済みのshaは人が入力する。
-  実際の適用済みと一致しない記録は`plan`が使わない。
-  ただし、これは「実際の適用済み」を偽造できない出どころから得たときだけ成り立つ。
-  共有ボリュームの印はworkerが偽造できるので、`--applied`はホストのcheckoutの履歴で確かめる。
-  ホストの状態ディレクトリ(0700)に適用済みのshaを書き、`approve`と`plan`がそれを読む形は、後続の段階である。
-- `plan --approved`は、承認の`applied`を照合しない。
-  自動の経路は`plan --state-dir`だけを使う。
-- ページ送りは論理行単位である。
-  1行が極端に長い入力は、画面の外へ流れる。
-- パスが`-`で始まる承認の対象は、gitの引数に渡せないので、`approve`が終了コード1で止まる。
-- 承認は1回に1件で、前の記録を置き換える。
+- [R-HOST-04](../security-risks.md#r-host-04)
+- [R-HOST-05](../security-risks.md#r-host-05)
+- [R-HOST-06](../security-risks.md#r-host-06)
+- [R-HOST-07](../security-risks.md#r-host-07)
+- [R-HOST-08](../security-risks.md#r-host-08)
+- [R-HOST-09](../security-risks.md#r-host-09)
+- [R-HOST-10](../security-risks.md#r-host-10)
+- [R-HOST-11](../security-risks.md#r-host-11)
 
 ### 状態の置き場
 
@@ -606,52 +594,22 @@ pgidの再利用で、無関係のグループを殺しうるためである。
 
 #### 置き場の残るリスク
 
-- 同じホストユーザーのプロセスは、置き場のファイルを直接書ける。
-  0700が防ぐのは、他のユーザーとworkerのコンテナである。
-- 排水の記録の読み書きの競合と、状態ファイルを新しく作るときの「無いときだけ」の確認から書くまでの競合は、ロックを持つ書き手だけが書くことで防ぐ。
-  ロックが防ぐのはプロセスの間だけである。
-  プロセスの中の書き手は、1つに直列化する(実行役の本体の規則)。
-- フェンスは、書く直前の`lock`の実体の照合までを確かめる。
-  同じホストユーザーのプロセスが`lock`を消す・差し替えると、排他を割れる。
-  dockerの操作はフェンスの外にあり、照合の後の差し替えは次の書き込みまで検出できない。
-- ロックは置き場ごとである。
-  dockerのスタックはホストに1つなので、別の`--state-dir`で動く実行役は別のロックを取れる。
-  dockerを操作するサブコマンドは、既定の置き場だけを受ける(実行役の本体の規則)。
-- 本物の孤児は、控えに残る限り`orphan_alive`で止める。
-  pgidの再利用は区間の照合で除くが、先頭が抜けた別のグループ、`setsid`で別のグループへ逃げた孫、子を控える前のSIGKILLは守れない。
-  人が確かめて、`resetOwnerRecord`の`discard`で外す。
-  生きた本物を名指しすれば、孤児と並んで実行役が動く。
-- 電源断で`lock`の本文が壊れると、`owner_unreadable`で止まる。
-  `resetOwnerRecord`で戻す。
-  通常のファイルでない、他者の所有、緩い権限、リンクの複数化、symlinkの`lock`は`unsafe`で止まり、記録の復旧では直らない。
-  実行役が動いていないことを確かめたうえで、人がそのパスの実体だけを除き、`init`で作り直す。
-- `lock`のopenと置き場の照合の間に、置き場をsymlinkへ差し替えて戻されると、置き場の外のファイルに記録を書かれる。
-  差し替えられるのは、親を書ける同じホストユーザーに限る。
-- 孤児の検査の間(実行役の本体では`ps`の起動を含む)に`lock`の実体が替わるのは、書く前の照合で検出する。
-  照合の後の差し替えは、次の書き込みまで検出できない。
-- ロックの有効性の検査は、同じプロセスの中の2回目のopenが`EAGAIN`になることまでである。
-  CIはLinuxなので、カーネルのロックを使うテストはdarwinだけで動く。
-- スタックの照合は、呼び出し側が渡す関数で、`state_io.ts`は中身を確かめられない。
-  渡せるのは実行役のコードだけで、コードの出どころの検査が守る。
-  ただし、正当なコードの誤りは防げない。
-- 同じホストユーザーのプロセスは、`state.json`の`applied_sha`を書き換えられる。
-  これで承認の差の基準をずらせる。
-  `approved.json`を直接書ける場合と同じ扱いである。
-- コンテナから状態の置き場を守るのは、0700ではなく、置き場をマウントしないことである。
-  Docker Desktop for Macのbind mountでは、コンテナが書いたファイルはホストのユーザーの所有に見える。
-  所有者と権限の検査では区別できない。
-  `--state-dir`は、共有の場所やbind mountの下に置かない。
-- 契約テストは字句の検査である。
-  文字列の連結は検出できない。
-  レビューが守る。
-  `node:fs`を使えるモジュールは、閉じた一覧(`code_origin.ts`、`lock.ts`、`secure_file.ts`)で固定する。
-- 状態ファイルが読めないとき(`state_unreadable`)は、`createState`と`reinit`のどちらも使えない。
-  人が壊れたファイルを退避して初期化する。
-  手順は、初期化を足す段階で`docs/operations.md`に書く。
-- 親のディレクトリの鎖とACLは検査しない。
-  `--state-dir`は、本人だけが書ける親の下に置く。
-- 置き場の検査から開くまでの間に、パスを差し替えられる隙がある。
-  差し替えられるのは、親を書ける同じホストユーザーに限る。
+- [R-HOST-12](../security-risks.md#r-host-12)
+- [R-HOST-13](../security-risks.md#r-host-13)
+- [R-HOST-14](../security-risks.md#r-host-14)
+- [R-HOST-15](../security-risks.md#r-host-15)
+- [R-HOST-16](../security-risks.md#r-host-16)
+- [R-HOST-17](../security-risks.md#r-host-17)
+- [R-HOST-18](../security-risks.md#r-host-18)
+- [R-HOST-19](../security-risks.md#r-host-19)
+- [R-HOST-20](../security-risks.md#r-host-20)
+- [R-HOST-21](../security-risks.md#r-host-21)
+- [R-HOST-22](../security-risks.md#r-host-22)
+- [R-HOST-23](../security-risks.md#r-host-23)
+- [R-HOST-24](../security-risks.md#r-host-24)
+- [R-HOST-25](../security-risks.md#r-host-25)
+- [R-HOST-26](../security-risks.md#r-host-26)
+- [R-HOST-27](../security-risks.md#r-host-27)
 
 ### composeの方針
 
@@ -1001,38 +959,19 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 
 #### 外部コマンドの残るリスク
 
-- 実行口の検査は、実行役のコード自身が行う。
-  同じユーザーのプロセスが実行役のコードを書き換えれば、迂回できる。
-  コードの出どころの検査が守る。
-- 本番の`command.ts`が、検査を飛ばす入口をexportする。
-  守りは、別の登録簿と契約テストである。
-- 取得先のURLの照合は、`url.<base>.insteadOf`、URLごとの`http.<url>.*`、`include`を見ない。
-  リポジトリの置き場は0700だが、同じユーザーのプロセスは書き換えられる。
-- トークンは環境に入る。
-  同じユーザーのプロセスは、`ps eww`で読める。
-- `ps`の開始時刻は秒単位である。
-  同じ秒の内にpidが再利用されると、区別できない。
-- 子は別のプロセスグループで動くので、`plan`と`approve`のgitは、端末のCtrl-Cを受けない。
-  読み取りだけなので害は無い。
-- 終了を見た後にグループを止めるとき、別のグループが同じpgidを得ていると、無関係なグループを止めうる。
-  グループが空になった後にだけ起きる、狭い競合である。
-  標準出力の溢れでプロセスを止める経路も、終了を見た後に止める窓を持つ。
-- `setsid`で別のグループに移った孫は、止められない。
-- `Bun.spawn`の`detached`の挙動は、Bunの版に依る。
-  実際のプロセスのテストが検知する。
-- `GIT_NO_LAZY_FETCH`は、ホストのgitの版に依る。
-  古いgitは無視する。
-  読み取りの環境の空の`GIT_ALLOW_PROTOCOL`も、遅延取得を止める。
-- リポジトリの設定の`http.*`のうち、検証、プロキシ、リダイレクトのURL別の指定と、名前解決の上書きだけを引数で固定する。
-  `http.sslCAInfo`や`fetch.bundleURI`などは、取得の通信先や検証を変えうるが、止まらない。
-  `url.<base>.insteadOf`と`include`を見ないことと同じく、置き場の0700に頼る。
-- 取得先を別のホストへ向けられると、URLで照合する認証ヘッダー(`http.https://github.com/.extraHeader`)のトークンがそのホストへ送られうる。
-  向ける手段は、リポジトリの設定の`http.sslCAInfo`と、名前解決の上書きの組である。
-  名前解決の上書きは、引数の空の値で消えると、gitの文書にある。
-  実機では確かめていない。
-- リポジトリの設定の`remote.<取得先URL>.*`(`remote.<取得先URL>.proxy`など)が、`http.<URL>.*`を覆いうる。
-  gitのソースからの推論で、実機では確かめていない。
-  置き場の0700に頼る。
+- [R-HOST-28](../security-risks.md#r-host-28)
+- [R-HOST-29](../security-risks.md#r-host-29)
+- [R-HOST-30](../security-risks.md#r-host-30)
+- [R-HOST-31](../security-risks.md#r-host-31)
+- [R-HOST-32](../security-risks.md#r-host-32)
+- [R-HOST-33](../security-risks.md#r-host-33)
+- [R-HOST-34](../security-risks.md#r-host-34)
+- [R-HOST-35](../security-risks.md#r-host-35)
+- [R-HOST-36](../security-risks.md#r-host-36)
+- [R-HOST-37](../security-risks.md#r-host-37)
+- [R-HOST-38](../security-risks.md#r-host-38)
+- [R-HOST-39](../security-risks.md#r-host-39)
+- [R-HOST-40](../security-risks.md#r-host-40)
 - `git fetch`が`GIT_DIR`と作業ディレクトリの組で動くことは、実機で確かめていない。
 
 ### 子プロセスの環境とログ
@@ -1140,12 +1079,7 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
 
 ### 残るリスク
 
-- composeの検査は、YAMLを静的に読む。
-  `docker compose config`の解釈とは突き合わせていない。
-  解釈が食い違うと、許可した形が別の意味になりうる。
-  食い違いうる書き方のうち、マージキー、YAMLのタグ、`\r`とUnicodeの改行は、文字があれば拒否する。
-  重複したキーは、composeが失敗するので反映されない。
-  複数の文書を書いたYAMLは、1つ目だけを検査して2つ目以降を見逃さないよう、拒否する。
+- [R-HOST-41](../security-risks.md#r-host-41)
 - composeの`image`と環境変数の参照は、表と照らす([composeのimageと秘密値の表](#composeのimageと秘密値の表))。
   ただし、違反は`plan`の判定に使っていない。
   そのため、表の外のリポジトリや、表の外のサービスへの`DB_PASSWORD`の受け渡しは、`would_converge`と判定される。
@@ -1153,27 +1087,16 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
   拒否になる形は、[composeの方針](#composeの方針)と[composeのimageと秘密値の表](#composeのimageと秘密値の表)に挙げた。
   承認の記録は後続の段階で足す。
   それまでの防ぎは、保護パス(`infra/docker-compose.yml`)と人のマージで、mainは承認0件でマージできるため、補助にとどまる。
-  受け入れる理由は、実行役がまだ反映しないためである。
-- 表が見るのは参照名とリポジトリ名だけである。
-  タグが同じ名前の別のイメージを指す浮動タグは、見ない。
-  `build`するサービスのDockerfileの`FROM`も、表の外である。
-  守りは保護パスと人のマージだけである。
-- 表のサービスの`environment`の値に、秘密値の参照を置くことは許す。
-  値の残りは見ないので、`DATABASE_URL`のホストを外部に変えても、通常の参照として扱われる。
-  後続の段階で、秘密値を運ぶ値の形を固定するか、許した参照を含むスカラーを承認の材料に入れるかを検討する。
-- 表の秘密値の検出は、Bunが読んだ文字列の走査である。
-  composeの補間の仕様が変わると、見逃しうる。
-  補間した後の値を見る二重の検査は、`docker compose config`の出力が要るので、後続の段階に回す。
-- ホストの秘密値を置くファイルを指すパスの拒否は、名前で判定する。
-  ディレクトリのbindやcontextは、ルートを含みうる。
-  `prod`の木にあるリンクがsymlinkで、コンテナの中では辿れないことに頼っている。
-  ハードリンクやコピーに変えるときは、この規則を見直す。
+  残るリスクの表の[R-HOST-42](../security-risks.md#r-host-42)にあたる。
+- [R-HOST-43](../security-risks.md#r-host-43)
+- [R-HOST-44](../security-risks.md#r-host-44)
+- [R-HOST-45](../security-risks.md#r-host-45)
+- [R-HOST-46](../security-risks.md#r-host-46)
 - 反映する側は、`docker compose`を、必ず`-f infra/docker-compose.yml`と`--project-directory`を明示して呼ぶ。
   省くと、overrideファイルを自動で読む場所が変わる。
 - 反映に使うチェックアウトのgitには、`GIT_CONFIG_GLOBAL=/dev/null`と`GIT_CONFIG_NOSYSTEM=1`を付ける。
   利用者とシステムのgit設定を読ませないためである。
-- `bun.lock`は承認の対象ではないので、取得元の欄を承認なしで書き換えられる。
-  実行役が`bun install`を呼ぶ段階を足すときは、`bun install --frozen-lockfile`の前に、`bun.lock`の取得元を検査するか、承認の対象にする。
+- [R-HOST-47](../security-risks.md#r-host-47)
 - 設計は`mise`コマンドを使わないと定めるが、`scripts/doctor.sh`は`mise exec`を使う。
   反映する段階の設計で見直す。
 - composeとYAMLの重複キーの解釈の差と、`package.json`の重複キーの解釈の差（compose-goとbun）は、`docker compose config`との突き合わせで確かめる。
@@ -1189,25 +1112,16 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
   - `Bun.YAML.parse`は、重複したキーを最後の値で上書きし、エラーにしない。
     `__proto__`は通常のキーとして残る。
   - composeの解釈とYAMLの重複キーの扱いが違うかは、`docker compose config`と突き合わせて確かめる。
-- パスの検査は、文字列で行い、symlinkを辿らない。
-  目標のtreeにsymlinkがあれば拒否するが、実行役が使うチェックアウトに後から置かれたsymlinkは見ない。
-- miseの値の免除は、形式だけを見る。
-  `GTR_COMMIT`の指す内容は確かめない。
-- `plan`はCIを確認しない。
-  `would_converge`は、CIの通過を含まない判定である。
+- [R-HOST-48](../security-risks.md#r-host-48)
+- [R-HOST-49](../security-risks.md#r-host-49)
+- [R-HOST-50](../security-risks.md#r-host-50)
 - `docker compose up --dry-run`の出力のうち、`Creating`などの行の形は実測した。
   `Running`と`Recreate`の行の形は、同じ3列と見なした推定で、実機の出力では確かめていない。
-- `mise run up`の許可は、自前でビルドした旧イメージの削除を含む。
-  `mise run up`と`mise run deploy`は、終わりに`docker image prune -f --filter label=com.atelier-works.prune=true`を実行する。
-  消えるのは、ラベルが付いた、タグの無いイメージだけで、他のイメージ、ボリューム、コンテナ、ビルドキャッシュには触れない。
-  コマンドは固定で引数を受けないが、ラベルを付けるのは`infra/docker-compose.yml`の`build.labels`なので、守りは保護パスと人のマージである。
+- [R-HOST-51](../security-risks.md#r-host-51)
 - 掃除は使われていない旧版を次に成功した時点で消すので、ホストの実行役の巻き戻しとの関係が決まっていない。
   `scripts/host_apply/state.ts`は、反映の前の版のイメージのIDを控える設計だが、巻き戻しはまだ配線されていない。
   配線する変更が、控えたIDにタグを付けて掃除から守るか、再ビルドで戻すかを決める。
-- 取得した浮動タグのイメージ(`postgres:18`など)の旧版と、ビルドキャッシュは、掃除の対象外である。
-  ラベルを持たないイメージを、`mise run up`は消さないためである。
-  ラベルを足す前にビルドした旧イメージと、ラベルを足した最初のビルドで置き換わる1つ前の版も、ラベルが無いので対象外である。
-  ディスクを使い続けるので、増えたときは人が手で掃除する。
+- [R-HOST-52](../security-risks.md#r-host-52)
 
 ## ホストの反映の印
 
@@ -1222,14 +1136,8 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
 
 残るリスクは次のとおりである。
 
-- defaultのworkerのジョブは、印を偽造できる。
-  偽の印で、`host_action_required`を黙らせられる。
-  影響は、ホストでの反映の遅れに気づけなくなるところまでである。
-  突くには、defaultのworkerでのコード実行が要る。
-- 印を`approve`の`--applied`の値に使うと、偽の印が承認の始点になる。
-  実際の適用済みと違う始点で承認すると、人が見ていない変更を、記録が隠しうる。
-  そのため、`--applied`の値は印から取らず、ホストのcheckoutの履歴で確かめる([変更を承認する](../operations.md#変更を承認する))。
-  印は照合にだけ使う。
+- [R-HOST-53](../security-risks.md#r-host-53)
+- [R-HOST-54](../security-risks.md#r-host-54)
 - ホストの書き込み(`docker compose exec`)は、ジョブと同じ権限で動く。
   同じディレクトリに、`mktemp`のランダムな名前の一時ファイルを排他的に作って書き、`mv -fT`で置き換える。
   印のパスがsymlinkでも、その先は上書きされず、置き換わるのはsymlink自体である。
@@ -1237,4 +1145,4 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
   その場合、記録は警告で終わる。
   一時ファイルの名前は予測できないので、ジョブがFIFOなどを先回りして置くことはできない。
   それでも止まらないよう、書き込みは`timeout 10`で包む。
-  ホストのスクリプトが得る権限はジョブと同じで、権限は広がらない。
+  残るリスクの表の[R-HOST-55](../security-risks.md#r-host-55)にあたる。

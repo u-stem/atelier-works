@@ -1,10 +1,13 @@
 #!/usr/bin/env bun
 // リポジトリのMarkdown文書を`docs/writing-guidelines.md`の規則で検査する。
-// 次の6つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
+// 次の7つをまとめて実行し、1つでも失敗すれば終了コード1で終わる。
 // - このリポジトリの規則(`f/factory/lib/prose_check.ts`の`REPO_DOC_RULES`)
 // - 「1文は1行」(`scripts/lint-one-sentence-per-line.ts`)。
 //   対象は他の検査と同じ文書(`isOneSentencePerLineTarget`)で、`.claude/`の自作のスキルの文書も入る。
 // - 文書の間のリンクとアンカー(`scripts/lint-doc-links.ts`)
+// - 残るリスクの表と、各節からの行へのリンク(`scripts/lint-risk-register.ts`)。
+//   表を通さない箇所は、許可リスト(`scripts/lint-risk-register-allowlist.txt`)と照らす。
+//   リンクの検査と、ファイルの一覧と構文木を共有する(`lintRepoDocs`)。
 // - markdownlint(`.markdownlint-cli2.jsonc`)
 // - textlint(`.textlintrc.json`)
 // - 生成範囲とmiseタスクの表の確認(`scripts/docs-gen.ts --check`)
@@ -27,8 +30,8 @@
 // 相対パスの引数は、カレントディレクトリから解決する。読めない、または対象外のファイルは飛ばす。
 // リンクの検査は引数にかかわらず、追跡している対象の全文書を見る。
 // 見出しを変えると、変えていない文書からのリンクが壊れるため。
-// `--links-only`は、リンクの検査だけを実行する(約1秒)。
-// リンク先や文書の削除、`.md`以外のファイルの改名による壊れたリンクを、文書を変えていないコミットでも止めるために使う。
+// `--links-only`は、リンクの検査と残るリスクの表の検査だけを実行する(約1秒)。
+// リンク先や文書の削除、`.md`以外のファイルの改名による壊れたリンクと、許可リストだけを変えたコミットの誤りを、文書を変えていないコミットでも止めるために使う。
 // このときのファイルの引数は使わない。
 //
 // リポジトリの中のパスは、実行するときのカレントディレクトリではなく、リポジトリの根を基準に読む。
@@ -48,6 +51,8 @@ import {
   findSentenceViolationLines,
   formatSentenceViolation,
 } from "./lint-one-sentence-per-line.ts";
+import { ALLOWLIST_PATH, lintRiskRegister } from "./lint-risk-register.ts";
+import { createTreeReader, type ReadTree } from "./markdown-tree.ts";
 
 /** 自作のスキル。これ以外の`.claude/skills/`は`wmill`の管理スキルか取り込んだもの。 */
 const OWN_SKILL_PATTERN =
@@ -231,12 +236,56 @@ export function listDocCandidates(root: string): string[] {
 export function lintAllDocLinks(
   files: readonly string[],
   readDoc: ReadDoc,
+  readTree: ReadTree = createTreeReader(readDoc),
 ): string[] {
-  const resolver = createLinkResolver(files, readDoc);
+  const resolver = createLinkResolver(files, readDoc, readTree);
   return [...new Set(files)]
     .filter(isTargetDoc)
     .sort()
     .flatMap((path) => lintDocLinks(path, resolver));
+}
+
+/**
+ * 追跡している文書に対して、リンクの検査と残るリスクの表の検査を行う。
+ * 2つの検査は、重複を除いて並べたファイルの一覧と、文書の構文木を共有する。
+ * 一覧の取得の失敗は、2つの検査を飛ばしたことを示す1件の問題にする。
+ */
+export function lintRepoDocs(
+  listFiles: () => readonly string[],
+  readDoc: ReadDoc,
+): string[] {
+  const listing = guardList(listFiles);
+  if (listing.files === undefined) return listing.problems;
+  const files = listing.files;
+  const readTree = createTreeReader(readDoc);
+  const linkProblems = guardCheck("document links", () =>
+    lintAllDocLinks(files, readDoc, readTree),
+  );
+  const riskProblems = guardCheck("risk register", () => [
+    ...lintRiskRegister(
+      files.filter(isTargetDoc),
+      readTree,
+      readDoc(ALLOWLIST_PATH),
+    ).problems,
+  ]);
+  return [...linkProblems, ...riskProblems];
+}
+
+/** 一覧を1回だけ取り、重複を除いて並べる。失敗は、どちらの検査も行わなかったことを示す問題にする。 */
+function guardList(listFiles: () => readonly string[]): {
+  readonly files: readonly string[] | undefined;
+  readonly problems: string[];
+} {
+  try {
+    return { files: [...new Set(listFiles())].sort(), problems: [] };
+  } catch (error) {
+    return {
+      files: undefined,
+      problems: [
+        `lint-docs: listing the files failed, so neither the document links nor the risk register were checked: ${errorMessage(error)}`,
+      ],
+    };
+  }
 }
 
 /**
@@ -483,14 +532,11 @@ export async function main(
 ): Promise<number> {
   const { linksOnly, paths } = parseArgs(args);
   const readDoc = createDocReader(root);
-  // 一覧の取得の失敗も、リンクの検査の1件の問題として扱う。ほかの検査の結果を出すためである。
-  const linkProblems = guardCheck("document links", () =>
-    lintAllDocLinks(listRepoFiles(root), readDoc),
-  );
+  const repoProblems = lintRepoDocs(() => listRepoFiles(root), readDoc);
 
   if (linksOnly) {
-    for (const problem of linkProblems) report(problem);
-    return linkProblems.length > 0 ? 1 : 0;
+    for (const problem of repoProblems) report(problem);
+    return repoProblems.length > 0 ? 1 : 0;
   }
 
   const candidates =
@@ -506,7 +552,7 @@ export async function main(
     const markdown = readDoc(path);
     if (markdown !== undefined) problems.push(...lintDocText(path, markdown));
   }
-  problems.push(...linkProblems);
+  problems.push(...repoProblems);
   for (const problem of problems) report(problem);
 
   const toolsOk = await lintWithTools(targets, createProductionDeps(root));

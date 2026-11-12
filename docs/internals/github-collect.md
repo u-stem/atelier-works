@@ -1372,7 +1372,7 @@ Discordの説明には、閾値、最後の成功(JST)、最新の実行の原�
   - 作者を`allowed_labeler_logins`か`allowed_labeler_ids`に足したとき。
     作者が許可されていないために対象でなかったPRも、覚えているためである。
 - stateを書けない間は、チームへの依頼の確認を毎周回先頭から選ぶ。
-  先頭の候補が枠を使うので、後ろの候補を確かめられないことがある。
+  後ろの候補を確かめられないことは、[R-PER-19](../security-risks.md#r-per-19)にあたる。
 - `repo_allowlist`が空の構成では、`poll_prs`は`gh_repos`に行の無いリポジトリのPRを、見つけない。
   `repo_allowlist`が空でないときは、対象は明示リポジトリだけなので、行が無くてもRESTの一覧で読み、見落とさない。
 - archive済みのリポジトリのPRは、`poll_prs`が読まない。
@@ -1445,18 +1445,9 @@ Discordの説明には、閾値、最後の成功(JST)、最新の実行の原�
 仕様は[通知とrate limitの仕様](notifications.md#restの検索の拒否)にある。
 残るリスクは次のとおりである。
 
-- 拒否は、`callGhApi`を通る呼び出しにだけ効く。
-  argv配列で`gh`を起動するのは`github.ts`だけである。
-  `workspace.ts`のgit credential helperの`gh auth git-credential`は除く。
-  静的テストが、argvの先頭に`gh`を置く配列を書くファイルが`github.ts`だけであることを確かめる。
-- `fetch`でRESTを呼ぶ経路は、`callGhApi`を通らず、実行時の拒否が効かない。
-  経路は、`github.ts`の`fetchIssueObject`、`lib/metadata_patch_download.ts`、GraphQLの`gh_graphql.ts`である。
-  字面の`search/`だけを静的テストが止める。
-  宛先は固定で、実害は無い。
+- [R-GHC-01](../security-risks.md#r-ghc-01)
+- [R-GHC-02](../security-risks.md#r-ghc-02)
 - `gh search`、`--search`、argvの`gh`と`search`の並びも、静的テストが字面で走査して止める。
-- GraphQLの`search`のフィールドは拒まない。
-  使う変更は、枠の消費を設計から見直す。
-- endpointを文字列の組み立てで作る呼び出しは、静的テストが見つけられない。
-  `callGhApi`を通る呼び出しなら、実行時の拒否が止める。
-- 実行時の拒否が正規化するのは、先頭の`/`、大文字、絶対URLの3種類だけである。
-  ドットセグメントとパーセントエンコードは対象外で、呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通る。
+- [R-GHC-03](../security-risks.md#r-ghc-03)
+- [R-GHC-04](../security-risks.md#r-ghc-04)
+- [R-GHC-05](../security-risks.md#r-ghc-05)

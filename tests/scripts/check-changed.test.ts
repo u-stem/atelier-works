@@ -16,9 +16,9 @@ const LINKS_ONLY = [
 ] as const;
 
 describe("planDocChecks", () => {
-  test("runs the link check, then the docs:gen check, when no document changed", () => {
+  test("runs the link and risk register checks, then the docs:gen check, when no document changed", () => {
     expect(planDocChecks([])).toEqual([
-      { label: "doc links", argv: [...LINKS_ONLY] },
+      { label: "doc links and risk register", argv: [...LINKS_ONLY] },
       {
         label: "docs:gen --check",
         argv: ["bun", "run", "scripts/docs-gen.ts", "--check"],
@@ -26,9 +26,9 @@ describe("planDocChecks", () => {
     ]);
   });
 
-  test("runs the link check, then lint:docs for the changed documents, when documents changed", () => {
+  test("runs the link and risk register checks, then lint:docs for the changed documents, when documents changed", () => {
     expect(planDocChecks(["docs/a.md", "README.md"])).toEqual([
-      { label: "doc links", argv: [...LINKS_ONLY] },
+      { label: "doc links and risk register", argv: [...LINKS_ONLY] },
       {
         label: "lint:docs (changed files)",
         argv: ["bun", "run", "scripts/lint-docs.ts", "docs/a.md", "README.md"],

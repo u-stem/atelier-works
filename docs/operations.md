@@ -152,7 +152,7 @@ gh api users/<名前> --jq .id
 `id`があるオーナーは、`poll_issues`と`poll_prs`が発見の前にGitHubの現在のIDを取得して照合する。
 IDが一致すれば、そのオーナーのIssueとPRを発見する。
 食い違うか、IDを取得できないオーナーは、その回の発見を飛ばし、失敗として記録する。
-`id`の無いオーナーは、名前だけで動く。
+`id`の無いオーナーが名前だけで動く残るリスクは、[R-TB-27](security-risks.md#r-tb-27)である。
 DBから見つけ直す追跡中のPRも、`owners`にあって照合を通ったオーナーのものだけを候補に残す。
 飛ばしたオーナーと、`owners`に無い旧名のオーナーのPRは、候補から外れる。
 `factory_repo`のPRは、オーナーによらず残る。
@@ -409,8 +409,8 @@ originは取得の前にそのURLへ付け替わるので、古い名前のclone
 - ロックを持つ時間は、照合の1往復の分だけ延びる。
 - `isRepoAllowed`は`factory_repo`を名前で常に許す。
   自己改善の起票と、`factory_repo`のPRの候補への採用は、名前のままである。
-- 監査のスナップショットのworktreeが、self cloneに既にあるshaを取るfetchは、照合しない。
-- Consoleの配信物を取り込む処理と、ホストの`git pull`は、`factory_repo_id`を照合しない。
+- [R-TB-26](security-risks.md#r-tb-26)
+- [R-TB-25](security-risks.md#r-tb-25)
 
 前回反映したshaが新しいHEADの祖先であることは、force pushで巻き戻す正規の運用が止まるので、反映の条件にしない。
 
@@ -1624,7 +1624,7 @@ Consoleの設定タブは、`design_enabled`が`true`のとき**止める**を�
    `needs_human`のうち、自動で再開する理由(workerのイメージが古い、PRに動いている修正がある)を持つ項目も、同じ扱いになる。
    Consoleの要対応で理由を確かめる。
    `implementing`の項目は、終わってから有効にする。
-   0にできない分は、再実行が設計へ回ることを受け入れる。
+   0にできない分の残るリスクは、[R-DES-40](security-risks.md#r-des-40)である。
 4. 本番の過去の要件定義書で、承認画面が止める条件に当たる割合を確かめる。
    設計書はまだ本番に無いので、要件定義書で近似する。
    次のコマンドは読み取りだけで、書き込まない。
@@ -2241,9 +2241,7 @@ dry-runの出力は、実機で測った。
 最後に`end of 'compose up' output, interactive run is not supported in dry-run mode`の行が付く。
 Caddyだけが変わるときは、Caddyの行が`Recreate`と`Recreated`になり、ほかは`Running`のままだった。
 
-残るリスクは、dry-runが作り直しを示さない変更を見逃すことである。
-イメージだけが変わる更新で、dry-runが`Recreate`を示すかは、確かめていない。
-示さなければ、workerは確認なしで作り直される。
+作り直しを示さない変更を見逃す残るリスクは、[R-HOST-56](security-risks.md#r-host-56)である。
 イメージを取得した直後に`mise exec -- bun ./scripts/check-idle.ts`を手で実行すると、dry-runに頼らず確認できる。
 
 止められたときは、一覧の仕事が終わるのを待ち、同じコマンドをやり直す。
@@ -4134,9 +4132,9 @@ dependabotの対象は、baseが`main`のPRに限る。
 | `read_failed` | 表の読み取りが失敗した。失敗の記録の段`read_gh_pull_requests`と、DBの状態を確かめる |
 
 一覧の読み取りが失敗すると、失敗の記録の段`list_open_pull_requests`に残り、`failed`に数える。
-開いているPRが1000件を超えるリポジトリでは、一覧が上限に当たって失敗し続ける。
+開いているPRが1000件を超えるリポジトリで一覧が失敗し続ける残るリスクは、[R-DEP-03](security-risks.md#r-dep-03)である。
 一覧を読むのは、収集が止まっている間と、収集が集めないリポジトリである。
-公開のリポジトリへ第三者が大量のPRを開くと、その場合に当たりうる([dependabotの更新の内部仕様](internals/dependabot.md#dependabotの更新の自動マージ)の残るリスク)。
+公開のリポジトリへ第三者が大量のPRを開くと、その場合に当たりうる([R-DEP-03](security-risks.md#r-dep-03))。
 
 定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
 説明できなければ、収集の失敗として調べる。

@@ -28,8 +28,14 @@
 
 import { posix } from "node:path";
 import GithubSlugger from "github-slugger";
+import type { Nodes } from "mdast";
 import * as mdastToString from "mdast-util-to-string";
-import { parseMarkdown, visit } from "./markdown-tree.ts";
+import {
+  createTreeReader,
+  parseMarkdown,
+  type ReadTree,
+  visit,
+} from "./markdown-tree.ts";
 
 /** 文書の中のリンク。`line`は1始まり。 */
 export type DocLink = {
@@ -62,8 +68,11 @@ const START_TAG =
 const ATTRIBUTE =
   /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 
-/** HTMLの断片にある開始タグの`id`と`name`の値を、出現の順に返す。 */
-function htmlIds(html: string): string[] {
+/**
+ * HTMLの断片にある開始タグの`id`と`name`の値を、出現の順に返す。
+ * HTMLコメントの中のタグは読まない。
+ */
+export function htmlIds(html: string): string[] {
   const ids: string[] = [];
   for (const tag of html.replace(HTML_COMMENT, "").matchAll(START_TAG)) {
     for (const attribute of (tag[1] ?? "").matchAll(ATTRIBUTE)) {
@@ -83,7 +92,11 @@ function htmlIds(html: string): string[] {
 
 /** `markdown`のリンクと、リンクが指せるアンカーを集める。 */
 export function indexDoc(markdown: string): DocIndex {
-  const tree = parseMarkdown(markdown);
+  return indexTree(parseMarkdown(markdown));
+}
+
+/** 構文木`tree`のリンクと、リンクが指せるアンカーを集める。 */
+function indexTree(tree: Nodes): DocIndex {
   const slugger = new GithubSlugger();
   const candidates: (DocLink & { readonly identifier?: string })[] = [];
   const linkReferenced = new Set<string>();
@@ -174,14 +187,53 @@ function resolveTargetPath(
   return normalized === "" ? "." : normalized;
 }
 
+/** 根からの相対パスにしたリンク先。 */
+export type LinkTarget = {
+  readonly path: string;
+  /** 復号したアンカー。無いときは空文字列。 */
+  readonly anchor: string;
+  /** 末尾が`/`で、ディレクトリとしてだけ指すか。 */
+  readonly directory: boolean;
+  /** クエリ(`?plain=1`など)があったか。パスからは落とす。 */
+  readonly query: boolean;
+};
+
+/**
+ * 文書`docPath`のリンク先`target`を、根からの相対パスと、復号したアンカーにする。
+ * `lintDocLinks`も、この読み方でリンク先を解く。
+ * 外部のURLと、根の外へ出るパスは`undefined`を返す。
+ */
+export function resolveLinkTarget(
+  docPath: string,
+  target: string,
+): LinkTarget | undefined {
+  if (isExternal(target)) return undefined;
+  const hash = target.indexOf("#");
+  const beforeHash = hash === -1 ? target : target.slice(0, hash);
+  const rawPath = beforeHash.replace(/\?.*$/, "");
+  const anchor = hash === -1 ? "" : decode(target.slice(hash + 1));
+  const decodedPath = decode(rawPath);
+  const path =
+    rawPath === "" ? docPath : resolveTargetPath(docPath, decodedPath);
+  if (path === undefined) return undefined;
+  return {
+    path,
+    anchor,
+    directory: decodedPath.endsWith("/"),
+    query: beforeHash.includes("?"),
+  };
+}
+
 /**
  * 管理下のファイルの一覧`files`から`LinkResolver`を作る。
  * ファイルの上にあるディレクトリは「ある」として扱う。
  * 文書は、最初に尋ねられたときに1回だけ読んで解析する。
+ * `readTree`を渡すと、その構文木を使う。ほかの検査と、同じ文書の解析を共有するため。
  */
 export function createLinkResolver(
   files: readonly string[],
   readDoc: ReadDoc,
+  readTree: ReadTree = createTreeReader(readDoc),
 ): LinkResolver {
   const fileSet = new Set(files);
   const directories = new Set<string>(["."]);
@@ -200,9 +252,9 @@ export function createLinkResolver(
     isDirectory: (path) => directories.has(path),
     indexOf: (path) => {
       if (indexes.has(path)) return indexes.get(path);
-      const markdown =
-        path.endsWith(".md") && fileSet.has(path) ? readDoc(path) : undefined;
-      const index = markdown === undefined ? undefined : indexDoc(markdown);
+      const tree =
+        path.endsWith(".md") && fileSet.has(path) ? readTree(path) : undefined;
+      const index = tree === undefined ? undefined : indexTree(tree);
       indexes.set(path, index);
       return index;
     },
@@ -225,36 +277,35 @@ export function lintDocLinks(path: string, resolver: LinkResolver): string[] {
   const problems: string[] = [];
   for (const { line, target } of own.links) {
     if (isExternal(target)) continue;
-    const hash = target.indexOf("#");
-    const beforeHash = hash === -1 ? target : target.slice(0, hash);
-    const hasQuery = beforeHash.includes("?");
-    const rawPath = beforeHash.replace(/\?.*$/, "");
-    const anchor = hash === -1 ? "" : decode(target.slice(hash + 1));
-    const decodedPath = decode(rawPath);
-    const resolved =
-      rawPath === "" ? path : resolveTargetPath(path, decodedPath);
+    const resolved = resolveLinkTarget(path, target);
     const report = (reason: string): void => {
       problems.push(`${path}:${line}: [link] ${reason}: ${target}`);
     };
     // 末尾が`/`のリンク先は、ディレクトリとしてだけ「ある」と判定する。
-    const asDirectory = decodedPath.endsWith("/");
     if (
       resolved === undefined ||
-      !(asDirectory
-        ? resolver.isDirectory(resolved)
-        : resolver.exists(resolved))
+      !(resolved.directory
+        ? resolver.isDirectory(resolved.path)
+        : resolver.exists(resolved.path))
     ) {
       report("file not found");
       continue;
     }
+    const { anchor } = resolved;
     // ディレクトリへのリンクのアンカーは照合しない。
-    if (anchor === "" || asDirectory || !resolved.endsWith(".md")) continue;
-    // クエリつきのリンクは`?plain=1#L10`のように、見出しでない先を指す。
-    if (hasQuery || LINE_ANCHOR.test(anchor) || FOOTNOTE_ANCHOR.test(anchor)) {
+    if (anchor === "" || resolved.directory || !resolved.path.endsWith(".md")) {
       continue;
     }
-    if (anchor === "top" && resolved === path) continue;
-    const anchors = resolver.indexOf(resolved)?.anchors;
+    // クエリつきのリンクは`?plain=1#L10`のように、見出しでない先を指す。
+    if (
+      resolved.query ||
+      LINE_ANCHOR.test(anchor) ||
+      FOOTNOTE_ANCHOR.test(anchor)
+    ) {
+      continue;
+    }
+    if (anchor === "top" && resolved.path === path) continue;
+    const anchors = resolver.indexOf(resolved.path)?.anchors;
     if (anchors !== undefined && !anchors.has(anchor)) {
       report("anchor not found");
     }

@@ -535,9 +535,7 @@ transcriptと設定の置き場は、実行のたびに消す。
 
 #### 残るリスク
 
-予定外の`tool_use`の検査は、起動が終わった後にtranscriptを読む、事後の検出である。
-外れた呼び出しの`tool_result`は、検出より前にモデル(API)へ送られている。
-検査が止めるのは、残りの実行である。
+残るリスクは[R-INV-01](../security-risks.md#r-inv-01)である。
 
 呼び出しそのものを防ぐのは、次の3つである。
 
@@ -813,7 +811,7 @@ workerの秘密値の流出を疑い、[秘密の入れ替え](../security.md#�
 形が秘密値でない本文や、値を変えて書かれた秘密値は消せない。
 最後に投稿を止める守りは、投稿のstepの直前のgitleaks検査である。
 この検査の経路は保護の外にある。
-[残るリスク](#残るリスク調査の隔離)に書く。
+残るリスクは[R-INV-35](../security-risks.md#r-inv-35)である。
 
 コメントは、先頭にタグ`[investigate 自動調査]`、末尾に目印`<!-- factory:investigate:<id> -->`を付けて投稿する。
 目印は、Factory自身のアカウントのコメントにあるものだけを、投稿済みとみなす。
@@ -909,29 +907,14 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
 
 ### 残るリスク(調査の隔離)
 
-- 合格が保証するのは、[合格の意味](#合格の意味)の範囲だけである。
-  外の9件は、3つの置き場の目印が読めないことしか示さない。
-  ほかのパス(`/etc`、別のユーザーの`$HOME`など)、symlink経由、`--add-dir`、ほかのツールは測っていない。
-- `deny`の規則が効くかは、測っていない。
-  拒否は、`--restricted`の閉じ込め1枚に頼る。
-- ツールを通らない経路(設定の層、hook)は、測っていない。
-  `CLAUDE.md`の`@`による取り込みは測らずに、[指示ファイルの無効化](#指示ファイルの無効化)で名前を変えて塞ぐ。
-  設定の層を`user`だけにしたとき、対象リポジトリの`CLAUDE.md`が読み込まれなくなるかは、実機で確かめていない。
-  読み込まれうる条件が残っても、改名の後の確かめ直しが、対象の名前が残ったworktreeを使わせない。
-- 判定の根拠は、1回の実行(ジョブ01a1a0b1-cd69-6017-20f8-26b7407b6f3b)で、Claude Code 2.1.282に限る。
-  版が上がると、関門が`version_changed`で閉じる。
-  そのとき拒否の文言が変わっていれば、判定の版を上げて測り直す。
-- 拒否の文言は、Claude Codeの内部の文字列に頼る。
-  変わると、不合格に倒れる。
-- 12件の実行は、モデルの振る舞いに依存する。
-  呼び出しが1回でなくなると不合格になるので、再実行して通るかを確かめる。
-- 観測のモジュールの変更は、ハッシュの表が拾う。
-  表に入っていない`lib/log.ts`の`maskSecrets`などが観測の文字列を変えても、表は落ちない。
-  その変更は、観測のテストの固定とレビューが受け持つ。
-- 表に入っていないファイルの変更も、表は拾わない。
-  `lib/investigate_workspace.ts`の`investigateWorktreeDir`が返す作業ディレクトリや、`lib/investigate_isolation.ts`の定数が対象である。
-  保護パスとレビューが受け持つ。
-  表に足さないのは、判定に効く変更が頻繁に版を上げる原因にならないよう、判定の直接の入力だけに絞るためである。
+- [R-INV-02](../security-risks.md#r-inv-02)
+- [R-INV-03](../security-risks.md#r-inv-03)
+- [R-INV-04](../security-risks.md#r-inv-04)
+- [R-INV-05](../security-risks.md#r-inv-05)
+- [R-INV-06](../security-risks.md#r-inv-06)
+- [R-INV-07](../security-risks.md#r-inv-07)
+- [R-INV-08](../security-risks.md#r-inv-08)
+- [R-INV-09](../security-risks.md#r-inv-09)
 - 測定のscriptが、結果を自己申告する。
   信頼の根は、測定のscriptの保護(`f/factory/investigate_isolation_probe.`の前方一致)にある。
   関門が読むのは、Windmillに置かれた`f/factory/investigate_isolation_probe`の完了ジョブである。
@@ -939,26 +922,12 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   Windmillの画面か、どのブランチからでも`wmill sync push`でそのpathを書き換えられる主体は、合格を偽造できる。
   測定は、判定と観測のモジュールを相対のimportで読み、Windmillはこのimportを実行のときに解決する。
   そのため、判定と観測のモジュールのpathと、測定が起動に使う`lib/claude.ts`のpathも、同じ理由で書き換えの対象になる。
-  この偽造できる主体は、デプロイできる者であり、デプロイ済みのコード全体と同じ信頼の範囲に含める。
-  scriptのハッシュの照合は入れない。
-  受け入れる。
-- 測定の実行の経路に、保護されていないモジュールが入っている。
-  対象は次の3つである。
-  `lib/log.ts`(`maskSecrets`)、`lib/types.ts`、`lib/db.ts`(`hasInvestigatingWorkItem`)。
-  `lib/db.ts`は日常的に直すので保護しない。
-  稼働中の調査を読むSQLの全文と戻り値の式は、保護されたテスト(`tests/scripts/investigate_singleton_migration.test.ts`)が固定する。
-  `lib/db.ts`の他の部分や、`defaultSqlClient`の差し替えは、固定しない。
-- 指示ファイルの再走査は、worktreeの項目数に上限が無い。
-  大きなリポジトリでは、stepのタイムアウトで失敗しうる。
-  失敗は調査を止める側に倒れるので、受け入れる。
-- Claude Codeの版が上がると、作業ディレクトリから読む指示や設定の名前が増えうる。
-  版を上げるときは、その名前を確かめ、`INSTRUCTION_ENTRY_NAMES`(`lib/investigate_workspace.ts`)を直す。
-  確かめない間は、新しい名前の項目が改名されずに残る。
-  受け入れる。
-- 関門が見るのは、最新の完了ジョブ1件だけである。
-  不合格の後に再実行して通ると、前の不合格は見えなくなる。
-- 判定は、後始末の失敗(`cleanup.failed`)を条件にしない。
-  目印が秘密でなく、後始末の失敗が秘密に関わらないためである。
+  残るリスクの表の[R-INV-10](../security-risks.md#r-inv-10)にあたる。
+- [R-INV-11](../security-risks.md#r-inv-11)
+- [R-INV-12](../security-risks.md#r-inv-12)
+- [R-INV-13](../security-risks.md#r-inv-13)
+- [R-INV-14](../security-risks.md#r-inv-14)
+- [R-INV-15](../security-risks.md#r-inv-15)
 - 公開の関門`checkIsolationProof`と、調査のClaudeを起動する公開の`runInvestigateClaude`を名指しする本番のファイルは、2種類に限る。
   1つは定義元で、もう1つは調査の生成のstep(`steps/investigate_generate.ts`)である。
   生成のstepでは、importと、依存の初期値として渡す箇所の2回ずつ現れる。
@@ -966,44 +935,21 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   `tests/lib/investigate_isolation_gate.test.ts`と`tests/lib/investigate_claude.test.ts`が、`f`の下のファイルを走査する。
   走査の許可の一覧を直す変更は、必ず保護パスに触れる。
   上の信頼の穴の扱いは、[入口の前提の扱い](#入口の前提の扱い)にある。
-- 観測の中の予定外の読み出しは、実行が終わってから、transcriptで見つける。
-  1回の実行の途中で止める手段は無い。
-  本物の秘密を読ませない保証は、次の3つに頼る。
-  固定のプロンプト、読み出しを塞ぐ一覧、実行の後に止める検査である。
-- 出力用のツール名の綴りに、秘密の断片が載りうる。
-  目印の値と名前、32桁以上の16進の並び、既知の秘密の形は置き換えるが、それ以外の短い断片は、名前の形に合えば残る。
-  断片を載せるには、モデルが先に予定外の`tool_use`で秘密を読む必要がある。
-  その場合は、名前を結果に並べないので、断片は残らない。
-  外に触れる判定を抜けた読み出しがあると、この前提が崩れる。
-- 観測は、`Glob`と`Grep`が祖先のディレクトリから目印を見つけるか、設定の層が読まれないか、指示文書の`@`の取り込みが起きないかを測らない。
-- 測定は1時点の結果である。
-  Claude Codeの版か起動の形が変われば、関門が閉じ、測り直しになる。
-  worker imageと、マウントの変更は、証拠に入らないので、測り直しにならない。
-- 古い版の測定のscriptをハッシュで実行すれば、合格のジョブの記録を作れる。
-  デプロイできる者と、rootで動くジョブ(superuserのDB接続を持つ)も、ジョブの記録を作れる。
-  uidを分けるまでは、デプロイ済みのコード全体と同じ信頼の範囲に含める。
-  scriptのハッシュの照合は入れない。
-- 測定を動かす主体と、関門を呼ぶ主体が、同じ範囲のジョブの記録を読めることを前提にする。
-  見える範囲が違うと、閉じる理由が`proof_unreadable`か`proof_missing`になる。
-- ジョブの記録の保持期間(約30日)が切れると、測定のジョブが見えなくなり、関門が閉じる。
-  閉じるのは安全な側である。
-- 関門が塞ぐのは、`runInvestigateClaude`を通る起動だけである。
-  `runClaude`を直接呼ぶ経路は`lib/claude.ts`にあり、この証拠では塞がない。
-  `lib/claude.ts`は保護パスで、変更は人の承認を経て反映される。
-  調査の4つのstepと支援のlibが`runClaude`を名指ししないことは、保護されたテストが固定する。
-  別のファイルから名指しする経路は、このテストでは見つからないので、PRのレビューで見る。
-- 証拠の参照元の走査は、識別子を連結や別名で組み立てる動的な参照を数えられない。
-  そうした参照は、PRのレビューで見る。
-- 拒否の規則は、`Read`、`Glob`、`Grep`の組み込みのツールに効く設定である。
-  対象リポジトリの設定を読まないこと(設定の層を`user`だけにしたこと)が、実際に文脈へ入らないことも、実機で確かめていない。
-- `lib/claude.ts`の分岐のうち、テストと本番で振る舞いが変わるものは、保護されたテストでは見つからない。
-  PRのレビューで見る。
-- 作業ディレクトリの検査は、起動の前の1回である。
-  起動の後にsymlinkを差し替える操作は、検出しない。
+- [R-INV-16](../security-risks.md#r-inv-16)
+- [R-INV-17](../security-risks.md#r-inv-17)
+- [R-INV-39](../security-risks.md#r-inv-39)
+- [R-INV-18](../security-risks.md#r-inv-18)
+- [R-INV-19](../security-risks.md#r-inv-19)
+- [R-INV-20](../security-risks.md#r-inv-20)
+- [R-INV-21](../security-risks.md#r-inv-21)
+- [R-INV-22](../security-risks.md#r-inv-22)
+- [R-INV-23](../security-risks.md#r-inv-23)
+- [R-INV-40](../security-risks.md#r-inv-40)
+- [R-INV-24](../security-risks.md#r-inv-24)
+- [R-INV-25](../security-risks.md#r-inv-25)
 - 置き場をworker imageが作ること、置き場の検査、`git worktree add`が置き場の下に作れることは、実機で確かめていない。
   image(`mise run up`)の反映の後でないと確かめられない。
 - 掃除は、置き場の下の自分以外の項目をすべて消す。
-  workerが調査を1件ずつ動かす前提(`replicas`が1)に立つ。
   flowの段と段の間には別の調査のジョブが入りうる。
   そのため、稼働中(`investigating`)の調査は、部分一意インデックス`work_items_active_investigate_singleton`で全体1件に直列化する。
   登録(`insertInvestigateWorkItemUnlessActive`)は、稼働中の調査があれば断る。
@@ -1012,58 +958,33 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   調査の側は、登録のstepと生成のstepが、測定のジョブが待ちか実行中でないことを確かめ、あれば断る。
   確認は、測定の開始時と、調査の登録と生成の開始時に、1回ずつである。
   確認と掃除の間に相手が始まる競合は残る。
-  受け入れる。
-  workerを増やす変更や、調査を並行させる変更では、この前提を見直す。
-- 調査のフローの失敗処理は、`flow_job_id`を記録していない行を`failed`にしない。
-  登録が、行の作成と同時にフローのルートジョブのIDを`flow_job_id`に記録することを前提にする。
-  記録のない行は、照合が孤児として扱う。
-- 掃除が取るロックは、引数の主リポジトリのものだけである。
-  置き場は全リポジトリで共有するので、他のリポジトリの項目はロックなしで消す。
-  他のリポジトリのworktreeの登録(`.git/worktrees/<id>`)は、そのリポジトリの次の作成の`git worktree prune`で消える。
-- 別名の`/var/run`、`/var/lock`と、`/dev/fd`、`/dev/stdin`の拒否は、効くことを確かめない。
-  効かないと、綴りを変えて塞いだ場所に届く。
+  この競合は、残るリスクの表の[R-INV-26](../security-risks.md#r-inv-26)として受け入れる。
+- [R-INV-27](../security-risks.md#r-inv-27)
+- [R-INV-28](../security-risks.md#r-inv-28)
+- [R-INV-29](../security-risks.md#r-inv-29)
 - 生成のstepの結果には、生の構造化出力を残さない。
   失敗の詳細も、結果と注記のどちらにも載せない。
   秘密値を検出した出力は、どこにも残らない。
   検出の通知は、確かめる先を案内せず、秘密の入れ替えを案内する。
-- 最終の本文は、生成のstepの結果と、投稿のstepの引数に残る。
-  保持先は、Windmillの完了ジョブ(約30日)と、Consoleのジョブ詳細である。
-  投稿のstepの再検査で止めた本文も残る。
-  生成のstepでは、この本文は検査を2回通っている。
-- 投稿のstepは、コメントの投稿と、調査の状態の更新を、別の操作で行う。
-  投稿の後に更新が失敗すると、調査は`failed`になり、コメントは残る。
-  投稿し直すと、新しい作業項目の目印で、2件目のコメントが付く。
-  受け入れる。
-- 調査の実行の途中で、予定外の読み出しを見つけて止める手段は無い。
-  隔離の測定は実行の後にtranscriptを読んで検出するが、調査の本番の実行には、実行後のtranscriptの検査が無い。
-  読み出しを防ぐのは、ツールの制限と`--restricted`の閉じ込めと、指示ファイルの無効化に限る。
-  受け入れる。
-- 調査の結果のコメントには、`Glob`と`Grep`の結果のパス名が出うる。
-  対象は、作業ディレクトリの中のパスと、それを根拠にした説明である。
-  Issueを読める人には見える。
-  非公開の試験用リポジトリで、敵対的な依頼文を使って確かめる。
-- 完全一致のマスクの対象は、生成のstepが読む秘密値に限る。
-  `claude_oauth_token`、`github_token`、`wmill_token`、`discord_webhook_url`の値と、生成のstepのジョブのトークンである。
-  `github_read_tokens`は、対応表の値を1つずつ消す。
+- [R-INV-30](../security-risks.md#r-inv-30)
+- [R-INV-31](../security-risks.md#r-inv-31)
+- [R-INV-32](../security-risks.md#r-inv-32)
+- [R-INV-33](../security-risks.md#r-inv-33)
+- [R-INV-34](../security-risks.md#r-inv-34)
 - 本文の検査の経路は、保護の外にある。
   対象は5つのファイルである。
   `lib/ci_fix_round.ts`の`ciTextScanner`、`lib/workspace.ts`の`runGitleaksOnText`と`runGitleaksStdin`がある。
   `lib/log.ts`の`SECRET_PATTERNS`、`lib/github.ts`の`commentIssue`と`withMarker`もある。
   `lib/gh_collect_support.ts`の`parseTokenVariable`は、マスクする読み取りトークンの集め方を決める。
-  ほかのフローも日常的に直すファイルなので、保護しない。
   保護されたテストは、検査器を偽物に差し替えて順序と分岐を確かめるので、この5つのファイルが緩められても落ちない。
   検査と目印の付け方の変更は、PRのレビューで見る。
   そのため、検査が出力の秘密値を止めることは、保証でなく、第2層の守りとして扱う。
-- 生成のstepが推移的にimportするモジュールは、保護しない。
-  固定するのは、直接importするモジュールの集合だけである。
-- 一意制約の違反(23505)は、すべて`investigation_in_progress`として断る。
-  同じIssueの別の行との衝突も、同じ理由で表に出る。
-- 隔離の測定のジョブの有無を、調査の登録と生成が、ジョブのトークンの権限で見られるかは、実機で確かめる。
-  見えないと、確認が空の一覧になり、測定が動いていても調査を始めうる。
+  残るリスクの表の[R-INV-35](../security-risks.md#r-inv-35)にあたる。
+- [R-INV-36](../security-risks.md#r-inv-36)
+- [R-INV-37](../security-risks.md#r-inv-37)
+- [R-INV-41](../security-risks.md#r-inv-41)
 - 依頼文の`@`が、プロンプトの展開で取り込みにならないことは、実装でなく実機の確認に回した。
-- 作業ディレクトリの中(対象リポジトリの内容)は、読めるので、信頼できない入力のままである。
-  プロンプトのデータの区切りと、出力の検査で抑える。
-  どちらも、呼び出し側が担う。
+- [R-INV-38](../security-risks.md#r-inv-38)
 
 ### 入口の前提の扱い
 

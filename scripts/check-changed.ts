@@ -2,7 +2,7 @@
 // `origin/main`との差分に応じて、`mise run check`の検査を絞って実行する。
 // lintと型検査は数秒で終わるので常に実行する。重い検査だけを、差分が触れたときに実行する。
 // - 文書の検査: 差分にあるMarkdownだけを検査する。差分に無くても、生成範囲の確認は行う。
-//   リンクの検査は、差分に文書が無くても、全文書に対して実行する(`lint-docs.ts --links-only`)。
+//   リンクの検査と残るリスクの表の検査は、差分に文書が無くても、全文書に対して実行する(`lint-docs.ts --links-only`)。
 // - Consoleの検査: Console、共有のlib、ルートの設定に触れたときだけ実行する。
 // - テスト: 差分(削除を含む)の`console/`の外にある非Markdownのパスで決める。
 //   すべてがimportの解析で扱える拡張子(`.ts`、`.tsx`、`.js`、`.mjs`)なら、変更に絞って実行する。
@@ -274,13 +274,14 @@ export type DocCheck = {
 
 /**
  * 文書の検査を決める。
- * リンクの検査は、文書の差分の有無にかかわらず先に実行する。
+ * リンクの検査と残るリスクの表の検査は、文書の差分の有無にかかわらず先に実行する。
  * リンク先や文書の削除、`.md`以外のファイルの改名で、差分に文書が無くてもリンクが壊れるため。
+ * 許可リストだけを変えた差分も、表の検査で照らす。
  * 差分の文書があるときは、その文書の検査を続け、無いときは生成範囲の確認だけを続ける。
  */
 export function planDocChecks(docs: readonly string[]): readonly DocCheck[] {
   const links: DocCheck = {
-    label: "doc links",
+    label: "doc links and risk register",
     argv: ["bun", "run", "scripts/lint-docs.ts", "--links-only"],
   };
   if (docs.length > 0) {

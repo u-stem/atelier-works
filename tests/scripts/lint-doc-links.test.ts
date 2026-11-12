@@ -1,10 +1,71 @@
 import { describe, expect, test } from "bun:test";
 import {
   createLinkResolver,
+  htmlIds,
   indexDoc,
   type LinkResolver,
   lintDocLinks,
+  resolveLinkTarget,
 } from "../../scripts/lint-doc-links.ts";
+import { parseMarkdown } from "../../scripts/markdown-tree.ts";
+
+describe("resolveLinkTarget", () => {
+  test("resolves a relative path from the document and decodes the anchor", () => {
+    expect(
+      resolveLinkTarget("docs/internals/a.md", "../b.md#%E6%AE%8B%E3%82%8B"),
+    ).toEqual({
+      path: "docs/b.md",
+      anchor: "残る",
+      directory: false,
+      query: false,
+    });
+  });
+
+  test("resolves an empty path to the document itself", () => {
+    expect(resolveLinkTarget("docs/a.md", "#x")).toEqual({
+      path: "docs/a.md",
+      anchor: "x",
+      directory: false,
+      query: false,
+    });
+  });
+
+  test("marks a path that ends with a slash as a directory", () => {
+    expect(resolveLinkTarget("docs/a.md", "internals/")?.directory).toBe(true);
+  });
+
+  test("drops the query from the path and marks it", () => {
+    expect(resolveLinkTarget("docs/a.md", "b.md?plain=1#L10")).toEqual({
+      path: "docs/b.md",
+      anchor: "L10",
+      directory: false,
+      query: true,
+    });
+  });
+
+  test("returns undefined for an external URL", () => {
+    expect(resolveLinkTarget("docs/a.md", "https://example.com/a.md#x")).toBe(
+      undefined,
+    );
+  });
+
+  test("returns undefined for a path that leaves the repository", () => {
+    expect(resolveLinkTarget("docs/a.md", "../../x.md")).toBe(undefined);
+  });
+});
+
+describe("htmlIds", () => {
+  test("returns the id and the name of start tags in order", () => {
+    expect(htmlIds('<a id="r-ab-01"></a><a name="x"></a>')).toEqual([
+      "r-ab-01",
+      "x",
+    ]);
+  });
+
+  test("ignores a tag inside an HTML comment", () => {
+    expect(htmlIds('<!-- <a id="r-ab-01"></a> -->')).toEqual([]);
+  });
+});
 
 function anchorsOf(markdown: string): string[] {
   return [...indexDoc(markdown).anchors];
@@ -660,5 +721,15 @@ describe("createLinkResolver", () => {
     resolver.indexOf("a.md");
 
     expect(reads).toEqual(["a.md"]);
+  });
+
+  test("uses the given tree reader, so another check can share the parsed trees", () => {
+    const resolver = createLinkResolver(
+      ["a.md"],
+      () => "# A\n",
+      () => parseMarkdown("# B\n"),
+    );
+
+    expect(resolver.indexOf("a.md")?.anchors.has("b")).toBe(true);
   });
 });

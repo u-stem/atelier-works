@@ -20,6 +20,7 @@ import {
   type LintDeps,
   lintAllDocLinks,
   lintDocText,
+  lintRepoDocs,
   lintWithTools,
   listDocCandidates,
   listRepoFiles,
@@ -323,6 +324,80 @@ describe("lintAllDocLinks", () => {
   });
 });
 
+// 残るリスクの表の検査が通る最小の文書。節の段落の1つは、許可リストに載せないと問題になる。
+const REGISTER =
+  '# 残るリスク\n\n| 略号 | 領域 | 説明の文書 | 使った最大の番号 |\n| --- | --- | --- | --- |\n| AB | 領域 | 節 | 01 |\n\n## 領域\n\n| ID | 残るリスクと、受け入れる理由 | 関連する節 |\n| --- | --- | --- |\n| <a id="r-ab-01"></a>R-AB-01 | リスクの文。 | 節 |\n';
+const GUIDE =
+  "# 書き方\n\n| 許可の種類 | 意味 |\n| --- | --- |\n| `pointer` | 表への案内 |\n";
+const SECTION =
+  "# 節\n\n[R-AB-01](security-risks.md#r-ab-01)\n\n残るリスクは[表](security-risks.md)にある。\n";
+
+describe("lintRepoDocs", () => {
+  // 表、案内、節、許可リストを持つリポジトリ。`overrides`で文書を差し替える。
+  function repo(
+    overrides: Record<string, string | undefined> = {},
+  ): Record<string, string | undefined> {
+    return {
+      "docs/security-risks.md": REGISTER,
+      "docs/writing-guidelines.md": GUIDE,
+      "docs/security.md": SECTION,
+      "scripts/lint-risk-register-allowlist.txt": "",
+      ...overrides,
+    };
+  }
+
+  function run(
+    docs: Record<string, string | undefined>,
+    list: () => readonly string[] = () =>
+      Object.keys(docs).filter((path) => docs[path] !== undefined),
+  ): string[] {
+    return lintRepoDocs(list, (path) => docs[path]);
+  }
+
+  test("runs the risk register check after the link check", () => {
+    expect(
+      run(repo()).some((p) =>
+        p.startsWith(
+          "docs/security-risks.md: [risk] unregistered residual risk",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("skips the risk register check when listing the files fails", () => {
+    expect(
+      run(repo(), () => {
+        throw new Error("boom");
+      }),
+    ).toEqual([
+      "lint-docs: listing the files failed, so neither the document links nor the risk register were checked: boom",
+    ]);
+  });
+
+  test("reports a missing register", () => {
+    expect(
+      run(repo({ "docs/security-risks.md": undefined })).includes(
+        "docs/security-risks.md: [risk] register not found",
+      ),
+    ).toBe(true);
+  });
+
+  test("reports a broken allowlist line", () => {
+    expect(
+      run(
+        repo({ "scripts/lint-risk-register-allowlist.txt": "broken\n" }),
+      ).some((p) => p.includes("malformed allowlist line")),
+    ).toBe(true);
+  });
+
+  test("lists a file that appears twice only once", () => {
+    const docs = repo();
+    const once = run(docs);
+    const twice = run(docs, () => [...Object.keys(docs), "docs/security.md"]);
+    expect(twice).toEqual(once);
+  });
+});
+
 describe("guardCheck", () => {
   test("returns the problems of a check that finishes", () => {
     expect(guardCheck("links", () => ["a.md:1: [link] x"])).toEqual([
@@ -490,8 +565,26 @@ describe("main with --links-only", () => {
     return { exitCode, output };
   }
 
+  // 表の検査が通る表、案内、節と、空の許可リストを追跡させる。
+  function addRegister(dir: string, git: Git, allowlist = ""): void {
+    mkdirSync(join(dir, "docs"));
+    mkdirSync(join(dir, "scripts"));
+    writeFileSync(join(dir, "docs/security-risks.md"), REGISTER);
+    writeFileSync(join(dir, "docs/writing-guidelines.md"), GUIDE);
+    writeFileSync(
+      join(dir, "docs/security.md"),
+      "# 節\n\n[R-AB-01](security-risks.md#r-ab-01)\n",
+    );
+    writeFileSync(
+      join(dir, "scripts/lint-risk-register-allowlist.txt"),
+      allowlist,
+    );
+    git("add", "docs", "scripts");
+  }
+
   test("exits with 0 and prints nothing when every link resolves", async () => {
     await withRepoAsync(async (dir, git) => {
+      addRegister(dir, git);
       writeFileSync(join(dir, "good.md"), "[t](tracked.md)\n");
       git("add", "good.md");
 
@@ -501,6 +594,7 @@ describe("main with --links-only", () => {
 
   test("exits with 1 and prints the problem when a link is broken", async () => {
     await withRepoAsync(async (dir, git) => {
+      addRegister(dir, git);
       writeFileSync(join(dir, "broken.md"), "[m](missing.md)\n");
       git("add", "broken.md");
 
@@ -512,10 +606,24 @@ describe("main with --links-only", () => {
   });
 
   test("does not check an untracked draft", async () => {
-    await withRepoAsync(async (dir) => {
+    await withRepoAsync(async (dir, git) => {
+      addRegister(dir, git);
       writeFileSync(join(dir, "draft.md"), "[m](missing.md)\n");
 
       expect(await runLinksOnly(dir)).toEqual({ exitCode: 0, output: [] });
+    });
+  });
+
+  test("runs the risk register check and reports a broken allowlist line", async () => {
+    await withRepoAsync(async (dir, git) => {
+      addRegister(dir, git, "broken\n");
+
+      expect(await runLinksOnly(dir)).toEqual({
+        exitCode: 1,
+        output: [
+          "docs/security-risks.md: [risk] malformed allowlist line in scripts/lint-risk-register-allowlist.txt: broken",
+        ],
+      });
     });
   });
 });
