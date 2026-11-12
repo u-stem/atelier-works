@@ -51,10 +51,13 @@ Consoleは管理者のCookieで動くので、呼べる範囲を固定する。
 中断(`AbortSignal`)だけは、取り消しとして扱えるよう例外を再び投げる。
 
 分類は、成功、`invalid_response`、`unauthorized`、`forbidden`、`timeout_or_unknown`、`job_failed`、`http`、`network`である。
-応答の状態と本文から分類を決める規則は、[`console/src/api/errors.ts`](../../../console/src/api/errors.ts)の`classifyRunResponse`が定める。
+`network`は、応答の無い通信の失敗で、`fetch`が例外を投げたときに`runScript`が付ける。
+ほかの分類について、応答の状態と本文から分類を決める規則は、[`console/src/api/errors.ts`](../../../console/src/api/errors.ts)の`classifyRunResponse`が定める。
 状態ごとの分類は[`classifyRunResponse on failure statuses`](../../../console/src/api/errors.test.ts)で確かめる。
 ジョブの失敗(500)は[`classifyRunResponse on a failed job (500)`](../../../console/src/api/errors.test.ts)で確かめる。
 待ちの上限の定型文は[`classifyRunResponse on a timeout message`](../../../console/src/api/errors.test.ts)で確かめる。
+`job_failed`は本文から取り出した文を持ち、`http`は4xxのときだけ本文から取り出した文を持つ。
+500を除く5xxの`http`は、本文を添えない。
 本文から取り出して持つ文の長さの上限は、同じファイルの`MAX_MESSAGE_LENGTH`と`MAX_DETAIL_LENGTH`が定める。
 ジョブの失敗の分類は、スタックを持たない。
 
