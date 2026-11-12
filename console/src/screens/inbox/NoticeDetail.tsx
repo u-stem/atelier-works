@@ -1,9 +1,11 @@
+import { useQuery } from "@tanstack/react-query";
 import { CircleCheck, ExternalLink, Info, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import type { WriteOutcome } from "../../api/executeWrite.ts";
 import type { SummaryNotice } from "../../api/guards/summary.ts";
 import type { NoticeResolveResult } from "../../api/guards/writeResults.ts";
+import { configQueryOptions } from "../../api/jobsQueries.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
 import { NOTICE_RESOLVE_INVALIDATES } from "../../api/noticeQueries.ts";
 import { writeTargetKey } from "../../api/writeLocks.ts";
@@ -13,11 +15,13 @@ import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { workItemRef } from "../../lib/labels.ts";
+import { factoryRepository, noticeDocUrl } from "../../lib/noticeDocLink.ts";
 import { describeNotice } from "../../lib/noticeView.ts";
 import { noticeWorkItemId } from "../../lib/noticeWorkItem.ts";
 import { formatAbsoluteWithRelative } from "../../lib/relativeTime.ts";
 import { systemSectionPath } from "../../lib/systemSections.ts";
 import { describeNoticeResult, releaseNotice } from "../../lib/writeNotices.ts";
+import { TargetLinkView } from "../items/detail/DetailParts.tsx";
 import { NoticeMessageText } from "./NoticeMessageText.tsx";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -58,6 +62,8 @@ const RESOLVE_CONFIG = {
  * 一覧に無い失敗へ移ると、選んだ項目が一覧に無いという行き止まりになるためである。
  * ボタンは遷移を自分で起こさず、`onOpenFailure`を呼ぶ。履歴、種類のチップ、フォーカスは、一覧を持つ画面が決める。
  * 次の操作の欄の末尾には、運用の文書のこの種類の行へのリンクを、新しいタブで開く形で出す。
+ * リポジトリは設定の`factory_repo`から読み、設定を読めない間と、形が合わないときはリンクを出さない。
+ * 設定の取得は設定のタブと共有する。`factory_repo`はめったに変わらないので、一度取得した後は、この画面からは取り直さない。
  */
 export function NoticeDetail({
   notice,
@@ -76,6 +82,14 @@ export function NoticeDetail({
   onOpenFailure: (workItemId: number) => void;
 }) {
   const description = describeNotice(notice, source);
+  const config = useQuery({
+    ...configQueryOptions(),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const procedureUrl = noticeDocUrl(
+    notice.kind,
+    factoryRepository(config.data),
+  );
   const { submit, isLocked } = useWriteMutation(RESOLVE_CONFIG);
   const locked = isLocked(notice.notice_id);
   const { guide } = description;
@@ -203,17 +217,11 @@ export function NoticeDetail({
               {guide.note}
             </p>
           )}
-          {description.procedureUrl === null ? null : (
+          {procedureUrl === null ? null : (
             <p className="mt-1 text-small">
-              <a
-                href={description.procedureUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 rounded-sm font-medium text-primary underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                運用の文書で手順を読む
-                <ExternalLink aria-hidden="true" className="size-3.5" />
-              </a>
+              <TargetLinkView
+                target={{ label: "運用の文書で手順を読む", url: procedureUrl }}
+              />
             </p>
           )}
         </div>

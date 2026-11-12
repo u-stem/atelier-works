@@ -116,7 +116,7 @@ export function CodeSpanBlock({ children }: { children: string }) {
   );
 }
 
-/** GitHubのIssueかPRへのリンク。リンクにできるURLが無ければ、番号だけを文字で出す。 */
+/** GitHubのIssueかPR、文書へのリンク。新しいタブで開く。リンクにできるURLが無ければ、名前だけを文字で出す。 */
 export function TargetLinkView({ target }: { target: TargetLink | null }) {
   if (target === null) {
     return <span className="text-subtle">-</span>;

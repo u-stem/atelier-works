@@ -60,7 +60,7 @@ Consoleの通知の詳細にある「運用の文書で手順を読む」のリ�
 | 隔離の測定が不合格になった | 測定のジョブの結果 | [不合格のときの扱い](operations/features.md#不合格のときの扱い) |
 | scheduleの失敗の検出器が止まった | Discord、Consoleの**要対応**(`schedule_detector_stale`) | [検出器が止まったとき](operations/monitoring.md#検出器が止まったとき) |
 | 自己更新が繰り返し打ち切られる | 自己更新のジョブの一覧とログ | [自己更新が繰り返し打ち切られるとき](operations/monitoring.md#自己更新が繰り返し打ち切られるとき) |
-| 自己更新の区切った呼び出しが時間切れになった | Discordのジョブ失敗(`job_failed`)と`schedule_failing` | [区切った呼び出しが時間切れになったとき](operations/monitoring.md#区切った呼び出しが時間切れになったとき) |
+| 自己更新の区切った呼び出しが時間切れになった | Discordのジョブ失敗、Consoleの**要対応**(`schedule_failing`) | [区切った呼び出しが時間切れになったとき](operations/monitoring.md#区切った呼び出しが時間切れになったとき) |
 | 保護パスの変更の反映が承認待ちで止まった | Consoleの**システム**の「反映の承認待ち」 | [保護パスの変更の反映を承認する](operations/deploy.md#保護パスの変更の反映を承認する) |
 | 反映の承認で自己更新が失敗し続ける | 自己更新のジョブのログ | [反映の承認で自己更新が失敗し続けるとき](operations/deploy.md#反映の承認で自己更新が失敗し続けるとき) |
 | ホスト側の作業が要る | Consoleの**要対応**(`host_action_required`) | [ホスト側で反映するもの](operations/deploy.md#ホスト側で反映するもの) |
