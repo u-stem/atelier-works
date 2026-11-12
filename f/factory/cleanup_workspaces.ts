@@ -111,6 +111,19 @@ async function recordBusyWorktreeNotice(
   }
 }
 
+/** 消してよいレビュー用の作業ツリーのパスを返す。 */
+export function selectReviewWorktreesToRemove(
+  _repoDir: string,
+  _worktrees: readonly Pick<WorktreeEntry, "path" | "detached">[],
+  _item: Pick<WorkItem, "owner" | "repo" | "pr_number" | "head_sha">,
+  _activeItems: readonly Pick<
+    WorkItem,
+    "kind" | "owner" | "repo" | "pr_number"
+  >[],
+): string[] {
+  return [];
+}
+
 async function removeStaleWorktreesForRepo(
   owner: string,
   repo: string,
@@ -162,6 +175,7 @@ async function removeStaleWorktreesForRepo(
           repoDir,
           item.pr_number,
           item.head_sha.slice(0, 7),
+          null,
         );
         const found = worktrees.find((entry) => entry.path === dir)?.path;
         targetDirs = found === undefined ? [] : [found];

@@ -6946,22 +6946,57 @@ describe("runGitleaksOnWorktree against a real git repository", () => {
 describe("isReviewWorktreeOf", () => {
   const REPO_DIR = "/workspaces/acme/widgets/main";
 
-  test("matches the path buildReviewWorktreeDir creates", () => {
-    const path = buildReviewWorktreeDir(REPO_DIR, 42, "abc1234");
+  test("matches a name with an 8-digit hex run id", () => {
+    const path = "/workspaces/acme/widgets/review-42-abc1234-0a1b2c3d";
     expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
       true,
     );
   });
 
+  test("matches the older path without a run id", () => {
+    const path = buildReviewWorktreeDir(REPO_DIR, 42, "abc1234", null);
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      true,
+    );
+  });
+
+  test("does not match a run id of 7 hex digits", () => {
+    const path = "/workspaces/acme/widgets/review-42-abc1234-0a1b2c3";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a run id of 9 hex digits", () => {
+    const path = "/workspaces/acme/widgets/review-42-abc1234-0a1b2c3d4";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a run id with an uppercase letter", () => {
+    const path = "/workspaces/acme/widgets/review-42-abc1234-0A1B2C3D";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a dependabot worktree", () => {
+    const path = "/workspaces/acme/widgets/dependabot-42-abc1234";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
   test("does not match a worktree of another pr", () => {
-    const path = buildReviewWorktreeDir(REPO_DIR, 421, "abc1234");
+    const path = buildReviewWorktreeDir(REPO_DIR, 421, "abc1234", "0a1b2c3d");
     expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
       false,
     );
   });
 
   test("does not match a worktree that is not detached", () => {
-    const path = buildReviewWorktreeDir(REPO_DIR, 42, "abc1234");
+    const path = buildReviewWorktreeDir(REPO_DIR, 42, "abc1234", "0a1b2c3d");
     expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: false })).toBe(
       false,
     );

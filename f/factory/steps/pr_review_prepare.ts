@@ -17,7 +17,7 @@ import {
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getPr, type PullRequest } from "../lib/github.ts";
-import { logger } from "../lib/log.ts";
+import { type Logger, logger } from "../lib/log.ts";
 import { markTransientGitHubFailure } from "../lib/pr_review_retry.ts";
 import {
   type RepoOwnerGateResult,
@@ -33,6 +33,7 @@ import {
   addDetachedWorktree,
   ensureRepo,
   fetchPrHeadRef,
+  removeWorktree,
   runCommand,
 } from "../lib/workspace.ts";
 import {
@@ -68,8 +69,17 @@ export function buildReviewWorktreeDir(
   repoDir: string,
   prNumber: number,
   sha7: string,
+  _runId: string | null,
 ): string {
   return `${repoDir.replace(/\/main$/, "")}/review-${String(prNumber)}-${sha7}`;
+}
+
+/** 実行の識別子を返す。 */
+export function reviewRunId(
+  _env: Readonly<Record<string, string | undefined>>,
+  _randomUuid: () => string = () => crypto.randomUUID(),
+): string {
+  return "00000000";
 }
 
 const SKIPPED_BASE = {
@@ -163,6 +173,10 @@ async function prepare(work_item_id: number): Promise<PrReviewPrepareResult> {
       addDetachedWorktree: async (input) => {
         await addDetachedWorktree({ run: runCommand, ghToken, ...input });
       },
+      removeWorktree: (repoDir, dir) =>
+        removeWorktree({ run: runCommand, repoDir, dir, force: true }),
+      runId: reviewRunId(process.env),
+      log: logger("pr_review_prepare"),
       setHeadSha,
       readBranchStatus: (headRef) =>
         readBranchItemStatus(
@@ -302,6 +316,11 @@ export type ReviewPrepareDeps = {
     readonly sha: string;
     readonly dir: string;
   }) => Promise<void>;
+  /** 作ったworktreeを消す。作成の後の失敗で、このstepが作ったパスだけに使う。 */
+  readonly removeWorktree: (repoDir: string, dir: string) => Promise<void>;
+  /** この実行を表す8桁の小文字の16進数。worktreeのパスに入れる。 */
+  readonly runId: string;
+  readonly log: Logger;
   readonly setHeadSha: (id: number, sha: string) => Promise<void>;
   /** 準備の関門でPRのレビューを見送るとき、作業項目を終端にして人に知らせる。 */
   readonly blockReview: (reason: string) => Promise<void>;
@@ -370,7 +389,12 @@ export async function prepareReviewWorktree(
   assertSha(prBeforeWorktree.headSha);
 
   const sha7 = prBeforeWorktree.headSha.slice(0, 7);
-  const worktreeDir = buildReviewWorktreeDir(repoDir, pr_number, sha7);
+  const worktreeDir = buildReviewWorktreeDir(
+    repoDir,
+    pr_number,
+    sha7,
+    deps.runId,
+  );
 
   await deps.addDetachedWorktree({
     repoDir,
