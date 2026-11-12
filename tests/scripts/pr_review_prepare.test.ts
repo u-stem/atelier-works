@@ -1,6 +1,5 @@
 // `pr_review_prepare.ts`が使う`pr_workflow_support.ts`の`decideReviewPrepare`と、
-// `pr_review_prepare.ts`自身の`buildReviewWorktreeDir`と`prepareReviewWorktree`のテスト。
-// `buildReviewWorktreeDir`は`cleanup_workspaces.ts`も使う。
+// `pr_review_prepare.ts`自身の`buildReviewWorktreeDir`、`reviewRunId`、`prepareReviewWorktree`のテスト。
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {

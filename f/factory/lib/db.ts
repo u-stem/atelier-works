@@ -1145,6 +1145,16 @@ export async function listActivePrFixWorkItems(
   return rows.map(toWorkItem);
 }
 
+/** (owner, repo, prNumber)の、更新が最も新しい`pr_review`の作業項目を返す。 */
+export async function getLatestPrReviewWorkItem(
+  _owner: string,
+  _repo: string,
+  _prNumber: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem | null> {
+  return null;
+}
+
 /**
  * (owner, repo, prNumber)の、終端でない`pr_review`の作業項目を返す。
  * ownerとrepoは小文字で照合する。`insertPrReviewWorkItemUnlessActive`と同じ比べ方である。

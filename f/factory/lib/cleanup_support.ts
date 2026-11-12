@@ -248,11 +248,11 @@ export function unresolvedHoldersNoticeMessage(
 export function busyWorktreeNoticeMessage(input: {
   readonly owner: string;
   readonly repo: string;
-  readonly workItemId: number;
+  readonly cleanupWorkItemId: number;
   readonly worktreeDir: string;
   readonly reason: string;
 }): string {
-  const target = `${input.owner}/${input.repo}の作業項目${String(input.workItemId)}のworktree(${input.worktreeDir})`;
+  const target = `${input.owner}/${input.repo}の作業項目${String(input.cleanupWorkItemId)}のworktree(${input.worktreeDir})`;
   if (isOwnershipRestoreFailure(input.reason)) {
     return `${target}は、検査用のユーザーからrootに戻せないため削除しませんでした(${input.reason})。運用の文書の「検査の枠の記録を片付ける」の手順で片付けると、次の掃除で削除されます。`;
   }
