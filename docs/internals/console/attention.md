@@ -76,7 +76,7 @@ Consoleの要対応の画面(承認、失敗と再実行、通知)の仕様を�
 対象と版は現れた位置で切り出す。
 先頭の対象と同じ文字列で始まる別の対象(`o/r#1`を切っても`o/r#12`)や、2番目以降の対象と版は残る。
 版の直前が文頭から始まる「ラベル: 」で、直後が「。」か本文の終わりのときは、ラベルとコロンと「。」も一緒に切り出す。
-ラベルの長さの上限は、同じファイルの`LABEL_BEFORE_SHA`が定め、[`keeps a label longer than twelve code points`](../../../console/src/lib/inboxView.test.ts)で確かめる。
+ラベルの長さの上限は、同じファイルの正規表現`LABEL_BEFORE_SHA`の量指定子が定め、[`keeps a label longer than twelve code points`](../../../console/src/lib/inboxView.test.ts)で確かめる。
 絵文字などはコードポイントで数える。
 区切りは、半角か全角のコロンに空白が0個以上続く形とする。
 切り出す範囲が対象の範囲と重なるときは、1つにまとめて切り出す。
