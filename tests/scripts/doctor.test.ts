@@ -24,6 +24,11 @@ const BASH = Bun.which("bash") ?? "bash";
 // 伸びてbunの既定の5秒を超えることがあるため、このファイルだけ30秒にする。
 setDefaultTimeout(30_000);
 
+// 偽のWindmillの待ち受け先。doctor.shは127.0.0.1へ接続する。ワイルドカード(0.0.0.0)で待ち受けると、
+// 並列の負荷の下で、接続が偽のサーバーに届かない(接続は成り立つが応答が無い)ことがあるため、
+// 接続先と同じ127.0.0.1に固定する。
+const LOOPBACK = "127.0.0.1";
+
 let dir: string;
 
 beforeEach(() => {
@@ -197,6 +202,7 @@ describe("doctor.sh custom tag check", () => {
   function startWindmill(tags: string[]): Windmill {
     const calls: string[] = [];
     const server = Bun.serve({
+      hostname: LOOPBACK,
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
@@ -230,6 +236,7 @@ describe("doctor.sh custom tag check", () => {
   function startDecoy(): Windmill {
     const calls: string[] = [];
     const server = Bun.serve({
+      hostname: LOOPBACK,
       port: 0,
       fetch(request) {
         calls.push(`${request.method} ${new URL(request.url).pathname}`);
@@ -537,6 +544,7 @@ describe("doctor.sh owners that the collection cannot handle", () => {
   function startWindmill(config: unknown, status = 200): Windmill {
     const paths: string[] = [];
     const server = Bun.serve({
+      hostname: LOOPBACK,
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
