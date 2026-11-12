@@ -626,6 +626,13 @@ async function removeDependabotWorktreesSafe(log: Logger): Promise<number> {
 // レビュー用の作業ツリー
 // ---------------------------------------------------------------------------
 
+/** `lstat`などが、パスが無い(`ENOENT`)ことで失敗したかを返す。 */
+function isNoSuchFile(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err
+    ? err.code === "ENOENT"
+    : false;
+}
+
 export type ReviewWorktreeTarget = Pick<WorktreeEntry, "path" | "lock">;
 
 export type ReviewWorktreeRemovalDeps = {
@@ -656,7 +663,7 @@ export type ReviewWorktreeRemovalInput = {
  * 1. そのPRに終端でない`pr_review`があれば、何も消さず、使用中の確認もしない。
  * 2. 無ければ、ディレクトリの更新が`cutoff`より古いものだけを対象にする。
  *    detachedのcheckoutの後、生成のClaudeは`Read`・`Glob`・`Grep`だけで書き込まないので、更新の時刻は作成の時刻に近い。
- *    読めないものは消さずに警告にする。
+ *    読めないものは消さずに警告にする。ただし、ディレクトリが無く(`ENOENT`)、理由が`initializing`のロックだけが残る登録は、期限切れとみなして消す。
  * 3. ロックの理由が`initializing`でなければ、gitがロックしたものは消さずに警告にする。
  * 4. 使用中のものを除き、消す直前に1を1回だけ読み直す。
  * 確認が失敗したときは、原因が分かる警告を1件残し、このPRの残りは扱わない。
@@ -691,26 +698,33 @@ export async function removeReviewWorktrees(
   }[] = [];
   for (const target of input.targets) {
     const dir = target.path;
+    const removal = reviewWorktreeRemoval(target);
+    // ディレクトリが無くて登録だけが残ったものは、更新の時刻を読めない。
+    // ロックの無い登録は後の`git worktree prune`が片付けるが、`initializing`のロックは`prune`が消さないので、
+    // 期限切れとみなして消す。使うプロセスは無いので、使用中の確認は行わない。
+    let missing = false;
     try {
       if ((await deps.modifiedAtMs(dir)) >= input.cutoff.getTime()) continue;
     } catch (err) {
-      deps.warn(
-        "cleanup: failed to read the modification time of a review worktree",
-        {
-          repo_dir: repoDir,
-          worktree_dir: dir,
-          error: describe(err),
-        },
-      );
-      continue;
+      missing = isNoSuchFile(err) && removal?.forceLocked === true;
+      if (!missing) {
+        deps.warn(
+          "cleanup: failed to read the modification time of a review worktree",
+          { repo_dir: repoDir, worktree_dir: dir, error: describe(err) },
+        );
+        continue;
+      }
     }
-    const removal = reviewWorktreeRemoval(target);
     if (removal === null) {
       deps.warn("cleanup: skipping a review worktree locked by git", {
         repo_dir: repoDir,
         worktree_dir: dir,
         reason: target.lock?.reason ?? null,
       });
+      continue;
+    }
+    if (missing) {
+      free.push({ dir, removal });
       continue;
     }
     try {
