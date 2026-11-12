@@ -54,6 +54,7 @@ jobs:
         run: bun audit --audit-level=high
 
       - name: Audit console dependencies
-        # ルートの監査が失敗しても、Consoleの指摘も出す。
-        if: ${{ !cancelled() }}
+        # ルートの監査が失敗しても、Consoleの指摘も出す。取り消したときは動かさない。
+        # `!`で否定する式は、YAMLのタグを拒む契約テストに当たるので、成功と失敗を並べて書く。
+        if: ${{ success() || failure() }}
         run: bun audit --cwd console --audit-level=high
