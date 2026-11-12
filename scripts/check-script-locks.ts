@@ -169,10 +169,14 @@ function checkDeclared(
   return violations;
 }
 
+/** workerのscriptが宣言してよい依存の名前(未実装)。 */
+export const WORKER_DEPENDENCIES: ReadonlySet<string> = new Set<string>();
+
 /** 1つの`.script.lock`の中身を、ルートの表と照らして違反の一覧を返す。 */
 export function checkScriptLock(
   text: string,
   root: RootIndex,
+  _workerDependencies: ReadonlySet<string> = WORKER_DEPENDENCIES,
 ): ScriptLockViolation[] {
   const parts = text.split(SEPARATOR);
   if (parts.length !== 2) {
