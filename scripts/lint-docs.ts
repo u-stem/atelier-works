@@ -6,7 +6,8 @@
 //   対象は他の検査と同じ文書(`isOneSentencePerLineTarget`)で、`.claude/`の自作のスキルの文書も入る。
 // - 文書の間のリンクとアンカー(`scripts/lint-doc-links.ts`)
 // - 残るリスクの表と、各節からの行へのリンク(`scripts/lint-risk-register.ts`)。
-//   `--links-only`では走らせない。
+//   表を通さない箇所は、許可リスト(`scripts/lint-risk-register-allowlist.txt`)と照らす。
+//   リンクの検査と、ファイルの一覧と構文木を共有する。`--links-only`では走らせない。
 // - markdownlint(`.markdownlint-cli2.jsonc`)
 // - textlint(`.textlintrc.json`)
 // - 生成範囲とmiseタスクの表の確認(`scripts/docs-gen.ts --check`)
@@ -50,7 +51,8 @@ import {
   findSentenceViolationLines,
   formatSentenceViolation,
 } from "./lint-one-sentence-per-line.ts";
-import { lintRiskRegister } from "./lint-risk-register.ts";
+import { ALLOWLIST_PATH, lintRiskRegister } from "./lint-risk-register.ts";
+import { createTreeReader, type ReadTree } from "./markdown-tree.ts";
 
 /** 自作のスキル。これ以外の`.claude/skills/`は`wmill`の管理スキルか取り込んだもの。 */
 const OWN_SKILL_PATTERN =
@@ -234,8 +236,9 @@ export function listDocCandidates(root: string): string[] {
 export function lintAllDocLinks(
   files: readonly string[],
   readDoc: ReadDoc,
+  readTree: ReadTree = createTreeReader(readDoc),
 ): string[] {
-  const resolver = createLinkResolver(files, readDoc);
+  const resolver = createLinkResolver(files, readDoc, readTree);
   return [...new Set(files)]
     .filter(isTargetDoc)
     .sort()
@@ -486,15 +489,28 @@ export async function main(
 ): Promise<number> {
   const { linksOnly, paths } = parseArgs(args);
   const readDoc = createDocReader(root);
+  // リンクの検査と残るリスクの表の検査は、ファイルの一覧と構文木を共有する。
+  const readTree = createTreeReader(readDoc);
+  let repoFiles: readonly string[] | undefined;
   // 一覧の取得の失敗も、リンクの検査の1件の問題として扱う。ほかの検査の結果を出すためである。
-  const linkProblems = guardCheck("document links", () =>
-    lintAllDocLinks(listRepoFiles(root), readDoc),
-  );
+  const linkProblems = guardCheck("document links", () => {
+    const files = listRepoFiles(root);
+    repoFiles = files;
+    return lintAllDocLinks(files, readDoc, readTree);
+  });
   // 残るリスクの表は、リンクの検査と同じく、追跡している対象の全文書を見る。
-  const riskProblems = () =>
-    guardCheck("risk register", () =>
-      lintRiskRegister(listRepoFiles(root).filter(isTargetDoc).sort(), readDoc),
-    );
+  // 一覧を取れなかったときは、その失敗をリンクの検査がすでに返している。
+  const riskProblems = (): string[] => {
+    const files = repoFiles;
+    if (files === undefined) return [];
+    return guardCheck("risk register", () => [
+      ...lintRiskRegister(
+        files.filter(isTargetDoc).sort(),
+        readTree,
+        readDoc(ALLOWLIST_PATH) ?? "",
+      ).problems,
+    ]);
+  };
 
   if (linksOnly) {
     for (const problem of linkProblems) report(problem);

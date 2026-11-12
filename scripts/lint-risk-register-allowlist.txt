@@ -1,0 +1,124 @@
+# 残るリスクの表を通さない箇所の許可リスト。
+# scripts/lint-risk-register.tsが読み、見つけた箇所とちょうど一致することを確かめる。
+# 1行に1つの箇所を「パス ハッシュ 抜粋」の形で書く。
+# ハッシュは箇所の本文から作るので、本文を変えたら行を書き直す。抜粋は読む人のためで、照合には使わない。
+# 載せてよいのは、受け入れたリスクではない箇所だけである(docs/writing-guidelines.mdの「残るリスクを書く」)。
+
+.claude/skills/factory-implementation/SKILL.md a297c3b6261e392c PR本文は、フロー側が.github/PULL_REQUEST_TEMPLATE
+AGENTS.md 1da5b2ab208f8724 受け入れたセキュリティのリスクは、PR本文の「残るリスク」に理由を1文で書く。 
+docs/architecture.md dc7e5a91e0da599e poll_dependabotが10分ごとに、dependabotが開いた依存の
+docs/coding-guidelines.md 0fa9cd8e04d2c28c ファイルを問わず、禁止、止める基準、確認の省略の範囲を緩める文言を足すか変えた。
+docs/internals/audit.md 9aa4fc2412f525fe 工程5の監査が、いつ起動し、何を集め、何を検査して保存するかを定める仕様である。
+docs/internals/check-sandbox.md 7f46256d96a7ccc6 前提の確かめは、findで/と/dev/shmからたどり、誰でも書き込めるもの(
+docs/internals/check-sandbox.md cd9984062d344779 枠を持たない走査のランダムな名前(scan-<uuid>.linksとscan-
+docs/internals/check-sandbox.md e3495ffe092fc0b9 ホストのカーネルでfs.protected_hardlinksとfs.prote
+docs/internals/check-sandbox.md ee54a77d446b041a Docker Engineがuser namespaceの再マップ(userns
+docs/internals/check-sandbox.md 4e57a4cfd91b8a09 allowed_check_commandsとcheck_commands_by
+docs/internals/check-sandbox.md 08da63317e915347 次の変更の前に、枠の記録が残っていないことを確かめる。 枠の数(FACTORY_
+docs/internals/check-sandbox.md cd2606372d472a3d 検査を枠のユーザーで動かす前にrootが作った、誰でも書けるworktreeやフ
+docs/internals/ci-fix.md 7b27554d348143e8 mergeShaを本物のPRのmerge commitに結び付けること。 適用の
+docs/internals/ci-fix.md 84772b77063798d6 再レビューでCI回の差分を重点的に見る固定文(競合回用の固定文も同じ)は、回のp
+docs/internals/console.md eeda07798a2d129b Consoleのアプリ(console/)の構成と、成果物を配信する仕組みを書く
+docs/internals/console.md 683cc89ed998dabd data-themeとdata-theme-preferenceは、描画の前にp
+docs/internals/console.md dd7b9924b560fb68 この方針の根拠と残るリスクは、Consoleの安全策の内部仕様の「取り込み時点の
+docs/internals/console.md fecd644ff19407d2 承認画面のファイル(DesignReview.tsx)自体も保護パスにある。 全
+docs/internals/console.md c5220b4897f0aa4f 設計タブの一覧は、work_item_detailのdesign_attempt
+docs/internals/console.md c632a0920e7e9691 プレビューは、生のHTMLとリンク参照定義を描かず、見えない文字を置き換え、長さ
+docs/internals/console.md 9d18f47bf815b2c4 履歴とスケジュールの一覧は、自動で取り直さない。 Console用workerの
+docs/internals/console/security.md 16959bce02d309bd 過剰に伏せることは許容する。 伏せた箇所があるときは、戻りのmaskedで画面に
+docs/internals/console/security.md 7854155a93bb2964 ジョブを取り消すconsole_job_cancelは、tagconsoleで動
+docs/internals/console/security.md 5b75d36008f68ce3 図のXMLは、マスクを通さない。 残るリスクはdraw.ioの図の描画に書く。
+docs/internals/console/security.md 1414cd28ac831051 設計書のプレビューの保護と残るリスクは、「設計書のプレビュー」の節に書く。
+docs/internals/dependabot.md e4370844d28ca258 dependabotが開いた依存の更新PRを、Factoryがどう選び、どう評価
+docs/internals/dependabot.md 569fb9b12dc5c10e 古典的なブランチ保護の必須チェックは読まない。 読むには管理の権限が要り、404
+docs/internals/dependabot.md 8a9905b0a10a0af3 次の点は、実機でしか確かめられない。 確かめる順は3段階である。 最初に、フロー
+docs/internals/dependabot.md da8e5a123185a269 他のリポジトリを処理する条件を外す前に、次を決める。 これを決めるまで、他のリポ
+docs/internals/dependabot.md 79f417915c8fdce7 ルートとconsole/で別々のパッケージが上がるグループは、人に回る(グループ
+docs/internals/dependabot.md bfbd16da9a3c104e 変更履歴、マニフェストの差分、ロックファイルの要約が切り詰められたときは、単独の
+docs/internals/deploy-approvals.md e358c4c119106c3b 運用の手順は運用の「保護パスの変更の反映を承認する」にある。 安全策と残るリスク
+docs/internals/deploy-approvals.md cc88e4c02794713b 要対応の通知は、止めるたびに残し、重複はしない。 書き込みに失敗しても、次の回が
+docs/internals/design.md 98d39738e5d1d4d5 承認済みの要件定義から設計書を作る処理を定める仕様である。 設計フロー、設計書の
+docs/internals/freezes.md cbac47026f10948a 安全策と残るリスクはこの文書の「凍結とdeployの保留」に書く。
+docs/internals/freezes.md 89fb2c5e793887eb フックの拒否は、セキュリティの「Claude Codeの拒否ルール」にある、ベス
+docs/internals/freezes.md 74b3245287ea4f13 Consoleから凍結とdeployの保留を置ける。 置く道と守りは、保留と凍結
+docs/internals/github-collect.md 5ced86ea4f562886 collect_githubがGitHubから何を読み、どう判定し、何をDBに書
+docs/internals/github-collect.md 3b7d458c676bd386 owner_mismatchは、設定にIDがあるかによらずstaleとして知らせ
+docs/internals/github-collect.md d5d3d6117bb98866 gh search、--search、argvのghとsearchの並びも、静的
+docs/internals/holds.md 123dd5b35b17c2e0 安全策と残るリスクはこの文書の「保留」に書く。
+docs/internals/holds.md 9b98c0759e3e1460 コメントの投稿などの書き込みのメソッドも、保留が有効な間は止まる。 安全側に倒す
+docs/internals/holds.md a812c4dbc1b6219e 迂回のための環境変数は設けない。 残るリスクはこの文書の「保留」に書く。
+docs/internals/holds.md 90d7ba3159a869c6 この2つの規則は、次の分類を誤検知として受け入れる。 語を足す文脈の後ろの、集合
+docs/internals/holds.md c5a448a03775d5c3 検出するのは次の参照である。 factory.holdsの名前(コメントや引用符
+docs/internals/holds.md d8f74da085e18b78 wmill.datatable()の接続の既定のsearch_pathは"$us
+docs/internals/holds.md 1d5a01518cfe550a Consoleの解除は、f/でreleaseHoldを読み込める唯一のファイルで
+docs/internals/holds.md 4a160d9d9ca84d66 mise run hold:list -- '<文字列>'で余分な引数を渡しても
+docs/internals/holds.md 4d11f3292816e59c CLIの接続先のデータベースは、scripts/hold.tsの定数だけに書く。
+docs/internals/holds.md 1f91eb0a0a6f86c0 止め方が、凍結とdeployの保留(変数)と、保留(表)に分かれる。 範囲が違う
+docs/internals/host-apply.md 2d93c0c3ce0fe1ae 親のディレクトリの鎖とACLの扱いは、置き場の残るリスクにある。
+docs/internals/host-apply.md cff9ee08e1363b40 lockは消さない常設のファイルで、人も移さない・消さない(復旧できないunsa
+docs/internals/host-apply.md 00929355fdf00910 取得の引数は、protocol.allowをneverにしたうえで、protoc
+docs/internals/host-apply.md 7368b393dab9f454 git fetchがGIT_DIRと作業ディレクトリの組で動くことは、実機で確か
+docs/internals/host-apply.md c4f378394c4ee904 反映する側は、docker composeを、必ず-f infra/docker
+docs/internals/host-apply.md 77bbabf56d377ef8 反映に使うチェックアウトのgitには、GIT_CONFIG_GLOBAL=/de
+docs/internals/host-apply.md 0330611295de92fa 設計はmiseコマンドを使わないと定めるが、scripts/doctor.shは
+docs/internals/host-apply.md e464398c04804638 composeとYAMLの重複キーの解釈の差と、package.jsonの重複キ
+docs/internals/host-apply.md b247f26a7be96438 .github/workflows/で作られたcheck-runが付くcheck
+docs/internals/host-apply.md 5e8a5b92ca7f4670 反映に使うチェックアウトのgit worktree addとgit checko
+docs/internals/host-apply.md adf3b78ba13e0f4e tree_forbiddenの通知は、原因のパスと次の操作を載せる。 日本語のフ
+docs/internals/host-apply.md da9b3c29d1a57073 設定ファイルの読み取りの違い。Bun.TOML.parseは、重複したキーとテー
+docs/internals/host-apply.md ab0fd3ebbb81dd16 docker compose up --dry-runの出力のうち、Creati
+docs/internals/host-apply.md e48a5069c7b7c08c 掃除は使われていない旧版を次に成功した時点で消すので、ホストの実行役の巻き戻しと
+docs/internals/implement.md 671adb9ab749164a 工程3の実装フロー(f/factory/implement)の内部の挙動、設定値
+docs/internals/investigate.md c3646b95fd941508 調査(進め方investigate)のClaudeを隔離する仕組みと、調査の入口
+docs/internals/investigate.md 5bef721f0044ce62 合格は、ツールを通るRead・Glob・Grepの読み出しが、3つの置き場で--
+docs/internals/investigate.md 215d8583d835c4e4 --toolsによるツールの制限。 Read、Glob、Grep以外を使えなくす
+docs/internals/investigate.md f6543b43c74649f4 --restrictedによる作業ディレクトリへの閉じ込め。
+docs/internals/investigate.md 578b9f329f902104 denyの規則。 効くかは、まだ測っていない。
+docs/internals/investigate.md 24d80794c999a54c この合格が意味するのは、合格の意味に書いたとおりである。 測っていないものは、残
+docs/internals/investigate.md 31f49858fd38adf3 この合格を、現在の関門が受ける。 版1の記録と同じく、測っていないものは、残るリ
+docs/internals/investigate.md 3290e1c6ebae9393 公開の関門checkIsolationProofと、調査のClaudeを起動する
+docs/internals/investigate.md 75a1b6b3a4a9bb99 置き場をworker imageが作ること、置き場の検査、git worktre
+docs/internals/investigate.md b96a539bc2b0ea6f 生成のstepの結果には、生の構造化出力を残さない。 失敗の詳細も、結果と注記の
+docs/internals/investigate.md edaac492a54f9870 依頼文の@が、プロンプトの展開で取り込みにならないことは、実装でなく実機の確認に
+docs/internals/notifications.md d96a06c4a226dbfd 投稿するモードに戻したあと、1件も投稿しないままgatedへ戻したときは、前の期
+docs/internals/notifications.md cdff7acd217c14ce レビューの記録は、終端の作業項目と一緒にretention_work_items
+docs/internals/notifications.md 525e8905b4537ef4 設定を切り替えた瞬間は、日次サマリーの数字とモードがずれる。 サマリーは、実行時
+docs/internals/notifications.md dce7a32b87482420 gatedを意図して続けると、人がnoticeを解決しても、翌日の実行で出直す。
+docs/internals/notifications.md fd219ac737490b0a self_updateは、wmill sync pushを先に、wmill da
+docs/internals/pr-workflow.md 2931f272dd342c42 PRのレビュー(f/factory/pr_review)とPRの修正(f/fac
+docs/internals/pr-workflow.md f869be0900d1a588 正当な文字も置き換わる。 絵文字を結合するZWJ、絵文字の異体字選択子(U+FE
+docs/internals/pr-workflow.md 35d302c1b9c8e27e 修正の終わりでは、形の合わないスレッドが1つあるだけで一覧が空になり、全提案のス
+docs/internals/pr-workflow.md b4fffc7f0975676e 生成のプロンプトに載るスレッドの上限は、100件から1000件に上がる。 読み切
+docs/internals/pr-workflow.md dd109e2643865ce4 この3つのscript定義(.script.yaml)も対象である。 lockは
+docs/internals/pr-workflow.md dd018555bed9cd7b wmill.yamlも止める。 codebasesのcustomBundlerは
+docs/internals/work-items.md c2e6763a020493a6 self_updateは、f/を反映した後にmigrationを流す。 列を足す
+docs/operations.md 2e6c84cc05dbcec8 書き込みの直前の照合に落ちた処理は、書かずに止める。 dependabotの終了
+docs/operations.md d908a6566e1509f4 照合しない処理も残る。 同じ項目を、セキュリティの残るリスクにも挙げている。
+docs/operations.md 45a4e1fe8db69465 残りは、poll_issues.tsの照合が猶予の後に失敗へ移す。 残りの警告は
+docs/operations.md 7deaa9cb2b83bda7 残るリスクは、dry-runが作り直しを示さない変更を見逃すことである。 イメー
+docs/operations.md f4052e50b25e7f16 止められてもよい緊急の作業で、実行中の仕事が止まることを受け入れる。
+docs/operations.md 19e91e23aa519a47 反映の順は次のとおりである。 マージの後、self_updateがscriptと
+docs/operations.md 26b9684f2d2c63da マージする条件と残るリスクはdependabotの更新の内部仕様に、選び方と状態
+docs/operations.md d5071f1f518de3f2 一覧の読み取りが失敗すると、失敗の記録の段list_open_pull_requ
+docs/operations.md 952b9b9961d8b8c3 この表が示すのは、環境変数の有無だけである。 CLAUDE_CONFIG_DIR
+docs/operations.md 4286cc6bc894bb18 2つの数は、大きいほうを取る。 足さない。 ラウンドの数はblockedで終えた
+docs/operations.md 6abd62c11fda4e2e doneで終えた後にretry_work_itemで再実行し、検査の再実行が起き
+docs/operations.md ca7ac6a54c13c39b 許可はmise run doctorの「カスタムtag」で確かめる。 docto
+docs/operations.md 5ecb76fc62853205 migrationのように、反映を待たせたい作業の間は、deployの保留を置く
+docs/operations.md af9ab1d7d9eeee9c planがpending_approvalを返す変更は、人がapproveで承認
+docs/operations.md 7e0cb9cb1ac97080 解除は、同じ画面の一覧の「解除」で行う。 期限が来ても終わる。 仕様と残るリスク
+docs/operations.md 8178327d617abd2a mise run freeze:resetで変数を空にした後も、Consoleで
+docs/operations.md fc7e6fa96b8e7f16 Factoryが暴走したとき、1つの操作でFactory全体を止める。 止めた状
+docs/security.md 1ef1aeec6575e88b Software Factoryの信頼境界、秘密値の扱い、資格情報の取得手順、フ
+docs/security.md 4a2b9cb7cdea5c95 stateやdeployed_shaを書き換えても、通知より新しい反映の成功の記
+docs/security.md f08357de85eec66d 前段でTLSを終端するときは、プロキシがHostをポートを含めて保つ(nginx
+docs/security.md a99c79848744c178 旧Consoleへの規則は、過去のDiscordの通知、Issueのコメント、P
+docs/security.md c144b27e1d6468d2 検証用サーバー(scripts/console-branch-server.ts
+docs/security.md 2ce56f946807464b 組織の所有者での次の4つは、実機で確かめていない。 所有者が個人で、確かめる手段
+docs/security.md 9b0ce5d88aee2a99 残ったプロセスの見つけ方と、打ち切りが子を止めるかの確かめ方は運用の「自己更新の
+docs/security.md 575d62f58d2df356 マージと反映の判定が追わない形。 残るリスクは「保留」に書く。
+docs/security.md c0b79dc29150dca8 受け入れた残るリスクは、領域ごとに残るリスクの表へまとめ、この文書とdocs/i
+docs/security.md d04aa78e1c078c9a 各フローの安全策は、フローごとの内部仕様の文書にある。 受け入れた残るリスクは、
+docs/writing-guidelines.md a7e6db8eb874344f 受け入れた残るリスクは、docs/security-risks.mdの表に、1つ
+docs/writing-guidelines.md babcfcceea352f6e 表の2列目には、リスクと、受け入れる理由を書く。 受け入れたリスクに結び付く未確
+docs/writing-guidelines.md 37d3d4796f81291c 受け入れたリスクに結び付かない未確認の前提と後続の作業は、表に置かず、その節に書
