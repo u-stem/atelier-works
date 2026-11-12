@@ -8,6 +8,7 @@
 // bun.lockの部分だけを照らすと、宣言はあるのに項目の無いlockを通してしまうため。
 // どちらの部分も、Windmillが書く欄だけを許す。
 // `trustedDependencies`や`overrides`のように、照合の外で取得やinstallの動きを変える欄を混ぜさせないため。
+// どちらの部分も、同じオブジェクトに同じキーがあれば、値を照らす前に止める。
 // 使い方: bun run scripts/check-script-locks.ts [path](既定はbun.lock)
 // 違反を`path: key: reason`の形で出力して終了コード1、無ければ0。
 
@@ -106,9 +107,158 @@ export type DuplicateKey = {
   readonly key: string;
 };
 
-/** JSONCの本文から、重複したキーを返す(未実装)。 */
-export function findDuplicateKeys(_text: string): DuplicateKey[] {
-  return [];
+type Token =
+  | { readonly kind: "punct"; readonly value: string }
+  | { readonly kind: "string"; readonly raw: string }
+  | { readonly kind: "literal" };
+
+/** 形の読めない本文で、走査を止めるための例外。 */
+class MalformedJsonc extends Error {}
+
+/**
+ * JSONCの本文を字句に分ける。
+ * 空白、行のコメント(`//`)、範囲のコメント(`/* *\/`)は読み飛ばす。
+ * 文字列は、`\`の後の1文字を含めて読み、閉じの`"`までを1つの字句にする。
+ * 数、`true`、`false`、`null`は、区切りの文字までを1つの字句にする。
+ */
+function tokenize(text: string): Token[] {
+  const tokens: Token[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === undefined) break;
+    if (/\s/.test(char)) {
+      index += 1;
+    } else if (text.startsWith("//", index)) {
+      const end = text.indexOf("\n", index);
+      index = end === -1 ? text.length : end + 1;
+    } else if (text.startsWith("/*", index)) {
+      const end = text.indexOf("*/", index + 2);
+      if (end === -1) throw new MalformedJsonc();
+      index = end + 2;
+    } else if ("{}[]:,".includes(char)) {
+      tokens.push({ kind: "punct", value: char });
+      index += 1;
+    } else if (char === '"') {
+      let end = index + 1;
+      while (end < text.length && text[end] !== '"') {
+        end += text[end] === "\\" ? 2 : 1;
+      }
+      if (end >= text.length) throw new MalformedJsonc();
+      tokens.push({ kind: "string", raw: text.slice(index, end + 1) });
+      index = end + 1;
+    } else {
+      let end = index;
+      while (end < text.length && !/[\s{}[\]:,"/]/.test(text[end] ?? "")) {
+        end += 1;
+      }
+      if (end === index) throw new MalformedJsonc();
+      tokens.push({ kind: "literal" });
+      index = end;
+    }
+  }
+  return tokens;
+}
+
+/** 字句の文字列を、JSONと同じ規則でエスケープを解いた値にする。`"packages"`は`packages`と同じキーになる。 */
+function decodeString(raw: string): string {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (typeof value === "string") return value;
+  } catch {
+    // 解けないエスケープは、形の読めない本文として扱う。
+  }
+  throw new MalformedJsonc();
+}
+
+/**
+ * JSONCの本文から、同じオブジェクトに2回現れたキーを、どの深さでも返す。
+ * `Bun.JSONC.parse`は後の値を採り、`bun install`は前の値を採るので、重複を読み分けずに照合すると、
+ * 検査が見る値とinstallが使う値が食い違う。そのため、値を読む前に重複を探す。
+ * 配列の中のオブジェクトの位置は、添字を文字列にして表す。末尾のカンマは許す。
+ * 形の読めない本文では、そこまでに見つけた重複だけを返す。形の誤りは、後の解析が違反にする。
+ */
+export function findDuplicateKeys(text: string): DuplicateKey[] {
+  const duplicates: DuplicateKey[] = [];
+  let tokens: Token[];
+  try {
+    tokens = tokenize(text);
+  } catch {
+    return duplicates;
+  }
+  let position = 0;
+  const next = (): Token => {
+    const token = tokens[position];
+    if (token === undefined) throw new MalformedJsonc();
+    position += 1;
+    return token;
+  };
+  const peekPunct = (value: string): boolean => {
+    const token = tokens[position];
+    return token?.kind === "punct" && token.value === value;
+  };
+  const expectPunct = (value: string): void => {
+    const token = next();
+    if (token.kind !== "punct" || token.value !== value) {
+      throw new MalformedJsonc();
+    }
+  };
+
+  const readValue = (path: readonly string[]): void => {
+    const token = next();
+    if (token.kind !== "punct") return;
+    if (token.value === "{") readObject(path);
+    else if (token.value === "[") readArray(path);
+    else throw new MalformedJsonc();
+  };
+  const readObject = (path: readonly string[]): void => {
+    const keys = new Set<string>();
+    while (!peekPunct("}")) {
+      const token = next();
+      if (token.kind !== "string") throw new MalformedJsonc();
+      const key = decodeString(token.raw);
+      if (keys.has(key)) duplicates.push({ path, key });
+      keys.add(key);
+      expectPunct(":");
+      readValue([...path, key]);
+      if (!peekPunct(",")) break;
+      expectPunct(",");
+    }
+    expectPunct("}");
+  };
+  const readArray = (path: readonly string[]): void => {
+    let item = 0;
+    while (!peekPunct("]")) {
+      readValue([...path, String(item)]);
+      item += 1;
+      if (!peekPunct(",")) break;
+      expectPunct(",");
+    }
+    expectPunct("]");
+  };
+
+  try {
+    readValue([]);
+  } catch {
+    // 形の読めない本文は、そこまでに見つけた重複だけを返す。
+  }
+  return duplicates;
+}
+
+/** 重複したキーを、どの部分のどのキーかが分かる違反にする。 */
+function duplicateViolations(
+  part: string,
+  text: string,
+): ScriptLockViolation[] {
+  return findDuplicateKeys(text).map(({ path, key }) => ({
+    key: part,
+    reason:
+      path.length === 0
+        ? `duplicate key "${key}" at the top level`
+        : `duplicate key "${key}" in ${path
+            .map((segment) => (segment === "" ? '""' : segment))
+            .join(".")}`,
+  }));
 }
 
 function parseJsonc(text: string): unknown {
@@ -321,6 +471,14 @@ export function checkScriptLock(
     return [{ key: "<root>", reason: "lock has no single //bun.lock line" }];
   }
   const [front = "", back = ""] = parts;
+  // 重複したキーがあれば、`parseJsonc`の値は`bun install`が使う値と食い違いうるので、値を照らさずに止める。
+  const duplicates = [
+    ...duplicateViolations("manifest", front),
+    ...(back.trim() === EMPTY_LOCK
+      ? []
+      : duplicateViolations("bun.lock", back)),
+  ];
+  if (duplicates.length > 0) return duplicates;
   const manifest = parseJsonc(front);
   if (!isRecord(manifest) || !isRecord(manifest.dependencies)) {
     return [{ key: "dependencies", reason: "dependencies is malformed" }];

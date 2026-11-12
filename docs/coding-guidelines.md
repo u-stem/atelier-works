@@ -281,6 +281,8 @@ workerのscriptに依存を足すときは、ルートの`package.json`にも同
 workerのscriptが宣言してよい依存は、`scripts/check-script-locks.ts`の`WORKER_DEPENDENCIES`に限る。
 今の一覧は`windmill-client`だけで、一覧に足すかどうかは人が判断する。
 `.script.lock`は、Windmillが書く欄だけを持ち、`trustedDependencies`や`overrides`のような欄を持つと止まる。
+同じオブジェクトに同じキーを2回書いたlockも止まる。
+検査の解析は後の値を採り、`bun install`は前の値を採るので、照合した値とinstallの使う値が食い違うためである。
 CIの`bun audit`(`.github/workflows/audit.yml`)は、`main`に対する定期と手動の実行だけで、PRでは動かない。
 PRでは、この`lint`の検査がworkerの依存をルートにそろえる。
 
