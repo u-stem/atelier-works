@@ -1,0 +1,51 @@
+# dependabotの版の更新の設定。セキュリティ更新は、リポジトリの設定で有効にする。
+# 版の更新のPRも、セキュリティ更新のPRと同じく、Factoryのdependabotのフローが同じ関門で扱う。
+# 対象外にする依存と、その理由は、docs/internals/dependabot.mdの「dependabotの設定」にある。
+# `ignore`はセキュリティ更新にも効く。対象外にした依存の指摘は、定期の監査(.github/workflows/audit.yml)が拾う。
+version: 2
+updates:
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 3
+    # 公開から7日たつまで、版の更新のPRを開かない。自動マージの関門の公開の日数と同じにする。
+    cooldown:
+      default-days: 7
+    ignore:
+      # workerのscriptが読む。全scriptの`.script.lock`と一緒に上げる。
+      - dependency-name: "windmill-client"
+      # `mise.toml`のbunの版にそろえる。
+      - dependency-name: "bun-types"
+      # メジャー版の更新は、自動マージの関門が人に回すので、PRを開かない。
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "bun"
+    directory: "/console"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: "bun-types"
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # ワークフローは保護パスなので、このPRは自動マージの関門が人に回す。
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7

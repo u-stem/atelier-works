@@ -23,6 +23,39 @@ dependabotが開いた依存の更新PRを、Factoryがどう選び、どう評�
 終了のステップは、同じ場合に自動マージをやめて人に渡す。
 仕様は[保留の内部仕様](holds.md#dependabotの自動マージ)にある。
 
+## dependabotの設定
+
+`.github/dependabot.yml`は、版の更新を有効にする。
+セキュリティ更新は、リポジトリの設定で有効にする。
+フローは、版の更新のPRも、セキュリティ更新のPRと同じ関門で扱う([R-DEP-04](../security-risks.md#r-dep-04))。
+
+| 対象 | 頻度 | 設定 |
+| --- | --- | --- |
+| ルートの`bun` | 毎週月曜の9時(JST) | 開いたPRは3件まで。公開から7日たつまで、版の更新のPRを開かない(`cooldown`) |
+| `console/`の`bun` | 毎週月曜の9時(JST) | ルートと同じ |
+| `github-actions` | 毎月1日の9時(JST) | ルートと同じ |
+
+`cooldown`の日数は、関門の公開の日数(`dependabot_min_published_days`の既定)と同じにする。
+早く開いたPRは、関門で待つだけだからである。
+グループの更新(`groups`)は使わない。
+フローが扱えるグループは3つのパッケージまでで、既定では人に回すためである([グループの更新](#グループの更新))。
+
+次の更新は、`ignore`で対象外にする。
+
+| 対象外 | 理由 |
+| --- | --- |
+| `windmill-client` | workerのscriptが読み、全scriptの`.script.lock`と同じ版にそろえる。ルートだけを上げるPRは、`lint`の`.script.lock`の検査で落ちる |
+| `bun-types` | `mise.toml`のbunの版にそろえる |
+| メジャー版の更新 | 関門が人に回すので、PRを開いても自動では進まない |
+
+`ignore`は、セキュリティ更新にも効く。
+対象外にした依存の指摘は、定期の監査(`.github/workflows/audit.yml`)が拾う。
+監査は毎週と、依存の宣言かlockfileを変えるPRで動き、high以上の指摘で失敗する。
+必須チェックではないので、失敗はマージを止めない。
+失敗したときの確かめ方は[セキュリティの「依存の脆弱性」](../security.md#依存の脆弱性)にある。
+
+`github-actions`の更新は、ワークフロー(保護パス)を変えるので、関門が人に回す。
+
 ## PRの選び方
 
 対象のリポジトリは、`watch_main_ci`と同じ規則(`listMainCiTargets`)で決める。

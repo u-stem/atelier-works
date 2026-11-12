@@ -175,6 +175,8 @@ atelier-worksのCIは、gitleaksでPRのコミットを走査する。
 成果物の書き込みは、`GITHUB_TOKEN`の書き込み権限を使わず、ランナーの実行用の資格情報で行う。
 `main`へのpushでだけ動かし、PRの実行では成果物を上げない。
 
+依存の監査の`audit.yml`の権限も、`contents: read`だけである([定期の監査](#定期の監査))。
+
 ### CIの実行の範囲の判定
 
 PRの実行の判定は、PRの版の`scripts/ci-scope.ts`で行う。
@@ -1416,12 +1418,21 @@ scriptの`.script.lock`は、ルートの`bun.lock`と同じ版・同じintegrit
 どちらも、修正版は親の求める範囲の外にあるメジャー版である。
 `overrides`でメジャー版を越えて固定すると、textlintの動作を保証できないため、固定しない。
 
+### 定期の監査
+
+`.github/workflows/audit.yml`が、ルートとConsoleの`bun.lock`を、`bun audit --audit-level=high`で監査する。
+毎週月曜の9時(JST)と、手動の実行と、依存の宣言かlockfileを変えるPRで動く。
+権限は`contents: read`だけで、依存は入れない。
+必須チェックにはしない。
+親の求める範囲に修正版の無い指摘が、無関係なPRとdependabotのPRを止めないためである。
+moderate以下の指摘では失敗しないので、上の表の指摘は、次の確認で見る。
+失敗はActionsの実行の結果に残り、Factoryは通知しない。
+
 ### 修正版が出たときの確認
 
-`bun audit`は定期には走らない。
-依存を更新するPRの前と、指摘の報告を受けたときに、人かClaudeが次の順で確かめる。
+監査が失敗したとき、依存を更新するPRの前、指摘の報告を受けたときに、人かClaudeが次の順で確かめる。
 
-1. ルートで`bun audit`を実行する。
+1. ルートとConsoleで`bun audit`を実行する。
 2. 受け入れている指摘に修正版が出ていれば、`bun update`か`overrides`で解消し、上の表から外す。
 3. `overrides`で固定しているパッケージの親が修正版を取り込んでいれば、`overrides`を外す。
 4. `mise run lint:docs`が通ることを確かめる。

@@ -1,0 +1,59 @@
+name: Audit
+
+# ルートとConsoleのbun.lockを、`bun audit`で定期に監査する。
+# workerのscriptの依存は、`.script.lock`がルートのbun.lockと同じ版にそろうことを`mise run lint`が確かめるので、ルートの監査が覆う。
+# 必須チェックにはしない。親の範囲に修正版の無い指摘が、無関係なPRとdependabotのPRを止めないようにするため。
+# 失敗したときの確かめ方は、docs/security.mdの「依存の脆弱性」にある。
+on:
+  schedule:
+    # 毎週月曜の9時(JST)に動かす。cronはUTCで書く。
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+  # 依存の宣言かlockfileを変えるPRでも動かす。
+  pull_request:
+    paths:
+      - "package.json"
+      - "bun.lock"
+      - "console/package.json"
+      - "console/bun.lock"
+
+# 同じ参照の古いPRの実行は止める。定期と手動の実行は、実行ごとに別のグループにする。
+concurrency:
+  group: audit-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ジョブの名前を、mainの必須チェックの名前と重ねない。
+  # 重なると、dependabotの自動マージの関門がこのジョブの結果も求めるため。
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # `mise run` / `mise exec`を使わずbunを直接呼ぶ。
+      # 入れていない[tools]を、後からmiseが自動で入れないようにする。
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      MISE_EXEC_AUTO_INSTALL: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          # 監査に要るbunだけを入れる。キャッシュは読み書きしない。
+          install_args: bun
+          cache: false
+
+      # `bun audit`はlockfileだけを読むので、依存は入れない。
+      - name: Audit root dependencies
+        run: bun audit --audit-level=high
+
+      - name: Audit console dependencies
+        # ルートの監査が失敗しても、Consoleの指摘も出す。
+        if: ${{ !cancelled() }}
+        run: bun audit --cwd console --audit-level=high
