@@ -349,7 +349,8 @@ backendは、失敗、状態の遷移、PRのレビュー、PRの修正の履歴
 図の見せ方は、図を包む要素の実際の幅から、[flowの図の画面の幅](graphs.md#幅)と同じ規則で選ぶ。
 入口の列が無いので、図の幅はその分狭い。
 本文の幅が上限のとき、図をそのまま出すflowは、audit、dependabot、manual_intake、pr_reviewである。
-上限の幅は、[`src/lib/flowDiagram.test.ts`](../../../console/src/lib/flowDiagram.test.ts)の`ITEM_BODY_WIDTH`が持つ。
+上限の幅は、[`src/lib/layoutClasses.ts`](../../../console/src/lib/layoutClasses.ts)の`OVERVIEW_BODY_CLASS`が定める。
+[`src/lib/flowDiagram.test.ts`](../../../console/src/lib/flowDiagram.test.ts)の`ITEM_BODY_WIDTH`が、同じ値で見せ方を確かめる。
 pipeline、pr_fix、design、implementは、横にスクロールする枠で出す。
 `src/lib/flowDiagram.test.ts`が、実際のflowごとの見せ方を固定する。
 スクロールする枠は、開いたとき、実行中か失敗したステップが見える位置へ寄せる。
