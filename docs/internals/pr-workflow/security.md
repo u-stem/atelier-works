@@ -305,7 +305,7 @@ PR修正と実装フローのworktreeでの操作も含む。
 
 ### pushの直前の確認
 
-pushの直前には、`commitAndPush`がfetchし直した`head_sha`と、準備のステップが確かめた値を比べる。
+pushの直前には、`commitAndPush`がfetchし直した`head_sha`と、準備のステップが確かめた値([準備での確認](../pr-workflow.md#準備での確認))を比べる。
 違えば、その間に人がpushしたとみなし、pushを止めてブロックにする。
 
 ### コミットの作成者情報
