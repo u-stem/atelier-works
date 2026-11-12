@@ -78,5 +78,6 @@
   フックが作るworktreeにも効く。
   コマンドへの前置きは、許可の確認を求められる場合がある(未確認)。
 - 型アサーションは、型ガード関数の中でも使わない。
+  ユーザーレベルの「型ガード関数を除く」の例外は、このリポジトリでは使わない。
   Biomeの`noUnsafeTypeAssertion`が`as const`以外を止めるため。
   書き換え方は[コーディング規約](docs/coding-guidelines.md)の「TypeScript」にある。

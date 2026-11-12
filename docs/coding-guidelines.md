@@ -78,6 +78,7 @@ if (!isClaudeResult(parsed)) {
 判定は`typeof`、`in`、配列の確認などで組み立てる。
 
 - 複数のフィールドを読むときは、`isRecord`(`f/factory/lib/types.ts`)で絞り込んでから読む。
+  Consoleでは、`console/src/api/guards/primitives.ts`の`isRecord`を使う。
   絞り込んだ値のフィールドは`unknown`として読める。
 - 1つのフィールドを読むときは、`"name" in value`で確かめてから`value.name`を読んでもよい。
 - 型を広げるだけのときは、`as`ではなく型注釈を付けた変数に代入する(`const names: readonly string[] = allowed;`)。
@@ -85,8 +86,11 @@ if (!isClaudeResult(parsed)) {
 `as`の検出は、Biomeの`noUnsafeTypeAssertion`の規則が行う。
 規則は`biome.json`で`error`にしてあり、`mise run lint`とpre-commitの`biome check`が止める。
 構文木で判定するので、`console/`を含む`.ts`と`.tsx`の、JSXの中の`as`も見る。
+この規則の抑制(`biome-ignore`の各形)は認めない。
 この規則はBiomeのnurseryの規則で、Biomeの版を上げると挙動が変わりうる。
-版を上げたときは、`as`を一時的に足して`mise run lint`が失敗することを確かめる。
+規則が`as`の各形を止めることと、抑制のコメントが無いことは、`tests/scripts/biome_type_assertion_rule.test.ts`が確かめる。
+同じテストが、追跡しているファイルが`biome.json`の`files.maxSize`に収まることも確かめる。
+上限を超えたファイルは、Biomeが検査しないためである。
 
 ## リモート追跡ref
 
