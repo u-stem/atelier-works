@@ -6,9 +6,9 @@
 // - IDの領域が、略号の表(1列目の見出しが「略号」の表)にある。
 // - 行のIDのセルに、IDを小文字にした`<a id>`がある。
 // - 各IDに、表の外の文書から、ラベルがそのIDで行のアンカーへ着くリンクがある。
-// - ラベルがIDの形で表へ向かうリンクは、そのIDの行のアンカーへ着く。
+// - ラベルがIDの形で表へ向かうリンクは、表の中のものも含めて、そのIDの行のアンカーへ着く。
 // - 領域ごとに、1から略号の表の「使った最大の番号」までの番号が、行か「欠番」の一覧のどちらかに1回ずつある。
-//   最大の番号を超える番号は使わない。
+//   最大の番号は、IDの連番と同じ2桁(01から99)で書く。最大の番号を超える番号は使わない。
 //   最大の番号を表に持つので、最後の番号の行を欠番に挙げずに消しても、gitの履歴を読まずに見つけられる。
 //   IDを使い回すと、古いリンクが別のリスクを指すためである。
 // - 表の行へのリンクを持たない、受け入れたリスクの語(`RISK_WORDS`)を含む箇所が、
@@ -19,8 +19,10 @@
 // 箇所の見つけ方:
 // - 表の外の段落のうち、`RISK_WORDS`のどれかを含む文を持つものを1つの箇所とする。
 //   行へのリンクを含む文は数えないので、リンクを持つ段落でも、残りの文に語があれば箇所になる。
-// - 直後の箇条書きを導く段落は、導く文より前の文に語があるときだけ箇所とする。
-//   導く文は段落の最後の文で、「残るリスク」と`INTRO`を含み、受け入れの語(`ACCEPT_WORDS`)を含まない。
+//   リンクを含むかは、構文木のリンクの範囲で決める。地の文にIDを書いただけの文は、リンクを含む文にならない。
+// - 段落の最後の文が`INTRO`と「残るリスク」か受け入れの語(`ACCEPT_WORDS`)を含むとき、その段落は直後の箇条書きを導く。
+//   受け入れの語を含まない導く文は、箇所の判定から除く。
+//   受け入れの語を含む導く文は、受け入れを書いた文なので、ほかの文と同じく数える。
 // - 導く段落の直後の箇条書きと、見出しに`RISK_WORDS`を含む節の直下の箇条書きは、最上位の項目ごとに見る。
 //   行へのリンクが無い項目は、1つの箇所とする。
 //   行へのリンクがある項目は、リンクを含む文を除いた残りの文に語があるときだけ箇所とする。
@@ -28,6 +30,7 @@
 //   `RISK_WORDS`を含まない見出しが来ると、その節の扱いは終わる。
 // - 行へのリンクとして扱うのは、ラベルが`R-<領域>-<連番2桁>`で、表の行のアンカーへ着くものだけである。
 //   参照形式のリンクは、CommonMarkと同じく、同じラベルの最初の定義を引く。
+// - 表の文書の中では箇所を探さない。表の行が、受け入れたリスクそのものだからである。
 // - 許可リストは、箇所を文書のパスと、本文のハッシュで指す。
 //   行の番号で指すと、前に行を足しただけで食い違うためである。
 //
@@ -37,8 +40,6 @@
 // - 行へのリンクを含む文の中に、別の受け入れたリスクを書いた形。リンクを含む文は数えないためである。
 // - 見出しと表のセルの中の語。どちらも段落でないので見ない。
 // - 導く文も`RISK_WORDS`の見出しも持たない箇条書きの項目は、項目の中の段落に語があるときだけ見る。
-// - `lint-docs`の`--links-only`は、この検査を走らせない。
-//   許可リストやスクリプトだけを変えたコミットと、`.md`を消すだけのコミットは、ローカルのフックでは捕まらず、CIの`check-docs`で捕まる。
 
 import { createHash } from "node:crypto";
 import type { Nodes } from "mdast";
@@ -74,9 +75,13 @@ const RISK_WORDS = [RISK_WORD, ...ACCEPT_WORDS];
 /** 導く文が、後に続く箇条書きを指す言い方。 */
 const INTRO = /次の|次を|以下の/;
 
-const ID_PATTERN = /^R-([A-Z]+)-(0[1-9]|[1-9]\d)$/;
+/** IDの連番と、略号の表の「使った最大の番号」の書式。01から99の2桁。 */
+const NUMBER = "0[1-9]|[1-9]\\d";
+const ID_PATTERN = new RegExp(`^R-([A-Z]+)-(${NUMBER})$`);
+const MAX_PATTERN = new RegExp(`^(?:${NUMBER})$`);
 const GAP_HEADING = "欠番";
 const AREA_HEADER = "略号";
+const MAX_HEADER = "使った最大の番号";
 const KIND_HEADER = "許可の種類";
 const EXCERPT_LENGTH = 40;
 
@@ -96,22 +101,43 @@ function mentionsRisk(value: string): boolean {
   return RISK_WORDS.some((word) => value.includes(word));
 }
 
-/** 段落の文を、句点で区切って返す。 */
-function sentencesOf(value: string): string[] {
-  return value
-    .split(/(?<=。)/)
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence !== "");
+/** 本文の中の文。`start`と`end`は、`text`で得た本文の中の位置。 */
+type Sentence = {
+  readonly value: string;
+  readonly start: number;
+  readonly end: number;
+};
+
+/** 本文を、句点で区切った文にする。空白だけの文は返さない。 */
+function sentencesOf(value: string): Sentence[] {
+  const sentences: Sentence[] = [];
+  let start = 0;
+  for (const piece of value.split(/(?<=。)/)) {
+    const end = start + piece.length;
+    if (piece.trim() !== "") {
+      sentences.push({ value: piece.trim(), start, end });
+    }
+    start = end;
+  }
+  return sentences;
+}
+
+function mentionsAcceptance(value: string): boolean {
+  return ACCEPT_WORDS.some((word) => value.includes(word));
 }
 
 /** 段落の最後の文が、直後の箇条書きを導く文か。 */
 function isIntro(paragraph: Nodes): boolean {
-  const last = sentencesOf(text(paragraph)).at(-1) ?? "";
+  const last = sentencesOf(text(paragraph)).at(-1)?.value ?? "";
   return (
-    last.includes(RISK_WORD) &&
-    INTRO.test(last) &&
-    !ACCEPT_WORDS.some((word) => last.includes(word))
+    INTRO.test(last) && (last.includes(RISK_WORD) || mentionsAcceptance(last))
   );
+}
+
+/** 導く文のうち、箇所の判定から除くもの。受け入れの語を含む導く文は、受け入れを書いた文として数える。 */
+function isPlainIntro(paragraph: Nodes): boolean {
+  const last = sentencesOf(text(paragraph)).at(-1)?.value ?? "";
+  return isIntro(paragraph) && !mentionsAcceptance(last);
 }
 
 /** 表の行へのリンクを持たない、受け入れたリスクの語を含む箇所。 */
@@ -162,16 +188,21 @@ function htmlIdsIn(node: Nodes): string[] {
   return ids;
 }
 
-/** 1列目の見出しが`header`の表の、各行のセルの文字列を返す。 */
-function tableRows(tree: Nodes, header: string): string[][] {
-  const rows: string[][] = [];
+/** 1列目の見出しが`header`の表の各行を、列の見出しからセルの文字列への対応で返す。 */
+function tableRows(tree: Nodes, header: string): Map<string, string>[] {
+  const rows: Map<string, string>[] = [];
   visit(tree, (node) => {
     if (node.type !== "table") return;
     const [head, ...body] = node.children;
-    const first = head?.children[0];
-    if (first === undefined || text(first).trim() !== header) return;
+    const names = head?.children.map((cell) => text(cell).trim()) ?? [];
+    if (names[0] !== header) return;
     for (const tableRow of body) {
-      rows.push(tableRow.children.map((cell) => text(cell).trim()));
+      const cells = new Map<string, string>();
+      tableRow.children.forEach((cell, i) => {
+        const name = names[i];
+        if (name !== undefined) cells.set(name, text(cell).trim());
+      });
+      rows.push(cells);
     }
   });
   return rows;
@@ -180,8 +211,9 @@ function tableRows(tree: Nodes, header: string): string[][] {
 /** 略号の表、1列目の見出しが「ID」の表の行、「欠番」の見出しの下の一覧を読む。 */
 function readRegister(tree: Nodes): Register {
   const areas = new Map<string, string>();
-  for (const [code, , , max] of tableRows(tree, AREA_HEADER)) {
-    if (code !== undefined) areas.set(code, max ?? "");
+  for (const cells of tableRows(tree, AREA_HEADER)) {
+    const code = cells.get(AREA_HEADER);
+    if (code !== undefined) areas.set(code, cells.get(MAX_HEADER) ?? "");
   }
   const rows: Row[] = [];
   const gaps: string[] = [];
@@ -223,13 +255,38 @@ function definitionsOf(tree: Nodes): Map<string, string> {
 /** 文書の中で、表の行へ着くリンクの節の集合。 */
 type RowLinks = ReadonlySet<Nodes>;
 
-/** `node`の中の、表の行へ着くリンクのラベル。 */
-function rowLabelsIn(node: Nodes, rowLinks: RowLinks): string[] {
-  const labels: string[] = [];
-  visit(node, (n) => {
-    if (rowLinks.has(n)) labels.push(text(n));
-  });
-  return labels;
+/**
+ * `node`の本文の中で、表の行へ着くリンクが占める範囲。
+ * 本文は`text`と同じく、子の文字列をつなげて作るので、位置は`text(node)`の中の位置になる。
+ */
+function rowLinkRanges(
+  node: Nodes,
+  rowLinks: RowLinks,
+): { start: number; end: number }[] {
+  const ranges: { start: number; end: number }[] = [];
+  let offset = 0;
+  const walk = (n: Nodes): void => {
+    if (rowLinks.has(n)) {
+      const length = text(n).length;
+      ranges.push({ start: offset, end: offset + length });
+      offset += length;
+      return;
+    }
+    if ("value" in n) {
+      offset += text(n).length;
+      return;
+    }
+    if ("children" in n) {
+      for (const child of n.children) walk(child);
+    }
+  };
+  walk(node);
+  return ranges;
+}
+
+/** `node`が表の行へ着くリンクを持つか。 */
+function hasRowLink(node: Nodes, rowLinks: RowLinks): boolean {
+  return rowLinkRanges(node, rowLinks).length > 0;
 }
 
 /** 行へのリンクを含む文を除いた文に、語があるか。`skipLast`は導く文を除くときに使う。 */
@@ -238,13 +295,15 @@ function mentionsRiskOutsideLinks(
   rowLinks: RowLinks,
   skipLast = false,
 ): boolean {
-  const labels = rowLabelsIn(node, rowLinks);
+  const ranges = rowLinkRanges(node, rowLinks);
   const sentences = sentencesOf(text(node));
   const considered = skipLast ? sentences.slice(0, -1) : sentences;
   return considered.some(
     (sentence) =>
-      mentionsRisk(sentence) &&
-      !labels.some((label) => sentence.includes(label)),
+      mentionsRisk(sentence.value) &&
+      !ranges.some(
+        (range) => range.start < sentence.end && sentence.start < range.end,
+      ),
   );
 }
 
@@ -269,8 +328,10 @@ function collectSpots(
       const introduced = prev?.type === "paragraph" && isIntro(prev);
       if (introduced || underRiskHeading) {
         for (const item of child.children) {
-          const linked = rowLabelsIn(item, rowLinks).length > 0;
-          if (!linked || mentionsRiskOutsideLinks(item, rowLinks)) {
+          if (
+            !hasRowLink(item, rowLinks) ||
+            mentionsRiskOutsideLinks(item, rowLinks)
+          ) {
             spots.push(spotOf(path, item));
           }
         }
@@ -279,8 +340,8 @@ function collectSpots(
     }
     if (child.type === "paragraph") {
       const next = children[i + 1];
-      const introducesList = next?.type === "list" && isIntro(child);
-      if (mentionsRiskOutsideLinks(child, rowLinks, introducesList)) {
+      const skipIntro = next?.type === "list" && isPlainIntro(child);
+      if (mentionsRiskOutsideLinks(child, rowLinks, skipIntro)) {
         spots.push(spotOf(path, child));
       }
       return;
@@ -383,8 +444,10 @@ export function lintRiskRegister(
   const idOf = (area: string, n: number): string =>
     `R-${area}-${String(n).padStart(2, "0")}`;
   for (const [area, recorded] of register.areas) {
-    if (!/^[1-9]\d*$/.test(recorded)) {
-      report(`malformed recorded maximum: ${area}`);
+    if (!MAX_PATTERN.test(recorded)) {
+      report(
+        `malformed recorded maximum: ${area}: "${recorded}" (two digits from 01 to 99, as in the IDs)`,
+      );
       continue;
     }
     const max = Number(recorded);
@@ -402,9 +465,10 @@ export function lintRiskRegister(
 
   const linked = new Set<string>();
   const spots: RiskSpot[] = [];
+  // 表の文書は、IDのリンクが行へ着くかだけを確かめる。表の中のリンクは、節からのリンクに数えない。
   for (const path of docs) {
-    if (path === REGISTER_PATH) continue;
-    const tree = readTree(path);
+    const inRegister = path === REGISTER_PATH;
+    const tree = inRegister ? own : readTree(path);
     if (tree === undefined) continue;
     const definitions = definitionsOf(tree);
     const rowLinks = new Set<Nodes>();
@@ -425,13 +489,13 @@ export function lintRiskRegister(
         rowAnchors.has(target.anchor)
       ) {
         rowLinks.add(node);
-        linked.add(label);
+        if (!inRegister) linked.add(label);
         return;
       }
       const line = node.position?.start.line ?? 1;
       report(`link does not reach its row: ${label} (${path}:${line})`);
     });
-    collectSpots(path, tree, rowLinks, spots);
+    if (!inRegister) collectSpots(path, tree, rowLinks, spots);
   }
   for (const row of register.rows) {
     if (ID_PATTERN.test(row.id) && !linked.has(row.id)) {
@@ -443,7 +507,9 @@ export function lintRiskRegister(
   const allowedKinds = new Set(
     guide === undefined
       ? []
-      : tableRows(guide, KIND_HEADER).map(([kind]) => kind ?? ""),
+      : tableRows(guide, KIND_HEADER).flatMap(
+          (cells) => cells.get(KIND_HEADER) ?? [],
+        ),
   );
   if (allowedKinds.size === 0) {
     report(
