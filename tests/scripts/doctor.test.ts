@@ -634,6 +634,7 @@ describe("doctor.sh owners that the collection cannot handle", () => {
       ...run.lines,
       "---",
       `exit code: ${run.exitCode}`,
+      `requests: ${run.paths.join(" ")}`,
       "stderr:",
       run.stderr,
       "stdout:",
@@ -666,7 +667,7 @@ describe("doctor.sh owners that the collection cannot handle", () => {
   test("reads factory_config when Windmill responds", async () => {
     const run = await ownerRun({ owners: [{ name: "acme" }] });
 
-    expect(run.paths).toContain(CONFIG_PATH);
+    expect(shown(run)).toContain(CONFIG_PATH);
   });
 
   test("does not report the check as skipped when the config can be read", async () => {
