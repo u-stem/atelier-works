@@ -283,11 +283,12 @@ workerのscriptに依存を足すときは、ルートの`package.json`にも同
 親が修正版を取り込んだら、`overrides`を外す。
 固定したままだと、親が新しい版へ移っても古い版に留まるためである。
 
-今、`overrides`で固定しているのは次の2つである。
+今、`overrides`で固定しているのは次の3つである。
 
 | パッケージ | 固定する理由 |
 | --- | --- |
 | `katex` | micromark-extension-mathが`^0.16.0`を求め、0.16系に修正版が無い |
+| `markdown-it` | markdownlint-cli2が15.0.1に厳密固定している |
 | `smol-toml` | markdownlint-cli2が1.8.0に厳密固定している |
 
 修正版が無い指摘の受け入れと、その確認の手順は[セキュリティ](security.md#依存の脆弱性)に書く。

@@ -1395,11 +1395,13 @@ Windmillの資産のうちnpmの依存を入れるのは、dependabotの更新�
 
 ## 依存の脆弱性
 
-ルートの`bun audit`の指摘のうち、修正版が無いものの残るリスクは[R-TB-36](security-risks.md#r-tb-36)である。
+ルートの`bun audit`の指摘のうち、親の求める範囲に修正版が無いものの残るリスクは[R-TB-36](security-risks.md#r-tb-36)である。
 `overrides`で解消できるものは[コーディング規約](coding-guidelines.md#依存の脆弱性)の手順で固定する。
 
-ルートの依存はすべて開発用で、文書の検査(markdownlint-cli2、textlint)、型検査、整形に使う。
+ルートの依存は、`windmill-client`を除いて開発用で、文書の検査(markdownlint-cli2、textlint)、型検査、整形に使う。
 本番のコードからは読まれない。
+`windmill-client`はworkerのscriptが読む。
+scriptの`.script.lock`は、ルートの`bun.lock`と同じ版・同じintegrityであることを`lint`が確かめるので、ルートの監査がworkerの依存も覆う([コーディング規約](coding-guidelines.md#依存の脆弱性))。
 ただし、このリポジトリを対象に`check_commands_by_repo`か`allowed_check_commands`を設定すると、検査がworkerのコンテナの中で走る。
 そのとき`bun install`で入る依存は、workerのコンテナの中で動く。
 設定の詳細は[実装フローの仕様](internals/implement.md)と[PRワークフローの仕様](internals/pr-workflow.md)にある。
@@ -1408,10 +1410,11 @@ Windmillの資産のうちnpmの依存を入れるのは、dependabotの更新�
 
 | パッケージ | 重大度 | 経路 | 受け入れる理由 |
 | --- | --- | --- | --- |
-| `braces` | high | markdownlint-cli2 > globby > fast-glob > micromatch | `scripts/lint-docs.ts`はファイル名をglobとしてmarkdownlint-cli2に渡す。`{`を含む名前をコミットできる者は、深くネストしたパターンに到達しうる。影響は文書検査の失敗にとどまり、本番には及ばない。長さの上限の範囲では停止を再現できていない |
-| `sprintf-js` | moderate | prh > js-yaml@3.15.2 > argparse@1.0.10 > sprintf-js | js-yaml@3でargparseを読むのはCLIの`bin/js-yaml.js`だけで、`lib/`からは読まれない。prhの実行時にsprintf-jsは読み込まれない |
+| `glob` | moderate | textlint > glob | 指摘は、取り消しの合図(AbortSignal)を渡した呼び出しだけに当たる。textlintは合図を渡さずに`glob`を呼ぶ |
+| `minimatch` | moderate | textlint > glob > minimatch | `scripts/lint-docs.ts`がtextlintに渡すパターンは、gitが追跡しているMarkdownのパスから作る。届くのはリポジトリにコミットできる者だけで、影響は文書の検査の遅れにとどまり、本番には及ばない |
 
-markdown-itはargparse@3を、rc-config-loaderのjs-yaml@4はargparse@2を使い、どちらもsprintf-jsに依存しない。
+どちらも、修正版は親の求める範囲の外にあるメジャー版である。
+`overrides`でメジャー版を越えて固定すると、textlintの動作を保証できないため、固定しない。
 
 ### 修正版が出たときの確認
 
