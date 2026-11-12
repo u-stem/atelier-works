@@ -200,7 +200,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-per-01"></a>R-PER-01 | 書き込み権限を持つfine-grained PATを、読み取り用として入れても、`bootstrap.sh`は見分けられない。見るのは、`github_pat_`の接頭辞と、`GITHUB_TOKEN`と`CONSOLE_GITHUB_TOKEN`との一致だけである。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-02"></a>R-PER-02 | 「All repositories」のトークンは、所有者の全リポジトリの内容を読める。集める範囲は設定で絞るが、トークンの読める範囲は絞られない。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-03"></a>R-PER-03 | 全部の所有者のトークンを、所有者ごとに分けずに1つの変数に置く。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
-| <a id="r-per-04"></a>R-PER-04 | `repo_allowlist`が空のとき、見えないリポジトリを`not_visible`として検出できない。反映後に、人が件数を確かめる([収集の運用](operations.md#収集の運用))。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
+| <a id="r-per-04"></a>R-PER-04 | `repo_allowlist`が空のとき、見えないリポジトリを`not_visible`として検出できない。反映後に、人が件数を確かめる([収集の運用](operations/collect.md#収集の運用))。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-05"></a>R-PER-05 | loginに`_`を含む所有者(EMUのアカウント)は集めない。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-06"></a>R-PER-06 | 先頭が`.`のリポジトリ名(`.github`など)は、収集から漏れる。GitHubの名前の述語は、シェルとパスに渡す名前の守りと共通なので、収集のために緩めると、その守りも緩む。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-07"></a>R-PER-07 | 締め切りやGitHubの失敗が続くと、リポジトリの状態が前回のまま凍る。`gone`の行は消えない。 | [既知の限界](internals/github-collect.md#既知の限界)、[定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
@@ -345,14 +345,14 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-host-50"></a>R-HOST-50 | `plan`はCIを確認しない。`would_converge`は、CIの通過を含まない判定である。 | [ホストの実行役の境界](internals/host-apply.md#ホストの実行役の境界) |
 | <a id="r-host-51"></a>R-HOST-51 | `mise run up`の許可は、自前でビルドした旧イメージの削除を含む。`mise run up`と`mise run deploy`は、終わりに`docker image prune -f --filter label=com.atelier-works.prune=true`を実行する。消えるのは、ラベルが付いた、タグの無いイメージだけで、他のイメージ、ボリューム、コンテナ、ビルドキャッシュには触れない。コマンドは固定で引数を受けないが、ラベルを付けるのは`infra/docker-compose.yml`の`build.labels`なので、守りは保護パスと人のマージである。 | [ホストの実行役の境界](internals/host-apply.md#ホストの実行役の境界) |
 | <a id="r-host-52"></a>R-HOST-52 | 取得した浮動タグのイメージ(`postgres:18`など)の旧版と、ビルドキャッシュは、掃除の対象外である。ラベルを持たないイメージを、`mise run up`は消さないためである。ラベルを足す前にビルドした旧イメージと、ラベルを足した最初のビルドで置き換わる1つ前の版も、ラベルが無いので対象外である。ディスクを使い続けるので、増えたときは人が手で掃除する。 | [ホストの実行役の境界](internals/host-apply.md#ホストの実行役の境界) |
-| <a id="r-host-56"></a>R-HOST-56 | workerを作り直す前の確認は、dry-runが作り直しを示さない変更を見逃す。イメージだけが変わる更新で、dry-runが`Recreate`を示すかは、確かめていない。示さなければ、workerは確認なしで作り直される。 | [workerを作り直す前の確認](operations.md#workerを作り直す前の確認) |
+| <a id="r-host-56"></a>R-HOST-56 | workerを作り直す前の確認は、dry-runが作り直しを示さない変更を見逃す。イメージだけが変わる更新で、dry-runが`Recreate`を示すかは、確かめていない。示さなければ、workerは確認なしで作り直される。 | [workerを作り直す前の確認](operations/stages.md#workerを作り直す前の確認) |
 
 ### ホストの反映の印
 
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
 | <a id="r-host-53"></a>R-HOST-53 | defaultのworkerのジョブは、印を偽造できる。偽の印で、`host_action_required`を黙らせられる。影響は、ホストでの反映の遅れに気づけなくなるところまでである。突くには、defaultのworkerでのコード実行が要る。 | [ホストの反映の印](internals/host-apply.md#ホストの反映の印) |
-| <a id="r-host-54"></a>R-HOST-54 | 印を`approve`の`--applied`の値に使うと、偽の印が承認の始点になる。実際の適用済みと違う始点で承認すると、人が見ていない変更を、記録が隠しうる。そのため、`--applied`の値は印から取らず、ホストのcheckoutの履歴で確かめる([変更を承認する](operations.md#変更を承認する))。印は照合にだけ使う。 | [ホストの反映の印](internals/host-apply.md#ホストの反映の印) |
+| <a id="r-host-54"></a>R-HOST-54 | 印を`approve`の`--applied`の値に使うと、偽の印が承認の始点になる。実際の適用済みと違う始点で承認すると、人が見ていない変更を、記録が隠しうる。そのため、`--applied`の値は印から取らず、ホストのcheckoutの履歴で確かめる([変更を承認する](operations/deploy.md#変更を承認する))。印は照合にだけ使う。 | [ホストの反映の印](internals/host-apply.md#ホストの反映の印) |
 | <a id="r-host-55"></a>R-HOST-55 | 印を書くホストの書き込み(`docker compose exec`)は、ジョブと同じ権限で動く。ホストのスクリプトが得る権限はジョブと同じで、権限は広がらない。 | [ホストの反映の印](internals/host-apply.md#ホストの反映の印) |
 
 ## Consoleの安全策
@@ -586,7 +586,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-des-37"></a>R-DES-37 | 判断の反映が3回の起動し直しの後に止まった作業項目を再実行すると、承認の副作用は実行されない。止まった理由は`approval decision could not be applied after 3 restarts of the handler`である。要件定義の承認では、Issueへのコメントと要件定義のworktreeの片付けが対象である。反映の処理が失敗し続けた作業項目なので、人がConsoleで状態と承認の記録を確かめてから再実行する。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-38"></a>R-DES-38 | 設計の却下の反映でIssueが消えた、または移された場合は、Issueを読めない。変わっていないものとして設計を再生成するので、要件定義へ戻る出口に入れず、`max_design_attempts`の回数まで再生成が繰り返される。上限で人の対応待ちになり、通知が知らせる。却下は人の意思で、読めないことを理由に止めても再実行は同じ状態に戻るだけで出口にならない。承認の断りの案内が、この挙動を先に伝える。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-39"></a>R-DES-39 | 恒久的に失敗する決定済みの依頼は、処理先を3回起動し直した後に人の対応待ちにする。それ以降は走査の対象から外れ、3回の起動し直しの失敗が`job_failures`に残る。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
-| <a id="r-des-40"></a>R-DES-40 | `design_enabled`を偽から真にする時点で止まっている作業項目(承認済み、実装中、自動で再開する理由を持つ人の対応待ち)は、有効にしても自動では再開されず、人が再実行すると設計から始まる。運用の手順は、有効にする前の件数を数え、0にすることである。0にできない分は、再実行が設計へ回ることを受け入れる。開ける前にPRを出していた作業項目で`design_gap`が出ると、設計へ差し戻される。差し戻しは、上限と人の承認で抑えられるため、受け入れる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策)、[有効にする前に確かめること](operations.md#有効にする前に確かめること) |
+| <a id="r-des-40"></a>R-DES-40 | `design_enabled`を偽から真にする時点で止まっている作業項目(承認済み、実装中、自動で再開する理由を持つ人の対応待ち)は、有効にしても自動では再開されず、人が再実行すると設計から始まる。運用の手順は、有効にする前の件数を数え、0にすることである。0にできない分は、再実行が設計へ回ることを受け入れる。開ける前にPRを出していた作業項目で`design_gap`が出ると、設計へ差し戻される。差し戻しは、上限と人の承認で抑えられるため、受け入れる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策)、[有効にする前に確かめること](operations/stages.md#有効にする前に確かめること) |
 | <a id="r-des-41"></a>R-DES-41 | `design_enabled`を真から偽に戻しても、設計中と設計の承認待ちの作業項目は止まらず、`design_apply`も動く。承認の反映は`design_enabled`の値を見ず、設計書を渡さずに実装へ進む。関門は設計が無効のときの扱い(`skip`)になるためである。却下の反映は、設計を作り直す分岐でだけ値を見る。偽なら設計フローを起動せず、人の対応待ちで止める。閉じた入口を、`design_apply`が迂回しないためである。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-42"></a>R-DES-42 | 要件定義の下書きができた後に止まった作業項目は、理由が使われ済みなので、再実行は理由を渡さない。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-43"></a>R-DES-43 | `design_enabled`が真偽値でないときと、`max_design_attempts`が範囲外のときは、設定を読む処理が例外のままである。設定を読む処理は`self_update`で`try`の外にあるので、自己更新と検知が止まる。設定の書き損じが、そのまま全体の停止になる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
@@ -745,7 +745,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | --- | --- | --- |
 | <a id="r-dep-01"></a>R-DEP-01 | 上流が侵害された版でも、公開の日数、関門、影響調査をすべて通ればマージされる。公開の日数の待ち、registryとの整合性の照合、影響調査が、その機会を減らす。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
 | <a id="r-dep-02"></a>R-DEP-02 | 影響調査の判断は誤りうる。マージの後の動作を最後に確かめるのは、必須チェックである。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
-| <a id="r-dep-03"></a>R-DEP-03 | 一覧は、ページの上限(10ページ、1000件)を超えると失敗する。公開の明示リポジトリで第三者が1000件を超えるPRを開くと、一覧が失敗し続け、そのリポジトリのdependabotのPRを処理できない。一覧を読むのは、収集が止まっているか、そのリポジトリの記録を使えない間と、収集が集めないリポジトリ(`owners`に無い所有者の`factory_repo`、fork、先頭が`.`のリポジトリ名など)である。収集が集めないリポジトリでは、収集が動いていても当たる。失敗は`failed`に数え、失敗の記録として残る。 | [候補の元を確かめる](operations.md#候補の元を確かめる)、[dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
+| <a id="r-dep-03"></a>R-DEP-03 | 一覧は、ページの上限(10ページ、1000件)を超えると失敗する。公開の明示リポジトリで第三者が1000件を超えるPRを開くと、一覧が失敗し続け、そのリポジトリのdependabotのPRを処理できない。一覧を読むのは、収集が止まっているか、そのリポジトリの記録を使えない間と、収集が集めないリポジトリ(`owners`に無い所有者の`factory_repo`、fork、先頭が`.`のリポジトリ名など)である。収集が集めないリポジトリでは、収集が動いていても当たる。失敗は`failed`に数え、失敗の記録として残る。 | [候補の元を確かめる](operations/features.md#候補の元を確かめる)、[dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
 | <a id="r-dep-04"></a>R-DEP-04 | セキュリティ更新と版の更新を区別しない。どちらも同じ関門を通る。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
 | <a id="r-dep-05"></a>R-DEP-05 | `node_modules`の下の`CLAUDE.md`と`AGENTS.md`は、単独の実験では読み込まれなかった。ただし、Claudeのバージョンが変わると結果が変わりうるので、更新のたびに同じ実験をやり直す。依存が同梱する指示のファイルが読み込まれれば、影響調査の判断に指示を注入される窓が開く。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
 | <a id="r-dep-06"></a>R-DEP-06 | `main`が頻繁に動くと、マージの直前の確認で取り消しが続き、3回で人に回る。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |

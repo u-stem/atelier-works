@@ -308,7 +308,7 @@ cloneを開くステップでは、`openFactoryClone`の照合も重なるので
 調査の種別と状態を足したmigrationのdownは、調査の作業項目を削除し、外部キーの連鎖で`agent_runs`の行も消す。
 `agent_runs`は日次予算の元データなので、downを当てた日は、予算の検査が調査に使った費用の分だけ少なく数える。
 その日は、予算の上限を超えてClaudeが動きうる。
-手順と消える表は[調査のmigrationを戻す](operations.md#調査のmigrationを戻す)にある。
+手順と消える表は[調査のmigrationを戻す](operations/collect.md#調査のmigrationを戻す)にある。
 
 ## シークレットの扱い
 
@@ -1124,7 +1124,7 @@ Podmanは対象外である。
   誤ったマウントは、symlinkを消してworkerを起動し直すまで残る。
   `mise run up`は、設定の変わらない、動いているworkerを作り直さないためである。
   `mise run up`が`factory_state_init`の失敗で止まったときは、その時点のworkerのマウントを疑う。
-  [Console用workerを確かめる](operations.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
+  [Console用workerを確かめる](operations/deploy.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
   突くにはdefaultのworkerでのコード実行が要る。
   その権限があれば`factory_state`のボリューム全体を直接読めるので、実害は増えない。
 
@@ -1351,7 +1351,7 @@ cgroupの文字列を解析するだけで、ファイルは読まない。
   - `GET /user/teams`が、PATのアカウントのチームを返すか。
   - 親チーム経由の依頼の扱い。
   - `requested_teams`と`/user/teams`の応答の形。
-  組織の所有者を足すときは、先に[運用](operations.md#組織の所有者を足す前の確認)の手順で確かめる。
+  組織の所有者を足すときは、先に[運用](operations/collect.md#組織の所有者を足す前の確認)の手順で確かめる。
   権限が要ると分かったときは、同じ変更で[PATの権限](#githubのpat)の表に足し、種類をセキュリティとして監査を通す。
   今は、PATに権限を足していない。
 - [R-PER-17](security-risks.md#r-per-17)
@@ -1459,7 +1459,7 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 ## 全停止
 
 全停止は、Factory全体を1つの操作で止める仕組みである。
-手順は[運用](operations.md#全停止する)にある。
+手順は[運用](operations/stop.md#全停止する)にある。
 止める働きは、Windmillの秘密でない変数`f/factory/stop_all`と、それを読む各所にある。
 
 - 変数を書くのは、Consoleの2つのscript(全停止と解除)と、それを`wmill script run`で呼ぶ`mise run stop`だけである。

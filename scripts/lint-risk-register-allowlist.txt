@@ -99,19 +99,19 @@ docs/internals/pr-workflow.md dd018555bed9cd7b safe-side wmill.yamlも止める�
 docs/internals/work-items.md c2e6763a020493a6 operational self_updateは、f/を反映した後にmigrationを流す。 列を足す
 docs/operations.md 2e6c84cc05dbcec8 pointer 書き込みの直前の照合に落ちた処理は、書かずに止める。 dependabotの終了
 docs/operations.md d908a6566e1509f4 pointer 照合しない処理も残る。 同じ項目を、セキュリティの残るリスクにも挙げている。
-docs/operations.md 45a4e1fe8db69465 unverified 残りは、poll_issues.tsの照合が猶予の後に失敗へ移す。 残りの警告は
-docs/operations.md f4052e50b25e7f16 operational 止められてもよい緊急の作業で、実行中の仕事が止まることを受け入れる。
-docs/operations.md 19e91e23aa519a47 operational 反映の順は次のとおりである。 マージの後、self_updateがscriptと
-docs/operations.md 26b9684f2d2c63da pointer マージする条件と残るリスクはdependabotの更新の内部仕様に、選び方と状態
-docs/operations.md 952b9b9961d8b8c3 pointer この表が示すのは、環境変数の有無だけである。 CLAUDE_CONFIG_DIR
-docs/operations.md 4286cc6bc894bb18 operational 2つの数は、大きいほうを取る。 足さない。 ラウンドの数はblockedで終えた
-docs/operations.md 6abd62c11fda4e2e operational doneで終えた後にretry_work_itemで再実行し、検査の再実行が起き
-docs/operations.md ca7ac6a54c13c39b pointer 許可はmise run doctorの「カスタムtag」で確かめる。 docto
-docs/operations.md 5ecb76fc62853205 pointer migrationのように、反映を待たせたい作業の間は、deployの保留を置く
-docs/operations.md af9ab1d7d9eeee9c pointer planがpending_approvalを返す変更は、人がapproveで承認
-docs/operations.md 7e0cb9cb1ac97080 pointer 解除は、同じ画面の一覧の「解除」で行う。 期限が来ても終わる。 仕様と残るリスク
-docs/operations.md 8178327d617abd2a pointer mise run freeze:resetで変数を空にした後も、Consoleで
-docs/operations.md fc7e6fa96b8e7f16 pointer Factoryが暴走したとき、1つの操作でFactory全体を止める。 止めた状
+docs/operations/collect.md 19e91e23aa519a47 operational 反映の順は次のとおりである。 マージの後、self_updateがscriptと
+docs/operations/deploy.md 5ecb76fc62853205 pointer migrationのように、反映を待たせたい作業の間は、deployの保留を置く
+docs/operations/deploy.md af9ab1d7d9eeee9c pointer planがpending_approvalを返す変更は、人がapproveで承認
+docs/operations/features.md 26b9684f2d2c63da pointer マージする条件と残るリスクはdependabotの更新の内部仕様に、選び方と状態
+docs/operations/features.md 952b9b9961d8b8c3 pointer この表が示すのは、環境変数の有無だけである。 CLAUDE_CONFIG_DIR
+docs/operations/features.md 4286cc6bc894bb18 operational 2つの数は、大きいほうを取る。 足さない。 ラウンドの数はblockedで終えた
+docs/operations/features.md 6abd62c11fda4e2e operational doneで終えた後にretry_work_itemで再実行し、検査の再実行が起き
+docs/operations/monitoring.md ca7ac6a54c13c39b pointer 許可はmise run doctorの「カスタムtag」で確かめる。 docto
+docs/operations/stages.md 45a4e1fe8db69465 unverified 残りは、poll_issues.tsの照合が猶予の後に失敗へ移す。 残りの警告は
+docs/operations/stages.md f4052e50b25e7f16 operational 止められてもよい緊急の作業で、実行中の仕事が止まることを受け入れる。
+docs/operations/stop.md 7e0cb9cb1ac97080 pointer 解除は、同じ画面の一覧の「解除」で行う。 期限が来ても終わる。 仕様と残るリスク
+docs/operations/stop.md 8178327d617abd2a pointer mise run freeze:resetで変数を空にした後も、Consoleで
+docs/operations/stop.md fc7e6fa96b8e7f16 pointer Factoryが暴走したとき、1つの操作でFactory全体を止める。 止めた状
 docs/security.md 1ef1aeec6575e88b pointer Software Factoryの信頼境界、秘密値の扱い、資格情報の取得手順、フ
 docs/security.md 4a2b9cb7cdea5c95 mechanism stateやdeployed_shaを書き換えても、通知より新しい反映の成功の記
 docs/security.md f08357de85eec66d mechanism 前段でTLSを終端するときは、プロキシがHostをポートを含めて保つ(nginx

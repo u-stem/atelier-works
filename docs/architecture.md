@@ -51,13 +51,13 @@ tag`periodic`を付けるのは、ファイル、独自イメージの道具、c
 検出器(`detect_schedule_failures`)は、外部の死活監視に生存を報告するため、`heartbeat_url`も読む。
 `claude_oauth_token`、`github_token`、`wmill_token`は届かせない。
 依存するジョブは、defaultのworkerで動かす。
-tag`periodic`のジョブが13分以上待つと、defaultのworkerで動く`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
-逆に、defaultのworkerが止まったことは、このworkerで動く`default_worker_watch`が5分ごとに検知して通知する([運用](operations.md#defaultのworkerの検知を確かめる))。
+tag`periodic`のジョブが13分以上待つと、defaultのworkerで動く`self_update`が検知して通知する([運用](operations/monitoring.md#定期ジョブ用のworkerの検知を確かめる))。
+逆に、defaultのworkerが止まったことは、このworkerで動く`default_worker_watch`が5分ごとに検知して通知する([運用](operations/monitoring.md#defaultのworkerの検知を確かめる))。
 止まったworkerの中のscriptは動かないので、片方だけが止まるときは、もう一方のworkerで動くscriptが拾う。
 両方が止まる障害は拾えない。
 scheduleの失敗を拾う検出器(`detect_schedule_failures`)も、このworkerで動かす。
 defaultのworkerで動かすと、長いジョブが枠を塞ぐ間、失敗の検知が止まるためである。
-検出器が止まったことは、`default_worker_watch`が同じ回で検知して通知する([運用](operations.md#scheduleの失敗の検出))。
+検出器が止まったことは、`default_worker_watch`が同じ回で検知して通知する([運用](operations/monitoring.md#scheduleの失敗の検出))。
 上流のWindmillイメージで動き、nativeでないworkerなので、同時に動かすジョブは1つである。
 1件のジョブが止まっている間は、ほかのジョブが待つため、このworkerで動かすscriptには`timeout`を付ける。
 メモリの上限は1024Mである。
@@ -486,7 +486,7 @@ IssueやPRには何も書かず、ラベルにも触れない。
 cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。
 各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。
 このWindmillはスケジュールの失敗時の呼び出し(`on_failure`)を呼ばないので、どのスケジュールにも`on_failure`を設定しない。
-スケジュールの失敗は、`detect_schedule_failures`がジョブ履歴から拾って記録し、通知する([運用](operations.md#scheduleの失敗の検出))。
+スケジュールの失敗は、`detect_schedule_failures`がジョブ履歴から拾って記録し、通知する([運用](operations/monitoring.md#scheduleの失敗の検出))。
 
 生成した表の内容欄より細かい処理の対象は次のとおり。
 
@@ -889,7 +889,7 @@ PRを取り出せなくても、反映の成功は変えない。
 `self_update`は`deployments.needs_host_action`を`true`にして記録し、要対応の通知`host_action_required`とDiscordで知らせる。
 これらはホスト側のcheckoutをpullしたうえで、`mise run up`で起動したときに反映される。
 `mise run up`は、Caddyの確認の後に、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
-その後に、ラベルを付けた自前ビルドの使われていない旧イメージを消す([旧イメージの掃除](operations.md#旧イメージの掃除))。
+その後に、ラベルを付けた自前ビルドの使われていない旧イメージを消す([旧イメージの掃除](operations/deploy.md#旧イメージの掃除))。
 `self_update`はこのHEADを毎回読み、通知の版を含むか、ホスト側の作業が要るパスの内容が通知の版と同じなら、通知を解決する。
 通知の解決の後に、通知を解決した回と、再開できる候補が残っている回だけ、`auto_retry_stale_image`を別のジョブで起動する。
 候補が無い回に起動しないのは、何もしないジョブが2分ごとにジョブ履歴とqueueを埋めるためである。
@@ -1139,7 +1139,7 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 設定で明示したリポジトリは、表を使えないとき、RESTのPRの一覧で読む。
 `owners`に無い所有者の`factory_repo`も、一覧で読む。
 候補は、表の行も一覧の要素も、PRを読み直して作者、fork、ブランチを確かめてから記録する。
-トークンの作り方と扱いは[セキュリティ](security.md#収集用の読み取りトークン)に、運用は[運用](operations.md#収集の運用)に、記録の意味と限界は[GitHubの収集](internals/github-collect.md)に書く。
+トークンの作り方と扱いは[セキュリティ](security.md#収集用の読み取りトークン)に、運用は[運用](operations/collect.md#収集の運用)に、記録の意味と限界は[GitHubの収集](internals/github-collect.md)に書く。
 
 ## 工程5の監査
 
@@ -1164,7 +1164,7 @@ Consoleの**レポート**の**今すぐ監査**からも起動できる。
 3. 生成: 隔離の関門を確かめて、読み出し専用のClaudeで調べ、結果から投稿する本文を作る。
 4. 投稿: 本文に秘密値の検査をもう一度掛けて、Issueへ投稿する。
 
-手順は[運用](operations.md#調査を実行する)に、隔離と本文の検査は[調査の隔離の内部仕様](internals/investigate.md#調査の入口)に、状態の動きは[作業項目の状態とリース](internals/work-items.md#調査の作業項目)に書く。
+手順は[運用](operations/features.md#調査を実行する)に、隔離と本文の検査は[調査の隔離の内部仕様](internals/investigate.md#調査の入口)に、状態の動きは[作業項目の状態とリース](internals/work-items.md#調査の作業項目)に書く。
 
 ## 未実装の機能
 
@@ -1176,6 +1176,6 @@ Consoleの**レポート**の**今すぐ監査**からも起動できる。
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。
   `metadata`ジョブがartifactのIDとdigestを出す処理も含む
 - 調査(`investigate`)の、新規投入の入口、Consoleの投入フォームと表示と取り消し、置き場の定期的な掃除、孤児の扱いの拡張、隔離の測定の定期実行。
-  Windmillから直接実行するフロー`f/factory/investigate`だけがある([調査を実行する](operations.md#調査を実行する)、[調査の隔離](internals/investigate.md#調査の隔離))
+  Windmillから直接実行するフロー`f/factory/investigate`だけがある([調査を実行する](operations/features.md#調査を実行する)、[調査の隔離](internals/investigate.md#調査の隔離))
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

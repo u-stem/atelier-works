@@ -2013,8 +2013,8 @@ Claudeが直せる検査の失敗ではないので、Sonnetの失敗として�
 
 | 原因 | 理由の先頭 | 要対応の通知 |
 | --- | --- | --- |
-| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
-| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
+| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations/deploy.md#fとworkerのイメージを両方変えたとき)) |
+| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations/deploy.md#稼働中のworkerが検査の前提を満たさないとき)) |
 
 イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
 `host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
@@ -2638,7 +2638,7 @@ lockfileや`package.json`の`trustedDependencies`も、人がinstallしたとき
   検査をしていない修正を、既存のPRのheadへpushする。
 
 保護パスで止まった回の集計は、この差の根拠にしない。
-通常の回について、集計が数えるのは`FORBIDDEN_*`に当たって止めた回で、lockfileやツールの設定を書き換えて通った回は数えない([保護パスで止まった回数を数える](../operations.md#保護パスで止まった回数を数える))。
+通常の回について、集計が数えるのは`FORBIDDEN_*`に当たって止めた回で、lockfileやツールの設定を書き換えて通った回は数えない([保護パスで止まった回数を数える](../operations/pr.md#保護パスで止まった回数を数える))。
 
 CIの修正と競合の修正は、実装の一覧を使うので、この差を持たない。
 

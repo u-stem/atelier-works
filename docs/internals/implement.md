@@ -428,9 +428,9 @@ Claudeが直せる検査の失敗ではないので、修正のラウンドに�
 
 | 原因 | 理由の先頭 | 要対応の通知 |
 | --- | --- | --- |
-| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
-| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
-| 検査コマンドの実行ファイルを起動できない | `check command could not run:` | `implement_needs_human`([運用](../operations.md#人の対応待ちになったら)) |
+| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations/deploy.md#fとworkerのイメージを両方変えたとき)) |
+| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations/deploy.md#稼働中のworkerが検査の前提を満たさないとき)) |
+| 検査コマンドの実行ファイルを起動できない | `check command could not run:` | `implement_needs_human`([運用](../operations/stages.md#人の対応待ちになったら)) |
 
 イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
 `host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
@@ -773,7 +773,7 @@ PR修正が親を差し戻すときも同じである。
 
 `check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。
 workerで直接動く例は`bunx --no-install --bun tsc --noEmit`や`bunx --no-install --bun biome check .`である。
-`--no-install`は、lockfileから入れていない実行ファイルをレジストリから取得しないための指定で、理由は[運用](../operations.md#検査コマンドを設定する)にある。
+`--no-install`は、lockfileから入れていない実行ファイルをレジストリから取得しないための指定で、理由は[運用](../operations/stages.md#検査コマンドを設定する)にある。
 workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く。
 実装フローは`allowed_check_commands`を使わない。
 
