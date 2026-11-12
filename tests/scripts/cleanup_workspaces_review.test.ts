@@ -52,6 +52,8 @@ type Setup = {
   readonly activeFails?: readonly boolean[];
   /** 作業ツリーのディレクトリの更新の時刻。無いものは読めない。 */
   readonly mtimes?: Readonly<Record<string, number>>;
+  /** ディレクトリが無い(`ENOENT`)ものの一覧。`mtimes`より優先する。 */
+  readonly missing?: readonly string[];
   readonly free?: (dir: string) => boolean;
   readonly ensureFreeFails?: (dir: string) => boolean;
   readonly removeFails?: (dir: string) => boolean;
@@ -73,6 +75,11 @@ function setup(options: Setup = {}) {
     },
     modifiedAtMs: async (dir) => {
       counts.mtime += 1;
+      if (options.missing?.includes(dir) === true) {
+        throw Object.assign(new Error(`ENOENT: no such file ${dir}`), {
+          code: "ENOENT",
+        });
+      }
       const mtime = options.mtimes?.[dir];
       if (mtime === undefined) throw new Error(`cannot stat ${dir}`);
       return mtime;
@@ -282,6 +289,48 @@ describe("removeReviewWorktrees", () => {
   test("keeps a worktree locked for another reason and warns", async () => {
     const s = setup({ mtimes: { [OLD_A]: OLD } });
     await s.run([target(OLD_A, { reason: "on a usb drive" })]);
+    expect([s.removedDirs(), s.warnings.length]).toEqual([[], 1]);
+  });
+
+  test("removes a registration whose directory is gone when it is locked as initializing", async () => {
+    const s = setup({ missing: [OLD_A] });
+    await s.run([target(OLD_A, { reason: "initializing" })]);
+    expect(s.removed).toEqual([{ dir: OLD_A, forceLocked: true }]);
+  });
+
+  test("does not check the use of a directory that is gone", async () => {
+    const s = setup({ missing: [OLD_A] });
+    await s.run([target(OLD_A, { reason: "initializing" })]);
+    expect(s.counts.free).toBe(0);
+  });
+
+  test("does not warn about a directory that is gone when it is locked as initializing", async () => {
+    const s = setup({ missing: [OLD_A] });
+    await s.run([target(OLD_A, { reason: "initializing" })]);
+    expect(s.warnings).toEqual([]);
+  });
+
+  test("still checks for a running pr_review before removing a registration whose directory is gone", async () => {
+    const s = setup({ active: [false, true], missing: [OLD_A] });
+    await s.run([target(OLD_A, { reason: "initializing" })]);
+    expect(s.removedDirs()).toEqual([]);
+  });
+
+  test("warns and keeps an unlocked registration whose directory is gone", async () => {
+    const s = setup({ missing: [OLD_A] });
+    await s.run([target(OLD_A)]);
+    expect([s.removedDirs(), s.warnings.length]).toEqual([[], 1]);
+  });
+
+  test("warns and keeps a registration whose directory is gone and that is locked for another reason", async () => {
+    const s = setup({ missing: [OLD_A] });
+    await s.run([target(OLD_A, { reason: "on a usb drive" })]);
+    expect([s.removedDirs(), s.warnings.length]).toEqual([[], 1]);
+  });
+
+  test("warns and keeps an initializing registration when the modification time fails for another reason", async () => {
+    const s = setup({ mtimes: {} });
+    await s.run([target(OLD_A, { reason: "initializing" })]);
     expect([s.removedDirs(), s.warnings.length]).toEqual([[], 1]);
   });
 

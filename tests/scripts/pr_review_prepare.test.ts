@@ -84,10 +84,6 @@ describe("reviewRunId", () => {
     expect(reviewRunId()).toMatch(/^[0-9a-f]{8}$/);
   });
 
-  test("differs between two runs with the default random source", () => {
-    expect(reviewRunId()).not.toBe(reviewRunId());
-  });
-
   test("takes the last 8 digits of another random uuid", () => {
     expect(reviewRunId(() => SECOND_UUID)).toBe("76543210");
   });

@@ -7264,6 +7264,47 @@ describe("worktree locks with real git", () => {
     expect(existsSync(s.first)).toBe(false);
   });
 
+  test("removes the registration of a locked worktree whose directory is gone with forceLocked", async () => {
+    const s = await setup();
+    await s.git(s.repo, [
+      "worktree",
+      "lock",
+      "--reason",
+      INITIALIZING_LOCK_REASON,
+      s.first,
+    ]);
+    rmSync(s.first, { recursive: true, force: true });
+    await removeWorktree({
+      run: runCommand,
+      repoDir: s.repo,
+      dir: s.first,
+      force: true,
+      forceLocked: true,
+      home: s.home,
+    });
+    expect((await s.list()).map((item) => item.path)).not.toContain(s.first);
+  });
+
+  test("keeps the registration of a locked worktree whose directory is gone without forceLocked", async () => {
+    const s = await setup();
+    await s.git(s.repo, [
+      "worktree",
+      "lock",
+      "--reason",
+      INITIALIZING_LOCK_REASON,
+      s.first,
+    ]);
+    rmSync(s.first, { recursive: true, force: true });
+    await removeWorktree({
+      run: runCommand,
+      repoDir: s.repo,
+      dir: s.first,
+      force: true,
+      home: s.home,
+    });
+    expect((await s.list()).map((item) => item.path)).toContain(s.first);
+  });
+
   test("keeps the registration of an unverified locked worktree without forceLocked", async () => {
     const s = await setup();
     await s.git(s.repo, [
