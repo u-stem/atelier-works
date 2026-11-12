@@ -1,14 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   allowlistLine,
+  GUIDE_PATH,
   lintRiskRegister,
   REGISTER_PATH,
   type RiskRegisterResult,
 } from "../../scripts/lint-risk-register.ts";
 import { createTreeReader } from "../../scripts/markdown-tree.ts";
-
-const AREAS =
-  "| 略号 | 領域 | 説明の文書 |\n| --- | --- | --- |\n| AB | [領域](#領域) | [節](security.md) |\n";
 
 const HEADER =
   "| ID | 残るリスクと、受け入れる理由 | 関連する節 |\n| --- | --- | --- |\n";
@@ -17,9 +15,18 @@ function row(id: string, anchor = id.toLowerCase()): string {
   return `| <a id="${anchor}"></a>${id} | リスクの文。 | [節](security.md#節) |\n`;
 }
 
-function register(rows: string, tail = ""): string {
-  return `# 残るリスク\n\n${AREAS}\n## 領域\n\n${HEADER}${rows}${tail}`;
+// 略号の表の最大の番号は、渡さなければ、行と欠番に現れるR-ABの番号の最大にする。
+function register(rows: string, tail = "", max?: string): string {
+  const numbers = [...`${rows}${tail}`.matchAll(/R-AB-(\d{2})/g)].map((m) =>
+    Number(m[1]),
+  );
+  const recorded = max ?? String(Math.max(0, ...numbers));
+  const areas = `| 略号 | 領域 | 説明の文書 | 使った最大の番号 |\n| --- | --- | --- | --- |\n| AB | [領域](#領域) | [節](security.md) | ${recorded} |\n`;
+  return `# 残るリスク\n\n${areas}\n## 領域\n\n${HEADER}${rows}${tail}`;
 }
+
+const GUIDE =
+  "# 書き方\n\n## 許可の種類\n\n| 許可の種類 | 意味 |\n| --- | --- |\n| `unverified` | 確かめていない前提 |\n| `pointer` | 表への案内 |\n";
 
 const SECTION = "docs/security.md";
 
@@ -30,7 +37,7 @@ function link(id: string): string {
 // 表と節の文書を、パスから本文への対応で渡す。
 function resultOf(
   files: Record<string, string>,
-  allowlist = "",
+  allowlist: string | undefined = "",
 ): RiskRegisterResult {
   return lintRiskRegister(
     Object.keys(files).sort(),
@@ -39,7 +46,10 @@ function resultOf(
   );
 }
 
-function problemsOf(files: Record<string, string>, allowlist = ""): string[] {
+function problemsOf(
+  files: Record<string, string>,
+  allowlist: string | undefined = "",
+): string[] {
   return [...resultOf(files, allowlist).problems];
 }
 
@@ -49,7 +59,23 @@ function hasProblem(files: Record<string, string>, part: string): boolean {
 
 // 表にR-AB-01の行がある文書の組で、節の本文だけを変える。
 function withSection(section: string): Record<string, string> {
-  return { [REGISTER_PATH]: register(row("R-AB-01")), [SECTION]: section };
+  return {
+    [REGISTER_PATH]: register(row("R-AB-01")),
+    [GUIDE_PATH]: GUIDE,
+    [SECTION]: section,
+  };
+}
+
+// 表と案内の文書に、節の文書を足す。
+function withRegister(
+  registerText: string,
+  section: string,
+): Record<string, string> {
+  return {
+    [REGISTER_PATH]: registerText,
+    [GUIDE_PATH]: GUIDE,
+    [SECTION]: section,
+  };
 }
 
 function spotCount(section: string): number {
@@ -68,10 +94,7 @@ describe("lintRiskRegister rows", () => {
   test("reports an ID that is not of the form R-<AREA>-<NN>", () => {
     expect(
       hasProblem(
-        {
-          [REGISTER_PATH]: register(row("R-AB-1")),
-          [SECTION]: `# 節\n\n${link("R-AB-1")}\n`,
-        },
+        withRegister(register(row("R-AB-1")), `# 節\n\n${link("R-AB-1")}\n`),
         "malformed ID: R-AB-1",
       ),
     ).toBe(true);
@@ -80,10 +103,7 @@ describe("lintRiskRegister rows", () => {
   test("reports an ID numbered 00", () => {
     expect(
       hasProblem(
-        {
-          [REGISTER_PATH]: register(row("R-AB-00")),
-          [SECTION]: `# 節\n\n${link("R-AB-00")}\n`,
-        },
+        withRegister(register(row("R-AB-00")), `# 節\n\n${link("R-AB-00")}\n`),
         "malformed ID: R-AB-00",
       ),
     ).toBe(true);
@@ -92,10 +112,10 @@ describe("lintRiskRegister rows", () => {
   test("reports an ID whose area is not in the table of area codes", () => {
     expect(
       hasProblem(
-        {
-          [REGISTER_PATH]: register(row("R-AB-01") + row("R-ZZ-01")),
-          [SECTION]: `# 節\n\n${link("R-AB-01")} ${link("R-ZZ-01")}\n`,
-        },
+        withRegister(
+          register(row("R-AB-01") + row("R-ZZ-01")),
+          `# 節\n\n${link("R-AB-01")} ${link("R-ZZ-01")}\n`,
+        ),
         "unknown area code: R-ZZ-01",
       ),
     ).toBe(true);
@@ -104,10 +124,10 @@ describe("lintRiskRegister rows", () => {
   test("reports an ID that appears in two rows", () => {
     expect(
       hasProblem(
-        {
-          [REGISTER_PATH]: register(row("R-AB-01") + row("R-AB-01")),
-          [SECTION]: `# 節\n\n${link("R-AB-01")}\n`,
-        },
+        withRegister(
+          register(row("R-AB-01") + row("R-AB-01")),
+          `# 節\n\n${link("R-AB-01")}\n`,
+        ),
         "repeated ID: R-AB-01",
       ),
     ).toBe(true);
@@ -116,10 +136,10 @@ describe("lintRiskRegister rows", () => {
   test("reports a row whose anchor does not match its ID", () => {
     expect(
       hasProblem(
-        {
-          [REGISTER_PATH]: register(row("R-AB-01", "r-ab-02")),
-          [SECTION]: `# 節\n\n${link("R-AB-01")}\n`,
-        },
+        withRegister(
+          register(row("R-AB-01", "r-ab-02")),
+          `# 節\n\n${link("R-AB-01")}\n`,
+        ),
         "row anchor missing: R-AB-01",
       ),
     ).toBe(true);
@@ -137,10 +157,10 @@ describe("lintRiskRegister rows", () => {
   test("reports a link labelled with an ID that points to another row", () => {
     expect(
       hasProblem(
-        {
-          [REGISTER_PATH]: register(row("R-AB-01") + row("R-AB-02")),
-          [SECTION]: `# 節\n\n[R-AB-01](security-risks.md#r-ab-02) ${link("R-AB-02")}\n`,
-        },
+        withRegister(
+          register(row("R-AB-01") + row("R-AB-02")),
+          `# 節\n\n[R-AB-01](security-risks.md#r-ab-02) ${link("R-AB-02")}\n`,
+        ),
         "link does not reach its row: R-AB-01",
       ),
     ).toBe(true);
@@ -157,14 +177,60 @@ describe("lintRiskRegister rows", () => {
   });
 });
 
+describe("lintRiskRegister recorded maximum", () => {
+  test("reports a deleted highest row that the gap list does not name", () => {
+    expect(
+      hasProblem(
+        withRegister(
+          register(row("R-AB-01"), "", "2"),
+          `# 節\n\n${link("R-AB-01")}\n`,
+        ),
+        "number skipped without a gap entry: R-AB-02",
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts a deleted highest row that the gap list names", () => {
+    expect(
+      problemsOf(
+        withRegister(
+          register(row("R-AB-01"), "\n## 欠番\n\n- R-AB-02\n", "2"),
+          `# 節\n\n${link("R-AB-01")}\n`,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  test("reports a number above the recorded maximum of its area", () => {
+    expect(
+      hasProblem(
+        withRegister(
+          register(row("R-AB-01") + row("R-AB-02"), "", "1"),
+          `# 節\n\n${link("R-AB-01")} ${link("R-AB-02")}\n`,
+        ),
+        "number above the recorded maximum: R-AB-02",
+      ),
+    ).toBe(true);
+  });
+
+  test("reports an area whose recorded maximum is not a number", () => {
+    expect(
+      hasProblem(
+        withRegister(
+          register(row("R-AB-01"), "", "-"),
+          `# 節\n\n${link("R-AB-01")}\n`,
+        ),
+        "malformed recorded maximum: AB",
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("lintRiskRegister gaps", () => {
   test("reports a missing number that the gap list does not name", () => {
     expect(
       hasProblem(
-        {
-          [REGISTER_PATH]: register(row("R-AB-02")),
-          [SECTION]: `# 節\n\n${link("R-AB-02")}\n`,
-        },
+        withRegister(register(row("R-AB-02")), `# 節\n\n${link("R-AB-02")}\n`),
         "number skipped without a gap entry: R-AB-01",
       ),
     ).toBe(true);
@@ -172,20 +238,22 @@ describe("lintRiskRegister gaps", () => {
 
   test("accepts a missing number that the gap list names", () => {
     expect(
-      problemsOf({
-        [REGISTER_PATH]: register(row("R-AB-02"), "\n## 欠番\n\n- R-AB-01\n"),
-        [SECTION]: `# 節\n\n${link("R-AB-02")}\n`,
-      }),
+      problemsOf(
+        withRegister(
+          register(row("R-AB-02"), "\n## 欠番\n\n- R-AB-01\n"),
+          `# 節\n\n${link("R-AB-02")}\n`,
+        ),
+      ),
     ).toEqual([]);
   });
 
   test("reports a gap entry that is still a row", () => {
     expect(
       hasProblem(
-        {
-          [REGISTER_PATH]: register(row("R-AB-01"), "\n## 欠番\n\n- R-AB-01\n"),
-          [SECTION]: `# 節\n\n${link("R-AB-01")}\n`,
-        },
+        withRegister(
+          register(row("R-AB-01"), "\n## 欠番\n\n- R-AB-01\n"),
+          `# 節\n\n${link("R-AB-01")}\n`,
+        ),
         "gap entry is a row: R-AB-01",
       ),
     ).toBe(true);
@@ -194,13 +262,10 @@ describe("lintRiskRegister gaps", () => {
   test("reports a gap entry listed twice", () => {
     expect(
       hasProblem(
-        {
-          [REGISTER_PATH]: register(
-            row("R-AB-02"),
-            "\n## 欠番\n\n- R-AB-01\n- R-AB-01\n",
-          ),
-          [SECTION]: `# 節\n\n${link("R-AB-02")}\n`,
-        },
+        withRegister(
+          register(row("R-AB-02"), "\n## 欠番\n\n- R-AB-01\n- R-AB-01\n"),
+          `# 節\n\n${link("R-AB-02")}\n`,
+        ),
         "repeated gap entry: R-AB-01",
       ),
     ).toBe(true);
@@ -209,10 +274,10 @@ describe("lintRiskRegister gaps", () => {
   test("reports a gap entry numbered 00", () => {
     expect(
       hasProblem(
-        {
-          [REGISTER_PATH]: register(row("R-AB-01"), "\n## 欠番\n\n- R-AB-00\n"),
-          [SECTION]: `# 節\n\n${link("R-AB-01")}\n`,
-        },
+        withRegister(
+          register(row("R-AB-01"), "\n## 欠番\n\n- R-AB-00\n"),
+          `# 節\n\n${link("R-AB-01")}\n`,
+        ),
         "malformed gap entry: R-AB-00",
       ),
     ).toBe(true);
@@ -221,10 +286,10 @@ describe("lintRiskRegister gaps", () => {
   test("reports a gap entry whose area is not in the table of area codes", () => {
     expect(
       hasProblem(
-        {
-          [REGISTER_PATH]: register(row("R-AB-01"), "\n## 欠番\n\n- R-ZZ-01\n"),
-          [SECTION]: `# 節\n\n${link("R-AB-01")}\n`,
-        },
+        withRegister(
+          register(row("R-AB-01"), "\n## 欠番\n\n- R-ZZ-01\n"),
+          `# 節\n\n${link("R-AB-01")}\n`,
+        ),
         "unknown area code: R-ZZ-01",
       ),
     ).toBe(true);
@@ -236,11 +301,46 @@ describe("lintRiskRegister allowlist", () => {
     `# 節\n\n${link("R-AB-01")}\n\n残るリスクとして、何かが起きうる。\n`,
   );
 
-  function spotLine(): string {
+  function spotLine(kind = "unverified"): string {
     const [spot] = resultOf(files).spots;
     if (spot === undefined) throw new Error("no spot");
-    return allowlistLine(spot);
+    return allowlistLine(spot, kind);
   }
+
+  test("reports a missing allowlist as one problem", () => {
+    expect(problemsOf(files, undefined)).toEqual([
+      "docs/security-risks.md: [risk] allowlist not found: scripts/lint-risk-register-allowlist.txt",
+    ]);
+  });
+
+  test("reports an allowlist line whose kind is not in the guide", () => {
+    expect(
+      problemsOf(files, `${spotLine("bogus")}\n`).some((p) =>
+        p.includes("unknown allowlist kind: bogus"),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts any kind that the guide lists", () => {
+    expect(problemsOf(files, `${spotLine("pointer")}\n`)).toEqual([]);
+  });
+
+  test("reports an allowlist line without a kind as malformed", () => {
+    const [path, key] = spotLine().split(" ");
+    expect(
+      problemsOf(files, `${path} ${key}\n`).some((p) =>
+        p.includes("malformed allowlist line"),
+      ),
+    ).toBe(true);
+  });
+
+  test("reports a guide without the table of allowlist kinds", () => {
+    expect(
+      problemsOf({ ...files, [GUIDE_PATH]: "# 書き方\n" }, "").some((p) =>
+        p.includes("allowlist kinds not found"),
+      ),
+    ).toBe(true);
+  });
 
   test("reports a residual risk without a row link that the allowlist does not name", () => {
     expect(
@@ -329,12 +429,56 @@ describe("lintRiskRegister spots", () => {
     ).toBe(2);
   });
 
-  test("finds items under an introducing sentence that accepts them", () => {
+  test("reads a sentence with an acceptance word as a spot, not as an introducing sentence", () => {
     expect(
       spotCount(
         "# 節\n\n次の2つの挙動は、受け入れている。\n\n- 1つ目。\n- 2つ目。\n",
       ),
+    ).toBe(1);
+  });
+
+  test("does not read a sentence that ends with がある as introducing a list", () => {
+    expect(
+      spotCount("# 節\n\n残るリスクがある。\n\n- 1つ目。\n- 2つ目。\n"),
+    ).toBe(1);
+  });
+
+  test("reads 以下の as introducing a list", () => {
+    expect(
+      spotCount(
+        "# 節\n\n残るリスクは以下のとおりである。\n\n- 1つ目。\n- 2つ目。\n",
+      ),
     ).toBe(2);
+  });
+
+  test("finds an acceptance in another sentence of a paragraph that links to a row", () => {
+    expect(
+      spotCount(
+        `# 節\n\n残るリスクは${link("R-AB-01")}である。\n止めすぎは受け入れる。\n`,
+      ),
+    ).toBe(1);
+  });
+
+  test("does not find the acceptance in the sentence that holds the row link", () => {
+    expect(
+      spotCount(`# 節\n\nこの形は、${link("R-AB-01")}として受け入れる。\n`),
+    ).toBe(0);
+  });
+
+  test("finds an acceptance in another sentence of an item that links to a row", () => {
+    expect(
+      spotCount(
+        `# 節\n\n残るリスクは次のとおりである。\n\n- ${link("R-AB-01")}にあたる。\n  止めすぎは受け入れる。\n`,
+      ),
+    ).toBe(1);
+  });
+
+  test("uses the first of two definitions with the same label", () => {
+    expect(
+      spotCount(
+        "# 節\n\n残るリスクは[R-AB-01][r]である。\n\n[r]: security-risks.md#r-ab-01\n[r]: security-risks.md#領域\n",
+      ),
+    ).toBe(0);
   });
 
   test("reads the introducing sentence at the end of a paragraph of several lines", () => {

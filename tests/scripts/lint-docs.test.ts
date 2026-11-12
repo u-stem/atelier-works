@@ -20,6 +20,7 @@ import {
   type LintDeps,
   lintAllDocLinks,
   lintDocText,
+  lintRepoDocs,
   lintWithTools,
   listDocCandidates,
   listRepoFiles,
@@ -320,6 +321,95 @@ describe("lintAllDocLinks", () => {
 
   test("skips a listed document that cannot be read", () => {
     expect(lintAllDocLinks(["gone.md"], () => undefined)).toEqual([]);
+  });
+});
+
+describe("lintRepoDocs", () => {
+  const REGISTER =
+    '# 残るリスク\n\n| 略号 | 領域 | 説明の文書 | 使った最大の番号 |\n| --- | --- | --- | --- |\n| AB | 領域 | 節 | 1 |\n\n## 領域\n\n| ID | 残るリスクと、受け入れる理由 | 関連する節 |\n| --- | --- | --- |\n| <a id="r-ab-01"></a>R-AB-01 | リスクの文。 | 節 |\n';
+  const GUIDE =
+    "# 書き方\n\n| 許可の種類 | 意味 |\n| --- | --- |\n| `pointer` | 表への案内 |\n";
+  const SECTION =
+    "# 節\n\n[R-AB-01](security-risks.md#r-ab-01)\n\n残るリスクは[表](security-risks.md)にある。\n";
+
+  // 表、案内、節、許可リストを持つリポジトリ。`overrides`で文書を差し替える。
+  function repo(
+    overrides: Record<string, string | undefined> = {},
+  ): Record<string, string | undefined> {
+    return {
+      "docs/security-risks.md": REGISTER,
+      "docs/writing-guidelines.md": GUIDE,
+      "docs/security.md": SECTION,
+      "scripts/lint-risk-register-allowlist.txt": "",
+      ...overrides,
+    };
+  }
+
+  function run(
+    docs: Record<string, string | undefined>,
+    options: { linksOnly: boolean; list?: () => readonly string[] } = {
+      linksOnly: false,
+    },
+  ): string[] {
+    const list =
+      options.list ??
+      (() => Object.keys(docs).filter((path) => docs[path] !== undefined));
+    return lintRepoDocs(list, (path) => docs[path], {
+      linksOnly: options.linksOnly,
+    });
+  }
+
+  test("runs the risk register check after the link check", () => {
+    expect(
+      run(repo()).some((p) =>
+        p.startsWith(
+          "docs/security-risks.md: [risk] unregistered residual risk",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("does not run the risk register check with links only", () => {
+    expect(
+      run(repo(), { linksOnly: true }).some((p) => p.includes("[risk]")),
+    ).toBe(false);
+  });
+
+  test("skips the risk register check when listing the files fails", () => {
+    expect(
+      run(repo(), {
+        linksOnly: false,
+        list: () => {
+          throw new Error("boom");
+        },
+      }),
+    ).toEqual(["lint-docs: document links failed: boom"]);
+  });
+
+  test("reports a missing register", () => {
+    expect(
+      run(repo({ "docs/security-risks.md": undefined })).includes(
+        "docs/security-risks.md: [risk] register not found",
+      ),
+    ).toBe(true);
+  });
+
+  test("reports a broken allowlist line", () => {
+    expect(
+      run(
+        repo({ "scripts/lint-risk-register-allowlist.txt": "broken\n" }),
+      ).some((p) => p.includes("malformed allowlist line")),
+    ).toBe(true);
+  });
+
+  test("lists a file that appears twice only once", () => {
+    const docs = repo();
+    const once = run(docs);
+    const twice = run(docs, {
+      linksOnly: false,
+      list: () => [...Object.keys(docs), "docs/security.md"],
+    });
+    expect(twice).toEqual(once);
   });
 });
 
