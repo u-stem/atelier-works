@@ -214,7 +214,7 @@ describe("protected paths", () => {
     "wmill-lock.yaml",
     "console/src/main.tsx",
     "console/src/components/Foo.tsx",
-    "scripts/lint-no-type-assertions.ts",
+    "scripts/lint-no-section-sign.ts",
     "scripts/ci-scope.ts",
     "tsconfig.json",
     "tsconfig.wmill.json",

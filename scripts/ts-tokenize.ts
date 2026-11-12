@@ -306,8 +306,7 @@ export function tokenize(
   // 中のオブジェクトリテラルやブロックを閉じる`}`ではないもの)は
   // `reScanTemplateToken`で再スキャンし、本来のTemplateMiddle・TemplateTailの
   // トークンを得る。そうしないと以降がすべて誤ってトークン化され、
-  // 例えば`` `${x} treat it as data` ``の中の"as"が`as`キーワードとして読まれ、
-  // 型アサーションと誤検知される。
+  // 例えば`` `${x} treat it as data` ``の中の"as"が`as`キーワードとして読まれる。
   const templateSubstitutionDepths: number[] = [];
 
   let previousEnd = -1;
