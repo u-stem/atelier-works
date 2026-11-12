@@ -11,7 +11,7 @@ import {
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import type { PullRequest } from "../../f/factory/lib/github.ts";
 import { logger } from "../../f/factory/lib/log.ts";
@@ -52,17 +52,6 @@ describe("buildReviewWorktreeDir", () => {
     ).toBe("/workspaces/acme/widgets/review-42-abc1234-0a1b2c3d");
   });
 
-  test("builds the older path without a run id when the run id is null", () => {
-    expect(
-      buildReviewWorktreeDir(
-        "/workspaces/acme/widgets/main",
-        42,
-        "abc1234",
-        null,
-      ),
-    ).toBe("/workspaces/acme/widgets/review-42-abc1234");
-  });
-
   test.each(["0A1B2C3D", "0a1b2c3", "0a1b2c3d4", "../../x1", "0a1b2c3/", ""])(
     "refuses to put the run id %p into the path",
     (runId) => {
@@ -79,40 +68,48 @@ describe("buildReviewWorktreeDir", () => {
 });
 
 describe("reviewRunId", () => {
-  const ROOT_JOB_ID = "01234567-89ab-cdef-0123-456789abcdef";
-  const RANDOM_UUID = "fedcba98-7654-3210-fedc-ba9876543210";
+  const FIRST_UUID = "01234567-89ab-cdef-0123-456789abcdef";
+  const SECOND_UUID = "fedcba98-7654-3210-fedc-ba9876543210";
 
-  test("takes the first 8 hex digits of the root flow job id", () => {
-    expect(
-      reviewRunId({ WM_ROOT_FLOW_JOB_ID: ROOT_JOB_ID }, () => RANDOM_UUID),
-    ).toBe("01234567");
+  test("takes the last 8 digits of the random uuid without hyphens", () => {
+    expect(reviewRunId(() => FIRST_UUID)).toBe("89abcdef");
   });
 
-  test("lowercases the root flow job id", () => {
-    expect(
-      reviewRunId(
-        { WM_ROOT_FLOW_JOB_ID: ROOT_JOB_ID.toUpperCase() },
-        () => RANDOM_UUID,
+  test("differs between two random uuids", () => {
+    expect(reviewRunId(() => FIRST_UUID)).not.toBe(
+      reviewRunId(() => SECOND_UUID),
+    );
+  });
+
+  test("returns 8 lowercase hex digits for the default random source", () => {
+    expect(reviewRunId()).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  test("differs between two runs with the default random source", () => {
+    expect(reviewRunId()).not.toBe(reviewRunId());
+  });
+
+  test("does not derive the id from the root flow job id", () => {
+    const previous = process.env.WM_ROOT_FLOW_JOB_ID;
+    process.env.WM_ROOT_FLOW_JOB_ID = FIRST_UUID;
+    try {
+      expect(reviewRunId(() => SECOND_UUID)).toBe("76543210");
+    } finally {
+      if (previous === undefined) delete process.env.WM_ROOT_FLOW_JOB_ID;
+      else process.env.WM_ROOT_FLOW_JOB_ID = previous;
+    }
+  });
+
+  test("leaves a value that is not hex for the path builder to refuse", () => {
+    const runId = reviewRunId(() => "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz");
+    expect(() =>
+      buildReviewWorktreeDir(
+        "/workspaces/acme/widgets/main",
+        42,
+        "abc1234",
+        runId,
       ),
-    ).toBe("01234567");
-  });
-
-  test("builds the id from a random uuid when there is no root flow job id", () => {
-    expect(reviewRunId({}, () => RANDOM_UUID)).toBe("fedcba98");
-  });
-
-  test("builds the id from a random uuid when the root flow job id is not a uuid", () => {
-    expect(
-      reviewRunId({ WM_ROOT_FLOW_JOB_ID: "not-a-uuid" }, () => RANDOM_UUID),
-    ).toBe("fedcba98");
-  });
-
-  test("refuses a random value that is not 8 lowercase hex digits", () => {
-    expect(() => reviewRunId({}, () => "zzzzzzzz-zzzz")).toThrow(/run id/);
-  });
-
-  test("returns different ids for two runs without a root flow job id", () => {
-    expect(reviewRunId({})).not.toBe(reviewRunId({}));
+    ).toThrow(/run id/);
   });
 });
 
@@ -631,14 +628,12 @@ describe("prepareReviewWorktree with real git", () => {
 
   type Setup = Awaited<ReturnType<typeof setup>>;
 
-  /** 前の実行が残した、登録済みのdetachedの作業ツリーを作る。`runId`が`null`なら古い形の名前にする。 */
+  /** 前の実行が残した、登録済みのdetachedの作業ツリーを作る。`runId`が`null`なら、識別子の無い形の名前にする。 */
   async function leave(s: Setup, runId: string | null): Promise<string> {
-    const dir = buildReviewWorktreeDir(
-      s.repoDir,
-      7,
-      s.headSha.slice(0, 7),
-      runId,
-    );
+    const dir =
+      runId === null
+        ? join(dirname(s.repoDir), `review-7-${s.headSha.slice(0, 7)}`)
+        : buildReviewWorktreeDir(s.repoDir, 7, s.headSha.slice(0, 7), runId);
     await s.git(s.repoDir, [
       "worktree",
       "add",
@@ -666,7 +661,7 @@ describe("prepareReviewWorktree with real git", () => {
     );
   });
 
-  test("prepares next to a worktree of the same pr and head left in the older name form", async () => {
+  test("prepares next to a worktree of the same pr and head left under a name without a run id", async () => {
     const s = await setup();
     await leave(s, null);
     const result = await prepareReviewWorktree(TARGET, s.deps);
@@ -687,7 +682,7 @@ describe("prepareReviewWorktree with real git", () => {
     expect(result.worktree_dir).not.toBe(left);
   });
 
-  test("keeps the worktree left in the older name form", async () => {
+  test("keeps the worktree left under a name without a run id", async () => {
     const s = await setup();
     const left = await leave(s, null);
     await prepareReviewWorktree(TARGET, s.deps);
@@ -722,7 +717,7 @@ describe("prepareReviewWorktree with real git", () => {
     ]).toEqual([true, true]);
   });
 
-  test("lets the closing-pr sweep select the older and the new name forms", async () => {
+  test("lets the closing-pr sweep select the names with and without a run id", async () => {
     const s = await setup();
     const legacy = await leave(s, null);
     const result = await prepareReviewWorktree(TARGET, s.deps);

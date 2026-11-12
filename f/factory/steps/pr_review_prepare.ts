@@ -18,7 +18,6 @@ import {
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getPr, type PullRequest } from "../lib/github.ts";
-import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { markTransientGitHubFailure } from "../lib/pr_review_retry.ts";
 import {
@@ -76,43 +75,21 @@ export function buildReviewWorktreeDir(
   repoDir: string,
   prNumber: number,
   sha7: string,
-  runId: string | null,
+  runId: string,
 ): string {
-  if (runId !== null && !RUN_ID_PATTERN.test(runId)) {
-    throw new Error(
-      `pr_review_prepare: run id must be 8 lowercase hex digits: ${JSON.stringify(runId)}`,
-    );
-  }
-  const suffix = runId === null ? "" : `-${runId}`;
-  return `${repoDir.replace(/\/main$/, "")}/review-${String(prNumber)}-${sha7}${suffix}`;
-}
-
-/**
- * この実行の識別子を返す。
- * flowのルートジョブID(`rootFlowJobId`)から英数字以外を除いた先頭8文字にする。
- * ルートジョブIDが取れない実行(scriptの単独実行)では、`randomUuid`の値から同じ形で作る。
- * 8桁の小文字の16進数にならなければ例外を投げる。
- */
-export function reviewRunId(
-  env: Readonly<Record<string, string | undefined>>,
-  randomUuid: () => string = () => crypto.randomUUID(),
-): string {
-  let source: string;
-  try {
-    source = rootFlowJobId(env);
-  } catch {
-    source = randomUuid();
-  }
-  const runId = source
-    .replace(/[^0-9A-Za-z]/g, "")
-    .slice(0, 8)
-    .toLowerCase();
   if (!RUN_ID_PATTERN.test(runId)) {
     throw new Error(
       `pr_review_prepare: run id must be 8 lowercase hex digits: ${JSON.stringify(runId)}`,
     );
   }
-  return runId;
+  return `${repoDir.replace(/\/main$/, "")}/review-${String(prNumber)}-${sha7}-${runId}`;
+}
+
+/** 実行の識別子を返す。 */
+export function reviewRunId(
+  _randomUuid: () => string = () => crypto.randomUUID(),
+): string {
+  return "00000000";
 }
 
 const SKIPPED_BASE = {
@@ -208,7 +185,7 @@ async function prepare(work_item_id: number): Promise<PrReviewPrepareResult> {
       },
       removeWorktree: (repoDir, dir) =>
         removeWorktree({ run: runCommand, repoDir, dir, force: true }),
-      runId: reviewRunId(process.env),
+      runId: reviewRunId(),
       log: logger("pr_review_prepare"),
       setHeadSha,
       readBranchStatus: (headRef) =>

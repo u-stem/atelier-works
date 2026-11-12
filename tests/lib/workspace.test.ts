@@ -6953,8 +6953,8 @@ describe("isReviewWorktreeOf", () => {
     );
   });
 
-  test("matches the older path without a run id", () => {
-    const path = buildReviewWorktreeDir(REPO_DIR, 42, "abc1234", null);
+  test("matches a name without a run id", () => {
+    const path = "/workspaces/acme/widgets/review-42-abc1234";
     expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
       true,
     );
