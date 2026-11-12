@@ -529,6 +529,14 @@ describe("matchesImplementProtectedPath", () => {
     );
   });
 
+  test("matches the Biome configuration, which decides what the lint rejects", () => {
+    expect(matchesImplementProtectedPath("biome.json")).toBe(true);
+  });
+
+  test("matches a Biome configuration written as jsonc in a subdirectory", () => {
+    expect(matchesImplementProtectedPath("console/biome.jsonc")).toBe(true);
+  });
+
   test("does not match ordinary source files", () => {
     expect(matchesImplementProtectedPath("src/config.ts")).toBe(false);
   });
