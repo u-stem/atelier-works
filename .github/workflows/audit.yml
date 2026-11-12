@@ -56,4 +56,6 @@ jobs:
         # ルートの監査が失敗しても、Consoleの指摘も出す。取り消したときは動かさない。
         # `!`で否定する式は、YAMLのタグを拒む契約テストに当たるので、成功と失敗を並べて書く。
         if: ${{ success() || failure() }}
-        run: bun audit --cwd console --audit-level=high
+        # サブコマンドの後ろの`--cwd`に頼らず、作業ディレクトリでconsole/bun.lockを読ませる。
+        working-directory: console
+        run: bun audit --audit-level=high
