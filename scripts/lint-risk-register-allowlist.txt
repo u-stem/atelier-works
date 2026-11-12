@@ -42,7 +42,7 @@ docs/internals/design.md 98d39738e5d1d4d5 pointer 承認済みの要件定義か
 docs/internals/freezes.md cbac47026f10948a pointer 安全策と残るリスクはこの文書の「凍結とdeployの保留」に書く。
 docs/internals/freezes.md 89fb2c5e793887eb safe-side フックの拒否は、セキュリティの「Claude Codeの拒否ルール」にある、ベス
 docs/internals/freezes.md 74b3245287ea4f13 pointer Consoleから凍結とdeployの保留を置ける。 置く道と守りは、保留と凍結
-docs/internals/github-collect.md c43d3c73bc274da5 pointer collect_githubがGitHubから何を読み、どう判定し、何をDBに書
+docs/internals/github-collect.md 596da8c7c455412d pointer collect_githubがGitHubから何を読み、どう判定し、何をDBに書
 docs/internals/github-collect.md 3b7d458c676bd386 operational owner_mismatchは、設定にIDがあるかによらずstaleとして知らせ
 docs/internals/github-collect.md d5d3d6117bb98866 mechanism gh search、--search、argvのghとsearchの並びも、静的
 docs/internals/holds.md 123dd5b35b17c2e0 pointer 安全策と残るリスクはこの文書の「保留」に書く。
@@ -71,7 +71,7 @@ docs/internals/host-apply.md adf3b78ba13e0f4e mechanism tree_forbiddenの通知�
 docs/internals/host-apply.md da9b3c29d1a57073 unverified 設定ファイルの読み取りの違い。Bun.TOML.parseは、重複したキーとテー
 docs/internals/host-apply.md ab0fd3ebbb81dd16 unverified docker compose up --dry-runの出力のうち、Creati
 docs/internals/host-apply.md e48a5069c7b7c08c followup 掃除は使われていない旧版を次に成功した時点で消すので、ホストの実行役の巻き戻しと
-docs/internals/implement.md 7c3f037a94c98b3e pointer 工程3の実装フロー(f/factory/implement)の内部の挙動、設定値
+docs/internals/implement.md 82f4bc30786f3e5a pointer 工程3の実装フロー(f/factory/implement)の内部の挙動、設定値
 docs/internals/investigate.md c3646b95fd941508 pointer 調査(進め方investigate)のClaudeを隔離する仕組みと、調査の入口
 docs/internals/investigate.md 5bef721f0044ce62 mechanism 合格は、ツールを通るRead・Glob・Grepの読み出しが、3つの置き場で--
 docs/internals/investigate.md 215d8583d835c4e4 mechanism --toolsによるツールの制限。 Read、Glob、Grep以外を使えなくす
@@ -89,7 +89,7 @@ docs/internals/notifications.md cdff7acd217c14ce operational レビューの記�
 docs/internals/notifications.md 525e8905b4537ef4 operational 設定を切り替えた瞬間は、日次サマリーの数字とモードがずれる。 サマリーは、実行時
 docs/internals/notifications.md dce7a32b87482420 operational gatedを意図して続けると、人がnoticeを解決しても、翌日の実行で出直す。
 docs/internals/notifications.md fd219ac737490b0a operational self_updateは、wmill sync pushを先に、wmill da
-docs/internals/pr-workflow.md 1eacc5537a2cbb68 pointer PRのレビュー(f/factory/pr_review)とPRの修正(f/fac
+docs/internals/pr-workflow.md be08d7030934845e pointer PRのレビュー(f/factory/pr_review)とPRの修正(f/fac
 docs/internals/pr-workflow.md f869be0900d1a588 operational 正当な文字も置き換わる。 絵文字を結合するZWJ、絵文字の異体字選択子(U+FE
 docs/internals/pr-workflow.md f3e047c3e5863b47 operational 次の2つの挙動は、受け入れている。
 docs/internals/pr-workflow.md 35d302c1b9c8e27e operational 修正の終わりでは、形の合わないスレッドが1つあるだけで一覧が空になり、全提案のス

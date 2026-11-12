@@ -12,7 +12,7 @@ description: 本リポジトリ(atelier-works)のMarkdown文書(README、AGENTS.
 ## 手順
 
 1. 書く情報の種類を決め、`docs/writing-guidelines.md`の「文書の種類」の表から置き場所を選ぶ。
-   手順なら`docs/operations.md`、内部の挙動なら`docs/internals/`のように、読み手と目的で選ぶ。
+   手順なら`docs/operations.md`と`docs/operations/`、内部の挙動なら`docs/internals/`のように、読み手と目的で選ぶ。
 2. 同じ情報が既にどこかに書かれていないか、`Grep`で探す。
    あれば、そこを直す。
    別の場所にも要るときはリンクにする。

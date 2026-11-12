@@ -307,7 +307,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-host-22"></a>R-HOST-22 | 同じホストユーザーのプロセスは、`state.json`の`applied_sha`を書き換えられる。これで承認の差の基準をずらせる。`approved.json`を直接書ける場合と同じ扱いである。 | [状態の置き場](internals/host-apply.md#状態の置き場) |
 | <a id="r-host-23"></a>R-HOST-23 | コンテナから状態の置き場を守るのは、0700ではなく、置き場をマウントしないことである。Docker Desktop for Macのbind mountでは、コンテナが書いたファイルはホストのユーザーの所有に見える。所有者と権限の検査では区別できない。`--state-dir`は、共有の場所やbind mountの下に置かない。 | [状態の置き場](internals/host-apply.md#状態の置き場) |
 | <a id="r-host-24"></a>R-HOST-24 | 契約テストは字句の検査である。文字列の連結は検出できない。レビューが守る。`node:fs`を使えるモジュールは、閉じた一覧(`code_origin.ts`、`lock.ts`、`secure_file.ts`)で固定する。 | [状態の置き場](internals/host-apply.md#状態の置き場) |
-| <a id="r-host-25"></a>R-HOST-25 | 状態ファイルが読めないとき(`state_unreadable`)は、`createState`と`reinit`のどちらも使えない。人が壊れたファイルを退避して初期化する。手順は、初期化を足す段階で`docs/operations.md`に書く。 | [状態の置き場](internals/host-apply.md#状態の置き場) |
+| <a id="r-host-25"></a>R-HOST-25 | 状態ファイルが読めないとき(`state_unreadable`)は、`createState`と`reinit`のどちらも使えない。人が壊れたファイルを退避して初期化する。手順は、初期化を足す段階で`docs/operations/deploy.md`に書く。 | [状態の置き場](internals/host-apply.md#状態の置き場) |
 | <a id="r-host-26"></a>R-HOST-26 | 親のディレクトリの鎖とACLは検査しない。`--state-dir`は、本人だけが書ける親の下に置く。 | [状態の置き場](internals/host-apply.md#状態の置き場) |
 | <a id="r-host-27"></a>R-HOST-27 | 置き場の検査から開くまでの間に、パスを差し替えられる隙がある。差し替えられるのは、親を書ける同じホストユーザーに限る。 | [状態の置き場](internals/host-apply.md#状態の置き場) |
 
