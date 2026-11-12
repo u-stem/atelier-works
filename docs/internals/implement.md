@@ -1200,12 +1200,12 @@ Claudeが書き換えた`mise.toml`や`package.json`のscriptsをworkerで実行
 | gitleaks | `.gitleaksignore`、`.gitleaks.toml` |
 | ランタイムのバージョン | `.python-version`、`.nvmrc`、`rust-toolchain` |
 | パッケージマネージャー | `.yarnrc`、`.pnpmfile.cjs`、JavaScriptのlockfile、すべての`package.json` |
-| ツールの設定 | `*.config.[cm][jt]s`、`.eslintrc`、`.babelrc`、`.prettierrc`、`biome.json`、`biome.jsonc` |
+| ツールの設定 | `*.config.[cm][jt]s`、`.eslintrc`、`.babelrc`、`.prettierrc` |
 | タスクランナーなど | `Makefile`、`Justfile`、`Taskfile.yml`、`turbo.json`、`nx.json`、`deno.json`、`CODEOWNERS`、`.pre-commit-config.yaml` |
 | JavaScript以外のlockfileとmanifest | `uv.lock`、`poetry.lock`、`Pipfile`、`pyproject.toml`、`setup.py`、`setup.cfg`、`requirements*.txt`、`Cargo.toml`、`Cargo.lock`、`go.mod`、`go.sum`、`Gemfile`、`composer.json`、`composer.lock` |
 
 PR修正の一覧そのものの中身は、[PRワークフローの安全策の内部仕様の「禁止パスによる停止」](pr-workflow/security.md#禁止パスによる停止)にある。
-markdownlint-cli2とtextlintの設定は、PR修正の一覧に含まれる。
+markdownlint-cli2とtextlintの設定、Biomeの設定(`biome.json`、`biome.jsonc`)、`.gitignore`は、PR修正の一覧に含まれる。
 
 `infra/`を加えるのは、workerのイメージとcomposeの定義の変更が、次にホストで`mise run up`するまで反映されないからである。
 レビューする人がその変更を知る必要がある。

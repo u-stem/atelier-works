@@ -683,6 +683,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
  * pr_fixが保護するファイル名(ディレクトリを問わない)。
  * markdownlint-cli2とtextlintの設定も含める。どちらも設定から任意のモジュールを読み込めて、
  * pre-commitと`mise run check`が読むので、書き換えられるとコードを実行されるため。
+ * Biomeの設定(`biome.json`、`biome.jsonc`)も含める。lintの規則を決め、書き換えると検査を緩めて通せるため。
+ * `.gitignore`も含める。Biomeは無視されたファイルを、追跡済みでも検査しないため。
  * ホストの実行役が動かすmise、bun、nodeの設定も含める(`.tool-versions`、`.node-version`、`.bun-version`、
  * `.env`系)。ツールの版と環境変数を変えると、実行役が動かす道具の中身が変わる。
  * wmillの設定(`wmill.yaml`と別名の`wmill.yml`)もどのディレクトリでも含める。
@@ -708,6 +710,8 @@ export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.tool-versions$/,
   /^\.env(\..*)?$/,
   /^\.(node|bun)-version$/,
+  /^biome\.jsonc?$/,
+  /^\.gitignore$/,
 ];
 
 /**
@@ -745,7 +749,6 @@ export const IMPLEMENT_PROTECTED_EXACT_PATHS: readonly string[] = [
  * (gitleaksの設定、ほかのランタイム・ツールチェーンのバージョン指定、
  * パッケージマネージャーの設定とロックファイル、ツールの設定モジュールとrcファイル、
  * タスクランナー、`scripts`に限らず`package.json`全体)。
- * Biomeの設定(`biome.json`、`biome.jsonc`)も加える。型アサーションの禁止を含むlintの規則を決めるため。
  */
 export const IMPLEMENT_PROTECTED_BASENAME_PATTERNS: readonly RegExp[] = [
   ...FORBIDDEN_BASENAME_PATTERNS,
@@ -760,7 +763,6 @@ export const IMPLEMENT_PROTECTED_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.(eslintrc|babelrc|prettierrc)(\..*)?$/,
   /^(Makefile|[Jj]ustfile|Taskfile\.ya?ml|turbo\.json|nx\.json|deno\.jsonc?|CODEOWNERS|\.pre-commit-config\.yaml)$/,
   /^package\.json$/,
-  /^biome\.jsonc?$/,
   // JS以外のロックファイルとマニフェスト。インストール時に、記載された
   // ビルドスクリプトや`setup.py`が実行され、固定したものが取得される。
   /^(uv|poetry)\.lock$/,
