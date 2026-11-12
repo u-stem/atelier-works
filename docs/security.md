@@ -704,7 +704,9 @@ Contentsを付けないのは、Metadata、Pull requests、IssuesのRead-onlyだ
 loginに`_`を含む所有者(EMUのアカウント)は、環境変数の名前の`_`が`-`に直るので、対応表のキーに合わない。
 収集は扱わない。
 `mise run doctor`が、`owners`にある該当の所有者の名前を警告する。
-読めなかったときは、理由の行にパスワードを出さず、段階の名前、HTTPのstatus、例外の名前だけを出す。
+読めなかったときに`factory-owners.ts`が標準エラーに出す理由は、段階の名前、HTTPのstatus、例外の名前だけである。
+`doctor.sh`は、`factory-owners:`で始まる最初の行を、パスワードを伏せて200文字までで出す。
+その行が無いときは、標準エラーの先頭行を同じ扱いで出す。
 
 ## Windmillの公開範囲と初期パスワード
 

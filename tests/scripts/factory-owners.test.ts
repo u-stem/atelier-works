@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  missingEnvironmentReason,
   ownersWithUnderscore,
+  readEnvironment,
   readFactoryOwnerNames,
 } from "../../scripts/factory-owners.ts";
 
@@ -240,24 +240,35 @@ describe("readFactoryOwnerNames reasons", () => {
   });
 });
 
-describe("missingEnvironmentReason", () => {
+describe("readEnvironment", () => {
   const COMPLETE = {
     WM_CHECK_BASE_URL: "http://127.0.0.1:8080",
     WM_ADMIN_EMAIL: "admin@example.com",
     WM_ADMIN_PASSWORD: "not-a-real-password",
   };
 
-  test("returns null when every variable is set", () => {
-    expect(missingEnvironmentReason(COMPLETE)).toBeNull();
+  test("returns the destination and the credentials when every variable is set", () => {
+    expect(readEnvironment(COMPLETE)).toEqual({
+      baseUrl: "http://127.0.0.1:8080",
+      email: "admin@example.com",
+      password: "not-a-real-password",
+    });
   });
 
   test("names the variables that are missing or empty", () => {
     expect(
-      missingEnvironmentReason({
+      readEnvironment({
         ...COMPLETE,
         WM_ADMIN_EMAIL: undefined,
         WM_ADMIN_PASSWORD: "",
       }),
-    ).toBe("missing environment: WM_ADMIN_EMAIL, WM_ADMIN_PASSWORD");
+    ).toEqual({
+      reason: "missing environment: WM_ADMIN_EMAIL, WM_ADMIN_PASSWORD",
+    });
+  });
+
+  test("leaves the values of the variables out of the reason", () => {
+    const read = readEnvironment({ ...COMPLETE, WM_ADMIN_EMAIL: "" });
+    expect(JSON.stringify(read)).not.toContain(COMPLETE.WM_ADMIN_PASSWORD);
   });
 });
