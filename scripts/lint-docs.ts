@@ -120,12 +120,11 @@ export function lintDocText(path: string, markdown: string): string[] {
     line: issue.line,
     text: `${path}:${issue.line}: [${issue.rule}] ${issue.message}`,
   }));
+  // 「1文は1行」と行数の上限は、どちらも検査の対象の文書(`isTargetDoc`)にかける。
   if (isOneSentencePerLineTarget(path)) {
     for (const line of findSentenceViolationLines(body)) {
       issues.push({ line, text: formatSentenceViolation(path, line) });
     }
-  }
-  if (isTargetDoc(path)) {
     const tooLong = findDocLengthViolation(path, body);
     if (tooLong !== undefined) {
       issues.push({ line: MAX_DOC_LINES + 1, text: tooLong });

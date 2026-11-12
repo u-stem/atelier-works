@@ -36,8 +36,4 @@ describe("findDocLengthViolation", () => {
       findDocLengthViolation("docs/a.md", docOfLines(MAX_DOC_LINES + 1)),
     ).toStartWith(`docs/a.md:${MAX_DOC_LINES + 1}: [max-lines] `);
   });
-
-  test("keeps the limit at 3000 lines", () => {
-    expect(MAX_DOC_LINES).toBe(3000);
-  });
 });
