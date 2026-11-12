@@ -4,6 +4,7 @@
 import type { SummaryNotice } from "../api/guards/summary.ts";
 import { displayableIssueText } from "./intakeText.ts";
 import { noticeKindLabel } from "./labels.ts";
+import { noticeDocUrl } from "./noticeDocLink.ts";
 import { type NoticeGuide, noticeGuide } from "./noticeGuide.ts";
 import { safeGitHubUrl } from "./safeUrl.ts";
 
@@ -148,6 +149,8 @@ export type NoticeDescription = {
   readonly shas: readonly string[];
   readonly targets: readonly NoticeTarget[];
   readonly guide: NoticeGuide;
+  /** 運用の文書の、この種類の行を指すURL。種類がアンカーに入れられない形なら`null`。 */
+  readonly procedureUrl: string | null;
 };
 
 const UNRESOLVABLE_REASON =
@@ -185,5 +188,6 @@ export function describeNotice(
     shas,
     targets: noticeTargets(message.text, truncated),
     guide: noticeGuide(notice.kind),
+    procedureUrl: noticeDocUrl(notice.kind),
   };
 }

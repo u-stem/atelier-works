@@ -57,6 +57,7 @@ const RESOLVE_CONFIG = {
  * 本文が作業項目を名指しする種類は、未解決で、その作業項目の失敗が一覧にあるときだけ、同じ位置に、その失敗へ移るボタンを出す。
  * 一覧に無い失敗へ移ると、選んだ項目が一覧に無いという行き止まりになるためである。
  * ボタンは遷移を自分で起こさず、`onOpenFailure`を呼ぶ。履歴、種類のチップ、フォーカスは、一覧を持つ画面が決める。
+ * 次の操作の欄の末尾には、運用の文書のこの種類の行へのリンクを、新しいタブで開く形で出す。
  */
 export function NoticeDetail({
   notice,
@@ -200,6 +201,19 @@ export function NoticeDetail({
           {guide.note === null ? null : (
             <p className="mt-1 text-small text-muted-foreground">
               {guide.note}
+            </p>
+          )}
+          {description.procedureUrl === null ? null : (
+            <p className="mt-1 text-small">
+              <a
+                href={description.procedureUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-sm font-medium text-primary underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                運用の文書で手順を読む
+                <ExternalLink aria-hidden="true" className="size-3.5" />
+              </a>
             </p>
           )}
         </div>
