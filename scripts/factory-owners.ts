@@ -52,10 +52,10 @@ export function ownersWithUnderscore(config: unknown): string[] {
 // ログインの前に`/api/version`がWindmillの応答かを確かめ、そうでなければ資格情報を送らない。
 // 別のプロセスが宛先のポートを使っていても漏らさないため。読めなければnullを返す。
 // セッションのトークンはメモリの上だけに置き、読んだ後にログアウトする。
-export async function readFactoryOwnerNames(
+async function readOwnerNamesOrNull(
   baseUrl: string,
   credentials: AdminCredentials,
-  fetchFn: typeof fetch = fetch,
+  fetchFn: typeof fetch,
 ): Promise<string[] | null> {
   const api = `${baseUrl.replace(/\/+$/, "")}/api`;
   let token: string | undefined;
@@ -104,23 +104,43 @@ export async function readFactoryOwnerNames(
   }
 }
 
+export type OwnerRead = { names: string[] } | { reason: string };
+
+export async function readFactoryOwnerNames(
+  baseUrl: string,
+  credentials: AdminCredentials,
+  fetchFn: typeof fetch = fetch,
+): Promise<OwnerRead> {
+  const names = await readOwnerNamesOrNull(baseUrl, credentials, fetchFn);
+  return names === null ? { reason: "" } : { names };
+}
+
+export function missingEnvironmentReason(
+  _env: Record<string, string | undefined>,
+): string | null {
+  return null;
+}
+
 async function main(args: readonly string[]): Promise<number> {
   if (args[0] !== "underscore") {
     console.error("usage: factory-owners.ts underscore");
     return 64;
   }
+  const missing = missingEnvironmentReason(process.env);
+  if (missing !== null) {
+    console.error(missing);
+    return EXIT_UNREADABLE;
+  }
   const baseUrl = process.env.WM_CHECK_BASE_URL ?? "";
   const email = process.env.WM_ADMIN_EMAIL ?? "";
   const password = process.env.WM_ADMIN_PASSWORD ?? "";
-  if (baseUrl === "" || email === "" || password === "") {
-    return EXIT_UNREADABLE;
-  }
-  const names = await readFactoryOwnerNames(baseUrl, { email, password });
-  if (names === null) {
+  const read = await readFactoryOwnerNames(baseUrl, { email, password });
+  if ("reason" in read) {
+    console.error(read.reason);
     return EXIT_UNREADABLE;
   }
   for (const name of ownersWithUnderscore({
-    owners: names.map((owner) => ({ name: owner })),
+    owners: read.names.map((owner) => ({ name: owner })),
   })) {
     console.log(name);
   }

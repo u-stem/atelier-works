@@ -525,12 +525,22 @@ describe("doctor.sh read-only token check", () => {
 describe("doctor.sh owners that the collection cannot handle", () => {
   const ADMIN_EMAIL = "admin@example.com";
   const ADMIN_PASSWORD = "correct-horse-battery";
+  const CONFIG_PATH =
+    "/api/w/factory/resources/get_value/f/factory/factory_config";
 
-  function startWindmill(config: unknown, status = 200) {
-    return Bun.serve({
+  interface Windmill {
+    server: ReturnType<typeof Bun.serve>;
+    // 受け取ったリクエストのパス。
+    paths: string[];
+  }
+
+  function startWindmill(config: unknown, status = 200): Windmill {
+    const paths: string[] = [];
+    const server = Bun.serve({
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        paths.push(url.pathname);
         if (url.pathname === "/api/version") {
           return new Response("CE v1.817.0");
         }
@@ -546,9 +556,11 @@ describe("doctor.sh owners that the collection cannot handle", () => {
         return new Response("ok");
       },
     });
+    return { server, paths };
   }
 
-  function installFakeMise(): void {
+  // bunは本物へのリンクにするか、与えられた本文のスクリプトにする。
+  function installFakeMise(bunBody?: string): void {
     const mise = join(dir, "mise");
     writeFileSync(
       mise,
@@ -563,22 +575,36 @@ describe("doctor.sh owners that the collection cannot handle", () => {
       ].join("\n"),
     );
     chmodSync(mise, 0o755);
-    symlinkSync(process.execPath, join(dir, "bun"));
+    const bun = join(dir, "bun");
+    if (bunBody === undefined) {
+      symlinkSync(process.execPath, bun);
+    } else {
+      writeFileSync(bun, `#!/bin/sh\n${bunBody}\n`);
+      chmodSync(bun, 0o755);
+    }
   }
 
   interface OwnerRun {
+    // 「収集の対象外」を含む行。
     lines: string[];
-    // 警告の行が無いときに、原因をたどるための終了コードと、標準エラーと標準出力の末尾。
-    // doctor.shは子プロセスの標準エラーを捨てるので、どの項目まで進んだかは標準出力で見分ける。
-    diagnostics: string;
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    // 偽のWindmillが受け取ったリクエストのパス。
+    paths: string[];
   }
 
-  async function ownerRun(port: number): Promise<OwnerRun> {
+  async function ownerRun(
+    config: unknown,
+    options: { status?: number; bunBody?: string } = {},
+  ): Promise<OwnerRun> {
+    installFakeMise(options.bunBody);
+    const windmill = startWindmill(config, options.status);
     const proc = Bun.spawn([BASH, SCRIPT], {
       env: {
         PATH: `${dir}:/usr/bin:/bin`,
         HOME: dir,
-        WM_HTTP_PORT: String(port),
+        WM_HTTP_PORT: String(windmill.server.port),
         WM_ADMIN_EMAIL: ADMIN_EMAIL,
         WM_ADMIN_PASSWORD: ADMIN_PASSWORD,
       },
@@ -590,70 +616,85 @@ describe("doctor.sh owners that the collection cannot handle", () => {
       new Response(proc.stderr).text(),
     ]);
     const exitCode = await proc.exited;
+    windmill.server.stop(true);
     return {
       lines: stdout.split("\n").filter((l) => l.includes("収集の対象外")),
-      diagnostics: `exit code: ${exitCode}, stderr tail: ${JSON.stringify(stderr.slice(-500))}, stdout tail: ${JSON.stringify(stdout.slice(-500))}`,
+      stdout,
+      stderr,
+      exitCode,
+      paths: windmill.paths,
     };
   }
 
-  async function ownerLines(port: number): Promise<string[]> {
-    return (await ownerRun(port)).lines;
+  // 失敗したときに、絞った行と実行の全体が同じメッセージに載るようにする。
+  // 絞った行を先頭に置くので、行頭を固定した正規表現で照合できる。
+  function shown(run: OwnerRun): string {
+    return [
+      "lines:",
+      ...run.lines,
+      "---",
+      `exit code: ${run.exitCode}`,
+      "stderr:",
+      run.stderr,
+      "stdout:",
+      run.stdout,
+    ].join("\n");
   }
 
   test("warns with the name of an owner whose login has an underscore", async () => {
-    installFakeMise();
-    const server = startWindmill({
+    const run = await ownerRun({
       owners: [{ name: "acme" }, { name: "emu_user" }],
     });
 
-    const { lines, diagnostics } = await ownerRun(server.port ?? 0);
-
-    server.stop(true);
-    // 行が無いときは、期待値との差に終了コードと標準エラーと標準出力が載るようにする。
-    expect(lines[0] ?? `no warning line (${diagnostics})`).toMatch(
-      /^\s+WARN\s.*emu_user/,
-    );
+    expect(shown(run)).toMatch(/^lines:\n\s+WARN\s.*emu_user/);
   });
 
   test("does not mention an owner whose login has no underscore", async () => {
-    installFakeMise();
-    const server = startWindmill({
+    const run = await ownerRun({
       owners: [{ name: "acme" }, { name: "emu_user" }],
     });
 
-    const lines = await ownerLines(server.port ?? 0);
-
-    server.stop(true);
-    expect(lines.join("\n")).not.toContain("acme");
+    expect(run.lines.join("\n")).not.toContain("acme");
   });
 
   test("says nothing when every login is plain", async () => {
-    installFakeMise();
-    const server = startWindmill({ owners: [{ name: "acme" }] });
+    const run = await ownerRun({ owners: [{ name: "acme" }] });
 
-    const lines = await ownerLines(server.port ?? 0);
-
-    server.stop(true);
-    expect(lines).toEqual([]);
+    expect(shown(run)).toMatch(/^lines:\n---\n/);
   });
 
-  test("says nothing when the config cannot be read", async () => {
-    installFakeMise();
-    const server = startWindmill({ message: "not found" }, 404);
+  test("reads factory_config when Windmill responds", async () => {
+    const run = await ownerRun({ owners: [{ name: "acme" }] });
 
-    const lines = await ownerLines(server.port ?? 0);
+    expect(run.paths).toContain(CONFIG_PATH);
+  });
 
-    server.stop(true);
-    expect(lines).toEqual([]);
+  test("does not report the check as skipped when the config can be read", async () => {
+    const run = await ownerRun({ owners: [{ name: "emu_user" }] });
+
+    expect(run.lines.join("\n")).not.toContain("確認できませんでした");
+  });
+
+  test("reports the skipped check with the reason when the config cannot be read", async () => {
+    const run = await ownerRun({ message: "not found" }, { status: 404 });
+
+    expect(shown(run)).toMatch(
+      /^lines:\n\s+OK\s+収集の対象外\s+確認できませんでした\(終了コード: 2、factory_config: status 404\)。この検査はスキップしました\n---\n/,
+    );
   });
 
   test("does not print the admin password", async () => {
-    installFakeMise();
-    const server = startWindmill({ owners: [{ name: "emu_user" }] });
+    const run = await ownerRun({ owners: [{ name: "emu_user" }] });
 
-    const lines = await ownerLines(server.port ?? 0);
+    expect(run.stdout + run.stderr).not.toContain(ADMIN_PASSWORD);
+  });
 
-    server.stop(true);
-    expect(lines.join("\n")).not.toContain(ADMIN_PASSWORD);
+  test("masks the admin password in the reason of the skipped check", async () => {
+    const run = await ownerRun(
+      { owners: [{ name: "emu_user" }] },
+      { bunBody: `echo "failed with ${ADMIN_PASSWORD}" >&2; exit 1` },
+    );
+
+    expect(run.stdout + run.stderr).not.toContain(ADMIN_PASSWORD);
   });
 });
