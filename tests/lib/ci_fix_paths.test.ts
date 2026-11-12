@@ -415,6 +415,25 @@ describe("protected paths", () => {
   });
 });
 
+describe("biome configuration and ignore files", () => {
+  test.each([
+    ".biome.json",
+    "f/x/.biome.jsonc",
+    ".ignore",
+    "console/src/.ignore",
+  ])("denies %s, which biome reads", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+
+  test.each([
+    "f/factory/sample/.biome.json.bak",
+    "f/factory/sample/ignore",
+    "f/factory/sample/.ignored",
+  ])("does not deny the near miss %s", (path) => {
+    expect(isDeniedPath(path)).toBe(false);
+  });
+});
+
 describe("tests", () => {
   const TEST = "tests/lib/foo.test.ts";
 

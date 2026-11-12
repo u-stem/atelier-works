@@ -572,6 +572,43 @@ describe("lint configuration and ignore files", () => {
     },
   );
 
+  test.each([".biome.json", "f/x/.biome.jsonc"])(
+    "matchesForbiddenPath matches the dotted Biome configuration %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(true);
+    },
+  );
+
+  test.each([".ignore", "console/src/.ignore"])(
+    "matchesForbiddenPath matches the ignore file %s, which biome also reads",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(true);
+    },
+  );
+
+  test.each([
+    ".biome.json",
+    "f/x/.biome.jsonc",
+    ".ignore",
+    "console/src/.ignore",
+  ])("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each([".biome.json.bak", "ignore", ".ignored"])(
+    "matchesForbiddenPath does not match the near miss %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(false);
+    },
+  );
+
+  test.each([".biome.json.bak", "ignore", ".ignored"])(
+    "matchesImplementProtectedPath does not match the near miss %s",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(false);
+    },
+  );
+
   test.each(["gitignore.bak", ".gitignore-example", "docs/gitignore.md"])(
     "matchesForbiddenPath does not match the near miss %s",
     (path) => {

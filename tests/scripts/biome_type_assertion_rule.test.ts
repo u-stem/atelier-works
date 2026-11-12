@@ -7,14 +7,23 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
+import {
+  computeLineStarts,
+  getLeadingCommentRanges,
+  getTrailingCommentRanges,
+} from "typescript/unstable/ast";
 import { isRecord } from "../../f/factory/lib/types.ts";
+import {
+  type Token,
+  TokenizeError,
+  tokenize,
+} from "../../scripts/ts-tokenize.ts";
 
 // 型アサーションを止めるBiomeの規則が、設定どおりに効き続けることを固定する。
 // 規則はBiomeのnurseryにあり、版を上げると挙動が変わりうるため、実物のBiomeで確かめる。
 
 const ROOT = join(import.meta.dir, "..", "..");
-const SELF = relative(ROOT, import.meta.path);
 const RULE = "noUnsafeTypeAssertion";
 // Biomeの`files.maxSize`の既定値(1 MiB)。
 const DEFAULT_MAX_SIZE = 1024 * 1024;
@@ -58,32 +67,82 @@ function lint(
 
 function trackedTypeScriptFiles(): string[] {
   const result = Bun.spawnSync(
-    ["git", "ls-files", "-z", "--", "*.ts", "*.tsx"],
+    ["git", "ls-files", "-z", "--", "*.ts", "*.tsx", "*.mts", "*.cts"],
     { cwd: ROOT, env: { PATH: process.env.PATH ?? "" } },
   );
   if (result.exitCode !== 0) throw new Error("git ls-files failed");
   return result.stdout
     .toString()
     .split("\0")
-    .filter((path) => path !== "" && path !== SELF);
+    .filter((path) => path !== "");
 }
 
-// 条件に合う行を`path:line`の形で返す。
-function linesMatching(match: (line: string) => boolean): string[] {
-  const found: string[] = [];
-  for (const path of trackedTypeScriptFiles()) {
-    const lines = readFileSync(join(ROOT, path), "utf8").split("\n");
-    lines.forEach((line, index) => {
-      if (match(line)) found.push(`${path}:${index + 1}`);
-    });
+// `position`が何行目か(1始まり)を返す。
+function lineAt(lineStarts: readonly number[], position: number): number {
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if ((lineStarts[mid] ?? 0) <= position) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
   }
-  return found;
+  return low + 1;
 }
 
-// 規則のグループ全体(`lint`と`lint/nursery`)を黙らせるコメントの行。
-// 文字列の中の同じ並びを拾わないよう、行頭がコメントのものだけを見る。
+type Comment = { readonly where: string; readonly text: string };
+
+// ファイルの中のコメントを返す。
+// 行頭に限らず、行末、式の途中、JSXの`{/* ... */}`のコメントも拾う。
+// 文字列、テンプレート、正規表現、JSXの本文の中の同じ並びは、コメントに数えない。
+// トークンに分けられないファイルは、全体を1つのコメントとみなし、見逃さない側に倒す。
+function commentsOf(path: string): Comment[] {
+  const text = readFileSync(join(ROOT, path), "utf8");
+  let tokens: Token[];
+  try {
+    tokens = tokenize(text, { jsx: path.endsWith(".tsx") });
+  } catch (err) {
+    if (err instanceof TokenizeError) return [{ where: path, text }];
+    throw err;
+  }
+  const lineStarts = computeLineStarts(text);
+  const seen = new Set<number>();
+  const comments: Comment[] = [];
+  const collect = (position: number): void => {
+    const ranges = [
+      ...(getTrailingCommentRanges(text, position) ?? []),
+      ...(getLeadingCommentRanges(text, position) ?? []),
+    ];
+    for (const range of ranges) {
+      if (seen.has(range.pos)) continue;
+      seen.add(range.pos);
+      comments.push({
+        where: `${path}:${lineAt(lineStarts, range.pos)}`,
+        text: text.slice(range.pos, range.end),
+      });
+    }
+  };
+  collect(0);
+  for (const token of tokens) collect(token.start + token.text.length);
+  return comments;
+}
+
+// 条件に合うコメントの位置を`path:line`の形で返す。
+// このテスト自身も対象にする。規則名と正規表現はコードに書き、コメントには書かない。
+function commentsMatching(match: (comment: string) => boolean): string[] {
+  return trackedTypeScriptFiles().flatMap((path) =>
+    commentsOf(path)
+      .filter((comment) => match(comment.text))
+      .map((comment) => comment.where),
+  );
+}
+
+// 規則のグループ全体を黙らせる抑制の指示。
+// `-all`と`-start`の形と、`/** ... */`の形も、Biomeは抑制として受け付ける。
 const GROUP_SUPPRESSION =
-  /^\s*(?:\{\s*)?(?:\/\/|\/\*)\s*biome-ignore(?:-all|-start)?\s+lint(?:\/nursery)?(?=[\s:(]|$)/;
+  /biome-ignore(?:-all|-start)?\s+lint(?:\/nursery)?(?![\w/])/;
 
 function readMaxSize(): number | null {
   const parsed: unknown = JSON.parse(
@@ -120,14 +179,16 @@ describe("biome rejects type assertions", () => {
 describe("biome checks every tracked TypeScript file", () => {
   test("no tracked file suppresses the rule with a biome-ignore comment", () => {
     expect(
-      linesMatching(
-        (line) => line.includes("biome-ignore") && line.includes(RULE),
+      commentsMatching(
+        (comment) => comment.includes("biome-ignore") && comment.includes(RULE),
       ),
     ).toEqual([]);
   });
 
   test("no tracked file suppresses the whole lint or nursery group with a biome-ignore comment", () => {
-    expect(linesMatching((line) => GROUP_SUPPRESSION.test(line))).toEqual([]);
+    expect(
+      commentsMatching((comment) => GROUP_SUPPRESSION.test(comment)),
+    ).toEqual([]);
   });
 
   test("biome.json sets files.maxSize explicitly", () => {
