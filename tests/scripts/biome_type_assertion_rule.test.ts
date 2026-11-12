@@ -82,10 +82,18 @@ const GROUP_SUPPRESSION =
 // 抑制の指示と同じ並びを、文字列のデータとして持つ既知の箇所。
 // `snippet`は、当たった並びを囲む本文で、その範囲の中の当たりだけを外す。
 // 載せる前に、本当に文字列のデータであることを読んで確かめる。
+// `snippet`の指示の直後の空白は`SPACE`から組み立て、このテスト自身の本文が当たらないようにする。
+const SPACE = " ";
 const ALLOWED_DATA: readonly {
   readonly path: string;
   readonly snippet: string;
-}[] = [];
+}[] = [
+  // 修正の差分の検査が、抑制のコメントを足す行を止めることを確かめるテストの入力の文字列。
+  {
+    path: "tests/lib/conflict_fix_round.test.ts",
+    snippet: `withNewLine("// biome-ignore${SPACE}lint: x")`,
+  },
+];
 
 // 本文で`pattern`に当たる箇所を、許可の一覧で外したうえで`path:line`の形で返す。
 // コメントかどうかは見分けない。トークンの読み違いでコメントを取りこぼさないため。
