@@ -11,18 +11,30 @@ import { createTreeReader } from "../../scripts/markdown-tree.ts";
 const HEADER =
   "| ID | 残るリスクと、受け入れる理由 | 関連する節 |\n| --- | --- | --- |\n";
 
-function row(id: string, anchor = id.toLowerCase()): string {
-  return `| <a id="${anchor}"></a>${id} | リスクの文。 | [節](security.md#節) |\n`;
+function row(
+  id: string,
+  anchor = id.toLowerCase(),
+  cell = "リスクの文。",
+): string {
+  return `| <a id="${anchor}"></a>${id} | ${cell} | [節](security.md#節) |\n`;
 }
 
-// 略号の表の最大の番号は、渡さなければ、行と欠番に現れるR-ABの番号の最大にする。
-function register(rows: string, tail = "", max?: string): string {
+const AREAS_HEAD =
+  "| 略号 | 領域 | 説明の文書 | 使った最大の番号 |\n| --- | --- | --- | --- |\n";
+
+// 略号の表の最大の番号は、渡さなければ、行と欠番に現れるR-ABの番号の最大を2桁にする。
+function register(
+  rows: string,
+  tail = "",
+  max?: string,
+  areasOf: (recorded: string) => string = (recorded) =>
+    `${AREAS_HEAD}| AB | [領域](#領域) | [節](security.md) | ${recorded} |\n`,
+): string {
   const numbers = [...`${rows}${tail}`.matchAll(/R-AB-(\d{2})/g)].map((m) =>
     Number(m[1]),
   );
-  const recorded = max ?? String(Math.max(0, ...numbers));
-  const areas = `| 略号 | 領域 | 説明の文書 | 使った最大の番号 |\n| --- | --- | --- | --- |\n| AB | [領域](#領域) | [節](security.md) | ${recorded} |\n`;
-  return `# 残るリスク\n\n${areas}\n## 領域\n\n${HEADER}${rows}${tail}`;
+  const recorded = max ?? String(Math.max(0, ...numbers)).padStart(2, "0");
+  return `# 残るリスク\n\n${areasOf(recorded)}\n## 領域\n\n${HEADER}${rows}${tail}`;
 }
 
 const GUIDE =
@@ -166,6 +178,50 @@ describe("lintRiskRegister rows", () => {
     ).toBe(true);
   });
 
+  test("reports a link inside the register labelled with an ID that points to another row", () => {
+    expect(
+      hasProblem(
+        withRegister(
+          register(
+            row("R-AB-01") +
+              row("R-AB-02", "r-ab-02", "[R-AB-01](#r-ab-02)と同じ。"),
+          ),
+          `# 節\n\n${link("R-AB-01")} ${link("R-AB-02")}\n`,
+        ),
+        "link does not reach its row: R-AB-01 (docs/security-risks.md:",
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts a link inside the register that reaches its row", () => {
+    expect(
+      problemsOf(
+        withRegister(
+          register(
+            row("R-AB-01") +
+              row("R-AB-02", "r-ab-02", "[R-AB-01](#r-ab-01)と同じ。"),
+          ),
+          `# 節\n\n${link("R-AB-01")} ${link("R-AB-02")}\n`,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  test("does not count a link inside the register as a link from a section", () => {
+    expect(
+      hasProblem(
+        withRegister(
+          register(
+            row("R-AB-01") +
+              row("R-AB-02", "r-ab-02", "[R-AB-01](#r-ab-01)と同じ。"),
+          ),
+          `# 節\n\n${link("R-AB-02")}\n`,
+        ),
+        "ID not linked from any section: R-AB-01",
+      ),
+    ).toBe(true);
+  });
+
   test("accepts a reference-style link to the row anchor", () => {
     expect(
       problemsOf(
@@ -182,7 +238,7 @@ describe("lintRiskRegister recorded maximum", () => {
     expect(
       hasProblem(
         withRegister(
-          register(row("R-AB-01"), "", "2"),
+          register(row("R-AB-01"), "", "02"),
           `# 節\n\n${link("R-AB-01")}\n`,
         ),
         "number skipped without a gap entry: R-AB-02",
@@ -194,7 +250,7 @@ describe("lintRiskRegister recorded maximum", () => {
     expect(
       problemsOf(
         withRegister(
-          register(row("R-AB-01"), "\n## 欠番\n\n- R-AB-02\n", "2"),
+          register(row("R-AB-01"), "\n## 欠番\n\n- R-AB-02\n", "02"),
           `# 節\n\n${link("R-AB-01")}\n`,
         ),
       ),
@@ -205,7 +261,7 @@ describe("lintRiskRegister recorded maximum", () => {
     expect(
       hasProblem(
         withRegister(
-          register(row("R-AB-01") + row("R-AB-02"), "", "1"),
+          register(row("R-AB-01") + row("R-AB-02"), "", "01"),
           `# 節\n\n${link("R-AB-01")} ${link("R-AB-02")}\n`,
         ),
         "number above the recorded maximum: R-AB-02",
@@ -223,6 +279,43 @@ describe("lintRiskRegister recorded maximum", () => {
         "malformed recorded maximum: AB",
       ),
     ).toBe(true);
+  });
+
+  test("reports a recorded maximum above 99, which no ID can reach", () => {
+    expect(
+      hasProblem(
+        withRegister(
+          register(row("R-AB-01"), "", "100"),
+          `# 節\n\n${link("R-AB-01")}\n`,
+        ),
+        "malformed recorded maximum: AB",
+      ),
+    ).toBe(true);
+  });
+
+  test("reports a recorded maximum not written in two digits as in the IDs", () => {
+    expect(
+      hasProblem(
+        withRegister(
+          register(row("R-AB-01"), "", "1"),
+          `# 節\n\n${link("R-AB-01")}\n`,
+        ),
+        "malformed recorded maximum: AB",
+      ),
+    ).toBe(true);
+  });
+
+  test("finds the recorded maximum by its header, not by its position", () => {
+    const moved = (recorded: string): string =>
+      `| 略号 | 使った最大の番号 | 領域 | 説明の文書 |\n| --- | --- | --- | --- |\n| AB | ${recorded} | [領域](#領域) | [節](security.md) |\n`;
+    expect(
+      problemsOf(
+        withRegister(
+          register(row("R-AB-01"), "", "01", moved),
+          `# 節\n\n${link("R-AB-01")}\n`,
+        ),
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -434,10 +527,34 @@ describe("lintRiskRegister spots", () => {
     ).toBe(2);
   });
 
-  test("reads a sentence with an acceptance word as a spot, not as an introducing sentence", () => {
+  test("finds both an introducing sentence with an acceptance word and each item without a row link", () => {
     expect(
       spotCount(
         "# 節\n\n次の2つの挙動は、受け入れている。\n\n- 1つ目。\n- 2つ目。\n",
+      ),
+    ).toBe(3);
+  });
+
+  test("does not find an item that links to a row under an introducing sentence with an acceptance word", () => {
+    expect(
+      spotCount(
+        `# 節\n\n次の挙動は、受け入れている。\n\n- ${link("R-AB-01")}にあたる。\n`,
+      ),
+    ).toBe(1);
+  });
+
+  test("finds a sentence that names an ID without a link", () => {
+    expect(
+      spotCount(
+        `# 節\n\n残るリスクは${link("R-AB-01")}である。\nR-AB-01と同じ止めすぎは受け入れる。\n`,
+      ),
+    ).toBe(1);
+  });
+
+  test("finds a sentence of an item that names an ID without a link", () => {
+    expect(
+      spotCount(
+        `# 節\n\n残るリスクは次のとおりである。\n\n- ${link("R-AB-01")}にあたる。\n  R-AB-01と同じ止めすぎは受け入れる。\n`,
       ),
     ).toBe(1);
   });
