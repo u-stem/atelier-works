@@ -527,6 +527,7 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
 状態は秘密でない変数に置き、置く主体は環境変数`CLAUDECODE`と端末(TTY)で分ける。
 
 残るリスクは次のとおりである。
+いずれも受け入れる。
 
 - [R-FRZ-01](../security-risks.md#r-frz-01)
 - [R-FRZ-02](../security-risks.md#r-frz-02)
@@ -555,19 +556,16 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
   止めたscheduleは、凍結が終わった後の追従で、リポジトリの定義に戻る。
 - [R-FRZ-22](../security-risks.md#r-frz-22)
 - `freeze_release`は、書いた後に変数を読み直す。
-  残るリスクの表の[R-FRZ-23](../security-risks.md#r-frz-23)にあたる。
   解除が残っていないとき、または書いた時点で有効だった行が欠けているときは、確認できなかったと返す。
   変数の読み直しと書き込みは排他しない。
   Console用のworkerは1つ(`replicas: 1`)で動くので、Consoleのジョブ同士は重ならない。
-  CLIや`self_update`と重なると、他の行を黙って消すか、解除を巻き戻すことがある。
+  CLIや`self_update`との競合の残るリスクは、[R-FRZ-23](../security-risks.md#r-frz-23)である。
   読み直しで気づけない順序が2つある。
   - CLIの`place`が、Consoleの読みの後に、読み直しより前の状態を書き、Consoleが最後に書く。
   - Consoleの読み直しの後に、別の書き手が書いて、解除が巻き戻る。
 - `session`は、deployの保留を確認なしで置ける。
-  残るリスクの表の[R-FRZ-24](../security-risks.md#r-frz-24)にあたる。
-  上限は120分で、この区別は誤操作を防ぐためのもので、境界ではない。
   subagentは、`hold-guard.ts`が`freeze:place`の`--scope deploy`、`freeze:release`、`freeze:reset`、`push:prune`を拒否する。
-  ベストエフォートの規則で、保留の拒否と同じ限界を持つ。
+  この区別とsubagentの拒否の残るリスクは、[R-FRZ-24](../security-risks.md#r-frz-24)である。
   `bun run - list < scripts/freeze.ts`のように標準入力へ流し込む形は、作業ツリーの`scripts/`で実行すると動くことを実測した。
   `mise run -- freeze:release 1`は、mise 2026.9.13で実測すると、`--`より後ろをタスク`default`への引数として扱い、実行しない。
   保留の側は`--`より後ろの`hold:`を名指しする語も拒否するが、凍結の側はこの形を見ない。

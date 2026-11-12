@@ -2241,9 +2241,7 @@ dry-runの出力は、実機で測った。
 最後に`end of 'compose up' output, interactive run is not supported in dry-run mode`の行が付く。
 Caddyだけが変わるときは、Caddyの行が`Recreate`と`Recreated`になり、ほかは`Running`のままだった。
 
-残るリスクは、dry-runが作り直しを示さない変更を見逃すことである。
-イメージだけが変わる更新で、dry-runが`Recreate`を示すかは、確かめていない。
-示さなければ、workerは確認なしで作り直される。
+作り直しを示さない変更を見逃す残るリスクは、[R-HOST-56](security-risks.md#r-host-56)である。
 イメージを取得した直後に`mise exec -- bun ./scripts/check-idle.ts`を手で実行すると、dry-runに頼らず確認できる。
 
 止められたときは、一覧の仕事が終わるのを待ち、同じコマンドをやり直す。
@@ -4134,9 +4132,9 @@ dependabotの対象は、baseが`main`のPRに限る。
 | `read_failed` | 表の読み取りが失敗した。失敗の記録の段`read_gh_pull_requests`と、DBの状態を確かめる |
 
 一覧の読み取りが失敗すると、失敗の記録の段`list_open_pull_requests`に残り、`failed`に数える。
-開いているPRが1000件を超えるリポジトリでは、一覧が上限に当たって失敗し続ける。
+開いているPRが1000件を超えるリポジトリで一覧が失敗し続ける残るリスクは、[R-DEP-03](security-risks.md#r-dep-03)である。
 一覧を読むのは、収集が止まっている間と、収集が集めないリポジトリである。
-公開のリポジトリへ第三者が大量のPRを開くと、その場合に当たりうる([dependabotの更新の内部仕様](internals/dependabot.md#dependabotの更新の自動マージ)の残るリスク)。
+公開のリポジトリへ第三者が大量のPRを開くと、その場合に当たりうる([R-DEP-03](security-risks.md#r-dep-03))。
 
 定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
 説明できなければ、収集の失敗として調べる。

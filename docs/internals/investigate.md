@@ -958,8 +958,7 @@ headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す
   調査の側は、登録のstepと生成のstepが、測定のジョブが待ちか実行中でないことを確かめ、あれば断る。
   確認は、測定の開始時と、調査の登録と生成の開始時に、1回ずつである。
   確認と掃除の間に相手が始まる競合は残る。
-  受け入れる。
-  残るリスクの表の[R-INV-26](../security-risks.md#r-inv-26)にあたる。
+  この競合は、残るリスクの表の[R-INV-26](../security-risks.md#r-inv-26)として受け入れる。
 - [R-INV-27](../security-risks.md#r-inv-27)
 - [R-INV-28](../security-risks.md#r-inv-28)
 - [R-INV-29](../security-risks.md#r-inv-29)

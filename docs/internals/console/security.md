@@ -1129,7 +1129,7 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 
 XMLをiframeへ送るときの`targetOrigin`は`"*"`にする。
 不透明なオリジンには、送り先のオリジンを指定する方法が他に無いためである。
-送るのは図のXMLだけなので、宛先を絞れなくても許容する。
+宛先を絞れない残るリスクは、[R-DIO-17](../../security-risks.md#r-dio-17)である。
 設計の図のXMLには、秘密値のマスクをかけない。
 残るリスクは[R-DIO-02](../../security-risks.md#r-dio-02)である。
 XMLをpostMessageで送る先は、このsandboxのiframeだけである。
