@@ -568,14 +568,16 @@ describe("doctor.sh owners that the collection cannot handle", () => {
   }
 
   // bunは本物へのリンクにするか、与えられた本文のスクリプトにする。
-  function installFakeMise(bunBody?: string): void {
+  // miseWarningを渡すと、miseがコマンドを実行する前に、その行を標準エラーに出す。
+  function installFakeMise(bunBody?: string, miseWarning?: string): void {
     const mise = join(dir, "mise");
+    const warn = miseWarning === undefined ? "" : `echo '${miseWarning}' >&2; `;
     writeFileSync(
       mise,
       [
         "#!/bin/sh",
         'case "$1" in',
-        '  exec) shift; [ "$1" = -- ] && shift; exec "$@" ;;',
+        `  exec) ${warn}shift; [ "$1" = -- ] && shift; exec "$@" ;;`,
         "  --version) echo 2026.1.0 ;;",
         "  *) exit 1 ;;",
         "esac",
@@ -604,9 +606,9 @@ describe("doctor.sh owners that the collection cannot handle", () => {
 
   async function ownerRun(
     config: unknown,
-    options: { status?: number; bunBody?: string } = {},
+    options: { status?: number; bunBody?: string; miseWarning?: string } = {},
   ): Promise<OwnerRun> {
-    installFakeMise(options.bunBody);
+    installFakeMise(options.bunBody, options.miseWarning);
     const windmill = startWindmill(config, options.status);
     const proc = Bun.spawn([BASH, SCRIPT], {
       env: {
@@ -688,7 +690,29 @@ describe("doctor.sh owners that the collection cannot handle", () => {
     const run = await ownerRun({ message: "not found" }, { status: 404 });
 
     expect(shown(run)).toMatch(
-      /^lines:\n\s+OK\s+収集の対象外\s+確認できませんでした\(終了コード: 2、factory_config: status 404\)。この検査はスキップしました\n---\n/,
+      /^lines:\n\s+OK\s+収集の対象外\s+確認できませんでした\(終了コード: 2、factory-owners: factory_config: status 404\)。この検査はスキップしました\n---\n/,
+    );
+  });
+
+  test("shows the line with the prefix even when mise warns first", async () => {
+    const run = await ownerRun(
+      { message: "not found" },
+      { status: 404, miseWarning: "mise WARN a deprecated setting is used" },
+    );
+
+    expect(shown(run)).toMatch(
+      /^lines:\n\s+OK\s+収集の対象外\s+確認できませんでした\(終了コード: 2、factory-owners: factory_config: status 404\)/,
+    );
+  });
+
+  test("shows the first line of stderr when no line has the prefix", async () => {
+    const run = await ownerRun(
+      { owners: [{ name: "emu_user" }] },
+      { bunBody: "echo 'boom' >&2; echo 'second' >&2; exit 1" },
+    );
+
+    expect(shown(run)).toMatch(
+      /^lines:\n\s+OK\s+収集の対象外\s+確認できませんでした\(終了コード: 1、boom\)/,
     );
   });
 
@@ -705,5 +729,14 @@ describe("doctor.sh owners that the collection cannot handle", () => {
     );
 
     expect(run.stdout + run.stderr).not.toContain(ADMIN_PASSWORD);
+  });
+
+  test("replaces the admin password with asterisks in the reason of the skipped check", async () => {
+    const run = await ownerRun(
+      { owners: [{ name: "emu_user" }] },
+      { bunBody: `echo "failed with ${ADMIN_PASSWORD}" >&2; exit 1` },
+    );
+
+    expect(shown(run)).toMatch(/^lines:\n.*failed with \*\*\*/);
   });
 });
