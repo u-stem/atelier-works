@@ -1,17 +1,21 @@
 // 見た目の決まりが、内部仕様の文書に節として書かれていることを確かめる。
 // 節の内容は読み手が判断するので、ここでは見出しの有無だけを見る。
-// Consoleの仕様は`docs/internals/console.md`と`docs/internals/console/`の各文書に分かれるので、まとめて読む。
+// Consoleの仕様は`docs/internals/console.md`と`docs/internals/console/`の各文書に分かれるので、
+// 安全策の文書(`console/security.md`)を除いてまとめて読む。
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 
 const DOCS_DIR = new URL("../../docs/internals/", import.meta.url);
 
-/** `console.md`と`console/`の`.md`を、名前の順につないだ本文。 */
+// 見た目の決まりが安全策の文書へ移ったときに通さないよう、安全策の文書は読まない。
+const EXCLUDED = new Set(["security.md"]);
+
+/** `console.md`と、`console/`の安全策の文書を除く`.md`を、名前の順につないだ本文。 */
 const DOC = [
   "console.md",
   ...readdirSync(new URL("console/", DOCS_DIR))
-    .filter((name) => name.endsWith(".md"))
+    .filter((name) => name.endsWith(".md") && !EXCLUDED.has(name))
     .sort()
     .map((name) => `console/${name}`),
 ]
