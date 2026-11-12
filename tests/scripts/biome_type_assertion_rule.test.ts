@@ -8,17 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  computeLineStarts,
-  getLeadingCommentRanges,
-  getTrailingCommentRanges,
-} from "typescript/unstable/ast";
 import { isRecord } from "../../f/factory/lib/types.ts";
-import {
-  type Token,
-  TokenizeError,
-  tokenize,
-} from "../../scripts/ts-tokenize.ts";
 
 // 型アサーションを止めるBiomeの規則が、設定どおりに効き続けることを固定する。
 // 規則はBiomeのnurseryにあり、版を上げると挙動が変わりうるため、実物のBiomeで確かめる。
@@ -77,72 +67,47 @@ function trackedTypeScriptFiles(): string[] {
     .filter((path) => path !== "");
 }
 
-// `position`が何行目か(1始まり)を返す。
-function lineAt(lineStarts: readonly number[], position: number): number {
-  let low = 0;
-  let high = lineStarts.length - 1;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if ((lineStarts[mid] ?? 0) <= position) {
-      low = mid;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return low + 1;
-}
-
-type Comment = { readonly where: string; readonly text: string };
-
-// ファイルの中のコメントを返す。
-// 行頭に限らず、行末、式の途中、JSXの`{/* ... */}`のコメントも拾う。
-// 文字列、テンプレート、正規表現、JSXの本文の中の同じ並びは、コメントに数えない。
-// トークンに分けられないファイルは、全体を1つのコメントとみなし、見逃さない側に倒す。
-function commentsOf(path: string): Comment[] {
-  const text = readFileSync(join(ROOT, path), "utf8");
-  let tokens: Token[];
-  try {
-    tokens = tokenize(text, { jsx: path.endsWith(".tsx") });
-  } catch (err) {
-    if (err instanceof TokenizeError) return [{ where: path, text }];
-    throw err;
-  }
-  const lineStarts = computeLineStarts(text);
-  const seen = new Set<number>();
-  const comments: Comment[] = [];
-  const collect = (position: number): void => {
-    const ranges = [
-      ...(getTrailingCommentRanges(text, position) ?? []),
-      ...(getLeadingCommentRanges(text, position) ?? []),
-    ];
-    for (const range of ranges) {
-      if (seen.has(range.pos)) continue;
-      seen.add(range.pos);
-      comments.push({
-        where: `${path}:${lineAt(lineStarts, range.pos)}`,
-        text: text.slice(range.pos, range.end),
-      });
-    }
-  };
-  collect(0);
-  for (const token of tokens) collect(token.start + token.text.length);
-  return comments;
-}
-
-// 条件に合うコメントの位置を`path:line`の形で返す。
-// このテスト自身も対象にする。規則名と正規表現はコードに書き、コメントには書かない。
-function commentsMatching(match: (comment: string) => boolean): string[] {
-  return trackedTypeScriptFiles().flatMap((path) =>
-    commentsOf(path)
-      .filter((comment) => match(comment.text))
-      .map((comment) => comment.where),
-  );
-}
+// 規則を名指しで黙らせる抑制の指示。
+// このテスト自身の本文が当たらないよう、規則名は定数から組み立て、指示の直後に空白を置かない。
+const RULE_SUPPRESSION = new RegExp(
+  `biome-ignore(?:-all|-start)?\\s+[^\\s:]*${RULE}`,
+  "g",
+);
 
 // 規則のグループ全体を黙らせる抑制の指示。
 // `-all`と`-start`の形と、`/** ... */`の形も、Biomeは抑制として受け付ける。
 const GROUP_SUPPRESSION =
-  /biome-ignore(?:-all|-start)?\s+lint(?:\/nursery)?(?![\w/])/;
+  /biome-ignore(?:-all|-start)?\s+lint(?:\/nursery)?(?![\w/])/g;
+
+// 抑制の指示と同じ並びを、文字列のデータとして持つ既知の箇所。
+// `snippet`は、当たった並びを囲む本文で、その範囲の中の当たりだけを外す。
+// 載せる前に、本当に文字列のデータであることを読んで確かめる。
+const ALLOWED_DATA: readonly {
+  readonly path: string;
+  readonly snippet: string;
+}[] = [];
+
+// 本文で`pattern`に当たる箇所を、許可の一覧で外したうえで`path:line`の形で返す。
+// コメントかどうかは見分けない。トークンの読み違いでコメントを取りこぼさないため。
+function suppressionsMatching(pattern: RegExp): string[] {
+  const found: string[] = [];
+  for (const path of trackedTypeScriptFiles()) {
+    const text = readFileSync(join(ROOT, path), "utf8");
+    const allowed = ALLOWED_DATA.filter((entry) => entry.path === path);
+    for (const match of text.matchAll(pattern)) {
+      const start = match.index;
+      const end = start + match[0].length;
+      const isData = allowed.some((entry) => {
+        const at = text.indexOf(entry.snippet);
+        return at !== -1 && at <= start && end <= at + entry.snippet.length;
+      });
+      if (isData) continue;
+      const line = text.slice(0, start).split("\n").length;
+      found.push(`${path}:${line}`);
+    }
+  }
+  return found;
+}
 
 function readMaxSize(): number | null {
   const parsed: unknown = JSON.parse(
@@ -178,16 +143,19 @@ describe("biome rejects type assertions", () => {
 
 describe("biome checks every tracked TypeScript file", () => {
   test("no tracked file suppresses the rule with a biome-ignore comment", () => {
-    expect(
-      commentsMatching(
-        (comment) => comment.includes("biome-ignore") && comment.includes(RULE),
-      ),
-    ).toEqual([]);
+    expect(suppressionsMatching(RULE_SUPPRESSION)).toEqual([]);
   });
 
   test("no tracked file suppresses the whole lint or nursery group with a biome-ignore comment", () => {
+    expect(suppressionsMatching(GROUP_SUPPRESSION)).toEqual([]);
+  });
+
+  test("every entry of the allowed data still appears in its file", () => {
     expect(
-      commentsMatching((comment) => GROUP_SUPPRESSION.test(comment)),
+      ALLOWED_DATA.filter(
+        (entry) =>
+          !readFileSync(join(ROOT, entry.path), "utf8").includes(entry.snippet),
+      ),
     ).toEqual([]);
   });
 
