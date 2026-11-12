@@ -308,7 +308,7 @@ cloneを開くステップでは、`openFactoryClone`の照合も重なるので
 調査の種別と状態を足したmigrationのdownは、調査の作業項目を削除し、外部キーの連鎖で`agent_runs`の行も消す。
 `agent_runs`は日次予算の元データなので、downを当てた日は、予算の検査が調査に使った費用の分だけ少なく数える。
 その日は、予算の上限を超えてClaudeが動きうる。
-手順と消える表は[調査のmigrationを戻す](operations/collect.md#調査のmigrationを戻す)にある。
+手順と消える表は[調査のmigrationを戻す](operations/features.md#調査のmigrationを戻す)にある。
 
 ## シークレットの扱い
 

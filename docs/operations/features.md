@@ -332,6 +332,26 @@ stepが例外で落ちたときは、`on_error_flow`が調査を`failed`にし�
 
 調査の隔離の層と、読み出しの固定の一覧、worktreeの置き場の検査は[調査の隔離の内部仕様](../internals/investigate.md#調査の隔離)にある。
 
+### 調査のmigrationを戻す
+
+調査の種別と状態を足すmigration(`20261102120000_investigate_work_items`)を戻す手順である。
+このmigrationは設計工程より新しいので、設計工程のmigrationを戻すときは、先にこれが戻る。
+
+戻すと、種別が調査(`investigate`)の作業項目がすべて削除される。
+行が残っていると、種別と状態の制約を戻す文が失敗するためである。
+調査の答えはIssueのコメントに残るが、作業項目の記録は失われる。
+
+作業項目の削除は、外部キーの`ON DELETE CASCADE`で、状態遷移の履歴(`work_item_events`)とClaudeの実行の記録(`agent_runs`)も消す。
+そのほかに消える表は[作業項目の状態とリース](../internals/work-items.md)の「調査の作業項目」に書く。
+`agent_runs`は日次予算の元データなので、戻した日は、予算の検査が調査に使った費用の分だけ少なく数える。
+
+稼働中の調査を全体で1件にする索引のmigration(`20261104100000_investigate_singleton`)は、このmigrationより新しいので、先に戻る。
+戻すのは索引を落とすだけで、行は変わらず、失敗しない。
+戻した後は、稼働中の調査を複数入れられる。
+稼働中の調査が2件以上ある間は、索引のmigrationをやり直せない。
+重複した行があると、索引を作れないためである。
+1件を残して終端にしてから、やり直す。
+
 ## 隔離の測定を実行する
 
 調査のClaudeの隔離を測って判定するscript(`f/factory/investigate_isolation_probe`)を、手動で実行する。
