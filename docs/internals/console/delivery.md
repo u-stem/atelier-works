@@ -326,7 +326,7 @@ raw.githubusercontent.comの障害で取得に失敗したら、失敗したワ�
 | `f/factory/lib/drawio_viewer_observations.ts` | タグごとに、最初に見たcommitと時刻を記録する |
 | `migrations/datatable/main/20261011153000_drawio_viewer_observations.up.sql` | 記録の表`factory.drawio_viewer_observations` |
 
-保護パスの一覧は、[PRワークフローの仕様の「保護パスの変更を止める」](../pr-workflow.md#保護パスの変更を止める)にある。
+保護パスの一覧は、[PRワークフローの仕様の「保護パスの変更を止める」](../pr-workflow/security.md#保護パスの変更を止める)にある。
 
 処理は次の順に進む。
 

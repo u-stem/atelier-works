@@ -90,12 +90,12 @@ docs/internals/notifications.md 525e8905b4537ef4 operational 設定を切り替�
 docs/internals/notifications.md dce7a32b87482420 operational gatedを意図して続けると、人がnoticeを解決しても、翌日の実行で出直す。
 docs/internals/notifications.md fd219ac737490b0a operational self_updateは、wmill sync pushを先に、wmill da
 docs/internals/pr-workflow.md be08d7030934845e pointer PRのレビュー(f/factory/pr_review)とPRの修正(f/fac
-docs/internals/pr-workflow.md f869be0900d1a588 operational 正当な文字も置き換わる。 絵文字を結合するZWJ、絵文字の異体字選択子(U+FE
-docs/internals/pr-workflow.md f3e047c3e5863b47 operational 次の2つの挙動は、受け入れている。
-docs/internals/pr-workflow.md 35d302c1b9c8e27e operational 修正の終わりでは、形の合わないスレッドが1つあるだけで一覧が空になり、全提案のス
-docs/internals/pr-workflow.md b4fffc7f0975676e operational 生成のプロンプトに載るスレッドの上限は、100件から1000件に上がる。 読み切
-docs/internals/pr-workflow.md dd109e2643865ce4 mechanism この3つのscript定義(.script.yaml)も対象である。 lockは
-docs/internals/pr-workflow.md dd018555bed9cd7b safe-side wmill.yamlも止める。 codebasesのcustomBundlerは
+docs/internals/pr-workflow/review.md f869be0900d1a588 operational 正当な文字も置き換わる。 絵文字を結合するZWJ、絵文字の異体字選択子(U+FE
+docs/internals/pr-workflow/review.md f3e047c3e5863b47 operational 次の2つの挙動は、受け入れている。
+docs/internals/pr-workflow/review.md 35d302c1b9c8e27e operational 修正の終わりでは、形の合わないスレッドが1つあるだけで一覧が空になり、全提案のス
+docs/internals/pr-workflow/review.md b4fffc7f0975676e operational 生成のプロンプトに載るスレッドの上限は、100件から1000件に上がる。 読み切
+docs/internals/pr-workflow/security.md dd109e2643865ce4 mechanism この3つのscript定義(.script.yaml)も対象である。 lockは
+docs/internals/pr-workflow/security.md dd018555bed9cd7b safe-side wmill.yamlも止める。 codebasesのcustomBundlerは
 docs/internals/work-items.md c2e6763a020493a6 operational self_updateは、f/を反映した後にmigrationを流す。 列を足す
 docs/operations.md 2e6c84cc05dbcec8 pointer 書き込みの直前の照合に落ちた処理は、書かずに止める。 dependabotの終了
 docs/operations.md d908a6566e1509f4 pointer 照合しない処理も残る。 同じ項目を、セキュリティの残るリスクにも挙げている。

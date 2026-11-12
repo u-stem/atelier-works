@@ -1189,7 +1189,7 @@ Claudeが書き換えた`mise.toml`や`package.json`のscriptsをworkerで実行
 
 - ディレクトリ: `IMPLEMENT_PROTECTED_PATH_PREFIXES`
 - 個別のファイル: `IMPLEMENT_PROTECTED_EXACT_PATHS`。
-  PR修正の一覧と同じで、[PRワークフロー](pr-workflow.md)の[禁止パスによる停止](pr-workflow.md#禁止パスによる停止)にある。
+  PR修正の一覧と同じで、[PRワークフロー](pr-workflow.md)の[禁止パスによる停止](pr-workflow/security.md#禁止パスによる停止)にある。
 - ファイル名: `IMPLEMENT_PROTECTED_BASENAME_PATTERNS`
 
 ディレクトリとファイル名は、PR修正の一覧に次を加えたものである。
@@ -1204,7 +1204,7 @@ Claudeが書き換えた`mise.toml`や`package.json`のscriptsをworkerで実行
 | タスクランナーなど | `Makefile`、`Justfile`、`Taskfile.yml`、`turbo.json`、`nx.json`、`deno.json`、`CODEOWNERS`、`.pre-commit-config.yaml` |
 | JavaScript以外のlockfileとmanifest | `uv.lock`、`poetry.lock`、`Pipfile`、`pyproject.toml`、`setup.py`、`setup.cfg`、`requirements*.txt`、`Cargo.toml`、`Cargo.lock`、`go.mod`、`go.sum`、`Gemfile`、`composer.json`、`composer.lock` |
 
-PR修正の一覧そのものの中身は、[PRワークフロー](pr-workflow.md)の[禁止パスによる停止](pr-workflow.md#禁止パスによる停止)にある。
+PR修正の一覧そのものの中身は、[PRワークフロー](pr-workflow.md)の[禁止パスによる停止](pr-workflow/security.md#禁止パスによる停止)にある。
 markdownlint-cli2とtextlintの設定は、PR修正の一覧に含まれる。
 
 `infra/`を加えるのは、workerのイメージとcomposeの定義の変更が、次にホストで`mise run up`するまで反映されないからである。
