@@ -334,7 +334,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `backup_failed` | `backup` | 失敗した段階と、ジョブのログを見る案内。原因の本文は、秘密値を伏せてジョブのログにだけ残す |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
-| `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
+| `cleanup_worktree_busy` | `cleanup_workspaces` | 掃除を起こした作業項目のID、worktreeのパス、worktreeを使っているプロセス |
 | `workspace_disk_usage` | `cleanup_workspaces` | 作業領域のディスク使用量(MiB) |
 | `main_ci_failed` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、コミットの先頭7文字、失敗した実行のリンク、次の操作 |
 | `main_ci_check_denied` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |

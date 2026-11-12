@@ -337,10 +337,11 @@ flowのジョブIDは、先頭の桁が長く変わらず、同じジョブの�
 作った後の確認が失敗したときは、そのステップが作ったworktreeだけを消して、元の例外を投げる。
 生成のステップが早く抜けて投稿しなかったときも、投稿のステップがworktreeを消す。
 生成のステップが失敗して残ったworktreeは、やり直しを妨げず、失敗した実行の数だけ残る。
-残りは、PR番号で選んで消す。
-消すのは、PRが閉じたとき(`poll_issues`)か、`pr_review`の作業項目が終端になって`worktree_ttl_days`を過ぎたとき(`cleanup_workspaces`)である。
+残りは、PR番号で選んで消す(shaは問わない)。
 名前に`<run>`の無い`review-<pr>-<sha7>`も同じように選ぶ。
-同じPRに終端でない`pr_review`の作業項目がある間は、消さない。
+PRが閉じたとき(`poll_issues`)は、期限を待たずに消す。
+`cleanup_workspaces`は、そのPRの`pr_review`のうち、最後に更新された作業項目が終端で、`worktree_ttl_days`を過ぎたときだけ消す。
+最も新しいものが終端でなければ、そのPRを見直している最中なので消さない。
 gitが`initializing`でロックした残りは消えず、片付けが警告を残すが、ほかの残りの片付けは止めない。
 
 PR修正は、`git gtr new`で作るPRのブランチのworktreeを使う。

@@ -19,8 +19,8 @@
 // dependabotの作業ツリー(`dependabot-<PR番号>-<sha7>`)は、期限を待たず、終端でないdependabotの作業項目が
 // 使っていなければ消す(`removeDependabotWorktrees`)。信頼していない依存をインストールした作業ツリーで、
 // 調べ直すときは準備のステップが作り直すので、残しておく理由が無いためである。
-// レビュー用の作業ツリー(`review-<PR番号>-<sha7>-<識別子>`)は、期限を過ぎた終端の`pr_review`のPR番号で選ぶ。
-// 同じPRに終端でない`pr_review`がある間は消さない(`selectReviewWorktreesToRemove`、`removeReviewWorktrees`)。
+// レビュー用の作業ツリー(`review-<PR番号>-<sha7>-<識別子>`)は、PR番号で選ぶ。
+// そのPRの`pr_review`のうち、更新が最も新しいものが終端で期限を過ぎているときだけ消す(`reviewWorktreesAreDue`、`removeReviewWorktrees`)。
 
 import * as wmill from "windmill-client@1.817.0";
 import { readdir } from "node:fs/promises";
@@ -62,8 +62,13 @@ import {
   WorktreeBusyError,
   worktreeLockFor,
 } from "./lib/process_lock.ts";
-import { assertGitHubName, type WorkItem } from "./lib/types.ts";
 import {
+  assertGitHubName,
+  TERMINAL_WORK_ITEM_STATUSES,
+  type WorkItem,
+} from "./lib/types.ts";
+import {
+  isReviewWorktreeOf,
   listWorktrees,
   pathExists,
   pruneWorktrees,
@@ -179,25 +184,45 @@ async function worktreeIsFreeToRemove(
 
 type LatestReview = Pick<WorkItem, "status" | "updated_at">;
 
-/** レビュー用の作業ツリーを消してよい時期かを返す。 */
+/**
+ * そのPRのレビュー用の作業ツリーを消してよい時期かを返す。
+ * `latest`はそのPRの`pr_review`の作業項目のうち、更新が最も新しいもの(状態を問わない)で、
+ * 終端で、更新が`cutoff`以前のときだけ`true`を返す。
+ * 終端でなければ、そのPRを見直している最中なので消さない。
+ * 終端でも期限の内なら、その作業項目か、その前の実行が残した作業ツリーが、まだ期限の内かもしれないので消さない。
+ * 作業項目が1つも残っていないPRは、使う作業項目が無いので`true`を返す。
+ */
 export function reviewWorktreesAreDue(
-  _latest: LatestReview | null,
-  _cutoff: Date,
+  latest: LatestReview | null,
+  cutoff: Date,
 ): boolean {
-  return false;
+  if (latest === null) return true;
+  return (
+    TERMINAL_WORK_ITEM_STATUSES.includes(latest.status) &&
+    latest.updated_at <= cutoff
+  );
 }
 
-/** PR番号`prNumber`のレビュー用の作業ツリーのパスを返す。 */
+/**
+ * `repoDir`のPR番号`prNumber`のレビュー用の作業ツリーのパスを、すべて返す。
+ * 対象は`isReviewWorktreeOf`が選ぶもので、shaでは絞らない。
+ * 作業ツリーの名前のshaは準備の時点のheadで決まり、作業項目の`head_sha`と食い違うことがあるためである。
+ * 終端の作業項目のflowは作業ツリーを使わないので、期限を過ぎていれば、同じPRのどの実行の残りも一緒に消してよい。
+ */
 export function selectReviewWorktreesOfPr(
-  _repoDir: string,
-  _worktrees: readonly Pick<WorktreeEntry, "path" | "detached">[],
-  _prNumber: number,
+  repoDir: string,
+  worktrees: readonly Pick<WorktreeEntry, "path" | "detached">[],
+  prNumber: number,
 ): string[] {
-  return [];
+  return worktrees
+    .filter((worktree) => isReviewWorktreeOf(repoDir, prNumber, worktree))
+    .map((worktree) => worktree.path);
 }
 
 export type ReviewWorktreeRemovalDeps = {
+  /** 作業ツリーを使う生き残りのプロセスがいなければ`true`を返す。使用中で飛ばすときは`false`を返す。 */
   readonly ensureFree: (dir: string) => Promise<boolean>;
+  /** そのPRの`pr_review`の作業項目のうち、更新が最も新しいものを返す。無ければ`null`を返す。 */
   readonly latestReview: () => Promise<LatestReview | null>;
   readonly removeWorktree: (dir: string) => Promise<void>;
   readonly warn: (message: string, fields: LogFields) => void;
@@ -208,17 +233,72 @@ export type ReviewWorktreeRemovalInput = {
   readonly prNumber: number;
   readonly targetDirs: readonly string[];
   readonly cutoff: Date;
+  /** この掃除の実行ですでに扱った作業ツリー。消したものと、消さずに飛ばしたもの(失敗、使用中、時期でない)。 */
   readonly visited: {
     readonly removed: Set<string>;
     readonly skipped: Set<string>;
   };
 };
 
-/** レビュー用の作業ツリーを消す。 */
+/**
+ * `targetDirs`のレビュー用の作業ツリーを消す。
+ * 使用中のものを除いた後、消す直前に1回だけ`latestReview`を読み、消してよい時期(`reviewWorktreesAreDue`)でなければ、どれも消さない。
+ * 読めなかったときは、原因が分かる警告を1件残して、このPRの残りは扱わない。
+ * 同じ実行の後続の作業項目が選ぶのは一覧の時点の作業ツリーだけで、その後に新しい実行が作る別の名前の作業ツリーは選ばれないので、この1回で足りる。
+ * 1つの作業ツリーの失敗は警告に残して次へ進む。扱ったものは`visited`に残し、同じ実行の中でもう試さない。
+ */
 export async function removeReviewWorktrees(
-  _input: ReviewWorktreeRemovalInput,
-  _deps: ReviewWorktreeRemovalDeps,
-): Promise<void> {}
+  input: ReviewWorktreeRemovalInput,
+  deps: ReviewWorktreeRemovalDeps,
+): Promise<void> {
+  const { repoDir, prNumber, visited } = input;
+  const warnFailure = (dir: string, err: unknown) =>
+    deps.warn("cleanup: failed to remove a review worktree", {
+      repo_dir: repoDir,
+      worktree_dir: dir,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+
+  const free: string[] = [];
+  for (const dir of dirsNotYetVisited(input.targetDirs, {
+    removed: visited.removed,
+    skippedBusy: visited.skipped,
+  })) {
+    try {
+      if (await deps.ensureFree(dir)) free.push(dir);
+      else visited.skipped.add(dir);
+    } catch (err) {
+      visited.skipped.add(dir);
+      warnFailure(dir, err);
+    }
+  }
+  if (free.length === 0) return;
+
+  try {
+    if (!reviewWorktreesAreDue(await deps.latestReview(), input.cutoff)) {
+      for (const dir of free) visited.skipped.add(dir);
+      return;
+    }
+  } catch (err) {
+    for (const dir of free) visited.skipped.add(dir);
+    deps.warn("cleanup: failed to re-check active pr_review", {
+      repo_dir: repoDir,
+      pr_number: prNumber,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return;
+  }
+
+  for (const dir of free) {
+    try {
+      await deps.removeWorktree(dir);
+      visited.removed.add(dir);
+    } catch (err) {
+      visited.skipped.add(dir);
+      warnFailure(dir, err);
+    }
+  }
+}
 
 async function removeStaleWorktreesForRepo(
   owner: string,

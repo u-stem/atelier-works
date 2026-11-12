@@ -243,6 +243,7 @@ export function unresolvedHoldersNoticeMessage(
  * 使用中として消さなかったworktreeについてのnoticeの文言を返す。
  * 掃除は誰のプロセスも止めないので、人が対処しない限り毎日同じworktreeを飛ばし続ける。
  * 運用者が原因を選べるよう、`reason`(`WorktreeBusyError`のメッセージ)をそのまま含める。
+ * `cleanupWorkItemId`は掃除を起こした期限切れの作業項目で、worktreeの持ち主とは限らないので、文言もそう読める形にする。
  * 検査用のユーザーから所有権を取り戻せなかった理由(`isOwnershipRestoreFailure`)なら、プロセスではなく枠の記録を片付ける手順を示す。
  */
 export function busyWorktreeNoticeMessage(input: {
@@ -252,7 +253,7 @@ export function busyWorktreeNoticeMessage(input: {
   readonly worktreeDir: string;
   readonly reason: string;
 }): string {
-  const target = `${input.owner}/${input.repo}の作業項目${String(input.cleanupWorkItemId)}のworktree(${input.worktreeDir})`;
+  const target = `${input.owner}/${input.repo}の作業項目${String(input.cleanupWorkItemId)}の掃除で見つけたworktree(${input.worktreeDir})`;
   if (isOwnershipRestoreFailure(input.reason)) {
     return `${target}は、検査用のユーザーからrootに戻せないため削除しませんでした(${input.reason})。運用の文書の「検査の枠の記録を片付ける」の手順で片付けると、次の掃除で削除されます。`;
   }

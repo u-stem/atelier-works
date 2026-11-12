@@ -84,16 +84,14 @@ export function buildReviewWorktreeDir(
 
 /**
  * このstepの実行ごとの識別子を、乱数から作って返す。
- * `randomUuid`の値から英数字以外を除いた末尾8桁である。
+ * `randomUuid`の値の末尾8桁である。`crypto.randomUUID()`の末尾の12桁は小文字の16進数なので、そのまま識別子の形になる。
  * flowのジョブIDは、時刻順で先頭の桁が長く変わらず、同じジョブの再実行では値も同じになるため、使わない。
  * 形の検証は、パスを組む`buildReviewWorktreeDir`が行う。
  */
 export function reviewRunId(
   randomUuid: () => string = () => crypto.randomUUID(),
 ): string {
-  return randomUuid()
-    .replace(/[^0-9A-Za-z]/g, "")
-    .slice(-8);
+  return randomUuid().slice(-8);
 }
 
 const SKIPPED_BASE = {

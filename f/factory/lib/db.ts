@@ -1145,14 +1145,27 @@ export async function listActivePrFixWorkItems(
   return rows.map(toWorkItem);
 }
 
-/** (owner, repo, prNumber)の、更新が最も新しい`pr_review`の作業項目を返す。 */
+/**
+ * (owner, repo, prNumber)の`pr_review`の作業項目のうち、更新が最も新しいものを返す。状態は問わない。
+ * ownerとrepoは小文字で照合する。`listActivePrReviewWorkItems`と同じ比べ方である。
+ * 更新の時刻が同じなら、`id`の大きい方を返す。無ければ`null`を返す。
+ */
 export async function getLatestPrReviewWorkItem(
-  _owner: string,
-  _repo: string,
-  _prNumber: number,
-  _sql: SqlClient = defaultSqlClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<WorkItem | null> {
-  return null;
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE kind = 'pr_review'
+      AND lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
+      AND pr_number = ${prNumber}::integer
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toWorkItem(row);
 }
 
 /**
