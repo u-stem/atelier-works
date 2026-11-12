@@ -7,7 +7,8 @@
 // - 文書の間のリンクとアンカー(`scripts/lint-doc-links.ts`)
 // - 残るリスクの表と、各節からの行へのリンク(`scripts/lint-risk-register.ts`)。
 //   表を通さない箇所は、許可リスト(`scripts/lint-risk-register-allowlist.txt`)と照らす。
-//   リンクの検査と、ファイルの一覧と構文木を共有する。`--links-only`では走らせない。
+//   リンクの検査と、ファイルの一覧と構文木を共有する(`lintRepoDocs`)。`--links-only`では走らせない。
+//   そのため、`.md`を含まないコミットで壊れた表や許可リストは、ローカルのフックでなくCIの`check-docs`が捕まえる。
 // - markdownlint(`.markdownlint-cli2.jsonc`)
 // - textlint(`.textlintrc.json`)
 // - 生成範囲とmiseタスクの表の確認(`scripts/docs-gen.ts --check`)
@@ -243,6 +244,51 @@ export function lintAllDocLinks(
     .filter(isTargetDoc)
     .sort()
     .flatMap((path) => lintDocLinks(path, resolver));
+}
+
+/**
+ * 追跡している文書に対して、リンクの検査と残るリスクの表の検査を行う。
+ * 2つの検査は、重複を除いて並べたファイルの一覧と、文書の構文木を共有する。
+ * 一覧の取得の失敗は、リンクの検査の1件の問題にして、表の検査は行わない。
+ * `linksOnly`のときは、表の検査を行わない。
+ * 許可リストやスクリプトだけを変えたコミットでは表の検査が走らないが、CIの`check-docs`が捕まえる。
+ */
+export function lintRepoDocs(
+  listFiles: () => readonly string[],
+  readDoc: ReadDoc,
+  options: { readonly linksOnly: boolean },
+): string[] {
+  const listing = guardList(listFiles);
+  if (listing.files === undefined) return listing.problems;
+  const files = listing.files;
+  const readTree = createTreeReader(readDoc);
+  const linkProblems = guardCheck("document links", () =>
+    lintAllDocLinks(files, readDoc, readTree),
+  );
+  if (options.linksOnly) return linkProblems;
+  const riskProblems = guardCheck("risk register", () => [
+    ...lintRiskRegister(
+      files.filter(isTargetDoc),
+      readTree,
+      readDoc(ALLOWLIST_PATH),
+    ).problems,
+  ]);
+  return [...linkProblems, ...riskProblems];
+}
+
+/** 一覧を1回だけ取り、重複を除いて並べる。失敗はリンクの検査の問題にする。 */
+function guardList(listFiles: () => readonly string[]): {
+  readonly files: readonly string[] | undefined;
+  readonly problems: string[];
+} {
+  try {
+    return { files: [...new Set(listFiles())].sort(), problems: [] };
+  } catch (error) {
+    return {
+      files: undefined,
+      problems: [`lint-docs: document links failed: ${errorMessage(error)}`],
+    };
+  }
 }
 
 /**
@@ -489,32 +535,13 @@ export async function main(
 ): Promise<number> {
   const { linksOnly, paths } = parseArgs(args);
   const readDoc = createDocReader(root);
-  // リンクの検査と残るリスクの表の検査は、ファイルの一覧と構文木を共有する。
-  const readTree = createTreeReader(readDoc);
-  let repoFiles: readonly string[] | undefined;
-  // 一覧の取得の失敗も、リンクの検査の1件の問題として扱う。ほかの検査の結果を出すためである。
-  const linkProblems = guardCheck("document links", () => {
-    const files = listRepoFiles(root);
-    repoFiles = files;
-    return lintAllDocLinks(files, readDoc, readTree);
+  const repoProblems = lintRepoDocs(() => listRepoFiles(root), readDoc, {
+    linksOnly,
   });
-  // 残るリスクの表は、リンクの検査と同じく、追跡している対象の全文書を見る。
-  // 一覧を取れなかったときは、その失敗をリンクの検査がすでに返している。
-  const riskProblems = (): string[] => {
-    const files = repoFiles;
-    if (files === undefined) return [];
-    return guardCheck("risk register", () => [
-      ...lintRiskRegister(
-        files.filter(isTargetDoc).sort(),
-        readTree,
-        readDoc(ALLOWLIST_PATH) ?? "",
-      ).problems,
-    ]);
-  };
 
   if (linksOnly) {
-    for (const problem of linkProblems) report(problem);
-    return linkProblems.length > 0 ? 1 : 0;
+    for (const problem of repoProblems) report(problem);
+    return repoProblems.length > 0 ? 1 : 0;
   }
 
   const candidates =
@@ -530,8 +557,7 @@ export async function main(
     const markdown = readDoc(path);
     if (markdown !== undefined) problems.push(...lintDocText(path, markdown));
   }
-  problems.push(...linkProblems);
-  problems.push(...riskProblems());
+  problems.push(...repoProblems);
   for (const problem of problems) report(problem);
 
   const toolsOk = await lintWithTools(targets, createProductionDeps(root));
