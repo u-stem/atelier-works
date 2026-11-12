@@ -20,12 +20,17 @@ export type DocLengthViolation = {
 
 /**
  * 文書`path`の行数が上限を超えていれば、指摘を返す。上限以下なら`undefined`。
+ * 報告する行は、上限を超えた最初の行にする。並べ替えに使う行と、文に埋める行を同じ値にするため、ここで1回だけ決める。
  */
 export function findDocLengthViolation(
-  _path: string,
+  path: string,
   markdown: string,
 ): DocLengthViolation | undefined {
   const lines = countLines(markdown);
   if (lines <= MAX_DOC_LINES) return undefined;
-  return { line: 0, text: "" };
+  const line = MAX_DOC_LINES + 1;
+  return {
+    line,
+    text: `${path}:${line}: [max-lines] the document has ${lines} lines, over the limit of ${MAX_DOC_LINES}; split it into documents by purpose`,
+  };
 }

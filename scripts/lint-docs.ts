@@ -114,17 +114,20 @@ export function isOneSentencePerLineTarget(path: string): boolean {
  * 同じ行の指摘は、文章の規則を先にする。
  */
 export function lintDocText(path: string, markdown: string): string[] {
-  // 2つの検査に同じ本文を渡す。frontmatterを空行にしても行番号は変わらない。
+  // どの検査にも同じ本文を渡す。frontmatterを空行にしても行番号は変わらない。
   const body = blankFrontmatter(markdown);
   const issues = checkProse(body, REPO_DOC_RULES).map((issue) => ({
     line: issue.line,
     text: `${path}:${issue.line}: [${issue.rule}] ${issue.message}`,
   }));
-  // 「1文は1行」と行数の上限は、どちらも検査の対象の文書(`isTargetDoc`)にかける。
+  // 「1文は1行」は、その規則で書く文書だけにかける。
   if (isOneSentencePerLineTarget(path)) {
     for (const line of findSentenceViolationLines(body)) {
       issues.push({ line, text: formatSentenceViolation(path, line) });
     }
+  }
+  // 行数の上限は、このリポジトリが書いて検査する文書にかける。取り込んだ文書の長さは、自分で分けられないため。
+  if (isTargetDoc(path)) {
     const tooLong = findDocLengthViolation(path, body);
     if (tooLong !== undefined) issues.push(tooLong);
   }
