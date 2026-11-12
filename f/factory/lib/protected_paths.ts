@@ -228,7 +228,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 取消の画面の部品(`console/src/lib/jobActions.ts`、`console/src/screens/jobs/JobActions.tsx`)とそのテストも守らない。
  * 再実行と設定変更の画面の部品(`console/src/lib/configChange.ts`、`console/src/screens/system/ConfigChangeDialog.tsx`など)も同じ理由で守らない。
  * 守ると毎回人の確認が要り、書き換えられた被害は、確認のダイアログを飛ばして呼ぶことに限られるためである。
- * 絞り込みと記録は守ったscript側にある(`docs/security.md`の「ジョブの取消」)。
+ * 絞り込みと記録は守ったscript側にある(`docs/internals/console/security.md`の「ジョブの取消」)。
  * 描画の部品(`JobDetailParts.tsx`、`ConfigSection.tsx`)も、同じ理由で守らない。
  * 契約テストが画面のソース全体を走査するので、守っても保証の上乗せが小さい。
  * これらのlock(`console_jobs.script.lock`など)は、`windmill-client`を含み、その版を上げる変更で全scriptのlockと
