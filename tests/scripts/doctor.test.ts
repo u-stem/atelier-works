@@ -690,7 +690,7 @@ describe("doctor.sh owners that the collection cannot handle", () => {
     const run = await ownerRun({ message: "not found" }, { status: 404 });
 
     expect(shown(run)).toMatch(
-      /^lines:\n\s+OK\s+収集の対象外\s+確認できませんでした\(終了コード: 2、factory-owners: factory_config: status 404\)。この検査はスキップしました\n---\n/,
+      /^lines:\n\s+WARN\s+収集の対象外\s+確認できませんでした\(終了コード: 2、factory-owners: factory_config: status 404\)。この検査はスキップしました\n---\n/,
     );
   });
 
@@ -701,7 +701,7 @@ describe("doctor.sh owners that the collection cannot handle", () => {
     );
 
     expect(shown(run)).toMatch(
-      /^lines:\n\s+OK\s+収集の対象外\s+確認できませんでした\(終了コード: 2、factory-owners: factory_config: status 404\)/,
+      /^lines:\n\s+WARN\s+収集の対象外\s+確認できませんでした\(終了コード: 2、factory-owners: factory_config: status 404\)/,
     );
   });
 
@@ -712,7 +712,7 @@ describe("doctor.sh owners that the collection cannot handle", () => {
     );
 
     expect(shown(run)).toMatch(
-      /^lines:\n\s+OK\s+収集の対象外\s+確認できませんでした\(終了コード: 1、boom\)/,
+      /^lines:\n\s+WARN\s+収集の対象外\s+確認できませんでした\(終了コード: 1、boom\)/,
     );
   });
 
