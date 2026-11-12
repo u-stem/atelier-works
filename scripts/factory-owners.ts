@@ -1,10 +1,11 @@
 // factory_configのownersを、WindmillのAPIから読む。doctor.shが、収集の対象外の所有者を警告するために使う。
 //
 // 使い方: factory-owners.ts underscore
-//   loginに`_`を含む所有者の名前を、1行に1つ標準出力に出す。読めなければ何も出さず、終了コード2で終わる。
+//   loginに`_`を含む所有者の名前を、1行に1つ標準出力に出す。読めなければ標準出力には何も出さず、
+//   失敗した段階を表す理由を1行標準エラーに出して、終了コード2で終わる。
 //   宛先は`WM_CHECK_BASE_URL`だけから読む。呼び出し側が死活を確かめた宛先と同じものを渡させ、
 //   資格情報を別の宛先へ送らない。管理者の資格情報は環境変数から読み、引数に載せない。
-//   出すのは所有者の名前だけで、資格情報も応答の本文も出さない。
+//   標準出力に出すのは所有者の名前だけで、資格情報も応答の本文も出さない。
 
 const WORKSPACE = "factory";
 
@@ -50,23 +51,48 @@ export function ownersWithUnderscore(config: unknown): string[] {
 
 // 管理者でログインし、factory_configのownersの名前を読む。
 // ログインの前に`/api/version`がWindmillの応答かを確かめ、そうでなければ資格情報を送らない。
-// 別のプロセスが宛先のポートを使っていても漏らさないため。読めなければnullを返す。
+// 別のプロセスが宛先のポートを使っていても漏らさないため。
+// 読めなければ、失敗した段階を表す理由を返す。理由に載せるのは、段階の名前、HTTPのstatus、
+// 例外の名前だけで、資格情報、トークン、応答の本文、例外のメッセージは載せない。
 // セッションのトークンはメモリの上だけに置き、読んだ後にログアウトする。
-async function readOwnerNamesOrNull(
+export type OwnerRead = { names: string[] } | { reason: string };
+
+type Stage = "version" | "login" | "factory_config";
+
+// 例外の名前。端末に出せない名前や、名前の無い値は`unknown`にする。
+function exceptionName(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    typeof error.name === "string" &&
+    PRINTABLE_NAME.test(error.name)
+  ) {
+    return error.name;
+  }
+  return "unknown";
+}
+
+export async function readFactoryOwnerNames(
   baseUrl: string,
   credentials: AdminCredentials,
-  fetchFn: typeof fetch,
-): Promise<string[] | null> {
+  fetchFn: typeof fetch = fetch,
+): Promise<OwnerRead> {
   const api = `${baseUrl.replace(/\/+$/, "")}/api`;
   let token: string | undefined;
+  let stage: Stage = "version";
   try {
     const version = await fetchFn(`${api}/version`, {
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
-    if (!version.ok || !WINDMILL_VERSION_PATTERN.test(await version.text())) {
-      return null;
+    if (!version.ok) {
+      return { reason: `version: status ${version.status}` };
     }
+    if (!WINDMILL_VERSION_PATTERN.test(await version.text())) {
+      return { reason: "version: unexpected response" };
+    }
+    stage = "login";
     const login = await fetchFn(`${api}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -75,9 +101,10 @@ async function readOwnerNamesOrNull(
       signal: AbortSignal.timeout(10_000),
     });
     if (!login.ok) {
-      return null;
+      return { reason: `login: status ${login.status}` };
     }
     token = (await login.text()).trim();
+    stage = "factory_config";
     const response = await fetchFn(
       `${api}/w/${WORKSPACE}/resources/get_value/f/factory/factory_config`,
       {
@@ -87,11 +114,14 @@ async function readOwnerNamesOrNull(
       },
     );
     if (!response.ok) {
-      return null;
+      return { reason: `factory_config: status ${response.status}` };
     }
-    return ownerNames(await response.json());
-  } catch {
-    return null;
+    const names = ownerNames(await response.json());
+    return names === null
+      ? { reason: "factory_config: no owner list" }
+      : { names };
+  } catch (error) {
+    return { reason: `exception: ${exceptionName(error)} (${stage})` };
   } finally {
     if (token !== undefined && token.length > 0) {
       await fetchFn(`${api}/auth/logout`, {
@@ -104,21 +134,22 @@ async function readOwnerNamesOrNull(
   }
 }
 
-export type OwnerRead = { names: string[] } | { reason: string };
+const REQUIRED_ENVIRONMENT: readonly string[] = [
+  "WM_CHECK_BASE_URL",
+  "WM_ADMIN_EMAIL",
+  "WM_ADMIN_PASSWORD",
+];
 
-export async function readFactoryOwnerNames(
-  baseUrl: string,
-  credentials: AdminCredentials,
-  fetchFn: typeof fetch = fetch,
-): Promise<OwnerRead> {
-  const names = await readOwnerNamesOrNull(baseUrl, credentials, fetchFn);
-  return names === null ? { reason: "" } : { names };
-}
-
+// 足りない環境変数の名前から理由を作る。値は載せない。全部あればnull。
 export function missingEnvironmentReason(
-  _env: Record<string, string | undefined>,
+  env: Record<string, string | undefined>,
 ): string | null {
-  return null;
+  const missing = REQUIRED_ENVIRONMENT.filter(
+    (name) => (env[name] ?? "") === "",
+  );
+  return missing.length === 0
+    ? null
+    : `missing environment: ${missing.join(", ")}`;
 }
 
 async function main(args: readonly string[]): Promise<number> {

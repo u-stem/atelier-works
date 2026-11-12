@@ -338,13 +338,26 @@ fi
 # 15. 収集が扱えない所有者(Windmillが応答している場合だけ)
 # loginに`_`を含む所有者(EMUのアカウントなど)は、環境変数の名前の`_`が`-`に直るので、
 # 読み取り用のトークンの対応表のキーに合わず、収集の対象外になる。`factory_config`の`owners`を管理者のログインで読み、
-# 該当する所有者の名前だけを出す。読めないときはこの検査を飛ばす。
+# 該当する所有者の名前だけを出す。読めないときはこの検査を飛ばし、飛ばしたことを終了コードと理由つきで出す。
+# 理由は`factory-owners.ts`の標準エラーの先頭行で、手順13と同じくパスワードを伏せて200文字に切り詰める。
 # 宛先は、手順9で死活を確かめた`127.0.0.1:${wm_http_port}`と同じにする。パスワードは引数に載せず、環境変数から読ませる。
 if [[ "${windmill_is_up}" -eq 1 ]] && command -v mise >/dev/null 2>&1; then
   owners_status=0
+  owners_stderr_file="$(mktemp 2>/dev/null)" || owners_stderr_file=""
   underscore_owners="$(cd "${REPO_ROOT}" && WM_CHECK_BASE_URL="http://127.0.0.1:${wm_http_port}" \
-    mise exec -- bun run scripts/factory-owners.ts underscore 2>/dev/null)" || owners_status=$?
-  if [[ "${owners_status}" -eq 0 && -n "${underscore_owners}" ]]; then
+    mise exec -- bun run scripts/factory-owners.ts underscore 2>"${owners_stderr_file:-/dev/null}")" || owners_status=$?
+  owners_reason=""
+  if [[ -n "${owners_stderr_file}" ]]; then
+    owners_reason="$(head -n1 "${owners_stderr_file}")"
+    rm -f "${owners_stderr_file}"
+  fi
+  if [[ "${owners_status}" -ne 0 ]]; then
+    if [[ -n "${WM_ADMIN_PASSWORD:-}" ]]; then
+      owners_reason="${owners_reason//"${WM_ADMIN_PASSWORD}"/***}"
+    fi
+    owners_reason="$(printf '%s' "${owners_reason}" | cut -c1-200)"
+    report "収集の対象外" ok "確認できませんでした(終了コード: ${owners_status}${owners_reason:+、${owners_reason}})。この検査はスキップしました"
+  elif [[ -n "${underscore_owners}" ]]; then
     warn "収集の対象外" "loginに_を含む所有者は収集しません: $(printf '%s' "${underscore_owners}" | tr '\n' ' ')"
   fi
 fi
