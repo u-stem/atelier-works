@@ -1808,6 +1808,8 @@ export type RemoveWorktreeOptions = {
   readonly repoDir: string;
   readonly dir: string;
   readonly force?: boolean;
+  /** gitがロックしたworktreeも消す(`--force`を2回)。 */
+  readonly forceLocked?: boolean;
   readonly home?: string;
   readonly path?: string;
   readonly lockFs?: LockFs;
@@ -1917,37 +1919,86 @@ export type WorktreeEntry = {
   readonly branch: string | null;
   readonly bare: boolean;
   readonly detached: boolean;
+  /** gitがロックしているときだけ持つ。`reason`は`git worktree lock --reason`の文で、理由が無いロックは`null`。 */
+  readonly lock?: { readonly reason: string | null };
 };
+
+/** 作成の途中で止まったworktreeに、gitが付けるロックの理由。 */
+export const INITIALIZING_LOCK_REASON = "initializing";
 
 /** レビューのworktreeの名前に付く、実行の識別子の形。小文字の16進数の8桁。 */
 const REVIEW_RUN_ID_SOURCE = "[0-9a-f]{8}";
+const REVIEW_RUN_ID = new RegExp(`^${REVIEW_RUN_ID_SOURCE}$`);
+
+/**
+ * レビューのworktreeの名前の形。
+ * `review-<PR番号>-<sha7>-<実行の識別子>`と、識別子の無い`review-<PR番号>-<sha7>`の両方に合わせる。
+ * 1つ目の括弧がPR番号である。
+ */
+const REVIEW_WORKTREE_NAME = new RegExp(
+  `^review-([1-9][0-9]*)-[0-9a-f]{7}(?:-${REVIEW_RUN_ID_SOURCE})?$`,
+);
 
 /** `value`が、レビューのworktreeの名前に付けてよい実行の識別子かを返す。 */
 export function isReviewRunId(value: string): boolean {
-  return new RegExp(`^${REVIEW_RUN_ID_SOURCE}$`).test(value);
+  return REVIEW_RUN_ID.test(value);
 }
 
 /**
- * `entry`が、PR番号`prNumber`のレビューのworktree(`buildReviewWorktreeDir`が作るパス)かを返す。
+ * `entry`がレビューのworktree(`buildReviewWorktreeDir`が作るパス)なら、そのPR番号を返す。そうでなければ`null`を返す。
  * `repoDir`と同じ親の直下にある、detachedのworktreeだけを対象にする。
- * 名前は`review-<PR番号>-<sha7>-<実行の識別子>`と、識別子の無い`review-<PR番号>-<sha7>`の両方に合わせる。
  * パスの一部が一致しただけで選ぶと、別の場所のdirectoryやブランチのworktreeまで消しうるためである。
  * パスは文字列の前方一致で比べるので、列挙されたパスと`repoDir`が同じ綴りでなければ、
  * 何も選ばれない。workerの`/workspaces`はボリュームのマウント先そのものでsymlinkを挟まないので、
  * `/workspaces/<owner>/<repo>/main`のcloneのworktreeは、同じ綴りで列挙される。
  */
+export function reviewWorktreePrNumber(
+  repoDir: string,
+  entry: Pick<WorktreeEntry, "path" | "detached">,
+): number | null {
+  if (!entry.detached) return null;
+  const prefix = `${repoDir.replace(/\/main$/, "")}/`;
+  if (!entry.path.startsWith(prefix)) return null;
+  const match = entry.path.slice(prefix.length).match(REVIEW_WORKTREE_NAME);
+  const prNumber = match?.[1];
+  return prNumber === undefined ? null : Number(prNumber);
+}
+
+/** `entry`が、PR番号`prNumber`のレビューのworktreeかを返す。 */
 export function isReviewWorktreeOf(
   repoDir: string,
   prNumber: number,
   entry: Pick<WorktreeEntry, "path" | "detached">,
 ): boolean {
-  if (!entry.detached) return false;
-  const prefix = `${repoDir.replace(/\/main$/, "")}/`;
-  if (!entry.path.startsWith(prefix)) return false;
-  const name = entry.path.slice(prefix.length);
-  return new RegExp(
-    `^review-${String(prNumber)}-[0-9a-f]{7}(-${REVIEW_RUN_ID_SOURCE})?$`,
-  ).test(name);
+  return reviewWorktreePrNumber(repoDir, entry) === prNumber;
+}
+
+/**
+ * PR番号`prNumber`のレビューのworktreeを、すべて返す。
+ * 名前のshaでは絞らない。名前のshaは準備の時点のheadで決まり、作業項目の`head_sha`と食い違うことがあるためである。
+ * 定期の片付けと、PRが閉じたときの片付けが、同じ選び方を使う。
+ */
+export function selectReviewWorktreesOfPr<
+  T extends Pick<WorktreeEntry, "path" | "detached">,
+>(repoDir: string, worktrees: readonly T[], prNumber: number): T[] {
+  return worktrees.filter((worktree) =>
+    isReviewWorktreeOf(repoDir, prNumber, worktree),
+  );
+}
+
+/**
+ * レビューのworktreeを消すときの`removeWorktree`の指定を返す。消さないときは`null`を返す。
+ * ロックの無いものは`--force`で、理由が`initializing`のロックは作成の途中で止まった残骸なので`--force`を2回で消す。
+ * 理由が別のロックと、理由の無いロックは、誰かが意図して付けた可能性があるので消さない。
+ */
+export function reviewWorktreeRemoval(
+  entry: Pick<WorktreeEntry, "lock">,
+): { readonly force: true; readonly forceLocked: boolean } | null {
+  if (entry.lock === undefined) return { force: true, forceLocked: false };
+  if (entry.lock.reason === INITIALIZING_LOCK_REASON) {
+    return { force: true, forceLocked: true };
+  }
+  return null;
 }
 
 /**

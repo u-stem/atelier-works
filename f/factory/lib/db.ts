@@ -1146,29 +1146,6 @@ export async function listActivePrFixWorkItems(
 }
 
 /**
- * (owner, repo, prNumber)の`pr_review`の作業項目のうち、更新が最も新しいものを返す。状態は問わない。
- * ownerとrepoは小文字で照合する。`listActivePrReviewWorkItems`と同じ比べ方である。
- * 更新の時刻が同じなら、`id`の大きい方を返す。無ければ`null`を返す。
- */
-export async function getLatestPrReviewWorkItem(
-  owner: string,
-  repo: string,
-  prNumber: number,
-  sql: SqlClient = defaultSqlClient,
-): Promise<WorkItem | null> {
-  const rows = await sql`
-    SELECT * FROM factory.work_items
-    WHERE kind = 'pr_review'
-      AND lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
-      AND pr_number = ${prNumber}::integer
-    ORDER BY updated_at DESC, id DESC
-    LIMIT 1
-  `.fetch();
-  const row = rows[0];
-  return row === undefined ? null : toWorkItem(row);
-}
-
-/**
  * (owner, repo, prNumber)の、終端でない`pr_review`の作業項目を返す。
  * ownerとrepoは小文字で照合する。`insertPrReviewWorkItemUnlessActive`と同じ比べ方である。
  * 一意インデックス`work_items_active_pr_review_key`により、通常は多くても1件である。

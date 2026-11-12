@@ -36,7 +36,6 @@ import {
   getIssueProposal,
   getLatestDeployment,
   getLatestPrCiCheck,
-  getLatestPrReviewWorkItem,
   getLatestScheduleFailure,
   getMainCiStateBySha,
   getNoticeById,
@@ -10907,50 +10906,6 @@ describe("hasActivePrReviewWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await hasActivePrReviewWorkItem("acme", "widgets", 12, sql);
     expect(calls[0]?.text).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/);
-  });
-});
-
-describe("getLatestPrReviewWorkItem", () => {
-  test("reads only the pr_review kind", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await getLatestPrReviewWorkItem("acme", "widgets", 12, sql);
-    expect(calls[0]?.text).toContain("kind = 'pr_review'");
-  });
-
-  test("includes work items of every status", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await getLatestPrReviewWorkItem("acme", "widgets", 12, sql);
-    expect(calls[0]?.text).not.toContain("status");
-  });
-
-  test("compares the owner and repo in lower case", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await getLatestPrReviewWorkItem("Acme", "Widgets", 12, sql);
-    expect(calls[0]?.values).toEqual(
-      expect.arrayContaining(["acme", "widgets"]),
-    );
-  });
-
-  test("takes the most recently updated row", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await getLatestPrReviewWorkItem("acme", "widgets", 12, sql);
-    expect(calls[0]?.text).toMatch(
-      /ORDER BY updated_at DESC, id DESC\s+LIMIT 1/,
-    );
-  });
-
-  test("returns null when the pr has no pr_review", async () => {
-    const { sql } = createFakeSqlClient([[]]);
-    expect(await getLatestPrReviewWorkItem("acme", "widgets", 12, sql)).toBe(
-      null,
-    );
-  });
-
-  test("returns the parsed row", async () => {
-    const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
-    expect(
-      (await getLatestPrReviewWorkItem("acme", "widgets", 12, sql))?.id,
-    ).toBe(1);
   });
 });
 

@@ -36,6 +36,7 @@ import {
   fetchPrHeadRef,
   formatGitleaksReport,
   type GitleaksConfigDir,
+  INITIALIZING_LOCK_REASON,
   isCappedOutput,
   isReviewWorktreeOf,
   type LockFs,
@@ -63,11 +64,14 @@ import {
   removeWorktree,
   resolveDefaultBranchHeadSha,
   resolveDefaultBranchName,
+  reviewWorktreePrNumber,
+  reviewWorktreeRemoval,
   runCommand,
   runGitleaksOnTreeDiff,
   runGitleaksOnWorktree,
   SpawnError,
   scannedTreeStopReasons,
+  selectReviewWorktreesOfPr,
   stagedTreeSha,
   verifyWorktreeGitdir,
   WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON,
@@ -7021,6 +7025,234 @@ describe("isReviewWorktreeOf", () => {
     expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
       false,
     );
+  });
+});
+
+describe("reviewWorktreePrNumber", () => {
+  const REPO_DIR = "/workspaces/acme/widgets/main";
+  const entry = (path: string, detached = true) => ({ path, detached });
+
+  test("returns the pr number of a name with a run id", () => {
+    expect(
+      reviewWorktreePrNumber(
+        REPO_DIR,
+        entry("/workspaces/acme/widgets/review-42-abc1234-0a1b2c3d"),
+      ),
+    ).toBe(42);
+  });
+
+  test("returns the pr number of a name without a run id", () => {
+    expect(
+      reviewWorktreePrNumber(
+        REPO_DIR,
+        entry("/workspaces/acme/widgets/review-42-abc1234"),
+      ),
+    ).toBe(42);
+  });
+
+  test("returns null for a pr number with a leading zero", () => {
+    expect(
+      reviewWorktreePrNumber(
+        REPO_DIR,
+        entry("/workspaces/acme/widgets/review-042-abc1234-0a1b2c3d"),
+      ),
+    ).toBe(null);
+  });
+
+  test("returns null for a dependabot worktree", () => {
+    expect(
+      reviewWorktreePrNumber(
+        REPO_DIR,
+        entry("/workspaces/acme/widgets/dependabot-42-abc1234"),
+      ),
+    ).toBe(null);
+  });
+
+  test("returns null for a worktree that is not detached", () => {
+    expect(
+      reviewWorktreePrNumber(
+        REPO_DIR,
+        entry("/workspaces/acme/widgets/review-42-abc1234-0a1b2c3d", false),
+      ),
+    ).toBe(null);
+  });
+
+  test("returns null for the main clone", () => {
+    expect(reviewWorktreePrNumber(REPO_DIR, entry(REPO_DIR))).toBe(null);
+  });
+});
+
+describe("selectReviewWorktreesOfPr", () => {
+  const REPO_DIR = "/workspaces/acme/widgets/main";
+  const PARENT = "/workspaces/acme/widgets";
+
+  test("returns the entries of the pr whatever the sha7 and run id", () => {
+    const entries = [
+      { path: `${PARENT}/review-42-aaaaaaa`, detached: true },
+      { path: `${PARENT}/review-42-bbbbbbb-0a1b2c3d`, detached: true },
+      { path: `${PARENT}/review-43-aaaaaaa-0a1b2c3d`, detached: true },
+    ];
+    expect(
+      selectReviewWorktreesOfPr(REPO_DIR, entries, 42).map(
+        (entry) => entry.path,
+      ),
+    ).toEqual([
+      `${PARENT}/review-42-aaaaaaa`,
+      `${PARENT}/review-42-bbbbbbb-0a1b2c3d`,
+    ]);
+  });
+});
+
+describe("reviewWorktreeRemoval", () => {
+  test("forces an unlocked worktree once", () => {
+    expect(reviewWorktreeRemoval({})).toEqual({
+      force: true,
+      forceLocked: false,
+    });
+  });
+
+  test("forces a worktree locked as initializing twice", () => {
+    expect(
+      reviewWorktreeRemoval({ lock: { reason: INITIALIZING_LOCK_REASON } }),
+    ).toEqual({ force: true, forceLocked: true });
+  });
+
+  test("does not remove a worktree locked for another reason", () => {
+    expect(reviewWorktreeRemoval({ lock: { reason: "on a usb drive" } })).toBe(
+      null,
+    );
+  });
+
+  test("does not remove a worktree locked without a reason", () => {
+    expect(reviewWorktreeRemoval({ lock: { reason: null } })).toBe(null);
+  });
+});
+
+describe("worktree locks with real git", () => {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** 1コミットのリポジトリと、そのdetachedのworktreeを2つ作る。 */
+  async function setup() {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "worktree-lock-")));
+    roots.push(root);
+    const home = join(root, "home");
+    const repo = join(root, "repo");
+    mkdirSync(home);
+    mkdirSync(repo);
+    const git = async (cwd: string, args: readonly string[]) => {
+      const result = await runCommand(
+        [
+          "git",
+          "-c",
+          "user.name=test",
+          "-c",
+          "user.email=test@example.invalid",
+          ...args,
+        ],
+        {
+          cwd,
+          env: {
+            PATH: process.env.PATH ?? "",
+            HOME: home,
+            GIT_CONFIG_NOSYSTEM: "1",
+          },
+        },
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+      }
+    };
+    await git(repo, ["init", "-q", "-b", "main"]);
+    await git(repo, ["commit", "-q", "--allow-empty", "-m", "init"]);
+    const first = join(root, "review-7-aaaaaaa-0a1b2c3d");
+    const second = join(root, "review-7-aaaaaaa-4e5f6a7b");
+    await git(repo, ["worktree", "add", "-q", "--detach", first]);
+    await git(repo, ["worktree", "add", "-q", "--detach", second]);
+    const list = async () =>
+      listWorktrees({ run: runCommand, repoDir: repo, home });
+    return { git, repo, home, first, second, list };
+  }
+
+  test("reads the reason of a lock", async () => {
+    const s = await setup();
+    await s.git(s.repo, [
+      "worktree",
+      "lock",
+      "--reason",
+      INITIALIZING_LOCK_REASON,
+      s.first,
+    ]);
+    const entry = (await s.list()).find((item) => item.path === s.first);
+    expect(entry?.lock).toEqual({ reason: INITIALIZING_LOCK_REASON });
+  });
+
+  test("reads a lock without a reason", async () => {
+    const s = await setup();
+    await s.git(s.repo, ["worktree", "lock", s.first]);
+    const entry = (await s.list()).find((item) => item.path === s.first);
+    expect(entry?.lock).toEqual({ reason: null });
+  });
+
+  test("reports no lock for an unlocked worktree", async () => {
+    const s = await setup();
+    const entry = (await s.list()).find((item) => item.path === s.second);
+    expect(entry?.lock).toBeUndefined();
+  });
+
+  test("removes a worktree locked as initializing with forceLocked", async () => {
+    const s = await setup();
+    await s.git(s.repo, [
+      "worktree",
+      "lock",
+      "--reason",
+      INITIALIZING_LOCK_REASON,
+      s.first,
+    ]);
+    await removeWorktree({
+      run: runCommand,
+      repoDir: s.repo,
+      dir: s.first,
+      force: true,
+      forceLocked: true,
+      home: s.home,
+    });
+    expect((await s.list()).map((item) => item.path)).not.toContain(s.first);
+  });
+
+  test("leaves a worktree locked for another reason when only force is given", async () => {
+    const s = await setup();
+    await s.git(s.repo, [
+      "worktree",
+      "lock",
+      "--reason",
+      "on a usb drive",
+      s.first,
+    ]);
+    await removeWorktree({
+      run: runCommand,
+      repoDir: s.repo,
+      dir: s.first,
+      force: true,
+      home: s.home,
+    }).catch(() => undefined);
+    expect((await s.list()).map((item) => item.path)).toContain(s.first);
+  });
+
+  test("throws when a locked worktree is removed with only force", async () => {
+    const s = await setup();
+    await s.git(s.repo, ["worktree", "lock", s.first]);
+    await expect(
+      removeWorktree({
+        run: runCommand,
+        repoDir: s.repo,
+        dir: s.first,
+        force: true,
+        home: s.home,
+      }),
+    ).rejects.toThrow("git worktree remove failed");
   });
 });
 
