@@ -219,6 +219,8 @@ gitのpre-pushは全体の`check`を実行しない。
 理由は[セットアップ](setup.md#gitのフック)にある。
 
 - `lint`はbiome、`wmill lint f`、型アサーションと`§`の検出を含む。
+  `f/`の`.script.lock`の依存が、ルートの`bun.lock`と同じ版・同じintegrityであることも確かめる(`scripts/check-script-locks.ts`)。
+  理由は[この文書の「依存の脆弱性」](#依存の脆弱性)にある。
 - `test`は`bun test --parallel`で、`console/`を除く。
   カバレッジを`coverage/lcov.info`に出す。
   `check`は、その後に`bun ./scripts/check-coverage.ts`で、全体と層ごとの行カバレッジの下限と、lcovに出ない対象を確かめる。
@@ -269,6 +271,12 @@ gitのpre-pushは全体の`check`を実行しない。
 bunは依存のinstall scriptを既定では実行しないが、既定の信頼する一覧(trustedDependencies)にある有名なパッケージだけは実行するためである。
 
 ### 依存の脆弱性
+
+workerのscriptの依存は、scriptごとの`.script.lock`が固定する。
+`bun audit`はルートの`bun.lock`しか読まないので、`.script.lock`の依存は、ルートの`bun.lock`と同じ版・同じintegrityにそろえる。
+そろっていれば、ルートの監査がworkerの依存も覆う。
+`lint`の`scripts/check-script-locks.ts`が、版とintegrityの食い違いと、ルートに無い依存を止める。
+workerのscriptに依存を足すときは、ルートの`package.json`にも同じ版で足す。
 
 ルートで`bun audit`を実行し、指摘が出たら更新で解消できるかを先に確かめる。
 修正版が出ているのに親のパッケージが古い版を求めるときは、ルートの`package.json`の`overrides`で修正版に固定する。
