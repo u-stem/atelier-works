@@ -1082,7 +1082,6 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
 - [R-HOST-41](../security-risks.md#r-host-41)
 - composeの`image`と環境変数の参照は、表と照らす([composeのimageと秘密値の表](#composeのimageと秘密値の表))。
   ただし、違反は`plan`の判定に使っていない。
-  そのため、表の外のリポジトリや、表の外のサービスへの`DB_PASSWORD`の受け渡しは、`would_converge`と判定される。
   止まるのは、拒否になる形だけである。
   拒否になる形は、[composeの方針](#composeの方針)と[composeのimageと秘密値の表](#composeのimageと秘密値の表)に挙げた。
   承認の記録は後続の段階で足す。
@@ -1138,8 +1137,7 @@ Windmillへ反映する保護パスのファイル(`f/`の下と`wmill.yaml`)か
 
 - [R-HOST-53](../security-risks.md#r-host-53)
 - [R-HOST-54](../security-risks.md#r-host-54)
-- ホストの書き込み(`docker compose exec`)は、ジョブと同じ権限で動く。
-  同じディレクトリに、`mktemp`のランダムな名前の一時ファイルを排他的に作って書き、`mv -fT`で置き換える。
+- 同じディレクトリに、`mktemp`のランダムな名前の一時ファイルを排他的に作って書き、`mv -fT`で置き換える。
   印のパスがsymlinkでも、その先は上書きされず、置き換わるのはsymlink自体である。
   印のパスがディレクトリのときは、中へ移さず失敗し、一時ファイルを消す。
   その場合、記録は警告で終わる。

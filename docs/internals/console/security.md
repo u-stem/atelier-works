@@ -33,7 +33,7 @@ Console用workerの境界の全体は、[セキュリティ](../../security.md#c
 契約テストは、たどれるファイルの集合が保護パスに収まることを確かめる。
 
 3つのscriptの`.script.lock`は、保護パスの外にある。
-`windmill-client`の版を上げる変更が、全scriptのlockと一緒に書き換わるので、守るとその変更を止めてしまうためである。
+残るリスクは[R-DIO-15](../../security-risks.md#r-dio-15)である。
 残るリスクは[R-CON-01](../../security-risks.md#r-con-01)である。
 
 走査は、許可表のほかに、次の形を禁じる。
@@ -198,7 +198,7 @@ PRが開いていることも確かめ、GitHubが返す正規のリポジトリ
 投入を止める停止スイッチは無い。
 `poll_prs`のスケジュールを止めても、投入は止まらない。
 
-残るリスクがある。
+残るリスクは次のとおりである。
 
 - [R-CON-02](../../security-risks.md#r-con-02)
 - [R-CON-03](../../security-risks.md#r-con-03)
@@ -677,7 +677,7 @@ Markdownの文字は、見えない文字の表し方、改行と空白の扱い
 設計の承認画面(`DesignReview.tsx`)は、同じパネルを使うが、`mode`を渡さないので、原文のままである。
 設計の承認画面の保護は、次の節に書く。
 
-残るリスクがある。
+残るリスクは次のとおりである。
 
 - [R-CON-10](../../security-risks.md#r-con-10)
 - [R-CON-11](../../security-risks.md#r-con-11)
@@ -799,7 +799,7 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
 一覧は網羅しないので、漏れはレビューで確かめる。
 承認画面のファイルを変える変更は、保護パスなので、人のレビューを経る。
 
-残るリスクがある。
+残るリスクは次のとおりである。
 
 - [R-CON-16](../../security-risks.md#r-con-16)
 - [R-CON-17](../../security-risks.md#r-con-17)
@@ -850,7 +850,7 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
   知らない形式への切り替えは、プレビューとして扱い、`previewed`を立てる。
   `designPreviewGate`は、`text`で`previewed`のときだけ、チェックの文を返す。
   プレビューの表示中は、承認そのものを止めるので、チェックを出さない。
-  チェックは自己申告で、読んだことを保証しない。
+  残るリスクは[R-CON-31](../../security-risks.md#r-con-31)である。
 - 切り替えは、設計書のパネルの中の1か所にあり、設計書の本文だけに効く。
   取り込み時点のIssueのパネルには`mode`を渡さないので、常に原文である。
 - 承認バーは、承認依頼ごとに`key`で作り直す。
@@ -917,15 +917,13 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
 このファイルの誤りは、プレビューの描画を壊す側に出て、承認を通す側には出ない。
 `ViewModeSwitch`、`ToggleChip`、`IntakeSnapshotPanel`、`Markdown`も、共有の部品なので保護しない。
 
-残るリスクがある。
+残るリスクは次のとおりである。
 
 - [R-CON-31](../../security-risks.md#r-con-31)
 - [R-CON-32](../../security-risks.md#r-con-32)
-- mountの後の確認のチェックの扱いは、すべて保護の外の`ApprovalBar.tsx`と`approvalDecision.ts`にある。
-  求めるか、出すか、付けた後に強制するかを決める処理である。
+- 求めるか、出すか、付けた後に強制するかを決める処理である。
   `previewChecked`の持ち越しと、`approveGateProblem`の判定の順もここである。
   保護テストが固定するのは、最初の描画で承認が無効で、理由が確認の理由の文であるところまでである。
-  mountの後の変更は、保護パスを通らず、人のレビューを経ない。
   たとえば、`ApprovalBar.tsx`に、`previewCheckMessage`が非nullになったら`setPreviewChecked(true)`する効果を足す変更が当たる。
   `approveGateProblem`の判定の順を入れ替えて、プレビューの確認を後回しにする変更も当たる。
   残るリスクの表の[R-CON-33](../../security-risks.md#r-con-33)にあたる。
@@ -1129,7 +1127,7 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 
 XMLをiframeへ送るときの`targetOrigin`は`"*"`にする。
 不透明なオリジンには、送り先のオリジンを指定する方法が他に無いためである。
-送るのは図のXMLだけなので、宛先を絞れなくても許容する。
+宛先を絞れない残るリスクは、[R-DIO-17](../../security-risks.md#r-dio-17)である。
 設計の図のXMLには、秘密値のマスクをかけない。
 残るリスクは[R-DIO-02](../../security-risks.md#r-dio-02)である。
 XMLをpostMessageで送る先は、このsandboxのiframeだけである。

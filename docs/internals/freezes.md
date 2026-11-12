@@ -168,7 +168,7 @@ deployの保留の判定は読む段の中で済ませるので、段は増え�
 | ローカルのClaudeのセッションの手動の`wmill sync push`と`wmill datatable migrate` | フックが拒否する | フックが拒否する |
 
 `up`と`deploy`の確認(`freeze.ts check`)は、読めないときに警告だけで通す。
-Windmillが止まっていると変数を読めず、スタックを起こせなくなるためである。
+残るリスクは[R-FRZ-26](../security-risks.md#r-frz-26)である。
 `check`が変数を読む待ちは10秒で打ち切り、同じく警告で通す。
 `up`は復旧の道具なので、応答しないサーバーで長く止まらないようにする。
 読めないまま反映が進むことは無い。
@@ -230,7 +230,6 @@ pushとmigrationの間に保留が置かれても、migrationは続く。
 追従だけの回も、保留中は待つ。
 終わった行は、保留が切れた後の回で追従する。
 保留が24時間を超えて続くと、終わった行が次の`place`で捨てられうる。
-捨てた行は追従されず、スケジュールは次の反映で戻る。
 
 ## 版の食い違いの通知
 
@@ -555,19 +554,17 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
   止めたscheduleは、凍結が終わった後の追従で、リポジトリの定義に戻る。
 - [R-FRZ-22](../security-risks.md#r-frz-22)
 - `freeze_release`は、書いた後に変数を読み直す。
-  残るリスクの表の[R-FRZ-23](../security-risks.md#r-frz-23)にあたる。
   解除が残っていないとき、または書いた時点で有効だった行が欠けているときは、確認できなかったと返す。
   変数の読み直しと書き込みは排他しない。
   Console用のworkerは1つ(`replicas: 1`)で動くので、Consoleのジョブ同士は重ならない。
-  CLIや`self_update`と重なると、他の行を黙って消すか、解除を巻き戻すことがある。
+  CLIや`self_update`との競合の残るリスクは、[R-FRZ-23](../security-risks.md#r-frz-23)である。
   読み直しで気づけない順序が2つある。
   - CLIの`place`が、Consoleの読みの後に、読み直しより前の状態を書き、Consoleが最後に書く。
   - Consoleの読み直しの後に、別の書き手が書いて、解除が巻き戻る。
 - `session`は、deployの保留を確認なしで置ける。
-  残るリスクの表の[R-FRZ-24](../security-risks.md#r-frz-24)にあたる。
-  上限は120分で、この区別は誤操作を防ぐためのもので、境界ではない。
+  上限は120分である。
   subagentは、`hold-guard.ts`が`freeze:place`の`--scope deploy`、`freeze:release`、`freeze:reset`、`push:prune`を拒否する。
-  ベストエフォートの規則で、保留の拒否と同じ限界を持つ。
+  この区別とsubagentの拒否の残るリスクは、[R-FRZ-24](../security-risks.md#r-frz-24)である。
   `bun run - list < scripts/freeze.ts`のように標準入力へ流し込む形は、作業ツリーの`scripts/`で実行すると動くことを実測した。
   `mise run -- freeze:release 1`は、mise 2026.9.13で実測すると、`--`より後ろをタスク`default`への引数として扱い、実行しない。
   保留の側は`--`より後ろの`hold:`を名指しする語も拒否するが、凍結の側はこの形を見ない。

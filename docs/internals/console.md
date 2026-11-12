@@ -6245,7 +6245,7 @@ Consoleの本体のCSPは`/console/assets/`だけを許すので、本体のペ�
 ブラウザは、GETとHEAD以外の要求には`Origin`を付けるので、2つ目の規則がそれを止める。
 ナビゲーションや`<img>`のGETには`Origin`が付かない。
 Firefox 70未満は、フォームのPOSTにも付けない。
-そのため、この検査が補えるのは、GETとHEAD以外のブラウザの要求だけである。
+残るリスクは[R-DLV-17](../security-risks.md#r-dlv-17)である。
 
 ブラウザが開いたオリジンは、`Host`ヘッダーのホスト名とポートに、`http://`か`https://`を付けたものである。
 許すのはこの2つだけで、`WM_HTTP_PORT`やホスト名を変えても規則はそのまま合う。
@@ -6279,7 +6279,7 @@ Consoleの呼び出しはPOSTの`fetch`なので、影響しない。
 `Sec-Fetch-Dest`を送らないブラウザは、`Cookie`を持つときだけ止める。
 対象は、古いブラウザと、HTTPで公開したブラウザである。
 `Sec-Fetch-*`は、信頼できるオリジン(localhostかHTTPS)でだけ付く。
-そのため、WindmillのフロントエンドがこれらのGETを使うと、その環境では403になる。
+残るリスクは[R-DLV-20](../security-risks.md#r-dlv-20)である。
 CLIとscriptは、`Sec-Fetch-*`と`Cookie`を送らず、`Authorization`で認証するので、そのまま通る。
 
 パスの照合は、大文字小文字を区別せず、`//`の重なりも許す。
