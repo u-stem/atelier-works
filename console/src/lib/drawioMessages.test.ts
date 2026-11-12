@@ -137,6 +137,11 @@ describe("readFrameHeight", () => {
   test("ignores null data", () => {
     expect(readFrameHeight(frame, frame, null)).toBeNull();
   });
+
+  test("ignores an array that carries the fields of a height message", () => {
+    const data = Object.assign([], { type: "drawio:height", height: 300 });
+    expect(readFrameHeight(frame, frame, data)).toBeNull();
+  });
 });
 
 describe("readFrameError", () => {
@@ -194,6 +199,14 @@ describe("readFrameError", () => {
 
   test("ignores null data", () => {
     expect(readFrameError(frame, frame, null)).toBeNull();
+  });
+
+  test("ignores an array that carries the fields of an error message", () => {
+    const data = Object.assign([], {
+      type: "drawio:error",
+      reason: "render_failed",
+    });
+    expect(readFrameError(frame, frame, data)).toBeNull();
   });
 });
 
