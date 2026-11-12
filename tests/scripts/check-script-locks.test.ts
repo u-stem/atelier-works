@@ -456,6 +456,11 @@ function lockWithBefore(before: string, manifest: string = MANIFEST): string {
   );
 }
 
+// 見えない文字は、ソースに直接書かず、文字コードから作る。エディタや差分で見分けられないため。
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
+const NO_BREAK_SPACE = String.fromCharCode(0x00a0);
+
 function notStrict(part: string, problem: string): ScriptLockViolation[] {
   return [{ key: part, reason: `lock is not strict JSON: ${problem}` }];
 }
@@ -538,7 +543,9 @@ describe("checkScriptLock with a lock that is not strict JSON", () => {
   test("reports a line comment that ends with a line separator", () => {
     expect(
       checkScriptLock(
-        lockWithBefore('"packages": {}, // c   "packages": {},\n  '),
+        lockWithBefore(
+          `"packages": {}, // c${LINE_SEPARATOR}  "packages": {},\n  `,
+        ),
         rootIndex(),
       ),
     ).toEqual(notStrict("bun.lock", "a comment"));
@@ -557,15 +564,22 @@ describe("checkScriptLock with a lock that is not strict JSON", () => {
   });
 
   test("reports a byte order mark", () => {
-    const lock = lockWithBefore("").replace("//bun.lock\n{", "//bun.lock\n﻿{");
+    const lock = lockWithBefore("").replace(
+      "//bun.lock\n{",
+      `//bun.lock\n${BYTE_ORDER_MARK}{`,
+    );
     expect(checkScriptLock(lock, rootIndex())).toEqual(
       notStrict("bun.lock", "an unexpected character U+FEFF"),
     );
   });
 
   test("reports a no-break space between tokens", () => {
+    // コロンと値の間の空白を、NBSPにする。
     expect(
-      checkScriptLock(lockWithBefore('"note": 1,\n  '), rootIndex()),
+      checkScriptLock(
+        lockWithBefore(`"note":${NO_BREAK_SPACE}1,\n  `),
+        rootIndex(),
+      ),
     ).toEqual(notStrict("bun.lock", "an unexpected character U+00A0"));
   });
 
