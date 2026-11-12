@@ -568,7 +568,8 @@ describe("doctor.sh owners that the collection cannot handle", () => {
 
   interface OwnerRun {
     lines: string[];
-    // 警告の行が無いときに、原因をたどるための終了コードと標準エラーの末尾。
+    // 警告の行が無いときに、原因をたどるための終了コードと、標準エラーと標準出力の末尾。
+    // doctor.shは子プロセスの標準エラーを捨てるので、どの項目まで進んだかは標準出力で見分ける。
     diagnostics: string;
   }
 
@@ -591,7 +592,7 @@ describe("doctor.sh owners that the collection cannot handle", () => {
     const exitCode = await proc.exited;
     return {
       lines: stdout.split("\n").filter((l) => l.includes("収集の対象外")),
-      diagnostics: `exit code: ${exitCode}, stderr tail: ${JSON.stringify(stderr.slice(-500))}`,
+      diagnostics: `exit code: ${exitCode}, stderr tail: ${JSON.stringify(stderr.slice(-500))}, stdout tail: ${JSON.stringify(stdout.slice(-500))}`,
     };
   }
 
@@ -608,7 +609,7 @@ describe("doctor.sh owners that the collection cannot handle", () => {
     const { lines, diagnostics } = await ownerRun(server.port ?? 0);
 
     server.stop(true);
-    // 行が無いときは、期待値との差に終了コードと標準エラーが載るようにする。
+    // 行が無いときは、期待値との差に終了コードと標準エラーと標準出力が載るようにする。
     expect(lines[0] ?? `no warning line (${diagnostics})`).toMatch(
       /^\s+WARN\s.*emu_user/,
     );
