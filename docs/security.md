@@ -1424,6 +1424,8 @@ scriptの`.script.lock`は、ルートの`bun.lock`と同じ版・同じintegrit
 
 `.github/workflows/audit.yml`が、`main`のルートとConsoleの`bun.lock`を、`bun audit --audit-level=high`で監査する。
 毎週月曜の9時(JST)と、手動の実行で動く。
+ジョブは`main`のrefのときだけ動き、手動の実行でほかのブランチを選ぶと飛ばされる。
+失敗した実行がPRのheadに付き、CIの自動修正を起動するのを防ぐためである。
 権限は`contents: read`だけで、依存は入れない。
 PRでは動かさず、必須チェックにもしない。
 PRで落ちると、FactoryのPRのCIの監視が直せる失敗とみなし、lockfileを直せない自動の修正を起動するためである。

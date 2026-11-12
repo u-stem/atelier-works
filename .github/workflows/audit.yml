@@ -4,6 +4,7 @@ name: Audit
 # workerのscriptの依存は、`.script.lock`がルートのbun.lockと同じ版にそろうことを`mise run lint`が確かめるので、ルートの監査が覆う。
 # PRでは動かさない。PRの実行が落ちると、FactoryのPRのCIの監視が直せる失敗とみなし、
 # lockfileを直せない自動の修正を起動してしまうため。
+# 手動の実行も、mainのrefのときだけ監査する。
 # 定期の実行の失敗は、Factoryが通知しない。失敗はActionsの実行の一覧で見る。
 # 失敗したときの確かめ方は、docs/security.mdの「依存の脆弱性」にある。
 on:
@@ -24,6 +25,9 @@ jobs:
   # ジョブの名前を、mainの必須チェックの名前と重ねない。
   # 重なる名前のチェックがPRのheadに付くと、dependabotの自動マージの関門がその結果も求めるため。
   audit:
+    # mainのrefだけで動かす。手動の実行でPRのブランチを選ぶと、失敗した実行がPRのheadに付き、
+    # CIの自動修正を起動しうるため。ほかのrefでは、ジョブは飛ばされる。
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:

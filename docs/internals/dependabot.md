@@ -55,6 +55,7 @@ dependabotが開いた依存の更新PRを、Factoryがどう選び、どう評�
 `ignore`は、セキュリティ更新にも効く。
 対象外にした依存のhigh以上の指摘は、定期の監査(`.github/workflows/audit.yml`)が拾う。
 監査は`main`に対して毎週と手動の実行で動き、PRでは動かない。
+手動の実行でも、`main`のref以外ではジョブが飛ばされる。
 定期の実行の失敗は、Factoryが通知しない([R-TB-37](../security-risks.md#r-tb-37))。
 moderate以下の指摘は、GitHubのDependabot alertsの画面で確かめる([R-TB-39](../security-risks.md#r-tb-39))。
 確かめ方は[セキュリティの「依存の脆弱性」](../security.md#依存の脆弱性)にある。
