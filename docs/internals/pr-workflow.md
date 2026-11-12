@@ -126,7 +126,7 @@ ownerとrepoは小文字にして比べる。
 インデックスを足すmigrationは、重なった古い行を`cancelled`にする。
 `pr_review`はリースを使わないので、取り消された行のフローは自分では止まらない。
 止めるのは、投稿の直前に作業項目が`reviewing`かを確かめる処理で、そうでなければ投稿しない。
-残るリスクは[R-FIX-01](../security-risks.md#r-fix-01)である。
+残るリスクは[R-CON-04](../security-risks.md#r-con-04)である。
 
 修正への指示は、ラベルを付ける前に、PRへ通常のコメントとして書く。
 `pr_fix_collect`が、ほかの人のコメントと同じくフィードバックとして集める。
@@ -2717,11 +2717,10 @@ Factoryのリポジトリにsymlinkを足すと、self cloneでは普通のフ�
 `core.alternateRefsCommand`は、`objects/info/alternates`があるcloneのfetchで、シェルから実行される。
 `core.worktree`は、`config.worktree`に書くと、`status`、`clean`、`add -A`が見る作業ツリーを別のディレクトリに変える。
 どちらも実際のgitで確かめた。
-これらは残るリスクである。
+これらは、残るリスクの表の[R-FIX-03](../security-risks.md#r-fix-03)にあたる。
 `git gtr new`のcheckoutは`GH_TOKEN`を持つ環境で動く。
 検査コマンドは検査用のユーザーで動き、main cloneの`.git`に書き込めない([検査コマンドの権限](check-sandbox.md#検査コマンドの権限))。
 検査コマンドが書き換えられるworktreeの`.git`ファイルは、記録との照合で止める。
-残るリスクの表の[R-FIX-03](../security-risks.md#r-fix-03)にあたる。
 
 ### コミットの直前の再検査
 

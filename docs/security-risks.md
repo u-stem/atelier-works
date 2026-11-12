@@ -139,12 +139,11 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-cred-01"></a>R-CRED-01 | 記録が古い明示でないリポジトリの人のPRは、収集の鮮度の監視が通知するまで見つからず、`gh_repos`に行が無い明示でないリポジトリの人のPRは、通知なしに見送る。第三者が1000件超のPRで一覧を読む明示リポジトリを埋めると、5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。第三者が埋める経路が当たる条件は、対象のリポジトリが明示リポジトリで、公開されていることなので、受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-02"></a>R-CRED-02 | Actions: Read-onlyの権限は選んだ全リポジトリの実行のログとartifactも読め、`github_token`はConsole用workerも読むので、漏れたときの影響は、Contentsの読み書きに加えて、ログとartifactを読まれる分だけ広がる。ログとartifactには秘密値を入れない。漏れたときの影響が広がる分は、残るリスクとして受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-03"></a>R-CRED-03 | 残るリスクとして、トレーラーはcommit本文の照合なので、リポジトリへ書ける人は偽れる。偽ったcommitだけのPRは、「Factoryが作ったPR」として自動で直す対象になりうる。対象のPRは、PATのアカウントが作った、Factoryのブランチの形のPRに限る。書き込める人は、ほかの手段でも同じPRを書き換えられるので、受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
-| <a id="r-cred-04"></a>R-CRED-04 | 残るリスクとして、第三者が1000件超のPRで、REST一覧を読むリポジトリを埋めることがある。このとき5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。1回の実行に、1リポジトリ10ページ、予算120秒、rate limitでの停止という上限がある。条件は、対象のリポジトリが作業項目、競合の行、明示リポジトリのどれかに入り、公開されていることなので、受け入れる。1回の実行の上限(10ページ、予算120秒、rate limitでの停止)があるので、受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
+| <a id="r-cred-04"></a>R-CRED-04 | 残るリスクとして、第三者が1000件超のPRで、REST一覧を読むリポジトリを埋めることがある。このとき5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。1回の実行に、1リポジトリ10ページ、予算120秒、rate limitでの停止という上限がある。条件は、対象のリポジトリが作業項目、競合の行、明示リポジトリのどれかに入り、公開されていることで、1回の実行にこの上限があるので、受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-05"></a>R-CRED-05 | 残るリスクとして、次のPRを拾えなくなる。作業項目も競合の行も無く、表も古い、明示でないリポジトリにあるFactoryのPRである。読めない間は、収集の鮮度の監視が通知するまで、知らせずに見送る。検索へ戻す設定は無い。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-06"></a>R-CRED-06 | 人がIssueの末尾に書き足すと、目印が最後の行でなくなり、再試行のときに見つからず、Issueが重複して起票される。書き足せるのは、リポジトリのIssueを編集できる人に限る。受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-07"></a>R-CRED-07 | 目印を偽造して、作成済みのIssueとして再利用させる経路があり、実際には付いていないラベルが付いた扱いになりうる。偽造できるのは、PATのアカウントとしてIssueを作る人と、書き込み権限のある協力者のIssueの書き換えに限る。PATのアカウントとしてIssueを作る経路は、運用者と、親のセッションが同じアカウントで`gh issue create`する経路、`manual_intake_create_issue`である。親のセッションの経路と`manual_intake_create_issue`には、信頼できない文が入りうるので、その文に目印が書かれると偽造になる。受け入れる。偽造できる人は、Factoryのリポジトリに書き込める人で、その人はIssueやPRを直接操作できるためである。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-08"></a>R-CRED-08 | 提案の作成の1時間前から承認までの間に、PATのアカウントが作ったIssueとPRが1000件を超えると、その提案の承認は通らない。承認は保留のまま残り、再度承認しても通らないので、却下して起票し直すしかない。受け入れる。長く保留した提案だけで起き、却下して起票し直せば復旧できるためである。 | [GitHubのPAT](security.md#githubのpat) |
-| <a id="r-cred-09"></a>R-CRED-09 | 走査と作成が、Issueを作る処理の印の有効期間(15分)を超えて続く障害では、印を取り直した別の呼び出しと重なり、Issueが重複して起票されうる。受け入れる。[R-DLV-04](#r-dlv-04)と同じ内容である。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-10"></a>R-CRED-10 | 再試行の前にPATのアカウントが替わると、前のアカウントが作ったIssueは作成者で絞った一覧に出ず、取りこぼして重複して起票される。受け入れる。再試行の前にPATを替える運用は想定しないためである。 | [GitHubのPAT](security.md#githubのpat) |
 
 ## Consoleの配信
@@ -154,7 +153,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-dlv-01"></a>R-DLV-01 | 許可リストと型付きの関数が防ぐのは、Console自身の誤りだけである。ConsoleのXSSや、運用者のCookieを持つ攻撃者は防げない。Cookieがあれば、許可リストの外のscriptも、Windmillのapiから直に呼べる。ログインのセッションの有効期間は30日で、Windmillの既定の3日より長い。運用者のブラウザが管理者のCookieを持つ時間も、そのぶん長い。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-02"></a>R-DLV-02 | 新規投入の冪等キーで止まらない再送(リロードの後、別のタブ、入力を変えたもの、キーを付けない直接のフロー実行、保持期間を過ぎたキー)では、Issue、作業項目、pipelineが重複しうる。承認を省く進め方でキーが変わる再送では、実装が二重に起動し、PRが重複しうる。損なわれるのは手間で、データと権限は損なわれない。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-03"></a>R-DLV-03 | GitHubの一覧の反映の遅れや、取り直した試行の目印の探索の失敗で、新規投入のIssueが二重になりうる。`gh`がタイムアウトすると予約が10分残り、その間の同じキーの再送は`intake_key_in_flight`で失敗する。取り直しの前に探索する順にすると設計が変わるので、受け入れる。 | [Consoleの配信](security.md#consoleの配信) |
-| <a id="r-dlv-04"></a>R-DLV-04 | 承認の二重の送信を画面で止められるのは送信した同じタブの中だけで、Issue提案のIssue作成のやり直しが重なると、Issueが2件できうる。サーバーの承認依頼ごとの印が重なりを緩和するが、期限を超える処理と取り直した処理は、理論上は重なりうる。 | [Consoleの配信](security.md#consoleの配信) |
+| <a id="r-dlv-04"></a>R-DLV-04 | 承認の二重の送信を画面で止められるのは送信した同じタブの中だけで、Issue提案のIssue作成のやり直しが重なると、Issueが2件できうる。サーバーの承認依頼ごとの印が重なりを緩和するが、期限を超える処理と取り直した処理は、理論上は重なりうる。走査と作成が、Issueを作る処理の印の有効期間(15分)を超えて続く障害では、印を取り直した別の呼び出しと重なり、Issueが重複して起票されうる。受け入れる。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-05"></a>R-DLV-05 | `main`へのマージは、承認0件のPRで済む。PRの必須チェックは通る必要があるが、人のレビューは強制されない。FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](security.md#mainの保護とリポジトリの公開))。そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。保護パスの反映の承認は、Consoleの配信物(`console/`)を止めない([反映の承認](internals/deploy-approvals.md#反映の承認))。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-06"></a>R-DLV-06 | CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-07"></a>R-DLV-07 | `console-a11y`ジョブが使うPlaywrightのブラウザは、ハッシュで照合しないので、取得元かその通信が侵害されると、改ざんされたブラウザが動く。受け入れる理由は、このジョブが`contents: read`の権限だけを持ち、秘密値と配信物を扱わず、PRの実行だけで動くためである。 | [Consoleの配信](security.md#consoleの配信) |
@@ -369,7 +368,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | --- | --- | --- |
 | <a id="r-con-02"></a>R-CON-02 | `pr_review_intake`のフローを直接実行すると、`pr_review_submit`を通らず、操作の記録が残らない。実行できるのは、`f/factory`の権限を持つ管理者と、その資格情報で動くローカルのClaudeのセッションである。拒否フックが名前で止めるのは、`CONSOLE_WRITE_SCRIPTS`の書き込みのscriptだけで、フローと登録のステップは止めない。手動投入のフロー(`manual_intake`)と同じ性質である。`.claude/settings.json`の許可に`wmill`の実行系は無いので、実行には人の許可が要る。 | [PRレビューの投入](internals/console/security.md#prレビューの投入) |
 | <a id="r-con-03"></a>R-CON-03 | 登録のステップの断りのうち、noticeに残るのは、fork headとオーナーのIDの食い違いだけである。そのほかは、ステップのジョブの結果として読む。 | [PRレビューの投入](internals/console/security.md#prレビューの投入) |
-| <a id="r-con-04"></a>R-CON-04 | 一意インデックスを足すmigrationは、重なった古い`pr_review`を取り消す。`pr_review`はリースを使わず、止めるのは投稿の直前の状態の確かめだけである。この確かめから投稿までの間に取り消しが割り込むと、取り消された行のレビューが投稿されうる。migrationは1回しか走らず、窓も短いので、受け入れる。 | [PRレビューの投入](internals/console/security.md#prレビューの投入) |
+| <a id="r-con-04"></a>R-CON-04 | 一意インデックスを足すmigrationは、重なった古い`pr_review`を取り消す。`pr_review`はリースを使わず、止めるのは投稿の直前に作業項目が`reviewing`かを確かめる処理だけである。この確かめから投稿(`publishReview`)までの間に取り消しが割り込むと、取り消された行のレビューが投稿されうる。migrationは1回しか走らず、窓も短いので、受け入れる。 | [PRレビューの投入](internals/console/security.md#prレビューの投入) |
 | <a id="r-con-05"></a>R-CON-05 | 次の確かめは、綴りを区別したままである。`listActionableWorkItems`と`console_query.ts`の「より新しい行」の確かめ、`hasNonTerminalPrWorkItem`、`hasUnfinishedPrRun`、`pr_fix`側の`countPrFixFailures`、`restartStoppedWorkItem`、自動の再開である。綴りの違う行があると、引き継ぎ済みの古い`failed`の行が要対応の一覧に残る。人がそれを再実行すると、レビューが二重になりうる。閉じたPRのworktreeの掃除と、実装の準備の保護も、綴りの違う行を見落とす。後の2つは、自動で復旧する。 | [PRレビューの投入](internals/console/security.md#prレビューの投入) |
 | <a id="r-con-06"></a>R-CON-06 | 投入の確認の後に、ラベルの経路が同じPRのレビューを始めた競合は、登録のステップの挿入が断る。人の依頼は失われない。ラベルの経路は、ラベルを付け直して次の巡回に任せる。 | [PRレビューの投入](internals/console/security.md#prレビューの投入) |
 
@@ -592,7 +591,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-des-43"></a>R-DES-43 | `design_enabled`が真偽値でないときと、`max_design_attempts`が範囲外のときは、設定を読む処理が例外のままである。設定を読む処理は`self_update`で`try`の外にあるので、自己更新と検知が止まる。設定の書き損じが、そのまま全体の停止になる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-44"></a>R-DES-44 | `config.ts`で名前を組み立てて入力(`raw`)を書き換える変更は、保護されたテストでは検出できない。`resolveDesignGate`へ渡す前に、`config.ts`が`design_enabled_since`の値を作り直せるためである。文字列の連結を検出できないとする既存の限界と同じ形で、PRの人のレビューとマージが守る。禁止の一覧で検出する方式は、保護されていない別ファイルの補助関数経由やスプレッドでの作り直しが残るので採らない。この限界は、残るリスクとして受け入れる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-45"></a>R-DES-45 | Consoleで止めた後、`design_enabled_since`が残るので、`design_enabled`だけを`true`に戻すと、設計工程がすぐ開く。有効に戻す手順(時刻の書き直し)は、運用者が行い、確認のダイアログと文書で伝える。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
-| <a id="r-des-46"></a>R-DES-46 | 設定タブの一覧は、書かれた値をそのまま出す。`false`として読まれている`design_enabled`の`true`も、`true`と表示される。設計工程だけは、「設計」グループの先頭の**設計工程(実際の状態)**の行が、効いている値と、書かれた値が無視されている理由を出す。設定が参照で書かれているときは、設定タブが参照を解決しないので、効いている値を断定せず「判定できない」と出す。通知`design_enabled_ignored`は、書き忘れだけを知らせる。効いている値の確認は、設定タブだけである。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
+| <a id="r-des-46"></a>R-DES-46 | 設定タブの一覧は、書かれた値をそのまま出す。`false`として読まれている`design_enabled`の`true`も、`true`と表示される。設計工程だけは、「設計」グループの先頭の「設計工程(実際の状態)」の行が、効いている値と、書かれた値が無視されている理由を出す。設定が参照で書かれているときは、設定タブが参照を解決しないので、効いている値を断定せず「判定できない」と出す。通知`design_enabled_ignored`は、書き忘れだけを知らせる。効いている値の確認は、設定タブだけである。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 
 ## 保留
 
@@ -666,12 +665,6 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-frz-29"></a>R-FRZ-29 | 除外を作る`parseWmillExcludes`は、`wmill.yaml`の最上位の`excludes`だけを読む。`workspaces.<name>`の`overrides`に`excludes`を足すと、CLIの`--excludes`が黙って置き換えるので、足さない。足さない決まりを守れば、読み違いは起きないため、受け入れる。 | [凍結とdeployの保留](internals/freezes.md#凍結とdeployの保留) |
 
 ## PR修正の安全策
-
-### PRの発見
-
-| ID | 残るリスクと、受け入れる理由 | 関連する節 |
-| --- | --- | --- |
-| <a id="r-fix-01"></a>R-FIX-01 | 投稿の直前に作業項目が`reviewing`かを確かめる処理から`publishReview`までの間に取り消しが割り込むと、取り消された行のレビューが投稿されうる。窓は短く、migrationは1回しか走らないので、残るリスクとして受け入れる。 | [PRの発見](internals/pr-workflow.md#prの発見) |
 
 ### 修正と実装で範囲が違う理由
 
@@ -814,4 +807,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 
 ## 欠番
 
-消したIDは無い。
+次のIDは、行をほかの行にまとめたので使わない。
+
+- R-CRED-09
+- R-FIX-01

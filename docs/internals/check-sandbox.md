@@ -567,20 +567,20 @@ main cloneの`.git`はrootが所有する。
 - [R-CHK-03](../security-risks.md#r-chk-03)
 - [R-CHK-04](../security-risks.md#r-chk-04)
 - 検査のプロセス自身は、worktree、`HOME`、共有の一時ディレクトリの外に書けない。
+  ただし、検査はworktreeの中に、worktreeの外を指すsymlinkを置ける([R-CHK-05](../security-risks.md#r-chk-05))。
   取り戻しはsymlinkの所有者をrootに戻すが、symlink自体は消さない。
   そのため、取り戻しの後に、worktreeの外を指すsymlinkを調べて消す([検査が置いたsymlinkの検出](#検査が置いたsymlinkの検出))。
   失敗にするのは、検出が不完全だったときと、追跡されているsymlinkが書き換えられたときだけである。
   取り戻しが失敗した実行と、取り消された実行は検出まで進まない。
   その場合は、回復の経路が取り戻した後に、絶対パスか`..`を含むsymlinkをすべて消す。
   実装フローは、次の検査の前の`git clean -fdX`で、無視されるパスのsymlinkを消す。
-  残るリスクの表の[R-CHK-05](../security-risks.md#r-chk-05)にあたる。
 - [R-CHK-06](../security-risks.md#r-chk-06)
 - [R-CHK-07](../security-risks.md#r-chk-07)
 - [R-CHK-08](../security-risks.md#r-chk-08)
 - [R-CHK-09](../security-risks.md#r-chk-09)
 - [R-CHK-10](../security-risks.md#r-chk-10)
 - workerのジョブは`HOME`が`/root`で、`TMPDIR`が無い。
-  残るリスクの表の[R-CHK-11](../security-risks.md#r-chk-11)にあたる。
+  共有の`/tmp`の一時ファイルは、検査用のユーザーが先に作れる([R-CHK-11](../security-risks.md#r-chk-11))。
   そのため、ジョブごとに`/run/factory-tmp/fj-<ジョブID>`を0700で作り、一時ファイルをそこへ向ける。
   親は、Windmillが管理する`/tmp/windmill`ではなく、rootが所有して他のユーザーが書けない`/run`の下に置く。
   `/tmp/windmill`の権限はWindmillがジョブの途中で戻しうるので、それに頼らない。
