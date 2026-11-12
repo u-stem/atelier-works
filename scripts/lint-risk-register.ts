@@ -15,11 +15,14 @@
 //   許可リスト(`ALLOWLIST_PATH`)にちょうど載っている。
 //   載っていない箇所も、載っているのに見つからない箇所も、問題として返す。
 // - 許可リストの各行の種類が、`GUIDE_PATH`の「許可の種類」の表にある値である。
+// - 1列目の見出しが「ID」の表は、文書の最上位にある。引用や箇条書きの中の表の行は読まないためである。
 //
 // 箇所の見つけ方:
 // - 表の外の段落のうち、`RISK_WORDS`のどれかを含む文を持つものを1つの箇所とする。
 //   行へのリンクを含む文は数えないので、リンクを持つ段落でも、残りの文に語があれば箇所になる。
 //   リンクを含むかは、構文木のリンクの範囲で決める。地の文にIDを書いただけの文は、リンクを含む文にならない。
+//   文は、句点のほかに、改行とブロック(段落、入れ子の箇条書き)の境目でも区切る。
+//   句点で終わらないリンクの文が、次の行やブロックの文を飲み込まないためである。
 // - 段落の最後の文が`INTRO`と「残るリスク」か受け入れの語(`ACCEPT_WORDS`)を含むとき、その段落は直後の箇条書きを導く。
 //   受け入れの語を含まない導く文は、箇所の判定から除く。
 //   受け入れの語を含む導く文は、受け入れを書いた文なので、ほかの文と同じく数える。
@@ -27,7 +30,7 @@
 //   行へのリンクが無い項目は、1つの箇所とする。
 //   行へのリンクがある項目は、リンクを含む文を除いた残りの文に語があるときだけ箇所とする。
 //   入れ子の箇条書きは、親の項目の一部として扱う。
-//   `RISK_WORDS`を含まない見出しが来ると、その節の扱いは終わる。
+//   `RISK_WORDS`の見出しの節は、同じか浅い見出しが来るまで続き、深い小見出しと引用などの入れ物の中も含む。
 // - 行へのリンクとして扱うのは、ラベルが`R-<領域>-<連番2桁>`で、表の行のアンカーへ着くものだけである。
 //   参照形式のリンクは、CommonMarkと同じく、同じラベルの最初の定義を引く。
 // - 表の文書の中では箇所を探さない。表の行が、受け入れたリスクそのものだからである。
@@ -81,6 +84,7 @@ const ID_PATTERN = new RegExp(`^R-([A-Z]+)-(${NUMBER})$`);
 const MAX_PATTERN = new RegExp(`^(?:${NUMBER})$`);
 const GAP_HEADING = "欠番";
 const AREA_HEADER = "略号";
+const ROW_HEADER = "ID";
 const MAX_HEADER = "使った最大の番号";
 const KIND_HEADER = "許可の種類";
 const EXCERPT_LENGTH = 40;
@@ -108,11 +112,58 @@ type Sentence = {
   readonly end: number;
 };
 
-/** 本文を、句点で区切った文にする。空白だけの文は返さない。 */
+/** 文の区切りに使う字。改行とブロックの境目に置く。 */
+const BREAK = "\n";
+
+/** 中の子を、文の区切りのある塊として並べるブロック。 */
+const BLOCK_TYPES = new Set([
+  "paragraph",
+  "heading",
+  "blockquote",
+  "list",
+  "listItem",
+  "code",
+  "table",
+  "tableRow",
+]);
+
+/** 表の行へ着くリンクが、本文の中で占める範囲。 */
+type Range = { readonly start: number; readonly end: number };
+
+/**
+ * `node`の本文を、ブロックの境目と改行で`BREAK`を挟んでつなぐ。
+ * 字は`text`と同じく、HTMLと画像の代替文を含めない。
+ * `rowLinks`のリンクが占める範囲も、つないだ本文の中の位置で返す。
+ */
+function flatten(
+  node: Nodes,
+  rowLinks: RowLinks = new Set(),
+): { readonly value: string; readonly ranges: readonly Range[] } {
+  let value = "";
+  const ranges: Range[] = [];
+  const walk = (n: Nodes): void => {
+    if (rowLinks.has(n)) {
+      const start = value.length;
+      value += text(n);
+      ranges.push({ start, end: value.length });
+      return;
+    }
+    if (n.type === "break") value += BREAK;
+    else if ("value" in n) value += text(n);
+    else if ("children" in n) {
+      for (const child of n.children) walk(child);
+    }
+    if (BLOCK_TYPES.has(n.type)) value += BREAK;
+  };
+  walk(node);
+  return { value, ranges };
+}
+
+/** 本文を、句点と`BREAK`で区切った文にする。空白だけの文は返さない。 */
 function sentencesOf(value: string): Sentence[] {
   const sentences: Sentence[] = [];
   let start = 0;
-  for (const piece of value.split(/(?<=。)/)) {
+  for (const piece of value.split(/(?<=[。\n])/)) {
     const end = start + piece.length;
     if (piece.trim() !== "") {
       sentences.push({ value: piece.trim(), start, end });
@@ -126,9 +177,13 @@ function mentionsAcceptance(value: string): boolean {
   return ACCEPT_WORDS.some((word) => value.includes(word));
 }
 
+function lastSentence(paragraph: Nodes): string {
+  return sentencesOf(flatten(paragraph).value).at(-1)?.value ?? "";
+}
+
 /** 段落の最後の文が、直後の箇条書きを導く文か。 */
 function isIntro(paragraph: Nodes): boolean {
-  const last = sentencesOf(text(paragraph)).at(-1)?.value ?? "";
+  const last = lastSentence(paragraph);
   return (
     INTRO.test(last) && (last.includes(RISK_WORD) || mentionsAcceptance(last))
   );
@@ -136,7 +191,7 @@ function isIntro(paragraph: Nodes): boolean {
 
 /** 導く文のうち、箇所の判定から除くもの。受け入れの語を含む導く文は、受け入れを書いた文として数える。 */
 function isPlainIntro(paragraph: Nodes): boolean {
-  const last = sentencesOf(text(paragraph)).at(-1)?.value ?? "";
+  const last = lastSentence(paragraph);
   return isIntro(paragraph) && !mentionsAcceptance(last);
 }
 
@@ -178,7 +233,15 @@ type Register = {
   readonly areas: ReadonlyMap<string, string>;
   readonly rows: readonly Row[];
   readonly gaps: readonly string[];
+  /** 最上位の外(引用や箇条書きの中)にある、1列目の見出しが「ID」の表の数。行は読まない。 */
+  readonly nestedRowTables: number;
 };
+
+function isRowTable(node: Nodes): boolean {
+  if (node.type !== "table") return false;
+  const first = node.children[0]?.children[0];
+  return first !== undefined && text(first).trim() === ROW_HEADER;
+}
 
 function htmlIdsIn(node: Nodes): string[] {
   const ids: string[] = [];
@@ -217,8 +280,15 @@ function readRegister(tree: Nodes): Register {
   }
   const rows: Row[] = [];
   const gaps: string[] = [];
-  if (!("children" in tree)) return { areas, rows, gaps };
+  let rowTables = 0;
+  visit(tree, (node) => {
+    if (isRowTable(node)) rowTables += 1;
+  });
+  if (!("children" in tree)) {
+    return { areas, rows, gaps, nestedRowTables: rowTables };
+  }
   let inGaps = false;
+  let topRowTables = 0;
   for (const node of tree.children) {
     if (node.type === "heading") {
       inGaps = text(node).trim() === GAP_HEADING;
@@ -228,17 +298,15 @@ function readRegister(tree: Nodes): Register {
       for (const item of node.children) gaps.push(text(item).trim());
       continue;
     }
-    if (node.type !== "table") continue;
-    const [header, ...body] = node.children;
-    const first = header?.children[0];
-    if (first === undefined || text(first).trim() !== "ID") continue;
-    for (const tableRow of body) {
+    if (node.type !== "table" || !isRowTable(node)) continue;
+    topRowTables += 1;
+    for (const tableRow of node.children.slice(1)) {
       const cell = tableRow.children[0];
       if (cell === undefined) continue;
       rows.push({ id: text(cell).trim(), anchors: htmlIdsIn(cell) });
     }
   }
-  return { areas, rows, gaps };
+  return { areas, rows, gaps, nestedRowTables: rowTables - topRowTables };
 }
 
 /** 参照の定義を、CommonMarkと同じく同じラベルの最初の定義で引く。 */
@@ -255,38 +323,9 @@ function definitionsOf(tree: Nodes): Map<string, string> {
 /** 文書の中で、表の行へ着くリンクの節の集合。 */
 type RowLinks = ReadonlySet<Nodes>;
 
-/**
- * `node`の本文の中で、表の行へ着くリンクが占める範囲。
- * 本文は`text`と同じく、子の文字列をつなげて作るので、位置は`text(node)`の中の位置になる。
- */
-function rowLinkRanges(
-  node: Nodes,
-  rowLinks: RowLinks,
-): { start: number; end: number }[] {
-  const ranges: { start: number; end: number }[] = [];
-  let offset = 0;
-  const walk = (n: Nodes): void => {
-    if (rowLinks.has(n)) {
-      const length = text(n).length;
-      ranges.push({ start: offset, end: offset + length });
-      offset += length;
-      return;
-    }
-    if ("value" in n) {
-      offset += text(n).length;
-      return;
-    }
-    if ("children" in n) {
-      for (const child of n.children) walk(child);
-    }
-  };
-  walk(node);
-  return ranges;
-}
-
 /** `node`が表の行へ着くリンクを持つか。 */
 function hasRowLink(node: Nodes, rowLinks: RowLinks): boolean {
-  return rowLinkRanges(node, rowLinks).length > 0;
+  return flatten(node, rowLinks).ranges.length > 0;
 }
 
 /** 行へのリンクを含む文を除いた文に、語があるか。`skipLast`は導く文を除くときに使う。 */
@@ -295,8 +334,8 @@ function mentionsRiskOutsideLinks(
   rowLinks: RowLinks,
   skipLast = false,
 ): boolean {
-  const ranges = rowLinkRanges(node, rowLinks);
-  const sentences = sentencesOf(text(node));
+  const { value, ranges } = flatten(node, rowLinks);
+  const sentences = sentencesOf(value);
   const considered = skipLast ? sentences.slice(0, -1) : sentences;
   return considered.some(
     (sentence) =>
@@ -307,26 +346,34 @@ function mentionsRiskOutsideLinks(
   );
 }
 
-/** `node`の子をたどり、箇所を`spots`に足す。 */
+/**
+ * `node`の子をたどり、箇所を`spots`に足す。
+ * `riskDepth`は、いま読んでいる`RISK_WORDS`の見出しの深さで、その節の外では`undefined`。
+ * 引用などの入れ物の中へは、外の節の深さを引き継ぐ。
+ */
 function collectSpots(
   path: string,
   node: Nodes,
   rowLinks: RowLinks,
   spots: RiskSpot[],
+  inherited?: number,
 ): void {
   if (!("children" in node)) return;
   const children: Nodes[] = node.children;
-  let underRiskHeading = false;
+  let riskDepth = inherited;
   children.forEach((child, i) => {
     if (child.type === "heading") {
-      underRiskHeading = mentionsRisk(text(child));
+      // リスクの見出しより深い小見出しは、その節の中にある。
+      if (riskDepth === undefined || child.depth <= riskDepth) {
+        riskDepth = mentionsRisk(text(child)) ? child.depth : undefined;
+      }
       return;
     }
     if (child.type === "table") return;
     if (child.type === "list") {
       const prev = children[i - 1];
       const introduced = prev?.type === "paragraph" && isIntro(prev);
-      if (introduced || underRiskHeading) {
+      if (introduced || riskDepth !== undefined) {
         for (const item of child.children) {
           if (
             !hasRowLink(item, rowLinks) ||
@@ -346,13 +393,15 @@ function collectSpots(
       }
       return;
     }
-    collectSpots(path, child, rowLinks, spots);
+    collectSpots(path, child, rowLinks, spots, riskDepth);
   });
 }
 
 type Allowlist = {
   /** `パス ハッシュ`ごとの数。 */
   readonly counts: Map<string, number>;
+  /** `パス ハッシュ`ごとの、最初の行の抜粋。 */
+  readonly excerpts: ReadonlyMap<string, string>;
   readonly malformed: readonly string[];
   /** 種類の列の値と、その行。 */
   readonly kinds: readonly { readonly kind: string; readonly line: string }[];
@@ -361,12 +410,13 @@ type Allowlist = {
 /** 許可リストの本文を読む。読めない行は`malformed`に入れる。 */
 function readAllowlist(allowlist: string): Allowlist {
   const counts = new Map<string, number>();
+  const excerpts = new Map<string, string>();
   const malformed: string[] = [];
   const kinds: { kind: string; line: string }[] = [];
   for (const raw of allowlist.split("\n")) {
     const line = raw.trim();
     if (line === "" || line.startsWith("#")) continue;
-    const [path, key, kind] = line.split(/\s+/);
+    const [path, key, kind, ...rest] = line.split(/\s+/);
     if (
       path === undefined ||
       key === undefined ||
@@ -379,8 +429,9 @@ function readAllowlist(allowlist: string): Allowlist {
     kinds.push({ kind, line });
     const entry = `${path} ${key}`;
     counts.set(entry, (counts.get(entry) ?? 0) + 1);
+    if (!excerpts.has(entry)) excerpts.set(entry, rest.join(" "));
   }
-  return { counts, malformed, kinds };
+  return { counts, excerpts, malformed, kinds };
 }
 
 /**
@@ -404,6 +455,11 @@ export function lintRiskRegister(
     return { problems, spots: [] };
   }
   const register = readRegister(own);
+  if (register.nestedRowTables > 0) {
+    report(
+      `row table must be at the top level: ${register.nestedRowTables} table(s) whose first header is "${ROW_HEADER}" are inside another block, and their rows are not read`,
+    );
+  }
 
   const seen = new Set<string>();
   const numbers = new Map<string, Set<number>>();
@@ -521,7 +577,7 @@ export function lintRiskRegister(
     report(`allowlist not found: ${ALLOWLIST_PATH}`);
     return { problems, spots };
   }
-  const { counts, malformed, kinds } = readAllowlist(allowlist);
+  const { counts, excerpts, malformed, kinds } = readAllowlist(allowlist);
   for (const line of malformed) {
     report(`malformed allowlist line in ${ALLOWLIST_PATH}: ${line}`);
   }
@@ -548,7 +604,10 @@ export function lintRiskRegister(
   }
   for (const [entry, left] of counts) {
     for (let n = 0; n < left; n++) {
-      report(`allowlist entry not found: ${entry} (${ALLOWLIST_PATH})`);
+      report(
+        `allowlist entry not found: ${entry} "${excerpts.get(entry) ?? ""}". ` +
+          `Remove the line from ${ALLOWLIST_PATH}, or write it again with the hash of the changed text`,
+      );
     }
   }
   return { problems, spots };

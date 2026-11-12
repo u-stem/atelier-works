@@ -249,8 +249,9 @@ gitのpre-pushは全体の`check`を実行しない。
   `test:changed`が、全件を要する差分で呼ぶ。
 - `check:changed`は、`scripts/check-changed.ts`が差分のパスから実行する検査を決める。
   重いのは`lint:docs`なので、差分のMarkdownだけを検査する。
-  文書の間のリンクは、差分に文書が無くても、全文書を検査する(`scripts/lint-docs.ts --links-only`)。
-  リンク先や文書の削除、`.md`以外のファイルの改名で壊れるためである。
+  文書の間のリンクと残るリスクの表は、差分に文書が無くても、全文書を検査する(`scripts/lint-docs.ts --links-only`)。
+  リンクは、リンク先や文書の削除、`.md`以外のファイルの改名で壊れるためである。
+  表の検査は、許可リストだけを変えた差分も照らす。
   テストは、`test:changed`と同じ規則で選ぶ。
   絞り方を変えるときは`tests/scripts/check-changed.test.ts`と`tests/scripts/check-changed-git.test.ts`を直す。
 - `console:check`は、Console(`console/`)のlockfileの方針を検査し、型検査、テスト、組み立てを行う。

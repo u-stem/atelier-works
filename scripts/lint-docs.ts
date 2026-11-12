@@ -248,7 +248,7 @@ export function lintAllDocLinks(
 /**
  * 追跡している文書に対して、リンクの検査と残るリスクの表の検査を行う。
  * 2つの検査は、重複を除いて並べたファイルの一覧と、文書の構文木を共有する。
- * 一覧の取得の失敗は、リンクの検査の1件の問題にして、表の検査は行わない。
+ * 一覧の取得の失敗は、2つの検査を飛ばしたことを示す1件の問題にする。
  */
 export function lintRepoDocs(
   listFiles: () => readonly string[],
@@ -271,7 +271,7 @@ export function lintRepoDocs(
   return [...linkProblems, ...riskProblems];
 }
 
-/** 一覧を1回だけ取り、重複を除いて並べる。失敗はリンクの検査の問題にする。 */
+/** 一覧を1回だけ取り、重複を除いて並べる。失敗は、どちらの検査も行わなかったことを示す問題にする。 */
 function guardList(listFiles: () => readonly string[]): {
   readonly files: readonly string[] | undefined;
   readonly problems: string[];
@@ -281,7 +281,9 @@ function guardList(listFiles: () => readonly string[]): {
   } catch (error) {
     return {
       files: undefined,
-      problems: [`lint-docs: document links failed: ${errorMessage(error)}`],
+      problems: [
+        `lint-docs: listing the files failed, so neither the document links nor the risk register were checked: ${errorMessage(error)}`,
+      ],
     };
   }
 }
