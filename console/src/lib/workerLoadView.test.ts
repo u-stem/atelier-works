@@ -101,6 +101,14 @@ describe("describeWorkerLoad slots", () => {
     expect(rowValue(late, "メモリ(最新)")).toContain("(00:05時点)");
   });
 
+  test("shows an unreadable time of the latest sample as unknown", () => {
+    const unreadable = {
+      ...LOAD,
+      latest: { ...LOAD.latest, sampled_at: "not a time" },
+    };
+    expect(rowValue(unreadable, "メモリ(最新)")).toContain("(不明時点)");
+  });
+
   test("shows an unreadable running count as unknown", () => {
     const unknown = { ...LOAD, latest: { ...LOAD.latest, running_jobs: null } };
     expect(rowValue(unknown, "枠の使用(最新)")).toBe("不明");
