@@ -132,14 +132,23 @@ describe("biome rejects type assertions", () => {
     ["an angle-bracket assertion", "export const y = <Foo>x;"],
     ["a widening `as` assertion", "export const t = s as string | number;"],
     ["a double `as` assertion", "export const y = x as unknown as Foo;"],
-  ])("fails on %s", (_label, body) => {
-    expect(lint(body, { onlyRule: true }).exitCode).not.toBe(0);
+  ])("fails on %s with the rule reported", (_label, body) => {
+    // 設定の誤りや起動の失敗でも終了コードは0でなくなるので、規則が当たったことを出力でも確かめる。
+    const result = lint(body, { onlyRule: true });
+    expect({
+      failed: result.exitCode !== 0,
+      reported: result.output.includes(`lint/nursery/${RULE}`),
+    }).toEqual({ failed: true, reported: true });
   });
 
-  test("passes an `as const` assertion", () => {
-    expect(
-      lint("export const pair = [1, 2] as const;", { onlyRule: true }).exitCode,
-    ).toBe(0);
+  test("passes an `as const` assertion without reporting the rule", () => {
+    const result = lint("export const pair = [1, 2] as const;", {
+      onlyRule: true,
+    });
+    expect({
+      exitCode: result.exitCode,
+      reported: result.output.includes(`lint/nursery/${RULE}`),
+    }).toEqual({ exitCode: 0, reported: false });
   });
 
   test("reports the rule from biome.json without selecting it on the command line", () => {
