@@ -71,9 +71,10 @@ import {
 // dependabotの作業ツリーのパスも、作る側(`dependabot_prepare`)の関数で求める。理由は上と同じ。
 import { buildDependabotWorktreeDir } from "./steps/dependabot_prepare.ts";
 // `buildReviewWorktreeDir`は、複製せずworktreeを作るstepから直接importする。
-// `req-*`と違い`review-*`のディレクトリ名はレビューしたコミットのshaを含み、
-// そのshaの正本は`work_items.head_sha`にある。式を複製すると同期を保ちにくく、
-// `pr_review_prepare`自身が使う関数を使う方が間違いにくいため。
+// `req-*`と違い`review-*`のディレクトリ名は、レビューしたコミットのshaと、実行ごとの識別子を含む。
+// shaの正本は`work_items.head_sha`にあり、識別子は作業項目から求められないので、
+// PR番号とsha7に合う名前を、識別子が付く前の古い形も含めて選ぶ(`selectReviewWorktreesToRemove`)。
+// 式を複製すると同期を保ちにくく、`pr_review_prepare`自身が使う関数を使う方が間違いにくいため。
 import { buildReviewWorktreeDir } from "./steps/pr_review_prepare.ts";
 
 const WORKSPACES_ROOT = "/workspaces";
@@ -111,17 +112,53 @@ async function recordBusyWorktreeNotice(
   }
 }
 
-/** 消してよいレビュー用の作業ツリーのパスを返す。 */
+/** `buildReviewWorktreeDir`が作る作業ツリーの名前。実行の識別子は、付く前の古い形では無い。 */
+const REVIEW_WORKTREE_NAME =
+  /^review-([1-9][0-9]*)-([0-9a-f]{7})(?:-([0-9a-f]{8}))?$/;
+
+/**
+ * 期限を過ぎた終端の`pr_review`の作業項目`item`について、消してよいレビュー用の作業ツリーのパスを返す。
+ * 対象は、メインのcloneと同じ親の直下にあるdetachedの作業ツリーで、名前から求め直したパスが
+ * `buildReviewWorktreeDir`と一致し、PR番号とsha7が`item`と同じものに限る。
+ * 実行の識別子が付く前の古い形も、識別子が付いた形のすべても選ぶ。
+ * 同じPRに終端でない`pr_review`の作業項目が`activeItems`にあるときは、何も選ばない。
+ * 同じheadを見直している最中の作業ツリーを、古い作業項目の期限で消さないためである。
+ */
 export function selectReviewWorktreesToRemove(
-  _repoDir: string,
-  _worktrees: readonly Pick<WorktreeEntry, "path" | "detached">[],
-  _item: Pick<WorkItem, "owner" | "repo" | "pr_number" | "head_sha">,
-  _activeItems: readonly Pick<
+  repoDir: string,
+  worktrees: readonly Pick<WorktreeEntry, "path" | "detached">[],
+  item: Pick<WorkItem, "pr_number" | "head_sha">,
+  activeItems: readonly Pick<
     WorkItem,
     "kind" | "owner" | "repo" | "pr_number"
   >[],
 ): string[] {
-  return [];
+  if (item.pr_number === null || item.head_sha === null) return [];
+  const sha7 = item.head_sha.slice(0, 7);
+  const reviewedAgain = activeItems.some(
+    (active) =>
+      active.kind === "pr_review" &&
+      active.pr_number === item.pr_number &&
+      mainRepoDir(active.owner, active.repo) === repoDir,
+  );
+  if (reviewedAgain) return [];
+  const selected: string[] = [];
+  for (const worktree of worktrees) {
+    if (!worktree.detached) continue;
+    const match = basename(worktree.path).match(REVIEW_WORKTREE_NAME);
+    if (match === null) continue;
+    const [, prNumber, matchedSha7, runId] = match;
+    if (prNumber !== String(item.pr_number) || matchedSha7 !== sha7) continue;
+    // 名前から求め直したパスと一致するものだけを選ぶ。メインのcloneと同じ親の直下に無いものは一致しない。
+    const dir = buildReviewWorktreeDir(
+      repoDir,
+      item.pr_number,
+      sha7,
+      runId ?? null,
+    );
+    if (dir === worktree.path) selected.push(dir);
+  }
+  return selected;
 }
 
 async function removeStaleWorktreesForRepo(
@@ -130,6 +167,7 @@ async function removeStaleWorktreesForRepo(
   items: readonly WorkItem[],
   ghClient: GhClient,
   holders: readonly WorktreeHolder[],
+  activeItems: readonly WorkItem[],
   log: Logger,
 ): Promise<RemovedCounts> {
   const repoDir = mainRepoDir(owner, repo);
@@ -166,19 +204,13 @@ async function removeStaleWorktreesForRepo(
           (entry) => entry.branch === pr.headRef,
         )?.path;
         targetDirs = dir === undefined ? [] : [dir];
-      } else if (
-        item.kind === "pr_review" &&
-        item.pr_number !== null &&
-        item.head_sha !== null
-      ) {
-        const dir = buildReviewWorktreeDir(
+      } else if (item.kind === "pr_review") {
+        targetDirs = selectReviewWorktreesToRemove(
           repoDir,
-          item.pr_number,
-          item.head_sha.slice(0, 7),
-          null,
+          worktrees,
+          item,
+          activeItems,
         );
-        const found = worktrees.find((entry) => entry.path === dir)?.path;
-        targetDirs = found === undefined ? [] : [found];
       }
 
       // 1つの作業項目が選ぶworktreeは互いに異なるので、作業項目ごとに除けば足りる。
@@ -240,6 +272,19 @@ async function removeStaleWorktreesForRepo(
             },
             log,
           );
+          continue;
+        }
+        // 一覧を読んでから今までに、同じPRのレビューが始まっているかもしれない。消す直前に読み直し、
+        // 始まっていれば、そのレビューが作った作業ツリーを消さない。
+        if (
+          item.kind === "pr_review" &&
+          !selectReviewWorktreesToRemove(
+            repoDir,
+            [{ path: targetDir, detached: true }],
+            item,
+            await listActive(),
+          ).includes(targetDir)
+        ) {
           continue;
         }
         await removeWorktree({
@@ -328,10 +373,13 @@ async function activeWorktreeHolders(
 ): Promise<{
   readonly holders: WorktreeHolder[];
   readonly unresolved: WorkItem[];
+  /** 終端でない作業項目のすべて。終端でない`pr_review`が見直している最中のレビュー用の作業ツリーを消さないために使う。 */
+  readonly activeItems: readonly WorkItem[];
 }> {
   const holders: WorktreeHolder[] = [];
   const unresolved: WorkItem[] = [];
-  for (const item of await listActive()) {
+  const activeItems = await listActive();
+  for (const item of activeItems) {
     // investigateの作業項目の作業ツリーは、`/workspaces`の外の調査の置き場にあり、この掃除が消さない。
     // そのため、持ち主にも足さない。
     if (item.kind === "issue") {
@@ -366,7 +414,7 @@ async function activeWorktreeHolders(
       }
     }
   }
-  return { holders, unresolved };
+  return { holders, unresolved, activeItems };
 }
 
 /**
@@ -381,7 +429,10 @@ async function removeStaleWorktrees(
 ): Promise<RemovedCounts> {
   if (staleItems.length === 0) return { worktrees: 0, lockFiles: 0 };
   const ghClient: GhClient = { run: runCommand, ghToken };
-  const { holders, unresolved } = await activeWorktreeHolders(ghClient, log);
+  const { holders, unresolved, activeItems } = await activeWorktreeHolders(
+    ghClient,
+    log,
+  );
   const { sweep, skipped } = partitionRepoGroups(
     groupByRepo(staleItems),
     groupByRepo(unresolved),
@@ -409,6 +460,7 @@ async function removeStaleWorktrees(
       group.items,
       ghClient,
       holders,
+      activeItems,
       log,
     );
     worktrees += removed.worktrees;

@@ -1921,7 +1921,9 @@ export type WorktreeEntry = {
 
 /**
  * `entry`が、PR番号`prNumber`のレビューのworktree(`buildReviewWorktreeDir`が作るパス)かを返す。
- * `repoDir`と同じ親の直下にある`review-<PR番号>-<sha7>`というdetachedのworktreeだけを対象にする。
+ * `repoDir`と同じ親の直下にある、detachedのworktreeだけを対象にする。
+ * 名前は`review-<PR番号>-<sha7>-<実行の識別子>`と、識別子が付く前の古い形の`review-<PR番号>-<sha7>`の両方に合わせる。
+ * 識別子は小文字の16進数の8桁である。
  * パスの一部が一致しただけで選ぶと、別の場所のdirectoryやブランチのworktreeまで消しうるためである。
  * パスは文字列の前方一致で比べるので、列挙されたパスと`repoDir`が同じ綴りでなければ、
  * 何も選ばれない。workerの`/workspaces`はボリュームのマウント先そのものでsymlinkを挟まないので、
@@ -1936,7 +1938,9 @@ export function isReviewWorktreeOf(
   const prefix = `${repoDir.replace(/\/main$/, "")}/`;
   if (!entry.path.startsWith(prefix)) return false;
   const name = entry.path.slice(prefix.length);
-  return new RegExp(`^review-${String(prNumber)}-[0-9a-f]{7}$`).test(name);
+  return new RegExp(
+    `^review-${String(prNumber)}-[0-9a-f]{7}(-[0-9a-f]{8})?$`,
+  ).test(name);
 }
 
 /**
