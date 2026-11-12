@@ -222,6 +222,20 @@ describe("lintRiskRegister rows", () => {
     ).toBe(true);
   });
 
+  test("reports a row table that is not at the top level of the register", () => {
+    const quoted = `# 残るリスク\n\n${AREAS_HEAD}| AB | [領域](#領域) | [節](security.md) | 01 |\n\n## 領域\n\n${`${HEADER}${row("R-AB-01")}`
+      .trimEnd()
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n")}\n`;
+    expect(
+      hasProblem(
+        withRegister(quoted, `# 節\n\n${link("R-AB-01")}\n`),
+        "row table must be at the top level",
+      ),
+    ).toBe(true);
+  });
+
   test("accepts a reference-style link to the row anchor", () => {
     expect(
       problemsOf(
@@ -469,6 +483,19 @@ describe("lintRiskRegister allowlist", () => {
     ).toBe(true);
   });
 
+  test("names the excerpt of an allowlist entry whose spot is gone", () => {
+    expect(
+      problemsOf(
+        withSection(`# 節\n\n${link("R-AB-01")}\n`),
+        `${spotLine()}\n`,
+      ).some(
+        (p) =>
+          p.includes("allowlist entry not found") &&
+          p.includes("残るリスクとして、何かが起きうる。"),
+      ),
+    ).toBe(true);
+  });
+
   test("reads the allowlist entry by its text, not by its line", () => {
     const moved = withSection(
       `# 節\n\n前の段落。\n\n${link("R-AB-01")}\n\n残るリスクとして、何かが起きうる。\n`,
@@ -633,10 +660,52 @@ describe("lintRiskRegister spots", () => {
     );
   });
 
-  test("stops reading items at a sub-heading below a residual-risk heading", () => {
+  test("keeps reading items under a sub-heading below a residual-risk heading", () => {
+    expect(
+      spotCount("# 節\n\n## 残るリスク\n\n- 1つ目。\n\n### 詳細\n\n- 説明。\n"),
+    ).toBe(2);
+  });
+
+  test("stops reading items at a heading as deep as the residual-risk heading", () => {
     expect(
       spotCount(
-        "# 節\n\n## 残るリスク\n\n- 1つ目。\n\n### 別の話\n\n- 説明。\n",
+        "# 節\n\n## 残るリスク\n\n- 1つ目。\n\n## 別の話\n\n- 説明。\n",
+      ),
+    ).toBe(1);
+  });
+
+  test("finds items inside a block quote under a residual-risk heading", () => {
+    expect(spotCount("# 節\n\n## 残るリスク\n\n> - 1つ目。\n")).toBe(1);
+  });
+
+  test("finds an acceptance in a nested item after a row link without a period", () => {
+    expect(
+      spotCount(
+        `# 節\n\n残るリスクは次のとおりである。\n\n- ${link("R-AB-01")}を参照\n  - 別の残るリスクとして、何かを受け入れる。\n`,
+      ),
+    ).toBe(1);
+  });
+
+  test("finds an acceptance in the second paragraph of an item after a row link without a period", () => {
+    expect(
+      spotCount(
+        `# 節\n\n残るリスクは次のとおりである。\n\n- ${link("R-AB-01")}を参照\n\n  別の残るリスクとして、何かを受け入れる。\n`,
+      ),
+    ).toBe(1);
+  });
+
+  test("finds an acceptance in an item under a residual-risk heading after a row link without a period", () => {
+    expect(
+      spotCount(
+        `# 節\n\n## 残るリスク\n\n- ${link("R-AB-01")}\n\n  何かも受け入れる。\n`,
+      ),
+    ).toBe(1);
+  });
+
+  test("finds an acceptance on the line after a row link without a period", () => {
+    expect(
+      spotCount(
+        `# 節\n\n${link("R-AB-01")}の対策がある\n残るリスクとして、何かを受け入れる。\n`,
       ),
     ).toBe(1);
   });

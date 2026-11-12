@@ -369,7 +369,9 @@ describe("lintRepoDocs", () => {
       run(repo(), () => {
         throw new Error("boom");
       }),
-    ).toEqual(["lint-docs: document links failed: boom"]);
+    ).toEqual([
+      "lint-docs: listing the files failed, so neither the document links nor the risk register were checked: boom",
+    ]);
   });
 
   test("reports a missing register", () => {
