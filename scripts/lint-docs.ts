@@ -43,7 +43,7 @@ import { availableParallelism } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { checkProse, REPO_DOC_RULES } from "../f/factory/lib/prose_check.ts";
 import { runDocsGen } from "./docs-gen.ts";
-import { findDocLengthViolation, MAX_DOC_LINES } from "./lint-doc-length.ts";
+import { findDocLengthViolation } from "./lint-doc-length.ts";
 import {
   createLinkResolver,
   lintDocLinks,
@@ -126,9 +126,7 @@ export function lintDocText(path: string, markdown: string): string[] {
       issues.push({ line, text: formatSentenceViolation(path, line) });
     }
     const tooLong = findDocLengthViolation(path, body);
-    if (tooLong !== undefined) {
-      issues.push({ line: MAX_DOC_LINES + 1, text: tooLong });
-    }
+    if (tooLong !== undefined) issues.push(tooLong);
   }
   // 配列の`sort`は安定なので、同じ行では文章の規則が先に残る。
   return issues.sort((a, b) => a.line - b.line).map((issue) => issue.text);

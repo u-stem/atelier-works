@@ -33,7 +33,18 @@ describe("findDocLengthViolation", () => {
 
   test("reports a document one line over the limit at the first line over it", () => {
     expect(
-      findDocLengthViolation("docs/a.md", docOfLines(MAX_DOC_LINES + 1)),
-    ).toStartWith(`docs/a.md:${MAX_DOC_LINES + 1}: [max-lines] `);
+      findDocLengthViolation("docs/a.md", docOfLines(MAX_DOC_LINES + 1))?.line,
+    ).toBe(MAX_DOC_LINES + 1);
+  });
+
+  test("writes the reported line and the rule into the text", () => {
+    const violation = findDocLengthViolation(
+      "docs/a.md",
+      docOfLines(MAX_DOC_LINES + 1),
+    );
+
+    expect(violation?.text).toStartWith(
+      `docs/a.md:${violation?.line}: [max-lines] `,
+    );
   });
 });

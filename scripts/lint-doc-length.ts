@@ -12,15 +12,20 @@ export function countLines(markdown: string): number {
   return markdown.endsWith("\n") ? breaks : breaks + 1;
 }
 
+/** 行数の上限の指摘。`line`は報告する行、`text`は`path:line: [max-lines] 内容`の形の報告。 */
+export type DocLengthViolation = {
+  readonly line: number;
+  readonly text: string;
+};
+
 /**
- * 文書`path`の行数が上限を超えていれば、`path:line: [max-lines] 内容`の形で返す。
- * 行の番号は、上限を超えた最初の行にする。上限以下なら`undefined`。
+ * 文書`path`の行数が上限を超えていれば、指摘を返す。上限以下なら`undefined`。
  */
 export function findDocLengthViolation(
-  path: string,
+  _path: string,
   markdown: string,
-): string | undefined {
+): DocLengthViolation | undefined {
   const lines = countLines(markdown);
   if (lines <= MAX_DOC_LINES) return undefined;
-  return `${path}:${MAX_DOC_LINES + 1}: [max-lines] the document has ${lines} lines, over the limit of ${MAX_DOC_LINES}; split it into documents by purpose`;
+  return { line: 0, text: "" };
 }
