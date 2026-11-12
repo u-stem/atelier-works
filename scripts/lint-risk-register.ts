@@ -37,7 +37,7 @@ import { parseMarkdown, visit } from "./markdown-tree.ts";
 export const REGISTER_PATH = "docs/security-risks.md";
 
 /** 表の行へのリンクを持たない「残るリスク」の段落と箇条書きの、ちょうどの数。 */
-export const UNREGISTERED_RISKS = 96;
+export const UNREGISTERED_RISKS = 97;
 
 const ID_PATTERN = /^R-([A-Z]+)-(\d{2})$/;
 const RISK_WORD = "残るリスク";
