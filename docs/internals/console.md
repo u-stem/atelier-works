@@ -43,7 +43,7 @@ importは相対パスにし、型アサーションは外す。
 | 選択中 | 期間と種類の切り替えの選択中は、藍の枠線と藍寄りの面(`src/lib/selectedStyle.ts`)で示す。面の明るさの差は両テーマで小さいため、枠線で未選択と分ける。この2つは文字の太さを変えない。文字幅が動くと隣の項目がずれるためである。試行の切り替えとタブは、この表し方の対象外である |
 | 意味の色 | 承認は青(`approval`)、失敗は赤(`destructive`)、通知は琥珀(`warning`)、成功は緑(`success`)。点、バッジ、ラベルに使う |
 | 文字の濃さ | 主(`foreground`)、副(`muted-foreground`)、補足(`subtle-foreground`)の3段 |
-| 文字の大きさ | 12、13、14、16、20、24pxの6段(`text-caption`、`text-small`、`text-body`、`text-lead`、`text-title`、`text-display`)。本文の行間は1.7 |
+| 文字の大きさ | 6段(`text-caption`、`text-small`、`text-body`、`text-lead`、`text-title`、`text-display`)。大きさと行間の値は[`src/index.css`](../../console/src/index.css)の`--text-*`が定める |
 | 角丸と影 | 角丸は5段、影は3段で、値は`index.css`のトークンが決める([角丸と影](#角丸と影)) |
 | 書体 | システムの書体を使い、Webフォントを読み込まない([書体](#書体))。ID、SHA、ジョブID、ログは等幅で出す([等幅](#等幅)) |
 | 数字 | 件数や時刻は`tabular-nums`で桁をそろえる |
@@ -73,10 +73,10 @@ importは相対パスにし、型アサーションは外す。
 6段の外の大きさ(`text-sm`、`text-xs`、`text-[11px]`など)は書かない。
 `src/visual-tokens.test.ts`が、ソースの中の直書きを検出する。
 段が揃っていないと、同じ役割の文字が画面ごとに1〜2px違い、読み手が違いを意味と取り違えるためである。
-`BarChart`のラベルは`text-caption`(0.75rem)で描き、幅の見積もり(`src/lib/barChart.ts`の`LABEL_FONT_SIZE`)は12pxで固定する。
-`--text-caption`の値と見積もりが合うことは、`src/lib/barChart.test.ts`が確かめる。
+`BarChart`のラベルは`text-caption`で描き、幅の見積もりは[`src/lib/barChart.ts`](../../console/src/lib/barChart.ts)の`LABEL_FONT_SIZE`の固定のpxで行う。
+`--text-caption`と見積もりの一致は、[`counts a full-width character as the text-caption size of index.css`](../../console/src/lib/barChart.test.ts)で確かめる。
 残る制限がある。
-基準の文字サイズを変えた利用者では、ラベルがremで拡縮する一方、見積もりは12pxのままである。
+基準の文字サイズを変えた利用者では、ラベルがremで拡縮する一方、見積もりは固定のpxのままである。
 そのため、ラベルの間引きと端の寄せがずれる。
 flowの図(`FlowDiagram`)と起動の図(`OriginDiagram`)のSVGの`<text>`だけは、文字の大きさの直書きの検出から外す。
 この検出は`src/visual-tokens.test.ts`のもので、axe-coreの検査とは別である。
@@ -106,7 +106,7 @@ shadcn/uiの部品を写したものと、同じ作りの自前の部品(`Card`�
 
 | 部品 | 決めること |
 | --- | --- |
-| `Card` | 角丸の枠と面。`variant`は、中身のある面(`default`)、行を線で区切る面(`list`)、破線の面(`empty`、使い分けは下に書く)の3つである。余白は`padding`の段(`none`、`frame`、`compact`、`default`、`spacious`)で選び、個別の余白は足さない。面の横の余白は`px-5`に固定し、段は縦の余白で分ける。文書を読ませる面(監査レポートの本文)だけは、長い本文を読みやすくするため、画面の幅に応じて横の余白を変える例外である。描く要素は`tag`で選ぶ |
+| `Card` | 角丸の枠と面。`variant`は、中身のある面(`default`)、行を線で区切る面(`list`)、破線の面(`empty`、使い分けは下に書く)の3つである。余白は`padding`の段で選び、個別の余白は足さない。面の横の余白はどの段でも同じにし、段は縦の余白で分ける。段の値は[`src/components/ui/card.tsx`](../../console/src/components/ui/card.tsx)の`cardVariants`が定め、横の余白がそろうことは[`gives every padded step the same horizontal padding`](../../console/src/components/ui/card.test.tsx)で確かめる。文書を読ませる面(監査レポートの本文)だけは、長い本文を読みやすくするため、画面の幅に応じて横の余白を変える例外である。描く要素は`tag`で選ぶ |
 | `Dialog` | ブラウザ標準の`<dialog>`の外枠と、開閉の同期(`useDialogSync`)。位置は、中央(`center`)と上寄せ(`top`)の2つである。`ConfirmDialog`、ショートカットの一覧、コマンドパレットが使う |
 | `Field` | ラベル、入力欄、補足、字数、エラーの組。ラベルを入力欄に結び、補足、字数、エラーを`aria-describedby`で入力欄に結ぶ。字数は、補足とエラーと同じ行の右に置く。誤りのときは、字数も誤りの色にする。ラベルの段は、縦に並ぶ入力の`form`(`text-body font-medium`)と、絞り込みの行やダイアログの小さな入力の`filter`(`text-small text-muted-foreground`)の2つである |
 
@@ -156,9 +156,9 @@ Enterは、送信中かどうかによらず止める。
 
 `aria-disabled`のボタンは、hoverの見た目を出さない。
 `Button`は、variantごとのhoverの指定をそのまま持ち、`aria-disabled:hover:`で元の面と文字へ戻す。
-戻す値は、`default`が`bg-primary`、`destructive`が`bg-destructive`、`secondary`が`bg-secondary`である。
-`outline`は`bg-card`と`text-current`、`ghost`は`bg-transparent`と`text-current`、`link`は`no-underline`である。
-文字を`text-current`に戻すのは、`outline`と`ghost`が文字の色を持たず、親から継ぐためである。
+戻す値は[`src/components/ui/button.tsx`](../../console/src/components/ui/button.tsx)の`buttonVariants`が定め、[`cancels the hover style of %s`](../../console/src/components/ui/button.test.ts)で確かめる。
+hoverで変わる性質のすべてを戻すことは、[`pairs every hover property of %s with a cancel`](../../console/src/components/ui/button.test.ts)で確かめる。
+`outline`と`ghost`の文字を`text-current`に戻すのは、`outline`と`ghost`が文字の色を持たず、親から継ぐためである。
 `not-aria-disabled:`は使わない。
 使うと、`aria-disabled`でない通常のhoverの詳細度が上がり、`className`でhoverを上書きする呼び出し(期間切替の`SELECTED_STYLE`)の指定に負けるためである。
 `aria-disabled:hover:`は、`[aria-disabled=true]:hover`として出力され、`:where()`で包まれない。
@@ -189,7 +189,7 @@ Enterは、送信中かどうかによらず止める。
 | --- | --- | --- |
 | 行のリンク | `src/lib/controlClasses.ts`のclassの定数(`ROW_LINK_CLASS`、`ROW_TARGET_CLASS`)で共有する | 要素が`Link`と`button`で違い、部品にすると要素を選ぶ引数が増える。要対応の一覧の行は`button`で、同じ`ROW_LINK_CLASS`を使う |
 | アイコンボタン | 同じファイルの`SIDEBAR_ICON_BUTTON_CLASS`で共有する | サイドバーだけが使い、hoverの面と輪の色がサイドバー専用である。別の面に置くなら、その面の色で定数を足す |
-| 表 | 同じファイルの`TABLE_CELL_CLASS`(`px-3 py-2`)と`TABLE_CELL_COMPACT_CLASS`(`px-3 py-1.5`)で、セルの余白の段だけを共有する。数値の小さな表は`DataTable`で描く | 表の枠、行、列の揃えは、表ごとに違う。`th`と`td`で要素が違い、行がリンクになる表、右に寄せる数値の列、利用者の文書から描く表があるので、部品にまとめると引数が増える |
+| 表 | 同じファイルの`TABLE_CELL_CLASS`(標準)と`TABLE_CELL_COMPACT_CLASS`(詰めた)で、セルの余白の段だけを共有する。数値の小さな表は`DataTable`で描く | 表の枠、行、列の揃えは、表ごとに違う。`th`と`td`で要素が違い、行がリンクになる表、右に寄せる数値の列、利用者の文書から描く表があるので、部品にまとめると引数が増える |
 | チェックボックスとラジオ | 同じファイルの`CHECKBOX_CLASS`で共有する | 大きさと選択の色だけが共通で、ラベルとの並びは使う側が決める |
 | 左から出すドロワー | `NavDrawer`が、開閉の同期(`useDialogSync`)だけを使う | 外枠の形が`Dialog`と違う。`Dialog`の位置は中央と上寄せの2つで、端に寄せる形を持たない |
 | 取得の失敗の表示 | `QueryFailure`と`QueryFailureAlert`を一本化しない | `QueryFailure`は`QueryFailureAlert`を包み、ログイン切れの案内と余白を足す。重複ではない |
@@ -208,7 +208,8 @@ Enterは、送信中かどうかによらず止める。
 `AuditMarkdown`の表は、別の画面の本文なので変えない。
 
 確認ダイアログの影は、浮いた面の影(`shadow-raised`)にそろえる。
-`Dialog`が外枠、角、影、背面の幕を決めるので、`ConfirmDialog`を使うダイアログは、外枠、余白(`p-6`)、影が同じになる。
+`Dialog`が外枠、角、影、背面の幕を決めるので、`ConfirmDialog`を使うダイアログは、外枠、余白、影が同じになる。
+余白は[`src/components/ConfirmDialog.tsx`](../../console/src/components/ConfirmDialog.tsx)の`ConfirmDialog`が持つ。
 `Dialog`の`onClose`は、利用者の操作(Escなど)で閉じたときだけ呼ぶ。
 `open`を偽にして閉じたときは、親がすでに知っているので呼ばない。
 閉じるたびに要る後始末は、`onClosed`に書く。
@@ -220,7 +221,8 @@ Enterの押し間違いで実行させないためである。
 `BrandMark`は、Factory Consoleの印をSVGで描く。
 外部のファイルを読まないので、CSPの制限を受けない。
 大きさは`className`で決める。
-広い画面のサイドバーとドロワーの上端は既定の`size-8`、狭い画面の上端の帯は`size-7`にする。
+広い画面のサイドバーとドロワーの上端は既定の大きさ、狭い画面の上端の帯は一段小さい大きさにする。
+既定の値は[`src/components/BrandMark.tsx`](../../console/src/components/BrandMark.tsx)の`BrandMark`に、狭い画面の値は[`src/app/Sidebar.tsx`](../../console/src/app/Sidebar.tsx)にある。
 色は`primary`と`primary-foreground`を読むので、テーマに追従する。
 印は飾りなので読み上げから外し、隣に名前の文字を置く。
 
@@ -230,13 +232,13 @@ Enterの押し間違いで実行させないためである。
 
 ### 動きのトークン
 
-動きの長さとイージングは、`src/index.css`のトークンで決める。
+動きの長さとイージングは、[`src/index.css`](../../console/src/index.css)の`@theme`のトークンが定め、3つのトークンがあることは[`index.css defines %s`](../../console/src/motion.test.ts)で確かめる。
 
-| トークン | 値 | 使う所 |
-| --- | --- | --- |
-| `--duration-fast` | 150ms | hoverとfocusでの色の変化、矢印の回転、選択の帯の現れ方、確認のダイアログと背面の幕が開くときのフェード |
-| `--duration-moderate` | 200ms | サイドバーの幅の変化 |
-| `--ease-standard` | `cubic-bezier(0.4, 0, 0.2, 1)` | すべての遷移 |
+| トークン | 使う所 |
+| --- | --- |
+| `--duration-fast` | hoverとfocusでの色の変化、矢印の回転、選択の帯の現れ方、確認のダイアログと背面の幕が開くときのフェード |
+| `--duration-moderate` | サイドバーの幅の変化 |
+| `--ease-standard` | すべての遷移 |
 
 Tailwind v4は、`--duration-*`から長さのユーティリティを作らない。
 そのため`duration-(--duration-fast)`の形で読む。
@@ -246,7 +248,8 @@ Tailwind v4は、`--duration-*`から長さのユーティリティを作らな�
 
 動きを減らす設定は、`index.css`の全要素への1つの規則が受ける。
 部品ごとに`motion-reduce:`を付けると、付け忘れた要素だけが動き続けるためである。
-規則は、遷移と回転の長さを0.01msにし、遅延を0sにし、滑らかなスクロールを止める。
+規則は、遷移と回転の長さと遅延を実質0にし、滑らかなスクロールを止める。
+宣言の値は[`index.css declares %s in the one rule`](../../console/src/motion.test.ts)で確かめる。
 部品には`motion-reduce:`と`motion-safe:`を書かない。
 書いたものは`src/motion.test.ts`が検出する。
 JavaScriptで動かすものは、`matchMedia('(prefers-reduced-motion: reduce)')`で動かすかどうかを分ける。
@@ -297,14 +300,15 @@ ID、SHA、ジョブID、flowの名前、scriptのパス、ログと出力は、
 角丸は、小さい印から大きい面へ、5段で上げる。
 値は既定のまま(Tailwindの既定と同じ)で、変えるときは`index.css`の1行を直す。
 値を大きくするかは、実機で見て決める。
+値は[`src/index.css`](../../console/src/index.css)の`--radius-*`が定め、[`index.css defines --radius-%s as %s`](../../console/src/visual-tokens.test.ts)で確かめる。
 
-| 段 | 値 | 使う所 |
-| --- | --- | --- |
-| `rounded-sm` | 4px | 文字の中の印(コードの背景、見出しのフォーカスの輪) |
-| `rounded-md` | 6px | 操作の部品(ボタン、ツールチップ、スケルトン) |
-| `rounded-lg` | 8px | 入力欄、通知の枠、コードの塊 |
-| `rounded-xl` | 12px | 面(`Card`、`Dialog`) |
-| `rounded-2xl` | 16px | 画面の中央に置く案内の面 |
+| 段 | 使う所 |
+| --- | --- |
+| `rounded-sm` | 文字の中の印(コードの背景、見出しのフォーカスの輪) |
+| `rounded-md` | 操作の部品(ボタン、ツールチップ、スケルトン) |
+| `rounded-lg` | 入力欄、通知の枠、コードの塊 |
+| `rounded-xl` | 面(`Card`、`Dialog`) |
+| `rounded-2xl` | 画面の中央に置く案内の面 |
 
 点とバッジの`rounded-full`は、段に含めない。
 テーマが定義しない段(`rounded-xs`、`rounded-3xl`、`shadow-xs`、`shadow-lg`など)は使わない。
@@ -469,24 +473,18 @@ URLのフラグメントはブラウザが保つので、新しいConsoleが読�
 `main.tsx`が、routerを作る前に`history.replaceState`で置き換える。
 routerが先に`/console/`の画面を描くと、その画面が一瞬動いてしまうためである。
 置き換えは履歴を増やさない。
-`<id>`と`<k>`は、先頭が0でない正の整数に限る。
+置き換えるのは、要件定義書(試行の指定を含む)と監査レポートのフラグメントである。
+作業項目の番号と試行の番号は、先頭が0でない正の整数に限る。
+置き換え先は[`src/lib/legacyDeepLink.ts`](../../console/src/lib/legacyDeepLink.ts)の`legacyDeepLinkTarget`が定める。
+要件定義書は[`maps a requirements link`](../../console/src/lib/legacyDeepLink.test.ts)と[`maps a requirements link with an attempt`](../../console/src/lib/legacyDeepLink.test.ts)で確かめる。
+監査レポートは[`maps an audit link`](../../console/src/lib/legacyDeepLink.test.ts)で確かめる。
 
-| 旧Consoleのフラグメント | 置き換え先 |
-| --- | --- |
-| `#requirements/<id>` | `/console/items/<id>/requirements` |
-| `#requirements/<id>/attempt-<k>` | `/console/items/<id>/requirements?attempt=<k>` |
-| `#audit/<id>` | `/console/reports/audit/<id>` |
-
-上の表に合わない旧ConsoleのフラグメントとフラグメントのないURLは、`/console/`の入口(要対応)に着く。
+置き換えの規則に合わない旧ConsoleのフラグメントとフラグメントのないURLは、`/console/`の入口(要対応)に着く。
 
 承認フローが投稿するConsoleのリンクは、新しいConsoleの経路を直接指す。
-`f/factory/lib/approval_support.ts`が、次の3つを作る。
-
-| リンク | 作る関数 | 経路 |
-| --- | --- | --- |
-| 要件定義書 | `buildConsoleUrl` | `/console/items/<id>/requirements`。試行が分かるときは`?attempt=<k>`を付ける |
-| 承認の詳細 | `buildApprovalConsoleUrl` | `/console/?approval=<id>` |
-| 監査レポート | `buildAuditConsoleUrl` | `/console/reports/audit/<id>` |
+リンクは[`f/factory/lib/approval_support.ts`](../../f/factory/lib/approval_support.ts)の関数が作る。
+要件定義書は`buildConsoleUrl`、承認の詳細は`buildApprovalConsoleUrl`、監査レポートは`buildAuditConsoleUrl`が作る。
+各関数が作る経路は、[`tests/lib/approval_support.test.ts`](../../tests/lib/approval_support.test.ts)の関数ごとのテストで確かめる。
 
 ## 画面の外枠
 
@@ -667,20 +665,14 @@ Escの扱いは、ダイアログの標準の動作に任せている。
 
 ### ショートカット
 
-| キー | 操作 |
-| --- | --- |
-| Command+KかCtrl+K | コマンドパレットを開く |
-| `?` | ショートカットの一覧を開く |
-| `g`の次に1 | 要対応へ移る |
-| `g`の次に2 | 作業項目へ移る |
-| `g`の次に3 | レポートへ移る |
-| `g`の次に4 | ジョブへ移る |
-| `g`の次に5 | システムへ移る |
+Command+KかCtrl+Kでコマンドパレットを、`?`でショートカットの一覧を開く。
+`g`の次に数字を押すと、その番号の画面へ移る。
 
 画面の移動のキーは、画面の表の`shortcut`に持つ。
 サイドバーの並びの番号で、順序を覚えやすくするためである。
+番号がサイドバーの並びの順であることは、[`numbers the go-to keys in the order of the side bar`](../../console/src/app/screens.test.ts)で確かめる。
 ヘルプの一覧はこの値から作るので、正本は1つである。
-`g`の後は1秒だけ次のキーを待ち、別のキーが来たら取り消す。
+`g`の後は[`src/lib/shortcutKeys.ts`](../../console/src/lib/shortcutKeys.ts)の`GO_WAIT_MS`の間だけ次のキーを待ち、別のキーが来たら取り消す。
 `?`はShiftを伴うので、Shiftは見ない。
 Ctrl、Alt、Metaを伴うキーは、ブラウザや他の部品のものなので使わない。
 通知のAlt+Tとは重ならない。
@@ -689,8 +681,8 @@ Ctrl、Alt、Metaを伴うキーは、ブラウザや他の部品のものなの
 
 - 文字を打ち込む場所にフォーカスがあるとき。
   入力を奪わないためである。
-  対象は、`textarea`、`select`、`contenteditable`である。
-  `input`は、`type`が無いものと、`text`、`search`、`email`、`url`、`tel`、`password`、`number`、日付と時刻の種類に限る。
+  対象は、`textarea`、`select`、`contenteditable`と、文字を打ち込む種類の`input`である。
+  `input`の種類は、`src/lib/shortcutKeys.ts`の`TYPING_INPUT_TYPES`が定める。
 - 変換中のとき。
 - パレットを含む、開いているダイアログがあるとき。
   背面の操作を止めている間に、画面を移さないためである。
@@ -853,7 +845,7 @@ axe-coreの検査(`axe.a11y.ts`)は、次の組み合わせを開く。
 - flowの図は、`implement`、`pr_review`、`pr_fix`を開く。
 - 起動の図は、見出しを1つずつ開いて検査する。
   開いたときだけ描かれる要素(ステップの行、リンク)を、検査の対象に入れるためである。
-  640px未満の一覧でも、1つずつ開いて検査する。
+  図が一覧に替わる幅([Consoleの図の画面の仕様の「幅」](console/graphs.md#幅))の一覧でも、1つずつ開いて検査する。
 - データは、有る状態と無い状態の両方。
 - ダイアログは、パレット、ヘルプ、再実行の確認を開いた状態。
 - 投入の2画面は、入力の操作で出せる状態も開く(`intakeStates.ts`)。
@@ -906,7 +898,7 @@ Tabの順序のスナップショットは取らない。
   ページはスクロールしない。
 - 起動の図で開いた見出しの次のTabは、同じflowの「flowの図」のリンクへ移る。
   リンクをEnterで開くと、flowの図へ移る。
-- 起動の図は、幅が640pxをまたいで図と一覧が入れ替わっても、開いたflowが開いたまま残る。
+- 起動の図は、図が一覧に替わる幅([Consoleの図の画面の仕様の「幅」](console/graphs.md#幅))をまたいで図と一覧が入れ替わっても、開いたflowが開いたまま残る。
 - 投入の2画面は、一覧へ戻るリンクの次から、入力欄とボタンに、画面の順でTabが止まる。
   止まった要素の名前は、ラベルと一致する。
   進め方のラジオは、選んでいる1つにだけ止まる。
@@ -1143,7 +1135,8 @@ workerは1台で直列に処理するので、入口1つの先読みは、その
 印を持つのは、新規投入、PRレビューの投入、作業項目の詳細、要件定義書、設計書、監査レポート、ジョブの詳細である。
 戻り先の行は、新規投入とPRレビューの投入が一覧への戻りのリンク(`back`)、ほかの5つの画面がパンくず(`breadcrumb`)である。
 要対応の副題は、すべて片付いたときだけ出るので、印を付けない。
-右端には更新の操作の枠(高さ36px、幅約154px)を置く。
+右端には更新の操作の枠を置く。
+枠の寸法は、[`src/app/RouteFallback.tsx`](../../console/src/app/RouteFallback.tsx)の`Fallback`が定める。
 更新の操作を持たない画面は、経路の印(`refresh: false`)で枠を省く。
 省くのは、取得するものを持たない新規投入とPRレビューの投入と、見つからない画面である。
 幅が狭いと、実物の更新の操作は題の下へ折り返し、帯が約44px高くなる。
@@ -1208,15 +1201,10 @@ workerは1台で直列に処理するので、入口1つの先読みは、その
 枠が見つからないときは、何も動かさない。
 操作は`src/components/Pagination.tsx`にある。
 
-| 一覧 | 1ページの件数 |
-| --- | --- |
-| 作業項目の進捗 | 25 |
-| 要件定義の一覧 | 10 |
-| 更新履歴 | 10 |
-| 情報の通知 | 10 |
-| 解決済みの通知 | 10 |
-| 監査の失敗 | 10 |
-| 作業項目に紐づかない失敗 | 10 |
+ページ送りを持つ一覧は、作業項目の進捗、要件定義の一覧、更新履歴、情報の通知、解決済みの通知、監査の失敗、作業項目に紐づかない失敗である。
+1ページの件数は、各一覧の部品の`PAGE_SIZE`が定める。
+作業項目の画面の部品は、[`PipelineTable.tsx`](../../console/src/screens/items/PipelineTable.tsx)と[`RequirementsIndexList.tsx`](../../console/src/screens/items/RequirementsIndexList.tsx)である。
+システムの画面の部品は、[`UpdateHistory.tsx`](../../console/src/screens/system/UpdateHistory.tsx)、[`NoticeLists.tsx`](../../console/src/screens/system/NoticeLists.tsx)、[`FailureLists.tsx`](../../console/src/screens/system/FailureLists.tsx)である。
 
 操作と表示の規則は次のとおりである。
 
@@ -1458,7 +1446,7 @@ Consoleの開発サーバー(`bun run --cwd console dev`、`http://localhost:517
 - 保留の表が無い、保留を読めない、保留の表が壊れている、凍結の変数を読めない表示
 - `<a href>`を含む理由と、書字方向を変える制御文字を含む置いた主体が、文字のまま出ること
 - 長い理由と長い対象の折り返し
-- 期限が数十秒後の行が、画面の時計の更新(30秒ごと)で「期限切れ」に変わること
+- 期限が数十秒後の行が、画面の時計の更新(間隔は[`src/app/clock.ts`](../../console/src/app/clock.ts)の`CLOCK_TICK_MS`)で「期限切れ」に変わること
 - 401のときの、ログインを促す文
 - ライト、ダーク、狭い幅
 - 確認のダイアログと、開いた直後のフォーカスが「取り消す」にあること
