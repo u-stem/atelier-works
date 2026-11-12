@@ -19,9 +19,11 @@
 // dependabotの作業ツリー(`dependabot-<PR番号>-<sha7>`)は、期限を待たず、終端でないdependabotの作業項目が
 // 使っていなければ消す(`removeDependabotWorktrees`)。信頼していない依存をインストールした作業ツリーで、
 // 調べ直すときは準備のステップが作り直すので、残しておく理由が無いためである。
+// レビュー用の作業ツリー(`review-<PR番号>-<sha7>-<識別子>`)は、作業項目ではなく作業ツリーの一覧から、PR番号ごとに扱う(`removeStaleReviewWorktrees`)。
+// そのPRに終端でない`pr_review`があれば消さず、無ければディレクトリの更新が期限より古いものだけを消す。
 
 import * as wmill from "windmill-client@1.817.0";
-import { readdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { basename } from "node:path";
 import { CheckEnvironmentError } from "./lib/check_sandbox.ts";
 import {
@@ -36,6 +38,7 @@ import {
   partitionRepoGroups,
   recordDiskUsage,
   selectOrphanClaudePids,
+  staleItemsForWorktreeSweep,
   terminateOrphans,
   unresolvedHoldersNoticeMessage,
   type WorktreeHolder,
@@ -44,6 +47,7 @@ import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
   listActive,
+  listActivePrReviewWorkItems,
   listStaleTerminalWorkItems,
   recordWorkspaceDiskUsageNotice,
 } from "./lib/db.ts";
@@ -65,22 +69,21 @@ import {
   pathExists,
   pruneWorktrees,
   removeWorktree,
+  reviewWorktreePrNumber,
+  reviewWorktreeRemoval,
   runCommand,
+  selectReviewWorktreesOfPr,
   type WorktreeEntry,
 } from "./lib/workspace.ts";
-// dependabotの作業ツリーのパスも、作る側(`dependabot_prepare`)の関数で求める。理由は上と同じ。
+// dependabotの作業ツリーのパスは、作る側(`dependabot_prepare`)の関数で求める。
+// 名前に含むPR番号とshaは作業項目の値で決まり、式を複製すると同期を保ちにくく、作る側が使う関数を使う方が間違いにくいため。
 import { buildDependabotWorktreeDir } from "./steps/dependabot_prepare.ts";
-// `buildReviewWorktreeDir`は、複製せずworktreeを作るstepから直接importする。
-// `req-*`と違い`review-*`のディレクトリ名はレビューしたコミットのshaを含み、
-// そのshaの正本は`work_items.head_sha`にある。式を複製すると同期を保ちにくく、
-// `pr_review_prepare`自身が使う関数を使う方が間違いにくいため。
-import { buildReviewWorktreeDir } from "./steps/pr_review_prepare.ts";
 
 const WORKSPACES_ROOT = "/workspaces";
 
 // ---------------------------------------------------------------------------
 // worktreeの掃除(issue種別は`req-*`と実装ブランチのworktree、
-// pr_review種別は`review-*`、pr_fix種別はgtrのブランチのworktree)
+// pr_fix種別はgtrのブランチのworktree)
 // ---------------------------------------------------------------------------
 
 type RemovedCounts = {
@@ -104,10 +107,80 @@ async function recordBusyWorktreeNotice(
     });
   } catch (err) {
     log.warn("cleanup: failed to record the busy-worktree notice", {
-      work_item_id: input.workItemId,
+      owner: input.owner,
+      repo: input.repo,
       worktree_dir: input.worktreeDir,
       error: maskSecrets(err instanceof Error ? err.message : String(err)),
     });
+  }
+}
+
+/**
+ * 作業ツリー`targetDir`を使う生き残りのプロセスがいないかを確かめ、消してよければ`true`を返す。
+ * 生き残りのプロセス(ロックの保持者か、このロックファイルのタグを持つ残り)がいるときは、
+ * 警告とnoticeを残して`false`を返す。飛ばした作業ツリーの記録は、呼び出し側が行う。
+ * 対象は終端状態で待つ処理が無く、翌日また試せる。止めるのは、持ち主タグとリースで根拠がある実装フローの準備だけにする。
+ * ロックファイルのパスを作れない(親が無い)ときなど、それ以外の例外はそのまま投げる。
+ * `workItemId`は、作業ツリーを持つ作業項目から選んだときだけ渡し、警告に載せる。noticeの本文には載せない。
+ */
+async function worktreeIsFreeToRemove(
+  input: {
+    readonly targetDir: string;
+    readonly workItemId?: number;
+    readonly owner: string;
+    readonly repo: string;
+  },
+  log: Logger,
+): Promise<boolean> {
+  const { targetDir, owner, repo } = input;
+  const itemFields =
+    input.workItemId === undefined ? {} : { work_item_id: input.workItemId };
+  try {
+    await ensureWorktreeLockFree({
+      run: runCommand,
+      lock: worktreeLockFor(targetDir),
+      policy: null,
+      deps: defaultLockReleaseDeps(),
+    });
+    return true;
+  } catch (err) {
+    // 枠の記録が指すworktreeを、workerが検査の前提を満たさないので取り戻せない。消すと記録だけが残るので、前提を満たすまで飛ばす。
+    if (err instanceof CheckEnvironmentError) {
+      log.warn("cleanup: skipping a worktree the worker cannot take back now", {
+        ...itemFields,
+        owner,
+        repo,
+        worktree_dir: targetDir,
+        reason: err.message,
+      });
+      await recordCheckEnvironmentNotice(
+        {
+          readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
+          addNotice: addNoticeUnlessUnresolved,
+          log,
+        },
+        err,
+      );
+      return false;
+    }
+    if (!(err instanceof WorktreeBusyError)) throw err;
+    log.warn("cleanup: skipping a worktree still used by processes", {
+      ...itemFields,
+      owner,
+      repo,
+      worktree_dir: targetDir,
+      reason: err.message,
+    });
+    await recordBusyWorktreeNotice(
+      {
+        owner,
+        repo,
+        worktreeDir: targetDir,
+        reason: maskSecrets(err.message),
+      },
+      log,
+    );
+    return false;
   }
 }
 
@@ -153,18 +226,6 @@ async function removeStaleWorktreesForRepo(
           (entry) => entry.branch === pr.headRef,
         )?.path;
         targetDirs = dir === undefined ? [] : [dir];
-      } else if (
-        item.kind === "pr_review" &&
-        item.pr_number !== null &&
-        item.head_sha !== null
-      ) {
-        const dir = buildReviewWorktreeDir(
-          repoDir,
-          item.pr_number,
-          item.head_sha.slice(0, 7),
-        );
-        const found = worktrees.find((entry) => entry.path === dir)?.path;
-        targetDirs = found === undefined ? [] : [found];
       }
 
       // 1つの作業項目が選ぶworktreeは互いに異なるので、作業項目ごとに除けば足りる。
@@ -172,60 +233,14 @@ async function removeStaleWorktreesForRepo(
         excludeActiveWorktrees(targetDirs, holders, worktrees, owner, repo),
         { removed: removedDirs, skippedBusy: skippedBusyDirs },
       )) {
-        // 生き残りのプロセス(ロックの保持者か、このロックファイルのタグを持つ残り)がいるworktreeは消さない。
-        // 対象は終端状態で待つ処理が無く、翌日また試せる。止めるのは、持ち主タグとリースで根拠がある実装フローの準備だけにする。
         // ロックファイルのパスを作れない(親が無い)ときの例外は、項目ごとの例外処理が受けて消さずに進む。
-        try {
-          await ensureWorktreeLockFree({
-            run: runCommand,
-            lock: worktreeLockFor(targetDir),
-            policy: null,
-            deps: defaultLockReleaseDeps(),
-          });
-        } catch (err) {
-          // 枠の記録が指すworktreeを、workerが検査の前提を満たさないので取り戻せない。消すと記録だけが残るので、前提を満たすまで飛ばす。
-          if (err instanceof CheckEnvironmentError) {
-            skippedBusyDirs.add(targetDir);
-            log.warn(
-              "cleanup: skipping a worktree the worker cannot take back now",
-              {
-                work_item_id: item.id,
-                owner,
-                repo,
-                worktree_dir: targetDir,
-                reason: err.message,
-              },
-            );
-            await recordCheckEnvironmentNotice(
-              {
-                readDeployedSha: () =>
-                  wmill.getVariable("f/factory/deployed_sha"),
-                addNotice: addNoticeUnlessUnresolved,
-                log,
-              },
-              err,
-            );
-            continue;
-          }
-          if (!(err instanceof WorktreeBusyError)) throw err;
-          skippedBusyDirs.add(targetDir);
-          log.warn("cleanup: skipping a worktree still used by processes", {
-            work_item_id: item.id,
-            owner,
-            repo,
-            worktree_dir: targetDir,
-            reason: err.message,
-          });
-          await recordBusyWorktreeNotice(
-            {
-              owner,
-              repo,
-              workItemId: item.id,
-              worktreeDir: targetDir,
-              reason: maskSecrets(err.message),
-            },
+        if (
+          !(await worktreeIsFreeToRemove(
+            { targetDir, workItemId: item.id, owner, repo },
             log,
-          );
+          ))
+        ) {
+          skippedBusyDirs.add(targetDir);
           continue;
         }
         await removeWorktree({
@@ -608,6 +623,302 @@ async function removeDependabotWorktreesSafe(log: Logger): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
+// レビュー用の作業ツリー
+// ---------------------------------------------------------------------------
+
+/** `lstat`などが、パスが無い(`ENOENT`)ことで失敗したかを返す。 */
+function isNoSuchFile(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err
+    ? err.code === "ENOENT"
+    : false;
+}
+
+export type ReviewWorktreeTarget = Pick<WorktreeEntry, "path" | "lock">;
+
+export type ReviewWorktreeRemovalDeps = {
+  /** そのPRに終端でない`pr_review`の作業項目があるかを返す。 */
+  readonly hasActiveReview: () => Promise<boolean>;
+  /** 作業ツリーのディレクトリの更新の時刻(ミリ秒)を返す。読めなければ例外を投げる。 */
+  readonly modifiedAtMs: (dir: string) => Promise<number>;
+  /** 作業ツリーを使う生き残りのプロセスがいなければ`true`を返す。使用中で飛ばすときは`false`を返す。 */
+  readonly ensureFree: (dir: string) => Promise<boolean>;
+  readonly removeWorktree: (
+    dir: string,
+    options: { readonly force: true; readonly forceLocked: boolean },
+  ) => Promise<void>;
+  readonly warn: (message: string, fields: LogFields) => void;
+};
+
+export type ReviewWorktreeRemovalInput = {
+  readonly repoDir: string;
+  readonly prNumber: number;
+  readonly targets: readonly ReviewWorktreeTarget[];
+  readonly cutoff: Date;
+};
+
+/**
+ * 1つのPRのレビュー用の作業ツリーを消し、消した数を返す。
+ * 判定は作業ツリーごとに行う。PRの作業項目の更新の時刻は、動きの多いPRでは常に期限の内になり、
+ * 長い生成の最中の作業項目は更新が止まるので、PR単位では、残りが溜まるか、使用中のものを消してしまう。
+ * 1. そのPRに終端でない`pr_review`があれば、何も消さず、使用中の確認もしない。
+ * 2. 無ければ、ディレクトリの更新が`cutoff`より古いものだけを対象にする。
+ *    detachedのcheckoutの後、生成のClaudeは`Read`・`Glob`・`Grep`だけで書き込まないので、更新の時刻は作成の時刻に近い。
+ *    読めないものは消さずに警告にする。ただし、ディレクトリが無く(`ENOENT`)、理由が`initializing`のロックだけが残る登録は、期限切れとみなして消す。
+ * 3. ロックの理由が`initializing`でなければ、gitがロックしたものは消さずに警告にする。
+ * 4. 使用中のものを除き、消す直前に1を1回だけ読み直す。
+ * 確認が失敗したときは、原因が分かる警告を1件残し、このPRの残りは扱わない。
+ * 1つの作業ツリーの失敗は警告に残して次へ進む。
+ */
+export async function removeReviewWorktrees(
+  input: ReviewWorktreeRemovalInput,
+  deps: ReviewWorktreeRemovalDeps,
+): Promise<number> {
+  const { repoDir, prNumber } = input;
+  const describe = (err: unknown) =>
+    maskSecrets(err instanceof Error ? err.message : String(err));
+  /** 消してはいけない(終端でない`pr_review`がある)か、確認できなかったときに`true`を返す。 */
+  const mustKeep = async (message: string): Promise<boolean> => {
+    try {
+      return await deps.hasActiveReview();
+    } catch (err) {
+      deps.warn(message, {
+        repo_dir: repoDir,
+        pr_number: prNumber,
+        error: describe(err),
+      });
+      return true;
+    }
+  };
+
+  if (await mustKeep("cleanup: failed to check active pr_review")) return 0;
+
+  const free: {
+    readonly dir: string;
+    readonly removal: NonNullable<ReturnType<typeof reviewWorktreeRemoval>>;
+  }[] = [];
+  for (const target of input.targets) {
+    const dir = target.path;
+    const removal = reviewWorktreeRemoval(target);
+    // ディレクトリが無くて登録だけが残ったものは、更新の時刻を読めない。
+    // ロックの無い登録は後の`git worktree prune`が片付けるが、`initializing`のロックは`prune`が消さないので、
+    // 期限切れとみなして消す。使うプロセスは無いので、使用中の確認は行わない。
+    let missing = false;
+    try {
+      if ((await deps.modifiedAtMs(dir)) >= input.cutoff.getTime()) continue;
+    } catch (err) {
+      missing = isNoSuchFile(err) && removal?.forceLocked === true;
+      if (!missing) {
+        deps.warn(
+          "cleanup: failed to read the modification time of a review worktree",
+          { repo_dir: repoDir, worktree_dir: dir, error: describe(err) },
+        );
+        continue;
+      }
+    }
+    if (removal === null) {
+      deps.warn("cleanup: skipping a review worktree locked by git", {
+        repo_dir: repoDir,
+        worktree_dir: dir,
+        reason: target.lock?.reason ?? null,
+      });
+      continue;
+    }
+    if (missing) {
+      free.push({ dir, removal });
+      continue;
+    }
+    try {
+      if (await deps.ensureFree(dir)) free.push({ dir, removal });
+    } catch (err) {
+      deps.warn("cleanup: failed to check the use of a review worktree", {
+        repo_dir: repoDir,
+        worktree_dir: dir,
+        error: describe(err),
+      });
+    }
+  }
+  if (free.length === 0) return 0;
+
+  if (await mustKeep("cleanup: failed to re-check active pr_review")) return 0;
+
+  let removed = 0;
+  for (const { dir, removal } of free) {
+    try {
+      await deps.removeWorktree(dir, removal);
+      removed += 1;
+    } catch (err) {
+      deps.warn("cleanup: failed to remove a review worktree", {
+        repo_dir: repoDir,
+        worktree_dir: dir,
+        error: describe(err),
+      });
+    }
+  }
+  return removed;
+}
+
+export type ReviewWorktreeSweepDeps = {
+  readonly findMainRepoDirs: () => Promise<readonly string[]>;
+  readonly listWorktrees: (
+    repoDir: string,
+  ) => Promise<readonly WorktreeEntry[]>;
+  /** リポジトリとPRごとの、消す部分の依存を返す。 */
+  readonly removalDeps: (
+    repoDir: string,
+    prNumber: number,
+  ) => ReviewWorktreeRemovalDeps;
+  /** 消した後に、なくなった作業ツリーの管理情報を片付ける。 */
+  readonly pruneWorktrees: (repoDir: string) => Promise<void>;
+  /** 消す前の一覧から、なくなった作業ツリーのプロセスのロックファイルを片付ける。 */
+  readonly removeOrphanLockFiles: (
+    repoDir: string,
+    worktrees: readonly WorktreeEntry[],
+  ) => Promise<void>;
+  readonly warn: (message: string, fields: LogFields) => void;
+};
+
+/**
+ * 作業ツリーのディレクトリの更新の時刻(ミリ秒)を返す。
+ * シンボリックリンクはたどらず、ディレクトリでなければ例外を投げる。
+ * リンクの先の更新の時刻で、リンク自身の古さを偽らせないためである。
+ */
+export async function directoryModifiedAtMs(dir: string): Promise<number> {
+  const info = await lstat(dir);
+  if (!info.isDirectory()) throw new Error(`not a directory: ${dir}`);
+  return info.mtimeMs;
+}
+
+/**
+ * 全リポジトリのレビュー用の作業ツリーを、PR番号ごとに消し、消した数を返す。
+ * 起点は作業項目ではなく作業ツリーの一覧なので、作業項目の行が消えたPRも扱う。
+ * 1つのPRや1つのリポジトリの失敗は警告に残して次へ進む。
+ */
+export async function removeStaleReviewWorktrees(
+  deps: ReviewWorktreeSweepDeps,
+  cutoff: Date,
+): Promise<number> {
+  let removed = 0;
+  for (const repoDir of await deps.findMainRepoDirs()) {
+    let worktrees: readonly WorktreeEntry[];
+    try {
+      worktrees = await deps.listWorktrees(repoDir);
+    } catch (err) {
+      deps.warn("cleanup: failed to list worktrees for review", {
+        repo_dir: repoDir,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+      continue;
+    }
+    const prNumbers = new Set<number>();
+    for (const worktree of worktrees) {
+      const prNumber = reviewWorktreePrNumber(repoDir, worktree);
+      if (prNumber !== null) prNumbers.add(prNumber);
+    }
+    for (const prNumber of prNumbers) {
+      try {
+        removed += await removeReviewWorktrees(
+          {
+            repoDir,
+            prNumber,
+            targets: selectReviewWorktreesOfPr(repoDir, worktrees, prNumber),
+            cutoff,
+          },
+          deps.removalDeps(repoDir, prNumber),
+        );
+      } catch (err) {
+        deps.warn("cleanup: failed to sweep the review worktrees of a pr", {
+          repo_dir: repoDir,
+          pr_number: prNumber,
+          error: maskSecrets(err instanceof Error ? err.message : String(err)),
+        });
+      }
+    }
+    if (prNumbers.size === 0) continue;
+    // 使用中の確認は、作業ツリーごとのプロセスのロックファイルを作る。消した後に、管理情報とロックファイルを片付ける。
+    // ロックファイルの親は、消す前の一覧から集める。
+    try {
+      await deps.pruneWorktrees(repoDir);
+    } catch (err) {
+      deps.warn("cleanup: git worktree prune failed", {
+        repo_dir: repoDir,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+    try {
+      await deps.removeOrphanLockFiles(repoDir, worktrees);
+    } catch (err) {
+      deps.warn("cleanup: failed to remove orphaned process lock files", {
+        repo_dir: repoDir,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+  return removed;
+}
+
+/** `/workspaces/<owner>/<repo>/main`から、ownerとrepoを返す。 */
+function ownerAndRepoOf(repoDir: string): {
+  readonly owner: string;
+  readonly repo: string;
+} {
+  const match = repoDir.match(/^\/workspaces\/([^/]+)\/([^/]+)\/main$/);
+  const owner = match?.[1];
+  const repo = match?.[2];
+  if (owner === undefined || repo === undefined) {
+    throw new Error(`not a main clone directory: ${repoDir}`);
+  }
+  return { owner, repo };
+}
+
+/** レビュー用の作業ツリーを消し、消した数を返す。`/workspaces`を読めないなどの失敗では掃除全体を止めない。 */
+async function removeStaleReviewWorktreesSafe(
+  cutoff: Date,
+  log: Logger,
+): Promise<number> {
+  try {
+    return await removeStaleReviewWorktrees(
+      {
+        findMainRepoDirs: () =>
+          findMainRepoDirs({ listSubdirs, exists: pathExists }),
+        listWorktrees: (repoDir) => listWorktrees({ run: runCommand, repoDir }),
+        removalDeps: (repoDir, prNumber) => {
+          const { owner, repo } = ownerAndRepoOf(repoDir);
+          return {
+            hasActiveReview: async () =>
+              (await listActivePrReviewWorkItems(owner, repo, prNumber))
+                .length > 0,
+            modifiedAtMs: directoryModifiedAtMs,
+            ensureFree: (dir) =>
+              worktreeIsFreeToRemove({ targetDir: dir, owner, repo }, log),
+            removeWorktree: (dir, options) =>
+              removeWorktree({ run: runCommand, repoDir, dir, ...options }),
+            warn: (message, fields) => log.warn(message, fields),
+          };
+        },
+        pruneWorktrees: (repoDir) =>
+          pruneWorktrees({ run: runCommand, repoDir }),
+        removeOrphanLockFiles: (repoDir, worktrees) => {
+          const { owner, repo } = ownerAndRepoOf(repoDir);
+          return removeOrphanLockFilesForRepo(
+            owner,
+            repo,
+            lockFileDirs(repoDir, worktrees),
+            log,
+          ).then(() => undefined);
+        },
+        warn: (message, fields) => log.warn(message, fields),
+      },
+      cutoff,
+    );
+  } catch (err) {
+    log.warn("cleanup: failed to sweep review worktrees", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 孤立したheadless Claudeプロセス
 // ---------------------------------------------------------------------------
 
@@ -701,7 +1012,12 @@ export async function main(): Promise<CleanupWorkspacesResult> {
     Date.now() - config.worktree_ttl_days * 24 * 60 * 60 * 1000,
   );
   const staleItems = await listStaleTerminalWorkItems(cutoff);
-  const removed = await removeStaleWorktrees(staleItems, ghToken, log);
+  const removed = await removeStaleWorktrees(
+    staleItemsForWorktreeSweep(staleItems),
+    ghToken,
+    log,
+  );
+  const removedReview = await removeStaleReviewWorktreesSafe(cutoff, log);
   const removedDependabot = await removeDependabotWorktreesSafe(log);
 
   const claudeResult = await terminateOrphanClaudeProcesses(
@@ -714,7 +1030,7 @@ export async function main(): Promise<CleanupWorkspacesResult> {
   const diskUsageKb = await recordWorkspacesDiskUsage(log);
 
   const result: CleanupWorkspacesResult = {
-    removed_worktrees: removed.worktrees + removedDependabot,
+    removed_worktrees: removed.worktrees + removedReview + removedDependabot,
     removed_lock_files: removed.lockFiles,
     terminated_claude_processes: claudeResult.terminated,
     killed_claude_processes: claudeResult.killed,

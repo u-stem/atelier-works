@@ -4,6 +4,7 @@
 // fetchだけを行うmainのcloneと、PRのheadコミットを指すdetachedのworktreeを用意する。
 // pr_reviewはmainのcloneでは作業ツリーをcheckoutしない。
 // worktreeを作る間にheadのshaが動いていないかを、最後にもう一度確かめる。
+// worktreeの名前には、このstepの実行ごとに乱数から作る識別子を付けるので、残りがあっても作成は衝突しない。
 
 import * as wmill from "windmill-client@1.817.0";
 import { isDesignStage, readBranchItemStatus } from "../lib/branch_hold.ts";
@@ -17,7 +18,7 @@ import {
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getPr, type PullRequest } from "../lib/github.ts";
-import { logger } from "../lib/log.ts";
+import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { markTransientGitHubFailure } from "../lib/pr_review_retry.ts";
 import {
   type RepoOwnerGateResult,
@@ -33,6 +34,8 @@ import {
   addDetachedWorktree,
   ensureRepo,
   fetchPrHeadRef,
+  isReviewRunId,
+  removeWorktree,
   runCommand,
 } from "../lib/workspace.ts";
 import {
@@ -61,15 +64,34 @@ export type PrReviewPrepareResult = {
 /**
  * PRの1コミットをレビューするためのdetachedのworktreeのパスを返す。
  * `sha7`はレビュー対象コミットのshaの先頭7文字。
- * このファイルが作成に、`cleanup_workspaces.ts`がTTL切れの削除に使うため、
- * 両者で同じパスになるようここに一本化している。
+ * `runId`はこのstepの実行を表す識別子(`reviewRunId`)で、パスの末尾に付く。
+ * 同じPRの同じheadでも、実行ごとに別のパスになるので、残りのworktreeと衝突しない。
+ * 識別子の形はここで確かめ、合わなければ、パスに入れずに例外を投げる。
  */
 export function buildReviewWorktreeDir(
   repoDir: string,
   prNumber: number,
   sha7: string,
+  runId: string,
 ): string {
-  return `${repoDir.replace(/\/main$/, "")}/review-${String(prNumber)}-${sha7}`;
+  if (!isReviewRunId(runId)) {
+    throw new Error(
+      `pr_review_prepare: run id must be 8 lowercase hex digits: ${JSON.stringify(runId)}`,
+    );
+  }
+  return `${repoDir.replace(/\/main$/, "")}/review-${String(prNumber)}-${sha7}-${runId}`;
+}
+
+/**
+ * このstepの実行ごとの識別子を、乱数から作って返す。
+ * `randomUuid`の値の末尾8桁である。`crypto.randomUUID()`の末尾の12桁は小文字の16進数なので、そのまま識別子の形になる。
+ * flowのジョブIDは、時刻順で先頭の桁が長く変わらず、同じジョブの再実行では値も同じになるため、使わない。
+ * 形の検証は、パスを組む`buildReviewWorktreeDir`が行う。
+ */
+export function reviewRunId(
+  randomUuid: () => string = () => crypto.randomUUID(),
+): string {
+  return randomUuid().slice(-8);
 }
 
 const SKIPPED_BASE = {
@@ -163,6 +185,10 @@ async function prepare(work_item_id: number): Promise<PrReviewPrepareResult> {
       addDetachedWorktree: async (input) => {
         await addDetachedWorktree({ run: runCommand, ghToken, ...input });
       },
+      removeWorktree: (repoDir, dir) =>
+        removeWorktree({ run: runCommand, repoDir, dir, force: true }),
+      runId: reviewRunId(),
+      log: logger("pr_review_prepare"),
       setHeadSha,
       readBranchStatus: (headRef) =>
         readBranchItemStatus(
@@ -302,6 +328,11 @@ export type ReviewPrepareDeps = {
     readonly sha: string;
     readonly dir: string;
   }) => Promise<void>;
+  /** 作ったworktreeを消す。作成の後の失敗で、このstepが作ったパスだけに使う。 */
+  readonly removeWorktree: (repoDir: string, dir: string) => Promise<void>;
+  /** この実行を表す8桁の小文字の16進数。worktreeのパスに入れる。 */
+  readonly runId: string;
+  readonly log: Logger;
   readonly setHeadSha: (id: number, sha: string) => Promise<void>;
   /** 準備の関門でPRのレビューを見送るとき、作業項目を終端にして人に知らせる。 */
   readonly blockReview: (reason: string) => Promise<void>;
@@ -370,7 +401,12 @@ export async function prepareReviewWorktree(
   assertSha(prBeforeWorktree.headSha);
 
   const sha7 = prBeforeWorktree.headSha.slice(0, 7);
-  const worktreeDir = buildReviewWorktreeDir(repoDir, pr_number, sha7);
+  const worktreeDir = buildReviewWorktreeDir(
+    repoDir,
+    pr_number,
+    sha7,
+    deps.runId,
+  );
 
   await deps.addDetachedWorktree({
     repoDir,
@@ -378,13 +414,35 @@ export async function prepareReviewWorktree(
     dir: worktreeDir,
   });
 
-  // 上の`getPr`から今までにPRへ新しいコミットが積まれている場合がある。
-  // そのときは新しい`head_sha`を保存するが、レビューはcheckout済みのshaのまま続ける。
-  // 新しいコミットは、次の`poll_prs`の周期で別のレビューとして拾われる
-  // (1コミットにつき1レビュー)。
-  const prAfterWorktree = await deps.getPr(owner, repo, pr_number);
-  if (prAfterWorktree.headSha !== prBeforeWorktree.headSha) {
-    await deps.setHeadSha(target.work_item_id, prAfterWorktree.headSha);
+  // ここから先で失敗すると、後続のstepが動かず、作ったworktreeを誰も使わない。
+  // このstepがいま作ったパスだけを消して、元の例外を投げ直す。
+  // 消せなかったときも元の例外を優先し、警告だけ残す。
+  try {
+    // 上の`getPr`から今までにPRへ新しいコミットが積まれている場合がある。
+    // そのときは新しい`head_sha`を保存するが、レビューはcheckout済みのshaのまま続ける。
+    // 新しいコミットは、次の`poll_prs`の周期で別のレビューとして拾われる
+    // (1コミットにつき1レビュー)。
+    const prAfterWorktree = await deps.getPr(owner, repo, pr_number);
+    if (prAfterWorktree.headSha !== prBeforeWorktree.headSha) {
+      await deps.setHeadSha(target.work_item_id, prAfterWorktree.headSha);
+    }
+  } catch (err) {
+    try {
+      await deps.removeWorktree(repoDir, worktreeDir);
+    } catch (cleanupErr) {
+      deps.log.warn(
+        "pr_review_prepare: failed to remove the created worktree",
+        {
+          worktree_dir: worktreeDir,
+          error: maskSecrets(
+            cleanupErr instanceof Error
+              ? cleanupErr.message
+              : String(cleanupErr),
+          ),
+        },
+      );
+    }
+    throw err;
   }
 
   return {

@@ -14,6 +14,7 @@ import {
   recordDiskUsage,
   requirementsWorktreeDir,
   selectOrphanClaudePids,
+  staleItemsForWorktreeSweep,
   terminateOrphans,
   unresolvedHoldersNoticeMessage,
 } from "../../f/factory/lib/cleanup_support.ts";
@@ -508,19 +509,41 @@ describe("dirsNotYetVisited", () => {
   });
 });
 
+describe("staleItemsForWorktreeSweep", () => {
+  test("drops the pr_review work items, which the review sweep handles from the worktree list", () => {
+    const items = [
+      { kind: "issue" },
+      { kind: "pr_review" },
+      { kind: "pr_fix" },
+    ];
+    expect(staleItemsForWorktreeSweep(items)).toEqual([
+      { kind: "issue" },
+      { kind: "pr_fix" },
+    ]);
+  });
+
+  test("keeps every other kind", () => {
+    const items = [
+      { kind: "issue" },
+      { kind: "investigate" },
+      { kind: "pr_fix" },
+    ];
+    expect(staleItemsForWorktreeSweep(items)).toEqual(items);
+  });
+});
+
 describe("busyWorktreeNoticeMessage", () => {
   test("names the worktree and its processes, and says how to let the sweep remove it", () => {
     expect(
       busyWorktreeNoticeMessage({
         owner: "acme",
         repo: "widgets",
-        workItemId: 7,
         worktreeDir: "/workspaces/acme/widgets/factory-issue-7-wi-7",
         reason:
           "worktree is still used by processes from an earlier run: pid 42 (3600s, implement:7:job-a) `bun test`",
       }),
     ).toBe(
-      "acme/widgetsの作業項目7のworktree(/workspaces/acme/widgets/factory-issue-7-wi-7)は、プロセスがまだ使っているため削除しませんでした(worktree is still used by processes from an earlier run: pid 42 (3600s, implement:7:job-a) `bun test`)。使っているプロセス(検査コマンドの生き残りなど)をworkerのコンテナで止めると、次の掃除で削除されます。",
+      "acme/widgetsのworktree(/workspaces/acme/widgets/factory-issue-7-wi-7)は、プロセスがまだ使っているため削除しませんでした(worktree is still used by processes from an earlier run: pid 42 (3600s, implement:7:job-a) `bun test`)。使っているプロセス(検査コマンドの生き残りなど)をworkerのコンテナで止めると、次の掃除で削除されます。",
     );
   });
 
@@ -529,13 +552,12 @@ describe("busyWorktreeNoticeMessage", () => {
       busyWorktreeNoticeMessage({
         owner: "acme",
         repo: "widgets",
-        workItemId: 7,
         worktreeDir: "/workspaces/acme/widgets/factory-issue-7-wi-7",
         reason:
           "worktree is still used by processes from an earlier run: check sandbox: the worktree recorded by slot factory-check-1 (uid 10002) could not be taken back: denied",
       }),
     ).toBe(
-      "acme/widgetsの作業項目7のworktree(/workspaces/acme/widgets/factory-issue-7-wi-7)は、検査用のユーザーからrootに戻せないため削除しませんでした(worktree is still used by processes from an earlier run: check sandbox: the worktree recorded by slot factory-check-1 (uid 10002) could not be taken back: denied)。運用の文書の「検査の枠の記録を片付ける」の手順で片付けると、次の掃除で削除されます。",
+      "acme/widgetsのworktree(/workspaces/acme/widgets/factory-issue-7-wi-7)は、検査用のユーザーからrootに戻せないため削除しませんでした(worktree is still used by processes from an earlier run: check sandbox: the worktree recorded by slot factory-check-1 (uid 10002) could not be taken back: denied)。運用の文書の「検査の枠の記録を片付ける」の手順で片付けると、次の掃除で削除されます。",
     );
   });
 });

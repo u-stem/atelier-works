@@ -215,7 +215,7 @@ async function readGeneratedOrCleanUp(
 /**
  * 包んだ引数を戻してから`runPrReviewPost`を呼ぶ。
  * 戻せないときも、`worktree_dir`が空でなければreviewのworktreeを消してから投げる。
- * 残ると同じshaを再実行したときに、worktreeを作れず止まるためである。
+ * 残ると、ディスクを使い続け、定期の片付けが消す期限まで残るためである。
  * 包んだ値から取るキーは明示する。包んだ値が、包まずに受け取る値(`owner`や`worktree_dir`など)を上書きしないためである。
  */
 export async function runSealedPrReviewPost(
@@ -288,7 +288,7 @@ export async function main(
  * レビューを投稿・記録し、投稿したかどうかとレビューのidを返す。
  * `worktree_dir`が空でなければ、投稿の有無や成否に関わらず最後にreviewのworktreeを消す。
  * 生成ステップが早く抜けた(日次予算の超過や、時間設定がstep timeoutに収まらない)ときも消すのは、
- * 残ると同じshaを再実行したときに`git worktree add`が既存のパスで失敗するためである。
+ * 残ると、ディスクを使い続け、定期の片付けが消す期限まで残るためである。
  * 準備ステップが飛ばした実行はworktreeを作っていない(`worktree_dir`が空)ので、何も消さない。
  * 削除の失敗は警告を記録するだけで投げない。
  *
