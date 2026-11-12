@@ -909,7 +909,7 @@ type ErrnoLike = Error & { readonly code?: string };
 
 function isErrnoLike(err: unknown): err is ErrnoLike {
   if (!(err instanceof Error)) return false;
-  const maybeCode = (err as { code?: unknown }).code;
+  const maybeCode = "code" in err ? err.code : undefined;
   return maybeCode === undefined || typeof maybeCode === "string";
 }
 
@@ -973,7 +973,7 @@ type LockFileContent = { readonly token: string };
 function isLockFileContent(value: unknown): value is LockFileContent {
   if (typeof value !== "object" || value === null) return false;
   if (!("token" in value)) return false;
-  return typeof (value as { token: unknown }).token === "string";
+  return typeof value.token === "string";
 }
 
 function parseLockToken(content: string): string | null {

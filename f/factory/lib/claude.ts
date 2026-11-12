@@ -26,6 +26,7 @@ import {
   type AgentRunRecord,
   capToDeadline,
   type FactoryConfig,
+  isRecord,
   isStringArray,
   type ModelUsageEntry,
   type RunClaudeFailureReason,
@@ -158,18 +159,12 @@ type RawClaudeUsage = {
 };
 
 function isRawClaudeUsage(value: unknown): value is RawClaudeUsage {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as {
-    input_tokens: unknown;
-    output_tokens: unknown;
-    cache_read_input_tokens: unknown;
-    cache_creation_input_tokens: unknown;
-  };
+  if (!isRecord(value)) return false;
   return (
-    typeof record.input_tokens === "number" &&
-    typeof record.output_tokens === "number" &&
-    typeof record.cache_read_input_tokens === "number" &&
-    typeof record.cache_creation_input_tokens === "number"
+    typeof value.input_tokens === "number" &&
+    typeof value.output_tokens === "number" &&
+    typeof value.cache_read_input_tokens === "number" &&
+    typeof value.cache_creation_input_tokens === "number"
   );
 }
 
@@ -261,30 +256,18 @@ function resultTextOf(parsed: RawClaudeJson): string {
 }
 
 function isRawClaudeJson(value: unknown): value is RawClaudeJson {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as {
-    type: unknown;
-    subtype: unknown;
-    is_error: unknown;
-    result: unknown;
-    errors: unknown;
-    session_id: unknown;
-    total_cost_usd: unknown;
-    num_turns: unknown;
-    duration_ms: unknown;
-    usage: unknown;
-  };
-  if (typeof record.type !== "string") return false;
-  if (typeof record.subtype !== "string") return false;
-  if (typeof record.is_error !== "boolean") return false;
-  if (!hasReadableResult(record.is_error, record.result, record.errors)) {
+  if (!isRecord(value)) return false;
+  if (typeof value.type !== "string") return false;
+  if (typeof value.subtype !== "string") return false;
+  if (typeof value.is_error !== "boolean") return false;
+  if (!hasReadableResult(value.is_error, value.result, value.errors)) {
     return false;
   }
-  if (typeof record.session_id !== "string") return false;
-  if (typeof record.total_cost_usd !== "number") return false;
-  if (typeof record.num_turns !== "number") return false;
-  if (typeof record.duration_ms !== "number") return false;
-  return isRawClaudeUsage(record.usage);
+  if (typeof value.session_id !== "string") return false;
+  if (typeof value.total_cost_usd !== "number") return false;
+  if (typeof value.num_turns !== "number") return false;
+  if (typeof value.duration_ms !== "number") return false;
+  return isRawClaudeUsage(value.usage);
 }
 
 /** `api_error_status`を整数として読む。無いときと、整数でないときはnullを返す。 */
