@@ -11,6 +11,7 @@ Software Factoryが受け入れた残るリスクを、領域ごとの表にま�
 2列目は、受け入れた残るリスクと、受け入れる理由である。
 受け入れたリスクに結び付く未確認の点と、受け入れを見直す条件も、同じ行の文に含む。
 3列目の関連する節には、そのリスクに関わる安全策の仕組みがある。
+関連する節が複数あるときは、読点「、」で区切って並べる。
 
 IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとおりである。
 「使った最大の番号」は、その領域でこれまでに振ったIDの番号の最大である。
@@ -104,14 +105,14 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-tb-22"></a>R-TB-22 | 照合の応答を読んでからfetchの接続までの短い間は、リポジトリが入れ替わる余地として残る。照合はcloneのロックの中で行うので、この間にロックの待ちは入らない。 | [Factory自身のリポジトリの照合](security.md#factory自身のリポジトリの照合) |
 | <a id="r-tb-23"></a>R-TB-23 | `factory_repo_id`が未設定の間は、名前の再取得から守られない。未設定のときは、照合せず、通知も出さない。 | [Factory自身のリポジトリの照合](security.md#factory自身のリポジトリの照合) |
 | <a id="r-tb-24"></a>R-TB-24 | `isRepoAllowed`は`factory_repo`を名前で許すので、自己改善の起票と候補への採用は名前のままである。 | [Factory自身のリポジトリの照合](security.md#factory自身のリポジトリの照合) |
-| <a id="r-tb-25"></a>R-TB-25 | Consoleの配信物を取り込む処理と、ホストの`git pull`は、`factory_repo_id`を照合しない。 | [Factory自身のリポジトリの照合](security.md#factory自身のリポジトリの照合) |
-| <a id="r-tb-26"></a>R-TB-26 | 監査のスナップショットのworktreeが、self cloneに既にあるshaを取るfetchは、照合しない。 | [Factory自身のリポジトリの照合](security.md#factory自身のリポジトリの照合) |
+| <a id="r-tb-25"></a>R-TB-25 | Consoleの配信物を取り込む処理と、ホストの`git pull`は、`factory_repo_id`を照合しない。 | [Factory自身のリポジトリの照合](security.md#factory自身のリポジトリの照合)、[Factory自身のリポジトリの数値IDを固定する](operations.md#factory自身のリポジトリの数値idを固定する) |
+| <a id="r-tb-26"></a>R-TB-26 | 監査のスナップショットのworktreeが、self cloneに既にあるshaを取るfetchは、照合しない。 | [Factory自身のリポジトリの照合](security.md#factory自身のリポジトリの照合)、[Factory自身のリポジトリの数値IDを固定する](operations.md#factory自身のリポジトリの数値idを固定する) |
 
 ### オーナーの数値IDの照合
 
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
-| <a id="r-tb-27"></a>R-TB-27 | `id`の無いオーナーは、名前だけで動く。 | [オーナーの数値IDの照合](security.md#オーナーの数値idの照合) |
+| <a id="r-tb-27"></a>R-TB-27 | `id`の無いオーナーは、名前だけで動く。 | [オーナーの数値IDの照合](security.md#オーナーの数値idの照合)、[オーナーの数値IDを固定する](operations.md#オーナーの数値idを固定する) |
 | <a id="r-tb-28"></a>R-TB-28 | dependabotを除く準備のステップ、フォームからのIssueの作成、Issue化の提案の承認は、処理の始めに照合する。Issue化の提案の却下だけは、判断を記録した後に照合する。照合の後に名前が入れ替わっても、その実行は検知しない。 | [オーナーの数値IDの照合](security.md#オーナーの数値idの照合) |
 | <a id="r-tb-29"></a>R-TB-29 | `allowed_labeler_ids`にIDを入れないアカウントは、名前だけで判定する。`allowed_labeler_logins`に古い名前が残ると、その名前を取得した人が、許可された付与者とPRの作成者になりうる。IDを入れたアカウントは、IDも一致するときだけ許可する。 | [オーナーの数値IDの照合](security.md#オーナーの数値idの照合) |
 | <a id="r-tb-30"></a>R-TB-30 | 保存済みの名前でGitHubを読み書きする処理は、ほかにもある。Issueの状態の確認と整理、承認後のIssueへのコメント、PRへの返信は、名前のままである。取り消された作業項目を再開する前の状態の確認と、要件定義を作り直す再実行の前の取り込みも、名前のままである。これらはcloneも検査コマンドの実行もしない。投稿の内容は、名前を取得した人の目に触れうる。 | [オーナーの数値IDの照合](security.md#オーナーの数値idの照合) |
@@ -139,7 +140,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-cred-01"></a>R-CRED-01 | 記録が古い明示でないリポジトリの人のPRは、収集の鮮度の監視が通知するまで見つからず、`gh_repos`に行が無い明示でないリポジトリの人のPRは、通知なしに見送る。第三者が1000件超のPRで一覧を読む明示リポジトリを埋めると、5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。第三者が埋める経路が当たる条件は、対象のリポジトリが明示リポジトリで、公開されていることなので、受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-02"></a>R-CRED-02 | Actions: Read-onlyの権限は選んだ全リポジトリの実行のログとartifactも読め、`github_token`はConsole用workerも読むので、漏れたときの影響は、Contentsの読み書きに加えて、ログとartifactを読まれる分だけ広がる。ログとartifactには秘密値を入れない。漏れたときの影響が広がる分は、残るリスクとして受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-03"></a>R-CRED-03 | 残るリスクとして、トレーラーはcommit本文の照合なので、リポジトリへ書ける人は偽れる。偽ったcommitだけのPRは、「Factoryが作ったPR」として自動で直す対象になりうる。対象のPRは、PATのアカウントが作った、Factoryのブランチの形のPRに限る。書き込める人は、ほかの手段でも同じPRを書き換えられるので、受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
-| <a id="r-cred-04"></a>R-CRED-04 | 残るリスクとして、第三者が1000件超のPRで、REST一覧を読むリポジトリを埋めることがある。このとき5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。1回の実行に、1リポジトリ10ページ、予算120秒、rate limitでの停止という上限がある。条件は、対象のリポジトリが作業項目、競合の行、明示リポジトリのどれかに入り、公開されていることで、1回の実行にこの上限があるので、受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
+| <a id="r-cred-04"></a>R-CRED-04 | 残るリスクとして、第三者が1000件超のPRで、REST一覧を読むリポジトリを埋めることがある。このとき5分ごとに10ページを読み続け、他のフローと共有するPATのrate limitの枠を、1リポジトリにつき1時間で約120リクエスト使う。1回の実行に、1リポジトリ10ページ、予算120秒、rate limitでの停止という上限がある。条件は、対象のリポジトリが作業項目、競合の行、明示リポジトリのどれかに入り、公開されていることで、1回の実行にこの上限があるので、受け入れる。 | [GitHubのPAT](security.md#githubのpat)、[限界](internals/pr-ci.md#限界) |
 | <a id="r-cred-05"></a>R-CRED-05 | 残るリスクとして、次のPRを拾えなくなる。作業項目も競合の行も無く、表も古い、明示でないリポジトリにあるFactoryのPRである。読めない間は、収集の鮮度の監視が通知するまで、知らせずに見送る。検索へ戻す設定は無い。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-06"></a>R-CRED-06 | 人がIssueの末尾に書き足すと、目印が最後の行でなくなり、再試行のときに見つからず、Issueが重複して起票される。書き足せるのは、リポジトリのIssueを編集できる人に限る。受け入れる。 | [GitHubのPAT](security.md#githubのpat) |
 | <a id="r-cred-07"></a>R-CRED-07 | 目印を偽造して、作成済みのIssueとして再利用させる経路があり、実際には付いていないラベルが付いた扱いになりうる。偽造できるのは、PATのアカウントとしてIssueを作る人と、書き込み権限のある協力者のIssueの書き換えに限る。PATのアカウントとしてIssueを作る経路は、運用者と、親のセッションが同じアカウントで`gh issue create`する経路、`manual_intake_create_issue`である。親のセッションの経路と`manual_intake_create_issue`には、信頼できない文が入りうるので、その文に目印が書かれると偽造になる。受け入れる。偽造できる人は、Factoryのリポジトリに書き込める人で、その人はIssueやPRを直接操作できるためである。 | [GitHubのPAT](security.md#githubのpat) |
@@ -153,16 +154,16 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-dlv-01"></a>R-DLV-01 | 許可リストと型付きの関数が防ぐのは、Console自身の誤りだけである。ConsoleのXSSや、運用者のCookieを持つ攻撃者は防げない。Cookieがあれば、許可リストの外のscriptも、Windmillのapiから直に呼べる。ログインのセッションの有効期間は30日で、Windmillの既定の3日より長い。運用者のブラウザが管理者のCookieを持つ時間も、そのぶん長い。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-02"></a>R-DLV-02 | 新規投入の冪等キーで止まらない再送(リロードの後、別のタブ、入力を変えたもの、キーを付けない直接のフロー実行、保持期間を過ぎたキー)では、Issue、作業項目、pipelineが重複しうる。承認を省く進め方でキーが変わる再送では、実装が二重に起動し、PRが重複しうる。損なわれるのは手間で、データと権限は損なわれない。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-03"></a>R-DLV-03 | GitHubの一覧の反映の遅れや、取り直した試行の目印の探索の失敗で、新規投入のIssueが二重になりうる。`gh`がタイムアウトすると予約が10分残り、その間の同じキーの再送は`intake_key_in_flight`で失敗する。取り直しの前に探索する順にすると設計が変わるので、受け入れる。 | [Consoleの配信](security.md#consoleの配信) |
-| <a id="r-dlv-04"></a>R-DLV-04 | 承認の二重の送信を画面で止められるのは送信した同じタブの中だけで、Issue提案のIssue作成のやり直しが重なると、Issueが2件できうる。サーバーの承認依頼ごとの印が重なりを緩和するが、期限を超える処理と取り直した処理は、理論上は重なりうる。走査と作成が、Issueを作る処理の印の有効期間(15分)を超えて続く障害では、印を取り直した別の呼び出しと重なり、Issueが重複して起票されうる。受け入れる。 | [Consoleの配信](security.md#consoleの配信) |
+| <a id="r-dlv-04"></a>R-DLV-04 | 承認の二重の送信を画面で止められるのは送信した同じタブの中だけで、Issue提案のIssue作成のやり直しが重なると、Issueが2件できうる。サーバーの承認依頼ごとの印が重なりを緩和するが、期限を超える処理と取り直した処理は、理論上は重なりうる。走査と作成が、Issueを作る処理の印の有効期間(15分)を超えて続く障害では、印を取り直した別の呼び出しと重なり、Issueが重複して起票されうる。受け入れる。 | [Consoleの配信](security.md#consoleの配信)、[GitHubのPAT](security.md#githubのpat) |
 | <a id="r-dlv-05"></a>R-DLV-05 | `main`へのマージは、承認0件のPRで済む。PRの必須チェックは通る必要があるが、人のレビューは強制されない。FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](security.md#mainの保護とリポジトリの公開))。そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。保護パスの反映の承認は、Consoleの配信物(`console/`)を止めない([反映の承認](internals/deploy-approvals.md#反映の承認))。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-06"></a>R-DLV-06 | CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。 | [Consoleの配信](security.md#consoleの配信) |
-| <a id="r-dlv-07"></a>R-DLV-07 | `console-a11y`ジョブが使うPlaywrightのブラウザは、ハッシュで照合しないので、取得元かその通信が侵害されると、改ざんされたブラウザが動く。受け入れる理由は、このジョブが`contents: read`の権限だけを持ち、秘密値と配信物を扱わず、PRの実行だけで動くためである。 | [Consoleの配信](security.md#consoleの配信) |
+| <a id="r-dlv-07"></a>R-DLV-07 | `console-a11y`ジョブが使うPlaywrightのブラウザは、ハッシュで照合しないので、取得元かその通信が侵害されると、改ざんされたブラウザが動く。受け入れる理由は、このジョブが`contents: read`の権限だけを持ち、秘密値と配信物を扱わず、PRの実行だけで動くためである。 | [Consoleの配信](security.md#consoleの配信)、[CIの組み立て](internals/console.md#ciの組み立て) |
 | <a id="r-dlv-08"></a>R-DLV-08 | e2eの依存(`@playwright/test`、`@axe-core/playwright`、`axe-core`)は、`console/package.json`にある。そのため、配信するジョブ(`console-dist.yml`と`ci.yml`の`console`ジョブ)の`node_modules`に入る。インストールは`--ignore-scripts`で行うので、install scriptは動かない。`vite build`はこの3つを読み込まないので、配布物には入らない。別の`package.json`に分けると、lockfileの検査とdependabotの設定が二重になる。そのため、分けない。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-09"></a>R-DLV-09 | 信頼の境界は`console-dist.yml`の1つのジョブと、そこで動くツールや依存に及ぶ。`ci.yml`のジョブは同名の成果物を上げても、取り込み先の実行(`console-dist.yml`)に入らない。組み立ての手順は`console-dist.yml`に直接書き、composite actionに分けない。`console-dist.yml`を書き換える変更は、`main`へのマージで反映されるので、マージ前のレビューが唯一の防御である。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-10"></a>R-DLV-10 | 同じ実行の中では、成果物を`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。`console-dist.yml`のジョブは1つなので、同じ実行にほかの上げ手はいない。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-11"></a>R-DLV-11 | `console-dist.yml`の成功が示すのは、組み立てが通ったことだけである。型検査、lint、テストを担う`ci.yml`の成功も、同じcommitについて取り込みの条件にする。`ci.yml`が実行中のcommitは、成功するまで取り込まない。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-12"></a>R-DLV-12 | `main`という名前のタグの実行は、ブランチ名が`main`で現れる。`console_fetcher`は同じcommitで、`console-dist.yml`と`ci.yml`のどちらも`main`へのpushとして成功していることを求める。FactoryのPATはWorkflowsの権限が無く、ワークフローのファイルを書き換えたcommitを作れない。現在のワークフローは`main`のブランチのpushでしか動かないので、PATによるタグでは実行が作られない。 | [Consoleの配信](security.md#consoleの配信) |
-| <a id="r-dlv-13"></a>R-DLV-13 | 両方のワークフローを書き換えたcommitに`main`というタグを付けられる人は、`console_fetcher`の、同じcommitで`console-dist.yml`と`ci.yml`のどちらも`main`へのpushとして成功していることの照合を通せる。タグの作成と更新は、rulesetの`protect-tags`で管理者に限っている。管理者は迂回できるので、管理者のアカウントの侵害は防げない。取り込むcommitが`main`の履歴に含まれるかは、確かめていない。 | [Consoleの配信](security.md#consoleの配信) |
+| <a id="r-dlv-13"></a>R-DLV-13 | 両方のワークフローを書き換えたcommitに`main`というタグを付けられる人は、`console_fetcher`の、同じcommitで`console-dist.yml`と`ci.yml`のどちらも`main`へのpushとして成功していることの照合を通せる。タグの作成と更新は、rulesetの`protect-tags`で管理者に限っている。管理者は迂回できるので、管理者のアカウントの侵害は防げない。取り込むcommitが`main`の履歴に含まれるかは、確かめていない。 | [Consoleの配信](security.md#consoleの配信)、[取り込みの検証](internals/console.md#取り込みの検証) |
 | <a id="r-dlv-14"></a>R-DLV-14 | draw.ioのビューアも、`console-dist`の成果物の差し替えの範囲に入る。ビューアは`console-dist.yml`が取得して、同じ成果物に入れるためである。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-15"></a>R-DLV-15 | `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけである。`WM_BIND`を外向きにしてHTTPで公開すると、この防御は効かない。外向きにするならHTTPSで公開する。 | [Consoleの配信](security.md#consoleの配信) |
 | <a id="r-dlv-16"></a>R-DLV-16 | `Origin`の検査が比べる相手は、要求の`Host`ヘッダーから作ったオリジンである。DNSリバインディングで`Host`が攻撃者のホスト名になると、`Origin`も一致して通る。ただしCookieはホスト名ごとに付くので、運用者のCookieは付かない。 | [Consoleの配信](security.md#consoleの配信) |
@@ -202,9 +203,9 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-per-04"></a>R-PER-04 | `repo_allowlist`が空のとき、見えないリポジトリを`not_visible`として検出できない。反映後に、人が件数を確かめる([収集の運用](operations.md#収集の運用))。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-05"></a>R-PER-05 | loginに`_`を含む所有者(EMUのアカウント)は集めない。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-06"></a>R-PER-06 | 先頭が`.`のリポジトリ名(`.github`など)は、収集から漏れる。GitHubの名前の述語は、シェルとパスに渡す名前の守りと共通なので、収集のために緩めると、その守りも緩む。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
-| <a id="r-per-07"></a>R-PER-07 | 締め切りやGitHubの失敗が続くと、リポジトリの状態が前回のまま凍る。`gone`の行は消えない。 | [既知の限界](internals/github-collect.md#既知の限界) |
+| <a id="r-per-07"></a>R-PER-07 | 締め切りやGitHubの失敗が続くと、リポジトリの状態が前回のまま凍る。`gone`の行は消えない。 | [既知の限界](internals/github-collect.md#既知の限界)、[定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-08"></a>R-PER-08 | 詳細の行のブランチ名と作者は、forkのPRを含めて、外の人が決められる。収集は、書くときと読むときに形を検査し、通らない値を`NULL`にする。下流は、DBの値だけでGitHubへ作用する操作に進まない([下流が守る不変条件](internals/github-collect.md#下流が守る不変条件))。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
-| <a id="r-per-09"></a>R-PER-09 | 開いたPRが90件を超えるリポジトリは、詳細が打ち切られ続ける。公開リポジトリでは、外の人がPRを開けて、そのリポジトリの詳細を古いままにできる。打ち切りや失敗のリポジトリの古い行は、`usable`が真のまま残る。最初に詳細の行を読む処理には、閾値で判断を止める判定が要る([下流が守る不変条件](internals/github-collect.md#下流が守る不変条件))。 | [読む側の判定](internals/github-collect.md#読む側の判定) |
+| <a id="r-per-09"></a>R-PER-09 | 開いたPRが90件を超えるリポジトリは、詳細が打ち切られ続ける。公開リポジトリでは、外の人がPRを開けて、そのリポジトリの詳細を古いままにできる。打ち切りや失敗のリポジトリの古い行は、`usable`が真のまま残る。最初に詳細の行を読む処理には、閾値で判断を止める判定が要る([下流が守る不変条件](internals/github-collect.md#下流が守る不変条件))。 | [読む側の判定](internals/github-collect.md#読む側の判定)、[定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-10"></a>R-PER-10 | `poll_issues`は、明示でないリポジトリの記録が古い間、そのリポジトリのIssueを見つけない。鮮度の監視が通知するまでの時間は、黙って見送る。最大の時間は[GitHubの収集](internals/github-collect.md#鮮度の足りないリポジトリ)にある。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-11"></a>R-PER-11 | `poll_issues`が検索を使わないので、発見の経路を設定だけで検索へ戻す手段は無い。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-12"></a>R-PER-12 | `poll_issues`が明示リポジトリを一覧で読むとき、トリガーラベルの付いた開いたIssueとPRが合わせて1000件を超えると、一覧が失敗し続ける。トリガーラベルはIssueフォームに設定しない方針なので、外の人が埋めるのは難しい。失敗は`list_labeled_issues`の段に残る。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
@@ -214,7 +215,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-per-16"></a>R-PER-16 | `poll_prs`は、組織の所有者のPRのチーム宛てのレビューの依頼を、`GET /user/teams`のチームの数値IDで照合する。チームへの依頼は、作者が許可された人のPRだけ、候補にする。個人の所有者のリポジトリには、チーム宛ての依頼が付かないので、現在の構成では起きない。個人の所有者の行は、直接の依頼だけで判定される。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-17"></a>R-PER-17 | 組織の所有者で`GET /user/teams`を使えない間は、チーム宛てだけの依頼のレビューが起動しない。通知は出ず、組織ごとの固定の文の失敗が、`job_failures`に毎周回残る。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-18"></a>R-PER-18 | `poll_prs`がチームを使えて照合の結果対象でなかったPRを1時間は確かめ直さないので、別のチームの依頼、依頼されたチームへのPATのアカウントの追加、直接の依頼の追加、作者の許可の追加に、最大で1時間気づかない。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
-| <a id="r-per-19"></a>R-PER-19 | `poll_prs`は、stateを書けない間、チームへの依頼の確認を毎周回先頭から選ぶ。先頭の候補が枠を使うので、後ろの候補を確かめられないことがある。 | [既知の限界](internals/github-collect.md#既知の限界) |
+| <a id="r-per-19"></a>R-PER-19 | `poll_prs`は、stateを書けない間、チームへの依頼の確認を毎周回先頭から選ぶ。先頭の候補が枠を使うので、後ろの候補を確かめられないことがある。 | [既知の限界](internals/github-collect.md#既知の限界)、[定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-20"></a>R-PER-20 | `poll_prs`は、チーム宛ての確認が要る行を、1周回に20件までRESTで確かめる。超えた分は、結果の`team_capped`に出る。前の周回の続きから選ぶので、次の周回以降に確かめられる。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-21"></a>R-PER-21 | 許可されていない作者のPRも、1周回20件のチーム宛ての確認の枠を使う。外の人がheadを変え続けると、許可された作者のチーム依頼の確認が数周回遅れうる。止まらない。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-22"></a>R-PER-22 | `listPrReviews`と`listPrReviewComments`にはページの上限が無い。許可された作者のPRや直接の依頼のPRに、外の人がコメントを増やせる経路は、以前からある。この変更の範囲外の記録である。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
@@ -239,7 +240,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
-| <a id="r-hook-01"></a>R-HOOK-01 | Consoleの書き込みのscriptは、端末での人の確認を通らずに他の主体の保留を外せるので、`hold-guard.ts`が、1コマンドで呼ぶ形を、主セッションを含むすべてのセッションで拒否する。この判定はベストエフォートで、ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前、名前が語にも標準入力にも現れない形などは止めない。これらの形は止められないので、残るリスクとして受け入れる。 | [Claude Codeのフック](security.md#claude-codeのフック) |
+| <a id="r-hook-01"></a>R-HOOK-01 | Consoleの書き込みのscriptは、端末での人の確認を通らずに他の主体の保留を外せるので、`hold-guard.ts`が、1コマンドで呼ぶ形を、主セッションを含むすべてのセッションで拒否する。この判定はベストエフォートで、ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前、名前が語にも標準入力にも現れない形などは止めない。これらの形は止められないので、残るリスクとして受け入れる。 | [Claude Codeのフック](security.md#claude-codeのフック)、[保留](internals/holds.md#保留) |
 | <a id="r-hook-02"></a>R-HOOK-02 | `CHECK_IDLE_FORCE`の拒否は、変数名の組み立てと、スクリプトファイルを経由した代入を塞がない。 | [Claude Codeのフック](security.md#claude-codeのフック) |
 | <a id="r-hook-03"></a>R-HOOK-03 | `CHECK_IDLE_FORCE`の拒否は、代入以外で変数を設定する組み込み(`read`、`printf -v`、`declare -n`)と、`set -a`に続く`source`を塞がない。 | [Claude Codeのフック](security.md#claude-codeのフック) |
 | <a id="r-hook-04"></a>R-HOOK-04 | `CHECK_IDLE_FORCE`の拒否は、ブレース展開(`CHECK_IDLE_FORCE{,}=1`)を塞がない。 | [Claude Codeのフック](security.md#claude-codeのフック) |
@@ -368,7 +369,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | --- | --- | --- |
 | <a id="r-con-02"></a>R-CON-02 | `pr_review_intake`のフローを直接実行すると、`pr_review_submit`を通らず、操作の記録が残らない。実行できるのは、`f/factory`の権限を持つ管理者と、その資格情報で動くローカルのClaudeのセッションである。拒否フックが名前で止めるのは、`CONSOLE_WRITE_SCRIPTS`の書き込みのscriptだけで、フローと登録のステップは止めない。手動投入のフロー(`manual_intake`)と同じ性質である。`.claude/settings.json`の許可に`wmill`の実行系は無いので、実行には人の許可が要る。 | [PRレビューの投入](internals/console/security.md#prレビューの投入) |
 | <a id="r-con-03"></a>R-CON-03 | 登録のステップの断りのうち、noticeに残るのは、fork headとオーナーのIDの食い違いだけである。そのほかは、ステップのジョブの結果として読む。 | [PRレビューの投入](internals/console/security.md#prレビューの投入) |
-| <a id="r-con-04"></a>R-CON-04 | 一意インデックスを足すmigrationは、重なった古い`pr_review`を取り消す。`pr_review`はリースを使わず、止めるのは投稿の直前に作業項目が`reviewing`かを確かめる処理だけである。この確かめから投稿(`publishReview`)までの間に取り消しが割り込むと、取り消された行のレビューが投稿されうる。migrationは1回しか走らず、窓も短いので、受け入れる。 | [PRレビューの投入](internals/console/security.md#prレビューの投入) |
+| <a id="r-con-04"></a>R-CON-04 | 一意インデックスを足すmigrationは、重なった古い`pr_review`を取り消す。`pr_review`はリースを使わず、止めるのは投稿の直前に作業項目が`reviewing`かを確かめる処理だけである。この確かめから投稿(`publishReview`)までの間に取り消しが割り込むと、取り消された行のレビューが投稿されうる。migrationは1回しか走らず、窓も短いので、受け入れる。 | [PRレビューの投入](internals/console/security.md#prレビューの投入)、[PRの発見](internals/pr-workflow.md#prの発見) |
 | <a id="r-con-05"></a>R-CON-05 | 次の確かめは、綴りを区別したままである。`listActionableWorkItems`と`console_query.ts`の「より新しい行」の確かめ、`hasNonTerminalPrWorkItem`、`hasUnfinishedPrRun`、`pr_fix`側の`countPrFixFailures`、`restartStoppedWorkItem`、自動の再開である。綴りの違う行があると、引き継ぎ済みの古い`failed`の行が要対応の一覧に残る。人がそれを再実行すると、レビューが二重になりうる。閉じたPRのworktreeの掃除と、実装の準備の保護も、綴りの違う行を見落とす。後の2つは、自動で復旧する。 | [PRレビューの投入](internals/console/security.md#prレビューの投入) |
 | <a id="r-con-06"></a>R-CON-06 | 投入の確認の後に、ラベルの経路が同じPRのレビューを始めた競合は、登録のステップの挿入が断る。人の依頼は失われない。ラベルの経路は、ラベルを付け直して次の巡回に任せる。 | [PRレビューの投入](internals/console/security.md#prレビューの投入) |
 
@@ -411,7 +412,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-con-24"></a>R-CON-24 | 設計書の取得(`queries.ts`の`fetchApprovalDesignDoc`)と型ガード(`approvalDesignDoc.ts`)は保護しない。描く文字と止める判定の入力を、同じ形に書き換えられる。配線の検査はキャッシュに値を直接入れるので、この経路を通らない。承認画面の起点である`InboxDetail.tsx`から`ApprovalOverview`への分岐も、配線の検査は通らない。 | [設計の承認画面の保護](internals/console/security.md#設計の承認画面の保護) |
 | <a id="r-con-25"></a>R-CON-25 | 組み直しの検査は、固定した入力だけを使う。承認画面(`DesignReview.tsx`)の中の、入力の内容によって動く変更は、保護パスなので、人のレビューで確かめる。 | [設計の承認画面の保護](internals/console/security.md#設計の承認画面の保護) |
 | <a id="r-con-26"></a>R-CON-26 | 承認を止める連鎖(`designBlockedReason`、`approveGateProblem`、承認バー、承認の呼び出し)は、承認画面のほかは保護しない。止める理由を無視する分岐を足す変更は、分岐の条件がテストの固定値に当たらないとき、配線の検査を通る。`ApprovalOverview.tsx`と`ReviewPanel.tsx`の入力によって動く差し替えも、同じく検査を通る。呼ぶ側が判定を迂回する変更は、レビューで差分から確かめる。 | [設計の承認画面の保護](internals/console/security.md#設計の承認画面の保護) |
-| <a id="r-con-27"></a>R-CON-27 | 配線の契約テストは、最初の描画だけを見る。DOMを動かすテストの基盤が無いので、mountの後に止める理由を外す変更は、テストで検出できない。`initialView`を渡して描くプレビューと、プレビューを選んだ後の原文も、最初の描画である。mountの後に切り替えた状態は、テストで描けない。切り替えと原文への復帰は、保護の外のe2e(`console/e2e/keyboard.a11y.ts`)が確かめる。レビューで差分から確かめる。 | [設計の承認画面の保護](internals/console/security.md#設計の承認画面の保護) |
+| <a id="r-con-27"></a>R-CON-27 | 配線の契約テストは、最初の描画だけを見る。DOMを動かすテストの基盤が無いので、mountの後に止める理由を外す変更は、テストで検出できない。`initialView`を渡して描くプレビューと、プレビューを選んだ後の原文も、最初の描画である。mountの後に切り替えた状態は、テストで描けない。切り替えと原文への復帰は、保護の外のe2e(`console/e2e/keyboard.a11y.ts`)が確かめる。レビューで差分から確かめる。 | [設計の承認画面の保護](internals/console/security.md#設計の承認画面の保護)、[設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-con-28"></a>R-CON-28 | 長い全文を最後までスクロールしなくても、承認できる。見える文字で後ろに置いた指示は、読まれずに通りうる。行数、コードポイント数、終わりの印を全文の外に出して、長さを確かめられるようにしている。読み終えたことを承認の条件にする仕組みは無い。 | [設計の承認画面の保護](internals/console/security.md#設計の承認画面の保護) |
 | <a id="r-con-29"></a>R-CON-29 | タブは4桁で数えるが、描画の既定の`tab-size`は8である。`<pre>`に`tab-size: 4`を付け、ソースの契約で固定している。ブラウザが`tab-size`を効かせない場合は、数える桁と見える桁がずれる。 | [設計の承認画面の保護](internals/console/security.md#設計の承認画面の保護) |
 | <a id="r-con-30"></a>R-CON-30 | NFDで書いたラテン文字(e+U+0301など)は、結合文字を数えるので、承認が止まり続ける。却下か再生成で扱う。 | [設計の承認画面の保護](internals/console/security.md#設計の承認画面の保護) |
@@ -554,7 +555,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-des-06"></a>R-DES-06 | 自動のPRレビュー(`pr_review`)には設計書を渡さない。レビューの指摘が承認済みの設計と食い違うと、PR修正が`design_gap`を返す候補になる。この影響は、残るリスクとして受け入れる。誤った`design_gap`は、返してよい条件を狭めたこと、見送る(`skipped`)逃げ道、戻しの上限、人の設計の承認で抑える。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-07"></a>R-DES-07 | PR修正の設計への戻しで書き込みが途中で失敗し、処理済みの位置が進んでいると、次のPR修正の行は位置を引き継ぐので、元の指摘は二度と集まらない。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-08"></a>R-DES-08 | 設計の起動に失敗した親は、人の対応待ちで止まる。その後で設計工程を無効にして親を再実行すると、報告が設計に届かず実装へ進む。処理済みの位置は戻した時点で進んでいるので、元の指摘は消える。人の手順は、再実行の前に設計工程が有効かを確かめることである。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
-| <a id="r-des-09"></a>R-DES-09 | PR修正の設計への戻しの上限と設計工程の無効の判定は、親の状態の確認より前にある。親が別の経路ですでに設計の段階にあり、数が上限に達していると、理由が上限になる。このとき案内は「ラベルの付け直しか、PRを人が直す」になる。親は進行中なので、設計の段階にあるという案内の方が正しい。理由の字面を固定するテストと両立させるため、この食い違いは直さずに受け入れる。 | [戻さずに止めるとき](internals/pr-workflow.md#戻さずに止めるとき) |
+| <a id="r-des-09"></a>R-DES-09 | PR修正の設計への戻しの上限と設計工程の無効の判定は、親の状態の確認より前にある。親が別の経路ですでに設計の段階にあり、数が上限に達していると、理由が上限になる。このとき案内は「ラベルの付け直しか、PRを人が直す」になる。親は進行中なので、設計の段階にあるという案内の方が正しい。理由の字面を固定するテストと両立させるため、この食い違いは直さずに受け入れる。 | [戻さずに止めるとき](internals/pr-workflow.md#戻さずに止めるとき)、[設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-10"></a>R-DES-10 | PR修正の設計への戻しで、親の確認と比較交換は1つの文ではない。その間に割り込んだ同じIssueの新しいサイクルは、部分一意インデックス(`work_items_active_issue_key`)が捕まえる。この制約が効かないと、置き換わった親を設計へ戻して生き返らせる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-11"></a>R-DES-11 | PR修正の設計への戻しが、上限か設計工程の無効で止まったとき、親はPR作成済みのまま残り、再実行で設計を作り直せない。人が、トリガーのラベルを付け直すか、PRを直す。自動で設計を作り直し続けることは無い。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-12"></a>R-DES-12 | 設計の段階の間にPRのブランチへ別の回がpushしないよう回ごとに止めるが、ブランチ名から作業項目を引けないとき(形が違う、削除済み、別のリポジトリ)は、どの回も止めない。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
@@ -564,13 +565,13 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-des-16"></a>R-DES-16 | 設計の段階で`blocked`にしたレビュー回は、Consoleの進行中の一覧に残りうる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-17"></a>R-DES-17 | 承認待ちの2状態(`awaiting_approval`、`awaiting_design_approval`)の間は、競合の通知が出ず、競合回とCI回も起動しない。解けるのは、承認、却下、期限切れ(`expired`)のときである。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-18"></a>R-DES-18 | 承認済み(`approved`)は終端の状態で、実装フローが無効のとき(`implement_enabled`が偽)などは長く残る。その間も、競合回とCI回の自動修正と、競合の通知は止まる。本番は実装フローが有効なので、通常は短い。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
-| <a id="r-des-19"></a>R-DES-19 | CI回の失敗は、ブランチを引き継ぐ間は自動で直さず、見送りの時点では保留を書かない。保留の無い失敗の通知(`UNHELD_FAILURE_NOTICE_AFTER_MS`、2時間)が、説明なしに出うる。競合の通知は止めるのに、CI回の通知は止めない。 | [ブランチを引き継ぐ間](internals/pr-ci.md#ブランチを引き継ぐ間) |
+| <a id="r-des-19"></a>R-DES-19 | CI回の失敗は、ブランチを引き継ぐ間は自動で直さず、見送りの時点では保留を書かない。保留の無い失敗の通知(`UNHELD_FAILURE_NOTICE_AFTER_MS`、2時間)が、説明なしに出うる。競合の通知は止めるのに、CI回の通知は止めない。 | [ブランチを引き継ぐ間](internals/pr-ci.md#ブランチを引き継ぐ間)、[設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-20"></a>R-DES-20 | 通知済みの競合の行は、動かさない。通知した後で作業項目が設計の段階へ移ると、通知は開いたまま残る。人が手でpushした後は、自動修正が`not_factory_head`で止まる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-21"></a>R-DES-21 | 照合(reconcile)は、設計中のPRの閉鎖を見ない(#146)。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-22"></a>R-DES-22 | 実装の不足の報告(`gap_report`)には、整える前の文字列を保存する場所がある。実装のラウンドの記録(`implement_rounds.gap_report`)は、Claudeの出力をそのまま保存し、Consoleのラウンドの表示に出る。要件の不足の遷移の注記(`gap: ...`)と、その遷移の戻り値(`transitionResult`)にも、整えずに入る。整えるのは、設計や要件定義へ渡すときと、再実行が注記から読み出すときである。ここまでは要件の不足にもともとある扱いで、設計の不足のラウンドの記録にも同じ扱いが及ぶ。設計の不足の遷移の注記と戻り値は、整えてから入れる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-23"></a>R-DES-23 | 設計が読む対象リポジトリのコミットは、要件定義が読んだコミットと違いうる。既定ブランチが進むためである。読んだ先頭は`design_drafts.head_sha`に記録し、追えるようにしている。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-24"></a>R-DES-24 | 書き込み境界は、検出して止めるにとどまる。書き換えを元に戻す手段は別に要る。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
-| <a id="r-des-25"></a>R-DES-25 | ハッシュの検査には、次の限界がある。ルートのリンクの検査は、検査の時点で最後の要素がリンクのときだけ拒む。走査の途中の入れ替えと、親の要素のリンクは検出できない。`snapshotDocDir`は、窓の中の追加と削除を前後のハッシュの違いで検出する。ただし、検査とハッシュと本文の読み取りは別々にファイルを読むので、Claudeの終了の後も動き続けてdoc dirに書ける者による入れ替えは検出できない。どちらも、`--restricted`の境界の外に書ける者が前提である。設計のClaudeにはBashが無く、今の呼び出し元から到達する経路は見つかっていない。 | [ハッシュ](internals/requirements.md#ハッシュ) |
+| <a id="r-des-25"></a>R-DES-25 | ハッシュの検査には、次の限界がある。ルートのリンクの検査は、検査の時点で最後の要素がリンクのときだけ拒む。走査の途中の入れ替えと、親の要素のリンクは検出できない。`snapshotDocDir`は、窓の中の追加と削除を前後のハッシュの違いで検出する。ただし、検査とハッシュと本文の読み取りは別々にファイルを読むので、Claudeの終了の後も動き続けてdoc dirに書ける者による入れ替えは検出できない。どちらも、`--restricted`の境界の外に書ける者が前提である。設計のClaudeにはBashが無く、今の呼び出し元から到達する経路は見つかっていない。 | [ハッシュ](internals/requirements.md#ハッシュ)、[設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-26"></a>R-DES-26 | 要件定義の下書きの列の欠落(PostgreSQLのコード42703)の判定は、PostgreSQLの文言とコードに依る。`message`と`body`の`\"`を`"`に戻して照合する。本番の`wmill.datatable()`が返す形を、実機で確かめていない。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-27"></a>R-DES-27 | 実行が強制終了されたとき、`design-<N>`のworktreeと図の複製は、次の日次の掃除まで残りうる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-28"></a>R-DES-28 | 日次の掃除が稼働中かを判定してから削除するまでの間に、別の実行が同じ`design-<N>`を使い始める競合が残る。判定と削除が別の操作だからである。要件定義と実装のworktreeも、掃除が使用中かを判定してから消す([実装](internals/implement.md)の「ロックファイルの掃除」)ので、同じ前提が設計のworktreeにも当てはまる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
@@ -585,7 +586,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-des-37"></a>R-DES-37 | 判断の反映が3回の起動し直しの後に止まった作業項目を再実行すると、承認の副作用は実行されない。止まった理由は`approval decision could not be applied after 3 restarts of the handler`である。要件定義の承認では、Issueへのコメントと要件定義のworktreeの片付けが対象である。反映の処理が失敗し続けた作業項目なので、人がConsoleで状態と承認の記録を確かめてから再実行する。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-38"></a>R-DES-38 | 設計の却下の反映でIssueが消えた、または移された場合は、Issueを読めない。変わっていないものとして設計を再生成するので、要件定義へ戻る出口に入れず、`max_design_attempts`の回数まで再生成が繰り返される。上限で人の対応待ちになり、通知が知らせる。却下は人の意思で、読めないことを理由に止めても再実行は同じ状態に戻るだけで出口にならない。承認の断りの案内が、この挙動を先に伝える。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-39"></a>R-DES-39 | 恒久的に失敗する決定済みの依頼は、処理先を3回起動し直した後に人の対応待ちにする。それ以降は走査の対象から外れ、3回の起動し直しの失敗が`job_failures`に残る。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
-| <a id="r-des-40"></a>R-DES-40 | `design_enabled`を偽から真にする時点で止まっている作業項目(承認済み、実装中、自動で再開する理由を持つ人の対応待ち)は、有効にしても自動では再開されず、人が再実行すると設計から始まる。運用の手順は、有効にする前の件数を数え、0にすることである。0にできない分は、再実行が設計へ回ることを受け入れる。開ける前にPRを出していた作業項目で`design_gap`が出ると、設計へ差し戻される。差し戻しは、上限と人の承認で抑えられるため、受け入れる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
+| <a id="r-des-40"></a>R-DES-40 | `design_enabled`を偽から真にする時点で止まっている作業項目(承認済み、実装中、自動で再開する理由を持つ人の対応待ち)は、有効にしても自動では再開されず、人が再実行すると設計から始まる。運用の手順は、有効にする前の件数を数え、0にすることである。0にできない分は、再実行が設計へ回ることを受け入れる。開ける前にPRを出していた作業項目で`design_gap`が出ると、設計へ差し戻される。差し戻しは、上限と人の承認で抑えられるため、受け入れる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策)、[有効にする前に確かめること](operations.md#有効にする前に確かめること) |
 | <a id="r-des-41"></a>R-DES-41 | `design_enabled`を真から偽に戻しても、設計中と設計の承認待ちの作業項目は止まらず、`design_apply`も動く。承認の反映は`design_enabled`の値を見ず、設計書を渡さずに実装へ進む。関門は設計が無効のときの扱い(`skip`)になるためである。却下の反映は、設計を作り直す分岐でだけ値を見る。偽なら設計フローを起動せず、人の対応待ちで止める。閉じた入口を、`design_apply`が迂回しないためである。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-42"></a>R-DES-42 | 要件定義の下書きができた後に止まった作業項目は、理由が使われ済みなので、再実行は理由を渡さない。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
 | <a id="r-des-43"></a>R-DES-43 | `design_enabled`が真偽値でないときと、`max_design_attempts`が範囲外のときは、設定を読む処理が例外のままである。設定を読む処理は`self_update`で`try`の外にあるので、自己更新と検知が止まる。設定の書き損じが、そのまま全体の停止になる。 | [設計書の生成の安全策](internals/design.md#設計書の生成の安全策) |
@@ -599,7 +600,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | --- | --- | --- |
 | <a id="r-hold-01"></a>R-HOLD-01 | Windmillのscriptはすべて同じdatatableの接続を持つ。検出をすり抜けるコードは、表を読み書きできる。保留は止めるためだけに使い、外れても元の保護が残るので、受け入れる。接続の`role`で分離できる可能性は、確かめるまで、できないとは断定しない。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-02"></a>R-HOLD-02 | 検出の範囲は、`f/`のすべてのファイル(`.lock`を含む)と、`migrations/datatable/main/`の表を作る2本以外である。`.ts`は変換後のコードを、ほかの形式(SQL、シェル、Python、YAML)は生のテキストを読む。`scripts/`やローカルのフックなど、ほかの場所は見ない。 | [保留](internals/holds.md#保留) |
-| <a id="r-hold-03"></a>R-HOLD-03 | 許可した読み取りの関数(`listActiveHolds`)は、呼び出し側から接続を受け取る。呼び出し側が`strings`を書き換えた接続を渡す迂回は、止めない。 | [保留](internals/holds.md#保留) |
+| <a id="r-hold-03"></a>R-HOLD-03 | 許可した読み取りの関数(`listActiveHolds`)は、呼び出し側から接続を受け取る。呼び出し側が`strings`を書き換えた接続を渡す迂回は、止めない。 | [保留](internals/holds.md#保留)、[参照の禁止](internals/holds.md#参照の禁止) |
 | <a id="r-hold-04"></a>R-HOLD-04 | 英文のログ(`could not update holds`など)は当たらない。`factory.holds`を含む文字列は、英文でも、SQLコメントや`COMMENT ON`、`.script.yaml`の`description`でも当たる。見逃しを減らすため、誤検知を許している。誤検知の規則を直すには、保護パスの変更としてPRを出す。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-05"></a>R-HOLD-05 | 見つけられない入力の例は次のとおりである。文字列の連結や`${}`で名前を組み立てるコード、名前をJavaScriptの文字列のエスケープで書くコード、保留のモジュールの名前を組み立てるimportがある。migrationの動的SQL(`EXECUTE format(...)`、文字列の連結、カタログを引くループ)では、スキーマ無しの`holds`の規則も塞げない。`PGOPTIONS=-csearch_path=factory`や`set_config('search_'\|\|'path', ...)`のように、語を分ける形もある。これらは例であり、すべてではない。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-06"></a>R-HOLD-06 | `scripts/test-db.sh`は守らない。日常的に直すファイルなので、守ると正当な変更を止める。実DBの検査を呼ぶ位置の検査は、`exit 0`を足すか、呼び出しを`if false; then ... fi`で囲むと、迂回できる。迂回しても、制約名まで照合する`scripts/test-db-holds.ts`と、CIの`test-db`ジョブが別の層で守るので、受け入れる。 | [保留](internals/holds.md#保留) |
@@ -615,7 +616,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-hold-16"></a>R-HOLD-16 | 画面の時計とDBの`now()`のずれで、期限の境界に数秒の誤差が出る。解除はidで行い、idは再利用されないので、別の保留を解除することはない。idは、migrationをdownしてからupすると振り直されるが、運用では行わない。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-17"></a>R-HOLD-17 | 偽造した保留の影響は、対象の進みが遅れることに限られる。許可に使わない限り、保留が権限を増やすことはない。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-18"></a>R-HOLD-18 | 保留を読めないとき、dependabotの自動マージは止まる。DBが落ちている間は、取得が待ち、終了のステップが作業項目を人の対応待ちで終える。止めた作業項目は再開しないので、人がPRを確認して手でマージする。安全側に倒す方針なので、受け入れる。 | [保留](internals/holds.md#保留) |
-| <a id="r-hold-19"></a>R-HOLD-19 | 保留を読んでからマージを要求するまでの数秒は、保留が置かれても止まらない。保留は止めるだけの補助で、元の保護(レビューとゲート)が残るので、受け入れる。 | [保留](internals/holds.md#保留) |
+| <a id="r-hold-19"></a>R-HOLD-19 | 保留を読んでからマージを要求するまでの数秒は、保留が置かれても止まらない。保留は止めるだけの補助で、元の保護(レビューとゲート)が残るので、受け入れる。 | [保留](internals/holds.md#保留)、[dependabotの自動マージ](internals/holds.md#dependabotの自動マージ) |
 | <a id="r-hold-20"></a>R-HOLD-20 | ローカルのセッションの`gh pr merge`などは`merge-guard.ts`が止めるが、人の端末、GitHubのWeb UI、他の人のマージ、クラウドのセッションのGitHubのMCP、保留を置く前から有効だった自動マージ、追わない形のマージは止まらない。端末は人が意図して実行する経路で、止めると復旧の手段を失うため、受け入れる。ほかは、保留は止めるだけの補助で、元の保護(レビューとゲート)が残るため、受け入れる。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-21"></a>R-HOLD-21 | `gh pr comment`は対象外にしている。コメントで`@dependabot merge`のようなコマンドを送れるが、保留が有効な間にそれがマージを起こすかは、確かめていない。Factoryのdependabotの自動マージは、保留が別に止める。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-22"></a>R-HOLD-22 | フックが保留を読んでからマージを要求するまでの間は、保留が置かれても止まらない。人の承認を待つ間は、分単位に延びうる。待つ間にマージが要る作業は、保留を置いた主体と調整するため、受け入れる。 | [保留](internals/holds.md#保留) |
@@ -626,7 +627,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-hold-27"></a>R-HOLD-27 | `.claude/settings.local.json`の`disableAllHooks`は、`merge-guard`を含むすべてのフックを止める。ファイルはgitignore済みで、置くのは人である。範囲外の既存の穴として受け入れる。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-28"></a>R-HOLD-28 | ホストの実行役(`scripts/host_apply/`)の反映は、`merge-guard`が覆わない。実行役は承認の門を別に持つため、受け入れる。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-29"></a>R-HOLD-29 | `merge-guard`の読みは、`mise exec`で包んだ子プロセスを使う。子の環境で自動インストールを止めるので、ネットワークには出ない。`mise`のツールが入っていなければ、読めないものとして拒否される。 | [保留](internals/holds.md#保留) |
-| <a id="r-hold-30"></a>R-HOLD-30 | 保留の操作と、凍結のCLIでの端末の確認を通る書き込みを止める`hold-guard.ts`の拒否は、語の字面で判定するので、実行時に組んだ名前、別名、変数で組んだパス、前置きの無いシェルやインタプリタが受け取るコード、保留のコードを書き換えてから起動する形などは止めず、受け入れる誤検知も残る。`find`の後ろの`node`、`tsx`、`ts-node`、`deno`は最初のオペランドをファイルとして実行するので、探索先に検査の道具と同じ名前のファイルがあると、それが実行され、この形も新しいファイルを書いて実行する形として受け入れる。フックの時点では、名前からしか実体を判定できないので、`sh`の実体がzshに設定された環境、`ksh`がmkshやpdkshの環境、Linuxの実体では、判定が食い違いうる。止めるのは、誤操作と、拒否を知らない呼び出しで、境界ではない。保留は、BashとDockerを持つ主体がpsqlで直接書ける。 | [保留](internals/holds.md#保留) |
+| <a id="r-hold-30"></a>R-HOLD-30 | 保留の操作と、凍結のCLIでの端末の確認を通る書き込みを止める`hold-guard.ts`の拒否は、語の字面で判定するので、実行時に組んだ名前、別名、変数で組んだパス、前置きの無いシェルやインタプリタが受け取るコード、保留のコードを書き換えてから起動する形などは止めず、受け入れる誤検知も残る。`find`の後ろの`node`、`tsx`、`ts-node`、`deno`は最初のオペランドをファイルとして実行するので、探索先に検査の道具と同じ名前のファイルがあると、それが実行され、この形も新しいファイルを書いて実行する形として受け入れる。フックの時点では、名前からしか実体を判定できないので、`sh`の実体がzshに設定された環境、`ksh`がmkshやpdkshの環境、Linuxの実体では、判定が食い違いうる。止めるのは、誤操作と、拒否を知らない呼び出しで、境界ではない。保留は、BashとDockerを持つ主体がpsqlで直接書ける。 | [保留](internals/holds.md#保留)、[主セッションの免除](internals/holds.md#主セッションの免除) |
 | <a id="r-hold-31"></a>R-HOLD-31 | 保留の`reason`と`holder`は、psqlのプロセスの引数に現れ、一覧に表示される。秘密を書かない前提である。一覧は、`target`、`reason`、`holder`の制御文字を空白にして表示する。 | [保留](internals/holds.md#保留) |
 | <a id="r-hold-32"></a>R-HOLD-32 | 保留で待つPRが増えても取得の通知は周回ごとに種類ごとの1件に保つが、監視の対象から外れたリポジトリの通知は、読まないので解決しない。保留は1行が最長24時間なので、受け入れる。 | [保留](internals/holds.md#保留) |
 
@@ -693,15 +694,15 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-fix-06"></a>R-FIX-06 | 生のログの先頭と末尾を残す境目では、秘密値が分断される。分断された後半は接頭辞を持たないので、伏せられず、gitleaksにも検出されない可能性がある。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
 | <a id="r-fix-07"></a>R-FIX-07 | base64などで符号化された秘密値と、複数の行に分割された秘密値は、gitleaksと`maskSecrets`で検出できない可能性がある。Actionsが自動で伏せる範囲に頼る部分が残る。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
 | <a id="r-fix-08"></a>R-FIX-08 | 抑制の記述の検出は文字列の照合なので、別の書き方で検査を無効にする変更は検出できない。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-09"></a>R-FIX-09 | CI回のテストの期待値の書き換えは機械では判定できず、再レビューに頼る。PRが足した行の書き換え、同じhunkの中で別の行へ置き換える変更、何もしない行(`void 0;`、`;`、`if (false) ...`など)への置き換えも検出できない。再レビューは、PR全体の差分を読み、CI回のcommit単体の差分(書き換え前後の行)は入力に無い。書き換えは、最終の形が新しいコードとして読まれ、気づかれない可能性が残る。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
+| <a id="r-fix-09"></a>R-FIX-09 | CI回のテストの期待値の書き換えは機械では判定できず、再レビューに頼る。PRが足した行の書き換え、同じhunkの中で別の行へ置き換える変更、何もしない行(`void 0;`、`;`、`if (false) ...`など)への置き換えも検出できない。再レビューは、PR全体の差分を読み、CI回のcommit単体の差分(書き換え前後の行)は入力に無い。書き換えは、最終の形が新しいコードとして読まれ、気づかれない可能性が残る。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い)、[既知の限界](internals/ci-fix.md#既知の限界) |
 | <a id="r-fix-10"></a>R-FIX-10 | 空白を無視した差分で行の位置がずれることについて、次の2点を受け入れている。隣り合う同じ内容の行は、どちらがPRの追加かを決められず、基点の行がPRの追加に見えることがある。字下げだけが違う複製の行は、同じ行と見なされる。字下げに意味がある言語のテストでは、基点の行がすり替わりうる。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-11"></a>R-FIX-11 | どのファイルへでも、PRが移した行はPRの追加に見える。基点のテストの行を消して別のファイル(新しいファイルを含む)へ移したPRでは、移した行を1行ずつ書き換える変更が通る。名前の変更も検出しない。行を削る変更は、意味のある追加行より多く減らせないので通らない。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-12"></a>R-FIX-12 | CIのログは、`gh`が署名付きURLへの302を内部でたどって取得する。認証情報が別のホストへ渡らないことは、`gh`の挙動に頼る。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
+| <a id="r-fix-11"></a>R-FIX-11 | どのファイルへでも、PRが移した行はPRの追加に見える。基点のテストの行を消して別のファイル(新しいファイルを含む)へ移したPRでは、移した行を1行ずつ書き換える変更が通る。名前の変更も検出しない。行を削る変更は、意味のある追加行より多く減らせないので通らない。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い)、[既知の限界](internals/ci-fix.md#既知の限界) |
+| <a id="r-fix-12"></a>R-FIX-12 | CIのログは、`gh`が署名付きURLへの302を内部でたどって取得する。認証情報が別のホストへ渡らないことは、`gh`の挙動に頼る。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い)、[ログの取得](internals/ci-fix.md#ログの取得)、[既知の限界](internals/ci-fix.md#既知の限界) |
 | <a id="r-fix-13"></a>R-FIX-13 | 拒否した安全装置が直接importするモジュールのうち、`db`、`discord`、`poll_support`、`implement_*`などの共有モジュールは、拒否せずに受け入れている。CI回のClaudeが、PRがすでに変更していればこれらを書き換えられる。受け入れた一覧と理由は、テストが固定する。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
 | <a id="r-fix-14"></a>R-FIX-14 | 受け入れた共有モジュールに`approver.ts`がある。31行で安定しており、承認の`approval_decide`が以前から同じ依存を持つ。CI回が変えても影響は操作者の名前に限られ、Consoleの解除は導けないときに拒否する。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
 | <a id="r-fix-15"></a>R-FIX-15 | ルートの`AGENTS.md`、`CLAUDE.md`、`AGENTS.wmill.md`、`.gitignore`と、安全装置以外の`*.script.yaml`は、拒否の一覧に無い。PRがすでに変更していれば、CI回のClaudeが書き換えられる。影響は、マージの後か、人の対話セッションで読まれたときに現れる。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
 | <a id="r-fix-16"></a>R-FIX-16 | `github.ts`は、CI回のClaudeが変更できない。Factory自身の修正PRのCIが`github.ts`の不具合で落ちても、CI回は直せずに人へ渡す。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
-| <a id="r-fix-27"></a>R-FIX-27 | テストの行がPRの足した行かを行の位置で判定するとき、整形で1行が複数行に分かれると、分かれた行がPRの追加になる。この扱いは受け入れている。CIの自動修正の回の、削除された行の数え方も同じである。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い) |
+| <a id="r-fix-27"></a>R-FIX-27 | テストの行がPRの足した行かを行の位置で判定するとき、整形で1行が複数行に分かれると、分かれた行がPRの追加になる。この扱いは受け入れている。CIの自動修正の回の、削除された行の数え方も同じである。 | [CIのログの扱い](internals/pr-workflow.md#ciのログの扱い)、[検証のステップ](internals/ci-fix.md#検証のステップ) |
 
 ### マージの競合を解く回(PR修正の安全策)の残るリスク
 
@@ -744,7 +745,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | --- | --- | --- |
 | <a id="r-dep-01"></a>R-DEP-01 | 上流が侵害された版でも、公開の日数、関門、影響調査をすべて通ればマージされる。公開の日数の待ち、registryとの整合性の照合、影響調査が、その機会を減らす。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
 | <a id="r-dep-02"></a>R-DEP-02 | 影響調査の判断は誤りうる。マージの後の動作を最後に確かめるのは、必須チェックである。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
-| <a id="r-dep-03"></a>R-DEP-03 | 一覧は、ページの上限(10ページ、1000件)を超えると失敗する。公開の明示リポジトリで第三者が1000件を超えるPRを開くと、一覧が失敗し続け、そのリポジトリのdependabotのPRを処理できない。一覧を読むのは、収集が止まっているか、そのリポジトリの記録を使えない間と、収集が集めないリポジトリ(`owners`に無い所有者の`factory_repo`、fork、先頭が`.`のリポジトリ名など)である。収集が集めないリポジトリでは、収集が動いていても当たる。失敗は`failed`に数え、失敗の記録として残る。 | [候補の元を確かめる](operations.md#候補の元を確かめる) |
+| <a id="r-dep-03"></a>R-DEP-03 | 一覧は、ページの上限(10ページ、1000件)を超えると失敗する。公開の明示リポジトリで第三者が1000件を超えるPRを開くと、一覧が失敗し続け、そのリポジトリのdependabotのPRを処理できない。一覧を読むのは、収集が止まっているか、そのリポジトリの記録を使えない間と、収集が集めないリポジトリ(`owners`に無い所有者の`factory_repo`、fork、先頭が`.`のリポジトリ名など)である。収集が集めないリポジトリでは、収集が動いていても当たる。失敗は`failed`に数え、失敗の記録として残る。 | [候補の元を確かめる](operations.md#候補の元を確かめる)、[dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
 | <a id="r-dep-04"></a>R-DEP-04 | セキュリティ更新と版の更新を区別しない。どちらも同じ関門を通る。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
 | <a id="r-dep-05"></a>R-DEP-05 | `node_modules`の下の`CLAUDE.md`と`AGENTS.md`は、単独の実験では読み込まれなかった。ただし、Claudeのバージョンが変わると結果が変わりうるので、更新のたびに同じ実験をやり直す。依存が同梱する指示のファイルが読み込まれれば、影響調査の判断に指示を注入される窓が開く。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
 | <a id="r-dep-06"></a>R-DEP-06 | `main`が頻繁に動くと、マージの直前の確認で取り消しが続き、3回で人に回る。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
