@@ -604,7 +604,7 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 `console/`の変更は、`main`にマージされて`console-dist.yml`が成功すれば、数分で`console_fetcher`が取り込んで反映する。
 `self_update`は関与しない。
 `console-dist.yml`は、draw.ioのビューアを外部から取得する。
-取得に失敗したときの対応は、[Consoleの配信の仕様](../internals/console.md)の「ビューアの取得」にある。
+取得に失敗したときの対応は、[Consoleの配信の仕様の「ビューアの取得」](../internals/console/delivery.md#ビューアの取得)にある。
 `infra/console_fetcher/`の変更は、ほかの`infra/`と同じく次の`mise run up`で反映される。
 取得元や検証を変える変更は、マージ後に`mise run up`でfetcherのイメージを作り直すまで反映されない。
 それまでは、古いイメージが新しい取得元の成果物を見つけられず、`artifact_missing`になる。

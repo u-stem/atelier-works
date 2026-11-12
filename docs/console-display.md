@@ -146,7 +146,7 @@ Consoleの画面を変える変更では、親がtask reviewerと`/code-review`�
    手順は[ブランチ版のConsoleを確かめる](setup.md#ブランチ版のconsoleを確かめる)にある。
 2. 1を行えないときは、開発サーバーと`/api`の差し替えで開く。
    行えないのは、ローカルのWindmillを起動できないときである。
-   手順は[Consoleの仕様](internals/console/system.md#描画の確認)にある。
+   手順は[Consoleのシステムの画面の仕様](internals/console/system.md#描画の確認)にある。
 3. どちらも行えなかったときだけ、PR本文に「未実施」と書く。
 
 開いたら、次の順に確かめる。

@@ -653,7 +653,7 @@ viewには、backendが受ける最大の2000件を指定する。
 本文からはIssueかPRかを区別できない。
 GitHubは`/issues/<番号>`をPRなら`/pull/<番号>`へ転送するので、常にIssueの形のURLを作る。
 起きたことと次の操作は、`src/lib/noticeGuide.ts`が種類ごとに持つ。
-内容は[運用](../../operations.md)の通知の表に合わせる。
+内容は[運用](../../operations.md#通知の種類)の通知の表に合わせる。
 表に無い種類は、本文を確かめるよう案内する。
 ホスト側の作業が必要な通知(`host_action_required`)には、ホストのcheckoutで順に実行するコマンドを出す。
 コマンドは、`git pull`、`mise install`、`mise run up`である。

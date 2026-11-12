@@ -1,8 +1,9 @@
 # Consoleの仕様
 
-Consoleのアプリ(`console/`)の構成と、成果物を配信する仕組みを書く。
-アプリの構成は、画面とAPI層を変更する人が読む。
-配信の仕組みは、`console_fetcher`とCaddyを変更する人が読む。
+Consoleのアプリ(`console/`)の構成と、画面をまたぐ仕様を書く。
+画面と部品を変更する人が読む。
+API層、画面ごとの仕様、成果物を配信する仕組みは、`docs/internals/console/`の各文書にある。
+置き場は、末尾の[仕様の置き場](#仕様の置き場)の表から引ける。
 何を守るかと残るリスクは、[セキュリティ](../security.md)の「Consoleの配信」にある。
 画面に何を表示するかの原則は、[Consoleの画面の表示の原則](../console-display.md)にある。
 
@@ -463,7 +464,7 @@ routerの基準は`/console`で、Caddyが`/console/`の下のパスに`index.ht
 旧Console(Windmillのraw app)は廃止した。
 過去のDiscordの通知、Issueのコメント、PRの本文には、旧Consoleのリンクが残る。
 旧ConsoleのURLを開くと、Caddyが固定の`/console/`へ302で飛ばす。
-規則は「配信の経路」にある。
+規則は[Consoleの配信の仕様の「配信の経路」](console/delivery.md#配信の経路)にある。
 URLのフラグメントはブラウザが保つので、新しいConsoleが読み替える。
 `main.tsx`が、routerを作る前に`history.replaceState`で置き換える。
 routerが先に`/console/`の画面を描くと、その画面が一瞬動いてしまうためである。
@@ -1383,3 +1384,151 @@ URLにワークスペースの指定(`?workspace=`)を付けない。
    取得するデータを持たない画面は渡さない。
 6. 足した表示を、[Consoleの画面の表示の原則](../console-display.md)に照らして確かめる。
    確認の方法は、同じ文書の[毎日見る目での確認](../console-display.md#毎日見る目での確認)にある。
+
+## 仕様の置き場
+
+API層、画面ごとの仕様、成果物を配信する仕組みは、`docs/internals/console/`の次の文書にある。
+
+| 文書 | 仕様 |
+| --- | --- |
+| [ConsoleのAPI層の仕様](console/api.md) | API層、ログイン切れの扱い、Windmillに届かないとき |
+| [Consoleの要対応の画面の仕様](console/attention.md) | 要対応の画面(承認、失敗と再実行、通知) |
+| [Consoleの文書の画面の仕様](console/documents.md) | 要件定義書、設計書、レポートの画面 |
+| [Consoleのシステムの画面の仕様](console/system.md) | システムの画面(反映の状態、保留と凍結、通知の履歴、設定) |
+| [Consoleの作業項目と投入の画面の仕様](console/work-items.md) | 分析、作業項目、作業項目の詳細、新規投入、PRレビューの投入の画面 |
+| [Consoleのジョブの画面の仕様](console/jobs.md) | ジョブの画面と、ジョブの詳細の画面 |
+| [Consoleの図の画面の仕様](console/graphs.md) | flowの図と起動の図の画面 |
+| [Consoleの配信の仕様](console/delivery.md) | 配信の構成、取り込みの検証、CIの組み立て、配信の経路、開いたままのタブの版の確認、ブラウザ側のヘッダー、draw.ioの図、他のサイトからのAPIの呼び出し、古い版の掃除 |
+| [Consoleの安全策の内部仕様](console/security.md) | Console用workerの操作ごとの守り、draw.ioの図の描画、要件定義書のリンク、更新履歴のPR |
+
+次の表は、節の名前から置き場を引くためのものである。
+
+| 節 | 置き場 |
+| --- | --- |
+| <a id="api層"></a>API層 | [ConsoleのAPI層の仕様の「API層」](console/api.md#api層) |
+| <a id="実測した応答"></a>実測した応答 | [ConsoleのAPI層の仕様の「実測した応答」](console/api.md#実測した応答) |
+| <a id="応答の型ガード"></a>応答の型ガード | [ConsoleのAPI層の仕様の「応答の型ガード」](console/api.md#応答の型ガード) |
+| <a id="取得の方針"></a>取得の方針(API層) | [ConsoleのAPI層の仕様の「取得の方針(API層)」](console/api.md#取得の方針) |
+| <a id="書き込み"></a>書き込み(API層) | [ConsoleのAPI層の仕様の「書き込み(API層)」](console/api.md#書き込み) |
+| <a id="ジョブschedule設定の読み取り"></a>ジョブ、schedule、設定の読み取り | [ConsoleのAPI層の仕様の「ジョブ、schedule、設定の読み取り」](console/api.md#ジョブschedule設定の読み取り) |
+| <a id="取得の負荷"></a>取得の負荷 | [ConsoleのAPI層の仕様の「取得の負荷」](console/api.md#取得の負荷) |
+| <a id="workerの生死の取得"></a>workerの生死の取得 | [ConsoleのAPI層の仕様の「workerの生死の取得」](console/api.md#workerの生死の取得) |
+| <a id="ログイン切れの扱い"></a>ログイン切れの扱い | [ConsoleのAPI層の仕様の「ログイン切れの扱い」](console/api.md#ログイン切れの扱い) |
+| <a id="windmillに届かないとき"></a>Windmillに届かないとき | [ConsoleのAPI層の仕様の「Windmillに届かないとき」](console/api.md#windmillに届かないとき) |
+| <a id="要対応の画面"></a>要対応の画面 | [Consoleの要対応の画面の仕様の「要対応の画面」](console/attention.md#要対応の画面) |
+| <a id="失敗と再実行"></a>失敗と再実行 | [Consoleの要対応の画面の仕様の「失敗と再実行」](console/attention.md#失敗と再実行) |
+| <a id="取り込み時点のissue"></a>取り込み時点のIssue | [Consoleの要対応の画面の仕様の「取り込み時点のIssue」](console/attention.md#取り込み時点のissue) |
+| <a id="承認画面の本文のプレビュー"></a>承認画面の本文のプレビュー | [Consoleの要対応の画面の仕様の「承認画面の本文のプレビュー」](console/attention.md#承認画面の本文のプレビュー) |
+| <a id="承認バー"></a>承認バー | [Consoleの要対応の画面の仕様の「承認バー」](console/attention.md#承認バー) |
+| <a id="承認と却下の呼び出し"></a>承認と却下の呼び出し | [Consoleの要対応の画面の仕様の「承認と却下の呼び出し」](console/attention.md#承認と却下の呼び出し) |
+| <a id="issue作成のやり直し"></a>Issue作成のやり直し | [Consoleの要対応の画面の仕様の「Issue作成のやり直し」](console/attention.md#issue作成のやり直し) |
+| <a id="断りの表示"></a>断りの表示 | [Consoleの要対応の画面の仕様の「断りの表示」](console/attention.md#断りの表示) |
+| <a id="要件定義の承認の前提"></a>要件定義の承認の前提 | [Consoleの要対応の画面の仕様の「要件定義の承認の前提」](console/attention.md#要件定義の承認の前提) |
+| <a id="設計書の取得"></a>設計書の取得 | [Consoleの要対応の画面の仕様の「設計書の取得」](console/attention.md#設計書の取得) |
+| <a id="設計の承認"></a>設計の承認 | [Consoleの要対応の画面の仕様の「設計の承認」](console/attention.md#設計の承認) |
+| <a id="issue提案の本文"></a>Issue提案の本文 | [Consoleの要対応の画面の仕様の「Issue提案の本文」](console/attention.md#issue提案の本文) |
+| <a id="一覧に出ない項目と空の状態"></a>一覧に出ない項目と空の状態 | [Consoleの要対応の画面の仕様の「一覧に出ない項目と空の状態」](console/attention.md#一覧に出ない項目と空の状態) |
+| <a id="通知"></a>通知 | [Consoleの要対応の画面の仕様の「通知」](console/attention.md#通知) |
+| <a id="要件定義書の画面"></a>要件定義書の画面 | [Consoleの文書の画面の仕様の「要件定義書の画面」](console/documents.md#要件定義書の画面) |
+| <a id="試行の切り替え"></a>試行の切り替え | [Consoleの文書の画面の仕様の「試行の切り替え」](console/documents.md#試行の切り替え) |
+| <a id="本文の描画"></a>本文の描画(要件定義書の画面) | [Consoleの文書の画面の仕様の「本文の描画(要件定義書の画面)」](console/documents.md#本文の描画) |
+| <a id="表示の形式"></a>表示の形式 | [Consoleの文書の画面の仕様の「表示の形式」](console/documents.md#表示の形式) |
+| <a id="図"></a>図 | [Consoleの文書の画面の仕様の「図」](console/documents.md#図) |
+| <a id="設計書の画面"></a>設計書の画面 | [Consoleの文書の画面の仕様の「設計書の画面」](console/documents.md#設計書の画面) |
+| <a id="設計書の特定"></a>設計書の特定 | [Consoleの文書の画面の仕様の「設計書の特定」](console/documents.md#設計書の特定) |
+| <a id="取得"></a>取得 | [Consoleの文書の画面の仕様の「取得」](console/documents.md#取得) |
+| <a id="本文の描画-1"></a>本文の描画(設計書の画面) | [Consoleの文書の画面の仕様の「本文の描画(設計書の画面)」](console/documents.md#本文の描画設計書の画面) |
+| <a id="固定の注記"></a>固定の注記 | [Consoleの文書の画面の仕様の「固定の注記」](console/documents.md#固定の注記) |
+| <a id="レポートの画面"></a>レポートの画面 | [Consoleの文書の画面の仕様の「レポートの画面」](console/documents.md#レポートの画面) |
+| <a id="手動の起動"></a>手動の起動 | [Consoleの文書の画面の仕様の「手動の起動」](console/documents.md#手動の起動) |
+| <a id="システムの画面"></a>システムの画面 | [Consoleのシステムの画面の仕様の「システムの画面」](console/system.md#システムの画面) |
+| <a id="要約の帯"></a>要約の帯 | [Consoleのシステムの画面の仕様の「要約の帯」](console/system.md#要約の帯) |
+| <a id="タブの構成"></a>タブの構成 | [Consoleのシステムの画面の仕様の「タブの構成」](console/system.md#タブの構成) |
+| <a id="失敗が隠れないための条件"></a>失敗が隠れないための条件 | [Consoleのシステムの画面の仕様の「失敗が隠れないための条件」](console/system.md#失敗が隠れないための条件) |
+| <a id="保留と凍結"></a>保留と凍結 | [Consoleのシステムの画面の仕様の「保留と凍結」](console/system.md#保留と凍結) |
+| <a id="区画への移動"></a>区画への移動 | [Consoleのシステムの画面の仕様の「区画への移動」](console/system.md#区画への移動) |
+| <a id="反映の状態"></a>反映の状態 | [Consoleのシステムの画面の仕様の「反映の状態」](console/system.md#反映の状態) |
+| <a id="更新履歴"></a>更新履歴 | [Consoleのシステムの画面の仕様の「更新履歴」](console/system.md#更新履歴) |
+| <a id="workerの負荷"></a>workerの負荷 | [Consoleのシステムの画面の仕様の「workerの負荷」](console/system.md#workerの負荷) |
+| <a id="情報の通知"></a>情報の通知 | [Consoleのシステムの画面の仕様の「情報の通知」](console/system.md#情報の通知) |
+| <a id="解決済みの通知"></a>解決済みの通知 | [Consoleのシステムの画面の仕様の「解決済みの通知」](console/system.md#解決済みの通知) |
+| <a id="監査の失敗"></a>監査の失敗 | [Consoleのシステムの画面の仕様の「監査の失敗」](console/system.md#監査の失敗) |
+| <a id="作業項目に紐づかない失敗"></a>作業項目に紐づかない失敗 | [Consoleのシステムの画面の仕様の「作業項目に紐づかない失敗」](console/system.md#作業項目に紐づかない失敗) |
+| <a id="設定"></a>設定 | [Consoleのシステムの画面の仕様の「設定」](console/system.md#設定) |
+| <a id="分析の画面"></a>分析の画面 | [Consoleの作業項目と投入の画面の仕様の「分析の画面」](console/work-items.md#分析の画面) |
+| <a id="作業項目の画面"></a>作業項目の画面 | [Consoleの作業項目と投入の画面の仕様の「作業項目の画面」](console/work-items.md#作業項目の画面) |
+| <a id="タブ-1"></a>タブ(作業項目の画面) | [Consoleの作業項目と投入の画面の仕様の「タブ(作業項目の画面)」](console/work-items.md#タブ) |
+| <a id="進捗"></a>進捗 | [Consoleの作業項目と投入の画面の仕様の「進捗」](console/work-items.md#進捗) |
+| <a id="表示する範囲"></a>表示する範囲 | [Consoleの作業項目と投入の画面の仕様の「表示する範囲」](console/work-items.md#表示する範囲) |
+| <a id="作業項目の詳細の画面"></a>作業項目の詳細の画面 | [Consoleの作業項目と投入の画面の仕様の「作業項目の詳細の画面」](console/work-items.md#作業項目の詳細の画面) |
+| <a id="タブ-2"></a>タブ(作業項目の詳細の画面) | [Consoleの作業項目と投入の画面の仕様の「タブ(作業項目の詳細の画面)」](console/work-items.md#タブ作業項目の詳細の画面) |
+| <a id="進行"></a>進行 | [Consoleの作業項目と投入の画面の仕様の「進行」](console/work-items.md#進行) |
+| <a id="ジョブのリンク"></a>ジョブのリンク | [Consoleの作業項目と投入の画面の仕様の「ジョブのリンク」](console/work-items.md#ジョブのリンク) |
+| <a id="表示の規則"></a>表示の規則 | [Consoleの作業項目と投入の画面の仕様の「表示の規則」](console/work-items.md#表示の規則) |
+| <a id="新規投入の画面"></a>新規投入の画面 | [Consoleの作業項目と投入の画面の仕様の「新規投入の画面」](console/work-items.md#新規投入の画面) |
+| <a id="進め方の選択"></a>進め方の選択 | [Consoleの作業項目と投入の画面の仕様の「進め方の選択」](console/work-items.md#進め方の選択) |
+| <a id="書き込み-1"></a>書き込み(新規投入の画面) | [Consoleの作業項目と投入の画面の仕様の「書き込み(新規投入の画面)」](console/work-items.md#書き込み) |
+| <a id="結果が分からないとき"></a>結果が分からないとき | [Consoleの作業項目と投入の画面の仕様の「結果が分からないとき」](console/work-items.md#結果が分からないとき) |
+| <a id="タブ全体の状態"></a>タブ全体の状態 | [Consoleの作業項目と投入の画面の仕様の「タブ全体の状態」](console/work-items.md#タブ全体の状態) |
+| <a id="prレビューの投入の画面"></a>PRレビューの投入の画面 | [Consoleの作業項目と投入の画面の仕様の「PRレビューの投入の画面」](console/work-items.md#prレビューの投入の画面) |
+| <a id="入力"></a>入力 | [Consoleの作業項目と投入の画面の仕様の「入力」](console/work-items.md#入力) |
+| <a id="書き込み-2"></a>書き込み(PRレビューの投入の画面) | [Consoleの作業項目と投入の画面の仕様の「書き込み(PRレビューの投入の画面)」](console/work-items.md#書き込みprレビューの投入の画面) |
+| <a id="同期の結果"></a>同期の結果 | [Consoleの作業項目と投入の画面の仕様の「同期の結果」](console/work-items.md#同期の結果) |
+| <a id="結果の読み方"></a>結果の読み方 | [Consoleの作業項目と投入の画面の仕様の「結果の読み方」](console/work-items.md#結果の読み方) |
+| <a id="断りの固定文"></a>断りの固定文 | [Consoleの作業項目と投入の画面の仕様の「断りの固定文」](console/work-items.md#断りの固定文) |
+| <a id="ジョブの画面"></a>ジョブの画面 | [Consoleのジョブの画面の仕様の「ジョブの画面」](console/jobs.md#ジョブの画面) |
+| <a id="取得の方針-1"></a>取得の方針(ジョブの画面) | [Consoleのジョブの画面の仕様の「取得の方針(ジョブの画面)」](console/jobs.md#取得の方針) |
+| <a id="実行中と待ち"></a>実行中と待ち | [Consoleのジョブの画面の仕様の「実行中と待ち」](console/jobs.md#実行中と待ち) |
+| <a id="今のステップ"></a>今のステップ | [Consoleのジョブの画面の仕様の「今のステップ」](console/jobs.md#今のステップ) |
+| <a id="履歴"></a>履歴 | [Consoleのジョブの画面の仕様の「履歴」](console/jobs.md#履歴) |
+| <a id="スケジュール"></a>スケジュール | [Consoleのジョブの画面の仕様の「スケジュール」](console/jobs.md#スケジュール) |
+| <a id="ジョブの詳細の画面"></a>ジョブの詳細の画面 | [Consoleのジョブの画面の仕様の「ジョブの詳細の画面」](console/jobs.md#ジョブの詳細の画面) |
+| <a id="出力の描画"></a>出力の描画 | [Consoleのジョブの画面の仕様の「出力の描画」](console/jobs.md#出力の描画) |
+| <a id="取得と更新"></a>取得と更新 | [Consoleのジョブの画面の仕様の「取得と更新」](console/jobs.md#取得と更新) |
+| <a id="ジョブの中止"></a>ジョブの中止 | [Consoleのジョブの画面の仕様の「ジョブの中止」](console/jobs.md#ジョブの中止) |
+| <a id="失敗した定期ジョブの再実行"></a>失敗した定期ジョブの再実行 | [Consoleのジョブの画面の仕様の「失敗した定期ジョブの再実行」](console/jobs.md#失敗した定期ジョブの再実行) |
+| <a id="画面に出ないジョブ"></a>画面に出ないジョブ | [Consoleのジョブの画面の仕様の「画面に出ないジョブ」](console/jobs.md#画面に出ないジョブ) |
+| <a id="戻り先とwindmillへのリンク"></a>戻り先とWindmillへのリンク | [Consoleのジョブの画面の仕様の「戻り先とWindmillへのリンク」](console/jobs.md#戻り先とwindmillへのリンク) |
+| <a id="flowの図の画面"></a>flowの図の画面 | [Consoleの図の画面の仕様の「flowの図の画面」](console/graphs.md#flowの図の画面) |
+| <a id="データ"></a>データ | [Consoleの図の画面の仕様の「データ」](console/graphs.md#データ) |
+| <a id="入口と出口"></a>入口と出口 | [Consoleの図の画面の仕様の「入口と出口」](console/graphs.md#入口と出口) |
+| <a id="差し戻し"></a>差し戻し | [Consoleの図の画面の仕様の「差し戻し」](console/graphs.md#差し戻し) |
+| <a id="pr経由の関係"></a>PR経由の関係 | [Consoleの図の画面の仕様の「PR経由の関係」](console/graphs.md#pr経由の関係) |
+| <a id="設定と上限で決まる辺"></a>設定と上限で決まる辺 | [Consoleの図の画面の仕様の「設定と上限で決まる辺」](console/graphs.md#設定と上限で決まる辺) |
+| <a id="配置"></a>配置(flowの図の画面) | [Consoleの図の画面の仕様の「配置(flowの図の画面)」](console/graphs.md#配置) |
+| <a id="実行の状態"></a>実行の状態 | [Consoleの図の画面の仕様の「実行の状態」](console/graphs.md#実行の状態) |
+| <a id="幅"></a>幅(flowの図の画面) | [Consoleの図の画面の仕様の「幅(flowの図の画面)」](console/graphs.md#幅) |
+| <a id="無害化"></a>無害化(flowの図の画面) | [Consoleの図の画面の仕様の「無害化(flowの図の画面)」](console/graphs.md#無害化) |
+| <a id="起動の図の画面"></a>起動の図の画面 | [Consoleの図の画面の仕様の「起動の図の画面」](console/graphs.md#起動の図の画面) |
+| <a id="図の組み立て"></a>図の組み立て | [Consoleの図の画面の仕様の「図の組み立て」](console/graphs.md#図の組み立て) |
+| <a id="起点の箱"></a>起点の箱 | [Consoleの図の画面の仕様の「起点の箱」](console/graphs.md#起点の箱) |
+| <a id="配置-1"></a>配置(起動の図の画面) | [Consoleの図の画面の仕様の「配置(起動の図の画面)」](console/graphs.md#配置起動の図の画面) |
+| <a id="開閉"></a>開閉 | [Consoleの図の画面の仕様の「開閉」](console/graphs.md#開閉) |
+| <a id="幅-1"></a>幅(起動の図の画面) | [Consoleの図の画面の仕様の「幅(起動の図の画面)」](console/graphs.md#幅起動の図の画面) |
+| <a id="キーボードと読み上げ"></a>キーボードと読み上げ | [Consoleの図の画面の仕様の「キーボードと読み上げ」](console/graphs.md#キーボードと読み上げ) |
+| <a id="無害化-1"></a>無害化(起動の図の画面) | [Consoleの図の画面の仕様の「無害化(起動の図の画面)」](console/graphs.md#無害化起動の図の画面) |
+| <a id="配信の構成"></a>配信の構成 | [Consoleの配信の仕様の「配信の構成」](console/delivery.md#配信の構成) |
+| <a id="console_fetcherのコンテナ"></a>console_fetcherのコンテナ | [Consoleの配信の仕様の「console_fetcherのコンテナ」](console/delivery.md#console_fetcherのコンテナ) |
+| <a id="取り込みの検証"></a>取り込みの検証 | [Consoleの配信の仕様の「取り込みの検証」](console/delivery.md#取り込みの検証) |
+| <a id="ciの組み立て"></a>CIの組み立て | [Consoleの配信の仕様の「CIの組み立て」](console/delivery.md#ciの組み立て) |
+| <a id="配信の経路"></a>配信の経路 | [Consoleの配信の仕様の「配信の経路」](console/delivery.md#配信の経路) |
+| <a id="開いたままのタブの版の確認"></a>開いたままのタブの版の確認 | [Consoleの配信の仕様の「開いたままのタブの版の確認」](console/delivery.md#開いたままのタブの版の確認) |
+| <a id="確認の時機"></a>確認の時機 | [Consoleの配信の仕様の「確認の時機」](console/delivery.md#確認の時機) |
+| <a id="自分の版の見分け方"></a>自分の版の見分け方 | [Consoleの配信の仕様の「自分の版の見分け方」](console/delivery.md#自分の版の見分け方) |
+| <a id="判定"></a>判定 | [Consoleの配信の仕様の「判定」](console/delivery.md#判定) |
+| <a id="ブラウザ側のヘッダー"></a>ブラウザ側のヘッダー | [Consoleの配信の仕様の「ブラウザ側のヘッダー」](console/delivery.md#ブラウザ側のヘッダー) |
+| <a id="cspとcaddyのパスの解釈の違い"></a>CSPとCaddyのパスの解釈の違い | [Consoleの配信の仕様の「CSPとCaddyのパスの解釈の違い」](console/delivery.md#cspとcaddyのパスの解釈の違い) |
+| <a id="開くときのホスト名"></a>開くときのホスト名 | [Consoleの配信の仕様の「開くときのホスト名」](console/delivery.md#開くときのホスト名) |
+| <a id="drawioの図"></a>draw.ioの図 | [Consoleの配信の仕様の「draw.ioの図」](console/delivery.md#drawioの図) |
+| <a id="ビューアの取得"></a>ビューアの取得 | [Consoleの配信の仕様の「ビューアの取得」](console/delivery.md#ビューアの取得) |
+| <a id="ビューアの更新"></a>ビューアの更新 | [Consoleの配信の仕様の「ビューアの更新」](console/delivery.md#ビューアの更新) |
+| <a id="iframeとメッセージ"></a>iframeとメッセージ | [Consoleの配信の仕様の「iframeとメッセージ」](console/delivery.md#iframeとメッセージ) |
+| <a id="図の色"></a>図の色 | [Consoleの配信の仕様の「図の色」](console/delivery.md#図の色) |
+| <a id="cspとヘッダー"></a>CSPとヘッダー | [Consoleの配信の仕様の「CSPとヘッダー」](console/delivery.md#cspとヘッダー) |
+| <a id="他のサイトからのapiの呼び出し"></a>他のサイトからのAPIの呼び出し | [Consoleの配信の仕様の「他のサイトからのAPIの呼び出し」](console/delivery.md#他のサイトからのapiの呼び出し) |
+| <a id="sec-fetch-siteの規則"></a>Sec-Fetch-Siteの規則 | [Consoleの配信の仕様の「Sec-Fetch-Siteの規則」](console/delivery.md#sec-fetch-siteの規則) |
+| <a id="originの検査"></a>Originの検査 | [Consoleの配信の仕様の「Originの検査」](console/delivery.md#originの検査) |
+| <a id="副作用のあるget"></a>副作用のあるGET | [Consoleの配信の仕様の「副作用のあるGET」](console/delivery.md#副作用のあるget) |
+| <a id="ページの移動で送られる書き込み"></a>ページの移動で送られる書き込み | [Consoleの配信の仕様の「ページの移動で送られる書き込み」](console/delivery.md#ページの移動で送られる書き込み) |
+| <a id="実機での確認"></a>実機での確認 | [Consoleの配信の仕様の「実機での確認」](console/delivery.md#実機での確認) |
+| <a id="古い版の掃除"></a>古い版の掃除 | [Consoleの配信の仕様の「古い版の掃除」](console/delivery.md#古い版の掃除) |

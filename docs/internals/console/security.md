@@ -1102,7 +1102,7 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 実装は`console/src/components/drawio/DrawioFrame.tsx`と、`console/public/drawio.html`である。
 要件定義書の画面(`/console/items/:id/requirements`)が、図ごとに`DrawioFrame`で描く。
 安全の検査を通らなかった図(`rejected_diagrams`)は、iframeを作らず、表示しない旨だけを出す。
-仕組みは[Consoleの配信の仕様](../console.md)の「draw.ioの図」にある。
+仕組みは[Consoleの配信の仕様の「draw.ioの図」](delivery.md#drawioの図)にある。
 
 ジョブの画面と作業項目の詳細のflowの図(`console/src/screens/jobs/FlowDiagram.tsx`)と、スケジュールの説明は、iframeを使わない。
 自前のSVGと文字で描く。
@@ -1125,7 +1125,7 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 
 固定するsha256は、commit固定のURLから取得したバイト列の値である。
 版の更新は、[ビューアの更新](#ビューアの更新)で自動のPRにする。
-手で上げる手順は[Consoleの配信の仕様](../console.md)の「draw.ioの図」にある。
+手で上げる手順は[Consoleの配信の仕様の「draw.ioの図」](delivery.md#drawioの図)にある。
 
 XMLをiframeへ送るときの`targetOrigin`は`"*"`にする。
 不透明なオリジンには、送り先のオリジンを指定する方法が他に無いためである。

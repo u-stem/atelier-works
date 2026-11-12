@@ -276,7 +276,7 @@ subagentと主セッションに同じ判定を当て、主セッションは単
 
 ### Consoleからの解除
 
-人は、Consoleのシステムの画面の「保留と凍結」から、凍結とdeployの保留を解除できる([Consoleの仕様](console.md)の「保留と凍結」)。
+人は、Consoleのシステムの画面の「保留と凍結」から、凍結とdeployの保留を解除できる([Consoleのシステムの画面の仕様の「保留と凍結」](console/system.md#保留と凍結))。
 `f/factory/freeze_release`が、解除する主体を人(`human`)に固定して、`releaseFreeze`を`mutateFreezeState`で当てる。
 操作者は、ジョブの実行文脈から導く。
 凍結の行は解除した主体を残さないので、操作者は情報の通知`hold_released`とジョブのログに残す。
@@ -314,7 +314,7 @@ CLIや`self_update`と重なると、2つの結果がありうる。
 
 ### Consoleからの置く操作
 
-人は、Consoleから、スケジュールの凍結とdeployの保留を置ける([Consoleの仕様](console.md)の「保留と凍結」)。
+人は、Consoleから、スケジュールの凍結とdeployの保留を置ける([Consoleのシステムの画面の仕様の「保留と凍結」](console/system.md#保留と凍結))。
 マージの保留も同じscriptが置く([保留の内部仕様](holds.md)の「Consoleからの置く操作」)。
 `f/factory/console_hold_place`は、tag`console`のscriptで、Console用のworkerで動く。
 
@@ -375,7 +375,7 @@ CLIや`self_update`と重なると、2つの結果がありうる。
 
 凍結は、スケジュールを止めない。
 Consoleから止めるには、凍結を置いた後で、`f/factory/console_schedule_stop`を呼ぶ。
-画面の操作は、「止める準備」(凍結を置く)と「止める」の2段である([Consoleの仕様](console.md)のスケジュール)。
+画面の操作は、「止める準備」(凍結を置く)と「止める」の2段である([Consoleのジョブの画面の仕様の「スケジュール」](console/jobs.md#スケジュール))。
 
 止められるのは、止めて黙るのがそのスケジュール自身の仕事だけで、ほかのスケジュールの入力や検知を止めず、再開を自己更新の追従へ任せられるものだけである。
 名前で列挙した次の7つが、この基準を満たす。

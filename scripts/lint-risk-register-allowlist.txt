@@ -19,7 +19,7 @@ docs/internals/check-sandbox.md 08da63317e915347 pointer 次の変更の前に�
 docs/internals/check-sandbox.md d03a1e8031548ae0 mechanism 検査を枠のユーザーで動かす前にrootが作った、誰でも書けるworktreeやフ
 docs/internals/ci-fix.md 7b27554d348143e8 mechanism mergeShaを本物のPRのmerge commitに結び付けること。 適用の
 docs/internals/ci-fix.md 84772b77063798d6 operational 再レビューでCI回の差分を重点的に見る固定文(競合回用の固定文も同じ)は、回のp
-docs/internals/console.md eeda07798a2d129b pointer Consoleのアプリ(console/)の構成と、成果物を配信する仕組みを書く
+docs/internals/console.md ec937d4d26214bcf pointer Consoleのアプリ(console/)の構成と、画面をまたぐ仕様を書く。 画
 docs/internals/console.md 683cc89ed998dabd operational data-themeとdata-theme-preferenceは、描画の前にp
 docs/internals/console/attention.md dd7b9924b560fb68 pointer この方針の根拠と残るリスクは、Consoleの安全策の内部仕様の「取り込み時点の
 docs/internals/console/attention.md fecd644ff19407d2 pointer 承認画面のファイル(DesignReview.tsx)自体も保護パスにある。 全

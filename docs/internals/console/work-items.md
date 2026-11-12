@@ -266,7 +266,7 @@ Consoleは、接頭辞(`console_query:`)と要求した番号まで合わせて�
 違えば、汎用の取得失敗の表示になる。
 番号が正の整数でないときは、取得せずにその旨を出す。
 
-### タブ
+### タブ(作業項目の詳細の画面)
 
 開くタブはURLの`?tab=<名前>`に持つ。
 名前が無いか知らない名前なら、概要を開く。
@@ -646,7 +646,7 @@ URLでリポジトリ欄が空なら、URLのリポジトリを使う。
 PRの番号の範囲は、登録のステップの判定(正の安全な整数)と同じにしてある。
 `tests/scripts/console_pr_review_input_contract.test.ts`が、同じ入力の列で突き合わせる。
 
-### 書き込み
+### 書き込み(PRレビューの投入の画面)
 
 画面は、送信を`useWriteMutation`と`prReviewConfig`(`src/api/prReviewConfig.ts`)に載せ、`submitPrReview`を呼ぶ。
 ロックのキー(`PR_REVIEW_WRITE_KEY`)は1つに固定する。

@@ -623,7 +623,7 @@ Issueが変わった却下は、要件定義の却下の作り直しと同じ手
 この行の数が回数になる。
 3回起動し直しても作業項目が承認待ちのままなら、人の対応待ちへ移して通知する。
 理由は`approval decision could not be applied after 3 restarts of the handler`である。
-起動し直しの行は、状態が同じ遷移の記録なので、Consoleの「今の状態へ遷移したときの注記」からは除く([Console](console.md))。
+起動し直しの行は、状態が同じ遷移の記録なので、Consoleの「今の状態へ遷移したときの注記」からは除く([Consoleの作業項目と投入の画面の仕様の「タブ(作業項目の詳細の画面)」](console/work-items.md#タブ作業項目の詳細の画面))。
 
 ### 依頼の側の走査
 
