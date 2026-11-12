@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  NOTICE_KIND_SOURCE,
+  noticeDocAnchor,
+} from "../../console/src/lib/noticeDocLink.ts";
+import {
   ACTIONABLE_WORK_ITEM_STATUSES,
   countHiddenCharacters,
   countHtmlCommentOpeners,
@@ -12,15 +16,43 @@ import {
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../../f/factory/lib/console_support.ts";
 
-/** `docs/operations.md`の「通知の種類」の表から、種類の列を取り出す。 */
-async function documentedNoticeKinds(): Promise<string[]> {
-  const doc = await Bun.file("docs/operations.md").text();
-  const start = doc.indexOf("### 通知の種類");
-  const rest = doc.slice(start + 1);
-  const end = rest.search(/\n#{2,3} /);
-  const section = end === -1 ? rest : rest.slice(0, end);
-  return [...section.matchAll(/^\| `([a-z_]+)` \|/gm)].map((m) => m[1] ?? "");
+/** `docs/operations.md`の本文。ファイルの読み込みは1回にする。 */
+const OPERATIONS_DOC = await Bun.file("docs/operations.md").text();
+
+/** `heading`の行から、`next`に合う次の見出しの前までを返す。見出しが無ければ例外を投げる。 */
+function sectionOf(heading: string, next: RegExp): string {
+  const start = OPERATIONS_DOC.indexOf(heading);
+  if (start === -1) {
+    throw new Error(`docs/operations.md has no heading: ${heading}`);
+  }
+  const rest = OPERATIONS_DOC.slice(start + 1);
+  const end = rest.search(next);
+  return end === -1 ? rest : rest.slice(0, end);
 }
+
+/** 「通知の種類」の節。次の`##`か`###`の見出しの前までである。 */
+const NOTICE_KINDS_SECTION = sectionOf("### 通知の種類", /\n#{2,3} /);
+
+/** 冒頭の「症状から手順を引く」の節。次の`##`の見出しの前までである。 */
+const INDEX_SECTION = sectionOf("## 症状から手順を引く", /\n## /);
+
+/** 通知の表の1行。種類の列の先頭にアンカーが無い行は、`anchor`が`null`である。 */
+type NoticeTableRow = { readonly anchor: string | null; readonly kind: string };
+
+/** 「通知の種類」の表の、行ごとのアンカーと種類。種類の形はConsoleと同じ`NOTICE_KIND_SOURCE`で読む。 */
+const NOTICE_TABLE_ROWS: readonly NoticeTableRow[] = [
+  ...NOTICE_KINDS_SECTION.matchAll(
+    new RegExp(
+      `^\\| (?:<a id="([^"]*)"><\\/a>)?\`(${NOTICE_KIND_SOURCE})\` \\|`,
+      "gm",
+    ),
+  ),
+].map((m) => ({ anchor: m[1] ?? null, kind: m[2] ?? "" }));
+
+/** 「通知の種類」の表の、種類の列。 */
+const DOCUMENTED_NOTICE_KINDS: readonly string[] = NOTICE_TABLE_ROWS.map(
+  (row) => row.kind,
+);
 
 describe("noticeSeverity", () => {
   test("returns info for a kind that needs no action", () => {
@@ -255,28 +287,80 @@ describe("work item constants", () => {
 });
 
 describe("operations.md notice table", () => {
-  test("documents every kind in NOTICE_SEVERITY", async () => {
-    const documented = await documentedNoticeKinds();
+  test("documents every kind in NOTICE_SEVERITY", () => {
     expect(
-      Object.keys(NOTICE_SEVERITY).filter((kind) => !documented.includes(kind)),
+      Object.keys(NOTICE_SEVERITY).filter(
+        (kind) => !DOCUMENTED_NOTICE_KINDS.includes(kind),
+      ),
     ).toEqual([]);
   });
 
-  test("documents doc_hash_column_missing", async () => {
-    expect(await documentedNoticeKinds()).toContain("doc_hash_column_missing");
+  test("documents doc_hash_column_missing", () => {
+    expect(DOCUMENTED_NOTICE_KINDS).toContain("doc_hash_column_missing");
   });
 
-  test("documents design_enabled_ignored", async () => {
-    expect(await documentedNoticeKinds()).toContain("design_enabled_ignored");
+  test("documents design_enabled_ignored", () => {
+    expect(DOCUMENTED_NOTICE_KINDS).toContain("design_enabled_ignored");
   });
 
-  test("documents claude_usage_limit", async () => {
-    expect(await documentedNoticeKinds()).toContain("claude_usage_limit");
+  test("documents claude_usage_limit", () => {
+    expect(DOCUMENTED_NOTICE_KINDS).toContain("claude_usage_limit");
   });
 
-  test("documents no kind that NOTICE_SEVERITY lacks", async () => {
-    const documented = await documentedNoticeKinds();
-    expect(documented.filter((kind) => !(kind in NOTICE_SEVERITY))).toEqual([]);
+  test("documents no kind that NOTICE_SEVERITY lacks", () => {
+    expect(
+      DOCUMENTED_NOTICE_KINDS.filter((kind) => !(kind in NOTICE_SEVERITY)),
+    ).toEqual([]);
+  });
+});
+
+/** 索引の表の、バッククォートで名指しした種類の形の語。 */
+const INDEX_NAMED_KINDS: readonly string[] = [
+  ...INDEX_SECTION.matchAll(new RegExp(`\`(${NOTICE_KIND_SOURCE})\``, "g")),
+].map((m) => m[1] ?? "");
+
+describe("operations.md symptom index", () => {
+  test("names some notice kinds", () => {
+    expect(INDEX_NAMED_KINDS.length).toBeGreaterThan(0);
+  });
+
+  test("names only kinds in NOTICE_SEVERITY", () => {
+    expect(
+      INDEX_NAMED_KINDS.filter((kind) => !(kind in NOTICE_SEVERITY)),
+    ).toEqual([]);
+  });
+});
+
+// Consoleの通知の詳細は、種類から`docs/operations.md#notice-<種類>`を決めてリンクする。
+// 表のアンカーは`notice-<種類>`の名前で確かめ、Consoleの規則(`noticeDocAnchor`)が同じ名前を作ることを先頭のテストで確かめる。
+describe("operations.md notice anchors", () => {
+  test("names the Console anchor of every kind in NOTICE_SEVERITY after the kind as it is", () => {
+    expect(
+      Object.keys(NOTICE_SEVERITY).filter(
+        (kind) => noticeDocAnchor(kind) !== `notice-${kind}`,
+      ),
+    ).toEqual([]);
+  });
+
+  test("has the anchor of every kind in NOTICE_SEVERITY", () => {
+    const anchors = NOTICE_TABLE_ROWS.map((row) => row.anchor);
+    expect(
+      Object.keys(NOTICE_SEVERITY).filter(
+        (kind) => !anchors.includes(`notice-${kind}`),
+      ),
+    ).toEqual([]);
+  });
+
+  test("puts each anchor in the row of its own kind", () => {
+    expect(
+      NOTICE_TABLE_ROWS.filter((row) => row.anchor !== `notice-${row.kind}`),
+    ).toEqual([]);
+  });
+
+  test("has as many anchors in the section as there are kinds", () => {
+    expect([...NOTICE_KINDS_SECTION.matchAll(/<a id="/g)].length).toBe(
+      Object.keys(NOTICE_SEVERITY).length,
+    );
   });
 });
 

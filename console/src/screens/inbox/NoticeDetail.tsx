@@ -1,9 +1,11 @@
+import { useQuery } from "@tanstack/react-query";
 import { CircleCheck, ExternalLink, Info, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import type { WriteOutcome } from "../../api/executeWrite.ts";
 import type { SummaryNotice } from "../../api/guards/summary.ts";
 import type { NoticeResolveResult } from "../../api/guards/writeResults.ts";
+import { configQueryOptions } from "../../api/jobsQueries.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
 import { NOTICE_RESOLVE_INVALIDATES } from "../../api/noticeQueries.ts";
 import { writeTargetKey } from "../../api/writeLocks.ts";
@@ -13,11 +15,13 @@ import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { workItemRef } from "../../lib/labels.ts";
+import { factoryRepository, noticeDocUrl } from "../../lib/noticeDocLink.ts";
 import { describeNotice } from "../../lib/noticeView.ts";
 import { noticeWorkItemId } from "../../lib/noticeWorkItem.ts";
 import { formatAbsoluteWithRelative } from "../../lib/relativeTime.ts";
 import { systemSectionPath } from "../../lib/systemSections.ts";
 import { describeNoticeResult, releaseNotice } from "../../lib/writeNotices.ts";
+import { TargetLinkView } from "../items/detail/DetailParts.tsx";
 import { NoticeMessageText } from "./NoticeMessageText.tsx";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -57,6 +61,9 @@ const RESOLVE_CONFIG = {
  * 本文が作業項目を名指しする種類は、未解決で、その作業項目の失敗が一覧にあるときだけ、同じ位置に、その失敗へ移るボタンを出す。
  * 一覧に無い失敗へ移ると、選んだ項目が一覧に無いという行き止まりになるためである。
  * ボタンは遷移を自分で起こさず、`onOpenFailure`を呼ぶ。履歴、種類のチップ、フォーカスは、一覧を持つ画面が決める。
+ * 次の操作の欄の末尾には、運用の文書のこの種類の行へのリンクを、新しいタブで開く形で出す。
+ * リポジトリは設定の`factory_repo`から読み、設定を読めない間と、形が合わないときはリンクを出さない。
+ * 設定の取得は設定のタブと共有する。`factory_repo`はめったに変わらないので、一度取得した後は、この画面からは取り直さない。
  */
 export function NoticeDetail({
   notice,
@@ -75,6 +82,14 @@ export function NoticeDetail({
   onOpenFailure: (workItemId: number) => void;
 }) {
   const description = describeNotice(notice, source);
+  const config = useQuery({
+    ...configQueryOptions(),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const procedureUrl = noticeDocUrl(
+    notice.kind,
+    factoryRepository(config.data),
+  );
   const { submit, isLocked } = useWriteMutation(RESOLVE_CONFIG);
   const locked = isLocked(notice.notice_id);
   const { guide } = description;
@@ -200,6 +215,13 @@ export function NoticeDetail({
           {guide.note === null ? null : (
             <p className="mt-1 text-small text-muted-foreground">
               {guide.note}
+            </p>
+          )}
+          {procedureUrl === null ? null : (
+            <p className="mt-1 text-small">
+              <TargetLinkView
+                target={{ label: "運用の文書で手順を読む", url: procedureUrl }}
+              />
             </p>
           )}
         </div>
