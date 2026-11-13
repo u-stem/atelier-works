@@ -10,6 +10,7 @@
 // Issueと同じく取得時に消費する。`wip`ラベルも状態ラベルも無い。
 // `claimPr`は今回のサイクルを起こしたトリガーラベルを外す。ラベルが既に無ければ(404)
 // ほかが先に外したので引き、外せたら取り直して残っていないかを確かめる。
+// 外す要求の結果が分からないときは、取り直してラベルの有無と最後に外した人で決める。
 // 取り直しが数回とも失敗したときは、ラベルを付け直して引く。レート制限で読めないときは、
 // 付け直さず、ラベルが外れたままであることを例外で知らせる(`claimPr`を参照)。
 // 付け直しも失敗して外れたままになったPRは、`processPrDecisions`が集め、
@@ -67,6 +68,7 @@ import {
   getViewer,
   getViewerTeams,
   type Issue,
+  isUndeterminedRemoval,
   type LabelerActor,
   LabelerCheckLimitError,
   listOpenPullRequests,
@@ -76,6 +78,7 @@ import {
   type RemoveLabelResult,
   removeLabel,
   rereadWithRetries,
+  resolveUndeterminedRemoval,
 } from "./lib/github.ts";
 import { errorMessage, type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
@@ -460,6 +463,10 @@ export type ClaimPrResult =
  * ラベルが既に無ければ(404)、ほかが先に外したので`claimed: false`を返す
  * (Issueの`claimIssue`と同じ)。外せなかったときと、外した後も残っていたときも、
  * `claimed: false`と理由を返す。
+ * 削除が、応答の無い失敗、サーバーエラー、2xxの後で本文が欠けた失敗のどれかで終わったときは、
+ * 外れたのかが分からない。`claimIssue`と同じく`resolveUndeterminedRemoval`で読み直し、
+ * `claimPrAfterUndeterminedRemoval`が結果を決める。`viewer`は自分のログイン名で、
+ * タイムラインの最後の削除の実行者と比べる。
  * 外した後の確認の読み取りは、`rereadWithRetries`で数回試す(`log`に各回の失敗を警告で残す)。
  * それでも読めなければ、取得できたか分からない。ラベルを消費したまま
  * 作業項目を作らないと、以後ラベルでもDBでもそのPRを見つけられない。
@@ -487,12 +494,22 @@ export async function claimPr(
   repo: string,
   number: number,
   triggerLabel: string,
+  viewer: string,
   log?: Logger,
 ): Promise<ClaimPrResult> {
   let removal: RemoveLabelResult;
   try {
     removal = await removeLabel(client, owner, repo, number, triggerLabel);
   } catch (err) {
+    if (isUndeterminedRemoval(err)) {
+      return claimPrAfterUndeterminedRemoval(
+        client,
+        { owner, repo, number, triggerLabel },
+        viewer,
+        err,
+        log,
+      );
+    }
     // この理由は`recordPrClaimNotClaimed`の`claim_race_lost`のnoticeに載るので、
     // ghの失敗に由来する他のメッセージと同じくマスクする。
     return {
@@ -537,6 +554,57 @@ export async function claimPr(
   return { claimed: true };
 }
 
+/**
+ * `claimPr`の削除の結果が不明なとき、`resolveUndeterminedRemoval`の結果を`ClaimPrResult`に写す。
+ * ラベルが残っていれば引き、次のポーリングが拾い直す。
+ * 外れていて最後に外したのが自分なら取得し、別のユーザーなら引く。
+ * 自分が外したか判断できなければ、取得しない。
+ * そのまま引くと、ラベルも作業項目も無いPRが残るので、確認の読み取りが読めなかったときと同じく、
+ * ラベルを付け直して`restored: true`で引く(`restoreTriggerLabel`)。
+ * ラベルが残っていても、付け直しは状態を変えない。
+ * 読めなかった原因がレート制限なら、同じ制限に当たるので付け直さず、`PrClaimLabelLeftRemovedError`を投げる。
+ */
+async function claimPrAfterUndeterminedRemoval(
+  client: GhClient,
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+    readonly triggerLabel: string;
+  },
+  viewer: string,
+  removalErr: unknown,
+  log: Logger | undefined,
+): Promise<ClaimPrResult> {
+  const { owner, repo, number, triggerLabel } = target;
+  const outcome = await resolveUndeterminedRemoval(
+    client,
+    { owner, repo, number },
+    { triggerLabel, actor: viewer, log },
+    removalErr,
+  );
+  switch (outcome.kind) {
+    case "present":
+      return { claimed: false, reason: deferredClaimReason(triggerLabel) };
+    case "removed_by_other":
+      return {
+        claimed: false,
+        reason: `trigger label ${triggerLabel} was removed by another actor`,
+      };
+    case "removed_by_self":
+      return { claimed: true };
+    case "unknown":
+      if (outcome.cause instanceof GitHubRateLimitError) {
+        throw new PrClaimLabelLeftRemovedError(
+          triggerLabel,
+          `claim confirmation hit the GitHub rate limit after the removal of trigger label ${triggerLabel} from ${owner}/${repo}#${String(number)} was undetermined; the label may stay removed, so a person must check it (${errorMessage(outcome.cause)})`,
+          outcome.cause,
+        );
+      }
+      return restoreTriggerLabel(client, target, outcome.cause, log);
+  }
+}
+
 /** `poll_prs`がnoticeを解決済みにしたときに、`resolved_by`へ記録する名前。 */
 export const POLL_PRS_RESOLVER = "poll_prs";
 
@@ -564,6 +632,11 @@ function restoredClaimReason(triggerLabel: string): string {
   return `could not confirm the claim; restored trigger label ${triggerLabel}`;
 }
 
+/** 削除の結果が分からず、読み直してもラベルが残っていたので引いたときの`ClaimPrResult.reason`。 */
+function deferredClaimReason(triggerLabel: string): string {
+  return `trigger label ${triggerLabel} removal failed and the label is still present`;
+}
+
 /**
  * `claim_race_lost`のnoticeの本文。対象と理由だけで決まる。
  * 記録(`recordPrClaimNotClaimed`)と解決(`resolveClaimNotices`)が同じ関数から作り、
@@ -585,7 +658,8 @@ function prClaimNoticeMessage(
  * 作業の開始が例外になったときは呼ばない。noticeが解決済みに見えて、証跡が消えるのを防ぐ。
  * 対象は、確認できずにラベルを付け直したときの`claim_race_lost`と、
  * ラベルが外れたままになった旨の`pr_trigger_label_left_removed`と、
- * 付与者が許可されていなかった旨の`labeler_denied`である。
+ * 付与者が許可されていなかった旨の`labeler_denied`と、
+ * 削除の結果が分からず、ラベルが残っていたので引いたときの`claim_race_lost`である。
  * 本文の完全一致で選ぶので、`review`と`review-fix`のようにラベル名が互いの接頭辞でも、
  * 別のラベルのnoticeには触れない。
  * 解決の失敗は取得の成否を変えず、警告をログに残すだけにする。
@@ -612,6 +686,10 @@ export async function resolveClaimNotices(
     {
       kind: LABELER_DENIED_KIND,
       message: labelerDeniedMessage(target, triggerLabel),
+    },
+    {
+      kind: "claim_race_lost",
+      message: prClaimNoticeMessage(target, deferredClaimReason(triggerLabel)),
     },
   ];
   for (const notice of notices) {
@@ -719,7 +797,9 @@ function prUrl(item: {
 }
 
 /**
- * 確認の読み取りが読めなかった`claimPr`が、外したトリガーラベルを付け直す。
+ * 取得を確かめられなかった`claimPr`が、外したトリガーラベルを付け直す。
+ * 確かめられないのは、確認の読み取りが読めなかったときと、削除の結果が分からず、自分が外したか判断できなかったときである。
+ * `cause`は確かめられなかった原因の例外で、後者では削除の例外のこともある。
  * ラベルの付与は、既に付いていても成功する。付け直せたら`claimed: false`を返す。
  * 付け直しも失敗したら、両方の失敗の文を含む例外を投げる。ラベルが外れたままなので、
  * `processPrDecisions`が記録する失敗から人が付け直せるようにする。
@@ -732,7 +812,7 @@ async function restoreTriggerLabel(
     readonly number: number;
     readonly triggerLabel: string;
   },
-  readErr: unknown,
+  cause: unknown,
   log: Logger | undefined,
 ): Promise<ClaimPrResult> {
   const { owner, repo, number, triggerLabel } = target;
@@ -744,14 +824,14 @@ async function restoreTriggerLabel(
   } catch (restoreErr) {
     throw new PrClaimLabelLeftRemovedError(
       triggerLabel,
-      `claim confirmation read failed (${errorMessage(readErr)}) and restoring trigger label ${triggerLabel} failed (${errorMessage(restoreErr)}); the label stays removed, so a person must add it back`,
+      `claim could not be confirmed (${errorMessage(cause)}) and restoring trigger label ${triggerLabel} failed (${errorMessage(restoreErr)}); the label stays removed, so a person must add it back`,
       restoreErr,
     );
   }
   log?.warn("claim could not be confirmed; restored the trigger label", {
     target: `${owner}/${repo}#${String(number)}`,
     label: triggerLabel,
-    error: errorMessage(readErr),
+    error: errorMessage(cause),
   });
   return {
     claimed: false,
@@ -1506,6 +1586,7 @@ export async function main(): Promise<{
           candidate.repo,
           candidate.number,
           label,
+          viewer.login,
           log,
         ),
       recordNotClaimed: recordPrClaimNotClaimed,
