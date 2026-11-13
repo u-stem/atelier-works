@@ -1094,9 +1094,19 @@ async function fetchIssueObject(
       { timedOut: response.timedOut === true },
     );
   }
+  // 本文が切れた応答は、形の誤りではなく通信の失敗として、受け取ったステータスのまま投げる。
+  if (response.incomplete === true) {
+    const detail =
+      response.timedOut === true ? " (timed out)" : " (incomplete body)";
+    throw new GitHubHttpError(
+      `${context} failed with HTTP ${response.status}${detail}`,
+      response.status,
+      { timedOut: response.timedOut === true },
+    );
+  }
   let body: unknown = null;
   try {
-    if (response.incomplete !== true) body = JSON.parse(response.bodyText);
+    body = JSON.parse(response.bodyText);
   } catch {
     body = null;
   }

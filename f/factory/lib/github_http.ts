@@ -1,7 +1,7 @@
 // GitHubのAPIへの通信層。宛先の固定、リダイレクトの扱い、締め切り、レート制限の判定と待ち、
 // 一時的な失敗の再試行を、このモジュールだけが持つ。
 // トークンは`Authorization`ヘッダーにだけ載せ、送り先が`GITHUB_API_ORIGIN`と一致するときだけ載せる。
-// グローバルの`fetch`を参照するのも、このモジュールだけである(`tests/lib/github_http.test.ts`が固定する)。
+// グローバルの`fetch`を参照するファイルは、理由つきの一覧に限る(`tests/lib/github_http.test.ts`が固定する)。
 // ファイルにも子プロセスにも触れない。importは失敗の型、ログ、型ガードの3つだけにする。
 //
 // `gh`を起動する送り方(`github.ts`の`callGhApi`)も、再試行と待ちは`runGitHubRequest`で行う。
@@ -542,7 +542,7 @@ async function sendWithRateLimitWait<R extends GitHubHttpResponseCore>(
  * 差し込んだ送り方で要求を送る、再試行と待ちの機構。通信層の再試行は、この関数の中だけにある。
  * 順に、一時的な失敗の再試行(`sendWithTransientRetry`)、レート制限の待ち(`policy`)、
  * 本文が途中で切れた応答の取り直しを行う。取り直すのは冪等な要求だけで、1回だけである。
- * 締め切りで切れた本文(`timedOut`)は取り直さない。
+ * 締め切りで切れた本文(`timedOut`)と、2xx以外の応答の切れた本文は取り直さない。
  * 取り直しても切れていれば、`incomplete`の応答をそのまま返す。呼び出し側が失敗にする。
  * レート制限以外のHTTPのエラーのステータスでは例外を投げない。
  */
@@ -554,8 +554,11 @@ export async function runGitHubRequest<R extends GitHubHttpResponseCore>(
 ): Promise<R> {
   const first = await sendWithRateLimitWait(env, request, policy, send);
   // 締め切りで切れた本文は取り直さない。締め切りを過ぎた要求は送り直さない、という決まりに合わせる。
+  // 取り直すのは2xxの応答だけにする。2xx以外は、ステータスで判定する一時的な失敗の再試行に任せ、送る回数を重ねない。
   if (
     first.incomplete !== true ||
+    first.status < 200 ||
+    first.status >= 300 ||
     first.timedOut === true ||
     !isIdempotent(request) ||
     request.retry === "never"

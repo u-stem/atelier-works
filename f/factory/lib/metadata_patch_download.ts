@@ -8,6 +8,7 @@ import {
   classifyRateLimit,
   GITHUB_API_ORIGIN,
   GITHUB_API_VERSION,
+  GITHUB_USER_AGENT,
   rateLimitError,
 } from "./github_http.ts";
 import { assertGitHubName } from "./types.ts";
@@ -44,7 +45,6 @@ export type ArtifactDownloadClient = {
 
 export const ARTIFACT_FETCH_TIMEOUT_MS = 60_000;
 
-const ARTIFACT_USER_AGENT = "atelier-works-factory";
 /** artifactの取得先として認めるホストの末尾。GitHubはAzureのblob storageの署名付きURLへ302で渡す。 */
 const ARTIFACT_STORAGE_HOST_SUFFIX = ".blob.core.windows.net";
 
@@ -195,7 +195,7 @@ export async function downloadArtifactZip(
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${client.ghToken}`,
         "X-GitHub-Api-Version": GITHUB_API_VERSION,
-        "User-Agent": ARTIFACT_USER_AGENT,
+        "User-Agent": GITHUB_USER_AGENT,
       },
       redirect: "manual",
     },
@@ -224,7 +224,7 @@ export async function downloadArtifactZip(
     throw new GitHubArtifactDownloadError("bad_redirect");
   }
   const second = await sendArtifactRequest(client, location, {
-    headers: { "User-Agent": ARTIFACT_USER_AGENT },
+    headers: { "User-Agent": GITHUB_USER_AGENT },
     redirect: "error",
   });
   if (!second.ok) {
