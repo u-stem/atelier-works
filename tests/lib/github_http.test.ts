@@ -476,6 +476,41 @@ describe("sendGitHubRequest request shape", () => {
     expect(f.sent[0]?.init.method).toBe("PATCH");
   });
 
+  // 書き込みが作るcommitの日時の時差を、運用者の最後のブラウザの時間帯に左右させない。
+  test("names UTC in the Time-Zone header of a write", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "repos/o/r/git/commits",
+      method: "POST",
+      body: {},
+    });
+    expect(headerOf(f.sent[0]?.init, "Time-Zone")).toBe("UTC");
+  });
+
+  test("names UTC in the Time-Zone header of a DELETE without a body", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "repos/o/r/issues/1/labels/bug",
+      method: "DELETE",
+    });
+    expect(headerOf(f.sent[0]?.init, "Time-Zone")).toBe("UTC");
+  });
+
+  test("sends no Time-Zone header with a GET", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), { path: "repos/o/r" });
+    expect(headerOf(f.sent[0]?.init, "Time-Zone")).toBeUndefined();
+  });
+
+  test("sends no Content-Type without a body", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "repos/o/r/issues/1/labels/bug",
+      method: "DELETE",
+    });
+    expect(headerOf(f.sent[0]?.init, "Content-Type")).toBeUndefined();
+  });
+
   test("rejects the search API without sending", async () => {
     const f = fakeFetch([]);
     await sendGitHubRequest(client(), { path: "search/issues" }).catch(
@@ -962,6 +997,34 @@ describe("requestGitHub retries", () => {
       path: "repos/o/r",
     });
     expect(response.status).toBe(200);
+  });
+
+  // 接続の失敗は、要求が届く前か後かを見分けられないので、冪等でない要求は送り直さない。
+  test("does not retry a POST after a lost response", async () => {
+    const f = fakeFetch([
+      new TypeError("reset"),
+      new Response("{}", { status: 200 }),
+    ]);
+    await requestGitHub(client(), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: {},
+    });
+    expect(f.sent).toHaveLength(1);
+  });
+
+  test("does not retry a GraphQL mutation after a lost response", async () => {
+    const f = fakeFetch([
+      new TypeError("reset"),
+      new Response("{}", { status: 200 }),
+    ]);
+    await requestGitHub(client(), {
+      path: "graphql",
+      method: "POST",
+      body: { query: "mutation { x }" },
+      idempotent: false,
+    });
+    expect(f.sent).toHaveLength(1);
   });
 
   test("does not retry a POST after a 5xx", async () => {
