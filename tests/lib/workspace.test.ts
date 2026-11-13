@@ -5843,7 +5843,7 @@ function killEscaped(stdout: string): void {
 }
 
 // 実時間が要る。プロセスグループの後始末と、出力の読み取りを見切るまでの時間(outputDrainMs)が対象で、実プロセスの終了を待つ。
-// 待ちは最小(100〜200ms)にしてある。
+// 見切りを確かめるテストの待ちは、最小(100〜200ms)にしてある。猶予を長くしたテストは、猶予を待たずに返ることを確かめる。
 describe("createBunCommandRunner process-group cleanup", () => {
   test("stops a background process the command left in its group", async () => {
     const run = createBunCommandRunner({ killGraceMs: 1_000 });

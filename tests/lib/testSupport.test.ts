@@ -149,15 +149,108 @@ describe("nextTask", () => {
 });
 
 /**
- * `stubLongTimers`を呼ぶのに、`afterEach`で`restoreTimers`を呼ばないテストファイルのパスを返す。
+ * コメントと文字列の中身を空白に置き換える。改行の位置は変えない。
+ * 文字列は、`'`、`"`、`` ` `` で囲まれたものを読む。
+ * 限りがある。正規表現リテラルの中の引用符は、文字列の始まりと読み違えうる。
+ * テンプレートリテラルの`${}`の中のコードも、文字列の一部として空白にする。
+ */
+function maskNonCode(text: string): string {
+  const out: string[] = [];
+  let quote = "";
+  let comment: "" | "line" | "block" = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text.charAt(i);
+    const next = text.charAt(i + 1);
+    const blank = ch === "\n" ? "\n" : " ";
+    if (comment === "line") {
+      out.push(blank);
+      if (ch === "\n") comment = "";
+    } else if (comment === "block") {
+      out.push(blank);
+      if (ch === "*" && next === "/") {
+        out.push(" ");
+        i += 1;
+        comment = "";
+      }
+    } else if (quote !== "") {
+      out.push(blank);
+      if (ch === "\\") {
+        out.push(next === "\n" ? "\n" : " ");
+        i += 1;
+      } else if (ch === quote) {
+        quote = "";
+      }
+    } else if (ch === "/" && next === "/") {
+      comment = "line";
+      out.push(" ");
+    } else if (ch === "/" && next === "*") {
+      comment = "block";
+      out.push(" ");
+    } else if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      out.push(" ");
+    } else {
+      out.push(ch);
+    }
+  }
+  return out.join("");
+}
+
+/** `open`の位置の`(`に対応する`)`の手前までの文字列を返す。対応が無ければ末尾までを返す。 */
+function argumentAt(code: string, open: number): string {
+  let depth = 0;
+  for (let i = open; i < code.length; i += 1) {
+    const ch = code.charAt(i);
+    if (ch === "(") depth += 1;
+    if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return code.slice(open + 1, i);
+    }
+  }
+  return code.slice(open + 1);
+}
+
+/** ファイルの最上位(波括弧の外)に置かれた`afterEach`の引数を、出てきた順に返す。 */
+function topLevelAfterEachArguments(code: string): string[] {
+  const found: string[] = [];
+  let depth = 0;
+  for (let i = 0; i < code.length; i += 1) {
+    const ch = code.charAt(i);
+    if (ch === "{") depth += 1;
+    if (ch === "}") depth -= 1;
+    if (depth === 0 && code.startsWith("afterEach(", i)) {
+      found.push(argumentAt(code, i + "afterEach".length));
+    }
+  }
+  return found;
+}
+
+/** `stubLongTimers`の呼び出しがある。定義(`function stubLongTimers(`)は数えない。 */
+function callsStubLongTimers(code: string): boolean {
+  return /(?<!function\s)\bstubLongTimers\(/.test(code);
+}
+
+/**
+ * `stubLongTimers`を呼ぶのに、最上位の`afterEach`で`restoreTimers`を呼ばないファイルのパスを返す。
  * 戻し忘れた差し替えは、同じワーカーの後続のテストに残るためである。
+ * コメントと文字列の中は見ない。
+ * `afterEach`は、ファイルの最上位に置く規則とする。入れ子の`describe`の中だけにある`afterEach`は、戻したものと数えない。
+ * 最上位の`afterEach`の引数が`restoreTimers`そのものか、その中で`restoreTimers(`を呼べば、戻したと数える。
+ * 見落とす範囲がある。`afterEach`の中の条件分岐の先でだけ呼ぶ場合と、引数に別の関数を渡して中で呼ぶ場合は、戻したと数える。
+ * 誤って検出する範囲がある。入れ子の`describe`だけに`afterEach`を置いた場合は、その中の差し替えでも検出する。
  */
 function filesWithoutRestore(sources: Readonly<Record<string, string>>) {
-  const restoresAfterEach =
-    /afterEach\(\s*restoreTimers\s*\)|afterEach\(\s*(?:async\s*)?\(\)\s*=>\s*\{[^}]*\brestoreTimers\(\)/;
   return Object.entries(sources)
-    .filter(([, text]) => /\bstubLongTimers\(/.test(text))
-    .filter(([, text]) => !restoresAfterEach.test(text))
+    .map(([path, text]) => [path, maskNonCode(text)] as const)
+    .filter(([, code]) => callsStubLongTimers(code))
+    .filter(
+      ([, code]) =>
+        !topLevelAfterEachArguments(code).some(
+          (arg) =>
+            /^\s*restoreTimers\s*$/.test(arg) ||
+            /\brestoreTimers\s*\(/.test(arg),
+        ),
+    )
     .map(([path]) => path);
 }
 
@@ -187,17 +280,76 @@ describe("the files that call stubLongTimers", () => {
     expect(filesWithoutRestore(sources)).toEqual([]);
   });
 
+  test("accepts a block that closes another brace before restoreTimers", () => {
+    const sources = {
+      "a.test.ts":
+        "afterEach(() => {\n  if (a) {\n    b();\n  }\n  restoreTimers();\n});\nstubLongTimers();\n",
+    };
+    expect(filesWithoutRestore(sources)).toEqual([]);
+  });
+
+  test("flags a file whose only afterEach is in a comment", () => {
+    const sources = {
+      "a.test.ts":
+        "// afterEach(restoreTimers);\n/* afterEach(() => { restoreTimers(); }); */\nstubLongTimers();\n",
+    };
+    expect(filesWithoutRestore(sources)).toEqual(["a.test.ts"]);
+  });
+
+  test("flags a file whose only afterEach is in a string", () => {
+    const sources = {
+      "a.test.ts": 'const s = "afterEach(restoreTimers)";\nstubLongTimers();\n',
+    };
+    expect(filesWithoutRestore(sources)).toEqual(["a.test.ts"]);
+  });
+
+  test("ignores a call that is only in a comment", () => {
+    const sources = { "a.test.ts": "// stubLongTimers();\n" };
+    expect(filesWithoutRestore(sources)).toEqual([]);
+  });
+
+  test("flags a file whose only afterEach is in a nested describe", () => {
+    const sources = {
+      "a.test.ts":
+        'describe("a", () => {\n  afterEach(restoreTimers);\n});\ndescribe("b", () => {\n  stubLongTimers();\n});\n',
+    };
+    expect(filesWithoutRestore(sources)).toEqual(["a.test.ts"]);
+  });
+
+  test("flags a helper file that calls it without an afterEach", () => {
+    const sources = {
+      "helper.ts": "export function f() {\n  stubLongTimers();\n}\n",
+    };
+    expect(filesWithoutRestore(sources)).toEqual(["helper.ts"]);
+  });
+
+  test("does not count the definition as a call", () => {
+    const sources = {
+      "testSupport.ts": "export function stubLongTimers(ms = 1) {}\n",
+    };
+    expect(filesWithoutRestore(sources)).toEqual([]);
+  });
+
   test("ignores a file that does not call stubLongTimers", () => {
     expect(filesWithoutRestore({ "a.test.ts": "const a = 1;\n" })).toEqual([]);
   });
+});
 
-  test("restores the timers in every test file that stubs them", () => {
-    const sources: Record<string, string> = {};
-    for (const path of new Bun.Glob("tests/**/*.test.ts").scanSync({
-      cwd: ROOT,
-    })) {
-      sources[path] = readFileSync(join(ROOT, path), "utf8");
-    }
+describe("the files under tests that call stubLongTimers", () => {
+  const sources = Object.fromEntries(
+    Array.from(new Bun.Glob("tests/**/*.ts").scanSync({ cwd: ROOT })).map(
+      (path) => [path, readFileSync(join(ROOT, path), "utf8")],
+    ),
+  );
+
+  test("include at least one file", () => {
+    const callers = Object.entries(sources).filter(([, text]) =>
+      callsStubLongTimers(maskNonCode(text)),
+    );
+    expect(callers.length).toBeGreaterThan(0);
+  });
+
+  test("restore the timers in every one of them", () => {
     expect(filesWithoutRestore(sources)).toEqual([]);
   });
 });
