@@ -315,26 +315,29 @@ describe("mergeSignals", () => {
   });
 });
 
-describe("boundedCheckFrom that keeps a true answer that came late", () => {
-  /** 1回目の読み取りだけが`delayMs`の後に真を返す。2回目以降は偽を返す。 */
-  function lateTrueOnce(delayMs: number) {
-    let reads = 0;
-    return {
-      read: () => {
-        reads += 1;
-        if (reads > 1) return Promise.resolve(false);
-        return new Promise<boolean>((resolve) => {
-          setTimeout(() => {
-            resolve(true);
-          }, delayMs);
-        });
-      },
-      reads: () => reads,
-    };
-  }
+/** 読み取りの結果を、テストが手で返す。時間に依存しない。 */
+function manualReads() {
+  const resolvers: Array<(stop: boolean) => void> = [];
+  return {
+    read: () =>
+      new Promise<boolean>((resolve) => {
+        resolvers.push(resolve);
+      }),
+    answer: (index: number, stop: boolean) => {
+      resolvers[index]?.(stop);
+    },
+    reads: () => resolvers.length,
+  };
+}
 
+/** 解決した読み取りの後始末が、マイクロタスクで終わるまで待つ。 */
+async function settle(): Promise<void> {
+  await Bun.sleep(0);
+}
+
+describe("boundedCheckFrom that keeps a true answer that came late", () => {
   test("answers not stopped while the read has not finished", async () => {
-    const fake = lateTrueOnce(40);
+    const fake = manualReads();
     const check = boundedCheckFrom(fake.read, 10, Date.now, {
       keepLateTrue: true,
     });
@@ -342,87 +345,129 @@ describe("boundedCheckFrom that keeps a true answer that came late", () => {
   });
 
   test("answers stopped at the next call once the late read answered true", async () => {
-    const fake = lateTrueOnce(30);
+    const fake = manualReads();
     const check = boundedCheckFrom(fake.read, 10, Date.now, {
       keepLateTrue: true,
     });
     await check();
-    await Bun.sleep(60);
+    fake.answer(0, true);
+    await settle();
     expect(await check()).toBe(true);
   });
 
   test("keeps answering stopped after that", async () => {
-    const fake = lateTrueOnce(30);
+    const fake = manualReads();
     const check = boundedCheckFrom(fake.read, 10, Date.now, {
       keepLateTrue: true,
     });
     await check();
-    await Bun.sleep(60);
+    fake.answer(0, true);
+    await settle();
     await check();
     expect(await check()).toBe(true);
   });
 
   test("does not read again once it knows the answer", async () => {
-    const fake = lateTrueOnce(30);
+    const fake = manualReads();
     const check = boundedCheckFrom(fake.read, 10, Date.now, {
       keepLateTrue: true,
     });
     await check();
-    await Bun.sleep(60);
+    fake.answer(0, true);
+    await settle();
     await check();
     expect(fake.reads()).toBe(1);
   });
 
   test("does not keep a false answer that came late", async () => {
-    let reads = 0;
-    const check = boundedCheckFrom(
-      () => {
-        reads += 1;
-        const answer = reads > 1;
-        return new Promise<boolean>((resolve) => {
-          setTimeout(
-            () => {
-              resolve(answer);
-            },
-            reads === 1 ? 30 : 0,
-          );
-        });
-      },
-      10,
-      Date.now,
-      { keepLateTrue: true },
-    );
+    const fake = manualReads();
+    const check = boundedCheckFrom(fake.read, 10, Date.now, {
+      keepLateTrue: true,
+    });
     await check();
-    await Bun.sleep(60);
-    expect(await check()).toBe(true);
+    fake.answer(0, false);
+    await settle();
+    const next = check();
+    await settle();
+    fake.answer(1, true);
+    expect(await next).toBe(true);
   });
 
   test("forgets a late true answer when the option is off", async () => {
-    const fake = lateTrueOnce(30);
+    const fake = manualReads();
     const check = boundedCheckFrom(fake.read, 10);
     await check();
-    await Bun.sleep(60);
-    expect(await check()).toBe(false);
+    fake.answer(0, true);
+    await settle();
+    const next = check();
+    await settle();
+    fake.answer(1, false);
+    expect(await next).toBe(false);
   });
 
   test("the check of the stop-all forgets a late true answer", async () => {
-    let reads = 0;
+    const releases: Array<(value: string | null) => void> = [];
     const check = stopCheckFrom(
       {
-        readVariable: () => {
-          reads += 1;
-          if (reads > 1) return Promise.resolve("");
-          return new Promise<string | null>((resolve) => {
-            setTimeout(() => {
-              resolve(PLACED);
-            }, 30);
-          });
-        },
+        readVariable: () =>
+          new Promise<string | null>((resolve) => {
+            releases.push(resolve);
+          }),
       },
       10,
     );
     await check();
-    await Bun.sleep(60);
+    releases[0]?.(PLACED);
+    await settle();
+    const next = check();
+    await settle();
+    releases[1]?.("");
+    expect(await next).toBe(false);
+  });
+});
+
+describe("boundedCheckFrom that tells when a read ran out of time", () => {
+  test("calls onTimeout when the read does not finish in time", async () => {
+    const fake = manualReads();
+    let calls = 0;
+    const check = boundedCheckFrom(fake.read, 10, Date.now, {
+      onTimeout: () => {
+        calls += 1;
+      },
+    });
+    await check();
+    expect(calls).toBe(1);
+  });
+
+  test("does not call onTimeout when the read finishes in time", async () => {
+    let calls = 0;
+    const check = boundedCheckFrom(async () => false, 50, Date.now, {
+      onTimeout: () => {
+        calls += 1;
+      },
+    });
+    await check();
+    expect(calls).toBe(0);
+  });
+
+  test("does not call onTimeout for a call that skips the read because an older read is pending", async () => {
+    const fake = manualReads();
+    let calls = 0;
+    const check = boundedCheckFrom(fake.read, 10, Date.now, {
+      onTimeout: () => {
+        calls += 1;
+      },
+    });
+    await check();
+    await check();
+    expect(calls).toBe(1);
+  });
+
+  test("the check of the stop-all has no onTimeout and still answers not stopped", async () => {
+    const check = stopCheckFrom(
+      { readVariable: () => new Promise<string | null>(() => {}) },
+      10,
+    );
     expect(await check()).toBe(false);
   });
 });

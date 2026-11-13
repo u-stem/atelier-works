@@ -141,6 +141,31 @@ function squash(text: string): string {
   return text.replace(/\s+/g, "").replace(/,([)\]}])/g, "$1");
 }
 
+/** 条件の式。コメントを落としたコードと、同じ変換を通して比べる。 */
+const EARLY_RETURN_CONDITION =
+  "if (item !== null && (await isFailureSilenced(item, input.rootJobId, deps.readCancelNote, log)))";
+
+const NOTE_READ = 'latestStatusEvent(id, "cancelled")';
+
+/** 期待する式を、ソースと同じ`codeOf`に通し、空白を除いて返す。 */
+function expectedCode(expression: string): string {
+  return squash(codeOf(expression)).replace(/;$/, "");
+}
+
+/** `source`のコード(コメントを除く)に、早い戻りの条件が、その形のまま`{`の前にあるか。 */
+function hasEarlyReturnCondition(source: string): boolean {
+  const probe = expectedCode(`${EARLY_RETURN_CONDITION} {}`).replace(
+    /\{\}$/,
+    "",
+  );
+  return squash(codeOf(source)).includes(`${probe}{`);
+}
+
+/** `source`のコード(コメントを除く)にある、遷移の注記を読む呼び出しの数。 */
+function countNoteReads(source: string): number {
+  return countOf(squash(codeOf(source)), expectedCode(NOTE_READ));
+}
+
 describe("on_error_flow.ts", () => {
   const source = read(ON_ERROR_FLOW);
   const code = codeOf(source);
@@ -160,12 +185,24 @@ describe("on_error_flow.ts", () => {
     ).toEqual([]);
   });
 
-  test("has the exact condition of the early return", () => {
-    expect(squash(source)).toContain(
-      squash(
-        "if (item !== null && (await isFailureSilenced(item, input.rootJobId, deps.readCancelNote, log))) {",
-      ),
-    );
+  test("has the exact condition of the early return in its code", () => {
+    expect(hasEarlyReturnCondition(source)).toBe(true);
+  });
+
+  // 同じ式をコメントに残しても、コードの条件を変える迂回は通らない。
+  test("does not take the condition from a comment", () => {
+    const commented = `// ${EARLY_RETURN_CONDITION} {\nasync function handleFlowFailure() {}`;
+    expect(hasEarlyReturnCondition(commented)).toBe(false);
+  });
+
+  test("does not take the condition from a block comment", () => {
+    const commented = `/* ${EARLY_RETURN_CONDITION} { */\nasync function handleFlowFailure() {}`;
+    expect(hasEarlyReturnCondition(commented)).toBe(false);
+  });
+
+  test("does not accept another condition although the exact one is in a comment", () => {
+    const changed = `// ${EARLY_RETURN_CONDITION} {\nasync function handleFlowFailure(item) {\n  if (item !== null) {\n    return;\n  }\n}`;
+    expect(hasEarlyReturnCondition(changed)).toBe(false);
   });
 
   test("calls isFailureSilenced once", () => {
@@ -190,9 +227,12 @@ describe("on_error_flow.ts", () => {
   });
 
   test("reads the note of the cancel in the main with the latest transition into the cancelled state", () => {
-    expect(countOf(squash(source), 'latestStatusEvent(id,"cancelled")')).toBe(
-      1,
-    );
+    expect(countNoteReads(source)).toBe(1);
+  });
+
+  test("does not count a read that is in a comment", () => {
+    const commented = `// ${NOTE_READ}\n/* ${NOTE_READ} */\nconst x = 1;`;
+    expect(countNoteReads(commented)).toBe(0);
   });
 });
 
@@ -403,6 +443,13 @@ describe("the checks that stop a running Claude and a running check", () => {
     );
   });
 
+  // 起動の前、実行中、再試行の前が同じ確認を使うことで、遅れて返った「止める」が引き継がれる。
+  test("is made once in runClaude and shared by the start, the run and the retry", () => {
+    expect(
+      countOf(codeOf(read("f/factory/lib/claude.ts")), "workItemStopCheckOf("),
+    ).toBe(2);
+  });
+
   test("is made by the check runner from the work item id of its own options", () => {
     expect(codeOf(read("f/factory/lib/check_runner.ts"))).toContain(
       "defaultWorkItemStopCheck(stop.workItemId)",
@@ -544,10 +591,20 @@ describe("the cancel of the implement flow", () => {
     });
   });
 
-  test("has the note that the prepare step gives as its reason", () => {
-    expect(read("f/factory/steps/implement_prepare.ts")).toContain(
-      `"${IMPLEMENT_CANCEL_NOTES.closed_before_start}"`,
-    );
+  // 準備のstepが取り消しに使う形。空白を除いて比べるので、文の中の空白も除く。
+  const PREPARE_STOP = squash(
+    `stop("cancelled", "${IMPLEMENT_CANCEL_NOTES.closed_before_start}")`,
+  );
+
+  test("has the note that the prepare step gives as its reason of the stop", () => {
+    expect(
+      squash(codeOf(read("f/factory/steps/implement_prepare.ts"))),
+    ).toContain(PREPARE_STOP);
+  });
+
+  test("does not take that match from a text that only mentions the note", () => {
+    const mention = `// stop("cancelled", "${IMPLEMENT_CANCEL_NOTES.closed_before_start}")\nconst reason = "${IMPLEMENT_CANCEL_NOTES.closed_before_start}";`;
+    expect(squash(codeOf(mention))).not.toContain(PREPARE_STOP);
   });
 });
 

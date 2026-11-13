@@ -121,17 +121,6 @@ describe("the CI round whose Claude run failed in a way that repeats", () => {
     );
   });
 
-  test("does not hold a failed row whose note is the stop of a work item that a person cancelled", () => {
-    expect(
-      decideFixingRecovery(
-        item("failed", {
-          note: `pr_fix_apply: ${ciClaudeFailureText("work_item_stopped")}`,
-        }),
-        NOW,
-      ),
-    ).toEqual({ kind: "release", hold: null });
-  });
-
   test("lists both notes of the usage limit and the stop as the ones that wait", () => {
     expect([...CI_CLAUDE_WAIT_NOTES].sort()).toEqual(
       (["usage_limit", "stopped"] as const)

@@ -369,13 +369,20 @@ describe("isFailureSilenced", () => {
     );
   });
 
-  test("warns once, with the secret masked, when the note cannot be read", async () => {
+  test("warns once when the note cannot be read", async () => {
+    const fake = setup(async () => {
+      throw new Error("db down");
+    });
+    await isFailureSilenced(ITEM, ROOT, fake.readNote, fake.log);
+    expect(fake.warnings).toHaveLength(1);
+  });
+
+  test("masks a secret in the warning when the note cannot be read", async () => {
     const fake = setup(async () => {
       throw new Error(`db down ghp_${"a".repeat(36)}`);
     });
     await isFailureSilenced(ITEM, ROOT, fake.readNote, fake.log);
     expect(JSON.stringify(fake.warnings)).not.toContain("ghp_");
-    expect(fake.warnings).toHaveLength(1);
   });
 
   test("is false when the work item has no recorded job id", async () => {
@@ -430,6 +437,70 @@ describe("the work item check that keeps a true answer that came late", () => {
 
   test("waits at least 10 seconds", () => {
     expect(WORK_ITEM_STOP_CHECK_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+  });
+});
+
+describe("the warning of a work item check that ran out of time", () => {
+  function recordingLogger() {
+    const warnings: string[] = [];
+    const log: Logger = {
+      info: () => {},
+      warn: (message, fields) => {
+        warnings.push(JSON.stringify({ message, fields }));
+      },
+      error: () => {},
+    };
+    return { warnings, log };
+  }
+
+  /** 返らない読み取りと、手で進める時計。 */
+  function hanging() {
+    let time = 1_000_000;
+    return {
+      io: io(() => new Promise<WorkItemStopState | null>(() => {})),
+      now: () => time,
+      advance: (ms: number) => {
+        time += ms;
+      },
+    };
+  }
+
+  test("is left when the first read runs out of time", async () => {
+    const fake = recordingLogger();
+    const world = hanging();
+    const check = workItemStopCheckFrom(world.io, 10, world.now, fake.log);
+    await check();
+    expect(fake.warnings).toHaveLength(1);
+  });
+
+  test("is left only once although a later read runs out of time too", async () => {
+    const fake = recordingLogger();
+    const world = hanging();
+    const check = workItemStopCheckFrom(world.io, 10, world.now, fake.log);
+    await check();
+    world.advance(61_000);
+    await check();
+    expect(fake.warnings).toHaveLength(1);
+  });
+
+  test("says how long the check waits", async () => {
+    const fake = recordingLogger();
+    const world = hanging();
+    const check = workItemStopCheckFrom(world.io, 10, world.now, fake.log);
+    await check();
+    expect(fake.warnings[0]).toContain("10");
+  });
+
+  test("is not left for a read that finishes in time", async () => {
+    const fake = recordingLogger();
+    const check = workItemStopCheckFrom(
+      io(async () => null),
+      WORK_ITEM_STOP_CHECK_TIMEOUT_MS,
+      Date.now,
+      fake.log,
+    );
+    await check();
+    expect(fake.warnings).toEqual([]);
   });
 });
 

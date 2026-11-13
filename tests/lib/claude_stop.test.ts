@@ -532,3 +532,51 @@ describe("runClaude when both the stop-all and the work item stop", () => {
     expect(result.outcome === "failure" ? result.reason : null).toBe("stopped");
   });
 });
+
+describe("runClaude with a work item check that answers late", () => {
+  /** 手で答える読み取り。`answer`を呼ぶまで返らない。 */
+  function manualCheck() {
+    const resolvers: Array<(stop: boolean) => void> = [];
+    const check = boundedCheckFrom(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolvers.push(resolve);
+        }),
+      10,
+      Date.now,
+      { keepLateTrue: true },
+    );
+    return {
+      check,
+      answer: (stop: boolean) => resolvers[0]?.(stop),
+      reads: () => resolvers.length,
+    };
+  }
+
+  test("stops the running claude with the true answer that the check before the start received late", async () => {
+    const manual = manualCheck();
+    const recorder = untilStopped();
+    const running = runClaude(
+      itemOptions(recorder.run, manual.check, sequence(false), 5),
+    );
+    // 起動の前の確認が時間切れで返った後に、読み取りが真を返す。
+    await Bun.sleep(100);
+    manual.answer(true);
+    const result = await running;
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "work_item_stopped",
+    );
+  });
+
+  test("does not read again after the late true answer", async () => {
+    const manual = manualCheck();
+    const recorder = untilStopped();
+    const running = runClaude(
+      itemOptions(recorder.run, manual.check, sequence(false), 5),
+    );
+    await Bun.sleep(100);
+    manual.answer(true);
+    await running;
+    expect(manual.reads()).toBe(1);
+  });
+});
