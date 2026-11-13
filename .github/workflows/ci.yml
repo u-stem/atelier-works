@@ -51,7 +51,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           # スクリプトを動かすbunだけを入れる。キャッシュは読み書きしない。
           install_args: bun
@@ -90,7 +90,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
 
       - name: Install dependencies
         # `mise run console:check`が使うので、Consoleの依存も入れる。
@@ -170,7 +170,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
 
       - name: Install dependencies
         # 依存のinstall scriptは実行しない。
@@ -194,7 +194,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
 
       - name: Install dependencies
         # `tests/lib/process_lock.test.ts`と検査用のscriptを動かすため、ルートの依存を、`check`と同じ固定のlockfileから入れる。
@@ -257,7 +257,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
 
       - name: Start a scratch Postgres (db service only)
         run: mise exec -- docker compose -f infra/docker-compose.yml up -d db --wait
@@ -305,7 +305,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
 
       - name: Start Windmill (db and server only)
         # `docker-compose.ci.yml`が、サーバーを`127.0.0.1:8080`に公開する。
@@ -423,7 +423,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           # 成果物の組み立てに要るbunと、viteとtscを動かすnodeだけを入れる。
           # 他の[tools]のinstall scriptや固定していない依存を、配信物を作るジョブで動かさないため。
@@ -501,7 +501,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           # 成果物の組み立てに要るbunと、viteとPlaywrightを動かすnodeだけを入れる。
           # 他の[tools]のinstall scriptや固定していない依存を、このジョブで動かさないため。
