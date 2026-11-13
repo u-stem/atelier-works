@@ -342,6 +342,12 @@ describe("the import scan", () => {
     expect(unfollowableImports("const load = loader.require;")).not.toEqual([]);
   });
 
+  test("flags module.require taken from module kept in a variable", () => {
+    expect(
+      unfollowableImports('const m = module;\nm.require("node:fs");'),
+    ).not.toEqual([]);
+  });
+
   test("does not flag a mention of require in a string", () => {
     expect(unfollowableImports('const s = "require";')).toEqual([]);
   });

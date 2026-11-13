@@ -268,10 +268,15 @@ describe("the tool dependency scan", () => {
   });
 
   // CommonJSの`module`と`exports`は、`module.require`でモジュールへ届く。
-  test("flags module.require", () => {
+  // 変換は`module.require(...)`を`require(...)`に書き換えるので、その形は`unfollowableImports`が止める。
+  test("flags module kept in a variable", () => {
+    expect(toolDependencies("const m = module;")).not.toEqual([]);
+  });
+
+  test("does not flag a local variable named module", () => {
     expect(
-      toolDependencies('const fs = module.require("node:fs");'),
-    ).not.toEqual([]);
+      toolDependencies("for (const module of steps) {\n  use(module.id);\n}"),
+    ).toEqual([]);
   });
 
   test("flags a reference to exports", () => {
