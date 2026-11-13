@@ -1455,8 +1455,8 @@ describe("nothingToCommitReason", () => {
   });
 });
 
+// この`describe`の`run`は、`fakeGit`が返す偽のrunnerで、ファイル先頭の`run`関数(`WorkflowRun`の組み立て)とは別である。
 describe("ci_fix_round changes", () => {
-  const SHA = "a".repeat(40);
   const MERGE_BASE = "d".repeat(40);
   const BASE_TIP = "e".repeat(40);
   const DIR = "/work/tree";

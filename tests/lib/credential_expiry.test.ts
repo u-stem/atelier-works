@@ -287,8 +287,6 @@ describe("checkCredentialExpiry", () => {
 });
 
 describe("credential_expiry record", () => {
-  const NOW = new Date("2026-11-05T00:00:00.000Z");
-
   function input(
     overrides: Partial<CredentialRecordInput> = {},
   ): CredentialRecordInput {
