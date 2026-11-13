@@ -224,7 +224,7 @@ gitのpre-pushは全体の`check`を実行しない。
   理由は[この文書の「脆弱性」](#脆弱性)にある。
 - `test`は`bun test --parallel`で、`console/`を除く。
   カバレッジを`coverage/lcov.info`に出す。
-  `check`は、その後に`bun ./scripts/check-coverage.ts`で、全体と層ごとの行カバレッジの下限と、lcovに出ない対象を確かめる。
+  `check`は、その後に`bun ./scripts/check-coverage.ts`で、全体と層ごとの行カバレッジの下限、lcovに出ない対象、判断の層の差分の行カバレッジを確かめる。
 - `test:changed`は、`scripts/check-changed.ts`が`origin/main`との差分(削除を含む)から、実行するテストを選ぶ。
   全件の確認はCIが行う。
   `bun test --changed`はimportの解析で選ぶので、コードから読まないファイルの変更は拾えない。

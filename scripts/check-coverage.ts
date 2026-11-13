@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// `mise run test`が作るcoverage/lcov.infoから行カバレッジを求め、全体と層ごとの下限を割っていないか確かめる。
+// `mise run test`が作るcoverage/lcov.infoから行カバレッジを求め、全体、層ごと、差分の下限を割っていないか確かめる。
 //
 // bunの`coverageThreshold`は、ファイルごとに判定する。全体や層の下限には使えないので、ここで縛る。
 // lcovに分岐(BRDA)は出ないので、見るのは行だけである。
@@ -29,9 +29,14 @@
 // - 下限の表に載る層に、対象が1件も無い。
 // - 全体、または層のどれかが、下限を割る。
 //
+// 全体と層の検査が通ったら、差分の行カバレッジも確かめる。
+// `origin/main`とのマージ基点から作業ツリーまでに変えた行のうち、lcovに実行可能と出た行を数える。
+// 数えるのは判断の層(`DIFF_COVERAGE_PATHS`)だけで、追跡していない新しいファイルは全行を変えた行とする。
+// 実行された割合が`DIFF_COVERAGE_FLOOR_PERCENT`を割るか、マージ基点を求められないときは、終了コード1で止まる。
+//
 // 失敗の出力は、Factoryの修正のプロンプトに載る末尾2000字から、miseのタスク失敗の行の分を引いた字数に収める。
 // 割った層、未読み込みの総数と上位のパスを、出力の最後に置く。
-// 出すのは、値、下限、パス、割合に限る。行の中身は出さない。標準エラーも載せない。
+// 出すのは、値、下限、パス、割合、差分の検査で実行されなかった行の番号に限る。行の中身は出さない。標準エラーも載せない。
 //
 // 下限を変えるときは、実測を見てこの定数を変える。変更は保護パスの変更として扱う。
 // 使い方: bun ./scripts/check-coverage.ts
@@ -163,12 +168,26 @@ export function layerOf(path: string): Layer | null {
   return "scripts";
 }
 
+/** lcovを解析し、対象のファイルごとの行数を数える。 */
+export function summarizeLcov(text: string): CoverageSummary {
+  const files: FileCoverage[] = [];
+  let executable = 0;
+  let executed = 0;
+  for (const [path, lines] of lineHitsOf(text)) {
+    const fileExecuted = [...lines.values()].filter(Boolean).length;
+    files.push({ path, executable: lines.size, executed: fileExecuted });
+    executable += lines.size;
+    executed += fileExecuted;
+  }
+  return { files, executable, executed };
+}
+
 /**
- * lcovを解析し、対象のファイルごとの行数を数える。
+ * lcovの対象のファイルごとに、実行可能な行と、その行が実行されたかを返す。
  * 同じ`SF`が複数回出ても1つにまとめ、どれかで実行された行を実行済みとする。
  * 解析できない行は無視する。
  */
-export function summarizeLcov(text: string): CoverageSummary {
+function lineHitsOf(text: string): Map<string, Map<number, boolean>> {
   const byPath = new Map<string, Map<number, boolean>>();
   let current: Map<number, boolean> | null = null;
   for (const line of text.split(/\r?\n/)) {
@@ -194,17 +213,7 @@ export function summarizeLcov(text: string): CoverageSummary {
     const executed = Number(match[2]) > 0;
     current.set(lineNumber, current.get(lineNumber) === true || executed);
   }
-
-  const files: FileCoverage[] = [];
-  let executable = 0;
-  let executed = 0;
-  for (const [path, lines] of byPath) {
-    const fileExecuted = [...lines.values()].filter(Boolean).length;
-    files.push({ path, executable: lines.size, executed: fileExecuted });
-    executable += lines.size;
-    executed += fileExecuted;
-  }
-  return { files, executable, executed };
+  return byPath;
 }
 
 type Tally = {
@@ -654,52 +663,255 @@ export function checkCoverage(options: CheckCoverageOptions): Verdict {
   return judgeCoverage(loaded, floor, { layerFloors, unloaded });
 }
 
-export const DIFF_COVERAGE_FLOOR_PERCENT = 0;
-export const DIFF_COVERAGE_PATHS: readonly string[] = [];
+/** 変更した行のうち、テストが実行した行の割合の下限(%)。 */
+export const DIFF_COVERAGE_FLOOR_PERCENT = 90;
+
+/**
+ * 変更した行の割合を縛るパス。判断の層だけにする。
+ * 配線の層と入口は、層ごとのC0の目標を置かないためである。
+ */
+export const DIFF_COVERAGE_PATHS: readonly string[] = ["f/factory/lib"];
+
+/** 1ファイルに載せる、実行されなかった行の範囲の数。 */
+const RANGE_COUNT = 8;
 
 export type ChangedLines = {
+  /** 変更した行の番号。作業ツリーのファイルの行番号で持つ。 */
   readonly lines: ReadonlyMap<string, ReadonlySet<number>>;
+  /** 追跡していない新しいファイル。実行可能なすべての行を、変更した行とする。 */
   readonly wholeFiles: readonly string[];
 };
 
-export function parseDiffAddedLines(_diff: string): Map<string, Set<number>> {
-  return new Map();
-}
+export type JudgeDiffOptions = {
+  readonly floorPercent?: number;
+  readonly paths?: readonly string[];
+};
 
-export function judgeDiffCoverage(
-  _lcovText: string,
-  _changed: ChangedLines,
-  _options: { readonly floorPercent?: number } = {},
-): Verdict {
-  return { ok: false, message: "" };
-}
-
-export function diffArgv(_base: string, _paths: readonly string[]): string[] {
-  return [];
-}
-
-export function listChangedLines(
-  _root: string,
-  _paths: readonly string[],
-  _run: (argv: readonly string[], cwd: string) => string = runGit,
-): ChangedLines {
-  return { lines: new Map(), wholeFiles: [] };
-}
-
-export function checkDiffCoverage(_options: {
+export type CheckDiffCoverageOptions = JudgeDiffOptions & {
   readonly root: string;
+  /** coverage/lcov.infoの内容。全体の検査で検証したものを渡す。 */
   readonly lcovText: string;
+  /** 変更した行の列挙。既定は実際にgitを呼ぶ。 */
   readonly listChanged?: (root: string) => ChangedLines;
-}): Verdict {
-  return { ok: false, message: "" };
+};
+
+const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+
+/**
+ * `git diff -U0`の出力から、ファイルごとに新しい側の行番号を集める。
+ * hunkの中の行は、見出しの行数の分だけ読み飛ばす。
+ * `+++ `で始まる追加の行を、ファイルの見出しと読み違えないためである。
+ * 消したファイル(`+++ /dev/null`)は入れない。
+ */
+export function parseDiffAddedLines(diff: string): Map<string, Set<number>> {
+  const byPath = new Map<string, Set<number>>();
+  let current: Set<number> | null = null;
+  let oldLeft = 0;
+  let newLeft = 0;
+  for (const line of diff.split("\n")) {
+    if (oldLeft > 0 || newLeft > 0) {
+      if (line.startsWith("-")) oldLeft -= 1;
+      else if (line.startsWith("+")) newLeft -= 1;
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      const target = line.slice("+++ ".length);
+      if (!target.startsWith("b/")) {
+        current = null;
+        continue;
+      }
+      const path = target.slice("b/".length);
+      current = byPath.get(path) ?? new Set<number>();
+      byPath.set(path, current);
+      continue;
+    }
+    const hunk = HUNK_HEADER.exec(line);
+    if (hunk === null) continue;
+    oldLeft = Number(hunk[1] ?? "1");
+    const start = Number(hunk[2]);
+    newLeft = Number(hunk[3] ?? "1");
+    for (let offset = 0; offset < newLeft; offset += 1) {
+      current?.add(start + offset);
+    }
+  }
+  return byPath;
+}
+
+/** 行番号の並びを、`2-4, 7`の形の範囲にまとめる。多いときは先頭の範囲だけを残す。 */
+function rangesOf(lines: readonly number[]): string {
+  const ranges: [start: number, end: number][] = [];
+  for (const line of [...lines].sort((a, b) => a - b)) {
+    const last = ranges.at(-1);
+    if (last !== undefined && line === last[1] + 1) last[1] = line;
+    else ranges.push([line, line]);
+  }
+  const shown = ranges
+    .slice(0, RANGE_COUNT)
+    .map(([start, end]) => (start === end ? `${start}` : `${start}-${end}`))
+    .join(", ");
+  return ranges.length > RANGE_COUNT ? `${shown}, ...` : shown;
+}
+
+type DiffFile = {
+  readonly path: string;
+  readonly executable: number;
+  readonly unexecuted: readonly number[];
+};
+
+/**
+ * 変更した行のうち、テストが実行した行が下限を満たすかを判定する。
+ * 数えるのは、`paths`の下の対象のファイルの、lcovに実行可能と出た行だけである。
+ * lcovに無いファイルは数えない。全体の検査が、対象の未読み込みを先に止めるためである。
+ */
+export function judgeDiffCoverage(
+  lcovText: string,
+  changed: ChangedLines,
+  options: JudgeDiffOptions = {},
+): Verdict {
+  const floorPercent = options.floorPercent ?? DIFF_COVERAGE_FLOOR_PERCENT;
+  const paths = options.paths ?? DIFF_COVERAGE_PATHS;
+  const scope = paths.join(", ");
+  const inScope = (path: string): boolean =>
+    isTargetPath(path) && paths.some((prefix) => path.startsWith(`${prefix}/`));
+  const wholeFiles = new Set(changed.wholeFiles);
+
+  const files: DiffFile[] = [];
+  for (const [path, hits] of lineHitsOf(lcovText)) {
+    if (!inScope(path)) continue;
+    const lines = changed.lines.get(path);
+    const counted = [...hits.keys()].filter(
+      (line) => wholeFiles.has(path) || lines?.has(line) === true,
+    );
+    if (counted.length === 0) continue;
+    const unexecuted = counted.filter((line) => hits.get(line) !== true);
+    files.push({ path, executable: counted.length, unexecuted });
+  }
+
+  const executable = files.reduce((sum, file) => sum + file.executable, 0);
+  if (executable === 0) {
+    return {
+      ok: true,
+      message: `diff line coverage of ${scope}: no changed executable line`,
+    };
+  }
+  const unexecuted = files.reduce(
+    (sum, file) => sum + file.unexecuted.length,
+    0,
+  );
+  const executed = executable - unexecuted;
+  const ratio = percent(executed, executable).toFixed(2);
+  const head = `diff line coverage of ${scope}: ${ratio}% (${executed} of ${executable} changed lines in ${files.length} files), floor ${floorPercent.toFixed(2)}%`;
+  if (executed * 100 >= floorPercent * executable) {
+    return { ok: true, message: head };
+  }
+
+  const rows = files
+    .filter((file) => file.unexecuted.length > 0)
+    .sort(
+      (a, b) =>
+        b.unexecuted.length - a.unexecuted.length ||
+        a.path.localeCompare(b.path),
+    )
+    .slice(0, WORST_FILE_COUNT)
+    .map((file) => `  ${file.path}: lines ${rangesOf(file.unexecuted)}`);
+  return {
+    ok: false,
+    message: composeFailure(
+      [`diff coverage check failed: ${head}`],
+      [{ heading: "changed lines that no test executed:", details: rows }],
+      [
+        {
+          heading: `the changed lines are below the floor: ${ratio}% < ${floorPercent.toFixed(2)}% (add tests that run them; see docs/testing-guidelines.md)`,
+          details: [],
+        },
+      ],
+    ),
+  };
+}
+
+/**
+ * 変更した行を出す`git diff`の引数。作業ツリーを基点と比べ、ステージしていない変更も含める。
+ * 利用者の設定で出力の形が変わらないよう、色、外部のdiff、textconv、名前の変更の検出を止め、接頭辞を固定する。
+ */
+export function diffArgv(base: string, paths: readonly string[]): string[] {
+  return [
+    "git",
+    "diff",
+    "-U0",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    base,
+    "--",
+    ...paths,
+  ];
+}
+
+/**
+ * `origin/main`とのマージ基点から、作業ツリーまでに変更した行を列挙する。
+ * 追跡していない新しいファイルは、ファイル全体を変更したものとする。
+ * マージ基点を求められないときや、gitが失敗したときは投げる。
+ */
+export function listChangedLines(
+  root: string,
+  paths: readonly string[],
+  run: (argv: readonly string[], cwd: string) => string = runGit,
+): ChangedLines {
+  const base = run(["git", "merge-base", "HEAD", "origin/main"], root).trim();
+  if (!/^[0-9a-f]{40,64}$/.test(base)) {
+    throw new Error("git merge-base printed no commit");
+  }
+  const lines = parseDiffAddedLines(run(diffArgv(base, paths), root));
+  const wholeFiles = run(
+    ["git", "ls-files", "-z", "--others", "--exclude-standard", "--", ...paths],
+    root,
+  )
+    .split("\0")
+    .filter((entry) => entry !== "");
+  return { lines, wholeFiles };
+}
+
+/** 変更した行を列挙し、変更した行のカバレッジが下限を満たすかを判定する。 */
+export function checkDiffCoverage(options: CheckDiffCoverageOptions): Verdict {
+  const paths = options.paths ?? DIFF_COVERAGE_PATHS;
+  const listChanged =
+    options.listChanged ?? ((root: string) => listChangedLines(root, paths));
+  let changed: ChangedLines;
+  try {
+    changed = listChanged(options.root);
+  } catch {
+    // gitの標準エラーとパスは載せない。
+    return {
+      ok: false,
+      message:
+        "diff coverage check failed: listing the changed lines failed (git merge-base HEAD origin/main, git diff, or git ls-files)",
+    };
+  }
+  return judgeDiffCoverage(options.lcovText, changed, {
+    floorPercent: options.floorPercent ?? DIFF_COVERAGE_FLOOR_PERCENT,
+    paths,
+  });
 }
 
 if (import.meta.main) {
-  const result = checkCoverage({ root: resolve(import.meta.dir, "..") });
-  if (result.ok) {
-    console.log(result.message);
-  } else {
+  const root = resolve(import.meta.dir, "..");
+  const result = checkCoverage({ root });
+  if (!result.ok) {
     console.error(result.message);
     process.exit(1);
   }
+  console.log(result.message);
+  // 全体の検査が、lcovを通常のファイルとして読めることを確かめた後に読む。
+  const diff = checkDiffCoverage({
+    root,
+    lcovText: readFileSync(join(root, "coverage", "lcov.info"), "utf8"),
+  });
+  if (!diff.ok) {
+    console.error(diff.message);
+    process.exit(1);
+  }
+  console.log(diff.message);
 }
