@@ -280,7 +280,7 @@ describe("parseNameStatus", () => {
 // マクロは印のファイルを書く。印ができたら、変換がマクロを実行したことになる。
 // 対照のテストは、同じ入力を素の`transformSync`に通すと印ができることを確かめる。
 // 印の作り方や入力の書き方が誤っていると、「印ができない」テストは常に緑になるためである。
-describe("check-comment-only-diff check comment only macro", () => {
+describe("check-comment-only-diff macro", () => {
   const SPACES: Record<string, string> = {
     "a space": " ",
     "a vertical tab": String.fromCharCode(0x0b),

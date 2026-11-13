@@ -526,7 +526,7 @@ describe("usableTableRows", () => {
 
 // リポジトリ単位の古さを、所有者ごとに数える判定のテスト。
 // 数える対象(明示でなく、gone・archivedでないリポジトリ)と、理由別の数え方、最初に見た時刻からの猶予を確かめる。
-describe("gh_collect_read gh collect repo stale", () => {
+describe("gh_collect_read repo stale", () => {
   const MINUTE_MS = 60_000;
   const DAY_MS = 24 * 60 * MINUTE_MS;
   const DB_NOW = new Date("2026-10-19T00:00:00.000Z");
