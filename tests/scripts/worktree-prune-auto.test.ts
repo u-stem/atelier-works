@@ -200,6 +200,7 @@ describe("worktree-prune.sh", () => {
             env: autoEnv(),
           },
         );
+        // 実時間が要る。別プロセスのシェルが印のファイルを作るのを、条件で待つ。条件が成り立てばすぐ抜ける。
         for (let i = 0; i < 100 && !existsSync(started); i++) {
           await Bun.sleep(50);
         }

@@ -514,6 +514,7 @@ describe("checkConflictResolution search budget", () => {
     ]);
   });
 
+  // 実時間が要る。重い入力で、突き合わせが探索を打ち切って固定の違反を返すことを、経過時間の上限で確かめる。
   test("finishes the heavy input quickly", () => {
     const startedAt = Date.now();
     check([heavyFile()]);

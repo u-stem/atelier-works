@@ -88,6 +88,8 @@ describe("validateDrawioXml tokenizer", () => {
   const prefix = "<mxfile><diagram><mxGraphModel><root>";
   const maxBytes = 256 * 1024;
 
+  // 実時間が要る。タグの走査が入力の長さに対して線形であることを、経過時間の上限で確かめる。
+  // 上限は緩く、2乗の走査なら大きく超える。対象は、このdescribeと、`validateDrawioXml long inputs`の経過時間の検査である。
   function timeOf(xml: string): { valid: boolean; elapsedMs: number } {
     const started = performance.now();
     const result = validateDrawioXml(xml);

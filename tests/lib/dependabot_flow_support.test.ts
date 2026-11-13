@@ -772,6 +772,8 @@ describe("sanitizeUntrustedProse", () => {
     expect(sanitizeUntrustedProse("Title\n=====", 100)).toBe("Title\n\\=====");
   });
 
+  // 実時間が要る。巨大な入力でも、本文の整形と変更履歴の抜粋が線形時間で終わることを、経過時間の上限で確かめる。
+  // 上限は緩い。対象は、経過時間を測る検査である。
   test("handles a very large text without a heavy cost", () => {
     const started = performance.now();
     sanitizeUntrustedProse("word ".repeat(2_000_000), 4000);

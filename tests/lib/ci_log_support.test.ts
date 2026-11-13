@@ -286,6 +286,8 @@ describe("cleanLogText", () => {
 describe("cleanLogText worst-case input", () => {
   const ESC = String.fromCharCode(0x1b);
   const BEL = String.fromCharCode(0x07);
+  // 実時間が要る。病的な入力でも、ログの整形が線形時間で終わることを、経過時間の上限で確かめる。
+  // 対象は、このdescribeと、「eight megabytes」の検査である。
   // 時間の上限は緩くする。線形なら数十ミリ秒、2乗なら数分かかる入力である。
   const LIMIT_MS = 5000;
   const elapsedMs = (raw: string): number => {

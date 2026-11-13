@@ -2256,6 +2256,8 @@ describe("lock file preparation", () => {
   });
 });
 
+// 実時間が要る。実際のflockと/procが対象で、保持者のプロセスが走っている間に、塞がりの確認と走査を行う。
+// Linuxで、flockがあるときだけ動き、それ以外では飛ばされる。
 describe("process lock with the real flock and /proc", () => {
   const supported = process.platform === "linux" && existsSync(FLOCK_PATH);
   // /procを全件走査するテストはrootでだけ走らせる。

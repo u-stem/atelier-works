@@ -657,6 +657,7 @@ describe("verifyMetadataPatch keeps the work bounded", () => {
     expect(Math.max(...counts.values())).toBe(1);
   });
 
+  // 実時間が要る。上限に近い大きさのファイルが多数あっても、検証の作業量が有界であることを、経過時間の上限で確かめる。
   test("finishes on many files that are close to the size limit", async () => {
     const w = world();
     const body = 'import { c } from "./common.ts";\n'.repeat(

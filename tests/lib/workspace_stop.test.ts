@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createBunCommandRunner } from "../../f/factory/lib/workspace.ts";
 
+// 実時間が要る。実プロセスが、停止の合図で本当に止まり、猶予の後にSIGKILLされることが対象である。
+// 合図を出すまでの待ちは最小(50ms)にしてある。
 function abortAfter(ms: number): AbortSignal {
   const controller = new AbortController();
   setTimeout(() => {

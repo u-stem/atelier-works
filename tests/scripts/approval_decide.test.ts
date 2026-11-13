@@ -9,9 +9,17 @@ import {
   missingApprovalRequestMessage,
 } from "../../f/factory/approval_decide.ts";
 import type { ApprovalRequest } from "../../f/factory/lib/types.ts";
-import { restoreGlobalFetch, stubGlobalFetchWith } from "../lib/testSupport.ts";
+import {
+  restoreGlobalFetch,
+  restoreTimers,
+  stubGlobalFetchWith,
+  stubLongTimers,
+} from "../lib/testSupport.ts";
 
-afterEach(restoreGlobalFetch);
+afterEach(() => {
+  restoreGlobalFetch();
+  restoreTimers();
+});
 
 const SNAPSHOT = {
   owner: "o",
@@ -48,6 +56,8 @@ function checkDeps(overrides: CheckOverrides = {}): {
   const warnings: string[] = [];
   const { fetchFn = () => liveIssue(), ...rest } = overrides;
   stubGlobalFetchWith((request) => fetchFn(request.url));
+  // 5xxと通信断の再試行は、Issueの読み取りの既定の待ち(2秒)を実際に待つ。待ちは時計の差し替えで飛ばす。
+  stubLongTimers();
   const deps: IssueCheckDeps = {
     getWorkItem: () => Promise.resolve(SNAPSHOT),
     getToken: () => Promise.resolve(TOKEN),

@@ -259,6 +259,53 @@ export function restoreGlobalFetch(): void {
   for (const stub of globalFetchStubs.splice(0).reverse()) stub.mockRestore();
 }
 
+/**
+ * 待っているマイクロタスクがすべて終わるまで、制御を譲る。
+ * 時間は待たない。`await`の連鎖だけで進む処理が落ち着くのを待つために使う。
+ */
+export function nextTask(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+const timerRestores: (() => void)[] = [];
+
+/**
+ * `thresholdMs`以上の`setTimeout`を、待たずに次のタスクで発火させる。
+ * `sleep`を差し込めず、既定の`setTimeout`で再試行の前に実際に待つ関数のテストで使う。
+ * しきい値以上の`setTimeout`は、締め切りや猶予も含めてすべて即時に発火する。
+ * `setTimeout`で締め切りや猶予を持つ対象の、時間切れを確かめるテストでは使わない。
+ * 差し替えは`restoreTimers`で戻す。使うテストのファイルは`afterEach(restoreTimers)`を置く。
+ */
+export function stubLongTimers(thresholdMs = 1_000): void {
+  const realSetTimeout = globalThis.setTimeout;
+  // `setTimeout`の型は、返す値の違う2つの宣言が重なっていて、関数を`spyOn(globalThis, "setTimeout")`に渡せない。そのため`Reflect`で差し替える。
+  const replacement = (
+    handler: TimerHandler,
+    ms?: number,
+    ...args: unknown[]
+  ) => {
+    if (ms !== undefined && ms >= thresholdMs) {
+      return realSetTimeout(handler, 0, ...args);
+    }
+    return realSetTimeout(handler, ms, ...args);
+  };
+  Reflect.set(
+    globalThis,
+    "setTimeout",
+    Object.assign(replacement, { __promisify__: realSetTimeout.__promisify__ }),
+  );
+  timerRestores.push(() => {
+    Reflect.set(globalThis, "setTimeout", realSetTimeout);
+  });
+}
+
+/** `stubLongTimers`の差し替えをすべて戻す。 */
+export function restoreTimers(): void {
+  for (const restore of timerRestores.splice(0).reverse()) restore();
+}
+
 /** 本文の`prefix`を渡した後、読み取りの途中で`error`で失敗する応答。 */
 export function cutBody(status: number, error: Error, prefix = ""): Response {
   const stream = new ReadableStream<Uint8Array>({

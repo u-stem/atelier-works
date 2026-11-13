@@ -93,6 +93,8 @@ describe("inflation stops at the declared size", () => {
     expect(process.memoryUsage().rss - before).toBeLessThan(30 * 1024 * 1024);
   });
 
+  // 実時間が要る。申告の大きさが小さいzipに巨大な実データがあるとき、膨張させずに、申告の大きさで読むのを止めることを、経過時間の上限で確かめる。
+  // 全部を展開すれば、上限を大きく超える。
   test("stops quickly on a small declared size with a huge real size", () => {
     const zip = buildZip([{ name: "a", data: zeros, declaredSize: 10 }]);
     const started = performance.now();

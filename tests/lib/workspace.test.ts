@@ -83,7 +83,7 @@ import {
   writeTextFile,
 } from "../../f/factory/lib/workspace.ts";
 import { buildReviewWorktreeDir } from "../../f/factory/steps/pr_review_prepare.ts";
-import { createFakeCommandRunner, fail, ok } from "./testSupport.ts";
+import { createFakeCommandRunner, fail, nextTask, ok } from "./testSupport.ts";
 
 describe("runCommand", () => {
   test("captures stdout of a trivial command", async () => {
@@ -101,6 +101,7 @@ describe("runCommand", () => {
     expect(result.stdout).toBe("piped input");
   });
 
+  // 実時間が要る。実プロセスが、時間切れで本当に止められることが対象で、待ちは最小(50ms)にしてある。
   test("kills the process and reports timedOut after the timeout elapses", async () => {
     const result = await runCommand(["sleep", "5"], { timeoutMs: 50 });
     expect(result.timedOut).toBe(true);
@@ -196,6 +197,8 @@ describe("createBunCommandRunner spawn failure", () => {
   });
 });
 
+// 実時間が要る。SIGTERMとSIGKILLの切り替えは、実プロセスの停止と猶予の経過そのものが対象で、時計を差し替えると検査の意味が無くなる。
+// 待ちは最小(30ms)にし、猶予を長くした側は、猶予が過ぎるのを待たずに返ることを、長い上限との差で確かめる。
 describe("createBunCommandRunner SIGTERM -> SIGKILL escalation", () => {
   test("escalates to SIGKILL after killGraceMs when the process ignores SIGTERM", async () => {
     const run = createBunCommandRunner({ killGraceMs: 30 });
@@ -5760,7 +5763,8 @@ describe("readStreamAll", () => {
   test("returns what it read when the signal aborts", async () => {
     const controller = new AbortController();
     const reading = readStreamAll(openStreamOf("abc"), controller.signal);
-    await Bun.sleep(10);
+    // 読み取りが最初の塊を受け取るまで、時間を待たずにマイクロタスクを進める。
+    await nextTask();
     controller.abort();
     expect(await reading).toBe("abc");
   });
@@ -5774,7 +5778,8 @@ describe("readStreamCapped with a signal", () => {
       100,
       controller.signal,
     );
-    await Bun.sleep(10);
+    // 読み取りが最初の塊を受け取るまで、時間を待たずにマイクロタスクを進める。
+    await nextTask();
     controller.abort();
     expect(await reading).toBe("abc");
   });
@@ -5837,6 +5842,8 @@ function killEscaped(stdout: string): void {
   }
 }
 
+// 実時間が要る。プロセスグループの後始末と、出力の読み取りを見切るまでの時間(outputDrainMs)が対象で、実プロセスの終了を待つ。
+// 見切りを確かめるテストの待ちは、最小(100〜200ms)にしてある。猶予を長くしたテストは、猶予を待たずに返ることを確かめる。
 describe("createBunCommandRunner process-group cleanup", () => {
   test("stops a background process the command left in its group", async () => {
     const run = createBunCommandRunner({ killGraceMs: 1_000 });

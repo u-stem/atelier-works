@@ -121,8 +121,9 @@ function world(w: World) {
 
 async function build(w: World) {
   const fake = world(w);
+  // 5xxの再試行は、既定では実際に待つ。待ちは何もしない関数に差し替える。
   const context = await buildPrCandidate(
-    { ghToken: "tok" },
+    { ghToken: "tok", sleep: async () => {} },
     FOUND,
     "octo-owner",
     [],

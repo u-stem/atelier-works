@@ -136,6 +136,8 @@ describe("scanImports", () => {
     );
   });
 
+  // 実時間が要る。病的な入力でも、importの走査が線形時間で終わることを、経過時間の上限で確かめる。
+  // 上限は緩く、2乗の走査なら大きく超える。対象は、この`test.each`と、「linear time」の検査である。
   test.each([
     ["repeated import keywords", "import ".repeat(MAX_FILE_BYTES / 7)],
     ["white space after a keyword", `import${" ".repeat(MAX_FILE_BYTES - 6)}`],
