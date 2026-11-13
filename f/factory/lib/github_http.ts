@@ -97,6 +97,10 @@ export type GitHubRequest = {
   readonly timeoutMs?: number;
   readonly retry?: "once" | "never";
   readonly redirect?: "follow_same_origin" | "never";
+  /** 本文で保持するバイト数の上限。超えたら先頭と末尾を残して間を捨て、`capped`を付ける。省略すると上限を付けない。 */
+  readonly maxBodyBytes?: number;
+  /** 端末の制御列(ESC)を含む本文を受け取る。省略すると、ESCを含むJSONでない本文を、本文が欠けたもの(`incomplete`)にする。 */
+  readonly allowEscapeSequences?: boolean;
 };
 
 /**
@@ -135,6 +139,8 @@ export type GitHubHttpResponseCore = {
   readonly bodyText: string;
   readonly timedOut?: true;
   readonly incomplete?: true;
+  /** `maxBodyBytes`を超えて本文の間を捨てたときだけ付く。判定は受け取ったバイト数で行い、本文の文字列は見ない。 */
+  readonly capped?: true;
 };
 
 export type GitHubHttpResponse = GitHubHttpResponseCore & {
@@ -768,4 +774,51 @@ export async function requestGitHub(
       ...(await fetchAttempt(client, request)),
     }),
   );
+}
+
+// ---------------------------------------------------------------------------
+// 署名付きURLの取得
+// ---------------------------------------------------------------------------
+
+/** 署名付きURLを取りに行く用途。用途ごとに、取得先として認めるホストが決まる。 */
+export type DownloadPurpose = "artifact" | "job_log";
+
+/**
+ * 取得の決まり。`maxBytes`は本文の上限で、`bytes`は超えたら`too_large`、`text_capped`は先頭と末尾を残す。
+ * `timeoutMs`はAPIへの要求と取得先への要求を合わせた締め切りで、既定は`GITHUB_HTTP_TIMEOUT_MS`。
+ */
+export type DownloadOptions = {
+  readonly as: "bytes" | "text_capped";
+  readonly maxBytes: number;
+  readonly timeoutMs?: number;
+};
+
+/**
+ * 取得の結果。どの結果にも、署名付きURL、例外の文、取得先の本文の断片(`text`と`bytes`を除く)を載せない。
+ * - `api_response`: APIが3xxを返さなかった。応答をそのまま返す(ステータス0は応答が無い)。
+ * - `bad_redirect`: 3xxの`Location`が無いか、用途の取得先の表に当たらない。`status`は3xxのステータス。
+ * - `storage_status`: 取得先が2xx以外を返した。
+ * - `no_response`: 取得先の応答が無いか、本文の途中で切れた。`timedOut`は締め切りによるか。
+ * - `too_large`: `bytes`で、本文が`maxBytes`を超えた。
+ * - `bytes`、`text`: 取得した本文。`capped`は`text_capped`で間を捨てたか。
+ */
+export type DownloadResult =
+  | { readonly kind: "api_response"; readonly response: GitHubHttpResponse }
+  | { readonly kind: "bad_redirect"; readonly status: number }
+  | { readonly kind: "storage_status"; readonly status: number }
+  | { readonly kind: "no_response"; readonly timedOut: boolean }
+  | { readonly kind: "too_large" }
+  | { readonly kind: "bytes"; readonly bytes: Uint8Array }
+  | { readonly kind: "text"; readonly text: string; readonly capped: boolean };
+
+/**
+ * APIの`path`へトークンつきでGETを送り、返った3xxの`Location`の署名付きURLから本文を取る。
+ */
+export async function downloadRedirectTarget(
+  _client: GitHubHttpClient,
+  _request: { readonly path: string },
+  _purpose: DownloadPurpose,
+  _options: DownloadOptions,
+): Promise<DownloadResult> {
+  return { kind: "too_large" };
 }
