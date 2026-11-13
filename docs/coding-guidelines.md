@@ -216,7 +216,21 @@ Windmillの資産の配置、secretとconfigの取得、`//native`を使わな�
 
 適用済みのmigrationは書き換えず、変更は新しいmigrationで足す。
 書き換えは、新規環境と復元にだけ効き、本番とずれるためである。
-migrationの文面はテストで固定しないので、`test:db`が拾うのは振る舞いの変化だけである。
+実DBの検査(`test:db`)と重複する、migrationの文面のテストは足さない。
+migrationの書き方の規約は、2つのテストが全migrationに共通で確かめる。
+`tests/scripts/migration_timestamps.test.ts`は、upとdownの対と、版の重複を確かめる。
+`tests/scripts/migration_conventions.test.ts`は、ほかの規約を確かめる。
+
+- 版は14桁の実在する日時にし、ファイル名は`<版>_<名前>.(up|down).sql`にする。
+  upとdownは対にする。
+- migrationは`BEGIN`で始めて`END`で終え、途中にトランザクションを操作する文を置かない。
+- `BEGIN`の直後に`SET LOCAL lock_timeout`を、60秒以下の正の値で設定し、ほかの文では`lock_timeout`に触れない。
+  文字列のエスケープ(`E'...'`、`U&'...'`、バックスラッシュ)は、検査が読めないので使わない。
+
+`lock_timeout`の規約は、版`20261017110000`以降に求める。
+それより前のmigrationには`lock_timeout`の無いファイルがあり、適用済みで書き換えないためである。
+版、ファイル名、トランザクションの規約は、`lock_timeout`の無い既存のmigrationも含めて、すべてが満たす。
+`BEGIN`と`END`、`lock_timeout`の規約は、既存のmigrationの実測にもとづく。
 
 ## 検証コマンド
 
