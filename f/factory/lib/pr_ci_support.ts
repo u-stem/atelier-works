@@ -509,6 +509,8 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `claude_run_failed`: 直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗した。
  *   同じheadで起動し直しても同じ失敗になり、費用と回数だけを使う。
  *   `claude_usage_limit`の行が、時間の上限まで待っても戻らなかったときも、この理由に移る。
+ * - `operator_cancelled`: PRの直す作業項目か、PRの最新の作業項目を、人がConsoleから中止した。
+ *   人が止めると決めたので、同じheadでは起動し直さない。人が止めた操作の結果なので、Discordには送らない。
  *
  * 一時的な理由は、解ければ外してよい理由である。
  * - `marker_missing`: Factoryのクローンのスキルが、CIの失敗を直す節を持たない。
@@ -541,6 +543,7 @@ export const PR_CI_FIX_HOLD_REASONS = [
   "rounds_exhausted",
   "not_factory_head",
   "claude_run_failed",
+  "operator_cancelled",
   "main_ci_failed",
   "budget_exceeded",
   "not_reviewed",
@@ -643,6 +646,14 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
       "直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗したか、待っても戻らなかった使用上限で止まった。同じheadでは起動し直さない。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの修正を起動し直す」に従う",
     stopAction:
       "直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗したか、待っても戻らなかった使用上限で止まりました。同じheadでは起動し直しません。作業項目の理由で種類を確かめて原因を解き、人が直してPRにpushするか、運用手順の「Claudeの失敗で保留したCIの修正を起動し直す」に従ってください",
+  },
+  operator_cancelled: {
+    temporary: false,
+    discord: false,
+    nextAction:
+      "人がConsoleから作業項目を中止したので、同じheadでは自動で直さない。直すときは、人が直してPRにpushするか、PRに修正のラベルを付け直す",
+    stopAction:
+      "人がConsoleから作業項目を中止したので、同じheadでは自動で直しません。直すときは、人が直してPRにpushするか、PRに修正のラベルを付け直してください",
   },
   marker_missing: {
     temporary: true,

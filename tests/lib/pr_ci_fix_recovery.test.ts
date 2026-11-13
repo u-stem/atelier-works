@@ -8,6 +8,7 @@ import {
 } from "../../f/factory/lib/ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import { NON_RETRYABLE_REASONS } from "../../f/factory/lib/flow_retry_marker.ts";
+import { OPERATOR_CANCELLED_NOTE } from "../../f/factory/lib/operator_cancel.ts";
 import {
   CI_CLAUDE_WAIT_NOTES,
   decideFixingRecovery,
@@ -17,6 +18,7 @@ import {
   readFixItemState,
   STALE_IMAGE_WAIT_MS,
 } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
+import { prCiFixHoldInfo } from "../../f/factory/lib/pr_ci_support.ts";
 import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
 
 const NOW = new Date("2026-10-13T12:00:00Z");
@@ -159,6 +161,40 @@ describe("the CI round whose Claude run failed in a way that repeats", () => {
         NOW,
       ),
     ).toEqual({ kind: "pushed" });
+  });
+});
+
+describe("the CI round that a person cancelled", () => {
+  test("holds the row until the head moves, so that the round is not started again", () => {
+    expect(
+      decideFixingRecovery(
+        item("cancelled", { note: OPERATOR_CANCELLED_NOTE }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: "operator_cancelled" });
+  });
+
+  test("releases a row whose work item was cancelled for another reason without a hold", () => {
+    expect(
+      decideFixingRecovery(
+        item("cancelled", { note: "reconcile: pr_closed (actionable)" }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("maps the note of a cancel by a person to its hold", () => {
+    expect(holdReasonForStoppedItem(OPERATOR_CANCELLED_NOTE)).toBe(
+      "operator_cancelled",
+    );
+  });
+
+  test("keeps the hold of a cancel by a person until the head moves", () => {
+    expect(prCiFixHoldInfo("operator_cancelled").temporary).toBe(false);
+  });
+
+  test("does not send the hold of a cancel by a person to Discord", () => {
+    expect(prCiFixHoldInfo("operator_cancelled").discord).toBe(false);
   });
 });
 

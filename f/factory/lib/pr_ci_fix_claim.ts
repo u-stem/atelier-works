@@ -187,6 +187,8 @@ export type FixClaimReaders = {
   readonly countRounds: () => Promise<number>;
   /** 全停止が置かれているか、解除されたと確かめられないか。全停止で止まった行だけが読む。 */
   readonly stopHeld: () => Promise<boolean>;
+  /** PRの最新の作業項目が、行のheadで人に中止されたか(`readOperatorCancelledAtHead`)。 */
+  readonly operatorCancelledAtHead: () => Promise<boolean>;
 };
 
 export type FixClaimInput = {
@@ -249,6 +251,8 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  * 3. その後でPRを読み直す。行のheadから進んでいれば、閉じていれば、skipする。
  *    続けて、PRのブランチが指すIssueの作業項目が、Factoryがブランチを引き継ぐ状態(`isBranchHeldForFixRounds`)なら、
  *    `branch_held`でskipする。起動せず、ラウンドを数えず、保留も書かない。引き継ぐ間は、設計や実装がpushするためである。
+ *    PRの最新の作業項目を、人が行のheadで中止していれば、`operator_cancelled`で保留する。
+ *    人が止めると決めたPRで、同じheadの新しい修正を作らないためである。headが動けば新しい行になり、保留は残らない。
  *    ドラフトか、auto-mergeが有効なら`pr_draft_or_auto_merge`で保留する。
  *    作業項目の状態を先に読むのは、読んでいる間に直す作業項目がpushしたとき、
  *    古いheadの行を起動しないためである。PRを先に読むと、その読み取りは古くなる。
@@ -302,6 +306,9 @@ export async function decideFixClaim(
   if (pr.headSha !== row.head_sha) return { kind: "skip", why: "head_moved" };
   if (isBranchHeldForFixRounds(await readers.readBranchItemStatus())) {
     return { kind: "skip", why: "branch_held" };
+  }
+  if (await readers.operatorCancelledAtHead()) {
+    return hold("operator_cancelled");
   }
   if (pr.draft || pr.autoMergeEnabled) return hold("pr_draft_or_auto_merge");
 

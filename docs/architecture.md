@@ -634,6 +634,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/model_text` | script | [LIB] モデルの出力の文字列の整形 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
 | `f/factory/lib/stream_cap` | script | [LIB] 上限つきのストリームの読み取り |
+| `f/factory/lib/operator_cancel` | script | [LIB] 人による作業項目の中止の決まり |
 | `f/factory/lib/profile` | script | [LIB] 作業項目の進め方ごとの承認の要否 |
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |
@@ -734,6 +735,7 @@ Consoleは工程0として扱う。
 | `f/factory/console_deploy_decide` | script | [OP-2-12] 保護パスの変更の反映を承認・却下 |
 | `f/factory/console_stop_all` | script | [OP-2-13] Factoryを全停止 |
 | `f/factory/console_stop_all_release` | script | [OP-2-14] 全停止を解除 |
+| `f/factory/console_work_item_cancel` | script | [OP-2-15] 作業項目を中止 |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
 | `f/factory/hold_release` | script | [OP-2-4] 保留を解除 |

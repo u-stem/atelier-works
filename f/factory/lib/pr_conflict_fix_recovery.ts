@@ -9,6 +9,7 @@ import {
   CONFLICT_TEMPORARY_STOP_NOTES,
   conflictRoundReason,
 } from "./conflict_fix_round.ts";
+import { isOperatorCancelledNote } from "./operator_cancel.ts";
 import {
   BUDGET_REASON,
   DRAFT_OR_AUTO_MERGE_REASONS,
@@ -59,6 +60,8 @@ export function holdReasonForConflictStoppedItem(
   note: string | null,
 ): PrConflictFixHoldReason | null {
   if (note === null) return null;
+  // 人の中止は、同じ競合の回で起動し直さない。人が止めると決めた回を、監視が戻さないためである。
+  if (isOperatorCancelledNote(note)) return "operator_cancelled";
   for (const [detail, reason] of FIXED_NOTE_HOLDS) {
     if (note === conflictRoundReason(detail)) return reason;
   }
@@ -109,7 +112,9 @@ function isTerminal(status: WorkItemStatus): boolean {
  *   それ以外は、理由を写せれば写し、写せなければ保留なしで結びを外す。
  *   例外で終わった回は、`getDefaultBranch`や`git fetch`の通信の失敗のように、待てば解けるものを区別できないためである。
  *   起動し直しは、回数に数える`failed`なので`pr_conflict_fix_max_rounds`が止める。失敗の通知はフローの失敗の処理が出す。
- * - ほかの終端(`cancelled`など)は、保留なしで結びを外す。
+ * - 人がConsoleから中止した`cancelled`(注記が`OPERATOR_CANCELLED_NOTE`)は、`operator_cancelled`で保留する。
+ *   最終の保留なので、次の競合の回が始まるまで起動し直さない。
+ * - ほかの終端(ほかの理由の`cancelled`など)は、保留なしで結びを外す。
  */
 function decideRecoveryByState(
   item: ConflictFixItemState | null,
@@ -154,6 +159,9 @@ function decideRecoveryByState(
       kind: "release",
       hold: holdReasonForConflictStoppedItem(note),
     };
+  }
+  if (item.status === "cancelled" && isOperatorCancelledNote(item.note)) {
+    return { kind: "release", hold: "operator_cancelled" };
   }
   return { kind: "release", hold: null };
 }

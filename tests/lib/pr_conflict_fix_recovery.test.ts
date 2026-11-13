@@ -5,6 +5,8 @@ import {
   CONFLICT_ROUND_DETAILS,
   conflictRoundReason,
 } from "../../f/factory/lib/conflict_fix_round.ts";
+import { OPERATOR_CANCELLED_NOTE } from "../../f/factory/lib/operator_cancel.ts";
+import { isFinalPrConflictFixHold } from "../../f/factory/lib/pr_conflict_fix_holds.ts";
 import {
   type ConflictFixItemSources,
   type ConflictFixItemState,
@@ -31,6 +33,34 @@ function item(
     ...overrides,
   };
 }
+
+describe("the conflict round that a person cancelled", () => {
+  test("holds the row, so that the round is not started again for the same conflict", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("cancelled", { note: OPERATOR_CANCELLED_NOTE }),
+      ),
+    ).toEqual({ kind: "release", hold: "operator_cancelled" });
+  });
+
+  test("releases a row whose work item was cancelled for another reason without a hold", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("cancelled", { note: "reconcile: pr_closed (actionable)" }),
+      ),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("maps the note of a cancel by a person to its hold", () => {
+    expect(holdReasonForConflictStoppedItem(OPERATOR_CANCELLED_NOTE)).toBe(
+      "operator_cancelled",
+    );
+  });
+
+  test("treats the hold of a cancel by a person as final", () => {
+    expect(isFinalPrConflictFixHold("operator_cancelled")).toBe(true);
+  });
+});
 
 describe("holdReasonForConflictStoppedItem", () => {
   test.each([

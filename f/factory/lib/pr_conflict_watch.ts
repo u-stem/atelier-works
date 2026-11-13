@@ -184,6 +184,13 @@ export type PrConflictFixDeps = {
     repo: string,
     headRef: string,
   ) => Promise<WorkItemStatus | null>;
+  /** PRの最新の作業項目が、`headSha`で人に中止されたか(`readOperatorCancelledAtHead`)。 */
+  readonly operatorCancelledAtHead: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+    headSha: string,
+  ) => Promise<boolean>;
   /**
    * 行の猶予の起点(競合の回の開始時刻)を今に戻す(`restartPrConflictGrace`)。戻したら`true`。
    * Factoryがブランチを引き継ぐ間は猶予を進めず、その状態を出た時点から数え直すために使う。
@@ -1345,6 +1352,13 @@ function claimReaders(
     readPr: () => deps.getPr(ref.owner, ref.repo, ref.number),
     readBranchItemStatus: () =>
       fix.readBranchItemStatus(names.owner, names.repo, headRef),
+    operatorCancelledAtHead: () =>
+      fix.operatorCancelledAtHead(
+        names.owner,
+        names.repo,
+        row.pr_number,
+        row.head_sha,
+      ),
     readDefaultBranch: defaultBranch,
     readCommits: () => fix.listCommits(names.owner, names.repo, row.pr_number),
     hasSkillMarker: () =>

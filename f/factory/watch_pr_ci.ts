@@ -52,6 +52,7 @@ import {
   hasPrReviewForHead,
   isLatestMainCiRunFailed,
   latestFixRound,
+  latestPrWorkItem,
   latestStatusEvent,
   listActivePrFixWorkItems,
   listClaimablePrCiChecks,
@@ -96,6 +97,7 @@ import {
 } from "./lib/github.ts";
 import { recordCheckEnvironmentNotice } from "./lib/host_action.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import { readOperatorCancelledAtHead } from "./lib/operator_cancel.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
 import {
   CI_CLAUDE_WAIT_NOTES,
@@ -199,6 +201,15 @@ export function buildClaimDeps(
       hasPrReviewForHead(owner, repo, prNumber, headSha),
     readBranchItemStatus: (owner, repo, headRef) =>
       readBranchItemStatus({ headRef, owner, repo }, (id) => getWorkItem(id)),
+    operatorCancelledAtHead: (owner, repo, prNumber, headSha) =>
+      readOperatorCancelledAtHead(
+        {
+          latestPrRow: () => latestPrWorkItem(owner, repo, prNumber),
+          cancelNote: async (id) =>
+            (await latestStatusEvent(id, "cancelled"))?.note ?? null,
+        },
+        headSha,
+      ),
     listCommits: (owner, repo, prNumber) =>
       listPrCommitMessages(client, owner, repo, prNumber),
     // `factory_repo`の解釈もここで行う。解釈に失敗しても、ほかの処理を止めず、行単位の失敗として記録される。

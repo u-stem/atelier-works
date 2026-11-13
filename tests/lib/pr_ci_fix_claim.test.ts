@@ -80,6 +80,8 @@ type Setup = {
   readonly workerEnv?: WorkerEnvHoldReason | null;
   /** 全停止が解除されたと確かめられないか。 */
   readonly stopHeld?: boolean;
+  /** PRの最新の作業項目が、行のheadで人に中止されたか。 */
+  readonly operatorCancelled?: boolean;
 };
 
 function readers(setup: Setup = {}): {
@@ -118,6 +120,10 @@ function readers(setup: Setup = {}): {
       countRounds: track("rounds", setup.rounds ?? 0),
       workerEnv: track("worker_env", setup.workerEnv ?? null),
       stopHeld: track("stop_held", setup.stopHeld ?? false),
+      operatorCancelledAtHead: track(
+        "operator_cancel",
+        setup.operatorCancelled ?? false,
+      ),
     },
   };
 }
@@ -365,6 +371,26 @@ describe("decideFixClaim", () => {
       kind: "hold",
       reason: "last_fix_unsettled",
     });
+  });
+
+  test("holds operator_cancelled when a person cancelled the latest work item of the pull request at the head", async () => {
+    const { decision } = decide({ operatorCancelled: true });
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "operator_cancelled",
+    });
+  });
+
+  test("does not read the commits when a person cancelled the latest work item at the head", async () => {
+    const { decision, events } = decide({ operatorCancelled: true });
+    await decision;
+    expect(events).not.toContain("commits");
+  });
+
+  test("reads the cancel by a person after the work item of the branch", async () => {
+    const { decision, events } = decide();
+    await decision;
+    expect(events.slice(3, 5)).toEqual(["branch_item", "operator_cancel"]);
   });
 
   test("holds not_reviewed when the head has no review row", async () => {

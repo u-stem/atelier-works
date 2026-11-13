@@ -61,6 +61,8 @@ type Setup = {
   readonly episodeRounds?: number;
   readonly prRounds?: number;
   readonly lastFixSettledAt?: Date | null;
+  /** PRの最新の作業項目が、行のheadで人に中止されたか。 */
+  readonly operatorCancelled?: boolean;
 };
 
 function readers(setup: Setup = {}): {
@@ -94,6 +96,10 @@ function readers(setup: Setup = {}): {
       countEpisodeRounds: track("episode_rounds", setup.episodeRounds ?? 0),
       countPrRounds: track("pr_rounds", setup.prRounds ?? 0),
       lastFixSettledAt: track("last_fix", setup.lastFixSettledAt ?? null),
+      operatorCancelledAtHead: track(
+        "operator_cancel",
+        setup.operatorCancelled ?? false,
+      ),
     },
   };
 }
@@ -139,6 +145,7 @@ describe("decideConflictFixClaim", () => {
       "active_fix",
       "pr",
       "branch_item",
+      "operator_cancel",
       "default_branch",
       "commits",
       "marker",
@@ -162,6 +169,20 @@ describe("decideConflictFixClaim", () => {
     const { decision, events } = decide({ hasActiveFix: true });
     await decision;
     expect(events).toEqual(["active_fix"]);
+  });
+
+  test("holds operator_cancelled when a person cancelled the latest work item of the pull request at the head", async () => {
+    const { decision } = decide({ operatorCancelled: true });
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "operator_cancelled",
+    });
+  });
+
+  test("does not read the commits when a person cancelled the latest work item at the head", async () => {
+    const { decision, events } = decide({ operatorCancelled: true });
+    await decision;
+    expect(events).not.toContain("commits");
   });
 
   test("does not require a review record", async () => {

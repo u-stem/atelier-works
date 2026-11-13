@@ -1184,6 +1184,7 @@ const DETERMINISTIC_HOLDS = [
   "rounds_exhausted",
   "not_factory_head",
   "claude_run_failed",
+  "operator_cancelled",
 ] as const;
 
 const TEMPORARY_HOLDS = [

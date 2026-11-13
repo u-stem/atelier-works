@@ -12,6 +12,7 @@ import {
 } from "./ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "./ci_metadata_rehash.ts";
 import type { RunClaudeFailureReason } from "./claude.ts";
+import { isOperatorCancelledNote } from "./operator_cancel.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
 import { TERMINAL_WORK_ITEM_STATUSES, type WorkItemStatus } from "./types.ts";
 
@@ -88,6 +89,8 @@ export function holdReasonForStoppedItem(
   note: string | null,
 ): PrCiFixHoldReason | null {
   if (note === null) return null;
+  // 人の中止は、headが動くまで保留する。人が止めると決めた回を、同じheadで起動し直さないためである。
+  if (isOperatorCancelledNote(note)) return "operator_cancelled";
   if (note === ciRoundReason(CI_ROUND_DETAILS.markerMissing)) {
     return "marker_missing";
   }
@@ -149,8 +152,10 @@ function isTerminal(status: WorkItemStatus): boolean {
  * - `failed`のうち、Claudeの実行がtimeoutか予算の超過で失敗したものは、`claude_run_failed`で保留して戻す。
  *   保留なしで戻すと、次の巡回で同じ失敗を繰り返し、費用と回数の上限を使い切るためである。
  *   使用上限は`claude_usage_limit`、全停止は`claude_stopped`で保留して戻す。待てば解けるので、起動の判断が起動し直す。
+ * - 人がConsoleから中止した`cancelled`(注記が`OPERATOR_CANCELLED_NOTE`)は、`operator_cancelled`で保留して戻す。
+ *   headが動くまで起動し直さない。
  * - 存在しない作業項目と、ほかの`failed`や`cancelled`などの終わり方をした作業項目は、保留なしで戻す。
- *   `pr_fix`が`cancelled`になるのはPRが閉じたときだけで、設定から外れたリポジトリを除き、閉じたPRは戻す前のheadの読み取りが拾うためである。
+ *   ほかの理由で`pr_fix`が`cancelled`になるのはPRが閉じたときだけで、設定から外れたリポジトリを除き、閉じたPRは戻す前のheadの読み取りが拾うためである。
  * - `blocked`は、理由を保留の理由に写せればその理由で保留する。写せなければ、保留なしで戻す。
  *   起動し直す回数は、回数の上限(`pr_ci_fix_max_rounds`)が止める。
  *   ただし、イメージが古い理由(`AUTO_RETRY_REASON_PREFIXES`)で止まった作業項目は、
@@ -190,6 +195,9 @@ export function decideFixingRecovery(
       kind: "release",
       hold: CLAUDE_FAILURE_HOLDS.get(item.note) ?? null,
     };
+  }
+  if (item.status === "cancelled" && isOperatorCancelledNote(item.note)) {
+    return { kind: "release", hold: "operator_cancelled" };
   }
   return { kind: "release", hold: null };
 }

@@ -41,6 +41,7 @@ import {
   getWorkItem,
   latestConflictFixSettledAt,
   latestFixRound,
+  latestPrWorkItem,
   latestStatusEvent,
   listActivePrFixWorkItems,
   listConflictedPrConflictChecks,
@@ -76,6 +77,7 @@ import {
   parseGitHubRepoUrl,
 } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import { readOperatorCancelledAtHead } from "./lib/operator_cancel.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
 import { buildRepoGates } from "./lib/pr_ci_watch.ts";
 import { readConflictFixItemState } from "./lib/pr_conflict_fix_recovery.ts";
@@ -154,6 +156,15 @@ export function buildConflictFixDeps(
     readBranchItemStatus: (owner, repo, headRef) =>
       readBranchItemStatus({ headRef, owner, repo }, (id) =>
         read.getWorkItem(id),
+      ),
+    operatorCancelledAtHead: (owner, repo, prNumber, headSha) =>
+      readOperatorCancelledAtHead(
+        {
+          latestPrRow: () => latestPrWorkItem(owner, repo, prNumber),
+          cancelNote: async (id) =>
+            (await latestStatusEvent(id, "cancelled"))?.note ?? null,
+        },
+        headSha,
       ),
     restartGrace: (id) => read.restartPrConflictGrace(id),
     getDefaultBranch: (owner, repo) => getDefaultBranch(client, owner, repo),

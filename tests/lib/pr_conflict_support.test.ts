@@ -196,7 +196,7 @@ describe("PR_CONFLICT_KIND", () => {
 });
 
 describe("PR_CONFLICT_FIX_HOLD_REASONS", () => {
-  test("lists the fourteen reasons of the vocabulary", () => {
+  test("lists the fifteen reasons of the vocabulary", () => {
     expect(PR_CONFLICT_FIX_HOLD_REASONS.map(String).sort()).toEqual(
       [
         "base_changes_workflows",
@@ -208,6 +208,7 @@ describe("PR_CONFLICT_FIX_HOLD_REASONS", () => {
         "main_ci_failed",
         "marker_missing",
         "not_factory_head",
+        "operator_cancelled",
         "pr_draft_or_auto_merge",
         "protected_path",
         "recently_fixed",
