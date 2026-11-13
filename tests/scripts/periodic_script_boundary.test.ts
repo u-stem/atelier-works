@@ -260,6 +260,21 @@ describe("the tool dependency scan", () => {
     expect(toolDependencies('import vm from "vm";')).not.toEqual([]);
   });
 
+  // `import.meta.require`は、別名に入れて呼ぶとimportの一覧に現れずにファイルのモジュールへ届く。
+  test("flags import.meta.require kept in a variable", () => {
+    expect(
+      toolDependencies('const load = import.meta.require;\nload("node:fs");'),
+    ).not.toEqual([]);
+  });
+
+  test("flags import.meta by itself", () => {
+    expect(toolDependencies("const m = import.meta;")).not.toEqual([]);
+  });
+
+  test("does not flag a mention of import.meta in a string", () => {
+    expect(toolDependencies('const s = "import.meta";')).toEqual([]);
+  });
+
   test("does not flag node:path", () => {
     expect(toolDependencies('import { join } from "node:path";')).toEqual([]);
   });

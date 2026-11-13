@@ -274,6 +274,50 @@ describe("the import scan", () => {
     ).not.toEqual([]);
   });
 
+  // 変換は、リテラルだけの式を1つのリテラルに畳み込む。変換前のimportの一覧には現れない。
+  test("flags a dynamic import whose argument concatenates literals", () => {
+    expect(
+      unfollowableImports('const m = await import("node:" + "fs");'),
+    ).not.toEqual([]);
+  });
+
+  test("flags a dynamic import whose template embeds only a literal", () => {
+    expect(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: 走査の入力にする文字列である
+      unfollowableImports('const m = await import(`node:child_${"process"}`);'),
+    ).not.toEqual([]);
+  });
+
+  // 変換は、条件式の引数を、枝ごとのリテラルの動的importに書き換える。
+  test("flags a dynamic import whose argument is a conditional of literals", () => {
+    expect(
+      unfollowableImports('const m = await import(c ? "node:fs" : "./x.ts");'),
+    ).not.toEqual([]);
+  });
+
+  // 変換が消す到達しない動的importの数で、畳み込まれた動的importを相殺させない。
+  test("flags a folded dynamic import next to one that the transform removes", () => {
+    expect(
+      unfollowableImports(
+        'if (false) { await import("./a.ts"); }\nawait import("node:" + "fs");',
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("does not flag a dynamic import with a template without a substitution", () => {
+    expect(unfollowableImports("const m = await import(`./x.ts`);")).toEqual(
+      [],
+    );
+  });
+
+  test("does not flag two dynamic imports of the same literal", () => {
+    expect(
+      unfollowableImports(
+        'const a = await import("./x.ts");\nconst b = await import("./x.ts");',
+      ),
+    ).toEqual([]);
+  });
+
   test("flags require", () => {
     expect(unfollowableImports('const m = require("./x.js");')).not.toEqual([]);
   });
@@ -496,6 +540,25 @@ describe("the SDK use scan", () => {
         'import wmillDefault, { JobService } from "windmill-client@1.817.0";\nJobService.getJob({});',
       ).problems,
     ).not.toEqual([]);
+  });
+
+  test("flags the client with a tag instead of a version", () => {
+    expect(
+      sdkFindings('import * as wmill from "windmill-client@latest";').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags the client with a version range", () => {
+    expect(
+      sdkFindings('import * as wmill from "windmill-client@^1.817.0";')
+        .problems,
+    ).not.toEqual([]);
+  });
+
+  test("accepts the client without a version", () => {
+    expect(
+      sdkFindings('import * as wmill from "windmill-client";').problems,
+    ).toEqual([]);
   });
 
   test("flags a deep path import of the client", () => {
