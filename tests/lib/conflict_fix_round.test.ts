@@ -720,10 +720,12 @@ describe("checkConflictResolution test files", () => {
     expect(check([testFile(result)])).toEqual({ ok: true });
   });
 
-  test("accepts taking one side when both have the same number of assertions", () => {
+  test("rejects dropping the test that one side added", () => {
     const result =
       "x\ntest('a', () => { expect(1).toBe(1); });\ntest('o', () => { expect(2).toBe(2); });\ny\n";
-    expect(check([testFile(result)])).toEqual({ ok: true });
+    expect(codesOf(check([testFile(result)]))).toEqual([
+      "test_count_decreased",
+    ]);
   });
 
   test("rejects dropping both added tests", () => {
@@ -733,7 +735,7 @@ describe("checkConflictResolution test files", () => {
     ]);
   });
 
-  test("rejects a resolution that removes an assertion from the larger side", () => {
+  test("rejects a resolution that removes an assertion a side added", () => {
     const result =
       "x\ntest('a', () => { expect(1).toBe(1); });\ntest('o', () => {});\ny\n";
     expect(codesOf(check([testFile(result)]))).toEqual([
@@ -752,6 +754,104 @@ describe("checkConflictResolution test files", () => {
       result: "x\ntest('a', () => {});\n\n",
     });
     expect(codesOf(check([file]))).not.toContain("test_count_decreased");
+  });
+});
+
+describe("checkConflictResolution test files where one side removes tests", () => {
+  const TEST_PATH = "tests/a.test.ts";
+  // 5つのテストで、`test(`と`expect(`を合わせて10回呼ぶ。
+  const FIVE = [1, 2, 3, 4, 5]
+    .map((n) => `test('t${n}', () => { expect(${n}).toBe(${n}); });`)
+    .join("\n");
+  // `test(`を1回だけ呼ぶ、足したテスト。
+  const ADDED = "test('n', () => {});";
+
+  const REMOVED = "x\ny\n";
+  const KEPT_AND_ADDED = `x\n${FIVE}\n${ADDED}\ny\n`;
+
+  type Sides = Pick<FileSpec, "ours" | "theirs" | "reconstructed">;
+
+  /** PRのheadが5つのテストを消し、baseの側がその後ろに1つのテストを足した版。 */
+  const REMOVED_IN_HEAD: Sides = {
+    ours: REMOVED,
+    theirs: KEPT_AND_ADDED,
+    reconstructed: `x\n${block("", FIVE, `${FIVE}\n${ADDED}`)}\ny\n`,
+  };
+
+  /** baseの側が5つのテストを消し、PRのheadがその後ろに1つのテストを足した版。 */
+  const REMOVED_IN_BASE: Sides = {
+    ours: KEPT_AND_ADDED,
+    theirs: REMOVED,
+    reconstructed: `x\n${block(`${FIVE}\n${ADDED}`, FIVE, "")}\ny\n`,
+  };
+
+  function fileWith(sides: Sides, result: string): ConflictFileInput {
+    return fileOf({
+      path: TEST_PATH,
+      base: `x\n${FIVE}\ny\n`,
+      ...sides,
+      result,
+    });
+  }
+
+  test("accepts the removals of the PR head combined with the test the base side added", () => {
+    const file = fileWith(REMOVED_IN_HEAD, `x\n${ADDED}\ny\n`);
+    expect(check([file])).toEqual({ ok: true });
+  });
+
+  test("accepts the removals of the base side combined with the test the PR head added", () => {
+    const file = fileWith(REMOVED_IN_BASE, `x\n${ADDED}\ny\n`);
+    expect(check([file])).toEqual({ ok: true });
+  });
+
+  test("rejects dropping the added test as well as the removed ones", () => {
+    const file = fileWith(REMOVED_IN_HEAD, REMOVED);
+    expect(codesOf(check([file]))).toEqual(["test_count_decreased"]);
+  });
+});
+
+describe("checkConflictResolution test counts outside the conflict blocks", () => {
+  const TEST_PATH = "tests/a.test.ts";
+  // ブロックの外にある、`test(`と`expect(`を1回ずつ呼ぶテスト。
+  const OUTSIDE = "test('s', () => { expect(0).toBe(0); });";
+  const OURS_TEST = "test('o', () => { expect(2).toBe(2); });";
+  const THEIRS_TEST = "test('t', () => { expect(3).toBe(3); });";
+
+  test("rejects dropping a test one side added in a block when both sides removed the same test outside it", () => {
+    const file = fileOf({
+      path: TEST_PATH,
+      base: `${OUTSIDE}\nx\nb\ny\n`,
+      ours: `x\n${OURS_TEST}\ny\n`,
+      theirs: `x\n${THEIRS_TEST}\ny\n`,
+      reconstructed: `x\n${block(OURS_TEST, "b", THEIRS_TEST)}\ny\n`,
+      result: `x\n${OURS_TEST}\ny\n`,
+    });
+    expect(codesOf(check([file]))).toEqual(["test_count_decreased"]);
+  });
+
+  test("rejects a missing test in one block even when another block gains an extra test", () => {
+    const extra = "test('e', () => { expect(4).toBe(4); });";
+    const file = fileOf({
+      path: TEST_PATH,
+      base: "x\na\ny\nb\nz\n",
+      ours: `x\n${OURS_TEST}\ny\nB1\nz\n`,
+      theirs: "x\nA2\ny\nB2\nz\n",
+      reconstructed: `x\n${block(OURS_TEST, "a", "A2")}\ny\n${block("B1", "b", "B2")}\nz\n`,
+      result: `x\nA2\ny\nB1\n${extra}\nz\n`,
+    });
+    expect(codesOf(check([file]))).toEqual(["test_count_decreased"]);
+  });
+
+  test("accepts a resolution when both sides added the same test outside the block", () => {
+    const file = fileOf({
+      path: TEST_PATH,
+      base: "x\nb\ny\n",
+      ours: `${OUTSIDE}\nx\nB1\ny\n`,
+      theirs: `${OUTSIDE}\nx\nB2\ny\n`,
+      reconstructed: `${OUTSIDE}\nx\n${block("B1", "b", "B2")}\ny\n`,
+      result: `${OUTSIDE}\nx\nB1\ny\n`,
+    });
+    expect(check([file])).toEqual({ ok: true });
   });
 });
 

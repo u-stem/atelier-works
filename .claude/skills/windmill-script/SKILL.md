@@ -124,6 +124,10 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
   実プロセスや実HTTPを叩くテストは書かない。
 - 1テスト1振る舞い、Arrange-Act-Assertの構成にする。
   基準は[テストの基準](../../../docs/testing-guidelines.md)に従う。
+- `f/factory/lib/**`の判断は、正常系、準正常系、異常系を確かめる。
+  権限、保護パス、許可リストの判定は、条件ごとに結果を反転させるテスト(MC/DC)を置く。
+- `f/factory/lib/**`で変えた行は、90%以上をテストで実行する。
+  `mise run check`とCIが、差分の行カバレッジとして確かめる。
 
 ## メタデータとデプロイ
 
