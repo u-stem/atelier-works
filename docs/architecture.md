@@ -1003,7 +1003,7 @@ Discordへの通知の2回は、ホスト側の作業の通知と、Console用�
 定期ジョブ用のworkerの確認と収集の鮮度の確認は、通知を確認ごとの上限(10秒、30秒)の中で送る。
 Console用のworkerの確認も、受けていない通知は上限の10秒の中で送る。
 確認できない状態が続いたときの通知は、上限の外で送り、通知1回の上限で区切る。
-値を変えるときは、`tests/scripts/self_update_timeout.test.ts`が次の2点を確かめる。
+値を変えるときは、`tests/scripts/self_update.test.ts`の`self_update timeout`が次の2点を確かめる。
 
 - `timeout`が、`self_update.ts`の見積もり以上であること。
 - `self_update.ts`の呼び出しが、見積もりの回数と合うこと。
