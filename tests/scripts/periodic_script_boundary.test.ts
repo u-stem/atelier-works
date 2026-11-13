@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PERIODIC_JOB_WAIT_SECONDS } from "../../f/factory/lib/periodic_worker.ts";
 import {
   codeOf,
@@ -355,11 +357,24 @@ describe("the external package scan", () => {
     expect(externalPackageImports('// import { z } from "zod";\n')).toEqual([]);
   });
 
-  // 走査の共有部品は`bun`をimportするので、ファイルの単位で数えることを確かめる入口に使う。
+  // 入口から相対importでたどった先のファイルを、違反の出たファイルの単位で名指しすることを確かめる。
   test("names a reached file that imports a package other than the windmill client", () => {
-    expect(
-      filesWithExternalPackages(["tests/scripts/worker_boundary_scan"]),
-    ).toEqual(["tests/scripts/worker_boundary_scan.ts"]);
+    const dir = mkdtempSync(join(tmpdir(), "periodic-boundary-"));
+    try {
+      writeFileSync(
+        join(dir, "entry.ts"),
+        'import * as wmill from "windmill-client@1.817.0";\nimport { x } from "./lib.ts";\nexport { wmill, x };\n',
+      );
+      writeFileSync(
+        join(dir, "lib.ts"),
+        'import { z } from "zod";\nexport const x = z;\n',
+      );
+      expect(filesWithExternalPackages([join(dir, "entry")])).toEqual([
+        join(dir, "lib.ts"),
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
