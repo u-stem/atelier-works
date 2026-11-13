@@ -1401,12 +1401,13 @@ Windmillの資産のうちnpmの依存を入れるのは、dependabotの更新�
 ## 依存の脆弱性
 
 ルートの`bun audit`の指摘のうち、親の求める範囲に修正版が無いものの残るリスクは[R-TB-36](security-risks.md#r-tb-36)である。
-`overrides`で解消できるものは[コーディング規約](coding-guidelines.md#依存の脆弱性)の手順で固定する。
+`overrides`で解消できるものは[コーディング規約](coding-guidelines.md#脆弱性)の手順で固定する。
+依存の選び方と足す手順は、[コーディング規約](coding-guidelines.md#依存)にある。
 
 ルートの依存は、`windmill-client`を除いて開発用で、文書の検査(markdownlint-cli2、textlint)、型検査、整形に使う。
 本番のコードからは読まれない。
 `windmill-client`はworkerのscriptが読む。
-scriptの`.script.lock`は、ルートの`bun.lock`と同じ版・同じintegrityであることを`lint`が確かめるので、ルートの監査がworkerの依存も覆う([コーディング規約](coding-guidelines.md#依存の脆弱性))。
+scriptの`.script.lock`は、ルートの`bun.lock`と同じ版・同じintegrityであることを`lint`が確かめるので、ルートの監査がworkerの依存も覆う([コーディング規約](coding-guidelines.md#脆弱性))。
 `windmill-client`の指摘は、受け入れの表に入れない。
 修正版の無いhighの指摘が出たときの残るリスクは[R-TB-38](security-risks.md#r-tb-38)である。
 ただし、このリポジトリを対象に`check_commands_by_repo`か`allowed_check_commands`を設定すると、検査がworkerのコンテナの中で走る。

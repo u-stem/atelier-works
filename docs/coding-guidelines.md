@@ -221,7 +221,7 @@ gitのpre-pushは全体の`check`を実行しない。
 
 - `lint`はbiome(型アサーションの検出を含む)、`wmill lint f`、`§`の検出を含む。
   `f/`の`.script.lock`の依存が、ルートの`bun.lock`と同じ版・同じintegrityであることも確かめる(`scripts/check-script-locks.ts`)。
-  理由は[この文書の「依存の脆弱性」](#依存の脆弱性)にある。
+  理由は[この文書の「脆弱性」](#脆弱性)にある。
 - `test`は`bun test --parallel`で、`console/`を除く。
   カバレッジを`coverage/lcov.info`に出す。
   `check`は、その後に`bun ./scripts/check-coverage.ts`で、全体と層ごとの行カバレッジの下限と、lcovに出ない対象を確かめる。
@@ -261,6 +261,40 @@ gitのpre-pushは全体の`check`を実行しない。
 - `console:a11y`は、組み立てたConsoleをChromiumで検査する。
   ブラウザの取得が要るので`check`に含めず、CIの`console-a11y`ジョブが動かす。
 
+## 依存
+
+依存の選び方、固定と足す手順、脆弱性の扱いを定める。
+
+### 選び方
+
+依存を足すか自前で書くかは、次の順で決める。
+
+1. 標準の機能(Bun、`node:`のモジュール、ブラウザのAPI)か、今ある依存で足りるかを調べる。
+2. 足りなければ、自前で書く前に、ライブラリを下の基準で評価する。
+3. 自前で書くのは、基準に合うライブラリが無いときと、下の境界ごとの例外に当たるときだけにする。
+
+| 基準 | 理由 |
+| --- | --- |
+| デファクトで、保守が続いている | 自前の実装は、誤りの修正と検査を自分で負い続けるため |
+| install scriptが無い | 依存は`--ignore-scripts`で入れ、install scriptを動かさないため |
+| 正確な版で固定できる | 範囲で指定すると、入れるたびに中身が変わりうるため |
+| Consoleでは、gzipした後の大きさが小さい | 依存は運用者のブラウザに配るバンドルに入るため。大きさは`mise run console:build`の出力で確かめる |
+
+次の境界では、上の順によらず、表の方針に従う。
+
+| 境界 | 方針 | 理由 | 根拠 |
+| --- | --- | --- | --- |
+| 定期ジョブ用workerのscript | 外部のパッケージは`windmill-client`だけにする | 境界の走査はパッケージの中身を見ない。ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるため | `tests/scripts/periodic_script_boundary.test.ts`、[定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
+| Console用workerのscript | 外部のimportは`windmill-client`だけにする。`node:`のモジュールと`fetch`も使わない | SDKの呼び出しを許可表で絞り、たどれるファイルを保護パスに収める。パッケージの中身には、走査も保護も届かないため | `tests/scripts/console_worker_boundary.test.ts`、[Console用workerの境界](security.md#console用workerの境界) |
+| 秘密値に届くworkerで、攻撃者が決められる入力を読む部品 | 依存を足さず、`node:`の標準の機能の上に自前で書く。CIの成果物のzipの読み取りが当たる | 攻撃者が決められるzipを、展開の前に大きさとパスで検査し、展開の間は実測の長さで打ち切るため。判定のすべてを、保護パスのコードとしてレビューできる範囲に置く | `f/factory/lib/metadata_patch_zip.ts`の先頭のコメント |
+| Claude Codeのフックの、シェルの字句解析 | 自前で持つ | 読めない構文と実行時に決まる語を拒否に倒す境目を、字句の段から決めるため | `scripts/claude-hooks/shell-words.ts`の先頭のコメント、[判定の範囲](security.md#判定の範囲) |
+| 保護パスの判定の部品 | 保護の外の部品をimportしない。要る処理は、そのファイルに持つ | 保護の外の部品を書き換えて、判定を緩められないようにするため | `tests/lib/protected_paths.test.ts`のimportの連鎖のテスト、`f/factory/lib/deploy_gate.ts`の先頭のコメント |
+| Consoleの応答の型ガード | スキーマのライブラリ(zodなど)を使わず、型ガードを手で書く | 形の保証は、backendの出力と照らす契約テストが出す。backendの`f/`はworkerの依存の制限でzodを読めず、スキーマを共有できない。依存はバンドルに入り、ルートのテストが`console/node_modules`に頼るようになる | `tests/scripts/console_*_contract.test.ts`、[応答の型ガード](internals/console/api.md#応答の型ガード) |
+| Consoleの画面の小さな描画と部品 | ブラウザの標準の機能(SVG、`<dialog>`)で書く。棒グラフ、図、確認ダイアログが当たる | 要る機能が小さく、標準の機能で足りるため。依存はバンドルに入る | `console/src/lib/barChart.ts`、[分析の画面](internals/console/work-items.md#分析の画面)、[承認バー](internals/console/attention.md#承認バー) |
+| 検査の道具 | lintとMarkdownの解析は、デファクトの道具の規則と解析器を使い、自作しない | 自作の検査は、誤検知と見逃しを自分で直し続けることになるため | [TypeScript](#typescript)の`noUnsafeTypeAssertion`、`scripts/lint-doc-links.ts`の`mdast-util-from-markdown` |
+
+### 固定と追加
+
 依存は、ルートの`bun.lock`と、Console(`console/`)の`console/bun.lock`に分けて固定する。
 
 | 対象 | 入れるとき | 足すとき |
@@ -271,7 +305,20 @@ gitのpre-pushは全体の`check`を実行しない。
 どちらも`--ignore-scripts`を必ず付ける。
 bunは依存のinstall scriptを既定では実行しないが、既定の信頼する一覧(trustedDependencies)にある有名なパッケージだけは実行するためである。
 
-### 依存の脆弱性
+依存を足すときは、次の順で進める。
+
+1. [選び方](#選び方)の基準と例外に照らし、足してよいことを確かめる。
+2. 上の表の「足すとき」のコマンドで、正確な版を足す。
+3. workerのscriptが読む依存では、ルートの`package.json`との一致と、許す一覧の条件を満たす。
+   条件と検査は[脆弱性](#脆弱性)にある。
+4. `mise run check`で、lockの検査と型検査を通す。
+
+`f/factory/lib/`の部品に依存を足すと、その部品をimportするすべてのscriptの`.script.lock`に依存が広がる。
+`windmill-client`の版を上げると、すべての`.script.lock`が書き換わる。
+lockはメタデータのフックが作り直し、ルートの`bun.lock`とのずれは`lint`の`scripts/check-script-locks.ts`が止める。
+Consoleの依存の取得元は、`scripts/check-console-lockfile.ts`が検査し、registryからintegrity付きで取ったものだけを通す。
+
+### 脆弱性
 
 workerのscriptの依存は、scriptごとの`.script.lock`が固定する。
 `bun audit`はルートの`bun.lock`しか読まないので、`.script.lock`の依存は、ルートの`bun.lock`と同じ版・同じintegrityにそろえる。

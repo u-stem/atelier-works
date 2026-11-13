@@ -81,3 +81,5 @@
   ユーザーレベルの「型ガード関数を除く」の例外は、このリポジトリでは使わない。
   Biomeの`noUnsafeTypeAssertion`が`as const`以外を止めるため。
   書き換え方は[コーディング規約](docs/coding-guidelines.md)の「TypeScript」にある。
+- 依存を足すか自前で書くかは、標準の機能と今ある依存で足りるかを先に調べてから決める。
+  基準と境界ごとの例外は、[コーディング規約](docs/coding-guidelines.md)の「依存」にある。
