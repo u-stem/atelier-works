@@ -581,7 +581,8 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker kil
 このときConsoleの**要対応**に`cleanup_worktree_busy`が残る。
 載ったプロセスを止めれば、次の掃除で消える。
 
-Consoleで中止した実行や、Windmillで取り消した実行のClaudeや検査コマンドは、止まらずに残る。
+Consoleのジョブの中止や、Windmillで取り消した実行のClaudeや検査コマンドは、止まらずに残る。
+Consoleで実行中のIssueの作業項目を中止したときは、Claudeと検査コマンドが自分で止まる([作業項目を中止する](../operations.md#作業項目を中止する))。
 残ったプロセスの扱いと、実行中に作業項目を取られたときの挙動は[実装フローの仕様](../internals/implement.md)を参照する。
 
 ### 実装フローの実行中に避けること

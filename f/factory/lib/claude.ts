@@ -19,6 +19,7 @@ import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import {
   checkStop,
   defaultStopCheck,
+  mergeSignals,
   STOP_CHECK_INTERVAL_MS,
   type StopCheck,
   watchStop,
@@ -32,6 +33,7 @@ import {
   type ModelUsageEntry,
   type RunClaudeFailureReason,
 } from "./types.ts";
+import { defaultWorkItemStopCheck } from "./work_item_stop.ts";
 import type { CommandResult, CommandRunner } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
@@ -422,8 +424,15 @@ export type RunClaudeOptions<T> = {
    * 止まっていれば起動せず、実行中ならプロセスグループを止め、`stopped`の失敗で終わる。読めないときは止めない。
    */
   readonly stopCheck?: StopCheck;
-  /** 実行中の確認の間隔(ミリ秒)。既定は15秒。 */
+  /** 実行中の確認の間隔(ミリ秒)。既定は15秒。全停止の確認と、作業項目の確認で共通である。 */
   readonly stopCheckIntervalMs?: number;
+  /**
+   * 人が中止した作業項目の確認。テストだけが渡す。
+   * 既定は、ジョブの中なら`workItemId`の作業項目を読む確認(`defaultWorkItemStopCheck`)である。
+   * 全停止の確認とは別に、起動の前と再試行の前と実行中に確かめ、当たれば`work_item_stopped`の失敗で終わる。
+   * 全停止の確認と待ちの管理を共有しないので、片方が遅れても、もう片方は影響を受けない。
+   */
+  readonly workItemStopCheck?: StopCheck;
   /**
    * 将来、workerをroot以外で実行する方式のために予約している。
    * 今は使わず、workerの現在のユーザーで起動する。
@@ -595,9 +604,35 @@ export const CLAUDE_STOPPED_DETAIL =
  */
 const COST_IS_CAP_NOTE = "(cost_usd is the --max-budget-usd cap)";
 
+/** 人が中止した作業項目を止めたため、Claudeを起動しなかったときの詳細。 */
+export const CLAUDE_WORK_ITEM_STOPPED_BEFORE_START_DETAIL =
+  "claude -p not started: the work item was stopped by an operator";
+
+/** 実行中に人が作業項目を中止し、Claudeを止めたときの詳細。 */
+export const CLAUDE_WORK_ITEM_STOPPED_DETAIL =
+  "claude -p stopped: the work item was stopped by an operator";
+
 /** この実行の全停止の確認。指定が無ければ既定の確認を使う。 */
 function stopCheckOf<T>(opts: RunClaudeOptions<T>): StopCheck {
   return opts.stopCheck ?? defaultStopCheck();
+}
+
+/** この実行の作業項目の確認。指定が無ければ、作業項目のIDで既定の確認を作る。 */
+function workItemStopCheckOf<T>(opts: RunClaudeOptions<T>): StopCheck {
+  return opts.workItemStopCheck ?? defaultWorkItemStopCheck(opts.workItemId);
+}
+
+/** 停止の確認の結果。作業項目の中止が全停止より優先する。人が中止した作業項目を、全停止の解除の後に起動し直さないためである。 */
+type StopKind = "work_item" | "all" | null;
+
+/** 全停止と作業項目の確認を、それぞれ別に呼ぶ。両方が当たれば作業項目を返す。 */
+async function checkStops<T>(opts: RunClaudeOptions<T>): Promise<StopKind> {
+  const [all, item] = await Promise.all([
+    checkStop(stopCheckOf(opts)),
+    checkStop(workItemStopCheckOf(opts)),
+  ]);
+  if (item) return "work_item";
+  return all ? "all" : null;
 }
 
 /** この試行のタイムアウト(ms)を返す。deadlineAtがあれば残り時間で頭打ちにする。 */
@@ -820,10 +855,11 @@ async function attemptClaude<T>(
   const argv = buildClaudeArgv(opts);
   const timeoutMs = attemptTimeoutMs(opts);
 
-  const watch = watchStop(
-    stopCheckOf(opts),
-    opts.stopCheckIntervalMs ?? STOP_CHECK_INTERVAL_MS,
-  );
+  const intervalMs = opts.stopCheckIntervalMs ?? STOP_CHECK_INTERVAL_MS;
+  // 全停止と作業項目の確認は、別々の監視で動かす。片方の読み取りが返らなくても、もう片方は待たされない。
+  const itemCheck = workItemStopCheckOf(opts);
+  const watch = watchStop(stopCheckOf(opts), intervalMs);
+  const itemWatch = watchStop(itemCheck, intervalMs);
   let commandResult: CommandResult;
   try {
     commandResult = await opts.run(argv, {
@@ -831,13 +867,26 @@ async function attemptClaude<T>(
       env,
       stdin: promptText,
       timeoutMs,
-      stopSignal: watch.signal,
+      stopSignal: mergeSignals(watch.signal, itemWatch.signal),
     });
   } finally {
     watch.dispose();
+    itemWatch.dispose();
   }
 
   const baseAgentRun = baseAgentRunFor(opts, commandResult.exitCode);
+
+  // 人が中止した作業項目の実行は、全停止と同じく、出力を解析せずに失敗にする。両方が当たったときは作業項目を優先する。
+  // 全停止だけが当たって見えるときは、作業項目の確認の読み取りが遅れただけかもしれないので、もう1回確かめる。
+  const stoppedAll = watch.stopped() || commandResult.stopped === true;
+  if (itemWatch.stopped() || (stoppedAll && (await checkStop(itemCheck)))) {
+    const detail = failureDetail(CLAUDE_WORK_ITEM_STOPPED_DETAIL);
+    return failedAttempt(
+      "work_item_stopped",
+      interruptedAgentRun(opts, baseAgentRun, commandResult.stdout, detail),
+      detail,
+    );
+  }
 
   // 全停止で止めた実行は、出力を解析せずに失敗にする。止めた後の出力は途中までで、解析しても意味が無いためである。
   // 費用だけは、結果を書き終えていれば読む。
@@ -965,6 +1014,7 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
  * 例外を投げたときは、秘密を伏せたメッセージを最初の失敗の`detail`に足す。
  * 全停止(`stopCheck`)が置かれていれば起動せず、実行中なら止めて、どちらも`stopped`で返し、再試行しない。
  * 再試行の前に全停止が見つかったときも`stopped`で返し、最初の試行の記録は`discardedAgentRun`に残す。
+ * 人が作業項目を中止したとき(`workItemStopCheck`)も同じ扱いにして、`work_item_stopped`で返す。両方が当たれば`work_item_stopped`を優先する。
  */
 export async function runClaude<T>(
   opts: RunClaudeOptions<T>,
@@ -989,8 +1039,22 @@ export async function runClaude<T>(
       retried: false,
     };
   }
-  // 全停止の間は起動しない。flowのstepの再試行で呼び直されたときも、ここで起動せずに終わる。
-  if (await checkStop(stopCheckOf(opts))) {
+  // 全停止の間と、人が中止した作業項目は起動しない。flowのstepの再試行で呼び直されたときも、ここで起動せずに終わる。
+  const stoppedBefore = await checkStops(opts);
+  if (stoppedBefore === "work_item") {
+    return {
+      ...failedAttempt(
+        "work_item_stopped",
+        {
+          ...baseAgentRunFor(opts, null),
+          error: CLAUDE_WORK_ITEM_STOPPED_BEFORE_START_DETAIL,
+        },
+        CLAUDE_WORK_ITEM_STOPPED_BEFORE_START_DETAIL,
+      ),
+      retried: false,
+    };
+  }
+  if (stoppedBefore === "all") {
     return {
       ...failedAttempt(
         "stopped",
@@ -1019,13 +1083,17 @@ export async function runClaude<T>(
   }
   const decision = await retryDecision(opts);
   if (!decision.allowed) {
-    if (decision.stopped) {
+    if (decision.stoppedBy !== null) {
       // 1回目の実行には費用がかかっているので、捨てた実行として残す。
+      const [reason, detail] =
+        decision.stoppedBy === "work_item"
+          ? (["work_item_stopped", CLAUDE_WORK_ITEM_STOPPED_DETAIL] as const)
+          : (["stopped", CLAUDE_STOPPED_DETAIL] as const);
       return {
         ...failedAttempt(
-          "stopped",
-          { ...baseAgentRunFor(opts, null), error: CLAUDE_STOPPED_DETAIL },
-          CLAUDE_STOPPED_DETAIL,
+          reason,
+          { ...baseAgentRunFor(opts, null), error: detail },
+          detail,
         ),
         discardedAgentRun: first.agentRun,
         retried: false,
@@ -1095,13 +1163,13 @@ async function reviewIssues<T>(
 /**
  * `retryDecision`の結果。再試行しないときの`checkError`は、`beforeRetry`が投げた例外のメッセージ
  * (`failureDetail`で秘密を伏せ、区切りを置き換えたもの)で、例外が無ければnullである。
- * `stopped`は、再試行の前の全停止の確認で止まったことを表す。
+ * `stoppedBy`は、再試行の前の確認で止まったことを表す。人が中止した作業項目(`work_item`)と全停止(`all`)の両方が当たれば`work_item`にする。
  */
 type RetryDecision =
   | { readonly allowed: true }
   | {
       readonly allowed: false;
-      readonly stopped: boolean;
+      readonly stoppedBy: "work_item" | "all" | null;
       readonly checkError: string | null;
     };
 
@@ -1115,20 +1183,21 @@ async function retryDecision<T>(
   opts: RunClaudeOptions<T>,
 ): Promise<RetryDecision> {
   if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
-    return { allowed: false, stopped: false, checkError: null };
+    return { allowed: false, stoppedBy: null, checkError: null };
   }
-  if (await checkStop(stopCheckOf(opts))) {
-    return { allowed: false, stopped: true, checkError: null };
+  const stoppedBy = await checkStops(opts);
+  if (stoppedBy !== null) {
+    return { allowed: false, stoppedBy, checkError: null };
   }
   if (opts.beforeRetry === undefined) return { allowed: true };
   try {
     return (await opts.beforeRetry())
       ? { allowed: true }
-      : { allowed: false, stopped: false, checkError: null };
+      : { allowed: false, stoppedBy: null, checkError: null };
   } catch (err) {
     return {
       allowed: false,
-      stopped: false,
+      stoppedBy: null,
       checkError: failureDetail(
         err instanceof Error ? err.message : String(err),
       ),

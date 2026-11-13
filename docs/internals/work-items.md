@@ -522,7 +522,7 @@ Issueの新しいサイクルの作業項目を挿入すると、同じIssueの�
 
 ### 人による中止
 
-運用者は、Consoleの作業項目の詳細から、実行中のジョブが無い作業項目を中止できる。
+運用者は、Consoleの作業項目の詳細から、作業項目を中止できる。
 中止は、書き込みのscript`console_work_item_cancel`が行う。
 作業項目を取り消し(`cancelled`)にし、遷移の記録に固定の注記`console: operator_cancelled`を残す。
 操作者は注記に入れず、操作の記録(`console_actions`)に残す。
@@ -534,13 +534,15 @@ Issueの新しいサイクルの作業項目を挿入すると、同じIssueの�
 
 | 種別 | 中止できる状態 |
 | --- | --- |
-| `issue` | `awaiting_approval`、`awaiting_design_approval`、`approved`、`failed`、`needs_human`、`expired`、`blocked` |
+| `issue` | `awaiting_approval`、`awaiting_design_approval`、`approved`、`failed`、`needs_human`、`expired`、`blocked`、実行中の`picked`、`requirements_generating`、`designing`、`implementing` |
 | `pr_review`、`pr_fix` | `failed`、`needs_human`、`blocked` |
 | `audit` | `awaiting_approval`、`failed`、`needs_human` |
 | `dependabot`、`investigate` | `failed`、`needs_human` |
 
-実行中の状態は入れない。
-動いているClaudeと検査を止める仕組みが無いためである。
+実行中の状態は、Issueの4つだけを入れる。
+動いているClaudeと検査を止める仕組み([実行中の作業項目の停止](#実行中の作業項目の停止))がある種別に限るためである。
+PRのレビューと修正、監査、dependabot、調査の実行中の状態は、まだ入れない。
+実行中の状態の一覧は、`lib/operator_cancel.ts`の`OPERATOR_CANCEL_RUNNING_STATUSES`にある。
 Issueの`pr_open`も入れない。
 同じPRのレビューと修正の作業項目が、動きうるためである。
 CIの失敗を直す回と、競合を直す回の`pr_fix`は入れる。
@@ -601,6 +603,57 @@ Issue化の提案の依頼は残す。
 - ブランチ名は外部の入力である。
   `factory/issue-<N>-wi-<id>`の形で、人が中止したIssueの作業項目のIDを名乗るPRは、自動の修正が止まりうる。
   止まる側に倒れる偽の一致で、`branch_held`の照合も同じ形である。
+
+### 実行中の作業項目の停止
+
+Issueの実行中の作業項目を中止すると、動いているClaudeと検査は、自分で止まる。
+Windmillのジョブは取り消さない。
+取り消すと、子プロセスを止める監視が、ジョブと一緒に消えるためである。
+
+止める確認は`lib/work_item_stop.ts`にある。
+作業項目の状態が`cancelled`で、取り消しへ移った最新の遷移の注記が人の中止の固定文のときだけ、止める。
+照合による取り消しなど、ほかの理由の取り消しは止めない。
+読めないとき、5秒で読み終わらないとき、行が無いときは、止めない扱いにする。
+DBの一時的な障害で、動いているジョブを壊さないためである。
+
+確認は、全停止の確認とは別の監視で動かす。
+待ちの管理を共有しないので、片方の読み取りが返らなくても、もう片方は遅れない。
+`lib/claude.ts`は、起動の前と再試行の前に確かめ、実行中は15秒ごとに確かめる。
+`lib/check_runner.ts`は、コマンドの前に1回確かめ、実行中は15秒ごとに確かめる。
+当たると、Claudeと検査は、起動せず、またはプロセスのグループごと止まる。
+全停止と人の中止の両方が当たったときは、人の中止を優先する。
+失敗の理由は`work_item_stopped`で、flowの再試行をせず、モデルの昇格の失敗にも数えない。
+検査コマンドを実行する関数は、作業項目のIDを必ず受け取る。
+渡し忘れは型が止め、`null`で作業項目に結ばない検査は、配線のテストが許可した場所に限る。
+
+止まった実行の後は、フローごとに次のとおりになる。
+
+| フロー | 止まった後 |
+| --- | --- |
+| implement | 書き込みの直前のリースの確かめで、リースを失っていると分かり、何も書かずに終わる |
+| pipeline、design | 承認依頼の後の比較交換が負け、依頼を取り下げて、通知せずに終わる |
+
+止まった実行が例外で終わると、失敗の処理(`on_error_flow`)が動く。
+作業項目が人に中止され、失敗した実行がその行の実行であれば、失敗の記録(`job_failures`)と通知(`job_failed`)を出さずに終わる。
+ジョブのログには、失敗の文を残す。
+人が止めた実行は、Factoryの異常ではないためである。
+判定は`lib/work_item_stop.ts`の`shouldSilenceFailure`にあり、注記を読めないときは、通知する側へ進む。
+失敗した実行が行の実行かは、`shouldMarkFailed`と同じ規則で決める。
+pipeline、設計、調査は、行のジョブIDが記録されていて、失敗した実行のルートジョブIDと一致するときだけ、行の実行とみなす。
+ほかのフローは、どちらかが無いときも、行の実行とみなす。
+`on_error_flow`の配線は、保護したテスト(`tests/scripts/work_item_stop_wiring.test.ts`)が固定する。
+
+停止には、次の限りがある。
+
+- 止まるまで、通常は確認の間隔(15秒)と読み取りの上限(5秒)を足した20秒ほどかかる。
+  DBが応答しない間は、止まらない。
+- 止まるまでの間に書かれたブランチ、PR、作業ツリー、費用は残る。
+- 外へ書く直前の確かめは、implementのリースと、pipelineとdesignの比較交換が担う。
+  implementの準備が、空のブランチをpushする直前には、確かめが無い。
+- 書き終わっていない実行の費用は、上限の値で記録する。
+- 自己停止が実際に届くまでの時間と、止めたときの費用の記録は、実機で確かめていない。
+
+残るリスクは[R-CON-44](../security-risks.md#r-con-44)と[R-CON-45](../security-risks.md#r-con-45)である。
 
 ### 終端の一覧の同期
 

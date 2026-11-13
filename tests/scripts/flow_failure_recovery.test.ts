@@ -79,6 +79,7 @@ async function noteAfterFlowFailure(
       recordFailure: async () => {},
       hasSupersedingPrReview: async () => false,
       findInvestigationByFlowJobId: async () => null,
+      readCancelNote: async () => null,
       updateStatusIfLeaseHolder: async (_id, _from, _to, _job, note) => {
         notes.push(note);
         return true;

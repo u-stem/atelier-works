@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { ActionSqlClient } from "../../f/factory/lib/console_actions.ts";
 import { OPERATOR_CANCELLED_NOTE } from "../../f/factory/lib/operator_cancel.ts";
 import {
   DESIGN_FLOW_PATH,
@@ -12,6 +11,7 @@ import {
   isWorkItemStopped,
   type NoteRead,
   type SilenceInput,
+  type StopSqlClient,
   sdkWorkItemStopReadIo,
   shouldSilenceFailure,
   type WorkItemStopReadIo,
@@ -151,15 +151,14 @@ describe("sdkWorkItemStopReadIo", () => {
   type Seen = { sql: string; values: unknown[] };
 
   function fakeSql(rows: readonly Record<string, unknown>[]): {
-    sql: ActionSqlClient;
+    sql: StopSqlClient;
     seen: Seen[];
   } {
     const seen: Seen[] = [];
-    const sql: ActionSqlClient = (strings, ...values) => {
+    const sql: StopSqlClient = (strings, ...values) => {
       seen.push({ sql: strings.join("?"), values });
       return {
         fetch: async () => rows.map((row) => ({ ...row })),
-        execute: async () => {},
       };
     };
     return { sql, seen };
@@ -216,7 +215,9 @@ describe("sdkWorkItemStopReadIo", () => {
   test("takes the note of the latest transition into the cancelled state", async () => {
     const fake = fakeSql([]);
     await sdkWorkItemStopReadIo(7, fake.sql).readState();
-    expect(fake.seen[0]?.sql).toContain("ORDER BY occurred_at DESC, id DESC");
+    expect(fake.seen[0]?.sql).toContain(
+      "ORDER BY e.occurred_at DESC, e.id DESC",
+    );
   });
 
   test("does not write", async () => {

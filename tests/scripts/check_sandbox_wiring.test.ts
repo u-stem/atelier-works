@@ -27,7 +27,9 @@ function checkCall(text: string): string {
 describe("check sandbox wiring", () => {
   for (const name of ["implement_verify.ts", "pr_fix_verify.ts"]) {
     test(`${name} passes the check sandbox to runAllowedCheckCommands`, () => {
-      expect(checkCall(source(name))).toMatch(/,\s*checkSandbox,?\s*\)$/);
+      expect(checkCall(source(name))).toMatch(
+        /,\s*checkSandbox,\s*\{\s*workItemId:\s*work_item_id,?\s*\},?\s*\)$/,
+      );
     });
 
     test(`${name} builds the check sandbox from the environment`, () => {

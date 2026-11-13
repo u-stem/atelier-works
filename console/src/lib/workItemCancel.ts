@@ -16,6 +16,10 @@ export const WORK_ITEM_CANCELLABLE_STATUSES: Readonly<
     "needs_human",
     "expired",
     "blocked",
+    "picked",
+    "requirements_generating",
+    "designing",
+    "implementing",
   ],
   pr_review: ["failed", "needs_human", "blocked"],
   pr_fix: ["failed", "needs_human", "blocked"],
@@ -23,6 +27,18 @@ export const WORK_ITEM_CANCELLABLE_STATUSES: Readonly<
   dependabot: ["failed", "needs_human"],
   investigate: ["failed", "needs_human"],
 };
+
+/**
+ * 許可表の状態のうち、フローが動いている状態。
+ * `f/factory/lib/operator_cancel.ts`の`OPERATOR_CANCEL_RUNNING_STATUSES`の写しで、
+ * 一致は`tests/scripts/console_write_contract.test.ts`が確かめる。
+ */
+export const WORK_ITEM_CANCEL_RUNNING_STATUSES: readonly string[] = [
+  "picked",
+  "requirements_generating",
+  "designing",
+  "implementing",
+];
 
 /** 承認依頼を待つ状態。 */
 const AWAITING_APPROVAL_STATUSES: readonly string[] = [
@@ -65,6 +81,14 @@ export function canCancelWorkItem(kind: string, status: string): boolean {
   return WORK_ITEM_CANCELLABLE_STATUSES[kind]?.includes(status) ?? false;
 }
 
+/** 種別`kind`で状態`status`の中止が、動いているフローを止める中止か。中止してよい組に限る。 */
+export function isRunningCancel(kind: string, status: string): boolean {
+  return (
+    canCancelWorkItem(kind, status) &&
+    WORK_ITEM_CANCEL_RUNNING_STATUSES.includes(status)
+  );
+}
+
 export type WorkItemCancelInput = { readonly workItemId: number };
 
 /**
@@ -81,6 +105,7 @@ export function workItemCancelKey(input: WorkItemCancelInput): string {
  * 承認待ちのIssueには、要件定義と設計の承認依頼が期限切れになることを足す。
  * 提案を出しうる種別(監査、PRのレビュー、PRの修正)には、状態によらず、Issue化の提案の依頼が残ることを足す。
  * Issueには、ブランチのPRの直す回が止まることを、PRの行には、CIと競合の直す回が止まる条件を足す。
+ * 動いているフローを止める中止には、止まるまでの時間、残るもの、ジョブの画面の「ジョブの中止」を押さないことを足す。
  */
 export function cancelWorkItemDialogLines(
   kind: string,
@@ -102,6 +127,13 @@ export function cancelWorkItemDialogLines(
   if (kind === "issue") {
     lines.push(
       "このIssueのブランチのPRは、CIの失敗と競合を、Factoryが自動では直しません。",
+    );
+  }
+  if (isRunningCancel(kind, status)) {
+    lines.push(
+      "動いているジョブは、通常は数十秒で止まります。外部の処理の最中は、次の確認まで続くことがあります。",
+      "止まるまでの間に書き込まれたもの(ブランチ、PR、作業ツリー)と、それまでに使った費用は残ります。",
+      "ジョブの画面の「ジョブの中止」は押さないでください。押すと、Claudeが止まらずに、費用が出続けることがあります。",
     );
   }
   if (PR_KINDS.includes(kind)) {

@@ -1160,6 +1160,11 @@ Consoleから押せる書き込みには、読むsecret変数の上限を決め�
 作業項目を中止する`console_work_item_cancel`も、どのsecret変数も読まない。
 SDKの呼び出しは`datatable`だけで、書く表は作業項目、承認依頼、遷移の記録と、操作の記録に限る。
 この絞り方は、scriptの固有のテストが確かめる([作業項目の中止](internals/console/security.md#作業項目の中止))。
+実行中のIssueの中止では、このscriptはClaudeを止めない。
+動いているClaudeと検査が、作業項目の状態を15秒ごとに読んで、自分で止まる(`lib/work_item_stop.ts`)。
+読む部品と、失敗の処理を静かにする判定は、保護パスにある。
+失敗の処理(`on_error_flow.ts`)は日常的に直すので保護の外に置き、判定を呼ぶ配線を、保護したテストが固定する。
+詳しくは[実行中の作業項目の停止](internals/work-items.md#実行中の作業項目の停止)にある。
 Consoleの操作で、外向きの資格情報が動く範囲を広げないためである。
 tag`console`のscriptがimportでたどれるソースを数える契約テスト(`tests/scripts/console_worker_boundary.test.ts`)が、この上限を確かめる。
 許可した2つも、`github_token`以外のsecret変数は読まない。

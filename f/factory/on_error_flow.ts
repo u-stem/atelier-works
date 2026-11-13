@@ -11,6 +11,11 @@
 // 調査のフローは、稼働中(`investigating`)の調査の作業項目だけを`failed`にする。
 // 調査のフローの入力には`work_item_id`が無いので、調査のときは、ルートジョブIDで行を引く。
 //
+// 人がConsoleから中止した作業項目(状態が`cancelled`で、注記が人の中止の固定文)の実行が失敗したときは、
+// ジョブのログに失敗の文を残した後、失敗の記録も作業項目の遷移も通知もせずに終わる(`shouldSilenceFailure`)。
+// 止めたのは人で、失敗はFactoryの異常ではないためである。判定は保護したlibの関数だけに任せ、ここでは人の中止の注記を見ない。
+// 注記を読めないときは、通知する側へ進む。
+//
 // `pipeline_generate`の失敗も、自分で終了処理をせずここに集める。
 // `retry_work_item`が行う状態やラベルの管理と干渉しないため。
 //
@@ -33,6 +38,7 @@ import {
   getInvestigateWorkItemByFlowJobId,
   getWorkItem,
   hasSupersedingPrReview,
+  latestStatusEvent,
   recordFailure,
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
@@ -43,7 +49,6 @@ import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   DESIGN_FLOW_PATH,
   INVESTIGATE_FLOW_PATH,
-  PIPELINE_FLOW_PATH,
 } from "./lib/pipeline_lease.ts";
 import { CI_CLAUDE_WAIT_NOTES } from "./lib/pr_ci_fix_recovery.ts";
 import {
@@ -59,6 +64,11 @@ import {
   type WorkItem,
   type WorkItemStatus,
 } from "./lib/types.ts";
+import {
+  flowRunMatchesRow,
+  type NoteRead,
+  shouldSilenceFailure,
+} from "./lib/work_item_stop.ts";
 import { nextActionFor } from "./steps/pr_workflow_support.ts";
 
 /**
@@ -120,15 +130,7 @@ export function shouldMarkFailed(
   rootJobId: string | null,
   flowPath: string | null,
 ): boolean {
-  const root = rootJobId?.toLowerCase() ?? null;
-  if (
-    flowPath === PIPELINE_FLOW_PATH ||
-    flowPath === DESIGN_FLOW_PATH ||
-    flowPath === INVESTIGATE_FLOW_PATH
-  )
-    return workItemFlowJobId !== null && workItemFlowJobId === root;
-  if (workItemFlowJobId === null || root === null) return true;
-  return workItemFlowJobId === root;
+  return flowRunMatchesRow(workItemFlowJobId, rootJobId, flowPath);
 }
 
 /** 設定を読めず、インスタンス名が分からないときに通知に載せる名前。 */
@@ -185,6 +187,8 @@ export type FlowFailureDeps = {
   readonly recordFailure: (record: FailureRecord) => Promise<unknown>;
   /** 同じPRに、置き換えた行か並走する行がPRレビューの他にあるか。 */
   readonly hasSupersedingPrReview: (id: number) => Promise<boolean>;
+  /** 作業項目が取り消しへ移った最新の遷移の注記。遷移が無ければ`null`。読めなければ例外を投げる。 */
+  readonly readCancelNote: (id: number) => Promise<string | null>;
   /** 調査のフローの入力には作業項目のIDが無いので、ルートジョブIDで調査の行を引く。 */
   readonly findInvestigationByFlowJobId: (
     flowJobId: string,
@@ -269,6 +273,36 @@ export async function handleFlowFailure(
           fetchErr instanceof Error ? fetchErr.message : String(fetchErr),
         ),
       });
+    }
+  }
+
+  // 人が中止した作業項目の失敗は、上のログだけを残して終わる。記録も、遷移も、通知もしない。
+  // 注記を読めないときは、人の中止と確かめられないので、通知する側へ進む。
+  if (item !== null && item.status === "cancelled") {
+    let note: NoteRead = { kind: "unreadable" };
+    try {
+      note = { kind: "read", note: await deps.readCancelNote(item.id) };
+    } catch (noteErr) {
+      log.error("failed to read the note of the cancel", {
+        work_item_id,
+        error: maskSecrets(
+          noteErr instanceof Error ? noteErr.message : String(noteErr),
+        ),
+      });
+    }
+    if (
+      shouldSilenceFailure({
+        status: item.status,
+        note,
+        rowFlowJobId: item.flow_job_id,
+        rootJobId: input.rootJobId,
+        flowPath: path ?? null,
+      })
+    ) {
+      log.info("flow failed after a person cancelled the work item", {
+        work_item_id: item.id,
+      });
+      return;
     }
   }
 
@@ -465,6 +499,8 @@ export async function main(
       findInvestigationByFlowJobId: (flowJobId) =>
         getInvestigateWorkItemByFlowJobId(flowJobId),
       hasSupersedingPrReview: (id) => hasSupersedingPrReview(id),
+      readCancelNote: async (id) =>
+        (await latestStatusEvent(id, "cancelled"))?.note ?? null,
       recordFailure: (record) => recordFailure(record),
       updateStatusIfLeaseHolder: (id, from, to, flowJobId, note) =>
         updateStatusIfLeaseHolder(id, from, to, flowJobId, note),

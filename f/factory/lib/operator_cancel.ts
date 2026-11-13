@@ -11,10 +11,11 @@ export const OPERATOR_CANCELLED_NOTE = "console: operator_cancelled";
 
 /**
  * 種別ごとに、人が中止してよい状態。
- * 実行中のジョブが無い状態だけを入れる。承認待ちの2つは、フローが終わって人の判断を待つ状態である。
- * 実行中の状態(実装中、修正中、調査中など)は、動いているClaudeと検査を止める仕組みが無いので入れない。
- * - `issue`: 要件定義と設計の承認待ち、承認済み(実装の起動の前)、止まった状態。PRを作った後(`pr_open`)は入れない。
- *   PRの修正やレビューの作業項目が、同じPRで動きうるためである。
+ * 承認待ちの2つは、フローが終わって人の判断を待つ状態である。
+ * 実行中の状態は、動いているClaudeと検査を止める仕組み(`lib/work_item_stop.ts`)がある種別だけを入れる。
+ * - `issue`: 要件定義と設計の承認待ち、承認済み(実装の起動の前)、止まった状態、
+ *   要件定義と設計と実装のフローが動いている状態(`OPERATOR_CANCEL_RUNNING_STATUSES`)。
+ *   PRを作った後(`pr_open`)は入れない。PRの修正やレビューの作業項目が、同じPRで動きうるためである。
  * - `pr_review`と`pr_fix`: 止まった状態。CIの失敗と競合を直す回も含める。監視が起動し直さないことは、監視の側が確かめる。
  * - `audit`: 提案の承認待ちと、止まった状態。
  * - `dependabot`: 人に回した状態と、失敗した状態。中止した行は処理済みに数えるので、同じheadは自動で処理し直さない。
@@ -31,6 +32,10 @@ export const OPERATOR_CANCELLABLE_STATUSES: Readonly<
     "needs_human",
     "expired",
     "blocked",
+    "picked",
+    "requirements_generating",
+    "designing",
+    "implementing",
   ],
   pr_review: ["failed", "needs_human", "blocked"],
   pr_fix: ["failed", "needs_human", "blocked"],
@@ -38,6 +43,17 @@ export const OPERATOR_CANCELLABLE_STATUSES: Readonly<
   dependabot: ["failed", "needs_human"],
   investigate: ["failed", "needs_human"],
 };
+
+/**
+ * 許可表の状態のうち、フローが動いている状態。種別を問わず、状態の名前で数える。
+ * 画面が「止まるまで数十秒かかる」と伝えるかを決める。許可表に無い種別と状態の組は、この一覧に入っていても中止できない。
+ */
+export const OPERATOR_CANCEL_RUNNING_STATUSES: readonly string[] = [
+  "picked",
+  "requirements_generating",
+  "designing",
+  "implementing",
+];
 
 /** 種別`kind`の作業項目を、人が中止してよい状態。知らない種別は空にする。 */
 export function operatorCancellableStatuses(kind: string): readonly string[] {
@@ -49,6 +65,14 @@ export function operatorCancellableStatuses(kind: string): readonly string[] {
 /** 種別`kind`で状態`status`の作業項目を、人が中止してよいか。 */
 export function isOperatorCancellable(kind: string, status: string): boolean {
   return operatorCancellableStatuses(kind).includes(status);
+}
+
+/** 種別`kind`で状態`status`の中止が、動いているフローを止める中止か。中止してよい組に限る。 */
+export function isOperatorCancelRunning(kind: string, status: string): boolean {
+  return (
+    isOperatorCancellable(kind, status) &&
+    OPERATOR_CANCEL_RUNNING_STATUSES.includes(status)
+  );
 }
 
 /**

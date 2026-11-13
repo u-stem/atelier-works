@@ -2134,6 +2134,7 @@ describe("runDependabotInstall", () => {
     await runDependabotInstall(WORKTREE_DIR, {
       run: async () => commandResult(),
       sandbox,
+      workItemId: 7,
       runChecks: async (...received) => {
         args = received;
         return [];
@@ -2164,6 +2165,11 @@ describe("runDependabotInstall", () => {
   test("runs the install in the check sandbox", async () => {
     const args = await captured();
     expect(args[6]).toBe(FAKE_SANDBOX);
+  });
+
+  test("binds the install to the work item, so that cancelling it stops the install", async () => {
+    const args = await captured();
+    expect(args[7]?.workItemId).toBe(7);
   });
 });
 

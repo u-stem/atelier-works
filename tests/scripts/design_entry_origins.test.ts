@@ -43,6 +43,7 @@ type Counts = Readonly<Record<string, number>>;
  * 設計フローを参照するファイルと、参照ごとの出現の数。キーは`f/factory`からの相対パス。
  * 起動元は`retry_work_item.ts`、`steps/requirements_apply.ts`、`steps/design_apply.ts`、`steps/implement_finish.ts`、`steps/pr_fix_finish.ts`の5つ。
  * 起動しない参照は、失敗ハンドラ(`on_error_flow.ts`)、ジョブの取消(`console_job_cancel.ts`)、
+ * 失敗した実行が行の実行かを見分ける判定(`lib/work_item_stop.ts`)、
  * リースの定義(`lib/pipeline_lease.ts`)、Consoleの既知のpathの生成物(`lib/console_known_paths.ts`)、
  * 設計フロー自身の定義(`design__flow/flow.yaml`)である。
  */
@@ -57,7 +58,8 @@ const ALLOWED_REFERENCES: Readonly<Record<string, Counts>> = {
   "steps/design_apply.ts": { "startDesign(": 1, "buildStartDesign(": 1 },
   "steps/implement_finish.ts": { "startDesign(": 1, "buildStartDesign(": 1 },
   "steps/pr_fix_finish.ts": { "startDesign(": 1, "buildStartDesign(": 1 },
-  "on_error_flow.ts": { DESIGN_FLOW_PATH: 3 },
+  "on_error_flow.ts": { DESIGN_FLOW_PATH: 2 },
+  "lib/work_item_stop.ts": { DESIGN_FLOW_PATH: 2 },
   "console_job_cancel.ts": { designFlowPathLiteral: 1 },
   "lib/pipeline_lease.ts": { DESIGN_FLOW_PATH: 1, designFlowPathLiteral: 1 },
   "lib/console_known_paths.ts": { designFlowPathLiteral: 2 },
@@ -71,6 +73,7 @@ const ALLOWED_REFERENCES: Readonly<Record<string, Counts>> = {
 const ALLOWED_DESIGNING: Readonly<Record<string, number>> = {
   "lib/branch_hold.ts": 1,
   "lib/db.ts": 13,
+  "lib/operator_cancel.ts": 2,
   "lib/types.ts": 1,
   "retry_work_item.ts": 2,
   "steps/design_apply.ts": 1,

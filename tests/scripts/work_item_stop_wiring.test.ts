@@ -443,7 +443,7 @@ describe("the note of a cancel by a person", () => {
 
   test("is put into a SQL template only by the script that cancels", () => {
     const interpolating = F_SOURCES.filter((path) =>
-      read(path).includes("${OPERATOR_CANCELLED_NOTE}"),
+      /\$\{OPERATOR_CANCELLED_NOTE\}/.test(read(path)),
     );
     expect(interpolating).toEqual([CANCEL_SCRIPT]);
   });
@@ -475,6 +475,7 @@ describe("the calls that move a work item into the cancelled state", () => {
   test("are the ones that this test lists, each with a fixed note", () => {
     expect(cancelNoteExpressions()).toEqual([
       "f/factory/poll_issues.ts: note",
+      "f/factory/steps/dependabot_finish.ts: note",
       "f/factory/steps/design_prepare.ts: ".concat(
         '"issue closed before design started"',
       ),
@@ -506,11 +507,11 @@ describe("the library that reads the work item", () => {
 
   test("imports only the modules that this test lists", () => {
     expect(importSpecifiers(read(WORK_ITEM_STOP))).toEqual([
-      "./console_actions.ts",
       "./operator_cancel.ts",
       "./pipeline_lease.ts",
       "./stop_all.ts",
       "./stop_check.ts",
+      "./types.ts",
       "windmill-client@1.817.0",
     ]);
   });

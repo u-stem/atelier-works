@@ -230,6 +230,7 @@ export async function main(
             undefined,
             undefined,
             checkSandbox,
+            { workItemId: work_item_id },
           ),
         runFixRound: async (request) => {
           // 直前のラウンドは記録済みなので、その失敗も数に入る。
