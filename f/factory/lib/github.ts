@@ -22,7 +22,9 @@
 import { revealControlChars, VolatileCiLog } from "./ci_log_support.ts";
 import {
   GH_EXIT_AUTH_REQUIRED,
+  GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GitHubHttpError,
+  GitHubRateLimitError,
   RATE_LIMIT_HINT_TEXT_LIMIT,
   SECONDARY_RATE_LIMIT_PHRASE,
 } from "./github_errors.ts";
@@ -58,7 +60,13 @@ import {
 export type { GitHubRepoRef };
 // 失敗の型は`github_errors.ts`にある。呼び出し側が`github.ts`から読めるよう再エクスポートする。
 // リポジトリのURLの読み取りは`types.ts`にある。`config.ts`が子プロセスの依存を持たずに使えるようにするためである。
-export { GH_EXIT_AUTH_REQUIRED, GitHubHttpError, parseGitHubRepoUrl };
+export {
+  GH_EXIT_AUTH_REQUIRED,
+  GITHUB_RATE_LIMIT_MAX_WAIT_MS,
+  GitHubHttpError,
+  GitHubRateLimitError,
+  parseGitHubRepoUrl,
+};
 
 /** エンドポイントやURLを組み立てる前に、`owner/repo`の両方を検証する。 */
 export function validateOwnerRepo(owner: string, repo: string): void {
@@ -158,16 +166,6 @@ function parseGhApiOutput(stdout: string): GhApiResponse {
 }
 
 /**
- * rate limitの解除を待つ時間の上限(ミリ秒)。
- * 1回の待ちはどのstepのtimeoutよりも短い(最も短いのはpr_fixの指摘の収集の600秒)ので、
- * 1つのstepで何度か待っても打ち切られない。
- * 二次レート制限の`retry-after`(多くは60秒)はこの範囲で待てる。
- * 一次レート制限(1時間ごと)を使い切ったときの`x-ratelimit-reset`までの待ちは収まらないので、
- * 待たずに`GitHubRateLimitError`を投げる。
- */
-export const GITHUB_RATE_LIMIT_MAX_WAIT_MS = 120_000;
-
-/**
  * `x-ratelimit-reset`から求めた待ちに足す余裕(ミリ秒)。
  * ヘッダーの時刻は秒単位で、workerとGitHubの時計もずれうるため、
  * 解除の直前に再試行してまた拒まれないようにする。
@@ -176,54 +174,6 @@ const RATE_LIMIT_RESET_MARGIN_MS = 1000;
 
 /** 応答に解除の時刻を示すヘッダーが無いときに待つ時間(ミリ秒)。 */
 const DEFAULT_RATE_LIMIT_WAIT_MS = 60_000;
-
-/**
- * rate limitの解除まで待てない(必要な待ちが`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超える)か、
- * 待って再試行しても再びrate limitに当たったときに投げる。
- * GraphQLの一次レート制限(HTTP 200で`errors[].type`が`RATE_LIMITED`)では、待たずに投げる。
- * 投げるのは要求がGitHubに拒まれた後なので、その要求による副作用は起きていない。
- * 捕まえない呼び出し側では、`on_error_flow`が`message`を失敗の理由として記録・通知する。
- * `message`は`"; "`を含まない1つの理由にし、`describeReason` / `nextActionFor`が
- * 分割せずに扱えるようにする。
- */
-export class GitHubRateLimitError extends Error {
-  readonly endpoint: string;
-  /**
-   * 解除までに必要な待ち(ミリ秒)。再試行も拒まれたときは、その応答から求めた値。
-   * 応答に解除の時刻を示すヘッダーが無ければnull。
-   */
-  readonly requiredWaitMs: number | null;
-  /** 1回待って再試行した後に投げたか。 */
-  readonly retried: boolean;
-  constructor(
-    endpoint: string,
-    requiredWaitMs: number | null,
-    retried: boolean,
-  ) {
-    super(
-      `GitHub rate limit on ${endpoint}: ${rateLimitDetail(requiredWaitMs, retried)} (rerun after the limit resets)`,
-    );
-    this.name = "GitHubRateLimitError";
-    this.endpoint = endpoint;
-    this.requiredWaitMs = requiredWaitMs;
-    this.retried = retried;
-  }
-}
-
-/** `GitHubRateLimitError`のメッセージの、エンドポイントの後に続く説明を作る。 */
-function rateLimitDetail(
-  requiredWaitMs: number | null,
-  retried: boolean,
-): string {
-  if (requiredWaitMs === null) {
-    return retried ? "still limited after waiting once" : "no reset time given";
-  }
-  const wait = `needs a ${String(Math.ceil(requiredWaitMs / 1000))}s wait`;
-  if (retried) return `still limited after waiting once (${wait})`;
-  return requiredWaitMs > GITHUB_RATE_LIMIT_MAX_WAIT_MS
-    ? `${wait}, longer than the ${String(GITHUB_RATE_LIMIT_MAX_WAIT_MS / 1000)}s wait cap`
-    : wait;
-}
 
 export function isRateLimited(response: GhApiResponse): boolean {
   if (response.status !== 403 && response.status !== 429) return false;

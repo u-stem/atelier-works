@@ -110,8 +110,8 @@ locks:
   f/factory/lib/gh_collect_read: 73c7075dc3f8dd186ea835bd9311d4719003170e374b065eee4b7f98ad7261b7
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: 6df2c0f549bffcff4d562c2e5d6f9c0cf3b7be5575e6ec1727ee61151f3e15e5
-  f/factory/lib/github: 17b08dede6453878ff7860ccf425761390a42d3d70f1ad992b583b6f71d518dd
-  f/factory/lib/github_errors: c1c63662dbdc331149e492cfd841f14f93f898a99bde2605b753b0db2127f8b4
+  f/factory/lib/github: 011d2ac2e36866e6e3fcdc8402a268f6c57c17340788d3faf200296e0182fe49
+  f/factory/lib/github_errors: 25d91078274cd6fa82791b18fb5e819df02a5ddb5cf94f6af09c1b773e4ff396
   f/factory/lib/heartbeat: 0780343b32026cd007ea35b095340c0b7cb640fb2bab46eb8d213c0a5204673e
   f/factory/lib/holds: 2377c9840d17e626331e3450f97978bfa8fafa583d01b243a9073169aaad728c
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
