@@ -218,7 +218,12 @@ function topLevelAfterEachArguments(code: string): string[] {
     const ch = code.charAt(i);
     if (ch === "{") depth += 1;
     if (ch === "}") depth -= 1;
-    if (depth === 0 && code.startsWith("afterEach(", i)) {
+    const before = i === 0 ? "" : code.charAt(i - 1);
+    if (
+      depth === 0 &&
+      !/[\w$.]/.test(before) &&
+      code.startsWith("afterEach(", i)
+    ) {
       found.push(argumentAt(code, i + "afterEach".length));
     }
   }
@@ -312,6 +317,20 @@ describe("the files that call stubLongTimers", () => {
     const sources = {
       "a.test.ts":
         'describe("a", () => {\n  afterEach(restoreTimers);\n});\ndescribe("b", () => {\n  stubLongTimers();\n});\n',
+    };
+    expect(filesWithoutRestore(sources)).toEqual(["a.test.ts"]);
+  });
+
+  test("flags a file whose only afterEach has a longer name", () => {
+    const sources = {
+      "a.test.ts": "myafterEach(restoreTimers);\nstubLongTimers();\n",
+    };
+    expect(filesWithoutRestore(sources)).toEqual(["a.test.ts"]);
+  });
+
+  test("flags a file whose only afterEach is a member of another object", () => {
+    const sources = {
+      "a.test.ts": "support.afterEach(restoreTimers);\nstubLongTimers();\n",
     };
     expect(filesWithoutRestore(sources)).toEqual(["a.test.ts"]);
   });
