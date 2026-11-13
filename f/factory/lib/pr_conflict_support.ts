@@ -135,6 +135,7 @@ export const PR_CONFLICT_FIX_HOLD_NOTE: Readonly<
   unresolvable: "競合が自動で解ける形でないため",
   check_failed: "解消した後の検査が失敗したため",
   fix_stopped: "直す作業が自動では解けない理由で止まったため",
+  operator_cancelled: "人がConsoleから作業項目を中止したため",
 };
 
 /** 保留の理由によって、人が取る操作が違うときの固定文。 */

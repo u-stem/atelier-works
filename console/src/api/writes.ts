@@ -35,6 +35,7 @@ import {
   isScheduleStopResult,
   isStopAllReleaseResult,
   isStopAllResult,
+  isWorkItemCancelResult,
   type JobCancelResult,
   type JobRerunResult,
   type ManualIntakeSubmitResult,
@@ -44,6 +45,7 @@ import {
   type ScheduleStopResult,
   type StopAllReleaseResult,
   type StopAllResult,
+  type WorkItemCancelResult,
 } from "./guards/writeResults.ts";
 import {
   type RunScriptOptions,
@@ -253,6 +255,23 @@ export function cancelJob(
     "console_job_cancel",
     { job_id: jobId },
     isJobCancelResult,
+    options,
+  );
+}
+
+/**
+ * 実行中のジョブが無い作業項目を1件中止する。中止した作業項目は再開できない。
+ * 種別と状態が許可表に無い作業項目と、読んだ後に状態が変わった作業項目は、中止せずに理由つきの断りで返る。断りは失敗ではなく結果である。
+ * 操作者と注記は引数に取らない。scriptが、操作者をジョブの実行文脈から導き、注記を固定の文で書く。
+ */
+export function cancelWorkItem(
+  workItemId: number,
+  options: RunScriptOptions = {},
+): Promise<WorkItemCancelResult> {
+  return callWrite(
+    "console_work_item_cancel",
+    { work_item_id: workItemId },
+    isWorkItemCancelResult,
     options,
   );
 }

@@ -29,6 +29,7 @@ const CONSOLE_SCRIPTS: Readonly<Record<string, number>> = {
   "f/factory/console_deploy_decide": 30,
   "f/factory/console_stop_all": 60,
   "f/factory/console_stop_all_release": 60,
+  "f/factory/console_work_item_cancel": 30,
 };
 
 /**

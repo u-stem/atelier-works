@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
 import type { GhClient } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
+import { OPERATOR_CANCELLED_NOTE } from "../../f/factory/lib/operator_cancel.ts";
 import {
   buildConflictFixDeps,
   buildConflictRecoveryDeps,
@@ -351,6 +352,101 @@ describe("buildConflictFixDeps: the branch of the pull request", () => {
     });
     await deps?.restartGrace(7);
     expect(restarted).toEqual([7]);
+  });
+
+  test("holds the round when a person cancelled the Issue work item of the branch", async () => {
+    const deps = buildConflictFixDeps(config, CLIENT, {
+      getWorkItem: async () => ({
+        ...BRANCH_ITEM,
+        status: "cancelled" as const,
+      }),
+      latestStatusEvent: async () => ({ note: OPERATOR_CANCELLED_NOTE }),
+    });
+    expect(
+      await deps?.branchItemOperatorCancelled(
+        "Acme",
+        "Widgets",
+        "factory/issue-5-wi-33",
+      ),
+    ).toBe(true);
+  });
+
+  test("does not hold the round for a work item that the reconcile cancelled", async () => {
+    const deps = buildConflictFixDeps(config, CLIENT, {
+      getWorkItem: async () => ({
+        ...BRANCH_ITEM,
+        status: "cancelled" as const,
+      }),
+      latestStatusEvent: async () => ({
+        note: "reconcile: closed (actionable)",
+      }),
+    });
+    expect(
+      await deps?.branchItemOperatorCancelled(
+        "Acme",
+        "Widgets",
+        "factory/issue-5-wi-33",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("buildConflictFixDeps: the cancel by a person at the head", () => {
+  const config = parseFactoryConfig(ENABLED);
+  const HEAD = "0123456789abcdef0123456789abcdef01234567";
+  const OTHER_HEAD = "89abcdef0123456789abcdef0123456789abcdef";
+
+  function lookupsOf(
+    latest: { id: number; status: string; head_sha: string | null } | null,
+    asked: unknown[][] = [],
+  ) {
+    return {
+      latestPrWorkItem: async (...args: [string, string, number]) => {
+        asked.push(args);
+        return latest;
+      },
+      latestStatusEvent: async () => ({ note: OPERATOR_CANCELLED_NOTE }),
+    };
+  }
+
+  test("is true when a person cancelled the latest work item at the head", async () => {
+    const deps = buildConflictFixDeps(
+      config,
+      CLIENT,
+      lookupsOf({ id: 7, status: "cancelled", head_sha: HEAD }),
+    );
+    expect(
+      await deps?.operatorCancelledAtHead("acme", "widgets", 3, HEAD),
+    ).toBe(true);
+  });
+
+  test("reads the latest work item of the pull request it is asked about", async () => {
+    const asked: unknown[][] = [];
+    const deps = buildConflictFixDeps(config, CLIENT, lookupsOf(null, asked));
+    await deps?.operatorCancelledAtHead("acme", "widgets", 3, HEAD);
+    expect(asked).toEqual([["acme", "widgets", 3]]);
+  });
+
+  test("is false when the cancel was at another head", async () => {
+    const deps = buildConflictFixDeps(
+      config,
+      CLIENT,
+      lookupsOf({ id: 7, status: "cancelled", head_sha: OTHER_HEAD }),
+    );
+    expect(
+      await deps?.operatorCancelledAtHead("acme", "widgets", 3, HEAD),
+    ).toBe(false);
+  });
+
+  test("is false when the latest work item is not cancelled", async () => {
+    const deps = buildConflictFixDeps(
+      config,
+      CLIENT,
+      lookupsOf({ id: 7, status: "needs_human", head_sha: HEAD }),
+    );
+    expect(
+      await deps?.operatorCancelledAtHead("acme", "widgets", 3, HEAD),
+    ).toBe(false);
   });
 });
 

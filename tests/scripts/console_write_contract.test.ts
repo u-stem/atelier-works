@@ -35,6 +35,7 @@ import {
   isScheduleStopResult,
   isStopAllReleaseResult,
   isStopAllResult,
+  isWorkItemCancelResult,
   JOB_CANCEL_REFUSAL_REASONS,
   JOB_RERUN_REFUSAL_REASONS,
   type JobCancelResult,
@@ -56,6 +57,7 @@ import {
   STOP_ALL_RELEASE_REFUSAL_REASONS,
   type StopAllReleaseResult,
   type StopAllResult,
+  WORK_ITEM_CANCEL_REFUSAL_REASONS,
 } from "../../console/src/api/guards/writeResults.ts";
 import {
   type FetchLike,
@@ -65,6 +67,7 @@ import {
 import * as consoleWrites from "../../console/src/api/writes.ts";
 import { describeIntakeRefusal } from "../../console/src/lib/intakeRefusal.ts";
 import { buildIntakeInput } from "../../console/src/lib/manualIntake.ts";
+import { WORK_ITEM_CANCELLABLE_STATUSES } from "../../console/src/lib/workItemCancel.ts";
 import * as approvalScript from "../../f/factory/approval_decide.ts";
 import type * as auditKickoff from "../../f/factory/audit_kickoff.ts";
 import * as configUpdate from "../../f/factory/console_config_update.ts";
@@ -75,6 +78,7 @@ import * as jobRerun from "../../f/factory/console_job_rerun.ts";
 import * as scheduleStop from "../../f/factory/console_schedule_stop.ts";
 import * as stopAllScript from "../../f/factory/console_stop_all.ts";
 import * as stopAllRelease from "../../f/factory/console_stop_all_release.ts";
+import * as workItemCancel from "../../f/factory/console_work_item_cancel.ts";
 import * as freezeRelease from "../../f/factory/freeze_release.ts";
 import * as holdRelease from "../../f/factory/hold_release.ts";
 import {
@@ -84,6 +88,7 @@ import {
 import type { ActionSqlClient } from "../../f/factory/lib/console_actions.ts";
 import type { HoldRow, Outcome } from "../../f/factory/lib/holds.ts";
 import * as manualIntakeSupport from "../../f/factory/lib/manual_intake_support.ts";
+import { OPERATOR_CANCELLABLE_STATUSES } from "../../f/factory/lib/operator_cancel.ts";
 import { isRecord, type Notice } from "../../f/factory/lib/types.ts";
 import * as manualIntakeSubmit from "../../f/factory/manual_intake_submit.ts";
 import * as noticeResolve from "../../f/factory/notice_resolve.ts";
@@ -107,7 +112,8 @@ type WriteScript =
   | "console_schedule_stop"
   | "console_deploy_decide"
   | "console_stop_all"
-  | "console_stop_all_release";
+  | "console_stop_all_release"
+  | "console_work_item_cancel";
 
 const WRITE_SCRIPTS: WriteScript[] = [
   "approval_decide",
@@ -126,6 +132,7 @@ const WRITE_SCRIPTS: WriteScript[] = [
   "console_deploy_decide",
   "console_stop_all",
   "console_stop_all_release",
+  "console_work_item_cancel",
 ];
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -326,10 +333,12 @@ const WRAPPER_CALLS: Readonly<
     consoleWrites.stopAll("a runaway loop", { fetchFn }),
   console_stop_all_release: (fetchFn) =>
     consoleWrites.releaseStopAll({ fetchFn }),
+  console_work_item_cancel: (fetchFn) =>
+    consoleWrites.cancelWorkItem(7, { fetchFn }),
 };
 
 describe("allowlist", () => {
-  test("holds the five read scripts and the sixteen write scripts", () => {
+  test("holds the five read scripts and the seventeen write scripts", () => {
     expect(Object.keys(SCRIPT_PATHS).sort()).toEqual(
       [
         "console_query",
@@ -451,6 +460,18 @@ describe("what the typed calls send", () => {
   test("console_job_cancel requires the id of the job", async () => {
     const { required } = await schemaOf(SCRIPT_PATHS.console_job_cancel);
     expect(required).toEqual(["job_id"]);
+  });
+
+  test("console_work_item_cancel takes only the id of the work item, and no operator or note", async () => {
+    const { properties } = await schemaOf(
+      SCRIPT_PATHS.console_work_item_cancel,
+    );
+    expect(properties).toEqual(["work_item_id"]);
+  });
+
+  test("console_work_item_cancel requires the id of the work item", async () => {
+    const { required } = await schemaOf(SCRIPT_PATHS.console_work_item_cancel);
+    expect(required).toEqual(["work_item_id"]);
   });
 
   test("console_job_rerun takes only the id of the job", async () => {
@@ -1135,6 +1156,76 @@ describe("what the scripts return", () => {
     expect([...JOB_CANCEL_REFUSAL_REASONS]).toEqual([
       ...jobCancel.CANCEL_REFUSAL_REASONS,
     ]);
+  });
+
+  function workItemCancelPorts(
+    row: { kind: string; status: string } | null,
+    cancelled = true,
+  ): workItemCancel.WorkItemCancelPorts {
+    return {
+      deriveActor: () => "operator",
+      readWorkItem: (id) =>
+        Promise.resolve(row === null ? null : { id, ...row }),
+      cancelIfCurrent: () =>
+        Promise.resolve({ cancelled, withdrawn: 1, newer: false }),
+      sql: () => ({
+        fetch: () => Promise.resolve([{ id: 5 }]),
+        execute: () => Promise.resolve(),
+      }),
+    };
+  }
+
+  test("a cancelled work item passes the guard", async () => {
+    const result = await workItemCancel.cancelWorkItemFromConsole(
+      7,
+      workItemCancelPorts({ kind: "issue", status: "awaiting_approval" }),
+    );
+    expect(isWorkItemCancelResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
+
+  test("a work item that does not exist passes the guard", async () => {
+    const result = await workItemCancel.cancelWorkItemFromConsole(
+      7,
+      workItemCancelPorts(null),
+    );
+    expect(isWorkItemCancelResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
+
+  test("a work item cancel refused by the real check passes the guard", async () => {
+    const result = await workItemCancel.cancelWorkItemFromConsole(
+      7,
+      workItemCancelPorts({ kind: "issue", status: "implementing" }),
+    );
+    expect(isWorkItemCancelResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
+
+  test("a work item cancel that lost the compare passes the guard", async () => {
+    const result = await workItemCancel.cancelWorkItemFromConsole(
+      7,
+      workItemCancelPorts({ kind: "pr_fix", status: "failed" }, false),
+    );
+    expect(isWorkItemCancelResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
+
+  test("the console work item cancel refusal reasons are the backend ones", () => {
+    expect([...WORK_ITEM_CANCEL_REFUSAL_REASONS]).toEqual([
+      ...workItemCancel.WORK_ITEM_CANCEL_REFUSAL_REASONS,
+    ]);
+  });
+
+  // 画面がボタンを出す表と、scriptが強制する表がずれると、押せるのに断られるか、断られない対象にボタンが出ない。
+  test("the console shows the cancel for the kinds and states that the script allows", () => {
+    expect(WORK_ITEM_CANCELLABLE_STATUSES).toEqual(
+      OPERATOR_CANCELLABLE_STATUSES,
+    );
   });
 
   const RERUN_JOB = {

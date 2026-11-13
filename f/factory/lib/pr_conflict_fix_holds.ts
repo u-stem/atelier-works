@@ -26,6 +26,7 @@ export const PR_CONFLICT_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `unresolvable`: 競合が自動で解ける形でない。
  * - `check_failed`: 解消した後の検査コマンドが失敗した。
  * - `fix_stopped`: 直す作業項目が、上のどれにも当たらない理由で止まった。
+ * - `operator_cancelled`: PRの直す作業項目、PRの最新の作業項目、ブランチが指すIssueの作業項目のどれかを、人がConsoleから中止した。
  */
 export const PR_CONFLICT_FIX_HOLD_REASONS = [
   "last_fix_unsettled",
@@ -42,6 +43,7 @@ export const PR_CONFLICT_FIX_HOLD_REASONS = [
   "unresolvable",
   "check_failed",
   "fix_stopped",
+  "operator_cancelled",
 ] as const;
 
 export type PrConflictFixHoldReason =
@@ -76,6 +78,7 @@ export const PR_CONFLICT_FIX_HOLD_INFO: Readonly<
   unresolvable: { temporary: false },
   check_failed: { temporary: false },
   fix_stopped: { temporary: false },
+  operator_cancelled: { temporary: false },
 };
 
 /**

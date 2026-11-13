@@ -360,6 +360,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 判定が止めるのは、判定のコード自体の改変である。判定の入力(gitの実行と承認の行のDB接続)は、守らないモジュールから来る。
  * 守ると、全機能が使うモジュールを直すほぼすべてのPRが承認待ちになる。守っても、反映済みのscriptはDBに書けるので、承認の行を直接作る経路は閉じない。
  * この部分は、人のレビューとDBの権限に頼る。
+ * Consoleから作業項目を中止するscript(`console_work_item_cancel.ts`)と、その`.script.yaml`、テストも守る。
+ * 中止してよい種別と状態の表と、人の中止の注記の固定文を持つ`lib/operator_cancel.ts`と、その`.script.yaml`、テストも守る。
+ * 書き換えられると、実行中の作業項目を止めたり、記録なしで中止したり、承認依頼を残したまま中止したりできる。
+ * 注記が変わると、監視が人の中止を見分けられず、中止した作業項目の直す回を起動し直す。
+ * 2つの`.script.lock`は守らない。scriptのlockは`windmill-client`を含み、libのlockは依存の無いlibのlockと同じ扱いである。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -707,6 +712,12 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/console_deploy_decide.ts",
   "f/factory/console_deploy_decide.script.yaml",
   "tests/scripts/console_deploy_decide.test.ts",
+  "f/factory/console_work_item_cancel.ts",
+  "f/factory/console_work_item_cancel.script.yaml",
+  "tests/scripts/console_work_item_cancel.test.ts",
+  "f/factory/lib/operator_cancel.ts",
+  "f/factory/lib/operator_cancel.script.yaml",
+  "tests/lib/operator_cancel.test.ts",
 ];
 
 /**

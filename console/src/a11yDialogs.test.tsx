@@ -25,6 +25,7 @@ import {
   scheduleFreezeItems,
 } from "./lib/holdsView.ts";
 import { RetryConfirmDialog } from "./screens/inbox/RetryConfirmDialog.tsx";
+import { WorkItemCancelDialog } from "./screens/items/detail/WorkItemCancelAction.tsx";
 import { CancelDialog, RerunDialog } from "./screens/jobs/JobActions.tsx";
 import {
   ScheduleRestoreDialog,
@@ -220,6 +221,19 @@ const CASES: readonly (readonly [string, Draw])[] = [
   [
     "the job rerun dialog",
     () => <RerunDialog job={JOB} onConfirm={NOOP} onCancel={NOOP} />,
+  ],
+  [
+    "the work item cancel dialog",
+    () => (
+      <WorkItemCancelDialog
+        open
+        workItemId={7}
+        kind="pr_fix"
+        status="failed"
+        onConfirm={NOOP}
+        onCancel={NOOP}
+      />
+    ),
   ],
   [
     "the schedule stop dialog",

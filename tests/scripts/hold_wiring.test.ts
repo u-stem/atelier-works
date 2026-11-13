@@ -1,11 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
+import type { GhClient, PullRequest } from "../../f/factory/lib/github.ts";
+import { OPERATOR_CANCELLED_NOTE } from "../../f/factory/lib/operator_cancel.ts";
+import { decideFixClaim } from "../../f/factory/lib/pr_ci_fix_claim.ts";
+import { decideConflictFixClaim } from "../../f/factory/lib/pr_conflict_fix_claim.ts";
 import {
   FORBIDDEN_EXACT_PATHS,
   matchesForbiddenPath,
   matchesImplementProtectedPath,
 } from "../../f/factory/lib/protected_paths.ts";
+import { buildClaimDeps } from "../../f/factory/watch_pr_ci.ts";
+import { buildConflictFixDeps } from "../../f/factory/watch_pr_conflicts.ts";
 import { WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES } from "../../scripts/claude-hooks/console-scripts.ts";
 
 // 保留の表`factory.holds`の読み書きは、`f/factory/lib/holds.ts`の関数を通す。
@@ -1692,7 +1699,7 @@ describe("the names of the console write scripts that only their own files name"
     return new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(text);
   }
 
-  test("are the release scripts, the job scripts, the config update script, the place script, the stop script, the deploy decide script and the stop-all scripts", () => {
+  test("are the release scripts, the job scripts, the config update script, the place script, the stop script, the deploy decide script, the stop-all scripts and the work item cancel script", () => {
     expect([...WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES]).toEqual([
       "hold_release",
       "freeze_release",
@@ -1704,6 +1711,7 @@ describe("the names of the console write scripts that only their own files name"
       "console_deploy_decide",
       "console_stop_all",
       "console_stop_all_release",
+      "console_work_item_cancel",
     ]);
   });
 
@@ -2023,5 +2031,337 @@ describe("the merge guard hook", () => {
       .map((entry) => entry.path)
       .sort();
     expect(statics).toEqual(["./env-exposure.ts", "./shell-words.ts"]);
+  });
+});
+
+// 人がConsoleから作業項目を中止すると、CIと競合を直す回はその中止を見て保留する。
+// 中止を効かせる分岐と配線を、保護したこのテストで固定する。
+describe("the cancel by a person in the fix rounds", () => {
+  const SHA = "a".repeat(40);
+  const NOW = new Date("2026-11-13T00:00:00Z");
+  const TRAILER = "Generated-By: Software Factory (local)";
+  const PR: PullRequest = {
+    number: 12,
+    title: "t",
+    body: "",
+    draft: false,
+    state: "open",
+    merged: false,
+    headSha: SHA,
+    headRef: "factory/issue-5-wi-33",
+    headRepoFullName: "acme/widgets",
+    baseRepoFullName: "acme/widgets",
+    baseRepoId: 100,
+    baseRef: "main",
+    mergeable: null,
+    mergeableState: null,
+    authorLogin: "factory-bot",
+    authorId: null,
+    authorType: "User",
+    autoMergeEnabled: false,
+    requestedReviewerIds: [],
+  };
+  const COMMITS = {
+    messages: [`fix: x\n\n${TRAILER}`],
+    truncated: false,
+  };
+
+  /** 中止の2つの読み取り。`fromCall`回目の読み取りから、真にした方が真を返す。省略は1回目から。 */
+  type CancelSetup = {
+    readonly branch?: boolean;
+    readonly head?: boolean;
+    readonly fromCall?: number;
+  };
+
+  function cancelReaders(setup: CancelSetup): {
+    branchItemOperatorCancelled: () => Promise<boolean>;
+    operatorCancelledAtHead: () => Promise<boolean>;
+  } {
+    const from = setup.fromCall ?? 1;
+    let branchCalls = 0;
+    let headCalls = 0;
+    return {
+      branchItemOperatorCancelled: async () => {
+        branchCalls += 1;
+        return branchCalls >= from && (setup.branch ?? false);
+      },
+      operatorCancelledAtHead: async () => {
+        headCalls += 1;
+        return headCalls >= from && (setup.head ?? false);
+      },
+    };
+  }
+
+  function decideCi(
+    setup: CancelSetup,
+    classification: "fixable" | "metadata_only" = "fixable",
+  ) {
+    return decideFixClaim({
+      row: {
+        head_sha: SHA,
+        notified_reason: "ci_failure",
+        fix_attempts: 0,
+        fix_hold_reason: null,
+        updated_at: NOW,
+        first_seen_at: NOW,
+      },
+      now: NOW,
+      instanceName: "local",
+      maxRounds: 2,
+      configMisfit: null,
+      readers: {
+        hasActiveFix: async () => false,
+        hasReview: async () => true,
+        readPr: async () => PR,
+        readBranchItemStatus: async () => null,
+        readCommits: async () => COMMITS,
+        hasSkillMarker: async () => true,
+        classify: async () => classification,
+        lockIntegrityOnly: async () => false,
+        workerEnv: async () => null,
+        budgetExceeded: async () => false,
+        mainCiFailed: async () => false,
+        countRounds: async () => 0,
+        stopHeld: async () => false,
+        ...cancelReaders(setup),
+      },
+    });
+  }
+
+  function decideConflict(setup: CancelSetup) {
+    return decideConflictFixClaim({
+      row: { head_sha: SHA, fix_attempts: 0 },
+      instanceName: "local",
+      maxRounds: 2,
+      maxRoundsPerPr: 5,
+      now: NOW,
+      readers: {
+        hasActiveFix: async () => false,
+        readPr: async () => PR,
+        readBranchItemStatus: async () => null,
+        readDefaultBranch: async () => "main",
+        readCommits: async () => COMMITS,
+        hasSkillMarker: async () => true,
+        budgetExceeded: async () => false,
+        mainCiState: async () => null,
+        countEpisodeRounds: async () => 0,
+        countPrRounds: async () => 0,
+        lastFixSettledAt: async () => null,
+        ...cancelReaders(setup),
+      },
+    });
+  }
+
+  const HELD = { kind: "hold", reason: "operator_cancelled" } as const;
+
+  test("the CI round claims when no one cancelled", async () => {
+    expect((await decideCi({})).kind).toBe("claim");
+  });
+
+  const CANCEL_CASES: [string, CancelSetup][] = [
+    ["the Issue work item of the branch", { branch: true }],
+    ["the latest work item at the head", { head: true }],
+    [
+      "the Issue work item of the branch just before the claim",
+      { branch: true, fromCall: 2 },
+    ],
+    ["the latest work item just before the claim", { head: true, fromCall: 2 }],
+  ];
+
+  test.each(CANCEL_CASES)(
+    "the CI round holds when a person cancelled %s",
+    async (_name, setup) => {
+      expect(await decideCi(setup)).toEqual(HELD);
+    },
+  );
+
+  // Claudeを使わない回も同じ起動の口を通る。別の起動のreturnが先にできて、窓が戻る形を捕まえる。
+  test.each(CANCEL_CASES)(
+    "the CI round for the metadata job holds when a person cancelled %s",
+    async (_name, setup) => {
+      expect(await decideCi(setup, "metadata_only")).toEqual(HELD);
+    },
+  );
+
+  test("the conflict round claims when no one cancelled", async () => {
+    expect((await decideConflict({})).kind).toBe("claim");
+  });
+
+  test.each(CANCEL_CASES)(
+    "the conflict round holds when a person cancelled %s",
+    async (_name, setup) => {
+      expect(await decideConflict(setup)).toEqual(HELD);
+    },
+  );
+
+  /**
+   * 最上位の関数の本文。`head`で始まる宣言から、変換したJavaScriptで関数を閉じる行までを返す。
+   * 宣言が見つからなければ空文字列を返し、続く検査を落とす。
+   */
+  function bodyOf(path: string, head: string): string {
+    const code = codeOf(read(path));
+    const start = code.indexOf(head);
+    if (start === -1) return "";
+    const end = code.indexOf("\n}\n", start);
+    return code.slice(start, end === -1 ? undefined : end);
+  }
+
+  // 最後の読み取り(CI回はworkerの環境、競合回は直近の修正の時刻)の後で、起動の前に、中止を読み直す。
+  const DECISIONS = [
+    [
+      "f/factory/lib/pr_ci_fix_claim.ts",
+      "export async function decideFixClaim(",
+      "readers.workerEnv()",
+    ],
+    [
+      "f/factory/lib/pr_conflict_fix_claim.ts",
+      "export async function decideConflictFixClaim(",
+      "readers.lastFixSettledAt()",
+    ],
+  ];
+  const RECHECK = "await cancelledByOperator(readers)";
+
+  test.each(DECISIONS)(
+    "%s reads the cancel again after the last read",
+    (path, head, lastRead) => {
+      const body = bodyOf(path, head);
+      expect(body.lastIndexOf(RECHECK)).toBeGreaterThan(body.indexOf(lastRead));
+    },
+  );
+
+  test.each(DECISIONS)(
+    "%s reads the cancel again before the claim",
+    (path, head) => {
+      const body = bodyOf(path, head);
+      expect(body.lastIndexOf(RECHECK)).toBeLessThan(
+        body.lastIndexOf('kind: "claim"'),
+      );
+    },
+  );
+
+  // 起動の口が1つなら、読み直しの後に別の起動のreturnを足せない。
+  test.each(DECISIONS)("%s claims at a single place", (path, head) => {
+    const body = bodyOf(path, head);
+    expect(body.indexOf('kind: "claim"')).toBe(
+      body.lastIndexOf('kind: "claim"'),
+    );
+  });
+
+  // 監視の中間層が、判定の読み取りを、正規の綴りのowner・repo、ブランチ名、行のPRの番号とheadで配線する。
+  test.each([
+    ["f/factory/lib/pr_ci_watch.ts", "claim"],
+    ["f/factory/lib/pr_conflict_watch.ts", "fix"],
+  ])(
+    "%s passes the branch of the row to the cancel of the Issue work item",
+    (path, deps) => {
+      const body = bodyOf(path, "function claimReaders(").replace(/\s+/g, "");
+      expect(body).toContain(
+        `branchItemOperatorCancelled:()=>${deps}.branchItemOperatorCancelled(names.owner,names.repo,headRef)`,
+      );
+    },
+  );
+
+  test.each([
+    ["f/factory/lib/pr_ci_watch.ts", "claim"],
+    ["f/factory/lib/pr_conflict_watch.ts", "fix"],
+  ])(
+    "%s passes the pull request and the head of the row to the cancel at the head",
+    (path, deps) => {
+      const body = bodyOf(path, "function claimReaders(").replace(/\s+/g, "");
+      expect(body).toContain(
+        `operatorCancelledAtHead:()=>${deps}.operatorCancelledAtHead(names.owner,names.repo,row.pr_number,row.head_sha)`,
+      );
+    },
+  );
+
+  const CANCELLED_BRANCH_ITEM = {
+    kind: "issue" as const,
+    owner: "acme",
+    repo: "widgets",
+    status: "cancelled" as const,
+  };
+  const CANCEL_LOOKUPS = {
+    getWorkItem: async () => CANCELLED_BRANCH_ITEM,
+    latestPrWorkItem: async () => ({
+      id: 7,
+      status: "cancelled",
+      head_sha: SHA,
+    }),
+    latestStatusEvent: async () => ({ note: OPERATOR_CANCELLED_NOTE }),
+  };
+  const BASE_CONFIG = {
+    owners: [{ name: "octo-owner", kind: "user" }],
+    trigger_label: "factory",
+    allowed_labeler_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
+    model: "claude-opus-5-5",
+    max_attempts: 3,
+    max_turns: 40,
+    max_budget_usd_per_run: 5,
+    daily_budget_usd: 50,
+    worktree_ttl_days: 7,
+    factory_repo: "https://github.com/octo-owner/atelier-works",
+    instance_name: "local",
+    windmill_public_url: "http://127.0.0.1:8080",
+  };
+  const CLIENT: GhClient = { ghToken: "token" };
+
+  function ciDeps() {
+    return buildClaimDeps(
+      parseFactoryConfig({
+        ...BASE_CONFIG,
+        pr_ci_fix_enabled: true,
+        pr_ci_fix_enabled_since: "2026-10-13T03:00:00Z",
+      }),
+      CLIENT,
+      undefined,
+      undefined,
+      undefined,
+      CANCEL_LOOKUPS,
+    );
+  }
+
+  function conflictDeps() {
+    return buildConflictFixDeps(
+      parseFactoryConfig({
+        ...BASE_CONFIG,
+        pr_conflict_watch_enabled: true,
+        pr_conflict_fix_enabled: true,
+        pr_conflict_fix_enabled_since: "2026-10-16T03:00:00Z",
+      }),
+      CLIENT,
+      CANCEL_LOOKUPS,
+    );
+  }
+
+  test("watch_pr_ci wires the cancel of the Issue work item of the branch", async () => {
+    expect(
+      await ciDeps()?.branchItemOperatorCancelled(
+        "acme",
+        "widgets",
+        PR.headRef,
+      ),
+    ).toBe(true);
+  });
+
+  test("watch_pr_ci wires the cancel of the latest work item at the head", async () => {
+    expect(
+      await ciDeps()?.operatorCancelledAtHead("acme", "widgets", 12, SHA),
+    ).toBe(true);
+  });
+
+  test("watch_pr_conflicts wires the cancel of the Issue work item of the branch", async () => {
+    expect(
+      await conflictDeps()?.branchItemOperatorCancelled(
+        "acme",
+        "widgets",
+        PR.headRef,
+      ),
+    ).toBe(true);
+  });
+
+  test("watch_pr_conflicts wires the cancel of the latest work item at the head", async () => {
+    expect(
+      await conflictDeps()?.operatorCancelledAtHead("acme", "widgets", 12, SHA),
+    ).toBe(true);
   });
 });

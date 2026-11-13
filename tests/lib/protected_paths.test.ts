@@ -2495,3 +2495,42 @@ describe("deploy approval gate files", () => {
     ).toEqual([]);
   });
 });
+
+// Consoleから作業項目を中止するscriptと、中止してよい種別と状態の表は、書き換えられると、
+// 実行中の作業項目を止めたり、記録なしで中止したりできる。完全一致の一覧で守る。
+describe("work item cancel files", () => {
+  const PATHS = [
+    "f/factory/console_work_item_cancel.ts",
+    "f/factory/console_work_item_cancel.script.yaml",
+    "tests/scripts/console_work_item_cancel.test.ts",
+    "f/factory/lib/operator_cancel.ts",
+    "f/factory/lib/operator_cancel.script.yaml",
+    "tests/lib/operator_cancel.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test("does not protect the lock of the script, which pins windmill-client", () => {
+    expect(
+      matchesForbiddenPath("f/factory/console_work_item_cancel.script.lock"),
+    ).toBe(false);
+  });
+
+  test("every file that the script imports is a protected path", () => {
+    expect(
+      importClosure("f/factory/console_work_item_cancel.ts").filter(
+        (path) => !matchesImplementProtectedPath(path),
+      ),
+    ).toEqual([]);
+  });
+});

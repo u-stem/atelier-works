@@ -6,6 +6,7 @@ import { isRecord } from "../src/api/guards/primitives.ts";
 import {
   APPROVAL_DESIGN_DOC_NORMAL,
   APPROVAL_DESIGN_DOC_TRUNCATED_ITEM,
+  CANCELLABLE_WORK_ITEM_ID,
   CONFIG_EMPTY,
   CONFIG_NORMAL,
   DESIGN_DOC_NORMAL,
@@ -30,6 +31,7 @@ import {
   SYSTEM_EMPTY,
   SYSTEM_NORMAL,
   TRUNCATED_WORK_ITEM_ID,
+  WORK_ITEM_DETAIL_CANCELLABLE,
   WORK_ITEM_DETAIL_NORMAL,
 } from "./fixtures.ts";
 
@@ -79,9 +81,12 @@ function queryReply(args: unknown, mode: Mode): Reply | null {
     case "system_status":
       return pick(mode, SYSTEM_NORMAL, SYSTEM_EMPTY);
     case "work_item_detail":
-      return mode === "normal"
-        ? ok(WORK_ITEM_DETAIL_NORMAL)
-        : WORK_ITEM_NOT_FOUND;
+      if (mode !== "normal") return WORK_ITEM_NOT_FOUND;
+      return ok(
+        isRecord(args) && args.work_item_id === CANCELLABLE_WORK_ITEM_ID
+          ? WORK_ITEM_DETAIL_CANCELLABLE
+          : WORK_ITEM_DETAIL_NORMAL,
+      );
     case "intake_snapshot":
       return pick(
         mode,
@@ -157,6 +162,7 @@ export const WRITE_SCRIPT = {
   cancel: "f/factory/console_job_cancel",
   place: "f/factory/console_hold_place",
   stopAll: "f/factory/console_stop_all",
+  workItemCancel: "f/factory/console_work_item_cancel",
 } as const;
 
 export type WriteScript = (typeof WRITE_SCRIPT)[keyof typeof WRITE_SCRIPT];
@@ -193,7 +199,7 @@ const STAMP_PLUS_HOUR = new Date(Date.parse(STAMP) + 3_600_000).toISOString();
 /**
  * 書き込みのscriptが、選んだ結果で返す値。形は`src/api/guards/writeResults.ts`の型ガードに合わせる。
  * 承認の断りは、scriptが例外で断るので、ジョブの失敗(500)で返す。文は`f/factory/approval_decide.ts`の断りの文と同じ形にする。
- * ほかの3本の断りは、断りの結果(200)である。
+ * ほかの4本の断りは、断りの結果(200)である。
  */
 function writeReply(
   script: WriteScript,
@@ -260,6 +266,17 @@ function writeReply(
             action_audit: "recorded",
           })
         : ok({ refused: true, reason: "state_unreadable" });
+    case "f/factory/console_work_item_cancel":
+      return result === "success"
+        ? ok({
+            found: true,
+            refused: false,
+            work_item_id: record.work_item_id,
+            from_status: "failed",
+            withdrawn_approval_requests: 0,
+            action_audit: "recorded",
+          })
+        : ok({ found: true, refused: true, reason: "status_changed" });
   }
 }
 

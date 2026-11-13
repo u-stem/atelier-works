@@ -1157,6 +1157,9 @@ Consoleから押せる書き込みには、読むsecret変数の上限を決め�
 失敗した定期ジョブを再実行する`console_job_rerun`と、設定を変更する`console_config_update`も、同じ上限と同じ絞り方である([定期ジョブの再実行](internals/console/security.md#定期ジョブの再実行)、[設定の変更](internals/console/security.md#設定の変更))。
 保留と凍結を置く`console_hold_place`と、スケジュールを止める`console_schedule_stop`も、同じ上限と同じ絞り方である。
 詳しくは、[保留と凍結を置く](internals/console/security.md#保留と凍結を置く)と[スケジュールを止める](internals/console/security.md#スケジュールを止める)にある。
+作業項目を中止する`console_work_item_cancel`も、どのsecret変数も読まない。
+SDKの呼び出しは`datatable`だけで、書く表は作業項目、承認依頼、遷移の記録と、操作の記録に限る。
+この絞り方は、scriptの固有のテストが確かめる([作業項目の中止](internals/console/security.md#作業項目の中止))。
 Consoleの操作で、外向きの資格情報が動く範囲を広げないためである。
 tag`console`のscriptがimportでたどれるソースを数える契約テスト(`tests/scripts/console_worker_boundary.test.ts`)が、この上限を確かめる。
 許可した2つも、`github_token`以外のsecret変数は読まない。

@@ -249,6 +249,9 @@ function setup(options: Setup = {}): Harness {
       read("hasActiveFix", ...args);
       return false;
     },
+    // 人の中止の判断は`decideConflictFixClaim`のテストが確かめる。ここでは中止されていないPRとして読む。
+    operatorCancelledAtHead: async () => false,
+    branchItemOperatorCancelled: async () => false,
     readBranchItemStatus: async (...args) => {
       read("readBranchItemStatus", ...args);
       return options.branchItemStatus ?? null;

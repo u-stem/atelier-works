@@ -7,6 +7,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { THEMES, WCAG_TAGS } from "./axeScope.ts";
+import { CANCELLABLE_WORK_ITEM_ID } from "./fixtures.ts";
 import { INTAKE_STATES } from "./intakeStates.ts";
 import {
   expect,
@@ -543,6 +544,27 @@ for (const theme of THEMES) {
       await settle(page);
 
       expect(await auditOf(page)).toEqual(clean(theme));
+    });
+
+    test("the work item cancel confirmation has no violations", async ({
+      page,
+    }) => {
+      await openScreen(page, `items/${String(CANCELLABLE_WORK_ITEM_ID)}`);
+      await page.getByRole("button", { name: "作業項目を中止" }).click();
+      await expect(page.locator("dialog[open]")).toBeVisible();
+      await settle(page);
+
+      expect(await auditOf(page)).toEqual(clean(theme));
+    });
+
+    test("the work item cancel confirmation takes the first focus on the button that backs out", async ({
+      page,
+    }) => {
+      await openScreen(page, `items/${String(CANCELLABLE_WORK_ITEM_ID)}`);
+      await page.getByRole("button", { name: "作業項目を中止" }).click();
+      await expect(page.locator("dialog[open]")).toBeVisible();
+
+      await expect(page.getByRole("button", { name: "閉じる" })).toBeFocused();
     });
   });
 }

@@ -362,6 +362,7 @@ headが進んで新しい行になるまで残る。
 | `rounds_exhausted` | 決定的 | 直す回数の上限に達した |
 | `not_factory_head` | 決定的 | 最後のpushがFactoryのものでない |
 | `claude_run_failed` | 決定的 | 直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗したか、待っても戻らなかった使用上限で止まった。外す手順は[運用](../operations.md#claudeの失敗で保留したciの修正を起動し直す)にある |
+| `operator_cancelled` | 決定的 | 直す作業項目、PRの最新の作業項目、ブランチが指すIssueの作業項目のどれかを、人がConsoleから中止した([人による中止](work-items.md#人による中止)) |
 | `marker_missing` | 一時的 | Factoryのクローンのスキルが、CIの失敗を直す節を持たない。スキルが入れば外れる |
 | `main_ci_failed` | 一時的 | mainのCIが赤い |
 | `budget_exceeded` | 一時的 | 日次の予算を使い切った |
@@ -380,6 +381,8 @@ noticeを出す時機は、決定的な理由なら保留した時点、一時�
 自動レビューや直す作業項目が走っている間は、この2つが長く続いても異常でないためである。
 Discordも送るかは理由ごとに決める。
 `fix_stopped`は、止めた`pr_fix_finish`がすでに送っているので、noticeだけにする。
+`operator_cancelled`も、noticeだけにする。
+人が止めた操作の結果で、人を呼ぶ知らせではないためである。
 `claude_run_failed`はDiscordにも送る。
 先に届く`job_failed`には、PRのリンクと次の操作が無いためである。
 検証のステップで止まった回は、`pr_fix_finish`の通知と2件になる。
@@ -422,13 +425,14 @@ Discordも送るかは理由ごとに決める。
 | `needs_human` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ`fix_stopped`にする |
 | `failed`で、注記がtimeoutか実行ごとの予算の超過の固定文である | `claude_run_failed`で保留して`failed`に戻す。保留なしで戻すと、次の巡回で同じ失敗を繰り返し、費用と回数の上限を使い切るためである |
 | `failed`か`needs_human`で、注記が使用上限か全停止の固定文である | `claude_usage_limit`か`claude_stopped`で保留して`failed`に戻し、行の起動の回数(`fix_attempts`)を1回返す。待てば解けるので、起動の判断が起動し直す |
-| 存在しない、または上の行に当たらない終端の状態(ほかの`failed`、`cancelled`、`expired`、`reviewed`、`approved`、`rejected`など) | 保留なしで`failed`に戻す |
+| `cancelled`で、注記が人の中止の固定文(`console: operator_cancelled`)である | `operator_cancelled`で保留して`failed`に戻す。headが動くまで起動し直さない |
+| 存在しない、または上の行に当たらない終端の状態(ほかの`failed`、ほかの`cancelled`、`expired`、`reviewed`、`approved`、`rejected`など) | 保留なしで`failed`に戻す |
 
 24時間待つのは、待たずに戻すと、同じ理由で止まる回を重ねて、直す回数の上限を使い切るためである。
 CIの回は自動の再開の対象外なので、この間に作業項目が再開されることはない。
-`pr_fix`が`cancelled`になるのはPRが閉じたときだけである。
+人の中止のほかに`pr_fix`が`cancelled`になるのは、PRが閉じたときだけである。
 設定から外れたリポジトリを除き、閉じたPRは、戻す前のheadの読み取りが拾う。
-そのため`cancelled`は保留しない。
+そのため、人の中止でない`cancelled`は保留しない。
 
 既知の競合がある。
 `poll_issues`は、PRが閉じた`pr_fix`を`cancelled`にする。
@@ -470,6 +474,7 @@ Claudeの出力は、止めた理由の中で`ci round: claude blocked:`の接�
 | Claudeの実行がtimeoutか実行ごとの予算の超過で失敗した | `claude_run_failed` |
 | Claudeの実行が使用上限で失敗した | `claude_usage_limit` |
 | Claudeの実行を全停止で止めた | `claude_stopped` |
+| 人がConsoleから中止した(`console: operator_cancelled`) | `operator_cancelled` |
 
 保留なしで戻した行は、直す作業を起動し直せる。
 直す回数の上限(`pr_ci_fix_max_rounds`)が、起動し直しの歯止めになる。
@@ -531,6 +536,12 @@ headが進むと新しい行になり、headが以前の値に戻ると`first_se
 4. PRを読み直す。
    閉じているか、headが行から進んでいれば、何もしない。
    続けて、ブランチの作業項目がFactoryにブランチを引き継ぐ状態なら、理由`branch_held`で何もしない([ブランチを引き継ぐ間](#ブランチを引き継ぐ間))。
+   ブランチが指すIssueの作業項目を、人がConsoleから中止していれば、`operator_cancelled`で保留する。
+   中止すると引き継ぐ状態から外れるので、別に止める。
+   この保留はheadが動いても続く。
+   PRの最新の作業項目を、人が行のheadでConsoleから中止していれば、`operator_cancelled`で保留する([人による中止](work-items.md#人による中止))。
+   最新の作業項目は`latestPrWorkItem`で読み、種別を問わず、作った順(`created_at`、`id`)で選ぶ。
+   中止の書き込みが同じ順で最新でない行の中止を断るので、人が中止したPRの行は、この読み取りに当たる。
    ドラフトか、auto-mergeが有効なら、`pr_draft_or_auto_merge`で保留する。
 5. PRのすべてのcommit(250件まで)の本文の最後の段落に、次の行が無ければ、`not_factory_head`で保留する。
    `Generated-By: Software Factory (<instance_name>)`
@@ -593,7 +604,10 @@ headが進むと新しい行になり、headが以前の値に戻ると`first_se
    イメージが古い回は、列挙に失敗していても、イメージの通知と稼働中のworkerの通知の両方を残す。
    この保留も、ラウンドも行の起動の回数も使わない。
     環境を直すと、次の巡回で外れて起動できる。
-12. どれにも当たらなければ起動する。
+12. 起動の直前に、4の人の中止の2つをもう一度読み、当たれば`operator_cancelled`で保留する。
+   高くつく読み取りの間に人が中止しても、新しい修正の行を作らないためである。
+   読み直しから起動までの窓は残る。
+13. どれにも当たらなければ起動する。
 
 ジョブの分類は、workflowごとの最新の実行のうち、失敗した実行を古い順に最大5件まで読む。
 CI回の収集と同じ関数(`classifyFailedRuns`)で、同じ範囲を読む。
@@ -1392,7 +1406,7 @@ PRの今の状態から、次の順に扱いを決める(`decidePrConflict`)。
 
 ### 保留の理由の語彙
 
-`fix_hold_reason`に書く値は、`lib/pr_conflict_fix_holds.ts`の`PR_CONFLICT_FIX_HOLD_REASONS`の14個に限る。
+`fix_hold_reason`に書く値は、`lib/pr_conflict_fix_holds.ts`の`PR_CONFLICT_FIX_HOLD_REASONS`の15個に限る。
 `lib/pr_conflict_support.ts`が同じ名前で再エクスポートする。
 DBの関数が一時の理由の一覧を読むので、依存を持たない小さなモジュールに置く。
 DBの検査は長さだけなので、書く側をこの型で縛る。
@@ -1416,6 +1430,7 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 | `unresolvable` | 最終 | 競合が自動で解ける形でない |
 | `check_failed` | 最終 | 解消した後の検査コマンドが失敗した |
 | `fix_stopped` | 最終 | 直す作業項目が、上のどれにも当たらない理由で止まった |
+| `operator_cancelled` | 最終 | 直す作業項目、PRの最新の作業項目、ブランチが指すIssueの作業項目のどれかを、人がConsoleから中止した([人による中止](work-items.md#人による中止)) |
 
 語彙に無い値は、最終として扱う。
 通知を出さずに放置しないためである。
@@ -1433,6 +1448,8 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 2. PRを読み直す。
    閉じているか、行のheadから進んでいれば、何もしない。
    続けて、ブランチの作業項目がFactoryにブランチを引き継ぐ状態なら、理由`branch_held`で何もしない([ブランチを引き継ぐ間](#ブランチを引き継ぐ間))。
+   ブランチが指すIssueの作業項目を、人がConsoleから中止していれば、`operator_cancelled`で保留する。
+   PRの最新の作業項目を、人が行のheadでConsoleから中止していれば、`operator_cancelled`で保留する。
    baseが既定のブランチでなければ`base_not_default`、ドラフトかauto-mergeが有効なら`pr_draft_or_auto_merge`で保留する。
 3. コミットがすべてFactoryのものでなければ、`not_factory_head`で保留する。
 4. スキルのマーカーが無ければ`marker_missing`、予算を使い切っていれば`budget_exceeded`で保留する。
@@ -1440,6 +1457,9 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
    記録が無い、判定待ち、期限切れ、CIなし、基準の行のときは止めない。
 6. 競合の1回の起動数、PR全体の起動数、行の起動の回数のどれかが上限に達していれば、`rounds_exhausted`で保留する。
 7. 直近の直す作業項目が終わってから5分に満たなければ、`recently_fixed`で保留する。
+8. 起動の直前に、2の人の中止の2つをもう一度読み、当たれば`operator_cancelled`で保留する。
+   判定の間に人が中止しても、新しい修正の行を作らないためである。
+   読み直しから起動までの窓は残る。
 
 作業項目の状態をPRより先に読むのは、読んでいる間に直す作業項目がpushしたとき、古いheadの行を起動しないためである。
 Factoryのレビューの記録は要求しない。
@@ -1492,7 +1512,9 @@ Factoryのレビューの記録は要求しない。
     Claudeの費用を使った失敗を同じ入力で繰り返さず、人の行動が要らない通知も増やさないためである。
   - それ以外は、止めた理由を保留の理由に写せればその理由で、写せなければ保留なしで結びを外す。
     `getDefaultBranch`や`git fetch`の通信の失敗のように、待てば解けるものを例外から区別できないためである。
-- `cancelled`などのほかの終端: 保留なしで結びを外す。
+- 人がConsoleから中止した`cancelled`(注記が`console: operator_cancelled`): `operator_cancelled`で保留して、結びを外す。
+  最終の保留なので、次の競合の回が始まるまで起動し直さない。
+- ほかの`cancelled`などの終端: 保留なしで結びを外す。
 
 保留なしで結びを外した回は、次の巡回で判定し直す。
 起動し直しを止めるのは、回数の上限である。

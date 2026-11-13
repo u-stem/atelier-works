@@ -929,3 +929,16 @@ export function datatableStringSql(source: string): string[] {
   if (/\bRawSql\b/.test(skeleton)) found.push("use of RawSql");
   return found;
 }
+
+/** 大文字で書いた、書き込みとスキーマの変更のSQLの語。単独で数える。 */
+const SQL_WRITE_WORDS =
+  /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|COPY|CALL|GRANT)\b/;
+
+/** 小文字でも書ける、書き込みとスキーマの変更のSQLの形。文章中の英単語を数えないため、語の組で数える。 */
+const SQL_WRITE_PHRASES =
+  /\b(?:insert\s+into|delete\s+from|drop\s+(?:table|index|view|schema)|alter\s+table|create\s+(?:table|index|view|schema|function)|update\s+[\w."]+\s+set)\b/i;
+
+/** テンプレートリテラルの本文`text`が、書き込みかスキーマの変更のSQLを含むか。 */
+export function writesSql(text: string): boolean {
+  return SQL_WRITE_WORDS.test(text) || SQL_WRITE_PHRASES.test(text);
+}

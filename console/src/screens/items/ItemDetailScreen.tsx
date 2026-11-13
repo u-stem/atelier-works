@@ -36,6 +36,7 @@ import {
 import { OverviewTab } from "./detail/OverviewTab.tsx";
 import { RequirementsTab } from "./detail/RequirementsTab.tsx";
 import { RoundsTab } from "./detail/RoundsTab.tsx";
+import { WorkItemCancelAction } from "./detail/WorkItemCancelAction.tsx";
 import { QueryFailure } from "./QueryFailure.tsx";
 
 /**
@@ -149,7 +150,18 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
         className={DETAIL_PANEL_CLASS}
       >
         {tab === "overview" ? (
-          <OverviewTab detail={detail} now={now} progress={flow.view} />
+          <OverviewTab
+            detail={detail}
+            now={now}
+            progress={flow.view}
+            actions={
+              <WorkItemCancelAction
+                workItemId={detail.work_item.work_item_id}
+                kind={detail.work_item.kind}
+                status={detail.work_item.status}
+              />
+            }
+          />
         ) : null}
         {tab === "requirements" ? (
           <RequirementsTab detail={detail} now={now} />

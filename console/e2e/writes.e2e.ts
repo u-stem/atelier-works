@@ -7,7 +7,7 @@ import AxeBuilder from "@axe-core/playwright";
 import type { Locator, Page } from "@playwright/test";
 import { isRecord } from "../src/api/guards/primitives.ts";
 import { THEMES, WCAG_TAGS } from "./axeScope.ts";
-import { RUNNING_FLOW_JOB } from "./fixtures.ts";
+import { CANCELLABLE_WORK_ITEM_ID, RUNNING_FLOW_JOB } from "./fixtures.ts";
 import type { MockApi } from "./mockApi.ts";
 import { WRITE_SCRIPT, type WriteScript } from "./responses.ts";
 import { expect, openScreen, test } from "./support.ts";
@@ -115,6 +115,11 @@ async function cancel(page: Page): Promise<void> {
   await confirmIn(page, "このジョブを中止しますか", "中止する");
 }
 
+async function cancelWorkItem(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "作業項目を中止" }).click();
+  await confirmIn(page, "この作業項目を中止しますか", "中止する");
+}
+
 async function placeHold(page: Page): Promise<void> {
   await page.getByRole("button", { name: "保留や凍結を置く" }).click();
   const dialog = page.getByRole("dialog", { name: "保留か凍結を置きますか" });
@@ -181,6 +186,30 @@ const OPERATIONS: readonly Operation[] = [
       reads: [{ script: JOBS, args: { view: "detail", include_output: true } }],
     },
     refusal: { message: "すでに終わっています。", type: "info" },
+  },
+  {
+    name: "work item cancel",
+    path: `items/${String(CANCELLABLE_WORK_ITEM_ID)}`,
+    script: WRITE_SCRIPT.workItemCancel,
+    act: cancelWorkItem,
+    success: `作業項目 #${String(CANCELLABLE_WORK_ITEM_ID)} を中止しました。`,
+    rereads: {
+      name: "the work item",
+      reads: [
+        {
+          script: QUERY,
+          args: {
+            view: "work_item_detail",
+            work_item_id: CANCELLABLE_WORK_ITEM_ID,
+          },
+        },
+        SUMMARY,
+      ],
+    },
+    refusal: {
+      message: "確かめている間に状態が変わったため",
+      type: "info",
+    },
   },
   {
     name: "hold",

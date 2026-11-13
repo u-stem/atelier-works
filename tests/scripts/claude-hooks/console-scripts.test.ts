@@ -59,6 +59,7 @@ describe("the classification of the console scripts", () => {
       "console_schedule_stop",
       "console_stop_all",
       "console_stop_all_release",
+      "console_work_item_cancel",
       "freeze_release",
       "hold_release",
       "manual_intake_submit",
@@ -144,6 +145,7 @@ describe("bash-guard denies running a Console write script", () => {
     "console_schedule_stop",
     "console_stop_all",
     "console_stop_all_release",
+    "console_work_item_cancel",
   ])("denies running %s through xargs", async (name) => {
     expect(
       await decide(`echo f/factory/${name} | xargs wmill script run`),

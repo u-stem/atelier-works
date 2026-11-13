@@ -26,6 +26,7 @@ import {
   sourcesReachableFrom,
   transpilerImports,
   unfollowableImports,
+  writesSql,
   yamlOf,
 } from "./worker_boundary_scan.ts";
 
@@ -35,8 +36,8 @@ import {
 // - その2つも、github_token以外のsecret変数は読まない。
 // - audit_kickoff、notice_resolve、manual_intake_submit、pr_review_submit、console_holds、hold_release、freeze_release、
 //   console_jobs、console_schedules、console_config、console_job_cancel、console_job_rerun、console_config_update、
-//   console_hold_place、console_schedule_stop、console_deploy_decide、console_stop_all、console_stop_all_releaseは、
-//   どのsecret変数も読まない。
+//   console_hold_place、console_schedule_stop、console_deploy_decide、console_stop_all、console_stop_all_release、
+//   console_work_item_cancelは、どのsecret変数も読まない。
 //   Consoleから押せる操作に、外向きの資格情報を持たせないためである。
 // - console_jobs、console_schedules、console_config、console_job_cancel、console_job_rerun、console_config_update、
 //   console_hold_place、console_schedule_stop、console_stop_all、console_stop_all_releaseの10本は、SDKの呼び出しも許可表に絞る。
@@ -90,6 +91,7 @@ const READS_NO_SECRET = [
   "f/factory/console_deploy_decide",
   "f/factory/console_stop_all",
   "f/factory/console_stop_all_release",
+  "f/factory/console_work_item_cancel",
 ];
 
 /**
@@ -1751,14 +1753,8 @@ describe("the scripts restricted to an SDK allowance", () => {
     (path) => {
       // 検査はテンプレートリテラルだけを見る。文字列で渡すSQL(`sql.query(...)`、`sql.raw(...)`)は、
       // 上の`datatableStringSql`が別に禁じる。
-      // 大文字のSQLの語は単独で、小文字でも書ける形は語の組で数える。文章中の英単語を数えないため。
-      const upper =
-        /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|COPY|CALL|GRANT)\b/;
-      const phrases =
-        /\b(?:insert\s+into|delete\s+from|drop\s+(?:table|index|view|schema)|alter\s+table|create\s+(?:table|index|view|schema|function)|update\s+[\w."]+\s+set)\b/i;
-      const writes = {
-        test: (text: string) => upper.test(text) || phrases.test(text),
-      };
+      // 数え方は`writesSql`にある。文章中の英単語を数えないため、小文字は語の組で数える。
+      const writes = { test: writesSql };
       const offenders: string[] = [];
       for (const [file, source] of sourcesReachableFrom(path)) {
         if (relative(file) in SQL_WRITERS_ALLOWED) continue;

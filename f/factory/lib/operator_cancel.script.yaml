@@ -1,0 +1,9 @@
+summary: '[LIB] 人による作業項目の中止の決まり'
+description: 内部ライブラリです。直接実行するものではありません。人がConsoleから作業項目を中止するときの注記の固定文と、中止してよい種別と状態の表を持ちます。
+lock: '!inline f/factory/lib/operator_cancel.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

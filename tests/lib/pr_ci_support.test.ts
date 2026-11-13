@@ -1184,6 +1184,7 @@ const DETERMINISTIC_HOLDS = [
   "rounds_exhausted",
   "not_factory_head",
   "claude_run_failed",
+  "operator_cancelled",
 ] as const;
 
 const TEMPORARY_HOLDS = [
@@ -1245,6 +1246,36 @@ const POLITE_ENDING = /(です|ます|ません|ました|でした|ください
 function sentencesOf(action: string): string[] {
   return action.split("。").filter((sentence) => sentence !== "");
 }
+
+// 人の中止の保留は、PRの行の中止ならheadが動くまで、Issueの中止なら同じPRでは続く。
+describe("prCiFixHoldInfo for a cancel by a person", () => {
+  test.each(["nextAction", "stopAction"] as const)(
+    "%s does not limit the hold to the same head",
+    (field) => {
+      expect(prCiFixHoldInfo("operator_cancelled")[field]).not.toContain(
+        "同じheadでは",
+      );
+    },
+  );
+
+  test.each(["nextAction", "stopAction"] as const)(
+    "%s says that the cancel of an Issue holds the same pull request",
+    (field) => {
+      expect(prCiFixHoldInfo("operator_cancelled")[field]).toContain(
+        "Issueの中止は同じPRでは続",
+      );
+    },
+  );
+
+  test.each(["nextAction", "stopAction"] as const)(
+    "%s says that the cancel of a pull request row holds until the head moves",
+    (field) => {
+      expect(prCiFixHoldInfo("operator_cancelled")[field]).toContain(
+        "PRの行の中止はheadが動くまで",
+      );
+    },
+  );
+});
 
 describe("prCiFixHoldInfo for the metadata job", () => {
   test("points an unnamed job to the log, not to the metadata command", () => {

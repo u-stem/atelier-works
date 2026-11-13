@@ -365,6 +365,19 @@ export type PrCiClaimDeps = {
     repo: string,
     headRef: string,
   ) => Promise<WorkItemStatus | null>;
+  /** PRのブランチ名(`headRef`)が指すIssueの作業項目を、人が中止したか(`readBranchItemOperatorCancelled`)。 */
+  readonly branchItemOperatorCancelled: (
+    owner: string,
+    repo: string,
+    headRef: string,
+  ) => Promise<boolean>;
+  /** PRの最新の作業項目が、`headSha`で人に中止されたか(`readOperatorCancelledAtHead`)。 */
+  readonly operatorCancelledAtHead: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+    headSha: string,
+  ) => Promise<boolean>;
   readonly listCommits: (
     owner: string,
     repo: string,
@@ -2689,6 +2702,15 @@ function claimReaders(
     readPr: () => readPr(context, ref),
     readBranchItemStatus: () =>
       claim.readBranchItemStatus(names.owner, names.repo, headRef),
+    branchItemOperatorCancelled: () =>
+      claim.branchItemOperatorCancelled(names.owner, names.repo, headRef),
+    operatorCancelledAtHead: () =>
+      claim.operatorCancelledAtHead(
+        names.owner,
+        names.repo,
+        row.pr_number,
+        row.head_sha,
+      ),
     readCommits: () => claim.listCommits(row.owner, row.repo, row.pr_number),
     hasSkillMarker: () => readSkillMarker(context, claim),
     classify: async (pr) => {
