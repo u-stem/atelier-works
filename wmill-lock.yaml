@@ -95,7 +95,7 @@ locks:
   f/factory/lib/doc_tree_hash: 248310a17a8d590114b08021e558454a908388727e4e199c5c4a6cd482c3e699
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/drawio_viewer_bump: 9970434f61c82d9f1e5ea228c2e5a1649b7e9eae5a6f7c332a1e31f17d9434aa
-  f/factory/lib/drawio_viewer_bump_github: ef90ae628fab8eb3ca7eeffcf9cf4aa5099d09a8046bab3121c25a501ad68235
+  f/factory/lib/drawio_viewer_bump_github: be708157b4fc6ba6a048fd8b9aa5df74a4b4ea3356167b3c48e3fef6a462dcaa
   f/factory/lib/drawio_viewer_observations: 33e09dc40e72b47e2be3da91c06b88429b73e9f6d89e3291947aaaca23841886
   f/factory/lib/factory_clone: 7cd4c88b175139a351bc1308e83fa40ff56f2124061fedd56c513b5236b2515d
   f/factory/lib/factory_repo_gate: 5916036950252dbf9a7e55de9acc7d392471fedaef11aee9cb6df2367304add9
@@ -110,9 +110,9 @@ locks:
   f/factory/lib/gh_collect_read: 73c7075dc3f8dd186ea835bd9311d4719003170e374b065eee4b7f98ad7261b7
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: 14389b4e2a47fc0c6e5f8642870091ee1f0507e3d7ad95d4965bbbbe9e665d3f
-  f/factory/lib/github: 06c0fb66a744094f0b644fd0e4c7850f7d909726e52796cd9d4d934f0ebe377a
-  f/factory/lib/github_errors: b07cafa95ca43b8893903fd9451575776406ec8a013c9ca2bbbe4b2ef607d613
-  f/factory/lib/github_http: d650300cbbb7218adb8fddab9a0648d7840b83075ccbe177809db547e4552a25
+  f/factory/lib/github: 2d03f48172a8750f3fe116a0a91ad4eb008a7704b99a8e4704b25550a71db5e7
+  f/factory/lib/github_errors: dc1085bd19c14b4b036e990cef87eb82c6a6686af6593aa4f0fce2f4a7a4d5f6
+  f/factory/lib/github_http: f86439aba105d75bd59df67b60990f00c03a609e9b4321e2ba71714a04a4bd17
   f/factory/lib/heartbeat: 0780343b32026cd007ea35b095340c0b7cb640fb2bab46eb8d213c0a5204673e
   f/factory/lib/holds: 2377c9840d17e626331e3450f97978bfa8fafa583d01b243a9073169aaad728c
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f

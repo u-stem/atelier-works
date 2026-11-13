@@ -31,7 +31,6 @@ import {
 import { describeReason } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
   createFakeCommandRunner,
-  fail,
   ghApiOk,
   ghApiStdout,
   ok,
@@ -382,7 +381,9 @@ describe("claimPr", () => {
   });
 
   test("reports not claimed when the label removal itself fails", async () => {
-    createFakeCommandRunner([fail("rate limited")]);
+    createFakeCommandRunner([
+      ok(ghApiStdout(429, { message: "API rate limit exceeded" })),
+    ]);
     const result = await claimPr(
       { ghToken: "token" },
       "octo-owner",

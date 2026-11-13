@@ -194,24 +194,24 @@ describe("isFactoryPost", () => {
 });
 
 describe("allowEscapeSequences", () => {
-  const client = (_fake: ReturnType<typeof createFakeCommandRunner>) => ({
+  const client = () => ({
     ghToken: "tok",
   });
 
   test("keeps an escape sequence in a GET body when the option is true", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "a\u001bb"))]);
-    const response = await callGhApi(client(fake), "repos/o/r/pulls/1", {
+    createFakeCommandRunner([ok(ghApiStdout(200, "a\u001bb"))]);
+    const response = await callGhApi(client(), "repos/o/r/pulls/1", {
       allowEscapeSequences: true,
     });
     expect(response.bodyText).toBe("a\u001bb");
   });
 
   test("drops a GET body with an escape sequence by default", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ok(ghApiStdout(200, "a\u001bb")),
       ok(ghApiStdout(200, "a\u001bb")),
     ]);
-    const response = await callGhApi(client(fake), "repos/o/r/pulls/1", {});
+    const response = await callGhApi(client(), "repos/o/r/pulls/1", {});
     expect(response.bodyText).toBe("");
   });
 });
@@ -438,7 +438,7 @@ describe("getViewer", () => {
 });
 
 describe("getViewerTeams", () => {
-  const client = (_fake: ReturnType<typeof createFakeCommandRunner>) => ({
+  const client = () => ({
     ghToken: "tok",
   });
 
@@ -453,45 +453,45 @@ describe("getViewerTeams", () => {
 
   test("asks for the teams of the authenticated user, 100 per page", async () => {
     const fake = createFakeCommandRunner([ghApiOk([])]);
-    await getViewerTeams(client(fake));
+    await getViewerTeams(client());
     expect(fake.calls[0]?.argv).toContain("user/teams?per_page=100");
   });
 
   test("returns the numeric id of every team", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk([team(11, "core"), team(22, "infra", "Beta")]),
     ]);
-    const teams = await getViewerTeams(client(fake));
+    const teams = await getViewerTeams(client());
     expect([...teams.ids].sort()).toEqual([11, 22]);
   });
 
   test("returns the organization and slug of every team in lowercase", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk([team(11, "Core"), team(22, "Infra", "Beta")]),
     ]);
-    const teams = await getViewerTeams(client(fake));
+    const teams = await getViewerTeams(client());
     expect([...teams.slugs].sort()).toEqual(["acme/core", "beta/infra"]);
   });
 
   test("returns empty sets when the user belongs to no team", async () => {
-    const fake = createFakeCommandRunner([ghApiOk([])]);
-    const teams = await getViewerTeams(client(fake));
+    createFakeCommandRunner([ghApiOk([])]);
+    const teams = await getViewerTeams(client());
     expect([teams.ids.size, teams.slugs.size]).toEqual([0, 0]);
   });
 
   test("reads every page", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk([team(11, "core")], {
         link: '<https://api.github.com/user/teams?per_page=100&page=2>; rel="next"',
       }),
       ghApiOk([team(22, "infra")]),
     ]);
-    const teams = await getViewerTeams(client(fake));
+    const teams = await getViewerTeams(client());
     expect([...teams.ids].sort()).toEqual([11, 22]);
   });
 
   test("fails when the pages exceed the limit", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk([team(11, "core")], {
         link: '<https://api.github.com/user/teams?per_page=100&page=2>; rel="next"',
       }),
@@ -499,61 +499,51 @@ describe("getViewerTeams", () => {
         link: '<https://api.github.com/user/teams?per_page=100&page=3>; rel="next"',
       }),
     ]);
-    await expect(getViewerTeams(client(fake), 2)).rejects.toThrow(
+    await expect(getViewerTeams(client(), 2)).rejects.toThrow(
       GitHubPaginationLimitError,
     );
   });
 
   test("fails as a whole when one team has no numeric id", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([team(11, "core"), team("x", "infra")]),
-    ]);
-    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+    createFakeCommandRunner([ghApiOk([team(11, "core"), team("x", "infra")])]);
+    await expect(getViewerTeams(client())).rejects.toThrow(
       /unexpected response shape/,
     );
   });
 
   test("fails as a whole when one team has an id that is not positive", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([team(11, "core"), team(0, "infra")]),
-    ]);
-    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+    createFakeCommandRunner([ghApiOk([team(11, "core"), team(0, "infra")])]);
+    await expect(getViewerTeams(client())).rejects.toThrow(
       /unexpected response shape/,
     );
   });
 
   test("fails as a whole when one team has no slug", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([team(11, "core"), team(22, undefined)]),
-    ]);
-    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+    createFakeCommandRunner([ghApiOk([team(11, "core"), team(22, undefined)])]);
+    await expect(getViewerTeams(client())).rejects.toThrow(
       /unexpected response shape/,
     );
   });
 
   test("fails as a whole when one team has no organization", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk([team(11, "core"), team(22, "infra", null)]),
     ]);
-    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+    await expect(getViewerTeams(client())).rejects.toThrow(
       /unexpected response shape/,
     );
   });
 
   test("fails when the response is not a list", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ teams: [] })]);
-    await expect(getViewerTeams(client(fake))).rejects.toThrow(
-      /expected an array/,
-    );
+    createFakeCommandRunner([ghApiOk({ teams: [] })]);
+    await expect(getViewerTeams(client())).rejects.toThrow(/expected an array/);
   });
 
   test("does not put the slug of a valid team into the message of a failure", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk([team(11, "secret-team"), team("x", "infra")]),
     ]);
-    const error = await getViewerTeams(client(fake)).catch(
-      (err: unknown) => err,
-    );
+    const error = await getViewerTeams(client()).catch((err: unknown) => err);
     expect(String(error)).not.toContain("secret-team");
   });
 });
@@ -2670,7 +2660,12 @@ describe("claimIssue", () => {
     });
 
     test("still claims when the confirmation read fails, reporting the assignee as unknown", async () => {
-      const { client, opts } = setup([assigned, deleted, serverError]);
+      const { client, opts } = setup([
+        assigned,
+        deleted,
+        serverError,
+        serverError,
+      ]);
       const result = await claimIssue(client, "acme", "widgets", 5, opts);
       expect(result).toEqual({ claimed: true, assignee: "unknown" });
     });
@@ -2986,9 +2981,7 @@ describe("claimIssue", () => {
         assigned,
         serverError,
         labelAbsent(),
-        serverError,
-        serverError,
-        serverError,
+        ...Array(6).fill(serverError),
       ]);
       const claiming = claimIssue(client, "acme", "widgets", 5, opts);
       await expect(claiming).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
@@ -3012,9 +3005,7 @@ describe("claimIssue", () => {
       const { client, opts } = setup([
         assigned,
         noResponse,
-        serverError,
-        serverError,
-        serverError,
+        ...Array(6).fill(serverError),
       ]);
       const claiming = claimIssue(client, "acme", "widgets", 5, opts);
       await expect(claiming).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
@@ -3038,9 +3029,7 @@ describe("claimIssue", () => {
       const { client, opts } = setup([
         assigned,
         serverError,
-        serverError,
-        serverError,
-        serverError,
+        ...Array(6).fill(serverError),
       ]);
       const claiming = claimIssue(client, "acme", "widgets", 5, opts);
       await expect(claiming).rejects.toThrow(/DELETE issue label.*HTTP 500/);
@@ -3050,9 +3039,7 @@ describe("claimIssue", () => {
       const { client, warns, opts } = setup([
         assigned,
         serverError,
-        serverError,
-        serverError,
-        serverError,
+        ...Array(6).fill(serverError),
       ]);
       await claimIssue(client, "acme", "widgets", 5, opts).catch(
         () => undefined,
@@ -3127,9 +3114,7 @@ describe("claimIssue", () => {
       const { client, warns, opts } = setup([
         assigned,
         serverError,
-        serverError,
-        serverError,
-        serverError,
+        ...Array(6).fill(serverError),
       ]);
       await claimIssue(client, "acme", "widgets", 5, opts).catch(
         () => undefined,
@@ -3142,9 +3127,7 @@ describe("claimIssue", () => {
         assigned,
         serverError,
         ghApiOk(issueBody([], ["factory-bot"])),
-        serverError,
-        serverError,
-        serverError,
+        ...Array(6).fill(serverError),
       ]);
       await claimIssue(client, "acme", "widgets", 5, opts).catch(
         () => undefined,
@@ -4895,32 +4878,30 @@ describe("getPrDiff", () => {
   });
 
   const ESC = String.fromCharCode(0x1b);
-  const client = (_fake: ReturnType<typeof createFakeCommandRunner>) => ({
+  const client = () => ({
     ghToken: "tok",
     sleep: async () => {},
   });
 
   test("reads a body that carries terminal escape sequences", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, `+${ESC}[31mred`)),
-    ]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, `+${ESC}[31mred`))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+<U+001B>[31mred");
   });
 
   test("writes control characters of the diff as visible code points", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ok(ghApiStdout(200, `+hello ${ESC}[31mred${ESC}[0m\n+ok`)),
     ]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+hello <U+001B>[31mred<U+001B>[0m\n+ok");
   });
 
   test("counts lines after replacing, so a replacement does not change the line count", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ok(ghApiStdout(200, `l1${ESC}\nl2${ESC}\nl3\nl4`)),
     ]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 2);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 2);
     expect(diff).toEqual({
       diff: "l1<U+001B>\nl2<U+001B>",
       truncated: true,
@@ -4932,10 +4913,10 @@ describe("getPrDiff", () => {
   test("truncates by characters after replacing, at a line boundary", async () => {
     const line = `+${ESC.repeat(10)}`;
     const body = Array.from({ length: 4 }, () => line).join("\n");
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
     const revealedLine = `+${"<U+001B>".repeat(10)}`;
     const diff = await getPrDiff(
-      client(fake),
+      client(),
       "acme",
       "widgets",
       12,
@@ -4951,10 +4932,8 @@ describe("getPrDiff", () => {
   });
 
   test("cuts inside a single line longer than the character limit", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, "x".repeat(50))),
-    ]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 10);
+    createFakeCommandRunner([ok(ghApiStdout(200, "x".repeat(50)))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100, 10);
     expect(diff).toEqual({
       diff: "x".repeat(10),
       truncated: true,
@@ -4964,10 +4943,8 @@ describe("getPrDiff", () => {
   });
 
   test("drops an unfinished replacement marker when it cuts inside a line", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, ESC.repeat(10))),
-    ]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 20);
+    createFakeCommandRunner([ok(ghApiStdout(200, ESC.repeat(10)))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100, 20);
     expect(diff.diff).toBe("<U+001B><U+001B>");
   });
 
@@ -4978,11 +4955,9 @@ describe("getPrDiff", () => {
   ])(
     "drops every prefix of a marker when it cuts at %i characters",
     async (maxChars, expected) => {
-      const fake = createFakeCommandRunner([
-        ok(ghApiStdout(200, ESC.repeat(10))),
-      ]);
+      createFakeCommandRunner([ok(ghApiStdout(200, ESC.repeat(10)))]);
       const diff = await getPrDiff(
-        client(fake),
+        client(),
         "acme",
         "widgets",
         12,
@@ -4994,39 +4969,35 @@ describe("getPrDiff", () => {
   );
 
   test("keeps a complete marker at the cut", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, ESC.repeat(10))),
-    ]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 16);
+    createFakeCommandRunner([ok(ghApiStdout(200, ESC.repeat(10)))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100, 16);
     expect(diff.diff).toBe("<U+001B><U+001B>");
   });
 
   test("keeps the text at a line boundary even when it looks like a marker prefix", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "a<U\nb"))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 3);
+    createFakeCommandRunner([ok(ghApiStdout(200, "a<U\nb"))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100, 3);
     expect(diff.diff).toBe("a<U");
   });
 
   test("does not split a surrogate pair when it cuts by characters", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, "ab\u{1F600}cd")),
-    ]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 3);
+    createFakeCommandRunner([ok(ghApiStdout(200, "ab\u{1F600}cd"))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100, 3);
     expect(diff.diff).toBe("ab");
   });
 
   test("applies a default character limit to a replaced body", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ok(ghApiStdout(200, ESC.repeat(PR_DIFF_MAX_CHARS))),
     ]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.diff.length).toBeLessThanOrEqual(PR_DIFF_MAX_CHARS);
   });
 
   test("does not hide code between an escape introducer and a terminator", async () => {
     const line = `+const t = "${ESC}]"; exec(evil); "\u0007";`;
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, line))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, line))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toContain("exec(evil)");
   });
 
@@ -5038,9 +5009,9 @@ describe("getPrDiff", () => {
       exitCode: 1,
       timedOut: false,
     };
-    const fake = createFakeCommandRunner([rejected, rejected]);
+    createFakeCommandRunner([rejected, rejected]);
     await expect(
-      getPrDiff(client(fake), "acme", "widgets", 12, 100),
+      getPrDiff(client(), "acme", "widgets", 12, 100),
     ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
   });
 
@@ -5051,42 +5022,35 @@ describe("getPrDiff", () => {
       exitCode: 1,
       timedOut: false,
     };
-    const fake = createFakeCommandRunner([
-      rejected,
-      ok(ghApiStdout(200, "+line")),
-    ]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([rejected, ok(ghApiStdout(200, "+line"))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+line");
   });
 
   test("normalizes CRLF line ends of the diff to LF", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, "+a\r\n+b\r\n c")),
-    ]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, "+a\r\n+b\r\n c"))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+a\n+b\n c");
   });
 
   test("gives the same diff for LF and CRLF line ends", async () => {
     // GitHubのAPIへの`fetch`に答えるのは最後に作った偽のrunnerなので、作ってすぐに読む。
-    const lf = createFakeCommandRunner([ok(ghApiStdout(200, "+a\n+b\n"))]);
-    const fromLf = await getPrDiff(client(lf), "acme", "widgets", 12, 100);
-    const crlf = createFakeCommandRunner([
-      ok(ghApiStdout(200, "+a\r\n+b\r\n")),
-    ]);
-    const fromCrlf = await getPrDiff(client(crlf), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, "+a\n+b\n"))]);
+    const fromLf = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, "+a\r\n+b\r\n"))]);
+    const fromCrlf = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(fromCrlf).toEqual(fromLf);
   });
 
   test("counts the lines of a CRLF diff as LF lines", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "a\r\nb\r\nc"))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 2);
+    createFakeCommandRunner([ok(ghApiStdout(200, "a\r\nb\r\nc"))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 2);
     expect(diff).toMatchObject({ diff: "a\nb", totalLines: 3 });
   });
 
   test("still reveals a carriage return that is not part of a CRLF", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "+a\rb\r\n"))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, "+a\rb\r\n"))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+a<U+000D>b\n");
   });
 
@@ -5096,22 +5060,22 @@ describe("getPrDiff", () => {
       "index 1111111..2222222 100644",
       "Binary files a/img/logo.png and b/img/logo.png differ",
     ].join("\n");
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["img/logo.png"]);
   });
 
   test("lists an added binary file by its new path", async () => {
     const body = "Binary files /dev/null and b/new.bin differ";
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["new.bin"]);
   });
 
   test("lists a deleted binary file by its old path", async () => {
     const body = "Binary files a/old.bin and /dev/null differ";
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["old.bin"]);
   });
 
@@ -5122,86 +5086,86 @@ describe("getPrDiff", () => {
       "+c",
       "Binary files a/x.bin and b/x.bin differ",
     ].join("\n");
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 2);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 2);
     expect(diff.binaryFiles).toEqual(["x.bin"]);
   });
 
   test("drops the side prefix inside the quotes of a quoted path", async () => {
     const body = 'Binary files /dev/null and "b/\\346\\227\\245.png" differ';
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
   });
 
   test("drops the side prefix of a quoted path on both sides", async () => {
     const body =
       'Binary files "a/\\346\\227\\245.png" and "b/\\346\\227\\245.png" differ';
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
   });
 
   test("drops the side prefix of a quoted deleted path", async () => {
     const body = 'Binary files "a/\\346\\227\\245.png" and /dev/null differ';
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
   });
 
   test("splits a modified path containing and at the last and b/", async () => {
     const body = "Binary files a/x and y.bin and b/x and y.bin differ";
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["x and y.bin"]);
   });
 
   test("prefers the split where both sides name the same path", async () => {
     const body =
       "Binary files a/x and b/evil.png and b/x and b/evil.png differ";
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["x and b/evil.png"]);
   });
 
   test("falls back to the last and b/ when a rename has different sides", async () => {
     const body = "Binary files a/old.png and b/new and b/x.png differ";
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["x.png"]);
   });
 
   test("keeps the whole added path when it contains and", async () => {
     const body = "Binary files /dev/null and b/x and y.bin differ";
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["x and y.bin"]);
   });
 
   test("keeps the whole deleted path when it contains and", async () => {
     const body = "Binary files a/old and x.bin and /dev/null differ";
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["old and x.bin"]);
   });
 
   test("does not take an added line that looks like a binary notice", async () => {
     const body = "+Binary files a/x and b/x differ";
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual([]);
   });
 
   test("reveals control characters in the listed binary path", async () => {
     const body = `Binary files a/x${ESC}.bin and b/x${ESC}.bin differ`;
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["x<U+001B>.bin"]);
   });
 
   test("returns an empty diff when gh exits zero with an empty body", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, ""))]);
-    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    createFakeCommandRunner([ok(ghApiStdout(200, ""))]);
+    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("");
   });
 });
@@ -5215,10 +5179,7 @@ describe("callGhApiRawBody", () => {
   });
 
   /** 実行とsleepを記録し、取り直しの回数と待ちを確かめられるようにする。 */
-  const recording = (
-    fake: ReturnType<typeof createFakeCommandRunner>,
-    transientRetryDelayMs?: number,
-  ) => {
+  const recording = (transientRetryDelayMs?: number) => {
     const sleeps: number[] = [];
     return {
       sleeps,
@@ -5238,19 +5199,17 @@ describe("callGhApiRawBody", () => {
     callGhApiRawBody(client, "repos/acme/widgets/x", {}, "GET x");
 
   test("returns the response when gh exited zero", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "body"))]);
-    const response = await call(recording(fake).client);
+    createFakeCommandRunner([ok(ghApiStdout(200, "body"))]);
+    const response = await call(recording().client);
     expect(response.bodyText).toBe("body");
   });
 
   test("does not fetch again when the deadline cut the body after a 2xx status", async () => {
-    const fake = createFakeCommandRunner([]);
+    createFakeCommandRunner([]);
     const stub = stubGlobalFetchWith(async () =>
       cutBody(200, new DOMException("timed out", "TimeoutError"), "part"),
     );
-    const error = await call(recording(fake).client).catch(
-      (err: unknown) => err,
-    );
+    const error = await call(recording().client).catch((err: unknown) => err);
     expect([
       error instanceof GitHubRawBodyIncompleteError,
       stub.sent.length,
@@ -5259,43 +5218,37 @@ describe("callGhApiRawBody", () => {
 
   test("does not wait or fetch again when gh exited zero", async () => {
     const fake = createFakeCommandRunner([ok(ghApiStdout(200, "body"))]);
-    const { client, sleeps } = recording(fake);
+    const { client, sleeps } = recording();
     await call(client);
     expect([fake.calls.length, sleeps]).toEqual([1, []]);
   });
 
   test("returns the second response when the first one was incomplete", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       exited(1, "part"),
       ok(ghApiStdout(200, "whole body")),
     ]);
-    const response = await call(recording(fake).client);
+    const response = await call(recording().client);
     expect(response.bodyText).toBe("whole body");
   });
 
   test("waits for the transient retry delay of the client before the second fetch", async () => {
-    const fake = createFakeCommandRunner([
-      exited(1, ""),
-      ok(ghApiStdout(200, "x")),
-    ]);
-    const { client, sleeps } = recording(fake, 1234);
+    createFakeCommandRunner([exited(1, ""), ok(ghApiStdout(200, "x"))]);
+    const { client, sleeps } = recording(1234);
     await call(client);
     expect(sleeps).toEqual([1234]);
   });
 
   test("waits for the default delay when the client has no transient retry delay", async () => {
-    const fake = createFakeCommandRunner([
-      exited(1, ""),
-      ok(ghApiStdout(200, "x")),
-    ]);
-    const { client, sleeps } = recording(fake);
+    createFakeCommandRunner([exited(1, ""), ok(ghApiStdout(200, "x"))]);
+    const { client, sleeps } = recording();
     await call(client);
     expect(sleeps).toEqual([GITHUB_TRANSIENT_RETRY_DELAY_MS]);
   });
 
   test("throws a GitHubRawBodyIncompleteError when the second response is also incomplete", async () => {
-    const fake = createFakeCommandRunner([exited(1, ""), exited(1, "")]);
-    await expect(call(recording(fake).client)).rejects.toBeInstanceOf(
+    createFakeCommandRunner([exited(1, ""), exited(1, "")]);
+    await expect(call(recording().client)).rejects.toBeInstanceOf(
       GitHubRawBodyIncompleteError,
     );
   });
@@ -5306,16 +5259,16 @@ describe("callGhApiRawBody", () => {
       exited(1, ""),
       ok(ghApiStdout(200, "x")),
     ]);
-    await call(recording(fake).client).catch(() => undefined);
+    await call(recording().client).catch(() => undefined);
     expect(fake.calls).toHaveLength(2);
   });
 
   test("names the request without the body or stderr in the message", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       exited(1, "PARTIAL-BODY"),
       exited(1, "PARTIAL-BODY"),
     ]);
-    const error = await call(recording(fake).client).catch((e: unknown) => e);
+    const error = await call(recording().client).catch((e: unknown) => e);
     expect(error instanceof Error ? error.message : "").toBe(
       "GET x ended incomplete: the body was cut after a 2xx status",
     );
@@ -5327,7 +5280,7 @@ describe("callGhApiRawBody", () => {
       ok(ghApiStdout(200, "x")),
     ]);
     await callGhApiRawBody(
-      recording(fake).client,
+      recording().client,
       "repos/acme/widgets/x",
       { method: "POST" },
       "POST x",
@@ -5335,28 +5288,23 @@ describe("callGhApiRawBody", () => {
     expect(fake.calls).toHaveLength(1);
   });
 
-  test("throws a GitHubRawBodyIncompleteError when a non-idempotent request is incomplete", async () => {
-    const fake = createFakeCommandRunner([
-      exited(1, ""),
-      ok(ghApiStdout(200, "x")),
-    ]);
+  // 冪等でない要求の欠けた本文は、変更が効いた後に本文だけを失ったものとして、一時的でない応答の失敗にする。
+  test("throws a response error when a non-idempotent request is incomplete", async () => {
+    createFakeCommandRunner([exited(1, "")]);
     await expect(
       callGhApiRawBody(
-        recording(fake).client,
+        recording().client,
         "repos/acme/widgets/x",
         { method: "POST" },
         "POST x",
       ),
-    ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
+    ).rejects.toBeInstanceOf(GitHubResponseError);
   });
 
   test("fetches again when a POST is marked idempotent", async () => {
-    const fake = createFakeCommandRunner([
-      exited(1, ""),
-      ok(ghApiStdout(200, "x")),
-    ]);
+    createFakeCommandRunner([exited(1, ""), ok(ghApiStdout(200, "x"))]);
     const response = await callGhApiRawBody(
-      recording(fake).client,
+      recording().client,
       "repos/acme/widgets/x",
       { method: "POST", idempotent: true },
       "POST x",
@@ -5373,7 +5321,7 @@ describe("callGhApiRawBody", () => {
         timedOut: false,
       },
     ]);
-    const response = await call(recording(fake).client);
+    const response = await call(recording().client);
     expect([response.status, fake.calls.length]).toEqual([404, 1]);
   });
 });
@@ -7073,13 +7021,13 @@ describe("listWorkflowRuns", () => {
     html_url: "https://github.com/acme/widgets/actions/runs/101",
     ...overrides,
   });
-  const client = (_fake: ReturnType<typeof createFakeCommandRunner>) => ({
+  const client = () => ({
     ghToken: "tok",
   });
 
   test("reads one page of push runs on the branch", async () => {
     const fake = createFakeCommandRunner([ghApiOk({ workflow_runs: [] })]);
-    await listWorkflowRuns(client(fake), "acme", "widgets", "main");
+    await listWorkflowRuns(client(), "acme", "widgets", "main");
     expect(fake.calls[0]?.argv).toContain(
       "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=20",
     );
@@ -7087,24 +7035,19 @@ describe("listWorkflowRuns", () => {
 
   test("encodes the branch name", async () => {
     const fake = createFakeCommandRunner([ghApiOk({ workflow_runs: [] })]);
-    await listWorkflowRuns(client(fake), "acme", "widgets", "release/v1");
+    await listWorkflowRuns(client(), "acme", "widgets", "release/v1");
     expect(
       fake.calls[0]?.argv.some((arg) => arg.includes("release%2Fv1")),
     ).toBe(true);
   });
 
   test("returns the runs with their fields parsed", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [rawRun({ conclusion: null, status: "queued" })],
       }),
     ]);
-    const runs = await listWorkflowRuns(
-      client(fake),
-      "acme",
-      "widgets",
-      "main",
-    );
+    const runs = await listWorkflowRuns(client(), "acme", "widgets", "main");
     expect(runs).toEqual([
       {
         id: 101,
@@ -7119,49 +7062,44 @@ describe("listWorkflowRuns", () => {
   });
 
   test("treats a null name as an empty name", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ name: null })] }),
     ]);
-    const runs = await listWorkflowRuns(
-      client(fake),
-      "acme",
-      "widgets",
-      "main",
-    );
+    const runs = await listWorkflowRuns(client(), "acme", "widgets", "main");
     expect(runs[0]?.name).toBe("");
   });
 
   test("rejects non 40-hex sha", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ head_sha: "abc1234" })] }),
     ]);
     await expect(
-      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+      listWorkflowRuns(client(), "acme", "widgets", "main"),
     ).rejects.toThrow("invalid commit sha");
   });
 
   test("throws when a run has an unexpected shape", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ status: 7 })] }),
     ]);
     await expect(
-      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+      listWorkflowRuns(client(), "acme", "widgets", "main"),
     ).rejects.toThrow("unexpected response shape");
   });
 
   test("throws when created_at is not a timestamp", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ created_at: "yesterday" })] }),
     ]);
     await expect(
-      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+      listWorkflowRuns(client(), "acme", "widgets", "main"),
     ).rejects.toThrow("unexpected response shape");
   });
 
   test("throws when the body has no workflow_runs array", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ total_count: 0 })]);
+    createFakeCommandRunner([ghApiOk({ total_count: 0 })]);
     await expect(
-      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+      listWorkflowRuns(client(), "acme", "widgets", "main"),
     ).rejects.toThrow("unexpected response shape");
   });
 
@@ -7175,7 +7113,7 @@ describe("listWorkflowRuns", () => {
 
     test("asks for the push runs of that sha on the branch", async () => {
       const fake = createFakeCommandRunner([page(1)]);
-      await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA);
+      await listWorkflowRuns(client(), "acme", "widgets", "main", SHA);
       expect(fake.calls[0]?.argv).toContain(
         `repos/acme/widgets/actions/runs?branch=main&head_sha=${SHA}&event=push&per_page=100&page=1`,
       );
@@ -7183,14 +7121,14 @@ describe("listWorkflowRuns", () => {
 
     test("reads one page when it is not full", async () => {
       const fake = createFakeCommandRunner([page(99)]);
-      await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA);
+      await listWorkflowRuns(client(), "acme", "widgets", "main", SHA);
       expect(fake.calls).toHaveLength(1);
     });
 
     test("reads the next page when a page is full", async () => {
-      const fake = createFakeCommandRunner([page(100), page(5, 1000)]);
+      createFakeCommandRunner([page(100), page(5, 1000)]);
       const runs = await listWorkflowRuns(
-        client(fake),
+        client(),
         "acme",
         "widgets",
         "main",
@@ -7201,69 +7139,61 @@ describe("listWorkflowRuns", () => {
 
     test("asks for the second page with page=2", async () => {
       const fake = createFakeCommandRunner([page(100), page(5, 1000)]);
-      await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA);
+      await listWorkflowRuns(client(), "acme", "widgets", "main", SHA);
       expect(fake.calls[1]?.argv.some((arg) => arg.endsWith("&page=2"))).toBe(
         true,
       );
     });
 
     test("throws when three pages are all full", async () => {
-      const fake = createFakeCommandRunner([
-        page(100),
-        page(100, 1000),
-        page(100, 2000),
-      ]);
+      createFakeCommandRunner([page(100), page(100, 1000), page(100, 2000)]);
       await expect(
-        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+        listWorkflowRuns(client(), "acme", "widgets", "main", SHA),
       ).rejects.toThrow("may be incomplete");
     });
 
     test("throws a WorkflowRunsIncompleteError when three pages are all full", async () => {
-      const fake = createFakeCommandRunner([
-        page(100),
-        page(100, 1000),
-        page(100, 2000),
-      ]);
+      createFakeCommandRunner([page(100), page(100, 1000), page(100, 2000)]);
       await expect(
-        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+        listWorkflowRuns(client(), "acme", "widgets", "main", SHA),
       ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
     });
 
     test("returns an empty list when the sha has no run", async () => {
-      const fake = createFakeCommandRunner([page(0)]);
+      createFakeCommandRunner([page(0)]);
       expect(
-        await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+        await listWorkflowRuns(client(), "acme", "widgets", "main", SHA),
       ).toEqual([]);
     });
 
     test("rejects non 40-hex sha before calling the API", async () => {
-      const fake = createFakeCommandRunner([]);
+      createFakeCommandRunner([]);
       await expect(
-        listWorkflowRuns(client(fake), "acme", "widgets", "main", "abc1234"),
+        listWorkflowRuns(client(), "acme", "widgets", "main", "abc1234"),
       ).rejects.toThrow("invalid commit sha");
     });
 
     test("throws a WorkflowRunsIncompleteError when a run belongs to another sha", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ghApiOk({ workflow_runs: [rawRun({ head_sha: "b".repeat(40) })] }),
       ]);
       await expect(
-        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+        listWorkflowRuns(client(), "acme", "widgets", "main", SHA),
       ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
     });
 
     test("does not treat a malformed run as a WorkflowRunsIncompleteError", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ghApiOk({ workflow_runs: [rawRun({ status: 7 })] }),
       ]);
       await expect(
-        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+        listWorkflowRuns(client(), "acme", "widgets", "main", SHA),
       ).rejects.not.toBeInstanceOf(WorkflowRunsIncompleteError);
     });
   });
 
   test("drops a run of another branch when listing the branch", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           rawRun({ id: 1, head_branch: "feature" }),
@@ -7271,17 +7201,12 @@ describe("listWorkflowRuns", () => {
         ],
       }),
     ]);
-    const runs = await listWorkflowRuns(
-      client(fake),
-      "acme",
-      "widgets",
-      "main",
-    );
+    const runs = await listWorkflowRuns(client(), "acme", "widgets", "main");
     expect(runs.map((item) => item.id)).toEqual([2]);
   });
 
   test("drops a run without a branch when listing the branch", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           rawRun({ id: 1, head_branch: null }),
@@ -7289,17 +7214,12 @@ describe("listWorkflowRuns", () => {
         ],
       }),
     ]);
-    const runs = await listWorkflowRuns(
-      client(fake),
-      "acme",
-      "widgets",
-      "main",
-    );
+    const runs = await listWorkflowRuns(client(), "acme", "widgets", "main");
     expect(runs.map((item) => item.id)).toEqual([2]);
   });
 
   test("drops a run that a pull request started when listing the branch", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           rawRun({ id: 1, event: "pull_request" }),
@@ -7307,53 +7227,48 @@ describe("listWorkflowRuns", () => {
         ],
       }),
     ]);
-    const runs = await listWorkflowRuns(
-      client(fake),
-      "acme",
-      "widgets",
-      "main",
-    );
+    const runs = await listWorkflowRuns(client(), "acme", "widgets", "main");
     expect(runs.map((item) => item.id)).toEqual([2]);
   });
 
   test("still rejects the sha of a dropped run", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [rawRun({ head_branch: "feature", head_sha: "abc" })],
       }),
     ]);
     await expect(
-      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+      listWorkflowRuns(client(), "acme", "widgets", "main"),
     ).rejects.toThrow("invalid commit sha");
   });
 
   test("checks the branch and the event when reading by head sha", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ head_branch: "v1" })] }),
     ]);
     await expect(
-      listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+      listWorkflowRuns(client(), "acme", "widgets", "main", SHA),
     ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
   });
 
   test("throws an unexpected-shape error when head_branch or event is missing", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ event: undefined })] }),
     ]);
     await expect(
-      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+      listWorkflowRuns(client(), "acme", "widgets", "main"),
     ).rejects.toThrow("unexpected response shape");
   });
 
   test("rejects an invalid owner before calling the API", async () => {
-    const fake = createFakeCommandRunner([]);
+    createFakeCommandRunner([]);
     await expect(
-      listWorkflowRuns(client(fake), "ac me", "widgets", "main"),
+      listWorkflowRuns(client(), "ac me", "widgets", "main"),
     ).rejects.toThrow("invalid GitHub name");
   });
 
   test("surfaces a permission error with its status", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ok(
         ghApiStdout(403, {
           message: "Resource not accessible by personal access token",
@@ -7361,7 +7276,7 @@ describe("listWorkflowRuns", () => {
       ),
     ]);
     await expect(
-      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+      listWorkflowRuns(client(), "acme", "widgets", "main"),
     ).rejects.toMatchObject({ status: 403 });
   });
 });
@@ -7385,21 +7300,17 @@ describe("listPrHeadWorkflowRuns", () => {
     pull_requests: [{ number: 12 }],
     ...overrides,
   });
-  const client = (_fake: ReturnType<typeof createFakeCommandRunner>) => ({
+  const client = () => ({
     ghToken: "tok",
   });
-  const listAll = (
-    fake: ReturnType<typeof createFakeCommandRunner>,
-    options: { baseRepoId?: number; prNumber?: number } = {},
-  ) =>
-    listPrHeadWorkflowRuns(client(fake), "acme", "widgets", SHA, REF, {
+  const listAll = (options: { baseRepoId?: number; prNumber?: number } = {}) =>
+    listPrHeadWorkflowRuns(client(), "acme", "widgets", SHA, REF, {
       baseRepoId: 55,
       ...options,
     });
   const list = async (
-    fake: ReturnType<typeof createFakeCommandRunner>,
     options: { baseRepoId?: number; prNumber?: number } = {},
-  ) => (await listAll(fake, options)).runs;
+  ) => (await listAll(options)).runs;
   const page = (count: number, firstId = 1) =>
     ghApiOk({
       workflow_runs: Array.from({ length: count }, (_, i) =>
@@ -7409,15 +7320,15 @@ describe("listPrHeadWorkflowRuns", () => {
 
   test("asks for the runs of that sha on the head branch", async () => {
     const fake = createFakeCommandRunner([page(1)]);
-    await list(fake);
+    await list();
     expect(fake.calls[0]?.argv).toContain(
       `repos/acme/widgets/actions/runs?branch=${encodeURIComponent(REF)}&head_sha=${SHA}&per_page=100&page=1`,
     );
   });
 
   test("returns the runs with the extra fields parsed", async () => {
-    const fake = createFakeCommandRunner([page(1)]);
-    expect(await list(fake, { baseRepoId: 55, prNumber: 12 })).toEqual([
+    createFakeCommandRunner([page(1)]);
+    expect(await list({ baseRepoId: 55, prNumber: 12 })).toEqual([
       {
         id: 1,
         workflowId: 7,
@@ -7436,14 +7347,14 @@ describe("listPrHeadWorkflowRuns", () => {
   });
 
   test("accepts the runs of the push event", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ event: "push" })] }),
     ]);
-    expect((await list(fake)).map((item) => item.event)).toEqual(["push"]);
+    expect((await list()).map((item) => item.event)).toEqual(["push"]);
   });
 
   test("drops a run of another event", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           rawRun({ id: 1, event: "workflow_dispatch" }),
@@ -7451,7 +7362,7 @@ describe("listPrHeadWorkflowRuns", () => {
         ],
       }),
     ]);
-    expect((await list(fake)).map((item) => item.id)).toEqual([2]);
+    expect((await list()).map((item) => item.id)).toEqual([2]);
   });
 
   test("counts a dropped run when it decides the page is full", async () => {
@@ -7463,30 +7374,26 @@ describe("listPrHeadWorkflowRuns", () => {
       }),
       page(0),
     ]);
-    await list(fake);
+    await list();
     expect(fake.calls).toHaveLength(2);
   });
 
   test("throws a WorkflowRunsIncompleteError for a run of another sha", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ head_sha: "b".repeat(40) })] }),
     ]);
-    await expect(list(fake)).rejects.toBeInstanceOf(
-      WorkflowRunsIncompleteError,
-    );
+    await expect(list()).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
   });
 
   test("throws a WorkflowRunsIncompleteError for a run of another branch", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ head_branch: "other" })] }),
     ]);
-    await expect(list(fake)).rejects.toBeInstanceOf(
-      WorkflowRunsIncompleteError,
-    );
+    await expect(list()).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
   });
 
   test("drops a run whose head repository has another id", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           rawRun({
@@ -7497,22 +7404,22 @@ describe("listPrHeadWorkflowRuns", () => {
         ],
       }),
     ]);
-    expect((await list(fake)).map((item) => item.id)).toEqual([2]);
+    expect((await list()).map((item) => item.id)).toEqual([2]);
   });
 
   test("does not trust the repository name when the id matches", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           rawRun({ head_repository: { id: 55, full_name: "renamed/widgets" } }),
         ],
       }),
     ]);
-    expect(await list(fake)).toHaveLength(1);
+    expect(await list()).toHaveLength(1);
   });
 
   test("drops a run whose head repository is gone", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           rawRun({ id: 1, head_repository: null }),
@@ -7520,11 +7427,11 @@ describe("listPrHeadWorkflowRuns", () => {
         ],
       }),
     ]);
-    expect((await list(fake)).map((item) => item.id)).toEqual([2]);
+    expect((await list()).map((item) => item.id)).toEqual([2]);
   });
 
   test("drops a run whose head repository has no id", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           rawRun({ id: 1, head_repository: { full_name: "acme/widgets" } }),
@@ -7532,11 +7439,11 @@ describe("listPrHeadWorkflowRuns", () => {
         ],
       }),
     ]);
-    expect((await list(fake)).map((item) => item.id)).toEqual([2]);
+    expect((await list()).map((item) => item.id)).toEqual([2]);
   });
 
   test("reports how many runs of another repository were dropped", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           rawRun({ id: 1, head_repository: null }),
@@ -7548,19 +7455,19 @@ describe("listPrHeadWorkflowRuns", () => {
         ],
       }),
     ]);
-    expect((await listAll(fake)).droppedOtherRepository).toBe(2);
+    expect((await listAll()).droppedOtherRepository).toBe(2);
   });
 
   test("reports no dropped run when every run is the base repository's", async () => {
-    const fake = createFakeCommandRunner([page(2)]);
-    expect(await listAll(fake)).toMatchObject({
+    createFakeCommandRunner([page(2)]);
+    expect(await listAll()).toMatchObject({
       droppedOtherRepository: 0,
       droppedOtherPullRequest: 0,
     });
   });
 
   test("throws a WorkflowRunsIncompleteError when every run was another repository's", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           rawRun({ id: 1, head_repository: null }),
@@ -7571,30 +7478,28 @@ describe("listPrHeadWorkflowRuns", () => {
         ],
       }),
     ]);
-    await expect(list(fake)).rejects.toBeInstanceOf(
-      WorkflowRunsIncompleteError,
-    );
+    await expect(list()).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
   });
 
   test("throws a WorkflowRunsIncompleteError when the base repository id is wrong for every run", async () => {
-    const fake = createFakeCommandRunner([page(1)]);
-    await expect(list(fake, { baseRepoId: 56 })).rejects.toBeInstanceOf(
+    createFakeCommandRunner([page(1)]);
+    await expect(list({ baseRepoId: 56 })).rejects.toBeInstanceOf(
       WorkflowRunsIncompleteError,
     );
   });
 
   test("does not throw when the only runs dropped were of another pull request", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ pull_requests: [{ number: 13 }] })] }),
     ]);
-    expect(await list(fake, { prNumber: 12 })).toEqual([]);
+    expect(await list({ prNumber: 12 })).toEqual([]);
   });
 
   test("does not throw when the only runs dropped were of another event", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ event: "schedule" })] }),
     ]);
-    expect(await list(fake)).toEqual([]);
+    expect(await list()).toEqual([]);
   });
 
   test("counts a dropped run when it decides the page is full", async () => {
@@ -7606,123 +7511,113 @@ describe("listPrHeadWorkflowRuns", () => {
       }),
       page(0),
     ]);
-    await list(fake);
+    await list();
     expect(fake.calls).toHaveLength(2);
   });
 
   test("adopts a run whose pull_requests is empty", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ pull_requests: [] })] }),
     ]);
-    expect(await list(fake, { baseRepoId: 55, prNumber: 12 })).toHaveLength(1);
+    expect(await list({ baseRepoId: 55, prNumber: 12 })).toHaveLength(1);
   });
 
   test("drops a run whose pull_requests lacks the pull request", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ pull_requests: [{ number: 13 }] })] }),
     ]);
-    expect(await list(fake, { baseRepoId: 55, prNumber: 12 })).toEqual([]);
+    expect(await list({ baseRepoId: 55, prNumber: 12 })).toEqual([]);
   });
 
   test("reports how many runs of another pull request were dropped", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ pull_requests: [{ number: 13 }] })] }),
     ]);
-    expect(
-      (await listAll(fake, { prNumber: 12 })).droppedOtherPullRequest,
-    ).toBe(1);
+    expect((await listAll({ prNumber: 12 })).droppedOtherPullRequest).toBe(1);
   });
 
   test("does not check pull_requests when no pull request number is given", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ pull_requests: [{ number: 13 }] })] }),
     ]);
-    expect(await list(fake, { baseRepoId: 55 })).toHaveLength(1);
+    expect(await list({ baseRepoId: 55 })).toHaveLength(1);
   });
 
   test("throws when the run id is not a positive safe integer", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({ workflow_runs: [rawRun({ id: 0 })] }),
-    ]);
-    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+    createFakeCommandRunner([ghApiOk({ workflow_runs: [rawRun({ id: 0 })] })]);
+    await expect(list()).rejects.toThrow("unexpected response shape");
   });
 
   test("throws when the run id is beyond the safe integer range", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ id: 2 ** 60 })] }),
     ]);
-    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+    await expect(list()).rejects.toThrow("unexpected response shape");
   });
 
   test("leaves workflowId out when the run has no workflow_id", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ workflow_id: undefined })] }),
     ]);
-    expect((await list(fake))[0]?.workflowId).toBeUndefined();
+    expect((await list())[0]?.workflowId).toBeUndefined();
   });
 
   test("throws when workflow_id is not a positive safe integer", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ workflow_id: -1 })] }),
     ]);
-    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+    await expect(list()).rejects.toThrow("unexpected response shape");
   });
 
   test("throws when pull_requests is not an array", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ workflow_runs: [rawRun({ pull_requests: "none" })] }),
     ]);
-    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+    await expect(list()).rejects.toThrow("unexpected response shape");
   });
 
   test("reads the next page when a page is full", async () => {
-    const fake = createFakeCommandRunner([page(100), page(5, 1000)]);
-    expect(await list(fake)).toHaveLength(105);
+    createFakeCommandRunner([page(100), page(5, 1000)]);
+    expect(await list()).toHaveLength(105);
   });
 
   test("throws a WorkflowRunsIncompleteError when three pages are all full", async () => {
-    const fake = createFakeCommandRunner([
-      page(100),
-      page(100, 1000),
-      page(100, 2000),
-    ]);
-    await expect(list(fake)).rejects.toBeInstanceOf(
-      WorkflowRunsIncompleteError,
-    );
+    createFakeCommandRunner([page(100), page(100, 1000), page(100, 2000)]);
+    await expect(list()).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
   });
 
   test("returns an empty list when the sha has no run", async () => {
-    const fake = createFakeCommandRunner([page(0)]);
-    expect(await list(fake)).toEqual([]);
+    createFakeCommandRunner([page(0)]);
+    expect(await list()).toEqual([]);
   });
 
   test("rejects a short sha before calling the API", async () => {
-    const fake = createFakeCommandRunner([]);
+    createFakeCommandRunner([]);
     await expect(
-      listPrHeadWorkflowRuns(client(fake), "acme", "widgets", "abc1234", REF, {
+      listPrHeadWorkflowRuns(client(), "acme", "widgets", "abc1234", REF, {
         baseRepoId: 55,
       }),
     ).rejects.toThrow("invalid commit sha");
   });
 
   test("rejects a branch name that git would take as an option", async () => {
-    const fake = createFakeCommandRunner([]);
+    createFakeCommandRunner([]);
     await expect(
-      listPrHeadWorkflowRuns(client(fake), "acme", "widgets", SHA, "-x", {
+      listPrHeadWorkflowRuns(client(), "acme", "widgets", SHA, "-x", {
         baseRepoId: 55,
       }),
     ).rejects.toThrow("invalid branch name");
   });
 
   test("surfaces a permission error with its status", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ok(ghApiStdout(403, { message: "Resource not accessible" })),
     ]);
-    await expect(list(fake)).rejects.toMatchObject({ status: 403 });
+    await expect(list()).rejects.toMatchObject({ status: 403 });
   });
 
   test("does not change what listWorkflowRuns returns", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           {
@@ -7739,12 +7634,7 @@ describe("listPrHeadWorkflowRuns", () => {
         ],
       }),
     ]);
-    const runs = await listWorkflowRuns(
-      client(fake),
-      "acme",
-      "widgets",
-      "main",
-    );
+    const runs = await listWorkflowRuns(client(), "acme", "widgets", "main");
     expect(Object.keys(runs[0] ?? {}).sort()).toEqual([
       "conclusion",
       "createdAt",
@@ -9505,13 +9395,6 @@ describe("GitHubHttpError details for a failure without a response", () => {
     expect(error?.timedOut).toBe(false);
   });
 
-  test("keeps the status of a refused token", async () => {
-    const error = await failureOf(
-      ok(ghApiStdout(401, { message: "Bad credentials" })),
-    );
-    expect(error?.status).toBe(401);
-  });
-
   test("is marked as timed out when the request ran past the deadline", async () => {
     const error = await failureOf(timeout());
     expect(error?.timedOut).toBe(true);
@@ -9520,5 +9403,27 @@ describe("GitHubHttpError details for a failure without a response", () => {
   test("does not carry a timeout for a plain HTTP error", async () => {
     const error = await failureOf(ok(ghApiStdout(502, { message: "Bad" })));
     expect(error?.timedOut).toBe(false);
+  });
+});
+
+describe("GitHubHttpError details for a refused token", () => {
+  test("keeps the status 401", async () => {
+    createFakeCommandRunner([
+      ok(ghApiStdout(401, { message: "Bad credentials" })),
+    ]);
+    const response = await callGhApi(
+      { ghToken: "tok" },
+      "repos/acme/widgets/pulls/1/reviews",
+      { method: "POST", body: {} },
+    );
+    const error = (() => {
+      try {
+        ensureSuccess(response, "POST pr review");
+      } catch (err) {
+        return err;
+      }
+      return null;
+    })();
+    expect(error instanceof GitHubHttpError ? error.status : null).toBe(401);
   });
 });

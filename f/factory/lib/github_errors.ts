@@ -67,6 +67,22 @@ function rateLimitDetail(
 }
 
 /**
+ * GitHubへの要求を組み立てられなかった失敗。本文をJSONにできないときと、ヘッダーの値(トークン)が不正なときに投げる。
+ * 要求は送っていないことが確かで、待っても直らないので、応答の無い通信の失敗(ステータス0)とは分ける。
+ * 文には理由の種類だけを載せ、トークンも本文も載せない。
+ */
+export class GitHubRequestError extends Error {
+  constructor(reason: "body_not_json" | "invalid_header") {
+    super(
+      reason === "body_not_json"
+        ? "GitHub request could not be built: the body cannot be turned into JSON"
+        : "GitHub request could not be built: a header value is not allowed",
+    );
+    this.name = "GitHubRequestError";
+  }
+}
+
+/**
  * 2xx以外の応答による失敗。`status`が0のときは応答が返らなかった(通信断やtimeout)。
  * 呼び出し側が、要求が効いたかを状態から判断するために使う(`claimIssue`を参照)。
  * トークンが拒まれた失敗は、`status`が401になる。

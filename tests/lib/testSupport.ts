@@ -8,7 +8,10 @@ import type {
   CommandRunner,
   CommandRunOptions,
 } from "../../f/factory/lib/workspace.ts";
-import { GITHUB_FETCH_HANDLER_KEY } from "../preload.ts";
+import {
+  GITHUB_FETCH_EXHAUSTED_KEY,
+  GITHUB_FETCH_HANDLER_KEY,
+} from "../preload.ts";
 
 /** `fetch`で送ったGitHubのAPIへの要求。偽のrunnerが記録する。 */
 export type FakeRequest = {
@@ -149,7 +152,16 @@ export function createFakeCommandRunner(
   const handleFetch: GitHubFetchHandler = async (url, init) => {
     const call = fetchCall(url, init);
     calls.push(call);
-    return responseFromGhOutput(next(call.argv.join(" ")));
+    const label = call.argv.join(" ");
+    // 応答が尽きた後の要求は、通信層が応答の無い失敗として飲み込むので、記録してテストの後で失敗にする。
+    if (index >= responses.length) {
+      Reflect.set(
+        globalThis,
+        GITHUB_FETCH_EXHAUSTED_KEY,
+        `createFakeCommandRunner: no canned response for call #${String(index + 1)} (${label})`,
+      );
+    }
+    return responseFromGhOutput(next(label));
   };
   setGitHubFetchHandler(handleFetch);
   return { run, calls };

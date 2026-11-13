@@ -12,11 +12,8 @@ async function rejectionOf(url: string): Promise<string> {
   return error instanceof Error ? error.message : "resolved";
 }
 
-/** 呼べば例外を投げる`run`だけを持つ依頼の手段。依存の組み立てのテストが渡すものと同じ形にする。 */
-const RUN_THROWS_CLIENT = {
-  run: async (): Promise<never> => {
-    throw new Error("the builder must not call GitHub");
-  },
+/** 偽の応答を置かずに使うクライアント。依存の組み立てのテストが渡すものと同じ形にする。 */
+const NO_FAKE_CLIENT = {
   ghToken: "token",
   sleep: async (): Promise<void> => {},
 };
@@ -51,12 +48,12 @@ describe("the fetch of the tests", () => {
     expect(await response.json()).toEqual({ ok: true });
   });
 
-  // `run`が例外を投げる依頼の手段でも、GETは`fetch`で送られ、偽の応答が無ければ拒まれて失敗する。
-  // 依存の組み立てのテストは、これでGETも「GitHubを呼ばない」ことを確かめる。
+  // GitHubのAPIへの要求は`fetch`で送られ、偽の応答が無ければ拒まれて失敗する。
+  // 依存の組み立てのテストは、これで「GitHubを呼ばない」ことを確かめる。
   // 本物へ届けば偽のトークンは401になるので、ステータス0は本物へ送っていないことも示す。
-  test("fails a GET of a client whose run throws when no fake answers", async () => {
+  test("fails a request of a client when no fake answers", async () => {
     expect(
-      await failedStatusOf(getDefaultBranch(RUN_THROWS_CLIENT, "o", "r")),
+      await failedStatusOf(getDefaultBranch(NO_FAKE_CLIENT, "o", "r")),
     ).toBe(0);
   });
 

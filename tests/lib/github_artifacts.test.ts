@@ -22,20 +22,18 @@ const rawArtifact = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const client = (_fake: ReturnType<typeof createFakeCommandRunner>) => ({
+const client = () => ({
   ghToken: "tok",
   sleep: async () => {},
 });
 
 describe("listWorkflowRunArtifacts", () => {
-  const list = (
-    fake: ReturnType<typeof createFakeCommandRunner>,
-    name?: string,
-  ) => listWorkflowRunArtifacts(client(fake), "acme", "widgets", 555, name);
+  const list = (name?: string) =>
+    listWorkflowRunArtifacts(client(), "acme", "widgets", 555, name);
 
   test("asks for the artifacts of that run", async () => {
     const fake = createFakeCommandRunner([ghApiOk({ artifacts: [] })]);
-    await list(fake);
+    await list();
     expect(fake.calls[0]?.argv).toContain(
       "repos/acme/widgets/actions/runs/555/artifacts?per_page=100",
     );
@@ -43,17 +41,15 @@ describe("listWorkflowRunArtifacts", () => {
 
   test("filters by name when given", async () => {
     const fake = createFakeCommandRunner([ghApiOk({ artifacts: [] })]);
-    await list(fake, "metadata-patch");
+    await list("metadata-patch");
     expect(fake.calls[0]?.argv).toContain(
       "repos/acme/widgets/actions/runs/555/artifacts?per_page=100&name=metadata-patch",
     );
   });
 
   test("returns the artifacts with the fields to check", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({ artifacts: [rawArtifact()] }),
-    ]);
-    expect(await list(fake)).toEqual([
+    createFakeCommandRunner([ghApiOk({ artifacts: [rawArtifact()] })]);
+    expect(await list()).toEqual([
       {
         id: 9001,
         name: "metadata-patch",
@@ -68,14 +64,14 @@ describe("listWorkflowRunArtifacts", () => {
   });
 
   test("returns null for fields that GitHub leaves out", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         artifacts: [
           rawArtifact({ digest: undefined, workflow_run: undefined }),
         ],
       }),
     ]);
-    const [artifact] = await list(fake);
+    const [artifact] = await list();
     expect([artifact?.digest, artifact?.runId, artifact?.headSha]).toEqual([
       null,
       null,
@@ -84,30 +80,30 @@ describe("listWorkflowRunArtifacts", () => {
   });
 
   test("rejects an artifact of another run", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         artifacts: [rawArtifact({ workflow_run: { id: 1, head_sha: SHA } })],
       }),
     ]);
-    await expect(list(fake)).rejects.toBeInstanceOf(GitHubResponseError);
+    await expect(list()).rejects.toBeInstanceOf(GitHubResponseError);
   });
 
   test("rejects a response of an unexpected shape", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ artifacts: "no" })]);
-    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+    createFakeCommandRunner([ghApiOk({ artifacts: "no" })]);
+    await expect(list()).rejects.toThrow("unexpected response shape");
   });
 
   test("rejects an artifact with a negative size", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ artifacts: [rawArtifact({ size_in_bytes: -1 })] }),
     ]);
-    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+    await expect(list()).rejects.toThrow("unexpected response shape");
   });
 
   test("rejects a run id that is not a positive integer", async () => {
-    const fake = createFakeCommandRunner([]);
+    createFakeCommandRunner([]);
     await expect(
-      listWorkflowRunArtifacts(client(fake), "acme", "widgets", 0),
+      listWorkflowRunArtifacts(client(), "acme", "widgets", 0),
     ).rejects.toThrow("invalid run id");
   });
 });

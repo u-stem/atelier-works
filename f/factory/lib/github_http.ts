@@ -11,6 +11,7 @@
 import {
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GitHubRateLimitError,
+  GitHubRequestError,
   RATE_LIMIT_HINT_TEXT_LIMIT,
   SECONDARY_RATE_LIMIT_PHRASE,
 } from "./github_errors.ts";
@@ -29,8 +30,8 @@ export const GITHUB_API_VERSION = "2022-11-28";
 /** 要求に付けるUser-Agent。 */
 export const GITHUB_USER_AGENT = "atelier-works-factory";
 
-/** GET以外の要求の`Time-Zone`ヘッダーに付ける時間帯。 */
-const GITHUB_WRITE_TIME_ZONE = "UTC";
+/** `Time-Zone`ヘッダーに付ける時間帯。書き込みに限らず、GET以外のすべての要求(読み取りのGraphQLのPOSTを含む)に付ける。 */
+const NON_GET_TIME_ZONE = "UTC";
 
 /**
  * 一時的な失敗で再試行する前の待機(ミリ秒)の既定値。
@@ -357,7 +358,10 @@ export function rateLimitError(
 // パスの検査
 // ---------------------------------------------------------------------------
 
-/** endpointから、ホストと先頭の`/`を落とす。`gh`は絶対URLと先頭の`/`も受け付けるため、比べる前にそろえる。 */
+/**
+ * endpointから、ホストと先頭の`/`を落とす。
+ * リダイレクト先の`pathname`は`/`で始まり、検索APIの拒否はパスの形の検査より先に呼ぶので、比べる前にそろえる。
+ */
 function withoutHost(endpoint: string): string {
   return endpoint.replace(/^https?:\/\/[^/]+\//i, "").replace(/^\/+/, "");
 }
@@ -437,7 +441,10 @@ export function assertGitHubApiPath(path: string): void {
 // ---------------------------------------------------------------------------
 
 /** 同じ要求をもう一度送っても、GitHub上の状態が1回目の成否に左右されないか。省略するとGETだけが該当する。 */
-function isIdempotent(request: RetryRequest): boolean {
+function isIdempotent(request: {
+  readonly method?: GitHubMethod;
+  readonly idempotent?: boolean;
+}): boolean {
   return (
     request.idempotent ??
     (request.method === undefined || request.method === "GET")
@@ -636,7 +643,7 @@ function requestHeaders(
     "X-GitHub-Api-Version": GITHUB_API_VERSION,
     "User-Agent": GITHUB_USER_AGENT,
     ...((request.method ?? "GET") !== "GET"
-      ? { "Time-Zone": GITHUB_WRITE_TIME_ZONE }
+      ? { "Time-Zone": NON_GET_TIME_ZONE }
       : {}),
     ...(request.body !== undefined
       ? { "Content-Type": "application/json" }
@@ -772,7 +779,8 @@ function isJsonText(text: string): boolean {
 /**
  * 端末の制御列を含む本文を、本文が欠けたものとして扱うか。
  * `allowEscapeSequences`を指定しない要求で、JSONでない本文がESCかCSI(U+009B)を含むときに真になる。
- * `gh`が、制御列を含む本文を出さずに拒んでいた挙動に合わせる。読み手が制御列を見ずに使う本文(ファイルの内容)を守るため。
+ * 制御列を受け取ると指定しない要求では、本文を空にして欠けたもの(`incomplete`)にし、呼び出し側が失敗にする。
+ * 読み手が制御列を見ずに使う本文(ファイルの内容)に、制御列を通さないためである。
  */
 function refusesEscapeSequences(request: GitHubRequest, text: string): boolean {
   return (
@@ -782,8 +790,49 @@ function refusesEscapeSequences(request: GitHubRequest, text: string): boolean {
   );
 }
 
+/** 要求の本文をJSONにする。JSONにできないときは、送らずに`GitHubRequestError`を投げる。 */
+function jsonBody(body: unknown): string {
+  let text: string | undefined;
+  try {
+    text = JSON.stringify(body);
+  } catch {
+    throw new GitHubRequestError("body_not_json");
+  }
+  if (typeof text !== "string") throw new GitHubRequestError("body_not_json");
+  return text;
+}
+
 /**
- * 1回の要求を、同じoriginへのリダイレクトを辿りながら送る。例外は投げない。
+ * `fetch`に渡す要求を組み立てる。組み立てられないときは`GitHubRequestError`を投げる。
+ * ヘッダーは`Headers`で先に検査し、改行などを含む値(不正なトークン)を、送る前に断る。
+ * 冪等でない要求には`keepalive: false`を付け、使い回した接続を使わない。
+ * 使い回した接続が切れていると、届いたか分からない失敗になり、冪等でない要求は送り直せないためである。
+ */
+function buildInit(
+  client: GitHubHttpClient,
+  request: GitHubRequest,
+  signal: AbortSignal,
+): RequestInit {
+  const headers = requestHeaders(client, request);
+  try {
+    new Headers(headers);
+  } catch {
+    // 例外の文はヘッダーの値を含みうるので、載せない。
+    throw new GitHubRequestError("invalid_header");
+  }
+  return {
+    method: request.method ?? "GET",
+    headers,
+    ...(request.body !== undefined ? { body: jsonBody(request.body) } : {}),
+    ...(isIdempotent(request) ? {} : { keepalive: false }),
+    redirect: "manual",
+    signal,
+  };
+}
+
+/**
+ * 1回の要求を、同じoriginへのリダイレクトを辿りながら送る。
+ * 要求を組み立てられないときだけ`GitHubRequestError`を投げ、通信の失敗は応答の無い結果として返す。
  * `signal`は締め切りで、省略すると`timeoutMs`(既定は`GITHUB_HTTP_TIMEOUT_MS`)から作る。
  */
 async function fetchAttempt(
@@ -797,6 +846,8 @@ async function fetchAttempt(
   // 辿るのはGETだけで、`redirect: "never"`を指定したGETも辿らない。
   const follow = method === "GET" && request.redirect !== "never";
   const now = client.now ?? (() => new Date());
+  // 組み立ての失敗は送る前に分かるので、`fetch`の呼び出しを包む`try`の外で組み立てる。
+  const init = buildInit(client, request, signal);
   let url = `${GITHUB_API_ORIGIN}/${request.path}`;
   for (let hop = 0; ; hop += 1) {
     // トークンを載せる前に、送り先のoriginを毎回確かめる。リダイレクトの各回も同じ。
@@ -805,15 +856,7 @@ async function fetchAttempt(
     }
     let raw: Response;
     try {
-      raw = await fetch(url, {
-        method,
-        headers: requestHeaders(client, request),
-        ...(request.body !== undefined
-          ? { body: JSON.stringify(request.body) }
-          : {}),
-        redirect: "manual",
-        signal,
-      });
+      raw = await fetch(url, init);
     } catch (err) {
       return noResponse(err);
     }
@@ -861,7 +904,7 @@ async function fetchAttempt(
 }
 
 /**
- * 要求を1回送る。再試行も待ちもしない。パスが使えないときだけ例外を投げ、通信の失敗は応答として返す。
+ * 要求を1回送る。再試行も待ちもしない。パスが使えないときと要求を組み立てられないときだけ例外を投げ、通信の失敗は応答として返す。
  * 送り先は`GITHUB_API_ORIGIN`に固定し、すべての`fetch`に`redirect: "manual"`を付ける。
  * GETは、既定で同じoriginへのリダイレクトを最大3回辿る(`redirect: "never"`で止める)。ほかのメソッドは辿らない。
  * 応答が無いときはステータス0(締め切りなら`timedOut`)、本文が途中で切れたときは`incomplete`を返す。
@@ -992,7 +1035,7 @@ function allowedDownloadUrl(
  * - APIのレート制限は、待たずに`GitHubRateLimitError`を投げる。投げる前に警告のログを1行残す。
  * - 本文は、`bytes`なら`maxBytes`を超えた時点で断り、`text_capped`なら先頭と末尾を残す。
  *   取得先の本文は、制御列を含んでもそのまま返す。読む側が見える形に置き換える。
- * パスが使えないときと、レート制限のときだけ例外を投げる。ほかの失敗は結果の`kind`で返す。
+ * パスが使えないとき、要求を組み立てられないとき、レート制限のときだけ例外を投げる。ほかの失敗は結果の`kind`で返す。
  */
 export async function downloadRedirectTarget(
   client: GitHubHttpClient,

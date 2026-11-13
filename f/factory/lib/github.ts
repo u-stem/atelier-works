@@ -146,6 +146,7 @@ export type GhApiCallOptions = {
  * 冪等でない要求は、要求を送る前の失敗かを見分けられないので、通信断でも送り直さない。
  * レート制限以外のHTTPのエラーのステータスでは例外を投げない。
  * 呼び出し側が`response.status`を確かめる(`ensureSuccess`を参照)。
+ * 例外として、冪等でない要求の2xxの本文が欠けたときは、`GitHubWriteBodyCutError`を投げる。
  */
 export async function callGhApi(
   client: GhClient,
@@ -155,12 +156,13 @@ export async function callGhApi(
   const policy: RateLimitPolicy = NO_WAIT_CLIENTS.has(client)
     ? { mode: "throw" }
     : { mode: "wait_once" };
+  const method = options.method ?? "GET";
   // 宛先とパスの形の検査(`assertGitHubApiPath`)は、トークンを載せる通信層が行う。
-  return requestGitHub(
+  const response = await requestGitHub(
     httpClientOf(client),
     {
       path: endpoint,
-      method: options.method ?? "GET",
+      method,
       ...(options.body !== undefined ? { body: options.body } : {}),
       ...(options.acceptHeader !== undefined
         ? { accept: options.acceptHeader }
@@ -177,6 +179,16 @@ export async function callGhApi(
     },
     policy,
   );
+  const idempotent = options.idempotent ?? method === "GET";
+  if (
+    !idempotent &&
+    response.incomplete === true &&
+    response.status >= 200 &&
+    response.status < 300
+  ) {
+    throw new GitHubWriteBodyCutError(method, endpoint);
+  }
+  return response;
 }
 
 /**
@@ -207,6 +219,24 @@ export class GitHubResponseError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "GitHubResponseError";
+  }
+}
+
+/**
+ * 冪等でない要求(書き込みとGraphQLのmutation)で、2xxのステータスの後に本文が欠けたときの例外。
+ * 変更は効いた後で、応答の本文だけを失っている。
+ * 待って再開すると二重に効くので、通信の一時的な失敗(ステータス0の`GitHubHttpError`)にはしない。
+ * 効いたかを状態から確かめられる呼び出し側(`claimIssue`のラベルの削除)は、読み直して判断する。
+ * 文には、メソッドとクエリを落としたendpointだけを載せる。
+ */
+export class GitHubWriteBodyCutError extends GitHubResponseError {
+  constructor(method: string, endpoint: string) {
+    super(
+      maskSecrets(
+        `${method} ${endpoint.replace(/[?#].*$/s, "")}: the body was cut after a 2xx status, so the change may have taken effect`,
+      ),
+    );
+    this.name = "GitHubWriteBodyCutError";
   }
 }
 
@@ -918,10 +948,12 @@ const FETCH_ISSUE_TIMEOUT_MS = 10_000;
 
 /**
  * `GET /repos/.../issues/<番号>`を読み、JSONのオブジェクトを返す。
- * `gh`を起動できないworker(Console用のworker)から使うためのもので、送り方は`github_http.ts`の`requestGitHub`に任せる。
+ * Console用のworkerから、締め切りを短くし、リダイレクトとレート制限の扱いを変えて使う。
+ * 送り方は`github_http.ts`の`requestGitHub`に任せる。
  * 宛先は`api.github.com`に固定され、資格情報は`Authorization`ヘッダだけに載る。
  * リダイレクトは辿らない(`redirect: "never"`)。Consoleの再開が3xxを「移された」と見分け、確かめられないものとして扱うためである。
- * 10秒の締め切りを付ける。一時的な失敗(応答の無い通信断と5xx)は1回だけ再試行し、レート制限は待たずに`GitHubRateLimitError`を投げる。
+ * 1回の要求に10秒の締め切りを付ける。一時的な失敗(応答の無い通信断と5xx)は1回だけ再試行し、レート制限は待たずに`GitHubRateLimitError`を投げる。
+ * 2xxで本文が欠けたときの1回の取り直しも数えると、最悪は要求4回と待ち3回の約46秒になる。
  * 応答が2xxでなければ`GitHubHttpError`を(応答が無ければステータス0)、形が違えば`Error`を投げる。
  * エラーの文に、資格情報とIssueの内容は含めない。
  */
@@ -1334,10 +1366,14 @@ export class ClaimOwnershipUnknownError extends Error {
   }
 }
 
-/** ラベルの削除が実行されたか判断できない失敗か(応答が無い、またはサーバーエラー)。 */
+/**
+ * ラベルの削除が実行されたか判断できない失敗か(応答が無い、サーバーエラー、2xxの後で本文が欠けた)。
+ * 本文が欠けた削除は効いているはずだが、ほかの失敗と同じく読み直しで確かめる。
+ */
 function isUndeterminedRemoval(err: unknown): boolean {
   return (
-    err instanceof GitHubHttpError && (err.status === 0 || err.status >= 500)
+    err instanceof GitHubWriteBodyCutError ||
+    (err instanceof GitHubHttpError && (err.status === 0 || err.status >= 500))
   );
 }
 

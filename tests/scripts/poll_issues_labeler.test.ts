@@ -13,7 +13,6 @@ import {
 import { buildIssueCandidates } from "../../f/factory/poll_issues.ts";
 import {
   createFakeCommandRunner,
-  fail,
   ghApiStdout,
   labelEventNode,
   labelEventsOk,
@@ -156,7 +155,9 @@ describe("issue claim by the trigger label's labeler", () => {
   });
 
   test("does not claim an issue whose events could not be fetched", async () => {
-    const { action } = await actionFor([fail("gh: Not Found (HTTP 404)")]);
+    const { action } = await actionFor([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
     expect(action).toBeUndefined();
   });
 
@@ -315,7 +316,7 @@ describe("confirmLabeler", () => {
   });
 
   test("throws when the events cannot be fetched", async () => {
-    createFakeCommandRunner([fail("gh: boom")]);
+    createFakeCommandRunner([ok(ghApiStdout(404, { message: "Not Found" }))]);
     const result = confirmLabeler(
       { ghToken: "tok" },
       TARGET,

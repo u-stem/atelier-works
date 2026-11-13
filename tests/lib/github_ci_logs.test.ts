@@ -25,7 +25,7 @@ afterEach(restoreGlobalFetch);
 
 const SHA = "a".repeat(40);
 
-const client = (_fake: ReturnType<typeof createFakeCommandRunner>) => ({
+const client = () => ({
   ghToken: "tok",
   sleep: async () => {},
 });
@@ -51,23 +51,20 @@ const rawJob = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("listWorkflowRunJobs", () => {
-  const list = (
-    fake: ReturnType<typeof createFakeCommandRunner>,
-    runId = 555,
-    headSha = SHA,
-  ) => listWorkflowRunJobs(client(fake), "acme", "widgets", runId, headSha);
+  const list = (runId = 555, headSha = SHA) =>
+    listWorkflowRunJobs(client(), "acme", "widgets", runId, headSha);
 
   test("asks for the latest attempt jobs of that run", async () => {
     const fake = createFakeCommandRunner([ghApiOk({ jobs: [rawJob()] })]);
-    await list(fake);
+    await list();
     expect(fake.calls[0]?.argv).toContain(
       "repos/acme/widgets/actions/runs/555/jobs?filter=latest&per_page=100",
     );
   });
 
   test("returns the jobs with their steps parsed", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ jobs: [rawJob()] })]);
-    expect(await list(fake)).toEqual([
+    createFakeCommandRunner([ghApiOk({ jobs: [rawJob()] })]);
+    expect(await list()).toEqual([
       {
         id: 9001,
         runId: 555,
@@ -84,106 +81,98 @@ describe("listWorkflowRunJobs", () => {
   });
 
   test("treats a missing steps array as no steps", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ jobs: [rawJob({ steps: undefined })] }),
     ]);
-    expect((await list(fake))[0]?.steps).toEqual([]);
+    expect((await list())[0]?.steps).toEqual([]);
   });
 
   test("rejects a non-positive run id before calling the API", async () => {
-    const fake = createFakeCommandRunner([]);
-    await expect(list(fake, 0)).rejects.toThrow("invalid run id");
+    createFakeCommandRunner([]);
+    await expect(list(0)).rejects.toThrow("invalid run id");
   });
 
   test("rejects a fractional run id before calling the API", async () => {
-    const fake = createFakeCommandRunner([]);
-    await expect(list(fake, 1.5)).rejects.toThrow("invalid run id");
+    createFakeCommandRunner([]);
+    await expect(list(1.5)).rejects.toThrow("invalid run id");
   });
 
   test("rejects an unsafe-integer run id before calling the API", async () => {
-    const fake = createFakeCommandRunner([]);
-    await expect(list(fake, 2 ** 60)).rejects.toThrow("invalid run id");
+    createFakeCommandRunner([]);
+    await expect(list(2 ** 60)).rejects.toThrow("invalid run id");
   });
 
   test("rejects a short head sha before calling the API", async () => {
-    const fake = createFakeCommandRunner([]);
-    await expect(list(fake, 555, "abc1234")).rejects.toThrow(
-      "invalid commit sha",
-    );
+    createFakeCommandRunner([]);
+    await expect(list(555, "abc1234")).rejects.toThrow("invalid commit sha");
   });
 
   test("rejects a job of another run", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({ jobs: [rawJob({ run_id: 556 })] }),
-    ]);
-    await expect(list(fake)).rejects.toThrow("another run");
+    createFakeCommandRunner([ghApiOk({ jobs: [rawJob({ run_id: 556 })] })]);
+    await expect(list()).rejects.toThrow("another run");
   });
 
   test("rejects a job of another commit", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ jobs: [rawJob({ head_sha: "b".repeat(40) })] }),
     ]);
-    await expect(list(fake)).rejects.toThrow("another commit");
+    await expect(list()).rejects.toThrow("another commit");
   });
 
   test("rejects a job whose id is not a positive safe integer", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({ jobs: [rawJob({ id: -3 })] }),
-    ]);
-    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+    createFakeCommandRunner([ghApiOk({ jobs: [rawJob({ id: -3 })] })]);
+    await expect(list()).rejects.toThrow("unexpected response shape");
   });
 
   test("rejects a job whose name is not a string", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({ jobs: [rawJob({ name: 5 })] }),
-    ]);
-    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+    createFakeCommandRunner([ghApiOk({ jobs: [rawJob({ name: 5 })] })]);
+    await expect(list()).rejects.toThrow("unexpected response shape");
   });
 
   test("rejects a step whose number is not an integer", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({
         jobs: [
           rawJob({ steps: [{ name: "x", conclusion: null, number: "1" }] }),
         ],
       }),
     ]);
-    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+    await expect(list()).rejects.toThrow("unexpected response shape");
   });
 
   test("rejects a response without a jobs array", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ total_count: 0 })]);
-    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+    createFakeCommandRunner([ghApiOk({ total_count: 0 })]);
+    await expect(list()).rejects.toThrow("unexpected response shape");
   });
 
   test("surfaces a permission error with its status", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ok(ghApiStdout(403, { message: "Resource not accessible" })),
     ]);
-    await expect(list(fake)).rejects.toMatchObject({ status: 403 });
+    await expect(list()).rejects.toMatchObject({ status: 403 });
   });
 
   test("follows the next link to the following page", async () => {
     const next = {
       link: '<https://api.github.com/repos/acme/widgets/actions/runs/555/jobs?page=2>; rel="next"',
     };
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({ jobs: [rawJob({ id: 1 })] }, next),
       ghApiOk({ jobs: [rawJob({ id: 2 })] }),
     ]);
-    expect((await list(fake)).map((job) => job.id)).toEqual([1, 2]);
+    expect((await list()).map((job) => job.id)).toEqual([1, 2]);
   });
 
   test("throws a pagination limit error past the page cap", async () => {
     const next = {
       link: '<https://api.github.com/repos/acme/widgets/actions/runs/555/jobs?page=2>; rel="next"',
     };
-    const fake = createFakeCommandRunner(
+    createFakeCommandRunner(
       Array.from({ length: WORKFLOW_RUN_JOBS_MAX_PAGES + 1 }, (_, i) =>
         ghApiOk({ jobs: [rawJob({ id: i + 1 })] }, next),
       ),
     );
-    await expect(list(fake)).rejects.toBeInstanceOf(GitHubPaginationLimitError);
+    await expect(list()).rejects.toBeInstanceOf(GitHubPaginationLimitError);
   });
 });
 
