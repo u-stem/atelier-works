@@ -120,8 +120,6 @@ const ERROR_TEXT_HOMES: Readonly<Record<string, string>> = {
 /** 日本時間とUTCの差を定義してよいファイルと、その理由。Consoleの`jst.ts`は`f/factory/lib/jst.ts`を読み直す。 */
 const JST_OFFSET_HOMES: Readonly<Record<string, string>> = {
   "f/factory/lib/jst.ts": "the shared leaf module",
-  "f/factory/lib/console_holds_support.ts":
-    "the console worker scripts reach only protected paths",
 };
 
 describe("isRecord", () => {

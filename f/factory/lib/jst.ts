@@ -58,6 +58,11 @@ export function formatJstMinute(epochMs: number): string | null {
   return parts === null ? null : `${parts.date} ${parts.clock}`;
 }
 
+/** 時刻を、日本時間の`YYYY-MM-DD HH:mm:ss`にする。日付として読めなければ`null`を返す。 */
+export function formatJstSecond(_epochMs: number): string | null {
+  return "";
+}
+
 /** 時刻を、日本時間の`HH:mm`にする。秒は切り捨てる。日付として読めなければ`null`を返す。 */
 export function formatJstClock(epochMs: number): string | null {
   return jstParts(epochMs)?.clock ?? null;

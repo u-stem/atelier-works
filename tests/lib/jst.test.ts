@@ -3,6 +3,7 @@ import {
   formatJstClock,
   formatJstDate,
   formatJstMinute,
+  formatJstSecond,
   INVALID_JST_CLOCK,
   INVALID_JST_DATE,
   INVALID_JST_MINUTE,
@@ -67,6 +68,16 @@ describe("formatJstMinute", () => {
 
   test("returns null for NaN", () => {
     expect(formatJstMinute(Number.NaN)).toBeNull();
+  });
+});
+
+describe("formatJstSecond", () => {
+  test("shows the JST date and time to the second", () => {
+    expect(formatJstSecond(NEW_YEAR)).toBe("2027-01-01 00:04:05");
+  });
+
+  test("returns null for NaN", () => {
+    expect(formatJstSecond(Number.NaN)).toBeNull();
   });
 });
 
