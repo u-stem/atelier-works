@@ -328,6 +328,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 上の`check-idle.ts`が読む`lib/types.ts`も、同じ理由で守らない。
  * 日本時間の部品(`lib/jst.ts`)と`.script.yaml`は守る。`lib/credential_expiry.ts`が資格情報の期限の通知の日付に、
  * `lib/claude.ts`が日次予算の日の境界に使い、どちらも保護パスだからである。
+ * Console用workerの解除のscriptの部品(`lib/console_holds_support.ts`)も、解除の通知の時刻に使う。
+ * このscriptは保護パスだけを読むので、守らないと境界の外のファイルになる。
  * `log.ts`と`types.ts`と違い、日常的に直す部品ではないので、守っても正当な変更をほとんど止めない。
  * `lib/jst.script.lock`は、依存の無いlibのlockと同じ扱いで守らない。
  * 全停止の通知を変数に合わせる`lib/stop_all_notice.ts`と、ランナーの`lib/workspace.ts`は守らない。
