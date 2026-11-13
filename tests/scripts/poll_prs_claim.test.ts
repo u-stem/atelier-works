@@ -13,6 +13,7 @@ import type { Logger } from "../../f/factory/lib/log.ts";
 import type { PrDecision } from "../../f/factory/lib/poll_support.ts";
 import {
   type ClaimNotClaimedDeps,
+  type ClaimPrResult,
   claimPr,
   collectLabelLeftRemoved,
   notifyPrLabelsLeftRemoved,
@@ -31,7 +32,6 @@ import {
 import { describeReason } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
   createFakeCommandRunner,
-  fail,
   ghApiOk,
   ghApiStdout,
   ok,
@@ -93,7 +93,13 @@ function labelPost<T extends { argv: readonly string[] }>(
 }
 
 describe("claimPr when the confirmation read fails", () => {
-  const args = ["octo-owner", "atelier-works", 7, "factory:review"] as const;
+  const args = [
+    "octo-owner",
+    "atelier-works",
+    7,
+    "factory:review",
+    "factory-bot",
+  ] as const;
 
   test("claims when a later read attempt succeeds", async () => {
     createFakeCommandRunner([ghApiOk({}), readFails, ghApiOk(fakeIssue([]))]);
@@ -341,6 +347,7 @@ describe("claimPr", () => {
       "atelier-works",
       7,
       "factory:review",
+      "factory-bot",
     );
     expect(result).toEqual({ claimed: true });
   });
@@ -356,6 +363,7 @@ describe("claimPr", () => {
       "atelier-works",
       7,
       "factory:review",
+      "factory-bot",
     );
     const assigneeCall = calls.find((call) =>
       call.argv.some((arg) => arg.includes("assignees")),
@@ -374,6 +382,7 @@ describe("claimPr", () => {
       "atelier-works",
       7,
       "factory:review",
+      "factory-bot",
     );
     expect(calls[0]?.argv.join(" ")).toContain("DELETE");
     expect(decodeURIComponent(calls[0]?.argv.join(" ") ?? "")).toContain(
@@ -381,17 +390,33 @@ describe("claimPr", () => {
     );
   });
 
-  // ステータス行の無い結果は、応答の無い失敗(ステータス0)の削除になる。
-  test("reports not claimed when the label removal itself fails", async () => {
-    createFakeCommandRunner([fail("rate limited")]);
+  // 4xxの削除は拒否が確定しているので、ラベルは残る。
+  test("reports not claimed when the label removal is rejected", async () => {
+    createFakeCommandRunner([ok(ghApiStdout(422, { message: "nope" }))]);
     const result = await claimPr(
       { ghToken: "token" },
       "octo-owner",
       "atelier-works",
       7,
       "factory:review",
+      "factory-bot",
     );
     expect(result.claimed).toBe(false);
+  });
+
+  test("does not read the issue when the label removal is rejected", async () => {
+    const { calls } = createFakeCommandRunner([
+      ok(ghApiStdout(422, { message: "nope" })),
+    ]);
+    await claimPr(
+      { ghToken: "token" },
+      "octo-owner",
+      "atelier-works",
+      7,
+      "factory:review",
+      "factory-bot",
+    );
+    expect(calls).toHaveLength(1);
   });
 
   test("reports not claimed when the label removal is rate limited", async () => {
@@ -404,6 +429,7 @@ describe("claimPr", () => {
       "atelier-works",
       7,
       "factory:review",
+      "factory-bot",
     );
     expect(result.claimed).toBe(false);
   });
@@ -419,6 +445,7 @@ describe("claimPr", () => {
       "atelier-works",
       7,
       "factory:review",
+      "factory-bot",
     );
     expect(result).toEqual({
       claimed: false,
@@ -437,6 +464,7 @@ describe("claimPr", () => {
       "atelier-works",
       7,
       "factory:review",
+      "factory-bot",
     );
     expect(result).toEqual({
       claimed: false,
@@ -452,6 +480,7 @@ describe("claimPr", () => {
       "atelier-works",
       7,
       "factory:review",
+      "factory-bot",
     );
     expect(result).toEqual({
       claimed: false,
@@ -469,8 +498,189 @@ describe("claimPr", () => {
       "atelier-works",
       7,
       "factory:review",
+      "factory-bot",
     );
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("claimPr when the label removal is undetermined", () => {
+  const args = [
+    "octo-owner",
+    "atelier-works",
+    7,
+    "factory:review",
+    "factory-bot",
+  ] as const;
+  // ステータス行の無い結果は、応答の無い失敗(ステータス0)の削除になる。
+  const noResponse = ok("");
+  const labelAbsent = () => ghApiOk(fakeIssue([]));
+  const labelPresent = () => ghApiOk(fakeIssue(["factory:review"]));
+  const restoredResult: ClaimPrResult = {
+    claimed: false,
+    reason:
+      "could not confirm the claim; restored trigger label factory:review",
+    restored: true,
+  };
+
+  function unlabeled(actor: string) {
+    return {
+      event: "unlabeled",
+      actor: { login: actor },
+      label: { name: "factory:review" },
+      created_at: "2026-10-09T00:00:00Z",
+    };
+  }
+
+  function labeled(actor: string) {
+    return {
+      event: "labeled",
+      actor: { login: actor },
+      label: { name: "factory:review" },
+      created_at: "2026-10-09T00:00:00Z",
+    };
+  }
+
+  test("claims when the label is gone and our login removed it last", async () => {
+    createFakeCommandRunner([
+      noResponse,
+      labelAbsent(),
+      ghApiOk([unlabeled("factory-bot")]),
+    ]);
+    const { client } = recordingClient();
+    expect(await claimPr(client, ...args)).toEqual({ claimed: true });
+  });
+
+  // 2xxの後で本文が切れた削除も、効いたかを読み直しで確かめる。
+  test("claims after a removal whose body was cut after a 2xx status", async () => {
+    const cutRemoval = {
+      stdout: ghApiStdout(200, "[{"),
+      stderr: "",
+      exitCode: 1,
+      timedOut: false,
+    };
+    createFakeCommandRunner([
+      cutRemoval,
+      labelAbsent(),
+      ghApiOk([unlabeled("factory-bot")]),
+    ]);
+    const { client } = recordingClient();
+    expect(await claimPr(client, ...args)).toEqual({ claimed: true });
+  });
+
+  test("leaves the PR to the next poll when the label is still present", async () => {
+    createFakeCommandRunner([noResponse, labelPresent()]);
+    const { client } = recordingClient();
+    expect(await claimPr(client, ...args)).toEqual({
+      claimed: false,
+      reason:
+        "trigger label factory:review removal failed and the label is still present",
+    });
+  });
+
+  test("does not post the label back when the label is still present", async () => {
+    const { calls } = createFakeCommandRunner([noResponse, labelPresent()]);
+    const { client } = recordingClient();
+    await claimPr(client, ...args);
+    expect(labelPost(calls)).toBeUndefined();
+  });
+
+  test("leaves the PR to the next poll after a server error on the removal", async () => {
+    createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+      labelPresent(),
+    ]);
+    const { client } = recordingClient();
+    expect(await claimPr(client, ...args)).toEqual({
+      claimed: false,
+      reason:
+        "trigger label factory:review removal failed and the label is still present",
+    });
+  });
+
+  test("does not claim when another actor removed the label last", async () => {
+    createFakeCommandRunner([
+      noResponse,
+      labelAbsent(),
+      ghApiOk([unlabeled("factory-bot"), unlabeled("alice")]),
+    ]);
+    const { client } = recordingClient();
+    expect(await claimPr(client, ...args)).toEqual({
+      claimed: false,
+      reason: "trigger label factory:review was removed by another actor",
+    });
+  });
+
+  test("puts the label back when no removal follows the latest labeling", async () => {
+    createFakeCommandRunner([
+      noResponse,
+      labelAbsent(),
+      ghApiOk([unlabeled("factory-bot"), labeled("alice")]),
+      ghApiOk([]), // POST: ラベルを付け直す
+    ]);
+    const { client } = recordingClient();
+    expect(await claimPr(client, ...args)).toEqual(restoredResult);
+  });
+
+  test("puts the label back when every issue re-read fails", async () => {
+    createFakeCommandRunner([
+      noResponse,
+      readFails,
+      readFails,
+      readFails,
+      ghApiOk([]),
+    ]);
+    const { client } = recordingClient();
+    expect(await claimPr(client, ...args)).toEqual(restoredResult);
+  });
+
+  test("posts the trigger label back when the ownership is unknown", async () => {
+    const { calls } = createFakeCommandRunner([
+      noResponse,
+      readFails,
+      readFails,
+      readFails,
+      ghApiOk([]),
+    ]);
+    const { client } = recordingClient();
+    await claimPr(client, ...args);
+    expect(labelPost(calls)?.request?.body).toBe(
+      JSON.stringify({ labels: ["factory:review"] }),
+    );
+  });
+
+  test("throws a left-removed error when the issue re-read is rate limited", async () => {
+    createFakeCommandRunner([noResponse, rateLimited]);
+    const { client } = recordingClient();
+    const caught = await claimPr(client, ...args).catch((err: unknown) => err);
+    expect(caught).toBeInstanceOf(PrClaimLabelLeftRemovedError);
+  });
+
+  test("throws a left-removed error when the timeline read is rate limited", async () => {
+    createFakeCommandRunner([noResponse, labelAbsent(), rateLimited]);
+    const { client } = recordingClient();
+    const caught = await claimPr(client, ...args).catch((err: unknown) => err);
+    expect(caught).toBeInstanceOf(PrClaimLabelLeftRemovedError);
+  });
+
+  test("does not post the label back when a re-read is rate limited", async () => {
+    const { calls } = createFakeCommandRunner([noResponse, rateLimited]);
+    const { client } = recordingClient();
+    await claimPr(client, ...args).catch(() => undefined);
+    expect(labelPost(calls)).toBeUndefined();
+  });
+
+  test("throws a left-removed error when putting the label back fails", async () => {
+    createFakeCommandRunner([
+      noResponse,
+      readFails,
+      readFails,
+      readFails,
+      ok(ghApiStdout(422, { message: "nope" })),
+    ]);
+    const { client } = recordingClient();
+    const caught = await claimPr(client, ...args).catch((err: unknown) => err);
+    expect(caught).toBeInstanceOf(PrClaimLabelLeftRemovedError);
   });
 });
 

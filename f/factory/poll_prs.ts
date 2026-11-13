@@ -487,6 +487,7 @@ export async function claimPr(
   repo: string,
   number: number,
   triggerLabel: string,
+  viewer: string,
   log?: Logger,
 ): Promise<ClaimPrResult> {
   let removal: RemoveLabelResult;
@@ -1510,6 +1511,7 @@ export async function main(): Promise<{
           candidate.repo,
           candidate.number,
           label,
+          viewer.login,
           log,
         ),
       recordNotClaimed: recordPrClaimNotClaimed,
