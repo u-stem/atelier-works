@@ -752,6 +752,27 @@ describe("requestGitHub retries", () => {
     expect([response.timedOut, f.sent.length]).toEqual([true, 1]);
   });
 
+  // 本文の切れた5xxは、ステータスで判定する一時的な失敗の再試行だけに任せ、本文の取り直しを重ねない。
+  test("sends a 5xx whose body was cut only twice in all", async () => {
+    const f = fakeFetch([
+      brokenBody(502, new TypeError("cut")),
+      brokenBody(502, new TypeError("cut")),
+      brokenBody(502, new TypeError("cut")),
+      brokenBody(502, new TypeError("cut")),
+    ]);
+    await requestGitHub(client(f.fetch), { path: "repos/o/r" });
+    expect(f.sent.length).toBe(2);
+  });
+
+  test("does not read a 404 again after its body was cut", async () => {
+    const f = fakeFetch([
+      brokenBody(404, new TypeError("cut")),
+      new Response("{}", { status: 404 }),
+    ]);
+    await requestGitHub(client(f.fetch), { path: "repos/o/r" });
+    expect(f.sent.length).toBe(1);
+  });
+
   test("does not read a POST again after an incomplete body", async () => {
     const f = fakeFetch([brokenBody(200, new TypeError("cut"))]);
     const response = await requestGitHub(client(f.fetch), {

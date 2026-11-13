@@ -1868,6 +1868,60 @@ describe("fetchIssueState", () => {
     });
   });
 
+  /** 本文の読み取りの途中で、`error`で失敗する応答を返す`fetch`。 */
+  function cutBodyFetch(error: Error): FetchLike {
+    return async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("{"));
+            controller.error(error);
+          },
+        }),
+        { status: 200 },
+      );
+  }
+
+  test("throws an http error marked as timed out when the deadline cut the body", async () => {
+    const error = await fetchIssueState(
+      cutBodyFetch(new DOMException("timed out", "TimeoutError")),
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      NO_WAIT,
+    ).catch((err: unknown) => err);
+    expect(
+      error instanceof GitHubHttpError ? [error.status, error.timedOut] : null,
+    ).toEqual([200, true]);
+  });
+
+  test("says that the read timed out when the deadline cut the body", async () => {
+    await expect(
+      fetchIssueState(
+        cutBodyFetch(new DOMException("timed out", "TimeoutError")),
+        "tok",
+        "acme",
+        "widgets",
+        5,
+        NO_WAIT,
+      ),
+    ).rejects.toThrow("(timed out)");
+  });
+
+  test("throws an http error that says the body was cut when the connection cut it", async () => {
+    await expect(
+      fetchIssueState(
+        cutBodyFetch(new TypeError("connection cut")),
+        "tok",
+        "acme",
+        "widgets",
+        5,
+        NO_WAIT,
+      ),
+    ).rejects.toThrow("(incomplete body)");
+  });
+
   test("keeps the fetch when the options carry a fetch at run time", async () => {
     const { fetchFn } = fakeFetch(200, { state: "open" });
     const { options, otherCalls } = optionsWithExtras();
