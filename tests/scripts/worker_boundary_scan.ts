@@ -724,7 +724,9 @@ function importProblems(source: string, problems: string[]): void {
  * 引数への受け渡し)は禁じる。名前付きimport、windmill-client以外の外部のimportと深いパスのimport、
  * `fetch`、`require`(変数に入れる形も)、`import.meta`、`Worker`、`globalThis`、CommonJSの`module`と`exports`、
  * `WM_TOKEN`などの名前も禁じる。
- * `require`は`unfollowableImports`と同じ正規表現で数え、この関数だけで許可表の検査が閉じるようにする。
+ * `require`は、骨組みに`unfollowableImports`と同じ正規表現を当てて数える。
+ * 変換後のコードを直接見る`require`の判定は`unfollowableImports`にあり、この関数だけでは閉じない。
+ * Consoleのscriptには、`unfollowableImports`の検査も走る。
  * 文字列とコメントの中の言及は数えない。ただし`WM_TOKEN`などの名前は、文字列でも禁じる。
  * パスをリテラルに固定する呼び出し(`BOUND_PATH_CALLS`)は、その定数以外のパスを禁じる。
  */
