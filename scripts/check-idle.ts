@@ -39,6 +39,7 @@
 
 import { resolve } from "node:path";
 import { isJobId } from "../f/factory/lib/job_ids.ts";
+import { isRecord } from "../f/factory/lib/types.ts";
 
 export type RunningJob = {
   readonly id: string;
@@ -186,10 +187,6 @@ export function runningWorkItemsSql(): string {
     "ORDER BY id",
     ") t",
   ].join(" ");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function stringOrNull(value: unknown): string | null {

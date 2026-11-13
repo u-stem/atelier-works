@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isRecord } from "../../f/factory/lib/types.ts";
 import {
   ARTIFACT_NAME,
   CI_WORKFLOW_FILE,
@@ -13,10 +14,6 @@ import {
 
 const ROOT = join(import.meta.dir, "..", "..");
 const WORKFLOWS_DIR = join(ROOT, ".github", "workflows");
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function readYaml(path: string): Record<string, unknown> {
   const parsed: unknown = Bun.YAML.parse(readFileSync(path, "utf8"));
   if (!isRecord(parsed)) {

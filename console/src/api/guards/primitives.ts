@@ -1,11 +1,9 @@
 // APIの応答を検証する型ガードの部品。値の形が違えば`false`を返し、補正や変換はしない。
 
-export type Guard<T> = (value: unknown) => value is T;
+// 配列でも`null`でもないオブジェクトの判定は、backendと同じ1つの定義を使う。
+export { isRecord } from "../../../../f/factory/lib/types.ts";
 
-/** 配列でも`null`でもないオブジェクト。 */
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export type Guard<T> = (value: unknown) => value is T;
 
 export function isString(value: unknown): value is string {
   return typeof value === "string";

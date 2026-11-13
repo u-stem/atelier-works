@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { isRecord } from "../../f/factory/lib/types.ts";
 
 const ROOT = join(import.meta.dir, "../..");
 const OWNED_DIRS = [".claude/skills/hold", ".claude/skills/pr-body"];
@@ -15,10 +16,6 @@ const FORBIDDEN = new RegExp(
     "superpowers",
   ].join("|"),
 );
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function listFiles(dir: string): string[] {
   const absolute = join(ROOT, dir);

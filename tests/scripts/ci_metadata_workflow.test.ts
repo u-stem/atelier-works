@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isRecord } from "../../f/factory/lib/types.ts";
 
 // `metadata`ジョブが、検査の失敗のときだけ、条件を満たすPRにパッチを出す配線を確かめる。
 // 実際のGitHub Actionsでは動かせないので、ワークフローの定義を静的に確かめる。
@@ -8,10 +9,6 @@ const ROOT = join(import.meta.dir, "..", "..");
 
 // GitHub Actionsの式の開き括弧。テンプレートリテラルの置換と誤検出されないよう、組み立てる。
 const OPEN = "$" + "{{";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function readYaml(file: string): Record<string, unknown> {
   const parsed: unknown = Bun.YAML.parse(

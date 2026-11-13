@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
+import { isRecord } from "../../f/factory/lib/types.ts";
 import {
   allScope,
   type BaseLookup,
@@ -1267,10 +1268,6 @@ describe("import closure of the CI tests", () => {
     expect(missing).toEqual([]);
   });
 });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function recordAt(parent: unknown, key: string): Record<string, unknown> {
   if (!isRecord(parent)) {

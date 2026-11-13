@@ -5,7 +5,7 @@
 
 import { escapeReasonSeparator } from "./log.ts";
 import { matchesForbiddenPath } from "./protected_paths.ts";
-import { parseGitHubRepoUrl } from "./types.ts";
+import { isRecord, parseGitHubRepoUrl } from "./types.ts";
 
 // 値の出典は、.github/workflows/ci.ymlのジョブIDと、docs/security.mdの必須チェックの節である。
 /**
@@ -178,10 +178,6 @@ export function detail(text: string): string {
       ? `${text.slice(0, MAX_DETAIL_CHARS)}...`
       : text;
   return escapeReasonSeparator(shortened);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // ---- 更新の種別 ----

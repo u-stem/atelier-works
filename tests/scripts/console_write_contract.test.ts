@@ -84,7 +84,7 @@ import {
 import type { ActionSqlClient } from "../../f/factory/lib/console_actions.ts";
 import type { HoldRow, Outcome } from "../../f/factory/lib/holds.ts";
 import * as manualIntakeSupport from "../../f/factory/lib/manual_intake_support.ts";
-import type { Notice } from "../../f/factory/lib/types.ts";
+import { isRecord, type Notice } from "../../f/factory/lib/types.ts";
 import * as manualIntakeSubmit from "../../f/factory/manual_intake_submit.ts";
 import * as noticeResolve from "../../f/factory/notice_resolve.ts";
 import * as prReviewSubmit from "../../f/factory/pr_review_submit.ts";
@@ -226,10 +226,6 @@ function configBase() {
     after: 20,
     verified: true,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 type ScriptSchema = {

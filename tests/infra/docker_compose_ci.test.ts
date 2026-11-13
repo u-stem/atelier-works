@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isRecord } from "../../f/factory/lib/types.ts";
 
 // CIの`metadata`ジョブがメタデータを作り直すときだけ起動するworkerの構成を、静的に確かめる。
 // 作り直しはPRのブランチの依存を入れるので、使い捨てであること、秘密を持たないこと、
@@ -8,10 +9,6 @@ import { join } from "node:path";
 const REPO_ROOT = join(import.meta.dir, "../..");
 
 type Json = Record<string, unknown>;
-
-function isRecord(value: unknown): value is Json {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");

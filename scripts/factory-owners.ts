@@ -7,6 +7,8 @@
 //   資格情報を別の宛先へ送らない。管理者の資格情報は環境変数から読み、引数に載せない。
 //   標準出力に出すのは所有者の名前だけで、資格情報も応答の本文も出さない。
 
+import { isRecord } from "../f/factory/lib/types.ts";
+
 const WORKSPACE = "factory";
 
 // Windmillの`/api/version`は`CE v1.817.0`のような文字列を返す。
@@ -24,10 +26,6 @@ const REASON_PREFIX = "factory-owners: ";
 interface AdminCredentials {
   email: string;
   password: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // factory_configの値から、所有者の名前を取り出す。ownersが配列でなければnull。
