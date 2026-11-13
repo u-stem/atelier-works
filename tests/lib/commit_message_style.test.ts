@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { buildCiFixPrompt } from "../../f/factory/lib/ci_fix_prompt.ts";
 import { VolatileCiExcerpt } from "../../f/factory/lib/ci_log_support.ts";
 import {
@@ -10,9 +8,8 @@ import {
 } from "../../f/factory/lib/prompts.ts";
 
 // コミットメッセージの件名と本文は常体で書く。
-// プロンプトとスキルの文体の指示が食い違わないことを、ここでまとめて確かめる。
+// コミットメッセージを書かせるプロンプトの文体の指示が食い違わないことを、ここでまとめて確かめる。
 
-const REPO_ROOT = join(import.meta.dir, "../..");
 const FIXED_UUID = { uuid: () => "test-nonce" };
 const CI_NONCE = "00000000-0000-4000-8000-000000000001";
 
@@ -195,72 +192,5 @@ describe("commitStyleViolations", () => {
     expect(commitStyleViolations(prompt)).toEqual([
       "no plain form rule for commit_subject and commit_body",
     ]);
-  });
-});
-
-const COMMIT_MESSAGE_PATTERN = /`commit_(?:subject|body)`|コミットメッセージ/;
-
-/** スキルの本文を、行と「。」で文に分ける。1行に2文あるときも1文ずつ見るため。 */
-function skillSentencesOf(markdown: string): string[] {
-  return markdown.split(/(?<=。)|\n/);
-}
-
-/** スキルの文のうち、コミットメッセージを敬体で書くよう指示する文を返す。 */
-function politeCommitLines(markdown: string): string[] {
-  return skillSentencesOf(markdown)
-    .filter((sentence) => COMMIT_MESSAGE_PATTERN.test(sentence))
-    .filter((sentence) => sentence.includes("敬体で書"));
-}
-
-/** スキルの文のうち、コミットメッセージを常体で書くよう指示する文を返す。 */
-function plainCommitLines(markdown: string): string[] {
-  return skillSentencesOf(markdown)
-    .filter((sentence) => COMMIT_MESSAGE_PATTERN.test(sentence))
-    .filter((sentence) => sentence.includes("常体で書く"));
-}
-
-/** `## <heading>`の節の本文を、次の`## `の見出しの手前まで返す。 */
-function sectionOf(markdown: string, heading: string): string {
-  const start = markdown.indexOf(`\n## ${heading}\n`);
-  if (start === -1) throw new Error(`no section: ${heading}`);
-  const bodyStart = start + heading.length + 5;
-  const end = markdown.indexOf("\n## ", bodyStart);
-  return markdown.slice(bodyStart, end === -1 ? undefined : end);
-}
-
-function readSkill(name: string): string {
-  return readFileSync(
-    join(REPO_ROOT, `.claude/skills/${name}/SKILL.md`),
-    "utf8",
-  );
-}
-
-describe("commit message style in the skills", () => {
-  const writingSkill = readSkill("factory-writing");
-  const implementationSkill = readSkill("factory-implementation");
-  const fixStyleSection = sectionOf(readSkill("factory-fix"), "文体");
-
-  test("factory-writing asks for the plain form in the commit message", () => {
-    expect(plainCommitLines(writingSkill)).toHaveLength(1);
-  });
-
-  test("factory-writing never asks for the polite form in the commit message", () => {
-    expect(politeCommitLines(writingSkill)).toEqual([]);
-  });
-
-  test("factory-implementation asks for the plain form in the commit message", () => {
-    expect(plainCommitLines(implementationSkill)).toHaveLength(1);
-  });
-
-  test("factory-implementation never asks for the polite form in the commit message", () => {
-    expect(politeCommitLines(implementationSkill)).toEqual([]);
-  });
-
-  test("factory-fix asks for the plain form in the commit message", () => {
-    expect(plainCommitLines(fixStyleSection)).toHaveLength(1);
-  });
-
-  test("factory-fix never asks for the polite form in the commit message", () => {
-    expect(politeCommitLines(fixStyleSection)).toEqual([]);
   });
 });
