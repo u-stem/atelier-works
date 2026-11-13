@@ -373,7 +373,7 @@ describe("a write whose body was cut after a 2xx status", () => {
   });
 
   test("throws a response error from callGhApi", async () => {
-    createFakeCommandRunner([cut, cut]);
+    createFakeCommandRunner([cut]);
     await expect(
       callGhApi({ ghToken: "tok" }, "repos/acme/widgets/issues", {
         method: "POST",

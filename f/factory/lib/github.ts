@@ -229,6 +229,7 @@ export class GitHubResponseError extends Error {
 
 /**
  * 冪等でない要求(書き込みとGraphQLのmutation)で、2xxのステータスの後に本文が欠けたときの例外。
+ * 欠けるのは、本文が途中で切れたときと、制御列を含むJSONでない本文を通信層が拒んだときである。
  * 変更は効いた後で、応答の本文だけを失っている。
  * 待って再開すると二重に効くので、通信の一時的な失敗(ステータス0の`GitHubHttpError`)にはしない。
  * 効いたかを状態から確かめられる呼び出し側(`claimIssue`のラベルの削除)は、読み直して判断する。
@@ -239,7 +240,7 @@ export class GitHubWriteBodyCutError extends GitHubResponseError {
   constructor(method: string, endpoint: string, tooLarge: boolean) {
     const what = tooLarge
       ? "the body was too large to read"
-      : "the body was cut";
+      : "the body was cut or refused";
     super(
       maskSecrets(
         `${method} ${endpoint.replace(/[?#].*$/s, "")}: ${what} after a 2xx status, so the change may have taken effect`,
