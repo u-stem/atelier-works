@@ -27,7 +27,22 @@ export function relativeImports(source: string): string[] {
 
 const SIMPLE_DYNAMIC_IMPORT = /^import\s*\(\s*(?:"[^"\\]*"|'[^'\\]*')\s*\)/;
 
-/** 走査がたどれないimportの形。たどれない理由を返す。 */
+/** `source`を読み込む先のうち、動的importの指定。同じ指定が何度も現れれば、その数だけ並べる。 */
+function dynamicImportPaths(source: string): string[] {
+  return transpiler
+    .scanImports(source)
+    .filter((entry) => entry.kind === "dynamic-import")
+    .map((entry) => entry.path);
+}
+
+/**
+ * 走査がたどれないimportの形。たどれない理由を返す。
+ * 絶対パスと`f/`・`u/`で始まるimport、`require`、変換後のコードで引数が単純な文字列リテラルでない動的importを数える。
+ * 変換は、リテラルだけで組み立てた引数(連結、リテラルだけを埋め込んだテンプレート、条件式)を、リテラルに畳み込む。
+ * 畳み込まれた動的importは、変換前の本文から読むimportの一覧に現れない。
+ * そのため、変換後のコードから読む動的importのうち、変換前の一覧に無いものも数える。
+ * 指定ごとに数を突き合わせるので、変換が消す到達しない動的importで相殺されない。
+ */
 export function unfollowableImports(source: string): string[] {
   const found: string[] = [];
   for (const entry of transpiler.scanImports(source)) {
@@ -40,6 +55,15 @@ export function unfollowableImports(source: string): string[] {
   for (const match of code.matchAll(/\bimport\s*\(/g)) {
     if (!SIMPLE_DYNAMIC_IMPORT.test(code.slice(match.index))) {
       found.push("dynamic import with a non-literal argument");
+    }
+  }
+  const before = dynamicImportPaths(source);
+  for (const path of dynamicImportPaths(code)) {
+    const index = before.indexOf(path);
+    if (index === -1) {
+      found.push(`dynamic import folded into the literal ${path}`);
+    } else {
+      before.splice(index, 1);
     }
   }
   return found;
@@ -262,6 +286,8 @@ const BUN_NAME = /\bBun\b/g;
 const BUN_MEMBER = /^\s*\.\s*([\w$]+)/;
 const GLOBAL_LOOKUP =
   /\bglobalThis\b|\bgetBuiltinModule\b|\bprocess\s*\.\s*binding\b/g;
+// `import.meta`は`env`や`require`を持つ。
+const IMPORT_META = /(?<![.\w$])import\s*\.\s*meta(?![\w$])/;
 
 /** ファイルにもサブプロセスにも届かない`Bun`のメンバー。 */
 const HARMLESS_BUN_MEMBERS: ReadonlySet<string> = new Set([
@@ -289,8 +315,10 @@ const HARMLESS_BUN_MEMBERS: ReadonlySet<string> = new Set([
  * - `Bun`の使い方。無害なメンバー(`Bun.sleep`など)の呼び出し以外は、すべて数える。
  *   `Bun.spawn`と`Bun.file`だけでなく、分割代入、別名への代入、添字アクセスも当たる。
  * - `globalThis`、`process.getBuiltinModule`、`process.binding`。これらを経由すると、名前を伏せて同じものに届くため。
+ * - `import.meta`のすべて。`require`を持ち、別名に入れて呼ぶとimportの一覧に現れずにモジュールへ届くため。
  * 見ないもの: 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身、
  * 第三者パッケージ(`execa`、`fs-extra`、`zx`など)の中身。
+ * リテラルだけで組み立てた動的importは、ここでは数えず、`unfollowableImports`が止める。
  * 文字列の中の言及は数えない。
  */
 export function toolDependencies(source: string): string[] {
@@ -313,6 +341,7 @@ export function toolDependencies(source: string): string[] {
   for (const match of skeleton.matchAll(GLOBAL_LOOKUP)) {
     found.push(`use of ${match[0]}`);
   }
+  if (IMPORT_META.test(skeleton)) found.push("use of import.meta");
   return found;
 }
 
@@ -398,16 +427,19 @@ export type SdkFindings = {
   readonly problems: readonly string[];
 };
 
-const CLIENT_IMPORT = /^windmill-client(?:@[\w.+-]+)?$/;
+/**
+ * windmill-clientのimport。版の指定は、数字の版(`@1.817.0`)だけを認める。
+ * `@latest`のようなタグや範囲は、入れるたびに中身が変わりうるので当たらない。深いパス(`windmill-client/...`)も当たらない。
+ */
+export const CLIENT_PACKAGE = /^windmill-client(?:@\d+\.\d+\.\d+)?$/;
 const FORBIDDEN_NAMES =
   /\b(?:WM_TOKEN|BASE_INTERNAL_URL|BASE_URL|OpenAPI|XMLHttpRequest|WebSocket|EventSource)\b/;
 const CLIENT_IMPORT_CLAUSE =
   /\bimport\s+([^;"']*?)\s*\bfrom\s*["']windmill-client[^"']*["']/g;
 const IMPORT_STATEMENT = /\bimport\s+[^;"']*?\bfrom\s*""/g;
 const FETCH_REFERENCE = /(?<![.\w$])fetch(?![\w$])(?!\s*:)/;
-// `require`は呼び出しの形に限らず、変数に入れる形も禁じる。`import.meta`は`env`や`require`を持つ。
+// `require`は呼び出しの形に限らず、変数に入れる形も禁じる。
 const REQUIRE_REFERENCE = /(?<![.\w$])require(?![\w$])(?!\s*:)/;
-const IMPORT_META = /(?<![.\w$])import\s*\.\s*meta(?![\w$])/;
 const WORKER_REFERENCE = /(?<![.\w$])Worker(?![\w$])(?!\s*:)/;
 const GLOBAL_OBJECT = /(?<![.\w$])(?:globalThis|global|self|window)(?![\w$])/;
 const MEMBER_ACCESS = /^\s*\.\s*([A-Za-z_$][\w$]*)/;
@@ -639,7 +671,7 @@ function importProblems(source: string, problems: string[]): void {
   for (const entry of transpiler.scanImports(source)) {
     const path = entry.path;
     if (path.startsWith(".")) continue;
-    if (CLIENT_IMPORT.test(path) && entry.kind !== "dynamic-import") continue;
+    if (CLIENT_PACKAGE.test(path) && entry.kind !== "dynamic-import") continue;
     problems.push(`import of ${path}`);
   }
 }

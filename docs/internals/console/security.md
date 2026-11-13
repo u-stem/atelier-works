@@ -39,6 +39,11 @@ Console用workerの境界の全体は、[セキュリティ](../../security.md#c
 走査は、許可表のほかに、次の形を禁じる。
 
 - `windmill-client`の再エクスポート。
+- 数字の版(`@1.817.0`)でない`windmill-client`の版の指定。
+  `@latest`のようなタグと範囲は、入れるたびに中身が変わりうるためである。
+- リテラルだけで組み立てた引数の動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート、リテラルの条件式)。
+  変換の過程でリテラルに畳み込まれ、変換前の本文から読むimportの一覧に現れないためである。
+  走査は、変換の前と後で動的importの指定を突き合わせて見つける。
 - `global`、`self`、`window`、`globalThis`の経由。
 - リソースの引数の上書き。
   読み取り(`getResourceValue`)の引数は`{ workspace, path: <定数> }`の形に固定し、`requestBody`を認めない。

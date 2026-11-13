@@ -1166,6 +1166,9 @@ tag`console`のscriptがimportでたどれるソースを数える契約テス�
 - 絶対パスと、`f/`か`u/`で始まるimport
 - `require`
 - 引数が単純な文字列リテラルでないimport()
+- リテラルだけで組み立てた引数のimport()。
+  `import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート、リテラルの条件式が当たる。
+  変換の過程でリテラルに畳み込まれ、変換前の本文から読むimportの一覧に現れないので、変換の前と後で動的importの指定を突き合わせて見つける
 - `.name("literal")`の形の呼び出しで説明できない、`getVariable`と`getResource`の出現。
   添字アクセス、分割代入、名前付きimport、別名への代入、引数が変数の呼び出し、注入された関数の呼び出しが当たる
 - 呼び出し(`名前(`)でない、`getVariable`と`setVariable`の出現。
@@ -1180,8 +1183,6 @@ script.yamlに`$var:`か`$res:`の参照があるときも、テストは落ち�
 凍結の変数`f/factory/freezes`は、書き込みのときに`isSecretIfNotExist`へ`false`を渡すので、secretではない。
 呼び出し側が定数だけを渡すことを確かめ、テストの許可リストに理由を書いている。
 テストが見ないのは、文字列を組み立てて作ったsecretのパス、環境変数やDBを経由して受け取る名前、`eval`、文字列の中に隠したコードである。
-リテラルだけで組み立てた動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート)も見ない。
-変換の過程で単一のリテラルに畳み込まれ、importの一覧に現れないためである。
 これらはコードのレビューで見る。
 
 サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
@@ -1396,7 +1397,7 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、tag`periodic`を持つscriptについて次を固定する。
 走査の方法と、たどれない形は、Console用workerの契約テストと同じである。
 引数が変数の動的importは、たどれない形として止まる。
-引数がリテラルだけで組み立てた形は、変換の過程で単一のリテラルに畳み込まれるので止まらず、下の「テストが見ないもの」に入る。
+引数がリテラルだけで組み立てた動的importも、変換の過程でリテラルに畳み込まれた形として止まる。
 
 - `f/`の下のYAMLのうち、tag`periodic`へ振り分けるものが、テストの一覧のscriptの定義と一致する。
   scriptの定義の`tag`だけでなく、スケジュールの`tag`と、フローのモジュールの`tag`と`tag_override`も、入れ子の中まで調べる。
@@ -1420,6 +1421,8 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
   `node:fs`、`node:child_process`、`bun`モジュールのimportと、`Bun`の使い方を調べる。
   `Bun.sleep`のような無害なメンバー以外は、`Bun.spawn`や`Bun.file`に加えて、分割代入、別名への代入、添字アクセスも当たる。
   `globalThis`、`process.getBuiltinModule`、`process.binding`も当たる。
+  `import.meta`の参照も、すべて当たる。
+  `import.meta`は`require`を持ち、別名に入れて呼ぶと、importの一覧に現れずにモジュールへ届くためである。
 
 `node:module`、`node:worker_threads`、`node:vm`のimportも、迂回に使えるので数える。
 `f/`の下のTypeScriptが、`JobService.run*`でジョブを起動したり、tagの文字列を渡したりしていないことも、テストが確かめる。
@@ -1430,11 +1433,6 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 - 式で組み立てたtag、フローの入力で渡すtag。
 - Windmillの画面で付けたtag。
 - 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
-- リテラルだけで組み立てた動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート)。
-  変換の過程で定数に畳み込まれ、走査には単一のリテラルに見えるが、importの一覧には現れない。
-  そのため、外部のパッケージの固定とサブプロセスの禁止をすり抜ける。
-- `import.meta.require`を変数に入れて呼ぶ形。
-  この境界の走査は`import.meta`を拒まないので、同じくすり抜ける。
 - `windmill-client`の中身。
 - resourceの中身で解決されるsecret。
   `getResource`が返す値の中の`$var:`は、走査が見ない。

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PERIODIC_JOB_WAIT_SECONDS } from "../../f/factory/lib/periodic_worker.ts";
 import {
+  CLIENT_PACKAGE,
   codeOf,
   DISCORD_WEBHOOK_URL,
   filesWithNonLiteralReads,
@@ -43,19 +44,16 @@ import {
 // - defaultのworkerの停止を検知するscript(default_worker_watch)も、この一覧に入る。
 //   defaultのworkerの中では、そのworkerが止まると動かないためである。
 // - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
+//   `import.meta`の参照も無い。`require`を持ち、別名に入れて呼ぶとimportの一覧に現れないためである。
 // - importでたどれるソースがimportの形で読む外部のパッケージは、windmill-clientだけである。
 //   パッケージの中身は走査が見ないので、ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるためである。
 // - 走査でたどれない形(Console用workerの境界テストと同じ)が無い。
-//   引数が変数の動的importは止まるが、リテラルだけで組み立てた引数は、下の「見ないもの」に入る。
+//   引数が変数の動的importと、リテラルだけで組み立てた引数が変換で畳み込まれた動的importも、ここで止まる。
 //
 // 走査の方法と限界は、`console_worker_boundary.test.ts`の先頭にある。
 // tagの走査が見ないもの: 式で組み立てたtag、フローの入力で渡すtag、Windmillの画面で付けたtag。
 // 依存の走査が見ないもの: 文字列で組み立てた呼び出し、`eval`と`Function`、注入された関数の中身、
 // windmill-clientの中身。
-// リテラルだけで組み立てた動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート)と、
-// `import.meta.require`を変数に入れて呼ぶ形も見ない。
-// 前者は変換の過程で定数に畳み込まれ、走査には単一のリテラルに見えるが、importの一覧には現れない。
-// どちらも、外部のパッケージの固定とサブプロセスの禁止をすり抜ける。
 // コードがAPIで渡すtag(`JobService.run*`の`tag`)は、下の「コードが渡すtag」のテストが、現在の0件を保つ。
 // resourceの中身で解決されるsecret(`getResource`が返す値の`$var:`)は、走査が見ない。
 // これらはコードのレビューで見る。tag periodicを最初に付けるPRでは、そのscriptが読むresourceの中身も確かめる。
@@ -107,12 +105,6 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
   "f/factory/lib/config.ts":
     "loadConfigの引数getResource(注入された関数)。呼び出し側は、リテラルのwmill.getResource(...)を包んで渡す",
 };
-
-/**
- * windmill-clientのimport。版の指定は、数字の版(`@1.817.0`)だけを認める。
- * `@latest`のようなタグは、入れるたびに中身が変わりうるので当たらない。深いパス(`windmill-client/...`)も当たらない。
- */
-const CLIENT_PACKAGE = /^windmill-client(?:@\d+\.\d+\.\d+)?$/;
 
 /**
  * `source`が読み込む先のうち、windmill-client以外の外部のパッケージ。
