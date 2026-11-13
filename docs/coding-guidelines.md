@@ -295,6 +295,16 @@ gitのpre-pushは全体の`check`を実行しない。
 | Consoleの画面の小さな描画と部品 | ブラウザの標準の機能(SVG、`<dialog>`)で書く。棒グラフ、flowの図、確認ダイアログが当たる | 要る機能が小さく、標準の機能で足りるため。依存はバンドルに入る | `console/src/lib/barChart.ts`、[分析の画面](internals/console/work-items.md#分析の画面)、[flowの図の画面](internals/console/graphs.md#flowの図の画面)、[承認バー](internals/console/attention.md#承認バー) |
 | 検査の道具 | 字句と構文の解析は、デファクトの解析器を使い、自作しない。道具に無い、このリポジトリに固有の規則だけを、その上に自作する。`scripts/ts-tokenize.ts`の字句の読み取りは既知の例外で、限界は[リモート追跡ref](#リモート追跡ref)にある | 自作の解析は、誤検知と見逃しを自分で直し続けることになるため | [TypeScript](#typescript)の`noUnsafeTypeAssertion`、`scripts/lint-doc-links.ts`の`mdast-util-from-markdown` |
 
+### 共通の小さな関数
+
+小さな共通の関数は、決まったモジュールに1つだけ置き、ほかのファイルで定義し直さない。
+`isRecord`は`f/factory/lib/types.ts`に、秘密情報をマスクする`errorMessage`は`f/factory/lib/log.ts`に置く。
+日本時間の整形とUTCとの差は`f/factory/lib/jst.ts`に置く。
+3つのモジュールは何もimportしないので、`console/`と`scripts/`からも読める。
+定義を残してよいのは、import先が限られるファイルだけである。
+保護パスだけを読むファイル、`scripts/host_apply/`、`infra/console_fetcher/`が当たる。
+その一覧と理由は、`tests/scripts/shared_helpers.test.ts`が固定する。
+
 ### 固定と追加
 
 依存は、ルートの`bun.lock`と、Console(`console/`)の`console/bun.lock`に分けて固定する。

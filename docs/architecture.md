@@ -666,6 +666,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/approver` | script | [LIB] 承認者の導出 |
 | `f/factory/lib/prose_check` | script | [LIB] 文章の検査 |
 | `f/factory/lib/console_known_paths` | script | [LIB] 既知のscript pathの定数(生成物) |
+| `f/factory/lib/jst` | script | [LIB] 日本時間 |
 | `f/factory/lib/summary_support` | script | [LIB] 日次サマリの集計 |
 | `f/factory/lib/check_runner` | script | [LIB] 検査コマンドの実行 |
 | `f/factory/lib/check_sandbox` | script | [LIB] 検査コマンドの実行ユーザーの切り替え |
