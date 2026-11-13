@@ -25,11 +25,7 @@
 
 import { readFileSync } from "node:fs";
 import { hasAttribute } from "../f/factory/lib/metadata_patch_imports.ts";
-import {
-  ScannerStallError,
-  type Token,
-  tokenize,
-} from "./lint-no-type-assertions.ts";
+import { ScannerStallError, type Token, tokenize } from "./ts-tokenize.ts";
 
 const TOKEN_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".mjs"]);
 const HASH_COMMENT_EXTENSIONS = new Set([

@@ -77,5 +77,7 @@
   編集中の版が本物のworktreeを消すのを避けるため。
   フックが作るworktreeにも効く。
   コマンドへの前置きは、許可の確認を求められる場合がある(未確認)。
-- `scripts/lint-no-type-assertions.ts`はトークン単位のヒューリスティックで、まれな入力では誤検知や見逃しが起こる。
-  `.tsx`でJSXを読み違えたときの扱いと既知の限界は[コーディング規約](docs/coding-guidelines.md)の「TypeScript」にある。
+- 型アサーションは、型ガード関数の中でも使わない。
+  ユーザーレベルの「型ガード関数を除く」の例外は、このリポジトリでは使わない。
+  Biomeの`noUnsafeTypeAssertion`が`as const`以外を止めるため。
+  書き換え方は[コーディング規約](docs/coding-guidelines.md)の「TypeScript」にある。

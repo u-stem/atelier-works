@@ -1206,6 +1206,7 @@ Claudeが書き換えた`mise.toml`や`package.json`のscriptsをworkerで実行
 
 PR修正の一覧そのものの中身は、[PRワークフローの安全策の内部仕様の「禁止パスによる停止」](pr-workflow/security.md#禁止パスによる停止)にある。
 markdownlint-cli2とtextlintの設定は、PR修正の一覧に含まれる。
+Biomeの設定(`biome.json`、`biome.jsonc`、`.biome.json`、`.biome.jsonc`)と無視ファイル(`.gitignore`、`.ignore`)も含まれる。
 
 `infra/`を加えるのは、workerのイメージとcomposeの定義の変更が、次にホストで`mise run up`するまで反映されないからである。
 レビューする人がその変更を知る必要がある。
@@ -1213,6 +1214,9 @@ markdownlint-cli2とtextlintの設定は、PR修正の一覧に含まれる。
 保護パスの一覧は、Factory自身に限らず、実装フローが扱うすべてのリポジトリに効く。
 ほかのリポジトリに`infra/`、`console/public/`、`console/index.html`などがあれば、それに触れたラウンドは検査コマンドを実行しない。
 そのときは、GitHub側のCIの結果を見る。
+
+`.gitignore`と`.ignore`も保護パスなので、どのリポジトリでもこの2つを変えたラウンドは検査コマンドを省き、その分だけ検証が減ることを、運用上の副作用として受け入れる。
+
 Factory自身のリポジトリでは、ホストの実行役が実行するファイルも保護パスである。
 対象は、`scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/custom-tags.ts`、実行役のテストである。
 `scripts/check-idle.ts`と`tests/scripts/check-idle.test.ts`も対象に含む。

@@ -48,7 +48,9 @@ export function isOneOf<T extends string>(
   if (typeof value !== "string") {
     return false;
   }
-  return (allowed as readonly string[]).includes(value);
+  // `T[]`の`includes`は`T`しか受けないので、注釈で`string`の配列に広げてから探す。
+  const candidates: readonly string[] = allowed;
+  return candidates.includes(value);
 }
 
 /**

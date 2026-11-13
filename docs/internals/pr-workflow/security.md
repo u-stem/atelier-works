@@ -59,6 +59,8 @@ flow.yamlの式が`JSON.stringify(...)`で作り、受け取るstepが`parseUntr
 - `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`、`wmill.yaml`、`wmill.yml`
 - markdownlintとmarkdownlint-cli2の設定(`.markdownlint.*`と`.markdownlint-cli2.*`。拡張子は`jsonc?`、`ya?ml`、`[cm]?js`)
 - textlintの設定(`.textlintrc`と`.textlintrc.*`)
+- Biomeの設定(`biome.json`、`biome.jsonc`、`.biome.json`、`.biome.jsonc`)
+- 無視ファイル(`.gitignore`と`.ignore`)
 - `package.json`の`scripts`の変更
 - 新しく追加した`*.sh`
 
@@ -352,6 +354,10 @@ CIのワークフローとcomposite action(`.github/workflows/`と`.github/actio
 これらはFactoryやCIが実行する設定で、書き換えられるとコードを実行されるためである。
 markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。
 どちらも設定から任意のモジュールを読み込め、pre-commitと`check-docs`ジョブの`mise run lint:docs`が読むためである。
+Biomeの設定(`biome.json`、`biome.jsonc`、`.biome.json`、`.biome.jsonc`)も止める。
+lintの規則を決めるので、書き換えると検査を緩めて通せるためである。
+`.gitignore`と`.ignore`も、どのディレクトリでも止める。
+Biomeはこの2つが無視するファイルを、追跡済みでも検査しないためである。
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
 固定を書き換えるPRを作る側も止める。
@@ -462,7 +468,8 @@ Factoryが扱う他のリポジトリのサブディレクトリの`wmill.yaml`�
 保護したテストは、どれも保護していないコードと同じ実行の中で走る。
 契約テストと`tests/lib/drawio_frame_isolation.test.ts`は、その例である。
 CIの`check`ジョブと`check-docs`ジョブが走らせる検査のうち、保護していないものがある。
-例は、`scripts/lint-*.ts`、`lint-docs.ts`、ほかのテスト、`tsconfig.json`、`biome.json`、`wmill lint f`の設定である。
+例は、`scripts/lint-*.ts`、`lint-docs.ts`、ほかのテスト、`tsconfig.json`、`wmill lint f`の設定である。
+Biomeの設定(`biome.json`、`biome.jsonc`、`.biome.json`、`.biome.jsonc`)と無視ファイル(`.gitignore`、`.ignore`)は、止める側に入る。
 このツリーに`mise-tasks/`は無いが、置かれればmiseが読むので、同じ経路になる。
 保護していないコードの変更で、これらの検査を無効にしたまま、CIを緑にできる。
 そのため、CIはこの経路の関門にならない。
@@ -553,7 +560,8 @@ Claudeが書き換えた、lockfile、`scripts`以外の`package.json`、ツー�
 通常の回は、検査を省かず、載せない。
 通常の回は、無視されたファイルを`FORBIDDEN_*`の判定に入れない。
 `.env`や`bunfig.toml`を新しく作られても、検査が読むまで止まらない。
-`.gitignore`は保護の一覧に無く、Claudeが無視の規則を足せば、新しく作るどのファイルも判定から外れる。
+`.gitignore`と`.ignore`は保護の一覧にあるので、Claudeが無視の規則を足すと、その変更で止まる。
+もとからある無視の規則に当たる名前で新しく作ったファイルは、判定から外れる。
 無視されたファイルはコミットされないので、PRに跡が残らない。
 実行するユーザーは非特権で、networkはworkerと共有する([検査コマンドはフローが実行する](../check-sandbox.md#検査コマンドはフローが実行する))。
 

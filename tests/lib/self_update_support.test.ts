@@ -134,7 +134,7 @@ describe("classifyChangedPaths", () => {
 
   test("does not flag a path under scripts/ (host tooling, not worker runtime)", () => {
     const result = classifyChangedPaths(
-      ["scripts/lint-no-type-assertions.ts"],
+      ["scripts/lint-no-section-sign.ts"],
       false,
     );
     expect(result.needs_host_action).toBe(false);

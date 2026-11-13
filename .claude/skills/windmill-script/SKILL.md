@@ -90,12 +90,15 @@ import wmillDefault, * as wmill from "windmill-client@1.817.0";
 
 - `strict: true`にする。
 - `as`によるキャストは禁止する。
-  `<T>expr`の形も含み、`as const`は許可する。
+  `<T>expr`の形も含み、型ガード関数の中も例外にしない。
+  許可するのは`as const`だけで、Biomeの`noUnsafeTypeAssertion`がそれ以外を止める。
 - 外部由来のJSON(Issue APIのレスポンス、Claudeのstdoutなど)は、型ガード関数でパースしてから使う(parse, don't validate)。
 
 例は次のとおり。
 
 ```ts
+import { isRecord } from "./lib/types.ts";
+
 type ClaudeResult = {
   summary: string;
   markdown: string;
@@ -104,17 +107,14 @@ type ClaudeResult = {
 };
 
 function isClaudeResult(value: unknown): value is ClaudeResult {
-  if (typeof value !== "object" || value === null) return false;
-  if (!("summary" in value) || !("markdown" in value)) return false;
-  const summary = (value as { summary: unknown }).summary;
-  const markdown = (value as { markdown: unknown }).markdown;
-  return typeof summary === "string" && typeof markdown === "string";
+  if (!isRecord(value)) return false;
+  return typeof value.summary === "string" && typeof value.markdown === "string";
   // 実装では diagrams / open_questions の要素も同様に検証する
 }
 ```
 
-型ガード関数(戻り値の型が型述語の関数)の本体の中だけは、オブジェクトの形を確かめるための`as`を使ってよい。
-`lint-no-type-assertions`は、この範囲を例外として扱う。
+型ガード関数の中でも、オブジェクトの形は`as`を使わずに確かめる。
+`isRecord`(`f/factory/lib/types.ts`)で絞り込めば、フィールドを`unknown`として読める。
 判定のロジック自体は、`typeof` / `in` / 配列のチェックで組み立てる。
 
 ## TDD

@@ -214,7 +214,7 @@ describe("protected paths", () => {
     "wmill-lock.yaml",
     "console/src/main.tsx",
     "console/src/components/Foo.tsx",
-    "scripts/lint-no-type-assertions.ts",
+    "scripts/lint-no-section-sign.ts",
     "scripts/ci-scope.ts",
     "tsconfig.json",
     "tsconfig.wmill.json",
@@ -412,6 +412,25 @@ describe("protected paths", () => {
 
   test("does not treat a similarly named source file as a safety device", () => {
     expect(allowed("f/factory/lib/logger_helper.ts")).toBe(true);
+  });
+});
+
+describe("biome configuration and ignore files", () => {
+  test.each([
+    ".biome.json",
+    "f/x/.biome.jsonc",
+    ".ignore",
+    "console/src/.ignore",
+  ])("denies %s, which biome reads", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+
+  test.each([
+    "f/factory/sample/.biome.json.bak",
+    "f/factory/sample/ignore",
+    "f/factory/sample/.ignored",
+  ])("does not deny the near miss %s", (path) => {
+    expect(isDeniedPath(path)).toBe(false);
   });
 });
 

@@ -10,7 +10,7 @@
 // 先頭が`origin/`のものだけである(コメントは見ない)。
 // 例外を認める仕組みは設けない。必要が出たら、そのとき理由と一緒に足す。
 //
-// 実装の注意: 構文解析はせず、`lint-no-type-assertions.ts`と同じトークナイザを使う。
+// 実装の注意: 構文解析はせず、`ts-tokenize.ts`のトークナイザを使う。
 // 完全な解析ではないので、まれな入力では誤検知や見逃しが起こりうる。
 //
 // 使い方: bun run scripts/lint-no-short-remote-ref.ts [file...]
@@ -18,11 +18,7 @@
 // 見つかった位置を`path:line:column`で出力して終了コード1、無ければ0。
 
 import { computeLineStarts, SyntaxKind } from "typescript/unstable/ast";
-import {
-  type Token,
-  TokenizeError,
-  tokenize,
-} from "./lint-no-type-assertions.ts";
+import { type Token, TokenizeError, tokenize } from "./ts-tokenize.ts";
 
 export type Finding = {
   readonly file: string;
