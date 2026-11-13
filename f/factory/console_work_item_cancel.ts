@@ -236,18 +236,19 @@ export async function cancelStatement(
       FROM updated
       RETURNING work_item_id
     )
-    SELECT (SELECT count(*) FROM recorded) AS cancelled, (SELECT count(*) FROM withdrawn) AS withdrawn, EXISTS (SELECT 1 FROM newer) AS newer
+    SELECT (SELECT count(*) FROM recorded) AS cancelled, (SELECT count(*) FROM withdrawn) AS withdrawn, (SELECT count(*) FROM newer) AS newer
   `.fetch();
   const first = rows[0];
   const cancelled = countOf(first?.cancelled);
   const withdrawn = countOf(first?.withdrawn);
-  const newer = first?.newer;
-  if (cancelled === null || withdrawn === null || typeof newer !== "boolean") {
+  // より新しい行も`count(*)`で数え、ほかの2つと同じ読み方にする。真偽値の返し方はドライバで違いうるためである。
+  const newer = countOf(first?.newer);
+  if (cancelled === null || withdrawn === null || newer === null) {
     throw new Error(
       "console_work_item_cancel: the cancel statement returned a result it cannot read",
     );
   }
-  return { cancelled: cancelled > 0, withdrawn, newer };
+  return { cancelled: cancelled > 0, withdrawn, newer: newer > 0 };
 }
 
 /**

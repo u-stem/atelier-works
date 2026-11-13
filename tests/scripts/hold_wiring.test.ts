@@ -2149,13 +2149,13 @@ describe("the cancel by a person in the fix rounds", () => {
     });
   }
 
-  const HELD = { kind: "hold", reason: "operator_cancelled" };
+  const HELD = { kind: "hold", reason: "operator_cancelled" } as const;
 
   test("the CI round claims when no one cancelled", async () => {
     expect((await decideCi({})).kind).toBe("claim");
   });
 
-  test.each([
+  const CANCEL_CASES: [string, CancelSetup][] = [
     ["the Issue work item of the branch", { branch: true }],
     ["the latest work item at the head", { head: true }],
     [
@@ -2163,49 +2163,54 @@ describe("the cancel by a person in the fix rounds", () => {
       { branch: true, fromCall: 2 },
     ],
     ["the latest work item just before the claim", { head: true, fromCall: 2 }],
-  ])("the CI round holds when a person cancelled %s", async (_name, setup) => {
-    expect(await decideCi(setup)).toEqual(HELD);
-  });
+  ];
+
+  test.each(CANCEL_CASES)(
+    "the CI round holds when a person cancelled %s",
+    async (_name, setup) => {
+      expect(await decideCi(setup)).toEqual(HELD);
+    },
+  );
 
   test("the conflict round claims when no one cancelled", async () => {
     expect((await decideConflict({})).kind).toBe("claim");
   });
 
-  test.each([
-    ["the Issue work item of the branch", { branch: true }],
-    ["the latest work item at the head", { head: true }],
-    [
-      "the Issue work item of the branch just before the claim",
-      { branch: true, fromCall: 2 },
-    ],
-    ["the latest work item just before the claim", { head: true, fromCall: 2 }],
-  ])(
+  test.each(CANCEL_CASES)(
     "the conflict round holds when a person cancelled %s",
     async (_name, setup) => {
       expect(await decideConflict(setup)).toEqual(HELD);
     },
   );
 
-  /** 関数`name`の本文。次の`export`の前までを返す。 */
+  /** 最上位の関数`name`の本文。変換したJavaScriptで、関数を閉じる行までを返す。 */
   function bodyOf(path: string, name: string): string {
     const code = codeOf(read(path));
     const start = code.indexOf(`export async function ${name}(`);
-    const end = code.indexOf("\nexport ", start + 1);
+    const end = code.indexOf("\n}\n", start);
     return code.slice(start, end === -1 ? undefined : end);
   }
 
+  // 最後の読み取り(CI回はworkerの環境、競合回は直近の修正の時刻)の後で、起動の前に、中止を読み直す。
   test.each([
-    ["f/factory/lib/pr_ci_fix_claim.ts", "decideFixClaim"],
-    ["f/factory/lib/pr_conflict_fix_claim.ts", "decideConflictFixClaim"],
+    [
+      "f/factory/lib/pr_ci_fix_claim.ts",
+      "decideFixClaim",
+      "readers.workerEnv()",
+    ],
+    [
+      "f/factory/lib/pr_conflict_fix_claim.ts",
+      "decideConflictFixClaim",
+      "readers.lastFixSettledAt()",
+    ],
   ])(
     "%s reads the cancel again after the last read and before the claim",
-    (path, name) => {
+    (path, name, lastRead) => {
       const body = bodyOf(path, name);
-      const claim = body.lastIndexOf('kind: "claim"');
-      const recheck = body.lastIndexOf("cancelledByOperator(readers)");
+      const recheck = body.lastIndexOf("await cancelledByOperator(readers)");
       expect(
-        recheck > body.indexOf("cancelledByOperator(readers)") &&
-          recheck < claim,
+        recheck > body.indexOf(lastRead) &&
+          recheck < body.lastIndexOf('kind: "claim"'),
       ).toBe(true);
     },
   );

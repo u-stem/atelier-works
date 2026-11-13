@@ -280,7 +280,9 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  *    稼働中のworkerが安全でないとき`worker_runtime_unsafe`で保留する。
  *    準備のステップが同じ理由で止めるので、起動の前に確かめ、ラウンドと、起動ごとの停止通知を使わない。
  *    確認は全体の走査で費用がかかるので、7までの安い判定の後に置く。環境を直せば、次の巡回で外れる。
- * 9. どれにも当たらなければ起動する。
+ * 9. 起動の直前に、人の中止(3の2つ)をもう一度読み、当たれば`operator_cancelled`で保留する。
+ *    判定の間に人が中止しても、新しい修正の行を作らないためである。読み直しの後から起動までの窓は残る。
+ * 10. どれにも当たらなければ起動する。
  */
 export async function decideFixClaim(
   input: FixClaimInput,
@@ -311,12 +313,7 @@ export async function decideFixClaim(
   if (isBranchHeldForFixRounds(await readers.readBranchItemStatus())) {
     return { kind: "skip", why: "branch_held" };
   }
-  if (await readers.branchItemOperatorCancelled()) {
-    return hold("operator_cancelled");
-  }
-  if (await readers.operatorCancelledAtHead()) {
-    return hold("operator_cancelled");
-  }
+  if (await cancelledByOperator(readers)) return hold("operator_cancelled");
   if (pr.draft || pr.autoMergeEnabled) return hold("pr_draft_or_auto_merge");
 
   if (!allCommitsFromFactory(await readers.readCommits(), input.instanceName)) {
@@ -366,5 +363,20 @@ export async function decideFixClaim(
   // 全体を走査するので、安い判定をすべて通った行だけが読む。
   const workerEnv = await readers.workerEnv();
   if (workerEnv !== null) return hold(workerEnv);
+  // 高くつく読み取りの間に人が中止していれば、起動しない。中止した行より新しい行を作らないためである。
+  if (await cancelledByOperator(readers)) return hold("operator_cancelled");
   return { kind: "claim", pr };
+}
+
+/** ブランチが指すIssueの作業項目か、PRの最新の作業項目を、人が中止したか。 */
+async function cancelledByOperator(
+  readers: Pick<
+    FixClaimReaders,
+    "branchItemOperatorCancelled" | "operatorCancelledAtHead"
+  >,
+): Promise<boolean> {
+  return (
+    (await readers.branchItemOperatorCancelled()) ||
+    (await readers.operatorCancelledAtHead())
+  );
 }

@@ -108,7 +108,9 @@ function hold(reason: PrConflictFixHoldReason): ConflictFixClaimDecision {
  *    競合の1回の上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数に達していれば`rounds_exhausted`で保留する。
  *    後者は、フローが起動しないまま起動し直し続けるのを止める。
  * 7. 直近の直す作業項目が終わってから`RECENTLY_FIXED_WINDOW_MS`未満なら`recently_fixed`で保留する。
- * 8. どれにも当たらなければ起動する。
+ * 8. 起動の直前に、人の中止(2の2つ)をもう一度読み、当たれば`operator_cancelled`で保留する。
+ *    読み取りの間に人が中止しても、新しい修正の行を作らないためである。読み直しの後から起動までの窓は残る。
+ * 9. どれにも当たらなければ起動する。
  * 競合を直す起動は、Factoryのレビューの記録を要求しない。
  */
 export async function decideConflictFixClaim(
@@ -124,12 +126,7 @@ export async function decideConflictFixClaim(
   if (isBranchHeldForFixRounds(await readers.readBranchItemStatus())) {
     return { kind: "skip", why: "branch_held" };
   }
-  if (await readers.branchItemOperatorCancelled()) {
-    return hold("operator_cancelled");
-  }
-  if (await readers.operatorCancelledAtHead()) {
-    return hold("operator_cancelled");
-  }
+  if (await cancelledByOperator(readers)) return hold("operator_cancelled");
   if (pr.baseRef !== (await readers.readDefaultBranch())) {
     return hold("base_not_default");
   }
@@ -157,7 +154,22 @@ export async function decideConflictFixClaim(
   ) {
     return hold("recently_fixed");
   }
+  // 読み取りの間に人が中止していれば、起動しない。中止した行より新しい行を作らないためである。
+  if (await cancelledByOperator(readers)) return hold("operator_cancelled");
   return { kind: "claim", pr };
+}
+
+/** ブランチが指すIssueの作業項目か、PRの最新の作業項目を、人が中止したか。 */
+async function cancelledByOperator(
+  readers: Pick<
+    ConflictFixClaimReaders,
+    "branchItemOperatorCancelled" | "operatorCancelledAtHead"
+  >,
+): Promise<boolean> {
+  return (
+    (await readers.branchItemOperatorCancelled()) ||
+    (await readers.operatorCancelledAtHead())
+  );
 }
 
 export type ConflictNotifyInput = {

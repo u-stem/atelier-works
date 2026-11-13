@@ -651,9 +651,9 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     temporary: false,
     discord: false,
     nextAction:
-      "人がConsoleから作業項目を中止したので、同じheadでは自動で直さない。直すときは、人が直してPRにpushするか、PRに修正のラベルを付け直す",
+      "人がConsoleから作業項目を中止したので、自動では直さない。PRの行の中止はheadが動くまで、Issueの中止は同じPRでは続く。直すときは、人が直してPRにpushするか、PRに修正のラベルを付け直す",
     stopAction:
-      "人がConsoleから作業項目を中止したので、同じheadでは自動で直しません。直すときは、人が直してPRにpushするか、PRに修正のラベルを付け直してください",
+      "人がConsoleから作業項目を中止したので、自動では直しません。PRの行の中止はheadが動くまで、Issueの中止は同じPRでは続きます。直すときは、人が直してPRにpushするか、PRに修正のラベルを付け直してください",
   },
   marker_missing: {
     temporary: true,

@@ -33,6 +33,9 @@ const AWAITING_APPROVAL_STATUSES: readonly string[] = [
 /** PRの1つの行として作業項目を持つ種別。中止すると、同じheadではCIの自動の修正が起動しない。 */
 const PR_KINDS: readonly string[] = ["pr_review", "pr_fix", "dependabot"];
 
+/** Issue化の提案の承認依頼を出しうる種別。提案の依頼は、中止しても状態によらず残る。 */
+const PROPOSAL_KINDS: readonly string[] = ["audit", "pr_review", "pr_fix"];
+
 /** 人がトリガーのラベルを付けて始まる種別。 */
 const LABEL_KINDS: readonly string[] = ["issue", "pr_review", "pr_fix"];
 
@@ -76,7 +79,7 @@ export function workItemCancelKey(input: WorkItemCancelInput): string {
  * 確認のダイアログに並べる文。効果、元に戻せないこと、残るもの、拾い直されない条件を書く。
  * 拾い直されない条件は、種別ごとに、実装の振る舞いに合わせて書き分ける。
  * 承認待ちのIssueには、要件定義と設計の承認依頼が期限切れになることを足す。
- * 監査の承認待ちには、Issue化の提案の依頼が残ることを足す。
+ * 提案を出しうる種別(監査、PRのレビュー、PRの修正)には、状態によらず、Issue化の提案の依頼が残ることを足す。
  * Issueには、ブランチのPRの直す回が止まることを、PRの行には、CIと競合の直す回が止まる条件を足す。
  */
 export function cancelWorkItemDialogLines(
@@ -88,12 +91,13 @@ export function cancelWorkItemDialogLines(
     "ブランチとPRは残ります。要らなければ、人が閉じるか消してください。",
     ...pickUpLines(kind),
   ];
-  if (AWAITING_APPROVAL_STATUSES.includes(status)) {
+  if (kind === "issue" && AWAITING_APPROVAL_STATUSES.includes(status)) {
     lines.push(
-      kind === "audit"
-        ? "Issue化の提案の承認依頼は残ります。"
-        : "保留中の承認依頼は期限切れになり、承認も却下もできなくなります。",
+      "保留中の承認依頼は期限切れになり、承認も却下もできなくなります。",
     );
+  }
+  if (PROPOSAL_KINDS.includes(kind)) {
+    lines.push("Issue化の提案の承認依頼は残ります。");
   }
   if (kind === "issue") {
     lines.push(
