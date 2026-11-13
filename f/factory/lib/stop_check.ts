@@ -38,13 +38,18 @@ export const NEVER_STOPPED: StopCheck = async () => false;
  * `keepLateTrue`を真にすると、時間切れの後に読み取りが真を返したとき、その真を覚えて、以後の呼び出しは読まずに真を返す。
  * 止める合図が戻らない確認(人の中止のように、終端で戻らない状態)だけに使う。
  * 全停止は解除があるので、古い真を覚えない。
+ * `onTimeout`は、読み取りが時間切れになったことを、呼び出し側に知らせる。例外を投げても確認は投げない。
  * `now`は現在の時刻(ミリ秒)を返す。テストで差し替える。
  */
 export function boundedCheckFrom(
   read: () => Promise<boolean>,
   timeoutMs: number,
   now: () => number = Date.now,
-  options: { readonly keepLateTrue?: boolean } = {},
+  options: {
+    readonly keepLateTrue?: boolean;
+    /** 読み取りが時間切れになるたびに呼ぶ。読みを飛ばした呼び出しでは呼ばない。 */
+    readonly onTimeout?: () => void;
+  } = {},
 ): StopCheck {
   let pending: { readonly id: number; readonly startedAt: number } | undefined;
   let nextId = 0;
@@ -72,6 +77,11 @@ export function boundedCheckFrom(
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<boolean>((resolve) => {
       timer = setTimeout(() => {
+        try {
+          options.onTimeout?.();
+        } catch {
+          // 通知の失敗で、確認の答えを変えない。
+        }
         resolve(false);
       }, timeoutMs);
     });

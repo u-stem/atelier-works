@@ -160,10 +160,27 @@ function readOrWarnOnce(
 }
 
 /**
+ * 読み取りが時間切れになったときに、確認ごとに最初の1回だけ警告を残す関数を返す。
+ * 時間切れは、読み取りが遅いことを表す。止まるのが遅れるので、ジョブのログから分かるようにする。
+ * 警告に載せるのは、固定の文と待った時間だけである。
+ */
+function warnTimeoutOnce(log: Logger, timeoutMs: number): () => void {
+  let warned = false;
+  return () => {
+    if (warned) return;
+    warned = true;
+    log.warn(
+      "work item stop: the read of the work item ran out of time, so the stop may come late",
+      { timeout_ms: timeoutMs },
+    );
+  };
+}
+
+/**
  * 作業項目の停止の確認を作る。読み取りを`timeoutMs`で区切り、読めない、時間切れ、行が無いは、止めない扱いにする。
  * 時間切れの後に読み取りが真を返したときは、その真を覚える。人の中止は終端で戻らないので、古い真で誤って止めることは無い。
  * 全停止の確認とは別の確認なので、待ちの管理を共有しない。
- * 読めなかったときは、確認ごとに最初の1回だけ、秘密を伏せた警告を`log`に残す。
+ * 読めなかったときと、時間切れになったときは、それぞれ確認ごとに最初の1回だけ警告を`log`に残す。読めなかった警告は、秘密を伏せる。
  */
 export function workItemStopCheckFrom(
   io: WorkItemStopReadIo,
@@ -175,7 +192,7 @@ export function workItemStopCheckFrom(
     readOrWarnOnce(async () => isWorkItemStopped(await io.readState()), log),
     timeoutMs,
     now,
-    { keepLateTrue: true },
+    { keepLateTrue: true, onTimeout: warnTimeoutOnce(log, timeoutMs) },
   );
 }
 
@@ -202,7 +219,10 @@ export function defaultWorkItemStopCheck(
     }, log),
     WORK_ITEM_STOP_CHECK_TIMEOUT_MS,
     Date.now,
-    { keepLateTrue: true },
+    {
+      keepLateTrue: true,
+      onTimeout: warnTimeoutOnce(log, WORK_ITEM_STOP_CHECK_TIMEOUT_MS),
+    },
   );
 }
 

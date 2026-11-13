@@ -625,11 +625,18 @@ function workItemStopCheckOf<T>(opts: RunClaudeOptions<T>): StopCheck {
 /** 停止の確認の結果。作業項目の中止が全停止より優先する。人が中止した作業項目を、全停止の解除の後に起動し直さないためである。 */
 type StopKind = "work_item" | "all" | null;
 
-/** 全停止と作業項目の確認を、それぞれ別に呼ぶ。両方が当たれば作業項目を返す。 */
-async function checkStops<T>(opts: RunClaudeOptions<T>): Promise<StopKind> {
+/**
+ * 全停止と作業項目の確認を、それぞれ別に呼ぶ。両方が当たれば作業項目を返す。
+ * 作業項目の確認`itemCheck`は、`runClaude`が1つだけ作って渡す。起動の前、実行中、再試行の前で共有するので、
+ * 時間切れの後に返った「止める」が、次の確認に引き継がれる。
+ */
+async function checkStops<T>(
+  opts: RunClaudeOptions<T>,
+  itemCheck: StopCheck,
+): Promise<StopKind> {
   const [all, item] = await Promise.all([
     checkStop(stopCheckOf(opts)),
-    checkStop(workItemStopCheckOf(opts)),
+    checkStop(itemCheck),
   ]);
   if (item) return "work_item";
   return all ? "all" : null;
@@ -850,6 +857,7 @@ function parseClaudeJsonOrNull(stdout: string): ClaudeRunResult | null {
 async function attemptClaude<T>(
   opts: RunClaudeOptions<T>,
   promptText: string,
+  itemCheck: StopCheck,
 ): Promise<ClaudeAttemptResult<T>> {
   const env = buildClaudeEnv(opts);
   const argv = buildClaudeArgv(opts);
@@ -857,7 +865,6 @@ async function attemptClaude<T>(
 
   const intervalMs = opts.stopCheckIntervalMs ?? STOP_CHECK_INTERVAL_MS;
   // 全停止と作業項目の確認は、別々の監視で動かす。片方の読み取りが返らなくても、もう片方は待たされない。
-  const itemCheck = workItemStopCheckOf(opts);
   const watch = watchStop(stopCheckOf(opts), intervalMs);
   const itemWatch = watchStop(itemCheck, intervalMs);
   let commandResult: CommandResult;
@@ -1040,7 +1047,9 @@ export async function runClaude<T>(
     };
   }
   // 全停止の間と、人が中止した作業項目は起動しない。flowのstepの再試行で呼び直されたときも、ここで起動せずに終わる。
-  const stoppedBefore = await checkStops(opts);
+  // 作業項目の確認は、この実行で1つだけ作り、起動の前、実行中、再試行の前で共有する。
+  const itemCheck = workItemStopCheckOf(opts);
+  const stoppedBefore = await checkStops(opts, itemCheck);
   if (stoppedBefore === "work_item") {
     return {
       ...failedAttempt(
@@ -1068,7 +1077,7 @@ export async function runClaude<T>(
     };
   }
 
-  const first = await attemptClaude(opts, opts.prompt);
+  const first = await attemptClaude(opts, opts.prompt, itemCheck);
   let retryNote: string;
   let firstIssues: readonly string[] = [];
   if (first.outcome === "success") {
@@ -1081,7 +1090,7 @@ export async function runClaude<T>(
     }
     retryNote = opts.retryNote ?? DEFAULT_RETRY_NOTE;
   }
-  const decision = await retryDecision(opts);
+  const decision = await retryDecision(opts, itemCheck);
   if (!decision.allowed) {
     if (decision.stoppedBy !== null) {
       // 1回目の実行には費用がかかっているので、捨てた実行として残す。
@@ -1113,7 +1122,7 @@ export async function runClaude<T>(
   }
 
   const retryPrompt = `${opts.prompt}\n\n${retryNote}`;
-  const second = await attemptClaude(opts, retryPrompt);
+  const second = await attemptClaude(opts, retryPrompt, itemCheck);
   if (second.outcome === "failure" && firstIssues.length > 0) {
     // 再試行が別の理由(タイムアウトなど)で失敗しても、再試行に至った最初の問題を失敗の記録に残す。
     return {
@@ -1181,11 +1190,12 @@ type RetryDecision =
  */
 async function retryDecision<T>(
   opts: RunClaudeOptions<T>,
+  itemCheck: StopCheck,
 ): Promise<RetryDecision> {
   if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
     return { allowed: false, stoppedBy: null, checkError: null };
   }
-  const stoppedBy = await checkStops(opts);
+  const stoppedBy = await checkStops(opts, itemCheck);
   if (stoppedBy !== null) {
     return { allowed: false, stoppedBy, checkError: null };
   }
