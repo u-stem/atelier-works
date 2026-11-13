@@ -22,12 +22,14 @@ const PARTS_FORMAT = new Intl.DateTimeFormat("ja-JP", {
   day: "2-digit",
   hour: "2-digit",
   minute: "2-digit",
+  second: "2-digit",
   hourCycle: "h23",
 });
 
 type JstParts = {
   readonly date: string;
   readonly clock: string;
+  readonly second: string;
 };
 
 /**
@@ -44,6 +46,7 @@ function jstParts(epochMs: number): JstParts | null {
   return {
     date: `${part("year")}-${part("month")}-${part("day")}`,
     clock: `${part("hour")}:${part("minute")}`,
+    second: part("second"),
   };
 }
 
@@ -59,8 +62,9 @@ export function formatJstMinute(epochMs: number): string | null {
 }
 
 /** 時刻を、日本時間の`YYYY-MM-DD HH:mm:ss`にする。日付として読めなければ`null`を返す。 */
-export function formatJstSecond(_epochMs: number): string | null {
-  return "";
+export function formatJstSecond(epochMs: number): string | null {
+  const parts = jstParts(epochMs);
+  return parts === null ? null : `${parts.date} ${parts.clock}:${parts.second}`;
 }
 
 /** 時刻を、日本時間の`HH:mm`にする。秒は切り捨てる。日付として読めなければ`null`を返す。 */

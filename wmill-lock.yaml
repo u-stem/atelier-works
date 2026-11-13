@@ -70,7 +70,7 @@ locks:
   f/factory/lib/conflict_fix_round: 6c870cbb4ae69eca8106d227ab1bd8ba16457740da07e713820478141f3cb5c6
   f/factory/lib/conflict_fix_verify: 4a244c4da1dacfe86bed6878d2b41e1a6586268091c6c2b1aaf6616cff48f83a
   f/factory/lib/console_actions: 5e87033cf1afa095d967d4e9ba8a1a6f245f7c3b25f1ef71a7419a7536ebcd38
-  f/factory/lib/console_holds_support: e7bb1f80a0f1ff54a6daaf379382155a03da3ff1d9c9e2132148df3aa67c945f
+  f/factory/lib/console_holds_support: e2bcb34500ed2725dcdd33964eff393dcf505b590f90aeb0cd2844e82ba85287
   f/factory/lib/console_known_paths: aa4cdf4332d35035002ec981deb865daf18862551183b64d26f2937479266d43
   f/factory/lib/console_redact: cfcb51085118f37897c76db4dae6b6d5dd314d3e4904b08268d937811df2a351
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
@@ -133,7 +133,7 @@ locks:
   f/factory/lib/job_ids: f11c9a38be9492f5776fdf950f87c51f0162028142640a2017f0f2dafba49432
   f/factory/lib/job_state: ddd6d4c4ad73b379ac89faba02b3a34963864a5486ab7c7590b4437fa3ecdc3d
   f/factory/lib/job_tmp: b6cd08b7b849d342dcef62dd6518a15f07cfb88c8dd995a739e5b36037c65149
-  f/factory/lib/jst: 15b9efbc662d96c76ff95725b80e4bc0823051844481a5e26adb6472d9d368a7
+  f/factory/lib/jst: 16bdeab691a883da06a15ddabf368cecb973712bc95a579291f4ada4d2aaf706
   f/factory/lib/log: d4c8ea14e796fa60f9da8c0d02ff358cd40e483f0896f31c93a7d2871d0bc479
   f/factory/lib/main_ci_support: 940c2ac05fb0df4f52899703c910d5a0dd42390a131802ea0e087964812e2b1c
   f/factory/lib/main_ci_watch: 10ae321eee218b4bc096e95ee0001f9d4734c4091c5478cba1246666642d22d0
