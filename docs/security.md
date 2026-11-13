@@ -415,25 +415,42 @@ URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文に
   - `refuses a redirect from the signed URL`
   - `refuses a Location with`で始まるテスト
   - `keeps the signed URL out of a failure`
-- 制御列を受け取ると指定しない要求では、ESCを含むJSONでない本文を、本文が欠けたものとして空にする。
+- 制御列を受け取ると指定しない要求では、ESC(U+001B)かCSI(U+009B)を含むJSONでない本文を、本文が欠けたものとして空にする。
   `gh`が、制御列を含む本文を出さずに拒んでいた挙動に合わせる。
-  固定するテストは`treats a text body with an escape sequence as incomplete`である。
+  固定するテストは`treats a text body with an escape sequence as incomplete`と`treats a text body with the C1 control sequence introducer as incomplete`である。
+- 本文は、上限の有無によらずreaderで読み、締め切りでは読み取りを取り消す。
+  `fetch`の`signal`の実装に頼らずに、本文の途中で止まった応答を締め切りで打ち切るためである。
+  上限を指定しない要求の本文は、16MiB(`GITHUB_RESPONSE_MAX_BYTES`)を超えた時点で読むのをやめる。
+  固定するテストは`sendGitHubRequest deadline on a stalled body`と`sendGitHubRequest memory cap`のテストである。
 
 テストは、グローバルの`fetch`を差し替えて偽の応答を返す。
 本番のscriptには`fetch`の差し込み口が無い。
 差し替えたグローバルの`fetch`はトークンを受け取るので、この層が防ぐのは、宛先とヘッダーを広げる誤用である。
-グローバルの`fetch`を置き換える変更は、参照するファイルの一覧の走査が見つける。
+グローバルの`fetch`を置き換える変更と、グローバルのオブジェクトを書き換える変更は、走査が見つける。
+走査は仕掛け線で、書き方のパターンを見るだけである。
+名前を組み立てた置き換えなど走査が見ない書き方と、一覧に載ったファイルが置き換えを足す変更は、人のレビューに頼る。
 残るリスクは[R-GHC-06](security-risks.md#r-ghc-06)に書く。
 
 GETの`fetch`は、workerのジョブのプロセスの中で動く。
 `gh`の子プロセスは`GH_TOKEN`、`HOME`、`PATH`、`TMPDIR`だけの閉じた環境で動いたが、APIのGETの通信は、この閉じた環境の外にある。
-プロキシと証明書の環境変数(`HTTPS_PROXY`、`NODE_EXTRA_CA_CERTS`、`NODE_TLS_REJECT_UNAUTHORIZED`)は、ジョブの環境から効きうる。
-Windmillのジョブに届く環境変数は、`infra/docker-compose.yml`の`WHITELIST_ENVS`に挙げた名前だけで、これらの名前は挙げていない。
-残るリスクは[R-GHC-07](security-risks.md#r-ghc-07)に書く。
+次の環境変数は、ジョブの環境から`fetch`に効きうる。
 
-通信の再試行は、この層の`runGitHubRequest`だけが行う。
+- プロキシ(`HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`)。
+  トークンを載せた要求が、経由先に見える。
+- 証明書(`NODE_EXTRA_CA_CERTS`、`NODE_TLS_REJECT_UNAUTHORIZED`)。
+  証明書の検査が外れうる。
+- `BUN_CONFIG_VERBOSE_FETCH`。
+  要求と応答がログに出る。
+  `Authorization`は伏せられるが、署名付きURLと`Location`は全文が出る。
+
+Windmillのジョブに届く環境変数は`WHITELIST_ENVS`に挙げた名前だけだと見ているが、ジョブの中では確かめていない。
+`infra/docker-compose.yml`のworkerの`environment`と`WHITELIST_ENVS`のどちらにも、これらの名前は無い。
+残るリスクと見直しのきっかけは[R-GHC-07](security-risks.md#r-ghc-07)に書く。
+
+通信の再試行は、この層の`runGitHubRequest`と、その中の一時的な失敗の再試行(`sendWithTransientRetry`)だけが行う。
 `gh`を起動する送り方(`lib/github.ts`の`callGhApi`の書き込み)も、再試行とレート制限の待ちをこの関数に任せる。
-署名付きURLの取得は再試行せず、レート制限も待たない。
+署名付きURLの取得では、APIへの要求だけが、通信断と5xxで1回だけ送り直す。
+取得先への要求は送り直さず、APIのレート制限も待たない。
 再試行するのは、冪等な要求の通信断と5xxと、本文が途中で切れた2xxの応答である。
 どれも1回だけ送り直す。
 本文の切れた5xxは、5xxとしてだけ数え、通信層全体で2回までしか送らない。

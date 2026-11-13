@@ -323,12 +323,19 @@ describe("getWorkflowJobLog", () => {
   });
 
   test("states only the status in the message of a server error", async () => {
-    stubGlobalFetch([new Response("response body marker", { status: 500 })]);
+    // APIの5xxは1回だけ送り直すので、2回とも5xxを返す。
+    stubGlobalFetch([
+      new Response("response body marker", { status: 500 }),
+      new Response("response body marker", { status: 500 }),
+    ]);
     expect(await messageOf()).toBe("GET workflow job log failed with HTTP 500");
   });
 
   test("throws a status 0 GitHubCiLogError when the API does not answer", async () => {
-    stubGlobalFetch([new TypeError("connection refused")]);
+    stubGlobalFetch([
+      new TypeError("connection refused"),
+      new TypeError("connection refused"),
+    ]);
     await expect(get()).rejects.toMatchObject({
       name: "GitHubCiLogError",
       status: 0,

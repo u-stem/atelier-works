@@ -199,9 +199,10 @@ export async function getBranchHeadSha(
   validateOwnerRepo(owner, repo);
   assertBranchName(branch);
   const context = `GET ref ${owner}/${repo}@${branch}`;
+  // ブランチ名は`%`と`#`を含みうるので、区間ごとにエンコードする。`/`はrefの区切りなので残す。
   const response = await callGhApi(
     client,
-    `repos/${owner}/${repo}/git/ref/heads/${branch}`,
+    `repos/${owner}/${repo}/git/ref/heads/${encodeRepoPath(branch)}`,
   );
   if (response.status === 404) return null;
   ensureSuccess(response, context);

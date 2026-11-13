@@ -1,7 +1,7 @@
 // GitHubのREST APIを呼ぶ。
 // GETの要求は、`gh`を起動せず、通信層(`github_http.ts`)の`fetch`で送る。
 // 宛先の固定、トークンを`Authorization`ヘッダーに載せること、リダイレクトの扱いは、通信層が決める。
-// 書き込み(POST、PATCH、PUT、DELETE)は、まだ注入された`run`(`workspace.ts`の`CommandRunner`)で
+// 書き込み(POST、PATCH、PUT、DELETE)は`gh api`で送る。注入された`run`(`workspace.ts`の`CommandRunner`)で
 // `gh api ...`を引数の配列として実行する。シェルの文字列は使わない。
 // `gh`へのトークンはサブプロセスの環境変数`GH_TOKEN`でだけ渡し、コマンドの引数やURLには入れない。
 //
@@ -151,6 +151,8 @@ export type GhApiResponse = {
    * `gh`の書き込みでは、JSONでない本文を読む`callGhApiRawBody`の要求で、終了コードが0以外のときだけ付ける。
    */
   readonly incomplete?: true;
+  /** GETの本文が通信層の上限(`GITHUB_RESPONSE_MAX_BYTES`)を超えて、読むのをやめたときだけ付く。`incomplete`も付く。 */
+  readonly tooLarge?: true;
 };
 
 function parseGhApiOutput(stdout: string): GhApiResponse {
@@ -401,8 +403,28 @@ export class GitHubResponseError extends Error {
   }
 }
 
+/**
+ * 2xxでなければ`GitHubHttpError`を投げる。本文は、マスクを通した先頭の500文字だけを載せる。
+ * 2xxでも本文が欠けた(`incomplete`)ときは、通信の一時的な失敗として、ステータス0の`GitHubHttpError`を投げる。
+ * 締め切りで欠けたかは`timedOut`に載せ、本文は載せない。
+ * 本文が大きすぎて読むのをやめたときは、待っても直らないので`GitHubResponseError`を投げる。
+ */
 export function ensureSuccess(response: GhApiResponse, context: string): void {
-  if (response.status >= 200 && response.status < 300) return;
+  if (response.status >= 200 && response.status < 300) {
+    if (response.incomplete !== true) return;
+    if (response.tooLarge === true) {
+      throw new GitHubResponseError(
+        maskSecrets(`${context}: response body is larger than the limit`),
+      );
+    }
+    throw new GitHubHttpError(
+      maskSecrets(
+        `${context} failed with HTTP 0: the body was cut after a ${String(response.status)} status`,
+      ),
+      0,
+      { timedOut: response.timedOut === true },
+    );
+  }
   throw new GitHubHttpError(
     maskSecrets(
       `${context} failed with HTTP ${response.status}: ${response.bodyText.slice(0, 500)}`,
@@ -459,6 +481,11 @@ export async function callGhApiRawBody(
     response.status >= 200 &&
     response.status < 300
   ) {
+    if (response.tooLarge === true) {
+      throw new GitHubResponseError(
+        maskSecrets(`${context}: response body is larger than the limit`),
+      );
+    }
     throw new GitHubRawBodyIncompleteError(context);
   }
   return response;
@@ -5085,6 +5112,7 @@ export async function getWorkflowJobLog(
       throw new GitHubCiLogError(0);
     case "incomplete":
       throw new GitHubRawBodyIncompleteError("GET workflow job log");
+    // `text_capped`の取得は上限で先頭と末尾を残し、バイト列も返さないので、この2つには至らない。
     case "too_large":
     case "bytes":
       throw new GitHubCiLogError(0);

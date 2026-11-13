@@ -961,6 +961,13 @@ PRとIssueのポーリングは5分ごとに動くので、一過性の失敗で
 `fetch`では、要求が届く前の失敗と届いた後の失敗を見分けられない。
 そのため、GETの通信の失敗は、すべて応答の無い失敗として扱う。
 
+2xxの後で本文が途中で切れたGETは、1回だけ取り直す。
+取り直しても欠けたJSONの応答は、`ensureSuccess`がステータス0の`GitHubHttpError`にする。
+締め切りで切れたかは`timedOut`に載せる。
+形の誤り(`GitHubResponseError`)にせず通信の一時的な失敗として扱うので、PRのレビューの自動の再開(`markTransientGitHubFailure`)の対象になる。
+本文の上限を指定しないGETは、本文が16MiB(`GITHUB_RESPONSE_MAX_BYTES`)を超えた時点で読むのをやめる。
+大きすぎた本文は、取り直しても同じなので取り直さず、待っても直らない`GitHubResponseError`にする。
+
 待つ時間は2秒(`GITHUB_TRANSIENT_RETRY_DELAY_MS`)である。
 テストでは`GhClient`の`transientRetryDelayMs`と`sleep`で差し替える。
 再試行は要求ごとに1回までで、rate limitの再試行とは別に数える。

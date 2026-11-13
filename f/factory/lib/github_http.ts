@@ -61,8 +61,12 @@ const MAX_SAME_ORIGIN_REDIRECTS = 3;
 /** 呼び出しの入口で拒むRESTの検索APIの接頭辞。検索は1分ごとの枠が小さく、5分の境目に集中して拒まれる。 */
 const REJECTED_REST_ENDPOINT_PREFIX = "search/";
 
-/** 端末の制御列の始まり(ESC)。 */
-const ESCAPE = "\u001b";
+/** 端末の制御列の始まり。ESC(U+001B)と、1文字で制御列を始めるCSI(U+009B)。 */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: 制御列を見分けるため、意図して制御文字に一致させる
+const ESCAPE_SEQUENCE_START = /[\u001b\u009b]/;
+
+/** 署名付きURLの取得で、APIの応答(302)の本文として受け取るバイト数の上限。 */
+const DOWNLOAD_API_MAX_BODY_BYTES = 64 * 1024;
 
 /**
  * 通信層のクライアント。持つのはトークンと、待機、時計、ログ、再試行の待ちの差し込みだけで、`fetch`は持たない。
@@ -558,11 +562,13 @@ export async function runGitHubRequest<R extends GitHubHttpResponseCore>(
   const first = await sendWithRateLimitWait(env, request, policy, send);
   // 締め切りで切れた本文は取り直さない。締め切りを過ぎた要求は送り直さない、という決まりに合わせる。
   // 取り直すのは2xxの応答だけにする。2xx以外は、ステータスで判定する一時的な失敗の再試行に任せ、送る回数を重ねない。
+  // 大きすぎた本文は、取り直しても同じなので取り直さない。
   if (
     first.incomplete !== true ||
     first.status < 200 ||
     first.status >= 300 ||
     first.timedOut === true ||
+    first.tooLarge === true ||
     !isIdempotent(request) ||
     request.retry === "never"
   ) {
@@ -655,29 +661,104 @@ function noResponse(err: unknown): {
   };
 }
 
-/** 本文を読んだ結果。`ok`が偽なら、本文が途中で切れたか、締め切りを過ぎた。 */
-type BodyRead =
-  | { readonly ok: true; readonly text: string; readonly capped: boolean }
-  | { readonly ok: false; readonly timedOut: boolean };
+/** 本文をバイト列で読んだ結果。 */
+type BytesRead =
+  | { readonly kind: "bytes"; readonly bytes: Uint8Array }
+  | { readonly kind: "too_large" }
+  | { readonly kind: "incomplete"; readonly timedOut: boolean };
 
 /**
- * 応答の本文を文字列で読む。`maxBytes`があれば、先頭と末尾だけを保持する(`stream_cap.ts`)。
- * 上限つきの読み取りは、締め切りで読み取りを取り消すとそれまでの分で返るので、取り消した後の本文は欠けたものにする。
+ * 本文を`maxBytes`まで、バイト列で読む。超えた時点で読むのをやめる。
+ * 申告された大きさ(`content-length`)が`maxBytes`を超えるときは、読まずに断る。
+ * 締め切りは`cancelOnAbort`で読み取りを取り消して効かせ、`fetch`の`signal`の実装に頼らない。
+ * 取り消した後に残った本文は、全体として返さない。
+ */
+async function readBodyBytes(
+  raw: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<BytesRead> {
+  const declared = Number(raw.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await raw.body?.cancel().catch(() => undefined);
+    return { kind: "too_large" };
+  }
+  if (raw.body === null) return { kind: "bytes", bytes: new Uint8Array() };
+  const reader = raw.body.getReader();
+  const release = cancelOnAbort(reader, signal);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return { kind: "too_large" };
+      }
+      chunks.push(chunk.value);
+    }
+  } catch (err) {
+    return { kind: "incomplete", timedOut: isTimeout(err) || signal.aborted };
+  } finally {
+    release();
+  }
+  if (signal.aborted) return { kind: "incomplete", timedOut: true };
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { kind: "bytes", bytes };
+}
+
+/** 本文を文字列で読んだ結果。`ok`が偽なら、本文が途中で切れたか、締め切りを過ぎたか、大きすぎた。 */
+type BodyRead =
+  | { readonly ok: true; readonly text: string; readonly capped: boolean }
+  | {
+      readonly ok: false;
+      readonly timedOut: boolean;
+      readonly tooLarge: boolean;
+    };
+
+/**
+ * 応答の本文を文字列で読む。どちらの経路も本文をreaderで読み、締め切りは`cancelOnAbort`で読み取りを取り消して効かせる。
+ * `maxBytes`があれば、先頭と末尾だけを保持する(`stream_cap.ts`)。
+ * 無ければ、`GITHUB_RESPONSE_MAX_BYTES`を超えた時点で読むのをやめ、大きすぎたものにする。
+ * 締め切りで取り消した後に残った本文は、欠けたものにする。
  */
 async function readBodyText(
   raw: Response,
   maxBytes: number | undefined,
   signal: AbortSignal,
 ): Promise<BodyRead> {
-  try {
-    if (maxBytes === undefined || raw.body === null) {
-      return { ok: true, text: await raw.text(), capped: false };
+  if (raw.body === null) return { ok: true, text: "", capped: false };
+  if (maxBytes === undefined) {
+    const read = await readBodyBytes(raw, GITHUB_RESPONSE_MAX_BYTES, signal);
+    if (read.kind === "too_large") {
+      return { ok: false, timedOut: false, tooLarge: true };
     }
+    if (read.kind === "incomplete") {
+      return { ok: false, timedOut: read.timedOut, tooLarge: false };
+    }
+    return {
+      ok: true,
+      text: new TextDecoder().decode(read.bytes),
+      capped: false,
+    };
+  }
+  try {
     const read = await readStreamCappedDetail(raw.body, maxBytes, signal);
-    if (signal.aborted) return { ok: false, timedOut: true };
+    if (signal.aborted) return { ok: false, timedOut: true, tooLarge: false };
     return { ok: true, text: read.text, capped: read.omittedBytes > 0 };
   } catch (err) {
-    return { ok: false, timedOut: isTimeout(err) || signal.aborted };
+    return {
+      ok: false,
+      timedOut: isTimeout(err) || signal.aborted,
+      tooLarge: false,
+    };
   }
 }
 
@@ -692,13 +773,13 @@ function isJsonText(text: string): boolean {
 
 /**
  * 端末の制御列を含む本文を、本文が欠けたものとして扱うか。
- * `allowEscapeSequences`を指定しない要求で、JSONでない本文がESCを含むときに真になる。
+ * `allowEscapeSequences`を指定しない要求で、JSONでない本文がESCかCSI(U+009B)を含むときに真になる。
  * `gh`が、制御列を含む本文を出さずに拒んでいた挙動に合わせる。読み手が制御列を見ずに使う本文(ファイルの内容)を守るため。
  */
 function refusesEscapeSequences(request: GitHubRequest, text: string): boolean {
   return (
     request.allowEscapeSequences !== true &&
-    text.includes(ESCAPE) &&
+    ESCAPE_SEQUENCE_START.test(text) &&
     !isJsonText(text)
   );
 }
@@ -756,6 +837,7 @@ async function fetchAttempt(
           rateLimit: classifyRateLimit(raw.status, headers, "", now()),
           incomplete: true,
           ...(body.timedOut ? { timedOut: true as const } : {}),
+          ...(body.tooLarge ? { tooLarge: true as const } : {}),
         },
         noResponse: false,
       };
@@ -908,58 +990,14 @@ function allowedDownloadUrl(
 }
 
 /**
- * 本文をバイト列で読み、`maxBytes`を超えた時点で読むのをやめる。
- * 申告された大きさ(`content-length`)が`maxBytes`を超えるときは、読まずに断る。
- */
-async function readBodyBytes(
-  raw: Response,
-  maxBytes: number,
-  signal: AbortSignal,
-): Promise<DownloadResult> {
-  const declared = Number(raw.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    await raw.body?.cancel().catch(() => undefined);
-    return { kind: "too_large" };
-  }
-  if (raw.body === null) return { kind: "bytes", bytes: new Uint8Array() };
-  const reader = raw.body.getReader();
-  const release = cancelOnAbort(reader, signal);
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      total += chunk.value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        return { kind: "too_large" };
-      }
-      chunks.push(chunk.value);
-    }
-  } catch (err) {
-    return { kind: "incomplete", timedOut: isTimeout(err) || signal.aborted };
-  } finally {
-    release();
-  }
-  // 締め切りで読み取りを取り消すと、それまでの分で終わる。欠けた本文を全体として返さない。
-  if (signal.aborted) return { kind: "incomplete", timedOut: true };
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return { kind: "bytes", bytes };
-}
-
-/**
  * APIの`path`へトークンつきでGETを送り、返った3xxの`Location`の署名付きURLから本文を取る。
  * - APIへの要求は、リダイレクトを辿らない。署名付きURLは、外から受け取らず、この応答の`Location`からだけ取る。
+ * - APIへの要求は、応答の無い通信断と5xxのときだけ、短く待って1回だけ送り直す(`sendWithTransientRetry`)。
+ *   本文は`DOWNLOAD_API_MAX_BODY_BYTES`までしか受け取らない。
  * - 署名付きURLは、用途の取得先の表(`DOWNLOAD_HOST_SUFFIXES`)に当たるものだけを取りに行く。
- *   トークンを付けず、`redirect: "error"`でリダイレクトを辿らない。
+ *   トークンを付けず、`redirect: "error"`でリダイレクトを辿らない。送り直さない。
  * - 締め切り(`timeoutMs`)は、APIへの要求と取得先への要求で1つを共有する。
- * - 再試行はしない。APIのレート制限は、待たずに`GitHubRateLimitError`を投げる。
+ * - APIのレート制限は、待たずに`GitHubRateLimitError`を投げる。投げる前に警告のログを1行残す。
  * - 本文は、`bytes`なら`maxBytes`を超えた時点で断り、`text_capped`なら先頭と末尾を残す。
  *   取得先の本文は、制御列を含んでもそのまま返す。読む側が見える形に置き換える。
  * パスが使えないときと、レート制限のときだけ例外を投げる。ほかの失敗は結果の`kind`で返す。
@@ -974,12 +1012,24 @@ export async function downloadRedirectTarget(
   const signal = AbortSignal.timeout(
     options.timeoutMs ?? GITHUB_HTTP_TIMEOUT_MS,
   );
-  const { response } = await fetchAttempt(
+  const response = await sendWithTransientRetry(
     client,
-    { path: request.path, redirect: "never" },
-    signal,
+    { endpoint: request.path, method: "GET" },
+    async () => ({
+      kind: "response",
+      ...(await fetchAttempt(
+        client,
+        {
+          path: request.path,
+          redirect: "never",
+          maxBodyBytes: DOWNLOAD_API_MAX_BODY_BYTES,
+        },
+        signal,
+      )),
+    }),
   );
   if (response.rateLimit !== null) {
+    logRateLimit(client, request.path, response, "wait_too_long");
     throw rateLimitError(request.path, response.rateLimit, false);
   }
   if (!isRedirectStatus(response.status)) {
