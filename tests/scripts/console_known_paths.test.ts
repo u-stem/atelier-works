@@ -45,6 +45,7 @@ describe("the generated known paths", () => {
       "f/factory/console_schedule_stop",
       "f/factory/console_stop_all",
       "f/factory/console_stop_all_release",
+      "f/factory/console_work_item_cancel",
       "f/factory/freeze_release",
       "f/factory/hold_release",
     ]);
