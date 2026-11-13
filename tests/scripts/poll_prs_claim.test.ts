@@ -269,7 +269,7 @@ describe("claimPr when the confirmation read fails", () => {
     ]);
     const { client } = recordingClient();
     await expect(claimPr(client, ...args)).rejects.toThrow(
-      /confirmation read failed.*HTTP 404.*restoring trigger label factory:review failed.*HTTP 500/s,
+      /claim could not be confirmed.*HTTP 404.*restoring trigger label factory:review failed.*HTTP 500/s,
     );
   });
 
@@ -611,6 +611,17 @@ describe("claimPr when the label removal is undetermined", () => {
     });
   });
 
+  test("does not post the label back when another actor removed the label last", async () => {
+    const { calls } = createFakeCommandRunner([
+      noResponse,
+      labelAbsent(),
+      ghApiOk([unlabeled("factory-bot"), unlabeled("alice")]),
+    ]);
+    const { client } = recordingClient();
+    await claimPr(client, ...args);
+    expect(labelPost(calls)).toBeUndefined();
+  });
+
   test("puts the label back when no removal follows the latest labeling", async () => {
     createFakeCommandRunner([
       noResponse,
@@ -906,7 +917,7 @@ describe("resolveClaimNotices", () => {
     return { resolve, calls, resolvedMessages };
   }
 
-  test("resolves the restored, left-removed and labeler-denied notices of that PR and label", async () => {
+  test("resolves the restored, left-removed, labeler-denied and deferred notices of that PR and label", async () => {
     const { resolve, calls } = exactResolver([]);
     await resolveClaimNotices(TARGET, "factory:review", resolve, noopLog);
     expect(calls).toEqual([
@@ -927,7 +938,42 @@ describe("resolveClaimNotices", () => {
           "octo-owner/atelier-works#7: factory:reviewラベルを付けたのは許可されていないユーザーです",
         resolvedBy: "poll_prs",
       },
+      {
+        kind: "claim_race_lost",
+        message:
+          "octo-owner/atelier-works#7: trigger label factory:review removal failed and the label is still present",
+        resolvedBy: "poll_prs",
+      },
     ]);
+  });
+
+  // 削除の結果が分からず、ラベルが残っていて引いたときのnoticeは、次の巡回で取得できたら解決する。
+  test("matches the message recorded when a claim with the label still present is deferred", async () => {
+    createFakeCommandRunner([
+      ok(""), // DELETE: 応答の無い失敗(ステータス0)
+      ghApiOk(fakeIssue(["factory:review"])),
+    ]);
+    const { client } = recordingClient();
+    const deferred = await claimPr(
+      client,
+      TARGET.owner,
+      TARGET.repo,
+      TARGET.number,
+      "factory:review",
+      "factory-bot",
+    );
+    const recorded: string[] = [];
+    if (!deferred.claimed) {
+      await recordPrClaimNotClaimed(TARGET, deferred, {
+        addNoticeUnlessUnresolved: async (record) => {
+          recorded.push(record.message);
+          return 1;
+        },
+      });
+    }
+    const { resolve, calls } = exactResolver([]);
+    await resolveClaimNotices(TARGET, "factory:review", resolve, noopLog);
+    expect(calls[3]?.message).toBe(recorded[0]);
   });
 
   test("matches the message the labeler-denied recording writes", async () => {
@@ -1030,6 +1076,7 @@ describe("resolveClaimNotices", () => {
       },
     );
     expect(warns).toEqual([
+      "claim notices could not be resolved",
       "claim notices could not be resolved",
       "claim notices could not be resolved",
       "claim notices could not be resolved",
