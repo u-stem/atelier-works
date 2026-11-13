@@ -1189,6 +1189,25 @@ function importClosure(entry: string): string[] {
   return [...seen].sort();
 }
 
+// Consoleの組み立てと検査が、console/の外から読み込むファイルの全体。
+// console/の中のimportは拡張子を省くことがあるので、console/の外を指すimportだけをたどる。
+function consoleOutsideImports(): string[] {
+  const found = new Set<string>();
+  const glob = new Bun.Glob("{src,scripts,e2e}/**/*.{ts,tsx}");
+  for (const file of glob.scanSync({ cwd: join(ROOT, "console") })) {
+    const path = `console/${file}`;
+    const source = readFileSync(join(ROOT, path), "utf8");
+    for (const match of source.matchAll(
+      /(?:from|import)\s+["'](\.[^"']+)["']/g,
+    )) {
+      const next = normalize(join(dirname(path), match[1] ?? ""));
+      if (next.startsWith("console/")) continue;
+      for (const reached of importClosure(next)) found.add(reached);
+    }
+  }
+  return [...found].sort();
+}
+
 // test:dbが実行するscriptの全体。実行するscriptを足したときに、一覧から漏れないようグロブで列挙する。
 function dbTestEntries(): string[] {
   return readdirSync(join(ROOT, "scripts"))
@@ -1209,6 +1228,18 @@ describe("import closure of the CI tests", () => {
         "scripts/test-db-queries.ts",
       ]),
     );
+  });
+
+  test("finds the files that the console imports from f/, so that the check below is not empty", () => {
+    expect(consoleOutsideImports()).toContain("f/factory/lib/jst.ts");
+  });
+
+  test("every file outside console/ that the console imports triggers console", () => {
+    const uncovered = consoleOutsideImports().filter(
+      (path) => scopeOfPaths([path]).console === false,
+    );
+
+    expect(uncovered).toEqual([]);
   });
 
   test("every file the db tests import under f/ triggers db", () => {
