@@ -948,7 +948,7 @@ verify_gh_collect_detail() {
 }
 
 # 稼働中の一意インデックス5本の述語が、アプリの終端でない状態の一覧と一致することを確かめる。
-# 一覧は`f/factory/lib/types.ts`から読む。migrationの文面の検査(`tests/scripts/active_*_migration.test.ts`)と違い、
+# 一覧は`f/factory/lib/types.ts`から読む。migrationの文面ではなく、
 # PostgreSQLが実際に持つインデックスの定義を読む。全migrationの適用後に呼ぶ。
 verify_active_index_predicates() {
   local expected
