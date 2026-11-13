@@ -512,6 +512,22 @@ describe("permission errors", () => {
     ]);
   });
 
+  test("masks a known token in the logged error of a denied repository", async () => {
+    const h = harness({
+      discovery: {
+        widgets: new GitHubHttpError(
+          "denied for ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+          403,
+        ),
+      },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(
+      h.logs.find((log) => log.message === "main ci runs are not readable")
+        ?.fields?.error,
+    ).toBe("denied for ***");
+  });
+
   test("a server error is not treated as denied", async () => {
     const h = harness({ discovery: { widgets: deniedError(500) } });
     await runMainCiWatch([TARGET], h.deps);

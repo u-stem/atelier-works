@@ -27,7 +27,7 @@ import type { TransientReviewCandidate } from "./db.ts";
 import type { NotifyEvent } from "./discord.ts";
 import { GitHubHttpError } from "./github_errors.ts";
 import { parseFlowJobId } from "./implement_launch_support.ts";
-import { type Logger, maskSecrets } from "./log.ts";
+import { errorMessage, type Logger } from "./log.ts";
 import { assertGitHubName } from "./types.ts";
 
 export const PR_REVIEW_FLOW_PATH = "f/factory/pr_review";
@@ -271,10 +271,6 @@ export type TransientReviewDeps = {
   readonly log: Logger;
 };
 
-function messageOf(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 type Outcome = "restarted" | "skipped" | "failed";
 
 async function retryOne(
@@ -303,7 +299,7 @@ async function retryOne(
       "runFlowAsync",
     );
   } catch (err) {
-    const reason = `${TRANSIENT_GITHUB_REASON_PREFIX}${TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX}${PR_REVIEW_FLOW_PATH} could not be started: ${messageOf(err)}`;
+    const reason = `${TRANSIENT_GITHUB_REASON_PREFIX}${TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX}${PR_REVIEW_FLOW_PATH} could not be started: ${errorMessage(err)}`;
     const movedBack = await deps.rollBack(candidate, reason);
     deps.log.warn("pr_review retry could not start the flow", {
       work_item_id: candidate.id,
@@ -352,7 +348,7 @@ export async function retryTransientPrReviews(
         counts.failed += 1;
         deps.log.warn("pr_review retry failed for a work item", {
           work_item_id: candidate.id,
-          error: messageOf(err),
+          error: errorMessage(err),
         });
       }
       // 上限に届いたら、次の候補にも次のページにも進まない。
@@ -434,7 +430,7 @@ export async function notifyStalledTransientReviews(
       } catch (err) {
         deps.log.warn("pr_review stall could not be reported", {
           work_item_id: candidate.id,
-          error: messageOf(err),
+          error: errorMessage(err),
         });
       }
     }

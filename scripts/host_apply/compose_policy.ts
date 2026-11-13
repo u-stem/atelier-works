@@ -2,7 +2,7 @@
 
 import { isAbsolute, relative, resolve } from "node:path";
 import { MAX_BLOB_BYTES } from "./constants.ts";
-import { escapeDetail } from "./stable.ts";
+import { escapeDetail, isRecord } from "./stable.ts";
 
 export const COMPOSE_SERVICE_ALLOWLIST: readonly string[] = [
   "db",
@@ -132,10 +132,6 @@ class Violation extends Error {
 
 function forbid(detail: string): never {
   throw new Violation("compose_forbidden", detail);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isExtensionKey(key: string): boolean {

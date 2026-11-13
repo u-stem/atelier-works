@@ -57,13 +57,9 @@ import {
   insertCleanupRun,
   resolveStaleInfoNoticesBefore,
 } from "./lib/db.ts";
-import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import { errorMessage, type Logger, logger } from "./lib/log.ts";
 import { REQUIREMENTS_BASE_DIR } from "./lib/requirements_template.ts";
 import { removeEmptyDir, removePath } from "./lib/workspace.ts";
-
-function errorMessage(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
 
 /**
  * `cutoff`より前の終端状態の作業項目を削除し、件数と削除した行の参照を返す。

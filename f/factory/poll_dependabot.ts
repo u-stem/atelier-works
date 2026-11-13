@@ -74,7 +74,7 @@ import {
   listActiveHolds,
 } from "./lib/holds.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
-import { logger, maskSecrets } from "./lib/log.ts";
+import { errorMessage, logger } from "./lib/log.ts";
 import { isCommitSha } from "./lib/main_ci_support.ts";
 import { listMainCiTargets } from "./lib/main_ci_watch.ts";
 import {
@@ -364,10 +364,6 @@ function splitRepoFullName(
     return null;
   }
   return { owner, repo };
-}
-
-function errorMessage(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
 }
 
 /**

@@ -1,6 +1,7 @@
 /** 目標のコミットの必須チェックを、GitHubのAPIの応答から判定する。ネットワークには触れない。 */
 
 import { CI_WORKFLOW_PATH, REQUIRED_CHECKS } from "./constants.ts";
+import { isRecord } from "./stable.ts";
 
 export type CiPendingWhy =
   | "no_run"
@@ -31,10 +32,6 @@ type CheckRun = {
   readonly appSlug: string;
   readonly suiteId: number;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function readWorkflowRun(value: unknown): WorkflowRun | null {
   if (!isRecord(value)) return null;

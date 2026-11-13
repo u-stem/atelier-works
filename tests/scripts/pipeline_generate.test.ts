@@ -329,6 +329,19 @@ describe("snapshotDocDir", () => {
     );
   });
 
+  test("masks a known token in the reason of a snapshot failure", async () => {
+    const h = io([HASH, HASH]);
+    const deps: SnapshotIo = {
+      ...h.deps,
+      readDir: async () => {
+        throw new Error("EIO: ghp_0123456789abcdefghijklmnopqrstuvwxyz");
+      },
+    };
+    await expect(snapshotDocDir("/doc", deps)).rejects.toThrow(
+      "pipeline_generate: doc snapshot failed (doc_list_failed): EIO: ***",
+    );
+  });
+
   test("does not report a snapshot failure as a failed Claude run", async () => {
     const h = io([null, null]);
     await expect(snapshotDocDir("/doc", h.deps)).rejects.not.toThrow(

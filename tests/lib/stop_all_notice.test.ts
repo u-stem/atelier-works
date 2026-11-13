@@ -269,6 +269,21 @@ describe("stopAllCause", () => {
     );
   });
 
+  test("names each part of a time that is not a time as NaN", () => {
+    expect(
+      stopAllCause({
+        kind: "active",
+        state: {
+          placed_at: "not a time",
+          placed_by: "operator",
+          reason: "a runaway loop",
+        },
+      }),
+    ).toBe(
+      "NaN-NaN-NaN NaN:NaN JSTにoperatorが全停止を置きました。理由: a runaway loop",
+    );
+  });
+
   test("speaks of a corrupt variable", () => {
     expect(stopAllCause({ kind: "corrupt", reason: "r" })).toContain(
       "壊れている",

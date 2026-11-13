@@ -168,9 +168,10 @@ describe("self_update gh collect freshness check", () => {
     expect(callSection(await selfUpdateSource())).not.toContain("timeoutMs");
   });
 
-  test("the freshness module imports only types, log and discord", async () => {
+  test("the freshness module imports only types, log, jst and discord", async () => {
     expect(importedModules(await freshnessSource()).sort()).toEqual([
       "./discord.ts",
+      "./jst.ts",
       "./log.ts",
       "./types.ts",
     ]);

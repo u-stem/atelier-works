@@ -4,18 +4,9 @@
 // このファイルは依存を持たない小さなものに保つ。
 
 import { jstMidnightTodayIso } from "./claude.ts";
+import { formatJstDate, INVALID_JST_DATE } from "./jst.ts";
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 export const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** `date`が属するJSTの日付を`YYYY-MM-DD`で返す(UTC+9固定、夏時間なし)。 */
-export function formatJstDate(date: Date): string {
-  const shifted = new Date(date.getTime() + JST_OFFSET_MS);
-  const year = shifted.getUTCFullYear();
-  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(shifted.getUTCDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
 
 /**
  * 監査期間`[start, end)`を人が読むラベルにして返す。
@@ -23,7 +14,9 @@ export function formatJstDate(date: Date): string {
  * 09-29 00:00に終わる期間は「〜09-28」と表示する。
  */
 export function formatAuditPeriodLabel(start: Date, end: Date): string {
-  return `${formatJstDate(start)}〜${formatJstDate(new Date(end.getTime() - DAY_MS))}`;
+  const first = formatJstDate(start.getTime()) ?? INVALID_JST_DATE;
+  const last = formatJstDate(end.getTime() - DAY_MS) ?? INVALID_JST_DATE;
+  return `${first}〜${last}`;
 }
 
 export type AuditPeriod = {

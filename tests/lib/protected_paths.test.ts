@@ -2340,6 +2340,8 @@ describe("safety boundary files", () => {
     "scripts/credential_expiry.ts",
     "f/factory/lib/credential_expiry.ts",
     "f/factory/lib/credential_expiry.script.yaml",
+    "f/factory/lib/jst.ts",
+    "f/factory/lib/jst.script.yaml",
   ];
   // windmill-clientを含むlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるので守らない。
   const CLIENT_LOCKS = [
@@ -2394,6 +2396,19 @@ describe("safety boundary files", () => {
   ])("does not protect the lock %s of the cost and retry libs", (path) => {
     expect(matchesForbiddenPath(path)).toBe(false);
   });
+
+  // 日本時間の部品は依存を持たないので、lockは依存の無いlibのlockと同じ扱いにする。
+  test("does not protect the lock of the JST lib", () => {
+    expect(matchesForbiddenPath("f/factory/lib/jst.script.lock")).toBe(false);
+  });
+
+  // `log.ts`と`types.ts`は日常的に直す部品なので守らない。`jst.ts`だけを守る違いを固定する。
+  test.each(["f/factory/lib/log.ts", "f/factory/lib/types.ts"])(
+    "does not protect the everyday shared module %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(false);
+    },
+  );
 
   test.each(CLIENT_LOCKS)("the CI round still denies the lock %s", (path) => {
     expect(isDeniedPath(path)).toBe(true);

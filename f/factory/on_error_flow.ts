@@ -61,7 +61,11 @@ import {
 } from "./lib/types.ts";
 import { nextActionFor } from "./steps/pr_workflow_support.ts";
 
-function errorMessage(error: unknown): string {
+/**
+ * 失敗のflowが渡した`error`(`message`を持つオブジェクトか文字列)から、記録と通知に使う文を取り出す。
+ * マスクは、呼び出し側が再試行の印を外した後にかける。
+ */
+function flowErrorText(error: unknown): string {
   if (isRecord(error) && isString(error.message)) return error.message;
   if (typeof error === "string") return error;
   try {
@@ -227,7 +231,7 @@ export async function handleFlowFailure(
   // 再試行を止めるタグは、flowの`retry_if`のための印で、ここに来た時点で役目を終えている。
   // 記録、作業項目の注記、通知のどれにも出さないよう、最初に1回だけ外す。
   const message = maskSecrets(
-    withoutFlowRetryMarker(errorMessage(input.error)),
+    withoutFlowRetryMarker(flowErrorText(input.error)),
   );
   const resolvedPath = path ?? "unknown";
   const resolvedJobId =

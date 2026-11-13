@@ -97,6 +97,10 @@ describe("the notice text", () => {
     );
   });
 
+  test("writes each part of an invalid date as NaN", () => {
+    expect(jstDateLabel(new Date(Number.NaN))).toBe("NaN-NaN-NaN");
+  });
+
   test("names the credential and the date", () => {
     expect(
       credentialNoticeMessage({

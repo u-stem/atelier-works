@@ -3,6 +3,7 @@
 // queueの応答は信頼しない入力として読み、形が違う要素は数えない。
 
 import type { ListQueueData } from "windmill-client@1.817.0";
+import { formatJstClock, INVALID_JST_CLOCK } from "./jst.ts";
 import { isRecord, type NoticeRecord } from "./types.ts";
 
 /**
@@ -800,14 +801,9 @@ function percentOrDecimal(ratio: number): string {
     : percent(ratio);
 }
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-
-/** `date`のJSTの時刻を`HH:MM`で返す。 */
+/** `date`のJSTの時刻を`HH:MM`で返す。日付として読めなければ、時と分をそれぞれ`NaN`にする。 */
 function jstClock(date: Date): string {
-  const shifted = new Date(date.getTime() + JST_OFFSET_MS);
-  const hours = String(shifted.getUTCHours()).padStart(2, "0");
-  const minutes = String(shifted.getUTCMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
+  return formatJstClock(date.getTime()) ?? INVALID_JST_CLOCK;
 }
 
 function mib(bytes: number): string {

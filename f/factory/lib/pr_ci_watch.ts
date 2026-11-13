@@ -53,7 +53,7 @@ import {
   type WorkflowRunJob,
   WorkflowRunsIncompleteError,
 } from "./github.ts";
-import type { Logger } from "./log.ts";
+import { errorMessage, type Logger } from "./log.ts";
 import { shortSha, type WorkflowRun } from "./main_ci_support.ts";
 import { type LabelerPolicy, labelerPolicyFor } from "./poll_support.ts";
 import {
@@ -760,10 +760,6 @@ function isServerError(err: unknown): err is GitHubHttpError {
 /** rate limitか5xxで、この回の新しいGitHubの読み取りを止めているか。 */
 function readingStopped(state: WatchState): boolean {
   return state.rateLimited || state.serverErrorStopped;
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /** 実行の開始から`RUN_BUDGET_MS`以上たったか。たったら、新しい読み取りは始めない。 */

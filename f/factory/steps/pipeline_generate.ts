@@ -25,7 +25,7 @@ import { validateDrawioXml } from "../lib/drawio.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import { flowFailureMessage } from "../lib/flow_retry_marker.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
-import { logger, maskSecrets } from "../lib/log.ts";
+import { errorMessage, logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
 import {
   holdsPipelineLease,
@@ -192,10 +192,6 @@ function failSnapshot(reason: string, detail: string): never {
       `pipeline_generate: doc snapshot failed (${reason}): ${detail}`,
     ),
   );
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /** `io.hashTree`を呼び、例外は`failSnapshot`で保存する内容の取得の失敗として投げ直す。 */

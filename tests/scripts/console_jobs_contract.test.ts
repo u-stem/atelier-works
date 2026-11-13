@@ -33,14 +33,11 @@ import {
   type SchedulesPorts,
 } from "../../f/factory/console_schedules.ts";
 import { REPO_SCHEDULES } from "../../f/factory/lib/console_known_paths.ts";
+import { isRecord } from "../../f/factory/lib/types.ts";
 
 const READ_SCRIPTS = ["console_jobs", "console_schedules", "console_config"];
 const ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 const NOW = new Date("2026-10-26T06:00:00.000Z");
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 async function schemaOf(scriptPath: string) {
   const parsed: unknown = Bun.YAML.parse(

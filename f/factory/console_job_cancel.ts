@@ -27,6 +27,7 @@ import {
   type RecordedOperation,
   runRecorded,
 } from "./lib/console_actions.ts";
+import { isRecord } from "./lib/console_redact.ts";
 
 const JOB_PATH_PREFIX = "f/factory/";
 
@@ -140,10 +141,6 @@ export const SCHEDULED_FOR_LATER_GRACE_MS = 10_000;
 
 const JOB_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function stringOf(record: Record<string, unknown>, key: string): string | null {
   const value = record[key];

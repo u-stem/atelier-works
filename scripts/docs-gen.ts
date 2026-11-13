@@ -20,7 +20,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { handlerPathFor } from "../f/factory/lib/approval_support.ts";
-import type { ApprovalRequestKind } from "../f/factory/lib/types.ts";
+import { type ApprovalRequestKind, isRecord } from "../f/factory/lib/types.ts";
 import {
   buildFlowsData,
   type FlowDefinitionInput,
@@ -194,10 +194,6 @@ export function flowsProblem(
   return current === next
     ? null
     : `${FLOWS_FILE}: file is stale (run \`mise run docs:gen\`)`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function stringField(record: Record<string, unknown>, key: string): string {

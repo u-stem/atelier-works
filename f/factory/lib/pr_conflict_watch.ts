@@ -75,7 +75,7 @@ import {
   type PullRequest,
   type Viewer,
 } from "./github.ts";
-import type { Logger } from "./log.ts";
+import { errorMessage, type Logger } from "./log.ts";
 import type { MainCiState } from "./main_ci_support.ts";
 import { pullRequestKey } from "./pr_ci_human_support.ts";
 import { type PullRequestRef, pullRequestPageUrl } from "./pr_ci_support.ts";
@@ -469,10 +469,6 @@ function readOnce<T>(
 
 function isStatus(err: unknown, ...statuses: number[]): boolean {
   return err instanceof GitHubHttpError && statuses.includes(err.status);
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 function overBudget(context: Context): boolean {

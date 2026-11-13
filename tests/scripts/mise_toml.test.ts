@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isRecord } from "../../f/factory/lib/types.ts";
 
 // ホストのgitleaks(`[tools]`、pre-commitフックが使う)と、
 // workerイメージのgitleaks(`[env]`の`GITLEAKS_VERSION`、Dockerfileのビルド引数)は
@@ -29,10 +30,6 @@ describe("mise.toml", () => {
 // Console用workerに`factory_state`のボリューム全体がマウントされうるため。
 // 検査に失敗したら必ず止まるよう、タスクの先頭で`set -e`を置く。
 // miseの既定のシェルの引数が変わっても、検査の後の行へ進まないためである。
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function taskRuns(): Map<string, string[]> {
   const text = readFileSync(join(import.meta.dir, "../../mise.toml"), "utf8");
   const parsed: unknown = Bun.TOML.parse(text);

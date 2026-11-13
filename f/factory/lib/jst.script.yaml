@@ -1,0 +1,9 @@
+summary: '[LIB] 日本時間'
+description: 内部ライブラリです。直接実行するものではありません。日本時間の表示の整形と、UTCとの差を共有する共通処理です。
+lock: '!inline f/factory/lib/jst.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

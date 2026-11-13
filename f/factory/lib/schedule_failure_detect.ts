@@ -6,7 +6,7 @@
 
 import type { ListCompletedJobsData } from "windmill-client@1.817.0";
 import type { JobIds } from "./job_ids.ts";
-import { type Logger, maskSecrets } from "./log.ts";
+import { errorMessage, type Logger } from "./log.ts";
 import {
   flagFailingSchedule,
   type PreviousScheduleFailure,
@@ -97,10 +97,6 @@ export type ScheduleFailureDetectResult = {
   readonly truncated: boolean;
 };
 
-function errorText(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 /** 前回の成功した実行の結果から読んだ、続きの位置。 */
 type Baseline = {
   readonly processedUntilMs: number;
@@ -140,7 +136,7 @@ async function readBaseline(
     }
     deps.log.warn(
       "could not read the result of the previous run, which is older than a day; scanning the last day only",
-      { error: errorText(err) },
+      { error: errorMessage(err) },
     );
     result = undefined;
   }
@@ -195,7 +191,7 @@ async function readErrorText(
   } catch (err) {
     deps.log.warn("could not read the error of a failed job", {
       job_id: failure.id,
-      error: errorText(err),
+      error: errorMessage(err),
     });
     return describeJobError(
       failure.canceledByTimeout
@@ -229,7 +225,7 @@ async function processScript(
     // 読めなければ、変わったかを判定できないので、通知を送る側に倒す。
     deps.log.error("failed to read the previous failure", {
       flow_path: scriptPath,
-      error: errorText(err),
+      error: errorMessage(err),
     });
   }
 
@@ -248,7 +244,7 @@ async function processScript(
     // 履歴を読めなければ、初回の失敗として通知する。
     deps.log.error("failed to read the schedule history for the notification", {
       flow_path: scriptPath,
-      error: errorText(err),
+      error: errorMessage(err),
     });
   }
 
@@ -294,7 +290,7 @@ async function processScript(
     } catch (err) {
       deps.log.error("failed to send discord notification", {
         flow_path: scriptPath,
-        error: errorText(err),
+        error: errorMessage(err),
       });
     }
   }

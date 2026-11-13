@@ -3,7 +3,6 @@ import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import {
   checkGhCollectFreshness,
   collectCause,
-  formatJstMinute,
   GH_COLLECT_NOT_RUNNING_AFTER_MS,
   GH_COLLECT_STALE_KIND,
   GH_COLLECT_WATCH_STATE_KEY,
@@ -308,12 +307,6 @@ describe("stale notice", () => {
     expect(staleNotice("acme").message).not.toMatch(/\d{4}-\d{2}-\d{2}|分/);
   });
 
-  test("formats the last success in JST", () => {
-    expect(formatJstMinute(Date.parse("2026-10-17T00:00:00.000Z"))).toBe(
-      "2026-10-17 09:00",
-    );
-  });
-
   test("every error code has a next action", () => {
     const causes: readonly GhCollectCause[] = [
       ...GH_COLLECT_ERROR_CODES,
@@ -344,6 +337,17 @@ describe("stale notice", () => {
       cause: "unauthorized",
     });
     expect(text).toContain("最後の成功: 記録なし");
+  });
+
+  test("cause text throws a RangeError for a last success that is not a time", () => {
+    expect(() =>
+      staleCauseText({
+        owner: "acme",
+        thresholdMs: THRESHOLD,
+        lastSuccessAtMs: Number.NaN,
+        cause: "unauthorized",
+      }),
+    ).toThrow(RangeError);
   });
 
   test("cause text names the threshold in minutes", () => {

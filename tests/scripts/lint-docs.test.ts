@@ -442,6 +442,14 @@ describe("guardCheck", () => {
       }),
     ).toEqual(["lint-docs: links failed: boom"]);
   });
+
+  test("masks a known token in the problem of an exception", () => {
+    expect(
+      guardCheck("links", () => {
+        throw new Error("boom ghp_0123456789abcdefghijklmnopqrstuvwxyz");
+      }),
+    ).toEqual(["lint-docs: links failed: boom ***"]);
+  });
 });
 
 type Git = (...args: string[]) => void;

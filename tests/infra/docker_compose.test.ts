@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKUP_ROOT } from "../../f/factory/lib/backup_support.ts";
 import { CHECK_NPROC_LIMIT } from "../../f/factory/lib/check_sandbox.ts";
+import { isRecord } from "../../f/factory/lib/types.ts";
 import { DEFAULT_WORKER_SLOTS } from "../../f/factory/lib/worker_load_support.ts";
 
 // Console用workerの構成を静的に確かめる。
@@ -22,10 +23,6 @@ import { DEFAULT_WORKER_SLOTS } from "../../f/factory/lib/worker_load_support.ts
 const REPO_ROOT = join(import.meta.dir, "../..");
 
 type Json = Record<string, unknown>;
-
-function isRecord(value: unknown): value is Json {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");

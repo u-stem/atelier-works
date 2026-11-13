@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
+import { isRecord } from "../../f/factory/lib/types.ts";
 import {
   allScope,
   type BaseLookup,
@@ -1188,6 +1189,42 @@ function importClosure(entry: string): string[] {
   return [...seen].sort();
 }
 
+// Consoleの組み立てと検査が、console/の外から読み込むファイルの全体。
+// console/の中のimportは拡張子を省くことがあるので、console/の外を指すimportだけをたどる。
+function consoleSourceFiles(): string[] {
+  const glob = new Bun.Glob("{src,scripts,e2e}/**/*.{ts,tsx}");
+  // 直下の設定ファイルも、組み立てと検査が読み込む。
+  const configs = ["vite.config.ts", "playwright.config.ts"].filter((file) =>
+    existsSync(join(ROOT, "console", file)),
+  );
+  return [...glob.scanSync({ cwd: join(ROOT, "console") }), ...configs]
+    .map((file) => `console/${file}`)
+    .sort();
+}
+
+/** `path`のファイルの`source`が、console/の外を指すimport。リポジトリのルートからの相対パスで返す。 */
+function importsOutsideConsole(path: string, source: string): string[] {
+  const found: string[] = [];
+  for (const match of source.matchAll(
+    /(?:from|import)\s*\(?\s*["'](\.[^"']+)["']/g,
+  )) {
+    const next = normalize(join(dirname(path), match[1] ?? ""));
+    if (!next.startsWith("console/")) found.push(next);
+  }
+  return found;
+}
+
+function consoleOutsideImports(): string[] {
+  const found = new Set<string>();
+  for (const path of consoleSourceFiles()) {
+    const source = readFileSync(join(ROOT, path), "utf8");
+    for (const next of importsOutsideConsole(path, source)) {
+      for (const reached of importClosure(next)) found.add(reached);
+    }
+  }
+  return [...found].sort();
+}
+
 // test:dbが実行するscriptの全体。実行するscriptを足したときに、一覧から漏れないようグロブで列挙する。
 function dbTestEntries(): string[] {
   return readdirSync(join(ROOT, "scripts"))
@@ -1208,6 +1245,43 @@ describe("import closure of the CI tests", () => {
         "scripts/test-db-queries.ts",
       ]),
     );
+  });
+
+  test("reads a dynamic import that points outside console/", () => {
+    expect(
+      importsOutsideConsole(
+        "console/src/lib/a.ts",
+        'const jst = await import("../../../f/factory/lib/jst.ts");',
+      ),
+    ).toEqual(["f/factory/lib/jst.ts"]);
+  });
+
+  test("reads a static import that points outside console/", () => {
+    expect(
+      importsOutsideConsole(
+        "console/src/lib/a.ts",
+        'import { isRecord } from "../../../f/factory/lib/types.ts";',
+      ),
+    ).toEqual(["f/factory/lib/types.ts"]);
+  });
+
+  test.each(["console/vite.config.ts", "console/playwright.config.ts"])(
+    "scans the console config file %s",
+    (path) => {
+      expect(consoleSourceFiles()).toContain(path);
+    },
+  );
+
+  test("finds the files that the console imports from f/, so that the check below is not empty", () => {
+    expect(consoleOutsideImports()).toContain("f/factory/lib/jst.ts");
+  });
+
+  test("every file outside console/ that the console imports triggers console", () => {
+    const uncovered = consoleOutsideImports().filter(
+      (path) => scopeOfPaths([path]).console === false,
+    );
+
+    expect(uncovered).toEqual([]);
   });
 
   test("every file the db tests import under f/ triggers db", () => {
@@ -1267,10 +1341,6 @@ describe("import closure of the CI tests", () => {
     expect(missing).toEqual([]);
   });
 });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function recordAt(parent: unknown, key: string): Record<string, unknown> {
   if (!isRecord(parent)) {

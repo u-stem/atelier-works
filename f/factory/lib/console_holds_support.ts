@@ -21,6 +21,7 @@ import type {
   HoldRow,
   HoldScope,
 } from "./holds.ts";
+import { formatJstSecond } from "./jst.ts";
 import type { StopAllStatus } from "./stop_all.ts";
 import type { NoticeRecord } from "./types.ts";
 
@@ -280,14 +281,13 @@ export async function readFreezeState(
   return await readFreezeStateVia(ports);
 }
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-
-/** `date`をJSTの`YYYY-MM-DD HH:mm:ss`にする(UTC+9固定、夏時間なし)。 */
-function formatJstSecond(date: Date): string {
-  return new Date(date.getTime() + JST_OFFSET_MS)
-    .toISOString()
-    .slice(0, 19)
-    .replace("T", " ");
+/** `date`をJSTの`YYYY-MM-DD HH:mm:ss`にする。日付として読めなければ`RangeError`を投げる。 */
+function releaseTimeText(date: Date): string {
+  const text = formatJstSecond(date.getTime());
+  if (text === null) {
+    throw new RangeError("release time is not a time");
+  }
+  return text;
 }
 
 /**
@@ -300,7 +300,7 @@ export function releaseNoticeMessage(
   now: Date,
 ): string {
   const operator = clipDisplay(actor, OPERATOR_NAME_MAX);
-  return `${subject}を${operator}が解除しました。(${formatJstSecond(now)} JST)`;
+  return `${subject}を${operator}が解除しました。(${releaseTimeText(now)} JST)`;
 }
 
 /**
@@ -313,7 +313,7 @@ export function releaseUnverifiedNoticeMessage(
   now: Date,
 ): string {
   const operator = clipDisplay(actor, OPERATOR_NAME_MAX);
-  return `${subject}の解除の操作を${operator}が行いました。解除の前に有効だったかは確認できませんでした。(${formatJstSecond(now)} JST)`;
+  return `${subject}の解除の操作を${operator}が行いました。解除の前に有効だったかは確認できませんでした。(${releaseTimeText(now)} JST)`;
 }
 
 /** 保留の行を指す句。対象は行を読めたときだけ載せる。 */

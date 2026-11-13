@@ -27,6 +27,7 @@ import {
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { CHECK_IMAGE_STALE_REASON } from "./check_sandbox_reasons.ts";
 import {
+  errorMessage,
   escapeReasonSeparator,
   type Logger,
   logger,
@@ -2193,10 +2194,6 @@ function assertRecordable(record: SlotRecord): void {
       `check sandbox: the directories cannot be recorded: ${record.worktreeDir}, ${record.homeDir}`,
     );
   }
-}
-
-function errorMessage(error: unknown): string {
-  return maskSecrets(error instanceof Error ? error.message : String(error));
 }
 
 const KERNEL_PROTECTIONS = [

@@ -670,6 +670,31 @@ describe("buildEmbed", () => {
     });
   });
 
+  test("shows each part of an invalid start date as NaN", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+      gated_review: {
+        kind: "on",
+        since: new Date(Number.NaN),
+        unposted_count: 4,
+        elapsed_days: 3,
+      },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "レビューの投稿",
+      value: "gatedで有効。NaN-NaN-NaNから3日、投稿しなかったレビューは4件",
+    });
+  });
+
   test("shows no date while nothing was left unposted", () => {
     const embed = buildEmbed({
       kind: "daily_summary",

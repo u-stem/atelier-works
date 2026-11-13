@@ -4,7 +4,7 @@
 // フロー自身のルートジョブIDを返す`rootFlowJobId`は、pipelineのステップもリースの値として使う。
 
 import { isJobId } from "./job_ids.ts";
-import { maskSecrets } from "./log.ts";
+import { errorMessage, maskSecrets } from "./log.ts";
 import type { WorkItem } from "./types.ts";
 
 /** 実装フローのパス。 */
@@ -137,10 +137,6 @@ export type StartImplementOutcome =
   | "launch_failed"
   | "flow_holds_lease";
 
-function messageOf(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 /** `action`を実行し、失敗してもログに残すだけで例外を投げない。 */
 async function attempt(
   deps: StartImplementDeps,
@@ -150,7 +146,7 @@ async function attempt(
   try {
     await action();
   } catch (err) {
-    deps.log(`startImplement: ${label} failed`, { error: messageOf(err) });
+    deps.log(`startImplement: ${label} failed`, { error: errorMessage(err) });
   }
 }
 
@@ -187,7 +183,7 @@ export async function startImplement(
   try {
     moved = await deps.casToImplementing();
   } catch (err) {
-    const reason = implementCasFailureReason(messageOf(err));
+    const reason = implementCasFailureReason(errorMessage(err));
     deps.log("startImplement: approved → implementing failed", {
       error: reason,
     });
@@ -203,13 +199,13 @@ export async function startImplement(
   try {
     jobId = parseFlowJobId(await deps.launchFlow(), "runFlowAsync");
   } catch (err) {
-    const reason = implementLaunchFailureReason(messageOf(err));
+    const reason = implementLaunchFailureReason(errorMessage(err));
     let leaseFree = true;
     try {
       leaseFree = await deps.moveToNeedsHuman(reason);
     } catch (moveErr) {
       deps.log("startImplement: needs_human transition failed", {
-        error: messageOf(moveErr),
+        error: errorMessage(moveErr),
       });
     }
     if (!leaseFree) {
@@ -233,7 +229,7 @@ export async function startImplement(
       recorded = await deps.recordFlowJobId(jobId);
     } catch (err) {
       deps.log("startImplement: recordFlowJobId failed; retrying once", {
-        error: messageOf(err),
+        error: errorMessage(err),
       });
       recorded = await deps.recordFlowJobId(jobId);
     }
@@ -245,7 +241,7 @@ export async function startImplement(
     }
     return "started";
   } catch (err) {
-    const reason = flowJobIdFailureReason(messageOf(err));
+    const reason = flowJobIdFailureReason(errorMessage(err));
     await attempt(deps, "recordFailure", () =>
       deps.recordFailure(reason, "record_flow_job_id"),
     );

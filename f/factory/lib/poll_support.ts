@@ -6,7 +6,7 @@ import { ACTIONABLE_WORK_ITEM_STATUSES } from "./console_support.ts";
 import { isViewerBumpBranch } from "./drawio_viewer_bump.ts";
 import { type GhClient, GitHubHttpError, getLabelerActor } from "./github.ts";
 import type { JobState } from "./job_state.ts";
-import { type Logger, maskSecrets } from "./log.ts";
+import { errorMessage, type Logger } from "./log.ts";
 import {
   OWNER_ID_MISMATCH_KIND,
   ownerIdMismatchMessage,
@@ -327,10 +327,6 @@ export type DeployedShaCheckOutcome =
   | "waiting"
   | "notified";
 
-function errorText(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 /** `stored`からこの判定のキーだけを除いたオブジェクトを返す。 */
 function withoutDeployedShaState(
   stored: Record<string, unknown>,
@@ -357,7 +353,7 @@ async function resolveNoticesBeforeDeployment(
     }
   } catch (err) {
     deps.log.warn("deployed_sha_mismatch resolve failed", {
-      error: errorText(err),
+      error: errorMessage(err),
     });
   }
 }
@@ -389,7 +385,7 @@ async function deployFreezeHolds(deps: DeployedShaCheckDeps): Promise<boolean> {
   try {
     return await deps.isDeployHeld();
   } catch (err) {
-    deps.log.warn("deploy freeze read failed", { error: errorText(err) });
+    deps.log.warn("deploy freeze read failed", { error: errorMessage(err) });
     return false;
   }
 }
@@ -420,7 +416,7 @@ async function waitWhileDeployFrozen(
       });
     } catch (err) {
       deps.log.warn("deployed_sha state write failed", {
-        error: errorText(err),
+        error: errorMessage(err),
       });
     }
   }
@@ -459,7 +455,7 @@ export async function runDeployedShaCheck(
     }
   } catch (err) {
     stateUsable = false;
-    log.warn("deployed_sha state read failed", { error: errorText(err) });
+    log.warn("deployed_sha state read failed", { error: errorMessage(err) });
   }
   const prev = parseDeployedShaState(stored);
 
@@ -476,7 +472,9 @@ export async function runDeployedShaCheck(
       try {
         await deps.setState(withoutDeployedShaState(stored));
       } catch (err) {
-        log.warn("deployed_sha state clear failed", { error: errorText(err) });
+        log.warn("deployed_sha state clear failed", {
+          error: errorMessage(err),
+        });
       }
     }
     return "resolved";
@@ -496,7 +494,7 @@ export async function runDeployedShaCheck(
       });
       return "recorded";
     } catch (err) {
-      log.warn("deployed_sha state write failed", { error: errorText(err) });
+      log.warn("deployed_sha state write failed", { error: errorMessage(err) });
     }
   }
 
@@ -508,7 +506,7 @@ export async function runDeployedShaCheck(
   try {
     latest = await deps.getLatestDeployment();
   } catch (err) {
-    log.warn("latest deployment lookup failed", { error: errorText(err) });
+    log.warn("latest deployment lookup failed", { error: errorMessage(err) });
   }
   const noticeId = await deps.addNotice({
     kind: "deployed_sha_mismatch",

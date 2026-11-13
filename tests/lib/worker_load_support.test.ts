@@ -893,6 +893,19 @@ describe("summarizeWorkerLoad", () => {
     ).toContain("最長60分(23:00〜00:00)");
   });
 
+  test("shows each part of an invalid time of the longest gap as NaN", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({
+          gap_count: 1,
+          gap_longest_seconds: 3600,
+          gap_longest_from: new Date(Number.NaN),
+          gap_longest_to: new Date(Number.NaN),
+        }),
+      ),
+    ).toContain("最長60分(NaN:NaN〜NaN:NaN)");
+  });
+
   test("omits the time of the longest gap when it is unknown", () => {
     expect(
       summarizeWorkerLoad(

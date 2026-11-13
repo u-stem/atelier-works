@@ -41,6 +41,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { errorMessage } from "../f/factory/lib/log.ts";
 import { checkProse, REPO_DOC_RULES } from "../f/factory/lib/prose_check.ts";
 import { runDocsGen } from "./docs-gen.ts";
 import { findDocLengthViolation } from "./lint-doc-length.ts";
@@ -501,10 +502,6 @@ export async function lintWithTools(
     resolved.length === plan.length &&
     resolved.every((result) => result.ok)
   );
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** 本番の`deps`。子プロセスは`root`で、環境変数を引き継いで起動する。 */

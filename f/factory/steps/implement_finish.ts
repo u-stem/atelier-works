@@ -103,7 +103,7 @@ import {
   neutralizeIssueRefs,
   profileDiffWarnings,
 } from "../lib/implement_support.ts";
-import { logger, maskSecrets } from "../lib/log.ts";
+import { errorMessage, logger, maskSecrets } from "../lib/log.ts";
 import { limitGapReport } from "../lib/model_text.ts";
 import {
   defaultLockReleaseDeps,
@@ -206,10 +206,6 @@ export function needsHumanBaseReason(
  */
 export function claudeText(text: string): string {
   return maskSecrets(normalizeJapaneseText(text));
-}
-
-function errorText(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
 }
 
 type PrAttempt =
@@ -431,7 +427,7 @@ async function finishImplement(
         });
       } catch (err) {
         log.warn("failed to record the implement_needs_human notice", {
-          error: errorText(err),
+          error: errorMessage(err),
         });
       }
       await notifyBestEffort(
@@ -631,7 +627,7 @@ async function finishImplement(
       });
     } catch (err) {
       log.warn("failed to remove the implement worktree", {
-        error: errorText(err),
+        error: errorMessage(err),
       });
     }
     let openPrNumber: number | null = null;
@@ -643,7 +639,7 @@ async function finishImplement(
     } catch (err) {
       prLookupFailed = true;
       log.warn("open PR lookup failed; keeping the branch", {
-        error: errorText(err),
+        error: errorMessage(err),
       });
     }
     const shouldDelete = shouldDeleteBranchOnGap({
@@ -658,7 +654,7 @@ async function finishImplement(
       ensureRepoOwner: ownerStopReason,
       onCheckError: (err) => {
         log.warn("owner id check failed; keeping the branch", {
-          error: errorText(err),
+          error: errorMessage(err),
         });
       },
     });
@@ -682,7 +678,7 @@ async function finishImplement(
         });
       } catch (err) {
         log.warn("failed to delete the remote implement branch", {
-          error: errorText(err),
+          error: errorMessage(err),
         });
       }
       try {
@@ -693,7 +689,7 @@ async function finishImplement(
         });
       } catch (err) {
         log.warn("failed to delete the local implement branch", {
-          error: errorText(err),
+          error: errorMessage(err),
         });
       }
     }
@@ -770,7 +766,7 @@ async function finishImplement(
       await setFlowJobIdIfUnset(work_item_id, flowJobId);
     } catch (err) {
       log.warn("requirements regeneration could not be started", {
-        error: errorText(err),
+        error: errorMessage(err),
       });
       return finalizeNeedsHuman(
         REQUIREMENTS_REGENERATION_FAILED_REASON,
@@ -973,7 +969,7 @@ async function finishImplement(
         );
       } catch (err) {
         log.warn("ensureLabel failed; addLabels will create it with defaults", {
-          error: errorText(err),
+          error: errorMessage(err),
         });
       }
       await addLabels(client, owner, repo, pr.number, [config.review_label]);

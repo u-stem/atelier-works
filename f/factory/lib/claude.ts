@@ -14,6 +14,7 @@ import {
 } from "./claude_read_deny.ts";
 import { defaultSqlClient, type SqlClient, sumAgentCostSince } from "./db.ts";
 import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
+import { JST_OFFSET_MS } from "./jst.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import {
   checkStop,
@@ -1138,8 +1139,6 @@ async function retryDecision<T>(
 // ---------------------------------------------------------------------------
 // 日次予算のガード
 // ---------------------------------------------------------------------------
-
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /**
  * `now`を含むJSTの日の0時を、UTCのISO文字列で返す。

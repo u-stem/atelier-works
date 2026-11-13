@@ -30,7 +30,7 @@ import {
   CheckRuntimeUnsafeError,
 } from "./check_sandbox.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
-import { type Logger, maskSecrets } from "./log.ts";
+import { errorMessage, type Logger } from "./log.ts";
 import { classifyChangedPaths } from "./self_update_support.ts";
 import type { NoticeRecord } from "./types.ts";
 
@@ -271,10 +271,6 @@ export async function readHostAppliedSha(
   } finally {
     await handle.close();
   }
-}
-
-function errorMessage(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
 }
 
 function isMissingFile(err: unknown): boolean {
