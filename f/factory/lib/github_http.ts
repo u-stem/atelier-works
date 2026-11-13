@@ -105,6 +105,19 @@ export type GitHubRequest = {
  */
 export type RateLimitInfo = {
   readonly kind: "primary" | "secondary";
+  /**
+   * 判定の根拠。`retry_after`、`remaining`(残りが0)、`secondary_message`(本文が二次の制限を名指す)、
+   * `rate_limit_message`(`remaining`の無い応答の本文が`rate limit`を含む)、`status`(ほかに当たらない429)、
+   * `graphql`(HTTP 200の`RATE_LIMITED`)のどれか。
+   * `rate_limit_message`と`status`は制限かどうかの確かさが低いので、冪等でない要求は待って送り直さない。
+   */
+  readonly basis:
+    | "retry_after"
+    | "remaining"
+    | "secondary_message"
+    | "rate_limit_message"
+    | "status"
+    | "graphql";
   readonly waitMs: number | null;
   readonly retryAfterSec: number | null;
   readonly resetAtSec: number | null;
@@ -217,6 +230,7 @@ function untilResetMs(resetAtSec: number | null, now: Date): number | null {
  *    残りが1以上の403は制限ではない。権限不足の403が制限と読まれ、呼び出し側の403の分岐を通らなくなるのを防ぐ。
  * 5. 429で上のどれにも当たらない: 二次の制限。既定の長さを待つ。
  * 6. その他: 制限ではない。
+ * 4と5は確かさが低いので、待って送り直すのは冪等な要求だけにする(`sendWithRateLimitWait`)。
  * GraphQLのHTTP 200の`RATE_LIMITED`は、`graphqlErrorsRateLimited`と`graphqlRateLimit`が扱う。
  */
 export function classifyRateLimit(
@@ -234,25 +248,46 @@ export function classifyRateLimit(
     resource: headers.get("x-ratelimit-resource") ?? null,
   };
   if (retryAfterSec !== null) {
-    return { kind: "secondary", waitMs: retryAfterSec * 1000, ...facts };
+    return {
+      kind: "secondary",
+      basis: "retry_after",
+      waitMs: retryAfterSec * 1000,
+      ...facts,
+    };
   }
   const remaining = headers.get("x-ratelimit-remaining")?.trim();
   if (remaining === "0") {
     return {
       kind: "primary",
+      basis: "remaining",
       waitMs: untilResetMs(resetAtSec, now) ?? DEFAULT_RATE_LIMIT_WAIT_MS,
       ...facts,
     };
   }
   const message = limitMessage(bodyText);
   if (message.includes(SECONDARY_RATE_LIMIT_PHRASE)) {
-    return { kind: "secondary", waitMs: DEFAULT_RATE_LIMIT_WAIT_MS, ...facts };
+    return {
+      kind: "secondary",
+      basis: "secondary_message",
+      waitMs: DEFAULT_RATE_LIMIT_WAIT_MS,
+      ...facts,
+    };
   }
   if (remaining === undefined && message.includes("rate limit")) {
-    return { kind: "primary", waitMs: untilResetMs(resetAtSec, now), ...facts };
+    return {
+      kind: "primary",
+      basis: "rate_limit_message",
+      waitMs: untilResetMs(resetAtSec, now),
+      ...facts,
+    };
   }
   if (status === 429) {
-    return { kind: "secondary", waitMs: DEFAULT_RATE_LIMIT_WAIT_MS, ...facts };
+    return {
+      kind: "secondary",
+      basis: "status",
+      waitMs: DEFAULT_RATE_LIMIT_WAIT_MS,
+      ...facts,
+    };
   }
   return null;
 }
@@ -276,6 +311,7 @@ export function graphqlRateLimit(
   const resetAtSec = headerInteger(headers, "x-ratelimit-reset");
   return {
     kind: "primary",
+    basis: "graphql",
     waitMs:
       retryAfterSec !== null
         ? retryAfterSec * 1000
@@ -314,12 +350,19 @@ export function rateLimitError(
 // パスの検査
 // ---------------------------------------------------------------------------
 
+/** endpointから、ホストと先頭の`/`を落とす。`gh`は絶対URLと先頭の`/`も受け付けるため、比べる前にそろえる。 */
+function withoutHost(endpoint: string): string {
+  return endpoint.replace(/^https?:\/\/[^/]+\//i, "").replace(/^\/+/, "");
+}
+
+/** endpointから、クエリと断片を落とす。 */
+function withoutQuery(endpoint: string): string {
+  return endpoint.replace(/[?#].*$/s, "");
+}
+
 /** ログとエラーに載せるendpoint。ホスト、先頭の`/`、クエリを落とす。クエリには値が入りうるため。 */
-export function endpointForLog(endpoint: string): string {
-  return endpoint
-    .replace(/^https?:\/\/[^/]+\//, "")
-    .replace(/^\/+/, "")
-    .replace(/[?#].*$/s, "");
+function endpointForLog(endpoint: string): string {
+  return withoutQuery(withoutHost(endpoint));
 }
 
 /**
@@ -327,14 +370,11 @@ export function endpointForLog(endpoint: string): string {
  * 接頭辞だけを見るので、`repos/o/search-x/issues`のようにリポジトリ名やクエリに含むだけの要求は拒まない。
  * GraphQLの検索のフィールドは`graphql`への要求で、対象外である。
  */
-export function isRestSearchEndpoint(endpoint: string): boolean {
-  const path = endpoint
-    .toLowerCase()
-    .replace(/^https?:\/\/[^/]+\//, "")
-    .replace(/^\/+/, "");
+function isRestSearchEndpoint(endpoint: string): boolean {
+  const path = withoutHost(endpoint).toLowerCase();
   return (
     path.startsWith(REJECTED_REST_ENDPOINT_PREFIX) ||
-    path.replace(/[?#].*$/s, "") === "search"
+    withoutQuery(path) === "search"
   );
 }
 
@@ -471,7 +511,14 @@ async function sendWithRateLimitWait<R extends GitHubHttpResponseCore>(
     policy.mode === "wait_once"
       ? (policy.maxWaitMs ?? GITHUB_RATE_LIMIT_MAX_WAIT_MS)
       : -1;
-  if (limit.waitMs === null || limit.waitMs > maxWaitMs) {
+  // 確かさの低い判定(表の4行目と5行目)では、冪等でない要求を送り直さない。制限でなかったときに二重に効くため。
+  const uncertain =
+    limit.basis === "rate_limit_message" || limit.basis === "status";
+  if (
+    limit.waitMs === null ||
+    limit.waitMs > maxWaitMs ||
+    (uncertain && !isIdempotent(request))
+  ) {
     logRateLimit(env, request.endpoint, first, "wait_too_long");
     throw rateLimitError(request.endpoint, limit, false);
   }
@@ -495,6 +542,7 @@ async function sendWithRateLimitWait<R extends GitHubHttpResponseCore>(
  * 差し込んだ送り方で要求を送る、再試行と待ちの機構。通信層の再試行は、この関数の中だけにある。
  * 順に、一時的な失敗の再試行(`sendWithTransientRetry`)、レート制限の待ち(`policy`)、
  * 本文が途中で切れた応答の取り直しを行う。取り直すのは冪等な要求だけで、1回だけである。
+ * 締め切りで切れた本文(`timedOut`)は取り直さない。
  * 取り直しても切れていれば、`incomplete`の応答をそのまま返す。呼び出し側が失敗にする。
  * レート制限以外のHTTPのエラーのステータスでは例外を投げない。
  */
@@ -505,8 +553,10 @@ export async function runGitHubRequest<R extends GitHubHttpResponseCore>(
   send: () => Promise<GitHubSendResult<R>>,
 ): Promise<R> {
   const first = await sendWithRateLimitWait(env, request, policy, send);
+  // 締め切りで切れた本文は取り直さない。締め切りを過ぎた要求は送り直さない、という決まりに合わせる。
   if (
     first.incomplete !== true ||
+    first.timedOut === true ||
     !isIdempotent(request) ||
     request.retry === "never"
   ) {
@@ -648,7 +698,8 @@ async function fetchAttempt(
           status: raw.status,
           headers,
           bodyText: "",
-          rateLimit: null,
+          // 本文が読めなくても、ステータスとヘッダーで判定できる制限(429など)は判定する。
+          rateLimit: classifyRateLimit(raw.status, headers, "", now()),
           incomplete: true,
           ...(isTimeout(err) ? { timedOut: true as const } : {}),
         },

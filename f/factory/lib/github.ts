@@ -315,6 +315,11 @@ export async function callGhApi(
   return sendGhApiRequest(client, endpoint, options, false);
 }
 
+/**
+ * `noWaitClient`が作ったクライアント。`GhClient`の形を変えずに、レート制限の方針を`throw`にするための印である。
+ */
+const NO_WAIT_CLIENTS = new WeakSet<GhClient>();
+
 async function sendGhApiRequest(
   client: GhClient,
   endpoint: string,
@@ -333,7 +338,7 @@ async function sendGhApiRequest(
         ? { idempotent: options.idempotent }
         : {}),
     },
-    { mode: "wait_once" },
+    NO_WAIT_CLIENTS.has(client) ? { mode: "throw" } : { mode: "wait_once" },
     () => attemptGhApi(client, endpoint, options, markIncomplete),
   );
 }
@@ -1050,11 +1055,12 @@ async function fetchIssueObject(
   owner: string,
   repo: string,
   number: number,
+  options: FetchIssueOptions,
 ): Promise<{ readonly context: string; readonly body: object }> {
   validateOwnerRepo(owner, repo);
   const context = `GET issue ${owner}/${repo}#${number}`;
   const response = await requestGitHub(
-    { token: ghToken, fetch: fetchFn },
+    { token: ghToken, fetch: fetchFn, ...options },
     {
       path: `repos/${owner}/${repo}/issues/${String(number)}`,
       redirect: "never",
@@ -1063,8 +1069,15 @@ async function fetchIssueObject(
     { mode: "throw" },
   );
   if (response.status < 200 || response.status >= 300) {
+    // 応答が無いときは、締め切りかどうかだけを載せる。URLと例外の文は載せない。
+    const detail =
+      response.status !== 0
+        ? ""
+        : response.timedOut === true
+          ? " (timed out)"
+          : " (no response)";
     throw new GitHubHttpError(
-      `${context} failed with HTTP ${response.status}`,
+      `${context} failed with HTTP ${response.status}${detail}`,
       response.status,
       { timedOut: response.timedOut === true },
     );
@@ -1091,7 +1104,7 @@ export async function fetchIssueState(
   owner: string,
   repo: string,
   number: number,
-  _options: FetchIssueOptions = {},
+  options: FetchIssueOptions = {},
 ): Promise<string> {
   const { context, body } = await fetchIssueObject(
     fetchFn,
@@ -1099,6 +1112,7 @@ export async function fetchIssueState(
     owner,
     repo,
     number,
+    options,
   );
   const state = Reflect.get(body, "state");
   if (typeof state !== "string") {
@@ -1117,7 +1131,7 @@ export async function fetchIssueContent(
   owner: string,
   repo: string,
   number: number,
-  _options: FetchIssueOptions = {},
+  options: FetchIssueOptions = {},
 ): Promise<{ readonly title: string; readonly body: string }> {
   const { context, body } = await fetchIssueObject(
     fetchFn,
@@ -1125,6 +1139,7 @@ export async function fetchIssueContent(
     owner,
     repo,
     number,
+    options,
   );
   const title = Reflect.get(body, "title");
   const text = Reflect.get(body, "body");
@@ -2183,18 +2198,14 @@ export type PrSearchItem = {
 
 /**
  * rate limitの解除を待たないクライアントを返す。
- * 解除まで待つ代わりに、待ちが要るとすぐ`GitHubRateLimitError`を投げる。
+ * 解除まで待つ代わりに、制限に当たるとすぐ`GitHubRateLimitError`を投げる(通信層の`throw`の方針)。
+ * 例外の`requiredWaitMs`は、ほかの経路と同じく応答が示した待ちだけで、既定の長さで補った待ちは載せない。
  * ghの起動失敗と5xxの再試行は、待たずにすぐ行う。補助の読み取りが、最大120秒眠って全体の時間を使わないためである。
  */
-function noWaitClient(client: GhClient, endpoint: string): GhClient {
-  return {
-    ...client,
-    transientRetryDelayMs: 0,
-    sleep: async (ms) => {
-      if (ms === 0) return;
-      throw new GitHubRateLimitError(endpoint, ms, false);
-    },
-  };
+function noWaitClient(client: GhClient): GhClient {
+  const noWait: GhClient = { ...client, transientRetryDelayMs: 0 };
+  NO_WAIT_CLIENTS.add(noWait);
+  return noWait;
 }
 
 /**
@@ -2207,12 +2218,7 @@ export async function getPrWithoutWait(
   repo: string,
   number: number,
 ): Promise<PullRequest> {
-  return getPr(
-    noWaitClient(client, `repos/${owner}/${repo}/pulls/${String(number)}`),
-    owner,
-    repo,
-    number,
-  );
+  return getPr(noWaitClient(client), owner, repo, number);
 }
 
 export type PullRequest = {
@@ -4384,12 +4390,7 @@ export async function listOpenPullRequestsWithoutWait(
   maxPages: number = OPEN_PULL_REQUESTS_MAX_PAGES,
 ): Promise<OpenPullRequest[]> {
   validateOwnerRepo(owner, repo);
-  return listOpenPullRequests(
-    noWaitClient(client, `repos/${owner}/${repo}/pulls`),
-    owner,
-    repo,
-    maxPages,
-  );
+  return listOpenPullRequests(noWaitClient(client), owner, repo, maxPages);
 }
 
 /** ラベルの名前を読む。配列でないとき、名前が文字列でない要素があるときは`null`にする。 */

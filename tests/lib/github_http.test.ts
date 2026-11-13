@@ -1024,11 +1024,14 @@ const AUTHORIZATION_HEADER =
 /** グローバルの`fetch`の参照。プロパティ(`.fetch`)とオブジェクトのキー(`fetch:`)は除く。 */
 const GLOBAL_FETCH = /(?<![.\w$])fetch\b(?!\s*:)/;
 const GLOBAL_FETCH_THROUGH_OBJECT =
-  /\b(?:globalThis|global|self|window)\s*(?:\.\s*fetch\b|\[)/;
+  /\b(?:globalThis|global|self|window|Bun)\s*(?:\.\s*fetch\b|\[)/;
 
-/** `github_http.ts`から値を読み込むimport(`import type`は除く)。 */
+/**
+ * `github_http.ts`から値を読み込む書き方。import、再エクスポート(`export ... from`、`export * from`)、動的import。
+ * `import type`と`export type`は除く。
+ */
 const HTTP_VALUE_IMPORT =
-  /import\s+(?!type\s)[^;]*?from\s*["'][^"']*github_http\.ts["']/s;
+  /(?:\b(?:import|export)\s+(?!type\s)[^;]*?from\s*|\bimport\s*\(\s*)["'][^"']*github_http\.ts["']/s;
 
 describe("only github_http.ts carries the token to the GitHub API", () => {
   const sources = factorySources();

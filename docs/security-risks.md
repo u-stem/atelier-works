@@ -40,7 +40,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | CHK | [検査コマンドの権限](#検査コマンドの権限) | [検査コマンドの実行と権限の内部仕様](internals/check-sandbox.md) | 15 |
 | DEP | [dependabotの更新の自動マージ](#dependabotの更新の自動マージ) | [dependabotの更新の内部仕様](internals/dependabot.md) | 15 |
 | DAP | [反映の承認](#反映の承認) | [反映の承認の内部仕様](internals/deploy-approvals.md) | 05 |
-| GHC | [RESTの検索の拒否](#restの検索の拒否) | [GitHubの収集の内部仕様](internals/github-collect.md) | 05 |
+| GHC | [RESTの検索の拒否](#restの検索の拒否) | [GitHubの収集の内部仕様](internals/github-collect.md) | 06 |
 | IMP | [実装の安全策](#実装の安全策) | [実装フロー](internals/implement.md) | 04 |
 | CIF | [CIのメタデータの再生成](#ciのメタデータの再生成) | [CIの失敗を直す部品の内部仕様](internals/ci-fix.md) | 03 |
 | COV | [カバレッジの検査](#カバレッジの検査) | [テストの基準](testing-guidelines.md) | 05 |
@@ -782,6 +782,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-ghc-03"></a>R-GHC-03 | GraphQLの`search`のフィールドは拒まない。使う変更は、枠の消費を設計から見直す。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
 | <a id="r-ghc-04"></a>R-GHC-04 | endpointを文字列の組み立てで作る呼び出しは、静的テストが見つけられない。`callGhApi`を通る呼び出しなら、実行時の拒否が止める。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
 | <a id="r-ghc-05"></a>R-GHC-05 | 実行時の拒否が正規化するのは、先頭の`/`、大文字、絶対URLの3種類である。`fetch`の経路は、加えて`.`と`..`の区間とエンコードした`.`を含む区間を拒むが、`gh`の経路はドットセグメントを拒まない。どちらの経路も、`.`以外のパーセントエンコード(検索の語の一部をエンコードしたもの)は正規化しない。呼び出し側は自前で組み立てた名前だけを渡し、その名前は`assertGitHubName`を通る。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
+| <a id="r-ghc-06"></a>R-GHC-06 | GitHubのAPIへの通信層は、呼ぶ側が注入した`fetch`にトークンを渡す。保護テストは、宛先とヘッダーを広げる誤用と、`fetch`を参照するファイルや通信層を呼ぶファイルが増えることを止める。保護パスの外の呼ぶ側で、注入する`fetch`を包む変更は止めない。本番から`fetch`の注入をなくすまで、この変更は人のレビューで見る。 | [GitHubのAPIへの通信層](security.md#githubのapiへの通信層) |
 
 ## 実装の安全策
 

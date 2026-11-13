@@ -4,7 +4,12 @@
 // 取得したバイト列は信用せず、呼び出し側が検査する。
 
 // レート制限の判定は、通信層(`github_http.ts`)と共有する。`github.ts`は子プロセスにつながるのでimportしない。
-import { classifyRateLimit, rateLimitError } from "./github_http.ts";
+import {
+  classifyRateLimit,
+  GITHUB_API_ORIGIN,
+  GITHUB_API_VERSION,
+  rateLimitError,
+} from "./github_http.ts";
 import { assertGitHubName } from "./types.ts";
 
 /** endpointを組み立てる前に、`owner/repo`の両方を検証する。 */
@@ -39,8 +44,6 @@ export type ArtifactDownloadClient = {
 
 export const ARTIFACT_FETCH_TIMEOUT_MS = 60_000;
 
-const GITHUB_API_ORIGIN = "https://api.github.com";
-const GITHUB_API_VERSION = "2022-11-28";
 const ARTIFACT_USER_AGENT = "atelier-works-factory";
 /** artifactの取得先として認めるホストの末尾。GitHubはAzureのblob storageの署名付きURLへ302で渡す。 */
 const ARTIFACT_STORAGE_HOST_SUFFIX = ".blob.core.windows.net";
