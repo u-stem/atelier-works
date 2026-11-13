@@ -40,7 +40,7 @@ import type {
   GhPullRequest,
   NoticeRecord,
 } from "../../f/factory/lib/types.ts";
-import { ghApiOk } from "./testSupport.ts";
+import { ghApiOk, serveGitHubFetchWith } from "./testSupport.ts";
 
 const HEAD = "a".repeat(40);
 const NEW_HEAD = "d".repeat(40);
@@ -2708,6 +2708,8 @@ describe("runPrConflictWatch never calls a search endpoint", () => {
         });
       },
     };
+    // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+    serveGitHubFetchWith(client.run);
     const h = setup(options);
     const result = await runPrConflictWatch({
       ...h.deps,

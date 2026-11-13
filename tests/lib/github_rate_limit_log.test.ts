@@ -74,13 +74,17 @@ describe("callGhApi logs the rate limit responses", () => {
     expect(warned[0]?.fields.endpoint).toBe("repos/o/r/issues");
   });
 
+  // GETは相対パスしか受け付けないので、絶対URLを受け付ける`gh`の書き込みで確かめる。
   test("logs the endpoint of an absolute URL without the host", async () => {
     const { client, warned } = setup([
       limited({ "retry-after": "1" }),
       ghApiOk([]),
     ]);
 
-    await callGhApi(client, "https://api.github.com/repos/o/r/pulls?page=2");
+    await callGhApi(client, "https://api.github.com/repos/o/r/pulls?page=2", {
+      method: "POST",
+      body: {},
+    });
 
     expect(warned[0]?.fields.endpoint).toBe("repos/o/r/pulls");
   });

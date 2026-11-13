@@ -40,7 +40,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | CHK | [検査コマンドの権限](#検査コマンドの権限) | [検査コマンドの実行と権限の内部仕様](internals/check-sandbox.md) | 15 |
 | DEP | [dependabotの更新の自動マージ](#dependabotの更新の自動マージ) | [dependabotの更新の内部仕様](internals/dependabot.md) | 15 |
 | DAP | [反映の承認](#反映の承認) | [反映の承認の内部仕様](internals/deploy-approvals.md) | 05 |
-| GHC | [RESTの検索の拒否](#restの検索の拒否) | [GitHubの収集の内部仕様](internals/github-collect.md) | 06 |
+| GHC | [RESTの検索の拒否](#restの検索の拒否) | [GitHubの収集の内部仕様](internals/github-collect.md) | 07 |
 | IMP | [実装の安全策](#実装の安全策) | [実装フロー](internals/implement.md) | 04 |
 | CIF | [CIのメタデータの再生成](#ciのメタデータの再生成) | [CIの失敗を直す部品の内部仕様](internals/ci-fix.md) | 03 |
 | COV | [カバレッジの検査](#カバレッジの検査) | [テストの基準](testing-guidelines.md) | 05 |
@@ -701,7 +701,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-fix-09"></a>R-FIX-09 | CI回のテストの期待値の書き換えは機械では判定できず、再レビューに頼る。PRが足した行の書き換え、同じhunkの中で別の行へ置き換える変更、何もしない行(`void 0;`、`;`、`if (false) ...`など)への置き換えも検出できない。再レビューは、PR全体の差分を読み、CI回のcommit単体の差分(書き換え前後の行)は入力に無い。書き換えは、最終の形が新しいコードとして読まれ、気づかれない可能性が残る。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い)、[既知の限界](internals/ci-fix.md#既知の限界) |
 | <a id="r-fix-10"></a>R-FIX-10 | 空白を無視した差分で行の位置がずれることについて、次の2点を受け入れている。隣り合う同じ内容の行は、どちらがPRの追加かを決められず、基点の行がPRの追加に見えることがある。字下げだけが違う複製の行は、同じ行と見なされる。字下げに意味がある言語のテストでは、基点の行がすり替わりうる。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
 | <a id="r-fix-11"></a>R-FIX-11 | どのファイルへでも、PRが移した行はPRの追加に見える。基点のテストの行を消して別のファイル(新しいファイルを含む)へ移したPRでは、移した行を1行ずつ書き換える変更が通る。名前の変更も検出しない。行を削る変更は、意味のある追加行より多く減らせないので通らない。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い)、[既知の限界](internals/ci-fix.md#既知の限界) |
-| <a id="r-fix-12"></a>R-FIX-12 | CIのログは、`gh`が署名付きURLへの302を内部でたどって取得する。認証情報が別のホストへ渡らないことは、`gh`の挙動に頼る。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い)、[ログの取得](internals/ci-fix.md#ログの取得)、[既知の限界](internals/ci-fix.md#既知の限界) |
+| <a id="r-fix-12"></a>R-FIX-12 | CIのログの取得先は、通信層の定数の表で`*.blob.core.windows.net`に限り、トークンを付けずに送る。表は、Azureのほかの利用者のstorageも含む。取得先に渡るものは無く、取得した本文は信用せずに整形と秘密値の検査を通すので、受け入れる。ジョブのログの行き先は、実際のジョブの302で1件だけ確かめた。GitHubが行き先を変えると、ログの取得は断られて止まる。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い)、[ログの取得](internals/ci-fix.md#ログの取得)、[既知の限界](internals/ci-fix.md#既知の限界) |
 | <a id="r-fix-13"></a>R-FIX-13 | 拒否した安全装置が直接importするモジュールのうち、`db`、`discord`、`poll_support`、`implement_*`などの共有モジュールは、拒否せずに受け入れている。CI回のClaudeが、PRがすでに変更していればこれらを書き換えられる。受け入れた一覧と理由は、テストが固定する。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
 | <a id="r-fix-14"></a>R-FIX-14 | 受け入れた共有モジュールに`approver.ts`がある。31行で安定しており、承認の`approval_decide`が以前から同じ依存を持つ。CI回が変えても影響は操作者の名前に限られ、Consoleの解除は導けないときに拒否する。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
 | <a id="r-fix-15"></a>R-FIX-15 | ルートの`AGENTS.md`、`CLAUDE.md`、`AGENTS.wmill.md`と、安全装置以外の`*.script.yaml`は、拒否の一覧に無い。PRがすでに変更していれば、CI回のClaudeが書き換えられる。影響は、マージの後か、人の対話セッションで読まれたときに現れる。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
@@ -778,11 +778,12 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
 | <a id="r-ghc-01"></a>R-GHC-01 | 拒否は、`callGhApi`を通る呼び出しにだけ効く。argv配列で`gh`を起動するのは`github.ts`だけである。`workspace.ts`のgit credential helperの`gh auth git-credential`は除く。静的テストが、argvの先頭に`gh`を置く配列を書くファイルが`github.ts`だけであることを確かめる。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
-| <a id="r-ghc-02"></a>R-GHC-02 | 実行時の拒否は`lib/github_http.ts`の`rejectRestSearchEndpoint`にあり、`callGhApi`と`fetch`の経路(`fetchIssueObject`、`gh_graphql.ts`)の両方が通る。通らないのは、`lib/metadata_patch_download.ts`のartifactの取得の最初の要求だけである。endpointは`actions/artifacts/<数値>/zip`の固定の形で、検索APIを指せないので、実害は無い。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
+| <a id="r-ghc-02"></a>R-GHC-02 | 実行時の拒否は`lib/github_http.ts`の`rejectRestSearchEndpoint`にあり、`callGhApi`(GETは`fetch`、書き込みは`gh`)、`fetchIssueObject`、`gh_graphql.ts`、署名付きURLの取得(artifactとジョブのログ)のすべてが通る。拒否を通らないGitHubのAPIへの要求は無い。署名付きURLの取得先への要求は、APIの応答の`Location`へ送り、GitHubのAPIへは送らない。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
 | <a id="r-ghc-03"></a>R-GHC-03 | GraphQLの`search`のフィールドは拒まない。使う変更は、枠の消費を設計から見直す。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
 | <a id="r-ghc-04"></a>R-GHC-04 | endpointを文字列の組み立てで作る呼び出しは、静的テストが見つけられない。`callGhApi`を通る呼び出しなら、実行時の拒否が止める。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
-| <a id="r-ghc-05"></a>R-GHC-05 | 実行時の拒否が正規化するのは、先頭の`/`、大文字、絶対URLの3種類である。`fetch`の経路は、加えて`.`と`..`の区間とエンコードした`.`を含む区間を拒むが、`gh`の経路はドットセグメントを拒まない。どちらの経路も、`.`以外のパーセントエンコード(検索の語の一部をエンコードしたもの)は正規化しない。呼び出し側は自前で組み立てた名前だけを渡し、その名前は`assertGitHubName`を通る。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
-| <a id="r-ghc-06"></a>R-GHC-06 | GitHubのAPIへの通信層は、呼ぶ側が注入した`fetch`にトークンを渡す。保護テストは、宛先とヘッダーを広げる誤用を防ぎ、`fetch`を参照するファイルや通信層を呼ぶファイルが増えることを走査で見つける。走査は書き方のパターンを見るだけで、動的に組み立てた指定子や参照は見ない。保護パスの外の呼ぶ側で、注入する`fetch`を包む変更も見つけない。本番から`fetch`の注入をなくすまで、これらの変更は人のレビューで見る。 | [GitHubのAPIへの通信層](security.md#githubのapiへの通信層) |
+| <a id="r-ghc-05"></a>R-GHC-05 | 実行時の拒否が正規化するのは、先頭の`/`、大文字、絶対URLの3種類である。`fetch`の経路(GETのすべて)は、加えて`.`と`..`の区間とエンコードした`.`を含む区間を拒むが、`gh`の経路(書き込み)はドットセグメントを拒まない。どちらの経路も、`.`以外のパーセントエンコード(検索の語の一部をエンコードしたもの)は正規化しない。呼び出し側は自前で組み立てた名前だけを渡し、その名前は`assertGitHubName`を通る。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
+| <a id="r-ghc-06"></a>R-GHC-06 | 呼ぶ側が注入した`fetch`にトークンを渡す経路は、解消した。本番のscriptは`fetch`を渡せず、通信層は常にグローバルの`fetch`で送る。残るのは、同じプロセスでグローバルの`fetch`を置き換える変更である。保護テストは、グローバルの`fetch`を参照するファイルと通信層を呼ぶファイルが一覧と一致することを走査で確かめ、置き換えを見つける。走査は書き方のパターンを見るだけで、動的に組み立てた指定子や参照は見ないので、その形の変更は人のレビューで見る。 | [GitHubのAPIへの通信層](security.md#githubのapiへの通信層) |
+| <a id="r-ghc-07"></a>R-GHC-07 | APIのGETの`fetch`は、`gh`の子プロセスの閉じた環境の外、workerのジョブのプロセスの中で動く。プロキシや証明書の環境変数(`HTTPS_PROXY`、`NODE_EXTRA_CA_CERTS`、`NODE_TLS_REJECT_UNAUTHORIZED`)が効くと、トークンを載せた要求が経由先に見えるか、証明書の検査が外れる。Windmillのジョブに届く環境変数は`WHITELIST_ENVS`に挙げた名前だけで、これらは挙げていないので受け入れる。実際のジョブの環境は、反映の後の最初のジョブで確かめる(未確認)。`WHITELIST_ENVS`に名前を足す変更は、この行を見直す。 | [GitHubのAPIへの通信層](security.md#githubのapiへの通信層) |
 
 ## 実装の安全策
 

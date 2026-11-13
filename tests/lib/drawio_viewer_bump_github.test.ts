@@ -165,8 +165,8 @@ describe("getRepoFileText", () => {
   test("asks for the raw media type", async () => {
     const { client, fake } = clientFor([ok(ghApiStdout(200, "x"))]);
     await getRepoFileText(client, "acme", "widgets", "a.txt", "main");
-    expect(fake.calls[0]?.argv).toContain(
-      "Accept: application/vnd.github.raw+json",
+    expect(fake.calls[0]?.request?.headers.get("accept")).toBe(
+      "application/vnd.github.raw+json",
     );
   });
 });

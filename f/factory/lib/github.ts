@@ -1,15 +1,15 @@
-// `gh api`を通してGitHubのREST APIを呼ぶ。
-// 呼び出しはすべて、注入された`run`(`workspace.ts`の`CommandRunner`)で
+// GitHubのREST APIを呼ぶ。
+// GETの要求は、`gh`を起動せず、通信層(`github_http.ts`)の`fetch`で送る。
+// 宛先の固定、トークンを`Authorization`ヘッダーに載せること、リダイレクトの扱いは、通信層が決める。
+// 書き込み(POST、PATCH、PUT、DELETE)は、まだ注入された`run`(`workspace.ts`の`CommandRunner`)で
 // `gh api ...`を引数の配列として実行する。シェルの文字列は使わない。
-// トークンはサブプロセスの環境変数`GH_TOKEN`でだけ渡し、
-// コマンドの引数やURLには入れない。
+// `gh`へのトークンはサブプロセスの環境変数`GH_TOKEN`でだけ渡し、コマンドの引数やURLには入れない。
 //
-// 応答は`gh api -i`で受け取る(標準出力にステータス行・ヘッダー・本文が出る。
+// `gh`の応答は`gh api -i`で受け取る(標準出力にステータス行・ヘッダー・本文が出る。
 // ヘッダーの行末がCRLFであることは実際に確かめている)。こうすると、
 // 403/429のレート制限のヘッダー(`retry-after`、`x-ratelimit-remaining`)を
 // 2回目の要求なしに読める。レート制限の判定と待ち、ghプロセスの起動失敗と冪等な要求の通信断と5xxの再試行は、
-// `github_http.ts`の`runGitHubRequest`が行う。このモジュールは`gh`を起動する送り方だけを差し込む(`callGhApi`を参照)。
-// Console用のworkerのIssueの読み取り(`fetchIssueState`、`fetchIssueContent`)は、`gh`を起動せず、`github_http.ts`の`fetch`で送る。
+// どちらの送り方でも`github_http.ts`の`runGitHubRequest`が行う。このモジュールは`gh`を起動する送り方だけを差し込む(`callGhApi`を参照)。
 //
 // 自己再入の防止: Factoryが投稿するコメント・レビュー・返信には、すべて
 // `<!-- factory:<kind>:<work_item_id> -->`の目印を付ける(`withMarker`)。
@@ -26,11 +26,13 @@ import {
   GitHubRateLimitError,
 } from "./github_errors.ts";
 import {
+  downloadRedirectTarget,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
+  type GitHubHttpClient,
   type GitHubSendResult,
   graphqlErrorsRateLimited,
   graphqlRateLimit,
-  type HttpFetch,
+  type RateLimitPolicy,
   rateLimitError,
   rejectRestSearchEndpoint,
   requestGitHub,
@@ -83,6 +85,10 @@ export function validateOwnerRepo(owner: string, repo: string): void {
   assertGitHubName(repo);
 }
 
+/**
+ * GitHubを呼ぶクライアント。`run`、`home`、`path`、`tmpDir`は、`gh`を起動する書き込みだけが使う。
+ * GETは`ghToken`を通信層に渡し、`sleep`、`transientRetryDelayMs`、`now`、`log`を再試行と待ちに使う。
+ */
 export type GhClient = {
   readonly run: CommandRunner;
   readonly ghToken: string;
@@ -129,23 +135,20 @@ export type GhApiResponse = {
   readonly headers: ReadonlyMap<string, string>;
   readonly bodyText: string;
   /**
-   * `maxOutputBytes`を指定した要求で、出力が上限を超えた(runnerが間を捨てた)ときだけ真になる。
-   * 判定は出力全体のバイト数で行う。保持する量は上限に省略の注記を足した分なので、
-   * 上限を超えたかを、本文に書かれた注記の文字列には頼らずに決められる。
+   * `maxOutputBytes`を指定した要求で、本文(`gh`では出力全体)が上限を超えて間を捨てたときだけ真になる。
+   * 判定は受け取ったバイト数で行い、本文に書かれた省略の注記の文字列には頼らない。
    */
   readonly capped?: true;
   /**
-   * `gh`プロセスの終了コード。`attemptGhApi`が付ける。
-   * ステータスが2xxでも、本文が欠けたまま`gh`が失敗したことを呼び出し側が見分けるために使う。
-   * 省略可能なのは、出力を読んだ直後の応答が終了コードを持たず、後から付けるため。
-   * 省略された応答は、終了コードが0だと確かめられていないので、呼び出し側は失敗として扱う(fail-closed)。
+   * `gh`プロセスの終了コード。`gh`で送った書き込みの応答にだけ、`attemptGhApi`が付ける。
+   * `fetch`で送ったGETの応答には付かない。
    */
   readonly exitCode?: number;
-  /** `gh`プロセスがtimeoutで打ち切られたときだけ真になる。 */
+  /** 締め切りで打ち切ったときだけ真になる。 */
   readonly timedOut?: true;
   /**
-   * 2xxなのに`gh`の終了コードが0以外で、本文が欠けたときだけ真になる。
-   * JSONでない本文を読む`callGhApiRawBody`の要求だけに付ける。
+   * 2xxなのに本文が欠けたときだけ真になる。GETでは、本文が途中で切れたときと、制御列を含む本文を拒んだときに付く。
+   * `gh`の書き込みでは、JSONでない本文を読む`callGhApiRawBody`の要求で、終了コードが0以外のときだけ付ける。
    */
   readonly incomplete?: true;
 };
@@ -195,16 +198,16 @@ export type GhApiCallOptions = {
    */
   readonly idempotent?: boolean;
   /**
-   * `gh`の出力(ヘッダーと本文)で保持するバイト数の上限。
-   * 大きく信頼できない本文(Actionsのログ)を受け取るときに指定する。
+   * 本文(`gh`では出力のヘッダーと本文)で保持するバイト数の上限。
+   * 大きく信頼できない本文を受け取るときに指定する。
    * 超えたときは先頭と末尾を残し、間を`omittedMarker`でつなぐ。
-   * ヘッダーは先頭にあるので、先頭の半分が上限より小さい限り読める。
    */
   readonly maxOutputBytes?: number;
   /**
-   * `gh`に`--allow-escape-sequences`を渡す。
-   * ghは、応答に端末の制御列を含むと、本文を出さずに拒否の文だけを出す。
-   * 制御列を含みうる本文(Actionsのログ、PRの差分)を受け取るときに指定する。
+   * 端末の制御列を含む本文を受け取る。`gh`では`--allow-escape-sequences`を渡す。
+   * 指定しないと、制御列を含むJSONでない本文は、本文が欠けたもの(`incomplete`)になる。
+   * `gh`が、制御列を含む本文を出さずに拒否の文だけを出していた挙動に合わせている。
+   * 制御列を含みうる本文(PRの差分)を受け取るときに指定する。
    * 制御列の除去や置き換えは、呼び出し側が行う。
    */
   readonly allowEscapeSequences?: boolean;
@@ -295,8 +298,12 @@ async function attemptGhApi(
 }
 
 /**
- * `gh api <endpoint>`を呼ぶ。再試行とレート制限の待ちは、`github_http.ts`の`runGitHubRequest`が行う。
- * RESTの検索APIのendpointは、`gh`を起動せずに例外で拒む(`rejectRestSearchEndpoint`)。
+ * GitHubのREST APIの`endpoint`を呼ぶ。再試行とレート制限の待ちは、`github_http.ts`の`runGitHubRequest`が行う。
+ * GET(`options.method`の省略を含む)は、`gh`を起動せず、通信層の`fetch`で送る。
+ * GETの`endpoint`は`api.github.com`からの相対パスでなければならず、先頭の`/`、絶対URL、`.`と`..`の区間などは
+ * 送る前に例外で拒む(`assertGitHubApiPath`)。
+ * ほかのメソッドは`gh api`で送る。`gh`は先頭の`/`と絶対URLも受け付ける。
+ * RESTの検索APIのendpointは、どちらの送り方でも、送る前に例外で拒む(`rejectRestSearchEndpoint`)。
  * メッセージにはendpointを載せない(クエリに値が入りうるため)。
  * レート制限の応答を受けたら、待ってから1回だけ再試行する。
  * 必要な待ちが`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えるときは待たずに、
@@ -322,14 +329,52 @@ export async function callGhApi(
  */
 const NO_WAIT_CLIENTS = new WeakSet<GhClient>();
 
+/** 通信層のクライアント。渡すのはトークンと、待機、時計、ログ、再試行の待ちだけである。 */
+function httpClientOf(client: GhClient): GitHubHttpClient {
+  return {
+    token: client.ghToken,
+    ...(client.sleep !== undefined ? { sleep: client.sleep } : {}),
+    ...(client.now !== undefined ? { now: client.now } : {}),
+    ...(client.log !== undefined ? { log: client.log } : {}),
+    ...(client.transientRetryDelayMs !== undefined
+      ? { transientRetryDelayMs: client.transientRetryDelayMs }
+      : {}),
+  };
+}
+
 async function sendGhApiRequest(
   client: GhClient,
   endpoint: string,
   options: GhApiCallOptions,
   markIncomplete: boolean,
 ): Promise<GhApiResponse> {
+  const policy: RateLimitPolicy = NO_WAIT_CLIENTS.has(client)
+    ? { mode: "throw" }
+    : { mode: "wait_once" };
+  if ((options.method ?? "GET") === "GET") {
+    // 宛先とパスの形の検査(`assertGitHubApiPath`)は、トークンを載せる通信層が行う。
+    return requestGitHub(
+      httpClientOf(client),
+      {
+        path: endpoint,
+        method: "GET",
+        ...(options.acceptHeader !== undefined
+          ? { accept: options.acceptHeader }
+          : {}),
+        ...(options.idempotent !== undefined
+          ? { idempotent: options.idempotent }
+          : {}),
+        ...(options.maxOutputBytes !== undefined
+          ? { maxBodyBytes: options.maxOutputBytes }
+          : {}),
+        ...(options.allowEscapeSequences === true
+          ? { allowEscapeSequences: true }
+          : {}),
+      },
+      policy,
+    );
+  }
   // `gh`は先頭の`/`と`api.github.com`の絶対URLも受け付けるので、ここでは検索APIだけを拒む。
-  // 宛先とパスの形の検査(`assertGitHubApiPath`)は、トークンを自分で載せる`fetch`の送り方が行う。
   rejectRestSearchEndpoint(endpoint);
   return runGitHubRequest(
     client,
@@ -340,7 +385,7 @@ async function sendGhApiRequest(
         ? { idempotent: options.idempotent }
         : {}),
     },
-    NO_WAIT_CLIENTS.has(client) ? { mode: "throw" } : { mode: "wait_once" },
+    policy,
     () => attemptGhApi(client, endpoint, options, markIncomplete),
   );
 }
@@ -373,9 +418,8 @@ export function ensureSuccess(response: GhApiResponse, context: string): void {
 }
 
 /**
- * JSONでない本文(差分、ファイルの生の内容、Actionsのログ)が欠けたまま`gh`が終わったときの例外。
- * ステータスが2xxなのに`gh`の終了コードが0以外のとき、つまり、端末の制御列を含む本文の拒否、
- * 本文の途中の切断、timeoutで止めた取得で起きる。
+ * JSONでない本文(差分、ファイルの生の内容、Actionsのログ)が、2xxの応答の後で欠けたときの例外。
+ * 本文の途中の切断、締め切りで止めた取得、端末の制御列を含む本文の拒否で起きる。
  * 拒否のときの本文は空になるので、欠けた本文を空の内容として使わないために投げる。
  * 取り直しても欠けたときに、`callGhApiRawBody`が投げる。
  * 締め切り(`timedOut`)で欠けた本文は取り直さず、すぐ投げる。
@@ -386,7 +430,7 @@ export class GitHubRawBodyIncompleteError extends Error {
   constructor(context: string) {
     super(
       maskSecrets(
-        `${context} ended incomplete: gh exited non-zero after a 2xx status`,
+        `${context} ended incomplete: the body was cut after a 2xx status`,
       ),
     );
     this.name = "GitHubRawBodyIncompleteError";
@@ -394,13 +438,13 @@ export class GitHubRawBodyIncompleteError extends Error {
 }
 
 /**
- * JSONでない本文を読む`gh api`の呼び出し。
- * 2xxなのに`gh`の終了コードが0以外の応答を、本文が欠けた(`incomplete`)応答として扱う。
+ * JSONでない本文を読むGitHubのAPIの呼び出し。
+ * 2xxの応答の本文が欠けた(`incomplete`)応答を、例外にする。
  * 取り直しは`runGitHubRequest`が行い、冪等な要求(GETか`idempotent`の指定)だけ、短く待ってから1回だけ取り直す。
  * 取り直しても欠けたとき、また冪等でない要求で欠けたときは、`GitHubRawBodyIncompleteError`を投げる。
  * 締め切り(`timedOut`)で欠けた本文は取り直さず、すぐ投げる。
  * JSONの応答はESCがエスケープされ、構文の検査が欠けを見つけるので、この関数は要らない。
- * 2xx以外の応答は、終了コードを見ずにそのまま返す。呼び出し側がステータスで扱いを決める。
+ * 2xx以外の応答は、本文が欠けても、そのまま返す。呼び出し側がステータスで扱いを決める。
  * 取り直しの待ちは`GhClient`の`transientRetryDelayMs`で決まる。
  */
 export async function callGhApiRawBody(
@@ -410,7 +454,11 @@ export async function callGhApiRawBody(
   context: string,
 ): Promise<GhApiResponse> {
   const response = await sendGhApiRequest(client, endpoint, options, true);
-  if (response.incomplete === true) {
+  if (
+    response.incomplete === true &&
+    response.status >= 200 &&
+    response.status < 300
+  ) {
     throw new GitHubRawBodyIncompleteError(context);
   }
   return response;
@@ -441,8 +489,9 @@ function parseNextLinkUrl(linkHeader: string | undefined): string | null {
 }
 
 /**
- * `link`ヘッダーの絶対URLを、このモジュールのほかの箇所で使う
- * `gh api`の相対エンドポイントの形に変える。
+ * `link`ヘッダーの絶対URLを、このモジュールのほかの箇所で使う相対エンドポイントの形に変える。
+ * ホストは捨てるので、次のページの要求も通信層の固定の送り先(`api.github.com`)へ送られる。
+ * 返る形は`repositories/<数値ID>/...`とクエリで、通信層のパスの検査(`assertGitHubApiPath`)を通る。
  */
 function toApiEndpoint(url: string): string {
   return url.replace(/^https?:\/\/[^/]+\//, "");
@@ -1029,12 +1078,6 @@ export async function listLabeledOpenIssues(
   return numbers.filter((number) => number !== null);
 }
 
-/**
- * `fetchIssueState`が使う`fetch`の形。呼び出し側がグローバルの`fetch`を渡し、テストで差し替える。
- * 宛先とトークンの扱いは`github_http.ts`が決め、渡した`fetch`は決めない。
- */
-export type FetchLike = HttpFetch;
-
 /** Issueの読み取りの再試行の待ちの差し込み。省略すると実際に待つ。テストで差し替える。 */
 export type FetchIssueOptions = {
   readonly sleep?: (ms: number) => Promise<void>;
@@ -1045,7 +1088,7 @@ export type FetchIssueOptions = {
 const FETCH_ISSUE_TIMEOUT_MS = 10_000;
 
 /**
- * `GET /repos/.../issues/<番号>`を`fetch`で読み、JSONのオブジェクトを返す。
+ * `GET /repos/.../issues/<番号>`を読み、JSONのオブジェクトを返す。
  * `gh`を起動できないworker(Console用のworker)から使うためのもので、送り方は`github_http.ts`の`requestGitHub`に任せる。
  * 宛先は`api.github.com`に固定され、資格情報は`Authorization`ヘッダだけに載る。
  * リダイレクトは辿らない(`redirect: "never"`)。Consoleの再開が3xxを「移された」と見分け、確かめられないものとして扱うためである。
@@ -1054,7 +1097,6 @@ const FETCH_ISSUE_TIMEOUT_MS = 10_000;
  * エラーの文に、資格情報とIssueの内容は含めない。
  */
 async function fetchIssueObject(
-  fetchFn: FetchLike,
   ghToken: string,
   owner: string,
   repo: string,
@@ -1067,7 +1109,6 @@ async function fetchIssueObject(
     {
       // 差し込めるのは待ちの2つだけにする。実行時に余分な値が来ても、トークンと送り方を上書きさせない。
       token: ghToken,
-      fetch: fetchFn,
       ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
       ...(options.transientRetryDelayMs !== undefined
         ? { transientRetryDelayMs: options.transientRetryDelayMs }
@@ -1117,11 +1158,10 @@ async function fetchIssueObject(
 }
 
 /**
- * IssueまたはPRの`state`(`open`か`closed`)を、`fetch`で読む。
+ * IssueまたはPRの`state`(`open`か`closed`)を、`gh`を起動せずに読む。
  * 通信の決まりは`fetchIssueObject`にある。
  */
 export async function fetchIssueState(
-  fetchFn: FetchLike,
   ghToken: string,
   owner: string,
   repo: string,
@@ -1129,7 +1169,6 @@ export async function fetchIssueState(
   options: FetchIssueOptions = {},
 ): Promise<string> {
   const { context, body } = await fetchIssueObject(
-    fetchFn,
     ghToken,
     owner,
     repo,
@@ -1144,11 +1183,10 @@ export async function fetchIssueState(
 }
 
 /**
- * Issueの題名と本文を、`fetch`で読む。本文が無い(`null`)Issueは空文字にする。
+ * Issueの題名と本文を、`gh`を起動せずに読む。本文が無い(`null`)Issueは空文字にする。
  * 通信の決まりは`fetchIssueObject`にある。
  */
 export async function fetchIssueContent(
-  fetchFn: FetchLike,
   ghToken: string,
   owner: string,
   repo: string,
@@ -1156,7 +1194,6 @@ export async function fetchIssueContent(
   options: FetchIssueOptions = {},
 ): Promise<{ readonly title: string; readonly body: string }> {
   const { context, body } = await fetchIssueObject(
-    fetchFn,
     ghToken,
     owner,
     repo,
@@ -5002,20 +5039,17 @@ export class GitHubCiLogError extends Error {
 
 /**
  * ジョブ(`jobId`)のログを読む。ログはJSONではないので、本文をそのまま文字列で返す。
- * 取得先は署名付きURLへの302で、`gh`が内部でたどる。URLは受け取らず、エラーにも戻り値にも出さない。
+ * APIは署名付きURLへの302を返す。取得は通信層の`downloadRedirectTarget`が行い、
+ * 署名付きURLへはトークンを付けずに送る。URLは受け取らず、エラーにも戻り値にも出さない。
  * `jobId`は正の安全な整数でなければ、API呼び出しの前に例外を投げる。
- * 本文は`CI_JOB_LOG_MAX_BYTES`で切り、切ったかは`truncated`で返す。
- * 本文は`VolatileCiLog`で包んで返す。
- * ログは端末の制御列を含むので、`gh`に`--allow-escape-sequences`を渡す。
- * 2xxなのに`gh`の終了コードが0以外(終了コードが無い場合を含む)のときは、
- * 上限に達したかによらず、本文の欠けたログとして扱う。
- * runnerは上限に達してもプロセスを止めず、先頭と末尾を残して最後まで読むので、
- * 上限に達した正常なログは終了コード0で`truncated`のログとして返る。
- * 一時的な切断をCIの回に持ち込まないため、欠けたときは1回だけ取り直す。
- * 取り直しても欠けたときは、`GitHubRawBodyIncompleteError`を投げる(`callGhApiRawBody`)。
- * 2xxは`ok`、403は`forbidden`、404と410は`log_unavailable`で返す。
- * それ以外の失敗は`GitHubCiLogError`を投げ、`ensureSuccess`は使わない
- * (本文をエラーの文に写さないため)。rate limitは`GitHubRateLimitError`で伝える。
+ * 本文は`CI_JOB_LOG_MAX_BYTES`で先頭と末尾を残して切り、切ったかは`truncated`で返す。
+ * 本文は`VolatileCiLog`で包んで返す。ログは端末の制御列を含むので、制御列を含んだまま受け取る。
+ * 締め切りはAPIと取得先を合わせて60秒で、取り直しはしない。CIの回の次の読み取りに任せる。
+ * APIの403は`forbidden`、404と410は`log_unavailable`で返す。
+ * 本文が途中で切れたときは`GitHubRawBodyIncompleteError`を投げる。
+ * それ以外の失敗は`GitHubCiLogError`を投げ、`ensureSuccess`は使わない(本文をエラーの文に写さないため)。
+ * `GitHubCiLogError`のステータスは、APIか取得先の応答のステータスで、応答が無いか締め切りを過ぎたときは0である。
+ * rate limitは待たずに`GitHubRateLimitError`で伝える。
  */
 export async function getWorkflowJobLog(
   client: GhClient,
@@ -5025,24 +5059,36 @@ export async function getWorkflowJobLog(
 ): Promise<WorkflowJobLogResult> {
   validateOwnerRepo(owner, repo);
   assertJobId(jobId);
-  const response = await callGhApiRawBody(
-    client,
-    `repos/${owner}/${repo}/actions/jobs/${String(jobId)}/logs`,
-    { maxOutputBytes: CI_JOB_LOG_MAX_BYTES, allowEscapeSequences: true },
-    "GET workflow job log",
+  const result = await downloadRedirectTarget(
+    httpClientOf(client),
+    { path: `repos/${owner}/${repo}/actions/jobs/${String(jobId)}/logs` },
+    "job_log",
+    { as: "text_capped", maxBytes: CI_JOB_LOG_MAX_BYTES },
   );
-  if (response.status >= 200 && response.status < 300) {
-    return {
-      kind: "ok",
-      log: VolatileCiLog.of(response.bodyText),
-      truncated: response.capped === true,
-    };
+  switch (result.kind) {
+    case "text":
+      return {
+        kind: "ok",
+        log: VolatileCiLog.of(result.text),
+        truncated: result.capped,
+      };
+    case "api_response":
+      if (result.response.status === 403) return { kind: "forbidden" };
+      if (result.response.status === 404 || result.response.status === 410) {
+        return { kind: "log_unavailable" };
+      }
+      throw new GitHubCiLogError(result.response.status);
+    case "bad_redirect":
+    case "storage_status":
+      throw new GitHubCiLogError(result.status);
+    case "no_response":
+      throw new GitHubCiLogError(0);
+    case "incomplete":
+      throw new GitHubRawBodyIncompleteError("GET workflow job log");
+    case "too_large":
+    case "bytes":
+      throw new GitHubCiLogError(0);
   }
-  if (response.status === 403) return { kind: "forbidden" };
-  if (response.status === 404 || response.status === 410) {
-    return { kind: "log_unavailable" };
-  }
-  throw new GitHubCiLogError(response.status);
 }
 
 /**

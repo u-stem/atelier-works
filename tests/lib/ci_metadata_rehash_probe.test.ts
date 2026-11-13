@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
 import { rehashRoundProbe } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import type { CommandRunner } from "../../f/factory/lib/workspace.ts";
-import { ghApiOk, ok } from "./testSupport.ts";
+import {
+  FAKE_LOG_STORAGE_URL,
+  ghApiOk,
+  ghApiRedirect,
+  ok,
+  serveGitHubFetchWith,
+} from "./testSupport.ts";
 
 const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
 const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
@@ -83,11 +89,16 @@ function job(name: string, conclusion: string, id: number) {
   };
 }
 
-/** エンドポイントで答えを選ぶ、GitHubの偽物。`gh api`の引数にエンドポイントが入る。 */
+/**
+ * エンドポイントで答えを選ぶ、GitHubの偽物。argvにエンドポイントが入る。
+ * GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ関数で答える(`serveGitHubFetchWith`)。
+ * ジョブのログは、取得先への302と、取得先の本文の2つで答える。
+ */
 function githubOf(world: World): CommandRunner {
-  return async (argv) => {
+  const run: CommandRunner = async (argv) => {
     const text = argv.join(" ");
-    if (text.includes("/logs")) return ghApiOk(world.log);
+    if (text.includes(FAKE_LOG_STORAGE_URL)) return ghApiOk(world.log);
+    if (text.includes("/logs")) return ghApiRedirect();
     if (text.includes("/jobs")) return ghApiOk({ jobs: world.jobs });
     if (text.includes("actions/runs?")) {
       return ghApiOk({ workflow_runs: [RUN] });
@@ -95,6 +106,8 @@ function githubOf(world: World): CommandRunner {
     if (text.includes("pulls/12")) return ghApiOk(rawPr(world));
     return ok();
   };
+  serveGitHubFetchWith(run);
+  return run;
 }
 
 async function probe(world: World): Promise<boolean> {
@@ -199,6 +212,7 @@ describe("rehashRoundProbe", () => {
       if (argv.join(" ").includes("pulls/12")) reads += 1;
       return base(argv, options);
     };
+    serveGitHubFetchWith(run);
     const subject = rehashRoundProbe({
       client: { run, ghToken: "tok", sleep: async () => {} },
       owner: "acme",

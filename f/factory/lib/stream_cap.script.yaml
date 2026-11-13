@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 上限つきのストリームの読み取り'
+description: 内部ライブラリです。直接実行するものではありません。子プロセスの出力とGitHubの応答の本文を、先頭と末尾だけを残して読みます。
 lock: '!inline f/factory/lib/stream_cap.script.lock'
 kind: script
 schema:

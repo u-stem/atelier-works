@@ -326,17 +326,21 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 - `f/factory/db_backup_url`
 - `f/factory/heartbeat_url`
 
-scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。
+scriptは`wmill.getVariable()`で値を取得する。
+渡し方は、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)か、HTTPの要求の`Authorization`ヘッダーだけである。
 HTTPの要求にGitHubのトークンを載せるのは`lib/github_http.ts`だけで、`Authorization`ヘッダーにだけ載せる。
-例外は、下のメタデータのパッチの取得の1か所である。
+例外は無い。
 URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
-親プロセスが`fetch`で使う秘密値は、次の4か所である。
+親プロセスが`fetch`で使う秘密値は、次の3か所である。
 
 - GitHubのAPIへの通信層(`lib/github_http.ts`)は、GitHubのトークンを`Authorization`ヘッダーに載せる。
   載せるのは、`github_token`と、`github_read_tokens`の所有者ごとのトークンである。
   宛先は`https://api.github.com`に固定する。
   決まりは[GitHubのAPIへの通信層](#githubのapiへの通信層)に書く。
-  この層を使うのは次の3つである。
+  この層を使うのは次のものである。
+  - `lib/github.ts`の`callGhApi`のGET(`callGhApiRawBody`と`paginateGhApi`を含む)。
+    defaultのworkerの読み取りは、すべてこの層で送る。
+    書き込みは、まだ`gh`の子プロセスで送る。
   - Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、この層で`github_token`を使う。
     使うのは、取り消された作業項目を再開するときの対象の状態の確認と、Issueの要件定義を作り直す再実行のときの取り込み内容の更新(現在のIssueの題名と本文の取得)である。
     リダイレクトは辿らない。
@@ -349,13 +353,11 @@ URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文に
     GraphQLのエラーの文は、残さない。
     拒否された項目として、許可表の`type`と、問い合わせの文に現れる語だけの項目名を、1回10件までログに残す。
     語の表は自前の問い合わせの文から作るので、エラーの側に何が来ても、トークンの形の文字列はログに入らない。
-- メタデータのパッチの取得(`lib/metadata_patch_download.ts`)は、`github_token`を`Authorization`ヘッダーに載せる。
-  載せるのは、artifactのAPIへの最初の要求だけである。
-  この要求は、まだ通信層を通らずに自分で送る。
-  宛先は`https://api.github.com`に固定し、リダイレクトは辿らない。
-  返った302の取得先へは、トークンを付けずに送る。
-  取得先は、`https`のAzureのblob storageで、利用者名、パスワード、ポートを含まないURLに限る。
-  レート制限の判定は、通信層と共有する。
+  - CIのジョブのログの取得(`getWorkflowJobLog`)と、メタデータのパッチの取得(`lib/metadata_patch_download.ts`)。
+    どちらも、この層の`downloadRedirectTarget`で`github_token`を使う。
+    トークンを載せるのは、APIへの最初の要求だけである。
+    返った302の取得先へは、トークンを付けずに送る。
+    取得先は、`https`のAzureのblob storageで、利用者名、パスワード、ポートを含まないURLに限る。
 - Discordへの送信(`lib/discord.ts`の`notify`)は、`discord_webhook_url`を`fetch`の宛先のURLにする。
   URLそのものが秘密なので、エラーメッセージとログには含めない。
 - 検出器の`detect_schedule_failures`は、外部の死活監視の`heartbeat_url`を`fetch`の宛先にする。
@@ -380,7 +382,11 @@ URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文に
 - トークンは`Authorization`ヘッダーにだけ載せ、載せる前に毎回、送り先のoriginを確かめる。
   ほかのファイルは`Authorization`ヘッダーを組み立てず、APIのホストの字面も書かない。
   固定するテストは`no other file builds an Authorization header`と`no other file names the API host`である。
-  例外は、まだ通信層を通らないメタデータのパッチの取得の1か所で、テストの例外の一覧に理由を書く。
+  例外は無い。
+  テストの例外の一覧は空で、足す変更は保護されたテストの変更として人のレビューを経る。
+- 送るのは常にグローバルの`fetch`で、呼ぶ側は`fetch`を渡せない。
+  クライアントに`fetch`の項目が付いていても使わない。
+  固定するテストは`sends with the global fetch even when the client carries another fetch`である。
 - すべての`fetch`に`redirect: "manual"`を付け、`fetch`にリダイレクトを辿らせない。
   辿るのはGETだけで、最大3回である。
   `Location`は今のURLを基準に解決し、行き先のoriginが`https://api.github.com`と完全に一致するときだけ辿る。
@@ -399,15 +405,35 @@ URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文に
   固定するテストは`the files that refer to the global fetch are the listed ones`と`only the listed files import values from github_http.ts`である。
 - SDKを許可表に絞ったConsoleの10本のscriptは、この層に届かない。
   固定するテストは、`tests/scripts/console_worker_boundary.test.ts`の`does not reach the GitHub HTTP layer`である。
+- 署名付きURLの取得(`downloadRedirectTarget`)は、APIの応答の`Location`だけを取得先にし、呼ぶ側からURLを受け取らない。
+  取得先の表は用途(artifactとジョブのログ)ごとの定数で、引数では広げられない。
+  認めるのは、`https`で、利用者名、パスワード、ポートを含まず、ホストが`.blob.core.windows.net`で終わるURLだけである。
+  取得先へはトークンを付けず、`redirect: "error"`で送る。
+  締め切りは、APIへの要求と取得先への要求で1つを共有する。
+  固定するテストは、`downloadRedirectTarget`の次のテストである。
+  - `sends no token to the signed URL`
+  - `refuses a redirect from the signed URL`
+  - `refuses a Location with`で始まるテスト
+  - `keeps the signed URL out of a failure`
+- 制御列を受け取ると指定しない要求では、ESCを含むJSONでない本文を、本文が欠けたものとして空にする。
+  `gh`が、制御列を含む本文を出さずに拒んでいた挙動に合わせる。
+  固定するテストは`treats a text body with an escape sequence as incomplete`である。
 
-呼び出し側は、テストのために`fetch`を差し替えられる。
-差し替えた`fetch`はトークンを受け取る。
-この層は、宛先とヘッダーを広げる誤用は防ぐ。
-呼ぶ側で注入した`fetch`を包む悪用は防がない。
+テストは、グローバルの`fetch`を差し替えて偽の応答を返す。
+本番のscriptには`fetch`の差し込み口が無い。
+差し替えたグローバルの`fetch`はトークンを受け取るので、この層が防ぐのは、宛先とヘッダーを広げる誤用である。
+グローバルの`fetch`を置き換える変更は、参照するファイルの一覧の走査が見つける。
 残るリスクは[R-GHC-06](security-risks.md#r-ghc-06)に書く。
 
+GETの`fetch`は、workerのジョブのプロセスの中で動く。
+`gh`の子プロセスは`GH_TOKEN`、`HOME`、`PATH`、`TMPDIR`だけの閉じた環境で動いたが、APIのGETの通信は、この閉じた環境の外にある。
+プロキシと証明書の環境変数(`HTTPS_PROXY`、`NODE_EXTRA_CA_CERTS`、`NODE_TLS_REJECT_UNAUTHORIZED`)は、ジョブの環境から効きうる。
+Windmillのジョブに届く環境変数は、`infra/docker-compose.yml`の`WHITELIST_ENVS`に挙げた名前だけで、これらの名前は挙げていない。
+残るリスクは[R-GHC-07](security-risks.md#r-ghc-07)に書く。
+
 通信の再試行は、この層の`runGitHubRequest`だけが行う。
-`gh`を起動する送り方(`lib/github.ts`の`callGhApi`)も、再試行とレート制限の待ちをこの関数に任せる。
+`gh`を起動する送り方(`lib/github.ts`の`callGhApi`の書き込み)も、再試行とレート制限の待ちをこの関数に任せる。
+署名付きURLの取得は再試行せず、レート制限も待たない。
 再試行するのは、冪等な要求の通信断と5xxと、本文が途中で切れた2xxの応答である。
 どれも1回だけ送り直す。
 本文の切れた5xxは、5xxとしてだけ数え、通信層全体で2回までしか送らない。
@@ -676,7 +702,12 @@ PRは除くが、ページは消費する。
 失敗は、スケジュールの失敗を拾う検出器(`detect_schedule_failures`)が`job_failures`に記録し、Discordに`job_failed`として通知する。
 直近3回の実行が続けて失敗すると、要対応の通知`schedule_failing`も残る。
 
-GitHubの認証は、環境変数`GH_TOKEN`と、gitのcredential helperとしての`gh auth git-credential`だけで行う。
+GitHubの認証は、次の3つだけで行う。
+
+- APIのGETとartifact、ジョブのログの取得は、通信層(`lib/github_http.ts`)が`Authorization`ヘッダーに載せる。
+- APIの書き込みは、`gh`の子プロセスの環境変数`GH_TOKEN`で渡す。
+- gitの通信は、gitのcredential helperとしての`gh auth git-credential`で渡す。
+
 `gh auth login`の対話ログインと、トークンを埋め込んだclone URLは使わない。
 
 ### Claude CodeのOAuthトークン

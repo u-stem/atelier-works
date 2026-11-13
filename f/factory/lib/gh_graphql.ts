@@ -7,8 +7,6 @@ import {
   GITHUB_API_ORIGIN,
   type GitHubHttpResponse,
   graphqlErrorsRateLimited,
-  type HttpFetch,
-  type HttpResponseLike,
   sendGitHubRequest,
 } from "./github_http.ts";
 import {
@@ -48,12 +46,6 @@ export const OWNER_REPOS_QUERY = `query($owner: String!, $label: String!, $curso
     }
   }
 }`;
-
-/** `graphqlRequest`が使う応答の最小の形。`Response`が満たす。 */
-export type GraphqlResponseLike = HttpResponseLike;
-
-/** `graphqlRequest`が使う`fetch`の最小の形。テストでは差し替える。 */
-export type GraphqlFetch = HttpFetch;
 
 /**
  * 失敗の分類に要る事実。本文もエラーの文も持たない。
@@ -435,7 +427,6 @@ function failureFromStatus(response: GitHubHttpResponse): GraphqlFailure {
  */
 export async function graphqlRequest(
   deps: {
-    readonly fetch: GraphqlFetch;
     readonly token: string;
     readonly timeoutMs?: number;
     /** 送った別名の数。渡すと、別名の水準のエラーだけの応答を成功として返す。 */
@@ -445,7 +436,7 @@ export async function graphqlRequest(
   variables: Readonly<Record<string, unknown>>,
 ): Promise<GraphqlResponse> {
   const response = await sendGitHubRequest(
-    { token: deps.token, fetch: deps.fetch },
+    { token: deps.token },
     {
       path: "graphql",
       method: "POST",

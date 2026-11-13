@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import type { GateInput } from "../../f/factory/lib/dependabot_support.ts";
 import {
   addLabels,
@@ -15,7 +15,6 @@ import {
   ensureLabel,
   ensureSuccess,
   type FetchIssueOptions,
-  type FetchLike,
   fetchIssueContent,
   fetchIssueState,
   findIssueByMarker,
@@ -92,14 +91,19 @@ import {
 } from "../../f/factory/lib/workspace.ts";
 import {
   createFakeCommandRunner,
+  cutBody,
   fail,
   ghApiOk,
   ghApiStdout,
   labelEventNode,
   labelEventsOk,
   ok,
+  restoreGlobalFetch,
+  stubGlobalFetchWith,
   timeout,
 } from "./testSupport.ts";
+
+afterEach(restoreGlobalFetch);
 
 describe("limitReviewDiff", () => {
   test("cuts the text to the line limit", () => {
@@ -198,22 +202,42 @@ describe("allowEscapeSequences", () => {
     ghToken: "tok",
   });
 
-  test("adds --allow-escape-sequences when the option is true", async () => {
+  // 書き込みは`gh`で送るので、`gh`に`--allow-escape-sequences`を渡すかで確かめる。
+  test("adds --allow-escape-sequences to a write when the option is true", async () => {
     const fake = createFakeCommandRunner([ghApiOk({})]);
-    await callGhApi(client(fake), "user", { allowEscapeSequences: true });
+    await callGhApi(client(fake), "repos/o/r/issues", {
+      method: "POST",
+      body: {},
+      allowEscapeSequences: true,
+    });
     expect(fake.calls[0]?.argv).toContain("--allow-escape-sequences");
   });
 
-  test("omits --allow-escape-sequences by default", async () => {
+  test("omits --allow-escape-sequences from a write by default", async () => {
     const fake = createFakeCommandRunner([ghApiOk({})]);
-    await callGhApi(client(fake), "user");
+    await callGhApi(client(fake), "repos/o/r/issues", {
+      method: "POST",
+      body: {},
+    });
     expect(fake.calls[0]?.argv).not.toContain("--allow-escape-sequences");
   });
 
-  test("omits --allow-escape-sequences from the other API calls", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ login: "bot", id: 1 })]);
-    await getViewer(client(fake));
-    expect(fake.calls[0]?.argv).not.toContain("--allow-escape-sequences");
+  // GETは`fetch`で送るので、制御列を含む本文が残るかで確かめる。
+  test("keeps an escape sequence in a GET body when the option is true", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "a\u001bb"))]);
+    const response = await callGhApi(client(fake), "repos/o/r/pulls/1", {
+      allowEscapeSequences: true,
+    });
+    expect(response.bodyText).toBe("a\u001bb");
+  });
+
+  test("drops a GET body with an escape sequence by default", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, "a\u001bb")),
+      ok(ghApiStdout(200, "a\u001bb")),
+    ]);
+    const response = await callGhApi(client(fake), "repos/o/r/pulls/1", {});
+    expect(response.bodyText).toBe("");
   });
 });
 
@@ -248,21 +272,32 @@ describe("getDefaultBranch", () => {
   });
 });
 
-describe("getViewer", () => {
+describe("the environment of gh for a write", () => {
   test("points TMPDIR at the given job directory", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ login: "bot", id: 1 })]);
-    await getViewer({
-      run: fake.run,
-      ghToken: "tok",
-      tmpDir: "/run/factory-tmp/fj-x",
-    });
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await callGhApi(
+      { run: fake.run, ghToken: "tok", tmpDir: "/run/factory-tmp/fj-x" },
+      "repos/o/r/issues",
+      { method: "POST", body: {} },
+    );
     expect(fake.calls[0]?.options?.env?.TMPDIR).toBe("/run/factory-tmp/fj-x");
   });
 
   test("leaves TMPDIR unset outside a job", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await callGhApi({ run: fake.run, ghToken: "tok" }, "repos/o/r/issues", {
+      method: "POST",
+      body: {},
+    });
+    expect(fake.calls[0]?.options?.env?.TMPDIR).toBeUndefined();
+  });
+});
+
+describe("getViewer", () => {
+  test("does not start gh", async () => {
     const fake = createFakeCommandRunner([ghApiOk({ login: "bot", id: 1 })]);
     await getViewer({ run: fake.run, ghToken: "tok" });
-    expect(fake.calls[0]?.options?.env?.TMPDIR).toBeUndefined();
+    expect(fake.calls[0]?.argv[0]).toBe("fetch");
   });
 
   test("returns the authenticated login", async () => {
@@ -1141,36 +1176,43 @@ describe("transient failure retry", () => {
     );
   }
 
+  // `gh`を起動するのは書き込みだけなので、起動の失敗はIssueの作成(POST)で確かめる。
   describe("when the gh process fails to start", () => {
+    const create = (client: GhClient) =>
+      createIssue(client, "acme", "widgets", { title: "t", body: "b" });
+
     test("succeeds on the retry after an EAGAIN failure", async () => {
-      const { client } = fakeClient([spawnError("EAGAIN"), viewerOk]);
-      const viewer = await getViewer(client);
-      expect(viewer.login).toBe("factory-bot");
+      const { client } = fakeClient([spawnError("EAGAIN"), issueCreated]);
+      const created = await create(client);
+      expect(created.number).toBe(5);
     });
 
     test("waits the injected delay once before retrying", async () => {
       const sleeps: number[] = [];
       const { client } = fakeClient(
-        [spawnError("EAGAIN"), viewerOk],
+        [spawnError("EAGAIN"), issueCreated],
         sleeps,
         250,
       );
-      await getViewer(client);
+      await create(client);
       expect(sleeps).toEqual([250]);
     });
 
     test("waits the default delay when none is injected", async () => {
       const sleeps: number[] = [];
-      const { client } = fakeClient([spawnError("EAGAIN"), viewerOk], sleeps);
-      await getViewer(client);
+      const { client } = fakeClient(
+        [spawnError("EAGAIN"), issueCreated],
+        sleeps,
+      );
+      await create(client);
       expect(sleeps).toEqual([GITHUB_TRANSIENT_RETRY_DELAY_MS]);
     });
 
     test.each(["EMFILE", "ENFILE", "ENOMEM"])(
       "retries after an %s failure",
       async (code) => {
-        const { client, calls } = fakeClient([spawnError(code), viewerOk]);
-        await getViewer(client);
+        const { client, calls } = fakeClient([spawnError(code), issueCreated]);
+        await create(client);
         expect(calls.length).toBe(2);
       },
     );
@@ -1180,7 +1222,7 @@ describe("transient failure retry", () => {
         spawnError("EAGAIN"),
         spawnError("EMFILE"),
       ]);
-      await expect(getViewer(client)).rejects.toThrow(/EMFILE/);
+      await expect(create(client)).rejects.toThrow(/EMFILE/);
     });
 
     test("does not start a third process", async () => {
@@ -1188,13 +1230,16 @@ describe("transient failure retry", () => {
         spawnError("EAGAIN"),
         spawnError("EAGAIN"),
       ]);
-      await rejectionOf(getViewer(client));
+      await rejectionOf(create(client));
       expect(calls.length).toBe(2);
     });
 
     test("does not retry a spawn failure that is not transient", async () => {
-      const { client, calls } = fakeClient([spawnError("ENOENT"), viewerOk]);
-      await rejectionOf(getViewer(client));
+      const { client, calls } = fakeClient([
+        spawnError("ENOENT"),
+        issueCreated,
+      ]);
+      await rejectionOf(create(client));
       expect(calls.length).toBe(1);
     });
 
@@ -1203,25 +1248,14 @@ describe("transient failure retry", () => {
         postSpawnError("EAGAIN"),
         issueCreated,
       ]);
-      await rejectionOf(
-        createIssue(client, "acme", "widgets", { title: "t", body: "b" }),
-      );
+      await rejectionOf(create(client));
       expect(calls.length).toBe(1);
     });
 
     test("does not retry an error without a code", async () => {
-      const { client, calls } = fakeClient([new Error("boom"), viewerOk]);
-      await rejectionOf(getViewer(client));
+      const { client, calls } = fakeClient([new Error("boom"), issueCreated]);
+      await rejectionOf(create(client));
       expect(calls.length).toBe(1);
-    });
-
-    test("retries a POST because the request never reached GitHub", async () => {
-      const { client, calls } = fakeClient([
-        spawnError("EAGAIN"),
-        issueCreated,
-      ]);
-      await createIssue(client, "acme", "widgets", { title: "t", body: "b" });
-      expect(calls.length).toBe(2);
     });
   });
 
@@ -1289,9 +1323,11 @@ describe("transient failure retry", () => {
       expect(calls.length).toBe(1);
     });
 
-    test("throws the spawn error when the retry fails to start", async () => {
+    test("throws the spawn error when the retry of a query fails to start", async () => {
       const { client } = fakeClient([connectionReset, spawnError("EAGAIN")]);
-      await expect(getViewer(client)).rejects.toBeInstanceOf(SpawnError);
+      await expect(
+        listReviewThreads(client, "acme", "widgets", 7),
+      ).rejects.toBeInstanceOf(SpawnError);
     });
 
     test("retries a GraphQL query that reads review threads", async () => {
@@ -1760,73 +1796,73 @@ describe("listLabeledOpenIssues", () => {
 /** Issueの読み取りの再試行で、実際には待たない差し込み。 */
 const NO_WAIT = { sleep: async () => {} };
 
-describe("fetchIssueState", () => {
-  function fakeFetch(status: number, body: unknown) {
-    const calls: { url: string; init: RequestInit }[] = [];
-    const fetchFn: FetchLike = async (url, init) => {
-      calls.push({ url, init });
-      return new Response(JSON.stringify(body), { status });
-    };
-    return { fetchFn, calls };
-  }
+/** グローバルの`fetch`を、同じ応答を何度でも返す関数に差し替える。 */
+function stubIssueFetch(status: number, body: unknown) {
+  const stub = stubGlobalFetchWith(
+    async () => new Response(JSON.stringify(body), { status }),
+  );
+  return { calls: stub.sent };
+}
 
+/** グローバルの`fetch`を、本文の読み取りの途中で`error`で失敗する応答を返す関数に差し替える。 */
+function stubCutBodyFetch(error: Error): void {
+  stubGlobalFetchWith(async () => cutBody(200, error, "{"));
+}
+
+/** グローバルの`fetch`を、毎回`error`で拒否する関数に差し替える。 */
+function stubRejectingFetch(error: Error): void {
+  stubGlobalFetchWith(async () => {
+    throw error;
+  });
+}
+
+describe("fetchIssueState", () => {
   test("returns the state of the issue", async () => {
-    const { fetchFn } = fakeFetch(200, { state: "closed" });
-    expect(await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5)).toBe(
-      "closed",
-    );
+    stubIssueFetch(200, { state: "closed" });
+    expect(await fetchIssueState("tok", "acme", "widgets", 5)).toBe("closed");
   });
 
   test("reads the issues endpoint", async () => {
-    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
-    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5);
+    const { calls } = stubIssueFetch(200, { state: "open" });
+    await fetchIssueState("tok", "acme", "widgets", 5);
     expect(calls[0]?.url).toBe(
       "https://api.github.com/repos/acme/widgets/issues/5",
     );
   });
 
   test("sends the token in the authorization header", async () => {
-    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
-    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5);
+    const { calls } = stubIssueFetch(200, { state: "open" });
+    await fetchIssueState("tok", "acme", "widgets", 5);
     expect(calls[0]?.init.headers).toMatchObject({
       Authorization: "Bearer tok",
     });
   });
 
   test("throws an http error carrying the status", async () => {
-    const { fetchFn } = fakeFetch(404, { message: "Not Found" });
-    const error = await fetchIssueState(
-      fetchFn,
-      "tok",
-      "acme",
-      "widgets",
-      5,
-    ).catch((err: unknown) => err);
+    stubIssueFetch(404, { message: "Not Found" });
+    const error = await fetchIssueState("tok", "acme", "widgets", 5).catch(
+      (err: unknown) => err,
+    );
     expect(error instanceof GitHubHttpError && error.status).toBe(404);
   });
 
   test("does not follow redirects", async () => {
-    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
-    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5);
+    const { calls } = stubIssueFetch(200, { state: "open" });
+    await fetchIssueState("tok", "acme", "widgets", 5);
     expect(calls[0]?.init.redirect).toBe("manual");
   });
 
   test("treats a redirect as a failed check", async () => {
-    const { fetchFn } = fakeFetch(301, {});
-    const error = await fetchIssueState(
-      fetchFn,
-      "tok",
-      "acme",
-      "widgets",
-      5,
-    ).catch((err: unknown) => err);
+    stubIssueFetch(301, {});
+    const error = await fetchIssueState("tok", "acme", "widgets", 5).catch(
+      (err: unknown) => err,
+    );
     expect(error instanceof GitHubHttpError && error.status).toBe(301);
   });
 
   test("does not put the token in the error message", async () => {
-    const { fetchFn } = fakeFetch(500, {});
+    stubIssueFetch(500, {});
     const error = await fetchIssueState(
-      fetchFn,
       "secret-token",
       "acme",
       "widgets",
@@ -1854,9 +1890,8 @@ describe("fetchIssueState", () => {
   }
 
   test("keeps the token when the options carry a token at run time", async () => {
-    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
+    const { calls } = stubIssueFetch(200, { state: "open" });
     await fetchIssueState(
-      fetchFn,
       "tok",
       "acme",
       "widgets",
@@ -1868,23 +1903,9 @@ describe("fetchIssueState", () => {
     });
   });
 
-  /** 本文の読み取りの途中で、`error`で失敗する応答を返す`fetch`。 */
-  function cutBodyFetch(error: Error): FetchLike {
-    return async () =>
-      new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("{"));
-            controller.error(error);
-          },
-        }),
-        { status: 200 },
-      );
-  }
-
   test("throws an http error marked as timed out when the deadline cut the body", async () => {
+    stubCutBodyFetch(new DOMException("timed out", "TimeoutError"));
     const error = await fetchIssueState(
-      cutBodyFetch(new DOMException("timed out", "TimeoutError")),
       "tok",
       "acme",
       "widgets",
@@ -1897,41 +1918,29 @@ describe("fetchIssueState", () => {
   });
 
   test("says that the read timed out when the deadline cut the body", async () => {
+    stubCutBodyFetch(new DOMException("timed out", "TimeoutError"));
     await expect(
-      fetchIssueState(
-        cutBodyFetch(new DOMException("timed out", "TimeoutError")),
-        "tok",
-        "acme",
-        "widgets",
-        5,
-        NO_WAIT,
-      ),
+      fetchIssueState("tok", "acme", "widgets", 5, NO_WAIT),
     ).rejects.toThrow("(timed out)");
   });
 
   test("throws an http error that says the body was cut when the connection cut it", async () => {
+    stubCutBodyFetch(new TypeError("connection cut"));
     await expect(
-      fetchIssueState(
-        cutBodyFetch(new TypeError("connection cut")),
-        "tok",
-        "acme",
-        "widgets",
-        5,
-        NO_WAIT,
-      ),
+      fetchIssueState("tok", "acme", "widgets", 5, NO_WAIT),
     ).rejects.toThrow("(incomplete body)");
   });
 
-  test("keeps the fetch when the options carry a fetch at run time", async () => {
-    const { fetchFn } = fakeFetch(200, { state: "open" });
+  test("keeps the global fetch when the options carry a fetch at run time", async () => {
+    stubIssueFetch(200, { state: "open" });
     const { options, otherCalls } = optionsWithExtras();
-    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, options);
+    await fetchIssueState("tok", "acme", "widgets", 5, options);
     expect(otherCalls).toEqual([]);
   });
 
   test("sends the read twice for a 5xx", async () => {
-    const { fetchFn, calls } = fakeFetch(502, {});
-    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, NO_WAIT).catch(
+    const { calls } = stubIssueFetch(502, {});
+    await fetchIssueState("tok", "acme", "widgets", 5, NO_WAIT).catch(
       () => undefined,
     );
     expect(calls).toHaveLength(2);
@@ -1939,8 +1948,8 @@ describe("fetchIssueState", () => {
 
   test("waits through the injected sleep before the second read", async () => {
     const sleeps: number[] = [];
-    const { fetchFn } = fakeFetch(502, {});
-    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, {
+    stubIssueFetch(502, {});
+    await fetchIssueState("tok", "acme", "widgets", 5, {
       sleep: async (ms) => {
         sleeps.push(ms);
       },
@@ -1950,34 +1959,29 @@ describe("fetchIssueState", () => {
   });
 
   test("sends a 403 with no quota left once and throws the rate limit error", async () => {
-    const calls: string[] = [];
-    const fetchFn: FetchLike = async (url) => {
-      calls.push(url);
-      return new Response("{}", {
-        status: 403,
-        headers: { "X-RateLimit-Remaining": "0" },
-      });
-    };
+    const stub = stubGlobalFetchWith(
+      async () =>
+        new Response("{}", {
+          status: 403,
+          headers: { "X-RateLimit-Remaining": "0" },
+        }),
+    );
     const error = await fetchIssueState(
-      fetchFn,
       "tok",
       "acme",
       "widgets",
       5,
       NO_WAIT,
     ).catch((err: unknown) => err);
-    expect([error instanceof GitHubRateLimitError, calls.length]).toEqual([
+    expect([error instanceof GitHubRateLimitError, stub.sent.length]).toEqual([
       true,
       1,
     ]);
   });
 
   test("turns a fetch that timed out into a status 0 http error marked as timed out", async () => {
-    const fetchFn: FetchLike = async () => {
-      throw new DOMException("timed out", "TimeoutError");
-    };
+    stubRejectingFetch(new DOMException("timed out", "TimeoutError"));
     const error = await fetchIssueState(
-      fetchFn,
       "tok",
       "acme",
       "widgets",
@@ -1990,20 +1994,17 @@ describe("fetchIssueState", () => {
   });
 
   test("says that the read timed out in the message", async () => {
-    const fetchFn: FetchLike = async () => {
-      throw new DOMException("timed out", "TimeoutError");
-    };
+    stubRejectingFetch(new DOMException("timed out", "TimeoutError"));
     await expect(
-      fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, NO_WAIT),
+      fetchIssueState("tok", "acme", "widgets", 5, NO_WAIT),
     ).rejects.toThrow("timed out");
   });
 
   test("says that no response came back in the message", async () => {
-    const fetchFn: FetchLike = async () => {
-      throw new TypeError("connection reset for https://api.github.com/x");
-    };
+    stubRejectingFetch(
+      new TypeError("connection reset for https://api.github.com/x"),
+    );
     const error = await fetchIssueState(
-      fetchFn,
       "tok",
       "acme",
       "widgets",
@@ -2016,93 +2017,77 @@ describe("fetchIssueState", () => {
   });
 
   test("rejects a response without a state", async () => {
-    const { fetchFn } = fakeFetch(200, { title: "x" });
-    await expect(
-      fetchIssueState(fetchFn, "tok", "acme", "widgets", 5),
-    ).rejects.toThrow("unexpected response shape");
+    stubIssueFetch(200, { title: "x" });
+    await expect(fetchIssueState("tok", "acme", "widgets", 5)).rejects.toThrow(
+      "unexpected response shape",
+    );
   });
 
   test("rejects an owner that isn't a valid GitHub name", async () => {
-    const { fetchFn } = fakeFetch(200, { state: "open" });
+    stubIssueFetch(200, { state: "open" });
     await expect(
-      fetchIssueState(fetchFn, "tok", "../etc", "widgets", 5),
+      fetchIssueState("tok", "../etc", "widgets", 5),
     ).rejects.toThrow();
   });
 });
 
 describe("fetchIssueContent", () => {
-  function fakeFetch(status: number, body: unknown) {
-    const calls: { url: string; init: RequestInit }[] = [];
-    const fetchFn: FetchLike = async (url, init) => {
-      calls.push({ url, init });
-      return new Response(JSON.stringify(body), { status });
-    };
-    return { fetchFn, calls };
-  }
   const issue = { title: "Add feature", body: "Original body", state: "open" };
 
   test("returns the title and body", async () => {
-    const { fetchFn } = fakeFetch(200, issue);
-    expect(
-      await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5),
-    ).toEqual({
+    stubIssueFetch(200, issue);
+    expect(await fetchIssueContent("tok", "acme", "widgets", 5)).toEqual({
       title: "Add feature",
       body: "Original body",
     });
   });
 
   test("sends the read twice for a 5xx", async () => {
-    const { fetchFn, calls } = fakeFetch(503, {});
-    await fetchIssueContent(
-      fetchFn,
-      "tok",
-      "acme",
-      "widgets",
-      5,
-      NO_WAIT,
-    ).catch(() => undefined);
+    const { calls } = stubIssueFetch(503, {});
+    await fetchIssueContent("tok", "acme", "widgets", 5, NO_WAIT).catch(
+      () => undefined,
+    );
     expect(calls).toHaveLength(2);
   });
 
   test("treats a null body as empty", async () => {
-    const { fetchFn } = fakeFetch(200, { ...issue, body: null });
-    expect(
-      (await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5)).body,
-    ).toBe("");
+    stubIssueFetch(200, { ...issue, body: null });
+    expect((await fetchIssueContent("tok", "acme", "widgets", 5)).body).toBe(
+      "",
+    );
   });
 
   test("reads the issues endpoint on api.github.com", async () => {
-    const { fetchFn, calls } = fakeFetch(200, issue);
-    await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5);
+    const { calls } = stubIssueFetch(200, issue);
+    await fetchIssueContent("tok", "acme", "widgets", 5);
     expect(calls[0]?.url).toBe(
       "https://api.github.com/repos/acme/widgets/issues/5",
     );
   });
 
   test("sends the token in the authorization header", async () => {
-    const { fetchFn, calls } = fakeFetch(200, issue);
-    await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5);
+    const { calls } = stubIssueFetch(200, issue);
+    await fetchIssueContent("tok", "acme", "widgets", 5);
     expect(calls[0]?.init.headers).toMatchObject({
       Authorization: "Bearer tok",
     });
   });
 
   test("does not follow redirects", async () => {
-    const { fetchFn, calls } = fakeFetch(200, issue);
-    await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5);
+    const { calls } = stubIssueFetch(200, issue);
+    await fetchIssueContent("tok", "acme", "widgets", 5);
     expect(calls[0]?.init.redirect).toBe("manual");
   });
 
   test("passes a deadline signal", async () => {
-    const { fetchFn, calls } = fakeFetch(200, issue);
-    await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5);
+    const { calls } = stubIssueFetch(200, issue);
+    await fetchIssueContent("tok", "acme", "widgets", 5);
     expect(calls[0]?.init.signal).toBeInstanceOf(AbortSignal);
   });
 
   test.each([301, 404, 500])("throws an http error for %d", async (status) => {
-    const { fetchFn } = fakeFetch(status, {});
+    stubIssueFetch(status, {});
     const error = await fetchIssueContent(
-      fetchFn,
       "tok",
       "acme",
       "widgets",
@@ -2113,9 +2098,8 @@ describe("fetchIssueContent", () => {
   });
 
   test("does not put the token or the issue text in the error message", async () => {
-    const { fetchFn } = fakeFetch(500, { title: "secret title" });
+    stubIssueFetch(500, { title: "secret title" });
     const error = await fetchIssueContent(
-      fetchFn,
       "secret-token",
       "acme",
       "widgets",
@@ -2126,23 +2110,23 @@ describe("fetchIssueContent", () => {
   });
 
   test("rejects a response whose title is not a string", async () => {
-    const { fetchFn } = fakeFetch(200, { ...issue, title: 1 });
+    stubIssueFetch(200, { ...issue, title: 1 });
     await expect(
-      fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5),
+      fetchIssueContent("tok", "acme", "widgets", 5),
     ).rejects.toThrow("unexpected response shape");
   });
 
   test("rejects a response whose body is not a string or null", async () => {
-    const { fetchFn } = fakeFetch(200, { ...issue, body: 1 });
+    stubIssueFetch(200, { ...issue, body: 1 });
     await expect(
-      fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5),
+      fetchIssueContent("tok", "acme", "widgets", 5),
     ).rejects.toThrow("unexpected response shape");
   });
 
   test("rejects an owner that isn't a valid GitHub name", async () => {
-    const { fetchFn } = fakeFetch(200, issue);
+    stubIssueFetch(200, issue);
     await expect(
-      fetchIssueContent(fetchFn, "tok", "../etc", "widgets", 5),
+      fetchIssueContent("tok", "../etc", "widgets", 5),
     ).rejects.toThrow();
   });
 });
@@ -5232,10 +5216,12 @@ describe("getPrDiff", () => {
     sleep: async () => {},
   });
 
-  test("asks gh to output a body that carries terminal escape sequences", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "+line"))]);
-    await getPrDiff(client(fake), "acme", "widgets", 12, 100);
-    expect(fake.calls[0]?.argv).toContain("--allow-escape-sequences");
+  test("reads a body that carries terminal escape sequences", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, `+${ESC}[31mred`)),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toBe("+<U+001B>[31mred");
   });
 
   test("writes control characters of the diff as visible code points", async () => {
@@ -5398,11 +5384,12 @@ describe("getPrDiff", () => {
   });
 
   test("gives the same diff for LF and CRLF line ends", async () => {
+    // GitHubのAPIへの`fetch`に答えるのは最後に作った偽のrunnerなので、作ってすぐに読む。
     const lf = createFakeCommandRunner([ok(ghApiStdout(200, "+a\n+b\n"))]);
+    const fromLf = await getPrDiff(client(lf), "acme", "widgets", 12, 100);
     const crlf = createFakeCommandRunner([
       ok(ghApiStdout(200, "+a\r\n+b\r\n")),
     ]);
-    const fromLf = await getPrDiff(client(lf), "acme", "widgets", 12, 100);
     const fromCrlf = await getPrDiff(client(crlf), "acme", "widgets", 12, 100);
     expect(fromCrlf).toEqual(fromLf);
   });
@@ -5573,22 +5560,17 @@ describe("callGhApiRawBody", () => {
     expect(response.bodyText).toBe("body");
   });
 
-  test("does not fetch again when the gh timeout cut the body after a 2xx status", async () => {
-    const fake = createFakeCommandRunner([
-      {
-        stdout: ghApiStdout(200, "part"),
-        stderr: "",
-        exitCode: 137,
-        timedOut: true,
-      },
-      ok(ghApiStdout(200, "whole body")),
-    ]);
+  test("does not fetch again when the deadline cut the body after a 2xx status", async () => {
+    const fake = createFakeCommandRunner([]);
+    const stub = stubGlobalFetchWith(async () =>
+      cutBody(200, new DOMException("timed out", "TimeoutError"), "part"),
+    );
     const error = await call(recording(fake).client).catch(
       (err: unknown) => err,
     );
     expect([
       error instanceof GitHubRawBodyIncompleteError,
-      fake.calls.length,
+      stub.sent.length,
     ]).toEqual([true, 1]);
   });
 
@@ -5652,7 +5634,7 @@ describe("callGhApiRawBody", () => {
     ]);
     const error = await call(recording(fake).client).catch((e: unknown) => e);
     expect(error instanceof Error ? error.message : "").toBe(
-      "GET x ended incomplete: gh exited non-zero after a 2xx status",
+      "GET x ended incomplete: the body was cut after a 2xx status",
     );
   });
 

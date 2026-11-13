@@ -1,10 +1,11 @@
 // GitHubのAPIへの通信層。宛先の固定、リダイレクトの扱い、締め切り、レート制限の判定と待ち、
-// 一時的な失敗の再試行を、このモジュールだけが持つ。
+// 一時的な失敗の再試行、署名付きURLの取得を、このモジュールだけが持つ。
 // トークンは`Authorization`ヘッダーにだけ載せ、送り先が`GITHUB_API_ORIGIN`と一致するときだけ載せる。
+// 送るのは常にグローバルの`fetch`で、呼び出し側は`fetch`を渡せない。
 // グローバルの`fetch`を参照するファイルは、理由つきの一覧に限る(`tests/lib/github_http.test.ts`が固定する)。
-// ファイルにも子プロセスにも触れない。importは失敗の型、ログ、型ガードの3つだけにする。
+// ファイルにも子プロセスにも触れない。importは失敗の型、ログ、本文の上限、型ガードの4つだけにする。
 //
-// `gh`を起動する送り方(`github.ts`の`callGhApi`)も、再試行と待ちは`runGitHubRequest`で行う。
+// `gh`を起動する送り方(`github.ts`の`callGhApi`の書き込み)も、再試行と待ちは`runGitHubRequest`で行う。
 // 送り方だけを引数で差し込み、判定と再試行の実装はここの1か所にする。
 
 import {
@@ -14,6 +15,7 @@ import {
   SECONDARY_RATE_LIMIT_PHRASE,
 } from "./github_errors.ts";
 import { type Logger, logger } from "./log.ts";
+import { cancelOnAbort, readStreamCappedDetail } from "./stream_cap.ts";
 import { isRecord } from "./types.ts";
 
 export { GITHUB_RATE_LIMIT_MAX_WAIT_MS };
@@ -53,28 +55,15 @@ const MAX_SAME_ORIGIN_REDIRECTS = 3;
 /** 呼び出しの入口で拒むRESTの検索APIの接頭辞。検索は1分ごとの枠が小さく、5分の境目に集中して拒まれる。 */
 const REJECTED_REST_ENDPOINT_PREFIX = "search/";
 
-/** `fetch`の応答のうち、このモジュールが読む部分。`Response`が満たす。 */
-export type HttpResponseLike = {
-  readonly status: number;
-  readonly headers: {
-    forEach(callback: (value: string, key: string) => void): void;
-  };
-  text(): Promise<string>;
-};
-
-/** 差し込める`fetch`。既定はグローバルの`fetch`で、テストでは差し替える。 */
-export type HttpFetch = (
-  url: string,
-  init: RequestInit,
-) => Promise<HttpResponseLike>;
+/** 端末の制御列の始まり(ESC)。 */
+const ESCAPE = "\u001b";
 
 /**
- * 通信層のクライアント。`fetch`を差し替えても、宛先とトークンの扱いはこのモジュールが決める。
- * 差し替えた`fetch`はトークンを受け取るので、悪用は防がない。防ぐのは誤用だけである。
+ * 通信層のクライアント。持つのはトークンと、待機、時計、ログ、再試行の待ちの差し込みだけで、`fetch`は持たない。
+ * 送り先とトークンの扱いはこのモジュールが決め、送るのは常にグローバルの`fetch`である。
  */
 export type GitHubHttpClient = {
   readonly token: string;
-  readonly fetch?: HttpFetch;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => Date;
   readonly log?: Logger;
@@ -658,10 +647,64 @@ function noResponse(err: unknown): {
   };
 }
 
-/** 1回の要求を、同じoriginへのリダイレクトを辿りながら送る。例外は投げない。 */
+/** 本文を読んだ結果。`ok`が偽なら、本文が途中で切れたか、締め切りを過ぎた。 */
+type BodyRead =
+  | { readonly ok: true; readonly text: string; readonly capped: boolean }
+  | { readonly ok: false; readonly timedOut: boolean };
+
+/**
+ * 応答の本文を文字列で読む。`maxBytes`があれば、先頭と末尾だけを保持する(`stream_cap.ts`)。
+ * 上限つきの読み取りは、締め切りで読み取りを取り消すとそれまでの分で返るので、取り消した後の本文は欠けたものにする。
+ */
+async function readBodyText(
+  raw: Response,
+  maxBytes: number | undefined,
+  signal: AbortSignal,
+): Promise<BodyRead> {
+  try {
+    if (maxBytes === undefined || raw.body === null) {
+      return { ok: true, text: await raw.text(), capped: false };
+    }
+    const read = await readStreamCappedDetail(raw.body, maxBytes, signal);
+    if (signal.aborted) return { ok: false, timedOut: true };
+    return { ok: true, text: read.text, capped: read.omittedBytes > 0 };
+  } catch (err) {
+    return { ok: false, timedOut: isTimeout(err) || signal.aborted };
+  }
+}
+
+function isJsonText(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 端末の制御列を含む本文を、本文が欠けたものとして扱うか。
+ * `allowEscapeSequences`を指定しない要求で、JSONでない本文がESCを含むときに真になる。
+ * `gh`が、制御列を含む本文を出さずに拒んでいた挙動に合わせる。読み手が制御列を見ずに使う本文(ファイルの内容)を守るため。
+ */
+function refusesEscapeSequences(request: GitHubRequest, text: string): boolean {
+  return (
+    request.allowEscapeSequences !== true &&
+    text.includes(ESCAPE) &&
+    !isJsonText(text)
+  );
+}
+
+/**
+ * 1回の要求を、同じoriginへのリダイレクトを辿りながら送る。例外は投げない。
+ * `signal`は締め切りで、省略すると`timeoutMs`(既定は`GITHUB_HTTP_TIMEOUT_MS`)から作る。
+ */
 async function fetchAttempt(
   client: GitHubHttpClient,
   request: GitHubRequest,
+  signal: AbortSignal = AbortSignal.timeout(
+    request.timeoutMs ?? GITHUB_HTTP_TIMEOUT_MS,
+  ),
 ): Promise<{
   readonly response: GitHubHttpResponse;
   readonly noResponse: boolean;
@@ -669,10 +712,6 @@ async function fetchAttempt(
   const method = request.method ?? "GET";
   // 辿るのはGETだけで、`redirect: "never"`を指定したGETも辿らない。
   const follow = method === "GET" && request.redirect !== "never";
-  const fetchFn = client.fetch ?? fetch;
-  const signal = AbortSignal.timeout(
-    request.timeoutMs ?? GITHUB_HTTP_TIMEOUT_MS,
-  );
   const now = client.now ?? (() => new Date());
   let url = `${GITHUB_API_ORIGIN}/${request.path}`;
   for (let hop = 0; ; hop += 1) {
@@ -680,9 +719,9 @@ async function fetchAttempt(
     if (new URL(url).origin !== GITHUB_API_ORIGIN) {
       throw new Error("GitHub request target is not the API origin");
     }
-    let raw: HttpResponseLike;
+    let raw: Response;
     try {
-      raw = await fetchFn(url, {
+      raw = await fetch(url, {
         method,
         headers: requestHeaders(client, request),
         ...(request.body !== undefined
@@ -698,10 +737,8 @@ async function fetchAttempt(
     raw.headers.forEach((value, key) => {
       headers.set(key.toLowerCase(), value);
     });
-    let bodyText: string;
-    try {
-      bodyText = await raw.text();
-    } catch (err) {
+    const body = await readBodyText(raw, request.maxBodyBytes, signal);
+    if (!body.ok) {
       return {
         response: {
           status: raw.status,
@@ -710,7 +747,7 @@ async function fetchAttempt(
           // 本文が読めなくても、ステータスとヘッダーで判定できる制限(429など)は判定する。
           rateLimit: classifyRateLimit(raw.status, headers, "", now()),
           incomplete: true,
-          ...(isTimeout(err) ? { timedOut: true as const } : {}),
+          ...(body.timedOut ? { timedOut: true as const } : {}),
         },
         noResponse: false,
       };
@@ -720,12 +757,16 @@ async function fetchAttempt(
         ? sameOriginRedirectTarget(headers.get("location"), url)
         : null;
     if (next === null) {
+      const refused = refusesEscapeSequences(request, body.text);
+      const bodyText = refused ? "" : body.text;
       return {
         response: {
           status: raw.status,
           headers,
           bodyText,
           rateLimit: classifyRateLimit(raw.status, headers, bodyText, now()),
+          ...(refused ? { incomplete: true as const } : {}),
+          ...(body.capped && !refused ? { capped: true as const } : {}),
         },
         noResponse: false,
       };
@@ -739,6 +780,7 @@ async function fetchAttempt(
  * 送り先は`GITHUB_API_ORIGIN`に固定し、すべての`fetch`に`redirect: "manual"`を付ける。
  * GETは、既定で同じoriginへのリダイレクトを最大3回辿る(`redirect: "never"`で止める)。ほかのメソッドは辿らない。
  * 応答が無いときはステータス0(締め切りなら`timedOut`)、本文が途中で切れたときは`incomplete`を返す。
+ * `allowEscapeSequences`を指定しない要求で、JSONでない本文がESCを含むときは、本文を空にして`incomplete`を返す。
  */
 export async function sendGitHubRequest(
   client: GitHubHttpClient,
@@ -784,6 +826,19 @@ export async function requestGitHub(
 export type DownloadPurpose = "artifact" | "job_log";
 
 /**
+ * 用途ごとの、取得先として認めるホストの末尾。末尾の前に1文字以上のホスト名が要る。
+ * artifactとジョブのログは、どちらもAzureのblob storageの署名付きURLへの302で渡される。
+ * ジョブのログの行き先は、実際のジョブの302で`*.blob.core.windows.net`だと確かめた。
+ * 定数で持ち、引数では広げられない。保護されていない呼び出し側から、取得先を足せないようにするため。
+ */
+const DOWNLOAD_HOST_SUFFIXES: Readonly<
+  Record<DownloadPurpose, readonly string[]>
+> = Object.freeze({
+  artifact: Object.freeze([".blob.core.windows.net"]),
+  job_log: Object.freeze([".blob.core.windows.net"]),
+});
+
+/**
  * 取得の決まり。`maxBytes`は本文の上限で、`bytes`は超えたら`too_large`、`text_capped`は先頭と末尾を残す。
  * `timeoutMs`はAPIへの要求と取得先への要求を合わせた締め切りで、既定は`GITHUB_HTTP_TIMEOUT_MS`。
  */
@@ -798,7 +853,8 @@ export type DownloadOptions = {
  * - `api_response`: APIが3xxを返さなかった。応答をそのまま返す(ステータス0は応答が無い)。
  * - `bad_redirect`: 3xxの`Location`が無いか、用途の取得先の表に当たらない。`status`は3xxのステータス。
  * - `storage_status`: 取得先が2xx以外を返した。
- * - `no_response`: 取得先の応答が無いか、本文の途中で切れた。`timedOut`は締め切りによるか。
+ * - `no_response`: 取得先の応答が無い。`timedOut`は締め切りによるか。
+ * - `incomplete`: 取得先の2xxの本文が、途中で切れた。`timedOut`は締め切りによるか。
  * - `too_large`: `bytes`で、本文が`maxBytes`を超えた。
  * - `bytes`、`text`: 取得した本文。`capped`は`text_capped`で間を捨てたか。
  */
@@ -807,18 +863,142 @@ export type DownloadResult =
   | { readonly kind: "bad_redirect"; readonly status: number }
   | { readonly kind: "storage_status"; readonly status: number }
   | { readonly kind: "no_response"; readonly timedOut: boolean }
+  | { readonly kind: "incomplete"; readonly timedOut: boolean }
   | { readonly kind: "too_large" }
   | { readonly kind: "bytes"; readonly bytes: Uint8Array }
   | { readonly kind: "text"; readonly text: string; readonly capped: boolean };
 
 /**
+ * 3xxの`Location`が、用途の取得先として認めるURLなら返す。
+ * 認めるのは、`https`で、利用者名、パスワード、ポートを含まず、ホストが用途の表の末尾で終わる絶対URLだけである。
+ */
+function allowedDownloadUrl(
+  location: string | undefined,
+  purpose: DownloadPurpose,
+): string | null {
+  if (location === undefined) return null;
+  let url: URL;
+  try {
+    url = new URL(location);
+  } catch {
+    return null;
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.port !== ""
+  ) {
+    return null;
+  }
+  const host = url.hostname;
+  return DOWNLOAD_HOST_SUFFIXES[purpose].some(
+    (suffix) => host.length > suffix.length && host.endsWith(suffix),
+  )
+    ? url.href
+    : null;
+}
+
+/**
+ * 本文をバイト列で読み、`maxBytes`を超えた時点で読むのをやめる。
+ * 申告された大きさ(`content-length`)が`maxBytes`を超えるときは、読まずに断る。
+ */
+async function readBodyBytes(
+  raw: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<DownloadResult> {
+  const declared = Number(raw.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await raw.body?.cancel().catch(() => undefined);
+    return { kind: "too_large" };
+  }
+  if (raw.body === null) return { kind: "bytes", bytes: new Uint8Array() };
+  const reader = raw.body.getReader();
+  const release = cancelOnAbort(reader, signal);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return { kind: "too_large" };
+      }
+      chunks.push(chunk.value);
+    }
+  } catch (err) {
+    return { kind: "incomplete", timedOut: isTimeout(err) || signal.aborted };
+  } finally {
+    release();
+  }
+  // 締め切りで読み取りを取り消すと、それまでの分で終わる。欠けた本文を全体として返さない。
+  if (signal.aborted) return { kind: "incomplete", timedOut: true };
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { kind: "bytes", bytes };
+}
+
+/**
  * APIの`path`へトークンつきでGETを送り、返った3xxの`Location`の署名付きURLから本文を取る。
+ * - APIへの要求は、リダイレクトを辿らない。署名付きURLは、外から受け取らず、この応答の`Location`からだけ取る。
+ * - 署名付きURLは、用途の取得先の表(`DOWNLOAD_HOST_SUFFIXES`)に当たるものだけを取りに行く。
+ *   トークンを付けず、`redirect: "error"`でリダイレクトを辿らない。
+ * - 締め切り(`timeoutMs`)は、APIへの要求と取得先への要求で1つを共有する。
+ * - 再試行はしない。APIのレート制限は、待たずに`GitHubRateLimitError`を投げる。
+ * - 本文は、`bytes`なら`maxBytes`を超えた時点で断り、`text_capped`なら先頭と末尾を残す。
+ *   取得先の本文は、制御列を含んでもそのまま返す。読む側が見える形に置き換える。
+ * パスが使えないときと、レート制限のときだけ例外を投げる。ほかの失敗は結果の`kind`で返す。
  */
 export async function downloadRedirectTarget(
-  _client: GitHubHttpClient,
-  _request: { readonly path: string },
-  _purpose: DownloadPurpose,
-  _options: DownloadOptions,
+  client: GitHubHttpClient,
+  request: { readonly path: string },
+  purpose: DownloadPurpose,
+  options: DownloadOptions,
 ): Promise<DownloadResult> {
-  return { kind: "too_large" };
+  assertGitHubApiPath(request.path);
+  const signal = AbortSignal.timeout(
+    options.timeoutMs ?? GITHUB_HTTP_TIMEOUT_MS,
+  );
+  const { response } = await fetchAttempt(
+    client,
+    { path: request.path, redirect: "never" },
+    signal,
+  );
+  if (response.rateLimit !== null) {
+    throw rateLimitError(request.path, response.rateLimit, false);
+  }
+  if (!isRedirectStatus(response.status)) {
+    return { kind: "api_response", response };
+  }
+  const target = allowedDownloadUrl(response.headers.get("location"), purpose);
+  if (target === null) return { kind: "bad_redirect", status: response.status };
+  let raw: Response;
+  try {
+    raw = await fetch(target, {
+      method: "GET",
+      headers: { "User-Agent": GITHUB_USER_AGENT },
+      redirect: "error",
+      signal,
+    });
+  } catch (err) {
+    // 例外の文は署名付きURLを含みうるので、載せない。
+    return { kind: "no_response", timedOut: isTimeout(err) || signal.aborted };
+  }
+  if (raw.status < 200 || raw.status >= 300) {
+    await raw.body?.cancel().catch(() => undefined);
+    return { kind: "storage_status", status: raw.status };
+  }
+  if (options.as === "bytes") {
+    return readBodyBytes(raw, options.maxBytes, signal);
+  }
+  const read = await readBodyText(raw, options.maxBytes, signal);
+  if (!read.ok) return { kind: "incomplete", timedOut: read.timedOut };
+  return { kind: "text", text: read.text, capped: read.capped };
 }

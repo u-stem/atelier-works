@@ -1346,20 +1346,20 @@ describe("downloadRedirectTarget", () => {
     expect(await download()).toEqual({ kind: "no_response", timedOut: true });
   });
 
-  test("returns no_response when the text is cut", async () => {
+  test("returns incomplete when the text is cut", async () => {
     fakeFetch([found(LOG_URL), brokenBody(200, new TypeError("cut"))]);
-    expect(await download()).toEqual({ kind: "no_response", timedOut: false });
+    expect(await download()).toEqual({ kind: "incomplete", timedOut: false });
   });
 
-  test("returns no_response when the bytes are cut", async () => {
+  test("returns incomplete when the bytes are cut", async () => {
     fakeFetch([found(ARTIFACT_URL), brokenBody(200, new TypeError("cut"))]);
     expect(await download("artifact", BYTES)).toEqual({
-      kind: "no_response",
+      kind: "incomplete",
       timedOut: false,
     });
   });
 
-  test("returns no_response timed out when the deadline passes while reading the text", async () => {
+  test("returns incomplete timed out when the deadline passes while reading the text", async () => {
     const endless = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode("x"));
@@ -1372,10 +1372,10 @@ describe("downloadRedirectTarget", () => {
         maxBytes: 64,
         timeoutMs: 20,
       }),
-    ).toEqual({ kind: "no_response", timedOut: true });
+    ).toEqual({ kind: "incomplete", timedOut: true });
   });
 
-  test("returns no_response timed out when the deadline passes while reading the bytes", async () => {
+  test("returns incomplete timed out when the deadline passes while reading the bytes", async () => {
     const endless = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array([1]));
@@ -1384,7 +1384,7 @@ describe("downloadRedirectTarget", () => {
     fakeFetch([found(ARTIFACT_URL), new Response(endless)]);
     expect(
       await download("artifact", { as: "bytes", maxBytes: 64, timeoutMs: 20 }),
-    ).toEqual({ kind: "no_response", timedOut: true });
+    ).toEqual({ kind: "incomplete", timedOut: true });
   });
 
   test("keeps the signed URL out of a failure", async () => {

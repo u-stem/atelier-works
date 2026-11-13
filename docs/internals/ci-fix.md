@@ -424,13 +424,12 @@ Claudeの回では、`deny`にして、保護パスの違反として拒否す�
 - 本文はJSONではないので、文字列のまま受ける。
 - 本文は`VolatileCiLog`で包んで返す。
   `reveal`で取り出すのは、`buildCiExcerpt`に渡す直前だけにする。
-- 出力は8MBで切る。
+- 本文は8MiB(`CI_JOB_LOG_MAX_BYTES`)で切る。
   先頭と末尾を残し、間は`omittedMarker`でつなぐ。
 - 失敗の原因は末尾に出るのが普通なので、切れても使える。
 - 切れたかは`truncated`で返す。
-  出力全体のバイト数が上限を超えたかで決める。
+  受け取った本文のバイト数が上限を超えたかで決める。
   本文に書かれた注記の文字列は見ないので、切れたのに切れていないと判定させることはできない。
-  不正なUTF-8を含むログでは、切れていないのに切れたと判定することがある。
 - `ensureSuccess`は使わない。
   本文をエラーの文に写してしまうためである。
 
@@ -438,60 +437,64 @@ Claudeの回では、`deny`にして、保護パスの違反として拒否す�
 
 | 結果 | 条件 |
 | --- | --- |
-| `ok` | 2xxで、`gh`の終了コードが0。本文と`truncated`を持つ |
-| `forbidden` | 403。トークンの権限が足りない |
-| `log_unavailable` | 404か410。ログが無いか、保存期間を過ぎた |
+| `ok` | 取得先の2xxの本文を最後まで読めた。本文と`truncated`を持つ |
+| `forbidden` | APIの403。トークンの権限が足りない |
+| `log_unavailable` | APIの404か410。ログが無いか、保存期間を過ぎた |
 
 例外は次の3種類である。
 
 | 例外 | 条件 |
 | --- | --- |
-| `GitHubCiLogError` | 上の3つ以外のステータスと、応答が返らない通信断 |
-| `GitHubRawBodyIncompleteError` | 2xxなのに、取り直しても`gh`の終了コードが0以外 |
-| `GitHubRateLimitError` | rate limit。ほかの読み取りと同じ |
+| `GitHubCiLogError` | 上の3つ以外の失敗。下の取得の失敗の表を参照 |
+| `GitHubRawBodyIncompleteError` | 取得先の2xxの本文が、途中で切れた |
+| `GitHubRateLimitError` | APIのrate limit。待たずに投げる |
 
 `GitHubCiLogError`が持つのはHTTPのステータスだけである。
 `GitHubRawBodyIncompleteError`は、取得の名前だけを含む固定の文を持つ。
-どちらも、本文、ヘッダー、`gh`のstderrは載せない。
+どちらも、本文、ヘッダー、署名付きURL、通信の例外の文は載せない。
 
-ログは端末の制御列を含むので、`getWorkflowJobLog`は`gh api`に`--allow-escape-sequences`を渡す。
+ログは端末の制御列を含むので、`getWorkflowJobLog`は制御列を含んだまま本文を受け取る。
 制御列の除去は、取得ではなく[ログの整形](#ログの整形)が行う。
 PRの差分は、除去ではなく見える表記への置き換えで受ける。
 ログの整形と違い、差分の形は保つが、書式文字や見えない文字は置き換える。
 そのため、絵文字を結合するZWJのような正当な文字も`<U+200D>`になる。
 扱いは[差分の取得](pr-workflow/review.md#差分の取得)にある。
 
-2xxのステータスを受けた後でも、`gh`は本文を欠いたまま終わることがある。
-次の場合は、本文が空か欠けて、終了コードが0以外になる。
+### 署名付きURLの取得
 
-- 制御列を理由に、`gh`が本文を出さない。
-- 本文の途中で切れる。
-- timeoutで止めた結果、本文が欠ける。
-  この場合は取り直さず、すぐ`GitHubRawBodyIncompleteError`を投げ、フローの再試行に任せる。
+APIは、ログの本文を返さず、署名付きURLへの302を返す。
+取得は、通信層(`lib/github_http.ts`)の`downloadRedirectTarget`が2つの要求で行う。
 
-本文は見ず、終了コードで判定する。
-timeoutで欠けた本文を除き、一時的な切断をCIの回に持ち込まないため、GETが冪等であることを使い、1回だけ取り直す。
-取り直しは、JSONでない本文を読む取得で共通の`callGhApiRawBody`が行う。
-PRの差分とファイルの内容の取得も、回数と例外が同じである。
-冪等でない要求(GET以外で、`idempotent`の指定が無いもの)は、取り直さずに同じ例外を投げる。
-取り直しても終了コードが0以外なら、`GitHubRawBodyIncompleteError`を投げる。
-例外は呼び出し側のstepを止める。
-Claudeは起動しない。
-フローの再試行(`pr_fix_apply`は2回、60秒間隔)で、取得をやり直す。
-再試行でも欠けたときは、作業項目が失敗で終わる。
-回復が失敗の行を戻し、回数の上限の範囲で、次の巡回が評価し直す。
-フラグを付けたのに`gh`が拒否する場面は特定できていない。
-この例外は、`gh`の挙動が変わっても、本文の欠けたログをClaudeに渡さないための備えである。
+1. APIへ、トークンつきでGETを送る。
+   リダイレクトは辿らない。
+2. 返った302の`Location`が取得先の表に当たれば、そのURLへトークンを付けずにGETを送る。
+   `redirect: "error"`で、取得先からのリダイレクトは辿らない。
 
-出力が上限に達しても、runnerはプロセスを止めず、先頭と末尾を残して最後まで読む。
-そのため、上限に達した正常なログは終了コード0で終わり、`truncated`つきのログとして返る。
-終了コードが0以外なら、上限に達したかによらず、欠けたログとして扱う。
+`Location`は、呼び出し側から受け取らず、1つ目の応答からだけ取る。
+取得先の表は`github_http.ts`の定数で、引数では広げられない。
+認めるのは、`https`で、利用者名、パスワード、ポートを含まず、ホストが`.blob.core.windows.net`で終わる絶対URLだけである。
+ジョブのログの302の行き先が`*.blob.core.windows.net`であることは、実際のジョブで確かめた。
+締め切りは、APIへの要求と取得先への要求で1つを共有し、合わせて60秒である。
+取り直しはしない。
+欠けたログや取れなかったログは、CIの回の次の読み取り(フローの再試行と次の巡回)に任せる。
 
-ログの取得先は署名付きURLへの302で、`gh`が内部でたどる。
-URLは受け取らない。
-エラー、ログ、戻り値のどれにも出さない。
-認証情報が別のホストへ渡らないかは、[R-FIX-12](../security-risks.md#r-fix-12)にあたる。
-このリポジトリのテストでは確かめられない。
+取得の失敗は次のとおりである。
+
+| 失敗 | 結果 |
+| --- | --- |
+| APIの403、404、410 | `forbidden`、`log_unavailable` |
+| APIのそのほかのステータス(5xxを含む) | `GitHubCiLogError`(そのステータス) |
+| APIの応答が無い(通信断、締め切り) | `GitHubCiLogError`(ステータス0) |
+| APIが3xxを返さない(2xxで本文を返すなど) | `GitHubCiLogError`(そのステータス) |
+| 302の`Location`が無いか、取得先の表に当たらない | `GitHubCiLogError`(302のステータス)。取得先へは送らない |
+| 取得先の403(署名の期限切れなど)とそのほかの2xx以外 | `GitHubCiLogError`(取得先のステータス) |
+| 取得先の応答が無い(通信断、締め切り、取得先からのリダイレクト) | `GitHubCiLogError`(ステータス0) |
+| 取得先の本文が途中で切れた(締め切りで切れた場合を含む) | `GitHubRawBodyIncompleteError` |
+| 本文が上限(8MiB)を超えた | 失敗にしない。先頭と末尾を残した`ok`で、`truncated`が真 |
+| APIのrate limit | `GitHubRateLimitError`。待たない |
+
+認証情報が別のホストへ渡らないことは、通信層の不変条件とテストが固定する。
+不変条件は[GitHubのAPIへの通信層](../security.md#githubのapiへの通信層)にある。
 
 ## ログの整形
 
@@ -1167,7 +1170,7 @@ artifactはPRの作者が完全に決められるので、安全は内容の制�
 | ファイル | 責務 |
 | --- | --- |
 | `lib/github.ts` | 実行のartifactの一覧(`listWorkflowRunArtifacts`) |
-| `lib/metadata_patch_download.ts` | zipのバイト列の取得(`downloadArtifactZip`)。トークンの渡し先と取得先の制限 |
+| `lib/metadata_patch_download.ts` | zipのバイト列の取得(`downloadArtifactZip`)。取得は通信層の`downloadRedirectTarget`に任せ、失敗を種別に写す |
 | `lib/metadata_patch_zip.ts` | zipの安全な読み取り。結果は、パスから内容への対応 |
 | `lib/metadata_patch_manifest.ts` | パスの許可リストと、manifestの形と上限 |
 | `lib/metadata_patch_imports.ts` | scriptのimportの読み取り。相対importの閉包と、裸のimportの検出 |
@@ -1176,12 +1179,14 @@ artifactはPRの作者が完全に決められるので、安全は内容の制�
 
 ### パッチの取得
 
-zipは`fetch`で取得する。
+zipは、通信層(`lib/github_http.ts`)の`downloadRedirectTarget`で、バイト列のまま取得する。
 `gh api`の出力は文字列に復号されるので、バイナリのzipが壊れるためである。
 トークンはGitHubのAPIへの最初の要求にだけ載せ、リダイレクトはたどらない。
 返った302の`Location`が、`https`のAzureのblob storageでなければ断る。
 次の要求にはトークンを付けず、リダイレクトをたどらない。
-この制限は、トークンを別のホストへ渡さないために、`github.ts`から分けた`metadata_patch_download.ts`に置き、保護パスにする。
+2つの要求は、60秒の締め切りを共有する。
+この制限は、トークンを別のホストへ渡さないために、保護パスの通信層に置く。
+取得先の表と決まりは、ジョブのログの取得と同じで、[署名付きURLの取得](#署名付きurlの取得)にある。
 
 取得の前に、期限切れと、申告された大きさ(`size_in_bytes`)が上限を超えるものを断る。
 取得の間は、実際に受け取ったバイト数が上限を超えた時点で読むのをやめる。

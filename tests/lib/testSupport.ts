@@ -32,15 +32,35 @@ export type FakeCommandRunner = {
 
 const GITHUB_API_ORIGIN = "https://api.github.com";
 
+/** GitHubがartifactとジョブのログの取得先にする、blob storageのホストの末尾。 */
+const BLOB_STORAGE_HOST_SUFFIX = ".blob.core.windows.net";
+
+/** 偽のrunnerが答える、ジョブのログの取得先。`ghApiRedirect`で指す。 */
+export const FAKE_LOG_STORAGE_URL =
+  "https://fake.blob.core.windows.net/job-log.txt";
+
 type GitHubFetchHandler = (url: string, init: RequestInit) => Promise<Response>;
 
 /** GitHubのAPIへの`fetch`を受ける、最後に作った偽のrunner。 */
 let activeGitHubHandler: GitHubFetchHandler | null = null;
 let routeInstalled = false;
 
+/** GitHubのAPIか、その取得先のblob storageへの要求か。 */
+function isGitHubTarget(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.origin === GITHUB_API_ORIGIN ||
+      parsed.hostname.endsWith(BLOB_STORAGE_HOST_SUFFIX)
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
- * グローバルの`fetch`を、GitHubのAPIへの要求だけを偽のrunnerへ回す関数に置き換える。1つのプロセスで1回だけ行う。
- * ほかの宛先は元の`fetch`へ渡す。偽のrunnerが無いときにGitHubのAPIへ送ると、例外を投げて本物へは送らない。
+ * グローバルの`fetch`を、GitHubのAPIとその取得先への要求だけを偽のrunnerへ回す関数に置き換える。1つのプロセスで1回だけ行う。
+ * ほかの宛先は元の`fetch`へ渡す。偽のrunnerが無いときにGitHubへ送ると、例外を投げて本物へは送らない。
  */
 function installGitHubFetchRoute(): void {
   if (routeInstalled) return;
@@ -51,13 +71,7 @@ function installGitHubFetchRoute(): void {
     init?: RequestInit,
   ): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input);
-    let origin = "";
-    try {
-      origin = new URL(url).origin;
-    } catch {
-      origin = "";
-    }
-    if (origin !== GITHUB_API_ORIGIN) return original(input, init);
+    if (!isGitHubTarget(url)) return original(input, init);
     if (activeGitHubHandler === null) {
       throw new Error("no fake command runner answers the GitHub API");
     }
@@ -66,6 +80,31 @@ function installGitHubFetchRoute(): void {
   globalThis.fetch = Object.assign(routed, {
     preconnect: original.preconnect,
   });
+}
+
+/**
+ * `gh api -i`の出力を、ステータス行とヘッダーの部分(改行は`\n`にそろえる)と、本文に分ける。
+ * 区切りは最初の空行で、CRLFの空行を先に探す。
+ */
+function splitGhOutput(stdout: string): {
+  readonly head: string;
+  readonly bodyText: string;
+} {
+  const crlf = stdout.indexOf("\r\n\r\n");
+  const lf = stdout.indexOf("\n\n");
+  if (crlf !== -1 && (lf === -1 || crlf < lf)) {
+    return {
+      head: stdout.slice(0, crlf).replace(/\r\n/g, "\n"),
+      bodyText: stdout.slice(crlf + 4),
+    };
+  }
+  if (lf !== -1) {
+    return {
+      head: stdout.slice(0, lf).replace(/\r\n/g, "\n"),
+      bodyText: stdout.slice(lf + 2),
+    };
+  }
+  return { head: stdout.replace(/\r\n/g, "\n"), bodyText: "" };
 }
 
 /** 本文の無いステータス。`Response`はこれらに本文を付けられない。 */
@@ -81,10 +120,8 @@ function responseFromGhOutput(result: CommandResult): Response {
   if (result.timedOut) {
     throw new DOMException("The operation timed out.", "TimeoutError");
   }
-  const normalized = result.stdout.replace(/\r\n/g, "\n");
-  const separator = normalized.indexOf("\n\n");
-  const head = separator === -1 ? normalized : normalized.slice(0, separator);
-  const bodyText = separator === -1 ? "" : normalized.slice(separator + 2);
+  // 本文は書き換えずに渡す。`fetch`の本文は、改行を正規化されないため。
+  const { head, bodyText } = splitGhOutput(result.stdout);
   const [statusLine = "", ...headerLines] = head.split("\n");
   const statusMatch = statusLine.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})/);
   if (statusMatch?.[1] === undefined) throw new TypeError("fetch failed");
@@ -143,30 +180,82 @@ export function createFakeCommandRunner(
     return next(argv.join(" "));
   };
   const handleFetch: GitHubFetchHandler = async (url, init) => {
-    const parsed = new URL(url);
-    const method = init.method ?? "GET";
-    calls.push({
-      argv: ["fetch", method, `${parsed.pathname.slice(1)}${parsed.search}`],
-      options: undefined,
-      request: {
-        url,
-        method,
-        headers: new Headers(init.headers),
-        body: typeof init.body === "string" ? init.body : null,
-        redirect: init.redirect,
-      },
-    });
-    return responseFromGhOutput(next(`fetch ${method} ${url}`));
+    const call = fetchCall(url, init);
+    calls.push(call);
+    return responseFromGhOutput(next(call.argv.join(" ")));
   };
-  installGitHubFetchRoute();
   activeGitHubHandler = handleFetch;
   return { run, calls };
 }
+
+/**
+ * `fetch`の要求を、偽のrunnerが記録する形にする。
+ * GitHubのAPIへの要求はパスとクエリを、取得先(blob storage)への要求はURLの全体を、argvの3つ目に置く。
+ */
+function fetchCall(url: string, init: RequestInit): FakeCall {
+  const parsed = new URL(url);
+  const method = init.method ?? "GET";
+  const target =
+    parsed.origin === GITHUB_API_ORIGIN
+      ? `${parsed.pathname.slice(1)}${parsed.search}`
+      : parsed.href;
+  return {
+    argv: ["fetch", method, target],
+    options: undefined,
+    request: {
+      url,
+      method,
+      headers: new Headers(init.headers),
+      body: typeof init.body === "string" ? init.body : null,
+      redirect: init.redirect,
+    },
+  };
+}
+
+/**
+ * GitHubのAPIへの`fetch`を、`run`に答えさせる。エンドポイントで応答を選ぶ自前の`run`を使うテストのためのもの。
+ * `run`は、`["fetch", <method>, <パスとクエリ>]`のargvで呼ばれ、`gh api -i`の出力の形で答える。
+ * 次に偽のrunnerを作るか、この関数を呼ぶまで続く。
+ */
+export function serveGitHubFetchWith(run: CommandRunner): void {
+  activeGitHubHandler = async (url, init) =>
+    responseFromGhOutput(await run(fetchCall(url, init).argv));
+}
+
+// テストが本物のGitHubへ送らないよう、このモジュールを読んだ時点でグローバルの`fetch`を置き換える。
+installGitHubFetchRoute();
 
 /** `stubGlobalFetch`が記録する、送った要求。 */
 export type SentRequest = { readonly url: string; readonly init: RequestInit };
 
 const globalFetchStubs: { mockRestore(): void }[] = [];
+
+/**
+ * グローバルの`fetch`を、`handler`に答えさせる関数に差し替える。送った要求は`sent`に記録する。
+ * 差し替えは`restoreGlobalFetch`で戻す。使うテストのファイルは`afterEach(restoreGlobalFetch)`を置く。
+ */
+export function stubGlobalFetchWith(
+  handler: (request: SentRequest, index: number) => Promise<Response>,
+): { readonly sent: SentRequest[] } {
+  const sent: SentRequest[] = [];
+  const replacement = async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const request = {
+      url: input instanceof Request ? input.url : String(input),
+      init: init ?? {},
+    };
+    sent.push(request);
+    return handler(request, sent.length - 1);
+  };
+  globalFetchStubs.push(
+    spyOn(globalThis, "fetch").mockImplementation(
+      Object.assign(replacement, { preconnect: globalThis.fetch.preconnect }),
+    ),
+  );
+  return { sent };
+}
 
 /**
  * グローバルの`fetch`を、`steps`を順に返す関数に差し替える。`Error`を渡すと、その回は拒否する。
@@ -176,30 +265,16 @@ const globalFetchStubs: { mockRestore(): void }[] = [];
 export function stubGlobalFetch(steps: readonly (Response | Error)[]): {
   readonly sent: SentRequest[];
 } {
-  const sent: SentRequest[] = [];
-  let index = 0;
-  const replacement = async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const url = input instanceof Request ? input.url : String(input);
-    sent.push({ url, init: init ?? {} });
+  return stubGlobalFetchWith(async (_request, index) => {
     const step = steps[index];
-    index += 1;
     if (step === undefined) {
       throw new Error(
-        `stubGlobalFetch: no stubbed response for request #${index}`,
+        `stubGlobalFetch: no stubbed response for request #${index + 1}`,
       );
     }
     if (step instanceof Error) throw step;
     return step;
-  };
-  globalFetchStubs.push(
-    spyOn(globalThis, "fetch").mockImplementation(
-      Object.assign(replacement, { preconnect: globalThis.fetch.preconnect }),
-    ),
-  );
-  return { sent };
+  });
 }
 
 /** `stubGlobalFetch`の差し替えをすべて戻す。 */
@@ -260,6 +335,13 @@ export function ghApiOk(
   headers: Record<string, string> = {},
 ): CommandResult {
   return ok(ghApiStdout(200, body, headers));
+}
+
+/** `location`へ302で渡す応答。ジョブのログとartifactのAPIの応答に使う。 */
+export function ghApiRedirect(
+  location: string = FAKE_LOG_STORAGE_URL,
+): CommandResult {
+  return ok(ghApiStdout(302, "", { location }));
 }
 
 /**
