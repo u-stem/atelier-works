@@ -1,6 +1,7 @@
 // GraphQLクライアントの通信の決まりのテスト。実際には通信せず、グローバルの`fetch`を差し替える。
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { classifyGraphqlFailure } from "../../f/factory/lib/gh_collect_support.ts";
 import {
   buildRepoDetailQuery,
   GITHUB_GRAPHQL_URL,
@@ -95,6 +96,12 @@ describe("graphqlRequest request shape", () => {
   test("sets a timeout signal", async () => {
     const { sent } = await request(async () => respond({}));
     expect(sent[0]?.init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  // 読み取りの問い合わせは冪等なので、接続を使い回してよい。
+  test("lets the read query reuse a connection", async () => {
+    const { sent } = await request(async () => respond({}));
+    expect(sent[0]?.init.keepalive).toBeUndefined();
   });
 
   test("carries the token only in the Authorization header", async () => {
@@ -364,6 +371,39 @@ describe("graphqlRequest results", () => {
       Promise.reject(new TypeError("connection refused")),
     );
     expect(result.ok ? null : result.kind).toBe("network");
+  });
+});
+
+// 要求を組み立てられない失敗も、例外にせず失敗の結果で返す。改行を含むトークンは、待っても直らない認証の失敗にする。
+describe("graphqlRequest with a token that cannot be sent", () => {
+  const BAD_TOKEN = "github_pat_BROKEN\nX-Injected: 1";
+  const send = () => {
+    const h = harness(async () => respond({}));
+    return {
+      ...h,
+      result: graphqlRequest(
+        { token: BAD_TOKEN },
+        OWNER_REPOS_QUERY,
+        VARIABLES,
+      ),
+    };
+  };
+
+  test("does not throw", async () => {
+    await expect(send().result).resolves.toBeDefined();
+  });
+
+  test("is classified as unauthorized, which waiting does not fix", async () => {
+    const result = await send().result;
+    expect(
+      result.ok ? "ok" : classifyGraphqlFailure(result, Date.now()).error_code,
+    ).toBe("unauthorized");
+  });
+
+  test("does not send the request", async () => {
+    const h = send();
+    await h.result;
+    expect(h.sent).toHaveLength(0);
   });
 });
 

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import {
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GitHubRateLimitError,
+  GitHubRequestError,
   RATE_LIMIT_HINT_TEXT_LIMIT,
   SECONDARY_RATE_LIMIT_PHRASE,
 } from "../../f/factory/lib/github_errors.ts";
@@ -614,7 +615,12 @@ describe("a request that cannot be built", () => {
       { ...client(), token: BAD_TOKEN },
       { path: "repos/o/r" },
     ).catch((err: unknown) => err);
-    expect(String(error)).not.toContain("BROKEN");
+    // 組み立ての失敗の例外であることを前提にして、その文を確かめる。別の例外なら、この確かめは意味を持たない。
+    expect(
+      error instanceof GitHubRequestError
+        ? error.message
+        : "BROKEN: not a request error",
+    ).not.toContain("BROKEN");
   });
 });
 

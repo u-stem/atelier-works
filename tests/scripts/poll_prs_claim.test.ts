@@ -31,6 +31,7 @@ import {
 import { describeReason } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
   createFakeCommandRunner,
+  fail,
   ghApiOk,
   ghApiStdout,
   ok,
@@ -380,7 +381,20 @@ describe("claimPr", () => {
     );
   });
 
+  // ステータス行の無い結果は、応答の無い失敗(ステータス0)の削除になる。
   test("reports not claimed when the label removal itself fails", async () => {
+    createFakeCommandRunner([fail("rate limited")]);
+    const result = await claimPr(
+      { ghToken: "token" },
+      "octo-owner",
+      "atelier-works",
+      7,
+      "factory:review",
+    );
+    expect(result.claimed).toBe(false);
+  });
+
+  test("reports not claimed when the label removal is rate limited", async () => {
     createFakeCommandRunner([
       ok(ghApiStdout(429, { message: "API rate limit exceeded" })),
     ]);

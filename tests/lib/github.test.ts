@@ -27,6 +27,7 @@ import {
   GitHubRateLimitError,
   GitHubRawBodyIncompleteError,
   GitHubResponseError,
+  GitHubWriteBodyCutError,
   getAccountId,
   getBranchProtected,
   getBranchRuleCount,
@@ -82,6 +83,7 @@ import {
   WorkflowRunsIncompleteError,
   withMarker,
 } from "../../f/factory/lib/github.ts";
+import { GITHUB_RESPONSE_MAX_BYTES } from "../../f/factory/lib/github_http.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import { markTransientGitHubFailure } from "../../f/factory/lib/pr_review_retry.ts";
 import { isRecord } from "../../f/factory/lib/types.ts";
@@ -347,6 +349,28 @@ describe("a write whose body was cut after a 2xx status", () => {
       title: "t",
       body: "b",
     });
+
+  test("throws a GitHubWriteBodyCutError from callGhApi", async () => {
+    createFakeCommandRunner([cut]);
+    await expect(
+      callGhApi({ ghToken: "tok" }, "repos/acme/widgets/issues", {
+        method: "POST",
+        body: {},
+      }),
+    ).rejects.toBeInstanceOf(GitHubWriteBodyCutError);
+  });
+
+  test("says the body was too large when the body went over the limit", async () => {
+    createFakeCommandRunner([
+      ok(ghApiStdout(201, `"${"x".repeat(GITHUB_RESPONSE_MAX_BYTES)}"`)),
+    ]);
+    const error = await callGhApi(
+      { ghToken: "tok" },
+      "repos/acme/widgets/issues",
+      { method: "POST", body: {} },
+    ).catch((err: unknown) => err);
+    expect(error instanceof Error ? error.message : "").toContain("too large");
+  });
 
   test("throws a response error from callGhApi", async () => {
     createFakeCommandRunner([cut, cut]);
@@ -2981,7 +3005,7 @@ describe("claimIssue", () => {
         assigned,
         serverError,
         labelAbsent(),
-        ...Array(6).fill(serverError),
+        ...Array.from({ length: 6 }, () => serverError),
       ]);
       const claiming = claimIssue(client, "acme", "widgets", 5, opts);
       await expect(claiming).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
@@ -2993,7 +3017,7 @@ describe("claimIssue", () => {
       const { fake, client, opts } = setup([
         assigned,
         serverError,
-        ...Array(6).fill(serverError),
+        ...Array.from({ length: 6 }, () => serverError),
       ]);
       await claimIssue(client, "acme", "widgets", 5, opts).catch(
         () => undefined,
@@ -3005,7 +3029,7 @@ describe("claimIssue", () => {
       const { client, opts } = setup([
         assigned,
         noResponse,
-        ...Array(6).fill(serverError),
+        ...Array.from({ length: 6 }, () => serverError),
       ]);
       const claiming = claimIssue(client, "acme", "widgets", 5, opts);
       await expect(claiming).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
@@ -3015,7 +3039,7 @@ describe("claimIssue", () => {
       const { client, sleeps, opts } = setup([
         assigned,
         serverError,
-        ...Array(6).fill(serverError),
+        ...Array.from({ length: 6 }, () => serverError),
       ]);
       await claimIssue(client, "acme", "widgets", 5, opts).catch(
         () => undefined,
@@ -3029,7 +3053,7 @@ describe("claimIssue", () => {
       const { client, opts } = setup([
         assigned,
         serverError,
-        ...Array(6).fill(serverError),
+        ...Array.from({ length: 6 }, () => serverError),
       ]);
       const claiming = claimIssue(client, "acme", "widgets", 5, opts);
       await expect(claiming).rejects.toThrow(/DELETE issue label.*HTTP 500/);
@@ -3039,7 +3063,7 @@ describe("claimIssue", () => {
       const { client, warns, opts } = setup([
         assigned,
         serverError,
-        ...Array(6).fill(serverError),
+        ...Array.from({ length: 6 }, () => serverError),
       ]);
       await claimIssue(client, "acme", "widgets", 5, opts).catch(
         () => undefined,
@@ -3114,7 +3138,7 @@ describe("claimIssue", () => {
       const { client, warns, opts } = setup([
         assigned,
         serverError,
-        ...Array(6).fill(serverError),
+        ...Array.from({ length: 6 }, () => serverError),
       ]);
       await claimIssue(client, "acme", "widgets", 5, opts).catch(
         () => undefined,
@@ -3127,7 +3151,7 @@ describe("claimIssue", () => {
         assigned,
         serverError,
         ghApiOk(issueBody([], ["factory-bot"])),
-        ...Array(6).fill(serverError),
+        ...Array.from({ length: 6 }, () => serverError),
       ]);
       await claimIssue(client, "acme", "widgets", 5, opts).catch(
         () => undefined,
