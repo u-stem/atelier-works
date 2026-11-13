@@ -1066,17 +1066,22 @@ const HTTP_VALUE_IMPORTERS: readonly string[] = [
 const AUTHORIZATION_HEADER =
   /["']?\bauthorization["']?\s*:|\.\s*(?:set|append)\s*\(\s*["']authorization["']|\[\s*["']authorization["']\s*,/i;
 
-/** グローバルの`fetch`の参照。プロパティ(`.fetch`)とオブジェクトのキー(`fetch:`)は除く。 */
+/**
+ * グローバルの`fetch`の参照。プロパティ(`.fetch`)とオブジェクトのキー(`fetch:`)は除く。
+ * 下の式は、グローバルのオブジェクトを通した参照と、グローバルのオブジェクトの分割代入(`} = globalThis`)を見る。
+ * 分割代入は`}`の直後の`=`だけを見る。`= Bun.spawn`や`>= window.x`のような、ほかの式を数えないためである。
+ */
 const GLOBAL_FETCH = /(?<![.\w$])fetch\b(?!\s*:)/;
 const GLOBAL_FETCH_THROUGH_OBJECT =
-  /\b(?:globalThis|global|self|window|Bun)\s*(?:\.\s*fetch\b|\[)/;
+  /\b(?:globalThis|global|self|window|Bun)\s*(?:\.\s*fetch\b|\[)|\}\s*=\s*(?:globalThis|global|self|window|Bun)\b/;
 
 /**
- * `github_http.ts`から値を読み込む書き方。import、再エクスポート(`export ... from`、`export * from`)、動的import。
- * `import type`と`export type`は除く。
+ * `github_http.ts`から値を読み込む書き方。import、再エクスポート(`export ... from`、`export * from`)、
+ * 動的import(文字列とバッククォート)、`require`。拡張子の無い指定子と、空白を詰めた書き方も数える。
+ * `import type`と`export type`は除く。書き方のパターンを見るだけで、動的に組み立てた指定子は見ない。
  */
 const HTTP_VALUE_IMPORT =
-  /(?:\b(?:import|export)\s+(?!type\s)[^;]*?from\s*|\bimport\s*\(\s*)["'][^"']*github_http\.ts["']/s;
+  /(?:\b(?:import|export)(?!\s*type\s)\s*[^;]*?\bfrom\s*|\b(?:import|require)\s*\(\s*)["'`][^"'`]*github_http(?:\.ts)?["'`]/s;
 
 describe("only github_http.ts carries the token to the GitHub API", () => {
   const sources = factorySources();
@@ -1207,6 +1212,14 @@ describe("only github_http.ts carries the token to the GitHub API", () => {
   test("the import pattern does not see another module whose name starts the same", () => {
     expect(
       HTTP_VALUE_IMPORT.test('import { x } from "./github_http_extra.ts";'),
+    ).toBe(false);
+  });
+
+  test("the fetch pattern does not see a comparison with a property of window", () => {
+    expect(
+      GLOBAL_FETCH_THROUGH_OBJECT.test(
+        "if (started >= window.startedAfterMs) {}",
+      ),
     ).toBe(false);
   });
 

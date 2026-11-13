@@ -317,6 +317,8 @@ export async function callGhApi(
 
 /**
  * `noWaitClient`が作ったクライアント。`GhClient`の形を変えずに、レート制限の方針を`throw`にするための印である。
+ * 印はオブジェクトそのものに付くので、展開して作り直したクライアントには付かず、待つ方針に戻る。
+ * 印を見るのは`sendGhApiRequest`だけである。
  */
 const NO_WAIT_CLIENTS = new WeakSet<GhClient>();
 
@@ -376,6 +378,7 @@ export function ensureSuccess(response: GhApiResponse, context: string): void {
  * 本文の途中の切断、timeoutで止めた取得で起きる。
  * 拒否のときの本文は空になるので、欠けた本文を空の内容として使わないために投げる。
  * 取り直しても欠けたときに、`callGhApiRawBody`が投げる。
+ * 締め切り(`timedOut`)で欠けた本文は取り直さず、すぐ投げる。
  * メッセージは呼び出し側の`context`だけで組み立て、本文、stderr、終了コードを載せない。
  * HTTPの失敗ではないので、ステータスを持たない。
  */
@@ -395,6 +398,7 @@ export class GitHubRawBodyIncompleteError extends Error {
  * 2xxなのに`gh`の終了コードが0以外の応答を、本文が欠けた(`incomplete`)応答として扱う。
  * 取り直しは`runGitHubRequest`が行い、冪等な要求(GETか`idempotent`の指定)だけ、短く待ってから1回だけ取り直す。
  * 取り直しても欠けたとき、また冪等でない要求で欠けたときは、`GitHubRawBodyIncompleteError`を投げる。
+ * 締め切り(`timedOut`)で欠けた本文は取り直さず、すぐ投げる。
  * JSONの応答はESCがエスケープされ、構文の検査が欠けを見つけるので、この関数は要らない。
  * 2xx以外の応答は、終了コードを見ずにそのまま返す。呼び出し側がステータスで扱いを決める。
  * 取り直しの待ちは`GhClient`の`transientRetryDelayMs`で決まる。
@@ -1060,7 +1064,15 @@ async function fetchIssueObject(
   validateOwnerRepo(owner, repo);
   const context = `GET issue ${owner}/${repo}#${number}`;
   const response = await requestGitHub(
-    { token: ghToken, fetch: fetchFn, ...options },
+    {
+      // 差し込めるのは待ちの2つだけにする。実行時に余分な値が来ても、トークンと送り方を上書きさせない。
+      token: ghToken,
+      fetch: fetchFn,
+      ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
+      ...(options.transientRetryDelayMs !== undefined
+        ? { transientRetryDelayMs: options.transientRetryDelayMs }
+        : {}),
+    },
     {
       path: `repos/${owner}/${repo}/issues/${String(number)}`,
       redirect: "never",
