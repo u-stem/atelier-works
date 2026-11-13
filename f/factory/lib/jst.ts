@@ -1,7 +1,7 @@
 // 日本時間(JST)の扱い。BackendとConsoleで共有する。
 // 表示の整形は、`Intl.DateTimeFormat`に`Asia/Tokyo`を渡して行う。
 // 日の境界の計算は、UTCとの差を足してからUTCの部品で読む。
-// 日本時間は夏時間を持たないので、固定の差で日本時間の日付になる。
+// 1952年以降の日本時間は夏時間を持たないので、固定の差で日本時間の日付になる。
 
 /** 日本時間とUTCの差(ミリ秒)。 */
 export const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -42,6 +42,7 @@ function jstParts(epochMs: number): JstParts | null {
   for (const part of PARTS_FORMAT.formatToParts(epochMs)) {
     parts.set(part.type, part.value);
   }
+  // 書式が年、月、日、時、分、秒をすべて求めるので、部品は欠けない。`??`は型を`string`にするためだけにある。
   const part = (type: string): string => parts.get(type) ?? "";
   return {
     date: `${part("year")}-${part("month")}-${part("day")}`,
