@@ -1267,14 +1267,14 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 - importでたどれるソースが読むsecret変数は、scriptごとの許可に限る。
   許可のキーが、tag`periodic`のscriptの一覧と一致することと、許可したsecretを実際に読むことも固定する。
   ある許可を別のscriptに当てると、違反が返ることも確かめる。
+- importでたどれるソースが、importの形で書いた外部のパッケージは、`windmill-client`だけである。
+  パッケージの中身は走査が見ないので、ほかのパッケージを足すと、次の項目のファイルとサブプロセスの禁止をすり抜けられるためである。
+  `node:`のモジュールは、この項目では外部のパッケージに数えず、次の項目で調べる。
+  版の指定は、数字の版だけを認める。
 - importでたどれるソースに、ファイル、サブプロセス、`claude.ts`への依存が無い。
   `node:fs`、`node:child_process`、`bun`モジュールのimportと、`Bun`の使い方を調べる。
   `Bun.sleep`のような無害なメンバー以外は、`Bun.spawn`や`Bun.file`に加えて、分割代入、別名への代入、添字アクセスも当たる。
   `globalThis`、`process.getBuiltinModule`、`process.binding`も当たる。
-- importでたどれるソースが、importの形で書いた外部のパッケージは、`windmill-client`だけである。
-  パッケージの中身は走査が見ないので、ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるためである。
-  `node:`のモジュールは数えない。
-  版の指定は、数字の版だけを認める。
 
 `node:module`、`node:worker_threads`、`node:vm`のimportも、迂回に使えるので数える。
 `f/`の下のTypeScriptが、`JobService.run*`でジョブを起動したり、tagの文字列を渡したりしていないことも、テストが確かめる。
