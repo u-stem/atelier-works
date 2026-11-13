@@ -83,6 +83,7 @@ import {
   withMarker,
 } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
+import { markTransientGitHubFailure } from "../../f/factory/lib/pr_review_retry.ts";
 import { isRecord } from "../../f/factory/lib/types.ts";
 import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
@@ -329,6 +330,59 @@ describe("a write request", () => {
     ]);
     await resolveReviewThread({ ghToken: "tok" }, "PRRT_1");
     expect(fake.calls[0]?.request?.url).toBe("https://api.github.com/graphql");
+  });
+});
+
+// 2xxの後で本文が切れた書き込みは、変更が効いた後で応答の本文だけを失ったものである。
+// 待って再開すると二重に効くので、一時的な失敗にしない。
+describe("a write whose body was cut after a 2xx status", () => {
+  const cut: CommandResult = {
+    stdout: ghApiStdout(201, '{"number":5'),
+    stderr: "",
+    exitCode: 1,
+    timedOut: false,
+  };
+  const create = () =>
+    createIssue({ ghToken: "tok", sleep: async () => {} }, "acme", "widgets", {
+      title: "t",
+      body: "b",
+    });
+
+  test("throws a response error from callGhApi", async () => {
+    createFakeCommandRunner([cut, cut]);
+    await expect(
+      callGhApi({ ghToken: "tok" }, "repos/acme/widgets/issues", {
+        method: "POST",
+        body: {},
+      }),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
+  test("is not an HTTP failure that waiting fixes", async () => {
+    createFakeCommandRunner([cut, cut]);
+    const error = await create().catch((err: unknown) => err);
+    expect(error instanceof GitHubHttpError).toBe(false);
+  });
+
+  test("is not marked for the automatic restart", async () => {
+    createFakeCommandRunner([cut, cut]);
+    const error = await create().catch((err: unknown) => err);
+    expect(markTransientGitHubFailure(error)).toBe(error);
+  });
+
+  test("does not send the write again", async () => {
+    const fake = createFakeCommandRunner([cut, cut]);
+    await create().catch(() => undefined);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("still reads a GET again once", async () => {
+    const fake = createFakeCommandRunner([
+      { ...cut, stdout: ghApiStdout(200, '{"login"') },
+      ghApiOk({ login: "bot", id: 1 }),
+    ]);
+    await getViewer({ ghToken: "tok", sleep: async () => {} });
+    expect(fake.calls).toHaveLength(2);
   });
 });
 
@@ -2667,6 +2721,19 @@ describe("claimIssue", () => {
 
     test("asks to retry later after a response-less failure (HTTP 0)", async () => {
       const { client, opts } = setup([assigned, noResponse, labelPresent()]);
+      const result = await claimIssue(client, "acme", "widgets", 5, opts);
+      expect(result).toEqual(retryResult);
+    });
+
+    // 2xxの後で本文が切れた削除は、効いたかを読み直しで確かめる。
+    test("reads the issue again when the body of the removal was cut after a 2xx status", async () => {
+      const cutRemoval: CommandResult = {
+        stdout: ghApiStdout(200, "[{"),
+        stderr: "",
+        exitCode: 1,
+        timedOut: false,
+      };
+      const { client, opts } = setup([assigned, cutRemoval, labelPresent()]);
       const result = await claimIssue(client, "acme", "widgets", 5, opts);
       expect(result).toEqual(retryResult);
     });

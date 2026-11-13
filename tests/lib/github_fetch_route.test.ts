@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { getDefaultBranch } from "../../f/factory/lib/github.ts";
 import { GitHubHttpError } from "../../f/factory/lib/github_errors.ts";
+import { GITHUB_FETCH_EXHAUSTED_KEY } from "../preload.ts";
 import { createFakeCommandRunner, ghApiOk } from "./testSupport.ts";
 
 async function rejectionOf(url: string): Promise<string> {
@@ -57,6 +58,19 @@ describe("the fetch of the tests", () => {
     expect(
       await failedStatusOf(getDefaultBranch(RUN_THROWS_CLIENT, "o", "r")),
     ).toBe(0);
+  });
+
+  // 用意した応答より多い要求は、通信の失敗として静かに飲み込まれないよう記録し、テストの後で失敗にする。
+  test("records a request after the fake answers ran out", async () => {
+    createFakeCommandRunner([]);
+    await fetch("https://api.github.com/repos/o/r").catch(() => undefined);
+    const recorded: unknown = Reflect.get(
+      globalThis,
+      GITHUB_FETCH_EXHAUSTED_KEY,
+    );
+    // このテストでは記録を確かめるだけなので、テストの後の失敗にしないよう消す。
+    Reflect.deleteProperty(globalThis, GITHUB_FETCH_EXHAUSTED_KEY);
+    expect(typeof recorded).toBe("string");
   });
 
   // 前のテストが作った偽のrunnerは、テストが終わると外れる。

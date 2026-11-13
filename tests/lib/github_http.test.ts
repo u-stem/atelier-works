@@ -500,6 +500,54 @@ describe("sendGitHubRequest request shape", () => {
     expect(headerOf(f.sent[0]?.init, "Time-Zone")).toBeUndefined();
   });
 
+  // 冪等でない要求は、使い回した接続が切れていて、届いたか分からない失敗になるのを避ける。
+  test("does not reuse a connection for a POST", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: {},
+    });
+    expect(f.sent[0]?.init.keepalive).toBe(false);
+  });
+
+  test("does not reuse a connection for a DELETE", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "repos/o/r/issues/1/labels/bug",
+      method: "DELETE",
+    });
+    expect(f.sent[0]?.init.keepalive).toBe(false);
+  });
+
+  test("does not reuse a connection for a GraphQL mutation", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "graphql",
+      method: "POST",
+      body: { query: "mutation { x }" },
+      idempotent: false,
+    });
+    expect(f.sent[0]?.init.keepalive).toBe(false);
+  });
+
+  test("keeps the connection reuse for a GET", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), { path: "repos/o/r" });
+    expect(f.sent[0]?.init.keepalive).toBeUndefined();
+  });
+
+  test("keeps the connection reuse for a GraphQL query marked idempotent", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "graphql",
+      method: "POST",
+      body: { query: "query { x }" },
+      idempotent: true,
+    });
+    expect(f.sent[0]?.init.keepalive).toBeUndefined();
+  });
+
   test("sends no Content-Type without a body", async () => {
     const f = fakeFetch([]);
     await sendGitHubRequest(client(), {
@@ -515,6 +563,58 @@ describe("sendGitHubRequest request shape", () => {
       () => undefined,
     );
     expect(f.sent).toHaveLength(0);
+  });
+});
+
+// 要求を組み立てられない失敗は、送っていないことが確かで、待っても直らない。応答の無い通信の失敗と分ける。
+describe("a request that cannot be built", () => {
+  const BUILD_FAILURE = "GitHub request could not be built";
+  const BAD_TOKEN = "github_pat_BROKEN\nX-Injected: 1";
+
+  test("rejects a body that cannot be turned into JSON", async () => {
+    fakeFetch([]);
+    await expect(
+      requestGitHub(client(), {
+        path: "repos/o/r/issues",
+        method: "POST",
+        body: { n: 1n },
+      }),
+    ).rejects.toThrow(BUILD_FAILURE);
+  });
+
+  test("does not send a body that cannot be turned into JSON", async () => {
+    const f = fakeFetch([]);
+    await requestGitHub(client(), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: { n: 1n },
+    }).catch(() => undefined);
+    expect(f.sent).toHaveLength(0);
+  });
+
+  test("rejects a token with a line break", async () => {
+    fakeFetch([]);
+    await expect(
+      requestGitHub({ ...client(), token: BAD_TOKEN }, { path: "repos/o/r" }),
+    ).rejects.toThrow(BUILD_FAILURE);
+  });
+
+  test("does not send a request with a token that has a line break", async () => {
+    const f = fakeFetch([]);
+    await requestGitHub(
+      { ...client(), token: BAD_TOKEN },
+      { path: "repos/o/r" },
+    ).catch(() => undefined);
+    expect(f.sent).toHaveLength(0);
+  });
+
+  test("keeps the token out of the error", async () => {
+    fakeFetch([]);
+    const error = await requestGitHub(
+      { ...client(), token: BAD_TOKEN },
+      { path: "repos/o/r" },
+    ).catch((err: unknown) => err);
+    expect(String(error)).not.toContain("BROKEN");
   });
 });
 

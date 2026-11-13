@@ -19,6 +19,11 @@ export const GITHUB_FETCH_HANDLER_KEY = Symbol.for(
   "atelier-works.tests.github-fetch-handler",
 );
 
+/** 偽のrunnerの応答が尽きた後の要求を記録する、グローバルのオブジェクトの鍵。`tests/lib/testSupport.ts`が書く。 */
+export const GITHUB_FETCH_EXHAUSTED_KEY = Symbol.for(
+  "atelier-works.tests.github-fetch-exhausted",
+);
+
 /** GitHubのAPIか、その取得先のblob storageへの要求か。 */
 function isGitHubTarget(url: string): boolean {
   try {
