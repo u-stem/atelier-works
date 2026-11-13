@@ -234,14 +234,14 @@ describe("cancelWorkItemDialogLines for a running work item", () => {
   test("tells not to press the cancel of the job in the jobs screen", () => {
     expect(
       cancelWorkItemDialogLines("issue", "implementing").join(""),
-    ).toContain("「ジョブの中止」は押さないでください");
+    ).toContain("「ジョブを中止」は押さないでください");
   });
 
   test.each(["picked", "requirements_generating", "designing"])(
     "gives the same warnings for an Issue in %s",
     (status) => {
       expect(cancelWorkItemDialogLines("issue", status).join("")).toContain(
-        "「ジョブの中止」は押さないでください",
+        "「ジョブを中止」は押さないでください",
       );
     },
   );

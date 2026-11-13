@@ -138,20 +138,21 @@ describe("the failure of a CI round, from the exception of the step to the recov
     ["run_budget_exceeded", "claude_run_failed"],
     ["usage_limit", "claude_usage_limit"],
     ["stopped", "claude_stopped"],
-    ["work_item_stopped", "operator_cancelled"],
   ] as const)("holds the row on %s as %s", async (reason, hold) => {
     expect(await ciRecovery(reason)).toEqual({ kind: "release", hold });
   });
 
-  test.each(["claude_error", "non_zero_exit", "invalid_json"] as const)(
-    "releases the row on %s without a hold",
-    async (reason) => {
-      expect(await ciRecovery(reason)).toEqual({
-        kind: "release",
-        hold: null,
-      });
-    },
-  );
+  test.each([
+    "claude_error",
+    "non_zero_exit",
+    "invalid_json",
+    "work_item_stopped",
+  ] as const)("releases the row on %s without a hold", async (reason) => {
+    expect(await ciRecovery(reason)).toEqual({
+      kind: "release",
+      hold: null,
+    });
+  });
 
   test("carries a marker in the exception of the step", () => {
     expect(
@@ -178,7 +179,6 @@ describe("the failure of the verify step of a CI round, from the finish step to 
     ["run_budget_exceeded", "claude_run_failed"],
     ["usage_limit", "claude_usage_limit"],
     ["stopped", "claude_stopped"],
-    ["work_item_stopped", "operator_cancelled"],
   ] as const)("holds the row on %s as %s", (reason, hold) => {
     expect(
       decideFixingRecovery(

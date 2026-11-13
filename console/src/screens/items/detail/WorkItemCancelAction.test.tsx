@@ -86,12 +86,12 @@ describe("WorkItemCancelDialog", () => {
 
   test("warns about the running job when the Issue is being implemented", () => {
     expect(renderDialog(true, "implementing")).toContain(
-      "「ジョブの中止」は押さないでください",
+      "「ジョブを中止」は押さないでください",
     );
   });
 
   test("does not warn about a running job for an Issue that waits for an approval", () => {
-    expect(renderDialog(true)).not.toContain("「ジョブの中止」");
+    expect(renderDialog(true)).not.toContain("「ジョブを中止」");
   });
 
   test("has no body while it is closed", () => {

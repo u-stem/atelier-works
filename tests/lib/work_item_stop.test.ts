@@ -1,19 +1,23 @@
 import { describe, expect, test } from "bun:test";
+import type { Logger } from "../../f/factory/lib/log.ts";
 import { OPERATOR_CANCELLED_NOTE } from "../../f/factory/lib/operator_cancel.ts";
 import {
   DESIGN_FLOW_PATH,
   INVESTIGATE_FLOW_PATH,
   PIPELINE_FLOW_PATH,
 } from "../../f/factory/lib/pipeline_lease.ts";
+import { STOP_ALL_CHECK_TIMEOUT_MS } from "../../f/factory/lib/stop_all.ts";
 import {
   defaultWorkItemStopCheck,
   flowRunMatchesRow,
+  isFailureSilenced,
   isWorkItemStopped,
   type NoteRead,
   type SilenceInput,
   type StopSqlClient,
   sdkWorkItemStopReadIo,
   shouldSilenceFailure,
+  WORK_ITEM_STOP_CHECK_TIMEOUT_MS,
   type WorkItemStopReadIo,
   type WorkItemStopState,
   workItemStopCheckFrom,
@@ -237,7 +241,6 @@ function silence(overrides: Partial<SilenceInput> = {}): SilenceInput {
     note: READ_OPERATOR,
     rowFlowJobId: ROOT,
     rootJobId: ROOT,
-    flowPath: "f/factory/implement",
     ...overrides,
   };
 }
@@ -277,18 +280,226 @@ describe("shouldSilenceFailure", () => {
     expect(shouldSilenceFailure(silence({ rowFlowJobId: OTHER }))).toBe(false);
   });
 
-  test("is true while no job id is recorded for a flow that does not need one", () => {
-    expect(shouldSilenceFailure(silence({ rowFlowJobId: null }))).toBe(true);
+  test("is false while no job id is recorded for the work item", () => {
+    expect(shouldSilenceFailure(silence({ rowFlowJobId: null }))).toBe(false);
   });
 
-  test("is true when the root job id is unavailable", () => {
-    expect(shouldSilenceFailure(silence({ rootJobId: null }))).toBe(true);
+  test("is false when the root job id is unavailable", () => {
+    expect(shouldSilenceFailure(silence({ rootJobId: null }))).toBe(false);
   });
 
   test("compares the root job id without regard to letter case", () => {
     expect(
       shouldSilenceFailure(silence({ rootJobId: ROOT.toUpperCase() })),
     ).toBe(true);
+  });
+});
+
+describe("isFailureSilenced", () => {
+  type Warning = { message: string; fields: unknown };
+
+  function setup(note: () => Promise<string | null>) {
+    const warnings: Warning[] = [];
+    const reads: number[] = [];
+    const log: Logger = {
+      info: () => {},
+      warn: (message, fields) => {
+        warnings.push({ message, fields });
+      },
+      error: () => {},
+    };
+    const readNote = (id: number) => {
+      reads.push(id);
+      return note();
+    };
+    return { warnings, reads, log, readNote };
+  }
+
+  const ITEM = { id: 7, status: "cancelled", flow_job_id: ROOT };
+
+  test("is true for a work item that a person cancelled and a run that is its own", async () => {
+    const fake = setup(async () => OPERATOR_CANCELLED_NOTE);
+    expect(await isFailureSilenced(ITEM, ROOT, fake.readNote, fake.log)).toBe(
+      true,
+    );
+  });
+
+  test("does not read the note of a work item that is not cancelled", async () => {
+    const fake = setup(async () => OPERATOR_CANCELLED_NOTE);
+    await isFailureSilenced(
+      { ...ITEM, status: "implementing" },
+      ROOT,
+      fake.readNote,
+      fake.log,
+    );
+    expect(fake.reads).toEqual([]);
+  });
+
+  test("is false for a work item that is not cancelled", async () => {
+    const fake = setup(async () => OPERATOR_CANCELLED_NOTE);
+    expect(
+      await isFailureSilenced(
+        { ...ITEM, status: "implementing" },
+        ROOT,
+        fake.readNote,
+        fake.log,
+      ),
+    ).toBe(false);
+  });
+
+  test("reads the note of the work item it was given", async () => {
+    const fake = setup(async () => OPERATOR_CANCELLED_NOTE);
+    await isFailureSilenced(ITEM, ROOT, fake.readNote, fake.log);
+    expect(fake.reads).toEqual([7]);
+  });
+
+  test("is false for a cancel that is not a person's", async () => {
+    const fake = setup(async () => "reconcile: pr_closed");
+    expect(await isFailureSilenced(ITEM, ROOT, fake.readNote, fake.log)).toBe(
+      false,
+    );
+  });
+
+  test("is false when the note cannot be read", async () => {
+    const fake = setup(async () => {
+      throw new Error("db down");
+    });
+    expect(await isFailureSilenced(ITEM, ROOT, fake.readNote, fake.log)).toBe(
+      false,
+    );
+  });
+
+  test("warns once, with the secret masked, when the note cannot be read", async () => {
+    const fake = setup(async () => {
+      throw new Error(`db down ghp_${"a".repeat(36)}`);
+    });
+    await isFailureSilenced(ITEM, ROOT, fake.readNote, fake.log);
+    expect(JSON.stringify(fake.warnings)).not.toContain("ghp_");
+    expect(fake.warnings).toHaveLength(1);
+  });
+
+  test("is false when the work item has no recorded job id", async () => {
+    const fake = setup(async () => OPERATOR_CANCELLED_NOTE);
+    expect(
+      await isFailureSilenced(
+        { ...ITEM, flow_job_id: null },
+        ROOT,
+        fake.readNote,
+        fake.log,
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when the run belongs to another job", async () => {
+    const fake = setup(async () => OPERATOR_CANCELLED_NOTE);
+    expect(await isFailureSilenced(ITEM, OTHER, fake.readNote, fake.log)).toBe(
+      false,
+    );
+  });
+});
+
+describe("the work item check that keeps a true answer that came late", () => {
+  test("answers stopped at the next call when the read finished after the time limit", async () => {
+    let reads = 0;
+    const check = workItemStopCheckFrom(
+      io(() => {
+        reads += 1;
+        if (reads > 1) return Promise.resolve(null);
+        return new Promise<WorkItemStopState | null>((resolve) => {
+          setTimeout(() => {
+            resolve(OPERATOR_STOP);
+          }, 30);
+        });
+      }),
+      10,
+    );
+    await check();
+    await Bun.sleep(60);
+    expect(await check()).toBe(true);
+  });
+
+  test("waits longer than the stop-all does, for the queue of the preview job", () => {
+    expect(WORK_ITEM_STOP_CHECK_TIMEOUT_MS).toBeGreaterThan(
+      STOP_ALL_CHECK_TIMEOUT_MS,
+    );
+  });
+
+  test("waits no longer than 15 seconds, so that the check does not hold a watch for long", () => {
+    expect(WORK_ITEM_STOP_CHECK_TIMEOUT_MS).toBeLessThanOrEqual(15_000);
+  });
+
+  test("waits at least 10 seconds", () => {
+    expect(WORK_ITEM_STOP_CHECK_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+  });
+});
+
+describe("the warning of a work item check that cannot read", () => {
+  function recordingLogger() {
+    const warnings: string[] = [];
+    const log: Logger = {
+      info: () => {},
+      warn: (message, fields) => {
+        warnings.push(JSON.stringify({ message, fields }));
+      },
+      error: () => {},
+    };
+    return { warnings, log };
+  }
+
+  test("is left once for the first failed read of a check", async () => {
+    const fake = recordingLogger();
+    const check = workItemStopCheckFrom(
+      io(async () => {
+        throw new Error("db down");
+      }),
+      WORK_ITEM_STOP_CHECK_TIMEOUT_MS,
+      Date.now,
+      fake.log,
+    );
+    await check();
+    await check();
+    expect(fake.warnings).toHaveLength(1);
+  });
+
+  test("masks a secret in the error", async () => {
+    const fake = recordingLogger();
+    const check = workItemStopCheckFrom(
+      io(async () => {
+        throw new Error(`db down ghp_${"a".repeat(36)}`);
+      }),
+      WORK_ITEM_STOP_CHECK_TIMEOUT_MS,
+      Date.now,
+      fake.log,
+    );
+    await check();
+    expect(fake.warnings.join("")).not.toContain("ghp_");
+  });
+
+  test("is not left for a read that works", async () => {
+    const fake = recordingLogger();
+    const check = workItemStopCheckFrom(
+      io(async () => null),
+      WORK_ITEM_STOP_CHECK_TIMEOUT_MS,
+      Date.now,
+      fake.log,
+    );
+    await check();
+    expect(fake.warnings).toEqual([]);
+  });
+
+  test("is left once for a client that cannot be made", async () => {
+    const fake = recordingLogger();
+    const check = defaultWorkItemStopCheck(
+      7,
+      "factory",
+      () => {
+        throw new Error("no client");
+      },
+      fake.log,
+    );
+    await check();
+    await check();
+    expect(fake.warnings).toHaveLength(1);
   });
 });
 

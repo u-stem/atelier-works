@@ -333,6 +333,18 @@ describe("runAllowedCheckCommands while a person has cancelled the work item", (
     expect(fake.calls.length).toBe(0);
   });
 
+  test("reads the work item again before it explains a stop that only the stop-all seemed to cause", async () => {
+    let reads = 0;
+    const { results } = runWithItem([], ["true"], {
+      all: async () => true,
+      item: async () => {
+        reads += 1;
+        return reads > 1;
+      },
+    });
+    expect((await results)[0]?.output).toBe(CHECK_WORK_ITEM_STOPPED_NOTE);
+  });
+
   test("does not stop when the work item check throws", async () => {
     const { fake, results } = runWithItem([ok()], ["true"], {
       item: async () => {

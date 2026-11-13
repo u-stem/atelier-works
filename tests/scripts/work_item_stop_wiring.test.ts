@@ -9,8 +9,14 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
+import { IMPLEMENT_ISSUE_CLOSED_NOTE } from "../../f/factory/lib/implement_finish_support.ts";
+import { holdsImplementLease } from "../../f/factory/lib/implement_launch_support.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import { OPERATOR_CANCELLED_NOTE } from "../../f/factory/lib/operator_cancel.ts";
+import {
+  checkPipelineLease,
+  holdsPipelineLease,
+} from "../../f/factory/lib/pipeline_lease.ts";
 import type { FailureRecord, WorkItem } from "../../f/factory/lib/types.ts";
 import {
   type FlowFailureDeps,
@@ -130,35 +136,50 @@ function callsOf(text: string, name: RegExp): string[][] {
   return calls;
 }
 
+/** 空白を除き、閉じ括弧の前の末尾のカンマを除く。整形の違いに依らず、式の並びを比べるために使う。 */
+function squash(text: string): string {
+  return text.replace(/\s+/g, "").replace(/,([)\]}])/g, "$1");
+}
+
 describe("on_error_flow.ts", () => {
   const source = read(ON_ERROR_FLOW);
   const code = codeOf(source);
   const body = code.slice(code.indexOf("async function handleFlowFailure("));
 
-  test("decides on a person's cancel only through shouldSilenceFailure", () => {
+  test("decides on a person's cancel only through isFailureSilenced", () => {
     expect(
       [
         "isOperatorCancelledNote",
         "OPERATOR_CANCELLED_NOTE",
         "isWorkItemStopped",
+        "shouldSilenceFailure",
+        "NoteRead",
       ]
         .filter((name) => code.includes(name))
         .sort(),
     ).toEqual([]);
   });
 
-  test("calls shouldSilenceFailure once", () => {
-    expect(countOf(body, "shouldSilenceFailure(")).toBe(1);
+  test("has the exact condition of the early return", () => {
+    expect(squash(source)).toContain(
+      squash(
+        "if (item !== null && (await isFailureSilenced(item, input.rootJobId, deps.readCancelNote, log))) {",
+      ),
+    );
+  });
+
+  test("calls isFailureSilenced once", () => {
+    expect(countOf(body, "isFailureSilenced(")).toBe(1);
   });
 
   test("leaves the log of the failure before the early return", () => {
     expect(positionOf(body, 'log.error("flow failed"')).toBeLessThan(
-      positionOf(body, "shouldSilenceFailure("),
+      positionOf(body, "isFailureSilenced("),
     );
   });
 
   test("returns early before the failure is recorded", () => {
-    expect(positionOf(body, "shouldSilenceFailure(")).toBeLessThan(
+    expect(positionOf(body, "isFailureSilenced(")).toBeLessThan(
       positionOf(body, "deps.recordFailure("),
     );
   });
@@ -168,17 +189,10 @@ describe("on_error_flow.ts", () => {
     expect(countOf(before, "return")).toBe(1);
   });
 
-  test("reads the note only for a cancelled work item", () => {
-    expect(body).toMatch(/item\.status === "cancelled"/);
-  });
-
-  test("goes on to the notification when the note cannot be read", () => {
-    expect(body).toContain('kind: "unreadable"');
-  });
-
-  test("hands the raw values to the judgement", () => {
-    const [args] = callsOf(body, /shouldSilenceFailure\(/g);
-    expect(args?.join("")).toMatch(/rowFlowJobId/);
+  test("reads the note of the cancel in the main with the latest transition into the cancelled state", () => {
+    expect(countOf(squash(source), 'latestStatusEvent(id,"cancelled")')).toBe(
+      1,
+    );
   });
 });
 
@@ -344,6 +358,18 @@ describe("handleFlowFailure for a work item that a person did not cancel", () =>
     expect(fake.calls).toEqual(["recordFailure", "notify"]);
   });
 
+  test("records and notifies when the work item has no recorded job id", async () => {
+    const fake = fakeDeps({ item: workItem({ flow_job_id: null }) });
+    await handleFlowFailure(fake.deps, input());
+    expect(fake.calls).toEqual(["recordFailure", "notify"]);
+  });
+
+  test("records and notifies when the root job id is unknown", async () => {
+    const fake = fakeDeps();
+    await handleFlowFailure(fake.deps, input({ rootJobId: null }));
+    expect(fake.calls).toEqual(["recordFailure", "notify"]);
+  });
+
   test("records and notifies a pipeline run that the work item has not recorded", async () => {
     const fake = fakeDeps({ item: workItem({ flow_job_id: null }) });
     await handleFlowFailure(fake.deps, input({ path: "f/factory/pipeline" }));
@@ -360,18 +386,15 @@ describe("handleFlowFailure for a work item that a person did not cancel", () =>
 // ---- 動いているClaudeと検査を止める確認 ----
 
 describe("the checks that stop a running Claude and a running check", () => {
-  test("is not given by any file in f/ as workItemStopCheck", () => {
-    const given = F_SOURCES.filter((path) =>
-      /\bworkItemStopCheck\s*:/.test(codeOf(read(path))),
+  // 上書きの名前は、2つのファイルだけが持つ。省略記法、スプレッド、別の変数での受け渡しも、名前を書くので、ここで見つかる。
+  test("have their names only in claude.ts and check_runner.ts", () => {
+    const named = F_FILES.filter((path) =>
+      /\b(?:workItemStopCheck|workItemCheck)\b/.test(read(path)),
     );
-    expect(given).toEqual([]);
-  });
-
-  test("is not given by any file in f/ as workItemCheck", () => {
-    const given = F_SOURCES.filter((path) =>
-      /\bworkItemCheck\s*:/.test(codeOf(read(path))),
-    );
-    expect(given).toEqual([]);
+    expect(named).toEqual([
+      "f/factory/lib/check_runner.ts",
+      "f/factory/lib/claude.ts",
+    ]);
   });
 
   test("is made by runClaude from the work item id of its own options", () => {
@@ -404,21 +427,24 @@ describe("the calls of runAllowedCheckCommands", () => {
     ]);
   });
 
-  test("pass the work item id in every direct call", () => {
-    const withoutId = callers.flatMap((path) =>
-      callsOf(codeOf(read(path)), /\brunAllowedCheckCommands\(/g)
-        .filter((args) => !/\bworkItemId\b/.test(args.slice(7).join(",")))
-        .map(() => path),
+  test("pass exactly the work item id of the step in every direct call", () => {
+    const args = callers.flatMap((path) =>
+      callsOf(codeOf(read(path)), /\brunAllowedCheckCommands\(/g).map(
+        (call) => `${path}: ${squash(call[7] ?? "")}`,
+      ),
     );
-    expect(withoutId).toEqual([]);
+    expect(args).toEqual([
+      "f/factory/steps/implement_verify.ts: {workItemId:work_item_id}",
+      "f/factory/steps/pr_fix_verify.ts: {workItemId:work_item_id}",
+      "f/factory/steps/pr_fix_verify.ts: {workItemId:work_item_id}",
+    ]);
   });
 
-  test("pass the work item id in the call through the installer deps", () => {
+  test("pass exactly the work item id of the installer deps in the call through them", () => {
     const code = codeOf(read("f/factory/steps/dependabot_prepare.ts"));
-    const calls = callsOf(code, /\brunChecks\(/g);
     expect(
-      calls.filter((args) => !/\bworkItemId\b/.test(args.slice(7).join(","))),
-    ).toEqual([]);
+      callsOf(code, /\brunChecks\(/g).map((call) => squash(call[7] ?? "")),
+    ).toEqual(["{workItemId:deps.workItemId}"]);
   });
 
   test("use workItemId: null only in the files that this test allows", () => {
@@ -479,7 +505,7 @@ describe("the calls that move a work item into the cancelled state", () => {
       "f/factory/steps/design_prepare.ts: ".concat(
         '"issue closed before design started"',
       ),
-      "f/factory/steps/implement_finish.ts: note",
+      "f/factory/steps/implement_finish.ts: IMPLEMENT_ISSUE_CLOSED_NOTE",
       "f/factory/steps/investigate_generate.ts: ".concat(
         '"investigation disabled"',
       ),
@@ -491,6 +517,49 @@ describe("the calls that move a work item into the cancelled state", () => {
         '"issue closed before pipeline started"',
       ),
     ]);
+  });
+});
+
+describe("the cancel of the implement flow", () => {
+  const finish = squash(read("f/factory/steps/implement_finish.ts"));
+
+  test("takes no note from the argument of the step", () => {
+    expect(finish).toContain('if(action.kind==="cancel")returncancel();');
+  });
+
+  test("writes the fixed note", () => {
+    expect(finish).toContain("constcancel=async()=>");
+  });
+
+  test("has a note that is a fixed text of its own", () => {
+    expect(IMPLEMENT_ISSUE_CLOSED_NOTE).toBe(
+      "issue closed before implementation started",
+    );
+  });
+
+  test("has the note that the prepare step gives as its reason", () => {
+    expect(read("f/factory/steps/implement_prepare.ts")).toContain(
+      `"${IMPLEMENT_ISSUE_CLOSED_NOTE}"`,
+    );
+  });
+});
+
+// ---- 取り消した行は、各stepのリースを持たない ----
+// 中止の後に各stepが書き込まないことの根拠は、リースの判定が取り消した行で偽になることである。
+
+describe("a work item that a person cancelled", () => {
+  const CANCELLED = { status: "cancelled", flow_job_id: ROOT_JOB } as const;
+
+  test("does not hold the lease of the pipeline and the design flows", () => {
+    expect(holdsPipelineLease(CANCELLED, ROOT_JOB)).toBe(false);
+  });
+
+  test("does not hold the lease of the implement flow", () => {
+    expect(holdsImplementLease(CANCELLED, ROOT_JOB)).toBe(false);
+  });
+
+  test("makes the pipeline lease check give up at once", () => {
+    expect(checkPipelineLease(CANCELLED, ROOT_JOB, 0, 60_000)).toBe("lost");
   });
 });
 
@@ -507,6 +576,7 @@ describe("the library that reads the work item", () => {
 
   test("imports only the modules that this test lists", () => {
     expect(importSpecifiers(read(WORK_ITEM_STOP))).toEqual([
+      "./log.ts",
       "./operator_cancel.ts",
       "./pipeline_lease.ts",
       "./stop_all.ts",

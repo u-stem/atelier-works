@@ -314,3 +314,115 @@ describe("mergeSignals", () => {
     expect(merged.aborted).toBe(true);
   });
 });
+
+describe("boundedCheckFrom that keeps a true answer that came late", () => {
+  /** 1回目の読み取りだけが`delayMs`の後に真を返す。2回目以降は偽を返す。 */
+  function lateTrueOnce(delayMs: number) {
+    let reads = 0;
+    return {
+      read: () => {
+        reads += 1;
+        if (reads > 1) return Promise.resolve(false);
+        return new Promise<boolean>((resolve) => {
+          setTimeout(() => {
+            resolve(true);
+          }, delayMs);
+        });
+      },
+      reads: () => reads,
+    };
+  }
+
+  test("answers not stopped while the read has not finished", async () => {
+    const fake = lateTrueOnce(40);
+    const check = boundedCheckFrom(fake.read, 10, Date.now, {
+      keepLateTrue: true,
+    });
+    expect(await check()).toBe(false);
+  });
+
+  test("answers stopped at the next call once the late read answered true", async () => {
+    const fake = lateTrueOnce(30);
+    const check = boundedCheckFrom(fake.read, 10, Date.now, {
+      keepLateTrue: true,
+    });
+    await check();
+    await Bun.sleep(60);
+    expect(await check()).toBe(true);
+  });
+
+  test("keeps answering stopped after that", async () => {
+    const fake = lateTrueOnce(30);
+    const check = boundedCheckFrom(fake.read, 10, Date.now, {
+      keepLateTrue: true,
+    });
+    await check();
+    await Bun.sleep(60);
+    await check();
+    expect(await check()).toBe(true);
+  });
+
+  test("does not read again once it knows the answer", async () => {
+    const fake = lateTrueOnce(30);
+    const check = boundedCheckFrom(fake.read, 10, Date.now, {
+      keepLateTrue: true,
+    });
+    await check();
+    await Bun.sleep(60);
+    await check();
+    expect(fake.reads()).toBe(1);
+  });
+
+  test("does not keep a false answer that came late", async () => {
+    let reads = 0;
+    const check = boundedCheckFrom(
+      () => {
+        reads += 1;
+        const answer = reads > 1;
+        return new Promise<boolean>((resolve) => {
+          setTimeout(
+            () => {
+              resolve(answer);
+            },
+            reads === 1 ? 30 : 0,
+          );
+        });
+      },
+      10,
+      Date.now,
+      { keepLateTrue: true },
+    );
+    await check();
+    await Bun.sleep(60);
+    expect(await check()).toBe(true);
+  });
+
+  test("forgets a late true answer when the option is off", async () => {
+    const fake = lateTrueOnce(30);
+    const check = boundedCheckFrom(fake.read, 10);
+    await check();
+    await Bun.sleep(60);
+    expect(await check()).toBe(false);
+  });
+
+  test("the check of the stop-all forgets a late true answer", async () => {
+    let reads = 0;
+    const check = stopCheckFrom(
+      {
+        readVariable: () => {
+          reads += 1;
+          if (reads > 1) return Promise.resolve("");
+          return new Promise<string | null>((resolve) => {
+            setTimeout(() => {
+              resolve(PLACED);
+            }, 30);
+          });
+        },
+      },
+      10,
+    );
+    await check();
+    await Bun.sleep(60);
+    expect(await check()).toBe(false);
+  });
+});
