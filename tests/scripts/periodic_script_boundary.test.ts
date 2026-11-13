@@ -16,6 +16,7 @@ import {
   mentionsTag,
   nonLiteralVariableReads,
   parseYamlFile,
+  relative,
   scan,
   scriptTimeoutSeconds,
   secretsOutside,
@@ -41,13 +42,13 @@ import {
 //   defaultのworkerの中では、そのworkerが止まると動かないためである。
 // - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
 // - importでたどれるソースが読む外部のパッケージは、windmill-clientだけである。
-//   パッケージの中身は走査が見ないので、ほかのパッケージを足すと、上の禁止をすり抜けられるためである。
+//   パッケージの中身は走査が見ないので、ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるためである。
 // - 走査でたどれない形(Console用workerの境界テストと同じ)が無い。
 //
 // 走査の方法と限界は、`console_worker_boundary.test.ts`の先頭にある。
 // tagの走査が見ないもの: 式で組み立てたtag、フローの入力で渡すtag、Windmillの画面で付けたtag。
 // 依存の走査が見ないもの: 文字列で組み立てた呼び出し、`eval`と`Function`、注入された関数の中身、
-// 第三者パッケージ(execa、fs-extra、zxなど)の中身。
+// windmill-clientの中身。
 // コードがAPIで渡すtag(`JobService.run*`の`tag`)は、下の「コードが渡すtag」のテストが、現在の0件を保つ。
 // resourceの中身で解決されるsecret(`getResource`が返す値の`$var:`)は、走査が見ない。
 // これらはコードのレビューで見る。tag periodicを最初に付けるPRでは、そのscriptが読むresourceの中身も確かめる。
@@ -108,14 +109,23 @@ const CLIENT_PACKAGE = /^windmill-client(?:@[\w.+-]+)?$/;
  * 相対のimportと`node:`のモジュールは数えない。`node:`の付かない組み込みの名前(`fs`など)は数える。
  */
 function externalPackageImports(source: string): string[] {
-  void source;
-  return [];
+  return transpilerImports(source).filter(
+    (path) =>
+      !path.startsWith(".") &&
+      !path.startsWith("node:") &&
+      !CLIENT_PACKAGE.test(path),
+  );
 }
 
 /** `entries`がimportでたどれるファイルのうち、windmill-client以外の外部のパッケージを読むもの。 */
 function filesWithExternalPackages(entries: readonly string[]): string[] {
-  void entries;
-  return [];
+  const found = new Set<string>();
+  for (const entry of entries) {
+    for (const [file, source] of sourcesReachableFrom(entry)) {
+      if (externalPackageImports(source).length > 0) found.add(relative(file));
+    }
+  }
+  return [...found].sort();
 }
 
 async function scheduledScripts(): Promise<string[]> {
