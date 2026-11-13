@@ -121,10 +121,7 @@ const SKILL_DIRECTORY = /^(\.claude\/skills\/[^/]+)\//;
  * 全スキルの文書を、パスを変数で組み立てて読むテスト。
  * パスの文字列では`git grep`に当たらないので、スキルの文書が変わったときは固定で足す。
  */
-const SKILL_READING_TESTS = [
-  "tests/lib/commit_message_style.test.ts",
-  "tests/scripts/claude-config.test.ts",
-];
+const SKILL_READING_TESTS = ["tests/scripts/claude-config.test.ts"];
 
 /**
  * 差分のMarkdownのパスを書いているテストファイルを集める。

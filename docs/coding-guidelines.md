@@ -212,6 +212,12 @@ Windmillの資産の配置、secretとconfigの取得、`//native`を使わな�
   食い違いは、`test:db`を待たず、型検査か単体テストで見つかる。
 - 別のテーブルへ広げるときは、型の主張(`as`)を使わない同じ形で書く。
 
+### 適用済みのmigration
+
+適用済みのmigrationは書き換えず、変更は新しいmigrationで足す。
+書き換えは、新規環境と復元にだけ効き、本番とずれるためである。
+migrationの文面はテストで固定しないので、`test:db`が拾うのは振る舞いの変化だけである。
+
 ## 検証コマンド
 
 `mise run check`は、`lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する。
@@ -235,7 +241,7 @@ gitのpre-pushは全体の`check`を実行しない。
   そのため、削除された`.ts`、`.tsx`、`.js`、`.mjs`が1つでもあれば、全件を実行する。
   削除された`.md`と、`console/`の下の削除は、全件にしない。
   差分のMarkdown(削除と名前の変更を含む)のパスを`tests/`の中に書いているテストも、`git grep`で集めて実行する。
-  スキルの文書が含まれるときは、全スキルを読む`tests/scripts/claude-config.test.ts`と`tests/lib/commit_message_style.test.ts`も足す。
+  スキルの文書が含まれるときは、全スキルを読む`tests/scripts/claude-config.test.ts`も足す。
   パスを変数で組み立てるテストは、`git grep`に当たらないためである。
   メタデータのフックが作るファイルは、対応するコードが同じ差分にあるときだけ、全件の判定から外す。
   `<名前>.script.yaml`と`<名前>.script.lock`は`<名前>.ts`があるとき、`wmill-lock.yaml`は`f/`の下の`.ts`があるときである。

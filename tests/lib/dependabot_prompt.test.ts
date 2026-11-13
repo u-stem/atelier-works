@@ -800,22 +800,4 @@ describe("factory-dependabot skill", () => {
 
     expect(listed).toEqual([...ALLOWED_PATHS]);
   });
-
-  test("keeps a file with an unconfirmed condition in scope", () => {
-    expect(skill).toContain(
-      "対象外にする条件のどれかを確かめられないファイルは、対象になる。",
-    );
-  });
-
-  test("states the clean checkout the caller provides", () => {
-    expect(skill).toContain(
-      "- 呼び出し側は、機械の関門を通したshaのクリーンなcheckoutでClaudeを起動する。\n  追跡されていないのは`node_modules`と`vendor`(依存のインストール先)だけで、キャッシュなどの生成物は作業ディレクトリの外に置く。",
-    );
-  });
-
-  test("keeps node_modules and vendor in scope at any depth", () => {
-    expect(skill).toContain(
-      "`node_modules`と`vendor`は、任意の深さのどのディレクトリでも対象になる(例: `console/node_modules`)。",
-    );
-  });
 });

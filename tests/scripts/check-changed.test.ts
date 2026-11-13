@@ -342,20 +342,17 @@ describe("collectMarkdownTests", () => {
     ]);
   });
 
-  test("adds the tests that read every skill when a skill document changed", () => {
+  test("adds the test that reads every skill when a skill document changed", () => {
     expect(
       collectMarkdownTests(
         [".claude/skills/hold/SKILL.md"],
         grepFrom({}),
         allFiles,
       ),
-    ).toEqual([
-      "tests/lib/commit_message_style.test.ts",
-      "tests/scripts/claude-config.test.ts",
-    ]);
+    ).toEqual(["tests/scripts/claude-config.test.ts"]);
   });
 
-  test("adds the tests that read every skill when a skill document was deleted", () => {
+  test("adds the test that reads every skill when a skill document was deleted", () => {
     // 削除されたスキルの文書も、同じ一覧で渡される。
     expect(
       collectMarkdownTests(
@@ -363,37 +360,31 @@ describe("collectMarkdownTests", () => {
         grepFrom({}),
         allFiles,
       ),
-    ).toHaveLength(2);
+    ).toEqual(["tests/scripts/claude-config.test.ts"]);
   });
 
   test("does not add a skill-reading test that does not exist", () => {
-    const onlyConfig = (path: string) =>
-      path === "tests/scripts/claude-config.test.ts";
-
     expect(
       collectMarkdownTests(
         [".claude/skills/hold/SKILL.md"],
         grepFrom({}),
-        onlyConfig,
+        noFiles,
       ),
-    ).toEqual(["tests/scripts/claude-config.test.ts"]);
+    ).toEqual([]);
   });
 
-  test("finds the skill-reading tests at their real paths", () => {
-    // 固定の2つのパスが改名されると、黙って外れる。実在することをここで確かめる。
+  test("finds the skill-reading test at its real path", () => {
+    // 固定のパスが改名されると、黙って外れる。実在することをここで確かめる。
     expect(
       collectMarkdownTests(
         [".claude/skills/hold/SKILL.md"],
         grepFrom({}),
         existsSync,
       ),
-    ).toEqual([
-      "tests/lib/commit_message_style.test.ts",
-      "tests/scripts/claude-config.test.ts",
-    ]);
+    ).toEqual(["tests/scripts/claude-config.test.ts"]);
   });
 
-  test("does not add the skill-reading tests for a document outside the skills", () => {
+  test("does not add the skill-reading test for a document outside the skills", () => {
     expect(
       collectMarkdownTests(["docs/setup.md"], grepFrom({}), allFiles),
     ).toEqual([]);
