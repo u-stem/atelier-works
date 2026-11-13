@@ -104,6 +104,7 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/investigate_gate.ts",
   "f/factory/lib/job_ids.ts",
   "f/factory/lib/job_tmp.ts",
+  "f/factory/lib/jst.ts",
   "f/factory/lib/log.ts",
   "f/factory/lib/main_ci_support.ts",
   "f/factory/lib/model_text.ts",

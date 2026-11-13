@@ -155,7 +155,7 @@ const CI_DENIED_DIRECTORIES: readonly string[] = [
  * CI回で常に拒否するFactoryの安全装置の名前の前方一致(小文字)。
  * 拡張子の違うファイル(`.ts`、`.script.yaml`、`.script.lock`)をまとめて拒否するため、
  * ステムで終わらせる。
- * Claudeの実行、保護パスの判定、ログの機密保持、作業ディレクトリ、検査の隔離、pr_fixのstep、
+ * Claudeの実行、保護パスの判定、ログの機密保持、日本時間の整形とUTCとの差(`jst`)、作業ディレクトリ、検査の隔離、pr_fixのstep、
  * CI回のログの整形・検査・分類・プロンプト・パスの検査、PRとmainのCIの判定と起動、
  * レビュー回に親の設計書を渡すかの判定(`pr_fix_design`)、
  * Factoryがブランチを引き継ぐ作業項目の状態の述語と照合(`branch_hold`)、
@@ -180,6 +180,7 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/untrusted_arg.",
   "f/factory/lib/protected_paths.",
   "f/factory/lib/log.",
+  "f/factory/lib/jst.",
   "f/factory/lib/workspace.",
   "f/factory/lib/check_sandbox.",
   "f/factory/lib/check_runner.",

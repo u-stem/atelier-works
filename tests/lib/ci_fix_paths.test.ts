@@ -244,6 +244,7 @@ describe("protected paths", () => {
     "f/factory/lib/claude.script.yaml",
     "f/factory/lib/protected_paths.ts",
     "f/factory/lib/log.ts",
+    "f/factory/lib/jst.ts",
     "f/factory/lib/workspace.ts",
     "f/factory/lib/check_sandbox.ts",
     "f/factory/steps/pr_workflow_support.ts",
