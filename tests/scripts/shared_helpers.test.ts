@@ -42,24 +42,35 @@ type BodyShape = {
   readonly body: string;
 };
 
+// 整形で改行や括弧が入っても拾えるよう、字句の間はどれも空白と改行を許す。
+const ERROR_TEXT_EXPRESSION = String.raw`ARG\s+instanceof\s+Error\s*\?\s*ARG\.message\s*:\s*String\(\s*ARG\s*\)`;
+
 /** 例外の文を取り出す本体。マスクの有無を問わない。 */
 const ERROR_TEXT_SHAPE: BodyShape = {
   returnType: "string",
-  body: String.raw`(?:maskSecrets\(\s*)?ARG instanceof Error \? ARG\.message : String\(ARG\)\s*\)?`,
+  body: String.raw`(?:maskSecrets\(\s*${ERROR_TEXT_EXPRESSION}\s*,?\s*\)|${ERROR_TEXT_EXPRESSION})`,
 };
 
 /** 配列でも`null`でもないオブジェクトを判定する本体。 */
 const RECORD_SHAPE: BodyShape = {
-  returnType: String.raw`\1 is [^{]+`,
-  body: String.raw`typeof ARG === "object" && ARG !== null && !Array\.isArray\(ARG\)`,
+  returnType: String.raw`\1\s+is\s+[^{=]+?`,
+  body: String.raw`typeof\s+ARG\s*===\s*"object"\s*&&\s*ARG\s*!==\s*null\s*&&\s*!Array\.isArray\(\s*ARG\s*\)`,
 };
 
-/** `source`が、`shape`の式だけを返す関数を、名前を問わず定義しているか。 */
+/**
+ * `source`が、`shape`の式だけを返す関数を、名前を問わず定義しているか。
+ * 関数の宣言と、`const`に入れたアロー関数(式だけの本体と、`return`だけのブロック)を見る。
+ * 式は括弧で包まれていてもよい。
+ */
 function definesBody(source: string, shape: BodyShape): boolean {
   const body = shape.body.replaceAll("ARG", String.raw`\1`);
-  return new RegExp(
-    String.raw`function\s+\w+\s*\(\s*(\w+)\s*:\s*unknown\s*\)\s*:\s*${shape.returnType}\s*\{\s*return\s+${body}\s*;\s*\}`,
-  ).test(source);
+  const returned = String.raw`(?:\(\s*${body}\s*\)|${body})`;
+  const block = String.raw`\{\s*return\s+${returned}\s*;?\s*\}`;
+  const parameter = String.raw`\(\s*(\w+)\s*:\s*unknown\s*,?\s*\)\s*:\s*${shape.returnType}\s*`;
+  return [
+    String.raw`function\s+\w+\s*${parameter}${block}`,
+    String.raw`const\s+\w+\s*=\s*${parameter}=>\s*(?:${block}|${returned})`,
+  ].some((pattern) => new RegExp(pattern).test(source));
 }
 
 /** `shape`の本体の関数を定義しているファイル。 */
