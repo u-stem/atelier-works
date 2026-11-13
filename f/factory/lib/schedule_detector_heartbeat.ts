@@ -7,7 +7,7 @@
 
 import type { ListCompletedJobsData } from "windmill-client@1.817.0";
 import type { NotifyEvent } from "./discord.ts";
-import { type Logger, maskSecrets } from "./log.ts";
+import { errorMessage, type Logger } from "./log.ts";
 import {
   baselineRunsQuery,
   findBaselineRun,
@@ -98,10 +98,6 @@ export type ScheduleDetectorCheckDeps = {
   readonly timeoutMs?: number;
 };
 
-function errorText(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 /** 見る側のscriptのscheduleの実行が、`sinceMs`以降に開始して何回完了したかを返す。読めなければ`null`。 */
 async function countWatchRuns(
   deps: ScheduleDetectorCheckDeps,
@@ -127,7 +123,7 @@ async function countWatchRuns(
     ).length;
   } catch (err) {
     deps.log.warn("could not count the runs of the watch script", {
-      error: errorText(err),
+      error: errorMessage(err),
     });
     return null;
   }
@@ -159,7 +155,7 @@ async function readSchedule(
     return readScheduleFacts(await deps.getSchedule(SCHEDULE_DETECTOR_PATH));
   } catch (err) {
     deps.log.warn("could not read the schedule of the detector", {
-      error: errorText(err),
+      error: errorMessage(err),
     });
     return null;
   }
@@ -184,7 +180,7 @@ async function recordAndNotify(
     }
   } catch (err) {
     deps.log.warn("could not record the schedule detector problem", {
-      error: errorText(err),
+      error: errorMessage(err),
     });
   }
 }
@@ -197,7 +193,7 @@ async function resolveRecovered(
     await deps.resolveNotices(NOTICE_KIND, SCHEDULE_DETECTOR_NOTICE_PREFIX);
   } catch (err) {
     deps.log.warn("could not resolve the schedule detector problem", {
-      error: errorText(err),
+      error: errorMessage(err),
     });
   }
 }
@@ -232,7 +228,7 @@ async function checkOnce(
     response = await deps.listCompletedJobs(baselineRunsQuery(deps.workspace));
   } catch (err) {
     deps.log.warn("could not list the runs of the schedule detector", {
-      error: errorText(err),
+      error: errorMessage(err),
     });
     return "unknown";
   }

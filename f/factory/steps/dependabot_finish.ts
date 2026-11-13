@@ -51,7 +51,7 @@ import {
   type HoldRow,
   listActiveHolds,
 } from "../lib/holds.ts";
-import { logger, maskSecrets } from "../lib/log.ts";
+import { errorMessage, logger, maskSecrets } from "../lib/log.ts";
 import {
   repoOwnerGateDeps,
   repoOwnerStopReason,
@@ -387,10 +387,6 @@ export type DependabotFinishResult = {
   readonly reason: string | null;
 };
 
-function errorText(error: unknown): string {
-  return maskSecrets(error instanceof Error ? error.message : String(error));
-}
-
 // ---- 本体 ----
 
 /**
@@ -516,7 +512,7 @@ export async function runDependabotFinish(
   } catch (error) {
     deps.warn("failed to remove the dependabot worktree", {
       work_item_id: workItemId,
-      error: errorText(error),
+      error: errorMessage(error),
     });
   }
 
@@ -546,7 +542,7 @@ export async function runDependabotFinish(
     } catch (error) {
       deps.warn("failed to re-read the pull request", {
         work_item_id: workItemId,
-        error: errorText(error),
+        error: errorMessage(error),
       });
       return toHuman(
         dependabotReason("finish", "the pull request could not be re-read"),
@@ -632,7 +628,7 @@ export async function runDependabotFinish(
           work_item_id: workItemId,
           head_sha: target.headSha,
           merge_sha: mergeSha,
-          error: errorText(error),
+          error: errorMessage(error),
         });
         return result("merged", null, DEPENDABOT_DONE_NOTE.merged);
       }
@@ -655,7 +651,7 @@ export async function runDependabotFinish(
     } catch (error) {
       deps.warn("failed to re-read the base branch", {
         work_item_id: workItemId,
-        error: errorText(error),
+        error: errorMessage(error),
       });
       return toHuman(
         dependabotReason("finish", "the base branch could not be re-read"),
@@ -673,7 +669,7 @@ export async function runDependabotFinish(
       } catch (error) {
         deps.warn("failed to re-read the group setting", {
           work_item_id: workItemId,
-          error: errorText(error),
+          error: errorMessage(error),
         });
         return toHuman(
           dependabotReason(
@@ -736,7 +732,7 @@ export async function runDependabotFinish(
       // 調べたheadのままマージ済みと読めたときだけマージとして記録する。マージは再送しない。
       deps.warn("merge request failed", {
         work_item_id: workItemId,
-        error: errorText(error),
+        error: errorMessage(error),
       });
       let after: PullRequest | null = null;
       try {
@@ -744,7 +740,7 @@ export async function runDependabotFinish(
       } catch (readError) {
         deps.warn("failed to re-read the pull request after the merge", {
           work_item_id: workItemId,
-          error: errorText(readError),
+          error: errorMessage(readError),
         });
       }
       if (after?.merged === true && after.headSha === target.headSha) {
@@ -778,7 +774,7 @@ export async function runDependabotFinish(
     } catch (error) {
       deps.warn("failed to post the dependabot findings", {
         work_item_id: workItemId,
-        error: errorText(error),
+        error: errorMessage(error),
       });
       return toHuman(
         dependabotReason("finish", "the findings could not be posted"),
@@ -790,7 +786,7 @@ export async function runDependabotFinish(
       } catch (error) {
         deps.warn("failed to add the fix label", {
           work_item_id: workItemId,
-          error: errorText(error),
+          error: errorMessage(error),
         });
         return toHuman(
           dependabotReason("finish", "the fix label could not be added"),
@@ -836,7 +832,7 @@ export async function runDependabotFinish(
   } catch (error) {
     deps.warn("failed to post the dependabot findings", {
       work_item_id: workItemId,
-      error: errorText(error),
+      error: errorMessage(error),
     });
     return toHuman(
       dependabotReason(
@@ -938,7 +934,7 @@ export async function main(
           );
         } catch (error) {
           log.warn("failed to read the discord webhook url", {
-            error: errorText(error),
+            error: errorMessage(error),
           });
         }
       },

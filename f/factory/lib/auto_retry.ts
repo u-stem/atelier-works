@@ -36,7 +36,7 @@ import {
   IMPLEMENT_FLOW_PATH,
   parseFlowJobId,
 } from "./implement_launch_support.ts";
-import { type Logger, maskSecrets } from "./log.ts";
+import { errorMessage, type Logger, maskSecrets } from "./log.ts";
 import type { WorkItemStatus } from "./types.ts";
 
 /** 自動の再開の遷移の注記の先頭。再開の回数をこの注記で数える。 */
@@ -161,10 +161,6 @@ export type AutoRetryResult = {
   readonly failed: number;
 };
 
-function messageOf(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 type Outcome = "restarted" | "skipped" | "failed";
 
 /** PRのURL(`https://github.com/<owner>/<repo>/pull/<n>`)の末尾の番号。形が合わなければ空の一覧を返す。 */
@@ -238,7 +234,7 @@ async function retryOne(
       "runFlowAsync",
     );
   } catch (err) {
-    const reason = `retry_stale_image: ${plan.flowPath} could not be started: ${messageOf(err)}`;
+    const reason = `retry_stale_image: ${plan.flowPath} could not be started: ${errorMessage(err)}`;
     const movedBack = await deps.rollBack(candidate, plan, reason);
     deps.log.warn("auto retry could not start the flow", {
       work_item_id: candidate.id,
@@ -273,7 +269,7 @@ export async function retryStaleImageItems(
     candidates = await deps.listCandidates();
   } catch (err) {
     deps.log.warn("auto retry candidates could not be listed", {
-      error: messageOf(err),
+      error: errorMessage(err),
     });
     return { restarted: 0, skipped: 0, failed: 0 };
   }
@@ -286,7 +282,7 @@ export async function retryStaleImageItems(
       counts.failed += 1;
       deps.log.warn("auto retry failed for a work item", {
         work_item_id: candidate.id,
-        error: messageOf(err),
+        error: errorMessage(err),
       });
     }
   }

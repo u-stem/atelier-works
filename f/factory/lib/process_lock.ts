@@ -20,7 +20,7 @@ import {
   resolveCheckPool,
   restoreCheckOwnershipFromEnv,
 } from "./check_sandbox.ts";
-import { escapeReasonSeparator, maskSecrets } from "./log.ts";
+import { errorMessage, escapeReasonSeparator, maskSecrets } from "./log.ts";
 import type { CommandResult, CommandRunner } from "./workspace.ts";
 
 /** workerのイメージ(Debian)のutil-linuxが入れるflock。PATHに頼らず絶対パスで呼ぶ。 */
@@ -1102,10 +1102,6 @@ export type OrphanLockOutcome = {
   readonly detail: string | null;
 };
 
-function errorText(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 /** worktreeが無いロックファイル1つを、条件を満たせば消す。候補でなければnullを返す。 */
 async function removeOrphanLockFile(
   lock: WorktreeLock,
@@ -1148,7 +1144,11 @@ export async function removeOrphanLockFiles(
       names = await deps.listDir(realDir);
     } catch (err) {
       if (!isGoneError(err))
-        outcomes.push({ path: dir, result: "failed", detail: errorText(err) });
+        outcomes.push({
+          path: dir,
+          result: "failed",
+          detail: errorMessage(err),
+        });
       continue;
     }
     for (const name of [...names].sort()) {
@@ -1165,7 +1165,7 @@ export async function removeOrphanLockFiles(
         outcomes.push({
           path: lockPath,
           result: "failed",
-          detail: errorText(err),
+          detail: errorMessage(err),
         });
       }
     }

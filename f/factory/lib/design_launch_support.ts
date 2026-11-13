@@ -4,7 +4,7 @@
 // ここは起動とジョブIDの記録、失敗したときの`needs_human`への戻しを受け持つ。
 
 import { parseFlowJobId } from "./implement_launch_support.ts";
-import { maskSecrets } from "./log.ts";
+import { errorMessage } from "./log.ts";
 import type { WorkItem } from "./types.ts";
 
 /**
@@ -73,10 +73,6 @@ export type DesignLaunchDeps = {
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
-function messageOf(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 /** `action`を実行し、失敗してもログに残すだけで例外を投げない。 */
 async function attempt(
   deps: DesignLaunchDeps,
@@ -86,7 +82,7 @@ async function attempt(
   try {
     await action();
   } catch (err) {
-    deps.log(`startDesign: ${label} failed`, { error: messageOf(err) });
+    deps.log(`startDesign: ${label} failed`, { error: errorMessage(err) });
   }
 }
 
@@ -108,7 +104,7 @@ async function rollBackToNeedsHuman(
     leaseFree = await deps.moveToNeedsHuman(DESIGN_START_FAILED_REASON);
   } catch (moveErr) {
     deps.log("startDesign: needs_human transition failed", {
-      error: messageOf(moveErr),
+      error: errorMessage(moveErr),
     });
   }
   if (!leaseFree) {
@@ -146,7 +142,7 @@ export async function startDesign(
     return rollBackToNeedsHuman(
       deps,
       "launch",
-      designLaunchFailureReason(messageOf(err)),
+      designLaunchFailureReason(errorMessage(err)),
       "launch_failed",
     );
   }
@@ -158,7 +154,7 @@ export async function startDesign(
     return rollBackToNeedsHuman(
       deps,
       "record_flow_job_id",
-      designFlowJobIdFailureReason(messageOf(err)),
+      designFlowJobIdFailureReason(errorMessage(err)),
       "record_failed",
     );
   }

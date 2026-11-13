@@ -40,7 +40,7 @@ import {
 import { type GhClient, getIssue } from "../lib/github.ts";
 import type { StartImplementOutcome } from "../lib/implement_launch_support.ts";
 import { issueChangedSinceIntake } from "../lib/implement_support.ts";
-import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import { errorMessage, type Logger, logger } from "../lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
 import type {
   ApprovalRequest,
@@ -75,10 +75,6 @@ export type DesignApplyResult = {
   readonly design_started?: boolean;
 };
 
-function messageOf(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 /** 人の対応待ち(`needs_human`)へ止める手順の依存。 */
 export type DesignNeedsHumanDeps = {
   /** リースを条件にした比較交換で、`awaiting_design_approval`から`needs_human`へ移す。移せなければ`false`。 */
@@ -100,7 +96,7 @@ async function stopForPerson(
   try {
     await deps.notifyNeedsHuman(reason);
   } catch (err) {
-    deps.log("failed to notify the needs_human", { error: messageOf(err) });
+    deps.log("failed to notify the needs_human", { error: errorMessage(err) });
   }
   return { outcome: "needs_human" };
 }
@@ -413,7 +409,7 @@ export async function buildDesignApplyDeps(
       } catch (err) {
         warn("the issue could not be read; treating it as unchanged", {
           work_item_id: workItem.id,
-          error: messageOf(err),
+          error: errorMessage(err),
         });
         return "unavailable";
       }

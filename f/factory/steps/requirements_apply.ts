@@ -42,7 +42,7 @@ import {
   INTAKE_REFRESHED_NOTICE_KIND,
   refreshIntakeFromIssue,
 } from "../lib/intake_refresh.ts";
-import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import { errorMessage, type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { DESIGN_FLOW_PATH, PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
 import {
   type FactoryConfig,
@@ -154,10 +154,6 @@ export type ApprovedSideEffectsDeps = {
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
-function messageOf(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 /**
  * 作業項目を`approved`か`designing`へ移した後の副作用を、コメント・通知・worktreeの片付け・次のフローの起動の順に行う。
  * 次のフローは、`startDesign`があれば設計フロー、無ければimplementフローである。両方は起動しない。
@@ -175,7 +171,7 @@ export async function applyApprovedSideEffects(
   try {
     await deps.commentIssue();
   } catch (err) {
-    const reason = messageOf(err);
+    const reason = errorMessage(err);
     deps.log("failed to post the approval comment", { error: reason });
     try {
       await deps.addCommentFailedNotice(
@@ -184,20 +180,20 @@ export async function applyApprovedSideEffects(
       );
     } catch (noticeErr) {
       deps.log("failed to record the approval comment notice", {
-        error: messageOf(noticeErr),
+        error: errorMessage(noticeErr),
       });
     }
   }
   try {
     await deps.notifyApproved();
   } catch (err) {
-    deps.log("failed to notify the approval", { error: messageOf(err) });
+    deps.log("failed to notify the approval", { error: errorMessage(err) });
   }
   try {
     await deps.removeWorktree();
   } catch (err) {
     deps.log("failed to remove requirements worktree", {
-      error: messageOf(err),
+      error: errorMessage(err),
     });
   }
   if (startDesignFlow !== null) {
@@ -610,7 +606,7 @@ export async function relaunchPipelineAfterRejection(
     await deps.removeWorktree();
   } catch (err) {
     deps.log("failed to remove requirements worktree", {
-      error: messageOf(err),
+      error: errorMessage(err),
     });
   }
 
@@ -618,7 +614,7 @@ export async function relaunchPipelineAfterRejection(
     await deps.refreshIntake();
   } catch (err) {
     deps.log("failed to refresh the intake content", {
-      error: messageOf(err),
+      error: errorMessage(err),
     });
   }
 
@@ -628,7 +624,7 @@ export async function relaunchPipelineAfterRejection(
   } catch (err) {
     throw await rollBackToNeedsHuman(
       deps,
-      `${label}: ${PIPELINE_FLOW_PATH} could not be started: ${messageOf(err)}`,
+      `${label}: ${PIPELINE_FLOW_PATH} could not be started: ${errorMessage(err)}`,
     );
   }
 
@@ -638,7 +634,7 @@ export async function relaunchPipelineAfterRejection(
   } catch (err) {
     throw await rollBackToNeedsHuman(
       deps,
-      `${label}: ${PIPELINE_FLOW_PATH} job ${jobId} could not be recorded: ${messageOf(err)}`,
+      `${label}: ${PIPELINE_FLOW_PATH} job ${jobId} could not be recorded: ${errorMessage(err)}`,
     );
   }
   if (!recorded) {
@@ -667,7 +663,7 @@ async function rollBackToNeedsHuman(
     );
   } catch (err) {
     deps.log("needs_human rollback after a failed relaunch failed", {
-      error: messageOf(err),
+      error: errorMessage(err),
     });
     return new Error(failure);
   }
@@ -676,7 +672,7 @@ async function rollBackToNeedsHuman(
       await deps.notifyNeedsHuman(REQUIREMENTS_REGENERATION_FAILED_REASON);
     } catch (err) {
       deps.log("failed to notify the needs_human after a failed relaunch", {
-        error: messageOf(err),
+        error: errorMessage(err),
       });
     }
     return new Error(failure);
@@ -743,7 +739,7 @@ export async function reportApplyFailure(
   log: Logger,
   ports: ApplyFailurePorts = REAL_APPLY_FAILURE_PORTS,
 ): Promise<void> {
-  const message = messageOf(err);
+  const message = errorMessage(err);
   const jobId = process.env.WM_JOB_ID ?? "unknown";
   const name = flowPath.split("/").at(-1) ?? flowPath;
   log.error(`${name} failed`, { error: message });
@@ -756,13 +752,13 @@ export async function reportApplyFailure(
       error: message,
     });
   } catch (recordErr) {
-    log.error("failed to record failure", { error: messageOf(recordErr) });
+    log.error("failed to record failure", { error: errorMessage(recordErr) });
   }
   try {
     await ports.notifyJobFailed(flowPath, jobId, message);
   } catch (notifyErr) {
     log.error("failed to send discord notification", {
-      error: messageOf(notifyErr),
+      error: errorMessage(notifyErr),
     });
   }
 }
@@ -802,7 +798,7 @@ export function buildRefreshIntake(args: {
         } catch (err) {
           log.warn("failed to record the intake refresh notice", {
             work_item_id: workItem.id,
-            error: messageOf(err),
+            error: errorMessage(err),
           });
         }
         await notifyBestEffort(

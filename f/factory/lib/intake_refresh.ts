@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { INTAKE_REFRESHED_NOTE_PREFIX } from "./console_support.ts";
 import { issueChangedSinceIntake } from "./implement_support.ts";
-import { maskSecrets } from "./log.ts";
+import { errorMessage } from "./log.ts";
 
 /** 取り込み直しを知らせるnoticeの種類。 */
 export const INTAKE_REFRESHED_NOTICE_KIND = "intake_refreshed";
@@ -75,10 +75,6 @@ export type RefreshIntakeDeps = {
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
-function messageOf(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 /**
  * 作り直しの前に、作業項目の題名と本文を現在のIssueの内容に更新する。
  * 却下の理由が「Issueを書き換えた」ことのとき、作り直した要件定義が書き換え後の内容に基づき、
@@ -97,7 +93,7 @@ export async function refreshIntakeFromIssue(
     live = await deps.getIssue();
   } catch (err) {
     deps.log("could not fetch the issue; keeping the intake content", {
-      error: messageOf(err),
+      error: errorMessage(err),
     });
     return "fetch_failed";
   }
@@ -112,14 +108,16 @@ export async function refreshIntakeFromIssue(
       return "not_written";
     }
   } catch (err) {
-    deps.log("could not write the intake content", { error: messageOf(err) });
+    deps.log("could not write the intake content", {
+      error: errorMessage(err),
+    });
     return "write_failed";
   }
   try {
     await deps.announce({ title: live.title, body: live.body });
   } catch (err) {
     deps.log("could not announce the intake refresh", {
-      error: messageOf(err),
+      error: errorMessage(err),
     });
   }
   return "updated";

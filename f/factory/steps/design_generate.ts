@@ -66,7 +66,7 @@ import {
   rootFlowJobId,
 } from "../lib/implement_launch_support.ts";
 import { jobTmpBase } from "../lib/job_tmp.ts";
-import { logger, maskSecrets } from "../lib/log.ts";
+import { errorMessage, logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
 import { limitGapReport, sanitizeModelText } from "../lib/model_text.ts";
 import {
@@ -256,10 +256,6 @@ export type DesignGenerateDeps = {
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
-function messageOf(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
-}
-
 /**
  * `feedback`を正規化する。null、undefined、空文字列はどれも「フィードバック無し」としてnullを返す。
  * フロースキーマの`default: ''`は`wmill.runFlowAsync`やAPIからの起動では効かないため。
@@ -340,7 +336,7 @@ async function readDocFile(
     return await fs.readText(`${docDir}/${fileName}`);
   } catch (err) {
     throw new Error(
-      `設計書ファイル「${fileName}」を読めませんでした: ${messageOf(err)}`,
+      `設計書ファイル「${fileName}」を読めませんでした: ${errorMessage(err)}`,
     );
   }
 }
@@ -514,7 +510,7 @@ export async function runDesignGenerate(
     } catch (err) {
       deps.log("failed to remove the copy of the requirements diagrams", {
         work_item_id: workItemId,
-        error: messageOf(err),
+        error: errorMessage(err),
       });
     }
   };
@@ -531,7 +527,7 @@ export async function runDesignGenerate(
     } catch (err) {
       deps.log("could not read the work item before the cleanup", {
         work_item_id: workItemId,
-        error: messageOf(err),
+        error: errorMessage(err),
       });
       return;
     }
@@ -542,7 +538,7 @@ export async function runDesignGenerate(
     } catch (err) {
       deps.log("failed to remove the design worktree", {
         work_item_id: workItemId,
-        error: messageOf(err),
+        error: errorMessage(err),
       });
     }
   };
@@ -563,7 +559,7 @@ export async function runDesignGenerate(
     } catch (err) {
       deps.log("failed to notify needs_human", {
         work_item_id: workItemId,
-        error: messageOf(err),
+        error: errorMessage(err),
       });
     }
     return result;
@@ -864,7 +860,7 @@ export async function runDesignGenerate(
         await factory.cleanup();
       } catch (err) {
         deps.log("failed to remove the system prompt file", {
-          error: messageOf(err),
+          error: errorMessage(err),
         });
       }
     }
@@ -897,7 +893,7 @@ async function relaunchRequirements(
     } catch (err) {
       deps.log("needs_human rollback after a failed relaunch failed", {
         work_item_id: item.id,
-        error: messageOf(err),
+        error: errorMessage(err),
       });
       return new Error(failure);
     }
@@ -919,7 +915,7 @@ async function relaunchRequirements(
     );
   } catch (err) {
     throw await rollBack(
-      `design_generate: ${PIPELINE_FLOW_PATH} could not be started: ${messageOf(err)}`,
+      `design_generate: ${PIPELINE_FLOW_PATH} could not be started: ${errorMessage(err)}`,
     );
   }
   let recorded: boolean;
@@ -927,7 +923,7 @@ async function relaunchRequirements(
     recorded = await deps.recordPipelineJobId(jobId);
   } catch (err) {
     throw await rollBack(
-      `design_generate: ${PIPELINE_FLOW_PATH} job ${jobId} could not be recorded: ${messageOf(err)}`,
+      `design_generate: ${PIPELINE_FLOW_PATH} job ${jobId} could not be recorded: ${errorMessage(err)}`,
     );
   }
   if (!recorded) {
