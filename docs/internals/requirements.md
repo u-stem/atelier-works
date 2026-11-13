@@ -303,7 +303,11 @@ Consoleは`f/factory/approval_decide`を実行する。
 - `github_token`は`Authorization`ヘッダだけに載せる。
 - リダイレクトは辿らない。
 - 10秒の締め切りを付ける。
+- 応答の無い通信断と5xxは、2秒待って1回だけ送り直す。
+- レート制限では待たず、失敗として返す。
 - エラーの文とログに、トークンとIssueの内容を含めない。
+
+送り方は、GitHubのAPIへの通信層(`lib/github_http.ts`)が決める。
 
 判定は次の3つである。
 
