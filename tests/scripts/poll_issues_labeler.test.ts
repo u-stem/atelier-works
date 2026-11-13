@@ -66,12 +66,12 @@ async function actionFor(
   limited: string[];
   warns: string[];
 }> {
-  const fake = createFakeCommandRunner(responses);
+  createFakeCommandRunner(responses);
   const failures: string[] = [];
   const limited: string[] = [];
   const warns: string[] = [];
   const candidates = await buildIssueCandidates(
-    { run: fake.run, ghToken: "tok" },
+    { ghToken: "tok" },
     [ITEM],
     new Set(),
     "factory",
@@ -262,13 +262,8 @@ describe("confirmLabeler", () => {
     label: string,
     policy: LabelerPolicy = VIEWER_ONLY,
   ) {
-    const fake = createFakeCommandRunner([labelEventsOk(events)]);
-    return confirmLabeler(
-      { run: fake.run, ghToken: "tok" },
-      TARGET,
-      label,
-      policy,
-    );
+    createFakeCommandRunner([labelEventsOk(events)]);
+    return confirmLabeler({ ghToken: "tok" }, TARGET, label, policy);
   }
 
   const MIXED = [
@@ -320,9 +315,9 @@ describe("confirmLabeler", () => {
   });
 
   test("throws when the events cannot be fetched", async () => {
-    const fake = createFakeCommandRunner([fail("gh: boom")]);
+    createFakeCommandRunner([fail("gh: boom")]);
     const result = confirmLabeler(
-      { run: fake.run, ghToken: "tok" },
+      { ghToken: "tok" },
       TARGET,
       "factory",
       VIEWER_ONLY,

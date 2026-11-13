@@ -125,7 +125,6 @@ import {
   sdkStopAllReadIo,
 } from "./lib/stop_all.ts";
 import type { FactoryConfig } from "./lib/types.ts";
-import { runCommand } from "./lib/workspace.ts";
 import { ciRoundTimeoutMisfit } from "./steps/pr_workflow_support.ts";
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -326,7 +325,7 @@ export async function main(): Promise<PrCiWatchResult> {
   const discordWebhookUrl = await wmill.getVariable(
     "f/factory/discord_webhook_url",
   );
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
 
   // 名前の付け替えで別のアカウントを読まないよう、`repo_allowlist`は照合を通ったオーナーのものだけを通す。
   // 無効のときは、照合のGitHubの呼び出しとnoticeの追加を避けるため、照合せずに設定だけで決める。

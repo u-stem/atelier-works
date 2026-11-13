@@ -1503,7 +1503,7 @@ export async function main(): Promise<{
   const discordWebhookUrl = await wmill.getVariable(
     "f/factory/discord_webhook_url",
   );
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
 
   // ヘルスチェック。PATが壊れている・期限切れのとき、下のIssueを
   // 黙ってすべて飛ばすのではなく、ジョブ全体を失敗させて

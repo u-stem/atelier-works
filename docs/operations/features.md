@@ -575,9 +575,11 @@ workerのイメージは、`CLAUDE_CONFIG_DIR`(`/var/lib/factory/claude`)と`GH_
 ジョブのディレクトリが安全でないときは、戻らずにジョブが失敗する。
 反映より前のジョブが`$HOME/.claude`に残した状態は、そのまま残る。
 
-`GH_CONFIG_DIR`を届かせないのは、ghとgitの子プロセスが、`GH_TOKEN`、`HOME`、`PATH`などを明示して作る環境で動き、ジョブの環境を引き継がないためである。
+`GH_CONFIG_DIR`を届かせないのは、gitの子プロセスがジョブの環境を引き継がないためである。
+gitの子プロセスは、資格情報の補助の`gh auth git-credential`を含めて、`GH_TOKEN`、`HOME`、`PATH`などを明示して作る環境で動く。
 届かせても、読む処理が無い。
-GitHubのAPIのGETは、子プロセスを起動せず、ジョブのプロセスの`fetch`で送るので、ジョブの環境を引き継ぐ。
+GitHubのAPIへの要求は、子プロセスを起動せず、ジョブのプロセスの`fetch`で送る。
+読み取りと書き込みのどちらでも、ジョブの環境を引き継ぐ。
 扱いは[セキュリティの「GitHubのAPIへの通信層」](../security.md#githubのapiへの通信層)にある。
 
 ジョブの環境は、実ジョブで次の結果になる。

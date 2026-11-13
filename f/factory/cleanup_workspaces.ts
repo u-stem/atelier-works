@@ -381,7 +381,7 @@ async function removeStaleWorktrees(
   log: Logger,
 ): Promise<RemovedCounts> {
   if (staleItems.length === 0) return { worktrees: 0, lockFiles: 0 };
-  const ghClient: GhClient = { run: runCommand, ghToken };
+  const ghClient: GhClient = { ghToken };
   const { holders, unresolved } = await activeWorktreeHolders(ghClient, log);
   const { sweep, skipped } = partitionRepoGroups(
     groupByRepo(staleItems),

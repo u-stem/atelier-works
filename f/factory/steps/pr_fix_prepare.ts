@@ -209,7 +209,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   // リポジトリのcloneより前に、オーナーの数値IDを`owners`と照合する。
   // 名前が別の人に渡っていれば、他人のコードをcloneも検査もしない。
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const ownerGuard = await verifyRepoOwnerId(
     config,
     workItem.owner,

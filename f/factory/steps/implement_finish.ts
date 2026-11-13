@@ -380,7 +380,7 @@ async function finishImplement(
     wmill.getResource("f/factory/factory_config"),
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
 
   // origin(push、ブランチの削除)への書き込みの直前に呼ぶ。準備の入口の照合から長い実行を挟むので、

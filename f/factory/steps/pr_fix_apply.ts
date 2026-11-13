@@ -220,7 +220,7 @@ export async function main(
 
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
 
   if (conflictInput !== null) {
     return await applyConflictRound({
@@ -530,7 +530,7 @@ async function applyMetadataRound(
   input: MetadataRoundInput,
 ): Promise<PrFixApplyResult | null> {
   const { owner, repo, headSha, worktreeDir, ghToken } = input;
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const target = { owner, repo, prNumber: input.prNumber, headSha };
   const gatherDeps = buildCiGatherDeps(client, target, runCommand);
   const planner = githubRehashPlanner({

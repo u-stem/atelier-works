@@ -1200,7 +1200,7 @@ describe("discoverIssues never calls a search endpoint", () => {
         });
       },
     };
-    // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+    // GitHubのAPIへの要求は`fetch`で送られるので、その`fetch`にも同じ`run`で答える。
     serveGitHubFetchWith(client.run);
     const owners = options.owners ?? [ACME];
     const log: Logger = { info() {}, warn() {}, error() {} };
@@ -4181,7 +4181,7 @@ describe("discoverPrs never calls a search endpoint", () => {
         });
       },
     };
-    // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+    // GitHubのAPIへの要求は`fetch`で送られるので、その`fetch`にも同じ`run`で答える。
     serveGitHubFetchWith(client.run);
     const owners = options.owners ?? [ACME];
     const log: Logger = { info() {}, warn() {}, error() {} };
@@ -4298,7 +4298,7 @@ describe("discoverPrs never calls a search endpoint", () => {
         });
       },
     };
-    // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+    // GitHubのAPIへの要求は`fetch`で送られるので、その`fetch`にも同じ`run`で答える。
     serveGitHubFetchWith(client.run);
     const result = await discoverPrs(
       {

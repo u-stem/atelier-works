@@ -48,7 +48,6 @@ import type {
   FactoryConfig,
   WorkItem,
 } from "../lib/types.ts";
-import { runCommand } from "../lib/workspace.ts";
 import {
   buildRefreshIntake,
   buildStartDesign,
@@ -367,7 +366,7 @@ export async function buildDesignApplyDeps(
     wmill.getResource("f/factory/factory_config"),
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
 
   const warn = (message: string, fields: Record<string, unknown>): void =>

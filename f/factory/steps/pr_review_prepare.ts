@@ -154,7 +154,7 @@ async function prepare(work_item_id: number): Promise<PrReviewPrepareResult> {
   }
 
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const prNumber = workItem.pr_number;
 
   return prepareReviewWorktree(

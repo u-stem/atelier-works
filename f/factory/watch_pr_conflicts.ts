@@ -93,7 +93,6 @@ import {
 } from "./lib/pr_conflict_watch.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
 import type { FactoryConfig, WorkItemStatus } from "./lib/types.ts";
-import { runCommand } from "./lib/workspace.ts";
 
 /** 起動の依存が呼ぶ読み取り。テストで差し替える。 */
 export type ConflictFixLookups = {
@@ -302,7 +301,7 @@ export async function main(): Promise<PrConflictWatchResult> {
       const discordWebhookUrl = await wmill.getVariable(
         "f/factory/discord_webhook_url",
       );
-      const client: GhClient = { run: runCommand, ghToken };
+      const client: GhClient = { ghToken };
 
       // 名前の付け替えで別のアカウントを読まないよう、読み取りは照合を通ったオーナーのリポジトリだけにする。
       // 行を閉じる判定は、照合の一時的な失敗に左右されないよう、設定だけで決める。

@@ -7236,7 +7236,7 @@ describe("the human discovery never calls a search endpoint", () => {
         });
       },
     };
-    // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+    // GitHubのAPIへの要求は`fetch`で送られるので、その`fetch`にも同じ`run`で答える。
     serveGitHubFetchWith(client.run);
     const discovery = await buildHumanDiscovery({
       config: {

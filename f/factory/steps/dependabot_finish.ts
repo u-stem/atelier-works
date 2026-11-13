@@ -882,7 +882,7 @@ export async function main(
     wmill.getResource("f/factory/factory_config"),
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   // 作業項目を読めないときは、本体が先に失敗する。ここでは書き込ませない側の`off`にする。
   const item = await getWorkItem(work_item_id);
   const repoPolicy: RepoPolicy =

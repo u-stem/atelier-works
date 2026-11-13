@@ -27,10 +27,9 @@ function limited(headers: Record<string, string>, status = 403) {
 }
 
 function setup(responses: Parameters<typeof createFakeCommandRunner>[0]) {
-  const fake = createFakeCommandRunner(responses);
+  createFakeCommandRunner(responses);
   const { log, warned } = recordingLogger();
   const client: GhClient = {
-    run: fake.run,
     ghToken: "tok_secret_value",
     sleep: async () => undefined,
     log,
@@ -74,14 +73,13 @@ describe("callGhApi logs the rate limit responses", () => {
     expect(warned[0]?.fields.endpoint).toBe("repos/o/r/issues");
   });
 
-  // GETは相対パスしか受け付けないので、絶対URLを受け付ける`gh`の書き込みで確かめる。
-  test("logs the endpoint of an absolute URL without the host", async () => {
+  test("logs the endpoint of a write without its query", async () => {
     const { client, warned } = setup([
       limited({ "retry-after": "1" }),
       ghApiOk([]),
     ]);
 
-    await callGhApi(client, "https://api.github.com/repos/o/r/pulls?page=2", {
+    await callGhApi(client, "repos/o/r/pulls?page=2", {
       method: "POST",
       body: {},
     });
@@ -206,7 +204,7 @@ describe("callGhApi logs the rate limit responses", () => {
   });
 
   test("writes to the console when the client has no logger", async () => {
-    const fake = createFakeCommandRunner([
+    createFakeCommandRunner([
       limited({ "retry-after": "1", "x-ratelimit-resource": "core" }),
       ghApiOk([]),
     ]);
@@ -214,7 +212,7 @@ describe("callGhApi logs the rate limit responses", () => {
 
     try {
       await callGhApi(
-        { run: fake.run, ghToken: "tok", sleep: async () => undefined },
+        { ghToken: "tok", sleep: async () => undefined },
         ENDPOINT,
       );
       expect(spy).toHaveBeenCalledTimes(1);

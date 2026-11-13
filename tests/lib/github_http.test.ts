@@ -19,11 +19,9 @@ import {
   GITHUB_RESPONSE_MAX_BYTES,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   type GitHubHttpClient,
-  type GitHubSendResult,
   graphqlErrorsRateLimited,
   graphqlRateLimit,
   requestGitHub,
-  runGitHubRequest,
   sendGitHubRequest,
 } from "../../f/factory/lib/github_http.ts";
 import { omittedMarker } from "../../f/factory/lib/stream_cap.ts";
@@ -1287,63 +1285,6 @@ describe("requestGitHub rate limits", () => {
       path: "repos/o/r/issues?labels=secret-label",
     }).catch((err: unknown) => err);
     expect(String(error)).not.toContain("secret-label");
-  });
-});
-
-describe("runGitHubRequest with a sender that may not send", () => {
-  const ok = {
-    status: 200,
-    headers: new Map<string, string>(),
-    bodyText: "{}",
-  };
-
-  test("retries a request that was not sent, even a POST", async () => {
-    const results: GitHubSendResult<typeof ok>[] = [
-      { kind: "not_sent", error: new Error("EAGAIN") },
-      { kind: "response", response: ok, noResponse: false },
-    ];
-    let calls = 0;
-    const response = await runGitHubRequest(
-      { sleep: async () => {} },
-      { endpoint: "repos/o/r/issues", method: "POST" },
-      { mode: "wait_once" },
-      async () => {
-        const next = results[calls] ?? results[0];
-        calls += 1;
-        if (next === undefined) throw new Error("no result");
-        return next;
-      },
-    );
-    expect([response.status, calls]).toEqual([200, 2]);
-  });
-
-  test("does not read again a response whose body the deadline cut", async () => {
-    let calls = 0;
-    await runGitHubRequest(
-      { sleep: async () => {} },
-      { endpoint: "repos/o/r" },
-      { mode: "wait_once" },
-      async () => {
-        calls += 1;
-        return {
-          kind: "response",
-          response: { ...ok, incomplete: true, timedOut: true },
-          noResponse: false,
-        };
-      },
-    );
-    expect(calls).toBe(1);
-  });
-
-  test("throws the error when the retry is not sent either", async () => {
-    const error = new Error("EAGAIN");
-    const thrown = await runGitHubRequest<typeof ok>(
-      { sleep: async () => {} },
-      { endpoint: "repos/o/r" },
-      { mode: "wait_once" },
-      async () => ({ kind: "not_sent", error }),
-    ).catch((err: unknown) => err);
-    expect(thrown).toBe(error);
   });
 });
 

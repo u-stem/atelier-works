@@ -91,7 +91,7 @@ function job(name: string, conclusion: string, id: number) {
 
 /**
  * エンドポイントで答えを選ぶ、GitHubの偽物。argvにエンドポイントが入る。
- * GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ関数で答える(`serveGitHubFetchWith`)。
+ * GitHubのAPIへの要求は`fetch`で送られるので、その`fetch`にも同じ関数で答える(`serveGitHubFetchWith`)。
  * ジョブのログは、取得先への302と、取得先の本文の2つで答える。
  */
 function githubOf(world: World): CommandRunner {
@@ -113,7 +113,7 @@ function githubOf(world: World): CommandRunner {
 async function probe(world: World): Promise<boolean> {
   const run = githubOf(world);
   return rehashRoundProbe({
-    client: { run, ghToken: "tok", sleep: async () => {} },
+    client: { ghToken: "tok", sleep: async () => {} },
     owner: "acme",
     repo: "widgets",
     prNumber: 12,
@@ -214,7 +214,7 @@ describe("rehashRoundProbe", () => {
     };
     serveGitHubFetchWith(run);
     const subject = rehashRoundProbe({
-      client: { run, ghToken: "tok", sleep: async () => {} },
+      client: { ghToken: "tok", sleep: async () => {} },
       owner: "acme",
       repo: "widgets",
       prNumber: 12,

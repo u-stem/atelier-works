@@ -1,6 +1,6 @@
 // GETの要求が、`gh`を起動せずに通信層(`github_http.ts`)の`fetch`で送られることのテスト。
-// 書き込み(POST、PATCH、PUT、DELETE)は`gh api`で送る。
-// 偽のrunnerは、`gh`の起動とGitHubのAPIへの`fetch`の両方に、同じ応答の列から答える(`testSupport.ts`)。
+// 書き込み(POST、PATCH、PUT、DELETE)の要求の中身は、`github.test.ts`の「a write request」が確かめる。
+// 偽のrunnerは、GitHubのAPIへの`fetch`に、用意した応答の列から順に答える(`testSupport.ts`)。
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { getRepoFileText } from "../../f/factory/lib/drawio_viewer_bump_github.ts";
@@ -38,7 +38,6 @@ function clientWith(responses: Parameters<typeof createFakeCommandRunner>[0]) {
     fake,
     sleeps,
     client: {
-      run: fake.run,
       ghToken: "tok",
       sleep: async (ms: number) => {
         sleeps.push(ms);
@@ -98,18 +97,12 @@ describe("callGhApi sends a GET through fetch", () => {
     expect(response.status).toBe(404);
   });
 
-  test("keeps a POST on gh", async () => {
-    const { client, fake } = clientWith([ghApiOk({})]);
-    await callGhApi(client, "repos/o/r/issues", { method: "POST", body: {} });
-    expect(fake.calls[0]?.argv[0]).toBe("gh");
-  });
-
-  test("keeps a DELETE on gh", async () => {
+  test("sends a DELETE through fetch too", async () => {
     const { client, fake } = clientWith([ok(ghApiStdout(204, ""))]);
     await callGhApi(client, "repos/o/r/issues/1/labels/x", {
       method: "DELETE",
     });
-    expect(fake.calls[0]?.argv[0]).toBe("gh");
+    expect(fake.calls[0]?.request?.method).toBe("DELETE");
   });
 
   test("rejects a GET with a leading slash", async () => {
@@ -228,7 +221,6 @@ describe("a JSON GET whose body was cut after a 2xx status", () => {
       cutBody(200, new DOMException("timed out", "TimeoutError"), '{"a"'),
     );
     const error = await getViewer({
-      run: createFakeCommandRunner([]).run,
       ghToken: "tok",
       sleep: async () => {},
     }).catch((err: unknown) => err);

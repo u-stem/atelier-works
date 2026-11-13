@@ -2662,54 +2662,51 @@ describe("runPrConflictWatch: the idle result", () => {
 });
 
 describe("runPrConflictWatch never calls a search endpoint", () => {
-  /** 実際の`listOpenPullRequests`と`getPr`を、呼ばれたendpointを記録する偽の`gh`に通す。 */
+  /** 実際の`listOpenPullRequests`と`getPr`を、呼ばれたendpointを記録する偽のGitHubに通す。 */
   async function runWithRealReaders(options: Setup) {
     const endpoints: string[] = [];
-    const client: GhClient = {
-      ghToken: "tok",
-      run: async (argv: readonly string[]) => {
-        const endpoint =
-          argv.find(
-            (arg) => arg.startsWith("repos/") || arg.startsWith("search/"),
-          ) ?? "";
-        endpoints.push(endpoint);
-        if (endpoint.includes("/pulls?state=open")) {
-          return ghApiOk([
-            {
-              number: 12,
-              draft: false,
-              head: { ref: BRANCH, repo: { full_name: "acme/widgets" } },
-              base: { ref: "main", repo: { full_name: "acme/widgets" } },
-              user: { login: "factory-bot", id: 5 },
-            },
-          ]);
-        }
-        return ghApiOk({
-          number: 12,
-          title: "t",
-          body: "",
-          draft: false,
-          state: "open",
-          merged: false,
-          head: {
-            sha: HEAD,
-            ref: BRANCH,
-            repo: { full_name: "acme/widgets" },
+    const client: GhClient = { ghToken: "tok" };
+    // GitHubのAPIへの`fetch`に、endpointで応答を選ぶ関数で答える。
+    serveGitHubFetchWith(async (argv: readonly string[]) => {
+      const endpoint =
+        argv.find(
+          (arg) => arg.startsWith("repos/") || arg.startsWith("search/"),
+        ) ?? "";
+      endpoints.push(endpoint);
+      if (endpoint.includes("/pulls?state=open")) {
+        return ghApiOk([
+          {
+            number: 12,
+            draft: false,
+            head: { ref: BRANCH, repo: { full_name: "acme/widgets" } },
+            base: { ref: "main", repo: { full_name: "acme/widgets" } },
+            user: { login: "factory-bot", id: 5 },
           },
-          base: {
-            ref: "main",
-            repo: { full_name: "acme/widgets", id: REPO_ID },
-          },
-          mergeable: false,
-          mergeable_state: "dirty",
-          user: { login: "factory-bot", id: 5, type: "User" },
-          auto_merge: null,
-          requested_reviewers: [],
-        });
-      },
-    };
-    // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
-    serveGitHubFetchWith(client.run);
+        ]);
+      }
+      return ghApiOk({
+        number: 12,
+        title: "t",
+        body: "",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: {
+          sha: HEAD,
+          ref: BRANCH,
+          repo: { full_name: "acme/widgets" },
+        },
+        base: {
+          ref: "main",
+          repo: { full_name: "acme/widgets", id: REPO_ID },
+        },
+        mergeable: false,
+        mergeable_state: "dirty",
+        user: { login: "factory-bot", id: 5, type: "User" },
+        auto_merge: null,
+        requested_reviewers: [],
+      });
+    });
     const h = setup(options);
     const result = await runPrConflictWatch({
       ...h.deps,

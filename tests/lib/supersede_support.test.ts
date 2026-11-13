@@ -8,9 +8,8 @@ import {
   type PostSupersededDeps,
   postSupersededComments,
 } from "../../f/factory/lib/supersede_support.ts";
-import { ok } from "./testSupport.ts";
 
-const CLIENT: GhClient = { run: async () => ok(), ghToken: "tok" };
+const CLIENT: GhClient = { ghToken: "tok" };
 
 type CommentCall = {
   kind: string;

@@ -1445,7 +1445,7 @@ Discordの説明には、閾値、最後の成功(JST)、最新の実行の原�
 
 ## RESTの検索の拒否
 
-`callGhApi`は、RESTの検索APIのendpointを、送る前に拒む(GETは`fetch`で、書き込みは`gh`で送る)。
+`callGhApi`は、RESTの検索APIのendpointを、送る前に拒む(GETと書き込みは、どちらも通信層の`fetch`で送る)。
 検索の枠は小さく、5分の境目に呼びが重なると拒まれる。
 下流が検索を使わない設計を、後の変更で破らせないための防止である。
 仕様は[通知とrate limitの仕様](notifications.md#restの検索の拒否)にある。

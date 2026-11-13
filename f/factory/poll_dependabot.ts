@@ -94,7 +94,6 @@ import {
   isGitHubName,
   type WorkItem,
 } from "./lib/types.ts";
-import { runCommand } from "./lib/workspace.ts";
 import { describeReason, nextActionFor } from "./steps/pr_workflow_support.ts";
 
 const DAY_MS = 86_400_000;
@@ -1430,7 +1429,7 @@ export async function main(): Promise<PollDependabotResult> {
       const discordWebhookUrl = await wmill.getVariable(
         "f/factory/discord_webhook_url",
       );
-      const client: GhClient = { run: runCommand, ghToken };
+      const client: GhClient = { ghToken };
       const viewer = await getViewer(client);
       const record = async (
         step: string,

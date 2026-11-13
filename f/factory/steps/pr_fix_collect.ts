@@ -24,7 +24,6 @@ import {
   listPrReviews,
 } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
-import { runCommand } from "../lib/workspace.ts";
 import {
   type CollectedComment,
   type CollectedReview,
@@ -114,7 +113,7 @@ export async function main(
   const lastReviewCommentId = workItem.last_review_comment_id ?? 0;
 
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const viewer = await getViewer(client);
 
   const [reviewsResult, reviewCommentsResult, issueCommentsResult] =

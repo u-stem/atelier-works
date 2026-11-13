@@ -40,7 +40,6 @@ import {
   runMainCiWatch,
 } from "./lib/main_ci_watch.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
-import { runCommand } from "./lib/workspace.ts";
 
 async function recordFailureSafe(
   step: string,
@@ -73,7 +72,7 @@ export async function main(): Promise<MainCiWatchResult> {
   const discordWebhookUrl = await wmill.getVariable(
     "f/factory/discord_webhook_url",
   );
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
 
   // 名前の付け替えで別のアカウントを読まないよう、`repo_allowlist`は照合を通ったオーナーのものだけを通す。
   const verified = await filterVerifiedOwners(config.owners, {

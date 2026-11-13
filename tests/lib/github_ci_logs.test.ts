@@ -25,8 +25,7 @@ afterEach(restoreGlobalFetch);
 
 const SHA = "a".repeat(40);
 
-const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
-  run: fake.run,
+const client = (_fake: ReturnType<typeof createFakeCommandRunner>) => ({
   ghToken: "tok",
   sleep: async () => {},
 });
@@ -198,7 +197,6 @@ describe("getWorkflowJobLog", () => {
   const get = (jobId = 9001, sleeps: number[] = []) =>
     getWorkflowJobLog(
       {
-        run: createFakeCommandRunner([]).run,
         ghToken: "tok",
         sleep: async (ms) => {
           sleeps.push(ms);
@@ -229,12 +227,9 @@ describe("getWorkflowJobLog", () => {
   test("does not start gh", async () => {
     stubGlobalFetch([redirectTo(LOG_URL), new Response("line")]);
     const fake = createFakeCommandRunner([]);
-    await getWorkflowJobLog(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      9001,
-    ).catch(() => undefined);
+    await getWorkflowJobLog({ ghToken: "tok" }, "acme", "widgets", 9001).catch(
+      () => undefined,
+    );
     expect(fake.calls).toHaveLength(0);
   });
 

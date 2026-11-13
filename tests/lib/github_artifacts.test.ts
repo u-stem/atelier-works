@@ -22,8 +22,7 @@ const rawArtifact = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
-  run: fake.run,
+const client = (_fake: ReturnType<typeof createFakeCommandRunner>) => ({
   ghToken: "tok",
   sleep: async () => {},
 });

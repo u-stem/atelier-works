@@ -528,7 +528,7 @@ export async function main(
     wmill.getResource("f/factory/factory_config"),
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const viewer = await getViewer(client);
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
   const prUrl = `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`;

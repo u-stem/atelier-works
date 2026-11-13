@@ -29,7 +29,6 @@ import {
   processIssueDecisions,
   recordLabelerDenied,
 } from "../../f/factory/poll_issues.ts";
-import { ok } from "../lib/testSupport.ts";
 
 const WEBHOOK = "https://discord.example/api/webhooks/1/token";
 const CANDIDATE: IssueCandidate = {
@@ -80,7 +79,7 @@ function fakeDeps(
 function run(deps: ClaimNoticeDeps, log: Logger = silentLog): Promise<boolean> {
   return claimIssueWithNotice(
     {
-      client: { run: async () => ok(), ghToken: "tok" },
+      client: { ghToken: "tok" },
       candidate: CANDIDATE,
       viewerLogin: "factory-bot",
       triggerLabel: "factory",

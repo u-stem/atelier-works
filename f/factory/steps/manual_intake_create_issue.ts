@@ -40,7 +40,6 @@ import {
   verifyRepoOwnerId,
 } from "../lib/repo_owner_gate.ts";
 import { assertGitHubName, isGitHubName } from "../lib/types.ts";
-import { runCommand } from "../lib/workspace.ts";
 
 // `buildManualIntakeIssueBody`は、秘密値を読まないConsole用のscriptも使うので`lib/`にある。
 // 向きは、このステップが`lib/`から取り込む一方向にする。
@@ -245,7 +244,7 @@ export async function main(
   assertImplementEnabledForProfile(profile, config.implement_enabled);
 
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
 
   // 入力した依頼文を、名前が別の人に渡ったリポジトリのIssueに書き込まないよう、投稿の前に照合する。
   const ownerGuard = await verifyRepoOwnerId(

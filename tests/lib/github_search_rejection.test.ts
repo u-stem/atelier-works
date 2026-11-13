@@ -15,7 +15,7 @@ const REJECTION = "GitHub REST search endpoints are not allowed";
 
 function clientWith(responses: Parameters<typeof createFakeCommandRunner>[0]) {
   const fake = createFakeCommandRunner(responses);
-  return { fake, client: { run: fake.run, ghToken: "tok" } };
+  return { fake, client: { ghToken: "tok" } };
 }
 
 describe("callGhApi rejects the REST search endpoints", () => {
@@ -75,7 +75,7 @@ describe("callGhApi rejects the REST search endpoints", () => {
     );
   });
 
-  test("does not start gh for a rejected endpoint", async () => {
+  test("does not send a rejected endpoint", async () => {
     const { client, fake } = clientWith([ghApiOk({})]);
 
     await callGhApi(client, "search/issues?q=x").catch(() => undefined);
@@ -129,8 +129,8 @@ describe("callGhApi does not reject the other endpoints", () => {
     expect(response.status).toBe(200);
   });
 
-  // GETは通信層の`fetch`で送り、パスは`api.github.com`からの相対パスに限る。
-  // 先頭の`/`と絶対URLを受け付けていたのは`gh`の送り方で、GETでは送る前に拒む。
+  // 要求は通信層の`fetch`で送り、パスは`api.github.com`からの相対パスに限る。
+  // 先頭の`/`と絶対URLは、読み取りでも書き込みでも、送る前に拒む。
   test("rejects a pull request read with a leading slash", async () => {
     const { client } = clientWith([ghApiOk({})]);
 
@@ -147,12 +147,12 @@ describe("callGhApi does not reject the other endpoints", () => {
     ).rejects.toThrow("GitHub API path is not allowed");
   });
 
-  test("passes a write with a leading slash to gh", async () => {
-    const { client, fake } = clientWith([ghApiOk({})]);
+  test("rejects a write with a leading slash", async () => {
+    const { client } = clientWith([ghApiOk({})]);
 
-    await callGhApi(client, "/repos/o/r/issues", { method: "POST", body: {} });
-
-    expect(fake.calls[0]?.argv[0]).toBe("gh");
+    await expect(
+      callGhApi(client, "/repos/o/r/issues", { method: "POST", body: {} }),
+    ).rejects.toThrow("GitHub API path is not allowed");
   });
 
   test("passes a query that mentions the search prefix", async () => {
