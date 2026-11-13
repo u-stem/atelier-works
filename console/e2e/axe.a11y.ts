@@ -564,9 +564,7 @@ for (const theme of THEMES) {
       await page.getByRole("button", { name: "作業項目を中止" }).click();
       await expect(page.locator("dialog[open]")).toBeVisible();
 
-      await expect(
-        page.getByRole("button", { name: "取り消す" }),
-      ).toBeFocused();
+      await expect(page.getByRole("button", { name: "閉じる" })).toBeFocused();
     });
   });
 }

@@ -60,10 +60,41 @@ describe("cancelWorkItemDialogLines", () => {
     );
   });
 
-  test("says that a pending approval request is withdrawn while it waits for an approval", () => {
+  test("says that it cancels the work item", () => {
+    expect(cancelWorkItemDialogLines("issue", "failed")[0]).toContain(
+      "中止します",
+    );
+  });
+
+  test.each(["pr_review", "pr_fix"])(
+    "says for %s that the pull request is not picked up until a person adds the label again",
+    (kind) => {
+      expect(cancelWorkItemDialogLines(kind, "failed").join("")).toContain(
+        "ラベルを付け直すまで",
+      );
+    },
+  );
+
+  // ラベルで始まらない種別には、ラベルを付け直す案内を出さない。
+  test.each(["dependabot", "audit", "investigate"])(
+    "does not talk about the label for %s",
+    (kind) => {
+      expect(cancelWorkItemDialogLines(kind, "failed").join("")).not.toContain(
+        "ラベル",
+      );
+    },
+  );
+
+  test("says that the same head of a dependabot pull request is not handled again", () => {
+    expect(
+      cancelWorkItemDialogLines("dependabot", "failed").join(""),
+    ).toContain("同じheadのdependabotのPRは");
+  });
+
+  test("says that a pending approval request is withdrawn while an Issue waits for an approval", () => {
     expect(
       cancelWorkItemDialogLines("issue", "awaiting_approval").join(""),
-    ).toContain("承認依頼");
+    ).toContain("承認依頼は期限切れになり");
   });
 
   test("does not talk about an approval request for a failed work item", () => {
@@ -72,9 +103,40 @@ describe("cancelWorkItemDialogLines", () => {
     );
   });
 
-  test("says that the automatic fixes of the pull request stop for the same head", () => {
+  // 監査の承認待ちの依頼はIssue化の提案で、中止しても期限切れにしない。
+  test("says that the proposals of an audit stay", () => {
+    expect(
+      cancelWorkItemDialogLines("audit", "awaiting_approval").join(""),
+    ).toContain("Issue化の提案の承認依頼は残ります");
+  });
+
+  test("does not say that the proposals of an audit expire", () => {
+    expect(
+      cancelWorkItemDialogLines("audit", "awaiting_approval").join(""),
+    ).not.toContain("期限切れ");
+  });
+
+  test("says that the CI failure of the pull request is not fixed while the head stays", () => {
     expect(cancelWorkItemDialogLines("pr_fix", "failed").join("")).toContain(
-      "headが変わるまで",
+      "headが同じ間",
+    );
+  });
+
+  test("says that a conflict is not fixed until the next conflict", () => {
+    expect(cancelWorkItemDialogLines("pr_fix", "failed").join("")).toContain(
+      "次に競合が起きるまで",
+    );
+  });
+
+  test("says that a move of the head can start a new review without the label", () => {
+    expect(cancelWorkItemDialogLines("pr_review", "failed").join("")).toContain(
+      "ラベルが無くても新しいレビューが始まることがあります",
+    );
+  });
+
+  test("says that the fixes of the pull request of the branch of an Issue stop", () => {
+    expect(cancelWorkItemDialogLines("issue", "failed").join("")).toContain(
+      "このIssueのブランチのPRは",
     );
   });
 

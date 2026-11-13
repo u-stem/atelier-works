@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  WORK_ITEM_CANCEL_CONFIRM,
   WorkItemCancelAction,
   WorkItemCancelDialog,
 } from "./WorkItemCancelAction.tsx";
@@ -53,12 +54,22 @@ describe("WorkItemCancelDialog", () => {
     expect(renderDialog(true)).toContain("#7");
   });
 
-  test("confirms with the destructive button", () => {
-    expect(renderDialog(true)).toMatch(/bg-destructive[^>]*>中止する</);
+  // 色はConfirmDialogが決める。ここでは、破壊的な確認として渡していることだけを確かめる。
+  test("confirms as a destructive action", () => {
+    expect(WORK_ITEM_CANCEL_CONFIRM.destructive).toBe(true);
   });
 
-  test("offers to back out with the button that takes the first focus", () => {
-    expect(renderDialog(true)).toContain(">取り消す<");
+  test("confirms with the button that says it cancels", () => {
+    expect(renderDialog(true)).toContain(">中止する<");
+  });
+
+  // 「取り消す」は、作業項目を取り消す操作と読み違えるので、このダイアログでは「閉じる」にする。
+  test("offers to back out with the button that says it closes", () => {
+    expect(renderDialog(true)).toContain(">閉じる<");
+  });
+
+  test("does not label the button that backs out as a cancel", () => {
+    expect(renderDialog(true)).not.toContain(">取り消す<");
   });
 
   test("says that a cancelled work item cannot be resumed", () => {

@@ -4,8 +4,10 @@ import {
   isBranchHeldForFixRounds,
   isDesignStage,
   matchBranchWorkItem,
+  readBranchItemOperatorCancelled,
   readBranchItemStatus,
 } from "../../f/factory/lib/branch_hold.ts";
+import { OPERATOR_CANCELLED_NOTE } from "../../f/factory/lib/operator_cancel.ts";
 import {
   WORK_ITEM_STATUSES,
   type WorkItemStatus,
@@ -186,5 +188,113 @@ describe("readBranchItemStatus", () => {
         },
       ),
     ).rejects.toThrow("db down");
+  });
+});
+
+describe("readBranchItemOperatorCancelled", () => {
+  const BRANCH = {
+    headRef: "factory/issue-5-wi-33",
+    owner: "acme",
+    repo: "widgets",
+  };
+  const cancelled = {
+    kind: "issue" as const,
+    owner: "acme",
+    repo: "widgets",
+    status: "cancelled" as const,
+  };
+
+  function notes(note: string | null): {
+    read: number[];
+    cancelNote: (id: number) => Promise<string | null>;
+  } {
+    const read: number[] = [];
+    return {
+      read,
+      cancelNote: async (id) => {
+        read.push(id);
+        return note;
+      },
+    };
+  }
+
+  test("is true when a person cancelled the Issue work item of the branch", async () => {
+    expect(
+      await readBranchItemOperatorCancelled(
+        BRANCH,
+        async () => cancelled,
+        notes(OPERATOR_CANCELLED_NOTE).cancelNote,
+      ),
+    ).toBe(true);
+  });
+
+  test("reads the note of the work item that the branch names", async () => {
+    const { read, cancelNote } = notes(OPERATOR_CANCELLED_NOTE);
+    await readBranchItemOperatorCancelled(
+      BRANCH,
+      async () => cancelled,
+      cancelNote,
+    );
+    expect(read).toEqual([33]);
+  });
+
+  test("is false when the reconcile cancelled the Issue work item", async () => {
+    expect(
+      await readBranchItemOperatorCancelled(
+        BRANCH,
+        async () => cancelled,
+        notes("reconcile: closed (actionable)").cancelNote,
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when the cancel has no note", async () => {
+    expect(
+      await readBranchItemOperatorCancelled(
+        BRANCH,
+        async () => cancelled,
+        notes(null).cancelNote,
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when the work item belongs to another repository", async () => {
+    expect(
+      await readBranchItemOperatorCancelled(
+        BRANCH,
+        async () => ({ ...cancelled, repo: "gadgets" }),
+        notes(OPERATOR_CANCELLED_NOTE).cancelNote,
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when the branch names a work item that is not an Issue", async () => {
+    expect(
+      await readBranchItemOperatorCancelled(
+        BRANCH,
+        async () => ({ ...cancelled, kind: "pr_fix" as const }),
+        notes(OPERATOR_CANCELLED_NOTE).cancelNote,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not read the note of a work item that is not cancelled", async () => {
+    const { read, cancelNote } = notes(OPERATOR_CANCELLED_NOTE);
+    await readBranchItemOperatorCancelled(
+      BRANCH,
+      async () => ({ ...cancelled, status: "pr_open" as const }),
+      cancelNote,
+    );
+    expect(read).toEqual([]);
+  });
+
+  test("is false for a branch the factory did not name", async () => {
+    expect(
+      await readBranchItemOperatorCancelled(
+        { ...BRANCH, headRef: "feature/x" },
+        async () => cancelled,
+        notes(OPERATOR_CANCELLED_NOTE).cancelNote,
+      ),
+    ).toBe(false);
   });
 });

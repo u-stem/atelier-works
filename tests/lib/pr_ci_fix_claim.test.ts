@@ -82,6 +82,8 @@ type Setup = {
   readonly stopHeld?: boolean;
   /** PRの最新の作業項目が、行のheadで人に中止されたか。 */
   readonly operatorCancelled?: boolean;
+  /** PRのブランチが指すIssueの作業項目を、人が中止したか。 */
+  readonly branchItemOperatorCancelled?: boolean;
 };
 
 function readers(setup: Setup = {}): {
@@ -104,6 +106,10 @@ function readers(setup: Setup = {}): {
       readBranchItemStatus: track(
         "branch_item",
         setup.branchItemStatus ?? null,
+      ),
+      branchItemOperatorCancelled: track(
+        "branch_cancel",
+        setup.branchItemOperatorCancelled ?? false,
       ),
       readCommits: track(
         "commits",
@@ -390,7 +396,26 @@ describe("decideFixClaim", () => {
   test("reads the cancel by a person after the work item of the branch", async () => {
     const { decision, events } = decide();
     await decision;
-    expect(events.slice(3, 5)).toEqual(["branch_item", "operator_cancel"]);
+    expect(events.slice(3, 6)).toEqual([
+      "branch_item",
+      "branch_cancel",
+      "operator_cancel",
+    ]);
+  });
+
+  // Issueの作業項目を中止すると、ブランチを引き継ぐ状態から外れるので、別に止める。
+  test("holds operator_cancelled when a person cancelled the Issue work item of the branch", async () => {
+    const { decision } = decide({ branchItemOperatorCancelled: true });
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "operator_cancelled",
+    });
+  });
+
+  test("does not read the commits when a person cancelled the Issue work item of the branch", async () => {
+    const { decision, events } = decide({ branchItemOperatorCancelled: true });
+    await decision;
+    expect(events).not.toContain("commits");
   });
 
   test("holds not_reviewed when the head has no review row", async () => {

@@ -71,4 +71,14 @@ describe("describeWorkItemCancelResult", () => {
       }).message,
     ).toContain("状態が変わった");
   });
+
+  test("tells that the pull request has a newer work item", () => {
+    expect(
+      describeWorkItemCancelResult({
+        found: true,
+        refused: true,
+        reason: "newer_work_item",
+      }).message,
+    ).toContain("このPRには、より新しい作業項目があります");
+  });
 });

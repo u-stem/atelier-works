@@ -8,11 +8,14 @@ import {
 import {
   cancelStatement,
   cancelWorkItemFromConsole,
+  readCancelTarget,
   WORK_ITEM_CANCEL_REFUSAL_REASONS,
   type WorkItemCancelPorts,
 } from "../../f/factory/console_work_item_cancel.ts";
 import type { ActionSqlClient } from "../../f/factory/lib/console_actions.ts";
 import {
+  OPERATOR_CANCEL_PR_ROW_KINDS,
+  OPERATOR_CANCEL_WITHDRAWN_REQUEST_KINDS,
   OPERATOR_CANCELLED_NOTE,
   operatorCancellableStatuses,
 } from "../../f/factory/lib/operator_cancel.ts";
@@ -28,6 +31,7 @@ import {
   relative,
   sdkViolationsReachableFrom,
   sourcesReachableFrom,
+  writesSql,
 } from "./worker_boundary_scan.ts";
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -79,7 +83,7 @@ function harness(
   options: {
     row?: Row | null;
     readError?: unknown;
-    cancel?: { cancelled: boolean; withdrawn: number } | Error;
+    cancel?: { cancelled: boolean; withdrawn: number; newer?: boolean } | Error;
     sql?: readonly (Record<string, unknown>[] | Error)[];
     actor?: () => string;
   } = {},
@@ -101,7 +105,7 @@ function harness(
       cancels.push({ ...input, allowed: [...input.allowed] });
       const outcome = options.cancel ?? { cancelled: true, withdrawn: 1 };
       if (outcome instanceof Error) throw outcome;
-      return outcome;
+      return { newer: false, ...outcome };
     },
     sql: fakeSql(
       options.sql ?? [[{ id: 5 }], [{ id: 5 }]],
@@ -295,13 +299,48 @@ describe("cancelWorkItemFromConsole", () => {
     await expect(cancelWorkItemFromConsole(7, ports)).rejects.toBe(boom);
   });
 
+  test("refuses a row of a pull request that has a newer work item", async () => {
+    const { ports } = harness({
+      cancel: { cancelled: false, withdrawn: 0, newer: true },
+    });
+    expect(await cancelWorkItemFromConsole(7, ports)).toEqual({
+      found: true,
+      refused: true,
+      reason: "newer_work_item",
+    });
+  });
+
+  test("records the refusal of a row that is not the newest as a failure", async () => {
+    const { ports, sqlCalls } = harness({
+      cancel: { cancelled: false, withdrawn: 0, newer: true },
+    });
+    await cancelWorkItemFromConsole(7, ports);
+    expect(sqlCalls[1]?.values[0]).toBe("failed");
+  });
+
   test("lists every reason it refuses with", () => {
     expect([...WORK_ITEM_CANCEL_REFUSAL_REASONS].sort()).toEqual([
       "actor_unknown",
       "audit_unavailable",
+      "newer_work_item",
       "not_cancellable",
       "status_changed",
     ]);
+  });
+});
+
+describe("readCancelTarget", () => {
+  test("reads the id, the kind and the state of the row", () => {
+    expect(
+      readCancelTarget({ id: "7", kind: "issue", status: "approved" }),
+    ).toEqual({ id: 7, kind: "issue", status: "approved" });
+  });
+
+  // 行があるのに読めないときは、存在しない作業項目と取り違えないように投げる。
+  test("throws on a row whose shape it cannot read", () => {
+    expect(() =>
+      readCancelTarget({ id: 7, kind: null, status: "approved" }),
+    ).toThrow("console_work_item_cancel: the work item row has a shape");
   });
 });
 
@@ -341,8 +380,35 @@ describe("cancelStatement", () => {
 
   test("withdraws only the pending approval requests of the work item", () => {
     expect(statementOf().text).toMatch(
-      /UPDATE factory\.approval_requests SET status = 'expired', decided_at = now\(\) WHERE work_item_id IN \(SELECT id FROM updated\) AND status = 'pending'/,
+      /UPDATE factory\.approval_requests SET status = 'expired', decided_at = now\(\) WHERE work_item_id IN \(SELECT id FROM updated\) AND status = 'pending' AND kind = ANY\(\?\)/,
     );
+  });
+
+  test("passes the kinds of the requests it withdraws as a value", () => {
+    expect(statementOf().values).toContainEqual([
+      ...OPERATOR_CANCEL_WITHDRAWN_REQUEST_KINDS,
+    ]);
+  });
+
+  test("does not cancel a row of a pull request that has a newer work item", () => {
+    expect(statementOf().text).toMatch(
+      /AND NOT \(w\.kind = ANY\(\?\) AND EXISTS \(SELECT 1 FROM factory\.work_items AS n WHERE n\.id <> w\.id AND n\.pr_number = w\.pr_number AND lower\(n\.owner\) = lower\(w\.owner\) AND lower\(n\.repo\) = lower\(w\.repo\) AND \(n\.created_at, n\.id\) > \(w\.created_at, w\.id\)\)\)/,
+    );
+  });
+
+  test("passes the kinds that are rows of a pull request as a value", () => {
+    expect(statementOf().values).toContainEqual([
+      ...OPERATOR_CANCEL_PR_ROW_KINDS,
+    ]);
+  });
+
+  test("reads whether a newer work item kept the row from being cancelled", async () => {
+    const result = await cancelStatement(
+      fakeSql([[{ cancelled: 0, withdrawn: 0, newer: true }]]),
+      input,
+      { job_id: null, root_job_id: null },
+    );
+    expect(result).toEqual({ cancelled: false, withdrawn: 0, newer: true });
   });
 
   test("writes the fixed note of a cancel by a person", () => {
@@ -359,20 +425,20 @@ describe("cancelStatement", () => {
 
   test("reads the result of the statement as whether it cancelled and how many it withdrew", async () => {
     const result = await cancelStatement(
-      fakeSql([[{ cancelled: "1", withdrawn: "2" }]]),
+      fakeSql([[{ cancelled: "1", withdrawn: "2", newer: false }]]),
       input,
       { job_id: null, root_job_id: null },
     );
-    expect(result).toEqual({ cancelled: true, withdrawn: 2 });
+    expect(result).toEqual({ cancelled: true, withdrawn: 2, newer: false });
   });
 
   test("reads no updated row as a lost compare", async () => {
     const result = await cancelStatement(
-      fakeSql([[{ cancelled: 0, withdrawn: 0 }]]),
+      fakeSql([[{ cancelled: 0, withdrawn: 0, newer: false }]]),
       input,
       { job_id: null, root_job_id: null },
     );
-    expect(result).toEqual({ cancelled: false, withdrawn: 0 });
+    expect(result).toEqual({ cancelled: false, withdrawn: 0, newer: false });
   });
 
   test("throws on a result it cannot read", async () => {
@@ -457,8 +523,8 @@ describe("what the work item cancel script reaches", () => {
     );
   }
 
-  const WRITE_WORDS =
-    /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|COPY|CALL|GRANT)\b/;
+  // 共通の境界テストと同じ数え方で、小文字の`insert into`、`update … set`、`delete from`も数える。
+  const WRITE_WORDS = { test: writesSql };
 
   const OWN_SOURCE = readFileSync(`${SCRIPT}.ts`, "utf8");
 
@@ -540,6 +606,25 @@ describe("what the work item cancel script reaches", () => {
     expect(
       templatesOf(OWN_SOURCE).filter((text) => WRITE_WORDS.test(text)),
     ).toHaveLength(1);
+  });
+
+  test("counts a lowercase write as a write", () => {
+    expect(
+      [
+        "insert into factory.x (a) values (1)",
+        "update factory.x set a = 1",
+        "delete from factory.x",
+      ].filter((text) => WRITE_WORDS.test(text)),
+    ).toHaveLength(3);
+  });
+
+  // 中止は行を消さず、表の形も権限も変えない。書く語は更新と挿入だけである。
+  test("has no delete, schema change, grant, copy or call in its own SQL", () => {
+    expect(
+      templatesOf(OWN_SOURCE).filter((text) =>
+        /\b(?:DELETE|TRUNCATE|DROP|ALTER|CREATE|GRANT|COPY|CALL)\b/i.test(text),
+      ),
+    ).toEqual([]);
   });
 
   test("writes through no file but itself and the record of the operations", () => {

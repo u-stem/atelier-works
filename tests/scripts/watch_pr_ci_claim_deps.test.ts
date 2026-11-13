@@ -5,8 +5,12 @@ import type { CheckEnvironmentProblems } from "../../f/factory/lib/check_sandbox
 import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
 import type { GhClient } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
+import { OPERATOR_CANCELLED_NOTE } from "../../f/factory/lib/operator_cancel.ts";
 import { ciRoundTimeoutMisfit } from "../../f/factory/steps/pr_workflow_support.ts";
-import { buildClaimDeps } from "../../f/factory/watch_pr_ci.ts";
+import {
+  buildClaimDeps,
+  type ClaimDepsLookups,
+} from "../../f/factory/watch_pr_ci.ts";
 
 const RAW_CONFIG = {
   owners: [{ name: "octo-owner", kind: "user" }],
@@ -57,6 +61,145 @@ describe("buildClaimDeps", () => {
     expect(buildClaimDeps(config, CLIENT)?.configMisfit).toMatch(
       /^ci round: time settings do not fit .*the verify step needs/,
     );
+  });
+});
+
+const HEAD = "0123456789abcdef0123456789abcdef01234567";
+const OTHER_HEAD = "89abcdef0123456789abcdef0123456789abcdef";
+
+/** 中止の判定が読むDBの読み取りを差し替える。`latest`はPRの最新の作業項目、`note`は取り消しの注記。 */
+function cancelLookups(
+  latest: { id: number; status: string; head_sha: string | null } | null,
+  note: string | null,
+  asked: unknown[][] = [],
+): Partial<ClaimDepsLookups> {
+  return {
+    latestPrWorkItem: async (...args) => {
+      asked.push(args);
+      return latest;
+    },
+    latestStatusEvent: async () => (note === null ? null : { note }),
+  };
+}
+
+describe("buildClaimDeps operatorCancelledAtHead", () => {
+  const config = parseFactoryConfig(RAW_CONFIG);
+
+  test("is true when a person cancelled the latest work item at the head", async () => {
+    const deps = buildClaimDeps(
+      config,
+      CLIENT,
+      undefined,
+      undefined,
+      undefined,
+      cancelLookups(
+        { id: 7, status: "cancelled", head_sha: HEAD },
+        OPERATOR_CANCELLED_NOTE,
+      ),
+    );
+    expect(
+      await deps?.operatorCancelledAtHead("acme", "widgets", 3, HEAD),
+    ).toBe(true);
+  });
+
+  test("reads the latest work item of the pull request it is asked about", async () => {
+    const asked: unknown[][] = [];
+    const deps = buildClaimDeps(
+      config,
+      CLIENT,
+      undefined,
+      undefined,
+      undefined,
+      cancelLookups(null, null, asked),
+    );
+    await deps?.operatorCancelledAtHead("acme", "widgets", 3, HEAD);
+    expect(asked).toEqual([["acme", "widgets", 3]]);
+  });
+
+  test("is false when the cancel was at another head", async () => {
+    const deps = buildClaimDeps(
+      config,
+      CLIENT,
+      undefined,
+      undefined,
+      undefined,
+      cancelLookups(
+        { id: 7, status: "cancelled", head_sha: OTHER_HEAD },
+        OPERATOR_CANCELLED_NOTE,
+      ),
+    );
+    expect(
+      await deps?.operatorCancelledAtHead("acme", "widgets", 3, HEAD),
+    ).toBe(false);
+  });
+
+  test("is false when the latest work item is not cancelled", async () => {
+    const deps = buildClaimDeps(
+      config,
+      CLIENT,
+      undefined,
+      undefined,
+      undefined,
+      cancelLookups(
+        { id: 7, status: "failed", head_sha: HEAD },
+        OPERATOR_CANCELLED_NOTE,
+      ),
+    );
+    expect(
+      await deps?.operatorCancelledAtHead("acme", "widgets", 3, HEAD),
+    ).toBe(false);
+  });
+});
+
+describe("buildClaimDeps branchItemOperatorCancelled", () => {
+  const config = parseFactoryConfig(RAW_CONFIG);
+  const ISSUE = {
+    kind: "issue" as const,
+    owner: "acme",
+    repo: "widgets",
+    status: "cancelled" as const,
+  };
+
+  test("is true when a person cancelled the Issue work item of the branch", async () => {
+    const deps = buildClaimDeps(
+      config,
+      CLIENT,
+      undefined,
+      undefined,
+      undefined,
+      {
+        getWorkItem: async () => ISSUE,
+        latestStatusEvent: async () => ({ note: OPERATOR_CANCELLED_NOTE }),
+      },
+    );
+    expect(
+      await deps?.branchItemOperatorCancelled(
+        "acme",
+        "widgets",
+        "factory/issue-5-wi-33",
+      ),
+    ).toBe(true);
+  });
+
+  test("is false for the work item of another pull request", async () => {
+    const deps = buildClaimDeps(
+      config,
+      CLIENT,
+      undefined,
+      undefined,
+      undefined,
+      {
+        getWorkItem: async () => ({ ...ISSUE, kind: "pr_fix" as const }),
+        latestStatusEvent: async () => ({ note: OPERATOR_CANCELLED_NOTE }),
+      },
+    );
+    expect(
+      await deps?.branchItemOperatorCancelled(
+        "acme",
+        "widgets",
+        "factory/issue-5-wi-33",
+      ),
+    ).toBe(false);
   });
 });
 

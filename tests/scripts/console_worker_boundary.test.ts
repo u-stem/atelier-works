@@ -26,6 +26,7 @@ import {
   sourcesReachableFrom,
   transpilerImports,
   unfollowableImports,
+  writesSql,
   yamlOf,
 } from "./worker_boundary_scan.ts";
 
@@ -1752,14 +1753,8 @@ describe("the scripts restricted to an SDK allowance", () => {
     (path) => {
       // 検査はテンプレートリテラルだけを見る。文字列で渡すSQL(`sql.query(...)`、`sql.raw(...)`)は、
       // 上の`datatableStringSql`が別に禁じる。
-      // 大文字のSQLの語は単独で、小文字でも書ける形は語の組で数える。文章中の英単語を数えないため。
-      const upper =
-        /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|COPY|CALL|GRANT)\b/;
-      const phrases =
-        /\b(?:insert\s+into|delete\s+from|drop\s+(?:table|index|view|schema)|alter\s+table|create\s+(?:table|index|view|schema|function)|update\s+[\w."]+\s+set)\b/i;
-      const writes = {
-        test: (text: string) => upper.test(text) || phrases.test(text),
-      };
+      // 数え方は`writesSql`にある。文章中の英単語を数えないため、小文字は語の組で数える。
+      const writes = { test: writesSql };
       const offenders: string[] = [];
       for (const [file, source] of sourcesReachableFrom(path)) {
         if (relative(file) in SQL_WRITERS_ALLOWED) continue;

@@ -3357,6 +3357,7 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
     },
     // 人の中止の判断は`decideFixClaim`のテストが確かめる。ここでは中止されていないPRとして読む。
     operatorCancelledAtHead: async () => false,
+    branchItemOperatorCancelled: async () => false,
     readBranchItemStatus: async (...args) => {
       count("branch_item");
       branchReads.push(args);

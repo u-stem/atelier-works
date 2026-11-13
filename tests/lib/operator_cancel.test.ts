@@ -2,13 +2,17 @@ import { describe, expect, test } from "bun:test";
 import {
   isOperatorCancellable,
   isOperatorCancelledAtHead,
+  isOperatorCancelledItem,
   isOperatorCancelledNote,
+  OPERATOR_CANCEL_PR_ROW_KINDS,
+  OPERATOR_CANCEL_WITHDRAWN_REQUEST_KINDS,
   OPERATOR_CANCELLABLE_STATUSES,
   OPERATOR_CANCELLED_NOTE,
   operatorCancellableStatuses,
   readOperatorCancelledAtHead,
 } from "../../f/factory/lib/operator_cancel.ts";
 import {
+  APPROVAL_REQUEST_KINDS,
   TERMINAL_WORK_ITEM_STATUSES,
   WORK_ITEM_KINDS,
   WORK_ITEM_STATUSES,
@@ -172,6 +176,72 @@ describe("isOperatorCancelledAtHead", () => {
     expect(isOperatorCancelledAtHead(null, OPERATOR_CANCELLED_NOTE, HEAD)).toBe(
       false,
     );
+  });
+});
+
+describe("the approval requests that a cancel withdraws", () => {
+  test("are the requests of the requirements and the design", () => {
+    expect([...OPERATOR_CANCEL_WITHDRAWN_REQUEST_KINDS].sort()).toEqual([
+      "design",
+      "requirements",
+    ]);
+  });
+
+  // 提案は作業項目と別のIssueを作る判断で、照合による取り消しと同じく残す。
+  test("leave the requests of the Issue proposals", () => {
+    expect(
+      OPERATOR_CANCEL_WITHDRAWN_REQUEST_KINDS.some(
+        (kind) => kind === "issue_proposal",
+      ),
+    ).toBe(false);
+  });
+
+  test("name only kinds of approval requests that exist", () => {
+    expect(
+      OPERATOR_CANCEL_WITHDRAWN_REQUEST_KINDS.filter(
+        (kind) => !APPROVAL_REQUEST_KINDS.some((known) => known === kind),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("the kinds whose work item is one row of a pull request", () => {
+  test("are the review, the fix and the dependabot item", () => {
+    expect([...OPERATOR_CANCEL_PR_ROW_KINDS].sort()).toEqual([
+      "dependabot",
+      "pr_fix",
+      "pr_review",
+    ]);
+  });
+});
+
+describe("isOperatorCancelledItem", () => {
+  test("is true for a cancelled item with the note of a cancel by a person", () => {
+    expect(
+      isOperatorCancelledItem({ status: "cancelled" }, OPERATOR_CANCELLED_NOTE),
+    ).toBe(true);
+  });
+
+  test("is false for an item that the reconcile cancelled", () => {
+    expect(
+      isOperatorCancelledItem(
+        { status: "cancelled" },
+        "reconcile: closed (actionable)",
+      ),
+    ).toBe(false);
+  });
+
+  test("is false for an item that is not cancelled", () => {
+    expect(
+      isOperatorCancelledItem(
+        { status: "awaiting_approval" },
+        OPERATOR_CANCELLED_NOTE,
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when there is no item", () => {
+    expect(isOperatorCancelledItem(null, OPERATOR_CANCELLED_NOTE)).toBe(false);
   });
 });
 
