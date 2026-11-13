@@ -104,6 +104,7 @@ headlessで起動したClaude Code(`claude -p`)がレビュー指摘と未解決
 依存を足すか自前で書くかは、対象リポジトリの方針(`AGENTS.md`、`docs/`の依存の章)に従い、例外に当たらない再発明を避ける。
 新しい依存が要ると判断したら、マニフェストとlockfileを自分で書き換えない。
 `Bash`が使えず、名前、公開者、公開からの日数をレジストリで確かめられないためである。
+宣言していないパッケージをimportするコードも書かず、依存が要る処理は、報告した依存が入るまで実装しない。
 足したい依存と理由は、`decision: "propose_issue"`の`issue_proposal`か、`outcome: "blocked"`の`blocked_reason`に書く。
 CI回と競合回では依存を足さない。
 
