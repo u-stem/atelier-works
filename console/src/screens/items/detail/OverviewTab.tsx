@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Link } from "react-router";
 import type { WorkItemDetail } from "../../../api/guards/workItemDetail.ts";
 import { EmptyNote } from "../../../components/EmptyNote.tsx";
@@ -164,21 +165,26 @@ const NO_PROGRESS: FlowProgressView = { kind: "none" };
 
 /**
  * 概要のタブ。状態、リンク、試行などの概要と、flowの進行、失敗の記録、状態の遷移を出す。
- * 失敗の再実行などの書き込みは置かず、要対応の画面へのリンクだけを添える。
+ * 書き込みは、概要の下に置く操作(`actions`)だけにする。中止は詳細の画面が組んで渡す。
+ * 失敗の再実行は置かず、要対応の画面へのリンクだけを添える。
  * 進行は、概要の取得とは別の取得なので、読めなくても概要は残る。
  */
 export function OverviewTab({
   detail,
   now,
   progress = NO_PROGRESS,
+  actions = null,
 }: {
   detail: WorkItemDetail;
   now: number;
   progress?: FlowProgressView;
+  /** 概要の下に置く操作。無ければ`null`。 */
+  actions?: ReactNode;
 }) {
   return (
     <div className={OVERVIEW_BODY_CLASS}>
       <Summary detail={detail} now={now} />
+      {actions}
       <ItemFlowProgress view={progress} />
       <Failures detail={detail} now={now} />
       <Transitions detail={detail} now={now} />

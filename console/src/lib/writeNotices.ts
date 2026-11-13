@@ -27,6 +27,8 @@ import type {
   StopAllReleaseRefusalReason,
   StopAllReleaseResult,
   StopAllResult,
+  WorkItemCancelRefusalReason,
+  WorkItemCancelResult,
 } from "../api/guards/writeResults.ts";
 import { LAST_ELEMENT_NOTE } from "./configChange.ts";
 import {
@@ -354,6 +356,43 @@ export function describeJobCancelResult(result: JobCancelResult): WriteNotice {
       }
     : { tone: "success", message: `ジョブを中止しました。${workItem}` };
   return noteActionAudit(notice, result.action_audit);
+}
+
+const WORK_ITEM_CANCEL_REFUSALS: Readonly<
+  Record<WorkItemCancelRefusalReason, string>
+> = {
+  not_cancellable:
+    "この状態の作業項目は、中止できません。実行中の作業項目は、終わるのを待ってください。",
+  status_changed:
+    "確かめている間に状態が変わったため、中止しませんでした。状態を更新して、もう一度確かめてください。",
+  actor_unknown: "操作者を確認できないため、中止しませんでした。",
+  audit_unavailable: "操作の記録を残せないため、中止しませんでした。",
+};
+
+/**
+ * 作業項目の中止の結果。断りは失敗ではなく、何も変えなかった結果として伝える。
+ * 中止したときは、期限切れにした承認依頼の数を添える。
+ */
+export function describeWorkItemCancelResult(
+  result: WorkItemCancelResult,
+): WriteNotice {
+  if (!result.found) {
+    return { tone: "info", message: "作業項目が見つかりません。" };
+  }
+  if (result.refused) {
+    return { tone: "info", message: WORK_ITEM_CANCEL_REFUSALS[result.reason] };
+  }
+  const withdrawn =
+    result.withdrawn_approval_requests === 0
+      ? ""
+      : `保留中の承認依頼${String(result.withdrawn_approval_requests)}件を期限切れにしました。`;
+  return noteActionAudit(
+    {
+      tone: "success",
+      message: `作業項目 #${String(result.work_item_id)} を中止しました。${withdrawn}`,
+    },
+    result.action_audit,
+  );
 }
 
 const JOB_RERUN_REFUSALS: Readonly<Record<JobRerunRefusalReason, string>> = {

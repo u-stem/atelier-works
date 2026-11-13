@@ -108,6 +108,17 @@ describe("OverviewTab frame", () => {
 });
 
 describe("OverviewTab", () => {
+  test("places the actions it is given in the overview", () => {
+    const html = render(
+      <OverviewTab
+        detail={detail()}
+        now={NOW}
+        actions={<button type="button">作業項目を中止</button>}
+      />,
+    );
+    expect(html).toContain(">作業項目を中止</button>");
+  });
+
   test("has no heading that repeats the tab name", () => {
     const html = render(<OverviewTab detail={detail()} now={NOW} />);
     expect(html).not.toContain(">概要</h2>");

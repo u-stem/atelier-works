@@ -15,6 +15,7 @@ import { classifyRunResponse, type RunResult } from "./errors.ts";
  * `console_config_update`は、設定の許可した項目を1つ、止める向きか下げる向きにだけ変える。
  * `console_deploy_decide`は、保護パスの変更を含む反映の、最新の承認待ちの版を1件、承認か却下する。
  * `console_stop_all`はFactory全体を止め(全停止)、`console_stop_all_release`は全停止を解除する。どちらも`*_enabled`を有効にする向きには変えない。
+ * `console_work_item_cancel`は、実行中のジョブが無い作業項目を1件中止する。中止した作業項目は再開できない。
  */
 export const SCRIPT_PATHS = {
   console_query: "f/factory/steps/console_query",
@@ -38,6 +39,7 @@ export const SCRIPT_PATHS = {
   console_deploy_decide: "f/factory/console_deploy_decide",
   console_stop_all: "f/factory/console_stop_all",
   console_stop_all_release: "f/factory/console_stop_all_release",
+  console_work_item_cancel: "f/factory/console_work_item_cancel",
 } as const;
 
 export type ScriptName = keyof typeof SCRIPT_PATHS;

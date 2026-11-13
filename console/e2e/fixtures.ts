@@ -95,6 +95,9 @@ export const REQUIREMENTS_ROW: RequirementsIndexRow = {
 /** 取り込み時点のIssueの本文が切り詰められている承認の作業項目。 */
 export const TRUNCATED_WORK_ITEM_ID = 9;
 
+/** 失敗して止まり、詳細に中止のボタンが出る作業項目。 */
+export const CANCELLABLE_WORK_ITEM_ID = 11;
+
 export const SUMMARY_NORMAL: ConsoleSummary = {
   counts: { approvals: 5, failures: 1, notices: 1 },
   approvals: [
@@ -477,6 +480,18 @@ export const WORK_ITEM_DETAIL_NORMAL: WorkItemDetail = {
       approval_status: null,
     },
   ],
+};
+
+/** 失敗して止まった作業項目の詳細。概要に中止のボタンが出る。 */
+export const WORK_ITEM_DETAIL_CANCELLABLE: WorkItemDetail = {
+  ...WORK_ITEM_DETAIL_NORMAL,
+  work_item: {
+    ...WORK_ITEM_DETAIL_NORMAL.work_item,
+    work_item_id: CANCELLABLE_WORK_ITEM_ID,
+    status: "failed",
+    pr_number: null,
+    pr_url: null,
+  },
 };
 
 /**
