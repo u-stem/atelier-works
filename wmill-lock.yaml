@@ -44,7 +44,7 @@ locks:
   f/factory/lib/audit_doc: 0dcccfcfd59607c2aff289b48940f5dfd98de36ce6db462375394f2b6d696aa1
   f/factory/lib/audit_evidence: 74bbf38124ccee9c630cd3bd04e8a952d54c5c88d1206c4666a0b98eaa732c85
   f/factory/lib/audit_support: fb02476fedd46bd81f95131ebe6bf54f6765617295a60b0667b52dc0f9b5bf16
-  f/factory/lib/auto_retry: dd030a64e931f6ccb099494e20d08025ccec31ef9f337ddfaa6a157682e76e84
+  f/factory/lib/auto_retry: 3f71ecf8bd6561907175594734cfec1f0dc6cc6ae9320187b4367f1afacfc543
   f/factory/lib/auto_retry_reasons: e2d2fd0db790d66913db9449b203d937d93464ae93f1cc790721fd51771dabdc
   f/factory/lib/backup_support: f4379f36e1a89a6f4dc9a700ca1a051237ee6acba44a009f0052db1ffa128cb5
   f/factory/lib/branch_hold: 0f2fb8cd95dd575a8b868a2087222690dc25dab0ed16b5e3b21510c4a4a0dbbb
@@ -247,7 +247,7 @@ locks:
   f/factory/steps/pr_review_post: a25a948fd2673ae07cb64a12945d153288891d2861e3b443af05893b804308cf
   f/factory/steps/pr_review_prepare: 005bdcacfb003e9dca2eb75cf72b6ce65ff97bd9039ed4d0aca44d6b9def4040
   f/factory/steps/pr_workflow_support: 8f6e62d9da5ac39ae91fa5edf425f6ebdaad40c9c542daef315782685d11249a
-  f/factory/steps/requirements_apply: 4dfe29cada9a6dc6bba3491c74fc54fdd8643b9d5bc8154569271b189d5108a0
+  f/factory/steps/requirements_apply: 6428dda8b7ef58c6bb5e0adcc628e43c7e954427fa392402957a15da4760f21a
   f/factory/watch_main_ci: 835d343d078eba333b2ab32b548ca518db19fcad2d5dfd58e179e79357cbef04
   f/factory/watch_pr_ci: d7e29cfac779f60ebc4d4c284ee7e7931d249b1ea1f5db90f0a528daef6546c9
   f/factory/watch_pr_conflicts: 865d1827fd0e8bdfefc6f14e68449c139377384f2cefb898379e4ef4ae6d8abb

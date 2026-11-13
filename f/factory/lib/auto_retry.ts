@@ -36,7 +36,7 @@ import {
   IMPLEMENT_FLOW_PATH,
   parseFlowJobId,
 } from "./implement_launch_support.ts";
-import { errorMessage, type Logger, maskSecrets } from "./log.ts";
+import { errorMessage, type Logger } from "./log.ts";
 import type { WorkItemStatus } from "./types.ts";
 
 /** 自動の再開の遷移の注記の先頭。再開の回数をこの注記で数える。 */
@@ -334,7 +334,7 @@ export async function shouldStartStaleImageRetry(deps: {
     return await deps.hasCandidates();
   } catch (err) {
     deps.log.warn("auto retry candidates could not be counted", {
-      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      error: errorMessage(err),
     });
     return true;
   }

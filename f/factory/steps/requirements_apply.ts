@@ -42,7 +42,7 @@ import {
   INTAKE_REFRESHED_NOTICE_KIND,
   refreshIntakeFromIssue,
 } from "../lib/intake_refresh.ts";
-import { errorMessage, type Logger, logger, maskSecrets } from "../lib/log.ts";
+import { errorMessage, type Logger, logger } from "../lib/log.ts";
 import { DESIGN_FLOW_PATH, PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
 import {
   type FactoryConfig,
@@ -850,7 +850,7 @@ async function removeReqWorktree(workItem: WorkItem): Promise<void> {
       "failed to remove requirements worktree",
       {
         worktreeDir,
-        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+        error: errorMessage(err),
       },
     );
   }
