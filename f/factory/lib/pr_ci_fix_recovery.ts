@@ -52,7 +52,7 @@ function ciClaudeFailureNotes(reason: RunClaudeFailureReason): string[] {
  * Claudeの実行の失敗のうち、そのままでは起動し直さないものの注記と、写す保留の理由。
  * timeoutと予算の超過は、同じheadで繰り返しても同じ失敗になるので、決定的な保留にする。
  * 使用上限と全停止は、待てば解けるので、一時的な保留にする。
- * 人が中止した作業項目の実行は、人の中止の保留にする。人が止めた行は失敗にならないので、実際には引かれない防御である。
+ * 人が中止した作業項目の実行(`work_item_stopped`)は入れない。人が止めた行は取り消しで、失敗にならないので、ここで読まれない。
  */
 const CLAUDE_FAILURE_HOLDS: ReadonlyMap<string, PrCiFixHoldReason> = new Map(
   (
@@ -61,7 +61,6 @@ const CLAUDE_FAILURE_HOLDS: ReadonlyMap<string, PrCiFixHoldReason> = new Map(
       ["run_budget_exceeded", "claude_run_failed"],
       ["usage_limit", "claude_usage_limit"],
       ["stopped", "claude_stopped"],
-      ["work_item_stopped", "operator_cancelled"],
     ] as const
   ).flatMap(([reason, hold]) =>
     ciClaudeFailureNotes(reason).map((note): [string, PrCiFixHoldReason] => [

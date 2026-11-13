@@ -376,8 +376,14 @@ export async function runAllowedCheckCommands(
             watch.stopped() ||
             itemWatch.stopped()
           ) {
+            // 全停止だけが当たって見えるときは、作業項目の確認の読み取りが遅れただけかもしれないので、もう1回確かめる。
             results.push(
-              stoppedResult(command, itemStoppedBefore || itemWatch.stopped()),
+              stoppedResult(
+                command,
+                itemStoppedBefore ||
+                  itemWatch.stopped() ||
+                  (await checkStop(workItemCheck)),
+              ),
             );
             break;
           }

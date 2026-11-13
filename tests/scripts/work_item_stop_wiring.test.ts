@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
-import { IMPLEMENT_ISSUE_CLOSED_NOTE } from "../../f/factory/lib/implement_finish_support.ts";
+import { IMPLEMENT_CANCEL_NOTES } from "../../f/factory/lib/implement_finish_support.ts";
 import { holdsImplementLease } from "../../f/factory/lib/implement_launch_support.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import { OPERATOR_CANCELLED_NOTE } from "../../f/factory/lib/operator_cancel.ts";
@@ -505,7 +505,7 @@ describe("the calls that move a work item into the cancelled state", () => {
       "f/factory/steps/design_prepare.ts: ".concat(
         '"issue closed before design started"',
       ),
-      "f/factory/steps/implement_finish.ts: IMPLEMENT_ISSUE_CLOSED_NOTE",
+      "f/factory/steps/implement_finish.ts: IMPLEMENT_CANCEL_NOTES[reason]",
       "f/factory/steps/investigate_generate.ts: ".concat(
         '"investigation disabled"',
       ),
@@ -524,22 +524,29 @@ describe("the cancel of the implement flow", () => {
   const finish = squash(read("f/factory/steps/implement_finish.ts"));
 
   test("takes no note from the argument of the step", () => {
-    expect(finish).toContain('if(action.kind==="cancel")returncancel();');
-  });
-
-  test("writes the fixed note", () => {
-    expect(finish).toContain("constcancel=async()=>");
-  });
-
-  test("has a note that is a fixed text of its own", () => {
-    expect(IMPLEMENT_ISSUE_CLOSED_NOTE).toBe(
-      "issue closed before implementation started",
+    expect(finish).toContain(
+      'if(action.kind==="cancel")returncancel("closed_before_start");',
     );
+  });
+
+  test("chooses the note of the other cancel from the enumerated reasons", () => {
+    expect(finish).toContain('returncancel("closed_during_run");');
+  });
+
+  test("writes the note that the enumerated reason chooses", () => {
+    expect(finish).toContain("IMPLEMENT_CANCEL_NOTES[reason]");
+  });
+
+  test("has notes that are fixed texts", () => {
+    expect(IMPLEMENT_CANCEL_NOTES).toEqual({
+      closed_before_start: "issue closed before implementation started",
+      closed_during_run: "issue closed during implementation",
+    });
   });
 
   test("has the note that the prepare step gives as its reason", () => {
     expect(read("f/factory/steps/implement_prepare.ts")).toContain(
-      `"${IMPLEMENT_ISSUE_CLOSED_NOTE}"`,
+      `"${IMPLEMENT_CANCEL_NOTES.closed_before_start}"`,
     );
   });
 });
@@ -579,7 +586,6 @@ describe("the library that reads the work item", () => {
       "./log.ts",
       "./operator_cancel.ts",
       "./pipeline_lease.ts",
-      "./stop_all.ts",
       "./stop_check.ts",
       "./types.ts",
       "windmill-client@1.817.0",

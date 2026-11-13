@@ -35,16 +35,22 @@ export const NEVER_STOPPED: StopCheck = async () => false;
  * 残っている間は、始めてから`STALE_READ_MS`が過ぎるまで、新しい読み取りを始めず止めない扱いにする。応答しないAPIに読み取りを積み重ねないためである。
  * `STALE_READ_MS`が過ぎた読み取りは見切り、新しく読む。見切った読み取りが後で終わっても、新しい読み取りの状態は消さない。
  * 残っている読み取りの管理は、この関数を呼んで作る確認ごとに別になる。2つの確認は、互いの遅れに影響されない。
+ * `keepLateTrue`を真にすると、時間切れの後に読み取りが真を返したとき、その真を覚えて、以後の呼び出しは読まずに真を返す。
+ * 止める合図が戻らない確認(人の中止のように、終端で戻らない状態)だけに使う。
+ * 全停止は解除があるので、古い真を覚えない。
  * `now`は現在の時刻(ミリ秒)を返す。テストで差し替える。
  */
 export function boundedCheckFrom(
   read: () => Promise<boolean>,
   timeoutMs: number,
   now: () => number = Date.now,
+  options: { readonly keepLateTrue?: boolean } = {},
 ): StopCheck {
   let pending: { readonly id: number; readonly startedAt: number } | undefined;
   let nextId = 0;
+  let lateTrue = false;
   return async () => {
+    if (lateTrue) return true;
     if (pending !== undefined && now() - pending.startedAt < STALE_READ_MS) {
       return false;
     }
@@ -58,6 +64,11 @@ export function boundedCheckFrom(
       if (pending?.id === mine.id) pending = undefined;
     };
     result.then(clear, clear);
+    if (options.keepLateTrue === true) {
+      void result.then((stop) => {
+        if (stop) lateTrue = true;
+      });
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<boolean>((resolve) => {
       timer = setTimeout(() => {

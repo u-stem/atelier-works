@@ -55,8 +55,10 @@ import {
   finishFailureReason,
   gapExhaustedReason,
   gapReportNoticeDetail,
+  IMPLEMENT_CANCEL_NOTES,
   IMPLEMENT_FINISH_NO_OUTPUT_REASON,
   IMPLEMENT_WIP_COMMIT_MESSAGE,
+  type ImplementCancelReason,
   type ImplementFinishOutcome,
   implementCommitGuards,
   implementDesignGapExhaustedNote,
@@ -448,20 +450,23 @@ async function finishImplement(
     return transitionResult(moved, "needs_human", reason);
   };
 
-  const cancel = async (note: string): Promise<ImplementFinishResult> =>
+  // 取り消しの注記は、step間の引数(`prepare_reason`)を使わず、列挙値から決まる固定の文にする。
+  const cancel = async (
+    reason: ImplementCancelReason,
+  ): Promise<ImplementFinishResult> =>
     transitionResult(
       await updateStatusIfLeaseHolder(
         work_item_id,
         "implementing",
         "cancelled",
         leaseJobId,
-        note,
+        IMPLEMENT_CANCEL_NOTES[reason],
       ),
       "cancelled",
-      note,
+      IMPLEMENT_CANCEL_NOTES[reason],
     );
 
-  if (action.kind === "cancel") return cancel(prepare_reason ?? "issue closed");
+  if (action.kind === "cancel") return cancel("closed_before_start");
 
   const commitOptions = async (
     ctx: ImplementContext,
@@ -573,8 +578,7 @@ async function finishImplement(
         }),
       );
     }
-    if (issue.state !== "open")
-      return cancel("issue closed during implementation");
+    if (issue.state !== "open") return cancel("closed_during_run");
     issueUpdatedAfterIntake = issueChangedSinceIntake(workItem, issue);
   }
 
