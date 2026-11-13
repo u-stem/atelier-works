@@ -728,7 +728,7 @@ describe("self_update timeout", () => {
   /** 区切りの呼び出しの開きから、その中の呼び出しまでの、最も長い距離。 */
   const WRAPPER_REACH = 700;
 
-  describe("self_update timeout", () => {
+  describe("job timeout and call sites", () => {
     test("the job timeout covers the worst case", async () => {
       expect(await jobTimeoutMs()).toBeGreaterThanOrEqual(
         SELF_UPDATE_WORST_CASE_MS,

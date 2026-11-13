@@ -1395,9 +1395,6 @@ describe("rehashMetadataLock", () => {
 });
 
 describe("ci_metadata_rehash probe", () => {
-  const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
-  const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
-
   const SHA = "a".repeat(40);
   const REF = "factory/issue-3-wi-7";
 
