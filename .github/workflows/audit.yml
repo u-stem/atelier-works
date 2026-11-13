@@ -1,0 +1,61 @@
+name: Audit
+
+# mainのルートとConsoleのbun.lockを、`bun audit`で定期に監査する。
+# workerのscriptの依存は、`.script.lock`がルートのbun.lockと同じ版にそろうことを`mise run lint`が確かめるので、ルートの監査が覆う。
+# PRでは動かさない。PRの実行が落ちると、FactoryのPRのCIの監視が直せる失敗とみなし、
+# lockfileを直せない自動の修正を起動してしまうため。
+# 手動の実行も、mainのrefのときだけ監査する。
+# 定期の実行の失敗は、Factoryが通知しない。失敗はActionsの実行の一覧で見る。
+# 失敗したときの確かめ方は、docs/security.mdの「依存の脆弱性」にある。
+on:
+  schedule:
+    # 毎週月曜の9時(JST)に動かす。cronはUTCで書く。
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+
+# 実行ごとに別のグループにする。
+concurrency:
+  group: audit-${{ github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ジョブの名前を、mainの必須チェックの名前と重ねない。
+  # 重なる名前のチェックがPRのheadに付くと、dependabotの自動マージの関門がその結果も求めるため。
+  audit:
+    # mainのrefだけで動かす。手動の実行でPRのブランチを選ぶと、失敗した実行がPRのheadに付き、
+    # CIの自動修正を起動しうるため。ほかのrefでは、ジョブは飛ばされる。
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # `mise run` / `mise exec`を使わずbunを直接呼ぶ。
+      # 入れていない[tools]を、後からmiseが自動で入れないようにする。
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      MISE_EXEC_AUTO_INSTALL: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          # 監査に要るbunだけを入れる。キャッシュは読み書きしない。
+          install_args: bun
+          cache: false
+
+      # `bun audit`はlockfileだけを読むので、依存は入れない。
+      - name: Audit root dependencies
+        run: bun audit --audit-level=high
+
+      - name: Audit console dependencies
+        # ルートの監査が失敗しても、Consoleの指摘も出す。取り消したときは動かさない。
+        # `!`で否定する式は、YAMLのタグを拒む契約テストに当たるので、成功と失敗を並べて書く。
+        if: ${{ success() || failure() }}
+        # サブコマンドの後ろの`--cwd`に頼らず、作業ディレクトリでconsole/bun.lockを読ませる。
+        working-directory: console
+        run: bun audit --audit-level=high

@@ -1,0 +1,701 @@
+import { describe, expect, test } from "bun:test";
+import {
+  checkScriptLock,
+  indexRootLock,
+  type RootIndex,
+  type ScriptLockViolation,
+  scanStrictJson,
+  WORKER_DEPENDENCIES,
+} from "../../scripts/check-script-locks.ts";
+
+const CLIENT_INTEGRITY = "sha512-AbCd+/0123456789==";
+const SCOPED_INTEGRITY = "sha512-EfGh+/9876543210==";
+const TRANSITIVE_INTEGRITY = "sha512-IjKl+/1357924680==";
+const NESTED_INTEGRITY = "sha512-MnOp+/2468013579==";
+const OTHER_REGISTRY = "https://registry.example.com/";
+
+// `fast-uri`は、ルートのpackage.jsonが宣言しない推移的な依存として置く。
+// `windmill-client/argparse`は、入れ子の項目として置く。
+const ROOT_LOCK = `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "root",
+      "devDependencies": {
+        "windmill-client": "1.817.0",
+        "@scope/x": "2.0.0",
+      },
+    },
+  },
+  "packages": {
+    "windmill-client": ["windmill-client@1.817.0", "", {}, "${CLIENT_INTEGRITY}"],
+    "@scope/x": ["@scope/x@2.0.0", "", {}, "${SCOPED_INTEGRITY}"],
+    "fast-uri": ["fast-uri@3.1.9", "", {}, "${TRANSITIVE_INTEGRITY}"],
+    "windmill-client/argparse": ["argparse@3.0.4", "", {}, "${NESTED_INTEGRITY}"],
+  }
+}
+`;
+
+/** 入れ子の項目`windmill-client/argparse`を、版、registry、integrityから組み立てる。 */
+function nestedEntry(
+  version: string,
+  registry: string,
+  integrity: string,
+): string {
+  return `"windmill-client/argparse": ["argparse@${version}", "${registry}", {}, "${integrity}"],`;
+}
+
+const EMPTY_LOCK = '{\n  "dependencies": {}\n}\n//bun.lock\n<empty>';
+
+const CLIENT_ENTRY = `"windmill-client": ["windmill-client@1.817.0", "", {}, "${CLIENT_INTEGRITY}"],`;
+
+const SCOPED_ENTRY = `"@scope/x": ["@scope/x@2.0.0", "", {}, "${SCOPED_INTEGRITY}"],`;
+
+const CLIENT_DEPENDENCIES: Record<string, string> = {
+  "windmill-client": "1.817.0",
+};
+
+type LockShape = {
+  /** 前半のpackage.jsonに足す欄。 */
+  readonly manifestFields?: Record<string, unknown>;
+  /** 後半の`workspaces[""]`。既定は前半と同じ`dependencies`を持つ。 */
+  readonly workspace?: Record<string, unknown>;
+  /** 後半の`workspaces`に足すworkspace。 */
+  readonly extraWorkspaces?: Record<string, unknown>;
+  /** 後半の最上位に足す欄。 */
+  readonly lockFields?: Record<string, unknown>;
+};
+
+/**
+ * scriptの`.script.lock`を、宣言する依存と、bun.lockの`packages`の中身から組み立てる。
+ * 宣言の既定は、windmill-clientだけである。
+ */
+function scriptLock(
+  packages: string,
+  dependencies: Record<string, string> = CLIENT_DEPENDENCIES,
+  shape: LockShape = {},
+): string {
+  const manifest = { dependencies, ...shape.manifestFields };
+  const workspaces = {
+    "": shape.workspace ?? { dependencies },
+    ...shape.extraWorkspaces,
+  };
+  const extra = Object.entries(shape.lockFields ?? {})
+    .map(
+      ([key, value]) => `\n  ${JSON.stringify(key)}: ${JSON.stringify(value)},`,
+    )
+    .join("");
+  return `${JSON.stringify(manifest, null, 2)}
+//bun.lock
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": ${JSON.stringify(workspaces)},${extra}
+  "packages": {
+    ${packages}
+  }
+}`;
+}
+
+function rootIndex(text: string = ROOT_LOCK): RootIndex {
+  const result = indexRootLock(text);
+  if (!result.ok) throw new Error(result.reason);
+  return result.index;
+}
+
+function keysOf(text: string, workers?: ReadonlySet<string>): string[] {
+  return checkScriptLock(text, rootIndex(), workers).map(
+    (violation) => violation.key,
+  );
+}
+
+describe("checkScriptLock", () => {
+  test("accepts a package with the same version and integrity as the root", () => {
+    expect(checkScriptLock(scriptLock(CLIENT_ENTRY), rootIndex())).toEqual([]);
+  });
+
+  test("accepts a scoped transitive package with the same version and integrity as the root", () => {
+    const lock = scriptLock(`${CLIENT_ENTRY}\n    ${SCOPED_ENTRY}`);
+    expect(checkScriptLock(lock, rootIndex())).toEqual([]);
+  });
+
+  test("accepts a nested package with the same version, registry, and integrity as the root", () => {
+    const lock = scriptLock(
+      `${CLIENT_ENTRY}\n    ${nestedEntry("3.0.4", "", NESTED_INTEGRITY)}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([]);
+  });
+
+  test("reports a nested package whose version differs from the root", () => {
+    const lock = scriptLock(
+      `${CLIENT_ENTRY}\n    ${nestedEntry("3.0.2", "", NESTED_INTEGRITY)}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client/argparse",
+        reason: "version differs from the root bun.lock",
+      },
+    ]);
+  });
+
+  test("reports a nested package whose integrity differs from the root", () => {
+    const lock = scriptLock(
+      `${CLIENT_ENTRY}\n    ${nestedEntry("3.0.4", "", CLIENT_INTEGRITY)}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client/argparse",
+        reason: "integrity differs from the root bun.lock",
+      },
+    ]);
+  });
+
+  test("reports a nested package whose registry differs from the root", () => {
+    const lock = scriptLock(
+      `${CLIENT_ENTRY}\n    ${nestedEntry("3.0.4", OTHER_REGISTRY, NESTED_INTEGRITY)}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client/argparse",
+        reason: "registry differs from the root bun.lock",
+      },
+    ]);
+  });
+
+  test("reports a top-level package whose registry differs from the root", () => {
+    const lock = scriptLock(
+      `"windmill-client": ["windmill-client@1.817.0", "${OTHER_REGISTRY}", {}, "${CLIENT_INTEGRITY}"],`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client",
+        reason: "registry differs from the root bun.lock",
+      },
+    ]);
+  });
+
+  test("reports a package whose version differs from the root", () => {
+    const lock = scriptLock(
+      `"windmill-client": ["windmill-client@1.818.0", "", {}, "${CLIENT_INTEGRITY}"],`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client",
+        reason: "version differs from the root bun.lock",
+      },
+    ]);
+  });
+
+  test("reports a package whose integrity differs from the root", () => {
+    const lock = scriptLock(
+      `"windmill-client": ["windmill-client@1.817.0", "", {}, "${SCOPED_INTEGRITY}"],`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client",
+        reason: "integrity differs from the root bun.lock",
+      },
+    ]);
+  });
+
+  test("reports a package that the root does not have", () => {
+    const lock = scriptLock(
+      `${CLIENT_ENTRY}\n    "left-pad": ["left-pad@1.3.0", "", {}, "${CLIENT_INTEGRITY}"],`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.left-pad",
+        reason: "package is not in the root bun.lock",
+      },
+    ]);
+  });
+
+  test("reports a top-level key whose entry names another package", () => {
+    const lock = scriptLock(
+      `"windmill-client": ["@scope/x@2.0.0", "", {}, "${SCOPED_INTEGRITY}"],`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client",
+        reason: "package entry names another package than its key",
+      },
+    ]);
+  });
+
+  test("reports a package entry without integrity", () => {
+    const lock = scriptLock(
+      `"windmill-client": ["windmill-client@1.817.0", "", {}],`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client",
+        reason: "integrity differs from the root bun.lock",
+      },
+    ]);
+  });
+
+  test("reports a malformed package entry", () => {
+    const lock = scriptLock(`"windmill-client": "windmill-client@1.817.0",`);
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client",
+        reason: "package entry is malformed",
+      },
+    ]);
+  });
+
+  test("reports a declared dependency when the packages are empty", () => {
+    expect(checkScriptLock(scriptLock(""), rootIndex())).toEqual([
+      {
+        key: "dependencies.windmill-client",
+        reason: "dependency has no package in the bun.lock part",
+      },
+    ]);
+  });
+
+  test("reports a declared dependency that only another package stands for", () => {
+    expect(checkScriptLock(scriptLock(SCOPED_ENTRY), rootIndex())).toEqual([
+      {
+        key: "dependencies.windmill-client",
+        reason: "dependency has no package in the bun.lock part",
+      },
+    ]);
+  });
+
+  test("reports a declared version that differs from the root package.json", () => {
+    const lock = scriptLock(CLIENT_ENTRY, { "windmill-client": "1.818.0" });
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "dependencies.windmill-client",
+        reason: "declared version differs from the root package.json",
+      },
+    ]);
+  });
+
+  test("reports a declared dependency that the root package.json does not declare", () => {
+    const lock = scriptLock(
+      `"fast-uri": ["fast-uri@3.1.9", "", {}, "${TRANSITIVE_INTEGRITY}"],`,
+      { "fast-uri": "3.1.9" },
+    );
+    expect(checkScriptLock(lock, rootIndex(), new Set(["fast-uri"]))).toEqual([
+      {
+        key: "dependencies.fast-uri",
+        reason: "dependency is not declared in the root package.json",
+      },
+    ]);
+  });
+
+  test("reports a declared dependency that the worker list does not allow", () => {
+    const lock = scriptLock(SCOPED_ENTRY, { "@scope/x": "2.0.0" });
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "dependencies.@scope/x",
+        reason: "dependency is not in the worker dependency list",
+      },
+    ]);
+  });
+
+  test("accepts a declared dependency that the worker list allows", () => {
+    const lock = scriptLock(SCOPED_ENTRY, { "@scope/x": "2.0.0" });
+    expect(keysOf(lock, new Set(["@scope/x"]))).toEqual([]);
+  });
+
+  test("allows windmill-client in the worker list", () => {
+    expect(WORKER_DEPENDENCIES.has("windmill-client")).toBe(true);
+  });
+
+  test("reports a manifest field other than dependencies", () => {
+    const lock = scriptLock(CLIENT_ENTRY, CLIENT_DEPENDENCIES, {
+      manifestFields: { devDependencies: { "@scope/x": "2.0.0" } },
+    });
+    expect(keysOf(lock)).toEqual(["devDependencies"]);
+  });
+
+  test("reports a workspace whose dependencies differ from the manifest", () => {
+    const lock = scriptLock(CLIENT_ENTRY, CLIENT_DEPENDENCIES, {
+      workspace: { dependencies: { "windmill-client": "1.818.0" } },
+    });
+    expect(keysOf(lock)).toEqual(['workspaces."".dependencies']);
+  });
+
+  test("reports a workspace field other than dependencies", () => {
+    const lock = scriptLock(CLIENT_ENTRY, CLIENT_DEPENDENCIES, {
+      workspace: {
+        dependencies: CLIENT_DEPENDENCIES,
+        devDependencies: { "@scope/x": "2.0.0" },
+      },
+    });
+    expect(keysOf(lock)).toEqual(['workspaces."".devDependencies']);
+  });
+
+  test("reports an extra workspace", () => {
+    const lock = scriptLock(CLIENT_ENTRY, CLIENT_DEPENDENCIES, {
+      extraWorkspaces: { "packages/x": { dependencies: {} } },
+    });
+    expect(keysOf(lock)).toEqual(["workspaces.packages/x"]);
+  });
+
+  test("reports trustedDependencies in the bun.lock part", () => {
+    const lock = scriptLock(CLIENT_ENTRY, CLIENT_DEPENDENCIES, {
+      lockFields: { trustedDependencies: ["windmill-client"] },
+    });
+    expect(keysOf(lock)).toEqual(["bun.lock.trustedDependencies"]);
+  });
+
+  test("reports overrides in the bun.lock part", () => {
+    const lock = scriptLock(CLIENT_ENTRY, CLIENT_DEPENDENCIES, {
+      lockFields: { overrides: { "windmill-client": "1.818.0" } },
+    });
+    expect(keysOf(lock)).toEqual(["bun.lock.overrides"]);
+  });
+
+  test("reports patchedDependencies in the bun.lock part", () => {
+    const lock = scriptLock(CLIENT_ENTRY, CLIENT_DEPENDENCIES, {
+      lockFields: {
+        patchedDependencies: { "windmill-client@1.817.0": "patches/x.patch" },
+      },
+    });
+    expect(keysOf(lock)).toEqual(["bun.lock.patchedDependencies"]);
+  });
+
+  test("accepts an empty lock of a script without dependencies", () => {
+    expect(checkScriptLock(EMPTY_LOCK, rootIndex())).toEqual([]);
+  });
+
+  test("reports dependencies that have no bun.lock part", () => {
+    const lock =
+      '{\n  "dependencies": {\n    "windmill-client": "1.817.0"\n  }\n}\n//bun.lock\n<empty>';
+    expect(keysOf(lock)).toEqual(["bun.lock"]);
+  });
+
+  test("reports a manifest without dependencies", () => {
+    expect(keysOf("{}\n//bun.lock\n<empty>")).toEqual(["dependencies"]);
+  });
+
+  test("reports a lock without the bun.lock separator", () => {
+    expect(keysOf('{"dependencies": {}}')).toEqual(["<root>"]);
+  });
+
+  test("reports a bun.lock part that is not valid JSONC", () => {
+    expect(keysOf('{"dependencies": {}}\n//bun.lock\n{"packages": ')).toEqual([
+      "bun.lock",
+    ]);
+  });
+});
+
+const MANIFEST =
+  '{\n  "dependencies": {\n    "windmill-client": "1.817.0"\n  }\n}';
+
+const WORKSPACES = `"workspaces": {
+    "": {
+      "dependencies": {
+        "windmill-client": "1.817.0",
+      },
+    },
+  },`;
+
+/** 前半と後半の本文から、`.script.lock`をそのまま組み立てる。重複したキーを書くためである。 */
+function rawLock(manifest: string, lock: string): string {
+  return `${manifest}\n//bun.lock\n${lock}`;
+}
+
+describe("checkScriptLock with duplicate keys", () => {
+  test("reports a duplicate top-level packages key in the bun.lock part", () => {
+    const lock = rawLock(
+      MANIFEST,
+      `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  ${WORKSPACES}
+  "packages": {
+    "windmill-client": ["windmill-client@1.818.0", "", {}, "${SCOPED_INTEGRITY}"],
+  },
+  "packages": {
+    ${CLIENT_ENTRY}
+  }
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "bun.lock",
+        reason: 'duplicate key "packages" at the top level',
+      },
+    ]);
+  });
+
+  test("reports a duplicate nested dependencies key in the bun.lock workspace", () => {
+    const lock = rawLock(
+      MANIFEST,
+      `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "dependencies": {
+        "left-pad": "1.3.0",
+      },
+      "dependencies": {
+        "windmill-client": "1.817.0",
+      },
+    },
+  },
+  "packages": {
+    ${CLIENT_ENTRY}
+  }
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "bun.lock",
+        reason: 'duplicate key "dependencies" in workspaces.""',
+      },
+    ]);
+  });
+
+  test("reports a duplicate dependencies key in the manifest part", () => {
+    const manifest =
+      '{\n  "dependencies": {\n    "left-pad": "1.3.0"\n  },\n  "dependencies": {\n    "windmill-client": "1.817.0"\n  }\n}';
+    const lock = rawLock(
+      manifest,
+      `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  ${WORKSPACES}
+  "packages": {
+    ${CLIENT_ENTRY}
+  }
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "manifest",
+        reason: 'duplicate key "dependencies" at the top level',
+      },
+    ]);
+  });
+
+  test("accepts a lock without duplicate keys", () => {
+    const lock = rawLock(
+      MANIFEST,
+      `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  ${WORKSPACES}
+  "packages": {
+    ${CLIENT_ENTRY}
+  }
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([]);
+  });
+
+  test("does not count a string value that equals a key in the same object", () => {
+    const lock = rawLock(
+      MANIFEST,
+      `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  ${WORKSPACES}
+  "packages": {
+    "windmill-client": ["windmill-client@1.817.0", "", { "bin": "os", "os": "linux" }, "${CLIENT_INTEGRITY}"],
+  }
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([]);
+  });
+});
+
+/**
+ * 通常の厳密なbun.lockの部分の、`packages`の前に`before`を差し込んだlockを組み立てる。
+ * `before`には、重複したキーや、厳密でない書式を書く。
+ */
+function lockWithBefore(before: string, manifest: string = MANIFEST): string {
+  return rawLock(
+    manifest,
+    `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  ${WORKSPACES}
+  ${before}"packages": {
+    ${CLIENT_ENTRY}
+  },
+}`,
+  );
+}
+
+// 見えない文字は、ソースに直接書かず、文字コードから作る。エディタや差分で見分けられないため。
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
+const NO_BREAK_SPACE = String.fromCharCode(0x00a0);
+
+function notStrict(part: string, problem: string): ScriptLockViolation[] {
+  return [{ key: part, reason: `lock is not strict JSON: ${problem}` }];
+}
+
+describe("checkScriptLock with a lock that is not strict JSON", () => {
+  test("accepts a strict lock", () => {
+    expect(checkScriptLock(lockWithBefore(""), rootIndex())).toEqual([]);
+  });
+
+  test("accepts trailing commas in the bun.lock part", () => {
+    const lock = rawLock(
+      MANIFEST,
+      `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  ${WORKSPACES}
+  "packages": {
+    "windmill-client": ["windmill-client@1.817.0", "", {}, "${CLIENT_INTEGRITY}",],
+  },
+}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([]);
+  });
+
+  test("reports a trailing comma in the manifest part", () => {
+    const manifest =
+      '{\n  "dependencies": {\n    "windmill-client": "1.817.0",\n  }\n}';
+    expect(checkScriptLock(lockWithBefore("", manifest), rootIndex())).toEqual(
+      notStrict("manifest", "a trailing comma"),
+    );
+  });
+
+  test("reports a duplicate written with a single-quoted key", () => {
+    expect(
+      checkScriptLock(
+        lockWithBefore("\"packages\": {},\n  'packages': {},\n  "),
+        rootIndex(),
+      ),
+    ).toEqual(notStrict("bun.lock", "a single-quoted string"));
+  });
+
+  test("reports a single-quoted key before a duplicate", () => {
+    expect(
+      checkScriptLock(
+        lockWithBefore("'x': 1,\n  \"packages\": {},\n  "),
+        rootIndex(),
+      ),
+    ).toEqual(notStrict("bun.lock", "a single-quoted string"));
+  });
+
+  test("reports a key written with a hexadecimal escape", () => {
+    const manifest =
+      '{\n  "\\x64ependencies": {},\n  "dependencies": {\n    "windmill-client": "1.817.0"\n  }\n}';
+    expect(checkScriptLock(lockWithBefore("", manifest), rootIndex())).toEqual(
+      notStrict("manifest", "an escape that JSON does not allow"),
+    );
+  });
+
+  test("reports a vertical tab escape", () => {
+    expect(
+      checkScriptLock(lockWithBefore('"note": "a\\vb",\n  '), rootIndex()),
+    ).toEqual(notStrict("bun.lock", "an escape that JSON does not allow"));
+  });
+
+  test("reports a raw tab inside a string", () => {
+    expect(
+      checkScriptLock(lockWithBefore('"note": "a\tb",\n  '), rootIndex()),
+    ).toEqual(notStrict("bun.lock", "a raw control character in a string"));
+  });
+
+  test("reports a line comment that ends with a carriage return", () => {
+    expect(
+      checkScriptLock(
+        lockWithBefore('"packages": {}, // c\r  "packages": {},\n  '),
+        rootIndex(),
+      ),
+    ).toEqual(notStrict("bun.lock", "a comment"));
+  });
+
+  test("reports a line comment that ends with a line separator", () => {
+    expect(
+      checkScriptLock(
+        lockWithBefore(
+          `"packages": {}, // c${LINE_SEPARATOR}  "packages": {},\n  `,
+        ),
+        rootIndex(),
+      ),
+    ).toEqual(notStrict("bun.lock", "a comment"));
+  });
+
+  test("reports a line comment that ends with a newline", () => {
+    expect(
+      checkScriptLock(lockWithBefore('// "packages": {},\n  '), rootIndex()),
+    ).toEqual(notStrict("bun.lock", "a comment"));
+  });
+
+  test("reports a block comment", () => {
+    expect(
+      checkScriptLock(lockWithBefore('/* "packages": {} */\n  '), rootIndex()),
+    ).toEqual(notStrict("bun.lock", "a comment"));
+  });
+
+  test("reports a byte order mark", () => {
+    const lock = lockWithBefore("").replace(
+      "//bun.lock\n{",
+      `//bun.lock\n${BYTE_ORDER_MARK}{`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual(
+      notStrict("bun.lock", "an unexpected character U+FEFF"),
+    );
+  });
+
+  test("reports a no-break space between tokens", () => {
+    // コロンと値の間の空白を、NBSPにする。
+    expect(
+      checkScriptLock(
+        lockWithBefore(`"note":${NO_BREAK_SPACE}1,\n  `),
+        rootIndex(),
+      ),
+    ).toEqual(notStrict("bun.lock", "an unexpected character U+00A0"));
+  });
+
+  test("reports a bare word in the key position", () => {
+    expect(
+      checkScriptLock(lockWithBefore("packages: {},\n  "), rootIndex()),
+    ).toEqual(
+      notStrict("bun.lock", "a key that is not a double-quoted string"),
+    );
+  });
+
+  test("reports a bun.lock part that ends early", () => {
+    expect(
+      checkScriptLock(`${MANIFEST}\n//bun.lock\n{"packages": `, rootIndex()),
+    ).toEqual(notStrict("bun.lock", "the text ends early"));
+  });
+});
+
+describe("scanStrictJson", () => {
+  test("counts a key written with a unicode escape as the same key", () => {
+    expect(
+      scanStrictJson('{"packages": {}, "pack\\u0061ges": {}}', false),
+    ).toEqual({ ok: true, duplicates: [{ path: [], key: "packages" }] });
+  });
+
+  test("reads an escaped quote inside a string without ending it", () => {
+    expect(
+      scanStrictJson('{"a": "x\\", \\"a\\": ", "b": [1, {"c": 1}]}', false),
+    ).toEqual({ ok: true, duplicates: [] });
+  });
+
+  test("reports a duplicate key inside an object in an array", () => {
+    expect(scanStrictJson('[{"c": 1, "c": 2,},]', true)).toEqual({
+      ok: true,
+      duplicates: [{ path: ["0"], key: "c" }],
+    });
+  });
+
+  test("reports text after the value", () => {
+    expect(scanStrictJson('{"a": 1} {"a": 2}', false)).toEqual({
+      ok: false,
+      problem: "text after the value",
+    });
+  });
+});
+
+describe("indexRootLock", () => {
+  test("rejects a root lockfile without packages", () => {
+    expect(indexRootLock('{"lockfileVersion": 2}').ok).toBe(false);
+  });
+});

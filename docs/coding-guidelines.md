@@ -220,6 +220,8 @@ gitのpre-pushは全体の`check`を実行しない。
 理由は[セットアップ](setup.md#gitのフック)にある。
 
 - `lint`はbiome(型アサーションの検出を含む)、`wmill lint f`、`§`の検出を含む。
+  `f/`の`.script.lock`の依存が、ルートの`bun.lock`と同じ版・同じintegrityであることも確かめる(`scripts/check-script-locks.ts`)。
+  理由は[この文書の「依存の脆弱性」](#依存の脆弱性)にある。
 - `test`は`bun test --parallel`で、`console/`を除く。
   カバレッジを`coverage/lcov.info`に出す。
   `check`は、その後に`bun ./scripts/check-coverage.ts`で、全体と層ごとの行カバレッジの下限と、lcovに出ない対象を確かめる。
@@ -271,19 +273,38 @@ bunは依存のinstall scriptを既定では実行しないが、既定の信頼
 
 ### 依存の脆弱性
 
+workerのscriptの依存は、scriptごとの`.script.lock`が固定する。
+`bun audit`はルートの`bun.lock`しか読まないので、`.script.lock`の依存は、ルートの`bun.lock`と同じ版・同じintegrityにそろえる。
+そろっていれば、ルートの監査がworkerの依存も覆う。
+`lint`の`scripts/check-script-locks.ts`が、版とintegrityの食い違いと、ルートに無い依存を止める。
+`.script.lock`が宣言する依存は、照合元をルートの`bun.lock`の`workspaces[""]`(ルートの`package.json`の宣言の写し)にする。
+そこに同じ版の指定があり、`.script.lock`のbun.lockの部分に項目があることを確かめる。
+workerのscriptに依存を足すときは、ルートの`package.json`にも同じ版で足す。
+workerのscriptが宣言してよい依存は、`scripts/check-script-locks.ts`の`WORKER_DEPENDENCIES`に限る。
+今の一覧は`windmill-client`だけで、一覧に足すかどうかは人が判断する。
+`.script.lock`は、Windmillが書く欄だけを持ち、`trustedDependencies`や`overrides`のような欄を持つと止まる。
+同じオブジェクトに同じキーを2回書いたlockも止まる。
+検査の解析は後の値を採り、`bun install`は前の値を採るので、照合した値とinstallの使う値が食い違うためである。
+`.script.lock`は厳密な書式だけを認め、コメントや単一引用符などで読めない形は止める。
+検査の解析と`bun install`の解析が食い違い、照合した値とinstallの使う値がずれるためである。
+認めるのは厳密なJSONで、bun.lockの部分だけに末尾のカンマを認める。
+CIの`bun audit`(`.github/workflows/audit.yml`)は、`main`に対する定期と手動の実行だけで、PRでは動かない。
+PRでは、この`lint`の検査がworkerの依存をルートにそろえる。
+
 ルートで`bun audit`を実行し、指摘が出たら更新で解消できるかを先に確かめる。
 修正版が出ているのに親のパッケージが古い版を求めるときは、ルートの`package.json`の`overrides`で修正版に固定する。
 親が修正版を取り込んだら、`overrides`を外す。
 固定したままだと、親が新しい版へ移っても古い版に留まるためである。
 
-今、`overrides`で固定しているのは次の2つである。
+今、`overrides`で固定しているのは次の3つである。
 
 | パッケージ | 固定する理由 |
 | --- | --- |
 | `katex` | micromark-extension-mathが`^0.16.0`を求め、0.16系に修正版が無い |
+| `markdown-it` | markdownlint-cli2が15.0.1に厳密固定している |
 | `smol-toml` | markdownlint-cli2が1.8.0に厳密固定している |
 
-修正版が無い指摘の受け入れと、その確認の手順は[セキュリティ](security.md#依存の脆弱性)に書く。
+親の求める範囲に修正版が無い指摘の受け入れと、その確認の手順は[セキュリティ](security.md#依存の脆弱性)に書く。
 
 ## PRとコミット
 

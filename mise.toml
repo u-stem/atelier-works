@@ -196,12 +196,13 @@ description = "Fail if Windmill metadata (locks and schemas) is stale"
 run = "scripts/check-metadata-fresh.sh"
 
 [tasks.lint]
-description = "Run biome (including the type-assertion rule), wmill lint, and the section-sign and short-remote-ref lint scripts"
+description = "Run biome (including the type-assertion rule), wmill lint, the section-sign and short-remote-ref lint scripts, and the script lock check against the root bun.lock"
 run = """
 bunx --bun biome check .
 if [ -d f ]; then wmill lint f; fi
 bun run scripts/lint-no-section-sign.ts
 bun run scripts/lint-no-short-remote-ref.ts
+bun run scripts/check-script-locks.ts bun.lock
 """
 
 [tasks.typecheck]

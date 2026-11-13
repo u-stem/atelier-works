@@ -175,6 +175,8 @@ atelier-worksのCIは、gitleaksでPRのコミットを走査する。
 成果物の書き込みは、`GITHUB_TOKEN`の書き込み権限を使わず、ランナーの実行用の資格情報で行う。
 `main`へのpushでだけ動かし、PRの実行では成果物を上げない。
 
+依存の監査の`audit.yml`の権限も、`contents: read`だけである([定期の監査](#定期の監査))。
+
 ### CIの実行の範囲の判定
 
 PRの実行の判定は、PRの版の`scripts/ci-scope.ts`で行う。
@@ -1395,11 +1397,15 @@ Windmillの資産のうちnpmの依存を入れるのは、dependabotの更新�
 
 ## 依存の脆弱性
 
-ルートの`bun audit`の指摘のうち、修正版が無いものの残るリスクは[R-TB-36](security-risks.md#r-tb-36)である。
+ルートの`bun audit`の指摘のうち、親の求める範囲に修正版が無いものの残るリスクは[R-TB-36](security-risks.md#r-tb-36)である。
 `overrides`で解消できるものは[コーディング規約](coding-guidelines.md#依存の脆弱性)の手順で固定する。
 
-ルートの依存はすべて開発用で、文書の検査(markdownlint-cli2、textlint)、型検査、整形に使う。
+ルートの依存は、`windmill-client`を除いて開発用で、文書の検査(markdownlint-cli2、textlint)、型検査、整形に使う。
 本番のコードからは読まれない。
+`windmill-client`はworkerのscriptが読む。
+scriptの`.script.lock`は、ルートの`bun.lock`と同じ版・同じintegrityであることを`lint`が確かめるので、ルートの監査がworkerの依存も覆う([コーディング規約](coding-guidelines.md#依存の脆弱性))。
+`windmill-client`の指摘は、受け入れの表に入れない。
+修正版の無いhighの指摘が出たときの残るリスクは[R-TB-38](security-risks.md#r-tb-38)である。
 ただし、このリポジトリを対象に`check_commands_by_repo`か`allowed_check_commands`を設定すると、検査がworkerのコンテナの中で走る。
 そのとき`bun install`で入る依存は、workerのコンテナの中で動く。
 設定の詳細は[実装フローの仕様](internals/implement.md)と[PRワークフローの仕様](internals/pr-workflow.md)にある。
@@ -1408,20 +1414,40 @@ Windmillの資産のうちnpmの依存を入れるのは、dependabotの更新�
 
 | パッケージ | 重大度 | 経路 | 受け入れる理由 |
 | --- | --- | --- | --- |
-| `braces` | high | markdownlint-cli2 > globby > fast-glob > micromatch | `scripts/lint-docs.ts`はファイル名をglobとしてmarkdownlint-cli2に渡す。`{`を含む名前をコミットできる者は、深くネストしたパターンに到達しうる。影響は文書検査の失敗にとどまり、本番には及ばない。長さの上限の範囲では停止を再現できていない |
-| `sprintf-js` | moderate | prh > js-yaml@3.15.2 > argparse@1.0.10 > sprintf-js | js-yaml@3でargparseを読むのはCLIの`bin/js-yaml.js`だけで、`lib/`からは読まれない。prhの実行時にsprintf-jsは読み込まれない |
+| `glob` | moderate | textlint > glob | 指摘は、取り消しの合図(AbortSignal)を渡した呼び出しだけに当たる。textlintは合図を渡さずに`glob`を呼ぶ |
+| `minimatch` | moderate | textlint > glob > minimatch | `scripts/lint-docs.ts`がtextlintに渡すパターンは、検査の対象のMarkdown(gitが追跡しているものと、未追跡で無視されていないもの)のパスから作る。届くのは、コミットできる者か、作業ツリーにファイルを置ける者だけで、影響は文書の検査の遅れにとどまり、本番には及ばない |
 
-markdown-itはargparse@3を、rc-config-loaderのjs-yaml@4はargparse@2を使い、どちらもsprintf-jsに依存しない。
+どちらも、修正版は親の求める範囲の外にあるメジャー版である。
+`overrides`でメジャー版を越えて固定すると、textlintの動作を保証できないため、固定しない。
+
+### 定期の監査
+
+`.github/workflows/audit.yml`が、`main`のルートとConsoleの`bun.lock`を、`bun audit --audit-level=high`で監査する。
+毎週月曜の9時(JST)と、手動の実行で動く。
+ジョブは`main`のrefのときだけ動き、手動の実行でほかのブランチを選ぶと飛ばされる。
+失敗した実行がPRのheadに付き、CIの自動修正を起動するのを防ぐためである。
+権限は`contents: read`だけで、依存は入れない。
+PRでは動かさず、必須チェックにもしない。
+PRで落ちると、FactoryのPRのCIの監視が直せる失敗とみなし、lockfileを直せない自動の修正を起動するためである。
+PRでは、`.script.lock`のずれを`mise run lint`の`scripts/check-script-locks.ts`が止め、workerの依存をルートの監査にそろえる。
+moderate以下の指摘では失敗しないので、上の表の指摘は、次の確認で見る。
+定期の実行の失敗はFactoryが通知しないので、Actionsの実行の一覧で見る。
+`main`のCIの監視は、pushの実行だけを読むためである。
+この残るリスクは[R-TB-37](security-risks.md#r-tb-37)である。
+
+dependabotの自動マージの関門は、この監査の結果を見ない。
+自動マージの有効化の前に足す条件と、その残るリスクは[R-TB-40](security-risks.md#r-tb-40)である。
 
 ### 修正版が出たときの確認
 
-`bun audit`は定期には走らない。
-依存を更新するPRの前と、指摘の報告を受けたときに、人かClaudeが次の順で確かめる。
+監査が失敗したとき、依存を更新するPRの前、指摘の報告を受けたときに、人かClaudeが次の順で確かめる。
 
-1. ルートで`bun audit`を実行する。
-2. 受け入れている指摘に修正版が出ていれば、`bun update`か`overrides`で解消し、上の表から外す。
-3. `overrides`で固定しているパッケージの親が修正版を取り込んでいれば、`overrides`を外す。
-4. `mise run lint:docs`が通ることを確かめる。
+1. ルートとConsoleで`bun audit`を実行する。
+2. GitHubのDependabot alertsの画面で、`windmill-client`の指摘を確かめる。
+   moderate以下の指摘は、定期の監査もセキュリティ更新のPRも拾わないためである([R-TB-39](security-risks.md#r-tb-39))。
+3. 受け入れている指摘に修正版が出ていれば、`bun update`か`overrides`で解消し、上の表から外す。
+4. `overrides`で固定しているパッケージの親が修正版を取り込んでいれば、`overrides`を外す。
+5. `mise run lint:docs`が通ることを確かめる。
 
 ## 依存の変更のレビュー
 
