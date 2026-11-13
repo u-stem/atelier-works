@@ -35,30 +35,46 @@ function filesDefining(name: string): string[] {
     .sort();
 }
 
-/** `body`の形の1行だけを返す関数を、名前を問わず定義しているファイル。`body`は引数の名前を`ARG`と書く。 */
-function filesWithBody(returnType: string, body: string): string[] {
-  const definition = new RegExp(
-    String.raw`function\s+\w+\s*\(\s*(\w+)\s*:\s*unknown\s*\)\s*:\s*${returnType}\s*\{\s*return\s+${body.replaceAll("ARG", String.raw`\1`)}\s*;\s*\}`,
-  );
+type BodyShape = {
+  /** 戻り値の型。引数の名前は`\1`で参照する。 */
+  readonly returnType: string;
+  /** 返す式。引数の名前を`ARG`と書く。 */
+  readonly body: string;
+};
+
+/** 例外の文を取り出す本体。マスクの有無を問わない。 */
+const ERROR_TEXT_SHAPE: BodyShape = {
+  returnType: "string",
+  body: String.raw`(?:maskSecrets\(\s*)?ARG instanceof Error \? ARG\.message : String\(ARG\)\s*\)?`,
+};
+
+/** 配列でも`null`でもないオブジェクトを判定する本体。 */
+const RECORD_SHAPE: BodyShape = {
+  returnType: String.raw`\1 is [^{]+`,
+  body: String.raw`typeof ARG === "object" && ARG !== null && !Array\.isArray\(ARG\)`,
+};
+
+/** `source`が、`shape`の式だけを返す関数を、名前を問わず定義しているか。 */
+function definesBody(source: string, shape: BodyShape): boolean {
+  const body = shape.body.replaceAll("ARG", String.raw`\1`);
+  return new RegExp(
+    String.raw`function\s+\w+\s*\(\s*(\w+)\s*:\s*unknown\s*\)\s*:\s*${shape.returnType}\s*\{\s*return\s+${body}\s*;\s*\}`,
+  ).test(source);
+}
+
+/** `shape`の本体の関数を定義しているファイル。 */
+function filesWithBody(shape: BodyShape): string[] {
   return trackedTypeScriptFiles()
-    .filter((path) => definition.test(read(path)))
+    .filter((path) => definesBody(read(path), shape))
     .sort();
 }
 
-/** 例外の文を取り出す本体。マスクの有無を問わない。 */
 function filesWithErrorTextBody(): string[] {
-  return filesWithBody(
-    "string",
-    String.raw`(?:maskSecrets\(\s*)?ARG instanceof Error \? ARG\.message : String\(ARG\)\s*\)?`,
-  );
+  return filesWithBody(ERROR_TEXT_SHAPE);
 }
 
-/** 配列でも`null`でもないオブジェクトを判定する本体。 */
 function filesWithRecordBody(): string[] {
-  return filesWithBody(
-    String.raw`\1 is [^{]+`,
-    String.raw`typeof ARG === "object" && ARG !== null && !Array\.isArray\(ARG\)`,
-  );
+  return filesWithBody(RECORD_SHAPE);
 }
 
 /** `homes`の外で`name`を定義しているファイル。 */
@@ -121,6 +137,77 @@ const ERROR_TEXT_HOMES: Readonly<Record<string, string>> = {
 const JST_OFFSET_HOMES: Readonly<Record<string, string>> = {
   "f/factory/lib/jst.ts": "the shared leaf module",
 };
+
+describe("definesBody", () => {
+  test("finds a function declaration that returns the error text", () => {
+    const source = [
+      "function textOf(err: unknown): string {",
+      "  return err instanceof Error ? err.message : String(err);",
+      "}",
+    ].join("\n");
+    expect(definesBody(source, ERROR_TEXT_SHAPE)).toBe(true);
+  });
+
+  test("finds an arrow function whose expression is the error text", () => {
+    const source = [
+      "const textOf = (err: unknown): string =>",
+      "  err instanceof Error ? err.message : String(err);",
+    ].join("\n");
+    expect(definesBody(source, ERROR_TEXT_SHAPE)).toBe(true);
+  });
+
+  test("finds an arrow function whose block returns the error text", () => {
+    const source = [
+      "const textOf = (err: unknown): string => {",
+      "  return err instanceof Error ? err.message : String(err);",
+      "};",
+    ].join("\n");
+    expect(definesBody(source, ERROR_TEXT_SHAPE)).toBe(true);
+  });
+
+  test("finds the masked error text that the formatter broke over lines", () => {
+    const source = [
+      "function textOf(err: unknown): string {",
+      "  return maskSecrets(",
+      "    err instanceof Error",
+      "      ? err.message",
+      "      : String(err),",
+      "  );",
+      "}",
+    ].join("\n");
+    expect(definesBody(source, ERROR_TEXT_SHAPE)).toBe(true);
+  });
+
+  test("finds a record check that the formatter wrapped in parentheses", () => {
+    const source = [
+      "function isObject(value: unknown): value is Record<string, unknown> {",
+      "  return (",
+      '    typeof value === "object" &&',
+      "    value !== null &&",
+      "    !Array.isArray(value)",
+      "  );",
+      "}",
+    ].join("\n");
+    expect(definesBody(source, RECORD_SHAPE)).toBe(true);
+  });
+
+  test("finds an arrow function that checks for a record", () => {
+    const source = [
+      "const isObject = (value: unknown): value is Record<string, unknown> =>",
+      '  typeof value === "object" && value !== null && !Array.isArray(value);',
+    ].join("\n");
+    expect(definesBody(source, RECORD_SHAPE)).toBe(true);
+  });
+
+  test("does not find a function that does more than the error text", () => {
+    const source = [
+      "function textOf(err: unknown): string {",
+      "  return clean(err instanceof Error ? err.message : String(err));",
+      "}",
+    ].join("\n");
+    expect(definesBody(source, ERROR_TEXT_SHAPE)).toBe(false);
+  });
+});
 
 describe("isRecord", () => {
   test("is defined only in types.ts and the files that cannot import it", () => {
