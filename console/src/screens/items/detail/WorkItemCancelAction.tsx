@@ -21,9 +21,25 @@ import {
 } from "../../../lib/writeNotices.ts";
 
 /**
- * 作業項目を中止する前の確認。確認のボタンは破壊的な色にする。中止した作業項目は再開できないためである。
+ * 中止の確認のダイアログの固定の設定。確認は破壊的な操作として渡す。中止した作業項目は再開できないためである。
+ * やめるボタンは「閉じる」にする。既定の「取り消す」は、作業項目を取り消す操作と読み違えるためである。
+ */
+export const WORK_ITEM_CANCEL_CONFIRM: {
+  readonly title: string;
+  readonly confirmLabel: string;
+  readonly cancelLabel: string;
+  readonly destructive: boolean;
+} = {
+  title: "この作業項目を中止しますか",
+  confirmLabel: "中止する",
+  cancelLabel: "閉じる",
+  destructive: true,
+};
+
+/**
+ * 作業項目を中止する前の確認。
  * 対象の作業項目と、効果、残るもの、拾い直されない条件を並べる。
- * 初期のフォーカスは、操作をやめる「取り消す」ボタンにある(`ConfirmDialog`)。
+ * 初期のフォーカスは、操作をやめる「閉じる」ボタンにある(`ConfirmDialog`)。
  */
 export function WorkItemCancelDialog({
   open,
@@ -43,9 +59,10 @@ export function WorkItemCancelDialog({
   return (
     <ConfirmDialog
       open={open}
-      title={open ? "この作業項目を中止しますか" : ""}
-      confirmLabel="中止する"
-      destructive
+      title={open ? WORK_ITEM_CANCEL_CONFIRM.title : ""}
+      confirmLabel={WORK_ITEM_CANCEL_CONFIRM.confirmLabel}
+      cancelLabel={WORK_ITEM_CANCEL_CONFIRM.cancelLabel}
+      destructive={WORK_ITEM_CANCEL_CONFIRM.destructive}
       onConfirm={onConfirm}
       onCancel={onCancel}
     >

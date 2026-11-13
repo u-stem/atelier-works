@@ -362,7 +362,7 @@ headが進んで新しい行になるまで残る。
 | `rounds_exhausted` | 決定的 | 直す回数の上限に達した |
 | `not_factory_head` | 決定的 | 最後のpushがFactoryのものでない |
 | `claude_run_failed` | 決定的 | 直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗したか、待っても戻らなかった使用上限で止まった。外す手順は[運用](../operations.md#claudeの失敗で保留したciの修正を起動し直す)にある |
-| `operator_cancelled` | 決定的 | 直す作業項目か、PRの最新の作業項目を、人がConsoleから中止した([人による中止](work-items.md#人による中止)) |
+| `operator_cancelled` | 決定的 | 直す作業項目、PRの最新の作業項目、ブランチが指すIssueの作業項目のどれかを、人がConsoleから中止した([人による中止](work-items.md#人による中止)) |
 | `marker_missing` | 一時的 | Factoryのクローンのスキルが、CIの失敗を直す節を持たない。スキルが入れば外れる |
 | `main_ci_failed` | 一時的 | mainのCIが赤い |
 | `budget_exceeded` | 一時的 | 日次の予算を使い切った |
@@ -536,7 +536,12 @@ headが進むと新しい行になり、headが以前の値に戻ると`first_se
 4. PRを読み直す。
    閉じているか、headが行から進んでいれば、何もしない。
    続けて、ブランチの作業項目がFactoryにブランチを引き継ぐ状態なら、理由`branch_held`で何もしない([ブランチを引き継ぐ間](#ブランチを引き継ぐ間))。
+   ブランチが指すIssueの作業項目を、人がConsoleから中止していれば、`operator_cancelled`で保留する。
+   中止すると引き継ぐ状態から外れるので、別に止める。
+   この保留はheadが動いても続く。
    PRの最新の作業項目を、人が行のheadでConsoleから中止していれば、`operator_cancelled`で保留する([人による中止](work-items.md#人による中止))。
+   最新の作業項目は`latestPrWorkItem`で読み、種別を問わず、作った順(`created_at`、`id`)で選ぶ。
+   中止の書き込みが同じ順で最新でない行の中止を断るので、人が中止したPRの行は、この読み取りに当たる。
    ドラフトか、auto-mergeが有効なら、`pr_draft_or_auto_merge`で保留する。
 5. PRのすべてのcommit(250件まで)の本文の最後の段落に、次の行が無ければ、`not_factory_head`で保留する。
    `Generated-By: Software Factory (<instance_name>)`
@@ -1422,7 +1427,7 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 | `unresolvable` | 最終 | 競合が自動で解ける形でない |
 | `check_failed` | 最終 | 解消した後の検査コマンドが失敗した |
 | `fix_stopped` | 最終 | 直す作業項目が、上のどれにも当たらない理由で止まった |
-| `operator_cancelled` | 最終 | 直す作業項目か、PRの最新の作業項目を、人がConsoleから中止した([人による中止](work-items.md#人による中止)) |
+| `operator_cancelled` | 最終 | 直す作業項目、PRの最新の作業項目、ブランチが指すIssueの作業項目のどれかを、人がConsoleから中止した([人による中止](work-items.md#人による中止)) |
 
 語彙に無い値は、最終として扱う。
 通知を出さずに放置しないためである。
@@ -1440,6 +1445,7 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 2. PRを読み直す。
    閉じているか、行のheadから進んでいれば、何もしない。
    続けて、ブランチの作業項目がFactoryにブランチを引き継ぐ状態なら、理由`branch_held`で何もしない([ブランチを引き継ぐ間](#ブランチを引き継ぐ間))。
+   ブランチが指すIssueの作業項目を、人がConsoleから中止していれば、`operator_cancelled`で保留する。
    PRの最新の作業項目を、人が行のheadでConsoleから中止していれば、`operator_cancelled`で保留する。
    baseが既定のブランチでなければ`base_not_default`、ドラフトかauto-mergeが有効なら`pr_draft_or_auto_merge`で保留する。
 3. コミットがすべてFactoryのものでなければ、`not_factory_head`で保留する。

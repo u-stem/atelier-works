@@ -184,6 +184,12 @@ export type PrConflictFixDeps = {
     repo: string,
     headRef: string,
   ) => Promise<WorkItemStatus | null>;
+  /** PRのブランチ名(`headRef`)が指すIssueの作業項目を、人が中止したか(`readBranchItemOperatorCancelled`)。 */
+  readonly branchItemOperatorCancelled: (
+    owner: string,
+    repo: string,
+    headRef: string,
+  ) => Promise<boolean>;
   /** PRの最新の作業項目が、`headSha`で人に中止されたか(`readOperatorCancelledAtHead`)。 */
   readonly operatorCancelledAtHead: (
     owner: string,
@@ -1352,6 +1358,8 @@ function claimReaders(
     readPr: () => deps.getPr(ref.owner, ref.repo, ref.number),
     readBranchItemStatus: () =>
       fix.readBranchItemStatus(names.owner, names.repo, headRef),
+    branchItemOperatorCancelled: () =>
+      fix.branchItemOperatorCancelled(names.owner, names.repo, headRef),
     operatorCancelledAtHead: () =>
       fix.operatorCancelledAtHead(
         names.owner,

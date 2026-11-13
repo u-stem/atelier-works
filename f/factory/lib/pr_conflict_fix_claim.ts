@@ -51,6 +51,8 @@ export type ConflictFixClaimReaders = {
   readonly lastFixSettledAt: () => Promise<Date | null>;
   /** PRの最新の作業項目が、行のheadで人に中止されたか(`readOperatorCancelledAtHead`)。 */
   readonly operatorCancelledAtHead: () => Promise<boolean>;
+  /** PRのブランチが指すIssueの作業項目を、人が中止したか(`readBranchItemOperatorCancelled`)。 */
+  readonly branchItemOperatorCancelled: () => Promise<boolean>;
 };
 
 export type ConflictFixClaimInput = {
@@ -91,6 +93,8 @@ function hold(reason: PrConflictFixHoldReason): ConflictFixClaimDecision {
  * 2. その後でPRを読み直す。閉じているか、headが行から進んでいれば、skipする。
  *    続けて、PRのブランチが指すIssueの作業項目が、Factoryがブランチを引き継ぐ状態(`isBranchHeldForFixRounds`)なら、
  *    `branch_held`でskipする。起動せず、ラウンドを数えず、保留も書かない。引き継ぐ間は、設計や実装がpushするためである。
+ *    ブランチが指すIssueの作業項目を人が中止していれば、`operator_cancelled`で保留する。
+ *    中止すると引き継ぐ状態から外れるので、別に止める。
  *    PRの最新の作業項目を、人が行のheadで中止していれば、`operator_cancelled`で保留する。
  *    baseが既定のブランチでなければ`base_not_default`、ドラフトかauto-mergeが有効なら
  *    `pr_draft_or_auto_merge`で保留する。
@@ -119,6 +123,9 @@ export async function decideConflictFixClaim(
   if (pr.headSha !== row.head_sha) return { kind: "skip", why: "head_moved" };
   if (isBranchHeldForFixRounds(await readers.readBranchItemStatus())) {
     return { kind: "skip", why: "branch_held" };
+  }
+  if (await readers.branchItemOperatorCancelled()) {
+    return hold("operator_cancelled");
   }
   if (await readers.operatorCancelledAtHead()) {
     return hold("operator_cancelled");

@@ -3,11 +3,13 @@
 // 中止できるのは、種別と状態が許可表(`lib/operator_cancel.ts`)にある作業項目だけである。
 // 承認待ち、承認済み(実装の起動の前)、止まった状態が当たる。実行中の作業項目は断る。
 // 作業項目を取り消し(`cancelled`)にし、遷移の記録に固定の注記(`OPERATOR_CANCELLED_NOTE`)を残す。
-// 同じ文で、その作業項目の保留中の承認依頼を期限切れにして、後から決定できないようにする。
-// 中止した作業項目は再開できない。ブランチとPRは残す。新しいサイクルは、人がラベルを付け直したときに始まる。
+// 同じ文で、その作業項目の保留中の承認依頼のうち、要件定義と設計のものを期限切れにして、後から決定できないようにする。
+// Issue化の提案の依頼は残す。中止した作業項目は再開できない。ブランチとPRは残す。
 //
 // 状態の変更は、読んだ状態と許可表の両方を条件にした比較交換である。
 // 読んだ後に状態が変わっていれば、何も書かずに断る。行が無いidは、存在しない作業項目として返す。
+// PRの行(レビュー、修正、dependabot)は、同じPRに作った順でより新しい作業項目があれば、同じ文の中で断る。
+// 監視はPRの最新の作業項目だけを見るので、古い行の中止は監視に届かず、最新の行の判定だけを狂わせるためである。
 //
 // 操作の記録(`factory.console_actions`)は、中止の前に`attempted`の行を入れ、後で結果を更新する。
 // 行を入れられなければ、中止せずに断る。更新に失敗しても中止は戻さず、`action_audit`を`failed`にする。
@@ -27,6 +29,8 @@ import {
   runRecorded,
 } from "./lib/console_actions.ts";
 import {
+  OPERATOR_CANCEL_PR_ROW_KINDS,
+  OPERATOR_CANCEL_WITHDRAWN_REQUEST_KINDS,
   OPERATOR_CANCELLED_NOTE,
   operatorCancellableStatuses,
 } from "./lib/operator_cancel.ts";
@@ -35,6 +39,7 @@ import {
 export const WORK_ITEM_CANCEL_REFUSAL_REASONS = [
   "not_cancellable",
   "status_changed",
+  "newer_work_item",
   "actor_unknown",
   "audit_unavailable",
 ] as const;
@@ -82,6 +87,8 @@ export type CancelOutcome = {
   readonly cancelled: boolean;
   /** 期限切れにした保留中の承認依頼の数。 */
   readonly withdrawn: number;
+  /** 同じPRに、作った順でより新しい作業項目があったか。真なら、中止しなかった理由はこれである。 */
+  readonly newer: boolean;
 };
 
 /** 遷移の記録に書くジョブのID。読めなければ`null`。 */
@@ -166,7 +173,11 @@ export async function cancelWorkItemFromConsole(
     return { found: true, refused: true, reason: "audit_unavailable" };
   }
   if (!recorded.value.cancelled) {
-    return { found: true, refused: true, reason: "status_changed" };
+    return {
+      found: true,
+      refused: true,
+      reason: recorded.value.newer ? "newer_work_item" : "status_changed",
+    };
   }
   return {
     found: true,
@@ -198,17 +209,26 @@ export async function cancelStatement(
   jobIds: CancelJobIds,
 ): Promise<CancelOutcome> {
   const allowed: string[] = [...input.allowed];
+  const prRowKinds: string[] = [...OPERATOR_CANCEL_PR_ROW_KINDS];
+  const withdrawnKinds: string[] = [...OPERATOR_CANCEL_WITHDRAWN_REQUEST_KINDS];
+  // より新しい行の条件は、比較交換の条件と、断る理由を返す読み取りの2か所で同じ形にする。
+  // 最新の順は、監視が読む`latestPrWorkItem`と同じく、作った順(`created_at`、`id`)で、種別を問わない。
   const rows: ActionSqlRow[] = await sql`
-    WITH updated AS (
-      UPDATE factory.work_items
+    WITH newer AS (
+      SELECT 1 FROM factory.work_items AS w
+      WHERE w.id = ${input.id}::bigint AND w.kind = ANY(${prRowKinds})
+        AND EXISTS (SELECT 1 FROM factory.work_items AS n WHERE n.id <> w.id AND n.pr_number = w.pr_number AND lower(n.owner) = lower(w.owner) AND lower(n.repo) = lower(w.repo) AND (n.created_at, n.id) > (w.created_at, w.id))
+    ), updated AS (
+      UPDATE factory.work_items AS w
       SET status = 'cancelled', updated_at = now()
-      WHERE id = ${input.id}::bigint AND kind = ${input.kind}
-        AND status = ${input.expected} AND status = ANY(${allowed})
-      RETURNING id
+      WHERE w.id = ${input.id}::bigint AND w.kind = ${input.kind}
+        AND w.status = ${input.expected} AND w.status = ANY(${allowed})
+        AND NOT (w.kind = ANY(${prRowKinds}) AND EXISTS (SELECT 1 FROM factory.work_items AS n WHERE n.id <> w.id AND n.pr_number = w.pr_number AND lower(n.owner) = lower(w.owner) AND lower(n.repo) = lower(w.repo) AND (n.created_at, n.id) > (w.created_at, w.id)))
+      RETURNING w.id
     ), withdrawn AS (
       UPDATE factory.approval_requests
       SET status = 'expired', decided_at = now()
-      WHERE work_item_id IN (SELECT id FROM updated) AND status = 'pending'
+      WHERE work_item_id IN (SELECT id FROM updated) AND status = 'pending' AND kind = ANY(${withdrawnKinds})
       RETURNING id
     ), recorded AS (
       INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
@@ -216,23 +236,35 @@ export async function cancelStatement(
       FROM updated
       RETURNING work_item_id
     )
-    SELECT (SELECT count(*) FROM recorded) AS cancelled, (SELECT count(*) FROM withdrawn) AS withdrawn
+    SELECT (SELECT count(*) FROM recorded) AS cancelled, (SELECT count(*) FROM withdrawn) AS withdrawn, EXISTS (SELECT 1 FROM newer) AS newer
   `.fetch();
   const first = rows[0];
   const cancelled = countOf(first?.cancelled);
   const withdrawn = countOf(first?.withdrawn);
-  if (cancelled === null || withdrawn === null) {
+  const newer = first?.newer;
+  if (cancelled === null || withdrawn === null || typeof newer !== "boolean") {
     throw new Error(
       "console_work_item_cancel: the cancel statement returned a result it cannot read",
     );
   }
-  return { cancelled: cancelled > 0, withdrawn };
+  return { cancelled: cancelled > 0, withdrawn, newer };
 }
 
-function toTargetRow(row: ActionSqlRow): CancelTargetRow | null {
+/**
+ * 読んだ作業項目の行を、中止の対象に直す。
+ * 行があるのに形を読めないときは投げる。存在しない作業項目と取り違えないためである。
+ */
+export function readCancelTarget(row: ActionSqlRow): CancelTargetRow {
   const id = countOf(row.id);
-  if (id === null || typeof row.kind !== "string") return null;
-  if (typeof row.status !== "string") return null;
+  if (
+    id === null ||
+    typeof row.kind !== "string" ||
+    typeof row.status !== "string"
+  ) {
+    throw new Error(
+      "console_work_item_cancel: the work item row has a shape it cannot read",
+    );
+  }
   return { id, kind: row.kind, status: row.status };
 }
 
@@ -255,7 +287,7 @@ function sdkPorts(): WorkItemCancelPorts {
         WHERE id = ${id}::bigint
       `.fetch();
       const first = rows[0];
-      return first === undefined ? null : toTargetRow(first);
+      return first === undefined ? null : readCancelTarget(first);
     },
     cancelIfCurrent: (input) => cancelStatement(sql, input, jobIds),
     sql,

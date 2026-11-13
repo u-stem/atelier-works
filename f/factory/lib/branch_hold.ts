@@ -3,6 +3,7 @@
 // 設計や実装がそのブランチへpushする。人や自動修正がpushすると、食い違うためである。
 // 述語は何も読まない。作業項目の読み取りは呼び出し側が注入する。
 
+import { isOperatorCancelledItem } from "./operator_cancel.ts";
 import {
   parseImplementBranchWorkItemId,
   type WorkItem,
@@ -95,4 +96,26 @@ export async function readBranchItemStatus(
   const id = parseImplementBranchWorkItemId(target.headRef);
   if (id === null) return null;
   return matchBranchWorkItem(await getWorkItem(id), target.owner, target.repo);
+}
+
+/**
+ * PRのブランチ名が指すIssueの作業項目を、人が中止したかを読む。
+ * 中止するとブランチを引き継ぐ状態から外れるので、直す回は、この読み取りで別に止める。
+ * 照合は`readBranchItemStatus`と同じで、注記は作業項目が取り消されているときだけ読む。
+ * 読み取りの失敗は握らず、呼び出し側へ伝える。
+ */
+export async function readBranchItemOperatorCancelled(
+  target: { headRef: string; owner: string; repo: string },
+  getWorkItem: (id: number) => Promise<BranchWorkItem | null>,
+  cancelNote: (id: number) => Promise<string | null>,
+): Promise<boolean> {
+  const id = parseImplementBranchWorkItemId(target.headRef);
+  if (id === null) return false;
+  const status = matchBranchWorkItem(
+    await getWorkItem(id),
+    target.owner,
+    target.repo,
+  );
+  if (status !== "cancelled") return false;
+  return isOperatorCancelledItem({ status }, await cancelNote(id));
 }

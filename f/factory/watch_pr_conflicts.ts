@@ -27,6 +27,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { AUTO_RETRY_REASON_PREFIXES } from "./lib/auto_retry_reasons.ts";
 import {
   type BranchWorkItem,
+  readBranchItemOperatorCancelled,
   readBranchItemStatus,
 } from "./lib/branch_hold.ts";
 import { dailyBudgetStatus } from "./lib/claude.ts";
@@ -77,7 +78,10 @@ import {
   parseGitHubRepoUrl,
 } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
-import { readOperatorCancelledAtHead } from "./lib/operator_cancel.ts";
+import {
+  type LatestPrRow,
+  readOperatorCancelledAtHead,
+} from "./lib/operator_cancel.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
 import { buildRepoGates } from "./lib/pr_ci_watch.ts";
 import { readConflictFixItemState } from "./lib/pr_conflict_fix_recovery.ts";
@@ -103,6 +107,17 @@ export type ConflictFixLookups = {
   readonly getFileAtRef: typeof getFileAtRef;
   readonly getWorkItem: (id: number) => Promise<BranchWorkItem | null>;
   readonly restartPrConflictGrace: typeof restartPrConflictGrace;
+  /** 人の中止の判定が読む、PRの最新の作業項目。 */
+  readonly latestPrWorkItem: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<LatestPrRow | null>;
+  /** 人の中止の判定が読む、取り消しへ移った最新の遷移。 */
+  readonly latestStatusEvent: (
+    id: number,
+    toStatus: "cancelled",
+  ) => Promise<{ readonly note: string | null } | null>;
 };
 
 /** 回復の依存が呼ぶ読み取りと書き込み。テストで差し替える。 */
@@ -142,10 +157,15 @@ export function buildConflictFixDeps(
     getFileAtRef,
     getWorkItem,
     restartPrConflictGrace,
+    latestPrWorkItem: (owner, repo, prNumber) =>
+      latestPrWorkItem(owner, repo, prNumber),
+    latestStatusEvent: (id, toStatus) => latestStatusEvent(id, toStatus),
     ...lookups,
   };
   const since = config.pr_conflict_fix_enabled_since;
   if (!config.pr_conflict_fix_enabled || since === null) return undefined;
+  const cancelNote = async (id: number): Promise<string | null> =>
+    (await read.latestStatusEvent(id, "cancelled"))?.note ?? null;
   return {
     maxRounds: config.pr_conflict_fix_max_rounds,
     maxRoundsPerPr: config.pr_conflict_fix_max_rounds_per_pr,
@@ -157,12 +177,17 @@ export function buildConflictFixDeps(
       readBranchItemStatus({ headRef, owner, repo }, (id) =>
         read.getWorkItem(id),
       ),
+    branchItemOperatorCancelled: (owner, repo, headRef) =>
+      readBranchItemOperatorCancelled(
+        { headRef, owner, repo },
+        (id) => read.getWorkItem(id),
+        cancelNote,
+      ),
     operatorCancelledAtHead: (owner, repo, prNumber, headSha) =>
       readOperatorCancelledAtHead(
         {
-          latestPrRow: () => latestPrWorkItem(owner, repo, prNumber),
-          cancelNote: async (id) =>
-            (await latestStatusEvent(id, "cancelled"))?.note ?? null,
+          latestPrRow: () => read.latestPrWorkItem(owner, repo, prNumber),
+          cancelNote,
         },
         headSha,
       ),

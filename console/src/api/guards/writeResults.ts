@@ -365,6 +365,7 @@ export function isJobCancelResult(value: unknown): value is JobCancelResult {
 export const WORK_ITEM_CANCEL_REFUSAL_REASONS = [
   "not_cancellable",
   "status_changed",
+  "newer_work_item",
   "actor_unknown",
   "audit_unavailable",
 ] as const;

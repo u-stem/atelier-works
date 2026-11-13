@@ -31,7 +31,11 @@
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
-import { readBranchItemStatus } from "./lib/branch_hold.ts";
+import {
+  type BranchWorkItem,
+  readBranchItemOperatorCancelled,
+  readBranchItemStatus,
+} from "./lib/branch_hold.ts";
 import {
   type CheckEnvironmentError,
   type CheckEnvironmentProblems,
@@ -97,7 +101,10 @@ import {
 } from "./lib/github.ts";
 import { recordCheckEnvironmentNotice } from "./lib/host_action.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
-import { readOperatorCancelledAtHead } from "./lib/operator_cancel.ts";
+import {
+  type LatestPrRow,
+  readOperatorCancelledAtHead,
+} from "./lib/operator_cancel.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
 import {
   CI_CLAUDE_WAIT_NOTES,
@@ -149,6 +156,28 @@ function reportCheckEnvironment(error: CheckEnvironmentError): Promise<void> {
   );
 }
 
+/** 人の中止の判定が読むDBの読み取り。テストで差し替える。 */
+export type ClaimDepsLookups = {
+  readonly latestPrWorkItem: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<LatestPrRow | null>;
+  readonly latestStatusEvent: (
+    workItemId: number,
+    toStatus: "cancelled",
+  ) => Promise<{ readonly note: string | null } | null>;
+  readonly getWorkItem: (id: number) => Promise<BranchWorkItem | null>;
+};
+
+const DB_CLAIM_LOOKUPS: ClaimDepsLookups = {
+  latestPrWorkItem: (owner, repo, prNumber) =>
+    latestPrWorkItem(owner, repo, prNumber),
+  latestStatusEvent: (workItemId, toStatus) =>
+    latestStatusEvent(workItemId, toStatus),
+  getWorkItem: (id) => getWorkItem(id),
+};
+
 /**
  * 失敗した行から直す作業項目を起動する依存を組む。
  * 設定で起動が有効で、有効にした時刻があるときだけ組み、そうでなければ`undefined`を返す。
@@ -163,9 +192,13 @@ export function buildClaimDeps(
     error: CheckEnvironmentError,
   ) => Promise<void> = reportCheckEnvironment,
   log: Logger = logger("watch_pr_ci"),
+  overrides: Partial<ClaimDepsLookups> = {},
 ): PrCiClaimDeps | undefined {
   const since = config.pr_ci_fix_enabled_since;
   if (!config.pr_ci_fix_enabled || since === null) return undefined;
+  const lookups: ClaimDepsLookups = { ...DB_CLAIM_LOOKUPS, ...overrides };
+  const cancelNote = async (id: number): Promise<string | null> =>
+    (await lookups.latestStatusEvent(id, "cancelled"))?.note ?? null;
   return {
     maxRounds: config.pr_ci_fix_max_rounds,
     configMisfit: ciRoundTimeoutMisfit(config),
@@ -200,13 +233,20 @@ export function buildClaimDeps(
     hasReview: (owner, repo, prNumber, headSha) =>
       hasPrReviewForHead(owner, repo, prNumber, headSha),
     readBranchItemStatus: (owner, repo, headRef) =>
-      readBranchItemStatus({ headRef, owner, repo }, (id) => getWorkItem(id)),
+      readBranchItemStatus({ headRef, owner, repo }, (id) =>
+        lookups.getWorkItem(id),
+      ),
+    branchItemOperatorCancelled: (owner, repo, headRef) =>
+      readBranchItemOperatorCancelled(
+        { headRef, owner, repo },
+        (id) => lookups.getWorkItem(id),
+        cancelNote,
+      ),
     operatorCancelledAtHead: (owner, repo, prNumber, headSha) =>
       readOperatorCancelledAtHead(
         {
-          latestPrRow: () => latestPrWorkItem(owner, repo, prNumber),
-          cancelNote: async (id) =>
-            (await latestStatusEvent(id, "cancelled"))?.note ?? null,
+          latestPrRow: () => lookups.latestPrWorkItem(owner, repo, prNumber),
+          cancelNote,
         },
         headSha,
       ),

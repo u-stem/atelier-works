@@ -1166,7 +1166,8 @@ describe("what the scripts return", () => {
       deriveActor: () => "operator",
       readWorkItem: (id) =>
         Promise.resolve(row === null ? null : { id, ...row }),
-      cancelIfCurrent: () => Promise.resolve({ cancelled, withdrawn: 1 }),
+      cancelIfCurrent: () =>
+        Promise.resolve({ cancelled, withdrawn: 1, newer: false }),
       sql: () => ({
         fetch: () => Promise.resolve([{ id: 5 }]),
         execute: () => Promise.resolve(),

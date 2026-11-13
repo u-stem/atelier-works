@@ -51,9 +51,44 @@ export function isOperatorCancellable(kind: string, status: string): boolean {
   return operatorCancellableStatuses(kind).includes(status);
 }
 
+/**
+ * 中止で期限切れにする承認依頼の種類。作業項目を先へ進める判断(要件定義と設計)だけである。
+ * Issue化の提案(`issue_proposal`)は、作業項目とは別のIssueを作る判断なので残す。
+ * 要対応の照合による取り消しと同じ扱いである。提案の状態の制約に期限切れが無いことも理由になる。
+ */
+export const OPERATOR_CANCEL_WITHDRAWN_REQUEST_KINDS: readonly string[] = [
+  "requirements",
+  "design",
+];
+
+/**
+ * PRの1つの行として作業項目を持つ種別。同じPRに、より新しい作業項目があれば、中止を断る。
+ * 監視はPRの最新の作業項目だけを見るので、古い行の中止は監視に届かず、最新の行の判定だけを狂わせるためである。
+ */
+export const OPERATOR_CANCEL_PR_ROW_KINDS: readonly string[] = [
+  "pr_review",
+  "pr_fix",
+  "dependabot",
+];
+
 /** 遷移の注記が、人の中止の固定文か。 */
 export function isOperatorCancelledNote(note: string | null): boolean {
   return note === OPERATOR_CANCELLED_NOTE;
+}
+
+/**
+ * 作業項目が、人に中止されたか。`note`は、その作業項目が取り消しへ移った最新の遷移の注記である。
+ * 作業項目が引けないとき(`null`)と、照合による取り消しは偽にする。
+ */
+export function isOperatorCancelledItem(
+  item: { readonly status: string } | null,
+  note: string | null,
+): boolean {
+  return (
+    item !== null &&
+    item.status === "cancelled" &&
+    isOperatorCancelledNote(note)
+  );
 }
 
 /** 監視が読む、PRの最新の作業項目のうち、判定に要る部分。 */
@@ -73,17 +108,15 @@ export function isOperatorCancelledAtHead(
   note: string | null,
   headSha: string,
 ): boolean {
-  return (
-    latest !== null &&
-    latest.status === "cancelled" &&
-    latest.head_sha === headSha &&
-    isOperatorCancelledNote(note)
-  );
+  return latest?.head_sha === headSha && isOperatorCancelledItem(latest, note);
 }
 
 /** `readOperatorCancelledAtHead`が読む元。DBの読み取りを注入する。 */
 export type OperatorCancelReaders = {
-  /** PRの最新の作業項目(PRのレビューと修正)。無ければ`null`。 */
+  /**
+   * PRの最新の作業項目。無ければ`null`。種別を問わず、作った順(`created_at`、`id`)で最新の行である。
+   * 中止の書き込みが、同じ順で最新でない行の中止を断るので、人が中止した行は、中止の時点でこの行に当たる。
+   */
   readonly latestPrRow: () => Promise<LatestPrRow | null>;
   /** 作業項目が取り消しへ移った最新の遷移の注記。 */
   readonly cancelNote: (id: number) => Promise<string | null>;
