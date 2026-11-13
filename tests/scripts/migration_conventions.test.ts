@@ -139,6 +139,26 @@ describe("splitStatements", () => {
     ]);
   });
 
+  test("keeps a semicolon inside a dollar quote whose tag has a digit", () => {
+    const sql = "SELECT $fn1$ a; b; $fn1$; SELECT 2;";
+    expect(splitStatements(sql).statements).toEqual([
+      "SELECT $fn1$ a; b; $fn1$",
+      "SELECT 2",
+    ]);
+  });
+
+  test("reports an unterminated dollar quote", () => {
+    expect(splitStatements("SELECT $f$ a;").unsupported).toEqual([
+      "an unterminated dollar quote",
+    ]);
+  });
+
+  test("reports an unterminated quoted identifier", () => {
+    expect(splitStatements('SELECT "a;').unsupported).toEqual([
+      "an unterminated quoted identifier",
+    ]);
+  });
+
   test("does not start a dollar quote right after an identifier character", () => {
     const sql = "SELECT a$1; SELECT 2;";
     expect(splitStatements(sql).statements).toEqual(["SELECT a$1", "SELECT 2"]);
@@ -201,6 +221,12 @@ describe("transactionViolations", () => {
     expect(transactionOf("BEGIN; SELECT 1; END;")).toEqual([]);
   });
 
+  test("does not mistake SET LOCAL for SET TRANSACTION", () => {
+    expect(
+      transactionOf("BEGIN; SET LOCAL lock_timeout = '30s'; END;"),
+    ).toEqual([]);
+  });
+
   test("accepts a function body that has its own BEGIN and END", () => {
     const sql =
       "BEGIN; CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql; END;";
@@ -228,6 +254,10 @@ describe("transactionViolations", () => {
     "START TRANSACTION",
     "ABORT",
     "PREPARE TRANSACTION 'x'",
+    "SAVEPOINT a",
+    "RELEASE SAVEPOINT a",
+    "RELEASE a",
+    "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
   ])("rejects %s in the middle", (statement) => {
     expect(transactionOf(`BEGIN; ${statement}; SELECT 1; END;`)).toEqual([
       "x.up.sql: a transaction statement appears in the middle",

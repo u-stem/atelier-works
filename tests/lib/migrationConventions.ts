@@ -38,6 +38,9 @@ export type Migration = {
 const isIdentifierChar = (char: string | undefined): boolean =>
   char !== undefined && /[\w$]/.test(char);
 
+/** ドル引用のタグ。位置`lastIndex`から照合する。 */
+const DOLLAR_TAG = /\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/y;
+
 /**
  * SQLを、コメントを除いた文に分ける。
  * 文字列リテラル(`'...'`)、二重引用符の識別子(`"..."`)、ドル引用(`$$...$$`、`$tag$...$tag$`)の中の
@@ -51,11 +54,10 @@ export function splitStatements(sql: string): SplitResult {
   let i = 0;
   while (i < sql.length) {
     const char = sql[i];
-    const rest = sql.slice(i);
-    if (rest.startsWith("--")) {
+    if (sql.startsWith("--", i)) {
       const end = sql.indexOf("\n", i);
       i = end === -1 ? sql.length : end;
-    } else if (rest.startsWith("/*")) {
+    } else if (sql.startsWith("/*", i)) {
       let depth = 1;
       let j = i + 2;
       while (j < sql.length && depth > 0) {
@@ -112,7 +114,8 @@ export function splitStatements(sql: string): SplitResult {
       current += sql.slice(i, j + 1);
       i = j + 1;
     } else if (char === "$" && !isIdentifierChar(sql[i - 1])) {
-      const tag = /^\$[A-Za-z_]*\$/.exec(rest)?.[0];
+      DOLLAR_TAG.lastIndex = i;
+      const tag = DOLLAR_TAG.exec(sql)?.[0];
       if (tag === undefined) {
         current += char;
         i += 1;
@@ -199,7 +202,7 @@ export function isRealTimestamp(version: string): boolean {
 
 /** トランザクションを操作する文。先頭の語で見る。 */
 const TRANSACTION_CONTROL =
-  /^(?:BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|ABORT|PREPARE\s+TRANSACTION)\b/i;
+  /^(?:BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|ABORT|PREPARE\s+TRANSACTION|SAVEPOINT|RELEASE|SET\s+TRANSACTION)\b/i;
 
 /** 最初がBEGIN、最後がENDで、途中にトランザクションを操作する文が無いことを確かめ、破っている点を返す。 */
 export function transactionViolations(

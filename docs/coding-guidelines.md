@@ -217,7 +217,9 @@ Windmillの資産の配置、secretとconfigの取得、`//native`を使わな�
 適用済みのmigrationは書き換えず、変更は新しいmigrationで足す。
 書き換えは、新規環境と復元にだけ効き、本番とずれるためである。
 実DBの検査(`test:db`)と重複する、migrationの文面のテストは足さない。
-migrationの書き方の規約は、`tests/scripts/migration_conventions.test.ts`が全migrationに共通で確かめる。
+migrationの書き方の規約は、2つのテストが全migrationに共通で確かめる。
+`tests/scripts/migration_timestamps.test.ts`は、upとdownの対と、版の重複を確かめる。
+`tests/scripts/migration_conventions.test.ts`は、ほかの規約を確かめる。
 
 - 版は14桁の実在する日時にし、ファイル名は`<版>_<名前>.(up|down).sql`にする。
   upとdownは対にする。
