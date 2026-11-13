@@ -54,7 +54,11 @@ import {
 // 走査の方法と限界は、`console_worker_boundary.test.ts`の先頭にある。
 // tagの走査が見ないもの: 式で組み立てたtag、フローの入力で渡すtag、Windmillの画面で付けたtag。
 // 依存の走査が見ないもの: 文字列で組み立てた呼び出し、`eval`と`Function`、注入された関数の中身、
-// windmill-clientの中身。
+// windmill-clientの中身、グローバルの`Worker`、`process`の別名と分割代入、禁止の一覧に無い`node:`のモジュール、
+// `globalThis`以外のグローバルオブジェクト(`global`、`self`、`window`)、骨組みの字句の読み違え。
+// 字句の読み違えは、割り算を正規表現リテラルと読んで間のコードを落とす向きと、
+// 正規表現リテラルを割り算と読んで、正規表現の中の引用符から後ろを文字列として落とす向きがある。
+// `Worker`から字句の読み違えまでの限界は、`docs/security-risks.md`のR-PER-23にある。
 // コードがAPIで渡すtag(`JobService.run*`の`tag`)は、下の「コードが渡すtag」のテストが、現在の0件を保つ。
 // resourceの中身で解決されるsecret(`getResource`が返す値の`$var:`)は、走査が見ない。
 // これらはコードのレビューで見る。tag periodicを最初に付けるPRでは、そのscriptが読むresourceの中身も確かめる。

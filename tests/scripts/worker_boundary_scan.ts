@@ -49,6 +49,7 @@ function dynamicImportPaths(source: string): string[] {
  * 畳み込まれた動的importは、変換前の本文から読むimportの一覧に現れない。
  * そのため、変換後のコードから読む動的importの指定は、変換前の一覧にすべて現れることを確かめる。
  * 到達しない動的importが変換で消えても、その指定は変換前の一覧に残るので、ほかの走査から隠れない。
+ * 畳み込まれた指定が変換前の一覧の指定と同じ値なら、その値はほかの走査(依存、外部のimport)が見るので、ここでは止めない。
  */
 export function unfollowableImports(source: string): string[] {
   const found: string[] = [];
@@ -457,8 +458,11 @@ export type SdkFindings = {
 };
 
 /**
- * windmill-clientのimport。版の指定は、数字の版(`@1.817.0`)だけを認める。
- * `@latest`のようなタグや範囲は、入れるたびに中身が変わりうるので当たらない。深いパス(`windmill-client/...`)も当たらない。
+ * windmill-clientのimport。版の指定は、数字の版(`@1.817.0`)と、版の指定の無い形だけを認める。
+ * 版の指定の無い形を認めるのは、動く版が`.script.lock`で決まるためである。
+ * `scripts/check-script-locks.ts`が、lockの宣言の版をルートのpackage.jsonと、解決した版とintegrityをルートのbun.lockと照らす。
+ * `@latest`のようなタグや範囲は、import自体が動く版を求め、lockを作り直すと別の版に解決されうるので当たらない。
+ * lockの照合より前の、import文の段で止めるためである。深いパス(`windmill-client/...`)も当たらない。
  */
 export const CLIENT_PACKAGE = /^windmill-client(?:@\d+\.\d+\.\d+)?$/;
 const FORBIDDEN_NAMES =
