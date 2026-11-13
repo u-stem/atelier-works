@@ -35,9 +35,46 @@ function filesDefining(name: string): string[] {
     .sort();
 }
 
+/** `body`の形の1行だけを返す関数を、名前を問わず定義しているファイル。`body`は引数の名前を`ARG`と書く。 */
+function filesWithBody(returnType: string, body: string): string[] {
+  const definition = new RegExp(
+    String.raw`function\s+\w+\s*\(\s*(\w+)\s*:\s*unknown\s*\)\s*:\s*${returnType}\s*\{\s*return\s+${body.replaceAll("ARG", String.raw`\1`)}\s*;\s*\}`,
+  );
+  return trackedTypeScriptFiles()
+    .filter((path) => definition.test(read(path)))
+    .sort();
+}
+
+/** 例外の文を取り出す本体。マスクの有無を問わない。 */
+function filesWithErrorTextBody(): string[] {
+  return filesWithBody(
+    "string",
+    String.raw`(?:maskSecrets\(\s*)?ARG instanceof Error \? ARG\.message : String\(ARG\)\s*\)?`,
+  );
+}
+
+/** 配列でも`null`でもないオブジェクトを判定する本体。 */
+function filesWithRecordBody(): string[] {
+  return filesWithBody(
+    String.raw`\1 is [^{]+`,
+    String.raw`typeof ARG === "object" && ARG !== null && !Array\.isArray\(ARG\)`,
+  );
+}
+
+/** `homes`の外で`name`を定義しているファイル。 */
+function definedOutside(
+  name: string,
+  homes: Readonly<Record<string, string>>,
+): string[] {
+  return filesDefining(name).filter((path) => !(path in homes));
+}
+
 // 保護パスの中だけを読むファイルの理由。保護されない共通のモジュールをimportすると、人のレビューを経ない変更が判定の入力になる。
+// 保留と凍結と全停止の部品は、保留のCLI、マージのフック、Console用workerのscriptが読み込むので、どれもこの閉包に入る。
 const PROTECTED_CLOSURE =
-  "the hold command and the merge guard reach only protected paths";
+  "the hold, freeze and stop-all files reach only protected paths, because the hold command, the merge guard and the console worker load them";
+const DEPLOY_GATE_CLOSURE =
+  "every file that the deploy gate imports is a protected path";
 const PROTECTED_LEAF =
   "a protected path whose imports are all protected keeps its own copy";
 
@@ -65,13 +102,17 @@ const IS_RECORD_HOMES: Readonly<Record<string, string>> = {
   "tests/scripts/claude-hooks/settings.test.ts": PROTECTED_LEAF,
 };
 
-/** `errorMessage`を定義してよいファイルと、その理由。`log.ts`の定義は、秘密情報を常にマスクする。 */
-const ERROR_MESSAGE_HOMES: Readonly<Record<string, string>> = {
+/**
+ * 例外の文を取り出す関数(`errorMessage`と、同じ本体の別の名前の関数)を定義してよいファイルと、その理由。
+ * `log.ts`の定義は、秘密情報を常にマスクする。
+ */
+const ERROR_TEXT_HOMES: Readonly<Record<string, string>> = {
   "f/factory/lib/log.ts": "the shared leaf module",
   "f/factory/lib/freezes.ts": PROTECTED_CLOSURE,
   "f/factory/lib/freeze_apply.ts": PROTECTED_CLOSURE,
   "scripts/freeze.ts": PROTECTED_CLOSURE,
   "scripts/hold.ts": PROTECTED_CLOSURE,
+  "f/factory/lib/deploy_gate.ts": DEPLOY_GATE_CLOSURE,
 };
 
 /** 日本時間とUTCの差を定義してよいファイルと、その理由。Consoleの`jst.ts`は`f/factory/lib/jst.ts`を読み直す。 */
@@ -83,16 +124,22 @@ const JST_OFFSET_HOMES: Readonly<Record<string, string>> = {
 
 describe("isRecord", () => {
   test("is defined only in types.ts and the files that cannot import it", () => {
-    expect(filesDefining("isRecord")).toEqual(
-      Object.keys(IS_RECORD_HOMES).sort(),
-    );
+    expect(definedOutside("isRecord", IS_RECORD_HOMES)).toEqual([]);
+  });
+
+  test("has its body under any name only in the files of the table", () => {
+    expect(filesWithRecordBody()).toEqual(Object.keys(IS_RECORD_HOMES).sort());
   });
 });
 
 describe("errorMessage", () => {
   test("is defined only in log.ts and the files that cannot import it", () => {
-    expect(filesDefining("errorMessage")).toEqual(
-      Object.keys(ERROR_MESSAGE_HOMES).sort(),
+    expect(definedOutside("errorMessage", ERROR_TEXT_HOMES)).toEqual([]);
+  });
+
+  test("has its body under any name only in the files of the table", () => {
+    expect(filesWithErrorTextBody()).toEqual(
+      Object.keys(ERROR_TEXT_HOMES).sort(),
     );
   });
 });
