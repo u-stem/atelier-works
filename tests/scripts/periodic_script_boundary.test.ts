@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PERIODIC_JOB_WAIT_SECONDS } from "../../f/factory/lib/periodic_worker.ts";
 import {
   codeOf,
@@ -16,11 +18,14 @@ import {
   mentionsTag,
   nonLiteralVariableReads,
   parseYamlFile,
+  relative,
   scan,
   scriptTimeoutSeconds,
   secretsOutside,
   secretVariablePaths,
+  sourcesReachableFrom,
   toolDependencies,
+  transpilerImports,
   yamlOf,
 } from "./worker_boundary_scan.ts";
 
@@ -38,12 +43,19 @@ import {
 // - defaultのworkerの停止を検知するscript(default_worker_watch)も、この一覧に入る。
 //   defaultのworkerの中では、そのworkerが止まると動かないためである。
 // - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
+// - importでたどれるソースがimportの形で読む外部のパッケージは、windmill-clientだけである。
+//   パッケージの中身は走査が見ないので、ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるためである。
 // - 走査でたどれない形(Console用workerの境界テストと同じ)が無い。
+//   引数が変数の動的importは止まるが、リテラルだけで組み立てた引数は、下の「見ないもの」に入る。
 //
 // 走査の方法と限界は、`console_worker_boundary.test.ts`の先頭にある。
 // tagの走査が見ないもの: 式で組み立てたtag、フローの入力で渡すtag、Windmillの画面で付けたtag。
 // 依存の走査が見ないもの: 文字列で組み立てた呼び出し、`eval`と`Function`、注入された関数の中身、
-// 第三者パッケージ(execa、fs-extra、zxなど)の中身。
+// windmill-clientの中身。
+// リテラルだけで組み立てた動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート)と、
+// `import.meta.require`を変数に入れて呼ぶ形も見ない。
+// 前者は変換の過程で定数に畳み込まれ、走査には単一のリテラルに見えるが、importの一覧には現れない。
+// どちらも、外部のパッケージの固定とサブプロセスの禁止をすり抜ける。
 // コードがAPIで渡すtag(`JobService.run*`の`tag`)は、下の「コードが渡すtag」のテストが、現在の0件を保つ。
 // resourceの中身で解決されるsecret(`getResource`が返す値の`$var:`)は、走査が見ない。
 // これらはコードのレビューで見る。tag periodicを最初に付けるPRでは、そのscriptが読むresourceの中身も確かめる。
@@ -95,6 +107,36 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
   "f/factory/lib/config.ts":
     "loadConfigの引数getResource(注入された関数)。呼び出し側は、リテラルのwmill.getResource(...)を包んで渡す",
 };
+
+/**
+ * windmill-clientのimport。版の指定は、数字の版(`@1.817.0`)だけを認める。
+ * `@latest`のようなタグは、入れるたびに中身が変わりうるので当たらない。深いパス(`windmill-client/...`)も当たらない。
+ */
+const CLIENT_PACKAGE = /^windmill-client(?:@\d+\.\d+\.\d+)?$/;
+
+/**
+ * `source`が読み込む先のうち、windmill-client以外の外部のパッケージ。
+ * 相対のimportと`node:`のモジュールは数えない。`node:`の付かない組み込みの名前(`fs`など)は数える。
+ */
+function externalPackageImports(source: string): string[] {
+  return transpilerImports(source).filter(
+    (path) =>
+      !path.startsWith(".") &&
+      !path.startsWith("node:") &&
+      !CLIENT_PACKAGE.test(path),
+  );
+}
+
+/** `entries`がimportでたどれるファイルのうち、windmill-client以外の外部のパッケージを読むもの。 */
+function filesWithExternalPackages(entries: readonly string[]): string[] {
+  const found = new Set<string>();
+  for (const entry of entries) {
+    for (const [file, source] of sourcesReachableFrom(entry)) {
+      if (externalPackageImports(source).length > 0) found.add(relative(file));
+    }
+  }
+  return [...found].sort();
+}
 
 async function scheduledScripts(): Promise<string[]> {
   const paths: string[] = [];
@@ -242,6 +284,100 @@ describe("the tool dependency scan", () => {
     expect(
       toolDependencies('// import { readFile } from "node:fs/promises";\n'),
     ).toEqual([]);
+  });
+});
+
+describe("the external package scan", () => {
+  test("flags an import of another package", () => {
+    expect(externalPackageImports('import { z } from "zod";')).toEqual(["zod"]);
+  });
+
+  test("flags a side-effect import of another package", () => {
+    expect(externalPackageImports('import "zod";')).toEqual(["zod"]);
+  });
+
+  test("flags a re-export from another package", () => {
+    expect(externalPackageImports('export * from "zod";')).toEqual(["zod"]);
+  });
+
+  test("flags a literal dynamic import of another package", () => {
+    expect(externalPackageImports('await import("zod");')).toEqual(["zod"]);
+  });
+
+  test("flags a scoped package", () => {
+    expect(
+      externalPackageImports('import { graphql } from "@octokit/graphql";'),
+    ).toEqual(["@octokit/graphql"]);
+  });
+
+  test("flags a deep path import of the windmill client", () => {
+    expect(
+      externalPackageImports('import x from "windmill-client/dist/core";'),
+    ).toEqual(["windmill-client/dist/core"]);
+  });
+
+  test("flags a builtin module without the node: prefix", () => {
+    expect(externalPackageImports('import { join } from "path";')).toEqual([
+      "path",
+    ]);
+  });
+
+  test("flags the windmill client with a tag instead of a version", () => {
+    expect(
+      externalPackageImports(
+        'import * as wmill from "windmill-client@latest";',
+      ),
+    ).toEqual(["windmill-client@latest"]);
+  });
+
+  test("does not flag the windmill client with a version", () => {
+    expect(
+      externalPackageImports(
+        'import * as wmill from "windmill-client@1.817.0";',
+      ),
+    ).toEqual([]);
+  });
+
+  test("does not flag the windmill client without a version", () => {
+    expect(
+      externalPackageImports('import * as wmill from "windmill-client";'),
+    ).toEqual([]);
+  });
+
+  test("does not flag a node: module", () => {
+    expect(externalPackageImports('import { join } from "node:path";')).toEqual(
+      [],
+    );
+  });
+
+  test("does not flag a relative import", () => {
+    expect(
+      externalPackageImports('import { x } from "./lib/types.ts";'),
+    ).toEqual([]);
+  });
+
+  test("does not flag a mention in a comment", () => {
+    expect(externalPackageImports('// import { z } from "zod";\n')).toEqual([]);
+  });
+
+  // 入口から相対importでたどった先のファイルを、違反の出たファイルの単位で名指しすることを確かめる。
+  test("names a reached file that imports a package other than the windmill client", () => {
+    const dir = mkdtempSync(join(tmpdir(), "periodic-boundary-"));
+    try {
+      writeFileSync(
+        join(dir, "entry.ts"),
+        'import * as wmill from "windmill-client@1.817.0";\nimport { x } from "./lib.ts";\nexport { wmill, x };\n',
+      );
+      writeFileSync(
+        join(dir, "lib.ts"),
+        'import { z } from "zod";\nexport const x = z;\n',
+      );
+      expect(filesWithExternalPackages([join(dir, "entry")])).toEqual([
+        join(dir, "lib.ts"),
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -472,6 +608,17 @@ describe("periodic scripts", () => {
 
   test("no file a periodic script reaches depends on files, subprocesses, or claude", () => {
     expect(filesWithToolDependencies(PERIODIC_SCRIPTS)).toEqual([]);
+  });
+
+  test("a periodic script reaches an import of the windmill client, so that the check below is not empty", () => {
+    const imports = [
+      ...sourcesReachableFrom("f/factory/collect_github").values(),
+    ].flatMap(transpilerImports);
+    expect(imports.some((path) => CLIENT_PACKAGE.test(path))).toBe(true);
+  });
+
+  test("no file a periodic script reaches imports a package other than the windmill client", () => {
+    expect(filesWithExternalPackages(PERIODIC_SCRIPTS)).toEqual([]);
   });
 
   test("the scan sees the secret variables the boundary is about", async () => {

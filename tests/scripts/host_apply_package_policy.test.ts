@@ -67,7 +67,7 @@ describe("classifyPackageJsonChange: version bumps", () => {
     expect(
       classifyPackageJsonChange(
         REAL,
-        REAL.replace('"typescript": "^7.0.2"', '"typescript": "^7.0.3"'),
+        REAL.replace('"typescript": "7.0.2"', '"typescript": "7.0.3"'),
       ),
     ).toBe("auto");
   });

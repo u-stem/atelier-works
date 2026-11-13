@@ -1039,6 +1039,8 @@ script.yamlに`$var:`か`$res:`の参照があるときも、テストは落ち�
 凍結の変数`f/factory/freezes`は、書き込みのときに`isSecretIfNotExist`へ`false`を渡すので、secretではない。
 呼び出し側が定数だけを渡すことを確かめ、テストの許可リストに理由を書いている。
 テストが見ないのは、文字列を組み立てて作ったsecretのパス、環境変数やDBを経由して受け取る名前、`eval`、文字列の中に隠したコードである。
+リテラルだけで組み立てた動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート)も見ない。
+変換の過程で単一のリテラルに畳み込まれ、importの一覧に現れないためである。
 これらはコードのレビューで見る。
 
 サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
@@ -1252,6 +1254,8 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 
 契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、tag`periodic`を持つscriptについて次を固定する。
 走査の方法と、たどれない形は、Console用workerの契約テストと同じである。
+引数が変数の動的importは、たどれない形として止まる。
+引数がリテラルだけで組み立てた形は、変換の過程で単一のリテラルに畳み込まれるので止まらず、下の「テストが見ないもの」に入る。
 
 - `f/`の下のYAMLのうち、tag`periodic`へ振り分けるものが、テストの一覧のscriptの定義と一致する。
   scriptの定義の`tag`だけでなく、スケジュールの`tag`と、フローのモジュールの`tag`と`tag_override`も、入れ子の中まで調べる。
@@ -1267,6 +1271,10 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 - importでたどれるソースが読むsecret変数は、scriptごとの許可に限る。
   許可のキーが、tag`periodic`のscriptの一覧と一致することと、許可したsecretを実際に読むことも固定する。
   ある許可を別のscriptに当てると、違反が返ることも確かめる。
+- importでたどれるソースがimportの形で読む外部のパッケージは、`windmill-client`だけである。
+  パッケージの中身は走査が見ないので、ほかのパッケージを足すと、次の項目のファイルとサブプロセスの禁止をすり抜けられるためである。
+  `node:`のモジュールは、この項目では外部のパッケージに数えず、次の項目で調べる。
+  版の指定は、数字の版だけを認める。
 - importでたどれるソースに、ファイル、サブプロセス、`claude.ts`への依存が無い。
   `node:fs`、`node:child_process`、`bun`モジュールのimportと、`Bun`の使い方を調べる。
   `Bun.sleep`のような無害なメンバー以外は、`Bun.spawn`や`Bun.file`に加えて、分割代入、別名への代入、添字アクセスも当たる。
@@ -1281,7 +1289,12 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 - 式で組み立てたtag、フローの入力で渡すtag。
 - Windmillの画面で付けたtag。
 - 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
-- 第三者パッケージ(`execa`、`fs-extra`、`zx`など)の中身。
+- リテラルだけで組み立てた動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート)。
+  変換の過程で定数に畳み込まれ、走査には単一のリテラルに見えるが、importの一覧には現れない。
+  そのため、外部のパッケージの固定とサブプロセスの禁止をすり抜ける。
+- `import.meta.require`を変数に入れて呼ぶ形。
+  この境界の走査は`import.meta`を拒まないので、同じくすり抜ける。
+- `windmill-client`の中身。
 - resourceの中身で解決されるsecret。
   `getResource`が返す値の中の`$var:`は、走査が見ない。
 
@@ -1398,12 +1411,13 @@ Windmillの資産のうちnpmの依存を入れるのは、dependabotの更新�
 ## 依存の脆弱性
 
 ルートの`bun audit`の指摘のうち、親の求める範囲に修正版が無いものの残るリスクは[R-TB-36](security-risks.md#r-tb-36)である。
-`overrides`で解消できるものは[コーディング規約](coding-guidelines.md#依存の脆弱性)の手順で固定する。
+`overrides`で解消できるものは[コーディング規約](coding-guidelines.md#脆弱性)の手順で固定する。
+依存の選び方と足す手順は、[コーディング規約](coding-guidelines.md#依存)にある。
 
 ルートの依存は、`windmill-client`を除いて開発用で、文書の検査(markdownlint-cli2、textlint)、型検査、整形に使う。
 本番のコードからは読まれない。
 `windmill-client`はworkerのscriptが読む。
-scriptの`.script.lock`は、ルートの`bun.lock`と同じ版・同じintegrityであることを`lint`が確かめるので、ルートの監査がworkerの依存も覆う([コーディング規約](coding-guidelines.md#依存の脆弱性))。
+scriptの`.script.lock`は、ルートの`bun.lock`と同じ版・同じintegrityであることを`lint`が確かめるので、ルートの監査がworkerの依存も覆う([コーディング規約](coding-guidelines.md#脆弱性))。
 `windmill-client`の指摘は、受け入れの表に入れない。
 修正版の無いhighの指摘が出たときの残るリスクは[R-TB-38](security-risks.md#r-tb-38)である。
 ただし、このリポジトリを対象に`check_commands_by_repo`か`allowed_check_commands`を設定すると、検査がworkerのコンテナの中で走る。
