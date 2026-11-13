@@ -509,7 +509,7 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `claude_run_failed`: 直す作業のClaudeの実行が、timeoutか実行ごとの予算の超過で失敗した。
  *   同じheadで起動し直しても同じ失敗になり、費用と回数だけを使う。
  *   `claude_usage_limit`の行が、時間の上限まで待っても戻らなかったときも、この理由に移る。
- * - `operator_cancelled`: PRの直す作業項目か、PRの最新の作業項目を、人がConsoleから中止した。
+ * - `operator_cancelled`: PRの直す作業項目、PRの最新の作業項目、ブランチが指すIssueの作業項目のどれかを、人がConsoleから中止した。
  *   人が止めると決めたので、同じheadでは起動し直さない。人が止めた操作の結果なので、Discordには送らない。
  *
  * 一時的な理由は、解ければ外してよい理由である。

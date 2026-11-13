@@ -2092,7 +2092,10 @@ describe("the cancel by a person in the fix rounds", () => {
     };
   }
 
-  function decideCi(setup: CancelSetup) {
+  function decideCi(
+    setup: CancelSetup,
+    classification: "fixable" | "metadata_only" = "fixable",
+  ) {
     return decideFixClaim({
       row: {
         head_sha: SHA,
@@ -2113,7 +2116,7 @@ describe("the cancel by a person in the fix rounds", () => {
         readBranchItemStatus: async () => null,
         readCommits: async () => COMMITS,
         hasSkillMarker: async () => true,
-        classify: async () => "fixable",
+        classify: async () => classification,
         lockIntegrityOnly: async () => false,
         workerEnv: async () => null,
         budgetExceeded: async () => false,
@@ -2172,6 +2175,14 @@ describe("the cancel by a person in the fix rounds", () => {
     },
   );
 
+  // Claudeを使わない回も同じ起動の口を通る。別の起動のreturnが先にできて、窓が戻る形を捕まえる。
+  test.each(CANCEL_CASES)(
+    "the CI round for the metadata job holds when a person cancelled %s",
+    async (_name, setup) => {
+      expect(await decideCi(setup, "metadata_only")).toEqual(HELD);
+    },
+  );
+
   test("the conflict round claims when no one cancelled", async () => {
     expect((await decideConflict({})).kind).toBe("claim");
   });
@@ -2183,35 +2194,83 @@ describe("the cancel by a person in the fix rounds", () => {
     },
   );
 
-  /** 最上位の関数`name`の本文。変換したJavaScriptで、関数を閉じる行までを返す。 */
-  function bodyOf(path: string, name: string): string {
+  /**
+   * 最上位の関数の本文。`head`で始まる宣言から、変換したJavaScriptで関数を閉じる行までを返す。
+   * 宣言が見つからなければ空文字列を返し、続く検査を落とす。
+   */
+  function bodyOf(path: string, head: string): string {
     const code = codeOf(read(path));
-    const start = code.indexOf(`export async function ${name}(`);
+    const start = code.indexOf(head);
+    if (start === -1) return "";
     const end = code.indexOf("\n}\n", start);
     return code.slice(start, end === -1 ? undefined : end);
   }
 
   // 最後の読み取り(CI回はworkerの環境、競合回は直近の修正の時刻)の後で、起動の前に、中止を読み直す。
-  test.each([
+  const DECISIONS = [
     [
       "f/factory/lib/pr_ci_fix_claim.ts",
-      "decideFixClaim",
+      "export async function decideFixClaim(",
       "readers.workerEnv()",
     ],
     [
       "f/factory/lib/pr_conflict_fix_claim.ts",
-      "decideConflictFixClaim",
+      "export async function decideConflictFixClaim(",
       "readers.lastFixSettledAt()",
     ],
+  ];
+  const RECHECK = "await cancelledByOperator(readers)";
+
+  test.each(DECISIONS)(
+    "%s reads the cancel again after the last read",
+    (path, head, lastRead) => {
+      const body = bodyOf(path, head);
+      expect(body.lastIndexOf(RECHECK)).toBeGreaterThan(body.indexOf(lastRead));
+    },
+  );
+
+  test.each(DECISIONS)(
+    "%s reads the cancel again before the claim",
+    (path, head) => {
+      const body = bodyOf(path, head);
+      expect(body.lastIndexOf(RECHECK)).toBeLessThan(
+        body.lastIndexOf('kind: "claim"'),
+      );
+    },
+  );
+
+  // 起動の口が1つなら、読み直しの後に別の起動のreturnを足せない。
+  test.each(DECISIONS)("%s claims at a single place", (path, head) => {
+    const body = bodyOf(path, head);
+    expect(body.indexOf('kind: "claim"')).toBe(
+      body.lastIndexOf('kind: "claim"'),
+    );
+  });
+
+  // 監視の中間層が、判定の読み取りを、正規の綴りのowner・repo、ブランチ名、行のPRの番号とheadで配線する。
+  test.each([
+    ["f/factory/lib/pr_ci_watch.ts", "claim"],
+    ["f/factory/lib/pr_conflict_watch.ts", "fix"],
   ])(
-    "%s reads the cancel again after the last read and before the claim",
-    (path, name, lastRead) => {
-      const body = bodyOf(path, name);
-      const recheck = body.lastIndexOf("await cancelledByOperator(readers)");
-      expect(
-        recheck > body.indexOf(lastRead) &&
-          recheck < body.lastIndexOf('kind: "claim"'),
-      ).toBe(true);
+    "%s passes the branch of the row to the cancel of the Issue work item",
+    (path, deps) => {
+      const body = bodyOf(path, "function claimReaders(").replace(/\s+/g, "");
+      expect(body).toContain(
+        `branchItemOperatorCancelled:()=>${deps}.branchItemOperatorCancelled(names.owner,names.repo,headRef)`,
+      );
+    },
+  );
+
+  test.each([
+    ["f/factory/lib/pr_ci_watch.ts", "claim"],
+    ["f/factory/lib/pr_conflict_watch.ts", "fix"],
+  ])(
+    "%s passes the pull request and the head of the row to the cancel at the head",
+    (path, deps) => {
+      const body = bodyOf(path, "function claimReaders(").replace(/\s+/g, "");
+      expect(body).toContain(
+        `operatorCancelledAtHead:()=>${deps}.operatorCancelledAtHead(names.owner,names.repo,row.pr_number,row.head_sha)`,
+      );
     },
   );
 
