@@ -404,11 +404,27 @@ describe("cancelStatement", () => {
 
   test("reads whether a newer work item kept the row from being cancelled", async () => {
     const result = await cancelStatement(
-      fakeSql([[{ cancelled: 0, withdrawn: 0, newer: true }]]),
+      fakeSql([[{ cancelled: 0, withdrawn: 0, newer: 1 }]]),
       input,
       { job_id: null, root_job_id: null },
     );
     expect(result).toEqual({ cancelled: false, withdrawn: 0, newer: true });
+  });
+
+  // `count(*)`はbigintで、ドライバが文字列で返すことがある。確定した中止を例外にしない。
+  test("reads the newer work item as a count that may come as a string", async () => {
+    const result = await cancelStatement(
+      fakeSql([[{ cancelled: "1", withdrawn: "0", newer: "0" }]]),
+      input,
+      { job_id: null, root_job_id: null },
+    );
+    expect(result).toEqual({ cancelled: true, withdrawn: 0, newer: false });
+  });
+
+  test("counts the newer work items in the statement", () => {
+    expect(statementOf().text).toContain(
+      "(SELECT count(*) FROM newer) AS newer",
+    );
   });
 
   test("writes the fixed note of a cancel by a person", () => {
@@ -425,7 +441,7 @@ describe("cancelStatement", () => {
 
   test("reads the result of the statement as whether it cancelled and how many it withdrew", async () => {
     const result = await cancelStatement(
-      fakeSql([[{ cancelled: "1", withdrawn: "2", newer: false }]]),
+      fakeSql([[{ cancelled: "1", withdrawn: "2", newer: "0" }]]),
       input,
       { job_id: null, root_job_id: null },
     );
@@ -434,7 +450,7 @@ describe("cancelStatement", () => {
 
   test("reads no updated row as a lost compare", async () => {
     const result = await cancelStatement(
-      fakeSql([[{ cancelled: 0, withdrawn: 0, newer: false }]]),
+      fakeSql([[{ cancelled: 0, withdrawn: 0, newer: 0 }]]),
       input,
       { job_id: null, root_job_id: null },
     );

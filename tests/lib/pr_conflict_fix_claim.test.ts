@@ -65,7 +65,26 @@ type Setup = {
   readonly operatorCancelled?: boolean;
   /** PRのブランチが指すIssueの作業項目を、人が中止したか。 */
   readonly branchItemOperatorCancelled?: boolean;
+  /** 起動の直前に読み直したときの、ブランチのIssueの作業項目の中止。省略は1回目と同じ。 */
+  readonly branchItemOperatorCancelledOnRecheck?: boolean;
+  /** 起動の直前に読み直したときの、PRの最新の作業項目の中止。省略は1回目と同じ。 */
+  readonly operatorCancelledOnRecheck?: boolean;
 };
+
+/** 1回目は`first`、2回目からは`later`を返す読み取り。判定と起動の間に人が中止した窓を作る。 */
+function firstThen(
+  events: string[],
+  name: string,
+  first: boolean,
+  later: boolean,
+): () => Promise<boolean> {
+  let calls = 0;
+  return async () => {
+    events.push(name);
+    calls += 1;
+    return calls === 1 ? first : later;
+  };
+}
 
 function readers(setup: Setup = {}): {
   readonly readers: ConflictFixClaimReaders;
@@ -87,9 +106,13 @@ function readers(setup: Setup = {}): {
         "branch_item",
         setup.branchItemStatus ?? null,
       ),
-      branchItemOperatorCancelled: track(
+      branchItemOperatorCancelled: firstThen(
+        events,
         "branch_cancel",
         setup.branchItemOperatorCancelled ?? false,
+        setup.branchItemOperatorCancelledOnRecheck ??
+          setup.branchItemOperatorCancelled ??
+          false,
       ),
       readDefaultBranch: track("default_branch", setup.defaultBranch ?? "main"),
       readCommits: track(
@@ -102,9 +125,11 @@ function readers(setup: Setup = {}): {
       countEpisodeRounds: track("episode_rounds", setup.episodeRounds ?? 0),
       countPrRounds: track("pr_rounds", setup.prRounds ?? 0),
       lastFixSettledAt: track("last_fix", setup.lastFixSettledAt ?? null),
-      operatorCancelledAtHead: track(
+      operatorCancelledAtHead: firstThen(
+        events,
         "operator_cancel",
         setup.operatorCancelled ?? false,
+        setup.operatorCancelledOnRecheck ?? setup.operatorCancelled ?? false,
       ),
     },
   };
@@ -161,7 +186,26 @@ describe("decideConflictFixClaim", () => {
       "episode_rounds",
       "pr_rounds",
       "last_fix",
+      "branch_cancel",
+      "operator_cancel",
     ]);
+  });
+
+  // 判定の途中で人が中止したとき、高くつく読み取りの後でも起動しない。
+  test("holds operator_cancelled when a person cancels the latest work item while it decides", async () => {
+    const { decision } = decide({ operatorCancelledOnRecheck: true });
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "operator_cancelled",
+    });
+  });
+
+  test("holds operator_cancelled when a person cancels the Issue work item of the branch while it decides", async () => {
+    const { decision } = decide({ branchItemOperatorCancelledOnRecheck: true });
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "operator_cancelled",
+    });
   });
 
   test("holds last_fix_unsettled while a fix work item is active", async () => {

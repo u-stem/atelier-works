@@ -84,7 +84,26 @@ type Setup = {
   readonly operatorCancelled?: boolean;
   /** PRのブランチが指すIssueの作業項目を、人が中止したか。 */
   readonly branchItemOperatorCancelled?: boolean;
+  /** 起動の直前に読み直したときの、ブランチのIssueの作業項目の中止。省略は1回目と同じ。 */
+  readonly branchItemOperatorCancelledOnRecheck?: boolean;
+  /** 起動の直前に読み直したときの、PRの最新の作業項目の中止。省略は1回目と同じ。 */
+  readonly operatorCancelledOnRecheck?: boolean;
 };
+
+/** 1回目は`first`、2回目からは`later`を返す読み取り。判定と起動の間に人が中止した窓を作る。 */
+function firstThen(
+  events: string[],
+  name: string,
+  first: boolean,
+  later: boolean,
+): () => Promise<boolean> {
+  let calls = 0;
+  return async () => {
+    events.push(name);
+    calls += 1;
+    return calls === 1 ? first : later;
+  };
+}
 
 function readers(setup: Setup = {}): {
   readonly readers: FixClaimReaders;
@@ -107,9 +126,13 @@ function readers(setup: Setup = {}): {
         "branch_item",
         setup.branchItemStatus ?? null,
       ),
-      branchItemOperatorCancelled: track(
+      branchItemOperatorCancelled: firstThen(
+        events,
         "branch_cancel",
         setup.branchItemOperatorCancelled ?? false,
+        setup.branchItemOperatorCancelledOnRecheck ??
+          setup.branchItemOperatorCancelled ??
+          false,
       ),
       readCommits: track(
         "commits",
@@ -126,9 +149,11 @@ function readers(setup: Setup = {}): {
       countRounds: track("rounds", setup.rounds ?? 0),
       workerEnv: track("worker_env", setup.workerEnv ?? null),
       stopHeld: track("stop_held", setup.stopHeld ?? false),
-      operatorCancelledAtHead: track(
+      operatorCancelledAtHead: firstThen(
+        events,
         "operator_cancel",
         setup.operatorCancelled ?? false,
+        setup.operatorCancelledOnRecheck ?? setup.operatorCancelled ?? false,
       ),
     },
   };
@@ -410,6 +435,33 @@ describe("decideFixClaim", () => {
       kind: "hold",
       reason: "operator_cancelled",
     });
+  });
+
+  // 判定の途中で人が中止したとき、高くつく読み取りの後でも起動しない。
+  test("holds operator_cancelled when a person cancels the latest work item while it decides", async () => {
+    const { decision } = decide({ operatorCancelledOnRecheck: true });
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "operator_cancelled",
+    });
+  });
+
+  test("holds operator_cancelled when a person cancels the Issue work item of the branch while it decides", async () => {
+    const { decision } = decide({ branchItemOperatorCancelledOnRecheck: true });
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "operator_cancelled",
+    });
+  });
+
+  test("reads the cancel by a person again after the worker environment, just before it claims", async () => {
+    const { decision, events } = decide();
+    await decision;
+    expect(events.slice(-3)).toEqual([
+      "worker_env",
+      "branch_cancel",
+      "operator_cancel",
+    ]);
   });
 
   test("does not read the commits when a person cancelled the Issue work item of the branch", async () => {

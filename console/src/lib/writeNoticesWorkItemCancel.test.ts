@@ -81,4 +81,14 @@ describe("describeWorkItemCancelResult", () => {
       }).message,
     ).toContain("このPRには、より新しい作業項目があります");
   });
+
+  test("tells what to do instead of cancelling a row that is not the newest", () => {
+    expect(
+      describeWorkItemCancelResult({
+        found: true,
+        refused: true,
+        reason: "newer_work_item",
+      }).message,
+    ).toContain("再実行で進めるか、最新の作業項目を中止してください");
+  });
 });

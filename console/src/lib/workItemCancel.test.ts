@@ -103,6 +103,34 @@ describe("cancelWorkItemDialogLines", () => {
     );
   });
 
+  // 提案の依頼は状態によらず残るので、提案を出しうる種別には状態を問わず伝える。
+  test.each([
+    ["audit", "failed"],
+    ["audit", "needs_human"],
+    ["pr_review", "failed"],
+    ["pr_fix", "needs_human"],
+  ])("says for %s in %s that the proposals stay", (kind, status) => {
+    expect(cancelWorkItemDialogLines(kind, status).join("")).toContain(
+      "Issue化の提案の承認依頼は残ります",
+    );
+  });
+
+  test.each(["issue", "dependabot", "investigate"])(
+    "does not talk about the proposals for %s",
+    (kind) => {
+      expect(cancelWorkItemDialogLines(kind, "failed").join("")).not.toContain(
+        "Issue化の提案",
+      );
+    },
+  );
+
+  // 要件定義と設計の依頼を持つのはIssueだけなので、期限切れの文はIssueに限る。
+  test("does not say that the requests expire for an audit that waits for an approval", () => {
+    expect(
+      cancelWorkItemDialogLines("audit", "awaiting_approval").join(""),
+    ).not.toContain("期限切れになり");
+  });
+
   // 監査の承認待ちの依頼はIssue化の提案で、中止しても期限切れにしない。
   test("says that the proposals of an audit stay", () => {
     expect(
