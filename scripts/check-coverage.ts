@@ -706,6 +706,10 @@ export type CheckDiffCoverageOptions = JudgeDiffOptions & {
   readonly listChanged?: (root: string) => ChangedLines;
 };
 
+/**
+ * `git diff`の出力を読めなかった失敗。
+ * 追跡refや基点を取れない失敗と分け、`git fetch`では直らないことを案内するために使う。
+ */
 export class DiffFormatError extends Error {}
 
 const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
@@ -737,7 +741,9 @@ export function parseDiffAddedLines(diff: string): Map<string, Set<number>> {
         oldLeft -= 1;
         newLeft -= 1;
       } else if (!line.startsWith("\\")) {
-        throw new Error("git diff printed a hunk line of an unknown form");
+        throw new DiffFormatError(
+          "git diff printed a hunk line of an unknown form",
+        );
       }
       continue;
     }
@@ -748,7 +754,9 @@ export function parseDiffAddedLines(diff: string): Map<string, Set<number>> {
         continue;
       }
       if (!target.startsWith("b/")) {
-        throw new Error("git diff printed a file header of an unknown form");
+        throw new DiffFormatError(
+          "git diff printed a file header of an unknown form",
+        );
       }
       const path = target.slice("b/".length);
       current = byPath.get(path) ?? new Set<number>();
@@ -756,7 +764,14 @@ export function parseDiffAddedLines(diff: string): Map<string, Set<number>> {
       continue;
     }
     const hunk = HUNK_HEADER.exec(line);
-    if (hunk === null) continue;
+    if (hunk === null) {
+      if (line.startsWith("@@")) {
+        throw new DiffFormatError(
+          "git diff printed a hunk header of an unknown form",
+        );
+      }
+      continue;
+    }
     oldLeft = Number(hunk[1] ?? "1");
     nextLine = Number(hunk[2]);
     newLeft = Number(hunk[3] ?? "1");
@@ -860,11 +875,15 @@ export function judgeDiffCoverage(
  * 変更した行を出す`git diff`の引数。作業ツリーを基点と比べ、ステージしていない変更も含める。
  * 利用者の設定で出力の形が変わらないよう、色、外部のdiff、textconv、名前の変更の検出を止め、接頭辞を固定する。
  * `--text`は、NULを含むファイルをバイナリとして行を出さずに済ませないために付ける。
- * `--inter-hunk-context=0`は、hunkの間の変えていない行を文脈として出させないために付ける。
+ * `--inter-hunk-context=0`は、利用者のgitの設定`diff.interHunkContext`で、hunkの間の変えていない行が文脈として混ざり、形が変わらないように付ける。
+ * `core.quotePath=false`は、非ASCIIの名前を引用させないために付ける。
+ * それでも引用が残る名前(制御文字を含むものなど)は、差分を読めない失敗になる。
  */
 export function diffArgv(base: string, paths: readonly string[]): string[] {
   return [
     "git",
+    "-c",
+    "core.quotePath=false",
     "diff",
     "-U0",
     "--text",
@@ -923,14 +942,21 @@ export function checkDiffCoverage(options: CheckDiffCoverageOptions): Verdict {
   let changed: ChangedLines;
   try {
     changed = listChanged(options.root);
-  } catch {
+  } catch (error) {
     // gitの標準エラーとパスは載せない。
+    // 差分を読めなかったときは、取り直しでは直らないので、案内を分ける。
     return {
       ok: false,
-      message: [
-        "diff coverage check failed: listing the changed lines failed (git show-ref refs/remotes/origin/main, git merge-base, git diff, or git ls-files)",
-        "run git fetch origin main (git fetch --unshallow origin main in a shallow clone) and run the check again",
-      ].join("\n"),
+      message:
+        error instanceof DiffFormatError
+          ? [
+              "diff coverage check failed: the output of git diff could not be read (an unknown file header, hunk header, or hunk line, or a quoted file name)",
+              "git fetch does not fix this; check the form of the diff by hand",
+            ].join("\n")
+          : [
+              "diff coverage check failed: listing the changed lines failed (git show-ref refs/remotes/origin/main, git merge-base, git diff, or git ls-files)",
+              "run git fetch origin main (git fetch --unshallow origin main in a shallow clone) and run the check again",
+            ].join("\n"),
     };
   }
   return judgeDiffCoverage(options.lcovText, changed, {
