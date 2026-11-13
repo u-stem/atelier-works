@@ -220,6 +220,7 @@ function fakeFailureDeps(world: FakeFailureWorld = {}) {
       lookups.push(flowJobId);
       return world.byFlowJobId === undefined ? null : world.byFlowJobId();
     },
+    readCancelNote: async () => null,
     readInstanceName: world.instanceName ?? (async () => "test-instance"),
     readWebhookUrl: async () => world.webhookUrl ?? "https://discord.example/x",
     notify: async (_url, event) => {

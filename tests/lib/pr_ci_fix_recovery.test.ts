@@ -44,6 +44,7 @@ const CLAUDE_FAILURE_HOLDS = [
   ["run_budget_exceeded", "claude_run_failed"],
   ["usage_limit", "claude_usage_limit"],
   ["stopped", "claude_stopped"],
+  ["work_item_stopped", "operator_cancelled"],
 ] as const;
 
 describe("the CI round whose Claude run failed in a way that repeats", () => {
@@ -92,7 +93,12 @@ describe("the CI round whose Claude run failed in a way that repeats", () => {
     },
   );
 
-  test.each(["timeout", "run_budget_exceeded", "claude_error"] as const)(
+  test.each([
+    "timeout",
+    "run_budget_exceeded",
+    "claude_error",
+    "work_item_stopped",
+  ] as const)(
     "tells that the note of the verify step on %s does not wait",
     (reason) => {
       expect(isCiClaudeWaitNote(ciClaudeFailureText(reason))).toBe(false);

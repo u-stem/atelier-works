@@ -67,7 +67,10 @@ import {
 import * as consoleWrites from "../../console/src/api/writes.ts";
 import { describeIntakeRefusal } from "../../console/src/lib/intakeRefusal.ts";
 import { buildIntakeInput } from "../../console/src/lib/manualIntake.ts";
-import { WORK_ITEM_CANCELLABLE_STATUSES } from "../../console/src/lib/workItemCancel.ts";
+import {
+  WORK_ITEM_CANCEL_RUNNING_STATUSES,
+  WORK_ITEM_CANCELLABLE_STATUSES,
+} from "../../console/src/lib/workItemCancel.ts";
 import * as approvalScript from "../../f/factory/approval_decide.ts";
 import type * as auditKickoff from "../../f/factory/audit_kickoff.ts";
 import * as configUpdate from "../../f/factory/console_config_update.ts";
@@ -88,7 +91,10 @@ import {
 import type { ActionSqlClient } from "../../f/factory/lib/console_actions.ts";
 import type { HoldRow, Outcome } from "../../f/factory/lib/holds.ts";
 import * as manualIntakeSupport from "../../f/factory/lib/manual_intake_support.ts";
-import { OPERATOR_CANCELLABLE_STATUSES } from "../../f/factory/lib/operator_cancel.ts";
+import {
+  OPERATOR_CANCEL_RUNNING_STATUSES,
+  OPERATOR_CANCELLABLE_STATUSES,
+} from "../../f/factory/lib/operator_cancel.ts";
 import { isRecord, type Notice } from "../../f/factory/lib/types.ts";
 import * as manualIntakeSubmit from "../../f/factory/manual_intake_submit.ts";
 import * as noticeResolve from "../../f/factory/notice_resolve.ts";
@@ -1198,7 +1204,7 @@ describe("what the scripts return", () => {
   test("a work item cancel refused by the real check passes the guard", async () => {
     const result = await workItemCancel.cancelWorkItemFromConsole(
       7,
-      workItemCancelPorts({ kind: "issue", status: "implementing" }),
+      workItemCancelPorts({ kind: "issue", status: "pr_open" }),
     );
     expect(isWorkItemCancelResult(JSON.parse(JSON.stringify(result)))).toBe(
       true,
@@ -1225,6 +1231,13 @@ describe("what the scripts return", () => {
   test("the console shows the cancel for the kinds and states that the script allows", () => {
     expect(WORK_ITEM_CANCELLABLE_STATUSES).toEqual(
       OPERATOR_CANCELLABLE_STATUSES,
+    );
+  });
+
+  // 実行中の状態の写しがずれると、ダイアログと通知の「止まるまで数十秒」の文が、実行中の作業項目と合わなくなる。
+  test("the console words the running cancel for the states that the script treats as running", () => {
+    expect(WORK_ITEM_CANCEL_RUNNING_STATUSES).toEqual(
+      OPERATOR_CANCEL_RUNNING_STATUSES,
     );
   });
 

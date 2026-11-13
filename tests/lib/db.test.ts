@@ -3750,12 +3750,13 @@ describe("countImplementFailedRounds", () => {
     );
   });
 
-  test("leaves out the usage limit, the stop and the run not started, and nothing else", async () => {
+  test("leaves out the usage limit, the stops and the run not started, and nothing else", async () => {
     const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
     await countImplementFailedRounds(1, 2, sql);
     expect(calls[0]?.values).toContainEqual([
       "usage_limit",
       "stopped",
+      "work_item_stopped",
       "not_started",
     ]);
   });
@@ -3836,12 +3837,13 @@ describe("countPrFixFailures", () => {
     );
   });
 
-  test("leaves out the usage limit, the stop and the run not started, and nothing else", async () => {
+  test("leaves out the usage limit, the stops and the run not started, and nothing else", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
     await countPrFixFailures(1, sql);
     expect(calls[0]?.values).toContainEqual([
       "usage_limit",
       "stopped",
+      "work_item_stopped",
       "not_started",
     ]);
   });

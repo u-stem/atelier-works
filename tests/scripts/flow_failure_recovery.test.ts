@@ -137,6 +137,7 @@ describe("the failure of a CI round, from the exception of the step to the recov
     ["run_budget_exceeded", "claude_run_failed"],
     ["usage_limit", "claude_usage_limit"],
     ["stopped", "claude_stopped"],
+    ["work_item_stopped", "operator_cancelled"],
   ] as const)("holds the row on %s as %s", async (reason, hold) => {
     expect(await ciRecovery(reason)).toEqual({ kind: "release", hold });
   });
@@ -176,6 +177,7 @@ describe("the failure of the verify step of a CI round, from the finish step to 
     ["run_budget_exceeded", "claude_run_failed"],
     ["usage_limit", "claude_usage_limit"],
     ["stopped", "claude_stopped"],
+    ["work_item_stopped", "operator_cancelled"],
   ] as const)("holds the row on %s as %s", (reason, hold) => {
     expect(
       decideFixingRecovery(

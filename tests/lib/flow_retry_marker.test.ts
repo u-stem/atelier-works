@@ -17,6 +17,7 @@ describe("isFlowRetryable", () => {
     ["run_budget_exceeded", false],
     ["usage_limit", false],
     ["stopped", false],
+    ["work_item_stopped", false],
     ["not_started", true],
     ["claude_error", true],
     ["non_zero_exit", true],
@@ -39,6 +40,7 @@ describe("flowFailureMessage", () => {
     "run_budget_exceeded",
     "usage_limit",
     "stopped",
+    "work_item_stopped",
   ])("puts the marker at the head for %s", (reason) => {
     expect(flowFailureMessage(reason, MESSAGE)).toBe(
       `[no-flow-retry] ${MESSAGE}`,

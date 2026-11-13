@@ -2,10 +2,15 @@ import { describe, expect, test } from "bun:test";
 import {
   CLAUDE_STOPPED_BEFORE_START_DETAIL,
   CLAUDE_STOPPED_DETAIL,
+  CLAUDE_WORK_ITEM_STOPPED_BEFORE_START_DETAIL,
+  CLAUDE_WORK_ITEM_STOPPED_DETAIL,
   type RunClaudeOptions,
   runClaude,
 } from "../../f/factory/lib/claude.ts";
-import type { StopCheck } from "../../f/factory/lib/stop_check.ts";
+import {
+  boundedCheckFrom,
+  type StopCheck,
+} from "../../f/factory/lib/stop_check.ts";
 import type {
   CommandResult,
   CommandRunner,
@@ -337,5 +342,193 @@ describe("runClaude while the factory is stopped", () => {
     const recorder = answering([SUCCESS]);
     const result = await runClaude(options(recorder.run, sequence(false)));
     expect(result.outcome).toBe("success");
+  });
+});
+
+/** 全停止の確認と別に、作業項目の確認を渡す。 */
+function itemOptions(
+  run: CommandRunner,
+  workItemStopCheck: StopCheck,
+  stopCheck: StopCheck = sequence(false),
+  stopCheckIntervalMs = 60_000,
+): RunClaudeOptions<Payload> {
+  return {
+    ...options(run, stopCheck, stopCheckIntervalMs),
+    workItemStopCheck,
+  };
+}
+
+describe("runClaude while a person has cancelled the work item", () => {
+  test("does not start claude", async () => {
+    const recorder = answering([]);
+    await runClaude(itemOptions(recorder.run, sequence(true)));
+    expect(recorder.seen.length).toBe(0);
+  });
+
+  test("returns work_item_stopped when the work item is already cancelled", async () => {
+    const recorder = answering([]);
+    const result = await runClaude(itemOptions(recorder.run, sequence(true)));
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "work_item_stopped",
+    );
+  });
+
+  test("says why it did not start", async () => {
+    const recorder = answering([]);
+    const result = await runClaude(itemOptions(recorder.run, sequence(true)));
+    expect(result.outcome === "failure" ? result.detail : "").toBe(
+      CLAUDE_WORK_ITEM_STOPPED_BEFORE_START_DETAIL,
+    );
+  });
+
+  test("records work_item_stopped as the failure reason and no cost when it did not start", async () => {
+    const recorder = answering([]);
+    const result = await runClaude(itemOptions(recorder.run, sequence(true)));
+    expect([result.agentRun.failure_reason, result.agentRun.cost_usd]).toEqual([
+      "work_item_stopped",
+      null,
+    ]);
+  });
+
+  test("stops a running claude when the check turns true", async () => {
+    const recorder = untilStopped();
+    const result = await runClaude(
+      itemOptions(recorder.run, sequence(false, true), sequence(false), 5),
+    );
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "work_item_stopped",
+    );
+  });
+
+  test("says that the work item stopped the running claude", async () => {
+    const recorder = untilStopped();
+    const result = await runClaude(
+      itemOptions(recorder.run, sequence(false, true), sequence(false), 5),
+    );
+    expect(result.outcome === "failure" ? result.detail : "").toBe(
+      CLAUDE_WORK_ITEM_STOPPED_DETAIL,
+    );
+  });
+
+  test("records maxBudgetUsd as the cost of a run that the work item stopped", async () => {
+    const recorder = untilStopped();
+    const opts = itemOptions(
+      recorder.run,
+      sequence(false, true),
+      sequence(false),
+      5,
+    );
+    const result = await runClaude(opts);
+    expect(result.agentRun.cost_usd).toBe(opts.maxBudgetUsd);
+  });
+
+  test("records work_item_stopped as the failure reason of the run that it stopped", async () => {
+    const recorder = untilStopped();
+    const result = await runClaude(
+      itemOptions(recorder.run, sequence(false, true), sequence(false), 5),
+    );
+    expect(result.agentRun.failure_reason).toBe("work_item_stopped");
+  });
+
+  test("does not retry a run that the work item stopped", async () => {
+    const recorder = untilStopped();
+    const result = await runClaude(
+      itemOptions(recorder.run, sequence(false, true), sequence(false), 5),
+    );
+    expect(result.retried).toBe(false);
+  });
+
+  test("does not retry an invalid output once the work item is cancelled", async () => {
+    const recorder = answering([NOT_JSON, SUCCESS]);
+    await runClaude(itemOptions(recorder.run, sequence(false, true)));
+    expect(recorder.seen.length).toBe(1);
+  });
+
+  test("returns work_item_stopped when the work item is cancelled before the retry", async () => {
+    const recorder = answering([NOT_JSON, SUCCESS]);
+    const result = await runClaude(
+      itemOptions(recorder.run, sequence(false, true)),
+    );
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "work_item_stopped",
+    );
+  });
+
+  test("says that the work item stopped the retry", async () => {
+    const recorder = answering([NOT_JSON, SUCCESS]);
+    const result = await runClaude(
+      itemOptions(recorder.run, sequence(false, true)),
+    );
+    expect(result.outcome === "failure" ? result.detail : "").toBe(
+      CLAUDE_WORK_ITEM_STOPPED_DETAIL,
+    );
+  });
+
+  test("keeps the first run as a discarded run when the work item is cancelled before the retry", async () => {
+    const recorder = answering([NOT_JSON, SUCCESS]);
+    const result = await runClaude(
+      itemOptions(recorder.run, sequence(false, true)),
+    );
+    expect(result.discardedAgentRun?.exit_code).toBe(0);
+  });
+
+  test("keeps going when the check throws", async () => {
+    const recorder = answering([SUCCESS]);
+    const result = await runClaude(
+      itemOptions(recorder.run, async () => {
+        throw new Error("api down");
+      }),
+    );
+    expect(result.outcome).toBe("success");
+  });
+
+  test("finishes normally while the work item is not cancelled", async () => {
+    const recorder = answering([SUCCESS]);
+    const result = await runClaude(itemOptions(recorder.run, sequence(false)));
+    expect(result.outcome).toBe("success");
+  });
+});
+
+describe("runClaude when both the stop-all and the work item stop", () => {
+  test("prefers work_item_stopped before the start", async () => {
+    const recorder = answering([]);
+    const result = await runClaude(
+      itemOptions(recorder.run, sequence(true), sequence(true)),
+    );
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "work_item_stopped",
+    );
+  });
+
+  test("prefers work_item_stopped while claude is running", async () => {
+    const recorder = untilStopped();
+    const result = await runClaude(
+      itemOptions(
+        recorder.run,
+        sequence(false, true),
+        sequence(false, true),
+        5,
+      ),
+    );
+    expect(result.outcome === "failure" ? result.reason : null).toBe(
+      "work_item_stopped",
+    );
+  });
+
+  test("still returns stopped when only the stop-all is placed while running", async () => {
+    const recorder = untilStopped();
+    const result = await runClaude(
+      itemOptions(recorder.run, sequence(false), sequence(false, true), 5),
+    );
+    expect(result.outcome === "failure" ? result.reason : null).toBe("stopped");
+  });
+
+  test("stops a running claude on the stop-all although the work item check never returns", async () => {
+    const recorder = untilStopped();
+    const hanging = boundedCheckFrom(() => new Promise<boolean>(() => {}), 10);
+    const result = await runClaude(
+      itemOptions(recorder.run, hanging, sequence(false, true), 5),
+    );
+    expect(result.outcome === "failure" ? result.reason : null).toBe("stopped");
   });
 });

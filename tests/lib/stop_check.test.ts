@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  boundedCheckFrom,
   checkStop,
   defaultStopCheck,
+  mergeSignals,
   NEVER_STOPPED,
   STALE_READ_MS,
   stopCheckFrom,
@@ -226,5 +228,89 @@ describe("watchStop", () => {
     const seen = calls;
     await Bun.sleep(30);
     expect(calls).toBe(seen);
+  });
+});
+
+describe("boundedCheckFrom", () => {
+  test("answers what the read answers", async () => {
+    const check = boundedCheckFrom(async () => true, 50);
+    expect(await check()).toBe(true);
+  });
+
+  test("does not throw when the read throws before it returns a promise", async () => {
+    const check = boundedCheckFrom(() => {
+      throw new Error("sync failure");
+    }, 50);
+    expect(await check()).toBe(false);
+  });
+
+  test("does not throw when the read is rejected", async () => {
+    const check = boundedCheckFrom(async () => {
+      throw new Error("failure");
+    }, 50);
+    expect(await check()).toBe(false);
+  });
+
+  test("answers not stopped when the read does not finish in time", async () => {
+    const check = boundedCheckFrom(() => new Promise<boolean>(() => {}), 10);
+    expect(await check()).toBe(false);
+  });
+
+  test("does not start another read while a read that timed out is pending", async () => {
+    let reads = 0;
+    const check = boundedCheckFrom(() => {
+      reads += 1;
+      return new Promise<boolean>(() => {});
+    }, 10);
+    await check();
+    await check();
+    expect(reads).toBe(1);
+  });
+});
+
+describe("two checks that do not share a pending read", () => {
+  test("the second check answers while the first read never returns", async () => {
+    const hanging = boundedCheckFrom(() => new Promise<boolean>(() => {}), 10);
+    const answering = boundedCheckFrom(async () => true, 10);
+    await hanging();
+    expect(await answering()).toBe(true);
+  });
+
+  test("a check made by stopCheckFrom does not wait for another check that hangs", async () => {
+    const hanging = boundedCheckFrom(() => new Promise<boolean>(() => {}), 10);
+    const stopAll = stopCheckFrom({ readVariable: async () => PLACED }, 10);
+    await hanging();
+    expect(await stopAll()).toBe(true);
+  });
+});
+
+describe("mergeSignals", () => {
+  test("is not aborted while neither signal is aborted", () => {
+    const merged = mergeSignals(
+      new AbortController().signal,
+      new AbortController().signal,
+    );
+    expect(merged.aborted).toBe(false);
+  });
+
+  test("aborts when the first signal aborts", () => {
+    const first = new AbortController();
+    const merged = mergeSignals(first.signal, new AbortController().signal);
+    first.abort();
+    expect(merged.aborted).toBe(true);
+  });
+
+  test("aborts when the second signal aborts", () => {
+    const second = new AbortController();
+    const merged = mergeSignals(new AbortController().signal, second.signal);
+    second.abort();
+    expect(merged.aborted).toBe(true);
+  });
+
+  test("is aborted from the start when a signal is already aborted", () => {
+    const first = new AbortController();
+    first.abort();
+    const merged = mergeSignals(first.signal, new AbortController().signal);
+    expect(merged.aborted).toBe(true);
   });
 });

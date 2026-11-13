@@ -38,6 +38,22 @@ describe("describeWorkItemCancelResult", () => {
     ).not.toContain("承認依頼");
   });
 
+  test.each(["picked", "requirements_generating", "designing", "implementing"])(
+    "tells that the running job takes a while to stop for %s",
+    (from) => {
+      expect(
+        describeWorkItemCancelResult({ ...CANCELLED, from_status: from })
+          .message,
+      ).toContain("動いているジョブが止まるまで、通常は数十秒かかります。");
+    },
+  );
+
+  test("does not talk about a running job for a work item that was not running", () => {
+    expect(describeWorkItemCancelResult(CANCELLED).message).not.toContain(
+      "動いているジョブ",
+    );
+  });
+
   test("warns when the record could not be written", () => {
     expect(
       describeWorkItemCancelResult({ ...CANCELLED, action_audit: "failed" })

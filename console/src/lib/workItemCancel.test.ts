@@ -3,6 +3,7 @@ import { retryTargetKey } from "./retryView.ts";
 import {
   canCancelWorkItem,
   cancelWorkItemDialogLines,
+  isRunningCancel,
   workItemCancelKey,
 } from "./workItemCancel.ts";
 
@@ -15,8 +16,26 @@ describe("canCancelWorkItem", () => {
     expect(canCancelWorkItem("pr_fix", "failed")).toBe(true);
   });
 
-  test("does not offer to cancel an Issue that is being implemented", () => {
-    expect(canCancelWorkItem("issue", "implementing")).toBe(false);
+  test.each(["picked", "requirements_generating", "designing", "implementing"])(
+    "offers to cancel an Issue whose flow is running in %s",
+    (status) => {
+      expect(canCancelWorkItem("issue", status)).toBe(true);
+    },
+  );
+
+  test("does not offer to cancel an Issue whose pull request is open", () => {
+    expect(canCancelWorkItem("issue", "pr_open")).toBe(false);
+  });
+
+  test.each([
+    ["pr_fix", "fixing"],
+    ["pr_review", "reviewing"],
+    ["audit", "auditing"],
+    ["audit", "picked"],
+    ["dependabot", "picked"],
+    ["investigate", "investigating"],
+  ])("does not offer to cancel a %s that is running in %s", (kind, status) => {
+    expect(canCancelWorkItem(kind, status)).toBe(false);
   });
 
   test("does not offer to cancel a work item that is already cancelled", () => {
@@ -29,6 +48,24 @@ describe("canCancelWorkItem", () => {
 
   test("does not take a key of the prototype for a kind", () => {
     expect(canCancelWorkItem("constructor", "failed")).toBe(false);
+  });
+});
+
+describe("isRunningCancel", () => {
+  test("is true for an Issue whose flow is running", () => {
+    expect(isRunningCancel("issue", "implementing")).toBe(true);
+  });
+
+  test("is false for an Issue that waits for an approval", () => {
+    expect(isRunningCancel("issue", "awaiting_approval")).toBe(false);
+  });
+
+  test("is false for a failed Issue", () => {
+    expect(isRunningCancel("issue", "failed")).toBe(false);
+  });
+
+  test("is false for a state that the table does not allow", () => {
+    expect(isRunningCancel("pr_fix", "fixing")).toBe(false);
   });
 });
 
@@ -173,4 +210,54 @@ describe("cancelWorkItemDialogLines", () => {
       "head",
     );
   });
+});
+
+describe("cancelWorkItemDialogLines for a running work item", () => {
+  test("says that the running job stops in a few tens of seconds", () => {
+    expect(
+      cancelWorkItemDialogLines("issue", "implementing").join(""),
+    ).toContain("数十秒");
+  });
+
+  test("says that the job can go on until the next check during an outside call", () => {
+    expect(
+      cancelWorkItemDialogLines("issue", "implementing").join(""),
+    ).toContain("外部の処理の最中は、次の確認まで続くことがあります");
+  });
+
+  test("says that the worktree and the cost stay", () => {
+    expect(
+      cancelWorkItemDialogLines("issue", "implementing").join(""),
+    ).toContain("作業ツリー");
+  });
+
+  test("tells not to press the cancel of the job in the jobs screen", () => {
+    expect(
+      cancelWorkItemDialogLines("issue", "implementing").join(""),
+    ).toContain("「ジョブの中止」は押さないでください");
+  });
+
+  test.each(["picked", "requirements_generating", "designing"])(
+    "gives the same warnings for an Issue in %s",
+    (status) => {
+      expect(cancelWorkItemDialogLines("issue", status).join("")).toContain(
+        "「ジョブの中止」は押さないでください",
+      );
+    },
+  );
+
+  test("keeps the lines about the cancel that cannot be resumed", () => {
+    expect(
+      cancelWorkItemDialogLines("issue", "implementing").join(""),
+    ).toContain("再開できません");
+  });
+
+  test.each(["failed", "awaiting_approval", "approved"])(
+    "does not talk about a running job for an Issue in %s",
+    (status) => {
+      expect(cancelWorkItemDialogLines("issue", status).join("")).not.toContain(
+        "数十秒",
+      );
+    },
+  );
 });

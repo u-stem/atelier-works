@@ -234,6 +234,7 @@ sleep 0.2
         undefined,
         undefined,
         sandbox,
+        { workItemId: null },
       );
       values = parseProbeOutput(result?.output ?? "");
       home = values.get("home") ?? "";
@@ -446,6 +447,7 @@ sleep 0.2
       undefined,
       undefined,
       sandbox,
+      { workItemId: null },
     );
     expect([result?.timedOut, processesOf(POOL)]).toEqual([true, []]);
   }, 60_000);
@@ -523,6 +525,7 @@ function runChecks(
     undefined,
     undefined,
     sandbox,
+    { workItemId: null },
   );
 }
 
