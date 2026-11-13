@@ -1271,9 +1271,10 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
   `node:fs`、`node:child_process`、`bun`モジュールのimportと、`Bun`の使い方を調べる。
   `Bun.sleep`のような無害なメンバー以外は、`Bun.spawn`や`Bun.file`に加えて、分割代入、別名への代入、添字アクセスも当たる。
   `globalThis`、`process.getBuiltinModule`、`process.binding`も当たる。
-- importでたどれるソースが読む外部のパッケージは、`windmill-client`だけである。
+- importでたどれるソースが、importの形で書いた外部のパッケージは、`windmill-client`だけである。
   パッケージの中身は走査が見ないので、ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるためである。
   `node:`のモジュールは数えない。
+  版の指定は、数字の版だけを認める。
 
 `node:module`、`node:worker_threads`、`node:vm`のimportも、迂回に使えるので数える。
 `f/`の下のTypeScriptが、`JobService.run*`でジョブを起動したり、tagの文字列を渡したりしていないことも、テストが確かめる。
@@ -1284,6 +1285,10 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 - 式で組み立てたtag、フローの入力で渡すtag。
 - Windmillの画面で付けたtag。
 - 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
+- 文字列を連結した動的import(`import("node:child_" + "process")`、テンプレートで組み立てた指定)。
+  importの一覧に現れないので、外部のパッケージの固定とサブプロセスの禁止をすり抜ける。
+- `import.meta.require`を変数に入れて呼ぶ形。
+  この境界の走査は`import.meta`を拒まないので、同じくすり抜ける。
 - `windmill-client`の中身。
 - resourceの中身で解決されるsecret。
   `getResource`が返す値の中の`$var:`は、走査が見ない。

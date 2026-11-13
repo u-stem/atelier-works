@@ -41,7 +41,7 @@ import {
 // - defaultのworkerの停止を検知するscript(default_worker_watch)も、この一覧に入る。
 //   defaultのworkerの中では、そのworkerが止まると動かないためである。
 // - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
-// - importでたどれるソースが読む外部のパッケージは、windmill-clientだけである。
+// - importでたどれるソースが、importの形で書いた外部のパッケージは、windmill-clientだけである。
 //   パッケージの中身は走査が見ないので、ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるためである。
 // - 走査でたどれない形(Console用workerの境界テストと同じ)が無い。
 //
@@ -49,6 +49,8 @@ import {
 // tagの走査が見ないもの: 式で組み立てたtag、フローの入力で渡すtag、Windmillの画面で付けたtag。
 // 依存の走査が見ないもの: 文字列で組み立てた呼び出し、`eval`と`Function`、注入された関数の中身、
 // windmill-clientの中身。
+// 文字列を連結した動的import(`import("node:child_" + "process")`、テンプレートで組み立てた指定)と、
+// `import.meta.require`を変数に入れて呼ぶ形も見ない。どちらもimportの一覧に現れず、外部のパッケージと子プロセスの禁止をすり抜ける。
 // コードがAPIで渡すtag(`JobService.run*`の`tag`)は、下の「コードが渡すtag」のテストが、現在の0件を保つ。
 // resourceの中身で解決されるsecret(`getResource`が返す値の`$var:`)は、走査が見ない。
 // これらはコードのレビューで見る。tag periodicを最初に付けるPRでは、そのscriptが読むresourceの中身も確かめる。
@@ -101,8 +103,11 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
     "loadConfigの引数getResource(注入された関数)。呼び出し側は、リテラルのwmill.getResource(...)を包んで渡す",
 };
 
-/** windmill-clientのimport。版の指定は付いてもよい。深いパス(`windmill-client/...`)は当たらない。 */
-const CLIENT_PACKAGE = /^windmill-client(?:@[\w.+-]+)?$/;
+/**
+ * windmill-clientのimport。版の指定は、数字の版(`@1.817.0`)だけを認める。
+ * `@latest`のようなタグは、入れるたびに中身が変わりうるので当たらない。深いパス(`windmill-client/...`)も当たらない。
+ */
+const CLIENT_PACKAGE = /^windmill-client(?:@\d+\.\d+\.\d+)?$/;
 
 /**
  * `source`が読み込む先のうち、windmill-client以外の外部のパッケージ。
