@@ -585,10 +585,7 @@ async function claimPrAfterUndeterminedRemoval(
   );
   switch (outcome.kind) {
     case "present":
-      return {
-        claimed: false,
-        reason: `trigger label ${triggerLabel} removal failed and the label is still present`,
-      };
+      return { claimed: false, reason: deferredClaimReason(triggerLabel) };
     case "removed_by_other":
       return {
         claimed: false,
@@ -635,6 +632,11 @@ function restoredClaimReason(triggerLabel: string): string {
   return `could not confirm the claim; restored trigger label ${triggerLabel}`;
 }
 
+/** 削除の結果が分からず、読み直してもラベルが残っていたので引いたときの`ClaimPrResult.reason`。 */
+function deferredClaimReason(triggerLabel: string): string {
+  return `trigger label ${triggerLabel} removal failed and the label is still present`;
+}
+
 /**
  * `claim_race_lost`のnoticeの本文。対象と理由だけで決まる。
  * 記録(`recordPrClaimNotClaimed`)と解決(`resolveClaimNotices`)が同じ関数から作り、
@@ -656,7 +658,8 @@ function prClaimNoticeMessage(
  * 作業の開始が例外になったときは呼ばない。noticeが解決済みに見えて、証跡が消えるのを防ぐ。
  * 対象は、確認できずにラベルを付け直したときの`claim_race_lost`と、
  * ラベルが外れたままになった旨の`pr_trigger_label_left_removed`と、
- * 付与者が許可されていなかった旨の`labeler_denied`である。
+ * 付与者が許可されていなかった旨の`labeler_denied`と、
+ * 削除の結果が分からず、ラベルが残っていたので引いたときの`claim_race_lost`である。
  * 本文の完全一致で選ぶので、`review`と`review-fix`のようにラベル名が互いの接頭辞でも、
  * 別のラベルのnoticeには触れない。
  * 解決の失敗は取得の成否を変えず、警告をログに残すだけにする。
@@ -683,6 +686,10 @@ export async function resolveClaimNotices(
     {
       kind: LABELER_DENIED_KIND,
       message: labelerDeniedMessage(target, triggerLabel),
+    },
+    {
+      kind: "claim_race_lost",
+      message: prClaimNoticeMessage(target, deferredClaimReason(triggerLabel)),
     },
   ];
   for (const notice of notices) {
@@ -794,7 +801,9 @@ function errorMessage(err: unknown): string {
 }
 
 /**
- * 確認の読み取りが読めなかった`claimPr`が、外したトリガーラベルを付け直す。
+ * 取得を確かめられなかった`claimPr`が、外したトリガーラベルを付け直す。
+ * 確かめられないのは、確認の読み取りが読めなかったときと、削除の結果が分からず、自分が外したか判断できなかったときである。
+ * `cause`は確かめられなかった原因の例外で、後者では削除の例外のこともある。
  * ラベルの付与は、既に付いていても成功する。付け直せたら`claimed: false`を返す。
  * 付け直しも失敗したら、両方の失敗の文を含む例外を投げる。ラベルが外れたままなので、
  * `processPrDecisions`が記録する失敗から人が付け直せるようにする。
@@ -807,7 +816,7 @@ async function restoreTriggerLabel(
     readonly number: number;
     readonly triggerLabel: string;
   },
-  readErr: unknown,
+  cause: unknown,
   log: Logger | undefined,
 ): Promise<ClaimPrResult> {
   const { owner, repo, number, triggerLabel } = target;
@@ -819,14 +828,14 @@ async function restoreTriggerLabel(
   } catch (restoreErr) {
     throw new PrClaimLabelLeftRemovedError(
       triggerLabel,
-      `claim confirmation read failed (${errorMessage(readErr)}) and restoring trigger label ${triggerLabel} failed (${errorMessage(restoreErr)}); the label stays removed, so a person must add it back`,
+      `claim could not be confirmed (${errorMessage(cause)}) and restoring trigger label ${triggerLabel} failed (${errorMessage(restoreErr)}); the label stays removed, so a person must add it back`,
       restoreErr,
     );
   }
   log?.warn("claim could not be confirmed; restored the trigger label", {
     target: `${owner}/${repo}#${String(number)}`,
     label: triggerLabel,
-    error: errorMessage(readErr),
+    error: errorMessage(cause),
   });
   return {
     claimed: false,
