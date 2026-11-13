@@ -758,7 +758,10 @@ export function parseDiffAddedLines(diff: string): Map<string, Set<number>> {
           "git diff printed a file header of an unknown form",
         );
       }
-      const path = target.slice("b/".length);
+      // 名前に空白があると、gitは見出しの末尾にタブを1つ付ける。タブを含む名前は引用されるので、ここには来ない。
+      // 空白を含む`.ts`は、全体の検査が名前の取りこぼし(`malformed`)として先に止める。
+      // `.ts`以外は下限の対象でないので、パスを読めても数えない。
+      const path = target.slice("b/".length).replace(/\t$/, "");
       current = byPath.get(path) ?? new Set<number>();
       byPath.set(path, current);
       continue;
