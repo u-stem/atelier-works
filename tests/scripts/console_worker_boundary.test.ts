@@ -1389,6 +1389,14 @@ describe("the scripts restricted to an SDK allowance", () => {
     expect(filesWithToolDependencies(RESTRICTED)).toEqual([]);
   });
 
+  // GitHubの通信層は、トークンを載せてグローバルの`fetch`を使う。SDKを許可表に絞ったscriptは、GitHubへ送らない。
+  test.each(RESTRICTED)("%s does not reach the GitHub HTTP layer", (path) => {
+    const reached = [...sourcesReachableFrom(path).keys()]
+      .map(relative)
+      .filter((file) => file === "f/factory/lib/github_http.ts");
+    expect(reached).toEqual([]);
+  });
+
   test.each(RESTRICTED)("%s reaches no escape hatch", (path) => {
     const offenders: string[] = [];
     for (const [file, source] of sourcesReachableFrom(path)) {

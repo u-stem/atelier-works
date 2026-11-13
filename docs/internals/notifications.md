@@ -779,13 +779,26 @@ noticeには重要度がある。
 
 GitHub APIの呼び出しは`f/factory/lib/github.ts`が`gh api -i`で行う。
 応答のヘッダーを、2回目の要求なしに読むためである。
+rate limitの判定と待ち、一時的な失敗の再試行は、通信層の`f/factory/lib/github_http.ts`が行う。
+`gh`の送り方と、Console用のworkerと収集の`fetch`の送り方は、同じ判定と再試行を通る。
 
 ### rate limitと判定する応答
 
-HTTP 403か429で、次のどちらかを満たす応答をrate limitとみなす。
+判定の表は、`github_http.ts`の`classifyRateLimit`の1か所にある。
+上から順に当て、最初に当たったものを採る。
 
-- `retry-after`ヘッダーがある。
-- `x-ratelimit-remaining`が`0`である。
+| 応答 | 判定 | 待ち |
+| --- | --- | --- |
+| 403か429で、`retry-after`(数字だけ有効)がある | 二次の制限 | `retry-after`の秒数 |
+| 403か429で、`x-ratelimit-remaining`が`0` | 一次の制限 | `x-ratelimit-reset`まで(無ければ60秒) |
+| 403か429で、本文のJSONの`message`に`secondary rate limit`がある | 二次の制限 | 60秒 |
+| 403か429で、`message`に`rate limit`があり、`x-ratelimit-remaining`のヘッダーが無い | 一次の制限 | `x-ratelimit-reset`まで(無ければ待てない) |
+| 上のどれにも当たらない429 | 二次の制限 | 60秒 |
+| その他(残りの回数が1以上の403を含む) | 制限でない | なし |
+
+残りの回数が1以上の403は、`message`に`rate limit`の語があっても制限と読まない。
+権限不足の403を`GitHubRateLimitError`にすると、呼び出し側の403の分岐(人への通知、拒否、権限不足の記録)を通らなくなるためである。
+本文は、JSONの`message`の項目だけを、先頭の4096文字まで小文字で読む。
 
 GraphQLでは、HTTP 200で`errors[].type`が`RATE_LIMITED`の応答を一次レート制限とみなす。
 
@@ -815,12 +828,9 @@ GraphQLでは、HTTP 200で`errors[].type`が`RATE_LIMITED`の応答を一次レ
 ### 待って再試行する
 
 RESTのrate limitでは、解除まで待って1回だけ再試行する。
-待つ時間は次の順で決める。
-
-1. `retry-after`ヘッダー(秒)。
-2. `x-ratelimit-reset`の時刻までの時間に、1秒の余裕を足したもの。
-   ヘッダーの時刻は秒単位で、workerとGitHubの時計もずれうるので、解除の直前に再試行してまた拒まれないようにする。
-3. どちらも無ければ60秒。
+待つ時間は、上の判定の表の「待ち」である。
+`x-ratelimit-reset`までの待ちには、1秒の余裕を足す。
+ヘッダーの時刻は秒単位で、workerとGitHubの時計もずれうるので、解除の直前に再試行してまた拒まれないようにする。
 
 待つのは最大120秒(`GITHUB_RATE_LIMIT_MAX_WAIT_MS`)である。
 1回の待ちは、どのステップのtimeoutよりも短い。
@@ -835,6 +845,8 @@ RESTのrate limitでは、解除まで待って1回だけ再試行する。
 
 - 必要な待ちが120秒を超える。
   この場合は待たない。
+- 待てない一次の制限(`x-ratelimit-reset`の無い、本文だけの判定)に当たった。
+  この場合は待たない。
 - 待って再試行しても、またrate limitで拒まれた。
 - GraphQLの一次レート制限に当たった。
   この場合は待たない。
@@ -848,19 +860,22 @@ rate limitで失敗したときに各ステップが何を済ませているか�
 
 ### RESTの検索の拒否
 
-`callGhApi`は、RESTの検索APIのendpointを、`gh`を起動せずに例外で拒む。
+通信層の`rejectRestSearchEndpoint`は、RESTの検索APIのendpointを、送る前に例外で拒む。
+`callGhApi`は`gh`を起動する前に、`fetch`の経路(`fetchIssueObject`、`gh_graphql.ts`)は送る前に、この検査を通る。
 検索の枠は小さく、周期の同じフローが5分の境目に重なって呼ぶと拒まれるので、呼び出しを入口で止める。
 判定は、endpointの先頭の`/`とホストを落とし、小文字にして、`search/`で始まるかを見る。
 `/search/issues`、`SEARCH/issues`、`https://api.github.com/search/issues`は拒む。
+`fetch`の経路は、パスの形の検査(`assertGitHubApiPath`)も通り、`/`で始まるendpointと絶対URLを、検索でなくても拒む。
 `repos/o/search-x/issues`のように、リポジトリ名やクエリに含むだけの要求は拒まない。
 `paginateGhApi`と`callGhApiRawBody`は`callGhApi`を通るので、次のページのURLも同じ判定を受ける。
+同じoriginへのリダイレクトを辿るときも、行き先が検索APIなら辿らない。
 例外のメッセージにendpointを載せない。
 クエリに値が入りうるためである。
 対象はRESTだけで、GraphQLの`search`のフィールドは拒まない。
-正規化するのは、先頭の`/`、大文字、絶対URLの3種類だけである。
-ドットセグメントとパーセントエンコードは対象外で、呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通る。
-`fetch`でRESTを呼ぶ経路は、`callGhApi`を通らないので、実行時の拒否が効かない。
-経路は、`fetchIssueObject`、`lib/metadata_patch_download.ts`、`gh_graphql.ts`である。
+`fetch`の経路は、`.`と`..`の区間と、エンコードした`.`を含む区間も拒む。
+`gh`の経路はドットセグメントを拒まず、どちらの経路も`.`以外のパーセントエンコードは正規化しない。
+呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通る。
+検査を通らないのは、`lib/metadata_patch_download.ts`のartifactの取得の最初の要求だけで、endpointは固定の形である。
 
 静的テスト`tests/scripts/no_search_api.test.ts`は、次の3つを固定する。
 
@@ -868,11 +883,13 @@ rate limitで失敗したときに各ステップが何を済ませているか�
 - `gh`をargvの先頭に置く配列を書くファイルは、`github.ts`だけである。
 - 5つのフローが、`search`で始まる名前を`github.ts`から読み込まない。
 
-`search/`の字面を書けるのは、拒否の接頭辞を持つ定数の1行だけである。
+`search/`の字面を書けるのは、`github_http.ts`の、拒否の接頭辞を持つ定数の1行だけである。
 
 ## GitHub APIの一時的な失敗
 
-rate limitのほかに、次の3つの一時的な失敗は、`f/factory/lib/github.ts`が短く待って1回だけ再試行する。
+rate limitのほかに、次の3つの一時的な失敗は、通信層の`f/factory/lib/github_http.ts`の`runGitHubRequest`が短く待って1回だけ再試行する。
+通信の再試行は、この関数の中だけにある。
+`github.ts`の`rereadWithRetries`は、ラベルを外した後の整合を待つ業務の層の繰り返しで、通信の再試行ではない。
 PRとIssueのポーリングは5分ごとに動くので、一過性の失敗でその回の検出が抜けることを防ぐ。
 
 | 失敗 | 判定 | 再試行する要求 |

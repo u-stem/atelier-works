@@ -23,18 +23,26 @@ type ResponseSpec = {
   readonly text?: string;
 };
 
+/**
+ * 偽の応答。`json`を渡すと、その値を直列化した本文を返す。`json`が拒否すると、本文の読み取りが拒否される。
+ * `json`が`SyntaxError`で拒否するときは、JSONとして読めない本文を返す。
+ */
 function respond(spec: ResponseSpec): GraphqlResponseLike {
-  const headers = new Map(
-    Object.entries(spec.headers ?? {}).map(([key, value]) => [
-      key.toLowerCase(),
-      value,
-    ]),
-  );
+  const headers = new Headers(spec.headers ?? {});
+  const json = spec.json;
   return {
     status: spec.status ?? 200,
-    headers: { get: (name) => headers.get(name.toLowerCase()) ?? null },
-    json: spec.json ?? (() => Promise.resolve({ data: {} })),
-    text: () => Promise.resolve(spec.text ?? ""),
+    headers,
+    text: async () => {
+      if (spec.text !== undefined) return spec.text;
+      if (json === undefined) return JSON.stringify({ data: {} });
+      try {
+        return JSON.stringify(await json());
+      } catch (err) {
+        if (err instanceof SyntaxError) return `not json ${err.message}`;
+        throw err;
+      }
+    },
   };
 }
 
@@ -250,9 +258,11 @@ describe("graphqlRequest results", () => {
     ]);
   });
 
-  test("reads 429 as a rate limit", async () => {
+  test("reads a bare 429 as a secondary limit", async () => {
     const { result } = await request(async () => respond({ status: 429 }));
-    expect(result.ok ? null : result.rate_limited).toBe(true);
+    expect(
+      result.ok ? null : [result.rate_limited, result.secondary_limit],
+    ).toEqual([false, true]);
   });
 
   test("reads 403 with no remaining quota as a primary rate limit with its reset time", async () => {
@@ -279,14 +289,29 @@ describe("graphqlRequest results", () => {
     ).toEqual([true, 60]);
   });
 
-  test("reads a body that names a secondary rate limit", async () => {
+  test("reads a message that names a secondary rate limit", async () => {
     const { result } = await request(async () =>
       respond({
         status: 403,
-        text: "You have exceeded a secondary rate limit.",
+        text: JSON.stringify({
+          message: "You have exceeded a secondary rate limit.",
+        }),
       }),
     );
     expect(result.ok ? null : result.secondary_limit).toBe(true);
+  });
+
+  test("does not read a 403 with quota left as a rate limit", async () => {
+    const { result } = await request(async () =>
+      respond({
+        status: 403,
+        headers: { "x-ratelimit-remaining": "4999" },
+        text: JSON.stringify({ message: "see the rate limit docs" }),
+      }),
+    );
+    expect(
+      result.ok ? null : [result.rate_limited, result.secondary_limit],
+    ).toEqual([false, false]);
   });
 
   test("does not read a plain 403 as a rate limit", async () => {

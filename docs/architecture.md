@@ -649,6 +649,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/pr_ci_notify` | script | [LIB] 失敗の通知を出す時機の判断 |
 | `f/factory/lib/pr_ci_fix_recovery` | script | [LIB] 失敗を直した行の回復 |
 | `f/factory/lib/periodic_worker` | script | [LIB] 定期ジョブ用workerの停止の検知 |
+| `f/factory/lib/github_http` | script | [LIB] 宛先を固定したGitHubのAPIの通信層 |
 | `f/factory/lib/gh_graphql` | script | [LIB] 宛先を固定したGitHubのGraphQLクライアント |
 | `f/factory/lib/approval_gate` | script | [LIB] 実装の関門が読む承認の判定 |
 | `f/factory/lib/implement_finish_support` | script | [LIB] 実装フローの完了処理の判定 |

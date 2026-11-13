@@ -3,12 +3,15 @@
 // トークンはAPIへの最初の要求にだけ載せ、取得先はAzureのblob storageの`https`に限る。
 // 取得したバイト列は信用せず、呼び出し側が検査する。
 
-import {
-  GitHubRateLimitError,
-  isRateLimited,
-  rateLimitWaitMs,
-  validateOwnerRepo,
-} from "./github.ts";
+// レート制限の判定は、通信層(`github_http.ts`)と共有する。`github.ts`は子プロセスにつながるのでimportしない。
+import { classifyRateLimit, rateLimitError } from "./github_http.ts";
+import { assertGitHubName } from "./types.ts";
+
+/** endpointを組み立てる前に、`owner/repo`の両方を検証する。 */
+function validateOwnerRepo(owner: string, repo: string): void {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+}
 
 /** 正の安全な整数か。endpointに入れるIDは、この条件を満たすものだけにする。 */
 function isPositiveSafeInteger(value: unknown): value is number {
@@ -196,14 +199,18 @@ export async function downloadArtifactZip(
   );
   await first.body?.cancel().catch(() => undefined);
   if (first.status < 300 || first.status >= 400) {
-    const headers = new Map(first.headers);
-    if (isRateLimited({ status: first.status, headers, bodyText: "" })) {
-      throw new GitHubRateLimitError(
-        endpoint,
-        rateLimitWaitMs(headers, client.now ?? (() => new Date())),
-        false,
-      );
-    }
+    const headers = new Map<string, string>();
+    first.headers.forEach((value, key) => {
+      headers.set(key.toLowerCase(), value);
+    });
+    // 本文は読まずに捨てたので、ヘッダーだけで判定する。
+    const limit = classifyRateLimit(
+      first.status,
+      headers,
+      "",
+      (client.now ?? (() => new Date()))(),
+    );
+    if (limit !== null) throw rateLimitError(endpoint, limit, false);
     throw new GitHubArtifactDownloadError(
       first.status >= 200 && first.status < 300 ? "bad_redirect" : "api_status",
       first.status,

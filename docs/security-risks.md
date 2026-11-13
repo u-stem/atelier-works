@@ -778,10 +778,10 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
 | <a id="r-ghc-01"></a>R-GHC-01 | 拒否は、`callGhApi`を通る呼び出しにだけ効く。argv配列で`gh`を起動するのは`github.ts`だけである。`workspace.ts`のgit credential helperの`gh auth git-credential`は除く。静的テストが、argvの先頭に`gh`を置く配列を書くファイルが`github.ts`だけであることを確かめる。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
-| <a id="r-ghc-02"></a>R-GHC-02 | `fetch`でRESTを呼ぶ経路は、`callGhApi`を通らず、実行時の拒否が効かない。経路は、`github.ts`の`fetchIssueObject`、`lib/metadata_patch_download.ts`、GraphQLの`gh_graphql.ts`である。字面の`search/`だけを静的テストが止める。宛先は固定で、実害は無い。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
+| <a id="r-ghc-02"></a>R-GHC-02 | 実行時の拒否は`lib/github_http.ts`の`rejectRestSearchEndpoint`にあり、`callGhApi`と`fetch`の経路(`fetchIssueObject`、`gh_graphql.ts`)の両方が通る。通らないのは、`lib/metadata_patch_download.ts`のartifactの取得の最初の要求だけである。endpointは`actions/artifacts/<数値>/zip`の固定の形で、検索APIを指せないので、実害は無い。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
 | <a id="r-ghc-03"></a>R-GHC-03 | GraphQLの`search`のフィールドは拒まない。使う変更は、枠の消費を設計から見直す。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
 | <a id="r-ghc-04"></a>R-GHC-04 | endpointを文字列の組み立てで作る呼び出しは、静的テストが見つけられない。`callGhApi`を通る呼び出しなら、実行時の拒否が止める。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
-| <a id="r-ghc-05"></a>R-GHC-05 | 実行時の拒否が正規化するのは、先頭の`/`、大文字、絶対URLの3種類だけである。ドットセグメントとパーセントエンコードは正規化しない。呼び出し側は自前で組み立てた名前だけを渡し、その名前は`assertGitHubName`を通る。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
+| <a id="r-ghc-05"></a>R-GHC-05 | 実行時の拒否が正規化するのは、先頭の`/`、大文字、絶対URLの3種類である。`fetch`の経路は、加えて`.`と`..`の区間とエンコードした`.`を含む区間を拒むが、`gh`の経路はドットセグメントを拒まない。どちらの経路も、`.`以外のパーセントエンコード(検索の語の一部をエンコードしたもの)は正規化しない。呼び出し側は自前で組み立てた名前だけを渡し、その名前は`assertGitHubName`を通る。 | [RESTの検索の拒否](internals/github-collect.md#restの検索の拒否) |
 
 ## 実装の安全策
 

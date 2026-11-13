@@ -3331,12 +3331,7 @@ describe("runGhCollect refused items from raw GraphQL responses", () => {
 
   /** 生の応答を返す`fetch`。`graphqlRequest`を通して`runGhCollect`に渡す。 */
   function rawFetch(body: unknown): GraphqlFetch {
-    return async () => ({
-      status: 200,
-      headers: { get: () => null },
-      json: async () => body,
-      text: async () => JSON.stringify(body),
-    });
+    return async () => new Response(JSON.stringify(body), { status: 200 });
   }
 
   function withRawStage(

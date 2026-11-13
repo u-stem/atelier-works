@@ -327,23 +327,37 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 - `f/factory/heartbeat_url`
 
 scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。
+HTTPの要求にGitHubのトークンを載せるのは`lib/github_http.ts`だけで、`Authorization`ヘッダーにだけ載せる。
+例外は、下のメタデータのパッチの取得の1か所である。
 URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
-親プロセスが`fetch`で使う秘密値は、次の5か所である。
+親プロセスが`fetch`で使う秘密値は、次の4か所である。
 
-- Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。
-  使うのは、取り消された作業項目を再開するときの対象の状態の確認と、Issueの要件定義を作り直す再実行のときの取り込み内容の更新(現在のIssueの題名と本文の取得)である。
+- GitHubのAPIへの通信層(`lib/github_http.ts`)は、GitHubのトークンを`Authorization`ヘッダーに載せる。
+  載せるのは、`github_token`と、`github_read_tokens`の所有者ごとのトークンである。
+  宛先は`https://api.github.com`に固定する。
+  決まりは[GitHubのAPIへの通信層](#githubのapiへの通信層)に書く。
+  この層を使うのは次の3つである。
+  - Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、この層で`github_token`を使う。
+    使うのは、取り消された作業項目を再開するときの対象の状態の確認と、Issueの要件定義を作り直す再実行のときの取り込み内容の更新(現在のIssueの題名と本文の取得)である。
+    リダイレクトは辿らない。
+    境界は[Console用workerの境界](#console用workerの境界)に書く。
+  - Console用のworkerで動く`approval_decide`は、要件定義の承認の前に現在のIssueを読むため、同じ形で`github_token`を使う。
+    10秒の締め切りを付け、エラーの文とログにトークンとIssueの内容を含めない。
+  - 収集の`collect_github`(`lib/gh_graphql.ts`)は、`github_read_tokens`の所有者ごとのトークンを、この層で`graphql`へ送る。
+    リダイレクトは辿らず、1要求に10秒の締め切りを付ける。
+    エラーの文とログに、トークンと応答の本文を含めない。
+    GraphQLのエラーの文は、残さない。
+    拒否された項目として、許可表の`type`と、問い合わせの文に現れる語だけの項目名を、1回10件までログに残す。
+    語の表は自前の問い合わせの文から作るので、エラーの側に何が来ても、トークンの形の文字列はログに入らない。
+- メタデータのパッチの取得(`lib/metadata_patch_download.ts`)は、`github_token`を`Authorization`ヘッダーに載せる。
+  載せるのは、artifactのAPIへの最初の要求だけである。
+  この要求は、まだ通信層を通らずに自分で送る。
   宛先は`https://api.github.com`に固定し、リダイレクトは辿らない。
-  境界は[Console用workerの境界](#console用workerの境界)に書く。
-- Console用のworkerで動く`approval_decide`は、要件定義の承認の前に現在のIssueを読むため、同じ形で`github_token`を使う。
-  10秒の締め切りを付け、エラーの文とログにトークンとIssueの内容を含めない。
+  返った302の取得先へは、トークンを付けずに送る。
+  取得先は、`https`のAzureのblob storageで、利用者名、パスワード、ポートを含まないURLに限る。
+  レート制限の判定は、通信層と共有する。
 - Discordへの送信(`lib/discord.ts`の`notify`)は、`discord_webhook_url`を`fetch`の宛先のURLにする。
   URLそのものが秘密なので、エラーメッセージとログには含めない。
-- 収集の`collect_github`(`lib/gh_graphql.ts`)は、`github_read_tokens`の所有者ごとのトークンを`fetch`の`Authorization`ヘッダに載せる。
-  宛先は`https://api.github.com/graphql`に固定し、リダイレクトは辿らず、1要求に10秒の締め切りを付ける。
-  エラーの文とログに、トークンと応答の本文を含めない。
-  GraphQLのエラーの文は、残さない。
-  拒否された項目として、許可表の`type`と、問い合わせの文に現れる語だけの項目名を、1回10件までログに残す。
-  語の表は自前の問い合わせの文から作るので、エラーの側に何が来ても、トークンの形の文字列はログに入らない。
 - 検出器の`detect_schedule_failures`は、外部の死活監視の`heartbeat_url`を`fetch`の宛先にする。
   `https`のURLだけを叩き、リダイレクトは辿らず、10秒の締め切りを付ける。
   URLそのものが秘密なので、ログには伏せた形だけを残す。
@@ -351,6 +365,53 @@ URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文に
 
 エラーメッセージと失敗の記録(`job_failures`)には、マスク処理を通してから値を入れる。
 マスクの関数はテストで検証する。
+
+### GitHubのAPIへの通信層
+
+`lib/github_http.ts`は、GitHubのAPIへトークンを送る経路の不変条件を持つ。
+保護パスに入れ、変更は人がレビューする。
+不変条件と、それを固定するテストは次のとおりである。
+テストは`tests/lib/github_http.test.ts`(保護パス)にある。
+
+- 送り先は`https://api.github.com`に固定する。
+  パスは区間に分けて見て、`.`と`..`の区間、エンコードした`.`を含む区間、スキーム、`/`で始まるもの、`\`、`#`、検索API(`search/`)を拒む。
+  `new URL`で組み立てた後に、originと`pathname`が変わらないことを確かめる。
+  固定するテストは`sends to the fixed origin`と、`assertGitHubApiPath`の`rejects`で始まるテストである。
+- トークンは`Authorization`ヘッダーにだけ載せ、載せる前に毎回、送り先のoriginを確かめる。
+  ほかのファイルは`Authorization`ヘッダーを組み立てず、APIのホストの字面も書かない。
+  固定するテストは`no other file builds an Authorization header`と`no other file names the API host`である。
+  例外は、まだ通信層を通らないメタデータのパッチの取得の1か所で、テストの例外の一覧に理由を書く。
+- すべての`fetch`に`redirect: "manual"`を付け、`fetch`にリダイレクトを辿らせない。
+  辿るのはGETだけで、最大3回である。
+  `Location`は今のURLを基準に解決し、行き先のoriginが`https://api.github.com`と完全に一致するときだけ辿る。
+  行き先が検索APIなら辿らない。
+  GET以外と、`redirect: "never"`を指定した要求(Issueの読み取り)は辿らず、3xxのまま返す。
+  固定するテストは次の3つである。
+  - `never lets fetch follow a redirect by itself`
+  - `does not follow to another host`
+  - `does not follow a POST`
+- 通信の例外の文はURLを含みうるので、応答に写さない。
+  返すのはステータス0と、締め切りによる打ち切りかどうかだけである。
+  固定するテストは`keeps the text of the rejection out of the response`である。
+- グローバルの`fetch`を参照するファイルは、理由を添えてテストの一覧に並べる。
+  一覧と実際がずれると、テストが落ちる。
+  `github_http.ts`から値をimportしてよいファイルも一覧で決め、ほかのファイルには`import type`だけを許す。
+  固定するテストは`the files that refer to the global fetch are the listed ones`と`only the listed files import values from github_http.ts`である。
+- SDKを許可表に絞ったConsoleの10本のscriptは、この層に届かない。
+  固定するテストは、`tests/scripts/console_worker_boundary.test.ts`の`does not reach the GitHub HTTP layer`である。
+
+呼び出し側は、テストのために`fetch`を差し替えられる。
+差し替えた`fetch`はトークンを受け取るので、この層は悪用を防がない。
+宛先とヘッダーを引数で広げられないことが防ぐのは、誤用だけである。
+悪用の変更は、保護パスと一覧のテストの変更として、人のレビューで止める。
+
+通信の再試行は、この層の`runGitHubRequest`だけが行う。
+`gh`を起動する送り方(`lib/github.ts`の`callGhApi`)も、再試行とレート制限の待ちをこの関数に任せる。
+再試行するのは、冪等な要求の通信断と5xxと、本文が途中で切れた応答である。
+どれも1回だけ送り直す。
+締め切りで打ち切った要求は送り直さない。
+送れなかった(`gh`を起動できなかった)要求は、冪等でなくても送り直す。
+`lib/github.ts`の`rereadWithRetries`は、ラベルを外した後の整合を待つ業務の層の繰り返しで、通信の再試行ではないので対象に含めない。
 
 ### ホストでの保持
 

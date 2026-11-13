@@ -22,7 +22,7 @@ const SNAPSHOT = {
 const TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
 
 function issueResponse(status: number, body: unknown): ReturnType<FetchLike> {
-  return Promise.resolve({ status, json: async () => body });
+  return Promise.resolve(new Response(JSON.stringify(body), { status }));
 }
 
 function liveIssue(

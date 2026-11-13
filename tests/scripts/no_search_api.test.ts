@@ -17,7 +17,10 @@ const FLOWS = [
 
 /** 実行時の拒否が、拒否する接頭辞を持つ定数の名前。この行だけが接頭辞の字面を書ける。 */
 const GUARD_CONSTANT = "REJECTED_REST_ENDPOINT_PREFIX";
-const GUARD_FILE = "lib/github.ts";
+/** 実行時の拒否を持つ通信層。`gh`の送り方と`fetch`の送り方の両方が、ここの拒否を通る。 */
+const GUARD_FILE = "lib/github_http.ts";
+/** `gh`を起動する送り方を持つファイル。 */
+const GH_RUNNER_FILE = "lib/github.ts";
 
 type Source = { readonly path: string; readonly text: string };
 
@@ -138,7 +141,7 @@ describe("the Factory scripts never name the REST search API", () => {
   });
 
   test("gh is started directly only by github.ts", () => {
-    expect(pathsMatching(sources, GH_ARGV_START)).toEqual([GUARD_FILE]);
+    expect(pathsMatching(sources, GH_ARGV_START)).toEqual([GH_RUNNER_FILE]);
   });
 });
 

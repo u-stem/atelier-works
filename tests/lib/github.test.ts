@@ -956,26 +956,38 @@ describe("rate limit wait cap", () => {
       });
     });
 
-    test("does not treat a primary-only rate limit body as secondary", async () => {
-      const { client, calls } = fakeClient([
-        bodyOnlyLimited("API rate limit exceeded for user ID 1."),
-      ]);
+    test("throws a primary-only rate limit body without the remaining header at once, since it gives no reset time", async () => {
+      const sleeps: number[] = [];
+      const { client, calls } = fakeClient(
+        [bodyOnlyLimited("API rate limit exceeded for user ID 1.")],
+        sleeps,
+      );
       const error = await rejectionOf(getViewer(client));
       expect({
-        name: error instanceof Error ? error.name : undefined,
+        rateLimited: error instanceof GitHubRateLimitError,
+        sleeps,
         calls: calls.length,
-      }).toEqual({ name: "GitHubHttpError", calls: 1 });
+      }).toEqual({ rateLimited: true, sleeps: [], calls: 1 });
     });
 
-    test("does not apply to statuses other than 403", async () => {
-      const { client, calls } = fakeClient([
-        ok(ghApiStdout(429, { message: "secondary rate limit" })),
-      ]);
-      const error = await rejectionOf(getViewer(client));
-      expect({
-        name: error instanceof Error ? error.name : undefined,
-        calls: calls.length,
-      }).toEqual({ name: "GitHubHttpError", calls: 1 });
+    test("waits the default time for a 429 whose body says secondary", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient(
+        [ok(ghApiStdout(429, { message: "secondary rate limit" })), viewerOk],
+        sleeps,
+      );
+      await getViewer(client);
+      expect(sleeps).toEqual([DEFAULT_WAIT_MS]);
+    });
+
+    test("waits the default time for a bare 429", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient(
+        [ok(ghApiStdout(429, { message: "Too Many Requests" })), viewerOk],
+        sleeps,
+      );
+      await getViewer(client);
+      expect(sleeps).toEqual([DEFAULT_WAIT_MS]);
     });
 
     test("a client that does not wait throws the rate limit error at once", async () => {
@@ -1732,7 +1744,7 @@ describe("fetchIssueState", () => {
     const calls: { url: string; init: RequestInit }[] = [];
     const fetchFn: FetchLike = async (url, init) => {
       calls.push({ url, init });
-      return { status, json: async () => body };
+      return new Response(JSON.stringify(body), { status });
     };
     return { fetchFn, calls };
   }
@@ -1822,7 +1834,7 @@ describe("fetchIssueContent", () => {
     const calls: { url: string; init: RequestInit }[] = [];
     const fetchFn: FetchLike = async (url, init) => {
       calls.push({ url, init });
-      return { status, json: async () => body };
+      return new Response(JSON.stringify(body), { status });
     };
     return { fetchFn, calls };
   }
@@ -3738,7 +3750,7 @@ describe("findIssueByMarker", () => {
 
   test("rejects an HTTP error response", async () => {
     const fake = createFakeCommandRunner([
-      ok(ghApiStdout(403, { message: "rate limited" })),
+      ok(ghApiStdout(403, { message: "Forbidden" })),
     ]);
     await expect(
       findIssueByMarker(

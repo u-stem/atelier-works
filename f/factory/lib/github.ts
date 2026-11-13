@@ -7,10 +7,9 @@
 // 応答は`gh api -i`で受け取る(標準出力にステータス行・ヘッダー・本文が出る。
 // ヘッダーの行末がCRLFであることは実際に確かめている)。こうすると、
 // 403/429のレート制限のヘッダー(`retry-after`、`x-ratelimit-remaining`)を
-// 2回目の要求なしに読める。レート制限の待ちには上限があり、超えるなら
-// 待たずに`GitHubRateLimitError`を投げる(`callGhApi`を参照)。
-// ghプロセスの起動失敗と、冪等な要求の通信断と5xxには、短い待機の後に1回だけ再試行する
-// (`sendGhApi`を参照)。
+// 2回目の要求なしに読める。レート制限の判定と待ち、ghプロセスの起動失敗と冪等な要求の通信断と5xxの再試行は、
+// `github_http.ts`の`runGitHubRequest`が行う。このモジュールは`gh`を起動する送り方だけを差し込む(`callGhApi`を参照)。
+// Console用のworkerのIssueの読み取り(`fetchIssueState`、`fetchIssueContent`)は、`gh`を起動せず、`github_http.ts`の`fetch`で送る。
 //
 // 自己再入の防止: Factoryが投稿するコメント・レビュー・返信には、すべて
 // `<!-- factory:<kind>:<work_item_id> -->`の目印を付ける(`withMarker`)。
@@ -25,11 +24,20 @@ import {
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GitHubHttpError,
   GitHubRateLimitError,
-  RATE_LIMIT_HINT_TEXT_LIMIT,
-  SECONDARY_RATE_LIMIT_PHRASE,
 } from "./github_errors.ts";
+import {
+  GITHUB_TRANSIENT_RETRY_DELAY_MS,
+  type GitHubSendResult,
+  graphqlErrorsRateLimited,
+  graphqlRateLimit,
+  type HttpFetch,
+  rateLimitError,
+  rejectRestSearchEndpoint,
+  requestGitHub,
+  runGitHubRequest,
+} from "./github_http.ts";
 import { jobTmpEnv } from "./job_tmp.ts";
-import { type Logger, logger, maskSecrets } from "./log.ts";
+import { type Logger, maskSecrets } from "./log.ts";
 import {
   assertCommitSha,
   isCommitSha,
@@ -63,6 +71,7 @@ export type { GitHubRepoRef };
 export {
   GH_EXIT_AUTH_REQUIRED,
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
+  GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubHttpError,
   GitHubRateLimitError,
   parseGitHubRepoUrl,
@@ -134,6 +143,11 @@ export type GhApiResponse = {
   readonly exitCode?: number;
   /** `gh`プロセスがtimeoutで打ち切られたときだけ真になる。 */
   readonly timedOut?: true;
+  /**
+   * 2xxなのに`gh`の終了コードが0以外で、本文が欠けたときだけ真になる。
+   * JSONでない本文を読む`callGhApiRawBody`の要求だけに付ける。
+   */
+  readonly incomplete?: true;
 };
 
 function parseGhApiOutput(stdout: string): GhApiResponse {
@@ -163,61 +177,6 @@ function parseGhApiOutput(stdout: string): GhApiResponse {
   }
 
   return { status, headers, bodyText };
-}
-
-/**
- * `x-ratelimit-reset`から求めた待ちに足す余裕(ミリ秒)。
- * ヘッダーの時刻は秒単位で、workerとGitHubの時計もずれうるため、
- * 解除の直前に再試行してまた拒まれないようにする。
- */
-const RATE_LIMIT_RESET_MARGIN_MS = 1000;
-
-/** 応答に解除の時刻を示すヘッダーが無いときに待つ時間(ミリ秒)。 */
-const DEFAULT_RATE_LIMIT_WAIT_MS = 60_000;
-
-export function isRateLimited(response: GhApiResponse): boolean {
-  if (response.status !== 403 && response.status !== 429) return false;
-  if (response.headers.has("retry-after")) return true;
-  return response.headers.get("x-ratelimit-remaining") === "0";
-}
-
-/**
- * ヘッダーでは判定できない403のうち、本文に二次レート制限の語句があるものか。
- * 語句の判定はGraphQL呼び出しと同じ(先頭の一定の長さを読み、大文字と小文字を区別しない)。
- * 一次レート制限の本文だけの403と、権限不足の403は対象にしない。
- */
-function isSecondaryRateLimitedByBody(response: GhApiResponse): boolean {
-  if (response.status !== 403) return false;
-  if (isRateLimited(response)) return false;
-  return response.bodyText
-    .slice(0, RATE_LIMIT_HINT_TEXT_LIMIT)
-    .toLowerCase()
-    .includes(SECONDARY_RATE_LIMIT_PHRASE);
-}
-
-/**
- * rate limitの解除までの待ち(ミリ秒)を、`retry-after`、無ければ`x-ratelimit-reset`
- * (余裕の`RATE_LIMIT_RESET_MARGIN_MS`を足す)から求める。
- * どちらも無いか読めなければnullを返す。
- */
-export function rateLimitWaitMs(
-  headers: ReadonlyMap<string, string>,
-  now: () => Date,
-): number | null {
-  const retryAfter = headers.get("retry-after");
-  if (retryAfter !== undefined) {
-    const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  }
-  const reset = headers.get("x-ratelimit-reset");
-  if (reset !== undefined) {
-    const resetEpochSeconds = Number(reset);
-    if (Number.isFinite(resetEpochSeconds)) {
-      const untilResetMs = resetEpochSeconds * 1000 - now().getTime();
-      return Math.max(untilResetMs, 0) + RATE_LIMIT_RESET_MARGIN_MS;
-    }
-  }
-  return null;
 }
 
 function clientNow(client: GhClient): () => Date {
@@ -252,13 +211,6 @@ export type GhApiCallOptions = {
 };
 
 /**
- * 一時的な失敗で再試行する前の待機(ミリ秒)の既定値。
- * 資源の一時不足と瞬間的な通信断を越えるだけの短さにする。
- * 再試行は1回だけなので、5分ごとのポーリングの周期に対して十分に小さい。
- */
-export const GITHUB_TRANSIENT_RETRY_DELAY_MS = 2000;
-
-/**
  * 資源の一時不足を表すプロセス起動のエラーコード。
  * EAGAINはプロセス数かメモリの一時不足、EMFILE / ENFILEはファイル記述子の枯渇、
  * ENOMEMはメモリ不足である。いずれも少し待てば解消しうる。
@@ -283,23 +235,18 @@ function isTransientSpawnError(error: unknown): boolean {
 }
 
 /**
- * 1回の要求の結果。`spawn_failed`はghプロセスを起動できなかったことを表し、
- * 要求はGitHubに届いていない。
+ * `gh api`を1回起動する、`runGitHubRequest`に差し込む送り方。
+ * 資源の一時不足でghプロセスを起動できなかったときは、要求がGitHubに届いていないので`not_sent`を返す。
+ * ほかの起動の失敗は、待っても直らないのでそのまま投げる。
+ * ステータス行が無く、timeoutでもないときは、応答が返らなかった(`noResponse`)として返す。
+ * `markIncomplete`のときは、2xxなのに`gh`の終了コードが0でない応答を、本文が欠けた(`incomplete`)として返す。
  */
-type GhApiAttempt =
-  | { readonly kind: "spawn_failed"; readonly error: unknown }
-  | {
-      readonly kind: "completed";
-      readonly response: GhApiResponse;
-      /** ステータス行が無く、応答が返らなかった(通信断など)。プロセスのtimeoutは含めない。 */
-      readonly noResponse: boolean;
-    };
-
 async function attemptGhApi(
   client: GhClient,
   endpoint: string,
   options: GhApiCallOptions,
-): Promise<GhApiAttempt> {
+  markIncomplete: boolean,
+): Promise<GitHubSendResult<GhApiResponse>> {
   const argv = ["gh", "api", endpoint, "-i"];
   if (options.method !== undefined) argv.push("-X", options.method);
   if (options.acceptHeader !== undefined)
@@ -321,145 +268,42 @@ async function attemptGhApi(
         : {}),
     });
   } catch (error) {
-    if (isTransientSpawnError(error)) return { kind: "spawn_failed", error };
+    if (isTransientSpawnError(error)) return { kind: "not_sent", error };
     throw error;
   }
   const parsed = parseGhApiOutput(commandResult.stdout);
   const capped =
     options.maxOutputBytes !== undefined &&
     Buffer.byteLength(commandResult.stdout) > options.maxOutputBytes;
+  const incomplete =
+    markIncomplete &&
+    parsed.status >= 200 &&
+    parsed.status < 300 &&
+    commandResult.exitCode !== 0;
   const response: GhApiResponse = {
     ...parsed,
     ...(capped ? { capped: true as const } : {}),
     ...(commandResult.timedOut ? { timedOut: true as const } : {}),
+    ...(incomplete ? { incomplete: true as const } : {}),
     exitCode: commandResult.exitCode,
   };
   return {
-    kind: "completed",
+    kind: "response",
     response,
     noResponse: response.status === 0 && !commandResult.timedOut,
   };
 }
 
-/** 同じ要求をもう一度送っても、GitHub上の状態が1回目の成否に左右されないか。 */
-function isIdempotentRequest(options: GhApiCallOptions): boolean {
-  return (
-    options.idempotent ??
-    (options.method === undefined || options.method === "GET")
-  );
-}
-
-/** サーバー側の一時的な障害を示す、ステータス行のあるHTTPのステータスか(500から599)。 */
-function isServerErrorStatus(status: number): boolean {
-  return status >= 500 && status <= 599;
-}
-
 /**
- * 再試行してよい失敗かを返す。
- * - プロセスの起動失敗: 要求はGitHubに届いていないので、どの要求でも再試行してよい。
- * - 応答の無い通信断: 要求が届いた後に応答だけが失われたかもしれない。
- *   届いていた場合、コメント・レビュー・ラベル・PRの作成などの変更は二重に実行される。
- * - ステータス行のある5xx: サーバー側の一時的な障害かもしれないが、
- *   変更が途中まで効いている可能性は通信断と同じである。
- *   そのため、通信断と5xxは冪等な要求だけを再試行する。冪等かどうかは`options.idempotent`で決め、
- *   省略したときはGET(メソッドの指定なしを含む)を冪等とみなす。
- *   冪等でない要求は再試行せず、通信断はHTTP 0の失敗として、5xxはその応答のまま記録する。
- */
-function isRetryable(
-  attempt: GhApiAttempt,
-  options: GhApiCallOptions,
-): boolean {
-  if (attempt.kind === "spawn_failed") return true;
-  if (!isIdempotentRequest(options)) return false;
-  return attempt.noResponse || isServerErrorStatus(attempt.response.status);
-}
-
-/**
- * 要求を1回送る。一時的な失敗(`isRetryable`)なら、短く待ってから1回だけ再送する。
- * 再送も失敗したら、ghの起動失敗はその例外を投げ、応答の無い通信断はステータス0の、
- * 5xxはその5xxの応答として返す(呼び出し側の`ensureSuccess`が失敗にする)。
- * レート制限は扱わない(`callGhApi`を参照)。
- */
-async function sendGhApi(
-  client: GhClient,
-  endpoint: string,
-  options: GhApiCallOptions,
-): Promise<GhApiResponse> {
-  const first = await attemptGhApi(client, endpoint, options);
-  if (first.kind === "completed" && !isRetryable(first, options)) {
-    return first.response;
-  }
-  const sleep = client.sleep ?? defaultSleep;
-  await sleep(client.transientRetryDelayMs ?? GITHUB_TRANSIENT_RETRY_DELAY_MS);
-
-  const second = await attemptGhApi(client, endpoint, options);
-  if (second.kind === "spawn_failed") throw second.error;
-  return second.response;
-}
-
-/**
- * RESTの検索APIのendpointの接頭辞。検索は1分ごとの枠が小さく、5分の境目に集中して拒まれるため、
- * 呼び出しの入口で拒む(`isRestSearchEndpoint`)。
- */
-const REJECTED_REST_ENDPOINT_PREFIX = "search/";
-
-/**
- * endpointが、RESTの検索APIを指すか。先頭の`/`とホストを落とし、小文字にして接頭辞で比べる。
- * 書き方の違いのうち、先頭の`/`、大文字、絶対URLの3種類だけを正規化する。
- * ドットセグメントとパーセントエンコードは対象外である。
- * 呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通るため、その書き方は入らない。
- * 接頭辞だけを見るので、`repos/o/search-x/issues`のようにリポジトリ名やクエリに含むだけの要求は拒まない。
- * GraphQLの検索のフィールドは`graphql`への要求で、対象外である。
- */
-function isRestSearchEndpoint(endpoint: string): boolean {
-  const path = endpoint
-    .toLowerCase()
-    .replace(/^https?:\/\/[^/]+\//, "")
-    .replace(/^\/+/, "");
-  return path.startsWith(REJECTED_REST_ENDPOINT_PREFIX);
-}
-
-const defaultRateLimitLog = logger("github");
-
-/** ログに載せるendpoint。ホスト、先頭の`/`、クエリを落とす。クエリには値が入りうるため。 */
-function endpointForLog(endpoint: string): string {
-  return endpoint
-    .replace(/^https?:\/\/[^/]+\//, "")
-    .replace(/^\/+/, "")
-    .replace(/[?#].*$/s, "");
-}
-
-/**
- * レート制限と判定した応答を、警告の1行として残す。
- * 待って成功した403と、どのリソースの枠(`x-ratelimit-resource`の`core`、`search`、`graphql`)の
- * 403かを、ジョブのログから数えるためである。
- * 載せるのはステータス、クエリを除いたendpoint、`retry-after`、リソースの枠、その後の扱いだけで、
- * トークンもクエリの値も載せない。
- */
-function logRateLimit(
-  client: GhClient,
-  endpoint: string,
-  response: GhApiResponse,
-  outcome: "waiting" | "wait_too_long" | "still_limited",
-): void {
-  (client.log ?? defaultRateLimitLog).warn("github rate limit response", {
-    status: response.status,
-    endpoint: endpointForLog(endpoint),
-    retry_after: response.headers.get("retry-after") ?? null,
-    resource: response.headers.get("x-ratelimit-resource") ?? null,
-    outcome,
-  });
-}
-
-/**
- * `gh api <endpoint>`を呼ぶ。RESTの検索APIのendpointは、`gh`を起動せずに例外で拒む。
+ * `gh api <endpoint>`を呼ぶ。再試行とレート制限の待ちは、`github_http.ts`の`runGitHubRequest`が行う。
+ * RESTの検索APIのendpointは、`gh`を起動せずに例外で拒む(`rejectRestSearchEndpoint`)。
  * メッセージにはendpointを載せない(クエリに値が入りうるため)。
  * レート制限の応答を受けたら、待ってから1回だけ再試行する。
  * 必要な待ちが`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えるときは待たずに、
  * 再試行も拒まれたときはその時点で、`GitHubRateLimitError`を投げる。
  * 待ちがstepのtimeoutより長引いて、副作用の途中でstepが打ち切られることを防ぐ。
- * ghの起動失敗、応答の無い通信断、冪等な要求の5xxの再試行は、それぞれの要求の中で行う(`sendGhApi`を参照)。
- * レート制限の応答は、待つ前と再試行の後に、警告のログ1行として残す(`logRateLimit`)。
+ * ghの起動失敗、応答の無い通信断、冪等な要求の5xxは、短く待ってから1回だけ再試行する。
+ * 応答の無い通信断と5xxを再試行するのは、冪等な要求(`options.idempotent`、省略時はGET)だけである。
  * レート制限以外のHTTPのエラーのステータスでは例外を投げない。
  * 呼び出し側が`response.status`を確かめる(`ensureSuccess`を参照)。
  */
@@ -468,40 +312,30 @@ export async function callGhApi(
   endpoint: string,
   options: GhApiCallOptions = {},
 ): Promise<GhApiResponse> {
-  if (isRestSearchEndpoint(endpoint)) {
-    throw new Error("GitHub REST search endpoints are not allowed");
-  }
-  const first = await sendGhApi(client, endpoint, options);
-  const limitedByBody = isSecondaryRateLimitedByBody(first);
-  if (!isRateLimited(first) && !limitedByBody) return first;
+  return sendGhApiRequest(client, endpoint, options, false);
+}
 
-  const sleep = client.sleep ?? defaultSleep;
-  const now = clientNow(client);
-  // 本文だけで判定したときは、ヘッダーの`x-ratelimit-reset`が一次レート制限のものなので使わない。
-  const waitMs = limitedByBody
-    ? DEFAULT_RATE_LIMIT_WAIT_MS
-    : (rateLimitWaitMs(first.headers, now) ?? DEFAULT_RATE_LIMIT_WAIT_MS);
-  if (waitMs > GITHUB_RATE_LIMIT_MAX_WAIT_MS) {
-    logRateLimit(client, endpoint, first, "wait_too_long");
-    throw new GitHubRateLimitError(endpoint, waitMs, false);
-  }
-  logRateLimit(client, endpoint, first, "waiting");
-  await sleep(waitMs);
-
-  const second = await sendGhApi(client, endpoint, options);
-  if (isRateLimited(second)) {
-    logRateLimit(client, endpoint, second, "still_limited");
-    throw new GitHubRateLimitError(
+async function sendGhApiRequest(
+  client: GhClient,
+  endpoint: string,
+  options: GhApiCallOptions,
+  markIncomplete: boolean,
+): Promise<GhApiResponse> {
+  // `gh`は先頭の`/`と`api.github.com`の絶対URLも受け付けるので、ここでは検索APIだけを拒む。
+  // 宛先とパスの形の検査(`assertGitHubApiPath`)は、トークンを自分で載せる`fetch`の送り方が行う。
+  rejectRestSearchEndpoint(endpoint);
+  return runGitHubRequest(
+    client,
+    {
       endpoint,
-      rateLimitWaitMs(second.headers, now),
-      true,
-    );
-  }
-  if (isSecondaryRateLimitedByBody(second)) {
-    logRateLimit(client, endpoint, second, "still_limited");
-    throw new GitHubRateLimitError(endpoint, null, true);
-  }
-  return second;
+      ...(options.method !== undefined ? { method: options.method } : {}),
+      ...(options.idempotent !== undefined
+        ? { idempotent: options.idempotent }
+        : {}),
+    },
+    { mode: "wait_once" },
+    () => attemptGhApi(client, endpoint, options, markIncomplete),
+  );
 }
 
 /**
@@ -551,18 +385,11 @@ export class GitHubRawBodyIncompleteError extends Error {
   }
 }
 
-/** 2xxなのに`gh`の終了コードが0以外(終了コードが無い場合を含む)で、本文が欠けているか。 */
-function isIncompleteRawBody(response: GhApiResponse): boolean {
-  return (
-    response.status >= 200 && response.status < 300 && response.exitCode !== 0
-  );
-}
-
 /**
- * JSONでない本文を読む`gh api`の呼び出し。本文の欠けを、取り直しも含めてここだけで扱う。
- * 2xxなのに`gh`の終了コードが0以外のときは、冪等な要求(GETか`idempotent`の指定)だけ、
- * 短く待ってから1回だけ取り直す。冪等でない要求は取り直さず、
- * 取り直しても欠けたときと同じく、`GitHubRawBodyIncompleteError`を投げる。
+ * JSONでない本文を読む`gh api`の呼び出し。
+ * 2xxなのに`gh`の終了コードが0以外の応答を、本文が欠けた(`incomplete`)応答として扱う。
+ * 取り直しは`runGitHubRequest`が行い、冪等な要求(GETか`idempotent`の指定)だけ、短く待ってから1回だけ取り直す。
+ * 取り直しても欠けたとき、また冪等でない要求で欠けたときは、`GitHubRawBodyIncompleteError`を投げる。
  * JSONの応答はESCがエスケープされ、構文の検査が欠けを見つけるので、この関数は要らない。
  * 2xx以外の応答は、終了コードを見ずにそのまま返す。呼び出し側がステータスで扱いを決める。
  * 取り直しの待ちは`GhClient`の`transientRetryDelayMs`で決まる。
@@ -573,18 +400,11 @@ export async function callGhApiRawBody(
   options: GhApiCallOptions,
   context: string,
 ): Promise<GhApiResponse> {
-  const first = await callGhApi(client, endpoint, options);
-  if (!isIncompleteRawBody(first)) return first;
-  // 冪等でない要求は、取り直すと副作用が重なるので、欠けたまま失敗にする。
-  if (!isIdempotentRequest(options)) {
+  const response = await sendGhApiRequest(client, endpoint, options, true);
+  if (response.incomplete === true) {
     throw new GitHubRawBodyIncompleteError(context);
   }
-  const sleep = client.sleep ?? defaultSleep;
-  await sleep(client.transientRetryDelayMs ?? GITHUB_TRANSIENT_RETRY_DELAY_MS);
-  const second = await callGhApi(client, endpoint, options);
-  if (isIncompleteRawBody(second))
-    throw new GitHubRawBodyIncompleteError(context);
-  return second;
+  return response;
 }
 
 export function parseJsonBody(
@@ -1200,22 +1020,22 @@ export async function listLabeledOpenIssues(
   return numbers.filter((number) => number !== null);
 }
 
-/** `fetchIssueState`が使う`fetch`の最小の形。テストで差し替える。 */
-export type FetchLike = (
-  url: string,
-  init: RequestInit,
-) => Promise<Pick<Response, "status" | "json">>;
+/**
+ * `fetchIssueState`が使う`fetch`の形。呼び出し側がグローバルの`fetch`を渡し、テストで差し替える。
+ * 宛先とトークンの扱いは`github_http.ts`が決め、渡した`fetch`は決めない。
+ */
+export type FetchLike = HttpFetch;
 
+/** Console用のworkerのIssueの読み取りの締め切り(ミリ秒)。 */
 const FETCH_ISSUE_TIMEOUT_MS = 10_000;
 
 /**
  * `GET /repos/.../issues/<番号>`を`fetch`で読み、JSONのオブジェクトを返す。
- * `gh`を起動できないworker(Console用のworker)から使うためのもので、
- * 宛先は`api.github.com`に固定し、資格情報は`Authorization`ヘッダだけに載せる。
- * リダイレクトは辿らない。移したIssueの新しい宛先へ`Authorization`を送らず、
- * 確かめられないものとして扱うためである。
- * 10秒の締め切りを付け、超えると`fetch`が拒否される。
- * 応答が2xxでなければ`GitHubHttpError`を、形が違えば`Error`を投げる。
+ * `gh`を起動できないworker(Console用のworker)から使うためのもので、送り方は`github_http.ts`の`requestGitHub`に任せる。
+ * 宛先は`api.github.com`に固定され、資格情報は`Authorization`ヘッダだけに載る。
+ * リダイレクトは辿らない(`redirect: "never"`)。Consoleの再開が3xxを「移された」と見分け、確かめられないものとして扱うためである。
+ * 10秒の締め切りを付ける。一時的な失敗(応答の無い通信断と5xx)は1回だけ再試行し、レート制限は待たずに`GitHubRateLimitError`を投げる。
+ * 応答が2xxでなければ`GitHubHttpError`を(応答が無ければステータス0)、形が違えば`Error`を投げる。
  * エラーの文に、資格情報とIssueの内容は含めない。
  */
 async function fetchIssueObject(
@@ -1227,25 +1047,28 @@ async function fetchIssueObject(
 ): Promise<{ readonly context: string; readonly body: object }> {
   validateOwnerRepo(owner, repo);
   const context = `GET issue ${owner}/${repo}#${number}`;
-  const response = await fetchFn(
-    `https://api.github.com/repos/${owner}/${repo}/issues/${number}`,
+  const response = await requestGitHub(
+    { token: ghToken, fetch: fetchFn },
     {
-      headers: {
-        Authorization: `Bearer ${ghToken}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-      redirect: "manual",
-      signal: AbortSignal.timeout(FETCH_ISSUE_TIMEOUT_MS),
+      path: `repos/${owner}/${repo}/issues/${String(number)}`,
+      redirect: "never",
+      timeoutMs: FETCH_ISSUE_TIMEOUT_MS,
     },
+    { mode: "throw" },
   );
   if (response.status < 200 || response.status >= 300) {
     throw new GitHubHttpError(
       `${context} failed with HTTP ${response.status}`,
       response.status,
+      { timedOut: response.timedOut === true },
     );
   }
-  const body: unknown = await response.json();
+  let body: unknown = null;
+  try {
+    if (response.incomplete !== true) body = JSON.parse(response.bodyText);
+  } catch {
+    body = null;
+  }
   if (typeof body !== "object" || body === null) {
     throw new Error(`${context}: unexpected response shape`);
   }
@@ -3853,15 +3676,6 @@ function isGraphqlErrorsPayload(value: unknown): value is GraphqlErrorsPayload {
   );
 }
 
-/**
- * GraphQLの一次レート制限の応答かを返す。GitHubはHTTP 200で返し、
- * `errors[].type`が`RATE_LIMITED`になる(`x-ratelimit-remaining`は0になる)。
- * RESTのレート制限と違い403/429にならないので、`callGhApi`では見分けられない。
- */
-function isGraphqlRateLimited(payload: GraphqlErrorsPayload): boolean {
-  return payload.errors.some((error) => error.type === "RATE_LIMITED");
-}
-
 type GraphqlDataPayload = {
   readonly data: unknown;
 };
@@ -3881,7 +3695,7 @@ function isGraphqlDataPayload(value: unknown): value is GraphqlDataPayload {
  * (`RATE_LIMITED`なら`GitHubRateLimitError`、それ以外は一般のエラー)。こうして、
  * HTTPのステータスだけを確かめた呼び出し側がGraphQLの失敗を成功と取り違えないようにする。
  * `idempotent`は、読み取りのqueryなら`true`、mutationなら`false`にする。
- * `true`のときだけ、応答の無い通信断と5xxを再試行する(`isRetryable`を参照)。
+ * `true`のときだけ、応答の無い通信断と5xxを再試行する(`github_http.ts`の`runGitHubRequest`を参照)。
  */
 async function callGhGraphql(
   client: GhClient,
@@ -3900,10 +3714,11 @@ async function callGhGraphql(
   if (isGraphqlErrorsPayload(parsed)) {
     // GraphQLの一次レート制限は1時間ごとの点数で、解除までの待ちはたいてい上限より長い。
     // 拒まれた要求は再送せず、そのまま投げる。
-    if (isGraphqlRateLimited(parsed)) {
-      throw new GitHubRateLimitError(
+    // HTTP 200で返るので、`callGhApi`のステータスの判定では見分けられない。判定は`github_http.ts`にある。
+    if (graphqlErrorsRateLimited(parsed.errors)) {
+      throw rateLimitError(
         "graphql",
-        rateLimitWaitMs(response.headers, clientNow(client)),
+        graphqlRateLimit(response.headers, clientNow(client)()),
         false,
       );
     }
