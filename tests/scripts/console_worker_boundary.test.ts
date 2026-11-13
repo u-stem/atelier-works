@@ -1070,6 +1070,13 @@ describe("the SDK use scan", () => {
     expect(sdkFindings("exports.x = 1;").problems).not.toEqual([]);
   });
 
+  test("flags a local variable named module", () => {
+    expect(
+      sdkFindings("for (const module of steps) {\n  use(module.id);\n}")
+        .problems,
+    ).not.toEqual([]);
+  });
+
   test("does not flag a property that is named module", () => {
     expect(sdkFindings("const m = job.module;").problems).toEqual([]);
   });

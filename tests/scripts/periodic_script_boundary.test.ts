@@ -274,10 +274,11 @@ describe("the tool dependency scan", () => {
     expect(toolDependencies("const m = module;")).not.toEqual([]);
   });
 
-  test("does not flag a local variable named module", () => {
+  // 宣言の有効範囲は見ないので、同じ名前の変数を宣言したソースでも、`module`の参照を当てる。
+  test("flags a local variable named module", () => {
     expect(
       toolDependencies("for (const module of steps) {\n  use(module.id);\n}"),
-    ).toEqual([]);
+    ).not.toEqual([]);
   });
 
   test("flags a reference to exports", () => {
