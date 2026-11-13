@@ -286,6 +286,7 @@ describe("cleanLogText", () => {
 describe("cleanLogText worst-case input", () => {
   const ESC = String.fromCharCode(0x1b);
   const BEL = String.fromCharCode(0x07);
+  // 計算量の退行を見る検査で、測るものが実行時間そのものなので、時計は差し替えない。
   // 時間の上限は緩くする。線形なら数十ミリ秒、2乗なら数分かかる入力である。
   const LIMIT_MS = 5000;
   const elapsedMs = (raw: string): number => {

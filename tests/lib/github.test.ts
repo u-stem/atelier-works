@@ -196,8 +196,10 @@ describe("isFactoryPost", () => {
 });
 
 describe("allowEscapeSequences", () => {
+  // 本文が欠けた応答の取り直しは、既定では実際に待つ。待ちは何もしない関数に差し替える。
   const client = () => ({
     ghToken: "tok",
+    sleep: async () => {},
   });
 
   test("keeps an escape sequence in a GET body when the option is true", async () => {
@@ -2167,8 +2169,9 @@ describe("getLabelerActor labeler selection", () => {
 
   async function loginOf(responses: readonly CommandResult[], label: string) {
     const fake = createFakeCommandRunner(responses);
+    // 5xxの再試行は、既定では実際に待つ。待ちは何もしない関数に差し替える。
     const actor = await getLabelerActor(
-      { ghToken: "tok" },
+      { ghToken: "tok", sleep: async () => {} },
       "acme",
       "widgets",
       5,

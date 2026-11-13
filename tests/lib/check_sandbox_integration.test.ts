@@ -52,6 +52,8 @@ import { runCommand } from "../../f/factory/lib/workspace.ts";
 // 検査の後にworktreeがrootに戻り、残ったプロセスが無いことを見る。
 // `/tmp/windmill`の権限を書き換えるので、`scripts/verify-check-sandbox.sh`が使い捨てのコンテナで
 // `FACTORY_CHECK_SANDBOX_IT=1`を付けて走らせるときだけ動く。それ以外では飛ばす。
+// 実時間が要る。実プロセスの起動、flockの保持と解放、slotの空きの待ちが対象で、時計を差し替えると検査の意味が無くなる。
+// コンテナの中でしか動かせず、手元で検証できないので、待ちの置き換えはしない。
 const SETPRIV = "/usr/bin/setpriv";
 const enabled =
   process.platform === "linux" &&

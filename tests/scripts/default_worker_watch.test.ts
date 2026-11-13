@@ -106,6 +106,7 @@ describe("buildWatchDeps", () => {
     ]);
   });
 
+  // 実時間が要る。既定の`sleep`が実際に待って解決することが対象で、待ちは最小(1ms)にしてある。
   test("provides a sleep that waits and then resolves", async () => {
     const { io } = setup();
     expect(await buildWatchDeps(io, "local", log).sleep(1)).toBeUndefined();

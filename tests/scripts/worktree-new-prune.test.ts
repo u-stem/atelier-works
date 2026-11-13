@@ -62,6 +62,7 @@ describe("worktree-new.sh", () => {
     }
 
     // 起動しないことは、少し待っても記録が現れないことで確かめる。
+    // 何も起きないことは、時間が経った後でしか確かめられないので、実時間が要る。待ちは最小(1秒)にしてある。
     async function notStarted(): Promise<boolean> {
       return (await waitForRecord(1000)) === null;
     }

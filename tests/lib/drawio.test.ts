@@ -88,6 +88,7 @@ describe("validateDrawioXml tokenizer", () => {
   const prefix = "<mxfile><diagram><mxGraphModel><root>";
   const maxBytes = 256 * 1024;
 
+  // 計算量の退行を見る検査で、測るものが実行時間そのものなので、時計は差し替えない。上限は、線形なら数十ミリ秒、2乗以上なら数分かかる入力に対して緩くしてある。同じファイルの経過時間の検査も同じ。
   function timeOf(xml: string): { valid: boolean; elapsedMs: number } {
     const started = performance.now();
     const result = validateDrawioXml(xml);

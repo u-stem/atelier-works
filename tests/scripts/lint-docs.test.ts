@@ -35,6 +35,7 @@ import {
   toRepoPath,
   toToolPath,
 } from "../../scripts/lint-docs.ts";
+import { nextTask } from "../lib/testSupport.ts";
 
 const NINE_TARGETS = Array.from({ length: 9 }, (_, i) => `docs/f${i}.md`);
 
@@ -938,7 +939,8 @@ describe("lintWithTools", () => {
     }));
 
     const running = lintWithTools(NINE_TARGETS, deps);
-    await Bun.sleep(20);
+    // 偽の子プロセスはマイクロタスクだけで終わる。時間は待たずに、終わるまで制御を譲る。
+    await nextTask();
     const beforeRelease = [...written];
     release();
     await running;

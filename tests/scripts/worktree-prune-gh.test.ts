@@ -79,7 +79,7 @@ describe("worktree-prune.sh", () => {
         runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "5" } });
 
         const pid = readFileSync(childPid, "utf8").trim();
-        // 子の終了は、シグナルを送った後の非同期の処理なので、終わるまで待つ。
+        // 実時間が要る。子の終了は、シグナルを送った後の非同期の処理なので、実プロセスが終わるまで条件で待つ。
         let alive = true;
         for (let waited = 0; alive && waited < 5000; waited += 100) {
           alive = Bun.spawnSync(["kill", "-0", pid]).exitCode === 0;

@@ -43,7 +43,7 @@ import type {
   GhOwnerRepoFreshnessRow,
   GhPullRequest,
 } from "../../f/factory/lib/types.ts";
-import { ghApiOk, serveGitHubFetchWith } from "./testSupport.ts";
+import { ghApiOk, nextTask, serveGitHubFetchWith } from "./testSupport.ts";
 
 const MINUTE_MS = 60_000;
 const DB_NOW = new Date("2026-10-18T00:00:00.000Z");
@@ -2066,7 +2066,8 @@ describe("discoverPrs from the table", () => {
     const tracked = async <T>(read: () => T): Promise<T> => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      // 読み取りが重なって進むかを見るので、時間は待たずに、他の読み取りが始まるまで制御を譲る。
+      await nextTask();
       inFlight -= 1;
       return read();
     };

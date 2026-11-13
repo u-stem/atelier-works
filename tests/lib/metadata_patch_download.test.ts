@@ -6,11 +6,16 @@ import {
 } from "../../f/factory/lib/metadata_patch_download.ts";
 import {
   restoreGlobalFetch,
+  restoreTimers,
   type SentRequest,
   stubGlobalFetch,
+  stubLongTimers,
 } from "./testSupport.ts";
 
-afterEach(restoreGlobalFetch);
+afterEach(() => {
+  restoreGlobalFetch();
+  restoreTimers();
+});
 
 const STORAGE_URL =
   "https://productionresultssa1.blob.core.windows.net/actions-results/zip?sig=SECRET-SIGNATURE";
@@ -19,6 +24,8 @@ type Call = SentRequest;
 
 /** グローバルの`fetch`を、`responses`を順に返す関数に差し替える。 */
 function fakeFetch(responses: readonly (Response | Error)[]) {
+  // 通信断の再試行は、既定の待ち(2秒)を実際に待つ。待ちは時計の差し替えで飛ばす。
+  stubLongTimers();
   return { calls: stubGlobalFetch(responses).sent };
 }
 

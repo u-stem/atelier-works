@@ -60,6 +60,22 @@ bunのlcovに分岐の記録が無いためである。
 一時ディレクトリのリポジトリで実際のgitを実行するテストは、`mise run test`の中で動くが、区分はmediumである。
 そのため、`mise run test`には、smallでないテストも含まれる。
 
+sizeをコードに持たせる仕組みは無い。
+`mise run test`の中のmediumは、次の群に分かれる。
+mediumの群を足す、または無くす変更は、同じ変更で表を直す。
+
+| 群 | 使うもの | 代表例 |
+| --- | --- | --- |
+| 実git | 一時ディレクトリのリポジトリで、本物のgitを実行する | `tests/lib/workspace_merge.test.ts`、`tests/lib/*_git.test.ts`、`tests/scripts/worktree-*.test.ts` |
+| 実シェルスクリプト | `scripts/`のシェルスクリプトとフックを、子プロセスで起動する | `tests/scripts/check-docker-version.test.ts`、`tests/scripts/doctor.test.ts`、`tests/scripts/claude-hooks/` |
+| 実プロセスの停止と時間切れ | 実際のプロセスを起動し、時間切れや合図で止める | `tests/lib/workspace_stop.test.ts`、`tests/scripts/test_db_session.test.ts` |
+| 実ファイル | 一時ディレクトリ、FIFO、symlinkを作って読み書きする | `tests/lib/doc_tree_hash.test.ts`、`tests/lib/job_tmp.test.ts` |
+| コンテナ | workerのイメージの中で、実際のsetprivとflockを使う。`mise run test`では飛ばす | `tests/lib/check_sandbox_integration.test.ts` |
+
+表の単位はファイルである。
+1つのファイルにsmallとmediumが混ざる場合は、表はmediumの部分を指す。
+`tests/lib/workspace.test.ts`が例である。
+
 ## 実DBの検査
 
 `mise run test:db`は、使い捨てのDBにmigrationを適用する。
@@ -108,6 +124,13 @@ bunのlcovに分岐の記録が無いためである。
 - Arrange-Act-Assertの構成にする。
 - `test.each`は、静的な表に限る。
 - テストに分岐やループを書かない。
+- 実時間を待たない。
+  `sleep`や`now`を注入できる対象は、注入する。
+  注入できないときは、`tests/lib/testSupport.ts`の`stubLongTimers`と`nextTask`を使う。
+  待つ必要があるときは、時間ではなく、起きるはずの出来事を待つ。
+- 時間の経過そのものを確かめるテストは、待ちを最小にして、実時間が要る理由をコメントに書く。
+  対象は、実プロセスの停止、時間切れ、計算量の退行を見る検査である。
+  時計を差し替えると、検査の意味が無くなるためである。
 
 ## 書かないテスト
 
