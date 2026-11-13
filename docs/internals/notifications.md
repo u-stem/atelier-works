@@ -926,14 +926,14 @@ commitのIDは、`assertCommitSha`か`isCommitSha`を通した40桁の16進数�
 | `listReleases` | `repos/<o>/<r>/releases?per_page=100` | なし | 辿る |
 | `resolveTagCommit` | `repos/<o>/<r>/git/ref/tags/<タグ>`、`repos/<o>/<r>/git/tags/<id>` | タグ名は英数字と`._-`だけで`..`を含まない。IDは40桁の16進数 | 辿る |
 | `getRepoFileMeta`、`getRepoFileText` | `repos/<o>/<r>/contents/<パス>?ref=<ref>` | パスは区間ごとに、refは全体を`encodeURIComponent` | 辿る |
-| `getBranchHeadSha`、`createBranchWithFiles`(先頭のcommitの読み取り) | `repos/<o>/<r>/git/ref/heads/<ブランチ>`、`repos/<o>/<r>/git/commits/<sha>` | ブランチ名は`assertBranchName`を通し、エンコードしない | 辿る |
+| `getBranchHeadSha`、`createBranchWithFiles`(先頭のcommitの読み取り) | `repos/<o>/<r>/git/ref/heads/<ブランチ>`、`repos/<o>/<r>/git/commits/<sha>` | ブランチ名は`assertBranchName`の後、区間ごとに`encodeURIComponent`。shaは40桁の16進数 | 辿る |
 | `listOpenPullRequestHeads` | `repos/<o>/<r>/pulls?state=open&per_page=100` | なし | 辿る |
-| `compareChangedFiles` | `repos/<o>/<r>/compare/<base>...<head>` | 区間ごとに`encodeURIComponent` | 辿る |
+| `compareChangedFiles` | `repos/<o>/<r>/compare/<base>...<head>` | `base`と`head`は`assertBranchName`の後、区間ごとに`encodeURIComponent` | 辿る |
 
 ページ送り(`paginateGhApi`と`findIssueByMarker`)は、`link`ヘッダーの次のURLからホストを落とした相対パスで送る(`toApiEndpoint`)。
 GitHubが返す次のURLは`repositories/<数値ID>/...`とクエリの形で、同じパスの検査を通る。
 ホストを落とすので、`link`ヘッダーが別のホストを指しても、送り先は`api.github.com`に固定される。
-エンコードしない名前(ブランチ名やタグ名)が、`new URL`で書き換わる文字を含むときは、パスの検査が送る前に拒む。
+エンコードしない名前(`resolveTagCommit`のタグ名)が、`new URL`で書き換わる文字を含むときは、パスの検査が送る前に拒む。
 `gh`の送り方は先頭の`/`と絶対URLも受け付けたが、GETではどちらも拒む。
 `tests/lib/github_search_rejection.test.ts`は、GETでの拒否と、書き込みが`gh`に先頭の`/`を渡せることを固定する。
 
