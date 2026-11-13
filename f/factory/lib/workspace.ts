@@ -39,6 +39,13 @@ import {
 } from "./log.ts";
 import type { ChangedPathStatus } from "./protected_paths.ts";
 import {
+  cancelOnAbort,
+  isCappedOutput,
+  omittedMarker,
+  omittedMarkerIndex,
+  readStreamCapped,
+} from "./stream_cap.ts";
+import {
   assertBranchName,
   assertGitHubName,
   assertSha,
@@ -49,6 +56,9 @@ import {
   isRecord,
   isString,
 } from "./types.ts";
+
+// 上限つきの読み取りは`stream_cap.ts`にある。呼び出し側が`workspace.ts`から読めるよう再エクスポートする。
+export { isCappedOutput, omittedMarker, omittedMarkerIndex, readStreamCapped };
 
 // ---------------------------------------------------------------------------
 // サブプロセスの実行(`github.ts`、`claude.ts`と共有)
@@ -221,23 +231,6 @@ async function settlesWithin(
   }
 }
 
-/** signalが中断されたらreaderを取り消す(保留中のreadはdone: trueで返る)。戻り値は登録を外す関数。 */
-function cancelOnAbort(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  signal: AbortSignal | undefined,
-): () => void {
-  if (signal === undefined) return () => {};
-  const cancel = (): void => {
-    reader.cancel().catch(() => {});
-  };
-  if (signal.aborted) {
-    cancel();
-    return () => {};
-  }
-  signal.addEventListener("abort", cancel, { once: true });
-  return () => signal.removeEventListener("abort", cancel);
-}
-
 /** streamを終わりまで(またはsignalが中断されるまで)読み、読めた分をUTF-8として返す。上限は無い。 */
 export async function readStreamAll(
   stream: ReadableStream<Uint8Array>,
@@ -264,110 +257,6 @@ export async function readStreamAll(
     offset += chunk.byteLength;
   }
   return new TextDecoder().decode(whole);
-}
-
-const OMITTED_MARKER_PATTERN = /\[\.\.\. \d+ bytes omitted \.\.\.\]/;
-
-/** `readStreamCapped`が、保持した先頭と末尾の間に入れる文字列を返す。 */
-export function omittedMarker(bytes: number): string {
-  return `\n[... ${String(bytes)} bytes omitted ...]\n`;
-}
-
-/**
- * `readStreamCapped`が間を捨てたときの`omittedMarker`の位置(文字数)を返す。無ければ-1。
- * 位置より前が、保持した先頭である。
- */
-export function omittedMarkerIndex(text: string): number {
-  return text.search(OMITTED_MARKER_PATTERN);
-}
-
-/**
- * `readStreamCapped`が`text`の途中を捨てたかを返す。
- * 途中を捨てた機械可読のレポートは解析してはいけない。
- */
-export function isCappedOutput(text: string): boolean {
-  return OMITTED_MARKER_PATTERN.test(text);
-}
-
-/**
- * `stream`を最後まで読み、先頭の`floor(maxBytes / 2)`バイトと、
- * 末尾の`maxBytes - floor(maxBytes / 2)`バイトだけを保持して文字列で返す。
- * 先頭は固定長のバッファ、末尾は固定長のリングバッファにコピーするので、
- * ストリームが長くてもメモリは増えない。
- * 間を捨てたときは、2つの部分を別々にデコードし、`omittedMarker(捨てたバイト数)`でつなぐ
- * (境界で切れたマルチバイト文字はU+FFFDになる)。
- * signalが中断されたら、それまでに保持した分で返す。
- */
-export async function readStreamCapped(
-  stream: ReadableStream<Uint8Array>,
-  maxBytes: number,
-  signal?: AbortSignal,
-): Promise<string> {
-  const headLimit = Math.floor(maxBytes / 2);
-  const tailLimit = maxBytes - headLimit;
-  const head = new Uint8Array(headLimit);
-  let headSize = 0;
-  const ring = new Uint8Array(tailLimit);
-  let ringStart = 0;
-  let ringSize = 0;
-  let omitted = 0;
-
-  const pushTail = (bytes: Uint8Array): void => {
-    if (tailLimit === 0) {
-      omitted += bytes.byteLength;
-      return;
-    }
-    if (bytes.byteLength >= tailLimit) {
-      omitted += ringSize + (bytes.byteLength - tailLimit);
-      ring.set(bytes.subarray(bytes.byteLength - tailLimit), 0);
-      ringStart = 0;
-      ringSize = tailLimit;
-      return;
-    }
-    const overflow = ringSize + bytes.byteLength - tailLimit;
-    if (overflow > 0) {
-      ringStart = (ringStart + overflow) % tailLimit;
-      ringSize -= overflow;
-      omitted += overflow;
-    }
-    const writeAt = (ringStart + ringSize) % tailLimit;
-    const firstPart = Math.min(bytes.byteLength, tailLimit - writeAt);
-    ring.set(bytes.subarray(0, firstPart), writeAt);
-    ring.set(bytes.subarray(firstPart), 0);
-    ringSize += bytes.byteLength;
-  };
-
-  const reader = stream.getReader();
-  const release = cancelOnAbort(reader, signal);
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      let offset = 0;
-      if (headSize < headLimit) {
-        const take = Math.min(headLimit - headSize, value.byteLength);
-        head.set(value.subarray(0, take), headSize);
-        headSize += take;
-        offset = take;
-      }
-      if (offset < value.byteLength) pushTail(value.subarray(offset));
-    }
-  } finally {
-    release();
-  }
-
-  const tail = new Uint8Array(ringSize);
-  const firstPart = Math.min(ringSize, tailLimit - ringStart);
-  tail.set(ring.subarray(ringStart, ringStart + firstPart), 0);
-  tail.set(ring.subarray(0, ringSize - firstPart), firstPart);
-  const decoder = new TextDecoder();
-  if (omitted === 0) {
-    const whole = new Uint8Array(headSize + ringSize);
-    whole.set(head.subarray(0, headSize), 0);
-    whole.set(tail, headSize);
-    return decoder.decode(whole);
-  }
-  return `${decoder.decode(head.subarray(0, headSize))}${omittedMarker(omitted)}${decoder.decode(tail)}`;
 }
 
 /**
