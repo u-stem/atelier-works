@@ -3,6 +3,8 @@
 // iframeは不透明なオリジンなので、親からは送り先のオリジンを指定できず、
 // 受け取る側が送り元のwindowを確かめる。
 
+import { isRecord } from "../api/guards/primitives.ts";
+
 /** 図を描くページ。同じオリジンから配信され、CSPがこのページだけ別になる。 */
 export const DRAWIO_FRAME_SRC = "/console/drawio.html";
 
@@ -43,10 +45,6 @@ export function clampFrameHeight(height: number): number {
     MAX_FRAME_HEIGHT,
     Math.max(MIN_FRAME_HEIGHT, Math.ceil(height)),
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 /** 送り元がiframeのwindowで、種別が`type`のメッセージだけを返す。 */
