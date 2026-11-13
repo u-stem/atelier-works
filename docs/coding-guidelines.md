@@ -277,7 +277,8 @@ workerのscriptの依存は、scriptごとの`.script.lock`が固定する。
 `bun audit`はルートの`bun.lock`しか読まないので、`.script.lock`の依存は、ルートの`bun.lock`と同じ版・同じintegrityにそろえる。
 そろっていれば、ルートの監査がworkerの依存も覆う。
 `lint`の`scripts/check-script-locks.ts`が、版とintegrityの食い違いと、ルートに無い依存を止める。
-`.script.lock`が宣言する依存も、ルートの`package.json`が同じ版で宣言し、`.script.lock`のbun.lockの部分に項目があることを確かめる。
+`.script.lock`が宣言する依存は、照合元をルートの`bun.lock`の`workspaces[""]`(ルートの`package.json`の宣言の写し)にする。
+そこに同じ版の指定があり、`.script.lock`のbun.lockの部分に項目があることを確かめる。
 workerのscriptに依存を足すときは、ルートの`package.json`にも同じ版で足す。
 workerのscriptが宣言してよい依存は、`scripts/check-script-locks.ts`の`WORKER_DEPENDENCIES`に限る。
 今の一覧は`windmill-client`だけで、一覧に足すかどうかは人が判断する。

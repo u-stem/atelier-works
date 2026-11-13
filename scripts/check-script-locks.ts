@@ -4,7 +4,7 @@
 // 2つが一致していれば、ルートの監査がworkerの依存も覆う。崩れたら、ここで止める。
 // `.script.lock`は、package.jsonの部分と、`//bun.lock`の行の後のbun.lockの部分からなる。
 // 依存の無いscriptのbun.lockの部分は`<empty>`である。
-// package.jsonの部分が宣言する依存も、ルートのpackage.jsonが同じ版で宣言し、bun.lockの部分に項目があることを求める。
+// package.jsonの部分が宣言する依存も、ルートのbun.lockの`workspaces[""]`(ルートのpackage.jsonの宣言の写し)に同じ版の指定があり、bun.lockの部分に項目があることを求める。
 // bun.lockの部分だけを照らすと、宣言はあるのに項目の無いlockを通してしまうため。
 // どちらの部分も、Windmillが書く欄だけを許す。
 // `trustedDependencies`や`overrides`のように、照合の外で取得やinstallの動きを変える欄を混ぜさせないため。
@@ -21,13 +21,22 @@ type RootEntry = {
   readonly integrity: string;
 };
 
+/** ルートのbun.lockの、同じ名前と版の項目の取得元。 */
+type RootSource = {
+  readonly registry: unknown;
+  readonly integrity: string;
+};
+
 /** ルートのbun.lockから引く表。 */
 export type RootIndex = {
-  /** パッケージの名前から、版とintegrityの対応。入れ子の項目の版も含む。 */
-  readonly versions: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** パッケージの名前から、版と、その版の項目の取得元の一覧への対応。入れ子の項目も含む。 */
+  readonly versions: ReadonlyMap<
+    string,
+    ReadonlyMap<string, readonly RootSource[]>
+  >;
   /** 入れ子でない項目の、キーから項目。 */
   readonly topLevel: ReadonlyMap<string, RootEntry>;
-  /** ルートのpackage.jsonが宣言する依存の、名前から版の指定。 */
+  /** ルートのbun.lockの`workspaces[""]`(ルートのpackage.jsonの宣言の写し)の、名前から版の指定。 */
   readonly declared: ReadonlyMap<string, string>;
 };
 
@@ -71,7 +80,7 @@ const LOCK_FIELDS: ReadonlySet<string> = new Set([
 /** bun.lockの部分の`workspaces[""]`に許す欄。 */
 const WORKSPACE_FIELDS: ReadonlySet<string> = new Set(["dependencies"]);
 
-/** ルートのpackage.jsonで、宣言の根拠にする欄。 */
+/** ルートのbun.lockの`workspaces[""]`で、宣言の根拠にする欄。 */
 const DECLARED_FIELDS: readonly string[] = ["dependencies", "devDependencies"];
 
 /** 入れ子でない項目のキー。名前そのもの(スコープ付きを含む)で、`/`で区切った親を持たない。 */
@@ -365,13 +374,15 @@ export function indexRootLock(text: string): RootIndexResult {
   if (!isRecord(lock) || !isRecord(lock.packages)) {
     return { ok: false, reason: "root lockfile has no packages" };
   }
-  const versions = new Map<string, Map<string, string>>();
+  const versions = new Map<string, Map<string, RootSource[]>>();
   const topLevel = new Map<string, RootEntry>();
   for (const [key, entry] of Object.entries(lock.packages)) {
     const parsed = readPackageEntry(entry);
     if (parsed === null || parsed.integrity === null) continue;
-    const known = versions.get(parsed.name) ?? new Map<string, string>();
-    known.set(parsed.version, parsed.integrity);
+    const known = versions.get(parsed.name) ?? new Map<string, RootSource[]>();
+    const sources = known.get(parsed.version) ?? [];
+    sources.push({ registry: parsed.registry, integrity: parsed.integrity });
+    known.set(parsed.version, sources);
     versions.set(parsed.name, known);
     if (TOP_LEVEL_KEY.test(key)) {
       topLevel.set(key, {
@@ -391,7 +402,7 @@ export function indexRootLock(text: string): RootIndexResult {
  * bun.lockの部分の1項目を、ルートの表と照らす。一致すれば`null`。
  * 入れ子でない項目は、キーと項目の名前が同じで、ルートの同じキーの項目と名前・版・registry・integrityが一致することを求める。
  * 別名のキーで別のパッケージを置き、入れ子の扱いにして版の照合を外す道を塞ぐためである。
- * 入れ子の項目は、木の形がルートと違いうるので、ルートのどこかに同じ版があればよい。
+ * 入れ子の項目は、木の形がルートと違いうるので、ルートのどこかに同じ名前・版・integrity・registryの項目があればよい。
  */
 function compareWithRoot(
   key: string,
@@ -419,17 +430,27 @@ function compareWithRoot(
   }
   const known = root.versions.get(parsed.name);
   if (known === undefined) return "package is not in the root bun.lock";
-  const integrity = known.get(parsed.version);
-  if (integrity === undefined) return "version differs from the root bun.lock";
-  if (parsed.integrity !== integrity) {
+  const sameVersion = known.get(parsed.version);
+  if (sameVersion === undefined) {
+    return "version differs from the root bun.lock";
+  }
+  const sameIntegrity = sameVersion.filter(
+    (candidate) => candidate.integrity === parsed.integrity,
+  );
+  if (sameIntegrity.length === 0) {
     return "integrity differs from the root bun.lock";
+  }
+  if (
+    !sameIntegrity.some((candidate) => candidate.registry === parsed.registry)
+  ) {
+    return "registry differs from the root bun.lock";
   }
   return null;
 }
 
 /**
  * 前半のpackage.jsonが宣言する依存を照らす。
- * workerの依存の一覧にあり、ルートのpackage.jsonが同じ版の指定で宣言し、bun.lockの部分に同じ名前の項目があることを求める。
+ * workerの依存の一覧にあり、ルートのbun.lockの`workspaces[""]`に同じ版の指定があり、bun.lockの部分に同じ名前の項目があることを求める。
  * 項目の版とintegrityは、`compareWithRoot`が照らす。
  */
 function checkDeclared(
