@@ -17,10 +17,13 @@ import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import {
   checkStop,
   defaultStopCheck,
+  mergeSignals,
+  NEVER_STOPPED,
   STOP_CHECK_INTERVAL_MS,
   type StopCheck,
   watchStop,
 } from "./stop_check.ts";
+import { defaultWorkItemStopCheck } from "./work_item_stop.ts";
 import type { CommandRunner } from "./workspace.ts";
 
 export type CheckCommandResult = {
@@ -36,7 +39,7 @@ export type CheckCommandResult = {
    * プロンプトに載せる抜粋は引き続き`outputTail`を使う。
    */
   readonly output: string;
-  /** 全停止で実行しなかったか、実行中に止めた。止めていなければ付かない。 */
+  /** 全停止か人の中止で実行しなかったか、実行中に止めた。止めていなければ付かない。 */
   readonly stopped?: boolean;
 };
 
@@ -46,20 +49,38 @@ const CHECK_OUTPUT_TAIL_CHARS = 2000;
 export const CHECK_STOPPED_NOTE =
   "the check command was stopped because the factory is stopped (f/factory/stop_all)";
 
-/** 全停止の確認の指定。省略すると、既定の確認(`defaultStopCheck`)を15秒ごとに呼ぶ。 */
+/** 人が中止した作業項目の検査コマンドを止めたときの出力。 */
+export const CHECK_WORK_ITEM_STOPPED_NOTE =
+  "the check command was stopped because the work item was stopped by an operator";
+
+/**
+ * 止める確認の指定。
+ * `workItemId`は、検査が結ぶ作業項目のIDで、必須にする。渡し忘れを型で止めるためである。
+ * 作業項目に結ばない検査だけが`null`を渡す。使ってよいファイルは、配線のテストが固定する。
+ * `check`は全停止の確認で、省略すると既定の確認(`defaultStopCheck`)を15秒ごとに呼ぶ。
+ * `workItemCheck`は人が中止した作業項目の確認で、省略すると`workItemId`の作業項目を読む既定の確認を、全停止の確認とは別に呼ぶ。
+ * `workItemCheck`はテストだけが渡す。
+ */
 export type CheckStopOptions = {
+  readonly workItemId: number | null;
   readonly check?: StopCheck;
   readonly intervalMs?: number;
+  readonly workItemCheck?: StopCheck;
 };
 
-function stoppedResult(command: string): CheckCommandResult {
+/** 止めた理由。人が中止した作業項目を、全停止より優先する。 */
+function stoppedResult(
+  command: string,
+  byWorkItem: boolean,
+): CheckCommandResult {
+  const note = byWorkItem ? CHECK_WORK_ITEM_STOPPED_NOTE : CHECK_STOPPED_NOTE;
   return {
     command,
     ok: false,
     exitCode: 1,
     timedOut: false,
-    outputTail: CHECK_STOPPED_NOTE,
-    output: CHECK_STOPPED_NOTE,
+    outputTail: note,
+    output: note,
     stopped: true,
   };
 }
@@ -303,7 +324,9 @@ function escapingSymlinksResult(
  * 運用者が書く設定(`factory_config`)だから。
  * 出力の読み取りを打ち切ったコマンド(`outputAbandoned`)は、終了コードに関わらず失敗にする。
  * 別セッションへ抜けたプロセスがworkerに残ったことを検査結果に出すためである。
- * 全停止が置かれていれば、次のコマンドを起動せず、実行中のコマンドはグループごと止める。止めたコマンドは`stopped`の失敗として結果に足し、残りは実行しない。
+ * 全停止が置かれているか、人が作業項目を中止していれば、次のコマンドを起動せず、実行中のコマンドはグループごと止める。
+ * 止めたコマンドは`stopped`の失敗として結果に足し、残りは実行しない。両方が当たったときは、人の中止の注記を使う。
+ * 2つの確認は別の監視で動かし、片方の読み取りが返らなくても、もう片方は待たされない。
  */
 export async function runAllowedCheckCommands(
   run: CommandRunner,
@@ -313,7 +336,7 @@ export async function runAllowedCheckCommands(
   createHomeDir: CreateCheckHomeDir = defaultCreateCheckHomeDir,
   path: string = CHECK_COMMAND_PATH,
   sandbox: CheckSandbox | null = null,
-  stop: CheckStopOptions = {},
+  stop: CheckStopOptions,
 ): Promise<CheckCommandResult[]> {
   const homeDir = await createHomeDir({ worktreeDir: cwd });
   const dirs = { worktreeDir: cwd, homeDir: homeDir.path };
@@ -325,10 +348,20 @@ export async function runAllowedCheckCommands(
       const env = checkEnv({ path, home: homeDir.path, worktreeDir: cwd });
 
       const check = stop.check ?? defaultStopCheck();
-      // 変数はループの前に1回だけ読み、その後はループ全体にかけた1つの監視で見る。
+      const workItemCheck =
+        stop.workItemCheck ??
+        (stop.workItemId === null
+          ? NEVER_STOPPED
+          : defaultWorkItemStopCheck(stop.workItemId));
+      // 変数と作業項目はループの前に1回だけ読み、その後はループ全体にかけた監視で見る。
       // コマンドごとに読むと、読み取りの待ち(最長5秒)がコマンドの数だけ重なるためである。
-      const stoppedBefore = await checkStop(check);
-      const watch = watchStop(check, stop.intervalMs ?? STOP_CHECK_INTERVAL_MS);
+      const [stoppedBefore, itemStoppedBefore] = await Promise.all([
+        checkStop(check),
+        checkStop(workItemCheck),
+      ]);
+      const intervalMs = stop.intervalMs ?? STOP_CHECK_INTERVAL_MS;
+      const watch = watchStop(check, intervalMs);
+      const itemWatch = watchStop(workItemCheck, intervalMs);
       try {
         for (const command of commands) {
           const argv = command
@@ -336,9 +369,22 @@ export async function runAllowedCheckCommands(
             .split(/\s+/)
             .filter((token) => token.length > 0);
           if (argv.length === 0) continue;
-          // 全停止の間は、次のコマンドを起動しない。
-          if (stoppedBefore || watch.stopped()) {
-            results.push(stoppedResult(command));
+          // 全停止の間と、人が中止した作業項目は、次のコマンドを起動しない。
+          if (
+            stoppedBefore ||
+            itemStoppedBefore ||
+            watch.stopped() ||
+            itemWatch.stopped()
+          ) {
+            // 全停止だけが当たって見えるときは、作業項目の確認の読み取りが遅れただけかもしれないので、もう1回確かめる。
+            results.push(
+              stoppedResult(
+                command,
+                itemStoppedBefore ||
+                  itemWatch.stopped() ||
+                  (await checkStop(workItemCheck)),
+              ),
+            );
             break;
           }
           const result = await run(
@@ -348,12 +394,22 @@ export async function runAllowedCheckCommands(
               env,
               timeoutMs,
               maxOutputBytes: CHECK_COMMAND_MAX_OUTPUT_BYTES,
-              stopSignal: watch.signal,
+              stopSignal: mergeSignals(watch.signal, itemWatch.signal),
             },
           );
           if (sandbox !== null) await sandbox.settle();
-          if (watch.stopped() || result.stopped === true) {
-            results.push(stoppedResult(command));
+          if (
+            watch.stopped() ||
+            itemWatch.stopped() ||
+            result.stopped === true
+          ) {
+            // 全停止だけが当たって見えるときは、作業項目の確認の読み取りが遅れただけかもしれないので、もう1回確かめる。
+            results.push(
+              stoppedResult(
+                command,
+                itemWatch.stopped() || (await checkStop(workItemCheck)),
+              ),
+            );
             break;
           }
           const masked = maskSecrets(
@@ -373,6 +429,7 @@ export async function runAllowedCheckCommands(
         }
       } finally {
         watch.dispose();
+        itemWatch.dispose();
       }
     } finally {
       if (sandbox !== null) {

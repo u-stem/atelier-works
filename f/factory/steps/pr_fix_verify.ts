@@ -878,6 +878,7 @@ export async function main(
       undefined,
       undefined,
       checkSandbox,
+      { workItemId: work_item_id },
     );
     if (worktree_git_pointer !== null) {
       const pointer = worktree_git_pointer;
@@ -1025,6 +1026,7 @@ export async function main(
           undefined,
           undefined,
           checkSandbox,
+          { workItemId: work_item_id },
         );
         // 検査コマンドの生成物(無視されたファイル)を捨てる。残すと、次の検査で、
         // Claudeが書いた無視されたファイルと見分けられない。

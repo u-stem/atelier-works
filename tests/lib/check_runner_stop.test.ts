@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   CHECK_COMMAND_PATH,
   CHECK_STOPPED_NOTE,
+  CHECK_WORK_ITEM_STOPPED_NOTE,
   type CreateCheckHomeDir,
   runAllowedCheckCommands,
 } from "../../f/factory/lib/check_runner.ts";
 import type { CheckSandbox } from "../../f/factory/lib/check_sandbox.ts";
+import { boundedCheckFrom } from "../../f/factory/lib/stop_check.ts";
 import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import { createFakeCommandRunner, ok } from "./testSupport.ts";
 
@@ -30,7 +32,7 @@ function runWith(
     home,
     CHECK_COMMAND_PATH,
     null,
-    { check: async () => stopped },
+    { workItemId: null, check: async () => stopped },
   );
   return { fake, results };
 }
@@ -69,7 +71,7 @@ function runWithSandbox(
     home,
     CHECK_COMMAND_PATH,
     sandbox,
-    { check: async () => false },
+    { workItemId: null, check: async () => false },
   );
 }
 
@@ -143,6 +145,7 @@ describe("runAllowedCheckCommands while the factory is stopped", () => {
       CHECK_COMMAND_PATH,
       null,
       {
+        workItemId: null,
         check: async () => {
           reads += 1;
           return false;
@@ -170,7 +173,7 @@ describe("runAllowedCheckCommands while the factory is stopped", () => {
       home,
       CHECK_COMMAND_PATH,
       null,
-      { check: async () => stopNow, intervalMs: 5 },
+      { workItemId: null, check: async () => stopNow, intervalMs: 5 },
     );
     expect(fake.calls.length).toBe(1);
   });
@@ -179,5 +182,176 @@ describe("runAllowedCheckCommands while the factory is stopped", () => {
     const { fake, results } = runWith([ok(), ok()], ["a", "b"], false);
     await results;
     expect(fake.calls.length).toBe(2);
+  });
+});
+
+describe("runAllowedCheckCommands while a person has cancelled the work item", () => {
+  function runWithItem(
+    responses: readonly CommandResult[],
+    commands: readonly string[],
+    stop: {
+      readonly all?: () => Promise<boolean>;
+      readonly item: () => Promise<boolean>;
+      readonly intervalMs?: number;
+    },
+  ) {
+    const fake = createFakeCommandRunner(responses);
+    const results = runAllowedCheckCommands(
+      fake.run,
+      "/work",
+      commands,
+      1000,
+      home,
+      CHECK_COMMAND_PATH,
+      null,
+      {
+        workItemId: 7,
+        check: stop.all ?? (async () => false),
+        workItemCheck: stop.item,
+        ...(stop.intervalMs === undefined
+          ? {}
+          : { intervalMs: stop.intervalMs }),
+      },
+    );
+    return { fake, results };
+  }
+
+  test("does not run a command once the work item is cancelled", async () => {
+    const { fake, results } = runWithItem([], ["true"], {
+      item: async () => true,
+    });
+    await results;
+    expect(fake.calls.length).toBe(0);
+  });
+
+  test("reports the command it did not run as stopped", async () => {
+    const { results } = runWithItem([], ["true"], { item: async () => true });
+    expect((await results)[0]?.stopped).toBe(true);
+  });
+
+  test("explains that the work item was stopped", async () => {
+    const { results } = runWithItem([], ["true"], { item: async () => true });
+    expect((await results)[0]?.output).toBe(CHECK_WORK_ITEM_STOPPED_NOTE);
+  });
+
+  test("keeps the note of the stop-all when only the stop-all is placed", async () => {
+    const { results } = runWithItem([], ["true"], {
+      all: async () => true,
+      item: async () => false,
+    });
+    expect((await results)[0]?.output).toBe(CHECK_STOPPED_NOTE);
+  });
+
+  test("prefers the note of the work item when both are placed", async () => {
+    const { results } = runWithItem([], ["true"], {
+      all: async () => true,
+      item: async () => true,
+    });
+    expect((await results)[0]?.output).toBe(CHECK_WORK_ITEM_STOPPED_NOTE);
+  });
+
+  test("notes the work item when only the watch of the work item sees the cancel during a command", async () => {
+    let stopNow = false;
+    const fake = createFakeCommandRunner([ok()]);
+    const run: typeof fake.run = async (argv, options) => {
+      stopNow = true;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return fake.run(argv, options);
+    };
+    const results = await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["a"],
+      1000,
+      home,
+      CHECK_COMMAND_PATH,
+      null,
+      {
+        workItemId: 7,
+        check: async () => false,
+        workItemCheck: async () => stopNow,
+        intervalMs: 5,
+      },
+    );
+    expect(results[0]?.output).toBe(CHECK_WORK_ITEM_STOPPED_NOTE);
+  });
+
+  test("does not run the next command once the watch sees the cancel", async () => {
+    let stopNow = false;
+    const fake = createFakeCommandRunner([ok(), ok()]);
+    const run: typeof fake.run = async (argv, options) => {
+      const result = await fake.run(argv, options);
+      stopNow = true;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return result;
+    };
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["a", "b"],
+      1000,
+      home,
+      CHECK_COMMAND_PATH,
+      null,
+      {
+        workItemId: 7,
+        check: async () => false,
+        workItemCheck: async () => stopNow,
+        intervalMs: 5,
+      },
+    );
+    expect(fake.calls.length).toBe(1);
+  });
+
+  test("reads the work item once for several commands", async () => {
+    let reads = 0;
+    const { results } = runWithItem([ok(), ok(), ok()], ["a", "b", "c"], {
+      item: async () => {
+        reads += 1;
+        return false;
+      },
+    });
+    await results;
+    expect(reads).toBe(1);
+  });
+
+  test("runs every command while the work item is not cancelled", async () => {
+    const { fake, results } = runWithItem([ok(), ok()], ["a", "b"], {
+      item: async () => false,
+    });
+    await results;
+    expect(fake.calls.length).toBe(2);
+  });
+
+  test("stops on the stop-all although the work item check never returns", async () => {
+    const hanging = boundedCheckFrom(() => new Promise<boolean>(() => {}), 10);
+    const { fake, results } = runWithItem([], ["true"], {
+      all: async () => true,
+      item: hanging,
+    });
+    await results;
+    expect(fake.calls.length).toBe(0);
+  });
+
+  test("reads the work item again before it explains a stop that only the stop-all seemed to cause", async () => {
+    let reads = 0;
+    const { results } = runWithItem([], ["true"], {
+      all: async () => true,
+      item: async () => {
+        reads += 1;
+        return reads > 1;
+      },
+    });
+    expect((await results)[0]?.output).toBe(CHECK_WORK_ITEM_STOPPED_NOTE);
+  });
+
+  test("does not stop when the work item check throws", async () => {
+    const { fake, results } = runWithItem([ok()], ["true"], {
+      item: async () => {
+        throw new Error("api down");
+      },
+    });
+    await results;
+    expect(fake.calls.length).toBe(1);
   });
 });

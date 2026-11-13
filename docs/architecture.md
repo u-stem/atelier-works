@@ -634,6 +634,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/model_text` | script | [LIB] モデルの出力の文字列の整形 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
 | `f/factory/lib/stream_cap` | script | [LIB] 上限つきのストリームの読み取り |
+| `f/factory/lib/work_item_stop` | script | [LIB] 人が中止した作業項目の停止の確認 |
 | `f/factory/lib/operator_cancel` | script | [LIB] 人による作業項目の中止の決まり |
 | `f/factory/lib/profile` | script | [LIB] 作業項目の進め方ごとの承認の要否 |
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |

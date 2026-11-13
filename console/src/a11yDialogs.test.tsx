@@ -236,6 +236,19 @@ const CASES: readonly (readonly [string, Draw])[] = [
     ),
   ],
   [
+    "the work item cancel dialog of an Issue that is being implemented",
+    () => (
+      <WorkItemCancelDialog
+        open
+        workItemId={7}
+        kind="issue"
+        status="implementing"
+        onConfirm={NOOP}
+        onCancel={NOOP}
+      />
+    ),
+  ],
+  [
     "the schedule stop dialog",
     () => (
       <ScheduleStopDialog

@@ -40,6 +40,7 @@ import {
 import { workItemStatusLabel } from "./labels.ts";
 import { formatShortAbsoluteIso } from "./relativeTime.ts";
 import { safeText } from "./safeText.ts";
+import { WORK_ITEM_CANCEL_RUNNING_STATUSES } from "./workItemCancel.ts";
 
 /**
  * 画面に出す知らせ。
@@ -388,10 +389,13 @@ export function describeWorkItemCancelResult(
     result.withdrawn_approval_requests === 0
       ? ""
       : `保留中の承認依頼${String(result.withdrawn_approval_requests)}件を期限切れにしました。`;
+  const running = WORK_ITEM_CANCEL_RUNNING_STATUSES.includes(result.from_status)
+    ? "動いているジョブが止まるまで、通常は数十秒かかります。"
+    : "";
   return noteActionAudit(
     {
       tone: "success",
-      message: `作業項目 #${String(result.work_item_id)} を中止しました。${withdrawn}`,
+      message: `作業項目 #${String(result.work_item_id)} を中止しました。${withdrawn}${running}`,
     },
     result.action_audit,
   );

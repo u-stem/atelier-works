@@ -131,6 +131,32 @@ describe("cancelWorkItemFromConsole", () => {
     });
   });
 
+  test.each(["picked", "requirements_generating", "designing", "implementing"])(
+    "cancels an Issue whose flow is running in %s",
+    async (status) => {
+      const { ports } = harness({ row: { id: 7, kind: "issue", status } });
+      expect(await cancelWorkItemFromConsole(7, ports)).toMatchObject({
+        found: true,
+        refused: false,
+        from_status: status,
+      });
+    },
+  );
+
+  test.each([
+    ["pr_fix", "fixing"],
+    ["pr_review", "reviewing"],
+    ["audit", "auditing"],
+    ["investigate", "investigating"],
+    ["audit", "picked"],
+    ["dependabot", "picked"],
+  ])("still refuses a %s whose flow is running in %s", async (kind, status) => {
+    const { ports } = harness({ row: { id: 7, kind, status } });
+    expect(await cancelWorkItemFromConsole(7, ports)).toMatchObject({
+      reason: "not_cancellable",
+    });
+  });
+
   test("reads the row, records, cancels and records the outcome, in that order", async () => {
     const { ports, events } = harness();
     await cancelWorkItemFromConsole(7, ports);
@@ -204,7 +230,7 @@ describe("cancelWorkItemFromConsole", () => {
 
   test("refuses a work item whose state is not on the table", async () => {
     const { ports } = harness({
-      row: { id: 7, kind: "issue", status: "implementing" },
+      row: { id: 7, kind: "issue", status: "pr_open" },
     });
     expect(await cancelWorkItemFromConsole(7, ports)).toEqual({
       found: true,

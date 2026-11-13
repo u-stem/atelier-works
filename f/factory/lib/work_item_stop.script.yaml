@@ -1,0 +1,9 @@
+summary: '[LIB] 人が中止した作業項目の停止の確認'
+description: 内部ライブラリです。直接実行するものではありません。人が中止した作業項目を、実行中のClaudeと検査から見つけて止める確認と、失敗の処理を静かにする判定を持ちます。
+lock: '!inline f/factory/lib/work_item_stop.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -365,6 +365,14 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 書き換えられると、実行中の作業項目を止めたり、記録なしで中止したり、承認依頼を残したまま中止したりできる。
  * 注記が変わると、監視が人の中止を見分けられず、中止した作業項目の直す回を起動し直す。
  * 2つの`.script.lock`は守らない。scriptのlockは`windmill-client`を含み、libのlockは依存の無いlibのlockと同じ扱いである。
+ * 人が中止した作業項目を、動いているClaudeと検査から見つけて止める部品(`lib/work_item_stop.ts`)と、その`.script.yaml`も守る。
+ * 止める確認と、失敗の処理(`on_error_flow.ts`)を静かにする判定を持つ。
+ * 書き換えられると、中止した作業項目のClaudeと検査が止まらなくなるか、人の中止の失敗が通知に出続けるか、別の実行の失敗が静かになる。
+ * 部品のテスト(`tests/lib/work_item_stop.test.ts`)と、失敗の処理と確認の配線を走査で固定するテスト(`tests/scripts/work_item_stop_wiring.test.ts`)も守る。
+ * 配線のテストは、`on_error_flow.ts`が判定に`isFailureSilenced`だけを使うことと、確認を呼び出し側が差し替えられないことと、検査の呼び出しが作業項目を結ぶことを固定する。
+ * `on_error_flow.ts`は日常的に直すので守らない。配線を、保護されたこのテストが固定する。
+ * 全停止と作業項目の確認を動かす側の振る舞いのテスト(`tests/lib/stop_check.test.ts`、`tests/lib/claude_stop.test.ts`、`tests/lib/check_runner_stop.test.ts`)も守る。
+ * `lib/work_item_stop.script.lock`は、`windmill-client`を含むので守らない。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -718,6 +726,13 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/operator_cancel.ts",
   "f/factory/lib/operator_cancel.script.yaml",
   "tests/lib/operator_cancel.test.ts",
+  "f/factory/lib/work_item_stop.ts",
+  "f/factory/lib/work_item_stop.script.yaml",
+  "tests/lib/work_item_stop.test.ts",
+  "tests/scripts/work_item_stop_wiring.test.ts",
+  "tests/lib/stop_check.test.ts",
+  "tests/lib/claude_stop.test.ts",
+  "tests/lib/check_runner_stop.test.ts",
 ];
 
 /**

@@ -16,13 +16,13 @@ function renderAction(kind: string, status: string) {
   );
 }
 
-function renderDialog(open: boolean) {
+function renderDialog(open: boolean, status = "awaiting_approval") {
   return renderToStaticMarkup(
     <WorkItemCancelDialog
       open={open}
       workItemId={7}
       kind="issue"
-      status="awaiting_approval"
+      status={status}
       onConfirm={() => undefined}
       onCancel={() => undefined}
     />,
@@ -36,8 +36,16 @@ describe("WorkItemCancelAction", () => {
     );
   });
 
-  test("renders nothing for a work item that is running", () => {
-    expect(renderAction("issue", "implementing")).toBe("");
+  test("offers to cancel an Issue whose flow is running", () => {
+    expect(renderAction("issue", "implementing")).toContain("作業項目を中止");
+  });
+
+  test("renders nothing for a work item whose flow runs and that the table does not allow", () => {
+    expect(renderAction("pr_fix", "fixing")).toBe("");
+  });
+
+  test("renders nothing for an Issue whose pull request is open", () => {
+    expect(renderAction("issue", "pr_open")).toBe("");
   });
 
   test("renders nothing for a work item that is already cancelled", () => {
@@ -74,6 +82,16 @@ describe("WorkItemCancelDialog", () => {
 
   test("says that a cancelled work item cannot be resumed", () => {
     expect(renderDialog(true)).toContain("再開できません");
+  });
+
+  test("warns about the running job when the Issue is being implemented", () => {
+    expect(renderDialog(true, "implementing")).toContain(
+      "「ジョブを中止」は押さないでください",
+    );
+  });
+
+  test("does not warn about a running job for an Issue that waits for an approval", () => {
+    expect(renderDialog(true)).not.toContain("「ジョブを中止」");
   });
 
   test("has no body while it is closed", () => {

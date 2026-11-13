@@ -79,6 +79,7 @@ async function noteAfterFlowFailure(
       recordFailure: async () => {},
       hasSupersedingPrReview: async () => false,
       findInvestigationByFlowJobId: async () => null,
+      readCancelNote: async () => null,
       updateStatusIfLeaseHolder: async (_id, _from, _to, _job, note) => {
         notes.push(note);
         return true;
@@ -141,15 +142,17 @@ describe("the failure of a CI round, from the exception of the step to the recov
     expect(await ciRecovery(reason)).toEqual({ kind: "release", hold });
   });
 
-  test.each(["claude_error", "non_zero_exit", "invalid_json"] as const)(
-    "releases the row on %s without a hold",
-    async (reason) => {
-      expect(await ciRecovery(reason)).toEqual({
-        kind: "release",
-        hold: null,
-      });
-    },
-  );
+  test.each([
+    "claude_error",
+    "non_zero_exit",
+    "invalid_json",
+    "work_item_stopped",
+  ] as const)("releases the row on %s without a hold", async (reason) => {
+    expect(await ciRecovery(reason)).toEqual({
+      kind: "release",
+      hold: null,
+    });
+  });
 
   test("carries a marker in the exception of the step", () => {
     expect(

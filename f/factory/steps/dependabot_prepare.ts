@@ -351,6 +351,8 @@ export const DEPENDABOT_INSTALL_COMMANDS: readonly string[] = Object.freeze([
 export type InstallDeps = {
   readonly run: CommandRunner;
   readonly sandbox: CheckSandbox;
+  /** インストールを結ぶ作業項目。人が作業項目を中止すると、実行中のインストールを止める。 */
+  readonly workItemId: number;
   readonly runChecks?: typeof runAllowedCheckCommands;
 };
 
@@ -373,6 +375,7 @@ export function runDependabotInstall(
     undefined,
     undefined,
     deps.sandbox,
+    { workItemId: deps.workItemId },
   );
 }
 
@@ -1192,6 +1195,7 @@ export async function main(
       runInstall: (worktreeDir) =>
         runDependabotInstall(worktreeDir, {
           run: runCommand,
+          workItemId: work_item_id,
           // 枠を片付けられずに飛ばしたときなどは、インストールを止めずにnoticeで知らせる。
           sandbox: checkSandboxFromEnv(process.env, async (notice) => {
             await addNoticeUnlessUnresolved(notice);

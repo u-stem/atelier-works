@@ -40,7 +40,7 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 | `console_deploy_decide` | 保護パスの変更の反映の承認か却下 | `decideDeploy` |
 | `console_stop_all` | 全停止の設置 | `stopAll` |
 | `console_stop_all_release` | 全停止の解除 | `releaseStopAll` |
-| `console_work_item_cancel` | 実行中のジョブが無い作業項目1件の中止 | `cancelWorkItem` |
+| `console_work_item_cancel` | 作業項目1件の中止(実行中の状態は、Issueの4つ) | `cancelWorkItem` |
 
 保留や凍結を置くscriptは`console_hold_place`の1本で、置ける種類と期限の上限を固定する。
 スケジュールを止める`console_schedule_stop`は、止めてよいスケジュールの表を持つ。

@@ -4,7 +4,9 @@ import {
   isOperatorCancelledAtHead,
   isOperatorCancelledItem,
   isOperatorCancelledNote,
+  isOperatorCancelRunning,
   OPERATOR_CANCEL_PR_ROW_KINDS,
+  OPERATOR_CANCEL_RUNNING_STATUSES,
   OPERATOR_CANCEL_WITHDRAWN_REQUEST_KINDS,
   OPERATOR_CANCELLABLE_STATUSES,
   OPERATOR_CANCELLED_NOTE,
@@ -55,15 +57,17 @@ describe("the table of the work items a person can cancel", () => {
     expect(unknown).toEqual([]);
   });
 
-  // 終端でない状態では、ジョブが動いているので、実行中の中止の仕組みが無いまま止めない。
-  test("names no state in which a flow is still running", () => {
+  // 終端でない状態では、ジョブが動いている。動いているClaudeと検査を止める仕組みがある状態だけを入れる。
+  test("names no state in which a flow is running unless the stop covers it", () => {
     const running = Object.values(OPERATOR_CANCELLABLE_STATUSES)
       .flat()
       .filter(
         (status) =>
           !TERMINAL_WORK_ITEM_STATUSES.some((known) => known === status) &&
           status !== "awaiting_approval" &&
-          status !== "awaiting_design_approval",
+          status !== "awaiting_design_approval" &&
+          status !== "approved" &&
+          !OPERATOR_CANCEL_RUNNING_STATUSES.includes(status),
       );
     expect(running).toEqual([]);
   });
@@ -88,9 +92,12 @@ describe("the table of the work items a person can cancel", () => {
     expect(isOperatorCancellable("issue", "approved")).toBe(true);
   });
 
-  test("does not let a person cancel an Issue that is being implemented", () => {
-    expect(isOperatorCancellable("issue", "implementing")).toBe(false);
-  });
+  test.each(["picked", "requirements_generating", "designing", "implementing"])(
+    "lets a person cancel an Issue in the running state %s",
+    (status) => {
+      expect(isOperatorCancellable("issue", status)).toBe(true);
+    },
+  );
 
   test("does not let a person cancel an Issue whose pull request is open", () => {
     expect(isOperatorCancellable("issue", "pr_open")).toBe(false);
@@ -118,6 +125,51 @@ describe("the table of the work items a person can cancel", () => {
 
   test("does not take a key of the prototype for a kind", () => {
     expect(operatorCancellableStatuses("constructor")).toEqual([]);
+  });
+});
+
+describe("the running states that a person can cancel", () => {
+  test("are the states of the Issue flows", () => {
+    expect([...OPERATOR_CANCEL_RUNNING_STATUSES].sort()).toEqual([
+      "designing",
+      "implementing",
+      "picked",
+      "requirements_generating",
+    ]);
+  });
+
+  test("are all in the table of the cancellable states", () => {
+    const outside = OPERATOR_CANCEL_RUNNING_STATUSES.filter(
+      (status) =>
+        !Object.values(OPERATOR_CANCELLABLE_STATUSES).some((statuses) =>
+          statuses.includes(status),
+        ),
+    );
+    expect(outside).toEqual([]);
+  });
+
+  test("are not terminal states", () => {
+    expect(
+      OPERATOR_CANCEL_RUNNING_STATUSES.filter((status) =>
+        TERMINAL_WORK_ITEM_STATUSES.some((known) => known === status),
+      ),
+    ).toEqual([]);
+  });
+
+  test("make a running Issue a running cancel", () => {
+    expect(isOperatorCancelRunning("issue", "implementing")).toBe(true);
+  });
+
+  test("do not make a waiting Issue a running cancel", () => {
+    expect(isOperatorCancelRunning("issue", "awaiting_approval")).toBe(false);
+  });
+
+  test("do not make a failed Issue a running cancel", () => {
+    expect(isOperatorCancelRunning("issue", "failed")).toBe(false);
+  });
+
+  test("do not make a state outside the table a running cancel", () => {
+    expect(isOperatorCancelRunning("pr_fix", "fixing")).toBe(false);
   });
 });
 

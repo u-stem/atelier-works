@@ -182,6 +182,7 @@ import {
   DESIGN_FOR_IMPLEMENT_MAX_CHARS,
   normalizeDesignForImplement,
 } from "../f/factory/lib/model_text.ts";
+import { OPERATOR_CANCELLED_NOTE } from "../f/factory/lib/operator_cancel.ts";
 import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "../f/factory/lib/pr_ci_support.ts";
 import {
   getCleanupSummary,
@@ -193,6 +194,10 @@ import type {
   GhPullRequestWrite,
   WorkItemStatus,
 } from "../f/factory/lib/types.ts";
+import {
+  isWorkItemStopped,
+  sdkWorkItemStopReadIo,
+} from "../f/factory/lib/work_item_stop.ts";
 import {
   runConsoleQuery,
   runConsoleSummary,
@@ -13089,6 +13094,58 @@ check(
   afterNoticeError,
 );
 await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
+
+// 作業項目の停止の確認が読む、2つの表を1文で引くSQL。人の中止だけが真になり、行が無いときは`null`になる。
+{
+  const stopIo = (id: number) => sdkWorkItemStopReadIo(id, sql);
+  const stopState = async (id: number) => {
+    const state = await stopIo(id).readState();
+    return state === null ? null : isWorkItemStopped(state);
+  };
+  const operatorCancelled = await issueWorkItem(
+    987_101,
+    1,
+    "implementing",
+    "stop",
+  );
+  await updateStatusIfCurrent(
+    operatorCancelled,
+    "implementing",
+    "cancelled",
+    OPERATOR_CANCELLED_NOTE,
+    sql,
+  );
+  const reconcileCancelled = await issueWorkItem(
+    987_102,
+    1,
+    "implementing",
+    "stop",
+  );
+  await updateStatusIfCurrent(
+    reconcileCancelled,
+    "implementing",
+    "cancelled",
+    "reconcile: pr_closed (actionable)",
+    sql,
+  );
+  const running = await issueWorkItem(987_103, 1, "implementing", "stop");
+  check(
+    "work item stop: a work item that a person cancelled stops",
+    (await stopState(operatorCancelled)) === true,
+  );
+  check(
+    "work item stop: a work item that another cause cancelled does not stop",
+    (await stopState(reconcileCancelled)) === false,
+  );
+  check(
+    "work item stop: a work item that is still running does not stop",
+    (await stopState(running)) === false,
+  );
+  check(
+    "work item stop: a work item that does not exist reads as no row",
+    (await stopState(2 ** 52)) === null,
+  );
+}
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。

@@ -39,6 +39,18 @@ import {
 export const IMPLEMENT_DESIGN_GAP_NOTE_PREFIX = "implement design gap: ";
 
 /**
+ * 実装のフローが、Issueが閉じたために作業項目を取り消すときの、遷移の注記。
+ * 取り消す場面を列挙値で選び、注記は固定の文にする。step間の引数からは取らない。
+ * `closed_before_start`は、準備のステップが取り消しの理由に使う文と同じである(テストが一致を確かめる)。
+ */
+export const IMPLEMENT_CANCEL_NOTES = {
+  closed_before_start: "issue closed before implementation started",
+  closed_during_run: "issue closed during implementation",
+} as const;
+
+export type ImplementCancelReason = keyof typeof IMPLEMENT_CANCEL_NOTES;
+
+/**
  * 設計へ戻す上限に達して`needs_human`にした遷移の注記の接頭辞。
  * 理由の文は固定の英文(`DESIGN_GAP_EXHAUSTED_REASON`)で、報告は注記だけに残す。再実行はこの接頭辞で報告を読み出す。
  */

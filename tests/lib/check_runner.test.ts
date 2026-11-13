@@ -46,6 +46,9 @@ describe("runAllowedCheckCommands", () => {
       ["mise run check"],
       1000,
       fakeCheckHomeDir().factory,
+      undefined,
+      undefined,
+      { workItemId: null },
     );
     expect(results[0]?.ok).toBe(true);
   });
@@ -58,6 +61,9 @@ describe("runAllowedCheckCommands", () => {
       ["mise run check"],
       1000,
       fakeCheckHomeDir().factory,
+      undefined,
+      undefined,
+      { workItemId: null },
     );
     expect(results[0]?.ok).toBe(false);
   });
@@ -70,6 +76,9 @@ describe("runAllowedCheckCommands", () => {
       ["mise run check"],
       1000,
       fakeCheckHomeDir().factory,
+      undefined,
+      undefined,
+      { workItemId: null },
     );
     expect(results[0]?.timedOut).toBe(true);
   });
@@ -82,6 +91,9 @@ describe("runAllowedCheckCommands", () => {
       ["mise run check"],
       1000,
       fakeCheckHomeDir().factory,
+      undefined,
+      undefined,
+      { workItemId: null },
     );
     const checkCall = calls.find((call) => call.argv[0] === "mise");
     expect(checkCall?.argv).toEqual(["mise", "run", "check"]);
@@ -96,6 +108,8 @@ describe("runAllowedCheckCommands", () => {
       1000,
       fakeCheckHomeDir("/fake-check-home").factory,
       "/usr/bin",
+      undefined,
+      { workItemId: null },
     );
     const checkCall = calls[0];
     expect(checkCall?.options?.env).toEqual(
@@ -118,6 +132,9 @@ describe("runAllowedCheckCommands", () => {
         ["true"],
         1000,
         fakeCheckHomeDir().factory,
+        undefined,
+        undefined,
+        { workItemId: null },
       );
     } finally {
       if (before === undefined) delete process.env.WM_TOKEN;
@@ -137,6 +154,9 @@ describe("runAllowedCheckCommands", () => {
         ["true"],
         1000,
         fakeCheckHomeDir().factory,
+        undefined,
+        undefined,
+        { workItemId: null },
       );
     } finally {
       if (workerPath === undefined) delete process.env.PATH;
@@ -168,6 +188,9 @@ describe("runAllowedCheckCommands", () => {
       ["true"],
       1000,
       homeDir.factory,
+      undefined,
+      undefined,
+      { workItemId: null },
     );
     expect(homeDir.state.cleanupCalls).toBe(1);
   });
@@ -181,13 +204,25 @@ describe("runAllowedCheckCommands", () => {
       ["true"],
       1000,
       homeDir.factory,
+      undefined,
+      undefined,
+      { workItemId: null },
     );
     expect(homeDir.state.cleanupCalls).toBe(1);
   });
 
   test("the real default createHomeDir provides a HOME dir that no longer exists after the run", async () => {
     const { run, calls } = createFakeCommandRunner([ok("")]);
-    await runAllowedCheckCommands(run, "/work", ["true"], 1000);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      undefined,
+      undefined,
+      undefined,
+      { workItemId: null },
+    );
     const homeUsed = calls[0]?.options?.env?.HOME;
     expect(homeUsed !== undefined && existsSync(homeUsed)).toBe(false);
   });
@@ -199,7 +234,16 @@ describe("runAllowedCheckCommands", () => {
       tmpExisted = tmp !== undefined && existsSync(tmp);
       return ok("");
     };
-    await runAllowedCheckCommands(run, "/work", ["true"], 1000);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      undefined,
+      undefined,
+      undefined,
+      { workItemId: null },
+    );
     expect(tmpExisted).toBe(true);
   });
 
@@ -210,7 +254,16 @@ describe("runAllowedCheckCommands", () => {
       mode = tmp === undefined ? -1 : statSync(tmp).mode & 0o777;
       return ok("");
     };
-    await runAllowedCheckCommands(run, "/work", ["true"], 1000);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      undefined,
+      undefined,
+      undefined,
+      { workItemId: null },
+    );
     expect(mode).toBe(0o700);
   });
 
@@ -220,7 +273,16 @@ describe("runAllowedCheckCommands", () => {
     // Windmillのジョブの一時ディレクトリは、検査用のuidが入れない0700の下にありうる。
     process.env.TMPDIR = "/run/factory-tmp/fj-y";
     try {
-      await runAllowedCheckCommands(run, "/work", ["true"], 1000);
+      await runAllowedCheckCommands(
+        run,
+        "/work",
+        ["true"],
+        1000,
+        undefined,
+        undefined,
+        undefined,
+        { workItemId: null },
+      );
     } finally {
       if (before === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = before;
@@ -238,7 +300,16 @@ describe("runAllowedCheckCommands", () => {
           : readFileSync(join(home, CHECK_GITCONFIG_NAME), "utf8");
       return ok("");
     };
-    await runAllowedCheckCommands(run, "/work", ["true"], 1000);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      undefined,
+      undefined,
+      undefined,
+      { workItemId: null },
+    );
     expect(body).toBe(checkGitConfig("/work"));
   });
 
@@ -252,22 +323,47 @@ describe("runAllowedCheckCommands", () => {
           : statSync(join(home, CHECK_GITCONFIG_NAME)).mode & 0o777;
       return ok("");
     };
-    await runAllowedCheckCommands(run, "/work", ["true"], 1000);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      undefined,
+      undefined,
+      undefined,
+      { workItemId: null },
+    );
     expect(mode).toBe(0o600);
   });
 
   test("refuses a worktree path that would break the .gitconfig", async () => {
     const { run } = createFakeCommandRunner([ok("")]);
     await expect(
-      runAllowedCheckCommands(run, "/work\n[core]", ["true"], 1000),
+      runAllowedCheckCommands(
+        run,
+        "/work\n[core]",
+        ["true"],
+        1000,
+        undefined,
+        undefined,
+        undefined,
+        { workItemId: null },
+      ),
     ).rejects.toThrow("check sandbox: refusing a worktree path");
   });
 
   test("runs no command for a worktree path that would break the .gitconfig", async () => {
     const { run, calls } = createFakeCommandRunner([ok("")]);
-    await runAllowedCheckCommands(run, "/work\n[core]", ["true"], 1000).catch(
-      () => undefined,
-    );
+    await runAllowedCheckCommands(
+      run,
+      "/work\n[core]",
+      ["true"],
+      1000,
+      undefined,
+      undefined,
+      undefined,
+      { workItemId: null },
+    ).catch(() => undefined);
     expect(calls).toEqual([]);
   });
 
@@ -278,15 +374,42 @@ describe("runAllowedCheckCommands", () => {
       seen = input.worktreeDir;
       return { path: "/fake-check-home", cleanup: async () => {} };
     };
-    await runAllowedCheckCommands(run, "/work", ["true"], 1000, factory);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      factory,
+      undefined,
+      undefined,
+      { workItemId: null },
+    );
     expect(seen).toBe("/work");
   });
 
   test("two runs using the real default createHomeDir get different HOME dirs", async () => {
     const first = createFakeCommandRunner([ok("")]);
     const second = createFakeCommandRunner([ok("")]);
-    await runAllowedCheckCommands(first.run, "/work", ["true"], 1000);
-    await runAllowedCheckCommands(second.run, "/work", ["true"], 1000);
+    await runAllowedCheckCommands(
+      first.run,
+      "/work",
+      ["true"],
+      1000,
+      undefined,
+      undefined,
+      undefined,
+      { workItemId: null },
+    );
+    await runAllowedCheckCommands(
+      second.run,
+      "/work",
+      ["true"],
+      1000,
+      undefined,
+      undefined,
+      undefined,
+      { workItemId: null },
+    );
     const firstHome = first.calls[0]?.options?.env?.HOME;
     const secondHome = second.calls[0]?.options?.env?.HOME;
     expect(firstHome).not.toBe(secondHome);
@@ -300,6 +423,9 @@ describe("runAllowedCheckCommands", () => {
       ["bun test"],
       1000,
       fakeCheckHomeDir().factory,
+      undefined,
+      undefined,
+      { workItemId: null },
     );
     expect(results[0]?.output).toBe("out-line\nerr-line");
   });
@@ -313,6 +439,9 @@ describe("runAllowedCheckCommands", () => {
       ["bun test"],
       1000,
       fakeCheckHomeDir().factory,
+      undefined,
+      undefined,
+      { workItemId: null },
     );
     expect(results[0]?.output).toBe("leaked ***");
   });
@@ -325,6 +454,9 @@ describe("runAllowedCheckCommands", () => {
       ["bun test"],
       1000,
       fakeCheckHomeDir().factory,
+      undefined,
+      undefined,
+      { workItemId: null },
     );
     expect(calls[0]?.options?.maxOutputBytes).toBe(
       CHECK_COMMAND_MAX_OUTPUT_BYTES,
@@ -341,6 +473,9 @@ describe("runAllowedCheckCommands", () => {
       ["bun test"],
       1000,
       fakeCheckHomeDir().factory,
+      undefined,
+      undefined,
+      { workItemId: null },
     );
     expect(results[0]?.ok).toBe(false);
   });
@@ -409,6 +544,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(results.at(-1)?.ok).toBe(false);
   });
@@ -426,6 +562,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(results.at(-1)?.output).toContain("/work/bad");
   });
@@ -441,6 +578,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(results).toHaveLength(2);
   });
@@ -456,6 +594,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(events.at(-1)).toBe("escaping");
   });
@@ -473,6 +612,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     ).catch(() => {});
     expect(events).not.toContain("escaping");
   });
@@ -490,6 +630,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(results).toHaveLength(1);
   });
@@ -508,6 +649,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(results.at(-1)?.output).toContain("1 symlinks pointing outside");
   });
@@ -523,6 +665,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(results).toHaveLength(1);
   });
@@ -538,6 +681,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(calls[0]?.argv).toEqual(setprivArgv(identity, ["bun", "test"]));
   });
@@ -553,6 +697,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir("/home-x").factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(events.map((event) => event.split(" ")[0])).toEqual([
       "prepare",
@@ -576,6 +721,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir("/home-x").factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(events[0]).toBe("prepare /work /home-x");
   });
@@ -591,6 +737,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     ).catch(() => {});
     expect(events.some((event) => event.startsWith("release"))).toBe(true);
   });
@@ -608,6 +755,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     ).catch(() => {});
     expect(events.some((event) => event.startsWith("release"))).toBe(true);
   });
@@ -625,6 +773,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     ).catch(() => {});
     expect(events.some((event) => event.startsWith("release"))).toBe(true);
   });
@@ -642,6 +791,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir().factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     ).catch(() => {});
     expect(events.some((event) => event.startsWith("run"))).toBe(false);
   });
@@ -660,6 +810,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
         fakeCheckHomeDir().factory,
         "/usr/bin",
         sandbox,
+        { workItemId: null },
       ),
     ).rejects.toThrow("handover failed");
   });
@@ -678,6 +829,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       home.factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     ).catch(() => {});
     expect(home.state.cleanupCalls).toBe(1);
   });
@@ -696,6 +848,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       home.factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     ).catch(() => {});
     expect(home.state.cleanupCalls).toBe(0);
   });
@@ -712,6 +865,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       home.factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     ).catch(() => {});
     expect(home.state.cleanupCalls).toBe(1);
   });
@@ -730,6 +884,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
         fakeCheckHomeDir().factory,
         "/usr/bin",
         sandbox,
+        { workItemId: null },
       ),
     ).rejects.toThrow("take back failed");
   });
@@ -748,6 +903,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
         fakeCheckHomeDir().factory,
         "/usr/bin",
         sandbox,
+        { workItemId: null },
       ),
     ).rejects.toThrow("could not be stopped");
   });
@@ -774,6 +930,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(events.slice(-3).map((event) => event.split(" ")[0])).toEqual([
       "release",
@@ -793,6 +950,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       fakeCheckHomeDir("/home-x").factory,
       "/usr/bin",
       sandbox,
+      { workItemId: null },
     );
     expect(calls[0]?.options?.env).toEqual(
       checkEnv({ path: "/usr/bin", home: "/home-x", worktreeDir: "/work" }),

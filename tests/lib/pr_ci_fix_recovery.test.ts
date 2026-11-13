@@ -38,7 +38,11 @@ function item(
   };
 }
 
-/** 失敗の種類と、その種類で止まった行の保留の理由。`NON_RETRYABLE_REASONS`のすべてを持つ。 */
+/**
+ * 失敗の種類と、その種類で止まった行の保留の理由。
+ * `NON_RETRYABLE_REASONS`のうち、人が中止した作業項目の`work_item_stopped`を除くすべてを持つ。
+ * 人が中止した行は失敗にならないので、回復が読むことが無い。
+ */
 const CLAUDE_FAILURE_HOLDS = [
   ["timeout", "claude_run_failed"],
   ["run_budget_exceeded", "claude_run_failed"],
@@ -92,7 +96,12 @@ describe("the CI round whose Claude run failed in a way that repeats", () => {
     },
   );
 
-  test.each(["timeout", "run_budget_exceeded", "claude_error"] as const)(
+  test.each([
+    "timeout",
+    "run_budget_exceeded",
+    "claude_error",
+    "work_item_stopped",
+  ] as const)(
     "tells that the note of the verify step on %s does not wait",
     (reason) => {
       expect(isCiClaudeWaitNote(ciClaudeFailureText(reason))).toBe(false);
@@ -107,7 +116,9 @@ describe("the CI round whose Claude run failed in a way that repeats", () => {
     const mapped: readonly string[] = CLAUDE_FAILURE_HOLDS.map(
       ([reason]) => reason,
     );
-    expect(mapped).toEqual([...NON_RETRYABLE_REASONS]);
+    expect(mapped).toEqual(
+      NON_RETRYABLE_REASONS.filter((reason) => reason !== "work_item_stopped"),
+    );
   });
 
   test("lists both notes of the usage limit and the stop as the ones that wait", () => {
