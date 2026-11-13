@@ -217,6 +217,8 @@ Windmillの資産の配置、secretとconfigの取得、`//native`を使わな�
 適用済みのmigrationは書き換えず、変更は新しいmigrationで足す。
 書き換えは、新規環境と復元にだけ効き、本番とずれるためである。
 migrationの文面はテストで固定しないので、`test:db`が拾うのは振る舞いの変化だけである。
+全migrationに共通する書き方は、`tests/scripts/migration_conventions.test.ts`が確かめる。
+対象は、版の名前と日時、upとdownの対、`BEGIN`から`END`までの1つのトランザクション、`SET LOCAL lock_timeout`である。
 
 ## 検証コマンド
 
