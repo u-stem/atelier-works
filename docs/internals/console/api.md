@@ -14,7 +14,7 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 画面は、取得の`queries.ts`と書き込みの`writes.ts`にある型付きの関数だけを使う。
 `src/api/`の外が`windmill.ts`をimportしないことは、契約テストが確かめる。
 
-呼べるscriptは、`SCRIPT_PATHS`の許可リストにある次の18個だけである。
+呼べるscriptは、`SCRIPT_PATHS`の許可リストにある次の22個だけである。
 どれもtag`console`を持ち、Console用のworkerで動く。
 
 | 名前 | 用途 | 型付きの関数 |
@@ -38,6 +38,9 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 | `console_hold_place` | 保留か凍結の設置 | `placeHold` |
 | `console_schedule_stop` | scheduleの無効化 | `stopSchedule` |
 | `console_deploy_decide` | 保護パスの変更の反映の承認か却下 | `decideDeploy` |
+| `console_stop_all` | 全停止の設置 | `stopAll` |
+| `console_stop_all_release` | 全停止の解除 | `releaseStopAll` |
+| `console_work_item_cancel` | 実行中のジョブが無い作業項目1件の中止 | `cancelWorkItem` |
 
 保留や凍結を置くscriptは`console_hold_place`の1本で、置ける種類と期限の上限を固定する。
 スケジュールを止める`console_schedule_stop`は、止めてよいスケジュールの表を持つ。

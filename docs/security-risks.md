@@ -30,7 +30,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | LBL | [ラベル付与の制限](#ラベル付与の制限) | [セキュリティ](security.md) | 10 |
 | CLS | [閉じた人の確認](#閉じた人の確認) | [セキュリティ](security.md) | 03 |
 | HOST | [ホストの実行役の境界](#ホストの実行役の境界) | [ホストの実行役の内部仕様](internals/host-apply.md) | 56 |
-| CON | [Consoleの安全策](#consoleの安全策) | [Consoleの安全策の内部仕様](internals/console/security.md) | 42 |
+| CON | [Consoleの安全策](#consoleの安全策) | [Consoleの安全策の内部仕様](internals/console/security.md) | 43 |
 | DIO | [draw.ioの図の描画](#drawioの図の描画) | [Consoleの安全策の内部仕様](internals/console/security.md) | 17 |
 | INV | [調査の隔離](#調査の隔離) | [調査の隔離の内部仕様](internals/investigate.md) | 41 |
 | DES | [設計書の生成の安全策](#設計書の生成の安全策) | [設計書の生成](internals/design.md) | 46 |
@@ -441,6 +441,12 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
 | <a id="r-con-39"></a>R-CON-39 | ローカルのClaudeのセッションも、運用者のwmillの資格で、Consoleの取消と同じことができる。`wmill job cancel`や、取り消しのAPI(`curl`での`/jobs_u/queue/cancel/<id>`)は、許可表、tag`console`の除外、操作の記録のどれも通らない。そのため、`self_update`、migrationを走らせるscript、`cleanup_*`のジョブも止められる。フックが止めるのは、書き込みのscriptを名前で呼ぶ経路だけである。この経路は、`AGENTS.wmill.md`がジョブのデバッグに勧める正当な操作でもあるので、フックで止めずに受け入れる。止めると、障害のときにジョブを止める手段を、セッションから奪うためである。 | [ジョブの取消](internals/console/security.md#ジョブの取消) |
+
+### 作業項目の中止
+
+| ID | 残るリスクと、受け入れる理由 | 関連する節 |
+| --- | --- | --- |
+| <a id="r-con-43"></a>R-CON-43 | 承認待ちへ移した直後で、フローの通知の手順がまだ動いている作業項目を中止すると、承認依頼の通知が後から届くことがある。依頼は中止と同じ文で期限切れにしたので、通知から開いても判断できない。通知を止めるには、実行中のフローを止める仕組みが要る。この操作は実行中のジョブが無い作業項目だけを扱うので、受け入れる。 | [作業項目の中止](internals/console/security.md#作業項目の中止) |
 
 ### 定期ジョブの再実行
 
