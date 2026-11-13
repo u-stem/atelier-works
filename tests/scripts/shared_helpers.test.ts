@@ -65,6 +65,15 @@ const IS_RECORD_HOMES: Readonly<Record<string, string>> = {
   "tests/scripts/claude-hooks/settings.test.ts": PROTECTED_LEAF,
 };
 
+/** `errorMessage`を定義してよいファイルと、その理由。`log.ts`の定義は、秘密情報を常にマスクする。 */
+const ERROR_MESSAGE_HOMES: Readonly<Record<string, string>> = {
+  "f/factory/lib/log.ts": "the shared leaf module",
+  "f/factory/lib/freezes.ts": PROTECTED_CLOSURE,
+  "f/factory/lib/freeze_apply.ts": PROTECTED_CLOSURE,
+  "scripts/freeze.ts": PROTECTED_CLOSURE,
+  "scripts/hold.ts": PROTECTED_CLOSURE,
+};
+
 describe("isRecord", () => {
   test("is defined only in types.ts and the files that cannot import it", () => {
     expect(filesDefining("isRecord")).toEqual(
@@ -73,8 +82,19 @@ describe("isRecord", () => {
   });
 });
 
-describe("the shared leaf modules", () => {
-  test.each(["f/factory/lib/types.ts"])("%s imports nothing", (path) => {
-    expect(read(path)).not.toMatch(/^\s*(?:import|export)\b[^;]*\bfrom\s+"/m);
+describe("errorMessage", () => {
+  test("is defined only in log.ts and the files that cannot import it", () => {
+    expect(filesDefining("errorMessage")).toEqual(
+      Object.keys(ERROR_MESSAGE_HOMES).sort(),
+    );
   });
+});
+
+describe("the shared leaf modules", () => {
+  test.each(["f/factory/lib/types.ts", "f/factory/lib/log.ts"])(
+    "%s imports nothing",
+    (path) => {
+      expect(read(path)).not.toMatch(/^\s*(?:import|export)\b[^;]*\bfrom\s+"/m);
+    },
+  );
 });

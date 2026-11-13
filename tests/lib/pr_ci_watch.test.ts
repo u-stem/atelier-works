@@ -1889,6 +1889,23 @@ describe("unreadable runs", () => {
     expect(h.transitions).toEqual([]);
   });
 
+  test("masks a known token in the logged error of an unreadable pull request", async () => {
+    const h = harness({
+      prs: {
+        [PR_KEY]: new GitHubHttpError(
+          "not found for ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+          404,
+        ),
+      },
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(
+      h.logs.find((line) => line.message === "pr ci is not readable")?.fields
+        ?.error,
+    ).toBe("not found for ***");
+  });
+
   test("does not resolve the failure notices of a day-old failed row that returns 403", async () => {
     const h = harness({
       prs: { [PR_KEY]: pr() },

@@ -1,9 +1,34 @@
 import { describe, expect, test } from "bun:test";
 import {
+  errorMessage,
   escapeReasonSeparator,
   logger,
   maskSecrets,
 } from "../../f/factory/lib/log.ts";
+
+describe("errorMessage", () => {
+  test("returns the message of an Error", () => {
+    expect(errorMessage(new Error("disk full"))).toBe("disk full");
+  });
+
+  test("turns a value that is not an Error into a string", () => {
+    expect(errorMessage(42)).toBe("42");
+  });
+
+  test("masks a known token in the message of an Error", () => {
+    expect(
+      errorMessage(
+        new Error("token=ghp_0123456789abcdefghijklmnopqrstuvwxyz failed"),
+      ),
+    ).toBe("token=*** failed");
+  });
+
+  test("masks a known token in a thrown string", () => {
+    expect(
+      errorMessage("token=ghp_0123456789abcdefghijklmnopqrstuvwxyz failed"),
+    ).toBe("token=*** failed");
+  });
+});
 
 describe("maskSecrets", () => {
   test("masks a GitHub fine-grained PAT", () => {

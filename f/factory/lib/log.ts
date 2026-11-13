@@ -49,6 +49,14 @@ export function maskSecrets(
 }
 
 /**
+ * 例外の文を取り出し、既知の形式の秘密情報をマスクして返す。
+ * `Error`でない値は`String`で文字列にする。
+ */
+export function errorMessage(_err: unknown): string {
+  return "";
+}
+
+/**
  * 理由の文字列に埋め込む詳細の中の`"; "`を`", "`に置き換えて返す。
  * 理由は`"; "`でつないだ項目の一覧として訳され、次の操作も項目ごとに選ばれる。
  * Claudeや検査コマンドが書ける文(Claudeの結果の文、構造化出力、stderr、ファイル名、プロセスのコマンド)に

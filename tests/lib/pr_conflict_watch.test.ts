@@ -1418,6 +1418,21 @@ describe("runPrConflictWatch: rows whose pull request is not in the open list", 
     ]);
   });
 
+  test("masks a known token in the warned error of an unreadable pull request", async () => {
+    const h = setup({
+      repos: [],
+      rows: [check({ notified_at: NOW })],
+      prs: {
+        "acme/widgets#12": new GitHubHttpError(
+          "not found for ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+          404,
+        ),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.warned[0]?.fields).toMatchObject({ error: "not found for ***" });
+  });
+
   test("keeps the row of a pull request that GitHub forbids reading", async () => {
     const h = setup({
       repos: [],
