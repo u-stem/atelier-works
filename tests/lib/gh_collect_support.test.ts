@@ -21,7 +21,11 @@ import {
   selectTargets,
   stage1Floor,
 } from "../../f/factory/lib/gh_collect_support.ts";
-import type { GraphqlFailure } from "../../f/factory/lib/gh_graphql.ts";
+import {
+  type GraphqlFailure,
+  graphqlRequest,
+  OWNER_REPOS_QUERY,
+} from "../../f/factory/lib/gh_graphql.ts";
 import type { GhCollectOwnerState, GhRepo } from "../../f/factory/lib/types.ts";
 
 const NOW = Date.parse("2026-10-17T12:00:00.000Z");
@@ -342,8 +346,16 @@ describe("classifyGraphqlFailure maps errors to codes", () => {
     expect(code({ status: 403, rate_limited: true })).toBe("rate_limited");
   });
 
-  test("maps 429 to rate_limited", () => {
+  // 通信層は、`x-ratelimit-remaining`が0の429を一次の制限(`rate_limited`)に、
+  // ヘッダーの無い429を二次の制限(`secondary_limit`)に分ける。
+  test("maps a 429 with no quota left to rate_limited", () => {
     expect(code({ status: 429, rate_limited: true })).toBe("rate_limited");
+  });
+
+  test("maps a bare 429 to secondary_limit", () => {
+    expect(code({ status: 429, secondary_limit: true })).toBe(
+      "secondary_limit",
+    );
   });
 
   test("maps a secondary limit to secondary_limit", () => {
@@ -400,6 +412,34 @@ describe("classifyGraphqlFailure maps errors to codes", () => {
     expect(
       classifyGraphqlFailure(failure({ status: 500 }), NOW).next_allowed_at,
     ).toBeNull();
+  });
+});
+
+describe("classifyGraphqlFailure reads the failures that graphqlRequest returns", () => {
+  async function codeOfResponse(response: Response) {
+    const result = await graphqlRequest(
+      { fetch: async () => response, token: "tok" },
+      OWNER_REPOS_QUERY,
+      { owner: "acme", label: "factory", cursor: null },
+    );
+    return result.ok ? "ok" : classifyGraphqlFailure(result, NOW).error_code;
+  }
+
+  test("a bare 429 becomes secondary_limit", async () => {
+    expect(await codeOfResponse(new Response("{}", { status: 429 }))).toBe(
+      "secondary_limit",
+    );
+  });
+
+  test("a 429 with no quota left becomes rate_limited", async () => {
+    expect(
+      await codeOfResponse(
+        new Response("{}", {
+          status: 429,
+          headers: { "X-RateLimit-Remaining": "0" },
+        }),
+      ),
+    ).toBe("rate_limited");
   });
 });
 

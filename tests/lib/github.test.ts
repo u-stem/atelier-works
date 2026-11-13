@@ -14,6 +14,7 @@ import {
   createPullRequest,
   ensureLabel,
   ensureSuccess,
+  type FetchIssueOptions,
   type FetchLike,
   fetchIssueContent,
   fetchIssueState,
@@ -581,6 +582,85 @@ describe("getRepositoryOwnerId", () => {
   });
 });
 
+// 権限不足の403は、残りの回数が1以上のまま返る。本文に「rate limit」の語があっても制限ではない。
+// dependabot_prepare、pr_ci_watch、main_ci_watch、dependabot_finishと、github.tsの403の分岐
+// (needs_human、denied、forbidden)は、この403をGitHubHttpErrorとして受け取って扱いを決める。
+// 制限の例外に化けると、その分岐を通らなくなる。
+describe("a permission 403 with quota left stays a 403 for the forbidden branches", () => {
+  /** 残りの回数が4999のままの、権限不足の403。 */
+  function forbidden(message: string): CommandResult {
+    return ok(
+      ghApiStdout(403, { message }, { "x-ratelimit-remaining": "4999" }),
+    );
+  }
+
+  /** `promise`が拒否されたらその理由を、解決したら`null`を返す。 */
+  function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+    return promise.then(
+      () => null,
+      (err: unknown) => err,
+    );
+  }
+
+  test("callGhApi returns the 403 without waiting when the message mentions a rate limit", async () => {
+    const sleeps: number[] = [];
+    const fake = createFakeCommandRunner([
+      forbidden("Resource not accessible; see the rate limit docs"),
+    ]);
+    const response = await callGhApi(
+      {
+        run: fake.run,
+        ghToken: "tok",
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      },
+      "repos/acme/widgets/pulls/1",
+    );
+    expect({ status: response.status, sleeps }).toEqual({
+      status: 403,
+      sleeps: [],
+    });
+  });
+
+  test("getPr throws GitHubHttpError, not GitHubRateLimitError, for the 403", async () => {
+    const fake = createFakeCommandRunner([
+      forbidden("Resource not accessible; see the rate limit docs"),
+    ]);
+    const error = await rejectionOf(
+      getPr({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 1),
+    );
+    expect({
+      httpError: error instanceof GitHubHttpError,
+      rateLimited: error instanceof GitHubRateLimitError,
+      status: error instanceof GitHubHttpError ? error.status : undefined,
+    }).toEqual({ httpError: true, rateLimited: false, status: 403 });
+  });
+
+  test("getPrWithoutWait throws GitHubHttpError for the 403, as pr_ci_watch expects", async () => {
+    const fake = createFakeCommandRunner([
+      forbidden("Resource not accessible; see the rate limit docs"),
+    ]);
+    const error = await rejectionOf(
+      getPrWithoutWait({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 1),
+    );
+    expect(
+      error instanceof GitHubHttpError &&
+        !(error instanceof GitHubRateLimitError),
+    ).toBe(true);
+  });
+
+  test("sends the 403 request only once", async () => {
+    const fake = createFakeCommandRunner([
+      forbidden("Resource not accessible; see the rate limit docs"),
+    ]);
+    await rejectionOf(
+      getPr({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 1),
+    );
+    expect(fake.calls.length).toBe(1);
+  });
+});
+
 describe("rate limit wait cap", () => {
   const NOW = new Date("2026-10-08T00:00:00Z");
   const nowEpochSeconds = NOW.getTime() / 1000;
@@ -877,26 +957,55 @@ describe("rate limit wait cap", () => {
       });
     });
 
-    test("does not treat a primary-only rate limit body as secondary", async () => {
-      const { client, calls } = fakeClient([
-        bodyOnlyLimited("API rate limit exceeded for user ID 1."),
-      ]);
+    test("throws a primary-only rate limit body without the remaining header at once, since it gives no reset time", async () => {
+      const sleeps: number[] = [];
+      const { client, calls } = fakeClient(
+        [bodyOnlyLimited("API rate limit exceeded for user ID 1.")],
+        sleeps,
+      );
       const error = await rejectionOf(getViewer(client));
       expect({
-        name: error instanceof Error ? error.name : undefined,
+        rateLimited: error instanceof GitHubRateLimitError,
+        sleeps,
         calls: calls.length,
-      }).toEqual({ name: "GitHubHttpError", calls: 1 });
+      }).toEqual({ rateLimited: true, sleeps: [], calls: 1 });
     });
 
-    test("does not apply to statuses other than 403", async () => {
-      const { client, calls } = fakeClient([
-        ok(ghApiStdout(429, { message: "secondary rate limit" })),
+    test("waits the default time for a 429 whose body says secondary", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient(
+        [ok(ghApiStdout(429, { message: "secondary rate limit" })), viewerOk],
+        sleeps,
+      );
+      await getViewer(client);
+      expect(sleeps).toEqual([DEFAULT_WAIT_MS]);
+    });
+
+    test("waits the default time for a bare 429", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient(
+        [ok(ghApiStdout(429, { message: "Too Many Requests" })), viewerOk],
+        sleeps,
+      );
+      await getViewer(client);
+      expect(sleeps).toEqual([DEFAULT_WAIT_MS]);
+    });
+
+    test("a client that does not wait gives no wait for a bare 429, like the other paths", async () => {
+      const fake = createFakeCommandRunner([
+        ok(ghApiStdout(429, { message: "Too Many Requests" })),
       ]);
-      const error = await rejectionOf(getViewer(client));
-      expect({
-        name: error instanceof Error ? error.name : undefined,
-        calls: calls.length,
-      }).toEqual({ name: "GitHubHttpError", calls: 1 });
+      const error = await rejectionOf(
+        getPrWithoutWait(
+          { run: fake.run, ghToken: "tok" },
+          "acme",
+          "widgets",
+          12,
+        ),
+      );
+      expect(
+        error instanceof GitHubRateLimitError ? error.requiredWaitMs : "none",
+      ).toBeNull();
     });
 
     test("a client that does not wait throws the rate limit error at once", async () => {
@@ -1648,12 +1757,15 @@ describe("listLabeledOpenIssues", () => {
   });
 });
 
+/** Issueの読み取りの再試行で、実際には待たない差し込み。 */
+const NO_WAIT = { sleep: async () => {} };
+
 describe("fetchIssueState", () => {
   function fakeFetch(status: number, body: unknown) {
     const calls: { url: string; init: RequestInit }[] = [];
     const fetchFn: FetchLike = async (url, init) => {
       calls.push({ url, init });
-      return { status, json: async () => body };
+      return new Response(JSON.stringify(body), { status });
     };
     return { fetchFn, calls };
   }
@@ -1719,8 +1831,188 @@ describe("fetchIssueState", () => {
       "acme",
       "widgets",
       5,
+      NO_WAIT,
     ).catch((err: unknown) => err);
     expect(String(error)).not.toContain("secret-token");
+  });
+
+  // 型の上では受け付けないが、実行時に余分なプロパティの付いた値が来ても、トークンと送り方を変えない。
+  function optionsWithExtras(): {
+    readonly options: FetchIssueOptions;
+    readonly otherCalls: string[];
+  } {
+    const otherCalls: string[] = [];
+    const extras = {
+      sleep: async () => {},
+      token: "other-token",
+      fetch: async (url: string) => {
+        otherCalls.push(url);
+        return new Response("{}", { status: 200 });
+      },
+    };
+    return { options: extras, otherCalls };
+  }
+
+  test("keeps the token when the options carry a token at run time", async () => {
+    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
+    await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      optionsWithExtras().options,
+    );
+    expect(calls[0]?.init.headers).toMatchObject({
+      Authorization: "Bearer tok",
+    });
+  });
+
+  /** 本文の読み取りの途中で、`error`で失敗する応答を返す`fetch`。 */
+  function cutBodyFetch(error: Error): FetchLike {
+    return async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("{"));
+            controller.error(error);
+          },
+        }),
+        { status: 200 },
+      );
+  }
+
+  test("throws an http error marked as timed out when the deadline cut the body", async () => {
+    const error = await fetchIssueState(
+      cutBodyFetch(new DOMException("timed out", "TimeoutError")),
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      NO_WAIT,
+    ).catch((err: unknown) => err);
+    expect(
+      error instanceof GitHubHttpError ? [error.status, error.timedOut] : null,
+    ).toEqual([200, true]);
+  });
+
+  test("says that the read timed out when the deadline cut the body", async () => {
+    await expect(
+      fetchIssueState(
+        cutBodyFetch(new DOMException("timed out", "TimeoutError")),
+        "tok",
+        "acme",
+        "widgets",
+        5,
+        NO_WAIT,
+      ),
+    ).rejects.toThrow("(timed out)");
+  });
+
+  test("throws an http error that says the body was cut when the connection cut it", async () => {
+    await expect(
+      fetchIssueState(
+        cutBodyFetch(new TypeError("connection cut")),
+        "tok",
+        "acme",
+        "widgets",
+        5,
+        NO_WAIT,
+      ),
+    ).rejects.toThrow("(incomplete body)");
+  });
+
+  test("keeps the fetch when the options carry a fetch at run time", async () => {
+    const { fetchFn } = fakeFetch(200, { state: "open" });
+    const { options, otherCalls } = optionsWithExtras();
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, options);
+    expect(otherCalls).toEqual([]);
+  });
+
+  test("sends the read twice for a 5xx", async () => {
+    const { fetchFn, calls } = fakeFetch(502, {});
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, NO_WAIT).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(2);
+  });
+
+  test("waits through the injected sleep before the second read", async () => {
+    const sleeps: number[] = [];
+    const { fetchFn } = fakeFetch(502, {});
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, {
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      transientRetryDelayMs: 7,
+    }).catch(() => undefined);
+    expect(sleeps).toEqual([7]);
+  });
+
+  test("sends a 403 with no quota left once and throws the rate limit error", async () => {
+    const calls: string[] = [];
+    const fetchFn: FetchLike = async (url) => {
+      calls.push(url);
+      return new Response("{}", {
+        status: 403,
+        headers: { "X-RateLimit-Remaining": "0" },
+      });
+    };
+    const error = await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      NO_WAIT,
+    ).catch((err: unknown) => err);
+    expect([error instanceof GitHubRateLimitError, calls.length]).toEqual([
+      true,
+      1,
+    ]);
+  });
+
+  test("turns a fetch that timed out into a status 0 http error marked as timed out", async () => {
+    const fetchFn: FetchLike = async () => {
+      throw new DOMException("timed out", "TimeoutError");
+    };
+    const error = await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      NO_WAIT,
+    ).catch((err: unknown) => err);
+    expect(
+      error instanceof GitHubHttpError ? [error.status, error.timedOut] : null,
+    ).toEqual([0, true]);
+  });
+
+  test("says that the read timed out in the message", async () => {
+    const fetchFn: FetchLike = async () => {
+      throw new DOMException("timed out", "TimeoutError");
+    };
+    await expect(
+      fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, NO_WAIT),
+    ).rejects.toThrow("timed out");
+  });
+
+  test("says that no response came back in the message", async () => {
+    const fetchFn: FetchLike = async () => {
+      throw new TypeError("connection reset for https://api.github.com/x");
+    };
+    const error = await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      NO_WAIT,
+    ).catch((err: unknown) => String(err));
+    expect([error.includes("no response"), error.includes("https://")]).toEqual(
+      [true, false],
+    );
   });
 
   test("rejects a response without a state", async () => {
@@ -1743,7 +2035,7 @@ describe("fetchIssueContent", () => {
     const calls: { url: string; init: RequestInit }[] = [];
     const fetchFn: FetchLike = async (url, init) => {
       calls.push({ url, init });
-      return { status, json: async () => body };
+      return new Response(JSON.stringify(body), { status });
     };
     return { fetchFn, calls };
   }
@@ -1757,6 +2049,19 @@ describe("fetchIssueContent", () => {
       title: "Add feature",
       body: "Original body",
     });
+  });
+
+  test("sends the read twice for a 5xx", async () => {
+    const { fetchFn, calls } = fakeFetch(503, {});
+    await fetchIssueContent(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      NO_WAIT,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(2);
   });
 
   test("treats a null body as empty", async () => {
@@ -1802,6 +2107,7 @@ describe("fetchIssueContent", () => {
       "acme",
       "widgets",
       5,
+      NO_WAIT,
     ).catch((err: unknown) => err);
     expect(error instanceof GitHubHttpError && error.status).toBe(status);
   });
@@ -1814,6 +2120,7 @@ describe("fetchIssueContent", () => {
       "acme",
       "widgets",
       5,
+      NO_WAIT,
     ).catch((err: unknown) => String(err));
     expect(error).not.toMatch(/secret-token|secret title/);
   });
@@ -3659,7 +3966,7 @@ describe("findIssueByMarker", () => {
 
   test("rejects an HTTP error response", async () => {
     const fake = createFakeCommandRunner([
-      ok(ghApiStdout(403, { message: "rate limited" })),
+      ok(ghApiStdout(403, { message: "Forbidden" })),
     ]);
     await expect(
       findIssueByMarker(
@@ -5264,6 +5571,25 @@ describe("callGhApiRawBody", () => {
     const fake = createFakeCommandRunner([ok(ghApiStdout(200, "body"))]);
     const response = await call(recording(fake).client);
     expect(response.bodyText).toBe("body");
+  });
+
+  test("does not fetch again when the gh timeout cut the body after a 2xx status", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: ghApiStdout(200, "part"),
+        stderr: "",
+        exitCode: 137,
+        timedOut: true,
+      },
+      ok(ghApiStdout(200, "whole body")),
+    ]);
+    const error = await call(recording(fake).client).catch(
+      (err: unknown) => err,
+    );
+    expect([
+      error instanceof GitHubRawBodyIncompleteError,
+      fake.calls.length,
+    ]).toEqual([true, 1]);
   });
 
   test("does not wait or fetch again when gh exited zero", async () => {

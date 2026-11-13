@@ -125,6 +125,13 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 6つは、manifest、zip、yaml、verify、imports、downloadである。
  * パスの許可リスト、manifestの形、zipの読み方、yamlの許可するキー、importの読み方、適用の条件、
  * トークンの渡し先と取得先を決める。書き換えられると、パッチの受け取り側の検査が緩む。
+ * GitHubのAPIへの通信層(`lib/github_http.ts`)と、その`.script.yaml`、テスト(`tests/lib/github_http.test.ts`)も守る。
+ * トークンを送る宛先の固定、`Authorization`ヘッダーの組み立て、リダイレクトの扱い、レート制限の判定と再試行が、この1か所にある。
+ * テストは、`Authorization`ヘッダーとAPIのホストの字面がこの部品の外に無いこと(例外は一覧の1か所)と、グローバルの`fetch`を参照するファイルが一覧と一致することを走査で固定する。
+ * 書き換えられると、トークンが別のホストへ送られたり、冪等でない要求が二重に送られたりする。
+ * `lib/github_http.script.lock`は、依存の無いlibのlockと同じ扱いで守らない。
+ * 部品を呼ぶ`lib/github.ts`と`lib/gh_graphql.ts`は、日常的に直すので守らない。宛先とヘッダーは部品が決め、呼ぶ側は引数で変えられない。
+ * 呼ぶ側が差し替えた`fetch`はトークンを受け取るので、この保護が防ぐのは誤用だけである(`docs/security.md`の「GitHubのAPIへの通信層」)。
  * `wmill-lock.yaml`のhashを自前で再計算する部品(`lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`、
  * `lib/metadata_git_ports.ts`)と、それぞれの`.script.yaml`も守る。
  * hashの算法、再計算してよい条件、`main`の引数の比べ方、検査が読むgitのオブジェクトの取り方を決める。
@@ -406,6 +413,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/metadata_patch_imports.script.yaml",
   "f/factory/lib/metadata_patch_download.ts",
   "f/factory/lib/metadata_patch_download.script.yaml",
+  "f/factory/lib/github_http.ts",
+  "f/factory/lib/github_http.script.yaml",
+  "tests/lib/github_http.test.ts",
   "f/factory/lib/metadata_hash.ts",
   "f/factory/lib/metadata_hash.script.yaml",
   "f/factory/lib/metadata_precheck.ts",

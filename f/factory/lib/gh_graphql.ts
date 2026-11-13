@@ -1,20 +1,24 @@
 // GitHubのGraphQL APIを呼ぶ最小のクライアント。ファイルにも子プロセスにも触れない。
-// 読み取り専用のトークンを`Authorization`ヘッダだけに載せて、宛先を固定した`fetch`で送る。
+// 送り方(宛先の固定、`Authorization`ヘッダ、リダイレクト、締め切り)とレート制限の判定は、通信層(`github_http.ts`)に任せる。
 // 失敗は例外にせず、分類に要る事実だけを持つ結果にする。応答の本文とエラーの文は、分類にだけ使って残さない。
 // 拒否された項目は、許可表の`type`と、問い合わせの文に現れる語だけの項目名に絞って残す。
 
 import {
-  RATE_LIMIT_HINT_TEXT_LIMIT,
-  SECONDARY_RATE_LIMIT_PHRASE,
-} from "./github_errors.ts";
+  GITHUB_API_ORIGIN,
+  type GitHubHttpResponse,
+  graphqlErrorsRateLimited,
+  type HttpFetch,
+  type HttpResponseLike,
+  sendGitHubRequest,
+} from "./github_http.ts";
 import {
   GH_DETAIL_OPTIONAL_FIELDS,
   type GhDetailOptionalField,
   isRecord,
 } from "./types.ts";
 
-/** 送り先。トークンを送るので固定し、呼び出し側から変えられない。 */
-export const GITHUB_GRAPHQL_URL = "https://api.github.com/graphql";
+/** 送り先。通信層の固定の送り先の`graphql`で、呼び出し側から変えられない。 */
+export const GITHUB_GRAPHQL_URL = `${GITHUB_API_ORIGIN}/graphql`;
 
 /** 1回の要求の打ち切り(ミリ秒)。 */
 export const GRAPHQL_REQUEST_TIMEOUT_MS = 10_000;
@@ -46,18 +50,10 @@ export const OWNER_REPOS_QUERY = `query($owner: String!, $label: String!, $curso
 }`;
 
 /** `graphqlRequest`が使う応答の最小の形。`Response`が満たす。 */
-export type GraphqlResponseLike = {
-  readonly status: number;
-  readonly headers: { get(name: string): string | null };
-  json(): Promise<unknown>;
-  text(): Promise<string>;
-};
+export type GraphqlResponseLike = HttpResponseLike;
 
 /** `graphqlRequest`が使う`fetch`の最小の形。テストでは差し替える。 */
-export type GraphqlFetch = (
-  url: string,
-  init: RequestInit,
-) => Promise<GraphqlResponseLike>;
+export type GraphqlFetch = HttpFetch;
 
 /**
  * 失敗の分類に要る事実。本文もエラーの文も持たない。
@@ -400,69 +396,36 @@ function failure(
   };
 }
 
-function isTimeout(err: unknown): boolean {
-  return (
-    err instanceof Error &&
-    (err.name === "TimeoutError" || err.name === "AbortError")
-  );
-}
-
 function headerInteger(
-  headers: { get(name: string): string | null },
+  headers: ReadonlyMap<string, string>,
   name: string,
 ): number | null {
-  const value = headers.get(name);
-  if (value === null || !/^\d{1,12}$/.test(value.trim())) {
+  const value = headers.get(name)?.trim();
+  if (value === undefined || !/^\d{1,12}$/.test(value)) {
     return null;
   }
-  return Number(value.trim());
+  return Number(value);
 }
 
-/** 失敗した応答の本文を、制限の言及があるかを調べるためだけに読む。読めなければ言及なしとする。 */
-async function readLimitHints(
-  response: GraphqlResponseLike,
-): Promise<{ readonly rate: boolean; readonly secondary: boolean }> {
-  let text: string;
-  try {
-    text = (await response.text())
-      .slice(0, RATE_LIMIT_HINT_TEXT_LIMIT)
-      .toLowerCase();
-  } catch {
-    return { rate: false, secondary: false };
-  }
-  const secondary = text.includes(SECONDARY_RATE_LIMIT_PHRASE);
-  return { rate: secondary || text.includes("rate limit"), secondary };
-}
-
-async function failureFromStatus(
-  response: GraphqlResponseLike,
-): Promise<GraphqlFailure> {
-  const status = response.status;
-  const limitable = status === 403 || status === 429;
-  const retryAfter = limitable
-    ? headerInteger(response.headers, "retry-after")
-    : null;
-  const hints = limitable
-    ? await readLimitHints(response)
-    : { rate: false, secondary: false };
-  const remaining = response.headers.get("x-ratelimit-remaining")?.trim();
-  const secondary = limitable && (retryAfter !== null || hints.secondary);
-  const primary =
-    limitable &&
-    !secondary &&
-    (status === 429 || remaining === "0" || hints.rate);
+/**
+ * 2xx以外の応答の失敗。制限の種類は、通信層の判定(`classifyRateLimit`)の結果を写す。
+ * 一次の制限は`rate_limited`、二次の制限は`secondary_limit`にする。
+ */
+function failureFromStatus(response: GitHubHttpResponse): GraphqlFailure {
+  const limit = response.rateLimit;
   return failure("http", {
-    status,
-    rate_limited: primary || (status === 429 && secondary),
-    secondary_limit: secondary,
-    retry_after_sec: retryAfter,
+    status: response.status,
+    rate_limited: limit?.kind === "primary",
+    secondary_limit: limit?.kind === "secondary",
+    retry_after_sec: limit?.retryAfterSec ?? null,
     reset_at_sec: headerInteger(response.headers, "x-ratelimit-reset"),
   });
 }
 
 /**
  * GraphQLの問い合わせを1回送る。
- * 宛先は`GITHUB_GRAPHQL_URL`、リダイレクトは辿らず、`Authorization`ヘッダだけがトークンを持つ。
+ * 送るのは通信層の`sendGitHubRequest`で、宛先は`GITHUB_GRAPHQL_URL`、リダイレクトは辿らず、`Authorization`ヘッダだけがトークンを持つ。
+ * 再試行はしない。収集の側が、DBに書く待ちで代える。
  * `timeoutMs`(省略時は`GRAPHQL_REQUEST_TIMEOUT_MS`)を過ぎると打ち切る。
  * 例外は投げない。失敗は`GraphqlFailure`で返し、トークン・応答の本文・エラーの文・例外の文を含めない。
  * 拒否された項目(`rejected`)は、許可表の`type`と問い合わせの文に現れる語だけを持つ。
@@ -481,32 +444,31 @@ export async function graphqlRequest(
   query: string,
   variables: Readonly<Record<string, unknown>>,
 ): Promise<GraphqlResponse> {
-  let response: GraphqlResponseLike;
-  try {
-    response = await deps.fetch(GITHUB_GRAPHQL_URL, {
+  const response = await sendGitHubRequest(
+    { token: deps.token, fetch: deps.fetch },
+    {
+      path: "graphql",
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${deps.token}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ query, variables }),
-      redirect: "manual",
-      signal: AbortSignal.timeout(deps.timeoutMs ?? GRAPHQL_REQUEST_TIMEOUT_MS),
-    });
-  } catch (err) {
-    return failure(isTimeout(err) ? "timeout" : "network");
+      body: { query, variables },
+      accept: "application/json",
+      timeoutMs: deps.timeoutMs ?? GRAPHQL_REQUEST_TIMEOUT_MS,
+    },
+  );
+  if (response.status === 0) {
+    return failure(response.timedOut === true ? "timeout" : "network");
   }
   if (response.status < 200 || response.status >= 300) {
-    return await failureFromStatus(response);
+    return failureFromStatus(response);
+  }
+  if (response.incomplete === true) {
+    return response.timedOut === true
+      ? failure("timeout")
+      : failure("malformed", { status: response.status });
   }
   let body: unknown;
   try {
-    body = await response.json();
-  } catch (err) {
-    if (isTimeout(err)) {
-      return failure("timeout");
-    }
+    body = JSON.parse(response.bodyText);
+  } catch {
     return failure("malformed", { status: response.status });
   }
   if (!isRecord(body)) {
@@ -535,9 +497,7 @@ export async function graphqlRequest(
           };
         }
       }
-      const rateLimited = errors.some(
-        (entry) => isRecord(entry) && entry.type === "RATE_LIMITED",
-      );
+      const rateLimited = graphqlErrorsRateLimited(errors);
       return failure("graphql_errors", {
         status: response.status,
         rate_limited: rateLimited,

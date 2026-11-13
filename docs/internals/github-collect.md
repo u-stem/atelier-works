@@ -153,6 +153,11 @@ loginに`_`を含む所有者(EMUのアカウント)は、扱わない。
 GitHubが時刻を示さないときは1分とする。
 どの場合も、1時間以内に切り詰める。
 
+一次と二次の見分けは、通信層(`lib/github_http.ts`)の`classifyRateLimit`の判定の表に従う。
+`x-ratelimit-remaining`が0の応答は一次の制限、`Retry-After`のある応答と、本文の`message`が二次の制限を名指す応答は二次の制限である。
+ほかに当たらない429は、二次の制限として`secondary_limit`にし、`Retry-After`が無いので1分控える。
+残りの回数が1以上の403は、本文に`rate limit`の語があっても制限と読まず、`forbidden`にする。
+
 ### 締め切り
 
 実行全体の締め切りは100秒で、scriptのtimeout(120秒)の内側にある。
@@ -555,7 +560,7 @@ IDが一致したことを確かめたい処理は、`id_checked`を見る。
 | 7 | 締め切りで未着手、一覧の途中で打ち切った、または段2が有効で段1の下限を切った | 偽 | `deadline` | `list` |
 | 8 | 401 | 偽 | `unauthorized` | `list` |
 | 9 | レート制限でない403 | 偽 | `forbidden` | `list` |
-| 10 | 429、二次の制限 | 偽 | `rate_limited`、`secondary_limit` | `list` |
+| 10 | 一次の制限(`rate_limited`)、二次の制限と429(`secondary_limit`) | 偽 | `rate_limited`、`secondary_limit` | `list` |
 | 11 | 5xx、通信断、`/graphql`のHTTP 404 | 偽 | `http_5xx` | `list` |
 | 12 | 1要求の10秒の打ち切り(応答の本文を読む途中を含む) | 偽 | `timeout` | `list` |
 | 13 | 応答に`errors`がある(レート制限以外) | 偽 | `graphql_error` | `list` |

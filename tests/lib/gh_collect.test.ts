@@ -1052,6 +1052,8 @@ describe("runGhCollect ok per outcome", () => {
     ]).toEqual([5, 3990]);
   });
 
+  // 手で組んだ`status: 429, rate_limited: true`は、`x-ratelimit-remaining`が0の429を通信層が分類した形である。
+  // ヘッダーの無い429は`secondary_limit`になる(`gh_collect_support.test.ts`がつなげて確かめる)。
   const FAILURES: [string, GraphqlResponse, string][] = [
     ["401", failure({ status: 401 }), "unauthorized"],
     ["403", failure({ status: 403 }), "forbidden"],
@@ -2597,6 +2599,8 @@ describe("runGhCollect stage 2 failures", () => {
     });
   });
 
+  // 手で組んだ`status: 429, rate_limited: true`は、`x-ratelimit-remaining`が0の429を通信層が分類した形である。
+  // ヘッダーの無い429は`secondary_limit`になる(`gh_collect_support.test.ts`がつなげて確かめる)。
   const STOPS: [string, GraphqlResponse, GhCollectErrorCode][] = [
     ["401", httpFailure({ status: 401 }), "unauthorized"],
     ["403", httpFailure({ status: 403 }), "forbidden"],
@@ -3331,12 +3335,7 @@ describe("runGhCollect refused items from raw GraphQL responses", () => {
 
   /** 生の応答を返す`fetch`。`graphqlRequest`を通して`runGhCollect`に渡す。 */
   function rawFetch(body: unknown): GraphqlFetch {
-    return async () => ({
-      status: 200,
-      headers: { get: () => null },
-      json: async () => body,
-      text: async () => JSON.stringify(body),
-    });
+    return async () => new Response(JSON.stringify(body), { status: 200 });
   }
 
   function withRawStage(
