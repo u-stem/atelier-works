@@ -1610,7 +1610,7 @@ Windmillのトリガーのファイル名は`*.http_trigger.yaml`などの形で
 型だけのimport、型だけのexport、型の位置でしか使わないimport、使われないimportは、トランスパイラが省くので数えない。
 読み方は、`trimUnusedImports`を有効にした`Bun.Transpiler`の`scanImports`だけである。
 実行しない読み方だけを使う理由は、[この文書の「hashの再計算」](#hashの再計算)にある。
-マクロの実測の根拠は、`tests/lib/metadata_patch_imports_runtime.test.ts`にある。
+マクロの実測の根拠は、`tests/lib/metadata_patch_imports.test.ts`の`metadata_patch_imports runtime`にある。
 閉包の実測の根拠は、リポジトリの全scriptで閉包のパッケージ名と`.script.lock`の`dependencies`のキーが一致するテストにある。
 値のimportに書き換えて本体で使い始める変更は、省かれていたimportが現れるので、依存の変化として人の手に回る。
 PRが触っていないscriptも、すべて確かめる。
@@ -2153,7 +2153,7 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
 - importを読むときも、コードを実行しない。
   Bunの`transformSync`は、マクロを指定したimport属性のimportを、読む側のプロセスで実行する。
   空白、改行、コメントを挟んだ形でも実行されることを、Bun 1.4.0(worker)と1.4.3で確かめた。
-  挟んだ文字の一覧は、`tests/lib/metadata_patch_imports_runtime.test.ts`にある。
+  挟んだ文字の一覧は、`tests/lib/metadata_patch_imports.test.ts`の`metadata_patch_imports runtime`にある。
   そのため、`transformSync`は使わず、実行しない`scanImports`だけで読む。
   `scanImports`は、同じ入力でマクロを実行しないことを、両方の版で確かめた。
   加えて、import属性の検出は、JavaScriptの空白と行区切りをすべて数える。
