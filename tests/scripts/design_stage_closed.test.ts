@@ -9,7 +9,7 @@
 // 追えない形がある。識別子を連結や別名で組み立てる参照は数えられない。
 // 関数の観測(下の「設計の入口」)と組み合わせて守る。
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isReadyForImplement } from "../../f/factory/lib/approval_gate.ts";
@@ -32,10 +32,6 @@ import {
   applyApprovedBranch,
   buildApprovedBranchDeps,
 } from "../../f/factory/steps/requirements_apply.ts";
-import { refuseGitHubFetch } from "../lib/testSupport.ts";
-
-// 依存の組み立てはGitHubを呼ばない。GETも`fetch`で拒み、`run`の例外と同じく呼べば落ちるようにする。
-beforeEach(() => refuseGitHubFetch("the builder must not call GitHub"));
 
 const FACTORY_DIR = join(import.meta.dir, "../../f/factory");
 const transpiler = new Bun.Transpiler({ loader: "ts" });

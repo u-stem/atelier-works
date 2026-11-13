@@ -5,6 +5,7 @@
 // テストが本物のGitHubへ送らないよう、グローバルの`fetch`を置き換える。
 // GitHubのAPIと、その取得先のblob storageへの要求は、偽の応答の関数(`GITHUB_FETCH_HANDLER_KEY`)だけに答えさせる。
 // 関数が無いときは、例外を投げて本物へは送らない。関数はテストのたびに外す。
+// `beforeAll`で置いた偽の応答も、最初のテストの後で外れる。
 // 偽の応答の関数を置くのは`tests/lib/testSupport.ts`である。
 
 import { afterEach } from "bun:test";
@@ -13,8 +14,8 @@ delete process.env.WM_JOB_ID;
 delete process.env.WM_ROOT_FLOW_JOB_ID;
 delete process.env.WM_WORKSPACE;
 
-/** 偽の応答の関数を置く、グローバルのオブジェクトの鍵。`tests/lib/testSupport.ts`と同じ名前を使う。 */
-const GITHUB_FETCH_HANDLER_KEY = Symbol.for(
+/** 偽の応答の関数を置く、グローバルのオブジェクトの鍵。`tests/lib/testSupport.ts`が読み込んで使う。 */
+export const GITHUB_FETCH_HANDLER_KEY = Symbol.for(
   "atelier-works.tests.github-fetch-handler",
 );
 

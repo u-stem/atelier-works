@@ -7,6 +7,7 @@ import type {
   CommandRunner,
   CommandRunOptions,
 } from "../../f/factory/lib/workspace.ts";
+import { GITHUB_FETCH_HANDLER_KEY } from "../preload.ts";
 
 /** `fetch`で送ったGitHubのAPIへの要求。偽のrunnerが記録する。 */
 export type FakeRequest = {
@@ -39,25 +40,11 @@ export const FAKE_LOG_STORAGE_URL =
 type GitHubFetchHandler = (url: string, init: RequestInit) => Promise<Response>;
 
 /**
- * GitHubのAPIとその取得先への`fetch`に答える関数を置く、グローバルのオブジェクトの鍵。
- * `tests/preload.ts`がグローバルの`fetch`を置き換え、この鍵の関数に答えさせる。関数はテストのたびに外れる。
+ * GitHubのAPIとその取得先への`fetch`に答える関数を置く。
+ * `tests/preload.ts`がグローバルの`fetch`を置き換え、鍵の関数に答えさせる。関数はテストのたびに外れる。
  */
-const GITHUB_FETCH_HANDLER_KEY = Symbol.for(
-  "atelier-works.tests.github-fetch-handler",
-);
-
 function setGitHubFetchHandler(handler: GitHubFetchHandler): void {
   Reflect.set(globalThis, GITHUB_FETCH_HANDLER_KEY, handler);
-}
-
-/**
- * GitHubのAPIとその取得先への`fetch`を、`message`の例外で拒ませる。
- * GitHubを呼ばないはずの処理が、GETでもGitHubを呼ばないことを確かめるために使う。
- */
-export function refuseGitHubFetch(message: string): void {
-  setGitHubFetchHandler(async () => {
-    throw new Error(message);
-  });
 }
 
 /**

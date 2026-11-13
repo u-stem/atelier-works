@@ -720,7 +720,41 @@ function forwardTo(port: number) {
   );
 }
 
+/**
+ * 最初の1バイトの後で止まったままの本文を持つ応答。
+ * 本文は`signal`と結び付いていないので、締め切りで打ち切れるのは読み取り側だけである。
+ */
+function signalBlindStalledResponse(): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{"));
+      },
+    }),
+    { status: 200 },
+  );
+}
+
 describe("sendGitHubRequest deadline on a stalled body", () => {
+  test("cuts a signal-blind body without a cap at the deadline", async () => {
+    fakeFetch([signalBlindStalledResponse()]);
+    const response = await sendGitHubRequest(client(), {
+      path: "repos/o/r",
+      timeoutMs: 200,
+    });
+    expect([response.incomplete, response.timedOut]).toEqual([true, true]);
+  });
+
+  test("cuts a signal-blind body with a cap at the deadline", async () => {
+    fakeFetch([signalBlindStalledResponse()]);
+    const response = await sendGitHubRequest(client(), {
+      path: "repos/o/r",
+      timeoutMs: 200,
+      maxBodyBytes: 1024,
+    });
+    expect([response.incomplete, response.timedOut]).toEqual([true, true]);
+  });
+
   test("cuts a body without a cap at the deadline", async () => {
     const server = stalledServer();
     try {
@@ -1805,8 +1839,56 @@ describe("only github_http.ts carries the token to the GitHub API", () => {
     expect(GLOBAL_OBJECT_WRITE.test("let g = globalThis\n")).toBe(true);
   });
 
+  test("the write pattern sees globalThis after a nullish coalescing", () => {
+    expect(GLOBAL_OBJECT_WRITE.test("const g = maybe ?? globalThis;")).toBe(
+      true,
+    );
+  });
+
+  test("the write pattern sees globalThis after a logical or", () => {
+    expect(GLOBAL_OBJECT_WRITE.test("const g = maybe || globalThis;")).toBe(
+      true,
+    );
+  });
+
+  test("the write pattern sees globalThis after a colon", () => {
+    expect(GLOBAL_OBJECT_WRITE.test("const holder = { g: globalThis };")).toBe(
+      true,
+    );
+  });
+
+  test("the write pattern sees globalThis returned by an arrow", () => {
+    expect(GLOBAL_OBJECT_WRITE.test("const pick = () => globalThis;")).toBe(
+      true,
+    );
+  });
+
   test("the write pattern does not see a comparison with globalThis", () => {
     expect(GLOBAL_OBJECT_WRITE.test("if (x === globalThis) {}")).toBe(false);
+  });
+
+  test("the write pattern does not see a property read after a nullish coalescing", () => {
+    expect(
+      GLOBAL_OBJECT_WRITE.test("const v = maybe ?? globalThis.process;"),
+    ).toBe(false);
+  });
+
+  test("the write pattern does not see a call after a logical or", () => {
+    expect(GLOBAL_OBJECT_WRITE.test("const v = maybe || Bun.which(x);")).toBe(
+      false,
+    );
+  });
+
+  test("the write pattern does not see a property read after a colon", () => {
+    expect(
+      GLOBAL_OBJECT_WRITE.test("const holder = { env: globalThis.process };"),
+    ).toBe(false);
+  });
+
+  test("the write pattern does not see a comparison with globalThis in an arrow", () => {
+    expect(
+      GLOBAL_OBJECT_WRITE.test("const isGlobal = (x) => x === globalThis;"),
+    ).toBe(false);
   });
 
   test("the write pattern does not see Object.assign onto another object", () => {
