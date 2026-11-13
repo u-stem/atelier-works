@@ -312,6 +312,14 @@ describe("the external package scan", () => {
     ]);
   });
 
+  test("flags the windmill client with a tag instead of a version", () => {
+    expect(
+      externalPackageImports(
+        'import * as wmill from "windmill-client@latest";',
+      ),
+    ).toEqual(["windmill-client@latest"]);
+  });
+
   test("does not flag the windmill client with a version", () => {
     expect(
       externalPackageImports(
