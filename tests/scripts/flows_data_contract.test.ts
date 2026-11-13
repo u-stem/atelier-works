@@ -2,7 +2,7 @@
 // ステップのidはflow.yamlのモジュールと一致し、出口は起動の辺の表と承認の処理に合わせる。
 // 承認の出口は、承認の処理が実際に起動するflowだけを描く。
 
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -29,6 +29,10 @@ import {
   SCRIPT_CALLERS,
   UNWIRED_LAUNCH_EDGES,
 } from "../../scripts/launch-graph.ts";
+import { refuseGitHubFetch } from "../lib/testSupport.ts";
+
+// 依存の組み立てはGitHubを呼ばない。GETも`fetch`で拒み、`run`の例外と同じく呼べば落ちるようにする。
+beforeEach(() => refuseGitHubFetch("the builder must not call GitHub"));
 
 const ROOT = join(import.meta.dir, "../..");
 const FACTORY_DIR = join(ROOT, "f/factory");

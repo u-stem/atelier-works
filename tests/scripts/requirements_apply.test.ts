@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { DESIGN_START_FAILED_REASON } from "../../f/factory/lib/design_launch_support.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
@@ -35,6 +35,10 @@ import {
   type StartDesignPorts,
   shouldProceed,
 } from "../../f/factory/steps/requirements_apply.ts";
+import { refuseGitHubFetch } from "../lib/testSupport.ts";
+
+// 依存の組み立てはGitHubを呼ばない。GETも`fetch`で拒み、`run`の例外と同じく呼べば落ちるようにする。
+beforeEach(() => refuseGitHubFetch("the builder must not call GitHub"));
 
 const boom = async (): Promise<never> => {
   throw new Error("boom");

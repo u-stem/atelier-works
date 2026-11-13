@@ -32,53 +32,31 @@ export type FakeCommandRunner = {
 
 const GITHUB_API_ORIGIN = "https://api.github.com";
 
-/** GitHubがartifactとジョブのログの取得先にする、blob storageのホストの末尾。 */
-const BLOB_STORAGE_HOST_SUFFIX = ".blob.core.windows.net";
-
 /** 偽のrunnerが答える、ジョブのログの取得先。`ghApiRedirect`で指す。 */
 export const FAKE_LOG_STORAGE_URL =
   "https://fake.blob.core.windows.net/job-log.txt";
 
 type GitHubFetchHandler = (url: string, init: RequestInit) => Promise<Response>;
 
-/** GitHubのAPIへの`fetch`を受ける、最後に作った偽のrunner。 */
-let activeGitHubHandler: GitHubFetchHandler | null = null;
-let routeInstalled = false;
+/**
+ * GitHubのAPIとその取得先への`fetch`に答える関数を置く、グローバルのオブジェクトの鍵。
+ * `tests/preload.ts`がグローバルの`fetch`を置き換え、この鍵の関数に答えさせる。関数はテストのたびに外れる。
+ */
+const GITHUB_FETCH_HANDLER_KEY = Symbol.for(
+  "atelier-works.tests.github-fetch-handler",
+);
 
-/** GitHubのAPIか、その取得先のblob storageへの要求か。 */
-function isGitHubTarget(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return (
-      parsed.origin === GITHUB_API_ORIGIN ||
-      parsed.hostname.endsWith(BLOB_STORAGE_HOST_SUFFIX)
-    );
-  } catch {
-    return false;
-  }
+function setGitHubFetchHandler(handler: GitHubFetchHandler): void {
+  Reflect.set(globalThis, GITHUB_FETCH_HANDLER_KEY, handler);
 }
 
 /**
- * グローバルの`fetch`を、GitHubのAPIとその取得先への要求だけを偽のrunnerへ回す関数に置き換える。1つのプロセスで1回だけ行う。
- * ほかの宛先は元の`fetch`へ渡す。偽のrunnerが無いときにGitHubへ送ると、例外を投げて本物へは送らない。
+ * GitHubのAPIとその取得先への`fetch`を、`message`の例外で拒ませる。
+ * GitHubを呼ばないはずの処理が、GETでもGitHubを呼ばないことを確かめるために使う。
  */
-function installGitHubFetchRoute(): void {
-  if (routeInstalled) return;
-  routeInstalled = true;
-  const original = globalThis.fetch;
-  const routed = async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const url = input instanceof Request ? input.url : String(input);
-    if (!isGitHubTarget(url)) return original(input, init);
-    if (activeGitHubHandler === null) {
-      throw new Error("no fake command runner answers the GitHub API");
-    }
-    return activeGitHubHandler(url, init ?? {});
-  };
-  globalThis.fetch = Object.assign(routed, {
-    preconnect: original.preconnect,
+export function refuseGitHubFetch(message: string): void {
+  setGitHubFetchHandler(async () => {
+    throw new Error(message);
   });
 }
 
@@ -157,7 +135,7 @@ function responseFromGhOutput(result: CommandResult): Response {
  *
  * GitHubのAPIへの`fetch`(GETの要求)も、同じ`responses`の列から順に答える。
  * `gh api -i`の出力の形の応答を`fetch`の応答に写すので、`gh`への要求と`fetch`への要求を1つの列に並べられる。
- * `fetch`を受けるのは、最後に作った偽のrunnerである。
+ * `fetch`を受けるのは、そのテストの中で最後に作った偽のrunnerである。テストが終わると外れる(`tests/preload.ts`)。
  */
 export function createFakeCommandRunner(
   responses: readonly (CommandResult | Error)[],
@@ -184,7 +162,7 @@ export function createFakeCommandRunner(
     calls.push(call);
     return responseFromGhOutput(next(call.argv.join(" ")));
   };
-  activeGitHubHandler = handleFetch;
+  setGitHubFetchHandler(handleFetch);
   return { run, calls };
 }
 
@@ -215,15 +193,13 @@ function fetchCall(url: string, init: RequestInit): FakeCall {
 /**
  * GitHubのAPIへの`fetch`を、`run`に答えさせる。エンドポイントで応答を選ぶ自前の`run`を使うテストのためのもの。
  * `run`は、`["fetch", <method>, <パスとクエリ>]`のargvで呼ばれ、`gh api -i`の出力の形で答える。
- * 次に偽のrunnerを作るか、この関数を呼ぶまで続く。
+ * そのテストの中で、次に偽のrunnerを作るか、この関数を呼ぶまで続く。テストが終わると外れる。
  */
 export function serveGitHubFetchWith(run: CommandRunner): void {
-  activeGitHubHandler = async (url, init) =>
-    responseFromGhOutput(await run(fetchCall(url, init).argv));
+  setGitHubFetchHandler(async (url, init) =>
+    responseFromGhOutput(await run(fetchCall(url, init).argv)),
+  );
 }
-
-// テストが本物のGitHubへ送らないよう、このモジュールを読んだ時点でグローバルの`fetch`を置き換える。
-installGitHubFetchRoute();
 
 /** `stubGlobalFetch`が記録する、送った要求。 */
 export type SentRequest = { readonly url: string; readonly init: RequestInit };
