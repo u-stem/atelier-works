@@ -323,6 +323,41 @@ describe("the import scan", () => {
     expect(unfollowableImports('const m = require("./x.js");')).not.toEqual([]);
   });
 
+  // `require`は、呼び出しの形でなくても、別の名前や関数を通して呼べる。
+  test("flags require kept in a variable", () => {
+    expect(unfollowableImports("const load = require;")).not.toEqual([]);
+  });
+
+  test("flags require called through call", () => {
+    expect(unfollowableImports('require.call(null, "node:fs");')).not.toEqual(
+      [],
+    );
+  });
+
+  test("flags require passed as an argument", () => {
+    expect(unfollowableImports("use(require);")).not.toEqual([]);
+  });
+
+  test("flags a member reference to require", () => {
+    expect(unfollowableImports("const load = loader.require;")).not.toEqual([]);
+  });
+
+  test("does not flag a mention of require in a string", () => {
+    expect(unfollowableImports('const s = "require";')).toEqual([]);
+  });
+
+  test("does not flag a member of the client whose name starts with require", () => {
+    expect(
+      unfollowableImports(
+        'import * as wmill from "windmill-client@1.817.0";\nawait wmill.requireApproval();',
+      ),
+    ).toEqual([]);
+  });
+
+  test("does not flag an identifier that only starts with require", () => {
+    expect(unfollowableImports("const requires = 1;")).toEqual([]);
+  });
+
   test("flags an absolute import", () => {
     expect(
       unfollowableImports('import { x } from "/f/factory/lib/x.ts";'),
@@ -546,6 +581,19 @@ describe("the SDK use scan", () => {
   test("flags the client with a tag instead of a version", () => {
     expect(
       sdkFindings('import * as wmill from "windmill-client@latest";').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags the client with the tag next", () => {
+    expect(
+      sdkFindings('import * as wmill from "windmill-client@next";').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags the client with a prerelease version", () => {
+    expect(
+      sdkFindings('import * as wmill from "windmill-client@1.817.0-rc.1";')
+        .problems,
     ).not.toEqual([]);
   });
 
@@ -997,8 +1045,25 @@ describe("the SDK use scan", () => {
     expect(sdkFindings('new Worker("w.js");').problems).not.toEqual([]);
   });
 
-  test("does not flag a key that is named require", () => {
-    expect(sdkFindings("const a = { require: 1 };").problems).toEqual([]);
+  // 骨組みの上では、キーの`require:`と条件式の枝の`require :`を見分けられないので、キーも当てる。
+  test("flags require in a branch of a conditional", () => {
+    expect(
+      sdkFindings("const load = c ? require : null;").problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags module.require", () => {
+    expect(
+      sdkFindings('const fs = module.require("node:fs");').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a reference to exports", () => {
+    expect(sdkFindings("exports.x = 1;").problems).not.toEqual([]);
+  });
+
+  test("does not flag a property that is named module", () => {
+    expect(sdkFindings("const m = job.module;").problems).toEqual([]);
   });
 
   test("does not flag a property that is named Worker", () => {

@@ -267,6 +267,34 @@ describe("the tool dependency scan", () => {
     expect(toolDependencies('const s = "import.meta";')).toEqual([]);
   });
 
+  // CommonJSの`module`と`exports`は、`module.require`でモジュールへ届く。
+  test("flags module.require", () => {
+    expect(
+      toolDependencies('const fs = module.require("node:fs");'),
+    ).not.toEqual([]);
+  });
+
+  test("flags a reference to exports", () => {
+    expect(toolDependencies("exports.x = 1;")).not.toEqual([]);
+  });
+
+  test("does not flag a property that is named module", () => {
+    expect(toolDependencies("const m = job.module;")).toEqual([]);
+  });
+
+  test("does not flag a mention of module in a string", () => {
+    expect(toolDependencies('const s = "module";')).toEqual([]);
+  });
+
+  // 到達しない枝の動的importは変換で消えるが、指定は変換前の一覧に残るので、依存の走査から隠れない。
+  test("flags node:fs in an unreachable branch next to a folded dynamic import", () => {
+    expect(
+      toolDependencies(
+        'if (false) { await import("node:fs"); }\nawait import("./a" + ".ts");',
+      ),
+    ).not.toEqual([]);
+  });
+
   test("does not flag node:path", () => {
     expect(toolDependencies('import { join } from "node:path";')).toEqual([]);
   });
