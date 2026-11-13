@@ -6,7 +6,6 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isRecord } from "../../f/factory/lib/types.ts";
 
@@ -27,11 +26,12 @@ const PRELUDE = [
 // 一時ディレクトリに置いたファイルを、リポジトリの`biome.json`でlintする。
 // 標準入力(`--stdin-file-path`)はこの版では診断を返さないので、実ファイルを渡す。
 // cwdをリポジトリの根にすると、Biomeは根の`biome.json`と、インストール済みのBiomeを使う。
+// 一時ディレクトリは根の下に作る。根の外のファイルを渡すと、Biomeが.gitignoreの処理で異常終了することがあるため。
 function lint(
   body: string,
   options: { readonly onlyRule: boolean },
 ): { readonly exitCode: number; readonly output: string } {
-  const dir = mkdtempSync(join(tmpdir(), "biome-probe-"));
+  const dir = mkdtempSync(join(ROOT, ".biome-probe-"));
   try {
     const file = join(dir, "probe.ts");
     writeFileSync(file, `${PRELUDE}\n${body}\n`);

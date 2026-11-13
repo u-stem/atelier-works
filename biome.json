@@ -17,7 +17,10 @@
       "!tsconfig.wmill.json",
       "!node_modules",
       "!rt.d.ts",
-      "!wmill-lock.yaml"
+      "!wmill-lock.yaml",
+      "!**/*.md",
+      "!**/*.yaml",
+      "!**/*.yml"
     ]
   },
   "linter": {
@@ -49,6 +52,26 @@
     }
   },
   "overrides": [
+    {
+      "includes": ["**/*.test.ts", "**/*.test.tsx"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noComponentHookFactories": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["console/src/lib/writeNotices.ts"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "usePlaywrightValidDescribeCallback": "off"
+          }
+        }
+      }
+    },
     {
       "includes": ["console/**"],
       "javascript": {
