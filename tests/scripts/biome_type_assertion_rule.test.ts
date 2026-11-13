@@ -26,7 +26,7 @@ const PRELUDE = [
 // 一時ディレクトリに置いたファイルを、リポジトリの`biome.json`でlintする。
 // 標準入力(`--stdin-file-path`)はこの版では診断を返さないので、実ファイルを渡す。
 // cwdをリポジトリの根にすると、Biomeは根の`biome.json`と、インストール済みのBiomeを使う。
-// 一時ディレクトリは根の下に作る。根の外のファイルを渡すと、2.6.5は.gitignoreの処理で異常終了するため。
+// 一時ディレクトリは根の下に作る。根の外のファイルを渡すと、Biomeが.gitignoreの処理で異常終了することがあるため。
 function lint(
   body: string,
   options: { readonly onlyRule: boolean },

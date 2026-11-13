@@ -31,8 +31,7 @@
         "noUnsafeTypeAssertion": "error"
       },
       "suspicious": {
-        "noExplicitAny": "error",
-        "noTemplateCurlyInString": "off"
+        "noExplicitAny": "error"
       },
       "style": {
         "noNonNullAssertion": "error"
