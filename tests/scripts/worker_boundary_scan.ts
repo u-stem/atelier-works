@@ -58,7 +58,13 @@ export function unfollowableImports(source: string): string[] {
     }
   }
   const code = codeOf(source);
-  if (REQUIRE_REFERENCE.test(codeSkeleton(code))) found.push("require");
+  // 骨組みは、割り算を正規表現と読み違えると間のコードを落とすので、変換後のコードへの呼び出しの判定も残す。
+  if (
+    /\brequire\s*\(/.test(code) ||
+    REQUIRE_REFERENCE.test(codeSkeleton(code))
+  ) {
+    found.push("require");
+  }
   for (const match of code.matchAll(/\bimport\s*\(/g)) {
     if (!SIMPLE_DYNAMIC_IMPORT.test(code.slice(match.index))) {
       found.push("dynamic import with a non-literal argument");
@@ -81,8 +87,9 @@ const VARIABLE_NAME = /\b(?:getVariable|getResource)\w*/g;
 const LITERAL_CALL =
   /\.\s*(?:getVariable|getResource)\s*\(\s*(?:""|``)\s*[,)]/g;
 const NAME_ONLY_STRING = /^["'](?:getVariable|getResource)\w*["']$/;
+// キーワードは、メンバー(`.in`、`.of`)と識別子の一部を除く。その後ろの`/`は割り算である。
 const REGEX_PRECEDER =
-  /(?:^|[(,=:[!&|?{};+\-*%<>~^]|\b(?:return|typeof|case|in|of))\s*$/;
+  /(?:^|[(,=:[!&|?{};+\-*%<>~^]|(?<![.\w$])(?:return|typeof|case|in|of))\s*$/;
 
 /**
  * 変換後のコードから、文字列、テンプレートの文字部分、正規表現リテラルの中身を落とした骨組み。
@@ -298,7 +305,7 @@ const IMPORT_META = /(?<![.\w$])import\s*\.\s*meta(?![\w$])/;
 /**
  * CommonJSの`module`と`exports`の参照。`module.require`でモジュールへ届く。
  * `x.module`のようなメンバーは当てない。
- * 宣言の有効範囲は見ないので、同じ名前の変数も当てる。
+ * 宣言の有効範囲は見ないので、同じ名前の変数も当てる。オブジェクトのキー(`{ module: 1 }`)も当たる。
  */
 const COMMONJS_REFERENCE = /(?<![.\w$])(?:module|exports)(?![\w$])/g;
 
@@ -459,8 +466,22 @@ const FORBIDDEN_NAMES =
 const CLIENT_IMPORT_CLAUSE =
   /\bimport\s+([^;"']*?)\s*\bfrom\s*["']windmill-client[^"']*["']/g;
 const IMPORT_STATEMENT = /\bimport\s+[^;"']*?\bfrom\s*""/g;
-const FETCH_REFERENCE = /(?<![.\w$])fetch(?![\w$])(?!\s*:)/;
-const WORKER_REFERENCE = /(?<![.\w$])Worker(?![\w$])(?!\s*:)/;
+
+/**
+ * `skeleton`に、`name`の参照があるか。メンバー(`x.name`)と、オブジェクトのキーは数えない。
+ * キーとみなすのは、直前が`{`か`,`で、直後が`:`のものだけである。
+ * 後ろに`:`が続くだけで除くと、条件式の枝(`c ? name : null`)も通ってしまうためである。
+ */
+function hasReference(skeleton: string, name: string): boolean {
+  const occurrence = new RegExp(`(?<![.\\w$])${name}(?![\\w$])`, "g");
+  for (const match of skeleton.matchAll(occurrence)) {
+    const isKey =
+      /[{,]\s*$/.test(skeleton.slice(0, match.index)) &&
+      /^\s*:/.test(skeleton.slice(match.index + name.length));
+    if (!isKey) return true;
+  }
+  return false;
+}
 const GLOBAL_OBJECT = /(?<![.\w$])(?:globalThis|global|self|window)(?![\w$])/;
 const MEMBER_ACCESS = /^\s*\.\s*([A-Za-z_$][\w$]*)/;
 
@@ -744,10 +765,10 @@ export function sdkFindings(source: string): SdkFindings {
   if (clientStatements !== [...code.matchAll(CLIENT_IMPORT_CLAUSE)].length) {
     problems.push("re-export of windmill-client");
   }
-  if (FETCH_REFERENCE.test(skeleton)) problems.push("use of fetch");
+  if (hasReference(skeleton, "fetch")) problems.push("use of fetch");
   if (REQUIRE_REFERENCE.test(skeleton)) problems.push("use of require");
   if (IMPORT_META.test(skeleton)) problems.push("use of import.meta");
-  if (WORKER_REFERENCE.test(skeleton)) problems.push("use of Worker");
+  if (hasReference(skeleton, "Worker")) problems.push("use of Worker");
   const globalObject = GLOBAL_OBJECT.exec(skeleton)?.[0];
   if (globalObject !== undefined) problems.push(`use of ${globalObject}`);
   for (const name of commonjsReferences(skeleton)) {

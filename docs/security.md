@@ -1185,6 +1185,8 @@ script.yamlに`$var:`か`$res:`の参照があるときも、テストは落ち�
 凍結の変数`f/factory/freezes`は、書き込みのときに`isSecretIfNotExist`へ`false`を渡すので、secretではない。
 呼び出し側が定数だけを渡すことを確かめ、テストの許可リストに理由を書いている。
 テストが見ないのは、文字列を組み立てて作ったsecretのパス、環境変数やDBを経由して受け取る名前、`eval`、文字列の中に隠したコードである。
+割り算を正規表現リテラルと読み違えた範囲も見ない。
+走査は、読み違えた間のコードを落とす。
 これらはコードのレビューで見る。
 
 サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
@@ -1439,9 +1441,21 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 - 式で組み立てたtag、フローの入力で渡すtag。
 - Windmillの画面で付けたtag。
 - 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
+- 割り算を正規表現リテラルと読み違えた範囲。
+  走査は、読み違えた間のコードを落とす。
+- グローバルの`Worker`。
+  この境界の依存の走査は、`Worker`の参照を数えない。
+- `process`の別名と分割代入、`node:process`からの名前付きimportで読む`binding`。
+  依存の走査が名前で見るのは、`process.binding`の形だけである。
+- 禁止の一覧に無い`node:`のモジュール。
+  依存の走査は、`node:`のモジュールを禁止の一覧で止めるので、一覧に無いモジュールは通る。
+- `globalThis`以外のグローバルオブジェクト(`global`、`self`、`window`)の経由。
+  Console用workerの走査は、これらも禁じる。
 - `windmill-client`の中身。
 - resourceの中身で解決されるsecret。
   `getResource`が返す値の中の`$var:`は、走査が見ない。
+
+上の既知の限界は、残るリスクの[R-PER-23](security-risks.md#r-per-23)である。
 
 tag`periodic`を新しく付けるPRでは、そのscriptが読むresourceの中身を確かめる。
 `getResource`の引数のresourceごとに、値に`$var:`で始まる参照が無いことを、Windmillで確かめる。

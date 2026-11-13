@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FORBIDDEN_EXACT_PATHS } from "../../f/factory/lib/protected_paths.ts";
 import {
+  CLIENT_PACKAGE,
   codeOf,
   DISCORD_WEBHOOK_URL,
   datatableStringSql,
@@ -1107,6 +1108,14 @@ describe("the SDK use scan", () => {
     expect(sdkFindings("const f = c ? fetch : null;").problems).not.toEqual([]);
   });
 
+  test("flags fetch in the second branch of a conditional", () => {
+    expect(sdkFindings("const f = c ? null : fetch;").problems).not.toEqual([]);
+  });
+
+  test("flags fetch as a shorthand property", () => {
+    expect(sdkFindings("const handle = { fetch };").problems).not.toEqual([]);
+  });
+
   test("flags Worker in a branch of a conditional", () => {
     expect(sdkFindings("const W = c ? Worker : null;").problems).not.toEqual(
       [],
@@ -1555,10 +1564,7 @@ describe("the scripts restricted to an SDK allowance", () => {
     for (const path of RESTRICTED) {
       for (const [file, source] of sourcesReachableFrom(path)) {
         for (const spec of transpilerImports(source)) {
-          if (
-            !spec.startsWith(".") &&
-            !/^windmill-client(?:@[\w.+-]+)?$/.test(spec)
-          ) {
+          if (!spec.startsWith(".") && !CLIENT_PACKAGE.test(spec)) {
             outside.push(`${relative(file)}: ${spec}`);
           }
         }

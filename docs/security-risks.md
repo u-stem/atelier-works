@@ -23,7 +23,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | CRED | [資格情報の取得](#資格情報の取得) | [セキュリティ](security.md) | 10 |
 | DLV | [Consoleの配信](#consoleの配信) | [セキュリティ](security.md) | 33 |
 | BAK | [バックアップの控え](#バックアップの控え) | [セキュリティ](security.md) | 03 |
-| PER | [定期ジョブ用workerの境界](#定期ジョブ用workerの境界) | [セキュリティ](security.md) | 22 |
+| PER | [定期ジョブ用workerの境界](#定期ジョブ用workerの境界) | [セキュリティ](security.md) | 23 |
 | UPD | [自己更新の打ち切り](#自己更新の打ち切り) | [セキュリティ](security.md) | 04 |
 | DENY | [Claude Codeの拒否ルール](#claude-codeの拒否ルール) | [セキュリティ](security.md) | 02 |
 | HOOK | [Claude Codeのフック](#claude-codeのフック) | [セキュリティ](security.md) | 08 |
@@ -223,6 +223,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-per-20"></a>R-PER-20 | `poll_prs`は、チーム宛ての確認が要る行を、1周回に20件までRESTで確かめる。超えた分は、結果の`team_capped`に出る。前の周回の続きから選ぶので、次の周回以降に確かめられる。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-21"></a>R-PER-21 | 許可されていない作者のPRも、1周回20件のチーム宛ての確認の枠を使う。外の人がheadを変え続けると、許可された作者のチーム依頼の確認が数周回遅れうる。止まらない。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 | <a id="r-per-22"></a>R-PER-22 | `listPrReviews`と`listPrReviewComments`にはページの上限が無い。許可された作者のPRや直接の依頼のPRに、外の人がコメントを増やせる経路は、以前からある。この変更の範囲外の記録である。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
+| <a id="r-per-23"></a>R-PER-23 | 定期ジョブ用workerの境界の走査には、既知の限界がある。グローバルの`Worker`、`process`の別名と分割代入、`node:`のモジュールを禁止の一覧で止める方式、`globalThis`以外のグローバルオブジェクトである。走査は仕掛け線で、最後の関門は、scriptの変更に対する人のレビューである。対象のscriptと、importでたどれるファイルは、変更のたびに人がレビューする。 | [定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
 
 ## 自己更新の打ち切り
 
