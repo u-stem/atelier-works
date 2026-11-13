@@ -325,7 +325,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 緩めると検査をすり抜けた設定が書かれうるが、書くには人が端末で`yes`を入力する。
  * `lib/credential_expiry.script.lock`は守らない。依存の無いlibのlockと同じ扱いである。
  * これらが読む`lib/log.ts`と`lib/types.ts`、`lib/cleanup_support.ts`は、多くのscriptが使う日常的に直す部品なので守らない。
- * 上の`check-idle.ts`が読む`lib/types.ts`も、同じ理由で守らない。
+ * 上の`check-idle.ts`は、ホストのユーザーの権限で動くので、日常的に直す保護されない`lib/types.ts`を読まず、`isRecord`を自分で持つ。
+ * 読むと、その部品を直す変更が、人の承認なしにホストで動く経路になるためである。
  * 日本時間の部品(`lib/jst.ts`)と`.script.yaml`は守る。`lib/credential_expiry.ts`が資格情報の期限の通知の日付に、
  * `lib/claude.ts`が日次予算の日の境界に使い、どちらも保護パスだからである。
  * Console用workerの解除のscriptの部品(`lib/console_holds_support.ts`)も、解除の通知の時刻に使う。
