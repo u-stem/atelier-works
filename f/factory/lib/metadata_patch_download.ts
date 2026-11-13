@@ -1,16 +1,10 @@
 // CIが出したメタデータのパッチ(artifactのzip)を、バイト列で取得する。
-// `gh api`の出力は文字列に復号されてzipが壊れるため、`fetch`で取得する。
-// トークンはAPIへの最初の要求にだけ載せ、取得先はAzureのblob storageの`https`に限る。
+// 取得は通信層(`github_http.ts`)の`downloadRedirectTarget`に任せる。
+// トークンはAPIへの最初の要求にだけ載り、取得先はAzureのblob storageの`https`に限られる。
 // 取得したバイト列は信用せず、呼び出し側が検査する。
+// `github.ts`は子プロセスにつながるのでimportしない。
 
-// レート制限の判定は、通信層(`github_http.ts`)と共有する。`github.ts`は子プロセスにつながるのでimportしない。
-import {
-  classifyRateLimit,
-  GITHUB_API_ORIGIN,
-  GITHUB_API_VERSION,
-  GITHUB_USER_AGENT,
-  rateLimitError,
-} from "./github_http.ts";
+import { downloadRedirectTarget } from "./github_http.ts";
 import { assertGitHubName } from "./types.ts";
 
 /** endpointを組み立てる前に、`owner/repo`の両方を検証する。 */
@@ -24,29 +18,19 @@ function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-/** artifactのダウンロードに使う`fetch`。テストでは差し替える。 */
-export type ArtifactFetch = (
-  url: string,
-  init: RequestInit,
-) => Promise<Response>;
-
 /**
  * artifactのダウンロードの呼び出し側。
- * `gh`の出力は文字列に復号されてzipの中身が壊れるため、ダウンロードは`fetch`で行う。
- * トークンは、GitHubのAPIへの最初の要求の`Authorization`ヘッダーにだけ載せる。
+ * `gh`の出力は文字列に復号されてzipの中身が壊れるため、ダウンロードは通信層の`fetch`で行う。
+ * トークンは、GitHubのAPIへの最初の要求の`Authorization`ヘッダーにだけ載る。
  */
 export type ArtifactDownloadClient = {
   readonly ghToken: string;
-  readonly fetch: ArtifactFetch;
-  /** 1回の要求と本文の読み取りに許す時間(ミリ秒)。既定は`ARTIFACT_FETCH_TIMEOUT_MS`。 */
+  /** APIへの要求と取得先への要求を合わせて許す時間(ミリ秒)。既定は`ARTIFACT_FETCH_TIMEOUT_MS`。 */
   readonly timeoutMs?: number;
   readonly now?: () => Date;
 };
 
 export const ARTIFACT_FETCH_TIMEOUT_MS = 60_000;
-
-/** artifactの取得先として認めるホストの末尾。GitHubはAzureのblob storageの署名付きURLへ302で渡す。 */
-const ARTIFACT_STORAGE_HOST_SUFFIX = ".blob.core.windows.net";
 
 export type ArtifactDownloadFailure =
   | "expired"
@@ -80,85 +64,6 @@ function assertArtifactId(artifactId: number): void {
   }
 }
 
-/** 取得先として認めるURLか。`https`のAzureのblob storageで、認証情報とポートを含まないものだけを認める。 */
-function isAllowedArtifactStorageUrl(location: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(location);
-  } catch {
-    return false;
-  }
-  return (
-    url.protocol === "https:" &&
-    url.username === "" &&
-    url.password === "" &&
-    url.port === "" &&
-    url.hostname.endsWith(ARTIFACT_STORAGE_HOST_SUFFIX)
-  );
-}
-
-async function sendArtifactRequest(
-  client: ArtifactDownloadClient,
-  url: string,
-  init: RequestInit,
-): Promise<Response> {
-  try {
-    return await client.fetch(url, {
-      ...init,
-      signal: AbortSignal.timeout(
-        client.timeoutMs ?? ARTIFACT_FETCH_TIMEOUT_MS,
-      ),
-    });
-  } catch {
-    // 通信のエラーの文面にはURLが入りうるので、載せない。
-    throw new GitHubArtifactDownloadError("network");
-  }
-}
-
-/** 本文の次の断片を読む。途中で切れた接続や時間切れは`network`の失敗にする。 */
-async function readArtifactChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-) {
-  try {
-    return await reader.read();
-  } catch {
-    throw new GitHubArtifactDownloadError("network");
-  }
-}
-
-/** 本文を、実際に受け取ったバイト数で`maxBytes`を確かめながら読む。超えたら読むのをやめて失敗にする。 */
-async function readBodyWithLimit(
-  response: Response,
-  maxBytes: number,
-): Promise<Uint8Array> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new GitHubArtifactDownloadError("too_large");
-  }
-  if (response.body === null) return new Uint8Array();
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const chunk = await readArtifactChunk(reader);
-    if (chunk.done) break;
-    total += chunk.value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      throw new GitHubArtifactDownloadError("too_large");
-    }
-    chunks.push(chunk.value);
-  }
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body;
-}
-
 /**
  * artifactのzipをバイト列で取得する。取得したzipは信用せず、呼び出し側が検査する。
  * 取得の前に、期限切れと、申告された大きさ(`sizeInBytes`)が`maxBytes`を超えるものを断る。
@@ -166,6 +71,7 @@ async function readBodyWithLimit(
  * 返った302の`Location`が、`https`のAzureのblob storageでなければ断る。
  * 次に、そのURLへトークンなしで要求し、リダイレクトはたどらない。
  * 本文は、実際に受け取ったバイト数が`maxBytes`を超えた時点で読むのをやめて断る。
+ * 2つの手順は通信層の`downloadRedirectTarget`が行い、締め切りを共有する。
  * ログとDBに載せない前提のバイト列を返すだけで、本文を文字列にしない。
  * 失敗は`GitHubArtifactDownloadError`で、rate limitは`GitHubRateLimitError`で伝える。
  */
@@ -186,50 +92,41 @@ export async function downloadArtifactZip(
   if (artifact.sizeInBytes > maxBytes) {
     throw new GitHubArtifactDownloadError("too_large");
   }
-  const endpoint = `repos/${owner}/${repo}/actions/artifacts/${String(artifact.id)}/zip`;
-  const first = await sendArtifactRequest(
-    client,
-    `${GITHUB_API_ORIGIN}/${endpoint}`,
+  const result = await downloadRedirectTarget(
     {
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${client.ghToken}`,
-        "X-GitHub-Api-Version": GITHUB_API_VERSION,
-        "User-Agent": GITHUB_USER_AGENT,
-      },
-      redirect: "manual",
+      token: client.ghToken,
+      ...(client.now !== undefined ? { now: client.now } : {}),
+    },
+    {
+      path: `repos/${owner}/${repo}/actions/artifacts/${String(artifact.id)}/zip`,
+    },
+    "artifact",
+    {
+      as: "bytes",
+      maxBytes,
+      timeoutMs: client.timeoutMs ?? ARTIFACT_FETCH_TIMEOUT_MS,
     },
   );
-  await first.body?.cancel().catch(() => undefined);
-  if (first.status < 300 || first.status >= 400) {
-    const headers = new Map<string, string>();
-    first.headers.forEach((value, key) => {
-      headers.set(key.toLowerCase(), value);
-    });
-    // 本文は読まずに捨てたので、ヘッダーだけで判定する。
-    const limit = classifyRateLimit(
-      first.status,
-      headers,
-      "",
-      (client.now ?? (() => new Date()))(),
-    );
-    if (limit !== null) throw rateLimitError(endpoint, limit, false);
-    throw new GitHubArtifactDownloadError(
-      first.status >= 200 && first.status < 300 ? "bad_redirect" : "api_status",
-      first.status,
-    );
+  switch (result.kind) {
+    case "bytes":
+      return result.bytes;
+    case "api_response": {
+      const status = result.response.status;
+      if (status === 0) throw new GitHubArtifactDownloadError("network");
+      throw new GitHubArtifactDownloadError(
+        status >= 200 && status < 300 ? "bad_redirect" : "api_status",
+        status,
+      );
+    }
+    case "bad_redirect":
+      throw new GitHubArtifactDownloadError("bad_redirect");
+    case "storage_status":
+      throw new GitHubArtifactDownloadError("storage_status", result.status);
+    case "too_large":
+      throw new GitHubArtifactDownloadError("too_large");
+    case "no_response":
+    case "incomplete":
+    case "text":
+      throw new GitHubArtifactDownloadError("network");
   }
-  const location = first.headers.get("location");
-  if (location === null || !isAllowedArtifactStorageUrl(location)) {
-    throw new GitHubArtifactDownloadError("bad_redirect");
-  }
-  const second = await sendArtifactRequest(client, location, {
-    headers: { "User-Agent": GITHUB_USER_AGENT },
-    redirect: "error",
-  });
-  if (!second.ok) {
-    await second.body?.cancel().catch(() => undefined);
-    throw new GitHubArtifactDownloadError("storage_status", second.status);
-  }
-  return readBodyWithLimit(second, maxBytes);
 }

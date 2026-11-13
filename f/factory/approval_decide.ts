@@ -22,7 +22,7 @@
 // 同じかを確かめ、違うか確かめられなければ承認を拒否する。
 // 承認者が見た内容と、実装のClaudeに渡る内容を一致させるためである。
 // このscriptはConsole用workerで動き、`gh`を起動できない。そのため、GitHubのREST APIを
-// `fetch`で直接読む(`fetchIssueContent`)。別のworkerのscriptに確認を頼むと、
+// `gh`を起動しない通信層で読む(`fetchIssueContent`)。別のworkerのscriptに確認を頼むと、
 // defaultのworkerの待ち行列で、Console用workerの枠を塞ぐためである。
 // `github_token`は`Authorization`ヘッダだけに載せる。
 
@@ -42,7 +42,7 @@ import {
   getApprovalRequest,
   getWorkItem,
 } from "./lib/db.ts";
-import { type FetchLike, fetchIssueContent } from "./lib/github.ts";
+import { fetchIssueContent } from "./lib/github.ts";
 import { issueChangedSinceIntake } from "./lib/implement_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
 import {
@@ -82,7 +82,6 @@ export type IssueCheckDeps = {
     "owner" | "repo" | "issue_number" | "title" | "body"
   > | null>;
   readonly getToken: () => Promise<string>;
-  readonly fetchFn: FetchLike;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
 };
 
@@ -105,7 +104,6 @@ export async function checkIssueAgainstIntake(
       return "unavailable";
     }
     const live = await fetchIssueContent(
-      deps.fetchFn,
       await deps.getToken(),
       workItem.owner,
       workItem.repo,
@@ -302,7 +300,6 @@ export async function main(
           {
             getWorkItem: (id) => getWorkItem(id),
             getToken: () => wmill.getVariable("f/factory/github_token"),
-            fetchFn: fetch,
             warn: (message, fields) =>
               logger("approval_decide").warn(message, fields),
           },

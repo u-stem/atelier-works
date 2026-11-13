@@ -43,7 +43,7 @@ import type {
   GhOwnerRepoFreshnessRow,
   GhPullRequest,
 } from "../../f/factory/lib/types.ts";
-import { ghApiOk } from "./testSupport.ts";
+import { ghApiOk, serveGitHubFetchWith } from "./testSupport.ts";
 
 const MINUTE_MS = 60_000;
 const DB_NOW = new Date("2026-10-18T00:00:00.000Z");
@@ -1200,6 +1200,8 @@ describe("discoverIssues never calls a search endpoint", () => {
         });
       },
     };
+    // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+    serveGitHubFetchWith(client.run);
     const owners = options.owners ?? [ACME];
     const log: Logger = { info() {}, warn() {}, error() {} };
     const result = await discoverIssues(
@@ -4179,6 +4181,8 @@ describe("discoverPrs never calls a search endpoint", () => {
         });
       },
     };
+    // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+    serveGitHubFetchWith(client.run);
     const owners = options.owners ?? [ACME];
     const log: Logger = { info() {}, warn() {}, error() {} };
     const result = await discoverPrs(
@@ -4294,6 +4298,8 @@ describe("discoverPrs never calls a search endpoint", () => {
         });
       },
     };
+    // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+    serveGitHubFetchWith(client.run);
     const result = await discoverPrs(
       {
         useTable: true,

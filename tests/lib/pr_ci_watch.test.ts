@@ -89,7 +89,7 @@ import type {
   NoticeRecord,
   WorkItemStatus,
 } from "../../f/factory/lib/types.ts";
-import { ghApiOk } from "./testSupport.ts";
+import { ghApiOk, serveGitHubFetchWith } from "./testSupport.ts";
 
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
@@ -7236,6 +7236,8 @@ describe("the human discovery never calls a search endpoint", () => {
         });
       },
     };
+    // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+    serveGitHubFetchWith(client.run);
     const discovery = await buildHumanDiscovery({
       config: {
         pr_ci_watch_human_prs: true,

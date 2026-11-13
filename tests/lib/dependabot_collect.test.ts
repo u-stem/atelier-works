@@ -2077,14 +2077,16 @@ describe("buildCollectDeps", () => {
     expect(argv).toContain("repos/acme/widgets/pulls/12");
   });
 
-  test("passes the token of the client to gh", async () => {
+  test("passes the token of the client to the GitHub API", async () => {
     const fake = createFakeCommandRunner([ghApiOk({})]);
 
     await depsWith({ run: fake.run })
       .getPr("acme", "widgets", 12)
       .catch(() => undefined);
 
-    expect(fake.calls[0]?.options?.env?.GH_TOKEN).toBe(GH_TOKEN);
+    expect(fake.calls[0]?.request?.headers.get("authorization")).toBe(
+      `Bearer ${GH_TOKEN}`,
+    );
   });
 
   test("binds getBranchSha to the client", async () => {

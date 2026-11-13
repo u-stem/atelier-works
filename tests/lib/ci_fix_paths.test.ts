@@ -293,6 +293,8 @@ describe("protected paths", () => {
     "f/factory/lib/check_sandbox_reasons.script.yaml",
     "f/factory/lib/github_errors.ts",
     "f/factory/lib/github_errors.script.yaml",
+    "f/factory/lib/stream_cap.ts",
+    "f/factory/lib/stream_cap.script.yaml",
     "f/factory/lib/repo_owner_gate.ts",
     "f/factory/lib/model_policy.ts",
     "f/factory/lib/config.ts",

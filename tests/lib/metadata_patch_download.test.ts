@@ -1,32 +1,25 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { GitHubRateLimitError } from "../../f/factory/lib/github.ts";
 import {
-  type ArtifactFetch,
   downloadArtifactZip,
   GitHubArtifactDownloadError,
 } from "../../f/factory/lib/metadata_patch_download.ts";
+import {
+  restoreGlobalFetch,
+  type SentRequest,
+  stubGlobalFetch,
+} from "./testSupport.ts";
+
+afterEach(restoreGlobalFetch);
 
 const STORAGE_URL =
   "https://productionresultssa1.blob.core.windows.net/actions-results/zip?sig=SECRET-SIGNATURE";
 
-type Call = { readonly url: string; readonly init: RequestInit | undefined };
+type Call = SentRequest;
 
+/** グローバルの`fetch`を、`responses`を順に返す関数に差し替える。 */
 function fakeFetch(responses: readonly (Response | Error)[]) {
-  const calls: Call[] = [];
-  let index = 0;
-  const fetchFake: ArtifactFetch = async (url, init) => {
-    calls.push({ url, init });
-    const response = responses[index];
-    index += 1;
-    if (response === undefined) {
-      throw new Error("fakeFetch: no canned response");
-    }
-    if (response instanceof Error) {
-      throw response;
-    }
-    return response;
-  };
-  return { fetch: fetchFake, calls };
+  return { calls: stubGlobalFetch(responses).sent };
 }
 
 const redirect = (location: string | null = STORAGE_URL, status = 302) =>
@@ -43,10 +36,10 @@ async function downloadError(
   artifact = artifactRef,
   max = MAX,
 ): Promise<GitHubArtifactDownloadError> {
-  const { fetch } = fakeFetch(responses);
+  fakeFetch(responses);
   try {
     await downloadArtifactZip(
-      { ghToken: "tok", fetch },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       artifact,
@@ -66,9 +59,9 @@ describe("downloadArtifactZip", () => {
     const body = new Uint8Array([
       0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe, 0x00, 0x80,
     ]);
-    const { fetch } = fakeFetch([redirect(), new Response(body)]);
+    fakeFetch([redirect(), new Response(body)]);
     const bytes = await downloadArtifactZip(
-      { ghToken: "tok", fetch },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       artifactRef,
@@ -80,7 +73,7 @@ describe("downloadArtifactZip", () => {
   test("asks the API for the zip of that artifact without following the redirect", async () => {
     const fake = fakeFetch([redirect(), new Response(new Uint8Array(1))]);
     await downloadArtifactZip(
-      { ghToken: "tok", fetch: fake.fetch },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       artifactRef,
@@ -95,7 +88,7 @@ describe("downloadArtifactZip", () => {
   test("sends the token to the API only", async () => {
     const fake = fakeFetch([redirect(), new Response(new Uint8Array(1))]);
     await downloadArtifactZip(
-      { ghToken: "tok", fetch: fake.fetch },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       artifactRef,
@@ -112,7 +105,7 @@ describe("downloadArtifactZip", () => {
   test("fetches the storage URL without following further redirects", async () => {
     const fake = fakeFetch([redirect(), new Response(new Uint8Array(1))]);
     await downloadArtifactZip(
-      { ghToken: "tok", fetch: fake.fetch },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       artifactRef,
@@ -125,9 +118,9 @@ describe("downloadArtifactZip", () => {
   });
 
   test("rejects an expired artifact before any request", async () => {
-    const fake = fakeFetch([]);
+    fakeFetch([]);
     const promise = downloadArtifactZip(
-      { ghToken: "tok", fetch: fake.fetch },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       { ...artifactRef, expired: true },
@@ -139,7 +132,7 @@ describe("downloadArtifactZip", () => {
   test("rejects a declared size over the limit before any request", async () => {
     const fake = fakeFetch([]);
     await downloadArtifactZip(
-      { ghToken: "tok", fetch: fake.fetch },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       { ...artifactRef, sizeInBytes: MAX + 1 },
@@ -157,9 +150,9 @@ describe("downloadArtifactZip", () => {
   });
 
   test("rejects an artifact id that is not a positive integer", async () => {
-    const fake = fakeFetch([]);
+    fakeFetch([]);
     const promise = downloadArtifactZip(
-      { ghToken: "tok", fetch: fake.fetch },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       { ...artifactRef, id: 0 },
@@ -223,7 +216,7 @@ describe("downloadArtifactZip", () => {
   });
 
   test("throws the rate limit error when the API is rate limited", async () => {
-    const { fetch } = fakeFetch([
+    fakeFetch([
       new Response("{}", {
         status: 403,
         headers: {
@@ -233,7 +226,7 @@ describe("downloadArtifactZip", () => {
       }),
     ]);
     const promise = downloadArtifactZip(
-      { ghToken: "tok", fetch },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       artifactRef,
@@ -243,9 +236,9 @@ describe("downloadArtifactZip", () => {
   });
 
   test("throws the rate limit error without a wait for a 429 without headers", async () => {
-    const { fetch } = fakeFetch([new Response("{}", { status: 429 })]);
+    fakeFetch([new Response("{}", { status: 429 })]);
     const error = await downloadArtifactZip(
-      { ghToken: "tok", fetch },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       artifactRef,

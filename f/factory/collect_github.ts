@@ -45,14 +45,9 @@ export async function main(): Promise<GhCollectResult> {
     addNotice: (record) => addNoticeUnlessUnresolved(record),
     request: ({ token, variables, timeoutMs, kind }) =>
       kind.kind === "owner_repos"
-        ? graphqlRequest(
-            { fetch, token, timeoutMs },
-            OWNER_REPOS_QUERY,
-            variables,
-          )
+        ? graphqlRequest({ token, timeoutMs }, OWNER_REPOS_QUERY, variables)
         : graphqlRequest(
             {
-              fetch,
               token,
               timeoutMs,
               aliasErrors: { count: kind.aliases },

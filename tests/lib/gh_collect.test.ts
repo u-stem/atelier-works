@@ -1,6 +1,6 @@
 // 収集の本体のテスト。通信とDBは注入した偽物に差し替える。
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   type GhCollectConfig,
   type GhCollectDeps,
@@ -10,7 +10,6 @@ import {
 import {
   buildRepoDetailQuery,
   type GraphqlFailure,
-  type GraphqlFetch,
   type GraphqlResponse,
   graphqlRequest,
   OWNER_REPOS_QUERY,
@@ -41,6 +40,9 @@ import {
   issueNode,
   prNode,
 } from "../fixtures/gh_detail_responses.ts";
+import { restoreGlobalFetch, stubGlobalFetchWith } from "./testSupport.ts";
+
+afterEach(restoreGlobalFetch);
 
 const NOW = Date.parse("2026-10-17T12:00:00.000Z");
 const ALICE_TOKEN = "github_pat_ALICESECRET0123456789";
@@ -3333,9 +3335,11 @@ describe("runGhCollect refused items from raw GraphQL responses", () => {
   const LEAK_BODY = "private-repo-body-text";
   const LEAKS = [LEAK_GHP, LEAK_PAT, LEAK_BODY, "ghp_", "github_pat_"];
 
-  /** 生の応答を返す`fetch`。`graphqlRequest`を通して`runGhCollect`に渡す。 */
-  function rawFetch(body: unknown): GraphqlFetch {
-    return async () => new Response(JSON.stringify(body), { status: 200 });
+  /** グローバルの`fetch`を、生の応答を返す関数に差し替える。`graphqlRequest`を通して`runGhCollect`に渡る。 */
+  function rawFetch(body: unknown): void {
+    stubGlobalFetchWith(
+      async () => new Response(JSON.stringify(body), { status: 200 }),
+    );
   }
 
   function withRawStage(
@@ -3347,9 +3351,9 @@ describe("runGhCollect refused items from raw GraphQL responses", () => {
       ...h.deps,
       request: async (call: Parameters<GhCollectDeps["request"]>[0]) => {
         if (call.kind.kind === "owner_repos" && raw.list !== undefined) {
+          rawFetch(raw.list);
           return await graphqlRequest(
             {
-              fetch: rawFetch(raw.list),
               token: call.token,
               timeoutMs: call.timeoutMs,
             },
@@ -3358,9 +3362,9 @@ describe("runGhCollect refused items from raw GraphQL responses", () => {
           );
         }
         if (call.kind.kind === "repo_details" && raw.detail !== undefined) {
+          rawFetch(raw.detail);
           return await graphqlRequest(
             {
-              fetch: rawFetch(raw.detail),
               token: call.token,
               timeoutMs: call.timeoutMs,
               aliasErrors: { count: call.kind.aliases },

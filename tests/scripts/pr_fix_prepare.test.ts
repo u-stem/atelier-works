@@ -28,7 +28,12 @@ import {
   prFixTimeoutMisfit,
   shouldReadPrFixHeadState,
 } from "../../f/factory/steps/pr_workflow_support.ts";
-import { ghApiOk, ghApiStdout, ok } from "../lib/testSupport.ts";
+import {
+  ghApiOk,
+  ghApiStdout,
+  ok,
+  serveGitHubFetchWith,
+} from "../lib/testSupport.ts";
 
 const SAFE_INPUT = {
   open: true,
@@ -224,6 +229,8 @@ function createBranchApiRunner(headProtected: boolean, headRules = 0) {
     }
     return ghApiOk({ protected: headProtected });
   };
+  // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+  serveGitHubFetchWith(run);
   return { run, endpoints };
 }
 
@@ -296,6 +303,7 @@ describe("fetchPrFixHeadBranchState", () => {
       }
       return ghApiOk({ protected: false });
     };
+    serveGitHubFetchWith(run);
     await expect(
       fetchPrFixHeadBranchState(
         { run, ghToken: "tok" },

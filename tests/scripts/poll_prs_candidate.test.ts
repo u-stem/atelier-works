@@ -29,6 +29,7 @@ import {
   labelEventNode,
   labelEventsOk,
   ok,
+  serveGitHubFetchWith,
 } from "../lib/testSupport.ts";
 
 const FOUND: PrSearchItem = {
@@ -113,6 +114,8 @@ function world(w: World) {
     }
     return ok(ghApiStdout(404, { message: "Not Found" }));
   };
+  // GETは`gh`を起動せず`fetch`で送るので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+  serveGitHubFetchWith(run);
   return { run, eventCalls: () => eventCalls };
 }
 
@@ -636,6 +639,7 @@ describe("buildPrCandidate for a candidate that came from the table", () => {
       endpoints.push(argv.find((arg) => arg.startsWith("repo")) ?? "");
       return fake.run(argv);
     };
+    serveGitHubFetchWith(run);
     await buildPrCandidate(
       { run, ghToken: "tok" },
       FOUND,

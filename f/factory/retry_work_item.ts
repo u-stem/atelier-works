@@ -1210,10 +1210,9 @@ async function restartWorkItem(
           prNumber,
           item.id,
         ),
-      // Console用のworkerには`gh`が無いので、`gh`を起動せず`fetch`で読む。
+      // Console用のworkerには`gh`が無いので、`gh`を起動しない読み取り(通信層の`fetch`)を使う。
       getState: async (owner, repo, number) =>
         fetchIssueState(
-          fetch,
           await wmill.getVariable("f/factory/github_token"),
           owner,
           repo,
@@ -1286,13 +1285,12 @@ async function restartWorkItem(
 
   const issueNumber = workItem.issue_number;
   if (shouldRefreshIntakeOnRestart(workItem, plan) && issueNumber !== null) {
-    // Console用のworkerには`gh`が無いので、`fetch`で読む。
+    // Console用のworkerには`gh`が無いので、`gh`を起動しない読み取り(通信層の`fetch`)を使う。
     // 通知はnoticeだけにする。このscriptは`discord_webhook_url`を読まない。
     await refreshIntakeFromIssue({
       snapshot: workItem,
       getIssue: async () =>
         fetchIssueContent(
-          fetch,
           await wmill.getVariable("f/factory/github_token"),
           workItem.owner,
           workItem.repo,

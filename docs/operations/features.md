@@ -577,6 +577,8 @@ workerのイメージは、`CLAUDE_CONFIG_DIR`(`/var/lib/factory/claude`)と`GH_
 
 `GH_CONFIG_DIR`を届かせないのは、ghとgitの子プロセスが、`GH_TOKEN`、`HOME`、`PATH`などを明示して作る環境で動き、ジョブの環境を引き継がないためである。
 届かせても、読む処理が無い。
+GitHubのAPIのGETは、子プロセスを起動せず、ジョブのプロセスの`fetch`で送るので、ジョブの環境を引き継ぐ。
+扱いは[セキュリティの「GitHubのAPIへの通信層」](../security.md#githubのapiへの通信層)にある。
 
 ジョブの環境は、実ジョブで次の結果になる。
 

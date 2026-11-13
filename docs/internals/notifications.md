@@ -777,10 +777,13 @@ noticeには重要度がある。
 
 ## GitHub APIのrate limit
 
-GitHub APIの呼び出しは`f/factory/lib/github.ts`が`gh api -i`で行う。
-応答のヘッダーを、2回目の要求なしに読むためである。
-rate limitの判定と待ち、一時的な失敗の再試行は、通信層の`f/factory/lib/github_http.ts`が行う。
-`gh`の送り方と、Console用のworkerと収集の`fetch`の送り方は、同じ判定と再試行を通る。
+GitHub APIの呼び出しは`f/factory/lib/github.ts`が行う。
+GETは、`gh`を起動せず、通信層の`f/factory/lib/github_http.ts`の`fetch`で送る。
+書き込み(POST、PATCH、PUT、DELETE)は、`gh api -i`で送る。
+`gh api -i`を使うのは、応答のヘッダーを、2回目の要求なしに読むためである。
+rate limitの判定と待ち、一時的な失敗の再試行は、通信層の`github_http.ts`が行う。
+`gh`の送り方と`fetch`の送り方は、同じ判定と再試行を通る。
+GETの一覧とパスの組み立ては、[GETの呼び出しの一覧](#getの呼び出しの一覧)にある。
 
 ### rate limitと判定する応答
 
@@ -867,7 +870,8 @@ rate limitで失敗したときに各ステップが何を済ませているか�
 ### RESTの検索の拒否
 
 通信層の`rejectRestSearchEndpoint`は、RESTの検索APIのendpointを、送る前に例外で拒む。
-`callGhApi`は`gh`を起動する前に、`fetch`の経路(`fetchIssueObject`、`gh_graphql.ts`)は送る前に、この検査を通る。
+`callGhApi`の書き込みは、`gh`を起動する前に、この検査を通る。
+`fetch`の経路(`callGhApi`のGET、`fetchIssueObject`、`gh_graphql.ts`、署名付きURLの取得)は、送る前に通る。
 検索の枠は小さく、周期の同じフローが5分の境目に重なって呼ぶと拒まれるので、呼び出しを入口で止める。
 判定は、endpointの先頭の`/`とホストを落とし、小文字にして、`search/`で始まるかを見る。
 `/search/issues`、`SEARCH/issues`、`https://api.github.com/search/issues`は拒む。
@@ -879,9 +883,59 @@ rate limitで失敗したときに各ステップが何を済ませているか�
 クエリに値が入りうるためである。
 対象はRESTだけで、GraphQLの`search`のフィールドは拒まない。
 `fetch`の経路は、`.`と`..`の区間と、エンコードした`.`を含む区間も拒む。
-`gh`の経路はドットセグメントを拒まず、どちらの経路も`.`以外のパーセントエンコードは正規化しない。
+`gh`の経路(書き込み)はドットセグメントを拒まず、どちらの経路も`.`以外のパーセントエンコードは正規化しない。
 呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通る。
-検査を通らないのは、`lib/metadata_patch_download.ts`のartifactの取得の最初の要求だけで、endpointは固定の形である。
+artifactの取得も、通信層の`downloadRedirectTarget`を通るので、この検査を受ける。
+
+### GETの呼び出しの一覧
+
+`f/factory`のGETは、すべて通信層の`fetch`で送り、パスの形の検査(`assertGitHubApiPath`)を通る。
+パスは`api.github.com`からの相対パスで、送る前に組み立て方を次の表のとおりに限る。
+所有者とリポジトリの名前は、どの呼び出しでも先に`assertGitHubName`を通す。
+番号とID(Issue、PR、実行、ジョブ、artifact)は、数値か、正の安全な整数を確かめた値である。
+commitのIDは、`assertCommitSha`か`isCommitSha`を通した40桁の16進数である。
+リダイレクトの「辿る」は、同じoriginへ最大3回である。
+名前を変えたリポジトリへの301を、`gh`が辿っていた挙動に合わせる。
+
+| 呼び出し(`github.ts`) | パス | 名前の組み立て | リダイレクト |
+| --- | --- | --- | --- |
+| `getDefaultBranch`、`getIssue`、`getPr`系(`fetchPr`)、`getPrDiff` | `repos/<o>/<r>`、`repos/<o>/<r>/issues/<n>`、`repos/<o>/<r>/pulls/<n>` | 番号だけ | 辿る |
+| `getViewer`、`getViewerTeams` | `user`、`user/teams?per_page=100` | なし | 辿る |
+| `getAccountId` | `users/<名前>` | 名前を`encodeURIComponent` | 辿る |
+| `getRepositoryId`、`getRepositoryOwnerId` | `repos/<o>/<r>` | 所有者とリポジトリを`encodeURIComponent` | 辿る |
+| `listLabeledOpenIssues` | `repos/<o>/<r>/issues?labels=<ラベル>&state=open&per_page=100` | ラベル名を`encodeURIComponent` | 辿る |
+| `findIssueByMarker` | `repos/<o>/<r>/issues?creator=<login>&state=all&since=<時刻>&...` | loginと時刻を`encodeURIComponent` | 辿る |
+| `lastUnlabeledActor`、`listIssueComments`、目印のコメントの検索 | `repos/<o>/<r>/issues/<n>/timeline?per_page=100`、`.../comments?per_page=100` | 番号だけ | 辿る |
+| `ensureLabel`(有無の確認) | `repos/<o>/<r>/labels/<ラベル>` | ラベル名を`encodeURIComponent` | 辿る |
+| `getPrFiles`、`listPrFiles`、`listPrCommits`、`listPrCommitMessages`、`listPrReviews`、`listPrReviewComments` | `repos/<o>/<r>/pulls/<n>/<files、commits、reviews、comments>?per_page=100` | 番号だけ | 辿る |
+| `listPrChecks` | `repos/<o>/<r>/commits/<sha>/check-runs?per_page=100` | commitのID | 辿る |
+| `getBranchSha` | `repos/<o>/<r>/git/ref/heads/<ブランチ>` | `assertBranchName`の後、区間ごとに`encodeURIComponent` | 辿る |
+| `compareCommits` | `repos/<o>/<r>/compare/<sha>...<sha>?per_page=100` | commitのID | 辿る |
+| `getFileAtRef` | `repos/<o>/<r>/contents/<パス>?ref=<ref>` | パスは`.`と`..`の区間を拒んでから区間ごとに、refは全体を`encodeURIComponent` | 辿る |
+| `getBranchProtected`、`getBranchRuleCount`、`listBranchRules` | `repos/<o>/<r>/branches/<ブランチ>`、`repos/<o>/<r>/rules/branches/<ブランチ>` | ブランチ名を`encodeURIComponent` | 辿る |
+| `findOpenPullRequestByHead`、`listPullRequestNumbersByHead`、`listOpenPullRequests` | `repos/<o>/<r>/pulls?head=<o:ブランチ>&...`、`repos/<o>/<r>/pulls?state=open&per_page=100` | `head`の値を`encodeURIComponent` | 辿る |
+| `listWorkflowRuns`、`listPrHeadWorkflowRuns` | `repos/<o>/<r>/actions/runs?branch=<ブランチ>&...` | ブランチ名を`encodeURIComponent`、`head_sha`はcommitのID | 辿る |
+| `listWorkflowRunJobs`、`listWorkflowRunArtifacts` | `repos/<o>/<r>/actions/runs/<id>/<jobs、artifacts>?...` | IDだけ | 辿る |
+| `fetchIssueState`、`fetchIssueContent`(Console用のworker) | `repos/<o>/<r>/issues/<n>` | 番号だけ | 辿らない(3xxを「移された」として扱う) |
+| `getWorkflowJobLog` | `repos/<o>/<r>/actions/jobs/<id>/logs` | IDだけ | APIは辿らず、302の取得先へトークンなしで1回 |
+
+`lib/drawio_viewer_bump_github.ts`(保護パス)のGETも、`callGhApi`、`callGhApiRawBody`、`paginateGhApi`を通る。
+
+| 呼び出し(`drawio_viewer_bump_github.ts`) | パス | 名前の組み立て | リダイレクト |
+| --- | --- | --- | --- |
+| `listReleases` | `repos/<o>/<r>/releases?per_page=100` | なし | 辿る |
+| `resolveTagCommit` | `repos/<o>/<r>/git/ref/tags/<タグ>`、`repos/<o>/<r>/git/tags/<id>` | タグ名は英数字と`._-`だけで`..`を含まない。IDは40桁の16進数 | 辿る |
+| `getRepoFileMeta`、`getRepoFileText` | `repos/<o>/<r>/contents/<パス>?ref=<ref>` | パスは区間ごとに、refは全体を`encodeURIComponent` | 辿る |
+| `getBranchHeadSha`、`createBranchWithFiles`(先頭のcommitの読み取り) | `repos/<o>/<r>/git/ref/heads/<ブランチ>`、`repos/<o>/<r>/git/commits/<sha>` | ブランチ名は`assertBranchName`の後、区間ごとに`encodeURIComponent`。shaは40桁の16進数 | 辿る |
+| `listOpenPullRequestHeads` | `repos/<o>/<r>/pulls?state=open&per_page=100` | なし | 辿る |
+| `compareChangedFiles` | `repos/<o>/<r>/compare/<base>...<head>` | `base`と`head`は`assertBranchName`の後、区間ごとに`encodeURIComponent` | 辿る |
+
+ページ送り(`paginateGhApi`と`findIssueByMarker`)は、`link`ヘッダーの次のURLからホストを落とした相対パスで送る(`toApiEndpoint`)。
+GitHubが返す次のURLは`repositories/<数値ID>/...`とクエリの形で、同じパスの検査を通る。
+ホストを落とすので、`link`ヘッダーが別のホストを指しても、送り先は`api.github.com`に固定される。
+エンコードしない名前(`resolveTagCommit`のタグ名)が、`new URL`で書き換わる文字を含むときは、パスの検査が送る前に拒む。
+`gh`の送り方は先頭の`/`と絶対URLも受け付けたが、GETではどちらも拒む。
+`tests/lib/github_search_rejection.test.ts`は、GETでの拒否と、書き込みが`gh`に先頭の`/`を渡せることを固定する。
 
 静的テスト`tests/scripts/no_search_api.test.ts`は、次の3つを固定する。
 
@@ -900,15 +954,25 @@ PRとIssueのポーリングは5分ごとに動くので、一過性の失敗で
 
 | 失敗 | 判定 | 再試行する要求 |
 | --- | --- | --- |
-| ghプロセスの起動失敗 | `Bun.spawn`の失敗を表す`SpawnError`で、コードが`EAGAIN`、`EMFILE`、`ENFILE`、`ENOMEM`(資源の一時不足) | すべての要求 |
-| ステータス行の無い失敗(通信断など) | 標準出力にステータス行が無く(HTTP 0)、プロセスがtimeoutしていない | GETと、読み取りのGraphQL(`listReviewThreads`) |
+| ghプロセスの起動失敗 | `Bun.spawn`の失敗を表す`SpawnError`で、コードが`EAGAIN`、`EMFILE`、`ENFILE`、`ENOMEM`(資源の一時不足) | `gh`で送るすべての要求(書き込み) |
+| 応答の無い失敗(通信断など) | GETは`fetch`が拒否した(HTTP 0)。書き込みは`gh`の標準出力にステータス行が無い(HTTP 0)。どちらも締め切りによるものを除く | GETと、読み取りのGraphQL(`listReviewThreads`) |
 | サーバーエラー | ステータスが500から599 | GETと、読み取りのGraphQL(`listReviewThreads`) |
+
+`fetch`では、要求が届く前の失敗と届いた後の失敗を見分けられない。
+そのため、GETの通信の失敗は、すべて応答の無い失敗として扱う。
+
+2xxの後で本文が途中で切れたGETは、1回だけ取り直す。
+取り直しても欠けたJSONの応答は、`ensureSuccess`がステータス0の`GitHubHttpError`にする。
+締め切りで切れたかは`timedOut`に載せる。
+形の誤り(`GitHubResponseError`)にせず通信の一時的な失敗として扱うので、PRのレビューの自動の再開(`markTransientGitHubFailure`)の対象になる。
+本文の上限を指定しないGETは、本文が16MiB(`GITHUB_RESPONSE_MAX_BYTES`)を超えた時点で読むのをやめる。
+大きすぎた本文は、取り直しても同じなので取り直さず、待っても直らない`GitHubResponseError`にする。
 
 待つ時間は2秒(`GITHUB_TRANSIENT_RETRY_DELAY_MS`)である。
 テストでは`GhClient`の`transientRetryDelayMs`と`sleep`で差し替える。
 再試行は要求ごとに1回までで、rate limitの再試行とは別に数える。
 rate limitの待ちの上限は変わらない。
-rate limitの再試行の中でも一時的な失敗の再試行が起こりうるので、1回の`callGhApi`でghを最大4回起動する。
+rate limitの再試行の中でも一時的な失敗の再試行が起こりうるので、1回の`callGhApi`で要求を最大4回送る。
 
 ### 変更を伴う要求を再送しない理由
 
@@ -934,7 +998,7 @@ mutation(`resolveReviewThread`)は再試行しない。
 
 - HTTPの4xx応答。
   応答が返っているので、呼び出し側が失敗として扱う。
-- 待っても直らない起動の失敗。
+- 書き込みで、待っても直らない`gh`の起動の失敗。
   ghの実行ファイルが無い場合(`ENOENT`)と、実行権限が無い場合(`EACCES`)である。
 - ghプロセスのtimeoutと、`fetch`の締め切り。
   待ちが長引き、ステップのtimeoutに近づくため。

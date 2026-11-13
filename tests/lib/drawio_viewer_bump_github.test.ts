@@ -165,8 +165,8 @@ describe("getRepoFileText", () => {
   test("asks for the raw media type", async () => {
     const { client, fake } = clientFor([ok(ghApiStdout(200, "x"))]);
     await getRepoFileText(client, "acme", "widgets", "a.txt", "main");
-    expect(fake.calls[0]?.argv).toContain(
-      "Accept: application/vnd.github.raw+json",
+    expect(fake.calls[0]?.request?.headers.get("accept")).toBe(
+      "application/vnd.github.raw+json",
     );
   });
 });
@@ -186,6 +186,22 @@ describe("getBranchHeadSha", () => {
     expect(
       await getBranchHeadSha(client, "acme", "widgets", "gone"),
     ).toBeNull();
+  });
+
+  test("encodes a percent sign in the branch name", async () => {
+    const { client, fake } = clientFor([ghApiOk({ object: { sha: SHA_A } })]);
+    await getBranchHeadSha(client, "acme", "widgets", "feature/x%2fy");
+    expect(fake.calls[0]?.argv[2]).toBe(
+      "repos/acme/widgets/git/ref/heads/feature/x%252fy",
+    );
+  });
+
+  test("encodes a hash sign in the branch name", async () => {
+    const { client, fake } = clientFor([ghApiOk({ object: { sha: SHA_A } })]);
+    await getBranchHeadSha(client, "acme", "widgets", "feature/a#b");
+    expect(fake.calls[0]?.argv[2]).toBe(
+      "repos/acme/widgets/git/ref/heads/feature/a%23b",
+    );
   });
 });
 

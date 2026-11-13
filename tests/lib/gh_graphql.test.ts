@@ -1,20 +1,19 @@
-// GraphQLクライアントの通信の決まりのテスト。実際には通信せず、`fetch`を差し替える。
+// GraphQLクライアントの通信の決まりのテスト。実際には通信せず、グローバルの`fetch`を差し替える。
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   buildRepoDetailQuery,
   GITHUB_GRAPHQL_URL,
-  type GraphqlFetch,
-  type GraphqlResponseLike,
   graphqlRequest,
   OWNER_REPOS_QUERY,
   REJECTABLE_FIELDS,
   readRejectedItems,
 } from "../../f/factory/lib/gh_graphql.ts";
+import { restoreGlobalFetch, stubGlobalFetchWith } from "./testSupport.ts";
+
+afterEach(restoreGlobalFetch);
 
 const TOKEN = "github_pat_TESTSECRETVALUE0123456789";
-
-type Sent = { url: string; init: RequestInit };
 
 type ResponseSpec = {
   readonly status?: number;
@@ -27,43 +26,46 @@ type ResponseSpec = {
  * 偽の応答。`json`を渡すと、その値を直列化した本文を返す。`json`が拒否すると、本文の読み取りが拒否される。
  * `json`が`SyntaxError`で拒否するときは、JSONとして読めない本文を返す。
  */
-function respond(spec: ResponseSpec): GraphqlResponseLike {
-  const headers = new Headers(spec.headers ?? {});
+function respond(spec: ResponseSpec): Response {
+  const init = { status: spec.status ?? 200, headers: spec.headers ?? {} };
   const json = spec.json;
-  return {
-    status: spec.status ?? 200,
-    headers,
-    text: async () => {
-      if (spec.text !== undefined) return spec.text;
-      if (json === undefined) return JSON.stringify({ data: {} });
+  if (spec.text !== undefined) return new Response(spec.text, init);
+  if (json === undefined) {
+    return new Response(JSON.stringify({ data: {} }), init);
+  }
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
       try {
-        return JSON.stringify(await json());
+        controller.enqueue(encoder.encode(JSON.stringify(await json())));
+        controller.close();
       } catch (err) {
-        if (err instanceof SyntaxError) return `not json ${err.message}`;
-        throw err;
+        if (err instanceof SyntaxError) {
+          controller.enqueue(encoder.encode(`not json ${err.message}`));
+          controller.close();
+          return;
+        }
+        controller.error(err);
       }
     },
-  };
+  });
+  return new Response(body, init);
 }
 
-function harness(next: () => Promise<GraphqlResponseLike>) {
-  const sent: Sent[] = [];
-  const fetchFn: GraphqlFetch = (url, init) => {
-    sent.push({ url, init });
-    return next();
-  };
-  return { fetchFn, sent };
+/** グローバルの`fetch`を、`next`の応答を返す関数に差し替える。 */
+function harness(next: () => Promise<Response>) {
+  return stubGlobalFetchWith(() => next());
 }
 
 const VARIABLES = { owner: "acme", label: "factory", cursor: null };
 
 async function request(
-  next: () => Promise<GraphqlResponseLike>,
+  next: () => Promise<Response>,
   variables: Readonly<Record<string, unknown>> = VARIABLES,
 ) {
   const h = harness(next);
   const result = await graphqlRequest(
-    { fetch: h.fetchFn, token: TOKEN },
+    { token: TOKEN },
     OWNER_REPOS_QUERY,
     variables,
   );
@@ -412,15 +414,11 @@ describe("graphqlRequest malformed json has no echo", () => {
   });
 
   test("does not throw", async () => {
-    const h = harness(async () =>
+    harness(async () =>
       respond({ json: () => Promise.reject(new SyntaxError(TOKEN)) }),
     );
     await expect(
-      graphqlRequest(
-        { fetch: h.fetchFn, token: TOKEN },
-        OWNER_REPOS_QUERY,
-        VARIABLES,
-      ),
+      graphqlRequest({ token: TOKEN }, OWNER_REPOS_QUERY, VARIABLES),
     ).resolves.toBeDefined();
   });
 });
@@ -520,14 +518,13 @@ describe("graphqlRequest alias errors", () => {
     errors: readonly unknown[],
     options: { count?: number } = {},
   ) {
-    const h = harness(async () =>
+    harness(async () =>
       respond({
         json: () => Promise.resolve({ data: ALIAS_DATA, errors }),
       }),
     );
     return await graphqlRequest(
       {
-        fetch: h.fetchFn,
         token: TOKEN,
         aliasErrors: { count: options.count ?? 2 },
       },
@@ -698,7 +695,7 @@ describe("graphqlRequest alias errors", () => {
   });
 
   test("errors without data fail the whole request", async () => {
-    const h = harness(async () =>
+    harness(async () =>
       respond({
         json: () =>
           Promise.resolve({
@@ -708,7 +705,7 @@ describe("graphqlRequest alias errors", () => {
       }),
     );
     const result = await graphqlRequest(
-      { fetch: h.fetchFn, token: TOKEN, aliasErrors: { count: 2 } },
+      { token: TOKEN, aliasErrors: { count: 2 } },
       buildRepoDetailQuery(2),
       VARIABLES,
     );
@@ -716,11 +713,11 @@ describe("graphqlRequest alias errors", () => {
   });
 
   test("a response without errors has an empty alias error list", async () => {
-    const h = harness(async () =>
+    harness(async () =>
       respond({ json: () => Promise.resolve({ data: ALIAS_DATA }) }),
     );
     const result = await graphqlRequest(
-      { fetch: h.fetchFn, token: TOKEN, aliasErrors: { count: 2 } },
+      { token: TOKEN, aliasErrors: { count: 2 } },
       buildRepoDetailQuery(2),
       VARIABLES,
     );
@@ -1006,7 +1003,7 @@ describe("graphqlRequest rejected items", () => {
   });
 
   test("success with alias errors carries rejected only for alias targets", async () => {
-    const h = harness(async () =>
+    harness(async () =>
       respond({
         json: () =>
           Promise.resolve({
@@ -1022,7 +1019,7 @@ describe("graphqlRequest rejected items", () => {
       }),
     );
     const result = await graphqlRequest(
-      { fetch: h.fetchFn, token: TOKEN, aliasErrors: { count: 2 } },
+      { token: TOKEN, aliasErrors: { count: 2 } },
       buildRepoDetailQuery(2),
       VARIABLES,
     );
@@ -1032,7 +1029,7 @@ describe("graphqlRequest rejected items", () => {
   });
 
   test("success with only optional field errors carries no rejected", async () => {
-    const h = harness(async () =>
+    harness(async () =>
       respond({
         json: () =>
           Promise.resolve({
@@ -1047,7 +1044,7 @@ describe("graphqlRequest rejected items", () => {
       }),
     );
     const result = await graphqlRequest(
-      { fetch: h.fetchFn, token: TOKEN, aliasErrors: { count: 1 } },
+      { token: TOKEN, aliasErrors: { count: 1 } },
       buildRepoDetailQuery(1),
       VARIABLES,
     );

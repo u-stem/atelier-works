@@ -1,6 +1,6 @@
 // 収集の判定(トークンの対応表、失敗の分類、応答の解析、対象の選別、goneの計画)のテスト。
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   allowlistedRepos,
   carriedFailure,
@@ -27,6 +27,9 @@ import {
   OWNER_REPOS_QUERY,
 } from "../../f/factory/lib/gh_graphql.ts";
 import type { GhCollectOwnerState, GhRepo } from "../../f/factory/lib/types.ts";
+import { restoreGlobalFetch, stubGlobalFetchWith } from "./testSupport.ts";
+
+afterEach(restoreGlobalFetch);
 
 const NOW = Date.parse("2026-10-17T12:00:00.000Z");
 const SECRET = "github_pat_AAAASECRETVALUE0123456789";
@@ -417,11 +420,12 @@ describe("classifyGraphqlFailure maps errors to codes", () => {
 
 describe("classifyGraphqlFailure reads the failures that graphqlRequest returns", () => {
   async function codeOfResponse(response: Response) {
-    const result = await graphqlRequest(
-      { fetch: async () => response, token: "tok" },
-      OWNER_REPOS_QUERY,
-      { owner: "acme", label: "factory", cursor: null },
-    );
+    stubGlobalFetchWith(async () => response);
+    const result = await graphqlRequest({ token: "tok" }, OWNER_REPOS_QUERY, {
+      owner: "acme",
+      label: "factory",
+      cursor: null,
+    });
     return result.ok ? "ok" : classifyGraphqlFailure(result, NOW).error_code;
   }
 

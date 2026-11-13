@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   type ApprovalDecideDeps,
   assertIssueMatchesIntake,
@@ -8,8 +8,10 @@ import {
   type IssueCheckDeps,
   missingApprovalRequestMessage,
 } from "../../f/factory/approval_decide.ts";
-import type { FetchLike } from "../../f/factory/lib/github.ts";
 import type { ApprovalRequest } from "../../f/factory/lib/types.ts";
+import { restoreGlobalFetch, stubGlobalFetchWith } from "../lib/testSupport.ts";
+
+afterEach(restoreGlobalFetch);
 
 const SNAPSHOT = {
   owner: "o",
@@ -21,13 +23,11 @@ const SNAPSHOT = {
 
 const TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
 
-function issueResponse(status: number, body: unknown): ReturnType<FetchLike> {
+function issueResponse(status: number, body: unknown): Promise<Response> {
   return Promise.resolve(new Response(JSON.stringify(body), { status }));
 }
 
-function liveIssue(
-  overrides: Record<string, unknown> = {},
-): ReturnType<FetchLike> {
+function liveIssue(overrides: Record<string, unknown> = {}): Promise<Response> {
   return issueResponse(200, {
     title: "Add feature",
     body: "Original body",
@@ -36,19 +36,25 @@ function liveIssue(
   });
 }
 
-function checkDeps(overrides: Partial<IssueCheckDeps> = {}): {
+/** 依存の差し替え。`fetchFn`は、グローバルの`fetch`の代わりにGitHubの応答を返す。 */
+type CheckOverrides = Partial<IssueCheckDeps> & {
+  readonly fetchFn?: (url: string) => Promise<Response>;
+};
+
+function checkDeps(overrides: CheckOverrides = {}): {
   deps: IssueCheckDeps;
   warnings: string[];
 } {
   const warnings: string[] = [];
+  const { fetchFn = () => liveIssue(), ...rest } = overrides;
+  stubGlobalFetchWith((request) => fetchFn(request.url));
   const deps: IssueCheckDeps = {
     getWorkItem: () => Promise.resolve(SNAPSHOT),
     getToken: () => Promise.resolve(TOKEN),
-    fetchFn: () => liveIssue(),
     warn: (message, fields) => {
       warnings.push(`${message} ${JSON.stringify(fields)}`);
     },
-    ...overrides,
+    ...rest,
   };
   return { deps, warnings };
 }

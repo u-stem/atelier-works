@@ -1,7 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   CI_JOB_LOG_MAX_BYTES,
-  GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubCiLogError,
   GitHubPaginationLimitError,
   GitHubRateLimitError,
@@ -10,17 +9,19 @@ import {
   listWorkflowRunJobs,
   WORKFLOW_RUN_JOBS_MAX_PAGES,
 } from "../../f/factory/lib/github.ts";
-import {
-  type CommandResult,
-  omittedMarker,
-} from "../../f/factory/lib/workspace.ts";
+import { omittedMarker } from "../../f/factory/lib/workspace.ts";
 import {
   createFakeCommandRunner,
-  fail,
+  cutBody,
   ghApiOk,
   ghApiStdout,
   ok,
+  redirectTo,
+  restoreGlobalFetch,
+  stubGlobalFetch,
 } from "./testSupport.ts";
+
+afterEach(restoreGlobalFetch);
 
 const SHA = "a".repeat(40);
 
@@ -188,351 +189,272 @@ describe("listWorkflowRunJobs", () => {
 });
 
 describe("getWorkflowJobLog", () => {
-  const get = (
-    fake: ReturnType<typeof createFakeCommandRunner>,
-    jobId = 9001,
-  ) => getWorkflowJobLog(client(fake), "acme", "widgets", jobId);
+  // 実際のジョブのログの302が指したホスト。
+  const LOG_URL =
+    "https://productionresultssa10.blob.core.windows.net/logs/9001.txt?sig=SECRETSIGNATURE";
+  const API_URL =
+    "https://api.github.com/repos/acme/widgets/actions/jobs/9001/logs";
+
+  const get = (jobId = 9001, sleeps: number[] = []) =>
+    getWorkflowJobLog(
+      {
+        run: createFakeCommandRunner([]).run,
+        ghToken: "tok",
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      },
+      "acme",
+      "widgets",
+      jobId,
+    );
 
   /** 例外の文面。例外でなければ空文字。 */
-  const messageOf = async (
-    fake: ReturnType<typeof createFakeCommandRunner>,
-  ): Promise<string> => {
-    const error = await get(fake).catch((caught: unknown) => caught);
+  const messageOf = async (): Promise<string> => {
+    const error = await get().catch((caught: unknown) => caught);
     return error instanceof Error ? error.message : "";
   };
 
-  test("asks for the log of that job", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
-    await get(fake);
-    expect(fake.calls[0]?.argv).toContain(
-      "repos/acme/widgets/actions/jobs/9001/logs",
+  const logOf = async (): Promise<string | null> => {
+    const result = await get();
+    return result.kind === "ok" ? result.log.reveal() : null;
+  };
+
+  test("asks the API for the log of that job", async () => {
+    const stub = stubGlobalFetch([redirectTo(LOG_URL), new Response("line")]);
+    await get();
+    expect(stub.sent[0]?.url).toBe(API_URL);
+  });
+
+  test("does not start gh", async () => {
+    stubGlobalFetch([redirectTo(LOG_URL), new Response("line")]);
+    const fake = createFakeCommandRunner([]);
+    await getWorkflowJobLog(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      9001,
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  test("fetches the signed URL of the redirect", async () => {
+    const stub = stubGlobalFetch([redirectTo(LOG_URL), new Response("line")]);
+    await get();
+    expect(stub.sent[1]?.url).toBe(LOG_URL);
+  });
+
+  test("does not send the token to the signed URL", async () => {
+    const stub = stubGlobalFetch([redirectTo(LOG_URL), new Response("line")]);
+    await get();
+    expect(new Headers(stub.sent[1]?.init.headers).has("authorization")).toBe(
+      false,
     );
-  });
-
-  test("asks gh to output a log that has terminal escape sequences", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
-    await get(fake);
-    expect(fake.calls[0]?.argv).toContain("--allow-escape-sequences");
-  });
-
-  test("passes the byte cap to the runner", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
-    await get(fake);
-    expect(fake.calls[0]?.options?.maxOutputBytes).toBe(CI_JOB_LOG_MAX_BYTES);
   });
 
   test("returns the log text as is, not parsed as JSON", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, "2026-10-13T00:00:00.0000000Z hello\n{not json")),
+    stubGlobalFetch([
+      redirectTo(LOG_URL),
+      new Response("2026-10-13T00:00:00.0000000Z hello\n{not json"),
     ]);
-    const result = await get(fake);
-    expect(result.kind === "ok" ? result.log.reveal() : null).toBe(
-      "2026-10-13T00:00:00.0000000Z hello\n{not json",
-    );
+    expect(await logOf()).toBe("2026-10-13T00:00:00.0000000Z hello\n{not json");
+  });
+
+  test("keeps the terminal escape sequences of the log", async () => {
+    stubGlobalFetch([redirectTo(LOG_URL), new Response("a\u001b[31mb")]);
+    expect(await logOf()).toBe("a\u001b[31mb");
   });
 
   test("wraps the log in a volatile value that refuses JSON", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "RAW-LOG"))]);
-    const result = await get(fake);
+    stubGlobalFetch([redirectTo(LOG_URL), new Response("RAW-LOG")]);
+    const result = await get();
     expect(() => JSON.stringify(result)).toThrow("must not be serialized");
   });
 
   test("does not mark a log within the cap as truncated", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
-    expect(await get(fake)).toMatchObject({ kind: "ok", truncated: false });
+    stubGlobalFetch([redirectTo(LOG_URL), new Response("line")]);
+    expect(await get()).toMatchObject({ kind: "ok", truncated: false });
   });
 
   test("does not trust a marker inside a small log to mean truncation", async () => {
     const forged = `head${omittedMarker(9_000_000)}tail`;
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, forged))]);
-    expect(await get(fake)).toMatchObject({ kind: "ok", truncated: false });
+    stubGlobalFetch([redirectTo(LOG_URL), new Response(forged)]);
+    expect(await get()).toMatchObject({ kind: "ok", truncated: false });
   });
 
-  test("marks an output that went past the byte cap as truncated", async () => {
-    const stdout = ghApiStdout(
-      200,
-      `head${omittedMarker(9_000_000)}${"x".repeat(CI_JOB_LOG_MAX_BYTES)}`,
-    );
-    const fake = createFakeCommandRunner([ok(stdout)]);
-    expect(await get(fake)).toMatchObject({ kind: "ok", truncated: true });
-  });
-
-  /** ghが終了コードを非0にして終わった実行。stderrの中身は判定に使わない。 */
-  const exited = (
-    exitCode: number,
-    stdout: string,
-    stderr = "",
-  ): CommandResult => ({ stdout, stderr, exitCode, timedOut: false });
-
-  /** 取り直しても同じ失敗が続くように、同じ実行を2回分用意する。 */
-  const exitedTwice = (exitCode: number, stdout: string, stderr = "") => [
-    exited(exitCode, stdout, stderr),
-    exited(exitCode, stdout, stderr),
-  ];
-
-  const cappedStdout = ghApiStdout(
-    200,
-    `head${omittedMarker(9_000_000)}${"x".repeat(CI_JOB_LOG_MAX_BYTES)}`,
-  );
-
-  test("throws a GitHubRawBodyIncompleteError when gh exits non-zero after a 2xx status with an empty body", async () => {
-    const fake = createFakeCommandRunner(exitedTwice(1, ghApiStdout(200, "")));
-    await expect(get(fake)).rejects.toBeInstanceOf(
-      GitHubRawBodyIncompleteError,
-    );
-  });
-
-  test("throws a GitHubRawBodyIncompleteError when gh exits non-zero after a partial body", async () => {
-    const fake = createFakeCommandRunner(
-      exitedTwice(1, ghApiStdout(200, "line 1\nline 2")),
-    );
-    await expect(get(fake)).rejects.toBeInstanceOf(
-      GitHubRawBodyIncompleteError,
-    );
-  });
-
-  test("returns the log when gh exits zero after a 2xx status", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
-    expect(await get(fake)).toMatchObject({ kind: "ok", truncated: false });
-  });
-
-  test("throws a GitHubRawBodyIncompleteError when the output hit the cap and gh exits non-zero", async () => {
-    const fake = createFakeCommandRunner(exitedTwice(143, cappedStdout));
-    await expect(get(fake)).rejects.toBeInstanceOf(
-      GitHubRawBodyIncompleteError,
-    );
-  });
-
-  test("returns a truncated log when the output hit the cap and gh exits zero", async () => {
-    const fake = createFakeCommandRunner([ok(cappedStdout)]);
-    expect(await get(fake)).toMatchObject({ kind: "ok", truncated: true });
-  });
-
-  test("returns the log when the second fetch exits zero after a non-zero first fetch", async () => {
-    const fake = createFakeCommandRunner([
-      exited(1, ghApiStdout(200, "line 1")),
-      ok(ghApiStdout(200, "line 1\nline 2")),
+  test("marks a log over the byte cap as truncated", async () => {
+    stubGlobalFetch([
+      redirectTo(LOG_URL),
+      new Response("x".repeat(CI_JOB_LOG_MAX_BYTES + 1)),
     ]);
-    const result = await get(fake);
-    expect(result.kind === "ok" ? result.log.reveal() : null).toBe(
-      "line 1\nline 2",
-    );
+    expect(await get()).toMatchObject({ kind: "ok", truncated: true });
   });
 
-  test("fetches the log only once more after an incomplete first fetch", async () => {
-    const fake = createFakeCommandRunner([
-      ...exitedTwice(1, ghApiStdout(200, "")),
-      ok(ghApiStdout(200, "line")),
+  test("keeps the tail of a log over the byte cap", async () => {
+    stubGlobalFetch([
+      redirectTo(LOG_URL),
+      new Response(`${"x".repeat(CI_JOB_LOG_MAX_BYTES)}FAILURE-AT-THE-END`),
     ]);
-    await get(fake).catch(() => undefined);
-    expect(fake.calls).toHaveLength(2);
+    expect((await logOf())?.endsWith("FAILURE-AT-THE-END")).toBe(true);
   });
 
-  test("fetches the log once when gh exits zero", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
-    await get(fake);
-    expect(fake.calls).toHaveLength(1);
-  });
-
-  /** 実行とsleepの呼び出しを順に記録し、待ちの位置と長さを確かめられるようにする。 */
-  const recordingClient = (
-    fake: ReturnType<typeof createFakeCommandRunner>,
-    transientRetryDelayMs?: number,
-  ) => {
-    const events: string[] = [];
-    const sleeps: number[] = [];
-    return {
-      events,
-      sleeps,
-      client: {
-        run: async (...args: Parameters<typeof fake.run>) => {
-          events.push("run");
-          return fake.run(...args);
-        },
-        ghToken: "tok",
-        sleep: async (ms: number) => {
-          events.push("sleep");
-          sleeps.push(ms);
-        },
-        ...(transientRetryDelayMs === undefined
-          ? {}
-          : { transientRetryDelayMs }),
-      },
-    };
-  };
-
-  const incompleteThenOk = () =>
-    createFakeCommandRunner([
-      exited(1, ghApiStdout(200, "line 1")),
-      ok(ghApiStdout(200, "line 1\nline 2")),
+  test("returns forbidden for a 403 from the API", async () => {
+    stubGlobalFetch([
+      new Response('{"message":"Resource not accessible"}', { status: 403 }),
     ]);
-
-  test("waits once between an incomplete first fetch and the second fetch", async () => {
-    const { client: recording, events } = recordingClient(incompleteThenOk());
-    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
-    expect(events).toEqual(["run", "sleep", "run"]);
+    expect(await get()).toEqual({ kind: "forbidden" });
   });
 
-  test("waits for the transientRetryDelayMs of the client before the second fetch", async () => {
-    const { client: recording, sleeps } = recordingClient(
-      incompleteThenOk(),
-      1234,
-    );
-    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
-    expect(sleeps).toEqual([1234]);
+  test("returns log_unavailable for a 404 from the API", async () => {
+    stubGlobalFetch([new Response('{"message":"Not Found"}', { status: 404 })]);
+    expect(await get()).toEqual({ kind: "log_unavailable" });
   });
 
-  test("waits for the default delay before the second fetch when the client has no transientRetryDelayMs", async () => {
-    const { client: recording, sleeps } = recordingClient(incompleteThenOk());
-    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
-    expect(sleeps).toEqual([GITHUB_TRANSIENT_RETRY_DELAY_MS]);
-  });
-
-  test("does not wait when the first fetch succeeds", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
-    const { client: recording, sleeps } = recordingClient(fake);
-    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
-    expect(sleeps).toEqual([]);
-  });
-
-  test("states a fixed message for the incomplete log error", async () => {
-    const fake = createFakeCommandRunner(exitedTwice(1, ghApiStdout(200, "")));
-    expect(await messageOf(fake)).toBe(
-      "GET workflow job log ended incomplete: gh exited non-zero after a 2xx status",
-    );
-  });
-
-  test("keeps the stderr of gh out of the incomplete log error", async () => {
-    const stderr =
-      "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway";
-    const fake = createFakeCommandRunner(
-      exitedTwice(1, ghApiStdout(200, ""), stderr),
-    );
-    expect(await messageOf(fake)).not.toContain("--allow-escape-sequences");
-  });
-
-  test("keeps the partial body out of the incomplete log error", async () => {
-    const fake = createFakeCommandRunner(
-      exitedTwice(1, ghApiStdout(200, "PARTIAL-BODY-MARKER")),
-    );
-    expect(await messageOf(fake)).not.toContain("PARTIAL-BODY-MARKER");
-  });
-
-  test("does not look at the exit code for a 403", async () => {
-    const fake = createFakeCommandRunner([
-      exited(1, ghApiStdout(403, { message: "Resource not accessible" })),
-    ]);
-    expect(await get(fake)).toEqual({ kind: "forbidden" });
-  });
-
-  test("does not look at the exit code for a 404", async () => {
-    const fake = createFakeCommandRunner([
-      exited(1, ghApiStdout(404, { message: "Not Found" })),
-    ]);
-    expect(await get(fake)).toEqual({ kind: "log_unavailable" });
-  });
-
-  test("does not look at the exit code for a 410", async () => {
-    const fake = createFakeCommandRunner([
-      exited(1, ghApiStdout(410, { message: "Gone" })),
-    ]);
-    expect(await get(fake)).toEqual({ kind: "log_unavailable" });
-  });
-
-  test("throws a GitHubCiLogError for an unexpected status with a non-zero exit code", async () => {
-    const body = exited(1, ghApiStdout(422, "unprocessable"));
-    const fake = createFakeCommandRunner([body]);
-    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogError);
-  });
-
-  test("returns forbidden for 403", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(403, { message: "Resource not accessible" })),
-    ]);
-    expect(await get(fake)).toEqual({ kind: "forbidden" });
-  });
-
-  test("returns log_unavailable for 404", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(404, { message: "Not Found" })),
-    ]);
-    expect(await get(fake)).toEqual({ kind: "log_unavailable" });
-  });
-
-  test("returns log_unavailable for 410", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(410, { message: "Gone" })),
-    ]);
-    expect(await get(fake)).toEqual({ kind: "log_unavailable" });
-  });
-
-  test("rejects a non-positive job id before calling the API", async () => {
-    const fake = createFakeCommandRunner([]);
-    await expect(get(fake, 0)).rejects.toThrow("invalid job id");
-  });
-
-  test("rejects an unsafe-integer job id before calling the API", async () => {
-    const fake = createFakeCommandRunner([]);
-    await expect(get(fake, Number.MAX_SAFE_INTEGER + 1)).rejects.toThrow(
-      "invalid job id",
-    );
-  });
-
-  test("throws a GitHubCiLogError for a server error", async () => {
-    const body = ghApiStdout(500, "response body marker");
-    const fake = createFakeCommandRunner([ok(body), ok(body)]);
-    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogError);
-  });
-
-  test("states only the status in the message of a server error", async () => {
-    const body = ghApiStdout(500, "response body marker");
-    const fake = createFakeCommandRunner([ok(body), ok(body)]);
-    expect(await messageOf(fake)).toBe(
-      "GET workflow job log failed with HTTP 500",
-    );
+  test("returns log_unavailable for a 410 from the API", async () => {
+    stubGlobalFetch([new Response('{"message":"Gone"}', { status: 410 })]);
+    expect(await get()).toEqual({ kind: "log_unavailable" });
   });
 
   test("states only the status in the message of an unexpected 4xx", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(422, "unprocessable body marker")),
+    stubGlobalFetch([
+      new Response("unprocessable body marker", { status: 422 }),
     ]);
-    expect(await messageOf(fake)).toBe(
-      "GET workflow job log failed with HTTP 422",
+    expect(await messageOf()).toBe("GET workflow job log failed with HTTP 422");
+  });
+
+  test("states only the status in the message of a server error", async () => {
+    // APIの5xxは1回だけ送り直すので、2回とも5xxを返す。
+    stubGlobalFetch([
+      new Response("response body marker", { status: 500 }),
+      new Response("response body marker", { status: 500 }),
+    ]);
+    expect(await messageOf()).toBe("GET workflow job log failed with HTTP 500");
+  });
+
+  test("throws a status 0 GitHubCiLogError when the API does not answer", async () => {
+    stubGlobalFetch([
+      new TypeError("connection refused"),
+      new TypeError("connection refused"),
+    ]);
+    await expect(get()).rejects.toMatchObject({
+      name: "GitHubCiLogError",
+      status: 0,
+    });
+  });
+
+  test("throws a GitHubCiLogError when the API answers without a redirect", async () => {
+    stubGlobalFetch([new Response("line", { status: 200 })]);
+    await expect(get()).rejects.toBeInstanceOf(GitHubCiLogError);
+  });
+
+  test("throws a GitHubCiLogError for a redirect to a host that is not allowed", async () => {
+    stubGlobalFetch([
+      redirectTo("https://blob.example.net/logs?sig=SECRETSIGNATURE"),
+    ]);
+    await expect(get()).rejects.toBeInstanceOf(GitHubCiLogError);
+  });
+
+  test("keeps the redirect location out of the error of a refused redirect", async () => {
+    stubGlobalFetch([
+      redirectTo("https://blob.example.net/logs?sig=SECRETSIGNATURE"),
+    ]);
+    expect(await messageOf()).not.toContain("SECRETSIGNATURE");
+  });
+
+  test("throws a GitHubCiLogError with the status of a refused signed URL", async () => {
+    stubGlobalFetch([
+      redirectTo(LOG_URL),
+      new Response("AuthenticationFailed", { status: 403 }),
+    ]);
+    await expect(get()).rejects.toMatchObject({
+      name: "GitHubCiLogError",
+      status: 403,
+    });
+  });
+
+  test("keeps the signed URL out of the error when the signed URL fails", async () => {
+    stubGlobalFetch([
+      redirectTo(LOG_URL),
+      new TypeError(`fetch failed for ${LOG_URL}`),
+    ]);
+    expect(await messageOf()).not.toContain("SECRETSIGNATURE");
+  });
+
+  test("throws a status 0 GitHubCiLogError when the signed URL does not answer", async () => {
+    stubGlobalFetch([redirectTo(LOG_URL), new TypeError("connection refused")]);
+    await expect(get()).rejects.toMatchObject({
+      name: "GitHubCiLogError",
+      status: 0,
+    });
+  });
+
+  test("throws a status 0 GitHubCiLogError when the signed URL passes the deadline", async () => {
+    stubGlobalFetch([
+      redirectTo(LOG_URL),
+      new DOMException("timed out", "TimeoutError"),
+    ]);
+    await expect(get()).rejects.toMatchObject({
+      name: "GitHubCiLogError",
+      status: 0,
+    });
+  });
+
+  test("throws a GitHubRawBodyIncompleteError when the log is cut", async () => {
+    stubGlobalFetch([
+      redirectTo(LOG_URL),
+      cutBody(200, new TypeError("terminated"), "line 1"),
+    ]);
+    await expect(get()).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
+  });
+
+  test("states a fixed message for the incomplete log error", async () => {
+    stubGlobalFetch([
+      redirectTo(LOG_URL),
+      cutBody(200, new TypeError("terminated"), "PARTIAL-BODY-MARKER"),
+    ]);
+    expect(await messageOf()).toBe(
+      "GET workflow job log ended incomplete: the body was cut after a 2xx status",
     );
   });
 
-  test("keeps a signed URL from stderr out of the error when gh fails", async () => {
-    const url = "https://blob.example.net/logs?sig=SECRETSIGNATURE";
-    const failure = fail(`Get "${url}": dial tcp: lookup failed`);
-    const fake = createFakeCommandRunner([failure, failure]);
-    expect(await messageOf(fake)).not.toContain("SECRETSIGNATURE");
-  });
-
-  test("reports a status 0 error when gh fails without a response", async () => {
-    const fake = createFakeCommandRunner([
-      fail("Get https://blob.example.net/?sig=S: boom"),
-      fail("Get https://blob.example.net/?sig=S: boom"),
+  test("does not fetch the log again after a cut", async () => {
+    const stub = stubGlobalFetch([
+      redirectTo(LOG_URL),
+      cutBody(200, new TypeError("terminated")),
     ]);
-    await expect(get(fake)).rejects.toMatchObject({ status: 0 });
-  });
-
-  test("keeps the redirect location out of the error of an unfollowed redirect", async () => {
-    const location = "https://blob.example.net/logs?sig=SECRETSIGNATURE";
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(302, "", { location })),
-    ]);
-    expect(await messageOf(fake)).not.toContain("SECRETSIGNATURE");
+    await get().catch(() => undefined);
+    expect(stub.sent).toHaveLength(2);
   });
 
   test("lets a rate limit error through", async () => {
-    const limited = ok(ghApiStdout(429, "slow down", { "retry-after": "999" }));
-    const fake = createFakeCommandRunner([limited]);
-    await expect(get(fake)).rejects.toBeInstanceOf(GitHubRateLimitError);
+    stubGlobalFetch([
+      new Response("slow down", {
+        status: 429,
+        headers: { "Retry-After": "999" },
+      }),
+    ]);
+    await expect(get()).rejects.toBeInstanceOf(GitHubRateLimitError);
   });
 
-  test("never puts the token on the command line", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
-    await get(fake);
-    expect(fake.calls[0]?.argv.join(" ")).not.toContain("tok");
+  test("does not wait for a rate limit", async () => {
+    stubGlobalFetch([
+      new Response("slow down", {
+        status: 429,
+        headers: { "Retry-After": "5" },
+      }),
+    ]);
+    const sleeps: number[] = [];
+    await get(9001, sleeps).catch(() => undefined);
+    expect(sleeps).toEqual([]);
+  });
+
+  test("rejects a non-positive job id before calling the API", async () => {
+    await expect(get(0)).rejects.toThrow("invalid job id");
+  });
+
+  test("rejects an unsafe-integer job id before calling the API", async () => {
+    await expect(get(Number.MAX_SAFE_INTEGER + 1)).rejects.toThrow(
+      "invalid job id",
+    );
   });
 });
