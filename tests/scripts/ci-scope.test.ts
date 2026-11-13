@@ -1191,17 +1191,30 @@ function importClosure(entry: string): string[] {
 
 // Consoleの組み立てと検査が、console/の外から読み込むファイルの全体。
 // console/の中のimportは拡張子を省くことがあるので、console/の外を指すimportだけをたどる。
+function consoleSourceFiles(): string[] {
+  const glob = new Bun.Glob("{src,scripts,e2e}/**/*.{ts,tsx}");
+  return [...glob.scanSync({ cwd: join(ROOT, "console") })]
+    .map((file) => `console/${file}`)
+    .sort();
+}
+
+/** `path`のファイルの`source`が、console/の外を指すimport。リポジトリのルートからの相対パスで返す。 */
+function importsOutsideConsole(path: string, source: string): string[] {
+  const found: string[] = [];
+  for (const match of source.matchAll(
+    /(?:from|import)\s+["'](\.[^"']+)["']/g,
+  )) {
+    const next = normalize(join(dirname(path), match[1] ?? ""));
+    if (!next.startsWith("console/")) found.push(next);
+  }
+  return found;
+}
+
 function consoleOutsideImports(): string[] {
   const found = new Set<string>();
-  const glob = new Bun.Glob("{src,scripts,e2e}/**/*.{ts,tsx}");
-  for (const file of glob.scanSync({ cwd: join(ROOT, "console") })) {
-    const path = `console/${file}`;
+  for (const path of consoleSourceFiles()) {
     const source = readFileSync(join(ROOT, path), "utf8");
-    for (const match of source.matchAll(
-      /(?:from|import)\s+["'](\.[^"']+)["']/g,
-    )) {
-      const next = normalize(join(dirname(path), match[1] ?? ""));
-      if (next.startsWith("console/")) continue;
+    for (const next of importsOutsideConsole(path, source)) {
       for (const reached of importClosure(next)) found.add(reached);
     }
   }
@@ -1229,6 +1242,31 @@ describe("import closure of the CI tests", () => {
       ]),
     );
   });
+
+  test("reads a dynamic import that points outside console/", () => {
+    expect(
+      importsOutsideConsole(
+        "console/src/lib/a.ts",
+        'const jst = await import("../../../f/factory/lib/jst.ts");',
+      ),
+    ).toEqual(["f/factory/lib/jst.ts"]);
+  });
+
+  test("reads a static import that points outside console/", () => {
+    expect(
+      importsOutsideConsole(
+        "console/src/lib/a.ts",
+        'import { isRecord } from "../../../f/factory/lib/types.ts";',
+      ),
+    ).toEqual(["f/factory/lib/types.ts"]);
+  });
+
+  test.each(["console/vite.config.ts", "console/playwright.config.ts"])(
+    "scans the console config file %s",
+    (path) => {
+      expect(consoleSourceFiles()).toContain(path);
+    },
+  );
 
   test("finds the files that the console imports from f/, so that the check below is not empty", () => {
     expect(consoleOutsideImports()).toContain("f/factory/lib/jst.ts");
