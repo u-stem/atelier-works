@@ -4,12 +4,9 @@
 // このファイルは依存を持たない小さなものに保つ。
 
 import { jstMidnightTodayIso } from "./claude.ts";
-import { formatJstDate } from "./jst.ts";
+import { formatJstDate, INVALID_JST_DATE } from "./jst.ts";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** 日付として読めない時刻の表示。年、月、日をそれぞれ`NaN`にする。 */
-const INVALID_JST_DATE = "NaN-NaN-NaN";
 
 /**
  * 監査期間`[start, end)`を人が読むラベルにして返す。

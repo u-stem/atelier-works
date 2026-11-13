@@ -7,13 +7,13 @@
 export const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /** 日付として読めない時刻を`YYYY-MM-DD`の代わりに示す文字列。年、月、日をそれぞれ`NaN`にする。 */
-export const INVALID_JST_DATE = "";
+export const INVALID_JST_DATE = "NaN-NaN-NaN";
 
 /** 日付として読めない時刻を`YYYY-MM-DD HH:mm`の代わりに示す文字列。 */
-export const INVALID_JST_MINUTE = "";
+export const INVALID_JST_MINUTE = "NaN-NaN-NaN NaN:NaN";
 
 /** 日付として読めない時刻を`HH:mm`の代わりに示す文字列。 */
-export const INVALID_JST_CLOCK = "";
+export const INVALID_JST_CLOCK = "NaN:NaN";
 
 const PARTS_FORMAT = new Intl.DateTimeFormat("ja-JP", {
   timeZone: "Asia/Tokyo",

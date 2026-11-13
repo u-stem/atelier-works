@@ -6,7 +6,7 @@
 // 記録の項目が壊れている資格情報の通知は、解決しない。
 
 import type { NotifyEvent } from "./discord.ts";
-import { formatJstDate } from "./jst.ts";
+import { formatJstDate, INVALID_JST_DATE } from "./jst.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import { isRecord, type NoticeRecord } from "./types.ts";
 
@@ -257,9 +257,6 @@ export function credentialDeadlines(
   push(LABELS.interaction_limits, record.interaction_limits);
   return deadlines;
 }
-
-/** 日付として読めない時刻の表示。年、月、日をそれぞれ`NaN`にする。 */
-const INVALID_JST_DATE = "NaN-NaN-NaN";
 
 /** `at`が属するJSTの日付を`YYYY-MM-DD`で返す。 */
 export function jstDateLabel(at: Date): string {
