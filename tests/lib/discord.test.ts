@@ -1919,3 +1919,48 @@ describe("notifyBestEffort", () => {
     expect(JSON.stringify(result)).not.toContain("fake-webhook-token-value");
   });
 });
+
+describe("discord credential", () => {
+  const event: NotifyEvent = {
+    kind: "credential_expiring",
+    instance_name: "local",
+    cause: "GitHubのPAT(github_token)の期限が2026-11-20に切れる。",
+    next_action: "ローテーションの手順で更新する",
+  };
+
+  describe("buildEmbed credential_expiring", () => {
+    test("says that a credential expires soon", () => {
+      expect(buildEmbed(event).title).toBe("資格情報の期限が近づいています");
+    });
+
+    test("puts the cause in the description", () => {
+      expect(buildEmbed(event).description).toBe(event.cause);
+    });
+
+    test("shows the next action as a field", () => {
+      expect(buildEmbed(event).fields).toContainEqual({
+        name: "次の操作",
+        value: "ローテーションの手順で更新する",
+      });
+    });
+  });
+});
+
+describe("discord stop all", () => {
+  const event: NotifyEvent = {
+    kind: "stop_all_active",
+    instance_name: "local",
+    cause: "2026-11-05 12:00 JSTにoperatorが全停止を置きました。理由: r",
+    next_action: "解除する",
+  };
+
+  describe("buildEmbed stop_all_active", () => {
+    test("says that the Factory is stopped", () => {
+      expect(buildEmbed(event).title).toBe("Factoryを全停止しています");
+    });
+
+    test("puts the cause in the description", () => {
+      expect(buildEmbed(event).description).toBe(event.cause);
+    });
+  });
+});
