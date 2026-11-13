@@ -1,23 +1,7 @@
 // datatableのmigrationの版(ファイル名の先頭の数字)が、重ならず、upとdownで対になることを確かめる。
 // 版が重なると、`wmill sync push`が配信を拒否し、自己更新が止まる。
 import { describe, expect, test } from "bun:test";
-import { readdirSync } from "node:fs";
-
-const MIGRATIONS_DIR = "migrations/datatable/main";
-const MIGRATION_FILE = /^(\d{14})_([a-z0-9_]+)\.(up|down)\.sql$/;
-
-type Migration = { version: string; name: string; direction: string };
-
-function listMigrations(): Migration[] {
-  const migrations: Migration[] = [];
-  for (const file of readdirSync(MIGRATIONS_DIR)) {
-    const match = MIGRATION_FILE.exec(file);
-    if (match === null) continue;
-    const [, version = "", name = "", direction = ""] = match;
-    migrations.push({ version, name, direction });
-  }
-  return migrations;
-}
+import { listMigrations } from "../lib/migrationConventions.ts";
 
 function duplicatedVersions(direction: string): string[] {
   const seen = new Map<string, string[]>();
@@ -33,6 +17,28 @@ function duplicatedVersions(direction: string): string[] {
     .map(([version, names]) => `${version}: ${names.join(", ")}`);
 }
 
+/** upとdownの片方にしか無い版と名前を、`<ファイル名>: <欠けている側>`で返す。 */
+function unpairedMigrations(): string[] {
+  const migrations = listMigrations();
+  const idsOf = (direction: string) =>
+    new Set(
+      migrations
+        .filter((migration) => migration.direction === direction)
+        .map((migration) => `${migration.version}_${migration.name}`),
+    );
+  const ups = idsOf("up");
+  const downs = idsOf("down");
+  return migrations
+    .filter((migration) => {
+      const id = `${migration.version}_${migration.name}`;
+      return migration.direction === "up" ? !downs.has(id) : !ups.has(id);
+    })
+    .map(
+      (migration) =>
+        `${migration.file}: the ${migration.direction === "up" ? "down" : "up"} migration is missing`,
+    );
+}
+
 describe("datatable migrations", () => {
   test("every up migration has its own version", () => {
     expect(duplicatedVersions("up")).toEqual([]);
@@ -42,16 +48,7 @@ describe("datatable migrations", () => {
     expect(duplicatedVersions("down")).toEqual([]);
   });
 
-  test("every down migration has the up migration of the same name", () => {
-    const ups = new Set(
-      listMigrations()
-        .filter((migration) => migration.direction === "up")
-        .map((migration) => `${migration.version}_${migration.name}`),
-    );
-    const orphanDowns = listMigrations()
-      .filter((migration) => migration.direction === "down")
-      .map((migration) => `${migration.version}_${migration.name}`)
-      .filter((id) => !ups.has(id));
-    expect(orphanDowns).toEqual([]);
+  test("every up migration and down migration of the same name are paired", () => {
+    expect(unpairedMigrations()).toEqual([]);
   });
 });

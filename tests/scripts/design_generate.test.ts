@@ -2189,7 +2189,7 @@ describe("the shared text helpers of design_generate", () => {
 });
 
 // design_generateが本番で使う、ファイルシステムとプロセスの境界の挙動を確かめる。
-// 手続きの流れは`design_generate.test.ts`が偽の依存で確かめる。
+// 手続きの流れは、上の`describe`群が偽の依存で確かめる。
 describe("design_generate io", () => {
   let base: string;
 

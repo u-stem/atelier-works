@@ -1,156 +1,65 @@
 // datatableのmigrationすべてに共通する書き方を確かめる。
 // migrationごとの文面はテストで固定しない。ここは、新しいmigrationが外してはならない形だけを見る。
 // 落ちたときは、`<ファイル名>: <守られていない規約>`の一覧が出る。
+// 後半は、検査そのものが違反を見つけることを、違反のSQLで確かめる。
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync } from "node:fs";
+import {
+  isRealTimestamp,
+  listMainEntries,
+  listMigrations,
+  lockTimeoutViolations,
+  MIGRATION_FILE,
+  MIGRATIONS_ROOT,
+  NON_MIGRATION_FILES,
+  ROOT_ENTRIES,
+  splitStatements,
+  transactionViolations,
+} from "../lib/migrationConventions.ts";
 
-const MIGRATIONS_DIR = "migrations/datatable/main";
-const MIGRATION_FILE = /^(\d{14})_([a-z0-9_]+)\.(up|down)\.sql$/;
-
-// `SET LOCAL lock_timeout`を持つことを求める最初の版。
+// `SET LOCAL lock_timeout`を求める最初の版。
 // これより前のmigrationには、持たないものがある。適用済みなので書き換えない。
 // この版以降は、upとdownのすべてが持つ。
 const LOCK_TIMEOUT_SINCE = "20261017110000";
 
-type Migration = {
-  readonly file: string;
-  readonly version: string;
-  readonly name: string;
-  readonly direction: string;
-  readonly statements: readonly string[];
-};
-
-/**
- * SQLを、コメントを除いた文に分ける。
- * 文字列リテラル(`'...'`)とドル引用(`$$...$$`、`$tag$...$tag$`)の中の`;`と`--`では分けない。
- */
-function splitStatements(sql: string): string[] {
-  const statements: string[] = [];
-  let current = "";
-  let i = 0;
-  while (i < sql.length) {
-    const rest = sql.slice(i);
-    const dollar = /^\$[A-Za-z_]*\$/.exec(rest);
-    if (rest.startsWith("--")) {
-      const end = sql.indexOf("\n", i);
-      i = end === -1 ? sql.length : end;
-    } else if (rest.startsWith("/*")) {
-      const end = sql.indexOf("*/", i + 2);
-      i = end === -1 ? sql.length : end + 2;
-    } else if (rest.startsWith("'")) {
-      let j = i + 1;
-      while (j < sql.length) {
-        if (sql[j] === "'" && sql[j + 1] === "'") j += 2;
-        else if (sql[j] === "'") break;
-        else j += 1;
-      }
-      current += sql.slice(i, j + 1);
-      i = j + 1;
-    } else if (dollar !== null) {
-      const tag = dollar[0];
-      const end = sql.indexOf(tag, i + tag.length);
-      const stop = end === -1 ? sql.length : end + tag.length;
-      current += sql.slice(i, stop);
-      i = stop;
-    } else if (sql[i] === ";") {
-      statements.push(current.trim());
-      current = "";
-      i += 1;
-    } else {
-      current += sql[i];
-      i += 1;
-    }
-  }
-  if (current.trim() !== "") statements.push(current.trim());
-  return statements.filter((statement) => statement !== "");
-}
-
-function listSqlFiles(): string[] {
-  return readdirSync(MIGRATIONS_DIR)
-    .filter((file) => file.endsWith(".sql"))
-    .sort();
-}
-
-function listMigrations(): Migration[] {
-  const migrations: Migration[] = [];
-  for (const file of listSqlFiles()) {
-    const match = MIGRATION_FILE.exec(file);
-    if (match === null) continue;
-    const [, version = "", name = "", direction = ""] = match;
-    const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
-    migrations.push({
-      file,
-      version,
-      name,
-      direction,
-      statements: splitStatements(sql),
-    });
-  }
-  return migrations;
-}
-
-/** 14桁の版が、実在する日時(年月日時分秒)か。 */
-function isRealTimestamp(version: string): boolean {
-  const [year, month, day, hour, minute, second] = [
-    version.slice(0, 4),
-    version.slice(4, 6),
-    version.slice(6, 8),
-    version.slice(8, 10),
-    version.slice(10, 12),
-    version.slice(12, 14),
-  ].map(Number);
-  if (
-    year === undefined ||
-    month === undefined ||
-    day === undefined ||
-    hour === undefined ||
-    minute === undefined ||
-    second === undefined
-  ) {
-    return false;
-  }
-  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day &&
-    date.getUTCHours() === hour &&
-    date.getUTCMinutes() === minute &&
-    date.getUTCSeconds() === second
-  );
-}
-
-const isBegin = (statement: string | undefined): boolean =>
-  statement !== undefined && /^BEGIN$/i.test(statement);
-const isEnd = (statement: string | undefined): boolean =>
-  statement !== undefined && /^(?:END|COMMIT)$/i.test(statement);
-
-/** 最初がBEGIN、最後がENDで、途中にBEGINやENDが無いことを確かめ、破っている点を返す。 */
-function transactionViolations(migration: Migration): string[] {
-  const { statements, file } = migration;
-  const violations: string[] = [];
-  if (!isBegin(statements[0])) {
-    violations.push(`${file}: the first statement is not BEGIN`);
-  }
-  if (!isEnd(statements[statements.length - 1])) {
-    violations.push(`${file}: the last statement is not END`);
-  }
-  if (statements.slice(1, -1).some((s) => isBegin(s) || isEnd(s))) {
-    violations.push(`${file}: BEGIN or END appears in the middle`);
-  }
-  return violations;
-}
-
-const LOCK_TIMEOUT_STATEMENT =
-  /^SET\s+LOCAL\s+lock_timeout\s*=\s*'\d+(?:ms|s|min)'$/i;
+// 上の版より前のmigrationのファイル数(upとdownの合計)。
+// 新しいmigrationが古い版を名乗って、検査を免れないように固定する。
+const MIGRATIONS_BEFORE_LOCK_TIMEOUT = 78;
 
 describe("datatable migration conventions", () => {
-  test("every .sql file is named <14-digit version>_<snake_case name>.(up|down).sql", () => {
-    const violations = listSqlFiles()
-      .filter((file) => !MIGRATION_FILE.test(file))
-      .map((file) => `${file}: file name does not match the naming rule`);
+  test("the migrations are found", () => {
+    expect(listMigrations().length).toBeGreaterThan(0);
+  });
+
+  test("some migrations are at or after the lock_timeout version", () => {
+    const covered = listMigrations().filter(
+      (migration) => migration.version >= LOCK_TIMEOUT_SINCE,
+    );
+    expect(covered.length).toBeGreaterThan(0);
+  });
+
+  test("the migrations before the lock_timeout version are the known ones", () => {
+    const older = listMigrations().filter(
+      (migration) => migration.version < LOCK_TIMEOUT_SINCE,
+    );
+    expect(older).toHaveLength(MIGRATIONS_BEFORE_LOCK_TIMEOUT);
+  });
+
+  test("main holds only named migrations and the known non-migration files", () => {
+    const violations = listMainEntries()
+      .filter(
+        (entry) =>
+          !MIGRATION_FILE.test(entry) && !NON_MIGRATION_FILES.includes(entry),
+      )
+      .map((entry) => `${entry}: file name does not match the naming rule`);
     expect(violations).toEqual([]);
+  });
+
+  test("the migrations directory holds only main and the known files", () => {
+    const unknown = readdirSync(MIGRATIONS_ROOT).filter(
+      (entry) => !ROOT_ENTRIES.includes(entry),
+    );
+    expect(unknown).toEqual([]);
   });
 
   test("every version is a real timestamp", () => {
@@ -160,36 +69,224 @@ describe("datatable migration conventions", () => {
     expect(violations).toEqual([]);
   });
 
-  test("every up migration has the down migration of the same name", () => {
-    const downs = new Set(
-      listMigrations()
-        .filter((migration) => migration.direction === "down")
-        .map((migration) => `${migration.version}_${migration.name}`),
+  test("no migration uses a string syntax the checks cannot read", () => {
+    const violations = listMigrations().flatMap((migration) =>
+      migration.unsupported.map(
+        (reason) => `${migration.file}: uses ${reason}`,
+      ),
     );
-    const violations = listMigrations()
-      .filter((migration) => migration.direction === "up")
-      .filter(
-        (migration) => !downs.has(`${migration.version}_${migration.name}`),
-      )
-      .map((migration) => `${migration.file}: the down migration is missing`);
     expect(violations).toEqual([]);
   });
 
   test("every migration runs in one transaction, from BEGIN to END", () => {
-    expect(listMigrations().flatMap(transactionViolations)).toEqual([]);
+    const violations = listMigrations().flatMap((migration) =>
+      transactionViolations(migration.file, migration.statements),
+    );
+    expect(violations).toEqual([]);
   });
 
   test(`every migration from ${LOCK_TIMEOUT_SINCE} sets lock_timeout locally right after BEGIN`, () => {
     const violations = listMigrations()
       .filter((migration) => migration.version >= LOCK_TIMEOUT_SINCE)
-      .filter(
-        (migration) =>
-          !LOCK_TIMEOUT_STATEMENT.test(migration.statements[1] ?? ""),
-      )
-      .map(
-        (migration) =>
-          `${migration.file}: the statement after BEGIN is not SET LOCAL lock_timeout`,
+      .flatMap((migration) =>
+        lockTimeoutViolations(migration.file, migration.statements),
       );
     expect(violations).toEqual([]);
+  });
+});
+
+const lockTimeoutOf = (sql: string): string[] =>
+  lockTimeoutViolations("x.up.sql", splitStatements(sql).statements);
+const transactionOf = (sql: string): string[] =>
+  transactionViolations("x.up.sql", splitStatements(sql).statements);
+
+describe("splitStatements", () => {
+  test("drops line comments and block comments", () => {
+    const sql = "-- head\nBEGIN; /* a; b */ SELECT 1; -- tail\nEND;";
+    expect(splitStatements(sql).statements).toEqual([
+      "BEGIN",
+      "SELECT 1",
+      "END",
+    ]);
+  });
+
+  test("drops nested block comments", () => {
+    const sql = "SELECT 1 /* a /* b; */ c; */; SELECT 2;";
+    expect(splitStatements(sql).statements).toEqual(["SELECT 1", "SELECT 2"]);
+  });
+
+  test("keeps a semicolon and a comment marker inside a string literal", () => {
+    const sql = "SELECT 'a;b -- c'; SELECT 2;";
+    expect(splitStatements(sql).statements).toEqual([
+      "SELECT 'a;b -- c'",
+      "SELECT 2",
+    ]);
+  });
+
+  test("keeps a doubled quote inside a string literal", () => {
+    const sql = "SELECT 'it''s; ok'; SELECT 2;";
+    expect(splitStatements(sql).statements).toEqual([
+      "SELECT 'it''s; ok'",
+      "SELECT 2",
+    ]);
+  });
+
+  test("keeps a semicolon inside a dollar quote", () => {
+    const sql = "SELECT $f$ BEGIN; END; $f$; SELECT 2;";
+    expect(splitStatements(sql).statements).toEqual([
+      "SELECT $f$ BEGIN; END; $f$",
+      "SELECT 2",
+    ]);
+  });
+
+  test("does not start a dollar quote right after an identifier character", () => {
+    const sql = "SELECT a$1; SELECT 2;";
+    expect(splitStatements(sql).statements).toEqual(["SELECT a$1", "SELECT 2"]);
+  });
+
+  test("keeps a semicolon inside a quoted identifier", () => {
+    const sql = 'SELECT "a;b" FROM t; SELECT 2;';
+    expect(splitStatements(sql).statements).toEqual([
+      'SELECT "a;b" FROM t',
+      "SELECT 2",
+    ]);
+  });
+
+  test("keeps a single quote inside a quoted identifier", () => {
+    const sql = `SELECT "a'b" FROM t; SELECT 2;`;
+    expect(splitStatements(sql).statements).toEqual([
+      `SELECT "a'b" FROM t`,
+      "SELECT 2",
+    ]);
+  });
+
+  test("reports an E string as unsupported", () => {
+    expect(splitStatements("SELECT E'a\\nb';").unsupported).toEqual([
+      "an E'...' string",
+      "a backslash in a string literal",
+    ]);
+  });
+
+  test("reports a U& string as unsupported", () => {
+    expect(splitStatements("SELECT U&'d\\0061t';").unsupported).toContain(
+      "a U&'...' string",
+    );
+  });
+
+  test("reports a backslash in a plain string as unsupported", () => {
+    expect(splitStatements("SELECT 'a\\b';").unsupported).toEqual([
+      "a backslash in a string literal",
+    ]);
+  });
+
+  test("does not mistake an identifier ending in e for an E string", () => {
+    expect(splitStatements("SELECT mine'x';").unsupported).toEqual([]);
+  });
+
+  test("reports an unterminated string literal", () => {
+    expect(splitStatements("SELECT 'a;").unsupported).toEqual([
+      "an unterminated string literal",
+    ]);
+  });
+
+  test("reports an unterminated block comment", () => {
+    expect(splitStatements("SELECT 1; /* a").unsupported).toEqual([
+      "an unterminated block comment",
+    ]);
+  });
+});
+
+describe("transactionViolations", () => {
+  test("accepts BEGIN, statements, then END", () => {
+    expect(transactionOf("BEGIN; SELECT 1; END;")).toEqual([]);
+  });
+
+  test("accepts a function body that has its own BEGIN and END", () => {
+    const sql =
+      "BEGIN; CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql; END;";
+    expect(transactionOf(sql)).toEqual([]);
+  });
+
+  test("rejects a file that does not start with BEGIN", () => {
+    expect(transactionOf("SELECT 1; END;")).toContain(
+      "x.up.sql: the first statement is not BEGIN",
+    );
+  });
+
+  test("rejects a file that does not end with END", () => {
+    expect(transactionOf("BEGIN; SELECT 1;")).toContain(
+      "x.up.sql: the last statement is not END",
+    );
+  });
+
+  test.each([
+    "ROLLBACK",
+    "COMMIT",
+    "COMMIT WORK",
+    "END TRANSACTION",
+    "BEGIN TRANSACTION",
+    "START TRANSACTION",
+    "ABORT",
+    "PREPARE TRANSACTION 'x'",
+  ])("rejects %s in the middle", (statement) => {
+    expect(transactionOf(`BEGIN; ${statement}; SELECT 1; END;`)).toEqual([
+      "x.up.sql: a transaction statement appears in the middle",
+    ]);
+  });
+});
+
+describe("lockTimeoutViolations", () => {
+  test("accepts SET LOCAL lock_timeout right after BEGIN", () => {
+    expect(
+      lockTimeoutOf("BEGIN; SET LOCAL lock_timeout = '30s'; END;"),
+    ).toEqual([]);
+  });
+
+  test("accepts the upper limit of 60 seconds", () => {
+    expect(
+      lockTimeoutOf("BEGIN; SET LOCAL lock_timeout = '1min'; END;"),
+    ).toEqual([]);
+  });
+
+  test.each(["0s", "0ms", "00s", "0"])(
+    "rejects the value %s, which turns the timeout off",
+    (value) => {
+      expect(
+        lockTimeoutOf(`BEGIN; SET LOCAL lock_timeout = '${value}'; END;`),
+      ).toHaveLength(1);
+    },
+  );
+
+  test.each(["61s", "2min", "99999999s", "60001ms"])(
+    "rejects the value %s, which is above the limit",
+    (value) => {
+      expect(
+        lockTimeoutOf(`BEGIN; SET LOCAL lock_timeout = '${value}'; END;`),
+      ).toEqual(["x.up.sql: lock_timeout is longer than 60 seconds"]);
+    },
+  );
+
+  test("rejects a SET that is not local", () => {
+    expect(lockTimeoutOf("BEGIN; SET lock_timeout = '30s'; END;")).toEqual([
+      "x.up.sql: the statement after BEGIN is not SET LOCAL lock_timeout with a positive value",
+    ]);
+  });
+
+  test("rejects a file without lock_timeout", () => {
+    expect(lockTimeoutOf("BEGIN; SELECT 1; END;")).toEqual([
+      "x.up.sql: the statement after BEGIN is not SET LOCAL lock_timeout with a positive value",
+    ]);
+  });
+
+  test.each([
+    "SET LOCAL lock_timeout = 0",
+    "SET lock_timeout = '0'",
+    "RESET lock_timeout",
+    "SELECT set_config('lock_timeout', '0', true)",
+  ])("rejects %s after the first SET", (statement) => {
+    const sql = `BEGIN; SET LOCAL lock_timeout = '30s'; ${statement}; END;`;
+    expect(lockTimeoutOf(sql)).toEqual([
+      "x.up.sql: a statement other than the one after BEGIN touches lock_timeout",
+    ]);
   });
 });

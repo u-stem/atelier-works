@@ -303,7 +303,7 @@ describe("gh_collect_detail", () => {
     };
   }
 
-  function prNode(overrides: Record<string, unknown> = {}) {
+  function detailPrNode(overrides: Record<string, unknown> = {}) {
     return {
       number: 7,
       createdAt: "2026-10-17T01:00:00Z",
@@ -329,7 +329,7 @@ describe("gh_collect_detail", () => {
     };
   }
 
-  function issueNode(overrides: Record<string, unknown> = {}) {
+  function detailIssueNode(overrides: Record<string, unknown> = {}) {
     return {
       number: 3,
       createdAt: "2026-10-17T01:00:00Z",
@@ -361,8 +361,11 @@ describe("gh_collect_detail", () => {
   ) {
     return {
       databaseId: options.databaseId ?? 2002,
-      pullRequests: connection(options.prs ?? [prNode()], options.prExtra),
-      issues: connection(options.issues ?? [issueNode()]),
+      pullRequests: connection(
+        options.prs ?? [detailPrNode()],
+        options.prExtra,
+      ),
+      issues: connection(options.issues ?? [detailIssueNode()]),
     };
   }
 
@@ -447,23 +450,28 @@ describe("gh_collect_detail", () => {
     });
 
     test("an error under a required pull request field fails the alias", () => {
-      const result = parse(aliasRaw({ prs: [prNode({ headRefOid: null })] }), {
-        aliasErrors: [ALIAS_LEVEL_ERROR],
-      });
+      const result = parse(
+        aliasRaw({ prs: [detailPrNode({ headRefOid: null })] }),
+        {
+          aliasErrors: [ALIAS_LEVEL_ERROR],
+        },
+      );
       expect(result.kind === "failed" ? result.error_code : null).toBe(
         "graphql_error",
       );
     });
 
     test("fails the alias when a required field is invalid as parse_error", () => {
-      const result = parse(aliasRaw({ prs: [prNode({ headRefOid: "abc" })] }));
+      const result = parse(
+        aliasRaw({ prs: [detailPrNode({ headRefOid: "abc" })] }),
+      );
       expect(result.kind === "failed" ? result.error_code : null).toBe(
         "parse_error",
       );
     });
 
     test("fails the alias when the pull request number is invalid", () => {
-      const result = parse(aliasRaw({ prs: [prNode({ number: 0 })] }));
+      const result = parse(aliasRaw({ prs: [detailPrNode({ number: 0 })] }));
       expect(result.kind === "failed" ? result.error_code : null).toBe(
         "parse_error",
       );
@@ -471,7 +479,7 @@ describe("gh_collect_detail", () => {
 
     test("fails the alias when a date is invalid", () => {
       const result = parse(
-        aliasRaw({ prs: [prNode({ createdAt: "yesterday" })] }),
+        aliasRaw({ prs: [detailPrNode({ createdAt: "yesterday" })] }),
       );
       expect(result.kind === "failed" ? result.error_code : null).toBe(
         "parse_error",
@@ -479,14 +487,18 @@ describe("gh_collect_detail", () => {
     });
 
     test("fails the alias when isDraft is not a boolean", () => {
-      const result = parse(aliasRaw({ prs: [prNode({ isDraft: "no" })] }));
+      const result = parse(
+        aliasRaw({ prs: [detailPrNode({ isDraft: "no" })] }),
+      );
       expect(result.kind === "failed" ? result.error_code : null).toBe(
         "parse_error",
       );
     });
 
     test("fails the alias when assignees has no usable shape", () => {
-      const result = parse(aliasRaw({ prs: [prNode({ assignees: null })] }));
+      const result = parse(
+        aliasRaw({ prs: [detailPrNode({ assignees: null })] }),
+      );
       expect(result.kind === "failed" ? result.error_code : null).toBe(
         "parse_error",
       );
@@ -520,7 +532,7 @@ describe("gh_collect_detail", () => {
     });
 
     test("a null node in nodes is counted and never read", () => {
-      const result = parse(aliasRaw({ prs: [prNode(), null] }));
+      const result = parse(aliasRaw({ prs: [detailPrNode(), null] }));
       expect(result).toEqual({
         kind: "failed",
         error_code: "parse_error",
@@ -596,7 +608,9 @@ describe("gh_collect_detail", () => {
     });
 
     test("fails the alias when an issue date is invalid", () => {
-      const result = parse(aliasRaw({ issues: [issueNode({ updatedAt: 5 })] }));
+      const result = parse(
+        aliasRaw({ issues: [detailIssueNode({ updatedAt: 5 })] }),
+      );
       expect(result.kind === "failed" ? result.error_code : null).toBe(
         "parse_error",
       );
@@ -702,7 +716,9 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({ autoMergeRequest: { enabledAt: "2026-10-17T01:00:00Z" } }),
+            detailPrNode({
+              autoMergeRequest: { enabledAt: "2026-10-17T01:00:00Z" },
+            }),
           ],
         }),
       );
@@ -711,7 +727,7 @@ describe("gh_collect_detail", () => {
 
     test("counts optional field errors by fixed field name and type", () => {
       const result = parse(
-        aliasRaw({ prs: [prNode(), prNode({ number: 8 })] }),
+        aliasRaw({ prs: [detailPrNode(), detailPrNode({ number: 8 })] }),
         {
           aliasErrors: [
             fieldError("reviewRequests"),
@@ -748,41 +764,43 @@ describe("gh_collect_detail", () => {
     test("keeps the row with null branch names when they are not valid", () => {
       const pr = firstPr(
         aliasRaw({
-          prs: [prNode({ headRefName: "a..b", baseRefName: "x y" })],
+          prs: [detailPrNode({ headRefName: "a..b", baseRefName: "x y" })],
         }),
       );
       expect([pr?.number, pr?.head_ref, pr?.base_ref]).toEqual([7, null, null]);
     });
 
     test("a null branch name is stored as null", () => {
-      const pr = firstPr(aliasRaw({ prs: [prNode({ headRefName: null })] }));
+      const pr = firstPr(
+        aliasRaw({ prs: [detailPrNode({ headRefName: null })] }),
+      );
       expect(pr?.head_ref).toBeNull();
     });
 
     test("nulls a branch name longer than 255 bytes", () => {
       const pr = firstPr(
-        aliasRaw({ prs: [prNode({ headRefName: "a".repeat(256) })] }),
+        aliasRaw({ prs: [detailPrNode({ headRefName: "a".repeat(256) })] }),
       );
       expect(pr?.head_ref).toBeNull();
     });
 
     test("nulls a branch name with a format character", () => {
       const pr = firstPr(
-        aliasRaw({ prs: [prNode({ headRefName: "fix/‮evil" })] }),
+        aliasRaw({ prs: [detailPrNode({ headRefName: "fix/‮evil" })] }),
       );
       expect(pr?.head_ref).toBeNull();
     });
 
     test("nulls a branch name with a control character", () => {
       const pr = firstPr(
-        aliasRaw({ prs: [prNode({ baseRefName: "main\u0085" })] }),
+        aliasRaw({ prs: [detailPrNode({ baseRefName: "main\u0085" })] }),
       );
       expect(pr?.base_ref).toBeNull();
     });
 
     test("records the columns discarded for an invalid branch name", () => {
       const result = parse(
-        aliasRaw({ prs: [prNode({ headRefName: "a..b" })] }),
+        aliasRaw({ prs: [detailPrNode({ headRefName: "a..b" })] }),
       );
       expect(result.kind === "ok" ? result.discarded : null).toEqual([
         { number: 7, column: "head_ref" },
@@ -790,7 +808,7 @@ describe("gh_collect_detail", () => {
     });
 
     test("nulls all author fields when the author is missing", () => {
-      const pr = firstPr(aliasRaw({ prs: [prNode({ author: null })] }));
+      const pr = firstPr(aliasRaw({ prs: [detailPrNode({ author: null })] }));
       expect([pr?.author_login, pr?.author_type, pr?.author_id]).toEqual([
         null,
         null,
@@ -801,7 +819,7 @@ describe("gh_collect_detail", () => {
     test("nulls all author fields when the author type is unknown", () => {
       const pr = firstPr(
         aliasRaw({
-          prs: [prNode({ author: authorNode({ __typename: "App" }) })],
+          prs: [detailPrNode({ author: authorNode({ __typename: "App" }) })],
         }),
       );
       expect([pr?.author_login, pr?.author_type, pr?.author_id]).toEqual([
@@ -814,7 +832,9 @@ describe("gh_collect_detail", () => {
     test("nulls author fields when the login is longer than 39 characters", () => {
       const pr = firstPr(
         aliasRaw({
-          prs: [prNode({ author: authorNode({ login: "a".repeat(40) }) })],
+          prs: [
+            detailPrNode({ author: authorNode({ login: "a".repeat(40) }) }),
+          ],
         }),
       );
       expect(pr?.author_login).toBeNull();
@@ -823,7 +843,7 @@ describe("gh_collect_detail", () => {
     test("nulls all author fields when the author id is not a safe integer", () => {
       const pr = firstPr(
         aliasRaw({
-          prs: [prNode({ author: authorNode({ databaseId: 2 ** 53 }) })],
+          prs: [detailPrNode({ author: authorNode({ databaseId: 2 ** 53 }) })],
         }),
       );
       expect([pr?.author_login, pr?.author_type, pr?.author_id]).toEqual([
@@ -837,7 +857,7 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({
+            detailPrNode({
               author: { __typename: "Mannequin", login: "ghost-user" },
             }),
           ],
@@ -854,7 +874,7 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({
+            detailPrNode({
               author: authorNode({
                 __typename: "Bot",
                 login: "dependabot",
@@ -874,7 +894,7 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({
+            detailPrNode({
               assignees: {
                 totalCount: 2,
                 nodes: [{ databaseId: 2 ** 53 }, { databaseId: 5 }],
@@ -890,7 +910,7 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({
+            detailPrNode({
               assignees: {
                 totalCount: 2,
                 nodes: [{ databaseId: null }, { databaseId: 5 }],
@@ -903,19 +923,23 @@ describe("gh_collect_detail", () => {
     });
 
     test("writes only MERGEABLE and CONFLICTING", () => {
-      const pr = firstPr(aliasRaw({ prs: [prNode({ mergeable: "UNKNOWN" })] }));
+      const pr = firstPr(
+        aliasRaw({ prs: [detailPrNode({ mergeable: "UNKNOWN" })] }),
+      );
       expect(pr?.mergeable).toBeNull();
     });
 
     test("keeps CONFLICTING", () => {
       const pr = firstPr(
-        aliasRaw({ prs: [prNode({ mergeable: "CONFLICTING" })] }),
+        aliasRaw({ prs: [detailPrNode({ mergeable: "CONFLICTING" })] }),
       );
       expect(pr?.mergeable).toBe("CONFLICTING");
     });
 
     test("nulls an unknown mergeable value", () => {
-      const pr = firstPr(aliasRaw({ prs: [prNode({ mergeable: "WEIRD" })] }));
+      const pr = firstPr(
+        aliasRaw({ prs: [detailPrNode({ mergeable: "WEIRD" })] }),
+      );
       expect(pr?.mergeable).toBeNull();
     });
 
@@ -923,7 +947,7 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({
+            detailPrNode({
               labels: {
                 totalCount: 2,
                 nodes: [{ name: "Factory:Review" }, { name: "FACTORY:FIX" }],
@@ -939,7 +963,9 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({ labels: { totalCount: 1, nodes: [{ name: "bug" }] } }),
+            detailPrNode({
+              labels: { totalCount: 1, nodes: [{ name: "bug" }] },
+            }),
           ],
         }),
       );
@@ -950,7 +976,7 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({
+            detailPrNode({
               labels: { totalCount: 101, nodes: [{ name: "factory:review" }] },
             }),
           ],
@@ -971,7 +997,7 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({
+            detailPrNode({
               reviewRequests: {
                 totalCount: 1,
                 nodes: [{ requestedReviewer: null }],
@@ -990,7 +1016,7 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({
+            detailPrNode({
               reviewRequests: {
                 totalCount: 1,
                 nodes: [
@@ -1008,7 +1034,7 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({
+            detailPrNode({
               reviewRequests: {
                 totalCount: 25,
                 nodes: [
@@ -1029,7 +1055,7 @@ describe("gh_collect_detail", () => {
       const pr = firstPr(
         aliasRaw({
           prs: [
-            prNode({
+            detailPrNode({
               assignees: { totalCount: 21, nodes: [{ databaseId: 3 }] },
             }),
           ],
