@@ -216,7 +216,7 @@ Windmillの資産の配置、secretとconfigの取得、`//native`を使わな�
 
 適用済みのmigrationは書き換えず、変更は新しいmigrationで足す。
 書き換えは、新規環境と復元にだけ効き、本番とずれるためである。
-migrationの文面のテストを削ったので、`test:db`は振る舞いの変化しか拾わない。
+migrationの文面はテストで固定しないので、`test:db`が拾うのは振る舞いの変化だけである。
 
 ## 検証コマンド
 
