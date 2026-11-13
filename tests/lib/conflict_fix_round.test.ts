@@ -720,10 +720,12 @@ describe("checkConflictResolution test files", () => {
     expect(check([testFile(result)])).toEqual({ ok: true });
   });
 
-  test("accepts taking one side when both have the same number of assertions", () => {
+  test("rejects dropping the test that one side added", () => {
     const result =
       "x\ntest('a', () => { expect(1).toBe(1); });\ntest('o', () => { expect(2).toBe(2); });\ny\n";
-    expect(check([testFile(result)])).toEqual({ ok: true });
+    expect(codesOf(check([testFile(result)]))).toEqual([
+      "test_count_decreased",
+    ]);
   });
 
   test("rejects dropping both added tests", () => {
@@ -733,7 +735,7 @@ describe("checkConflictResolution test files", () => {
     ]);
   });
 
-  test("rejects a resolution that removes an assertion from the larger side", () => {
+  test("rejects a resolution that removes an assertion a side added", () => {
     const result =
       "x\ntest('a', () => { expect(1).toBe(1); });\ntest('o', () => {});\ny\n";
     expect(codesOf(check([testFile(result)]))).toEqual([
@@ -752,6 +754,59 @@ describe("checkConflictResolution test files", () => {
       result: "x\ntest('a', () => {});\n\n",
     });
     expect(codesOf(check([file]))).not.toContain("test_count_decreased");
+  });
+});
+
+describe("checkConflictResolution test files where one side removes tests", () => {
+  const TEST_PATH = "tests/a.test.ts";
+  // 5つのテストで、`test(`と`expect(`を合わせて10回呼ぶ。
+  const FIVE = [1, 2, 3, 4, 5]
+    .map((n) => `test('t${n}', () => { expect(${n}).toBe(${n}); });`)
+    .join("\n");
+  // `test(`を1回だけ呼ぶ、足したテスト。
+  const ADDED = "test('n', () => {});";
+
+  const REMOVED = "x\ny\n";
+  const KEPT_AND_ADDED = `x\n${FIVE}\n${ADDED}\ny\n`;
+
+  type Sides = Pick<FileSpec, "ours" | "theirs" | "reconstructed">;
+
+  /** PRのheadが5つのテストを消し、baseの側がその後ろに1つのテストを足した版。 */
+  const REMOVED_IN_HEAD: Sides = {
+    ours: REMOVED,
+    theirs: KEPT_AND_ADDED,
+    reconstructed: `x\n${block("", FIVE, `${FIVE}\n${ADDED}`)}\ny\n`,
+  };
+
+  /** baseの側が5つのテストを消し、PRのheadがその後ろに1つのテストを足した版。 */
+  const REMOVED_IN_BASE: Sides = {
+    ours: KEPT_AND_ADDED,
+    theirs: REMOVED,
+    reconstructed: `x\n${block(`${FIVE}\n${ADDED}`, FIVE, "")}\ny\n`,
+  };
+
+  function fileWith(sides: Sides, result: string): ConflictFileInput {
+    return fileOf({
+      path: TEST_PATH,
+      base: `x\n${FIVE}\ny\n`,
+      ...sides,
+      result,
+    });
+  }
+
+  test("accepts the removals of the PR head combined with the test the base side added", () => {
+    const file = fileWith(REMOVED_IN_HEAD, `x\n${ADDED}\ny\n`);
+    expect(check([file])).toEqual({ ok: true });
+  });
+
+  test("accepts the removals of the base side combined with the test the PR head added", () => {
+    const file = fileWith(REMOVED_IN_BASE, `x\n${ADDED}\ny\n`);
+    expect(check([file])).toEqual({ ok: true });
+  });
+
+  test("rejects dropping the added test as well as the removed ones", () => {
+    const file = fileWith(REMOVED_IN_HEAD, REMOVED);
+    expect(codesOf(check([file]))).toEqual(["test_count_decreased"]);
   });
 });
 
