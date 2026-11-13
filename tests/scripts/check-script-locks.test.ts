@@ -11,8 +11,11 @@ import {
 const CLIENT_INTEGRITY = "sha512-AbCd+/0123456789==";
 const SCOPED_INTEGRITY = "sha512-EfGh+/9876543210==";
 const TRANSITIVE_INTEGRITY = "sha512-IjKl+/1357924680==";
+const NESTED_INTEGRITY = "sha512-MnOp+/2468013579==";
+const OTHER_REGISTRY = "https://registry.example.com/";
 
 // `fast-uri`は、ルートのpackage.jsonが宣言しない推移的な依存として置く。
+// `windmill-client/argparse`は、入れ子の項目として置く。
 const ROOT_LOCK = `{
   "lockfileVersion": 2,
   "configVersion": 1,
@@ -29,9 +32,19 @@ const ROOT_LOCK = `{
     "windmill-client": ["windmill-client@1.817.0", "", {}, "${CLIENT_INTEGRITY}"],
     "@scope/x": ["@scope/x@2.0.0", "", {}, "${SCOPED_INTEGRITY}"],
     "fast-uri": ["fast-uri@3.1.9", "", {}, "${TRANSITIVE_INTEGRITY}"],
+    "windmill-client/argparse": ["argparse@3.0.4", "", {}, "${NESTED_INTEGRITY}"],
   }
 }
 `;
+
+/** 入れ子の項目`windmill-client/argparse`を、版、registry、integrityから組み立てる。 */
+function nestedEntry(
+  version: string,
+  registry: string,
+  integrity: string,
+): string {
+  return `"windmill-client/argparse": ["argparse@${version}", "${registry}", {}, "${integrity}"],`;
+}
 
 const EMPTY_LOCK = '{\n  "dependencies": {}\n}\n//bun.lock\n<empty>';
 
@@ -105,6 +118,61 @@ describe("checkScriptLock", () => {
   test("accepts a scoped transitive package with the same version and integrity as the root", () => {
     const lock = scriptLock(`${CLIENT_ENTRY}\n    ${SCOPED_ENTRY}`);
     expect(checkScriptLock(lock, rootIndex())).toEqual([]);
+  });
+
+  test("accepts a nested package with the same version, registry, and integrity as the root", () => {
+    const lock = scriptLock(
+      `${CLIENT_ENTRY}\n    ${nestedEntry("3.0.4", "", NESTED_INTEGRITY)}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([]);
+  });
+
+  test("reports a nested package whose version differs from the root", () => {
+    const lock = scriptLock(
+      `${CLIENT_ENTRY}\n    ${nestedEntry("3.0.2", "", NESTED_INTEGRITY)}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client/argparse",
+        reason: "version differs from the root bun.lock",
+      },
+    ]);
+  });
+
+  test("reports a nested package whose integrity differs from the root", () => {
+    const lock = scriptLock(
+      `${CLIENT_ENTRY}\n    ${nestedEntry("3.0.4", "", CLIENT_INTEGRITY)}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client/argparse",
+        reason: "integrity differs from the root bun.lock",
+      },
+    ]);
+  });
+
+  test("reports a nested package whose registry differs from the root", () => {
+    const lock = scriptLock(
+      `${CLIENT_ENTRY}\n    ${nestedEntry("3.0.4", OTHER_REGISTRY, NESTED_INTEGRITY)}`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client/argparse",
+        reason: "registry differs from the root bun.lock",
+      },
+    ]);
+  });
+
+  test("reports a top-level package whose registry differs from the root", () => {
+    const lock = scriptLock(
+      `"windmill-client": ["windmill-client@1.817.0", "${OTHER_REGISTRY}", {}, "${CLIENT_INTEGRITY}"],`,
+    );
+    expect(checkScriptLock(lock, rootIndex())).toEqual([
+      {
+        key: "packages.windmill-client",
+        reason: "registry differs from the root bun.lock",
+      },
+    ]);
   });
 
   test("reports a package whose version differs from the root", () => {
