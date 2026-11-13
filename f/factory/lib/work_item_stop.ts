@@ -212,17 +212,13 @@ export function defaultWorkItemStopCheck(
   if (!Number.isSafeInteger(workItemId) || workItemId <= 0) {
     return NEVER_STOPPED;
   }
-  return boundedCheckFrom(
-    readOrWarnOnce(async () => {
-      const io = sdkWorkItemStopReadIo(workItemId, stopSqlClientFrom(open));
-      return isWorkItemStopped(await io.readState());
-    }, log),
+  // 組み立ては`workItemStopCheckFrom`の1か所にする。
+  // `stopSqlClientFrom`は文ごとに`open`を呼ぶので、接続は確認の呼び出しの中で作られ、作れなければ読めなかったことになる。
+  return workItemStopCheckFrom(
+    sdkWorkItemStopReadIo(workItemId, stopSqlClientFrom(open)),
     WORK_ITEM_STOP_CHECK_TIMEOUT_MS,
     Date.now,
-    {
-      keepLateTrue: true,
-      onTimeout: warnTimeoutOnce(log, WORK_ITEM_STOP_CHECK_TIMEOUT_MS),
-    },
+    log,
   );
 }
 

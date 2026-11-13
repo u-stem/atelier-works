@@ -149,6 +149,54 @@ describe("defaultWorkItemStopCheck", () => {
     await check();
     expect(opened).toBe(2);
   });
+
+  test("does not open the client while it is built", () => {
+    let opened = 0;
+    defaultWorkItemStopCheck(7, "factory", () => {
+      opened += 1;
+      throw new Error("no client");
+    });
+    expect(opened).toBe(0);
+  });
+
+  // 本番の組み立て(`workItemStopCheckFrom`を通る形)で、Data Tableの行から判定まで通ることを確かめる。
+  test("stops when the Data Table says that a person cancelled the work item", async () => {
+    const check = defaultWorkItemStopCheck(7, "factory", () => () => ({
+      fetch: async () => [
+        { status: "cancelled", note: OPERATOR_CANCELLED_NOTE },
+      ],
+    }));
+    expect(await check()).toBe(true);
+  });
+
+  test("does not stop when the Data Table has no row for the work item", async () => {
+    const check = defaultWorkItemStopCheck(7, "factory", () => () => ({
+      fetch: async () => [],
+    }));
+    expect(await check()).toBe(false);
+  });
+
+  test("leaves one warning when the client cannot be made, as the check of the shared assembly does", async () => {
+    const warnings: string[] = [];
+    const log: Logger = {
+      info: () => {},
+      warn: (message) => {
+        warnings.push(message);
+      },
+      error: () => {},
+    };
+    const check = defaultWorkItemStopCheck(
+      7,
+      "factory",
+      () => {
+        throw new Error("no client");
+      },
+      log,
+    );
+    await check();
+    await check();
+    expect(warnings).toHaveLength(1);
+  });
 });
 
 describe("sdkWorkItemStopReadIo", () => {
