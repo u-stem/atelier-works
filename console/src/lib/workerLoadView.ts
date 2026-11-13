@@ -36,8 +36,7 @@ function percent(ratio: number): string {
 
 /** ISO文字列の時刻を、JSTの`HH:MM`で返す。読めなければ「不明」。 */
 function jstClock(iso: string): string {
-  const epochMs = Date.parse(iso);
-  return Number.isNaN(epochMs) ? UNKNOWN : formatJstClock(epochMs);
+  return formatJstClock(Date.parse(iso)) ?? UNKNOWN;
 }
 
 function jobs(count: number | null): string {

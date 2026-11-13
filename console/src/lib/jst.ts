@@ -13,7 +13,7 @@ const CLOCK_FORMAT = new Intl.DateTimeFormat("ja-JP", {
   hourCycle: "h23",
 });
 
-/** 時刻(エポックからのミリ秒)を、日本時間の`HH:MM`にする。秒は切り捨てる。読める時刻だけを渡す。 */
-export function formatJstClock(epochMs: number): string {
-  return CLOCK_FORMAT.format(epochMs);
+/** 時刻(エポックからのミリ秒)を、日本時間の`HH:MM`にする。秒は切り捨てる。有限の数でなければ`null`を返す。 */
+export function formatJstClock(epochMs: number): string | null {
+  return Number.isFinite(epochMs) ? CLOCK_FORMAT.format(epochMs) : null;
 }
