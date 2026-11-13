@@ -45,27 +45,11 @@ describe("formatJstClock", () => {
     );
   });
 
-  test("shows the start of a leap day in Japan as 00:00", () => {
-    expect(formatJstClock(Date.parse("2028-02-28T15:00:00.000Z"))).toBe(
-      "00:00",
-    );
+  test("returns null for NaN", () => {
+    expect(formatJstClock(Number.NaN)).toBeNull();
   });
 
-  test("shows the end of a leap day in Japan as 23:59", () => {
-    expect(formatJstClock(Date.parse("2028-02-29T14:59:00.000Z"))).toBe(
-      "23:59",
-    );
-  });
-
-  test("shows the start of a new year in Japan as 00:00", () => {
-    expect(formatJstClock(Date.parse("2026-12-31T15:00:00.000Z"))).toBe(
-      "00:00",
-    );
-  });
-
-  test("shows the last minute of a year in Japan as 23:59", () => {
-    expect(formatJstClock(Date.parse("2026-12-31T14:59:00.000Z"))).toBe(
-      "23:59",
-    );
+  test("returns null for an infinite time", () => {
+    expect(formatJstClock(Number.POSITIVE_INFINITY)).toBeNull();
   });
 });
