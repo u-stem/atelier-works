@@ -1193,7 +1193,11 @@ function importClosure(entry: string): string[] {
 // console/の中のimportは拡張子を省くことがあるので、console/の外を指すimportだけをたどる。
 function consoleSourceFiles(): string[] {
   const glob = new Bun.Glob("{src,scripts,e2e}/**/*.{ts,tsx}");
-  return [...glob.scanSync({ cwd: join(ROOT, "console") })]
+  // 直下の設定ファイルも、組み立てと検査が読み込む。
+  const configs = ["vite.config.ts", "playwright.config.ts"].filter((file) =>
+    existsSync(join(ROOT, "console", file)),
+  );
+  return [...glob.scanSync({ cwd: join(ROOT, "console") }), ...configs]
     .map((file) => `console/${file}`)
     .sort();
 }
@@ -1202,7 +1206,7 @@ function consoleSourceFiles(): string[] {
 function importsOutsideConsole(path: string, source: string): string[] {
   const found: string[] = [];
   for (const match of source.matchAll(
-    /(?:from|import)\s+["'](\.[^"']+)["']/g,
+    /(?:from|import)\s*\(?\s*["'](\.[^"']+)["']/g,
   )) {
     const next = normalize(join(dirname(path), match[1] ?? ""));
     if (!next.startsWith("console/")) found.push(next);
