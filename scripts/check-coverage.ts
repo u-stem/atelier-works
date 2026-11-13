@@ -706,6 +706,8 @@ export type CheckDiffCoverageOptions = JudgeDiffOptions & {
   readonly listChanged?: (root: string) => ChangedLines;
 };
 
+export class DiffFormatError extends Error {}
+
 const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
 /**

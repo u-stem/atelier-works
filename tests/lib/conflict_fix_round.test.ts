@@ -829,6 +829,19 @@ describe("checkConflictResolution test counts outside the conflict blocks", () =
     expect(codesOf(check([file]))).toEqual(["test_count_decreased"]);
   });
 
+  test("rejects a missing test in one block even when another block gains an extra test", () => {
+    const extra = "test('e', () => { expect(4).toBe(4); });";
+    const file = fileOf({
+      path: TEST_PATH,
+      base: "x\na\ny\nb\nz\n",
+      ours: `x\n${OURS_TEST}\ny\nB1\nz\n`,
+      theirs: "x\nA2\ny\nB2\nz\n",
+      reconstructed: `x\n${block(OURS_TEST, "a", "A2")}\ny\n${block("B1", "b", "B2")}\nz\n`,
+      result: `x\nA2\ny\nB1\n${extra}\nz\n`,
+    });
+    expect(codesOf(check([file]))).toEqual(["test_count_decreased"]);
+  });
+
   test("accepts a resolution when both sides added the same test outside the block", () => {
     const file = fileOf({
       path: TEST_PATH,

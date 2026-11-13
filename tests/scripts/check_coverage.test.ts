@@ -24,6 +24,7 @@ import {
   checkDiffCoverage,
   DIFF_COVERAGE_FLOOR_PERCENT,
   DIFF_COVERAGE_PATHS,
+  DiffFormatError,
   diffArgv,
   isTargetPath,
   judgeCoverage,
@@ -1527,6 +1528,26 @@ describe("parseDiffAddedLines", () => {
     expect(() => parseDiffAddedLines(diff)).toThrow();
   });
 
+  test("throws a diff format error on a quoted file header", () => {
+    const diff = [
+      '--- "a/f/factory/lib/\\001.ts"',
+      '+++ "b/f/factory/lib/\\001.ts"',
+    ].join("\n");
+
+    expect(() => parseDiffAddedLines(diff)).toThrow(DiffFormatError);
+  });
+
+  test("throws a diff format error on a hunk header it cannot read", () => {
+    const diff = [
+      "--- a/f/factory/lib/a.ts",
+      "+++ b/f/factory/lib/a.ts",
+      "@@ -x +y @@",
+      "+const a = 1;",
+    ].join("\n");
+
+    expect(() => parseDiffAddedLines(diff)).toThrow(DiffFormatError);
+  });
+
   test("throws on a line in a hunk that is not an added, removed, or context line", () => {
     const diff = [
       "--- a/f/factory/lib/a.ts",
@@ -1764,6 +1785,8 @@ describe("diffArgv", () => {
   test("diffs the working tree against the base without renames, colors, or external tools", () => {
     expect(diffArgv("0123abcd", ["f/factory/lib"])).toEqual([
       "git",
+      "-c",
+      "core.quotePath=false",
       "diff",
       "-U0",
       "--text",
@@ -1838,6 +1861,30 @@ describe("checkDiffCoverage", () => {
     });
 
     expect(result.message).toContain("git fetch --unshallow origin main");
+  });
+
+  test("tells to check the diff by hand when the diff cannot be read", () => {
+    const result = checkDiffCoverage({
+      root: "/unused",
+      lcovText: record(A, hitsOf(10, 10)),
+      listChanged: () => {
+        throw new DiffFormatError("git diff printed a line of an unknown form");
+      },
+    });
+
+    expect(result.message).toContain("git fetch does not fix this");
+  });
+
+  test("does not tell to fetch again when the diff cannot be read", () => {
+    const result = checkDiffCoverage({
+      root: "/unused",
+      lcovText: record(A, hitsOf(10, 10)),
+      listChanged: () => {
+        throw new DiffFormatError("git diff printed a line of an unknown form");
+      },
+    });
+
+    expect(result.message).not.toContain("git fetch origin main");
   });
 });
 
