@@ -25,6 +25,14 @@ describe("formatAuditPeriodLabel", () => {
     );
     expect(label).toBe("2026-09-22〜2026-09-28");
   });
+
+  test("shows each part of an invalid date as NaN", () => {
+    const label = formatAuditPeriodLabel(
+      new Date(Number.NaN),
+      new Date(Number.NaN),
+    );
+    expect(label).toBe("NaN-NaN-NaN〜NaN-NaN-NaN");
+  });
 });
 
 describe("assertAuditDays", () => {

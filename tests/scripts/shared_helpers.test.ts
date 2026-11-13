@@ -74,6 +74,13 @@ const ERROR_MESSAGE_HOMES: Readonly<Record<string, string>> = {
   "scripts/hold.ts": PROTECTED_CLOSURE,
 };
 
+/** 日本時間とUTCの差を定義してよいファイルと、その理由。Consoleの`jst.ts`は`f/factory/lib/jst.ts`を読み直す。 */
+const JST_OFFSET_HOMES: Readonly<Record<string, string>> = {
+  "f/factory/lib/jst.ts": "the shared leaf module",
+  "f/factory/lib/console_holds_support.ts":
+    "the console worker scripts reach only protected paths",
+};
+
 describe("isRecord", () => {
   test("is defined only in types.ts and the files that cannot import it", () => {
     expect(filesDefining("isRecord")).toEqual(
@@ -90,11 +97,20 @@ describe("errorMessage", () => {
   });
 });
 
+describe("JST_OFFSET_MS", () => {
+  test("is defined only in jst.ts and the files that cannot import it", () => {
+    expect(filesDefining("JST_OFFSET_MS")).toEqual(
+      Object.keys(JST_OFFSET_HOMES).sort(),
+    );
+  });
+});
+
 describe("the shared leaf modules", () => {
-  test.each(["f/factory/lib/types.ts", "f/factory/lib/log.ts"])(
-    "%s imports nothing",
-    (path) => {
-      expect(read(path)).not.toMatch(/^\s*(?:import|export)\b[^;]*\bfrom\s+"/m);
-    },
-  );
+  test.each([
+    "f/factory/lib/types.ts",
+    "f/factory/lib/log.ts",
+    "f/factory/lib/jst.ts",
+  ])("%s imports nothing", (path) => {
+    expect(read(path)).not.toMatch(/^\s*(?:import|export)\b[^;]*\bfrom\s+"/m);
+  });
 });

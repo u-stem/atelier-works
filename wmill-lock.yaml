@@ -133,6 +133,7 @@ locks:
   f/factory/lib/job_ids: f11c9a38be9492f5776fdf950f87c51f0162028142640a2017f0f2dafba49432
   f/factory/lib/job_state: ddd6d4c4ad73b379ac89faba02b3a34963864a5486ab7c7590b4437fa3ecdc3d
   f/factory/lib/job_tmp: b6cd08b7b849d342dcef62dd6518a15f07cfb88c8dd995a739e5b36037c65149
+  f/factory/lib/jst: 6abc1e5e46f9b6f86fffb138f4f83aabeeb8696627034d4448982c862bc8a43a
   f/factory/lib/log: d4c8ea14e796fa60f9da8c0d02ff358cd40e483f0896f31c93a7d2871d0bc479
   f/factory/lib/main_ci_support: 940c2ac05fb0df4f52899703c910d5a0dd42390a131802ea0e087964812e2b1c
   f/factory/lib/main_ci_watch: 10ae321eee218b4bc096e95ee0001f9d4734c4091c5478cba1246666642d22d0

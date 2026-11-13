@@ -346,6 +346,17 @@ describe("stale notice", () => {
     expect(text).toContain("最後の成功: 記録なし");
   });
 
+  test("cause text throws a RangeError for a last success that is not a time", () => {
+    expect(() =>
+      staleCauseText({
+        owner: "acme",
+        thresholdMs: THRESHOLD,
+        lastSuccessAtMs: Number.NaN,
+        cause: "unauthorized",
+      }),
+    ).toThrow(RangeError);
+  });
+
   test("cause text names the threshold in minutes", () => {
     const text = staleCauseText({
       owner: "acme",

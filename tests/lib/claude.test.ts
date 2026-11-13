@@ -1611,6 +1611,10 @@ describe("jstMidnightTodayIso", () => {
     const now = new Date("2026-09-25T23:00:00.000Z");
     expect(jstMidnightTodayIso(now)).toBe("2026-09-25T15:00:00.000Z");
   });
+
+  test("throws a RangeError for an invalid date", () => {
+    expect(() => jstMidnightTodayIso(new Date(Number.NaN))).toThrow(RangeError);
+  });
 });
 
 describe("dailyBudgetStatus", () => {
