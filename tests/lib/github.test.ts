@@ -581,6 +581,85 @@ describe("getRepositoryOwnerId", () => {
   });
 });
 
+// 権限不足の403は、残りの回数が1以上のまま返る。本文に「rate limit」の語があっても制限ではない。
+// dependabot_prepare、pr_ci_watch、main_ci_watch、dependabot_finishと、github.tsの403の分岐
+// (needs_human、denied、forbidden)は、この403をGitHubHttpErrorとして受け取って扱いを決める。
+// 制限の例外に化けると、その分岐を通らなくなる。
+describe("a permission 403 with quota left stays a 403 for the forbidden branches", () => {
+  /** 残りの回数が4999のままの、権限不足の403。 */
+  function forbidden(message: string): CommandResult {
+    return ok(
+      ghApiStdout(403, { message }, { "x-ratelimit-remaining": "4999" }),
+    );
+  }
+
+  /** `promise`が拒否されたらその理由を、解決したら`null`を返す。 */
+  function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+    return promise.then(
+      () => null,
+      (err: unknown) => err,
+    );
+  }
+
+  test("callGhApi returns the 403 without waiting when the message mentions a rate limit", async () => {
+    const sleeps: number[] = [];
+    const fake = createFakeCommandRunner([
+      forbidden("Resource not accessible; see the rate limit docs"),
+    ]);
+    const response = await callGhApi(
+      {
+        run: fake.run,
+        ghToken: "tok",
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      },
+      "repos/acme/widgets/pulls/1",
+    );
+    expect({ status: response.status, sleeps }).toEqual({
+      status: 403,
+      sleeps: [],
+    });
+  });
+
+  test("getPr throws GitHubHttpError, not GitHubRateLimitError, for the 403", async () => {
+    const fake = createFakeCommandRunner([
+      forbidden("Resource not accessible; see the rate limit docs"),
+    ]);
+    const error = await rejectionOf(
+      getPr({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 1),
+    );
+    expect({
+      httpError: error instanceof GitHubHttpError,
+      rateLimited: error instanceof GitHubRateLimitError,
+      status: error instanceof GitHubHttpError ? error.status : undefined,
+    }).toEqual({ httpError: true, rateLimited: false, status: 403 });
+  });
+
+  test("getPrWithoutWait throws GitHubHttpError for the 403, as pr_ci_watch expects", async () => {
+    const fake = createFakeCommandRunner([
+      forbidden("Resource not accessible; see the rate limit docs"),
+    ]);
+    const error = await rejectionOf(
+      getPrWithoutWait({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 1),
+    );
+    expect(
+      error instanceof GitHubHttpError &&
+        !(error instanceof GitHubRateLimitError),
+    ).toBe(true);
+  });
+
+  test("sends the 403 request only once", async () => {
+    const fake = createFakeCommandRunner([
+      forbidden("Resource not accessible; see the rate limit docs"),
+    ]);
+    await rejectionOf(
+      getPr({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 1),
+    );
+    expect(fake.calls.length).toBe(1);
+  });
+});
+
 describe("rate limit wait cap", () => {
   const NOW = new Date("2026-10-08T00:00:00Z");
   const nowEpochSeconds = NOW.getTime() / 1000;
