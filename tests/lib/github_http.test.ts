@@ -1885,6 +1885,13 @@ describe("only github_http.ts carries the token to the GitHub API", () => {
     ).toBe(false);
   });
 
+  // `self`の名前の変数を比べる矢印関数は、グローバルのオブジェクトの別名を作らない。
+  test("the write pattern does not see a comparison that starts an arrow body", () => {
+    expect(
+      GLOBAL_OBJECT_WRITE.test("const open = (item) => self === null || item;"),
+    ).toBe(false);
+  });
+
   test("the write pattern does not see a comparison with globalThis in an arrow", () => {
     expect(
       GLOBAL_OBJECT_WRITE.test("const isGlobal = (x) => x === globalThis;"),
