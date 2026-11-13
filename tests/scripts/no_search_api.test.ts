@@ -17,10 +17,8 @@ const FLOWS = [
 
 /** 実行時の拒否が、拒否する接頭辞を持つ定数の名前。この行だけが接頭辞の字面を書ける。 */
 const GUARD_CONSTANT = "REJECTED_REST_ENDPOINT_PREFIX";
-/** 実行時の拒否を持つ通信層。`gh`の送り方と`fetch`の送り方の両方が、ここの拒否を通る。 */
+/** 実行時の拒否を持つ通信層。GitHubのAPIへの要求は、すべてここの拒否を通る。 */
 const GUARD_FILE = "lib/github_http.ts";
-/** `gh`を起動する送り方を持つファイル。 */
-const GH_RUNNER_FILE = "lib/github.ts";
 
 type Source = { readonly path: string; readonly text: string };
 
@@ -46,6 +44,9 @@ function factorySources(): Source[] {
 
 /** `["gh", "search", ...]`のようなargv配列。改行をまたいでも見つける。 */
 const GH_SEARCH_ARGV = /["']gh["']\s*,\s*["']search["']/;
+
+/** `["gh", "api", ...]`のようなargv配列。改行をまたいでも見つける。 */
+const GH_API_ARGV = /["']gh["']\s*,\s*["']api["']/;
 
 /** `gh`をargvの先頭に置く配列。 */
 const GH_ARGV_START = /\[\s*["']gh["']\s*,/;
@@ -140,8 +141,17 @@ describe("the Factory scripts never name the REST search API", () => {
     expect(GH_SEARCH_ARGV.test('["gh", "api", endpoint]')).toBe(false);
   });
 
-  test("gh is started directly only by github.ts", () => {
-    expect(pathsMatching(sources, GH_ARGV_START)).toEqual([GH_RUNNER_FILE]);
+  // GitHubのAPIへの要求は、すべて通信層の`fetch`で送る。`gh`のバイナリは、gitの資格情報の補助だけに使う。
+  test("no script writes an argv array that runs gh api", () => {
+    expect(pathsMatching(sources, GH_API_ARGV)).toEqual([]);
+  });
+
+  test("the gh api pattern finds gh and api split across lines", () => {
+    expect(GH_API_ARGV.test('["gh",\n  "api", endpoint]')).toBe(true);
+  });
+
+  test("no script starts gh directly", () => {
+    expect(pathsMatching(sources, GH_ARGV_START)).toEqual([]);
   });
 });
 

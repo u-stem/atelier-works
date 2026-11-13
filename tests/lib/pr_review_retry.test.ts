@@ -65,19 +65,13 @@ describe("markTransientGitHubFailure", () => {
 
   test("marks a timeout", () => {
     const err = new GitHubHttpError("failed with HTTP 0", 0, {
-      exitCode: 1,
       timedOut: true,
     });
     expect(markTransientGitHubFailure(err)).not.toBe(err);
   });
 
-  test("marks a connection failure of gh", () => {
-    const err = new GitHubHttpError("failed with HTTP 0", 0, { exitCode: 1 });
-    expect(markTransientGitHubFailure(err)).not.toBe(err);
-  });
-
-  test("keeps an authentication failure of gh as it is", () => {
-    const err = new GitHubHttpError("failed with HTTP 0", 0, { exitCode: 4 });
+  test("keeps a refused token (401) as it is, because the same token fails again", () => {
+    const err = new GitHubHttpError("failed with HTTP 401", 401);
     expect(markTransientGitHubFailure(err)).toBe(err);
   });
 

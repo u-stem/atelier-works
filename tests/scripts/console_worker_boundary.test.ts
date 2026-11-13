@@ -1307,6 +1307,16 @@ describe("console worker boundary", () => {
     },
   );
 
+  // GitHubのAPIへの要求は通信層の`fetch`で送り、`gh`の子プロセスを起動しない。
+  // approval_decideは、GitHubを呼んでも、ファイルと子プロセスの道具に届かない。
+  // retry_work_itemは、CIの修正と実装のモジュール(`ci_fix_round.ts`、`implement_loop.ts`など)から定数を読み、
+  // それらを通してファイルと子プロセスの道具に届くので、対象にしない。
+  test("approval_decide reaches no file or process tool", () => {
+    expect(filesWithToolDependencies(["f/factory/approval_decide"])).toEqual(
+      [],
+    );
+  });
+
   test.each(READS_NO_SECRET)("%s does not read github_token", (path) => {
     expect(mentions(path, GITHUB_TOKEN)).toBe(false);
   });

@@ -19,7 +19,6 @@ import {
   fetchIssueState,
   findIssueByMarker,
   findOpenPullRequestByHead,
-  GH_EXIT_AUTH_REQUIRED,
   type GhClient,
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
@@ -85,10 +84,7 @@ import {
 } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import { isRecord } from "../../f/factory/lib/types.ts";
-import {
-  type CommandResult,
-  SpawnError,
-} from "../../f/factory/lib/workspace.ts";
+import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   createFakeCommandRunner,
   cutBody,
@@ -202,27 +198,6 @@ describe("allowEscapeSequences", () => {
     ghToken: "tok",
   });
 
-  // 書き込みは`gh`で送るので、`gh`に`--allow-escape-sequences`を渡すかで確かめる。
-  test("adds --allow-escape-sequences to a write when the option is true", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({})]);
-    await callGhApi(client(fake), "repos/o/r/issues", {
-      method: "POST",
-      body: {},
-      allowEscapeSequences: true,
-    });
-    expect(fake.calls[0]?.argv).toContain("--allow-escape-sequences");
-  });
-
-  test("omits --allow-escape-sequences from a write by default", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({})]);
-    await callGhApi(client(fake), "repos/o/r/issues", {
-      method: "POST",
-      body: {},
-    });
-    expect(fake.calls[0]?.argv).not.toContain("--allow-escape-sequences");
-  });
-
-  // GETは`fetch`で送るので、制御列を含む本文が残るかで確かめる。
   test("keeps an escape sequence in a GET body when the option is true", async () => {
     const fake = createFakeCommandRunner([ok(ghApiStdout(200, "a\u001bb"))]);
     const response = await callGhApi(client(fake), "repos/o/r/pulls/1", {
@@ -272,24 +247,92 @@ describe("getDefaultBranch", () => {
   });
 });
 
-describe("the environment of gh for a write", () => {
-  test("points TMPDIR at the given job directory", async () => {
+describe("a write request", () => {
+  const post = (fake: ReturnType<typeof createFakeCommandRunner>) =>
+    callGhApi({ run: fake.run, ghToken: "tok" }, "repos/o/r/issues", {
+      method: "POST",
+      body: { title: "t" },
+    });
+
+  test("is sent through fetch, not gh", async () => {
     const fake = createFakeCommandRunner([ghApiOk({})]);
-    await callGhApi(
-      { run: fake.run, ghToken: "tok", tmpDir: "/run/factory-tmp/fj-x" },
-      "repos/o/r/issues",
-      { method: "POST", body: {} },
-    );
-    expect(fake.calls[0]?.options?.env?.TMPDIR).toBe("/run/factory-tmp/fj-x");
+    await post(fake);
+    expect(fake.calls[0]?.argv[0]).toBe("fetch");
   });
 
-  test("leaves TMPDIR unset outside a job", async () => {
+  test("sends the method", async () => {
     const fake = createFakeCommandRunner([ghApiOk({})]);
-    await callGhApi({ run: fake.run, ghToken: "tok" }, "repos/o/r/issues", {
-      method: "POST",
-      body: {},
-    });
-    expect(fake.calls[0]?.options?.env?.TMPDIR).toBeUndefined();
+    await post(fake);
+    expect(fake.calls[0]?.request?.method).toBe("POST");
+  });
+
+  test("sends the path", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await post(fake);
+    expect(fake.calls[0]?.request?.url).toBe(
+      "https://api.github.com/repos/o/r/issues",
+    );
+  });
+
+  test("sends the body as JSON", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await post(fake);
+    expect(fake.calls[0]?.request?.body).toBe('{"title":"t"}');
+  });
+
+  test("marks the body as JSON", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await post(fake);
+    expect(fake.calls[0]?.request?.headers.get("content-type")).toBe(
+      "application/json",
+    );
+  });
+
+  test("puts the token in the Authorization header", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await post(fake);
+    expect(fake.calls[0]?.request?.headers.get("authorization")).toBe(
+      "Bearer tok",
+    );
+  });
+
+  test("does not follow a redirect by itself", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await post(fake);
+    expect(fake.calls[0]?.request?.redirect).toBe("manual");
+  });
+
+  test("returns an empty body for a 204", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(204, ""))]);
+    const response = await callGhApi(
+      { run: fake.run, ghToken: "tok" },
+      "repos/o/r/issues/1/labels/bug",
+      { method: "DELETE" },
+    );
+    expect(response.bodyText).toBe("");
+  });
+
+  test("rejects an absolute URL before sending", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await expect(
+      callGhApi(
+        { run: fake.run, ghToken: "tok" },
+        "https://api.github.com/repos/o/r/issues",
+        { method: "POST", body: {} },
+      ),
+    ).rejects.toThrow("GitHub API path is not allowed");
+  });
+
+  test("sends a GraphQL mutation through fetch", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        data: {
+          resolveReviewThread: { thread: { id: "PRRT_1", isResolved: true } },
+        },
+      }),
+    ]);
+    await resolveReviewThread({ run: fake.run, ghToken: "tok" }, "PRRT_1");
+    expect(fake.calls[0]?.request?.url).toBe("https://api.github.com/graphql");
   });
 });
 
@@ -1134,20 +1177,6 @@ describe("transient failure retry", () => {
     'Get "https://api.github.com/user": read tcp 10.0.0.2:51234->140.82.112.5:443: read: connection reset by peer',
   );
 
-  function spawnError(code: string): Error {
-    return new SpawnError(
-      Object.assign(
-        new Error(`${code}: resource unavailable, posix_spawn 'gh'`),
-        { code },
-      ),
-    );
-  }
-
-  /** プロセスの起動後に起きた失敗。`SpawnError`ではないが、コードは資源不足を示す。 */
-  function postSpawnError(code: string): Error {
-    return Object.assign(new Error(`${code}: read failed`), { code });
-  }
-
   function fakeClient(
     responses: readonly (CommandResult | Error)[],
     sleeps: number[] = [],
@@ -1175,89 +1204,6 @@ describe("transient failure retry", () => {
       (err: unknown) => err,
     );
   }
-
-  // `gh`を起動するのは書き込みだけなので、起動の失敗はIssueの作成(POST)で確かめる。
-  describe("when the gh process fails to start", () => {
-    const create = (client: GhClient) =>
-      createIssue(client, "acme", "widgets", { title: "t", body: "b" });
-
-    test("succeeds on the retry after an EAGAIN failure", async () => {
-      const { client } = fakeClient([spawnError("EAGAIN"), issueCreated]);
-      const created = await create(client);
-      expect(created.number).toBe(5);
-    });
-
-    test("waits the injected delay once before retrying", async () => {
-      const sleeps: number[] = [];
-      const { client } = fakeClient(
-        [spawnError("EAGAIN"), issueCreated],
-        sleeps,
-        250,
-      );
-      await create(client);
-      expect(sleeps).toEqual([250]);
-    });
-
-    test("waits the default delay when none is injected", async () => {
-      const sleeps: number[] = [];
-      const { client } = fakeClient(
-        [spawnError("EAGAIN"), issueCreated],
-        sleeps,
-      );
-      await create(client);
-      expect(sleeps).toEqual([GITHUB_TRANSIENT_RETRY_DELAY_MS]);
-    });
-
-    test.each(["EMFILE", "ENFILE", "ENOMEM"])(
-      "retries after an %s failure",
-      async (code) => {
-        const { client, calls } = fakeClient([spawnError(code), issueCreated]);
-        await create(client);
-        expect(calls.length).toBe(2);
-      },
-    );
-
-    test("throws the second failure when the retry fails to start too", async () => {
-      const { client } = fakeClient([
-        spawnError("EAGAIN"),
-        spawnError("EMFILE"),
-      ]);
-      await expect(create(client)).rejects.toThrow(/EMFILE/);
-    });
-
-    test("does not start a third process", async () => {
-      const { client, calls } = fakeClient([
-        spawnError("EAGAIN"),
-        spawnError("EAGAIN"),
-      ]);
-      await rejectionOf(create(client));
-      expect(calls.length).toBe(2);
-    });
-
-    test("does not retry a spawn failure that is not transient", async () => {
-      const { client, calls } = fakeClient([
-        spawnError("ENOENT"),
-        issueCreated,
-      ]);
-      await rejectionOf(create(client));
-      expect(calls.length).toBe(1);
-    });
-
-    test("does not retry an EAGAIN rejection that is not a SpawnError", async () => {
-      const { client, calls } = fakeClient([
-        postSpawnError("EAGAIN"),
-        issueCreated,
-      ]);
-      await rejectionOf(create(client));
-      expect(calls.length).toBe(1);
-    });
-
-    test("does not retry an error without a code", async () => {
-      const { client, calls } = fakeClient([new Error("boom"), issueCreated]);
-      await rejectionOf(create(client));
-      expect(calls.length).toBe(1);
-    });
-  });
 
   describe("when no response arrives", () => {
     test("succeeds on the retry of a GET", async () => {
@@ -1321,13 +1267,6 @@ describe("transient failure retry", () => {
         updatePullRequest(client, "acme", "widgets", 7, { title: "t" }),
       );
       expect(calls.length).toBe(1);
-    });
-
-    test("throws the spawn error when the retry of a query fails to start", async () => {
-      const { client } = fakeClient([connectionReset, spawnError("EAGAIN")]);
-      await expect(
-        listReviewThreads(client, "acme", "widgets", 7),
-      ).rejects.toBeInstanceOf(SpawnError);
     });
 
     test("retries a GraphQL query that reads review threads", async () => {
@@ -1463,7 +1402,7 @@ describe("transient failure retry", () => {
     test("retries a transient failure after the rate limit wait", async () => {
       const sleeps: number[] = [];
       const { client } = fakeClient(
-        [limited, spawnError("EAGAIN"), viewerOk],
+        [limited, connectionReset, viewerOk],
         sleeps,
         250,
       );
@@ -10143,22 +10082,24 @@ describe("GitHubHttpError details for a failure without a response", () => {
     return null;
   }
 
-  test("carries the exit code when gh asks for authentication", async () => {
-    const error = await failureOf(fail("gh auth login", GH_EXIT_AUTH_REQUIRED));
-    expect(error?.exitCode).toBe(GH_EXIT_AUTH_REQUIRED);
-  });
-
-  test("has status 0 when gh asks for authentication", async () => {
-    const error = await failureOf(fail("gh auth login", GH_EXIT_AUTH_REQUIRED));
+  test("has status 0 when the connection fails", async () => {
+    const error = await failureOf(fail("connection reset"));
     expect(error?.status).toBe(0);
   });
 
-  test("is not marked as timed out when gh asks for authentication", async () => {
-    const error = await failureOf(fail("gh auth login", GH_EXIT_AUTH_REQUIRED));
+  test("is not marked as timed out when the connection fails", async () => {
+    const error = await failureOf(fail("connection reset"));
     expect(error?.timedOut).toBe(false);
   });
 
-  test("is marked as timed out when the process was killed by the timeout", async () => {
+  test("keeps the status of a refused token", async () => {
+    const error = await failureOf(
+      ok(ghApiStdout(401, { message: "Bad credentials" })),
+    );
+    expect(error?.status).toBe(401);
+  });
+
+  test("is marked as timed out when the request ran past the deadline", async () => {
     const error = await failureOf(timeout());
     expect(error?.timedOut).toBe(true);
   });
