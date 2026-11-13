@@ -1164,8 +1164,13 @@ tag`console`のscriptがimportでたどれるソースを数える契約テス�
 たどれない形は、次のとおりである。
 
 - 絶対パスと、`f/`か`u/`で始まるimport
-- `require`
+- `require`の識別子の参照。
+  呼び出しに加えて、別名への代入、`.call`、引数への受け渡し、`.require`のメンバー参照、キーの`require:`が当たる。
+  文字列とコメントの中の言及は当たらない
 - 引数が単純な文字列リテラルでないimport()
+- リテラルだけで組み立てた引数のimport()。
+  `import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート、枝がリテラルの条件式が当たる。
+  変換の過程でリテラルに畳み込まれ、変換前の本文から読むimportの一覧に現れないので、変換の前と後で動的importの指定を突き合わせて見つける
 - `.name("literal")`の形の呼び出しで説明できない、`getVariable`と`getResource`の出現。
   添字アクセス、分割代入、名前付きimport、別名への代入、引数が変数の呼び出し、注入された関数の呼び出しが当たる
 - 呼び出し(`名前(`)でない、`getVariable`と`setVariable`の出現。
@@ -1180,8 +1185,11 @@ script.yamlに`$var:`か`$res:`の参照があるときも、テストは落ち�
 凍結の変数`f/factory/freezes`は、書き込みのときに`isSecretIfNotExist`へ`false`を渡すので、secretではない。
 呼び出し側が定数だけを渡すことを確かめ、テストの許可リストに理由を書いている。
 テストが見ないのは、文字列を組み立てて作ったsecretのパス、環境変数やDBを経由して受け取る名前、`eval`、文字列の中に隠したコードである。
-リテラルだけで組み立てた動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート)も見ない。
-変換の過程で単一のリテラルに畳み込まれ、importの一覧に現れないためである。
+骨組みの字句の読み違えも見ない。
+割り算を正規表現リテラルと読み違えると、走査は間のコードを落とす。
+逆に、正規表現リテラルを割り算と読むと、正規表現の中の引用符から後ろを文字列として落とす。
+正規表現の直前が`return`、`typeof`、`case`、`in`、`of`以外のキーワードのときに起きる。
+定期ジョブ用workerの走査も同じ骨組みを使い、この限界は残るリスクの[R-PER-23](security-risks.md#r-per-23)にある。
 これらはコードのレビューで見る。
 
 サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
@@ -1396,7 +1404,8 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、tag`periodic`を持つscriptについて次を固定する。
 走査の方法と、たどれない形は、Console用workerの契約テストと同じである。
 引数が変数の動的importは、たどれない形として止まる。
-引数がリテラルだけで組み立てた形は、変換の過程で単一のリテラルに畳み込まれるので止まらず、下の「テストが見ないもの」に入る。
+引数がリテラルだけで組み立てた動的importも、変換の過程でリテラルに畳み込まれた形として止まる。
+`require`は、呼び出しに限らず、別名への代入、`.call`、引数への受け渡し、`.require`のメンバー参照も止まる。
 
 - `f/`の下のYAMLのうち、tag`periodic`へ振り分けるものが、テストの一覧のscriptの定義と一致する。
   scriptの定義の`tag`だけでなく、スケジュールの`tag`と、フローのモジュールの`tag`と`tag_override`も、入れ子の中まで調べる。
@@ -1420,6 +1429,11 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
   `node:fs`、`node:child_process`、`bun`モジュールのimportと、`Bun`の使い方を調べる。
   `Bun.sleep`のような無害なメンバー以外は、`Bun.spawn`や`Bun.file`に加えて、分割代入、別名への代入、添字アクセスも当たる。
   `globalThis`、`process.getBuiltinModule`、`process.binding`も当たる。
+  `import.meta`の参照も、すべて当たる。
+  `import.meta`は`require`を持ち、別名に入れて呼ぶと、importの一覧に現れずにモジュールへ届くためである。
+  CommonJSの`module`と`exports`の参照も当たる。
+  `module.require`でモジュールへ届くためである。
+  宣言の有効範囲は見ないので、同じ名前の変数も当たる。
 
 `node:module`、`node:worker_threads`、`node:vm`のimportも、迂回に使えるので数える。
 `f/`の下のTypeScriptが、`JobService.run*`でジョブを起動したり、tagの文字列を渡したりしていないことも、テストが確かめる。
@@ -1430,14 +1444,23 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 - 式で組み立てたtag、フローの入力で渡すtag。
 - Windmillの画面で付けたtag。
 - 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
-- リテラルだけで組み立てた動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート)。
-  変換の過程で定数に畳み込まれ、走査には単一のリテラルに見えるが、importの一覧には現れない。
-  そのため、外部のパッケージの固定とサブプロセスの禁止をすり抜ける。
-- `import.meta.require`を変数に入れて呼ぶ形。
-  この境界の走査は`import.meta`を拒まないので、同じくすり抜ける。
+- 骨組みの字句の読み違え。
+  割り算を正規表現リテラルと読み違えると、走査は間のコードを落とす。
+  逆に、正規表現リテラルを割り算と読むと、正規表現の中の引用符から後ろを文字列として落とす。
+  正規表現の直前が`return`、`typeof`、`case`、`in`、`of`以外のキーワードのときに起きる。
+- グローバルの`Worker`。
+  この境界の依存の走査は、`Worker`の参照を数えない。
+- `process`の別名と分割代入、`node:process`からの名前付きimportで読む`binding`。
+  依存の走査が名前で見るのは、`process.binding`の形だけである。
+- 禁止の一覧に無い`node:`のモジュール。
+  依存の走査は、`node:`のモジュールを禁止の一覧で止めるので、一覧に無いモジュールは通る。
+- `globalThis`以外のグローバルオブジェクト(`global`、`self`、`window`)の経由。
+  Console用workerの走査は、これらも禁じる。
 - `windmill-client`の中身。
 - resourceの中身で解決されるsecret。
   `getResource`が返す値の中の`$var:`は、走査が見ない。
+
+このうち、骨組みの字句の読み違え、グローバルの`Worker`、`process`の別名、`node:`の禁止の一覧、`globalThis`以外のグローバルオブジェクトは、残るリスクの[R-PER-23](security-risks.md#r-per-23)である。
 
 tag`periodic`を新しく付けるPRでは、そのscriptが読むresourceの中身を確かめる。
 `getResource`の引数のresourceごとに、値に`$var:`で始まる参照が無いことを、Windmillで確かめる。

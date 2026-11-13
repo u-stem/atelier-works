@@ -39,6 +39,11 @@ Console用workerの境界の全体は、[セキュリティ](../../security.md#c
 走査は、許可表のほかに、次の形を禁じる。
 
 - `windmill-client`の再エクスポート。
+- 数字の版(`@1.817.0`)でない`windmill-client`の版の指定。
+  `@latest`のようなタグと範囲は、入れるたびに中身が変わりうるためである。
+- リテラルだけで組み立てた引数の動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート、枝がリテラルの条件式)。
+  変換の過程でリテラルに畳み込まれ、変換前の本文から読むimportの一覧に現れないためである。
+  走査は、変換の前と後で動的importの指定を突き合わせて見つける。
 - `global`、`self`、`window`、`globalThis`の経由。
 - リソースの引数の上書き。
   読み取り(`getResourceValue`)の引数は`{ workspace, path: <定数> }`の形に固定し、`requestBody`を認めない。
@@ -52,8 +57,11 @@ Console用workerの境界の全体は、[セキュリティ](../../security.md#c
   タグ付きテンプレートの`${}`は引数として渡る。
 - 字句の迂回。
   `constructor`の言及(文字列の中も数える)、`eval`、`Function`、`Bun`の添字アクセスを禁じる。
-  `require`(変数に入れる形も)、`import.meta`のすべて、`Worker`も禁じる。
+  `require`の参照(変数に入れる形、`.require`のメンバー参照も)、`import.meta`のすべて、`Worker`も禁じる。
   `import.meta`は`env`と`require`を持つためである。
+  CommonJSの`module`と`exports`の参照も禁じる。
+  宣言の有効範囲は見ないので、同じ名前の変数も禁じる。
+  `fetch`と`Worker`は、オブジェクトのキー(直前が`{`か`,`で、直後が`:`のもの)だけを除き、条件式の枝も禁じる。
 - ファイルとサブプロセスへの依存。
 
 読み取り専用であることは、たどれるファイルのテンプレートリテラルに、書き込みやスキーマ変更のSQLの語が無いことで確かめる。

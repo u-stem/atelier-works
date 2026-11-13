@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FORBIDDEN_EXACT_PATHS } from "../../f/factory/lib/protected_paths.ts";
 import {
+  CLIENT_PACKAGE,
   codeOf,
   DISCORD_WEBHOOK_URL,
   datatableStringSql,
@@ -46,7 +47,12 @@ import {
 // - 本文はBun.TranspilerでTypeScriptを落としたコードを調べる。コメントと型の中の文字列は数えない。
 // - 相対importと、副作用だけのimport、再エクスポート、リテラルの動的importをたどる。
 // - たどれない形が現れたら、走査の穴になるのでテストを落とす。
-//   絶対パス(/f/...)とf/・u/で始まるimport、require、引数が単純な文字列リテラルでないimport()。
+//   絶対パス(/f/...)とf/・u/で始まるimport、requireの参照(別名、`.call`、引数への受け渡し、`.require`も)、
+//   引数が単純な文字列リテラルでないimport()。
+//   リテラルだけで組み立てた引数(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート、
+//   枝がリテラルの条件式)も落とす。
+//   変換の過程でリテラルに畳み込まれ、変換前の本文から読むimportの一覧に現れないためである。
+//   変換の前と後で、動的importの指定を突き合わせて見つける。
 // - コード中のgetVariableとgetResourceの出現をすべて数え、`.name("literal")`の形の呼び出しで説明できる分を引く。
 //   残りが1つでもあれば落とす。添字アクセス、分割代入、名前付きimport、別名への代入、
 //   引数が変数や組み立てた文字列の呼び出し、注入された関数の呼び出しが残る。
@@ -58,8 +64,6 @@ import {
 //   文字列の連結で作った名前は見ない)、割り算を正規表現リテラルと読み違えた箇所の中身(骨組みが
 //   その間のコードを落とす)、`eval`と`Function`と`.constructor`を、字句の禁止で見つけられない書き方
 //   (識別子を連結して呼ぶ形など)、第三者パッケージの中身。
-//   リテラルだけで組み立てた動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート)も見ない。
-//   変換の過程で単一のリテラルに畳み込まれ、importの一覧に現れないためである。
 //   これらはコードのレビューで見る。3つのscriptがimportでたどれるファイルは、すべて保護パスの中にあり、
 //   変更は人がレビューする。下の「見ないもの」を確かめることが、レビューの観点になる。
 
@@ -274,8 +278,110 @@ describe("the import scan", () => {
     ).not.toEqual([]);
   });
 
+  // 変換は、リテラルだけの式を1つのリテラルに畳み込む。変換前のimportの一覧には現れない。
+  test("flags a dynamic import whose argument concatenates literals", () => {
+    expect(
+      unfollowableImports('const m = await import("node:" + "fs");'),
+    ).not.toEqual([]);
+  });
+
+  test("flags a dynamic import whose template embeds only a literal", () => {
+    expect(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: 走査の入力にする文字列である
+      unfollowableImports('const m = await import(`node:child_${"process"}`);'),
+    ).not.toEqual([]);
+  });
+
+  // 変換は、条件式の引数を、枝ごとのリテラルの動的importに書き換える。
+  test("flags a dynamic import whose argument is a conditional of literals", () => {
+    expect(
+      unfollowableImports('const m = await import(c ? "node:fs" : "./x.ts");'),
+    ).not.toEqual([]);
+  });
+
+  // 変換が消す到達しない動的importの数で、畳み込まれた動的importを相殺させない。
+  test("flags a folded dynamic import next to one that the transform removes", () => {
+    expect(
+      unfollowableImports(
+        'if (false) { await import("./a.ts"); }\nawait import("node:" + "fs");',
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("does not flag a dynamic import with a template without a substitution", () => {
+    expect(unfollowableImports("const m = await import(`./x.ts`);")).toEqual(
+      [],
+    );
+  });
+
+  test("does not flag two dynamic imports of the same literal", () => {
+    expect(
+      unfollowableImports(
+        'const a = await import("./x.ts");\nconst b = await import("./x.ts");',
+      ),
+    ).toEqual([]);
+  });
+
   test("flags require", () => {
     expect(unfollowableImports('const m = require("./x.js");')).not.toEqual([]);
+  });
+
+  // `require`は、呼び出しの形でなくても、別の名前や関数を通して呼べる。
+  test("flags require kept in a variable", () => {
+    expect(unfollowableImports("const load = require;")).not.toEqual([]);
+  });
+
+  test("flags require called through call", () => {
+    expect(unfollowableImports('require.call(null, "node:fs");')).not.toEqual(
+      [],
+    );
+  });
+
+  test("flags require passed as an argument", () => {
+    expect(unfollowableImports("use(require);")).not.toEqual([]);
+  });
+
+  test("flags a member reference to require", () => {
+    expect(unfollowableImports("const load = loader.require;")).not.toEqual([]);
+  });
+
+  test("flags module.require taken from module kept in a variable", () => {
+    expect(
+      unfollowableImports('const m = module;\nm.require("node:fs");'),
+    ).not.toEqual([]);
+  });
+
+  // 骨組みが割り算を正規表現の始まりと読み違えても、変換後のコードへの判定で止める。
+  test("flags require with a variable between two divisions by members named of", () => {
+    expect(
+      unfollowableImports(
+        "const a = x.of / 2;\nrequire(name);\nconst b = y.of / 2;",
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("flags module.require between two divisions by members named of", () => {
+    expect(
+      unfollowableImports(
+        'const a = x.of / 2;\nmodule.require("node:fs");\nconst b = y.of / 2;',
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("does not flag a mention of require in a string", () => {
+    expect(unfollowableImports('const s = "require";')).toEqual([]);
+  });
+
+  test("does not flag a member of the client whose name starts with require", () => {
+    expect(
+      unfollowableImports(
+        'import * as wmill from "windmill-client@1.817.0";\nawait wmill.requireApproval();',
+      ),
+    ).toEqual([]);
+  });
+
+  test("does not flag an identifier that only starts with require", () => {
+    expect(unfollowableImports("const requires = 1;")).toEqual([]);
   });
 
   test("flags an absolute import", () => {
@@ -496,6 +602,38 @@ describe("the SDK use scan", () => {
         'import wmillDefault, { JobService } from "windmill-client@1.817.0";\nJobService.getJob({});',
       ).problems,
     ).not.toEqual([]);
+  });
+
+  test("flags the client with a tag instead of a version", () => {
+    expect(
+      sdkFindings('import * as wmill from "windmill-client@latest";').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags the client with the tag next", () => {
+    expect(
+      sdkFindings('import * as wmill from "windmill-client@next";').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags the client with a prerelease version", () => {
+    expect(
+      sdkFindings('import * as wmill from "windmill-client@1.817.0-rc.1";')
+        .problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags the client with a version range", () => {
+    expect(
+      sdkFindings('import * as wmill from "windmill-client@^1.817.0";')
+        .problems,
+    ).not.toEqual([]);
+  });
+
+  test("accepts the client without a version", () => {
+    expect(
+      sdkFindings('import * as wmill from "windmill-client";').problems,
+    ).toEqual([]);
   });
 
   test("flags a deep path import of the client", () => {
@@ -933,12 +1071,55 @@ describe("the SDK use scan", () => {
     expect(sdkFindings('new Worker("w.js");').problems).not.toEqual([]);
   });
 
-  test("does not flag a key that is named require", () => {
-    expect(sdkFindings("const a = { require: 1 };").problems).toEqual([]);
+  // 骨組みの上では、キーの`require:`と条件式の枝の`require :`を見分けられないので、キーも当てる。
+  test("flags require in a branch of a conditional", () => {
+    expect(
+      sdkFindings("const load = c ? require : null;").problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags module.require", () => {
+    expect(
+      sdkFindings('const fs = module.require("node:fs");').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a reference to exports", () => {
+    expect(sdkFindings("exports.x = 1;").problems).not.toEqual([]);
+  });
+
+  test("flags a local variable named module", () => {
+    expect(
+      sdkFindings("for (const module of steps) {\n  use(module.id);\n}")
+        .problems,
+    ).not.toEqual([]);
+  });
+
+  test("does not flag a property that is named module", () => {
+    expect(sdkFindings("const m = job.module;").problems).toEqual([]);
   });
 
   test("does not flag a property that is named Worker", () => {
     expect(sdkFindings("const a = job.Worker;").problems).toEqual([]);
+  });
+
+  // キーの除外は、条件式の枝(`c ? fetch : null`)も通すので、置かない。
+  test("flags fetch in a branch of a conditional", () => {
+    expect(sdkFindings("const f = c ? fetch : null;").problems).not.toEqual([]);
+  });
+
+  test("flags fetch in the second branch of a conditional", () => {
+    expect(sdkFindings("const f = c ? null : fetch;").problems).not.toEqual([]);
+  });
+
+  test("flags fetch as a shorthand property", () => {
+    expect(sdkFindings("const handle = { fetch };").problems).not.toEqual([]);
+  });
+
+  test("flags Worker in a branch of a conditional", () => {
+    expect(sdkFindings("const W = c ? Worker : null;").problems).not.toEqual(
+      [],
+    );
   });
 
   test("flags a spread that overrides the resource path", () => {
@@ -1383,10 +1564,7 @@ describe("the scripts restricted to an SDK allowance", () => {
     for (const path of RESTRICTED) {
       for (const [file, source] of sourcesReachableFrom(path)) {
         for (const spec of transpilerImports(source)) {
-          if (
-            !spec.startsWith(".") &&
-            !/^windmill-client(?:@[\w.+-]+)?$/.test(spec)
-          ) {
+          if (!spec.startsWith(".") && !CLIENT_PACKAGE.test(spec)) {
             outside.push(`${relative(file)}: ${spec}`);
           }
         }

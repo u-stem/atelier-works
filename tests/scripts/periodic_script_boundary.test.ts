@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PERIODIC_JOB_WAIT_SECONDS } from "../../f/factory/lib/periodic_worker.ts";
 import {
+  CLIENT_PACKAGE,
   codeOf,
   DISCORD_WEBHOOK_URL,
   filesWithNonLiteralReads,
@@ -43,19 +44,21 @@ import {
 // - defaultのworkerの停止を検知するscript(default_worker_watch)も、この一覧に入る。
 //   defaultのworkerの中では、そのworkerが止まると動かないためである。
 // - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
+//   `import.meta`の参照も無い。`require`を持ち、別名に入れて呼ぶとimportの一覧に現れないためである。
+//   CommonJSの`module`と`exports`の参照も無い。`module.require`でモジュールへ届くためである。
 // - importでたどれるソースがimportの形で読む外部のパッケージは、windmill-clientだけである。
 //   パッケージの中身は走査が見ないので、ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるためである。
 // - 走査でたどれない形(Console用workerの境界テストと同じ)が無い。
-//   引数が変数の動的importは止まるが、リテラルだけで組み立てた引数は、下の「見ないもの」に入る。
+//   引数が変数の動的importと、リテラルだけで組み立てた引数が変換で畳み込まれた動的importも、ここで止まる。
 //
 // 走査の方法と限界は、`console_worker_boundary.test.ts`の先頭にある。
 // tagの走査が見ないもの: 式で組み立てたtag、フローの入力で渡すtag、Windmillの画面で付けたtag。
 // 依存の走査が見ないもの: 文字列で組み立てた呼び出し、`eval`と`Function`、注入された関数の中身、
-// windmill-clientの中身。
-// リテラルだけで組み立てた動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート)と、
-// `import.meta.require`を変数に入れて呼ぶ形も見ない。
-// 前者は変換の過程で定数に畳み込まれ、走査には単一のリテラルに見えるが、importの一覧には現れない。
-// どちらも、外部のパッケージの固定とサブプロセスの禁止をすり抜ける。
+// windmill-clientの中身、グローバルの`Worker`、`process`の別名と分割代入、禁止の一覧に無い`node:`のモジュール、
+// `globalThis`以外のグローバルオブジェクト(`global`、`self`、`window`)、骨組みの字句の読み違え。
+// 字句の読み違えは、割り算を正規表現リテラルと読んで間のコードを落とす向きと、
+// 正規表現リテラルを割り算と読んで、正規表現の中の引用符から後ろを文字列として落とす向きがある。
+// `Worker`から字句の読み違えまでの限界は、`docs/security-risks.md`のR-PER-23にある。
 // コードがAPIで渡すtag(`JobService.run*`の`tag`)は、下の「コードが渡すtag」のテストが、現在の0件を保つ。
 // resourceの中身で解決されるsecret(`getResource`が返す値の`$var:`)は、走査が見ない。
 // これらはコードのレビューで見る。tag periodicを最初に付けるPRでは、そのscriptが読むresourceの中身も確かめる。
@@ -107,12 +110,6 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
   "f/factory/lib/config.ts":
     "loadConfigの引数getResource(注入された関数)。呼び出し側は、リテラルのwmill.getResource(...)を包んで渡す",
 };
-
-/**
- * windmill-clientのimport。版の指定は、数字の版(`@1.817.0`)だけを認める。
- * `@latest`のようなタグは、入れるたびに中身が変わりうるので当たらない。深いパス(`windmill-client/...`)も当たらない。
- */
-const CLIENT_PACKAGE = /^windmill-client(?:@\d+\.\d+\.\d+)?$/;
 
 /**
  * `source`が読み込む先のうち、windmill-client以外の外部のパッケージ。
@@ -258,6 +255,72 @@ describe("the tool dependency scan", () => {
 
   test("flags an import of vm without the node: prefix", () => {
     expect(toolDependencies('import vm from "vm";')).not.toEqual([]);
+  });
+
+  // `import.meta.require`は、別名に入れて呼ぶとimportの一覧に現れずにファイルのモジュールへ届く。
+  test("flags import.meta.require kept in a variable", () => {
+    expect(
+      toolDependencies('const load = import.meta.require;\nload("node:fs");'),
+    ).not.toEqual([]);
+  });
+
+  test("flags import.meta by itself", () => {
+    expect(toolDependencies("const m = import.meta;")).not.toEqual([]);
+  });
+
+  test("does not flag a mention of import.meta in a string", () => {
+    expect(toolDependencies('const s = "import.meta";')).toEqual([]);
+  });
+
+  // CommonJSの`module`と`exports`は、`module.require`でモジュールへ届く。
+  // 変換は`module.require(...)`を`require(...)`に書き換えるので、その形は`unfollowableImports`が止める。
+  test("flags module kept in a variable", () => {
+    expect(toolDependencies("const m = module;")).not.toEqual([]);
+  });
+
+  // 宣言の有効範囲は見ないので、同じ名前の変数を宣言したソースでも、`module`の参照を当てる。
+  test("flags a local variable named module", () => {
+    expect(
+      toolDependencies("for (const module of steps) {\n  use(module.id);\n}"),
+    ).not.toEqual([]);
+  });
+
+  test("flags a reference to exports", () => {
+    expect(toolDependencies("exports.x = 1;")).not.toEqual([]);
+  });
+
+  test("does not flag a property that is named module", () => {
+    expect(toolDependencies("const m = job.module;")).toEqual([]);
+  });
+
+  test("does not flag a mention of module in a string", () => {
+    expect(toolDependencies('const s = "module";')).toEqual([]);
+  });
+
+  // `.of`と`.in`はメンバーなので、その後ろの`/`は割り算である。正規表現の始まりと読み違えて、間のコードを落とさない。
+  test("flags Bun.spawn between two divisions by members named of", () => {
+    expect(
+      toolDependencies(
+        'const a = x.of / 2;\nBun.spawn(["gh"]);\nconst b = y.of / 2;',
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("flags Bun.spawn between two divisions by members named in", () => {
+    expect(
+      toolDependencies(
+        'const a = x.in / 2;\nBun.spawn(["gh"]);\nconst b = y.in / 2;',
+      ),
+    ).not.toEqual([]);
+  });
+
+  // 到達しない枝の動的importは変換で消えるが、指定は変換前の一覧に残るので、依存の走査から隠れない。
+  test("flags node:fs in an unreachable branch next to a folded dynamic import", () => {
+    expect(
+      toolDependencies(
+        'if (false) { await import("node:fs"); }\nawait import("./a" + ".ts");',
+      ),
+    ).not.toEqual([]);
   });
 
   test("does not flag node:path", () => {

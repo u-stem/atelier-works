@@ -345,20 +345,20 @@ function projectSteps(raw: Record<string, unknown>): StepView[] {
   const status = raw.flow_status;
   if (!isRecord(status) || !Array.isArray(status.modules)) return [];
   const steps: StepView[] = [];
-  for (const module of status.modules.slice(0, STEPS_MAX)) {
-    if (!isRecord(module)) continue;
-    const id = stringOf(module, "id");
+  for (const flowModule of status.modules.slice(0, STEPS_MAX)) {
+    if (!isRecord(flowModule)) continue;
+    const id = stringOf(flowModule, "id");
     if (id === null) continue;
-    const type = stringOf(module, "type");
-    const child = stringOf(module, "job");
+    const type = stringOf(flowModule, "type");
+    const child = stringOf(flowModule, "job");
     steps.push({
       id,
       state: (type !== null ? STEP_STATES[type] : undefined) ?? "unknown",
       job_id: child !== null && isJobId(child) ? child : null,
-      iterations: Array.isArray(module.flow_jobs)
-        ? module.flow_jobs.length
+      iterations: Array.isArray(flowModule.flow_jobs)
+        ? flowModule.flow_jobs.length
         : null,
-      skipped: module.skipped === true,
+      skipped: flowModule.skipped === true,
     });
   }
   return steps;

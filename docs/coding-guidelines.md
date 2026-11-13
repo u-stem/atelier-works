@@ -286,8 +286,8 @@ gitのpre-pushは全体の`check`を実行しない。
 
 | 境界 | 方針 | 理由 | 根拠 |
 | --- | --- | --- | --- |
-| 定期ジョブ用workerのscript | 外部のパッケージは`windmill-client`だけにする | 境界の走査はパッケージの中身を見ない。ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるため | `tests/scripts/periodic_script_boundary.test.ts`が、importの形で読むものを止める。リテラルだけで組み立てた動的importと、`import.meta.require`を変数に入れて呼ぶ形は見ない。詳細は[定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界)にある |
-| Console用workerのscript | 外部のimportは`windmill-client`だけにする。`node:`のモジュールと`fetch`も使わない | SDKの呼び出しを許可表で絞り、たどれるファイルを保護パスに収める。パッケージの中身には、走査も保護も届かないため | `tests/scripts/console_worker_boundary.test.ts`が、importの形で読むものを止める。リテラルだけで組み立てた動的importは見ない。境界の全体は[Console用workerの境界](security.md#console用workerの境界)にある |
+| 定期ジョブ用workerのscript | 外部のパッケージは`windmill-client`だけにする | 境界の走査はパッケージの中身を見ない。ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるため | `tests/scripts/periodic_script_boundary.test.ts`が、importの形で読むものを止める。変換で畳み込まれる動的importと、`import.meta`も止める。名前を組み立てた参照、`eval`と`Function`、`windmill-client`の中身は見ない。詳細は[定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界)にある |
+| Console用workerのscript | 外部のimportは`windmill-client`だけにする。`node:`のモジュールと`fetch`も使わない | SDKの呼び出しを許可表で絞り、たどれるファイルを保護パスに収める。パッケージの中身には、走査も保護も届かないため | `tests/scripts/console_worker_boundary.test.ts`が、importの形で読むものを止める。変換で畳み込まれる動的importも止める。名前を組み立てた参照と`windmill-client`の中身は見ない。境界の全体は[Console用workerの境界](security.md#console用workerの境界)にある |
 | 秘密値に届くworkerで、攻撃者が決められる入力を読む部品 | 依存を足さず、`node:`の標準の機能の上に自前で書く。CIの成果物のzipの読み取りが当たる | 攻撃者が決められるzipを、展開の前に大きさとパスで検査し、展開の間は実測の長さで打ち切るため。判定のすべてを、保護パスのコードとしてレビューできる範囲に置く | `f/factory/lib/metadata_patch_zip.ts`の先頭のコメント |
 | Claude Codeのフックの、シェルの字句解析 | 自前で持つ | 読めない構文を構文エラーとして返し、判定を拒否に倒すため | `scripts/claude-hooks/shell-words.ts`の先頭のコメント、[判定の範囲](security.md#判定の範囲) |
 | 保護に関わる入口と判定(反映の判定、保留のCLI、マージのフック) | importの連鎖をすべて保護パスに収める。保護の外の処理が要るときは、そのファイルに持つか、読み込む部品も保護する | 保護の外の部品を書き換えて、判定を緩められないようにするため | `tests/lib/protected_paths.test.ts`のimportの連鎖のテスト、`f/factory/lib/protected_paths.ts`のコメント、`f/factory/lib/deploy_gate.ts`の先頭のコメント |
