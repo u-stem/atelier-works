@@ -112,6 +112,7 @@ locks:
   f/factory/lib/gh_graphql: 6df2c0f549bffcff4d562c2e5d6f9c0cf3b7be5575e6ec1727ee61151f3e15e5
   f/factory/lib/github: 011d2ac2e36866e6e3fcdc8402a268f6c57c17340788d3faf200296e0182fe49
   f/factory/lib/github_errors: 25d91078274cd6fa82791b18fb5e819df02a5ddb5cf94f6af09c1b773e4ff396
+  f/factory/lib/github_http: de4742810a91a9f712a42322349e5f4ceefa8563b7f952b159ead97957e1a2b1
   f/factory/lib/heartbeat: 0780343b32026cd007ea35b095340c0b7cb640fb2bab46eb8d213c0a5204673e
   f/factory/lib/holds: 2377c9840d17e626331e3450f97978bfa8fafa583d01b243a9073169aaad728c
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
