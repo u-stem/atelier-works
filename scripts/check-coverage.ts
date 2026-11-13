@@ -654,6 +654,46 @@ export function checkCoverage(options: CheckCoverageOptions): Verdict {
   return judgeCoverage(loaded, floor, { layerFloors, unloaded });
 }
 
+export const DIFF_COVERAGE_FLOOR_PERCENT = 0;
+export const DIFF_COVERAGE_PATHS: readonly string[] = [];
+
+export type ChangedLines = {
+  readonly lines: ReadonlyMap<string, ReadonlySet<number>>;
+  readonly wholeFiles: readonly string[];
+};
+
+export function parseDiffAddedLines(_diff: string): Map<string, Set<number>> {
+  return new Map();
+}
+
+export function judgeDiffCoverage(
+  _lcovText: string,
+  _changed: ChangedLines,
+  _options: { readonly floorPercent?: number } = {},
+): Verdict {
+  return { ok: false, message: "" };
+}
+
+export function diffArgv(_base: string, _paths: readonly string[]): string[] {
+  return [];
+}
+
+export function listChangedLines(
+  _root: string,
+  _paths: readonly string[],
+  _run: (argv: readonly string[], cwd: string) => string = runGit,
+): ChangedLines {
+  return { lines: new Map(), wholeFiles: [] };
+}
+
+export function checkDiffCoverage(_options: {
+  readonly root: string;
+  readonly lcovText: string;
+  readonly listChanged?: (root: string) => ChangedLines;
+}): Verdict {
+  return { ok: false, message: "" };
+}
+
 if (import.meta.main) {
   const result = checkCoverage({ root: resolve(import.meta.dir, "..") });
   if (result.ok) {

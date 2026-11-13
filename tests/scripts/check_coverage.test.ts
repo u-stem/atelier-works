@@ -18,18 +18,26 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  type ChangedLines,
   type CheckCoverageOptions,
   checkCoverage,
+  checkDiffCoverage,
+  DIFF_COVERAGE_FLOOR_PERCENT,
+  DIFF_COVERAGE_PATHS,
+  diffArgv,
   isTargetPath,
   judgeCoverage,
+  judgeDiffCoverage,
   LAYER_FLOORS,
   type Layer,
   type LayerFloor,
   type ListTargetsOptions,
   layerOf,
+  listChangedLines,
   listTargetFiles,
   NOT_LOADABLE_BY_BUN_TEST,
   NOT_LOADABLE_PATH,
+  parseDiffAddedLines,
   selectTargets,
   summarizeLcov,
   type TargetListing,
@@ -1402,5 +1410,450 @@ describe("checkCoverage with the not loadable list", () => {
     });
 
     expect(result.message).toContain("allowed form");
+  });
+});
+
+/** 変更した行を作る。`lines`はパスごとの行番号の並びで、`wholeFiles`は追跡していない新しいファイル。 */
+function changedOf(
+  lines: Readonly<Record<string, readonly number[]>>,
+  wholeFiles: readonly string[] = [],
+): ChangedLines {
+  return {
+    lines: new Map(
+      Object.entries(lines).map(([path, numbers]) => [path, new Set(numbers)]),
+    ),
+    wholeFiles,
+  };
+}
+
+describe("parseDiffAddedLines", () => {
+  test("reads the new lines of a hunk", () => {
+    const diff = [
+      "diff --git a/f/factory/lib/a.ts b/f/factory/lib/a.ts",
+      "--- a/f/factory/lib/a.ts",
+      "+++ b/f/factory/lib/a.ts",
+      "@@ -3,0 +4,2 @@",
+      "+const a = 1;",
+      "+const b = 2;",
+    ].join("\n");
+
+    const result = parseDiffAddedLines(diff);
+
+    expect([...(result.get("f/factory/lib/a.ts") ?? [])]).toEqual([4, 5]);
+  });
+
+  test("reads a hunk whose new side has no count as one line", () => {
+    const diff = [
+      "--- a/f/factory/lib/a.ts",
+      "+++ b/f/factory/lib/a.ts",
+      "@@ -7 +7 @@",
+      "-const a = 1;",
+      "+const a = 2;",
+    ].join("\n");
+
+    const result = parseDiffAddedLines(diff);
+
+    expect([...(result.get("f/factory/lib/a.ts") ?? [])]).toEqual([7]);
+  });
+
+  test("adds no line for a hunk that only deletes", () => {
+    const diff = [
+      "--- a/f/factory/lib/a.ts",
+      "+++ b/f/factory/lib/a.ts",
+      "@@ -7,2 +6,0 @@",
+      "-const a = 1;",
+      "-const b = 2;",
+    ].join("\n");
+
+    const result = parseDiffAddedLines(diff);
+
+    expect(result.get("f/factory/lib/a.ts")?.size ?? 0).toBe(0);
+  });
+
+  test("leaves out a deleted file", () => {
+    const diff = [
+      "--- a/f/factory/lib/a.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-const a = 1;",
+    ].join("\n");
+
+    const result = parseDiffAddedLines(diff);
+
+    expect(result.has("f/factory/lib/a.ts")).toBe(false);
+  });
+
+  test("reads the hunks of several files", () => {
+    const diff = [
+      "--- a/f/factory/lib/a.ts",
+      "+++ b/f/factory/lib/a.ts",
+      "@@ -1 +1 @@",
+      "-x",
+      "+y",
+      "--- a/f/factory/lib/b.ts",
+      "+++ b/f/factory/lib/b.ts",
+      "@@ -2,0 +3 @@",
+      "+z",
+    ].join("\n");
+
+    const result = parseDiffAddedLines(diff);
+
+    expect([...result.keys()]).toEqual([
+      "f/factory/lib/a.ts",
+      "f/factory/lib/b.ts",
+    ]);
+  });
+
+  test("does not take an added line that looks like a file header for a header", () => {
+    const diff = [
+      "--- a/f/factory/lib/a.ts",
+      "+++ b/f/factory/lib/a.ts",
+      "@@ -1,0 +2,2 @@",
+      "+++ b/f/factory/lib/other.ts",
+      "+@@ -1 +1,5 @@",
+    ].join("\n");
+
+    const result = parseDiffAddedLines(diff);
+
+    expect([...result.keys()]).toEqual(["f/factory/lib/a.ts"]);
+  });
+});
+
+describe("judgeDiffCoverage", () => {
+  const A = "f/factory/lib/a.ts";
+  const B = "f/factory/lib/b.ts";
+
+  test("passes when no changed line is executable", () => {
+    const lcov = record(A, [[10, 0]]);
+
+    const result = judgeDiffCoverage(lcov, changedOf({ [A]: [1, 2] }));
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("says that no changed line is executable", () => {
+    const lcov = record(A, [[10, 0]]);
+
+    const result = judgeDiffCoverage(lcov, changedOf({ [A]: [1, 2] }));
+
+    expect(result.message).toContain("no changed executable line");
+  });
+
+  test("passes when the changed lines meet the floor exactly", () => {
+    const lcov = record(A, hitsOf(10, 9));
+
+    const result = judgeDiffCoverage(
+      lcov,
+      changedOf({ [A]: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }),
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("fails when the changed lines are below the floor", () => {
+    const lcov = record(A, hitsOf(10, 9));
+
+    const result = judgeDiffCoverage(lcov, changedOf({ [A]: [9, 10] }));
+
+    expect(result.ok).toBe(false);
+  });
+
+  test("states the ratio and floor of the changed lines", () => {
+    const lcov = record(A, hitsOf(10, 9));
+
+    const result = judgeDiffCoverage(lcov, changedOf({ [A]: [9, 10] }));
+
+    expect(result.message).toContain(
+      "50.00% (1 of 2 changed lines in 1 files), floor 90.00%",
+    );
+  });
+
+  test("counts only the changed lines, not the whole file", () => {
+    const lcov = record(A, hitsOf(10, 2));
+
+    const result = judgeDiffCoverage(lcov, changedOf({ [A]: [1, 2] }));
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("leaves a path outside the diff layers out", () => {
+    const lcov = record("f/factory/steps/s.ts", hitsOf(10, 0));
+
+    const result = judgeDiffCoverage(
+      lcov,
+      changedOf({ "f/factory/steps/s.ts": [1, 2, 3] }),
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("leaves a test file out", () => {
+    const lcov = record("f/factory/lib/a.test.ts", hitsOf(10, 0));
+
+    const result = judgeDiffCoverage(
+      lcov,
+      changedOf({ "f/factory/lib/a.test.ts": [1, 2, 3] }),
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("counts every executable line of an untracked file", () => {
+    const lcov = record(A, hitsOf(10, 5));
+
+    const result = judgeDiffCoverage(lcov, changedOf({}, [A]));
+
+    expect(result.message).toContain("5 of 10 changed lines");
+  });
+
+  test("counts a line once when the same file appears twice in lcov", () => {
+    const lcov = [
+      record(A, [
+        [1, 0],
+        [2, 1],
+      ]),
+      record(A, [
+        [1, 1],
+        [2, 0],
+      ]),
+    ].join("\n");
+
+    const result = judgeDiffCoverage(lcov, changedOf({ [A]: [1, 2] }));
+
+    expect(result.message).toContain("2 of 2 changed lines");
+  });
+
+  test("names the unexecuted changed lines as ranges", () => {
+    const lcov = record(A, hitsOf(10, 0));
+
+    const result = judgeDiffCoverage(lcov, changedOf({ [A]: [2, 3, 4, 7] }));
+
+    expect(result.message).toContain(`${A}: lines 2-4, 7`);
+  });
+
+  test("lists the file with the most unexecuted changed lines first", () => {
+    const lcov = [record(A, hitsOf(10, 0)), record(B, hitsOf(10, 0))].join(
+      "\n",
+    );
+
+    const result = judgeDiffCoverage(
+      lcov,
+      changedOf({ [A]: [1], [B]: [1, 2] }),
+    );
+
+    expect(result.message.indexOf(B)).toBeLessThan(result.message.indexOf(A));
+  });
+
+  test("ends with the reason", () => {
+    const lcov = record(A, hitsOf(10, 0));
+
+    const result = judgeDiffCoverage(lcov, changedOf({ [A]: [1] }));
+
+    expect(result.message.split("\n").at(-1)).toContain(
+      "changed lines are below the floor",
+    );
+  });
+
+  test("fits in the tail the repair prompt keeps", () => {
+    const paths = Array.from(
+      { length: 40 },
+      (_, index) => `f/factory/lib/${"x".repeat(60)}${index}.ts`,
+    );
+    const odd = Array.from({ length: 200 }, (_, index) => index * 2 + 1);
+    const lcov = paths.map((path) => record(path, hitsOf(400, 0))).join("\n");
+    const changed = changedOf(
+      Object.fromEntries(paths.map((path) => [path, odd])),
+    );
+
+    const result = judgeDiffCoverage(lcov, changed);
+
+    expect(result.message.length).toBeLessThanOrEqual(OUTPUT_TAIL_CHARS);
+  });
+
+  test("keeps the reason when the rows are cut", () => {
+    const paths = Array.from(
+      { length: 40 },
+      (_, index) => `f/factory/lib/${"x".repeat(60)}${index}.ts`,
+    );
+    const odd = Array.from({ length: 200 }, (_, index) => index * 2 + 1);
+    const lcov = paths.map((path) => record(path, hitsOf(400, 0))).join("\n");
+    const changed = changedOf(
+      Object.fromEntries(paths.map((path) => [path, odd])),
+    );
+
+    const result = judgeDiffCoverage(lcov, changed);
+
+    expect(result.message).toContain("changed lines are below the floor");
+  });
+
+  test("uses the floor that is given", () => {
+    const lcov = record(A, hitsOf(10, 0));
+
+    const result = judgeDiffCoverage(lcov, changedOf({ [A]: [1] }), {
+      floorPercent: 0,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("DIFF_COVERAGE_PATHS", () => {
+  test("holds the decision layer", () => {
+    expect(DIFF_COVERAGE_PATHS).toEqual(["f/factory/lib"]);
+  });
+});
+
+describe("DIFF_COVERAGE_FLOOR_PERCENT", () => {
+  test("is 90", () => {
+    expect(DIFF_COVERAGE_FLOOR_PERCENT).toBe(90);
+  });
+});
+
+describe("diffArgv", () => {
+  test("diffs the working tree against the base without renames, colors, or external tools", () => {
+    expect(diffArgv("0123abcd", ["f/factory/lib"])).toEqual([
+      "git",
+      "diff",
+      "-U0",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-renames",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      "0123abcd",
+      "--",
+      "f/factory/lib",
+    ]);
+  });
+});
+
+describe("checkDiffCoverage", () => {
+  const A = "f/factory/lib/a.ts";
+
+  test("passes when the changed lines meet the floor", () => {
+    const result = checkDiffCoverage({
+      root: "/unused",
+      lcovText: record(A, hitsOf(10, 10)),
+      listChanged: () => changedOf({ [A]: [1, 2] }),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("fails when the changed lines are below the floor", () => {
+    const result = checkDiffCoverage({
+      root: "/unused",
+      lcovText: record(A, hitsOf(10, 0)),
+      listChanged: () => changedOf({ [A]: [1, 2] }),
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  test("fails when the changed lines cannot be listed", () => {
+    const result = checkDiffCoverage({
+      root: "/unused",
+      lcovText: record(A, hitsOf(10, 10)),
+      listChanged: () => {
+        throw new Error("fatal: Not a valid object name origin/main");
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  test("keeps the standard error of git out of the failure", () => {
+    const result = checkDiffCoverage({
+      root: "/unused",
+      lcovText: record(A, hitsOf(10, 10)),
+      listChanged: () => {
+        throw new Error("fatal: Not a valid object name origin/main");
+      },
+    });
+
+    expect(result.message).not.toContain("fatal");
+  });
+});
+
+describe("listChangedLines in a temporary repository", () => {
+  let repo = "";
+  // origin/mainを持たないリポジトリ。
+  let bare = "";
+
+  // gitのフックの中で走ると、親のリポジトリを指す`GIT_*`が環境に残る。一時リポジトリには引き継がない。
+  function git(cwd: string, args: readonly string[]): string {
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+    );
+    const result = Bun.spawnSync(["git", ...args], {
+      cwd,
+      env: { ...env, HOME: cwd },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`git ${args.join(" ")} failed`);
+    }
+    return result.stdout.toString();
+  }
+
+  function write(path: string, text: string): void {
+    mkdirSync(dirname(join(repo, path)), { recursive: true });
+    writeFileSync(join(repo, path), text);
+  }
+
+  const run = (argv: readonly string[], cwd: string): string =>
+    git(cwd, argv.slice(1));
+
+  beforeAll(() => {
+    repo = mkdtempSync(join(tmpdir(), "check-diff-coverage-repo-"));
+    git(repo, ["init", "-q"]);
+    write("f/factory/lib/a.ts", "a1\na2\na3\n");
+    write("f/factory/steps/s.ts", "s1\n");
+    git(repo, ["add", "-A"]);
+    git(repo, [
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@example.invalid",
+      "commit",
+      "-q",
+      "-m",
+      "base",
+    ]);
+    git(repo, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    write("f/factory/lib/a.ts", "a1\nchanged\na3\nadded\n");
+    write("f/factory/steps/s.ts", "s1\nchanged\n");
+    write("f/factory/lib/new.ts", "n1\n");
+    bare = mkdtempSync(join(tmpdir(), "check-diff-coverage-bare-"));
+    git(bare, ["init", "-q"]);
+  });
+
+  afterAll(() => {
+    if (repo !== "") rmSync(repo, { recursive: true, force: true });
+    if (bare !== "") rmSync(bare, { recursive: true, force: true });
+  });
+
+  test("lists the lines changed in the working tree since origin/main", () => {
+    const result = listChangedLines(repo, DIFF_COVERAGE_PATHS, run);
+
+    expect([...(result.lines.get("f/factory/lib/a.ts") ?? [])]).toEqual([2, 4]);
+  });
+
+  test("leaves out a path outside the diff layers", () => {
+    const result = listChangedLines(repo, DIFF_COVERAGE_PATHS, run);
+
+    expect(result.lines.has("f/factory/steps/s.ts")).toBe(false);
+  });
+
+  test("lists an untracked file as a whole file", () => {
+    const result = listChangedLines(repo, DIFF_COVERAGE_PATHS, run);
+
+    expect(result.wholeFiles).toEqual(["f/factory/lib/new.ts"]);
+  });
+
+  test("throws when origin/main does not exist", () => {
+    expect(() => listChangedLines(bare, DIFF_COVERAGE_PATHS, run)).toThrow();
   });
 });
