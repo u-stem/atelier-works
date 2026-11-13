@@ -155,6 +155,7 @@ describe("classifyRateLimit table", () => {
   test("row 1: a 403 with retry-after is a secondary limit that waits the retry-after", () => {
     expect(classify(403, { "retry-after": "30" })).toMatchObject({
       kind: "secondary",
+      basis: "retry_after",
       waitMs: 30_000,
       retryAfterSec: 30,
     });
@@ -176,7 +177,7 @@ describe("classifyRateLimit table", () => {
         "x-ratelimit-remaining": "0",
         "x-ratelimit-reset": String(NOW_SEC + 30),
       }),
-    ).toMatchObject({ kind: "primary", waitMs: 31_000 });
+    ).toMatchObject({ kind: "primary", basis: "remaining", waitMs: 31_000 });
   });
 
   test("row 2: a 429 with no quota left is a primary limit", () => {
@@ -201,7 +202,11 @@ describe("classifyRateLimit table", () => {
         {},
         jsonMessage("You have exceeded a secondary rate limit."),
       ),
-    ).toMatchObject({ kind: "secondary", waitMs: 60_000 });
+    ).toMatchObject({
+      kind: "secondary",
+      basis: "secondary_message",
+      waitMs: 60_000,
+    });
   });
 
   test("row 3: a 429 whose message names a secondary rate limit is a secondary limit", () => {
@@ -267,7 +272,11 @@ describe("classifyRateLimit table", () => {
   });
 
   test("row 5: a bare 429 is a secondary limit that waits a minute", () => {
-    expect(classify(429)).toMatchObject({ kind: "secondary", waitMs: 60_000 });
+    expect(classify(429)).toMatchObject({
+      kind: "secondary",
+      basis: "status",
+      waitMs: 60_000,
+    });
   });
 
   test("row 5: a 429 with quota left is still a secondary limit", () => {
@@ -319,7 +328,7 @@ describe("classifyRateLimit table", () => {
         headersOf({ "x-ratelimit-reset": String(NOW_SEC + 600) }),
         NOW,
       ),
-    ).toMatchObject({ kind: "primary", waitMs: 601_000 });
+    ).toMatchObject({ kind: "primary", basis: "graphql", waitMs: 601_000 });
   });
 });
 
@@ -824,7 +833,7 @@ describe("requestGitHub rate limits", () => {
     expect([error instanceof GitHubRateLimitError, sleeps]).toEqual([true, []]);
   });
 
-  // ヘッダーの無い429と、`remaining`の無い403は、制限かどうかの確かさが低い。
+  // 本文の`rate limit`の語だけで判定した403か429と、ほかの行に当たらない429は、制限かどうかの確かさが低い。
   // 冪等でない要求を送り直すと、制限でなかったときに二重に効くので、待たずに投げる。
   test("throws at once without resending a POST after a bare 429", async () => {
     const sleeps: number[] = [];
@@ -868,6 +877,42 @@ describe("requestGitHub rate limits", () => {
       new Response("{}", { status: 200 }),
     ]);
     await requestGitHub(client(f.fetch, sleeps), { path: "repos/o/r" });
+    expect([sleeps, f.sent.length]).toEqual([[60_000], 2]);
+  });
+
+  test("waits and resends a POST after a 403 with no quota left", async () => {
+    const sleeps: number[] = [];
+    const f = fakeFetch([
+      new Response("{}", {
+        status: 403,
+        headers: {
+          "X-RateLimit-Remaining": "0",
+          "X-RateLimit-Reset": String(NOW_SEC + 30),
+        },
+      }),
+      new Response("{}", { status: 200 }),
+    ]);
+    await requestGitHub(client(f.fetch, sleeps), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: {},
+    });
+    expect([sleeps, f.sent.length]).toEqual([[31_000], 2]);
+  });
+
+  test("waits and resends a POST after a 403 whose message names a secondary rate limit", async () => {
+    const sleeps: number[] = [];
+    const f = fakeFetch([
+      new Response(jsonMessage("You have exceeded a secondary rate limit."), {
+        status: 403,
+      }),
+      new Response("{}", { status: 200 }),
+    ]);
+    await requestGitHub(client(f.fetch, sleeps), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: {},
+    });
     expect([sleeps, f.sent.length]).toEqual([[60_000], 2]);
   });
 
@@ -1132,6 +1177,42 @@ describe("only github_http.ts carries the token to the GitHub API", () => {
   test("the import pattern sees a dynamic import", () => {
     expect(
       HTTP_VALUE_IMPORT.test('const m = await import("./github_http.ts");'),
+    ).toBe(true);
+  });
+
+  test("the import pattern sees a dynamic import with a template", () => {
+    expect(
+      HTTP_VALUE_IMPORT.test("const m = await import(`./github_http.ts`);"),
+    ).toBe(true);
+  });
+
+  test("the import pattern sees require", () => {
+    expect(
+      HTTP_VALUE_IMPORT.test('const m = require("./github_http.ts");'),
+    ).toBe(true);
+  });
+
+  test("the import pattern sees a specifier without the extension", () => {
+    expect(
+      HTTP_VALUE_IMPORT.test('import { requestGitHub } from "./github_http";'),
+    ).toBe(true);
+  });
+
+  test("the import pattern sees an import without spaces", () => {
+    expect(
+      HTTP_VALUE_IMPORT.test('import{requestGitHub}from"./github_http.ts";'),
+    ).toBe(true);
+  });
+
+  test("the import pattern does not see another module whose name starts the same", () => {
+    expect(
+      HTTP_VALUE_IMPORT.test('import { x } from "./github_http_extra.ts";'),
+    ).toBe(false);
+  });
+
+  test("the fetch pattern sees a destructuring of globalThis", () => {
+    expect(
+      GLOBAL_FETCH_THROUGH_OBJECT.test("const { fetch: f } = globalThis;"),
     ).toBe(true);
   });
 

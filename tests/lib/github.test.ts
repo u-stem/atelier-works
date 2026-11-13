@@ -14,6 +14,7 @@ import {
   createPullRequest,
   ensureLabel,
   ensureSuccess,
+  type FetchIssueOptions,
   type FetchLike,
   fetchIssueContent,
   fetchIssueState,
@@ -1833,6 +1834,45 @@ describe("fetchIssueState", () => {
       NO_WAIT,
     ).catch((err: unknown) => err);
     expect(String(error)).not.toContain("secret-token");
+  });
+
+  // 型の上では受け付けないが、実行時に余分なプロパティの付いた値が来ても、トークンと送り方を変えない。
+  function optionsWithExtras(): {
+    readonly options: FetchIssueOptions;
+    readonly otherCalls: string[];
+  } {
+    const otherCalls: string[] = [];
+    const extras = {
+      sleep: async () => {},
+      token: "other-token",
+      fetch: async (url: string) => {
+        otherCalls.push(url);
+        return new Response("{}", { status: 200 });
+      },
+    };
+    return { options: extras, otherCalls };
+  }
+
+  test("keeps the token when the options carry a token at run time", async () => {
+    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
+    await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      optionsWithExtras().options,
+    );
+    expect(calls[0]?.init.headers).toMatchObject({
+      Authorization: "Bearer tok",
+    });
+  });
+
+  test("keeps the fetch when the options carry a fetch at run time", async () => {
+    const { fetchFn } = fakeFetch(200, { state: "open" });
+    const { options, otherCalls } = optionsWithExtras();
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, options);
+    expect(otherCalls).toEqual([]);
   });
 
   test("sends the read twice for a 5xx", async () => {
