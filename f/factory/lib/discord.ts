@@ -2,6 +2,7 @@
 // テストで実際のHTTP通信や待機をしないよう、`fetch`と`sleep`は注入できる。
 
 import { type CleanupCounts, summarizeCleanup } from "./cleanup_db_support.ts";
+import { formatJstDate } from "./jst.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import type { GatedReviewReport, ImplementDiffStat } from "./types.ts";
 import {
@@ -330,14 +331,9 @@ function instanceField(instanceName: string): DiscordEmbedField {
   return { name: "インスタンス", value: instanceName };
 }
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-
-/** `date`が属するJSTの日付を`YYYY-MM-DD`で返す(UTC+9固定)。 */
+/** `date`が属するJSTの日付を`YYYY-MM-DD`で返す。日付として読めなければ、年、月、日をそれぞれ`NaN`にする。 */
 function jstDate(date: Date): string {
-  const shifted = new Date(date.getTime() + JST_OFFSET_MS);
-  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(shifted.getUTCDate()).padStart(2, "0");
-  return `${String(shifted.getUTCFullYear())}-${month}-${day}`;
+  return formatJstDate(date.getTime()) ?? "NaN-NaN-NaN";
 }
 
 /** 日次のまとめの欄の文。投稿するモードのときは`null`で、欄を出さない。 */

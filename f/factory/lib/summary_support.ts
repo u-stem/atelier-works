@@ -7,6 +7,7 @@
 
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "./db.ts";
+import { JST_OFFSET_MS } from "./jst.ts";
 import {
   type GatedReviewStats,
   isNumber,
@@ -20,7 +21,6 @@ import {
   type WorkerLoadSummary,
 } from "./worker_load_support.ts";
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type DayRange = {

@@ -5,6 +5,7 @@
 // 通知の本文は固定の文にする。時刻、操作者、理由はConsoleのシステムの画面に出し、Discordの知らせにだけ添える。
 
 import type { NotifyEvent } from "./discord.ts";
+import { formatJstMinute } from "./jst.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import { withCallTimeout } from "./self_update_support.ts";
 import { STOP_ALL_REASON_MAX, type StopAllStatus } from "./stop_all.ts";
@@ -55,7 +56,6 @@ export type StopAllNoticeOutcome =
   | "unreadable";
 
 const CONTROL_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /** Discordに載せる文字列。制御文字と書式文字を空白にし、長さを切る。 */
 function plain(text: string): string {
@@ -64,10 +64,9 @@ function plain(text: string): string {
     .join("");
 }
 
+/** ISO文字列の時刻を、JSTの`YYYY-MM-DD HH:mm JST`にする。読めなければ、各部品を`NaN`にする。 */
 function jstMinute(iso: string): string {
-  const shifted = new Date(Date.parse(iso) + JST_OFFSET_MS);
-  const pad = (value: number): string => String(value).padStart(2, "0");
-  return `${String(shifted.getUTCFullYear())}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())} ${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())} JST`;
+  return `${formatJstMinute(Date.parse(iso)) ?? "NaN-NaN-NaN NaN:NaN"} JST`;
 }
 
 /** Discordの知らせの説明。置いた時刻(JST)、操作者、理由を載せる。 */

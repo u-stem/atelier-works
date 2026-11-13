@@ -6,9 +6,10 @@
 // 判定は純関数にあり、記録の読み取りとnoticeの書き込みは依存として注入する。
 // defaultのworkerで動く`self_update`が呼ぶ。収集は定期ジョブ用のworkerで動くので、
 // そのworkerが止まると収集の停止に気づけなくなるため、同じworkerでは確かめない。
-// 子プロセスを起動せず、importは型とログだけにする。`self_update`の最悪の長さの数え方がこれに頼る。
+// 子プロセスを起動せず、importは型、ログ、日本時間の整形だけにする。`self_update`の最悪の長さの数え方がこれに頼る。
 
 import type { NotifyEvent } from "./discord.ts";
+import { formatJstMinute } from "./jst.ts";
 import type { Logger } from "./log.ts";
 import {
   type GhCollectErrorCode,
@@ -59,8 +60,6 @@ const COLLECT_CYCLE_MS = 5 * MINUTE_MS;
 
 /** 通知の閾値の下限。平常の揺れ(一時的な失敗、定期ジョブ用workerの待ち)を、所有者の数によらず黙らせる。 */
 const MIN_STALE_THRESHOLD_MS = 25 * MINUTE_MS;
-
-const JST_OFFSET_MS = 9 * 60 * MINUTE_MS;
 
 /**
  * 収集が成功していない原因。
@@ -307,12 +306,13 @@ export function staleNotice(owner: string): NoticeRecord {
   };
 }
 
-/** `ms`をJSTの`YYYY-MM-DD HH:mm`にする(UTC+9固定、夏時間なし)。 */
-export function formatJstMinute(ms: number): string {
-  return new Date(ms + JST_OFFSET_MS)
-    .toISOString()
-    .slice(0, 16)
-    .replace("T", " ");
+/** 最後の成功の時刻`ms`を、JSTの`YYYY-MM-DD HH:mm`にする。日付として読めなければ`RangeError`を投げる。 */
+function lastSuccessText(ms: number): string {
+  const text = formatJstMinute(ms);
+  if (text === null) {
+    throw new RangeError(`last success is not a time: ${String(ms)}`);
+  }
+  return text;
 }
 
 /** 原因の言葉。`repo_stale`と`collect_disabled`は所有者の最新の実行の原因ではないので持たない。 */
@@ -425,7 +425,7 @@ export function staleCauseText(input: {
   const last =
     input.lastSuccessAtMs === null
       ? "記録なし"
-      : formatJstMinute(input.lastSuccessAtMs);
+      : lastSuccessText(input.lastSuccessAtMs);
   return `${input.owner}のGitHubの収集が${String(minutes)}分以上成功していません。最後の成功: ${last}。最新の実行: ${CAUSE_LABELS[input.cause]}(${input.cause})`;
 }
 

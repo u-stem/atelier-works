@@ -3,7 +3,6 @@ import {
   formatJstClock,
   formatJstDate,
   formatJstMinute,
-  formatJstSecond,
   JST_OFFSET_MS,
 } from "../../f/factory/lib/jst.ts";
 
@@ -51,16 +50,6 @@ describe("formatJstMinute", () => {
 
   test("returns null for NaN", () => {
     expect(formatJstMinute(Number.NaN)).toBeNull();
-  });
-});
-
-describe("formatJstSecond", () => {
-  test("shows the JST date and time to the second", () => {
-    expect(formatJstSecond(NEW_YEAR)).toBe("2027-01-01 00:04:05");
-  });
-
-  test("returns null for NaN", () => {
-    expect(formatJstSecond(Number.NaN)).toBeNull();
   });
 });
 

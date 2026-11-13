@@ -6,6 +6,7 @@
 // 記録の項目が壊れている資格情報の通知は、解決しない。
 
 import type { NotifyEvent } from "./discord.ts";
+import { formatJstDate } from "./jst.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import { isRecord, type NoticeRecord } from "./types.ts";
 
@@ -22,7 +23,6 @@ export const CREDENTIAL_NEXT_ACTION =
   "docs/operations.mdの「秘密をローテーションする」の手順で更新し、mise run bootstrapを実行する";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 /** GitHubのloginの形(小文字)。bootstrapが環境変数の名前から作る。 */
 const OWNER_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,38})$/;
 
@@ -258,12 +258,12 @@ export function credentialDeadlines(
   return deadlines;
 }
 
+/** 日付として読めない時刻の表示。年、月、日をそれぞれ`NaN`にする。 */
+const INVALID_JST_DATE = "NaN-NaN-NaN";
+
 /** `at`が属するJSTの日付を`YYYY-MM-DD`で返す。 */
 export function jstDateLabel(at: Date): string {
-  const shifted = new Date(at.getTime() + JST_OFFSET_MS);
-  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(shifted.getUTCDate()).padStart(2, "0");
-  return `${String(shifted.getUTCFullYear())}-${month}-${day}`;
+  return formatJstDate(at.getTime()) ?? INVALID_JST_DATE;
 }
 
 /** 通知の本文。残り日数を含めない。 */

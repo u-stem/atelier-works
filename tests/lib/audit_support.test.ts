@@ -6,16 +6,8 @@ import {
   DAY_MS,
   decideAuditKickoff,
   formatAuditPeriodLabel,
-  formatJstDate,
   parsePeriodArgs,
 } from "../../f/factory/lib/audit_support.ts";
-
-describe("formatJstDate", () => {
-  test("formats the JST calendar date", () => {
-    // 2026-09-21T15:00:00ZはJSTで2026-09-22 00:00。
-    expect(formatJstDate(new Date("2026-09-21T15:00:00Z"))).toBe("2026-09-22");
-  });
-});
 
 describe("formatAuditPeriodLabel", () => {
   test("shows the last included day, not the exclusive end", () => {

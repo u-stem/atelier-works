@@ -3,7 +3,6 @@ import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import {
   checkGhCollectFreshness,
   collectCause,
-  formatJstMinute,
   GH_COLLECT_NOT_RUNNING_AFTER_MS,
   GH_COLLECT_STALE_KIND,
   GH_COLLECT_WATCH_STATE_KEY,
@@ -306,12 +305,6 @@ describe("stale notice", () => {
 
   test("notice message carries no raw time or cause", () => {
     expect(staleNotice("acme").message).not.toMatch(/\d{4}-\d{2}-\d{2}|分/);
-  });
-
-  test("formats the last success in JST", () => {
-    expect(formatJstMinute(Date.parse("2026-10-17T00:00:00.000Z"))).toBe(
-      "2026-10-17 09:00",
-    );
   });
 
   test("every error code has a next action", () => {
