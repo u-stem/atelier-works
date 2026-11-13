@@ -1,23 +1,35 @@
 // GETの要求が、`gh`を起動せずに通信層(`github_http.ts`)の`fetch`で送られることのテスト。
-// 書き込み(POST、PATCH、PUT、DELETE)は、まだ`gh`で送る。
+// 書き込み(POST、PATCH、PUT、DELETE)は`gh api`で送る。
 // 偽のrunnerは、`gh`の起動とGitHubのAPIへの`fetch`の両方に、同じ応答の列から答える(`testSupport.ts`)。
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { getRepoFileText } from "../../f/factory/lib/drawio_viewer_bump_github.ts";
 import {
   callGhApi,
+  ensureSuccess,
+  GitHubHttpError,
   GitHubRateLimitError,
   GitHubRawBodyIncompleteError,
+  GitHubResponseError,
   getPrDiff,
   getPrWithoutWait,
+  getViewer,
   paginateGhApi,
 } from "../../f/factory/lib/github.ts";
+import { GITHUB_RESPONSE_MAX_BYTES } from "../../f/factory/lib/github_http.ts";
+import { markTransientGitHubFailure } from "../../f/factory/lib/pr_review_retry.ts";
+import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   createFakeCommandRunner,
+  cutBody,
   ghApiOk,
   ghApiStdout,
   ok,
+  restoreGlobalFetch,
+  stubGlobalFetchWith,
 } from "./testSupport.ts";
+
+afterEach(restoreGlobalFetch);
 
 function clientWith(responses: Parameters<typeof createFakeCommandRunner>[0]) {
   const fake = createFakeCommandRunner(responses);
@@ -179,5 +191,81 @@ describe("escape sequences in a GET body", () => {
     await expect(
       getRepoFileText(client, "o", "r", "viewer/index.html", "main"),
     ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
+  });
+});
+
+describe("a JSON GET whose body was cut after a 2xx status", () => {
+  /** 2xxの後で本文が切れる`gh api -i`の形の結果。偽のrunnerが、途中で切れる本文に写す。 */
+  const cut = (body: string): CommandResult => ({
+    stdout: ghApiStdout(200, body),
+    stderr: "",
+    exitCode: 1,
+    timedOut: false,
+  });
+
+  const viewerError = async (responses: readonly CommandResult[]) => {
+    const { client } = clientWith(responses);
+    return getViewer(client).catch((err: unknown) => err);
+  };
+
+  test("fails with a status 0 http error", async () => {
+    const error = await viewerError([cut('{"login"'), cut('{"login"')]);
+    expect(error instanceof GitHubHttpError ? error.status : null).toBe(0);
+  });
+
+  test("is a failure that the transient check marks", async () => {
+    const error = await viewerError([cut('{"login"'), cut('{"login"')]);
+    expect(markTransientGitHubFailure(error)).not.toBe(error);
+  });
+
+  test("is not a response error that waiting does not fix", async () => {
+    const error = await viewerError([cut('{"login"'), cut('{"login"')]);
+    expect(error instanceof GitHubResponseError).toBe(false);
+  });
+
+  test("carries the deadline when the deadline cut the body", async () => {
+    stubGlobalFetchWith(async () =>
+      cutBody(200, new DOMException("timed out", "TimeoutError"), '{"a"'),
+    );
+    const error = await getViewer({
+      run: createFakeCommandRunner([]).run,
+      ghToken: "tok",
+      sleep: async () => {},
+    }).catch((err: unknown) => err);
+    expect(error instanceof GitHubHttpError ? error.timedOut : null).toBe(true);
+  });
+
+  test("keeps the cut body out of the message", async () => {
+    const error = await viewerError([
+      cut('{"login":"PARTIAL-BODY'),
+      cut('{"login":"PARTIAL-BODY'),
+    ]);
+    expect(error instanceof Error ? error.message : "").not.toContain(
+      "PARTIAL-BODY",
+    );
+  });
+
+  test("ensureSuccess fails an incomplete 2xx response with status 0", () => {
+    let status: number | null = null;
+    try {
+      ensureSuccess(
+        {
+          status: 200,
+          headers: new Map(),
+          bodyText: "",
+          incomplete: true,
+        },
+        "GET x",
+      );
+    } catch (err) {
+      status = err instanceof GitHubHttpError ? err.status : -1;
+    }
+    expect(status).toBe(0);
+  });
+
+  test("fails a body over the memory cap as a response error", async () => {
+    const huge = `"${"x".repeat(GITHUB_RESPONSE_MAX_BYTES)}"`;
+    const error = await viewerError([ok(ghApiStdout(200, huge))]);
+    expect(error instanceof GitHubResponseError).toBe(true);
   });
 });

@@ -16,6 +16,8 @@ import {
   type DownloadOptions,
   downloadRedirectTarget,
   GITHUB_API_ORIGIN,
+  GITHUB_RESPONSE_MAX_BYTES,
+  GITHUB_TRANSIENT_RETRY_DELAY_MS,
   type GitHubHttpClient,
   type GitHubSendResult,
   graphqlErrorsRateLimited,
@@ -678,6 +680,118 @@ describe("sendGitHubRequest uses the global fetch", () => {
   });
 });
 
+/**
+ * ヘッダーと本文の最初の1バイトを送った後、本文を止めたままにするローカルの一時サーバー。
+ * 締め切りが、`fetch`の実装ではなく本文の読み取りで効くことを、本物の`fetch`で確かめるために使う。
+ */
+function stalledServer() {
+  return Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("{"));
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+  });
+}
+
+/**
+ * GitHubへの要求を、同じパスのままローカルのサーバーへ送り直す。締め切りの`signal`もそのまま渡す。
+ * `api.github.com`以外の宛先は、`tests/preload.ts`が本物の`fetch`へ渡す。
+ */
+function forwardTo(port: number) {
+  const route = globalThis.fetch;
+  const replacement = async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = new URL(String(input));
+    return route(`http://127.0.0.1:${String(port)}${url.pathname}`, init);
+  };
+  fetchSpies.push(
+    spyOn(globalThis, "fetch").mockImplementation(
+      Object.assign(replacement, { preconnect: route.preconnect }),
+    ),
+  );
+}
+
+describe("sendGitHubRequest deadline on a stalled body", () => {
+  test("cuts a body without a cap at the deadline", async () => {
+    const server = stalledServer();
+    try {
+      forwardTo(server.port ?? 0);
+      const response = await sendGitHubRequest(client(), {
+        path: "repos/o/r",
+        timeoutMs: 200,
+      });
+      expect([response.incomplete, response.timedOut]).toEqual([true, true]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("cuts a body with a cap at the deadline", async () => {
+    const server = stalledServer();
+    try {
+      forwardTo(server.port ?? 0);
+      const response = await sendGitHubRequest(client(), {
+        path: "repos/o/r",
+        timeoutMs: 200,
+        maxBodyBytes: 1024,
+      });
+      expect([response.incomplete, response.timedOut]).toEqual([true, true]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+describe("sendGitHubRequest memory cap", () => {
+  test("marks a body without a cap over the memory cap as too large", async () => {
+    fakeFetch([
+      new Response(new Uint8Array(GITHUB_RESPONSE_MAX_BYTES + 1), {
+        status: 200,
+      }),
+    ]);
+    const response = await sendGitHubRequest(client(), { path: "repos/o/r" });
+    expect([response.incomplete, response.tooLarge]).toEqual([true, true]);
+  });
+
+  test("drops the body over the memory cap", async () => {
+    fakeFetch([
+      new Response(new Uint8Array(GITHUB_RESPONSE_MAX_BYTES + 1), {
+        status: 200,
+      }),
+    ]);
+    const response = await sendGitHubRequest(client(), { path: "repos/o/r" });
+    expect(response.bodyText).toBe("");
+  });
+
+  test("keeps a body at the memory cap", async () => {
+    fakeFetch([
+      new Response(new Uint8Array(GITHUB_RESPONSE_MAX_BYTES), { status: 200 }),
+    ]);
+    const response = await sendGitHubRequest(client(), { path: "repos/o/r" });
+    expect(response.tooLarge).toBeUndefined();
+  });
+
+  test("does not read a body over the memory cap again", async () => {
+    const f = fakeFetch([
+      new Response(new Uint8Array(GITHUB_RESPONSE_MAX_BYTES + 1), {
+        status: 200,
+      }),
+      new Response("{}", { status: 200 }),
+    ]);
+    await requestGitHub(client(), { path: "repos/o/r" });
+    expect(f.sent).toHaveLength(1);
+  });
+});
+
 describe("sendGitHubRequest body limit", () => {
   test("keeps a body within maxBodyBytes whole", async () => {
     fakeFetch([new Response("abcdef", { status: 200 })]);
@@ -757,6 +871,14 @@ describe("sendGitHubRequest escape sequences", () => {
       allowEscapeSequences: true,
     });
     expect(response.bodyText).toBe("line \u001b[31mred");
+  });
+
+  test("treats a text body with the C1 control sequence introducer as incomplete", async () => {
+    fakeFetch([new Response("line \u009b31mred", { status: 200 })]);
+    const response = await sendGitHubRequest(client(), {
+      path: "repos/o/r/pulls/1",
+    });
+    expect(response.incomplete).toBe(true);
   });
 
   test("keeps a JSON body that escapes the control character", async () => {
@@ -1392,6 +1514,87 @@ describe("downloadRedirectTarget", () => {
     expect(JSON.stringify(await download())).not.toContain("SECRETSIG");
   });
 
+  test("asks the API again once after a 5xx", async () => {
+    fakeFetch([
+      new Response("", { status: 502 }),
+      found(LOG_URL),
+      new Response("log"),
+    ]);
+    expect((await download()).kind).toBe("text");
+  });
+
+  test("asks the API again once when no response arrives", async () => {
+    fakeFetch([
+      new TypeError("connection reset"),
+      found(LOG_URL),
+      new Response("log"),
+    ]);
+    expect((await download()).kind).toBe("text");
+  });
+
+  test("waits the transient delay before asking the API again", async () => {
+    fakeFetch([
+      new Response("", { status: 502 }),
+      found(LOG_URL),
+      new Response("log"),
+    ]);
+    const sleeps: number[] = [];
+    await download("job_log", TEXT, sleeps);
+    expect(sleeps).toEqual([GITHUB_TRANSIENT_RETRY_DELAY_MS]);
+  });
+
+  test("asks the API at most twice", async () => {
+    const f = fakeFetch([
+      new Response("", { status: 502 }),
+      new Response("", { status: 502 }),
+      found(LOG_URL),
+    ]);
+    await download();
+    expect(f.sent).toHaveLength(2);
+  });
+
+  test("does not fetch the signed URL again when it does not answer", async () => {
+    const f = fakeFetch([
+      found(LOG_URL),
+      new TypeError("connection reset"),
+      new Response("log"),
+    ]);
+    await download();
+    expect(f.sent).toHaveLength(2);
+  });
+
+  test("keeps the API response within a small cap", async () => {
+    fakeFetch([new Response("x".repeat(70 * 1024), { status: 200 })]);
+    const result = await download();
+    expect(result.kind === "api_response" ? result.response.capped : null).toBe(
+      true,
+    );
+  });
+
+  test("logs a limited API response before throwing", async () => {
+    fakeFetch([
+      new Response("{}", { status: 429, headers: { "Retry-After": "5" } }),
+    ]);
+    const outcomes: unknown[] = [];
+    const logging: GitHubHttpClient = {
+      ...client(),
+      log: {
+        info: () => {},
+        warn: (_message, fields) => {
+          outcomes.push(fields?.outcome);
+        },
+        error: () => {},
+      },
+    };
+    await downloadRedirectTarget(
+      logging,
+      { path: LOG_PATH },
+      "job_log",
+      TEXT,
+    ).catch(() => undefined);
+    expect(outcomes).toEqual(["wait_too_long"]);
+  });
+
   test("rejects a path that is not allowed", async () => {
     fakeFetch([]);
     await expect(
@@ -1473,6 +1676,11 @@ const GLOBAL_FETCH_THROUGH_OBJECT =
   /\b(?:globalThis|global|self|window|Bun)\s*(?:\.\s*fetch\b|\[)|\}\s*=\s*(?:globalThis|global|self|window|Bun)\b/;
 
 /**
+ * グローバルのオブジェクトの書き換えと、その別名を作る書き方。
+ */
+const GLOBAL_OBJECT_WRITE = /(?!)/;
+
+/**
  * `github_http.ts`から値を読み込む書き方。import、再エクスポート(`export ... from`、`export * from`)、
  * 動的import(文字列とバッククォート)、`require`。拡張子の無い指定子と、空白を詰めた書き方も数える。
  * `import type`と`export type`は除く。書き方のパターンを見るだけで、動的に組み立てた指定子は見ない。
@@ -1547,6 +1755,65 @@ describe("only github_http.ts carries the token to the GitHub API", () => {
       .map((source) => source.path)
       .sort();
     expect(users).toEqual(Object.keys(GLOBAL_FETCH_USERS).sort());
+  });
+
+  test("no file writes the global object or takes an alias of it", () => {
+    const writers = sources
+      .filter((source) => GLOBAL_OBJECT_WRITE.test(codeSkeleton(source.code)))
+      .map((source) => source.path);
+    expect(writers).toEqual([]);
+  });
+
+  test("the write pattern sees Object.defineProperty on globalThis", () => {
+    expect(
+      GLOBAL_OBJECT_WRITE.test(
+        'Object.defineProperty(globalThis, "fetch", { value: f });',
+      ),
+    ).toBe(true);
+  });
+
+  test("the write pattern sees Reflect.set on globalThis", () => {
+    expect(
+      GLOBAL_OBJECT_WRITE.test('Reflect.set(globalThis, "fetch", f);'),
+    ).toBe(true);
+  });
+
+  test("the write pattern sees Object.assign onto globalThis", () => {
+    expect(
+      GLOBAL_OBJECT_WRITE.test("Object.assign(globalThis, { fetch: f });"),
+    ).toBe(true);
+  });
+
+  test("the write pattern sees Object.defineProperty on self", () => {
+    expect(
+      GLOBAL_OBJECT_WRITE.test("Object.defineProperty(self, name, d);"),
+    ).toBe(true);
+  });
+
+  test("the write pattern sees an alias of globalThis", () => {
+    expect(
+      GLOBAL_OBJECT_WRITE.test("const g = globalThis;\ng[name] = f;"),
+    ).toBe(true);
+  });
+
+  test("the write pattern sees an alias of globalThis without a semicolon", () => {
+    expect(GLOBAL_OBJECT_WRITE.test("let g = globalThis\n")).toBe(true);
+  });
+
+  test("the write pattern does not see a comparison with globalThis", () => {
+    expect(GLOBAL_OBJECT_WRITE.test("if (x === globalThis) {}")).toBe(false);
+  });
+
+  test("the write pattern does not see Object.assign onto another object", () => {
+    expect(GLOBAL_OBJECT_WRITE.test("Object.assign(target, { a: 1 });")).toBe(
+      false,
+    );
+  });
+
+  test("the write pattern does not see a property read of globalThis", () => {
+    expect(GLOBAL_OBJECT_WRITE.test("const v = globalThis.process;")).toBe(
+      false,
+    );
   });
 
   test("github_http.ts refers to the global fetch", () => {

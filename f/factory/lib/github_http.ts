@@ -39,6 +39,12 @@ export const GITHUB_TRANSIENT_RETRY_DELAY_MS = 2000;
 /** 1回の要求(リダイレクトを辿る分と本文の読み取りを含む)の締め切りの既定値(ミリ秒)。 */
 export const GITHUB_HTTP_TIMEOUT_MS = 60_000;
 
+/**
+ * `maxBodyBytes`を指定しない要求で、本文として受け取るバイト数の上限(16MiB)。
+ * 超えた本文は読むのをやめ、本文が大きすぎる(`tooLarge`)ものにする。
+ */
+export const GITHUB_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
 /** 応答に解除の時刻を示すヘッダーが無いときに待つ時間(ミリ秒)。 */
 export const DEFAULT_RATE_LIMIT_WAIT_MS = 60_000;
 
@@ -130,6 +136,8 @@ export type GitHubHttpResponseCore = {
   readonly incomplete?: true;
   /** `maxBodyBytes`を超えて本文の間を捨てたときだけ付く。判定は受け取ったバイト数で行い、本文の文字列は見ない。 */
   readonly capped?: true;
+  /** 本文が`GITHUB_RESPONSE_MAX_BYTES`を超えて、読むのをやめたときだけ付く。`incomplete`も付く。 */
+  readonly tooLarge?: true;
 };
 
 export type GitHubHttpResponse = GitHubHttpResponseCore & {
