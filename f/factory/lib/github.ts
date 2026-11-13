@@ -1026,6 +1026,12 @@ export async function listLabeledOpenIssues(
  */
 export type FetchLike = HttpFetch;
 
+/** Issueの読み取りの再試行の待ちの差し込み。省略すると実際に待つ。テストで差し替える。 */
+export type FetchIssueOptions = {
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly transientRetryDelayMs?: number;
+};
+
 /** Console用のworkerのIssueの読み取りの締め切り(ミリ秒)。 */
 const FETCH_ISSUE_TIMEOUT_MS = 10_000;
 
@@ -1085,6 +1091,7 @@ export async function fetchIssueState(
   owner: string,
   repo: string,
   number: number,
+  _options: FetchIssueOptions = {},
 ): Promise<string> {
   const { context, body } = await fetchIssueObject(
     fetchFn,
@@ -1110,6 +1117,7 @@ export async function fetchIssueContent(
   owner: string,
   repo: string,
   number: number,
+  _options: FetchIssueOptions = {},
 ): Promise<{ readonly title: string; readonly body: string }> {
   const { context, body } = await fetchIssueObject(
     fetchFn,

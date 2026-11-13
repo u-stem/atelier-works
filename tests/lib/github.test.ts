@@ -990,6 +990,23 @@ describe("rate limit wait cap", () => {
       expect(sleeps).toEqual([DEFAULT_WAIT_MS]);
     });
 
+    test("a client that does not wait gives no wait for a bare 429, like the other paths", async () => {
+      const fake = createFakeCommandRunner([
+        ok(ghApiStdout(429, { message: "Too Many Requests" })),
+      ]);
+      const error = await rejectionOf(
+        getPrWithoutWait(
+          { run: fake.run, ghToken: "tok" },
+          "acme",
+          "widgets",
+          12,
+        ),
+      );
+      expect(
+        error instanceof GitHubRateLimitError ? error.requiredWaitMs : "none",
+      ).toBeNull();
+    });
+
     test("a client that does not wait throws the rate limit error at once", async () => {
       const fake = createFakeCommandRunner([secondaryBody(), secondaryBody()]);
       const error = await rejectionOf(
@@ -1739,6 +1756,9 @@ describe("listLabeledOpenIssues", () => {
   });
 });
 
+/** Issueの読み取りの再試行で、実際には待たない差し込み。 */
+const NO_WAIT = { sleep: async () => {} };
+
 describe("fetchIssueState", () => {
   function fakeFetch(status: number, body: unknown) {
     const calls: { url: string; init: RequestInit }[] = [];
@@ -1810,8 +1830,95 @@ describe("fetchIssueState", () => {
       "acme",
       "widgets",
       5,
+      NO_WAIT,
     ).catch((err: unknown) => err);
     expect(String(error)).not.toContain("secret-token");
+  });
+
+  test("sends the read twice for a 5xx", async () => {
+    const { fetchFn, calls } = fakeFetch(502, {});
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, NO_WAIT).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(2);
+  });
+
+  test("waits through the injected sleep before the second read", async () => {
+    const sleeps: number[] = [];
+    const { fetchFn } = fakeFetch(502, {});
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, {
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      transientRetryDelayMs: 7,
+    }).catch(() => undefined);
+    expect(sleeps).toEqual([7]);
+  });
+
+  test("sends a 403 with no quota left once and throws the rate limit error", async () => {
+    const calls: string[] = [];
+    const fetchFn: FetchLike = async (url) => {
+      calls.push(url);
+      return new Response("{}", {
+        status: 403,
+        headers: { "X-RateLimit-Remaining": "0" },
+      });
+    };
+    const error = await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      NO_WAIT,
+    ).catch((err: unknown) => err);
+    expect([error instanceof GitHubRateLimitError, calls.length]).toEqual([
+      true,
+      1,
+    ]);
+  });
+
+  test("turns a fetch that timed out into a status 0 http error marked as timed out", async () => {
+    const fetchFn: FetchLike = async () => {
+      throw new DOMException("timed out", "TimeoutError");
+    };
+    const error = await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      NO_WAIT,
+    ).catch((err: unknown) => err);
+    expect(
+      error instanceof GitHubHttpError ? [error.status, error.timedOut] : null,
+    ).toEqual([0, true]);
+  });
+
+  test("says that the read timed out in the message", async () => {
+    const fetchFn: FetchLike = async () => {
+      throw new DOMException("timed out", "TimeoutError");
+    };
+    await expect(
+      fetchIssueState(fetchFn, "tok", "acme", "widgets", 5, NO_WAIT),
+    ).rejects.toThrow("timed out");
+  });
+
+  test("says that no response came back in the message", async () => {
+    const fetchFn: FetchLike = async () => {
+      throw new TypeError("connection reset for https://api.github.com/x");
+    };
+    const error = await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      NO_WAIT,
+    ).catch((err: unknown) => String(err));
+    expect([error.includes("no response"), error.includes("https://")]).toEqual(
+      [true, false],
+    );
   });
 
   test("rejects a response without a state", async () => {
@@ -1848,6 +1955,19 @@ describe("fetchIssueContent", () => {
       title: "Add feature",
       body: "Original body",
     });
+  });
+
+  test("sends the read twice for a 5xx", async () => {
+    const { fetchFn, calls } = fakeFetch(503, {});
+    await fetchIssueContent(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+      NO_WAIT,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(2);
   });
 
   test("treats a null body as empty", async () => {
@@ -1893,6 +2013,7 @@ describe("fetchIssueContent", () => {
       "acme",
       "widgets",
       5,
+      NO_WAIT,
     ).catch((err: unknown) => err);
     expect(error instanceof GitHubHttpError && error.status).toBe(status);
   });
@@ -1905,6 +2026,7 @@ describe("fetchIssueContent", () => {
       "acme",
       "widgets",
       5,
+      NO_WAIT,
     ).catch((err: unknown) => String(err));
     expect(error).not.toMatch(/secret-token|secret title/);
   });
@@ -5355,6 +5477,25 @@ describe("callGhApiRawBody", () => {
     const fake = createFakeCommandRunner([ok(ghApiStdout(200, "body"))]);
     const response = await call(recording(fake).client);
     expect(response.bodyText).toBe("body");
+  });
+
+  test("does not fetch again when the gh timeout cut the body after a 2xx status", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: ghApiStdout(200, "part"),
+        stderr: "",
+        exitCode: 137,
+        timedOut: true,
+      },
+      ok(ghApiStdout(200, "whole body")),
+    ]);
+    const error = await call(recording(fake).client).catch(
+      (err: unknown) => err,
+    );
+    expect([
+      error instanceof GitHubRawBodyIncompleteError,
+      fake.calls.length,
+    ]).toEqual([true, 1]);
   });
 
   test("does not wait or fetch again when gh exited zero", async () => {

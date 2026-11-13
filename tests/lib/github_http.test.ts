@@ -4,7 +4,12 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { GitHubRateLimitError } from "../../f/factory/lib/github_errors.ts";
+import {
+  GITHUB_RATE_LIMIT_MAX_WAIT_MS,
+  GitHubRateLimitError,
+  RATE_LIMIT_HINT_TEXT_LIMIT,
+  SECONDARY_RATE_LIMIT_PHRASE,
+} from "../../f/factory/lib/github_errors.ts";
 import {
   assertGitHubApiPath,
   classifyRateLimit,
@@ -128,6 +133,21 @@ describe("classifyRateLimit keeps a permission 403 out of the rate limit", () =>
 
   test("a 403 without any limit hint is not a rate limit", () => {
     expect(classify(403, {}, jsonMessage("Forbidden"))).toBeNull();
+  });
+});
+
+// 判定の表が使う定数は`github_errors.ts`にあり、保護パスの外である。値をここで固定する。
+describe("the constants the table depends on", () => {
+  test("the secondary limit phrase", () => {
+    expect(SECONDARY_RATE_LIMIT_PHRASE).toBe("secondary rate limit");
+  });
+
+  test("the length of the message read for the hints", () => {
+    expect(RATE_LIMIT_HINT_TEXT_LIMIT).toBe(4096);
+  });
+
+  test("the cap of the wait", () => {
+    expect(GITHUB_RATE_LIMIT_MAX_WAIT_MS).toBe(120_000);
   });
 });
 
@@ -308,6 +328,7 @@ describe("assertGitHubApiPath", () => {
     ["an absolute URL", "https://evil.example/repos/o/r"],
     ["a scheme", "javascript:alert(1)"],
     ["a protocol-relative path", "//evil.example/repos"],
+    ["a leading slash", "/repos/o/r"],
     ["a backslash", "repos\\o\\r"],
     ["a fragment", "repos/o/r#x"],
     ["a dot segment", "repos/o/./r"],
@@ -494,6 +515,14 @@ describe("sendGitHubRequest results", () => {
       path: "repos/o/r",
     });
     expect(response.timedOut).toBe(true);
+  });
+
+  test("classifies a 429 whose body could not be read as a secondary limit", async () => {
+    const f = fakeFetch([brokenBody(429, new TypeError("cut"))]);
+    const response = await sendGitHubRequest(client(f.fetch), {
+      path: "repos/o/r",
+    });
+    expect(response.rateLimit?.kind).toBe("secondary");
   });
 
   test("classifies the rate limit of the response", async () => {
@@ -703,6 +732,17 @@ describe("requestGitHub retries", () => {
     expect([response.bodyText, f.sent.length]).toEqual(['{"ok":true}', 2]);
   });
 
+  test("does not read a GET again when the deadline cut the body", async () => {
+    const f = fakeFetch([
+      brokenBody(200, new DOMException("timed out", "TimeoutError")),
+      new Response('{"ok":true}', { status: 200 }),
+    ]);
+    const response = await requestGitHub(client(f.fetch), {
+      path: "repos/o/r",
+    });
+    expect([response.timedOut, f.sent.length]).toEqual([true, 1]);
+  });
+
   test("does not read a POST again after an incomplete body", async () => {
     const f = fakeFetch([brokenBody(200, new TypeError("cut"))]);
     const response = await requestGitHub(client(f.fetch), {
@@ -784,6 +824,64 @@ describe("requestGitHub rate limits", () => {
     expect([error instanceof GitHubRateLimitError, sleeps]).toEqual([true, []]);
   });
 
+  // ヘッダーの無い429と、`remaining`の無い403は、制限かどうかの確かさが低い。
+  // 冪等でない要求を送り直すと、制限でなかったときに二重に効くので、待たずに投げる。
+  test("throws at once without resending a POST after a bare 429", async () => {
+    const sleeps: number[] = [];
+    const f = fakeFetch([new Response("{}", { status: 429 })]);
+    const error = await requestGitHub(client(f.fetch, sleeps), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: {},
+    }).catch((err: unknown) => err);
+    expect([
+      error instanceof GitHubRateLimitError,
+      sleeps,
+      f.sent.length,
+    ]).toEqual([true, [], 1]);
+  });
+
+  test("throws at once without resending a POST after a 403 that names a rate limit without the remaining header", async () => {
+    const sleeps: number[] = [];
+    const f = fakeFetch([
+      new Response(jsonMessage("API rate limit exceeded"), {
+        status: 403,
+        headers: { "X-RateLimit-Reset": String(NOW_SEC + 30) },
+      }),
+    ]);
+    const error = await requestGitHub(client(f.fetch, sleeps), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: {},
+    }).catch((err: unknown) => err);
+    expect([
+      error instanceof GitHubRateLimitError,
+      sleeps,
+      f.sent.length,
+    ]).toEqual([true, [], 1]);
+  });
+
+  test("waits and resends a GET after a bare 429", async () => {
+    const sleeps: number[] = [];
+    const f = fakeFetch([
+      new Response("{}", { status: 429 }),
+      new Response("{}", { status: 200 }),
+    ]);
+    await requestGitHub(client(f.fetch, sleeps), { path: "repos/o/r" });
+    expect([sleeps, f.sent.length]).toEqual([[60_000], 2]);
+  });
+
+  test("waits and resends a POST after a retry-after", async () => {
+    const sleeps: number[] = [];
+    const f = fakeFetch([secondary(5), new Response("{}", { status: 200 })]);
+    await requestGitHub(client(f.fetch, sleeps), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: {},
+    });
+    expect([sleeps, f.sent.length]).toEqual([[5000], 2]);
+  });
+
   test("keeps the query out of the error message", async () => {
     const f = fakeFetch([secondary(999)]);
     const error = await requestGitHub(client(f.fetch), {
@@ -818,6 +916,24 @@ describe("runGitHubRequest with a sender that may not send", () => {
       },
     );
     expect([response.status, calls]).toEqual([200, 2]);
+  });
+
+  test("does not read again a response whose body the deadline cut", async () => {
+    let calls = 0;
+    await runGitHubRequest(
+      { sleep: async () => {} },
+      { endpoint: "repos/o/r" },
+      { mode: "wait_once" },
+      async () => {
+        calls += 1;
+        return {
+          kind: "response",
+          response: { ...ok, incomplete: true, timedOut: true },
+          noResponse: false,
+        };
+      },
+    );
+    expect(calls).toBe(1);
   });
 
   test("throws the error when the retry is not sent either", async () => {
@@ -860,8 +976,8 @@ function factorySources(): Source[] {
 }
 
 /**
- * 4bで`github_http.ts`へ移すまで、自分でトークンをAPIへ載せるファイル。
- * artifactの取得の最初の要求で、取得の手順(`downloadRedirectTarget`)を移すときに外す。
+ * 自分でトークンをAPIへ載せるファイル。artifactの取得の最初の要求で、通信層を通さずに送る。
+ * 取得の手順を`github_http.ts`へ移したら、一覧から外す。
  * 保護パスのファイルなので、この一覧から外さずに経路を足す変更は人のレビューを経る。
  */
 const AUTHORIZATION_EXCEPTIONS: Readonly<Record<string, string>> = {
@@ -994,6 +1110,46 @@ describe("only github_http.ts carries the token to the GitHub API", () => {
       .map((source) => source.path)
       .filter((path) => !HTTP_VALUE_IMPORTERS.includes(path));
     expect(importers).toEqual([]);
+  });
+
+  test("the import pattern sees a named re-export", () => {
+    expect(
+      HTTP_VALUE_IMPORT.test(
+        'export { requestGitHub } from "./github_http.ts";',
+      ),
+    ).toBe(true);
+  });
+
+  test("the import pattern sees a star re-export", () => {
+    expect(HTTP_VALUE_IMPORT.test('export * from "./github_http.ts";')).toBe(
+      true,
+    );
+  });
+
+  test("the import pattern sees a dynamic import", () => {
+    expect(
+      HTTP_VALUE_IMPORT.test('const m = await import("./github_http.ts");'),
+    ).toBe(true);
+  });
+
+  test("the import pattern does not see a type-only re-export", () => {
+    expect(
+      HTTP_VALUE_IMPORT.test(
+        'export type { HttpFetch } from "./github_http.ts";',
+      ),
+    ).toBe(false);
+  });
+
+  test("the fetch pattern sees fetch reached through Bun", () => {
+    expect(GLOBAL_FETCH_THROUGH_OBJECT.test('await Bun.fetch("x");')).toBe(
+      true,
+    );
+  });
+
+  test("the fetch pattern sees a subscript of Bun", () => {
+    expect(GLOBAL_FETCH_THROUGH_OBJECT.test("await Bun[name]('x');")).toBe(
+      true,
+    );
   });
 
   test("the import pattern does not see a type-only import", () => {

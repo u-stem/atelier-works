@@ -289,6 +289,16 @@ describe("graphqlRequest results", () => {
     ).toEqual([true, 60]);
   });
 
+  test("reads a 429 whose body could not be read as a secondary limit", async () => {
+    const { result } = await request(async () =>
+      respond({
+        status: 429,
+        json: () => Promise.reject(new TypeError("connection cut")),
+      }),
+    );
+    expect(result.ok ? null : result.secondary_limit).toBe(true);
+  });
+
   test("reads a message that names a secondary rate limit", async () => {
     const { result } = await request(async () =>
       respond({

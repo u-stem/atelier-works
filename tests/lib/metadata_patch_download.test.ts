@@ -242,6 +242,20 @@ describe("downloadArtifactZip", () => {
     await expect(promise).rejects.toBeInstanceOf(GitHubRateLimitError);
   });
 
+  test("throws the rate limit error without a wait for a 429 without headers", async () => {
+    const { fetch } = fakeFetch([new Response("{}", { status: 429 })]);
+    const error = await downloadArtifactZip(
+      { ghToken: "tok", fetch },
+      "acme",
+      "widgets",
+      artifactRef,
+      MAX,
+    ).catch((err: unknown) => err);
+    expect(
+      error instanceof GitHubRateLimitError ? error.requiredWaitMs : "none",
+    ).toBeNull();
+  });
+
   test("stops reading when the body exceeds the limit", async () => {
     let cancelled = false;
     const stream = new ReadableStream<Uint8Array>({
