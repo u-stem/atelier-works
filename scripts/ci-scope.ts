@@ -248,8 +248,18 @@ const ADDITIVE_RULES: readonly Rule[] = [
   // メタデータの入力は、f/、依存の定義(dependencies/)、ロックのハッシュ。
   { matches: under("f/", "dependencies/"), flags: ["metadata"] },
   { matches: exact("wmill-lock.yaml"), flags: ["metadata"] },
-  // Consoleの組み立ては、console/の下(drawio-viewer.jsonを含む)だけを入力にする。
+  // Consoleの組み立てと検査の入力は、console/の下(drawio-viewer.jsonを含む)と、
+  // console/のコードがimportするf/の部品である。部品の一覧の網羅は、テストがimportの連鎖から確かめる。
   { matches: under("console/"), flags: ["console"] },
+  {
+    matches: exact(
+      "f/factory/lib/approval_support.ts",
+      "f/factory/lib/console_known_paths.ts",
+      "f/factory/lib/jst.ts",
+      "f/factory/lib/types.ts",
+    ),
+    flags: ["console"],
+  },
 ];
 
 // どのジョブも読まず、checkとcheck-docsの検査だけで足りるパス。
