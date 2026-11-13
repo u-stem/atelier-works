@@ -575,11 +575,13 @@ function inspect(path: string): "missing" | "symlink" | "directory" | "file" {
 
 /** coverage/lcov.infoを検証して読み、対象の一覧と照らして、下限と未読み込みを判定する。 */
 export function checkCoverage(options: CheckCoverageOptions): Verdict {
-  const floor = options.floorPercent ?? COVERAGE_FLOOR_PERCENT;
-  const layerFloors = options.layerFloors ?? LAYER_FLOORS;
-  const notLoadable = options.notLoadable ?? NOT_LOADABLE_BY_BUN_TEST;
+  const read = readLcov(options);
+  return typeof read === "string" ? judgeLcov(options, read) : read;
+}
+
+/** coverage/lcov.infoを検証して読む。読めたら本文を、検証に落ちたら失敗の判定を返す。 */
+function readLcov(options: CheckCoverageOptions): string | Verdict {
   const listTracked = options.listTracked ?? listTrackedWithGit;
-  const listTargets = options.listTargets ?? listTargetFiles;
 
   let tracked: readonly string[];
   try {
@@ -623,6 +625,15 @@ export function checkCoverage(options: CheckCoverageOptions): Verdict {
   if (text.trim() === "") {
     return failure("coverage/lcov.info is empty");
   }
+  return text;
+}
+
+/** 読んだlcovを対象の一覧と照らして、下限と未読み込みを判定する。 */
+function judgeLcov(options: CheckCoverageOptions, text: string): Verdict {
+  const floor = options.floorPercent ?? COVERAGE_FLOOR_PERCENT;
+  const layerFloors = options.layerFloors ?? LAYER_FLOORS;
+  const notLoadable = options.notLoadable ?? NOT_LOADABLE_BY_BUN_TEST;
+  const listTargets = options.listTargets ?? listTargetFiles;
 
   let listing: TargetListing;
   try {
@@ -698,27 +709,44 @@ export type CheckDiffCoverageOptions = JudgeDiffOptions & {
 const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
 /**
- * `git diff -U0`の出力から、ファイルごとに新しい側の行番号を集める。
- * hunkの中の行は、見出しの行数の分だけ読み飛ばす。
+ * `git diff`の出力から、ファイルごとに、足した行の新しい側の行番号を集める。
+ * hunkの中の行は、見出しの行数の分だけ読み、`+`の行だけを足した行とする。
  * `+++ `で始まる追加の行を、ファイルの見出しと読み違えないためである。
  * 消したファイル(`+++ /dev/null`)は入れない。
+ * 知らない形のファイルの見出しと、hunkの中の知らない形の行は、黙って飛ばさず投げる。
+ * 読み落とした変更を、検査が通したことにしないためである。
  */
 export function parseDiffAddedLines(diff: string): Map<string, Set<number>> {
   const byPath = new Map<string, Set<number>>();
   let current: Set<number> | null = null;
   let oldLeft = 0;
   let newLeft = 0;
+  let nextLine = 0;
   for (const line of diff.split("\n")) {
     if (oldLeft > 0 || newLeft > 0) {
-      if (line.startsWith("-")) oldLeft -= 1;
-      else if (line.startsWith("+")) newLeft -= 1;
+      if (line.startsWith("+")) {
+        current?.add(nextLine);
+        nextLine += 1;
+        newLeft -= 1;
+      } else if (line.startsWith("-")) {
+        oldLeft -= 1;
+      } else if (line.startsWith(" ")) {
+        nextLine += 1;
+        oldLeft -= 1;
+        newLeft -= 1;
+      } else if (!line.startsWith("\\")) {
+        throw new Error("git diff printed a hunk line of an unknown form");
+      }
       continue;
     }
     if (line.startsWith("+++ ")) {
       const target = line.slice("+++ ".length);
-      if (!target.startsWith("b/")) {
+      if (target === "/dev/null") {
         current = null;
         continue;
+      }
+      if (!target.startsWith("b/")) {
+        throw new Error("git diff printed a file header of an unknown form");
       }
       const path = target.slice("b/".length);
       current = byPath.get(path) ?? new Set<number>();
@@ -728,11 +756,8 @@ export function parseDiffAddedLines(diff: string): Map<string, Set<number>> {
     const hunk = HUNK_HEADER.exec(line);
     if (hunk === null) continue;
     oldLeft = Number(hunk[1] ?? "1");
-    const start = Number(hunk[2]);
+    nextLine = Number(hunk[2]);
     newLeft = Number(hunk[3] ?? "1");
-    for (let offset = 0; offset < newLeft; offset += 1) {
-      current?.add(start + offset);
-    }
   }
   return byPath;
 }
@@ -832,16 +857,20 @@ export function judgeDiffCoverage(
 /**
  * 変更した行を出す`git diff`の引数。作業ツリーを基点と比べ、ステージしていない変更も含める。
  * 利用者の設定で出力の形が変わらないよう、色、外部のdiff、textconv、名前の変更の検出を止め、接頭辞を固定する。
+ * `--text`は、NULを含むファイルをバイナリとして行を出さずに済ませないために付ける。
+ * `--inter-hunk-context=0`は、hunkの間の変えていない行を文脈として出させないために付ける。
  */
 export function diffArgv(base: string, paths: readonly string[]): string[] {
   return [
     "git",
     "diff",
     "-U0",
+    "--text",
     "--no-color",
     "--no-ext-diff",
     "--no-textconv",
     "--no-renames",
+    "--inter-hunk-context=0",
     "--src-prefix=a/",
     "--dst-prefix=b/",
     base,
@@ -853,15 +882,25 @@ export function diffArgv(base: string, paths: readonly string[]): string[] {
 /**
  * `origin/main`とのマージ基点から、作業ツリーまでに変更した行を列挙する。
  * 追跡していない新しいファイルは、ファイル全体を変更したものとする。
- * マージ基点を求められないときや、gitが失敗したときは投げる。
+ * 追跡ref(`refs/remotes/origin/main`)は完全な名前で読む。
+ * 短い名前の`origin/main`は、同じ名前のタグやブランチが先に解決されうるためである。
+ * 追跡refが無いとき、マージ基点を求められないとき、gitが失敗したときは投げる。
  */
 export function listChangedLines(
   root: string,
   paths: readonly string[],
   run: (argv: readonly string[], cwd: string) => string = runGit,
 ): ChangedLines {
-  const base = run(["git", "merge-base", "HEAD", "origin/main"], root).trim();
-  if (!/^[0-9a-f]{40,64}$/.test(base)) {
+  const commit = /^[0-9a-f]{40,64}$/;
+  const tracking = run(
+    ["git", "show-ref", "--verify", "--hash", "refs/remotes/origin/main"],
+    root,
+  ).trim();
+  if (!commit.test(tracking)) {
+    throw new Error("git show-ref printed no commit");
+  }
+  const base = run(["git", "merge-base", "HEAD", tracking], root).trim();
+  if (!commit.test(base)) {
     throw new Error("git merge-base printed no commit");
   }
   const lines = parseDiffAddedLines(run(diffArgv(base, paths), root));
@@ -886,8 +925,10 @@ export function checkDiffCoverage(options: CheckDiffCoverageOptions): Verdict {
     // gitの標準エラーとパスは載せない。
     return {
       ok: false,
-      message:
-        "diff coverage check failed: listing the changed lines failed (git merge-base HEAD origin/main, git diff, or git ls-files)",
+      message: [
+        "diff coverage check failed: listing the changed lines failed (git show-ref refs/remotes/origin/main, git merge-base, git diff, or git ls-files)",
+        "run git fetch origin main (git fetch --unshallow origin main in a shallow clone) and run the check again",
+      ].join("\n"),
     };
   }
   return judgeDiffCoverage(options.lcovText, changed, {
@@ -896,36 +937,47 @@ export function checkDiffCoverage(options: CheckDiffCoverageOptions): Verdict {
   });
 }
 
+/** 検査の終了コードと、標準出力と標準エラーに書く文。 */
 export type CoverageRunResult = {
   readonly exitCode: number;
   readonly stdout: readonly string[];
   readonly stderr: readonly string[];
 };
 
+export type RunCoverageChecksOptions = CheckCoverageOptions & {
+  /** 変更した行の列挙。既定は実際にgitを呼ぶ。 */
+  readonly listChanged?: (root: string) => ChangedLines;
+};
+
+/**
+ * 全体と層の検査を行い、通ったら同じlcovの本文で差分の検査を行う。
+ * 全体と層の検査が落ちたら、差分の検査はしない。
+ * 通った結果は標準出力に、落ちた結果は標準エラーに書く。
+ */
 export function runCoverageChecks(
-  _options: CheckCoverageOptions & {
-    readonly listChanged?: (root: string) => ChangedLines;
-  },
+  options: RunCoverageChecksOptions,
 ): CoverageRunResult {
-  return { exitCode: -1, stdout: [], stderr: [] };
+  const read = readLcov(options);
+  if (typeof read !== "string") {
+    return { exitCode: 1, stdout: [], stderr: [read.message] };
+  }
+  const total = judgeLcov(options, read);
+  if (!total.ok) return { exitCode: 1, stdout: [], stderr: [total.message] };
+  const diff = checkDiffCoverage({
+    root: options.root,
+    lcovText: read,
+    ...(options.listChanged === undefined
+      ? {}
+      : { listChanged: options.listChanged }),
+  });
+  return diff.ok
+    ? { exitCode: 0, stdout: [total.message, diff.message], stderr: [] }
+    : { exitCode: 1, stdout: [total.message], stderr: [diff.message] };
 }
 
 if (import.meta.main) {
-  const root = resolve(import.meta.dir, "..");
-  const result = checkCoverage({ root });
-  if (!result.ok) {
-    console.error(result.message);
-    process.exit(1);
-  }
-  console.log(result.message);
-  // 全体の検査が、lcovを通常のファイルとして読めることを確かめた後に読む。
-  const diff = checkDiffCoverage({
-    root,
-    lcovText: readFileSync(join(root, "coverage", "lcov.info"), "utf8"),
-  });
-  if (!diff.ok) {
-    console.error(diff.message);
-    process.exit(1);
-  }
-  console.log(diff.message);
+  const result = runCoverageChecks({ root: resolve(import.meta.dir, "..") });
+  for (const line of result.stdout) console.log(line);
+  for (const line of result.stderr) console.error(line);
+  process.exit(result.exitCode);
 }

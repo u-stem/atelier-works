@@ -1862,6 +1862,7 @@ describe("runCoverageChecks", () => {
     listTracked: () => [],
     listTargets: listing([A]),
     layerFloors: [],
+    notLoadable: [],
   };
 
   test("exits with 1 and writes the diff failure to stderr when only the diff check fails", () => {

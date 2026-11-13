@@ -486,6 +486,7 @@ OSやrootの有無で、動くテストが分かれるためである。
 失敗の出力が示すファイルの、実行されなかった行の番号を見て、その行を実行するテストを足す。
 `origin/main`が無いか古いと、差分が正しく取れない。
 手元では、`git fetch origin main`の後に`mise run check`を実行し直す。
+浅いクローンでは、マージ基点が求められないので、`git fetch --unshallow origin main`を使う。
 計算と限界は[テストの基準](testing-guidelines.md#差分の行カバレッジ)にある。
 
 ### 未読み込みで失敗したとき

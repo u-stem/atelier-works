@@ -456,7 +456,7 @@ export type ConflictResolutionInput = {
  * - `reordered`: ブロックの中で、片側の行の順序を入れ替えた。
  * - `weakens_checks`: 新しく足した行が検査を弱める。
  * - `unknown_import`: 新しく足した行が、どちらの版も読み込まないモジュールを読み込む。
- * - `test_count_decreased`: テストファイルの`test(`、`it(`、`expect(`の数が、両側の増減を足し合わせた数を下回った。
+ * - `test_count_decreased`: テストファイルのある衝突ブロックで、解消の`test(`、`it(`、`expect(`の数が、ブロックの中の両側の増減を足し合わせた数を下回った。
  */
 export type ConflictViolationCode =
   | "unsafe_path"
@@ -683,17 +683,17 @@ function countTestCalls(text: string): number {
 }
 
 /**
- * 解消後のテストファイルが下回ってはいけない、`test(`、`it(`、`expect(`の数。
- * 共通の祖先からの両側の増減を足し合わせた数(PRのhead + baseの側 - 共通の祖先)にする。
+ * 衝突ブロック1つの解消が下回ってはいけない、`test(`、`it(`、`expect(`の数。
+ * ブロックの中の両側の増減を足し合わせた数(PRのhead + baseの側 - 共通の祖先)にする。
  * 片側が消したテストは消えたまま、もう片側が足したテストは残した解消を許すためである。
- * 両側が消した分が足した分より多いと負になるが、数は0を下回らないので0にそろえる。
+ * 0未満を0にそろえるのは判定には効かず、期待値の意味を0以上に保つためである。
  */
-function expectedTestCalls(file: ConflictFileInput): number {
+function expectedTestCalls(block: ConflictBlock): number {
   return Math.max(
     0,
-    countTestCalls(file.ours) +
-      countTestCalls(file.theirs) -
-      countTestCalls(file.base),
+    countTestCalls(block.ours.join("\n")) +
+      countTestCalls(block.theirs.join("\n")) -
+      countTestCalls(block.base.join("\n")),
   );
 }
 
@@ -753,9 +753,15 @@ function contentViolationsOf(
   ) {
     codes.add("unknown_import");
   }
+  // テストの数はブロックごとに比べ、ファイル全体では比べない。
+  // ブロックの外の行は作り直した形と1行ずつ同じことを確かめ済みで、解消で数が変わらないためである。
+  // ファイル全体の増減の和は、両側がブロックの外で同じ変更をすると、その変更を2回数えてしまう。
   if (
     isTestPath(file.path) &&
-    countTestCalls(result) < expectedTestCalls(file)
+    resolutions.some(
+      ({ block, lines }) =>
+        countTestCalls(lines.join("\n")) < expectedTestCalls(block),
+    )
   ) {
     codes.add("test_count_decreased");
   }
@@ -772,7 +778,7 @@ function contentViolationsOf(
  * ブロックの外の行は、作り直した形と1行ずつ同じで、順序も保つ。
  * ブロックの中の解消は、PRのheadの側とbaseの側の行を、それぞれ順序を保って選んだものと、新しく足した行だけである。
  * 新しく足した行は、検査を弱める記述(`weakensChecks`)を持たず、読み込む指定子がどちらの版にも現れるものに限る。
- * テストファイルは、`test(`、`it(`、`expect(`の出現数が、両側の増減を足し合わせた数を下回ってはいけない。
+ * テストファイルは、衝突ブロックごとに、解消の`test(`、`it(`、`expect(`の出現数が、ブロックの中の両側の増減を足し合わせた数を下回ってはいけない。
  * 片側が消したテストを消したまま、もう片側が足したテストを残す解消は許す。
  * 同じ行を両側が変えた競合を1行にまとめる解消も、数が減らないので許す。
  * 衝突マーカーが結果に残ってはいけない。
