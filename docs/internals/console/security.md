@@ -41,7 +41,7 @@ Console用workerの境界の全体は、[セキュリティ](../../security.md#c
 - `windmill-client`の再エクスポート。
 - 数字の版(`@1.817.0`)でない`windmill-client`の版の指定。
   `@latest`のようなタグと範囲は、入れるたびに中身が変わりうるためである。
-- リテラルだけで組み立てた引数の動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート、リテラルの条件式)。
+- リテラルだけで組み立てた引数の動的import(`import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート、枝がリテラルの条件式)。
   変換の過程でリテラルに畳み込まれ、変換前の本文から読むimportの一覧に現れないためである。
   走査は、変換の前と後で動的importの指定を突き合わせて見つける。
 - `global`、`self`、`window`、`globalThis`の経由。
@@ -57,8 +57,10 @@ Console用workerの境界の全体は、[セキュリティ](../../security.md#c
   タグ付きテンプレートの`${}`は引数として渡る。
 - 字句の迂回。
   `constructor`の言及(文字列の中も数える)、`eval`、`Function`、`Bun`の添字アクセスを禁じる。
-  `require`(変数に入れる形も)、`import.meta`のすべて、`Worker`も禁じる。
+  `require`の参照(変数に入れる形、`.require`のメンバー参照も)、`import.meta`のすべて、`Worker`も禁じる。
   `import.meta`は`env`と`require`を持つためである。
+  CommonJSの`module`と`exports`の参照も禁じる。
+  同じ名前を`const`、`let`、`var`で宣言したファイルでは、その名前を当てない。
 - ファイルとサブプロセスへの依存。
 
 読み取り専用であることは、たどれるファイルのテンプレートリテラルに、書き込みやスキーマ変更のSQLの語が無いことで確かめる。

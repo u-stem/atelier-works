@@ -27,6 +27,12 @@ export function relativeImports(source: string): string[] {
 
 const SIMPLE_DYNAMIC_IMPORT = /^import\s*\(\s*(?:"[^"\\]*"|'[^'\\]*')\s*\)/;
 
+/**
+ * `require`の識別子の参照。呼び出しに限らず、別名への代入、`.call`、引数への受け渡し、`.require`のメンバー参照も当たる。
+ * 骨組みの上では、キーの`require:`と条件式の枝の`require :`を見分けられないので、キーも当てる。
+ */
+const REQUIRE_REFERENCE = /(?<![\w$])require(?![\w$])/;
+
 /** `source`を読み込む先のうち、動的importの指定。同じ指定が何度も現れれば、その数だけ並べる。 */
 function dynamicImportPaths(source: string): string[] {
   return transpiler
@@ -37,11 +43,12 @@ function dynamicImportPaths(source: string): string[] {
 
 /**
  * 走査がたどれないimportの形。たどれない理由を返す。
- * 絶対パスと`f/`・`u/`で始まるimport、`require`、変換後のコードで引数が単純な文字列リテラルでない動的importを数える。
- * 変換は、リテラルだけで組み立てた引数(連結、リテラルだけを埋め込んだテンプレート、条件式)を、リテラルに畳み込む。
+ * 絶対パスと`f/`・`u/`で始まるimport、`require`の参照、変換後のコードで引数が単純な文字列リテラルでない動的importを数える。
+ * 文字列とコメントの中の`require`は数えない。
+ * 変換は、リテラルだけで組み立てた引数(連結、リテラルだけを埋め込んだテンプレート、枝がリテラルの条件式)を、リテラルに畳み込む。
  * 畳み込まれた動的importは、変換前の本文から読むimportの一覧に現れない。
- * そのため、変換後のコードから読む動的importのうち、変換前の一覧に無いものも数える。
- * 指定ごとに数を突き合わせるので、変換が消す到達しない動的importで相殺されない。
+ * そのため、変換後のコードから読む動的importの指定は、変換前の一覧にすべて現れることを確かめる。
+ * 到達しない動的importが変換で消えても、その指定は変換前の一覧に残るので、ほかの走査から隠れない。
  */
 export function unfollowableImports(source: string): string[] {
   const found: string[] = [];
@@ -51,7 +58,7 @@ export function unfollowableImports(source: string): string[] {
     }
   }
   const code = codeOf(source);
-  if (/\brequire\s*\(/.test(code)) found.push("require");
+  if (REQUIRE_REFERENCE.test(codeSkeleton(code))) found.push("require");
   for (const match of code.matchAll(/\bimport\s*\(/g)) {
     if (!SIMPLE_DYNAMIC_IMPORT.test(code.slice(match.index))) {
       found.push("dynamic import with a non-literal argument");
@@ -289,6 +296,22 @@ const GLOBAL_LOOKUP =
 // `import.meta`は`env`や`require`を持つ。
 const IMPORT_META = /(?<![.\w$])import\s*\.\s*meta(?![\w$])/;
 
+/**
+ * CommonJSの`module`と`exports`の自由な参照。`module.require`でモジュールへ届く。
+ * `x.module`のようなメンバーは当てない。
+ * 同じ名前を`const`、`let`、`var`で宣言したソースでは、その名前を当てない。
+ * フローのステップを`module`という変数で回すコードがあるためである。
+ * 宣言の有効範囲は見ないので、内側の範囲で宣言し、外側でCommonJSの`module`を使う形は見つけられない。
+ * その形でも、`.require`のメンバー参照は`unfollowableImports`が止める。
+ */
+function commonjsReferences(skeleton: string): string[] {
+  return ["module", "exports"].filter(
+    (name) =>
+      new RegExp(`(?<![.\\w$])${name}(?![\\w$])`).test(skeleton) &&
+      !new RegExp(`\\b(?:const|let|var)\\s+${name}(?![\\w$])`).test(skeleton),
+  );
+}
+
 /** ファイルにもサブプロセスにも届かない`Bun`のメンバー。 */
 const HARMLESS_BUN_MEMBERS: ReadonlySet<string> = new Set([
   "sleep",
@@ -316,9 +339,10 @@ const HARMLESS_BUN_MEMBERS: ReadonlySet<string> = new Set([
  *   `Bun.spawn`と`Bun.file`だけでなく、分割代入、別名への代入、添字アクセスも当たる。
  * - `globalThis`、`process.getBuiltinModule`、`process.binding`。これらを経由すると、名前を伏せて同じものに届くため。
  * - `import.meta`のすべて。`require`を持ち、別名に入れて呼ぶとimportの一覧に現れずにモジュールへ届くため。
+ * - CommonJSの`module`と`exports`の参照。`module.require`でモジュールへ届くため。
  * 見ないもの: 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身、
  * 第三者パッケージ(`execa`、`fs-extra`、`zx`など)の中身。
- * リテラルだけで組み立てた動的importは、ここでは数えず、`unfollowableImports`が止める。
+ * `require`の参照とリテラルだけで組み立てた動的importは、ここでは数えず、`unfollowableImports`が止める。
  * 文字列の中の言及は数えない。
  */
 export function toolDependencies(source: string): string[] {
@@ -342,6 +366,7 @@ export function toolDependencies(source: string): string[] {
     found.push(`use of ${match[0]}`);
   }
   if (IMPORT_META.test(skeleton)) found.push("use of import.meta");
+  for (const name of commonjsReferences(skeleton)) found.push(`use of ${name}`);
   return found;
 }
 
@@ -438,8 +463,6 @@ const CLIENT_IMPORT_CLAUSE =
   /\bimport\s+([^;"']*?)\s*\bfrom\s*["']windmill-client[^"']*["']/g;
 const IMPORT_STATEMENT = /\bimport\s+[^;"']*?\bfrom\s*""/g;
 const FETCH_REFERENCE = /(?<![.\w$])fetch(?![\w$])(?!\s*:)/;
-// `require`は呼び出しの形に限らず、変数に入れる形も禁じる。
-const REQUIRE_REFERENCE = /(?<![.\w$])require(?![\w$])(?!\s*:)/;
 const WORKER_REFERENCE = /(?<![.\w$])Worker(?![\w$])(?!\s*:)/;
 const GLOBAL_OBJECT = /(?<![.\w$])(?:globalThis|global|self|window)(?![\w$])/;
 const MEMBER_ACCESS = /^\s*\.\s*([A-Za-z_$][\w$]*)/;
@@ -681,7 +704,9 @@ function importProblems(source: string, problems: string[]): void {
  * windmill-clientのnamespaceとdefaultの束縛を見つけ、束縛の出現をすべて数える。
  * `<束縛>.<member>`と`<束縛>.<X>Service.<method>`の形で説明できない出現(別名、添字、optional chain、
  * 引数への受け渡し)は禁じる。名前付きimport、windmill-client以外の外部のimportと深いパスのimport、
- * `fetch`、`require`(変数に入れる形も)、`import.meta`、`Worker`、`globalThis`、`WM_TOKEN`などの名前も禁じる。
+ * `fetch`、`require`(変数に入れる形も)、`import.meta`、`Worker`、`globalThis`、CommonJSの`module`と`exports`、
+ * `WM_TOKEN`などの名前も禁じる。
+ * `require`は`unfollowableImports`と同じ正規表現で数え、この関数だけで許可表の検査が閉じるようにする。
  * 文字列とコメントの中の言及は数えない。ただし`WM_TOKEN`などの名前は、文字列でも禁じる。
  * パスをリテラルに固定する呼び出し(`BOUND_PATH_CALLS`)は、その定数以外のパスを禁じる。
  */
@@ -728,6 +753,9 @@ export function sdkFindings(source: string): SdkFindings {
   if (WORKER_REFERENCE.test(skeleton)) problems.push("use of Worker");
   const globalObject = GLOBAL_OBJECT.exec(skeleton)?.[0];
   if (globalObject !== undefined) problems.push(`use of ${globalObject}`);
+  for (const name of commonjsReferences(skeleton)) {
+    problems.push(`use of ${name}`);
+  }
   const forbidden = FORBIDDEN_NAMES.exec(code)?.[0];
   if (forbidden !== undefined) problems.push(`mention of ${forbidden}`);
   for (const [call, bound] of Object.entries(BOUND_PATH_CALLS)) {

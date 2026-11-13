@@ -1164,10 +1164,12 @@ tag`console`のscriptがimportでたどれるソースを数える契約テス�
 たどれない形は、次のとおりである。
 
 - 絶対パスと、`f/`か`u/`で始まるimport
-- `require`
+- `require`の識別子の参照。
+  呼び出しに加えて、別名への代入、`.call`、引数への受け渡し、`.require`のメンバー参照、キーの`require:`が当たる。
+  文字列とコメントの中の言及は当たらない
 - 引数が単純な文字列リテラルでないimport()
 - リテラルだけで組み立てた引数のimport()。
-  `import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート、リテラルの条件式が当たる。
+  `import("node:child_" + "process")`、リテラルだけを埋め込んだテンプレート、枝がリテラルの条件式が当たる。
   変換の過程でリテラルに畳み込まれ、変換前の本文から読むimportの一覧に現れないので、変換の前と後で動的importの指定を突き合わせて見つける
 - `.name("literal")`の形の呼び出しで説明できない、`getVariable`と`getResource`の出現。
   添字アクセス、分割代入、名前付きimport、別名への代入、引数が変数の呼び出し、注入された関数の呼び出しが当たる
@@ -1398,6 +1400,7 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 走査の方法と、たどれない形は、Console用workerの契約テストと同じである。
 引数が変数の動的importは、たどれない形として止まる。
 引数がリテラルだけで組み立てた動的importも、変換の過程でリテラルに畳み込まれた形として止まる。
+`require`は、呼び出しに限らず、別名への代入、`.call`、引数への受け渡し、`.require`のメンバー参照も止まる。
 
 - `f/`の下のYAMLのうち、tag`periodic`へ振り分けるものが、テストの一覧のscriptの定義と一致する。
   scriptの定義の`tag`だけでなく、スケジュールの`tag`と、フローのモジュールの`tag`と`tag_override`も、入れ子の中まで調べる。
@@ -1423,6 +1426,10 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
   `globalThis`、`process.getBuiltinModule`、`process.binding`も当たる。
   `import.meta`の参照も、すべて当たる。
   `import.meta`は`require`を持ち、別名に入れて呼ぶと、importの一覧に現れずにモジュールへ届くためである。
+  CommonJSの`module`と`exports`の参照も当たる。
+  `module.require`でモジュールへ届くためである。
+  同じ名前を`const`、`let`、`var`で宣言したファイルでは、その名前を当てない。
+  宣言の有効範囲は見ないが、`.require`のメンバー参照は、たどれない形として止まる。
 
 `node:module`、`node:worker_threads`、`node:vm`のimportも、迂回に使えるので数える。
 `f/`の下のTypeScriptが、`JobService.run*`でジョブを起動したり、tagの文字列を渡したりしていないことも、テストが確かめる。

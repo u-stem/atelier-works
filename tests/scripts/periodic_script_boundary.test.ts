@@ -45,6 +45,7 @@ import {
 //   defaultのworkerの中では、そのworkerが止まると動かないためである。
 // - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
 //   `import.meta`の参照も無い。`require`を持ち、別名に入れて呼ぶとimportの一覧に現れないためである。
+//   CommonJSの`module`と`exports`の参照も無い。`module.require`でモジュールへ届くためである。
 // - importでたどれるソースがimportの形で読む外部のパッケージは、windmill-clientだけである。
 //   パッケージの中身は走査が見ないので、ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるためである。
 // - 走査でたどれない形(Console用workerの境界テストと同じ)が無い。
