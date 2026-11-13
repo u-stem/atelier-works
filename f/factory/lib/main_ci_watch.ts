@@ -13,7 +13,7 @@ import {
   parseGitHubRepoUrl,
   WorkflowRunsIncompleteError,
 } from "./github.ts";
-import type { Logger } from "./log.ts";
+import { errorMessage, type Logger } from "./log.ts";
 import {
   buildFailureSummary,
   decideState,
@@ -260,10 +260,6 @@ function isDenied(err: unknown): boolean {
   return (
     err instanceof GitHubHttpError && (err.status === 403 || err.status === 404)
   );
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /**

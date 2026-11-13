@@ -77,7 +77,7 @@ import {
   removeLabel,
   rereadWithRetries,
 } from "./lib/github.ts";
-import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import { errorMessage, type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   discoverPrs,
   parseCheckedPrs,
@@ -716,10 +716,6 @@ function prUrl(item: {
   readonly number: number;
 }): string {
   return `https://github.com/${item.owner}/${item.repo}/pull/${String(item.number)}`;
-}
-
-function errorMessage(err: unknown): string {
-  return maskSecrets(err instanceof Error ? err.message : String(err));
 }
 
 /**

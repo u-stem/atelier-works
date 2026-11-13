@@ -52,8 +52,8 @@ export function maskSecrets(
  * 例外の文を取り出し、既知の形式の秘密情報をマスクして返す。
  * `Error`でない値は`String`で文字列にする。
  */
-export function errorMessage(_err: unknown): string {
-  return "";
+export function errorMessage(err: unknown): string {
+  return maskSecrets(err instanceof Error ? err.message : String(err));
 }
 
 /**
