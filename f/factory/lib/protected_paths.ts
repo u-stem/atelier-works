@@ -325,6 +325,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 緩めると検査をすり抜けた設定が書かれうるが、書くには人が端末で`yes`を入力する。
  * `lib/credential_expiry.script.lock`は守らない。依存の無いlibのlockと同じ扱いである。
  * これらが読む`lib/log.ts`と`lib/types.ts`、`lib/cleanup_support.ts`は、多くのscriptが使う日常的に直す部品なので守らない。
+ * 上の`check-idle.ts`が読む`lib/types.ts`も、同じ理由で守らない。
+ * 日本時間の部品(`lib/jst.ts`)と`.script.yaml`は守る。`lib/credential_expiry.ts`が資格情報の期限の通知の日付に、
+ * `lib/claude.ts`が日次予算の日の境界に使い、どちらも保護パスだからである。
+ * `log.ts`と`types.ts`と違い、日常的に直す部品ではないので、守っても正当な変更をほとんど止めない。
+ * `lib/jst.script.lock`は、依存の無いlibのlockと同じ扱いで守らない。
  * 全停止の通知を変数に合わせる`lib/stop_all_notice.ts`と、ランナーの`lib/workspace.ts`は守らない。
  * 通知は止める働きを持たず、ランナーはほかのフローが日常的に直すファイルだからである。
  * 監視を呼ぶ`lib/claude.ts`、`lib/check_runner.ts`と、関門を持つ`self_update.ts`は、安全策を担うコードとして守っている。
@@ -683,6 +688,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "scripts/credential_expiry.ts",
   "f/factory/lib/credential_expiry.ts",
   "f/factory/lib/credential_expiry.script.yaml",
+  "f/factory/lib/jst.ts",
+  "f/factory/lib/jst.script.yaml",
   "migrations/datatable/main/20261105100000_deploy_approvals.up.sql",
   "migrations/datatable/main/20261105100000_deploy_approvals.down.sql",
   "f/factory/lib/deploy_approvals.ts",
