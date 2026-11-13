@@ -332,7 +332,10 @@ export function isRestSearchEndpoint(endpoint: string): boolean {
     .toLowerCase()
     .replace(/^https?:\/\/[^/]+\//, "")
     .replace(/^\/+/, "");
-  return path.startsWith(REJECTED_REST_ENDPOINT_PREFIX) || path === "search";
+  return (
+    path.startsWith(REJECTED_REST_ENDPOINT_PREFIX) ||
+    path.replace(/[?#].*$/s, "") === "search"
+  );
 }
 
 /**

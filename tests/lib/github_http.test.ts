@@ -316,6 +316,7 @@ describe("assertGitHubApiPath", () => {
     ["an encoded dot in a segment", "repos/o/a%2Eb"],
     ["the search API", "search/issues?q=x"],
     ["the search API in capitals", "SEARCH/code"],
+    ["the bare search path with a query", "search?q=x"],
     ["an empty path", ""],
     ["a path that URL would rewrite", "repos/o/r/a b"],
   ])("rejects %s", (_name, path) => {
