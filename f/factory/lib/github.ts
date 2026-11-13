@@ -1379,8 +1379,9 @@ export class ClaimOwnershipUnknownError extends Error {
 /**
  * ラベルの削除が実行されたか判断できない失敗か(応答が無い、サーバーエラー、2xxの後で本文が欠けた)。
  * 本文が欠けた削除は効いているはずだが、ほかの失敗と同じく読み直しで確かめる。
+ * `claimIssue`と、PRの取得(`poll_prs.ts`の`claimPr`)が、`resolveUndeterminedRemoval`へ進むかの判断に使う。
  */
-function isUndeterminedRemoval(err: unknown): boolean {
+export function isUndeterminedRemoval(err: unknown): boolean {
   return (
     err instanceof GitHubWriteBodyCutError ||
     (err instanceof GitHubHttpError && (err.status === 0 || err.status >= 500))
@@ -1517,7 +1518,14 @@ export async function claimIssue(
     removal = await removeLabel(client, owner, repo, number, opts.triggerLabel);
   } catch (err) {
     if (!isUndeterminedRemoval(err)) throw err;
-    return resolveUndeterminedRemoval(client, owner, repo, number, opts, err);
+    return claimIssueAfterUndeterminedRemoval(
+      client,
+      owner,
+      repo,
+      number,
+      opts,
+      err,
+    );
   }
   if (removal === "absent") {
     return {
@@ -1541,17 +1549,102 @@ export async function claimIssue(
 }
 
 /**
- * ラベルの削除が実行されたか判断できなかったとき、次の順に調べて結果を決める。
- * 1. Issueを読み直す(`rereadWithRetries`)。ラベルが残っていれば外れていないので`retry`を返す。
- * 2. ラベルが外れていれば、タイムラインでそのラベルを最後に外した人を調べる。
- *    自分のログイン名なら削除は実行されていたので、取得できたとして返す。
- *    別の人なら`lost`を返す。
- * 3. 読み直しやタイムラインが読めない(レート制限は繰り返さない)、または最後に付けられた後の
- *    削除の記録が無いときは、
- *    自分が外したか分からないので`ClaimOwnershipUnknownError`を投げる。
- * 同じPATで動く別のインスタンスは、ログイン名では区別できない(`ClaimIssueResult`を参照)。
+ * `resolveUndeterminedRemoval`の結果。
+ * - `present`: 読み直してもラベルが残っていた。外れていないので、次のポーリングが拾い直す。
+ * - `removed_by_self`: ラベルが外れていて、最後に外したのが`actor`だった。`issue`は読み直した内容である。
+ * - `removed_by_other`: ラベルが外れていて、最後に外したのが別のユーザーだった。
+ * - `unknown`: 自分が外したか判断できなかった。`cause`は、読めなかった読み取りの例外か、
+ *   タイムラインに決め手の記録が無かったときの削除の例外である。
+ *   レート制限で読めなかったときは、`GitHubRateLimitError`がそのまま入る。
  */
-async function resolveUndeterminedRemoval(
+export type UndeterminedRemovalOutcome =
+  | { readonly kind: "present" }
+  | { readonly kind: "removed_by_self"; readonly issue: Issue }
+  | { readonly kind: "removed_by_other" }
+  | { readonly kind: "unknown"; readonly cause: unknown };
+
+/**
+ * ラベルの削除が実行されたか判断できなかったとき、次の順に調べて結果を決める。
+ * IssueとPRのどちらにも使う。PRのタイムラインも、IssueのAPIで読めるためである。
+ * 1. Issueを読み直す(`rereadWithRetries`)。ラベルが残っていれば`present`を返す。
+ * 2. ラベルが外れていれば、タイムラインでそのラベルを最後に外した人を調べる。
+ *    `actor`のログイン名なら削除は実行されていたので、`removed_by_self`を返す。
+ *    別の人なら`removed_by_other`を返す。
+ * 3. 読み直しやタイムラインが読めない(レート制限は繰り返さない)、または最後に付けられた後の
+ *    削除の記録が無いときは、自分が外したか分からないので`unknown`を返す。
+ * 同じPATで動く別のインスタンスは、ログイン名では区別できない(`ClaimIssueResult`を参照)。
+ * 呼び出し元は、結果を自分の取得の結果に写す。`unknown`の扱いは呼び出し元ごとに違う。
+ */
+export async function resolveUndeterminedRemoval(
+  client: GhClient,
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+  },
+  opts: {
+    readonly triggerLabel: string;
+    /** 自分のログイン名。タイムラインの最後の削除の実行者と比べる。 */
+    readonly actor: string;
+    readonly log: Logger | undefined;
+  },
+  removalError: unknown,
+): Promise<UndeterminedRemovalOutcome> {
+  const { owner, repo, number } = target;
+  const label = `${owner}/${repo}#${number}`;
+  const detail =
+    removalError instanceof Error ? removalError.message : String(removalError);
+  opts.log?.warn("claim label removal was undetermined; re-reading the issue", {
+    target: label,
+    error: maskSecrets(detail),
+  });
+  const unknown = (cause: unknown): UndeterminedRemovalOutcome => {
+    opts.log?.warn("claim ownership could not be determined", {
+      target: label,
+    });
+    return { kind: "unknown", cause };
+  };
+
+  let reread: Issue;
+  try {
+    reread = await rereadWithRetries(
+      client,
+      { log: opts.log, target: label, what: "issue" },
+      () => getIssue(client, owner, repo, number),
+    );
+  } catch (err) {
+    return unknown(err);
+  }
+  if (hasLabel(reread.labels, opts.triggerLabel)) {
+    opts.log?.warn("claim deferred: trigger label is still present", {
+      target: label,
+    });
+    return { kind: "present" };
+  }
+
+  let actor: string | null;
+  try {
+    actor = await rereadWithRetries(
+      client,
+      { log: opts.log, target: label, what: "timeline" },
+      () => lastUnlabeledActor(client, owner, repo, number, opts.triggerLabel),
+    );
+  } catch (err) {
+    return unknown(err);
+  }
+  if (actor === null) return unknown(removalError);
+  if (actor.toLowerCase() !== opts.actor.toLowerCase()) {
+    return { kind: "removed_by_other" };
+  }
+  return { kind: "removed_by_self", issue: reread };
+}
+
+/**
+ * `claimIssue`の削除の結果が不明なとき、`resolveUndeterminedRemoval`の結果を`ClaimIssueResult`に写す。
+ * 自分が外したか判断できなければ、`ClaimOwnershipUnknownError`を投げる。
+ * `cause`には読み取りの例外を、それが無ければ削除の例外を残す。
+ */
+async function claimIssueAfterUndeterminedRemoval(
   client: GhClient,
   owner: string,
   repo: string,
@@ -1559,66 +1652,45 @@ async function resolveUndeterminedRemoval(
   opts: ClaimIssueOptions,
   removalError: unknown,
 ): Promise<ClaimIssueResult> {
-  const target = `${owner}/${repo}#${number}`;
-  const detail =
-    removalError instanceof Error ? removalError.message : String(removalError);
-  opts.log?.warn("claim label removal was undetermined; re-reading the issue", {
-    target,
-    error: maskSecrets(detail),
-  });
-  const unknown = (cause: unknown): ClaimOwnershipUnknownError => {
-    opts.log?.warn("claim ownership could not be determined", { target });
-    return new ClaimOwnershipUnknownError(
-      `claim ownership unknown for ${target}: ${detail}`,
-      { cause: cause instanceof Error ? cause : removalError },
-    );
-  };
-
-  let reread: Issue;
-  try {
-    reread = await rereadWithRetries(
-      client,
-      { log: opts.log, target, what: "issue" },
-      () => getIssue(client, owner, repo, number),
-    );
-  } catch (err) {
-    throw unknown(err);
+  const outcome = await resolveUndeterminedRemoval(
+    client,
+    { owner, repo, number },
+    { triggerLabel: opts.triggerLabel, actor: opts.assignee, log: opts.log },
+    removalError,
+  );
+  switch (outcome.kind) {
+    case "present":
+      return {
+        claimed: false,
+        outcome: "retry",
+        reason: `trigger label ${opts.triggerLabel} removal failed and the label is still present`,
+      };
+    case "removed_by_other":
+      return {
+        claimed: false,
+        outcome: "lost",
+        reason: `trigger label ${opts.triggerLabel} was removed by another actor`,
+      };
+    case "removed_by_self":
+      return {
+        claimed: true,
+        assignee: outcome.issue.assignees.includes(opts.assignee)
+          ? "confirmed"
+          : "missing",
+      };
+    case "unknown": {
+      const detail =
+        removalError instanceof Error
+          ? removalError.message
+          : String(removalError);
+      throw new ClaimOwnershipUnknownError(
+        `claim ownership unknown for ${owner}/${repo}#${number}: ${detail}`,
+        {
+          cause: outcome.cause instanceof Error ? outcome.cause : removalError,
+        },
+      );
+    }
   }
-  if (hasLabel(reread.labels, opts.triggerLabel)) {
-    opts.log?.warn("claim deferred: trigger label is still present", {
-      target,
-    });
-    return {
-      claimed: false,
-      outcome: "retry",
-      reason: `trigger label ${opts.triggerLabel} removal failed and the label is still present`,
-    };
-  }
-
-  let actor: string | null;
-  try {
-    actor = await rereadWithRetries(
-      client,
-      { log: opts.log, target, what: "timeline" },
-      () => lastUnlabeledActor(client, owner, repo, number, opts.triggerLabel),
-    );
-  } catch (err) {
-    throw unknown(err);
-  }
-  if (actor === null) throw unknown(removalError);
-  if (actor.toLowerCase() !== opts.assignee.toLowerCase()) {
-    return {
-      claimed: false,
-      outcome: "lost",
-      reason: `trigger label ${opts.triggerLabel} was removed by another actor`,
-    };
-  }
-  return {
-    claimed: true,
-    assignee: reread.assignees.includes(opts.assignee)
-      ? "confirmed"
-      : "missing",
-  };
 }
 
 /**
