@@ -303,6 +303,7 @@ gitのpre-pushは全体の`check`を実行しない。
 3つのモジュールは何もimportしないので、`console/`と`scripts/`からも読める。
 定義を残してよいのは、import先が限られるファイルだけである。
 保護パスだけを読むファイル、`scripts/host_apply/`、`infra/console_fetcher/`が当たる。
+ホストで動く保護パス(`scripts/check-idle.ts`)も当たり、日常的に直す保護されない部品を新しく読まない。
 その一覧と理由は、`tests/scripts/shared_helpers.test.ts`が固定する。
 
 ### 固定と追加
