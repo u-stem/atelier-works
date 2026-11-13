@@ -342,7 +342,7 @@ describe("collectMarkdownTests", () => {
     ]);
   });
 
-  test("adds the tests that read every skill when a skill document changed", () => {
+  test("adds the test that reads every skill when a skill document changed", () => {
     expect(
       collectMarkdownTests(
         [".claude/skills/hold/SKILL.md"],
@@ -352,7 +352,7 @@ describe("collectMarkdownTests", () => {
     ).toEqual(["tests/scripts/claude-config.test.ts"]);
   });
 
-  test("adds the tests that read every skill when a skill document was deleted", () => {
+  test("adds the test that reads every skill when a skill document was deleted", () => {
     // 削除されたスキルの文書も、同じ一覧で渡される。
     expect(
       collectMarkdownTests(
@@ -384,7 +384,7 @@ describe("collectMarkdownTests", () => {
     ).toEqual(["tests/scripts/claude-config.test.ts"]);
   });
 
-  test("does not add the skill-reading tests for a document outside the skills", () => {
+  test("does not add the skill-reading test for a document outside the skills", () => {
     expect(
       collectMarkdownTests(["docs/setup.md"], grepFrom({}), allFiles),
     ).toEqual([]);

@@ -212,6 +212,12 @@ Windmillの資産の配置、secretとconfigの取得、`//native`を使わな�
   食い違いは、`test:db`を待たず、型検査か単体テストで見つかる。
 - 別のテーブルへ広げるときは、型の主張(`as`)を使わない同じ形で書く。
 
+### 適用済みのmigration
+
+適用済みのmigrationは書き換えず、変更は新しいmigrationで足す。
+書き換えは、新規環境と復元にだけ効き、本番とずれるためである。
+migrationの文面のテストを削ったので、`test:db`は振る舞いの変化しか拾わない。
+
 ## 検証コマンド
 
 `mise run check`は、`lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する。
