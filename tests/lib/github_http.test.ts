@@ -1713,11 +1713,13 @@ const GLOBAL_FETCH_THROUGH_OBJECT =
  * グローバルのオブジェクトの書き換えと、その別名を作る書き方。
  * `Object.defineProperty`、`Object.defineProperties`、`Reflect.set`、`Reflect.defineProperty`、`Object.assign`の
  * 第1引数がグローバルのオブジェクトである呼び出しと、グローバルのオブジェクトそのものを変数に入れる代入を見る。
- * 代入は、`=`の前が比較の記号でなく、グローバルのオブジェクトの後がプロパティの参照でないものだけを数える。
+ * 代入は、`=`の前が比較の記号でないものを数える。
+ * `??`、`||`、`:`、`=>`の直後に置いたグローバルのオブジェクトも、別名に渡りうるので数える。
+ * どちらも、グローバルのオブジェクトの後に、プロパティの参照、呼び出し、比較(`===`、`!==`など)が続くものは数えない。
  * 走査は仕掛け線で、名前を組み立てる書き方は見ない。
  */
 const GLOBAL_OBJECT_WRITE =
-  /\b(?:defineProperty|defineProperties|set|assign)\s*\(\s*(?:globalThis|global|self|window|Bun)\b|(?<![=!<>])=\s*(?:globalThis|global|self|window|Bun)\b(?!\s*[.[?(])/;
+  /\b(?:defineProperty|defineProperties|set|assign)\s*\(\s*(?:globalThis|global|self|window|Bun)\b|(?:(?<![=!<>])=|\?\?|\|\||:|=>)\s*(?:globalThis|global|self|window|Bun)\b(?!\s*(?:[.[?(]|[=!]=))/;
 
 /**
  * `github_http.ts`から値を読み込む書き方。import、再エクスポート(`export ... from`、`export * from`)、

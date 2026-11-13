@@ -421,7 +421,8 @@ URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文に
 - 本文は、上限の有無によらずreaderで読み、締め切りでは読み取りを取り消す。
   `fetch`の`signal`の実装に頼らずに、本文の途中で止まった応答を締め切りで打ち切るためである。
   上限を指定しない要求の本文は、16MiB(`GITHUB_RESPONSE_MAX_BYTES`)を超えた時点で読むのをやめる。
-  固定するテストは`sendGitHubRequest deadline on a stalled body`と`sendGitHubRequest memory cap`のテストである。
+  締め切りを固定するテストは、`signal`と結び付かない本文を使う`cuts a signal-blind body without a cap at the deadline`と`cuts a signal-blind body with a cap at the deadline`である。
+  上限を固定するテストは`sendGitHubRequest memory cap`のテストである。
 
 テストは、グローバルの`fetch`を差し替えて偽の応答を返す。
 本番のscriptには`fetch`の差し込み口が無い。

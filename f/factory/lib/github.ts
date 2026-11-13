@@ -1163,6 +1163,10 @@ async function fetchIssueObject(
     );
   }
   // 本文が切れた応答は、形の誤りではなく通信の失敗として、受け取ったステータスのまま投げる。
+  // `ensureSuccess`のようにステータス0にしないのは、呼び出し元が、応答は来たが読めなかったことを、
+  // 応答が無かったこと(ステータス0)と区別して知らせるためである。
+  // 上限を超えた本文(`tooLarge`)も同じに扱い、`ensureSuccess`のように`GitHubResponseError`にはしない。
+  // 呼び出し元はどちらも「確かめられなかった」として扱い、例外の種類で分けないためである。
   if (response.incomplete === true) {
     const detail =
       response.timedOut === true ? " (timed out)" : " (incomplete body)";
@@ -5071,7 +5075,8 @@ export class GitHubCiLogError extends Error {
  * `jobId`は正の安全な整数でなければ、API呼び出しの前に例外を投げる。
  * 本文は`CI_JOB_LOG_MAX_BYTES`で先頭と末尾を残して切り、切ったかは`truncated`で返す。
  * 本文は`VolatileCiLog`で包んで返す。ログは端末の制御列を含むので、制御列を含んだまま受け取る。
- * 締め切りはAPIと取得先を合わせて60秒で、取り直しはしない。CIの回の次の読み取りに任せる。
+ * 締め切りはAPIと取得先を合わせて60秒である。
+ * APIへの要求は、通信断と5xxのときだけ1回送り直す。取得先へは送り直さず、欠けたログはCIの回の次の読み取りに任せる。
  * APIの403は`forbidden`、404と410は`log_unavailable`で返す。
  * 本文が途中で切れたときは`GitHubRawBodyIncompleteError`を投げる。
  * それ以外の失敗は`GitHubCiLogError`を投げ、`ensureSuccess`は使わない(本文をエラーの文に写さないため)。

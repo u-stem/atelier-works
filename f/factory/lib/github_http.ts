@@ -870,7 +870,7 @@ async function fetchAttempt(
  * 送り先は`GITHUB_API_ORIGIN`に固定し、すべての`fetch`に`redirect: "manual"`を付ける。
  * GETは、既定で同じoriginへのリダイレクトを最大3回辿る(`redirect: "never"`で止める)。ほかのメソッドは辿らない。
  * 応答が無いときはステータス0(締め切りなら`timedOut`)、本文が途中で切れたときは`incomplete`を返す。
- * `allowEscapeSequences`を指定しない要求で、JSONでない本文がESCを含むときは、本文を空にして`incomplete`を返す。
+ * `allowEscapeSequences`を指定しない要求で、JSONでない本文がESCかCSI(U+009B)を含むときは、本文を空にして`incomplete`を返す。
  */
 export async function sendGitHubRequest(
   client: GitHubHttpClient,
