@@ -1537,6 +1537,17 @@ describe("parseDiffAddedLines", () => {
     expect(() => parseDiffAddedLines(diff)).toThrow(DiffFormatError);
   });
 
+  test("does not throw on the deletion of a file with a quoted name", () => {
+    const diff = [
+      '--- "a/f/factory/lib/\\001.ts"',
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-const a = 1;",
+    ].join("\n");
+
+    expect(() => parseDiffAddedLines(diff)).not.toThrow();
+  });
+
   test("throws a diff format error on a hunk header it cannot read", () => {
     const diff = [
       "--- a/f/factory/lib/a.ts",
@@ -2022,6 +2033,7 @@ describe("listChangedLines in a temporary repository", () => {
     write("f/factory/steps/s.ts", "s1\n");
     write("f/factory/lib/bin.ts", "b1\0\nb2\n");
     write("f/factory/lib/nonl.ts", "n1\nn2");
+    write("f/factory/lib/a b.ts", "s1\ns2\n");
     commit(repo);
     git(repo, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     write("f/factory/lib/a.ts", "a1\nchanged\na3\nadded\n");
@@ -2029,6 +2041,7 @@ describe("listChangedLines in a temporary repository", () => {
     write("f/factory/lib/new.ts", "n1\n");
     write("f/factory/lib/bin.ts", "b1\0\nchanged\n");
     write("f/factory/lib/nonl.ts", "n1\nchanged");
+    write("f/factory/lib/a b.ts", "s1\nchanged\n");
     bare = mkdtempSync(join(tmpdir(), "check-diff-coverage-bare-"));
     git(bare, ["init", "-q"]);
 
@@ -2058,6 +2071,12 @@ describe("listChangedLines in a temporary repository", () => {
     const result = listChangedLines(repo, DIFF_COVERAGE_PATHS, run);
 
     expect([...(result.lines.get("f/factory/lib/nonl.ts") ?? [])]).toEqual([2]);
+  });
+
+  test("reads the path of a file whose name has a space without the tab git appends", () => {
+    const result = listChangedLines(repo, DIFF_COVERAGE_PATHS, run);
+
+    expect([...(result.lines.get("f/factory/lib/a b.ts") ?? [])]).toEqual([2]);
   });
 
   test("takes the base from the tracking ref, not from a tag of the same name", () => {
