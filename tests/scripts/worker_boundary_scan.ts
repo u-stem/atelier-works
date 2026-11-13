@@ -295,21 +295,18 @@ const GLOBAL_LOOKUP =
   /\bglobalThis\b|\bgetBuiltinModule\b|\bprocess\s*\.\s*binding\b/g;
 // `import.meta`は`env`や`require`を持つ。
 const IMPORT_META = /(?<![.\w$])import\s*\.\s*meta(?![\w$])/;
-
 /**
- * CommonJSの`module`と`exports`の自由な参照。`module.require`でモジュールへ届く。
+ * CommonJSの`module`と`exports`の参照。`module.require`でモジュールへ届く。
  * `x.module`のようなメンバーは当てない。
- * 同じ名前を`const`、`let`、`var`で宣言したソースでは、その名前を当てない。
- * フローのステップを`module`という変数で回すコードがあるためである。
- * 宣言の有効範囲は見ないので、内側の範囲で宣言し、外側でCommonJSの`module`を使う形は見つけられない。
- * その形でも、`.require`のメンバー参照は`unfollowableImports`が止める。
+ * 宣言の有効範囲は見ないので、同じ名前の変数も当てる。
  */
+const COMMONJS_REFERENCE = /(?<![.\w$])(?:module|exports)(?![\w$])/g;
+
+/** `skeleton`に現れる、CommonJSの`module`と`exports`の名前。重複を除く。 */
 function commonjsReferences(skeleton: string): string[] {
-  return ["module", "exports"].filter(
-    (name) =>
-      new RegExp(`(?<![.\\w$])${name}(?![\\w$])`).test(skeleton) &&
-      !new RegExp(`\\b(?:const|let|var)\\s+${name}(?![\\w$])`).test(skeleton),
-  );
+  return [
+    ...new Set([...skeleton.matchAll(COMMONJS_REFERENCE)].map((m) => m[0])),
+  ];
 }
 
 /** ファイルにもサブプロセスにも届かない`Bun`のメンバー。 */

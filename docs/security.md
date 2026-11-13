@@ -1428,8 +1428,7 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
   `import.meta`は`require`を持ち、別名に入れて呼ぶと、importの一覧に現れずにモジュールへ届くためである。
   CommonJSの`module`と`exports`の参照も当たる。
   `module.require`でモジュールへ届くためである。
-  同じ名前を`const`、`let`、`var`で宣言したファイルでは、その名前を当てない。
-  宣言の有効範囲は見ないが、`.require`のメンバー参照は、たどれない形として止まる。
+  宣言の有効範囲は見ないので、同じ名前の変数も当たる。
 
 `node:module`、`node:worker_threads`、`node:vm`のimportも、迂回に使えるので数える。
 `f/`の下のTypeScriptが、`JobService.run*`でジョブを起動したり、tagの文字列を渡したりしていないことも、テストが確かめる。

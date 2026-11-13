@@ -60,7 +60,7 @@ Console用workerの境界の全体は、[セキュリティ](../../security.md#c
   `require`の参照(変数に入れる形、`.require`のメンバー参照も)、`import.meta`のすべて、`Worker`も禁じる。
   `import.meta`は`env`と`require`を持つためである。
   CommonJSの`module`と`exports`の参照も禁じる。
-  同じ名前を`const`、`let`、`var`で宣言したファイルでは、その名前を当てない。
+  宣言の有効範囲は見ないので、同じ名前の変数も禁じる。
 - ファイルとサブプロセスへの依存。
 
 読み取り専用であることは、たどれるファイルのテンプレートリテラルに、書き込みやスキーマ変更のSQLの語が無いことで確かめる。
