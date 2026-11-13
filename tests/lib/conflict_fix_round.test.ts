@@ -810,6 +810,38 @@ describe("checkConflictResolution test files where one side removes tests", () =
   });
 });
 
+describe("checkConflictResolution test counts outside the conflict blocks", () => {
+  const TEST_PATH = "tests/a.test.ts";
+  // ブロックの外にある、`test(`と`expect(`を1回ずつ呼ぶテスト。
+  const OUTSIDE = "test('s', () => { expect(0).toBe(0); });";
+  const OURS_TEST = "test('o', () => { expect(2).toBe(2); });";
+  const THEIRS_TEST = "test('t', () => { expect(3).toBe(3); });";
+
+  test("rejects dropping a test one side added in a block when both sides removed the same test outside it", () => {
+    const file = fileOf({
+      path: TEST_PATH,
+      base: `${OUTSIDE}\nx\nb\ny\n`,
+      ours: `x\n${OURS_TEST}\ny\n`,
+      theirs: `x\n${THEIRS_TEST}\ny\n`,
+      reconstructed: `x\n${block(OURS_TEST, "b", THEIRS_TEST)}\ny\n`,
+      result: `x\n${OURS_TEST}\ny\n`,
+    });
+    expect(codesOf(check([file]))).toEqual(["test_count_decreased"]);
+  });
+
+  test("accepts a resolution when both sides added the same test outside the block", () => {
+    const file = fileOf({
+      path: TEST_PATH,
+      base: "x\nb\ny\n",
+      ours: `${OUTSIDE}\nx\nB1\ny\n`,
+      theirs: `${OUTSIDE}\nx\nB2\ny\n`,
+      reconstructed: `${OUTSIDE}\nx\n${block("B1", "b", "B2")}\ny\n`,
+      result: `${OUTSIDE}\nx\nB1\ny\n`,
+    });
+    expect(check([file])).toEqual({ ok: true });
+  });
+});
+
 describe("conflictResolutionReasons", () => {
   test("formats a violation as a conflict round reason with the code and the path", () => {
     const verdict = check(

@@ -896,6 +896,20 @@ export function checkDiffCoverage(options: CheckDiffCoverageOptions): Verdict {
   });
 }
 
+export type CoverageRunResult = {
+  readonly exitCode: number;
+  readonly stdout: readonly string[];
+  readonly stderr: readonly string[];
+};
+
+export function runCoverageChecks(
+  _options: CheckCoverageOptions & {
+    readonly listChanged?: (root: string) => ChangedLines;
+  },
+): CoverageRunResult {
+  return { exitCode: -1, stdout: [], stderr: [] };
+}
+
 if (import.meta.main) {
   const root = resolve(import.meta.dir, "..");
   const result = checkCoverage({ root });

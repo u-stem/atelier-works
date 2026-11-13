@@ -38,6 +38,7 @@ import {
   NOT_LOADABLE_BY_BUN_TEST,
   NOT_LOADABLE_PATH,
   parseDiffAddedLines,
+  runCoverageChecks,
   selectTargets,
   summarizeLcov,
   type TargetListing,
@@ -1517,6 +1518,56 @@ describe("parseDiffAddedLines", () => {
 
     expect([...result.keys()]).toEqual(["f/factory/lib/a.ts"]);
   });
+
+  test("throws on a file header it does not know", () => {
+    const diff = ["--- a/f/factory/lib/a.ts", "+++ c/f/factory/lib/a.ts"].join(
+      "\n",
+    );
+
+    expect(() => parseDiffAddedLines(diff)).toThrow();
+  });
+
+  test("throws on a line in a hunk that is not an added, removed, or context line", () => {
+    const diff = [
+      "--- a/f/factory/lib/a.ts",
+      "+++ b/f/factory/lib/a.ts",
+      "@@ -1 +1 @@",
+      "?const a = 1;",
+    ].join("\n");
+
+    expect(() => parseDiffAddedLines(diff)).toThrow();
+  });
+
+  test("counts only the added lines of a hunk with context lines", () => {
+    const diff = [
+      "--- a/f/factory/lib/a.ts",
+      "+++ b/f/factory/lib/a.ts",
+      "@@ -1,2 +1,2 @@",
+      " const a = 1;",
+      "-const b = 2;",
+      "+const b = 3;",
+    ].join("\n");
+
+    const result = parseDiffAddedLines(diff);
+
+    expect([...(result.get("f/factory/lib/a.ts") ?? [])]).toEqual([2]);
+  });
+
+  test("skips the no-newline marker in a hunk", () => {
+    const diff = [
+      "--- a/f/factory/lib/a.ts",
+      "+++ b/f/factory/lib/a.ts",
+      "@@ -2 +2,2 @@",
+      "-a2",
+      "\\ No newline at end of file",
+      "+b2",
+      "+b3",
+    ].join("\n");
+
+    const result = parseDiffAddedLines(diff);
+
+    expect([...(result.get("f/factory/lib/a.ts") ?? [])]).toEqual([2, 3]);
+  });
 });
 
 describe("judgeDiffCoverage", () => {
@@ -1654,16 +1705,24 @@ describe("judgeDiffCoverage", () => {
     );
   });
 
-  test("fits in the tail the repair prompt keeps", () => {
+  /** 長い名前の40ファイルで、奇数の行を変えて実行しなかった、出力の長い入力。 */
+  function manyUnexecutedFiles(): {
+    readonly lcov: string;
+    readonly changed: ChangedLines;
+  } {
     const paths = Array.from(
       { length: 40 },
       (_, index) => `f/factory/lib/${"x".repeat(60)}${index}.ts`,
     );
     const odd = Array.from({ length: 200 }, (_, index) => index * 2 + 1);
-    const lcov = paths.map((path) => record(path, hitsOf(400, 0))).join("\n");
-    const changed = changedOf(
-      Object.fromEntries(paths.map((path) => [path, odd])),
-    );
+    return {
+      lcov: paths.map((path) => record(path, hitsOf(400, 0))).join("\n"),
+      changed: changedOf(Object.fromEntries(paths.map((path) => [path, odd]))),
+    };
+  }
+
+  test("fits in the tail the repair prompt keeps", () => {
+    const { lcov, changed } = manyUnexecutedFiles();
 
     const result = judgeDiffCoverage(lcov, changed);
 
@@ -1671,15 +1730,7 @@ describe("judgeDiffCoverage", () => {
   });
 
   test("keeps the reason when the rows are cut", () => {
-    const paths = Array.from(
-      { length: 40 },
-      (_, index) => `f/factory/lib/${"x".repeat(60)}${index}.ts`,
-    );
-    const odd = Array.from({ length: 200 }, (_, index) => index * 2 + 1);
-    const lcov = paths.map((path) => record(path, hitsOf(400, 0))).join("\n");
-    const changed = changedOf(
-      Object.fromEntries(paths.map((path) => [path, odd])),
-    );
+    const { lcov, changed } = manyUnexecutedFiles();
 
     const result = judgeDiffCoverage(lcov, changed);
 
@@ -1715,10 +1766,12 @@ describe("diffArgv", () => {
       "git",
       "diff",
       "-U0",
+      "--text",
       "--no-color",
       "--no-ext-diff",
       "--no-textconv",
       "--no-renames",
+      "--inter-hunk-context=0",
       "--src-prefix=a/",
       "--dst-prefix=b/",
       "0123abcd",
@@ -1774,12 +1827,102 @@ describe("checkDiffCoverage", () => {
 
     expect(result.message).not.toContain("fatal");
   });
+
+  test("tells how to fetch origin/main again on failure", () => {
+    const result = checkDiffCoverage({
+      root: "/unused",
+      lcovText: record(A, hitsOf(10, 10)),
+      listChanged: () => {
+        throw new Error("fatal: Not a valid object name origin/main");
+      },
+    });
+
+    expect(result.message).toContain("git fetch --unshallow origin main");
+  });
+});
+
+describe("runCoverageChecks", () => {
+  const A = "f/factory/lib/a.ts";
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "check-coverage-main-"));
+    mkdirSync(join(root, "coverage"), { recursive: true });
+    writeFileSync(
+      join(root, "coverage", "lcov.info"),
+      record(A, hitsOf(10, 5)),
+    );
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const total: Omit<CheckCoverageOptions, "root"> = {
+    listTracked: () => [],
+    listTargets: listing([A]),
+    layerFloors: [],
+  };
+
+  test("exits with 1 and writes the diff failure to stderr when only the diff check fails", () => {
+    const result = runCoverageChecks({
+      root,
+      ...total,
+      floorPercent: 0,
+      listChanged: () => changedOf({ [A]: [9, 10] }),
+    });
+
+    expect(result).toEqual({
+      exitCode: 1,
+      stdout: [expect.stringContaining("line coverage 50.00%")],
+      stderr: [expect.stringContaining("diff coverage check failed")],
+    });
+  });
+
+  test("does not list the changed lines when the total check fails", () => {
+    let listed = false;
+
+    const result = runCoverageChecks({
+      root,
+      ...total,
+      floorPercent: 90,
+      listChanged: () => {
+        listed = true;
+        return changedOf({});
+      },
+    });
+
+    expect({ exitCode: result.exitCode, listed }).toEqual({
+      exitCode: 1,
+      listed: false,
+    });
+  });
+
+  test("exits with 0 and writes both results to stdout when both checks pass", () => {
+    const result = runCoverageChecks({
+      root,
+      ...total,
+      floorPercent: 0,
+      listChanged: () => changedOf({ [A]: [1, 2] }),
+    });
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: [
+        expect.stringContaining("line coverage 50.00%"),
+        expect.stringContaining("diff line coverage of f/factory/lib: 100.00%"),
+      ],
+      stderr: [],
+    });
+  });
 });
 
 describe("listChangedLines in a temporary repository", () => {
   let repo = "";
   // origin/mainを持たないリポジトリ。
   let bare = "";
+  // `origin/main`という名前のタグが、追跡refと別のcommitを指すリポジトリ。
+  let tagged = "";
 
   // gitのフックの中で走ると、親のリポジトリを指す`GIT_*`が環境に残る。一時リポジトリには引き継がない。
   function git(cwd: string, args: readonly string[]): string {
@@ -1798,9 +1941,27 @@ describe("listChangedLines in a temporary repository", () => {
     return result.stdout.toString();
   }
 
+  function writeIn(dir: string, path: string, text: string): void {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  }
+
   function write(path: string, text: string): void {
-    mkdirSync(dirname(join(repo, path)), { recursive: true });
-    writeFileSync(join(repo, path), text);
+    writeIn(repo, path, text);
+  }
+
+  function commit(dir: string): void {
+    git(dir, ["add", "-A"]);
+    git(dir, [
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@example.invalid",
+      "commit",
+      "-q",
+      "-m",
+      "c",
+    ]);
   }
 
   const run = (argv: readonly string[], cwd: string): string =>
@@ -1811,28 +1972,50 @@ describe("listChangedLines in a temporary repository", () => {
     git(repo, ["init", "-q"]);
     write("f/factory/lib/a.ts", "a1\na2\na3\n");
     write("f/factory/steps/s.ts", "s1\n");
-    git(repo, ["add", "-A"]);
-    git(repo, [
-      "-c",
-      "user.name=t",
-      "-c",
-      "user.email=t@example.invalid",
-      "commit",
-      "-q",
-      "-m",
-      "base",
-    ]);
+    write("f/factory/lib/bin.ts", "b1\0\nb2\n");
+    write("f/factory/lib/nonl.ts", "n1\nn2");
+    commit(repo);
     git(repo, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     write("f/factory/lib/a.ts", "a1\nchanged\na3\nadded\n");
     write("f/factory/steps/s.ts", "s1\nchanged\n");
     write("f/factory/lib/new.ts", "n1\n");
+    write("f/factory/lib/bin.ts", "b1\0\nchanged\n");
+    write("f/factory/lib/nonl.ts", "n1\nchanged");
     bare = mkdtempSync(join(tmpdir(), "check-diff-coverage-bare-"));
     git(bare, ["init", "-q"]);
+
+    tagged = mkdtempSync(join(tmpdir(), "check-diff-coverage-tagged-"));
+    git(tagged, ["init", "-q"]);
+    writeIn(tagged, "f/factory/lib/a.ts", "a1\na2\n");
+    commit(tagged);
+    git(tagged, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    writeIn(tagged, "f/factory/lib/a.ts", "a1\nchanged\n");
+    commit(tagged);
+    git(tagged, ["tag", "origin/main", "HEAD"]);
   });
 
   afterAll(() => {
     if (repo !== "") rmSync(repo, { recursive: true, force: true });
     if (bare !== "") rmSync(bare, { recursive: true, force: true });
+    if (tagged !== "") rmSync(tagged, { recursive: true, force: true });
+  });
+
+  test("counts the changed lines of a file that git takes for binary", () => {
+    const result = listChangedLines(repo, DIFF_COVERAGE_PATHS, run);
+
+    expect([...(result.lines.get("f/factory/lib/bin.ts") ?? [])]).toEqual([2]);
+  });
+
+  test("counts the changed last line of a file without a final newline", () => {
+    const result = listChangedLines(repo, DIFF_COVERAGE_PATHS, run);
+
+    expect([...(result.lines.get("f/factory/lib/nonl.ts") ?? [])]).toEqual([2]);
+  });
+
+  test("takes the base from the tracking ref, not from a tag of the same name", () => {
+    const result = listChangedLines(tagged, DIFF_COVERAGE_PATHS, run);
+
+    expect([...(result.lines.get("f/factory/lib/a.ts") ?? [])]).toEqual([2]);
   });
 
   test("lists the lines changed in the working tree since origin/main", () => {
