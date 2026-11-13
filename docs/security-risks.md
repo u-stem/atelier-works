@@ -704,7 +704,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-fix-12"></a>R-FIX-12 | CIのログは、`gh`が署名付きURLへの302を内部でたどって取得する。認証情報が別のホストへ渡らないことは、`gh`の挙動に頼る。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い)、[ログの取得](internals/ci-fix.md#ログの取得)、[既知の限界](internals/ci-fix.md#既知の限界) |
 | <a id="r-fix-13"></a>R-FIX-13 | 拒否した安全装置が直接importするモジュールのうち、`db`、`discord`、`poll_support`、`implement_*`などの共有モジュールは、拒否せずに受け入れている。CI回のClaudeが、PRがすでに変更していればこれらを書き換えられる。受け入れた一覧と理由は、テストが固定する。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
 | <a id="r-fix-14"></a>R-FIX-14 | 受け入れた共有モジュールに`approver.ts`がある。31行で安定しており、承認の`approval_decide`が以前から同じ依存を持つ。CI回が変えても影響は操作者の名前に限られ、Consoleの解除は導けないときに拒否する。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
-| <a id="r-fix-15"></a>R-FIX-15 | ルートの`AGENTS.md`、`CLAUDE.md`、`AGENTS.wmill.md`、`.gitignore`と、安全装置以外の`*.script.yaml`は、拒否の一覧に無い。PRがすでに変更していれば、CI回のClaudeが書き換えられる。影響は、マージの後か、人の対話セッションで読まれたときに現れる。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
+| <a id="r-fix-15"></a>R-FIX-15 | ルートの`AGENTS.md`、`CLAUDE.md`、`AGENTS.wmill.md`と、安全装置以外の`*.script.yaml`は、拒否の一覧に無い。PRがすでに変更していれば、CI回のClaudeが書き換えられる。影響は、マージの後か、人の対話セッションで読まれたときに現れる。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
 | <a id="r-fix-16"></a>R-FIX-16 | `github.ts`は、CI回のClaudeが変更できない。Factory自身の修正PRのCIが`github.ts`の不具合で落ちても、CI回は直せずに人へ渡す。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い) |
 | <a id="r-fix-27"></a>R-FIX-27 | テストの行がPRの足した行かを行の位置で判定するとき、整形で1行が複数行に分かれると、分かれた行がPRの追加になる。この扱いは受け入れている。CIの自動修正の回の、削除された行の数え方も同じである。 | [CIのログの扱い](internals/pr-workflow/security.md#ciのログの扱い)、[検証のステップ](internals/ci-fix.md#検証のステップ) |
 

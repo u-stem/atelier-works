@@ -72,6 +72,7 @@ docs/internals/host-apply.md da9b3c29d1a57073 unverified 設定ファイルの�
 docs/internals/host-apply.md ab0fd3ebbb81dd16 unverified docker compose up --dry-runの出力のうち、Creati
 docs/internals/host-apply.md e48a5069c7b7c08c followup 掃除は使われていない旧版を次に成功した時点で消すので、ホストの実行役の巻き戻しと
 docs/internals/implement.md 82f4bc30786f3e5a pointer 工程3の実装フロー(f/factory/implement)の内部の挙動、設定値
+docs/internals/implement.md 3ffeaa4a9b52efb3 safe-side .gitignoreと.ignoreも保護パスなので、どのリポジトリでもこの2つ
 docs/internals/investigate.md c3646b95fd941508 pointer 調査(進め方investigate)のClaudeを隔離する仕組みと、調査の入口
 docs/internals/investigate.md 5bef721f0044ce62 mechanism 合格は、ツールを通るRead・Glob・Grepの読み出しが、3つの置き場で--
 docs/internals/investigate.md 215d8583d835c4e4 mechanism --toolsによるツールの制限。 Read、Glob、Grep以外を使えなくす

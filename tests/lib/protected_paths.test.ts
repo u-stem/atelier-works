@@ -539,6 +539,14 @@ describe("matchesImplementProtectedPath", () => {
     );
   });
 
+  test("matches the Biome configuration, which decides what the lint rejects", () => {
+    expect(matchesImplementProtectedPath("biome.json")).toBe(true);
+  });
+
+  test("matches a Biome configuration written as jsonc in a subdirectory", () => {
+    expect(matchesImplementProtectedPath("console/biome.jsonc")).toBe(true);
+  });
+
   test("does not match ordinary source files", () => {
     expect(matchesImplementProtectedPath("src/config.ts")).toBe(false);
   });
@@ -560,6 +568,80 @@ describe("matchesImplementProtectedPath", () => {
   test("leaves pr_fix's matching of package.json unchanged", () => {
     expect(matchesForbiddenPath("package.json")).toBe(false);
   });
+});
+
+describe("lint configuration and ignore files", () => {
+  test.each(["biome.json", "console/biome.jsonc"])(
+    "matchesForbiddenPath matches the Biome configuration %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(true);
+    },
+  );
+
+  test.each([".gitignore", "f/factory/.gitignore"])(
+    "matchesForbiddenPath matches the ignore file %s, which hides files from biome",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(true);
+    },
+  );
+
+  test.each([".gitignore", "f/factory/.gitignore"])(
+    "matchesImplementProtectedPath matches the ignore file %s",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(true);
+    },
+  );
+
+  test.each([".biome.json", "f/x/.biome.jsonc"])(
+    "matchesForbiddenPath matches the dotted Biome configuration %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(true);
+    },
+  );
+
+  test.each([".ignore", "console/src/.ignore"])(
+    "matchesForbiddenPath matches the ignore file %s, which biome also reads",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(true);
+    },
+  );
+
+  test.each([
+    ".biome.json",
+    "f/x/.biome.jsonc",
+    ".ignore",
+    "console/src/.ignore",
+  ])("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each([".biome.json.bak", "ignore", ".ignored"])(
+    "matchesForbiddenPath does not match the near miss %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(false);
+    },
+  );
+
+  test.each([".biome.json.bak", "ignore", ".ignored"])(
+    "matchesImplementProtectedPath does not match the near miss %s",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(false);
+    },
+  );
+
+  test.each(["gitignore.bak", ".gitignore-example", "docs/gitignore.md"])(
+    "matchesForbiddenPath does not match the near miss %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(false);
+    },
+  );
+
+  test.each(["gitignore.bak", ".gitignore-example", "docs/gitignore.md"])(
+    "matchesImplementProtectedPath does not match the near miss %s",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(false);
+    },
+  );
 });
 
 describe("isNewShellScript", () => {

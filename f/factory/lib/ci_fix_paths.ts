@@ -227,7 +227,7 @@ const CI_DENIED_PATH_PATTERNS: readonly RegExp[] = [/(?:^|\/)[^/]*__flow\//];
 /** CI回で常に拒否するファイル名(ディレクトリを問わない、小文字)。 */
 const CI_DENIED_BASENAME_PATTERNS: readonly RegExp[] = [
   /^tsconfig[\w.-]*\.json$/,
-  /^biome\.jsonc?$/,
+  /^\.?biome\.jsonc?$/,
   /^wmill(-lock)?\.yaml$/,
   /\.script\.lock$/,
   /\.(?:schedule|variable|resource|resource-type|trigger)\.yaml$/,

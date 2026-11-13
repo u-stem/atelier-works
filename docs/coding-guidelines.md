@@ -49,9 +49,7 @@ export function jstMidnightTodayIso(now: Date): string {
 
 - `tsconfig.json`は`strict: true`を必須とする。
 - 型アサーション`as`(`<T>expr`形式含む)は禁止する。
-  例外は次の2つに限る。
-  - `as const`
-  - 型ガード関数の内部での絞り込み
+  許すのは`as const`だけで、型ガード関数の内部でも使わない。
 - `any`は使わない(biomeの`noExplicitAny`で強制する)。
 - 外部から来た値(HTTPの応答、`JSON.parse`の結果、サブプロセスのstdoutなど)は、parse, don't validateの原則で扱う。
   型があると決め打ちしてアクセスせず、型ガード関数でパースしてから使う。
@@ -76,20 +74,23 @@ if (!isClaudeResult(parsed)) {
 // ここから先は`parsed`を`ClaudeResult`として扱える
 ```
 
-型ガード関数の内部で、オブジェクトの形を確かめるために絞り込むことは許す。
-ただし、その箇所も`lint-no-type-assertions`の検査の対象になる。
+型ガード関数の内部でも、オブジェクトの形は`as`を使わずに確かめる。
 判定は`typeof`、`in`、配列の確認などで組み立てる。
 
-`as`の検出(`scripts/lint-no-type-assertions.ts`)は、`console/`を含めて`.ts`と`.tsx`を検査する。
-完全な構文解析ではなくトークン単位で読むので、まれな入力では誤検知や見逃しが起こる。
-`.tsx`ではJSXを読み分けるが、コードをJSXと読み違えることがある。
+- 複数のフィールドを読むときは、`isRecord`(`f/factory/lib/types.ts`)で絞り込んでから読む。
+  Consoleでは、`console/src/api/guards/primitives.ts`の`isRecord`を使う。
+  絞り込んだ値のフィールドは`unknown`として読める。
+- 1つのフィールドを読むときは、`"name" in value`で確かめてから`value.name`を読んでもよい。
+- 型を広げるだけのときは、`as`ではなく型注釈を付けた変数に代入する(`const names: readonly string[] = allowed;`)。
 
-- 読み違える例は、型の位置の呼び出しシグネチャ`{ <T>(x: T): T }`と、キーワードと同じ綴りの変数を`<`で比べる`from < max`である。
-- 読み違えた要素はたいていファイルの終わりまで閉じない。
-  そのときは`UnclosedJsxError`として`file:line:column`を出し、エラーで止まる。
-  書き方を変えて避ける。
-- 後ろの文字列リテラルなどにある`</`(`"</a>"`)が、読み違えた要素を閉じることがある。
-  そのときは、間のコードが黙って検査から漏れる。
+`as`の検出は、Biomeの`noUnsafeTypeAssertion`の規則が行う。
+規則は`biome.json`で`error`にしてあり、`mise run lint`とpre-commitの`biome check`が止める。
+構文木で判定するので、`console/`を含む`.ts`と`.tsx`の、JSXの中の`as`も見る。
+この規則の抑制(`biome-ignore`の各形)は認めない。
+この規則はBiomeのnurseryの規則で、Biomeの版を上げると挙動が変わりうる。
+規則が`as`の各形を止めることと、抑制のコメントが無いことは、`tests/scripts/biome_type_assertion_rule.test.ts`が確かめる。
+同じテストが、追跡しているファイルが`biome.json`の`files.maxSize`に収まることも確かめる。
+上限を超えたファイルは、Biomeが検査しないためである。
 
 ## リモート追跡ref
 
@@ -103,7 +104,7 @@ if (!isClaudeResult(parsed)) {
 - `scripts/lint-no-short-remote-ref.ts`が、`f/factory/`のTypeScriptで先頭が`origin/`の文字列リテラルとテンプレートリテラルを検出する。
   コメントは見ない。
 
-この検出もトークン単位で読むので、まれな入力では誤検知や見逃しが起こる。
+この検出は構文解析をせずトークン単位で読む(`scripts/ts-tokenize.ts`)ので、まれな入力では誤検知や見逃しが起こる。
 文字列の連結、変数、テンプレートリテラルの中間部に書かれた`origin/`は検出できない。
 `@{upstream}`、`FETCH_HEAD`、`git rev-parse refs/heads/<x>`の読み取りは対象外である。
 例外を認める仕組みは設けていない。
@@ -131,7 +132,7 @@ superpowersが使えない環境では、同じ流れ(計画、実装、別のsu
    次のどれかに当たるときは、`/security-review`も通す。
    - 保護パス(`f/factory/lib/protected_paths.ts`の一覧に当たるファイル)を変えた
    - 新しい`*.sh`を足した
-   - 検査を緩めうる`scripts/lint-*.ts`か`scripts/check-*.ts`を変えた
+   - 検査を緩めうる`scripts/lint-*.ts`、`scripts/check-*.ts`、`biome.json`を変えた
    - `protected_paths.ts`の注記が「人のレビューで差分を確かめて止める」と書いた関数や定数を変えた。
      注記の一覧が正本である。
      `pr_fix_verify.ts`、`pr_fix_finish.ts`、`ci_fix_round.ts`、`ci_fix_classify.ts`、`pr_ci_fix_claim.ts`が当たる。
@@ -218,7 +219,7 @@ PRを出す前に必ず通す。
 gitのpre-pushは全体の`check`を実行しない。
 理由は[セットアップ](setup.md#gitのフック)にある。
 
-- `lint`はbiome、`wmill lint f`、型アサーションと`§`の検出を含む。
+- `lint`はbiome(型アサーションの検出を含む)、`wmill lint f`、`§`の検出を含む。
   `f/`の`.script.lock`の依存が、ルートの`bun.lock`と同じ版・同じintegrityであることも確かめる(`scripts/check-script-locks.ts`)。
   理由は[この文書の「依存の脆弱性」](#依存の脆弱性)にある。
 - `test`は`bun test --parallel`で、`console/`を除く。

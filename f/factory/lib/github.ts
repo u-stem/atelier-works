@@ -861,7 +861,7 @@ type LoginPayload = { readonly login: string };
 function isLoginPayload(value: unknown): value is LoginPayload {
   if (typeof value !== "object" || value === null) return false;
   if (!("login" in value)) return false;
-  return typeof (value as { login: unknown }).login === "string";
+  return typeof value.login === "string";
 }
 
 /**
@@ -887,9 +887,8 @@ function readStringField(value: unknown, field: string): string | null {
 type ViewerPayload = LoginPayload & { readonly id: number };
 
 function isViewerPayload(value: unknown): value is ViewerPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as { login: unknown; id: unknown };
-  return typeof record.login === "string" && typeof record.id === "number";
+  if (!isRecord(value)) return false;
+  return typeof value.login === "string" && typeof value.id === "number";
 }
 
 /** リポジトリの既定のブランチの名前を返す。 */
@@ -1109,7 +1108,7 @@ type NamedPayload = { readonly name: string };
 function isNamedPayload(value: unknown): value is NamedPayload {
   if (typeof value !== "object" || value === null) return false;
   if (!("name" in value)) return false;
-  return typeof (value as { name: unknown }).name === "string";
+  return typeof value.name === "string";
 }
 
 /**
@@ -1134,25 +1133,15 @@ type IssuePayload = {
 };
 
 function isIssuePayload(value: unknown): value is IssuePayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as {
-    number: unknown;
-    title: unknown;
-    body: unknown;
-    html_url: unknown;
-    state: unknown;
-    user: unknown;
-    labels: unknown;
-    assignees: unknown;
-  };
-  if (typeof record.number !== "number") return false;
-  if (typeof record.title !== "string") return false;
-  if (record.body !== null && typeof record.body !== "string") return false;
-  if (typeof record.html_url !== "string") return false;
-  if (typeof record.state !== "string") return false;
-  if (record.user !== null && !isLoginPayload(record.user)) return false;
-  if (!Array.isArray(record.labels)) return false;
-  if (!Array.isArray(record.assignees)) return false;
+  if (!isRecord(value)) return false;
+  if (typeof value.number !== "number") return false;
+  if (typeof value.title !== "string") return false;
+  if (value.body !== null && typeof value.body !== "string") return false;
+  if (typeof value.html_url !== "string") return false;
+  if (typeof value.state !== "string") return false;
+  if (value.user !== null && !isLoginPayload(value.user)) return false;
+  if (!Array.isArray(value.labels)) return false;
+  if (!Array.isArray(value.assignees)) return false;
   return true;
 }
 
@@ -1959,7 +1948,7 @@ type IdPayload = { readonly id: number };
 function isIdPayload(value: unknown): value is IdPayload {
   if (typeof value !== "object" || value === null) return false;
   if (!("id" in value)) return false;
-  return typeof (value as { id: unknown }).id === "number";
+  return typeof value.id === "number";
 }
 
 type CommentBodyPayload = {
@@ -1970,16 +1959,10 @@ type CommentBodyPayload = {
 };
 
 function isCommentBodyPayload(value: unknown): value is CommentBodyPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as {
-    id: unknown;
-    body: unknown;
-    user: unknown;
-    author_association: unknown;
-  };
-  if (typeof record.id !== "number") return false;
-  if (typeof record.body !== "string") return false;
-  return record.user === null || isLoginPayload(record.user);
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== "number") return false;
+  if (typeof value.body !== "string") return false;
+  return value.user === null || isLoginPayload(value.user);
 }
 
 async function findExistingMarkerComment(
@@ -2159,9 +2142,8 @@ export type EnsureLabelResult = { readonly created: boolean };
 type ValidationErrorBody = { readonly errors: readonly unknown[] };
 
 function isValidationErrorBody(value: unknown): value is ValidationErrorBody {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as { errors?: unknown };
-  return Array.isArray(record.errors);
+  if (!isRecord(value)) return false;
+  return Array.isArray(value.errors);
 }
 
 function hasAlreadyExistsCode(value: unknown): boolean {
@@ -2526,27 +2508,15 @@ type PrPayload = {
 };
 
 function isPrPayload(value: unknown): value is PrPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as {
-    number: unknown;
-    title: unknown;
-    body: unknown;
-    draft: unknown;
-    state: unknown;
-    merged: unknown;
-    head: unknown;
-    base: unknown;
-  };
-  if (typeof record.number !== "number") return false;
-  if (typeof record.title !== "string") return false;
-  if (record.body !== null && typeof record.body !== "string") return false;
-  if (typeof record.draft !== "boolean") return false;
-  if (record.state !== "open" && record.state !== "closed") return false;
-  if (typeof record.merged !== "boolean") return false;
-  if (typeof record.head !== "object" || record.head === null) return false;
-  if (typeof record.base !== "object" || record.base === null) return false;
-  const head = record.head as { sha: unknown; ref: unknown };
-  const base = record.base as { ref: unknown };
+  if (!isRecord(value)) return false;
+  if (typeof value.number !== "number") return false;
+  if (typeof value.title !== "string") return false;
+  if (value.body !== null && typeof value.body !== "string") return false;
+  if (typeof value.draft !== "boolean") return false;
+  if (value.state !== "open" && value.state !== "closed") return false;
+  if (typeof value.merged !== "boolean") return false;
+  const { head, base } = value;
+  if (!isRecord(head) || !isRecord(base)) return false;
   if (typeof head.sha !== "string") return false;
   if (typeof head.ref !== "string") return false;
   if (typeof base.ref !== "string") return false;
@@ -2860,20 +2830,13 @@ type PrFilePayload = {
 };
 
 function isPrFilePayload(value: unknown): value is PrFilePayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as {
-    filename: unknown;
-    status: unknown;
-    additions: unknown;
-    deletions: unknown;
-    changes: unknown;
-  };
+  if (!isRecord(value)) return false;
   return (
-    typeof record.filename === "string" &&
-    typeof record.status === "string" &&
-    typeof record.additions === "number" &&
-    typeof record.deletions === "number" &&
-    typeof record.changes === "number"
+    typeof value.filename === "string" &&
+    typeof value.status === "string" &&
+    typeof value.additions === "number" &&
+    typeof value.deletions === "number" &&
+    typeof value.changes === "number"
   );
 }
 
@@ -3512,12 +3475,11 @@ type PrReviewPayload = {
 };
 
 function isPrReviewPayload(value: unknown): value is PrReviewPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as { id: unknown; state: unknown; body: unknown };
+  if (!isRecord(value)) return false;
   return (
-    typeof record.id === "number" &&
-    typeof record.state === "string" &&
-    typeof record.body === "string"
+    typeof value.id === "number" &&
+    typeof value.state === "string" &&
+    typeof value.body === "string"
   );
 }
 
@@ -3594,12 +3556,11 @@ type PrReviewCommentPayload = {
 function isPrReviewCommentPayload(
   value: unknown,
 ): value is PrReviewCommentPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as { id: unknown; path: unknown; body: unknown };
+  if (!isRecord(value)) return false;
   return (
-    typeof record.id === "number" &&
-    typeof record.path === "string" &&
-    typeof record.body === "string"
+    typeof value.id === "number" &&
+    typeof value.path === "string" &&
+    typeof value.body === "string"
   );
 }
 
@@ -3826,9 +3787,8 @@ type BranchProtectionPayload = { readonly protected: boolean };
 function isBranchProtectionPayload(
   value: unknown,
 ): value is BranchProtectionPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as { protected: unknown };
-  return typeof record.protected === "boolean";
+  if (!isRecord(value)) return false;
+  return typeof value.protected === "boolean";
 }
 
 /**
@@ -3935,13 +3895,12 @@ type GraphqlErrorsPayload = {
  * (空の配列はエラーではない)。
  */
 function isGraphqlErrorsPayload(value: unknown): value is GraphqlErrorsPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const errors = (value as { errors: unknown }).errors;
+  if (!isRecord(value)) return false;
+  const errors = value.errors;
   if (!Array.isArray(errors) || errors.length === 0) return false;
-  return errors.every((item) => {
-    if (typeof item !== "object" || item === null) return false;
-    return typeof (item as { message: unknown }).message === "string";
-  });
+  return errors.every(
+    (item) => isRecord(item) && typeof item.message === "string",
+  );
 }
 
 /**
@@ -4075,10 +4034,9 @@ type ReviewThreadsPageInfo = {
 function isReviewThreadsPageInfo(
   value: unknown,
 ): value is ReviewThreadsPageInfo {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as { hasNextPage: unknown; endCursor: unknown };
-  if (typeof record.hasNextPage !== "boolean") return false;
-  return record.endCursor === null || typeof record.endCursor === "string";
+  if (!isRecord(value)) return false;
+  if (typeof value.hasNextPage !== "boolean") return false;
+  return value.endCursor === null || typeof value.endCursor === "string";
 }
 
 type ReviewThreadsGraphqlPayload = {
@@ -4095,17 +4053,13 @@ type ReviewThreadsGraphqlPayload = {
 function isReviewThreadsGraphqlPayload(
   value: unknown,
 ): value is ReviewThreadsGraphqlPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const repository = (value as { repository: unknown }).repository;
-  if (typeof repository !== "object" || repository === null) return false;
-  const pullRequest = (repository as { pullRequest: unknown }).pullRequest;
-  if (typeof pullRequest !== "object" || pullRequest === null) return false;
-  const reviewThreads = (pullRequest as { reviewThreads: unknown })
-    .reviewThreads;
-  if (typeof reviewThreads !== "object" || reviewThreads === null) {
-    return false;
-  }
-  const connection = reviewThreads as { nodes: unknown; pageInfo: unknown };
+  if (!isRecord(value)) return false;
+  const repository = value.repository;
+  if (!isRecord(repository)) return false;
+  const pullRequest = repository.pullRequest;
+  if (!isRecord(pullRequest)) return false;
+  const connection = pullRequest.reviewThreads;
+  if (!isRecord(connection)) return false;
   if (!Array.isArray(connection.nodes)) return false;
   return isReviewThreadsPageInfo(connection.pageInfo);
 }
@@ -4121,8 +4075,7 @@ type ReviewThreadCommentsConnectionPayload = {
 function isReviewThreadCommentsConnectionPayload(
   value: unknown,
 ): value is ReviewThreadCommentsConnectionPayload {
-  if (typeof value !== "object" || value === null) return false;
-  return Array.isArray((value as { nodes: unknown }).nodes);
+  return isRecord(value) && Array.isArray(value.nodes);
 }
 
 type ReviewThreadNodePayload = {
@@ -4139,27 +4092,18 @@ type ReviewThreadNodePayload = {
 function isReviewThreadNodePayload(
   value: unknown,
 ): value is ReviewThreadNodePayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as {
-    id: unknown;
-    isResolved: unknown;
-    path: unknown;
-    line: unknown;
-    firstComments: unknown;
-    lastComments: unknown;
-    allComments: unknown;
-  };
-  if (typeof record.id !== "string") return false;
-  if (typeof record.isResolved !== "boolean") return false;
-  if (typeof record.path !== "string") return false;
-  if (record.line !== null && typeof record.line !== "number") return false;
-  if (!isReviewThreadCommentsConnectionPayload(record.firstComments)) {
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== "string") return false;
+  if (typeof value.isResolved !== "boolean") return false;
+  if (typeof value.path !== "string") return false;
+  if (value.line !== null && typeof value.line !== "number") return false;
+  if (!isReviewThreadCommentsConnectionPayload(value.firstComments)) {
     return false;
   }
-  if (!isReviewThreadCommentsConnectionPayload(record.lastComments)) {
+  if (!isReviewThreadCommentsConnectionPayload(value.lastComments)) {
     return false;
   }
-  return isReviewThreadCommentsConnectionPayload(record.allComments);
+  return isReviewThreadCommentsConnectionPayload(value.allComments);
 }
 
 type ReviewThreadCommentPayload = {
@@ -4174,18 +4118,13 @@ type ReviewThreadCommentPayload = {
 function isReviewThreadCommentPayload(
   value: unknown,
 ): value is ReviewThreadCommentPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as {
-    author: unknown;
-    body: unknown;
-    databaseId: unknown;
-  };
-  if (record.author !== null && !isLoginPayload(record.author)) return false;
-  if (typeof record.body !== "string") return false;
+  if (!isRecord(value)) return false;
+  if (value.author !== null && !isLoginPayload(value.author)) return false;
+  if (typeof value.body !== "string") return false;
   if (
-    record.databaseId !== undefined &&
-    record.databaseId !== null &&
-    typeof record.databaseId !== "number"
+    value.databaseId !== undefined &&
+    value.databaseId !== null &&
+    typeof value.databaseId !== "number"
   ) {
     return false;
   }
@@ -4199,9 +4138,8 @@ type ReviewThreadDatabaseIdNodePayload = {
 function isReviewThreadDatabaseIdNodePayload(
   value: unknown,
 ): value is ReviewThreadDatabaseIdNodePayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as { databaseId: unknown };
-  return record.databaseId === null || typeof record.databaseId === "number";
+  if (!isRecord(value)) return false;
+  return value.databaseId === null || typeof value.databaseId === "number";
 }
 
 /** `listReviewThreads`が辿るページ数の上限(1ページ100件なので1000件まで)。 */
@@ -4459,11 +4397,8 @@ export type PullRequestRef = {
 type PrRefPayload = { readonly number: number; readonly html_url: string };
 
 function isPrRefPayload(value: unknown): value is PrRefPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as { number: unknown; html_url: unknown };
-  return (
-    typeof record.number === "number" && typeof record.html_url === "string"
-  );
+  if (!isRecord(value)) return false;
+  return typeof value.number === "number" && typeof value.html_url === "string";
 }
 
 export type CreatePullRequestOptions = {

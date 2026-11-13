@@ -494,7 +494,7 @@ type OkPayload = { readonly ok: boolean };
 function isOkPayload(value: unknown): value is OkPayload {
   if (typeof value !== "object" || value === null) return false;
   if (!("ok" in value)) return false;
-  return typeof (value as { ok: unknown }).ok === "boolean";
+  return typeof value.ok === "boolean";
 }
 
 function baseOptions(

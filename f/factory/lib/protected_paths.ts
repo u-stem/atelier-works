@@ -689,6 +689,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
  * pr_fixが保護するファイル名(ディレクトリを問わない)。
  * markdownlint-cli2とtextlintの設定も含める。どちらも設定から任意のモジュールを読み込めて、
  * pre-commitと`mise run check`が読むので、書き換えられるとコードを実行されるため。
+ * Biomeの設定(`biome.json`、`biome.jsonc`と、点で始まる別名)も含める。lintの規則を決め、書き換えると検査を緩めて通せるため。
+ * `.gitignore`と`.ignore`も含める。Biomeは無視されたファイルを、追跡済みでも検査しないため。
  * ホストの実行役が動かすmise、bun、nodeの設定も含める(`.tool-versions`、`.node-version`、`.bun-version`、
  * `.env`系)。ツールの版と環境変数を変えると、実行役が動かす道具の中身が変わる。
  * wmillの設定(`wmill.yaml`と別名の`wmill.yml`)もどのディレクトリでも含める。
@@ -714,6 +716,9 @@ export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.tool-versions$/,
   /^\.env(\..*)?$/,
   /^\.(node|bun)-version$/,
+  /^\.?biome\.jsonc?$/,
+  /^\.gitignore$/,
+  /^\.ignore$/,
 ];
 
 /**
