@@ -3,6 +3,7 @@
 // 失敗は例外にせず、分類に要る事実だけを持つ結果にする。応答の本文とエラーの文は、分類にだけ使って残さない。
 // 拒否された項目は、許可表の`type`と、問い合わせの文に現れる語だけの項目名に絞って残す。
 
+import { GitHubRequestError } from "./github_errors.ts";
 import {
   GITHUB_API_ORIGIN,
   type GitHubHttpResponse,
@@ -419,7 +420,10 @@ function failureFromStatus(response: GitHubHttpResponse): GraphqlFailure {
  * 送るのは通信層の`sendGitHubRequest`で、宛先は`GITHUB_GRAPHQL_URL`、リダイレクトは辿らず、`Authorization`ヘッダだけがトークンを持つ。
  * 再試行はしない。収集の側が、DBに書く待ちで代える。
  * `timeoutMs`(省略時は`GRAPHQL_REQUEST_TIMEOUT_MS`)を過ぎると打ち切る。
+ * 問い合わせは読み取りなので冪等とし(`idempotent: true`)、通信層が接続を使い回せるようにする。
  * 例外は投げない。失敗は`GraphqlFailure`で返し、トークン・応答の本文・エラーの文・例外の文を含めない。
+ * 要求を組み立てられない失敗(`GitHubRequestError`)も、例外にせず失敗で返す。
+ * トークンが送れる形でないときは、待っても直らない認証の失敗(ステータス401の`http`)にする。応答は無いが、収集の分類が`unauthorized`にする。
  * 拒否された項目(`rejected`)は、許可表の`type`と問い合わせの文に現れる語だけを持つ。
  * `errors`のある応答は、一部の`data`があっても失敗にする。
  * ただし`aliasErrors`を渡すと、すべてのエラーが送った別名の下にあり、`RATE_LIMITED`が無いときだけ、
@@ -435,16 +439,25 @@ export async function graphqlRequest(
   query: string,
   variables: Readonly<Record<string, unknown>>,
 ): Promise<GraphqlResponse> {
-  const response = await sendGitHubRequest(
-    { token: deps.token },
-    {
-      path: "graphql",
-      method: "POST",
-      body: { query, variables },
-      accept: "application/json",
-      timeoutMs: deps.timeoutMs ?? GRAPHQL_REQUEST_TIMEOUT_MS,
-    },
-  );
+  let response: GitHubHttpResponse;
+  try {
+    response = await sendGitHubRequest(
+      { token: deps.token },
+      {
+        path: "graphql",
+        method: "POST",
+        body: { query, variables },
+        accept: "application/json",
+        idempotent: true,
+        timeoutMs: deps.timeoutMs ?? GRAPHQL_REQUEST_TIMEOUT_MS,
+      },
+    );
+  } catch (err) {
+    if (!(err instanceof GitHubRequestError)) throw err;
+    return err.reason === "invalid_header"
+      ? failure("http", { status: 401 })
+      : failure("malformed");
+  }
   if (response.status === 0) {
     return failure(response.timedOut === true ? "timeout" : "network");
   }

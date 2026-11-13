@@ -805,7 +805,7 @@ function jsonBody(body: unknown): string {
 /**
  * `fetch`に渡す要求を組み立てる。組み立てられないときは`GitHubRequestError`を投げる。
  * ヘッダーは`Headers`で先に検査し、改行などを含む値(不正なトークン)を、送る前に断る。
- * 冪等でない要求には`keepalive: false`を付け、使い回した接続を使わない。
+ * 冪等でない要求には`keepalive: false`を付ける。Bunでは、使い回した接続を使わない(ローカルのBun 1.4.3で確かめた。workerのBunの版では未確認)。
  * 使い回した接続が切れていると、届いたか分からない失敗になり、冪等でない要求は送り直せないためである。
  */
 function buildInit(

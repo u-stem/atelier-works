@@ -137,7 +137,8 @@ export type GhApiCallOptions = {
  * GitHubのREST APIの`endpoint`を呼ぶ。送信、再試行、レート制限の待ちは、通信層の`requestGitHub`が行う。
  * `endpoint`は`api.github.com`からの相対パスでなければならず、先頭の`/`、絶対URL、`.`と`..`の区間、
  * RESTの検索APIなどは、送る前に例外で拒む(`assertGitHubApiPath`)。
- * メッセージにはendpointを載せない(クエリに値が入りうるため)。
+ * 例外の文に、クエリは載せない(値が入りうるため)。
+ * `GitHubWriteBodyCutError`の文は、クエリを落としたパスを載せうる。
  * レート制限の応答を受けたら、待ってから1回だけ再試行する。
  * 必要な待ちが`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えるときは待たずに、
  * 再試行も拒まれたときはその時点で、`GitHubRateLimitError`を投げる。
@@ -186,7 +187,11 @@ export async function callGhApi(
     response.status >= 200 &&
     response.status < 300
   ) {
-    throw new GitHubWriteBodyCutError(method, endpoint);
+    throw new GitHubWriteBodyCutError(
+      method,
+      endpoint,
+      response.tooLarge === true,
+    );
   }
   return response;
 }
@@ -227,13 +232,17 @@ export class GitHubResponseError extends Error {
  * 変更は効いた後で、応答の本文だけを失っている。
  * 待って再開すると二重に効くので、通信の一時的な失敗(ステータス0の`GitHubHttpError`)にはしない。
  * 効いたかを状態から確かめられる呼び出し側(`claimIssue`のラベルの削除)は、読み直して判断する。
+ * 本文が上限を超えて読むのをやめたとき(`tooLarge`)も、この例外にし、文で切れたことと分ける。
  * 文には、メソッドとクエリを落としたendpointだけを載せる。
  */
 export class GitHubWriteBodyCutError extends GitHubResponseError {
-  constructor(method: string, endpoint: string) {
+  constructor(method: string, endpoint: string, tooLarge: boolean) {
+    const what = tooLarge
+      ? "the body was too large to read"
+      : "the body was cut";
     super(
       maskSecrets(
-        `${method} ${endpoint.replace(/[?#].*$/s, "")}: the body was cut after a 2xx status, so the change may have taken effect`,
+        `${method} ${endpoint.replace(/[?#].*$/s, "")}: ${what} after a 2xx status, so the change may have taken effect`,
       ),
     );
     this.name = "GitHubWriteBodyCutError";
@@ -295,7 +304,7 @@ export class GitHubRawBodyIncompleteError extends Error {
  * JSONでない本文を読むGitHubのAPIの呼び出し。
  * 2xxの応答の本文が欠けた(`incomplete`)応答を、例外にする。
  * 取り直しは通信層の`requestGitHub`が行い、冪等な要求(GETか`idempotent`の指定)だけ、短く待ってから1回だけ取り直す。
- * 取り直しても欠けたとき、また冪等でない要求で欠けたときは、`GitHubRawBodyIncompleteError`を投げる。
+ * 取り直しても欠けたときは、`GitHubRawBodyIncompleteError`を投げる。冪等でない要求で欠けたときは、先に`callGhApi`が`GitHubWriteBodyCutError`を投げる。
  * 締め切り(`timedOut`)で欠けた本文は取り直さず、すぐ投げる。
  * JSONの応答はESCがエスケープされ、構文の検査が欠けを見つけるので、この関数は要らない。
  * 2xx以外の応答は、本文が欠けても、そのまま返す。呼び出し側がステータスで扱いを決める。
@@ -1347,7 +1356,7 @@ export type ClaimIssueResult =
 
 /**
  * `claimIssue`が、自分がラベルを外したかを判断できなかったときの例外。
- * ラベルの削除が応答の無い失敗(HTTP 0)かサーバーエラー(5xx)で終わったときに、
+ * ラベルの削除が、応答の無い失敗(HTTP 0)、サーバーエラー(5xx)、2xxの後で本文が欠けた失敗(`GitHubWriteBodyCutError`)のどれかで終わったときに、
  * Issueの読み直しを間隔を空けて繰り返しても、次のどれかになった場合に投げる。
  * - Issueを読み直せなかった。
  * - ラベルが外れていて、タイムラインを読めなかった。
@@ -1476,7 +1485,7 @@ async function lastUnlabeledActor(
  * 削除が404なら、ほかが先に外したので引く。
  * 削除が成功したら、取得後のIssueの読み取りが失敗しても、assigneeが付いていなくても、
  * 所有は変わらず取得できたとして返す。
- * 削除が応答の無い失敗かサーバーエラーで終わったときは、削除が実行されたかを
+ * 削除が、応答の無い失敗、サーバーエラー、2xxの後で本文が欠けた失敗のどれかで終わったときは、削除が実行されたかを
  * `resolveUndeterminedRemoval`で調べる。
  */
 export async function claimIssue(

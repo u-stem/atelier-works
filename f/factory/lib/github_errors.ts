@@ -72,6 +72,8 @@ function rateLimitDetail(
  * 文には理由の種類だけを載せ、トークンも本文も載せない。
  */
 export class GitHubRequestError extends Error {
+  /** 組み立てられなかった理由。`invalid_header`は、トークンが送れる形でないことを表す。 */
+  readonly reason: "body_not_json" | "invalid_header";
   constructor(reason: "body_not_json" | "invalid_header") {
     super(
       reason === "body_not_json"
@@ -79,6 +81,7 @@ export class GitHubRequestError extends Error {
         : "GitHub request could not be built: a header value is not allowed",
     );
     this.name = "GitHubRequestError";
+    this.reason = reason;
   }
 }
 

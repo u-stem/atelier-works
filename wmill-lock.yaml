@@ -109,10 +109,10 @@ locks:
   f/factory/lib/gh_collect_freshness: e11d78b4ac218db89fa283e36341ab679d5fcae1c5408969db959aa008b400dd
   f/factory/lib/gh_collect_read: 73c7075dc3f8dd186ea835bd9311d4719003170e374b065eee4b7f98ad7261b7
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
-  f/factory/lib/gh_graphql: 14389b4e2a47fc0c6e5f8642870091ee1f0507e3d7ad95d4965bbbbe9e665d3f
-  f/factory/lib/github: 2d03f48172a8750f3fe116a0a91ad4eb008a7704b99a8e4704b25550a71db5e7
-  f/factory/lib/github_errors: dc1085bd19c14b4b036e990cef87eb82c6a6686af6593aa4f0fce2f4a7a4d5f6
-  f/factory/lib/github_http: f86439aba105d75bd59df67b60990f00c03a609e9b4321e2ba71714a04a4bd17
+  f/factory/lib/gh_graphql: 5db774957fb829075ee5950a1cc351c2c08eecfd93a9fe0df082ae892dad165a
+  f/factory/lib/github: 411c98e49eb01e752737fff40ee81b8ab52dd43d4701766bae6c23e6dbf426e9
+  f/factory/lib/github_errors: 3a72995a7a9f940ea6d6e0ca94b76e9e37c2b64d5723e0e51385f9a3fd87d6ac
+  f/factory/lib/github_http: 2ac990f277298849f4ea51dda35a92e75d115fb65be24dcd3a82a3425f511454
   f/factory/lib/heartbeat: 0780343b32026cd007ea35b095340c0b7cb640fb2bab46eb8d213c0a5204673e
   f/factory/lib/holds: 2377c9840d17e626331e3450f97978bfa8fafa583d01b243a9073169aaad728c
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
