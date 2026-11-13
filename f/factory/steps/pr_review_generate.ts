@@ -124,7 +124,7 @@ export async function main(
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
 
   /**
    * Claudeを起動せずに作業項目を`reviewing`から`needs_human`へ遷移させ、遷移できたらDiscordへ通知する。

@@ -426,7 +426,7 @@ export async function main(
   // リポジトリのcloneと検査コマンドの前に、オーナーの数値IDを`owners`と照合する。
   // 要件定義の承認を待つ間に名前が別の人に渡っていても、他人のコードの上で動かさない。
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const ownerGuard = await verifyRepoOwnerId(
     config,
     workItem.owner,

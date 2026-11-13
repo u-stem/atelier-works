@@ -1,5 +1,6 @@
-// コマンドを実行するlibモジュール(`github.ts`、`workspace.ts`、`claude.ts`)の
+// コマンドを実行するlibモジュール(`workspace.ts`、`claude.ts`)と、GitHubのAPIを呼ぶ`github.ts`の
 // smallテストで共有するフェイク。テスト専用で、Windmillにはデプロイしない。
+// GitHubのAPIの偽の応答は、`gh api -i`の標準出力の形(ステータス行、ヘッダー、本文)で用意し、`fetch`の応答に写す。
 
 import { spyOn } from "bun:test";
 import type {
@@ -7,7 +8,10 @@ import type {
   CommandRunner,
   CommandRunOptions,
 } from "../../f/factory/lib/workspace.ts";
-import { GITHUB_FETCH_HANDLER_KEY } from "../preload.ts";
+import {
+  GITHUB_FETCH_EXHAUSTED_KEY,
+  GITHUB_FETCH_HANDLER_KEY,
+} from "../preload.ts";
 
 /** `fetch`で送ったGitHubのAPIへの要求。偽のrunnerが記録する。 */
 export type FakeRequest = {
@@ -19,7 +23,7 @@ export type FakeRequest = {
 };
 
 export type FakeCall = {
-  /** `fetch`で送った要求は`["fetch", <method>, <パスとクエリ>]`になる。`gh`は起動していない。 */
+  /** GitHubのAPIへの要求は`["fetch", <method>, <パスとクエリ>]`になる。 */
   readonly argv: readonly string[];
   readonly options: CommandRunOptions | undefined;
   /** `fetch`で送った要求のときだけ付く。 */
@@ -120,8 +124,9 @@ function responseFromGhOutput(result: CommandResult): Response {
  * 検証のため、各呼び出しのargvとoptionsを`calls`に記録する。
  * 用意した応答が尽きたあとに呼ばれると例外を投げる。
  *
- * GitHubのAPIへの`fetch`(GETの要求)も、同じ`responses`の列から順に答える。
- * `gh api -i`の出力の形の応答を`fetch`の応答に写すので、`gh`への要求と`fetch`への要求を1つの列に並べられる。
+ * GitHubのAPIへの`fetch`(読み取りと書き込みのすべて)も、同じ`responses`の列から順に答える。
+ * `gh api -i`の出力の形の応答を`fetch`の応答に写すので、gitなどのコマンドとGitHubのAPIへの要求を1つの列に並べられる。
+ * `fetch`の要求は、メソッド、URL、ヘッダー、本文を`calls`の`request`に記録する。
  * `fetch`を受けるのは、そのテストの中で最後に作った偽のrunnerである。テストが終わると外れる(`tests/preload.ts`)。
  */
 export function createFakeCommandRunner(
@@ -147,7 +152,16 @@ export function createFakeCommandRunner(
   const handleFetch: GitHubFetchHandler = async (url, init) => {
     const call = fetchCall(url, init);
     calls.push(call);
-    return responseFromGhOutput(next(call.argv.join(" ")));
+    const label = call.argv.join(" ");
+    // 応答が尽きた後の要求は、通信層が応答の無い失敗として飲み込むので、記録してテストの後で失敗にする。
+    if (index >= responses.length) {
+      Reflect.set(
+        globalThis,
+        GITHUB_FETCH_EXHAUSTED_KEY,
+        `createFakeCommandRunner: no canned response for call #${String(index + 1)} (${label})`,
+      );
+    }
+    return responseFromGhOutput(next(label));
   };
   setGitHubFetchHandler(handleFetch);
   return { run, calls };

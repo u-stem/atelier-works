@@ -896,7 +896,7 @@ async function run(
     wmill.getResource("f/factory/factory_config"),
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
 
   const request = await getApprovalRequest(approval_request_id);

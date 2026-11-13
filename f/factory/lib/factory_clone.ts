@@ -35,11 +35,7 @@ export function openFactoryClone(
       // cloneのロックを持ったまま呼ぶので、他の処理を長く塞がないよう、上限で区切る。
       // この上限(`withCallTimeout`の既定の30秒)は、self_updateと共用している。
       withCallTimeout("getRepositoryId factory_repo", () =>
-        getRepositoryId(
-          { run: options.run, ghToken: options.ghToken },
-          owner,
-          repo,
-        ),
+        getRepositoryId({ ghToken: options.ghToken }, owner, repo),
       ),
     addNotice:
       deps.addNotice ??

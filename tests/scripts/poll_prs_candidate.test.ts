@@ -114,7 +114,7 @@ function world(w: World) {
     }
     return ok(ghApiStdout(404, { message: "Not Found" }));
   };
-  // GETは`gh`を起動せず`fetch`で送るので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+  // GitHubのAPIへの要求は`gh`を起動せず`fetch`で送るので、その`fetch`に同じ`run`で答える。
   serveGitHubFetchWith(run);
   return { run, eventCalls: () => eventCalls };
 }
@@ -122,7 +122,7 @@ function world(w: World) {
 async function build(w: World) {
   const fake = world(w);
   const context = await buildPrCandidate(
-    { run: fake.run, ghToken: "tok" },
+    { ghToken: "tok" },
     FOUND,
     "octo-owner",
     [],
@@ -397,10 +397,10 @@ describe("buildPrCandidate with dependabot work items", () => {
   };
 
   async function buildWithDependabot() {
-    const fake = world({ labels: [], events: labelEventsOk([]) });
+    world({ labels: [], events: labelEventsOk([]) });
     return (
       await buildPrCandidate(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         FOUND,
         "octo-owner",
         [DEPENDABOT_ROW],
@@ -480,7 +480,7 @@ describe("pr_review and pr_fix decisions with a row created by poll_dependabot",
     readonly labels: readonly string[];
     readonly author?: string;
   }) {
-    const fake = world({
+    world({
       labels: options.labels,
       ...(options.author === undefined ? {} : { author: options.author }),
       headRepo: "octo-owner/atelier-works",
@@ -491,7 +491,7 @@ describe("pr_review and pr_fix decisions with a row created by poll_dependabot",
     });
     const row = options.row;
     const context = await buildPrCandidate(
-      { run: fake.run, ghToken: "tok" },
+      { ghToken: "tok" },
       FOUND,
       "octo-owner",
       row !== null && row.status === "picked" ? [row] : [],
@@ -588,10 +588,10 @@ describe("buildPrCandidate with active pr_fix work items", () => {
   };
 
   async function buildWith(active: readonly WorkItem[]) {
-    const fake = world({ labels: [], events: labelEventsOk([]) });
+    world({ labels: [], events: labelEventsOk([]) });
     return (
       await buildPrCandidate(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         FOUND,
         "octo-owner",
         active,
@@ -641,7 +641,7 @@ describe("buildPrCandidate for a candidate that came from the table", () => {
     };
     serveGitHubFetchWith(run);
     await buildPrCandidate(
-      { run, ghToken: "tok" },
+      { ghToken: "tok" },
       FOUND,
       "octo-owner",
       [],
@@ -715,7 +715,7 @@ describe("buildPrCandidate with a review held at the design stage", () => {
     readonly branchStatus: WorkItem["status"] | null;
     readonly held: boolean;
   }) {
-    const fake = world({
+    world({
       labels: [],
       headRepo: "octo-owner/atelier-works",
       baseRepo: "octo-owner/atelier-works",
@@ -736,7 +736,7 @@ describe("buildPrCandidate with a review held at the design stage", () => {
       },
     };
     const context = await buildPrCandidate(
-      { run: fake.run, ghToken: "tok" },
+      { ghToken: "tok" },
       FOUND,
       "octo-owner",
       [],
@@ -877,14 +877,14 @@ describe("buildPrCandidate with a review row written under another spelling", ()
   };
 
   async function build() {
-    const fake = world({
+    world({
       labels: [],
       headRepo: "octo-owner/atelier-works",
       baseRepo: "octo-owner/atelier-works",
       events: labelEventsOk([]),
     });
     return buildPrCandidate(
-      { run: fake.run, ghToken: "tok" },
+      { ghToken: "tok" },
       SEARCHED,
       "octo-owner",
       [],

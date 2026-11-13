@@ -30,7 +30,7 @@ async function hasActiveWorkItem(
   found: IssueSearchItem,
   activeKeys: ReadonlySet<string>,
 ): Promise<boolean | undefined> {
-  const fake = createFakeCommandRunner([
+  createFakeCommandRunner([
     labelEventsOk([
       labelEventNode(
         "labeled",
@@ -41,7 +41,7 @@ async function hasActiveWorkItem(
     ]),
   ]);
   const candidates = await buildIssueCandidates(
-    { run: fake.run, ghToken: "tok" },
+    { ghToken: "tok" },
     [found],
     activeKeys,
     "factory",

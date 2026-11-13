@@ -1190,7 +1190,7 @@ artifactはPRの作者が完全に決められるので、安全は内容の制�
 ### パッチの取得
 
 zipは、通信層(`lib/github_http.ts`)の`downloadRedirectTarget`で、バイト列のまま取得する。
-`gh api`の出力は文字列に復号されるので、バイナリのzipが壊れるためである。
+本文を文字列に復号すると、バイナリのzipが壊れるためである。
 トークンはGitHubのAPIへの最初の要求にだけ載せ、リダイレクトはたどらない。
 返った302の`Location`が、`https`のAzureのblob storageでなければ断る。
 次の要求にはトークンを付けず、リダイレクトをたどらない。

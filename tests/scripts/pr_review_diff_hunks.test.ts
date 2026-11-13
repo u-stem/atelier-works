@@ -560,7 +560,7 @@ describe("publishing findings when some point outside the diff", () => {
     let error: unknown = null;
     try {
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         {
           target: TARGET,
           prAuthorLogin: "alice",
@@ -586,7 +586,7 @@ describe("publishing findings when some point outside the diff", () => {
         (c) =>
           c.argv.includes("POST") && c.argv[2]?.endsWith("/reviews") === true,
       )
-      .map((c) => JSON.parse(c.options?.stdin ?? "{}"));
+      .map((c) => JSON.parse(c.request?.body ?? "{}"));
     return { posts, error };
   }
 

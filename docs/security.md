@@ -329,6 +329,8 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 scriptは`wmill.getVariable()`で値を取得する。
 渡し方は、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)か、HTTPの要求の`Authorization`ヘッダーだけである。
 HTTPの要求にGitHubのトークンを載せるのは`lib/github_http.ts`だけで、`Authorization`ヘッダーにだけ載せる。
+GitHubのトークンを子プロセスの環境変数`GH_TOKEN`で渡すのは、gitの通信のcredential helper(`gh auth git-credential`)だけである。
+GitHubのAPIへの要求は、読み取りと書き込みのどちらでも、子プロセスを起動しない。
 例外は無い。
 URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
 親プロセスが`fetch`で使う秘密値は、次の3か所である。
@@ -338,9 +340,8 @@ URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文に
   宛先は`https://api.github.com`に固定する。
   決まりは[GitHubのAPIへの通信層](#githubのapiへの通信層)に書く。
   この層を使うのは次のものである。
-  - `lib/github.ts`の`callGhApi`のGET(`callGhApiRawBody`と`paginateGhApi`を含む)。
-    defaultのworkerの読み取りは、すべてこの層で送る。
-    書き込みは、まだ`gh`の子プロセスで送る。
+  - `lib/github.ts`の`callGhApi`(`callGhApiRawBody`と`paginateGhApi`を含む)。
+    defaultのworkerの読み取りと書き込み(POST、PATCH、PUT、DELETE、GraphQLのmutation)を、すべてこの層で送る。
   - Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、この層で`github_token`を使う。
     使うのは、取り消された作業項目を再開するときの対象の状態の確認と、Issueの要件定義を作り直す再実行のときの取り込み内容の更新(現在のIssueの題名と本文の取得)である。
     リダイレクトは辿らない。
@@ -405,6 +406,11 @@ URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文に
   固定するテストは`the files that refer to the global fetch are the listed ones`と`only the listed files import values from github_http.ts`である。
 - SDKを許可表に絞ったConsoleの10本のscriptは、この層に届かない。
   固定するテストは、`tests/scripts/console_worker_boundary.test.ts`の`does not reach the GitHub HTTP layer`である。
+- GitHubのAPIを呼ぶ`lib/github.ts`は、子プロセスを起動せず、ファイルと子プロセスの道具のモジュールに届かない。
+  `approval_decide`と`retry_work_item`がGitHubを呼んでも、この経路では道具に届かない。
+  固定するテストは、同じファイルの`github.ts, which both scripts call GitHub through, reaches no file or process tool`である。
+  2つのscriptは、別のモジュールを通して道具に届く。
+  `approval_decide`は`lib/implement_support.ts`から`lib/workspace.ts`に届き、`retry_work_item`は`lib/ci_fix_round.ts`などに届く。
 - 署名付きURLの取得(`downloadRedirectTarget`)は、APIの応答の`Location`だけを取得先にし、呼ぶ側からURLを受け取らない。
   取得先の表は用途(artifactとジョブのログ)ごとの定数で、引数では広げられない。
   認めるのは、`https`で、利用者名、パスワード、ポートを含まず、ホストが`.blob.core.windows.net`で終わるURLだけである。
@@ -432,8 +438,9 @@ URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文に
 名前を組み立てた置き換えなど走査が見ない書き方と、一覧に載ったファイルが置き換えを足す変更は、人のレビューに頼る。
 残るリスクは[R-GHC-06](security-risks.md#r-ghc-06)に書く。
 
-GETの`fetch`は、workerのジョブのプロセスの中で動く。
-`gh`の子プロセスは`GH_TOKEN`、`HOME`、`PATH`、`TMPDIR`だけの閉じた環境で動いたが、APIのGETの通信は、この閉じた環境の外にある。
+APIの`fetch`は、GETと書き込みのどちらでも、workerのジョブのプロセスの中で動く。
+gitの子プロセスは、`GH_TOKEN`、`HOME`、`PATH`などを明示して作る閉じた環境で動くが、APIの通信はこの閉じた環境の外にある。
+書き込みの要求も、トークンを載せたままジョブの環境の影響を受ける。
 次の環境変数は、ジョブの環境から`fetch`に効きうる。
 
 - プロキシ(`HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`)。
@@ -442,24 +449,41 @@ GETの`fetch`は、workerのジョブのプロセスの中で動く。
   証明書の検査が外れうる。
 - `BUN_CONFIG_VERBOSE_FETCH`。
   要求と応答がログに出る。
-  `Authorization`は伏せられるが、署名付きURLと`Location`は全文が出る。
+  値によっては(curlの形で出す値)、`Authorization`を含む要求の全体と、本文(PRの本文、コメント、ファイルの内容)がログに出る。
+  署名付きURLと`Location`も全文が出る。
 
 Windmillのジョブに届く環境変数は`WHITELIST_ENVS`に挙げた名前だけだと見ているが、ジョブの中では確かめていない。
 `infra/docker-compose.yml`のworkerの`environment`と`WHITELIST_ENVS`のどちらにも、これらの名前は無い。
+`BUN_CONFIG_VERBOSE_FETCH`がジョブの環境に現れたら、トークンがログに出たものとして扱い、トークンを替える。
 残るリスクと見直しのきっかけは[R-GHC-07](security-risks.md#r-ghc-07)に書く。
 
+一次の制限と二次の制限の判定、待ち、通信の再試行の実装は、この層の1か所だけにある。
 通信の再試行は、この層の`runGitHubRequest`と、その中の一時的な失敗の再試行(`sendWithTransientRetry`)だけが行う。
-`gh`を起動する送り方(`lib/github.ts`の`callGhApi`の書き込み)も、再試行とレート制限の待ちをこの関数に任せる。
+どちらもエクスポートせず、外から送り方を差し込めない。
 署名付きURLの取得では、APIへの要求だけが、通信断と5xxで1回だけ送り直す。
 取得先への要求は送り直さず、APIのレート制限も待たない。
 再試行するのは、冪等な要求の通信断と5xxと、本文が途中で切れた2xxの応答である。
 どれも1回だけ送り直す。
 本文の切れた5xxは、5xxとしてだけ数え、通信層全体で2回までしか送らない。
-締め切りで打ち切った要求は送り直さず、締め切りで本文が切れた応答も取り直さない(`gh`の経路も同じ)。
+締め切りで打ち切った要求は送り直さず、締め切りで本文が切れた応答も取り直さない。
 制限の判定の確かさが低い応答では、待って送り直すのは冪等な要求だけである。
 確かさが低いのは、本文の`rate limit`の語だけで判定した403か429と、ほかの行に当たらない429である。
-送れなかった(`gh`を起動できなかった)要求は、冪等でなくても送り直す。
+`fetch`の通信の失敗は、要求が届く前か後かを見分けられない。
+そのため、冪等でない要求(書き込みとGraphQLのmutation)は、要求を送る前の失敗でも送り直さない。
+冪等でない要求には`keepalive: false`を付ける。
+Bunは、この指定があると、使い回した接続を使わない。
+切れた接続を使い回して、届いたか分からない失敗になるのを減らすためである。
+ローカルのBun 1.4.3で確かめたが、workerのBunの版では確かめていない。
+反映した後の最初の書き込みのジョブで確かめる。
+冪等でない要求で2xxの後に本文が切れたときは、変更が効いた後で本文だけを失ったものとして、一時的でない`GitHubWriteBodyCutError`にする。
+本文をJSONにできない要求と、ヘッダーの値(トークン)が改行などを含む要求は、送らずに`GitHubRequestError`で失敗させる。
+どちらの文にも、トークンと本文を載せない。
+冪等でない書き込み1件の最悪の時間は、約240秒である。
+内訳は、締め切りの60秒、レート制限の待ちの最大120秒、送り直した要求の締め切りの60秒である。
 `lib/github.ts`の`rereadWithRetries`は、ラベルを外した後の整合を待つ業務の層の繰り返しで、通信の再試行ではないので対象に含めない。
+
+GET以外の要求には`Time-Zone: UTC`を付ける。
+値が無いとGitHubはアカウントが最後にブラウザで使った時間帯を使うので、運用者の操作でcommitの日時の時差が変わらないようにするためである。
 
 ### ホストでの保持
 
@@ -720,11 +744,14 @@ PRは除くが、ページは消費する。
 失敗は、スケジュールの失敗を拾う検出器(`detect_schedule_failures`)が`job_failures`に記録し、Discordに`job_failed`として通知する。
 直近3回の実行が続けて失敗すると、要対応の通知`schedule_failing`も残る。
 
-GitHubの認証は、次の3つだけで行う。
+GitHubの認証は、次の2つだけで行う。
 
-- APIのGETとartifact、ジョブのログの取得は、通信層(`lib/github_http.ts`)が`Authorization`ヘッダーに載せる。
-- APIの書き込みは、`gh`の子プロセスの環境変数`GH_TOKEN`で渡す。
+- APIの読み取りと書き込み、artifactとジョブのログの取得は、通信層(`lib/github_http.ts`)が`Authorization`ヘッダーに載せる。
 - gitの通信は、gitのcredential helperとしての`gh auth git-credential`で渡す。
+  `gh`の子プロセスには、環境変数`GH_TOKEN`で渡す。
+
+workerの`gh`のバイナリは、このcredential helperのために残す。
+APIの要求のために`gh`を起動することは無い。
 
 `gh auth login`の対話ログインと、トークンを埋め込んだclone URLは使わない。
 
@@ -912,7 +939,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
     時刻の比較は、DBの時計だけで行う。
   - [R-DLV-03](security-risks.md#r-dlv-03)の残るリスクは、次の3つである。
     GitHubの一覧の反映が遅れると、目印の探索が作成済みのIssueを見つけられず、Issueが二重になりうる。
-    `gh`がタイムアウトすると、予約が10分残る。
+    `createIssue`の要求が締め切りを過ぎると、予約が10分残る。
     その間の同じキーの再送は、`intake_key_in_flight`で失敗して通知に出る。
     取り直した試行の目印の探索が、タイムアウトやレート制限、一覧の件数の上限で失敗すると、予約の時刻だけが先へ進む。
     探索の窓は予約の時刻から始まるので、次の取り直しは最初の試行が作ったIssueを見つけられず、Issueが二重になりうる。

@@ -47,7 +47,6 @@ import {
   verifyRepoOwnerId,
 } from "../lib/repo_owner_gate.ts";
 import { isGitHubName } from "../lib/types.ts";
-import { runCommand } from "../lib/workspace.ts";
 import {
   evaluateSameRepoHeadGuard,
   extractLinkedIssueNumbers,
@@ -264,7 +263,7 @@ export async function main(
 
   const log = logger("pr_review_intake_register");
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const viewer = await getViewer(client);
 
   const result = await registerPrReviewIntake(

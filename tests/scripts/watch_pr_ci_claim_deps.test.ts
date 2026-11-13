@@ -26,12 +26,6 @@ const RAW_CONFIG = {
 };
 
 const CLIENT: GhClient = {
-  run: async () => ({
-    exitCode: 0,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-  }),
   ghToken: "token",
 };
 

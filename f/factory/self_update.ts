@@ -763,7 +763,7 @@ export const GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT = 8;
  *   noticeの挿入、通知先の取得: 4 + `HOST_ACTION_RECONCILE_LIMIT`
  * - 止まった作業項目の再開の候補の確認(候補の一覧と要件の承認の読み)と起動: 2
  * - `factory_repo_id`の照合: リポジトリIDの取得、失敗の記録、noticeの挿入: 3
- *   (`gh api`の子プロセスは`DEFAULT_TIMEOUT_MS`が上限だが、ここで先に区切る)
+ *   (通信層の締め切りは60秒だが、ここで先に区切る)
  * - 保護パスの変更の承認: 依頼の読み取り、依頼の作成、古い通知の解決、noticeの挿入、通知先の取得、
  *   反映の後の通知の解決: 6
  * - finally(収集の鮮度の確認): `GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT`
@@ -1135,7 +1135,7 @@ async function updateSelf(
       {
         getRepositoryId: (owner, repo) =>
           withCallTimeout("getRepositoryId factory_repo", () =>
-            getRepositoryId({ ghToken, run: runCommand }, owner, repo),
+            getRepositoryId({ ghToken }, owner, repo),
           ),
         addNotice: (record) =>
           withCallTimeout("addNotice factory_repo_id", () =>

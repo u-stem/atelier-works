@@ -19,7 +19,6 @@ import {
   manualIntakeSkippedResult,
   registerManualIntakeWorkItem,
 } from "../../f/factory/steps/manual_intake_register.ts";
-import { ok } from "../lib/testSupport.ts";
 
 type Notice = { kind: string; message: string };
 
@@ -53,7 +52,7 @@ function recordingLog(): { log: Logger; warns: string[] } {
 function run(deps: ManualIntakeClaimDeps, log: Logger) {
   return claimManualIntakeIssue(
     {
-      client: { run: async () => ok(), ghToken: "tok" },
+      client: { ghToken: "tok" },
       owner: "octo-owner",
       repo: "atelier-works",
       issueNumber: 12,

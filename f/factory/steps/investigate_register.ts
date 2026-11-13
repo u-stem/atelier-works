@@ -40,7 +40,6 @@ import {
   verifyRepoOwnerId,
 } from "../lib/repo_owner_gate.ts";
 import { isGitHubName } from "../lib/types.ts";
-import { runCommand } from "../lib/workspace.ts";
 
 /** 断る理由。入力の文字列は含めない。 */
 export const INVESTIGATE_REGISTER_REFUSAL_REASONS = [
@@ -249,7 +248,7 @@ export async function main(
   const client = (): Promise<GhClient> => {
     clientPromise ??= wmill
       .getVariable("f/factory/github_token")
-      .then((ghToken) => ({ run: runCommand, ghToken }));
+      .then((ghToken) => ({ ghToken }));
     return clientPromise;
   };
   const workspace = wmillDefault.getWorkspace();

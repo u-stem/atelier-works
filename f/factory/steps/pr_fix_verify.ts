@@ -756,7 +756,7 @@ export async function main(
   const loadPrChangedPaths = (): Promise<string[]> => {
     prChangedPathsRead ??= (async () => {
       const ghToken = await wmill.getVariable("f/factory/github_token");
-      const client: GhClient = { run: runCommand, ghToken };
+      const client: GhClient = { ghToken };
       return (await getPrFiles(client, owner, repo, pr_number)).map(
         (file) => file.filename,
       );
@@ -770,7 +770,7 @@ export async function main(
   const resolvePrBaseOnce = (): Promise<PrBase | null> => {
     prBaseResolved ??= (async () => {
       const ghToken = await wmill.getVariable("f/factory/github_token");
-      const client: GhClient = { run: runCommand, ghToken };
+      const client: GhClient = { ghToken };
       return await resolvePrMergeBase(
         githubPrMergeBaseIo({
           client,
@@ -808,7 +808,7 @@ export async function main(
   const rehashPlannerOnce = () => {
     rehashPlannerBuilt ??= (async () => {
       const ghToken = await wmill.getVariable("f/factory/github_token");
-      const client: GhClient = { run: runCommand, ghToken };
+      const client: GhClient = { ghToken };
       const headSha = requireCiRoundHeadSha(head_sha);
       return {
         planner: githubRehashPlanner({
@@ -1048,7 +1048,7 @@ export async function main(
         const oauthToken = await wmill.getVariable(
           "f/factory/claude_oauth_token",
         );
-        const client: GhClient = { run: runCommand, ghToken };
+        const client: GhClient = { ghToken };
         if (ciRound) {
           return ciRetryResult(
             await runCiRetry({

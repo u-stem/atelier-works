@@ -2009,7 +2009,7 @@ describe("posting a review once per sha", () => {
   }
 
   function isResolveCall(call: FakeCall): boolean {
-    return call.options?.stdin?.includes("resolveReviewThread") === true;
+    return call.request?.body?.includes("resolveReviewThread") === true;
   }
 
   /** 指摘が0件の再実行の入力。 */
@@ -2036,44 +2036,32 @@ describe("posting a review once per sha", () => {
 
   describe("findPostedReview", () => {
     test("returns the id of a review already posted for the same sha", async () => {
-      const fake = createFakeCommandRunner([ghApiOk([postedReview(55)])]);
-      const id = await findPostedReview(
-        { run: fake.run, ghToken: "tok" },
-        TARGET,
-      );
+      createFakeCommandRunner([ghApiOk([postedReview(55)])]);
+      const id = await findPostedReview({ ghToken: "tok" }, TARGET);
       expect(id).toBe(55);
     });
 
     test("returns null when no review for the sha exists", async () => {
-      const fake = createFakeCommandRunner([ghApiOk([humanReview(1)])]);
-      const id = await findPostedReview(
-        { run: fake.run, ghToken: "tok" },
-        TARGET,
-      );
+      createFakeCommandRunner([ghApiOk([humanReview(1)])]);
+      const id = await findPostedReview({ ghToken: "tok" }, TARGET);
       expect(id).toBeNull();
     });
 
     test("finds a posted review on a later page", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ghApiOk([humanReview(1)], {
           link: '<https://api.github.com/repos/acme/widgets/pulls/12/reviews?per_page=100&page=2>; rel="next"',
         }),
         ghApiOk([postedReview(55)]),
       ]);
-      const id = await findPostedReview(
-        { run: fake.run, ghToken: "tok" },
-        TARGET,
-      );
+      const id = await findPostedReview({ ghToken: "tok" }, TARGET);
       expect(id).toBe(55);
     });
 
     test("rejects when listing the reviews fails", async () => {
-      const fake = createFakeCommandRunner([serverError(), serverError()]);
+      createFakeCommandRunner([serverError(), serverError()]);
       await expect(
-        findPostedReview(
-          { run: fake.run, ghToken: "tok", sleep: async () => {} },
-          TARGET,
-        ),
+        findPostedReview({ ghToken: "tok", sleep: async () => {} }, TARGET),
       ).rejects.toThrow("HTTP 500");
     });
   });
@@ -2081,22 +2069,17 @@ describe("posting a review once per sha", () => {
   describe("postMarkedReview", () => {
     test("posts the body with the pr_review and sha markers", async () => {
       const fake = createFakeCommandRunner([ghApiOk({ id: 99 })]);
-      await postMarkedReview(
-        { run: fake.run, ghToken: "tok" },
-        TARGET,
-        SUMMARY,
-        COMMENTS,
-      );
-      const posted: unknown = JSON.parse(fake.calls[0]?.options?.stdin ?? "{}");
+      await postMarkedReview({ ghToken: "tok" }, TARGET, SUMMARY, COMMENTS);
+      const posted: unknown = JSON.parse(fake.calls[0]?.request?.body ?? "{}");
       expect(posted).toMatchObject({
         body: withReviewMarkers(SUMMARY, 7, SHA),
       });
     });
 
     test("returns the id of the created review", async () => {
-      const fake = createFakeCommandRunner([ghApiOk({ id: 99 })]);
+      createFakeCommandRunner([ghApiOk({ id: 99 })]);
       const id = await postMarkedReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         TARGET,
         SUMMARY,
         COMMENTS,
@@ -2117,16 +2100,13 @@ describe("posting a review once per sha", () => {
     }
 
     function postedBody(call: FakeCall | undefined): unknown {
-      return JSON.parse(call?.options?.stdin ?? "{}");
+      return JSON.parse(call?.request?.body ?? "{}");
     }
 
     test("posts again when GitHub answers 422", async () => {
-      const fake = createFakeCommandRunner([
-        unresolvedLine(),
-        ghApiOk({ id: 99 }),
-      ]);
+      createFakeCommandRunner([unresolvedLine(), ghApiOk({ id: 99 })]);
       const id = await postMarkedReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         TARGET,
         SUMMARY,
         COMMENTS,
@@ -2140,13 +2120,9 @@ describe("posting a review once per sha", () => {
         unresolvedLine(),
         ghApiOk({ id: 99 }),
       ]);
-      await postMarkedReview(
-        { run: fake.run, ghToken: "tok" },
-        TARGET,
-        SUMMARY,
-        COMMENTS,
-        { fallbackBody: FALLBACK },
-      );
+      await postMarkedReview({ ghToken: "tok" }, TARGET, SUMMARY, COMMENTS, {
+        fallbackBody: FALLBACK,
+      });
       expect(postedBody(fake.calls[1])).toMatchObject({ comments: [] });
     });
 
@@ -2155,13 +2131,9 @@ describe("posting a review once per sha", () => {
         unresolvedLine(),
         ghApiOk({ id: 99 }),
       ]);
-      await postMarkedReview(
-        { run: fake.run, ghToken: "tok" },
-        TARGET,
-        SUMMARY,
-        COMMENTS,
-        { fallbackBody: FALLBACK },
-      );
+      await postMarkedReview({ ghToken: "tok" }, TARGET, SUMMARY, COMMENTS, {
+        fallbackBody: FALLBACK,
+      });
       expect(postedBody(fake.calls[1])).toMatchObject({
         body: withReviewMarkers(FALLBACK, 7, SHA),
       });
@@ -2169,65 +2141,44 @@ describe("posting a review once per sha", () => {
 
     test("logs the 422 message of GitHub so that the cause can be told", async () => {
       const lines: string[] = [];
-      const fake = createFakeCommandRunner([
-        unresolvedLine(),
-        ghApiOk({ id: 99 }),
-      ]);
-      await postMarkedReview(
-        { run: fake.run, ghToken: "tok" },
-        TARGET,
-        SUMMARY,
-        COMMENTS,
-        {
-          fallbackBody: FALLBACK,
-          log: logger("pr_review_post", { sink: (line) => lines.push(line) }),
-        },
-      );
+      createFakeCommandRunner([unresolvedLine(), ghApiOk({ id: 99 })]);
+      await postMarkedReview({ ghToken: "tok" }, TARGET, SUMMARY, COMMENTS, {
+        fallbackBody: FALLBACK,
+        log: logger("pr_review_post", { sink: (line) => lines.push(line) }),
+      });
       expect(lines.join("\n")).toContain("Line could not be resolved");
     });
 
     test("does not post again for an error other than 422", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ok(ghApiStdout(403, { message: "Forbidden" })),
         ghApiOk({ id: 99 }),
       ]);
       await expect(
-        postMarkedReview(
-          { run: fake.run, ghToken: "tok" },
-          TARGET,
-          SUMMARY,
-          COMMENTS,
-          { fallbackBody: FALLBACK },
-        ),
+        postMarkedReview({ ghToken: "tok" }, TARGET, SUMMARY, COMMENTS, {
+          fallbackBody: FALLBACK,
+        }),
       ).rejects.toThrow("HTTP 403");
     });
 
     test("rejects when the post without inline comments also fails", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         unresolvedLine(),
         ok(ghApiStdout(422, { message: "Validation Failed" })),
       ]);
       await expect(
-        postMarkedReview(
-          { run: fake.run, ghToken: "tok" },
-          TARGET,
-          SUMMARY,
-          COMMENTS,
-          { fallbackBody: FALLBACK },
-        ),
+        postMarkedReview({ ghToken: "tok" }, TARGET, SUMMARY, COMMENTS, {
+          fallbackBody: FALLBACK,
+        }),
       ).rejects.toThrow("HTTP 422");
     });
 
     test("rejects without a second post when there were no inline comments", async () => {
-      const fake = createFakeCommandRunner([unresolvedLine()]);
+      createFakeCommandRunner([unresolvedLine()]);
       await expect(
-        postMarkedReview(
-          { run: fake.run, ghToken: "tok" },
-          TARGET,
-          SUMMARY,
-          [],
-          { fallbackBody: FALLBACK },
-        ),
+        postMarkedReview({ ghToken: "tok" }, TARGET, SUMMARY, [], {
+          fallbackBody: FALLBACK,
+        }),
       ).rejects.toThrow("HTTP 422");
     });
 
@@ -2239,7 +2190,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({
           priorReview: false,
           comments: COMMENTS,
@@ -2256,12 +2207,9 @@ describe("posting a review once per sha", () => {
 
   describe("publishReview", () => {
     test("records the id of a review already posted for the same sha", async () => {
-      const fake = createFakeCommandRunner([
-        ghApiOk([postedReview(55)]),
-        openMustThreads(),
-      ]);
+      createFakeCommandRunner([ghApiOk([postedReview(55)]), openMustThreads()]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput(),
         SILENT,
       );
@@ -2274,11 +2222,11 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ priorReview: false, binaryFiles: ["a.png"] }),
         SILENT,
       );
-      expect(JSON.parse(fake.calls[1]?.options?.stdin ?? "{}")).toMatchObject({
+      expect(JSON.parse(fake.calls[1]?.request?.body ?? "{}")).toMatchObject({
         body: expect.stringContaining(
           "内容を差分で読めないバイナリのファイルが1件あります。",
         ),
@@ -2291,11 +2239,11 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ priorReview: false, binaryUnlistedCount: 3 }),
         SILENT,
       );
-      expect(JSON.parse(fake.calls[1]?.options?.stdin ?? "{}")).toMatchObject({
+      expect(JSON.parse(fake.calls[1]?.request?.body ?? "{}")).toMatchObject({
         body: expect.stringContaining(
           "(パスを確認できなかったものが3件あります)",
         ),
@@ -2376,7 +2324,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
@@ -2394,7 +2342,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
@@ -2413,7 +2361,7 @@ describe("posting a review once per sha", () => {
       ]);
       let callsAtCheck = -1;
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({
           threadResponses: [ACCEPT_SKIP],
           ensureRepoOwner: async () => {
@@ -2435,7 +2383,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
@@ -2450,7 +2398,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({
           threadResponses: [{ ...ACCEPT_SKIP, decision: "skip_rejected" }],
         }),
@@ -2477,7 +2425,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ANSWER] }),
         SILENT,
       );
@@ -2492,7 +2440,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ANSWER] }),
         SILENT,
       );
@@ -2507,7 +2455,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
@@ -2515,7 +2463,7 @@ describe("posting a review once per sha", () => {
     });
 
     test("keeps counting a MUST thread whose reply failed", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         threadsResponse([
           skipThreadNode("PRRT_1", 501, "MUST"),
@@ -2527,7 +2475,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({
           threadResponses: [ACCEPT_SKIP, { ...ACCEPT_SKIP, thread_id: 601 }],
         }),
@@ -2549,14 +2497,14 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({
           threadResponses: [ACCEPT_SKIP, { ...ACCEPT_SKIP, thread_id: 601 }],
         }),
         SILENT,
       );
       expect(
-        fake.calls.filter(isResolveCall).map((call) => call.options?.stdin),
+        fake.calls.filter(isResolveCall).map((call) => call.request?.body),
       ).toEqual([expect.stringContaining("PRRT_2")]);
     });
 
@@ -2568,12 +2516,12 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
       expect(
-        JSON.parse(fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}"),
+        JSON.parse(fake.calls.find(isCreateReviewCall)?.request?.body ?? "{}"),
       ).toMatchObject({
         body: expect.stringContaining("未対応の指摘が1件残っています"),
       });
@@ -2588,19 +2536,19 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
       expect(
-        JSON.parse(fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}"),
+        JSON.parse(fake.calls.find(isCreateReviewCall)?.request?.body ?? "{}"),
       ).toMatchObject({
         body: expect.stringContaining("未対応の指摘が1件残っています"),
       });
     });
 
     test("reports a thread as blocking when resolving it failed", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         skipThreads(),
         ghApiOk({ id: 100 }),
@@ -2608,7 +2556,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
@@ -2624,12 +2572,12 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
       expect(
-        JSON.parse(fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}"),
+        JSON.parse(fake.calls.find(isCreateReviewCall)?.request?.body ?? "{}"),
       ).toMatchObject({
         body: expect.stringContaining("修正を確認しました。LGTMです。"),
       });
@@ -2676,7 +2624,7 @@ describe("posting a review once per sha", () => {
           ghApiOk({ id: 99 }),
         ]);
         await publishReview(
-          { run: fake.run, ghToken: "tok" },
+          { ghToken: "tok" },
           rerunInput({ threadResponses: [ACCEPT_SKIP] }),
           SILENT,
         );
@@ -2691,7 +2639,7 @@ describe("posting a review once per sha", () => {
           ghApiOk({ id: 99 }),
         ]);
         await publishReview(
-          { run: fake.run, ghToken: "tok" },
+          { ghToken: "tok" },
           rerunInput({ threadResponses: [ACCEPT_SKIP] }),
           SILENT,
         );
@@ -2715,7 +2663,7 @@ describe("posting a review once per sha", () => {
           ghApiOk({ id: 99 }),
         ]);
         await publishReview(
-          { run: fake.run, ghToken: "tok" },
+          { ghToken: "tok" },
           rerunInput({ threadResponses: [ADDRESSED] }),
           SILENT,
         );
@@ -2731,7 +2679,7 @@ describe("posting a review once per sha", () => {
           ghApiOk({ id: 99 }),
         ]);
         await publishReview(
-          { run: fake.run, ghToken: "tok" },
+          { ghToken: "tok" },
           rerunInput({ threadResponses: [ADDRESSED] }),
           SILENT,
         );
@@ -2740,7 +2688,7 @@ describe("posting a review once per sha", () => {
     });
 
     test("does not subtract a thread selected for resolving when posting is gated", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         threadsResponse([
           skipThreadNode(
             "PRRT_1",
@@ -2751,7 +2699,7 @@ describe("posting a review once per sha", () => {
         ]),
       ]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ post: false }),
         SILENT,
       );
@@ -2761,7 +2709,7 @@ describe("posting a review once per sha", () => {
     test("does not write to a thread when posting is gated", async () => {
       const fake = createFakeCommandRunner([skipThreads()]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ post: false, threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
@@ -2776,7 +2724,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok", sleep: async () => {} },
+        { ghToken: "tok", sleep: async () => {} },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
@@ -2792,13 +2740,9 @@ describe("posting a review once per sha", () => {
         openImoThreads(),
         ghApiOk({ id: 99 }),
       ]);
-      await publishReview(
-        { run: fake.run, ghToken: "tok" },
-        rerunInput(),
-        SILENT,
-      );
+      await publishReview({ ghToken: "tok" }, rerunInput(), SILENT);
       expect(
-        JSON.parse(fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}"),
+        JSON.parse(fake.calls.find(isCreateReviewCall)?.request?.body ?? "{}"),
       ).toMatchObject({
         body: expect.stringContaining("未対応の指摘が1件残っています"),
       });
@@ -2810,22 +2754,18 @@ describe("posting a review once per sha", () => {
         openMustThreads(),
         ghApiOk({ id: 99 }),
       ]);
-      await publishReview(
-        { run: fake.run, ghToken: "tok" },
-        rerunInput(),
-        SILENT,
-      );
+      await publishReview({ ghToken: "tok" }, rerunInput(), SILENT);
       expect(fake.calls.some(isResolveCall)).toBe(false);
     });
 
     test("reports a waiting skip as blocking", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         skipThreads(),
         ghApiOk({ id: 99 }),
       ]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput(),
         SILENT,
       );
@@ -2844,13 +2784,13 @@ describe("posting a review once per sha", () => {
       }
 
       test("stays blocking when a person who is not allowed resolved it", async () => {
-        const fake = createFakeCommandRunner([
+        createFakeCommandRunner([
           ghApiOk([humanReview(1)]),
           resolvedMust("mallory"),
           ghApiOk({ id: 99 }),
         ]);
         const result = await publishReview(
-          { run: fake.run, ghToken: "tok" },
+          { ghToken: "tok" },
           rerunInput(),
           SILENT,
         );
@@ -2863,14 +2803,10 @@ describe("posting a review once per sha", () => {
           resolvedMust("mallory"),
           ghApiOk({ id: 99 }),
         ]);
-        await publishReview(
-          { run: fake.run, ghToken: "tok" },
-          rerunInput(),
-          SILENT,
-        );
+        await publishReview({ ghToken: "tok" }, rerunInput(), SILENT);
         expect(
           JSON.parse(
-            fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}",
+            fake.calls.find(isCreateReviewCall)?.request?.body ?? "{}",
           ),
         ).toMatchObject({
           body: expect.stringContaining("未対応の指摘が1件残っています"),
@@ -2878,13 +2814,13 @@ describe("posting a review once per sha", () => {
       });
 
       test("is not blocking when an allowed person resolved it", async () => {
-        const fake = createFakeCommandRunner([
+        createFakeCommandRunner([
           ghApiOk([humanReview(1)]),
           resolvedMust("alice"),
           ghApiOk({ id: 99 }),
         ]);
         const result = await publishReview(
-          { run: fake.run, ghToken: "tok" },
+          { ghToken: "tok" },
           rerunInput(),
           SILENT,
         );
@@ -2892,12 +2828,12 @@ describe("posting a review once per sha", () => {
       });
 
       test("stays blocking when a reused review finds a person who is not allowed resolved it", async () => {
-        const fake = createFakeCommandRunner([
+        createFakeCommandRunner([
           ghApiOk([postedReview(55)]),
           resolvedMust("mallory"),
         ]);
         const result = await publishReview(
-          { run: fake.run, ghToken: "tok" },
+          { ghToken: "tok" },
           rerunInput(),
           SILENT,
         );
@@ -2906,7 +2842,7 @@ describe("posting a review once per sha", () => {
     });
 
     test("reports no blocking thread after a skip is accepted", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         skipThreads(),
         ghApiOk({ id: 100 }),
@@ -2914,7 +2850,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
@@ -2944,11 +2880,7 @@ describe("posting a review once per sha", () => {
           objectedThreads(),
           ghApiOk({ id: 99 }),
         ]);
-        await publishReview(
-          { run: fake.run, ghToken: "tok" },
-          rerunInput(),
-          SILENT,
-        );
+        await publishReview({ ghToken: "tok" }, rerunInput(), SILENT);
         expect(fake.calls.some(isResolveCall)).toBe(false);
       });
 
@@ -2958,14 +2890,10 @@ describe("posting a review once per sha", () => {
           objectedThreads(),
           ghApiOk({ id: 99 }),
         ]);
-        await publishReview(
-          { run: fake.run, ghToken: "tok" },
-          rerunInput(),
-          SILENT,
-        );
+        await publishReview({ ghToken: "tok" }, rerunInput(), SILENT);
         expect(
           JSON.parse(
-            fake.calls.find(isCreateReviewCall)?.options?.stdin ?? "{}",
+            fake.calls.find(isCreateReviewCall)?.request?.body ?? "{}",
           ),
         ).toMatchObject({
           body: expect.stringContaining("未対応の指摘が1件残っています"),
@@ -2973,13 +2901,13 @@ describe("posting a review once per sha", () => {
       });
 
       test("reports the thread as blocking", async () => {
-        const fake = createFakeCommandRunner([
+        createFakeCommandRunner([
           ghApiOk([humanReview(1)]),
           objectedThreads(),
           ghApiOk({ id: 99 }),
         ]);
         const result = await publishReview(
-          { run: fake.run, ghToken: "tok" },
+          { ghToken: "tok" },
           rerunInput(),
           SILENT,
         );
@@ -2989,7 +2917,7 @@ describe("posting a review once per sha", () => {
 
     describe("when an objected IMO thread remains and the re-review has no new findings", () => {
       test("reports the thread as blocking", async () => {
-        const fake = createFakeCommandRunner([
+        createFakeCommandRunner([
           ghApiOk([humanReview(1)]),
           threadsResponse([
             skipThreadNode(
@@ -3009,7 +2937,7 @@ describe("posting a review once per sha", () => {
           ghApiOk({ id: 99 }),
         ]);
         const result = await publishReview(
-          { run: fake.run, ghToken: "tok" },
+          { ghToken: "tok" },
           rerunInput(),
           SILENT,
         );
@@ -3023,7 +2951,7 @@ describe("posting a review once per sha", () => {
         skipThreads(),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
@@ -3031,12 +2959,12 @@ describe("posting a review once per sha", () => {
     });
 
     test("counts a thread that a reused review would have answered as still open", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ghApiOk([postedReview(55)]),
         skipThreads("MUST"),
       ]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ threadResponses: [ACCEPT_SKIP] }),
         SILENT,
       );
@@ -3049,7 +2977,7 @@ describe("posting a review once per sha", () => {
         skipThreads(),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({
           ensureRepoOwner: async () => "owner changed",
           threadResponses: [ACCEPT_SKIP],
@@ -3064,11 +2992,7 @@ describe("posting a review once per sha", () => {
         ghApiOk([postedReview(55)]),
         openMustThreads(),
       ]);
-      await publishReview(
-        { run: fake.run, ghToken: "tok" },
-        rerunInput(),
-        SILENT,
-      );
+      await publishReview({ ghToken: "tok" }, rerunInput(), SILENT);
       expect(fake.calls.some(isCreateReviewCall)).toBe(false);
     });
 
@@ -3079,21 +3003,14 @@ describe("posting a review once per sha", () => {
         ghApiOk([postedReview(55)]),
         openMustThreads(),
       ]);
-      await publishReview(
-        { run: fake.run, ghToken: "tok" },
-        rerunInput(),
-        SILENT,
-      );
+      await publishReview({ ghToken: "tok" }, rerunInput(), SILENT);
       expect(fake.calls.some(isResolveCall)).toBe(false);
     });
 
     test("reports the open MUST threads when a review for the same sha exists", async () => {
-      const fake = createFakeCommandRunner([
-        ghApiOk([postedReview(55)]),
-        openMustThreads(),
-      ]);
+      createFakeCommandRunner([ghApiOk([postedReview(55)]), openMustThreads()]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput(),
         SILENT,
       );
@@ -3103,12 +3020,9 @@ describe("posting a review once per sha", () => {
     // 初回のレビューの再実行では、DBにはまだ記録が無いが、
     // 投稿済みのレビューの`[MUST]`は残っている。
     test("counts the open MUST threads of a reused first review", async () => {
-      const fake = createFakeCommandRunner([
-        ghApiOk([postedReview(55)]),
-        openMustThreads(),
-      ]);
+      createFakeCommandRunner([ghApiOk([postedReview(55)]), openMustThreads()]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ priorReview: false }),
         SILENT,
       );
@@ -3116,12 +3030,9 @@ describe("posting a review once per sha", () => {
     });
 
     test("posts and records the new id when no review for the sha exists", async () => {
-      const fake = createFakeCommandRunner([
-        ghApiOk([humanReview(1)]),
-        ghApiOk({ id: 99 }),
-      ]);
+      createFakeCommandRunner([ghApiOk([humanReview(1)]), ghApiOk({ id: 99 })]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ priorReview: false, comments: COMMENTS }),
         SILENT,
       );
@@ -3129,10 +3040,10 @@ describe("posting a review once per sha", () => {
     });
 
     test("rejects when listing the reviews fails", async () => {
-      const fake = createFakeCommandRunner([serverError(), serverError()]);
+      createFakeCommandRunner([serverError(), serverError()]);
       await expect(
         publishReview(
-          { run: fake.run, ghToken: "tok", sleep: async () => {} },
+          { ghToken: "tok", sleep: async () => {} },
           rerunInput(),
           SILENT,
         ),
@@ -3146,7 +3057,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok", sleep: async () => {} },
+        { ghToken: "tok", sleep: async () => {} },
         rerunInput(),
         SILENT,
       ).catch(() => {});
@@ -3156,14 +3067,14 @@ describe("posting a review once per sha", () => {
     // 再利用するときにスレッドを読めないと、残っている`[MUST]`を数えられず、
     // 通知が`reviewed`になりうる。記録する前に失敗させ、再実行に回す。
     test("rejects when listing the threads of a reused review fails", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ghApiOk([postedReview(55)]),
         serverError(),
         serverError(),
       ]);
       await expect(
         publishReview(
-          { run: fake.run, ghToken: "tok", sleep: async () => {} },
+          { ghToken: "tok", sleep: async () => {} },
           rerunInput(),
           SILENT,
         ),
@@ -3173,14 +3084,14 @@ describe("posting a review once per sha", () => {
     // 新しく投稿するときは、スレッドを読めなくても投稿は止めない。
     // ただし0件として数えず、読めなかったことを返す。
     test("reports unreadable open threads as null when listing the threads fails before a new post", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         serverError(),
         serverError(),
         ghApiOk({ id: 99 }),
       ]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok", sleep: async () => {} },
+        { ghToken: "tok", sleep: async () => {} },
         rerunInput(),
         SILENT,
       );
@@ -3188,14 +3099,14 @@ describe("posting a review once per sha", () => {
     });
 
     test("still posts the review when listing the threads fails before a new post", async () => {
-      const fake = createFakeCommandRunner([
+      createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         serverError(),
         serverError(),
         ghApiOk({ id: 99 }),
       ]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok", sleep: async () => {} },
+        { ghToken: "tok", sleep: async () => {} },
         rerunInput(),
         SILENT,
       );
@@ -3210,24 +3121,21 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok", sleep: async () => {} },
+        { ghToken: "tok", sleep: async () => {} },
         rerunInput(),
         SILENT,
       );
       const call = fake.calls.find(isCreateReviewCall);
-      expect(JSON.parse(call?.options?.stdin ?? "{}")).toMatchObject({
+      expect(JSON.parse(call?.request?.body ?? "{}")).toMatchObject({
         body: expect.stringContaining("確認できていません"),
       });
     });
 
     // 初回のレビューにはスレッドが無いので、取得しなくても0件は確かな値である。
     test("reports zero open threads for a first review that does not list the threads", async () => {
-      const fake = createFakeCommandRunner([
-        ghApiOk([humanReview(1)]),
-        ghApiOk({ id: 99 }),
-      ]);
+      createFakeCommandRunner([ghApiOk([humanReview(1)]), ghApiOk({ id: 99 })]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ priorReview: false }),
         SILENT,
       );
@@ -3253,11 +3161,7 @@ describe("posting a review once per sha", () => {
         }),
         ghApiOk({ id: 99 }),
       ]);
-      await publishReview(
-        { run: fake.run, ghToken: "tok" },
-        rerunInput(),
-        SILENT,
-      );
+      await publishReview({ ghToken: "tok" }, rerunInput(), SILENT);
       expect(fake.calls.some(isResolveCall)).toBe(true);
     });
 
@@ -3270,7 +3174,7 @@ describe("posting a review once per sha", () => {
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ priorReview: false, ensureRepoOwner: OWNER_STOP }),
         SILENT,
       );
@@ -3283,7 +3187,7 @@ describe("posting a review once per sha", () => {
         openMustThreads(),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ ensureRepoOwner: OWNER_STOP }),
         SILENT,
       );
@@ -3291,9 +3195,9 @@ describe("posting a review once per sha", () => {
     });
 
     test("reports the reason when the owner check fails", async () => {
-      const fake = createFakeCommandRunner([ghApiOk([humanReview(1)])]);
+      createFakeCommandRunner([ghApiOk([humanReview(1)])]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ priorReview: false, ensureRepoOwner: OWNER_STOP }),
         SILENT,
       );
@@ -3303,13 +3207,10 @@ describe("posting a review once per sha", () => {
     });
 
     test("does not check the owner when a review for the sha is reused", async () => {
-      const fake = createFakeCommandRunner([
-        ghApiOk([postedReview(55)]),
-        openMustThreads(),
-      ]);
+      createFakeCommandRunner([ghApiOk([postedReview(55)]), openMustThreads()]);
       let checks = 0;
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({
           ensureRepoOwner: async () => {
             checks += 1;
@@ -3322,10 +3223,10 @@ describe("posting a review once per sha", () => {
     });
 
     test("does not check the owner when posting is gated", async () => {
-      const fake = createFakeCommandRunner([openMustThreads()]);
+      createFakeCommandRunner([openMustThreads()]);
       let checks = 0;
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({
           post: false,
           ensureRepoOwner: async () => {
@@ -3339,13 +3240,10 @@ describe("posting a review once per sha", () => {
     });
 
     test("checks the owner once before posting", async () => {
-      const fake = createFakeCommandRunner([
-        ghApiOk([humanReview(1)]),
-        ghApiOk({ id: 99 }),
-      ]);
+      createFakeCommandRunner([ghApiOk([humanReview(1)]), ghApiOk({ id: 99 })]);
       let checks = 0;
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({
           priorReview: false,
           comments: COMMENTS,
@@ -3362,7 +3260,7 @@ describe("posting a review once per sha", () => {
     test("does not list the reviews when posting is gated", async () => {
       const fake = createFakeCommandRunner([openMustThreads()]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ post: false }),
         SILENT,
       );
@@ -3372,7 +3270,7 @@ describe("posting a review once per sha", () => {
     test("does not post when posting is gated", async () => {
       const fake = createFakeCommandRunner([openMustThreads()]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ post: false }),
         SILENT,
       );
@@ -3380,9 +3278,9 @@ describe("posting a review once per sha", () => {
     });
 
     test("returns no posted review id when posting is gated", async () => {
-      const fake = createFakeCommandRunner([openMustThreads()]);
+      createFakeCommandRunner([openMustThreads()]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ post: false }),
         SILENT,
       );
@@ -3390,9 +3288,9 @@ describe("posting a review once per sha", () => {
     });
 
     test("does not mark the review as reused when posting is gated", async () => {
-      const fake = createFakeCommandRunner([openMustThreads()]);
+      createFakeCommandRunner([openMustThreads()]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ post: false }),
         SILENT,
       );
@@ -3400,9 +3298,9 @@ describe("posting a review once per sha", () => {
     });
 
     test("yields no review notification when posting is gated", async () => {
-      const fake = createFakeCommandRunner([openMustThreads()]);
+      createFakeCommandRunner([openMustThreads()]);
       const result = await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { ghToken: "tok" },
         rerunInput({ post: false }),
         SILENT,
       );

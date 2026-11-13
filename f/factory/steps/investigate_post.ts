@@ -231,7 +231,7 @@ export async function main(
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const viewer = await getViewer(client);
 
   const outcome = await runInvestigatePost(

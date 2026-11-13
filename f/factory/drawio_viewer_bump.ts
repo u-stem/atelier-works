@@ -70,7 +70,6 @@ import {
 } from "./lib/github.ts";
 import { type Logger, logger } from "./lib/log.ts";
 import type { NoticeRecord } from "./lib/types.ts";
-import { runCommand } from "./lib/workspace.ts";
 
 /** noticeの種類。保留した理由は本文に書く。 */
 const NOTICE_KIND = "drawio_viewer_bump_held";
@@ -400,7 +399,7 @@ export async function main(approved_version = ""): Promise<BumpResult> {
     wmill.getResource("f/factory/factory_config"),
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const repoRef = parseGitHubRepoUrl(config.factory_repo);
   const baseBranch = await getDefaultBranch(
     client,

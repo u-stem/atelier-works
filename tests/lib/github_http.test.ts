@@ -7,6 +7,7 @@ import { join } from "node:path";
 import {
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GitHubRateLimitError,
+  GitHubRequestError,
   RATE_LIMIT_HINT_TEXT_LIMIT,
   SECONDARY_RATE_LIMIT_PHRASE,
 } from "../../f/factory/lib/github_errors.ts";
@@ -19,11 +20,9 @@ import {
   GITHUB_RESPONSE_MAX_BYTES,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   type GitHubHttpClient,
-  type GitHubSendResult,
   graphqlErrorsRateLimited,
   graphqlRateLimit,
   requestGitHub,
-  runGitHubRequest,
   sendGitHubRequest,
 } from "../../f/factory/lib/github_http.ts";
 import { omittedMarker } from "../../f/factory/lib/stream_cap.ts";
@@ -476,12 +475,152 @@ describe("sendGitHubRequest request shape", () => {
     expect(f.sent[0]?.init.method).toBe("PATCH");
   });
 
+  // 書き込みが作るcommitの日時の時差を、運用者の最後のブラウザの時間帯に左右させない。
+  test("names UTC in the Time-Zone header of a write", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "repos/o/r/git/commits",
+      method: "POST",
+      body: {},
+    });
+    expect(headerOf(f.sent[0]?.init, "Time-Zone")).toBe("UTC");
+  });
+
+  test("names UTC in the Time-Zone header of a DELETE without a body", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "repos/o/r/issues/1/labels/bug",
+      method: "DELETE",
+    });
+    expect(headerOf(f.sent[0]?.init, "Time-Zone")).toBe("UTC");
+  });
+
+  test("sends no Time-Zone header with a GET", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), { path: "repos/o/r" });
+    expect(headerOf(f.sent[0]?.init, "Time-Zone")).toBeUndefined();
+  });
+
+  // 冪等でない要求は、使い回した接続が切れていて、届いたか分からない失敗になるのを避ける。
+  test("does not reuse a connection for a POST", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: {},
+    });
+    expect(f.sent[0]?.init.keepalive).toBe(false);
+  });
+
+  test("does not reuse a connection for a DELETE", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "repos/o/r/issues/1/labels/bug",
+      method: "DELETE",
+    });
+    expect(f.sent[0]?.init.keepalive).toBe(false);
+  });
+
+  test("does not reuse a connection for a GraphQL mutation", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "graphql",
+      method: "POST",
+      body: { query: "mutation { x }" },
+      idempotent: false,
+    });
+    expect(f.sent[0]?.init.keepalive).toBe(false);
+  });
+
+  test("keeps the connection reuse for a GET", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), { path: "repos/o/r" });
+    expect(f.sent[0]?.init.keepalive).toBeUndefined();
+  });
+
+  test("keeps the connection reuse for a GraphQL query marked idempotent", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "graphql",
+      method: "POST",
+      body: { query: "query { x }" },
+      idempotent: true,
+    });
+    expect(f.sent[0]?.init.keepalive).toBeUndefined();
+  });
+
+  test("sends no Content-Type without a body", async () => {
+    const f = fakeFetch([]);
+    await sendGitHubRequest(client(), {
+      path: "repos/o/r/issues/1/labels/bug",
+      method: "DELETE",
+    });
+    expect(headerOf(f.sent[0]?.init, "Content-Type")).toBeUndefined();
+  });
+
   test("rejects the search API without sending", async () => {
     const f = fakeFetch([]);
     await sendGitHubRequest(client(), { path: "search/issues" }).catch(
       () => undefined,
     );
     expect(f.sent).toHaveLength(0);
+  });
+});
+
+// 要求を組み立てられない失敗は、送っていないことが確かで、待っても直らない。応答の無い通信の失敗と分ける。
+describe("a request that cannot be built", () => {
+  const BUILD_FAILURE = "GitHub request could not be built";
+  const BAD_TOKEN = "github_pat_BROKEN\nX-Injected: 1";
+
+  test("rejects a body that cannot be turned into JSON", async () => {
+    fakeFetch([]);
+    await expect(
+      requestGitHub(client(), {
+        path: "repos/o/r/issues",
+        method: "POST",
+        body: { n: 1n },
+      }),
+    ).rejects.toThrow(BUILD_FAILURE);
+  });
+
+  test("does not send a body that cannot be turned into JSON", async () => {
+    const f = fakeFetch([]);
+    await requestGitHub(client(), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: { n: 1n },
+    }).catch(() => undefined);
+    expect(f.sent).toHaveLength(0);
+  });
+
+  test("rejects a token with a line break", async () => {
+    fakeFetch([]);
+    await expect(
+      requestGitHub({ ...client(), token: BAD_TOKEN }, { path: "repos/o/r" }),
+    ).rejects.toThrow(BUILD_FAILURE);
+  });
+
+  test("does not send a request with a token that has a line break", async () => {
+    const f = fakeFetch([]);
+    await requestGitHub(
+      { ...client(), token: BAD_TOKEN },
+      { path: "repos/o/r" },
+    ).catch(() => undefined);
+    expect(f.sent).toHaveLength(0);
+  });
+
+  test("keeps the token out of the error", async () => {
+    fakeFetch([]);
+    const error = await requestGitHub(
+      { ...client(), token: BAD_TOKEN },
+      { path: "repos/o/r" },
+    ).catch((err: unknown) => err);
+    // 組み立ての失敗の例外であることを前提にして、その文を確かめる。別の例外なら、この確かめは意味を持たない。
+    expect(
+      error instanceof GitHubRequestError
+        ? error.message
+        : "BROKEN: not a request error",
+    ).not.toContain("BROKEN");
   });
 });
 
@@ -964,6 +1103,34 @@ describe("requestGitHub retries", () => {
     expect(response.status).toBe(200);
   });
 
+  // 接続の失敗は、要求が届く前か後かを見分けられないので、冪等でない要求は送り直さない。
+  test("does not retry a POST after a lost response", async () => {
+    const f = fakeFetch([
+      new TypeError("reset"),
+      new Response("{}", { status: 200 }),
+    ]);
+    await requestGitHub(client(), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: {},
+    });
+    expect(f.sent).toHaveLength(1);
+  });
+
+  test("does not retry a GraphQL mutation after a lost response", async () => {
+    const f = fakeFetch([
+      new TypeError("reset"),
+      new Response("{}", { status: 200 }),
+    ]);
+    await requestGitHub(client(), {
+      path: "graphql",
+      method: "POST",
+      body: { query: "mutation { x }" },
+      idempotent: false,
+    });
+    expect(f.sent).toHaveLength(1);
+  });
+
   test("does not retry a POST after a 5xx", async () => {
     const f = fakeFetch([new Response("", { status: 502 })]);
     await requestGitHub(client(), {
@@ -1224,63 +1391,6 @@ describe("requestGitHub rate limits", () => {
       path: "repos/o/r/issues?labels=secret-label",
     }).catch((err: unknown) => err);
     expect(String(error)).not.toContain("secret-label");
-  });
-});
-
-describe("runGitHubRequest with a sender that may not send", () => {
-  const ok = {
-    status: 200,
-    headers: new Map<string, string>(),
-    bodyText: "{}",
-  };
-
-  test("retries a request that was not sent, even a POST", async () => {
-    const results: GitHubSendResult<typeof ok>[] = [
-      { kind: "not_sent", error: new Error("EAGAIN") },
-      { kind: "response", response: ok, noResponse: false },
-    ];
-    let calls = 0;
-    const response = await runGitHubRequest(
-      { sleep: async () => {} },
-      { endpoint: "repos/o/r/issues", method: "POST" },
-      { mode: "wait_once" },
-      async () => {
-        const next = results[calls] ?? results[0];
-        calls += 1;
-        if (next === undefined) throw new Error("no result");
-        return next;
-      },
-    );
-    expect([response.status, calls]).toEqual([200, 2]);
-  });
-
-  test("does not read again a response whose body the deadline cut", async () => {
-    let calls = 0;
-    await runGitHubRequest(
-      { sleep: async () => {} },
-      { endpoint: "repos/o/r" },
-      { mode: "wait_once" },
-      async () => {
-        calls += 1;
-        return {
-          kind: "response",
-          response: { ...ok, incomplete: true, timedOut: true },
-          noResponse: false,
-        };
-      },
-    );
-    expect(calls).toBe(1);
-  });
-
-  test("throws the error when the retry is not sent either", async () => {
-    const error = new Error("EAGAIN");
-    const thrown = await runGitHubRequest<typeof ok>(
-      { sleep: async () => {} },
-      { endpoint: "repos/o/r" },
-      { mode: "wait_once" },
-      async () => ({ kind: "not_sent", error }),
-    ).catch((err: unknown) => err);
-    expect(thrown).toBe(error);
   });
 });
 

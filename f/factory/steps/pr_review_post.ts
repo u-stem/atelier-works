@@ -896,7 +896,7 @@ async function postReview(
     wmill.getResource("f/factory/factory_config"),
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
 
   const currentItem = await getWorkItem(work_item_id);
   if (currentItem === null) {

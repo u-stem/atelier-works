@@ -7,6 +7,7 @@
 // 関数が無いときは、例外を投げて本物へは送らない。関数はテストのたびに外す。
 // `beforeAll`で置いた偽の応答も、最初のテストの後で外れる。
 // 偽の応答の関数を置くのは`tests/lib/testSupport.ts`である。
+// 偽のrunnerの応答が尽きた後の要求は記録され(`GITHUB_FETCH_EXHAUSTED_KEY`)、そのテストを失敗にする。
 
 import { afterEach } from "bun:test";
 
@@ -17,6 +18,11 @@ delete process.env.WM_WORKSPACE;
 /** 偽の応答の関数を置く、グローバルのオブジェクトの鍵。`tests/lib/testSupport.ts`が読み込んで使う。 */
 export const GITHUB_FETCH_HANDLER_KEY = Symbol.for(
   "atelier-works.tests.github-fetch-handler",
+);
+
+/** 偽のrunnerの応答が尽きた後の要求を記録する、グローバルのオブジェクトの鍵。`tests/lib/testSupport.ts`が書く。 */
+export const GITHUB_FETCH_EXHAUSTED_KEY = Symbol.for(
+  "atelier-works.tests.github-fetch-exhausted",
 );
 
 /** GitHubのAPIか、その取得先のblob storageへの要求か。 */
@@ -55,6 +61,14 @@ globalThis.fetch = Object.assign(routedFetch, {
   preconnect: originalFetch.preconnect,
 });
 
+// 偽のrunnerの応答が尽きた後の要求があったテストは、ここで失敗にする。
+// 通信層はその要求を応答の無い失敗として飲み込むので、テストの期待が偶然に通ってしまうのを防ぐ。
 afterEach(() => {
   Reflect.deleteProperty(globalThis, GITHUB_FETCH_HANDLER_KEY);
+  const exhausted: unknown = Reflect.get(
+    globalThis,
+    GITHUB_FETCH_EXHAUSTED_KEY,
+  );
+  Reflect.deleteProperty(globalThis, GITHUB_FETCH_EXHAUSTED_KEY);
+  if (typeof exhausted === "string") throw new Error(exhausted);
 });

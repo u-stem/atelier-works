@@ -229,7 +229,7 @@ function createBranchApiRunner(headProtected: boolean, headRules = 0) {
     }
     return ghApiOk({ protected: headProtected });
   };
-  // GETは`fetch`で送られるので、GitHubのAPIへの`fetch`にも同じ`run`で答える。
+  // GitHubのAPIへの要求は`fetch`で送られるので、その`fetch`にも同じ`run`で答える。
   serveGitHubFetchWith(run);
   return { run, endpoints };
 }
@@ -238,7 +238,7 @@ describe("fetchPrFixHeadBranchState", () => {
   test("reads the protection of the head branch, not the base branch", async () => {
     const api = createBranchApiRunner(false);
     await fetchPrFixHeadBranchState(
-      { run: api.run, ghToken: "tok" },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       "feature/x",
@@ -249,7 +249,7 @@ describe("fetchPrFixHeadBranchState", () => {
   test("never reads the base branch", async () => {
     const api = createBranchApiRunner(false);
     await fetchPrFixHeadBranchState(
-      { run: api.run, ghToken: "tok" },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       "feature/x",
@@ -258,9 +258,9 @@ describe("fetchPrFixHeadBranchState", () => {
   });
 
   test("reports a protected head branch", async () => {
-    const api = createBranchApiRunner(true);
+    createBranchApiRunner(true);
     const state = await fetchPrFixHeadBranchState(
-      { run: api.run, ghToken: "tok" },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       "feature/x",
@@ -271,7 +271,7 @@ describe("fetchPrFixHeadBranchState", () => {
   test("reads the rules that apply to the head branch", async () => {
     const api = createBranchApiRunner(false);
     await fetchPrFixHeadBranchState(
-      { run: api.run, ghToken: "tok" },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       "feature/x",
@@ -282,9 +282,9 @@ describe("fetchPrFixHeadBranchState", () => {
   });
 
   test("reports a head branch that a ruleset applies to", async () => {
-    const api = createBranchApiRunner(false, 1);
+    createBranchApiRunner(false, 1);
     const state = await fetchPrFixHeadBranchState(
-      { run: api.run, ghToken: "tok" },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       "release/*",
@@ -306,7 +306,7 @@ describe("fetchPrFixHeadBranchState", () => {
     serveGitHubFetchWith(run);
     await expect(
       fetchPrFixHeadBranchState(
-        { run, ghToken: "tok" },
+        { ghToken: "tok" },
         "acme",
         "widgets",
         "feature/x",
@@ -315,9 +315,9 @@ describe("fetchPrFixHeadBranchState", () => {
   });
 
   test("reports a head branch that no ruleset applies to", async () => {
-    const api = createBranchApiRunner(false, 0);
+    createBranchApiRunner(false, 0);
     const state = await fetchPrFixHeadBranchState(
-      { run: api.run, ghToken: "tok" },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       "feature/x",
@@ -326,9 +326,9 @@ describe("fetchPrFixHeadBranchState", () => {
   });
 
   test("reports a head branch that is the default branch", async () => {
-    const api = createBranchApiRunner(true);
+    createBranchApiRunner(true);
     const state = await fetchPrFixHeadBranchState(
-      { run: api.run, ghToken: "tok" },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       "main",
@@ -337,9 +337,9 @@ describe("fetchPrFixHeadBranchState", () => {
   });
 
   test("reports a head branch that is not the default branch", async () => {
-    const api = createBranchApiRunner(false);
+    createBranchApiRunner(false);
     const state = await fetchPrFixHeadBranchState(
-      { run: api.run, ghToken: "tok" },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       "feature/x",
@@ -348,9 +348,9 @@ describe("fetchPrFixHeadBranchState", () => {
   });
 
   test("lets a PR to the protected main through when its head is not protected", async () => {
-    const api = createBranchApiRunner(false);
+    createBranchApiRunner(false);
     const state = await fetchPrFixHeadBranchState(
-      { run: api.run, ghToken: "tok" },
+      { ghToken: "tok" },
       "acme",
       "widgets",
       "feature/x",

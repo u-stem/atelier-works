@@ -1113,7 +1113,7 @@ export async function main(
   const prNumber = workItem.pr_number;
 
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
   const owner = workItem.owner;
   const repo = workItem.repo;
 

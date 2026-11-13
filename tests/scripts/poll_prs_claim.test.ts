@@ -57,14 +57,13 @@ const rateLimited = ok(
   ghApiStdout(403, { message: "rate limited" }, { "retry-after": "100000" }),
 );
 
-function recordingClient(run: GhClient["run"]): {
+function recordingClient(): {
   client: GhClient;
   sleeps: number[];
 } {
   const sleeps: number[] = [];
   return {
     client: {
-      run,
       ghToken: "token",
       sleep: async (ms) => {
         sleeps.push(ms);
@@ -97,33 +96,25 @@ describe("claimPr when the confirmation read fails", () => {
   const args = ["octo-owner", "atelier-works", 7, "factory:review"] as const;
 
   test("claims when a later read attempt succeeds", async () => {
-    const { run } = createFakeCommandRunner([
-      ghApiOk({}),
-      readFails,
-      ghApiOk(fakeIssue([])),
-    ]);
-    const { client } = recordingClient(run);
+    createFakeCommandRunner([ghApiOk({}), readFails, ghApiOk(fakeIssue([]))]);
+    const { client } = recordingClient();
     expect(await claimPr(client, ...args)).toEqual({ claimed: true });
   });
 
   test("waits one second before the second read attempt", async () => {
-    const { run } = createFakeCommandRunner([
-      ghApiOk({}),
-      readFails,
-      ghApiOk(fakeIssue([])),
-    ]);
-    const { client, sleeps } = recordingClient(run);
+    createFakeCommandRunner([ghApiOk({}), readFails, ghApiOk(fakeIssue([]))]);
+    const { client, sleeps } = recordingClient();
     await claimPr(client, ...args);
     expect(sleeps).toEqual([1000]);
   });
 
   test("reports the label as still present when a later read sees it", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       ghApiOk(fakeIssue(["factory:review"])),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     expect(await claimPr(client, ...args)).toEqual({
       claimed: false,
       reason: "trigger label factory:review still present after claim",
@@ -131,27 +122,27 @@ describe("claimPr when the confirmation read fails", () => {
   });
 
   test("puts the label back and reports not claimed when every read fails", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       readFails,
       readFails,
       ghApiOk([]), // POST: ラベルを付け直す
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     const result = await claimPr(client, ...args);
     expect(result.claimed).toBe(false);
   });
 
   test("returns a fixed reason that marks the label as restored", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       readFails,
       readFails,
       ghApiOk([]),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     const result = await claimPr(client, ...args);
     expect(result).toEqual({
       claimed: false,
@@ -162,14 +153,14 @@ describe("claimPr when the confirmation read fails", () => {
   });
 
   test("logs the read failure when the label is restored", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       readFails,
       readFails,
       ghApiOk([]),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     const messages: string[] = [];
     const log: Logger = {
       info() {},
@@ -186,55 +177,55 @@ describe("claimPr when the confirmation read fails", () => {
   });
 
   test("makes three read attempts before restoring the label", async () => {
-    const { run, calls } = createFakeCommandRunner([
+    const { calls } = createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       readFails,
       readFails,
       ghApiOk([]),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     await claimPr(client, ...args);
     expect(calls).toHaveLength(5);
   });
 
   test("posts the trigger label back", async () => {
-    const { run, calls } = createFakeCommandRunner([
+    const { calls } = createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       readFails,
       readFails,
       ghApiOk([]),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     await claimPr(client, ...args);
-    expect(labelPost(calls)?.options?.stdin).toBe(
+    expect(labelPost(calls)?.request?.body).toBe(
       JSON.stringify({ labels: ["factory:review"] }),
     );
   });
 
   test("backs off one and two seconds between the read attempts", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       readFails,
       readFails,
       ghApiOk([]),
     ]);
-    const { client, sleeps } = recordingClient(run);
+    const { client, sleeps } = recordingClient();
     await claimPr(client, ...args);
     expect(sleeps).toEqual([1000, 2000]);
   });
 
   test("logs a warning for each failed read attempt", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       readFails,
       readFails,
       ghApiOk([]),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     const { log, warns } = recordingLog();
     await claimPr(client, ...args, log);
     expect(
@@ -243,26 +234,26 @@ describe("claimPr when the confirmation read fails", () => {
   });
 
   test("throws on a rate limit, saying the label stays removed", async () => {
-    const { run } = createFakeCommandRunner([ghApiOk({}), rateLimited]);
-    const { client } = recordingClient(run);
+    createFakeCommandRunner([ghApiOk({}), rateLimited]);
+    const { client } = recordingClient();
     await expect(claimPr(client, ...args)).rejects.toThrow(
       /rate limit after trigger label factory:review was removed.*a person must add it back/s,
     );
   });
 
   test("does not repeat the read or put the label back on a rate limit", async () => {
-    const { run, calls } = createFakeCommandRunner([
+    const { calls } = createFakeCommandRunner([
       ghApiOk({}),
       rateLimited,
       ghApiOk([]),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     await claimPr(client, ...args).catch(() => undefined);
     expect(calls).toHaveLength(2);
   });
 
   test("throws an error naming both failures when restoring the label fails", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       readFails,
@@ -270,22 +261,22 @@ describe("claimPr when the confirmation read fails", () => {
       ok(ghApiStdout(500, { message: "boom" })),
       ok(ghApiStdout(500, { message: "boom" })),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     await expect(claimPr(client, ...args)).rejects.toThrow(
       /confirmation read failed.*HTTP 404.*restoring trigger label factory:review failed.*HTTP 500/s,
     );
   });
 
   test("throws a left-removed error naming the label on a rate limit", async () => {
-    const { run } = createFakeCommandRunner([ghApiOk({}), rateLimited]);
-    const { client } = recordingClient(run);
+    createFakeCommandRunner([ghApiOk({}), rateLimited]);
+    const { client } = recordingClient();
     const caught = await claimPr(client, ...args).catch((err: unknown) => err);
     expect(caught).toBeInstanceOf(PrClaimLabelLeftRemovedError);
   });
 
   test("carries the trigger label in the left-removed error", async () => {
-    const { run } = createFakeCommandRunner([ghApiOk({}), rateLimited]);
-    const { client } = recordingClient(run);
+    createFakeCommandRunner([ghApiOk({}), rateLimited]);
+    const { client } = recordingClient();
     const caught = await claimPr(client, ...args).catch((err: unknown) => err);
     expect(
       caught instanceof PrClaimLabelLeftRemovedError ? caught.label : null,
@@ -293,21 +284,21 @@ describe("claimPr when the confirmation read fails", () => {
   });
 
   test("says a person must add the label back when restoring fails", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       readFails,
       readFails,
       ok(ghApiStdout(422, { message: "nope" })),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     await expect(claimPr(client, ...args)).rejects.toThrow(
       /the label stays removed, so a person must add it back/,
     );
   });
 
   test("resends the label POST once after a 500", async () => {
-    const { run, calls } = createFakeCommandRunner([
+    const { calls } = createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       readFails,
@@ -315,7 +306,7 @@ describe("claimPr when the confirmation read fails", () => {
       ok(ghApiStdout(500, { message: "boom" })),
       ghApiOk([]),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     const result = await claimPr(client, ...args);
     expect({
       restored: result.claimed === false && result.restored,
@@ -324,7 +315,7 @@ describe("claimPr when the confirmation read fails", () => {
   });
 
   test("sends the label POST twice at most when it keeps failing", async () => {
-    const { run, calls } = createFakeCommandRunner([
+    const { calls } = createFakeCommandRunner([
       ghApiOk({}),
       readFails,
       readFails,
@@ -332,7 +323,7 @@ describe("claimPr when the confirmation read fails", () => {
       ok(ghApiStdout(500, { message: "boom" })),
       ok(ghApiStdout(500, { message: "boom" })),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     await claimPr(client, ...args).catch(() => undefined);
     expect(calls.filter((call) => call.argv.includes("POST"))).toHaveLength(2);
   });
@@ -340,12 +331,12 @@ describe("claimPr when the confirmation read fails", () => {
 
 describe("claimPr", () => {
   test("reports claimed when the trigger label is gone after removal", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({}), // DELETE: トリガーラベルを外す
       ghApiOk(fakeIssue([])),
     ]);
     const result = await claimPr(
-      { run, ghToken: "token" },
+      { ghToken: "token" },
       "octo-owner",
       "atelier-works",
       7,
@@ -355,12 +346,12 @@ describe("claimPr", () => {
   });
 
   test("does not post an assignees request", async () => {
-    const { run, calls } = createFakeCommandRunner([
+    const { calls } = createFakeCommandRunner([
       ghApiOk({}),
       ghApiOk(fakeIssue([])),
     ]);
     await claimPr(
-      { run, ghToken: "token" },
+      { ghToken: "token" },
       "octo-owner",
       "atelier-works",
       7,
@@ -373,12 +364,12 @@ describe("claimPr", () => {
   });
 
   test("issues a DELETE for the trigger label", async () => {
-    const { run, calls } = createFakeCommandRunner([
+    const { calls } = createFakeCommandRunner([
       ghApiOk({}),
       ghApiOk(fakeIssue([])),
     ]);
     await claimPr(
-      { run, ghToken: "token" },
+      { ghToken: "token" },
       "octo-owner",
       "atelier-works",
       7,
@@ -390,10 +381,25 @@ describe("claimPr", () => {
     );
   });
 
+  // ステータス行の無い結果は、応答の無い失敗(ステータス0)の削除になる。
   test("reports not claimed when the label removal itself fails", async () => {
-    const { run } = createFakeCommandRunner([fail("rate limited")]);
+    createFakeCommandRunner([fail("rate limited")]);
     const result = await claimPr(
-      { run, ghToken: "token" },
+      { ghToken: "token" },
+      "octo-owner",
+      "atelier-works",
+      7,
+      "factory:review",
+    );
+    expect(result.claimed).toBe(false);
+  });
+
+  test("reports not claimed when the label removal is rate limited", async () => {
+    createFakeCommandRunner([
+      ok(ghApiStdout(429, { message: "API rate limit exceeded" })),
+    ]);
+    const result = await claimPr(
+      { ghToken: "token" },
       "octo-owner",
       "atelier-works",
       7,
@@ -403,12 +409,12 @@ describe("claimPr", () => {
   });
 
   test("reports not claimed when the trigger label is still present after removal (race)", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({}),
       ghApiOk(fakeIssue(["factory:review"])),
     ]);
     const result = await claimPr(
-      { run, ghToken: "token" },
+      { ghToken: "token" },
       "octo-owner",
       "atelier-works",
       7,
@@ -421,12 +427,12 @@ describe("claimPr", () => {
   });
 
   test("reports not claimed when the remaining label differs only in case", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ghApiOk({}),
       ghApiOk(fakeIssue(["Factory:Review"])),
     ]);
     const result = await claimPr(
-      { run, ghToken: "token" },
+      { ghToken: "token" },
       "octo-owner",
       "atelier-works",
       7,
@@ -439,11 +445,9 @@ describe("claimPr", () => {
   });
 
   test("reports not claimed when the label was already gone (404)", async () => {
-    const { run } = createFakeCommandRunner([
-      ok(ghApiStdout(404, { message: "Not Found" })),
-    ]);
+    createFakeCommandRunner([ok(ghApiStdout(404, { message: "Not Found" }))]);
     const result = await claimPr(
-      { run, ghToken: "token" },
+      { ghToken: "token" },
       "octo-owner",
       "atelier-works",
       7,
@@ -456,11 +460,11 @@ describe("claimPr", () => {
   });
 
   test("does not read the issue when the label was already gone (404)", async () => {
-    const { run, calls } = createFakeCommandRunner([
+    const { calls } = createFakeCommandRunner([
       ok(ghApiStdout(404, { message: "Not Found" })),
     ]);
     await claimPr(
-      { run, ghToken: "token" },
+      { ghToken: "token" },
       "octo-owner",
       "atelier-works",
       7,
@@ -991,27 +995,27 @@ describe("restoreTriggerLabelAfterStartRace", () => {
   const cause = new Error("duplicate key value");
 
   test("posts the trigger label back", async () => {
-    const { run, calls } = createFakeCommandRunner([ghApiOk([])]);
-    const { client } = recordingClient(run);
+    const { calls } = createFakeCommandRunner([ghApiOk([])]);
+    const { client } = recordingClient();
     await restoreTriggerLabelAfterStartRace(client, target, cause);
-    expect(labelPost(calls)?.options?.stdin).toBe(
+    expect(labelPost(calls)?.request?.body).toBe(
       JSON.stringify({ labels: ["factory:fix"] }),
     );
   });
 
   test("resends the label POST once after a 500", async () => {
-    const { run, calls } = createFakeCommandRunner([
+    const { calls } = createFakeCommandRunner([
       ok(ghApiStdout(500, { message: "boom" })),
       ghApiOk([]),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     await restoreTriggerLabelAfterStartRace(client, target, cause);
     expect(calls.filter((call) => call.argv.includes("POST"))).toHaveLength(2);
   });
 
   test("logs a warning that the label was restored", async () => {
-    const { run } = createFakeCommandRunner([ghApiOk([])]);
-    const { client } = recordingClient(run);
+    createFakeCommandRunner([ghApiOk([])]);
+    const { client } = recordingClient();
     const { log, warns } = recordingLog();
     await restoreTriggerLabelAfterStartRace(client, target, cause, log);
     expect(warns).toEqual([
@@ -1020,11 +1024,11 @@ describe("restoreTriggerLabelAfterStartRace", () => {
   });
 
   test("throws a left-removed error naming both failures when restoring fails", async () => {
-    const { run } = createFakeCommandRunner([
+    createFakeCommandRunner([
       ok(ghApiStdout(500, { message: "boom" })),
       ok(ghApiStdout(500, { message: "boom" })),
     ]);
-    const { client } = recordingClient(run);
+    const { client } = recordingClient();
     await expect(
       restoreTriggerLabelAfterStartRace(client, target, cause),
     ).rejects.toThrow(
@@ -1033,10 +1037,8 @@ describe("restoreTriggerLabelAfterStartRace", () => {
   });
 
   test("carries the trigger label in the left-removed error", async () => {
-    const { run } = createFakeCommandRunner([
-      ok(ghApiStdout(422, { message: "nope" })),
-    ]);
-    const { client } = recordingClient(run);
+    createFakeCommandRunner([ok(ghApiStdout(422, { message: "nope" }))]);
+    const { client } = recordingClient();
     const caught = await restoreTriggerLabelAfterStartRace(
       client,
       target,

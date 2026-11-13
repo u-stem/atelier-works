@@ -112,7 +112,6 @@ import {
   type WorkItem,
   type WorkItemStatus,
 } from "./lib/types.ts";
-import { runCommand } from "./lib/workspace.ts";
 import {
   describeReason,
   evaluateSameRepoHeadGuard,
@@ -1357,7 +1356,7 @@ export async function main(): Promise<{
   const discordWebhookUrl = await wmill.getVariable(
     "f/factory/discord_webhook_url",
   );
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
 
   const viewer = await getViewer(client);
 

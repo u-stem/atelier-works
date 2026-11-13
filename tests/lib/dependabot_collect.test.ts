@@ -1819,7 +1819,6 @@ function neverFetch(): FetchLike {
 
 function depsWith(
   overrides: {
-    run?: GhClient["run"];
     days?: number;
     group?: boolean;
     others?: string[];
@@ -1828,7 +1827,6 @@ function depsWith(
   } = {},
 ): CollectDeps {
   const client: GhClient = {
-    run: overrides.run ?? createFakeCommandRunner([]).run,
     ghToken: GH_TOKEN,
     sleep: async () => {},
     transientRetryDelayMs: 0,
@@ -1851,7 +1849,7 @@ async function firstGhArgv(
   call: (deps: CollectDeps) => Promise<unknown>,
 ): Promise<readonly string[]> {
   const fake = createFakeCommandRunner([ghApiOk({}), ghApiOk({}), ghApiOk({})]);
-  await call(depsWith({ run: fake.run })).catch(() => undefined);
+  await call(depsWith()).catch(() => undefined);
   return fake.calls[0]?.argv ?? [];
 }
 
@@ -2080,7 +2078,7 @@ describe("buildCollectDeps", () => {
   test("passes the token of the client to the GitHub API", async () => {
     const fake = createFakeCommandRunner([ghApiOk({})]);
 
-    await depsWith({ run: fake.run })
+    await depsWith()
       .getPr("acme", "widgets", 12)
       .catch(() => undefined);
 

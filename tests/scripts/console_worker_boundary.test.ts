@@ -1307,6 +1307,14 @@ describe("console worker boundary", () => {
     },
   );
 
+  // GitHubのAPIへの要求は通信層の`fetch`で送り、`gh`の子プロセスを起動しない。
+  // そのため、2つのscriptがGitHubを呼ぶ`github.ts`は、ファイルと子プロセスの道具に届かない。
+  // 2つのscript自体は、ほかのモジュールを通して道具に届く。
+  // approval_decideは`implement_support.ts`から`workspace.ts`に、retry_work_itemは`ci_fix_round.ts`などに届く。
+  test("github.ts, which both scripts call GitHub through, reaches no file or process tool", () => {
+    expect(filesWithToolDependencies(["f/factory/lib/github"])).toEqual([]);
+  });
+
   test.each(READS_NO_SECRET)("%s does not read github_token", (path) => {
     expect(mentions(path, GITHUB_TOKEN)).toBe(false);
   });

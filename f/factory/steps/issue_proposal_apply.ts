@@ -41,7 +41,6 @@ import {
   verifyRepoOwnerId,
 } from "../lib/repo_owner_gate.ts";
 import { type IssueProposalOrigin, isBoolean } from "../lib/types.ts";
-import { runCommand } from "../lib/workspace.ts";
 import {
   appendIssueProposalMarker,
   buildAuditProposalBody,
@@ -359,7 +358,7 @@ async function run(
     wmill.getResource("f/factory/factory_config"),
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
 
   // 承認の経路は判断の記録の前に、却下の経路は返信の前に、保存済みのリポジトリのオーナーを照合する。
   // どちらの経路も、照合は1回である。

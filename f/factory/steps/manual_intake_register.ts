@@ -57,7 +57,6 @@ import {
   type FailureRecord,
   type WorkItemStatus,
 } from "../lib/types.ts";
-import { runCommand } from "../lib/workspace.ts";
 import {
   buildImplementLaunchNoticeMessage,
   notifyNeedsHumanBestEffort,
@@ -564,7 +563,7 @@ export async function main(
     wmill.getResource("f/factory/factory_config"),
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
+  const client: GhClient = { ghToken };
 
   const viewer = await getViewer(client);
 

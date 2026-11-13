@@ -29,7 +29,7 @@ function clientFor(responses: Parameters<typeof createFakeCommandRunner>[0]) {
   const fake = createFakeCommandRunner(responses);
   return {
     fake,
-    client: { run: fake.run, ghToken: "tok", sleep: async () => {} },
+    client: { ghToken: "tok", sleep: async () => {} },
   };
 }
 
@@ -384,7 +384,7 @@ describe("createBranchWithFiles", () => {
   test("builds the tree on top of the base tree", async () => {
     const { client, fake } = clientFor(responses());
     await createBranchWithFiles(client, "acme", "widgets", options);
-    expect(fake.calls[2]?.options?.stdin).toBe(
+    expect(fake.calls[2]?.request?.body).toBe(
       JSON.stringify({
         base_tree: SHA_B,
         tree: [
@@ -402,7 +402,7 @@ describe("createBranchWithFiles", () => {
   test("commits with the given identity and the base as parent", async () => {
     const { client, fake } = clientFor(responses());
     await createBranchWithFiles(client, "acme", "widgets", options);
-    expect(fake.calls[3]?.options?.stdin).toBe(
+    expect(fake.calls[3]?.request?.body).toBe(
       JSON.stringify({
         message: "chore: update",
         tree: SHA_C,
@@ -416,7 +416,7 @@ describe("createBranchWithFiles", () => {
   test("points the new branch at the commit", async () => {
     const { client, fake } = clientFor(responses());
     await createBranchWithFiles(client, "acme", "widgets", options);
-    expect(fake.calls[4]?.options?.stdin).toBe(
+    expect(fake.calls[4]?.request?.body).toBe(
       JSON.stringify({ ref: `refs/heads/${options.branch}`, sha: SHA_D }),
     );
   });

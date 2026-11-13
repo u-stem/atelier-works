@@ -778,12 +778,19 @@ noticeには重要度がある。
 ## GitHub APIのrate limit
 
 GitHub APIの呼び出しは`f/factory/lib/github.ts`が行う。
-GETは、`gh`を起動せず、通信層の`f/factory/lib/github_http.ts`の`fetch`で送る。
-書き込み(POST、PATCH、PUT、DELETE)は、`gh api -i`で送る。
-`gh api -i`を使うのは、応答のヘッダーを、2回目の要求なしに読むためである。
-rate limitの判定と待ち、一時的な失敗の再試行は、通信層の`github_http.ts`が行う。
-`gh`の送り方と`fetch`の送り方は、同じ判定と再試行を通る。
+GETと書き込み(POST、PATCH、PUT、DELETE、GraphQLのmutation)は、どちらも`gh`を起動しない。
+要求は、すべて通信層の`f/factory/lib/github_http.ts`の`fetch`で送る。
+一次の制限と二次の制限の判定、待ち、一時的な失敗の再試行の実装は、`github_http.ts`の1か所だけにある。
+GitHubのAPIの通信層は、この1つである。
+gitの通信(clone、fetch、push)は、APIの通信層の対象に含めない。
+gitは`gh auth git-credential`を資格情報の補助に使うので、`gh`のバイナリはworkerに残る。
 GETの一覧とパスの組み立ては、[GETの呼び出しの一覧](#getの呼び出しの一覧)にある。
+
+GET以外の要求には、`Time-Zone: UTC`を付ける。
+GitHubは、commitを作る要求などで日時の時差をこの値から決め、値が無ければ、アカウントが最後にブラウザで使った時間帯を使う。
+運用者のブラウザの操作で、Factoryが作るcommit(`createBranchWithFiles`)の時差が変わらないようにするためである。
+本文のある要求には、`Content-Type: application/json`を付け、本文をJSONにして送る。
+204のように本文の無い応答は、空の本文として返す。
 
 ### rate limitと判定する応答
 
@@ -870,20 +877,19 @@ rate limitで失敗したときに各ステップが何を済ませているか�
 ### RESTの検索の拒否
 
 通信層の`rejectRestSearchEndpoint`は、RESTの検索APIのendpointを、送る前に例外で拒む。
-`callGhApi`の書き込みは、`gh`を起動する前に、この検査を通る。
-`fetch`の経路(`callGhApi`のGET、`fetchIssueObject`、`gh_graphql.ts`、署名付きURLの取得)は、送る前に通る。
+`callGhApi`(GETと書き込み)、`fetchIssueObject`、`gh_graphql.ts`、署名付きURLの取得は、すべて送る前にこの検査を通る。
 検索の枠は小さく、周期の同じフローが5分の境目に重なって呼ぶと拒まれるので、呼び出しを入口で止める。
 判定は、endpointの先頭の`/`とホストを落とし、小文字にして、`search/`で始まるかを見る。
 `/search/issues`、`SEARCH/issues`、`https://api.github.com/search/issues`は拒む。
-`fetch`の経路は、パスの形の検査(`assertGitHubApiPath`)も通り、`/`で始まるendpointと絶対URLを、検索でなくても拒む。
+どの要求も、パスの形の検査(`assertGitHubApiPath`)を通り、`/`で始まるendpointと絶対URLを、検索でなくても拒む。
 `repos/o/search-x/issues`のように、リポジトリ名やクエリに含むだけの要求は拒まない。
 `paginateGhApi`と`callGhApiRawBody`は`callGhApi`を通るので、次のページのURLも同じ判定を受ける。
 同じoriginへのリダイレクトを辿るときも、行き先が検索APIなら辿らない。
 例外のメッセージにendpointを載せない。
 クエリに値が入りうるためである。
 対象はRESTだけで、GraphQLの`search`のフィールドは拒まない。
-`fetch`の経路は、`.`と`..`の区間と、エンコードした`.`を含む区間も拒む。
-`gh`の経路(書き込み)はドットセグメントを拒まず、どちらの経路も`.`以外のパーセントエンコードは正規化しない。
+パスの検査は、`.`と`..`の区間と、エンコードした`.`を含む区間も拒む。
+`.`以外のパーセントエンコードは正規化しない。
 呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通る。
 artifactの取得も、通信層の`downloadRedirectTarget`を通るので、この検査を受ける。
 
@@ -934,34 +940,38 @@ commitのIDは、`assertCommitSha`か`isCommitSha`を通した40桁の16進数�
 GitHubが返す次のURLは`repositories/<数値ID>/...`とクエリの形で、同じパスの検査を通る。
 ホストを落とすので、`link`ヘッダーが別のホストを指しても、送り先は`api.github.com`に固定される。
 エンコードしない名前(`resolveTagCommit`のタグ名)が、`new URL`で書き換わる文字を含むときは、パスの検査が送る前に拒む。
-`gh`の送り方は先頭の`/`と絶対URLも受け付けたが、GETではどちらも拒む。
-`tests/lib/github_search_rejection.test.ts`は、GETでの拒否と、書き込みが`gh`に先頭の`/`を渡せることを固定する。
+先頭の`/`と絶対URLは、GETでも書き込みでも拒む。
+`tests/lib/github_search_rejection.test.ts`は、GETと書き込みの両方での拒否を固定する。
+
+書き込みのパスも、GETと同じ組み立て方(所有者とリポジトリの名前の検査、番号、`encodeURIComponent`)で作り、同じパスの検査を通る。
+書き込みはリダイレクトを辿らず、3xxをそのまま返す。
+改名か移管をしたリポジトリへの書き込みは、新しい名前へ辿らず、HTTP 3xxの失敗になる。
 
 静的テスト`tests/scripts/no_search_api.test.ts`は、次の3つを固定する。
 
 - `f/factory`のテスト以外に、`search/`の字面、`gh search`、`--search`、argvの`gh`と`search`の並びが無い。
-- `gh`をargvの先頭に置く配列を書くファイルは、`github.ts`だけである。
+- `gh`をargvの先頭に置く配列と、`gh api`を起動する配列を、どのファイルも書かない。
 - 5つのフローが、`search`で始まる名前を`github.ts`から読み込まない。
 
 `search/`の字面を書けるのは、`github_http.ts`の、拒否の接頭辞を持つ定数の1行だけである。
 
 ## GitHub APIの一時的な失敗
 
-rate limitのほかに、次の3つの一時的な失敗は、通信層の`f/factory/lib/github_http.ts`の`runGitHubRequest`が短く待って1回だけ再試行する。
+rate limitのほかに、次の2つの一時的な失敗は、通信層の`f/factory/lib/github_http.ts`の`runGitHubRequest`が短く待って1回だけ再試行する。
 通信の再試行は、この関数の中だけにある。
 `github.ts`の`rereadWithRetries`は、ラベルを外した後の整合を待つ業務の層の繰り返しで、通信の再試行ではない。
+再試行の実装を1か所にする決まりは、通信の再試行が対象で、この業務の層の繰り返しは含めない。
 PRとIssueのポーリングは5分ごとに動くので、一過性の失敗でその回の検出が抜けることを防ぐ。
 
 | 失敗 | 判定 | 再試行する要求 |
 | --- | --- | --- |
-| ghプロセスの起動失敗 | `Bun.spawn`の失敗を表す`SpawnError`で、コードが`EAGAIN`、`EMFILE`、`ENFILE`、`ENOMEM`(資源の一時不足) | `gh`で送るすべての要求(書き込み) |
-| 応答の無い失敗(通信断など) | GETは`fetch`が拒否した(HTTP 0)。書き込みは`gh`の標準出力にステータス行が無い(HTTP 0)。どちらも締め切りによるものを除く | GETと、読み取りのGraphQL(`listReviewThreads`) |
+| 応答の無い失敗(通信断など) | `fetch`が拒否した(HTTP 0)。締め切りによるものを除く | GETと、読み取りのGraphQL(`listReviewThreads`) |
 | サーバーエラー | ステータスが500から599 | GETと、読み取りのGraphQL(`listReviewThreads`) |
 
 `fetch`では、要求が届く前の失敗と届いた後の失敗を見分けられない。
-そのため、GETの通信の失敗は、すべて応答の無い失敗として扱う。
+そのため、通信の失敗は、要求を送る前の失敗(接続できなかったなど)も含めて、すべて応答の無い失敗として扱う。
 
-2xxの後で本文が途中で切れたGETは、1回だけ取り直す。
+2xxの後で本文が途中で切れたGET(と冪等な要求)は、1回だけ取り直す。
 取り直しても欠けたJSONの応答は、`ensureSuccess`がステータス0の`GitHubHttpError`にする。
 締め切りで切れたかは`timedOut`に載せる。
 形の誤り(`GitHubResponseError`)にせず通信の一時的な失敗として扱うので、PRのレビューの自動の再開(`markTransientGitHubFailure`)の対象になる。
@@ -976,16 +986,32 @@ rate limitの再試行の中でも一時的な失敗の再試行が起こりう�
 
 ### 変更を伴う要求を再送しない理由
 
-起動に失敗した要求はGitHubに届いていない。
-そのため、コメント、レビュー、ラベル、PRの作成でも、再送して二重にならない。
-`SpawnError`は`Bun.spawn`の呼び出しだけを包む。
-起動の後の失敗(出力の読み取りの失敗など)は、同じコードを持っていても対象にしない。
-
 通信断では、要求が届いた後で応答だけを失った可能性がある。
 届いていた場合に再送すると、コメントやレビューが二重に投稿され、PRやIssueが重複して作られる。
 そのため、GETでない要求は通信断を再試行せず、HTTP 0の失敗として記録する。
 GETでない要求とは、POST、PUT、PATCH、DELETEである。
 GraphQLはqueryでもPOSTで送るので含む。
+
+`fetch`では、要求を送る前の失敗(接続できなかったなど)を、届いた後の失敗と見分けられない。
+そのため、書き込みは、要求を送る前の失敗でも再送しない。
+二重の変更を避ける側に倒すためである。
+書き込みには`keepalive: false`を付ける。
+Bunは、この指定があると、使い回した接続を使わない。
+切れた接続を使い回して、届いたか分からない失敗になるのを減らすためである。
+ローカルのBun 1.4.3で確かめたが、workerのBunの版では確かめていない。
+反映した後の最初の書き込みのジョブで確かめる。
+
+2xxの後で本文が途中で切れた書き込みは、変更が効いた後で応答の本文だけを失ったものである。
+`callGhApi`は、これを一時的な失敗(ステータス0)にせず、`GitHubWriteBodyCutError`(`GitHubResponseError`の一種)を投げる。
+PRのレビューの自動の再開の対象にせず、待って再開して二重に効かせないためである。
+`claimIssue`のラベルの削除は、ほかの判断できない失敗と同じく、読み直して効いたかを確かめる。
+
+本文をJSONにできない要求と、ヘッダーの値(トークン)に改行などを含む要求は、送らずに`GitHubRequestError`を投げる。
+送っていないことが確かで、待っても直らないので、応答の無い失敗(ステータス0)にしない。
+文に、トークンと本文を載せない。
+
+冪等でない書き込み1件の最悪の時間は約240秒である。
+内訳は、締め切りの60秒、レート制限の待ちの最大120秒、送り直した要求の締め切りの60秒である。
 
 サーバーエラーでも、変更が途中まで効いている可能性は通信断と同じである。
 そのため、5xxを再試行するのもGETと読み取りのGraphQLだけで、GETでない要求は5xxの応答のまま失敗にする。
@@ -998,10 +1024,9 @@ mutation(`resolveReviewThread`)は再試行しない。
 
 - HTTPの4xx応答。
   応答が返っているので、呼び出し側が失敗として扱う。
-- 書き込みで、待っても直らない`gh`の起動の失敗。
-  ghの実行ファイルが無い場合(`ENOENT`)と、実行権限が無い場合(`EACCES`)である。
-- ghプロセスのtimeoutと、`fetch`の締め切り。
+  認証が拒まれたとき(401)は、待っても直らない失敗として扱う。
+- `fetch`の締め切り(既定は60秒)。
   待ちが長引き、ステップのtimeoutに近づくため。
   2xxのステータスの後で締め切りに本文を切られた応答も、取り直さない。
 - 再試行しても失敗したもの。
-  起動失敗は元のエラーで、通信断はHTTP 0の失敗で、サーバーエラーはその5xxの応答のままステップを失敗にする。
+  通信断はHTTP 0の失敗で、サーバーエラーはその5xxの応答のままステップを失敗にする。

@@ -2042,7 +2042,7 @@ describe("collectDepsFor", () => {
     let received: unknown = null;
     collectDepsFor(
       {
-        client: { run: async () => commandResult(), ghToken: "t" },
+        client: { ghToken: "t" },
         config: {
           dependabot_min_published_days: 7,
           dependabot_group_enabled: false,
@@ -2061,7 +2061,7 @@ describe("collectDepsFor", () => {
 
   test("passes dependabot_group_enabled as allowGroups", () => {
     const deps = collectDepsFor({
-      client: { run: async () => commandResult(), ghToken: "t" },
+      client: { ghToken: "t" },
       config: {
         dependabot_min_published_days: 7,
         dependabot_group_enabled: true,

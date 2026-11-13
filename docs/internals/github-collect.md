@@ -558,7 +558,7 @@ IDが一致したことを確かめたい処理は、`id_checked`を見る。
 | 5 | DBの書き込みの失敗(段1の置き換え、段2の行の読み取りと書き込みの例外) | 偽 | `db_error` | 起きた段 |
 | 6 | 設定のIDと不一致、または所有者が見つからない | 偽 | `owner_mismatch` | `list` |
 | 7 | 締め切りで未着手、一覧の途中で打ち切った、または段2が有効で段1の下限を切った | 偽 | `deadline` | `list` |
-| 8 | 401 | 偽 | `unauthorized` | `list` |
+| 8 | 401、またはトークンが改行などを含み要求を組み立てられない | 偽 | `unauthorized` | `list` |
 | 9 | レート制限でない403 | 偽 | `forbidden` | `list` |
 | 10 | 一次の制限(`rate_limited`)、二次の制限と429(`secondary_limit`) | 偽 | `rate_limited`、`secondary_limit` | `list` |
 | 11 | 5xx、通信断、`/graphql`のHTTP 404 | 偽 | `http_5xx` | `list` |
@@ -1445,7 +1445,7 @@ Discordの説明には、閾値、最後の成功(JST)、最新の実行の原�
 
 ## RESTの検索の拒否
 
-`callGhApi`は、RESTの検索APIのendpointを、送る前に拒む(GETは`fetch`で、書き込みは`gh`で送る)。
+`callGhApi`は、RESTの検索APIのendpointを、送る前に拒む(GETと書き込みは、どちらも通信層の`fetch`で送る)。
 検索の枠は小さく、5分の境目に呼びが重なると拒まれる。
 下流が検索を使わない設計を、後の変更で破らせないための防止である。
 仕様は[通知とrate limitの仕様](notifications.md#restの検索の拒否)にある。

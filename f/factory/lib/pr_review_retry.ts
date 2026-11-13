@@ -25,7 +25,7 @@ import { TRANSIENT_GITHUB_REASON_PREFIX } from "./auto_retry_reasons.ts";
 import { TRANSIENT_STALL_NOTE_PREFIX } from "./console_support.ts";
 import type { TransientReviewCandidate } from "./db.ts";
 import type { NotifyEvent } from "./discord.ts";
-import { GH_EXIT_AUTH_REQUIRED, GitHubHttpError } from "./github_errors.ts";
+import { GitHubHttpError } from "./github_errors.ts";
 import { parseFlowJobId } from "./implement_launch_support.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import { assertGitHubName } from "./types.ts";
@@ -78,10 +78,9 @@ export function transientReviewQuery() {
 /**
  * GitHubの5xxか応答の無い失敗(状態0)なら、文の先頭に印を付けた例外を返す。
  * それ以外はそのまま返す。待っても結果が変わらない失敗を、自動の再開に回さないためである。
- * 状態0のうち、timeoutで打ち切られたものは一時的として扱う。
- * `gh`が認証を求めて終わったもの(終了コード`GH_EXIT_AUTH_REQUIRED`)は、同じ入力で必ず落ちるので印を付けない。
- * それ以外の状態0は、通信断と`gh`のほかの失敗を見分ける情報が無いので、一時的として扱い、
- * 落ち続けるものは再開の回数の上限と待ちの伸長で打ち切る。
+ * 状態0は、通信断も締め切りによる打ち切りも、常に一時的として扱う。
+ * 落ち続けるものは、再開の回数の上限と待ちの伸長で打ち切る。
+ * トークンが拒まれた失敗(401)は、同じトークンで必ず落ちるので印を付けない。
  */
 export function markTransientGitHubFailure(err: unknown): unknown {
   if (err instanceof GitHubHttpError && isTransientStatus(err)) {
@@ -93,9 +92,7 @@ export function markTransientGitHubFailure(err: unknown): unknown {
 }
 
 function isTransientStatus(err: GitHubHttpError): boolean {
-  if (err.status >= 500) return true;
-  if (err.status !== 0) return false;
-  return err.timedOut || err.exitCode !== GH_EXIT_AUTH_REQUIRED;
+  return err.status === 0 || err.status >= 500;
 }
 
 export type TransientFailureAction = "defer" | "job_failed";

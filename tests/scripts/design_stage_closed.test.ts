@@ -203,9 +203,6 @@ const CONTEXT: ApprovedBranchContext = {
   issueNumber: 42,
   attempt: 1,
   client: {
-    run: async () => {
-      throw new Error("the builder must not call GitHub");
-    },
     ghToken: "token",
   },
   viewerLogin: "factory-bot",
