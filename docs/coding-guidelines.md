@@ -278,14 +278,16 @@ gitのpre-pushは全体の`check`を実行しない。
 | デファクトで、保守が続いている | 自前の実装は、誤りの修正と検査を自分で負い続けるため |
 | install scriptが無い | 依存は`--ignore-scripts`で入れ、install scriptを動かさないため |
 | 正確な版で固定できる | 範囲で指定すると、入れるたびに中身が変わりうるため |
+| 足す版が、公開から7日以上たっている | 公開の直後は、乗っ取られた版がまだ見つかっていないことがあるため。dependabotのcooldown(`.github/dependabot.yml`)とそろえる。新しく足す依存には機械の下限が無いので、足す人がレジストリで確かめる |
+| パッケージ名と公開者が本物であることを、レジストリで確かめた | 綴りの似た名前や、存在しない名前を取り違えて入れないため |
 | Consoleでは、gzipした後の大きさが小さい | 依存は運用者のブラウザに配るバンドルに入るため。大きさは`mise run console:build`の出力で確かめる |
 
 次の境界では、上の順によらず、表の方針に従う。
 
 | 境界 | 方針 | 理由 | 根拠 |
 | --- | --- | --- | --- |
-| 定期ジョブ用workerのscript | 外部のパッケージは`windmill-client`だけにする | 境界の走査はパッケージの中身を見ない。ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるため | `tests/scripts/periodic_script_boundary.test.ts`、[定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界) |
-| Console用workerのscript | 外部のimportは`windmill-client`だけにする。`node:`のモジュールと`fetch`も使わない | SDKの呼び出しを許可表で絞り、たどれるファイルを保護パスに収める。パッケージの中身には、走査も保護も届かないため | `tests/scripts/console_worker_boundary.test.ts`、[Console用workerの境界](security.md#console用workerの境界) |
+| 定期ジョブ用workerのscript | 外部のパッケージは`windmill-client`だけにする | 境界の走査はパッケージの中身を見ない。ほかのパッケージを足すと、ファイルとサブプロセスの禁止をすり抜けられるため | `tests/scripts/periodic_script_boundary.test.ts`が、importの形で書いたものを止める。走査が見ない形は[定期ジョブ用workerの境界](security.md#定期ジョブ用workerの境界)にある |
+| Console用workerのscript | 外部のimportは`windmill-client`だけにする。`node:`のモジュールと`fetch`も使わない | SDKの呼び出しを許可表で絞り、たどれるファイルを保護パスに収める。パッケージの中身には、走査も保護も届かないため | `tests/scripts/console_worker_boundary.test.ts`が、importの形で書いたものを止める。境界の全体は[Console用workerの境界](security.md#console用workerの境界)にある |
 | 秘密値に届くworkerで、攻撃者が決められる入力を読む部品 | 依存を足さず、`node:`の標準の機能の上に自前で書く。CIの成果物のzipの読み取りが当たる | 攻撃者が決められるzipを、展開の前に大きさとパスで検査し、展開の間は実測の長さで打ち切るため。判定のすべてを、保護パスのコードとしてレビューできる範囲に置く | `f/factory/lib/metadata_patch_zip.ts`の先頭のコメント |
 | Claude Codeのフックの、シェルの字句解析 | 自前で持つ | 読めない構文と実行時に決まる語を拒否に倒す境目を、字句の段から決めるため | `scripts/claude-hooks/shell-words.ts`の先頭のコメント、[判定の範囲](security.md#判定の範囲) |
 | 保護パスの判定の部品 | 保護の外の部品をimportしない。要る処理は、そのファイルに持つ | 保護の外の部品を書き換えて、判定を緩められないようにするため | `tests/lib/protected_paths.test.ts`のimportの連鎖のテスト、`f/factory/lib/deploy_gate.ts`の先頭のコメント |
