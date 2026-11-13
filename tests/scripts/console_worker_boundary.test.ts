@@ -350,6 +350,23 @@ describe("the import scan", () => {
     ).not.toEqual([]);
   });
 
+  // 骨組みが割り算を正規表現の始まりと読み違えても、変換後のコードへの判定で止める。
+  test("flags require with a variable between two divisions by members named of", () => {
+    expect(
+      unfollowableImports(
+        "const a = x.of / 2;\nrequire(name);\nconst b = y.of / 2;",
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("flags module.require between two divisions by members named of", () => {
+    expect(
+      unfollowableImports(
+        'const a = x.of / 2;\nmodule.require("node:fs");\nconst b = y.of / 2;',
+      ),
+    ).not.toEqual([]);
+  });
+
   test("does not flag a mention of require in a string", () => {
     expect(unfollowableImports('const s = "require";')).toEqual([]);
   });
@@ -1083,6 +1100,17 @@ describe("the SDK use scan", () => {
 
   test("does not flag a property that is named Worker", () => {
     expect(sdkFindings("const a = job.Worker;").problems).toEqual([]);
+  });
+
+  // キーの除外は、条件式の枝(`c ? fetch : null`)も通すので、置かない。
+  test("flags fetch in a branch of a conditional", () => {
+    expect(sdkFindings("const f = c ? fetch : null;").problems).not.toEqual([]);
+  });
+
+  test("flags Worker in a branch of a conditional", () => {
+    expect(sdkFindings("const W = c ? Worker : null;").problems).not.toEqual(
+      [],
+    );
   });
 
   test("flags a spread that overrides the resource path", () => {

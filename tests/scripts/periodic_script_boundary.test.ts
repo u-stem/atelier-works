@@ -293,6 +293,23 @@ describe("the tool dependency scan", () => {
     expect(toolDependencies('const s = "module";')).toEqual([]);
   });
 
+  // `.of`と`.in`はメンバーなので、その後ろの`/`は割り算である。正規表現の始まりと読み違えて、間のコードを落とさない。
+  test("flags Bun.spawn between two divisions by members named of", () => {
+    expect(
+      toolDependencies(
+        'const a = x.of / 2;\nBun.spawn(["gh"]);\nconst b = y.of / 2;',
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("flags Bun.spawn between two divisions by members named in", () => {
+    expect(
+      toolDependencies(
+        'const a = x.in / 2;\nBun.spawn(["gh"]);\nconst b = y.in / 2;',
+      ),
+    ).not.toEqual([]);
+  });
+
   // 到達しない枝の動的importは変換で消えるが、指定は変換前の一覧に残るので、依存の走査から隠れない。
   test("flags node:fs in an unreachable branch next to a folded dynamic import", () => {
     expect(
