@@ -6,6 +6,15 @@
 /** 日本時間とUTCの差(ミリ秒)。 */
 export const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
+/** 日付として読めない時刻を`YYYY-MM-DD`の代わりに示す文字列。年、月、日をそれぞれ`NaN`にする。 */
+export const INVALID_JST_DATE = "";
+
+/** 日付として読めない時刻を`YYYY-MM-DD HH:mm`の代わりに示す文字列。 */
+export const INVALID_JST_MINUTE = "";
+
+/** 日付として読めない時刻を`HH:mm`の代わりに示す文字列。 */
+export const INVALID_JST_CLOCK = "";
+
 const PARTS_FORMAT = new Intl.DateTimeFormat("ja-JP", {
   timeZone: "Asia/Tokyo",
   year: "numeric",

@@ -3,8 +3,25 @@ import {
   formatJstClock,
   formatJstDate,
   formatJstMinute,
+  INVALID_JST_CLOCK,
+  INVALID_JST_DATE,
+  INVALID_JST_MINUTE,
   JST_OFFSET_MS,
 } from "../../f/factory/lib/jst.ts";
+
+describe("the text for a time that is not a time", () => {
+  test("shows each part of a date as NaN", () => {
+    expect(INVALID_JST_DATE).toBe("NaN-NaN-NaN");
+  });
+
+  test("shows each part of a date and a minute as NaN", () => {
+    expect(INVALID_JST_MINUTE).toBe("NaN-NaN-NaN NaN:NaN");
+  });
+
+  test("shows each part of a clock as NaN", () => {
+    expect(INVALID_JST_CLOCK).toBe("NaN:NaN");
+  });
+});
 
 // 2026-12-31T15:04:05ZはJSTで2027-01-01 00:04:05。年と日付の繰り上がりを1つの時刻で確かめる。
 const NEW_YEAR = Date.parse("2026-12-31T15:04:05.678Z");

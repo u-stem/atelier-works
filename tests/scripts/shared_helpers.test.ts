@@ -154,6 +154,17 @@ describe("JST_OFFSET_MS", () => {
   });
 });
 
+describe("the text for a time that is not a time", () => {
+  test("is written in f/ only by jst.ts", () => {
+    expect(
+      trackedTypeScriptFiles().filter(
+        (path) =>
+          path.startsWith("f/") && /"NaN(?:-NaN-NaN|:NaN)/.test(read(path)),
+      ),
+    ).toEqual(["f/factory/lib/jst.ts"]);
+  });
+});
+
 describe("the shared leaf modules", () => {
   test.each([
     "f/factory/lib/types.ts",
