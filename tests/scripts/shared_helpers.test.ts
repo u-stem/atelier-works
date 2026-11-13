@@ -92,6 +92,8 @@ const IS_RECORD_HOMES: Readonly<Record<string, string>> = {
     "scripts/host_apply imports only built-ins and its own directory",
   "infra/console_fetcher/decide.ts":
     "the fetcher image copies only its own files",
+  "f/factory/lib/console_actions.ts":
+    "the console action log imports nothing, so that no unprotected module decides what it records",
   "f/factory/lib/metadata_patch_manifest.ts": PROTECTED_LEAF,
   "scripts/check-console-lockfile.ts": PROTECTED_LEAF,
   "scripts/check-script-locks.ts": PROTECTED_LEAF,

@@ -1,6 +1,7 @@
 // 設定の配列とオブジェクトの値を、画面が型ごとに描ける形にする。
 // サーバー由来の文字列は、すべて`safeText`を通した文字列にして返す。
 
+import { isRecord } from "../api/guards/primitives.ts";
 import { safeText } from "./safeText.ts";
 
 /** オブジェクトの1つのキーの値。文字列にした値か、要素ごとの行の一覧。 */
@@ -56,17 +57,13 @@ function isScalarArray(value: unknown): value is Scalar[] {
   return Array.isArray(value) && value.every(isScalar);
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function scalarText(value: Scalar): string {
   return safeText(String(value));
 }
 
 /** セルを持つ表にできる行。キーを1つ以上持ち、値がすべて単純な値のオブジェクト。 */
 function isTableRow(value: unknown): value is Record<string, Scalar> {
-  if (!isPlainObject(value)) return false;
+  if (!isRecord(value)) return false;
   const values = Object.values(value);
   return values.length > 0 && values.every(isScalar);
 }
@@ -155,7 +152,7 @@ export function describeStructure(key: string, value: object): ConfigStructure {
     if (elements.every(isTableRow)) return tableOf(key, elements);
     return jsonOf(value);
   }
-  if (isPlainObject(value)) {
+  if (isRecord(value)) {
     if (Object.keys(value).length === 0) return { kind: "empty", note: null };
     return entriesOf(value) ?? jsonOf(value);
   }
