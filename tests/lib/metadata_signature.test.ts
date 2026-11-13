@@ -256,7 +256,8 @@ describe("readSourceShape and the extent of declarations", () => {
     expect(readSourceShape(code).ok).toBe(false);
   });
 
-  // 計算量の退行を見る検査で、測るものが実行時間そのものなので、時計は差し替えない。上限は、線形なら数十ミリ秒、2乗以上なら数分かかる入力に対して緩くしてある。同じファイルの経過時間の検査も同じ。
+  // 実時間が要る。巨大な入力でも、宣言の読み取りが早く諦めて返ることを、経過時間の上限で確かめる。
+  // 上限は緩い。対象は、名前に「quickly」を含む検査である。
   test("gives up on many type aliases quickly", () => {
     const code = "type A = 1\n{}".repeat(80_000);
     const started = performance.now();

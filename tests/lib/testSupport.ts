@@ -274,12 +274,13 @@ const timerRestores: (() => void)[] = [];
 /**
  * `thresholdMs`以上の`setTimeout`を、待たずに次のタスクで発火させる。
  * `sleep`を差し込めず、既定の`setTimeout`で再試行の前に実際に待つ関数のテストで使う。
- * 短い`setTimeout`(締め切りなど)は、元のまま動く。
+ * しきい値以上の`setTimeout`は、締め切りや猶予も含めてすべて即時に発火する。
+ * `setTimeout`で締め切りや猶予を持つ対象の、時間切れを確かめるテストでは使わない。
  * 差し替えは`restoreTimers`で戻す。使うテストのファイルは`afterEach(restoreTimers)`を置く。
  */
 export function stubLongTimers(thresholdMs = 1_000): void {
   const realSetTimeout = globalThis.setTimeout;
-  // `setTimeout`の型は、返す値の違う2つの宣言が重なっていて、関数を直接代入できない。`Reflect`で差し替える。
+  // `setTimeout`の型は、返す値の違う2つの宣言が重なっていて、関数を`spyOn(globalThis, "setTimeout")`に渡せない。そのため`Reflect`で差し替える。
   const replacement = (
     handler: TimerHandler,
     ms?: number,

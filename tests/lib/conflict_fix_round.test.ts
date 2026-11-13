@@ -514,7 +514,7 @@ describe("checkConflictResolution search budget", () => {
     ]);
   });
 
-  // 計算量の退行を見る検査で、測るものが実行時間そのものなので、時計は差し替えない。上限は、線形なら数十ミリ秒、2乗以上なら数分かかる入力に対して緩くしてある。同じファイルの経過時間の検査も同じ。
+  // 実時間が要る。重い入力で、突き合わせが探索を打ち切って固定の違反を返すことを、経過時間の上限で確かめる。
   test("finishes the heavy input quickly", () => {
     const startedAt = Date.now();
     check([heavyFile()]);
