@@ -40,6 +40,7 @@ import {
   readFinishInput,
   renderFixReviewBody,
   renderHumanReviewBody,
+  renderMergeReviewBody,
   runDependabotFinish,
 } from "../../f/factory/steps/dependabot_finish.ts";
 import {
@@ -956,6 +957,148 @@ describe("runDependabotFinish when the outcome is merge", () => {
   });
 });
 
+/** Claudeの未確認だけが残る、マージの結論の入力。 */
+function mergeWithUnverifiedInput(): FinishInput {
+  return readFinishInput(
+    proceeding(),
+    assessedRaw(claude({ unverified: ["usage in src/"] })),
+    WORK_ITEM_ID,
+  );
+}
+
+describe("runDependabotFinish when only claude left unverified items", () => {
+  test("merges the pull request", async () => {
+    const { calls } = await run(mergeWithUnverifiedInput());
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(1);
+  });
+
+  test("posts the unverified items after the merge is recorded", async () => {
+    const { calls } = await run(mergeWithUnverifiedInput());
+
+    expect(effectOrder(calls)).toEqual([
+      "removeWorktree",
+      "getPr",
+      "mergePullRequest",
+      "updateStatus",
+      "createPrReview",
+    ]);
+  });
+
+  test("lists the unverified items in a fence of the posted review", async () => {
+    const { calls } = await run(mergeWithUnverifiedInput());
+
+    expect(postedBody(calls)).toContain("```\n- usage in src/\n```");
+  });
+
+  test("says in the posted review that the merge does not depend on the items", async () => {
+    const { calls } = await run(mergeWithUnverifiedInput());
+
+    expect(postedBody(calls)).toContain("マージの判断には使っていません。");
+  });
+
+  test("ends the posted review with the marker of this work item", async () => {
+    const { calls } = await run(mergeWithUnverifiedInput());
+
+    expect(
+      postedBody(calls).endsWith("\n\n<!-- factory:dependabot:7 -->"),
+    ).toBe(true);
+  });
+
+  test("does not post twice when the review of this work item exists", async () => {
+    const { calls } = await run(mergeWithUnverifiedInput(), {
+      reviews: [
+        {
+          id: 1,
+          authorLogin: VIEWER,
+          body: withMarker(DEPENDABOT_MARKER_KIND, WORK_ITEM_ID, "posted"),
+        },
+      ],
+    });
+
+    expect(named(calls, "createPrReview")).toHaveLength(0);
+  });
+
+  test("does not post the unverified items in the dry run", async () => {
+    const { calls } = await run(mergeWithUnverifiedInput(), {
+      mergeEnabled: false,
+    });
+
+    expect(named(calls, "createPrReview")).toHaveLength(0);
+  });
+
+  test("does not post the unverified items when the merge is refused with 409", async () => {
+    const { calls } = await run(mergeWithUnverifiedInput(), {
+      merge: { merged: false, status: 409, message: "head changed" },
+    });
+
+    expect(named(calls, "createPrReview")).toHaveLength(0);
+  });
+
+  test("posts the unverified items when the merge request threw but the pull request is merged", async () => {
+    const { calls } = await run(mergeWithUnverifiedInput(), {
+      mergeError: new Error("socket closed"),
+      prAfterMerge: openPr({ state: "closed", merged: true }),
+    });
+
+    expect(named(calls, "createPrReview")).toHaveLength(1);
+  });
+
+  test("does not notify the merge", async () => {
+    const { calls } = await run(mergeWithUnverifiedInput());
+
+    expect(named(calls, "notify")).toHaveLength(0);
+  });
+
+  test("still reports the merge when the unverified items could not be posted", async () => {
+    const { result } = await run(mergeWithUnverifiedInput(), {
+      createReviewError: new Error("HTTP 502"),
+    });
+
+    expect(result).toEqual({
+      workItemId: WORK_ITEM_ID,
+      action: "merged",
+      status: "reviewed",
+      reason: DEPENDABOT_DONE_NOTE.merged,
+    });
+  });
+
+  test("still reports the merge when the existing reviews could not be listed", async () => {
+    const { result } = await run(mergeWithUnverifiedInput(), {
+      listReviewsError: new Error("HTTP 502"),
+    });
+
+    expect(result.action).toBe("merged");
+  });
+
+  test("warns when the unverified items could not be posted", async () => {
+    const { calls } = await run(mergeWithUnverifiedInput(), {
+      createReviewError: new Error("HTTP 502"),
+    });
+
+    expect(named(calls, "warn").map((c) => c.args[0])).toEqual([
+      "failed to post the unverified items of claude",
+    ]);
+  });
+});
+
+describe("renderMergeReviewBody", () => {
+  function mergeBody(): string {
+    const input = mergeWithUnverifiedInput();
+    return input.kind === "assessed" ? renderMergeReviewBody(input.result) : "";
+  }
+
+  test("does not claim a verified absence of impact", () => {
+    expect(mergeBody()).not.toContain("影響しないと判断");
+  });
+
+  test("says that the investigation found no impact", () => {
+    expect(mergeBody()).toContain(
+      "調査では、このリポジトリへの影響が見つかりませんでした。",
+    );
+  });
+});
+
 describe("runDependabotFinish for another repository", () => {
   const other: FakeOptions = { repoPolicy: "other" };
 
@@ -1707,12 +1850,6 @@ describe("runDependabotFinish never merges an outcome other than merge", () => {
     expect(named(calls, "mergePullRequest")).toHaveLength(0);
   });
 
-  test("does not merge an unverified item from claude", async () => {
-    const { calls } = await run(humanInput({ unverified: ["usage in src/"] }));
-
-    expect(named(calls, "mergePullRequest")).toHaveLength(0);
-  });
-
   test("does not merge an impact", async () => {
     const { calls } = await run(fixInput());
 
@@ -1992,6 +2129,26 @@ describe("renderFixReviewBody", () => {
     );
   });
 
+  test("fences the unverified items written by claude", () => {
+    const input = fixInput({ unverified: ["usage in src/"] });
+    const body =
+      input.kind === "assessed"
+        ? renderFixReviewBody(input.result, FIX_LABEL)
+        : "";
+
+    expect(body).toContain("```\n- usage in src/\n```");
+  });
+
+  test("lists no unverified section when claude left none", () => {
+    const input = fixInput();
+    const body =
+      input.kind === "assessed"
+        ? renderFixReviewBody(input.result, FIX_LABEL)
+        : "";
+
+    expect(body).not.toContain("確認できなかった項目");
+  });
+
   test("starts with the role tag", () => {
     const input = fixInput();
     const body =
@@ -2066,7 +2223,7 @@ describe("runDependabotFinish when the outcome is needs_human", () => {
     );
 
     expect(needsHumanEvent(calls)?.reason).toBe(
-      "dependabotの更新の影響調査で、サプライチェーンの懸念が2件報告されました。内訳は、Claudeが挙げた懸念が1件、Claudeが確認できなかった項目が0件、機械の検査と入力の確認による根拠が1件です",
+      "dependabotの更新の影響調査で、サプライチェーンの懸念が2件報告されました。内訳は、Claudeが挙げた懸念が1件、機械の検査と入力の確認による根拠が1件です",
     );
   });
 
@@ -2301,6 +2458,14 @@ describe("renderHumanReviewBody", () => {
     const body = humanBody({ unverified: ["usage in src/"] });
 
     expect(body).toContain("```\n- usage in src/\n```");
+  });
+
+  test("does not name the unverified items of claude as a reason for a human", () => {
+    const body = humanBody({ unverified: ["usage in src/"] });
+
+    expect(body).toContain(
+      "サプライチェーンの懸念か、機械の検査と入力の確認で見つかった根拠が残っているためです。",
+    );
   });
 
   function groupBody(assessment: Partial<ImpactAssessment>): string {

@@ -83,9 +83,10 @@ const CASES: {
     nextAction: COMMENT_ACTION,
   },
   {
-    label: "impact with unverified items",
+    label: "impact with machine unverified items",
     reason: dependabotReason("impact", "3 unverified item(s) remain"),
-    described: "dependabotの更新の影響調査で、未確認の項目が3件残っています",
+    described:
+      "dependabotの更新の影響調査で、機械の検査と入力の確認で見つかった根拠が3件残っています",
     nextAction: COMMENT_ACTION,
   },
   {

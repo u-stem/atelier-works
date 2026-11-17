@@ -1369,7 +1369,7 @@ describe("impactForDecision", () => {
     ]);
   });
 
-  test("keeps the unverified items of claude", () => {
+  test("does not carry the unverified items of claude into the decision", () => {
     const value = assessed(
       {
         promptInput: promptInput({
@@ -1381,7 +1381,6 @@ describe("impactForDecision", () => {
     );
 
     expect(impactForDecision(value).unverified).toEqual([
-      "usage in console",
       "unverified input: changelog",
     ]);
   });
@@ -1410,6 +1409,132 @@ describe("impactForDecision", () => {
     const value = assessed({}, assessment({ impact: "impact" }));
 
     expect(impactForDecision(value).impact).toBe("impact");
+  });
+});
+
+// ---- Claudeの未確認は参考情報 ----
+
+describe("the unverified items of claude in the outcome", () => {
+  const CLAUDE_UNVERIFIED = ["usage in console", "changelog of 1.3.1"];
+
+  function outcomeOf(
+    value: ReturnType<typeof assessed>,
+  ): ReturnType<typeof decideAssessedOutcome> {
+    return decideAssessedOutcome({
+      kind: "assessed",
+      workItemId: WORK_ITEM_ID,
+      input: value.input,
+      claudeAssessment: value.claudeAssessment,
+      agentRunId: 1,
+    });
+  }
+
+  test("merges when only claude left unverified items and there is no impact", () => {
+    const value = assessed({}, assessment({ unverified: CLAUDE_UNVERIFIED }));
+
+    expect(outcomeOf(value).outcome).toBe("merge");
+  });
+
+  test("asks for a fix when only claude left unverified items and there is an impact", () => {
+    const value = assessed(
+      {},
+      assessment({ impact: "impact", unverified: CLAUDE_UNVERIFIED }),
+    );
+
+    expect(outcomeOf(value).outcome).toBe("fix");
+  });
+
+  test("hands a supply chain concern of claude to a human beside unverified items", () => {
+    const value = assessed(
+      {},
+      assessment({
+        supplyChainConcerns: ["maintainer changed"],
+        unverified: CLAUDE_UNVERIFIED,
+      }),
+    );
+
+    expect(outcomeOf(value).outcome).toBe("needs_human");
+  });
+
+  test("hands a supply chain concern of claude to a human without unverified items", () => {
+    const value = assessed(
+      {},
+      assessment({ supplyChainConcerns: ["maintainer changed"] }),
+    );
+
+    expect(outcomeOf(value).outcome).toBe("needs_human");
+  });
+
+  test("hands a machine concern to a human whatever claude answers", () => {
+    const value = assessed(
+      { machineConcerns: ["repository URL changed"] },
+      assessment({ unverified: CLAUDE_UNVERIFIED }),
+    );
+
+    expect(outcomeOf(value).outcome).toBe("needs_human");
+  });
+
+  test("hands a machine concern to a human even when claude found an impact", () => {
+    const value = assessed(
+      { machineConcerns: ["repository URL changed"] },
+      assessment({ impact: "impact" }),
+    );
+
+    expect(outcomeOf(value).outcome).toBe("needs_human");
+  });
+
+  test("hands an unverified input to a human whatever claude answers", () => {
+    const value = assessed(
+      {
+        promptInput: promptInput({
+          changelog: "",
+          unverifiedInputs: ["changelog"],
+        }),
+      },
+      assessment({ unverified: CLAUDE_UNVERIFIED }),
+    );
+
+    expect(outcomeOf(value).outcome).toBe("needs_human");
+  });
+
+  test("hands a missing package name to a human whatever claude answers", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: assessment({
+        evidence: "left-padを確認した",
+        unverified: ["usage of left-pad in console"],
+      }),
+    };
+
+    expect(outcomeOf(value).outcome).toBe("needs_human");
+  });
+
+  test("counts only the blocking concerns in the reason", () => {
+    const value = assessed(
+      { machineConcerns: ["repository URL changed"] },
+      assessment({
+        supplyChainConcerns: ["maintainer changed"],
+        unverified: CLAUDE_UNVERIFIED,
+      }),
+    );
+
+    expect(outcomeOf(value).reason).toBe(
+      "2 supply chain concern(s) were reported",
+    );
+  });
+
+  test("counts only the machine side unverified items in the reason", () => {
+    const value = assessed(
+      {
+        promptInput: promptInput({
+          changelog: "",
+          unverifiedInputs: ["changelog"],
+        }),
+      },
+      assessment({ unverified: CLAUDE_UNVERIFIED }),
+    );
+
+    expect(outcomeOf(value).reason).toBe("1 unverified item(s) remain");
   });
 });
 
@@ -1473,7 +1598,7 @@ describe("impactForDecision for a group of packages", () => {
     ]);
   });
 
-  test("keeps the unverified items of claude before the escalation", () => {
+  test("does not carry the unverified items of claude beside the escalation", () => {
     const value = {
       input: groupAssessInput(),
       claudeAssessment: assessment({
@@ -1483,7 +1608,6 @@ describe("impactForDecision for a group of packages", () => {
     };
 
     expect(impactForDecision(value).unverified).toEqual([
-      "usage in console",
       UNNAMED_PACKAGES_ESCALATION,
     ]);
   });
@@ -1509,9 +1633,7 @@ describe("impactForDecision for a group of packages", () => {
       }),
     };
 
-    expect(impactForDecision(value).unverified).toEqual([
-      "right-padのコンソール側の使用箇所",
-    ]);
+    expect(impactForDecision(value).unverified).toEqual([]);
   });
 
   test("does not count a name that only a machine concern carries", () => {

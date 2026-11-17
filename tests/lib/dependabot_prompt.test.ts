@@ -415,11 +415,35 @@ describe("buildDependabotPrompt", () => {
     expect(prompt).not.toContain("could not be retrieved");
   });
 
-  test("never sets impact to none while a concern or an unverified item remains", () => {
+  test("never sets impact to none while a concern remains", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
     expect(prompt).toContain(
-      "If any concern or unverified item remains, never set `impact` to `none`.",
+      "If any concern remains, never set `impact` to `none`.",
+    );
+  });
+
+  test("sets impact to impact when the usage search or the installed package was not checked", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "If you could not finish searching this repository for usages of the package, or could not inspect the installed package (node_modules is absent or outside the working directory), usage is not verified: set `impact` to `impact`.",
+    );
+  });
+
+  test("does not let any other unverified item decide impact", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "Any other unverified item, such as a missing changelog entry or a behavior change you cannot confirm, does not decide `impact`: write it to `unverified` only.",
+    );
+  });
+
+  test("keeps unverified items as reference information for a human", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "Unverified items are kept as reference information for a human.",
     );
   });
 

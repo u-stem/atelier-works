@@ -1290,6 +1290,8 @@ export type ImpactOutcome = {
  * 影響の評価から次の動作を決める。
  * サプライチェーンの懸念か未検証の項目が1つでもあれば、人に渡す。
  * 懸念も未検証も無いときは、影響が無ければmerge、あれば修正に進む。
+ * 呼び出し側は、止める根拠だけを渡す。Claudeの`unverified`は参考情報なので、渡さない(`impactForDecision`)。
+ * 理由の件数は、渡された止める根拠の件数だけである。
  */
 export function decideImpactOutcome(a: ImpactAssessment): ImpactOutcome {
   if (a.supplyChainConcerns.length > 0) {
@@ -1305,6 +1307,6 @@ export function decideImpactOutcome(a: ImpactAssessment): ImpactOutcome {
     };
   }
   return a.impact === "none"
-    ? { outcome: "merge", reason: "no impact and nothing is left unverified" }
+    ? { outcome: "merge", reason: "no impact and no blocking item remains" }
     : { outcome: "fix", reason: "the update affects this repository" };
 }
