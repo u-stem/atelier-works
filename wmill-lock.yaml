@@ -82,9 +82,9 @@ locks:
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905
-  f/factory/lib/dependabot_prompt: 5ffa5c70d53b980457a9904b228028cd5da315ce7fc27ddbd30b1ace548d9cf5
+  f/factory/lib/dependabot_prompt: 2042eb22197b09fcc327b84ca5a8f72f62847c3e9c27f21ceb3ae0af5656c92b
   f/factory/lib/dependabot_registry: 3bd1e2db9f439df63be90c0d5457a0eee2368b2bc3a69515370c52353f26f975
-  f/factory/lib/dependabot_support: 21ab6966ed951bf9331e6fe935373d89e70bc6aec5bb6f99d8ea430ef2032f47
+  f/factory/lib/dependabot_support: deb3f290d173bc8d5e1d1b5d413b98fee37276aab4f3d2445d19ed0b796aa05c
   f/factory/lib/deploy_approvals: 0a43a94f08925a6b6039f1e95fbd12c06cdc3f46cf7a8c2c6f6e06168d5005ac
   f/factory/lib/deploy_gate: 879dab77c4e82ddacf506646c210de9b43464d91c4473626957403ed936bc791
   f/factory/lib/design_apply_support: ad7611c5659ce77e9378008e504baa4f21b9295cf97d1fb22230ef27dba119bf
@@ -220,7 +220,7 @@ locks:
   f/factory/steps/audit_prepare: 4c551910b3e9c5bbc17609c0cc01b89c00ca7085acaab7e5799d8b53de3f4e0a
   f/factory/steps/console_query: 2e5e9b4632acd8ce2a055fe9304bd7b874d453de20f3bb8159f45e2dbcd1bd52
   f/factory/steps/dependabot_assess: 7d1fbf7d4c2b9df239d2cbe5f12aa4da737064144077bcb4810f86ecabaf8f5b
-  f/factory/steps/dependabot_finish: b46acc0a643cb74066d74e60379df49e5cace06a7efc700975bafd59c7385e2b
+  f/factory/steps/dependabot_finish: 410eca71df4b2336b628554880ceb50bc3de7ca2a65822e5e205677e973f0421
   f/factory/steps/dependabot_prepare: 7ca64805783a41c1fd52b492e970661444dcab6980efbc6dbe0fafec396a0c97
   f/factory/steps/design_apply: bc46d778a69023f08a29099a41857f82eeda169b548a5b61b2b17e2f859e7396
   f/factory/steps/design_generate: 07df3a672cc031a6f479f71e304143c809a91677de6dcb7312cd68412dc214b3

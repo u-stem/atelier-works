@@ -249,7 +249,6 @@ export function renderMergeReviewBody(result: DependabotAssessed): string {
     ROLE_TAG,
     `${targetText(result.input)}は、調査では、このリポジトリへの影響が見つかりませんでした。`,
     "Claudeが確認できなかった項目を、参考情報として残します。",
-    "これらは、マージの判断には使っていません。",
   ].join("\n");
   return (
     head +

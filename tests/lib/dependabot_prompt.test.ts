@@ -447,6 +447,14 @@ describe("buildDependabotPrompt", () => {
     );
   });
 
+  test("reports an uncomparable maintainer or publisher as a concern", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "If you could not compare the maintainers or the publisher between the two versions, report it in `supplyChainConcerns`, not in `unverified`.",
+    );
+  });
+
   test("leaves the merge decision to the caller", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 

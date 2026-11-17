@@ -98,6 +98,7 @@ If any concern remains, never set `impact` to `none`.
 If you could not finish searching this repository for usages of the package, or could not inspect the installed package (node_modules is absent or outside the working directory), usage is not verified: set `impact` to `impact`.
 Any other unverified item, such as a missing changelog entry or a behavior change you cannot confirm, does not decide `impact`: write it to `unverified` only.
 Unverified items are kept as reference information for a human.
+If you could not compare the maintainers or the publisher between the two versions, report it in `supplyChainConcerns`, not in `unverified`.
 
 Return the assessment exactly as the schema defines it.
 The caller derives the merge decision from your fields, so never state or
