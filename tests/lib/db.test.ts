@@ -3149,6 +3149,8 @@ describe("toReviewRecord", () => {
           message: "bug",
           suggestion: null,
           suggested_code: "const x = 2;",
+          evidence: "a.ts:10 reads x before it is set.",
+          confidence: "high",
         },
       ],
       posted_review_id: "review-1",
@@ -3163,8 +3165,83 @@ describe("toReviewRecord", () => {
         message: "bug",
         suggestion: null,
         suggested_code: "const x = 2;",
+        evidence: "a.ts:10 reads x before it is set.",
+        confidence: "high",
       },
     ]);
+  });
+
+  test("reads evidence and confidence as null when absent (row written before the two items existed)", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "request_changes",
+      summary: "needs work",
+      findings: [
+        {
+          path: "a.ts",
+          line: 10,
+          end_line: null,
+          severity: "major",
+          kind: "must",
+          message: "bug",
+          suggestion: null,
+          suggested_code: null,
+        },
+      ],
+      posted_review_id: "review-1",
+    });
+    expect(review.findings[0]).toMatchObject({
+      evidence: null,
+      confidence: null,
+    });
+  });
+
+  test("keeps a low confidence from a new-format row", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "comment",
+      summary: "s",
+      findings: [
+        {
+          path: "a.ts",
+          line: 10,
+          end_line: null,
+          severity: "major",
+          kind: "must",
+          message: "bug",
+          suggestion: null,
+          suggested_code: null,
+          evidence: "not confirmed",
+          confidence: "low",
+        },
+      ],
+      posted_review_id: null,
+    });
+    expect(review.findings[0]?.confidence).toBe("low");
+  });
+
+  test("rejects a confidence that is not known", () => {
+    expect(() =>
+      toReviewRecord({
+        work_item_id: 1,
+        head_sha: "abc1234",
+        verdict: "comment",
+        summary: "s",
+        findings: [
+          {
+            path: "a.ts",
+            line: 10,
+            severity: "major",
+            message: "bug",
+            suggestion: null,
+            confidence: "certain",
+          },
+        ],
+        posted_review_id: null,
+      }),
+    ).toThrow("malformed finding");
   });
 
   test("derives kind from severity when kind is absent (legacy pre-schema-change row shape): blocker/major → must, minor → imo, nit → nits", () => {
@@ -10981,6 +11058,8 @@ describe("latestPostedPrReview", () => {
     message: "m",
     suggestion: null,
     suggested_code: null,
+    evidence: "a.ts:1 shows it.",
+    confidence: "high",
   };
 
   test("returns the head of the newest posted review", async () => {

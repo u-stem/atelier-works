@@ -1563,6 +1563,8 @@ describe("pr_workflow_support prose", () => {
             message: "この分岐は不要である。",
             suggestion: null,
             suggested_code: null,
+            evidence: "src/a.ts:1を読みました。",
+            confidence: "high",
           },
         ],
         thread_responses: [],

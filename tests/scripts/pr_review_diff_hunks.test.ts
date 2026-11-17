@@ -42,6 +42,8 @@ function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
     message: "problem",
     suggestion: null,
     suggested_code: null,
+    evidence: "checked",
+    confidence: "high",
     ...overrides,
   };
 }

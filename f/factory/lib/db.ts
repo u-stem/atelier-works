@@ -114,6 +114,7 @@ import {
   NON_MODEL_FAILURE_REASONS,
   type Notice,
   type NoticeRecord,
+  REVIEW_CONFIDENCES,
   type RequirementDraft,
   type ReviewFinding,
   type ReviewFindingKind,
@@ -2873,7 +2874,7 @@ function deriveKindFromSeverity(severity: ReviewSeverity): ReviewFindingKind {
 /**
  * `factory.reviews`の行の`findings`配列の要素1つを解析する。
  * それらの項目より前に作られた既存の行では、`kind`を`severity`から導き、
- * `end_line`と`suggested_code`を`null`で補う。
+ * `end_line`と`suggested_code`と`evidence`と`confidence`を`null`で補う。
  * 形が不正なら例外を投げる。
  */
 function parseReviewFinding(value: unknown, field: string): ReviewFinding {
@@ -2904,6 +2905,20 @@ function parseReviewFinding(value: unknown, field: string): ReviewFinding {
   if (value.kind !== undefined && !isOneOf(value.kind, REVIEW_FINDING_KINDS)) {
     throw new Error(`db: row field "${field}" contains a malformed finding`);
   }
+  if (
+    value.evidence !== undefined &&
+    value.evidence !== null &&
+    !isString(value.evidence)
+  ) {
+    throw new Error(`db: row field "${field}" contains a malformed finding`);
+  }
+  if (
+    value.confidence !== undefined &&
+    value.confidence !== null &&
+    !isOneOf(value.confidence, REVIEW_CONFIDENCES)
+  ) {
+    throw new Error(`db: row field "${field}" contains a malformed finding`);
+  }
   return {
     path: value.path,
     line: value.line,
@@ -2913,6 +2928,8 @@ function parseReviewFinding(value: unknown, field: string): ReviewFinding {
     message: value.message,
     suggestion: value.suggestion,
     suggested_code: value.suggested_code ?? null,
+    evidence: value.evidence ?? null,
+    confidence: value.confidence ?? null,
   };
 }
 

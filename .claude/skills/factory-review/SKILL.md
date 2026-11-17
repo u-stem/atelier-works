@@ -22,7 +22,8 @@ headlessで起動したClaude Code(`claude -p`)がレビューし、GitHub上に
 - worker内のClaudeは人と対話できない。
   判断に迷う点があっても、レビューを止めて確認を求めない。
 - 妥当な範囲で判断する。
-  確信が持てない指摘は、severityを`nit`にするか`message`に不確実性を明記したうえで、必ず出力する。
+  確信が持てない指摘は、`confidence`を`low`にして、必ず出力する。
+  `low`の指摘は記録だけになり、PRのコメントにも、結果の判定にも出ない。
 - 「確認してください」で終わる出力と、指摘を書かずに質問だけをする出力は禁止する。
 - JSON schemaの必須フィールドはすべて埋める。
   欠落した出力は失敗として扱われ、再実行される。
@@ -127,6 +128,8 @@ dependabotの更新を自動でマージする前の影響調査は、`factory-d
 | `message` | 何が問題か、なぜ問題かを日本語で簡潔に書く。 |
 | `suggestion` | 修正の方針を日本語の文章で示す。コードで示せないときの補足に使い、無ければ`null`にする。 |
 | `suggested_code` | 対象行を置き換える完全なコード(複数行なら改行を含める)。修正案がある場合は必ず埋め、無い場合は`null`にする。 |
+| `evidence` | 指摘の根拠として、差分かリポジトリで確かめた事実(ファイルと行、出力)。推測は書かない。確かめていないことは、確かめていないと書く。 |
+| `confidence` | 確信度。`high` / `medium` / `low`のいずれか。 |
 
 `severity`の値は次のとおり。
 
@@ -146,6 +149,19 @@ dependabotの更新を自動でマージする前の影響調査は、`factory-d
 | `imo` | 意見・提案レベルの指摘 | `minor` |
 | `nits` | 些細な指摘 | `nit` |
 | `q` | 質問や不確実性を含む指摘 | `minor` / `nit` |
+
+`confidence`の値は次のとおり。
+
+| 値 | 意味 | 投稿 |
+| --- | --- | --- |
+| `high` | `evidence`が問題を直接示している | 投稿する |
+| `medium` | `evidence`は問題を指すが、ほかの説明を除けていない | 投稿する |
+| `low` | 問題を確かめられていない | 投稿しない。記録だけにする |
+
+確かめた問題に`low`を付けない。
+`low`の指摘は、PRの本文とインラインコメントの両方に出ない。
+`must`でも、結果を`changes_requested`にしない。
+後から、人が同じ箇所を指摘したかを見て、`low`の線が妥当かを確かめる。
 
 ## 要件外の設計変更を勧めない
 
@@ -253,9 +269,11 @@ PR全体を読むレビューでは、指摘を1回で出し切る。
           "kind": { "type": "string", "enum": ["must", "imo", "nits", "q"] },
           "message": { "type": "string" },
           "suggestion": { "type": ["string", "null"] },
-          "suggested_code": { "type": ["string", "null"] }
+          "suggested_code": { "type": ["string", "null"] },
+          "evidence": { "type": "string" },
+          "confidence": { "type": "string", "enum": ["high", "medium", "low"] }
         },
-        "required": ["path", "line", "end_line", "severity", "kind", "message", "suggestion", "suggested_code"]
+        "required": ["path", "line", "end_line", "severity", "kind", "message", "suggestion", "suggested_code", "evidence", "confidence"]
       }
     },
     "thread_responses": {
@@ -298,6 +316,8 @@ GitHubには投稿されず、記録用としてData Table(`factory.reviews`)に
 `findings`は指摘の配列である。
 指摘が無ければ空配列でよく、無理に指摘を作らない。
 各要素のフィールドは「指摘のフォーマット」の表に従う。
+`evidence`と`confidence`は必須である。
+`confidence`が`low`の指摘は、記録だけになり、投稿の件数にも数えない。
 
 ### thread_responses
 

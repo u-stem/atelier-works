@@ -1101,6 +1101,8 @@ describe("hasBodyOnlyMustFinding", () => {
       message: "null checkが抜けています。",
       suggestion: null,
       suggested_code: null,
+      evidence: "checked",
+      confidence: "high",
       ...overrides,
     };
   }
@@ -1108,6 +1110,22 @@ describe("hasBodyOnlyMustFinding", () => {
 
   test("finds a MUST whose message is in no thread", () => {
     expect(hasBodyOnlyMustFinding([finding()], [], VIEWER)).toBe(true);
+  });
+
+  test("does not flag a low confidence MUST that was never posted", () => {
+    expect(
+      hasBodyOnlyMustFinding([finding({ confidence: "low" })], [], VIEWER),
+    ).toBe(false);
+  });
+
+  test("flags a MUST recorded before confidence existed and not posted as a thread", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding({ confidence: null, evidence: null })],
+        [],
+        VIEWER,
+      ),
+    ).toBe(true);
   });
 
   test("does not flag a MUST posted as a thread", () => {
@@ -1404,6 +1422,8 @@ describe("settleReviewFindings", () => {
       message,
       suggestion: null,
       suggested_code: null,
+      evidence: "checked",
+      confidence: "high",
     };
   }
   const FIRST = { kind: "first" } as const;

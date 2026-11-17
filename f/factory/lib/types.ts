@@ -676,6 +676,19 @@ export type ReviewSeverity = "blocker" | "major" | "minor" | "nit";
  */
 export type ReviewFindingKind = "must" | "imo" | "nits" | "q";
 
+/**
+ * 指摘の確信度。
+ * `low`の指摘は、記録だけして、PRのコメントにも結果の判定にも使わない。
+ */
+export type ReviewConfidence = "high" | "medium" | "low";
+
+/** `ReviewConfidence`の全値。`REVIEW_SCHEMA`の`confidence`のenumと一致させる。 */
+export const REVIEW_CONFIDENCES: readonly ReviewConfidence[] = [
+  "high",
+  "medium",
+  "low",
+];
+
 export type ReviewFinding = {
   path: string;
   /** head側(差分適用後)の行番号。`end_line`と同じ基準。 */
@@ -692,6 +705,13 @@ export type ReviewFinding = {
    * 具体的な修正を提案しないときは`null`。
    */
   suggested_code: string | null;
+  /**
+   * 指摘の根拠として、差分かリポジトリで確かめた事実(ファイルと行、出力)。
+   * この項目を持たない古い行は`null`で読む。
+   */
+  evidence: string | null;
+  /** この項目を持たない古い行は`null`で読む。`null`は、投稿の対象として扱う。 */
+  confidence: ReviewConfidence | null;
 };
 
 /** 差分の1つのhunkが覆う、新しい側(head)の行の範囲。両端を含む。 */

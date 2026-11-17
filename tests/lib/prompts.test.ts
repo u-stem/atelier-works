@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   AUDIT_SCHEMA,
   AUTOMATED_FEEDBACK_MARKER,
@@ -388,6 +390,44 @@ describe("reviewPrompt", () => {
     expect(prompt).toContain('"imo"');
     expect(prompt).toContain('"nits"');
     expect(prompt).toContain('"q"');
+  });
+
+  test("instructs evidence to hold only facts checked in the diff or the repository", () => {
+    const prompt = reviewPrompt(
+      {
+        pr: PR,
+        diff: "+const x = 1;",
+        changedFiles: [],
+        requirements: null,
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
+        fixRound: null,
+        binaryFiles: [],
+      },
+      FIXED_UUID,
+    );
+    expect(prompt).toContain("`evidence`");
+    expect(prompt).toContain("Write no guess in `evidence`");
+  });
+
+  test("instructs that a low confidence finding is recorded but not posted", () => {
+    const prompt = reviewPrompt(
+      {
+        pr: PR,
+        diff: "+const x = 1;",
+        changedFiles: [],
+        requirements: null,
+        threads: [],
+        omittedThreadCount: 0,
+        scope: { kind: "first" },
+        fixRound: null,
+        binaryFiles: [],
+      },
+      FIXED_UUID,
+    );
+    expect(prompt).toContain('"low"');
+    expect(prompt).toContain("recorded only and never posted");
   });
 
   test("instructs that suggested_code is a complete replacement for line..end_line, posted as a GitHub suggestion block", () => {
@@ -1371,6 +1411,32 @@ describe("JSON schema constants", () => {
     expect(REVIEW_SCHEMA.properties.findings.items.required).toEqual(
       expect.arrayContaining(["kind", "end_line", "suggested_code"]),
     );
+  });
+
+  test("REVIEW_SCHEMA requires evidence and confidence on a finding item", () => {
+    expect(REVIEW_SCHEMA.properties.findings.items.required).toEqual(
+      expect.arrayContaining(["evidence", "confidence"]),
+    );
+  });
+
+  test("REVIEW_SCHEMA's finding confidence enum is high, medium and low", () => {
+    expect(
+      REVIEW_SCHEMA.properties.findings.items.properties.confidence.enum,
+    ).toEqual(["high", "medium", "low"]);
+  });
+
+  test("REVIEW_SCHEMA's finding item matches the schema in the factory-review skill", () => {
+    const skill = readFileSync(
+      join(import.meta.dir, "../../.claude/skills/factory-review/SKILL.md"),
+      "utf8",
+    );
+    const block = /```json\n([\s\S]*?)\n```/.exec(skill)?.[1] ?? "null";
+    const documented = JSON.parse(block).properties.findings.items;
+    const { properties, required } = REVIEW_SCHEMA.properties.findings.items;
+    expect({ properties, required }).toEqual({
+      properties: documented.properties,
+      required: documented.required,
+    });
   });
 
   test("FIX_SCHEMA forbids additional top-level properties", () => {

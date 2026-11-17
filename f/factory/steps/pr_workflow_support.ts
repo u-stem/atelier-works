@@ -103,6 +103,7 @@ import {
   isStringArray,
   type LabelerAssociation,
   type NoticeRecord,
+  REVIEW_CONFIDENCES,
   type ReviewFinding,
   type ReviewFindingKind,
   type ReviewOutcome,
@@ -247,7 +248,30 @@ export function normalizeJapaneseText(text: string): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * 指摘がPRに出てよいかを返す。確信度が`low`の指摘だけが出ない。
+ * 確信度を持たない古い行(`null`)は、出てよい指摘として扱う。
+ */
+export function isPostableFinding(finding: ReviewFinding): boolean {
+  return finding.confidence !== "low";
+}
+
+/**
+ * 指摘を、PRに出すものと、記録だけにするもの(確信度が`low`)に分ける。
+ * どちらも元の順を保つ。要素は同じ参照のまま返す。
+ */
+export function splitFindingsByConfidence(findings: readonly ReviewFinding[]): {
+  readonly postable: ReviewFinding[];
+  readonly held: ReviewFinding[];
+} {
+  return {
+    postable: findings.filter(isPostableFinding),
+    held: findings.filter((finding) => !isPostableFinding(finding)),
+  };
+}
+
+/**
  * 投稿したレビューの結果を返す。
+ * 確信度が`low`の指摘は、`kind`が`must`でも数えない。
  * 今回の指摘に`must`が1件でもあるか、`blockingThreadCount`
  * (`countBlockingThreads`の値)が0より大きければ`"changes_requested"`を返す。
  * 前のラウンドから残った未解決の`[MUST]`と、了承されていない見送り(反論した見送りを含む)も数える。
@@ -263,7 +287,11 @@ export function reviewResultFor(
   findings: readonly ReviewFinding[],
   blockingThreadCount: number | null,
 ): ReviewOutcome {
-  if (findings.some((finding) => finding.kind === "must")) {
+  if (
+    findings.some(
+      (finding) => isPostableFinding(finding) && finding.kind === "must",
+    )
+  ) {
     return "changes_requested";
   }
   if (blockingThreadCount === null) return "unverified";
@@ -275,6 +303,7 @@ export function reviewResultFor(
  * `result`は、今回の指摘と`blockingThreadCount`から`reviewResultFor`で決める。
  * Discordの通知もConsoleのレビュー行も、この値で状態を出す。
  * `verdict`が`approve`で今回の指摘が0件でも、マージを止めるスレッドが残れば`changes_requested`になる。
+ * `findings`は確信度が`low`の指摘も含めてすべて記録する。`result`の判定には`low`を使わない。
  * 未解決の指摘を読めなかった(`unverified`)ときは、`result`を`null`にして記録する。
  * Consoleのレビュー行は、`null`を「修正必須の有無の記録なし」と出す。
  */
@@ -410,7 +439,8 @@ export function isReviewFindingShape(value: unknown): value is ReviewFinding {
   if (value.suggested_code !== null && !isString(value.suggested_code)) {
     return false;
   }
-  return true;
+  if (!isString(value.evidence)) return false;
+  return isOneOf(value.confidence, REVIEW_CONFIDENCES);
 }
 
 /**
@@ -6533,6 +6563,7 @@ export function reviewDeltaPaths(
  * 行に紐づけられなかった指摘はスレッドにならないので、差分だけを読む再レビューでは忘れられる。
  * スレッドの一覧を読めなかったときは`threads`が空なので、`[MUST]`があれば真になり、PR全体を読む側に倒れる。
  * 解決済みのスレッドも、投稿した指摘として数える。
+ * 確信度が`low`の指摘は投稿していないので、スレッドが無くても数えない。
  * スレッドがあるとみなすのは、同じパスで、最初のコメントが`renderInlineComment`か`renderReattachedInlineComment`の形と同じものだけにする。
  * 本文の一部の一致では、別のパスの同じ文、別の指摘の提案の中の文、空の本文でも一致し、
  * 差分だけを読む側に倒れて指摘を忘れるためである。
@@ -6549,7 +6580,7 @@ export function hasBodyOnlyMustFinding(
     isFactoryFindingThread(thread, viewer),
   );
   return findings
-    .filter((finding) => finding.kind === "must")
+    .filter((finding) => isPostableFinding(finding) && finding.kind === "must")
     .some((finding) => {
       // 位置が差分の外で、差分の行に付け替えるか切り詰めて投稿したスレッドも、投稿済みとみなす。
       const expected = [
