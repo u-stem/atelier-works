@@ -187,6 +187,10 @@ function targetText(input: DependabotAssessInput): string {
   return `dependabotの更新(${items.join("、")})`;
 }
 
+const UNVERIFIED_HEADING = "確認できなかった項目";
+const UNVERIFIED_LEAD =
+  "Claudeが確認できなかった項目です。人への参考情報で、マージの判断には使っていません。";
+
 const EVIDENCE_LEAD =
   "影響調査の所見です。外部の入力をもとにしたClaudeの出力を、無害化して切り詰めています。";
 
@@ -224,19 +228,45 @@ export function renderFixReviewBody(
       : `修正が要るかは人が所見を確認して決め、修正するときは\`${fixLabel}\`を付けます。`,
     "修正の後も、このPRは自動ではマージしません。修正と再レビューが終わったら、人が確認してマージしてください。",
   ].join("\n");
-  return head + evidenceSection(result.claudeAssessment.evidence);
+  return (
+    head +
+    listSection(
+      UNVERIFIED_HEADING,
+      UNVERIFIED_LEAD,
+      result.claudeAssessment.unverified,
+    ) +
+    evidenceSection(result.claudeAssessment.evidence)
+  );
+}
+
+/**
+ * マージした後に投稿するレビューの本文(目印を除く)。Claudeの未確認の項目が残るときだけ投稿する。
+ * 未確認の項目はマージを止めないので、人への参考情報として残す。
+ */
+export function renderMergeReviewBody(result: DependabotAssessed): string {
+  const claude = result.claudeAssessment;
+  const head = [
+    ROLE_TAG,
+    `${targetText(result.input)}は、調査では、このリポジトリへの影響が見つかりませんでした。`,
+    "Claudeが確認できなかった項目を、参考情報として残します。",
+  ].join("\n");
+  return (
+    head +
+    listSection(UNVERIFIED_HEADING, UNVERIFIED_LEAD, claude.unverified) +
+    evidenceSection(claude.evidence)
+  );
 }
 
 /**
  * 人に回すときに投稿するレビューの本文(目印を除く)。
- * 人に回した根拠(`escalationsOf`)、Claudeの懸念と未確認の項目、所見を、それぞれ囲みの中に置く。
+ * 人に回した根拠(`escalationsOf`)、Claudeの懸念、Claudeの未確認の項目(参考情報)、所見を、それぞれ囲みの中に置く。
  */
 export function renderHumanReviewBody(result: DependabotAssessed): string {
   const claude = result.claudeAssessment;
   const head = [
     ROLE_TAG,
     `${targetText(result.input)}は、自動ではマージせず、人の確認に回しました。`,
-    "サプライチェーンの懸念か、確認できなかった項目が残っているためです。",
+    "サプライチェーンの懸念か、機械の検査と入力の確認で見つかった根拠が残っているためです。",
     "内容を確認し、問題なければ手でマージするか、閉じてください。",
   ].join("\n");
   return (
@@ -251,11 +281,7 @@ export function renderHumanReviewBody(result: DependabotAssessed): string {
       "Claudeが挙げた懸念です。",
       claude.supplyChainConcerns,
     ) +
-    listSection(
-      "確認できなかった項目",
-      "Claudeが確認できなかった項目です。",
-      claude.unverified,
-    ) +
+    listSection(UNVERIFIED_HEADING, UNVERIFIED_LEAD, claude.unverified) +
     evidenceSection(claude.evidence)
   );
 }
@@ -416,6 +442,8 @@ export type DependabotFinishResult = {
  *    要求が例外で終わったときは、PRを1回だけ読み直す。調べたheadのままマージ済みならマージとして記録し、
  *    読めないか未マージなら、マージできた扱いにせず人に回す。どの場合もマージを再送しない。
  *    マージの直前にbase(main)のshaも読み、影響調査の時から動いていれば、マージせずに取り消す(`gate_waiting`)。
+ *    マージが成功した後、Claudeの未確認の項目が残るときだけ、参考情報として所見をPRのレビューに投稿する(試運転では投稿しない)。
+ *    投稿はベストエフォートで、失敗しても警告だけを残し、マージ済みの結論は変えない。
  * 9. 修正: 所見をPRのレビューに投稿し(この作業項目の目印があれば投稿しない)、`reviewed`(`impact_found`)を記録して、
  *    人が所見を確かめて修正のラベルを付けるよう通知する(`DEPENDABOT_AUTO_FIX_LABEL`が偽のとき)。マージはしない。
  *    投稿に失敗したら人に回す。
@@ -607,7 +635,7 @@ export async function runDependabotFinish(
      * マージされたことを1回だけ記録する。マージは済んでいるので、記録できなくてもステップを失敗させない。
      * 失敗させると、フローの失敗の扱いが`picked`の行を`failed`にし、マージ済みのPRを人に回してしまう。
      */
-    const recordMerged = async (
+    const recordMergedStatus = async (
       mergeSha: string | null,
     ): Promise<DependabotFinishResult> => {
       deps.info("merged the dependabot pull request", {
@@ -644,6 +672,30 @@ export async function runDependabotFinish(
       );
     };
 
+    /**
+     * Claudeの未確認の項目が残るときだけ、参考情報として所見を投稿する。マージが成功した後に呼ぶ。
+     * 投稿はベストエフォートで、失敗してもマージ済みの結論は変えず、警告だけを残す。
+     * マージ前に投稿すると、マージが409で失敗したときに古い所見がPRに残るため、マージの後に置く。
+     */
+    const postUnverifiedOnce = async (): Promise<void> => {
+      if (assessed.claudeAssessment.unverified.length === 0) return;
+      try {
+        await postFindingsOnce(renderMergeReviewBody(assessed));
+      } catch (error) {
+        deps.warn("failed to post the unverified items of claude", {
+          work_item_id: workItemId,
+          error: errorMessage(error),
+        });
+      }
+    };
+
+    const recordMerged = async (
+      mergeSha: string | null,
+    ): Promise<DependabotFinishResult> => {
+      const recorded = await recordMergedStatus(mergeSha);
+      await postUnverifiedOnce();
+      return recorded;
+    };
     // 影響調査はmainのこのshaとの差で評価した。mainが動いていれば、評価していない組み合わせをマージしない。
     let baseSha: string;
     try {
@@ -843,8 +895,9 @@ export async function runDependabotFinish(
   }
   const note = dependabotReason("impact", outcome.reason);
   const claude = assessed.claudeAssessment;
-  // 通知はリンクとメンションを描くので、Claudeが書いた文は載せず、件数だけを載せる。
-  const counts = `内訳は、Claudeが挙げた懸念が${String(claude.supplyChainConcerns.length)}件、Claudeが確認できなかった項目が${String(claude.unverified.length)}件、機械の検査と入力の確認による根拠が${String(escalationsOf(target).length + coverageEscalationsOf(assessed).length)}件です`;
+  // 通知はリンクとメンションを描くので、Claudeが書いた文は載せず、止めた根拠の件数だけを載せる。
+  // Claudeの未確認の項目は止める根拠でないので、件数にも入れない(投稿した所見に残る)。
+  const counts = `内訳は、Claudeが挙げた懸念が${String(claude.supplyChainConcerns.length)}件、機械の検査と入力の確認による根拠が${String(escalationsOf(target).length + coverageEscalationsOf(assessed).length)}件です`;
   return toHuman(note, `${describeReason(note)}。${counts}`);
 }
 

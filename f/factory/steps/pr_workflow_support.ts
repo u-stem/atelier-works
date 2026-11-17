@@ -5096,6 +5096,7 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
     nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
   },
   // `decideImpactOutcome`が返す2つの理由は、件数を訳に含める。
+  // 未確認の件数は、Claudeの未確認でなく、機械の検査と入力の確認で見つかった根拠の件数である。
   {
     pattern: reasonPattern(
       DEPENDABOT_REASON_PREFIX.impact,
@@ -5111,7 +5112,7 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
       "(\\d+) unverified item",
     ),
     describe: (m) =>
-      `dependabotの更新の影響調査で、未確認の項目が${m[1]}件残っています`,
+      `dependabotの更新の影響調査で、機械の検査と入力の確認で見つかった根拠が${m[1]}件残っています`,
     nextAction: () => DEPENDABOT_IMPACT_NEXT_ACTION,
   },
   {

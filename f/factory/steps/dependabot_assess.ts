@@ -177,6 +177,8 @@ export function coverageEscalationsOf(result: {
  * Claudeの評価に、人に回す根拠(`escalationsOf`と`coverageEscalationsOf`)を足す。
  * 機械の懸念は`supplyChainConcerns`に、それ以外の根拠(未確認の入力、名前の欠け)は`unverified`に入れる。
  * 根拠が1件でもあれば、Claudeが懸念も未確認も無いと答えていても、結論は人に回る。
+ * Claudeの`unverified`は、人への参考情報として投稿に残すだけで、この評価には入れない。結論を止めない。
+ * Claudeの`supplyChainConcerns`は入れる。
  * Claudeの出力で根拠を減らすことはない。
  */
 export function impactForDecision(result: {
@@ -194,7 +196,6 @@ export function impactForDecision(result: {
       ...escalations.filter((item) => machine.has(item)),
     ],
     unverified: [
-      ...claude.unverified,
       ...escalations.filter((item) => !machine.has(item)),
       ...coverageEscalationsOf(result),
     ],

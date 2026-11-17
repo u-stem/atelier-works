@@ -1081,7 +1081,7 @@ function evaluateWithCoTargets(input: GateEvaluation): GateResult {
   }
   const commits = commitProblem(input);
   if (commits !== null) return stop(commits);
-  if (input.update !== "patch" && input.update !== "minor") {
+  if (input.update !== "patch") {
     return stop(`update kind is ${input.update}`);
   }
   const pathReason = pathProblem(input.changedPaths);
@@ -1288,8 +1288,10 @@ export type ImpactOutcome = {
 
 /**
  * 影響の評価から次の動作を決める。
- * サプライチェーンの懸念か未検証の項目が1つでもあれば、人に渡す。
- * 懸念も未検証も無いときは、影響が無ければmerge、あれば修正に進む。
+ * サプライチェーンの懸念か、止める根拠の未検証の項目(機械の検査と入力の確認による)が1つでもあれば、人に渡す。
+ * どちらも無いときは、影響が無ければmerge、あれば修正に進む。
+ * 呼び出し側は、止める根拠だけを渡す。Claudeの`unverified`は参考情報なので、渡さない(`impactForDecision`)。
+ * 理由の件数は、渡された止める根拠の件数だけである。
  */
 export function decideImpactOutcome(a: ImpactAssessment): ImpactOutcome {
   if (a.supplyChainConcerns.length > 0) {
@@ -1305,6 +1307,6 @@ export function decideImpactOutcome(a: ImpactAssessment): ImpactOutcome {
     };
   }
   return a.impact === "none"
-    ? { outcome: "merge", reason: "no impact and nothing is left unverified" }
+    ? { outcome: "merge", reason: "no impact and no blocking item remains" }
     : { outcome: "fix", reason: "the update affects this repository" };
 }

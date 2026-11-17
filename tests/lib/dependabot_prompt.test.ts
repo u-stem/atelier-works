@@ -279,11 +279,51 @@ describe("buildDependabotPrompt", () => {
     );
   });
 
-  test("leaves maintainers and repository transfers to the model", () => {
+  test("leaves maintainer changes to the model", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
     expect(prompt).toContain(
-      "It did not assess usage in this repository, breaking changes, maintainer changes, or repository transfers; those are yours.",
+      "It did not assess usage in this repository, breaking changes, or maintainer and publisher changes; those are yours.",
+    );
+  });
+
+  test("says the repository URL was compared before sanitizing", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "The repository URL before and after the update was already compared mechanically, before the inputs were sanitized; a concern there is sent to a human separately.",
+    );
+  });
+
+  test("does not ask for the repository URL comparison as unverified", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "URLs appear as [URL] in the registry metadata, so do not add the inability to compare them to `unverified`.",
+    );
+  });
+
+  test("says the required checks run before merge", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "The required CI checks of the repository run on the pull request head before merge.",
+    );
+  });
+
+  test("does not ask for running the tests as unverified", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "You cannot run commands, so do not add the inability to run them to `unverified`.",
+    );
+  });
+
+  test("keeps genuine information gaps in unverified", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "Any other real gap, such as a missing changelog entry or a behavior change you cannot confirm, still goes to `unverified`.",
     );
   });
 
@@ -375,11 +415,43 @@ describe("buildDependabotPrompt", () => {
     expect(prompt).not.toContain("could not be retrieved");
   });
 
-  test("never sets impact to none while a concern or an unverified item remains", () => {
+  test("never sets impact to none while a concern remains", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
     expect(prompt).toContain(
-      "If any concern or unverified item remains, never set `impact` to `none`.",
+      "If any concern remains, never set `impact` to `none`.",
+    );
+  });
+
+  test("sets impact to impact when the usage search or the installed package was not checked", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "If you could not finish searching this repository for usages of the package, or could not inspect the installed package (node_modules is absent or outside the working directory), usage is not verified: set `impact` to `impact`.",
+    );
+  });
+
+  test("does not let any other unverified item decide impact", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "Any other unverified item, such as a missing changelog entry or a behavior change you cannot confirm, does not decide `impact`: write it to `unverified` only.",
+    );
+  });
+
+  test("keeps unverified items as reference information for a human", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "Unverified items are kept as reference information for a human.",
+    );
+  });
+
+  test("reports an uncomparable maintainer or publisher as a concern", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "If you could not compare the maintainers or the publisher between the two versions, report it in `supplyChainConcerns`, not in `unverified`.",
     );
   });
 

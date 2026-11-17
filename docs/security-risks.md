@@ -759,7 +759,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | ID | 残るリスクと、受け入れる理由 | 関連する節 |
 | --- | --- | --- |
 | <a id="r-dep-01"></a>R-DEP-01 | 上流が侵害された版でも、公開の日数、関門、影響調査をすべて通ればマージされる。公開の日数の待ち、registryとの整合性の照合、影響調査が、その機会を減らす。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
-| <a id="r-dep-02"></a>R-DEP-02 | 影響調査の判断は誤りうる。マージの後の動作を最後に確かめるのは、必須チェックである。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
+| <a id="r-dep-02"></a>R-DEP-02 | 影響調査の判断は誤りうる。Claudeが確認できなかった項目は、人への参考情報としてPRに残すだけで、マージを止めない。マージの後の動作を最後に確かめるのは、必須チェックである。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
 | <a id="r-dep-03"></a>R-DEP-03 | 一覧は、ページの上限(10ページ、1000件)を超えると失敗する。公開の明示リポジトリで第三者が1000件を超えるPRを開くと、一覧が失敗し続け、そのリポジトリのdependabotのPRを処理できない。一覧を読むのは、収集が止まっているか、そのリポジトリの記録を使えない間と、収集が集めないリポジトリ(`owners`に無い所有者の`factory_repo`、fork、先頭が`.`のリポジトリ名など)である。収集が集めないリポジトリでは、収集が動いていても当たる。失敗は`failed`に数え、失敗の記録として残る。 | [候補の元を確かめる](operations/features.md#候補の元を確かめる)、[dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
 | <a id="r-dep-04"></a>R-DEP-04 | セキュリティ更新と版の更新を区別しない。どちらも同じ関門を通る。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
 | <a id="r-dep-05"></a>R-DEP-05 | `node_modules`の下の`CLAUDE.md`と`AGENTS.md`は、単独の実験では読み込まれなかった。ただし、Claudeのバージョンが変わると結果が変わりうるので、更新のたびに同じ実験をやり直す。依存が同梱する指示のファイルが読み込まれれば、影響調査の判断に指示を注入される窓が開く。 | [dependabotの更新の自動マージ](internals/dependabot.md#dependabotの更新の自動マージ) |
