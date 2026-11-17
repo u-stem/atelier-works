@@ -1044,8 +1044,18 @@ describe("evaluateGate", () => {
     expect(evaluateGate(validInput())).toEqual({ ok: true });
   });
 
-  test("accepts a minor update", () => {
-    expect(verdictOf({ update: "minor" })).toBe("ok");
+  test("accepts a patch update", () => {
+    expect(verdictOf({ update: "patch" })).toBe("ok");
+  });
+
+  test("needs a human for a minor update", () => {
+    expect(verdictOf({ update: "minor" })).toBe("needs_human");
+  });
+
+  test("names the update kind when a minor update stops", () => {
+    const result = evaluateGate(validInput({ update: "minor" }));
+
+    expect(result.ok ? "" : result.reason).toBe("update kind is minor");
   });
 
   test("accepts the console lockfile and manifest", () => {

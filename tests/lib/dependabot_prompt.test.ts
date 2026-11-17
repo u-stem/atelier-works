@@ -279,11 +279,51 @@ describe("buildDependabotPrompt", () => {
     );
   });
 
-  test("leaves maintainers and repository transfers to the model", () => {
+  test("leaves maintainer changes to the model", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
     expect(prompt).toContain(
-      "It did not assess usage in this repository, breaking changes, maintainer changes, or repository transfers; those are yours.",
+      "It did not assess usage in this repository, breaking changes, or maintainer and publisher changes; those are yours.",
+    );
+  });
+
+  test("says the repository URL was compared before sanitizing", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "The repository URL before and after the update was already compared mechanically, before the inputs were sanitized; a concern there is sent to a human separately.",
+    );
+  });
+
+  test("does not ask for the repository URL comparison as unverified", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "URLs appear as [URL] in the registry metadata, so do not add the inability to compare them to `unverified`.",
+    );
+  });
+
+  test("says the required checks run before merge", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "The required CI checks of the repository run on the pull request head before merge.",
+    );
+  });
+
+  test("does not ask for running the tests as unverified", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "You cannot run commands, so do not add the inability to run them to `unverified`.",
+    );
+  });
+
+  test("keeps genuine information gaps in unverified", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "Any other real gap, such as a missing changelog entry or a behavior change you cannot confirm, still goes to `unverified`.",
     );
   });
 

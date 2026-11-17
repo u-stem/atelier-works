@@ -1081,7 +1081,7 @@ function evaluateWithCoTargets(input: GateEvaluation): GateResult {
   }
   const commits = commitProblem(input);
   if (commits !== null) return stop(commits);
-  if (input.update !== "patch" && input.update !== "minor") {
+  if (input.update !== "patch") {
     return stop(`update kind is ${input.update}`);
   }
   const pathReason = pathProblem(input.changedPaths);
