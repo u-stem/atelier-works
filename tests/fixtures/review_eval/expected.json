@@ -1,0 +1,114 @@
+{
+  "cases": [
+    {
+      "id": "off-by-one-page",
+      "title": "slice end is one past the page size",
+      "diff": "off-by-one-page.diff",
+      "defects": [
+        {
+          "id": "slice-overrun",
+          "path": "src/paginate.ts",
+          "start_line": 17,
+          "end_line": 17,
+          "kinds": ["must"]
+        }
+      ]
+    },
+    {
+      "id": "missing-authz",
+      "title": "delete handler skips the permission check its sibling has",
+      "diff": "missing-authz.diff",
+      "defects": [
+        {
+          "id": "delete-without-check",
+          "path": "src/projects.ts",
+          "start_line": 37,
+          "end_line": 47,
+          "kinds": ["must"]
+        }
+      ]
+    },
+    {
+      "id": "inverted-expiry",
+      "title": "expiry comparison is inverted",
+      "diff": "inverted-expiry.diff",
+      "defects": [
+        {
+          "id": "inverted-comparison",
+          "path": "src/session.ts",
+          "start_line": 14,
+          "end_line": 16,
+          "kinds": ["must"]
+        }
+      ]
+    },
+    {
+      "id": "unawaited-async",
+      "title": "forEach with an async callback returns before the saves finish",
+      "diff": "unawaited-async.diff",
+      "defects": [
+        {
+          "id": "fire-and-forget",
+          "path": "src/import.ts",
+          "start_line": 14,
+          "end_line": 17,
+          "kinds": ["must"]
+        }
+      ]
+    },
+    {
+      "id": "empty-average",
+      "title": "empty-input guard removed from average",
+      "diff": "empty-average.diff",
+      "defects": [
+        {
+          "id": "divide-by-zero",
+          "path": "src/stats.ts",
+          "start_line": 5,
+          "end_line": 7,
+          "kinds": ["must", "imo"]
+        }
+      ]
+    },
+    {
+      "id": "path-traversal",
+      "title": "user-supplied file name joined onto the upload directory",
+      "diff": "path-traversal.diff",
+      "defects": [
+        {
+          "id": "unchecked-join",
+          "path": "src/uploads.ts",
+          "start_line": 8,
+          "end_line": 13,
+          "kinds": ["must"]
+        }
+      ]
+    },
+    {
+      "id": "sql-injection",
+      "title": "name interpolated into an SQL string",
+      "diff": "sql-injection.diff",
+      "defects": [
+        {
+          "id": "interpolated-query",
+          "path": "src/users.ts",
+          "start_line": 26,
+          "end_line": 26,
+          "kinds": ["must"]
+        }
+      ]
+    },
+    {
+      "id": "clean-clamp",
+      "title": "defect-free: new helper with tests for every branch",
+      "diff": "clean-clamp.diff",
+      "defects": []
+    },
+    {
+      "id": "clean-retry",
+      "title": "defect-free: retry gains a delay between attempts",
+      "diff": "clean-retry.diff",
+      "defects": []
+    }
+  ]
+}
