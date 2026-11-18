@@ -1734,8 +1734,8 @@ describe("PR review sections in the evidence pack", () => {
   test("issues the two new queries after the existing ones", async () => {
     const { calls } = await collectWith({});
     expect(calls.slice(-2).map((call) => call.text)).toEqual([
-      findCall(calls, "prReviewTopPrs")?.text,
-      findCall(calls, "prReviewTriggers")?.text,
+      findCall(calls, "prReviewTopPrs")?.text ?? "",
+      findCall(calls, "prReviewTriggers")?.text ?? "",
     ]);
   });
 
