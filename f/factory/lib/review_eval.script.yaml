@@ -1,0 +1,9 @@
+summary: '[LIB] レビューの回帰評価の照合と集計'
+description: 内部ライブラリです。直接実行するものではありません。固定の差分に対するレビューの出力を正解と照合し、検出率と誤検知を求める純粋ロジックです。
+lock: '!inline f/factory/lib/review_eval.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

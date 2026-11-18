@@ -632,6 +632,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/metadata_patch_manifest` | script | [LIB] メタデータのパッチの検査 |
 | `f/factory/lib/metadata_patch_verify` | script | [LIB] メタデータのパッチの適用条件の検査 |
 | `f/factory/lib/model_text` | script | [LIB] モデルの出力の文字列の整形 |
+| `f/factory/lib/review_eval` | script | [LIB] レビューの回帰評価の照合と集計 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
 | `f/factory/lib/stream_cap` | script | [LIB] 上限つきのストリームの読み取り |
 | `f/factory/lib/work_item_stop` | script | [LIB] 人が中止した作業項目の停止の確認 |
