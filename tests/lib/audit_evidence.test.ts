@@ -1581,6 +1581,28 @@ describe("skill versions", () => {
     );
   });
 
+  test("folds the elements without a hash into the unrecorded group of the query", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "skillVersions")?.text).toContain(
+      "CASE WHEN coalesce(s.sha256, '') = '' OR coalesce(s.path, '') = '' THEN NULL ELSE s.path END AS path",
+    );
+  });
+
+  test("groups the skill versions by the folded path, not by the raw one", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "skillVersions")?.text).toContain(
+      "GROUP BY v.stage, v.path, v.sha, v.bundle",
+    );
+  });
+
   test("does not hide another failure of the skill-version query", async () => {
     const { sql } = createRoutedSqlClient();
     const failing: SqlClient = (strings, ...values) => {

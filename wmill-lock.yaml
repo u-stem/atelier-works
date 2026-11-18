@@ -43,7 +43,7 @@ locks:
   f/factory/lib/approval_sweep: af06feb224e9d4304cadf460dd2c4a445b8c4e173294ac48476de599cfcafa49
   f/factory/lib/approver: 1c82cf702f2bb7ac29d81bf9a5d439ced908228a3ee8229b415118a13619c300
   f/factory/lib/audit_doc: 0dcccfcfd59607c2aff289b48940f5dfd98de36ce6db462375394f2b6d696aa1
-  f/factory/lib/audit_evidence: d1d23dc2b30ed242887ef0049e3622fc7963f74e2dc97b127dca21cca1bf2494
+  f/factory/lib/audit_evidence: cd8efb0e495e2853297a1dcfbb18f0faca5a6fe71827075123f86fbefc08719e
   f/factory/lib/audit_support: fb02476fedd46bd81f95131ebe6bf54f6765617295a60b0667b52dc0f9b5bf16
   f/factory/lib/auto_retry: 3f71ecf8bd6561907175594734cfec1f0dc6cc6ae9320187b4367f1afacfc543
   f/factory/lib/auto_retry_reasons: e2d2fd0db790d66913db9449b203d937d93464ae93f1cc790721fd51771dabdc
@@ -60,7 +60,7 @@ locks:
   f/factory/lib/ci_log_support: 82bfb98e03c1afb71b08c3b95d72fd95d8016f853373268b5c3fbbdd416d8a9e
   f/factory/lib/ci_metadata_rehash: fe02965a116e2f2767808f1265c8efb646ea60c8531b85c710576a32b5bb7309
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
-  f/factory/lib/claude: 32ed47b2502d82ecd67b9cdb0739c89088f2597a094553655f9f55edf888679a
+  f/factory/lib/claude: f89acf3334cc9afa123d097b803f0cbb388e16291e47d037feead10e7f85a9ca
   f/factory/lib/claude_flow_failure: 4dc39c3f6f17fcf3b0ba626b36aa64cae7db2dcb3787fda84da7c24c4805b646
   f/factory/lib/claude_read_deny: 344937384ac71e6635c10abd0edaa98c6d26b77fd9ce4fac8177e39b6d2add3b
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea

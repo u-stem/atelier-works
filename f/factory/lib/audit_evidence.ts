@@ -878,7 +878,8 @@ function previousPeriodOf(period: AuditPeriod): { start: Date; end: Date } {
 
 /**
  * 期間内の実行を、stageと、注入したスキルの版(SKILL.mdと同梱ファイルのハッシュの先頭12桁)ごとに数える。
- * スキルの記録が無い実行(`skills`がNULLか空の配列)は、スキルの列がNULLの1行にまとめる。
+ * スキルの記録が無い実行(`skills`がNULLか空の配列)と、`sha256`が空の要素は、スキルの列がNULLの1行にまとめる。
+ * パスだけがあって`sha256`が無い要素も、パスごとに分けず、同じ1行に寄せる。
  * 日はJSTで切る。
  * `skills`列を足すmigrationが当たる前は列が無いエラーになるので、そのときは版を集めず、空を返す。
  * 配列の要素のうちオブジェクトでないものは、その要素だけを除く。壊れた1件で集計全体を失敗させないためである。
@@ -891,29 +892,36 @@ async function fetchSkillVersionRows(
 ): Promise<SqlRow[]> {
   try {
     return await sql`
-      SELECT r.stage,
-             s.path,
-             left(s.sha256, 12) AS sha,
-             left(s.bundle_sha256, 12) AS bundle,
+      SELECT v.stage,
+             v.path,
+             v.sha,
+             v.bundle,
              count(*) AS run_count,
-             to_char(min(r.created_at) AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD') AS first_seen,
-             to_char(max(r.created_at) AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD') AS last_seen
-      FROM factory.agent_runs r
-      JOIN factory.work_items wi ON wi.id = r.work_item_id
-      LEFT JOIN LATERAL jsonb_to_recordset(
-        COALESCE(
-          (SELECT jsonb_agg(e.elem)
-             FROM jsonb_array_elements(
-               CASE WHEN jsonb_typeof(r.skills) = 'array' THEN r.skills ELSE '[]'::jsonb END
-             ) AS e (elem)
-            WHERE jsonb_typeof(e.elem) = 'object'),
-          '[]'::jsonb
-        )
-      ) AS s (path text, sha256 text, bundle_sha256 text) ON true
-      WHERE r.created_at >= ${start}::timestamptz AND r.created_at < ${end}::timestamptz
-        AND wi.kind <> 'audit'
-      GROUP BY r.stage, s.path, left(s.sha256, 12), left(s.bundle_sha256, 12)
-      ORDER BY r.stage, s.path, min(r.created_at), left(s.sha256, 12), left(s.bundle_sha256, 12)
+             to_char(min(v.created_at) AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD') AS first_seen,
+             to_char(max(v.created_at) AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD') AS last_seen
+      FROM (
+        SELECT r.stage,
+               r.created_at,
+               CASE WHEN coalesce(s.sha256, '') = '' OR coalesce(s.path, '') = '' THEN NULL ELSE s.path END AS path,
+               CASE WHEN coalesce(s.sha256, '') = '' OR coalesce(s.path, '') = '' THEN NULL ELSE left(s.sha256, 12) END AS sha,
+               CASE WHEN coalesce(s.sha256, '') = '' OR coalesce(s.path, '') = '' THEN NULL ELSE nullif(left(s.bundle_sha256, 12), '') END AS bundle
+        FROM factory.agent_runs r
+        JOIN factory.work_items wi ON wi.id = r.work_item_id
+        LEFT JOIN LATERAL jsonb_to_recordset(
+          COALESCE(
+            (SELECT jsonb_agg(e.elem)
+               FROM jsonb_array_elements(
+                 CASE WHEN jsonb_typeof(r.skills) = 'array' THEN r.skills ELSE '[]'::jsonb END
+               ) AS e (elem)
+              WHERE jsonb_typeof(e.elem) = 'object'),
+            '[]'::jsonb
+          )
+        ) AS s (path text, sha256 text, bundle_sha256 text) ON true
+        WHERE r.created_at >= ${start}::timestamptz AND r.created_at < ${end}::timestamptz
+          AND wi.kind <> 'audit'
+      ) v
+      GROUP BY v.stage, v.path, v.sha, v.bundle
+      ORDER BY v.stage, v.path, min(v.created_at), v.sha, v.bundle
     `.fetch();
   } catch (err) {
     if (!isMissingAgentRunSkillsColumnError(err)) throw err;

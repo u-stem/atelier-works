@@ -228,7 +228,7 @@ async function readCloneHeadOrNull(
 
 /**
  * `buildSystemPrompt`が書いたファイルのパスをキーにした、スキルの版の記録。
- * 約10か所の呼び出し側は`runClaude`にパスだけを渡すので、`baseAgentRunFor`がここから版を引く。
+ * 呼び出し側は`runClaude`にパスだけを渡すので、`baseAgentRunFor`がここから版を引く。
  * ファイルの`cleanup()`で消す。長く動くworkerの中で記録を溜めないためである。
  */
 const provenanceByPromptFile = new Map<string, SkillProvenance>();

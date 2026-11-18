@@ -78,6 +78,7 @@ import {
   isActivePrFixUniqueViolation,
   isActivePrReviewUniqueViolation,
   isLatestMainCiRunFailed,
+  isMissingAgentRunSkillsColumnError,
   isMissingDeploymentErrorColumnError,
   isMissingDocHashColumnError,
   isMissingPrClosedAtColumnError,
@@ -2762,6 +2763,91 @@ describe("recordAgentRun before the migrations of its newer columns", () => {
     await expect(recordAgentRun(RUN, sql, SILENT_LOG)).rejects.toThrow(
       "db down",
     );
+  });
+});
+
+describe("isMissingAgentRunSkillsColumnError", () => {
+  test("accepts the statement of a SELECT that qualifies the skills column by the table alias", () => {
+    expect(
+      isMissingAgentRunSkillsColumnError(
+        new Error("column r.skills does not exist"),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts the statement of an INSERT that names the relation", () => {
+    expect(
+      isMissingAgentRunSkillsColumnError(
+        new Error('column "skills" of relation "agent_runs" does not exist'),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts the skill_clone_sha column", () => {
+    expect(
+      isMissingAgentRunSkillsColumnError(
+        new Error(
+          'column "skill_clone_sha" of relation "agent_runs" does not exist',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects the statement of another column qualified by the table alias", () => {
+    expect(
+      isMissingAgentRunSkillsColumnError(
+        new Error("column r.model_usage does not exist"),
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects the undefined column code when the statement names another column", () => {
+    expect(
+      isMissingAgentRunSkillsColumnError(
+        Object.assign(new Error("column r.model_usage does not exist"), {
+          code: "42703",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("accepts the statement that exists only in the body", () => {
+    expect(
+      isMissingAgentRunSkillsColumnError(
+        Object.assign(new Error(""), {
+          body: "column r.skills does not exist",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects the statement of another column that exists only in the body", () => {
+    expect(
+      isMissingAgentRunSkillsColumnError(
+        Object.assign(new Error(""), {
+          code: "42703",
+          body: "column r.model_usage does not exist",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("accepts the undefined column code alone when no statement names a column", () => {
+    expect(
+      isMissingAgentRunSkillsColumnError(
+        Object.assign(new Error(""), { code: "42703" }),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects an error without the code and without a statement", () => {
+    expect(isMissingAgentRunSkillsColumnError(new Error("db down"))).toBe(
+      false,
+    );
+  });
+
+  test("rejects a value that is not an Error", () => {
+    expect(isMissingAgentRunSkillsColumnError("column r.skills")).toBe(false);
   });
 });
 
