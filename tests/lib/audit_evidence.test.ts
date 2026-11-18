@@ -641,6 +641,47 @@ describe("unset values (missing keys)", () => {
     ]);
   });
 
+  test("groups a low confidence finding apart from its kind in the query", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "reviewFindings")?.text).toContain(
+      "WHEN f ->> 'confidence' = 'low' THEN 'low'",
+    );
+  });
+
+  test("renders the low confidence findings as a group apart from the kinds", async () => {
+    const { sql } = createRoutedSqlClient({
+      reviewFindings: [
+        { key: "must", count: 5 },
+        { key: "low", count: 2 },
+      ],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- low(記録だけで投稿していない): 2件",
+    );
+  });
+
+  test("renders the must count without the low confidence findings", async () => {
+    const { sql } = createRoutedSqlClient({
+      reviewFindings: [
+        { key: "must", count: 5 },
+        { key: "low", count: 2 },
+      ],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain("- must: 5件");
+  });
+
   test("renders the unset reply decision with its count", async () => {
     const { sql } = createRoutedSqlClient({
       fixReply: [

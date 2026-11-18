@@ -1101,6 +1101,8 @@ describe("hasBodyOnlyMustFinding", () => {
       message: "null checkが抜けています。",
       suggestion: null,
       suggested_code: null,
+      evidence: "checked",
+      confidence: "high",
       ...overrides,
     };
   }
@@ -1108,6 +1110,22 @@ describe("hasBodyOnlyMustFinding", () => {
 
   test("finds a MUST whose message is in no thread", () => {
     expect(hasBodyOnlyMustFinding([finding()], [], VIEWER)).toBe(true);
+  });
+
+  test("does not flag a low confidence MUST that was never posted", () => {
+    expect(
+      hasBodyOnlyMustFinding([finding({ confidence: "low" })], [], VIEWER),
+    ).toBe(false);
+  });
+
+  test("flags a MUST recorded before confidence existed and not posted as a thread", () => {
+    expect(
+      hasBodyOnlyMustFinding(
+        [finding({ confidence: null, evidence: null })],
+        [],
+        VIEWER,
+      ),
+    ).toBe(true);
   });
 
   test("does not flag a MUST posted as a thread", () => {
@@ -1404,6 +1422,8 @@ describe("settleReviewFindings", () => {
       message,
       suggestion: null,
       suggested_code: null,
+      evidence: "checked",
+      confidence: "high",
     };
   }
   const FIRST = { kind: "first" } as const;
@@ -1460,6 +1480,85 @@ describe("settleReviewFindings", () => {
     expect(summary).toBe(
       "s\n\n(上限の1件を超えたため、重要度の低い指摘を2件省略しました。)",
     );
+  });
+
+  test("does not let a low confidence finding take a slot of the limit", () => {
+    const low: ReviewFinding = {
+      ...severe("blocker", "low"),
+      confidence: "low",
+    };
+    const { findings } = settleReviewFindings(
+      { summary: "s", findings: [low, severe("nit", "kept")] },
+      FIRST,
+      1,
+    );
+    expect(findings.map((finding) => finding.message)).toContain("kept");
+  });
+
+  test("keeps a low confidence finding for the record", () => {
+    const low: ReviewFinding = {
+      ...severe("blocker", "low"),
+      confidence: "low",
+    };
+    const { findings } = settleReviewFindings(
+      { summary: "s", findings: [low, severe("nit", "kept")] },
+      FIRST,
+      1,
+    );
+    expect(findings.map((finding) => finding.message)).toContain("low");
+  });
+
+  test("does not count a kept low confidence finding as omitted", () => {
+    const low: ReviewFinding = {
+      ...severe("blocker", "low"),
+      confidence: "low",
+    };
+    const { summary } = settleReviewFindings(
+      { summary: "s", findings: [low, severe("nit")] },
+      FIRST,
+      1,
+    );
+    expect(summary).toBe("s");
+  });
+
+  test("limits the low confidence findings to the same number", () => {
+    const low: ReviewFinding = { ...severe("blocker"), confidence: "low" };
+    const { findings } = settleReviewFindings(
+      { summary: "s", findings: [low, low, low] },
+      FIRST,
+      2,
+    );
+    expect(findings).toHaveLength(2);
+  });
+
+  test("reports the number of low confidence findings dropped over the limit", () => {
+    const low: ReviewFinding = { ...severe("blocker"), confidence: "low" };
+    const { heldOmitted } = settleReviewFindings(
+      { summary: "s", findings: [low, low, low] },
+      FIRST,
+      2,
+    );
+    expect(heldOmitted).toBe(1);
+  });
+
+  test("reports no dropped low confidence findings within the limit", () => {
+    const low: ReviewFinding = { ...severe("blocker"), confidence: "low" };
+    const { heldOmitted } = settleReviewFindings(
+      { summary: "s", findings: [low, severe("nit")] },
+      FIRST,
+      1,
+    );
+    expect(heldOmitted).toBe(0);
+  });
+
+  test("reports no dropped low confidence findings for a threads-only review", () => {
+    const low: ReviewFinding = { ...severe("blocker"), confidence: "low" };
+    const { heldOmitted } = settleReviewFindings(
+      { summary: "s", findings: [low] },
+      { kind: "threads_only", fromSha: PRIOR },
+      1,
+    );
+    expect(heldOmitted).toBe(0);
   });
 
   test("leaves the summary alone within the limit", () => {

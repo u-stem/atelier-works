@@ -10,6 +10,15 @@ import { maskSecrets } from "./log.ts";
  */
 export const GAP_REPORT_MAX_CHARS = 2000;
 
+/**
+ * レビューの指摘の根拠(`evidence`)の長さの上限(文字数)。
+ * 根拠は信頼できない入力を読んだClaudeの自由文で、DBとConsoleのAPIに出るので、長さを絞る。
+ */
+export const REVIEW_EVIDENCE_MAX_CHARS = 1000;
+
+/** 切り詰めた根拠の末尾に足す印。 */
+export const REVIEW_EVIDENCE_TRUNCATED_MARK = "[truncated]";
+
 /** 書式文字(ゼロ幅スペース、双方向の制御、バイトオーダーマークなど)。表示に現れず、文字列の見かけと中身を食い違わせる。 */
 export const FORMAT_CHARACTER_PATTERN = /^\p{Cf}$/u;
 
@@ -167,4 +176,18 @@ export function normalizeDesignForImplement(
  */
 export function limitGapReport(report: string): string {
   return sanitizeModelText(report, GAP_REPORT_MAX_CHARS);
+}
+
+/**
+ * レビューの指摘の根拠を、保存してよい形にする。
+ * 根拠は信頼できない入力を読んだClaudeの自由文で、トークンなどを含みうるため、
+ * 秘密のマスクと制御文字の除去をかけてから、`REVIEW_EVIDENCE_MAX_CHARS`に絞る。
+ * 切ったときだけ、末尾に`REVIEW_EVIDENCE_TRUNCATED_MARK`を足す。
+ * マスクを切る前に行うので、切った末尾に秘密情報の一部は残らない。
+ */
+export function limitReviewEvidence(evidence: string): string {
+  const points = Array.from(sanitizeModelTextDetailed(evidence).text);
+  return points.length <= REVIEW_EVIDENCE_MAX_CHARS
+    ? points.join("")
+    : `${points.slice(0, REVIEW_EVIDENCE_MAX_CHARS).join("")}${REVIEW_EVIDENCE_TRUNCATED_MARK}`;
 }

@@ -14,6 +14,10 @@ import {
   type ReviewThread,
 } from "../../f/factory/lib/github.ts";
 import { logger } from "../../f/factory/lib/log.ts";
+import {
+  REVIEW_EVIDENCE_MAX_CHARS,
+  REVIEW_EVIDENCE_TRUNCATED_MARK,
+} from "../../f/factory/lib/model_text.ts";
 import type {
   FileDiffHunks,
   ReviewFinding,
@@ -50,6 +54,7 @@ import {
   renderUnresolvedLineSummary,
   reviewResultFor,
   selectThreadsToResolve,
+  splitFindingsByConfidence,
   withReviewMarkers,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 import { evaluateSealed } from "../lib/flowExpressions.ts";
@@ -72,6 +77,8 @@ function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
     message: "problem",
     suggestion: null,
     suggested_code: null,
+    evidence: "checked",
+    confidence: "high",
     ...overrides,
   };
 }
@@ -789,6 +796,72 @@ describe("renderReviewSummary with binary files whose path was not confirmed", (
       0,
     );
     expect(body).not.toContain("パスを確認できなかった");
+  });
+});
+
+describe("renderReviewSummary with held back findings", () => {
+  const HELD_LINE =
+    "確信度が低く、投稿しなかった指摘が3件あります。記録はConsoleで確認できます。";
+
+  test("puts the held back notice right after the LGTM line", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      [],
+      0,
+      [],
+      3,
+    );
+    expect(body.split("\n")[2]).toBe(HELD_LINE);
+  });
+
+  test("keeps the final-Approve-is-human disclaimer after the held back notice", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "rereview_clean",
+      [],
+      0,
+      [],
+      0,
+      [],
+      3,
+    );
+    expect(body.split("\n")[3]).toBe(
+      "最終的なApprove判断は人が行ってください。",
+    );
+  });
+
+  test("adds the held back notice to a body with findings", () => {
+    const body = renderReviewSummary(
+      "alice",
+      2,
+      "findings",
+      [],
+      0,
+      [],
+      0,
+      [],
+      3,
+    );
+    expect(body.split("\n")).toContain(HELD_LINE);
+  });
+
+  test("leaves the body unchanged when nothing was held back", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0);
+    expect(body).not.toContain("確信度が低く");
+  });
+});
+
+describe("renderUnresolvedLineSummary with held back findings", () => {
+  test("adds the held back notice to the fallback summary", () => {
+    const body = renderUnresolvedLineSummary("alice", [], [], [], 0, 2);
+    expect(body.split("\n")).toContain(
+      "確信度が低く、投稿しなかった指摘が2件あります。記録はConsoleで確認できます。",
+    );
   });
 });
 
@@ -2025,6 +2098,7 @@ describe("posting a review once per sha", () => {
       droppedFindings: [],
       binaryFiles: [],
       binaryUnlistedCount: 0,
+      heldFindingCount: 0,
       priorReview: true,
       post: true,
       ensureRepoOwner: async () => null,
@@ -3474,5 +3548,284 @@ describe("sendReviewedNotification", () => {
       },
     });
     expect(calls).toEqual([["https://example.test/hook", event]]);
+  });
+});
+
+describe("findings with low confidence", () => {
+  const HELD_NOTICE_2 =
+    "確信度が低く、投稿しなかった指摘が2件あります。記録はConsoleで確認できます。";
+  const VIEWER = "factory-bot";
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const SILENT = logger("pr_review_post", { sink: () => {} });
+  const TARGET: PostReviewTarget = {
+    owner: "acme",
+    repo: "widgets",
+    pr_number: 12,
+    work_item_id: 7,
+    review_sha: SHA,
+    viewer_login: VIEWER,
+  };
+  const LOW_MUST = finding({
+    kind: "must",
+    confidence: "low",
+    message: "LOW_CONFIDENCE_MESSAGE",
+  });
+  const HIGH_IMO = finding({
+    line: 20,
+    kind: "imo",
+    severity: "minor",
+    confidence: "high",
+    message: "HIGH_CONFIDENCE_MESSAGE",
+  });
+
+  /** `postReview`と同じ順で、指摘を投稿の入力に組み立てる。 */
+  function publishInputFor(
+    findings: readonly ReviewFinding[],
+    overrides: Partial<PublishReviewInput> = {},
+  ): PublishReviewInput {
+    const { postable } = splitFindingsByConfidence(findings);
+    const mapped = mapFindingsToReviewComments(postable, A_TS_FILES);
+    return {
+      target: TARGET,
+      prAuthorLogin: "alice",
+      comments: mapped.comments,
+      commentedFindings: commentedFindingsOf(postable, mapped.droppedFindings),
+      unverifiedFindings: mapped.unverifiedFindings,
+      droppedFindings: mapped.droppedFindings,
+      binaryFiles: [],
+      binaryUnlistedCount: 0,
+      heldFindingCount: splitFindingsByConfidence(findings).held.length,
+      priorReview: false,
+      post: true,
+      ensureRepoOwner: async () => null,
+      threadResponses: [],
+      isAllowedReplier: (login) => login === VIEWER || login === "alice",
+      ...overrides,
+    };
+  }
+
+  function humanReview(id: number): unknown {
+    return { id, user: { login: "alice" }, state: "COMMENTED", body: "ok" };
+  }
+
+  /** 先の実行が投稿した、このshaのレビュー。 */
+  function postedReview(id: number): unknown {
+    return {
+      id,
+      user: { login: VIEWER },
+      state: "COMMENTED",
+      body: withReviewMarkers("[Factory 自動レビュー] @alice", 7, SHA),
+    };
+  }
+
+  function createReviewCalls(calls: readonly FakeCall[]): FakeCall[] {
+    return calls.filter(
+      (call) =>
+        call.argv.includes("POST") &&
+        call.argv[2]?.endsWith("/reviews") === true,
+    );
+  }
+
+  /** 投稿したレビューの本文とインラインコメントを読む。 */
+  async function postedPayload(findings: readonly ReviewFinding[]) {
+    const fake = createFakeCommandRunner([
+      ghApiOk([humanReview(1)]),
+      ghApiOk({ id: 99 }),
+    ]);
+    await publishReview({ ghToken: "tok" }, publishInputFor(findings), SILENT);
+    const payload: { body?: string; comments?: unknown[] } = JSON.parse(
+      fake.calls[1]?.request?.body ?? "{}",
+    );
+    return payload;
+  }
+
+  describe("splitFindingsByConfidence", () => {
+    test("holds back only the low confidence findings", () => {
+      const { held } = splitFindingsByConfidence([LOW_MUST, HIGH_IMO]);
+      expect(held).toEqual([LOW_MUST]);
+    });
+
+    test("keeps the other findings in their order", () => {
+      const medium = finding({ confidence: "medium", message: "MEDIUM" });
+      const { postable } = splitFindingsByConfidence([
+        HIGH_IMO,
+        LOW_MUST,
+        medium,
+      ]);
+      expect(postable).toEqual([HIGH_IMO, medium]);
+    });
+
+    test("treats a finding without a recorded confidence as postable", () => {
+      const legacy = finding({ confidence: null, evidence: null });
+      const { postable } = splitFindingsByConfidence([legacy]);
+      expect(postable).toEqual([legacy]);
+    });
+  });
+
+  describe("the review result", () => {
+    test("is not changes_requested for a low confidence must finding", () => {
+      expect(reviewResultFor([LOW_MUST], 0)).toBe("reviewed");
+    });
+
+    test("is changes_requested for a medium confidence must finding", () => {
+      expect(
+        reviewResultFor([finding({ kind: "must", confidence: "medium" })], 0),
+      ).toBe("changes_requested");
+    });
+
+    test("still counts the open threads of earlier rounds", () => {
+      expect(reviewResultFor([LOW_MUST], 1)).toBe("changes_requested");
+    });
+
+    test("is unverified when only a low confidence must finding exists and the threads could not be read", () => {
+      expect(reviewResultFor([LOW_MUST], null)).toBe("unverified");
+    });
+  });
+
+  describe("the record", () => {
+    const base = {
+      workItemId: 7,
+      headSha: "abc1234",
+      verdict: "comment" as const,
+      summary: "s",
+      postedReviewId: "99",
+      blockingThreadCount: 0,
+    };
+
+    test("keeps the low confidence findings", () => {
+      const record = buildReviewRecord({
+        ...base,
+        findings: [LOW_MUST, HIGH_IMO],
+      });
+      expect(record.findings).toEqual([LOW_MUST, HIGH_IMO]);
+    });
+
+    test("does not take its result from a low confidence must finding", () => {
+      const record = buildReviewRecord({ ...base, findings: [LOW_MUST] });
+      expect(record.result).toBe("reviewed");
+    });
+
+    test("masks a secret in the evidence before it is stored", () => {
+      const token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+      const record = buildReviewRecord({
+        ...base,
+        findings: [finding({ evidence: `printed ${token}` })],
+      });
+      expect(record.findings[0]?.evidence).not.toContain(token);
+    });
+
+    test("cuts a long evidence and marks the cut", () => {
+      const record = buildReviewRecord({
+        ...base,
+        findings: [
+          finding({ evidence: "a".repeat(REVIEW_EVIDENCE_MAX_CHARS + 1) }),
+        ],
+      });
+      expect(record.findings[0]?.evidence).toEndWith(
+        REVIEW_EVIDENCE_TRUNCATED_MARK,
+      );
+    });
+
+    test("keeps an evidence recorded as null", () => {
+      const record = buildReviewRecord({
+        ...base,
+        findings: [finding({ evidence: null })],
+      });
+      expect(record.findings[0]?.evidence).toBeNull();
+    });
+
+    test("leaves the other fields of a finding as they are", () => {
+      const record = buildReviewRecord({
+        ...base,
+        findings: [finding({ evidence: "short" })],
+      });
+      expect(record.findings[0]).toEqual(finding({ evidence: "short" }));
+    });
+  });
+
+  describe("the notification", () => {
+    test("does not count low confidence findings", () => {
+      const event = reviewedNotifyEvent({
+        posted: true,
+        instance_name: "factory-a",
+        owner: "octo",
+        repo: "app",
+        pr_number: 7,
+        verdict: "comment",
+        findings: [LOW_MUST, HIGH_IMO],
+        blockingThreadCount: 0,
+      });
+      expect(event).toMatchObject({ finding_count: 1, result: "reviewed" });
+    });
+  });
+
+  describe("the posted review", () => {
+    test("does not carry the message of a low confidence finding", async () => {
+      const payload = await postedPayload([LOW_MUST, HIGH_IMO]);
+      expect(JSON.stringify(payload)).not.toContain("LOW_CONFIDENCE_MESSAGE");
+    });
+
+    test("carries one inline comment for the finding that is not low confidence", async () => {
+      const payload = await postedPayload([LOW_MUST, HIGH_IMO]);
+      expect(payload.comments).toHaveLength(1);
+    });
+
+    test("states a count that leaves out the low confidence findings", async () => {
+      const payload = await postedPayload([LOW_MUST, HIGH_IMO]);
+      expect(payload.body).toContain("1件コメントしました。");
+    });
+
+    test("posts a review without findings when every finding is low confidence", async () => {
+      const payload = await postedPayload([LOW_MUST]);
+      expect(payload.body).toContain("指摘はありません。LGTMです。");
+    });
+
+    // LGTMの文だけでは、人が承認と読む。件数だけを添えて、内容は出さない。
+    test("says how many findings were held back right after the LGTM line when every finding is low confidence", async () => {
+      const payload = await postedPayload([LOW_MUST, LOW_MUST]);
+      const lines = (payload.body ?? "").split("\n");
+      expect(lines[2]).toBe(HELD_NOTICE_2);
+    });
+
+    test("says how many findings were held back when a finding is also posted", async () => {
+      const payload = await postedPayload([LOW_MUST, HIGH_IMO]);
+      expect(payload.body).toContain(
+        "確信度が低く、投稿しなかった指摘が1件あります。",
+      );
+    });
+
+    test("does not mention held back findings when none was held back", async () => {
+      const payload = await postedPayload([HIGH_IMO]);
+      expect(payload.body).not.toContain("確信度が低く");
+    });
+  });
+
+  describe("posting once per sha", () => {
+    test("reuses the posted review when the rerun holds back every finding", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([postedReview(55)]),
+        ghApiOk({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+      ]);
+      const result = await publishReview(
+        { ghToken: "tok" },
+        publishInputFor([LOW_MUST], { priorReview: true }),
+        SILENT,
+      );
+      expect({
+        id: result.postedReviewId,
+        created: createReviewCalls(fake.calls).length,
+      }).toEqual({ id: 55, created: 0 });
+    });
   });
 });

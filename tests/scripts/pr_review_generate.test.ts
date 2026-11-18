@@ -114,10 +114,24 @@ const VALID_OUTPUT = {
       message: "nit",
       suggestion: null,
       suggested_code: null,
+      evidence: "a.ts:3 was read.",
+      confidence: "high",
     },
   ],
   thread_responses: [],
 };
+
+/** `VALID_OUTPUT`の指摘から、指定の項目を除く、または置き換えた出力。 */
+function outputWithFinding(
+  change: Record<string, unknown>,
+  omit: readonly string[] = [],
+) {
+  const finding = { ...VALID_OUTPUT.findings[0], ...change };
+  for (const key of omit) {
+    Reflect.deleteProperty(finding, key);
+  }
+  return { ...VALID_OUTPUT, findings: [finding] };
+}
 
 describe("isReviewClaudeOutput", () => {
   test("accepts a well-formed review output", () => {
@@ -185,10 +199,42 @@ describe("isReviewClaudeOutput", () => {
           message: "x",
           suggestion: "y",
           suggested_code: null,
+          evidence: "a.ts was read.",
+          confidence: "medium",
         },
       ],
     };
     expect(isReviewClaudeOutput(output)).toBe(true);
+  });
+
+  test("rejects a finding without evidence", () => {
+    expect(isReviewClaudeOutput(outputWithFinding({}, ["evidence"]))).toBe(
+      false,
+    );
+  });
+
+  test("rejects a finding without confidence", () => {
+    expect(isReviewClaudeOutput(outputWithFinding({}, ["confidence"]))).toBe(
+      false,
+    );
+  });
+
+  test("rejects a finding with null evidence", () => {
+    expect(isReviewClaudeOutput(outputWithFinding({ evidence: null }))).toBe(
+      false,
+    );
+  });
+
+  test("rejects a finding with an unknown confidence", () => {
+    expect(
+      isReviewClaudeOutput(outputWithFinding({ confidence: "certain" })),
+    ).toBe(false);
+  });
+
+  test("accepts a finding with low confidence", () => {
+    expect(isReviewClaudeOutput(outputWithFinding({ confidence: "low" }))).toBe(
+      true,
+    );
   });
 
   test("rejects a missing findings array", () => {
@@ -505,6 +551,12 @@ describe("review scope wiring in the generate step", () => {
   test("settles the findings with the shared limit", async () => {
     expect((await SOURCE).replace(/\s+/g, " ")).toContain(
       "settleReviewFindings( output, scope, REVIEW_MAX_FINDINGS, )",
+    );
+  });
+
+  test("logs the low confidence findings dropped over the limit", async () => {
+    expect(await SOURCE).toContain(
+      'log.warn("low confidence findings over the limit were dropped"',
     );
   });
 

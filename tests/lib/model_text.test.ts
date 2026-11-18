@@ -6,7 +6,10 @@ import {
   INVISIBLE_PATTERN,
   isAllowedCharacter,
   limitGapReport,
+  limitReviewEvidence,
   normalizeDesignForImplement,
+  REVIEW_EVIDENCE_MAX_CHARS,
+  REVIEW_EVIDENCE_TRUNCATED_MARK,
   sanitizeModelText,
   sanitizeModelTextDetailed,
 } from "../../f/factory/lib/model_text.ts";
@@ -566,5 +569,40 @@ describe("limitGapReport", () => {
 
   test("removes the control characters of the report", () => {
     expect(limitGapReport("a\u0000b")).toBe("ab");
+  });
+});
+
+describe("limitReviewEvidence", () => {
+  test("keeps a short evidence as it is", () => {
+    expect(limitReviewEvidence("a.ts:3を読みました。")).toBe(
+      "a.ts:3を読みました。",
+    );
+  });
+
+  test("masks a secret in the evidence", () => {
+    expect(limitReviewEvidence(`output ${GITHUB_TOKEN}`)).not.toContain(
+      GITHUB_TOKEN,
+    );
+  });
+
+  test("removes the control characters of the evidence", () => {
+    expect(limitReviewEvidence("a\u0000b")).toBe("ab");
+  });
+
+  test("keeps an evidence of exactly the limit without a mark", () => {
+    const text = "あ".repeat(REVIEW_EVIDENCE_MAX_CHARS);
+    expect(limitReviewEvidence(text)).toBe(text);
+  });
+
+  test("cuts a long evidence at the limit and ends it with the mark", () => {
+    const cut = limitReviewEvidence("あ".repeat(REVIEW_EVIDENCE_MAX_CHARS + 5));
+    expect(cut).toBe(
+      `${"あ".repeat(REVIEW_EVIDENCE_MAX_CHARS)}${REVIEW_EVIDENCE_TRUNCATED_MARK}`,
+    );
+  });
+
+  test("masks a secret that straddles the cut", () => {
+    const text = `${"a".repeat(REVIEW_EVIDENCE_MAX_CHARS - 10)} ${GITHUB_TOKEN}`;
+    expect(limitReviewEvidence(text)).not.toContain("ghp_");
   });
 });

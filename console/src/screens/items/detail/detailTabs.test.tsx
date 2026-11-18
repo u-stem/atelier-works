@@ -287,6 +287,26 @@ describe("RoundsTab", () => {
     expect(html).not.toContain(REVIEW_EMPTY);
   });
 
+  test("shows the count of findings recorded but not posted beside the review", () => {
+    const html = render(
+      <RoundsTab
+        detail={detail({ reviews: [{ ...REVIEW, held_finding_count: 3 }] })}
+        now={NOW}
+      />,
+    );
+    expect(html).toContain("記録のみ 3件");
+  });
+
+  test("shows no count of unposted findings when there are none", () => {
+    const html = render(
+      <RoundsTab
+        detail={detail({ reviews: [{ ...REVIEW, held_finding_count: 0 }] })}
+        now={NOW}
+      />,
+    );
+    expect(html).not.toContain("記録のみ");
+  });
+
   test("renders the backticked gap report as code", () => {
     const html = render(
       <RoundsTab

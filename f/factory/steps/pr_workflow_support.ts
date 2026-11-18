@@ -63,6 +63,7 @@ import {
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { gitPointerStopReason } from "../lib/implement_loop.ts";
 import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
+import { limitReviewEvidence } from "../lib/model_text.ts";
 import { holdReasonForStoppedItem } from "../lib/pr_ci_fix_recovery.ts";
 import { prCiFixHoldInfo } from "../lib/pr_ci_support.ts";
 import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
@@ -105,6 +106,7 @@ import {
   type LabelerAssociation,
   type NoticeRecord,
   type PrReviewTrigger,
+  REVIEW_CONFIDENCES,
   type ReviewFinding,
   type ReviewFindingKind,
   type ReviewOutcome,
@@ -260,7 +262,30 @@ export function normalizeJapaneseText(text: string): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * 指摘がPRに出てよいかを返す。確信度が`low`の指摘だけが出ない。
+ * 確信度を持たない古い行(`null`)は、出てよい指摘として扱う。
+ */
+export function isPostableFinding(finding: ReviewFinding): boolean {
+  return finding.confidence !== "low";
+}
+
+/**
+ * 指摘を、PRに出すものと、記録だけにするもの(確信度が`low`)に分ける。
+ * どちらも元の順を保つ。要素は同じ参照のまま返す。
+ */
+export function splitFindingsByConfidence(findings: readonly ReviewFinding[]): {
+  readonly postable: ReviewFinding[];
+  readonly held: ReviewFinding[];
+} {
+  return {
+    postable: findings.filter(isPostableFinding),
+    held: findings.filter((finding) => !isPostableFinding(finding)),
+  };
+}
+
+/**
  * 投稿したレビューの結果を返す。
+ * 確信度が`low`の指摘は、`kind`が`must`でも数えない。
  * 今回の指摘に`must`が1件でもあるか、`blockingThreadCount`
  * (`countBlockingThreads`の値)が0より大きければ`"changes_requested"`を返す。
  * 前のラウンドから残った未解決の`[MUST]`と、了承されていない見送り(反論した見送りを含む)も数える。
@@ -276,7 +301,11 @@ export function reviewResultFor(
   findings: readonly ReviewFinding[],
   blockingThreadCount: number | null,
 ): ReviewOutcome {
-  if (findings.some((finding) => finding.kind === "must")) {
+  if (
+    findings.some(
+      (finding) => isPostableFinding(finding) && finding.kind === "must",
+    )
+  ) {
     return "changes_requested";
   }
   if (blockingThreadCount === null) return "unverified";
@@ -284,10 +313,23 @@ export function reviewResultFor(
 }
 
 /**
+ * 記録する指摘の`evidence`を、秘密のマスクと長さの上限にかける。
+ * `evidence`はClaudeの自由文で、記録はConsoleのAPIにも出るため。
+ * それ以外の項目は、そのまま返す。
+ */
+function sanitizeFindingForRecord(finding: ReviewFinding): ReviewFinding {
+  return finding.evidence === null
+    ? finding
+    : { ...finding, evidence: limitReviewEvidence(finding.evidence) };
+}
+
+/**
  * `factory.reviews`に書く行を組み立てる。
  * `result`は、今回の指摘と`blockingThreadCount`から`reviewResultFor`で決める。
  * Discordの通知もConsoleのレビュー行も、この値で状態を出す。
  * `verdict`が`approve`で今回の指摘が0件でも、マージを止めるスレッドが残れば`changes_requested`になる。
+ * `findings`は確信度が`low`の指摘も含めてすべて記録する。`result`の判定には`low`を使わない。
+ * 記録する`evidence`は、秘密をマスクし、長さの上限で切る(`limitReviewEvidence`)。
  * 未解決の指摘を読めなかった(`unverified`)ときは、`result`を`null`にして記録する。
  * Consoleのレビュー行は、`null`を「修正必須の有無の記録なし」と出す。
  */
@@ -307,7 +349,7 @@ export function buildReviewRecord(input: {
     verdict: input.verdict,
     result: outcome === "unverified" ? null : outcome,
     summary: input.summary,
-    findings: [...input.findings],
+    findings: input.findings.map(sanitizeFindingForRecord),
     posted_review_id: input.postedReviewId,
   };
 }
@@ -423,7 +465,8 @@ export function isReviewFindingShape(value: unknown): value is ReviewFinding {
   if (value.suggested_code !== null && !isString(value.suggested_code)) {
     return false;
   }
-  return true;
+  if (!isString(value.evidence)) return false;
+  return isOneOf(value.confidence, REVIEW_CONFIDENCES);
 }
 
 /**
@@ -706,25 +749,32 @@ function renderCodeBlock(code: string, info: "suggestion" | ""): string {
  * `factory-writing`スキルの規則で検査する。規則に反していても投稿は止めない。
  * レビューを作り直すと費用が倍になるので、呼び出し側は問題をログに残すだけにする。
  * `summary`はGitHubに投稿しない(総評は固定の文面)ので検査しない。
+ * `evidence`と、確信度が`low`で投稿しない指摘も、GitHubに載らないので検査しない。
  */
 export function reviewOutputProseIssues(output: ReviewClaudeOutput): string[] {
   return checkProseFields([
-    ...output.findings.flatMap((finding, index) => [
-      {
-        label: `findings[${index}].message`,
-        text: finding.message,
-        rules: GITHUB_PROSE_RULES,
-      },
-      ...(finding.suggestion === null
+    ...output.findings.flatMap((finding, index) =>
+      // 投稿しない指摘(確信度が`low`)は、GitHubに載らないので検査しない。
+      // 位置の表示は、出力の中の順のままにする。
+      !isPostableFinding(finding)
         ? []
         : [
             {
-              label: `findings[${index}].suggestion`,
-              text: finding.suggestion,
+              label: `findings[${index}].message`,
+              text: finding.message,
               rules: GITHUB_PROSE_RULES,
             },
-          ]),
-    ]),
+            ...(finding.suggestion === null
+              ? []
+              : [
+                  {
+                    label: `findings[${index}].suggestion`,
+                    text: finding.suggestion,
+                    rules: GITHUB_PROSE_RULES,
+                  },
+                ]),
+          ],
+    ),
     ...output.thread_responses.map((response, index) => ({
       label: `thread_responses[${index}].body`,
       text: response.body,
@@ -927,6 +977,9 @@ export function decideReviewBodyMode(
  * 指摘の無い2つの形式は、そのとき「LGTMです」を言わず、差分に指摘が無いことだけを書く。
  * 読めていないファイルが残るのに、LGTMと読める行を出さないため。
  *
+ * `heldFindingCount`が1以上なら、2行目の直後に、確信度が`low`で投稿しなかった指摘の件数を1行で足す。
+ * 指摘の内容は載せない。LGTMの文だけが残って、人が承認と読むのを防ぐため。
+ *
  * `"findings"`には「最終的なApproveは人が判断する」という免責の行を付けない。
  * 指摘のある投稿はすでに作成者に確認を求めている(「確認お願いします。」)ので、
  * 免責は重複になる。
@@ -949,6 +1002,7 @@ export function renderReviewSummary(
   binaryFiles: readonly string[] = [],
   binaryUnlistedCount = 0,
   movedFindings: readonly ReviewFinding[] = [],
+  heldFindingCount = 0,
 ): string {
   const lines = [`${ROLE_TAGS.pr_review} @${authorLogin}`];
   const hasBinary = binaryFiles.length + binaryUnlistedCount > 0;
@@ -981,9 +1035,24 @@ export function renderReviewSummary(
       );
       break;
   }
+  // どの形式も、2行目が結果の文である。投稿しなかった指摘の注記は、その直後に置く。
+  lines.splice(2, 0, ...renderHeldFindingsLines(heldFindingCount));
   lines.push(...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount));
   lines.push(...renderUnanchoredFindingLines(droppedFindings, movedFindings));
   return lines.join("\n");
+}
+
+/**
+ * 確信度が`low`で、投稿せず記録だけにした指摘があることを伝える1行。無ければ空。
+ * 指摘の内容は載せず、件数だけを書く。
+ * LGTMの文だけでは、人が「確認すべきことが何も無い」と読みかねないため。
+ */
+function renderHeldFindingsLines(heldFindingCount: number): string[] {
+  return heldFindingCount > 0
+    ? [
+        `確信度が低く、投稿しなかった指摘が${String(heldFindingCount)}件あります。記録はConsoleで確認できます。`,
+      ]
+    : [];
 }
 
 /**
@@ -1089,6 +1158,7 @@ function renderUnanchoredFindingLines(
  * 同じ一覧に並べる。後者の形は通常の総評と同じにする。
  * 「N件コメントしました」は、行コメントを1件も付けていないので書かない。
  * `binaryFiles`があれば、`renderReviewSummary`と同じ固定の一文とパスの一覧を足す。
+ * `heldFindingCount`が1以上なら、`renderReviewSummary`と同じ、投稿しなかった指摘の件数の1行を足す。
  */
 export function renderUnresolvedLineSummary(
   authorLogin: string,
@@ -1096,11 +1166,13 @@ export function renderUnresolvedLineSummary(
   droppedFindings: readonly ReviewFinding[],
   binaryFiles: readonly string[] = [],
   binaryUnlistedCount = 0,
+  heldFindingCount = 0,
 ): string {
   return [
     `${ROLE_TAGS.pr_review} @${authorLogin}`,
     "GitHubが行を解決できなかったため、行コメントにする指摘を総評に移しました。",
     "確認お願いします。",
+    ...renderHeldFindingsLines(heldFindingCount),
     ...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount),
     ...renderUnanchoredFindingLines(droppedFindings, commentedFindings),
   ].join("\n");
@@ -6546,6 +6618,7 @@ export function reviewDeltaPaths(
  * 行に紐づけられなかった指摘はスレッドにならないので、差分だけを読む再レビューでは忘れられる。
  * スレッドの一覧を読めなかったときは`threads`が空なので、`[MUST]`があれば真になり、PR全体を読む側に倒れる。
  * 解決済みのスレッドも、投稿した指摘として数える。
+ * 確信度が`low`の指摘は投稿していないので、スレッドが無くても数えない。
  * スレッドがあるとみなすのは、同じパスで、最初のコメントが`renderInlineComment`か`renderReattachedInlineComment`の形と同じものだけにする。
  * 本文の一部の一致では、別のパスの同じ文、別の指摘の提案の中の文、空の本文でも一致し、
  * 差分だけを読む側に倒れて指摘を忘れるためである。
@@ -6562,7 +6635,7 @@ export function hasBodyOnlyMustFinding(
     isFactoryFindingThread(thread, viewer),
   );
   return findings
-    .filter((finding) => finding.kind === "must")
+    .filter((finding) => isPostableFinding(finding) && finding.kind === "must")
     .some((finding) => {
       // 位置が差分の外で、差分の行に付け替えるか切り詰めて投稿したスレッドも、投稿済みとみなす。
       const expected = [
@@ -6646,6 +6719,10 @@ const REVIEW_SEVERITY_ORDER: Readonly<Record<ReviewSeverity, number>> = {
 /**
  * Claudeの出力から、投稿する指摘と記録する要約を決める。
  * 重要なものから順に並べて上限で切るので、省くのは重要度の低いものになる。
+ * 確信度が`low`の指摘は投稿しないので、投稿する指摘の枠を取らない。
+ * 上限は、投稿する指摘と`low`の指摘に別々にかけ、`low`の指摘を後ろに並べる。
+ * 要約の省略の件数は、投稿する指摘の分だけを数える。
+ * `low`の指摘で上限を超えて捨てた件数は、要約に足さず`heldOmitted`で返す。呼び出し側がログに残す。
  * スレッドだけのレビューは新しい指摘を出さないので、出力に指摘があっても捨てる。
  */
 export function settleReviewFindings(
@@ -6655,22 +6732,27 @@ export function settleReviewFindings(
   },
   scope: ReviewScope,
   maxFindings: number,
-): { summary: string; findings: ReviewFinding[] } {
+): { summary: string; findings: ReviewFinding[]; heldOmitted: number } {
   if (scope.kind === "threads_only") {
-    return { summary: output.summary, findings: [] };
+    return { summary: output.summary, findings: [], heldOmitted: 0 };
   }
-  const sorted = [...output.findings].sort(
-    (left, right) =>
-      REVIEW_SEVERITY_ORDER[left.severity] -
-      REVIEW_SEVERITY_ORDER[right.severity],
-  );
+  const bySeverity = (left: ReviewFinding, right: ReviewFinding): number =>
+    REVIEW_SEVERITY_ORDER[left.severity] -
+    REVIEW_SEVERITY_ORDER[right.severity];
+  const { postable, held } = splitFindingsByConfidence(output.findings);
+  const sorted = postable.sort(bySeverity);
+  const heldSorted = held.sort(bySeverity);
   const omitted = sorted.length - maxFindings;
   return {
     summary:
       omitted > 0
         ? `${output.summary}\n\n(上限の${String(maxFindings)}件を超えたため、重要度の低い指摘を${String(omitted)}件省略しました。)`
         : output.summary,
-    findings: sorted.slice(0, maxFindings),
+    findings: [
+      ...sorted.slice(0, maxFindings),
+      ...heldSorted.slice(0, maxFindings),
+    ],
+    heldOmitted: Math.max(0, heldSorted.length - maxFindings),
   };
 }
 
