@@ -87,6 +87,8 @@ PR全体を読むレビューには、1回で出し切るよう固定の文で�
 投稿する指摘は50件までにする(`settleReviewFindings`)。
 `blocker`、`major`、`minor`、`nit`の順に並べて切るので、省くのは重要度の低いものになる。
 省いた件数は`summary`に書く。
+確信度が`low`の指摘は、別に同じ上限で切る。
+上限を超えて捨てた`low`の指摘の件数は、総評に足さず、`pr_review_generate`の警告ログに残す。
 プロンプトとスキルにも、上限と、重要なものから出すことを書いている。
 
 `threads_only`では、Claudeの出力に指摘があっても捨てる。
@@ -191,7 +193,7 @@ Claudeの出力の指摘は、`evidence`と`confidence`を必ず持つ。
 `evidence`は、差分かリポジトリで確かめた事実である。
 `confidence`は`high`、`medium`、`low`のいずれかである。
 どちらかが欠けた出力は、形の検査(`isReviewClaudeOutput`)で落ちて、再試行になる。
-再試行の増えは、`invalid_structured_output`の失敗の数で見える。
+再試行が増えたかは、`invalid_structured_output`の失敗の数で見える。
 
 `low`の指摘は、記録だけにして、PRには出さない。
 投稿のステップ(`pr_review_post`)は、投稿の前に、`low`を分ける。

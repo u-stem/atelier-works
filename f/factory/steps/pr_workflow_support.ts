@@ -6709,6 +6709,7 @@ const REVIEW_SEVERITY_ORDER: Readonly<Record<ReviewSeverity, number>> = {
  * 確信度が`low`の指摘は投稿しないので、投稿する指摘の枠を取らない。
  * 上限は、投稿する指摘と`low`の指摘に別々にかけ、`low`の指摘を後ろに並べる。
  * 要約の省略の件数は、投稿する指摘の分だけを数える。
+ * `low`の指摘で上限を超えて捨てた件数は、要約に足さず`heldOmitted`で返す。呼び出し側がログに残す。
  * スレッドだけのレビューは新しい指摘を出さないので、出力に指摘があっても捨てる。
  */
 export function settleReviewFindings(
@@ -6718,15 +6719,16 @@ export function settleReviewFindings(
   },
   scope: ReviewScope,
   maxFindings: number,
-): { summary: string; findings: ReviewFinding[] } {
+): { summary: string; findings: ReviewFinding[]; heldOmitted: number } {
   if (scope.kind === "threads_only") {
-    return { summary: output.summary, findings: [] };
+    return { summary: output.summary, findings: [], heldOmitted: 0 };
   }
   const bySeverity = (left: ReviewFinding, right: ReviewFinding): number =>
     REVIEW_SEVERITY_ORDER[left.severity] -
     REVIEW_SEVERITY_ORDER[right.severity];
   const { postable, held } = splitFindingsByConfidence(output.findings);
   const sorted = postable.sort(bySeverity);
+  const heldSorted = held.sort(bySeverity);
   const omitted = sorted.length - maxFindings;
   return {
     summary:
@@ -6735,8 +6737,9 @@ export function settleReviewFindings(
         : output.summary,
     findings: [
       ...sorted.slice(0, maxFindings),
-      ...held.sort(bySeverity).slice(0, maxFindings),
+      ...heldSorted.slice(0, maxFindings),
     ],
+    heldOmitted: Math.max(0, heldSorted.length - maxFindings),
   };
 }
 

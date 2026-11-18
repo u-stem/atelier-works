@@ -534,6 +534,12 @@ describe("review scope wiring in the generate step", () => {
     );
   });
 
+  test("logs the low confidence findings dropped over the limit", async () => {
+    expect(await SOURCE).toContain(
+      'log.warn("low confidence findings over the limit were dropped"',
+    );
+  });
+
   test("trusts a resolved thread only after checking its resolver", async () => {
     const source = await SOURCE;
     const trusted = source.indexOf(

@@ -307,7 +307,10 @@ function isReviewFinding(value: unknown): value is ReviewFinding {
     isOneOf(value.severity, REVIEW_SEVERITIES) &&
     isString(value.message) &&
     (value.suggestion === null || isString(value.suggestion)) &&
-    // 確信度を記録する前の行は、項目を持たない。
+    // 根拠と確信度を記録する前の行は、項目を持たない。
+    (value.evidence === undefined ||
+      value.evidence === null ||
+      isString(value.evidence)) &&
     (value.confidence === undefined ||
       value.confidence === null ||
       isOneOf(value.confidence, REVIEW_CONFIDENCES))
@@ -315,7 +318,7 @@ function isReviewFinding(value: unknown): value is ReviewFinding {
 }
 
 /**
- * 記録した指摘を読む。確信度を記録する前の行は、`confidence`を`null`で返す。
+ * 記録した指摘を読む。根拠と確信度を記録する前の行は、`evidence`と`confidence`を`null`で返す。
  * 受け手は、`confidence`が`low`の指摘を、投稿せず記録だけにした指摘として区別できる。
  * `null`は投稿した指摘として扱う(`isPostableFinding`)。
  */
@@ -328,6 +331,7 @@ function parseFindings(value: unknown, field: string): ReviewFinding[] {
   }
   return array.map((finding) => ({
     ...finding,
+    evidence: finding.evidence ?? null,
     confidence: finding.confidence ?? null,
   }));
 }

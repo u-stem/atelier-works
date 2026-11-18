@@ -869,6 +869,65 @@ describe("runConsoleQuery", () => {
     );
   });
 
+  test("reviews: reports a null evidence for a finding recorded before the evidence existed", async () => {
+    const row: SqlRow = {
+      review_id: 1,
+      work_item_id: 2,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      head_sha: "abc1234",
+      verdict: "comment",
+      summary: "summary",
+      findings: JSON.stringify([
+        {
+          path: "a.ts",
+          line: 3,
+          severity: "minor",
+          message: "old",
+          suggestion: null,
+        },
+      ]),
+      posted_review_id: "rv-1",
+      created_at: NOW.toISOString(),
+    };
+    const { sql } = createFakeSqlClient([[row]]);
+
+    const rows = await runConsoleQuery("reviews", 200, 30, sql);
+
+    expect(rows[0]).toMatchObject({ findings: [{ evidence: null }] });
+  });
+
+  test("reviews: rejects a finding whose evidence is not a string", async () => {
+    const row: SqlRow = {
+      review_id: 1,
+      work_item_id: 2,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      head_sha: "abc1234",
+      verdict: "comment",
+      summary: "summary",
+      findings: JSON.stringify([
+        {
+          path: "a.ts",
+          line: 3,
+          severity: "minor",
+          message: "odd",
+          suggestion: null,
+          evidence: 42,
+        },
+      ]),
+      posted_review_id: "rv-1",
+      created_at: NOW.toISOString(),
+    };
+    const { sql } = createFakeSqlClient([[row]]);
+
+    await expect(runConsoleQuery("reviews", 200, 30, sql)).rejects.toThrow(
+      "malformed finding",
+    );
+  });
+
   test("fix_rounds: parses trigger_review_ids/replies/commit_shas", async () => {
     const row: SqlRow = {
       fix_round_id: 1,

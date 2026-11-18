@@ -1531,6 +1531,36 @@ describe("settleReviewFindings", () => {
     expect(findings).toHaveLength(2);
   });
 
+  test("reports the number of low confidence findings dropped over the limit", () => {
+    const low: ReviewFinding = { ...severe("blocker"), confidence: "low" };
+    const { heldOmitted } = settleReviewFindings(
+      { summary: "s", findings: [low, low, low] },
+      FIRST,
+      2,
+    );
+    expect(heldOmitted).toBe(1);
+  });
+
+  test("reports no dropped low confidence findings within the limit", () => {
+    const low: ReviewFinding = { ...severe("blocker"), confidence: "low" };
+    const { heldOmitted } = settleReviewFindings(
+      { summary: "s", findings: [low, severe("nit")] },
+      FIRST,
+      1,
+    );
+    expect(heldOmitted).toBe(0);
+  });
+
+  test("reports no dropped low confidence findings for a threads-only review", () => {
+    const low: ReviewFinding = { ...severe("blocker"), confidence: "low" };
+    const { heldOmitted } = settleReviewFindings(
+      { summary: "s", findings: [low] },
+      { kind: "threads_only", fromSha: PRIOR },
+      1,
+    );
+    expect(heldOmitted).toBe(0);
+  });
+
   test("leaves the summary alone within the limit", () => {
     const { summary } = settleReviewFindings(
       { summary: "s", findings: [severe("nit")] },
