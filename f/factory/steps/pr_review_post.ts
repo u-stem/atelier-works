@@ -302,7 +302,7 @@ export async function main(
  * (factory-reviewスキルの方針)。`verdict`は`factory.reviews`にだけ残す。
  * トリガーの`review_label`は着手時に消費済みなので、ここで外すラベルも、
  * 付けるPRの状態ラベルも無い。
- * 投稿の後に結果を決め、今回の指摘に`kind === "must"`があるか、
+ * 投稿の後に結果を決め、今回の指摘に`kind === "must"`(確信度が`low`のものを除く)があるか、
  * 前回までの`[MUST]`の指摘か、了承されていない見送り(反論した見送りを含む)が今回の解決の後も残っていれば
  * `"changes_requested"`、それ以外は`"reviewed"`にする。
  * これはDiscordの通知で、変更が要るのか承認だけでよいのかを一目で示すためのもの。
