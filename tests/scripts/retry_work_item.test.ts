@@ -3159,6 +3159,53 @@ describe("main: the context of the restart", () => {
   });
 });
 
+describe("main: the review trigger of the restart", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "../../f/factory/retry_work_item.ts"),
+    "utf8",
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  const restart = source.slice(
+    source.indexOf("async function restartWorkItem"),
+  );
+  const refusedWhenNotMoved = restart.indexOf("if (!moved)");
+  const triggerWrite = restart.indexOf("setPrReviewTrigger(work_item_id");
+  const flowLaunch = restart.indexOf("wmill.runFlowAsync(");
+
+  test("finds the three markers that the order tests compare", () => {
+    expect(
+      [refusedWhenNotMoved, triggerWrite, flowLaunch].every(
+        (position) => position >= 0,
+      ),
+    ).toBe(true);
+  });
+
+  test("writes the trigger only after the status exchange, which throws when it lost", () => {
+    expect(triggerWrite).toBeGreaterThan(refusedWhenNotMoved);
+  });
+
+  test("writes the trigger before the flow starts", () => {
+    expect(triggerWrite).toBeLessThan(flowLaunch);
+  });
+
+  test("writes the trigger that restartReviewTrigger chose", () => {
+    expect(restart).toMatch(
+      /const reviewTrigger = restartReviewTrigger\(workItem\);\s*if \(reviewTrigger !== null\) \{\s*await setPrReviewTrigger\(work_item_id, reviewTrigger\);/,
+    );
+  });
+
+  test("writes the trigger once", () => {
+    expect(restart.split("setPrReviewTrigger(").length - 1).toBe(1);
+  });
+
+  test("throws when the status exchange lost", () => {
+    expect(restart).toMatch(
+      /if \(!moved\) \{\s*throw new Error\(\s*`retry_work_item: work item/,
+    );
+  });
+});
+
 describe("main: the move back to the requirements", () => {
   const source = readFileSync(
     join(import.meta.dir, "../../f/factory/retry_work_item.ts"),

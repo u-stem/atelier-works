@@ -1600,7 +1600,7 @@ describe("PR review runs by pull request", () => {
       ],
     };
     expect(sectionOf(evidence, PR_SECTION)?.lines).toEqual([
-      "x /r#1: 実行1 / コスト $1.00",
+      "x/r#1: 実行1 / コスト $1.00",
     ]);
   });
 });

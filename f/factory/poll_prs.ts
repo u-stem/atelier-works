@@ -104,9 +104,10 @@ import {
 } from "./lib/poll_support.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
 import {
+  discoveredPrKeys,
   findLinkedParentWorkItemId,
   type PrReviewStartResult,
-  prReviewTriggerFor,
+  prReviewTriggerForCandidate,
   startPrReview,
 } from "./lib/pr_review_start.ts";
 import { collectTrackedPrCandidates } from "./lib/tracked_pr_candidates.ts";
@@ -1530,12 +1531,10 @@ export async function main(): Promise<{
     },
   );
   failed += tracked.failed;
-  rawCandidates.push(...tracked.items);
-  // 追跡中のPRの一覧だけから見つかったPR。発見で見つかったPRは`collectTrackedPrCandidates`が飛ばすので含まない。
+  // 検索で見つかったPRの鍵。ここに無い候補は、追跡中のPRの一覧だけから見つかったものである。
   // 割り当ての経路で始めたレビューのきっかけ(`tracked_push`)を見分けるのに使う。
-  const trackedOnlyKeys = new Set(
-    tracked.items.map((item) => prKey(item.owner, item.repo, item.number)),
-  );
+  const discoveredKeys = discoveredPrKeys(discovered.items);
+  rawCandidates.push(...tracked.items);
 
   const allowed = filterByRepoAllowlist(rawCandidates, scope);
 
@@ -1613,12 +1612,7 @@ export async function main(): Promise<{
           context.observed,
           context.linkedParentWorkItemId,
           reason,
-          prReviewTriggerFor(
-            reason,
-            trackedOnlyKeys.has(
-              prKey(candidate.owner, candidate.repo, candidate.number),
-            ),
-          ),
+          prReviewTriggerForCandidate(reason, candidate, discoveredKeys),
         ),
       startFix: (candidate, context) =>
         startFix(

@@ -2743,6 +2743,51 @@ describe("recordAgentRun before the migrations of its newer columns", () => {
     expect(texts[1]).not.toContain("trigger");
   });
 
+  test("keeps model_usage when only the trigger column is missing", async () => {
+    const { sql, texts } = missingColumnThenOk(
+      new Error('column "trigger" of relation "agent_runs" does not exist'),
+    );
+    await recordAgentRun({ ...RUN, trigger: "label" }, sql, SILENT_LOG);
+    expect(texts[1]).toContain("model_usage");
+  });
+
+  test("keeps failure_reason when only the trigger column is missing", async () => {
+    const { sql, texts } = missingColumnThenOk(
+      new Error('column "trigger" of relation "agent_runs" does not exist'),
+    );
+    await recordAgentRun({ ...RUN, trigger: "label" }, sql, SILENT_LOG);
+    expect(texts[1]).toContain("failure_reason");
+  });
+
+  test("falls back to the oldest statement when the statement without trigger still lacks a column", async () => {
+    const texts: string[] = [];
+    const sql: SqlClient = (strings) => {
+      texts.push(strings.join(" ? "));
+      const attempt = texts.length;
+      return {
+        fetch: () =>
+          attempt <= 2
+            ? Promise.reject(
+                Object.assign(new Error("undefined column"), {
+                  code: "42703",
+                }),
+              )
+            : Promise.resolve([{ id: 21 }]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    await recordAgentRun({ ...RUN, trigger: "label" }, sql, SILENT_LOG);
+    expect(texts[2]).not.toContain("model_usage");
+  });
+
+  test("skips the statement without trigger when the error names model_usage", async () => {
+    const { sql, texts } = missingColumnThenOk(
+      new Error('column "model_usage" of relation "agent_runs" does not exist'),
+    );
+    await recordAgentRun(RUN, sql, SILENT_LOG);
+    expect(texts.length).toBe(2);
+  });
+
   test("rethrows a failure other than a missing model_usage column", async () => {
     const { sql } = missingColumnThenOk(new Error("db down"));
     await expect(recordAgentRun(RUN, sql, SILENT_LOG)).rejects.toThrow(

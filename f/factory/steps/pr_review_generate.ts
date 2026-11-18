@@ -349,6 +349,12 @@ export async function main(
     factoryCloneDir: factory_clone_dir,
   });
 
+  // 起動の経路が作業項目に書いたきっかけを、実行の記録に写す。
+  // 作業項目の値は次の起動で上書きされるため、過去の実行のきっかけは実行の記録に残す。
+  // Claudeを起動する前に読み、実行の間に別の経路が書き換えた値を写さない。
+  // 読めなければnull(監査では不明)で記録し、レビューは止めない(`readPrReviewTrigger`が警告を残す)。
+  const trigger = await readPrReviewTrigger(work_item_id);
+
   try {
     const result = await runClaude({
       run: runCommand,
@@ -370,10 +376,6 @@ export async function main(
       timeoutMs: config.claude_timeout_sec * 1000,
     });
 
-    // 起動の経路が作業項目に書いたきっかけを、実行の記録に写す。
-    // 作業項目の値は次の起動で上書きされるため、過去の実行のきっかけは実行の記録に残す。
-    // 読めなければnull(監査では不明)で記録し、レビューは止めない(`readPrReviewTrigger`が警告を残す)。
-    const trigger = await readPrReviewTrigger(work_item_id);
     await recordClaudeRuns(result, (agentRun) =>
       recordAgentRun(withRunTrigger(agentRun, trigger)),
     );

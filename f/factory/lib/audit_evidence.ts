@@ -460,8 +460,11 @@ function hasPrReviewRuns(evidence: AuditEvidence): boolean {
 
 function formatPrReviewPrLine(stat: PrReviewPrStat): string {
   const number = stat.pr_number === null ? UNSET_LABEL : String(stat.pr_number);
+  // ownerとrepoは行全体の前に1つずつ無害化する。行全体だけに通すと、取り除いたタグの跡の空白が`/`の前後に残る。
+  const owner = sanitizeCell(stat.owner, SANITIZE_CELL_MAX);
+  const repo = sanitizeCell(stat.repo, SANITIZE_CELL_MAX);
   return sanitizeCell(
-    `${stat.owner}/${stat.repo}#${number}: 実行${stat.run_count} / コスト $${stat.total_cost_usd.toFixed(2)}`,
+    `${owner}/${repo}#${number}: 実行${stat.run_count} / コスト $${stat.total_cost_usd.toFixed(2)}`,
     SANITIZE_CELL_MAX,
   );
 }

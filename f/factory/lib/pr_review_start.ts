@@ -52,6 +52,41 @@ export function prReviewTriggerFor(
   return foundOnlyAsTracked ? "tracked_push" : "rereview_request";
 }
 
+/** 候補のPRを指す、owner・repo・番号。 */
+type PrRef = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly number: number;
+};
+
+/** GitHubのownerとrepoは大文字小文字を区別しないので、綴りの違いを吸収した鍵にする。 */
+function caseInsensitivePrKey(pr: PrRef): string {
+  return `${pr.owner}/${pr.repo}#${String(pr.number)}`.toLowerCase();
+}
+
+/**
+ * 検索で見つかったPRの鍵の集合。
+ * 追跡中の一覧だけから見つかったPRを見分けるために、追跡中のPRを足す前に作る。
+ */
+export function discoveredPrKeys(items: readonly PrRef[]): ReadonlySet<string> {
+  return new Set(items.map(caseInsensitivePrKey));
+}
+
+/**
+ * 候補ごとの起動のきっかけ。検索で見つかったPRの鍵(`discoveredPrKeys`)に候補が無ければ、追跡中の一覧だけから見つかったものとして扱う。
+ * 鍵はowner・repoの大文字小文字を区別しないので、追跡の一覧と検索で綴りが違っても、検索で見つかったPRは`rereview_request`になる。
+ */
+export function prReviewTriggerForCandidate(
+  reason: "label" | "assignment",
+  candidate: PrRef,
+  discovered: ReadonlySet<string>,
+): PrReviewTrigger {
+  return prReviewTriggerFor(
+    reason,
+    !discovered.has(caseInsensitivePrKey(candidate)),
+  );
+}
+
 /** `started`は作業項目を作ってフローを起動した。`already_active`は、同じPRの稼働中の`pr_review`があり、何も作らなかった。 */
 export type PrReviewStartResult =
   | {

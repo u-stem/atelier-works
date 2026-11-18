@@ -2,11 +2,13 @@ import { describe, expect, test } from "bun:test";
 import type { NewWorkItem } from "../../f/factory/lib/db.ts";
 import * as prReviewRetry from "../../f/factory/lib/pr_review_retry.ts";
 import {
+  discoveredPrKeys,
   findLinkedParentWorkItemId,
   PR_REVIEW_FLOW_PATH,
   type PrReviewStartDeps,
   type PrReviewStartInput,
   prReviewTriggerFor,
+  prReviewTriggerForCandidate,
   startPrReview,
 } from "../../f/factory/lib/pr_review_start.ts";
 import type { PrReviewTrigger } from "../../f/factory/lib/types.ts";
@@ -224,6 +226,62 @@ describe("prReviewTriggerFor", () => {
 
   test("is tracked_push for an assignment found only among the tracked pull requests", () => {
     expect(prReviewTriggerFor("assignment", true)).toBe("tracked_push");
+  });
+});
+
+describe("prReviewTriggerForCandidate", () => {
+  const SEARCHED = discoveredPrKeys([
+    { owner: "Octo-Owner", repo: "Widgets", number: 7 },
+  ]);
+
+  test("is tracked_push for an assignment on a pull request the search did not find", () => {
+    expect(
+      prReviewTriggerForCandidate(
+        "assignment",
+        { owner: "Octo-Owner", repo: "Widgets", number: 8 },
+        SEARCHED,
+      ),
+    ).toBe("tracked_push");
+  });
+
+  test("is rereview_request for an assignment on a pull request the search found", () => {
+    expect(
+      prReviewTriggerForCandidate(
+        "assignment",
+        { owner: "Octo-Owner", repo: "Widgets", number: 7 },
+        SEARCHED,
+      ),
+    ).toBe("rereview_request");
+  });
+
+  test("is rereview_request when the tracked list spells the owner and repository in another case", () => {
+    expect(
+      prReviewTriggerForCandidate(
+        "assignment",
+        { owner: "octo-owner", repo: "widgets", number: 7 },
+        SEARCHED,
+      ),
+    ).toBe("rereview_request");
+  });
+
+  test("is label for a labelled pull request the search did not find", () => {
+    expect(
+      prReviewTriggerForCandidate(
+        "label",
+        { owner: "Octo-Owner", repo: "Widgets", number: 8 },
+        SEARCHED,
+      ),
+    ).toBe("label");
+  });
+
+  test("is tracked_push for every pull request when the search found none", () => {
+    expect(
+      prReviewTriggerForCandidate(
+        "assignment",
+        { owner: "Octo-Owner", repo: "Widgets", number: 7 },
+        discoveredPrKeys([]),
+      ),
+    ).toBe("tracked_push");
   });
 });
 
