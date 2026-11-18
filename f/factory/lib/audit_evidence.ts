@@ -1564,6 +1564,10 @@ export async function collectAuditEvidence(
       AND rv.posted_review_id IS NOT NULL
       AND jsonb_array_length(rv.findings) > 0
       AND NOT EXISTS (SELECT 1 FROM factory.review_findings x WHERE x.review_id = rv.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM factory.reviews r2
+        WHERE r2.posted_review_id = rv.posted_review_id AND r2.id < rv.id
+      )
   `
     .fetch()
     .catch((err: unknown) => {
@@ -1574,6 +1578,10 @@ export async function collectAuditEvidence(
         WHERE rv.created_at >= ${start}::timestamptz AND rv.created_at < ${end}::timestamptz
           AND rv.posted_review_id IS NOT NULL
           AND jsonb_array_length(rv.findings) > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM factory.reviews r2
+            WHERE r2.posted_review_id = rv.posted_review_id AND r2.id < rv.id
+          )
       `.fetch();
     });
 

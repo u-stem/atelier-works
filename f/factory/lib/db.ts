@@ -5406,6 +5406,7 @@ export type TerminalWorkItemsDeleted = {
  * 報告する件数が実際に消えた行とずれることはない。
  * 参照する他のテーブルはこの1文から連鎖する。
  * `work_items`を`ON DELETE CASCADE`で参照する表の行は一緒に消える。
+ * 外部キーを持たない`review_human_threads`の行は、同じ文で消す。
  * `ON DELETE SET NULL`の`job_failures`は残り、`deleteJobFailuresBefore`が別に掃除する。
  * 同じく`SET NULL`の`work_items.parent_work_item_id`を持つ子の作業項目も、
  * 親と一緒には消えない。
@@ -5415,14 +5416,21 @@ export async function deleteTerminalWorkItemsBefore(
   sql: SqlClient = defaultSqlClient,
 ): Promise<TerminalWorkItemsDeleted> {
   const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const cutoff = olderThan.toISOString();
+  // `review_human_threads`は外部キーを持たないので、連鎖して消えない。同じ文のCTEで、候補の作業項目の行を一緒に消す。
+  // 表を足すmigrationより先にコードが反映された間は表が無いので、そのときだけ、この表を除いた文で消す。
   const rows = await sql`
     WITH candidates AS (
       SELECT id FROM factory.work_items
-      WHERE status = ANY(${terminal}) AND updated_at <= ${olderThan.toISOString()}::timestamptz
+      WHERE status = ANY(${terminal}) AND updated_at <= ${cutoff}::timestamptz
     ),
     cascaded AS (
       SELECT COUNT(*) AS approval_requests_count
       FROM factory.approval_requests
+      WHERE work_item_id IN (SELECT id FROM candidates)
+    ),
+    deleted_threads AS (
+      DELETE FROM factory.review_human_threads
       WHERE work_item_id IN (SELECT id FROM candidates)
     ),
     deleted AS (
@@ -5437,7 +5445,34 @@ export async function deleteTerminalWorkItemsBefore(
       deleted.issue_number,
       (SELECT approval_requests_count FROM cascaded) AS approval_requests_deleted
     FROM deleted
-  `.fetch();
+  `
+    .fetch()
+    .catch((err: unknown) => {
+      if (!isMissingReviewOutcomeTableError(err)) throw err;
+      return sql`
+        WITH candidates AS (
+          SELECT id FROM factory.work_items
+          WHERE status = ANY(${terminal}) AND updated_at <= ${cutoff}::timestamptz
+        ),
+        cascaded AS (
+          SELECT COUNT(*) AS approval_requests_count
+          FROM factory.approval_requests
+          WHERE work_item_id IN (SELECT id FROM candidates)
+        ),
+        deleted AS (
+          DELETE FROM factory.work_items
+          WHERE id IN (SELECT id FROM candidates)
+          RETURNING id, owner, repo, issue_number
+        )
+        SELECT
+          deleted.id,
+          deleted.owner,
+          deleted.repo,
+          deleted.issue_number,
+          (SELECT approval_requests_count FROM cascaded) AS approval_requests_deleted
+        FROM deleted
+      `.fetch();
+    });
 
   const deleted = rows.map((row) => ({
     id: parseId(row.id, "id"),

@@ -31,6 +31,7 @@ import {
   deletePrCiChecksBefore,
   deletePrConflictChecksBefore,
   deleteResolvedNoticesBefore,
+  deleteTerminalWorkItemsBefore,
   deleteWorkerSamplesBefore,
   dependabotGateWaitingCancels,
   findApprovedWorkItemForIssue,
@@ -13757,11 +13758,21 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     { ...reviewOf(runId), posted_review_id: null },
     sql,
   );
+  // 同じposted_review_idで、より新しい行は、投稿済みのレビューを再利用した回の行なので、採否の行が無くても未記録に数えない。
+  // withoutRunIdの行が、reviewIdの行の再利用にあたる。別のレビューIDを持つ行は、再利用でないので数える。
+  const unrecordedReviewId = await insertReview(
+    { ...reviewOf(null), posted_review_id: "100" },
+    sql,
+  );
 
   // 証跡パックの集計は、期間を遠い過去に動かした行で確かめる。
   await execPsqlAsync(
     target,
     `UPDATE factory.reviews SET created_at = '2002-01-03T00:00:00Z' WHERE id IN (${String(reviewId)}, ${String(withoutRunId)}, ${String(gatedReviewId)})`,
+  );
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.reviews SET created_at = '2002-02-03T00:00:00Z' WHERE id = ${String(unrecordedReviewId)}`,
   );
   await execPsqlAsync(
     target,
@@ -13811,9 +13822,25 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     reviewOutcomes.human_threads,
   );
   check(
-    "audit evidence: a posted review with findings and no outcome rows is counted as unrecorded, and a review that was not posted is not",
-    reviewOutcomes.unrecorded_reviews === 1,
+    "audit evidence: a review that reuses a posted review, and a review that was not posted, are not counted as unrecorded",
+    reviewOutcomes.unrecorded_reviews === 0,
     reviewOutcomes,
+  );
+  const unrecordedEvidence = await collectAuditEvidence(
+    {
+      period: {
+        start: new Date("2002-02-01T00:00:00Z"),
+        end: new Date("2002-02-08T00:00:00Z"),
+        unaudited_gap_days: 0,
+      },
+      instanceName: "qdb",
+    },
+    sql,
+  );
+  check(
+    "audit evidence: a posted review with findings and no outcome rows, and no older review of the same posted id, is counted as unrecorded",
+    unrecordedEvidence.review_outcomes.unrecorded_reviews === 1,
+    unrecordedEvidence.review_outcomes,
   );
 
   // 指摘の行は、レビューの削除にあわせて消える。人が始めたスレッドは、行と作成時刻が残る。
@@ -13857,6 +13884,49 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     "review outcomes: a thread that is read again after its first review was deleted keeps one row and its first time",
     JSON.stringify(threadsAfter) === JSON.stringify(threadsBefore),
     [threadsBefore, threadsAfter],
+  );
+
+  // 終端の作業項目を消すと、外部キーを持たないスレッドの行も、その作業項目の分だけ消える。
+  const doomedId = await prWorkItem(
+    "pr_review",
+    9102,
+    "cancelled",
+    "qdb outcomes doomed",
+  );
+  const keptId = await prWorkItem(
+    "pr_review",
+    9103,
+    "reviewed",
+    "qdb outcomes kept",
+  );
+  await upsertHumanThreads(
+    doomedId,
+    withoutRunId,
+    [{ firstCommentId: 811, resolved: false }],
+    sql,
+  );
+  await upsertHumanThreads(
+    keptId,
+    withoutRunId,
+    [{ firstCommentId: 812, resolved: false }],
+    sql,
+  );
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.work_items SET updated_at = '2002-01-03T00:00:00Z' WHERE id = ${String(doomedId)}`,
+  );
+  await deleteTerminalWorkItemsBefore(new Date("2002-06-01T00:00:00Z"), sql);
+  const threadsAfterWorkItemDelete = await sql`
+    SELECT first_comment_id FROM factory.review_human_threads
+    WHERE work_item_id IN (${doomedId}::bigint, ${keptId}::bigint)
+    ORDER BY first_comment_id
+  `.fetch();
+  check(
+    "review outcomes: deleting a work item deletes its threads and keeps the threads of another work item",
+    JSON.stringify(
+      threadsAfterWorkItemDelete.map((row) => row.first_comment_id),
+    ) === JSON.stringify([812]),
+    threadsAfterWorkItemDelete,
   );
 }
 
