@@ -318,7 +318,7 @@ export function setupWorktreePruneEnv() {
     writeFileSync(join(mainDir, "README.md"), "x\n");
     writeFileSync(
       join(mainDir, ".gitignore"),
-      "node_modules/\n.claude/\n.wmill\n*.local.*\nconsole/dist/\nconsole/.cache/\n__pycache__/\n.DS_Store\n",
+      "node_modules/\n.claude/\n.wmill\n*.local.*\nconsole/dist/\nconsole/.cache/\n__pycache__/\n.DS_Store\ncoverage/\n",
     );
     mkdirSync(join(mainDir, "console"));
     writeFileSync(join(mainDir, "console", "package.json"), "{}\n");
