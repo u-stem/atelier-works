@@ -7,8 +7,8 @@
 // `[env]`にあり、Dockerfileの`ENV`とcomposeの`WHITELIST_ENVS`でジョブまで届く。
 
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   prepareReadDenySettings,
   type ReadDenyContext,
@@ -16,7 +16,12 @@ import {
 import { defaultSqlClient, type SqlClient, sumAgentCostSince } from "./db.ts";
 import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
 import { JST_OFFSET_MS } from "./jst.ts";
-import { escapeReasonSeparator, maskSecrets } from "./log.ts";
+import {
+  escapeReasonSeparator,
+  type Logger,
+  logger,
+  maskSecrets,
+} from "./log.ts";
 import {
   checkStop,
   defaultStopCheck,
@@ -27,6 +32,7 @@ import {
 } from "./stop_check.ts";
 import {
   type AgentRunRecord,
+  BUNDLE_SHA256_UNREADABLE,
   capToDeadline,
   type FactoryConfig,
   isRecord,
@@ -56,12 +62,19 @@ export type BuildSystemPromptOptions = {
    */
   readonly factoryCloneDir: string;
   readonly readFile?: (path: string) => Promise<string>;
+  /**
+   * 同梱ファイル(template.mdなど)の生のバイト列を返す。
+   * 文字に直さずにハッシュするため、`readFile`とは分けている。
+   */
+  readonly readBytes?: (path: string) => Promise<Uint8Array>;
   readonly writeTempFile?: WriteTempFile;
   /**
    * スキルのディレクトリの下にあるファイルを、ディレクトリからの相対パス(`/`区切り)で返す。
    * 同梱ファイル(template.mdなど)のハッシュを求めるために使う。
    */
   readonly listSkillFiles?: (skillDir: string) => Promise<readonly string[]>;
+  /** 同梱ファイルを読めなかったときの警告の出し先。既定は`logger("claude")`。 */
+  readonly log?: Logger;
   /** `factoryCloneDir`のHEADのコミットSHAを返す。取れないときはnullを返してよい。 */
   readonly readCloneHead?: (factoryCloneDir: string) => Promise<string | null>;
 };
@@ -79,6 +92,9 @@ export type WriteTempFile = (content: string) => Promise<SystemPromptFile>;
 
 const defaultReadFile = (path: string): Promise<string> =>
   Bun.file(path).text();
+
+const defaultReadBytes = (path: string): Promise<Uint8Array> =>
+  Bun.file(path).bytes();
 
 /**
  * プロンプトを、新しく`mkdtemp`で作ったディレクトリの中の
@@ -117,8 +133,8 @@ export type SkillProvenance = {
 type ListSkillFiles = (skillDir: string) => Promise<readonly string[]>;
 type ReadCloneHead = (factoryCloneDir: string) => Promise<string | null>;
 
-function sha256Hex(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
+function sha256Hex(data: string | Uint8Array): string {
+  return createHash("sha256").update(data).digest("hex");
 }
 
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -149,30 +165,35 @@ export async function readCloneHeadSha(
 const defaultReadCloneHead: ReadCloneHead = (dir) =>
   readCloneHeadSha(runCommand, dir);
 
-/** スキルのディレクトリの下のファイルを、ディレクトリからの相対パス(`/`区切り)で返す。 */
+/**
+ * スキルのディレクトリの下のファイルを、ディレクトリからの相対パス(`/`区切り)で返す。
+ * `Dirent.parentPath`は実行環境によって無いので、`Bun.Glob`で走査する。
+ * ドットで始まるファイルも含める。ディレクトリを読めないときは例外を投げる。
+ */
 const defaultListSkillFiles: ListSkillFiles = async (skillDir) => {
-  const entries = await readdir(skillDir, {
-    recursive: true,
-    withFileTypes: true,
-  });
-  return entries
-    .filter((entry) => entry.isFile())
-    .map((entry) =>
-      relative(skillDir, join(entry.parentPath, entry.name))
-        .split(sep)
-        .join("/"),
-    );
+  const files: string[] = [];
+  const glob = new Bun.Glob("**/*");
+  for await (const rel of glob.scan({
+    cwd: skillDir,
+    onlyFiles: true,
+    dot: true,
+  })) {
+    files.push(rel);
+  }
+  return files;
 };
 
 /**
  * SKILL.md以外の同梱ファイルのハッシュを返す。
  * 相対パスの昇順に`<パス>\0<内容のsha256>`の行を並べた文字列のsha256で、同梱ファイルが無ければnullにする。
- * 一覧や読み取りに失敗したときも、nullにする。
+ * 内容は文字に直さず、生のバイト列でハッシュする。
+ * 一覧や読み取りに失敗したときは、同梱ファイルが無いことと区別できるよう`BUNDLE_SHA256_UNREADABLE`を返し、警告を残す。
  */
 async function bundleSha256Of(
   skillDir: string,
-  readFile: (path: string) => Promise<string>,
+  readBytes: (path: string) => Promise<Uint8Array>,
   listSkillFiles: ListSkillFiles,
+  log: Logger,
 ): Promise<string | null> {
   try {
     const bundled = (await listSkillFiles(skillDir))
@@ -181,11 +202,15 @@ async function bundleSha256Of(
     if (bundled.length === 0) return null;
     const lines: string[] = [];
     for (const rel of bundled) {
-      lines.push(`${rel}\0${sha256Hex(await readFile(`${skillDir}/${rel}`))}`);
+      lines.push(`${rel}\0${sha256Hex(await readBytes(`${skillDir}/${rel}`))}`);
     }
     return sha256Hex(lines.join("\n"));
-  } catch {
-    return null;
+  } catch (err) {
+    log.warn("could not hash the bundled files of a skill", {
+      skill_dir: skillDir,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return BUNDLE_SHA256_UNREADABLE;
   }
 }
 
@@ -231,6 +256,8 @@ export async function buildSystemPrompt(
   opts: BuildSystemPromptOptions,
 ): Promise<SystemPromptFile> {
   const readFile = opts.readFile ?? defaultReadFile;
+  const readBytes = opts.readBytes ?? defaultReadBytes;
+  const log = opts.log ?? logger("claude");
   const writeTempFile = opts.writeTempFile ?? defaultWriteTempFile;
   const listSkillFiles = opts.listSkillFiles ?? defaultListSkillFiles;
   const readCloneHead = opts.readCloneHead ?? defaultReadCloneHead;
@@ -252,8 +279,9 @@ export async function buildSystemPrompt(
       sha256: sha256Hex(content),
       bundle_sha256: await bundleSha256Of(
         `${opts.factoryCloneDir}/${skillDir}`,
-        readFile,
+        readBytes,
         listSkillFiles,
+        log,
       ),
     });
   }

@@ -677,9 +677,15 @@ export type SkillRef = {
   path: string;
   /** SKILL.mdの本文のsha256(16進)。 */
   sha256: string;
-  /** SKILL.md以外の同梱ファイル(template.mdなど)のハッシュ。同梱ファイルが無いか、読めなかったときはnull。 */
+  /**
+   * SKILL.md以外の同梱ファイル(template.mdなど)のハッシュ。
+   * 同梱ファイルが無いときはnull、一覧や読み取りに失敗したときは`BUNDLE_SHA256_UNREADABLE`である。
+   */
   bundle_sha256: string | null;
 };
+
+/** `SkillRef.bundle_sha256`に入れる、同梱ファイルを読めなかったことを表す値。ハッシュ(16進)とは重ならない。 */
+export const BUNDLE_SHA256_UNREADABLE = "unreadable";
 
 export type ReviewSeverity = "blocker" | "major" | "minor" | "nit";
 

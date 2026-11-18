@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   buildClaudeEnv,
   buildSystemPrompt,
@@ -25,6 +25,7 @@ import {
   skillProvenanceFor,
 } from "../../f/factory/lib/claude.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
 import { createFakeCommandRunner, fail, ok, timeout } from "./testSupport.ts";
 
 type FakeCall = { text: string; values: unknown[] };
@@ -59,6 +60,8 @@ describe("buildSystemPrompt", () => {
     await buildSystemPrompt({
       skillNames: ["a", "b"],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async (path) => {
         const content = files.get(path);
         if (content === undefined) throw new Error(`unexpected path: ${path}`);
@@ -77,6 +80,8 @@ describe("buildSystemPrompt", () => {
     await buildSystemPrompt({
       skillNames: ["a"],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async (path) => {
         readPaths.push(path);
         return path;
@@ -97,6 +102,8 @@ describe("buildSystemPrompt", () => {
     await buildSystemPrompt({
       skillNames: ["factory-writing"],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async (path) => {
         readPaths.push(path);
         return path;
@@ -113,6 +120,8 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async () => "",
       writeTempFile: async () => ({
         path: "/tmp/fake-system-prompt.md",
@@ -126,6 +135,8 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async () => "",
     });
     try {
@@ -141,6 +152,8 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async () => "",
     });
     await result.cleanup();
@@ -151,11 +164,15 @@ describe("buildSystemPrompt", () => {
     const first = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async () => "",
     });
     const second = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async () => "",
     });
     try {
@@ -176,6 +193,28 @@ function sha256Hex(text: string): string {
 /** 一時ファイルを書かない`writeTempFile`。パスは呼び出しごとに変える。 */
 function fakeWriter(path: string) {
   return async () => ({ path, cleanup: async () => {} });
+}
+
+/** 警告だけを控える偽の`Logger`。 */
+function createFakeLogger(): { log: Logger; warnings: string[] } {
+  const warnings: string[] = [];
+  const log: Logger = {
+    info: () => {},
+    warn: (message) => {
+      warnings.push(message);
+    },
+    error: () => {},
+  };
+  return { log, warnings };
+}
+
+/** `files`の内容をUTF-8のバイト列で返す`readBytes`。無いパスは例外にする。 */
+function bytesFrom(files: ReadonlyMap<string, string>) {
+  return async (path: string): Promise<Uint8Array> => {
+    const content = files.get(path);
+    if (content === undefined) throw new Error(`unexpected path: ${path}`);
+    return new TextEncoder().encode(content);
+  };
 }
 
 /** `files`の内容を返す`readFile`。無いパスは例外にする。 */
@@ -345,6 +384,7 @@ describe("buildSystemPrompt skill provenance", () => {
         skillNames: ["a"],
         factoryCloneDir: "/clone",
         readFile: readFrom(withTemplate(template)),
+        readBytes: bytesFrom(withTemplate(template)),
         writeTempFile: fakeWriter(path),
         listSkillFiles: async (dir) =>
           dir === "/clone/.claude/skills/a"
@@ -377,7 +417,7 @@ describe("buildSystemPrompt skill provenance", () => {
       expect(after).toBe(before);
     });
 
-    test("records a null bundle hash when listing the bundled files fails", async () => {
+    test("records unreadable as the bundle hash when listing the bundled files fails", async () => {
       await buildSystemPrompt({
         skillNames: ["a"],
         factoryCloneDir: "/clone",
@@ -387,12 +427,65 @@ describe("buildSystemPrompt skill provenance", () => {
           throw new Error("ENOENT");
         },
         readCloneHead: async () => FAKE_CLONE_HEAD,
+        log: createFakeLogger().log,
       });
       expect(
         skillProvenanceFor("/tmp/prov-b6.md")?.skills.map(
           (s) => s.bundle_sha256,
         ),
-      ).toEqual([null, null]);
+      ).toEqual(["unreadable", "unreadable"]);
+    });
+
+    test("records unreadable as the bundle hash when reading a bundled file fails", async () => {
+      await buildSystemPrompt({
+        skillNames: ["a"],
+        factoryCloneDir: "/clone",
+        readFile: readFrom(files),
+        readBytes: async () => {
+          throw new Error("EACCES");
+        },
+        writeTempFile: fakeWriter("/tmp/prov-b7.md"),
+        listSkillFiles: async (dir) =>
+          dir === "/clone/.claude/skills/a" ? ["SKILL.md", "template.md"] : [],
+        readCloneHead: async () => FAKE_CLONE_HEAD,
+        log: createFakeLogger().log,
+      });
+      expect(
+        skillProvenanceFor("/tmp/prov-b7.md")?.skills.map(
+          (s) => s.bundle_sha256,
+        ),
+      ).toEqual([null, "unreadable"]);
+    });
+
+    test("warns when the bundled files cannot be read", async () => {
+      const fake = createFakeLogger();
+      await buildSystemPrompt({
+        skillNames: [],
+        factoryCloneDir: "/clone",
+        readFile: readFrom(files),
+        writeTempFile: fakeWriter("/tmp/prov-b8.md"),
+        listSkillFiles: async () => {
+          throw new Error("ENOENT");
+        },
+        readCloneHead: async () => FAKE_CLONE_HEAD,
+        log: fake.log,
+      });
+      expect(fake.warnings).toHaveLength(1);
+    });
+
+    test("still builds the prompt when the bundled files cannot be read", async () => {
+      const result = await buildSystemPrompt({
+        skillNames: [],
+        factoryCloneDir: "/clone",
+        readFile: readFrom(files),
+        writeTempFile: fakeWriter("/tmp/prov-b9.md"),
+        listSkillFiles: async () => {
+          throw new Error("ENOENT");
+        },
+        readCloneHead: async () => FAKE_CLONE_HEAD,
+        log: createFakeLogger().log,
+      });
+      expect(result.path).toBe("/tmp/prov-b9.md");
     });
   });
 
@@ -409,34 +502,77 @@ describe("buildSystemPrompt skill provenance", () => {
     expect(skillProvenanceFor("/tmp/prov-cleanup.md")).toBeUndefined();
   });
 
-  test("lists the bundled files of a real skill directory", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "prov-real-"));
-    try {
-      await mkdir(join(dir, ".claude/skills/factory-writing"), {
-        recursive: true,
-      });
-      await writeFile(
-        join(dir, ".claude/skills/factory-writing/SKILL.md"),
-        "common",
-      );
-      await writeFile(
-        join(dir, ".claude/skills/factory-writing/template.md"),
-        "tpl",
-      );
-      const result = await buildSystemPrompt({
-        skillNames: [],
-        factoryCloneDir: dir,
-      });
+  describe("a real skill directory", () => {
+    /** `factory-writing`の下にSKILL.mdと同梱ファイルを置いたcloneを作り、バンドルのハッシュを返す。 */
+    async function bundleHashOfRealClone(
+      bundled: Readonly<Record<string, string | Uint8Array>>,
+    ): Promise<string | null | undefined> {
+      const dir = await mkdtemp(join(tmpdir(), "prov-real-"));
       try {
-        expect(
-          skillProvenanceFor(result.path)?.skills[0]?.bundle_sha256,
-        ).toMatch(/^[0-9a-f]{64}$/);
+        const skillDir = join(dir, ".claude/skills/factory-writing");
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(join(skillDir, "SKILL.md"), "common");
+        for (const [rel, content] of Object.entries(bundled)) {
+          await mkdir(dirname(join(skillDir, rel)), { recursive: true });
+          await writeFile(join(skillDir, rel), content);
+        }
+        const result = await buildSystemPrompt({
+          skillNames: [],
+          factoryCloneDir: dir,
+          readCloneHead: async () => null,
+        });
+        try {
+          return skillProvenanceFor(result.path)?.skills[0]?.bundle_sha256;
+        } finally {
+          await result.cleanup();
+        }
       } finally {
-        await result.cleanup();
+        await rm(dir, { recursive: true, force: true });
       }
-    } finally {
-      await rm(dir, { recursive: true, force: true });
     }
+
+    test("records a hash of the bundled files", async () => {
+      expect(await bundleHashOfRealClone({ "template.md": "tpl" })).toMatch(
+        /^[0-9a-f]{64}$/,
+      );
+    });
+
+    test("records null for a skill directory with only SKILL.md", async () => {
+      expect(await bundleHashOfRealClone({})).toBeNull();
+    });
+
+    test("changes the hash when a file in a subdirectory changes", async () => {
+      const before = await bundleHashOfRealClone({ "refs/deep/a.md": "one" });
+      const after = await bundleHashOfRealClone({ "refs/deep/a.md": "two" });
+      expect(after).not.toBe(before);
+    });
+
+    test("includes a dot file in the hash", async () => {
+      const without = await bundleHashOfRealClone({ "a.md": "x" });
+      const withDot = await bundleHashOfRealClone({
+        "a.md": "x",
+        ".hidden": "y",
+      });
+      expect(withDot).not.toBe(without);
+    });
+
+    test("does not collide two files that are not valid UTF-8 and differ in bytes", async () => {
+      const first = await bundleHashOfRealClone({
+        "blob.bin": new Uint8Array([0xff]),
+      });
+      const second = await bundleHashOfRealClone({
+        "blob.bin": new Uint8Array([0xfe]),
+      });
+      expect(second).not.toBe(first);
+    });
+
+    test("hashes the raw bytes of a bundled file", async () => {
+      const bytes = new Uint8Array([0xff, 0x00, 0x41]);
+      const expected = sha256Hex(
+        `blob.bin\0${createHash("sha256").update(bytes).digest("hex")}`,
+      );
+      expect(await bundleHashOfRealClone({ "blob.bin": bytes })).toBe(expected);
+    });
   });
 });
 

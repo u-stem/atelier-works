@@ -1417,7 +1417,7 @@ describe("skill versions", () => {
 
   test("renders the skill name, the 12-digit hash, the run count and the first and last day", async () => {
     expect(await renderedFor([versionRow({})])).toContain(
-      "- pr_review factory-review a1b2c3d4e5f6: 実行4 / 初出 2026-09-21 / 最終 2026-09-23\n",
+      "- pr_review factory-review a1b2c3d4e5f6: 実行4 / この期間の最初 2026-09-21 / この期間の最後 2026-09-23\n",
     );
   });
 
@@ -1444,8 +1444,8 @@ describe("skill versions", () => {
     expect(
       markdown.split("\n").filter((line) => line.includes("factory-review ")),
     ).toEqual([
-      "- pr_review factory-review a1b2c3d4e5f6+111111111111: 実行4 / 初出 2026-09-21 / 最終 2026-09-23",
-      "- pr_review factory-review a1b2c3d4e5f6+222222222222: 実行4 / 初出 2026-09-21 / 最終 2026-09-23",
+      "- pr_review factory-review a1b2c3d4e5f6+111111111111: 実行4 / この期間の最初 2026-09-21 / この期間の最後 2026-09-23",
+      "- pr_review factory-review a1b2c3d4e5f6+222222222222: 実行4 / この期間の最初 2026-09-21 / この期間の最後 2026-09-23",
     ]);
   });
 
@@ -1524,6 +1524,61 @@ describe("skill versions", () => {
       beforeMigration,
     );
     expect(evidence.skill_versions).toEqual([]);
+  });
+
+  /** スキルの版の問い合わせだけを、決めたエラーで失敗させる`SqlClient`。 */
+  function failingSkillVersions(error: Error): SqlClient {
+    const { sql } = createRoutedSqlClient();
+    return (strings, ...values) => {
+      const text = strings.join(" ? ").replace(/\s+/g, " ");
+      if (!text.includes("jsonb_to_recordset")) return sql(strings, ...values);
+      return {
+        fetch: () => Promise.reject(error),
+        execute: () => Promise.resolve(),
+      };
+    };
+  }
+
+  test("collects no versions when the error names the skills column", async () => {
+    const sql = failingSkillVersions(
+      Object.assign(
+        new Error('column "skills" of relation "agent_runs" does not exist'),
+        { code: "42703" },
+      ),
+    );
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.skill_versions).toEqual([]);
+  });
+
+  test("does not hide an undefined-column error of another column", async () => {
+    const sql = failingSkillVersions(
+      Object.assign(
+        new Error(
+          'column "model_usage" of relation "agent_runs" does not exist',
+        ),
+        { code: "42703" },
+      ),
+    );
+    await expect(
+      collectAuditEvidence(
+        { period: PERIOD, instanceName: "atelier-works" },
+        sql,
+      ),
+    ).rejects.toThrow("model_usage");
+  });
+
+  test("keeps only the object elements of the skills array in the query", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "skillVersions")?.text).toContain(
+      "jsonb_typeof(e.elem) = 'object'",
+    );
   });
 
   test("does not hide another failure of the skill-version query", async () => {

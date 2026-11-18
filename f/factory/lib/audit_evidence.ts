@@ -20,7 +20,7 @@ import {
 import {
   defaultSqlClient,
   fetchDeploymentRows,
-  isMissingAgentRunColumnError,
+  isMissingAgentRunSkillsColumnError,
   type SqlClient,
   type SqlRow,
 } from "./db.ts";
@@ -214,9 +214,9 @@ export type SkillVersionStat = {
   sha: string | null;
   bundle: string | null;
   run_count: number;
-  /** この版を使った最初の実行の日(JST、`YYYY-MM-DD`)。 */
+  /** この期間で、この版を使った最初の実行の日(JST、`YYYY-MM-DD`)。期間より前の実行は含まない。 */
   first_seen: string;
-  /** この版を使った最後の実行の日(JST、`YYYY-MM-DD`)。 */
+  /** この期間で、この版を使った最後の実行の日(JST、`YYYY-MM-DD`)。期間より後の実行は含まない。 */
   last_seen: string;
 };
 export type FailureGroup = {
@@ -437,7 +437,7 @@ function formatSkillVersionLine(stat: SkillVersionStat): string {
   const version =
     stat.bundle === null ? stat.sha : `${stat.sha}+${stat.bundle}`;
   return sanitizeCell(
-    `${stat.stage} ${stat.skill} ${version}: 実行${stat.run_count} / 初出 ${stat.first_seen} / 最終 ${stat.last_seen}`,
+    `${stat.stage} ${stat.skill} ${version}: 実行${stat.run_count} / この期間の最初 ${stat.first_seen} / この期間の最後 ${stat.last_seen}`,
     SANITIZE_CELL_MAX,
   );
 }
@@ -881,7 +881,8 @@ function previousPeriodOf(period: AuditPeriod): { start: Date; end: Date } {
  * スキルの記録が無い実行(`skills`がNULLか空の配列)は、スキルの列がNULLの1行にまとめる。
  * 日はJSTで切る。
  * `skills`列を足すmigrationが当たる前は列が無いエラーになるので、そのときは版を集めず、空を返す。
- * ほかのエラーは投げる。
+ * 配列の要素のうちオブジェクトでないものは、その要素だけを除く。壊れた1件で集計全体を失敗させないためである。
+ * ほかのエラー(ほかの列が無いエラーも含む)は投げる。
  */
 async function fetchSkillVersionRows(
   sql: SqlClient,
@@ -900,7 +901,14 @@ async function fetchSkillVersionRows(
       FROM factory.agent_runs r
       JOIN factory.work_items wi ON wi.id = r.work_item_id
       LEFT JOIN LATERAL jsonb_to_recordset(
-        CASE WHEN jsonb_typeof(r.skills) = 'array' THEN r.skills ELSE '[]'::jsonb END
+        COALESCE(
+          (SELECT jsonb_agg(e.elem)
+             FROM jsonb_array_elements(
+               CASE WHEN jsonb_typeof(r.skills) = 'array' THEN r.skills ELSE '[]'::jsonb END
+             ) AS e (elem)
+            WHERE jsonb_typeof(e.elem) = 'object'),
+          '[]'::jsonb
+        )
       ) AS s (path text, sha256 text, bundle_sha256 text) ON true
       WHERE r.created_at >= ${start}::timestamptz AND r.created_at < ${end}::timestamptz
         AND wi.kind <> 'audit'
@@ -908,7 +916,7 @@ async function fetchSkillVersionRows(
       ORDER BY r.stage, s.path, min(r.created_at), left(s.sha256, 12), left(s.bundle_sha256, 12)
     `.fetch();
   } catch (err) {
-    if (!isMissingAgentRunColumnError(err)) throw err;
+    if (!isMissingAgentRunSkillsColumnError(err)) throw err;
     return [];
   }
 }

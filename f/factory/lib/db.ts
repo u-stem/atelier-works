@@ -2275,6 +2275,27 @@ export function isMissingAgentRunColumnError(err: unknown): boolean {
   return typeof body === "string" && AGENT_RUN_NEW_COLUMN_PATTERN.test(body);
 }
 
+const AGENT_RUN_SKILLS_COLUMN_PATTERN =
+  /column (?:\w+\.)?"?(?:skills|skill_clone_sha)"?(?: of relation| does not exist)/;
+const AGENT_RUN_ANY_COLUMN_PATTERN =
+  /column (?:\w+\.)?"?\w+"?(?: of relation "\w+")? does not exist/;
+
+/**
+ * 例外が、`agent_runs`の`skills`か`skill_clone_sha`の列が無いことによるものかを返す。
+ * エラーコード42703でも、文が別の列の名前を挙げているときはfalseにする。
+ * 文が列の名前を挙げていないとき(windmill-clientが文を落とした場合など)は、42703だけで判定する。
+ */
+export function isMissingAgentRunSkillsColumnError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const body: unknown = Reflect.get(err, "body");
+  const messages = [err.message, typeof body === "string" ? body : ""];
+  if (messages.some((m) => AGENT_RUN_SKILLS_COLUMN_PATTERN.test(m))) {
+    return true;
+  }
+  if (messages.some((m) => AGENT_RUN_ANY_COLUMN_PATTERN.test(m))) return false;
+  return Reflect.get(err, "code") === "42703";
+}
+
 /**
  * `factory.agent_runs`に行を挿入し、そのIDを返す。
  * 反映(`wmill sync push`)はmigration(`wmill datatable migrate up`)より先に走るので、
@@ -2290,8 +2311,9 @@ export async function recordAgentRun(
   log: Logger = logger("db"),
 ): Promise<number> {
   // 記録の無い実行はSQLのNULLで保存する。`JSON.stringify(null)`はjsonbのnullになり、IS NULLで見分けられない。
+  // 呼び出し側が`skills`を渡さなかったとき(undefined)も、未定義の引数にせずNULLにする。
   const skillsJson =
-    record.skills === null ? null : JSON.stringify(record.skills);
+    record.skills == null ? null : JSON.stringify(record.skills);
   const statement = sql`
     INSERT INTO factory.agent_runs (
       work_item_id, stage, attempt, model, claude_version, input_tokens,

@@ -2586,6 +2586,14 @@ describe("recordAgentRun", () => {
     expect(calls[0]?.values).not.toContain("null");
   });
 
+  test("binds a run whose skills is undefined as SQL NULL, not as an undefined argument", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    const run = { ...RUN_WITH_SKILLS };
+    Reflect.deleteProperty(run, "skills");
+    await recordAgentRun(run, sql);
+    expect(calls[0]?.values).not.toContain(undefined);
+  });
+
   test("casts nullable numeric columns (tokens/cost/turns/duration/exit_code) to their real type when null — a Claude timeout/error leaves most of these null", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
     await recordAgentRun(
