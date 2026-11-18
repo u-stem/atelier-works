@@ -730,11 +730,12 @@ const USAGE_LIMIT_PATTERN =
 
 /**
  * `is_error: true`の結果を、失敗の種類に分ける。
- * `--max-budget-usd`の超過は`run_budget_exceeded`、使用上限は`usage_limit`、それ以外は`claude_error`にする。
+ * `--max-budget-usd`の超過は`run_budget_exceeded`、`--max-turns`の超過は`max_turns`、使用上限は`usage_limit`、それ以外は`claude_error`にする。
  * `api_error_status`の429だけでは使用上限にしない。一時的なレート制限は、Windmillの再試行で回復するためである。
  */
 function errorReasonFor(parsed: ClaudeRunResult): RunClaudeFailureReason {
   if (parsed.subtype === "error_max_budget_usd") return "run_budget_exceeded";
+  if (parsed.subtype === "error_max_turns") return "max_turns";
   if (USAGE_LIMIT_PATTERN.test(parsed.resultText)) return "usage_limit";
   return "claude_error";
 }

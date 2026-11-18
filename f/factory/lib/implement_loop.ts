@@ -830,6 +830,7 @@ export async function runImplementClaudeRound(
  * 検査コマンドの実行ファイルが見つからないなど、検査を実行できなかったこと、
  * Claudeの実行失敗、ラウンドの冒頭か修正ラウンドの前にリースを失っていたこと。
  * `claude_error`は、承認済みの要件定義のディレクトリが基準値と違うためにClaudeを起動せず止めたときも使う。
+ * `max_turns`は、Claudeの実行がターンの上限に達して止まったこと。
  */
 export type ImplementLoopExit =
   | "checks_passed"
@@ -847,6 +848,7 @@ export type ImplementLoopExit =
   | "check_image_stale"
   | "check_unrunnable"
   | "claude_error"
+  | "max_turns"
   | "lease_lost";
 
 export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
@@ -865,6 +867,7 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
   "check_image_stale",
   "check_unrunnable",
   "claude_error",
+  "max_turns",
   "lease_lost",
 ];
 
@@ -888,6 +891,11 @@ export const isImplementLoopResultShape = isShape({
 });
 
 export const GITLEAKS_TIMEOUT_MS = 5 * 60_000;
+
+/** Claudeの実行がターンの上限に達して止まったときの理由を返す(describeReasonが訳す)。 */
+export function maxTurnsReason(maxTurns: number): string {
+  return `implement reached the turn limit (${String(maxTurns)})`;
+}
 
 /** 期限までに次の修正ラウンドを終える時間が残っておらず、修正をやめたときの理由を返す(describeReasonが訳す)。 */
 export function deadlineReason(round: number): string {
@@ -1041,6 +1049,8 @@ export type ImplementLoopInput = {
   readonly attempt: number;
   /** `factory_config.implement_max_rounds`の値。 */
   readonly maxRounds: number;
+  /** `factory_config.implement_max_turns`の値。ターンの上限に達したときの理由に載せる。 */
+  readonly maxTurns: number;
   readonly hasCheckCommands: boolean;
   /** implement_generateの結果(1ラウンド目、modeは`implement`)。 */
   readonly firstRound: ImplementClaudeRound;
@@ -1349,6 +1359,22 @@ export async function runImplementVerifyLoop(
     }
 
     if (current.kind === "claude_failed") {
+      // ターンの上限は、同じ上限で再実行しても同じ結果になる。
+      // 設定を上げる手順を示すため、英語の生のメッセージではなく固定の理由にする。
+      if (current.reason === "max_turns") {
+        const reason = maxTurnsReason(input.maxTurns);
+        await deps.recordRound({
+          ...base,
+          outcome: "error",
+          summary: "",
+          gap_report: null,
+          check_output: truncateCheckOutput(reason),
+          checks_skipped_reason: null,
+          protected_changes: [],
+          diff_stat: null,
+        });
+        return stopped({ exit: "max_turns", reason });
+      }
       const failure = `claude run failed (${current.reason}): ${current.detail}`;
       // 期限で切られた実行と、期限で起動しなかった実行も検査を経ていないので、
       // 出口はclaude_errorのまま(途中経過をpushしない)にし、理由にだけ期限を添える。

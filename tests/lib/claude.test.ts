@@ -585,7 +585,7 @@ describe("runClaude", () => {
       {
         stdout: claudeJsonStdout({
           is_error: true,
-          subtype: "error_max_turns",
+          subtype: "error_during_execution",
         }),
         stderr: "",
         exitCode: 0,
@@ -596,6 +596,26 @@ describe("runClaude", () => {
     expect(result).toMatchObject({
       outcome: "failure",
       reason: "claude_error",
+      retried: false,
+    });
+  });
+
+  test("classifies error_max_turns as a non-retryable max_turns", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({
+          is_error: true,
+          subtype: "error_max_turns",
+        }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      },
+    ]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result).toMatchObject({
+      outcome: "failure",
+      reason: "max_turns",
       retried: false,
     });
   });

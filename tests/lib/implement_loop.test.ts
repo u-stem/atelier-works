@@ -1262,6 +1262,13 @@ const FAILED: ImplementClaudeRound = {
   agent_run_id: 9,
   cost_usd: 0,
 };
+const MAX_TURNS: ImplementClaudeRound = {
+  kind: "claude_failed",
+  reason: "max_turns",
+  detail: "Reached maximum number of turns (80)",
+  agent_run_id: 9,
+  cost_usd: 0,
+};
 const NOT_STARTED: ImplementClaudeRound = {
   kind: "claude_failed",
   reason: "not_started",
@@ -1421,6 +1428,7 @@ function loopInput(
     workItemId: 3,
     attempt: 1,
     maxRounds: 5,
+    maxTurns: 80,
     hasCheckCommands: true,
     firstRound,
     deadlineAt: Number.MAX_SAFE_INTEGER,
@@ -1596,6 +1604,21 @@ describe("runImplementVerifyLoop", () => {
   test("records an error round for a failed run", async () => {
     const h = harness();
     await run(h, loopInput(FAILED));
+    expect(h.recorded[0]?.outcome).toBe("error");
+  });
+
+  test("exits max_turns when the run hit the turn limit", async () => {
+    expect((await run(harness(), loopInput(MAX_TURNS))).exit).toBe("max_turns");
+  });
+
+  test("states the configured turn limit in the max_turns reason", async () => {
+    const result = await run(harness(), loopInput(MAX_TURNS, { maxTurns: 80 }));
+    expect(result.reason).toBe("implement reached the turn limit (80)");
+  });
+
+  test("records an error round when the run hit the turn limit", async () => {
+    const h = harness();
+    await run(h, loopInput(MAX_TURNS));
     expect(h.recorded[0]?.outcome).toBe("error");
   });
 

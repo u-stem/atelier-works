@@ -924,6 +924,12 @@ describe("describeReason (implement flow)", () => {
     );
   });
 
+  test("translates the turn limit exit with the limit", () => {
+    expect(describeReason("implement reached the turn limit (80)")).toBe(
+      "実装がターンの上限(80)に達しました",
+    );
+  });
+
   test("translates the unrunnable check as an environment problem", () => {
     expect(
       describeReason(
@@ -1479,6 +1485,12 @@ describe("nextActionFor (implement flow)", () => {
       nextActionFor("implementation of the branch's work item is running"),
     ).toBe(
       "実装フローの完了を待ってから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks to raise implement_max_turns when the run hit the turn limit", () => {
+    expect(nextActionFor("implement reached the turn limit (80)")).toBe(
+      "Consoleの設定の「実装」グループで`implement_max_turns`を上げてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 

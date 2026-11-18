@@ -31,6 +31,7 @@ import {
   implementDesignGapNote,
   implementNeedsHumanNextAction,
   isFactoryRepo,
+  maxTurnsNoticeDetail,
   mergeImplementOutcome,
   type PreserveWorkDeps,
   preserveWork,
@@ -179,6 +180,13 @@ describe("decideImplementFinishAction", () => {
 
   test("waits for a person and keeps nothing when a check command could not run", () => {
     expect(decideImplementFinishAction("check_unrunnable")).toEqual({
+      kind: "needs_human",
+      preserveWork: false,
+    });
+  });
+
+  test("waits for a person and keeps nothing when the run hit the turn limit", () => {
+    expect(decideImplementFinishAction("max_turns")).toEqual({
       kind: "needs_human",
       preserveWork: false,
     });
@@ -387,6 +395,14 @@ describe("gapReportNoticeDetail", () => {
   test("masks a secret in the gap report", () => {
     expect(gapReportNoticeDetail(`token ghp_${"a".repeat(36)}`)).not.toContain(
       "a".repeat(36),
+    );
+  });
+});
+
+describe("maxTurnsNoticeDetail", () => {
+  test("links the config tab", () => {
+    expect(maxTurnsNoticeDetail("http://127.0.0.1:8080")).toBe(
+      "設定: http://127.0.0.1:8080/console/system?tab=config",
     );
   });
 });

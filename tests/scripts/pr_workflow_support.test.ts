@@ -1687,6 +1687,7 @@ describe("pr_workflow_support reason rules", () => {
     "^parent issue is being re-implemented",
     "^implementation of the branch's work item is running",
     "^implement flow deadline passed",
+    "^implement reached the turn limit",
     "^implement time settings do not fit",
     "^design ",
     "^design ",
