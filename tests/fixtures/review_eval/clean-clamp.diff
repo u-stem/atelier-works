@@ -1,0 +1,41 @@
+diff --git a/src/clamp.ts b/src/clamp.ts
+new file mode 100644
+--- /dev/null
++++ b/src/clamp.ts
+@@ -0,0 +1,9 @@
++export function clamp(value: number, min: number, max: number): number {
++  if (Number.isNaN(value) || Number.isNaN(min) || Number.isNaN(max)) {
++    throw new RangeError("clamp: arguments must not be NaN");
++  }
++  if (min > max) {
++    throw new RangeError("clamp: min must not be greater than max");
++  }
++  return Math.min(Math.max(value, min), max);
++}
+diff --git a/tests/clamp.test.ts b/tests/clamp.test.ts
+new file mode 100644
+--- /dev/null
++++ b/tests/clamp.test.ts
+@@ -0,0 +1,22 @@
++import { expect, test } from "bun:test";
++import { clamp } from "../src/clamp.ts";
++
++test("clamp returns a value inside the range unchanged", () => {
++  expect(clamp(5, 0, 10)).toBe(5);
++});
++
++test("clamp raises a value below the range to min", () => {
++  expect(clamp(-3, 0, 10)).toBe(0);
++});
++
++test("clamp lowers a value above the range to max", () => {
++  expect(clamp(42, 0, 10)).toBe(10);
++});
++
++test("clamp rejects a range whose min is greater than max", () => {
++  expect(() => clamp(1, 10, 0)).toThrow("min must not be greater than max");
++});
++
++test("clamp rejects NaN", () => {
++  expect(() => clamp(Number.NaN, 0, 10)).toThrow("must not be NaN");
++});

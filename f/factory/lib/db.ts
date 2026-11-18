@@ -107,6 +107,7 @@ import {
   isImplementDiffStat,
   isNumber,
   isOneOf,
+  isPrReviewTrigger,
   isRecord,
   isStoredRefName,
   isString,
@@ -114,6 +115,8 @@ import {
   NON_MODEL_FAILURE_REASONS,
   type Notice,
   type NoticeRecord,
+  type PrReviewTrigger,
+  REVIEW_CONFIDENCES,
   type RequirementDraft,
   type ReviewFinding,
   type ReviewFindingKind,
@@ -1100,6 +1103,63 @@ export async function insertPrReviewWorkItemUnlessActive(
   const row = rows[0];
   if (row === undefined) return null;
   return parseId(row.id, "id");
+}
+
+/**
+ * `pr_review`の作業項目に、今回の起動のきっかけ(`review_trigger`)を書く。
+ * 起動の経路は、作業項目を作るか状態を戻した後、フローを起動する前に呼ぶ。
+ * 生成のステップ(`pr_review_generate`)が、この値を読んで実行の記録に写す。
+ * 書けなくても(列を足すmigrationより先にコードが反映された間を含む)レビューの起動は止めず、警告を残して`false`を返す。
+ * きっかけは監査の集計のための記録である。
+ * 列が無い間に書けなかった実行は不明として数えられる。
+ * 再開で書けなかったときは、前回の起動のきっかけが残り、そのきっかけで数えられる。
+ */
+export async function setPrReviewTrigger(
+  id: number,
+  trigger: PrReviewTrigger,
+  sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
+): Promise<boolean> {
+  try {
+    await sql`
+      UPDATE factory.work_items
+      SET review_trigger = ${trigger}::text
+      WHERE id = ${id}::bigint AND kind = 'pr_review'
+    `.execute();
+    return true;
+  } catch (err) {
+    log.warn("the review trigger of the work item could not be recorded", {
+      work_item_id: id,
+      trigger,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return false;
+  }
+}
+
+/**
+ * `pr_review`の作業項目の、最後の起動のきっかけ(`review_trigger`)を返す。
+ * 値が無い、5つの値のどれでもない、読めない(列が無い間を含む)ときは`null`を返し、読めなかったときは警告を残す。
+ * レビューを止めないためである。
+ */
+export async function readPrReviewTrigger(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
+): Promise<PrReviewTrigger | null> {
+  try {
+    const rows = await sql`
+      SELECT review_trigger FROM factory.work_items WHERE id = ${id}::bigint
+    `.fetch();
+    const value = rows[0]?.review_trigger;
+    return isPrReviewTrigger(value) ? value : null;
+  } catch (err) {
+    log.warn("the review trigger of the work item could not be read", {
+      work_item_id: id,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return null;
+  }
 }
 
 /**
@@ -2261,18 +2321,38 @@ export function toRequirementDraft(row: SqlRow): RequirementDraft {
 // ---------------------------------------------------------------------------
 
 const AGENT_RUN_NEW_COLUMN_PATTERN =
-  /column "(?:model_usage|failure_reason|skills|skill_clone_sha)" of relation "agent_runs" does not exist/;
+  /column "(?:model_usage|failure_reason|trigger|skills|skill_clone_sha)" of relation "agent_runs" does not exist/;
+
+/** 文が名指しする`agent_runs`の列の名前を取り出すパターン。 */
+const AGENT_RUN_NAMED_COLUMN_PATTERN =
+  /column "(\w+)" of relation "agent_runs" does not exist/;
+
+/** 例外の文(`message`と、windmill-clientがサーバーの文を入れる`body`)のどちらかが、パターンに合うかを返す。 */
+function errorTextMatches(err: Error, pattern: RegExp): boolean {
+  if (pattern.test(err.message)) return true;
+  const body: unknown = Reflect.get(err, "body");
+  return typeof body === "string" && pattern.test(body);
+}
+
+/** 例外の文が名指しする`agent_runs`の列の名前を返す。名指ししていないときはnullを返す。 */
+function missingAgentRunColumnName(err: Error): string | null {
+  const body: unknown = Reflect.get(err, "body");
+  const texts = [err.message, typeof body === "string" ? body : ""];
+  for (const text of texts) {
+    const name = AGENT_RUN_NAMED_COLUMN_PATTERN.exec(text)?.[1];
+    if (name !== undefined) return name;
+  }
+  return null;
+}
 
 /**
- * 例外が、`agent_runs`の新しい列(`model_usage`、`failure_reason`、`skills`、`skill_clone_sha`)が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * 例外が、`agent_runs`の新しい列(`model_usage`、`failure_reason`、`trigger`、`skills`、`skill_clone_sha`)が無いことによるもの(PostgreSQLのundefined_column)かを返す。
  * 判定は`isMissingJobLinkColumnError`と同じく、エラーコード42703か、列と表の名前を含む文のどちらかで行う。
  */
 export function isMissingAgentRunColumnError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (Reflect.get(err, "code") === "42703") return true;
-  if (AGENT_RUN_NEW_COLUMN_PATTERN.test(err.message)) return true;
-  const body: unknown = Reflect.get(err, "body");
-  return typeof body === "string" && AGENT_RUN_NEW_COLUMN_PATTERN.test(body);
+  return errorTextMatches(err, AGENT_RUN_NEW_COLUMN_PATTERN);
 }
 
 const AGENT_RUN_SKILLS_COLUMN_PATTERN =
@@ -2296,72 +2376,93 @@ export function isMissingAgentRunSkillsColumnError(err: unknown): boolean {
   return Reflect.get(err, "code") === "42703";
 }
 
+/** 記録し直しの1段。`omits`は、この段の文が書かない新しい列である。 */
+type AgentRunWrite = {
+  readonly omits: readonly string[];
+  readonly skipped: string;
+  readonly statement: (sql: SqlClient) => SqlStatementHandle;
+};
+
 /**
- * `factory.agent_runs`に行を挿入し、そのIDを返す。
- * 反映(`wmill sync push`)はmigration(`wmill datatable migrate up`)より先に走るので、
- * スキルの版、モデル別の内訳、失敗の種類の列を足すmigrationより先に、この関数を含むコードが動くと、列が無いエラーになる。
- * そのときだけ、新しい列を除いた文で記録し直す。費用の記録が消えると、日次の予算の集計が狂うためである。
- * 記録し直しは2段で、1段目はスキルの列だけを除く。それでも列が無ければ、2段目は旧い列だけで記録する。
- * 1段目でモデル別の内訳と失敗の種類を残すのは、費用の集計がこれらに頼るためである。
- * ほかのエラーは投げる。
+ * `agent_runs`への記録を、新しい列の多い順に並べた段である。
+ * 列は古い順に`model_usage`と`failure_reason`、`trigger`、`skills`と`skill_clone_sha`の順で足した。
+ * migrationも同じ順に当たるので、新しい列だけが無い状態は、この順に新しい側から欠ける。
+ * 最も新しい段の文は、`trigger`を最後の列にする(値の並びの末尾が`trigger`になる)。
  */
-export async function recordAgentRun(
-  record: AgentRunRecord,
-  sql: SqlClient = defaultSqlClient,
-  log: Logger = logger("db"),
-): Promise<number> {
+function agentRunWrites(record: AgentRunRecord): readonly AgentRunWrite[] {
+  const trigger = record.trigger ?? null;
   // 記録の無い実行はSQLのNULLで保存する。`JSON.stringify(null)`はjsonbのnullになり、IS NULLで見分けられない。
   // 呼び出し側が`skills`を渡さなかったとき(undefined)も、未定義の引数にせずNULLにする。
   const skillsJson =
     record.skills == null ? null : JSON.stringify(record.skills);
-  const statement = sql`
-    INSERT INTO factory.agent_runs (
-      work_item_id, stage, attempt, model, claude_version, input_tokens,
-      output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
-      session_id, exit_code, error, failure_reason, model_usage,
-      skills, skill_clone_sha
-    ) VALUES (
-      ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
-      ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
-      ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
-      ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error},
-      ${record.failure_reason}::text, ${JSON.stringify(record.model_usage)}::jsonb,
-      ${skillsJson}::jsonb, ${record.skill_clone_sha}::text
-    )
-    RETURNING id
-  `;
-  let row: SqlRow;
-  try {
-    row = await fetchOneRow(statement, "recordAgentRun");
-  } catch (err) {
-    if (!isMissingAgentRunColumnError(err)) throw err;
-    log.warn(
-      "a newer column of agent_runs is missing; recorded the run without the skill provenance (the datatable migration has not run yet)",
-      { stage: record.stage },
-    );
-    const withoutSkills = sql`
-      INSERT INTO factory.agent_runs (
-        work_item_id, stage, attempt, model, claude_version, input_tokens,
-        output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
-        session_id, exit_code, error, failure_reason, model_usage
-      ) VALUES (
-        ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
-        ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
-        ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
-        ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error},
-        ${record.failure_reason}::text, ${JSON.stringify(record.model_usage)}::jsonb
-      )
-      RETURNING id
-    `;
-    try {
-      row = await fetchOneRow(withoutSkills, "recordAgentRun");
-    } catch (legacyErr) {
-      if (!isMissingAgentRunColumnError(legacyErr)) throw legacyErr;
-      log.warn(
-        "a newer column of agent_runs is missing; recorded the run without the per-model usage and the failure reason (the datatable migration has not run yet)",
-        { stage: record.stage },
-      );
-      const legacy = sql`
+  return [
+    {
+      omits: [],
+      skipped: "",
+      statement: (sql) => sql`
+        INSERT INTO factory.agent_runs (
+          work_item_id, stage, attempt, model, claude_version, input_tokens,
+          output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
+          session_id, exit_code, error, failure_reason, model_usage,
+          skills, skill_clone_sha, trigger
+        ) VALUES (
+          ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
+          ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
+          ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
+          ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error},
+          ${record.failure_reason}::text, ${JSON.stringify(record.model_usage)}::jsonb,
+          ${skillsJson}::jsonb, ${record.skill_clone_sha}::text, ${trigger}::text
+        )
+        RETURNING id
+      `,
+    },
+    {
+      omits: ["skills", "skill_clone_sha"],
+      skipped: "the skill provenance",
+      statement: (sql) => sql`
+        INSERT INTO factory.agent_runs (
+          work_item_id, stage, attempt, model, claude_version, input_tokens,
+          output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
+          session_id, exit_code, error, failure_reason, model_usage, trigger
+        ) VALUES (
+          ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
+          ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
+          ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
+          ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error},
+          ${record.failure_reason}::text, ${JSON.stringify(record.model_usage)}::jsonb, ${trigger}::text
+        )
+        RETURNING id
+      `,
+    },
+    {
+      omits: ["skills", "skill_clone_sha", "trigger"],
+      skipped: "the skill provenance and the trigger",
+      statement: (sql) => sql`
+        INSERT INTO factory.agent_runs (
+          work_item_id, stage, attempt, model, claude_version, input_tokens,
+          output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
+          session_id, exit_code, error, failure_reason, model_usage
+        ) VALUES (
+          ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
+          ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
+          ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
+          ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error},
+          ${record.failure_reason}::text, ${JSON.stringify(record.model_usage)}::jsonb
+        )
+        RETURNING id
+      `,
+    },
+    {
+      omits: [
+        "skills",
+        "skill_clone_sha",
+        "trigger",
+        "model_usage",
+        "failure_reason",
+      ],
+      skipped:
+        "the skill provenance, the trigger, the per-model usage and the failure reason",
+      statement: (sql) => sql`
         INSERT INTO factory.agent_runs (
           work_item_id, stage, attempt, model, claude_version, input_tokens,
           output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
@@ -2373,11 +2474,68 @@ export async function recordAgentRun(
           ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error}
         )
         RETURNING id
-      `;
-      row = await fetchOneRow(legacy, "recordAgentRun");
+      `,
+    },
+  ];
+}
+
+/**
+ * 列が無いエラーのあとに試す段の位置を返す。
+ * 文が列を名指ししているときは、その列を書かない最初の段まで進める。
+ * たとえば`model_usage`が無いなら、`trigger`や`skills`だけを除いた段は、同じエラーになるので飛ばす。
+ * 名指ししていないときや、どの段も省かない列のときは、次の段にする。
+ */
+function nextAgentRunWrite(
+  writes: readonly AgentRunWrite[],
+  failedIndex: number,
+  err: Error,
+): number {
+  const named = missingAgentRunColumnName(err);
+  if (named === null) return failedIndex + 1;
+  const index = writes.findIndex(
+    (write, i) => i > failedIndex && write.omits.includes(named),
+  );
+  return index === -1 ? failedIndex + 1 : index;
+}
+
+/**
+ * `factory.agent_runs`に行を挿入し、そのIDを返す。
+ * 反映(`wmill sync push`)はmigration(`wmill datatable migrate up`)より先に走るので、
+ * モデル別の内訳、失敗の種類、PRレビューのきっかけ、スキルの版の列を足すmigrationより先に、この関数を含むコードが動くと、列が無いエラーになる。
+ * そのときだけ、新しい列を減らした文で段階的に記録し直す。費用の記録が消えると、日次の予算の集計が狂うためである。
+ * 段は、スキルの列だけを除く、さらに`trigger`を除く、旧い列だけで書く、の順である。
+ * 費用の集計が頼るモデル別の内訳と失敗の種類は、できるだけ残す。
+ * 文が列を名指ししているときは、その列を書く段を飛ばす。名指ししていないときは、1段ずつ減らす。
+ * ほかのエラーは投げる。
+ * `trigger`を省いた記録(PRレビュー以外の工程)と、スキルの記録を持たない実行は、NULLを書く。
+ */
+export async function recordAgentRun(
+  record: AgentRunRecord,
+  sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
+): Promise<number> {
+  const writes = agentRunWrites(record);
+  let index = 0;
+  for (;;) {
+    const write = writes[index];
+    if (write === undefined) {
+      throw new Error("db: no statement is left to record the agent run");
+    }
+    try {
+      const row = await fetchOneRow(write.statement(sql), "recordAgentRun");
+      if (index > 0) {
+        log.warn(
+          `a newer column of agent_runs is missing; recorded the run without ${write.skipped} (the datatable migration has not run yet)`,
+          { stage: record.stage },
+        );
+      }
+      return parseId(row.id, "id");
+    } catch (err) {
+      if (!isMissingAgentRunColumnError(err)) throw err;
+      if (!(err instanceof Error) || index >= writes.length - 1) throw err;
+      index = nextAgentRunWrite(writes, index, err);
     }
   }
-  return parseId(row.id, "id");
 }
 
 // ---------------------------------------------------------------------------
@@ -2925,7 +3083,7 @@ function deriveKindFromSeverity(severity: ReviewSeverity): ReviewFindingKind {
 /**
  * `factory.reviews`の行の`findings`配列の要素1つを解析する。
  * それらの項目より前に作られた既存の行では、`kind`を`severity`から導き、
- * `end_line`と`suggested_code`を`null`で補う。
+ * `end_line`と`suggested_code`と`evidence`と`confidence`を`null`で補う。
  * 形が不正なら例外を投げる。
  */
 function parseReviewFinding(value: unknown, field: string): ReviewFinding {
@@ -2956,6 +3114,20 @@ function parseReviewFinding(value: unknown, field: string): ReviewFinding {
   if (value.kind !== undefined && !isOneOf(value.kind, REVIEW_FINDING_KINDS)) {
     throw new Error(`db: row field "${field}" contains a malformed finding`);
   }
+  if (
+    value.evidence !== undefined &&
+    value.evidence !== null &&
+    !isString(value.evidence)
+  ) {
+    throw new Error(`db: row field "${field}" contains a malformed finding`);
+  }
+  if (
+    value.confidence !== undefined &&
+    value.confidence !== null &&
+    !isOneOf(value.confidence, REVIEW_CONFIDENCES)
+  ) {
+    throw new Error(`db: row field "${field}" contains a malformed finding`);
+  }
   return {
     path: value.path,
     line: value.line,
@@ -2965,6 +3137,8 @@ function parseReviewFinding(value: unknown, field: string): ReviewFinding {
     message: value.message,
     suggestion: value.suggestion,
     suggested_code: value.suggested_code ?? null,
+    evidence: value.evidence ?? null,
+    confidence: value.confidence ?? null,
   };
 }
 

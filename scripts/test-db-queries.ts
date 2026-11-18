@@ -129,6 +129,8 @@ import {
   readGhOwnerOpenIssues,
   readGhOwnerOpenPullRequests,
   readGhRepoOpenPullRequests,
+  readPrReviewTrigger,
+  recordAgentRun,
   recordApprovalRedispatch,
   recordDeployment,
   recordFailure,
@@ -160,6 +162,7 @@ import {
   setIssueProposalCreatedIssue,
   setPrCiFixHold,
   setPrConflictFixHold,
+  setPrReviewTrigger,
   settlePrConflictCheck,
   setWorkItemPrUrl,
   sqlIntakeKeyStore,
@@ -13212,6 +13215,171 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     "audit skill versions: a run with a valid element and an empty one counts in the version row",
     skillRows.find((row) => row.skill === "c")?.run_count === 1,
     skillRows,
+  );
+}
+
+{
+  // PRレビューの実行の、PRごとの上位と、起動のきっかけごとの件数を確かめる。
+  // ほかの場面の実行と混ざらないよう、実行は遠い過去の期間に置く。
+  const insertReviewItem = async (
+    owner: string,
+    prNumber: number,
+  ): Promise<number> => {
+    const rows = await sql`
+      INSERT INTO factory.work_items (kind, source, owner, repo, pr_number, status, cycle, attempt, title)
+      VALUES ('pr_review', 'issue', ${owner}, 'qdb-evidence', ${prNumber}::integer, 'cancelled', 1, 1, 'qdb-pr-review')
+      RETURNING id
+    `.fetch();
+    const id = rows[0]?.id;
+    if (typeof id !== "number") {
+      throw new Error(
+        `pr_review work item ${String(prNumber)} was not inserted`,
+      );
+    }
+    return id;
+  };
+  const insertRun = async (
+    workItemId: number,
+    stage: string,
+    cost: number,
+    trigger: string | null,
+  ): Promise<void> => {
+    await sql`
+      INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, cost_usd, exit_code, trigger, created_at)
+      VALUES (${workItemId}::bigint, ${stage}, 1, 'qdb-model', ${cost}::numeric, 0, ${trigger}::text, '2001-01-03T00:00:00Z'::timestamptz)
+    `.execute();
+  };
+
+  const first = await insertReviewItem(OWNER, 1);
+  const firstOtherSpelling = await insertReviewItem(OWNER.toUpperCase(), 1);
+  const second = await insertReviewItem(OWNER, 2);
+  await insertRun(first, "pr_review", 1, "label");
+  await insertRun(first, "pr_review", 1, "tracked_push");
+  await insertRun(first, "pr_review", 1, null);
+  await insertRun(firstOtherSpelling, "pr_review", 1, "console");
+  await insertRun(second, "pr_review", 5, "auto_retry");
+  await insertRun(second, "pr_review", 5, "auto_retry");
+  await insertRun(second, "implement", 9, null);
+  for (let prNumber = 3; prNumber <= 13; prNumber += 1) {
+    await insertRun(
+      await insertReviewItem(OWNER, prNumber),
+      "pr_review",
+      0.1,
+      "rereview_request",
+    );
+  }
+  await insertRun(
+    await auditItem("pr-review-evidence", "failed", "schedule", OWNER, "r"),
+    "pr_review",
+    7,
+    "label",
+  );
+
+  const evidence = await collectAuditEvidence(
+    {
+      period: {
+        start: new Date("2001-01-01T00:00:00Z"),
+        end: new Date("2001-01-08T00:00:00Z"),
+        unaudited_gap_days: 0,
+      },
+      instanceName: "qdb",
+    },
+    sql,
+  );
+  const top = evidence.pr_review_top_prs;
+  check(
+    "audit evidence: the pull requests are counted without the audit item",
+    evidence.pr_review_pr_count === 13,
+    evidence.pr_review_pr_count,
+  );
+  check(
+    "audit evidence: the pull request list is cut to the top 10",
+    top.length === 10,
+    top.length,
+  );
+  check(
+    "audit evidence: the owner spellings of one pull request are grouped",
+    top[0]?.owner.toLowerCase() === OWNER &&
+      top[0]?.pr_number === 1 &&
+      top[0]?.run_count === 4,
+    top[0],
+  );
+  check(
+    "audit evidence: another stage is not counted for the pull request",
+    top[1]?.pr_number === 2 &&
+      top[1]?.run_count === 2 &&
+      top[1]?.total_cost_usd === 10,
+    top[1],
+  );
+  const expectedTriggers = {
+    label: 1,
+    rereview_request: 11,
+    tracked_push: 1,
+    console: 1,
+    auto_retry: 2,
+    unknown: 1,
+  };
+  check(
+    "audit evidence: the runs are counted by trigger, with null as unknown",
+    JSON.stringify(evidence.pr_review_triggers) ===
+      JSON.stringify(expectedTriggers),
+    evidence.pr_review_triggers,
+  );
+  const reviewStat = evidence.agent_runs.find(
+    (stat) => stat.stage === "pr_review",
+  );
+  check(
+    "audit evidence: the trigger counts total to the pr_review runs",
+    reviewStat?.run_count === 17,
+    reviewStat,
+  );
+
+  await setPrReviewTrigger(first, "tracked_push", sql);
+  check(
+    "pr review trigger: the written trigger is read back",
+    (await readPrReviewTrigger(first, sql)) === "tracked_push",
+  );
+  const recordedId = await recordAgentRun(
+    {
+      work_item_id: first,
+      stage: "pr_review",
+      attempt: 1,
+      model: "qdb-model",
+      claude_version: null,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_tokens: null,
+      cost_usd: null,
+      num_turns: null,
+      duration_ms: null,
+      session_id: null,
+      exit_code: 0,
+      error: null,
+      failure_reason: null,
+      model_usage: [],
+      skills: null,
+      skill_clone_sha: null,
+      trigger: "auto_retry",
+    },
+    sql,
+  );
+  const recorded = await sql`
+    SELECT trigger FROM factory.agent_runs WHERE id = ${recordedId}::bigint
+  `.fetch();
+  check(
+    "pr review trigger: the run is recorded with its trigger",
+    recorded[0]?.trigger === "auto_retry",
+    recorded,
+  );
+  let rejected = false;
+  try {
+    await insertRun(first, "pr_review", 1, "webhook");
+  } catch {
+    rejected = true;
+  }
+  check(
+    "pr review trigger: a value outside the five triggers is rejected",
+    rejected,
   );
 }
 

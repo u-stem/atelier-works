@@ -59,6 +59,7 @@ import {
   countOpenThreads,
   decideReviewBodyMode,
   findPostedReviewId,
+  isPostableFinding,
   isReviewFindingShape,
   isThreadResponseShape,
   mapFindingsToReviewComments,
@@ -69,6 +70,7 @@ import {
   reviewResultFor,
   selectThreadResponses,
   selectThreadsToResolve,
+  splitFindingsByConfidence,
   type ThreadAuthorPredicate,
   withReviewMarkers,
   withTrustedResolution,
@@ -300,7 +302,7 @@ export async function main(
  * (factory-reviewスキルの方針)。`verdict`は`factory.reviews`にだけ残す。
  * トリガーの`review_label`は着手時に消費済みなので、ここで外すラベルも、
  * 付けるPRの状態ラベルも無い。
- * 投稿の後に結果を決め、今回の指摘に`kind === "must"`があるか、
+ * 投稿の後に結果を決め、今回の指摘に`kind === "must"`(確信度が`low`のものを除く)があるか、
  * 前回までの`[MUST]`の指摘か、了承されていない見送り(反論した見送りを含む)が今回の解決の後も残っていれば
  * `"changes_requested"`、それ以外は`"reviewed"`にする。
  * これはDiscordの通知で、変更が要るのか承認だけでよいのかを一目で示すためのもの。
@@ -507,6 +509,8 @@ export type PublishReviewInput = {
   readonly binaryFiles: readonly string[];
   /** `binaryFiles`に並べられなかった(パスを変更ファイルと照合できなかった)件数。 */
   readonly binaryUnlistedCount: number;
+  /** 確信度が`low`で、投稿せず記録だけにした指摘の件数。総評に件数だけを書く。 */
+  readonly heldFindingCount: number;
   /** このPRに、この作業項目より前のFactoryのレビューの記録があるか。 */
   readonly priorReview: boolean;
   /** 偽なら("gated")投稿も返信もスレッドの解決もしない。 */
@@ -724,6 +728,8 @@ export async function publishReview(
     openThreadCount,
     input.binaryFiles,
     input.binaryUnlistedCount,
+    [],
+    input.heldFindingCount,
   );
   // GitHubが行を解決できずに拒否したときは、行コメントの指摘もすべて総評に並べて投稿し直す。
   const fallbackBody = renderUnresolvedLineSummary(
@@ -732,6 +738,7 @@ export async function publishReview(
     droppedFindings,
     input.binaryFiles,
     input.binaryUnlistedCount,
+    input.heldFindingCount,
   );
   // 拒否されたら、まず範囲が分からないファイルの指摘だけを総評へ移して、残りの行コメントで投稿し直す。
   // 移す指摘が無いか、行コメントがすべて移す指摘のときは、この段を飛ばす。
@@ -760,6 +767,7 @@ export async function publishReview(
             input.binaryFiles,
             input.binaryUnlistedCount,
             unverifiedFindings,
+            input.heldFindingCount,
           ),
         }
       : undefined;
@@ -790,7 +798,7 @@ export type ReviewTransitionNoticeInput = {
  * 作業項目を`reviewed`へ進めるときに残す補足を返す。補足が要らなければnullを返す。
  * 投稿しないときは、投稿せずに記録したことを残す。
  * 一覧を読めなかった旨は、結果が`unverified`のときだけ残す。
- * 今回の指摘に`[MUST]`があれば結果は`changes_requested`で、結果を記録できているため。
+ * 今回の指摘に`[MUST]`(確信度が`low`のものを除く)があれば結果は`changes_requested`で、結果を記録できているため。
  */
 export function reviewTransitionNotice(
   input: ReviewTransitionNoticeInput,
@@ -821,6 +829,7 @@ export type ReviewedNotifyInput = {
  * 「PRレビュー完了」の通知を組み立てる。送らないときはnullを返す。
  * 投稿しなかったレビューは、PRに指摘が見えず、受け取った人が進める操作も無いので送らない。
  * 判定は設定値ではなく、実際の投稿の結果で行う。
+ * 件数は、PRに出る指摘だけを数える。確信度が`low`の指摘は数えない。
  */
 export function reviewedNotifyEvent(
   input: ReviewedNotifyInput,
@@ -836,7 +845,7 @@ export function reviewedNotifyEvent(
     pr_number: input.pr_number,
     pr_url: `https://github.com/${input.owner}/${input.repo}/pull/${String(input.pr_number)}`,
     verdict: input.verdict,
-    finding_count: input.findings.length,
+    finding_count: input.findings.filter(isPostableFinding).length,
     result: reviewResultFor(input.findings, input.blockingThreadCount),
   };
 }
@@ -910,9 +919,12 @@ async function postReview(
     return { skip: true, posted: false, posted_review_id: null };
   }
 
+  // 確信度が`low`の指摘は、PRのコメントにも総評にも出さず、記録だけにする。
+  // 結果の判定と通知の件数は、`findings`をそのまま渡しても`low`を数えない。
+  const { postable, held } = splitFindingsByConfidence(findings);
   const { comments, droppedFindings, reattachedFindings, unverifiedFindings } =
     mapFindingsToReviewComments(
-      findings,
+      postable,
       normalizePrFileHunks(input.pr_file_hunks, pr_files),
     );
   if (reattachedFindings.length > 0) {
@@ -946,11 +958,12 @@ async function postReview(
       },
       prAuthorLogin: pr.authorLogin,
       comments,
-      commentedFindings: commentedFindingsOf(findings, droppedFindings),
+      commentedFindings: commentedFindingsOf(postable, droppedFindings),
       unverifiedFindings,
       droppedFindings,
       binaryFiles,
       binaryUnlistedCount,
+      heldFindingCount: held.length,
       priorReview,
       post,
       ensureRepoOwner: () =>
@@ -1008,6 +1021,7 @@ async function postReview(
 
   // Discordの通知とConsoleのレビュー行が同じ基準で状態を出すため、
   // 未解決の[MUST]を数えた結果を、レビューと一緒に記録する。
+  // 記録には、確信度が`low`の指摘も含めてすべて入れる。結果の判定は`low`を数えない。
   const record = buildReviewRecord({
     workItemId: work_item_id,
     headSha: review_sha,

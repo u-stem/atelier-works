@@ -1,0 +1,41 @@
+diff --git a/src/paginate.ts b/src/paginate.ts
+--- a/src/paginate.ts
++++ b/src/paginate.ts
+@@ -2,6 +2,7 @@
+   readonly items: readonly T[];
+   readonly page: number;
+   readonly totalPages: number;
++  readonly hasNext: boolean;
+ };
+ 
+ export function paginate<T>(
+@@ -10,9 +11,12 @@
+   pageSize: number,
+ ): Page<T> {
+   const start = (page - 1) * pageSize;
++  const end = start + pageSize;
++  const totalPages = Math.ceil(items.length / pageSize);
+   return {
+-    items: items.slice(start, start + pageSize),
++    items: items.slice(start, end + 1),
+     page,
+-    totalPages: Math.ceil(items.length / pageSize),
++    totalPages,
++    hasNext: page < totalPages,
+   };
+ }
+diff --git a/tests/paginate.test.ts b/tests/paginate.test.ts
+new file mode 100644
+--- /dev/null
++++ b/tests/paginate.test.ts
+@@ -0,0 +1,10 @@
++import { expect, test } from "bun:test";
++import { paginate } from "../src/paginate.ts";
++
++test("hasNext is true before the last page", () => {
++  expect(paginate([1, 2, 3, 4, 5], 1, 2).hasNext).toBe(true);
++});
++
++test("hasNext is false on the last page", () => {
++  expect(paginate([1, 2, 3, 4, 5], 3, 2).hasNext).toBe(false);
++});

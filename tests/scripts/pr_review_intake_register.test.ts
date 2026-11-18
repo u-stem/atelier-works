@@ -143,6 +143,12 @@ describe("registerPrReviewIntake", () => {
     expect(started[0]?.linkedParentWorkItemId).toBe(5);
   });
 
+  test("starts the review with the console trigger", async () => {
+    const { deps, started } = harness();
+    await registerPrReviewIntake(INPUT, deps);
+    expect(started[0]?.trigger).toBe("console");
+  });
+
   test("looks the parent up in the canonical repository with the pull request body", async () => {
     const asked: unknown[] = [];
     const { deps } = harness({

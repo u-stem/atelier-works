@@ -294,6 +294,24 @@ describe("isWorkItemDetail", () => {
     ).toBe(false);
   });
 
+  test("accepts a review with a count of unposted findings", () => {
+    expect(
+      isWorkItemDetail({
+        ...DETAIL,
+        reviews: [{ ...REVIEW, held_finding_count: 2 }],
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a review whose count of unposted findings is negative", () => {
+    expect(
+      isWorkItemDetail({
+        ...DETAIL,
+        reviews: [{ ...REVIEW, held_finding_count: -1 }],
+      }),
+    ).toBe(false);
+  });
+
   test("rejects a review whose finding count is negative", () => {
     expect(
       isWorkItemDetail({

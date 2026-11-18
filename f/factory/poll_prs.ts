@@ -53,6 +53,7 @@ import {
   setFixRound,
   setFlowJobId,
   setObservedWatermarks,
+  setPrReviewTrigger,
   TRACKED_PR_LIST_LIMIT,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
@@ -103,14 +104,17 @@ import {
 } from "./lib/poll_support.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
 import {
+  discoveredPrKeys,
   findLinkedParentWorkItemId,
   type PrReviewStartResult,
+  prReviewTriggerForCandidate,
   startPrReview,
 } from "./lib/pr_review_start.ts";
 import { collectTrackedPrCandidates } from "./lib/tracked_pr_candidates.ts";
 import {
   hasLabel,
   isRecord,
+  type PrReviewTrigger,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
   type WorkItemStatus,
@@ -976,6 +980,7 @@ async function startReview(
   observed: ObservedSeed,
   linkedParentWorkItemId: number | null,
   reason: "label" | "assignment",
+  trigger: PrReviewTrigger,
 ): Promise<PrReviewStartResult> {
   return await startPrReview(
     {
@@ -988,10 +993,12 @@ async function startReview(
       body: reviewRowBody(reason),
       observed,
       linkedParentWorkItemId,
+      trigger,
     },
     {
       insertWorkItem: insertPrReviewWorkItemUnlessActive,
       setObservedWatermarks,
+      setReviewTrigger: (id, value) => setPrReviewTrigger(id, value),
       runFlowAsync: (path, args) => wmill.runFlowAsync(path, args),
       setFlowJobId,
     },
@@ -1524,6 +1531,9 @@ export async function main(): Promise<{
     },
   );
   failed += tracked.failed;
+  // 検索で見つかったPRの鍵。ここに無い候補は、追跡中のPRの一覧だけから見つかったものである。
+  // 割り当ての経路で始めたレビューのきっかけ(`tracked_push`)を見分けるのに使う。
+  const discoveredKeys = discoveredPrKeys(discovered.items);
   rawCandidates.push(...tracked.items);
 
   const allowed = filterByRepoAllowlist(rawCandidates, scope);
@@ -1602,6 +1612,7 @@ export async function main(): Promise<{
           context.observed,
           context.linkedParentWorkItemId,
           reason,
+          prReviewTriggerForCandidate(reason, candidate, discoveredKeys),
         ),
       startFix: (candidate, context) =>
         startFix(

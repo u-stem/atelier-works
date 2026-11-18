@@ -636,6 +636,27 @@ export const NON_MODEL_FAILURE_REASONS: readonly RunClaudeFailureReason[] = [
   "not_started",
 ];
 
+/**
+ * PRレビューの実行を始めたきっかけ。`factory.work_items.review_trigger`と`factory.agent_runs.trigger`に書く値である。
+ * - `label`: トリガーラベル(`review_label`)の付与
+ * - `rereview_request`: レビューの依頼かassignee(検索で見つかったPR)
+ * - `tracked_push`: 追跡中のPR(`listTrackedPrs`だけから見つかったPR)への新しいcommit
+ * - `console`: Consoleの投入と、Consoleか`retry_work_item`による再実行
+ * - `auto_retry`: 一時的な失敗からの自動の再開(`auto_retry_pr_review`)
+ */
+export const PR_REVIEW_TRIGGERS = [
+  "label",
+  "rereview_request",
+  "tracked_push",
+  "console",
+  "auto_retry",
+] as const;
+export type PrReviewTrigger = (typeof PR_REVIEW_TRIGGERS)[number];
+
+export function isPrReviewTrigger(value: unknown): value is PrReviewTrigger {
+  return isOneOf(value, PR_REVIEW_TRIGGERS);
+}
+
 /** `db.recordAgentRun`に渡す、`factory.agent_runs`の1行。 */
 export type AgentRunRecord = {
   work_item_id: number;
@@ -666,6 +687,8 @@ export type AgentRunRecord = {
   skills: readonly SkillRef[] | null;
   /** スキルを読んだときのFactoryのcloneのHEAD(40桁)。取れなかった実行と、`skills`がnullの実行はnullである。 */
   skill_clone_sha: string | null;
+  /** PRレビューの実行のきっかけ。PRレビュー以外の工程と、きっかけを読めなかった実行は省くかnullである。 */
+  trigger?: PrReviewTrigger | null;
 };
 
 /**
@@ -702,6 +725,19 @@ export type ReviewSeverity = "blocker" | "major" | "minor" | "nit";
  */
 export type ReviewFindingKind = "must" | "imo" | "nits" | "q";
 
+/**
+ * 指摘の確信度。
+ * `low`の指摘は、記録だけして、PRのコメントにも結果の判定にも使わない。
+ */
+export type ReviewConfidence = "high" | "medium" | "low";
+
+/** `ReviewConfidence`の全値。`REVIEW_SCHEMA`の`confidence`のenumと一致させる。 */
+export const REVIEW_CONFIDENCES: readonly ReviewConfidence[] = [
+  "high",
+  "medium",
+  "low",
+];
+
 export type ReviewFinding = {
   path: string;
   /** head側(差分適用後)の行番号。`end_line`と同じ基準。 */
@@ -718,6 +754,13 @@ export type ReviewFinding = {
    * 具体的な修正を提案しないときは`null`。
    */
   suggested_code: string | null;
+  /**
+   * 指摘の根拠として、差分かリポジトリで確かめた事実(ファイルと行、出力)。
+   * この項目を持たない古い行は`null`で読む。
+   */
+  evidence: string | null;
+  /** この項目を持たない古い行は`null`で読む。`null`は、投稿の対象として扱う。 */
+  confidence: ReviewConfidence | null;
 };
 
 /** 差分の1つのhunkが覆う、新しい側(head)の行の範囲。両端を含む。 */

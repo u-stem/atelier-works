@@ -17,6 +17,7 @@ import {
   findFixRoundKindToReview,
   latestDraft,
   latestPostedPrReview,
+  readPrReviewTrigger,
   recordAgentRun,
   updateStatusIfCurrent,
 } from "../lib/db.ts";
@@ -69,6 +70,7 @@ import {
   settleReviewFindings,
   settleThreadResponses,
   splitChangedFiles,
+  withRunTrigger,
   withTrustedResolution,
 } from "./pr_workflow_support.ts";
 
@@ -347,6 +349,12 @@ export async function main(
     factoryCloneDir: factory_clone_dir,
   });
 
+  // 起動の経路が作業項目に書いたきっかけを、実行の記録に写す。
+  // 作業項目の値は次の起動で上書きされるため、過去の実行のきっかけは実行の記録に残す。
+  // Claudeを起動する前に読み、実行の間に別の経路が書き換えた値を写さない。
+  // 読めなければnull(監査では不明)で記録し、レビューは止めない(`readPrReviewTrigger`が警告を残す)。
+  const trigger = await readPrReviewTrigger(work_item_id);
+
   try {
     const result = await runClaude({
       run: runCommand,
@@ -368,7 +376,9 @@ export async function main(
       timeoutMs: config.claude_timeout_sec * 1000,
     });
 
-    await recordClaudeRuns(result, recordAgentRun);
+    await recordClaudeRuns(result, (agentRun) =>
+      recordAgentRun(withRunTrigger(agentRun, trigger)),
+    );
 
     if (result.outcome !== "success") {
       throw new Error(
@@ -387,11 +397,18 @@ export async function main(
         issues: proseIssues,
       });
     }
-    const { summary, findings } = settleReviewFindings(
+    const { summary, findings, heldOmitted } = settleReviewFindings(
       output,
       scope,
       REVIEW_MAX_FINDINGS,
     );
+    if (heldOmitted > 0) {
+      log.warn("low confidence findings over the limit were dropped", {
+        work_item_id,
+        omitted: heldOmitted,
+        limit: REVIEW_MAX_FINDINGS,
+      });
+    }
 
     return {
       skip: false,

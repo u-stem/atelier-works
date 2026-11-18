@@ -5,7 +5,11 @@ import {
   collectAuditEvidence,
   countActionableRecords,
   DEPLOYMENT_ERROR_HEAD_MAX,
+  EMPTY_PR_REVIEW_TRIGGER_COUNTS,
+  type EvidenceSection,
   metricsOf,
+  NO_PR_REVIEW_RUNS_LINE,
+  PR_REVIEW_TOP_PRS_LIMIT,
   renderEvidenceMarkdown,
   sanitizeCell,
   truncateEvidence,
@@ -49,7 +53,10 @@ type QueryName =
   | "unresolvedNotices"
   | "skillVersions"
   | "deploymentHistory"
-  | "versionBounds";
+  | "versionBounds"
+  | "agentRuns"
+  | "prReviewTopPrs"
+  | "prReviewTriggers";
 
 const QUERY_NAMES: readonly QueryName[] = [
   "failures",
@@ -62,6 +69,9 @@ const QUERY_NAMES: readonly QueryName[] = [
   "skillVersions",
   "deploymentHistory",
   "versionBounds",
+  "agentRuns",
+  "prReviewTopPrs",
+  "prReviewTriggers",
 ];
 
 /**
@@ -79,6 +89,10 @@ const QUERY_FRAGMENTS: Record<QueryName, string> = {
   skillVersions: "jsonb_to_recordset",
   deploymentHistory: "SELECT occurred_at, sha_from, sha_to, result",
   versionBounds: "AS start_sha",
+  // 今の期間と前の期間の、工程ごとの実行統計の2つの問い合わせ。
+  agentRuns: "GROUP BY r.stage",
+  prReviewTopPrs: "count(*) OVER () AS pr_count",
+  prReviewTriggers: "to_jsonb(r) ->> 'trigger'",
 };
 
 /**
@@ -139,6 +153,9 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   running_version_at_end: null,
   past_proposals: [],
   skill_versions: [],
+  pr_review_top_prs: [],
+  pr_review_pr_count: 0,
+  pr_review_triggers: EMPTY_PR_REVIEW_TRIGGER_COUNTS,
 };
 
 /**
@@ -626,6 +643,47 @@ describe("unset values (missing keys)", () => {
       "must",
       "nits",
     ]);
+  });
+
+  test("groups a low confidence finding apart from its kind in the query", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "reviewFindings")?.text).toContain(
+      "WHEN f ->> 'confidence' = 'low' THEN 'low'",
+    );
+  });
+
+  test("renders the low confidence findings as a group apart from the kinds", async () => {
+    const { sql } = createRoutedSqlClient({
+      reviewFindings: [
+        { key: "must", count: 5 },
+        { key: "low", count: 2 },
+      ],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- low(記録だけで投稿していない): 2件",
+    );
+  });
+
+  test("renders the must count without the low confidence findings", async () => {
+    const { sql } = createRoutedSqlClient({
+      reviewFindings: [
+        { key: "must", count: 5 },
+        { key: "low", count: 2 },
+      ],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain("- must: 5件");
   });
 
   test("renders the unset reply decision with its count", async () => {
@@ -1691,5 +1749,412 @@ describe("skill versions", () => {
     expect(renderEvidenceMarkdown(evidence)).toContain(
       "- pr_review 未記録: 実行5\n",
     );
+  });
+});
+
+const PR_SECTION = "PRレビューの実行(PR別の上位)";
+const TRIGGER_SECTION = "PRレビューの実行(きっかけ別)";
+const PR_SECTIONS = [PR_SECTION, TRIGGER_SECTION];
+const STATS_SECTION = "実行統計(stage別)";
+const NEW_QUERIES = ["prReviewTopPrs", "prReviewTriggers"] as const;
+
+/** 2つのPRでPRレビューが実行され、きっかけが記録されている期間。 */
+const PR_REVIEW_EVIDENCE: AuditEvidence = {
+  ...EMPTY_EVIDENCE,
+  agent_runs: [
+    {
+      stage: "pr_review",
+      run_count: 12,
+      failure_count: 0,
+      avg_turns: 10,
+      total_cost_usd: 7.5,
+    },
+  ],
+  pr_review_top_prs: [
+    {
+      owner: "u-stem",
+      repo: "atelier-works",
+      pr_number: 701,
+      run_count: 9,
+      total_cost_usd: 5.25,
+    },
+    {
+      owner: "u-stem",
+      repo: "widgets",
+      pr_number: 12,
+      run_count: 3,
+      total_cost_usd: 2.25,
+    },
+  ],
+  pr_review_pr_count: 2,
+  pr_review_triggers: {
+    label: 1,
+    rereview_request: 2,
+    tracked_push: 6,
+    console: 1,
+    auto_retry: 0,
+    unknown: 2,
+  },
+};
+
+function sectionOf(
+  evidence: AuditEvidence,
+  heading: string,
+): EvidenceSection | undefined {
+  return buildEvidenceSections(evidence).find(
+    (section) => section.heading === heading,
+  );
+}
+
+async function collectWith(
+  rows: Partial<Record<QueryName, SqlRow[]>>,
+): Promise<{ evidence: AuditEvidence; calls: FakeCall[] }> {
+  const { sql, calls } = createRoutedSqlClient(rows);
+  const evidence = await collectAuditEvidence(
+    { period: PERIOD, instanceName: "atelier-works" },
+    sql,
+  );
+  return { evidence, calls };
+}
+
+describe("PR review runs by pull request", () => {
+  test("lists each pull request with its runs and cost", () => {
+    expect(sectionOf(PR_REVIEW_EVIDENCE, PR_SECTION)?.lines).toEqual([
+      "u-stem/atelier-works#701: 実行9 / コスト $5.25",
+      "u-stem/widgets#12: 実行3 / コスト $2.25",
+    ]);
+  });
+
+  test("keeps the pull request fixed line apart from the lines", () => {
+    expect(sectionOf(PR_REVIEW_EVIDENCE, PR_SECTION)?.fixed).toEqual([
+      "対象のPR: 2件(上位10件まで載せる)",
+    ]);
+  });
+
+  test("states the number of pull requests and the limit in the fixed line", () => {
+    const evidence = { ...PR_REVIEW_EVIDENCE, pr_review_pr_count: 15 };
+    expect(sectionOf(evidence, PR_SECTION)?.fixed).toEqual([
+      "対象のPR: 15件(上位10件まで載せる)",
+    ]);
+  });
+
+  test("labels a run without a pull request number as 未設定", () => {
+    const evidence: AuditEvidence = {
+      ...PR_REVIEW_EVIDENCE,
+      pr_review_top_prs: [
+        {
+          owner: "u-stem",
+          repo: "widgets",
+          pr_number: null,
+          run_count: 1,
+          total_cost_usd: 0.5,
+        },
+      ],
+    };
+    expect(sectionOf(evidence, PR_SECTION)?.lines).toEqual([
+      "u-stem/widgets#未設定: 実行1 / コスト $0.50",
+    ]);
+  });
+
+  test("limits the query to the top 10 pull requests", async () => {
+    const { calls } = await collectWith({});
+    const limit = findCall(calls, "prReviewTopPrs")?.values.at(-1);
+    expect([PR_REVIEW_TOP_PRS_LIMIT, limit]).toEqual([10, 10]);
+  });
+
+  test("orders by runs, then cost, then owner, repo and number", async () => {
+    const { calls } = await collectWith({});
+    expect(findCall(calls, "prReviewTopPrs")?.text).toContain(
+      "ORDER BY run_count DESC, total_cost_usd DESC, lower(wi.owner), lower(wi.repo), wi.pr_number",
+    );
+  });
+
+  test("keeps the order of the rows that the query returned", async () => {
+    const { evidence } = await collectWith({
+      prReviewTopPrs: [
+        {
+          owner: "u-stem",
+          repo: "b",
+          pr_number: 2,
+          run_count: 5,
+          total_cost_usd: "3.10",
+          pr_count: 12,
+        },
+        {
+          owner: "u-stem",
+          repo: "a",
+          pr_number: 1,
+          run_count: 5,
+          total_cost_usd: "1.00",
+          pr_count: 12,
+        },
+      ],
+    });
+    expect(evidence.pr_review_top_prs.map((stat) => stat.repo)).toEqual([
+      "b",
+      "a",
+    ]);
+  });
+
+  test("reads the number of pull requests from the window count", async () => {
+    const { evidence } = await collectWith({
+      prReviewTopPrs: [
+        {
+          owner: "u-stem",
+          repo: "a",
+          pr_number: 1,
+          run_count: 5,
+          total_cost_usd: 1,
+          pr_count: 12,
+        },
+      ],
+    });
+    expect(evidence.pr_review_pr_count).toBe(12);
+  });
+
+  test("groups the owner and repo without case", async () => {
+    const { calls } = await collectWith({});
+    expect(findCall(calls, "prReviewTopPrs")?.text).toContain(
+      "GROUP BY lower(wi.owner), lower(wi.repo), wi.pr_number",
+    );
+  });
+
+  test("sanitizes a hostile owner when it parses the row", async () => {
+    const { evidence } = await collectWith({
+      prReviewTopPrs: [
+        {
+          owner: "<b>u-stem</b> ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+          repo: "a",
+          pr_number: 1,
+          run_count: 1,
+          total_cost_usd: 1,
+          pr_count: 1,
+        },
+      ],
+      prReviewTriggers: [{ key: "label", count: 1 }],
+    });
+    expect(/<b>|ghp_/.test(renderEvidenceMarkdown(evidence))).toBe(false);
+  });
+
+  test("sanitizes a hostile owner again when it builds the line", () => {
+    const evidence: AuditEvidence = {
+      ...PR_REVIEW_EVIDENCE,
+      pr_review_top_prs: [
+        {
+          owner: "<i>x</i>",
+          repo: "r",
+          pr_number: 1,
+          run_count: 1,
+          total_cost_usd: 1,
+        },
+      ],
+    };
+    expect(sectionOf(evidence, PR_SECTION)?.lines).toEqual([
+      "x/r#1: 実行1 / コスト $1.00",
+    ]);
+  });
+});
+
+describe("PR review runs by trigger", () => {
+  test("lists the six triggers in order and the total", () => {
+    expect(sectionOf(PR_REVIEW_EVIDENCE, TRIGGER_SECTION)?.fixed).toEqual([
+      "ラベル: 1件",
+      "再レビューの依頼: 2件",
+      "追跡中のPRへのpush: 6件",
+      "Consoleの操作: 1件",
+      "自動の再試行: 0件",
+      "不明: 2件",
+      "合計: 12件",
+    ]);
+  });
+
+  test("has no droppable lines", () => {
+    expect(sectionOf(PR_REVIEW_EVIDENCE, TRIGGER_SECTION)?.lines).toEqual([]);
+  });
+
+  test("counts a null trigger and a value outside the five as unknown", async () => {
+    const { evidence } = await collectWith({
+      prReviewTriggers: [
+        { key: null, count: 3 },
+        { key: "webhook", count: 1 },
+        { key: "tracked_push", count: "4" },
+      ],
+    });
+    expect(evidence.pr_review_triggers).toEqual({
+      label: 0,
+      rereview_request: 0,
+      tracked_push: 4,
+      console: 0,
+      auto_retry: 0,
+      unknown: 4,
+    });
+  });
+
+  test("totals to the pr_review runs of the run statistics", async () => {
+    const { evidence } = await collectWith({
+      agentRuns: [
+        {
+          stage: "pr_review",
+          run_count: 9,
+          failure_count: 0,
+          avg_turns: 5,
+          total_cost_usd: 3,
+        },
+      ],
+      prReviewTriggers: [
+        { key: null, count: 2 },
+        { key: "label", count: 3 },
+        { key: "auto_retry", count: 4 },
+      ],
+    });
+    const stat = evidence.agent_runs.find((s) => s.stage === "pr_review");
+    expect(sectionOf(evidence, TRIGGER_SECTION)?.fixed.at(-1)).toBe(
+      `合計: ${String(stat?.run_count)}件`,
+    );
+  });
+
+  test("reads the trigger column through jsonb so that a missing column does not fail", async () => {
+    const { calls } = await collectWith({});
+    expect(findCall(calls, "prReviewTriggers")?.text).toContain(
+      "to_jsonb(r) ->> 'trigger' AS key",
+    );
+  });
+});
+
+describe("PR review sections without runs", () => {
+  test("shows only the no-runs line in the pull request section", () => {
+    expect(sectionOf(EMPTY_EVIDENCE, PR_SECTION)).toEqual({
+      heading: PR_SECTION,
+      fixed: [NO_PR_REVIEW_RUNS_LINE],
+      lines: [],
+    });
+  });
+
+  test("shows only the no-runs line in the trigger section", () => {
+    expect(sectionOf(EMPTY_EVIDENCE, TRIGGER_SECTION)).toEqual({
+      heading: TRIGGER_SECTION,
+      fixed: [NO_PR_REVIEW_RUNS_LINE],
+      lines: [],
+    });
+  });
+
+  test.each(PR_SECTIONS)("renders the no-runs line under %s", (heading) => {
+    const block = `## ${heading}\n- ${NO_PR_REVIEW_RUNS_LINE}\n\n`;
+    expect(renderEvidenceMarkdown(EMPTY_EVIDENCE)).toContain(block);
+  });
+});
+
+describe("PR review sections in the evidence pack", () => {
+  test("places the two sections right after the run statistics and the skill versions", () => {
+    const headings = buildEvidenceSections(EMPTY_EVIDENCE).map(
+      (section) => section.heading,
+    );
+    expect(headings).toEqual([
+      "対象",
+      STATS_SECTION,
+      "スキルの版(stage別)",
+      PR_SECTION,
+      TRIGGER_SECTION,
+      "失敗(flow + step別)",
+      "却下",
+      "要人手・ブロック・期限切れ",
+      "修正ラウンド",
+      "レビュー指摘",
+      "通知",
+      "デプロイ",
+      "過去の提案(直近3回)",
+    ]);
+  });
+
+  test("does not change the run statistics line", () => {
+    expect(sectionOf(PR_REVIEW_EVIDENCE, STATS_SECTION)?.lines).toEqual([
+      "pr_review: 実行12 / 失敗0 / 平均turn 10.0 / コスト $7.50 / 前期間 実行0 失敗0",
+    ]);
+  });
+
+  test("does not change the metrics", () => {
+    const without: AuditEvidence = {
+      ...PR_REVIEW_EVIDENCE,
+      pr_review_top_prs: [],
+      pr_review_pr_count: 0,
+      pr_review_triggers: EMPTY_PR_REVIEW_TRIGGER_COUNTS,
+    };
+    expect(metricsOf(PR_REVIEW_EVIDENCE)).toEqual(metricsOf(without));
+  });
+
+  test("issues the two new queries after the existing ones", async () => {
+    const { calls } = await collectWith({});
+    expect(calls.slice(-2).map((call) => call.text)).toEqual([
+      findCall(calls, "prReviewTopPrs")?.text ?? "",
+      findCall(calls, "prReviewTriggers")?.text ?? "",
+    ]);
+  });
+
+  test.each(NEW_QUERIES)(
+    "excludes audit work items and other stages in %s",
+    async (name) => {
+      const { calls } = await collectWith({});
+      expect(findCall(calls, name)?.text).toContain(
+        "wi.kind <> 'audit' AND r.stage = 'pr_review'",
+      );
+    },
+  );
+
+  test.each(NEW_QUERIES)("filters %s by the period", async (name) => {
+    const { calls } = await collectWith({});
+    expect(findCall(calls, name)?.values.slice(0, 2)).toEqual([
+      PERIOD.start.toISOString(),
+      PERIOD.end.toISOString(),
+    ]);
+  });
+
+  test("drops only pull request lines when the evidence is over the limit", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      pr_review_top_prs: Array.from({ length: 10 }, (_, i) => ({
+        owner: `owner-${i}-${"o".repeat(80)}`,
+        repo: `repo-${"p".repeat(80)}`,
+        pr_number: i + 1,
+        run_count: 10 - i,
+        total_cost_usd: 1,
+      })),
+      pr_review_pr_count: 30,
+      pr_review_triggers: PR_REVIEW_EVIDENCE.pr_review_triggers,
+    };
+    const truncated = truncateEvidence(buildEvidenceSections(evidence), 6000);
+    const prSection = truncated.find(
+      (section) => section.heading === PR_SECTION,
+    );
+    const triggerSection = truncated.find(
+      (section) => section.heading === TRIGGER_SECTION,
+    );
+    const summary = {
+      prOmitted: prSection?.lines.at(-1)?.startsWith("省略"),
+      prFixed: prSection?.fixed,
+      triggerFixed: triggerSection?.fixed.length,
+      triggerLines: triggerSection?.lines,
+    };
+    expect(summary).toEqual({
+      prOmitted: true,
+      prFixed: ["対象のPR: 30件(上位10件まで載せる)"],
+      triggerFixed: 7,
+      triggerLines: [],
+    });
+  });
+
+  test("stays within 12,000 characters with the pull request lines", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      pr_review_top_prs: Array.from({ length: 10 }, (_, i) => ({
+        owner: `owner-${"o".repeat(120)}`,
+        repo: `repo-${"p".repeat(120)}`,
+        pr_number: i + 1,
+        run_count: 10 - i,
+        total_cost_usd: 1,
+      })),
+      pr_review_pr_count: 10,
+      pr_review_triggers: PR_REVIEW_EVIDENCE.pr_review_triggers,
+    };
+    expect(renderEvidenceMarkdown(evidence).length).toBeLessThanOrEqual(12000);
   });
 });
