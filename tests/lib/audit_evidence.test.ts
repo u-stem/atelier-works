@@ -1603,6 +1603,17 @@ describe("skill versions", () => {
     );
   });
 
+  test("counts the runs of a skill version by the distinct run id, not by the element rows", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "skillVersions")?.text).toContain(
+      "count(DISTINCT v.id) AS run_count",
+    );
+  });
+
   test("does not hide another failure of the skill-version query", async () => {
     const { sql } = createRoutedSqlClient();
     const failing: SqlClient = (strings, ...values) => {

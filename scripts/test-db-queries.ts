@@ -4,6 +4,7 @@
 //
 // 使い方: COMPOSE_FILE=<compose> SCRATCH_DB=<db> bun run scripts/test-db-queries.ts
 
+import { collectAuditEvidence } from "../f/factory/lib/audit_evidence.ts";
 import {
   APPROVAL_REDISPATCH_NOTE_PREFIX,
   INFO_NOTICE_KINDS,
@@ -13144,6 +13145,73 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
   check(
     "work item stop: a work item that does not exist reads as no row",
     (await stopState(2 ** 52)) === null,
+  );
+}
+
+// 監査の証跡パックの「スキルの版」は、導出表が要素ごとに1行を作るので、実行の数を`count(DISTINCT v.id)`で数える。
+// 専用のstageに3回の実行を置く。
+// skillsNoElementHash: 空の要素が2つ(sha256が空の要素と、sha256が無い要素)。
+// skillsMixed: 有効な要素と空の要素が1つずつ。
+// skillsNull: スキルの記録が無い。
+{
+  const skillsNoElementHash = await issueWorkItem(
+    987_201,
+    1,
+    "picked",
+    "skill versions",
+  );
+  const skillsMixed = await issueWorkItem(
+    987_202,
+    1,
+    "picked",
+    "skill versions",
+  );
+  const skillsNull = await issueWorkItem(
+    987_203,
+    1,
+    "picked",
+    "skill versions",
+  );
+  const skillStage = "skill_versions_probe";
+  const skillRunRow = (id: number, skills: string | null): string =>
+    `(${String(id)}, '${skillStage}', 1, 'm', ${skills === null ? "NULL" : `'${skills}'::jsonb`})`;
+  await execPsqlAsync(
+    target,
+    `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, skills) VALUES ${[
+      skillRunRow(
+        skillsNoElementHash,
+        '[{"path":"a/SKILL.md","sha256":""},{"path":"b/SKILL.md"}]',
+      ),
+      skillRunRow(
+        skillsMixed,
+        '[{"path":".claude/skills/c/SKILL.md","sha256":"0123456789abcdef","bundle_sha256":""},{"path":"d/SKILL.md","sha256":""}]',
+      ),
+      skillRunRow(skillsNull, null),
+    ].join(", ")}`,
+  );
+  const skillEvidence = await collectAuditEvidence(
+    {
+      period: {
+        start: new Date(Date.now() - 86_400_000),
+        end: new Date(Date.now() + 86_400_000),
+        unaudited_gap_days: 0,
+      },
+      instanceName: "qdb",
+    },
+    sql,
+  );
+  const skillRows = skillEvidence.skill_versions.filter(
+    (row) => row.stage === skillStage,
+  );
+  check(
+    "audit skill versions: a run with two empty elements counts once in the unrecorded row",
+    skillRows.find((row) => row.skill === null)?.run_count === 3,
+    skillRows,
+  );
+  check(
+    "audit skill versions: a run with a valid element and an empty one counts in the version row",
+    skillRows.find((row) => row.skill === "c")?.run_count === 1,
+    skillRows,
   );
 }
 

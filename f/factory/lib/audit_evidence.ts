@@ -878,8 +878,9 @@ function previousPeriodOf(period: AuditPeriod): { start: Date; end: Date } {
 
 /**
  * 期間内の実行を、stageと、注入したスキルの版(SKILL.mdと同梱ファイルのハッシュの先頭12桁)ごとに数える。
- * スキルの記録が無い実行(`skills`がNULLか空の配列)と、`sha256`が空の要素は、スキルの列がNULLの1行にまとめる。
- * パスだけがあって`sha256`が無い要素も、パスごとに分けず、同じ1行に寄せる。
+ * スキルの記録が無い実行(`skills`がNULLか空の配列)と、`sha256`か`path`が空の要素は、パスごとに分けず、スキルの列がNULLの1行にまとめる。
+ * 導出表は要素ごとに1行を作るので、実行は`count(DISTINCT v.id)`で数える。
+ * 1回の実行が、版の行と未記録の行の両方に入ることがある。
  * 日はJSTで切る。
  * `skills`列を足すmigrationが当たる前は列が無いエラーになるので、そのときは版を集めず、空を返す。
  * 配列の要素のうちオブジェクトでないものは、その要素だけを除く。壊れた1件で集計全体を失敗させないためである。
@@ -896,11 +897,12 @@ async function fetchSkillVersionRows(
              v.path,
              v.sha,
              v.bundle,
-             count(*) AS run_count,
+             count(DISTINCT v.id) AS run_count,
              to_char(min(v.created_at) AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD') AS first_seen,
              to_char(max(v.created_at) AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD') AS last_seen
       FROM (
-        SELECT r.stage,
+        SELECT r.id,
+               r.stage,
                r.created_at,
                CASE WHEN coalesce(s.sha256, '') = '' OR coalesce(s.path, '') = '' THEN NULL ELSE s.path END AS path,
                CASE WHEN coalesce(s.sha256, '') = '' OR coalesce(s.path, '') = '' THEN NULL ELSE left(s.sha256, 12) END AS sha,
