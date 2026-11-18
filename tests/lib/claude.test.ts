@@ -292,24 +292,6 @@ describe("buildSystemPrompt skill provenance", () => {
     );
   });
 
-  test("records the sha256 of the whole concatenated prompt", async () => {
-    let written = "";
-    await buildSystemPrompt({
-      skillNames: ["a"],
-      factoryCloneDir: "/clone",
-      readFile: readFrom(files),
-      writeTempFile: async (content) => {
-        written = content;
-        return { path: "/tmp/prov-whole.md", cleanup: async () => {} };
-      },
-      listSkillFiles: async () => [],
-      readCloneHead: async () => FAKE_CLONE_HEAD,
-    });
-    expect(skillProvenanceFor("/tmp/prov-whole.md")?.promptSha256).toBe(
-      sha256Hex(written),
-    );
-  });
-
   test("records the HEAD of the clone", async () => {
     await buildSystemPrompt({
       skillNames: [],

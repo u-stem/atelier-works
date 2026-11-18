@@ -121,13 +121,12 @@ export const COMMON_SKILL_NAMES: readonly string[] = ["factory-writing"];
 
 /**
  * 1回の`buildSystemPrompt`が注入したスキルの版。
- * `skills`は注入した順(共通のスキルが先頭)で、`promptSha256`は連結した全体のsha256である。
+ * `skills`は注入した順(共通のスキルが先頭)である。
  */
 export type SkillProvenance = {
   readonly skills: readonly SkillRef[];
   /** スキルを読んだときのcloneのHEAD(40桁)。取れなかったときはnull。 */
   readonly cloneSha: string | null;
-  readonly promptSha256: string;
 };
 
 type ListSkillFiles = (skillDir: string) => Promise<readonly string[]>;
@@ -290,7 +289,6 @@ export async function buildSystemPrompt(
   provenanceByPromptFile.set(file.path, {
     skills,
     cloneSha: await readCloneHeadOrNull(readCloneHead, opts.factoryCloneDir),
-    promptSha256: sha256Hex(prompt),
   });
   return {
     path: file.path,

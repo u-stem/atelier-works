@@ -2384,10 +2384,10 @@ type AgentRunWrite = {
 };
 
 /**
- * `agent_runs`への記録を、新しい列の多い順に並べた段である。
- * 列は古い順に`model_usage`と`failure_reason`、`trigger`、`skills`と`skill_clone_sha`の順で足した。
- * migrationも同じ順に当たるので、新しい列だけが無い状態は、この順に新しい側から欠ける。
- * 最も新しい段の文は、`trigger`を最後の列にする(値の並びの末尾が`trigger`になる)。
+ * `agent_runs`への記録を、書く列の多い順に並べた段である。
+ * migrationは`model_usage`と`failure_reason`、`trigger`、`skills`と`skill_clone_sha`の順に当たるので、
+ * 列が無い状態は、この順の新しい側から欠ける。段も、新しい列から先に除く。
+ * 最初の段の文は、`trigger`を最後の列にする(値の並びの末尾が`trigger`になる)。
  */
 function agentRunWrites(record: AgentRunRecord): readonly AgentRunWrite[] {
   const trigger = record.trigger ?? null;
