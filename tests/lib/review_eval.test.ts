@@ -389,20 +389,59 @@ describe("scoreRun", () => {
     expect(score.false_positives).toBe(1);
   });
 
-  test("counts an imo finding away from every defect as a false positive", () => {
+  test("does not count an imo finding away from every defect as a false positive", () => {
     const score = scoreRun(DEFECT_CASE, [finding({ line: 40, kind: "imo" })]);
+
+    expect(score.false_positives).toBe(0);
+  });
+
+  test("counts an imo finding away from every defect as off target", () => {
+    const score = scoreRun(DEFECT_CASE, [
+      finding({ line: 40, kind: "imo" }),
+      finding({ line: 41, kind: "imo" }),
+    ]);
+
+    expect(score.imo_off_target).toBe(2);
+  });
+
+  test("does not count an imo finding on a defect as off target", () => {
+    const score = scoreRun(DEFECT_CASE, [finding({ line: 17, kind: "imo" })]);
+
+    expect(score.imo_off_target).toBe(0);
+  });
+
+  test("counts an imo finding in a defect-free case as imo on clean", () => {
+    const score = scoreRun(CLEAN_CASE, [finding({ kind: "imo" })]);
+
+    expect(score.imo_on_clean).toBe(1);
+  });
+
+  test("does not count an imo finding in a defect-free case as off target", () => {
+    const score = scoreRun(CLEAN_CASE, [finding({ kind: "imo" })]);
+
+    expect(score.imo_off_target).toBe(0);
+  });
+
+  test("does not count an imo finding in a case with defects as imo on clean", () => {
+    const score = scoreRun(DEFECT_CASE, [finding({ line: 40, kind: "imo" })]);
+
+    expect(score.imo_on_clean).toBe(0);
+  });
+
+  test("counts a must finding that points at no defect as a false positive", () => {
+    const score = scoreRun(DEFECT_CASE, [finding({ line: 40, kind: "must" })]);
 
     expect(score.false_positives).toBe(1);
   });
 
   test("records where each false positive points", () => {
     const score = scoreRun(DEFECT_CASE, [
-      finding({ line: 40, kind: "imo" }),
+      finding({ line: 40 }),
       finding({ line: null }),
     ]);
 
     expect(score.false_positive_locations).toEqual([
-      "src/paginate.ts:40 imo",
+      "src/paginate.ts:40 must",
       "src/paginate.ts:- must",
     ]);
   });
@@ -512,6 +551,23 @@ describe("countRuns", () => {
     expect(counts.clean_runs).toBe(0);
   });
 
+  test("sums the imo findings off target and on clean cases over the runs", () => {
+    const outcomes: RunOutcome[] = [
+      scored(DEFECT_CASE, [finding({ line: 40, kind: "imo" })]),
+      scored(DEFECT_CASE, [finding({ line: 41, kind: "imo" })]),
+    ];
+    const clean: RunOutcome[] = [
+      scored(CLEAN_CASE, [finding({ kind: "imo" })]),
+    ];
+
+    const sum = addCounts(
+      countRuns(DEFECT_CASE, outcomes),
+      countRuns(CLEAN_CASE, clean),
+    );
+
+    expect([sum.imo_off_target, sum.imo_on_clean]).toEqual([2, 1]);
+  });
+
   test("adds two tallies field by field", () => {
     const one = countRuns(DEFECT_CASE, [scored(DEFECT_CASE, [finding()])]);
     const two = countRuns(DEFECT_CASE, [scored(DEFECT_CASE, [])]);
@@ -557,6 +613,21 @@ describe("ratesOf", () => {
     const rates = ratesOf(countRuns(CLEAN_CASE, outcomes));
 
     expect(rates.clean_flag_rate).toBe(0.5);
+  });
+
+  test("gives a false positive rate of zero for a review that only has imo findings", () => {
+    const rates = ratesOf(
+      addCounts(
+        countRuns(DEFECT_CASE, [
+          scored(DEFECT_CASE, [finding({ line: 40, kind: "imo" })]),
+        ]),
+        countRuns(CLEAN_CASE, [scored(CLEAN_CASE, [finding({ kind: "imo" })])]),
+      ),
+    );
+
+    expect([rates.false_positives_per_run, rates.clean_flag_rate]).toEqual([
+      0, 0,
+    ]);
   });
 
   test("gives null rates when the denominator is zero", () => {
@@ -648,6 +719,8 @@ describe("buildEvalReport", () => {
       "false_positives_per_run_excluding_low",
       "clean_flag_rate",
       "clean_flag_rate_excluding_low",
+      "imo_off_target",
+      "imo_on_clean",
     ]);
   });
 });
@@ -708,6 +781,40 @@ describe("formatEvalMarkdown", () => {
     const markdown = formatEvalMarkdown(report);
 
     expect(markdown).toContain("| off-by-one | 1 | 1/1 | 0 | 0/1 | 0 |");
+  });
+
+  test("shows the imo findings off target and on defect-free cases per ref", () => {
+    const withImo = buildEvalReport(
+      [
+        {
+          ref: "main",
+          system_prompt_sha256: "a".repeat(64),
+          cases: [
+            {
+              eval_case: DEFECT_CASE,
+              outcomes: [
+                scored(DEFECT_CASE, [finding({ line: 40, kind: "imo" })]),
+              ],
+            },
+            {
+              eval_case: CLEAN_CASE,
+              outcomes: [
+                scored(CLEAN_CASE, [
+                  finding({ kind: "imo" }),
+                  finding({ line: 2, kind: "imo" }),
+                ]),
+              ],
+            },
+          ],
+        },
+      ],
+      1,
+    );
+
+    const markdown = formatEvalMarkdown(withImo);
+
+    expect(markdown).toContain("| imo findings off target | 1 |");
+    expect(markdown).toContain("| imo findings on defect-free cases | 2 |");
   });
 
   test("shows the number of invalid runs of each ref", () => {

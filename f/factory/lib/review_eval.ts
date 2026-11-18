@@ -23,8 +23,12 @@ const FINDING_KINDS: readonly ReviewFindingKind[] = [
   "q",
 ];
 
-/** 誤検知に数える指摘の種類。nitsと質問は、問題があるという主張ではないので数えない。 */
-const CLAIMING_KINDS: readonly ReviewFindingKind[] = ["must", "imo"];
+/**
+ * 誤検知に数える指摘の種類。`must`は、マージ前に直すべきという主張なので、位置が外れれば誤検知にする。
+ * `imo`は提案なので、誤検知には数えず、`imo_off_target`と`imo_on_clean`に別に数える。
+ * nitsと質問は、問題があるという主張ではないので、どちらにも数えない。
+ */
+const CLAIMING_KINDS: readonly ReviewFindingKind[] = ["must"];
 
 const CONFIDENCES = ["high", "medium", "low"] as const;
 export type EvalConfidence = (typeof CONFIDENCES)[number];
@@ -223,6 +227,10 @@ export type RunScore = {
   readonly false_positives_excluding_low: number;
   /** 誤検知にした指摘の位置(`path:line kind`)。ケースの正解が妥当かを見直す手がかりにする。 */
   readonly false_positive_locations: readonly string[];
+  /** どの欠陥の位置も指さない`imo`の指摘のうち、欠陥のあるケースでの件数。 */
+  readonly imo_off_target: number;
+  /** どの欠陥の位置も指さない`imo`の指摘のうち、無欠陥のケースでの件数。 */
+  readonly imo_on_clean: number;
   readonly finding_count: number;
 };
 
@@ -239,7 +247,8 @@ function pointsAt(finding: EvalFinding, defect: ExpectedDefect): boolean {
 /**
  * 1回の出力を、ケースの正解と照合する。
  * - 検出: 欠陥の行(前後に`LINE_TOLERANCE`行)に重なり、欠陥の`kinds`に含まれる種類の指摘がある。
- * - 誤検知: どの欠陥の位置も指さない、種類が`must`か`imo`の指摘。無欠陥のケースでは、そのような指摘すべて。
+ * - 誤検知: どの欠陥の位置も指さない、種類が`must`の指摘。無欠陥のケースでは、そのような指摘すべて。
+ * - `imo`: どの欠陥の位置も指さない指摘を、欠陥のあるケースでは`imo_off_target`、無欠陥のケースでは`imo_on_clean`に数える。
  */
 export function scoreRun(
   evalCase: EvalCase,
@@ -252,6 +261,12 @@ export function scoreRun(
     CLAIMING_KINDS.includes(f.kind) &&
     !evalCase.defects.some((defect) => pointsAt(f, defect));
   const falsePositives = findings.filter(isFalsePositive);
+  const imoOffDefects = findings.filter(
+    (f) =>
+      f.kind === "imo" &&
+      !evalCase.defects.some((defect) => pointsAt(f, defect)),
+  ).length;
+  const isClean = evalCase.defects.length === 0;
   return {
     detected: evalCase.defects
       .filter((d) => detects(findings, d))
@@ -264,6 +279,8 @@ export function scoreRun(
     false_positive_locations: falsePositives.map(
       (f) => `${f.path}:${f.line === null ? "-" : String(f.line)} ${f.kind}`,
     ),
+    imo_off_target: isClean ? 0 : imoOffDefects,
+    imo_on_clean: isClean ? imoOffDefects : 0,
     finding_count: findings.length,
   };
 }
@@ -306,6 +323,10 @@ export type EvalCounts = {
   /** そのうち、誤検知が1件以上あった実行の数。 */
   readonly clean_runs_flagged: number;
   readonly clean_runs_flagged_excluding_low: number;
+  /** 照合した実行の`imo_off_target`の和。誤検知率の式には入れない。 */
+  readonly imo_off_target: number;
+  /** 照合した実行の`imo_on_clean`の和。誤検知率の式には入れない。 */
+  readonly imo_on_clean: number;
   readonly cost_usd: number;
 };
 
@@ -321,6 +342,8 @@ const ZERO_COUNTS: EvalCounts = {
   clean_runs: 0,
   clean_runs_flagged: 0,
   clean_runs_flagged_excluding_low: 0,
+  imo_off_target: 0,
+  imo_on_clean: 0,
   cost_usd: 0,
 };
 
@@ -340,6 +363,8 @@ export function addCounts(a: EvalCounts, b: EvalCounts): EvalCounts {
     clean_runs_flagged: a.clean_runs_flagged + b.clean_runs_flagged,
     clean_runs_flagged_excluding_low:
       a.clean_runs_flagged_excluding_low + b.clean_runs_flagged_excluding_low,
+    imo_off_target: a.imo_off_target + b.imo_off_target,
+    imo_on_clean: a.imo_on_clean + b.imo_on_clean,
     cost_usd: a.cost_usd + b.cost_usd,
   };
 }
@@ -375,6 +400,8 @@ export function countRuns(
         clean_runs_flagged: isClean && score.false_positives > 0 ? 1 : 0,
         clean_runs_flagged_excluding_low:
           isClean && score.false_positives_excluding_low > 0 ? 1 : 0,
+        imo_off_target: score.imo_off_target,
+        imo_on_clean: score.imo_on_clean,
         cost_usd: cost,
       });
     }
@@ -460,23 +487,32 @@ export type EvalReport = {
   readonly clean_case_count: number;
   readonly runs_per_case: number;
   /** 各指標の式。同じ入力で再実行したとき、母数と式が同じであることを確かめる拠り所にする。 */
-  readonly formulas: Readonly<Record<keyof EvalRates, string>>;
+  readonly formulas: Readonly<Record<keyof EvalRates | ImoCountName, string>>;
   readonly refs: readonly RefReport[];
 };
 
-export const EVAL_FORMULAS: Readonly<Record<keyof EvalRates, string>> = {
+/** 率にせず件数だけを出す、`imo`の指標の名前。 */
+type ImoCountName = "imo_off_target" | "imo_on_clean";
+
+export const EVAL_FORMULAS: Readonly<
+  Record<keyof EvalRates | ImoCountName, string>
+> = {
   detection_rate:
     "defects detected / defects expected, summed over the scored runs",
   detection_rate_excluding_low:
     "the same, not counting a defect that only low-confidence findings detected",
   false_positives_per_run:
-    "must or imo findings that point at no defect / scored runs",
+    "must findings that point at no defect / scored runs",
   false_positives_per_run_excluding_low:
     "the same, not counting low-confidence findings",
   clean_flag_rate:
     "scored runs of defect-free cases with a false positive / scored runs of defect-free cases",
   clean_flag_rate_excluding_low:
     "the same, not counting low-confidence findings",
+  imo_off_target:
+    "count of imo findings that point at no defect in cases with defects; not part of any rate",
+  imo_on_clean:
+    "count of imo findings in defect-free cases; not part of any rate",
 };
 
 function runSummary(outcome: RunOutcome): CaseReport["runs"][number] {
@@ -628,6 +664,14 @@ export function formatEvalMarkdown(report: EvalReport): string {
           r.rates.clean_flag_rate_excluding_low,
         ),
       ),
+    ]),
+    row([
+      "imo findings off target",
+      ...refs.map((r) => String(r.counts.imo_off_target)),
+    ]),
+    row([
+      "imo findings on defect-free cases",
+      ...refs.map((r) => String(r.counts.imo_on_clean)),
     ]),
     row(["scored runs", ...refs.map((r) => String(r.counts.runs_scored))]),
     row(["invalid runs", ...refs.map((r) => String(r.counts.runs_invalid))]),
