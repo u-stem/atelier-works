@@ -441,7 +441,8 @@ function selectCases(
 /**
  * 参照ごとのスキルで、ケースごとに`runs`回レビューさせ、結果を集める。
  * 1回ごとに参照を入れ替えて起動する。時間による応答の揺れが、片方の参照に偏らないようにするため。
- * 費用の合計が`maxTotalUsd`に達したら、残りは起動せず`skipped`にする。
+ * 使った費用に、これから起動する全参照の1回あたりの上限(`maxBudgetUsd`)を足した額が`maxTotalUsd`を超えるなら、残りは起動せず`skipped`にする。
+ * 起動の後に使った費用が上限を超えないようにするため。
  * `dryRun`では、Claudeを起動せず、すべての実行を`skipped`にする。
  */
 export async function runEvaluation(
@@ -502,7 +503,11 @@ export async function runEvaluation(
       for (let run = 1; run <= options.runs; run += 1) {
         // 上限の判定は(ケース, 回)ごとに1回、全参照を始める前に行う。
         // 参照ごとに判定すると、片方だけが採点されて、比較の分母がずれる。
-        const skip = options.dryRun || spentUsd >= options.maxTotalUsd;
+        // 実費は上限までかかりうるので、これから起動する全参照の上限を足して判定する。
+        const skip =
+          options.dryRun ||
+          spentUsd + prepared.length * options.maxBudgetUsd >
+            options.maxTotalUsd;
         for (const { ref, systemPrompt } of prepared) {
           const list = outcomes.get(`${ref}\n${evalCase.id}`) ?? [];
           if (skip) {
@@ -540,7 +545,7 @@ export async function runEvaluation(
 
 /**
  * 1回起動する。例外は、理由つきの失敗にして返す。1回の例外で、それまでの結果を失わないため。
- * 費用が分からない失敗は、その1回の上限(`maxBudgetUsd`)を費用とする。
+ * 費用が分からない実行は、成功も失敗も、その1回の上限(`maxBudgetUsd`)を費用とする。
  * 分からないまま0と数えると、費用の上限を超えうる。
  */
 async function runOnce(

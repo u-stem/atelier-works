@@ -275,11 +275,23 @@ export type RunScore = {
   readonly imo_off_target: number;
   /** どの欠陥の位置も指さない`imo`の指摘のうち、無欠陥のケースでの件数。 */
   readonly imo_on_clean: number;
+  /**
+   * 行に紐付かない(`line`が`null`の)指摘の件数。種類は問わない。
+   * ファイル単位の指摘は、スキルが`line: null`にする決まりなので、検出にも誤検知にも数えない。
+   */
+  readonly unlocated: number;
   readonly finding_count: number;
 };
 
-function pointsAt(finding: EvalFinding, defect: ExpectedDefect): boolean {
-  if (finding.path !== defect.path || finding.line === null) return false;
+/** 行に紐付く指摘。`line`が数であることを型に持たせる。 */
+type LocatedFinding = EvalFinding & { readonly line: number };
+
+function isLocated(finding: EvalFinding): finding is LocatedFinding {
+  return finding.line !== null;
+}
+
+function pointsAt(finding: LocatedFinding, defect: ExpectedDefect): boolean {
+  if (finding.path !== defect.path) return false;
   const first = finding.line;
   const last = Math.max(finding.end_line ?? first, first);
   return (
@@ -293,15 +305,17 @@ function pointsAt(finding: EvalFinding, defect: ExpectedDefect): boolean {
  * - 検出: 欠陥の行(前後に`LINE_TOLERANCE`行)に重なり、欠陥の`kinds`に含まれる種類の指摘がある。
  * - 誤検知: どの欠陥の位置も指さない、種類が`must`の指摘。無欠陥のケースでは、そのような指摘すべて。
  * - `imo`: どの欠陥の位置も指さない指摘を、欠陥のあるケースでは`imo_off_target`、無欠陥のケースでは`imo_on_clean`に数える。
+ * - 行に紐付かない指摘は、上の3つのどれにも数えず、`unlocated`に数える。
  */
 export function scoreRun(
   evalCase: EvalCase,
-  findings: readonly EvalFinding[],
+  allFindings: readonly EvalFinding[],
 ): RunScore {
+  const findings = allFindings.filter(isLocated);
   const notLow = findings.filter((f) => f.confidence !== "low");
-  const detects = (pool: readonly EvalFinding[], defect: ExpectedDefect) =>
+  const detects = (pool: readonly LocatedFinding[], defect: ExpectedDefect) =>
     pool.some((f) => pointsAt(f, defect) && defect.kinds.includes(f.kind));
-  const isFalsePositive = (f: EvalFinding) =>
+  const isFalsePositive = (f: LocatedFinding) =>
     CLAIMING_KINDS.includes(f.kind) &&
     !evalCase.defects.some((defect) => pointsAt(f, defect));
   const falsePositives = findings.filter(isFalsePositive);
@@ -321,11 +335,12 @@ export function scoreRun(
     false_positives: falsePositives.length,
     false_positives_excluding_low: notLow.filter(isFalsePositive).length,
     false_positive_locations: falsePositives.map(
-      (f) => `${f.path}:${f.line === null ? "-" : String(f.line)} ${f.kind}`,
+      (f) => `${f.path}:${String(f.line)} ${f.kind}`,
     ),
     imo_off_target: isClean ? 0 : imoOffDefects,
     imo_on_clean: isClean ? imoOffDefects : 0,
-    finding_count: findings.length,
+    unlocated: allFindings.length - findings.length,
+    finding_count: allFindings.length,
   };
 }
 
@@ -371,6 +386,8 @@ export type EvalCounts = {
   readonly imo_off_target: number;
   /** 照合した実行の`imo_on_clean`の和。誤検知率の式には入れない。 */
   readonly imo_on_clean: number;
+  /** 照合した実行の`unlocated`の和。検出率にも誤検知の式にも入れない。 */
+  readonly unlocated: number;
   readonly cost_usd: number;
 };
 
@@ -388,6 +405,7 @@ const ZERO_COUNTS: EvalCounts = {
   clean_runs_flagged_excluding_low: 0,
   imo_off_target: 0,
   imo_on_clean: 0,
+  unlocated: 0,
   cost_usd: 0,
 };
 
@@ -409,6 +427,7 @@ export function addCounts(a: EvalCounts, b: EvalCounts): EvalCounts {
       a.clean_runs_flagged_excluding_low + b.clean_runs_flagged_excluding_low,
     imo_off_target: a.imo_off_target + b.imo_off_target,
     imo_on_clean: a.imo_on_clean + b.imo_on_clean,
+    unlocated: a.unlocated + b.unlocated,
     cost_usd: a.cost_usd + b.cost_usd,
   };
 }
@@ -446,6 +465,7 @@ export function countRuns(
           isClean && score.false_positives_excluding_low > 0 ? 1 : 0,
         imo_off_target: score.imo_off_target,
         imo_on_clean: score.imo_on_clean,
+        unlocated: score.unlocated,
         cost_usd: cost,
       });
     }
@@ -513,6 +533,7 @@ export type CaseReport = {
     readonly detected?: readonly string[];
     readonly false_positives?: number;
     readonly false_positive_locations?: readonly string[];
+    readonly unlocated?: number;
     readonly reason?: string;
   }[];
 };
@@ -531,15 +552,15 @@ export type EvalReport = {
   readonly clean_case_count: number;
   readonly runs_per_case: number;
   /** 各指標の式。同じ入力で再実行したとき、母数と式が同じであることを確かめる拠り所にする。 */
-  readonly formulas: Readonly<Record<keyof EvalRates | ImoCountName, string>>;
+  readonly formulas: Readonly<Record<keyof EvalRates | CountOnlyName, string>>;
   readonly refs: readonly RefReport[];
 };
 
-/** 率にせず件数だけを出す、`imo`の指標の名前。 */
-type ImoCountName = "imo_off_target" | "imo_on_clean";
+/** 率にせず件数だけを出す指標の名前。 */
+type CountOnlyName = "imo_off_target" | "imo_on_clean" | "unlocated";
 
 export const EVAL_FORMULAS: Readonly<
-  Record<keyof EvalRates | ImoCountName, string>
+  Record<keyof EvalRates | CountOnlyName, string>
 > = {
   detection_rate:
     "defects detected / defects expected, summed over the scored runs",
@@ -557,6 +578,8 @@ export const EVAL_FORMULAS: Readonly<
     "count of imo findings that point at no defect in cases with defects; not part of any rate",
   imo_on_clean:
     "count of imo findings in defect-free cases; not part of any rate",
+  unlocated:
+    "count of findings without a line, of any kind; counted as neither a detection nor a false positive, and not part of any rate",
 };
 
 function runSummary(outcome: RunOutcome): CaseReport["runs"][number] {
@@ -566,6 +589,7 @@ function runSummary(outcome: RunOutcome): CaseReport["runs"][number] {
       detected: outcome.score.detected,
       false_positives: outcome.score.false_positives,
       false_positive_locations: outcome.score.false_positive_locations,
+      unlocated: outcome.score.unlocated,
     };
   }
   if (outcome.status === "invalid") {
@@ -716,6 +740,10 @@ export function formatEvalMarkdown(report: EvalReport): string {
     row([
       "imo findings on defect-free cases",
       ...refs.map((r) => String(r.counts.imo_on_clean)),
+    ]),
+    row([
+      "findings without a line",
+      ...refs.map((r) => String(r.counts.unlocated)),
     ]),
     row(["scored runs", ...refs.map((r) => String(r.counts.runs_scored))]),
     row(["invalid runs", ...refs.map((r) => String(r.counts.runs_invalid))]),

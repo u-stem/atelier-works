@@ -532,7 +532,9 @@ describe("runEvaluation", () => {
     });
   });
 
-  test("stops starting runs once the total budget is spent and marks the rest skipped", async () => {
+  // 起動の前に、これから起動する全参照の1回あたりの上限(1 x 2参照)を、使った費用に足して判定する。
+  // 1ケース目は0 + 2 <= 2.5で起動し、実費は1になる。2ケース目は1 + 2 > 2.5で起動しない。
+  test("stops starting runs once the spent cost plus the per-run budgets would pass the total and marks the rest skipped", async () => {
     const harness = createHarness();
 
     const report = await runEvaluation(
@@ -540,7 +542,7 @@ describe("runEvaluation", () => {
         ...OPTIONS,
         runs: 1,
         caseIds: ["sql-injection", "clean-clamp"],
-        maxTotalUsd: 1,
+        maxTotalUsd: 2.5,
       },
       harness.deps,
     );
@@ -549,20 +551,60 @@ describe("runEvaluation", () => {
     expect(report.refs.map((r) => r.counts.runs_skipped)).toEqual([1, 1]);
   });
 
-  test("starts every ref of a case and run once the budget allows it", async () => {
+  test("does not start a run when the per-run budgets of every ref alone would pass the total", async () => {
+    const harness = createHarness();
+
+    const report = await runEvaluation(
+      {
+        ...OPTIONS,
+        runs: 1,
+        caseIds: ["sql-injection"],
+        maxBudgetUsd: 1,
+        maxTotalUsd: 1.5,
+      },
+      harness.deps,
+    );
+
+    expect(harness.calls.length).toBe(0);
+    expect(report.refs.map((r) => r.counts.runs_skipped)).toEqual([1, 1]);
+  });
+
+  test("starts a run when the per-run budgets of every ref equal the total", async () => {
     const harness = createHarness();
 
     await runEvaluation(
       {
         ...OPTIONS,
         runs: 1,
-        caseIds: ["sql-injection", "clean-clamp"],
-        maxTotalUsd: 0.5,
+        caseIds: ["sql-injection"],
+        maxBudgetUsd: 1,
+        maxTotalUsd: 2,
       },
       harness.deps,
     );
 
     expect(harness.calls.length).toBe(2);
+  });
+
+  test("keeps the reported cost within the total", async () => {
+    const harness = createHarness(async (input) => ({
+      ...(await perfectReview(input.prompt)),
+      cost_usd: 1,
+    }));
+
+    const report = await runEvaluation(
+      {
+        ...OPTIONS,
+        runs: 3,
+        caseIds: ["sql-injection", "clean-clamp"],
+        maxBudgetUsd: 1,
+        maxTotalUsd: 5,
+      },
+      harness.deps,
+    );
+
+    const total = report.refs.reduce((sum, r) => sum + r.counts.cost_usd, 0);
+    expect(total).toBeLessThanOrEqual(5);
   });
 
   test("scores the same cases for every ref when the budget runs out", async () => {
@@ -573,7 +615,7 @@ describe("runEvaluation", () => {
         ...OPTIONS,
         runs: 1,
         caseIds: ["sql-injection", "clean-clamp"],
-        maxTotalUsd: 0.5,
+        maxTotalUsd: 2.5,
       },
       harness.deps,
     );
@@ -663,6 +705,21 @@ describe("runEvaluation", () => {
     const harness = createHarness(async () => ({
       ok: false,
       reason: "claude -p exited with code 1",
+      cost_usd: null,
+    }));
+
+    const report = await runEvaluation(
+      { ...OPTIONS, runs: 1, caseIds: ["sql-injection"], maxBudgetUsd: 1 },
+      harness.deps,
+    );
+
+    expect(report.refs.map((r) => r.counts.cost_usd)).toEqual([1, 1]);
+  });
+
+  test("reports the per-run budget as the cost of a successful run with no known cost", async () => {
+    const harness = createHarness(async () => ({
+      ok: true,
+      output: reviewOutput([]),
       cost_usd: null,
     }));
 

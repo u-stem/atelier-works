@@ -514,13 +514,59 @@ describe("scoreRun", () => {
   test("records where each false positive points", () => {
     const score = scoreRun(DEFECT_CASE, [
       finding({ line: 40 }),
-      finding({ line: null }),
+      finding({ line: 41 }),
     ]);
 
     expect(score.false_positive_locations).toEqual([
       "src/paginate.ts:40 must",
-      "src/paginate.ts:- must",
+      "src/paginate.ts:41 must",
     ]);
+  });
+
+  test("does not count a must finding without a line as a false positive", () => {
+    const score = scoreRun(DEFECT_CASE, [finding({ line: null })]);
+
+    expect(score.false_positives).toBe(0);
+  });
+
+  test("does not count a must finding without a line in a defect-free case as a false positive", () => {
+    const score = scoreRun(CLEAN_CASE, [finding({ line: null })]);
+
+    expect(score.false_positives).toBe(0);
+  });
+
+  test("does not record a finding without a line as a false positive location", () => {
+    const score = scoreRun(DEFECT_CASE, [finding({ line: null })]);
+
+    expect(score.false_positive_locations).toEqual([]);
+  });
+
+  test("does not count an imo finding without a line as off target", () => {
+    const score = scoreRun(DEFECT_CASE, [finding({ line: null, kind: "imo" })]);
+
+    expect(score.imo_off_target).toBe(0);
+  });
+
+  test("does not count an imo finding without a line in a defect-free case as imo on clean", () => {
+    const score = scoreRun(CLEAN_CASE, [finding({ line: null, kind: "imo" })]);
+
+    expect(score.imo_on_clean).toBe(0);
+  });
+
+  test("counts findings without a line as unlocated whatever their kind", () => {
+    const score = scoreRun(DEFECT_CASE, [
+      finding({ line: null, kind: "must" }),
+      finding({ line: null, kind: "imo" }),
+      finding({ line: 40 }),
+    ]);
+
+    expect(score.unlocated).toBe(2);
+  });
+
+  test("still counts a finding without a line in the finding count", () => {
+    const score = scoreRun(DEFECT_CASE, [finding({ line: null })]);
+
+    expect(score.finding_count).toBe(1);
   });
 
   test("does not count nits and questions as false positives", () => {
@@ -643,6 +689,26 @@ describe("countRuns", () => {
     );
 
     expect([sum.imo_off_target, sum.imo_on_clean]).toEqual([2, 1]);
+  });
+
+  test("sums the unlocated findings over the runs", () => {
+    const outcomes: RunOutcome[] = [
+      scored(DEFECT_CASE, [finding({ line: null })]),
+      scored(DEFECT_CASE, [
+        finding({ line: null, kind: "imo" }),
+        finding({ line: null }),
+      ]),
+    ];
+
+    expect(countRuns(DEFECT_CASE, outcomes).unlocated).toBe(3);
+  });
+
+  test("keeps a run with only unlocated findings out of the flagged clean runs", () => {
+    const outcomes: RunOutcome[] = [
+      scored(CLEAN_CASE, [finding({ line: null })]),
+    ];
+
+    expect(countRuns(CLEAN_CASE, outcomes).clean_runs_flagged).toBe(0);
   });
 
   test("adds two tallies field by field", () => {
@@ -798,6 +864,7 @@ describe("buildEvalReport", () => {
       "clean_flag_rate_excluding_low",
       "imo_off_target",
       "imo_on_clean",
+      "unlocated",
     ]);
   });
 });
@@ -892,6 +959,33 @@ describe("formatEvalMarkdown", () => {
 
     expect(markdown).toContain("| imo findings off target | 1 |");
     expect(markdown).toContain("| imo findings on defect-free cases | 2 |");
+  });
+
+  test("shows the findings without a line per ref", () => {
+    const withUnlocated = buildEvalReport(
+      [
+        {
+          ref: "main",
+          system_prompt_sha256: "a".repeat(64),
+          cases: [
+            {
+              eval_case: DEFECT_CASE,
+              outcomes: [
+                scored(DEFECT_CASE, [
+                  finding({ line: null }),
+                  finding({ line: null, kind: "imo" }),
+                ]),
+              ],
+            },
+          ],
+        },
+      ],
+      1,
+    );
+
+    expect(formatEvalMarkdown(withUnlocated)).toContain(
+      "| findings without a line | 2 |",
+    );
   });
 
   test("shows the number of invalid runs of each ref", () => {
