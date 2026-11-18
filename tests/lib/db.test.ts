@@ -129,6 +129,7 @@ import {
   PR_CI_CHECK_COLUMNS,
   type PrCiCheckSqlRow,
   readDbNow,
+  readPrReviewTrigger,
   recordAgentRun,
   recordApprovalRedispatch,
   recordDeployment,
@@ -163,6 +164,7 @@ import {
   setIssueProposalCreatedIssue,
   setObservedWatermarks,
   setPrCiFixHold,
+  setPrReviewTrigger,
   setWorkItemBranch,
   setWorkItemPrUrl,
   sumAgentCostSince,
@@ -2516,6 +2518,62 @@ describe("recordAgentRun", () => {
     expect(calls[0]?.values).toContain(JSON.stringify([entry]));
   });
 
+  test("writes the trigger of a pr_review run", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await recordAgentRun(
+      {
+        work_item_id: 1,
+        stage: "pr_review",
+        attempt: 1,
+        model: "claude-sonnet-5",
+        claude_version: null,
+        input_tokens: null,
+        output_tokens: null,
+        cache_read_tokens: null,
+        cost_usd: null,
+        num_turns: null,
+        duration_ms: null,
+        session_id: null,
+        exit_code: 0,
+        error: null,
+        failure_reason: null,
+        model_usage: [],
+        trigger: "tracked_push",
+      },
+      sql,
+    );
+    expect([calls[0]?.text, calls[0]?.values.at(-1)]).toEqual([
+      expect.stringContaining("trigger"),
+      "tracked_push",
+    ]);
+  });
+
+  test("writes a null trigger when the record has none", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await recordAgentRun(
+      {
+        work_item_id: 1,
+        stage: "implement",
+        attempt: 1,
+        model: "claude-sonnet-5",
+        claude_version: null,
+        input_tokens: null,
+        output_tokens: null,
+        cache_read_tokens: null,
+        cost_usd: null,
+        num_turns: null,
+        duration_ms: null,
+        session_id: null,
+        exit_code: 0,
+        error: null,
+        failure_reason: null,
+        model_usage: [],
+      },
+      sql,
+    );
+    expect(calls[0]?.values.at(-1)).toBeNull();
+  });
+
   test("casts nullable numeric columns (tokens/cost/turns/duration/exit_code) to their real type when null — a Claude timeout/error leaves most of these null", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
     await recordAgentRun(
@@ -2542,6 +2600,75 @@ describe("recordAgentRun", () => {
     const text = calls[0]?.text ?? "";
     expect(text).toContain("::integer");
     expect(text).toContain("::numeric");
+  });
+});
+
+describe("setPrReviewTrigger", () => {
+  test("writes the trigger on the pr_review work item", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    expect(await setPrReviewTrigger(7, "auto_retry", sql, SILENT_LOG)).toBe(
+      true,
+    );
+    expect([calls[0]?.text, calls[0]?.values]).toEqual([
+      expect.stringContaining("SET review_trigger"),
+      ["auto_retry", 7],
+    ]);
+  });
+
+  test("only touches a pr_review row", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await setPrReviewTrigger(7, "label", sql, SILENT_LOG);
+    expect(calls[0]?.text).toContain("kind = 'pr_review'");
+  });
+
+  test("returns false and warns instead of throwing when the column is missing", async () => {
+    const warnings: string[] = [];
+    const missing = new Error(
+      'column "review_trigger" of relation "work_items" does not exist',
+    );
+    const sql: SqlClient = () => ({
+      fetch: () => Promise.resolve([]),
+      execute: () => Promise.reject(missing),
+    });
+    const result = await setPrReviewTrigger(7, "label", sql, {
+      ...SILENT_LOG,
+      warn: (message) => {
+        warnings.push(message);
+      },
+    });
+    expect([result, warnings.length]).toEqual([false, 1]);
+  });
+});
+
+describe("readPrReviewTrigger", () => {
+  test("returns the trigger of the work item", async () => {
+    const { sql } = createFakeSqlClient([[{ review_trigger: "tracked_push" }]]);
+    expect(await readPrReviewTrigger(7, sql, SILENT_LOG)).toBe("tracked_push");
+  });
+
+  test("returns null when the work item has no trigger", async () => {
+    const { sql } = createFakeSqlClient([[{ review_trigger: null }]]);
+    expect(await readPrReviewTrigger(7, sql, SILENT_LOG)).toBeNull();
+  });
+
+  test("returns null for a value outside the five triggers", async () => {
+    const { sql } = createFakeSqlClient([[{ review_trigger: "webhook" }]]);
+    expect(await readPrReviewTrigger(7, sql, SILENT_LOG)).toBeNull();
+  });
+
+  test("returns null and warns when the trigger cannot be read", async () => {
+    const warnings: string[] = [];
+    const sql: SqlClient = () => ({
+      fetch: () => Promise.reject(new Error("db down")),
+      execute: () => Promise.resolve(),
+    });
+    const result = await readPrReviewTrigger(7, sql, {
+      ...SILENT_LOG,
+      warn: (message) => {
+        warnings.push(message);
+      },
+    });
+    expect([result, warnings.length]).toEqual([null, 1]);
   });
 });
 
@@ -2606,6 +2733,14 @@ describe("recordAgentRun before the migrations of its newer columns", () => {
     );
     await recordAgentRun(RUN, sql, SILENT_LOG);
     expect(texts[1]).not.toContain("failure_reason");
+  });
+
+  test("records the run without trigger when that column is missing", async () => {
+    const { sql, texts } = missingColumnThenOk(
+      new Error('column "trigger" of relation "agent_runs" does not exist'),
+    );
+    await recordAgentRun({ ...RUN, trigger: "label" }, sql, SILENT_LOG);
+    expect(texts[1]).not.toContain("trigger");
   });
 
   test("rethrows a failure other than a missing model_usage column", async () => {

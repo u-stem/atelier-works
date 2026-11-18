@@ -86,6 +86,7 @@ import {
 } from "../lib/protected_paths.ts";
 import { isRepoOwnerStopReason } from "../lib/repo_owner_gate.ts";
 import {
+  type AgentRunRecord,
   assertSha,
   type DiffHunkRange,
   type FactoryConfig,
@@ -103,6 +104,7 @@ import {
   isStringArray,
   type LabelerAssociation,
   type NoticeRecord,
+  type PrReviewTrigger,
   type ReviewFinding,
   type ReviewFindingKind,
   type ReviewOutcome,
@@ -145,6 +147,17 @@ export {
   isNewShellScript,
   matchesForbiddenPath,
 } from "../lib/protected_paths.ts";
+
+/**
+ * PRレビューの実行の記録に、起動のきっかけを入れて返す。
+ * きっかけを読めなかった実行(`null`)は、そのまま`null`で記録し、監査では不明として数える。
+ */
+export function withRunTrigger(
+  agentRun: AgentRunRecord,
+  trigger: PrReviewTrigger | null,
+): AgentRunRecord {
+  return { ...agentRun, trigger };
+}
 
 // ---------------------------------------------------------------------------
 // 役割タグ。Factoryは専用のbotではなく運用者自身のアカウントで
