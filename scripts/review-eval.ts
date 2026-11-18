@@ -177,8 +177,16 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
     }
   }
   if (model === null) throw new UsageError("--model is required");
+  const resolvedRefs = refs.length === 0 ? ["HEAD"] : refs;
+  // 費用の判定は、これから起動する全参照の上限を足して行う。
+  // 上限が1回分に満たないと、どの実行も起動できないので、起動の前に弾く。
+  if (!dryRun && maxTotalUsd < resolvedRefs.length * maxBudgetUsd) {
+    throw new UsageError(
+      "--max-total-usd must be at least the number of refs times --max-budget-usd",
+    );
+  }
   return {
-    refs: refs.length === 0 ? ["HEAD"] : refs,
+    refs: resolvedRefs,
     runs,
     model,
     maxBudgetUsd,

@@ -230,6 +230,66 @@ describe("parseCliArgs", () => {
   test("rejects a flag that has no value", () => {
     expect(() => parseCliArgs(["--model"])).toThrow("--model needs a value");
   });
+
+  const TWO_REFS = ["--skills-ref", "main", "--skills-ref", "HEAD"];
+
+  test("rejects a total cap below the refs times the per-run budget", () => {
+    expect(() =>
+      parseCliArgs([
+        "--model",
+        "m1",
+        ...TWO_REFS,
+        "--max-budget-usd",
+        "2",
+        "--max-total-usd",
+        "3",
+      ]),
+    ).toThrow(
+      "--max-total-usd must be at least the number of refs times --max-budget-usd",
+    );
+  });
+
+  test("accepts a total cap equal to the refs times the per-run budget", () => {
+    const options = parseCliArgs([
+      "--model",
+      "m1",
+      ...TWO_REFS,
+      "--max-budget-usd",
+      "2",
+      "--max-total-usd",
+      "4",
+    ]);
+
+    expect(options.maxTotalUsd).toBe(4);
+  });
+
+  test("checks the total cap against one run when no ref is given", () => {
+    expect(() =>
+      parseCliArgs([
+        "--model",
+        "m1",
+        "--max-budget-usd",
+        "2",
+        "--max-total-usd",
+        "1.5",
+      ]),
+    ).toThrow("--max-total-usd must be at least");
+  });
+
+  test("skips the total cap check for a dry run", () => {
+    const options = parseCliArgs([
+      "--model",
+      "m1",
+      ...TWO_REFS,
+      "--max-budget-usd",
+      "2",
+      "--max-total-usd",
+      "3",
+      "--dry-run",
+    ]);
+
+    expect(options.dryRun).toBe(true);
+  });
 });
 
 describe("fixtures", () => {
