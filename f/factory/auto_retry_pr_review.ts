@@ -20,6 +20,7 @@ import {
   recordTransientStall,
   restartTransientPrReview,
   setFlowJobIdIfUnset,
+  setPrReviewTrigger,
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
@@ -34,6 +35,7 @@ import {
   transientReviewNotice,
   transientReviewQuery,
 } from "./lib/pr_review_retry.ts";
+import type { PrReviewTrigger } from "./lib/types.ts";
 
 export type AutoRetryPrReviewResult = AutoRetryResult & {
   readonly stalled_notified: number;
@@ -43,6 +45,11 @@ export type AutoRetryPrReviewResult = AutoRetryResult & {
 export type AutoRetryIo = {
   readonly listTransientReviewCandidates: typeof listTransientReviewCandidates;
   readonly restartTransientPrReview: typeof restartTransientPrReview;
+  /** 起動のきっかけを作業項目に書く。書けなくても例外を投げない。 */
+  readonly setPrReviewTrigger: (
+    id: number,
+    trigger: PrReviewTrigger,
+  ) => Promise<unknown>;
   readonly recordTransientStall: typeof recordTransientStall;
   readonly setFlowJobIdIfUnset: typeof setFlowJobIdIfUnset;
   readonly updateStatusIfLeaseHolder: typeof updateStatusIfLeaseHolder;
@@ -76,12 +83,17 @@ export function buildRetryDeps(
           afterId,
         }),
       isFlowJobFinished: io.isFlowJobFinished,
-      restart: (candidate) =>
-        io.restartTransientPrReview({
+      // 状態を戻せたときだけ、フローを起動する前に、起動のきっかけを自動の再試行にする。
+      // 比較交換に負けた実行は書かないので、先に再開した側のきっかけが残る。
+      restart: async (candidate) => {
+        const restarted = await io.restartTransientPrReview({
           ...query,
           id: candidate.id,
           note: `${AUTO_RETRY_NOTE_PREFIX}restarted from failed`,
-        }),
+        });
+        if (restarted) await io.setPrReviewTrigger(candidate.id, "auto_retry");
+        return restarted;
+      },
       launchFlow: (flowPath, args) => io.runFlowAsync(flowPath, args),
       recordFlowJobId: (id, jobId) => io.setFlowJobIdIfUnset(id, jobId),
       // 再開の状態交換が空にした`flow_job_id`を、リースの保持者として照合する。
@@ -157,6 +169,7 @@ export async function main(): Promise<AutoRetryPrReviewResult> {
     {
       listTransientReviewCandidates,
       restartTransientPrReview,
+      setPrReviewTrigger: (id, trigger) => setPrReviewTrigger(id, trigger),
       recordTransientStall,
       setFlowJobIdIfUnset,
       updateStatusIfLeaseHolder,

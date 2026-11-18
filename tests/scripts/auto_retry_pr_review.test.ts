@@ -41,6 +41,7 @@ type World = {
   readonly deliveries?: Delivery[];
   readonly retryListError?: Error;
   readonly launchError?: Error;
+  readonly restartMoved?: boolean;
 };
 
 function fakeIo(world: World = {}) {
@@ -49,6 +50,9 @@ function fakeIo(world: World = {}) {
   const recorded: number[] = [];
   const leaseCalls: unknown[][] = [];
   const unsetCalls: [number, string][] = [];
+  // 再開の状態交換、きっかけの書き込み、起動の順を控える。
+  const steps: string[] = [];
+  const triggers: [number, string][] = [];
   const deliveries = [...(world.deliveries ?? [])];
   const io: AutoRetryIo = {
     listTransientReviewCandidates: async (params) => {
@@ -68,7 +72,15 @@ function fakeIo(world: World = {}) {
         .filter((c) => c.id > (params.afterId ?? 0))
         .slice(0, params.limit);
     },
-    restartTransientPrReview: async () => true,
+    restartTransientPrReview: async () => {
+      steps.push("restart");
+      return world.restartMoved ?? true;
+    },
+    setPrReviewTrigger: async (id, trigger) => {
+      steps.push("trigger");
+      triggers.push([id, trigger]);
+      return true;
+    },
     recordTransientStall: async (params) => {
       recorded.push(params.id);
       return true;
@@ -83,6 +95,7 @@ function fakeIo(world: World = {}) {
     },
     isFlowJobFinished: async (flowJobId) => flowJobId !== "unreadable-job",
     runFlowAsync: async () => {
+      steps.push("launch");
       if (world.launchError !== undefined) throw world.launchError;
       return JOB_ID;
     },
@@ -95,7 +108,16 @@ function fakeIo(world: World = {}) {
         : { status };
     },
   };
-  return { io, listCalls, events, recorded, leaseCalls, unsetCalls };
+  return {
+    io,
+    listCalls,
+    events,
+    recorded,
+    leaseCalls,
+    unsetCalls,
+    steps,
+    triggers,
+  };
 }
 
 describe("runAutoRetryPrReview", () => {
@@ -136,6 +158,27 @@ describe("runAutoRetryPrReview", () => {
     const fake = fakeIo({ retryCandidates: [candidate(7)] });
     await runAutoRetryPrReview(fake.io, "test", SILENT);
     expect(fake.unsetCalls).toEqual([[7, JOB_ID]]);
+  });
+
+  test("records the auto_retry trigger on the restarted review", async () => {
+    const fake = fakeIo({ retryCandidates: [candidate(7)] });
+    await runAutoRetryPrReview(fake.io, "test", SILENT);
+    expect(fake.triggers).toEqual([[7, "auto_retry"]]);
+  });
+
+  test("records the trigger after the restart and before the flow starts", async () => {
+    const fake = fakeIo({ retryCandidates: [candidate(7)] });
+    await runAutoRetryPrReview(fake.io, "test", SILENT);
+    expect(fake.steps).toEqual(["restart", "trigger", "launch"]);
+  });
+
+  test("does not record the trigger when another run restarted the review first", async () => {
+    const fake = fakeIo({
+      retryCandidates: [candidate(7)],
+      restartMoved: false,
+    });
+    await runAutoRetryPrReview(fake.io, "test", SILENT);
+    expect(fake.triggers).toEqual([]);
   });
 
   test("rolls back with the empty lease the restart left behind", async () => {

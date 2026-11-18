@@ -4,6 +4,7 @@
 
 import type { NewWorkItem } from "./db.ts";
 import { parseFlowJobId } from "./implement_launch_support.ts";
+import type { PrReviewTrigger } from "./types.ts";
 
 /** レビューのフローのパス。 */
 export const PR_REVIEW_FLOW_PATH = "f/factory/pr_review";
@@ -33,7 +34,58 @@ export type PrReviewStartInput = {
   readonly body: string | null;
   readonly observed: PrReviewObserved;
   readonly linkedParentWorkItemId: number | null;
+  /** 起動のきっかけ。作業項目の`review_trigger`に書き、生成のステップが実行の記録に写す。 */
+  readonly trigger: PrReviewTrigger;
 };
+
+/**
+ * `poll_prs`の判定から、起動のきっかけを決める。
+ * ラベルの経路は`label`である。
+ * 割り当ての経路は、候補が追跡中のPR(`listTrackedPrs`)だけから見つかったなら`tracked_push`、
+ * 検索から見つかったなら`rereview_request`である。両方で見つかったPRは、重複の除去で検索の側が残る。
+ */
+export function prReviewTriggerFor(
+  reason: "label" | "assignment",
+  foundOnlyAsTracked: boolean,
+): PrReviewTrigger {
+  if (reason === "label") return "label";
+  return foundOnlyAsTracked ? "tracked_push" : "rereview_request";
+}
+
+/** 候補のPRを指す、owner・repo・番号。 */
+type PrRef = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly number: number;
+};
+
+/** GitHubのownerとrepoは大文字小文字を区別しないので、綴りの違いを吸収した鍵にする。 */
+function caseInsensitivePrKey(pr: PrRef): string {
+  return `${pr.owner}/${pr.repo}#${String(pr.number)}`.toLowerCase();
+}
+
+/**
+ * 検索で見つかったPRの鍵の集合。
+ * 追跡中の一覧だけから見つかったPRを見分けるために、追跡中のPRを足す前に作る。
+ */
+export function discoveredPrKeys(items: readonly PrRef[]): ReadonlySet<string> {
+  return new Set(items.map(caseInsensitivePrKey));
+}
+
+/**
+ * 候補ごとの起動のきっかけ。検索で見つかったPRの鍵(`discoveredPrKeys`)に候補が無ければ、追跡中の一覧だけから見つかったものとして扱う。
+ * 鍵はowner・repoの大文字小文字を区別しないので、追跡の一覧と検索で綴りが違っても、検索で見つかったPRは`rereview_request`になる。
+ */
+export function prReviewTriggerForCandidate(
+  reason: "label" | "assignment",
+  candidate: PrRef,
+  discovered: ReadonlySet<string>,
+): PrReviewTrigger {
+  return prReviewTriggerFor(
+    reason,
+    !discovered.has(caseInsensitivePrKey(candidate)),
+  );
+}
 
 /** `started`は作業項目を作ってフローを起動した。`already_active`は、同じPRの稼働中の`pr_review`があり、何も作らなかった。 */
 export type PrReviewStartResult =
@@ -54,6 +106,11 @@ export type PrReviewStartDeps = {
       readonly observed_review_comment_id: number;
     },
   ) => Promise<void>;
+  /** 起動のきっかけを作業項目に書く(`setPrReviewTrigger`)。書けなくても例外を投げない。 */
+  readonly setReviewTrigger: (
+    id: number,
+    trigger: PrReviewTrigger,
+  ) => Promise<unknown>;
   readonly runFlowAsync: (
     path: string,
     args: Record<string, unknown>,
@@ -99,6 +156,8 @@ export async function startPrReview(
     observed_review_id: input.observed.reviewId,
     observed_review_comment_id: input.observed.reviewCommentId,
   });
+  // フローの生成のステップが読むので、起動より前に書く。
+  await deps.setReviewTrigger(workItemId, input.trigger);
   const flowJobId = parseFlowJobId(
     await deps.runFlowAsync(PR_REVIEW_FLOW_PATH, { work_item_id: workItemId }),
     "runFlowAsync",
