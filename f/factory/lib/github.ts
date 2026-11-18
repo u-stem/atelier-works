@@ -3346,6 +3346,7 @@ type PrReviewCommentPayload = {
   readonly user: { readonly login: string } | null;
   readonly path: string;
   readonly line: unknown;
+  readonly original_line?: unknown;
   readonly body: string;
   readonly author_association: unknown;
 };
@@ -3409,6 +3410,46 @@ export async function listPrReviewComments(
     });
   }
   return { items, maxId };
+}
+
+/** 投稿済みのレビュー1つに付いた、行コメント1件。 */
+export type PostedReviewComment = {
+  readonly id: number;
+  readonly path: string;
+  /** 行が差分から外れたコメントは、投稿した時点の行(`original_line`)を返す。どちらも無ければ`null`。 */
+  readonly line: number | null;
+  readonly body: string;
+};
+
+/**
+ * `GET .../pulls/{n}/reviews/{id}/comments`で、投稿済みのレビュー1つの行コメントを、ページ送りしながら取得する。
+ * 投稿した行コメントに、GitHubが付けたidを知るために使う(`createPrReview`はコメントのidを返さない)。
+ * 形が合わない要素は、読まずに飛ばす。
+ */
+export async function listReviewComments(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  reviewId: number,
+): Promise<PostedReviewComment[]> {
+  validateOwnerRepo(owner, repo);
+  const parsed = await callGhApiAll(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/reviews/${reviewId}/comments?per_page=100`,
+  );
+  const comments: PostedReviewComment[] = [];
+  for (const raw of parsed) {
+    if (!isPrReviewCommentPayload(raw)) continue;
+    const line =
+      typeof raw.line === "number"
+        ? raw.line
+        : typeof raw.original_line === "number"
+          ? raw.original_line
+          : null;
+    comments.push({ id: raw.id, path: raw.path, line, body: raw.body });
+  }
+  return comments;
 }
 
 export type ReviewComment = {

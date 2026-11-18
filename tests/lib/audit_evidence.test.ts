@@ -6,9 +6,11 @@ import {
   countActionableRecords,
   DEPLOYMENT_ERROR_HEAD_MAX,
   EMPTY_PR_REVIEW_TRIGGER_COUNTS,
+  EMPTY_REVIEW_OUTCOME_EVIDENCE,
   type EvidenceSection,
   metricsOf,
   NO_PR_REVIEW_RUNS_LINE,
+  NO_REVIEW_OUTCOMES_LINE,
   PR_REVIEW_TOP_PRS_LIMIT,
   renderEvidenceMarkdown,
   sanitizeCell,
@@ -55,6 +57,9 @@ type QueryName =
   | "deploymentHistory"
   | "versionBounds"
   | "agentRuns"
+  | "unrecordedReviews"
+  | "reviewOutcomes"
+  | "humanThreads"
   | "prReviewTopPrs"
   | "prReviewTriggers";
 
@@ -70,6 +75,9 @@ const QUERY_NAMES: readonly QueryName[] = [
   "deploymentHistory",
   "versionBounds",
   "agentRuns",
+  "unrecordedReviews",
+  "reviewOutcomes",
+  "humanThreads",
   "prReviewTopPrs",
   "prReviewTriggers",
 ];
@@ -91,6 +99,9 @@ const QUERY_FRAGMENTS: Record<QueryName, string> = {
   versionBounds: "AS start_sha",
   // 今の期間と前の期間の、工程ごとの実行統計の2つの問い合わせ。
   agentRuns: "GROUP BY r.stage",
+  unrecordedReviews: "jsonb_array_length(rv.findings)",
+  reviewOutcomes: "FROM factory.review_findings rf",
+  humanThreads: "FROM factory.review_human_threads",
   prReviewTopPrs: "count(*) OVER () AS pr_count",
   prReviewTriggers: "to_jsonb(r) ->> 'trigger'",
 };
@@ -156,6 +167,7 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   pr_review_top_prs: [],
   pr_review_pr_count: 0,
   pr_review_triggers: EMPTY_PR_REVIEW_TRIGGER_COUNTS,
+  review_outcomes: EMPTY_REVIEW_OUTCOME_EVIDENCE,
 };
 
 /**
@@ -1757,6 +1769,7 @@ const TRIGGER_SECTION = "PRレビューの実行(きっかけ別)";
 const PR_SECTIONS = [PR_SECTION, TRIGGER_SECTION];
 const STATS_SECTION = "実行統計(stage別)";
 const NEW_QUERIES = ["prReviewTopPrs", "prReviewTriggers"] as const;
+const OUTCOME_SECTION = "レビュー指摘の採否";
 
 /** 2つのPRでPRレビューが実行され、きっかけが記録されている期間。 */
 const PR_REVIEW_EVIDENCE: AuditEvidence = {
@@ -2060,6 +2073,7 @@ describe("PR review sections in the evidence pack", () => {
       "要人手・ブロック・期限切れ",
       "修正ラウンド",
       "レビュー指摘",
+      OUTCOME_SECTION,
       "通知",
       "デプロイ",
       "過去の提案(直近3回)",
@@ -2156,5 +2170,339 @@ describe("PR review sections in the evidence pack", () => {
       pr_review_triggers: PR_REVIEW_EVIDENCE.pr_review_triggers,
     };
     expect(renderEvidenceMarkdown(evidence).length).toBeLessThanOrEqual(12000);
+  });
+});
+
+/** 採否の記録が十分にある期間。確定した指摘が30件、投稿した指摘が40件。 */
+const OUTCOME_EVIDENCE: AuditEvidence = {
+  ...EMPTY_EVIDENCE,
+  review_outcomes: {
+    posted_total: 40,
+    with_comment_id: 36,
+    counts: {
+      posted: 7,
+      skipped: 3,
+      issue_proposed: 1,
+      fixed: 12,
+      skip_accepted: 6,
+      skip_rejected: 2,
+      answered: 4,
+      resolved_by_human: 5,
+    },
+    human_threads: { total: 4, resolved: 1 },
+    unrecorded_reviews: 0,
+  },
+};
+
+describe("the review outcome section", () => {
+  test("shows the adoption rate with the numbers it divides", () => {
+    expect(sectionOf(OUTCOME_EVIDENCE, OUTCOME_SECTION)?.fixed).toContain(
+      "採用率: 40%(直した12件 / 確定した30件)",
+    );
+  });
+
+  test("shows the acceptance rate of the skips with the numbers it divides", () => {
+    expect(sectionOf(OUTCOME_EVIDENCE, OUTCOME_SECTION)?.fixed).toContain(
+      "見送りの了承率: 75%(了承6件 / 判断済みの見送り8件)",
+    );
+  });
+
+  test("shows the findings that still wait for an outcome", () => {
+    expect(sectionOf(OUTCOME_EVIDENCE, OUTCOME_SECTION)?.fixed).toContain(
+      "結果が決まっていない指摘: 投稿のまま7件 / 見送りの判断待ち3件",
+    );
+  });
+
+  test("shows how many posted findings have the id of their comment", () => {
+    expect(sectionOf(OUTCOME_EVIDENCE, OUTCOME_SECTION)?.fixed).toContain(
+      "行コメントのidを取れた指摘: 36/40件",
+    );
+  });
+
+  test("shows the threads that a person started and how many are resolved", () => {
+    expect(sectionOf(OUTCOME_EVIDENCE, OUTCOME_SECTION)?.fixed).toContain(
+      "人が始めたスレッド: 4件(うち解決済み1件)",
+    );
+  });
+
+  test("leaves out the line of unrecorded reviews when there is none", () => {
+    expect(
+      sectionOf(OUTCOME_EVIDENCE, OUTCOME_SECTION)?.fixed.some((line) =>
+        line.includes("未記録"),
+      ),
+    ).toBe(false);
+  });
+
+  test("shows the reviews without an outcome record apart from the denominator", () => {
+    const evidence: AuditEvidence = {
+      ...OUTCOME_EVIDENCE,
+      review_outcomes: {
+        ...OUTCOME_EVIDENCE.review_outcomes,
+        unrecorded_reviews: 5,
+      },
+    };
+    expect(sectionOf(evidence, OUTCOME_SECTION)?.fixed).toContain(
+      "採否の記録が無いレビュー(未記録、割合の母数に入れない): 5件",
+    );
+  });
+
+  test("lists the count of each outcome that happened as a droppable line", () => {
+    expect(sectionOf(OUTCOME_EVIDENCE, OUTCOME_SECTION)?.lines).toEqual([
+      "結果 posted: 7件",
+      "結果 skipped: 3件",
+      "結果 issue_proposed: 1件",
+      "結果 fixed: 12件",
+      "結果 skip_accepted: 6件",
+      "結果 skip_rejected: 2件",
+      "結果 answered: 4件",
+      "結果 resolved_by_human: 5件",
+    ]);
+  });
+
+  test("leaves out an outcome that did not happen", () => {
+    const evidence: AuditEvidence = {
+      ...OUTCOME_EVIDENCE,
+      review_outcomes: {
+        ...OUTCOME_EVIDENCE.review_outcomes,
+        counts: { ...OUTCOME_EVIDENCE.review_outcomes.counts, answered: 0 },
+      },
+    };
+    expect(
+      sectionOf(evidence, OUTCOME_SECTION)?.lines.some((line) =>
+        line.includes("answered"),
+      ),
+    ).toBe(false);
+  });
+
+  test("shows only the numbers when fewer than 20 findings have an outcome", () => {
+    const evidence: AuditEvidence = {
+      ...OUTCOME_EVIDENCE,
+      review_outcomes: {
+        ...OUTCOME_EVIDENCE.review_outcomes,
+        counts: {
+          ...OUTCOME_EVIDENCE.review_outcomes.counts,
+          fixed: 3,
+          skip_accepted: 1,
+          skip_rejected: 0,
+          issue_proposed: 0,
+          answered: 4,
+          resolved_by_human: 0,
+        },
+      },
+    };
+    expect(sectionOf(evidence, OUTCOME_SECTION)?.fixed).toContain(
+      "採用率: n=8(直した3件。確定した指摘が20件未満のため割合は出さない)",
+    );
+  });
+
+  test("shows only the numbers of the skips when fewer than 20 findings have an outcome", () => {
+    const evidence: AuditEvidence = {
+      ...OUTCOME_EVIDENCE,
+      review_outcomes: {
+        ...OUTCOME_EVIDENCE.review_outcomes,
+        counts: {
+          ...OUTCOME_EVIDENCE.review_outcomes.counts,
+          fixed: 3,
+          skip_accepted: 1,
+          skip_rejected: 1,
+          issue_proposed: 0,
+          answered: 0,
+          resolved_by_human: 0,
+        },
+      },
+    };
+    expect(sectionOf(evidence, OUTCOME_SECTION)?.fixed).toContain(
+      "見送りの了承率: n=2(了承1件。確定した指摘が20件未満のため割合は出さない)",
+    );
+  });
+
+  test("says that no skip was decided when enough findings have an outcome", () => {
+    const evidence: AuditEvidence = {
+      ...OUTCOME_EVIDENCE,
+      review_outcomes: {
+        ...OUTCOME_EVIDENCE.review_outcomes,
+        counts: {
+          ...OUTCOME_EVIDENCE.review_outcomes.counts,
+          skip_accepted: 0,
+          skip_rejected: 0,
+        },
+      },
+    };
+    expect(sectionOf(evidence, OUTCOME_SECTION)?.fixed).toContain(
+      "見送りの了承率: n=0(了承0件。判断済みの見送りが無いため割合は出さない)",
+    );
+  });
+
+  test("shows only the no-records line when nothing was recorded", () => {
+    expect(sectionOf(EMPTY_EVIDENCE, OUTCOME_SECTION)).toEqual({
+      heading: OUTCOME_SECTION,
+      fixed: [NO_REVIEW_OUTCOMES_LINE],
+      lines: [],
+    });
+  });
+
+  test("still shows the unrecorded reviews when no outcome was recorded", () => {
+    const evidence: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      review_outcomes: {
+        ...EMPTY_REVIEW_OUTCOME_EVIDENCE,
+        unrecorded_reviews: 2,
+      },
+    };
+    expect(sectionOf(evidence, OUTCOME_SECTION)?.fixed).toContain(
+      "採否の記録が無いレビュー(未記録、割合の母数に入れない): 2件",
+    );
+  });
+
+  test("keeps every fixed line and drops only the outcome lines when the evidence is over the limit", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      review_outcomes: OUTCOME_EVIDENCE.review_outcomes,
+    };
+    const truncated = truncateEvidence(buildEvidenceSections(evidence), 3000);
+    const section = truncated.find(
+      (candidate) => candidate.heading === OUTCOME_SECTION,
+    );
+    expect(section?.fixed).toEqual(
+      sectionOf(evidence, OUTCOME_SECTION)?.fixed ?? [],
+    );
+  });
+
+  test("stays within 12,000 characters", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      review_outcomes: OUTCOME_EVIDENCE.review_outcomes,
+    };
+    expect(renderEvidenceMarkdown(evidence).length).toBeLessThanOrEqual(12000);
+  });
+
+  test("does not change the metrics", () => {
+    expect(metricsOf(OUTCOME_EVIDENCE)).toEqual(metricsOf(EMPTY_EVIDENCE));
+  });
+});
+
+describe("collecting the review outcomes", () => {
+  test("issues the outcome queries before the pull request review queries", async () => {
+    const { calls } = await collectWith({});
+    expect(
+      calls.findIndex((call) => call === findCall(calls, "reviewOutcomes")),
+    ).toBeLessThan(
+      calls.findIndex((call) => call === findCall(calls, "prReviewTopPrs")),
+    );
+  });
+
+  test.each(["reviewOutcomes", "humanThreads", "unrecordedReviews"] as const)(
+    "filters %s by the period",
+    async (name) => {
+      const { calls } = await collectWith({});
+      expect(findCall(calls, name)?.values.slice(0, 2)).toEqual([
+        PERIOD.start.toISOString(),
+        PERIOD.end.toISOString(),
+      ]);
+    },
+  );
+
+  test("counts only the findings that were posted", async () => {
+    const { calls } = await collectWith({});
+    expect(findCall(calls, "reviewOutcomes")?.text).toContain("AND rf.posted");
+  });
+
+  test("reads the count of each outcome", async () => {
+    const { evidence } = await collectWith({
+      reviewOutcomes: [
+        { key: "fixed", count: "12", with_comment_id: "11" },
+        { key: "posted", count: 3, with_comment_id: 3 },
+      ],
+    });
+    expect(evidence.review_outcomes.counts).toMatchObject({
+      fixed: 12,
+      posted: 3,
+    });
+  });
+
+  test("totals the posted findings and the ones with a comment id", async () => {
+    const { evidence } = await collectWith({
+      reviewOutcomes: [
+        { key: "fixed", count: "12", with_comment_id: "11" },
+        { key: "posted", count: 3, with_comment_id: 2 },
+      ],
+    });
+    expect([
+      evidence.review_outcomes.posted_total,
+      evidence.review_outcomes.with_comment_id,
+    ]).toEqual([15, 13]);
+  });
+
+  test("leaves out a row whose outcome is not known", async () => {
+    const { evidence } = await collectWith({
+      reviewOutcomes: [{ key: "merged", count: 9, with_comment_id: 9 }],
+    });
+    expect(evidence.review_outcomes.posted_total).toBe(0);
+  });
+
+  test("reads the threads that a person started", async () => {
+    const { evidence } = await collectWith({
+      humanThreads: [{ total: "4", resolved: "1" }],
+    });
+    expect(evidence.review_outcomes.human_threads).toEqual({
+      total: 4,
+      resolved: 1,
+    });
+  });
+
+  test("reads the reviews without an outcome record", async () => {
+    const { evidence } = await collectWith({
+      unrecordedReviews: [{ count: "5" }],
+    });
+    expect(evidence.review_outcomes.unrecorded_reviews).toBe(5);
+  });
+
+  test("counts only the reviews that have findings and no outcome rows", async () => {
+    const { calls } = await collectWith({});
+    expect(findCall(calls, "unrecordedReviews")?.text).toContain(
+      "NOT EXISTS (SELECT 1 FROM factory.review_findings x WHERE x.review_id = rv.id)",
+    );
+  });
+});
+
+describe("collecting the review outcomes before the migration", () => {
+  const MISSING = new Error(
+    'relation "factory.review_findings" does not exist',
+  );
+
+  /** 採否の記録の表を読む問い合わせだけが、表が無いエラーで失敗する偽の`SqlClient`。 */
+  function sqlWithoutTables(error: Error): SqlClient {
+    return (strings) => {
+      const text = strings.join(" ? ").replace(/\s+/g, " ");
+      const reads = /FROM factory\.review_(findings|human_threads)/.test(text);
+      const unrecorded = text.includes("jsonb_array_length(rv.findings)");
+      return {
+        fetch: () =>
+          reads
+            ? Promise.reject(error)
+            : Promise.resolve(unrecorded ? [{ count: 7 }] : []),
+        execute: () => Promise.resolve(),
+      };
+    };
+  }
+
+  test("collects the evidence without the outcome tables", async () => {
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sqlWithoutTables(MISSING),
+    );
+    expect(evidence.review_outcomes).toEqual({
+      ...EMPTY_REVIEW_OUTCOME_EVIDENCE,
+      unrecorded_reviews: 7,
+    });
+  });
+
+  test("rethrows an error that is not a missing table", async () => {
+    await expect(
+      collectAuditEvidence(
+        { period: PERIOD, instanceName: "atelier-works" },
+        sqlWithoutTables(new Error("connection reset")),
+      ),
+    ).rejects.toThrow("connection reset");
   });
 });

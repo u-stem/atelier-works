@@ -1,0 +1,9 @@
+summary: '[LIB] レビュー指摘の採否'
+description: 内部ライブラリです。直接実行するものではありません。投稿したコメントと指摘の対応づけ、指摘の結果の遷移、採用率などの式を共有する純粋関数です。
+lock: '!inline f/factory/lib/review_outcomes.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

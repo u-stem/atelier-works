@@ -72,6 +72,7 @@ import {
   insertIssueWorkItemUnlessActive,
   insertPrReviewWorkItemUnlessActive,
   insertReview,
+  insertReviewFindings,
   insertWorkerSample,
   insertWorkItem,
   isActiveIssueUniqueViolation,
@@ -82,6 +83,8 @@ import {
   isMissingDeploymentErrorColumnError,
   isMissingDocHashColumnError,
   isMissingPrClosedAtColumnError,
+  isMissingReviewAgentRunColumnError,
+  isMissingReviewOutcomeTableError,
   lastApprovalRedispatchAt,
   latestApprovalRequest,
   latestConflictFixSettledAt,
@@ -129,12 +132,14 @@ import {
   nextCycleForIssue,
   PR_CI_CHECK_COLUMNS,
   type PrCiCheckSqlRow,
+  REVIEW_FINDING_COLUMNS,
   readDbNow,
   readPrReviewTrigger,
   recordAgentRun,
   recordApprovalRedispatch,
   recordDeployment,
   recordFailure,
+  recordFindingOutcomes,
   recordMainCiRun,
   recordPrCiCheck,
   recordTransientStall,
@@ -189,10 +194,13 @@ import {
   updateStatusIfLeaseHolderClearingFlowJobId,
   updateStatusToRequirementsIfCurrent,
   updateStatusToRequirementsIfLeaseHolder,
+  upsertHumanThreads,
 } from "../../f/factory/lib/db.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
+import type { ReviewFindingRow } from "../../f/factory/lib/review_outcomes.ts";
 import {
   type ReviewFinding,
+  type ReviewRecord,
   TERMINAL_WORK_ITEM_STATUSES,
 } from "../../f/factory/lib/types.ts";
 import { DEPENDABOT_CANCEL_NOTE } from "../../f/factory/steps/dependabot_prepare.ts";
@@ -3515,7 +3523,423 @@ describe("insertReview", () => {
   });
 });
 
+const REVIEW_RECORD: ReviewRecord = {
+  work_item_id: 1,
+  head_sha: "abc1234",
+  verdict: "approve",
+  result: "reviewed",
+  summary: "looks good",
+  findings: [],
+  posted_review_id: "review-1",
+};
+
+describe("insertReview and the agent run of the review", () => {
+  test("writes the agent_run_id column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 17 }]]);
+    await insertReview({ ...REVIEW_RECORD, agent_run_id: 41 }, sql);
+    expect(calls[0]?.text).toContain("agent_run_id");
+  });
+
+  test("binds the id of the agent run", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 17 }]]);
+    await insertReview({ ...REVIEW_RECORD, agent_run_id: 41 }, sql);
+    expect(calls[0]?.values).toContain(41);
+  });
+
+  test("binds NULL when the review has no agent run", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 17 }]]);
+    await insertReview(REVIEW_RECORD, sql);
+    expect(calls[0]?.values.at(-1)).toBeNull();
+  });
+
+  test("casts the agent run id to bigint so that a NULL does not bind as text", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 17 }]]);
+    await insertReview(REVIEW_RECORD, sql);
+    expect(calls[0]?.text).toContain("? ::bigint");
+  });
+});
+
+describe("insertReview before the agent_run_id migration", () => {
+  /** 先頭の文から`failures`の数だけ、順に決めたエラーで失敗し、その後の文は成功する。 */
+  function failingThenOk(failures: readonly Error[]): {
+    sql: SqlClient;
+    texts: string[];
+  } {
+    const texts: string[] = [];
+    const sql: SqlClient = (strings) => {
+      const failure = failures[texts.length];
+      texts.push(strings.join(" ? "));
+      return {
+        fetch: () =>
+          failure === undefined
+            ? Promise.resolve([{ id: 17 }])
+            : Promise.reject(failure),
+        execute: () => Promise.resolve(),
+      };
+    };
+    return { sql, texts };
+  }
+
+  const MISSING = new Error(
+    'column "agent_run_id" of relation "reviews" does not exist',
+  );
+
+  test("records the review without the column when it is missing", async () => {
+    const { sql, texts } = failingThenOk([MISSING]);
+    await insertReview(REVIEW_RECORD, sql, SILENT_LOG);
+    expect(texts[1]).not.toContain("agent_run_id");
+  });
+
+  test("returns the id of the review recorded without the column", async () => {
+    const { sql } = failingThenOk([MISSING]);
+    expect(await insertReview(REVIEW_RECORD, sql, SILENT_LOG)).toBe(17);
+  });
+
+  test("leaves a warning when it records the review without the column", async () => {
+    const warnings: string[] = [];
+    const { sql } = failingThenOk([MISSING]);
+    await insertReview(REVIEW_RECORD, sql, {
+      ...SILENT_LOG,
+      warn: (message) => {
+        warnings.push(message);
+      },
+    });
+    expect(warnings).toHaveLength(1);
+  });
+
+  test("rethrows an error that is not a missing column", async () => {
+    const { sql } = failingThenOk([new Error("connection reset")]);
+    await expect(insertReview(REVIEW_RECORD, sql, SILENT_LOG)).rejects.toThrow(
+      "connection reset",
+    );
+  });
+
+  test("rethrows a missing column that is another one", async () => {
+    const { sql } = failingThenOk([
+      new Error('column "result" of relation "reviews" does not exist'),
+    ]);
+    await expect(insertReview(REVIEW_RECORD, sql, SILENT_LOG)).rejects.toThrow(
+      "result",
+    );
+  });
+});
+
+describe("isMissingReviewAgentRunColumnError", () => {
+  test("accepts the message of the missing column", () => {
+    expect(
+      isMissingReviewAgentRunColumnError(
+        new Error('column "agent_run_id" of relation "reviews" does not exist'),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts the message that windmill-client keeps in the body", () => {
+    const err = Object.assign(new Error("Bad Request"), {
+      body: 'column "agent_run_id" of relation "reviews" does not exist',
+    });
+    expect(isMissingReviewAgentRunColumnError(err)).toBe(true);
+  });
+
+  test("accepts the undefined_column code when the message names no column", () => {
+    expect(
+      isMissingReviewAgentRunColumnError(
+        Object.assign(new Error("failed"), { code: "42703" }),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects the undefined_column code when the message names another column", () => {
+    expect(
+      isMissingReviewAgentRunColumnError(
+        Object.assign(
+          new Error('column "result" of relation "reviews" does not exist'),
+          { code: "42703" },
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects a value that is not an error", () => {
+    expect(isMissingReviewAgentRunColumnError("agent_run_id")).toBe(false);
+  });
+});
+
+describe("isMissingReviewOutcomeTableError", () => {
+  test.each([
+    'relation "factory.review_findings" does not exist',
+    'relation "review_human_threads" does not exist',
+  ])("accepts %s", (message) => {
+    expect(isMissingReviewOutcomeTableError(new Error(message))).toBe(true);
+  });
+
+  test("accepts the undefined_table code", () => {
+    expect(
+      isMissingReviewOutcomeTableError(
+        Object.assign(new Error("failed"), { code: "42P01" }),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects another missing table", () => {
+    expect(
+      isMissingReviewOutcomeTableError(
+        new Error('relation "factory.notices" does not exist'),
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects a value that is not an error", () => {
+    expect(isMissingReviewOutcomeTableError("review_findings")).toBe(false);
+  });
+});
+
+const FINDING_ROWS: readonly ReviewFindingRow[] = [
+  {
+    idx: 0,
+    path: "a.ts",
+    severity: "major",
+    kind: "must",
+    confidence: "high",
+    posted: true,
+    review_comment_id: 501,
+  },
+  {
+    idx: 1,
+    path: "b.ts",
+    severity: "minor",
+    kind: "imo",
+    confidence: "low",
+    posted: false,
+    review_comment_id: null,
+  },
+];
+
+/** `INSERT INTO <table> (...)`の列の並びを取り出す。 */
+function insertColumnList(text: string): string[] {
+  const match = /INSERT INTO [\w.]+\s*\(([^)]*)\)/.exec(text);
+  return (match?.[1] ?? "").split(",").map((column) => column.trim());
+}
+
+describe("insertReviewFindings", () => {
+  test("issues no statement for an empty list", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await insertReviewFindings(17, [], sql);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("inserts into factory.review_findings", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await insertReviewFindings(17, FINDING_ROWS, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.review_findings");
+  });
+
+  test("writes exactly the defined columns", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await insertReviewFindings(17, FINDING_ROWS, sql);
+    expect(insertColumnList(calls[0]?.text ?? "")).toEqual([
+      ...REVIEW_FINDING_COLUMNS,
+    ]);
+  });
+
+  test("casts the review id to bigint", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await insertReviewFindings(17, FINDING_ROWS, sql);
+    expect(calls[0]?.text).toContain("? ::bigint");
+  });
+
+  test("binds the rows as one jsonb value, so that a null stays a NULL", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await insertReviewFindings(17, FINDING_ROWS, sql);
+    expect(calls[0]?.values).toEqual([17, JSON.stringify(FINDING_ROWS)]);
+  });
+
+  test("starts a posted finding as posted and leaves the others without an outcome", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await insertReviewFindings(17, FINDING_ROWS, sql);
+    expect(calls[0]?.text).toContain("CASE WHEN r.posted THEN 'posted' END");
+  });
+});
+
+describe("recordFindingOutcomes", () => {
+  const POSTED_ROW = { id: 9, review_comment_id: 501, outcome: "posted" };
+
+  test("issues no statement for an empty list", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await recordFindingOutcomes([], sql);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("reads the findings of the comments by their ids", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await recordFindingOutcomes(
+      [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
+      sql,
+    );
+    expect(calls[0]?.text).toContain("review_comment_id = ANY(");
+  });
+
+  test("binds the comment ids once, even when a comment has two outcomes", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await recordFindingOutcomes(
+      [
+        { commentId: 501, outcome: "skipped", source: "pr_fix" },
+        { commentId: 501, outcome: "skip_accepted", source: "rereview" },
+      ],
+      sql,
+    );
+    expect(calls[0]?.values).toEqual([["501"]]);
+  });
+
+  test("moves a posted finding to the new outcome", async () => {
+    const { sql, calls } = createFakeSqlClient([[POSTED_ROW]]);
+    await recordFindingOutcomes(
+      [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
+      sql,
+    );
+    expect(calls[1]?.values).toEqual(["fixed", "pr_fix", 9, "posted"]);
+  });
+
+  test("returns the number of findings it updated", async () => {
+    const { sql } = createFakeSqlClient([[POSTED_ROW]]);
+    expect(
+      await recordFindingOutcomes(
+        [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
+        sql,
+      ),
+    ).toBe(1);
+  });
+
+  test("guards the update with the outcome it read", async () => {
+    const { sql, calls } = createFakeSqlClient([[POSTED_ROW]]);
+    await recordFindingOutcomes(
+      [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
+      sql,
+    );
+    expect(calls[1]?.text).toContain("outcome IS NOT DISTINCT FROM");
+  });
+
+  test("keeps a heavier outcome without a statement", async () => {
+    const { sql, calls } = createFakeSqlClient([
+      [{ ...POSTED_ROW, outcome: "fixed" }],
+    ]);
+    await recordFindingOutcomes(
+      [{ commentId: 501, outcome: "resolved_by_human", source: "thread_sync" }],
+      sql,
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  test("does nothing for a comment that has no finding", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await recordFindingOutcomes(
+      [{ commentId: 999, outcome: "fixed", source: "pr_fix" }],
+      sql,
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  test("writes the final outcome of a comment with two outcomes in one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[POSTED_ROW]]);
+    await recordFindingOutcomes(
+      [
+        { commentId: 501, outcome: "skipped", source: "pr_fix" },
+        { commentId: 501, outcome: "skip_rejected", source: "rereview" },
+      ],
+      sql,
+    );
+    expect(calls.slice(1).map((call) => call.values)).toEqual([
+      ["skip_rejected", "rereview", 9, "posted"],
+    ]);
+  });
+
+  test("updates every finding that carries the comment id", async () => {
+    const { sql, calls } = createFakeSqlClient([
+      [POSTED_ROW, { ...POSTED_ROW, id: 10 }],
+    ]);
+    await recordFindingOutcomes(
+      [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
+      sql,
+    );
+    expect(calls).toHaveLength(3);
+  });
+});
+
+describe("upsertHumanThreads", () => {
+  test("issues no statement for an empty list", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await upsertHumanThreads(5, 17, [], sql);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("inserts into factory.review_human_threads", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await upsertHumanThreads(
+      5,
+      17,
+      [{ firstCommentId: 801, resolved: false }],
+      sql,
+    );
+    expect(calls[0]?.text).toContain(
+      "INSERT INTO factory.review_human_threads",
+    );
+  });
+
+  test("updates only the resolved flag of a thread that is already recorded", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await upsertHumanThreads(
+      5,
+      17,
+      [{ firstCommentId: 801, resolved: true }],
+      sql,
+    );
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (first_comment_id) DO UPDATE SET resolved = EXCLUDED.resolved",
+    );
+  });
+
+  test("binds the work item, the review and the threads as one jsonb value", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await upsertHumanThreads(
+      5,
+      17,
+      [{ firstCommentId: 801, resolved: true }],
+      sql,
+    );
+    expect(calls[0]?.values).toEqual([
+      5,
+      17,
+      JSON.stringify([{ first_comment_id: 801, resolved: true }]),
+    ]);
+  });
+
+  test("casts the work item and the review ids to bigint", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await upsertHumanThreads(
+      5,
+      17,
+      [{ firstCommentId: 801, resolved: true }],
+      sql,
+    );
+    expect(calls[0]?.text.match(/\? ::bigint/g)).toHaveLength(2);
+  });
+});
+
 describe("toReviewRecord", () => {
+  test("reads the agent run id of the review", () => {
+    const review = toReviewRecord({ ...REVIEW_RECORD, agent_run_id: 41 });
+    expect(review.agent_run_id).toBe(41);
+  });
+
+  test("reads a row without the agent_run_id column as null", () => {
+    const review = toReviewRecord({ ...REVIEW_RECORD });
+    expect(review.agent_run_id).toBeNull();
+  });
+
+  test("reads a row with a NULL agent_run_id as null", () => {
+    const review = toReviewRecord({ ...REVIEW_RECORD, agent_run_id: null });
+    expect(review.agent_run_id).toBeNull();
+  });
+
   test("parses the recorded result", () => {
     const review = toReviewRecord({
       work_item_id: 1,

@@ -89,6 +89,8 @@ export type PrReviewGenerateResult = {
   readonly binary_files: readonly string[];
   /** `binary_files`に載せなかった(パスを変更ファイルと照合できなかった)バイナリの件数。 */
   readonly binary_unlisted_count: number;
+  /** このレビューを生成したClaudeの実行を記録した`agent_runs`の行のid。Claudeを起動しなかったときはnull。 */
+  readonly agent_run_id: number | null;
 };
 
 const SKIPPED_RESULT: PrReviewGenerateResult = {
@@ -102,6 +104,7 @@ const SKIPPED_RESULT: PrReviewGenerateResult = {
   pr_file_hunks: [],
   binary_files: [],
   binary_unlisted_count: 0,
+  agent_run_id: null,
 };
 
 export async function main(
@@ -376,7 +379,8 @@ export async function main(
       timeoutMs: config.claude_timeout_sec * 1000,
     });
 
-    await recordClaudeRuns(result, (agentRun) =>
+    // 最後の試行の行のidを、投稿のステップへ渡す。レビューの記録を、生成した実行に結びつけるためである。
+    const agentRunId = await recordClaudeRuns(result, (agentRun) =>
       recordAgentRun(withRunTrigger(agentRun, trigger)),
     );
 
@@ -421,6 +425,7 @@ export async function main(
       pr_file_hunks: prFileHunks,
       binary_files: binaryFiles,
       binary_unlisted_count: binaryUnlistedCount,
+      agent_run_id: agentRunId,
     };
   } finally {
     await systemPrompt.cleanup();

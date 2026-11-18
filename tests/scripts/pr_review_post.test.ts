@@ -19,6 +19,11 @@ import {
   REVIEW_EVIDENCE_TRUNCATED_MARK,
 } from "../../f/factory/lib/model_text.ts";
 import type {
+  FindingOutcomeUpdate,
+  HumanThreadSync,
+  ReviewFindingRow,
+} from "../../f/factory/lib/review_outcomes.ts";
+import type {
   FileDiffHunks,
   ReviewFinding,
   ThreadResponse,
@@ -32,6 +37,9 @@ import {
   type PublishReviewInput,
   postMarkedReview,
   publishReview,
+  type RecordReviewOutcomesInput,
+  type ReviewOutcomeDeps,
+  recordReviewOutcomes,
   reviewedNotifyEvent,
   reviewTransitionNotice,
   runPrReviewPost,
@@ -48,6 +56,7 @@ import {
   fenceFor,
   isFixedFixReply,
   mapFindingsToReviewComments,
+  planThreadSync,
   renderInlineComment,
   renderReviewSummary,
   renderThreadReply,
@@ -716,6 +725,20 @@ describe("thread responses wiring", () => {
       results: { pr_review_generate: { thread_responses: responses } },
     });
     expect(Reflect.get(Object(sealed), "thread_responses")).toEqual(responses);
+  });
+
+  test("passes the id of the agent run from generate to post in the flow", () => {
+    const sealed = evaluateSealed("pr_review", "pr_review_post", {
+      results: { pr_review_generate: { agent_run_id: 41 } },
+    });
+    expect(Reflect.get(Object(sealed), "agent_run_id")).toBe(41);
+  });
+
+  test("passes null to post when generate did not run", () => {
+    const sealed = evaluateSealed("pr_review", "pr_review_post", {
+      results: {},
+    });
+    expect(Reflect.get(Object(sealed), "agent_run_id")).toBeNull();
   });
 
   test("rejects an argument that is not the sealed text before it posts anything", async () => {
@@ -1688,6 +1711,7 @@ describe("runPrReviewPost worktree cleanup", () => {
       binary_unlisted_count: 0,
       worktree_dir: WORKTREE_DIR,
       repo_dir: REPO_DIR,
+      agent_run_id: null,
       ...overrides,
     };
   }
@@ -1769,6 +1793,7 @@ describe("runSealedPrReviewPost", () => {
     pr_files: [],
     pr_file_hunks: null,
     binary_files: [],
+    agent_run_id: 41,
   };
 
   function argsFor(untrusted: string) {
@@ -1834,6 +1859,32 @@ describe("runSealedPrReviewPost", () => {
     expect(run.posted[0]?.summary).toBe("all good");
   });
 
+  test("hands the id of the agent run on to the posting", async () => {
+    const run = recording();
+    await runSealedPrReviewPost(argsFor(sealUntrustedArg(GENERATED)), run.deps);
+
+    expect(run.posted[0]?.agent_run_id).toBe(41);
+  });
+
+  test("reads the agent run as null when the sealed text carries none", async () => {
+    const run = recording();
+    const { agent_run_id: _omitted, ...withoutId } = GENERATED;
+    await runSealedPrReviewPost(argsFor(sealUntrustedArg(withoutId)), run.deps);
+
+    expect(run.posted[0]?.agent_run_id).toBeNull();
+  });
+
+  test("rejects a sealed agent run that is not a number", async () => {
+    const run = recording();
+
+    await expect(
+      runSealedPrReviewPost(
+        argsFor(sealUntrustedArg({ ...GENERATED, agent_run_id: "41" })),
+        run.deps,
+      ),
+    ).rejects.toThrow("[no-flow-retry] pr_review_post:");
+  });
+
   test("keeps the trusted values when the sealed text carries the same keys", async () => {
     const run = recording();
     await runSealedPrReviewPost(
@@ -1870,6 +1921,7 @@ describe("runPrReviewPost failure marking", () => {
     binary_unlisted_count: 0,
     worktree_dir: "",
     repo_dir: "",
+    agent_run_id: null,
   };
 
   function failingWith(status: number) {
@@ -2405,6 +2457,80 @@ describe("posting a review once per sha", () => {
       expect(fake.calls.findIndex(isReplyCall)).toBeLessThan(
         fake.calls.findIndex(isCreateReviewCall),
       );
+    });
+
+    test("returns the responses whose reply was posted", async () => {
+      createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 100 }),
+        RESOLVED_OK,
+        ghApiOk({ id: 99 }),
+      ]);
+      const result = await publishReview(
+        { ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(result.answeredResponses).toEqual([ACCEPT_SKIP]);
+    });
+
+    test("leaves out a response whose reply was rejected", async () => {
+      createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        replyRejected(),
+        ghApiOk({ id: 99 }),
+      ]);
+      const result = await publishReview(
+        { ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(result.answeredResponses).toEqual([]);
+    });
+
+    test("returns the threads as they were before this run resolved any", async () => {
+      createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        skipThreads(),
+        ghApiOk({ id: 100 }),
+        RESOLVED_OK,
+        ghApiOk({ id: 99 }),
+      ]);
+      const result = await publishReview(
+        { ghToken: "tok" },
+        rerunInput({ threadResponses: [ACCEPT_SKIP] }),
+        SILENT,
+      );
+      expect(result.syncThreads?.map((thread) => thread.isResolved)).toEqual([
+        false,
+      ]);
+    });
+
+    test("returns no threads for a first review, which does not read them", async () => {
+      createFakeCommandRunner([ghApiOk([humanReview(1)]), ghApiOk({ id: 99 })]);
+      const result = await publishReview(
+        { ghToken: "tok" },
+        rerunInput({ priorReview: false }),
+        SILENT,
+      );
+      expect(result.syncThreads).toBeNull();
+    });
+
+    test("returns no threads when it could not read them", async () => {
+      createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        serverError(),
+        serverError(),
+        ghApiOk({ id: 99 }),
+      ]);
+      const result = await publishReview(
+        { ghToken: "tok", sleep: async () => {} },
+        rerunInput(),
+        SILENT,
+      );
+      expect(result.syncThreads).toBeNull();
     });
 
     test("resolves a thread before posting the review", async () => {
@@ -3390,6 +3516,523 @@ describe("posting a review once per sha", () => {
       });
       expect(event).toBeNull();
     });
+  });
+});
+
+describe("buildReviewRecord and the agent run", () => {
+  const base = {
+    workItemId: 7,
+    headSha: "abc1234",
+    summary: "no new findings",
+    postedReviewId: "99",
+    verdict: "comment" as const,
+    findings: [],
+    blockingThreadCount: 0,
+  };
+
+  test("carries the id of the agent run that generated the review", () => {
+    expect(buildReviewRecord({ ...base, agentRunId: 41 }).agent_run_id).toBe(
+      41,
+    );
+  });
+
+  test("records null when the agent run is not known", () => {
+    expect(buildReviewRecord(base).agent_run_id).toBeNull();
+  });
+});
+
+describe("planThreadSync", () => {
+  const VIEWER_LOGIN = "factory-bot";
+  const FINDING_BODY = "[Factory 自動レビュー] @alice\n[MUST] fix this";
+
+  function thread(overrides: Partial<ReviewThread> = {}): ReviewThread {
+    return {
+      id: "thread-1",
+      isResolved: false,
+      path: "a.ts",
+      line: 10,
+      firstCommentAuthorLogin: VIEWER_LOGIN,
+      firstCommentBody: FINDING_BODY,
+      lastCommentAuthorLogin: VIEWER_LOGIN,
+      lastCommentBody: FINDING_BODY,
+      firstCommentDatabaseId: 501,
+      allCommentIds: [501],
+      comments: [],
+      lastCommentAuthorId: null,
+      lastCommentDatabaseId: 501,
+      resolvedByLogin: "",
+      resolvedById: null,
+      ...overrides,
+    };
+  }
+
+  const humanThread = (overrides: Partial<ReviewThread> = {}): ReviewThread =>
+    thread({
+      firstCommentAuthorLogin: "alice",
+      firstCommentBody: "this looks wrong",
+      lastCommentAuthorLogin: "alice",
+      lastCommentBody: "this looks wrong",
+      firstCommentDatabaseId: 801,
+      ...overrides,
+    });
+
+  test("records a finding thread that a person resolved as resolved_by_human", () => {
+    const plan = planThreadSync(
+      [thread({ isResolved: true, lastCommentAuthorLogin: "alice" })],
+      VIEWER_LOGIN,
+    );
+    expect(plan.findingOutcomes).toEqual([
+      { commentId: 501, outcome: "resolved_by_human" },
+    ]);
+  });
+
+  test("records a resolved thread that ends with a fix reply as fixed", () => {
+    const plan = planThreadSync(
+      [
+        thread({
+          isResolved: true,
+          lastCommentBody: "[Factory 自動返信]\nfixed\n\n対応: `abc1234`",
+        }),
+      ],
+      VIEWER_LOGIN,
+    );
+    expect(plan.findingOutcomes).toEqual([
+      { commentId: 501, outcome: "fixed" },
+    ]);
+  });
+
+  test("records nothing for a resolved thread that ends with an acknowledgement", () => {
+    const plan = planThreadSync(
+      [
+        thread({
+          isResolved: true,
+          lastCommentBody:
+            "[Factory 自動返信]\nok\n\n見送り: 了承\n\n<!-- factory:pr_review_ack:9 -->",
+        }),
+      ],
+      VIEWER_LOGIN,
+    );
+    expect(plan.findingOutcomes).toEqual([]);
+  });
+
+  test("records nothing for a finding thread that is still open", () => {
+    const plan = planThreadSync([thread()], VIEWER_LOGIN);
+    expect(plan.findingOutcomes).toEqual([]);
+  });
+
+  test("records nothing for a finding thread without a comment id", () => {
+    const plan = planThreadSync(
+      [thread({ isResolved: true, firstCommentDatabaseId: null })],
+      VIEWER_LOGIN,
+    );
+    expect(plan.findingOutcomes).toEqual([]);
+  });
+
+  test("lists a thread that a person started as an open human thread", () => {
+    const plan = planThreadSync([humanThread()], VIEWER_LOGIN);
+    expect(plan.humanThreads).toEqual([
+      { firstCommentId: 801, resolved: false },
+    ]);
+  });
+
+  test("keeps the resolved flag of a human thread", () => {
+    const plan = planThreadSync(
+      [humanThread({ isResolved: true })],
+      VIEWER_LOGIN,
+    );
+    expect(plan.humanThreads).toEqual([
+      { firstCommentId: 801, resolved: true },
+    ]);
+  });
+
+  test("does not list a finding thread as a human thread", () => {
+    const plan = planThreadSync([thread()], VIEWER_LOGIN);
+    expect(plan.humanThreads).toEqual([]);
+  });
+
+  test("lists a thread that the viewer account started without the role tag", () => {
+    const plan = planThreadSync(
+      [humanThread({ firstCommentAuthorLogin: VIEWER_LOGIN })],
+      VIEWER_LOGIN,
+    );
+    expect(plan.humanThreads).toHaveLength(1);
+  });
+
+  test("does not list a thread that a bot started", () => {
+    const plan = planThreadSync(
+      [humanThread({ firstCommentAuthorLogin: "dependabot[bot]" })],
+      VIEWER_LOGIN,
+    );
+    expect(plan.humanThreads).toEqual([]);
+  });
+
+  test("does not list a thread whose author could not be read", () => {
+    const plan = planThreadSync(
+      [humanThread({ firstCommentAuthorLogin: "" })],
+      VIEWER_LOGIN,
+    );
+    expect(plan.humanThreads).toEqual([]);
+  });
+
+  test("does not list a human thread without a comment id", () => {
+    const plan = planThreadSync(
+      [humanThread({ firstCommentDatabaseId: null })],
+      VIEWER_LOGIN,
+    );
+    expect(plan.humanThreads).toEqual([]);
+  });
+});
+
+describe("recordReviewOutcomes", () => {
+  const BODY_MUST = "[Factory 自動レビュー]\n[MUST] first";
+  const BODY_IMO = "[Factory 自動レビュー]\n[IMO] second";
+  const MUST_FINDING = finding({ line: 10 });
+  const IMO_FINDING = finding({ path: "b.ts", line: 20, kind: "imo" });
+  const HELD_FINDING = finding({ path: "c.ts", line: 3, confidence: "low" });
+  const FINDINGS = [MUST_FINDING, IMO_FINDING, HELD_FINDING];
+  const COMMENTS: ReviewComment[] = [
+    { path: "a.ts", line: 10, side: "RIGHT", body: BODY_MUST },
+    { path: "b.ts", line: 20, side: "RIGHT", body: BODY_IMO },
+  ];
+
+  type Calls = {
+    inserted: { reviewId: number; rows: readonly ReviewFindingRow[] }[];
+    outcomes: (readonly FindingOutcomeUpdate[])[];
+    humanThreads: {
+      workItemId: number;
+      reviewId: number;
+      threads: readonly HumanThreadSync[];
+    }[];
+    warnings: string[];
+  };
+
+  function setup(overrides: Partial<ReviewOutcomeDeps> = {}) {
+    const calls: Calls = {
+      inserted: [],
+      outcomes: [],
+      humanThreads: [],
+      warnings: [],
+    };
+    const deps: ReviewOutcomeDeps = {
+      listPostedComments: async () => [
+        { id: 601, path: "a.ts", line: 10, body: BODY_MUST },
+        { id: 602, path: "b.ts", line: 20, body: BODY_IMO },
+      ],
+      insertReviewFindings: async (reviewId, rows) => {
+        calls.inserted.push({ reviewId, rows });
+      },
+      recordFindingOutcomes: async (updates) => {
+        calls.outcomes.push(updates);
+        return updates.length;
+      },
+      upsertHumanThreads: async (workItemId, reviewId, threads) => {
+        calls.humanThreads.push({ workItemId, reviewId, threads });
+      },
+      log: {
+        info() {},
+        warn: (message) => {
+          calls.warnings.push(message);
+        },
+        error() {},
+      },
+      ...overrides,
+    };
+    return { calls, deps };
+  }
+
+  function input(
+    overrides: Partial<RecordReviewOutcomesInput> = {},
+  ): RecordReviewOutcomesInput {
+    return {
+      workItemId: 7,
+      reviewId: 17,
+      findings: FINDINGS,
+      commentedFindings: [MUST_FINDING, IMO_FINDING],
+      comments: COMMENTS,
+      postedReviewId: 99,
+      syncThreads: null,
+      viewerLogin: "factory-bot",
+      answeredResponses: [],
+      ...overrides,
+    };
+  }
+
+  test("records one row per finding with the id of its comment", async () => {
+    const { calls, deps } = setup();
+    await recordReviewOutcomes(input(), deps);
+    expect(
+      calls.inserted[0]?.rows.map((row) => [row.idx, row.review_comment_id]),
+    ).toEqual([
+      [0, 601],
+      [1, 602],
+      [2, null],
+    ]);
+  });
+
+  test("records the rows under the review it was given", async () => {
+    const { calls, deps } = setup();
+    await recordReviewOutcomes(input(), deps);
+    expect(calls.inserted[0]?.reviewId).toBe(17);
+  });
+
+  test("marks only the findings that were shown on the pull request as posted", async () => {
+    const { calls, deps } = setup();
+    await recordReviewOutcomes(input(), deps);
+    expect(calls.inserted[0]?.rows.map((row) => row.posted)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  test("marks no finding as posted when the review was not posted", async () => {
+    const { calls, deps } = setup();
+    await recordReviewOutcomes(input({ postedReviewId: null }), deps);
+    expect(calls.inserted[0]?.rows.map((row) => row.posted)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  test("does not ask GitHub for comments when the review was not posted", async () => {
+    let asked = false;
+    const { deps } = setup({
+      listPostedComments: async () => {
+        asked = true;
+        return [];
+      },
+    });
+    await recordReviewOutcomes(input({ postedReviewId: null }), deps);
+    expect(asked).toBe(false);
+  });
+
+  test("does not ask GitHub for comments when no finding became a line comment", async () => {
+    let asked = false;
+    const { deps } = setup({
+      listPostedComments: async () => {
+        asked = true;
+        return [];
+      },
+    });
+    await recordReviewOutcomes(
+      input({ comments: [], commentedFindings: [] }),
+      deps,
+    );
+    expect(asked).toBe(false);
+  });
+
+  test("asks for the comments of the posted review", async () => {
+    const asked: number[] = [];
+    const { deps } = setup({
+      listPostedComments: async (reviewId) => {
+        asked.push(reviewId);
+        return [];
+      },
+    });
+    await recordReviewOutcomes(input(), deps);
+    expect(asked).toEqual([99]);
+  });
+
+  test("still records the findings when the comments could not be listed", async () => {
+    const { calls, deps } = setup({
+      listPostedComments: async () => {
+        throw new Error("rate limited");
+      },
+    });
+    await recordReviewOutcomes(input(), deps);
+    expect(calls.inserted[0]?.rows.map((row) => row.review_comment_id)).toEqual(
+      [null, null, null],
+    );
+  });
+
+  test("leaves a warning when the comments could not be listed", async () => {
+    const { calls, deps } = setup({
+      listPostedComments: async () => {
+        throw new Error("rate limited");
+      },
+    });
+    await recordReviewOutcomes(input(), deps);
+    expect(calls.warnings).toHaveLength(1);
+  });
+
+  test("does not throw when the findings cannot be recorded", async () => {
+    const { deps } = setup({
+      insertReviewFindings: async () => {
+        throw new Error('relation "factory.review_findings" does not exist');
+      },
+    });
+    await expect(recordReviewOutcomes(input(), deps)).resolves.toBeUndefined();
+  });
+
+  test("leaves a warning when the findings cannot be recorded", async () => {
+    const { calls, deps } = setup({
+      insertReviewFindings: async () => {
+        throw new Error("boom");
+      },
+    });
+    await recordReviewOutcomes(input(), deps);
+    expect(calls.warnings).toHaveLength(1);
+  });
+
+  test("still records the outcomes when the findings cannot be recorded", async () => {
+    const { calls, deps } = setup({
+      insertReviewFindings: async () => {
+        throw new Error("boom");
+      },
+    });
+    await recordReviewOutcomes(
+      input({
+        answeredResponses: [
+          { thread_id: 501, decision: "addressed", body: "ok" },
+        ],
+      }),
+      deps,
+    );
+    expect(calls.outcomes).toHaveLength(1);
+  });
+
+  test("does not throw when the outcomes cannot be recorded", async () => {
+    const { deps } = setup({
+      recordFindingOutcomes: async () => {
+        throw new Error("boom");
+      },
+    });
+    await expect(
+      recordReviewOutcomes(
+        input({
+          answeredResponses: [
+            { thread_id: 501, decision: "addressed", body: "ok" },
+          ],
+        }),
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  test("records the answers of the re-review as outcomes", async () => {
+    const { calls, deps } = setup();
+    await recordReviewOutcomes(
+      input({
+        answeredResponses: [
+          { thread_id: 501, decision: "addressed", body: "ok" },
+          { thread_id: 502, decision: "skip_rejected", body: "no" },
+        ],
+      }),
+      deps,
+    );
+    expect(calls.outcomes[0]).toEqual([
+      { commentId: 501, outcome: "fixed", source: "rereview" },
+      { commentId: 502, outcome: "skip_rejected", source: "rereview" },
+    ]);
+  });
+
+  test("records the resolution of the threads as outcomes from the thread sync", async () => {
+    const { calls, deps } = setup();
+    await recordReviewOutcomes(
+      input({
+        syncThreads: [
+          {
+            id: "t1",
+            isResolved: true,
+            path: "a.ts",
+            line: 10,
+            firstCommentAuthorLogin: "factory-bot",
+            firstCommentBody: "[Factory 自動レビュー] @alice\n[MUST] fix",
+            lastCommentAuthorLogin: "alice",
+            lastCommentBody: "done",
+            firstCommentDatabaseId: 501,
+            allCommentIds: [501],
+            comments: [],
+            lastCommentAuthorId: null,
+            lastCommentDatabaseId: null,
+            resolvedByLogin: "alice",
+            resolvedById: null,
+          },
+        ],
+      }),
+      deps,
+    );
+    expect(calls.outcomes[0]).toEqual([
+      { commentId: 501, outcome: "resolved_by_human", source: "thread_sync" },
+    ]);
+  });
+
+  test("records the human threads under the work item and the review", async () => {
+    const { calls, deps } = setup();
+    await recordReviewOutcomes(
+      input({
+        syncThreads: [
+          {
+            id: "t2",
+            isResolved: false,
+            path: "a.ts",
+            line: 10,
+            firstCommentAuthorLogin: "alice",
+            firstCommentBody: "wrong",
+            lastCommentAuthorLogin: "alice",
+            lastCommentBody: "wrong",
+            firstCommentDatabaseId: 801,
+            allCommentIds: [801],
+            comments: [],
+            lastCommentAuthorId: null,
+            lastCommentDatabaseId: null,
+            resolvedByLogin: "",
+            resolvedById: null,
+          },
+        ],
+      }),
+      deps,
+    );
+    expect(calls.humanThreads).toEqual([
+      {
+        workItemId: 7,
+        reviewId: 17,
+        threads: [{ firstCommentId: 801, resolved: false }],
+      },
+    ]);
+  });
+
+  test("records no outcome and no human thread when the threads were not read", async () => {
+    const { calls, deps } = setup();
+    await recordReviewOutcomes(input({ syncThreads: null }), deps);
+    expect([calls.outcomes.length, calls.humanThreads.length]).toEqual([0, 0]);
+  });
+
+  test("still records the outcomes when the human threads cannot be recorded", async () => {
+    const { calls, deps } = setup({
+      upsertHumanThreads: async () => {
+        throw new Error("boom");
+      },
+    });
+    await recordReviewOutcomes(
+      input({
+        syncThreads: [
+          {
+            id: "t2",
+            isResolved: false,
+            path: "a.ts",
+            line: 10,
+            firstCommentAuthorLogin: "alice",
+            firstCommentBody: "wrong",
+            lastCommentAuthorLogin: "alice",
+            lastCommentBody: "wrong",
+            firstCommentDatabaseId: 801,
+            allCommentIds: [801],
+            comments: [],
+            lastCommentAuthorId: null,
+            lastCommentDatabaseId: null,
+            resolvedByLogin: "",
+            resolvedById: null,
+          },
+        ],
+        answeredResponses: [
+          { thread_id: 501, decision: "answered", body: "fact" },
+        ],
+      }),
+      deps,
+    );
+    expect(calls.outcomes).toHaveLength(1);
   });
 });
 

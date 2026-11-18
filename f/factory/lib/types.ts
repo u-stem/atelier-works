@@ -855,6 +855,11 @@ export type ReviewRecord = {
   summary: string;
   findings: ReviewFinding[];
   posted_review_id: string | null;
+  /**
+   * このレビューを生成した`agent_runs`の行のid。
+   * 実行の記録を読めなかったレビューは省くか`null`にする。
+   */
+  agent_run_id?: number | null;
 };
 
 /**

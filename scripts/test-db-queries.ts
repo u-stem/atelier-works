@@ -68,6 +68,8 @@ import {
   insertGhCollectRuns,
   insertInvestigateWorkItemUnlessActive,
   insertPrReviewWorkItemUnlessActive,
+  insertReview,
+  insertReviewFindings,
   insertWorkerSample,
   insertWorkItem,
   isActiveIssueUniqueViolation,
@@ -134,6 +136,7 @@ import {
   recordApprovalRedispatch,
   recordDeployment,
   recordFailure,
+  recordFindingOutcomes,
   recordMainCiRun,
   recordPrCiCheck,
   recordPrConflict,
@@ -179,6 +182,7 @@ import {
   updateStatusIfLeaseHolderClearingFlowJobId,
   updateStatusToRequirementsIfCurrent,
   updateStatusToRequirementsIfLeaseHolder,
+  upsertHumanThreads,
   writeGhRepoDetail,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
@@ -13380,6 +13384,351 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
   check(
     "pr review trigger: a value outside the five triggers is rejected",
     rejected,
+  );
+}
+
+{
+  // レビュー指摘の採否の表を、実DBで確かめる。
+  // 証跡パックの期間は、ほかの場面と混ざらないよう、遠い過去に置く。
+  const itemId = await prWorkItem(
+    "pr_review",
+    9101,
+    "reviewed",
+    "qdb outcomes",
+  );
+  const runRecord = (workItemId: number) => ({
+    work_item_id: workItemId,
+    stage: "pr_review",
+    attempt: 1,
+    model: "qdb-model",
+    claude_version: null,
+    input_tokens: null,
+    output_tokens: null,
+    cache_read_tokens: null,
+    cost_usd: null,
+    num_turns: null,
+    duration_ms: null,
+    session_id: null,
+    exit_code: 0,
+    error: null,
+    failure_reason: null,
+    model_usage: [],
+    skills: null,
+    skill_clone_sha: null,
+  });
+  const findingOf = (
+    path: string,
+    kind: "must" | "imo",
+    confidence: "high" | "medium" | "low",
+  ) => ({
+    path,
+    line: 10,
+    end_line: null,
+    severity: kind === "must" ? ("major" as const) : ("minor" as const),
+    kind,
+    message: "qdb finding",
+    suggestion: null,
+    suggested_code: null,
+    evidence: "qdb evidence",
+    confidence,
+  });
+  const reviewOf = (agentRunId: number | null) => ({
+    work_item_id: itemId,
+    head_sha: "abc1234",
+    verdict: "comment" as const,
+    result: "reviewed" as const,
+    summary: "qdb summary",
+    findings: [
+      findingOf("a.ts", "must", "high"),
+      findingOf("b.ts", "imo", "medium"),
+      findingOf("c.ts", "must", "low"),
+    ],
+    posted_review_id: "99",
+    agent_run_id: agentRunId,
+  });
+
+  const runId = await recordAgentRun(runRecord(itemId), sql);
+  const reviewId = await insertReview(reviewOf(runId), sql);
+  const storedRun = await sql`
+    SELECT agent_run_id FROM factory.reviews WHERE id = ${reviewId}::bigint
+  `.fetch();
+  check(
+    "review outcomes: a review keeps the agent run that generated it",
+    storedRun[0]?.agent_run_id === runId,
+    storedRun,
+  );
+  const withoutRunId = await insertReview(reviewOf(null), sql);
+  const storedWithoutRun = await sql`
+    SELECT agent_run_id FROM factory.reviews WHERE id = ${withoutRunId}::bigint
+  `.fetch();
+  check(
+    "review outcomes: a review without an agent run stores NULL",
+    storedWithoutRun[0]?.agent_run_id === null,
+    storedWithoutRun,
+  );
+  const deletedRunId = await recordAgentRun(runRecord(itemId), sql);
+  const orphanReviewId = await insertReview(reviewOf(deletedRunId), sql);
+  await execPsqlAsync(
+    target,
+    `DELETE FROM factory.agent_runs WHERE id = ${String(deletedRunId)}`,
+  );
+  const orphaned = await sql`
+    SELECT agent_run_id FROM factory.reviews WHERE id = ${orphanReviewId}::bigint
+  `.fetch();
+  check(
+    "review outcomes: deleting the agent run leaves the review with NULL",
+    orphaned.length === 1 && orphaned[0]?.agent_run_id === null,
+    orphaned,
+  );
+
+  await insertReviewFindings(
+    reviewId,
+    [
+      {
+        idx: 0,
+        path: "a.ts",
+        severity: "major",
+        kind: "must",
+        confidence: "high",
+        posted: true,
+        review_comment_id: 501,
+      },
+      {
+        idx: 1,
+        path: "b.ts",
+        severity: "minor",
+        kind: "imo",
+        confidence: "medium",
+        posted: true,
+        review_comment_id: 502,
+      },
+      {
+        idx: 2,
+        path: "c.ts",
+        severity: "major",
+        kind: "must",
+        confidence: "low",
+        posted: false,
+        review_comment_id: null,
+      },
+    ],
+    sql,
+  );
+  const stored = await sql`
+    SELECT idx, outcome, review_comment_id, outcome_at IS NOT NULL AS has_time
+    FROM factory.review_findings WHERE review_id = ${reviewId}::bigint ORDER BY idx
+  `.fetch();
+  check(
+    "review outcomes: a posted finding starts as posted and a held one has no outcome",
+    JSON.stringify(
+      stored.map((row) => [row.idx, row.outcome, row.has_time]),
+    ) ===
+      JSON.stringify([
+        [0, "posted", true],
+        [1, "posted", true],
+        [2, null, false],
+      ]),
+    stored,
+  );
+  check(
+    "review outcomes: the comment ids are stored as bigint and an unposted finding has none",
+    JSON.stringify(stored.map((row) => row.review_comment_id)) ===
+      JSON.stringify([501, 502, null]),
+    stored,
+  );
+
+  const rejects = async (statement: string): Promise<boolean> => {
+    try {
+      await execPsqlAsync(target, statement);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  const insertFindingSql = (
+    idx: number,
+    posted: string,
+    outcome: string,
+    source = "NULL",
+  ) =>
+    `INSERT INTO factory.review_findings (review_id, idx, path, severity, kind, posted, outcome, outcome_source) VALUES (${String(reviewId)}, ${String(idx)}, 'x.ts', 'major', 'must', ${posted}, ${outcome}, ${source})`;
+  check(
+    "review outcomes: the table rejects an outcome out of range",
+    await rejects(insertFindingSql(7, "true", "'merged'")),
+  );
+  check(
+    "review outcomes: the table rejects an outcome source out of range",
+    await rejects(insertFindingSql(7, "true", "'posted'", "'webhook'")),
+  );
+  check(
+    "review outcomes: the table rejects an outcome on a finding that was not posted",
+    await rejects(insertFindingSql(7, "false", "'posted'")),
+  );
+  check(
+    "review outcomes: the table rejects a second row for the same position",
+    await rejects(insertFindingSql(0, "true", "'posted'")),
+  );
+
+  const outcomeOf = async (commentId: number) => {
+    const rows = await sql`
+      SELECT outcome, outcome_source FROM factory.review_findings
+      WHERE review_comment_id = ${commentId}::bigint
+    `.fetch();
+    return JSON.stringify([rows[0]?.outcome, rows[0]?.outcome_source]);
+  };
+  const fixedCount = await recordFindingOutcomes(
+    [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
+    sql,
+  );
+  check(
+    "review outcomes: a fix moves a posted finding to fixed",
+    fixedCount === 1 && (await outcomeOf(501)) === '["fixed","pr_fix"]',
+    await outcomeOf(501),
+  );
+  const keptCount = await recordFindingOutcomes(
+    [{ commentId: 501, outcome: "resolved_by_human", source: "thread_sync" }],
+    sql,
+  );
+  check(
+    "review outcomes: a human resolution does not replace a fix",
+    keptCount === 0 && (await outcomeOf(501)) === '["fixed","pr_fix"]',
+    await outcomeOf(501),
+  );
+  const rejectedCount = await recordFindingOutcomes(
+    [
+      { commentId: 502, outcome: "skipped", source: "pr_fix" },
+      { commentId: 502, outcome: "skip_rejected", source: "rereview" },
+    ],
+    sql,
+  );
+  check(
+    "review outcomes: two outcomes of one comment are written once, with the last source",
+    rejectedCount === 1 &&
+      (await outcomeOf(502)) === '["skip_rejected","rereview"]',
+    await outcomeOf(502),
+  );
+  check(
+    "review outcomes: a comment without a finding changes nothing",
+    (await recordFindingOutcomes(
+      [{ commentId: 999, outcome: "fixed", source: "pr_fix" }],
+      sql,
+    )) === 0,
+  );
+
+  await upsertHumanThreads(
+    itemId,
+    reviewId,
+    [
+      { firstCommentId: 801, resolved: false },
+      { firstCommentId: 802, resolved: false },
+    ],
+    sql,
+  );
+  await upsertHumanThreads(
+    itemId,
+    withoutRunId,
+    [{ firstCommentId: 801, resolved: true }],
+    sql,
+  );
+  const threads = await sql`
+    SELECT first_comment_id, resolved, first_seen_review_id
+    FROM factory.review_human_threads WHERE work_item_id = ${itemId}::bigint
+    ORDER BY first_comment_id
+  `.fetch();
+  check(
+    "review outcomes: a thread seen again keeps one row and updates only the resolved flag",
+    JSON.stringify(
+      threads.map((row) => [
+        row.first_comment_id,
+        row.resolved,
+        row.first_seen_review_id,
+      ]),
+    ) ===
+      JSON.stringify([
+        [801, true, reviewId],
+        [802, false, reviewId],
+      ]),
+    threads,
+  );
+
+  // 証跡パックの集計は、期間を遠い過去に動かした行で確かめる。
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.reviews SET created_at = '2002-01-03T00:00:00Z' WHERE id IN (${String(reviewId)}, ${String(withoutRunId)})`,
+  );
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.review_findings SET created_at = '2002-01-03T00:00:00Z' WHERE review_id = ${String(reviewId)}`,
+  );
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.review_human_threads SET created_at = '2002-01-03T00:00:00Z' WHERE work_item_id = ${String(itemId)}`,
+  );
+  const outcomeEvidence = await collectAuditEvidence(
+    {
+      period: {
+        start: new Date("2002-01-01T00:00:00Z"),
+        end: new Date("2002-01-08T00:00:00Z"),
+        unaudited_gap_days: 0,
+      },
+      instanceName: "qdb",
+    },
+    sql,
+  );
+  const reviewOutcomes = outcomeEvidence.review_outcomes;
+  check(
+    "audit evidence: the outcomes count only the findings that were posted",
+    reviewOutcomes.posted_total === 2 &&
+      reviewOutcomes.counts.fixed === 1 &&
+      reviewOutcomes.counts.skip_rejected === 1 &&
+      reviewOutcomes.counts.posted === 0,
+    reviewOutcomes,
+  );
+  check(
+    "audit evidence: the outcomes count the findings that have the id of a comment",
+    reviewOutcomes.with_comment_id === 2,
+    reviewOutcomes,
+  );
+  check(
+    "audit evidence: the threads that a person started are counted with the resolved ones",
+    reviewOutcomes.human_threads.total === 2 &&
+      reviewOutcomes.human_threads.resolved === 1,
+    reviewOutcomes.human_threads,
+  );
+  check(
+    "audit evidence: a review with findings and no outcome rows is counted as unrecorded",
+    reviewOutcomes.unrecorded_reviews === 1,
+    reviewOutcomes,
+  );
+
+  // 子の行は、レビューの削除にあわせて消える。
+  await execPsqlAsync(
+    target,
+    `DELETE FROM factory.reviews WHERE id = ${String(reviewId)}`,
+  );
+  const afterDelete = await sql`
+    SELECT
+      (SELECT count(*) FROM factory.review_findings WHERE review_id = ${reviewId}::bigint) AS findings,
+      (SELECT count(*) FROM factory.review_human_threads WHERE work_item_id = ${itemId}::bigint) AS threads
+  `.fetch();
+  check(
+    "review outcomes: deleting a review deletes its findings and the threads it saw first",
+    Number(afterDelete[0]?.findings) === 0 &&
+      Number(afterDelete[0]?.threads) === 0,
+    afterDelete,
+  );
+  let threadWithoutReviewRejected = false;
+  try {
+    await execPsqlAsync(
+      target,
+      `INSERT INTO factory.review_human_threads (work_item_id, first_comment_id, first_seen_review_id) VALUES (${String(itemId)}, 803, NULL)`,
+    );
+  } catch {
+    threadWithoutReviewRejected = true;
+  }
+  check(
+    "review outcomes: the table rejects a thread that has no review it was first seen in",
+    threadWithoutReviewRejected,
   );
 }
 

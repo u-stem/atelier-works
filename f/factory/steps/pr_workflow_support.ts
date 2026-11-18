@@ -86,6 +86,7 @@ import {
   matchesForbiddenPath,
 } from "../lib/protected_paths.ts";
 import { isRepoOwnerStopReason } from "../lib/repo_owner_gate.ts";
+import type { FindingOutcome } from "../lib/review_outcomes.ts";
 import {
   type AgentRunRecord,
   assertSha,
@@ -341,6 +342,8 @@ export function buildReviewRecord(input: {
   readonly findings: readonly ReviewFinding[];
   readonly blockingThreadCount: number | null;
   readonly postedReviewId: string | null;
+  /** このレビューを生成した`agent_runs`の行のid。記録できなかったときは省くか`null`。 */
+  readonly agentRunId?: number | null;
 }): ReviewRecord {
   const outcome = reviewResultFor(input.findings, input.blockingThreadCount);
   return {
@@ -351,6 +354,7 @@ export function buildReviewRecord(input: {
     summary: input.summary,
     findings: input.findings.map(sanitizeFindingForRecord),
     posted_review_id: input.postedReviewId,
+    agent_run_id: input.agentRunId ?? null,
   };
 }
 
@@ -1316,6 +1320,73 @@ export function countBlockingThreads(
           hasMarker(reply.body, PR_REVIEW_OBJECTION_MARKER_KIND)),
     );
   }).length;
+}
+
+/** `planThreadSync`が返す、Factoryの指摘のスレッドから読み取った結果1件。 */
+export type ThreadSyncOutcome = {
+  /** スレッドの最初のコメントのid。指摘の`review_comment_id`と同じである。 */
+  readonly commentId: number;
+  readonly outcome: FindingOutcome;
+};
+
+/** `planThreadSync`が返す、人が始めたスレッド1件。 */
+export type HumanThreadObservation = {
+  readonly firstCommentId: number;
+  readonly resolved: boolean;
+};
+
+export type ThreadSyncPlan = {
+  readonly findingOutcomes: readonly ThreadSyncOutcome[];
+  readonly humanThreads: readonly HumanThreadObservation[];
+};
+
+/** GitHubのAppやbotのloginが持つ接尾辞。人のスレッドに数えない。 */
+const BOT_LOGIN_SUFFIX = "[bot]";
+
+/**
+ * 読み取ったスレッドの一覧から、採否の記録に反映するものを決める。
+ * 一覧は、このラウンドが解決する前の状態で渡す。このラウンド自身の解決を、人の解決と取り違えないためである。
+ * Factoryの指摘のスレッドのうち、すでに解決されているものについて、結果を返す。
+ *   - 最後のコメントがFactoryの修正の返信(`isFixedFixReply`)なら`fixed`。
+ *   - 最後のコメントがFactoryの了承か解消の返信なら、返さない。その結果は、返信を投稿したときに記録している。
+ *   - それ以外は`resolved_by_human`。Factoryは運用者と同じアカウントで動くので、人が解決したものとして扱う。
+ * 開いたままのスレッドからは、結果を返さない。
+ * Factoryの指摘で始まらないスレッドは、人が始めたスレッドとして返す。
+ * botが始めたスレッドと、書き手を読めないスレッドは数えない。
+ * 最初のコメントのidを読めないスレッドは、どちらにも入れない。
+ */
+export function planThreadSync(
+  threads: readonly ReviewThread[],
+  viewer: string,
+): ThreadSyncPlan {
+  const findingOutcomes: ThreadSyncOutcome[] = [];
+  const humanThreads: HumanThreadObservation[] = [];
+  for (const thread of threads) {
+    const commentId = thread.firstCommentDatabaseId;
+    if (commentId === null) continue;
+    if (isFactoryFindingThread(thread, viewer)) {
+      if (!thread.isResolved) continue;
+      const lastIsOwn = isOwnPost(thread.lastCommentAuthorLogin, viewer);
+      if (lastIsOwn && isFixedFixReply(thread.lastCommentBody)) {
+        findingOutcomes.push({ commentId, outcome: "fixed" });
+      } else if (
+        lastIsOwn &&
+        hasMarker(thread.lastCommentBody, PR_REVIEW_ACK_MARKER_KIND)
+      ) {
+        continue;
+      } else {
+        findingOutcomes.push({ commentId, outcome: "resolved_by_human" });
+      }
+      continue;
+    }
+    const author = thread.firstCommentAuthorLogin;
+    if (author === "" || author.endsWith(BOT_LOGIN_SUFFIX)) continue;
+    humanThreads.push({
+      firstCommentId: commentId,
+      resolved: thread.isResolved,
+    });
+  }
+  return { findingOutcomes, humanThreads };
 }
 
 /**

@@ -60,6 +60,7 @@ import {
   insertFixRound,
   insertIssueProposal,
   recordFailure,
+  recordFindingOutcomes,
   returnToDesigningFromPrFixIfLeaseHolder,
   setFlowJobIdIfUnset,
   setHeadSha,
@@ -106,6 +107,7 @@ import {
   repoOwnerGateDeps,
   repoOwnerStopReason,
 } from "../lib/repo_owner_gate.ts";
+import { recordFixReplyOutcome } from "../lib/review_outcomes.ts";
 import { isOneOf, isString, type WorkItemStatus } from "../lib/types.ts";
 import {
   isArrayOf,
@@ -1135,6 +1137,17 @@ export async function main(
             pr_number,
             replyTargetCommentId(threads, reply.review_comment_id),
             body,
+          );
+          // 返信した指摘の結果を、スレッドの最初のコメントのidで記録する。
+          // 記録の失敗は、返信の投稿と修正の回を止めない。
+          await recordFixReplyOutcome(
+            recordFindingOutcomes,
+            {
+              decision: reply.decision,
+              committed: newSha !== null,
+              commentId: replyTargetCommentId(threads, reply.review_comment_id),
+            },
+            log,
           );
         } else {
           await postIssueComment(client, owner, repo, pr_number, body);
