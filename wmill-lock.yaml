@@ -181,7 +181,6 @@ locks:
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
   f/factory/lib/requirements_doc: c175acfaa2af360877513464eb2204289018739f267ab983ad991a5939242d62
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955
-  f/factory/lib/review_eval: cf76b6141f57d797e2db40f47ebbdda87f20a50401f8bde2529c69ff8cbcf494
   f/factory/lib/schedule_detector_heartbeat: 8861c17d5335c2f95017ef124cab0daec8669252cf80c06c600375fa6b1987f1
   f/factory/lib/schedule_failing: 3ef7839855097024db61ba09250654bdfc9d55157f99e7b7c4c9be07dec91237
   f/factory/lib/schedule_failure_detect: e144067bbd1b10e118cdbb0e2ec59b9d350a27f4dfad02c397649d0406c1fd3f

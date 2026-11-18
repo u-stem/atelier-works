@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 
-// スキルとプロンプトの回帰評価。
+// レビューのスキルの回帰評価。
 // 固定の差分(`tests/fixtures/review_eval/`)から`reviewPrompt`を作り、
 // 指定したgit参照のスキルを読ませて`claude -p`でレビューさせ、
 // 正解の定義と照合して、検出率と誤検知を参照ごとに並べて出す。
-// 照合と集計は`f/factory/lib/review_eval.ts`にあり、ここはその入出力をつなぐ。
+// 照合と集計は`scripts/review-eval-core.ts`にあり、ここはその入出力をつなぐ。
 // DBは使わない。実Claudeを呼ぶので、`mise run test`と`mise run check`には含めない。
 //
 // 使い方:
@@ -14,6 +14,8 @@
 //
 // 本番のレビューとの違い: 差分だけを渡し、ツールは渡さない(作業ディレクトリは空の一時ディレクトリ)。
 // 参照のスキルは`git show <ref>:<path>`で読むので、作業ツリーの未コミットの変更は読まない。
+// 参照ごとに変わるのはスキルの本文だけで、`reviewPrompt`と`REVIEW_SCHEMA`は作業ツリーのものを使う。
+// 利用者の設定(CLAUDE.md、hooks、plugins)は読ませない。評価の結果が操作者の環境で変わらないようにするため。
 
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -28,6 +30,7 @@ import {
   type WriteTempFile,
 } from "../f/factory/lib/claude.ts";
 import { REVIEW_SCHEMA, reviewPrompt } from "../f/factory/lib/prompts.ts";
+import { type CommandRunner, runCommand } from "../f/factory/lib/workspace.ts";
 import {
   buildEvalReport,
   changedFilesOfDiff,
@@ -39,8 +42,7 @@ import {
   type RunOutcome,
   readReviewOutput,
   scoreRun,
-} from "../f/factory/lib/review_eval.ts";
-import { type CommandRunner, runCommand } from "../f/factory/lib/workspace.ts";
+} from "./review-eval-core.ts";
 
 export const DEFAULT_RUNS = 3;
 /** 1回の実行に許す費用の上限(USD)。`--max-budget-usd`に渡す。 */
@@ -291,7 +293,9 @@ export async function runClaudeForReview(
     isStructuredOutput: (_value: unknown): _value is unknown => true,
     tools: [],
     permissionMode: "dontAsk",
-    settingSources: ["user"],
+    // 空にして、利用者の設定を読ませない。`user`を渡すと、操作者の~/.claudeが評価に混ざる。
+    // 設定の置き場(CLAUDE_CONFIG_DIR)を空にする方法は、macOSのログイン情報の鍵が置き場ごとに変わり、認証が外れるので選ばない。
+    settingSources: [],
     maxTurns: EVAL_MAX_TURNS,
     maxBudgetUsd: input.maxBudgetUsd,
     cwd: context.cwd,
@@ -457,6 +461,8 @@ export async function runEvaluation(
   }
 
   const prepared: PreparedRef[] = [];
+  // 作った時点で後片付けの対象にする。読み戻しやハッシュで失敗しても、一時ファイルを残さないため。
+  const created: SystemPromptFile[] = [];
   try {
     for (const ref of options.refs) {
       const systemPrompt = await buildSystemPrompt({
@@ -466,6 +472,7 @@ export async function runEvaluation(
           deps.readSkillAtRef(ref, relative(deps.repoRoot, path)),
         writeTempFile: deps.writeTempFile ?? writeSystemPromptFile,
       });
+      created.push(systemPrompt);
       const text = await readFile(systemPrompt.path, "utf8");
       prepared.push({
         ref,
@@ -493,22 +500,25 @@ export async function runEvaluation(
     for (const evalCase of cases) {
       const prompt = prompts.get(evalCase.id) ?? "";
       for (let run = 1; run <= options.runs; run += 1) {
+        // 上限の判定は(ケース, 回)ごとに1回、全参照を始める前に行う。
+        // 参照ごとに判定すると、片方だけが採点されて、比較の分母がずれる。
+        const skip = options.dryRun || spentUsd >= options.maxTotalUsd;
         for (const { ref, systemPrompt } of prepared) {
           const list = outcomes.get(`${ref}\n${evalCase.id}`) ?? [];
-          if (options.dryRun || spentUsd >= options.maxTotalUsd) {
+          if (skip) {
             list.push({ status: "skipped" });
             continue;
           }
           deps.progress(
             `${evalCase.id} run ${String(run)}/${String(options.runs)} (${ref})`,
           );
-          const result = await deps.runClaude({
+          const result = await runOnce(deps, {
             prompt,
             systemPromptFile: systemPrompt.path,
             model: options.model,
             maxBudgetUsd: options.maxBudgetUsd,
           });
-          spentUsd += result.cost_usd ?? 0;
+          spentUsd += result.cost_usd;
           list.push(outcomeOf(evalCase, result));
         }
       }
@@ -524,8 +534,31 @@ export async function runEvaluation(
     }));
     return buildEvalReport(refResults, options.runs);
   } finally {
-    for (const { systemPrompt } of prepared) await systemPrompt.cleanup();
+    for (const systemPrompt of created) await systemPrompt.cleanup();
   }
+}
+
+/**
+ * 1回起動する。例外は、理由つきの失敗にして返す。1回の例外で、それまでの結果を失わないため。
+ * 費用が分からない失敗は、その1回の上限(`maxBudgetUsd`)を費用とする。
+ * 分からないまま0と数えると、費用の上限を超えうる。
+ */
+async function runOnce(
+  deps: EvalDeps,
+  input: ReviewRunInput,
+): Promise<ReviewRunResult & { readonly cost_usd: number }> {
+  let result: ReviewRunResult;
+  try {
+    result = await deps.runClaude(input);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    result = {
+      ok: false,
+      reason: `claude run failed: ${message}`,
+      cost_usd: null,
+    };
+  }
+  return { ...result, cost_usd: result.cost_usd ?? input.maxBudgetUsd };
 }
 
 function outcomeOf(evalCase: EvalCase, result: ReviewRunResult): RunOutcome {

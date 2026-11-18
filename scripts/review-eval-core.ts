@@ -1,4 +1,4 @@
-// スキルとプロンプトの回帰評価の純粋な部分。
+// レビューのスキルの回帰評価の純粋な部分。
 // 固定の差分に対するレビューの出力を、正解の定義と照合し、検出率と誤検知を求める。
 // Claudeの起動、gitの読み取り、ファイルの読み込みは`scripts/review-eval.ts`が担う。
 //
@@ -11,7 +11,7 @@ import {
   isRecord,
   isString,
   type ReviewFindingKind,
-} from "./types.ts";
+} from "../f/factory/lib/types.ts";
 
 /** 正解の行の範囲の前後に許す行数。指摘が欠陥の数行先や手前を指しても、同じ箇所とみなす。 */
 export const LINE_TOLERANCE = 2;
@@ -124,14 +124,58 @@ export function parseEvalCases(value: unknown): EvalCase[] {
   return cases;
 }
 
-/** unified diffが変更するファイルの、新しい側のパス。削除されたファイルは古い側のパスを返す。 */
+/** hunk見出しの行数。省略された行数は1行である。 */
+const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/;
+
+function hunkLineCount(text: string | undefined): number {
+  return text === undefined ? 1 : Number(text);
+}
+
+/**
+ * unified diffが変更するファイルの、新しい側のパス。削除されたファイルは古い側のパスを返す。
+ * 見出し(`---`と`+++`)として読むのは、`diff --git`の直後から最初のhunkまでの行だけにする。
+ * hunkの中は、見出しの行数だけ読み飛ばす。コードの中の`-- `のコメントが、
+ * 削除行としては`--- `、追加行としては`+++ `で始まり、見出しと同じ形になるためである。
+ */
 export function changedFilesOfDiff(diff: string): string[] {
   const files: string[] = [];
   let oldPath: string | null = null;
+  // 次の行が見出しの領域にあるときはtrue。
+  let inHeader = false;
+  // hunkの中で、まだ読んでいない古い側と新しい側の行数。
+  let oldRemaining = 0;
+  let newRemaining = 0;
   for (const line of diff.split("\n")) {
     if (line.startsWith("diff --git ")) {
       oldPath = null;
-    } else if (line.startsWith("--- ")) {
+      inHeader = true;
+      oldRemaining = 0;
+      newRemaining = 0;
+      continue;
+    }
+    if (oldRemaining > 0 || newRemaining > 0) {
+      // hunkの中には`@`で始まる行が現れないので、行数が合わないdiffでは次のhunkとして読む。
+      if (!line.startsWith("@")) {
+        if (line.startsWith("+")) {
+          newRemaining -= 1;
+        } else if (line.startsWith("-")) {
+          oldRemaining -= 1;
+        } else if (!line.startsWith("\\")) {
+          oldRemaining -= 1;
+          newRemaining -= 1;
+        }
+        continue;
+      }
+    }
+    const hunk = HUNK_HEADER.exec(line);
+    if (hunk !== null) {
+      inHeader = false;
+      oldRemaining = hunkLineCount(hunk[1]);
+      newRemaining = hunkLineCount(hunk[2]);
+      continue;
+    }
+    if (!inHeader) continue;
+    if (line.startsWith("--- ")) {
       oldPath = line.startsWith("--- a/") ? line.slice("--- a/".length) : null;
     } else if (line.startsWith("+++ ")) {
       if (line.startsWith("+++ b/")) {

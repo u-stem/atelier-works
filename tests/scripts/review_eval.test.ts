@@ -3,11 +3,6 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  changedFilesOfDiff,
-  type EvalCase,
-  parseEvalCases,
-} from "../../f/factory/lib/review_eval.ts";
-import {
   type CliOptions,
   claudeEnvFrom,
   createDefaultDeps,
@@ -22,6 +17,11 @@ import {
   runEvaluation,
   UsageError,
 } from "../../scripts/review-eval.ts";
+import {
+  changedFilesOfDiff,
+  type EvalCase,
+  parseEvalCases,
+} from "../../scripts/review-eval-core.ts";
 import {
   createFakeCommandRunner,
   fail,
@@ -549,6 +549,148 @@ describe("runEvaluation", () => {
     expect(report.refs.map((r) => r.counts.runs_skipped)).toEqual([1, 1]);
   });
 
+  test("starts every ref of a case and run once the budget allows it", async () => {
+    const harness = createHarness();
+
+    await runEvaluation(
+      {
+        ...OPTIONS,
+        runs: 1,
+        caseIds: ["sql-injection", "clean-clamp"],
+        maxTotalUsd: 0.5,
+      },
+      harness.deps,
+    );
+
+    expect(harness.calls.length).toBe(2);
+  });
+
+  test("scores the same cases for every ref when the budget runs out", async () => {
+    const harness = createHarness();
+
+    const report = await runEvaluation(
+      {
+        ...OPTIONS,
+        runs: 1,
+        caseIds: ["sql-injection", "clean-clamp"],
+        maxTotalUsd: 0.5,
+      },
+      harness.deps,
+    );
+
+    expect(report.refs.map((r) => r.counts.runs_scored)).toEqual([1, 1]);
+    expect(report.refs.map((r) => r.counts.runs_skipped)).toEqual([1, 1]);
+  });
+
+  test("records a run that throws as invalid with the reason and goes on", async () => {
+    let first = true;
+    const harness = createHarness(async (input) => {
+      if (first) {
+        first = false;
+        throw new Error("spawn failed");
+      }
+      return perfectReview(input.prompt);
+    });
+
+    const report = await runEvaluation(
+      { ...OPTIONS, runs: 1, caseIds: ["sql-injection"] },
+      harness.deps,
+    );
+
+    expect(report.refs.map((r) => r.cases[0]?.runs[0])).toEqual([
+      { status: "invalid", reason: "claude run failed: spawn failed" },
+      expect.objectContaining({ status: "scored" }),
+    ]);
+  });
+
+  test("keeps the results gathered before a run that throws", async () => {
+    let calls = 0;
+    const harness = createHarness(async (input) => {
+      calls += 1;
+      if (calls === 3) throw new Error("boom");
+      return perfectReview(input.prompt);
+    });
+
+    const report = await runEvaluation(
+      { ...OPTIONS, runs: 1, caseIds: ["sql-injection", "clean-clamp"] },
+      harness.deps,
+    );
+
+    expect(report.refs.map((r) => r.counts.runs_scored)).toEqual([1, 2]);
+  });
+
+  test("adds the per-run budget to the spent total when a run throws", async () => {
+    const harness = createHarness(async () => {
+      throw new Error("boom");
+    });
+
+    await runEvaluation(
+      {
+        ...OPTIONS,
+        runs: 1,
+        caseIds: ["sql-injection", "clean-clamp"],
+        maxBudgetUsd: 1,
+        maxTotalUsd: 2,
+      },
+      harness.deps,
+    );
+
+    expect(harness.calls.length).toBe(2);
+  });
+
+  test("adds the per-run budget to the spent total when a failed run has no known cost", async () => {
+    const harness = createHarness(async () => ({
+      ok: false,
+      reason: "claude -p exited with code 1",
+      cost_usd: null,
+    }));
+
+    await runEvaluation(
+      {
+        ...OPTIONS,
+        runs: 1,
+        caseIds: ["sql-injection", "clean-clamp"],
+        maxBudgetUsd: 1,
+        maxTotalUsd: 2,
+      },
+      harness.deps,
+    );
+
+    expect(harness.calls.length).toBe(2);
+  });
+
+  test("reports the per-run budget as the cost of a failed run with no known cost", async () => {
+    const harness = createHarness(async () => ({
+      ok: false,
+      reason: "claude -p exited with code 1",
+      cost_usd: null,
+    }));
+
+    const report = await runEvaluation(
+      { ...OPTIONS, runs: 1, caseIds: ["sql-injection"], maxBudgetUsd: 1 },
+      harness.deps,
+    );
+
+    expect(report.refs.map((r) => r.counts.cost_usd)).toEqual([1, 1]);
+  });
+
+  test("removes the system prompt files when reading one back fails", async () => {
+    const cleaned: string[] = [];
+    const deps: EvalDeps = {
+      ...createHarness().deps,
+      writeTempFile: async () => ({
+        path: "/nonexistent/system-prompt.md",
+        cleanup: async () => {
+          cleaned.push("done");
+        },
+      }),
+    };
+
+    await expect(runEvaluation(OPTIONS, deps)).rejects.toThrow();
+
+    expect(cleaned).toEqual(["done"]);
+  });
+
   test("restricts the run to the cases named by --case", async () => {
     const harness = createHarness();
 
@@ -748,6 +890,20 @@ describe("runClaudeForReview", () => {
     expect(argv[argv.indexOf("--append-system-prompt-file") + 1]).toBe(
       "/tmp/system.md",
     );
+  });
+
+  test("reads no settings source so the operator's own configuration stays out", async () => {
+    const fake = createFakeCommandRunner([ok(stdoutOf())]);
+
+    await runClaudeForReview(input, fake.run, context);
+
+    const argv = fake.calls[0]?.argv ?? [];
+    expect(
+      argv.slice(
+        argv.indexOf("--setting-sources"),
+        argv.indexOf("--setting-sources") + 2,
+      ),
+    ).toEqual(["--setting-sources", ""]);
   });
 
   test("passes the prompt on standard input in the given directory and environment", async () => {

@@ -13,7 +13,7 @@ import {
   ratesOf,
   readReviewOutput,
   scoreRun,
-} from "../../f/factory/lib/review_eval.ts";
+} from "../../scripts/review-eval-core.ts";
 
 const DEFECT_CASE: EvalCase = {
   id: "off-by-one",
@@ -201,6 +201,83 @@ describe("changedFilesOfDiff", () => {
     ].join("\n");
 
     expect(changedFilesOfDiff(diff)).toEqual(["src/old.ts"]);
+  });
+
+  test("does not read a heading-like line inside a hunk as a file", () => {
+    // 削除した`-- x`のコメントと、追加した`++ b/evil`が、hunkの中で見出しと同じ形になる。
+    const diff = [
+      "diff --git a/q.sql b/q.sql",
+      "--- a/q.sql",
+      "+++ b/q.sql",
+      "@@ -1,3 +1,3 @@",
+      " select 1;",
+      "--- old comment",
+      "+++ b/evil",
+      " select 2;",
+    ].join("\n");
+
+    expect(changedFilesOfDiff(diff)).toEqual(["q.sql"]);
+  });
+
+  test("reads the file after a hunk that holds a heading-like line", () => {
+    const diff = [
+      "diff --git a/q.sql b/q.sql",
+      "--- a/q.sql",
+      "+++ b/q.sql",
+      "@@ -1,2 +1,1 @@",
+      "--- old comment",
+      " select 1;",
+      "diff --git a/next.ts b/next.ts",
+      "--- a/next.ts",
+      "+++ b/next.ts",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+    ].join("\n");
+
+    expect(changedFilesOfDiff(diff)).toEqual(["q.sql", "next.ts"]);
+  });
+
+  test("reads the file after a second hunk of the same file", () => {
+    const diff = [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      "@@ -10,2 +10,2 @@",
+      "--- c",
+      "+++ d",
+      " e",
+      "diff --git a/b.ts b/b.ts",
+      "--- a/b.ts",
+      "+++ b/b.ts",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+    ].join("\n");
+
+    expect(changedFilesOfDiff(diff)).toEqual(["a.ts", "b.ts"]);
+  });
+
+  test("treats a hunk header without a count as one line", () => {
+    const diff = [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1 +1 @@",
+      "--- x",
+      "+++ y",
+      "diff --git a/b.ts b/b.ts",
+      "--- a/b.ts",
+      "+++ b/b.ts",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+    ].join("\n");
+
+    expect(changedFilesOfDiff(diff)).toEqual(["a.ts", "b.ts"]);
   });
 });
 
