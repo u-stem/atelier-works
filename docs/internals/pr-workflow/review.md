@@ -200,7 +200,11 @@ Claudeの出力の指摘は、`evidence`と`confidence`を必ず持つ。
 - 総評の件数と、Discordの通知の件数に数えない。
 - 結果(`changes_requested`か`reviewed`)の判定に使わない。
   `kind`が`must`でも同じである。
+- 投稿する指摘の上限(50件)に数えない。
+  `low`の指摘にも、別に同じ件数の上限をかける。
 - `factory.reviews`の`findings`には、`low`も含めてすべて入れる。
+- Consoleのレビューの行は、投稿した件数と、`low`の件数を別に出す。
+  監査の証跡も、`low`を`kind`に数えず別の行にする。
 
 指摘が`low`だけのときも、レビューは投稿する。
 総評は、指摘が0件のときと同じ定型になる。

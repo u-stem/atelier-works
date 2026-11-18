@@ -448,6 +448,8 @@ export type ReviewView = {
   readonly resultLabel: string;
   readonly resultVariant: PipelineStatusVariant;
   readonly findingLabel: string;
+  /** 確信度が`low`で投稿しなかった指摘の件数。無いときは`null`。 */
+  readonly heldFindingLabel: string | null;
   readonly createdAt: string;
 };
 
@@ -473,6 +475,10 @@ export function describeReview(review: WorkItemReview): ReviewView {
     resultLabel: result.label,
     resultVariant: result.variant,
     findingLabel: `指摘 ${review.finding_count}件`,
+    heldFindingLabel:
+      review.held_finding_count === undefined || review.held_finding_count === 0
+        ? null
+        : `記録のみ ${review.held_finding_count}件`,
     createdAt: review.created_at,
   };
 }

@@ -6664,6 +6664,9 @@ const REVIEW_SEVERITY_ORDER: Readonly<Record<ReviewSeverity, number>> = {
 /**
  * Claudeの出力から、投稿する指摘と記録する要約を決める。
  * 重要なものから順に並べて上限で切るので、省くのは重要度の低いものになる。
+ * 確信度が`low`の指摘は投稿しないので、投稿する指摘の枠を取らない。
+ * 上限は、投稿する指摘と`low`の指摘に別々にかけ、`low`の指摘を後ろに並べる。
+ * 要約の省略の件数は、投稿する指摘の分だけを数える。
  * スレッドだけのレビューは新しい指摘を出さないので、出力に指摘があっても捨てる。
  */
 export function settleReviewFindings(
@@ -6677,18 +6680,21 @@ export function settleReviewFindings(
   if (scope.kind === "threads_only") {
     return { summary: output.summary, findings: [] };
   }
-  const sorted = [...output.findings].sort(
-    (left, right) =>
-      REVIEW_SEVERITY_ORDER[left.severity] -
-      REVIEW_SEVERITY_ORDER[right.severity],
-  );
+  const bySeverity = (left: ReviewFinding, right: ReviewFinding): number =>
+    REVIEW_SEVERITY_ORDER[left.severity] -
+    REVIEW_SEVERITY_ORDER[right.severity];
+  const { postable, held } = splitFindingsByConfidence(output.findings);
+  const sorted = postable.sort(bySeverity);
   const omitted = sorted.length - maxFindings;
   return {
     summary:
       omitted > 0
         ? `${output.summary}\n\n(上限の${String(maxFindings)}件を超えたため、重要度の低い指摘を${String(omitted)}件省略しました。)`
         : output.summary,
-    findings: sorted.slice(0, maxFindings),
+    findings: [
+      ...sorted.slice(0, maxFindings),
+      ...held.sort(bySeverity).slice(0, maxFindings),
+    ],
   };
 }
 

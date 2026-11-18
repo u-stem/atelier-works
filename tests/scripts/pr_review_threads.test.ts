@@ -1482,6 +1482,55 @@ describe("settleReviewFindings", () => {
     );
   });
 
+  test("does not let a low confidence finding take a slot of the limit", () => {
+    const low: ReviewFinding = {
+      ...severe("blocker", "low"),
+      confidence: "low",
+    };
+    const { findings } = settleReviewFindings(
+      { summary: "s", findings: [low, severe("nit", "kept")] },
+      FIRST,
+      1,
+    );
+    expect(findings.map((finding) => finding.message)).toContain("kept");
+  });
+
+  test("keeps a low confidence finding for the record", () => {
+    const low: ReviewFinding = {
+      ...severe("blocker", "low"),
+      confidence: "low",
+    };
+    const { findings } = settleReviewFindings(
+      { summary: "s", findings: [low, severe("nit", "kept")] },
+      FIRST,
+      1,
+    );
+    expect(findings.map((finding) => finding.message)).toContain("low");
+  });
+
+  test("does not count a kept low confidence finding as omitted", () => {
+    const low: ReviewFinding = {
+      ...severe("blocker", "low"),
+      confidence: "low",
+    };
+    const { summary } = settleReviewFindings(
+      { summary: "s", findings: [low, severe("nit")] },
+      FIRST,
+      1,
+    );
+    expect(summary).toBe("s");
+  });
+
+  test("limits the low confidence findings to the same number", () => {
+    const low: ReviewFinding = { ...severe("blocker"), confidence: "low" };
+    const { findings } = settleReviewFindings(
+      { summary: "s", findings: [low, low, low] },
+      FIRST,
+      2,
+    );
+    expect(findings).toHaveLength(2);
+  });
+
   test("leaves the summary alone within the limit", () => {
     const { summary } = settleReviewFindings(
       { summary: "s", findings: [severe("nit")] },

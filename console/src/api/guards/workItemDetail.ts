@@ -240,7 +240,13 @@ export type WorkItemReview = {
    * 結果を返す前のbackendの応答では欠ける。
    */
   readonly result?: string | null;
+  /** 投稿した指摘の件数。確信度が`low`の指摘は含めない。 */
   readonly finding_count: number;
+  /**
+   * 確信度が`low`で、記録だけにして投稿しなかった指摘の件数。
+   * この件数を返す前のbackendの応答では欠ける。
+   */
+  readonly held_finding_count?: number;
   readonly posted_review_id: string | null;
   readonly created_at: string;
 };
@@ -253,6 +259,8 @@ function isWorkItemReview(value: unknown): value is WorkItemReview {
     isString(value.verdict) &&
     (value.result === undefined || isNullableString(value.result)) &&
     isNonNegativeInteger(value.finding_count) &&
+    (value.held_finding_count === undefined ||
+      isNonNegativeInteger(value.held_finding_count)) &&
     isNullableString(value.posted_review_id) &&
     isIsoTimestamp(value.created_at)
   );

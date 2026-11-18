@@ -1816,7 +1816,10 @@ export type WorkItemReviewRow = {
   readonly verdict: string;
   /** `reviewResultFor`の結果。結果を記録する前の行では`null`。 */
   readonly result: string | null;
+  /** 投稿した指摘の件数。確信度が`low`の指摘は含めない。 */
   readonly finding_count: number;
+  /** 確信度が`low`で、記録だけにして投稿しなかった指摘の件数。 */
+  readonly held_finding_count: number;
   readonly posted_review_id: string | null;
   readonly created_at: string;
 };
@@ -1828,6 +1831,7 @@ function toWorkItemReviewRow(row: SqlRow): WorkItemReviewRow {
     verdict: asStr(row.verdict, "verdict"),
     result: asNullableStr(row.result, "result"),
     finding_count: asNumeric(row.finding_count, "finding_count"),
+    held_finding_count: asNumeric(row.held_finding_count, "held_finding_count"),
     posted_review_id: asNullableStr(row.posted_review_id, "posted_review_id"),
     created_at: asIsoDate(row.created_at, "created_at"),
   };
@@ -1985,7 +1989,10 @@ export async function runWorkItemDetail(
   const reviewRows = await sql`
     SELECT
       id AS review_id, head_sha, verdict, result,
-      jsonb_array_length(findings) AS finding_count,
+      (SELECT count(*) FROM jsonb_array_elements(findings) f
+        WHERE f ->> 'confidence' IS DISTINCT FROM 'low') AS finding_count,
+      (SELECT count(*) FROM jsonb_array_elements(findings) f
+        WHERE f ->> 'confidence' = 'low') AS held_finding_count,
       posted_review_id, created_at
     FROM factory.reviews
     WHERE work_item_id = ${workItemId}::bigint

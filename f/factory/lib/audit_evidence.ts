@@ -36,6 +36,9 @@ const EVIDENCE_MAX_CHARS = 12000;
 // 記録に値が無いグループのキーに使う表示。
 // 空欄のままだと、監査が値の欠落と空文字を区別できない。
 const UNSET_LABEL = "未設定";
+// 確信度が`low`で、記録だけにして投稿しなかった指摘のグループ。
+const HELD_FINDING_KEY = "low";
+const HELD_FINDING_LABEL = "low(記録だけで投稿していない)";
 
 /**
  * 秘密情報をマスクし、HTMLコメントとタグ(対になっていない`<!--` / `-->`の
@@ -269,6 +272,10 @@ export type AuditEvidence = {
   readonly needs_human_count: number;
   readonly fix_round_outcomes: CountByKey[];
   readonly fix_reply_decisions: CountByKey[];
+  /**
+   * レビュー指摘の件数。キーは`kind`で、確信度が`low`の指摘は`kind`に関わらず`low`の1グループにまとめる。
+   * `low`は記録だけで投稿しないので、`must`などの件数に入れない。
+   */
   readonly review_findings: CountByKey[];
   readonly notices: CountByKey[];
   /**
@@ -450,7 +457,10 @@ export function buildEvidenceSections(
   ];
 
   const reviewLines = evidence.review_findings.map((entry) =>
-    sanitizeCell(`${entry.key}: ${entry.count}件`, SANITIZE_CELL_MAX),
+    sanitizeCell(
+      `${entry.key === HELD_FINDING_KEY ? HELD_FINDING_LABEL : entry.key}: ${entry.count}件`,
+      SANITIZE_CELL_MAX,
+    ),
   );
 
   const unresolvedInPeriod = evidence.unresolved_notices_in_period;
@@ -921,7 +931,8 @@ export async function collectAuditEvidence(
   `.fetch();
 
   const reviewFindingRows = await sql`
-    SELECT f ->> 'kind' AS key, count(*) AS count
+    SELECT CASE WHEN f ->> 'confidence' = 'low' THEN 'low' ELSE f ->> 'kind' END AS key,
+           count(*) AS count
     FROM factory.reviews rv, jsonb_array_elements(rv.findings) f
     WHERE rv.created_at >= ${start}::timestamptz AND rv.created_at < ${end}::timestamptz
     GROUP BY 1
