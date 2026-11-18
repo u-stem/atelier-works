@@ -2429,6 +2429,38 @@ describe("toRequirementDraft", () => {
   });
 });
 
+const RUN_WITH_SKILLS = {
+  work_item_id: 1,
+  stage: "pr_review",
+  attempt: 1,
+  model: "claude-sonnet-5-5",
+  claude_version: null,
+  input_tokens: 1,
+  output_tokens: 2,
+  cache_read_tokens: 3,
+  cost_usd: 0.5,
+  num_turns: 1,
+  duration_ms: 10,
+  session_id: "s",
+  exit_code: 0,
+  error: null,
+  failure_reason: null,
+  model_usage: [],
+  skills: [
+    {
+      path: ".claude/skills/factory-writing/SKILL.md",
+      sha256: "a".repeat(64),
+      bundle_sha256: null,
+    },
+    {
+      path: ".claude/skills/factory-audit/SKILL.md",
+      sha256: "b".repeat(64),
+      bundle_sha256: "c".repeat(64),
+    },
+  ],
+  skill_clone_sha: "0123456789abcdef0123456789abcdef01234567",
+};
+
 describe("recordAgentRun", () => {
   test("inserts into factory.agent_runs", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
@@ -2450,6 +2482,8 @@ describe("recordAgentRun", () => {
         error: null,
         failure_reason: null,
         model_usage: [],
+        skills: null,
+        skill_clone_sha: null,
       },
       sql,
     );
@@ -2476,6 +2510,8 @@ describe("recordAgentRun", () => {
         error: "limit",
         failure_reason: "usage_limit",
         model_usage: [],
+        skills: null,
+        skill_clone_sha: null,
       },
       sql,
     );
@@ -2510,10 +2546,44 @@ describe("recordAgentRun", () => {
         error: null,
         failure_reason: null,
         model_usage: [entry],
+        skills: null,
+        skill_clone_sha: null,
       },
       sql,
     );
     expect(calls[0]?.values).toContain(JSON.stringify([entry]));
+  });
+
+  test("writes the skills and skill_clone_sha columns", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await recordAgentRun(RUN_WITH_SKILLS, sql);
+    expect(calls[0]?.text).toContain("skills, skill_clone_sha");
+  });
+
+  test("passes the skills as a jsonb array of the skill versions", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await recordAgentRun(RUN_WITH_SKILLS, sql);
+    expect(calls[0]?.values).toContain(JSON.stringify(RUN_WITH_SKILLS.skills));
+  });
+
+  test("casts the skills to jsonb", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await recordAgentRun(RUN_WITH_SKILLS, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "? ::jsonb, ? ::text",
+    );
+  });
+
+  test("passes the clone sha as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await recordAgentRun(RUN_WITH_SKILLS, sql);
+    expect(calls[0]?.values).toContain(RUN_WITH_SKILLS.skill_clone_sha);
+  });
+
+  test("binds a run without a skill record as SQL NULL, not the jsonb null", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await recordAgentRun({ ...RUN_WITH_SKILLS, skills: null }, sql);
+    expect(calls[0]?.values).not.toContain("null");
   });
 
   test("casts nullable numeric columns (tokens/cost/turns/duration/exit_code) to their real type when null — a Claude timeout/error leaves most of these null", async () => {
@@ -2536,6 +2606,8 @@ describe("recordAgentRun", () => {
         error: "timed out",
         failure_reason: null,
         model_usage: [],
+        skills: null,
+        skill_clone_sha: null,
       },
       sql,
     );
@@ -2563,53 +2635,122 @@ describe("recordAgentRun before the migrations of its newer columns", () => {
     error: null,
     failure_reason: null,
     model_usage: [],
+    skills: null,
+    skill_clone_sha: null,
   };
 
-  /** 1回目の文は列が無いエラーで失敗し、2回目以降は成功する。文の本文を控える。 */
-  function missingColumnThenOk(failure: Error): {
+  /** 先頭の文から`failures`の数だけ、順に決めたエラーで失敗し、その後の文は成功する。文の本文を控える。 */
+  function failingThenOk(failures: readonly Error[]): {
     sql: SqlClient;
     texts: string[];
   } {
     const texts: string[] = [];
     const sql: SqlClient = (strings) => {
+      const failure = failures[texts.length];
       texts.push(strings.join(" ? "));
-      const first = texts.length === 1;
       return {
         fetch: () =>
-          first ? Promise.reject(failure) : Promise.resolve([{ id: 21 }]),
+          failure === undefined
+            ? Promise.resolve([{ id: 21 }])
+            : Promise.reject(failure),
         execute: () => Promise.resolve(),
       };
     };
     return { sql, texts };
   }
 
-  test("records the run without model_usage when the column is missing", async () => {
-    const { sql, texts } = missingColumnThenOk(
-      new Error('column "model_usage" of relation "agent_runs" does not exist'),
-    );
+  const missing = (column: string) =>
+    new Error(`column "${column}" of relation "agent_runs" does not exist`);
+
+  test("records the run without the skill columns when they are missing", async () => {
+    const { sql, texts } = failingThenOk([missing("skills")]);
     await recordAgentRun(RUN, sql, SILENT_LOG);
-    expect(texts[1]).not.toContain("model_usage");
+    expect(texts[1]).not.toContain("skill");
   });
 
-  test("returns the id of the run recorded without model_usage", async () => {
-    const { sql } = missingColumnThenOk(
+  test("keeps model_usage when only the skill columns are missing", async () => {
+    const { sql, texts } = failingThenOk([missing("skills")]);
+    await recordAgentRun(RUN, sql, SILENT_LOG);
+    expect(texts[1]).toContain("model_usage");
+  });
+
+  test("keeps failure_reason when only the skill columns are missing", async () => {
+    const { sql, texts } = failingThenOk([missing("skill_clone_sha")]);
+    await recordAgentRun(RUN, sql, SILENT_LOG);
+    expect(texts[1]).toContain("failure_reason");
+  });
+
+  test("passes the per-model usage to the statement without the skill columns", async () => {
+    const values: unknown[][] = [];
+    let attempt = 0;
+    const sql: SqlClient = (_strings, ...v) => {
+      values.push(v);
+      attempt += 1;
+      const first = attempt === 1;
+      return {
+        fetch: () =>
+          first
+            ? Promise.reject(missing("skills"))
+            : Promise.resolve([{ id: 21 }]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    const usage = [
+      {
+        model: "claude-haiku-5",
+        input_tokens: 3,
+        output_tokens: 4,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        cost_usd: 0.002,
+      },
+    ];
+    await recordAgentRun({ ...RUN, model_usage: usage }, sql, SILENT_LOG);
+    expect(values[1]).toContain(JSON.stringify(usage));
+  });
+
+  test("returns the id of the run recorded without the skill columns", async () => {
+    const { sql } = failingThenOk([
       Object.assign(new Error("undefined column"), { code: "42703" }),
-    );
+    ]);
     expect(await recordAgentRun(RUN, sql, SILENT_LOG)).toBe(21);
   });
 
-  test("records the run without failure_reason when that column is missing", async () => {
-    const { sql, texts } = missingColumnThenOk(
-      new Error(
-        'column "failure_reason" of relation "agent_runs" does not exist',
-      ),
-    );
+  test("records the run without model_usage when that column is missing too", async () => {
+    const { sql, texts } = failingThenOk([
+      missing("skills"),
+      missing("model_usage"),
+    ]);
     await recordAgentRun(RUN, sql, SILENT_LOG);
-    expect(texts[1]).not.toContain("failure_reason");
+    expect(texts[2]).not.toContain("model_usage");
   });
 
-  test("rethrows a failure other than a missing model_usage column", async () => {
-    const { sql } = missingColumnThenOk(new Error("db down"));
+  test("returns the id of the run recorded without model_usage", async () => {
+    const { sql } = failingThenOk([
+      Object.assign(new Error("undefined column"), { code: "42703" }),
+      Object.assign(new Error("undefined column"), { code: "42703" }),
+    ]);
+    expect(await recordAgentRun(RUN, sql, SILENT_LOG)).toBe(21);
+  });
+
+  test("records the run without failure_reason when that column is missing too", async () => {
+    const { sql, texts } = failingThenOk([
+      missing("skills"),
+      missing("failure_reason"),
+    ]);
+    await recordAgentRun(RUN, sql, SILENT_LOG);
+    expect(texts[2]).not.toContain("failure_reason");
+  });
+
+  test("rethrows a failure other than a missing column", async () => {
+    const { sql } = failingThenOk([new Error("db down")]);
+    await expect(recordAgentRun(RUN, sql, SILENT_LOG)).rejects.toThrow(
+      "db down",
+    );
+  });
+
+  test("rethrows a failure of the statement without the skill columns that is not a missing column", async () => {
+    const { sql } = failingThenOk([missing("skills"), new Error("db down")]);
     await expect(recordAgentRun(RUN, sql, SILENT_LOG)).rejects.toThrow(
       "db down",
     );

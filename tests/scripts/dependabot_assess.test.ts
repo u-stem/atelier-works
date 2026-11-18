@@ -231,6 +231,8 @@ function agentRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
     error: null,
     failure_reason: null,
     model_usage: [],
+    skills: null,
+    skill_clone_sha: null,
     ...overrides,
   };
 }

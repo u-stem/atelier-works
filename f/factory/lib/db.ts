@@ -2261,10 +2261,10 @@ export function toRequirementDraft(row: SqlRow): RequirementDraft {
 // ---------------------------------------------------------------------------
 
 const AGENT_RUN_NEW_COLUMN_PATTERN =
-  /column "(?:model_usage|failure_reason)" of relation "agent_runs" does not exist/;
+  /column "(?:model_usage|failure_reason|skills|skill_clone_sha)" of relation "agent_runs" does not exist/;
 
 /**
- * 例外が、`agent_runs`の新しい列(`model_usage`、`failure_reason`)が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * 例外が、`agent_runs`の新しい列(`model_usage`、`failure_reason`、`skills`、`skill_clone_sha`)が無いことによるもの(PostgreSQLのundefined_column)かを返す。
  * 判定は`isMissingJobLinkColumnError`と同じく、エラーコード42703か、列と表の名前を含む文のどちらかで行う。
  */
 export function isMissingAgentRunColumnError(err: unknown): boolean {
@@ -2278,8 +2278,10 @@ export function isMissingAgentRunColumnError(err: unknown): boolean {
 /**
  * `factory.agent_runs`に行を挿入し、そのIDを返す。
  * 反映(`wmill sync push`)はmigration(`wmill datatable migrate up`)より先に走るので、
- * モデル別の内訳や失敗の種類の列を足すmigrationより先に、この関数を含むコードが動くと、列が無いエラーになる。
- * そのときだけ、新しい列を含まない文で記録し直す。費用の記録が消えると、日次の予算の集計が狂うためである。
+ * スキルの版、モデル別の内訳、失敗の種類の列を足すmigrationより先に、この関数を含むコードが動くと、列が無いエラーになる。
+ * そのときだけ、新しい列を除いた文で記録し直す。費用の記録が消えると、日次の予算の集計が狂うためである。
+ * 記録し直しは2段で、1段目はスキルの列だけを除く。それでも列が無ければ、2段目は旧い列だけで記録する。
+ * 1段目でモデル別の内訳と失敗の種類を残すのは、費用の集計がこれらに頼るためである。
  * ほかのエラーは投げる。
  */
 export async function recordAgentRun(
@@ -2287,17 +2289,22 @@ export async function recordAgentRun(
   sql: SqlClient = defaultSqlClient,
   log: Logger = logger("db"),
 ): Promise<number> {
+  // 記録の無い実行はSQLのNULLで保存する。`JSON.stringify(null)`はjsonbのnullになり、IS NULLで見分けられない。
+  const skillsJson =
+    record.skills === null ? null : JSON.stringify(record.skills);
   const statement = sql`
     INSERT INTO factory.agent_runs (
       work_item_id, stage, attempt, model, claude_version, input_tokens,
       output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
-      session_id, exit_code, error, failure_reason, model_usage
+      session_id, exit_code, error, failure_reason, model_usage,
+      skills, skill_clone_sha
     ) VALUES (
       ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
       ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
       ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
       ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error},
-      ${record.failure_reason}::text, ${JSON.stringify(record.model_usage)}::jsonb
+      ${record.failure_reason}::text, ${JSON.stringify(record.model_usage)}::jsonb,
+      ${skillsJson}::jsonb, ${record.skill_clone_sha}::text
     )
     RETURNING id
   `;
@@ -2307,23 +2314,46 @@ export async function recordAgentRun(
   } catch (err) {
     if (!isMissingAgentRunColumnError(err)) throw err;
     log.warn(
-      "a newer column of agent_runs is missing; recorded the run without the per-model usage and the failure reason (the datatable migration has not run yet)",
+      "a newer column of agent_runs is missing; recorded the run without the skill provenance (the datatable migration has not run yet)",
       { stage: record.stage },
     );
-    const legacy = sql`
+    const withoutSkills = sql`
       INSERT INTO factory.agent_runs (
         work_item_id, stage, attempt, model, claude_version, input_tokens,
         output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
-        session_id, exit_code, error
+        session_id, exit_code, error, failure_reason, model_usage
       ) VALUES (
         ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
         ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
         ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
-        ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error}
+        ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error},
+        ${record.failure_reason}::text, ${JSON.stringify(record.model_usage)}::jsonb
       )
       RETURNING id
     `;
-    row = await fetchOneRow(legacy, "recordAgentRun");
+    try {
+      row = await fetchOneRow(withoutSkills, "recordAgentRun");
+    } catch (legacyErr) {
+      if (!isMissingAgentRunColumnError(legacyErr)) throw legacyErr;
+      log.warn(
+        "a newer column of agent_runs is missing; recorded the run without the per-model usage and the failure reason (the datatable migration has not run yet)",
+        { stage: record.stage },
+      );
+      const legacy = sql`
+        INSERT INTO factory.agent_runs (
+          work_item_id, stage, attempt, model, claude_version, input_tokens,
+          output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
+          session_id, exit_code, error
+        ) VALUES (
+          ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
+          ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
+          ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
+          ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error}
+        )
+        RETURNING id
+      `;
+      row = await fetchOneRow(legacy, "recordAgentRun");
+    }
   }
   return parseId(row.id, "id");
 }

@@ -659,6 +659,26 @@ export type AgentRunRecord = {
    * Claudeが結果を返さなかった実行と、`modelUsage`を持たない結果では空になる。
    */
   model_usage: readonly ModelUsageEntry[];
+  /**
+   * システムプロンプトへ注入したスキルの版。`agent_runs.skills`に保存する。
+   * `buildSystemPrompt`を通さなかった実行はnullである。
+   */
+  skills: readonly SkillRef[] | null;
+  /** スキルを読んだときのFactoryのcloneのHEAD(40桁)。取れなかった実行と、`skills`がnullの実行はnullである。 */
+  skill_clone_sha: string | null;
+};
+
+/**
+ * 注入したスキル1つの版。`agent_runs.skills`の要素として保存する。
+ * SKILL.mdと同梱ファイルは別々に残す。同梱ファイルだけの変更でも、スキルの出力は変わるため。
+ */
+export type SkillRef = {
+  /** Factoryのcloneからの相対パス。例: `.claude/skills/factory-review/SKILL.md` */
+  path: string;
+  /** SKILL.mdの本文のsha256(16進)。 */
+  sha256: string;
+  /** SKILL.md以外の同梱ファイル(template.mdなど)のハッシュ。同梱ファイルが無いか、読めなかったときはnull。 */
+  bundle_sha256: string | null;
 };
 
 export type ReviewSeverity = "blocker" | "major" | "minor" | "nit";

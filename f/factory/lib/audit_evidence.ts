@@ -20,6 +20,7 @@ import {
 import {
   defaultSqlClient,
   fetchDeploymentRows,
+  isMissingAgentRunColumnError,
   type SqlClient,
   type SqlRow,
 } from "./db.ts";
@@ -201,6 +202,23 @@ export type StageStat = {
   avg_turns: number;
   total_cost_usd: number;
 };
+/**
+ * 期間内の実行が注入したスキルの版1つ分の集計。
+ * 版は、SKILL.mdのsha256の先頭12桁(`sha`)と、同梱ファイルのsha256の先頭12桁(`bundle`)で決める。
+ * スキルの記録を持たない実行(列を足す前の行など)は、`skill`、`sha`、`bundle`をnullにして、stageごとに1つにまとめる。
+ */
+export type SkillVersionStat = {
+  stage: string;
+  /** スキルの名前。`.claude/skills/<name>/SKILL.md`の形でなければパスそのもの。記録が無いときはnull。 */
+  skill: string | null;
+  sha: string | null;
+  bundle: string | null;
+  run_count: number;
+  /** この版を使った最初の実行の日(JST、`YYYY-MM-DD`)。 */
+  first_seen: string;
+  /** この版を使った最後の実行の日(JST、`YYYY-MM-DD`)。 */
+  last_seen: string;
+};
 export type FailureGroup = {
   flow_path: string;
   step: string | null;
@@ -254,6 +272,11 @@ export type AuditEvidence = {
   readonly instance_name: string;
   readonly agent_runs: StageStat[];
   readonly previous_agent_runs: StageStat[];
+  /**
+   * stageごとの、期間内の実行が注入したスキルの版。
+   * スキルの版の列を足すmigrationが当たる前は空である。
+   */
+  readonly skill_versions: SkillVersionStat[];
   readonly failures: FailureGroup[];
   readonly rejections: RejectionRecord[];
   /**
@@ -396,6 +419,39 @@ function formatStageLine(stat: StageStat, previous: StageStat | undefined) {
   );
 }
 
+const SKILL_PATH_PATTERN = /^\.claude\/skills\/([^/]+)\/SKILL\.md$/;
+const UNRECORDED_SKILL_LABEL = "未記録";
+
+/** スキルのパスから名前を取り出す。スキルのファイルの形でなければ、パスそのものを返す。 */
+function skillNameOfPath(path: string): string {
+  return SKILL_PATH_PATTERN.exec(path)?.[1] ?? path;
+}
+
+function formatSkillVersionLine(stat: SkillVersionStat): string {
+  if (stat.skill === null || stat.sha === null) {
+    return sanitizeCell(
+      `${stat.stage} ${UNRECORDED_SKILL_LABEL}: 実行${stat.run_count}`,
+      SANITIZE_CELL_MAX,
+    );
+  }
+  const version =
+    stat.bundle === null ? stat.sha : `${stat.sha}+${stat.bundle}`;
+  return sanitizeCell(
+    `${stat.stage} ${stat.skill} ${version}: 実行${stat.run_count} / 初出 ${stat.first_seen} / 最終 ${stat.last_seen}`,
+    SANITIZE_CELL_MAX,
+  );
+}
+
+/**
+ * 記録の無い実行の行を先頭に置き、版の行を続ける。
+ * 描画で行を削るときは末尾から削るため、版の割合を読むのに要る記録の無い実行の数を残す。
+ */
+function skillVersionLines(stats: readonly SkillVersionStat[]): string[] {
+  const unrecorded = stats.filter((stat) => stat.skill === null);
+  const recorded = stats.filter((stat) => stat.skill !== null);
+  return [...unrecorded, ...recorded].map(formatSkillVersionLine);
+}
+
 export function buildEvidenceSections(
   evidence: AuditEvidence,
 ): EvidenceSection[] {
@@ -529,6 +585,11 @@ export function buildEvidenceSections(
   return [
     { heading: "対象", fixed: targetFixed, lines: [] },
     { heading: "実行統計(stage別)", fixed: [], lines: stageLines },
+    {
+      heading: "スキルの版(stage別)",
+      fixed: [],
+      lines: skillVersionLines(evidence.skill_versions),
+    },
     { heading: "失敗(flow + step別)", fixed: [], lines: failureLines },
     { heading: "却下", fixed: [], lines: rejectionLines },
     { heading: "要人手・ブロック・期限切れ", fixed: [], lines: humanLines },
@@ -615,6 +676,27 @@ function toStageStat(row: SqlRow): StageStat {
     failure_count: parseNumeric(row.failure_count),
     avg_turns: parseNumeric(row.avg_turns),
     total_cost_usd: parseNumeric(row.total_cost_usd),
+  };
+}
+
+/** 版のハッシュのセル。値が無いか空文字ならnullにする。 */
+function parseHashPrefix(value: unknown): string | null {
+  const hash = parseNullableCellString(value);
+  return hash === null || hash.length === 0 ? null : hash;
+}
+
+function toSkillVersionStat(row: SqlRow): SkillVersionStat {
+  const path = parseNullableCellString(row.path);
+  const sha = parseHashPrefix(row.sha);
+  const recorded = path !== null && path.length > 0 && sha !== null;
+  return {
+    stage: parseCellString(row.stage),
+    skill: recorded ? skillNameOfPath(path) : null,
+    sha: recorded ? sha : null,
+    bundle: recorded ? parseHashPrefix(row.bundle) : null,
+    run_count: parseNumeric(row.run_count),
+    first_seen: parseCellString(row.first_seen),
+    last_seen: parseCellString(row.last_seen),
   };
 }
 
@@ -795,10 +877,48 @@ function previousPeriodOf(period: AuditPeriod): { start: Date; end: Date } {
 }
 
 /**
+ * 期間内の実行を、stageと、注入したスキルの版(SKILL.mdと同梱ファイルのハッシュの先頭12桁)ごとに数える。
+ * スキルの記録が無い実行(`skills`がNULLか空の配列)は、スキルの列がNULLの1行にまとめる。
+ * 日はJSTで切る。
+ * `skills`列を足すmigrationが当たる前は列が無いエラーになるので、そのときは版を集めず、空を返す。
+ * ほかのエラーは投げる。
+ */
+async function fetchSkillVersionRows(
+  sql: SqlClient,
+  start: string,
+  end: string,
+): Promise<SqlRow[]> {
+  try {
+    return await sql`
+      SELECT r.stage,
+             s.path,
+             left(s.sha256, 12) AS sha,
+             left(s.bundle_sha256, 12) AS bundle,
+             count(*) AS run_count,
+             to_char(min(r.created_at) AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD') AS first_seen,
+             to_char(max(r.created_at) AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD') AS last_seen
+      FROM factory.agent_runs r
+      JOIN factory.work_items wi ON wi.id = r.work_item_id
+      LEFT JOIN LATERAL jsonb_to_recordset(
+        CASE WHEN jsonb_typeof(r.skills) = 'array' THEN r.skills ELSE '[]'::jsonb END
+      ) AS s (path text, sha256 text, bundle_sha256 text) ON true
+      WHERE r.created_at >= ${start}::timestamptz AND r.created_at < ${end}::timestamptz
+        AND wi.kind <> 'audit'
+      GROUP BY r.stage, s.path, left(s.sha256, 12), left(s.bundle_sha256, 12)
+      ORDER BY r.stage, s.path, min(r.created_at), left(s.sha256, 12), left(s.bundle_sha256, 12)
+    `.fetch();
+  } catch (err) {
+    if (!isMissingAgentRunColumnError(err)) throw err;
+    return [];
+  }
+}
+
+/**
  * 監査の証跡パックを集める。集める内容は次のとおりで、グループごとに
  * 1つのクエリをこの固定の順で実行する(テスト「issues its queries in order」が
  * この順序を前提にする)。
  * - この期間と、その直前の同じ長さの期間についての、工程ごとのagent_runsの統計
+ * - この期間の、工程ごとに注入したスキルの版(`skills`列が無い間は集めない)
  * - 失敗のグループ、却下、人の対応に回った結果
  * - 修正ラウンド・レビュー・通知・デプロイの内訳
  * - 過去の監査レポート最大3件分の提案
@@ -853,6 +973,8 @@ export async function collectAuditEvidence(
     GROUP BY r.stage
     ORDER BY r.stage
   `.fetch();
+
+  const skillVersionRows = await fetchSkillVersionRows(sql, start, end);
 
   // 失敗ごとの稼働版は、成功したデプロイの記録から導く。
   // 失敗の時刻以前で最後の成功の`sha_to`を使い、無ければ(古い記録が
@@ -1037,6 +1159,7 @@ export async function collectAuditEvidence(
     instance_name: sanitizeCell(input.instanceName, SANITIZE_CELL_MAX),
     agent_runs: agentRunsRows.map(toStageStat),
     previous_agent_runs: previousAgentRunsRows.map(toStageStat),
+    skill_versions: skillVersionRows.map(toSkillVersionStat),
     failures: failureRows.map(toFailureGroup),
     rejections: rejectionRows.map(toRejectionRecord),
     rejected_count: parseNumeric(rejectedCountRows[0]?.count),
