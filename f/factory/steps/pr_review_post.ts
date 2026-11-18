@@ -966,6 +966,12 @@ export type RecordReviewOutcomesInput = {
   readonly comments: readonly ReviewComment[];
   /** 投稿したか再利用したレビューのid。投稿しなかったときはnull。 */
   readonly postedReviewId: number | null;
+  /**
+   * 投稿済みのレビューを再利用したか(`PublishReviewResult.reused`)。
+   * 再利用のとき、今回Claudeが作り直した指摘は、投稿済みのコメントと結びつかない。
+   * 指摘の行は、最初に投稿した回が記録しているか、記録できなかった回なので、ここでは作らない。
+   */
+  readonly reused: boolean;
   /** `PublishReviewResult.syncThreads`。 */
   readonly syncThreads: readonly ReviewThread[] | null;
   readonly viewerLogin: string;
@@ -981,6 +987,7 @@ export type RecordReviewOutcomesInput = {
  * 行コメントのidは、投稿したレビューの行コメントを読み、パスと行と本文で指摘に対応づける。
  * 読めなかったときと、対応づけられなかった指摘は、idを持たない行として記録する。
  * 投稿したのは、確信度が`low`でない指摘に限る。投稿しなかったレビューの指摘は、投稿していない行として記録する。
+ * 投稿済みのレビューを再利用したとき(`reused`)は、指摘の行を作らない。結果の更新と、人が始めたスレッドの記録は行う。
  */
 export async function recordReviewOutcomes(
   input: RecordReviewOutcomesInput,
@@ -997,7 +1004,7 @@ export async function recordReviewOutcomes(
   }
 
   let commentIds = new Map<number, number>();
-  if (postedReviewId !== null && input.comments.length > 0) {
+  if (!input.reused && postedReviewId !== null && input.comments.length > 0) {
     const expected: ExpectedComment[] = [];
     input.comments.forEach((comment, position) => {
       const target = input.commentedFindings[position];
@@ -1030,16 +1037,18 @@ export async function recordReviewOutcomes(
     }
   }
 
-  try {
-    await deps.insertReviewFindings(
-      input.reviewId,
-      buildFindingRows(findings, postedIndexes, commentIds),
-    );
-  } catch (err) {
-    log.warn("failed to record the findings of the review", {
-      work_item_id: input.workItemId,
-      error: errorMessage(err),
-    });
+  if (!input.reused) {
+    try {
+      await deps.insertReviewFindings(
+        input.reviewId,
+        buildFindingRows(findings, postedIndexes, commentIds),
+      );
+    } catch (err) {
+      log.warn("failed to record the findings of the review", {
+        work_item_id: input.workItemId,
+        error: errorMessage(err),
+      });
+    }
   }
 
   const plan =
@@ -1256,6 +1265,7 @@ async function postReview(
       commentedFindings: commentedFindingsOf(postable, droppedFindings),
       comments,
       postedReviewId: published.postedReviewId,
+      reused: published.reused,
       syncThreads: published.syncThreads,
       viewerLogin,
       answeredResponses: published.answeredResponses,

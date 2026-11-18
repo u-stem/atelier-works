@@ -42,12 +42,9 @@ import {
 } from "./pr_ci_support.ts";
 import { PR_CONFLICT_FIX_TEMPORARY_HOLD_REASONS } from "./pr_conflict_fix_holds.ts";
 import {
-  type FindingOutcome,
-  type FindingOutcomeSource,
   type FindingOutcomeUpdate,
   type HumanThreadSync,
-  isFindingOutcome,
-  nextOutcome,
+  outcomesReplacedBy,
   type ReviewFindingRow,
 } from "./review_outcomes.ts";
 import {
@@ -3175,54 +3172,39 @@ export async function insertReviewFindings(
 }
 
 /**
- * 指摘の結果を、コメントのidで探して記録し、更新した行の数を返す。
- * 結果は重さが増える向きにだけ進める(`nextOutcome`)。軽い結果が届いても、今の結果を保つ。
- * 同じコメントへの更新が複数あるときは、渡した順に重ねて、最後の結果を1回で書く。
- * 更新は、読んだ結果と同じときだけ効く。同時に別の経路が書いた結果を、読み直さずに上書きしない。
+ * 指摘の結果を、コメントのidで探して記録し、更新した指摘の数を返す。
+ * 遷移は`nextOutcome`の表に従う。更新1件につき1つのUPDATEで、今の結果が置き換えられる結果のときだけ書く。
+ * 読んでから書く間に、別の経路(pr_fixの返信、再レビューのスレッドの同期)が書いても、更新を捨てず、取りこぼしも数えない。
+ * 同じコメントへの更新が複数あるときは、渡した順に1件ずつ重ねる。
+ * 返した数は、RETURNINGで返った指摘を重複なく数えたものである。
  * コメントに結びつく指摘が無いとき(人が始めたスレッドなど)は、何もしない。
  */
 export async function recordFindingOutcomes(
   updates: readonly FindingOutcomeUpdate[],
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
-  if (updates.length === 0) return 0;
-  const commentIds = [...new Set(updates.map((update) => update.commentId))];
-  const rows = await sql`
-    SELECT id, review_comment_id, outcome
-    FROM factory.review_findings
-    WHERE posted AND review_comment_id = ANY(${commentIds.map(String)}::bigint[])
-    ORDER BY id
-  `.fetch();
-  let updated = 0;
-  for (const row of rows) {
-    const id = parseId(row.id, "id");
-    const commentId = parseId(row.review_comment_id, "review_comment_id");
-    const read: FindingOutcome = isFindingOutcome(row.outcome)
-      ? row.outcome
-      : "posted";
-    let current = read;
-    let source: FindingOutcomeSource | null = null;
-    for (const update of updates) {
-      if (update.commentId !== commentId) continue;
-      const next = nextOutcome(current, update.outcome);
-      if (next !== current) source = update.source;
-      current = next;
-    }
-    if (current === read || source === null) continue;
-    await sql`
+  const updatedIds = new Set<number>();
+  for (const update of updates) {
+    const replaced = outcomesReplacedBy(update.outcome, update.source);
+    if (replaced.length === 0) continue;
+    const rows = await sql`
       UPDATE factory.review_findings
-      SET outcome = ${current}, outcome_at = now(), outcome_source = ${source}
-      WHERE id = ${id}::bigint AND outcome IS NOT DISTINCT FROM ${read}
-    `.execute();
-    updated += 1;
+      SET outcome = ${update.outcome}, outcome_at = now(), outcome_source = ${update.source}
+      WHERE posted
+        AND review_comment_id = ${String(update.commentId)}::bigint
+        AND coalesce(outcome, 'posted') = ANY(${replaced}::text[])
+      RETURNING id
+    `.fetch();
+    for (const row of rows) updatedIds.add(parseId(row.id, "id"));
   }
-  return updated;
+  return updatedIds.size;
 }
 
 /**
  * 人が始めたレビュースレッドを`factory.review_human_threads`に記録する。
- * すでに記録したスレッドは、解決済みかだけを更新する。最初に読んだ作業項目とレビューは変えない。
- * 行は、最初に読んだレビュー(`reviewId`)の削除と一緒に消える。次のレビューが、読めたスレッドを記録し直す。
+ * すでに記録したスレッドは、解決済みかだけを更新する。最初に読んだ作業項目とレビューと、`created_at`は変えない。
+ * 最初に読んだレビュー(`reviewId`)が消えると、行は残り、`first_seen_review_id`だけがNULLになる。
+ * 次のレビューは、同じスレッドを新しい時刻で記録し直さない。
  * 表が無いときは、PostgreSQLのエラーをそのまま投げる。
  */
 export async function upsertHumanThreads(

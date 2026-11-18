@@ -3761,46 +3761,66 @@ describe("insertReviewFindings", () => {
 });
 
 describe("recordFindingOutcomes", () => {
-  const POSTED_ROW = { id: 9, review_comment_id: 501, outcome: "posted" };
-
   test("issues no statement for an empty list", async () => {
     const { sql, calls } = createFakeSqlClient();
     await recordFindingOutcomes([], sql);
     expect(calls).toHaveLength(0);
   });
 
-  test("reads the findings of the comments by their ids", async () => {
+  test("updates the findings in one statement without reading them first", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await recordFindingOutcomes(
       [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
       sql,
     );
-    expect(calls[0]?.text).toContain("review_comment_id = ANY(");
+    expect(calls.map((call) => call.text.trim().split(/\s/)[0])).toEqual([
+      "UPDATE",
+    ]);
   });
 
-  test("binds the comment ids once, even when a comment has two outcomes", async () => {
+  test("returns the updated rows with RETURNING", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await recordFindingOutcomes(
-      [
-        { commentId: 501, outcome: "skipped", source: "pr_fix" },
-        { commentId: 501, outcome: "skip_accepted", source: "rereview" },
-      ],
-      sql,
-    );
-    expect(calls[0]?.values).toEqual([["501"]]);
-  });
-
-  test("moves a posted finding to the new outcome", async () => {
-    const { sql, calls } = createFakeSqlClient([[POSTED_ROW]]);
     await recordFindingOutcomes(
       [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
       sql,
     );
-    expect(calls[1]?.values).toEqual(["fixed", "pr_fix", 9, "posted"]);
+    expect(calls[0]?.text).toContain("RETURNING id");
   });
 
-  test("returns the number of findings it updated", async () => {
-    const { sql } = createFakeSqlClient([[POSTED_ROW]]);
+  test("replaces only an outcome that the transition table lets the new one replace", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await recordFindingOutcomes(
+      [{ commentId: 501, outcome: "resolved_by_human", source: "thread_sync" }],
+      sql,
+    );
+    expect(calls[0]?.values).toEqual([
+      "resolved_by_human",
+      "thread_sync",
+      "501",
+      ["posted", "skipped", "issue_proposed"],
+    ]);
+  });
+
+  test("lets the update match a finding whose outcome is NULL as posted", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await recordFindingOutcomes(
+      [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
+      sql,
+    );
+    expect(calls[0]?.text).toContain("coalesce(outcome, 'posted') = ANY(");
+  });
+
+  test("updates only the findings that were posted", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await recordFindingOutcomes(
+      [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
+      sql,
+    );
+    expect(calls[0]?.text).toContain("WHERE posted");
+  });
+
+  test("returns the number of findings the statement updated", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
     expect(
       await recordFindingOutcomes(
         [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
@@ -3809,37 +3829,24 @@ describe("recordFindingOutcomes", () => {
     ).toBe(1);
   });
 
-  test("guards the update with the outcome it read", async () => {
-    const { sql, calls } = createFakeSqlClient([[POSTED_ROW]]);
-    await recordFindingOutcomes(
-      [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
-      sql,
-    );
-    expect(calls[1]?.text).toContain("outcome IS NOT DISTINCT FROM");
+  test("counts nothing when the statement updated no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await recordFindingOutcomes(
+        [
+          {
+            commentId: 501,
+            outcome: "resolved_by_human",
+            source: "thread_sync",
+          },
+        ],
+        sql,
+      ),
+    ).toBe(0);
   });
 
-  test("keeps a heavier outcome without a statement", async () => {
-    const { sql, calls } = createFakeSqlClient([
-      [{ ...POSTED_ROW, outcome: "fixed" }],
-    ]);
-    await recordFindingOutcomes(
-      [{ commentId: 501, outcome: "resolved_by_human", source: "thread_sync" }],
-      sql,
-    );
-    expect(calls).toHaveLength(1);
-  });
-
-  test("does nothing for a comment that has no finding", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await recordFindingOutcomes(
-      [{ commentId: 999, outcome: "fixed", source: "pr_fix" }],
-      sql,
-    );
-    expect(calls).toHaveLength(1);
-  });
-
-  test("writes the final outcome of a comment with two outcomes in one statement", async () => {
-    const { sql, calls } = createFakeSqlClient([[POSTED_ROW]]);
+  test("applies the outcomes of one comment in the given order", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }], [{ id: 9 }]]);
     await recordFindingOutcomes(
       [
         { commentId: 501, outcome: "skipped", source: "pr_fix" },
@@ -3847,20 +3854,33 @@ describe("recordFindingOutcomes", () => {
       ],
       sql,
     );
-    expect(calls.slice(1).map((call) => call.values)).toEqual([
-      ["skip_rejected", "rereview", 9, "posted"],
+    expect(calls.map((call) => call.values.slice(0, 2))).toEqual([
+      ["skipped", "pr_fix"],
+      ["skip_rejected", "rereview"],
     ]);
   });
 
-  test("updates every finding that carries the comment id", async () => {
-    const { sql, calls } = createFakeSqlClient([
-      [POSTED_ROW, { ...POSTED_ROW, id: 10 }],
-    ]);
-    await recordFindingOutcomes(
-      [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
-      sql,
-    );
-    expect(calls).toHaveLength(3);
+  test("counts a finding once when two outcomes of its comment both applied", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }], [{ id: 9 }]]);
+    expect(
+      await recordFindingOutcomes(
+        [
+          { commentId: 501, outcome: "skipped", source: "pr_fix" },
+          { commentId: 501, outcome: "skip_rejected", source: "rereview" },
+        ],
+        sql,
+      ),
+    ).toBe(1);
+  });
+
+  test("counts every finding that carries the comment id", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }, { id: 10 }]]);
+    expect(
+      await recordFindingOutcomes(
+        [{ commentId: 501, outcome: "fixed", source: "pr_fix" }],
+        sql,
+      ),
+    ).toBe(2);
   });
 });
 
@@ -3895,6 +3915,17 @@ describe("upsertHumanThreads", () => {
     expect(calls[0]?.text).toContain(
       "ON CONFLICT (first_comment_id) DO UPDATE SET resolved = EXCLUDED.resolved",
     );
+  });
+
+  test("does not write created_at, so that a recorded thread keeps its first time", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await upsertHumanThreads(
+      5,
+      17,
+      [{ firstCommentId: 801, resolved: true }],
+      sql,
+    );
+    expect(calls[0]?.text).not.toContain("created_at");
   });
 
   test("binds the work item, the review and the threads as one jsonb value", async () => {

@@ -306,18 +306,20 @@ export type PrReviewTriggerCounts = Readonly<
 /**
  * 期間内に記録したレビュー指摘の採否。
  * 結果は集計時点の値で、期間の後に決まった結果も含む。
- * 採否を記録する前のレビューは、指摘の行を持たないので、母数に入れず`unrecorded_reviews`に分ける。
+ * 行コメントのidに結びつかない指摘(総評に回った指摘など)は、結果が記録されないので、`counts`に入れない。
+ * 結びつかない件数は、`posted_total`から`with_comment_id`を引いた値である。
+ * 採否を記録できなかったレビューと、記録する前のレビューは、指摘の行を持たないので、母数に入れず`unrecorded_reviews`に分ける。
  */
 export type ReviewOutcomeEvidence = {
-  /** 期間内に投稿した指摘の件数。 */
+  /** 期間内に投稿した指摘の件数。コメントのidに結びつかない指摘を含む。 */
   readonly posted_total: number;
-  /** `posted_total`のうち、行コメントのidを取れた件数。 */
+  /** `posted_total`のうち、行コメントのidに結びつく件数。 */
   readonly with_comment_id: number;
-  /** 投稿した指摘の、結果ごとの件数。 */
+  /** コメントのidに結びつく指摘の、結果ごとの件数。採用率の分母と結果待ちの件数は、これから求める。 */
   readonly counts: OutcomeCounts;
   /** 期間内に初めて読んだ、人が始めたスレッドの件数と、そのうち解決済みの件数。 */
   readonly human_threads: { readonly total: number; readonly resolved: number };
-  /** 期間内のレビューのうち、指摘があるのに採否の行が無いものの件数。 */
+  /** 期間内に投稿したレビューのうち、指摘があるのに採否の行が無いものの件数。投稿しなかったレビューは数えない。 */
   readonly unrecorded_reviews: number;
 };
 
@@ -668,7 +670,7 @@ function reviewOutcomesSection(evidence: AuditEvidence): EvidenceSection {
     outcomes.unrecorded_reviews > 0
       ? [
           sanitizeCell(
-            `採否の記録が無いレビュー(未記録、割合の母数に入れない): ${outcomes.unrecorded_reviews}件`,
+            `採否を記録できなかった、または移行前のレビュー(割合の母数に入れない): ${outcomes.unrecorded_reviews}件`,
             SANITIZE_CELL_MAX,
           ),
         ]
@@ -698,7 +700,7 @@ function reviewOutcomesSection(evidence: AuditEvidence): EvidenceSection {
         SANITIZE_CELL_MAX,
       ),
       sanitizeCell(
-        `行コメントのidを取れた指摘: ${outcomes.with_comment_id}/${outcomes.posted_total}件`,
+        `コメントに結びつかない指摘(採用率と結果待ちの母数に入れない): ${outcomes.posted_total - outcomes.with_comment_id}件`,
         SANITIZE_CELL_MAX,
       ),
       sanitizeCell(
@@ -1153,10 +1155,10 @@ function toReviewOutcomeEvidence(
   for (const row of outcomeRows) {
     const key = row.key;
     if (!isFindingOutcome(key)) continue;
-    const count = parseNumeric(row.count);
-    counts[key] += count;
-    postedTotal += count;
-    withCommentId += parseNumeric(row.with_comment_id);
+    const linked = parseNumeric(row.with_comment_id);
+    counts[key] += linked;
+    postedTotal += parseNumeric(row.count);
+    withCommentId += linked;
   }
   return {
     posted_total: postedTotal,
@@ -1531,7 +1533,7 @@ export async function collectAuditEvidence(
       ) AS end_sha
   `.fetch();
 
-  // レビュー指摘の採否。投稿した指摘を結果ごとに数え、行コメントのidを取れた件数も数える。
+  // レビュー指摘の採否。投稿した指摘を結果ごとに数え、コメントのidに結びつく件数も数える。結びつかない指摘は、結果の件数に入れない。
   // 結果は集計時点の値で、期間は指摘を記録した時刻で切る。採否の表を足すmigrationより先にコードが反映された間は、表が無いので空にする。
   const reviewOutcomeRows = await fetchWhenOutcomeTablesExist(() =>
     sql`
@@ -1552,12 +1554,14 @@ export async function collectAuditEvidence(
     `.fetch(),
   );
 
-  // 指摘があるのに採否の行が無いレビューは、採否を記録する前のレビューなので、母数に入れず別に数える。
-  // 表が無い間は、指摘のあるレビューのすべてが未記録になる。
+  // 投稿したレビューのうち、指摘があるのに採否の行が無いものは、記録できなかったか、記録する前のレビューなので、母数に入れず別に数える。
+  // 投稿しなかったレビュー(投稿のモードが"gated"など)は、指摘の行を持たなくてよいので数えない。
+  // 表が無い間は、投稿したレビューのうち指摘のあるものすべてが未記録になる。
   const unrecordedReviewRows = await sql`
     SELECT count(*) AS count
     FROM factory.reviews rv
     WHERE rv.created_at >= ${start}::timestamptz AND rv.created_at < ${end}::timestamptz
+      AND rv.posted_review_id IS NOT NULL
       AND jsonb_array_length(rv.findings) > 0
       AND NOT EXISTS (SELECT 1 FROM factory.review_findings x WHERE x.review_id = rv.id)
   `
@@ -1568,6 +1572,7 @@ export async function collectAuditEvidence(
         SELECT count(*) AS count
         FROM factory.reviews rv
         WHERE rv.created_at >= ${start}::timestamptz AND rv.created_at < ${end}::timestamptz
+          AND rv.posted_review_id IS NOT NULL
           AND jsonb_array_length(rv.findings) > 0
       `.fetch();
     });

@@ -16,6 +16,7 @@ import {
   type OutcomeCounts,
   outcomeOfFixReply,
   outcomeOfThreadResponse,
+  outcomesReplacedBy,
   recordFixReplyOutcome,
   skipAcceptanceRate,
 } from "../../f/factory/lib/review_outcomes.ts";
@@ -70,51 +71,123 @@ describe("outcomeOfFixReply", () => {
 
 describe("nextOutcome", () => {
   test("moves a posted finding to any later outcome", () => {
-    expect(nextOutcome("posted", "skip_accepted")).toBe("skip_accepted");
-  });
-
-  test("moves a skipped finding to rejected when the re-review objects", () => {
-    expect(nextOutcome("skipped", "skip_rejected")).toBe("skip_rejected");
-  });
-
-  test("moves a rejected skip to fixed when the finding is fixed afterwards", () => {
-    expect(nextOutcome("skip_rejected", "fixed")).toBe("fixed");
-  });
-
-  test("keeps a fix when a human resolves the thread afterwards", () => {
-    expect(nextOutcome("fixed", "resolved_by_human")).toBe("fixed");
-  });
-
-  test("keeps an accepted skip when a human resolves the thread afterwards", () => {
-    expect(nextOutcome("skip_accepted", "resolved_by_human")).toBe(
+    expect(nextOutcome("posted", "skip_accepted", "rereview")).toBe(
       "skip_accepted",
     );
   });
 
+  test("moves a skipped finding to rejected when the re-review objects", () => {
+    expect(nextOutcome("skipped", "skip_rejected", "rereview")).toBe(
+      "skip_rejected",
+    );
+  });
+
+  test("moves a rejected skip to fixed when the finding is fixed afterwards", () => {
+    expect(nextOutcome("skip_rejected", "fixed", "pr_fix")).toBe("fixed");
+  });
+
+  test("keeps a fix when a human resolves the thread afterwards", () => {
+    expect(nextOutcome("fixed", "resolved_by_human", "thread_sync")).toBe(
+      "fixed",
+    );
+  });
+
+  test("keeps an accepted skip when a human resolves the thread afterwards", () => {
+    expect(
+      nextOutcome("skip_accepted", "resolved_by_human", "thread_sync"),
+    ).toBe("skip_accepted");
+  });
+
   test("keeps an answer when a human resolves the thread afterwards", () => {
-    expect(nextOutcome("answered", "resolved_by_human")).toBe("answered");
+    expect(nextOutcome("answered", "resolved_by_human", "thread_sync")).toBe(
+      "answered",
+    );
   });
 
   test("does not move a decided finding back to posted", () => {
-    expect(nextOutcome("fixed", "posted")).toBe("fixed");
+    expect(nextOutcome("fixed", "posted", "rereview")).toBe("fixed");
   });
 
   test("replaces a skip with a human resolution", () => {
-    expect(nextOutcome("skipped", "resolved_by_human")).toBe(
+    expect(nextOutcome("skipped", "resolved_by_human", "thread_sync")).toBe(
       "resolved_by_human",
     );
   });
 
   test("lets a fix replace a human resolution", () => {
-    expect(nextOutcome("resolved_by_human", "fixed")).toBe("fixed");
+    expect(nextOutcome("resolved_by_human", "fixed", "pr_fix")).toBe("fixed");
   });
 
   test("lets the later of two outcomes of the same weight win", () => {
-    expect(nextOutcome("skipped", "issue_proposed")).toBe("issue_proposed");
+    expect(nextOutcome("skipped", "issue_proposed", "pr_fix")).toBe(
+      "issue_proposed",
+    );
   });
 
   test("is stable when the same outcome arrives again", () => {
-    expect(nextOutcome("fixed", "fixed")).toBe("fixed");
+    expect(nextOutcome("fixed", "fixed", "pr_fix")).toBe("fixed");
+  });
+
+  test.each<FindingOutcome>(["skip_rejected", "answered"])(
+    "lets a new skip reply of pr_fix replace the %s of an earlier re-review",
+    (current) => {
+      expect(nextOutcome(current, "skipped", "pr_fix")).toBe("skipped");
+    },
+  );
+
+  test("lets a new issue proposal of pr_fix replace a rejected skip", () => {
+    expect(nextOutcome("skip_rejected", "issue_proposed", "pr_fix")).toBe(
+      "issue_proposed",
+    );
+  });
+
+  test.each<FindingOutcome>(["fixed", "skip_accepted", "resolved_by_human"])(
+    "does not roll the settled %s back with a skip reply of pr_fix",
+    (current) => {
+      expect(nextOutcome(current, "skipped", "pr_fix")).toBe(current);
+    },
+  );
+
+  test.each<FindingOutcome>(["fixed", "skip_accepted", "resolved_by_human"])(
+    "does not roll the settled %s back with an issue proposal of pr_fix",
+    (current) => {
+      expect(nextOutcome(current, "issue_proposed", "pr_fix")).toBe(current);
+    },
+  );
+
+  test("does not let a skip from another source replace a rejected skip", () => {
+    expect(nextOutcome("skip_rejected", "skipped", "rereview")).toBe(
+      "skip_rejected",
+    );
+  });
+});
+
+describe("outcomesReplacedBy", () => {
+  test("lists the outcomes that a skip reply of pr_fix replaces", () => {
+    expect(outcomesReplacedBy("skipped", "pr_fix")).toEqual([
+      "posted",
+      "issue_proposed",
+      "skip_rejected",
+      "answered",
+    ]);
+  });
+
+  test("lists nothing that equals the incoming outcome", () => {
+    expect(outcomesReplacedBy("fixed", "pr_fix")).not.toContain("fixed");
+  });
+
+  test("lists every other outcome for a fix", () => {
+    expect(outcomesReplacedBy("fixed", "pr_fix")).toHaveLength(
+      FINDING_OUTCOMES.length - 1,
+    );
+  });
+
+  test("lists only the outcomes that are lighter for a human resolution", () => {
+    expect(outcomesReplacedBy("resolved_by_human", "thread_sync")).toEqual([
+      "posted",
+      "skipped",
+      "issue_proposed",
+    ]);
   });
 });
 
@@ -332,6 +405,63 @@ describe("matchCommentsToFindings", () => {
     const matched = matchCommentsToFindings(
       [{ index: 0, path: "a.ts", line: 10, body: BODY_A }],
       [{ id: 501, path: "a.ts", line: null, body: BODY_A }],
+    );
+    expect(matched.size).toBe(0);
+  });
+
+  test("matches by the head of the body when only one comment can be the one", () => {
+    const long = `${BODY_A}\n\n${"detail ".repeat(60)}`;
+    const matched = matchCommentsToFindings(
+      [
+        { index: 0, path: "a.ts", line: 10, body: long },
+        { index: 1, path: "a.ts", line: 10, body: BODY_B },
+      ],
+      [
+        { id: 502, path: "a.ts", line: 10, body: BODY_B },
+        { id: 501, path: "a.ts", line: 10, body: `${long} (edited)` },
+      ],
+    );
+    expect([...matched].sort()).toEqual([
+      [0, 501],
+      [1, 502],
+    ]);
+  });
+
+  test("leaves a finding unmatched when two comments fit it by the head of the body", () => {
+    const long = `${BODY_A}\n\n${"detail ".repeat(60)}`;
+    const matched = matchCommentsToFindings(
+      [{ index: 0, path: "a.ts", line: 10, body: long }],
+      [
+        { id: 501, path: "a.ts", line: 10, body: `${long} (one)` },
+        { id: 502, path: "a.ts", line: 10, body: `${long} (two)` },
+      ],
+    );
+    expect(matched.size).toBe(0);
+  });
+
+  test("leaves two findings unmatched when they share a line and the head of the body", () => {
+    const long = `${BODY_A}\n\n${"detail ".repeat(60)}`;
+    const matched = matchCommentsToFindings(
+      [
+        { index: 0, path: "a.ts", line: 10, body: `${long} (first)` },
+        { index: 1, path: "a.ts", line: 10, body: `${long} (second)` },
+      ],
+      [
+        { id: 501, path: "a.ts", line: 10, body: `${long} (edited one)` },
+        { id: 502, path: "a.ts", line: 10, body: `${long} (edited two)` },
+      ],
+    );
+    expect(matched.size).toBe(0);
+  });
+
+  test("leaves a finding unmatched when another finding of the same head also lacks a comment", () => {
+    const long = `${BODY_A}\n\n${"detail ".repeat(60)}`;
+    const matched = matchCommentsToFindings(
+      [
+        { index: 0, path: "a.ts", line: 10, body: `${long} (first)` },
+        { index: 1, path: "a.ts", line: 10, body: `${long} (second)` },
+      ],
+      [{ id: 501, path: "a.ts", line: 10, body: `${long} (edited)` }],
     );
     expect(matched.size).toBe(0);
   });

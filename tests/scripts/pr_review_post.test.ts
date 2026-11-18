@@ -3750,6 +3750,7 @@ describe("recordReviewOutcomes", () => {
       commentedFindings: [MUST_FINDING, IMO_FINDING],
       comments: COMMENTS,
       postedReviewId: 99,
+      reused: false,
       syncThreads: null,
       viewerLogin: "factory-bot",
       answeredResponses: [],
@@ -3820,6 +3821,54 @@ describe("recordReviewOutcomes", () => {
       deps,
     );
     expect(asked).toBe(false);
+  });
+
+  test("records no finding row when it reuses a review that was already posted", async () => {
+    const { calls, deps } = setup();
+    await recordReviewOutcomes(input({ reused: true }), deps);
+    expect(calls.inserted).toEqual([]);
+  });
+
+  test("does not ask GitHub for comments when it reuses a review that was already posted", async () => {
+    let asked = false;
+    const { deps } = setup({
+      listPostedComments: async () => {
+        asked = true;
+        return [];
+      },
+    });
+    await recordReviewOutcomes(input({ reused: true }), deps);
+    expect(asked).toBe(false);
+  });
+
+  test("still records the outcomes of the threads when it reuses a review that was already posted", async () => {
+    const { calls, deps } = setup();
+    await recordReviewOutcomes(
+      input({
+        reused: true,
+        syncThreads: [
+          {
+            id: "t1",
+            isResolved: true,
+            path: "a.ts",
+            line: 10,
+            firstCommentAuthorLogin: "factory-bot",
+            firstCommentBody: "[Factory 自動レビュー] @alice\n[MUST] fix",
+            lastCommentAuthorLogin: "alice",
+            lastCommentBody: "done",
+            firstCommentDatabaseId: 501,
+            allCommentIds: [501],
+            comments: [],
+            lastCommentAuthorId: null,
+            lastCommentDatabaseId: null,
+            resolvedByLogin: "alice",
+            resolvedById: null,
+          },
+        ],
+      }),
+      deps,
+    );
+    expect(calls.outcomes).toHaveLength(1);
   });
 
   test("asks for the comments of the posted review", async () => {

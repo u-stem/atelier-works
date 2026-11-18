@@ -7,7 +7,9 @@
 --   review_comment_idは、投稿した行コメントのid。行コメントにならなかった指摘と、対応づけられなかった指摘はNULLである。
 --   outcomeは、postedが真の指摘の結果。偽の指摘はNULLである。
 -- review_human_threads: Factoryでなく人が始めたレビュースレッド。見逃しの代理の指標に使う。
---   最初に読んだレビュー(first_seen_review_id)の削除と一緒に消える。work_item_idは外部キーを持たず、値だけで参照する。
+--   最初に読んだレビュー(first_seen_review_id)が消えても、行とcreated_atは残り、first_seen_review_idだけがNULLになる。
+--   消えた行を次のレビューが新しい時刻で入れ直すと、期間ごとの件数が水増しされるためである。
+--   work_item_idは外部キーを持たず、値だけで参照する。
 -- reviews.agent_run_id: そのレビューを生成したagent_runsの行。スキルの版と結びつけるための参照である。
 -- 追加だけで、既存の行と列は変えない。
 BEGIN;
@@ -74,7 +76,7 @@ CREATE TABLE factory.review_human_threads (
     id bigserial PRIMARY KEY,
     work_item_id bigint NOT NULL,
     first_comment_id bigint NOT NULL,
-    first_seen_review_id bigint NOT NULL REFERENCES factory.reviews (id) ON DELETE CASCADE,
+    first_seen_review_id bigint REFERENCES factory.reviews (id) ON DELETE SET NULL,
     resolved boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT review_human_threads_first_comment_key UNIQUE (first_comment_id)
@@ -89,7 +91,7 @@ COMMENT ON COLUMN factory.review_human_threads.first_comment_id IS
 COMMENT ON COLUMN factory.review_human_threads.work_item_id IS
     'このスレッドを初めて読んだレビューの作業項目。外部キーを持たず、値だけで参照する。';
 COMMENT ON COLUMN factory.review_human_threads.first_seen_review_id IS
-    'このスレッドを初めて読んだレビュー。行は、このレビューの削除と一緒に消える。';
+    'このスレッドを初めて読んだレビュー。このレビューが消えても行は残り、この列だけがNULLになる。';
 COMMENT ON COLUMN factory.review_human_threads.resolved IS
     '最後に読んだ時点で、許可された人が解決していたか。';
 

@@ -32,6 +32,11 @@ describe("the outcome record in pr_review_post", () => {
     );
   });
 
+  test("tells the record whether the review was reused", async () => {
+    const text = await source("pr_review_post.ts");
+    expect(text).toContain("reused: published.reused,");
+  });
+
   test("hands the agent run of the generation to the review record", async () => {
     const text = await source("pr_review_post.ts");
     expect(text).toContain("agentRunId: input.agent_run_id,");
@@ -51,10 +56,25 @@ describe("the outcome record in pr_fix_finish", () => {
     expect(text).toContain("committed: newSha !== null,");
   });
 
+  test("computes the reply target once and uses it for the reply and the record", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(text.match(/replyTargetCommentId\(/g)).toHaveLength(1);
+  });
+
+  test("records outside the try that catches a failed reply", async () => {
+    const text = await source("pr_fix_finish.ts");
+    const record = positionOf(text, "await recordFixReplyOutcome(");
+    const failure = positionOf(
+      text,
+      'log.warn("failed to reply to a review comment"',
+    );
+    expect(record).toBeGreaterThan(failure);
+  });
+
   test("records against the first comment of the thread that was replied to", async () => {
     const text = await source("pr_fix_finish.ts");
     const call = text.slice(positionOf(text, "await recordFixReplyOutcome("));
-    expect(call.slice(0, 300)).toContain("commentId: replyTargetCommentId(");
+    expect(call.slice(0, 300)).toContain("commentId: replyTarget,");
   });
 });
 

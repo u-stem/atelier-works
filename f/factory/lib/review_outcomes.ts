@@ -59,7 +59,7 @@ export function isFindingOutcome(value: unknown): value is FindingOutcome {
 }
 
 /**
- * 結果の重さ。遷移では、重さが増える向きにだけ進める。
+ * 結果の重さ。経路が`pr_fix`以外の遷移では、重さが増える向きにだけ進める。
  * 見送りや人の解決は、後から再レビューの判断や修正で確かになる。
  * 逆に、確かになった結果を、弱い手がかり(人の解決)で上書きしない。
  */
@@ -75,17 +75,56 @@ const OUTCOME_WEIGHT: Readonly<Record<FindingOutcome, number>> = {
 };
 
 /**
- * 結果が届いたときの、次の結果を返す。
- * 届いた結果の方が重ければそれにし、軽ければ今の結果を保つ。
- * 重さが同じで結果が違うときは、後から届いた方にする。
+ * pr_fixの新しい返信が、重さによらず置き換える今の結果。
+ * pr_fixの返信は、それまでの再レビューの判断より後の出来事なので、
+ * 反論された見送りと答えのあとに、見送りやIssue化の返信が来たら、返信の結果にする。
+ * `fixed`、`skip_accepted`、`resolved_by_human`は確定した結果なので、ここに入れない。
+ */
+const REPLACED_BY_FIX_REPLY: ReadonlySet<FindingOutcome> = new Set([
+  "posted",
+  "skipped",
+  "issue_proposed",
+  "skip_rejected",
+  "answered",
+]);
+
+/**
+ * 結果が届いたときの、次の結果を返す。遷移は、届いた結果の出どころ(`source`)で決まる。
+ *
+ * | 出どころ | 今の結果 | 届いた結果 | 次の結果 |
+ * | --- | --- | --- | --- |
+ * | `pr_fix` | `posted`、`skipped`、`issue_proposed`、`skip_rejected`、`answered` | 返信の結果 | 届いた結果 |
+ * | `pr_fix` | `fixed`、`skip_accepted`、`resolved_by_human` | `fixed` | `fixed` |
+ * | `pr_fix` | `fixed`、`skip_accepted`、`resolved_by_human` | `skipped`、`issue_proposed` | 今の結果 |
+ * | それ以外 | すべて | 今より重い、または同じ重さの結果 | 届いた結果 |
+ * | それ以外 | すべて | 今より軽い結果 | 今の結果 |
  */
 export function nextOutcome(
   current: FindingOutcome,
   incoming: FindingOutcome,
+  source: FindingOutcomeSource,
 ): FindingOutcome {
+  if (source === "pr_fix" && REPLACED_BY_FIX_REPLY.has(current)) {
+    return incoming;
+  }
   return OUTCOME_WEIGHT[incoming] >= OUTCOME_WEIGHT[current]
     ? incoming
     : current;
+}
+
+/**
+ * 届いた結果が、置き換える今の結果の一覧を返す。届いた結果と同じ結果は含めない。
+ * DBが読んだ値に頼らず、1つのUPDATEで遷移を決めるために、遷移の表(`nextOutcome`)から作る。
+ */
+export function outcomesReplacedBy(
+  incoming: FindingOutcome,
+  source: FindingOutcomeSource,
+): FindingOutcome[] {
+  return FINDING_OUTCOMES.filter(
+    (current) =>
+      current !== incoming &&
+      nextOutcome(current, incoming, source) === incoming,
+  );
 }
 
 /** 結果が確定したかを返す。`posted`と、再レビューの判断を待つ`skipped`だけが未確定である。 */
@@ -197,9 +236,12 @@ function bodyHead(body: string): string {
 
 /**
  * 投稿した行コメントと、GitHubが返したコメントを対応づけ、指摘の位置からコメントのidを返す。
- * パスと行が同じで、本文が一致するものを先に選び、残りは本文の先頭だけで選ぶ。
+ * パスと行が同じで、本文が一致するものを先に選ぶ。
+ * 残りは、本文の先頭が同じコメントを選ぶが、候補が1つに決まるときだけにする。
+ * 同じ行に本文の先頭が同じ指摘が2つあるときと、候補が2つ以上あるときは、対応づけない。
+ * 間違ったidを結ぶと別の指摘に結果が付くので、結ばないほうがよい。
  * GitHubが改行コードを変えたり、末尾を整えたりしても、先頭が同じなら対応づける。
- * 同じ条件に合うコメントが複数あるときは、返った順に1つずつ使う。1つのコメントを2つの指摘に使わない。
+ * 本文が一致するコメントが複数あるときは、返った順に1つずつ使う。1つのコメントを2つの指摘に使わない。
  * 対応づけられなかった指摘は、返す表に入らない。
  */
 export function matchCommentsToFindings(
@@ -208,35 +250,41 @@ export function matchCommentsToFindings(
 ): Map<number, number> {
   const matched = new Map<number, number>();
   const used = new Set<number>();
-  const candidates = (comment: ExpectedComment): readonly PostedComment[] =>
+  const onSameLine = (comment: ExpectedComment): readonly PostedComment[] =>
     posted.filter(
       (candidate) =>
         !used.has(candidate.id) &&
         candidate.path === comment.path &&
         candidate.line === comment.line,
     );
-  const claim = (
-    comment: ExpectedComment,
-    same: (candidate: PostedComment) => boolean,
-  ): void => {
-    if (matched.has(comment.index)) return;
-    const found = candidates(comment).find(same);
-    if (found === undefined) return;
-    matched.set(comment.index, found.id);
-    used.add(found.id);
-  };
   for (const comment of expected) {
-    claim(
-      comment,
+    const found = onSameLine(comment).find(
       (candidate) =>
         normalizeBody(candidate.body) === normalizeBody(comment.body),
     );
+    if (found === undefined) continue;
+    matched.set(comment.index, found.id);
+    used.add(found.id);
   }
-  for (const comment of expected) {
-    claim(
-      comment,
+
+  const rest = expected.filter((comment) => !matched.has(comment.index));
+  const sameHead = (a: ExpectedComment, b: ExpectedComment): boolean =>
+    a.path === b.path &&
+    a.line === b.line &&
+    bodyHead(a.body) === bodyHead(b.body);
+  const chosen: [ExpectedComment, PostedComment][] = [];
+  for (const comment of rest) {
+    if (rest.filter((other) => sameHead(comment, other)).length > 1) continue;
+    const candidates = onSameLine(comment).filter(
       (candidate) => bodyHead(candidate.body) === bodyHead(comment.body),
     );
+    const [only] = candidates;
+    if (only !== undefined && candidates.length === 1) {
+      chosen.push([comment, only]);
+    }
+  }
+  for (const [comment, candidate] of chosen) {
+    matched.set(comment.index, candidate.id);
   }
   return matched;
 }

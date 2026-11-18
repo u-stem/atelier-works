@@ -192,6 +192,7 @@ import {
 } from "../f/factory/lib/model_text.ts";
 import { OPERATOR_CANCELLED_NOTE } from "../f/factory/lib/operator_cancel.ts";
 import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "../f/factory/lib/pr_ci_support.ts";
+import { FINDING_OUTCOMES } from "../f/factory/lib/review_outcomes.ts";
 import {
   getCleanupSummary,
   getGatedReviewStats,
@@ -13511,6 +13512,15 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
         posted: false,
         review_comment_id: null,
       },
+      {
+        idx: 3,
+        path: "d.ts",
+        severity: "major",
+        kind: "must",
+        confidence: "high",
+        posted: true,
+        review_comment_id: null,
+      },
     ],
     sql,
   );
@@ -13527,13 +13537,14 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
         [0, "posted", true],
         [1, "posted", true],
         [2, null, false],
+        [3, "posted", true],
       ]),
     stored,
   );
   check(
     "review outcomes: the comment ids are stored as bigint and an unposted finding has none",
     JSON.stringify(stored.map((row) => row.review_comment_id)) ===
-      JSON.stringify([501, 502, null]),
+      JSON.stringify([501, 502, null, null]),
     stored,
   );
 
@@ -13615,6 +13626,96 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     )) === 0,
   );
 
+  // 同じ指摘への2つの更新は、順序によらず、確定した結果を残す。更新は1つのUPDATEで決まり、同時に書いても捨てられない。
+  const raceReviewId = await insertReview(reviewOf(runId), sql);
+  await insertReviewFindings(
+    raceReviewId,
+    [701, 702, 703, 704, 705].map((commentId, idx) => ({
+      idx,
+      path: "race.ts",
+      severity: "major" as const,
+      kind: "must" as const,
+      confidence: "high" as const,
+      posted: true,
+      review_comment_id: commentId,
+    })),
+    sql,
+  );
+  const raceOutcome = async (commentId: number) => {
+    const rows = await sql`
+      SELECT outcome, outcome_source FROM factory.review_findings
+      WHERE review_comment_id = ${commentId}::bigint
+    `.fetch();
+    return JSON.stringify([rows[0]?.outcome, rows[0]?.outcome_source]);
+  };
+  const fixUpdate = (commentId: number) => ({
+    commentId,
+    outcome: "fixed" as const,
+    source: "pr_fix" as const,
+  });
+  const resolveUpdate = (commentId: number) => ({
+    commentId,
+    outcome: "resolved_by_human" as const,
+    source: "thread_sync" as const,
+  });
+  const fixThenResolve = [
+    await recordFindingOutcomes([fixUpdate(701)], sql),
+    await recordFindingOutcomes([resolveUpdate(701)], sql),
+  ];
+  const resolveThenFix = [
+    await recordFindingOutcomes([resolveUpdate(702)], sql),
+    await recordFindingOutcomes([fixUpdate(702)], sql),
+  ];
+  check(
+    "review outcomes: a fix and a human resolution end as a fix in either order",
+    (await raceOutcome(701)) === '["fixed","pr_fix"]' &&
+      (await raceOutcome(702)) === '["fixed","pr_fix"]',
+    [await raceOutcome(701), await raceOutcome(702)],
+  );
+  check(
+    "review outcomes: the update that does not change a finding is not counted",
+    JSON.stringify(fixThenResolve) === "[1,0]" &&
+      JSON.stringify(resolveThenFix) === "[1,1]",
+    [fixThenResolve, resolveThenFix],
+  );
+  const concurrentCounts = await Promise.all([
+    recordFindingOutcomes([fixUpdate(703)], sql),
+    recordFindingOutcomes([resolveUpdate(703)], sql),
+  ]);
+  check(
+    "review outcomes: two updates written at the same time end as a fix and none is lost",
+    (await raceOutcome(703)) === '["fixed","pr_fix"]' &&
+      concurrentCounts[0] === 1,
+    [await raceOutcome(703), concurrentCounts],
+  );
+  await recordFindingOutcomes(
+    [
+      { commentId: 704, outcome: "skipped", source: "pr_fix" },
+      { commentId: 704, outcome: "skip_rejected", source: "rereview" },
+    ],
+    sql,
+  );
+  const skipAfterReject = await recordFindingOutcomes(
+    [{ commentId: 704, outcome: "skipped", source: "pr_fix" }],
+    sql,
+  );
+  check(
+    "review outcomes: a new skip reply of pr_fix replaces the rejection of the re-review",
+    skipAfterReject === 1 &&
+      (await raceOutcome(704)) === '["skipped","pr_fix"]',
+    await raceOutcome(704),
+  );
+  await recordFindingOutcomes([fixUpdate(705)], sql);
+  const skipAfterFix = await recordFindingOutcomes(
+    [{ commentId: 705, outcome: "skipped", source: "pr_fix" }],
+    sql,
+  );
+  check(
+    "review outcomes: a skip reply of pr_fix does not roll a fix back",
+    skipAfterFix === 0 && (await raceOutcome(705)) === '["fixed","pr_fix"]',
+    await raceOutcome(705),
+  );
+
   await upsertHumanThreads(
     itemId,
     reviewId,
@@ -13651,10 +13752,16 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     threads,
   );
 
+  // 投稿しなかったレビュー(posted_review_idがNULL)の指摘は、採否の行が無くても未記録に数えない。
+  const gatedReviewId = await insertReview(
+    { ...reviewOf(runId), posted_review_id: null },
+    sql,
+  );
+
   // 証跡パックの集計は、期間を遠い過去に動かした行で確かめる。
   await execPsqlAsync(
     target,
-    `UPDATE factory.reviews SET created_at = '2002-01-03T00:00:00Z' WHERE id IN (${String(reviewId)}, ${String(withoutRunId)})`,
+    `UPDATE factory.reviews SET created_at = '2002-01-03T00:00:00Z' WHERE id IN (${String(reviewId)}, ${String(withoutRunId)}, ${String(gatedReviewId)})`,
   );
   await execPsqlAsync(
     target,
@@ -13678,7 +13785,7 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
   const reviewOutcomes = outcomeEvidence.review_outcomes;
   check(
     "audit evidence: the outcomes count only the findings that were posted",
-    reviewOutcomes.posted_total === 2 &&
+    reviewOutcomes.posted_total === 3 &&
       reviewOutcomes.counts.fixed === 1 &&
       reviewOutcomes.counts.skip_rejected === 1 &&
       reviewOutcomes.counts.posted === 0,
@@ -13690,18 +13797,30 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     reviewOutcomes,
   );
   check(
+    "audit evidence: a posted finding without a comment id is left out of the outcome counts",
+    FINDING_OUTCOMES.reduce(
+      (sum, outcome) => sum + reviewOutcomes.counts[outcome],
+      0,
+    ) === 2,
+    reviewOutcomes,
+  );
+  check(
     "audit evidence: the threads that a person started are counted with the resolved ones",
     reviewOutcomes.human_threads.total === 2 &&
       reviewOutcomes.human_threads.resolved === 1,
     reviewOutcomes.human_threads,
   );
   check(
-    "audit evidence: a review with findings and no outcome rows is counted as unrecorded",
+    "audit evidence: a posted review with findings and no outcome rows is counted as unrecorded, and a review that was not posted is not",
     reviewOutcomes.unrecorded_reviews === 1,
     reviewOutcomes,
   );
 
-  // 子の行は、レビューの削除にあわせて消える。
+  // 指摘の行は、レビューの削除にあわせて消える。人が始めたスレッドは、行と作成時刻が残る。
+  const threadsBefore = await sql`
+    SELECT first_comment_id, created_at FROM factory.review_human_threads
+    WHERE work_item_id = ${itemId}::bigint ORDER BY first_comment_id
+  `.fetch();
   await execPsqlAsync(
     target,
     `DELETE FROM factory.reviews WHERE id = ${String(reviewId)}`,
@@ -13709,26 +13828,35 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
   const afterDelete = await sql`
     SELECT
       (SELECT count(*) FROM factory.review_findings WHERE review_id = ${reviewId}::bigint) AS findings,
-      (SELECT count(*) FROM factory.review_human_threads WHERE work_item_id = ${itemId}::bigint) AS threads
+      (SELECT count(*) FROM factory.review_human_threads WHERE work_item_id = ${itemId}::bigint) AS threads,
+      (SELECT count(*) FROM factory.review_human_threads WHERE work_item_id = ${itemId}::bigint AND first_seen_review_id IS NULL) AS detached
+    FROM (SELECT 1) AS one
   `.fetch();
   check(
-    "review outcomes: deleting a review deletes its findings and the threads it saw first",
+    "review outcomes: deleting a review deletes its findings and keeps the threads it saw first, detached from the review",
     Number(afterDelete[0]?.findings) === 0 &&
-      Number(afterDelete[0]?.threads) === 0,
+      Number(afterDelete[0]?.threads) === 2 &&
+      Number(afterDelete[0]?.detached) === 2,
     afterDelete,
   );
-  let threadWithoutReviewRejected = false;
-  try {
-    await execPsqlAsync(
-      target,
-      `INSERT INTO factory.review_human_threads (work_item_id, first_comment_id, first_seen_review_id) VALUES (${String(itemId)}, 803, NULL)`,
-    );
-  } catch {
-    threadWithoutReviewRejected = true;
-  }
+  // 残った行がある間、次のレビューが同じスレッドを読んでも、作成時刻を新しくせず、行も増やさない。
+  await upsertHumanThreads(
+    itemId,
+    withoutRunId,
+    [
+      { firstCommentId: 801, resolved: true },
+      { firstCommentId: 802, resolved: false },
+    ],
+    sql,
+  );
+  const threadsAfter = await sql`
+    SELECT first_comment_id, created_at FROM factory.review_human_threads
+    WHERE work_item_id = ${itemId}::bigint ORDER BY first_comment_id
+  `.fetch();
   check(
-    "review outcomes: the table rejects a thread that has no review it was first seen in",
-    threadWithoutReviewRejected,
+    "review outcomes: a thread that is read again after its first review was deleted keeps one row and its first time",
+    JSON.stringify(threadsAfter) === JSON.stringify(threadsBefore),
+    [threadsBefore, threadsAfter],
   );
 }
 

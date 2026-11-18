@@ -2173,14 +2173,14 @@ describe("PR review sections in the evidence pack", () => {
   });
 });
 
-/** 採否の記録が十分にある期間。確定した指摘が30件、投稿した指摘が40件。 */
+/** 採否の記録が十分にある期間。確定した指摘が30件、コメントに結びついた指摘が36件、投稿した指摘が40件。 */
 const OUTCOME_EVIDENCE: AuditEvidence = {
   ...EMPTY_EVIDENCE,
   review_outcomes: {
     posted_total: 40,
     with_comment_id: 36,
     counts: {
-      posted: 7,
+      posted: 3,
       skipped: 3,
       issue_proposed: 1,
       fixed: 12,
@@ -2209,13 +2209,26 @@ describe("the review outcome section", () => {
 
   test("shows the findings that still wait for an outcome", () => {
     expect(sectionOf(OUTCOME_EVIDENCE, OUTCOME_SECTION)?.fixed).toContain(
-      "結果が決まっていない指摘: 投稿のまま7件 / 見送りの判断待ち3件",
+      "結果が決まっていない指摘: 投稿のまま3件 / 見送りの判断待ち3件",
     );
   });
 
-  test("shows how many posted findings have the id of their comment", () => {
+  test("shows the posted findings that no comment id ties to, apart from the denominator", () => {
     expect(sectionOf(OUTCOME_EVIDENCE, OUTCOME_SECTION)?.fixed).toContain(
-      "行コメントのidを取れた指摘: 36/40件",
+      "コメントに結びつかない指摘(採用率と結果待ちの母数に入れない): 4件",
+    );
+  });
+
+  test("shows zero when every posted finding is tied to a comment", () => {
+    const evidence: AuditEvidence = {
+      ...OUTCOME_EVIDENCE,
+      review_outcomes: {
+        ...OUTCOME_EVIDENCE.review_outcomes,
+        posted_total: 36,
+      },
+    };
+    expect(sectionOf(evidence, OUTCOME_SECTION)?.fixed).toContain(
+      "コメントに結びつかない指摘(採用率と結果待ちの母数に入れない): 0件",
     );
   });
 
@@ -2228,7 +2241,7 @@ describe("the review outcome section", () => {
   test("leaves out the line of unrecorded reviews when there is none", () => {
     expect(
       sectionOf(OUTCOME_EVIDENCE, OUTCOME_SECTION)?.fixed.some((line) =>
-        line.includes("未記録"),
+        line.includes("移行前"),
       ),
     ).toBe(false);
   });
@@ -2242,13 +2255,13 @@ describe("the review outcome section", () => {
       },
     };
     expect(sectionOf(evidence, OUTCOME_SECTION)?.fixed).toContain(
-      "採否の記録が無いレビュー(未記録、割合の母数に入れない): 5件",
+      "採否を記録できなかった、または移行前のレビュー(割合の母数に入れない): 5件",
     );
   });
 
   test("lists the count of each outcome that happened as a droppable line", () => {
     expect(sectionOf(OUTCOME_EVIDENCE, OUTCOME_SECTION)?.lines).toEqual([
-      "結果 posted: 7件",
+      "結果 posted: 3件",
       "結果 skipped: 3件",
       "結果 issue_proposed: 1件",
       "結果 fixed: 12件",
@@ -2350,7 +2363,7 @@ describe("the review outcome section", () => {
       },
     };
     expect(sectionOf(evidence, OUTCOME_SECTION)?.fixed).toContain(
-      "採否の記録が無いレビュー(未記録、割合の母数に入れない): 2件",
+      "採否を記録できなかった、または移行前のレビュー(割合の母数に入れない): 2件",
     );
   });
 
@@ -2407,7 +2420,7 @@ describe("collecting the review outcomes", () => {
     expect(findCall(calls, "reviewOutcomes")?.text).toContain("AND rf.posted");
   });
 
-  test("reads the count of each outcome", async () => {
+  test("reads the count of each outcome from the findings that have a comment id", async () => {
     const { evidence } = await collectWith({
       reviewOutcomes: [
         { key: "fixed", count: "12", with_comment_id: "11" },
@@ -2415,9 +2428,16 @@ describe("collecting the review outcomes", () => {
       ],
     });
     expect(evidence.review_outcomes.counts).toMatchObject({
-      fixed: 12,
+      fixed: 11,
       posted: 3,
     });
+  });
+
+  test("keeps the findings without a comment id out of the awaiting count", async () => {
+    const { evidence } = await collectWith({
+      reviewOutcomes: [{ key: "posted", count: 5, with_comment_id: 2 }],
+    });
+    expect(evidence.review_outcomes.counts.posted).toBe(2);
   });
 
   test("totals the posted findings and the ones with a comment id", async () => {
@@ -2455,6 +2475,13 @@ describe("collecting the review outcomes", () => {
       unrecordedReviews: [{ count: "5" }],
     });
     expect(evidence.review_outcomes.unrecorded_reviews).toBe(5);
+  });
+
+  test("counts only the reviews that were posted", async () => {
+    const { calls } = await collectWith({});
+    expect(findCall(calls, "unrecordedReviews")?.text).toContain(
+      "rv.posted_review_id IS NOT NULL",
+    );
   });
 
   test("counts only the reviews that have findings and no outcome rows", async () => {

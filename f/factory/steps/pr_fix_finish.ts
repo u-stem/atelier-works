@@ -1128,6 +1128,11 @@ export async function main(
         work_item_id,
         renderFixReply(reply, newSha),
       );
+      const replyTarget = replyTargetCommentId(
+        threads,
+        reply.review_comment_id,
+      );
+      let repliedInline = false;
       try {
         if (isInline) {
           await replyReviewComment(
@@ -1135,20 +1140,10 @@ export async function main(
             owner,
             repo,
             pr_number,
-            replyTargetCommentId(threads, reply.review_comment_id),
+            replyTarget,
             body,
           );
-          // 返信した指摘の結果を、スレッドの最初のコメントのidで記録する。
-          // 記録の失敗は、返信の投稿と修正の回を止めない。
-          await recordFixReplyOutcome(
-            recordFindingOutcomes,
-            {
-              decision: reply.decision,
-              committed: newSha !== null,
-              commentId: replyTargetCommentId(threads, reply.review_comment_id),
-            },
-            log,
-          );
+          repliedInline = true;
         } else {
           await postIssueComment(client, owner, repo, pr_number, body);
         }
@@ -1164,6 +1159,19 @@ export async function main(
           reviewCommentId: reply.review_comment_id,
           error: message,
         });
+      }
+      if (repliedInline) {
+        // 返信した指摘の結果を、スレッドの最初のコメントのidで記録する。
+        // 記録の失敗は、返信の失敗として数えず、返信の投稿と修正の回も止めない。
+        await recordFixReplyOutcome(
+          recordFindingOutcomes,
+          {
+            decision: reply.decision,
+            committed: newSha !== null,
+            commentId: replyTarget,
+          },
+          log,
+        );
       }
     }
 
