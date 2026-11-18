@@ -1575,6 +1575,68 @@ describe("pr_workflow_support prose", () => {
       ]);
     });
 
+    test("does not check a low confidence finding, which is never posted", () => {
+      const issues = reviewOutputProseIssues({
+        verdict: "comment",
+        summary: "要約です。",
+        findings: [
+          {
+            path: "src/a.ts",
+            line: 1,
+            end_line: null,
+            severity: "minor",
+            kind: "imo",
+            message: "この分岐は不要である。",
+            suggestion: "削除する。",
+            suggested_code: null,
+            evidence: "src/a.ts:1を読んだ。",
+            confidence: "low",
+          },
+        ],
+        thread_responses: [],
+      });
+
+      expect(issues).toEqual([]);
+    });
+
+    test("labels a finding by its position in the output when a low confidence finding comes first", () => {
+      const issues = reviewOutputProseIssues({
+        verdict: "comment",
+        summary: "要約です。",
+        findings: [
+          {
+            path: "src/a.ts",
+            line: 1,
+            end_line: null,
+            severity: "minor",
+            kind: "imo",
+            message: "記録だけの指摘である。",
+            suggestion: null,
+            suggested_code: null,
+            evidence: "確認した。",
+            confidence: "low",
+          },
+          {
+            path: "src/b.ts",
+            line: 2,
+            end_line: null,
+            severity: "minor",
+            kind: "imo",
+            message: "この分岐は不要である。",
+            suggestion: null,
+            suggested_code: null,
+            evidence: "src/b.ts:2を読みました。",
+            confidence: "high",
+          },
+        ],
+        thread_responses: [],
+      });
+
+      expect(issues).toEqual([
+        "findings[1].message: 1行目: 敬体(です・ます)で書く文章に、別の文体の文末があります(である。)",
+      ]);
+    });
+
     test("reports a plain ending in a thread response", () => {
       const issues = reviewOutputProseIssues({
         verdict: "comment",

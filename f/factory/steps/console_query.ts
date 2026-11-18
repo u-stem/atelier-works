@@ -68,6 +68,7 @@ import {
   isRecord,
   isString,
   PULL_REQUEST_ORIGINS,
+  REVIEW_CONFIDENCES,
   type ReviewFinding,
   type ReviewSeverity,
   sanitizePullRequestTitle,
@@ -305,10 +306,19 @@ function isReviewFinding(value: unknown): value is ReviewFinding {
     (value.line === null || isNumber(value.line)) &&
     isOneOf(value.severity, REVIEW_SEVERITIES) &&
     isString(value.message) &&
-    (value.suggestion === null || isString(value.suggestion))
+    (value.suggestion === null || isString(value.suggestion)) &&
+    // 確信度を記録する前の行は、項目を持たない。
+    (value.confidence === undefined ||
+      value.confidence === null ||
+      isOneOf(value.confidence, REVIEW_CONFIDENCES))
   );
 }
 
+/**
+ * 記録した指摘を読む。確信度を記録する前の行は、`confidence`を`null`で返す。
+ * 受け手は、`confidence`が`low`の指摘を、投稿せず記録だけにした指摘として区別できる。
+ * `null`は投稿した指摘として扱う(`isPostableFinding`)。
+ */
 function parseFindings(value: unknown, field: string): ReviewFinding[] {
   const array = asJsonArray(value, field);
   if (!array.every(isReviewFinding)) {
@@ -316,7 +326,10 @@ function parseFindings(value: unknown, field: string): ReviewFinding[] {
       `console_query: field "${field}" contains a malformed finding`,
     );
   }
-  return array;
+  return array.map((finding) => ({
+    ...finding,
+    confidence: finding.confidence ?? null,
+  }));
 }
 
 function isFixReply(value: unknown): value is FixReply {

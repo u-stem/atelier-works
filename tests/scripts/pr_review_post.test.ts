@@ -14,6 +14,10 @@ import {
   type ReviewThread,
 } from "../../f/factory/lib/github.ts";
 import { logger } from "../../f/factory/lib/log.ts";
+import {
+  REVIEW_EVIDENCE_MAX_CHARS,
+  REVIEW_EVIDENCE_TRUNCATED_MARK,
+} from "../../f/factory/lib/model_text.ts";
 import type {
   FileDiffHunks,
   ReviewFinding,
@@ -792,6 +796,72 @@ describe("renderReviewSummary with binary files whose path was not confirmed", (
       0,
     );
     expect(body).not.toContain("パスを確認できなかった");
+  });
+});
+
+describe("renderReviewSummary with held back findings", () => {
+  const HELD_LINE =
+    "確信度が低く、投稿しなかった指摘が3件あります。記録はConsoleで確認できます。";
+
+  test("puts the held back notice right after the LGTM line", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      [],
+      0,
+      [],
+      3,
+    );
+    expect(body.split("\n")[2]).toBe(HELD_LINE);
+  });
+
+  test("keeps the final-Approve-is-human disclaimer after the held back notice", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "rereview_clean",
+      [],
+      0,
+      [],
+      0,
+      [],
+      3,
+    );
+    expect(body.split("\n")[3]).toBe(
+      "最終的なApprove判断は人が行ってください。",
+    );
+  });
+
+  test("adds the held back notice to a body with findings", () => {
+    const body = renderReviewSummary(
+      "alice",
+      2,
+      "findings",
+      [],
+      0,
+      [],
+      0,
+      [],
+      3,
+    );
+    expect(body.split("\n")).toContain(HELD_LINE);
+  });
+
+  test("leaves the body unchanged when nothing was held back", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0);
+    expect(body).not.toContain("確信度が低く");
+  });
+});
+
+describe("renderUnresolvedLineSummary with held back findings", () => {
+  test("adds the held back notice to the fallback summary", () => {
+    const body = renderUnresolvedLineSummary("alice", [], [], [], 0, 2);
+    expect(body.split("\n")).toContain(
+      "確信度が低く、投稿しなかった指摘が2件あります。記録はConsoleで確認できます。",
+    );
   });
 });
 
@@ -2028,6 +2098,7 @@ describe("posting a review once per sha", () => {
       droppedFindings: [],
       binaryFiles: [],
       binaryUnlistedCount: 0,
+      heldFindingCount: 0,
       priorReview: true,
       post: true,
       ensureRepoOwner: async () => null,
@@ -3481,6 +3552,8 @@ describe("sendReviewedNotification", () => {
 });
 
 describe("findings with low confidence", () => {
+  const HELD_NOTICE_2 =
+    "確信度が低く、投稿しなかった指摘が2件あります。記録はConsoleで確認できます。";
   const VIEWER = "factory-bot";
   const SHA = "0123456789abcdef0123456789abcdef01234567";
   const SILENT = logger("pr_review_post", { sink: () => {} });
@@ -3521,6 +3594,7 @@ describe("findings with low confidence", () => {
       droppedFindings: mapped.droppedFindings,
       binaryFiles: [],
       binaryUnlistedCount: 0,
+      heldFindingCount: splitFindingsByConfidence(findings).held.length,
       priorReview: false,
       post: true,
       ensureRepoOwner: async () => null,
@@ -3630,6 +3704,43 @@ describe("findings with low confidence", () => {
       const record = buildReviewRecord({ ...base, findings: [LOW_MUST] });
       expect(record.result).toBe("reviewed");
     });
+
+    test("masks a secret in the evidence before it is stored", () => {
+      const token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+      const record = buildReviewRecord({
+        ...base,
+        findings: [finding({ evidence: `printed ${token}` })],
+      });
+      expect(record.findings[0]?.evidence).not.toContain(token);
+    });
+
+    test("cuts a long evidence and marks the cut", () => {
+      const record = buildReviewRecord({
+        ...base,
+        findings: [
+          finding({ evidence: "a".repeat(REVIEW_EVIDENCE_MAX_CHARS + 1) }),
+        ],
+      });
+      expect(record.findings[0]?.evidence).toEndWith(
+        REVIEW_EVIDENCE_TRUNCATED_MARK,
+      );
+    });
+
+    test("keeps an evidence recorded as null", () => {
+      const record = buildReviewRecord({
+        ...base,
+        findings: [finding({ evidence: null })],
+      });
+      expect(record.findings[0]?.evidence).toBeNull();
+    });
+
+    test("leaves the other fields of a finding as they are", () => {
+      const record = buildReviewRecord({
+        ...base,
+        findings: [finding({ evidence: "short" })],
+      });
+      expect(record.findings[0]).toEqual(finding({ evidence: "short" }));
+    });
   });
 
   describe("the notification", () => {
@@ -3667,6 +3778,25 @@ describe("findings with low confidence", () => {
     test("posts a review without findings when every finding is low confidence", async () => {
       const payload = await postedPayload([LOW_MUST]);
       expect(payload.body).toContain("指摘はありません。LGTMです。");
+    });
+
+    // LGTMの文だけでは、人が承認と読む。件数だけを添えて、内容は出さない。
+    test("says how many findings were held back right after the LGTM line when every finding is low confidence", async () => {
+      const payload = await postedPayload([LOW_MUST, LOW_MUST]);
+      const lines = (payload.body ?? "").split("\n");
+      expect(lines[2]).toBe(HELD_NOTICE_2);
+    });
+
+    test("says how many findings were held back when a finding is also posted", async () => {
+      const payload = await postedPayload([LOW_MUST, HIGH_IMO]);
+      expect(payload.body).toContain(
+        "確信度が低く、投稿しなかった指摘が1件あります。",
+      );
+    });
+
+    test("does not mention held back findings when none was held back", async () => {
+      const payload = await postedPayload([HIGH_IMO]);
+      expect(payload.body).not.toContain("確信度が低く");
     });
   });
 

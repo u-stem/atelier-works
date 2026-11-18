@@ -764,6 +764,111 @@ describe("runConsoleQuery", () => {
     });
   });
 
+  test("reviews: tells a held back finding from a posted one by its confidence", async () => {
+    const row: SqlRow = {
+      review_id: 1,
+      work_item_id: 2,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      head_sha: "abc1234",
+      verdict: "comment",
+      summary: "summary",
+      findings: JSON.stringify([
+        {
+          path: "a.ts",
+          line: 3,
+          severity: "minor",
+          message: "posted",
+          suggestion: null,
+          evidence: "a.ts:3",
+          confidence: "high",
+        },
+        {
+          path: "b.ts",
+          line: 4,
+          severity: "minor",
+          message: "held",
+          suggestion: null,
+          evidence: "b.ts:4",
+          confidence: "low",
+        },
+      ]),
+      posted_review_id: "rv-1",
+      created_at: NOW.toISOString(),
+    };
+    const { sql } = createFakeSqlClient([[row]]);
+
+    const rows = await runConsoleQuery("reviews", 200, 30, sql);
+
+    expect(
+      rows.map((review) =>
+        "findings" in review
+          ? review.findings.map((finding) => finding.confidence)
+          : [],
+      ),
+    ).toEqual([["high", "low"]]);
+  });
+
+  test("reviews: reports a null confidence for a finding recorded before the confidence existed", async () => {
+    const row: SqlRow = {
+      review_id: 1,
+      work_item_id: 2,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      head_sha: "abc1234",
+      verdict: "comment",
+      summary: "summary",
+      findings: JSON.stringify([
+        {
+          path: "a.ts",
+          line: 3,
+          severity: "minor",
+          message: "old",
+          suggestion: null,
+        },
+      ]),
+      posted_review_id: "rv-1",
+      created_at: NOW.toISOString(),
+    };
+    const { sql } = createFakeSqlClient([[row]]);
+
+    const rows = await runConsoleQuery("reviews", 200, 30, sql);
+
+    expect(rows[0]).toMatchObject({ findings: [{ confidence: null }] });
+  });
+
+  test("reviews: rejects a finding whose confidence is not a known value", async () => {
+    const row: SqlRow = {
+      review_id: 1,
+      work_item_id: 2,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      head_sha: "abc1234",
+      verdict: "comment",
+      summary: "summary",
+      findings: JSON.stringify([
+        {
+          path: "a.ts",
+          line: 3,
+          severity: "minor",
+          message: "odd",
+          suggestion: null,
+          confidence: "certain",
+        },
+      ]),
+      posted_review_id: "rv-1",
+      created_at: NOW.toISOString(),
+    };
+    const { sql } = createFakeSqlClient([[row]]);
+
+    await expect(runConsoleQuery("reviews", 200, 30, sql)).rejects.toThrow(
+      "malformed finding",
+    );
+  });
+
   test("fix_rounds: parses trigger_review_ids/replies/commit_shas", async () => {
     const row: SqlRow = {
       fix_round_id: 1,

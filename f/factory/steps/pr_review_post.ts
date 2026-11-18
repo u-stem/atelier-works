@@ -509,6 +509,8 @@ export type PublishReviewInput = {
   readonly binaryFiles: readonly string[];
   /** `binaryFiles`に並べられなかった(パスを変更ファイルと照合できなかった)件数。 */
   readonly binaryUnlistedCount: number;
+  /** 確信度が`low`で、投稿せず記録だけにした指摘の件数。総評に件数だけを書く。 */
+  readonly heldFindingCount: number;
   /** このPRに、この作業項目より前のFactoryのレビューの記録があるか。 */
   readonly priorReview: boolean;
   /** 偽なら("gated")投稿も返信もスレッドの解決もしない。 */
@@ -726,6 +728,8 @@ export async function publishReview(
     openThreadCount,
     input.binaryFiles,
     input.binaryUnlistedCount,
+    [],
+    input.heldFindingCount,
   );
   // GitHubが行を解決できずに拒否したときは、行コメントの指摘もすべて総評に並べて投稿し直す。
   const fallbackBody = renderUnresolvedLineSummary(
@@ -734,6 +738,7 @@ export async function publishReview(
     droppedFindings,
     input.binaryFiles,
     input.binaryUnlistedCount,
+    input.heldFindingCount,
   );
   // 拒否されたら、まず範囲が分からないファイルの指摘だけを総評へ移して、残りの行コメントで投稿し直す。
   // 移す指摘が無いか、行コメントがすべて移す指摘のときは、この段を飛ばす。
@@ -762,6 +767,7 @@ export async function publishReview(
             input.binaryFiles,
             input.binaryUnlistedCount,
             unverifiedFindings,
+            input.heldFindingCount,
           ),
         }
       : undefined;
@@ -915,7 +921,7 @@ async function postReview(
 
   // 確信度が`low`の指摘は、PRのコメントにも総評にも出さず、記録だけにする。
   // 結果の判定と通知の件数は、`findings`をそのまま渡しても`low`を数えない。
-  const { postable } = splitFindingsByConfidence(findings);
+  const { postable, held } = splitFindingsByConfidence(findings);
   const { comments, droppedFindings, reattachedFindings, unverifiedFindings } =
     mapFindingsToReviewComments(
       postable,
@@ -957,6 +963,7 @@ async function postReview(
       droppedFindings,
       binaryFiles,
       binaryUnlistedCount,
+      heldFindingCount: held.length,
       priorReview,
       post,
       ensureRepoOwner: () =>

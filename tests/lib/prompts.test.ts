@@ -942,6 +942,16 @@ describe("reviewPrompt", () => {
         `Report at most ${String(REVIEW_MAX_FINDINGS)} findings, the most important first`,
       );
     });
+
+    test("states that low confidence findings have their own limit", () => {
+      const prompt = reviewPrompt(
+        { ...baseInput, scope: { kind: "first" } },
+        FIXED_UUID,
+      );
+      expect(prompt).toContain(
+        `This limit does not count findings of "low" confidence, which have their own limit of ${String(REVIEW_MAX_FINDINGS)}.`,
+      );
+    });
   });
 
   describe("fixRound", () => {

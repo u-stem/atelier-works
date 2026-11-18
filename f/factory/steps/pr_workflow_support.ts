@@ -63,6 +63,7 @@ import {
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { gitPointerStopReason } from "../lib/implement_loop.ts";
 import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
+import { limitReviewEvidence } from "../lib/model_text.ts";
 import { holdReasonForStoppedItem } from "../lib/pr_ci_fix_recovery.ts";
 import { prCiFixHoldInfo } from "../lib/pr_ci_support.ts";
 import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
@@ -299,11 +300,23 @@ export function reviewResultFor(
 }
 
 /**
+ * 記録する指摘の`evidence`を、秘密のマスクと長さの上限にかける。
+ * `evidence`はClaudeの自由文で、記録はConsoleのAPIにも出るため。
+ * それ以外の項目は、そのまま返す。
+ */
+function sanitizeFindingForRecord(finding: ReviewFinding): ReviewFinding {
+  return finding.evidence === null
+    ? finding
+    : { ...finding, evidence: limitReviewEvidence(finding.evidence) };
+}
+
+/**
  * `factory.reviews`に書く行を組み立てる。
  * `result`は、今回の指摘と`blockingThreadCount`から`reviewResultFor`で決める。
  * Discordの通知もConsoleのレビュー行も、この値で状態を出す。
  * `verdict`が`approve`で今回の指摘が0件でも、マージを止めるスレッドが残れば`changes_requested`になる。
  * `findings`は確信度が`low`の指摘も含めてすべて記録する。`result`の判定には`low`を使わない。
+ * 記録する`evidence`は、秘密をマスクし、長さの上限で切る(`limitReviewEvidence`)。
  * 未解決の指摘を読めなかった(`unverified`)ときは、`result`を`null`にして記録する。
  * Consoleのレビュー行は、`null`を「修正必須の有無の記録なし」と出す。
  */
@@ -323,7 +336,7 @@ export function buildReviewRecord(input: {
     verdict: input.verdict,
     result: outcome === "unverified" ? null : outcome,
     summary: input.summary,
-    findings: [...input.findings],
+    findings: input.findings.map(sanitizeFindingForRecord),
     posted_review_id: input.postedReviewId,
   };
 }
@@ -723,25 +736,32 @@ function renderCodeBlock(code: string, info: "suggestion" | ""): string {
  * `factory-writing`スキルの規則で検査する。規則に反していても投稿は止めない。
  * レビューを作り直すと費用が倍になるので、呼び出し側は問題をログに残すだけにする。
  * `summary`はGitHubに投稿しない(総評は固定の文面)ので検査しない。
+ * `evidence`と、確信度が`low`で投稿しない指摘も、GitHubに載らないので検査しない。
  */
 export function reviewOutputProseIssues(output: ReviewClaudeOutput): string[] {
   return checkProseFields([
-    ...output.findings.flatMap((finding, index) => [
-      {
-        label: `findings[${index}].message`,
-        text: finding.message,
-        rules: GITHUB_PROSE_RULES,
-      },
-      ...(finding.suggestion === null
+    ...output.findings.flatMap((finding, index) =>
+      // 投稿しない指摘(確信度が`low`)は、GitHubに載らないので検査しない。
+      // 位置の表示は、出力の中の順のままにする。
+      !isPostableFinding(finding)
         ? []
         : [
             {
-              label: `findings[${index}].suggestion`,
-              text: finding.suggestion,
+              label: `findings[${index}].message`,
+              text: finding.message,
               rules: GITHUB_PROSE_RULES,
             },
-          ]),
-    ]),
+            ...(finding.suggestion === null
+              ? []
+              : [
+                  {
+                    label: `findings[${index}].suggestion`,
+                    text: finding.suggestion,
+                    rules: GITHUB_PROSE_RULES,
+                  },
+                ]),
+          ],
+    ),
     ...output.thread_responses.map((response, index) => ({
       label: `thread_responses[${index}].body`,
       text: response.body,
@@ -944,6 +964,9 @@ export function decideReviewBodyMode(
  * 指摘の無い2つの形式は、そのとき「LGTMです」を言わず、差分に指摘が無いことだけを書く。
  * 読めていないファイルが残るのに、LGTMと読める行を出さないため。
  *
+ * `heldFindingCount`が1以上なら、2行目の直後に、確信度が`low`で投稿しなかった指摘の件数を1行で足す。
+ * 指摘の内容は載せない。LGTMの文だけが残って、人が承認と読むのを防ぐため。
+ *
  * `"findings"`には「最終的なApproveは人が判断する」という免責の行を付けない。
  * 指摘のある投稿はすでに作成者に確認を求めている(「確認お願いします。」)ので、
  * 免責は重複になる。
@@ -966,6 +989,7 @@ export function renderReviewSummary(
   binaryFiles: readonly string[] = [],
   binaryUnlistedCount = 0,
   movedFindings: readonly ReviewFinding[] = [],
+  heldFindingCount = 0,
 ): string {
   const lines = [`${ROLE_TAGS.pr_review} @${authorLogin}`];
   const hasBinary = binaryFiles.length + binaryUnlistedCount > 0;
@@ -998,9 +1022,24 @@ export function renderReviewSummary(
       );
       break;
   }
+  // どの形式も、2行目が結果の文である。投稿しなかった指摘の注記は、その直後に置く。
+  lines.splice(2, 0, ...renderHeldFindingsLines(heldFindingCount));
   lines.push(...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount));
   lines.push(...renderUnanchoredFindingLines(droppedFindings, movedFindings));
   return lines.join("\n");
+}
+
+/**
+ * 確信度が`low`で、投稿せず記録だけにした指摘があることを伝える1行。無ければ空。
+ * 指摘の内容は載せず、件数だけを書く。
+ * LGTMの文だけでは、人が「確認すべきことが何も無い」と読みかねないため。
+ */
+function renderHeldFindingsLines(heldFindingCount: number): string[] {
+  return heldFindingCount > 0
+    ? [
+        `確信度が低く、投稿しなかった指摘が${String(heldFindingCount)}件あります。記録はConsoleで確認できます。`,
+      ]
+    : [];
 }
 
 /**
@@ -1106,6 +1145,7 @@ function renderUnanchoredFindingLines(
  * 同じ一覧に並べる。後者の形は通常の総評と同じにする。
  * 「N件コメントしました」は、行コメントを1件も付けていないので書かない。
  * `binaryFiles`があれば、`renderReviewSummary`と同じ固定の一文とパスの一覧を足す。
+ * `heldFindingCount`が1以上なら、`renderReviewSummary`と同じ、投稿しなかった指摘の件数の1行を足す。
  */
 export function renderUnresolvedLineSummary(
   authorLogin: string,
@@ -1113,11 +1153,13 @@ export function renderUnresolvedLineSummary(
   droppedFindings: readonly ReviewFinding[],
   binaryFiles: readonly string[] = [],
   binaryUnlistedCount = 0,
+  heldFindingCount = 0,
 ): string {
   return [
     `${ROLE_TAGS.pr_review} @${authorLogin}`,
     "GitHubが行を解決できなかったため、行コメントにする指摘を総評に移しました。",
     "確認お願いします。",
+    ...renderHeldFindingsLines(heldFindingCount),
     ...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount),
     ...renderUnanchoredFindingLines(droppedFindings, commentedFindings),
   ].join("\n");
