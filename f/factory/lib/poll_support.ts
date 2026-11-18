@@ -1268,7 +1268,11 @@ export type ClosedTargetInfo = {
 export type CloserDecision =
   | {
       readonly allowed: true;
-      readonly basis: "merged" | "other_than_author" | "author";
+      readonly basis:
+        | "merged"
+        | "other_than_author"
+        | "author"
+        | "dependabot_self";
     }
   | {
       readonly allowed: false;
@@ -1287,10 +1291,29 @@ function isBotCloser(info: ClosedTargetInfo): boolean {
 }
 
 /**
+ * dependabotのログイン名。
+ * `dependabot_support.ts`を読み込むと、共有の`poll_support.ts`の依存が広がるので、ここに置く。
+ */
+const DEPENDABOT_LOGIN = "dependabot[bot]";
+
+/**
+ * dependabotが、自分が作ったPRを自分で閉じたか。
+ * 更新が他の更新に置き換えられたときなどに、dependabot自身が閉じる。
+ * 作者と閉じた人の両方がdependabotのときだけ真にする。
+ */
+function isDependabotClosingOwnPr(info: ClosedTargetInfo): boolean {
+  return (
+    info.closedByLogin?.toLowerCase() === DEPENDABOT_LOGIN &&
+    info.authorLogin?.toLowerCase() === DEPENDABOT_LOGIN
+  );
+}
+
+/**
  * 対象を閉じた人が、要対応の取り消しを許せる人かを、Issue(PR)の1回の応答から次の順に判定する。
  * 1. PRがマージされていれば許す。マージにもmerge queueへの投入にも、write権限が要るため。
  * 2. 閉じた人が分からなければ許さない。
- * 3. Botが閉じたなら許さない。BotやActionsは、第三者のイベントを受けて閉じることがあるため。
+ * 3. dependabotが自分のPRを閉じたなら許す。置き換えられて不要になったPRで、人が判断する対象が無くなるため。
+ *    それ以外のBotが閉じたなら許さない。BotやActionsは、第三者のイベントを受けて閉じることがあるため。
  * 4. 作者が分からなければ許さない。
  * 5. 作者以外の人が閉じたなら許す。他人のIssueやPRを閉じるには、triage以上の権限が要るため。
  * 6. 作者が閉じたなら、作者の`author_association`が許可する関係に含まれるときだけ許す。
@@ -1304,6 +1327,9 @@ export function decideCloser(
   if (info.mergedAt !== null) return { allowed: true, basis: "merged" };
   if (info.closedByLogin === null) {
     return { allowed: false, reason: "no_closer" };
+  }
+  if (isDependabotClosingOwnPr(info)) {
+    return { allowed: true, basis: "dependabot_self" };
   }
   if (isBotCloser(info)) return { allowed: false, reason: "bot_closer" };
   if (info.authorLogin === null || info.authorLogin === "") {
