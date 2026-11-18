@@ -511,6 +511,42 @@ describe("worktree-prune.sh", () => {
       expect(existsSync(path)).toBe(false);
     });
 
+    test("removes a worktree that holds only a coverage directory", () => {
+      const path = addMergedWorktree("docs-cov", "docs/cov");
+      mkdirSync(join(path, "coverage"));
+      writeFileSync(join(path, "coverage", "lcov.info"), "g\n");
+      ageFiles(path, 180);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("keeps a worktree with a nested coverage directory that is not the top-level output", () => {
+      const path = addMergedWorktree("docs-cov2", "docs/cov2");
+      mkdirSync(join(path, "notes", "coverage"), { recursive: true });
+      writeFileSync(join(path, "notes", "coverage", "x.txt"), "g\n");
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/cov2): ignored files`,
+      );
+    });
+
+    test("keeps a worktree with a nested repository under coverage", () => {
+      const path = addMergedWorktree("docs-cov3", "docs/cov3");
+      mkdirSync(join(path, "coverage", "inner"), { recursive: true });
+      git(join(path, "coverage", "inner"), ["init", "--quiet"]);
+      writeFileSync(join(path, "coverage", "inner", "f.txt"), "g\n");
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/cov3): ignored files`,
+      );
+    });
+
     test("keeps a worktree with a local Claude settings file", () => {
       const path = addMergedWorktree("docs-claude", "docs/claude");
       mkdirSync(join(path, ".claude"));

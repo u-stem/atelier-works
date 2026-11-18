@@ -617,8 +617,15 @@ mise run worktree:prune -- --apply
 
 - ロックされておらず、HEADがブランチを指している(detachedではない)。
 - 変更も未追跡のファイルも無い。
-- 無視されたファイルが、再生成できる次の6つと、消してよい検査の記録だけである。
-  再生成できるものは、`node_modules`、`.wmill`のシンボリックリンク、`console/dist/`、`console/.cache/`、`__pycache__/`、`.DS_Store`である。
+- 無視されたファイルが、再生成できるものと、消してよい検査の記録だけである。
+  再生成できるものは、次の7つである。
+  - `node_modules`
+  - `.wmill`のシンボリックリンク
+  - `console/dist/`
+  - `console/.cache/`
+  - 最上位の`coverage/`(`bun test --coverage`の出力)
+  - `__pycache__/`
+  - `.DS_Store`
   消してよい検査の記録は、最上位の`.yomiyasu/`の下で、`!! .yomiyasu/<パス>`の1行で示されるファイルである。
   判定に使うコマンドは`git status --porcelain --ignored --untracked-files=all`である。
   `--untracked-files=all`を付けるので、無視されたフォルダはまとまらず、ファイルごとに1行で出る。
