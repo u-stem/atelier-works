@@ -280,6 +280,46 @@ describe("poll_issues actionable", () => {
       ).toEqual({ allowed: false, reason: "bot_closer" });
     });
 
+    test("allows dependabot closing its own pull request", () => {
+      expect(
+        decideCloser(
+          info({
+            closedByLogin: "dependabot[bot]",
+            closedByType: "Bot",
+            authorLogin: "dependabot[bot]",
+            authorAssociation: "NONE",
+          }),
+          ALLOWED,
+        ),
+      ).toEqual({ allowed: true, basis: "dependabot_self" });
+    });
+
+    test("denies another bot closing a dependabot pull request", () => {
+      expect(
+        decideCloser(
+          info({
+            closedByLogin: "github-actions[bot]",
+            closedByType: "Bot",
+            authorLogin: "dependabot[bot]",
+          }),
+          ALLOWED,
+        ),
+      ).toEqual({ allowed: false, reason: "bot_closer" });
+    });
+
+    test("denies dependabot closing a pull request it did not author", () => {
+      expect(
+        decideCloser(
+          info({
+            closedByLogin: "dependabot[bot]",
+            closedByType: "Bot",
+            authorLogin: "bob",
+          }),
+          ALLOWED,
+        ),
+      ).toEqual({ allowed: false, reason: "bot_closer" });
+    });
+
     test("allows someone other than the author", () => {
       expect(decideCloser(info({}), ALLOWED)).toEqual({
         allowed: true,
@@ -895,6 +935,34 @@ describe("poll_issues actionable", () => {
       const { deps, updates } = harness([workItem({ id: 1 })], {
         closed: [10],
         closer: { closedByType: "Bot", closedByLogin: "stale[bot]" },
+      });
+      await run(deps);
+      expect(updates).toEqual([]);
+    });
+
+    test("cancels a pr item when dependabot closed its own pull request", async () => {
+      const { deps, updates } = harness([prItem({ id: 2 })], {
+        closed: [20],
+        closer: {
+          closedByType: "Bot",
+          closedByLogin: "dependabot[bot]",
+          authorLogin: "dependabot[bot]",
+        },
+      });
+      await run(deps);
+      expect(updates.map((update) => update.note)).toEqual([
+        "reconcile: pr_closed (actionable)",
+      ]);
+    });
+
+    test("keeps the item when dependabot closed a pull request it did not author", async () => {
+      const { deps, updates } = harness([prItem({ id: 2 })], {
+        closed: [20],
+        closer: {
+          closedByType: "Bot",
+          closedByLogin: "dependabot[bot]",
+          authorLogin: "bob",
+        },
       });
       await run(deps);
       expect(updates).toEqual([]);
