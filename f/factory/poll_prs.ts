@@ -53,6 +53,7 @@ import {
   setFixRound,
   setFlowJobId,
   setObservedWatermarks,
+  setPrReviewTrigger,
   TRACKED_PR_LIST_LIMIT,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
@@ -105,12 +106,14 @@ import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
 import {
   findLinkedParentWorkItemId,
   type PrReviewStartResult,
+  prReviewTriggerFor,
   startPrReview,
 } from "./lib/pr_review_start.ts";
 import { collectTrackedPrCandidates } from "./lib/tracked_pr_candidates.ts";
 import {
   hasLabel,
   isRecord,
+  type PrReviewTrigger,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
   type WorkItemStatus,
@@ -976,6 +979,7 @@ async function startReview(
   observed: ObservedSeed,
   linkedParentWorkItemId: number | null,
   reason: "label" | "assignment",
+  trigger: PrReviewTrigger,
 ): Promise<PrReviewStartResult> {
   return await startPrReview(
     {
@@ -988,10 +992,12 @@ async function startReview(
       body: reviewRowBody(reason),
       observed,
       linkedParentWorkItemId,
+      trigger,
     },
     {
       insertWorkItem: insertPrReviewWorkItemUnlessActive,
       setObservedWatermarks,
+      setReviewTrigger: (id, value) => setPrReviewTrigger(id, value),
       runFlowAsync: (path, args) => wmill.runFlowAsync(path, args),
       setFlowJobId,
     },
@@ -1525,6 +1531,11 @@ export async function main(): Promise<{
   );
   failed += tracked.failed;
   rawCandidates.push(...tracked.items);
+  // 追跡中のPRの一覧だけから見つかったPR。発見で見つかったPRは`collectTrackedPrCandidates`が飛ばすので含まない。
+  // 割り当ての経路で始めたレビューのきっかけ(`tracked_push`)を見分けるのに使う。
+  const trackedOnlyKeys = new Set(
+    tracked.items.map((item) => prKey(item.owner, item.repo, item.number)),
+  );
 
   const allowed = filterByRepoAllowlist(rawCandidates, scope);
 
@@ -1602,6 +1613,12 @@ export async function main(): Promise<{
           context.observed,
           context.linkedParentWorkItemId,
           reason,
+          prReviewTriggerFor(
+            reason,
+            trackedOnlyKeys.has(
+              prKey(candidate.owner, candidate.repo, candidate.number),
+            ),
+          ),
         ),
       startFix: (candidate, context) =>
         startFix(

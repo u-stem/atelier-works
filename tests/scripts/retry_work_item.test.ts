@@ -57,11 +57,26 @@ import {
   restartConflictError,
   restartContextDeps,
   restartNote,
+  restartReviewTrigger,
   retryResult,
   runningFlowRefusal,
   shouldRefreshIntakeOnRestart,
   usesFlowJobIdLease,
 } from "../../f/factory/retry_work_item.ts";
+
+describe("restartReviewTrigger", () => {
+  test("is console for a pr_review that a person restarts", () => {
+    expect(restartReviewTrigger({ kind: "pr_review" })).toBe("console");
+  });
+
+  test("is null for a pr_fix", () => {
+    expect(restartReviewTrigger({ kind: "pr_fix" })).toBeNull();
+  });
+
+  test("is null for an issue", () => {
+    expect(restartReviewTrigger({ kind: "issue" })).toBeNull();
+  });
+});
 
 /** 設計の分岐に関わらない既存のテストが使う、設計が無効で、止まった理由が分類されない文脈。 */
 function context(overrides: Partial<RestartContext> = {}): RestartContext {

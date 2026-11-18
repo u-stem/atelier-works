@@ -6,8 +6,10 @@ import {
   PR_REVIEW_FLOW_PATH,
   type PrReviewStartDeps,
   type PrReviewStartInput,
+  prReviewTriggerFor,
   startPrReview,
 } from "../../f/factory/lib/pr_review_start.ts";
+import type { PrReviewTrigger } from "../../f/factory/lib/types.ts";
 
 const JOB_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
@@ -21,6 +23,7 @@ const INPUT: PrReviewStartInput = {
   body: "review requested by a person through the label",
   observed: { reviewId: 31, reviewCommentId: 42 },
   linkedParentWorkItemId: 5,
+  trigger: "label",
 };
 
 function depsWith(overrides: Partial<PrReviewStartDeps> = {}): {
@@ -29,12 +32,14 @@ function depsWith(overrides: Partial<PrReviewStartDeps> = {}): {
   inserted: NewWorkItem[];
   launched: { path: string; args: Record<string, unknown> }[];
   watermarks: { id: number; observed_review_id: number }[];
+  triggers: { id: number; trigger: PrReviewTrigger }[];
   jobIds: { id: number; jobId: string }[];
 } {
   const calls: string[] = [];
   const inserted: NewWorkItem[] = [];
   const launched: { path: string; args: Record<string, unknown> }[] = [];
   const watermarks: { id: number; observed_review_id: number }[] = [];
+  const triggers: { id: number; trigger: PrReviewTrigger }[] = [];
   const jobIds: { id: number; jobId: string }[] = [];
   const deps: PrReviewStartDeps = {
     insertWorkItem: async (item) => {
@@ -45,6 +50,11 @@ function depsWith(overrides: Partial<PrReviewStartDeps> = {}): {
     setObservedWatermarks: async (id, update) => {
       calls.push("watermarks");
       watermarks.push({ id, observed_review_id: update.observed_review_id });
+    },
+    setReviewTrigger: async (id, trigger) => {
+      calls.push("trigger");
+      triggers.push({ id, trigger });
+      return true;
     },
     runFlowAsync: async (path, args) => {
       calls.push("run");
@@ -57,7 +67,7 @@ function depsWith(overrides: Partial<PrReviewStartDeps> = {}): {
     },
     ...overrides,
   };
-  return { deps, calls, inserted, launched, watermarks, jobIds };
+  return { deps, calls, inserted, launched, watermarks, triggers, jobIds };
 }
 
 describe("startPrReview", () => {
@@ -144,10 +154,30 @@ describe("startPrReview", () => {
     expect(jobIds).toEqual([{ id: 11, jobId: JOB_ID }]);
   });
 
-  test("inserts, then records the watermarks, then starts the flow, then records the job", async () => {
+  test("inserts, then records the watermarks and the trigger, then starts the flow, then records the job", async () => {
     const { deps, calls } = depsWith();
     await startPrReview(INPUT, deps);
-    expect(calls).toEqual(["insert", "watermarks", "run", "setFlowJobId"]);
+    expect(calls).toEqual([
+      "insert",
+      "watermarks",
+      "trigger",
+      "run",
+      "setFlowJobId",
+    ]);
+  });
+
+  test("records the trigger that the caller gave on the new work item", async () => {
+    const { deps, triggers } = depsWith();
+    await startPrReview({ ...INPUT, trigger: "console" }, deps);
+    expect(triggers).toEqual([{ id: 11, trigger: "console" }]);
+  });
+
+  test("still starts the flow when the trigger could not be recorded", async () => {
+    const { deps, launched } = depsWith({
+      setReviewTrigger: async () => false,
+    });
+    await startPrReview(INPUT, deps);
+    expect(launched).toHaveLength(1);
   });
 
   test("returns already_active when no row was inserted", async () => {
@@ -176,6 +206,24 @@ describe("startPrReview", () => {
     });
     await startPrReview(INPUT, deps).catch(() => undefined);
     expect(jobIds).toEqual([]);
+  });
+});
+
+describe("prReviewTriggerFor", () => {
+  test("is label for a review started by the label", () => {
+    expect(prReviewTriggerFor("label", false)).toBe("label");
+  });
+
+  test("is label for a labelled pull request that is also tracked", () => {
+    expect(prReviewTriggerFor("label", true)).toBe("label");
+  });
+
+  test("is rereview_request for an assignment found by the search", () => {
+    expect(prReviewTriggerFor("assignment", false)).toBe("rereview_request");
+  });
+
+  test("is tracked_push for an assignment found only among the tracked pull requests", () => {
+    expect(prReviewTriggerFor("assignment", true)).toBe("tracked_push");
   });
 });
 

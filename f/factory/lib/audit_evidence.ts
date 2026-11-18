@@ -24,7 +24,12 @@ import {
   type SqlRow,
 } from "./db.ts";
 import { maskSecrets } from "./log.ts";
-import { isNumber, isString } from "./types.ts";
+import {
+  isNumber,
+  isPrReviewTrigger,
+  isString,
+  type PrReviewTrigger,
+} from "./types.ts";
 
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
 const HTML_TAG_PATTERN = /<\/?[a-zA-Z][^>]*>/g;
@@ -248,6 +253,24 @@ export type PastProposal = {
   created_issue_number: number | null;
   period_label: string;
 };
+/**
+ * 期間内のPRレビューの実行の、PR1つ分の集計。
+ * ownerとrepoは小文字で束ね、表示には行の綴りの最小の値を使う。`pr_number`は記録に無ければ`null`。
+ */
+export type PrReviewPrStat = {
+  owner: string;
+  repo: string;
+  pr_number: number | null;
+  run_count: number;
+  total_cost_usd: number;
+};
+/** 期間内のPRレビューの実行の、起動のきっかけごとの件数。`unknown`は、きっかけが記録されていない実行と範囲外の値の実行。 */
+export type PrReviewTriggerCounts = Readonly<
+  Record<PrReviewTrigger | "unknown", number>
+>;
+
+/** 証跡パックに載せる、PRレビューの実行回数が上位のPRの最大の数。 */
+export const PR_REVIEW_TOP_PRS_LIMIT = 10;
 export type AuditEvidence = {
   readonly period: AuditPeriod;
   readonly period_label: string;
@@ -296,6 +319,15 @@ export type AuditEvidence = {
   readonly running_version_at_start: string | null;
   readonly running_version_at_end: string | null;
   readonly past_proposals: PastProposal[];
+  /**
+   * 期間内のPRレビューの実行回数が上位のPR。
+   * 実行回数の降順、同数ならコストの降順、その次にowner、repo、番号の昇順で、最大`PR_REVIEW_TOP_PRS_LIMIT`件。
+   */
+  readonly pr_review_top_prs: PrReviewPrStat[];
+  /** 期間内にPRレビューの実行があったPRの数。`pr_review_top_prs`は上限で切っているため、別に持つ。 */
+  readonly pr_review_pr_count: number;
+  /** 期間内のPRレビューの実行の、きっかけごとの件数。合計は実行統計の`pr_review`の件数と一致する。 */
+  readonly pr_review_triggers: PrReviewTriggerCounts;
 };
 
 const DATA_NOT_INSTRUCTIONS_BANNER =
@@ -394,6 +426,87 @@ function formatStageLine(stat: StageStat, previous: StageStat | undefined) {
     `${stat.stage}: 実行${stat.run_count} / 失敗${stat.failure_count} / 平均turn ${stat.avg_turns.toFixed(1)} / コスト $${stat.total_cost_usd.toFixed(2)} / 前期間 実行${prevRun} 失敗${prevFailure}`,
     SANITIZE_CELL_MAX,
   );
+}
+
+/** 期間内にPRレビューの実行が無いとき、PRレビューの2つの節に載せる1行。 */
+export const NO_PR_REVIEW_RUNS_LINE = "期間内にPRレビューの実行は無い";
+
+/** きっかけの節に載せる順と表示。値の意味は`PrReviewTrigger`を参照。 */
+const PR_REVIEW_TRIGGER_LABELS: readonly {
+  readonly key: PrReviewTrigger | "unknown";
+  readonly label: string;
+}[] = [
+  { key: "label", label: "ラベル" },
+  { key: "rereview_request", label: "再レビューの依頼" },
+  { key: "tracked_push", label: "追跡中のPRへのpush" },
+  { key: "console", label: "Consoleの操作" },
+  { key: "auto_retry", label: "自動の再試行" },
+  { key: "unknown", label: "不明" },
+];
+
+function triggerTotal(counts: PrReviewTriggerCounts): number {
+  return PR_REVIEW_TRIGGER_LABELS.reduce(
+    (sum, { key }) => sum + counts[key],
+    0,
+  );
+}
+
+function hasPrReviewRuns(evidence: AuditEvidence): boolean {
+  return (
+    triggerTotal(evidence.pr_review_triggers) > 0 ||
+    evidence.pr_review_top_prs.length > 0
+  );
+}
+
+function formatPrReviewPrLine(stat: PrReviewPrStat): string {
+  const number = stat.pr_number === null ? UNSET_LABEL : String(stat.pr_number);
+  return sanitizeCell(
+    `${stat.owner}/${stat.repo}#${number}: 実行${stat.run_count} / コスト $${stat.total_cost_usd.toFixed(2)}`,
+    SANITIZE_CELL_MAX,
+  );
+}
+
+/**
+ * PRレビューの実行の、PR別の上位の節。
+ * 固定の行はPRの総数で、PRごとの行は全体の上限に収めるときに削れる。
+ */
+function prReviewTopPrsSection(evidence: AuditEvidence): EvidenceSection {
+  const heading = "PRレビューの実行(PR別の上位)";
+  if (!hasPrReviewRuns(evidence)) {
+    return { heading, fixed: [NO_PR_REVIEW_RUNS_LINE], lines: [] };
+  }
+  return {
+    heading,
+    fixed: [
+      sanitizeCell(
+        `対象のPR: ${evidence.pr_review_pr_count}件(上位${PR_REVIEW_TOP_PRS_LIMIT}件まで載せる)`,
+        SANITIZE_CELL_MAX,
+      ),
+    ],
+    lines: evidence.pr_review_top_prs.map(formatPrReviewPrLine),
+  };
+}
+
+/**
+ * PRレビューの実行の、きっかけ別の節。
+ * 6つのきっかけ(件数が0のものも含む)と合計を固定の行にし、全体の上限に収めるときも削らない。
+ */
+function prReviewTriggersSection(evidence: AuditEvidence): EvidenceSection {
+  const heading = "PRレビューの実行(きっかけ別)";
+  if (!hasPrReviewRuns(evidence)) {
+    return { heading, fixed: [NO_PR_REVIEW_RUNS_LINE], lines: [] };
+  }
+  const counts = evidence.pr_review_triggers;
+  return {
+    heading,
+    fixed: [
+      ...PR_REVIEW_TRIGGER_LABELS.map(({ key, label }) =>
+        sanitizeCell(`${label}: ${counts[key]}件`, SANITIZE_CELL_MAX),
+      ),
+      sanitizeCell(`合計: ${triggerTotal(counts)}件`, SANITIZE_CELL_MAX),
+    ],
+    lines: [],
+  };
 }
 
 export function buildEvidenceSections(
@@ -529,6 +642,8 @@ export function buildEvidenceSections(
   return [
     { heading: "対象", fixed: targetFixed, lines: [] },
     { heading: "実行統計(stage別)", fixed: [], lines: stageLines },
+    prReviewTopPrsSection(evidence),
+    prReviewTriggersSection(evidence),
     { heading: "失敗(flow + step別)", fixed: [], lines: failureLines },
     { heading: "却下", fixed: [], lines: rejectionLines },
     { heading: "要人手・ブロック・期限切れ", fixed: [], lines: humanLines },
@@ -741,6 +856,47 @@ function toPastProposal(row: SqlRow): PastProposal {
   };
 }
 
+function toPrReviewPrStat(row: SqlRow): PrReviewPrStat {
+  return {
+    owner: unsetIfBlank(parseCellString(row.owner)),
+    repo: unsetIfBlank(parseCellString(row.repo)),
+    pr_number:
+      row.pr_number === null || row.pr_number === undefined
+        ? null
+        : parseNumeric(row.pr_number),
+    run_count: parseNumeric(row.run_count),
+    total_cost_usd: parseNumeric(row.total_cost_usd),
+  };
+}
+
+/**
+ * きっかけごとの件数の行を、6つの枠に足し込む。
+ * きっかけが無い行(NULL)と、5つの値のどれでもない行は、不明に数える。
+ * 行の無いきっかけは0件にする。
+ */
+function toPrReviewTriggerCounts(
+  rows: readonly SqlRow[],
+): PrReviewTriggerCounts {
+  const counts: Record<PrReviewTrigger | "unknown", number> = {
+    ...EMPTY_PR_REVIEW_TRIGGER_COUNTS,
+  };
+  for (const row of rows) {
+    const key = isPrReviewTrigger(row.key) ? row.key : "unknown";
+    counts[key] += parseNumeric(row.count);
+  }
+  return counts;
+}
+
+/** PRレビューの実行が無い期間の、きっかけごとの件数。 */
+export const EMPTY_PR_REVIEW_TRIGGER_COUNTS: PrReviewTriggerCounts = {
+  label: 0,
+  rereview_request: 0,
+  tracked_push: 0,
+  console: 0,
+  auto_retry: 0,
+  unknown: 0,
+};
+
 /**
  * `period`の期間で、監査を実行する価値があると判断する材料になるレコードを数える。
  * 監査の処理自身のレコード(`kind = 'audit'`の作業項目、
@@ -804,7 +960,8 @@ function previousPeriodOf(period: AuditPeriod): { start: Date; end: Date } {
  * - 過去の監査レポート最大3件分の提案
  * - 却下と人の対応に回った結果の上限なしの総数
  *   (上の一覧のクエリは`LIMIT 30`のため、件数から指標を出せない)
- * - 最後に、期間内のデプロイの記録と、期間の開始・終了時点の稼働版
+ * - 期間内のデプロイの記録と、期間の開始・終了時点の稼働版
+ * - 最後に、PRレビューの実行のPRごとの上位と、起動のきっかけごとの件数
  *
  * work_itemsと結合するクエリはすべて、監査の処理自身の行を除く
  * (`wi.kind <> 'audit'`。null許容の`work_item_id`とLEFT JOINする場合は
@@ -1031,6 +1188,33 @@ export async function collectAuditEvidence(
       ) AS end_sha
   `.fetch();
 
+  // PRレビューの実行を、PRごとに数える。実行統計の節と同じ期間と除外で、`stage = 'pr_review'`に絞る。
+  // ownerとrepoは小文字で束ね、表示には行の綴りの最小の値を使う。PRの総数は、上限で切る前の窓関数で数える。
+  const prReviewTopPrRows = await sql`
+    SELECT min(wi.owner) AS owner, min(wi.repo) AS repo, wi.pr_number,
+           count(*) AS run_count,
+           coalesce(sum(r.cost_usd), 0) AS total_cost_usd,
+           count(*) OVER () AS pr_count
+    FROM factory.agent_runs r
+    JOIN factory.work_items wi ON wi.id = r.work_item_id
+    WHERE r.created_at >= ${start}::timestamptz AND r.created_at < ${end}::timestamptz
+      AND wi.kind <> 'audit' AND r.stage = 'pr_review'
+    GROUP BY lower(wi.owner), lower(wi.repo), wi.pr_number
+    ORDER BY run_count DESC, total_cost_usd DESC, lower(wi.owner), lower(wi.repo), wi.pr_number
+    LIMIT ${PR_REVIEW_TOP_PRS_LIMIT}::integer
+  `.fetch();
+
+  // PRレビューの実行を、起動のきっかけごとに数える。条件は上の問い合わせと同じで、合計は実行統計の`pr_review`の件数になる。
+  // `trigger`の列は行をjsonbにして読む。列を足すmigrationより先にコードが反映された間も、問い合わせを失敗させず、すべて不明に数える。
+  const prReviewTriggerRows = await sql`
+    SELECT to_jsonb(r) ->> 'trigger' AS key, count(*) AS count
+    FROM factory.agent_runs r
+    JOIN factory.work_items wi ON wi.id = r.work_item_id
+    WHERE r.created_at >= ${start}::timestamptz AND r.created_at < ${end}::timestamptz
+      AND wi.kind <> 'audit' AND r.stage = 'pr_review'
+    GROUP BY 1
+  `.fetch();
+
   return {
     period,
     period_label: formatAuditPeriodLabel(period.start, period.end),
@@ -1062,6 +1246,9 @@ export async function collectAuditEvidence(
     running_version_at_start: parseSha(versionBoundsRows[0]?.start_sha),
     running_version_at_end: parseSha(versionBoundsRows[0]?.end_sha),
     past_proposals: pastProposalRows.map(toPastProposal),
+    pr_review_top_prs: prReviewTopPrRows.map(toPrReviewPrStat),
+    pr_review_pr_count: parseNumeric(prReviewTopPrRows[0]?.pr_count),
+    pr_review_triggers: toPrReviewTriggerCounts(prReviewTriggerRows),
   };
 }
 
