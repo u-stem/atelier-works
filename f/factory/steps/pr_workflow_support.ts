@@ -1322,6 +1322,16 @@ export function countBlockingThreads(
   }).length;
 }
 
+/**
+ * Issue化の承認でFactoryが投稿する返信(`renderIssueProposalApprovedReply`)かを返す。
+ * 役割タグが`pr_fix`で、最後の行が`対応: Issue #N`のものを指す。
+ * 呼び出し側が、書き手がFactory自身であることを別に確かめる。
+ */
+function isIssueFilingReply(body: string): boolean {
+  if (firstLineOf(body) !== ROLE_TAGS.pr_fix) return false;
+  return /^対応: Issue #\d+$/.test(lastContentLine(body));
+}
+
 /** `planThreadSync`が返す、Factoryの指摘のスレッドから読み取った結果1件。 */
 export type ThreadSyncOutcome = {
   /** スレッドの最初のコメントのid。指摘の`review_comment_id`と同じである。 */
@@ -1348,7 +1358,7 @@ const BOT_LOGIN_SUFFIX = "[bot]";
  * 一覧は、このラウンドが解決する前の状態で渡す。このラウンド自身の解決を、人の解決と取り違えないためである。
  * Factoryの指摘のスレッドのうち、すでに解決されているものについて、結果を返す。
  *   - 最後のコメントがFactoryの修正の返信(`isFixedFixReply`)なら`fixed`。
- *   - 最後のコメントがFactoryの了承か解消の返信なら、返さない。その結果は、返信を投稿したときに記録している。
+ *   - 最後のコメントがFactoryの了承か解消の返信、またはIssue起票の返信(`isIssueFilingReply`)なら、返さない。その結果は、返信を投稿したときに記録している。
  *   - それ以外は`resolved_by_human`。Factoryは運用者と同じアカウントで動くので、人が解決したものとして扱う。
  * 開いたままのスレッドからは、結果を返さない。
  * Factoryの指摘で始まらないスレッドは、人が始めたスレッドとして返す。
@@ -1371,7 +1381,8 @@ export function planThreadSync(
         findingOutcomes.push({ commentId, outcome: "fixed" });
       } else if (
         lastIsOwn &&
-        hasMarker(thread.lastCommentBody, PR_REVIEW_ACK_MARKER_KIND)
+        (hasMarker(thread.lastCommentBody, PR_REVIEW_ACK_MARKER_KIND) ||
+          isIssueFilingReply(thread.lastCommentBody))
       ) {
         continue;
       } else {

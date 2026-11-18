@@ -3615,6 +3615,56 @@ describe("planThreadSync", () => {
     expect(plan.findingOutcomes).toEqual([]);
   });
 
+  test("records nothing for a resolved thread that ends with the Factory's Issue filing reply", () => {
+    // Issue化の承認で、Factoryが「対応: Issue #N」と返信して解決したスレッド。
+    // 人の解決として数えると、記録済みのissue_proposedを上書きしてしまう。
+    const plan = planThreadSync(
+      [
+        thread({
+          isResolved: true,
+          lastCommentBody:
+            "[Factory 自動返信]\nIssue #42を起票しました。\n\n対応: Issue #42\n\n<!-- factory:pr_fix:9 -->",
+        }),
+      ],
+      VIEWER_LOGIN,
+    );
+    expect(plan.findingOutcomes).toEqual([]);
+  });
+
+  test("records resolved_by_human when a person ends the thread with an Issue filing reply", () => {
+    // 人が同じ文面を書いても、Factoryの返信ではないので人の解決として扱う。
+    const plan = planThreadSync(
+      [
+        thread({
+          isResolved: true,
+          lastCommentAuthorLogin: "alice",
+          lastCommentBody:
+            "[Factory 自動返信]\nIssue #42を起票しました。\n\n対応: Issue #42",
+        }),
+      ],
+      VIEWER_LOGIN,
+    );
+    expect(plan.findingOutcomes).toEqual([
+      { commentId: 501, outcome: "resolved_by_human" },
+    ]);
+  });
+
+  test("records resolved_by_human when the Factory reply lacks the pr_fix role tag", () => {
+    // 役割タグが無い返信は、Factoryの起票の返信と見なさない。
+    const plan = planThreadSync(
+      [
+        thread({
+          isResolved: true,
+          lastCommentBody: "Issue #42を起票しました。\n\n対応: Issue #42",
+        }),
+      ],
+      VIEWER_LOGIN,
+    );
+    expect(plan.findingOutcomes).toEqual([
+      { commentId: 501, outcome: "resolved_by_human" },
+    ]);
+  });
+
   test("records nothing for a finding thread that is still open", () => {
     const plan = planThreadSync([thread()], VIEWER_LOGIN);
     expect(plan.findingOutcomes).toEqual([]);
