@@ -1,0 +1,66 @@
+diff --git a/src/retry.ts b/src/retry.ts
+--- a/src/retry.ts
++++ b/src/retry.ts
+@@ -1,13 +1,24 @@
++const defaultSleep = (ms: number): Promise<void> =>
++  new Promise((resolve) => setTimeout(resolve, ms));
++
+ export async function withRetry<T>(
+   task: () => Promise<T>,
+   attempts: number,
++  delayMs = 0,
++  sleep: (ms: number) => Promise<void> = defaultSleep,
+ ): Promise<T> {
++  if (!Number.isInteger(attempts) || attempts < 1) {
++    throw new RangeError("withRetry: attempts must be a positive integer");
++  }
+   let lastError: unknown;
+   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+     try {
+       return await task();
+     } catch (error) {
+       lastError = error;
++      if (attempt < attempts) {
++        await sleep(delayMs);
++      }
+     }
+   }
+   throw lastError;
+diff --git a/tests/retry.test.ts b/tests/retry.test.ts
+new file mode 100644
+--- /dev/null
++++ b/tests/retry.test.ts
+@@ -0,0 +1,33 @@
++import { expect, test } from "bun:test";
++import { withRetry } from "../src/retry.ts";
++
++test("withRetry returns the first successful result", async () => {
++  const result = await withRetry(async () => "ok", 3);
++  expect(result).toBe("ok");
++});
++
++test("withRetry sleeps between attempts but not after the last one", async () => {
++  const sleeps: number[] = [];
++  const failing = async (): Promise<never> => {
++    throw new Error("boom");
++  };
++  await withRetry(failing, 3, 50, async (ms) => {
++    sleeps.push(ms);
++  }).catch(() => {});
++  expect(sleeps).toEqual([50, 50]);
++});
++
++test("withRetry throws the last error when every attempt fails", async () => {
++  let calls = 0;
++  const failing = async (): Promise<never> => {
++    calls += 1;
++    throw new Error(`failure ${String(calls)}`);
++  };
++  await expect(withRetry(failing, 2)).rejects.toThrow("failure 2");
++});
++
++test("withRetry rejects an attempts value below one", async () => {
++  await expect(withRetry(async () => "ok", 0)).rejects.toThrow(
++    "attempts must be a positive integer",
++  );
++});

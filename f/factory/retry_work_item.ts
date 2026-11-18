@@ -59,6 +59,7 @@ import {
   type StatusEventSummary,
   setFlowJobId,
   setFlowJobIdIfUnset,
+  setPrReviewTrigger,
   updateIntakeIfRegenerating,
   updateStatusIfCurrent,
   updateStatusIfCurrentClearingFlowJobId,
@@ -98,6 +99,7 @@ import {
   type DesignApprovalRef,
   isIssueTargetKind,
   isOneOf,
+  type PrReviewTrigger,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
   type WorkItemStatus,
@@ -967,6 +969,17 @@ export function computeRestartPlan(
 }
 
 /**
+ * 再開で作業項目に書く、PRレビューの起動のきっかけを返す。
+ * `pr_review`の再開は、Consoleからの操作もWindmillからの直接の実行も、人の再実行なので`console`である。
+ * PRレビュー以外の作業項目には書かないので`null`を返す。
+ */
+export function restartReviewTrigger(
+  workItem: Pick<WorkItem, "kind">,
+): PrReviewTrigger | null {
+  return workItem.kind === "pr_review" ? "console" : null;
+}
+
+/**
  * flow_job_idをリースとして扱うフロー(実装フロー、設計フロー、pipeline)への再開ならtrueを返す。
  * そのときは比較交換でリースを空け、ジョブIDは空のときだけ記録する。
  * 空けておくと、記録までの間にreconcileが終わった前のジョブを見て再開を孤児と判定せず、
@@ -1281,6 +1294,12 @@ async function restartWorkItem(
     throw new Error(
       `retry_work_item: work item ${work_item_id} is no longer "${workItem.status}"; not restarted`,
     );
+  }
+
+  // 状態を戻せたときだけ、フローを起動する前に、PRレビューの起動のきっかけを書く。
+  const reviewTrigger = restartReviewTrigger(workItem);
+  if (reviewTrigger !== null) {
+    await setPrReviewTrigger(work_item_id, reviewTrigger);
   }
 
   const issueNumber = workItem.issue_number;

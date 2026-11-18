@@ -20,6 +20,7 @@ import {
   insertPrReviewWorkItemUnlessActive,
   setFlowJobId,
   setObservedWatermarks,
+  setPrReviewTrigger,
 } from "../lib/db.ts";
 import {
   type GhClient,
@@ -232,6 +233,8 @@ export async function registerPrReviewIntake(
       canonical.owner,
       canonical.repo,
     ),
+    // Consoleの投入は、Consoleの再実行と同じきっかけに数える。
+    trigger: "console",
   });
   if (started.status === "already_active") return refused("already_reviewing");
   return {
@@ -307,6 +310,7 @@ export async function main(
         startPrReview(input, {
           insertWorkItem: insertPrReviewWorkItemUnlessActive,
           setObservedWatermarks,
+          setReviewTrigger: (id, trigger) => setPrReviewTrigger(id, trigger),
           runFlowAsync: (path, args) => wmill.runFlowAsync(path, args),
           setFlowJobId,
         }),

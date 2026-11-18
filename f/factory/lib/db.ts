@@ -107,6 +107,7 @@ import {
   isImplementDiffStat,
   isNumber,
   isOneOf,
+  isPrReviewTrigger,
   isRecord,
   isStoredRefName,
   isString,
@@ -114,6 +115,7 @@ import {
   NON_MODEL_FAILURE_REASONS,
   type Notice,
   type NoticeRecord,
+  type PrReviewTrigger,
   REVIEW_CONFIDENCES,
   type RequirementDraft,
   type ReviewFinding,
@@ -1101,6 +1103,63 @@ export async function insertPrReviewWorkItemUnlessActive(
   const row = rows[0];
   if (row === undefined) return null;
   return parseId(row.id, "id");
+}
+
+/**
+ * `pr_review`の作業項目に、今回の起動のきっかけ(`review_trigger`)を書く。
+ * 起動の経路は、作業項目を作るか状態を戻した後、フローを起動する前に呼ぶ。
+ * 生成のステップ(`pr_review_generate`)が、この値を読んで実行の記録に写す。
+ * 書けなくても(列を足すmigrationより先にコードが反映された間を含む)レビューの起動は止めず、警告を残して`false`を返す。
+ * きっかけは監査の集計のための記録である。
+ * 列が無い間に書けなかった実行は不明として数えられる。
+ * 再開で書けなかったときは、前回の起動のきっかけが残り、そのきっかけで数えられる。
+ */
+export async function setPrReviewTrigger(
+  id: number,
+  trigger: PrReviewTrigger,
+  sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
+): Promise<boolean> {
+  try {
+    await sql`
+      UPDATE factory.work_items
+      SET review_trigger = ${trigger}::text
+      WHERE id = ${id}::bigint AND kind = 'pr_review'
+    `.execute();
+    return true;
+  } catch (err) {
+    log.warn("the review trigger of the work item could not be recorded", {
+      work_item_id: id,
+      trigger,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return false;
+  }
+}
+
+/**
+ * `pr_review`の作業項目の、最後の起動のきっかけ(`review_trigger`)を返す。
+ * 値が無い、5つの値のどれでもない、読めない(列が無い間を含む)ときは`null`を返し、読めなかったときは警告を残す。
+ * レビューを止めないためである。
+ */
+export async function readPrReviewTrigger(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
+): Promise<PrReviewTrigger | null> {
+  try {
+    const rows = await sql`
+      SELECT review_trigger FROM factory.work_items WHERE id = ${id}::bigint
+    `.fetch();
+    const value = rows[0]?.review_trigger;
+    return isPrReviewTrigger(value) ? value : null;
+  } catch (err) {
+    log.warn("the review trigger of the work item could not be read", {
+      work_item_id: id,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return null;
+  }
 }
 
 /**
@@ -2262,32 +2321,38 @@ export function toRequirementDraft(row: SqlRow): RequirementDraft {
 // ---------------------------------------------------------------------------
 
 const AGENT_RUN_NEW_COLUMN_PATTERN =
+  /column "(?:model_usage|failure_reason|trigger)" of relation "agent_runs" does not exist/;
+
+/** `trigger`より前に足した列(`model_usage`、`failure_reason`)が無いことを名指しする文。 */
+const AGENT_RUN_EARLIER_COLUMN_PATTERN =
   /column "(?:model_usage|failure_reason)" of relation "agent_runs" does not exist/;
 
+/** 例外の文(`message`と、windmill-clientがサーバーの文を入れる`body`)のどちらかが、パターンに合うかを返す。 */
+function errorTextMatches(err: Error, pattern: RegExp): boolean {
+  if (pattern.test(err.message)) return true;
+  const body: unknown = Reflect.get(err, "body");
+  return typeof body === "string" && pattern.test(body);
+}
+
 /**
- * 例外が、`agent_runs`の新しい列(`model_usage`、`failure_reason`)が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * 例外が、`agent_runs`の新しい列(`model_usage`、`failure_reason`、`trigger`)が無いことによるもの(PostgreSQLのundefined_column)かを返す。
  * 判定は`isMissingJobLinkColumnError`と同じく、エラーコード42703か、列と表の名前を含む文のどちらかで行う。
  */
 export function isMissingAgentRunColumnError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (Reflect.get(err, "code") === "42703") return true;
-  if (AGENT_RUN_NEW_COLUMN_PATTERN.test(err.message)) return true;
-  const body: unknown = Reflect.get(err, "body");
-  return typeof body === "string" && AGENT_RUN_NEW_COLUMN_PATTERN.test(body);
+  return errorTextMatches(err, AGENT_RUN_NEW_COLUMN_PATTERN);
 }
 
 /**
- * `factory.agent_runs`に行を挿入し、そのIDを返す。
- * 反映(`wmill sync push`)はmigration(`wmill datatable migrate up`)より先に走るので、
- * モデル別の内訳や失敗の種類の列を足すmigrationより先に、この関数を含むコードが動くと、列が無いエラーになる。
- * そのときだけ、新しい列を含まない文で記録し直す。費用の記録が消えると、日次の予算の集計が狂うためである。
- * ほかのエラーは投げる。
+ * `trigger`だけを除いた文で`agent_runs`に記録し、そのIDを返す。
+ * それでも列が無いエラーになったときは`null`を返し、呼び出し元が最も古い文で書き直す。ほかのエラーは投げる。
  */
-export async function recordAgentRun(
+async function recordAgentRunWithoutTrigger(
   record: AgentRunRecord,
-  sql: SqlClient = defaultSqlClient,
-  log: Logger = logger("db"),
-): Promise<number> {
+  sql: SqlClient,
+  log: Logger,
+): Promise<number | null> {
   const statement = sql`
     INSERT INTO factory.agent_runs (
       work_item_id, stage, attempt, model, claude_version, input_tokens,
@@ -2307,8 +2372,63 @@ export async function recordAgentRun(
     row = await fetchOneRow(statement, "recordAgentRun");
   } catch (err) {
     if (!isMissingAgentRunColumnError(err)) throw err;
+    return null;
+  }
+  log.warn(
+    "the trigger column of agent_runs is missing; recorded the run without the trigger (the datatable migration has not run yet)",
+    { stage: record.stage },
+  );
+  return parseId(row.id, "id");
+}
+
+/**
+ * `factory.agent_runs`に行を挿入し、そのIDを返す。
+ * 反映(`wmill sync push`)はmigration(`wmill datatable migrate up`)より先に走るので、
+ * モデル別の内訳、失敗の種類、PRレビューのきっかけの列を足すmigrationより先に、この関数を含むコードが動くと、列が無いエラーになる。
+ * そのときだけ、新しい列を減らした文で段階的に記録し直す。費用の記録が消えると、日次の予算の集計が狂うためである。
+ * まず`trigger`だけを除いた文で書く。`trigger`は最後の列なので、先の列が無いエラーは`model_usage`か`failure_reason`を名指しする。
+ * 名指しされたとき、または`trigger`だけを除いた文でも列が無いエラーになったときは、新しい列をすべて除いた文で書く。
+ * ほかのエラーは投げる。
+ * `trigger`を省いた記録(PRレビュー以外の工程)は、NULLを書く。
+ */
+export async function recordAgentRun(
+  record: AgentRunRecord,
+  sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
+): Promise<number> {
+  const trigger = record.trigger ?? null;
+  const statement = sql`
+    INSERT INTO factory.agent_runs (
+      work_item_id, stage, attempt, model, claude_version, input_tokens,
+      output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
+      session_id, exit_code, error, failure_reason, model_usage, trigger
+    ) VALUES (
+      ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
+      ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
+      ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
+      ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error},
+      ${record.failure_reason}::text, ${JSON.stringify(record.model_usage)}::jsonb, ${trigger}::text
+    )
+    RETURNING id
+  `;
+  let row: SqlRow;
+  try {
+    row = await fetchOneRow(statement, "recordAgentRun");
+  } catch (err) {
+    if (!isMissingAgentRunColumnError(err)) throw err;
+    const earlierColumnNamed =
+      err instanceof Error &&
+      errorTextMatches(err, AGENT_RUN_EARLIER_COLUMN_PATTERN);
+    if (!earlierColumnNamed) {
+      const withoutTrigger = await recordAgentRunWithoutTrigger(
+        record,
+        sql,
+        log,
+      );
+      if (withoutTrigger !== null) return withoutTrigger;
+    }
     log.warn(
-      "a newer column of agent_runs is missing; recorded the run without the per-model usage and the failure reason (the datatable migration has not run yet)",
+      "a newer column of agent_runs is missing; recorded the run without the per-model usage, the failure reason and the trigger (the datatable migration has not run yet)",
       { stage: record.stage },
     );
     const legacy = sql`

@@ -503,6 +503,26 @@ describe("claude failure wiring in the generate step", () => {
   });
 });
 
+describe("review trigger wiring in the generate step", () => {
+  const SOURCE = Bun.file(
+    new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),
+  ).text();
+
+  test("reads the trigger before the Claude run starts", async () => {
+    const source = await SOURCE;
+    const read = source.indexOf("await readPrReviewTrigger(work_item_id)");
+    expect(read === -1 ? Number.POSITIVE_INFINITY : read).toBeLessThan(
+      source.indexOf("await runClaude({"),
+    );
+  });
+
+  test("copies the trigger it read into the run records", async () => {
+    expect(await SOURCE).toContain(
+      "recordAgentRun(withRunTrigger(agentRun, trigger))",
+    );
+  });
+});
+
 describe("review scope wiring in the generate step", () => {
   const SOURCE = Bun.file(
     new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),

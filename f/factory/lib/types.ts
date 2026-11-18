@@ -636,6 +636,27 @@ export const NON_MODEL_FAILURE_REASONS: readonly RunClaudeFailureReason[] = [
   "not_started",
 ];
 
+/**
+ * PRレビューの実行を始めたきっかけ。`factory.work_items.review_trigger`と`factory.agent_runs.trigger`に書く値である。
+ * - `label`: トリガーラベル(`review_label`)の付与
+ * - `rereview_request`: レビューの依頼かassignee(検索で見つかったPR)
+ * - `tracked_push`: 追跡中のPR(`listTrackedPrs`だけから見つかったPR)への新しいcommit
+ * - `console`: Consoleの投入と、Consoleか`retry_work_item`による再実行
+ * - `auto_retry`: 一時的な失敗からの自動の再開(`auto_retry_pr_review`)
+ */
+export const PR_REVIEW_TRIGGERS = [
+  "label",
+  "rereview_request",
+  "tracked_push",
+  "console",
+  "auto_retry",
+] as const;
+export type PrReviewTrigger = (typeof PR_REVIEW_TRIGGERS)[number];
+
+export function isPrReviewTrigger(value: unknown): value is PrReviewTrigger {
+  return isOneOf(value, PR_REVIEW_TRIGGERS);
+}
+
 /** `db.recordAgentRun`に渡す、`factory.agent_runs`の1行。 */
 export type AgentRunRecord = {
   work_item_id: number;
@@ -659,6 +680,8 @@ export type AgentRunRecord = {
    * Claudeが結果を返さなかった実行と、`modelUsage`を持たない結果では空になる。
    */
   model_usage: readonly ModelUsageEntry[];
+  /** PRレビューの実行のきっかけ。PRレビュー以外の工程と、きっかけを読めなかった実行は省くかnullである。 */
+  trigger?: PrReviewTrigger | null;
 };
 
 export type ReviewSeverity = "blocker" | "major" | "minor" | "nit";
