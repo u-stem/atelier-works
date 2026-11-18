@@ -51,6 +51,7 @@ type QueryName =
   | "fixReply"
   | "reviewFindings"
   | "unresolvedNotices"
+  | "skillVersions"
   | "deploymentHistory"
   | "versionBounds"
   | "agentRuns"
@@ -65,6 +66,7 @@ const QUERY_NAMES: readonly QueryName[] = [
   "fixReply",
   "reviewFindings",
   "unresolvedNotices",
+  "skillVersions",
   "deploymentHistory",
   "versionBounds",
   "agentRuns",
@@ -84,6 +86,7 @@ const QUERY_FRAGMENTS: Record<QueryName, string> = {
   fixReply: "jsonb_array_elements(fr.replies)",
   reviewFindings: "jsonb_array_elements(rv.findings)",
   unresolvedNotices: "resolved = false",
+  skillVersions: "jsonb_to_recordset",
   deploymentHistory: "SELECT occurred_at, sha_from, sha_to, result",
   versionBounds: "AS start_sha",
   // 今の期間と前の期間の、工程ごとの実行統計の2つの問い合わせ。
@@ -149,6 +152,7 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   running_version_at_start: null,
   running_version_at_end: null,
   past_proposals: [],
+  skill_versions: [],
   pr_review_top_prs: [],
   pr_review_pr_count: 0,
   pr_review_triggers: EMPTY_PR_REVIEW_TRIGGER_COUNTS,
@@ -1443,6 +1447,311 @@ describe("truncation order", () => {
   });
 });
 
+describe("skill versions", () => {
+  const SHA_OLD = "a1b2c3d4e5f6a7b8c9d0";
+  const SHA_NEW = "f6e5d4c3b2a1f0e9d8c7";
+
+  function versionRow(extra: SqlRow): SqlRow {
+    return {
+      stage: "pr_review",
+      path: ".claude/skills/factory-review/SKILL.md",
+      sha: SHA_OLD.slice(0, 12),
+      bundle: null,
+      run_count: 4,
+      first_seen: "2026-09-21",
+      last_seen: "2026-09-23",
+      ...extra,
+    };
+  }
+
+  async function renderedFor(rows: SqlRow[]): Promise<string> {
+    const { sql } = createRoutedSqlClient({ skillVersions: rows });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    return renderEvidenceMarkdown(evidence);
+  }
+
+  test("renders the skill name, the 12-digit hash, the run count and the first and last day", async () => {
+    expect(await renderedFor([versionRow({})])).toContain(
+      "- pr_review factory-review a1b2c3d4e5f6: 実行4 / この期間の最初 2026-09-21 / この期間の最後 2026-09-23\n",
+    );
+  });
+
+  test("renders two rows when a skill has two versions in the period", async () => {
+    const markdown = await renderedFor([
+      versionRow({ sha: SHA_OLD.slice(0, 12) }),
+      versionRow({
+        sha: SHA_NEW.slice(0, 12),
+        run_count: 2,
+        first_seen: "2026-09-24",
+        last_seen: "2026-09-25",
+      }),
+    ]);
+    expect(
+      markdown.split("\n").filter((line) => line.includes("factory-review ")),
+    ).toHaveLength(2);
+  });
+
+  test("tells a change of the bundled files apart when SKILL.md is the same", async () => {
+    const markdown = await renderedFor([
+      versionRow({ bundle: "111111111111" }),
+      versionRow({ bundle: "222222222222" }),
+    ]);
+    expect(
+      markdown.split("\n").filter((line) => line.includes("factory-review ")),
+    ).toEqual([
+      "- pr_review factory-review a1b2c3d4e5f6+111111111111: 実行4 / この期間の最初 2026-09-21 / この期間の最後 2026-09-23",
+      "- pr_review factory-review a1b2c3d4e5f6+222222222222: 実行4 / この期間の最初 2026-09-21 / この期間の最後 2026-09-23",
+    ]);
+  });
+
+  test("renders the runs without a skill record as 未記録 and not as a version", async () => {
+    expect(
+      await renderedFor([versionRow({ path: null, sha: null, run_count: 7 })]),
+    ).toContain("- pr_review 未記録: 実行7\n");
+  });
+
+  test("puts the unrecorded runs of a stage ahead of its versions", async () => {
+    const markdown = await renderedFor([
+      versionRow({}),
+      versionRow({ path: null, sha: null, run_count: 7 }),
+    ]);
+    const lines = markdown.split("\n");
+    expect(lines.findIndex((l) => l.includes("未記録"))).toBeLessThan(
+      lines.findIndex((l) => l.includes("factory-review ")),
+    );
+  });
+
+  test("labels a path that is not a skill file by the path itself", async () => {
+    expect(
+      await renderedFor([versionRow({ path: "other/file.md" })]),
+    ).toContain("- pr_review other/file.md a1b2c3d4e5f6:");
+  });
+
+  test("sanitizes the skill path of a row", async () => {
+    const markdown = await renderedFor([versionRow({ path: "x\n<b>y</b>|z" })]);
+    expect(markdown).toContain("- pr_review x y z a1b2c3d4e5f6:");
+  });
+
+  test("excludes audit-kind work items from the skill-version query", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "skillVersions")?.text).toContain(
+      "wi.kind <> 'audit'",
+    );
+  });
+
+  test("filters the skill-version query by the period of the audit", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "skillVersions")?.values).toEqual([
+      PERIOD.start.toISOString(),
+      PERIOD.end.toISOString(),
+    ]);
+  });
+
+  test("renders 該当なし for the section when no run is in the period", async () => {
+    expect(await renderedFor([])).toContain(
+      "## スキルの版(stage別)\n- 該当なし",
+    );
+  });
+
+  test("collects no versions when the skills column is missing", async () => {
+    const { sql } = createRoutedSqlClient();
+    const beforeMigration: SqlClient = (strings, ...values) => {
+      const text = strings.join(" ? ").replace(/\s+/g, " ");
+      if (!text.includes("jsonb_to_recordset")) return sql(strings, ...values);
+      return {
+        fetch: () =>
+          Promise.reject(
+            Object.assign(new Error("undefined column"), { code: "42703" }),
+          ),
+        execute: () => Promise.resolve(),
+      };
+    };
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      beforeMigration,
+    );
+    expect(evidence.skill_versions).toEqual([]);
+  });
+
+  /** スキルの版の問い合わせだけを、決めたエラーで失敗させる`SqlClient`。 */
+  function failingSkillVersions(error: Error): SqlClient {
+    const { sql } = createRoutedSqlClient();
+    return (strings, ...values) => {
+      const text = strings.join(" ? ").replace(/\s+/g, " ");
+      if (!text.includes("jsonb_to_recordset")) return sql(strings, ...values);
+      return {
+        fetch: () => Promise.reject(error),
+        execute: () => Promise.resolve(),
+      };
+    };
+  }
+
+  test("collects no versions when the error names the skills column", async () => {
+    const sql = failingSkillVersions(
+      Object.assign(
+        new Error('column "skills" of relation "agent_runs" does not exist'),
+        { code: "42703" },
+      ),
+    );
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.skill_versions).toEqual([]);
+  });
+
+  test("does not hide an undefined-column error of another column", async () => {
+    const sql = failingSkillVersions(
+      Object.assign(
+        new Error(
+          'column "model_usage" of relation "agent_runs" does not exist',
+        ),
+        { code: "42703" },
+      ),
+    );
+    await expect(
+      collectAuditEvidence(
+        { period: PERIOD, instanceName: "atelier-works" },
+        sql,
+      ),
+    ).rejects.toThrow("model_usage");
+  });
+
+  test("keeps only the object elements of the skills array in the query", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "skillVersions")?.text).toContain(
+      "jsonb_typeof(e.elem) = 'object'",
+    );
+  });
+
+  test("folds the elements without a hash into the unrecorded group of the query", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "skillVersions")?.text).toContain(
+      "CASE WHEN coalesce(s.sha256, '') = '' OR coalesce(s.path, '') = '' THEN NULL ELSE s.path END AS path",
+    );
+  });
+
+  test("groups the skill versions by the folded path, not by the raw one", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "skillVersions")?.text).toContain(
+      "GROUP BY v.stage, v.path, v.sha, v.bundle",
+    );
+  });
+
+  test("counts the runs of a skill version by the distinct run id, not by the element rows", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "skillVersions")?.text).toContain(
+      "count(DISTINCT v.id) AS run_count",
+    );
+  });
+
+  test("does not hide another failure of the skill-version query", async () => {
+    const { sql } = createRoutedSqlClient();
+    const failing: SqlClient = (strings, ...values) => {
+      const text = strings.join(" ? ").replace(/\s+/g, " ");
+      if (!text.includes("jsonb_to_recordset")) return sql(strings, ...values);
+      return {
+        fetch: () => Promise.reject(new Error("db down")),
+        execute: () => Promise.resolve(),
+      };
+    };
+    await expect(
+      collectAuditEvidence(
+        { period: PERIOD, instanceName: "atelier-works" },
+        failing,
+      ),
+    ).rejects.toThrow("db down");
+  });
+
+  describe("worst-case size", () => {
+    const evidence: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      skill_versions: Array.from({ length: 400 }, (_, i) => ({
+        stage: `stage-${i % 12}`,
+        skill: `factory-skill-${i}-${"s".repeat(40)}`,
+        sha: SHA_OLD.slice(0, 12),
+        bundle: null,
+        run_count: i + 1,
+        first_seen: "2026-09-21",
+        last_seen: "2026-09-25",
+      })),
+    };
+
+    test("the fixture alone exceeds 12,000 characters, so truncation must run", () => {
+      const rawLength = buildEvidenceSections(evidence)
+        .flatMap((section) => [...section.fixed, ...section.lines])
+        .reduce((total, line) => total + line.length, 0);
+      expect(rawLength).toBeGreaterThan(12000);
+    });
+
+    test("stays within 12,000 characters", () => {
+      expect(renderEvidenceMarkdown(evidence).length).toBeLessThanOrEqual(
+        12000,
+      );
+    });
+  });
+
+  test("keeps the unrecorded runs when the version rows are cut", () => {
+    const evidence: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      notices: Array.from({ length: 400 }, (_, i) => ({
+        key: `kind-${i}-${"k".repeat(30)}`,
+        count: 1,
+      })),
+      skill_versions: [
+        ...Array.from({ length: 400 }, (_, i) => ({
+          stage: "pr_review",
+          skill: `skill-${i}-${"s".repeat(40)}`,
+          sha: SHA_OLD.slice(0, 12),
+          bundle: null,
+          run_count: 1,
+          first_seen: "2026-09-21",
+          last_seen: "2026-09-21",
+        })),
+        {
+          stage: "pr_review",
+          skill: null,
+          sha: null,
+          bundle: null,
+          run_count: 5,
+          first_seen: "2026-09-21",
+          last_seen: "2026-09-21",
+        },
+      ],
+    };
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- pr_review 未記録: 実行5\n",
+    );
+  });
+});
+
 const PR_SECTION = "PRレビューの実行(PR別の上位)";
 const TRIGGER_SECTION = "PRレビューの実行(きっかけ別)";
 const PR_SECTIONS = [PR_SECTION, TRIGGER_SECTION];
@@ -1736,13 +2045,14 @@ describe("PR review sections without runs", () => {
 });
 
 describe("PR review sections in the evidence pack", () => {
-  test("places the two sections right after the run statistics", () => {
+  test("places the two sections right after the run statistics and the skill versions", () => {
     const headings = buildEvidenceSections(EMPTY_EVIDENCE).map(
       (section) => section.heading,
     );
     expect(headings).toEqual([
       "対象",
       STATS_SECTION,
+      "スキルの版(stage別)",
       PR_SECTION,
       TRIGGER_SECTION,
       "失敗(flow + step別)",
