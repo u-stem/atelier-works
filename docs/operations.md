@@ -2085,6 +2085,7 @@ DBの掃除のスケジュール(`cleanup_db`、毎日03:30)が、保持期間�
 | 判定済みのPRのCIの記録(最後の更新から数える。判定を待つ記録と失敗を直している記録は消さない。各PRの最新の記録は、保持期間の4倍まで残す) | 30日(各PRの最新の記録は120日) | `retention_logs_days` |
 | workerの負荷の記録(測った時刻から数える) | 30日 | `retention_logs_days` |
 | 手動投入の冪等キー(予約した時刻から数える) | 90日 | `retention_work_items_days` |
+| 遷移の履歴(連鎖の最後の記録から数える。過ぎた連鎖を丸ごと消し、連鎖の一部だけは消さない) | 365日 | `retention_history_days` |
 | バックアップの世代(新しい方から数える) | 7世代 | `backup_keep_generations` |
 
 workerの負荷の記録(`worker_samples`)は、測った時刻(`sampled_at`)から30日を過ぎた行をすべて消す。
@@ -2114,6 +2115,11 @@ PR作成済みの作業項目は、PRがopenのままでも90日で消える。
 
 Claudeの実行の記録は、コスト分析(`v_agent_cost_daily`)の元データである。
 コスト分析を保持期間より長く見たいときは、`retention_work_items_days`を延ばす。
+
+遷移の履歴(`history_events`)は、外部キーを持たないので、作業項目を消しても残る。
+消えるのは、連鎖の最後の記録が`retention_history_days`(既定365日)より古くなった連鎖だけで、連鎖ごと丸ごと消える。
+掃除は、1回に1000連鎖までを消し、残りは次の掃除が消す。
+仕様は[遷移の履歴の内部仕様](internals/history.md#保持)にある。
 
 作業項目を消すときは、その要件定義のディレクトリも消す。
 ディレクトリは`requirement_drafts.doc_dir`が指す場所である。

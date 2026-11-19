@@ -287,7 +287,8 @@ migrationは追加だけにし、列やテーブルの名前は変えない。
 | テーブル | 役割 |
 | --- | --- |
 | `work_items` | 作業項目1件の状態。`(owner, repo, issue_number, cycle)`で一意。`pr_review`の作業項目は、最後に起動したきっかけ(`review_trigger`)も持つ |
-| `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ |
+| `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ。行を足すトリガーが、`history_events`にも1行を足す |
+| `history_events` | 状態遷移の、追記専用でハッシュの連鎖を持つ履歴。作業項目ごとに連番とハッシュでつなぎ、理由コード、遷移の前後の状態、元の遷移の行のIDを持つ。注記の本文は持たない。`work_item_events`のAFTER INSERTトリガーが書くので、状態を移す文は変えない。外部キーを持たず、作業項目を消しても残る。連鎖の最後の記録が保持期間(`retention_history_days`)より古くなると、DBの掃除が連鎖を丸ごと消す([遷移の履歴の内部仕様](internals/history.md)) |
 | `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)、承認の後の書き換えを検出する基準値(`doc_hash`)を持つ |
 | `design_drafts` | 設計の下書き。要件定義の下書きに結び付き、本文、図の参照、未確定事項、ファイルの置き場所、読んだコミットを持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ。設計の承認依頼(`design`)は、設計工程が有効なときだけ作られる |
@@ -468,7 +469,7 @@ IssueやPRには何も書かず、ラベルにも触れない。
 | audit_kickoff | `0 30 9 * * 1` | `f/factory/audit_kickoff` | 毎週月曜09:30(Asia/Tokyo)に実行します。前回の監査レポート以降の運用記録(失敗・却下・要人手・コスト・通知・デプロイ)に行動につながる記録があれば、監査の作業項目を作成して監査フローを起動します。記録が無い場合、別の監査が実行中の場合、日次予算を超過している場合は何もしません。 |
 | auto_retry_pr_review | `30 2-59/5 * * * *` | `f/factory/auto_retry_pr_review` | 5分ごとに実行します。GitHubの5xxや通信断で失敗したPRレビューを、失敗から再開の回数に応じた待ち(5分、15分、45分)が過ぎていれば同じ作業項目のまま再開します。ラベルは付け直さず、再開は同じ作業項目につき3回までです。 |
 | backup | `0 30 2 * * *` | `f/factory/backup` | 毎日2:30(Asia/Tokyo)に実行します。Postgresのクラスタ全体、factory_stateのvolume、参照を伏せたfactory_configを、/var/lib/factory-backupsの新しい世代に控えます。作業領域の掃除(3:00)とDBの掃除(3:30)の前に動き、掃除の前の状態を残します。新しい方からbackup_keep_generations(既定7)の世代を残し、古い世代を消します。失敗すると要対応の通知(backup_failed)を残し、ジョブを失敗にします。成功したときは通知しません。 |
-| cleanup_db | `0 30 3 * * *` | `f/factory/cleanup_db` | 毎日3:30に実行します。終端状態(承認済み・却下・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル・PR作成済み・監査完了)になった作業項目を既定90日(`factory_config`の`retention_work_items_days`で変更可)で削除し、あわせて要件定義ドラフトや承認依頼などの関連データも削除します。失敗記録・デプロイ記録・解決済みのお知らせは既定30日(`retention_logs_days`)で個別に削除します。古い「情報」の未解決のお知らせは、削除せず同じ期間で解決済みにします。判定済みのmainのCIの記録も同じ期間(`retention_logs_days`)で削除し、判定を待つ記録と、各リポジトリの最新の記録は削除しません。PRのCIの記録も同じ期間で削除します。判定を待つ記録と失敗を直している記録は削除せず、各PRの最新の記録は保持期間の4倍まで残します。workerの負荷の記録も同じ期間で削除します。 |
+| cleanup_db | `0 30 3 * * *` | `f/factory/cleanup_db` | 毎日3:30に実行します。終端状態(承認済み・却下・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル・PR作成済み・監査完了)になった作業項目を既定90日(`factory_config`の`retention_work_items_days`で変更可)で削除し、あわせて要件定義ドラフトや承認依頼などの関連データも削除します。失敗記録・デプロイ記録・解決済みのお知らせは既定30日(`retention_logs_days`)で個別に削除します。古い「情報」の未解決のお知らせは、削除せず同じ期間で解決済みにします。判定済みのmainのCIの記録も同じ期間(`retention_logs_days`)で削除し、判定を待つ記録と、各リポジトリの最新の記録は削除しません。PRのCIの記録も同じ期間で削除します。判定を待つ記録と失敗を直している記録は削除せず、各PRの最新の記録は保持期間の4倍まで残します。workerの負荷の記録も同じ期間で削除します。遷移の履歴は、連鎖の最後の記録が既定365日(`retention_history_days`)より古い連鎖だけを、丸ごと削除します。 |
 | cleanup_workspaces | `0 0 3 * * *` | `f/factory/cleanup_workspaces` | 毎日3:00に実行します。処理が終わった作業用ディレクトリや、動かなくなった処理の後始末を行い、保存領域の使用量を記録します。 |
 | collect_github | `0 1-59/5 * * * *` | `f/factory/collect_github` | 5分ごとに実行します。設定のownersの所有者ごとに、読み取り専用のトークンでリポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数を集めて、DBに書きます。設定のgh_collect_detail_enabledがtrueのときは、続けてPRとIssueの詳細も集めて書きます。設定のgh_collect_enabledがfalseの間は、トークンを読まず、何も書きません。毎日9時0分の日次サマリ通知と重ならないよう、毎時1分から5分おきに実行します。 |
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
@@ -739,6 +740,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/lib/tracked_pr_candidates` | script | [LIB] 追跡中のPRの候補の収集 |
 | `f/factory/lib/profile_upgrade` | script | [LIB] 進め方を通常に戻したことのIssueへのコメント |
+| `f/factory/lib/history` | script | [LIB] 遷移の履歴 |
 | `f/factory/lib/investigate_isolation_judge` | script | [LIB] 隔離の合否を決める判定 |
 | `f/factory/lib/isolation_proof` | script | [LIB] 隔離の合格の証拠の型 |
 | `f/factory/lib/investigate_isolation_gate` | script | [LIB] 隔離の合格の関門 |
