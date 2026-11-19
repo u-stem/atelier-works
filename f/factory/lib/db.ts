@@ -5407,6 +5407,8 @@ export type TerminalWorkItemsDeleted = {
  * 参照する他のテーブルはこの1文から連鎖する。
  * `work_items`を`ON DELETE CASCADE`で参照する表の行は一緒に消える。
  * 外部キーを持たない`review_human_threads`の行は、同じ文で消す。
+ * ただし、同じPRに終端でない作業項目が残る間は、その行を消さない。
+ * 消すと、後のレビューが同じスレッドを新しい作成時刻で入れ直し、別の期間にもう一度数えられるためである。
  * `ON DELETE SET NULL`の`job_failures`は残り、`deleteJobFailuresBefore`が別に掃除する。
  * 同じく`SET NULL`の`work_items.parent_work_item_id`を持つ子の作業項目も、
  * 親と一緒には消えない。
@@ -5417,7 +5419,7 @@ export async function deleteTerminalWorkItemsBefore(
 ): Promise<TerminalWorkItemsDeleted> {
   const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
   const cutoff = olderThan.toISOString();
-  // `review_human_threads`は外部キーを持たないので、連鎖して消えない。同じ文のCTEで、候補の作業項目の行を一緒に消す。
+  // `review_human_threads`は外部キーを持たないので、連鎖して消えない。同じ文のCTEで、候補の作業項目の行を一緒に消す(同じPRに終端でない作業項目が残るものを除く)。
   // 表を足すmigrationより先にコードが反映された間は表が無いので、そのときだけ、この表を除いた文で消す。
   const rows = await sql`
     WITH candidates AS (
@@ -5430,8 +5432,18 @@ export async function deleteTerminalWorkItemsBefore(
       WHERE work_item_id IN (SELECT id FROM candidates)
     ),
     deleted_threads AS (
-      DELETE FROM factory.review_human_threads
-      WHERE work_item_id IN (SELECT id FROM candidates)
+      DELETE FROM factory.review_human_threads AS thread
+      WHERE thread.work_item_id IN (SELECT id FROM candidates)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM factory.work_items AS seen
+          JOIN factory.work_items AS live
+            ON lower(live.owner) = lower(seen.owner)
+            AND lower(live.repo) = lower(seen.repo)
+            AND live.pr_number = seen.pr_number
+          WHERE seen.id = thread.work_item_id
+            AND live.status != ALL(${terminal})
+        )
     ),
     deleted AS (
       DELETE FROM factory.work_items

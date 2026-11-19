@@ -13889,7 +13889,7 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
   // 終端の作業項目を消すと、外部キーを持たないスレッドの行も、その作業項目の分だけ消える。
   const doomedId = await prWorkItem(
     "pr_review",
-    9102,
+    9921,
     "cancelled",
     "qdb outcomes doomed",
   );
@@ -13927,6 +13927,40 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
       threadsAfterWorkItemDelete.map((row) => row.first_comment_id),
     ) === JSON.stringify([812]),
     threadsAfterWorkItemDelete,
+  );
+
+  // 同じPRに、まだ終端でない作業項目が残る間は、終端の作業項目を消しても、スレッドの行を残す。
+  // 消すと、後のレビューが同じスレッドを新しい作成時刻で入れ直し、別の期間にもう一度数えられるため。
+  const doomedWithLiveId = await prWorkItem(
+    "pr_review",
+    9922,
+    "cancelled",
+    "qdb outcomes doomed with live",
+  );
+  await prWorkItem("pr_fix", 9922, "reviewing", "qdb outcomes live");
+  await upsertHumanThreads(
+    doomedWithLiveId,
+    withoutRunId,
+    [{ firstCommentId: 813, resolved: false }],
+    sql,
+  );
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.work_items SET updated_at = '2002-01-03T00:00:00Z' WHERE id = ${String(doomedWithLiveId)}`,
+  );
+  const deletedWithLive = await deleteTerminalWorkItemsBefore(
+    new Date("2002-06-01T00:00:00Z"),
+    sql,
+  );
+  const threadsWithLive = await sql`
+    SELECT first_comment_id FROM factory.review_human_threads
+    WHERE first_comment_id = 813
+  `.fetch();
+  check(
+    "review outcomes: deleting a terminal work item keeps its threads while a non-terminal work item of the same PR remains",
+    deletedWithLive.deleted.some((ref) => ref.id === doomedWithLiveId) &&
+      threadsWithLive.length === 1,
+    { deletedWithLive, threadsWithLive },
   );
 }
 

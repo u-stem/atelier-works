@@ -6323,6 +6323,16 @@ describe("deleteTerminalWorkItemsBefore", () => {
     expect(calls[0]?.text).toContain("DELETE FROM factory.work_items");
   });
 
+  test("keeps the review_human_threads rows while a non-terminal work item of the same PR remains", async () => {
+    // 同じPRの終端でない作業項目が残る間は、スレッドの行を消さない。
+    const { sql, calls } = createFakeSqlClient([DELETED_ROWS]);
+    await deleteTerminalWorkItemsBefore(NOW, sql);
+    const text = calls[0]?.text ?? "";
+    expect(text).toMatch(
+      /DELETE FROM factory\.review_human_threads[\s\S]*NOT EXISTS[\s\S]*pr_number/,
+    );
+  });
+
   test("counts cascaded approval_requests in the same statement", async () => {
     const { sql, calls } = createFakeSqlClient([DELETED_ROWS]);
     await deleteTerminalWorkItemsBefore(NOW, sql);
