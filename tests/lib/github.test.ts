@@ -5623,40 +5623,83 @@ describe("listPrReviewComments", () => {
 });
 
 describe("listReviewComments", () => {
-  test("requests the comments of one review", async () => {
+  // PR全体の取得が返す形。`line`は今のファイルでの行で、pushで動く。
+  // `original_line`は投稿したときの行で、複数行のコメントでは最後の行になる。
+  function rawComment(fields: Record<string, unknown>) {
+    return {
+      id: 5,
+      path: "a.ts",
+      body: "x",
+      pull_request_review_id: 77,
+      ...fields,
+    };
+  }
+
+  test("requests the comments of the whole pull request", async () => {
     const { calls } = createFakeCommandRunner([ghApiOk([])]);
     await listReviewComments({ ghToken: "tok" }, "acme", "widgets", 12, 77);
     expect(calls[0]?.argv.join(" ")).toContain(
-      "repos/acme/widgets/pulls/12/reviews/77/comments",
+      "repos/acme/widgets/pulls/12/comments?per_page=100",
     );
   });
 
-  test("reads the id, path, line and body of each comment", async () => {
+  test("keeps only the comments of the given review", async () => {
     createFakeCommandRunner([
       ghApiOk([
-        { id: 5, path: "a.ts", line: 10, body: "[MUST] x", user: null },
-        { id: 6, path: "b.ts", line: 3, body: "[IMO] y" },
+        rawComment({ id: 4623473635, original_line: 2844, line: 2847 }),
+        rawComment({
+          id: 4623473999,
+          original_line: 10,
+          line: 10,
+          pull_request_review_id: 5968297999,
+        }),
+        rawComment({ id: 4623474001, original_line: 12, line: null }),
       ]),
     ]);
     const comments = await listReviewComments(
       { ghToken: "tok" },
       "acme",
       "widgets",
-      12,
+      703,
       77,
     );
-    expect(comments).toEqual([
-      { id: 5, path: "a.ts", line: 10, body: "[MUST] x" },
-      { id: 6, path: "b.ts", line: 3, body: "[IMO] y" },
+    expect(comments.map((comment) => comment.id)).toEqual([
+      4623473635, 4623474001,
     ]);
   });
 
-  test("falls back to original_line when line is null", async () => {
+  test("prefers original_line over the current line", async () => {
     createFakeCommandRunner([
       ghApiOk([
-        { id: 5, path: "a.ts", line: null, original_line: 8, body: "x" },
+        rawComment({
+          id: 4623473635,
+          path: "f/factory/lib/github.ts",
+          original_line: 2844,
+          start_line: 2841,
+          line: 2847,
+          pull_request_review_id: 5968297438,
+        }),
       ]),
     ]);
+    const comments = await listReviewComments(
+      { ghToken: "tok" },
+      "acme",
+      "widgets",
+      703,
+      5968297438,
+    );
+    expect(comments).toEqual([
+      {
+        id: 4623473635,
+        path: "f/factory/lib/github.ts",
+        line: 2844,
+        body: "x",
+      },
+    ]);
+  });
+
+  test("falls back to line when original_line is missing", async () => {
+    createFakeCommandRunner([ghApiOk([rawComment({ line: 8 })])]);
     const comments = await listReviewComments(
       { ghToken: "tok" },
       "acme",
@@ -5667,8 +5710,10 @@ describe("listReviewComments", () => {
     expect(comments[0]?.line).toBe(8);
   });
 
-  test("reads a comment without a line as null", async () => {
-    createFakeCommandRunner([ghApiOk([{ id: 5, path: "a.ts", body: "x" }])]);
+  test("reads a comment with neither original_line nor line as null", async () => {
+    createFakeCommandRunner([
+      ghApiOk([rawComment({ original_line: null, line: null })]),
+    ]);
     const comments = await listReviewComments(
       { ghToken: "tok" },
       "acme",
@@ -5679,9 +5724,26 @@ describe("listReviewComments", () => {
     expect(comments[0]?.line).toBeNull();
   });
 
+  test("leaves out a comment without a review id", async () => {
+    createFakeCommandRunner([
+      ghApiOk([
+        { id: 5, path: "a.ts", body: "x", original_line: 3 },
+        rawComment({ id: 6, original_line: 4 }),
+      ]),
+    ]);
+    const comments = await listReviewComments(
+      { ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      77,
+    );
+    expect(comments.map((comment) => comment.id)).toEqual([6]);
+  });
+
   test("skips an element that is not a comment", async () => {
     createFakeCommandRunner([
-      ghApiOk([{ id: "x" }, { id: 6, path: "b.ts", line: 3, body: "y" }]),
+      ghApiOk([{ id: "x" }, rawComment({ id: 6, original_line: 3 })]),
     ]);
     const comments = await listReviewComments(
       { ghToken: "tok" },

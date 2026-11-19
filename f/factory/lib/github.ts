@@ -3347,6 +3347,7 @@ type PrReviewCommentPayload = {
   readonly path: string;
   readonly line: unknown;
   readonly original_line?: unknown;
+  readonly pull_request_review_id?: unknown;
   readonly body: string;
   readonly author_association: unknown;
 };
@@ -3417,17 +3418,20 @@ export type PostedReviewComment = {
   readonly id: number;
   readonly path: string;
   /**
-   * レビューごとの取得は、`line`と`original_line`を`null`で返すことがある(差分の位置の`position`だけを返す)。
-   * 行が分かるときだけ値を持ち、分からないときは`null`にする。
-   * 行が差分から外れたコメントは、投稿した時点の行(`original_line`)を使う。
+   * 投稿したときの行(`original_line`)。複数行のコメントでは最後の行になる。
+   * `original_line`が無いときだけ、今のファイルでの行(`line`)を使う。
+   * どちらも無ければ`null`。
    */
   readonly line: number | null;
   readonly body: string;
 };
 
 /**
- * `GET .../pulls/{n}/reviews/{id}/comments`で、投稿済みのレビュー1つの行コメントを、ページ送りしながら取得する。
+ * `GET .../pulls/{n}/comments`でPR全体の行コメントを、ページ送りしながら取得し、
+ * 投稿済みのレビュー1つ(`reviewId`)に属するものだけを返す。
  * 投稿した行コメントに、GitHubが付けたidを知るために使う(`createPrReview`はコメントのidを返さない)。
+ * レビューごとの取得は`line`と`original_line`を返さないので使わない。
+ * `line`はpushで動くので、投稿した行である`original_line`を先に使う。
  * 形が合わない要素は、読まずに飛ばす。
  */
 export async function listReviewComments(
@@ -3440,16 +3444,17 @@ export async function listReviewComments(
   validateOwnerRepo(owner, repo);
   const parsed = await callGhApiAll(
     client,
-    `repos/${owner}/${repo}/pulls/${number}/reviews/${reviewId}/comments?per_page=100`,
+    `repos/${owner}/${repo}/pulls/${number}/comments?per_page=100`,
   );
   const comments: PostedReviewComment[] = [];
   for (const raw of parsed) {
     if (!isPrReviewCommentPayload(raw)) continue;
+    if (raw.pull_request_review_id !== reviewId) continue;
     const line =
-      typeof raw.line === "number"
-        ? raw.line
-        : typeof raw.original_line === "number"
-          ? raw.original_line
+      typeof raw.original_line === "number"
+        ? raw.original_line
+        : typeof raw.line === "number"
+          ? raw.line
           : null;
     comments.push({ id: raw.id, path: raw.path, line, body: raw.body });
   }
