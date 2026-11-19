@@ -367,7 +367,7 @@ export type AuditEvidence = {
   readonly review_findings: CountByKey[];
   /**
    * 期間内のレビュー指摘の採否。採用率と見送りの了承率は、ここから`review_outcomes.ts`の式で求める。
-   * 採否の表を足すmigrationが当たる前は、すべて0である。
+   * 採否の表を足すmigrationが当たる前は、`unrecorded_reviews`のほかは0である。
    */
   readonly review_outcomes: ReviewOutcomeEvidence;
   readonly notices: CountByKey[];
