@@ -1186,8 +1186,8 @@ describe("skip wiring in the finish step", () => {
   });
 
   test("replies through the thread's first comment", async () => {
-    expect((await SOURCE).replace(/\s+/g, " ")).toContain(
-      "replyTargetCommentId(threads, reply.review_comment_id)",
+    expect(await SOURCE).toMatch(
+      /const replyTarget = replyTargetCommentId\(\s*threads,\s*reply\.review_comment_id,?\s*\)/,
     );
   });
 

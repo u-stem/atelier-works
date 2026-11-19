@@ -65,6 +65,7 @@ import {
   listPrReviewComments,
   listPrReviews,
   listPullRequestNumbersByHead,
+  listReviewComments,
   listReviewThreads,
   listWorkflowRuns,
   mergePullRequest,
@@ -5618,6 +5619,78 @@ describe("listPrReviewComments", () => {
       VIEWER,
     );
     expect(result.items[0]?.authorAssociation).toBe("OWNER");
+  });
+});
+
+describe("listReviewComments", () => {
+  test("requests the comments of one review", async () => {
+    const { calls } = createFakeCommandRunner([ghApiOk([])]);
+    await listReviewComments({ ghToken: "tok" }, "acme", "widgets", 12, 77);
+    expect(calls[0]?.argv.join(" ")).toContain(
+      "repos/acme/widgets/pulls/12/reviews/77/comments",
+    );
+  });
+
+  test("reads the id, path, line and body of each comment", async () => {
+    createFakeCommandRunner([
+      ghApiOk([
+        { id: 5, path: "a.ts", line: 10, body: "[MUST] x", user: null },
+        { id: 6, path: "b.ts", line: 3, body: "[IMO] y" },
+      ]),
+    ]);
+    const comments = await listReviewComments(
+      { ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      77,
+    );
+    expect(comments).toEqual([
+      { id: 5, path: "a.ts", line: 10, body: "[MUST] x" },
+      { id: 6, path: "b.ts", line: 3, body: "[IMO] y" },
+    ]);
+  });
+
+  test("falls back to original_line when line is null", async () => {
+    createFakeCommandRunner([
+      ghApiOk([
+        { id: 5, path: "a.ts", line: null, original_line: 8, body: "x" },
+      ]),
+    ]);
+    const comments = await listReviewComments(
+      { ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      77,
+    );
+    expect(comments[0]?.line).toBe(8);
+  });
+
+  test("reads a comment without a line as null", async () => {
+    createFakeCommandRunner([ghApiOk([{ id: 5, path: "a.ts", body: "x" }])]);
+    const comments = await listReviewComments(
+      { ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      77,
+    );
+    expect(comments[0]?.line).toBeNull();
+  });
+
+  test("skips an element that is not a comment", async () => {
+    createFakeCommandRunner([
+      ghApiOk([{ id: "x" }, { id: 6, path: "b.ts", line: 3, body: "y" }]),
+    ]);
+    const comments = await listReviewComments(
+      { ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      77,
+    );
+    expect(comments.map((comment) => comment.id)).toEqual([6]);
   });
 });
 

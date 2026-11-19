@@ -42,6 +42,12 @@ import {
 } from "./pr_ci_support.ts";
 import { PR_CONFLICT_FIX_TEMPORARY_HOLD_REASONS } from "./pr_conflict_fix_holds.ts";
 import {
+  type FindingOutcomeUpdate,
+  type HumanThreadSync,
+  outcomesReplacedBy,
+  type ReviewFindingRow,
+} from "./review_outcomes.ts";
+import {
   type AgentRunRecord,
   APPROVAL_REQUEST_KINDS,
   APPROVAL_REQUEST_STATUSES,
@@ -3046,21 +3052,181 @@ const REVIEW_FINDING_KINDS: readonly ReviewFindingKind[] = [
   "q",
 ];
 
-/** `factory.reviews`に行を挿入し、そのIDを返す。 */
+const REVIEW_AGENT_RUN_COLUMN_PATTERN =
+  /column (?:\w+\.)?"?agent_run_id"?(?: of relation "reviews"| does not exist)/;
+const ANY_COLUMN_MISSING_PATTERN =
+  /column (?:\w+\.)?"?\w+"?(?: of relation "\w+")? does not exist/;
+
+/**
+ * 例外が、`reviews.agent_run_id`の列が無いことによるものかを返す。
+ * エラーコード42703でも、文が別の列の名前を挙げているときはfalseにする。
+ * 文が列の名前を挙げていないとき(windmill-clientが文を落とした場合など)は、42703だけで判定する。
+ */
+export function isMissingReviewAgentRunColumnError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const body: unknown = Reflect.get(err, "body");
+  const messages = [err.message, typeof body === "string" ? body : ""];
+  if (messages.some((m) => REVIEW_AGENT_RUN_COLUMN_PATTERN.test(m))) {
+    return true;
+  }
+  if (messages.some((m) => ANY_COLUMN_MISSING_PATTERN.test(m))) return false;
+  return Reflect.get(err, "code") === "42703";
+}
+
+const REVIEW_OUTCOME_TABLE_PATTERN =
+  /relation "(?:factory\.)?review_(?:findings|human_threads)" does not exist/;
+
+/**
+ * 例外が、採否の記録の表(`review_findings`と`review_human_threads`)が無いことによるものかを返す。
+ * migrationより先にコードが反映された間は、この表が無い。
+ * エラーコード42P01でも、文が別の表の名前を挙げているときはfalseにする。
+ */
+export function isMissingReviewOutcomeTableError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const body: unknown = Reflect.get(err, "body");
+  const messages = [err.message, typeof body === "string" ? body : ""];
+  if (messages.some((m) => REVIEW_OUTCOME_TABLE_PATTERN.test(m))) return true;
+  if (messages.some((m) => /relation "[^"]+" does not exist/.test(m))) {
+    return false;
+  }
+  return Reflect.get(err, "code") === "42P01";
+}
+
+/**
+ * `factory.reviews`に行を挿入し、そのIDを返す。
+ * `agent_run_id`の列を足すmigrationより先に、この関数を含むコードが反映されると、列が無いエラーになる。
+ * そのときだけ、その列を除いた文で記録し直し、警告を残す。レビューの記録が消えると、再レビューの起点が失われるためである。
+ * ほかのエラーは投げる。
+ */
 export async function insertReview(
   record: ReviewRecord,
   sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
 ): Promise<number> {
   const statement = sql`
-    INSERT INTO factory.reviews (work_item_id, head_sha, verdict, result, summary, findings, posted_review_id)
+    INSERT INTO factory.reviews (work_item_id, head_sha, verdict, result, summary, findings, posted_review_id, agent_run_id)
     VALUES (
       ${record.work_item_id}::bigint, ${record.head_sha}, ${record.verdict}, ${record.result}, ${record.summary},
-      ${JSON.stringify(record.findings)}::jsonb, ${record.posted_review_id}
+      ${JSON.stringify(record.findings)}::jsonb, ${record.posted_review_id}, ${record.agent_run_id ?? null}::bigint
     )
     RETURNING id
   `;
-  const row = await fetchOneRow(statement, "insertReview");
-  return parseId(row.id, "id");
+  try {
+    const row = await fetchOneRow(statement, "insertReview");
+    return parseId(row.id, "id");
+  } catch (err) {
+    if (!isMissingReviewAgentRunColumnError(err)) throw err;
+    log.warn(
+      "reviews.agent_run_id is missing; recorded the review without the agent run (the datatable migration has not run yet)",
+      { work_item_id: record.work_item_id },
+    );
+    const legacy = sql`
+      INSERT INTO factory.reviews (work_item_id, head_sha, verdict, result, summary, findings, posted_review_id)
+      VALUES (
+        ${record.work_item_id}::bigint, ${record.head_sha}, ${record.verdict}, ${record.result}, ${record.summary},
+        ${JSON.stringify(record.findings)}::jsonb, ${record.posted_review_id}
+      )
+      RETURNING id
+    `;
+    const row = await fetchOneRow(legacy, "insertReview");
+    return parseId(row.id, "id");
+  }
+}
+
+/** `insertReviewFindings`が書く`factory.review_findings`の列。挿入文の列の並びと一致させる。 */
+export const REVIEW_FINDING_COLUMNS = [
+  "review_id",
+  "idx",
+  "path",
+  "severity",
+  "kind",
+  "confidence",
+  "posted",
+  "review_comment_id",
+  "outcome",
+  "outcome_at",
+] as const;
+
+/**
+ * レビューの指摘ごとの行を`factory.review_findings`に挿入する。
+ * 行は1つのjsonbの値で渡し、`jsonb_to_recordset`で列に開く。指摘の数で文の形が変わらず、nullは型のまま渡る。
+ * 投稿した指摘(`posted`が真)は結果`posted`から始め、投稿していない指摘は結果を持たない。
+ * 表が無いときは、PostgreSQLのエラーをそのまま投げる。呼び出し側が、レビューの記録を落とさないよう警告にして続ける。
+ */
+export async function insertReviewFindings(
+  reviewId: number,
+  rows: readonly ReviewFindingRow[],
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  if (rows.length === 0) return;
+  await sql`
+    INSERT INTO factory.review_findings (
+      review_id, idx, path, severity, kind, confidence, posted, review_comment_id, outcome, outcome_at
+    )
+    SELECT ${reviewId}::bigint, r.idx, r.path, r.severity, r.kind, r.confidence, r.posted, r.review_comment_id,
+           CASE WHEN r.posted THEN 'posted' END,
+           CASE WHEN r.posted THEN now() END
+    FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) AS r (
+      idx integer, path text, severity text, kind text, confidence text, posted boolean, review_comment_id bigint
+    )
+  `.execute();
+}
+
+/**
+ * 指摘の結果を、コメントのidで探して記録し、更新した指摘の数を返す。
+ * 遷移は`nextOutcome`の表に従う。更新1件につき1つのUPDATEで、今の結果が置き換えられる結果のときだけ書く。
+ * 読んでから書く間に、別の経路(pr_fixの返信、再レビューのスレッドの同期)が書いても、更新を捨てず、取りこぼしも数えない。
+ * 同じコメントへの更新が複数あるときは、渡した順に1件ずつ重ねる。
+ * 返した数は、RETURNINGで返った指摘を重複なく数えたものである。
+ * コメントに結びつく指摘が無いとき(人が始めたスレッドなど)は、何もしない。
+ */
+export async function recordFindingOutcomes(
+  updates: readonly FindingOutcomeUpdate[],
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const updatedIds = new Set<number>();
+  for (const update of updates) {
+    const replaced = outcomesReplacedBy(update.outcome, update.source);
+    if (replaced.length === 0) continue;
+    const rows = await sql`
+      UPDATE factory.review_findings
+      SET outcome = ${update.outcome}, outcome_at = now(), outcome_source = ${update.source}
+      WHERE posted
+        AND review_comment_id = ${String(update.commentId)}::bigint
+        AND coalesce(outcome, 'posted') = ANY(${replaced}::text[])
+      RETURNING id
+    `.fetch();
+    for (const row of rows) updatedIds.add(parseId(row.id, "id"));
+  }
+  return updatedIds.size;
+}
+
+/**
+ * 人が始めたレビュースレッドを`factory.review_human_threads`に記録する。
+ * すでに記録したスレッドは、解決済みかだけを更新する。最初に読んだ作業項目とレビューと、`created_at`は変えない。
+ * 最初に読んだレビュー(`reviewId`)が消えると、行は残り、`first_seen_review_id`だけがNULLになる。
+ * 次のレビューは、同じスレッドを新しい時刻で記録し直さない。
+ * 表が無いときは、PostgreSQLのエラーをそのまま投げる。
+ */
+export async function upsertHumanThreads(
+  workItemId: number,
+  reviewId: number,
+  threads: readonly HumanThreadSync[],
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  if (threads.length === 0) return;
+  const payload = JSON.stringify(
+    threads.map((thread) => ({
+      first_comment_id: thread.firstCommentId,
+      resolved: thread.resolved,
+    })),
+  );
+  await sql`
+    INSERT INTO factory.review_human_threads (work_item_id, first_comment_id, first_seen_review_id, resolved)
+    SELECT ${workItemId}::bigint, t.first_comment_id, ${reviewId}::bigint, t.resolved
+    FROM jsonb_to_recordset(${payload}::jsonb) AS t (first_comment_id bigint, resolved boolean)
+    ON CONFLICT (first_comment_id) DO UPDATE SET resolved = EXCLUDED.resolved
+  `.execute();
 }
 
 /**
@@ -3163,6 +3329,11 @@ export function toReviewRecord(row: SqlRow): ReviewRecord {
       row.posted_review_id,
       "posted_review_id",
     ),
+    // 列を足すmigrationより先にコードが反映された間は、`SELECT *`の行に列が無い。実行の記録を持たないレビューとして読む。
+    agent_run_id:
+      row.agent_run_id === undefined || row.agent_run_id === null
+        ? null
+        : parseId(row.agent_run_id, "agent_run_id"),
   };
 }
 
@@ -5236,6 +5407,9 @@ export type TerminalWorkItemsDeleted = {
  * 報告する件数が実際に消えた行とずれることはない。
  * 参照する他のテーブルはこの1文から連鎖する。
  * `work_items`を`ON DELETE CASCADE`で参照する表の行は一緒に消える。
+ * 外部キーを持たない`review_human_threads`の行は、同じ文で消す。
+ * ただし、同じPRに終端でない作業項目が残る間は、その行を消さない。
+ * 消すと、後のレビューが同じスレッドを新しい作成時刻で入れ直し、別の期間にもう一度数えられるためである。
  * `ON DELETE SET NULL`の`job_failures`は残り、`deleteJobFailuresBefore`が別に掃除する。
  * 同じく`SET NULL`の`work_items.parent_work_item_id`を持つ子の作業項目も、
  * 親と一緒には消えない。
@@ -5245,15 +5419,32 @@ export async function deleteTerminalWorkItemsBefore(
   sql: SqlClient = defaultSqlClient,
 ): Promise<TerminalWorkItemsDeleted> {
   const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const cutoff = olderThan.toISOString();
+  // `review_human_threads`は外部キーを持たないので、連鎖して消えない。同じ文のCTEで、候補の作業項目の行を一緒に消す(同じPRに終端でない作業項目が残るものを除く)。
+  // 表を足すmigrationより先にコードが反映された間は表が無いので、そのときだけ、この表を除いた文で消す。
   const rows = await sql`
     WITH candidates AS (
       SELECT id FROM factory.work_items
-      WHERE status = ANY(${terminal}) AND updated_at <= ${olderThan.toISOString()}::timestamptz
+      WHERE status = ANY(${terminal}) AND updated_at <= ${cutoff}::timestamptz
     ),
     cascaded AS (
       SELECT COUNT(*) AS approval_requests_count
       FROM factory.approval_requests
       WHERE work_item_id IN (SELECT id FROM candidates)
+    ),
+    deleted_threads AS (
+      DELETE FROM factory.review_human_threads AS thread
+      WHERE thread.work_item_id IN (SELECT id FROM candidates)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM factory.work_items AS seen
+          JOIN factory.work_items AS live
+            ON lower(live.owner) = lower(seen.owner)
+            AND lower(live.repo) = lower(seen.repo)
+            AND live.pr_number = seen.pr_number
+          WHERE seen.id = thread.work_item_id
+            AND live.status != ALL(${terminal})
+        )
     ),
     deleted AS (
       DELETE FROM factory.work_items
@@ -5267,7 +5458,34 @@ export async function deleteTerminalWorkItemsBefore(
       deleted.issue_number,
       (SELECT approval_requests_count FROM cascaded) AS approval_requests_deleted
     FROM deleted
-  `.fetch();
+  `
+    .fetch()
+    .catch((err: unknown) => {
+      if (!isMissingReviewOutcomeTableError(err)) throw err;
+      return sql`
+        WITH candidates AS (
+          SELECT id FROM factory.work_items
+          WHERE status = ANY(${terminal}) AND updated_at <= ${cutoff}::timestamptz
+        ),
+        cascaded AS (
+          SELECT COUNT(*) AS approval_requests_count
+          FROM factory.approval_requests
+          WHERE work_item_id IN (SELECT id FROM candidates)
+        ),
+        deleted AS (
+          DELETE FROM factory.work_items
+          WHERE id IN (SELECT id FROM candidates)
+          RETURNING id, owner, repo, issue_number
+        )
+        SELECT
+          deleted.id,
+          deleted.owner,
+          deleted.repo,
+          deleted.issue_number,
+          (SELECT approval_requests_count FROM cascaded) AS approval_requests_deleted
+        FROM deleted
+      `.fetch();
+    });
 
   const deleted = rows.map((row) => ({
     id: parseId(row.id, "id"),

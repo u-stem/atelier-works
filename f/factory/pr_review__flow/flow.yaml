@@ -98,7 +98,8 @@ value:
               thread_responses: results.pr_review_generate?.thread_responses ?? [],
               pr_files: results.pr_review_generate?.pr_files ?? [],
               pr_file_hunks: results.pr_review_generate?.pr_file_hunks ?? null,
-              binary_files: results.pr_review_generate?.binary_files ?? []
+              binary_files: results.pr_review_generate?.binary_files ?? [],
+              agent_run_id: results.pr_review_generate?.agent_run_id ?? null
               }).replace(/\$/g, "\\u0024")
           work_item_id:
             type: javascript

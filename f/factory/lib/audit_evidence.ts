@@ -21,10 +21,23 @@ import {
   defaultSqlClient,
   fetchDeploymentRows,
   isMissingAgentRunSkillsColumnError,
+  isMissingReviewOutcomeTableError,
   type SqlClient,
   type SqlRow,
 } from "./db.ts";
 import { maskSecrets } from "./log.ts";
+import {
+  adoptionRate,
+  confirmedCount,
+  emptyOutcomeCounts,
+  FINDING_OUTCOMES,
+  type FindingOutcome,
+  isFindingOutcome,
+  MIN_CONFIRMED_FINDINGS,
+  type OutcomeCounts,
+  type Rate,
+  skipAcceptanceRate,
+} from "./review_outcomes.ts";
 import {
   isNumber,
   isPrReviewTrigger,
@@ -290,6 +303,35 @@ export type PrReviewTriggerCounts = Readonly<
   Record<PrReviewTrigger | "unknown", number>
 >;
 
+/**
+ * 期間内に記録したレビュー指摘の採否。
+ * 結果は集計時点の値で、期間の後に決まった結果も含む。
+ * 行コメントのidに結びつかない指摘(総評に回った指摘など)は、結果が記録されないので、`counts`に入れない。
+ * 結びつかない件数は、`posted_total`から`with_comment_id`を引いた値である。
+ * 採否を記録できなかったレビューと、記録する前のレビューは、指摘の行を持たないので、母数に入れず`unrecorded_reviews`に分ける。
+ */
+export type ReviewOutcomeEvidence = {
+  /** 期間内に投稿した指摘の件数。コメントのidに結びつかない指摘を含む。 */
+  readonly posted_total: number;
+  /** `posted_total`のうち、行コメントのidに結びつく件数。 */
+  readonly with_comment_id: number;
+  /** コメントのidに結びつく指摘の、結果ごとの件数。採用率の分母と結果待ちの件数は、これから求める。 */
+  readonly counts: OutcomeCounts;
+  /** 期間内に初めて読んだ、人が始めたスレッドの件数と、そのうち解決済みの件数。 */
+  readonly human_threads: { readonly total: number; readonly resolved: number };
+  /** 期間内に投稿したレビューのうち、指摘があるのに採否の行が無いものの件数。投稿しなかったレビューは数えない。 */
+  readonly unrecorded_reviews: number;
+};
+
+/** 採否の記録が無い期間の値。 */
+export const EMPTY_REVIEW_OUTCOME_EVIDENCE: ReviewOutcomeEvidence = {
+  posted_total: 0,
+  with_comment_id: 0,
+  counts: emptyOutcomeCounts(),
+  human_threads: { total: 0, resolved: 0 },
+  unrecorded_reviews: 0,
+};
+
 /** 証跡パックに載せる、PRレビューの実行回数が上位のPRの最大の数。 */
 export const PR_REVIEW_TOP_PRS_LIMIT = 10;
 export type AuditEvidence = {
@@ -323,6 +365,11 @@ export type AuditEvidence = {
    * `low`は記録だけで投稿しないので、`must`などの件数に入れない。
    */
   readonly review_findings: CountByKey[];
+  /**
+   * 期間内のレビュー指摘の採否。採用率と見送りの了承率は、ここから`review_outcomes.ts`の式で求める。
+   * 採否の表を足すmigrationが当たる前は、`unrecorded_reviews`のほかは0である。
+   */
+  readonly review_outcomes: ReviewOutcomeEvidence;
   readonly notices: CountByKey[];
   /**
    * 期間内に作成され、集計時点で未解決の通知。種別ごと。
@@ -575,6 +622,103 @@ function prReviewTriggersSection(evidence: AuditEvidence): EvidenceSection {
   };
 }
 
+/** 採否の節に載せる、記録が1件も無い期間の1行。 */
+export const NO_REVIEW_OUTCOMES_LINE = "期間内に採否を記録した指摘は無い";
+
+/**
+ * 割合の行を作る。母数が小さいときは、割合を出さず、件数だけを`n=<母数>`と示す。
+ * `confirmed`は、結果が確定した指摘の件数である。割合を出さない理由の文を選ぶ。
+ */
+function formatRateLine(
+  label: string,
+  rate: Rate,
+  parts: { readonly numerator: string; readonly denominator: string },
+  confirmed: number,
+): string {
+  if (rate.kind === "rate") {
+    return sanitizeCell(
+      `${label}: ${rate.percent}%(${parts.numerator}${rate.numerator}件 / ${parts.denominator}${rate.denominator}件)`,
+      SANITIZE_CELL_MAX,
+    );
+  }
+  const reason =
+    confirmed < MIN_CONFIRMED_FINDINGS
+      ? `確定した指摘が${MIN_CONFIRMED_FINDINGS}件未満のため割合は出さない`
+      : "判断済みの見送りが無いため割合は出さない";
+  return sanitizeCell(
+    `${label}: n=${rate.denominator}(${parts.numerator}${rate.numerator}件。${reason})`,
+    SANITIZE_CELL_MAX,
+  );
+}
+
+/**
+ * レビュー指摘の採否の節。
+ * 採用率、見送りの了承率、結果が決まっていない件数、行コメントのidの取得率、人が始めたスレッドの数は、固定の行にする。
+ * 結果ごとの件数は、全体の上限に収めるときに削れる行にする。
+ */
+function reviewOutcomesSection(evidence: AuditEvidence): EvidenceSection {
+  const heading = "レビュー指摘の採否";
+  const outcomes = evidence.review_outcomes;
+  const hasRecords =
+    outcomes.posted_total > 0 ||
+    outcomes.human_threads.total > 0 ||
+    outcomes.unrecorded_reviews > 0;
+  if (!hasRecords) {
+    return { heading, fixed: [NO_REVIEW_OUTCOMES_LINE], lines: [] };
+  }
+  const unrecordedLine =
+    outcomes.unrecorded_reviews > 0
+      ? [
+          sanitizeCell(
+            `採否を記録できなかった、または移行前のレビュー(割合の母数に入れない): ${outcomes.unrecorded_reviews}件`,
+            SANITIZE_CELL_MAX,
+          ),
+        ]
+      : [];
+  if (outcomes.posted_total === 0 && outcomes.human_threads.total === 0) {
+    return { heading, fixed: unrecordedLine, lines: [] };
+  }
+  const { counts } = outcomes;
+  const confirmed = confirmedCount(counts);
+  return {
+    heading,
+    fixed: [
+      formatRateLine(
+        "採用率",
+        adoptionRate(counts),
+        { numerator: "直した", denominator: "確定した" },
+        confirmed,
+      ),
+      formatRateLine(
+        "見送りの了承率",
+        skipAcceptanceRate(counts),
+        { numerator: "了承", denominator: "判断済みの見送り" },
+        confirmed,
+      ),
+      sanitizeCell(
+        `結果が決まっていない指摘: 投稿のまま${counts.posted}件 / 見送りの判断待ち${counts.skipped}件`,
+        SANITIZE_CELL_MAX,
+      ),
+      sanitizeCell(
+        `コメントに結びつかない指摘(採用率と結果待ちの母数に入れない): ${outcomes.posted_total - outcomes.with_comment_id}件`,
+        SANITIZE_CELL_MAX,
+      ),
+      sanitizeCell(
+        `人が始めたスレッド: ${outcomes.human_threads.total}件(うち解決済み${outcomes.human_threads.resolved}件)`,
+        SANITIZE_CELL_MAX,
+      ),
+      ...unrecordedLine,
+    ],
+    lines: FINDING_OUTCOMES.filter((outcome) => counts[outcome] > 0).map(
+      (outcome) =>
+        sanitizeCell(
+          `結果 ${outcome}: ${counts[outcome]}件`,
+          SANITIZE_CELL_MAX,
+        ),
+    ),
+  };
+}
+
 export function buildEvidenceSections(
   evidence: AuditEvidence,
 ): EvidenceSection[] {
@@ -723,6 +867,7 @@ export function buildEvidenceSections(
     { heading: "要人手・ブロック・期限切れ", fixed: [], lines: humanLines },
     { heading: "修正ラウンド", fixed: [], lines: fixLines },
     { heading: "レビュー指摘", fixed: [], lines: reviewLines },
+    reviewOutcomesSection(evidence),
     { heading: "通知", fixed: noticeFixed, lines: noticeLines },
     { heading: "デプロイ", fixed: deploymentFixed, lines: deploymentLines },
     { heading: "過去の提案(直近3回)", fixed: [], lines: proposalLines },
@@ -982,6 +1127,51 @@ function toPrReviewTriggerCounts(
   return counts;
 }
 
+/**
+ * 採否の記録の表を読む問い合わせを実行する。
+ * 表を足すmigrationより先にコードが反映された間は、表が無いエラーになるので、空の結果にする。
+ * ほかのエラーは投げる。
+ */
+async function fetchWhenOutcomeTablesExist(
+  run: () => Promise<SqlRow[]>,
+): Promise<SqlRow[]> {
+  try {
+    return await run();
+  } catch (err) {
+    if (!isMissingReviewOutcomeTableError(err)) throw err;
+    return [];
+  }
+}
+
+/** 採否の3つの問い合わせの結果から、証跡の値を作る。結果の名前が未知の行は数えない。 */
+function toReviewOutcomeEvidence(
+  outcomeRows: readonly SqlRow[],
+  humanThreadRows: readonly SqlRow[],
+  unrecordedRows: readonly SqlRow[],
+): ReviewOutcomeEvidence {
+  const counts: Record<FindingOutcome, number> = { ...emptyOutcomeCounts() };
+  let postedTotal = 0;
+  let withCommentId = 0;
+  for (const row of outcomeRows) {
+    const key = row.key;
+    if (!isFindingOutcome(key)) continue;
+    const linked = parseNumeric(row.with_comment_id);
+    counts[key] += linked;
+    postedTotal += parseNumeric(row.count);
+    withCommentId += linked;
+  }
+  return {
+    posted_total: postedTotal,
+    with_comment_id: withCommentId,
+    counts,
+    human_threads: {
+      total: parseNumeric(humanThreadRows[0]?.total),
+      resolved: parseNumeric(humanThreadRows[0]?.resolved),
+    },
+    unrecorded_reviews: parseNumeric(unrecordedRows[0]?.count),
+  };
+}
+
 /** PRレビューの実行が無い期間の、きっかけごとの件数。 */
 export const EMPTY_PR_REVIEW_TRIGGER_COUNTS: PrReviewTriggerCounts = {
   label: 0,
@@ -1112,6 +1302,7 @@ async function fetchSkillVersionRows(
  * - 却下と人の対応に回った結果の上限なしの総数
  *   (上の一覧のクエリは`LIMIT 30`のため、件数から指標を出せない)
  * - 期間内のデプロイの記録と、期間の開始・終了時点の稼働版
+ * - レビュー指摘の採否(結果ごとの件数、人が始めたスレッド、採否の記録が無いレビュー。採否の表が無い間は集めない)
  * - 最後に、PRレビューの実行のPRごとの上位と、起動のきっかけごとの件数
  *
  * work_itemsと結合するクエリはすべて、監査の処理自身の行を除く
@@ -1342,6 +1533,58 @@ export async function collectAuditEvidence(
       ) AS end_sha
   `.fetch();
 
+  // レビュー指摘の採否。投稿した指摘を結果ごとに数え、コメントのidに結びつく件数も数える。結びつかない指摘は、結果の件数に入れない。
+  // 結果は集計時点の値で、期間は指摘を記録した時刻で切る。採否の表を足すmigrationより先にコードが反映された間は、表が無いので空にする。
+  const reviewOutcomeRows = await fetchWhenOutcomeTablesExist(() =>
+    sql`
+      SELECT rf.outcome AS key, count(*) AS count, count(rf.review_comment_id) AS with_comment_id
+      FROM factory.review_findings rf
+      WHERE rf.created_at >= ${start}::timestamptz AND rf.created_at < ${end}::timestamptz
+        AND rf.posted
+      GROUP BY rf.outcome
+    `.fetch(),
+  );
+
+  // 人が始めたスレッドは、最初に読んだ時刻で期間に入れる。
+  const humanThreadRows = await fetchWhenOutcomeTablesExist(() =>
+    sql`
+      SELECT count(*) AS total, count(*) FILTER (WHERE resolved) AS resolved
+      FROM factory.review_human_threads
+      WHERE created_at >= ${start}::timestamptz AND created_at < ${end}::timestamptz
+    `.fetch(),
+  );
+
+  // 投稿したレビューのうち、指摘があるのに採否の行が無いものは、記録できなかったか、記録する前のレビューなので、母数に入れず別に数える。
+  // 投稿しなかったレビュー(投稿のモードが"gated"など)は、指摘の行を持たなくてよいので数えない。
+  // 表が無い間は、投稿したレビューのうち指摘のあるものすべてが未記録になる。
+  const unrecordedReviewRows = await sql`
+    SELECT count(*) AS count
+    FROM factory.reviews rv
+    WHERE rv.created_at >= ${start}::timestamptz AND rv.created_at < ${end}::timestamptz
+      AND rv.posted_review_id IS NOT NULL
+      AND jsonb_array_length(rv.findings) > 0
+      AND NOT EXISTS (SELECT 1 FROM factory.review_findings x WHERE x.review_id = rv.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM factory.reviews r2
+        WHERE r2.posted_review_id = rv.posted_review_id AND r2.id < rv.id
+      )
+  `
+    .fetch()
+    .catch((err: unknown) => {
+      if (!isMissingReviewOutcomeTableError(err)) throw err;
+      return sql`
+        SELECT count(*) AS count
+        FROM factory.reviews rv
+        WHERE rv.created_at >= ${start}::timestamptz AND rv.created_at < ${end}::timestamptz
+          AND rv.posted_review_id IS NOT NULL
+          AND jsonb_array_length(rv.findings) > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM factory.reviews r2
+            WHERE r2.posted_review_id = rv.posted_review_id AND r2.id < rv.id
+          )
+      `.fetch();
+    });
+
   // PRレビューの実行を、PRごとに数える。実行統計の節と同じ期間と除外で、`stage = 'pr_review'`に絞る。
   // ownerとrepoは小文字で束ね、表示には行の綴りの最小の値を使う。PRの総数は、上限で切る前の窓関数で数える。
   const prReviewTopPrRows = await sql`
@@ -1384,6 +1627,11 @@ export async function collectAuditEvidence(
     fix_round_outcomes: toCountsByKey(fixRoundOutcomeRows),
     fix_reply_decisions: toCountsByKey(fixReplyDecisionRows),
     review_findings: toCountsByKey(reviewFindingRows),
+    review_outcomes: toReviewOutcomeEvidence(
+      reviewOutcomeRows,
+      humanThreadRows,
+      unrecordedReviewRows,
+    ),
     notices: toCountsByKey(noticeRows),
     unresolved_notices_in_period: toUnresolvedNoticeGroups(
       unresolvedNoticeRows,

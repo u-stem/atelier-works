@@ -9,7 +9,10 @@ import {
   getWorkItem,
   hasPriorReview,
   insertReview,
+  insertReviewFindings,
+  recordFindingOutcomes,
   updateStatusIfCurrent,
+  upsertHumanThreads,
 } from "../lib/db.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
@@ -19,19 +22,30 @@ import {
   getPr,
   getViewer,
   listPrReviews,
+  listReviewComments,
   listReviewThreads,
+  type PostedReviewComment,
   type ReviewComment,
   type ReviewThread,
   replyReviewComment,
   resolveReviewThread,
 } from "../lib/github.ts";
-import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import { errorMessage, type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { isAllowedLabeler, labelerPolicyFor } from "../lib/poll_support.ts";
 import { markTransientGitHubFailure } from "../lib/pr_review_retry.ts";
 import {
   repoOwnerGateDeps,
   repoOwnerStopReason,
 } from "../lib/repo_owner_gate.ts";
+import {
+  buildFindingRows,
+  type ExpectedComment,
+  type FindingOutcomeUpdate,
+  type HumanThreadSync,
+  matchCommentsToFindings,
+  outcomeOfThreadResponse,
+  type ReviewFindingRow,
+} from "../lib/review_outcomes.ts";
 import {
   type FileDiffHunks,
   isNumber,
@@ -46,6 +60,7 @@ import {
 import {
   isArrayOf,
   isNullOr,
+  isNumberOrNull,
   isShape,
   isStringOrNull,
   parseUntrustedArg,
@@ -63,6 +78,7 @@ import {
   isReviewFindingShape,
   isThreadResponseShape,
   mapFindingsToReviewComments,
+  planThreadSync,
   renderReviewSummary,
   renderThreadReply,
   renderUnresolvedLineSummary,
@@ -125,6 +141,8 @@ export type PrReviewPostInput = {
   readonly binary_unlisted_count: number;
   readonly worktree_dir: string;
   readonly repo_dir: string;
+  /** このレビューを生成した`agent_runs`の行のid。生成を飛ばしたレビューと、記録できなかったレビューはnull。 */
+  readonly agent_run_id: number | null;
 };
 
 export type PrReviewPostDeps = {
@@ -156,8 +174,18 @@ const isFileDiffHunksShape = isShape({
 });
 
 /**
+ * 数かnullか、キーが無い値。
+ * `agent_run_id`を包みに足す前のflowで始まったジョブは、このキーを持たないので、欠けていても落とさない。
+ */
+function isIdOrAbsent(value: unknown): value is number | null | undefined {
+  return value === undefined || isNumberOrNull(value);
+}
+
+/**
  * 生成のstepの結果のうち、Claudeの出力とPRのファイルのパスを含む値。
  * Windmillは引数の`$var:`で始まる文字列を解決するので、flowが1つのJSONの文字列に包んで渡す。
+ * `agent_run_id`は、生成のstepが記録した実行のidで、Claudeの出力ではない。
+ * 包まずに渡す引数は、保護された検査の許可表で決まるので、ほかの生成の結果と同じ包みに入れて渡す。
  */
 export const PR_REVIEW_POST_UNTRUSTED = isShape({
   summary: isString,
@@ -167,6 +195,7 @@ export const PR_REVIEW_POST_UNTRUSTED = isShape({
   pr_files: isStringArray,
   pr_file_hunks: isNullOr(isArrayOf(isFileDiffHunksShape)),
   binary_files: isStringArray,
+  agent_run_id: isIdOrAbsent,
 });
 
 /** `main`の引数のうち、包まずに受け取る値と、包んだ引数(`untrusted`)。 */
@@ -179,6 +208,7 @@ export type SealedPrReviewPostArgs = Omit<
   | "pr_files"
   | "pr_file_hunks"
   | "binary_files"
+  | "agent_run_id"
 > & { readonly untrusted: string };
 
 /** `worktree_dir`が空でなければreviewのworktreeを消す。消せなくても警告を記録するだけで投げない。 */
@@ -243,6 +273,7 @@ export async function runSealedPrReviewPost(
       binary_unlisted_count: args.binary_unlisted_count,
       worktree_dir: args.worktree_dir,
       repo_dir: args.repo_dir,
+      agent_run_id: generated.agent_run_id ?? null,
     },
     deps,
   );
@@ -327,6 +358,9 @@ export async function main(
  * 再実行で作り直した指摘は投稿されないので、それを根拠に投稿済みのレビューの指摘を閉じない。
  * 再利用するときにスレッドの一覧を取得できなければ、記録する前に例外を投げる。
  * 投稿済みのレビューを探すのに要るviewerとレビューの一覧の取得に失敗したら、投稿せずに例外を投げる。
+ *
+ * レビューを記録した後に、指摘ごとの採否を記録する(`recordReviewOutcomes`)。
+ * 採否の記録の失敗は警告にとどめ、投稿と記録は完了させる。
  *
  * GitHubの5xxや通信断で落ちたときは、例外の文の先頭に印を付けて投げる(`markTransientGitHubFailure`)。
  * 印の付いた失敗は、`auto_retry_pr_review`が作業項目の状態で自動に再開する。
@@ -527,6 +561,14 @@ export type PublishReviewInput = {
 };
 
 export type PublishReviewResult = {
+  /**
+   * 採否の記録に使うスレッドの一覧。このラウンドが返信と解決をする前に読んだ状態で、
+   * 許可されていない人の解決は未解決として扱う(`withTrustedResolution`)。
+   * 一覧を読まなかったとき(最初のレビューで、投稿済みのレビューも再利用しないとき)と、読めなかったときは`null`。
+   */
+  readonly syncThreads: readonly ReviewThread[] | null;
+  /** 返信を投稿できた、再レビューの答え。返信できなかった答えは入れない。 */
+  readonly answeredResponses: readonly ThreadResponse[];
   /** 投稿したか再利用したレビューのid。投稿しなかったときはnull。 */
   readonly postedReviewId: number | null;
   /** 投稿済みのレビューを再利用したか。 */
@@ -587,11 +629,14 @@ export async function publishReview(
     );
   let threads: ReviewThread[] = [];
   let threadsReadable = true;
+  let threadsRead = false;
   if (reused) {
     threads = await readThreads();
+    threadsRead = true;
   } else if (priorReview) {
     try {
       threads = await readThreads();
+      threadsRead = true;
     } catch (err) {
       threadsReadable = false;
       log.warn("failed to list review threads for resolving", {
@@ -617,10 +662,15 @@ export async function publishReview(
       : null,
   });
 
+  // 採否の記録に渡す一覧。返信と解決の前の状態を、読めたときだけ渡す。
+  const syncThreads = threadsRead ? threads : null;
+
   // 投稿しないときと再利用するときは、スレッドに書き込まず、残っているものをすべて数える。
   // 再実行ではClaudeがレビューを作り直すので、それを根拠に投稿済みのレビューの指摘を閉じない。
   if (!input.post) {
     return {
+      syncThreads,
+      answeredResponses: [],
       postedReviewId: null,
       reused: false,
       blockingThreadCount: countThreads([]).blockingThreadCount,
@@ -629,6 +679,8 @@ export async function publishReview(
   }
   if (existingId !== null) {
     return {
+      syncThreads,
+      answeredResponses: [],
       postedReviewId: existingId,
       reused: true,
       blockingThreadCount: countThreads([]).blockingThreadCount,
@@ -658,6 +710,8 @@ export async function publishReview(
   const ownerStop = await input.ensureRepoOwner();
   if (ownerStop !== null) {
     return {
+      syncThreads,
+      answeredResponses: [],
       postedReviewId: null,
       reused: false,
       blockingThreadCount: countThreads([]).blockingThreadCount,
@@ -669,6 +723,7 @@ export async function publishReview(
   // 投稿で落ちて再実行されても、返信の後は最後のコメントが変わるので、同じスレッドに二重に答えない。
   // 返信できなかったスレッドは解決せず、次のレビューが答え直す。
   const answeredIds: string[] = [];
+  const answeredResponses: ThreadResponse[] = [];
   for (const { thread, commentId, response } of applied) {
     try {
       await replyReviewComment(
@@ -679,6 +734,7 @@ export async function publishReview(
         commentId,
         renderThreadReply(response, target.work_item_id),
       );
+      answeredResponses.push(response);
       if (resolvesThread(response.decision)) answeredIds.push(thread.id);
     } catch (err) {
       log.warn("failed to answer a review thread", {
@@ -780,6 +836,8 @@ export async function publishReview(
   );
 
   return {
+    syncThreads,
+    answeredResponses,
     postedReviewId,
     reused: false,
     blockingThreadCount,
@@ -872,6 +930,170 @@ export async function sendReviewedNotification(
     return;
   }
   await deps.notify(await deps.getWebhookUrl(), event);
+}
+
+/** `recordReviewOutcomes`が外に頼る処理。テストで差し替える。 */
+export type ReviewOutcomeDeps = {
+  /** 投稿したレビュー1つの行コメントを、GitHubから読む。 */
+  readonly listPostedComments: (
+    reviewId: number,
+  ) => Promise<readonly PostedReviewComment[]>;
+  readonly insertReviewFindings: (
+    reviewId: number,
+    rows: readonly ReviewFindingRow[],
+  ) => Promise<void>;
+  readonly recordFindingOutcomes: (
+    updates: readonly FindingOutcomeUpdate[],
+  ) => Promise<unknown>;
+  readonly upsertHumanThreads: (
+    workItemId: number,
+    reviewId: number,
+    threads: readonly HumanThreadSync[],
+  ) => Promise<void>;
+  readonly log: Logger;
+};
+
+/** `recordReviewOutcomes`の入力。 */
+export type RecordReviewOutcomesInput = {
+  readonly workItemId: number;
+  /** `factory.reviews`に記録した行のid。 */
+  readonly reviewId: number;
+  /** 記録したレビューの全指摘。確信度が`low`の指摘を含む。 */
+  readonly findings: readonly ReviewFinding[];
+  /** 行コメントにした指摘。`comments`と同じ順で、`findings`の要素と同じ参照である。 */
+  readonly commentedFindings: readonly ReviewFinding[];
+  /** 投稿しようとした行コメント。 */
+  readonly comments: readonly ReviewComment[];
+  /** 投稿したか再利用したレビューのid。投稿しなかったときはnull。 */
+  readonly postedReviewId: number | null;
+  /**
+   * 投稿済みのレビューを再利用したか(`PublishReviewResult.reused`)。
+   * 再利用のとき、今回Claudeが作り直した指摘は、投稿済みのコメントと結びつかない。
+   * 指摘の行は、最初に投稿した回が記録しているか、記録できなかった回なので、ここでは作らない。
+   */
+  readonly reused: boolean;
+  /** `PublishReviewResult.syncThreads`。 */
+  readonly syncThreads: readonly ReviewThread[] | null;
+  readonly viewerLogin: string;
+  /** `PublishReviewResult.answeredResponses`。 */
+  readonly answeredResponses: readonly ThreadResponse[];
+};
+
+/**
+ * レビューの採否の記録を書く。指摘ごとの行、再レビューの答えとスレッドの解決から読み取る結果、人が始めたスレッドである。
+ * レビューの投稿と記録(`insertReview`)の後に呼び、投げない。
+ * GitHubの読み取りの失敗(rate limitを含む)も、表が無い間のDBのエラーも、警告にして先へ進む。
+ * 採否の記録の失敗で、投稿済みのレビューと記録を巻き戻さないためである。
+ * 行コメントのidは、投稿したレビューの行コメントを読み、パスと行と本文で指摘に対応づける。
+ * 読めなかったときと、対応づけられなかった指摘は、idを持たない行として記録する。
+ * 投稿したのは、確信度が`low`でない指摘に限る。投稿しなかったレビューの指摘は、投稿していない行として記録する。
+ * 投稿済みのレビューを再利用したとき(`reused`)は、指摘の行を作らない。結果の更新と、人が始めたスレッドの記録は行う。
+ */
+export async function recordReviewOutcomes(
+  input: RecordReviewOutcomesInput,
+  deps: ReviewOutcomeDeps,
+): Promise<void> {
+  const { log } = deps;
+  const { findings, postedReviewId } = input;
+  const indexOf = new Map(findings.map((item, index) => [item, index]));
+  const postedIndexes = new Set<number>();
+  if (postedReviewId !== null) {
+    findings.forEach((item, index) => {
+      if (isPostableFinding(item)) postedIndexes.add(index);
+    });
+  }
+
+  let commentIds = new Map<number, number>();
+  if (!input.reused && postedReviewId !== null && input.comments.length > 0) {
+    const expected: ExpectedComment[] = [];
+    input.comments.forEach((comment, position) => {
+      const target = input.commentedFindings[position];
+      const index = target === undefined ? undefined : indexOf.get(target);
+      if (index === undefined) return;
+      expected.push({
+        index,
+        path: comment.path,
+        line: comment.line,
+        body: comment.body,
+      });
+    });
+    try {
+      commentIds = matchCommentsToFindings(
+        expected,
+        await deps.listPostedComments(postedReviewId),
+      );
+      if (commentIds.size < expected.length) {
+        log.warn("could not match every posted line comment to a finding", {
+          work_item_id: input.workItemId,
+          posted_comments: expected.length,
+          matched: commentIds.size,
+        });
+      }
+    } catch (err) {
+      log.warn("failed to list the posted line comments; recording without", {
+        work_item_id: input.workItemId,
+        error: errorMessage(err),
+      });
+    }
+  }
+
+  if (!input.reused) {
+    try {
+      await deps.insertReviewFindings(
+        input.reviewId,
+        buildFindingRows(findings, postedIndexes, commentIds),
+      );
+    } catch (err) {
+      log.warn("failed to record the findings of the review", {
+        work_item_id: input.workItemId,
+        error: errorMessage(err),
+      });
+    }
+  }
+
+  const plan =
+    input.syncThreads === null
+      ? null
+      : planThreadSync(input.syncThreads, input.viewerLogin);
+  const fromThreads: FindingOutcomeUpdate[] = (plan?.findingOutcomes ?? []).map(
+    ({ commentId, outcome }) => ({
+      commentId,
+      outcome,
+      source: "thread_sync",
+    }),
+  );
+  const fromAnswers: FindingOutcomeUpdate[] = input.answeredResponses.map(
+    (response) => ({
+      commentId: response.thread_id,
+      outcome: outcomeOfThreadResponse(response.decision),
+      source: "rereview",
+    }),
+  );
+  const updates = [...fromThreads, ...fromAnswers];
+  if (updates.length > 0) {
+    try {
+      await deps.recordFindingOutcomes(updates);
+    } catch (err) {
+      log.warn("failed to record the outcomes of the findings", {
+        work_item_id: input.workItemId,
+        error: errorMessage(err),
+      });
+    }
+  }
+  if (plan !== null && plan.humanThreads.length > 0) {
+    try {
+      await deps.upsertHumanThreads(
+        input.workItemId,
+        input.reviewId,
+        plan.humanThreads,
+      );
+    } catch (err) {
+      log.warn("failed to record the threads that a person started", {
+        work_item_id: input.workItemId,
+        error: errorMessage(err),
+      });
+    }
+  }
 }
 
 /** `runPrReviewPost`のworktreeの削除を除いた本体。 */
@@ -1030,8 +1252,33 @@ async function postReview(
     findings,
     blockingThreadCount,
     postedReviewId,
+    agentRunId: input.agent_run_id,
   });
-  await insertReview(record);
+  const reviewId = await insertReview(record);
+
+  // 指摘ごとの採否の記録は、レビューの記録の後に書く。書けなくても、投稿と記録は完了させる。
+  await recordReviewOutcomes(
+    {
+      workItemId: work_item_id,
+      reviewId,
+      findings,
+      commentedFindings: commentedFindingsOf(postable, droppedFindings),
+      comments,
+      postedReviewId: published.postedReviewId,
+      reused: published.reused,
+      syncThreads: published.syncThreads,
+      viewerLogin,
+      answeredResponses: published.answeredResponses,
+    },
+    {
+      listPostedComments: (id) =>
+        listReviewComments(client, owner, repo, pr_number, id),
+      insertReviewFindings,
+      recordFindingOutcomes,
+      upsertHumanThreads,
+      log,
+    },
+  );
 
   const moved = await updateStatusIfCurrent(
     work_item_id,

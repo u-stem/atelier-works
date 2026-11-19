@@ -296,7 +296,9 @@ migrationは追加だけにし、列やテーブルの名前は変えない。
 | `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
 | `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)、失敗の理由(`error`)も持つ。DBの掃除は、最後に成功した反映の行を、期限を過ぎても残す。反映の承認の判定が、その時刻を基準にするためである |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
-| `reviews` | pr_reviewの実行1回ごとの判定、修正必須の指摘の有無(`result`)、総評、指摘、投稿したレビューのID |
+| `reviews` | pr_reviewの実行1回ごとの判定、修正必須の指摘の有無(`result`)、総評、指摘、投稿したレビューのID。レビューを生成したClaudeの実行(`agent_run_id`)も持つ |
+| `review_findings` | レビューの指摘1件ごとの記録。投稿したか、行コメントのID、その後の結果(直した、見送りが了承された、など)を持つ。行は`reviews`の削除にあわせて消える([指摘の採否の記録](internals/pr-workflow/review.md#指摘の採否の記録)) |
+| `review_human_threads` | Factoryでなく人が始めたレビュースレッド。最初のコメントのIDで一意で、解決済みかを持つ。見逃しの代理の指標に使う。最初に読んだレビューが消えても、行と作成時刻は残る。作業項目のIDは、外部キーを持たず値だけで参照する。作業項目を消すと、その作業項目の行も一緒に消える。ただし、同じPRに終端でない作業項目が残る間は、行を消さない。新しい作業項目が同じスレッドを入れ直して、別の期間にもう一度数えるのを防ぐためである |
 | `fix_rounds` | pr_fixの実行1回ごとの結果、返信、コミット |
 | `implement_rounds` | 実装フローのClaude実行1ラウンドごとの記録 |
 | `issue_proposals` | Issue化の提案の題名と本文、決定の履歴 |
@@ -633,6 +635,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/metadata_patch_manifest` | script | [LIB] メタデータのパッチの検査 |
 | `f/factory/lib/metadata_patch_verify` | script | [LIB] メタデータのパッチの適用条件の検査 |
 | `f/factory/lib/model_text` | script | [LIB] モデルの出力の文字列の整形 |
+| `f/factory/lib/review_outcomes` | script | [LIB] レビュー指摘の採否 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
 | `f/factory/lib/stream_cap` | script | [LIB] 上限つきのストリームの読み取り |
 | `f/factory/lib/work_item_stop` | script | [LIB] 人が中止した作業項目の停止の確認 |
