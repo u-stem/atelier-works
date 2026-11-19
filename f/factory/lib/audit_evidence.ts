@@ -26,7 +26,7 @@ import {
   type SqlClient,
   type SqlRow,
 } from "./db.ts";
-import { formatJstDate, jstWeekStart } from "./jst.ts";
+import { formatJstDate, jstWeekStart, WEEK_MS } from "./jst.ts";
 import { maskSecrets } from "./log.ts";
 import {
   adoptionRate,
@@ -1585,8 +1585,6 @@ function toReviewQualityThreads(
     .filter((entry) => entry.week.length > 0)
     .sort((a, b) => (a.week < b.week ? -1 : a.week > b.week ? 1 : 0));
 }
-
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** 期間の終わりを基準にした、週別の窓。最後の週は終わりの直前を含む週で、先頭はその7週前である。 */
 function reviewQualityWindow(period: AuditPeriod): {

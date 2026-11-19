@@ -9,6 +9,7 @@ import {
   INVALID_JST_MINUTE,
   JST_OFFSET_MS,
   jstWeekStart,
+  WEEK_MS,
 } from "../../f/factory/lib/jst.ts";
 
 describe("the text for a time that is not a time", () => {
@@ -129,5 +130,13 @@ describe("jstWeekStart", () => {
 
   test("returns NaN for a time that is not a time", () => {
     expect(jstWeekStart(Number.NaN)).toBeNaN();
+  });
+
+  test("starts the next week exactly one week length after the start of a week", () => {
+    expect(jstWeekStart(MONDAY_START + WEEK_MS)).toBe(MONDAY_START + WEEK_MS);
+  });
+
+  test("puts the start of the week before one week length earlier", () => {
+    expect(jstWeekStart(MONDAY_START - 1)).toBe(MONDAY_START - WEEK_MS);
   });
 });
