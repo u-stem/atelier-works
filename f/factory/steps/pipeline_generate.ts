@@ -41,6 +41,7 @@ import {
   REQUIREMENTS_BASE_DIR,
   TEMPLATE_RELATIVE_PATH,
 } from "../lib/requirements_template.ts";
+import { skillsFor } from "../lib/skill_registry.ts";
 import {
   type Diagram,
   isRecord,
@@ -443,7 +444,7 @@ export async function main(
     ghToken,
   });
   const systemPrompt = await buildSystemPrompt({
-    skillNames: ["factory-requirements", "drawio-diagram"],
+    skillNames: skillsFor("generate_requirements"),
     factoryCloneDir: factoryClone.dir,
   });
 

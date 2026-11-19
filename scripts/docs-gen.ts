@@ -8,6 +8,8 @@
 // - flows: `f/factory`のflowの一覧と起動元(`docs/architecture.md`)。
 //   起動元は`scripts/launch-graph.ts`の表から作る
 // - assets: `f/factory`のscriptとflowのpathとsummaryの一覧(`docs/architecture.md`)
+// - skills: 工程ごとに注入するスキルと共通のスキルの表(`docs/architecture.md`)。
+//   `f/factory/lib/skill_registry.ts`から作る
 // flowごとの図のデータ(`console/src/generated/flows.json`)も同じ元から作る。
 // Consoleのジョブ画面と作業項目の詳細が図にして出す。
 // READMEのmiseタスクの表は日本語の説明を手で書くので生成せず、
@@ -20,6 +22,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { handlerPathFor } from "../f/factory/lib/approval_support.ts";
+import {
+  COMMON_SKILL_NAMES,
+  SKILLS_BY_STAGE,
+} from "../f/factory/lib/skill_registry.ts";
 import { type ApprovalRequestKind, isRecord } from "../f/factory/lib/types.ts";
 import {
   buildFlowsData,
@@ -133,6 +139,30 @@ export function renderAssets(entries: readonly AssetEntry[]): string {
   return ["| path | 種別 | summary |", "| --- | --- | --- |", ...rows].join(
     "\n",
   );
+}
+
+/** スキルの名前を、コードの書式で並べる。 */
+function skillList(names: readonly string[]): string {
+  return names.map((name) => `\`${name}\``).join("、");
+}
+
+/**
+ * 工程ごとに注入するスキルの表にする。並びは登録簿の順。
+ * 共通のスキルは、どの工程にも先頭に注入されるので、全行に同じ値を書く。
+ */
+export function renderSkills(
+  byStage: Readonly<Record<string, readonly string[]>>,
+  common: readonly string[],
+): string {
+  const rows = Object.entries(byStage).map(
+    ([stage, names]) =>
+      `| \`${stage}\` | ${skillList(names)} | ${skillList(common)} |`,
+  );
+  return [
+    "| 工程 | 注入するスキル | 共通のスキル |",
+    "| --- | --- | --- |",
+    ...rows,
+  ].join("\n");
 }
 
 /**
@@ -353,6 +383,9 @@ function renderBlock(name: string): string | null {
     return renderFlows(loadFlows(), LAUNCH_EDGES, describeOrigin);
   }
   if (name === "assets") return renderAssets(loadAssets());
+  if (name === "skills") {
+    return renderSkills(SKILLS_BY_STAGE, COMMON_SKILL_NAMES);
+  }
   return null;
 }
 

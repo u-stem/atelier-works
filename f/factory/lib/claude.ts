@@ -22,6 +22,7 @@ import {
   logger,
   maskSecrets,
 } from "./log.ts";
+import { COMMON_SKILL_NAMES } from "./skill_registry.ts";
 import {
   checkStop,
   defaultStopCheck,
@@ -112,12 +113,6 @@ const defaultWriteTempFile: WriteTempFile = async (content) => {
     },
   };
 };
-
-/**
- * どの実行にも先頭に注入するスキル。Factoryが生成する文章に共通の書き方を定める。
- * 呼び出し側の`skillNames`に書き忘れても規則が抜けないよう、ここで必ず足す。
- */
-export const COMMON_SKILL_NAMES: readonly string[] = ["factory-writing"];
 
 /**
  * 1回の`buildSystemPrompt`が注入したスキルの版。

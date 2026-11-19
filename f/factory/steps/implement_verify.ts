@@ -30,7 +30,6 @@ import {
   type ChangeInspection,
   docDirGuardFor,
   GITLEAKS_TIMEOUT_MS,
-  IMPLEMENT_SKILL_NAME,
   type ImplementLoopResult,
   implementContextHasDesign,
   implementOutputContractNote,
@@ -53,6 +52,7 @@ import {
   worktreeLockFor,
 } from "../lib/process_lock.ts";
 import { implementFixPrompt } from "../lib/prompts.ts";
+import { skillsFor } from "../lib/skill_registry.ts";
 import { isShape, parseUntrustedArg } from "../lib/untrusted_arg.ts";
 import {
   assertWorktreeGitPointer,
@@ -178,7 +178,7 @@ export async function main(
   }
   const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");
   const systemPrompt = await buildSystemPrompt({
-    skillNames: [IMPLEMENT_SKILL_NAME],
+    skillNames: skillsFor("implement_fix"),
     factoryCloneDir: context.factory_clone_dir,
   });
   const worktreeDir = context.worktree_dir;

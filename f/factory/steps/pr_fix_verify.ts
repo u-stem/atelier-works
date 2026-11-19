@@ -90,6 +90,7 @@ import {
   FIX_SCHEMA_WITH_DESIGN_GAP,
   fixPrompt,
 } from "../lib/prompts.ts";
+import { skillsFor } from "../lib/skill_registry.ts";
 import { type FixOutcome, type FixReply, isString } from "../lib/types.ts";
 import {
   isArrayOf,
@@ -1110,7 +1111,7 @@ export async function main(
           checkFailures,
         });
         const systemPrompt = await buildSystemPrompt({
-          skillNames: ["factory-fix"],
+          skillNames: skillsFor("pr_fix_verify_retry"),
           factoryCloneDir: factory_clone_dir,
         });
         try {
@@ -1229,7 +1230,7 @@ async function runCiRetry(input: CiRetryInput): Promise<CiFixApplyResult> {
       }),
     startClaude: async (prompt) => {
       const systemPrompt = await buildSystemPrompt({
-        skillNames: ["factory-fix"],
+        skillNames: skillsFor("pr_fix_verify_retry"),
         factoryCloneDir: input.factoryCloneDir,
       });
       try {

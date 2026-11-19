@@ -30,6 +30,7 @@ import {
   type WriteTempFile,
 } from "../f/factory/lib/claude.ts";
 import { REVIEW_SCHEMA, reviewPrompt } from "../f/factory/lib/prompts.ts";
+import { skillsFor } from "../f/factory/lib/skill_registry.ts";
 import { type CommandRunner, runCommand } from "../f/factory/lib/workspace.ts";
 import {
   buildEvalReport,
@@ -56,7 +57,6 @@ const RUN_TIMEOUT_MS = 10 * 60 * 1000;
 const EVAL_MAX_TURNS = 5;
 /** 囲みの目印。ケースのidなど、欠陥を示す語を含めない固定の値にする。 */
 const EVAL_NONCE = "review-eval";
-const REVIEW_SKILL_NAMES = ["factory-review"];
 
 /** `config.ts`の`MODEL_NAME`と同じ形。先頭が`-`の値は、オプションとして読まれるので通さない。 */
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._[\]-]*$/;
@@ -475,7 +475,7 @@ export async function runEvaluation(
   try {
     for (const ref of options.refs) {
       const systemPrompt = await buildSystemPrompt({
-        skillNames: REVIEW_SKILL_NAMES,
+        skillNames: skillsFor("pr_review"),
         factoryCloneDir: deps.repoRoot,
         readFile: (path) =>
           deps.readSkillAtRef(ref, relative(deps.repoRoot, path)),

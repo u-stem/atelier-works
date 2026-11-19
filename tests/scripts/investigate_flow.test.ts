@@ -244,6 +244,7 @@ describe("the modules that the generate step imports", () => {
       "../lib/investigate_workspace.ts",
       "../lib/log.ts",
       "../lib/model_policy.ts",
+      "../lib/skill_registry.ts",
       "../lib/workspace.ts",
     ]);
   });

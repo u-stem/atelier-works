@@ -90,6 +90,8 @@ DBから読んだ文字列は、すべて`sanitizeCell`を通す。
 ### スキルの版
 
 Claudeの実行は、システムプロンプトへ注入したスキルの版を`agent_runs`に残す(`skills`、`skill_clone_sha`)。
+どのスキルをどの工程に注入するかは、`f/factory/lib/skill_registry.ts`の登録簿が決める([スキルの登録簿](../architecture.md#スキルの登録簿))。
+登録簿の工程の名前は、`agent_runs.stage`の値と同じである。
 `skills`の要素は、パス、SKILL.mdのsha256、同梱ファイル(`template.md`など)のsha256である。
 同梱ファイルが無いスキルは、同梱ファイルのsha256をnullにする。
 同梱ファイルの一覧や読み取りに失敗したときは、nullではなく`unreadable`を入れて、警告を残す。
