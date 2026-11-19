@@ -359,7 +359,7 @@ export type ReviewQualityRow = {
   readonly run_count: number;
   readonly cost_usd: number;
   readonly counts: OutcomeCounts;
-  /** この行の実行と指摘のうち、最も早い記録時刻(ISO)。版の初出の順を決める。読めなければ空文字。 */
+  /** この行の実行と指摘のうち、窓の中で最も早い記録時刻(ISO)。同じ週の版の前後を決める。版を入れた日ではない。読めなければ空文字。 */
   readonly first_at: string;
 };
 
@@ -790,9 +790,14 @@ function reviewOutcomesSection(evidence: AuditEvidence): EvidenceSection {
 export const NO_REVIEW_QUALITY_LINE =
   "窓の中にレビューの実行も採否の記録も無い";
 
-/** 版の合計の1つ。同じ版の週ごとの行を足し合わせた値である。 */
-type VersionTotals = {
+/**
+ * 同じ版が時間の順に続いた区間の合計。同じ版でも、別の版を挟んだ前後は別の区間である。
+ * `first_at`は区間の中で最も早い記録の時刻で、窓の中の記録から取るので、版を入れた日ではない。
+ */
+type VersionSegment = {
   readonly sha: string;
+  readonly first_week: string;
+  readonly last_week: string;
   readonly first_at: string;
   readonly run_count: number;
   readonly cost_usd: number;
@@ -813,35 +818,55 @@ function addCounts(a: OutcomeCounts, b: OutcomeCounts): OutcomeCounts {
   return sum;
 }
 
-/**
- * 版ごとに、週ごとの行を足し合わせ、初めて現れた時刻の順に並べる。
- * 記録の無い行(`sha`がnull)は版でないので含めない。
- * 版が週をまたいで入れ替わっても、同じ版の行は1つにまとまる。
- * 時刻が同じか読めない版は、ハッシュの昇順にする。
- */
-function versionTotalsInOrder(
-  rows: readonly ReviewQualityRow[],
-): VersionTotals[] {
-  const bySha = new Map<string, VersionTotals>();
-  for (const row of rows) {
-    if (row.sha === null) continue;
-    const existing = bySha.get(row.sha);
-    bySha.set(row.sha, {
-      sha: row.sha,
-      first_at: earlierTime(existing?.first_at ?? "", row.first_at),
-      run_count: (existing?.run_count ?? 0) + row.run_count,
-      cost_usd: (existing?.cost_usd ?? 0) + row.cost_usd,
-      counts: addCounts(existing?.counts ?? emptyOutcomeCounts(), row.counts),
-    });
+/** 週の昇順、同じ週は最初の記録が早い順(読めないものは後)、それも同じならハッシュの昇順。 */
+function compareRowsInTime(a: ReviewQualityRow, b: ReviewQualityRow): number {
+  if (a.week !== b.week) return a.week < b.week ? -1 : 1;
+  if (a.first_at !== b.first_at) {
+    if (a.first_at === "") return 1;
+    if (b.first_at === "") return -1;
+    return a.first_at < b.first_at ? -1 : 1;
   }
-  return [...bySha.values()].sort((a, b) => {
-    if (a.first_at !== b.first_at) {
-      if (a.first_at === "") return 1;
-      if (b.first_at === "") return -1;
-      return a.first_at < b.first_at ? -1 : 1;
+  return compareShaNullLast(a.sha, b.sha);
+}
+
+/**
+ * 行を時間の順に並べ、同じ版が続く行を1つの区間にまとめる。
+ * 記録の無い行(`sha`がnull)は版でないので、区間に入れず、区間を分ける理由にもしない。
+ * 版Aから、Bへ、Aへと戻ると、区間は3つになり、2つ目のAはBの後の別の区間である。
+ * 同じ週に版が2つあるときは、行の最初の記録が早い版を先に置く。週の中での入れ替わりの回数までは分からない。
+ */
+function versionSegmentsInOrder(
+  rows: readonly ReviewQualityRow[],
+): VersionSegment[] {
+  const segments: VersionSegment[] = [];
+  const ordered = rows
+    .filter((row) => row.sha !== null)
+    .sort(compareRowsInTime);
+  for (const row of ordered) {
+    if (row.sha === null) continue;
+    const last = segments[segments.length - 1];
+    if (last === undefined || last.sha !== row.sha) {
+      segments.push({
+        sha: row.sha,
+        first_week: row.week,
+        last_week: row.week,
+        first_at: row.first_at,
+        run_count: row.run_count,
+        cost_usd: row.cost_usd,
+        counts: row.counts,
+      });
+      continue;
     }
-    return a.sha < b.sha ? -1 : a.sha > b.sha ? 1 : 0;
-  });
+    segments[segments.length - 1] = {
+      ...last,
+      last_week: row.week,
+      first_at: earlierTime(last.first_at, row.first_at),
+      run_count: last.run_count + row.run_count,
+      cost_usd: last.cost_usd + row.cost_usd,
+      counts: addCounts(last.counts, row.counts),
+    };
+  }
+  return segments;
 }
 
 function formatSignedPoints(points: number): string {
@@ -948,11 +973,17 @@ function formatFirstDay(firstAt: string): string {
   return formatJstDate(Date.parse(firstAt)) ?? UNSET_LABEL;
 }
 
+function formatSegmentWeeks(segment: VersionSegment): string {
+  return segment.first_week === segment.last_week
+    ? `${segment.first_week}週`
+    : `${segment.first_week}週〜${segment.last_week}週`;
+}
+
 function formatVersionVerdictLine(
-  before: VersionTotals,
-  after: VersionTotals,
+  before: VersionSegment,
+  after: VersionSegment,
 ): string {
-  const head = `版${before.sha} → 版${after.sha}(後の版の初出 ${formatFirstDay(after.first_at)})`;
+  const head = `版${before.sha} → 版${after.sha}(後の区間の最初の記録 ${formatFirstDay(after.first_at)})`;
   const comparison = compareVersions(before.counts, after.counts);
   if (comparison.kind === "not_compared") {
     return sanitizeCell(
@@ -966,21 +997,22 @@ function formatVersionVerdictLine(
   );
 }
 
-function formatVersionTotalsLine(version: VersionTotals): string {
-  const { counts } = version;
+function formatVersionTotalsLine(segment: VersionSegment): string {
+  const { counts } = segment;
   return sanitizeCell(
-    `版${version.sha}の合計(初出 ${formatFirstDay(version.first_at)}): 実行${version.run_count} / コスト $${version.cost_usd.toFixed(2)} / 確定した指摘${confirmedCount(counts)}件(直した${counts.fixed}件 / 了承${counts.skip_accepted}件 / 反論${counts.skip_rejected}件)`,
+    `版${segment.sha}の合計(${formatSegmentWeeks(segment)}、区間の最初の記録 ${formatFirstDay(segment.first_at)}): 実行${segment.run_count} / コスト $${segment.cost_usd.toFixed(2)} / 確定した指摘${confirmedCount(counts)}件(直した${counts.fixed}件 / 了承${counts.skip_accepted}件 / 反論${counts.skip_rejected}件)`,
     SANITIZE_CELL_MAX,
   );
 }
 
 /**
  * レビューのスキルの版の前後比較の節。
- * 版は、窓の全体で版ごとに合計し、初出の順に隣り合う2つを比べる。
+ * 行を時間の順に、同じ版が続く区間に分け、隣り合う2つの区間を、区間ごとの合計で比べる。
+ * 版を元に戻したときは、戻した後の区間を、直前の別の版の区間と比べる。同じ版の前後の区間を足し合わせない。
  * 前後のどちらかで確定した指摘が`MIN_CONFIRMED_FINDINGS`未満なら、割合も差も出さず、件数だけを示す。
  * 差が有意かは判定しない。
  * 版の記録が無い行は、比べない。数だけを固定の行に載せる。
- * 比較の行は新しい切り替えを先にし、版の合計の行をその後に置くので、行を削るときは合計から落ちる。
+ * 比較の行は新しい切り替えを先にし、区間の合計の行をその後に置くので、行を削るときは合計から落ちる。
  */
 function reviewVersionComparisonSection(
   evidence: AuditEvidence,
@@ -990,18 +1022,19 @@ function reviewVersionComparisonSection(
   if (rows.length === 0) {
     return { heading, fixed: [NO_REVIEW_QUALITY_LINE], lines: [] };
   }
-  const versions = versionTotalsInOrder(rows);
+  const segments = versionSegmentsInOrder(rows);
+  const versionCount = new Set(segments.map((segment) => segment.sha)).size;
   const unrecorded = rows.filter((row) => row.sha === null);
-  const [only] = versions;
+  const [only] = segments;
   const countLine =
     only === undefined
       ? "版を記録した実行は無い"
-      : versions.length === 1
+      : segments.length === 1
         ? `窓の中の版は1つ(版${only.sha})で、比べる切り替えは無い`
-        : `窓の中の版: ${versions.length}つ`;
+        : `窓の中の版: ${versionCount}つ、切り替え${segments.length - 1}回`;
   const fixed = [
     sanitizeCell(
-      `版はレビューのスキルの本文で決める。初出の順に、隣り合う2つの版を、版ごとの合計で比べる。前後とも確定した指摘が${MIN_CONFIRMED_FINDINGS}件以上のときだけ割合を並べ、有意差は判定しない`,
+      `版はレビューのスキルの本文で決める。時間の順に、同じ版が続く区間に分け、隣り合う2つの区間を、区間ごとの合計で比べる。前の版に戻したときも、戻した後は別の区間である。前後とも確定した指摘が${MIN_CONFIRMED_FINDINGS}件以上のときだけ割合を並べ、有意差は判定しない`,
       SANITIZE_CELL_MAX,
     ),
     sanitizeCell(countLine, SANITIZE_CELL_MAX),
@@ -1014,7 +1047,7 @@ function reviewVersionComparisonSection(
       ),
     );
   }
-  const newestFirst = [...versions].reverse();
+  const newestFirst = [...segments].reverse();
   const verdicts = newestFirst.flatMap((after, index) => {
     const before = newestFirst[index + 1];
     return before === undefined

@@ -3143,11 +3143,18 @@ describe("the skill version comparison section", () => {
     );
   });
 
-  test("names the first day of the later version in Japan time", () => {
+  test("names the first record of the later segment in Japan time", () => {
     const evidence = qualityEvidence(TWO_VERSIONS);
     expect(sectionOf(evidence, COMPARISON_SECTION)?.lines[0]).toContain(
-      "後の版の初出 2026-09-15",
+      "後の区間の最初の記録 2026-09-15",
     );
+  });
+
+  test("does not call the first record in the window the first appearance of a version", () => {
+    const evidence = qualityEvidence(TWO_VERSIONS);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.join("\n"),
+    ).not.toContain("初出");
   });
 
   test("shows the skip acceptance without a difference when a version decided no skip", () => {
@@ -3164,7 +3171,7 @@ describe("the skill version comparison section", () => {
     );
   });
 
-  test("orders the versions by the first time they appear and not by the hash", () => {
+  test("orders the versions by the first record and not by the hash", () => {
     const evidence = qualityEvidence([
       qualityRow({
         week: "2026-09-07",
@@ -3264,7 +3271,7 @@ describe("the skill version comparison section", () => {
     );
   });
 
-  test("lists the total of each version with its runs, even when it does not compare", () => {
+  test("lists the total of each segment with its weeks and runs, even when it does not compare", () => {
     const evidence = qualityEvidence([
       qualityRow({
         week: "2026-09-07",
@@ -3284,9 +3291,145 @@ describe("the skill version comparison section", () => {
         line.includes("の合計"),
       ),
     ).toEqual([
-      `版${V2}の合計(初出 2026-09-14): 実行9 / コスト $1.50 / 確定した指摘0件(直した0件 / 了承0件 / 反論0件)`,
-      `版${V1}の合計(初出 2026-09-07): 実行7 / コスト $1.50 / 確定した指摘0件(直した0件 / 了承0件 / 反論0件)`,
+      `版${V2}の合計(2026-09-14週、区間の最初の記録 2026-09-14): 実行9 / コスト $1.50 / 確定した指摘0件(直した0件 / 了承0件 / 反論0件)`,
+      `版${V1}の合計(2026-09-07週、区間の最初の記録 2026-09-07): 実行7 / コスト $1.50 / 確定した指摘0件(直した0件 / 了承0件 / 反論0件)`,
     ]);
+  });
+
+  test("shows the first and the last week of a segment that spans weeks", () => {
+    const evidence = qualityEvidence([
+      qualityRow({ week: "2026-09-07", sha: V1 }),
+      qualityRow({ week: "2026-09-14", sha: V1 }),
+    ]);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.find((line) =>
+        line.includes("の合計"),
+      ),
+    ).toContain("2026-09-07週〜2026-09-14週");
+  });
+
+  // 版Aを入れ、Bに替え、Aに戻した窓。Aの前の区間と後の区間は、割合が違う。
+  const ROLLBACK = [
+    qualityRow({
+      week: "2026-09-07",
+      sha: V1,
+      counts: { ...emptyOutcomeCounts(), fixed: 20 },
+      first_at: "2026-09-07T01:00:00.000Z",
+    }),
+    qualityRow({
+      week: "2026-09-14",
+      sha: V2,
+      counts: { ...emptyOutcomeCounts(), fixed: 10, answered: 10 },
+      first_at: "2026-09-14T01:00:00.000Z",
+    }),
+    qualityRow({
+      week: "2026-09-21",
+      sha: V1,
+      counts: { ...emptyOutcomeCounts(), answered: 20 },
+      first_at: "2026-09-21T01:00:00.000Z",
+    }),
+  ];
+
+  test("compares a rollback as two switches, the way the versions changed", () => {
+    const evidence = qualityEvidence(ROLLBACK);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)
+        ?.lines.filter((line) => line.includes("→ 版"))
+        .map((line) => line.slice(0, line.indexOf("(")).trim()),
+    ).toEqual([`版${V2} → 版${V1}`, `版${V1} → 版${V2}`]);
+  });
+
+  test("compares the version before the switch only with the weeks before the switch", () => {
+    const evidence = qualityEvidence(ROLLBACK);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.find((line) =>
+        line.startsWith(`版${V1} → 版${V2}`),
+      ),
+    ).toContain("採用率 100%→50%");
+  });
+
+  test("compares the version after the rollback only with the weeks after the rollback", () => {
+    const evidence = qualityEvidence(ROLLBACK);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.find((line) =>
+        line.startsWith(`版${V2} → 版${V1}`),
+      ),
+    ).toContain("採用率 50%→0%");
+  });
+
+  test("lists the total of each segment of a rollback, so that a version appears twice", () => {
+    const evidence = qualityEvidence(ROLLBACK);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.filter((line) =>
+        line.startsWith(`版${V1}の合計`),
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("counts the versions and the switches of a rollback in a fixed line", () => {
+    const evidence = qualityEvidence(ROLLBACK);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.fixed.join("\n")).toContain(
+      "窓の中の版: 2つ、切り替え2回",
+    );
+  });
+
+  test("puts the earlier record of two versions in one week first", () => {
+    const evidence = qualityEvidence([
+      qualityRow({
+        week: "2026-09-14",
+        sha: V1,
+        counts: { ...emptyOutcomeCounts(), fixed: 20 },
+        first_at: "2026-09-17T01:00:00.000Z",
+      }),
+      qualityRow({
+        week: "2026-09-14",
+        sha: V2,
+        counts: { ...emptyOutcomeCounts(), fixed: 20 },
+        first_at: "2026-09-14T01:00:00.000Z",
+      }),
+    ]);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.lines[0]).toStartWith(
+      `版${V2} → 版${V1}`,
+    );
+  });
+
+  test("joins the weeks of one version that an unrecorded row separates", () => {
+    const evidence = qualityEvidence([
+      qualityRow({
+        week: "2026-09-07",
+        sha: V1,
+        counts: { ...emptyOutcomeCounts(), fixed: 10 },
+      }),
+      qualityRow({ week: "2026-09-14", sha: null }),
+      qualityRow({
+        week: "2026-09-21",
+        sha: V1,
+        counts: { ...emptyOutcomeCounts(), fixed: 10 },
+      }),
+    ]);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.filter((line) =>
+        line.includes("の合計"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("does not compare a segment of a rollback that has too few confirmed findings", () => {
+    const evidence = qualityEvidence([
+      ROLLBACK[0] ?? qualityRow({}),
+      ROLLBACK[1] ?? qualityRow({}),
+      qualityRow({
+        week: "2026-09-21",
+        sha: V1,
+        counts: { ...emptyOutcomeCounts(), answered: 5 },
+        first_at: "2026-09-21T01:00:00.000Z",
+      }),
+    ]);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.find((line) =>
+        line.startsWith(`版${V2} → 版${V1}`),
+      ),
+    ).toContain("比較しない(母数不足。確定した指摘 前20件 / 後5件)");
   });
 
   test("keeps the comparison lines ahead of the total lines so that the totals are dropped first", () => {
