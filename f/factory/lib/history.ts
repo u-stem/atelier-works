@@ -4,6 +4,7 @@
 // 検証のハッシュはSQL(`factory.history_verify`)が計算するので、言語をまたぐ正規化は持たない。
 
 import type { SqlClient, SqlRow } from "./db.ts";
+import { OPERATOR_CANCELLED_NOTE } from "./operator_cancel.ts";
 import { isNumber, isOneOf, isString } from "./types.ts";
 
 /**
@@ -62,7 +63,7 @@ export const HISTORY_NOTE_RULES: readonly HistoryNoteRule[] = [
   { prefix: "auto_retry:", code: "auto_retry" },
   { prefix: "retry_work_item:", code: "manual_retry" },
   {
-    prefix: "console: operator_cancelled",
+    prefix: OPERATOR_CANCELLED_NOTE,
     exact: true,
     toStatus: "cancelled",
     code: "operator_cancelled",
