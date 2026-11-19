@@ -140,7 +140,7 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   // 後者は独立したログ(`job_failures`、`deployments`、解決済みの`notices`)に使う。
   retention_work_items_days: 90,
   retention_logs_days: 30,
-  // 遷移の履歴(`history_events`)の保持期間。連鎖の最後の記録から数え、過ぎた連鎖を丸ごと削除する。
+  // 遷移の履歴(`history_events`)の保持期間。作業項目が無い連鎖について、最後の記録から数え、過ぎた連鎖を丸ごと削除する。
   retention_history_days: 365,
   // `backup.ts`が残すバックアップの世代の数。
   backup_keep_generations: 7,

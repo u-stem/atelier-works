@@ -18,6 +18,8 @@ DROP FUNCTION factory.history_record_transition();
 
 DROP FUNCTION factory.history_append(bigint, text, text, text, text, text, jsonb, timestamptz);
 
+DROP FUNCTION factory.history_append_unlocked(bigint, text, text, text, text, text, jsonb, timestamptz);
+
 DROP FUNCTION factory.history_row_hash(text, bigint, integer, text, text, text, text, text, jsonb, timestamptz);
 
 DROP FUNCTION factory.history_lock_key(bigint);

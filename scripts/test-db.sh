@@ -78,6 +78,7 @@ FIX_ROUNDS_DESIGN_GAP_MIGRATION="20261028110000_fix_rounds_design_gap.up.sql"
 ACTIVE_PR_REVIEW_MIGRATION="20261102100000_active_pr_review_key.up.sql"
 INVESTIGATE_MIGRATION="20261102120000_investigate_work_items.up.sql"
 INVESTIGATE_SINGLETON_MIGRATION="20261104100000_investigate_singleton.up.sql"
+HISTORY_EVENTS_MIGRATION="20261119100000_history_events.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -1334,6 +1335,65 @@ verify_fix_rounds_design_gap_rollback() {
   log "fix_rounds_design_gap refuses to roll back over a design_gap round, and round-trips"
 }
 
+# 遷移の履歴を足すmigrationを、既存のwork_item_eventsの行が多い状態で当て直す。
+# 1回の取り込みが、連鎖ごとのadvisory lockを積み上げて、共有のロック表を使い切らないことを確かめる。
+# 作業項目30000件に1行ずつ(先頭の3件は、idの順と時刻の順が逆の行を足す)の遷移を入れる。
+# 30000件は、ロック表の既定の容量(max_locks_per_transaction 64 × max_connections 100に余裕を足した数)を超える。
+# 連鎖ごとにlockを取る実装では、この件数で「out of shared memory」になる。
+# 取り込んだ連鎖が検証を通り、(occurred_at, id)の順に並ぶことも見る。全downを当てる検査の前に呼ぶ。
+verify_history_events_backfill() {
+  local up="${MIGRATIONS_DIR}/${HISTORY_EVENTS_MIGRATION}"
+  local down="${MIGRATIONS_DIR}/${HISTORY_EVENTS_MIGRATION%.up.sql}.down.sql"
+  local file
+  for file in "${up}" "${down}"; do
+    [ -f "${file}" ] || die "missing migration: ${file}"
+  done
+
+  history_scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+
+  log "rolling back history_events to seed many events"
+  psql_exec "${SCRATCH_DB}" -q <"${down}" >/dev/null || die "could not roll back history_events"
+
+  psql_exec "${SCRATCH_DB}" >/dev/null <<'SQL' || die "could not seed the history backfill events"
+INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status)
+  SELECT 1, 'issue', 'issue', 'histbackfill', 'r', g, 'https://github.com/histbackfill/r/issues/' || g, 't', 'failed'
+  FROM generate_series(1, 30000) AS g;
+INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at)
+  SELECT w.id, 'picked', 'failed', NULL, '2026-10-01 00:00:00+00'::timestamptz + w.issue_number * interval '1 second'
+  FROM factory.work_items w WHERE w.owner = 'histbackfill';
+INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at)
+  SELECT w.id, 'failed', 'picked', 'auto_retry: probe', '2026-09-01 00:00:00+00'::timestamptz
+  FROM factory.work_items w WHERE w.owner = 'histbackfill' AND w.issue_number <= 3;
+SQL
+
+  log "re-applying history_events over 30003 events"
+  psql_exec "${SCRATCH_DB}" -q <"${up}" >/dev/null \
+    || die "could not re-apply history_events over many events (lock table exhausted?)"
+
+  local owned="FROM factory.history_events h JOIN factory.work_items w ON w.id = h.work_item_id WHERE w.owner = 'histbackfill'"
+  [ "$(history_scalar "SELECT count(*) ${owned} AND (h.detail ->> 'backfilled') = 'true'")" = "30003" ] \
+    || die "expected 30003 backfilled history rows, got $(history_scalar "SELECT count(*) ${owned}")"
+  [ "$(history_scalar "SELECT count(*) FROM factory.history_verify()")" = "0" ] \
+    || die "the backfilled chains do not verify"
+  # 先頭の3件は、idが小さい行の時刻が新しい。連鎖の先頭は、時刻の古い、後から入れた行になる。
+  [ "$(history_scalar "SELECT count(*) ${owned} AND w.issue_number <= 3 AND h.seq = 1 AND h.reason_code = 'auto_retry'")" = "3" ] \
+    || die "the backfill did not number the chains in the order of (occurred_at, id)"
+  [ "$(history_scalar "SELECT count(*) ${owned} AND h.seq = 1 AND h.prev_hash <> repeat('0', 64)")" = "0" ] \
+    || die "a backfilled chain does not start at the genesis hash"
+
+  # 履歴は作業項目の削除では消えないので、掃除の印を立てて先に消す。
+  psql_exec "${SCRATCH_DB}" -q >/dev/null <<'SQL' || die "could not clean up the history backfill rows"
+BEGIN;
+SELECT set_config('factory.history_prune', 'on', true);
+DELETE FROM factory.history_events h USING factory.work_items w WHERE w.id = h.work_item_id AND w.owner = 'histbackfill';
+DELETE FROM factory.work_items WHERE owner = 'histbackfill';
+COMMIT;
+SQL
+  log "history_events backfills many events without per-chain locks, and round-trips"
+}
+
 for up_file in "${up_files[@]}"; do
   up_name="$(basename "${up_file}")"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -1515,6 +1575,7 @@ verify_design_drafts_rollback
 verify_doc_hash_rollback
 verify_implement_rounds_design_gap_rollback
 verify_fix_rounds_design_gap_rollback
+verify_history_events_backfill
 
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)

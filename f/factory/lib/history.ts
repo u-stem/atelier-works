@@ -286,7 +286,7 @@ export async function collectHistoryEvidence(
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** `now`から保持日数(`retention_history_days`)を引いた時刻。これより古い連鎖だけを、掃除が丸ごと消す。 */
+/** `now`から保持日数(`retention_history_days`)を引いた時刻。作業項目が無く、これより古い連鎖だけを、掃除が丸ごと消す。 */
 export function historyCutoff(now: Date, retentionDays: number): Date {
   return new Date(now.getTime() - retentionDays * DAY_MS);
 }
@@ -297,8 +297,10 @@ export type HistoryPruned = {
 };
 
 /**
- * 最後の記録が`olderThan`より古い連鎖を、丸ごと消し、消した連鎖と行の数を返す。連鎖の一部だけは消さない。
+ * 作業項目がもう無く、最後の記録が`olderThan`より古い連鎖を、丸ごと消し、消した連鎖と行の数を返す。連鎖の一部だけは消さない。
+ * 作業項目が残る連鎖は、古くても消さない。消すと、次の遷移が1から始まり、前の履歴の欠けが検証に出なくなるため。
  * 追記専用の歯止めは、SQLの`factory.history_prune_chains`が、この1つの文の中でだけ外す。
+ * 連鎖のlockを別のトランザクションが持つ間は、その連鎖を待たずに飛ばし、次の掃除が消す。
  * 1回に消す連鎖は1000件までで、残りは次の掃除が消す。
  * 関数が無いとき(migrationより先にコードが反映された間)は、何も消さずに0件を返す。ほかのエラーは投げる。
  */

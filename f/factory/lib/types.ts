@@ -1952,7 +1952,7 @@ export type FactoryConfig = {
   retention_logs_days: number;
   /**
    * 遷移の履歴(`history_events`)を、`cleanup_db.ts`が連鎖ごとに削除するまで残す日数。
-   * 連鎖の最後の記録がこの日数より古いときだけ、その連鎖を丸ごと削除する。
+   * 作業項目が無く、連鎖の最後の記録がこの日数より古いときだけ、その連鎖を丸ごと削除する。
    */
   retention_history_days: number;
   /**

@@ -14804,8 +14804,15 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     tamperedEvidence.history,
   );
 
-  // 保持の掃除。連鎖の最後の記録が期限より古い連鎖だけを、丸ごと消す。
+  // 保持の掃除。作業項目が無く、連鎖の最後の記録が期限より古い連鎖だけを、丸ごと消す。
+  // 作業項目がある連鎖は、古くても消さない。消すと、次の遷移が1から始まり、前の履歴の欠けが検証に出ないため。
   const oldItem = await issueWorkItem(97021, 1, "failed", "qdb-history-old");
+  const goneOldItem = await issueWorkItem(
+    97024,
+    1,
+    "failed",
+    "qdb-history-gone-old",
+  );
   const mixedItem = await issueWorkItem(
     97022,
     1,
@@ -14826,33 +14833,45 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
   await addEvent(mixedItem, "picked", "failed", null, longAgo);
   await addEvent(mixedItem, "failed", "picked", null, recently);
   await addEvent(freshItem, "picked", "failed", null, recently);
+  await addEvent(goneOldItem, "picked", "failed", null, longAgo);
+  // 履歴は作業項目の削除では消えない。残る作業項目は、oldItemだけにする。
+  await execPsqlAsync(
+    target,
+    `DELETE FROM factory.work_items WHERE id IN (${[mixedItem, freshItem, goneOldItem].join(", ")})`,
+  );
   const cutoff = historyCutoff(new Date(NOW_MS), 365);
   // 掃除が消すはずの連鎖と行は、掃除の前に、別の文で数える。
   const expectedPrune = await sql`
     SELECT count(*) AS chains, coalesce(sum(n), 0) AS events FROM (
-      SELECT count(*) AS n FROM factory.history_events
-      GROUP BY work_item_id HAVING max(occurred_at) < ${cutoff.toISOString()}::timestamptz
+      SELECT count(*) AS n FROM factory.history_events h
+      WHERE NOT EXISTS (SELECT 1 FROM factory.work_items w WHERE w.id = h.work_item_id)
+      GROUP BY h.work_item_id HAVING max(h.occurred_at) < ${cutoff.toISOString()}::timestamptz
     ) d
   `.fetch();
   const pruned = await pruneHistoryBefore(cutoff, sql);
   check(
-    "history: the prune deletes the chains whose newest event is older than the cutoff and reports their numbers",
+    "history: the prune deletes the chains of removed work items whose newest event is older than the cutoff and reports their numbers",
     pruned.chains_deleted === Number(expectedPrune[0]?.chains) &&
       pruned.events_deleted === Number(expectedPrune[0]?.events) &&
       pruned.chains_deleted >= 1,
     { pruned, expectedPrune },
   );
   check(
-    "history: the prune deletes an old chain as a whole",
-    (await historyOf(oldItem)).length === 0,
+    "history: the prune deletes an old chain of a removed work item as a whole",
+    (await historyOf(goneOldItem)).length === 0,
   );
   check(
-    "history: the prune keeps a chain that has a recent event, including its old rows",
+    "history: the prune keeps an old chain whose work item still exists",
+    (await historyOf(oldItem)).length === 2 &&
+      (await brokenChains(oldItem)).length === 0,
+  );
+  check(
+    "history: the prune keeps a chain of a removed work item that has a recent event, including its old rows",
     (await historyOf(mixedItem)).length === 2 &&
       (await brokenChains(mixedItem)).length === 0,
   );
   check(
-    "history: the prune keeps a recent chain",
+    "history: the prune keeps a recent chain of a removed work item",
     (await historyOf(freshItem)).length === 1,
   );
   check(
@@ -14870,6 +14889,73 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     "history: a second prune with the same cutoff deletes nothing",
     prunedAgain.chains_deleted === 0 && prunedAgain.events_deleted === 0,
     prunedAgain,
+  );
+
+  // 別のセッションが連鎖のlockを持つ間、掃除はその連鎖を飛ばす。待たず、消さず、次の掃除が消す。
+  // 別のセッションは、その連鎖へ追記するトランザクションを開いたまま止める(追記がlockを取り、取り消すので連鎖は変わらない)。
+  const busyItem = await issueWorkItem(97025, 1, "failed", "qdb-history-busy");
+  await addEvent(busyItem, "picked", "failed", null, longAgo);
+  await execPsqlAsync(
+    target,
+    `DELETE FROM factory.work_items WHERE id = ${String(busyItem)}`,
+  );
+  const lockHolder = Bun.spawn({
+    cmd: [
+      "docker",
+      "compose",
+      "-f",
+      target.composeFile,
+      "exec",
+      "-T",
+      "db",
+      "psql",
+      "-X",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-U",
+      "postgres",
+      "-d",
+      target.database,
+      "-q",
+      "-c",
+      `BEGIN; SELECT factory.history_append(${String(busyItem)}::bigint, 'transition', 'unspecified', 'picked', 'failed', 'factory', '{}'::jsonb, now()); SELECT pg_sleep(6); ROLLBACK;`,
+    ],
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  // 別のセッションがlockを取るまで待つ。
+  let lockTaken = false;
+  for (let waited = 0; waited < 20_000 && !lockTaken; waited += 100) {
+    const held = await sql`
+      SELECT count(*) AS n FROM pg_locks
+      WHERE locktype = 'advisory' AND granted AND pid <> pg_backend_pid()
+    `.fetch();
+    lockTaken = Number(held[0]?.n) > 0;
+    if (!lockTaken) await Bun.sleep(100);
+  }
+  const busyStartedAt = Date.now();
+  const prunedWhileBusy = await pruneHistoryBefore(cutoff, sql);
+  const busyElapsedMs = Date.now() - busyStartedAt;
+  const holderStillRunning = lockHolder.exitCode === null;
+  check(
+    "history: the prune skips a chain whose lock another session holds, and does not wait for it",
+    lockTaken &&
+      holderStillRunning &&
+      busyElapsedMs < 3_000 &&
+      prunedWhileBusy.chains_deleted === 0,
+    { lockTaken, holderStillRunning, busyElapsedMs, prunedWhileBusy },
+  );
+  check(
+    "history: the prune keeps the chain it skipped",
+    (await historyOf(busyItem)).length === 1,
+  );
+  await lockHolder.exited;
+  const prunedAfterBusy = await pruneHistoryBefore(cutoff, sql);
+  check(
+    "history: the next prune deletes the chain once the lock is free",
+    prunedAfterBusy.chains_deleted === 1 &&
+      (await historyOf(busyItem)).length === 0,
+    prunedAfterBusy,
   );
 
   // 改ざんした連鎖は、掃除の印を立てて消し、この節の最後で、全体が検証を通る状態に戻す。

@@ -163,9 +163,10 @@ AS $fn$
     SELECT hashtextextended('factory.history_events:' || p_work_item_id::text, 0)
 $fn$;
 
--- 連鎖の末尾に1行を足し、行のidを返す。
--- 作業項目のadvisory lockをトランザクションの終わりまで持ち、同じ作業項目への並行する追記が、同じseqを取らないようにする。
-CREATE FUNCTION factory.history_append(
+-- 連鎖の末尾に1行を足し、行のidを返す。advisory lockは取らない。
+-- 呼び出す側が、同じ作業項目への並行する追記が起きないことを保証する。
+-- 起きうる経路は、lockを取る`history_append`を使い、取り込みは、書き込みを止めた上で、直接使う。
+CREATE FUNCTION factory.history_append_unlocked(
     p_work_item_id bigint,
     p_kind text,
     p_reason_code text,
@@ -182,8 +183,6 @@ DECLARE
     v_prev text;
     v_id bigint;
 BEGIN
-    PERFORM pg_advisory_xact_lock(factory.history_lock_key(p_work_item_id));
-
     SELECT h.seq, h.row_hash INTO v_seq, v_prev
     FROM factory.history_events h
     WHERE h.work_item_id = p_work_item_id
@@ -208,6 +207,29 @@ BEGIN
     RETURNING id INTO v_id;
 
     RETURN v_id;
+END
+$fn$;
+
+-- 連鎖の末尾に1行を足し、行のidを返す。
+-- 作業項目のadvisory lockをトランザクションの終わりまで持ち、同じ作業項目への並行する追記が、同じseqを取らないようにする。
+CREATE FUNCTION factory.history_append(
+    p_work_item_id bigint,
+    p_kind text,
+    p_reason_code text,
+    p_from_status text,
+    p_to_status text,
+    p_actor text,
+    p_detail jsonb,
+    p_occurred_at timestamptz
+) RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+BEGIN
+    PERFORM pg_advisory_xact_lock(factory.history_lock_key(p_work_item_id));
+
+    RETURN factory.history_append_unlocked(
+        p_work_item_id, p_kind, p_reason_code, p_from_status, p_to_status, p_actor, p_detail, p_occurred_at
+    );
 END
 $fn$;
 
@@ -293,10 +315,12 @@ AS $fn$
     ORDER BY p.wid
 $fn$;
 
--- 最後の記録が`p_before`より古い連鎖を、丸ごと消す。連鎖の一部だけは消さない。
+-- 作業項目がもう無く、最後の記録が`p_before`より古い連鎖を、丸ごと消す。連鎖の一部だけは消さない。
+-- 作業項目が残る連鎖は、古くても消さない。消すと、次の遷移が1から始まり、前の履歴が欠けたまま検証を通ってしまうためである。
 -- 掃除の印を立てるのはこの関数の中なので、呼び出す側は、1つの文で掃除を行える。
--- 消す連鎖ごとに、追記と同じadvisory lockを取り、取った後で最後の記録の時刻を確かめ直す。
--- 掃除の間に新しい遷移が足された連鎖を、先頭の欠けた連鎖にしないためである。
+-- 消す連鎖ごとに、追記と同じadvisory lockを、待たずに取る。取れない連鎖は、使われている最中なので飛ばし、次の掃除に任せる。
+-- 待たないので、複数の連鎖へ書くトランザクションと、lockを待ち合って止まることがない。
+-- lockを取った後で最後の記録の時刻を確かめ直す。掃除の間に新しい遷移が足された連鎖を、先頭の欠けた連鎖にしないためである。
 -- 1回に消す連鎖は1000件までにする。1つのトランザクションが持つadvisory lockの数を抑えるためで、残りは次の掃除が消す。
 -- 印は、呼び出しの前の値に戻してから返る。
 CREATE FUNCTION factory.history_prune_chains(p_before timestamptz)
@@ -316,12 +340,15 @@ BEGIN
     FOR v_work_item_id IN
         SELECT h.work_item_id
         FROM factory.history_events h
+        WHERE NOT EXISTS (SELECT 1 FROM factory.work_items w WHERE w.id = h.work_item_id)
         GROUP BY h.work_item_id
         HAVING max(h.occurred_at) < p_before
         ORDER BY h.work_item_id
         LIMIT 1000
     LOOP
-        PERFORM pg_advisory_xact_lock(factory.history_lock_key(v_work_item_id));
+        IF NOT pg_try_advisory_xact_lock(factory.history_lock_key(v_work_item_id)) THEN
+            CONTINUE;
+        END IF;
         DELETE FROM factory.history_events e
         WHERE e.work_item_id = v_work_item_id
           AND NOT EXISTS (
@@ -342,6 +369,8 @@ $fn$;
 
 -- 既存のwork_item_eventsの行を、(occurred_at, id)の順に、履歴の連鎖へ取り込む。
 -- 行の順は作業項目ごとの連鎖の順になる。トリガーは、この後で作るので、取り込んだ行を二重に書かない。
+-- 履歴の表はこの移行が作ったばかりで、work_item_eventsへの書き込みは止めてあるので、連鎖ごとのadvisory lockは取らない。
+-- 取ると、作業項目の数だけlockが1つのトランザクションに積み上がり、共有のロック表を使い切るおそれがある。
 DO $do$
 DECLARE
     e record;
@@ -351,7 +380,7 @@ BEGIN
         FROM factory.work_item_events
         ORDER BY occurred_at, id
     LOOP
-        PERFORM factory.history_append(
+        PERFORM factory.history_append_unlocked(
             e.work_item_id,
             'transition',
             factory.history_reason_code(e.note, e.to_status),

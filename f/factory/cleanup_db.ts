@@ -12,8 +12,9 @@
 // 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
 // 手動投入の冪等キー`manual_intake_keys`は、`reserved_at`から作業項目と同じ保持期間(`retention_work_items_days`)を過ぎたものを削除する。件数はログだけに残す。
 // Consoleの操作の記録`console_actions`は、設定ではなく固定の保持日数(90日)で削除する。件数はログだけに残す。
-// 遷移の履歴`history_events`は、`config.retention_history_days`を、連鎖の最後の記録から数えて過ぎた連鎖だけを、丸ごと削除する。
-// 作業項目の削除では消えない(外部キーを持たない)。連鎖の一部だけを消すことはなく、件数(連鎖と行)はログだけに残す。
+// 遷移の履歴`history_events`は、作業項目がもう無く、`config.retention_history_days`を連鎖の最後の記録から数えて過ぎた連鎖だけを、丸ごと削除する。
+// 作業項目の削除では消えない(外部キーを持たない)。作業項目が残る連鎖は、古くても消さない。
+// 連鎖の一部だけを消すことはなく、件数(連鎖と行)はログだけに残す。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
 // このファイルは入出力をつなぐだけ。掃除は表ごとに独立しており、
@@ -333,7 +334,7 @@ async function cleanupConsoleActions(now: Date, log: Logger): Promise<number> {
 }
 
 /**
- * 遷移の履歴を、連鎖の最後の記録から保持期間を過ぎた連鎖だけ、丸ごと削除する。
+ * 遷移の履歴を、作業項目が無く、連鎖の最後の記録から保持期間を過ぎた連鎖だけ、丸ごと削除する。
  * 件数は`cleanup_runs`に記録せず、ログに残す。失敗したときは、0件を返す。
  */
 async function cleanupHistory(
