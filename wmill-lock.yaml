@@ -111,7 +111,7 @@ locks:
   f/factory/lib/gh_collect_read: 73c7075dc3f8dd186ea835bd9311d4719003170e374b065eee4b7f98ad7261b7
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: 5db774957fb829075ee5950a1cc351c2c08eecfd93a9fe0df082ae892dad165a
-  f/factory/lib/github: 0723db52d2ea11baa6687bf568cae05b8941d2f6fdc50496a5d1fc95058ac946
+  f/factory/lib/github: bd0788b45c389e9adde4730ea8a315c175f20ce107e4bae18726534a8562936f
   f/factory/lib/github_errors: 3a72995a7a9f940ea6d6e0ca94b76e9e37c2b64d5723e0e51385f9a3fd87d6ac
   f/factory/lib/github_http: 2ac990f277298849f4ea51dda35a92e75d115fb65be24dcd3a82a3425f511454
   f/factory/lib/heartbeat: 0780343b32026cd007ea35b095340c0b7cb640fb2bab46eb8d213c0a5204673e
@@ -181,7 +181,7 @@ locks:
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
   f/factory/lib/requirements_doc: c175acfaa2af360877513464eb2204289018739f267ab983ad991a5939242d62
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955
-  f/factory/lib/review_outcomes: 183435352fb16784e8d3e1423a238c79d4dcf055a634b36d39edc921e52d5ea4
+  f/factory/lib/review_outcomes: 16e4a2e46bcede2e05d3cbb000ee46c05635ead494ea9c4301411eb8cb8aa126
   f/factory/lib/schedule_detector_heartbeat: 8861c17d5335c2f95017ef124cab0daec8669252cf80c06c600375fa6b1987f1
   f/factory/lib/schedule_failing: 3ef7839855097024db61ba09250654bdfc9d55157f99e7b7c4c9be07dec91237
   f/factory/lib/schedule_failure_detect: e144067bbd1b10e118cdbb0e2ec59b9d350a27f4dfad02c397649d0406c1fd3f

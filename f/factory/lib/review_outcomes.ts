@@ -215,7 +215,7 @@ export type ExpectedComment = {
   readonly body: string;
 };
 
-/** GitHubが返した、投稿済みのレビューコメント1件。 */
+/** GitHubが返した、投稿済みのレビューコメント1件。`line`が`null`のコメントは、どの行にも合うものとして対応づける。 */
 export type PostedComment = {
   readonly id: number;
   readonly path: string;
@@ -236,12 +236,22 @@ function bodyHead(body: string): string {
 
 /**
  * 投稿した行コメントと、GitHubが返したコメントを対応づけ、指摘の位置からコメントのidを返す。
- * パスと行が同じで、本文が一致するものを先に選ぶ。
- * 残りは、本文の先頭が同じコメントを選ぶが、候補が1つに決まるときだけにする。
- * 同じ行に本文の先頭が同じ指摘が2つあるときと、候補が2つ以上あるときは、対応づけない。
- * 間違ったidを結ぶと別の指摘に結果が付くので、結ばないほうがよい。
+ * レビューごとの取得は行を返さないことがあり、そのコメントの`line`は`null`である。
+ * 行が`null`のコメントは、どの行にも合うものとして扱う。
+ * 行が合うコメントを、行が`null`のコメントより先に選ぶ。
+ *
+ * 1. パスと行が同じで、本文が一致するものを選ぶ。
+ *    本文が一致するコメントが複数あるときは、返った順に1つずつ使う。
+ * 2. 行が`null`で、パスと本文が一致するものを選ぶ。
+ *    その本文の指摘の数とコメントの数が同じときだけ、返った順に1つずつ結ぶ。
+ *    数が違うと、どの指摘のコメントか決まらないので結ばない。
+ * 3. 残りは、本文の先頭が同じコメントを選ぶが、候補が1つに決まるときだけにする。
+ *    同じ行に本文の先頭が同じ指摘が2つあるときと、候補が2つ以上あるときは、対応づけない。
+ *    行が`null`の候補は、行が違っても、先頭が同じ指摘が2つ以上あれば対応づけない。
+ *
+ * 間違ったidを結ぶと別の指摘に結果が付くので、迷うときは結ばない。
  * GitHubが改行コードを変えたり、末尾を整えたりしても、先頭が同じなら対応づける。
- * 本文が一致するコメントが複数あるときは、返った順に1つずつ使う。1つのコメントを2つの指摘に使わない。
+ * 1つのコメントを2つの指摘に使わない。
  * 対応づけられなかった指摘は、返す表に入らない。
  */
 export function matchCommentsToFindings(
@@ -250,38 +260,61 @@ export function matchCommentsToFindings(
 ): Map<number, number> {
   const matched = new Map<number, number>();
   const used = new Set<number>();
-  const onSameLine = (comment: ExpectedComment): readonly PostedComment[] =>
+  const unused = (comment: ExpectedComment): readonly PostedComment[] =>
     posted.filter(
-      (candidate) =>
-        !used.has(candidate.id) &&
-        candidate.path === comment.path &&
-        candidate.line === comment.line,
+      (candidate) => !used.has(candidate.id) && candidate.path === comment.path,
     );
+  const onSameLine = (comment: ExpectedComment): readonly PostedComment[] =>
+    unused(comment).filter((candidate) => candidate.line === comment.line);
+  const withoutLine = (comment: ExpectedComment): readonly PostedComment[] =>
+    unused(comment).filter((candidate) => candidate.line === null);
+  const sameBody = (a: { body: string }, b: { body: string }): boolean =>
+    normalizeBody(a.body) === normalizeBody(b.body);
+
   for (const comment of expected) {
-    const found = onSameLine(comment).find(
-      (candidate) =>
-        normalizeBody(candidate.body) === normalizeBody(comment.body),
+    const found = onSameLine(comment).find((candidate) =>
+      sameBody(candidate, comment),
     );
     if (found === undefined) continue;
     matched.set(comment.index, found.id);
     used.add(found.id);
   }
 
+  for (const comment of expected) {
+    if (matched.has(comment.index)) continue;
+    const candidates = withoutLine(comment).filter((candidate) =>
+      sameBody(candidate, comment),
+    );
+    const peers = expected.filter(
+      (other) =>
+        !matched.has(other.index) &&
+        other.path === comment.path &&
+        sameBody(other, comment),
+    );
+    const [first] = candidates;
+    if (first === undefined || candidates.length !== peers.length) continue;
+    matched.set(comment.index, first.id);
+    used.add(first.id);
+  }
+
   const rest = expected.filter((comment) => !matched.has(comment.index));
-  const sameHead = (a: ExpectedComment, b: ExpectedComment): boolean =>
-    a.path === b.path &&
-    a.line === b.line &&
-    bodyHead(a.body) === bodyHead(b.body);
+  const fitsHead = (
+    comment: ExpectedComment,
+    candidate: PostedComment,
+  ): boolean =>
+    candidate.path === comment.path &&
+    (candidate.line === null || candidate.line === comment.line) &&
+    bodyHead(candidate.body) === bodyHead(comment.body);
   const chosen: [ExpectedComment, PostedComment][] = [];
   for (const comment of rest) {
-    if (rest.filter((other) => sameHead(comment, other)).length > 1) continue;
-    const candidates = onSameLine(comment).filter(
-      (candidate) => bodyHead(candidate.body) === bodyHead(comment.body),
+    const candidates = posted.filter(
+      (candidate) => !used.has(candidate.id) && fitsHead(comment, candidate),
     );
     const [only] = candidates;
-    if (only !== undefined && candidates.length === 1) {
-      chosen.push([comment, only]);
-    }
+    if (only === undefined || candidates.length !== 1) continue;
+    const competitors = rest.filter((other) => fitsHead(other, only));
+    if (competitors.length > 1) continue;
+    chosen.push([comment, only]);
   }
   for (const [comment, candidate] of chosen) {
     matched.set(comment.index, candidate.id);

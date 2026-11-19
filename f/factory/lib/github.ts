@@ -3416,7 +3416,11 @@ export async function listPrReviewComments(
 export type PostedReviewComment = {
   readonly id: number;
   readonly path: string;
-  /** 行が差分から外れたコメントは、投稿した時点の行(`original_line`)を返す。どちらも無ければ`null`。 */
+  /**
+   * レビューごとの取得は、`line`と`original_line`を`null`で返すことがある(差分の位置の`position`だけを返す)。
+   * 行が分かるときだけ値を持ち、分からないときは`null`にする。
+   * 行が差分から外れたコメントは、投稿した時点の行(`original_line`)を使う。
+   */
   readonly line: number | null;
   readonly body: string;
 };

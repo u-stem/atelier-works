@@ -401,12 +401,116 @@ describe("matchCommentsToFindings", () => {
     expect(matched.size).toBe(0);
   });
 
-  test("does not match a comment without a line", () => {
+  test("matches a comment without a line by path and body", () => {
     const matched = matchCommentsToFindings(
       [{ index: 0, path: "a.ts", line: 10, body: BODY_A }],
       [{ id: 501, path: "a.ts", line: null, body: BODY_A }],
     );
+    expect([...matched]).toEqual([[0, 501]]);
+  });
+
+  test("does not match a comment without a line when the body differs", () => {
+    const matched = matchCommentsToFindings(
+      [{ index: 0, path: "a.ts", line: 10, body: BODY_A }],
+      [{ id: 501, path: "a.ts", line: null, body: BODY_B }],
+    );
     expect(matched.size).toBe(0);
+  });
+
+  test("does not match a comment without a line when the path differs", () => {
+    const matched = matchCommentsToFindings(
+      [{ index: 0, path: "a.ts", line: 10, body: BODY_A }],
+      [{ id: 501, path: "b.ts", line: null, body: BODY_A }],
+    );
+    expect(matched.size).toBe(0);
+  });
+
+  test("matches in the posted order when comments without a line share a body", () => {
+    const matched = matchCommentsToFindings(
+      [
+        { index: 0, path: "a.ts", line: 10, body: BODY_A },
+        { index: 1, path: "a.ts", line: 20, body: BODY_A },
+      ],
+      [
+        { id: 501, path: "a.ts", line: null, body: BODY_A },
+        { id: 502, path: "a.ts", line: null, body: BODY_A },
+      ],
+    );
+    expect([...matched]).toEqual([
+      [0, 501],
+      [1, 502],
+    ]);
+  });
+
+  test("leaves findings unmatched when one comment without a line fits two findings", () => {
+    const matched = matchCommentsToFindings(
+      [
+        { index: 0, path: "a.ts", line: 10, body: BODY_A },
+        { index: 1, path: "a.ts", line: 20, body: BODY_A },
+      ],
+      [{ id: 501, path: "a.ts", line: null, body: BODY_A }],
+    );
+    expect(matched.size).toBe(0);
+  });
+
+  test("leaves a finding unmatched when two comments without a line fit it equally", () => {
+    const matched = matchCommentsToFindings(
+      [{ index: 0, path: "a.ts", line: 10, body: BODY_A }],
+      [
+        { id: 501, path: "a.ts", line: null, body: BODY_A },
+        { id: 502, path: "a.ts", line: null, body: BODY_A },
+      ],
+    );
+    expect(matched.size).toBe(0);
+  });
+
+  test("tells findings apart by body when their comments have no line", () => {
+    const matched = matchCommentsToFindings(
+      [
+        { index: 0, path: "a.ts", line: 10, body: BODY_A },
+        { index: 1, path: "a.ts", line: 20, body: BODY_B },
+      ],
+      [
+        { id: 502, path: "a.ts", line: null, body: BODY_B },
+        { id: 501, path: "a.ts", line: null, body: BODY_A },
+      ],
+    );
+    expect([...matched].sort()).toEqual([
+      [0, 501],
+      [1, 502],
+    ]);
+  });
+
+  test("matches a comment without a line by the head of the body when only one comment can be the one", () => {
+    const long = `${BODY_A}\n\n${"detail ".repeat(60)}`;
+    const matched = matchCommentsToFindings(
+      [{ index: 0, path: "a.ts", line: 10, body: long }],
+      [{ id: 501, path: "a.ts", line: null, body: `${long} (edited)` }],
+    );
+    expect([...matched]).toEqual([[0, 501]]);
+  });
+
+  test("leaves findings unmatched when one comment without a line fits two findings by the head of the body", () => {
+    const long = `${BODY_A}\n\n${"detail ".repeat(60)}`;
+    const matched = matchCommentsToFindings(
+      [
+        { index: 0, path: "a.ts", line: 10, body: `${long} (first)` },
+        { index: 1, path: "a.ts", line: 20, body: `${long} (second)` },
+      ],
+      [{ id: 501, path: "a.ts", line: null, body: `${long} (edited)` }],
+    );
+    expect(matched.size).toBe(0);
+  });
+
+  test("prefers the comment on the same line over a comment without a line", () => {
+    const matched = matchCommentsToFindings(
+      [{ index: 0, path: "a.ts", line: 10, body: BODY_A }],
+      [
+        { id: 501, path: "a.ts", line: null, body: BODY_A },
+        { id: 502, path: "a.ts", line: 10, body: BODY_A },
+      ],
+    );
+    expect([...matched]).toEqual([[0, 502]]);
   });
 
   test("matches by the head of the body when only one comment can be the one", () => {
