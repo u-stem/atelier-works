@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { access, lstat, mkdtemp, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import {
+  access,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   buildClaudeEnv,
   buildSystemPrompt,
@@ -11,10 +20,13 @@ import {
   jstMidnightTodayIso,
   parseClaudeJson,
   type RunClaudeOptions,
+  readCloneHeadSha,
   runClaude,
+  skillProvenanceFor,
 } from "../../f/factory/lib/claude.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
-import { createFakeCommandRunner, fail, timeout } from "./testSupport.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
+import { createFakeCommandRunner, fail, ok, timeout } from "./testSupport.ts";
 
 type FakeCall = { text: string; values: unknown[] };
 
@@ -48,6 +60,8 @@ describe("buildSystemPrompt", () => {
     await buildSystemPrompt({
       skillNames: ["a", "b"],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async (path) => {
         const content = files.get(path);
         if (content === undefined) throw new Error(`unexpected path: ${path}`);
@@ -66,6 +80,8 @@ describe("buildSystemPrompt", () => {
     await buildSystemPrompt({
       skillNames: ["a"],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async (path) => {
         readPaths.push(path);
         return path;
@@ -86,6 +102,8 @@ describe("buildSystemPrompt", () => {
     await buildSystemPrompt({
       skillNames: ["factory-writing"],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async (path) => {
         readPaths.push(path);
         return path;
@@ -102,6 +120,8 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async () => "",
       writeTempFile: async () => ({
         path: "/tmp/fake-system-prompt.md",
@@ -115,6 +135,8 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async () => "",
     });
     try {
@@ -130,6 +152,8 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async () => "",
     });
     await result.cleanup();
@@ -140,11 +164,15 @@ describe("buildSystemPrompt", () => {
     const first = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async () => "",
     });
     const second = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      listSkillFiles: async () => [],
+      readCloneHead: async () => null,
       readFile: async () => "",
     });
     try {
@@ -153,6 +181,408 @@ describe("buildSystemPrompt", () => {
       await first.cleanup();
       await second.cleanup();
     }
+  });
+});
+
+const FAKE_CLONE_HEAD = "0123456789abcdef0123456789abcdef01234567";
+
+function sha256Hex(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** 一時ファイルを書かない`writeTempFile`。パスは呼び出しごとに変える。 */
+function fakeWriter(path: string) {
+  return async () => ({ path, cleanup: async () => {} });
+}
+
+/** 警告だけを控える偽の`Logger`。 */
+function createFakeLogger(): { log: Logger; warnings: string[] } {
+  const warnings: string[] = [];
+  const log: Logger = {
+    info: () => {},
+    warn: (message) => {
+      warnings.push(message);
+    },
+    error: () => {},
+  };
+  return { log, warnings };
+}
+
+/** `files`の内容をUTF-8のバイト列で返す`readBytes`。無いパスは例外にする。 */
+function bytesFrom(files: ReadonlyMap<string, string>) {
+  return async (path: string): Promise<Uint8Array> => {
+    const content = files.get(path);
+    if (content === undefined) throw new Error(`unexpected path: ${path}`);
+    return new TextEncoder().encode(content);
+  };
+}
+
+/** `files`の内容を返す`readFile`。無いパスは例外にする。 */
+function readFrom(files: ReadonlyMap<string, string>) {
+  return async (path: string): Promise<string> => {
+    const content = files.get(path);
+    if (content === undefined) throw new Error(`unexpected path: ${path}`);
+    return content;
+  };
+}
+
+describe("buildSystemPrompt skill provenance", () => {
+  const files = new Map([
+    ["/clone/.claude/skills/factory-writing/SKILL.md", "content-common"],
+    ["/clone/.claude/skills/a/SKILL.md", "content-a"],
+  ]);
+
+  test("records the clone-relative path of each skill in prompt order", async () => {
+    await buildSystemPrompt({
+      skillNames: ["a"],
+      factoryCloneDir: "/clone",
+      readFile: readFrom(files),
+      writeTempFile: fakeWriter("/tmp/prov-paths.md"),
+      listSkillFiles: async () => [],
+      readCloneHead: async () => FAKE_CLONE_HEAD,
+    });
+    expect(
+      skillProvenanceFor("/tmp/prov-paths.md")?.skills.map((s) => s.path),
+    ).toEqual([
+      ".claude/skills/factory-writing/SKILL.md",
+      ".claude/skills/a/SKILL.md",
+    ]);
+  });
+
+  test("records the sha256 of the SKILL.md content", async () => {
+    await buildSystemPrompt({
+      skillNames: ["a"],
+      factoryCloneDir: "/clone",
+      readFile: readFrom(files),
+      writeTempFile: fakeWriter("/tmp/prov-sha.md"),
+      listSkillFiles: async () => [],
+      readCloneHead: async () => FAKE_CLONE_HEAD,
+    });
+    expect(
+      skillProvenanceFor("/tmp/prov-sha.md")?.skills.map((s) => s.sha256),
+    ).toEqual([sha256Hex("content-common"), sha256Hex("content-a")]);
+  });
+
+  test("lists a common skill once when it is also requested", async () => {
+    await buildSystemPrompt({
+      skillNames: ["factory-writing", "a"],
+      factoryCloneDir: "/clone",
+      readFile: readFrom(files),
+      writeTempFile: fakeWriter("/tmp/prov-dedup.md"),
+      listSkillFiles: async () => [],
+      readCloneHead: async () => FAKE_CLONE_HEAD,
+    });
+    expect(skillProvenanceFor("/tmp/prov-dedup.md")?.skills).toHaveLength(2);
+  });
+
+  test("reproduces the same hashes for the same skill files", async () => {
+    const build = async (path: string) => {
+      await buildSystemPrompt({
+        skillNames: ["a"],
+        factoryCloneDir: "/clone",
+        readFile: readFrom(files),
+        writeTempFile: fakeWriter(path),
+        listSkillFiles: async () => [],
+        readCloneHead: async () => FAKE_CLONE_HEAD,
+      });
+      return skillProvenanceFor(path);
+    };
+    expect(await build("/tmp/prov-same-1.md")).toEqual(
+      await build("/tmp/prov-same-2.md"),
+    );
+  });
+
+  test("records the HEAD of the clone", async () => {
+    await buildSystemPrompt({
+      skillNames: [],
+      factoryCloneDir: "/clone",
+      readFile: readFrom(files),
+      writeTempFile: fakeWriter("/tmp/prov-head.md"),
+      listSkillFiles: async () => [],
+      readCloneHead: async () => FAKE_CLONE_HEAD,
+    });
+    expect(skillProvenanceFor("/tmp/prov-head.md")?.cloneSha).toBe(
+      FAKE_CLONE_HEAD,
+    );
+  });
+
+  test("still builds the prompt when reading the HEAD fails", async () => {
+    const result = await buildSystemPrompt({
+      skillNames: [],
+      factoryCloneDir: "/clone",
+      readFile: readFrom(files),
+      writeTempFile: fakeWriter("/tmp/prov-head-fail.md"),
+      listSkillFiles: async () => [],
+      readCloneHead: async () => {
+        throw new Error("not a git repository");
+      },
+    });
+    expect(result.path).toBe("/tmp/prov-head-fail.md");
+  });
+
+  test("records a null clone sha when reading the HEAD fails", async () => {
+    await buildSystemPrompt({
+      skillNames: [],
+      factoryCloneDir: "/clone",
+      readFile: readFrom(files),
+      writeTempFile: fakeWriter("/tmp/prov-head-null.md"),
+      listSkillFiles: async () => [],
+      readCloneHead: async () => {
+        throw new Error("not a git repository");
+      },
+    });
+    expect(skillProvenanceFor("/tmp/prov-head-null.md")?.cloneSha).toBeNull();
+  });
+
+  test("records a null bundle hash for a skill without bundled files", async () => {
+    await buildSystemPrompt({
+      skillNames: ["a"],
+      factoryCloneDir: "/clone",
+      readFile: readFrom(files),
+      writeTempFile: fakeWriter("/tmp/prov-nobundle.md"),
+      listSkillFiles: async () => [],
+      readCloneHead: async () => FAKE_CLONE_HEAD,
+    });
+    expect(
+      skillProvenanceFor("/tmp/prov-nobundle.md")?.skills.map(
+        (s) => s.bundle_sha256,
+      ),
+    ).toEqual([null, null]);
+  });
+
+  describe("bundled files", () => {
+    const withTemplate = (template: string) =>
+      new Map([
+        ...files,
+        ["/clone/.claude/skills/a/template.md", template],
+        ["/clone/.claude/skills/a/refs/extra.md", "extra"],
+      ]);
+
+    async function bundleHashOfA(
+      template: string,
+      path: string,
+    ): Promise<string | null | undefined> {
+      await buildSystemPrompt({
+        skillNames: ["a"],
+        factoryCloneDir: "/clone",
+        readFile: readFrom(withTemplate(template)),
+        readBytes: bytesFrom(withTemplate(template)),
+        writeTempFile: fakeWriter(path),
+        listSkillFiles: async (dir) =>
+          dir === "/clone/.claude/skills/a"
+            ? ["SKILL.md", "template.md", "refs/extra.md"]
+            : ["SKILL.md"],
+        readCloneHead: async () => FAKE_CLONE_HEAD,
+      });
+      return skillProvenanceFor(path)?.skills.find((s) =>
+        s.path.includes("/a/"),
+      )?.bundle_sha256;
+    }
+
+    test("records a hash of the bundled files apart from SKILL.md", async () => {
+      expect(await bundleHashOfA("t1", "/tmp/prov-b1.md")).toMatch(
+        /^[0-9a-f]{64}$/,
+      );
+    });
+
+    test("changes the bundle hash when a bundled file changes", async () => {
+      const before = await bundleHashOfA("t1", "/tmp/prov-b2.md");
+      const after = await bundleHashOfA("t2", "/tmp/prov-b3.md");
+      expect(after).not.toBe(before);
+    });
+
+    test("keeps the SKILL.md hash when only a bundled file changes", async () => {
+      await bundleHashOfA("t1", "/tmp/prov-b4.md");
+      const before = skillProvenanceFor("/tmp/prov-b4.md")?.skills[1]?.sha256;
+      await bundleHashOfA("t2", "/tmp/prov-b5.md");
+      const after = skillProvenanceFor("/tmp/prov-b5.md")?.skills[1]?.sha256;
+      expect(after).toBe(before);
+    });
+
+    test("records unreadable as the bundle hash when listing the bundled files fails", async () => {
+      await buildSystemPrompt({
+        skillNames: ["a"],
+        factoryCloneDir: "/clone",
+        readFile: readFrom(files),
+        writeTempFile: fakeWriter("/tmp/prov-b6.md"),
+        listSkillFiles: async () => {
+          throw new Error("ENOENT");
+        },
+        readCloneHead: async () => FAKE_CLONE_HEAD,
+        log: createFakeLogger().log,
+      });
+      expect(
+        skillProvenanceFor("/tmp/prov-b6.md")?.skills.map(
+          (s) => s.bundle_sha256,
+        ),
+      ).toEqual(["unreadable", "unreadable"]);
+    });
+
+    test("records unreadable as the bundle hash when reading a bundled file fails", async () => {
+      await buildSystemPrompt({
+        skillNames: ["a"],
+        factoryCloneDir: "/clone",
+        readFile: readFrom(files),
+        readBytes: async () => {
+          throw new Error("EACCES");
+        },
+        writeTempFile: fakeWriter("/tmp/prov-b7.md"),
+        listSkillFiles: async (dir) =>
+          dir === "/clone/.claude/skills/a" ? ["SKILL.md", "template.md"] : [],
+        readCloneHead: async () => FAKE_CLONE_HEAD,
+        log: createFakeLogger().log,
+      });
+      expect(
+        skillProvenanceFor("/tmp/prov-b7.md")?.skills.map(
+          (s) => s.bundle_sha256,
+        ),
+      ).toEqual([null, "unreadable"]);
+    });
+
+    test("warns when the bundled files cannot be read", async () => {
+      const fake = createFakeLogger();
+      await buildSystemPrompt({
+        skillNames: [],
+        factoryCloneDir: "/clone",
+        readFile: readFrom(files),
+        writeTempFile: fakeWriter("/tmp/prov-b8.md"),
+        listSkillFiles: async () => {
+          throw new Error("ENOENT");
+        },
+        readCloneHead: async () => FAKE_CLONE_HEAD,
+        log: fake.log,
+      });
+      expect(fake.warnings).toHaveLength(1);
+    });
+
+    test("still builds the prompt when the bundled files cannot be read", async () => {
+      const result = await buildSystemPrompt({
+        skillNames: [],
+        factoryCloneDir: "/clone",
+        readFile: readFrom(files),
+        writeTempFile: fakeWriter("/tmp/prov-b9.md"),
+        listSkillFiles: async () => {
+          throw new Error("ENOENT");
+        },
+        readCloneHead: async () => FAKE_CLONE_HEAD,
+        log: createFakeLogger().log,
+      });
+      expect(result.path).toBe("/tmp/prov-b9.md");
+    });
+  });
+
+  test("forgets the provenance when the prompt file is cleaned up", async () => {
+    const result = await buildSystemPrompt({
+      skillNames: [],
+      factoryCloneDir: "/clone",
+      readFile: readFrom(files),
+      writeTempFile: fakeWriter("/tmp/prov-cleanup.md"),
+      listSkillFiles: async () => [],
+      readCloneHead: async () => FAKE_CLONE_HEAD,
+    });
+    await result.cleanup();
+    expect(skillProvenanceFor("/tmp/prov-cleanup.md")).toBeUndefined();
+  });
+
+  describe("a real skill directory", () => {
+    /** `factory-writing`の下にSKILL.mdと同梱ファイルを置いたcloneを作り、バンドルのハッシュを返す。 */
+    async function bundleHashOfRealClone(
+      bundled: Readonly<Record<string, string | Uint8Array>>,
+    ): Promise<string | null | undefined> {
+      const dir = await mkdtemp(join(tmpdir(), "prov-real-"));
+      try {
+        const skillDir = join(dir, ".claude/skills/factory-writing");
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(join(skillDir, "SKILL.md"), "common");
+        for (const [rel, content] of Object.entries(bundled)) {
+          await mkdir(dirname(join(skillDir, rel)), { recursive: true });
+          await writeFile(join(skillDir, rel), content);
+        }
+        const result = await buildSystemPrompt({
+          skillNames: [],
+          factoryCloneDir: dir,
+          readCloneHead: async () => null,
+        });
+        try {
+          return skillProvenanceFor(result.path)?.skills[0]?.bundle_sha256;
+        } finally {
+          await result.cleanup();
+        }
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+
+    test("records a hash of the bundled files", async () => {
+      expect(await bundleHashOfRealClone({ "template.md": "tpl" })).toMatch(
+        /^[0-9a-f]{64}$/,
+      );
+    });
+
+    test("records null for a skill directory with only SKILL.md", async () => {
+      expect(await bundleHashOfRealClone({})).toBeNull();
+    });
+
+    test("changes the hash when a file in a subdirectory changes", async () => {
+      const before = await bundleHashOfRealClone({ "refs/deep/a.md": "one" });
+      const after = await bundleHashOfRealClone({ "refs/deep/a.md": "two" });
+      expect(after).not.toBe(before);
+    });
+
+    test("includes a dot file in the hash", async () => {
+      const without = await bundleHashOfRealClone({ "a.md": "x" });
+      const withDot = await bundleHashOfRealClone({
+        "a.md": "x",
+        ".hidden": "y",
+      });
+      expect(withDot).not.toBe(without);
+    });
+
+    test("does not collide two files that are not valid UTF-8 and differ in bytes", async () => {
+      const first = await bundleHashOfRealClone({
+        "blob.bin": new Uint8Array([0xff]),
+      });
+      const second = await bundleHashOfRealClone({
+        "blob.bin": new Uint8Array([0xfe]),
+      });
+      expect(second).not.toBe(first);
+    });
+
+    test("hashes the raw bytes of a bundled file", async () => {
+      const bytes = new Uint8Array([0xff, 0x00, 0x41]);
+      const expected = sha256Hex(
+        `blob.bin\0${createHash("sha256").update(bytes).digest("hex")}`,
+      );
+      expect(await bundleHashOfRealClone({ "blob.bin": bytes })).toBe(expected);
+    });
+  });
+});
+
+describe("readCloneHeadSha", () => {
+  test("returns the 40-digit sha printed by git rev-parse HEAD", async () => {
+    const fake = createFakeCommandRunner([ok(`${FAKE_CLONE_HEAD}\n`)]);
+    expect(await readCloneHeadSha(fake.run, "/clone")).toBe(FAKE_CLONE_HEAD);
+  });
+
+  test("runs git in the clone directory", async () => {
+    const fake = createFakeCommandRunner([ok(`${FAKE_CLONE_HEAD}\n`)]);
+    await readCloneHeadSha(fake.run, "/clone");
+    expect(fake.calls[0]?.options?.cwd).toBe("/clone");
+  });
+
+  test("returns null when git fails", async () => {
+    const fake = createFakeCommandRunner([fail("fatal: not a git repository")]);
+    expect(await readCloneHeadSha(fake.run, "/clone")).toBeNull();
+  });
+
+  test("returns null when the output is not a 40-digit sha", async () => {
+    const fake = createFakeCommandRunner([ok("HEAD\n")]);
+    expect(await readCloneHeadSha(fake.run, "/clone")).toBeNull();
+  });
+
+  test("returns null when git cannot be started", async () => {
+    const fake = createFakeCommandRunner([new Error("spawn failed")]);
+    expect(await readCloneHeadSha(fake.run, "/clone")).toBeNull();
   });
 });
 
@@ -1075,6 +1505,93 @@ describe("runClaude", () => {
     ]);
     const result = await runClaude(baseOptions(fake.run));
     expect(result.agentRun.model_usage).toEqual([]);
+  });
+
+  describe("skill provenance of the run record", () => {
+    async function builtPromptPath(path: string): Promise<string> {
+      await buildSystemPrompt({
+        skillNames: ["a"],
+        factoryCloneDir: "/clone",
+        readFile: async (p) => `body of ${p}`,
+        writeTempFile: fakeWriter(path),
+        listSkillFiles: async () => [],
+        readCloneHead: async () => FAKE_CLONE_HEAD,
+      });
+      return path;
+    }
+
+    test("records the skills of the system prompt file on success", async () => {
+      const path = await builtPromptPath("/tmp/run-prov-ok.md");
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      const result = await runClaude({
+        ...baseOptions(fake.run),
+        appendSystemPromptFile: path,
+      });
+      expect(result.agentRun.skills?.map((s) => s.path)).toEqual([
+        ".claude/skills/factory-writing/SKILL.md",
+        ".claude/skills/a/SKILL.md",
+      ]);
+    });
+
+    test("records the clone sha of the system prompt file on success", async () => {
+      const path = await builtPromptPath("/tmp/run-prov-sha.md");
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      const result = await runClaude({
+        ...baseOptions(fake.run),
+        appendSystemPromptFile: path,
+      });
+      expect(result.agentRun.skill_clone_sha).toBe(FAKE_CLONE_HEAD);
+    });
+
+    test("records the skills even when the run fails", async () => {
+      const path = await builtPromptPath("/tmp/run-prov-fail.md");
+      const fake = createFakeCommandRunner([fail("boom")]);
+      const result = await runClaude({
+        ...baseOptions(fake.run),
+        appendSystemPromptFile: path,
+      });
+      expect(result.agentRun.skills).toHaveLength(2);
+    });
+
+    test("records null skills for a prompt file that buildSystemPrompt did not build", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      const result = await runClaude(baseOptions(fake.run));
+      expect(result.agentRun.skills).toBeNull();
+    });
+
+    test("records a null clone sha for a prompt file that buildSystemPrompt did not build", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      const result = await runClaude(baseOptions(fake.run));
+      expect(result.agentRun.skill_clone_sha).toBeNull();
+    });
   });
 
   describe("claude_version from an empty value", () => {

@@ -1,0 +1,59 @@
+diff --git a/src/projects.ts b/src/projects.ts
+--- a/src/projects.ts
++++ b/src/projects.ts
+@@ -12,6 +12,7 @@
+ export interface ProjectStore {
+   get(id: string): Promise<Project | null>;
+   save(project: Project): Promise<void>;
++  remove(id: string): Promise<void>;
+ }
+ 
+ function canManage(user: User, project: Project): boolean {
+@@ -32,3 +33,15 @@
+   }
+   await store.save({ ...project, archived: true });
+ }
++
++export async function deleteProject(
++  store: ProjectStore,
++  user: User,
++  id: string,
++): Promise<void> {
++  const project = await store.get(id);
++  if (project === null) {
++    throw new Error("project not found");
++  }
++  await store.remove(project.id);
++}
+diff --git a/tests/projects.test.ts b/tests/projects.test.ts
+new file mode 100644
+--- /dev/null
++++ b/tests/projects.test.ts
+@@ -0,0 +1,27 @@
++import { expect, test } from "bun:test";
++import { deleteProject, type Project, type ProjectStore } from "../src/projects.ts";
++
++function memoryStore(initial: Project): ProjectStore & { removed: string[] } {
++  const removed: string[] = [];
++  return {
++    removed,
++    get: async (id) => (id === initial.id ? initial : null),
++    save: async () => {},
++    remove: async (id) => {
++      removed.push(id);
++    },
++  };
++}
++
++test("deleteProject removes the project from the store", async () => {
++  const store = memoryStore({ id: "p1", ownerId: "u1", archived: false });
++  await deleteProject(store, { id: "u1", role: "member" }, "p1");
++  expect(store.removed).toEqual(["p1"]);
++});
++
++test("deleteProject rejects an unknown project", async () => {
++  const store = memoryStore({ id: "p1", ownerId: "u1", archived: false });
++  await expect(
++    deleteProject(store, { id: "u1", role: "member" }, "p2"),
++  ).rejects.toThrow("project not found");
++});

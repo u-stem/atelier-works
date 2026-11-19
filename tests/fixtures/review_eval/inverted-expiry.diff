@@ -1,0 +1,32 @@
+diff --git a/src/session.ts b/src/session.ts
+--- a/src/session.ts
++++ b/src/session.ts
+@@ -12,5 +12,16 @@
+ }
+ 
+ export function isExpired(session: Session, now: number): boolean {
+-  return now >= session.expiresAt;
++  return session.expiresAt > now;
+ }
++
++export function renewSession(
++  session: Session,
++  now: number,
++  ttlMs: number,
++): Session | null {
++  if (isExpired(session, now)) {
++    return null;
++  }
++  return createSession(session.userId, now, ttlMs);
++}
+diff --git a/tests/session.test.ts b/tests/session.test.ts
+new file mode 100644
+--- /dev/null
++++ b/tests/session.test.ts
+@@ -0,0 +1,6 @@
++import { expect, test } from "bun:test";
++import { createSession } from "../src/session.ts";
++
++test("createSession sets the expiry to now plus the ttl", () => {
++  expect(createSession("u1", 1000, 500).expiresAt).toBe(1500);
++});

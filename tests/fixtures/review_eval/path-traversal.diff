@@ -1,0 +1,36 @@
+diff --git a/src/uploads.ts b/src/uploads.ts
+--- a/src/uploads.ts
++++ b/src/uploads.ts
+@@ -1,5 +1,14 @@
+-import { readdir } from "node:fs/promises";
++import { readdir, readFile } from "node:fs/promises";
++import { join } from "node:path";
+ 
+ export async function listUploads(uploadDir: string): Promise<string[]> {
+   return readdir(uploadDir);
+ }
++
++// `name` comes from the `file` query parameter of the download endpoint.
++export async function readUpload(
++  uploadDir: string,
++  name: string,
++): Promise<Buffer> {
++  return readFile(join(uploadDir, name));
++}
+diff --git a/tests/uploads.test.ts b/tests/uploads.test.ts
+new file mode 100644
+--- /dev/null
++++ b/tests/uploads.test.ts
+@@ -0,0 +1,12 @@
++import { expect, test } from "bun:test";
++import { mkdtemp, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { readUpload } from "../src/uploads.ts";
++
++test("readUpload returns the bytes of an uploaded file", async () => {
++  const dir = await mkdtemp(join(tmpdir(), "uploads-"));
++  await writeFile(join(dir, "a.txt"), "hello");
++  const content = await readUpload(dir, "a.txt");
++  expect(content.toString()).toBe("hello");
++});

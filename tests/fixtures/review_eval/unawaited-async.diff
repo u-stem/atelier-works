@@ -1,0 +1,33 @@
+diff --git a/src/import.ts b/src/import.ts
+--- a/src/import.ts
++++ b/src/import.ts
+@@ -11,10 +11,8 @@
+   store: RecordStore,
+   records: readonly ImportRecord[],
+ ): Promise<number> {
+-  let saved = 0;
+-  for (const record of records) {
++  records.forEach(async (record) => {
+     await store.save(record);
+-    saved += 1;
+-  }
+-  return saved;
++  });
++  return records.length;
+ }
+diff --git a/tests/import.test.ts b/tests/import.test.ts
+new file mode 100644
+--- /dev/null
++++ b/tests/import.test.ts
+@@ -0,0 +1,11 @@
++import { expect, test } from "bun:test";
++import { type ImportRecord, importRecords } from "../src/import.ts";
++
++test("importRecords returns the number of records", async () => {
++  const records: ImportRecord[] = [
++    { id: "1", name: "a" },
++    { id: "2", name: "b" },
++  ];
++  const count = await importRecords({ save: async () => {} }, records);
++  expect(count).toBe(2);
++});

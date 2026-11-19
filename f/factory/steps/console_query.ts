@@ -68,6 +68,7 @@ import {
   isRecord,
   isString,
   PULL_REQUEST_ORIGINS,
+  REVIEW_CONFIDENCES,
   type ReviewFinding,
   type ReviewSeverity,
   sanitizePullRequestTitle,
@@ -305,10 +306,22 @@ function isReviewFinding(value: unknown): value is ReviewFinding {
     (value.line === null || isNumber(value.line)) &&
     isOneOf(value.severity, REVIEW_SEVERITIES) &&
     isString(value.message) &&
-    (value.suggestion === null || isString(value.suggestion))
+    (value.suggestion === null || isString(value.suggestion)) &&
+    // 根拠と確信度を記録する前の行は、項目を持たない。
+    (value.evidence === undefined ||
+      value.evidence === null ||
+      isString(value.evidence)) &&
+    (value.confidence === undefined ||
+      value.confidence === null ||
+      isOneOf(value.confidence, REVIEW_CONFIDENCES))
   );
 }
 
+/**
+ * 記録した指摘を読む。根拠と確信度を記録する前の行は、`evidence`と`confidence`を`null`で返す。
+ * 受け手は、`confidence`が`low`の指摘を、投稿せず記録だけにした指摘として区別できる。
+ * `null`は投稿した指摘として扱う(`isPostableFinding`)。
+ */
 function parseFindings(value: unknown, field: string): ReviewFinding[] {
   const array = asJsonArray(value, field);
   if (!array.every(isReviewFinding)) {
@@ -316,7 +329,11 @@ function parseFindings(value: unknown, field: string): ReviewFinding[] {
       `console_query: field "${field}" contains a malformed finding`,
     );
   }
-  return array;
+  return array.map((finding) => ({
+    ...finding,
+    evidence: finding.evidence ?? null,
+    confidence: finding.confidence ?? null,
+  }));
 }
 
 function isFixReply(value: unknown): value is FixReply {
@@ -1816,7 +1833,10 @@ export type WorkItemReviewRow = {
   readonly verdict: string;
   /** `reviewResultFor`の結果。結果を記録する前の行では`null`。 */
   readonly result: string | null;
+  /** 投稿した指摘の件数。確信度が`low`の指摘は含めない。 */
   readonly finding_count: number;
+  /** 確信度が`low`で、記録だけにして投稿しなかった指摘の件数。 */
+  readonly held_finding_count: number;
   readonly posted_review_id: string | null;
   readonly created_at: string;
 };
@@ -1828,6 +1848,7 @@ function toWorkItemReviewRow(row: SqlRow): WorkItemReviewRow {
     verdict: asStr(row.verdict, "verdict"),
     result: asNullableStr(row.result, "result"),
     finding_count: asNumeric(row.finding_count, "finding_count"),
+    held_finding_count: asNumeric(row.held_finding_count, "held_finding_count"),
     posted_review_id: asNullableStr(row.posted_review_id, "posted_review_id"),
     created_at: asIsoDate(row.created_at, "created_at"),
   };
@@ -1985,7 +2006,10 @@ export async function runWorkItemDetail(
   const reviewRows = await sql`
     SELECT
       id AS review_id, head_sha, verdict, result,
-      jsonb_array_length(findings) AS finding_count,
+      (SELECT count(*) FROM jsonb_array_elements(findings) f
+        WHERE f ->> 'confidence' IS DISTINCT FROM 'low') AS finding_count,
+      (SELECT count(*) FROM jsonb_array_elements(findings) f
+        WHERE f ->> 'confidence' = 'low') AS held_finding_count,
       posted_review_id, created_at
     FROM factory.reviews
     WHERE work_item_id = ${workItemId}::bigint

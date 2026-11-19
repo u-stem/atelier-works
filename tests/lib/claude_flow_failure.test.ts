@@ -30,6 +30,8 @@ function runRecord(costUsd: number | null): AgentRunRecord {
     session_id: null,
     exit_code: 0,
     model_usage: [],
+    skills: null,
+    skill_clone_sha: null,
     error: null,
     failure_reason: null,
   };

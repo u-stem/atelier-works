@@ -900,7 +900,6 @@ sha256の表は人が更新できるので、表の更新だけでは緩めて�
 
 `lib/claude.ts`は保護する。
 headless Claudeの起動の全体(Bashの禁止、設定の出どころ、渡す環境変数)を決め、書き換えられると、調査に限らずすべてのフローの隔離が外れるためである。
-差分は、設定の書き出しを呼ぶ数行、`buildClaudeArgv`と`buildClaudeEnv`のexport、標準出力のトップレベルのキーを返す1項目に限る。
 `runClaude`が起動の前に設定を書くこと、起動の呼び出しの引数と環境と実行の条件は、保護されたテスト(`tests/lib/investigate_claude.test.ts`)が丸ごと固定する。
 `lib/claude.ts`がargvや環境を変えると、起動の形のハッシュが変わり、関門が閉じる。
 変更が隔離を黙って変えても、測り直すまでClaudeは起動しない。
