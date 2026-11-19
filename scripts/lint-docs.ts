@@ -26,7 +26,7 @@
 // どちらも、作業ツリーで消えていてインデックスに残るファイルは、読めないので飛ばす。
 // `wmill`が生成するファイルと外から取り込んだスキルは、自分で書き直さないので対象外にする。
 //
-// 使い方: bun run scripts/lint-docs.ts [--links-only] [file...]
+// 使い方: bun run scripts/lint-docs.ts [--links-only | --no-links] [file...]
 // 引数があれば、規則、markdownlint、textlintは、そのうち対象のファイルだけを検査する(pre-commitで使う)。
 // 相対パスの引数は、カレントディレクトリから解決する。読めない、または対象外のファイルは飛ばす。
 // リンクの検査は引数にかかわらず、追跡している対象の全文書を見る。
@@ -34,6 +34,10 @@
 // `--links-only`は、リンクの検査と残るリスクの表の検査だけを実行する(約1秒)。
 // リンク先や文書の削除、`.md`以外のファイルの改名による壊れたリンクと、許可リストだけを変えたコミットの誤りを、文書を変えていないコミットでも止めるために使う。
 // このときのファイルの引数は使わない。
+// `--no-links`は、リンクの検査と残るリスクの表の検査を除き、ほかの検査は同じに実行する。
+// 新しい文書がインデックスに入る前の検査(Factoryの`implement`の検査コマンドなど)では、
+// 追跡しているファイルだけを見るリンクの検査が、その文書へのリンクで誤って失敗するため。
+// `--links-only`とは同時に使えず、使うと使い方の誤りとして終了コード1で終わる。
 //
 // リポジトリの中のパスは、実行するときのカレントディレクトリではなく、リポジトリの根を基準に読む。
 // ただし、生成範囲の確認(`scripts/docs-gen.ts`)はカレントディレクトリを根として読むので、根で実行する。
@@ -156,17 +160,33 @@ export function toRepoPath(root: string, path: string, cwd: string): string {
   return relativePath;
 }
 
-/** コマンドラインの引数。`linksOnly`は`--links-only`、`paths`はそれ以外。 */
+/**
+ * コマンドラインの引数。
+ * `linksOnly`は`--links-only`、`noLinks`は`--no-links`、
+ * `unknownFlags`は知らない`--`始まりの引数、`paths`はそれ以外。
+ */
 export type ParsedArgs = {
   readonly linksOnly: boolean;
+  readonly noLinks: boolean;
+  readonly unknownFlags: readonly string[];
   readonly paths: readonly string[];
 };
 
-/** `--links-only`を旗として読み、残りをパスとして返す。 */
+/**
+ * `--links-only`と`--no-links`を旗として読む。
+ * 知らない`--`始まりの引数は、旗の打ち間違いが黙ってパスになるのを避けるため、パスにせず`unknownFlags`に分ける。
+ * `--`で始まる名前のファイルは、`./`を付けて渡す。
+ */
 export function parseArgs(args: readonly string[]): ParsedArgs {
+  const isKnownFlag = (arg: string): boolean =>
+    arg === "--links-only" || arg === "--no-links";
   return {
     linksOnly: args.includes("--links-only"),
-    paths: args.filter((arg) => arg !== "--links-only"),
+    noLinks: args.includes("--no-links"),
+    unknownFlags: args.filter(
+      (arg) => arg.startsWith("--") && !isKnownFlag(arg),
+    ),
+    paths: args.filter((arg) => !arg.startsWith("--")),
   };
 }
 
@@ -528,6 +548,7 @@ export function createProductionDeps(root: string): LintDeps {
  * 規則とリンクの問題は1行ずつ`report`に渡す。markdownlintとtextlintの出力は標準エラーに書く。
  * 生成範囲の検査(`runDocsGen`)は、`root`ではなくカレントディレクトリを基準に読む。
  * `args`はコマンドラインの引数、`cwd`は相対パスの引数を解決する基準。
+ * `deps`はmarkdownlintとtextlintを起動する口で、既定は本番の実装。テストでは差し替える。
  * 実際の根は実行の入口だけが渡す。
  */
 export async function main(
@@ -535,10 +556,21 @@ export async function main(
   args: readonly string[],
   cwd: string,
   report: (line: string) => void = (line) => console.error(line),
+  deps: LintDeps = createProductionDeps(root),
 ): Promise<number> {
-  const { linksOnly, paths } = parseArgs(args);
+  const { linksOnly, noLinks, unknownFlags, paths } = parseArgs(args);
+  if (unknownFlags.length > 0) {
+    report(`lint-docs: unknown option: ${unknownFlags.join(", ")}`);
+    return 1;
+  }
+  if (linksOnly && noLinks) {
+    report("lint-docs: --links-only and --no-links cannot be used together");
+    return 1;
+  }
   const readDoc = createDocReader(root);
-  const repoProblems = lintRepoDocs(() => listRepoFiles(root), readDoc);
+  const repoProblems = noLinks
+    ? []
+    : lintRepoDocs(() => listRepoFiles(root), readDoc);
 
   if (linksOnly) {
     for (const problem of repoProblems) report(problem);
@@ -561,7 +593,7 @@ export async function main(
   problems.push(...repoProblems);
   for (const problem of problems) report(problem);
 
-  const toolsOk = await lintWithTools(targets, createProductionDeps(root));
+  const toolsOk = await lintWithTools(targets, deps);
 
   const genProblems = runDocsGen(false);
   for (const problem of genProblems) report(problem);
