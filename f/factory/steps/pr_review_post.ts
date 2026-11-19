@@ -934,7 +934,10 @@ export async function sendReviewedNotification(
 
 /** `recordReviewOutcomes`が外に頼る処理。テストで差し替える。 */
 export type ReviewOutcomeDeps = {
-  /** 投稿したレビュー1つの行コメントを、GitHubから読む。 */
+  /**
+   * 投稿したレビュー1つの行コメントを、GitHubから読む。
+   * PR全体の行コメントを読み、レビューのidで絞るので、コメントの多いPRでは呼び出しが増える。
+   */
   readonly listPostedComments: (
     reviewId: number,
   ) => Promise<readonly PostedReviewComment[]>;

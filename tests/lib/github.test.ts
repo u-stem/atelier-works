@@ -5698,7 +5698,8 @@ describe("listReviewComments", () => {
     ]);
   });
 
-  test("falls back to line when original_line is missing", async () => {
+  test("reads a comment without original_line as null even when line is set", async () => {
+    // lineはpushで動くので、投稿した行の代わりには使わない。
     createFakeCommandRunner([ghApiOk([rawComment({ line: 8 })])]);
     const comments = await listReviewComments(
       { ghToken: "tok" },
@@ -5707,7 +5708,7 @@ describe("listReviewComments", () => {
       12,
       77,
     );
-    expect(comments[0]?.line).toBe(8);
+    expect(comments[0]?.line).toBeNull();
   });
 
   test("reads a comment with neither original_line nor line as null", async () => {

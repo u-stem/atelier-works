@@ -3419,8 +3419,8 @@ export type PostedReviewComment = {
   readonly path: string;
   /**
    * 投稿したときの行(`original_line`)。複数行のコメントでは最後の行になる。
-   * `original_line`が無いときだけ、今のファイルでの行(`line`)を使う。
-   * どちらも無ければ`null`。
+   * `original_line`が無ければ`null`にする。
+   * 今のファイルでの行(`line`)はpushで動くので、代わりには使わない。
    */
   readonly line: number | null;
   readonly body: string;
@@ -3431,7 +3431,7 @@ export type PostedReviewComment = {
  * 投稿済みのレビュー1つ(`reviewId`)に属するものだけを返す。
  * 投稿した行コメントに、GitHubが付けたidを知るために使う(`createPrReview`はコメントのidを返さない)。
  * レビューごとの取得は`line`と`original_line`を返さないので使わない。
- * `line`はpushで動くので、投稿した行である`original_line`を先に使う。
+ * 行は、投稿した行である`original_line`だけを使う。無いコメントは行を`null`にして、対応づけに使わせない。
  * 形が合わない要素は、読まずに飛ばす。
  */
 export async function listReviewComments(
@@ -3451,11 +3451,7 @@ export async function listReviewComments(
     if (!isPrReviewCommentPayload(raw)) continue;
     if (raw.pull_request_review_id !== reviewId) continue;
     const line =
-      typeof raw.original_line === "number"
-        ? raw.original_line
-        : typeof raw.line === "number"
-          ? raw.line
-          : null;
+      typeof raw.original_line === "number" ? raw.original_line : null;
     comments.push({ id: raw.id, path: raw.path, line, body: raw.body });
   }
   return comments;
