@@ -450,6 +450,29 @@ describe("decideFixingRecovery", () => {
     ).toEqual({ kind: "release", hold: "budget_exceeded" });
   });
 
+  // 既存の挙動を固定する。再計算の回が直せずに終わると、決定的な保留になり、同じheadで再計算を繰り返さない。
+  test("holds a blocked recompute round that cannot fix the lock as metadata_manual", () => {
+    expect(
+      decideFixingRecovery(
+        item("blocked", {
+          note: "ci round: the lock cannot be recomputed automatically (lock_up_to_date)",
+        }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: "metadata_manual" });
+  });
+
+  test("holds a needs_human recompute round that cannot fix the lock as metadata_manual", () => {
+    expect(
+      decideFixingRecovery(
+        item("needs_human", {
+          note: "ci round: the lock cannot be recomputed automatically (lock_up_to_date)",
+        }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: "metadata_manual" });
+  });
+
   test("treats a work item in rereview_requested as pushed", () => {
     expect(decideFixingRecovery(item("rereview_requested"), NOW)).toEqual({
       kind: "pushed",

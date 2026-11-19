@@ -348,8 +348,20 @@ PR本文の`Closes #N`で元のIssueに紐づく。
   このリポジトリでは、`wmill-lock.yaml`のハッシュを確かめる`tests/lib/metadata_*`を除く。
   `bun test`に`--path-ignore-patterns tests/lib/metadata_*`を付ける。
   CIは除かずに実行するので、メタデータのずれはCIの`metadata`ジョブが検知する。
-  `wmill-lock.yaml`の再生成(`mise run metadata`)と`lint:docs`は、検査コマンドに含められない。
-  実装のPRが、この2つでCIに落ちたら、人かローカルのセッションが同じブランチに直しを足す。
+  `wmill-lock.yaml`の再生成(`mise run metadata`)は、検査コマンドに含められない。
+  `wmill generate-metadata`が、Windmillのサーバーを必要とするためである。
+  `mise run lint:docs`も、workerにmiseが無いので書けない。
+  同じ検査は、miseを通さない`bun run scripts/lint-docs.ts`で動く。
+  ロックと違い、文書の検査はサーバーも外部への書き込みも要らない。
+  `git ls-files`、`node_modules/.bin/`のtextlintとmarkdownlint-cli2、`mise.toml`の読み取りだけで動き、イメージにはnodeが入っている。
+  ただし、workerの枠のuidで動かしたときの所要時間とメモリは、実機で確かめていない。
+  textlintを最大4個のプロセスに分けて動かし、CIでは3分前後かかる。
+  リンクの検査は、追跡しているファイルだけを見る。
+  実装が作った新しい文書がindexに無い時点で動かすと、その文書へのリンクで失敗しうるので、足す前に実機で確かめる。
+  足すときは、`implement_check_timeout_sec`に収まるかを、検査コマンドの設定を変えたときの確認と同じ手順で確かめる。
+  検査コマンドに足さない間は、`lint:docs`の失敗は、実装のPRがCIに落ちて初めて分かる。
+  CIの修正が、文書の失敗は直す。
+  ロックの失敗は、ラウンドの上限(`pr_ci_fix_max_rounds`)に達していても、余裕の3回まで、Claudeを使わない再計算が直す。
 - 検査コマンドの数を増やすときは、時間の合計を確かめる。
   `implement_flow_timeout_sec` + 600 + コマンド数 × (`implement_check_timeout_sec` + 15)が、ステップのtimeoutの21600秒以内でなければ、準備のステップが止める。
   8件の検査コマンドを置くときは、`implement_check_timeout_sec`を800にする。

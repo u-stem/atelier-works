@@ -127,6 +127,15 @@ export function allCommitsFromFactory(
 export const LAUNCH_FAILURE_ALLOWANCE = 3;
 
 /**
+ * 再計算で直す失敗(`metadata`だけの失敗と、整合のテストだけの失敗)に、ラウンドの上限へ足す余裕。
+ * 再計算はClaudeを使わず費用がかからないので、Claudeの回で枠を使い切った後も直す。
+ * ただし、再計算がpushしても、また古くなる繰り返しは続けない。
+ * 行の起動の回数は、headごとの行で数えるので、この繰り返しを止められない。
+ * そのため、PRで数えるラウンドの数に、この余裕を足した数で止める。
+ */
+export const METADATA_ROUND_ALLOWANCE = 3;
+
+/**
  * 使用上限で止まった行を起動し直すまでの時間。一時的な保留を知らせるまでの時間と同じにする。
  * 巡回の間隔(5分)で起動し直すと、上限が戻るまで作業項目とflowを作り続けるためである。
  * 長くすると、起動し直す前に保留の通知が出て、人の操作が要らないことで人を呼ぶ。
@@ -271,8 +280,11 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  *    起動の前に確かめ、ラウンドと、起動ごとの停止通知を使わない(保留が30分続くと、設定全体で1件の通知(`config_misfit`)が出る)。
  *    設定を直せば、次の巡回で外れる。
  * 7. 予算を使い切っていれば`budget_exceeded`、mainが赤ければ`main_ci_failed`、
- *    ラウンドの数が上限に達しているか、行の起動の回数が上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数に
- *    達していれば`rounds_exhausted`で保留する。後者は、フローが起動しないまま起動し直し続けるのを止める。
+ *    行の起動の回数が上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数に達していれば`rounds_exhausted`で保留する。
+ *    これは、フローが起動しないまま起動し直し続けるのを止めるので、`metadata_only`にも効く。
+ *    ラウンドの数が上限に達しているときも`rounds_exhausted`で保留する。ただし`metadata_only`は、
+ *    Claudeを使わず費用がかからないので、上限に`METADATA_ROUND_ALLOWANCE`を足した数に達するまで保留しない。
+ *    整合のテストだけの失敗も同じで、上限に達し、足した数に届かないときに限り、保留の直前にログを読んで決める(5と同じ読み取り)。
  *    日次の予算は、`metadata`だけが失敗しているときと、整合のテストだけの失敗のときには確かめない。Claudeを起動せず、費用がかからないためである。
  *    整合のテストだけの失敗かは、予算を使い切っていた場合に限り、保留の直前にログを読んで決める(5と同じ読み取り)。
  *    Claudeが直すジョブも落ちているときは、予算を確かめる。使い切っていれば保留し、行は巡回のたびに読み直すだけで、ラウンドを消費しない。
@@ -354,11 +366,20 @@ export async function decideFixClaim(
     return hold("budget_exceeded");
   }
   if (await readers.mainCiFailed()) return hold("main_ci_failed");
-  if (
-    row.fix_attempts >= input.maxRounds + LAUNCH_FAILURE_ALLOWANCE ||
-    (await readers.countRounds()) >= input.maxRounds
-  ) {
+  // 起動の回数の上限は、再計算で直す失敗にも効かせる。フローが起動しないまま起動し直し続けるのを止めるため。
+  if (row.fix_attempts >= input.maxRounds + LAUNCH_FAILURE_ALLOWANCE) {
     return hold("rounds_exhausted");
+  }
+  // ラウンドの上限は、Claudeを使う回には`maxRounds`で、再計算で直す回には余裕を足した数で効かせる。
+  // 再計算は決定的で費用がかからないので、CIの回を使い切った後のロックの失敗も直す。
+  // ただし、再計算がpushしてまた古くなる繰り返しは、headごとの行の起動の回数では止まらないので、余裕を超えたら止める。
+  // 整合のテストだけの失敗かは、余裕の内で上限に達したときに限り、ログを読んで決める。
+  const rounds = await readers.countRounds();
+  if (rounds >= input.maxRounds) {
+    const rehashLimit = input.maxRounds + METADATA_ROUND_ALLOWANCE;
+    if (rounds >= rehashLimit || !(await upgradeToRehash())) {
+      return hold("rounds_exhausted");
+    }
   }
   // 全体を走査するので、安い判定をすべて通った行だけが読む。
   const workerEnv = await readers.workerEnv();

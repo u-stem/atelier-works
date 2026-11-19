@@ -14,6 +14,7 @@ import {
   type FixClaimReaders,
   hasFactoryTrailer,
   LAUNCH_FAILURE_ALLOWANCE,
+  METADATA_ROUND_ALLOWANCE,
   readHeadFailure,
   readLockIntegrityOnly,
   USAGE_LIMIT_GIVE_UP_AFTER_MS,
@@ -741,9 +742,30 @@ describe("decideFixClaim", () => {
     expect(await decision).toEqual({ kind: "hold", reason: "main_ci_failed" });
   });
 
-  test("holds a metadata-only failure at the round limit", async () => {
+  test("claims a metadata-only failure at the round limit", async () => {
     const { decision } = decide(
       { classification: "metadata_only", rounds: 2 },
+      {},
+      2,
+    );
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("claims a metadata-only failure one round below the limit with the allowance", async () => {
+    const { decision } = decide(
+      {
+        classification: "metadata_only",
+        rounds: 2 + METADATA_ROUND_ALLOWANCE - 1,
+      },
+      {},
+      2,
+    );
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("holds a metadata-only failure at the limit with the allowance", async () => {
+    const { decision } = decide(
+      { classification: "metadata_only", rounds: 2 + METADATA_ROUND_ALLOWANCE },
       {},
       2,
     );
@@ -751,6 +773,101 @@ describe("decideFixClaim", () => {
       kind: "hold",
       reason: "rounds_exhausted",
     });
+  });
+
+  test("reads the rounds for a metadata-only failure", async () => {
+    const { decision, events } = decide(
+      { classification: "metadata_only", rounds: 2 },
+      {},
+      2,
+    );
+    await decision;
+    expect(events).toContain("rounds");
+  });
+
+  test("holds a metadata-only failure when launches keep failing before a flow starts", async () => {
+    const { decision } = decide(
+      { classification: "metadata_only", rounds: 0 },
+      { fix_attempts: 2 + LAUNCH_FAILURE_ALLOWANCE },
+      2,
+    );
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "rounds_exhausted",
+    });
+  });
+
+  test("claims a metadata-only failure that was started fewer times than the allowance", async () => {
+    const { decision } = decide(
+      { classification: "metadata_only", rounds: 2 },
+      { fix_attempts: 2 + LAUNCH_FAILURE_ALLOWANCE - 1 },
+      2,
+    );
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("claims a lock-integrity-only failure at the round limit", async () => {
+    const { decision } = decide({ rounds: 2, lockIntegrityOnly: true }, {}, 2);
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("claims a lock-integrity-only failure one round below the limit with the allowance", async () => {
+    const { decision } = decide(
+      { rounds: 2 + METADATA_ROUND_ALLOWANCE - 1, lockIntegrityOnly: true },
+      {},
+      2,
+    );
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("holds a lock-integrity-only failure at the limit with the allowance", async () => {
+    const { decision } = decide(
+      { rounds: 2 + METADATA_ROUND_ALLOWANCE, lockIntegrityOnly: true },
+      {},
+      2,
+    );
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "rounds_exhausted",
+    });
+  });
+
+  test("does not read the log of a failure that is over the limit with the allowance", async () => {
+    const { decision, events } = decide(
+      { rounds: 2 + METADATA_ROUND_ALLOWANCE, lockIntegrityOnly: true },
+      {},
+      2,
+    );
+    await decision;
+    expect(events).not.toContain("lock_log");
+  });
+
+  test("holds a failure of another test at the round limit", async () => {
+    const { decision } = decide({ rounds: 2, lockIntegrityOnly: false }, {}, 2);
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "rounds_exhausted",
+    });
+  });
+
+  test("does not read the log when the rounds are below the limit", async () => {
+    const { decision, events } = decide(
+      { rounds: 1, lockIntegrityOnly: true },
+      {},
+      2,
+    );
+    await decision;
+    expect(events).not.toContain("lock_log");
+  });
+
+  test("reads the log at most once for a row held by both the budget and the rounds", async () => {
+    const { decision, events } = decide(
+      { rounds: 2, budgetExceeded: true, lockIntegrityOnly: false },
+      {},
+      2,
+    );
+    await decision;
+    expect(events.filter((name) => name === "lock_log").length).toBe(1);
   });
 
   test("holds config_misfit when the time settings do not fit the step timeout", async () => {
