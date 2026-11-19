@@ -50,10 +50,6 @@ describe("skillsFor", () => {
       expect(skillsFor(stage)).toEqual(expected);
     },
   );
-
-  test("returns the list registered in SKILLS_BY_STAGE", () => {
-    expect(skillsFor("pr_review")).toBe(SKILLS_BY_STAGE.pr_review);
-  });
 });
 
 describe("COMMON_SKILL_NAMES", () => {

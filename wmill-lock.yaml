@@ -189,7 +189,7 @@ locks:
   f/factory/lib/schedule_failure_scan: 75af17ce22ab9ed41b7ba4abaecf54d991f5d192ba3dc3bbfc24a00702c62cb7
   f/factory/lib/self_update_pull_requests: b21a5d10d4d5900d7bebaad33b711e71d50461ff3747fd59c54dca63426674d0
   f/factory/lib/self_update_support: a98f74af2080996ec7191a8126563f4012795a4e39bdeb750401c1cfcb16c816
-  f/factory/lib/skill_registry: 650531fdb48bbad99d928c37d546f44a7ccf7efa2a5695917a5b63f4a389b3f9
+  f/factory/lib/skill_registry: 3a553cd759307ade3584b71c48175d861ee7cc643d3b7a8be257edefc190820b
   f/factory/lib/stop_all: c8b3fc97502d23f0facaaa541056dbcdcc9acde1bcc8961f98e1e4d31fcd8bde
   f/factory/lib/stop_all_notice: bb14f22bf86c38717278719183c27e209e4f2fb2749a64d2a9ba857944586a36
   f/factory/lib/stop_check: 61a232751b48ecbc2f076fcd41449bf7e6f07fe919f6057cb956c0f00e54ad31

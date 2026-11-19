@@ -8,6 +8,10 @@
  */
 export const COMMON_SKILL_NAMES: readonly string[] = ["factory-writing"];
 
+// 同じ作業の初回と再試行は同じスキルを使うので、1か所で定める。
+const FIX_SKILLS = ["factory-fix"] as const;
+const IMPLEMENT_SKILLS = ["factory-implementation"] as const;
+
 /**
  * 工程ごとの、共通のスキルに加えて注入するスキル。注入する順に並べる。
  * 共通のスキルはここに書かない。
@@ -16,10 +20,10 @@ export const SKILLS_BY_STAGE = {
   generate_requirements: ["factory-requirements", "drawio-diagram"],
   generate_design: ["factory-design", "drawio-diagram"],
   pr_review: ["factory-review"],
-  pr_fix: ["factory-fix"],
-  pr_fix_verify_retry: ["factory-fix"],
-  implement: ["factory-implementation"],
-  implement_fix: ["factory-implementation"],
+  pr_fix: FIX_SKILLS,
+  pr_fix_verify_retry: FIX_SKILLS,
+  implement: IMPLEMENT_SKILLS,
+  implement_fix: IMPLEMENT_SKILLS,
   investigate: ["factory-investigate"],
   audit: ["factory-audit"],
   dependabot_assess: ["factory-dependabot"],
