@@ -532,6 +532,31 @@ dependabotの`work_items_active_dependabot_key`([dependabotの更新の内部仕
 これらはDBを共有するインスタンスの間で働き、DBを分けたインスタンスが同じリポジトリを扱う構成は対象外である。
 1つのリポジトリは1つのインスタンスだけで扱う。
 
+## スキルの登録簿
+
+Claudeの実行が注入するスキルは、`f/factory/lib/skill_registry.ts`の`SKILLS_BY_STAGE`へ工程ごとに登録する。
+工程の名前は、`agent_runs.stage`に残る値と同じである。
+呼び出し側は`skillsFor("<工程>")`でスキルの名前を引き、`buildSystemPrompt`に渡す。
+共通のスキル(`COMMON_SKILL_NAMES`)は、`buildSystemPrompt`がすべての実行の先頭に足すので、工程ごとの一覧には書かない。
+工程が使うスキルを変えるときは、呼び出し側ではなく登録簿を変える。
+`tests/lib/skill_registry.test.ts`は、登録したスキルが`.claude/skills/`にあることを確かめる。
+同じテストは、`factory-*`のスキルがどれかの工程に登録されているか、注入しないと明示した一覧にあることも確かめる。
+
+<!-- generated:skills -->
+| 工程 | 注入するスキル | 共通のスキル |
+| --- | --- | --- |
+| `generate_requirements` | `factory-requirements`、`drawio-diagram` | `factory-writing` |
+| `generate_design` | `factory-design`、`drawio-diagram` | `factory-writing` |
+| `pr_review` | `factory-review` | `factory-writing` |
+| `pr_fix` | `factory-fix` | `factory-writing` |
+| `pr_fix_verify_retry` | `factory-fix` | `factory-writing` |
+| `implement` | `factory-implementation` | `factory-writing` |
+| `implement_fix` | `factory-implementation` | `factory-writing` |
+| `investigate` | `factory-investigate` | `factory-writing` |
+| `audit` | `factory-audit` | `factory-writing` |
+| `dependabot_assess` | `factory-dependabot` | `factory-writing` |
+<!-- /generated:skills -->
+
 ## 命名規則
 
 WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタグを付ける。
@@ -666,6 +691,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |
 | `f/factory/lib/implement_launch_support` | script | [LIB] 実装フローの起動判定 |
 | `f/factory/lib/repo_owner_gate` | script | [LIB] 対象リポジトリのオーナーIDの照合 |
+| `f/factory/lib/skill_registry` | script | [LIB] 工程ごとのスキルの登録簿 |
 | `f/factory/lib/model_policy` | script | [LIB] 工程ごとのモデルの選択 |
 | `f/factory/lib/manual_intake_support` | script | [LIB] 手動投入の検証とIssue本文 |
 | `f/factory/lib/supersede_support` | script | [LIB] 承認の取り消しのコメント |

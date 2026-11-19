@@ -9,6 +9,7 @@ import {
   renderFlows,
   renderFlowsFile,
   renderSchedules,
+  renderSkills,
   replaceGeneratedBlocks,
   resolveApprovalHandlers,
   runDocsGen,
@@ -64,6 +65,27 @@ describe("renderAssets", () => {
     ]);
 
     expect(table.split("\n")[2]).toBe("| `f/factory/a` | flow | [SF-1-1] a |");
+  });
+});
+
+describe("renderSkills", () => {
+  const SKILLS = { pr_review: ["factory-review"], audit: ["factory-audit"] };
+
+  test("keeps the registry order of the stages", () => {
+    const table = renderSkills(SKILLS, ["factory-writing"]);
+
+    expect(table.split("\n")[2]).toStartWith("| `pr_review` |");
+  });
+
+  test("lists the stage skills joined by a separator, then the common skills", () => {
+    const table = renderSkills(
+      { generate_design: ["factory-design", "drawio-diagram"] },
+      ["factory-writing"],
+    );
+
+    expect(table.split("\n")[2]).toBe(
+      "| `generate_design` | `factory-design`、`drawio-diagram` | `factory-writing` |",
+    );
   });
 });
 
