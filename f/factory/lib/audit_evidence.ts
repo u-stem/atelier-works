@@ -1505,6 +1505,75 @@ async function fetchWhenQualitySourcesExist(
   }
 }
 
+/**
+ * SQLの一部とそのパラメータ。別の問い合わせへ埋め込んで、同じ式を1か所にまとめる。
+ * 文面はこのファイルの定数だけで作り、外から来る値は`${}`でパラメータにして渡す。
+ */
+class SqlFragment {
+  constructor(
+    readonly parts: readonly string[],
+    readonly values: readonly unknown[],
+  ) {}
+}
+
+function sqlFragment(
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+): SqlFragment {
+  return new SqlFragment([...strings], values);
+}
+
+/** 断片を文面に展開し、パラメータは出てくる順に並べる。断片の中の断片も展開する。 */
+function flattenSql(
+  strings: readonly string[],
+  values: readonly unknown[],
+): { readonly parts: string[]; readonly values: unknown[] } {
+  const parts: string[] = [strings[0] ?? ""];
+  const flatValues: unknown[] = [];
+  values.forEach((value, index) => {
+    const following = strings[index + 1] ?? "";
+    if (value instanceof SqlFragment) {
+      const inner = flattenSql(value.parts, value.values);
+      parts[parts.length - 1] += inner.parts[0] ?? "";
+      inner.values.forEach((innerValue, innerIndex) => {
+        flatValues.push(innerValue);
+        parts.push(inner.parts[innerIndex + 1] ?? "");
+      });
+    } else {
+      flatValues.push(value);
+      parts.push("");
+    }
+    parts[parts.length - 1] += following;
+  });
+  return { parts, values: flatValues };
+}
+
+/** 断片を`${}`に置ける`SqlClient`にする。展開した後の文面とパラメータで、元の`SqlClient`を呼ぶ。 */
+function withSqlFragments(sql: SqlClient): SqlClient {
+  return (strings, ...values) => {
+    const flat = flattenSql(strings, values);
+    return sql(
+      Object.assign([...flat.parts], { raw: flat.parts }),
+      ...flat.values,
+    );
+  };
+}
+
+/**
+ * レビューのスキルの版を取り出す式。`skills`は、実行の`skills`のjsonbを返す式である。
+ * 版は、`REVIEW_SKILL_PATH`の要素のsha256の先頭12桁で、要素が無いか、sha256が空ならNULLになる。
+ * 配列でない`skills`と、オブジェクトでない要素は、`jsonb_array_elements`と`->>`がエラーにせずNULLにするので、版を取れないだけで済む。
+ */
+function reviewSkillShaSql(skills: SqlFragment): SqlFragment {
+  return sqlFragment`(SELECT left(e.elem ->> 'sha256', 12)
+                FROM jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(${skills}) = 'array' THEN ${skills} ELSE '[]'::jsonb END
+                ) AS e (elem)
+               WHERE e.elem ->> 'path' = ${REVIEW_SKILL_PATH}::text
+                 AND coalesce(e.elem ->> 'sha256', '') <> ''
+               LIMIT 1)`;
+}
+
 type QualityAccumulator = {
   week: string;
   sha: string | null;
@@ -2017,26 +2086,20 @@ export async function collectAuditEvidence(
 
   // レビューの質の週別。窓は期間の終わりの直前を含む週から`REVIEW_QUALITY_WEEKS`週さかのぼる。
   // 週は日本時間の月曜0時で切り、`date_trunc`には、接続の時刻帯に左右されないよう、日本時間に直した時刻を渡す。
-  // 版は、レビューのスキルのSKILL.mdの要素のsha256の先頭12桁である。要素が無いか、sha256が空なら、版はNULLで「未記録」になる。
-  // 配列でない`skills`と、オブジェクトでない要素は、`jsonb_array_elements`と`->>`がエラーにせずNULLにするので、版を取れないだけで済む。
+  // 版の式は`reviewSkillShaSql`にまとめてあり、版を取れない行は「未記録」になる。
   const qualityWindow = reviewQualityWindow(period);
   const qualityStart = new Date(qualityWindow.firstWeekStart).toISOString();
+  const weeklySql = withSqlFragments(sql);
 
   // 実行は、`skills`の列を足すmigrationより先にコードが反映された間も動くよう、行をjsonbにして読む。列が無いときは、すべて「未記録」になる。
-  const reviewQualityRunRows = await sql`
+  const reviewQualityRunRows = await weeklySql`
     SELECT v.week, v.sha,
            count(*) AS run_count,
            coalesce(sum(v.cost_usd), 0) AS total_cost_usd,
            min(v.created_at) AS first_at
     FROM (
       SELECT to_char(date_trunc('week', r.created_at AT TIME ZONE 'Asia/Tokyo'), 'YYYY-MM-DD') AS week,
-             (SELECT left(e.elem ->> 'sha256', 12)
-                FROM jsonb_array_elements(
-                  CASE WHEN jsonb_typeof(to_jsonb(r) -> 'skills') = 'array' THEN to_jsonb(r) -> 'skills' ELSE '[]'::jsonb END
-                ) AS e (elem)
-               WHERE e.elem ->> 'path' = ${REVIEW_SKILL_PATH}::text
-                 AND coalesce(e.elem ->> 'sha256', '') <> ''
-               LIMIT 1) AS sha,
+             ${reviewSkillShaSql(sqlFragment`to_jsonb(r) -> 'skills'`)} AS sha,
              r.cost_usd,
              r.created_at
       FROM factory.agent_runs r
@@ -2051,20 +2114,14 @@ export async function collectAuditEvidence(
   // 指摘は、採否の節と同じく、投稿した指摘を記録した時刻で切り、コメントのidに結びつく件数を数える。
   // 版は、レビューを生成した実行(`reviews.agent_run_id`)のスキルで決める。実行に結びつかないレビューの指摘は「未記録」になる。
   const reviewQualityFindingRows = await fetchWhenQualitySourcesExist(() =>
-    sql`
+    weeklySql`
       SELECT v.week, v.sha, v.outcome AS key,
              count(*) AS count,
              count(v.review_comment_id) AS with_comment_id,
              min(v.created_at) AS first_at
       FROM (
         SELECT to_char(date_trunc('week', fd.created_at AT TIME ZONE 'Asia/Tokyo'), 'YYYY-MM-DD') AS week,
-               (SELECT left(e.elem ->> 'sha256', 12)
-                  FROM jsonb_array_elements(
-                    CASE WHEN jsonb_typeof(ar.skills) = 'array' THEN ar.skills ELSE '[]'::jsonb END
-                  ) AS e (elem)
-                 WHERE e.elem ->> 'path' = ${REVIEW_SKILL_PATH}::text
-                   AND coalesce(e.elem ->> 'sha256', '') <> ''
-                 LIMIT 1) AS sha,
+               ${reviewSkillShaSql(sqlFragment`ar.skills`)} AS sha,
                fd.outcome,
                fd.review_comment_id,
                fd.created_at

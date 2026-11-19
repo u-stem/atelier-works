@@ -14,6 +14,7 @@ import {
   NO_REVIEW_OUTCOMES_LINE,
   NO_REVIEW_QUALITY_LINE,
   PR_REVIEW_TOP_PRS_LIMIT,
+  REVIEW_SKILL_PATH,
   type ReviewQualityRow,
   type ReviewQualityTrend,
   renderEvidenceMarkdown,
@@ -2781,6 +2782,45 @@ describe("collecting the weekly review quality", () => {
     expect(findCall(calls, "weeklyRuns")?.values).toContain(
       "2026-08-02T15:00:00.000Z",
     );
+  });
+
+  test("passes the skill path of the runs query as a parameter, once", async () => {
+    const { calls } = await collectWith({});
+    expect(
+      findCall(calls, "weeklyRuns")?.values.filter(
+        (value) => value === REVIEW_SKILL_PATH,
+      ),
+    ).toEqual([REVIEW_SKILL_PATH]);
+  });
+
+  test("passes the skill path of the findings query as a parameter, once", async () => {
+    const { calls } = await collectWith({});
+    expect(
+      findCall(calls, "weeklyFindings")?.values.filter(
+        (value) => value === REVIEW_SKILL_PATH,
+      ),
+    ).toEqual([REVIEW_SKILL_PATH]);
+  });
+
+  test("keeps the parameters of the runs query in step with its placeholders", async () => {
+    const { calls } = await collectWith({});
+    const call = findCall(calls, "weeklyRuns");
+    expect(call?.text.split(" ? ").length).toBe((call?.values.length ?? 0) + 1);
+  });
+
+  test("keeps the parameters of the findings query in step with its placeholders", async () => {
+    const { calls } = await collectWith({});
+    const call = findCall(calls, "weeklyFindings");
+    expect(call?.text.split(" ? ").length).toBe((call?.values.length ?? 0) + 1);
+  });
+
+  test("takes the version of the runs and of the findings from the same expression", async () => {
+    const { calls } = await collectWith({});
+    const shaExpression = (name: QueryName): string | undefined =>
+      findCall(calls, name)
+        ?.text.match(/\(SELECT left\(e\.elem.*?LIMIT 1\)/)?.[0]
+        ?.replace(/to_jsonb\(r\) -> 'skills'|ar\.skills/g, "SKILLS");
+    expect(shaExpression("weeklyFindings")).toBe(shaExpression("weeklyRuns"));
   });
 
   test("ends the window at the end of the period", async () => {
