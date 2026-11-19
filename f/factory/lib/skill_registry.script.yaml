@@ -1,0 +1,9 @@
+summary: '[LIB] 工程ごとのスキルの登録簿'
+description: 内部ライブラリです。直接実行するものではありません。Claudeの実行ごとに注入するスキルを、工程の名前から引きます。
+lock: '!inline f/factory/lib/skill_registry.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

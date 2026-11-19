@@ -64,6 +64,7 @@ import {
   FIX_SCHEMA_WITH_DESIGN_GAP,
   fixPrompt,
 } from "../lib/prompts.ts";
+import { skillsFor } from "../lib/skill_registry.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
 import { isShape, parseUntrustedArg } from "../lib/untrusted_arg.ts";
 import {
@@ -290,7 +291,7 @@ export async function main(
   });
 
   const systemPrompt = await buildSystemPrompt({
-    skillNames: ["factory-fix"],
+    skillNames: skillsFor("pr_fix"),
     factoryCloneDir: factory_clone_dir,
   });
 
@@ -425,7 +426,7 @@ async function applyConflictRound(
         ),
       startClaude: async (prompt) => {
         const systemPrompt = await buildSystemPrompt({
-          skillNames: ["factory-fix"],
+          skillNames: skillsFor("pr_fix"),
           factoryCloneDir: round.factoryCloneDir,
         });
         try {
@@ -626,7 +627,7 @@ async function applyCiRound(
         }),
       );
       const systemPrompt = await buildSystemPrompt({
-        skillNames: ["factory-fix"],
+        skillNames: skillsFor("pr_fix"),
         factoryCloneDir: input.factoryCloneDir,
       });
       try {

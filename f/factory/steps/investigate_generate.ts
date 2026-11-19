@@ -71,6 +71,7 @@ import {
 } from "../lib/investigate_workspace.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
+import { skillsFor } from "../lib/skill_registry.ts";
 import type { AgentRunRecord, WorkItem } from "../lib/types.ts";
 import { type CommandRunner, runCommand } from "../lib/workspace.ts";
 
@@ -470,7 +471,7 @@ export async function main(
         }),
       buildSystemPrompt: () =>
         buildSystemPrompt({
-          skillNames: ["factory-investigate"],
+          skillNames: skillsFor("investigate"),
           factoryCloneDir: factory_clone_dir,
         }),
       readOauthToken: () => wmill.getVariable("f/factory/claude_oauth_token"),

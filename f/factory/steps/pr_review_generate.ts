@@ -40,6 +40,7 @@ import {
   REVIEW_SCHEMA,
   reviewPrompt,
 } from "../lib/prompts.ts";
+import { skillsFor } from "../lib/skill_registry.ts";
 import type {
   FileDiffHunks,
   ReviewFinding,
@@ -348,7 +349,7 @@ export async function main(
   });
 
   const systemPrompt = await buildSystemPrompt({
-    skillNames: ["factory-review"],
+    skillNames: skillsFor("pr_review"),
     factoryCloneDir: factory_clone_dir,
   });
 

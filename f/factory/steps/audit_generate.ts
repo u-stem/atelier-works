@@ -47,6 +47,7 @@ import { jobTmpEnv } from "../lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
 import { AUDIT_SCHEMA, auditPrompt } from "../lib/prompts.ts";
+import { skillsFor } from "../lib/skill_registry.ts";
 import {
   type AuditIssueProposal,
   assertSha,
@@ -475,7 +476,7 @@ export async function main(
     );
 
     systemPrompt = await buildSystemPrompt({
-      skillNames: ["factory-audit"],
+      skillNames: skillsFor("audit"),
       factoryCloneDir: snapshotDir,
     });
 

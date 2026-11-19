@@ -86,6 +86,7 @@ import {
 } from "../lib/prompts.ts";
 import { documentRegisterIssues } from "../lib/requirements_doc.ts";
 import { REQUIREMENTS_BASE_DIR } from "../lib/requirements_template.ts";
+import { skillsFor } from "../lib/skill_registry.ts";
 import type {
   AgentRunRecord,
   DesignDraft,
@@ -1096,7 +1097,7 @@ export async function main(
           ghToken,
         });
         const systemPrompt = await buildSystemPrompt({
-          skillNames: ["factory-design", "drawio-diagram"],
+          skillNames: skillsFor("generate_design"),
           factoryCloneDir: clone.dir,
         });
         return {

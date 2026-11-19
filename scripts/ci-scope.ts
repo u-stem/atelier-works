@@ -116,6 +116,7 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/protected_paths.ts",
   "f/factory/lib/requirements_template.ts",
   "f/factory/lib/review_outcomes.ts",
+  "f/factory/lib/skill_registry.ts",
   "f/factory/lib/stop_all.ts",
   "f/factory/lib/stop_check.ts",
   "f/factory/lib/stream_cap.ts",

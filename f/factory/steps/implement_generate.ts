@@ -23,7 +23,6 @@ import {
 } from "../lib/implement_launch_support.ts";
 import {
   docDirGuardFor,
-  IMPLEMENT_SKILL_NAME,
   type ImplementClaudeRound,
   implementContextHasDesign,
   implementPromptInput,
@@ -38,6 +37,7 @@ import {
   worktreeLockFor,
 } from "../lib/process_lock.ts";
 import { implementPrompt } from "../lib/prompts.ts";
+import { skillsFor } from "../lib/skill_registry.ts";
 import { isShape, parseUntrustedArg } from "../lib/untrusted_arg.ts";
 import { runCommand, worktreeGitPointerMatches } from "../lib/workspace.ts";
 
@@ -77,7 +77,7 @@ export async function main(
         context.attempt,
       );
       const systemPrompt = await buildSystemPrompt({
-        skillNames: [IMPLEMENT_SKILL_NAME],
+        skillNames: skillsFor("implement"),
         factoryCloneDir: context.factory_clone_dir,
       });
       try {

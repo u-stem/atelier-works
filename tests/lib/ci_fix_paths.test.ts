@@ -869,6 +869,8 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "設計書テンプレートの固定値と、設計へ戻す遷移の注記の定数の共有モジュール。pr_fix_finishが読む。設計工程の修正が日常的に触れ、反映はマージ後で、レビューが受け皿になる。拒否すると、このファイルに触れるPRの競合回が止まる",
   "f/factory/lib/review_outcomes.ts":
     "レビュー指摘の採否の純粋関数。pr_fix_finishが返信の結果を記録するのに読む。通信とDBを持たず、記録の失敗は警告にとどめる。判断は測定の記録に限られ、修正のpushや承認の判断には使わない。レビューの測定の修正が日常的に触れ、反映はマージ後で、レビューが受け皿になる",
+  "f/factory/lib/skill_registry.ts":
+    "工程ごとに注入するスキルの名前の登録簿。定数と引くだけの関数で、通信とDBを持たない。スキルを足す変更が日常的に触れ、反映はマージ後で、レビューが受け皿になる",
 };
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");

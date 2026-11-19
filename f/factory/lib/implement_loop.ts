@@ -81,7 +81,6 @@ import {
 
 // パスは`implement_launch_support.ts`にある。呼び出し側が`implement_loop.ts`から読めるよう再エクスポートする。
 export { IMPLEMENT_FLOW_PATH };
-export const IMPLEMENT_SKILL_NAME = "factory-implementation";
 
 // ---------------------------------------------------------------------------
 // フローの契約(implement_prepareの結果で、後続のすべてのstepが読む)
@@ -748,7 +747,7 @@ export type ImplementClaudeRunInput = {
   readonly hasDesign: boolean;
   readonly stage: "implement" | "implement_fix";
   readonly prompt: string;
-  /** `buildSystemPrompt([IMPLEMENT_SKILL_NAME])`が作ったファイル。 */
+  /** `buildSystemPrompt`が作ったファイル。 */
   readonly systemPromptPath: string;
   readonly worktreeDir: string;
   /** 実行ごとの`doc_dir`の複製(`withReadOnlyDocDirCopy`)か`null`。 */

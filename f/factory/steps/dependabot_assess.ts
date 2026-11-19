@@ -43,6 +43,7 @@ import { openFactoryClone } from "../lib/factory_clone.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { isCommitSha } from "../lib/main_ci_support.ts";
 import { modelFor } from "../lib/model_policy.ts";
+import { skillsFor } from "../lib/skill_registry.ts";
 import {
   type AgentRunRecord,
   assertGitHubName,
@@ -75,8 +76,6 @@ export const DEPENDABOT_ASSESS_TOOLS: readonly string[] = Object.freeze([
   "Glob",
   "Grep",
 ]);
-
-const DEPENDABOT_SKILL = "factory-dependabot";
 
 /** dependabotの作業項目は再実行しないので、記録する試行の番号は常に1である。 */
 const ATTEMPT = 1;
@@ -687,7 +686,9 @@ export async function runDependabotAssess(
     input.promptInput,
     deps.uuid === undefined ? {} : { uuid: deps.uuid },
   );
-  const systemPrompt = await deps.buildSystemPrompt([DEPENDABOT_SKILL]);
+  const systemPrompt = await deps.buildSystemPrompt(
+    skillsFor(DEPENDABOT_ASSESS_STAGE),
+  );
   let result: RunClaudeResult<ImpactAssessment> | null = null;
   let startError: string | null = null;
   try {
