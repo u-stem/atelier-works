@@ -2109,6 +2109,7 @@ describe("PR review sections in the evidence pack", () => {
       OUTCOME_SECTION,
       "レビューの質(週別)",
       "レビューのスキルの版の前後比較",
+      "履歴の整合",
       "通知",
       "デプロイ",
       "過去の提案(直近3回)",
@@ -2131,9 +2132,9 @@ describe("PR review sections in the evidence pack", () => {
     expect(metricsOf(PR_REVIEW_EVIDENCE)).toEqual(metricsOf(without));
   });
 
-  test("issues the two new queries after the existing ones", async () => {
+  test("issues the two new queries after the existing ones, before the four history queries", async () => {
     const { calls } = await collectWith({});
-    expect(calls.slice(-2).map((call) => call.text)).toEqual([
+    expect(calls.slice(-6, -4).map((call) => call.text)).toEqual([
       findCall(calls, "prReviewTopPrs")?.text ?? "",
       findCall(calls, "prReviewTriggers")?.text ?? "",
     ]);

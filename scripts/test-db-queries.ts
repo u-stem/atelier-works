@@ -6,17 +6,10 @@
 
 import { cancelStatement } from "../f/factory/console_work_item_cancel.ts";
 import { collectAuditEvidence } from "../f/factory/lib/audit_evidence.ts";
-import { AUTO_RETRY_NOTE_PREFIX } from "../f/factory/lib/auto_retry.ts";
-import { CI_ROUND_REASON_PREFIX } from "../f/factory/lib/ci_fix_round.ts";
-import {
-  CONFLICT_CLAUDE_FAILED_NOTE_PREFIX,
-  CONFLICT_ROUND_REASON_PREFIX,
-} from "../f/factory/lib/conflict_fix_round.ts";
 import {
   APPROVAL_REDISPATCH_NOTE_PREFIX,
   INFO_NOTICE_KINDS,
   INTAKE_REFRESHED_NOTE_PREFIX,
-  TRANSIENT_STALL_NOTE_PREFIX,
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../f/factory/lib/console_support.ts";
 import {
@@ -195,25 +188,20 @@ import {
   upsertHumanThreads,
   writeGhRepoDetail,
 } from "../f/factory/lib/db.ts";
-import { PR_FIX_DESIGN_GAP_NOTE_PREFIX } from "../f/factory/lib/design_template.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
 import {
+  HISTORY_NOTE_RULES,
   HISTORY_REASON_CODES,
   historyCutoff,
+  historyReasonCode,
   pruneHistoryBefore,
 } from "../f/factory/lib/history.ts";
-import {
-  IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
-  IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
-} from "../f/factory/lib/implement_finish_support.ts";
 import {
   DESIGN_FOR_IMPLEMENT_MAX_CHARS,
   normalizeDesignForImplement,
 } from "../f/factory/lib/model_text.ts";
 import { OPERATOR_CANCELLED_NOTE } from "../f/factory/lib/operator_cancel.ts";
-import { RECONCILE_MERGED_NOTE } from "../f/factory/lib/poll_support.ts";
 import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "../f/factory/lib/pr_ci_support.ts";
-import { TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX } from "../f/factory/lib/pr_review_retry.ts";
 import { FINDING_OUTCOMES } from "../f/factory/lib/review_outcomes.ts";
 import {
   getCleanupSummary,
@@ -14377,70 +14365,46 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     sqlCodes,
   );
 
-  // 注記の先頭を理由コードに写す表。注記は、本番のコードの定数から作る。
-  const reasonSamples: readonly [string | null, string, string][] = [
-    [
-      `${AUTO_RETRY_NOTE_PREFIX}restarted from failed`,
-      "implementing",
-      "auto_retry",
-    ],
-    [`${TRANSIENT_STALL_NOTE_PREFIX}a`, "reviewing", "auto_retry_stalled"],
-    [
-      `${TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX}a`,
-      "failed",
-      "auto_retry_launch_failed",
-    ],
-    ["retry_work_item: restarted from failed", "implementing", "manual_retry"],
-    [OPERATOR_CANCELLED_NOTE, "cancelled", "operator_cancelled"],
-    [OPERATOR_CANCELLED_NOTE, "failed", "unspecified"],
-    [`${PR_FIX_DESIGN_GAP_NOTE_PREFIX}a`, "designing", "pr_fix_design_gap"],
-    [
-      `${IMPLEMENT_DESIGN_GAP_NOTE_PREFIX}a`,
-      "designing",
-      "implement_design_gap",
-    ],
-    [
-      `${IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX}a`,
-      "needs_human",
-      "implement_design_gap_exhausted",
-    ],
-    [`${CONFLICT_CLAUDE_FAILED_NOTE_PREFIX}a`, "needs_human", "pr_fix_apply"],
-    [RECONCILE_MERGED_NOTE, "reviewed", "reconcile"],
-    ["isolation gate closed: no_sandbox", "failed", "isolation_gate_closed"],
-    [`${INTAKE_REFRESHED_NOTE_PREFIX} (title)`, "picked", "intake_refreshed"],
-    [
-      `${APPROVAL_REDISPATCH_NOTE_PREFIX}12`,
-      "awaiting_approval",
-      "approval_redispatch",
-    ],
-    [
-      "superseded by a newer cycle (work item 9)",
-      "cancelled",
-      "superseded_by_newer_cycle",
-    ],
-    ["superseded by a newer cycle (work item 9)", "failed", "unspecified"],
-    [`${CI_ROUND_REASON_PREFIX}: claude blocked: a`, "needs_human", "ci_round"],
-    [`${CONFLICT_ROUND_REASON_PREFIX}: a`, "needs_human", "conflict_round"],
-    [null, "approved", "unspecified"],
-    ["", "failed", "unspecified"],
-    ["something nobody mapped", "failed", "unspecified"],
-    ["note that mentions auto_retry: in the middle", "failed", "unspecified"],
+  // 注記を理由コードに写す規則は、TypeScriptの表(`HISTORY_NOTE_RULES`)の各規則の注記をSQLに通して確かめる。
+  // 規則の表と注記の定数の一致は、`tests/lib/history.test.ts`が確かめる。
+  const noteSamples: readonly (readonly [string | null, string])[] = [
+    ...HISTORY_NOTE_RULES.map((rule): readonly [string, string] => [
+      rule.exact === true ? rule.prefix : `${rule.prefix}a`,
+      rule.toStatus ?? "failed",
+    ]),
+    [null, "approved"],
+    ["", "failed"],
+    ["something nobody mapped", "failed"],
+    ["note that mentions auto_retry: in the middle", "failed"],
+    // 移り先の状態を求める規則は、ほかの状態では当たらない。
+    [OPERATOR_CANCELLED_NOTE, "failed"],
+    ["superseded by a newer cycle (work item 9)", "failed"],
+    // 完全一致の規則は、注記が続くと当たらない。
+    [`${OPERATOR_CANCELLED_NOTE} and more`, "cancelled"],
   ];
-  for (const [note, toStatus, expected] of reasonSamples) {
+  const mismatches: unknown[] = [];
+  for (const [note, toStatus] of noteSamples) {
     const rows = await sql`
       SELECT factory.history_reason_code(${note}::text, ${toStatus}::text) AS code
     `.fetch();
-    check(
-      `history: the note ${JSON.stringify(note)} to ${toStatus} maps to ${expected}`,
-      rows[0]?.code === expected,
-      rows,
-    );
+    if (rows[0]?.code !== historyReasonCode(note, toStatus)) {
+      mismatches.push({ note, toStatus, sql: rows[0]?.code });
+    }
   }
-  const sampledCodes = new Set(reasonSamples.map(([, , code]) => code));
   check(
-    "history: every reason code in the list is produced by at least one sample note",
-    HISTORY_REASON_CODES.every((code) => sampledCodes.has(code)),
-    HISTORY_REASON_CODES.filter((code) => !sampledCodes.has(code)),
+    "history: the reason code from SQL equals the one from TypeScript for every rule and for the notes that no rule matches",
+    mismatches.length === 0,
+    mismatches,
+  );
+  check(
+    "history: every rule of the table maps its own note to the code of the rule",
+    HISTORY_NOTE_RULES.every(
+      (rule) =>
+        historyReasonCode(
+          rule.exact === true ? rule.prefix : `${rule.prefix}a`,
+          rule.toStatus ?? "failed",
+        ) === rule.code,
+    ),
   );
 
   // ここまでの節が書いた遷移は、すべて履歴に1行ずつあり、連鎖が検証を通る。
@@ -14496,7 +14460,7 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
   await updateStatus(
     pathItem,
     "awaiting_approval",
-    `${AUTO_RETRY_NOTE_PREFIX}secret-note-body`,
+    "auto_retry: secret-note-body",
     sql,
     NO_JOB_IDS,
   );

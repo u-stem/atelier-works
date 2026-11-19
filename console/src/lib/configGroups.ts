@@ -171,6 +171,7 @@ export const CONFIG_GROUP_DEFINITIONS: readonly ConfigGroupDefinition[] = [
     keys: [
       "retention_logs_days",
       "retention_work_items_days",
+      "retention_history_days",
       "worktree_ttl_days",
       "backup_keep_generations",
     ],

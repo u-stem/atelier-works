@@ -1,15 +1,36 @@
 import { describe, expect, test } from "bun:test";
+import { AUTO_RETRY_NOTE_PREFIX } from "../../f/factory/lib/auto_retry.ts";
+import { CI_ROUND_REASON_PREFIX } from "../../f/factory/lib/ci_fix_round.ts";
+import {
+  CONFLICT_CLAUDE_FAILED_NOTE_PREFIX,
+  CONFLICT_ROUND_REASON_PREFIX,
+} from "../../f/factory/lib/conflict_fix_round.ts";
+import {
+  APPROVAL_REDISPATCH_NOTE_PREFIX,
+  INTAKE_REFRESHED_NOTE_PREFIX,
+  TRANSIENT_STALL_NOTE_PREFIX,
+} from "../../f/factory/lib/console_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
+import { PR_FIX_DESIGN_GAP_NOTE_PREFIX } from "../../f/factory/lib/design_template.ts";
 import {
   collectHistoryEvidence,
   EMPTY_HISTORY_EVIDENCE,
+  HISTORY_NOTE_RULES,
   HISTORY_REASON_CODES,
   historyCutoff,
+  historyReasonCode,
   isHistoryReasonCode,
   isMissingHistoryObjectError,
   pruneHistoryBefore,
   verifyHistory,
 } from "../../f/factory/lib/history.ts";
+import {
+  IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+  IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
+} from "../../f/factory/lib/implement_finish_support.ts";
+import { OPERATOR_CANCELLED_NOTE } from "../../f/factory/lib/operator_cancel.ts";
+import { RECONCILE_MERGED_NOTE } from "../../f/factory/lib/poll_support.ts";
+import { TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX } from "../../f/factory/lib/pr_review_retry.ts";
 
 type Call = { readonly text: string; readonly values: readonly unknown[] };
 
@@ -71,6 +92,103 @@ describe("isHistoryReasonCode", () => {
 
   test("rejects a value that is not a string", () => {
     expect(isHistoryReasonCode(3)).toBe(false);
+  });
+});
+
+describe("historyReasonCode", () => {
+  // 注記は、本番のコードの定数から作る。定数の文が変わると、ここが落ちる。
+  test.each([
+    [`${AUTO_RETRY_NOTE_PREFIX}restarted from failed`, "failed", "auto_retry"],
+    [`${TRANSIENT_STALL_NOTE_PREFIX}a`, "reviewing", "auto_retry_stalled"],
+    [
+      `${TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX}a`,
+      "failed",
+      "auto_retry_launch_failed",
+    ],
+    ["retry_work_item: restarted from failed", "implementing", "manual_retry"],
+    [OPERATOR_CANCELLED_NOTE, "cancelled", "operator_cancelled"],
+    [`${PR_FIX_DESIGN_GAP_NOTE_PREFIX}a`, "designing", "pr_fix_design_gap"],
+    [
+      `${IMPLEMENT_DESIGN_GAP_NOTE_PREFIX}a`,
+      "designing",
+      "implement_design_gap",
+    ],
+    [
+      `${IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX}a`,
+      "needs_human",
+      "implement_design_gap_exhausted",
+    ],
+    [`${CONFLICT_CLAUDE_FAILED_NOTE_PREFIX}a`, "needs_human", "pr_fix_apply"],
+    [RECONCILE_MERGED_NOTE, "reviewed", "reconcile"],
+    ["isolation gate closed: no_sandbox", "failed", "isolation_gate_closed"],
+    [`${INTAKE_REFRESHED_NOTE_PREFIX} (title)`, "picked", "intake_refreshed"],
+    [
+      `${APPROVAL_REDISPATCH_NOTE_PREFIX}12`,
+      "awaiting_approval",
+      "approval_redispatch",
+    ],
+    [
+      "superseded by a newer cycle (work item 9)",
+      "cancelled",
+      "superseded_by_newer_cycle",
+    ],
+    [`${CI_ROUND_REASON_PREFIX}: claude blocked: a`, "needs_human", "ci_round"],
+    [`${CONFLICT_ROUND_REASON_PREFIX}: a`, "needs_human", "conflict_round"],
+  ])("maps the note %j to %s as %s", (note, toStatus, expected) => {
+    expect(historyReasonCode(note, toStatus)).toBe(expected);
+  });
+
+  test("maps a missing note to unspecified", () => {
+    expect(historyReasonCode(null, "approved")).toBe("unspecified");
+  });
+
+  test("maps an empty note to unspecified", () => {
+    expect(historyReasonCode("", "failed")).toBe("unspecified");
+  });
+
+  test("maps a note that no rule matches to unspecified", () => {
+    expect(historyReasonCode("something nobody mapped", "failed")).toBe(
+      "unspecified",
+    );
+  });
+
+  test("does not read a prefix that appears in the middle of a note", () => {
+    expect(
+      historyReasonCode("note that mentions auto_retry: later", "failed"),
+    ).toBe("unspecified");
+  });
+
+  test("keeps the stalled retry apart from the plain retry", () => {
+    expect(historyReasonCode("auto_retry_stalled: a", "failed")).toBe(
+      "auto_retry_stalled",
+    );
+  });
+
+  test("maps the operator cancel note only for a transition to cancelled", () => {
+    expect(historyReasonCode(OPERATOR_CANCELLED_NOTE, "failed")).toBe(
+      "unspecified",
+    );
+  });
+
+  test("does not read a note that only starts like the operator cancel note", () => {
+    expect(
+      historyReasonCode(`${OPERATOR_CANCELLED_NOTE} and more`, "cancelled"),
+    ).toBe("unspecified");
+  });
+
+  test("maps a supersede note only for a transition to cancelled", () => {
+    expect(
+      historyReasonCode("superseded by a newer cycle (work item 9)", "failed"),
+    ).toBe("unspecified");
+  });
+
+  test("has a rule for every code but unspecified", () => {
+    const covered = new Set(HISTORY_NOTE_RULES.map((rule) => rule.code));
+    expect(
+      HISTORY_REASON_CODES.filter(
+        (code) => code !== "unspecified" && !covered.has(code),
+      ),
+    ).toEqual([]);
   });
 });
 

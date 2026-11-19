@@ -26,6 +26,11 @@ import {
   type SqlClient,
   type SqlRow,
 } from "./db.ts";
+import {
+  collectHistoryEvidence,
+  HISTORY_BROKEN_LIST_MAX,
+  type HistoryEvidence,
+} from "./history.ts";
 import { formatJstDate, jstWeekStart, WEEK_MS } from "./jst.ts";
 import { maskSecrets } from "./log.ts";
 import {
@@ -437,6 +442,11 @@ export type AuditEvidence = {
    * スキルの版を比べる材料で、`review_outcomes`と違い、期間の長さによらず窓の長さが決まっている。
    */
   readonly review_quality: ReviewQualityTrend;
+  /**
+   * 遷移の履歴の整合。全連鎖の検証の結果と、期間内の遷移の理由コード別の件数。
+   * 履歴の表を足すmigrationが当たる前は、`available`が偽の空の値である。
+   */
+  readonly history: HistoryEvidence;
   readonly notices: CountByKey[];
   /**
    * 期間内に作成され、集計時点で未解決の通知。種別ごと。
@@ -1061,6 +1071,86 @@ function reviewVersionComparisonSection(
   };
 }
 
+/** 履歴の節に載せる、履歴の表がまだ無いときの1行。 */
+export const HISTORY_UNAVAILABLE_LINE = "履歴の表が無い(migrationが当たる前)";
+
+/** 履歴の節に載せる、履歴の記録が1件も無いときの1行。 */
+export const NO_HISTORY_LINE = "履歴の記録はまだ無い";
+
+/** 割合を整数のパーセントにする。母数が0なら0を返す。 */
+function percentOf(part: number, whole: number): number {
+  return whole === 0 ? 0 : Math.round((part * 100) / whole);
+}
+
+/**
+ * 遷移の履歴の整合の節。
+ * 検証した連鎖の数、壊れた連鎖(最大`HISTORY_BROKEN_LIST_MAX`件)、期間内の連鎖と遷移の数、理由が未指定の割合は、固定の行にする。
+ * 壊れた連鎖の行は、全体の上限に収めるときも削らない。
+ * 理由コードごとの件数は、件数の多い順に並べた、削れる行にする。
+ */
+function historySection(evidence: AuditEvidence): EvidenceSection {
+  const heading = "履歴の整合";
+  const history = evidence.history;
+  if (!history.available) {
+    return { heading, fixed: [HISTORY_UNAVAILABLE_LINE], lines: [] };
+  }
+  if (history.chains_checked === 0 && history.period_events === 0) {
+    return { heading, fixed: [NO_HISTORY_LINE], lines: [] };
+  }
+  const listed = history.broken.slice(0, HISTORY_BROKEN_LIST_MAX);
+  const unlisted = history.broken.length - listed.length;
+  const brokenLines = listed.map((chain) => {
+    // 理由は行全体の前に1つずつ無害化する。行全体だけに通すと、取り除いたタグの跡の空白が括弧の内側に残る。
+    const reason = sanitizeCell(chain.reason, SANITIZE_CELL_MAX);
+    return sanitizeCell(
+      `壊れた連鎖: 作業項目${chain.work_item_id}の第${chain.first_bad_seq}行(${reason})`,
+      SANITIZE_CELL_MAX,
+    );
+  });
+  const unspecified =
+    history.period_by_reason.find(
+      (entry) => entry.reason_code === "unspecified",
+    )?.count ?? 0;
+  const share =
+    history.period_events > 0
+      ? [
+          sanitizeCell(
+            `理由が未指定(unspecified)の割合: ${percentOf(unspecified, history.period_events)}%(${unspecified}件 / ${history.period_events}件)。割合が高い呼び出し元から、理由を明示する`,
+            SANITIZE_CELL_MAX,
+          ),
+        ]
+      : [];
+  return {
+    heading,
+    fixed: [
+      sanitizeCell(
+        `検証した連鎖: ${history.chains_checked}件 / 壊れた連鎖: ${history.broken.length}件`,
+        SANITIZE_CELL_MAX,
+      ),
+      ...brokenLines,
+      ...(unlisted > 0
+        ? [
+            sanitizeCell(
+              `壊れた連鎖: ほか${unlisted}件は載せない`,
+              SANITIZE_CELL_MAX,
+            ),
+          ]
+        : []),
+      sanitizeCell(
+        `期間内の連鎖: ${history.period_chains}件 / 遷移の記録: ${history.period_events}件`,
+        SANITIZE_CELL_MAX,
+      ),
+      ...share,
+    ],
+    lines: history.period_by_reason.map((entry) =>
+      sanitizeCell(
+        `理由コード ${sanitizeCell(entry.reason_code, SANITIZE_CELL_MAX)}: ${entry.count}件`,
+        SANITIZE_CELL_MAX,
+      ),
+    ),
+  };
+}
+
 export function buildEvidenceSections(
   evidence: AuditEvidence,
 ): EvidenceSection[] {
@@ -1212,6 +1302,7 @@ export function buildEvidenceSections(
     reviewOutcomesSection(evidence),
     reviewQualitySection(evidence),
     reviewVersionComparisonSection(evidence),
+    historySection(evidence),
     { heading: "通知", fixed: noticeFixed, lines: noticeLines },
     { heading: "デプロイ", fixed: deploymentFixed, lines: deploymentLines },
     { heading: "過去の提案(直近3回)", fixed: [], lines: proposalLines },
@@ -1835,7 +1926,8 @@ async function fetchSkillVersionRows(
  * - 期間内のデプロイの記録と、期間の開始・終了時点の稼働版
  * - レビュー指摘の採否(結果ごとの件数、人が始めたスレッド、採否の記録が無いレビュー。採否の表が無い間は集めない)
  * - レビューの質の週別(週とスキルの版ごとの実行、費用、採否と、週ごとの人が始めたスレッド。採否の表が無い間は、実行だけを集める)
- * - 最後に、PRレビューの実行のPRごとの上位と、起動のきっかけごとの件数
+ * - PRレビューの実行のPRごとの上位と、起動のきっかけごとの件数
+ * - 最後に、遷移の履歴の整合(全連鎖の検証と、期間内の理由コード別の件数。履歴の表が無い間は集めない)
  *
  * work_itemsと結合するクエリはすべて、監査の処理自身の行を除く
  * (`wi.kind <> 'audit'`。null許容の`work_item_id`とLEFT JOINする場合は
@@ -2209,6 +2301,9 @@ export async function collectAuditEvidence(
     GROUP BY 1
   `.fetch();
 
+  // 遷移の履歴は、全連鎖の検証と、期間内の理由コード別の件数を集める。表と関数が無い間は、空の値になる。
+  const history = await collectHistoryEvidence(sql, start, end);
+
   return {
     period,
     period_label: formatAuditPeriodLabel(period.start, period.end),
@@ -2236,6 +2331,7 @@ export async function collectAuditEvidence(
       rows: toReviewQualityRows(reviewQualityRunRows, reviewQualityFindingRows),
       human_threads: toReviewQualityThreads(reviewQualityThreadRows),
     },
+    history,
     notices: toCountsByKey(noticeRows),
     unresolved_notices_in_period: toUnresolvedNoticeGroups(
       unresolvedNoticeRows,

@@ -22,6 +22,7 @@ schema:
     - worktree_ttl_days
     - retention_work_items_days
     - retention_logs_days
+    - retention_history_days
     - backup_keep_generations
     - factory_repo
     - factory_repo_id
@@ -434,6 +435,12 @@ schema:
       description: >-
         失敗記録・デプロイ記録・解決済みのお知らせを保持する日数です。この日数を過ぎると自動的に削除されます。
       default: 30
+    retention_history_days:
+      type: integer
+      minimum: 1
+      description: >-
+        作業項目の状態遷移の履歴を保持する日数です。連鎖(作業項目ごとの履歴)の最後の記録がこの日数より古くなったとき、その連鎖を丸ごと削除します。連鎖の一部だけを削除することはありません。
+      default: 365
     retention_work_items_days:
       type: integer
       description: >-
