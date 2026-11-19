@@ -218,6 +218,8 @@ describe("parseArgs", () => {
   test("returns every argument as a path when there is no flag", () => {
     expect(parseArgs(["a.md", "b.md"])).toEqual({
       linksOnly: false,
+      noLinks: false,
+      unknownFlags: [],
       paths: ["a.md", "b.md"],
     });
   });
@@ -225,12 +227,46 @@ describe("parseArgs", () => {
   test("reads --links-only as a flag and keeps the other arguments as paths", () => {
     expect(parseArgs(["a.md", "--links-only", "b.md"])).toEqual({
       linksOnly: true,
+      noLinks: false,
+      unknownFlags: [],
       paths: ["a.md", "b.md"],
     });
   });
 
   test("returns no path and no flag for no arguments", () => {
-    expect(parseArgs([])).toEqual({ linksOnly: false, paths: [] });
+    expect(parseArgs([])).toEqual({
+      linksOnly: false,
+      noLinks: false,
+      unknownFlags: [],
+      paths: [],
+    });
+  });
+
+  test("reads --no-links as a flag and keeps the other arguments as paths", () => {
+    expect(parseArgs(["a.md", "--no-links", "b.md"])).toEqual({
+      linksOnly: false,
+      noLinks: true,
+      unknownFlags: [],
+      paths: ["a.md", "b.md"],
+    });
+  });
+
+  test("returns an unknown option starting with -- as an unknown flag, not as a path", () => {
+    expect(parseArgs(["a.md", "--no-link", "--nolinks"])).toEqual({
+      linksOnly: false,
+      noLinks: false,
+      unknownFlags: ["--no-link", "--nolinks"],
+      paths: ["a.md"],
+    });
+  });
+
+  test("keeps a path that merely contains -- as a path", () => {
+    expect(parseArgs(["docs/a--b.md", "./--c.md"])).toEqual({
+      linksOnly: false,
+      noLinks: false,
+      unknownFlags: [],
+      paths: ["docs/a--b.md", "./--c.md"],
+    });
   });
 });
 
@@ -663,6 +699,159 @@ describe("main with --links-only", () => {
           "docs/security-risks.md: [risk] malformed allowlist line in scripts/lint-risk-register-allowlist.txt: broken",
         ],
       });
+    });
+  });
+});
+
+describe("main with --no-links", () => {
+  /**
+   * `root`で`args`を実行し、終了コードと報告の行を返す。
+   * 対象外のパスを渡すと、markdownlintとtextlintは起動しない。
+   */
+  async function run(
+    root: string,
+    args: readonly string[],
+  ): Promise<{ exitCode: number; output: string[] }> {
+    const output: string[] = [];
+    const exitCode = await main(root, args, root, (line) => {
+      output.push(line);
+    });
+    return { exitCode, output };
+  }
+
+  test("does not report a broken link", async () => {
+    await withRepoAsync(async (dir, git) => {
+      writeFileSync(join(dir, "broken.md"), "[m](missing.md)\n");
+      git("add", "broken.md");
+
+      expect(await run(dir, ["--no-links", "none.txt"])).toEqual({
+        exitCode: 0,
+        output: [],
+      });
+    });
+  });
+
+  test("reports the broken link when the flag is absent", async () => {
+    await withRepoAsync(async (dir, git) => {
+      writeFileSync(join(dir, "broken.md"), "[m](missing.md)\n");
+      git("add", "broken.md");
+
+      const { exitCode, output } = await run(dir, ["none.txt"]);
+
+      expect({
+        exitCode,
+        reported: output.includes(
+          "broken.md:1: [link] file not found: missing.md",
+        ),
+      }).toEqual({ exitCode: 1, reported: true });
+    });
+  });
+
+  test("does not report a broken allowlist line of the risk register", async () => {
+    await withRepoAsync(async (dir, git) => {
+      mkdirSync(join(dir, "scripts"));
+      writeFileSync(
+        join(dir, "scripts/lint-risk-register-allowlist.txt"),
+        "broken\n",
+      );
+      git("add", "scripts");
+
+      expect(await run(dir, ["--no-links", "none.txt"])).toEqual({
+        exitCode: 0,
+        output: [],
+      });
+    });
+  });
+});
+
+describe("main with --no-links runs the other checks", () => {
+  /** 300字を超える1行。規則の検査(`REPO_DOC_RULES`)が指摘する。 */
+  const LONG_LINE = "あ".repeat(301);
+
+  async function runWithRecorder(
+    dir: string,
+  ): Promise<{ exitCode: number; output: string[]; spawned: string[][] }> {
+    const output: string[] = [];
+    const { deps, spawned } = recorder();
+    const exitCode = await main(
+      dir,
+      ["--no-links", "bad.md"],
+      dir,
+      (line) => {
+        output.push(line);
+      },
+      deps,
+    );
+    return { exitCode, output, spawned };
+  }
+
+  test("reports a rule violation in the given document and exits with 1", async () => {
+    await withRepoAsync(async (dir, git) => {
+      writeFileSync(join(dir, "bad.md"), `# t\n\n${LONG_LINE}\n`);
+      git("add", "bad.md");
+
+      const { exitCode, output } = await runWithRecorder(dir);
+
+      expect({
+        exitCode,
+        reported: output.some((line) => line.startsWith("bad.md:3:")),
+      }).toEqual({ exitCode: 1, reported: true });
+    });
+  });
+
+  test("starts markdownlint and textlint for the given document", async () => {
+    await withRepoAsync(async (dir, git) => {
+      writeFileSync(join(dir, "bad.md"), "# t\n");
+      git("add", "bad.md");
+
+      const { spawned } = await runWithRecorder(dir);
+
+      expect(spawned).toEqual([
+        [MARKDOWNLINT_BIN, "./bad.md"],
+        [TEXTLINT_BIN, "./bad.md"],
+      ]);
+    });
+  });
+});
+
+describe("main with an unknown option", () => {
+  test("exits with 1 and reports the usage error", async () => {
+    const output: string[] = [];
+
+    const exitCode = await main(
+      "/nonexistent-root",
+      ["--no-link", "--nolinks", "a.md"],
+      "/nonexistent-root",
+      (line) => {
+        output.push(line);
+      },
+    );
+
+    expect({ exitCode, output }).toEqual({
+      exitCode: 1,
+      output: ["lint-docs: unknown option: --no-link, --nolinks"],
+    });
+  });
+});
+
+describe("main with --links-only and --no-links", () => {
+  test("exits with 1 and reports the usage error", async () => {
+    const output: string[] = [];
+
+    const exitCode = await main(
+      "/nonexistent-root",
+      ["--links-only", "--no-links"],
+      "/nonexistent-root",
+      (line) => {
+        output.push(line);
+      },
+    );
+
+    expect({ exitCode, output }).toEqual({
+      exitCode: 1,
+      output: [
+        "lint-docs: --links-only and --no-links cannot be used together",
+      ],
     });
   });
 });
