@@ -4,11 +4,19 @@
 //
 // 使い方: COMPOSE_FILE=<compose> SCRATCH_DB=<db> bun run scripts/test-db-queries.ts
 
+import { cancelStatement } from "../f/factory/console_work_item_cancel.ts";
 import { collectAuditEvidence } from "../f/factory/lib/audit_evidence.ts";
+import { AUTO_RETRY_NOTE_PREFIX } from "../f/factory/lib/auto_retry.ts";
+import { CI_ROUND_REASON_PREFIX } from "../f/factory/lib/ci_fix_round.ts";
+import {
+  CONFLICT_CLAUDE_FAILED_NOTE_PREFIX,
+  CONFLICT_ROUND_REASON_PREFIX,
+} from "../f/factory/lib/conflict_fix_round.ts";
 import {
   APPROVAL_REDISPATCH_NOTE_PREFIX,
   INFO_NOTICE_KINDS,
   INTAKE_REFRESHED_NOTE_PREFIX,
+  TRANSIENT_STALL_NOTE_PREFIX,
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../f/factory/lib/console_support.ts";
 import {
@@ -159,6 +167,7 @@ import {
   returnToDesigningFromPrFixIfLeaseHolder,
   returnToRequirementsIfLeaseHolder,
   revertIssueProposalToPending,
+  type SqlRow,
   saveDesignDraftIfLeaseHolder,
   saveDraft,
   setAttemptIfLeaseHolder,
@@ -186,13 +195,25 @@ import {
   upsertHumanThreads,
   writeGhRepoDetail,
 } from "../f/factory/lib/db.ts";
+import { PR_FIX_DESIGN_GAP_NOTE_PREFIX } from "../f/factory/lib/design_template.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
+import {
+  HISTORY_REASON_CODES,
+  historyCutoff,
+  pruneHistoryBefore,
+} from "../f/factory/lib/history.ts";
+import {
+  IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+  IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
+} from "../f/factory/lib/implement_finish_support.ts";
 import {
   DESIGN_FOR_IMPLEMENT_MAX_CHARS,
   normalizeDesignForImplement,
 } from "../f/factory/lib/model_text.ts";
 import { OPERATOR_CANCELLED_NOTE } from "../f/factory/lib/operator_cancel.ts";
+import { RECONCILE_MERGED_NOTE } from "../f/factory/lib/poll_support.ts";
 import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "../f/factory/lib/pr_ci_support.ts";
+import { TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX } from "../f/factory/lib/pr_review_retry.ts";
 import { FINDING_OUTCOMES } from "../f/factory/lib/review_outcomes.ts";
 import {
   getCleanupSummary,
@@ -14275,6 +14296,629 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
         ["2003-01-13", 1, 1],
       ]),
     trend.human_threads,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 遷移の履歴(history_events)
+// ここまでの節が`work_item_events`へ書いたすべての行が、履歴の連鎖に入って検証を通ることを先に確かめる。
+// その後に、専用の作業項目で、書き込み、追記専用、改ざんの検知、保持の掃除を確かめる。
+// ---------------------------------------------------------------------------
+{
+  const NOW_MS = Date.now();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const GENESIS = "0".repeat(64);
+
+  /** 文を流し、失敗したときのエラーの文を返す。成功したらnullを返す。 */
+  async function rejection(statement: string): Promise<string | null> {
+    try {
+      await execPsqlAsync(target, statement);
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  /** 履歴の掃除を許す印を立てたトランザクションの中で、文を流す。 */
+  function withPruneFlag(statement: string): string {
+    return `BEGIN; SELECT set_config('factory.history_prune', 'on', true); ${statement}; COMMIT;`;
+  }
+
+  /** 検査用に履歴を書き換えるトランザクション。追記専用の歯止めを外して、改ざんを真似る。 */
+  function tampering(statement: string): string {
+    return `BEGIN; SELECT set_config('session_replication_role', 'replica', true); ${statement}; COMMIT;`;
+  }
+
+  async function historyOf(workItemId: number): Promise<SqlRow[]> {
+    return sql`
+      SELECT seq, kind, reason_code, from_status, to_status, actor, detail, prev_hash, row_hash
+      FROM factory.history_events
+      WHERE work_item_id = ${workItemId}::bigint
+      ORDER BY seq
+    `.fetch();
+  }
+
+  async function brokenChains(workItemId: number | null): Promise<SqlRow[]> {
+    return sql`
+      SELECT work_item_id, first_bad_seq, reason
+      FROM factory.history_verify(${workItemId}::bigint)
+      ORDER BY work_item_id
+    `.fetch();
+  }
+
+  async function lastEventId(workItemId: number): Promise<number> {
+    const rows = await sql`
+      SELECT max(id) AS id FROM factory.work_item_events WHERE work_item_id = ${workItemId}::bigint
+    `.fetch();
+    return Number(rows[0]?.id);
+  }
+
+  async function addEvent(
+    workItemId: number,
+    from: string | null,
+    to: string,
+    note: string | null,
+    occurredAt: string,
+  ): Promise<void> {
+    await sql`
+      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at)
+      VALUES (${workItemId}::bigint, ${from}::text, ${to}, ${note}::text, ${occurredAt}::timestamptz)
+    `.execute();
+  }
+
+  // 理由コードの一覧は、TypeScriptとSQLで同じ。
+  const sqlCodes = await sql`
+    SELECT code FROM unnest(factory.history_reason_codes()) AS t (code) ORDER BY code
+  `.fetch();
+  check(
+    "history: the reason codes in TypeScript and in SQL are the same list",
+    JSON.stringify(sqlCodes.map((row) => row.code)) ===
+      JSON.stringify([...HISTORY_REASON_CODES].sort()),
+    sqlCodes,
+  );
+
+  // 注記の先頭を理由コードに写す表。注記は、本番のコードの定数から作る。
+  const reasonSamples: readonly [string | null, string, string][] = [
+    [
+      `${AUTO_RETRY_NOTE_PREFIX}restarted from failed`,
+      "implementing",
+      "auto_retry",
+    ],
+    [`${TRANSIENT_STALL_NOTE_PREFIX}a`, "reviewing", "auto_retry_stalled"],
+    [
+      `${TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX}a`,
+      "failed",
+      "auto_retry_launch_failed",
+    ],
+    ["retry_work_item: restarted from failed", "implementing", "manual_retry"],
+    [OPERATOR_CANCELLED_NOTE, "cancelled", "operator_cancelled"],
+    [OPERATOR_CANCELLED_NOTE, "failed", "unspecified"],
+    [`${PR_FIX_DESIGN_GAP_NOTE_PREFIX}a`, "designing", "pr_fix_design_gap"],
+    [
+      `${IMPLEMENT_DESIGN_GAP_NOTE_PREFIX}a`,
+      "designing",
+      "implement_design_gap",
+    ],
+    [
+      `${IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX}a`,
+      "needs_human",
+      "implement_design_gap_exhausted",
+    ],
+    [`${CONFLICT_CLAUDE_FAILED_NOTE_PREFIX}a`, "needs_human", "pr_fix_apply"],
+    [RECONCILE_MERGED_NOTE, "reviewed", "reconcile"],
+    ["isolation gate closed: no_sandbox", "failed", "isolation_gate_closed"],
+    [`${INTAKE_REFRESHED_NOTE_PREFIX} (title)`, "picked", "intake_refreshed"],
+    [
+      `${APPROVAL_REDISPATCH_NOTE_PREFIX}12`,
+      "awaiting_approval",
+      "approval_redispatch",
+    ],
+    [
+      "superseded by a newer cycle (work item 9)",
+      "cancelled",
+      "superseded_by_newer_cycle",
+    ],
+    ["superseded by a newer cycle (work item 9)", "failed", "unspecified"],
+    [`${CI_ROUND_REASON_PREFIX}: claude blocked: a`, "needs_human", "ci_round"],
+    [`${CONFLICT_ROUND_REASON_PREFIX}: a`, "needs_human", "conflict_round"],
+    [null, "approved", "unspecified"],
+    ["", "failed", "unspecified"],
+    ["something nobody mapped", "failed", "unspecified"],
+    ["note that mentions auto_retry: in the middle", "failed", "unspecified"],
+  ];
+  for (const [note, toStatus, expected] of reasonSamples) {
+    const rows = await sql`
+      SELECT factory.history_reason_code(${note}::text, ${toStatus}::text) AS code
+    `.fetch();
+    check(
+      `history: the note ${JSON.stringify(note)} to ${toStatus} maps to ${expected}`,
+      rows[0]?.code === expected,
+      rows,
+    );
+  }
+  const sampledCodes = new Set(reasonSamples.map(([, , code]) => code));
+  check(
+    "history: every reason code in the list is produced by at least one sample note",
+    HISTORY_REASON_CODES.every((code) => sampledCodes.has(code)),
+    HISTORY_REASON_CODES.filter((code) => !sampledCodes.has(code)),
+  );
+
+  // ここまでの節が書いた遷移は、すべて履歴に1行ずつあり、連鎖が検証を通る。
+  const unrecorded = await sql`
+    SELECT count(*) AS n FROM factory.work_item_events e
+    WHERE NOT EXISTS (
+      SELECT 1 FROM factory.history_events h
+      WHERE h.work_item_id = e.work_item_id AND (h.detail ->> 'event_id')::bigint = e.id
+    )
+  `.fetch();
+  check(
+    "history: every transition written by the earlier sections has a history row",
+    Number(unrecorded[0]?.n) === 0,
+    unrecorded,
+  );
+  const duplicated = await sql`
+    SELECT count(*) AS n FROM (
+      SELECT (detail ->> 'event_id')::bigint AS event_id
+      FROM factory.history_events
+      WHERE detail ? 'event_id'
+      GROUP BY 1 HAVING count(*) > 1
+    ) d
+  `.fetch();
+  check(
+    "history: no transition has two history rows",
+    Number(duplicated[0]?.n) === 0,
+    duplicated,
+  );
+  check(
+    "history: every chain written by the earlier sections verifies",
+    (await brokenChains(null)).length === 0,
+    await brokenChains(null),
+  );
+  const backfilled = await sql`
+    SELECT count(*) AS n FROM factory.history_events WHERE (detail ->> 'backfilled') = 'true'
+  `.fetch();
+  check(
+    "history: the events that existed when the migration ran were taken in as backfilled rows",
+    Number(backfilled[0]?.n) > 0,
+    backfilled,
+  );
+
+  // 書き込みの経路。
+  const pathItem = await issueWorkItem(97001, 1, "picked", "qdb-history-path");
+  await updateStatus(
+    pathItem,
+    "requirements_generating",
+    null,
+    sql,
+    NO_JOB_IDS,
+  );
+  const pathFirstEvent = await lastEventId(pathItem);
+  await updateStatus(
+    pathItem,
+    "awaiting_approval",
+    `${AUTO_RETRY_NOTE_PREFIX}secret-note-body`,
+    sql,
+    NO_JOB_IDS,
+  );
+  await updateStatusIfCurrent(
+    pathItem,
+    "awaiting_approval",
+    "approved",
+    null,
+    sql,
+    NO_JOB_IDS,
+  );
+  const pathRows = await historyOf(pathItem);
+  check(
+    "history: updateStatus and updateStatusIfCurrent each add one row, numbered from 1 in order",
+    JSON.stringify(pathRows.map((row) => row.seq)) ===
+      JSON.stringify([1, 2, 3]),
+    pathRows,
+  );
+  check(
+    "history: the first row of a chain follows the genesis hash",
+    pathRows[0]?.prev_hash === GENESIS,
+    pathRows[0],
+  );
+  check(
+    "history: each row follows the hash of the row before it",
+    pathRows[1]?.prev_hash === pathRows[0]?.row_hash &&
+      pathRows[2]?.prev_hash === pathRows[1]?.row_hash,
+    pathRows,
+  );
+  check(
+    "history: a row carries the transition, the actor and the kind",
+    pathRows[0]?.kind === "transition" &&
+      pathRows[0]?.from_status === "picked" &&
+      pathRows[0]?.to_status === "requirements_generating" &&
+      pathRows[0]?.actor === "factory",
+    pathRows[0],
+  );
+  check(
+    "history: a transition without a note gets the unspecified reason",
+    pathRows[0]?.reason_code === "unspecified",
+    pathRows[0],
+  );
+  check(
+    "history: a note that starts with a known prefix gets its reason code",
+    pathRows[1]?.reason_code === "auto_retry",
+    pathRows[1],
+  );
+  check(
+    "history: the row points at the work item event it came from",
+    JSON.stringify(pathRows[0]?.detail) ===
+      JSON.stringify({ event_id: pathFirstEvent, note_chars: null }),
+    pathRows[0]?.detail,
+  );
+  check(
+    "history: the row keeps the length of the note but not the note",
+    JSON.stringify(pathRows[1]?.detail).includes('"note_chars":') &&
+      !JSON.stringify(pathRows[1]).includes("secret-note-body"),
+    pathRows[1]?.detail,
+  );
+
+  const cancelItem = await issueWorkItem(
+    97002,
+    1,
+    "failed",
+    "qdb-history-cancel",
+  );
+  await cancelStatement(
+    sql,
+    { id: cancelItem, kind: "issue", expected: "failed", allowed: ["failed"] },
+    NO_JOB_IDS,
+  );
+  const cancelRows = await historyOf(cancelItem);
+  check(
+    "history: the operator cancel statement adds one row with the cancel reason",
+    cancelRows.length === 1 &&
+      cancelRows[0]?.reason_code === "operator_cancelled",
+    cancelRows,
+  );
+
+  const directItem = await issueWorkItem(
+    97003,
+    1,
+    "picked",
+    "qdb-history-direct",
+  );
+  await event(directItem, "failed", "boom");
+  check(
+    "history: a plain insert into the events table adds one row",
+    (await historyOf(directItem)).length === 1,
+  );
+  await execPsqlAsync(
+    target,
+    `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(directItem)}, 'a', 'b', 'one'), (${String(directItem)}, 'b', 'c', 'two'), (${String(directItem)}, 'c', 'd', 'three')`,
+  );
+  const batchRows = await historyOf(directItem);
+  check(
+    "history: one statement that inserts three events adds three rows in the order of the events",
+    JSON.stringify(batchRows.map((row) => [row.seq, row.to_status])) ===
+      JSON.stringify([
+        [1, "failed"],
+        [2, "b"],
+        [3, "c"],
+        [4, "d"],
+      ]),
+    batchRows,
+  );
+  check(
+    "history: the rows of a multi-row insert form one valid chain",
+    (await brokenChains(directItem)).length === 0,
+  );
+
+  const rolledItem = await issueWorkItem(
+    97004,
+    1,
+    "picked",
+    "qdb-history-rolled",
+  );
+  await execPsqlAsync(
+    target,
+    `BEGIN; INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(rolledItem)}, 'picked', 'failed', 'rolled back'); ROLLBACK;`,
+  );
+  check(
+    "history: a rolled-back transition leaves no history row",
+    (await historyOf(rolledItem)).length === 0,
+  );
+  await execPsqlAsync(
+    target,
+    `BEGIN; INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(rolledItem)}, 'picked', 'failed', 'one'); INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(rolledItem)}, 'failed', 'picked', 'two'); COMMIT;`,
+  );
+  check(
+    "history: two transitions of one transaction are numbered in order",
+    JSON.stringify((await historyOf(rolledItem)).map((row) => row.seq)) ===
+      JSON.stringify([1, 2]),
+  );
+
+  const otherItem = await issueWorkItem(
+    97005,
+    1,
+    "picked",
+    "qdb-history-other",
+  );
+  await updateStatus(otherItem, "failed", null, sql, NO_JOB_IDS);
+  const otherRows = await historyOf(otherItem);
+  check(
+    "history: the chain of another work item starts again at 1 from the genesis hash",
+    otherRows.length === 1 &&
+      otherRows[0]?.seq === 1 &&
+      otherRows[0]?.prev_hash === GENESIS,
+    otherRows,
+  );
+
+  // 追記専用。
+  const updateError = await rejection(
+    `UPDATE factory.history_events SET actor = 'x' WHERE work_item_id = ${String(otherItem)}`,
+  );
+  check(
+    "history: an UPDATE of a history row is rejected",
+    updateError !== null && updateError.includes("append-only"),
+    updateError,
+  );
+  const deleteError = await rejection(
+    `DELETE FROM factory.history_events WHERE work_item_id = ${String(otherItem)}`,
+  );
+  check(
+    "history: a DELETE of a history row is rejected",
+    deleteError !== null && deleteError.includes("append-only"),
+    deleteError,
+  );
+  const truncateError = await rejection("TRUNCATE factory.history_events");
+  check(
+    "history: a TRUNCATE of the history table is rejected",
+    truncateError !== null && truncateError.includes("append-only"),
+    truncateError,
+  );
+  check(
+    "history: the rejected statements left the history as it was",
+    (await historyOf(otherItem)).length === 1,
+  );
+  check(
+    "history: an UPDATE is allowed in a transaction that sets the prune flag",
+    (await rejection(
+      `BEGIN; SELECT set_config('factory.history_prune', 'on', true); UPDATE factory.history_events SET actor = 'factory' WHERE work_item_id = ${String(otherItem)}; ROLLBACK;`,
+    )) === null,
+  );
+  check(
+    "history: a DELETE is allowed in a transaction that sets the prune flag",
+    (await rejection(
+      `BEGIN; SELECT set_config('factory.history_prune', 'on', true); DELETE FROM factory.history_events WHERE work_item_id = ${String(otherItem)}; ROLLBACK;`,
+    )) === null,
+  );
+  check(
+    "history: a TRUNCATE is allowed in a transaction that sets the prune flag",
+    (await rejection(
+      `BEGIN; SELECT set_config('factory.history_prune', 'on', true); TRUNCATE factory.history_events; ROLLBACK;`,
+    )) === null,
+  );
+  check(
+    "history: the prune flag does not outlive its transaction",
+    (await rejection(
+      `DELETE FROM factory.history_events WHERE work_item_id = ${String(otherItem)}`,
+    )) !== null,
+  );
+  check(
+    "history: the allowed statements that were rolled back left the history as it was",
+    (await historyOf(otherItem)).length === 1,
+  );
+
+  // 履歴は、作業項目を消しても残る。
+  const goneItem = await issueWorkItem(97006, 1, "picked", "qdb-history-gone");
+  await updateStatus(goneItem, "failed", null, sql, NO_JOB_IDS);
+  await execPsqlAsync(
+    target,
+    `DELETE FROM factory.work_items WHERE id = ${String(goneItem)}`,
+  );
+  check(
+    "history: the history outlives the work item and still verifies",
+    (await historyOf(goneItem)).length === 1 &&
+      (await brokenChains(goneItem)).length === 0,
+  );
+
+  // 改ざんの検知。
+  const chainSpecs: readonly [number, string][] = [
+    [97011, "edited"],
+    [97012, "middle"],
+    [97013, "first"],
+    [97014, "last"],
+  ];
+  const chainSteps: readonly WorkItemStatus[] = [
+    "requirements_generating",
+    "awaiting_approval",
+    "approved",
+    "implementing",
+  ];
+  const tamperItems = new Map<string, number>();
+  for (const [issue, name] of chainSpecs) {
+    const id = await issueWorkItem(issue, 1, "picked", `qdb-history-${name}`);
+    for (const to of chainSteps) {
+      await updateStatus(id, to, null, sql, NO_JOB_IDS);
+    }
+    tamperItems.set(name, id);
+  }
+  const editedId = tamperItems.get("edited") ?? 0;
+  const middleId = tamperItems.get("middle") ?? 0;
+  const firstId = tamperItems.get("first") ?? 0;
+  const lastId = tamperItems.get("last") ?? 0;
+  check(
+    "history: the chains to tamper with verify before the tampering",
+    (await brokenChains(null)).length === 0,
+    await brokenChains(null),
+  );
+  await execPsqlAsync(
+    target,
+    tampering(
+      `UPDATE factory.history_events SET reason_code = 'reconcile' WHERE work_item_id = ${String(editedId)} AND seq = 2`,
+    ),
+  );
+  const editedBroken = await brokenChains(editedId);
+  check(
+    "history: changing the reason code of one row makes the verification point at that row",
+    editedBroken.length === 1 &&
+      editedBroken[0]?.first_bad_seq === 2 &&
+      editedBroken[0]?.reason === "row_hash_mismatch",
+    editedBroken,
+  );
+  await execPsqlAsync(
+    target,
+    tampering(
+      `DELETE FROM factory.history_events WHERE work_item_id = ${String(middleId)} AND seq = 2`,
+    ),
+  );
+  const middleBroken = await brokenChains(middleId);
+  check(
+    "history: deleting a middle row is detected as a gap at the next row",
+    middleBroken.length === 1 &&
+      middleBroken[0]?.first_bad_seq === 3 &&
+      middleBroken[0]?.reason === "gap",
+    middleBroken,
+  );
+  await execPsqlAsync(
+    target,
+    tampering(
+      `DELETE FROM factory.history_events WHERE work_item_id = ${String(firstId)} AND seq = 1`,
+    ),
+  );
+  const firstBroken = await brokenChains(firstId);
+  check(
+    "history: deleting the first row is detected because the chain no longer starts at 1",
+    firstBroken.length === 1 &&
+      firstBroken[0]?.first_bad_seq === 2 &&
+      firstBroken[0]?.reason === "gap",
+    firstBroken,
+  );
+  await execPsqlAsync(
+    target,
+    tampering(
+      `DELETE FROM factory.history_events WHERE work_item_id = ${String(lastId)} AND seq = 4`,
+    ),
+  );
+  check(
+    "history: deleting the last row is not detected by the chain alone",
+    (await brokenChains(lastId)).length === 0,
+  );
+  check(
+    "history: verifying every work item reports exactly the three tampered chains",
+    JSON.stringify(
+      (await brokenChains(null)).map((row) => row.work_item_id),
+    ) === JSON.stringify([editedId, middleId, firstId].sort((a, b) => a - b)),
+    await brokenChains(null),
+  );
+  check(
+    "history: verifying one work item leaves the other chains out",
+    (await brokenChains(pathItem)).length === 0,
+  );
+
+  // 監査の証跡パックは、壊れた連鎖を載せる。
+  const tamperedEvidence = await collectAuditEvidence(
+    {
+      period: {
+        start: new Date(NOW_MS - DAY_MS),
+        end: new Date(NOW_MS + DAY_MS),
+        unaudited_gap_days: 0,
+      },
+      instanceName: "qdb",
+    },
+    sql,
+  );
+  check(
+    "history: the evidence pack lists the broken chains",
+    tamperedEvidence.history.available &&
+      tamperedEvidence.history.broken.some(
+        (chain) => chain.work_item_id === editedId && chain.first_bad_seq === 2,
+      ),
+    tamperedEvidence.history.broken,
+  );
+  check(
+    "history: the evidence pack counts the transitions of the period by reason code",
+    tamperedEvidence.history.period_events > 0 &&
+      tamperedEvidence.history.period_by_reason.some(
+        (entry) => entry.reason_code === "unspecified" && entry.count > 0,
+      ),
+    tamperedEvidence.history,
+  );
+
+  // 保持の掃除。連鎖の最後の記録が期限より古い連鎖だけを、丸ごと消す。
+  const oldItem = await issueWorkItem(97021, 1, "failed", "qdb-history-old");
+  const mixedItem = await issueWorkItem(
+    97022,
+    1,
+    "failed",
+    "qdb-history-mixed",
+  );
+  const freshItem = await issueWorkItem(
+    97023,
+    1,
+    "failed",
+    "qdb-history-fresh",
+  );
+  const longAgo = new Date(NOW_MS - 400 * DAY_MS).toISOString();
+  const lessAgo = new Date(NOW_MS - 399 * DAY_MS).toISOString();
+  const recently = new Date(NOW_MS - 1 * DAY_MS).toISOString();
+  await addEvent(oldItem, "picked", "failed", null, longAgo);
+  await addEvent(oldItem, "failed", "picked", null, lessAgo);
+  await addEvent(mixedItem, "picked", "failed", null, longAgo);
+  await addEvent(mixedItem, "failed", "picked", null, recently);
+  await addEvent(freshItem, "picked", "failed", null, recently);
+  const cutoff = historyCutoff(new Date(NOW_MS), 365);
+  // 掃除が消すはずの連鎖と行は、掃除の前に、別の文で数える。
+  const expectedPrune = await sql`
+    SELECT count(*) AS chains, coalesce(sum(n), 0) AS events FROM (
+      SELECT count(*) AS n FROM factory.history_events
+      GROUP BY work_item_id HAVING max(occurred_at) < ${cutoff.toISOString()}::timestamptz
+    ) d
+  `.fetch();
+  const pruned = await pruneHistoryBefore(cutoff, sql);
+  check(
+    "history: the prune deletes the chains whose newest event is older than the cutoff and reports their numbers",
+    pruned.chains_deleted === Number(expectedPrune[0]?.chains) &&
+      pruned.events_deleted === Number(expectedPrune[0]?.events) &&
+      pruned.chains_deleted >= 1,
+    { pruned, expectedPrune },
+  );
+  check(
+    "history: the prune deletes an old chain as a whole",
+    (await historyOf(oldItem)).length === 0,
+  );
+  check(
+    "history: the prune keeps a chain that has a recent event, including its old rows",
+    (await historyOf(mixedItem)).length === 2 &&
+      (await brokenChains(mixedItem)).length === 0,
+  );
+  check(
+    "history: the prune keeps a recent chain",
+    (await historyOf(freshItem)).length === 1,
+  );
+  check(
+    "history: the prune keeps the chains that are not old",
+    (await historyOf(pathItem)).length === 3,
+  );
+  check(
+    "history: the prune flag is not left on after the prune",
+    (await rejection(
+      `DELETE FROM factory.history_events WHERE work_item_id = ${String(freshItem)}`,
+    )) !== null,
+  );
+  const prunedAgain = await pruneHistoryBefore(cutoff, sql);
+  check(
+    "history: a second prune with the same cutoff deletes nothing",
+    prunedAgain.chains_deleted === 0 && prunedAgain.events_deleted === 0,
+    prunedAgain,
+  );
+
+  // 改ざんした連鎖は、掃除の印を立てて消し、この節の最後で、全体が検証を通る状態に戻す。
+  await execPsqlAsync(
+    target,
+    withPruneFlag(
+      `DELETE FROM factory.history_events WHERE work_item_id IN (${[editedId, middleId, firstId].join(", ")})`,
+    ),
+  );
+  check(
+    "history: after the tampered chains are removed, every chain verifies",
+    (await brokenChains(null)).length === 0,
+    await brokenChains(null),
   );
 }
 
