@@ -392,6 +392,8 @@ worker imageにmiseは無いので、検査コマンドはworkerで直接動く�
   イメージが古いときと、稼働中のworkerの問題のときの両方である
 - 検査コマンドの実行ファイルを起動できない(`check_unrunnable`)
 - Claudeの実行の失敗、または承認済みの要件定義のディレクトリが基準値と合わず、Claudeを起動しなかったこと(`claude_error`)
+- Claudeの実行がターンの上限(`implement_max_turns`)に達したこと(`max_turns`)。
+  ラウンドは`error`で記録するが、同じ上限で再実行しても同じ結果になるので、失敗ラウンドの数(`heavy_model`への切り替えの判定)には数えない
 - リースの喪失(`lease_lost`)
 
 `worktree_changed`で止めるのは、変更の判定とgitleaksの検査の両方を経たツリーだけを、検証済みとして記録するためである。
@@ -586,7 +588,7 @@ Claudeが不正な出力を返したときは、1回の実行につき1回だけ
 | 検査に通った、検査を実行しなかった | コミットしてPRを作成または更新し、PR作成済み(`pr_open`)にする |
 | 要件の不足。仕様がIssueの実装が、保護パスを変更した | 要件定義を作り直す工程2へ差し戻す |
 | ラウンドの上限、日次予算、期限、停滞、差分の超過 | 途中の変更を残して、人の対応待ちにする |
-| symlinkの変更、Claudeの実行の失敗、`.git`の書き換え、判定と検査の間のworktreeの変化、検査を実行できない環境の問題(`check_image_stale`、`check_unrunnable`)、準備での停止 | 何もpushせずに、人の対応待ちにする |
+| symlinkの変更、Claudeの実行の失敗、ターンの上限への到達、`.git`の書き換え、判定と検査の間のworktreeの変化、検査を実行できない環境の問題(`check_image_stale`、`check_unrunnable`)、準備での停止 | 何もpushせずに、人の対応待ちにする |
 
 完了のステップは、作業項目を読んだ直後にリースを確かめる。
 外への副作用の直前にも確かめ直す。
@@ -669,6 +671,7 @@ PRがあるときは、未検証の変更がPRに入るのでpushしない。
 
 - symlinkの変更
 - Claudeの実行の失敗
+- ターンの上限への到達(`max_turns`)
 - `.git`の書き換え
 - 判定と検査の間のworktreeの変化
 - 検査を動かせない環境の問題(`check_image_stale`、`check_unrunnable`)
@@ -752,7 +755,7 @@ PR修正が親を差し戻すときも同じである。
 | `model` | `claude-sonnet-5-5` | 実装のモデル。同じ要件定義の実装が続けて2回失敗した後は`heavy_model`を使う |
 | `heavy_model` | `claude-opus-5-5` | 要件定義の生成のモデルと、続けて2回失敗した後の実装のモデル |
 | `implement_max_rounds` | `5` | Claudeを実行するラウンドの上限 |
-| `implement_max_turns` | `80` | Claude 1回の実行のターン数の上限 |
+| `implement_max_turns` | `80` | Claude 1回の実行のターン数の上限。達すると`max_turns`で止まり、通知がこの設定を上げるよう案内する |
 | `implement_max_budget_usd_per_run` | `10` | Claude 1回の実行の費用の上限(USD) |
 | `implement_timeout_sec` | `3600` | Claude 1回の実行を打ち切る秒数 |
 | `implement_check_timeout_sec` | `900` | 検査コマンド1件を打ち切る秒数 |

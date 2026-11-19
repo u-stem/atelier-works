@@ -94,6 +94,7 @@ import {
   type GhRepoUpsert,
   IMPLEMENT_ROUND_MODES,
   IMPLEMENT_ROUND_OUTCOMES,
+  IMPLEMENT_UNCOUNTED_FAILURE_REASONS,
   type ImplementDiffStat,
   type ImplementRound,
   type ImplementRoundMode,
@@ -7205,7 +7206,7 @@ export async function insertImplementRound(
  * ラウンドは記録してから次のラウンドを始めるので、修正ラウンドの直前の失敗も含む。
  * 試行(`attempt`)が増えると数え直す。却下や要件の不足で要件定義からやり直した実装は、
  * 前の要件定義の失敗を引き継がない。
- * Claudeの実行が使用上限か全停止で終わった`error`のラウンドは、数えず、連続も途切れさせない(`NON_MODEL_FAILURE_REASONS`)。
+ * Claudeの実行が使用上限、全停止、ターンの上限で終わった`error`のラウンドは、数えず、連続も途切れさせない(`IMPLEMENT_UNCOUNTED_FAILURE_REASONS`)。
  * モデルを強くしても防げないためである。
  * 除くのは`error`のラウンドだけである。`.git`ポインタの書き換えは、実行の失敗の種類にかかわらず`check_failed`で記録され、モデルの失敗として数える。
  * 失敗の種類は`to_jsonb`で読む。列を足すmigrationより先にこの文が動いても列が無いエラーにせず、種類の無い実行として数える。
@@ -7216,7 +7217,7 @@ export async function countImplementFailedRounds(
   attempt: number,
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
-  const nonModelReasons: string[] = [...NON_MODEL_FAILURE_REASONS];
+  const nonModelReasons: string[] = [...IMPLEMENT_UNCOUNTED_FAILURE_REASONS];
   const rows = await sql`
     SELECT COUNT(*) AS failed_rounds
     FROM factory.implement_rounds ir

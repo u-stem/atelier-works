@@ -4705,7 +4705,7 @@ describe("countImplementFailedRounds", () => {
     );
   });
 
-  test("leaves out the usage limit, the stops and the run not started, and nothing else", async () => {
+  test("leaves out the usage limit, the stops, the run not started and the turn limit, and nothing else", async () => {
     const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
     await countImplementFailedRounds(1, 2, sql);
     expect(calls[0]?.values).toContainEqual([
@@ -4713,6 +4713,7 @@ describe("countImplementFailedRounds", () => {
       "stopped",
       "work_item_stopped",
       "not_started",
+      "max_turns",
     ]);
   });
 

@@ -1038,9 +1038,25 @@ const implementNotStarted = await issueWorkItem(
   "implementing",
   "qdb-implement-not-started",
 );
+// ターンの上限で止まったラウンドは数えず、連続も途切れさせない。
+// `implementTurnsOnly`は止まったラウンドだけ、`implementTurnsBetween`は失敗の間にターンの上限のラウンドが入る。
+const implementTurnsOnly = await issueWorkItem(
+  967,
+  1,
+  "implementing",
+  "qdb-implement-turns-only",
+);
+const implementTurnsBetween = await issueWorkItem(
+  968,
+  1,
+  "implementing",
+  "qdb-implement-turns-between",
+);
 await execPsqlAsync(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, failure_reason) VALUES ${[
+    `(${String(implementTurnsOnly)}, 'implement', 1, 'm', 'failed', 'max_turns')`,
+    `(${String(implementTurnsBetween)}, 'implement', 1, 'm', 'failed', 'max_turns')`,
     `(${String(implementLimitOnly)}, 'implement', 1, 'm', 'failed', 'usage_limit')`,
     `(${String(implementLimitOnly)}, 'implement', 1, 'm', 'failed', 'stopped')`,
     `(${String(implementLimitBetween)}, 'implement', 1, 'm', 'failed', 'usage_limit')`,
@@ -1056,6 +1072,11 @@ function runIdOf(workItemId: number, reason: string): string {
 await execPsqlAsync(
   target,
   `INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome, agent_run_id) VALUES ${[
+    `(${String(implementTurnsOnly)}, 1, 1, 'implement', 'error', ${runIdOf(implementTurnsOnly, "max_turns")})`,
+    `(${String(implementTurnsOnly)}, 1, 2, 'implement', 'error', ${runIdOf(implementTurnsOnly, "max_turns")})`,
+    `(${String(implementTurnsBetween)}, 1, 1, 'implement', 'check_failed', NULL)`,
+    `(${String(implementTurnsBetween)}, 1, 2, 'fix', 'error', ${runIdOf(implementTurnsBetween, "max_turns")})`,
+    `(${String(implementTurnsBetween)}, 1, 3, 'fix', 'stalled', NULL)`,
     `(${String(implementLimitOnly)}, 1, 1, 'implement', 'error', ${runIdOf(implementLimitOnly, "usage_limit")})`,
     `(${String(implementLimitOnly)}, 1, 2, 'fix', 'error', ${runIdOf(implementLimitOnly, "stopped")})`,
     `(${String(implementLimitBetween)}, 1, 1, 'implement', 'check_failed', NULL)`,
@@ -1075,6 +1096,16 @@ check(
   "countImplementFailedRounds: a round on the usage limit does not break the streak",
   (await countImplementFailedRounds(implementLimitBetween, 1, sql)) === 2,
   await countImplementFailedRounds(implementLimitBetween, 1, sql),
+);
+check(
+  "countImplementFailedRounds: rounds on the turn limit are not counted",
+  (await countImplementFailedRounds(implementTurnsOnly, 1, sql)) === 0,
+  await countImplementFailedRounds(implementTurnsOnly, 1, sql),
+);
+check(
+  "countImplementFailedRounds: a round on the turn limit does not break the streak",
+  (await countImplementFailedRounds(implementTurnsBetween, 1, sql)) === 2,
+  await countImplementFailedRounds(implementTurnsBetween, 1, sql),
 );
 check(
   "countImplementFailedRounds: a round on another failure of Claude is counted",

@@ -3,6 +3,7 @@
 // needs_humanの次の操作、Discordの`pr_opened`イベントを扱う。
 // 入出力は注入された依存を通してだけ行う。
 
+import { buildConfigConsoleUrl } from "./approval_support.ts";
 import { CheckEnvironmentError } from "./check_sandbox.ts";
 import { normalizeRepoUrl } from "./config.ts";
 import { isDesignRejectionExhausted } from "./design_apply_support.ts";
@@ -208,6 +209,7 @@ export function decideImplementFinishAction(
     case "needs_human":
     case "symlink":
     case "claude_error":
+    case "max_turns":
     case "git_pointer_modified":
     case "worktree_changed":
     case "check_image_stale":
@@ -303,6 +305,14 @@ export const REQUIREMENTS_REGENERATION_FAILED_REASON =
  */
 export function gapReportNoticeDetail(gapReport: string): string {
   return `差し戻し理由: ${maskSecrets(gapReport)}`;
+}
+
+/**
+ * ターンの上限で止まったとき、noticeとDiscordに載せる詳細を返す。
+ * 上限を上げる設定を開く、Consoleの設定タブへのリンクである。
+ */
+export function maxTurnsNoticeDetail(windmillPublicUrl: string): string {
+  return `設定: ${buildConfigConsoleUrl(windmillPublicUrl)}`;
 }
 
 /**

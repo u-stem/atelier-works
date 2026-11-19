@@ -153,6 +153,14 @@ export function buildSystemConsoleUrl(windmillPublicUrl: string): string {
 }
 
 /**
+ * Consoleのシステムの画面で、設定タブを開くURL(`/console/system?tab=config`)を返す。
+ * ConsoleはURLのフラグメントを読まないので、グループへの移動は付けない。
+ */
+export function buildConfigConsoleUrl(windmillPublicUrl: string): string {
+  return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}system?tab=config`;
+}
+
+/**
  * 判断が記録された承認依頼を処理するstepスクリプトのパスを、種類ごとに返す。
  * `approval_decide.ts`は判断を記録した後、
  * `wmill.runScriptByPathAsync`でこのパスのスクリプトを起動する。

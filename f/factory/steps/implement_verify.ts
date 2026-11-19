@@ -310,6 +310,7 @@ export async function main(
         workItemId: work_item_id,
         attempt: context.attempt,
         maxRounds: config.implement_max_rounds,
+        maxTurns: config.implement_max_turns,
         hasCheckCommands: commands.length > 0,
         firstRound: first_round,
         deadlineAt,

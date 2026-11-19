@@ -20,6 +20,7 @@ describe("isFlowRetryable", () => {
     ["work_item_stopped", false],
     ["not_started", true],
     ["claude_error", true],
+    ["max_turns", false],
     ["non_zero_exit", true],
     ["invalid_json", true],
     ["invalid_structured_output", true],
