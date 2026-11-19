@@ -12,6 +12,7 @@ import type { RunClaudeFailureReason } from "./claude.ts";
 export const NON_RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
   "timeout",
   "run_budget_exceeded",
+  "max_turns",
   "usage_limit",
   "stopped",
   "work_item_stopped",

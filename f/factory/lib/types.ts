@@ -608,7 +608,8 @@ export type ModelUsageEntry = {
 /**
  * `runClaude`の失敗の種類。
  * `run_budget_exceeded`は`--max-budget-usd`の超過、`usage_limit`はサブスクリプションの使用上限で、
- * どちらも結果のJSONが`is_error: true`のときに分ける。それ以外の`is_error`は`claude_error`になる。
+ * `max_turns`は`--max-turns`の超過(`error_max_turns`)。
+ * どれも結果のJSONが`is_error: true`のときに分ける。それ以外の`is_error`は`claude_error`になる。
  * 終了コードが0以外でも、標準出力が`is_error: true`の結果なら、この分け方にする。
  * `stopped`は全停止で止めた実行、`work_item_stopped`は人が中止した作業項目の実行を止めたもの。
  * `not_started`は、期限が残っていなかったので起動しなかった実行で、費用を記録しない。
@@ -621,6 +622,7 @@ export type RunClaudeFailureReason =
   | "claude_error"
   | "run_budget_exceeded"
   | "usage_limit"
+  | "max_turns"
   | "stopped"
   | "work_item_stopped"
   | "not_started";
@@ -635,6 +637,15 @@ export const NON_MODEL_FAILURE_REASONS: readonly RunClaudeFailureReason[] = [
   "work_item_stopped",
   "not_started",
 ];
+
+/**
+ * 実装の失敗ラウンドの数(`countImplementFailedRounds`)で、数えない失敗の種類。
+ * `NON_MODEL_FAILURE_REASONS`に、ターンの上限(`max_turns`)を足したもの。
+ * ターンの上限は、モデルを強くしても防げず、設定(`implement_max_turns`)を上げるまで同じ結果になる。
+ * PR修正の昇格の数え方(`countPrFixFailures`)には効かせないので、`NON_MODEL_FAILURE_REASONS`には足さない。
+ */
+export const IMPLEMENT_UNCOUNTED_FAILURE_REASONS: readonly RunClaudeFailureReason[] =
+  [...NON_MODEL_FAILURE_REASONS, "max_turns"];
 
 /**
  * PRレビューの実行を始めたきっかけ。`factory.work_items.review_trigger`と`factory.agent_runs.trigger`に書く値である。

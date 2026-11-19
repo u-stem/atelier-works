@@ -1160,10 +1160,11 @@ Discordの通知に従い、解除を待ってからラベルを付け直す([PR
 
 次の4つのステップは、Claudeの実行が上限で失敗すると、flowの再試行をしない。
 PRレビューの生成、PR修正の修正、要件定義の生成、監査の生成である。
-上限は次の3つである。
+上限は次の4つである。
 
 - `claude_timeout_sec`での打ち切り(`timeout`)
 - `max_budget_usd_per_run`の超過(`run_budget_exceeded`)
+- ターン数の上限(`max_turns`)
 - サブスクリプションの使用上限(`usage_limit`)
 
 すぐ再試行しても同じ失敗になり、費用だけがかかるためである。
@@ -1269,7 +1270,8 @@ Consoleからは上げられない([設定を止める向きに変える](operat
    ```
 
 2. `failure_reason`と、`error`の`subtype=`、`api_error_status=`、その後の本文を見る。
-   `is_error`の結果の`failure_reason`は`usage_limit`、`run_budget_exceeded`、`claude_error`のどれかである。
+   `is_error`の結果の`failure_reason`は`usage_limit`、`run_budget_exceeded`、`max_turns`、`claude_error`のどれかである。
+   `max_turns`は`error_max_turns`(ターン数の上限への到達)で、使用上限ではない。
 3. 使用上限の失敗の`failure_reason`が`claude_error`なら、判定が漏れている。
    `failure_reason`が`non_zero_exit`か`invalid_json`の失敗に使用上限の文があるときも、同じである。
    本文と終了の形をIssueに書き、`f/factory/lib/claude.ts`の判定を直す。
@@ -1377,7 +1379,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 
 ## Claudeの失敗で保留したCIの修正を起動し直す
 
-直す作業のClaudeの実行が次の4つで失敗すると、監視は行を保留する。
+直す作業のClaudeの実行が次の5つで失敗すると、監視は行を保留する。
 待てば解ける2つは、監視が自動で起動し直すので、解ける間は人の操作は要らない。
 
 | 種類 | 保留の理由 | 起動し直す時機 | 原因の解き方 |
@@ -1386,6 +1388,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 | `stopped` | `claude_stopped` | 全停止を解除した後の巡回 | 全停止を解除する |
 | `timeout` | `claude_run_failed` | 同じheadでは起動し直さない | 直す範囲が大きすぎないかをログで確かめ、必要なら`claude_timeout_sec`を上げる |
 | `run_budget_exceeded` | `claude_run_failed` | 同じheadでは起動し直さない | 直す範囲が大きすぎないかをログで確かめ、必要なら`max_budget_usd_per_run`を上げる |
+| `max_turns` | `claude_run_failed` | 同じheadでは起動し直さない | 直す範囲が大きすぎないかをログで確かめ、必要なら`max_turns`を上げる |
 
 使用上限と全停止で終わった回は、`pr_ci_fix_max_rounds`の回数に数えない。
 待つ間に回数を使い切ると、上限が戻っても直せないためである。
@@ -1397,7 +1400,7 @@ PRのリンクと次の操作がDiscordに届く。
 全停止の間は起動しないためである。
 全停止の変数を読めないときは、解除を確かめられないので、起動し直さない。
 
-`timeout`と`run_budget_exceeded`は同じheadで繰り返しても同じ失敗になり、費用と回数を使い切る。
+`timeout`、`run_budget_exceeded`、`max_turns`は同じheadで繰り返しても同じ失敗になり、費用と回数を使い切る。
 `claude_run_failed`の行の手順は次のとおりである。
 
 1. 行のIDは[失敗の自動修正を有効にする](operations/pr.md#失敗の自動修正を有効にする)の読み取りのコマンドで確かめる。

@@ -3,6 +3,7 @@ import {
   APPROVAL_TIMEOUT_SEC,
   buildApprovalConsoleUrl,
   buildAuditConsoleUrl,
+  buildConfigConsoleUrl,
   buildConsoleUrl,
   buildItemsConsoleUrl,
   buildNoticeConsoleUrl,
@@ -173,6 +174,14 @@ describe("buildSystemConsoleUrl", () => {
   test("links the system screen", () => {
     expect(buildSystemConsoleUrl("http://127.0.0.1:8080")).toBe(
       "http://127.0.0.1:8080/console/system",
+    );
+  });
+});
+
+describe("buildConfigConsoleUrl", () => {
+  test("links the config tab of the system screen", () => {
+    expect(buildConfigConsoleUrl("http://127.0.0.1:8080")).toBe(
+      "http://127.0.0.1:8080/console/system?tab=config",
     );
   });
 });
