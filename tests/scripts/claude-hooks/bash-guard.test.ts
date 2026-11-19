@@ -3270,7 +3270,10 @@ const LONG_INPUT_CPU_LIMIT_MS = 3000;
 
 // 幅のある256段などの判定が使うCPU時間(全スレッドの合計)の上限。最も遅い入力は256段×100語で、無負荷の単独の実測は、
 // 壁時計が約0.8〜1.1秒、CPU時間が約0.95〜1.25秒である。語の数の上限が無い最悪の形では、壁時計で約9秒になる。
-const WIDE_INPUT_CPU_LIMIT_MS = 8000;
+// GitHub Actionsの実行環境は、この処理が手元より数倍遅いので、そこでは上限を3倍にする。
+// 語の数の上限が無い最悪の形は手元で約9秒かかるので、3倍の上限でも、その退行は見つけられる。
+const CI_SLOWDOWN_ALLOWANCE = process.env.GITHUB_ACTIONS === "true" ? 3 : 1;
+const WIDE_INPUT_CPU_LIMIT_MS = 8000 * CI_SLOWDOWN_ALLOWANCE;
 
 // 幅のある入力と`find -exec`の入力の壁時計のタイムアウト。幅のある入力は無負荷で約1秒かかり、並列の検査では約9倍(約9秒)に伸びた実測がある。
 // `find -exec`の入力は、無負荷の壁時計が約0.5〜0.75秒で、負荷の下(CPUを使い切る36プロセスと並走)で約2.5〜3.8秒だった。

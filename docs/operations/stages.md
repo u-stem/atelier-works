@@ -351,15 +351,21 @@ PR本文の`Closes #N`で元のIssueに紐づく。
   `wmill-lock.yaml`の再生成(`mise run metadata`)は、検査コマンドに含められない。
   `wmill generate-metadata`が、Windmillのサーバーを必要とするためである。
   `mise run lint:docs`も、workerにmiseが無いので書けない。
-  同じ検査は、miseを通さない`bun run scripts/lint-docs.ts`で動く。
+  `bun run scripts/lint-docs.ts`は、miseを通さずに動く。
+  ただし、そのままの形は含められない。
+  リンクの検査は追跡しているファイルだけを見るので、実装が作った新しい文書がindexに無い時点で動かすと、その文書へのリンクで誤って失敗するためである。
+  `bun run scripts/lint-docs.ts --no-links`なら含められる。
+  リンクの検査と、リスクの表の検査(`scripts/lint-risk-register.ts`)を除き、規則、markdownlint、textlint、生成範囲の確認は実行する。
+  リンクの検査は、CIとgitのフックが担う。
   ロックと違い、文書の検査はサーバーも外部への書き込みも要らない。
   `git ls-files`、`node_modules/.bin/`のtextlintとmarkdownlint-cli2、`mise.toml`の読み取りだけで動き、イメージにはnodeが入っている。
-  ただし、workerの枠のuidで動かしたときの所要時間とメモリは、実機で確かめていない。
   textlintを最大4個のプロセスに分けて動かし、CIでは3分前後かかる。
-  リンクの検査は、追跡しているファイルだけを見る。
-  実装が作った新しい文書がindexに無い時点で動かすと、その文書へのリンクで失敗しうるので、足す前に実機で確かめる。
-  足すときは、`implement_check_timeout_sec`に収まるかを、検査コマンドの設定を変えたときの確認と同じ手順で確かめる。
-  検査コマンドに足さない間は、`lint:docs`の失敗は、実装のPRがCIに落ちて初めて分かる。
+  `check_commands_by_repo`の検査コマンドに足す値は、`bun run scripts/lint-docs.ts --no-links`である。
+  足すときは、次の2つを確かめる。
+  - workerの枠のuidで動かしたときの所要時間とメモリが、`implement_check_timeout_sec`とworkerの上限に収まること。
+  - 検査コマンドの設定を変えたときの確認と同じ手順で、軽い作業項目に流して通ること。
+
+  検査コマンドに足していないリポジトリでは、`lint:docs`の失敗は、実装のPRがCIに落ちて初めて分かる。
   CIの修正が、文書の失敗は直す。
   ロックの失敗は、ラウンドの上限(`pr_ci_fix_max_rounds`)に達していても、余裕の3回まで、Claudeを使わない再計算が直す。
 - 検査コマンドの数を増やすときは、時間の合計を確かめる。
