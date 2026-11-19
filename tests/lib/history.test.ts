@@ -17,6 +17,7 @@ import {
   EMPTY_HISTORY_EVIDENCE,
   HISTORY_NOTE_RULES,
   HISTORY_REASON_CODES,
+  type HistoryReasonCode,
   historyCutoff,
   historyReasonCode,
   isHistoryReasonCode,
@@ -97,7 +98,7 @@ describe("isHistoryReasonCode", () => {
 
 describe("historyReasonCode", () => {
   // 注記は、本番のコードの定数から作る。定数の文が変わると、ここが落ちる。
-  test.each([
+  const CASES: readonly (readonly [string, string, HistoryReasonCode])[] = [
     [`${AUTO_RETRY_NOTE_PREFIX}restarted from failed`, "failed", "auto_retry"],
     [`${TRANSIENT_STALL_NOTE_PREFIX}a`, "reviewing", "auto_retry_stalled"],
     [
@@ -134,9 +135,14 @@ describe("historyReasonCode", () => {
     ],
     [`${CI_ROUND_REASON_PREFIX}: claude blocked: a`, "needs_human", "ci_round"],
     [`${CONFLICT_ROUND_REASON_PREFIX}: a`, "needs_human", "conflict_round"],
-  ])("maps the note %j to %s as %s", (note, toStatus, expected) => {
-    expect(historyReasonCode(note, toStatus)).toBe(expected);
-  });
+  ];
+
+  test.each(CASES)(
+    "maps the note %j to %s as %s",
+    (note, toStatus, expected) => {
+      expect(historyReasonCode(note, toStatus)).toBe(expected);
+    },
+  );
 
   test("maps a missing note to unspecified", () => {
     expect(historyReasonCode(null, "approved")).toBe("unspecified");
