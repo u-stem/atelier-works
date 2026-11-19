@@ -408,3 +408,69 @@ export function skipAcceptanceRate(counts: OutcomeCounts): Rate {
     confirmedCount(counts),
   );
 }
+
+/** 割合1つの、前の版と後の版の値。両方が割合のときだけ、差(百分率の点、小数第1位まで)を持つ。 */
+export type RateChange = {
+  readonly before: Rate;
+  readonly after: Rate;
+  readonly diff_points: number | null;
+};
+
+/**
+ * 2つの版の比較の結果。
+ * - `not_compared`: どちらかの確定した指摘が`MIN_CONFIRMED_FINDINGS`未満で、比べない。確定した指摘の件数だけを持つ。
+ * - `compared`: 両側が基準以上で、割合と差を持つ。差は並べた値であり、偶然かを調べた結果ではない。
+ */
+export type VersionComparison =
+  | {
+      readonly kind: "not_compared";
+      readonly reason: "insufficient_denominator";
+      readonly before_confirmed: number;
+      readonly after_confirmed: number;
+    }
+  | {
+      readonly kind: "compared";
+      readonly adoption: RateChange;
+      readonly skip_acceptance: RateChange;
+    };
+
+function changeOf(before: Rate, after: Rate): RateChange {
+  const diff =
+    before.kind === "rate" && after.kind === "rate"
+      ? Math.round((after.percent - before.percent) * 10) / 10
+      : null;
+  return { before, after, diff_points: diff };
+}
+
+/**
+ * スキルの版の前後を比べるか決め、比べるときは割合の変化を返す。
+ * 前後のどちらかで、結果が確定した指摘が`MIN_CONFIRMED_FINDINGS`未満なら、比べない。
+ * 少ない件数の差は、1件の違いで大きく動き、版の効果と見分けられないためである。
+ * 差が有意かは判定しない。
+ */
+export function compareVersions(
+  before: OutcomeCounts,
+  after: OutcomeCounts,
+): VersionComparison {
+  const beforeConfirmed = confirmedCount(before);
+  const afterConfirmed = confirmedCount(after);
+  if (
+    beforeConfirmed < MIN_CONFIRMED_FINDINGS ||
+    afterConfirmed < MIN_CONFIRMED_FINDINGS
+  ) {
+    return {
+      kind: "not_compared",
+      reason: "insufficient_denominator",
+      before_confirmed: beforeConfirmed,
+      after_confirmed: afterConfirmed,
+    };
+  }
+  return {
+    kind: "compared",
+    adoption: changeOf(adoptionRate(before), adoptionRate(after)),
+    skip_acceptance: changeOf(
+      skipAcceptanceRate(before),
+      skipAcceptanceRate(after),
+    ),
+  };
+}

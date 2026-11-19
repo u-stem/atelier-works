@@ -7,17 +7,23 @@ import {
   DEPLOYMENT_ERROR_HEAD_MAX,
   EMPTY_PR_REVIEW_TRIGGER_COUNTS,
   EMPTY_REVIEW_OUTCOME_EVIDENCE,
+  EMPTY_REVIEW_QUALITY_TREND,
   type EvidenceSection,
   metricsOf,
   NO_PR_REVIEW_RUNS_LINE,
   NO_REVIEW_OUTCOMES_LINE,
+  NO_REVIEW_QUALITY_LINE,
   PR_REVIEW_TOP_PRS_LIMIT,
+  REVIEW_SKILL_PATH,
+  type ReviewQualityRow,
+  type ReviewQualityTrend,
   renderEvidenceMarkdown,
   sanitizeCell,
   truncateEvidence,
 } from "../../f/factory/lib/audit_evidence.ts";
 import type { AuditPeriod } from "../../f/factory/lib/audit_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
+import { emptyOutcomeCounts } from "../../f/factory/lib/review_outcomes.ts";
 
 type FakeCall = { text: string; values: unknown[] };
 
@@ -61,9 +67,16 @@ type QueryName =
   | "reviewOutcomes"
   | "humanThreads"
   | "prReviewTopPrs"
-  | "prReviewTriggers";
+  | "prReviewTriggers"
+  | "weeklyRuns"
+  | "weeklyFindings"
+  | "weeklyThreads";
 
+// 週別の3つの問い合わせは、採否の節の問い合わせと表の名前の一部が同じなので、先に見分ける。
 const QUERY_NAMES: readonly QueryName[] = [
+  "weeklyRuns",
+  "weeklyFindings",
+  "weeklyThreads",
   "failures",
   "humanOutcomes",
   "humanOutcomeCount",
@@ -104,6 +117,9 @@ const QUERY_FRAGMENTS: Record<QueryName, string> = {
   humanThreads: "FROM factory.review_human_threads",
   prReviewTopPrs: "count(*) OVER () AS pr_count",
   prReviewTriggers: "to_jsonb(r) ->> 'trigger'",
+  weeklyRuns: "to_jsonb(r) -> 'skills'",
+  weeklyFindings: "FROM factory.review_findings fd",
+  weeklyThreads: "FROM factory.review_human_threads t",
 };
 
 /**
@@ -168,6 +184,7 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   pr_review_pr_count: 0,
   pr_review_triggers: EMPTY_PR_REVIEW_TRIGGER_COUNTS,
   review_outcomes: EMPTY_REVIEW_OUTCOME_EVIDENCE,
+  review_quality: EMPTY_REVIEW_QUALITY_TREND,
 };
 
 /**
@@ -2074,6 +2091,8 @@ describe("PR review sections in the evidence pack", () => {
       "修正ラウンド",
       "レビュー指摘",
       OUTCOME_SECTION,
+      "レビューの質(週別)",
+      "レビューのスキルの版の前後比較",
       "通知",
       "デプロイ",
       "過去の提案(直近3回)",
@@ -2531,5 +2550,918 @@ describe("collecting the review outcomes before the migration", () => {
         sqlWithoutTables(new Error("connection reset")),
       ),
     ).rejects.toThrow("connection reset");
+  });
+});
+
+const V1 = "aaaaaaaaaaaa";
+const V2 = "bbbbbbbbbbbb";
+const V3 = "cccccccccccc";
+const TREND_SECTION = "レビューの質(週別)";
+const COMPARISON_SECTION = "レビューのスキルの版の前後比較";
+
+/** 確定した指摘が20件で、採用率は60%、見送りの了承率は75%になる件数。 */
+const SUFFICIENT_COUNTS = {
+  ...emptyOutcomeCounts(),
+  fixed: 12,
+  answered: 4,
+  skip_accepted: 3,
+  skip_rejected: 1,
+};
+
+function qualityRow(extra: Partial<ReviewQualityRow>): ReviewQualityRow {
+  return {
+    week: "2026-09-14",
+    sha: V1,
+    run_count: 5,
+    cost_usd: 1.5,
+    counts: emptyOutcomeCounts(),
+    first_at: "2026-09-14T01:00:00.000Z",
+    ...extra,
+  };
+}
+
+function qualityEvidence(
+  rows: readonly ReviewQualityRow[],
+  extra: Partial<ReviewQualityTrend> = {},
+): AuditEvidence {
+  return {
+    ...EMPTY_EVIDENCE,
+    review_quality: {
+      first_week: "2026-08-03",
+      last_week: "2026-09-21",
+      partial_last_week: false,
+      rows: [...rows],
+      human_threads: [],
+      ...extra,
+    },
+  };
+}
+
+describe("collecting the weekly review quality", () => {
+  const RUNS_V1: SqlRow = {
+    week: "2026-09-14",
+    sha: V1,
+    run_count: "5",
+    total_cost_usd: "1.5",
+    first_at: "2026-09-14T01:00:00.000Z",
+  };
+  const RUNS_V2: SqlRow = {
+    week: "2026-09-14",
+    sha: V2,
+    run_count: 2,
+    total_cost_usd: 0.5,
+    first_at: "2026-09-17T01:00:00.000Z",
+  };
+
+  test("reads a week that two skill versions share as two rows", async () => {
+    const { evidence } = await collectWith({ weeklyRuns: [RUNS_V1, RUNS_V2] });
+    expect(
+      evidence.review_quality.rows.map((row) => [
+        row.week,
+        row.sha,
+        row.run_count,
+      ]),
+    ).toEqual([
+      ["2026-09-14", V1, 5],
+      ["2026-09-14", V2, 2],
+    ]);
+  });
+
+  test("keeps the findings of each version apart in a week they share", async () => {
+    const { evidence } = await collectWith({
+      weeklyRuns: [RUNS_V1, RUNS_V2],
+      weeklyFindings: [
+        {
+          week: "2026-09-14",
+          sha: V1,
+          key: "fixed",
+          count: 3,
+          with_comment_id: 3,
+        },
+        {
+          week: "2026-09-14",
+          sha: V2,
+          key: "fixed",
+          count: 4,
+          with_comment_id: 4,
+        },
+      ],
+    });
+    expect(evidence.review_quality.rows.map((row) => row.counts.fixed)).toEqual(
+      [3, 4],
+    );
+  });
+
+  test("merges the runs and the findings of one week and version into one row", async () => {
+    const { evidence } = await collectWith({
+      weeklyRuns: [RUNS_V1],
+      weeklyFindings: [
+        {
+          week: "2026-09-14",
+          sha: V1,
+          key: "fixed",
+          count: 3,
+          with_comment_id: 3,
+        },
+      ],
+    });
+    expect(evidence.review_quality.rows).toHaveLength(1);
+  });
+
+  test("reads the cost of the runs of a row", async () => {
+    const { evidence } = await collectWith({ weeklyRuns: [RUNS_V1] });
+    expect(evidence.review_quality.rows[0]?.cost_usd).toBe(1.5);
+  });
+
+  test("counts only the findings that have a comment id", async () => {
+    const { evidence } = await collectWith({
+      weeklyFindings: [
+        {
+          week: "2026-09-14",
+          sha: V1,
+          key: "fixed",
+          count: 5,
+          with_comment_id: 2,
+        },
+      ],
+    });
+    expect(evidence.review_quality.rows[0]?.counts.fixed).toBe(2);
+  });
+
+  test("leaves out a finding row whose outcome is not known", async () => {
+    const { evidence } = await collectWith({
+      weeklyFindings: [
+        {
+          week: "2026-09-14",
+          sha: V1,
+          key: "merged",
+          count: 9,
+          with_comment_id: 9,
+        },
+      ],
+    });
+    expect(evidence.review_quality.rows).toEqual([]);
+  });
+
+  test("reads a run without a skill record as the unrecorded row", async () => {
+    const { evidence } = await collectWith({
+      weeklyRuns: [{ ...RUNS_V1, sha: null }],
+    });
+    expect(evidence.review_quality.rows[0]?.sha).toBeNull();
+  });
+
+  test("reads an empty hash as the unrecorded row", async () => {
+    const { evidence } = await collectWith({
+      weeklyRuns: [{ ...RUNS_V1, sha: "" }],
+    });
+    expect(evidence.review_quality.rows[0]?.sha).toBeNull();
+  });
+
+  test("puts the findings of a review without an agent run in the unrecorded row of the week", async () => {
+    const { evidence } = await collectWith({
+      weeklyRuns: [{ ...RUNS_V1, sha: null }],
+      weeklyFindings: [
+        {
+          week: "2026-09-14",
+          sha: null,
+          key: "fixed",
+          count: 2,
+          with_comment_id: 2,
+        },
+      ],
+    });
+    expect(
+      evidence.review_quality.rows.map((row) => [row.sha, row.counts.fixed]),
+    ).toEqual([[null, 2]]);
+  });
+
+  test("takes the earliest first time of the runs and the findings of a row", async () => {
+    const { evidence } = await collectWith({
+      weeklyRuns: [RUNS_V1],
+      weeklyFindings: [
+        {
+          week: "2026-09-14",
+          sha: V1,
+          key: "fixed",
+          count: 1,
+          with_comment_id: 1,
+          first_at: "2026-09-13T20:00:00.000Z",
+        },
+      ],
+    });
+    expect(evidence.review_quality.rows[0]?.first_at).toBe(
+      "2026-09-13T20:00:00.000Z",
+    );
+  });
+
+  test("sorts the rows by week", async () => {
+    const { evidence } = await collectWith({
+      weeklyRuns: [
+        { ...RUNS_V1, week: "2026-09-21" },
+        { ...RUNS_V1, week: "2026-09-07" },
+      ],
+    });
+    expect(evidence.review_quality.rows.map((row) => row.week)).toEqual([
+      "2026-09-07",
+      "2026-09-21",
+    ]);
+  });
+
+  test("reads the threads that a person started in each week", async () => {
+    const { evidence } = await collectWith({
+      weeklyThreads: [{ week: "2026-09-14", total: "3", resolved: "1" }],
+    });
+    expect(evidence.review_quality.human_threads).toEqual([
+      { week: "2026-09-14", total: 3, resolved: 1 },
+    ]);
+  });
+
+  test("starts the window at the Monday seven weeks before the last week", async () => {
+    const { calls } = await collectWith({});
+    // 最後の週は2026-09-21(月)の週。その7週前の月曜0時(日本時間)は、UTCでは日曜15時である。
+    expect(findCall(calls, "weeklyRuns")?.values).toContain(
+      "2026-08-02T15:00:00.000Z",
+    );
+  });
+
+  test("passes the skill path of the runs query as a parameter, once", async () => {
+    const { calls } = await collectWith({});
+    expect(
+      findCall(calls, "weeklyRuns")?.values.filter(
+        (value) => value === REVIEW_SKILL_PATH,
+      ),
+    ).toEqual([REVIEW_SKILL_PATH]);
+  });
+
+  test("passes the skill path of the findings query as a parameter, once", async () => {
+    const { calls } = await collectWith({});
+    expect(
+      findCall(calls, "weeklyFindings")?.values.filter(
+        (value) => value === REVIEW_SKILL_PATH,
+      ),
+    ).toEqual([REVIEW_SKILL_PATH]);
+  });
+
+  test("keeps the parameters of the runs query in step with its placeholders", async () => {
+    const { calls } = await collectWith({});
+    const call = findCall(calls, "weeklyRuns");
+    expect(call?.text.split(" ? ").length).toBe((call?.values.length ?? 0) + 1);
+  });
+
+  test("keeps the parameters of the findings query in step with its placeholders", async () => {
+    const { calls } = await collectWith({});
+    const call = findCall(calls, "weeklyFindings");
+    expect(call?.text.split(" ? ").length).toBe((call?.values.length ?? 0) + 1);
+  });
+
+  test("takes the version of the runs and of the findings from the same expression", async () => {
+    const { calls } = await collectWith({});
+    const shaExpression = (name: QueryName): string | undefined =>
+      findCall(calls, name)
+        ?.text.match(/\(SELECT left\(e\.elem.*?LIMIT 1\)/)?.[0]
+        ?.replace(/to_jsonb\(r\) -> 'skills'|ar\.skills/g, "SKILLS");
+    expect(shaExpression("weeklyFindings")).toBe(shaExpression("weeklyRuns"));
+  });
+
+  test("ends the window at the end of the period", async () => {
+    const { calls } = await collectWith({});
+    expect(findCall(calls, "weeklyFindings")?.values).toContain(
+      PERIOD.end.toISOString(),
+    );
+  });
+
+  test("names the first and the last week of the window", async () => {
+    const { evidence } = await collectWith({});
+    expect([
+      evidence.review_quality.first_week,
+      evidence.review_quality.last_week,
+    ]).toEqual(["2026-08-03", "2026-09-21"]);
+  });
+
+  test("takes the week before as the last week when the period ends at Japan midnight on Monday", async () => {
+    const { evidence } = await collectWith({});
+    expect([
+      evidence.review_quality.last_week,
+      evidence.review_quality.partial_last_week,
+    ]).toEqual(["2026-09-21", false]);
+  });
+
+  test("marks the last week as partial when the period ends in the middle of a week", async () => {
+    // 2026-09-30T15:00ZはJSTの木曜(2026-10-01)0時。最後の週は月曜から水曜までである。
+    const { sql } = createRoutedSqlClient();
+    const evidence = await collectAuditEvidence(
+      {
+        period: { ...PERIOD, end: new Date("2026-09-30T15:00:00Z") },
+        instanceName: "atelier-works",
+      },
+      sql,
+    );
+    expect([
+      evidence.review_quality.last_week,
+      evidence.review_quality.partial_last_week,
+    ]).toEqual(["2026-09-28", true]);
+  });
+
+  /** 指摘と人が始めたスレッドの表を読む問い合わせだけが、決めたエラーで失敗する`SqlClient`。 */
+  function sqlFailingOnOutcomeTables(
+    error: Error,
+    rows: Partial<Record<QueryName, SqlRow[]>> = {},
+  ): SqlClient {
+    const { sql } = createRoutedSqlClient(rows);
+    return (strings, ...values) => {
+      const text = strings.join(" ? ").replace(/\s+/g, " ");
+      const reads =
+        text.includes(QUERY_FRAGMENTS.weeklyFindings) ||
+        text.includes(QUERY_FRAGMENTS.weeklyThreads);
+      if (!reads) return sql(strings, ...values);
+      return {
+        fetch: () => Promise.reject(error),
+        execute: () => Promise.resolve(),
+      };
+    };
+  }
+
+  test("collects an empty trend when the outcome tables are missing", async () => {
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sqlFailingOnOutcomeTables(
+        new Error('relation "factory.review_findings" does not exist'),
+      ),
+    );
+    expect(evidence.review_quality.rows).toEqual([]);
+  });
+
+  test("keeps the runs of a week when the outcome tables are missing", async () => {
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sqlFailingOnOutcomeTables(
+        new Error('relation "factory.review_findings" does not exist'),
+        { weeklyRuns: [RUNS_V1] },
+      ),
+    );
+    expect(evidence.review_quality.rows.map((row) => row.run_count)).toEqual([
+      5,
+    ]);
+  });
+
+  test("rethrows an error that is not a missing table", async () => {
+    await expect(
+      collectAuditEvidence(
+        { period: PERIOD, instanceName: "atelier-works" },
+        sqlFailingOnOutcomeTables(new Error("connection reset")),
+      ),
+    ).rejects.toThrow("connection reset");
+  });
+});
+
+describe("the weekly review quality section", () => {
+  test("shows the runs, the cost and the rates of a version in a week with enough findings", () => {
+    const evidence = qualityEvidence([
+      qualityRow({ counts: SUFFICIENT_COUNTS }),
+    ]);
+    expect(sectionOf(evidence, TREND_SECTION)?.lines).toContain(
+      "2026-09-14週 版aaaaaaaaaaaa: 実行5 / コスト $1.50 / 確定した指摘20件 / 採用率 60%(直した12件 / 確定した20件) / 見送りの了承率 75%(了承3件 / 判断済み4件)",
+    );
+  });
+
+  test("shows only the counts of a week that has fewer confirmed findings than the minimum", () => {
+    const evidence = qualityEvidence([
+      qualityRow({
+        counts: { ...emptyOutcomeCounts(), fixed: 3, answered: 5 },
+      }),
+    ]);
+    expect(sectionOf(evidence, TREND_SECTION)?.lines[0]).toContain(
+      "採用率 n=8(直した3件)",
+    );
+  });
+
+  test("shows the counts of the skips without a rate when the findings are few", () => {
+    const evidence = qualityEvidence([
+      qualityRow({
+        counts: {
+          ...emptyOutcomeCounts(),
+          fixed: 3,
+          skip_accepted: 1,
+          skip_rejected: 1,
+        },
+      }),
+    ]);
+    expect(sectionOf(evidence, TREND_SECTION)?.lines[0]).toContain(
+      "見送りの了承率 n=2(了承1件)",
+    );
+  });
+
+  test("shows a week that two versions share as two lines", () => {
+    const evidence = qualityEvidence([
+      qualityRow({ sha: V1 }),
+      qualityRow({ sha: V2 }),
+    ]);
+    expect(
+      sectionOf(evidence, TREND_SECTION)?.lines.filter((line) =>
+        line.startsWith("2026-09-14週"),
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("shows the row without a skill record as unrecorded and not as a version", () => {
+    const evidence = qualityEvidence([qualityRow({ sha: null })]);
+    expect(sectionOf(evidence, TREND_SECTION)?.lines[0]).toStartWith(
+      "2026-09-14週 版未記録:",
+    );
+  });
+
+  test("lists the newest week first so that the oldest weeks are dropped first", () => {
+    const evidence = qualityEvidence([
+      qualityRow({ week: "2026-09-07" }),
+      qualityRow({ week: "2026-09-21" }),
+      qualityRow({ week: "2026-09-14" }),
+    ]);
+    expect(
+      sectionOf(evidence, TREND_SECTION)?.lines.map((line) =>
+        line.slice(0, 10),
+      ),
+    ).toEqual(["2026-09-21", "2026-09-14", "2026-09-07"]);
+  });
+
+  test("lists the threads that a person started after the version lines", () => {
+    const evidence = qualityEvidence([qualityRow({})], {
+      human_threads: [{ week: "2026-09-14", total: 3, resolved: 1 }],
+    });
+    expect(sectionOf(evidence, TREND_SECTION)?.lines.at(-1)).toBe(
+      "2026-09-14週 人が始めたスレッド: 3件(うち解決済み1件)",
+    );
+  });
+
+  test("names the weeks that the section covers in a fixed line", () => {
+    const evidence = qualityEvidence([qualityRow({})]);
+    expect(sectionOf(evidence, TREND_SECTION)?.fixed[0]).toContain(
+      "2026-08-03〜2026-09-21",
+    );
+  });
+
+  test("tells in a fixed line that the last week is partial", () => {
+    const evidence = qualityEvidence([qualityRow({})], {
+      partial_last_week: true,
+    });
+    expect(sectionOf(evidence, TREND_SECTION)?.fixed[0]).toContain("途中");
+  });
+
+  test("tells in a fixed line that a row with few findings shows counts only", () => {
+    const evidence = qualityEvidence([qualityRow({})]);
+    expect(sectionOf(evidence, TREND_SECTION)?.fixed.join("\n")).toContain(
+      "n=",
+    );
+  });
+
+  test("shows only the no-record line when there is no row and no thread", () => {
+    expect(sectionOf(qualityEvidence([]), TREND_SECTION)).toEqual({
+      heading: TREND_SECTION,
+      fixed: [NO_REVIEW_QUALITY_LINE],
+      lines: [],
+    });
+  });
+
+  test("keeps every fixed line and drops only the week lines when the evidence is over the limit", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      review_quality: qualityEvidence(
+        Array.from({ length: 40 }, (_, i) =>
+          qualityRow({ week: `2026-09-${String(i + 1).padStart(2, "0")}` }),
+        ),
+      ).review_quality,
+    };
+    const truncated = truncateEvidence(buildEvidenceSections(evidence), 3000);
+    expect(
+      truncated.find((section) => section.heading === TREND_SECTION)?.fixed,
+    ).toEqual(sectionOf(evidence, TREND_SECTION)?.fixed ?? []);
+  });
+
+  test("stays within 12,000 characters with every week and many versions", () => {
+    const rows = Array.from({ length: 8 * 12 }, (_, i) =>
+      qualityRow({
+        week: `2026-09-${String(1 + Math.floor(i / 12)).padStart(2, "0")}`,
+        sha: i.toString(16).padStart(12, "0"),
+        counts: SUFFICIENT_COUNTS,
+        first_at: `2026-09-01T00:${String(i % 60).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      review_quality: qualityEvidence(rows).review_quality,
+    };
+    expect(renderEvidenceMarkdown(evidence).length).toBeLessThanOrEqual(12000);
+  });
+
+  test("records the dropped lines instead of dropping them silently", () => {
+    const rows = Array.from({ length: 8 * 12 }, (_, i) =>
+      qualityRow({
+        week: `2026-09-${String(1 + Math.floor(i / 12)).padStart(2, "0")}`,
+        sha: i.toString(16).padStart(12, "0"),
+        counts: SUFFICIENT_COUNTS,
+        first_at: `2026-09-01T00:${String(i % 60).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      review_quality: qualityEvidence(rows).review_quality,
+    };
+    expect(renderEvidenceMarkdown(evidence)).toMatch(/- 省略\d+行/);
+  });
+
+  test("sanitizes the hash and the week of a row", () => {
+    const evidence = qualityEvidence([
+      qualityRow({ sha: "<b>x</b>|y", week: "2026-09-14\n" }),
+    ]);
+    expect(sectionOf(evidence, TREND_SECTION)?.lines[0]).toContain("版 x y:");
+  });
+});
+
+describe("the skill version comparison section", () => {
+  // 前の版(V1)と後の版(V2)がそれぞれ確定した指摘20件を持つ2週分の行。
+  const TWO_VERSIONS = [
+    qualityRow({
+      week: "2026-09-07",
+      sha: V1,
+      run_count: 10,
+      counts: { ...emptyOutcomeCounts(), fixed: 10, answered: 10 },
+      first_at: "2026-09-07T01:00:00.000Z",
+    }),
+    qualityRow({
+      week: "2026-09-14",
+      sha: V2,
+      run_count: 8,
+      counts: { ...emptyOutcomeCounts(), fixed: 15, answered: 5 },
+      first_at: "2026-09-14T16:00:00.000Z",
+    }),
+  ];
+
+  test("says that there is nothing to compare when the window has one version", () => {
+    const evidence = qualityEvidence([qualityRow({ sha: V1 })]);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.fixed.join("\n")).toContain(
+      "比べる切り替えは無い",
+    );
+  });
+
+  test("says that no version was recorded when every row is unrecorded", () => {
+    const evidence = qualityEvidence([qualityRow({ sha: null })]);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.fixed.join("\n")).toContain(
+      "版を記録した実行は無い",
+    );
+  });
+
+  test("does not compare two versions when one of them has fewer confirmed findings than the minimum", () => {
+    const evidence = qualityEvidence([
+      TWO_VERSIONS[0] ?? qualityRow({}),
+      qualityRow({
+        week: "2026-09-14",
+        sha: V2,
+        counts: { ...emptyOutcomeCounts(), fixed: 19 },
+        first_at: "2026-09-14T16:00:00.000Z",
+      }),
+    ]);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.lines[0]).toContain(
+      "比較しない(母数不足。確定した指摘 前20件 / 後19件)",
+    );
+  });
+
+  test("shows no rate and no difference for a pair it does not compare", () => {
+    const evidence = qualityEvidence([
+      TWO_VERSIONS[0] ?? qualityRow({}),
+      qualityRow({
+        week: "2026-09-14",
+        sha: V2,
+        counts: { ...emptyOutcomeCounts(), fixed: 19 },
+        first_at: "2026-09-14T16:00:00.000Z",
+      }),
+    ]);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.lines[0]).not.toContain(
+      "差",
+    );
+  });
+
+  test("compares two versions that both have enough confirmed findings", () => {
+    const evidence = qualityEvidence(TWO_VERSIONS);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.lines[0]).toContain(
+      "採用率 50%→75%(差+25ポイント)",
+    );
+  });
+
+  test("names the first record of the later segment in Japan time", () => {
+    const evidence = qualityEvidence(TWO_VERSIONS);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.lines[0]).toContain(
+      "後の区間の最初の記録 2026-09-15",
+    );
+  });
+
+  test("does not call the first record in the window the first appearance of a version", () => {
+    const evidence = qualityEvidence(TWO_VERSIONS);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.join("\n"),
+    ).not.toContain("初出");
+  });
+
+  test("shows the skip acceptance without a difference when a version decided no skip", () => {
+    const evidence = qualityEvidence(TWO_VERSIONS);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.lines[0]).toContain(
+      "見送りの了承率 n=0→n=0(差は出さない)",
+    );
+  });
+
+  test("tells in a fixed line that it does not judge a difference as significant", () => {
+    const evidence = qualityEvidence(TWO_VERSIONS);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.fixed.join("\n")).toContain(
+      "有意差は判定しない",
+    );
+  });
+
+  test("orders the versions by the first record and not by the hash", () => {
+    const evidence = qualityEvidence([
+      qualityRow({
+        week: "2026-09-07",
+        sha: V2,
+        counts: { ...emptyOutcomeCounts(), fixed: 20 },
+        first_at: "2026-09-07T01:00:00.000Z",
+      }),
+      qualityRow({
+        week: "2026-09-14",
+        sha: V1,
+        counts: { ...emptyOutcomeCounts(), fixed: 20 },
+        first_at: "2026-09-14T01:00:00.000Z",
+      }),
+    ]);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.lines[0]).toStartWith(
+      `版${V2} → 版${V1}`,
+    );
+  });
+
+  test("adds up the rows of a version across weeks before it counts the findings", () => {
+    const evidence = qualityEvidence([
+      qualityRow({
+        week: "2026-09-07",
+        sha: V1,
+        counts: { ...emptyOutcomeCounts(), fixed: 10 },
+        first_at: "2026-09-07T01:00:00.000Z",
+      }),
+      qualityRow({
+        week: "2026-09-14",
+        sha: V1,
+        counts: { ...emptyOutcomeCounts(), fixed: 10 },
+        first_at: "2026-09-14T01:00:00.000Z",
+      }),
+      qualityRow({
+        week: "2026-09-21",
+        sha: V2,
+        counts: { ...emptyOutcomeCounts(), fixed: 20 },
+        first_at: "2026-09-21T01:00:00.000Z",
+      }),
+    ]);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.lines[0]).toContain(
+      "採用率 100%→100%",
+    );
+  });
+
+  test("makes one comparison for each pair of neighbouring versions", () => {
+    const evidence = qualityEvidence([
+      qualityRow({
+        week: "2026-09-07",
+        sha: V1,
+        first_at: "2026-09-07T01:00:00.000Z",
+      }),
+      qualityRow({
+        week: "2026-09-14",
+        sha: V2,
+        first_at: "2026-09-14T01:00:00.000Z",
+      }),
+      qualityRow({
+        week: "2026-09-21",
+        sha: V3,
+        first_at: "2026-09-21T01:00:00.000Z",
+      }),
+    ]);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)
+        ?.lines.filter((line) => line.startsWith("版"))
+        .filter((line) => line.includes("→ 版")),
+    ).toHaveLength(2);
+  });
+
+  test("leaves the unrecorded rows out of the comparison", () => {
+    const evidence = qualityEvidence([
+      ...TWO_VERSIONS,
+      qualityRow({
+        week: "2026-09-14",
+        sha: null,
+        counts: { ...emptyOutcomeCounts(), fixed: 50 },
+      }),
+    ]);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.lines[0]).toContain(
+      "採用率 50%→75%",
+    );
+  });
+
+  test("shows the runs and the findings of the unrecorded rows in a fixed line", () => {
+    const evidence = qualityEvidence([
+      ...TWO_VERSIONS,
+      qualityRow({
+        week: "2026-09-14",
+        sha: null,
+        run_count: 4,
+        counts: { ...emptyOutcomeCounts(), fixed: 6 },
+      }),
+    ]);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.fixed.join("\n")).toContain(
+      "版が未記録の実行4件・確定した指摘6件は比べない",
+    );
+  });
+
+  test("lists the total of each segment with its weeks and runs, even when it does not compare", () => {
+    const evidence = qualityEvidence([
+      qualityRow({
+        week: "2026-09-07",
+        sha: V1,
+        run_count: 7,
+        first_at: "2026-09-07T01:00:00.000Z",
+      }),
+      qualityRow({
+        week: "2026-09-14",
+        sha: V2,
+        run_count: 9,
+        first_at: "2026-09-14T01:00:00.000Z",
+      }),
+    ]);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.filter((line) =>
+        line.includes("の合計"),
+      ),
+    ).toEqual([
+      `版${V2}の合計(2026-09-14週、区間の最初の記録 2026-09-14): 実行9 / コスト $1.50 / 確定した指摘0件(直した0件 / 了承0件 / 反論0件)`,
+      `版${V1}の合計(2026-09-07週、区間の最初の記録 2026-09-07): 実行7 / コスト $1.50 / 確定した指摘0件(直した0件 / 了承0件 / 反論0件)`,
+    ]);
+  });
+
+  test("shows the first and the last week of a segment that spans weeks", () => {
+    const evidence = qualityEvidence([
+      qualityRow({ week: "2026-09-07", sha: V1 }),
+      qualityRow({ week: "2026-09-14", sha: V1 }),
+    ]);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.find((line) =>
+        line.includes("の合計"),
+      ),
+    ).toContain("2026-09-07週〜2026-09-14週");
+  });
+
+  // 版Aを入れ、Bに替え、Aに戻した窓。Aの前の区間と後の区間は、割合が違う。
+  const ROLLBACK = [
+    qualityRow({
+      week: "2026-09-07",
+      sha: V1,
+      counts: { ...emptyOutcomeCounts(), fixed: 20 },
+      first_at: "2026-09-07T01:00:00.000Z",
+    }),
+    qualityRow({
+      week: "2026-09-14",
+      sha: V2,
+      counts: { ...emptyOutcomeCounts(), fixed: 10, answered: 10 },
+      first_at: "2026-09-14T01:00:00.000Z",
+    }),
+    qualityRow({
+      week: "2026-09-21",
+      sha: V1,
+      counts: { ...emptyOutcomeCounts(), answered: 20 },
+      first_at: "2026-09-21T01:00:00.000Z",
+    }),
+  ];
+
+  test("compares a rollback as two switches, the way the versions changed", () => {
+    const evidence = qualityEvidence(ROLLBACK);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)
+        ?.lines.filter((line) => line.includes("→ 版"))
+        .map((line) => line.slice(0, line.indexOf("(")).trim()),
+    ).toEqual([`版${V2} → 版${V1}`, `版${V1} → 版${V2}`]);
+  });
+
+  test("compares the version before the switch only with the weeks before the switch", () => {
+    const evidence = qualityEvidence(ROLLBACK);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.find((line) =>
+        line.startsWith(`版${V1} → 版${V2}`),
+      ),
+    ).toContain("採用率 100%→50%");
+  });
+
+  test("compares the version after the rollback only with the weeks after the rollback", () => {
+    const evidence = qualityEvidence(ROLLBACK);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.find((line) =>
+        line.startsWith(`版${V2} → 版${V1}`),
+      ),
+    ).toContain("採用率 50%→0%");
+  });
+
+  test("lists the total of each segment of a rollback, so that a version appears twice", () => {
+    const evidence = qualityEvidence(ROLLBACK);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.filter((line) =>
+        line.startsWith(`版${V1}の合計`),
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("counts the versions and the switches of a rollback in a fixed line", () => {
+    const evidence = qualityEvidence(ROLLBACK);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.fixed.join("\n")).toContain(
+      "窓の中の版: 2つ、切り替え2回",
+    );
+  });
+
+  test("puts the earlier record of two versions in one week first", () => {
+    const evidence = qualityEvidence([
+      qualityRow({
+        week: "2026-09-14",
+        sha: V1,
+        counts: { ...emptyOutcomeCounts(), fixed: 20 },
+        first_at: "2026-09-17T01:00:00.000Z",
+      }),
+      qualityRow({
+        week: "2026-09-14",
+        sha: V2,
+        counts: { ...emptyOutcomeCounts(), fixed: 20 },
+        first_at: "2026-09-14T01:00:00.000Z",
+      }),
+    ]);
+    expect(sectionOf(evidence, COMPARISON_SECTION)?.lines[0]).toStartWith(
+      `版${V2} → 版${V1}`,
+    );
+  });
+
+  test("joins the weeks of one version that an unrecorded row separates", () => {
+    const evidence = qualityEvidence([
+      qualityRow({
+        week: "2026-09-07",
+        sha: V1,
+        counts: { ...emptyOutcomeCounts(), fixed: 10 },
+      }),
+      qualityRow({ week: "2026-09-14", sha: null }),
+      qualityRow({
+        week: "2026-09-21",
+        sha: V1,
+        counts: { ...emptyOutcomeCounts(), fixed: 10 },
+      }),
+    ]);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.filter((line) =>
+        line.includes("の合計"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("does not compare a segment of a rollback that has too few confirmed findings", () => {
+    const evidence = qualityEvidence([
+      ROLLBACK[0] ?? qualityRow({}),
+      ROLLBACK[1] ?? qualityRow({}),
+      qualityRow({
+        week: "2026-09-21",
+        sha: V1,
+        counts: { ...emptyOutcomeCounts(), answered: 5 },
+        first_at: "2026-09-21T01:00:00.000Z",
+      }),
+    ]);
+    expect(
+      sectionOf(evidence, COMPARISON_SECTION)?.lines.find((line) =>
+        line.startsWith(`版${V2} → 版${V1}`),
+      ),
+    ).toContain("比較しない(母数不足。確定した指摘 前20件 / 後5件)");
+  });
+
+  test("keeps the comparison lines ahead of the total lines so that the totals are dropped first", () => {
+    const lines =
+      sectionOf(qualityEvidence(TWO_VERSIONS), COMPARISON_SECTION)?.lines ?? [];
+    expect(lines.findIndex((line) => line.includes("の合計"))).toBeGreaterThan(
+      lines.findIndex((line) => line.includes("→ 版")),
+    );
+  });
+
+  test("stays within 12,000 characters with many versions", () => {
+    const rows = Array.from({ length: 8 * 12 }, (_, i) =>
+      qualityRow({
+        week: `2026-09-${String(1 + Math.floor(i / 12)).padStart(2, "0")}`,
+        sha: i.toString(16).padStart(12, "0"),
+        counts: SUFFICIENT_COUNTS,
+        first_at: `2026-09-01T00:${String(i % 60).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      review_quality: qualityEvidence(rows).review_quality,
+    };
+    expect(renderEvidenceMarkdown(evidence).length).toBeLessThanOrEqual(12000);
+  });
+
+  test("does not change the metrics", () => {
+    expect(metricsOf(qualityEvidence(TWO_VERSIONS))).toEqual(
+      metricsOf(EMPTY_EVIDENCE),
+    );
   });
 });

@@ -8,6 +8,8 @@ import {
   INVALID_JST_DATE,
   INVALID_JST_MINUTE,
   JST_OFFSET_MS,
+  jstWeekStart,
+  WEEK_MS,
 } from "../../f/factory/lib/jst.ts";
 
 describe("the text for a time that is not a time", () => {
@@ -96,5 +98,45 @@ describe("formatJstClock", () => {
 
   test("returns null for an infinite time", () => {
     expect(formatJstClock(Number.POSITIVE_INFINITY)).toBeNull();
+  });
+});
+
+describe("jstWeekStart", () => {
+  // 2026-09-28は月曜日。日本時間の月曜0時は、UTCでは前日の日曜15時である。
+  const MONDAY_START = Date.parse("2026-09-27T15:00:00.000Z");
+
+  test("keeps Japan midnight on Monday, which is UTC Sunday 15:00, as the start of its own week", () => {
+    expect(jstWeekStart(MONDAY_START)).toBe(MONDAY_START);
+  });
+
+  test("keeps the last millisecond before Japan midnight on Monday in the week before", () => {
+    expect(jstWeekStart(MONDAY_START - 1)).toBe(
+      Date.parse("2026-09-20T15:00:00.000Z"),
+    );
+  });
+
+  test("returns the Monday of the week for the end of Japan Sunday", () => {
+    // 日本時間の日曜(2026-10-04)23:59:59.999。
+    expect(jstWeekStart(Date.parse("2026-10-04T14:59:59.999Z"))).toBe(
+      MONDAY_START,
+    );
+  });
+
+  test("puts UTC Monday morning, which is JST Monday 09:00, in the week of that Monday", () => {
+    expect(jstWeekStart(Date.parse("2026-09-28T00:00:00.000Z"))).toBe(
+      MONDAY_START,
+    );
+  });
+
+  test("returns NaN for a time that is not a time", () => {
+    expect(jstWeekStart(Number.NaN)).toBeNaN();
+  });
+
+  test("starts the next week exactly one week length after the start of a week", () => {
+    expect(jstWeekStart(MONDAY_START + WEEK_MS)).toBe(MONDAY_START + WEEK_MS);
+  });
+
+  test("puts the start of the week before one week length earlier", () => {
+    expect(jstWeekStart(MONDAY_START - 1)).toBe(MONDAY_START - WEEK_MS);
   });
 });

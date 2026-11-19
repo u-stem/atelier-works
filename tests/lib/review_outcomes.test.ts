@@ -3,6 +3,7 @@ import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   adoptionRate,
   buildFindingRows,
+  compareVersions,
   confirmedCount,
   emptyOutcomeCounts,
   FINDING_OUTCOMES,
@@ -604,5 +605,97 @@ describe("buildFindingRows", () => {
       new Map(),
     );
     expect(rows[0]?.confidence).toBeNull();
+  });
+});
+
+describe("compareVersions", () => {
+  // 確定した指摘が20件(直した10件、答えた10件)。採用率は50%。
+  const HALF_OF_TWENTY = counts({ fixed: 10, answered: 10 });
+  // 確定した指摘が20件(直した15件、答えた5件)。採用率は75%。
+  const THREE_QUARTERS_OF_TWENTY = counts({ fixed: 15, answered: 5 });
+
+  test("does not compare when the earlier version has fewer confirmed findings than the minimum", () => {
+    const result = compareVersions(
+      counts({ fixed: MIN_CONFIRMED_FINDINGS - 1 }),
+      THREE_QUARTERS_OF_TWENTY,
+    );
+    expect(result.kind).toBe("not_compared");
+  });
+
+  test("does not compare when the later version has fewer confirmed findings than the minimum", () => {
+    const result = compareVersions(
+      HALF_OF_TWENTY,
+      counts({ fixed: MIN_CONFIRMED_FINDINGS - 1 }),
+    );
+    expect(result.kind).toBe("not_compared");
+  });
+
+  test("does not compare when neither version has enough confirmed findings", () => {
+    const result = compareVersions(counts({ fixed: 2 }), counts({ fixed: 3 }));
+    expect(result.kind).toBe("not_compared");
+  });
+
+  test("reports the confirmed findings of both versions when it does not compare", () => {
+    const result = compareVersions(
+      counts({ fixed: 4, posted: 9 }),
+      counts({ fixed: 30, skipped: 2 }),
+    );
+    expect(result).toEqual({
+      kind: "not_compared",
+      reason: "insufficient_denominator",
+      before_confirmed: 4,
+      after_confirmed: 30,
+    });
+  });
+
+  test("compares when both versions have exactly the minimum confirmed findings", () => {
+    expect(compareVersions(HALF_OF_TWENTY, THREE_QUARTERS_OF_TWENTY).kind).toBe(
+      "compared",
+    );
+  });
+
+  test("gives the adoption rate of each version when it compares", () => {
+    const result = compareVersions(HALF_OF_TWENTY, THREE_QUARTERS_OF_TWENTY);
+    expect(result.kind === "compared" && result.adoption).toMatchObject({
+      before: { kind: "rate", percent: 50 },
+      after: { kind: "rate", percent: 75 },
+    });
+  });
+
+  test("gives the adoption difference in percentage points when it compares", () => {
+    const result = compareVersions(HALF_OF_TWENTY, THREE_QUARTERS_OF_TWENTY);
+    expect(result.kind === "compared" && result.adoption.diff_points).toBe(25);
+  });
+
+  test("rounds the adoption difference to one decimal place", () => {
+    // 7/20 = 35%、8/30 = 26.7%。差は-8.3。
+    const result = compareVersions(
+      counts({ fixed: 7, answered: 13 }),
+      counts({ fixed: 8, answered: 22 }),
+    );
+    expect(result.kind === "compared" && result.adoption.diff_points).toBe(
+      -8.3,
+    );
+  });
+
+  test("gives the skip acceptance difference when both versions decided skips", () => {
+    // 前: 了承2/判断済み4=50%。後: 了承3/判断済み4=75%。
+    const result = compareVersions(
+      counts({ fixed: 16, skip_accepted: 2, skip_rejected: 2 }),
+      counts({ fixed: 16, skip_accepted: 3, skip_rejected: 1 }),
+    );
+    expect(
+      result.kind === "compared" && result.skip_acceptance.diff_points,
+    ).toBe(25);
+  });
+
+  test("leaves the skip acceptance difference empty when a version decided no skip", () => {
+    const result = compareVersions(
+      HALF_OF_TWENTY,
+      counts({ fixed: 16, skip_accepted: 3, skip_rejected: 1 }),
+    );
+    expect(
+      result.kind === "compared" && result.skip_acceptance.diff_points,
+    ).toBeNull();
   });
 });

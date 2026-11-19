@@ -21,13 +21,16 @@ import {
   defaultSqlClient,
   fetchDeploymentRows,
   isMissingAgentRunSkillsColumnError,
+  isMissingReviewAgentRunColumnError,
   isMissingReviewOutcomeTableError,
   type SqlClient,
   type SqlRow,
 } from "./db.ts";
+import { formatJstDate, jstWeekStart, WEEK_MS } from "./jst.ts";
 import { maskSecrets } from "./log.ts";
 import {
   adoptionRate,
+  compareVersions,
   confirmedCount,
   emptyOutcomeCounts,
   FINDING_OUTCOMES,
@@ -36,6 +39,7 @@ import {
   MIN_CONFIRMED_FINDINGS,
   type OutcomeCounts,
   type Rate,
+  type RateChange,
   skipAcceptanceRate,
 } from "./review_outcomes.ts";
 import {
@@ -332,6 +336,64 @@ export const EMPTY_REVIEW_OUTCOME_EVIDENCE: ReviewOutcomeEvidence = {
   unrecorded_reviews: 0,
 };
 
+/** 週別の推移を載せる週の数。最後の週は、期間の終わりの直前を含む週である。 */
+export const REVIEW_QUALITY_WEEKS = 8;
+
+/**
+ * レビューのスキルの版を決めるファイル。
+ * `agent_runs.skills`のこのパスの要素の、SKILL.mdのsha256の先頭12桁を版とする。
+ * 同梱ファイルは、このスキルに無いので版に含めない。
+ */
+export const REVIEW_SKILL_PATH = ".claude/skills/factory-review/SKILL.md";
+
+/**
+ * 週とスキルの版ごとの、レビューの実行と指摘の集計。
+ * 週は日本時間の月曜0時で始まり、`week`はその月曜の日付(`YYYY-MM-DD`)である。
+ * `sha`は、レビューのスキルの版。実行にスキルの記録が無いときと、指摘のレビューが実行に結びつかないときはnullで、同じ週の「未記録」の1行にまとめる。
+ * 実行数と費用は`agent_runs`の実行の、`counts`は指摘の記録時刻の週の値である。
+ * `counts`は、採否の節と同じく、行コメントのidに結びつく投稿済みの指摘だけを数える。
+ */
+export type ReviewQualityRow = {
+  readonly week: string;
+  readonly sha: string | null;
+  readonly run_count: number;
+  readonly cost_usd: number;
+  readonly counts: OutcomeCounts;
+  /** この行の実行と指摘のうち、窓の中で最も早い記録時刻(ISO)。同じ週の版の前後を決める。版を入れた日ではない。読めなければ空文字。 */
+  readonly first_at: string;
+};
+
+/** 週ごとの、人が始めたスレッドの数。週はスレッドを最初に読んだ時刻で決める。 */
+export type ReviewQualityThreadWeek = {
+  readonly week: string;
+  readonly total: number;
+  readonly resolved: number;
+};
+
+/**
+ * 直近の複数週のレビューの質。窓は`REVIEW_QUALITY_WEEKS`週で、期間の終わりで切る。
+ * `first_week`と`last_week`は窓の最初と最後の週の月曜の日付。
+ * 期間の終わりが日本時間の月曜0時でないときは、最後の週が途中までなので`partial_last_week`が真になる。
+ * 採否の表とスキルの列を足すmigrationが当たる前は、行の一部が空になる。
+ */
+export type ReviewQualityTrend = {
+  readonly first_week: string;
+  readonly last_week: string;
+  readonly partial_last_week: boolean;
+  /** 週の昇順、同じ週は版の昇順(未記録は最後)。 */
+  readonly rows: readonly ReviewQualityRow[];
+  readonly human_threads: readonly ReviewQualityThreadWeek[];
+};
+
+/** 週別の記録が無いときの値。 */
+export const EMPTY_REVIEW_QUALITY_TREND: ReviewQualityTrend = {
+  first_week: "",
+  last_week: "",
+  partial_last_week: false,
+  rows: [],
+  human_threads: [],
+};
+
 /** 証跡パックに載せる、PRレビューの実行回数が上位のPRの最大の数。 */
 export const PR_REVIEW_TOP_PRS_LIMIT = 10;
 export type AuditEvidence = {
@@ -370,6 +432,11 @@ export type AuditEvidence = {
    * 採否の表を足すmigrationが当たる前は、`unrecorded_reviews`のほかは0である。
    */
   readonly review_outcomes: ReviewOutcomeEvidence;
+  /**
+   * 直近の複数週の、週とレビューのスキルの版ごとの実行、費用、採否。期間の始まりではなく終わりを基準にする。
+   * スキルの版を比べる材料で、`review_outcomes`と違い、期間の長さによらず窓の長さが決まっている。
+   */
+  readonly review_quality: ReviewQualityTrend;
   readonly notices: CountByKey[];
   /**
    * 期間内に作成され、集計時点で未解決の通知。種別ごと。
@@ -719,6 +786,281 @@ function reviewOutcomesSection(evidence: AuditEvidence): EvidenceSection {
   };
 }
 
+/** 週別の2つの節に載せる、実行も採否の記録も無い窓の1行。 */
+export const NO_REVIEW_QUALITY_LINE =
+  "窓の中にレビューの実行も採否の記録も無い";
+
+/**
+ * 同じ版が時間の順に続いた区間の合計。同じ版でも、別の版を挟んだ前後は別の区間である。
+ * `first_at`は区間の中で最も早い記録の時刻で、窓の中の記録から取るので、版を入れた日ではない。
+ */
+type VersionSegment = {
+  readonly sha: string;
+  readonly first_week: string;
+  readonly last_week: string;
+  readonly first_at: string;
+  readonly run_count: number;
+  readonly cost_usd: number;
+  readonly counts: OutcomeCounts;
+};
+
+function earlierTime(a: string, b: string): string {
+  if (a === "") return b;
+  if (b === "") return a;
+  return a < b ? a : b;
+}
+
+function addCounts(a: OutcomeCounts, b: OutcomeCounts): OutcomeCounts {
+  const sum: Record<FindingOutcome, number> = { ...emptyOutcomeCounts() };
+  for (const outcome of FINDING_OUTCOMES) {
+    sum[outcome] = a[outcome] + b[outcome];
+  }
+  return sum;
+}
+
+/** 週の昇順、同じ週は最初の記録が早い順(読めないものは後)、それも同じならハッシュの昇順。 */
+function compareRowsInTime(a: ReviewQualityRow, b: ReviewQualityRow): number {
+  if (a.week !== b.week) return a.week < b.week ? -1 : 1;
+  if (a.first_at !== b.first_at) {
+    if (a.first_at === "") return 1;
+    if (b.first_at === "") return -1;
+    return a.first_at < b.first_at ? -1 : 1;
+  }
+  return compareShaNullLast(a.sha, b.sha);
+}
+
+/**
+ * 行を時間の順に並べ、同じ版が続く行を1つの区間にまとめる。
+ * 記録の無い行(`sha`がnull)は版でないので、区間に入れず、区間を分ける理由にもしない。
+ * 版Aから、Bへ、Aへと戻ると、区間は3つになり、2つ目のAはBの後の別の区間である。
+ * 同じ週に版が2つあるときは、行の最初の記録が早い版を先に置く。週の中での入れ替わりの回数までは分からない。
+ */
+function versionSegmentsInOrder(
+  rows: readonly ReviewQualityRow[],
+): VersionSegment[] {
+  const segments: VersionSegment[] = [];
+  const ordered = rows
+    .filter((row) => row.sha !== null)
+    .sort(compareRowsInTime);
+  for (const row of ordered) {
+    if (row.sha === null) continue;
+    const last = segments[segments.length - 1];
+    if (last === undefined || last.sha !== row.sha) {
+      segments.push({
+        sha: row.sha,
+        first_week: row.week,
+        last_week: row.week,
+        first_at: row.first_at,
+        run_count: row.run_count,
+        cost_usd: row.cost_usd,
+        counts: row.counts,
+      });
+      continue;
+    }
+    segments[segments.length - 1] = {
+      ...last,
+      last_week: row.week,
+      first_at: earlierTime(last.first_at, row.first_at),
+      run_count: last.run_count + row.run_count,
+      cost_usd: last.cost_usd + row.cost_usd,
+      counts: addCounts(last.counts, row.counts),
+    };
+  }
+  return segments;
+}
+
+function formatSignedPoints(points: number): string {
+  return points > 0 ? `+${points}` : String(points);
+}
+
+/**
+ * 週別の行に載せる、割合の短い表し方。
+ * 母数が小さいときは、割合を出さず、`n=<母数>`と件数だけを示す。理由の文は、節の固定の行に1回だけ書く。
+ */
+function formatCompactRate(
+  label: string,
+  rate: Rate,
+  parts: { readonly numerator: string; readonly denominator: string },
+): string {
+  if (rate.kind === "rate") {
+    return `${label} ${rate.percent}%(${parts.numerator}${rate.numerator}件 / ${parts.denominator}${rate.denominator}件)`;
+  }
+  return `${label} n=${rate.denominator}(${parts.numerator}${rate.numerator}件)`;
+}
+
+function formatRateEnd(rate: Rate): string {
+  return rate.kind === "rate" ? `${rate.percent}%` : `n=${rate.denominator}`;
+}
+
+function formatRateChange(label: string, change: RateChange): string {
+  const diff =
+    change.diff_points === null
+      ? "差は出さない"
+      : `差${formatSignedPoints(change.diff_points)}ポイント`;
+  return `${label} ${formatRateEnd(change.before)}→${formatRateEnd(change.after)}(${diff})`;
+}
+
+function compareShaNullLast(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a < b ? -1 : 1;
+}
+
+function formatQualityRowLine(row: ReviewQualityRow): string {
+  const head = `${row.week}週 版${row.sha ?? UNRECORDED_SKILL_LABEL}`;
+  const metrics = [
+    `実行${row.run_count}`,
+    `コスト $${row.cost_usd.toFixed(2)}`,
+    `確定した指摘${confirmedCount(row.counts)}件`,
+    formatCompactRate("採用率", adoptionRate(row.counts), {
+      numerator: "直した",
+      denominator: "確定した",
+    }),
+    formatCompactRate("見送りの了承率", skipAcceptanceRate(row.counts), {
+      numerator: "了承",
+      denominator: "判断済み",
+    }),
+  ];
+  return sanitizeCell(`${head}: ${metrics.join(" / ")}`, SANITIZE_CELL_MAX);
+}
+
+/**
+ * レビューの質の週別の節。
+ * 固定の行は、窓の範囲と、母数が小さい行の表し方の2行である。
+ * 版ごとの行は、新しい週を先にして、行を削るときに古い週から落とす。
+ * 人が始めたスレッドの行は、版ごとの行より後に置き、先に削られる。
+ */
+function reviewQualitySection(evidence: AuditEvidence): EvidenceSection {
+  const heading = "レビューの質(週別)";
+  const trend = evidence.review_quality;
+  if (trend.rows.length === 0 && trend.human_threads.length === 0) {
+    return { heading, fixed: [NO_REVIEW_QUALITY_LINE], lines: [] };
+  }
+  const partial = trend.partial_last_week ? "。最後の週は途中まで" : "";
+  const rows = [...trend.rows].sort((a, b) => {
+    if (a.week !== b.week) return a.week < b.week ? 1 : -1;
+    return compareShaNullLast(a.sha, b.sha);
+  });
+  const threads = [...trend.human_threads].sort((a, b) =>
+    a.week < b.week ? 1 : a.week > b.week ? -1 : 0,
+  );
+  return {
+    heading,
+    fixed: [
+      sanitizeCell(
+        `対象の週: ${trend.first_week}〜${trend.last_week}(週は日本時間の月曜0時で始まる${partial})`,
+        SANITIZE_CELL_MAX,
+      ),
+      sanitizeCell(
+        `確定した指摘が${MIN_CONFIRMED_FINDINGS}件未満の行は、割合を出さず、n=で件数だけを示す`,
+        SANITIZE_CELL_MAX,
+      ),
+    ],
+    lines: [
+      ...rows.map(formatQualityRowLine),
+      ...threads.map((entry) =>
+        sanitizeCell(
+          `${entry.week}週 人が始めたスレッド: ${entry.total}件(うち解決済み${entry.resolved}件)`,
+          SANITIZE_CELL_MAX,
+        ),
+      ),
+    ],
+  };
+}
+
+function formatFirstDay(firstAt: string): string {
+  return formatJstDate(Date.parse(firstAt)) ?? UNSET_LABEL;
+}
+
+function formatSegmentWeeks(segment: VersionSegment): string {
+  return segment.first_week === segment.last_week
+    ? `${segment.first_week}週`
+    : `${segment.first_week}週〜${segment.last_week}週`;
+}
+
+function formatVersionVerdictLine(
+  before: VersionSegment,
+  after: VersionSegment,
+): string {
+  const head = `版${before.sha} → 版${after.sha}(後の区間の最初の記録 ${formatFirstDay(after.first_at)})`;
+  const comparison = compareVersions(before.counts, after.counts);
+  if (comparison.kind === "not_compared") {
+    return sanitizeCell(
+      `${head}: 比較しない(母数不足。確定した指摘 前${comparison.before_confirmed}件 / 後${comparison.after_confirmed}件)`,
+      SANITIZE_CELL_MAX,
+    );
+  }
+  return sanitizeCell(
+    `${head}: ${formatRateChange("採用率", comparison.adoption)} / ${formatRateChange("見送りの了承率", comparison.skip_acceptance)}`,
+    SANITIZE_CELL_MAX,
+  );
+}
+
+function formatVersionTotalsLine(segment: VersionSegment): string {
+  const { counts } = segment;
+  return sanitizeCell(
+    `版${segment.sha}の合計(${formatSegmentWeeks(segment)}、区間の最初の記録 ${formatFirstDay(segment.first_at)}): 実行${segment.run_count} / コスト $${segment.cost_usd.toFixed(2)} / 確定した指摘${confirmedCount(counts)}件(直した${counts.fixed}件 / 了承${counts.skip_accepted}件 / 反論${counts.skip_rejected}件)`,
+    SANITIZE_CELL_MAX,
+  );
+}
+
+/**
+ * レビューのスキルの版の前後比較の節。
+ * 行を時間の順に、同じ版が続く区間に分け、隣り合う2つの区間を、区間ごとの合計で比べる。
+ * 版を元に戻したときは、戻した後の区間を、直前の別の版の区間と比べる。同じ版の前後の区間を足し合わせない。
+ * 前後のどちらかで確定した指摘が`MIN_CONFIRMED_FINDINGS`未満なら、割合も差も出さず、件数だけを示す。
+ * 差が有意かは判定しない。
+ * 版の記録が無い行は、比べない。数だけを固定の行に載せる。
+ * 比較の行は新しい切り替えを先にし、区間の合計の行をその後に置くので、行を削るときは合計から落ちる。
+ */
+function reviewVersionComparisonSection(
+  evidence: AuditEvidence,
+): EvidenceSection {
+  const heading = "レビューのスキルの版の前後比較";
+  const { rows } = evidence.review_quality;
+  if (rows.length === 0) {
+    return { heading, fixed: [NO_REVIEW_QUALITY_LINE], lines: [] };
+  }
+  const segments = versionSegmentsInOrder(rows);
+  const versionCount = new Set(segments.map((segment) => segment.sha)).size;
+  const unrecorded = rows.filter((row) => row.sha === null);
+  const [only] = segments;
+  const countLine =
+    only === undefined
+      ? "版を記録した実行は無い"
+      : segments.length === 1
+        ? `窓の中の版は1つ(版${only.sha})で、比べる切り替えは無い`
+        : `窓の中の版: ${versionCount}つ、切り替え${segments.length - 1}回`;
+  const fixed = [
+    sanitizeCell(
+      `版はレビューのスキルの本文で決める。時間の順に、同じ版が続く区間に分け、隣り合う2つの区間を、区間ごとの合計で比べる。前の版に戻したときも、戻した後は別の区間である。前後とも確定した指摘が${MIN_CONFIRMED_FINDINGS}件以上のときだけ割合を並べ、有意差は判定しない`,
+      SANITIZE_CELL_MAX,
+    ),
+    sanitizeCell(countLine, SANITIZE_CELL_MAX),
+  ];
+  if (unrecorded.length > 0) {
+    fixed.push(
+      sanitizeCell(
+        `版が未記録の実行${sumBy(unrecorded, (row) => row.run_count)}件・確定した指摘${sumBy(unrecorded, (row) => confirmedCount(row.counts))}件は比べない`,
+        SANITIZE_CELL_MAX,
+      ),
+    );
+  }
+  const newestFirst = [...segments].reverse();
+  const verdicts = newestFirst.flatMap((after, index) => {
+    const before = newestFirst[index + 1];
+    return before === undefined
+      ? []
+      : [formatVersionVerdictLine(before, after)];
+  });
+  return {
+    heading,
+    fixed,
+    lines: [...verdicts, ...newestFirst.map(formatVersionTotalsLine)],
+  };
+}
+
 export function buildEvidenceSections(
   evidence: AuditEvidence,
 ): EvidenceSection[] {
@@ -868,6 +1210,8 @@ export function buildEvidenceSections(
     { heading: "修正ラウンド", fixed: [], lines: fixLines },
     { heading: "レビュー指摘", fixed: [], lines: reviewLines },
     reviewOutcomesSection(evidence),
+    reviewQualitySection(evidence),
+    reviewVersionComparisonSection(evidence),
     { heading: "通知", fixed: noticeFixed, lines: noticeLines },
     { heading: "デプロイ", fixed: deploymentFixed, lines: deploymentLines },
     { heading: "過去の提案(直近3回)", fixed: [], lines: proposalLines },
@@ -1172,6 +1516,193 @@ function toReviewOutcomeEvidence(
   };
 }
 
+/**
+ * 週別の問い合わせのうち、採否の表とスキルの列を読むものを実行する。
+ * それらを足すmigrationより先にコードが反映された間は、表か列が無いエラーになるので、空の結果にする。
+ * ほかのエラーは投げる。
+ */
+async function fetchWhenQualitySourcesExist(
+  run: () => Promise<SqlRow[]>,
+): Promise<SqlRow[]> {
+  try {
+    return await run();
+  } catch (err) {
+    if (
+      !isMissingReviewOutcomeTableError(err) &&
+      !isMissingAgentRunSkillsColumnError(err) &&
+      !isMissingReviewAgentRunColumnError(err)
+    ) {
+      throw err;
+    }
+    return [];
+  }
+}
+
+/**
+ * SQLの一部とそのパラメータ。別の問い合わせへ埋め込んで、同じ式を1か所にまとめる。
+ * 文面はこのファイルの定数だけで作り、外から来る値は`${}`でパラメータにして渡す。
+ */
+class SqlFragment {
+  constructor(
+    readonly parts: readonly string[],
+    readonly values: readonly unknown[],
+  ) {}
+}
+
+function sqlFragment(
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+): SqlFragment {
+  return new SqlFragment([...strings], values);
+}
+
+/** 断片を文面に展開し、パラメータは出てくる順に並べる。断片の中の断片も展開する。 */
+function flattenSql(
+  strings: readonly string[],
+  values: readonly unknown[],
+): { readonly parts: string[]; readonly values: unknown[] } {
+  const parts: string[] = [strings[0] ?? ""];
+  const flatValues: unknown[] = [];
+  values.forEach((value, index) => {
+    const following = strings[index + 1] ?? "";
+    if (value instanceof SqlFragment) {
+      const inner = flattenSql(value.parts, value.values);
+      parts[parts.length - 1] += inner.parts[0] ?? "";
+      inner.values.forEach((innerValue, innerIndex) => {
+        flatValues.push(innerValue);
+        parts.push(inner.parts[innerIndex + 1] ?? "");
+      });
+    } else {
+      flatValues.push(value);
+      parts.push("");
+    }
+    parts[parts.length - 1] += following;
+  });
+  return { parts, values: flatValues };
+}
+
+/** 断片を`${}`に置ける`SqlClient`にする。展開した後の文面とパラメータで、元の`SqlClient`を呼ぶ。 */
+function withSqlFragments(sql: SqlClient): SqlClient {
+  return (strings, ...values) => {
+    const flat = flattenSql(strings, values);
+    return sql(
+      Object.assign([...flat.parts], { raw: flat.parts }),
+      ...flat.values,
+    );
+  };
+}
+
+/**
+ * レビューのスキルの版を取り出す式。`skills`は、実行の`skills`のjsonbを返す式である。
+ * 版は、`REVIEW_SKILL_PATH`の要素のsha256の先頭12桁で、要素が無いか、sha256が空ならNULLになる。
+ * 配列でない`skills`と、オブジェクトでない要素は、`jsonb_array_elements`と`->>`がエラーにせずNULLにするので、版を取れないだけで済む。
+ */
+function reviewSkillShaSql(skills: SqlFragment): SqlFragment {
+  return sqlFragment`(SELECT left(e.elem ->> 'sha256', 12)
+                FROM jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(${skills}) = 'array' THEN ${skills} ELSE '[]'::jsonb END
+                ) AS e (elem)
+               WHERE e.elem ->> 'path' = ${REVIEW_SKILL_PATH}::text
+                 AND coalesce(e.elem ->> 'sha256', '') <> ''
+               LIMIT 1)`;
+}
+
+type QualityAccumulator = {
+  week: string;
+  sha: string | null;
+  run_count: number;
+  cost_usd: number;
+  counts: Record<FindingOutcome, number>;
+  first_at: string;
+};
+
+/**
+ * 実行と指摘の行を、週と版の組ごとに1行にまとめる。
+ * 版のハッシュが空か無い行は、同じ週の「未記録」(`sha`がnull)にまとめる。
+ * 週が読めない行と、結果の名前が未知の指摘の行は数えない。
+ * 並びは週の昇順、同じ週は版の昇順で、未記録を最後にする。
+ */
+function toReviewQualityRows(
+  runRows: readonly SqlRow[],
+  findingRows: readonly SqlRow[],
+): ReviewQualityRow[] {
+  const byKey = new Map<string, QualityAccumulator>();
+  const accumulatorFor = (row: SqlRow): QualityAccumulator | undefined => {
+    const week = parseCellString(row.week);
+    if (week.length === 0) return undefined;
+    const sha = parseHashPrefix(row.sha);
+    const key = `${week}\u0000${sha ?? ""}`;
+    const existing = byKey.get(key);
+    if (existing !== undefined) return existing;
+    const created: QualityAccumulator = {
+      week,
+      sha,
+      run_count: 0,
+      cost_usd: 0,
+      counts: { ...emptyOutcomeCounts() },
+      first_at: "",
+    };
+    byKey.set(key, created);
+    return created;
+  };
+  for (const row of runRows) {
+    const target = accumulatorFor(row);
+    if (target === undefined) continue;
+    target.run_count += parseNumeric(row.run_count);
+    target.cost_usd += parseNumeric(row.total_cost_usd);
+    target.first_at = earlierTime(
+      target.first_at,
+      parseTimestampIso(row.first_at),
+    );
+  }
+  for (const row of findingRows) {
+    const outcome = row.key;
+    if (!isFindingOutcome(outcome)) continue;
+    const target = accumulatorFor(row);
+    if (target === undefined) continue;
+    target.counts[outcome] += parseNumeric(row.with_comment_id);
+    target.first_at = earlierTime(
+      target.first_at,
+      parseTimestampIso(row.first_at),
+    );
+  }
+  return [...byKey.values()].sort((a, b) =>
+    a.week === b.week
+      ? compareShaNullLast(a.sha, b.sha)
+      : a.week < b.week
+        ? -1
+        : 1,
+  );
+}
+
+function toReviewQualityThreads(
+  rows: readonly SqlRow[],
+): ReviewQualityThreadWeek[] {
+  return rows
+    .map((row) => ({
+      week: parseCellString(row.week),
+      total: parseNumeric(row.total),
+      resolved: parseNumeric(row.resolved),
+    }))
+    .filter((entry) => entry.week.length > 0)
+    .sort((a, b) => (a.week < b.week ? -1 : a.week > b.week ? 1 : 0));
+}
+
+/** 期間の終わりを基準にした、週別の窓。最後の週は終わりの直前を含む週で、先頭はその7週前である。 */
+function reviewQualityWindow(period: AuditPeriod): {
+  readonly firstWeekStart: number;
+  readonly lastWeekStart: number;
+  readonly partialLastWeek: boolean;
+} {
+  const endMs = period.end.getTime();
+  const lastWeekStart = jstWeekStart(endMs - 1);
+  return {
+    firstWeekStart: lastWeekStart - (REVIEW_QUALITY_WEEKS - 1) * WEEK_MS,
+    lastWeekStart,
+    partialLastWeek: jstWeekStart(endMs) !== endMs,
+  };
+}
+
 /** PRレビューの実行が無い期間の、きっかけごとの件数。 */
 export const EMPTY_PR_REVIEW_TRIGGER_COUNTS: PrReviewTriggerCounts = {
   label: 0,
@@ -1303,6 +1834,7 @@ async function fetchSkillVersionRows(
  *   (上の一覧のクエリは`LIMIT 30`のため、件数から指標を出せない)
  * - 期間内のデプロイの記録と、期間の開始・終了時点の稼働版
  * - レビュー指摘の採否(結果ごとの件数、人が始めたスレッド、採否の記録が無いレビュー。採否の表が無い間は集めない)
+ * - レビューの質の週別(週とスキルの版ごとの実行、費用、採否と、週ごとの人が始めたスレッド。採否の表が無い間は、実行だけを集める)
  * - 最後に、PRレビューの実行のPRごとの上位と、起動のきっかけごとの件数
  *
  * work_itemsと結合するクエリはすべて、監査の処理自身の行を除く
@@ -1585,6 +2117,71 @@ export async function collectAuditEvidence(
       `.fetch();
     });
 
+  // レビューの質の週別。窓は期間の終わりの直前を含む週から`REVIEW_QUALITY_WEEKS`週さかのぼる。
+  // 週は日本時間の月曜0時で切り、`date_trunc`には、接続の時刻帯に左右されないよう、日本時間に直した時刻を渡す。
+  // 版の式は`reviewSkillShaSql`にまとめてあり、版を取れない行は「未記録」になる。
+  const qualityWindow = reviewQualityWindow(period);
+  const qualityStart = new Date(qualityWindow.firstWeekStart).toISOString();
+  const weeklySql = withSqlFragments(sql);
+
+  // 実行は、`skills`の列を足すmigrationより先にコードが反映された間も動くよう、行をjsonbにして読む。列が無いときは、すべて「未記録」になる。
+  const reviewQualityRunRows = await weeklySql`
+    SELECT v.week, v.sha,
+           count(*) AS run_count,
+           coalesce(sum(v.cost_usd), 0) AS total_cost_usd,
+           min(v.created_at) AS first_at
+    FROM (
+      SELECT to_char(date_trunc('week', r.created_at AT TIME ZONE 'Asia/Tokyo'), 'YYYY-MM-DD') AS week,
+             ${reviewSkillShaSql(sqlFragment`to_jsonb(r) -> 'skills'`)} AS sha,
+             r.cost_usd,
+             r.created_at
+      FROM factory.agent_runs r
+      JOIN factory.work_items wi ON wi.id = r.work_item_id
+      WHERE r.created_at >= ${qualityStart}::timestamptz AND r.created_at < ${end}::timestamptz
+        AND wi.kind <> 'audit' AND r.stage = 'pr_review'
+    ) v
+    GROUP BY v.week, v.sha
+    ORDER BY v.week, v.sha
+  `.fetch();
+
+  // 指摘は、採否の節と同じく、投稿した指摘を記録した時刻で切り、コメントのidに結びつく件数を数える。
+  // 版は、レビューを生成した実行(`reviews.agent_run_id`)のスキルで決める。実行に結びつかないレビューの指摘は「未記録」になる。
+  const reviewQualityFindingRows = await fetchWhenQualitySourcesExist(() =>
+    weeklySql`
+      SELECT v.week, v.sha, v.outcome AS key,
+             count(*) AS count,
+             count(v.review_comment_id) AS with_comment_id,
+             min(v.created_at) AS first_at
+      FROM (
+        SELECT to_char(date_trunc('week', fd.created_at AT TIME ZONE 'Asia/Tokyo'), 'YYYY-MM-DD') AS week,
+               ${reviewSkillShaSql(sqlFragment`ar.skills`)} AS sha,
+               fd.outcome,
+               fd.review_comment_id,
+               fd.created_at
+        FROM factory.review_findings fd
+        JOIN factory.reviews rv ON rv.id = fd.review_id
+        LEFT JOIN factory.agent_runs ar ON ar.id = rv.agent_run_id
+        WHERE fd.posted
+          AND fd.created_at >= ${qualityStart}::timestamptz AND fd.created_at < ${end}::timestamptz
+      ) v
+      GROUP BY v.week, v.sha, v.outcome
+      ORDER BY v.week, v.sha, v.outcome
+    `.fetch(),
+  );
+
+  // 人が始めたスレッドは、最初に読んだ時刻の週に数える。
+  const reviewQualityThreadRows = await fetchWhenQualitySourcesExist(() =>
+    sql`
+      SELECT to_char(date_trunc('week', t.created_at AT TIME ZONE 'Asia/Tokyo'), 'YYYY-MM-DD') AS week,
+             count(*) AS total,
+             count(*) FILTER (WHERE t.resolved) AS resolved
+      FROM factory.review_human_threads t
+      WHERE t.created_at >= ${qualityStart}::timestamptz AND t.created_at < ${end}::timestamptz
+      GROUP BY 1
+      ORDER BY 1
+    `.fetch(),
+  );
+
   // PRレビューの実行を、PRごとに数える。実行統計の節と同じ期間と除外で、`stage = 'pr_review'`に絞る。
   // ownerとrepoは小文字で束ね、表示には行の綴りの最小の値を使う。PRの総数は、上限で切る前の窓関数で数える。
   const prReviewTopPrRows = await sql`
@@ -1632,6 +2229,13 @@ export async function collectAuditEvidence(
       humanThreadRows,
       unrecordedReviewRows,
     ),
+    review_quality: {
+      first_week: formatJstDate(qualityWindow.firstWeekStart) ?? "",
+      last_week: formatJstDate(qualityWindow.lastWeekStart) ?? "",
+      partial_last_week: qualityWindow.partialLastWeek,
+      rows: toReviewQualityRows(reviewQualityRunRows, reviewQualityFindingRows),
+      human_threads: toReviewQualityThreads(reviewQualityThreadRows),
+    },
     notices: toCountsByKey(noticeRows),
     unresolved_notices_in_period: toUnresolvedNoticeGroups(
       unresolvedNoticeRows,
