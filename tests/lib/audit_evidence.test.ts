@@ -2840,7 +2840,10 @@ describe("collecting the weekly review quality", () => {
 
   test("takes the week before as the last week when the period ends at Japan midnight on Monday", async () => {
     const { evidence } = await collectWith({});
-    expect(evidence.review_quality.partial_last_week).toBe(false);
+    expect([
+      evidence.review_quality.last_week,
+      evidence.review_quality.partial_last_week,
+    ]).toEqual(["2026-09-21", false]);
   });
 
   test("marks the last week as partial when the period ends in the middle of a week", async () => {
