@@ -664,6 +664,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/scripts/host_apply_compose_tables.test.ts",
   "f/factory/lib/claude.ts",
   "f/factory/lib/claude.script.yaml",
+  "f/factory/lib/skill_registry.ts",
+  "f/factory/lib/skill_registry.script.yaml",
   "f/factory/lib/claude_flow_failure.ts",
   "f/factory/lib/claude_flow_failure.script.yaml",
   "f/factory/lib/flow_retry_marker.ts",
