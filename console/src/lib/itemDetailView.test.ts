@@ -754,6 +754,22 @@ describe("describeReview", () => {
       "指摘 3件",
     );
   });
+
+  test("labels the findings recorded but not posted", () => {
+    expect(
+      describeReview(review({ held_finding_count: 2 })).heldFindingLabel,
+    ).toBe("記録のみ 2件");
+  });
+
+  test("has no label for unposted findings when there are none", () => {
+    expect(
+      describeReview(review({ held_finding_count: 0 })).heldFindingLabel,
+    ).toBeNull();
+  });
+
+  test("has no label for unposted findings when the backend does not report them", () => {
+    expect(describeReview(review()).heldFindingLabel).toBeNull();
+  });
 });
 
 describe("describeFixRound", () => {

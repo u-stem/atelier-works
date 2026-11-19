@@ -1,0 +1,27 @@
+diff --git a/src/users.ts b/src/users.ts
+--- a/src/users.ts
++++ b/src/users.ts
+@@ -18,3 +18,10 @@
+   );
+   return rows[0] ?? null;
+ }
++
++export async function findUsersByName(
++  db: Db,
++  name: string,
++): Promise<readonly UserRow[]> {
++  return db.query(`SELECT id, name, email FROM users WHERE name = '${name}'`);
++}
+diff --git a/tests/users.test.ts b/tests/users.test.ts
+new file mode 100644
+--- /dev/null
++++ b/tests/users.test.ts
+@@ -0,0 +1,8 @@
++import { expect, test } from "bun:test";
++import { type Db, findUsersByName, type UserRow } from "../src/users.ts";
++
++test("findUsersByName returns the rows the database returns", async () => {
++  const rows: UserRow[] = [{ id: 1, name: "ann", email: "ann@example.invalid" }];
++  const db: Db = { query: async () => rows };
++  expect(await findUsersByName(db, "ann")).toEqual(rows);
++});

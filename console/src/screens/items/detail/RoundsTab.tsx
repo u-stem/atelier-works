@@ -134,6 +134,11 @@ function Reviews({ detail, now }: { detail: WorkItemDetail; now: number }) {
             <span className="text-body tabular-nums">
               {review.findingLabel}
             </span>
+            {review.heldFindingLabel === null ? null : (
+              <span className="text-small text-muted-foreground tabular-nums">
+                {review.heldFindingLabel}
+              </span>
+            )}
             <span className="font-mono text-small text-muted-foreground">
               {review.shaLabel}
             </span>

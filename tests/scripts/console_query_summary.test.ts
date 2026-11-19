@@ -637,6 +637,7 @@ const REVIEW_ROW: SqlRow = {
   verdict: "request_changes",
   result: "changes_requested",
   finding_count: "3",
+  held_finding_count: "1",
   posted_review_id: "9001",
   created_at: T0,
 };
@@ -964,10 +965,27 @@ describe("runWorkItemDetail result", () => {
         verdict: "request_changes",
         result: "changes_requested",
         finding_count: 3,
+        held_finding_count: 1,
         posted_review_id: "9001",
         created_at: T0,
       },
     ]);
+  });
+
+  test("counts the posted findings without the low confidence ones", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    const review = calls.find((c) => c.text.includes("FROM factory.reviews"));
+    expect(review?.text).toContain(
+      "WHERE f ->> 'confidence' IS DISTINCT FROM 'low'",
+    );
+  });
+
+  test("counts the low confidence findings on their own", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    const review = calls.find((c) => c.text.includes("FROM factory.reviews"));
+    expect(review?.text).toContain("WHERE f ->> 'confidence' = 'low'");
   });
 
   test("parses a review without a recorded result as null", async () => {

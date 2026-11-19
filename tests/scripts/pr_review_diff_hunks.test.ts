@@ -42,6 +42,8 @@ function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
     message: "problem",
     suggestion: null,
     suggested_code: null,
+    evidence: "checked",
+    confidence: "high",
     ...overrides,
   };
 }
@@ -570,6 +572,7 @@ describe("publishing findings when some point outside the diff", () => {
           droppedFindings,
           binaryFiles: [],
           binaryUnlistedCount: 0,
+          heldFindingCount: 0,
           priorReview: false,
           post: true,
           ensureRepoOwner: async () => null,

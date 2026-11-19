@@ -397,11 +397,18 @@ export async function main(
         issues: proseIssues,
       });
     }
-    const { summary, findings } = settleReviewFindings(
+    const { summary, findings, heldOmitted } = settleReviewFindings(
       output,
       scope,
       REVIEW_MAX_FINDINGS,
     );
+    if (heldOmitted > 0) {
+      log.warn("low confidence findings over the limit were dropped", {
+        work_item_id,
+        omitted: heldOmitted,
+        limit: REVIEW_MAX_FINDINGS,
+      });
+    }
 
     return {
       skip: false,

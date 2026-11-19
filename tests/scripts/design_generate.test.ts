@@ -2337,6 +2337,8 @@ describe("design_generate io", () => {
       error: null,
       failure_reason: null,
       model_usage: [],
+      skills: null,
+      skill_clone_sha: null,
     };
     const RAW: ClaudeRunResult = {
       type: "result",

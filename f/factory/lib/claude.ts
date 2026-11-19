@@ -6,6 +6,7 @@
 // `claude_version`はこのJSONには無く、環境変数`CLAUDE_VERSION`から取る。値は`mise.toml`の
 // `[env]`にあり、Dockerfileの`ENV`とcomposeの`WHITELIST_ENVS`でジョブまで届く。
 
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -15,7 +16,12 @@ import {
 import { defaultSqlClient, type SqlClient, sumAgentCostSince } from "./db.ts";
 import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
 import { JST_OFFSET_MS } from "./jst.ts";
-import { escapeReasonSeparator, maskSecrets } from "./log.ts";
+import {
+  escapeReasonSeparator,
+  type Logger,
+  logger,
+  maskSecrets,
+} from "./log.ts";
 import {
   checkStop,
   defaultStopCheck,
@@ -26,15 +32,23 @@ import {
 } from "./stop_check.ts";
 import {
   type AgentRunRecord,
+  BUNDLE_SHA256_UNREADABLE,
   capToDeadline,
   type FactoryConfig,
   isRecord,
   isStringArray,
   type ModelUsageEntry,
   type RunClaudeFailureReason,
+  type SkillRef,
 } from "./types.ts";
 import { defaultWorkItemStopCheck } from "./work_item_stop.ts";
-import type { CommandResult, CommandRunner } from "./workspace.ts";
+import {
+  buildGitArgv,
+  type CommandResult,
+  type CommandRunner,
+  localGitEnv,
+  runCommand,
+} from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
 // buildSystemPrompt: スキルのSKILL.mdを連結して一時ファイルに書く
@@ -48,7 +62,21 @@ export type BuildSystemPromptOptions = {
    */
   readonly factoryCloneDir: string;
   readonly readFile?: (path: string) => Promise<string>;
+  /**
+   * 同梱ファイル(template.mdなど)の生のバイト列を返す。
+   * 文字に直さずにハッシュするため、`readFile`とは分けている。
+   */
+  readonly readBytes?: (path: string) => Promise<Uint8Array>;
   readonly writeTempFile?: WriteTempFile;
+  /**
+   * スキルのディレクトリの下にあるファイルを、ディレクトリからの相対パス(`/`区切り)で返す。
+   * 同梱ファイル(template.mdなど)のハッシュを求めるために使う。
+   */
+  readonly listSkillFiles?: (skillDir: string) => Promise<readonly string[]>;
+  /** 同梱ファイルを読めなかったときの警告の出し先。既定は`logger("claude")`。 */
+  readonly log?: Logger;
+  /** `factoryCloneDir`のHEADのコミットSHAを返す。取れないときはnullを返してよい。 */
+  readonly readCloneHead?: (factoryCloneDir: string) => Promise<string | null>;
 };
 
 /**
@@ -64,6 +92,9 @@ export type WriteTempFile = (content: string) => Promise<SystemPromptFile>;
 
 const defaultReadFile = (path: string): Promise<string> =>
   Bun.file(path).text();
+
+const defaultReadBytes = (path: string): Promise<Uint8Array> =>
+  Bun.file(path).bytes();
 
 /**
  * プロンプトを、新しく`mkdtemp`で作ったディレクトリの中の
@@ -89,29 +120,183 @@ const defaultWriteTempFile: WriteTempFile = async (content) => {
 export const COMMON_SKILL_NAMES: readonly string[] = ["factory-writing"];
 
 /**
+ * 1回の`buildSystemPrompt`が注入したスキルの版。
+ * `skills`は注入した順(共通のスキルが先頭)である。
+ */
+export type SkillProvenance = {
+  readonly skills: readonly SkillRef[];
+  /** スキルを読んだときのcloneのHEAD(40桁)。取れなかったときはnull。 */
+  readonly cloneSha: string | null;
+};
+
+type ListSkillFiles = (skillDir: string) => Promise<readonly string[]>;
+type ReadCloneHead = (factoryCloneDir: string) => Promise<string | null>;
+
+function sha256Hex(data: string | Uint8Array): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
+const CLONE_HEAD_TIMEOUT_MS = 10_000;
+
+/**
+ * cloneのHEADのコミットSHA(40桁)を`git rev-parse HEAD`で読む。
+ * gitの失敗、起動の失敗、読めない出力は、どれもnullにして例外は投げない。
+ */
+export async function readCloneHeadSha(
+  run: CommandRunner,
+  dir: string,
+): Promise<string | null> {
+  try {
+    const result = await run(buildGitArgv(["rev-parse", "HEAD"]), {
+      cwd: dir,
+      env: localGitEnv(),
+      timeoutMs: CLONE_HEAD_TIMEOUT_MS,
+    });
+    if (result.exitCode !== 0) return null;
+    const sha = result.stdout.trim();
+    return GIT_SHA_PATTERN.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+const defaultReadCloneHead: ReadCloneHead = (dir) =>
+  readCloneHeadSha(runCommand, dir);
+
+/**
+ * スキルのディレクトリの下のファイルを、ディレクトリからの相対パス(`/`区切り)で返す。
+ * `Dirent.parentPath`は実行環境によって無いので、`Bun.Glob`で走査する。
+ * ドットで始まるファイルも含める。ディレクトリを読めないときは例外を投げる。
+ */
+const defaultListSkillFiles: ListSkillFiles = async (skillDir) => {
+  const files: string[] = [];
+  const glob = new Bun.Glob("**/*");
+  for await (const rel of glob.scan({
+    cwd: skillDir,
+    onlyFiles: true,
+    dot: true,
+  })) {
+    files.push(rel);
+  }
+  return files;
+};
+
+/**
+ * SKILL.md以外の同梱ファイルのハッシュを返す。
+ * 相対パスの昇順に`<パス>\0<内容のsha256>`の行を並べた文字列のsha256で、同梱ファイルが無ければnullにする。
+ * 内容は文字に直さず、生のバイト列でハッシュする。
+ * 一覧や読み取りに失敗したときは、同梱ファイルが無いことと区別できるよう`BUNDLE_SHA256_UNREADABLE`を返し、警告を残す。
+ */
+async function bundleSha256Of(
+  skillDir: string,
+  readBytes: (path: string) => Promise<Uint8Array>,
+  listSkillFiles: ListSkillFiles,
+  log: Logger,
+): Promise<string | null> {
+  try {
+    const bundled = (await listSkillFiles(skillDir))
+      .filter((rel) => rel !== "SKILL.md")
+      .sort();
+    if (bundled.length === 0) return null;
+    const lines: string[] = [];
+    for (const rel of bundled) {
+      lines.push(`${rel}\0${sha256Hex(await readBytes(`${skillDir}/${rel}`))}`);
+    }
+    return sha256Hex(lines.join("\n"));
+  } catch (err) {
+    log.warn("could not hash the bundled files of a skill", {
+      skill_dir: skillDir,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return BUNDLE_SHA256_UNREADABLE;
+  }
+}
+
+/** cloneのHEADを読む。読み取りが例外を投げても、nullにして先へ進む。 */
+async function readCloneHeadOrNull(
+  readCloneHead: ReadCloneHead,
+  dir: string,
+): Promise<string | null> {
+  try {
+    return await readCloneHead(dir);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `buildSystemPrompt`が書いたファイルのパスをキーにした、スキルの版の記録。
+ * 呼び出し側は`runClaude`にパスだけを渡すので、`baseAgentRunFor`がここから版を引く。
+ * ファイルの`cleanup()`で消す。長く動くworkerの中で記録を溜めないためである。
+ */
+const provenanceByPromptFile = new Map<string, SkillProvenance>();
+
+/** `buildSystemPrompt`が書いたファイルの、スキルの版を返す。そのファイルを`buildSystemPrompt`が書いていなければundefined。 */
+export function skillProvenanceFor(
+  promptFilePath: string,
+): SkillProvenance | undefined {
+  return provenanceByPromptFile.get(promptFilePath);
+}
+
+/**
  * `COMMON_SKILL_NAMES`と`skillNames`の各スキルの
  * `<factoryCloneDir>/.claude/skills/<name>/SKILL.md`を読んで、この順に連結し、
  * `--append-system-prompt-file`に渡す非公開の一時ファイルに書く。
  * `skillNames`に共通のスキルがあっても二重には読まない。
  * 呼び出し側は、このファイルを使う`runClaude`の呼び出しをすべて終えたら、
  * 返された`cleanup()`を`finally`で呼ぶこと。
+ *
+ * 注入したスキルの版(パス、SKILL.mdと同梱ファイルのハッシュ、cloneのHEAD)は、
+ * 返したファイルのパスをキーに保存し、`runClaude`の実行記録へ入れる(`skillProvenanceFor`)。
+ * 版の記録に失敗しても、プロンプトは作る。
  */
 export async function buildSystemPrompt(
   opts: BuildSystemPromptOptions,
 ): Promise<SystemPromptFile> {
   const readFile = opts.readFile ?? defaultReadFile;
+  const readBytes = opts.readBytes ?? defaultReadBytes;
+  const log = opts.log ?? logger("claude");
   const writeTempFile = opts.writeTempFile ?? defaultWriteTempFile;
+  const listSkillFiles = opts.listSkillFiles ?? defaultListSkillFiles;
+  const readCloneHead = opts.readCloneHead ?? defaultReadCloneHead;
 
   const names = [
     ...COMMON_SKILL_NAMES,
     ...opts.skillNames.filter((name) => !COMMON_SKILL_NAMES.includes(name)),
   ];
   const sections: string[] = [];
+  const skills: SkillRef[] = [];
   for (const name of names) {
-    const path = `${opts.factoryCloneDir}/.claude/skills/${name}/SKILL.md`;
-    sections.push(await readFile(path));
+    const skillDir = `.claude/skills/${name}`;
+    const content = await readFile(
+      `${opts.factoryCloneDir}/${skillDir}/SKILL.md`,
+    );
+    sections.push(content);
+    skills.push({
+      path: `${skillDir}/SKILL.md`,
+      sha256: sha256Hex(content),
+      bundle_sha256: await bundleSha256Of(
+        `${opts.factoryCloneDir}/${skillDir}`,
+        readBytes,
+        listSkillFiles,
+        log,
+      ),
+    });
   }
-  return writeTempFile(sections.join("\n\n---\n\n"));
+  const prompt = sections.join("\n\n---\n\n");
+  const file = await writeTempFile(prompt);
+  provenanceByPromptFile.set(file.path, {
+    skills,
+    cloneSha: await readCloneHeadOrNull(readCloneHead, opts.factoryCloneDir),
+  });
+  return {
+    path: file.path,
+    cleanup: async () => {
+      provenanceByPromptFile.delete(file.path);
+      await file.cleanup();
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -669,6 +854,7 @@ function baseAgentRunFor<T>(
   opts: RunClaudeOptions<T>,
   exitCode: number | null,
 ): AgentRunRecord {
+  const provenance = skillProvenanceFor(opts.appendSystemPromptFile);
   return {
     work_item_id: opts.workItemId,
     stage: opts.stage,
@@ -689,6 +875,8 @@ function baseAgentRunFor<T>(
     error: null,
     failure_reason: null,
     model_usage: [],
+    skills: provenance?.skills ?? null,
+    skill_clone_sha: provenance?.cloneSha ?? null,
   };
 }
 
