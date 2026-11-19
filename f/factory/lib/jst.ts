@@ -6,6 +6,22 @@
 /** 日本時間とUTCの差(ミリ秒)。 */
 export const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 時刻を含む日本時間の週の開始(月曜0時)を、エポックからのミリ秒で返す。
+ * 週は月曜日から始まる。月曜0時ちょうどの時刻は、その週の開始として自分自身を返す。
+ * 日本時間の月曜0時は、UTCでは日曜15時である。時刻が数でなければ`NaN`を返す。
+ */
+export function jstWeekStart(epochMs: number): number {
+  if (!Number.isFinite(epochMs)) return Number.NaN;
+  const shifted = epochMs + JST_OFFSET_MS;
+  const day = Math.floor(shifted / DAY_MS);
+  // 1970-01-01は木曜日なので、月曜日を0とする曜日の番号は、日数に3を足して7で割った余りになる。
+  const sinceMonday = (((day + 3) % 7) + 7) % 7;
+  return (day - sinceMonday) * DAY_MS - JST_OFFSET_MS;
+}
+
 /** 日付として読めない時刻を`YYYY-MM-DD`の代わりに示す文字列。年、月、日をそれぞれ`NaN`にする。 */
 export const INVALID_JST_DATE = "NaN-NaN-NaN";
 
