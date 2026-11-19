@@ -5968,6 +5968,13 @@ export const REASON_RULES: readonly ReasonRule[] = [
       `ラウンド${m[1]}で修正が停滞しました(差分か検査結果が前のラウンドと同じです)`,
     nextAction: () => CHECK_COMMAND_NEXT_ACTION,
   },
+  // `lib/implement_loop.ts`の`maxTurnsReason`。同じ上限で再実行しても同じ結果になるので、上限を上げる設定を案内する。
+  {
+    pattern: /^implement reached the turn limit \((\d+)\)$/,
+    describe: (m) => `実装がターンの上限(${m[1]})に達しました`,
+    nextAction: () =>
+      `Consoleの設定の「実装」グループで\`implement_max_turns\`を上げてから、${RETRY_WORK_ITEM_ACTION}`,
+  },
   {
     pattern: /^claude run failed \(([^)]+)\): ([\s\S]+)$/,
     describe: (m) => `Claudeの実行に失敗しました(${m[1]}): ${m[2]}`,

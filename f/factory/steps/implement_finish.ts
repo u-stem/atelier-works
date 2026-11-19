@@ -64,6 +64,7 @@ import {
   implementDesignGapExhaustedNote,
   implementDesignGapNote,
   implementNeedsHumanNextAction,
+  maxTurnsNoticeDetail,
   mergeImplementOutcome,
   PARTIAL_WORK_KEPT_LOCAL_REASON,
   PROTECTED_WORK_NOT_PUSHED_REASON,
@@ -583,6 +584,11 @@ async function finishImplement(
   }
 
   if (action.kind === "needs_human") {
+    // ターンの上限で止まったときだけ、上げる設定へのリンクを通知に足す。
+    const noticeOptions =
+      outcome === "max_turns"
+        ? { detail: maxTurnsNoticeDetail(config.windmill_public_url) }
+        : {};
     const baseReason = needsHumanBaseReason(
       loop_result?.reason ?? null,
       prepare_reason,
@@ -603,6 +609,7 @@ async function finishImplement(
         branch: context?.branch ?? null,
         notes,
       }),
+      noticeOptions,
     );
   }
 

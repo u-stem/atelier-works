@@ -46,6 +46,7 @@ function item(
 const CLAUDE_FAILURE_HOLDS = [
   ["timeout", "claude_run_failed"],
   ["run_budget_exceeded", "claude_run_failed"],
+  ["max_turns", "claude_run_failed"],
   ["usage_limit", "claude_usage_limit"],
   ["stopped", "claude_stopped"],
 ] as const;
@@ -99,6 +100,7 @@ describe("the CI round whose Claude run failed in a way that repeats", () => {
   test.each([
     "timeout",
     "run_budget_exceeded",
+    "max_turns",
     "claude_error",
     "work_item_stopped",
   ] as const)(
