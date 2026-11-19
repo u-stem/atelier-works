@@ -13993,6 +13993,289 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
       threadsWithLive.length === 1,
     { deletedWithLive, threadsWithLive },
   );
+
+  // 週ごとのレビューの質を確かめる。週は日本時間の月曜0時で始まり、UTCでは日曜15時にあたる。
+  // 期間の終わりは2003-01-20(月)0時(日本時間)で、最後の週は2003-01-13の週、先頭の週は7週前の2002-11-25の週である。
+  const trendItem = await prWorkItem(
+    "pr_review",
+    9931,
+    "cancelled",
+    "qdb trend",
+  );
+  const trendAudit = await auditItem("trend", "failed", "schedule", OWNER, "r");
+  const trendV1 = "aaaaaaaaaaaa";
+  const trendV2 = "bbbbbbbbbbbb";
+  // 別のスキルとオブジェクトでない要素を先に置き、レビューのスキルの要素だけが選ばれることを確かめる。
+  const skillsOf = (sha: string): string =>
+    JSON.stringify([
+      "junk",
+      {
+        path: ".claude/skills/factory-writing/SKILL.md",
+        sha256: "ffffffffffff0000",
+      },
+      { path: ".claude/skills/factory-review/SKILL.md", sha256: `${sha}0000` },
+    ]);
+  const trendRun = async (
+    workItemId: number,
+    stage: string,
+    skills: string | null,
+    createdAt: string,
+    cost: number,
+  ): Promise<number> => {
+    const rows = await sql`
+      INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, cost_usd, skills, created_at)
+      VALUES (${workItemId}::bigint, ${stage}, 1, 'qdb-model', ${cost}::numeric, ${skills}::jsonb, ${createdAt}::timestamptz)
+      RETURNING id
+    `.fetch();
+    const id = rows[0]?.id;
+    if (typeof id !== "number") {
+      throw new Error(`trend run was not inserted: ${String(id)}`);
+    }
+    return id;
+  };
+  // 窓の開始の1秒前(除く)と、開始ちょうど(含む)。
+  await trendRun(
+    trendItem,
+    "pr_review",
+    skillsOf(trendV1),
+    "2002-11-24T14:59:59Z",
+    9,
+  );
+  await trendRun(
+    trendItem,
+    "pr_review",
+    skillsOf(trendV1),
+    "2002-11-24T15:00:00Z",
+    0.5,
+  );
+  // 日本時間の日曜23:59:59(週の最後)と、月曜0時ちょうど(次の週の最初)。
+  await trendRun(
+    trendItem,
+    "pr_review",
+    skillsOf(trendV1),
+    "2003-01-12T14:59:59Z",
+    1,
+  );
+  const trendRunV1 = await trendRun(
+    trendItem,
+    "pr_review",
+    skillsOf(trendV1),
+    "2003-01-12T15:00:00Z",
+    2,
+  );
+  // 同じ週の中で版が替わる。スキルの記録が無い古い実行も同じ週にある。
+  const trendRunV2 = await trendRun(
+    trendItem,
+    "pr_review",
+    skillsOf(trendV2),
+    "2003-01-14T00:00:00Z",
+    3,
+  );
+  await trendRun(trendItem, "pr_review", null, "2003-01-14T01:00:00Z", 4);
+  // 期間の終わりちょうど、別のstage、監査の作業項目の実行は数えない。
+  await trendRun(
+    trendItem,
+    "pr_review",
+    skillsOf(trendV1),
+    "2003-01-19T15:00:00Z",
+    9,
+  );
+  await trendRun(
+    trendItem,
+    "implement",
+    skillsOf(trendV1),
+    "2003-01-14T00:00:00Z",
+    9,
+  );
+  await trendRun(
+    trendAudit,
+    "pr_review",
+    skillsOf(trendV1),
+    "2003-01-14T00:00:00Z",
+    9,
+  );
+
+  const trendReviewV1 = await insertReview(reviewOf(trendRunV1), sql);
+  const trendReviewV2 = await insertReview(reviewOf(trendRunV2), sql);
+  const trendReviewNoRun = await insertReview(reviewOf(null), sql);
+  const trendFinding = (
+    idx: number,
+    commentId: number | null,
+    posted = true,
+  ) => ({
+    idx,
+    path: "t.ts",
+    severity: "major" as const,
+    kind: "must" as const,
+    confidence: "high" as const,
+    posted,
+    review_comment_id: commentId,
+  });
+  await insertReviewFindings(
+    trendReviewV1,
+    [trendFinding(0, 9001), trendFinding(1, 9002)],
+    sql,
+  );
+  // 結果が決まっていない指摘(9005)、コメントに結びつかない指摘、投稿しなかった指摘を含める。
+  await insertReviewFindings(
+    trendReviewV2,
+    [
+      trendFinding(0, 9003),
+      trendFinding(1, 9004),
+      trendFinding(2, 9005),
+      trendFinding(3, null),
+      trendFinding(4, null, false),
+    ],
+    sql,
+  );
+  await insertReviewFindings(
+    trendReviewNoRun,
+    [trendFinding(0, 9006), trendFinding(1, 9007), trendFinding(2, 9008)],
+    sql,
+  );
+  await recordFindingOutcomes(
+    [9001, 9003, 9004, 9006, 9007, 9008].map((commentId) => ({
+      commentId,
+      outcome: "fixed" as const,
+      source: "pr_fix" as const,
+    })),
+    sql,
+  );
+  await recordFindingOutcomes(
+    [{ commentId: 9002, outcome: "skip_accepted", source: "rereview" }],
+    sql,
+  );
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.review_findings SET created_at = '2003-01-14T00:00:00Z' WHERE review_id IN (${String(trendReviewV1)}, ${String(trendReviewV2)}, ${String(trendReviewNoRun)})`,
+  );
+  // 窓の開始より前の指摘(9007)と、期間の終わりちょうどの指摘(9008)は数えない。
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.review_findings SET created_at = '2002-11-24T14:59:59Z' WHERE review_comment_id = 9007`,
+  );
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.review_findings SET created_at = '2003-01-19T15:00:00Z' WHERE review_comment_id = 9008`,
+  );
+
+  await upsertHumanThreads(
+    trendItem,
+    trendReviewV2,
+    [
+      { firstCommentId: 9101, resolved: false },
+      { firstCommentId: 9102, resolved: true },
+      { firstCommentId: 9103, resolved: true },
+    ],
+    sql,
+  );
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.review_human_threads SET created_at = '2003-01-12T14:59:59Z' WHERE first_comment_id = 9101`,
+  );
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.review_human_threads SET created_at = '2003-01-12T15:00:00Z' WHERE first_comment_id = 9102`,
+  );
+  await execPsqlAsync(
+    target,
+    `UPDATE factory.review_human_threads SET created_at = '2003-01-19T15:00:00Z' WHERE first_comment_id = 9103`,
+  );
+
+  const trendEvidence = await collectAuditEvidence(
+    {
+      period: {
+        start: new Date("2003-01-12T15:00:00Z"),
+        end: new Date("2003-01-19T15:00:00Z"),
+        unaudited_gap_days: 0,
+      },
+      instanceName: "qdb",
+    },
+    sql,
+  );
+  const trend = trendEvidence.review_quality;
+  check(
+    "review quality: the window covers eight weeks that start on Monday in Japan time",
+    trend.first_week === "2002-11-25" &&
+      trend.last_week === "2003-01-13" &&
+      !trend.partial_last_week,
+    trend,
+  );
+  check(
+    "review quality: a run belongs to the week that starts at Japan midnight on Monday, and the second before it to the week before",
+    JSON.stringify(
+      trend.rows
+        .filter((row) => row.sha === trendV1)
+        .map((row) => [row.week, row.run_count, row.cost_usd]),
+    ) ===
+      JSON.stringify([
+        ["2002-11-25", 1, 0.5],
+        ["2003-01-06", 1, 1],
+        ["2003-01-13", 1, 2],
+      ]),
+    trend.rows,
+  );
+  check(
+    "review quality: a week with two skill versions and an old run is split into three rows",
+    JSON.stringify(
+      trend.rows
+        .filter((row) => row.week === "2003-01-13")
+        .map((row) => [row.sha, row.run_count, row.cost_usd]),
+    ) ===
+      JSON.stringify([
+        [trendV1, 1, 2],
+        [trendV2, 1, 3],
+        [null, 1, 4],
+      ]),
+    trend.rows,
+  );
+  check(
+    "review quality: a run before the window, a run at the end, another stage and an audit work item are not counted",
+    trend.rows.reduce((sum, row) => sum + row.run_count, 0) === 5,
+    trend.rows,
+  );
+  check(
+    "review quality: the findings are counted by the week and the version of the review that made them",
+    JSON.stringify(
+      trend.rows
+        .filter((row) => row.week === "2003-01-13")
+        .map((row) => [
+          row.counts.fixed,
+          row.counts.skip_accepted,
+          row.counts.posted,
+        ]),
+    ) ===
+      JSON.stringify([
+        [1, 1, 0],
+        [2, 0, 1],
+        [1, 0, 0],
+      ]),
+    trend.rows,
+  );
+  check(
+    "review quality: a finding before the window and a finding at the end are not counted",
+    trend.rows.reduce(
+      (sum, row) =>
+        sum + row.counts.fixed + row.counts.skip_accepted + row.counts.posted,
+      0,
+    ) === 6,
+    trend.rows,
+  );
+  check(
+    "review quality: the threads that a person started are counted by week and the one at the end is left out",
+    JSON.stringify(
+      trend.human_threads.map((entry) => [
+        entry.week,
+        entry.total,
+        entry.resolved,
+      ]),
+    ) ===
+      JSON.stringify([
+        ["2003-01-06", 1, 0],
+        ["2003-01-13", 1, 1],
+      ]),
+    trend.human_threads,
+  );
 }
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
