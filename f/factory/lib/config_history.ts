@@ -1,6 +1,7 @@
 // 設定(`factory_config`)の変更の履歴(`factory.config_history`)を扱う部品。
 // 設定の値を許可リストで射影する関数、追記の呼び出し、連鎖の検証の呼び出し、証跡パックに載せる集計を持つ。
 // 履歴の書き込みは、Consoleの設定の更新と全停止のscriptが、変更の成功の後に呼ぶ。
+// Consoleの外の経路の変更は、定期の照合(`config_snapshot`)が、射影した値をそのまま書く(`appendConfigProjection`)。
 // 履歴を書けなくても、設定の書き込みは戻さない。失敗は結果で返し、投げない。
 // 連鎖のハッシュはSQL(`factory.config_history_row_hash`)が計算するので、言語をまたぐ正規化は持たない。
 // 射影のハッシュ(コマンドとURLと身元に関わる値の、生の値の代わりに残す変化の検知の印)だけは、このファイルが計算する。
@@ -22,12 +23,18 @@ import { holdsReference, redactText } from "./console_redact.ts";
  *   `after`は、読み直せたときは読み直した値の射影、読み直せなかったときは書こうとした値の射影である。
  * - stop_all_flag_off: Consoleの全停止が、`*_enabled`を`false`にした。
  * - unspecified: 呼び出し側が理由を決められなかった。
+ * - out_of_band_change: 定期の照合が、Consoleの外の経路(CLI、Windmillの画面)の変更を見つけた。
+ * - out_of_band_removed: 定期の照合が、履歴にある項目が設定から無くなったのを見つけた。
+ * - snapshot_baseline: 定期の照合が、履歴にまだ無い項目の、最初の値を残した。変更ではなく、比べる基準である。
  */
 export const CONFIG_HISTORY_REASON_CODES = [
   "console_update",
   "console_update_unverified",
   "stop_all_flag_off",
   "unspecified",
+  "out_of_band_change",
+  "out_of_band_removed",
+  "snapshot_baseline",
 ] as const;
 
 export type ConfigHistoryReasonCode =
@@ -35,7 +42,7 @@ export type ConfigHistoryReasonCode =
 
 /**
  * 変更を書いた経路。表の`source`の制約と同じ一覧である。
- * `out_of_band`は、Consoleの外の経路の変更を照合で見つけて書くために予約している。今は書き手が無い。
+ * `out_of_band`は、Consoleの外の経路の変更を、定期の照合(`lib/config_snapshot.ts`)が見つけて書く。
  */
 export const CONFIG_HISTORY_SOURCES = [
   "console",
@@ -64,6 +71,7 @@ export function isConfigHistoryReasonCode(
  *   塩を付けないので、候補が少ない値は、辞書や総当たりで当てられる。`changed`は、変更後の側だけに付く。
  * - `{ redacted: true }`: 参照、秘密らしい語、秘密の形、形に合わない文字列の代わり。
  * - `{ kind: "unknown" }`: 項目が未知か、値の型が項目の種類に合わない。値は入れない。
+ * - `{ removed: true }`: 項目が設定から無くなった。定期の照合だけが、変更後の側に入れる。値が`null`の項目とは区別する。
  */
 export type ConfigProjection =
   | boolean
@@ -73,7 +81,8 @@ export type ConfigProjection =
   | { readonly count: number }
   | { readonly hash: string; readonly changed?: boolean }
   | { readonly redacted: true }
-  | { readonly kind: "unknown" };
+  | { readonly kind: "unknown" }
+  | { readonly removed: true };
 
 type KeyClass = "flag" | "number" | "timestamp" | "enum" | "count" | "hash";
 
@@ -329,6 +338,11 @@ export type ConfigHistoryAppendResult =
 
 const ITEM_KEY_PATTERN = /^[a-z][a-z0-9_]{0,79}$/;
 const ACTOR_MAX = 100;
+
+/** 履歴の表の項目名の形(識別子)に合うか。合わない名前の項目は、履歴に書けない。 */
+export function isConfigItemKey(key: string): boolean {
+  return ITEM_KEY_PATTERN.test(key);
+}
 const FAILURE_REASON_MAX = 200;
 
 const MISSING_OBJECT_PATTERN =
@@ -367,7 +381,10 @@ function failure(
   return { recorded: false, kind, reason };
 }
 
-function inputProblem(input: ConfigChangeInput): string | null {
+function inputProblem(input: {
+  readonly key: string;
+  readonly actor: string;
+}): string | null {
   if (!ITEM_KEY_PATTERN.test(input.key)) {
     return "key must be lowercase letters, digits and underscores";
   }
@@ -381,25 +398,36 @@ function jsonOrNull(value: ConfigProjection): string | null {
   return value === null ? null : JSON.stringify(value);
 }
 
+/** 射影済みの変更1つ。`before`と`after`は、`projectConfigValue`などで射影した値で、そのまま履歴に書く。 */
+export type ConfigProjectionInput = {
+  readonly key: string;
+  readonly before: ConfigProjection;
+  readonly after: ConfigProjection;
+  readonly actor: string;
+  readonly source: ConfigHistorySource;
+  readonly reason: ConfigHistoryReasonCode;
+  /** 変更の時刻。省くと、DBの呼び出しの時刻を使う。 */
+  readonly occurredAt?: Date;
+};
+
 /**
- * 設定の変更1つを、履歴に1行足す。値は射影してから、パラメータとして渡す。
- * 失敗しても投げず、結果で返す。履歴を書けなくても、設定の書き込みは戻さないためである。
- * 失敗の理由の文は、秘密をマスクして200字までにする。
+ * 設定の変更1つを、射影済みの値のまま、履歴に1行足す。値は再び射影せず、パラメータとして渡す。
+ * 生の値を持たない呼び出し側(定期の照合は、前の値の射影しか持たない)のために、`appendConfigChange`とは別に持つ。
+ * 失敗しても投げず、結果で返す。失敗の理由の文は、秘密をマスクして200字までにする。
  */
-export async function appendConfigChange(
+export async function appendConfigProjection(
   sql: ActionSqlClient,
-  input: ConfigChangeInput,
+  input: ConfigProjectionInput,
 ): Promise<ConfigHistoryAppendResult> {
   try {
     const problem = inputProblem(input);
     if (problem !== null) return failure("invalid", problem);
-    const projected = projectConfigChange(input.key, input.before, input.after);
     const rows = await sql`
       SELECT factory.config_history_append(
         ${input.key}::text,
         ${input.reason}::text,
-        ${jsonOrNull(projected.before)}::jsonb,
-        ${jsonOrNull(projected.after)}::jsonb,
+        ${jsonOrNull(input.before)}::jsonb,
+        ${jsonOrNull(input.after)}::jsonb,
         ${input.actor}::text,
         ${input.source}::text,
         ${input.occurredAt === undefined ? null : input.occurredAt.toISOString()}::timestamptz
@@ -429,6 +457,34 @@ export async function appendConfigChange(
       reason,
     );
   }
+}
+
+/**
+ * 設定の変更1つを、履歴に1行足す。値は射影してから、パラメータとして渡す。
+ * 失敗しても投げず、結果で返す。履歴を書けなくても、設定の書き込みは戻さないためである。
+ * 失敗の理由の文は、秘密をマスクして200字までにする。
+ */
+export async function appendConfigChange(
+  sql: ActionSqlClient,
+  input: ConfigChangeInput,
+): Promise<ConfigHistoryAppendResult> {
+  const problem = inputProblem(input);
+  if (problem !== null) return failure("invalid", problem);
+  let projected: ConfigChangeProjection;
+  try {
+    projected = projectConfigChange(input.key, input.before, input.after);
+  } catch {
+    return failure("invalid", "the value could not be projected");
+  }
+  return await appendConfigProjection(sql, {
+    key: input.key,
+    before: projected.before,
+    after: projected.after,
+    actor: input.actor,
+    source: input.source,
+    reason: input.reason,
+    ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),
+  });
 }
 
 // ---------------------------------------------------------------------------

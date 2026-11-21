@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   appendConfigChange,
+  appendConfigProjection,
   CONFIG_HISTORY_REASON_CODES,
   CONFIG_HISTORY_SOURCES,
   collectConfigHistoryEvidence,
   EMPTY_CONFIG_HISTORY_EVIDENCE,
   isConfigHistoryReasonCode,
+  isConfigItemKey,
   isMissingConfigHistoryObjectError,
   projectConfigChange,
   projectConfigValue,
@@ -300,6 +302,9 @@ describe("the reason codes and the sources", () => {
       "console_update_unverified",
       "stop_all_flag_off",
       "unspecified",
+      "out_of_band_change",
+      "out_of_band_removed",
+      "snapshot_baseline",
     ]);
   });
 
@@ -500,6 +505,87 @@ describe("appendConfigChange", () => {
     });
     const result = await appendConfigChange(sql, INPUT);
     expect(JSON.stringify(result)).not.toContain("sk-ant-abcdefghijklmnop");
+  });
+});
+
+describe("appendConfigProjection", () => {
+  const PROJECTION_INPUT = {
+    key: "daily_budget_usd",
+    before: 50,
+    after: 20,
+    actor: "config_snapshot",
+    source: "out_of_band",
+    reason: "out_of_band_change",
+  } as const;
+
+  test("binds the projections as they are, without projecting them again", async () => {
+    const { sql, calls } = routedSql({});
+    await appendConfigProjection(sql, {
+      ...PROJECTION_INPUT,
+      key: "factory_repo",
+      before: { hash: "0123456789abcdef" },
+      after: { hash: "fedcba9876543210" },
+    });
+    expect(calls[0]?.values.slice(2, 4)).toEqual([
+      '{"hash":"0123456789abcdef"}',
+      '{"hash":"fedcba9876543210"}',
+    ]);
+  });
+
+  test("binds null for a side that has no projection", async () => {
+    const { sql, calls } = routedSql({});
+    await appendConfigProjection(sql, { ...PROJECTION_INPUT, before: null });
+    expect(calls[0]?.values[2]).toBeNull();
+  });
+
+  test("binds the reason and the source that the caller names", async () => {
+    const { sql, calls } = routedSql({});
+    await appendConfigProjection(sql, PROJECTION_INPUT);
+    expect([calls[0]?.values[1], calls[0]?.values[5]]).toEqual([
+      "out_of_band_change",
+      "out_of_band",
+    ]);
+  });
+
+  test("reports the id of the new row", async () => {
+    const { sql } = routedSql({
+      "factory.config_history_append(": [{ id: 9 }],
+    });
+    expect(await appendConfigProjection(sql, PROJECTION_INPUT)).toEqual({
+      recorded: true,
+      id: 9,
+    });
+  });
+
+  test("refuses a key that is not an identifier and sends no statement", async () => {
+    const { sql, calls } = routedSql({});
+    const result = await appendConfigProjection(sql, {
+      ...PROJECTION_INPUT,
+      key: "Bad Key",
+    });
+    expect([result.recorded, calls.length]).toEqual([false, 0]);
+  });
+
+  test("returns a failure instead of throwing when the statement fails", async () => {
+    const { sql } = routedSql({
+      "factory.config_history_append(": new Error("db down"),
+    });
+    const result = await appendConfigProjection(sql, PROJECTION_INPUT);
+    expect(result).toMatchObject({ recorded: false, kind: "write_failed" });
+  });
+});
+
+describe("isConfigItemKey", () => {
+  test("accepts a lowercase identifier", () => {
+    expect(isConfigItemKey("daily_budget_usd")).toBe(true);
+  });
+
+  test("rejects a key with an uppercase letter", () => {
+    expect(isConfigItemKey("Daily")).toBe(false);
+  });
+
+  test("rejects a key longer than 80 characters", () => {
+    expect(isConfigItemKey(`a${"b".repeat(80)}`)).toBe(false);
   });
 });
 

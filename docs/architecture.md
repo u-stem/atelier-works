@@ -726,6 +726,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/doc_tree_hash` | script | [LIB] 要件定義のディレクトリのハッシュと基準値の照合 |
 | `f/factory/lib/requirements_doc` | script | [LIB] 要件定義ファイルの検査 |
 | `f/factory/lib/pipeline_lease` | script | [LIB] 要件定義フローのリース判定 |
+| `f/factory/lib/config_snapshot` | script | [LIB] 設定のConsoleの外の変更の照合 |
 | `f/factory/lib/config_history` | script | [LIB] 設定の変更の履歴 |
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |
 | `f/factory/lib/design_apply_support` | script | [LIB] 設計の承認の反映の判定 |
@@ -827,6 +828,7 @@ Consoleは工程0として扱う。
 | `f/factory/sample_worker_load` | script | [SYS-10] workerの負荷を記録 |
 | `f/factory/collect_github` | script | [SYS-11] GitHubのリポジトリの状態を集める |
 | `f/factory/backup` | script | [SYS-12] バックアップを取る |
+| `f/factory/config_snapshot` | script | [SYS-13] 設定のConsoleの外の変更を検知して履歴に記録 |
 | `f/factory/cleanup_workspaces` | script | [SYS-2] 作業領域を掃除 |
 | `f/factory/notify_daily_summary` | script | [SYS-3] 日次サマリ通知 |
 | `f/factory/on_error_flow` | script | [SYS-4] フロー失敗ハンドラ |

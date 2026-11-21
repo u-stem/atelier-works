@@ -3975,17 +3975,18 @@ describe("the config history section", () => {
     );
   });
 
-  test("says that changes outside the Console are not recorded", () => {
+  test("says that changes outside the Console are recorded by the snapshot", () => {
     expect(
-      sectionOf(CONFIG_HISTORY_EVIDENCE, CONFIG_SECTION)?.fixed.some((line) =>
-        line.includes("Consoleの外"),
+      sectionOf(CONFIG_HISTORY_EVIDENCE, CONFIG_SECTION)?.fixed.some(
+        (line) =>
+          line.includes("Consoleの外") && line.includes("5分ごとの照合"),
       ),
     ).toBe(true);
   });
 
-  test("fixes the text of the scope line, with the restores that are not recorded", () => {
+  test("fixes the text of the scope line, with the delay of the restores and the changes that stay invisible", () => {
     expect(sectionOf(CONFIG_HISTORY_EVIDENCE, CONFIG_SECTION)?.fixed).toContain(
-      "記録の範囲: Consoleの設定の更新と全停止による停止だけ(復元と、Consoleの外の経路の変更は記録しない。旗の履歴がfalseで終わっていても、今の設定はtrueのことがある)",
+      "記録の範囲: Consoleの設定の更新、全停止による停止、5分ごとの照合が見つけたConsoleの外の経路の変更(CLIの復元は最大5分遅れて見える。5分の間に元へ戻された変更と、基準より前の変更は見えない)",
     );
   });
 
@@ -4086,8 +4087,8 @@ describe("the config history section", () => {
     });
   });
 
-  test("says in the line for an empty table that zero rows do not prove that nothing changed", () => {
-    expect(NO_CONFIG_HISTORY_LINE).toContain("Consoleの外");
+  test("says in the line for an empty table that zero rows do not prove that nothing changed while the snapshot is not running", () => {
+    expect(NO_CONFIG_HISTORY_LINE).toContain("照合が動いていなければ");
   });
 
   test("keeps every fixed line and drops only the item and reason lines when the evidence is over the limit", () => {

@@ -9,10 +9,16 @@ import { cancelStatement } from "../f/factory/console_work_item_cancel.ts";
 import { collectAuditEvidence } from "../f/factory/lib/audit_evidence.ts";
 import {
   appendConfigChange,
+  appendConfigProjection,
   CONFIG_HISTORY_REASON_CODES,
   CONFIG_HISTORY_SOURCES,
   collectConfigHistoryEvidence,
+  verifyConfigHistory,
 } from "../f/factory/lib/config_history.ts";
+import {
+  loadLatestProjections,
+  runConfigSnapshot,
+} from "../f/factory/lib/config_snapshot.ts";
 import {
   recordAttempt,
   recordOutcome,
@@ -15751,6 +15757,214 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
       .unrecorded_operations === 0,
   );
   await wipe();
+}
+
+// ---------------------------------------------------------------------------
+// 設定の変更の履歴の照合(config_snapshot)
+// resourceの代わりに固定の値を渡し、本物の表に対して、基準、変更、二重の防止、項目の消失、冪等、連鎖の検証を確かめる。
+// 場面の前後に表を空にして、ほかの検査へ持ち越さない。
+// ---------------------------------------------------------------------------
+{
+  async function wipeHistory(): Promise<void> {
+    await execPsqlAsync(
+      target,
+      "BEGIN; SELECT set_config('session_replication_role', 'replica', true); TRUNCATE factory.config_history; COMMIT;",
+    );
+  }
+
+  async function historyRows(): Promise<SqlRow[]> {
+    return sql`
+      SELECT seq, item_key, reason_code, before::text AS before_text, after::text AS after_text, actor, source
+      FROM factory.config_history
+      ORDER BY seq
+    `.fetch();
+  }
+
+  /** 固定のresourceの値で照合を1回走らせる。値は本物のresourceから読まない。 */
+  async function snapshotRun(raw: unknown, cap?: number) {
+    return runConfigSnapshot({
+      readRawConfig: () => Promise.resolve(raw),
+      loadLatest: () => loadLatestProjections(sql),
+      append: (input) => appendConfigProjection(sql, input),
+      log: { info: () => {}, warn: () => {} },
+      ...(cap === undefined ? {} : { cap }),
+    });
+  }
+
+  const FIXTURE_REPO = "https://github.com/octo-owner/snapshot-fixture-repo";
+  const FIXTURE_FREE_TEXT = "snapshot-fixture-free-text";
+  const fixture = {
+    daily_budget_usd: 20,
+    implement_enabled: false,
+    factory_repo: FIXTURE_REPO,
+    future_item: FIXTURE_FREE_TEXT,
+  };
+
+  await wipeHistory();
+
+  // 最初の実行は、履歴にまだ無い項目すべての基準を書く。
+  const baselineRun = await snapshotRun(fixture);
+  const baselineRows = await historyRows();
+  check(
+    "config snapshot: the first run writes a baseline row for each item",
+    baselineRun.baseline === 4 &&
+      baselineRows.length === 4 &&
+      baselineRows.every(
+        (row) =>
+          row.reason_code === "snapshot_baseline" &&
+          row.source === "out_of_band" &&
+          row.actor === "config_snapshot" &&
+          row.before_text === null,
+      ),
+    { baselineRun, baselineRows },
+  );
+  check(
+    "config snapshot: the rows of the first run keep the chain valid",
+    (await verifyConfigHistory(sql)).length === 0,
+  );
+  const tableText = JSON.stringify(baselineRows);
+  check(
+    "config snapshot: the history holds none of the raw strings of the fixture",
+    !tableText.includes(FIXTURE_REPO) && !tableText.includes(FIXTURE_FREE_TEXT),
+    baselineRows,
+  );
+
+  // 変わらなければ、何も書かない。
+  const idleRun = await snapshotRun(fixture);
+  check(
+    "config snapshot: a second run without a change writes nothing",
+    idleRun.baseline === 0 &&
+      idleRun.changed === 0 &&
+      (await historyRows()).length === 4,
+    idleRun,
+  );
+
+  // 値が変わった項目だけに、out_of_band_changeを書く。
+  await snapshotRun({ ...fixture, daily_budget_usd: 35 });
+  const afterChange = await historyRows();
+  const changeRow = afterChange[4];
+  check(
+    "config snapshot: a changed item gets one out_of_band_change row with the last value as its before",
+    afterChange.length === 5 &&
+      changeRow?.item_key === "daily_budget_usd" &&
+      changeRow.reason_code === "out_of_band_change" &&
+      changeRow.before_text === "20" &&
+      changeRow.after_text === "35",
+    afterChange,
+  );
+
+  // Consoleの経路が書いた行と同じ値なら、書かない。数値、真偽、ハッシュの項目(changedの印つき)で確かめる。
+  await appendConfigChange(sql, {
+    key: "implement_enabled",
+    before: false,
+    after: true,
+    actor: "operator",
+    source: "console",
+    reason: "console_update",
+  });
+  await appendConfigChange(sql, {
+    key: "factory_repo",
+    before: "https://github.com/octo-owner/old-fixture-repo",
+    after: FIXTURE_REPO,
+    actor: "operator",
+    source: "console",
+    reason: "console_update",
+  });
+  const rowsBeforeDedup = (await historyRows()).length;
+  const dedupRun = await snapshotRun({
+    ...fixture,
+    daily_budget_usd: 35,
+    implement_enabled: true,
+  });
+  check(
+    "config snapshot: a change that the Console path has recorded is not written again",
+    dedupRun.changed === 0 &&
+      dedupRun.failed === 0 &&
+      (await historyRows()).length === rowsBeforeDedup,
+    dedupRun,
+  );
+
+  // 読み直しが期待と合わなかったConsoleの行は、今の値と違えば、差になる。
+  await appendConfigChange(sql, {
+    key: "daily_budget_usd",
+    before: 35,
+    after: 40,
+    actor: "operator",
+    source: "console",
+    reason: "console_update_unverified",
+  });
+  const unverifiedRun = await snapshotRun({
+    ...fixture,
+    daily_budget_usd: 35,
+    implement_enabled: true,
+  });
+  const unverifiedRows = await historyRows();
+  const lastRow = unverifiedRows[unverifiedRows.length - 1];
+  check(
+    "config snapshot: a Console unverified row whose value differs from the live value gets an out_of_band row",
+    unverifiedRun.changed === 1 &&
+      lastRow?.item_key === "daily_budget_usd" &&
+      lastRow.source === "out_of_band" &&
+      lastRow.before_text === "40" &&
+      lastRow.after_text === "35",
+    { unverifiedRun, lastRow },
+  );
+
+  // 項目が無くなったら、消失の印を書く。続けて走らせても、二重に書かない。
+  const withoutFreeText = {
+    daily_budget_usd: 35,
+    implement_enabled: true,
+    factory_repo: FIXTURE_REPO,
+  };
+  const removalRun = await snapshotRun(withoutFreeText);
+  const removalRows = await historyRows();
+  const removalRow = removalRows[removalRows.length - 1];
+  check(
+    "config snapshot: an item that disappeared gets an out_of_band_removed row with the removed mark",
+    removalRun.removed === 1 &&
+      removalRow?.item_key === "future_item" &&
+      removalRow.reason_code === "out_of_band_removed" &&
+      JSON.stringify(JSON.parse(String(removalRow.after_text))) ===
+        '{"removed":true}',
+    { removalRun, removalRow },
+  );
+  const rowsAfterRemoval = removalRows.length;
+  await snapshotRun(withoutFreeText);
+  check(
+    "config snapshot: an item that stays removed is not written again",
+    (await historyRows()).length === rowsAfterRemoval,
+  );
+
+  // 最後の値の読み取りは、項目ごとに1行で、連番が最大の行の値を返す。
+  const latest = await loadLatestProjections(sql);
+  check(
+    "config snapshot: the latest value of each item comes from the row with the greatest seq",
+    latest.size === 4 &&
+      latest.get("daily_budget_usd") === 35 &&
+      latest.get("implement_enabled") === true &&
+      JSON.stringify(latest.get("future_item")) === '{"removed":true}',
+    [...latest],
+  );
+  check(
+    "config snapshot: the chain stays valid after every kind of row",
+    (await verifyConfigHistory(sql)).length === 0,
+    await verifyConfigHistory(sql),
+  );
+
+  // 上限を超えた差は、次の実行で書く。
+  await wipeHistory();
+  const capped = await snapshotRun(fixture, 3);
+  const cappedRest = await snapshotRun(fixture, 3);
+  check(
+    "config snapshot: the differences over the cap are written by the next run",
+    capped.baseline === 3 &&
+      capped.deferred === 1 &&
+      cappedRest.baseline === 1 &&
+      (await historyRows()).length === 4,
+    { capped, cappedRest },
+  );
+
+  await wipeHistory();
 }
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
