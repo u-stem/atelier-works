@@ -2209,6 +2209,7 @@ describe("PR review sections in the evidence pack", () => {
       "履歴の整合",
       "設定の変更",
       "通知",
+      "必須チェックが無いdependabotの通知(リポジトリ別)",
       "デプロイ",
       "過去の提案(直近3回)",
     ]);
