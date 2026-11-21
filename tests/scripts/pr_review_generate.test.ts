@@ -138,7 +138,10 @@ describe("buildFilePatchDiff", () => {
 
   test("joins the patches with a heading line for each file", () => {
     const diff = buildFilePatchDiff(
-      [file("a.ts", "@@ -1 +1 @@\n-a\n+b"), file("c.ts", "@@ -1 +1 @@\n-c\n+d")],
+      [
+        file("a.ts", "@@ -1 +1 @@\n-a\n+b"),
+        file("c.ts", "@@ -1 +1 @@\n-c\n+d"),
+      ],
       100,
     );
     expect(diff.diff).toBe(
@@ -189,7 +192,9 @@ describe("buildFilePatchDiff", () => {
       [file("a\n+evil.ts", "@@ -1 +1 @@\n+a")],
       100,
     );
-    expect(diff.diff.split("\n")[0]).toBe("diff --git a/a +evil.ts b/a +evil.ts");
+    expect(diff.diff.split("\n")[0]).toBe(
+      "diff --git a/a +evil.ts b/a +evil.ts",
+    );
   });
 
   test("replaces control characters in a patch with visible code points", () => {
@@ -559,20 +564,25 @@ describe("diff too large wiring in the generate step", () => {
   });
 
   test("logs one warning when the diff is refused", async () => {
-    expect(
-      count(await SOURCE, 'log.warn("pr diff too large for GitHub'),
-    ).toBe(1);
+    expect(count(await SOURCE, 'log.warn("pr diff too large for GitHub')).toBe(
+      1,
+    );
   });
 
   test("tells the prompt that the whole diff is missing, for every scope", async () => {
     expect(count(await SOURCE, "          diffTooLarge,\n        )")).toBe(1);
     expect(
-      count(await SOURCE, "buildReviewDiffText(deltaDiff ?? prDiff, diffTooLarge)"),
+      count(
+        await SOURCE,
+        "buildReviewDiffText(deltaDiff ?? prDiff, diffTooLarge)",
+      ),
     ).toBe(1);
   });
 
   test("returns the flag in the result, and false when the step is skipped", async () => {
-    expect(count(await SOURCE, "      diff_too_large: diffTooLarge,\n")).toBe(1);
+    expect(count(await SOURCE, "      diff_too_large: diffTooLarge,\n")).toBe(
+      1,
+    );
     expect(count(await SOURCE, "  diff_too_large: false,\n")).toBe(1);
   });
 

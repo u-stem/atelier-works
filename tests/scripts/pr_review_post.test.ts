@@ -752,6 +752,7 @@ describe("thread responses wiring", () => {
         "a".repeat(40),
         "$var:f/factory/github_token",
         0,
+        false,
         "",
         "",
       ),
@@ -1009,7 +1010,9 @@ describe("renderReviewSummary when the diff was too large", () => {
       0,
       true,
     );
-    expect(body.split("\n")[2]).toBe("最終的なApprove判断は人が行ってください。");
+    expect(body.split("\n")[2]).toBe(
+      "最終的なApprove判断は人が行ってください。",
+    );
   });
 
   test("puts the fixed sentence after the held back notice", () => {
@@ -1051,15 +1054,7 @@ describe("renderReviewSummary when the diff was too large", () => {
   });
 
   test("adds the fixed sentence to the fallback summary", () => {
-    const body = renderUnresolvedLineSummary(
-      "alice",
-      [],
-      [],
-      [],
-      0,
-      0,
-      true,
-    );
+    const body = renderUnresolvedLineSummary("alice", [], [], [], 0, 0, true);
     expect(body.split("\n")).toContain(SENTENCE);
   });
 

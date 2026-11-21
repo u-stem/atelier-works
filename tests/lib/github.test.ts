@@ -4906,7 +4906,13 @@ describe("getPrDiff", () => {
 
   test("truncates to maxLines and reports truncated: true", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, "l1\nl2\nl3\nl4\nl5"))]);
-    const diff = await getPrDiffOk({ ghToken: "tok" }, "acme", "widgets", 12, 2);
+    const diff = await getPrDiffOk(
+      { ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      2,
+    );
     expect(diff).toEqual({
       diff: "l1\nl2",
       truncated: true,
