@@ -7,6 +7,7 @@ import {
 } from "../../f/factory/lib/model_text.ts";
 import {
   main,
+  PIPELINE_RECENT_ONLY_STATUSES,
   readDocFromDisk,
   resolveIntArg,
   resolvePositiveIntArg,
@@ -620,6 +621,40 @@ describe("runConsoleQuery", () => {
 
     expect(calls[0]?.text).toContain("FROM factory.v_pipeline");
     expect(calls[0]?.values).toContain(50);
+  });
+
+  test("pipeline: reads the rows of the active and pr_open statuses without the period", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+
+    await runConsoleQuery("pipeline", 50, 7, sql);
+
+    expect(calls[0]?.text).toMatch(
+      /WHERE status <> ALL\( \? ::text\[\]\)\s+ORDER BY updated_at DESC\s+LIMIT/,
+    );
+  });
+
+  test("pipeline: limits only the settled statuses by the period", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+
+    await runConsoleQuery("pipeline", 50, 7, sql);
+
+    expect(calls[0]?.text).toMatch(
+      /status = ANY\( \? ::text\[\]\)\s+AND updated_at >=\s+\? ::timestamptz/,
+    );
+  });
+
+  test("pipeline: binds the settled statuses to both reads", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+
+    await runConsoleQuery("pipeline", 50, 7, sql);
+
+    const statusLists = (calls[0]?.values ?? []).filter(
+      (value): value is string[] => Array.isArray(value),
+    );
+    expect(statusLists).toEqual([
+      [...PIPELINE_RECENT_ONLY_STATUSES],
+      [...PIPELINE_RECENT_ONLY_STATUSES],
+    ]);
   });
 
   test("pipeline: selects branch and pr_url appended after fix_round (工程3 columns)", async () => {

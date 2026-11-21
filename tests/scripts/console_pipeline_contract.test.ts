@@ -25,7 +25,10 @@ import {
   WORK_ITEM_KINDS,
   WORK_ITEM_STATUSES,
 } from "../../f/factory/lib/types.ts";
-import { runConsoleQuery } from "../../f/factory/steps/console_query.ts";
+import {
+  PIPELINE_RECENT_ONLY_STATUSES,
+  runConsoleQuery,
+} from "../../f/factory/steps/console_query.ts";
 
 function sqlReturning(rows: SqlRow[]): SqlClient {
   return () => ({
@@ -148,6 +151,28 @@ describe("label tables cover the backend values", () => {
     }));
     const sorted = sortPipelineRows(rows, { key: "status", direction: "asc" });
     expect(sorted.at(-1)?.status).toBe("0-unknown");
+  });
+});
+
+// 一覧は、新しさだけで取る状態を新しい順の上限で切る。
+// 画面の「進行中」と「PR待ち」に入る状態がそこに入ると、終端の状態が上限を埋めたときに、古い行が黙って消える。
+describe("the statuses that the list reads only by recency", () => {
+  test.each([...WORK_ITEM_STATUSES])(
+    "do not hide %s, which the active and pr_open scopes show",
+    (status) => {
+      const shownByScope = isActiveStatus(status) || status === "pr_open";
+      expect(
+        PIPELINE_RECENT_ONLY_STATUSES.includes(status) && shownByScope,
+      ).toBe(false);
+    },
+  );
+
+  test("hold only terminal statuses", () => {
+    expect(
+      PIPELINE_RECENT_ONLY_STATUSES.every((status) =>
+        TERMINAL_PIPELINE_STATUSES.includes(status),
+      ),
+    ).toBe(true);
   });
 });
 

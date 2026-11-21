@@ -505,42 +505,32 @@ export function showsRequirementsLink(row: Pick<PipelineRow, "kind">): boolean {
   return row.kind === "issue";
 }
 
-/** 取得した件数が上限に達したか。達したときは、古い行を取得できていない場合がある。 */
+/**
+ * 新しさだけで取る行の数。進行中とPR待ちに入る状態の行は、更新が古くても取るので数えない。
+ * backendが期間と件数で切るのは、この行だけである(`PIPELINE_RECENT_ONLY_STATUSES`)。
+ */
+export function recentOnlyCount(rows: readonly PipelineRow[]): number {
+  return rows.filter(
+    (row) => !isActiveStatus(row.status) && row.status !== "pr_open",
+  ).length;
+}
+
+/** 新しさだけで取る行の数が上限に達したか。達したときは、古い終端の行を取得できていない場合がある。 */
 export function pipelineReachedLimit(count: number, limit: number): boolean {
   return count >= limit;
 }
 
 /**
- * 範囲の中に行が無いときに、空の文へ添える注記。
- * 取得は新しい順に上限まで読み、範囲で絞るのはその後なので、上限に達していると、
- * 取得できなかった古い行に、範囲の中の行があるかもしれない。
- * 「すべて」の範囲は絞らないので、注記は無い。
- */
-export function scopeEmptyNote(
-  scope: PipelineScope,
-  limitReached: boolean,
-): string | null {
-  if (!limitReached) return null;
-  switch (scope) {
-    case "active":
-      return "取得が上限に達しているため、古い進行中の作業項目が表に出ていない場合があります。";
-    case "pr_open":
-      return "取得が上限に達しているため、古いPR待ちの作業項目が表に出ていない場合があります。";
-    case "all":
-      return null;
-  }
-}
-
-/**
  * 表が見ている範囲の注記。
- * 取得の上限に達したときは、古い行が漏れているかもしれないので、件数の上限も添える。
+ * 進行中とPR待ちは、更新が古くてもすべて取る。終端の状態は、新しい順に上限まで取るので、
+ * 上限に達したときは、古い終端の行が漏れているかもしれないことを伝える。
  */
 export function pipelineScopeNote(
-  count: number,
+  recentCount: number,
   limit: number,
   days: number,
 ): string {
-  return pipelineReachedLimit(count, limit)
-    ? `直近${days}日に更新された作業項目を、新しい順に${limit}件まで取得しています。`
-    : `直近${days}日に更新された作業項目を表示しています。`;
+  return pipelineReachedLimit(recentCount, limit)
+    ? `直近${days}日に更新された完了などの作業項目を、新しい順に${limit}件まで取得しています。進行中とPR待ちは、更新が古くてもすべて取得します。`
+    : `直近${days}日に更新された作業項目を表示しています。進行中とPR待ちは、更新が古くてもすべて表示します。`;
 }

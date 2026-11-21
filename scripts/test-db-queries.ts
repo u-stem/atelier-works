@@ -1745,6 +1745,71 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// 作業項目の一覧は、進行中とPR待ちの状態を、期間と件数で切らずに取る
+// ---------------------------------------------------------------------------
+
+const pipeOldApproved = await auditItem(
+  "pipe-old-approved",
+  "approved",
+  "manual",
+  "qdb-pipe",
+  "app",
+);
+const pipeOldPrOpen = await auditItem(
+  "pipe-old-pr-open",
+  "pr_open",
+  "manual",
+  "qdb-pipe",
+  "app",
+);
+const pipeOldReviewed = await auditItem(
+  "pipe-old-reviewed",
+  "reviewed",
+  "manual",
+  "qdb-pipe",
+  "app",
+);
+const pipeNewReviewed = await auditItem(
+  "pipe-new-reviewed",
+  "reviewed",
+  "manual",
+  "qdb-pipe",
+  "app",
+);
+await execPsqlAsync(
+  target,
+  `UPDATE factory.work_items SET updated_at = now() - interval '200 days' WHERE id IN (${String(pipeOldApproved)}, ${String(pipeOldPrOpen)}, ${String(pipeOldReviewed)})`,
+);
+// 上限は、他の検査が残した進行中の行で埋まらない大きさにする。
+const pipeIds = (await runConsoleQuery("pipeline", 1000, 90, sql)).map((row) =>
+  Reflect.get(row, "work_item_id"),
+);
+check(
+  "pipeline: an approved item older than the period stays in the list",
+  pipeIds.includes(pipeOldApproved),
+  pipeIds,
+);
+check(
+  "pipeline: a pr_open item older than the period stays in the list",
+  pipeIds.includes(pipeOldPrOpen),
+  pipeIds,
+);
+check(
+  "pipeline: a settled item inside the period is in the list",
+  pipeIds.includes(pipeNewReviewed),
+  pipeIds,
+);
+check(
+  "pipeline: a settled item older than the period is not in the list",
+  !pipeIds.includes(pipeOldReviewed),
+  pipeIds,
+);
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.work_items WHERE owner = 'qdb-pipe'",
+);
+
+// ---------------------------------------------------------------------------
 // 完全一致による通知の解決
 // ---------------------------------------------------------------------------
 

@@ -19,12 +19,12 @@ import {
   pipelineStatusLabel,
   pipelineStatusVariant,
   prLink,
+  recentOnlyCount,
   reconcilePipelineFilter,
   relatedLinks,
   repoOptions,
   rowsInScope,
   scopeEmptyMessage,
-  scopeEmptyNote,
   selectPipelineStatus,
   showsRepository,
   showsRequirementsLink,
@@ -622,21 +622,21 @@ describe("showsRequirementsLink", () => {
 });
 
 describe("pipelineScopeNote", () => {
-  test("states the period and the limit when the list may be cut", () => {
+  test("states the period and the limit when the settled items may be cut", () => {
     expect(pipelineScopeNote(500, 500, 90)).toBe(
-      "直近90日に更新された作業項目を、新しい順に500件まで取得しています。",
+      "直近90日に更新された完了などの作業項目を、新しい順に500件まで取得しています。進行中とPR待ちは、更新が古くてもすべて取得します。",
     );
   });
 
   test("states only the period one below the limit", () => {
     expect(pipelineScopeNote(499, 500, 90)).toBe(
-      "直近90日に更新された作業項目を表示しています。",
+      "直近90日に更新された作業項目を表示しています。進行中とPR待ちは、更新が古くてもすべて表示します。",
     );
   });
 
   test("states only the period when the list is complete", () => {
     expect(pipelineScopeNote(12, 500, 90)).toBe(
-      "直近90日に更新された作業項目を表示しています。",
+      "直近90日に更新された作業項目を表示しています。進行中とPR待ちは、更新が古くてもすべて表示します。",
     );
   });
 });
@@ -852,25 +852,30 @@ describe("pipelineReachedLimit", () => {
   });
 });
 
-describe("scopeEmptyNote", () => {
-  test("warns that old active items may be missing at the limit", () => {
-    expect(scopeEmptyNote("active", true)).toBe(
-      "取得が上限に達しているため、古い進行中の作業項目が表に出ていない場合があります。",
+describe("recentOnlyCount", () => {
+  test("does not count the active statuses, which are always fetched", () => {
+    expect(
+      recentOnlyCount([
+        row({ work_item_id: 1, status: "implementing" }),
+        row({ work_item_id: 2, status: "approved" }),
+        row({ work_item_id: 3, status: "blocked" }),
+      ]),
+    ).toBe(0);
+  });
+
+  test("does not count the items waiting for a merge", () => {
+    expect(recentOnlyCount([row({ work_item_id: 1, status: "pr_open" })])).toBe(
+      0,
     );
   });
 
-  test("warns that old items waiting for a merge may be missing at the limit", () => {
-    expect(scopeEmptyNote("pr_open", true)).toBe(
-      "取得が上限に達しているため、古いPR待ちの作業項目が表に出ていない場合があります。",
-    );
-  });
-
-  test("says nothing below the limit", () => {
-    expect(scopeEmptyNote("active", false)).toBeNull();
-  });
-
-  test("says nothing for the all scope", () => {
-    expect(scopeEmptyNote("all", true)).toBeNull();
+  test("counts the settled statuses that are read by recency", () => {
+    expect(
+      recentOnlyCount([
+        row({ work_item_id: 1, status: "reviewed" }),
+        row({ work_item_id: 2, status: "failed" }),
+      ]),
+    ).toBe(2);
   });
 });
 
