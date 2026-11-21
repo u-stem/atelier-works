@@ -14844,7 +14844,7 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
   );
   const splitAfter = await collectHistoryEvidence(sql, splitStart, splitEnd);
   check(
-    "history: a transition without a note adds one to the unspecified count without a note only",
+    "history: a transition without a note adds one to the unspecified count without a note",
     splitAfter.unspecified_without_note -
       splitBefore.unspecified_without_note ===
       1,

@@ -265,7 +265,9 @@ export async function collectHistoryEvidence(
           WHERE h.reason_code = 'unspecified' AND coalesce((h.detail ->> 'note_chars')::int, 0) > 0
         ) AS unspecified_with_note,
         count(*) FILTER (
-          WHERE h.reason_code = 'unspecified' AND coalesce((h.detail ->> 'note_chars')::int, 0) = 0
+          WHERE h.reason_code = 'unspecified'
+            AND jsonb_exists(h.detail, 'note_chars')
+            AND coalesce((h.detail ->> 'note_chars')::int, 0) = 0
         ) AS unspecified_without_note
       FROM factory.history_events h
       LEFT JOIN factory.work_items wi ON wi.id = h.work_item_id
