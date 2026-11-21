@@ -321,6 +321,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 値を許可リストで射影する規則を持つので、書き換えられると、コマンドやURL、秘密らしい値が、履歴に生の値のまま入る。
  * 射影の規則の検査(`tests/lib/config_history.test.ts`)と、2つのscriptが履歴を書く配線の検査(`tests/scripts/config_history_hooks.test.ts`)も同じ理由で守る。
  * `lib/config_history.script.lock`は、依存の無いlibのlockと同じ扱いで守らない。
+ * 設定の外の変更を照合して履歴に書くscript(`config_snapshot.ts`)と、判定と書き込みの部品(`lib/config_snapshot.ts`)、それぞれの`.script.yaml`、
+ * 5分ごとの定期実行の定義(`config_snapshot.schedule.yaml`)、部品のテスト(`tests/lib/config_snapshot.test.ts`)も守る。
+ * 改ざんを検知する履歴の書き手の1つで、書き換えられると、Consoleの外の変更が履歴に書かれなくなるか、偽の行が履歴に混ざる。
+ * 定期実行の定義は、無効にされたり別のscriptへ向けられたりすると、照合が黙って止まるので、`poll_dependabot.schedule.yaml`と同じく守る。
+ * `config_snapshot.script.lock`は、`windmill-client`を含むので守らない。`lib/config_snapshot.script.lock`は、依存の無いlibのlockと同じ扱いで守らない。
  * 全停止のホストのCLI(`scripts/stop_all.ts`、`mise run stop`の入口)と、資格情報の期限の記録を組み立てる
  * `scripts/credential_expiry.ts`(`bootstrap.sh`が秘密値を環境に持たせて起動する)、その部品`lib/credential_expiry.ts`と`.script.yaml`も守る。
  * どれも、ホストのユーザーの権限と秘密値のある環境で動くため、書き換えられると任意の処理が秘密値の近くで動く。
@@ -570,6 +575,12 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/config_history.script.yaml",
   "tests/lib/config_history.test.ts",
   "tests/scripts/config_history_hooks.test.ts",
+  "f/factory/lib/config_snapshot.ts",
+  "f/factory/lib/config_snapshot.script.yaml",
+  "f/factory/config_snapshot.ts",
+  "f/factory/config_snapshot.script.yaml",
+  "f/factory/config_snapshot.schedule.yaml",
+  "tests/lib/config_snapshot.test.ts",
   "f/factory/console_job_cancel.ts",
   "f/factory/console_job_cancel.script.yaml",
   "f/factory/console_job_rerun.ts",

@@ -2056,6 +2056,44 @@ describe("config history files", () => {
   });
 });
 
+// 設定の外の変更を履歴に書く照合は、履歴の書き手の1つなので、保護パスに入る。
+// 書き換えられると、Consoleの外の変更が履歴に書かれなくなるか、偽の行が履歴に混ざる。
+describe("config snapshot files", () => {
+  const PATHS = [
+    "f/factory/config_snapshot.ts",
+    "f/factory/config_snapshot.script.yaml",
+    "f/factory/config_snapshot.schedule.yaml",
+    "f/factory/lib/config_snapshot.ts",
+    "f/factory/lib/config_snapshot.script.yaml",
+    "tests/lib/config_snapshot.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  // windmill-clientを含むlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるので守らない。
+  // 依存の無いlibのlockも、守らない。
+  test.each([
+    "f/factory/config_snapshot.script.lock",
+    "f/factory/lib/config_snapshot.script.lock",
+  ])("matchesForbiddenPath does not match the lock %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+});
+
 // 設計の承認画面が全文を描く部品と、止める判定、全コードポイントの契約テストは、
 // 書き換えられると、範囲を狭めたり、判定を緩めたりする変更が、人のレビューを経ずに入る。
 // 承認する人に見えない文字が、実装に渡ったまま承認されうる。
