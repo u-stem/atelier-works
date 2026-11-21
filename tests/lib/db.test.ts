@@ -144,6 +144,7 @@ import {
   recordFailure,
   recordFindingOutcomes,
   recordMainCiRun,
+  recordNoRequiredCheckNotice,
   recordOutageSkip,
   recordPrCiCheck,
   recordTransientStall,
@@ -200,6 +201,7 @@ import {
   updateStatusToRequirementsIfLeaseHolder,
   upsertHumanThreads,
 } from "../../f/factory/lib/db.ts";
+import { buildNoRequiredCheckMessage } from "../../f/factory/lib/dependabot_repo_notice.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import type { ReviewFindingRow } from "../../f/factory/lib/review_outcomes.ts";
 import {
@@ -3503,6 +3505,109 @@ describe("recordWorkspaceDiskUsageNotice", () => {
     await expect(recordWorkspaceDiskUsageNotice(message, sql)).rejects.toThrow(
       "recordWorkspaceDiskUsageNotice",
     );
+  });
+});
+
+describe("recordNoRequiredCheckNotice", () => {
+  const PREFIX = "u-stem/app: ";
+
+  test("inserts a notice of the missing required check kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ inserted: true }]]);
+    await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql);
+    expect(calls[0]?.text).toContain(
+      "VALUES ('dependabot_no_required_check', ",
+    );
+  });
+
+  test("passes only the message as a value", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ inserted: true }]]);
+    await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql);
+    expect(calls[0]?.values).toEqual([
+      buildNoRequiredCheckMessage("u-stem", "app", 2),
+    ]);
+  });
+
+  test("starts the message with the lowercased repository", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ inserted: true }]]);
+    await recordNoRequiredCheckNotice("U-Stem", "App", 2, true, sql);
+    expect(String(calls[0]?.values[0]).startsWith(PREFIX)).toBe(true);
+  });
+
+  test("targets the partial unique index over the open notice of a repository", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ inserted: true }]]);
+    await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql);
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT ((lower(split_part(message, ': ', 1))))",
+    );
+  });
+
+  test("limits the conflict target to the unresolved notices of the kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ inserted: true }]]);
+    await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql);
+    expect(calls[0]?.text).toContain(
+      "WHERE resolved = false AND kind = 'dependabot_no_required_check'",
+    );
+  });
+
+  test("updates the message only when it changed in overwrite mode", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ inserted: true }]]);
+    await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql);
+    expect(calls[0]?.text).toContain(
+      "DO UPDATE SET message = EXCLUDED.message",
+    );
+    expect(calls[0]?.text).toContain(
+      "WHERE factory.notices.message <> EXCLUDED.message",
+    );
+  });
+
+  test("does not touch created_at in overwrite mode", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ inserted: true }]]);
+    await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql);
+    expect(calls[0]?.text).not.toContain("created_at");
+  });
+
+  test("does nothing on a conflict when overwrite is off", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ inserted: true }]]);
+    await recordNoRequiredCheckNotice("u-stem", "app", 1, false, sql);
+    expect(calls[0]?.text).toContain("DO NOTHING");
+    expect(calls[0]?.text).not.toContain("DO UPDATE");
+  });
+
+  test("returns true when the notice was inserted", async () => {
+    const { sql } = createFakeSqlClient([[{ inserted: true }]]);
+    expect(
+      await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql),
+    ).toBe(true);
+  });
+
+  test("returns false when an open notice was updated", async () => {
+    const { sql } = createFakeSqlClient([[{ inserted: false }]]);
+    expect(
+      await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql),
+    ).toBe(false);
+  });
+
+  test("returns false when an open notice was left as it is", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await recordNoRequiredCheckNotice("u-stem", "app", 2, false, sql),
+    ).toBe(false);
+  });
+
+  test("rejects an invalid repository without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await expect(
+      recordNoRequiredCheckNotice("u-stem", "a b", 2, true, sql),
+    ).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
+
+  test("rejects a count below one without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await expect(
+      recordNoRequiredCheckNotice("u-stem", "app", 0, true, sql),
+    ).rejects.toThrow();
+    expect(calls).toEqual([]);
   });
 });
 

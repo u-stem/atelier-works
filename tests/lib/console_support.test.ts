@@ -179,6 +179,16 @@ describe("merge hold notices", () => {
   });
 });
 
+describe("no required check notice", () => {
+  test("the notice that the base branch has no required check needs an action", () => {
+    expect(noticeSeverity("dependabot_no_required_check")).toBe("action");
+  });
+
+  test("the notice can be resolved from the Console", () => {
+    expect(isNoticeResolvable("dependabot_no_required_check")).toBe(true);
+  });
+});
+
 describe("hold release notices", () => {
   test("the notice that a person released a hold needs no action", () => {
     expect(noticeSeverity("hold_released")).toBe("info");

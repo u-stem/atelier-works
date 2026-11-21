@@ -361,6 +361,24 @@ PRの読み取りや、一覧で候補を列挙するリポジトリの一覧の
 同じheadの取り消しから1時間たつまでは、フローを起動し直さない。
 同じheadで取り消しが3回に達したら、人に回す。
 
+### 対象ブランチに必須のチェックが無いPR
+
+対象のブランチに必須のステータスチェックが1件も無いリポジトリでは、PRを人に回さず、作業項目も待ちの記録も作らない。
+代わりに、リポジトリごとに未解決の通知(`dependabot_no_required_check`)を1件だけ残す。
+通知の本文には、リポジトリ、原因、操作、影響を受けているPRの数が載る。
+通知を新しく作った1回だけ、Discordに通知する。
+未解決の通知があるあいだは、新しい通知も、Discordへの通知も作らない。
+PRの数が変わったときだけ、本文を更新する。
+
+同じ周回の同じリポジトリでは、必須のチェックを1回だけ読む。
+2件目以降のPRは、収集を呼ばずに止めるので、GitHubの読み取りはPRの数に比例して増えない。
+必須のチェックを読めたリポジトリは、未解決の通知を解決する。
+設定が直った後の最初の周回で、止めていたPRが通常のゲートで評価される。
+設定をまた外したときは、新しい通知を作る。
+止めたPRは、ゲートを通らないので、自動でマージしない。
+
+フローの準備(`dependabot_prepare`)が同じ状態を見つけたときも、PRごとの通知は送らず、同じ通知にまとめて作業項目を取り消す(注記`no_required_check`)。
+
 ### 処理済みの記録が消えたPR
 
 `cleanup_db`は、保持期間(`retention_work_items_days`)を過ぎた終端の作業項目を消す。
@@ -410,6 +428,7 @@ PRを読み直して書いてよいと確かめた後、マージ、所見の投
 | `fallback_reasons` | 一覧に戻した理由ごとの、リポジトリの数 |
 | `failed` | 失敗の数。表の読み取りが失敗して一覧に戻し、その一覧も失敗すれば、1つのリポジトリで2増える |
 | `held` | マージの保留のために待ったPRの数。保留を読めずに待ったPRを含む |
+| `blocked` | 対象ブランチに必須のステータスチェックが無いために止めたPRの数 |
 
 dependabotが無効な周回と、レート制限の解除まで飛ばす周回は、表と一覧のどちらも使わない。
 この2つの周回では、`fallback_lists`は0になる。
@@ -439,13 +458,14 @@ dependabotの作業項目は、`picked`で始まり、次の終端のどれか�
 | `cancelled` | `pr_closed` | 処理の途中でPRが閉じた |
 | `cancelled` | `head_moved` | 処理の途中でheadが動いた |
 | `cancelled` | `gate_waiting` | フローの収集かゲートが待ちを返した |
+| `cancelled` | `no_required_check` | フローの準備が、対象ブランチに必須のステータスチェックが無いことを見つけた。リポジトリごとの通知(`dependabot_no_required_check`)にまとめる |
 | `needs_human` | `dependabot <段階>: <詳細>`などの理由 | 自動では処理できず、人に回した |
 | `needs_human` | `dependabot dry run: merge allowed` | 試運転で、マージしてよいと判断したがマージしなかった |
 | `needs_human` | `dependabot merge held by a hold` | 終了のステップがマージの直前に、リポジトリのマージの保留を見つけた |
 | `needs_human` | `dependabot merge hold unreadable: <種類>` | 終了のステップがマージの直前に、保留を読めなかった。種類は`missing_table`、`read_failed`、`corrupt`、`error` |
 | `failed` | フローの例外の理由など | 実行時エラーで止まった |
 
-`cancelled`の4つの注記は、フローがそのheadを判断せずに止めたことを表す。
+`cancelled`の5つの注記は、フローがそのheadを判断せずに止めたことを表す。
 そのheadは、スケジュールが改めて評価する。
 
 人に回す理由は、どの段階で止めたかを表す接頭辞で始まる。
@@ -722,7 +742,7 @@ Claudeのバージョンが変わったときは、同じ実験をやり直す�
 | --- | --- | --- |
 | 試運転で、マージ可と判定したPRの判断が妥当であること | 試運転で人に回ったPRの理由と所見を読む | マージを有効にしない |
 | PATのマージ権限と、rulesetの迂回の有無 | PATの権限とrulesetの迂回の設定を読む | マージを有効にしない。迂回が働くなら、必須チェックの防御が関門だけになることを受け入れるか決める |
-| 他のリポジトリのrulesetに必須チェックがあること | `gh api repos/<owner>/<repo>/rules/branches/main`を読み、`required_status_checks`の規則と`context`を確かめる | 必須チェックが無いリポジトリは人に回る。ruleset、またはGitHub Actionsの名前を直す |
+| 他のリポジトリのrulesetに必須チェックがあること | `gh api repos/<owner>/<repo>/rules/branches/main`を読み、`required_status_checks`の規則と`context`を確かめる | 必須チェックが無いリポジトリは、リポジトリごとの通知(`dependabot_no_required_check`)にまとまり、PRは止まる。ruleset、またはGitHub Actionsの名前を直す |
 | squashの空のcommit本文の扱い | 最初のマージのcommitを見る | commitの本文を直す |
 
 ### 残るリスク

@@ -1,0 +1,9 @@
+summary: '[LIB] 必須チェックが無いdependabot要人手の集約通知'
+description: 内部ライブラリです。対象ブランチに必須チェックが無いdependabotの更新PRを、リポジトリごとの1件の通知にまとめるための本文の組み立てと読み取りを提供します。
+lock: '!inline f/factory/lib/dependabot_repo_notice.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
