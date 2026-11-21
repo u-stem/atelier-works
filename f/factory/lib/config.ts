@@ -214,7 +214,7 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   // 資格情報の期限の通知は、期限の30日前から出す。
   credential_warn_days: 30,
   check_commands_by_repo: {},
-  // 静的検査は、保護パスを変えたラウンドで実行する。反映後に実ジョブで確かめてから、リモートのリソースで有効にする。
+  // 静的検査は、実装フローの保護パスを変えたラウンドと、PR修正フローの検証で実行する。反映後に実ジョブで確かめてから、リモートのリソースで有効にする。
   static_check_commands_by_repo: {},
 };
 
@@ -1256,7 +1256,7 @@ export function implementCheckCommandsFor(
 }
 
 /**
- * 保護パスを変えたラウンドで実行する静的検査のコマンドを返す。
+ * 静的検査のコマンドを返す。実装フローは保護パスを変えたラウンドで、PR修正フローは検証で、検査コマンドの前に実行する。
  * そのリポジトリを明示した`static_check_commands_by_repo`のエントリーだけを使い
  * (キーの照合は`implementCheckCommandsFor`と同じ)、無ければ`[]`を返す。
  * `allowed_check_commands`にも`check_commands_by_repo`にも、フォールバックしない。

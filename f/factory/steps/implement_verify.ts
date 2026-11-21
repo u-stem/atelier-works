@@ -47,6 +47,7 @@ import {
   runStaticChecksInWorkspace,
 } from "../lib/implement_loop.ts";
 import {
+  CHECK_COMMAND_STOP_OVERHEAD_SEC,
   fixRoundWorstCaseSec,
   requireDeadlineAt,
 } from "../lib/implement_support.ts";
@@ -58,10 +59,7 @@ import {
 } from "../lib/process_lock.ts";
 import { implementFixPrompt } from "../lib/prompts.ts";
 import { skillsFor } from "../lib/skill_registry.ts";
-import {
-  createStaticCheckWorkspace,
-  STATIC_CHECK_INSTALL_COMMAND,
-} from "../lib/static_check_workspace.ts";
+import { createStaticCheckWorkspace } from "../lib/static_check_workspace.ts";
 import { isShape, parseUntrustedArg } from "../lib/untrusted_arg.ts";
 import {
   assertWorktreeGitPointer,
@@ -253,8 +251,12 @@ export async function main(
           ),
         // 静的検査は、基準の版の木(`ensureRepo`のcloneから取り出す)にPRの変更を重ねた一時の作業木で、基準の版の道具を実行する。
         // PRのファイルは読むだけで、PRのコードは実行しない。作業木は通常の検査と同じ枠に渡し、非特権uidで実行する。
+        // 静的検査の全体は、時間の見積もりが数える検査コマンド1件分に収める。
         runStaticChecks: (changes) =>
           runStaticChecksInWorkspace({
+            commands: staticCommands,
+            budgetMs: config.implement_check_timeout_sec * 1000,
+            stopOverheadMs: CHECK_COMMAND_STOP_OVERHEAD_SEC * 1000,
             createWorkspace: () =>
               createStaticCheckWorkspace({
                 run: runCommand,
@@ -271,12 +273,12 @@ export async function main(
                 message: `implement_verifyはこれから${String(staticCommands.length)}件の静的検査コマンドと依存の導入を、コンテナの分離なしで非特権の検査用ユーザーにより${context.owner}/${context.repo}#${String(context.issue_number)}の未検証コードに対して実行します。基準の版の道具で未検証のファイルを読むだけで、そのコードは実行しません(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
               });
             },
-            runCommands: (dir) =>
+            runCommands: (dir, commands, commandTimeoutMs) =>
               runAllowedCheckCommands(
                 lockedRun,
                 dir,
-                [STATIC_CHECK_INSTALL_COMMAND, ...staticCommands],
-                config.implement_check_timeout_sec * 1000,
+                commands,
+                commandTimeoutMs,
                 undefined,
                 undefined,
                 checkSandbox,

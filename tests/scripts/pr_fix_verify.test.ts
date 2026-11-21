@@ -11,6 +11,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fixPrompt } from "../../f/factory/lib/prompts.ts";
+import {
+  createStaticCheckWorkspace,
+  STATIC_CHECK_UNSAFE_PATH_SKIP_REASON,
+} from "../../f/factory/lib/static_check_workspace.ts";
 import type { RequirementDraft } from "../../f/factory/lib/types.ts";
 import {
   type CommandRunner,
@@ -1740,6 +1744,50 @@ describe("changed path listing against a real git repository", () => {
     ).toEqual(["a.ts", "b.ts"]);
   });
 
+  // 一覧にgitがそのまま返す名前は、作業木に安全に写せない形のことがある。静的検査は、そのような名前があれば作業木を作らずに飛ばす。
+  test("the static check workspace skips an untracked file with an unsafe name", async () => {
+    const repo = await repoWithCommitAfterBase();
+    writeFileSync(join(repo.dir, "ｱ.ts"), "export const b = 1;\n");
+    const tmpRoot = mkdtempSync(join(tmpdir(), "pr-fix-verify-static-"));
+    tempDirs.push(tmpRoot);
+    const workspace = await createStaticCheckWorkspace({
+      run: repo.run,
+      repoDir: repo.dir,
+      baseSha: repo.baseSha,
+      worktreeDir: repo.dir,
+      changes: await listChangedPathsSinceBase(
+        repo.run,
+        repo.dir,
+        repo.baseSha,
+      ),
+      tmpRoot,
+    });
+    expect(workspace).toEqual({
+      kind: "skipped",
+      reason: STATIC_CHECK_UNSAFE_PATH_SKIP_REASON,
+    });
+  });
+
+  test("the static check workspace skips a staged file with an unsafe name that the implement flow lists", async () => {
+    const repo = await initRepo();
+    writeFileSync(join(repo.dir, "a​.ts"), "export const a = 1;\n");
+    await stageAll(repo);
+    const tmpRoot = mkdtempSync(join(tmpdir(), "pr-fix-verify-static-"));
+    tempDirs.push(tmpRoot);
+    const workspace = await createStaticCheckWorkspace({
+      run: repo.run,
+      repoDir: repo.dir,
+      baseSha: repo.baseSha,
+      worktreeDir: repo.dir,
+      changes: await listChangedPaths(repo.run, repo.dir, repo.baseSha),
+      tmpRoot,
+    });
+    expect(workspace).toEqual({
+      kind: "skipped",
+      reason: STATIC_CHECK_UNSAFE_PATH_SKIP_REASON,
+    });
+  });
+
   test("listChangedPathsSinceBase lists a file deleted without a commit", async () => {
     const repo = await repoWithCommitAfterBase();
     rmSync(join(repo.dir, "README.md"));
@@ -2051,16 +2099,29 @@ describe("the wiring of the static checks in pr_fix_verify", () => {
     );
   });
 
-  test("installs the base dependencies before the static check commands", async () => {
+  test("hands the static check commands to the runner that installs the dependencies first", async () => {
     expect(await stepSource("pr_fix_verify.ts")).toContain(
-      "[STATIC_CHECK_INSTALL_COMMAND, ...staticCommands]",
+      "commands: staticCommands,",
+    );
+  });
+
+  // 静的検査の全体を、検査コマンド1件分の打ち切りに収める。
+  test("gives the static checks the time of one check command", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toContain(
+      "budgetMs: timeoutMs, stopOverheadMs: PR_COMMAND_STOP_OVERHEAD_SEC * 1000,",
+    );
+  });
+
+  test("runs each static check command with the timeout that the runner gives", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toContain(
+      "runCommands: (dir, commands, commandTimeoutMs) => runAllowedCheckCommands( lockedRun, dir, commands, commandTimeoutMs,",
     );
   });
 
   // 作業木の後片付けは`runStaticChecksInWorkspace`が、検査コマンドの例外のときも行う。
   test("runs the static checks through the runner that removes the workspace", async () => {
     expect(await stepSource("pr_fix_verify.ts")).toContain(
-      "return await runStaticChecksInWorkspace({ createWorkspace: async () =>",
+      "return await runStaticChecksInWorkspace({ commands: staticCommands,",
     );
   });
 

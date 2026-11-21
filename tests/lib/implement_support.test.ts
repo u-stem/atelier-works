@@ -1691,12 +1691,12 @@ describe("fixRoundWorstCaseSec", () => {
     expect(fixRoundWorstCaseSec(TIME_SETTINGS, 0, false)).toBe(4_200);
   });
 
-  test("adds one check command run for the static checks", () => {
-    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 4, true)).toBe(8_775);
+  test("adds one check command run and the workspace for the static checks", () => {
+    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 4, true)).toBe(9_045);
   });
 
-  test("counts the static checks alone as one check command run", () => {
-    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 0, true)).toBe(5_115);
+  test("counts the static checks alone as one check command run and the workspace", () => {
+    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 0, true)).toBe(5_385);
   });
 });
 
@@ -1711,13 +1711,13 @@ describe("implementTimeoutMisfit", () => {
     );
   });
 
-  test("accepts the defaults with six check commands and the static checks", () => {
-    expect(implementTimeoutMisfit(TIME_SETTINGS, 6, true)).toBeNull();
+  test("accepts the defaults with five check commands and the static checks", () => {
+    expect(implementTimeoutMisfit(TIME_SETTINGS, 5, true)).toBeNull();
   });
 
-  test("rejects seven check commands and the static checks with the defaults", () => {
-    expect(implementTimeoutMisfit(TIME_SETTINGS, 7, true)).toBe(
-      "implement time settings do not fit the flow step timeout: implement_flow_timeout_sec 14400 + 600 + 8 check commands (7 + 1 for the static checks) x (implement_check_timeout_sec 900 + 15) = 22320s exceeds 21600s",
+  test("rejects six check commands and the static checks with the defaults", () => {
+    expect(implementTimeoutMisfit(TIME_SETTINGS, 6, true)).toBe(
+      "implement time settings do not fit the flow step timeout: implement_flow_timeout_sec 14400 + 600 + 7 check commands (6 + 1 for the static checks) x (implement_check_timeout_sec 900 + 15) + 270 for the static check workspace = 21675s exceeds 21600s",
     );
   });
 

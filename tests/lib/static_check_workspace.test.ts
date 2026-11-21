@@ -9,9 +9,14 @@ import {
   isStaticCheckDependencyPath,
   isStaticCheckExecutedPath,
   isStaticCheckOverlaidPath,
+  STATIC_CHECK_COMMAND_TIMEOUT_MS,
   STATIC_CHECK_DEPENDENCY_PATHS,
+  STATIC_CHECK_MIN_COMMAND_TIMEOUT_MS,
   STATIC_CHECK_NOT_OVERLAID,
+  STATIC_CHECK_WORKSPACE_WORST_CASE_SEC,
+  staticCheckCommandTimeoutMs,
 } from "../../f/factory/lib/static_check_workspace.ts";
+import { RUNNER_MAX_STOP_OVERHEAD_MS } from "../../f/factory/lib/workspace.ts";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 
@@ -221,5 +226,39 @@ describe("isStaticCheckExecutedPath", () => {
     [".github/workflows/ci.yml", false],
   ])("treats %s as executed by the checks: %p", (path, expected) => {
     expect(isStaticCheckExecutedPath(path)).toBe(expected);
+  });
+});
+
+describe("staticCheckCommandTimeoutMs", () => {
+  test("shares one check command between the install and the commands", () => {
+    expect(staticCheckCommandTimeoutMs(900_000, 15_000, 6)).toBe(115_714);
+  });
+
+  // 依存の導入と6件のコマンドが、すべて打ち切りまでかかり、停止の上乗せを足しても、検査コマンド1件分に収まる。
+  test("keeps the worst case of the install and the commands within one check command", () => {
+    const share = staticCheckCommandTimeoutMs(900_000, 15_000, 6) ?? 0;
+    expect(7 * (share + 15_000)).toBeLessThanOrEqual(900_000 + 15_000);
+  });
+
+  test("returns the floor of thirty seconds when the share just reaches it", () => {
+    expect(staticCheckCommandTimeoutMs(75_000, 15_000, 1)).toBe(
+      STATIC_CHECK_MIN_COMMAND_TIMEOUT_MS,
+    );
+  });
+
+  test("returns null when the share falls below thirty seconds", () => {
+    expect(staticCheckCommandTimeoutMs(74_999, 15_000, 1)).toBeNull();
+  });
+
+  test("sets the floor to thirty seconds", () => {
+    expect(STATIC_CHECK_MIN_COMMAND_TIMEOUT_MS).toBe(30_000);
+  });
+});
+
+describe("STATIC_CHECK_WORKSPACE_WORST_CASE_SEC", () => {
+  test("covers git archive and tar at their timeout with the runner's stop overhead", () => {
+    expect(STATIC_CHECK_WORKSPACE_WORST_CASE_SEC * 1000).toBeGreaterThanOrEqual(
+      2 * (STATIC_CHECK_COMMAND_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS),
+    );
   });
 });

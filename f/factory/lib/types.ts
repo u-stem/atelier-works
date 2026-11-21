@@ -2175,8 +2175,8 @@ export type FactoryConfig = {
   check_commands_by_repo: Record<string, string[]>;
   /**
    * リポジトリごとの静的検査のコマンド(`"<owner>/<repo>": string[]`)。
-   * 保護パスを変えたラウンドで、通常の検査コマンドの代わりに実行する(`config.ts`の
-   * `staticCheckCommandsFor`)。エントリの無いリポジトリでは静的検査を実行しない。
+   * 実装フローでは保護パスを変えたラウンドで通常の検査コマンドの代わりに、PR修正フローでは検証で通常の検査コマンドの前に実行する
+   * (`config.ts`の`staticCheckCommandsFor`)。エントリの無いリポジトリでは静的検査を実行しない。
    * `allowed_check_commands`と`check_commands_by_repo`にはフォールバックしない。
    */
   static_check_commands_by_repo: Record<string, string[]>;

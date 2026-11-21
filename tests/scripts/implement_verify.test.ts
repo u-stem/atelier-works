@@ -81,9 +81,20 @@ describe("the static checks of a protected-path round in implement_verify", () =
     );
   });
 
-  test("installs the base dependencies before the static check commands", async () => {
-    expect(await source()).toContain(
-      "[STATIC_CHECK_INSTALL_COMMAND, ...staticCommands]",
+  test("hands the static check commands to the runner that installs the dependencies first", async () => {
+    expect(await source()).toContain("commands: staticCommands,");
+  });
+
+  // 静的検査の全体を、検査コマンド1件分の打ち切りに収める。
+  test("gives the static checks the time of one check command", async () => {
+    expect(await source()).toMatch(
+      /budgetMs: config\.implement_check_timeout_sec \* 1000,\s*stopOverheadMs: CHECK_COMMAND_STOP_OVERHEAD_SEC \* 1000,/,
+    );
+  });
+
+  test("runs each static check command with the timeout that the runner gives", async () => {
+    expect(await source()).toMatch(
+      /runCommands: \(dir, commands, commandTimeoutMs\) =>\s*runAllowedCheckCommands\(\s*lockedRun,\s*dir,\s*commands,\s*commandTimeoutMs,/,
     );
   });
 

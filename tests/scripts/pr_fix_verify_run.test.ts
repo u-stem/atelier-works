@@ -11,6 +11,7 @@ import {
 import { CI_ROUND_REASONS_WITHHELD } from "../../f/factory/lib/ci_fix_round.ts";
 import type { StaticCheckOutcome } from "../../f/factory/lib/implement_loop.ts";
 import type { CheckFailure } from "../../f/factory/lib/prompts.ts";
+import { STATIC_CHECK_INSTALL_FAILED_REASON } from "../../f/factory/lib/static_check_workspace.ts";
 import type { FixReply } from "../../f/factory/lib/types.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
 import {
@@ -1053,6 +1054,36 @@ describe("runPrFixVerify: static checks", () => {
         fields: { reason: STATIC_SKIP_REASON },
       },
     ]);
+  });
+
+  // 依存の導入の失敗はClaudeが直せる失敗ではないので、再実行に回さず、理由を残して静的検査を飛ばす。
+  test("records the install failure as the skipped reason", async () => {
+    const h = harness();
+    const deps: PrFixVerifyDeps = {
+      ...h.deps,
+      runStaticChecks: async () => ({
+        kind: "skipped",
+        reason: STATIC_CHECK_INSTALL_FAILED_REASON,
+      }),
+    };
+    const result = await runPrFixVerify(deps, STATIC_INPUT);
+    expect([result.outcome, result.static_checks_skipped_reason]).toEqual([
+      "done",
+      STATIC_CHECK_INSTALL_FAILED_REASON,
+    ]);
+  });
+
+  test("does not retry with Claude for an install failure", async () => {
+    const h = harness();
+    const deps: PrFixVerifyDeps = {
+      ...h.deps,
+      runStaticChecks: async () => ({
+        kind: "skipped",
+        reason: STATIC_CHECK_INSTALL_FAILED_REASON,
+      }),
+    };
+    await runPrFixVerify(deps, STATIC_INPUT);
+    expect(h.calls).not.toContain("runRetry");
   });
 
   test("records no skipped reason when the last static checks ran", async () => {

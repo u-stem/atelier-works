@@ -1,4 +1,4 @@
-// 保護パスを変えたラウンドの静的検査のために、基準のcommitの木にPRの変更を重ねた一時の作業木を作る。
+// 静的検査(実装フローの保護パスを変えたラウンドと、PR修正フローの検証)のために、基準のcommitの木にPRの変更を重ねた一時の作業木を作る。
 // 検査の道具と設定は基準の版を使い、PRの版は重ねない。検査が実行するファイルをPRが変えたときは、作業木を作らない。
 // PRのファイルを読ませるだけにして、PRのコードを検査に実行させないためである。
 
@@ -15,7 +15,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { displayPath, isSafeRepoPath } from "./ci_fix_paths.ts";
+import { isSafeRepoPath } from "./ci_fix_paths.ts";
 import { jobTmpEnv } from "./job_tmp.ts";
 import { errorMessage, type Logger, logger, maskSecrets } from "./log.ts";
 import {
@@ -62,6 +62,41 @@ export const STATIC_CHECK_DEPENDENCY_SKIP_REASON =
 /** 検査が実行するファイルが変わったときの、作業木を作らない理由。 */
 export const STATIC_CHECK_EXECUTED_SKIP_REASON =
   "the change updates files the static checks execute, so the base version cannot check it";
+
+/** 作業木に安全に写せない名前のパスが変わったときの、作業木を作らない理由。 */
+export const STATIC_CHECK_UNSAFE_PATH_SKIP_REASON =
+  "the change has a path that cannot be copied into the workspace safely";
+
+/** 依存の導入が失敗したときの、静的検査を飛ばす理由。 */
+export const STATIC_CHECK_INSTALL_FAILED_REASON =
+  "the base dependencies could not be installed";
+
+/** 1件あたりの打ち切りが下限に届かないときの、静的検査を飛ばす理由。 */
+export const STATIC_CHECK_TIMEOUT_TOO_SHORT_REASON =
+  "the time of one check command is too short to share among the static check commands";
+
+/** 静的検査の依存の導入と設定のコマンドの、1件あたりの打ち切りの下限(ミリ秒)。これより短いと、1件も意味のある検査を終えられない。 */
+export const STATIC_CHECK_MIN_COMMAND_TIMEOUT_MS = 30_000;
+
+/**
+ * 静的検査の依存の導入と設定のコマンドの、1件あたりの打ち切り(ミリ秒)を返す。
+ * 時間の見積もりは静的検査を検査コマンド1件分(打ち切り`budgetMs`と停止の上乗せ`stopOverheadMs`)と数えるので、
+ * その1件分を、依存の導入と`commandCount`件のコマンドで等分する。
+ * 各件が打ち切りまでかかり、それぞれに停止の上乗せが付いても、合計は`budgetMs + stopOverheadMs`を超えない。
+ * 1件あたりが下限`STATIC_CHECK_MIN_COMMAND_TIMEOUT_MS`に届かなければnullを返し、呼び出し側は静的検査を飛ばす。
+ * 下限で打ち切りを延ばすと、合計が見積もりの1件分を超えるためである。
+ * 作業木を作る`git archive`と`tar`は、この1件分に含めず、`STATIC_CHECK_WORKSPACE_WORST_CASE_SEC`として見積もりに足す。
+ */
+export function staticCheckCommandTimeoutMs(
+  budgetMs: number,
+  stopOverheadMs: number,
+  commandCount: number,
+): number | null {
+  const share =
+    Math.floor((budgetMs + stopOverheadMs) / (commandCount + 1)) -
+    stopOverheadMs;
+  return share < STATIC_CHECK_MIN_COMMAND_TIMEOUT_MS ? null : share;
+}
 
 /**
  * 重ねずに基準の版を使うパスの一覧。どれかに当たれば重ねない。
@@ -140,8 +175,21 @@ export const STATIC_CHECK_DIR_PREFIX = "factory-static-check-";
 /** 基準の木のアーカイブを一時に置くディレクトリの名前の接頭辞。展開の後に消す。 */
 const ARCHIVE_DIR_PREFIX = `${STATIC_CHECK_DIR_PREFIX}archive-`;
 
-/** `git archive`と`tar`の、1回のtimeoutの既定(ミリ秒)。 */
-export const STATIC_CHECK_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
+/** `git archive`と`tar`の、1回のtimeoutの既定(ミリ秒)。どちらもローカルの読み書きだけで、ネットワークを使わない。 */
+export const STATIC_CHECK_COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
+
+/** `git archive`と`tar`が、timeoutの後に上乗せしうる停止と出力待ちの時間(秒)。ランナーの最大13秒を切り上げた値。 */
+const WORKSPACE_COMMAND_STOP_OVERHEAD_SEC = 15;
+
+/**
+ * 作業木の作成(`git archive`と`tar`)の最悪の所要時間(秒)。
+ * 時間の見積もりは、静的検査を1回実行するごとに、検査コマンド1件分にこの値を足す。
+ * 既定のtimeoutの2回分と、それぞれの停止の上乗せである。
+ */
+export const STATIC_CHECK_WORKSPACE_WORST_CASE_SEC =
+  2 *
+  (STATIC_CHECK_COMMAND_TIMEOUT_MS / 1000 +
+    WORKSPACE_COMMAND_STOP_OVERHEAD_SEC);
 
 /**
  * 掃除の対象にする、更新から経った時間(ミリ秒)。
@@ -200,7 +248,10 @@ export function isStaticCheckOverlaidPath(path: string): boolean {
  * 変わっていれば、何も作らずに`skipped`を返す。
  * 重ねるのは、`isStaticCheckOverlaidPath`が真のパスのうち、worktreeで通常のファイルであるものだけである。
  * worktreeに無いパスは、作業木からも消す。symlink、ディレクトリ、途中にsymlinkを挟むパスは読み飛ばす。
- * 変更のパスが安全でない(絶対パス、`..`、NULなど)ときは、何も作らずに例外を投げる。
+ * 変更のパスが安全に写せない形(`isSafeRepoPath`を通らない。絶対パス、`..`、NUL、バックスラッシュ、不可視文字、
+ * NFKCで変わる文字など)のときも、何も作らずに`skipped`を返す。
+ * そのパスだけを重ねずに検査すると、作業木がPRの版と食い違い、修正のラウンドで直せない偽の失敗か、
+ * 検査していないファイルを含んだまま検査に通ったという結果を出すためである。
  * 作る前に、`tmpRoot`に残った古い作業木を掃除する(`sweepStaleWorkspaces`)。掃除の失敗は`log`に出し、作成は続ける。
  * 途中で失敗したら、作ったディレクトリを消して例外を投げる。
  * 返した`cleanup`は作業木を消す。消せなければ例外を投げる。
@@ -223,11 +274,8 @@ export async function createStaticCheckWorkspace(input: {
   readonly log?: Logger;
 }): Promise<StaticCheckWorkspace> {
   assertSha(input.baseSha);
-  const unsafe = input.changes.find((change) => !isSafeRepoPath(change.path));
-  if (unsafe !== undefined) {
-    throw new Error(
-      `static check workspace: unsafe changed path: ${JSON.stringify(displayPath(unsafe.path))}`,
-    );
+  if (input.changes.some((change) => !isSafeRepoPath(change.path))) {
+    return { kind: "skipped", reason: STATIC_CHECK_UNSAFE_PATH_SKIP_REASON };
   }
   if (
     input.changes.some((change) => isStaticCheckDependencyPath(change.path))

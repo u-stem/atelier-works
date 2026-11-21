@@ -22,6 +22,7 @@ import type { ChangedPath } from "../../f/factory/lib/protected_paths.ts";
 import {
   createStaticCheckWorkspace,
   STATIC_CHECK_COMMAND_TIMEOUT_MS,
+  STATIC_CHECK_UNSAFE_PATH_SKIP_REASON,
   type StaticCheckWorkspace,
 } from "../../f/factory/lib/static_check_workspace.ts";
 import {
@@ -254,19 +255,19 @@ describe("createStaticCheckWorkspace", () => {
     expect(fx.calls.map((call) => call.command)).toEqual(["git", "tar"]);
   });
 
-  test("passes the default timeout of five minutes to git archive and tar", async () => {
+  test("passes the default timeout of two minutes to git archive and tar", async () => {
     const fx = await fixture();
 
     await createReady(fx, []);
 
     expect(fx.calls.map((call) => call.timeoutMs)).toEqual([
-      5 * 60 * 1000,
-      5 * 60 * 1000,
+      2 * 60 * 1000,
+      2 * 60 * 1000,
     ]);
   });
 
   test("exports the default command timeout", () => {
-    expect(STATIC_CHECK_COMMAND_TIMEOUT_MS).toBe(5 * 60 * 1000);
+    expect(STATIC_CHECK_COMMAND_TIMEOUT_MS).toBe(2 * 60 * 1000);
   });
 
   test("passes the given timeout to git archive and tar", async () => {
@@ -517,20 +518,30 @@ describe("createStaticCheckWorkspace", () => {
     expect(readdirSync(fx.tmpRoot)).toEqual([]);
   });
 
-  test("throws for a change path that leaves the tree", async () => {
+  test.each([
+    ["a path that leaves the tree", "../escape.ts"],
+    ["a NUL byte", "src/a\u0000.ts"],
+    ["a backslash", "src\\a.ts"],
+    ["a half-width katakana", "src/ｱ.ts"],
+    ["a combining character", "src/é.ts"],
+    ["an invisible character", "src/a​.ts"],
+  ])("returns skipped for a change path with %s", async (_name, path) => {
     const fx = await fixture();
 
-    const promise = create(fx, [{ path: "../escape.ts", status: "added" }]);
+    const workspace = await create(fx, [{ path, status: "added" }]);
 
-    await expect(promise).rejects.toThrow("unsafe changed path");
+    expect(workspace).toEqual({
+      kind: "skipped",
+      reason: STATIC_CHECK_UNSAFE_PATH_SKIP_REASON,
+    });
   });
 
-  test("throws for a change path with a NUL byte", async () => {
+  test("does not create a directory for an unsafe change path", async () => {
     const fx = await fixture();
 
-    const promise = create(fx, [{ path: "src/a\u0000.ts", status: "added" }]);
+    await create(fx, [{ path: "src\\a.ts", status: "added" }]);
 
-    await expect(promise).rejects.toThrow("unsafe changed path");
+    expect(readdirSync(fx.tmpRoot)).toEqual([]);
   });
 
   test("throws when the base commit cannot be archived", async () => {

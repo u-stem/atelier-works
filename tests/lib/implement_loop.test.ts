@@ -79,6 +79,11 @@ import {
   IMPLEMENT_SCHEMA_WITH_DESIGN_GAP,
 } from "../../f/factory/lib/prompts.ts";
 import type { ChangedPath } from "../../f/factory/lib/protected_paths.ts";
+import {
+  STATIC_CHECK_INSTALL_COMMAND,
+  STATIC_CHECK_INSTALL_FAILED_REASON,
+  STATIC_CHECK_TIMEOUT_TOO_SHORT_REASON,
+} from "../../f/factory/lib/static_check_workspace.ts";
 import type {
   AgentRunRecord,
   ImplementRoundRecord,
@@ -2844,6 +2849,31 @@ describe("runImplementVerifyLoop and the static checks of a protected-path round
     );
   });
 
+  // 依存の導入の失敗はClaudeが直せる失敗ではないので、修正ラウンドに回さず、検証を実行しなかったことにする。
+  test("records the install failure as the reason of skipped checks", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [
+        { kind: "skipped", reason: STATIC_CHECK_INSTALL_FAILED_REASON },
+      ],
+    });
+    await run(h, withStatic());
+    expect(h.recorded[0]?.checks_skipped_reason).toBe(
+      staticChecksSkippedReason(STATIC_CHECK_INSTALL_FAILED_REASON),
+    );
+  });
+
+  test("does not start a fix round for an install failure", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [
+        { kind: "skipped", reason: STATIC_CHECK_INSTALL_FAILED_REASON },
+      ],
+    });
+    await run(h, withStatic());
+    expect(h.fixRequests).toHaveLength(0);
+  });
+
   test("notes gitleaks in the summary of skipped static checks", async () => {
     const h = harness({
       inspection: PROTECTED,
@@ -2928,23 +2958,51 @@ describe("runStaticChecksInWorkspace", () => {
     readonly warnings: string[];
   };
 
+  const WORKSPACE_DIR = "/tmp/factory-static-check-abc";
+  const INSTALL_PASS: LoopCheckResult = {
+    command: STATIC_CHECK_INSTALL_COMMAND,
+    ok: true,
+    exitCode: 0,
+    output: "installed",
+    outputTail: "installed",
+  };
+  const INSTALL_FAIL: LoopCheckResult = {
+    command: STATIC_CHECK_INSTALL_COMMAND,
+    ok: false,
+    exitCode: 1,
+    output: "error: lockfile had changes",
+    outputTail: "error: lockfile had changes",
+  };
+  const INSTALL_UNRUNNABLE: LoopCheckResult = {
+    command: STATIC_CHECK_INSTALL_COMMAND,
+    ok: false,
+    exitCode: 127,
+    output: "setpriv: failed to execute bun: No such file or directory",
+    outputTail: "setpriv: failed to execute bun: No such file or directory",
+  };
+
   function staticHarness(
     options: {
       readonly workspace?: "ready" | "skipped";
+      readonly install?: LoopCheckResult;
       readonly commandsError?: Error;
       readonly cleanupError?: Error;
+      readonly budgetMs?: number;
     } = {},
   ): StaticHarness {
     const events: string[] = [];
     const warnings: string[] = [];
     const deps: StaticCheckRunDeps = {
+      commands: ["bunx --bun tsc --noEmit"],
+      budgetMs: options.budgetMs ?? 900_000,
+      stopOverheadMs: 15_000,
       createWorkspace: async () => {
         events.push("create");
         if (options.workspace === "skipped")
           return { kind: "skipped", reason: "dependency files changed" };
         return {
           kind: "ready",
-          dir: "/tmp/factory-static-check-abc",
+          dir: WORKSPACE_DIR,
           cleanup: async () => {
             events.push("cleanup");
             if (options.cleanupError !== undefined) throw options.cleanupError;
@@ -2954,9 +3012,12 @@ describe("runStaticChecksInWorkspace", () => {
       beforeRun: async () => {
         events.push("notice");
       },
-      runCommands: async (dir) => {
-        events.push(`run ${dir}`);
+      runCommands: async (dir, commands, timeoutMs) => {
+        events.push(`run ${dir} ${commands.join(",")} ${String(timeoutMs)}`);
         if (options.commandsError !== undefined) throw options.commandsError;
+        if (commands[0] === STATIC_CHECK_INSTALL_COMMAND) {
+          return [options.install ?? INSTALL_PASS];
+        }
         return [STATIC_PASS];
       },
       warn: (message) => {
@@ -2966,29 +3027,24 @@ describe("runStaticChecksInWorkspace", () => {
     return { deps, events, warnings };
   }
 
-  test("runs the commands in the workspace", async () => {
-    const h = staticHarness();
-    await runStaticChecksInWorkspace(h.deps);
-    expect(h.events).toContain("run /tmp/factory-static-check-abc");
-  });
-
-  test("returns the results of the commands", async () => {
-    const h = staticHarness();
-    expect(await runStaticChecksInWorkspace(h.deps)).toEqual({
-      kind: "ran",
-      results: [STATIC_PASS],
-    });
-  });
-
-  test("adds the notice before running the commands", async () => {
+  test("installs the dependencies before it runs the commands in the workspace", async () => {
     const h = staticHarness();
     await runStaticChecksInWorkspace(h.deps);
     expect(h.events).toEqual([
       "create",
       "notice",
-      "run /tmp/factory-static-check-abc",
+      `run ${WORKSPACE_DIR} ${STATIC_CHECK_INSTALL_COMMAND} 442500`,
+      `run ${WORKSPACE_DIR} bunx --bun tsc --noEmit 442500`,
       "cleanup",
     ]);
+  });
+
+  test("returns the results of the install and the commands", async () => {
+    const h = staticHarness();
+    expect(await runStaticChecksInWorkspace(h.deps)).toEqual({
+      kind: "ran",
+      results: [INSTALL_PASS, STATIC_PASS],
+    });
   });
 
   test("returns the workspace's reason when it was skipped", async () => {
@@ -3003,6 +3059,48 @@ describe("runStaticChecksInWorkspace", () => {
     const h = staticHarness({ workspace: "skipped" });
     await runStaticChecksInWorkspace(h.deps);
     expect(h.events).toEqual(["create"]);
+  });
+
+  test("skips with the reason of a failed install", async () => {
+    const h = staticHarness({ install: INSTALL_FAIL });
+    expect(await runStaticChecksInWorkspace(h.deps)).toEqual({
+      kind: "skipped",
+      reason: STATIC_CHECK_INSTALL_FAILED_REASON,
+    });
+  });
+
+  test("does not run the commands after a failed install", async () => {
+    const h = staticHarness({ install: INSTALL_FAIL });
+    await runStaticChecksInWorkspace(h.deps);
+    expect(h.events).toEqual([
+      "create",
+      "notice",
+      `run ${WORKSPACE_DIR} ${STATIC_CHECK_INSTALL_COMMAND} 442500`,
+      "cleanup",
+    ]);
+  });
+
+  // 実行ファイルを起動できなかったのはworkerの環境の問題なので、飛ばさずに結果として返し、呼び出し側に検査の環境の問題として扱わせる。
+  test("returns an install that could not run as the result", async () => {
+    const h = staticHarness({ install: INSTALL_UNRUNNABLE });
+    expect(await runStaticChecksInWorkspace(h.deps)).toEqual({
+      kind: "ran",
+      results: [INSTALL_UNRUNNABLE],
+    });
+  });
+
+  test("skips when the share of the time for a command is too short", async () => {
+    const h = staticHarness({ budgetMs: 60_000 });
+    expect(await runStaticChecksInWorkspace(h.deps)).toEqual({
+      kind: "skipped",
+      reason: STATIC_CHECK_TIMEOUT_TOO_SHORT_REASON,
+    });
+  });
+
+  test("does not create the workspace when the share of the time is too short", async () => {
+    const h = staticHarness({ budgetMs: 60_000 });
+    await runStaticChecksInWorkspace(h.deps);
+    expect(h.events).toEqual([]);
   });
 
   test("removes the workspace when the commands throw", async () => {
@@ -3032,7 +3130,7 @@ describe("runStaticChecksInWorkspace", () => {
     const h = staticHarness({ cleanupError: new Error("EBUSY") });
     expect(await runStaticChecksInWorkspace(h.deps)).toEqual({
       kind: "ran",
-      results: [STATIC_PASS],
+      results: [INSTALL_PASS, STATIC_PASS],
     });
   });
 

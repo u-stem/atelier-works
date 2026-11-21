@@ -109,7 +109,7 @@ export const CONFIG_GROUP_DEFINITIONS: readonly ConfigGroupDefinition[] = [
     id: "check-commands",
     label: "検査コマンド",
     description:
-      "修正と実装の検証で、隔離なしで走らせるコマンドと、保護パスを変えたラウンドの静的検査のコマンドを決めます。",
+      "修正と実装の検証で、隔離なしで走らせるコマンドと、静的検査のコマンドを決めます。",
     keys: [
       "allowed_check_commands",
       "check_commands_by_repo",

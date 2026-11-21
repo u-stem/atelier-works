@@ -6,7 +6,10 @@
 
 import { access, cp, lstat, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { firstUnrunnableCheckReason } from "./check_runner.ts";
+import {
+  firstUnrunnableCheckReason,
+  isCheckUnrunnable,
+} from "./check_runner.ts";
 import { CheckEnvironmentError } from "./check_sandbox.ts";
 import type { RunClaudeOptions, RunClaudeResult } from "./claude.ts";
 import { recordClaudeRuns } from "./claude_flow_failure.ts";
@@ -50,7 +53,13 @@ import {
   type ImplementSpecKind,
 } from "./prompts.ts";
 import type { ChangedPath } from "./protected_paths.ts";
-import type { StaticCheckWorkspace } from "./static_check_workspace.ts";
+import {
+  STATIC_CHECK_INSTALL_COMMAND,
+  STATIC_CHECK_INSTALL_FAILED_REASON,
+  STATIC_CHECK_TIMEOUT_TOO_SHORT_REASON,
+  type StaticCheckWorkspace,
+  staticCheckCommandTimeoutMs,
+} from "./static_check_workspace.ts";
 import {
   type AgentRunRecord,
   type Diagram,
@@ -992,34 +1001,82 @@ export function staticCheckResultName(command: string): string {
   return `${STATIC_CHECK_RESULT_PREFIX}${command}`;
 }
 
+/** `runStaticChecksInWorkspace`が読む、検査コマンドの結果の部分。 */
+type StaticCommandResult = {
+  readonly command: string;
+  readonly ok: boolean;
+  readonly exitCode?: number | undefined;
+  readonly output: string;
+};
+
 /** `runStaticChecksInWorkspace`の入出力。verifyのstepが実物を渡す。 */
 export type StaticCheckRunDeps<R = LoopCheckResult> = {
+  /** 設定の静的検査のコマンド(`staticCheckCommandsFor`)。依存の導入は含めない。 */
+  readonly commands: readonly string[];
+  /** 静的検査の全体に使える時間(ミリ秒)。時間の見積もりが数える、検査コマンド1件分の打ち切りである。 */
+  readonly budgetMs: number;
+  /** 検査コマンド1件が打ち切りの後に上乗せしうる時間(ミリ秒)。 */
+  readonly stopOverheadMs: number;
   /** 基準の版の木にPRの変更を重ねた作業木を作る(`createStaticCheckWorkspace`)。 */
   readonly createWorkspace: () => Promise<StaticCheckWorkspace>;
   /** 作業木ができた後、検査コマンドを実行する直前に1回呼ぶ。 */
   readonly beforeRun: () => Promise<void>;
-  /** 作業木のディレクトリで、静的検査のコマンドを実行する。 */
-  readonly runCommands: (dir: string) => Promise<readonly R[]>;
+  /** 作業木のディレクトリ`dir`で、`commands`を1件ずつ`timeoutMs`で打ち切って実行する。 */
+  readonly runCommands: (
+    dir: string,
+    commands: readonly string[],
+    timeoutMs: number,
+  ) => Promise<readonly R[]>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
 };
 
 /**
- * 静的検査の作業木を作り、その中で検査コマンドを実行して、結果を返す。
+ * 静的検査の作業木を作り、その中で依存を入れてから静的検査のコマンドを実行して、結果を返す。
+ * 依存の導入とコマンドは、検査コマンド1件分の時間(`budgetMs`)を等分した打ち切りで実行する(`staticCheckCommandTimeoutMs`)。
+ * 等分が下限に届かないときは、作業木を作らずに、その理由で飛ばす。
  * 作業木を作らなかったときは、その理由を返し、何も実行しない。
+ * 依存の導入が失敗したときは、コマンドを実行せずに`STATIC_CHECK_INSTALL_FAILED_REASON`で飛ばす。
+ * 基準の版のlockfileで入れる依存の失敗は、Claudeが直せる失敗ではないためである。
+ * 依存の導入の実行ファイルを起動できなかったとき(`isCheckUnrunnable`)は、workerの環境の問題なので、飛ばさずにその結果を返す。
+ * 呼び出し側が、検査コマンドを起動できなかったときと同じく扱う。
  * 作業木は、検査コマンドが例外を投げても必ず消す。
  * 消せなかったときは警告を出すだけにし、検査の結果や検査コマンドの例外を隠さない。
  * 消し損ねた作業木は、次に作業木を作るときの掃除が片付ける。
  */
-export async function runStaticChecksInWorkspace<R>(
+export async function runStaticChecksInWorkspace<R extends StaticCommandResult>(
   deps: StaticCheckRunDeps<R>,
 ): Promise<StaticCheckOutcome<R>> {
+  const timeoutMs = staticCheckCommandTimeoutMs(
+    deps.budgetMs,
+    deps.stopOverheadMs,
+    deps.commands.length,
+  );
+  if (timeoutMs === null) {
+    return { kind: "skipped", reason: STATIC_CHECK_TIMEOUT_TOO_SHORT_REASON };
+  }
   const workspace = await deps.createWorkspace();
   if (workspace.kind === "skipped") {
     return { kind: "skipped", reason: workspace.reason };
   }
   try {
     await deps.beforeRun();
-    return { kind: "ran", results: await deps.runCommands(workspace.dir) };
+    const install = await deps.runCommands(
+      workspace.dir,
+      [STATIC_CHECK_INSTALL_COMMAND],
+      timeoutMs,
+    );
+    if (install.some(isCheckUnrunnable)) {
+      return { kind: "ran", results: install };
+    }
+    if (!install.every((result) => result.ok)) {
+      return { kind: "skipped", reason: STATIC_CHECK_INSTALL_FAILED_REASON };
+    }
+    const results = await deps.runCommands(
+      workspace.dir,
+      deps.commands,
+      timeoutMs,
+    );
+    return { kind: "ran", results: [...install, ...results] };
   } finally {
     try {
       await workspace.cleanup();

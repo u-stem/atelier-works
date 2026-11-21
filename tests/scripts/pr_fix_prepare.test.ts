@@ -659,8 +659,21 @@ describe("prFixTimeoutMisfit", () => {
         true,
       ),
     ).toBe(
-      "pr_fix time settings do not fit the flow step timeout: (2 claude runs + 2 x 5 check commands (4 + 1 for the static checks)) x (claude_timeout_sec 1800 + 15) + 600 = 22380s exceeds 21600s",
+      "pr_fix time settings do not fit the flow step timeout: (2 claude runs + 2 x 5 check commands (4 + 1 for the static checks)) x (claude_timeout_sec 1800 + 15) + 600 + 2 x 270 for the static check workspace = 22920s exceeds 21600s",
     );
+  });
+
+  // 検証のステップは静的検査を2回実行しうるので、作業木の作成の時間も2回分足す。
+  test("rejects a timeout that fits the check commands but not the static check workspace twice", () => {
+    expect(
+      prFixTimeoutMisfit(
+        {
+          claude_timeout_sec: 2040,
+          allowed_check_commands: FOUR_CHECKS.slice(0, 3),
+        },
+        true,
+      ),
+    ).toContain("+ 2 x 270 for the static check workspace = 21690s");
   });
 
   test("accepts three check commands with the static checks at the defaults", () => {

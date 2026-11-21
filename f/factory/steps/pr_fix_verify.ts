@@ -96,10 +96,7 @@ import {
   fixPrompt,
 } from "../lib/prompts.ts";
 import { skillsFor } from "../lib/skill_registry.ts";
-import {
-  createStaticCheckWorkspace,
-  STATIC_CHECK_INSTALL_COMMAND,
-} from "../lib/static_check_workspace.ts";
+import { createStaticCheckWorkspace } from "../lib/static_check_workspace.ts";
 import { type FixOutcome, type FixReply, isString } from "../lib/types.ts";
 import {
   isArrayOf,
@@ -126,6 +123,7 @@ import {
   isFixReplyShape,
   listChangedPathsSinceBase,
   localHeadStopReason,
+  PR_COMMAND_STOP_OVERHEAD_SEC,
   PR_FIX_COLLECTED_SHAPE,
   PR_HEAD_NOT_RECORDED_REASON,
   recordedGitPointerStopReason,
@@ -1070,7 +1068,11 @@ export async function main(
     }
     if (baseSha === null) return { kind: "skipped", reason: noBaseReason };
     const repoDir = repo_dir;
+    // 静的検査の全体は、時間の見積もりが数える検査コマンド1件分に収める。
     return await runStaticChecksInWorkspace({
+      commands: staticCommands,
+      budgetMs: timeoutMs,
+      stopOverheadMs: PR_COMMAND_STOP_OVERHEAD_SEC * 1000,
       createWorkspace: async () =>
         createStaticCheckWorkspace({
           run: runCommand,
@@ -1091,12 +1093,12 @@ export async function main(
           message: `pr_fix_verifyはこれから${String(staticCommands.length)}件の静的検査コマンドと依存の導入を、コンテナの分離なしで非特権の検査用ユーザーにより${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します。基準の版の道具で未検証のファイルを読むだけで、そのコードは実行しません(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
         });
       },
-      runCommands: (dir) =>
+      runCommands: (dir, commands, commandTimeoutMs) =>
         runAllowedCheckCommands(
           lockedRun,
           dir,
-          [STATIC_CHECK_INSTALL_COMMAND, ...staticCommands],
-          timeoutMs,
+          commands,
+          commandTimeoutMs,
           undefined,
           undefined,
           checkSandbox,
@@ -1264,8 +1266,8 @@ export async function main(
         return results;
       },
       // 通常の回とCI回の基準は、PRのbaseの先端とPRのheadのmerge-baseである。基準の行の判定と同じ値を使う。
-      // 基準を求められなかったときは、静的検査を飛ばす。静的検査は検証に足した検査で、求められない間も従来の検証は続けられるためである。
-      // CI回の変更の検査が同じ基準を要るときは、その失敗はそちらで従来どおり例外になる。
+      // 基準を求められなかったときは、静的検査を飛ばし、禁止された変更の検査と検査コマンドで検証を続ける。
+      // CI回の変更の検査が同じ基準を要るときは、その失敗はそちらで例外になる。
       runStaticChecks: async () => {
         let mergeBase: string | null;
         try {

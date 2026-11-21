@@ -91,8 +91,10 @@ description: >-
 #     <owner>/<repo>:
 #       - bunx --bun biome check .
 #       - bunx --bun tsc --noEmit
-#     キーは`<owner>/<repo>`、値は実行するコマンドの配列。保護パスを変えた
-#     ラウンドで、mainの版のツールでPRのファイルを読む静的検査だけを実行する。
+#     キーは`<owner>/<repo>`、値は実行するコマンドの配列。実装の保護パスを
+#     変えたラウンドと、PRの修正の検証で、mainの版のツールでPRのファイルを
+#     読む静的検査だけを実行する。依存の導入と合わせて、検査コマンド1件分の
+#     時間を等分して打ち切る。
 #     ここに書いたリポジトリだけで実行し、`allowed_check_commands`と
 #     `check_commands_by_repo`は使わない。PRのコードを実行するコマンド
 #     (`bun test`など)は書かない。

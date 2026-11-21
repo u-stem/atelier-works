@@ -130,7 +130,7 @@ schema:
     static_check_commands_by_repo:
       type: object
       description: >-
-        リポジトリ別の静的検査のコマンドです。キーは`<owner>/<repo>`(大文字小文字は区別しない)、値はそのリポジトリで保護パスを変えたラウンドに実行するコマンドの配列です。エントリが無いリポジトリでは静的検査を実行しません(`allowed_check_commands`と`check_commands_by_repo`は使いません)。mainの版のツールでPRのファイルを読む検査(lintや型検査)だけを書き、PRのコードを実行するコマンド(`bun test`など)は書かないでください。
+        リポジトリ別の静的検査のコマンドです。キーは`<owner>/<repo>`(大文字小文字は区別しない)、値はそのリポジトリで実行するコマンドの配列です。実装では保護パスを変えたラウンドに、PRの修正では検証のたびに実行します。エントリが無いリポジトリでは静的検査を実行しません(`allowed_check_commands`と`check_commands_by_repo`は使いません)。mainの版のツールでPRのファイルを読む検査(lintや型検査)だけを書き、PRのコードを実行するコマンド(`bun test`など)は書かないでください。
       default: {}
       additionalProperties:
         type: array

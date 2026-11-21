@@ -90,6 +90,7 @@ import {
 } from "../lib/protected_paths.ts";
 import { isRepoOwnerStopReason } from "../lib/repo_owner_gate.ts";
 import type { FindingOutcome } from "../lib/review_outcomes.ts";
+import { STATIC_CHECK_WORKSPACE_WORST_CASE_SEC } from "../lib/static_check_workspace.ts";
 import {
   type AgentRunRecord,
   assertSha,
@@ -2252,7 +2253,7 @@ function singleClaudeStepMisfit(
  * 修正ステップはClaude 1回(不正な出力への再試行を含めて2回)で見積もる。
  * 検証ステップは、検査コマンドがあるときだけ、全件の検査を2回とClaude 1回(同じく2回)で見積もる。
  * 検査コマンドもClaudeと同じ`claude_timeout_sec`で打ち切る。
- * 静的検査(`hasStaticChecks`)があれば、その件数によらず、検査コマンド1件分を足す。
+ * 静的検査(`hasStaticChecks`)があれば、その件数によらず、検査コマンド1件分を足し、作業木の作成の時間の2回分も足す。
  * 検査コマンドも静的検査も無ければ、検証ステップは検査もClaudeも実行しない。
  * 理由は`describeReason`が"; "で分けないよう、セミコロンを含めない。
  */
@@ -2269,19 +2270,33 @@ export function prFixTimeoutMisfit(
   const commandCount = config.allowed_check_commands.length;
   const checkCount = estimatedPrCheckCount(config, hasStaticChecks);
   if (checkCount === 0) return null;
+  const workspaceSec = prStaticWorkspaceSec(hasStaticChecks);
   const verifyTotal =
     (2 + 2 * checkCount) * perRunSec(config.claude_timeout_sec) +
-    PR_STEP_OVERRUN_BASE_SEC;
+    PR_STEP_OVERRUN_BASE_SEC +
+    workspaceSec;
   if (verifyTotal <= PR_FIX_VERIFY_STEP_TIMEOUT_SEC) return null;
   const breakdown = hasStaticChecks
     ? ` (${String(commandCount)} + 1 for the static checks)`
     : "";
-  return `${PR_FIX_TIMEOUT_MISFIT_REASON}: (2 claude runs + 2 x ${String(checkCount)} check commands${breakdown}) x (claude_timeout_sec ${String(config.claude_timeout_sec)} + ${String(PR_COMMAND_STOP_OVERHEAD_SEC)}) + ${String(PR_STEP_OVERRUN_BASE_SEC)} = ${String(verifyTotal)}s exceeds ${String(PR_FIX_VERIFY_STEP_TIMEOUT_SEC)}s`;
+  const workspace = hasStaticChecks
+    ? ` + 2 x ${String(STATIC_CHECK_WORKSPACE_WORST_CASE_SEC)} for the static check workspace`
+    : "";
+  return `${PR_FIX_TIMEOUT_MISFIT_REASON}: (2 claude runs + 2 x ${String(checkCount)} check commands${breakdown}) x (claude_timeout_sec ${String(config.claude_timeout_sec)} + ${String(PR_COMMAND_STOP_OVERHEAD_SEC)}) + ${String(PR_STEP_OVERRUN_BASE_SEC)}${workspace} = ${String(verifyTotal)}s exceeds ${String(PR_FIX_VERIFY_STEP_TIMEOUT_SEC)}s`;
+}
+
+/**
+ * 静的検査があれば、検証のステップがその作業木を作る最悪の所要時間(秒)を返す。無ければ0を返す。
+ * 検証のステップは静的検査を2回実行しうるので、作業木の作成(`STATIC_CHECK_WORKSPACE_WORST_CASE_SEC`)の2回分である。
+ */
+function prStaticWorkspaceSec(hasStaticChecks: boolean): number {
+  return hasStaticChecks ? 2 * STATIC_CHECK_WORKSPACE_WORST_CASE_SEC : 0;
 }
 
 /**
  * pr_fixの時間の見積もりで数える検査コマンドの数を返す。
  * 静的検査があれば、その件数によらず1件として足す。
+ * 静的検査は、依存の導入と設定のコマンドを、検査コマンド1件分の打ち切りを等分して実行する(`staticCheckCommandTimeoutMs`)。
  */
 function estimatedPrCheckCount(
   config: Pick<FactoryConfig, "allowed_check_commands">,
@@ -2301,6 +2316,7 @@ const CI_ROUND_OVERHEAD = {
  * 通常の回の見積もり(`prFixTimeoutMisfit`)に、CI回だけの追加の作業を足して確かめる。
  * 準備のステップが止める条件であり、`watch_pr_ci`が起動の前に同じ条件で保留する。設定だけで決まる。
  * 静的検査(`hasStaticChecks`)があれば、どちらのステップの見積もりにも検査コマンド1件分を足す。
+ * CI回の検証ステップの見積もりには、作業木の作成の時間の2回分も、固定の余裕に足して数える。
  */
 export function ciRoundTimeoutMisfit(
   config: Pick<FactoryConfig, "claude_timeout_sec" | "allowed_check_commands">,
@@ -2317,7 +2333,11 @@ export function ciRoundTimeoutMisfit(
       config.claude_timeout_sec,
       estimatedPrCheckCount(config, hasStaticChecks),
       PR_FIX_VERIFY_STEP_TIMEOUT_SEC,
-      CI_ROUND_OVERHEAD,
+      {
+        ...CI_ROUND_OVERHEAD,
+        baseSec:
+          CI_ROUND_OVERHEAD.baseSec + prStaticWorkspaceSec(hasStaticChecks),
+      },
     )
   );
 }
