@@ -897,6 +897,197 @@ describe("renderUnresolvedLineSummary with binary files", () => {
   });
 });
 
+describe("renderReviewSummary when the diff was too large", () => {
+  const SENTENCE =
+    "差分がGitHubの上限を超えて全体を読めていないため、人が内容を確認してください。";
+  const MODES = [
+    ["findings", 3],
+    ["rereview_clean", 0],
+    ["first_clean", 0],
+    ["rereview_open", 2],
+    ["rereview_unverified", null],
+  ] as const;
+
+  for (const [mode, open] of MODES) {
+    test(`adds the fixed sentence when the mode is ${mode}`, () => {
+      const body = renderReviewSummary(
+        "alice",
+        1,
+        mode,
+        [],
+        open,
+        [],
+        0,
+        [],
+        0,
+        true,
+      );
+      expect(body.split("\n")).toContain(SENTENCE);
+    });
+
+    test(`puts a blank line before the fixed sentence when the mode is ${mode}`, () => {
+      const lines = renderReviewSummary(
+        "alice",
+        1,
+        mode,
+        [],
+        open,
+        [],
+        0,
+        [],
+        0,
+        true,
+      ).split("\n");
+      expect(lines[lines.indexOf(SENTENCE) - 1]).toBe("");
+    });
+
+    test(`never says LGTM when the mode is ${mode}`, () => {
+      const body = renderReviewSummary(
+        "alice",
+        1,
+        mode,
+        [],
+        open,
+        [],
+        0,
+        [],
+        0,
+        true,
+      );
+      expect(body).not.toContain("LGTM");
+    });
+
+    test(`leaves the body as it was when the diff was not too large and the mode is ${mode}`, () => {
+      expect(
+        renderReviewSummary("alice", 1, mode, [], open, [], 0, [], 0, false),
+      ).toBe(renderReviewSummary("alice", 1, mode, [], open));
+    });
+  }
+
+  test("states that the text diff has no findings in a first review", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      [],
+      0,
+      [],
+      0,
+      true,
+    );
+    expect(body.split("\n")[1]).toBe("差分に指摘はありません。");
+  });
+
+  test("states the fix was confirmed without LGTM in a re-review", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "rereview_clean",
+      [],
+      0,
+      [],
+      0,
+      [],
+      0,
+      true,
+    );
+    expect(body.split("\n")[1]).toBe("修正を確認しました。");
+  });
+
+  test("keeps the final-Approve-is-human disclaimer in a clean review", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      [],
+      0,
+      [],
+      0,
+      true,
+    );
+    expect(body.split("\n")[2]).toBe("最終的なApprove判断は人が行ってください。");
+  });
+
+  test("puts the fixed sentence after the held back notice", () => {
+    const lines = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      [],
+      0,
+      [],
+      2,
+      true,
+    ).split("\n");
+    expect(
+      lines.indexOf(
+        "確信度が低く、投稿しなかった指摘が2件あります。記録はConsoleで確認できます。",
+      ),
+    ).toBeLessThan(lines.indexOf(SENTENCE));
+  });
+
+  test("puts the fixed sentence before the binary notice", () => {
+    const lines = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      ["a.png"],
+      0,
+      [],
+      0,
+      true,
+    ).split("\n");
+    expect(lines.indexOf(SENTENCE)).toBeLessThan(
+      lines.findIndex((line) => line.startsWith("内容を差分で読めない")),
+    );
+  });
+
+  test("adds the fixed sentence to the fallback summary", () => {
+    const body = renderUnresolvedLineSummary(
+      "alice",
+      [],
+      [],
+      [],
+      0,
+      0,
+      true,
+    );
+    expect(body.split("\n")).toContain(SENTENCE);
+  });
+
+  test("puts the fixed sentence after the held back notice in the fallback summary", () => {
+    const lines = renderUnresolvedLineSummary(
+      "alice",
+      [],
+      [],
+      ["a.png"],
+      0,
+      2,
+      true,
+    ).split("\n");
+    const at = (prefix: string) =>
+      lines.findIndex((line) => line.startsWith(prefix));
+    expect([
+      at("確信度が低く") < lines.indexOf(SENTENCE),
+      lines.indexOf(SENTENCE) < at("内容を差分で読めない"),
+    ]).toEqual([true, true]);
+  });
+
+  test("leaves the fallback summary as it was when the diff was not too large", () => {
+    expect(renderUnresolvedLineSummary("alice", [], [], [], 0, 0, false)).toBe(
+      renderUnresolvedLineSummary("alice", [], []),
+    );
+  });
+});
+
 describe("isFixedFixReply", () => {
   test("returns true for a pr_fix reply that names a commit sha", () => {
     const body = "[Factory 自動返信]\nfixed the null check\n\n対応: `abc1234`";
@@ -1709,6 +1900,7 @@ describe("runPrReviewPost worktree cleanup", () => {
       pr_file_hunks: [],
       binary_files: [],
       binary_unlisted_count: 0,
+      diff_too_large: false,
       worktree_dir: WORKTREE_DIR,
       repo_dir: REPO_DIR,
       agent_run_id: null,
@@ -1806,6 +1998,7 @@ describe("runSealedPrReviewPost", () => {
       review_sha: "abc1234",
       untrusted,
       binary_unlisted_count: 0,
+      diff_too_large: false,
       worktree_dir: WORKTREE_DIR,
       repo_dir: REPO_DIR,
     };
@@ -1885,6 +2078,26 @@ describe("runSealedPrReviewPost", () => {
     ).rejects.toThrow("[no-flow-retry] pr_review_post:");
   });
 
+  test("hands the too-large flag on to the posting", async () => {
+    const run = recording();
+    await runSealedPrReviewPost(
+      { ...argsFor(sealUntrustedArg(GENERATED)), diff_too_large: true },
+      run.deps,
+    );
+
+    expect(run.posted[0]?.diff_too_large).toBe(true);
+  });
+
+  test("keeps the too-large flag from the trusted args when the sealed text carries another", async () => {
+    const run = recording();
+    await runSealedPrReviewPost(
+      argsFor(sealUntrustedArg({ ...GENERATED, diff_too_large: true })),
+      run.deps,
+    );
+
+    expect(run.posted[0]?.diff_too_large).toBe(false);
+  });
+
   test("keeps the trusted values when the sealed text carries the same keys", async () => {
     const run = recording();
     await runSealedPrReviewPost(
@@ -1919,6 +2132,7 @@ describe("runPrReviewPost failure marking", () => {
     pr_file_hunks: [],
     binary_files: [],
     binary_unlisted_count: 0,
+    diff_too_large: false,
     worktree_dir: "",
     repo_dir: "",
     agent_run_id: null,
@@ -2150,6 +2364,7 @@ describe("posting a review once per sha", () => {
       droppedFindings: [],
       binaryFiles: [],
       binaryUnlistedCount: 0,
+      diffTooLarge: false,
       heldFindingCount: 0,
       priorReview: true,
       post: true,
@@ -2357,6 +2572,36 @@ describe("posting a review once per sha", () => {
           "内容を差分で読めないバイナリのファイルが1件あります。",
         ),
       });
+    });
+
+    test("posts the fixed sentence in the summary when the diff was too large", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { ghToken: "tok" },
+        rerunInput({ priorReview: false, diffTooLarge: true }),
+        SILENT,
+      );
+      expect(JSON.parse(fake.calls[1]?.request?.body ?? "{}")).toMatchObject({
+        body: expect.stringContaining(
+          "差分がGitHubの上限を超えて全体を読めていないため、人が内容を確認してください。",
+        ),
+      });
+    });
+
+    test("does not say LGTM when the diff was too large and there are no findings", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { ghToken: "tok" },
+        rerunInput({ priorReview: false, diffTooLarge: true }),
+        SILENT,
+      );
+      expect(fake.calls[1]?.request?.body ?? "").not.toContain("LGTM");
     });
 
     test("posts the count of unconfirmed binary files in the summary", async () => {
@@ -4336,6 +4581,7 @@ describe("findings with low confidence", () => {
       droppedFindings: mapped.droppedFindings,
       binaryFiles: [],
       binaryUnlistedCount: 0,
+      diffTooLarge: false,
       heldFindingCount: splitFindingsByConfidence(findings).held.length,
       priorReview: false,
       post: true,

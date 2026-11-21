@@ -8,12 +8,14 @@ import { describe, expect, test } from "bun:test";
 import { reviewPrompt } from "../../f/factory/lib/prompts.ts";
 import type { RequirementDraft } from "../../f/factory/lib/types.ts";
 import {
+  buildFilePatchDiff,
   buildReviewDiffText,
   describeReason,
   isReviewClaudeOutput,
   nextActionFor,
   prReviewTimeoutMisfit,
   selectListedBinaryFiles,
+  selectReviewDiff,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 describe("prReviewTimeoutMisfit", () => {
@@ -98,6 +100,147 @@ describe("buildReviewDiffText", () => {
       totalLines: 10,
     });
     expect(text).not.toContain("not escaped");
+  });
+
+  test("adds the fixed note when GitHub refused the whole diff", () => {
+    const text = buildReviewDiffText(
+      { diff: "+a", truncated: false, totalLines: 1 },
+      true,
+    );
+    expect(text.startsWith("+a\n\n[full diff unavailable: ")).toBe(true);
+    expect(text).toContain("exceeds the line limit");
+    expect(text).toContain("use Read to inspect the rest");
+    expect(text).toContain("look for invisible and control characters");
+  });
+
+  test("adds both notes when the patch diff was also truncated", () => {
+    const text = buildReviewDiffText(
+      { diff: "+a", truncated: true, totalLines: 9000 },
+      true,
+    );
+    expect(text).toContain("[diff truncated: showing a prefix of 9000");
+    expect(text).toContain("[full diff unavailable: ");
+  });
+
+  test("does not add the note when the flag is false", () => {
+    const diff = { diff: "+a", truncated: false, totalLines: 1 };
+    expect(buildReviewDiffText(diff, false)).toBe(buildReviewDiffText(diff));
+    expect(buildReviewDiffText(diff)).toBe("+a");
+  });
+});
+
+describe("buildFilePatchDiff", () => {
+  const file = (
+    filename: string,
+    patch: string | null,
+    previous_filename: string | null = null,
+  ) => ({ filename, previous_filename, patch });
+
+  test("joins the patches with a heading line for each file", () => {
+    const diff = buildFilePatchDiff(
+      [file("a.ts", "@@ -1 +1 @@\n-a\n+b"), file("c.ts", "@@ -1 +1 @@\n-c\n+d")],
+      100,
+    );
+    expect(diff.diff).toBe(
+      [
+        "diff --git a/a.ts b/a.ts",
+        "@@ -1 +1 @@",
+        "-a",
+        "+b",
+        "diff --git a/c.ts b/c.ts",
+        "@@ -1 +1 @@",
+        "-c",
+        "+d",
+      ].join("\n"),
+    );
+    expect(diff.truncated).toBe(false);
+    expect(diff.binaryFiles).toEqual([]);
+  });
+
+  test("leaves out a file without a patch", () => {
+    const diff = buildFilePatchDiff(
+      [file("img.png", null), file("a.ts", "@@ -1 +1 @@\n+a")],
+      100,
+    );
+    expect(diff.diff).not.toContain("img.png");
+    expect(diff.diff).toContain("diff --git a/a.ts b/a.ts");
+  });
+
+  test("returns an empty diff when no file has a patch", () => {
+    const diff = buildFilePatchDiff([file("img.png", null)], 100);
+    expect(diff).toEqual({
+      diff: "",
+      truncated: false,
+      totalLines: 1,
+      binaryFiles: [],
+    });
+  });
+
+  test("names the previous path on the old side of a rename", () => {
+    const diff = buildFilePatchDiff(
+      [file("new.ts", "@@ -1 +1 @@\n+a", "old.ts")],
+      100,
+    );
+    expect(diff.diff.split("\n")[0]).toBe("diff --git a/old.ts b/new.ts");
+  });
+
+  test("keeps a newline in a file name from starting a new line of the diff", () => {
+    const diff = buildFilePatchDiff(
+      [file("a\n+evil.ts", "@@ -1 +1 @@\n+a")],
+      100,
+    );
+    expect(diff.diff.split("\n")[0]).toBe("diff --git a/a +evil.ts b/a +evil.ts");
+  });
+
+  test("replaces control characters in a patch with visible code points", () => {
+    const diff = buildFilePatchDiff(
+      [file("a.ts", `@@ -1 +1 @@\n+${String.fromCharCode(0x1b)}[31mred`)],
+      100,
+    );
+    expect(diff.diff).toContain("+<U+001B>[31mred");
+  });
+
+  test("cuts the diff at the line limit and reports it as truncated", () => {
+    const diff = buildFilePatchDiff(
+      [file("a.ts", "@@ -1,3 +1,3 @@\n+a\n+b\n+c")],
+      3,
+    );
+    expect(diff.diff.split("\n")).toHaveLength(3);
+    expect(diff.truncated).toBe(true);
+    expect(diff.totalLines).toBe(5);
+  });
+});
+
+describe("selectReviewDiff", () => {
+  const fetchedDiff = {
+    diff: "whole",
+    truncated: false,
+    totalLines: 1,
+    binaryFiles: ["x.bin"],
+  };
+  const patchDiff = {
+    diff: "patches",
+    truncated: false,
+    totalLines: 1,
+    binaryFiles: ["ignored.bin"],
+  };
+
+  test("uses the fetched diff and does not flag it when GitHub provided it", () => {
+    expect(
+      selectReviewDiff({ kind: "ok", diff: fetchedDiff }, patchDiff),
+    ).toEqual({ prDiff: fetchedDiff, diffTooLarge: false });
+  });
+
+  test("uses the patch diff and flags it when GitHub refused the diff", () => {
+    const selected = selectReviewDiff({ kind: "too_large" }, patchDiff);
+    expect(selected.diffTooLarge).toBe(true);
+    expect(selected.prDiff.diff).toBe("patches");
+  });
+
+  test("lists no binary files from a refused diff", () => {
+    expect(
+      selectReviewDiff({ kind: "too_large" }, patchDiff).prDiff.binaryFiles,
+    ).toEqual([]);
   });
 });
 
@@ -391,8 +534,50 @@ describe("diff hunks wiring in the generate step", () => {
   // patchの文字列を、Claudeの実行のあいだ持たないため、一覧を取った場所で分ける。
   test("splits the changed files right where the list is read", async () => {
     expect(await SOURCE).toContain(
-      "getPrFiles(client, owner, repo, pr_number).then(splitChangedFiles)",
+      "      ...splitChangedFiles(files),\n      patchDiff: buildFilePatchDiff(files, config.diff_max_lines),\n",
     );
+  });
+});
+
+// `main()`はWindmillとDBを直接使うので、配線はソースの並びで確かめる。
+describe("diff too large wiring in the generate step", () => {
+  const SOURCE = Bun.file(
+    new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),
+  ).text();
+
+  function count(text: string, needle: string): number {
+    return text.split(needle).length - 1;
+  }
+
+  test("chooses the diff of the prompt from the fetch result and the patch diff", async () => {
+    expect(
+      count(
+        await SOURCE,
+        "const { prDiff, diffTooLarge } = selectReviewDiff(fetchedDiff, patchDiff);",
+      ),
+    ).toBe(1);
+  });
+
+  test("logs one warning when the diff is refused", async () => {
+    expect(
+      count(await SOURCE, 'log.warn("pr diff too large for GitHub'),
+    ).toBe(1);
+  });
+
+  test("tells the prompt that the whole diff is missing, for every scope", async () => {
+    expect(count(await SOURCE, "          diffTooLarge,\n        )")).toBe(1);
+    expect(
+      count(await SOURCE, "buildReviewDiffText(deltaDiff ?? prDiff, diffTooLarge)"),
+    ).toBe(1);
+  });
+
+  test("returns the flag in the result, and false when the step is skipped", async () => {
+    expect(count(await SOURCE, "      diff_too_large: diffTooLarge,\n")).toBe(1);
+    expect(count(await SOURCE, "  diff_too_large: false,\n")).toBe(1);
+  });
+
+  test("does not fetch the diff again", async () => {
+    expect(count(await SOURCE, "getPrDiff(")).toBe(1);
   });
 });
 

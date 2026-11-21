@@ -172,8 +172,8 @@ describe("escape sequences in a GET body", () => {
     const { client } = clientWith([
       ok(ghApiStdout(200, "diff --git a/x b/x\n+\u001b[31mred\n")),
     ]);
-    const diff = await getPrDiff(client, "o", "r", 1, 100);
-    expect(diff.diff).toContain("<U+001B>");
+    const fetched = await getPrDiff(client, "o", "r", 1, 100);
+    expect(fetched.kind === "ok" && fetched.diff.diff).toContain("<U+001B>");
   });
 
   test("throws for a file text with an escape sequence", async () => {

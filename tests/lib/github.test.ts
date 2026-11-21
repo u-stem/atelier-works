@@ -70,6 +70,7 @@ import {
   listWorkflowRuns,
   mergePullRequest,
   PR_DIFF_MAX_CHARS,
+  type PrDiff,
   parseGitHubRepoUrl,
   postIssueComment,
   REVIEW_THREADS_MAX_PAGES,
@@ -4876,10 +4877,19 @@ describe("listOpenPullRequests", () => {
   });
 });
 
+/** 取得できた(`kind`が`ok`の)差分だけを返す。上限超過のときは、テストを失敗にする。 */
+async function getPrDiffOk(
+  ...args: Parameters<typeof getPrDiff>
+): Promise<PrDiff> {
+  const fetched = await getPrDiff(...args);
+  if (fetched.kind !== "ok") throw new Error("expected the diff to be fetched");
+  return fetched.diff;
+}
+
 describe("getPrDiff", () => {
   test("returns the full diff when under the line limit", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, "line1\nline2\nline3"))]);
-    const diff = await getPrDiff(
+    const diff = await getPrDiffOk(
       { ghToken: "tok" },
       "acme",
       "widgets",
@@ -4896,7 +4906,7 @@ describe("getPrDiff", () => {
 
   test("truncates to maxLines and reports truncated: true", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, "l1\nl2\nl3\nl4\nl5"))]);
-    const diff = await getPrDiff({ ghToken: "tok" }, "acme", "widgets", 12, 2);
+    const diff = await getPrDiffOk({ ghToken: "tok" }, "acme", "widgets", 12, 2);
     expect(diff).toEqual({
       diff: "l1\nl2",
       truncated: true,
@@ -4913,7 +4923,7 @@ describe("getPrDiff", () => {
 
   test("reads a body that carries terminal escape sequences", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, `+${ESC}[31mred`))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+<U+001B>[31mred");
   });
 
@@ -4921,7 +4931,7 @@ describe("getPrDiff", () => {
     createFakeCommandRunner([
       ok(ghApiStdout(200, `+hello ${ESC}[31mred${ESC}[0m\n+ok`)),
     ]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+hello <U+001B>[31mred<U+001B>[0m\n+ok");
   });
 
@@ -4929,7 +4939,7 @@ describe("getPrDiff", () => {
     createFakeCommandRunner([
       ok(ghApiStdout(200, `l1${ESC}\nl2${ESC}\nl3\nl4`)),
     ]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 2);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 2);
     expect(diff).toEqual({
       diff: "l1<U+001B>\nl2<U+001B>",
       truncated: true,
@@ -4943,7 +4953,7 @@ describe("getPrDiff", () => {
     const body = Array.from({ length: 4 }, () => line).join("\n");
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
     const revealedLine = `+${"<U+001B>".repeat(10)}`;
-    const diff = await getPrDiff(
+    const diff = await getPrDiffOk(
       client(),
       "acme",
       "widgets",
@@ -4961,7 +4971,7 @@ describe("getPrDiff", () => {
 
   test("cuts inside a single line longer than the character limit", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, "x".repeat(50)))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100, 10);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100, 10);
     expect(diff).toEqual({
       diff: "x".repeat(10),
       truncated: true,
@@ -4972,7 +4982,7 @@ describe("getPrDiff", () => {
 
   test("drops an unfinished replacement marker when it cuts inside a line", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, ESC.repeat(10)))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100, 20);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100, 20);
     expect(diff.diff).toBe("<U+001B><U+001B>");
   });
 
@@ -4984,7 +4994,7 @@ describe("getPrDiff", () => {
     "drops every prefix of a marker when it cuts at %i characters",
     async (maxChars, expected) => {
       createFakeCommandRunner([ok(ghApiStdout(200, ESC.repeat(10)))]);
-      const diff = await getPrDiff(
+      const diff = await getPrDiffOk(
         client(),
         "acme",
         "widgets",
@@ -4998,19 +5008,19 @@ describe("getPrDiff", () => {
 
   test("keeps a complete marker at the cut", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, ESC.repeat(10)))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100, 16);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100, 16);
     expect(diff.diff).toBe("<U+001B><U+001B>");
   });
 
   test("keeps the text at a line boundary even when it looks like a marker prefix", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, "a<U\nb"))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100, 3);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100, 3);
     expect(diff.diff).toBe("a<U");
   });
 
   test("does not split a surrogate pair when it cuts by characters", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, "ab\u{1F600}cd"))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100, 3);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100, 3);
     expect(diff.diff).toBe("ab");
   });
 
@@ -5018,14 +5028,14 @@ describe("getPrDiff", () => {
     createFakeCommandRunner([
       ok(ghApiStdout(200, ESC.repeat(PR_DIFF_MAX_CHARS))),
     ]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.diff.length).toBeLessThanOrEqual(PR_DIFF_MAX_CHARS);
   });
 
   test("does not hide code between an escape introducer and a terminator", async () => {
     const line = `+const t = "${ESC}]"; exec(evil); "\u0007";`;
     createFakeCommandRunner([ok(ghApiStdout(200, line))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toContain("exec(evil)");
   });
 
@@ -5051,34 +5061,34 @@ describe("getPrDiff", () => {
       timedOut: false,
     };
     createFakeCommandRunner([rejected, ok(ghApiStdout(200, "+line"))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+line");
   });
 
   test("normalizes CRLF line ends of the diff to LF", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, "+a\r\n+b\r\n c"))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+a\n+b\n c");
   });
 
   test("gives the same diff for LF and CRLF line ends", async () => {
     // GitHubのAPIへの`fetch`に答えるのは最後に作った偽のrunnerなので、作ってすぐに読む。
     createFakeCommandRunner([ok(ghApiStdout(200, "+a\n+b\n"))]);
-    const fromLf = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const fromLf = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     createFakeCommandRunner([ok(ghApiStdout(200, "+a\r\n+b\r\n"))]);
-    const fromCrlf = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const fromCrlf = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(fromCrlf).toEqual(fromLf);
   });
 
   test("counts the lines of a CRLF diff as LF lines", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, "a\r\nb\r\nc"))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 2);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 2);
     expect(diff).toMatchObject({ diff: "a\nb", totalLines: 3 });
   });
 
   test("still reveals a carriage return that is not part of a CRLF", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, "+a\rb\r\n"))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+a<U+000D>b\n");
   });
 
@@ -5089,21 +5099,21 @@ describe("getPrDiff", () => {
       "Binary files a/img/logo.png and b/img/logo.png differ",
     ].join("\n");
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["img/logo.png"]);
   });
 
   test("lists an added binary file by its new path", async () => {
     const body = "Binary files /dev/null and b/new.bin differ";
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["new.bin"]);
   });
 
   test("lists a deleted binary file by its old path", async () => {
     const body = "Binary files a/old.bin and /dev/null differ";
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["old.bin"]);
   });
 
@@ -5115,14 +5125,14 @@ describe("getPrDiff", () => {
       "Binary files a/x.bin and b/x.bin differ",
     ].join("\n");
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 2);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 2);
     expect(diff.binaryFiles).toEqual(["x.bin"]);
   });
 
   test("drops the side prefix inside the quotes of a quoted path", async () => {
     const body = 'Binary files /dev/null and "b/\\346\\227\\245.png" differ';
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
   });
 
@@ -5130,21 +5140,21 @@ describe("getPrDiff", () => {
     const body =
       'Binary files "a/\\346\\227\\245.png" and "b/\\346\\227\\245.png" differ';
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
   });
 
   test("drops the side prefix of a quoted deleted path", async () => {
     const body = 'Binary files "a/\\346\\227\\245.png" and /dev/null differ';
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
   });
 
   test("splits a modified path containing and at the last and b/", async () => {
     const body = "Binary files a/x and y.bin and b/x and y.bin differ";
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["x and y.bin"]);
   });
 
@@ -5152,49 +5162,117 @@ describe("getPrDiff", () => {
     const body =
       "Binary files a/x and b/evil.png and b/x and b/evil.png differ";
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["x and b/evil.png"]);
   });
 
   test("falls back to the last and b/ when a rename has different sides", async () => {
     const body = "Binary files a/old.png and b/new and b/x.png differ";
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["x.png"]);
   });
 
   test("keeps the whole added path when it contains and", async () => {
     const body = "Binary files /dev/null and b/x and y.bin differ";
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["x and y.bin"]);
   });
 
   test("keeps the whole deleted path when it contains and", async () => {
     const body = "Binary files a/old and x.bin and /dev/null differ";
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["old and x.bin"]);
   });
 
   test("does not take an added line that looks like a binary notice", async () => {
     const body = "+Binary files a/x and b/x differ";
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual([]);
   });
 
   test("reveals control characters in the listed binary path", async () => {
     const body = `Binary files a/x${ESC}.bin and b/x${ESC}.bin differ`;
     createFakeCommandRunner([ok(ghApiStdout(200, body))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.binaryFiles).toEqual(["x<U+001B>.bin"]);
   });
 
   test("returns an empty diff when gh exits zero with an empty body", async () => {
     createFakeCommandRunner([ok(ghApiStdout(200, ""))]);
-    const diff = await getPrDiff(client(), "acme", "widgets", 12, 100);
+    const diff = await getPrDiffOk(client(), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("");
+  });
+
+  describe("when GitHub refuses the diff", () => {
+    const TOO_LARGE_BODY = {
+      message: "the diff exceeded the maximum number of lines (20000)",
+      errors: [{ resource: "PullRequest", field: "diff", code: "too_large" }],
+    };
+
+    test("returns too_large for a 406 whose error code is too_large", async () => {
+      createFakeCommandRunner([ok(ghApiStdout(406, TOO_LARGE_BODY))]);
+      const fetched = await getPrDiff(client(), "acme", "widgets", 12, 100);
+      expect(fetched).toEqual({ kind: "too_large" });
+    });
+
+    test("does not read the message of the response to decide", async () => {
+      createFakeCommandRunner([
+        ok(
+          ghApiStdout(406, {
+            message: "the diff exceeded the maximum number of lines (20000)",
+            errors: [{ code: "other" }],
+          }),
+        ),
+      ]);
+      await expect(
+        getPrDiff(client(), "acme", "widgets", 12, 100),
+      ).rejects.toBeInstanceOf(GitHubHttpError);
+    });
+
+    test("does not fetch the diff again", async () => {
+      const runner = createFakeCommandRunner([
+        ok(ghApiStdout(406, TOO_LARGE_BODY)),
+      ]);
+      await getPrDiff(client(), "acme", "widgets", 12, 100);
+      expect(runner.calls).toHaveLength(1);
+    });
+
+    test("still throws for a 406 without errors", async () => {
+      createFakeCommandRunner([
+        ok(ghApiStdout(406, { message: "Not Acceptable" })),
+      ]);
+      await expect(
+        getPrDiff(client(), "acme", "widgets", 12, 100),
+      ).rejects.toBeInstanceOf(GitHubHttpError);
+    });
+
+    test("still throws for a 406 whose body is not JSON", async () => {
+      createFakeCommandRunner([ok(ghApiStdout(406, "too_large"))]);
+      await expect(
+        getPrDiff(client(), "acme", "widgets", 12, 100),
+      ).rejects.toBeInstanceOf(GitHubHttpError);
+    });
+
+    test("still throws for a too_large code on a status other than 406", async () => {
+      createFakeCommandRunner([ok(ghApiStdout(422, TOO_LARGE_BODY))]);
+      await expect(
+        getPrDiff(client(), "acme", "widgets", 12, 100),
+      ).rejects.toBeInstanceOf(GitHubHttpError);
+    });
+
+    test("still throws for a 5xx", async () => {
+      createFakeCommandRunner([
+        ok(ghApiStdout(502, { message: "Bad Gateway" })),
+        ok(ghApiStdout(502, { message: "Bad Gateway" })),
+      ]);
+      await expect(
+        getPrDiff(client(), "acme", "widgets", 12, 100),
+      ).rejects.toBeInstanceOf(GitHubHttpError);
+    });
   });
 });
 

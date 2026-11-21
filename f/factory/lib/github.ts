@@ -2454,6 +2454,11 @@ export type PrDiff = {
   readonly binaryFiles: readonly string[];
 };
 
+/** `getPrDiff`の結果。`too_large`は、GitHubが差分の提供を上限超過で拒んだこと。 */
+export type PrDiffFetch =
+  | { readonly kind: "ok"; readonly diff: PrDiff }
+  | { readonly kind: "too_large" };
+
 /** gitがバイナリの差分に出す1行。差分の内容の行は先頭が`+`、`-`、空白なので、行頭のこの語とは混ざらない。 */
 const BINARY_FILES_LINE = /^Binary files (.+) differ$/;
 
@@ -2555,6 +2560,9 @@ function cutToChars(text: string, maxChars: number): string {
  * 2xxなのに本文が途中で切れたときは、1回だけ取り直し、
  * 取り直しても欠けたときは、差分が空のまま読まれないよう
  * `GitHubRawBodyIncompleteError`を投げる(`callGhApiRawBody`)。
+ * GitHubが差分の行数の上限(2万行)を超えて提供を拒んだ応答(406で、`errors`の要素の`code`が`too_large`)だけは、
+ * 例外にせず`{ kind: "too_large" }`で返す。判定は状態と`code`だけで行い、`message`は使わない。
+ * ほかの2xx以外の応答は、従来どおり`ensureSuccess`が例外にする。
  */
 export async function getPrDiff(
   client: GhClient,
@@ -2563,7 +2571,7 @@ export async function getPrDiff(
   number: number,
   maxLines: number,
   maxChars: number = PR_DIFF_MAX_CHARS,
-): Promise<PrDiff> {
+): Promise<PrDiffFetch> {
   validateOwnerRepo(owner, repo);
   const context = `GET pr diff ${owner}/${repo}#${number}`;
   const response = await callGhApiRawBody(
@@ -2575,8 +2583,27 @@ export async function getPrDiff(
     },
     context,
   );
+  if (isDiffTooLargeResponse(response)) return { kind: "too_large" };
   ensureSuccess(response, context);
-  return limitReviewDiff(response.bodyText, maxLines, maxChars);
+  return {
+    kind: "ok",
+    diff: limitReviewDiff(response.bodyText, maxLines, maxChars),
+  };
+}
+
+/** 差分の取得が上限超過で拒まれた応答か。406で、`errors`のどれかの`code`が`too_large`のときだけ真。 */
+function isDiffTooLargeResponse(response: GhApiResponse): boolean {
+  if (response.status !== 406) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(response.bodyText);
+  } catch {
+    return false;
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.errors)) return false;
+  return parsed.errors.some(
+    (error: unknown) => isRecord(error) && error.code === "too_large",
+  );
 }
 
 /**
