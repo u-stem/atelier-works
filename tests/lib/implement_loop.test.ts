@@ -59,7 +59,11 @@ import {
   runImplementClaudeRound,
   runImplementGenerateRound,
   runImplementVerifyLoop,
+  runStaticChecksInWorkspace,
+  type StaticCheckOutcome,
+  type StaticCheckRunDeps,
   scannedTreeChangedReason,
+  staticCheckResultName,
   toImplementClaudeRound,
   type WorktreePrepDeps,
   withReadOnlyDocDirCopy,
@@ -67,12 +71,14 @@ import {
 import {
   IMPLEMENT_CHECK_SKIP_REASONS,
   type ImplementClaudeOutput,
+  staticChecksSkippedReason,
 } from "../../f/factory/lib/implement_support.ts";
 import { modelChangesAfterFailure } from "../../f/factory/lib/model_policy.ts";
 import {
   IMPLEMENT_SCHEMA,
   IMPLEMENT_SCHEMA_WITH_DESIGN_GAP,
 } from "../../f/factory/lib/prompts.ts";
+import type { ChangedPath } from "../../f/factory/lib/protected_paths.ts";
 import type {
   AgentRunRecord,
   ImplementRoundRecord,
@@ -1250,6 +1256,30 @@ const LINT_FAIL: LoopCheckResult = {
   output: "lint error",
   outputTail: "lint error",
 };
+const STATIC_PASS: LoopCheckResult = {
+  command: "bunx --bun tsc --noEmit",
+  ok: true,
+  output: "no errors",
+  outputTail: "no errors",
+};
+const STATIC_FAIL: LoopCheckResult = {
+  command: "bunx --bun tsc --noEmit",
+  ok: false,
+  output: "type error",
+  outputTail: "type error",
+};
+const STATIC_RAN_PASS: StaticCheckOutcome = {
+  kind: "ran",
+  results: [STATIC_PASS],
+};
+const STATIC_RAN_FAIL: StaticCheckOutcome = {
+  kind: "ran",
+  results: [STATIC_FAIL],
+};
+const STATIC_SKIPPED: StaticCheckOutcome = {
+  kind: "skipped",
+  reason: "the change updates dependency files",
+};
 const INVALID: ImplementClaudeRound = {
   kind: "invalid_output",
   output: DONE,
@@ -1321,6 +1351,10 @@ type HarnessOptions = {
   readonly checksError?: Error;
   /** `at`回目(0から数える)以降の`runChecks`が投げる例外。 */
   readonly checksErrorFrom?: { readonly at: number; readonly error: Error };
+  /** `runStaticChecks`が、呼び出しの順に返す値。最後の値を繰り返す。 */
+  readonly staticChecks?: readonly StaticCheckOutcome[];
+  /** `runStaticChecks`が投げる例外。 */
+  readonly staticChecksError?: Error;
 };
 
 type Harness = {
@@ -1330,18 +1364,23 @@ type Harness = {
   readonly calls: {
     gitleaks: number;
     checks: number;
+    staticChecks: number;
     fingerprint: number;
     modelChange: number;
   };
+  /** `runStaticChecks`が受け取った変更の一覧。呼び出しの順に並ぶ。 */
+  readonly staticChanges: (readonly ChangedPath[])[];
   readonly events: string[];
 };
 
 function harness(options: HarnessOptions = {}): Harness {
   const recorded: ImplementRoundRecord[] = [];
   const fixRequests: FixRoundRequest[] = [];
+  const staticChanges: (readonly ChangedPath[])[] = [];
   const calls = {
     gitleaks: 0,
     checks: 0,
+    staticChecks: 0,
     fingerprint: 0,
     modelChange: 0,
   };
@@ -1387,6 +1426,18 @@ function harness(options: HarnessOptions = {}): Harness {
       calls.checks += 1;
       return value;
     },
+    runStaticChecks: async (changes) => {
+      events.push("static");
+      staticChanges.push(changes);
+      if (options.staticChecksError !== undefined)
+        throw options.staticChecksError;
+      const value = pick(
+        options.staticChecks ?? [STATIC_RAN_PASS],
+        calls.staticChecks,
+      );
+      calls.staticChecks += 1;
+      return value;
+    },
     runFixRound: async (request) => {
       fixRequests.push(request);
       return pick(
@@ -1419,7 +1470,7 @@ function harness(options: HarnessOptions = {}): Harness {
       events.push(`stale ${error.message}`);
     },
   };
-  return { deps, recorded, fixRequests, calls, events };
+  return { deps, recorded, fixRequests, calls, staticChanges, events };
 }
 
 function loopInput(
@@ -1432,6 +1483,7 @@ function loopInput(
     maxRounds: 5,
     maxTurns: 80,
     hasCheckCommands: true,
+    hasStaticCheckCommands: false,
     firstRound,
     deadlineAt: Number.MAX_SAFE_INTEGER,
     fixRoundRequiredMs: 7_860_000,
@@ -2605,6 +2657,396 @@ describe("runImplementVerifyLoop and a requirements directory that cannot be tru
     };
     expect((await run(harness(), loopInput(missing))).reason).toBe(
       REQUIREMENTS_DIR_MISSING_REASON,
+    );
+  });
+});
+
+describe("runImplementVerifyLoop and the static checks of a protected-path round", () => {
+  const withStatic = (overrides: Partial<ImplementLoopInput> = {}) =>
+    loopInput(outputRound(), { hasStaticCheckCommands: true, ...overrides });
+
+  test("runs the static checks in a round that changed a protected path", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h, withStatic());
+    expect(h.calls.staticChecks).toBe(1);
+  });
+
+  test("does not run the regular check commands in that round", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h, withStatic());
+    expect(h.calls.checks).toBe(0);
+  });
+
+  test("hands the inspected changes to the static checks", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h, withStatic());
+    expect(h.staticChanges).toEqual([PROTECTED.changes]);
+  });
+
+  test("does not remove ignored files before the static checks", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h, withStatic());
+    expect(h.events).not.toContain("clean");
+  });
+
+  test("does not run the static checks in a round without a protected change", async () => {
+    const h = harness();
+    await run(h, withStatic());
+    expect(h.calls.staticChecks).toBe(0);
+  });
+
+  test("does not run the static checks when none are configured", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h);
+    expect(h.calls.staticChecks).toBe(0);
+  });
+
+  test("runs the static checks even without regular check commands", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h, withStatic({ hasCheckCommands: false }));
+    expect(h.calls.staticChecks).toBe(1);
+  });
+
+  test("exits checks_passed when the static checks pass", async () => {
+    const h = harness({ inspection: PROTECTED });
+    expect((await run(h, withStatic())).exit).toBe("checks_passed");
+  });
+
+  test("returns the round's tree as verified when the static checks pass", async () => {
+    const h = harness({ inspection: PROTECTED });
+    expect((await run(h, withStatic())).verified_tree_sha).toBe(FP_1.treeSha);
+  });
+
+  test("records no skip reason when the static checks ran", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h, withStatic());
+    expect(h.recorded[0]?.checks_skipped_reason).toBeNull();
+  });
+
+  test("names the static results so that the summary shows only the static checks ran", async () => {
+    const h = harness({ inspection: PROTECTED });
+    expect((await run(h, withStatic())).checks).toEqual({
+      kind: "ran",
+      results: [
+        { command: GITLEAKS_CHECK_NAME, ok: true },
+        { command: "static: bunx --bun tsc --noEmit", ok: true },
+      ],
+    });
+  });
+
+  test("records the static outputs under the static names", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h, withStatic());
+    expect(h.recorded[0]?.check_output).toBe(
+      "$ static: bunx --bun tsc --noEmit\nno errors",
+    );
+  });
+
+  test("starts a fix round when a static check fails", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [STATIC_RAN_FAIL, STATIC_RAN_PASS],
+      fingerprints: [FP_1, FP_2],
+    });
+    await run(h, withStatic());
+    expect(h.fixRequests).toHaveLength(1);
+  });
+
+  test("hands the failed static check to the fix round", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [STATIC_RAN_FAIL, STATIC_RAN_PASS],
+      fingerprints: [FP_1, FP_2],
+    });
+    await run(h, withStatic());
+    expect(h.fixRequests[0]?.failures).toEqual([
+      { command: "static: bunx --bun tsc --noEmit", outputTail: "type error" },
+    ]);
+  });
+
+  test("records a failed static check as a check_failed round", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [STATIC_RAN_FAIL, STATIC_RAN_PASS],
+      fingerprints: [FP_1, FP_2],
+    });
+    await run(h, withStatic());
+    expect(h.recorded[0]?.outcome).toBe("check_failed");
+  });
+
+  test("exits checks_passed after the fix round passes the static checks", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [STATIC_RAN_FAIL, STATIC_RAN_PASS],
+      fingerprints: [FP_1, FP_2],
+    });
+    expect((await run(h, withStatic())).exit).toBe("checks_passed");
+  });
+
+  test("exits stalled when the static checks fail the same way on the same tree", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [STATIC_RAN_FAIL],
+      fingerprints: [FP_1],
+    });
+    expect((await run(h, withStatic())).exit).toBe("stalled");
+  });
+
+  test("runs the static checks besides gitleaks", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      gitleaks: [GITLEAKS_LEAK],
+    });
+    await run(h, withStatic({ maxRounds: 1 }));
+    expect(h.calls.staticChecks).toBe(1);
+  });
+
+  test("lists a failing gitleaks with the passing static checks", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      gitleaks: [GITLEAKS_LEAK],
+    });
+    expect((await run(h, withStatic({ maxRounds: 1 }))).checks).toEqual({
+      kind: "ran",
+      results: [
+        { command: GITLEAKS_CHECK_NAME, ok: false },
+        { command: "static: bunx --bun tsc --noEmit", ok: true },
+      ],
+    });
+  });
+
+  test("still fails a round whose gitleaks fails when the static checks pass", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      gitleaks: [GITLEAKS_LEAK, GITLEAKS_OK],
+      fingerprints: [FP_1, FP_2],
+    });
+    await run(h, withStatic());
+    expect(h.fixRequests).toHaveLength(1);
+  });
+
+  test("exits checks_skipped when the static check workspace was skipped", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [STATIC_SKIPPED],
+    });
+    expect((await run(h, withStatic())).exit).toBe("checks_skipped");
+  });
+
+  test("records the workspace's reason when the static checks were skipped", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [STATIC_SKIPPED],
+    });
+    await run(h, withStatic());
+    expect(h.recorded[0]?.checks_skipped_reason).toBe(
+      staticChecksSkippedReason(STATIC_SKIPPED.reason),
+    );
+  });
+
+  test("notes gitleaks in the summary of skipped static checks", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [STATIC_SKIPPED],
+    });
+    expect((await run(h, withStatic())).checks).toEqual({
+      kind: "skipped",
+      reason: `${staticChecksSkippedReason(STATIC_SKIPPED.reason)}(gitleaks: 合格)`,
+    });
+  });
+
+  test("still fails a round whose gitleaks fails when the static checks were skipped", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [STATIC_SKIPPED],
+      gitleaks: [GITLEAKS_LEAK, GITLEAKS_OK],
+      fingerprints: [FP_1, FP_2],
+    });
+    await run(h, withStatic());
+    expect(h.fixRequests).toHaveLength(1);
+  });
+
+  test("exits check_image_stale when the static checks cannot run on the worker", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecksError: new CheckImageStaleError([
+        "/usr/bin/getfacl is missing",
+      ]),
+    });
+    expect((await run(h, withStatic())).exit).toBe("check_image_stale");
+  });
+
+  test("reports the environment error of the static checks once", async () => {
+    const error = new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
+    const h = harness({ inspection: PROTECTED, staticChecksError: error });
+    await run(h, withStatic());
+    expect(h.events.filter((event) => event.startsWith("stale "))).toEqual([
+      `stale ${error.message}`,
+    ]);
+  });
+
+  test("does not record the round the environment error of the static checks stopped", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecksError: new CheckImageStaleError([
+        "/usr/bin/getfacl is missing",
+      ]),
+    });
+    await run(h, withStatic());
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("exits check_unrunnable when a static check could not start", async () => {
+    const output = "setpriv: failed to execute bunx: No such file or directory";
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecks: [
+        {
+          kind: "ran",
+          results: [
+            { ...STATIC_FAIL, exitCode: 127, output, outputTail: output },
+          ],
+        },
+      ],
+    });
+    expect((await run(h, withStatic())).exit).toBe("check_unrunnable");
+  });
+
+  test("passes another error from the static checks through", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      staticChecksError: new Error("disk full"),
+    });
+    await expect(run(h, withStatic())).rejects.toThrow("disk full");
+  });
+});
+
+describe("runStaticChecksInWorkspace", () => {
+  type StaticHarness = {
+    readonly deps: StaticCheckRunDeps;
+    readonly events: string[];
+    readonly warnings: string[];
+  };
+
+  function staticHarness(
+    options: {
+      readonly workspace?: "ready" | "skipped";
+      readonly commandsError?: Error;
+      readonly cleanupError?: Error;
+    } = {},
+  ): StaticHarness {
+    const events: string[] = [];
+    const warnings: string[] = [];
+    const deps: StaticCheckRunDeps = {
+      createWorkspace: async () => {
+        events.push("create");
+        if (options.workspace === "skipped")
+          return { kind: "skipped", reason: "dependency files changed" };
+        return {
+          kind: "ready",
+          dir: "/tmp/factory-static-check-abc",
+          cleanup: async () => {
+            events.push("cleanup");
+            if (options.cleanupError !== undefined) throw options.cleanupError;
+          },
+        };
+      },
+      beforeRun: async () => {
+        events.push("notice");
+      },
+      runCommands: async (dir) => {
+        events.push(`run ${dir}`);
+        if (options.commandsError !== undefined) throw options.commandsError;
+        return [STATIC_PASS];
+      },
+      warn: (message) => {
+        warnings.push(message);
+      },
+    };
+    return { deps, events, warnings };
+  }
+
+  test("runs the commands in the workspace", async () => {
+    const h = staticHarness();
+    await runStaticChecksInWorkspace(h.deps);
+    expect(h.events).toContain("run /tmp/factory-static-check-abc");
+  });
+
+  test("returns the results of the commands", async () => {
+    const h = staticHarness();
+    expect(await runStaticChecksInWorkspace(h.deps)).toEqual({
+      kind: "ran",
+      results: [STATIC_PASS],
+    });
+  });
+
+  test("adds the notice before running the commands", async () => {
+    const h = staticHarness();
+    await runStaticChecksInWorkspace(h.deps);
+    expect(h.events).toEqual([
+      "create",
+      "notice",
+      "run /tmp/factory-static-check-abc",
+      "cleanup",
+    ]);
+  });
+
+  test("returns the workspace's reason when it was skipped", async () => {
+    const h = staticHarness({ workspace: "skipped" });
+    expect(await runStaticChecksInWorkspace(h.deps)).toEqual({
+      kind: "skipped",
+      reason: "dependency files changed",
+    });
+  });
+
+  test("neither notices nor runs anything when the workspace was skipped", async () => {
+    const h = staticHarness({ workspace: "skipped" });
+    await runStaticChecksInWorkspace(h.deps);
+    expect(h.events).toEqual(["create"]);
+  });
+
+  test("removes the workspace when the commands throw", async () => {
+    const h = staticHarness({ commandsError: new Error("sandbox failed") });
+    await runStaticChecksInWorkspace(h.deps).catch(() => {});
+    expect(h.events).toContain("cleanup");
+  });
+
+  test("rethrows the error of the commands", async () => {
+    const h = staticHarness({ commandsError: new Error("sandbox failed") });
+    await expect(runStaticChecksInWorkspace(h.deps)).rejects.toThrow(
+      "sandbox failed",
+    );
+  });
+
+  test("keeps the error of the commands when the removal also fails", async () => {
+    const h = staticHarness({
+      commandsError: new Error("sandbox failed"),
+      cleanupError: new Error("EBUSY"),
+    });
+    await expect(runStaticChecksInWorkspace(h.deps)).rejects.toThrow(
+      "sandbox failed",
+    );
+  });
+
+  test("returns the results when the removal fails", async () => {
+    const h = staticHarness({ cleanupError: new Error("EBUSY") });
+    expect(await runStaticChecksInWorkspace(h.deps)).toEqual({
+      kind: "ran",
+      results: [STATIC_PASS],
+    });
+  });
+
+  test("warns when the removal fails", async () => {
+    const h = staticHarness({ cleanupError: new Error("EBUSY") });
+    await runStaticChecksInWorkspace(h.deps);
+    expect(h.warnings).toEqual(["static check workspace could not be removed"]);
+  });
+});
+
+describe("staticCheckResultName", () => {
+  test("prefixes the command so that the summary shows a static check", () => {
+    expect(staticCheckResultName("bunx --bun tsc --noEmit")).toBe(
+      "static: bunx --bun tsc --noEmit",
     );
   });
 });

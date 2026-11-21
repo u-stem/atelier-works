@@ -1684,22 +1684,40 @@ describe("requireDeadlineAt", () => {
 
 describe("fixRoundWorstCaseSec", () => {
   test("adds Claude, the base overrun and every check command run to its timeout", () => {
-    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 4)).toBe(7_860);
+    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 4, false)).toBe(7_860);
   });
 
   test("leaves Claude and the base overrun without check commands", () => {
-    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 0)).toBe(4_200);
+    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 0, false)).toBe(4_200);
+  });
+
+  test("adds one check command run for the static checks", () => {
+    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 4, true)).toBe(8_775);
+  });
+
+  test("counts the static checks alone as one check command run", () => {
+    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 0, true)).toBe(5_115);
   });
 });
 
 describe("implementTimeoutMisfit", () => {
   test("accepts the defaults with seven check commands", () => {
-    expect(implementTimeoutMisfit(TIME_SETTINGS, 7)).toBeNull();
+    expect(implementTimeoutMisfit(TIME_SETTINGS, 7, false)).toBeNull();
   });
 
   test("rejects eight check commands with the defaults", () => {
-    expect(implementTimeoutMisfit(TIME_SETTINGS, 8)).toBe(
+    expect(implementTimeoutMisfit(TIME_SETTINGS, 8, false)).toBe(
       "implement time settings do not fit the flow step timeout: implement_flow_timeout_sec 14400 + 600 + 8 check commands x (implement_check_timeout_sec 900 + 15) = 22320s exceeds 21600s",
+    );
+  });
+
+  test("accepts the defaults with six check commands and the static checks", () => {
+    expect(implementTimeoutMisfit(TIME_SETTINGS, 6, true)).toBeNull();
+  });
+
+  test("rejects seven check commands and the static checks with the defaults", () => {
+    expect(implementTimeoutMisfit(TIME_SETTINGS, 7, true)).toBe(
+      "implement time settings do not fit the flow step timeout: implement_flow_timeout_sec 14400 + 600 + 8 check commands (7 + 1 for the static checks) x (implement_check_timeout_sec 900 + 15) = 22320s exceeds 21600s",
     );
   });
 
@@ -1708,6 +1726,7 @@ describe("implementTimeoutMisfit", () => {
       implementTimeoutMisfit(
         { ...TIME_SETTINGS, implement_timeout_sec: 21_001 },
         0,
+        false,
       ),
     ).toBe(
       "implement time settings do not fit the flow step timeout: implement_timeout_sec 21001 + 600 = 21601s exceeds 21600s",
@@ -1715,7 +1734,7 @@ describe("implementTimeoutMisfit", () => {
   });
 
   test("does not contain the separator describeReason splits on", () => {
-    expect(implementTimeoutMisfit(TIME_SETTINGS, 8)).not.toContain("; ");
+    expect(implementTimeoutMisfit(TIME_SETTINGS, 8, false)).not.toContain("; ");
   });
 });
 

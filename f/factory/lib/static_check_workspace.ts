@@ -47,6 +47,14 @@ export const STATIC_CHECK_DEPENDENCY_PATHS: readonly string[] = [
   "console/bun.lock",
 ];
 
+/**
+ * 静的検査のコマンドの前に、作業木で実行する依存の導入。
+ * 作業木は基準の版のlockfileを持つので、`--frozen-lockfile`で基準の依存をそのまま入れる。
+ * `--ignore-scripts`で、依存のinstallのスクリプトを実行しない。
+ */
+export const STATIC_CHECK_INSTALL_COMMAND =
+  "bun install --frozen-lockfile --ignore-scripts";
+
 /** 依存のファイルが変わったときの、作業木を作らない理由。 */
 export const STATIC_CHECK_DEPENDENCY_SKIP_REASON =
   "the change updates dependency files, so the base dependencies cannot check it";

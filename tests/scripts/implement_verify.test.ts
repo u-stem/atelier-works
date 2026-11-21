@@ -64,6 +64,54 @@ describe("the first round that never reaches the checks in implement_verify", ()
   });
 });
 
+describe("the static checks of a protected-path round in implement_verify", () => {
+  test("reads only the static check commands given for the repository", async () => {
+    expect(await source()).toMatch(
+      /staticCheckCommandsFor\(\s*config,\s*context\.owner,\s*context\.repo,?\s*\)/,
+    );
+  });
+
+  test("builds the workspace from the clone that ensureRepo manages", async () => {
+    expect(await source()).toContain("repoDir: context.repo_dir,");
+  });
+
+  test("overlays the changes that the loop inspected", async () => {
+    expect(await source()).toMatch(
+      /runStaticChecks: \(changes\) =>\s*runStaticChecksInWorkspace\(/,
+    );
+  });
+
+  test("installs the base dependencies before the static check commands", async () => {
+    expect(await source()).toContain(
+      "[STATIC_CHECK_INSTALL_COMMAND, ...staticCommands]",
+    );
+  });
+
+  test("builds the check sandbox when only the static checks exist", async () => {
+    expect(await source()).toContain(
+      "commands.length > 0 || staticCommands.length > 0",
+    );
+  });
+
+  test("adds the notice of the checks right before the static checks run", async () => {
+    expect(await source()).toMatch(
+      /beforeRun: async \(\) => \{\s*await addNoticeUnlessUnresolved\(\{\s*kind: "unsandboxed_check_commands",/,
+    );
+  });
+
+  test("tells the loop whether static check commands exist", async () => {
+    expect(await source()).toContain(
+      "hasStaticCheckCommands: staticCommands.length > 0,",
+    );
+  });
+
+  test("counts the static checks in the worst case of a fix round", async () => {
+    expect(await source()).toMatch(
+      /fixRoundWorstCaseSec\(\s*config,\s*commands\.length,\s*staticCommands\.length > 0,?\s*\)/,
+    );
+  });
+});
+
 describe("the design flag of the fix rounds in implement_verify", () => {
   test("passes whether the context carries a design to the Claude round", async () => {
     expect(await source()).toContain(

@@ -11,25 +11,43 @@ function source(name: string): string {
   return readFileSync(join(STEPS_DIR, name), "utf8");
 }
 
-/** `runAllowedCheckCommands(`から、対応する閉じ括弧までの呼び出し全体を返す。 */
-function checkCall(text: string): string {
-  const start = text.indexOf("runAllowedCheckCommands(");
-  if (start < 0) return "";
-  let depth = 0;
-  for (let index = text.indexOf("(", start); index < text.length; index += 1) {
-    if (text[index] === "(") depth += 1;
-    if (text[index] === ")") depth -= 1;
-    if (depth === 0) return text.slice(start, index + 1);
+/** `runAllowedCheckCommands(`から、対応する閉じ括弧までの呼び出し全体を、出てくる順にすべて返す。 */
+function checkCalls(text: string): string[] {
+  const calls: string[] = [];
+  let start = text.indexOf("runAllowedCheckCommands(");
+  while (start >= 0) {
+    let depth = 0;
+    for (
+      let index = text.indexOf("(", start);
+      index < text.length;
+      index += 1
+    ) {
+      if (text[index] === "(") depth += 1;
+      if (text[index] === ")") depth -= 1;
+      if (depth === 0) {
+        calls.push(text.slice(start, index + 1));
+        break;
+      }
+    }
+    start = text.indexOf("runAllowedCheckCommands(", start + 1);
   }
-  return "";
+  return calls;
 }
+
+const SANDBOXED_CALL =
+  /,\s*checkSandbox,\s*\{\s*workItemId:\s*work_item_id,?\s*\},?\s*\)$/;
 
 describe("check sandbox wiring", () => {
   for (const name of ["implement_verify.ts", "pr_fix_verify.ts"]) {
-    test(`${name} passes the check sandbox to runAllowedCheckCommands`, () => {
-      expect(checkCall(source(name))).toMatch(
-        /,\s*checkSandbox,\s*\{\s*workItemId:\s*work_item_id,?\s*\},?\s*\)$/,
-      );
+    test(`${name} calls runAllowedCheckCommands`, () => {
+      expect(checkCalls(source(name)).length).toBeGreaterThan(0);
+    });
+
+    // 静的検査の呼び出しも含め、どの呼び出しも枠を渡す。
+    test(`${name} passes the check sandbox to every runAllowedCheckCommands`, () => {
+      expect(
+        checkCalls(source(name)).filter((call) => !SANDBOXED_CALL.test(call)),
+      ).toEqual([]);
     });
 
     test(`${name} builds the check sandbox from the environment`, () => {
@@ -60,7 +78,7 @@ function inOrder(first: number, second: number): boolean {
 const GATES = [
   {
     step: "implement_prepare.ts",
-    hasCheckCommands: /checkImageGate\(\s*checkCommands\.length > 0,/,
+    hasCheckCommands: /checkImageGate\(\s*hasAnyCheckCommands,/,
     worktree: "prepareImplementWorktree(",
     flow: "implement__flow",
     claudeStep: "f/factory/steps/implement_generate",
@@ -74,6 +92,20 @@ const GATES = [
     claudeStep: "f/factory/steps/pr_fix_apply",
   },
 ] as const;
+
+describe("check image gate wiring for the static checks", () => {
+  test("implement_prepare.ts gates when the repository has only static checks", () => {
+    expect(source("implement_prepare.ts")).toMatch(
+      /const hasAnyCheckCommands =\s*checkCommands\.length > 0 \|\| staticCheckCommands\.length > 0;/,
+    );
+  });
+
+  test("implement_prepare.ts counts the static checks in the timeout fit", () => {
+    expect(source("implement_prepare.ts")).toMatch(
+      /implementTimeoutMisfit\(\s*config,\s*checkCommands\.length,\s*staticCheckCommands\.length > 0,?\s*\)/,
+    );
+  });
+});
 
 describe("check image gate wiring", () => {
   for (const gate of GATES) {

@@ -23,6 +23,7 @@ import {
   implementCheckCommandsFor,
   isRepoAllowed,
   loadConfig,
+  staticCheckCommandsFor,
 } from "../lib/config.ts";
 import {
   acquireImplementLease,
@@ -441,8 +442,20 @@ export async function main(
     workItem.owner,
     workItem.repo,
   );
-  const misfit = implementTimeoutMisfit(config, checkCommands.length);
+  const staticCheckCommands = staticCheckCommandsFor(
+    config,
+    workItem.owner,
+    workItem.repo,
+  );
+  const misfit = implementTimeoutMisfit(
+    config,
+    checkCommands.length,
+    staticCheckCommands.length > 0,
+  );
   if (misfit !== null) return stop("needs_human", misfit);
+  // 静的検査も検証のステップで同じ枠を使って実行するので、静的検査だけがあるリポジトリも前提を確かめる。
+  const hasAnyCheckCommands =
+    checkCommands.length > 0 || staticCheckCommands.length > 0;
   // 前提を満たさないまま進むと、Claudeの1ラウンド分を使ってから検証のステップで止まるので、Claudeより前に確かめる。
   // 検証のステップも検査の前に確かめ直す。準備と検証の間に、イメージも稼働中のworkerも変わることがあるためである。
   const reportStaleImage = (error: CheckEnvironmentError): Promise<void> =>
@@ -454,7 +467,7 @@ export async function main(
       },
       error,
     );
-  const staleImage = await checkImageGate(checkCommands.length > 0, {
+  const staleImage = await checkImageGate(hasAnyCheckCommands, {
     problems: () => checkImageProblemsFromEnv(),
     report: reportStaleImage,
   });

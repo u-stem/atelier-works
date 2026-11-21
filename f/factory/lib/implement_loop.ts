@@ -34,12 +34,13 @@ import {
   roundIsStalled,
   roundOutcomeForExit,
   stallHash,
+  staticChecksSkippedReason,
   truncateCheckOutput,
   truncateCheckSections,
   validateImplementOutput,
 } from "./implement_support.ts";
 import { jobTmpBase } from "./job_tmp.ts";
-import { escapeReasonSeparator } from "./log.ts";
+import { errorMessage, escapeReasonSeparator } from "./log.ts";
 import { modelFor } from "./model_policy.ts";
 import {
   type CheckFailure,
@@ -49,6 +50,7 @@ import {
   type ImplementSpecKind,
 } from "./prompts.ts";
 import type { ChangedPath } from "./protected_paths.ts";
+import type { StaticCheckWorkspace } from "./static_check_workspace.ts";
 import {
   type AgentRunRecord,
   type Diagram,
@@ -973,6 +975,62 @@ export type LoopCheckResult = {
   readonly outputTail: string;
 };
 
+/**
+ * 保護パスを変えたラウンドの静的検査の結果。
+ * `ran`は作業木で検査コマンドを実行した結果、`skipped`は作業木を作らなかった理由である。
+ */
+export type StaticCheckOutcome =
+  | { readonly kind: "ran"; readonly results: readonly LoopCheckResult[] }
+  | { readonly kind: "skipped"; readonly reason: string };
+
+/** 静的検査の結果の名前の接頭辞。PR本文とDiscordの要約で、静的検査だけを実行したことが分かるようにする。 */
+const STATIC_CHECK_RESULT_PREFIX = "static: ";
+
+/** 静的検査のコマンドを、結果と失敗の一覧に載せる名前にして返す。 */
+export function staticCheckResultName(command: string): string {
+  return `${STATIC_CHECK_RESULT_PREFIX}${command}`;
+}
+
+/** `runStaticChecksInWorkspace`の入出力。verifyのstepが実物を渡す。 */
+export type StaticCheckRunDeps = {
+  /** 基準の版の木にPRの変更を重ねた作業木を作る(`createStaticCheckWorkspace`)。 */
+  readonly createWorkspace: () => Promise<StaticCheckWorkspace>;
+  /** 作業木ができた後、検査コマンドを実行する直前に1回呼ぶ。 */
+  readonly beforeRun: () => Promise<void>;
+  /** 作業木のディレクトリで、静的検査のコマンドを実行する。 */
+  readonly runCommands: (dir: string) => Promise<readonly LoopCheckResult[]>;
+  readonly warn: (message: string, fields: Record<string, unknown>) => void;
+};
+
+/**
+ * 静的検査の作業木を作り、その中で検査コマンドを実行して、結果を返す。
+ * 作業木を作らなかったときは、その理由を返し、何も実行しない。
+ * 作業木は、検査コマンドが例外を投げても必ず消す。
+ * 消せなかったときは警告を出すだけにし、検査の結果や検査コマンドの例外を隠さない。
+ * 消し損ねた作業木は、次に作業木を作るときの掃除が片付ける。
+ */
+export async function runStaticChecksInWorkspace(
+  deps: StaticCheckRunDeps,
+): Promise<StaticCheckOutcome> {
+  const workspace = await deps.createWorkspace();
+  if (workspace.kind === "skipped") {
+    return { kind: "skipped", reason: workspace.reason };
+  }
+  try {
+    await deps.beforeRun();
+    return { kind: "ran", results: await deps.runCommands(workspace.dir) };
+  } finally {
+    try {
+      await workspace.cleanup();
+    } catch (error) {
+      deps.warn("static check workspace could not be removed", {
+        dir: workspace.dir,
+        error: errorMessage(error),
+      });
+    }
+  }
+}
+
 export type FixRoundRequest = {
   /** このループの中でのラウンド番号(1始まり)。プロンプトの"Round n of m"に使う。 */
   readonly round: number;
@@ -1015,6 +1073,16 @@ export type ImplementLoopDeps = {
    * 検証コマンドがあるときだけ呼ぶ。
    */
   readonly runChecks: () => Promise<readonly LoopCheckResult[]>;
+  /**
+   * 保護パスを変えたラウンドで、静的検査(`staticCheckCommandsFor`)を実行する。
+   * `changes`は、そのラウンドの`inspectChanges`の変更の一覧である。
+   * 静的検査のコマンドがあり、保護パスが変わったラウンドでだけ呼ぶ。`removeIgnoredFiles`は呼ばない。
+   * 検査はworktreeではなく、基準の版の木にPRの変更を重ねた一時の作業木で実行する。
+   * workerが検査を実行できなければ、`runChecks`と同じく`CheckEnvironmentError`を投げる。
+   */
+  readonly runStaticChecks: (
+    changes: readonly ChangedPath[],
+  ) => Promise<StaticCheckOutcome>;
   readonly runFixRound: (
     request: FixRoundRequest,
   ) => Promise<ImplementClaudeRound>;
@@ -1035,7 +1103,7 @@ export type ImplementLoopDeps = {
   readonly now: () => number;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
   /**
-   * `runChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。
+   * `runChecks`か`runStaticChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。
    * ループはそのラウンドで止まる。
    */
   readonly reportCheckImageStale: (
@@ -1051,6 +1119,8 @@ export type ImplementLoopInput = {
   /** `factory_config.implement_max_turns`の値。ターンの上限に達したときの理由に載せる。 */
   readonly maxTurns: number;
   readonly hasCheckCommands: boolean;
+  /** 保護パスを変えたラウンドで実行する静的検査のコマンドがあるか(`staticCheckCommandsFor`)。 */
+  readonly hasStaticCheckCommands: boolean;
   /** implement_generateの結果(1ラウンド目、modeは`implement`)。 */
   readonly firstRound: ImplementClaudeRound;
   /** フロー全体の期限(epoch ms)。 */
@@ -1123,6 +1193,9 @@ async function evaluateChecks(
     readonly noChanges: boolean;
     readonly protectedChanged: boolean;
     readonly hasCheckCommands: boolean;
+    readonly hasStaticCheckCommands: boolean;
+    /** そのラウンドの変更の一覧。静的検査の作業木に重ねる。 */
+    readonly changes: readonly ChangedPath[];
     /** 指紋を取って変更を判定したツリー。gitleaksが検査したツリーと比べる。 */
     readonly inspectedTreeSha: string;
   },
@@ -1144,6 +1217,25 @@ async function evaluateChecks(
   let summarySkipReason: string | null = null;
   let scannedTreeChanged = false;
   let unrunnableReason: string | null = null;
+  // 検査コマンドの結果を、結果・失敗・出力の節・停滞の指紋の入力に足す。`name`は、一覧に載せる名前を作る。
+  // 実行できなかったかの判定は、コマンドの先頭の実行ファイルを見るので、名前を変える前のコマンドで行う。
+  const addResults = (
+    checkResults: readonly LoopCheckResult[],
+    name: (command: string) => string,
+  ): void => {
+    unrunnableReason = firstUnrunnableCheckReason(checkResults);
+    for (const result of checkResults) {
+      const command = name(result.command);
+      results.push({ command, ok: result.ok });
+      if (result.ok) {
+        passedOutputs.push(section(command, result.output));
+      } else {
+        failures.push({ command, outputTail: result.outputTail });
+        failedOutputs.push(section(command, result.output));
+        stallParts.push(result.output);
+      }
+    }
+  };
   if (facts.noChanges) {
     results.push({ command: NO_CHANGES_CHECK_NAME, ok: false });
     failures.push({
@@ -1164,30 +1256,31 @@ async function evaluateChecks(
       stallParts.push(gitleaks.output);
     }
     scannedTreeChanged = gitleaks.treeSha !== facts.inspectedTreeSha;
+    const gitleaksNote = `(gitleaks: ${gitleaks.ok ? "合格" : "不合格"})`;
     // 検査したツリーが判定したツリーと違えば、判定していないツリーで検証コマンドを動かさない。呼び出し側がラウンドを止める。
-    if (!scannedTreeChanged && facts.protectedChanged) {
+    // 保護パスを変えたラウンドでは、worktreeで検証コマンドを動かさない。
+    // 静的検査があれば、基準の版の道具でPRのファイルを読むだけの検査を、別の作業木で実行する。
+    if (
+      !scannedTreeChanged &&
+      facts.protectedChanged &&
+      facts.hasStaticCheckCommands
+    ) {
+      const outcome = await deps.runStaticChecks(facts.changes);
+      if (outcome.kind === "skipped") {
+        skipReason = staticChecksSkippedReason(outcome.reason);
+        summarySkipReason = `${skipReason}${gitleaksNote}`;
+      } else {
+        addResults(outcome.results, staticCheckResultName);
+      }
+    } else if (!scannedTreeChanged && facts.protectedChanged) {
       skipReason = IMPLEMENT_CHECK_SKIP_REASONS.protected_paths;
-      summarySkipReason = `${skipReason}(gitleaks: ${gitleaks.ok ? "合格" : "不合格"})`;
+      summarySkipReason = `${skipReason}${gitleaksNote}`;
     } else if (!scannedTreeChanged && !facts.hasCheckCommands) {
       skipReason = IMPLEMENT_CHECK_SKIP_REASONS.no_commands;
       summarySkipReason = skipReason;
     } else if (!scannedTreeChanged) {
       await deps.removeIgnoredFiles();
-      const checkResults = await deps.runChecks();
-      unrunnableReason = firstUnrunnableCheckReason(checkResults);
-      for (const result of checkResults) {
-        results.push({ command: result.command, ok: result.ok });
-        if (result.ok) {
-          passedOutputs.push(section(result.command, result.output));
-        } else {
-          failures.push({
-            command: result.command,
-            outputTail: result.outputTail,
-          });
-          failedOutputs.push(section(result.command, result.output));
-          stallParts.push(result.output);
-        }
-      }
+      addResults(await deps.runChecks(), (command) => command);
     }
   }
 
@@ -1274,7 +1367,10 @@ export async function gitPointerStopReason(
  * 7. baseとの差が無いラウンドは、検証を実行せずに「変更なし」として失敗させる。
  *    差があれば、gitleaks、次に検証コマンドを実行する。検証コマンドは、
  *    保護パスが変わったときと未設定のときは実行しない。
- *    実行する直前に、gitが無視するファイルを削除する。検査コマンドは期限で切らない。
+ *    保護パスが変わったときは、静的検査のコマンドがあれば、代わりに静的検査を実行する(`runStaticChecks`)。
+ *    結果の名前には`static: `を付け、失敗すれば検証コマンドの失敗と同じく修正ラウンドへ進む。
+ *    静的検査の作業木を作らなかったときは、その理由で検証を実行しなかったことにする。
+ *    検証コマンドを実行する直前に、gitが無視するファイルを削除する。検査コマンドは期限で切らない。
  *    workerが検査の前提を満たさず検査を実行できなければ(`CheckEnvironmentError`)、`reportCheckImageStale`で知らせ、
  *    そのラウンドを記録せず、修正ラウンドに進まずに`check_image_stale`で止める。イメージが古いときと、稼働中のworkerの問題のときの両方である。
  *    検査コマンドの実行ファイルを起動できなかったとき(`isCheckUnrunnable`)も、環境の問題なので、
@@ -1459,6 +1555,8 @@ export async function runImplementVerifyLoop(
         noChanges: fingerprint.diffStat.files === 0,
         protectedChanged: protectedChanges.length > 0,
         hasCheckCommands: input.hasCheckCommands,
+        hasStaticCheckCommands: input.hasStaticCheckCommands,
+        changes: inspection.changes,
         inspectedTreeSha: fingerprint.treeSha,
       });
     } catch (err) {
