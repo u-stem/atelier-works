@@ -102,7 +102,10 @@ export class GitHubHttpError extends Error {
   constructor(
     message: string,
     status: number,
-    detail: { readonly timedOut?: boolean; readonly unreachable?: boolean } = {},
+    detail: {
+      readonly timedOut?: boolean;
+      readonly unreachable?: boolean;
+    } = {},
   ) {
     super(message);
     this.name = "GitHubHttpError";

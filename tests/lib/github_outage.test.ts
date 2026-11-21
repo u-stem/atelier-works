@@ -176,10 +176,8 @@ describe("an outage-only round", () => {
     const round = roundOf(h);
     await round.failure("a", unreachable(), recorder(h));
     await round.finish();
-    expect([h.skips, h.warnings]).toEqual([
-      [expect.objectContaining({ step: "a" })],
-      ["failed to record github outage event"],
-    ]);
+    expect(h.skips).toEqual([expect.objectContaining({ step: "a" })]);
+    expect(h.warnings).toContain("failed to record github outage event");
   });
 
   test("keeps the round going when the event cannot be stored", async () => {

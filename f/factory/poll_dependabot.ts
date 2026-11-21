@@ -68,13 +68,13 @@ import {
   type OpenPullRequest,
   type PullRequestWithCreatedAt,
 } from "./lib/github.ts";
+import { createOutageRound, type OutageRound } from "./lib/github_outage.ts";
 import {
   type HoldReadOutcome,
   type HoldRow,
   listActiveHolds,
 } from "./lib/holds.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
-import { createOutageRound, type OutageRound } from "./lib/github_outage.ts";
 import { errorMessage, type Logger, logger } from "./lib/log.ts";
 import { isCommitSha } from "./lib/main_ci_support.ts";
 import { listMainCiTargets } from "./lib/main_ci_watch.ts";

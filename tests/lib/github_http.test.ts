@@ -20,8 +20,8 @@ import {
   GITHUB_RESPONSE_MAX_BYTES,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   type GitHubHttpClient,
-  graphqlErrorsRateLimited,
   githubReadSuccessCount,
+  graphqlErrorsRateLimited,
   graphqlRateLimit,
   requestGitHub,
   sendGitHubRequest,
@@ -1935,6 +1935,7 @@ const HTTP_VALUE_IMPORTERS: readonly string[] = [
   "lib/github.ts",
   "lib/gh_graphql.ts",
   "lib/metadata_patch_download.ts",
+  "lib/github_outage.ts",
 ];
 
 /** `Authorization`ヘッダーを組み立てる書き方。オブジェクトのキー、`Headers`への設定、組の配列。 */

@@ -5,6 +5,8 @@
 -- 通信断の事象そのものは、noticesの種類github_unreachableに1件だけ残る。この表は、見送った回ごとに1行を残す。
 BEGIN;
 
+SET LOCAL lock_timeout = '30s';
+
 CREATE TABLE factory.job_outage_skips (
     id bigserial PRIMARY KEY,
     flow_path text NOT NULL,

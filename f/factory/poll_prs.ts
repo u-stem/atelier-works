@@ -113,6 +113,7 @@ import {
 } from "./lib/pr_review_start.ts";
 import { collectTrackedPrCandidates } from "./lib/tracked_pr_candidates.ts";
 import {
+  type FactoryConfig,
   hasLabel,
   isRecord,
   type PrReviewTrigger,
