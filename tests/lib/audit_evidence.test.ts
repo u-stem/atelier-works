@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type AuditEvidence,
   buildEvidenceSections,
+  CONFIG_HISTORY_UNAVAILABLE_LINE,
   collectAuditEvidence,
   countActionableRecords,
   DEPLOYMENT_ERROR_HEAD_MAX,
@@ -11,6 +12,7 @@ import {
   type EvidenceSection,
   HISTORY_UNAVAILABLE_LINE,
   metricsOf,
+  NO_CONFIG_HISTORY_LINE,
   NO_HISTORY_LINE,
   NO_PR_REVIEW_RUNS_LINE,
   NO_REVIEW_OUTCOMES_LINE,
@@ -24,6 +26,7 @@ import {
   truncateEvidence,
 } from "../../f/factory/lib/audit_evidence.ts";
 import type { AuditPeriod } from "../../f/factory/lib/audit_support.ts";
+import { EMPTY_CONFIG_HISTORY_EVIDENCE } from "../../f/factory/lib/config_history.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import { EMPTY_HISTORY_EVIDENCE } from "../../f/factory/lib/history.ts";
 import { emptyOutcomeCounts } from "../../f/factory/lib/review_outcomes.ts";
@@ -77,7 +80,10 @@ type QueryName =
   | "historyVerify"
   | "historyChains"
   | "historyPeriod"
-  | "historyReasons";
+  | "historyReasons"
+  | "configHistoryVerify"
+  | "configHistoryChain"
+  | "configHistoryPeriod";
 
 // 週別の3つの問い合わせは、採否の節の問い合わせと表の名前の一部が同じなので、先に見分ける。
 const QUERY_NAMES: readonly QueryName[] = [
@@ -104,6 +110,9 @@ const QUERY_NAMES: readonly QueryName[] = [
   "historyChains",
   "historyPeriod",
   "historyReasons",
+  "configHistoryVerify",
+  "configHistoryChain",
+  "configHistoryPeriod",
 ];
 
 /**
@@ -135,6 +144,9 @@ const QUERY_FRAGMENTS: Record<QueryName, string> = {
   historyChains: "AS chains",
   historyPeriod: "AS period_chains",
   historyReasons: "GROUP BY h.reason_code",
+  configHistoryVerify: "factory.config_history_verify(",
+  configHistoryChain: "AS chain_rows",
+  configHistoryPeriod: "GROUP BY c.item_key",
 };
 
 /**
@@ -201,6 +213,7 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   review_outcomes: EMPTY_REVIEW_OUTCOME_EVIDENCE,
   review_quality: EMPTY_REVIEW_QUALITY_TREND,
   history: EMPTY_HISTORY_EVIDENCE,
+  config_history: EMPTY_CONFIG_HISTORY_EVIDENCE,
 };
 
 /**
@@ -2110,6 +2123,7 @@ describe("PR review sections in the evidence pack", () => {
       "レビューの質(週別)",
       "レビューのスキルの版の前後比較",
       "履歴の整合",
+      "設定の変更",
       "通知",
       "デプロイ",
       "過去の提案(直近3回)",
@@ -2132,9 +2146,9 @@ describe("PR review sections in the evidence pack", () => {
     expect(metricsOf(PR_REVIEW_EVIDENCE)).toEqual(metricsOf(without));
   });
 
-  test("issues the two new queries after the existing ones, before the four history queries", async () => {
+  test("issues the two new queries after the existing ones, before the three config history queries and the four history queries", async () => {
     const { calls } = await collectWith({});
-    expect(calls.slice(-6, -4).map((call) => call.text)).toEqual([
+    expect(calls.slice(-9, -7).map((call) => call.text)).toEqual([
       findCall(calls, "prReviewTopPrs")?.text ?? "",
       findCall(calls, "prReviewTriggers")?.text ?? "",
     ]);
@@ -3743,5 +3757,240 @@ describe("collecting the history", () => {
       PERIOD.start.toISOString(),
       PERIOD.end.toISOString(),
     ]);
+  });
+});
+
+const CONFIG_SECTION = "設定の変更";
+
+/**
+ * 連鎖が12行で、うち1つの位置が壊れている期間。
+ * 期間内の変更は6件で、項目が3つ、理由コードが2つである。
+ */
+const CONFIG_HISTORY_EVIDENCE: AuditEvidence = {
+  ...EMPTY_EVIDENCE,
+  config_history: {
+    available: true,
+    chain_rows: 12,
+    last_seq: 12,
+    broken: [{ seq: 7, reason: "row_hash_mismatch" }],
+    period_changes: 6,
+    period_by_item: [
+      { item_key: "implement_enabled", count: 3 },
+      { item_key: "daily_budget_usd", count: 2 },
+      { item_key: "design_enabled", count: 1 },
+    ],
+    period_by_reason: [
+      { reason_code: "console_update", count: 4 },
+      { reason_code: "stop_all_flag_off", count: 2 },
+    ],
+  },
+};
+
+/** 壊れた位置が8つある履歴。載せる件数の上限を超える。 */
+const MANY_BROKEN_CONFIG_EVIDENCE: AuditEvidence = {
+  ...CONFIG_HISTORY_EVIDENCE,
+  config_history: {
+    ...CONFIG_HISTORY_EVIDENCE.config_history,
+    broken: Array.from({ length: 8 }, (_, i) => ({
+      seq: i + 2,
+      reason: "gap",
+    })),
+  },
+};
+
+describe("the config history section", () => {
+  test("is placed right after the history integrity section", () => {
+    const headings = buildEvidenceSections(CONFIG_HISTORY_EVIDENCE).map(
+      (section) => section.heading,
+    );
+    expect(headings.indexOf(CONFIG_SECTION)).toBe(
+      headings.indexOf(HISTORY_SECTION) + 1,
+    );
+  });
+
+  test("shows the rows of the chain, the last number and the broken positions", () => {
+    expect(sectionOf(CONFIG_HISTORY_EVIDENCE, CONFIG_SECTION)?.fixed).toContain(
+      "連鎖の行: 12件 / 最後の連番: 12 / 壊れた位置: 1件",
+    );
+  });
+
+  test("names the first bad row and the reason of a broken position", () => {
+    expect(sectionOf(CONFIG_HISTORY_EVIDENCE, CONFIG_SECTION)?.fixed).toContain(
+      "壊れた位置: 第7行(row_hash_mismatch)",
+    );
+  });
+
+  test("shows no broken position line when the chain verifies", () => {
+    const evidence: AuditEvidence = {
+      ...CONFIG_HISTORY_EVIDENCE,
+      config_history: { ...CONFIG_HISTORY_EVIDENCE.config_history, broken: [] },
+    };
+    expect(
+      sectionOf(evidence, CONFIG_SECTION)?.fixed.some((line) =>
+        line.startsWith("壊れた位置: 第"),
+      ),
+    ).toBe(false);
+  });
+
+  test("lists at most five broken positions", () => {
+    const fixed =
+      sectionOf(MANY_BROKEN_CONFIG_EVIDENCE, CONFIG_SECTION)?.fixed ?? [];
+    expect(
+      fixed.filter((line) => line.startsWith("壊れた位置: 第")),
+    ).toHaveLength(5);
+  });
+
+  test("says how many broken positions are not listed", () => {
+    expect(
+      sectionOf(MANY_BROKEN_CONFIG_EVIDENCE, CONFIG_SECTION)?.fixed,
+    ).toContain("壊れた位置: ほか3件は載せない");
+  });
+
+  test("sanitizes the reason of a broken position", () => {
+    const evidence: AuditEvidence = {
+      ...CONFIG_HISTORY_EVIDENCE,
+      config_history: {
+        ...CONFIG_HISTORY_EVIDENCE.config_history,
+        broken: [{ seq: 4, reason: "<b>x</b>\n- injected" }],
+      },
+    };
+    expect(sectionOf(evidence, CONFIG_SECTION)?.fixed).toContain(
+      "壊れた位置: 第4行(x - injected)",
+    );
+  });
+
+  test("shows the changes of the period", () => {
+    expect(sectionOf(CONFIG_HISTORY_EVIDENCE, CONFIG_SECTION)?.fixed).toContain(
+      "期間内の変更: 6件",
+    );
+  });
+
+  test("says that changes outside the Console are not recorded", () => {
+    expect(
+      sectionOf(CONFIG_HISTORY_EVIDENCE, CONFIG_SECTION)?.fixed.some((line) =>
+        line.includes("Consoleの外"),
+      ),
+    ).toBe(true);
+  });
+
+  test("lists the reason codes first and then the items, as droppable lines", () => {
+    expect(sectionOf(CONFIG_HISTORY_EVIDENCE, CONFIG_SECTION)?.lines).toEqual([
+      "理由コード console_update: 4件",
+      "理由コード stop_all_flag_off: 2件",
+      "項目 implement_enabled: 3件",
+      "項目 daily_budget_usd: 2件",
+      "項目 design_enabled: 1件",
+    ]);
+  });
+
+  test("sanitizes an item name and a reason code that came from the database", () => {
+    const evidence: AuditEvidence = {
+      ...CONFIG_HISTORY_EVIDENCE,
+      config_history: {
+        ...CONFIG_HISTORY_EVIDENCE.config_history,
+        period_by_item: [{ item_key: "<i>a</i>\n# head", count: 1 }],
+        period_by_reason: [{ reason_code: "x|y", count: 1 }],
+      },
+    };
+    expect(sectionOf(evidence, CONFIG_SECTION)?.lines).toEqual([
+      "理由コード x y: 1件",
+      "項目 a # head: 1件",
+    ]);
+  });
+
+  test("says that the table is missing before the migration is applied", () => {
+    expect(sectionOf(EMPTY_EVIDENCE, CONFIG_SECTION)).toEqual({
+      heading: CONFIG_SECTION,
+      fixed: [CONFIG_HISTORY_UNAVAILABLE_LINE],
+      lines: [],
+    });
+  });
+
+  test("says that nothing is recorded when the table is empty", () => {
+    const evidence: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      config_history: { ...EMPTY_CONFIG_HISTORY_EVIDENCE, available: true },
+    };
+    expect(sectionOf(evidence, CONFIG_SECTION)).toEqual({
+      heading: CONFIG_SECTION,
+      fixed: [NO_CONFIG_HISTORY_LINE],
+      lines: [],
+    });
+  });
+
+  test("says in the line for an empty table that zero rows do not prove that nothing changed", () => {
+    expect(NO_CONFIG_HISTORY_LINE).toContain("Consoleの外");
+  });
+
+  test("keeps every fixed line and drops only the item and reason lines when the evidence is over the limit", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      config_history: CONFIG_HISTORY_EVIDENCE.config_history,
+    };
+    const truncated = truncateEvidence(buildEvidenceSections(evidence), 3000);
+    const section = truncated.find(
+      (candidate) => candidate.heading === CONFIG_SECTION,
+    );
+    expect(section?.fixed).toEqual(
+      sectionOf(evidence, CONFIG_SECTION)?.fixed ?? [],
+    );
+  });
+
+  test("stays within 12,000 characters with many broken positions and items", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      config_history: {
+        ...CONFIG_HISTORY_EVIDENCE.config_history,
+        broken: Array.from({ length: 30 }, (_, i) => ({
+          seq: i + 2,
+          reason: "r".repeat(400),
+        })),
+        period_by_item: Array.from({ length: 80 }, (_, i) => ({
+          item_key: `item_${i}_${"k".repeat(60)}`,
+          count: i + 1,
+        })),
+      },
+    };
+    expect(renderEvidenceMarkdown(evidence).length).toBeLessThanOrEqual(12000);
+  });
+
+  test("does not change the metrics", () => {
+    expect(metricsOf(CONFIG_HISTORY_EVIDENCE)).toEqual(
+      metricsOf(EMPTY_EVIDENCE),
+    );
+  });
+});
+
+describe("collecting the config history", () => {
+  test("reads the broken positions from the verification function", async () => {
+    const { sql } = createRoutedSqlClient({
+      configHistoryVerify: [{ bad_seq: 5, reason: "gap" }],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.config_history.broken).toEqual([{ seq: 5, reason: "gap" }]);
+  });
+
+  test("binds the period to the query of the period", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "configHistoryPeriod")?.values).toEqual([
+      PERIOD.start.toISOString(),
+      PERIOD.end.toISOString(),
+    ]);
+  });
+
+  test("keeps the history of the transitions as the last query of the pack", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(calls.at(-1)?.text).toContain("history_events");
   });
 });
