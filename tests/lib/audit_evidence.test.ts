@@ -9,7 +9,9 @@ import {
   EMPTY_REVIEW_OUTCOME_EVIDENCE,
   EMPTY_REVIEW_QUALITY_TREND,
   type EvidenceSection,
+  HISTORY_UNAVAILABLE_LINE,
   metricsOf,
+  NO_HISTORY_LINE,
   NO_PR_REVIEW_RUNS_LINE,
   NO_REVIEW_OUTCOMES_LINE,
   NO_REVIEW_QUALITY_LINE,
@@ -23,6 +25,7 @@ import {
 } from "../../f/factory/lib/audit_evidence.ts";
 import type { AuditPeriod } from "../../f/factory/lib/audit_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
+import { EMPTY_HISTORY_EVIDENCE } from "../../f/factory/lib/history.ts";
 import { emptyOutcomeCounts } from "../../f/factory/lib/review_outcomes.ts";
 
 type FakeCall = { text: string; values: unknown[] };
@@ -70,7 +73,11 @@ type QueryName =
   | "prReviewTriggers"
   | "weeklyRuns"
   | "weeklyFindings"
-  | "weeklyThreads";
+  | "weeklyThreads"
+  | "historyVerify"
+  | "historyChains"
+  | "historyPeriod"
+  | "historyReasons";
 
 // 週別の3つの問い合わせは、採否の節の問い合わせと表の名前の一部が同じなので、先に見分ける。
 const QUERY_NAMES: readonly QueryName[] = [
@@ -93,6 +100,10 @@ const QUERY_NAMES: readonly QueryName[] = [
   "humanThreads",
   "prReviewTopPrs",
   "prReviewTriggers",
+  "historyVerify",
+  "historyChains",
+  "historyPeriod",
+  "historyReasons",
 ];
 
 /**
@@ -120,6 +131,10 @@ const QUERY_FRAGMENTS: Record<QueryName, string> = {
   weeklyRuns: "to_jsonb(r) -> 'skills'",
   weeklyFindings: "FROM factory.review_findings fd",
   weeklyThreads: "FROM factory.review_human_threads t",
+  historyVerify: "factory.history_verify(",
+  historyChains: "AS chains",
+  historyPeriod: "AS period_chains",
+  historyReasons: "GROUP BY h.reason_code",
 };
 
 /**
@@ -185,6 +200,7 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   pr_review_triggers: EMPTY_PR_REVIEW_TRIGGER_COUNTS,
   review_outcomes: EMPTY_REVIEW_OUTCOME_EVIDENCE,
   review_quality: EMPTY_REVIEW_QUALITY_TREND,
+  history: EMPTY_HISTORY_EVIDENCE,
 };
 
 /**
@@ -2093,6 +2109,7 @@ describe("PR review sections in the evidence pack", () => {
       OUTCOME_SECTION,
       "レビューの質(週別)",
       "レビューのスキルの版の前後比較",
+      "履歴の整合",
       "通知",
       "デプロイ",
       "過去の提案(直近3回)",
@@ -2115,9 +2132,9 @@ describe("PR review sections in the evidence pack", () => {
     expect(metricsOf(PR_REVIEW_EVIDENCE)).toEqual(metricsOf(without));
   });
 
-  test("issues the two new queries after the existing ones", async () => {
+  test("issues the two new queries after the existing ones, before the four history queries", async () => {
     const { calls } = await collectWith({});
-    expect(calls.slice(-2).map((call) => call.text)).toEqual([
+    expect(calls.slice(-6, -4).map((call) => call.text)).toEqual([
       findCall(calls, "prReviewTopPrs")?.text ?? "",
       findCall(calls, "prReviewTriggers")?.text ?? "",
     ]);
@@ -3463,5 +3480,228 @@ describe("the skill version comparison section", () => {
     expect(metricsOf(qualityEvidence(TWO_VERSIONS))).toEqual(
       metricsOf(EMPTY_EVIDENCE),
     );
+  });
+});
+
+const HISTORY_SECTION = "履歴の整合";
+
+/** 検証した連鎖が40件で、うち1件が壊れている期間。期間内の遷移は20件で、5件が理由を持たない。 */
+const HISTORY_EVIDENCE: AuditEvidence = {
+  ...EMPTY_EVIDENCE,
+  history: {
+    available: true,
+    chains_checked: 40,
+    broken: [
+      { work_item_id: 12, first_bad_seq: 3, reason: "row_hash_mismatch" },
+    ],
+    period_chains: 8,
+    period_events: 20,
+    period_by_reason: [
+      { reason_code: "reconcile", count: 12 },
+      { reason_code: "unspecified", count: 5 },
+      { reason_code: "auto_retry", count: 3 },
+    ],
+  },
+};
+
+/** 壊れた連鎖が8件ある履歴。載せる件数の上限を超える。 */
+const MANY_BROKEN_EVIDENCE: AuditEvidence = {
+  ...HISTORY_EVIDENCE,
+  history: {
+    ...HISTORY_EVIDENCE.history,
+    broken: Array.from({ length: 8 }, (_, i) => ({
+      work_item_id: i + 1,
+      first_bad_seq: 2,
+      reason: "gap",
+    })),
+  },
+};
+
+describe("the history integrity section", () => {
+  test("is placed after the review quality sections", () => {
+    const headings = buildEvidenceSections(HISTORY_EVIDENCE).map(
+      (section) => section.heading,
+    );
+    expect(headings.indexOf(HISTORY_SECTION)).toBeGreaterThan(
+      headings.indexOf("レビューのスキルの版の前後比較"),
+    );
+  });
+
+  test("shows how many chains were verified and how many are broken", () => {
+    expect(sectionOf(HISTORY_EVIDENCE, HISTORY_SECTION)?.fixed).toContain(
+      "検証した連鎖: 40件 / 壊れた連鎖: 1件",
+    );
+  });
+
+  test("names the work item and the first bad row of a broken chain", () => {
+    expect(sectionOf(HISTORY_EVIDENCE, HISTORY_SECTION)?.fixed).toContain(
+      "壊れた連鎖: 作業項目12の第3行(row_hash_mismatch)",
+    );
+  });
+
+  test("shows no broken chain line when every chain verifies", () => {
+    const evidence: AuditEvidence = {
+      ...HISTORY_EVIDENCE,
+      history: { ...HISTORY_EVIDENCE.history, broken: [] },
+    };
+    expect(
+      sectionOf(evidence, HISTORY_SECTION)?.fixed.some((line) =>
+        line.startsWith("壊れた連鎖:"),
+      ),
+    ).toBe(false);
+  });
+
+  test("lists at most five broken chains", () => {
+    const fixed = sectionOf(MANY_BROKEN_EVIDENCE, HISTORY_SECTION)?.fixed ?? [];
+    expect(
+      fixed.filter((line) => line.startsWith("壊れた連鎖: 作業項目")),
+    ).toHaveLength(5);
+  });
+
+  test("says how many broken chains are not listed", () => {
+    expect(sectionOf(MANY_BROKEN_EVIDENCE, HISTORY_SECTION)?.fixed).toContain(
+      "壊れた連鎖: ほか3件は載せない",
+    );
+  });
+
+  test("sanitizes the reason of a broken chain", () => {
+    const evidence: AuditEvidence = {
+      ...HISTORY_EVIDENCE,
+      history: {
+        ...HISTORY_EVIDENCE.history,
+        broken: [
+          { work_item_id: 4, first_bad_seq: 1, reason: "<b>x</b>\n- injected" },
+        ],
+      },
+    };
+    expect(sectionOf(evidence, HISTORY_SECTION)?.fixed).toContain(
+      "壊れた連鎖: 作業項目4の第1行(x - injected)",
+    );
+  });
+
+  test("shows the chains and the transitions of the period", () => {
+    expect(sectionOf(HISTORY_EVIDENCE, HISTORY_SECTION)?.fixed).toContain(
+      "期間内の連鎖: 8件 / 遷移の記録: 20件",
+    );
+  });
+
+  test("shows the share of unspecified with the numbers it divides", () => {
+    expect(sectionOf(HISTORY_EVIDENCE, HISTORY_SECTION)?.fixed).toContain(
+      "理由が未指定(unspecified)の割合: 25%(5件 / 20件)。割合が高い呼び出し元から、理由を明示する",
+    );
+  });
+
+  test("leaves out the share of unspecified when the period has no transition", () => {
+    const evidence: AuditEvidence = {
+      ...HISTORY_EVIDENCE,
+      history: {
+        ...HISTORY_EVIDENCE.history,
+        period_chains: 0,
+        period_events: 0,
+        period_by_reason: [],
+      },
+    };
+    expect(
+      sectionOf(evidence, HISTORY_SECTION)?.fixed.some((line) =>
+        line.includes("unspecified"),
+      ),
+    ).toBe(false);
+  });
+
+  test("lists the count of each reason code as droppable lines in the given order", () => {
+    expect(sectionOf(HISTORY_EVIDENCE, HISTORY_SECTION)?.lines).toEqual([
+      "理由コード reconcile: 12件",
+      "理由コード unspecified: 5件",
+      "理由コード auto_retry: 3件",
+    ]);
+  });
+
+  test("says that the table is missing before the migration is applied", () => {
+    expect(sectionOf(EMPTY_EVIDENCE, HISTORY_SECTION)).toEqual({
+      heading: HISTORY_SECTION,
+      fixed: [HISTORY_UNAVAILABLE_LINE],
+      lines: [],
+    });
+  });
+
+  test("says that nothing is recorded when the table is empty", () => {
+    const evidence: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      history: { ...EMPTY_HISTORY_EVIDENCE, available: true },
+    };
+    expect(sectionOf(evidence, HISTORY_SECTION)).toEqual({
+      heading: HISTORY_SECTION,
+      fixed: [NO_HISTORY_LINE],
+      lines: [],
+    });
+  });
+
+  test("keeps every fixed line and drops only the reason lines when the evidence is over the limit", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      history: HISTORY_EVIDENCE.history,
+    };
+    const truncated = truncateEvidence(buildEvidenceSections(evidence), 3000);
+    const section = truncated.find(
+      (candidate) => candidate.heading === HISTORY_SECTION,
+    );
+    expect(section?.fixed).toEqual(
+      sectionOf(evidence, HISTORY_SECTION)?.fixed ?? [],
+    );
+  });
+
+  test("stays within 12,000 characters with the broken chain lines", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      history: {
+        ...HISTORY_EVIDENCE.history,
+        broken: Array.from({ length: 30 }, (_, i) => ({
+          work_item_id: i + 1,
+          first_bad_seq: 2,
+          reason: "r".repeat(400),
+        })),
+      },
+    };
+    expect(renderEvidenceMarkdown(evidence).length).toBeLessThanOrEqual(12000);
+  });
+
+  test("does not change the metrics", () => {
+    expect(metricsOf(HISTORY_EVIDENCE)).toEqual(metricsOf(EMPTY_EVIDENCE));
+  });
+});
+
+describe("collecting the history", () => {
+  test("collects the history in the last query of the pack", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(calls.at(-1)?.text).toContain("history_events");
+  });
+
+  test("reads the broken chains from the verification function", async () => {
+    const { sql } = createRoutedSqlClient({
+      historyVerify: [{ work_item_id: 5, first_bad_seq: 2, reason: "gap" }],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.history.broken).toEqual([
+      { work_item_id: 5, first_bad_seq: 2, reason: "gap" },
+    ]);
+  });
+
+  test("binds the period to the period counts of the history", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "historyPeriod")?.values).toEqual([
+      PERIOD.start.toISOString(),
+      PERIOD.end.toISOString(),
+    ]);
   });
 });

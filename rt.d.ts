@@ -32,6 +32,7 @@ declare namespace RT {
     allowed_check_commands: string[],
     max_budget_usd_per_run: number,
     retention_logs_days: number,
+    retention_history_days: number,
     retention_work_items_days: number,
     backup_keep_generations: number,
     allowed_labeler_associations: string[],

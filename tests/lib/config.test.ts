@@ -590,6 +590,64 @@ describe("parseFactoryConfig", () => {
   });
 });
 
+describe("retention_history_days", () => {
+  test("defaults to 365 when absent", () => {
+    expect(parseFactoryConfig(LEGACY_RAW_CONFIG).retention_history_days).toBe(
+      365,
+    );
+  });
+
+  test("passes through an explicit value", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      retention_history_days: 730,
+    });
+    expect(config.retention_history_days).toBe(730);
+  });
+
+  test("throws when it is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, retention_history_days: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when it is not an integer", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, retention_history_days: 1.5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("retention_history_days in the resource type", () => {
+  const yaml = readFileSync(
+    join(import.meta.dir, "../../c_factory_config.resource-type.yaml"),
+    "utf8",
+  );
+  const types = readFileSync(join(import.meta.dir, "../../rt.d.ts"), "utf8");
+  const template = readFileSync(
+    join(import.meta.dir, "../../templates/factory_config.resource.yaml"),
+    "utf8",
+  );
+
+  test("orders retention_history_days after retention_logs_days", () => {
+    expect(yaml).toMatch(
+      /^ {4}- retention_logs_days\n {4}- retention_history_days$/m,
+    );
+  });
+
+  test("declares an integer of at least 1 with the default 365", () => {
+    expect(yaml).toMatch(
+      /^ {4}retention_history_days:\n {6}type: integer\n {6}minimum: 1\n {6}description: >-\n.*\n {6}default: 365$/m,
+    );
+  });
+
+  test("declares it in the generated resource types", () => {
+    expect(types).toContain("retention_history_days: number,");
+  });
+
+  test("sets the default in the template", () => {
+    expect(template).toMatch(/^ {2}retention_history_days: 365$/m);
+  });
+});
+
 describe("loadConfig", () => {
   test("calls the injected getResource and validates its result", async () => {
     const config = await loadConfig(() => Promise.resolve(LEGACY_RAW_CONFIG));

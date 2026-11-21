@@ -1,0 +1,9 @@
+summary: '[LIB] 遷移の履歴'
+description: 内部ライブラリです。直接実行するものではありません。作業項目の状態遷移の履歴(history_events)の理由コードの一覧、連鎖の検証の呼び出し、証跡パックの集計、保持期間を過ぎた連鎖の掃除を共有します。
+lock: '!inline f/factory/lib/history.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
