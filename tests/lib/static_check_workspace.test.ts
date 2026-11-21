@@ -7,6 +7,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { FORBIDDEN_PATH_PREFIXES } from "../../f/factory/lib/protected_paths.ts";
 import {
   isStaticCheckDependencyPath,
+  isStaticCheckExecutedPath,
   isStaticCheckOverlaidPath,
   STATIC_CHECK_DEPENDENCY_PATHS,
   STATIC_CHECK_NOT_OVERLAID,
@@ -46,10 +47,18 @@ function relativeImportClosure(entries: readonly string[]): string[] {
 }
 
 describe("STATIC_CHECK_NOT_OVERLAID", () => {
-  test("includes every forbidden path prefix", () => {
-    expect(STATIC_CHECK_NOT_OVERLAID.prefixes).toEqual(
-      expect.arrayContaining([...FORBIDDEN_PATH_PREFIXES]),
-    );
+  test("uses the forbidden path prefixes as the prefixes", () => {
+    expect(STATIC_CHECK_NOT_OVERLAID.prefixes).toEqual([
+      ...FORBIDDEN_PATH_PREFIXES,
+    ]);
+  });
+
+  test("treats every file the static check scripts execute as executed", () => {
+    const executed = relativeImportClosure(EXECUTED_ENTRY_SCRIPTS);
+
+    const missed = executed.filter((path) => !isStaticCheckExecutedPath(path));
+
+    expect(missed).toEqual([]);
   });
 
   test("keeps every file the static check scripts execute out of the overlay", () => {
@@ -60,8 +69,14 @@ describe("STATIC_CHECK_NOT_OVERLAID", () => {
     expect(overlaid).toEqual([]);
   });
 
+  test("lists the lint scripts by prefix", () => {
+    expect(STATIC_CHECK_NOT_OVERLAID.executed.prefixes).toEqual([
+      "scripts/lint-",
+    ]);
+  });
+
   test("lists the executed scripts that lint-docs imports", () => {
-    expect(STATIC_CHECK_NOT_OVERLAID.exactPaths).toEqual([
+    expect(STATIC_CHECK_NOT_OVERLAID.executed.exactPaths).toEqual([
       "scripts/check-script-locks.ts",
       "scripts/docs-gen.ts",
       "scripts/flow-graph.ts",
@@ -165,7 +180,7 @@ describe("isStaticCheckOverlaidPath", () => {
 });
 
 describe("STATIC_CHECK_DEPENDENCY_PATHS", () => {
-  test("lists the manifests and lockfiles the workspace installs from", () => {
+  test("lists the manifests and lockfiles the checks install from", () => {
     expect(STATIC_CHECK_DEPENDENCY_PATHS).toEqual([
       "package.json",
       "bun.lock",
@@ -187,5 +202,24 @@ describe("isStaticCheckDependencyPath", () => {
     ["package.json.bak", false],
   ])("treats %s as a dependency file: %p", (path, expected) => {
     expect(isStaticCheckDependencyPath(path)).toBe(expected);
+  });
+});
+
+describe("isStaticCheckExecutedPath", () => {
+  test.each([
+    ["scripts/lint-docs.ts", true],
+    ["scripts/lint-new-rule.ts", true],
+    ["scripts/lint-risk-register-allowlist.txt", true],
+    ["scripts/docs-gen.ts", true],
+    ["scripts/ts-tokenize.ts", true],
+    ["f/factory/lib/types.ts", true],
+    ["F/Factory/Lib/Types.ts", true],
+    ["f/factory/lib/implement_loop.ts", false],
+    ["scripts/check-changed.ts", false],
+    ["scripts/lint", false],
+    ["biome.json", false],
+    [".github/workflows/ci.yml", false],
+  ])("treats %s as executed by the checks: %p", (path, expected) => {
+    expect(isStaticCheckExecutedPath(path)).toBe(expected);
   });
 });

@@ -1,8 +1,9 @@
 // 静的検査の作業木を、実際のgitとtarで作って確かめる。
-// 依存の導入(`bun install`)だけは偽のrunnerで記録し、実行しない。
+// 古い作業木の掃除も、一時ディレクトリに作った実ファイルで確かめる。
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -11,13 +12,16 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { LogFields, Logger } from "../../f/factory/lib/log.ts";
 import type { ChangedPath } from "../../f/factory/lib/protected_paths.ts";
 import {
   createStaticCheckWorkspace,
+  STATIC_CHECK_COMMAND_TIMEOUT_MS,
   type StaticCheckWorkspace,
 } from "../../f/factory/lib/static_check_workspace.ts";
 import {
@@ -27,9 +31,16 @@ import {
 } from "../../f/factory/lib/workspace.ts";
 
 const roots: string[] = [];
+/** 消せないよう権限を落としたディレクトリ。後片付けの前に戻す。 */
+const lockedDirs: string[] = [];
 afterAll(() => {
+  for (const dir of lockedDirs) chmodSync(dir, 0o755);
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
+
+const HOUR_MS = 60 * 60 * 1000;
+/** 掃除の判定に使う、固定した今。作業木の作成で実際にできるものより後にして、symlinkの更新時刻を古く見せる。 */
+const NOW_MS = Date.parse("2100-01-01T00:00:00Z");
 
 const MAIN_FILES = {
   "src/a.ts": "export const a = 1;\n",
@@ -38,7 +49,15 @@ const MAIN_FILES = {
   ".github/workflows/ci.yml": "name: main\n",
   "package.json": '{"name": "main"}\n',
   "scripts/lint-docs.ts": "// main lint\n",
+  "f/factory/lib/types.ts": "export type T = 1;\n",
 } as const;
+
+type Call = {
+  readonly command: string | undefined;
+  readonly timeoutMs: number | undefined;
+};
+
+type Warning = { readonly message: string; readonly fields?: LogFields };
 
 type Fixture = {
   readonly repoDir: string;
@@ -46,7 +65,9 @@ type Fixture = {
   readonly tmpRoot: string;
   readonly outside: string;
   readonly run: CommandRunner;
-  readonly bunCalls: { argv: readonly string[]; cwd: string | undefined }[];
+  readonly calls: Call[];
+  readonly warnings: Warning[];
+  readonly log: Logger;
   readonly write: (path: string, content: string) => void;
   readonly remove: (path: string) => void;
 };
@@ -54,21 +75,15 @@ type Fixture = {
 /**
  * mainの内容を1つのcommitにしたリポジトリを作る。
  * 作業ツリーはPRのworktreeの代わりに使い、テストが書き換える。
- * `bun`の起動は`bunResult`を返して記録するだけにし、それ以外は実際に実行する。
+ * 起動したコマンドは名前とtimeoutを記録する。`tarResult`を渡すと、`tar`は実行せずにその結果を返す。
  * `linkToOutside`を渡すと、そのパスに、リポジトリの外のディレクトリを指すsymlinkをmainのcommitに入れる。
  */
 async function fixture(
   options: {
-    readonly bunResult?: CommandResult;
+    readonly tarResult?: CommandResult;
     readonly linkToOutside?: string;
   } = {},
 ): Promise<Fixture> {
-  const bunResult = options.bunResult ?? {
-    stdout: "",
-    stderr: "",
-    exitCode: 0,
-    timedOut: false,
-  };
   const root = realpathSync(
     mkdtempSync(join(tmpdir(), "static-check-workspace-git-")),
   );
@@ -82,24 +97,34 @@ async function fixture(
   mkdirSync(tmpRoot);
   mkdirSync(outside);
   writeFileSync(join(outside, "secret.txt"), "outside\n");
-  const bunCalls: { argv: readonly string[]; cwd: string | undefined }[] = [];
-  const run: CommandRunner = async (argv, options) => {
-    if (argv[0] === "bun") {
-      bunCalls.push({ argv, cwd: options?.cwd });
-      return bunResult;
-    }
-    return await runCommand(argv, {
-      ...options,
+  const calls: Call[] = [];
+  const realRun: CommandRunner = (argv, runOptions) =>
+    runCommand(argv, {
+      ...runOptions,
       env: {
-        ...options?.env,
+        ...runOptions?.env,
         PATH: process.env.PATH ?? "",
         HOME: home,
         GIT_CONFIG_NOSYSTEM: "1",
       },
     });
+  const run: CommandRunner = async (argv, runOptions) => {
+    calls.push({ command: argv[0], timeoutMs: runOptions?.timeoutMs });
+    if (argv[0] === "tar" && options.tarResult !== undefined) {
+      return options.tarResult;
+    }
+    return await realRun(argv, runOptions);
+  };
+  const warnings: Warning[] = [];
+  const log: Logger = {
+    info: () => {},
+    warn: (message, fields) => {
+      warnings.push({ message, ...(fields !== undefined ? { fields } : {}) });
+    },
+    error: () => {},
   };
   const git = async (args: readonly string[]): Promise<string> => {
-    const result = await run(
+    const result = await realRun(
       [
         "git",
         "-c",
@@ -140,7 +165,9 @@ async function fixture(
     tmpRoot,
     outside,
     run,
-    bunCalls,
+    calls,
+    warnings,
+    log,
     write,
     remove,
   };
@@ -149,16 +176,23 @@ async function fixture(
 async function create(
   fx: Fixture,
   changes: readonly ChangedPath[],
-  baseSha: string = fx.baseSha,
+  overrides: {
+    readonly baseSha?: string;
+    readonly commandTimeoutMs?: number;
+  } = {},
 ): Promise<StaticCheckWorkspace> {
   return await createStaticCheckWorkspace({
     run: fx.run,
     repoDir: fx.repoDir,
-    baseSha,
+    baseSha: overrides.baseSha ?? fx.baseSha,
     worktreeDir: fx.repoDir,
     changes,
-    installTimeoutMs: 1_000,
     tmpRoot: fx.tmpRoot,
+    now: () => NOW_MS,
+    log: fx.log,
+    ...(overrides.commandTimeoutMs !== undefined
+      ? { commandTimeoutMs: overrides.commandTimeoutMs }
+      : {}),
   });
 }
 
@@ -178,6 +212,23 @@ function readTree(dir: string, path: string): string {
   return readFileSync(join(dir, path), "utf8");
 }
 
+/** `tmpRoot`の下に、更新時刻が`ageMs`前のディレクトリを作って、そのパスを返す。 */
+function leftoverDir(fx: Fixture, name: string, ageMs: number): string {
+  const path = join(fx.tmpRoot, name);
+  mkdirSync(join(path, "inner"), { recursive: true });
+  writeFileSync(join(path, "inner", "file.txt"), "left\n");
+  const time = new Date(NOW_MS - ageMs);
+  utimesSync(path, time, time);
+  return path;
+}
+
+const TIMED_OUT: CommandResult = {
+  stdout: "",
+  stderr: "",
+  exitCode: 143,
+  timedOut: true,
+};
+
 describe("createStaticCheckWorkspace", () => {
   test("extracts the base tree into a directory under the temporary root", async () => {
     const fx = await fixture();
@@ -195,17 +246,35 @@ describe("createStaticCheckWorkspace", () => {
     expect(existsSync(join(dir, ".git"))).toBe(false);
   });
 
-  test("installs the dependencies from the base lockfile without lifecycle scripts", async () => {
+  test("runs only git archive and tar, without a package install", async () => {
     const fx = await fixture();
 
-    const dir = await createReady(fx, []);
+    await createReady(fx, []);
 
-    expect(fx.bunCalls).toEqual([
-      {
-        argv: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"],
-        cwd: dir,
-      },
+    expect(fx.calls.map((call) => call.command)).toEqual(["git", "tar"]);
+  });
+
+  test("passes the default timeout of five minutes to git archive and tar", async () => {
+    const fx = await fixture();
+
+    await createReady(fx, []);
+
+    expect(fx.calls.map((call) => call.timeoutMs)).toEqual([
+      5 * 60 * 1000,
+      5 * 60 * 1000,
     ]);
+  });
+
+  test("exports the default command timeout", () => {
+    expect(STATIC_CHECK_COMMAND_TIMEOUT_MS).toBe(5 * 60 * 1000);
+  });
+
+  test("passes the given timeout to git archive and tar", async () => {
+    const fx = await fixture();
+
+    await create(fx, [], { commandTimeoutMs: 1_234 });
+
+    expect(fx.calls.map((call) => call.timeoutMs)).toEqual([1_234, 1_234]);
   });
 
   test("overlays a modified file from the worktree", async () => {
@@ -239,19 +308,6 @@ describe("createStaticCheckWorkspace", () => {
     ]);
 
     expect(readTree(dir, "biome.json")).toBe(MAIN_FILES["biome.json"]);
-  });
-
-  test("keeps the base version of an executed lint script", async () => {
-    const fx = await fixture();
-    fx.write("scripts/lint-docs.ts", "// pr lint\n");
-
-    const dir = await createReady(fx, [
-      { path: "scripts/lint-docs.ts", status: "modified" },
-    ]);
-
-    expect(readTree(dir, "scripts/lint-docs.ts")).toBe(
-      MAIN_FILES["scripts/lint-docs.ts"],
-    );
   });
 
   test("keeps the base version of a file under a forbidden path prefix", async () => {
@@ -394,6 +450,28 @@ describe("createStaticCheckWorkspace", () => {
     expect(workspace.kind).toBe("skipped");
   });
 
+  test("returns skipped when an executed lint script changed", async () => {
+    const fx = await fixture();
+    fx.write("scripts/lint-docs.ts", "// pr lint\n");
+
+    const workspace = await create(fx, [
+      { path: "scripts/lint-docs.ts", status: "modified" },
+    ]);
+
+    expect(workspace.kind).toBe("skipped");
+  });
+
+  test("returns skipped when a library the lint scripts import changed", async () => {
+    const fx = await fixture();
+    fx.write("f/factory/lib/types.ts", "export type T = 2;\n");
+
+    const workspace = await create(fx, [
+      { path: "f/factory/lib/types.ts", status: "modified" },
+    ]);
+
+    expect(workspace.kind).toBe("skipped");
+  });
+
   test("does not create a directory when it skips", async () => {
     const fx = await fixture();
 
@@ -402,17 +480,31 @@ describe("createStaticCheckWorkspace", () => {
     expect(readdirSync(fx.tmpRoot)).toEqual([]);
   });
 
-  test("gives a skip reason without the reason separator", async () => {
+  test.each([["bun.lock"], ["scripts/lint-docs.ts"]])(
+    "gives a skip reason without the reason separator for %s",
+    async (path) => {
+      const fx = await fixture();
+
+      const workspace = await create(fx, [{ path, status: "modified" }]);
+
+      expect(workspace).toEqual({
+        kind: "skipped",
+        reason: expect.not.stringContaining("; "),
+      });
+    },
+  );
+
+  test("gives different skip reasons for dependency and executed file changes", async () => {
     const fx = await fixture();
 
-    const workspace = await create(fx, [
+    const dependency = await create(fx, [
       { path: "bun.lock", status: "modified" },
     ]);
+    const executed = await create(fx, [
+      { path: "scripts/lint-docs.ts", status: "modified" },
+    ]);
 
-    expect(workspace).toEqual({
-      kind: "skipped",
-      reason: expect.not.stringContaining("; "),
-    });
+    expect(dependency).not.toEqual(executed);
   });
 
   test("removes the tree on cleanup", async () => {
@@ -444,7 +536,7 @@ describe("createStaticCheckWorkspace", () => {
   test("throws when the base commit cannot be archived", async () => {
     const fx = await fixture();
 
-    const promise = create(fx, [], "0".repeat(40));
+    const promise = create(fx, [], { baseSha: "0".repeat(40) });
 
     await expect(promise).rejects.toThrow("git archive");
   });
@@ -452,33 +544,137 @@ describe("createStaticCheckWorkspace", () => {
   test("removes the temporary directories when the archive fails", async () => {
     const fx = await fixture();
 
-    await create(fx, [], "0".repeat(40)).catch(() => undefined);
+    await create(fx, [], { baseSha: "0".repeat(40) }).catch(() => undefined);
 
     expect(readdirSync(fx.tmpRoot)).toEqual([]);
   });
 
-  test("throws when the dependency install fails", async () => {
-    const fx = await fixture({
-      bunResult: {
-        stdout: "",
-        stderr: "lockfile had changes",
-        exitCode: 1,
-        timedOut: false,
-      },
-    });
+  test("throws when tar times out", async () => {
+    const fx = await fixture({ tarResult: TIMED_OUT });
 
     const promise = create(fx, []);
 
-    await expect(promise).rejects.toThrow("bun install");
+    await expect(promise).rejects.toThrow("tar -x timed out");
   });
 
-  test("removes the tree when the dependency install times out", async () => {
-    const fx = await fixture({
-      bunResult: { stdout: "", stderr: "", exitCode: 143, timedOut: true },
-    });
+  test("removes the temporary directories when tar times out", async () => {
+    const fx = await fixture({ tarResult: TIMED_OUT });
 
     await create(fx, []).catch(() => undefined);
 
     expect(readdirSync(fx.tmpRoot)).toEqual([]);
   });
+});
+
+describe("createStaticCheckWorkspace sweeping stale workspaces", () => {
+  test("removes a leftover workspace not updated for more than six hours", async () => {
+    const fx = await fixture();
+    const stale = leftoverDir(fx, "factory-static-check-stale", 7 * HOUR_MS);
+
+    await createReady(fx, []);
+
+    expect(existsSync(stale)).toBe(false);
+  });
+
+  test("removes a leftover archive directory not updated for more than six hours", async () => {
+    const fx = await fixture();
+    const stale = leftoverDir(
+      fx,
+      "factory-static-check-archive-stale",
+      7 * HOUR_MS,
+    );
+
+    await createReady(fx, []);
+
+    expect(existsSync(stale)).toBe(false);
+  });
+
+  test("keeps a workspace updated within six hours", async () => {
+    const fx = await fixture();
+    const recent = leftoverDir(fx, "factory-static-check-recent", 5 * HOUR_MS);
+
+    await createReady(fx, []);
+
+    expect(existsSync(recent)).toBe(true);
+  });
+
+  test("keeps an old directory whose name lacks the prefix", async () => {
+    const fx = await fixture();
+    const other = leftoverDir(fx, "factory-check-other", 7 * HOUR_MS);
+
+    await createReady(fx, []);
+
+    expect(existsSync(other)).toBe(true);
+  });
+
+  test("keeps an old regular file whose name has the prefix", async () => {
+    const fx = await fixture();
+    const file = join(fx.tmpRoot, "factory-static-check-file");
+    writeFileSync(file, "left\n");
+    const time = new Date(NOW_MS - 7 * HOUR_MS);
+    utimesSync(file, time, time);
+
+    await createReady(fx, []);
+
+    expect(existsSync(file)).toBe(true);
+  });
+
+  test("keeps a symlink whose name has the prefix", async () => {
+    const fx = await fixture();
+    const link = join(fx.tmpRoot, "factory-static-check-link");
+    symlinkSync(fx.outside, link);
+
+    await createReady(fx, []);
+
+    expect(readdirSync(fx.tmpRoot)).toContain("factory-static-check-link");
+  });
+
+  test("keeps the target of a symlink whose name has the prefix", async () => {
+    const fx = await fixture();
+    symlinkSync(fx.outside, join(fx.tmpRoot, "factory-static-check-link"));
+
+    await createReady(fx, []);
+
+    expect(existsSync(join(fx.outside, "secret.txt"))).toBe(true);
+  });
+
+  test("does not sweep when it skips", async () => {
+    const fx = await fixture();
+    const stale = leftoverDir(fx, "factory-static-check-stale", 7 * HOUR_MS);
+
+    await create(fx, [{ path: "bun.lock", status: "modified" }]);
+
+    expect(existsSync(stale)).toBe(true);
+  });
+
+  // rootはディレクトリの権限に関わらず消せるので、消せない状態を作れない。
+  test.skipIf(process.getuid?.() === 0)(
+    "logs a leftover workspace that could not be removed",
+    async () => {
+      const fx = await fixture();
+      const stuck = leftoverDir(fx, "factory-static-check-stuck", 7 * HOUR_MS);
+      chmodSync(join(stuck, "inner"), 0o500);
+      lockedDirs.push(join(stuck, "inner"));
+
+      await createReady(fx, []);
+
+      expect(fx.warnings.map((warning) => warning.fields?.name)).toEqual([
+        "factory-static-check-stuck",
+      ]);
+    },
+  );
+
+  test.skipIf(process.getuid?.() === 0)(
+    "still creates the workspace when a leftover could not be removed",
+    async () => {
+      const fx = await fixture();
+      const stuck = leftoverDir(fx, "factory-static-check-stuck", 7 * HOUR_MS);
+      chmodSync(join(stuck, "inner"), 0o500);
+      lockedDirs.push(join(stuck, "inner"));
+
+      const workspace = await create(fx, []);
+
+      expect(workspace.kind).toBe("ready");
+    },
+  );
 });
