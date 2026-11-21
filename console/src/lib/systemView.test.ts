@@ -323,6 +323,10 @@ describe("resolverLabel", () => {
     expect(resolverLabel("watch_pr_conflicts")).toBe("PRの競合の監視(自動)");
   });
 
+  test("labels the deploy decision recorder as automatic", () => {
+    expect(resolverLabel("console_deploy_decide")).toBe("反映の判断(自動)");
+  });
+
   test("shows a person's name as plain text", () => {
     expect(resolverLabel("operator")).toBe("operator");
   });

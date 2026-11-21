@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DEPLOY_DECIDE_RESOLVER,
   type DeployDecideDeps,
   decideDeployRecorded,
   decidedNoticeMessage,
@@ -177,6 +178,17 @@ describe("decideDeployRecorded decisions", () => {
     ]);
   });
 
+  test("leaves an info notice of the decision on an approval", async () => {
+    const { deps: d, seen } = deps();
+    await decideDeployRecorded(SHA, "approve", d, RECORDING);
+    expect(seen.notices).toEqual([
+      {
+        kind: "deploy_approval_decided",
+        message: decidedNoticeMessage(SHA, "approved", "operator"),
+      },
+    ]);
+  });
+
   test("keeps the decision when the info notice cannot be recorded", async () => {
     const { deps: d } = deps({
       addNotice: () => Promise.reject(new Error("db down")),
@@ -231,6 +243,19 @@ describe("the entry point", () => {
     expect(source.slice(source.indexOf("export async function main("))).toMatch(
       /await decideDeployRecorded\(/,
     );
+  });
+
+  test("main records the decision notice as already resolved by the decision script", async () => {
+    const source = await Bun.file("f/factory/console_deploy_decide.ts").text();
+    const main = source.slice(source.indexOf("export async function main("));
+    expect(main).toMatch(
+      /addNotice: \(record\) =>\s*addResolvedNotice\(record, DEPLOY_DECIDE_RESOLVER\)/,
+    );
+    expect(main).not.toContain("addNoticeUnlessUnresolved");
+  });
+
+  test("the resolver is console_deploy_decide", () => {
+    expect(DEPLOY_DECIDE_RESOLVER).toBe("console_deploy_decide");
   });
 
   test("main writes the decision through the approvals module", async () => {

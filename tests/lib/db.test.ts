@@ -4,6 +4,7 @@ import { INFO_NOTICE_KINDS } from "../../f/factory/lib/console_support.ts";
 import {
   acquireImplementLease,
   addNoticeUnlessUnresolved,
+  addResolvedNotice,
   bumpWatermarks,
   claimIssueCreation,
   claimPrCiCheckForFix,
@@ -3325,6 +3326,38 @@ describe("fetchDeploymentRows", () => {
         SILENT_LOG,
       ),
     ).rejects.toThrow("db down");
+  });
+});
+
+describe("addResolvedNotice", () => {
+  const record = {
+    kind: "deploy_approval_decided",
+    message: "decided qdb body",
+  };
+
+  test("returns the id of the inserted row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 31 }]]);
+    expect(await addResolvedNotice(record, "console_deploy_decide", sql)).toBe(
+      31,
+    );
+  });
+
+  test("inserts the row as resolved with the resolver and the time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 31 }]]);
+    await addResolvedNotice(record, "console_deploy_decide", sql);
+    expect(calls[0]?.text).toContain(
+      "(kind, message, resolved, resolved_by, resolved_at)",
+    );
+  });
+
+  test("passes the kind, the message and the resolver as values", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 31 }]]);
+    await addResolvedNotice(record, "console_deploy_decide", sql);
+    expect(calls[0]?.values).toEqual([
+      "deploy_approval_decided",
+      "decided qdb body",
+      "console_deploy_decide",
+    ]);
   });
 });
 
