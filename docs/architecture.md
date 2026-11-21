@@ -296,6 +296,7 @@ migrationは追加だけにし、列やテーブルの名前は変えない。
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
 | `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード。実際に使われたモデルごとの内訳(`model_usage`)、失敗の種類(`failure_reason`)、PRレビューの起動のきっかけ(`trigger`)、注入したスキルの版(`skills`、`skill_clone_sha`)も持つ |
 | `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
+| `job_outage_skips` | GitHubへの通信断で見送った定期ジョブの回の記録。flowのパス、ジョブID、ルートジョブID、通信断で止まったstepを持つ。失敗(`job_failures`)とは別に数える。期限を過ぎた行はDBの掃除が消す([通信断の扱い](internals/notifications.md#githubへの通信断の扱い)) |
 | `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)、失敗の理由(`error`)も持つ。DBの掃除は、最後に成功した反映の行を、期限を過ぎても残す。反映の承認の判定が、その時刻を基準にするためである |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
 | `reviews` | pr_reviewの実行1回ごとの判定、修正必須の指摘の有無(`result`)、総評、指摘、投稿したレビューのID。レビューを生成したClaudeの実行(`agent_run_id`)も持つ |

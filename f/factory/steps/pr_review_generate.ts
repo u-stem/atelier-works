@@ -203,7 +203,14 @@ export async function main(
   // 空で続けても、未解決の`[MUST]`の誤判定は投稿ステップが一覧を読み直して防ぐ。
   // 変更ファイルの一覧は、`patch`の文字列を持たない形に分けて受ける。Claudeの実行のあいだ、大きな文字列を持たないためである。
   // GitHubが差分全体の提供を拒んだとき(2万行超)は、`patch`をつないだ差分に切り替える。
-  // その差分も、`patch`の文字列を持ち続けないよう、一覧を読んだ場所で作る。
+  // その差分は、拒まれたときだけ、`patch`の文字列を持ち続けないよう、一覧を読んだ場所で作る。
+  const diffRequest = getPrDiff(
+    client,
+    owner,
+    repo,
+    pr_number,
+    config.diff_max_lines,
+  );
   const [
     pr,
     fetchedDiff,
@@ -212,10 +219,13 @@ export async function main(
     listedThreads,
   ] = await Promise.all([
     getPr(client, owner, repo, pr_number),
-    getPrDiff(client, owner, repo, pr_number, config.diff_max_lines),
-    getPrFiles(client, owner, repo, pr_number).then((files) => ({
+    diffRequest,
+    getPrFiles(client, owner, repo, pr_number).then(async (files) => ({
       ...splitChangedFiles(files),
-      patchDiff: buildFilePatchDiff(files, config.diff_max_lines),
+      patchDiff:
+        (await diffRequest).kind === "ok"
+          ? null
+          : buildFilePatchDiff(files, config.diff_max_lines),
     })),
     getViewer(client),
     listReviewThreadsBestEffort(
@@ -228,7 +238,10 @@ export async function main(
       },
     ),
   ]);
-  const { prDiff, diffTooLarge } = selectReviewDiff(fetchedDiff, patchDiff);
+  const { prDiff, diffTooLarge } = selectReviewDiff(
+    fetchedDiff,
+    patchDiff ?? buildFilePatchDiff([], config.diff_max_lines),
+  );
   if (diffTooLarge) {
     log.warn("pr diff too large for GitHub, using per-file patches", {
       work_item_id,

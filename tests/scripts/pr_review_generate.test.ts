@@ -538,8 +538,13 @@ describe("diff hunks wiring in the generate step", () => {
 
   // patchの文字列を、Claudeの実行のあいだ持たないため、一覧を取った場所で分ける。
   test("splits the changed files right where the list is read", async () => {
+    expect(await SOURCE).toContain("      ...splitChangedFiles(files),\n");
+  });
+
+  // 拒まれていないPRでは、使わないpatchの差分を作らず、大きな文字列を持たない。
+  test("builds the patch diff only when the whole diff was refused", async () => {
     expect(await SOURCE).toContain(
-      "      ...splitChangedFiles(files),\n      patchDiff: buildFilePatchDiff(files, config.diff_max_lines),\n",
+      '        (await diffRequest).kind === "ok"\n          ? null\n          : buildFilePatchDiff(files, config.diff_max_lines),\n',
     );
   });
 });
@@ -558,7 +563,7 @@ describe("diff too large wiring in the generate step", () => {
     expect(
       count(
         await SOURCE,
-        "const { prDiff, diffTooLarge } = selectReviewDiff(fetchedDiff, patchDiff);",
+        "const { prDiff, diffTooLarge } = selectReviewDiff(\n    fetchedDiff,\n    patchDiff ?? buildFilePatchDiff([], config.diff_max_lines),\n  );",
       ),
     ).toBe(1);
   });

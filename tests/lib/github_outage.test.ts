@@ -15,12 +15,18 @@ import {
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
 
 const DETECTED_AT = new Date("2026-11-21T03:00:00Z");
+const RECOVERED_AT = new Date("2026-11-21T03:05:00Z");
 
 type Harness = {
   readonly notices: NoticeRecord[];
   readonly notified: NotifyEvent[];
   readonly skips: { flow_path: string; job_id: string; step: string | null }[];
-  readonly resolved: { kind: string; message: string; by: string }[];
+  readonly resolved: {
+    kind: string;
+    message: string;
+    by: string;
+    createdBefore: Date;
+  }[];
   readonly warnings: string[];
   readonly recorded: string[];
   readonly state: { reads: number; unresolved: boolean };
@@ -49,8 +55,8 @@ function harness(overrides: Partial<OutageDeps> = {}): Harness {
         notices.push(record);
         return notices.length;
       },
-      resolveNotices: async (kind, message, by) => {
-        resolved.push({ kind, message, by });
+      resolveNotices: async (kind, message, by, createdBefore) => {
+        resolved.push({ kind, message, by, createdBefore });
         const was = state.unresolved;
         state.unresolved = false;
         return was ? 1 : 0;
@@ -62,6 +68,7 @@ function harness(overrides: Partial<OutageDeps> = {}): Harness {
         notified.push(event);
       },
       readSuccessCount: () => state.reads,
+      lastReadSuccessAt: () => (state.reads > 0 ? RECOVERED_AT : null),
       now: () => DETECTED_AT,
       jobId: () => "job-1",
       ...overrides,
@@ -130,7 +137,21 @@ describe("an outage-only round", () => {
     ]);
   });
 
-  test("does not notify again while the event is unresolved (AC-004)", async () => {
+  test("notifies with the time of the first outage of the round (AC-011, FR-011)", async () => {
+    let tick = 0;
+    const h = harness({
+      now: () => new Date(DETECTED_AT.getTime() + tick++ * 60_000),
+    });
+    const round = roundOf(h);
+    await round.failure("a", unreachable(), recorder(h));
+    await round.failure("b", unreachable(), recorder(h));
+    await round.finish();
+    expect(Reflect.get(Object(h.notified[0]), "detected_at")).toBe(
+      DETECTED_AT.toISOString(),
+    );
+  });
+
+  test("does not notify again while the event is unresolved (AC-002, AC-003)", async () => {
     const h = harness();
     for (let i = 0; i < 3; i += 1) {
       const round = roundOf(h);
@@ -140,7 +161,7 @@ describe("an outage-only round", () => {
     expect([h.notices.length, h.notified.length]).toEqual([1, 1]);
   });
 
-  test("records one skip and no failure (AC-005, FR-005)", async () => {
+  test("records one skip and no failure (AC-004, FR-004)", async () => {
     const h = harness();
     const round = roundOf(h);
     await round.failure("list_issues", unreachable(), recorder(h));
@@ -300,8 +321,17 @@ describe("resolution (AC-007, AC-008, FR-007, FR-008)", () => {
         kind: GITHUB_UNREACHABLE_KIND,
         message: GITHUB_UNREACHABLE_MESSAGE,
         by: GITHUB_OUTAGE_RESOLVER,
+        createdBefore: RECOVERED_AT,
       },
     ]);
+  });
+
+  test("does not resolve without a time of the last successful read", async () => {
+    const h = harness({ lastReadSuccessAt: () => null });
+    const round = roundOf(h);
+    h.state.reads += 1;
+    await round.finish();
+    expect(h.resolved).toEqual([]);
   });
 
   test("does not resolve when the round read nothing", async () => {

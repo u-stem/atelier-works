@@ -3043,19 +3043,24 @@ export async function resolveNoticeIfUnresolved(
  * 解決者は`resolvedBy`、解決時刻は`now()`に記録し、解決した行数を返す。
  * 本文の一部が重なる別の対象(`review`と`review-fix`のようにラベル名が接頭辞になる場合など)に
  * 当たらないよう、前方一致ではなく完全一致で選ぶ。
+ * `createdBefore`を渡すと、その時刻より前に作ったnoticeだけを解決する。
+ * noticeの作成より後に起きた出来事を解決の根拠にするときに使う。
  */
 export async function resolveUnresolvedNoticesByMessage(
   kind: string,
   message: string,
   resolvedBy: string,
   sql: SqlClient = defaultSqlClient,
+  createdBefore: Date | null = null,
 ): Promise<number> {
+  const before = createdBefore === null ? null : createdBefore.toISOString();
   const rows = await sql`
     UPDATE factory.notices
     SET resolved = true, resolved_by = ${resolvedBy}, resolved_at = now()
     WHERE resolved = false
       AND kind = ${kind}
       AND message = ${message}
+      AND (${before}::timestamptz IS NULL OR created_at < ${before}::timestamptz)
     RETURNING id
   `.fetch();
   return rows.length;

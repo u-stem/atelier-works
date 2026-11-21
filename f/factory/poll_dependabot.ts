@@ -1434,7 +1434,7 @@ export async function main(): Promise<PollDependabotResult> {
     wmill.getResource("f/factory/factory_config"),
   );
   if (!config.dependabot_enabled) {
-    return pollDependabotWith(config, log, null);
+    return pollDependabotWith(config, log, null, "");
   }
   const discordWebhookUrl = await wmill.getVariable(
     "f/factory/discord_webhook_url",
@@ -1446,7 +1446,7 @@ export async function main(): Promise<PollDependabotResult> {
     webhookUrl: discordWebhookUrl,
   });
   return round.guard(
-    () => pollDependabotWith(config, log, round),
+    () => pollDependabotWith(config, log, round, discordWebhookUrl),
     OUTAGE_SKIPPED_RESULT,
   );
 }
@@ -1455,6 +1455,7 @@ function pollDependabotWith(
   config: FactoryConfig,
   log: Logger,
   round: OutageRound | null,
+  discordWebhookUrl: string,
 ): Promise<PollDependabotResult> {
   return pollDependabot({
     loadConfig: () => Promise.resolve(config),
@@ -1463,9 +1464,6 @@ function pollDependabotWith(
     now: () => Date.now(),
     open: async () => {
       const ghToken = await wmill.getVariable("f/factory/github_token");
-      const discordWebhookUrl = await wmill.getVariable(
-        "f/factory/discord_webhook_url",
-      );
       const client: GhClient = { ghToken };
       const viewer = await getViewer(client);
       const write = async (

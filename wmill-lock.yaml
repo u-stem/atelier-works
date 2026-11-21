@@ -79,7 +79,7 @@ locks:
   f/factory/lib/console_support: c4d4e49ca0e1e10beb995ad71272a249533cbdeaf89d6af8ac1802d50c474273
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
   f/factory/lib/credential_expiry: 6548ab169aa527c5708ba20d8de1bf43ae9535c19c03489aa8d9a0e2a0649683
-  f/factory/lib/db: b3f0f090de0c1b7f7edd040486f31dcc5c591d2a1bba1a8c148cacfe83433d81
+  f/factory/lib/db: 49dc07aca5ce0bb94b4154b8835453ce067d488dba01111575506e2433262bf1
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905
@@ -112,10 +112,10 @@ locks:
   f/factory/lib/gh_collect_read: 73c7075dc3f8dd186ea835bd9311d4719003170e374b065eee4b7f98ad7261b7
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: 7a104717ed9796498efc66dfe55d06d5d60fe6d6fe745debe772117116917e4c
-  f/factory/lib/github: 58b6867a840559d0b090258daab3e459a51863c277906c3b52276e484147e7bc
+  f/factory/lib/github: a5b3c10eccd51abff900a5eac3008b1554ab3264dd8424ebc2777f18d93fbb16
   f/factory/lib/github_errors: 7d0c3b35f8070d0e9df793cf0e2bd955c0e8c2d4989eb217b55c6e422b572f0a
-  f/factory/lib/github_http: 69a32766864d330617b503137331ee022382598d235a9658ebc7805a1b574771
-  f/factory/lib/github_outage: 5c9757f5020dd865313f4d776691cbef803e81dbb5b3b00963d322eb9747c738
+  f/factory/lib/github_http: 62f34d30365df26f0d2a5c515c3d5150d3140d0520e500e82437822c9e11ab8c
+  f/factory/lib/github_outage: 27f38d635dc5834a6cea07d3a8759f72e2315c66dba6be0e6c8ccf84e09a5d4a
   f/factory/lib/heartbeat: 0780343b32026cd007ea35b095340c0b7cb640fb2bab46eb8d213c0a5204673e
   f/factory/lib/history: e03f352947a704e79dec90c7f28eae2af373030054b29dd71f34b6e7abe1b23b
   f/factory/lib/holds: 2377c9840d17e626331e3450f97978bfa8fafa583d01b243a9073169aaad728c
@@ -211,7 +211,7 @@ locks:
   f/factory/notify_daily_summary: 21b932a29570e5ac7d637f2e9f2ff7388db16370beb21bb8fd27e65e00ba7bca
   f/factory/on_error_flow: 0e6bb73a7d8886c34318251d45a8ce5edd383ed2cf0e4b91b6c8dfbafb8bd557
   f/factory/pipeline__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
-  f/factory/poll_dependabot: bc7c0b27b1166a8f4bba426bfb4274be65965e38adcf896c6baf40ead7d750ae
+  f/factory/poll_dependabot: 69eb51a59a0b3a80b856b98507e0ec01a1ad8a4aa948a16f788c3f3daff68bce
   f/factory/poll_issues: 7c97765f9e5ee42abaaba324964dd7d055529eefd3dddce5c6a6706501de55ac
   f/factory/poll_prs: 7abfd0896202fe7a3c06169e4f22d076bb8b88db1ea2dbe0437b83aa21c71ae7
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -250,7 +250,7 @@ locks:
   f/factory/steps/pr_fix_finish: f68be3c415d377d59909f4336644b71b82d4c2569598cdae2edf15f7043a0398
   f/factory/steps/pr_fix_prepare: 87fef29118ebce97aacdc640c015eecfd9b9d02afcf53139eb397183774a7fcf
   f/factory/steps/pr_fix_verify: 00785be9ab25ec582273e49c7d91e798984bd504e529c99fa9aa355aca0565e1
-  f/factory/steps/pr_review_generate: 98180f95651b6a15251be9d3262ec53712a4176cd7b8acea643d8f7dc7d935bc
+  f/factory/steps/pr_review_generate: 7a2bca32dc2b98bb8a83b9b22d132e97b008a5d26ffdb9b03c5756342972ce00
   f/factory/steps/pr_review_intake_register: 144eb184b0a0b7124b2e90f398de97b85044bfb05a41e0d4359be645bef6b5b8
   f/factory/steps/pr_review_post: c00638949e45b2adf8f07a22d237b0454d6ae38c24c1f4d770e704ef56fe02c8
   f/factory/steps/pr_review_prepare: 005bdcacfb003e9dca2eb75cf72b6ce65ff97bd9039ed4d0aca44d6b9def4040
