@@ -750,6 +750,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/isolation_proof` | script | [LIB] 隔離の合格の証拠の型 |
 | `f/factory/lib/investigate_isolation_gate` | script | [LIB] 隔離の合格の関門 |
 | `f/factory/lib/investigate_isolation_observe` | script | [LIB] 隔離の観測でtranscriptから残す項目を取り出す |
+| `f/factory/lib/static_check_workspace` | script | [LIB] 静的検査の作業木 |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
 | `f/factory/console_holds` | script | [OP-0-2] 保留と凍結を取得 |
 | `f/factory/console_jobs` | script | [OP-0-3] ジョブの一覧と詳細を取得 |

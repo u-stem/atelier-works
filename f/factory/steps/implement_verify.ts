@@ -13,7 +13,11 @@ import {
   dailyBudgetStatus,
   runClaude,
 } from "../lib/claude.ts";
-import { implementCheckCommandsFor, loadConfig } from "../lib/config.ts";
+import {
+  implementCheckCommandsFor,
+  loadConfig,
+  staticCheckCommandsFor,
+} from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
   countImplementFailedRounds,
@@ -40,8 +44,10 @@ import {
   runDocDirGuardedRound,
   runImplementClaudeRound,
   runImplementVerifyLoop,
+  runStaticChecksInWorkspace,
 } from "../lib/implement_loop.ts";
 import {
+  CHECK_COMMAND_STOP_OVERHEAD_SEC,
   fixRoundWorstCaseSec,
   requireDeadlineAt,
 } from "../lib/implement_support.ts";
@@ -53,6 +59,7 @@ import {
 } from "../lib/process_lock.ts";
 import { implementFixPrompt } from "../lib/prompts.ts";
 import { skillsFor } from "../lib/skill_registry.ts";
+import { createStaticCheckWorkspace } from "../lib/static_check_workspace.ts";
 import { isShape, parseUntrustedArg } from "../lib/untrusted_arg.ts";
 import {
   assertWorktreeGitPointer,
@@ -129,6 +136,8 @@ export const IMPLEMENT_VERIFY_UNTRUSTED = isShape({
  * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。workerが検査の前提を満たさず検査を実行できなかったラウンドは記録しない。
  * 検査コマンドがあるときは、コンテナの分離なしで非特権のuidにより実行することを
  * noticeとして記録する。
+ * 保護パスを変えたラウンドでは、静的検査のコマンドがあれば、基準の版の木にPRの変更を重ねた一時の作業木で、
+ * 依存を入れてから静的検査を実行し、作業木は必ず消す。実行する前に、同じ形のnoticeを記録する。
  * 包んだ引数の`first_round.kind`が想定外なら、型ガードが断って例外を投げる。
  */
 export async function main(
@@ -157,11 +166,19 @@ export async function main(
     context.owner,
     context.repo,
   );
+  // 保護パスを変えたラウンドで、検証コマンドの代わりに実行する静的検査。
+  // 通常の検査と同じく、対象リポジトリに明示した項目だけを使う。
+  const staticCommands = staticCheckCommandsFor(
+    config,
+    context.owner,
+    context.repo,
+  );
   // 検査コマンドは、検査用の非特権uidに落として実行する。rootのまま実行することはしない。
+  // 静的検査も同じ枠で実行するので、通常の検査コマンドが無くても、静的検査があれば枠を作る。
   // 枠を片付けられずに飛ばしたときと、読めない枠の記録を退避したときは、検査を止めずにnoticeで知らせる。
   // 同じ状況が続いても検査のたびに積み上がらないよう、同じ本文の未解決のnoticeがあれば足さない。
   const checkSandbox =
-    commands.length > 0
+    commands.length > 0 || staticCommands.length > 0
       ? checkSandboxFromEnv(process.env, async (notice) => {
           await addNoticeUnlessUnresolved(notice);
         })
@@ -232,6 +249,43 @@ export async function main(
             checkSandbox,
             { workItemId: work_item_id },
           ),
+        // 静的検査は、基準の版の木(`ensureRepo`のcloneから取り出す)にPRの変更を重ねた一時の作業木で、基準の版の道具を実行する。
+        // PRのファイルは読むだけで、PRのコードは実行しない。作業木は通常の検査と同じ枠に渡し、非特権uidで実行する。
+        // 静的検査の全体は、時間の見積もりが数える検査コマンド1件分に収める。
+        runStaticChecks: (changes) =>
+          runStaticChecksInWorkspace({
+            commands: staticCommands,
+            budgetMs: config.implement_check_timeout_sec * 1000,
+            stopOverheadMs: CHECK_COMMAND_STOP_OVERHEAD_SEC * 1000,
+            createWorkspace: () =>
+              createStaticCheckWorkspace({
+                run: runCommand,
+                repoDir: context.repo_dir,
+                baseSha: context.base_sha,
+                worktreeDir,
+                changes,
+                log,
+              }),
+            // 通常の検査コマンドと同じ常設リスクの告知。静的検査を実際に実行するラウンドの前にだけ出す。
+            beforeRun: async () => {
+              await addNoticeUnlessUnresolved({
+                kind: "unsandboxed_check_commands",
+                message: `implement_verifyはこれから${String(staticCommands.length)}件の静的検査コマンドと依存の導入を、コンテナの分離なしで非特権の検査用ユーザーにより${context.owner}/${context.repo}#${String(context.issue_number)}の未検証コードに対して実行します。基準の版の道具で未検証のファイルを読むだけで、そのコードは実行しません(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
+              });
+            },
+            runCommands: (dir, commands, commandTimeoutMs) =>
+              runAllowedCheckCommands(
+                lockedRun,
+                dir,
+                commands,
+                commandTimeoutMs,
+                undefined,
+                undefined,
+                checkSandbox,
+                { workItemId: work_item_id },
+              ),
+            warn: (message, fields) => log.warn(message, fields),
+          }),
         runFixRound: async (request) => {
           // 直前のラウンドは記録済みなので、その失敗も数に入る。
           const sonnetFailures = await countImplementFailedRounds(
@@ -312,10 +366,15 @@ export async function main(
         maxRounds: config.implement_max_rounds,
         maxTurns: config.implement_max_turns,
         hasCheckCommands: commands.length > 0,
+        hasStaticCheckCommands: staticCommands.length > 0,
         firstRound: first_round,
         deadlineAt,
         fixRoundRequiredMs:
-          fixRoundWorstCaseSec(config, commands.length) * 1000,
+          fixRoundWorstCaseSec(
+            config,
+            commands.length,
+            staticCommands.length > 0,
+          ) * 1000,
       },
     );
   } finally {

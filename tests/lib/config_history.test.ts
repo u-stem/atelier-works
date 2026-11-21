@@ -171,6 +171,7 @@ describe("projectConfigValue: lists", () => {
 describe("projectConfigValue: items that carry commands, URLs or identities", () => {
   test.each([
     "check_commands_by_repo",
+    "static_check_commands_by_repo",
     "allowed_check_commands",
     "factory_repo",
     "windmill_public_url",
@@ -196,6 +197,19 @@ describe("projectConfigValue: items that carry commands, URLs or identities", ()
       output.includes("internal.example"),
       output.includes("curl"),
     ]).toEqual([false, false, false]);
+  });
+
+  test("never puts the raw value of the static check commands into the output", () => {
+    const raw = {
+      "octo-owner/private-repo": ["bun run scripts/internal-lint.ts"],
+    };
+    const output = JSON.stringify(
+      projectConfigValue("static_check_commands_by_repo", raw),
+    );
+    expect([
+      output.includes("private-repo"),
+      output.includes("internal-lint"),
+    ]).toEqual([false, false]);
   });
 
   test("gives the same hash whatever the order of the keys of a map", () => {

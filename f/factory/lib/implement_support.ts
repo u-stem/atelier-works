@@ -21,6 +21,7 @@ import {
 } from "./protected_paths.ts";
 import { extractSectionBody } from "./requirements_doc.ts";
 import { classifyChangedPaths } from "./self_update_support.ts";
+import { STATIC_CHECK_WORKSPACE_WORST_CASE_SEC } from "./static_check_workspace.ts";
 import {
   assertBranchName,
   type FactoryConfig,
@@ -359,6 +360,15 @@ export const IMPLEMENT_CHECK_SKIP_REASONS = {
   protected_paths: "保護パスを変更したため",
   no_commands: "検査コマンドが未設定のため",
 } as const;
+
+/**
+ * 保護パスを変えたラウンドで、静的検査の作業木を作らなかったときの、検証を実行しなかった理由を返す。
+ * `reason`は作業木を作らなかった理由(`createStaticCheckWorkspace`の`skipped`)である。
+ * `IMPLEMENT_CHECK_SKIP_REASONS`と同じく、PR本文、Discord、`implement_rounds.checks_skipped_reason`で使う。
+ */
+export function staticChecksSkippedReason(reason: string): string {
+  return `保護パスを変更し、静的検査も実行できなかったため(${reason})`;
+}
 
 // ---------------------------------------------------------------------------
 // truncateCheckOutput: `implement_rounds.check_output`には先頭と末尾を残す
@@ -1041,8 +1051,26 @@ export function requireDeadlineAt(value: unknown, nowMs: number): number {
 }
 
 /**
+ * 時間の見積もりで数える検査コマンドの数を返す。
+ * 保護パスのラウンドの静的検査があれば、その件数によらず1件として足す。
+ * 静的検査は、依存の導入と設定のコマンドを、検査コマンド1件分の打ち切りを等分して実行する(`staticCheckCommandTimeoutMs`)。
+ */
+function estimatedCheckCommandCount(
+  checkCommandCount: number,
+  hasStaticChecks: boolean,
+): number {
+  return checkCommandCount + (hasStaticChecks ? 1 : 0);
+}
+
+/** 静的検査があれば、その作業木の作成(`git archive`、`tar`、`git init`、`git add`)の最悪の所要時間(秒)を返す。無ければ0を返す。 */
+function staticWorkspaceSec(hasStaticChecks: boolean): number {
+  return hasStaticChecks ? STATIC_CHECK_WORKSPACE_WORST_CASE_SEC : 0;
+}
+
+/**
  * 修正ラウンド1回の最悪の所要時間(秒)を返す。
  * Claudeがimplement_timeout_secまで、gitleaksとgit・DBの操作が基礎の値まで、すべての検査コマンドがimplement_check_timeout_secと停止の上乗せまでかかった場合である。
+ * 静的検査(`hasStaticChecks`)があれば、検査コマンド1件分と、作業木の作成の時間(`STATIC_CHECK_WORKSPACE_WORST_CASE_SEC`)を足す。
  * 期限までの残りがこれ以上のときだけ修正ラウンドを始めるので、Claude・gitleaks・検査コマンドがそれぞれのtimeoutまでかかっても、条件を満たして始めたラウンドは期限までに終わる。
  * 例外は、不正な出力の後のClaudeの再試行1回で、これだけは期限までの残りで打ち切る。
  * 再試行したラウンドは、gitleaksと検査コマンドが期限を過ぎて動くことがある。
@@ -1055,12 +1083,14 @@ export function fixRoundWorstCaseSec(
     "implement_timeout_sec" | "implement_check_timeout_sec"
   >,
   checkCommandCount: number,
+  hasStaticChecks: boolean,
 ): number {
   return (
     config.implement_timeout_sec +
     IMPLEMENT_OVERRUN_BASE_SEC +
-    checkCommandCount *
-      (config.implement_check_timeout_sec + CHECK_COMMAND_STOP_OVERHEAD_SEC)
+    estimatedCheckCommandCount(checkCommandCount, hasStaticChecks) *
+      (config.implement_check_timeout_sec + CHECK_COMMAND_STOP_OVERHEAD_SEC) +
+    staticWorkspaceSec(hasStaticChecks)
   );
 }
 
@@ -1068,6 +1098,7 @@ export function fixRoundWorstCaseSec(
  * 実装フローの時間設定が、flow.yamlの実装・検証ステップのtimeoutに収まらなければ理由を返し、収まればnullを返す。
  * 検証ステップは、期限の直前に始まった最初のラウンドの検査部分を期限の後も走らせうる。
  * そのため、期限と、1ラウンド分のgitleaks・git・DB・検査コマンドの和で見積もる(git・DBの操作には個別の上限が無いので、和で余裕を取る)。
+ * 静的検査(`hasStaticChecks`)があれば、検査コマンド1件分と、作業木の作成の時間を足す。
  * Claude 1回は、期限の頭打ちが効かない場合でもステップに収まることを確かめる。
  * 理由は`describeReason`が"; "で分けないよう、セミコロンを含めない。
  */
@@ -1079,15 +1110,28 @@ export function implementTimeoutMisfit(
     | "implement_check_timeout_sec"
   >,
   checkCommandCount: number,
+  hasStaticChecks: boolean,
 ): string | null {
   const perCommand =
     config.implement_check_timeout_sec + CHECK_COMMAND_STOP_OVERHEAD_SEC;
+  const estimatedCount = estimatedCheckCommandCount(
+    checkCommandCount,
+    hasStaticChecks,
+  );
+  const workspaceSec = staticWorkspaceSec(hasStaticChecks);
   const verifyTotal =
     config.implement_flow_timeout_sec +
     IMPLEMENT_OVERRUN_BASE_SEC +
-    checkCommandCount * perCommand;
+    estimatedCount * perCommand +
+    workspaceSec;
   if (verifyTotal > IMPLEMENT_STEP_TIMEOUT_SEC) {
-    return `${IMPLEMENT_TIMEOUT_MISFIT_REASON}: implement_flow_timeout_sec ${String(config.implement_flow_timeout_sec)} + ${String(IMPLEMENT_OVERRUN_BASE_SEC)} + ${String(checkCommandCount)} check commands x (implement_check_timeout_sec ${String(config.implement_check_timeout_sec)} + ${String(CHECK_COMMAND_STOP_OVERHEAD_SEC)}) = ${String(verifyTotal)}s exceeds ${String(IMPLEMENT_STEP_TIMEOUT_SEC)}s`;
+    const breakdown = hasStaticChecks
+      ? ` (${String(checkCommandCount)} + 1 for the static checks)`
+      : "";
+    const workspace = hasStaticChecks
+      ? ` + ${String(workspaceSec)} for the static check workspace`
+      : "";
+    return `${IMPLEMENT_TIMEOUT_MISFIT_REASON}: implement_flow_timeout_sec ${String(config.implement_flow_timeout_sec)} + ${String(IMPLEMENT_OVERRUN_BASE_SEC)} + ${String(estimatedCount)} check commands${breakdown} x (implement_check_timeout_sec ${String(config.implement_check_timeout_sec)} + ${String(CHECK_COMMAND_STOP_OVERHEAD_SEC)})${workspace} = ${String(verifyTotal)}s exceeds ${String(IMPLEMENT_STEP_TIMEOUT_SEC)}s`;
   }
   const claudeTotal = config.implement_timeout_sec + IMPLEMENT_OVERRUN_BASE_SEC;
   if (claudeTotal > IMPLEMENT_STEP_TIMEOUT_SEC) {

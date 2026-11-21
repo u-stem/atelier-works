@@ -61,7 +61,7 @@
 | 時刻の項目(`*_enabled_since`) | ISO 8601の時刻。形に合わなければ伏せた印 |
 | 列挙の項目(モデル名、ラベル名、ブランチ名、投稿の形式など。表にある項目) | 60字までの英数字と`.`、`_`、`:`、`/`、`-`の文字列。形に合わない、参照を含む、秘密らしい語か秘密の形を含む文字列は、伏せた印(`{redacted: true}`) |
 | 要素が名前かURLの一覧(`repo_allowlist`、`dependabot_other_repos`、`default_reviewers`) | 件数だけ(`{count}`) |
-| コマンド、URL、リポジトリ、身元に関わる項目(`check_commands_by_repo`、`allowed_check_commands`、`factory_repo`、`factory_repo_id`、`windmill_public_url`、`owners`、`allowed_labeler_`で始まる項目) | 正規化したJSONのsha256の先頭16桁(`{hash}`)。変更後の側には、前後のハッシュが違うかを示す`changed`を付ける |
+| コマンド、URL、リポジトリ、身元に関わる項目(`check_commands_by_repo`、`static_check_commands_by_repo`、`allowed_check_commands`、`factory_repo`、`factory_repo_id`、`windmill_public_url`、`owners`、`allowed_labeler_`で始まる項目) | 正規化したJSONのsha256の先頭16桁(`{hash}`)。変更後の側には、前後のハッシュが違うかを示す`changed`を付ける |
 | 表に無い項目 | 値を入れず、`{kind: "unknown"}`だけにする |
 
 項目の種類に合わない型の値(旗に文字列など)も、値を入れず`{kind: "unknown"}`にする。

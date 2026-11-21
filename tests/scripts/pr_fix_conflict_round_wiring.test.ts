@@ -98,7 +98,7 @@ describe("the prepare step of a conflict round", () => {
     expect(
       count(
         text,
-        "    : conflictRound\n      ? conflictRoundTimeoutMisfit(config)",
+        "    : conflictRound\n      ? conflictRoundTimeoutMisfit(config, hasStaticChecks)",
       ),
     ).toBe(1);
   });

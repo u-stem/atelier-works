@@ -66,6 +66,11 @@ schema:
       description: 対象リポジトリ名。
       default: null
       originalType: string
+    repo_dir:
+      type: string
+      description: 対象リポジトリを展開した作業ディレクトリのパス。静的検査の作業木に、基準の版の木を取り出す。
+      default: null
+      originalType: string
     untrusted:
       type: string
       description: 修正の結果、指摘とコメントの本文、競合したファイルのパスと3つのblobのsha、PRのheadのブランチ名を、JSONの文字列に包んだもの。

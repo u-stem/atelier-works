@@ -54,7 +54,7 @@ import {
   runClaude,
 } from "../lib/claude.ts";
 import { recordClaudeRuns } from "../lib/claude_flow_failure.ts";
-import { loadConfig } from "../lib/config.ts";
+import { loadConfig, staticCheckCommandsFor } from "../lib/config.ts";
 import {
   CONFLICT_MERGE_NOT_RECORDED_REASON,
   CONFLICT_ROUND_DETAILS,
@@ -73,7 +73,12 @@ import {
 } from "../lib/db.ts";
 import { type GhClient, getPr, getPrFiles } from "../lib/github.ts";
 import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
-import { escapeReasonSeparator, logger } from "../lib/log.ts";
+import {
+  runStaticChecksInWorkspace,
+  type StaticCheckOutcome,
+  staticCheckResultName,
+} from "../lib/implement_loop.ts";
+import { errorMessage, escapeReasonSeparator, logger } from "../lib/log.ts";
 import { prFixRetryModel } from "../lib/model_policy.ts";
 import {
   fixDesignDepsFromDb,
@@ -91,6 +96,7 @@ import {
   fixPrompt,
 } from "../lib/prompts.ts";
 import { skillsFor } from "../lib/skill_registry.ts";
+import { createStaticCheckWorkspace } from "../lib/static_check_workspace.ts";
 import { type FixOutcome, type FixReply, isString } from "../lib/types.ts";
 import {
   isArrayOf,
@@ -115,7 +121,9 @@ import {
   isConflictBlobsShape,
   isFixClaudeOutput,
   isFixReplyShape,
+  listChangedPathsSinceBase,
   localHeadStopReason,
+  PR_COMMAND_STOP_OVERHEAD_SEC,
   PR_FIX_COLLECTED_SHAPE,
   PR_HEAD_NOT_RECORDED_REASON,
   recordedGitPointerStopReason,
@@ -138,7 +146,109 @@ export type PrFixVerifyResult = {
    * 完了のステップは、pushの直前に検査したツリーがこの値と同じであることを確かめる。
    */
   readonly verified_tree_sha?: string | null;
+  /**
+   * 最後に静的検査を実行しようとした回で、作業木を作らずに静的検査を飛ばした理由。
+   * 飛ばさなかったときと、静的検査が無いときは持たない。飛ばしても検証の失敗にはしない。
+   */
+  readonly static_checks_skipped_reason?: string;
 };
+
+/** PRが既定のブランチを向いておらず、信頼できる基準が無いときの、静的検査を飛ばす理由。 */
+export const STATIC_CHECK_NO_BASE_REASON =
+  "the pull request does not target the default branch, so no trusted base can check it";
+
+/** PRの基準をGitHubとgitから求められなかったときの、静的検査を飛ばす理由。 */
+export const STATIC_CHECK_BASE_UNRESOLVED_REASON =
+  "the base of the pull request could not be resolved";
+
+/** 準備のステップが対象リポジトリのcloneを記録しなかったときの、静的検査を飛ばす理由。 */
+export const STATIC_CHECK_NO_REPO_DIR_REASON =
+  "the clone of the repository was not recorded";
+
+/** 静的検査と検査コマンドを1回ずつ実行した結果。 */
+type PrFixChecksRun = {
+  /** 静的検査の結果(名前に`static: `を付ける)と、検査コマンドの結果。 */
+  readonly results: readonly CheckCommandResult[];
+  /** 実行ファイルを起動できなかった検査の理由。無ければnull。 */
+  readonly unrunnableReason: string | null;
+};
+
+/** `prFixChecksRunner`が使う依存。通常の回と競合回で共通である。 */
+type PrFixChecksDeps = {
+  readonly announceChecks: () => Promise<void>;
+  readonly runChecks: () => Promise<readonly CheckCommandResult[]>;
+  readonly runStaticChecks: () => Promise<
+    StaticCheckOutcome<CheckCommandResult>
+  >;
+  readonly warn: (message: string, fields: Record<string, unknown>) => void;
+};
+
+/**
+ * 静的検査と検査コマンドを、あるものだけ1回ずつ実行する関数を返す。
+ * 静的検査を先に実行する。静的検査は、変更の検査を通ったworktreeのファイルを読んで作業木に重ねるので、
+ * 対象リポジトリのコードを実行してworktreeを書き換えうる検査コマンドより前に読むためである。
+ * 静的検査の結果は、名前に`static: `を付けて、検査コマンドの結果の前に並べる。
+ * 実行できなかったかの判定は、コマンドの先頭の実行ファイルを見るので、名前を付け替える前の結果で行う。
+ * 静的検査が実行できなければ、検査コマンドは実行しない。
+ * 作業木を作らずに静的検査を飛ばしたときは、その理由を`warn`に出して覚え、失敗にはしない。
+ * `skippedReason`は、最後に静的検査を実行しようとした回で飛ばした理由を返す。実行した回の後はnullを返す。
+ * `announceChecks`は、検査コマンドを初めて実行する直前に1回だけ呼ぶ。
+ * workerが検査を実行できないときの`CheckEnvironmentError`は、そのまま投げる。
+ */
+function prFixChecksRunner(
+  deps: PrFixChecksDeps,
+  input: {
+    readonly hasCheckCommands: boolean;
+    readonly hasStaticCheckCommands: boolean;
+  },
+): {
+  readonly run: () => Promise<PrFixChecksRun>;
+  readonly skippedReason: () => string | null;
+} {
+  let announced = false;
+  let skippedReason: string | null = null;
+  const run = async (): Promise<PrFixChecksRun> => {
+    let staticResults: readonly CheckCommandResult[] = [];
+    if (input.hasStaticCheckCommands) {
+      const outcome = await deps.runStaticChecks();
+      if (outcome.kind === "skipped") {
+        skippedReason = outcome.reason;
+        deps.warn("static checks were skipped", { reason: outcome.reason });
+      } else {
+        skippedReason = null;
+        staticResults = outcome.results;
+      }
+    }
+    const staticUnrunnable = firstUnrunnableCheckReason(staticResults);
+    const named = staticResults.map((result) => ({
+      ...result,
+      command: staticCheckResultName(result.command),
+    }));
+    if (staticUnrunnable !== null || !input.hasCheckCommands) {
+      return { results: named, unrunnableReason: staticUnrunnable };
+    }
+    if (!announced) {
+      announced = true;
+      await deps.announceChecks();
+    }
+    const results = await deps.runChecks();
+    return {
+      results: [...named, ...results],
+      unrunnableReason: firstUnrunnableCheckReason(results),
+    };
+  };
+  return { run, skippedReason: () => skippedReason };
+}
+
+/** 静的検査を飛ばした理由があれば、結果に載せて返す。 */
+function withStaticChecksSkipped(
+  result: PrFixVerifyResult,
+  skippedReason: string | null,
+): PrFixVerifyResult {
+  return skippedReason === null
+    ? result
+    : { ...result, static_checks_skipped_reason: skippedReason };
+}
 
 /** 検査コマンドの失敗を添えたClaudeの再実行の結果。 */
 export type PrFixRetryResult =
@@ -200,6 +310,13 @@ export type PrFixVerifyDeps = {
   readonly inspectChanges: () => Promise<ForbiddenChangeResult>;
   /** `allowed_check_commands`を実行する。 */
   readonly runChecks: () => Promise<readonly CheckCommandResult[]>;
+  /**
+   * 静的検査(`staticCheckCommandsFor`)を、基準の版の木にworktreeの変更を重ねた一時の作業木で実行する。
+   * 静的検査のコマンドがあるときだけ呼ぶ。workerが検査を実行できなければ、`runChecks`と同じく`CheckEnvironmentError`を投げる。
+   */
+  readonly runStaticChecks: () => Promise<
+    StaticCheckOutcome<CheckCommandResult>
+  >;
   readonly budgetStatus: () => Promise<DailyBudgetStatus>;
   /** 検査の失敗を添えてClaudeの修正を1回だけ再実行する。 */
   readonly runRetry: (
@@ -212,7 +329,7 @@ export type PrFixVerifyDeps = {
    * hashだけを書き換えた変更には意味が無く、対象リポジトリのコードを実行する危険だけが残るためである。
    */
   readonly rehashVerified?: () => boolean;
-  /** `runChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。 */
+  /** `runChecks`か`runStaticChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。 */
   readonly reportCheckImageStale: (
     error: CheckEnvironmentError,
   ) => Promise<void>;
@@ -231,6 +348,8 @@ export type PrFixVerifyInput = {
   /** PRのheadブランチ。準備ステップの結果に無ければnullか空文字列。 */
   readonly branch: string | null;
   readonly hasCheckCommands: boolean;
+  /** 対象リポジトリに静的検査のコマンドがあるか(`staticCheckCommandsFor`)。 */
+  readonly hasStaticCheckCommands: boolean;
   /**
    * CIの失敗を直す回か。真のときは、返信を持つ結果を受け付けない。
    * 返信する指摘が無く、ログに仕込まれた指示で返信が投稿されるのを防ぐため。
@@ -258,7 +377,7 @@ export type PrFixVerifyInput = {
  * 検査が失敗したら、日次予算の範囲で、失敗の出力を添えてClaudeの修正を1回だけ追加で走らせ、
  * 変更の検査と検査コマンドをもう一度行う。それでも失敗するときは"blocked"にする。
  * 検査コマンドを実行するときは、変更の検査を通った後、最初の検査コマンドの直前に1回だけ`announceChecks`を呼ぶ。
- * 実行しない回(検査コマンドが無い、変更の検査で止めた、再計算の出力を照合できた)は、呼ばない。
+ * 実行しない回(検査コマンドが無い、変更の検査で止めた、再計算の出力を照合できた、静的検査が実行できなかった)は、呼ばない。
  * 「検査コマンドを未検証コードに実行する」という告知を、実行しない回に残さないためである。
  * workerが検査の前提を満たさず検査を実行できなければ(`CheckEnvironmentError`)、`reportCheckImageStale`で知らせ、
  * Claudeを再実行せずに"guard_blocked"にする。Claudeが直せる検査の失敗ではないので、
@@ -267,10 +386,26 @@ export type PrFixVerifyInput = {
  * workerの環境の問題で、Claudeに直させても変わらないためである。
  * `assertGitPointer`が`WorktreeGitPointerModifiedError`以外を投げたときは、そのまま投げる。
  * CIの失敗を直す回(`input.ciRound`)は、返信を持つ結果(修正の結果と再実行の結果)を、検査より前に"blocked"にする。
+ * 静的検査のコマンドがあれば、検査コマンドを実行する場面ごとに、その前に静的検査を実行する(`prFixChecksRunner`)。
+ * 検査コマンドが無くても、静的検査があれば実行する。静的検査の失敗は、検査コマンドの失敗と同じく再実行に回す。
+ * 作業木を作らずに静的検査を飛ばしたときは失敗にせず、その理由を結果の`static_checks_skipped_reason`に載せる。
  */
 export async function runPrFixVerify(
   deps: PrFixVerifyDeps,
   input: PrFixVerifyInput,
+): Promise<PrFixVerifyResult> {
+  const checks = prFixChecksRunner(deps, input);
+  return withStaticChecksSkipped(
+    await verifyPrFix(deps, input, checks.run),
+    checks.skippedReason(),
+  );
+}
+
+/** `runPrFixVerify`の本体。`runAllChecks`は、静的検査と検査コマンドを1回ずつ実行する。 */
+async function verifyPrFix(
+  deps: PrFixVerifyDeps,
+  input: PrFixVerifyInput,
+  runAllChecks: () => Promise<PrFixChecksRun>,
 ): Promise<PrFixVerifyResult> {
   const blocked = (
     reason: string,
@@ -338,16 +473,17 @@ export async function runPrFixVerify(
     commit_subject: input.apply.commitSubject,
     commit_body: input.apply.commitBody,
   };
-  if (!input.hasCheckCommands) return applyDone;
+  if (!input.hasCheckCommands && !input.hasStaticCheckCommands) {
+    return applyDone;
+  }
   if (ciRound && deps.rehashVerified?.() === true) return applyDone;
-  await deps.announceChecks();
 
-  /** 検査コマンドを実行する。workerが前提を満たさず実行できなければ、知らせてからその例外を返す。 */
+  /** 静的検査と検査コマンドを実行する。workerが前提を満たさず実行できなければ、知らせてからその例外を返す。 */
   const runChecks = async (): Promise<
-    readonly CheckCommandResult[] | CheckEnvironmentError
+    PrFixChecksRun | CheckEnvironmentError
   > => {
     try {
-      return await deps.runChecks();
+      return await runAllChecks();
     } catch (error) {
       if (!(error instanceof CheckEnvironmentError)) throw error;
       await deps.reportCheckImageStale(error);
@@ -387,15 +523,14 @@ export async function runPrFixVerify(
       input.apply.replies,
     );
   }
-  const firstUnrunnable = firstUnrunnableCheckReason(firstChecks);
-  if (firstUnrunnable !== null) {
+  if (firstChecks.unrunnableReason !== null) {
     return await guardedUnrunnable(
-      firstUnrunnable,
+      firstChecks.unrunnableReason,
       input.apply.summary,
       input.apply.replies,
     );
   }
-  if (firstChecks.every((result) => result.ok)) {
+  if (firstChecks.results.every((result) => result.ok)) {
     const afterChecksReason = await inspect();
     return afterChecksReason === null
       ? applyDone
@@ -427,7 +562,7 @@ export async function runPrFixVerify(
     return blocked(beforeRetryReason, input.apply.summary, input.apply.replies);
   }
   const retry = await deps.runRetry(
-    firstChecks
+    firstChecks.results
       .filter((result) => !result.ok)
       .map((result) => ({
         command: result.command,
@@ -479,15 +614,14 @@ export async function runPrFixVerify(
   if (secondChecks instanceof CheckEnvironmentError) {
     return unrunnable(secondChecks.message, output.summary, output.replies);
   }
-  const secondUnrunnable = firstUnrunnableCheckReason(secondChecks);
-  if (secondUnrunnable !== null) {
+  if (secondChecks.unrunnableReason !== null) {
     return await guardedUnrunnable(
-      secondUnrunnable,
+      secondChecks.unrunnableReason,
       output.summary,
       output.replies,
     );
   }
-  if (!secondChecks.every((result) => result.ok)) {
+  if (!secondChecks.results.every((result) => result.ok)) {
     return blocked(
       "repository checks still failing after one automated fix retry",
       output.summary,
@@ -530,10 +664,14 @@ export type ConflictFixVerifyDeps = {
   }>;
   /** `allowed_check_commands`を実行する。 */
   readonly runChecks: () => Promise<readonly CheckCommandResult[]>;
+  /** 静的検査を実行する。`PrFixVerifyDeps`の`runStaticChecks`と同じである。 */
+  readonly runStaticChecks: () => Promise<
+    StaticCheckOutcome<CheckCommandResult>
+  >;
   /** 止める理由の文字列の秘密値の検査。 */
   readonly scanText: CiTextScanner;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
-  /** `runChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。 */
+  /** `runChecks`か`runStaticChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。 */
   readonly reportCheckImageStale: (
     error: CheckEnvironmentError,
   ) => Promise<void>;
@@ -547,6 +685,8 @@ export type ConflictFixVerifyInput = {
   /** PRのheadブランチ。 */
   readonly branch: string | null;
   readonly hasCheckCommands: boolean;
+  /** 対象リポジトリに静的検査のコマンドがあるか(`staticCheckCommandsFor`)。 */
+  readonly hasStaticCheckCommands: boolean;
   /** `pr_fix_apply.ts`が"done"で返した結果。 */
   readonly apply: {
     readonly summary: string;
@@ -571,10 +711,26 @@ export type ConflictFixVerifyInput = {
  * 検査コマンドの実行ファイルを起動できなかったときも、環境の問題なので"guard_blocked"にする。
  * workerが検査の前提を満たさず検査を実行できなければ、`reportCheckImageStale`で知らせ、"guard_blocked"にする。
  * 理由は例外の文のまま返す。接頭辞を付けると、イメージが古いことを示す理由の接頭辞が崩れ、自動の再開と回数の除外が働かなくなる。
+ * 静的検査のコマンドがあれば、検査コマンドの前に静的検査を実行する(`prFixChecksRunner`)。検査コマンドが無くても実行する。
+ * 静的検査の失敗は、検査コマンドの失敗と同じく固定の理由で"blocked"にする。
+ * 作業木を作らずに静的検査を飛ばしたときは失敗にせず、その理由を結果の`static_checks_skipped_reason`に載せる。
  */
 export async function runConflictFixVerify(
   deps: ConflictFixVerifyDeps,
   input: ConflictFixVerifyInput,
+): Promise<PrFixVerifyResult> {
+  const checks = prFixChecksRunner(deps, input);
+  return withStaticChecksSkipped(
+    await verifyConflictFix(deps, input, checks.run),
+    checks.skippedReason(),
+  );
+}
+
+/** `runConflictFixVerify`の本体。`runAllChecks`は、静的検査と検査コマンドを1回ずつ実行する。 */
+async function verifyConflictFix(
+  deps: ConflictFixVerifyDeps,
+  input: ConflictFixVerifyInput,
+  runAllChecks: () => Promise<PrFixChecksRun>,
 ): Promise<PrFixVerifyResult> {
   const { summary } = input.apply;
   const blocked = (reason: string): PrFixVerifyResult => ({
@@ -637,18 +793,17 @@ export async function runConflictFixVerify(
   const firstReason = await inspect();
   if (firstReason !== null) return blocked(firstReason);
   const treeBeforeChecks = verifiedTreeSha;
-  if (!input.hasCheckCommands) return done();
-  await deps.announceChecks();
+  if (!input.hasCheckCommands && !input.hasStaticCheckCommands) return done();
 
   let results: readonly CheckCommandResult[];
+  let unrunnableReason: string | null;
   try {
-    results = await deps.runChecks();
+    ({ results, unrunnableReason } = await runAllChecks());
   } catch (error) {
     if (!(error instanceof CheckEnvironmentError)) throw error;
     await deps.reportCheckImageStale(error);
     return { ...blocked(error.message), outcome: "guard_blocked" };
   }
-  const unrunnableReason = firstUnrunnableCheckReason(results);
   if (unrunnableReason !== null) {
     // 理由は検査コマンドの出力を含むので、他の理由と同じく外へ出す前に秘密値を検査する。
     const [safe] = await guardCiRoundReasons([unrunnableReason], deps.scanText);
@@ -694,6 +849,11 @@ export const PR_FIX_VERIFY_UNTRUSTED = isShape({
  * 準備ステップの結果にこれらが無いときは渡らないので、既定をnullにして"blocked"で止める。
  * CIの失敗を直す回(`ci_check_id`が非NULL)は、通常の回の検査に加えて、変更を許可リスト方式で検査する(`inspectCiFixChanges`)。
  * 検査コマンドの後は、無視されたファイルを消す。再実行は、CIのログの抜粋を取り直して渡す(`runCiRetry`)。
+ * 静的検査のコマンドがあれば、基準の版の木(`repo_dir`のcloneから取り出す)にworktreeの変更を重ねた一時の作業木で、
+ * 依存を入れてから静的検査を実行し、作業木は必ず消す。実行する前に、検査コマンドと同じ形のnoticeを記録する。
+ * 基準は、通常の回とCI回がPRのbaseの先端とPRのheadのmerge-base、競合回がmergeしたbaseの先端(`base_sha`)である。
+ * PRが既定のブランチを向いていないとき、基準を求められなかったとき、`repo_dir`が無いときは、静的検査を飛ばす。
+ * 静的検査の作業木はPRのworktreeとは別なので、pushしてよいかの判定(禁止された変更の検査)には関わらない。
  */
 export async function main(
   work_item_id: number,
@@ -713,6 +873,7 @@ export async function main(
   baseline_sha: string | null = null,
   base_sha: string | null = null,
   auto_tree_sha: string | null = null,
+  repo_dir: string | null = null,
 ): Promise<PrFixVerifyResult> {
   // 修正の結果(Claudeの出力)と、外から来た文字列は、flowがJSONの文字列に包んで渡す。
   const {
@@ -764,7 +925,7 @@ export async function main(
     })();
     return prChangedPathsRead;
   };
-  // テストの変更が、PRの基点から持っていた行を消していないかの基準。最初に要るときに1回だけ求める。
+  // テストの変更が、PRの基点から持っていた行を消していないかの基準。通常の回とCI回の静的検査の基準にも使う。最初に要るときに1回だけ求める。
   // 既定のブランチを向いていないPRはnullになり、検査は基点の行を消したものとして拒否に倒れる。
   // APIやgitの失敗は例外にする。ステップが失敗し、回復が行を保留なしで戻して、回数の上限の範囲で起動し直す。
   let prBaseResolved: Promise<PrBase | null> | null = null;
@@ -837,11 +998,14 @@ export async function main(
   let rehashVerified = false;
 
   const timeoutMs = config.claude_timeout_sec * 1000;
+  // 検査コマンドに加えて実行する静的検査。通常の検査コマンドと違い、対象リポジトリに明示した項目だけを使う。
+  const staticCommands = staticCheckCommandsFor(config, owner, repo);
   // 検査コマンドは、検査用の非特権uidに落として実行する。rootのまま実行することはしない。
+  // 静的検査も同じ枠で実行するので、通常の検査コマンドが無くても、静的検査があれば枠を作る。
   // 枠を片付けられずに飛ばしたときと、読めない枠の記録を退避したときは、検査を止めずにnoticeで知らせる。
   // 同じ状況が続いても検査のたびに積み上がらないよう、同じ本文の未解決のnoticeがあれば足さない。
   const checkSandbox =
-    config.allowed_check_commands.length > 0
+    config.allowed_check_commands.length > 0 || staticCommands.length > 0
       ? checkSandboxFromEnv(process.env, async (notice) => {
           await addNoticeUnlessUnresolved(notice);
         })
@@ -890,6 +1054,58 @@ export async function main(
       });
     }
     return results;
+  };
+  // 静的検査は、基準の版の木(`repo_dir`のcloneから取り出す)にworktreeの変更を重ねた一時の作業木で、基準の版の道具を実行する。
+  // PRのファイルは読むだけで、PRのコードは実行しない。作業木は通常の検査と同じ枠に渡し、非特権uidで実行する。
+  // 基準はmainの履歴にあるcommitに限る。基準の版の道具と設定を、信頼できる版にするためである。
+  // `baseSha`がnullのときは、その理由`noBaseReason`で飛ばす。
+  const runStaticChecks = async (
+    baseSha: string | null,
+    noBaseReason: string,
+  ): Promise<StaticCheckOutcome<CheckCommandResult>> => {
+    if (repo_dir === null || repo_dir.length === 0) {
+      return { kind: "skipped", reason: STATIC_CHECK_NO_REPO_DIR_REASON };
+    }
+    if (baseSha === null) return { kind: "skipped", reason: noBaseReason };
+    const repoDir = repo_dir;
+    // 静的検査の全体は、時間の見積もりが数える検査コマンド1件分に収める。
+    return await runStaticChecksInWorkspace({
+      commands: staticCommands,
+      budgetMs: timeoutMs,
+      stopOverheadMs: PR_COMMAND_STOP_OVERHEAD_SEC * 1000,
+      createWorkspace: async () =>
+        createStaticCheckWorkspace({
+          run: runCommand,
+          repoDir,
+          baseSha,
+          worktreeDir: worktree_dir,
+          changes: await listChangedPathsSinceBase(
+            runCommand,
+            worktree_dir,
+            baseSha,
+          ),
+          log,
+        }),
+      // 検査コマンドと同じ常設リスクの告知。静的検査を実際に実行する回の前にだけ出す。
+      beforeRun: async () => {
+        await addNoticeUnlessUnresolved({
+          kind: "unsandboxed_check_commands",
+          message: `pr_fix_verifyはこれから${String(staticCommands.length)}件の静的検査コマンドと依存の導入を、コンテナの分離なしで非特権の検査用ユーザーにより${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します。基準の版の道具で未検証のファイルを読むだけで、そのコードは実行しません(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
+        });
+      },
+      runCommands: (dir, commands, commandTimeoutMs) =>
+        runAllowedCheckCommands(
+          lockedRun,
+          dir,
+          commands,
+          commandTimeoutMs,
+          undefined,
+          undefined,
+          checkSandbox,
+          { workItemId: work_item_id },
+        ),
+      warn: (message, fields) => log.warn(message, { work_item_id, ...fields }),
+    });
   };
 
   if (conflict_check_id !== null) {
@@ -948,6 +1164,9 @@ export async function main(
             autoTreeSha,
           }),
         runChecks: runChecksAndCleanIgnored,
+        // 競合回の基準は、準備のステップがmergeした既定のブランチの先端である。
+        runStaticChecks: () =>
+          runStaticChecks(base_sha, CONFLICT_MERGE_NOT_RECORDED_REASON),
         scanText: ciTextScanner(runCommand),
         warn: (message, fields) =>
           log.warn(message, { work_item_id, ...fields }),
@@ -958,6 +1177,7 @@ export async function main(
         baselineSha,
         branch,
         hasCheckCommands: config.allowed_check_commands.length > 0,
+        hasStaticCheckCommands: staticCommands.length > 0,
         apply: {
           summary: apply_summary,
           replies: apply_replies,
@@ -1044,6 +1264,25 @@ export async function main(
           });
         }
         return results;
+      },
+      // 通常の回とCI回の基準は、PRのbaseの先端とPRのheadのmerge-baseである。基準の行の判定と同じ値を使う。
+      // 基準を求められなかったときは、静的検査を飛ばし、禁止された変更の検査と検査コマンドで検証を続ける。
+      // CI回の変更の検査が同じ基準を要るときは、その失敗はそちらで例外になる。
+      runStaticChecks: async () => {
+        let mergeBase: string | null;
+        try {
+          mergeBase = (await resolvePrBaseOnce())?.mergeBase ?? null;
+        } catch (error) {
+          log.warn("the base of the static checks could not be resolved", {
+            work_item_id,
+            error: errorMessage(error),
+          });
+          return {
+            kind: "skipped",
+            reason: STATIC_CHECK_BASE_UNRESOLVED_REASON,
+          };
+        }
+        return await runStaticChecks(mergeBase, STATIC_CHECK_NO_BASE_REASON);
       },
       budgetStatus: () => dailyBudgetStatus(config),
       runRetry: async (checkFailures) => {
@@ -1166,6 +1405,7 @@ export async function main(
       headSha: head_sha,
       branch,
       hasCheckCommands: config.allowed_check_commands.length > 0,
+      hasStaticCheckCommands: staticCommands.length > 0,
       ciRound,
       apply: {
         summary: apply_summary,

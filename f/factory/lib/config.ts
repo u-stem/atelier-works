@@ -116,7 +116,8 @@ type DefaultableField =
   | "gh_collect_detail_enabled"
   | "worker_alert_memory_ratio"
   | "credential_warn_days"
-  | "check_commands_by_repo";
+  | "check_commands_by_repo"
+  | "static_check_commands_by_repo";
 
 /**
  * `DefaultableField`の各項目の既定値。
@@ -213,6 +214,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   // 資格情報の期限の通知は、期限の30日前から出す。
   credential_warn_days: 30,
   check_commands_by_repo: {},
+  // 静的検査は、実装フローの保護パスを変えたラウンドと、PR修正フローの検証で実行する。反映後に実ジョブで確かめてから、リモートのリソースで有効にする。
+  static_check_commands_by_repo: {},
 };
 
 /** `owners`の1要素の`kind`に使える値か。 */
@@ -663,7 +666,8 @@ function booleanField(
 }
 
 /**
- * `raw.check_commands_by_repo`を`{ [owner/repo]: string[] }`として返す。
+ * `raw[field]`(`check_commands_by_repo`か`static_check_commands_by_repo`)を
+ * `{ [owner/repo]: string[] }`として返す。
  * 値が無ければ`fallback`を返す。
  * オブジェクトでないとき、値に文字列の配列でないものがあるとき、
  * キーを`normalizeRepoUrl`で正規化しても`owner/repo`の形にならないときは例外を投げる。
@@ -675,9 +679,9 @@ function booleanField(
  */
 function checkCommandsByRepoField(
   raw: Record<string, unknown>,
+  field: "check_commands_by_repo" | "static_check_commands_by_repo",
   fallback: Record<string, string[]>,
 ): Record<string, string[]> {
-  const field = "check_commands_by_repo";
   const value = raw[field];
   if (value === undefined) {
     return fallback;
@@ -1127,7 +1131,13 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     ),
     check_commands_by_repo: checkCommandsByRepoField(
       raw,
+      "check_commands_by_repo",
       DEFAULTS.check_commands_by_repo,
+    ),
+    static_check_commands_by_repo: checkCommandsByRepoField(
+      raw,
+      "static_check_commands_by_repo",
+      DEFAULTS.static_check_commands_by_repo,
     ),
   };
 }
@@ -1243,6 +1253,42 @@ export function implementCheckCommandsFor(
     }
   }
   return [];
+}
+
+/**
+ * 静的検査のコマンドを返す。実装フローは保護パスを変えたラウンドで、PR修正フローは検証で、検査コマンドの前に実行する。
+ * そのリポジトリを明示した`static_check_commands_by_repo`のエントリーだけを使い
+ * (キーの照合は`implementCheckCommandsFor`と同じ)、無ければ`[]`を返す。
+ * `allowed_check_commands`にも`check_commands_by_repo`にも、フォールバックしない。
+ * 静的検査はmainのツールでPRのファイルを読むだけで、PRのコードを実行しない。
+ * 通常の検査コマンドとは、実行する対象も有効にする判断も別である。
+ */
+export function staticCheckCommandsFor(
+  config: Pick<FactoryConfig, "static_check_commands_by_repo">,
+  owner: string,
+  repo: string,
+): string[] {
+  const target = normalizeRepoUrl(`${owner}/${repo}`);
+  for (const [key, commands] of Object.entries(
+    config.static_check_commands_by_repo,
+  )) {
+    if (normalizeRepoUrl(key) === target) {
+      return commands;
+    }
+  }
+  return [];
+}
+
+/**
+ * どれかのリポジトリに静的検査のコマンドがあるかを返す。
+ * リポジトリを決めずに設定全体で1つに決める判断(起動の前の保留)で、静的検査を数えるのに使う。
+ */
+export function hasAnyStaticCheckCommands(
+  config: Pick<FactoryConfig, "static_check_commands_by_repo">,
+): boolean {
+  return Object.values(config.static_check_commands_by_repo).some(
+    (commands) => commands.length > 0,
+  );
 }
 
 /**

@@ -75,6 +75,7 @@ schema:
     - worker_alert_memory_ratio
     - credential_warn_days
     - check_commands_by_repo
+    - static_check_commands_by_repo
   properties:
     allowed_check_commands:
       type: array
@@ -121,6 +122,15 @@ schema:
       type: object
       description: >-
         リポジトリ別の検査コマンドです。キーは`<owner>/<repo>`(大文字小文字は区別しない)、値はそのリポジトリの実装(工程3)で実行するコマンドの配列です。エントリが無いリポジトリでは検査コマンドを実行しません(`allowed_check_commands`は使いません)。検査コマンドはClaudeが書いたコードを隔離なしで実行するため、Issueを信頼できる人だけが起票するリポジトリだけに設定してください。
+      default: {}
+      additionalProperties:
+        type: array
+        items:
+          type: string
+    static_check_commands_by_repo:
+      type: object
+      description: >-
+        リポジトリ別の静的検査のコマンドです。キーは`<owner>/<repo>`(大文字小文字は区別しない)、値はそのリポジトリで実行するコマンドの配列です。実装では保護パスを変えたラウンドに、PRの修正では検証のたびに実行します。エントリが無いリポジトリでは静的検査を実行しません(`allowed_check_commands`と`check_commands_by_repo`は使いません)。mainの版のツールでPRのファイルを読む検査(lintや型検査)だけを書き、PRのコードを実行するコマンド(`bun test`など)は書かないでください。書けるのは、Biome、tsc、`bun run scripts/...`のうち、importの閉包を確かめたものだけです。重ねない一覧に無いツールの設定ファイルは、PRの版になります。
       default: {}
       additionalProperties:
         type: array
