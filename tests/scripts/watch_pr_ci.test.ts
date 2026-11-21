@@ -69,7 +69,7 @@ describe("watch_pr_ci claim deps", () => {
     test("counts the static checks when a repository has them", () => {
       const config = parseFactoryConfig({
         ...RAW_CONFIG,
-        claude_timeout_sec: 2000,
+        claude_timeout_sec: 1800,
         allowed_check_commands: ["a", "b", "c"],
         static_check_commands_by_repo: {
           "octo-owner/widgets": ["bunx --bun biome check ."],

@@ -97,7 +97,9 @@ description: >-
 #     時間を等分して打ち切る。
 #     ここに書いたリポジトリだけで実行し、`allowed_check_commands`と
 #     `check_commands_by_repo`は使わない。PRのコードを実行するコマンド
-#     (`bun test`など)は書かない。
+#     (`bun test`など)は書かない。書けるのは、Biome、tsc、
+#     `bun run scripts/...`のうち、importの閉包を確かめたものだけ。
+#     重ねない一覧に無いツールの設定ファイルは、PRの版になる。
 #   implement_timeout_sec: 3600
 #     Claude Codeの1回の実行を打ち切るまでの制限時間(秒)。
 #   implement_check_timeout_sec: 900

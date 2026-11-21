@@ -372,16 +372,20 @@ worker imageにmiseは無いので、検査コマンドはworkerで直接動く�
 
 1. 依存の導入と設定のコマンドの、1件あたりの打ち切りを決める([静的検査の時間](#静的検査の時間))。
    下限の30秒に届かなければ、作業木を作らず、静的検査を飛ばす。
-2. 依存のファイルか、検査が実行する側のファイルをPRが変えていれば、作業木を作らず、静的検査を飛ばす。
-   作業木に安全に写せない名前(絶対パス、`..`、バックスラッシュ、不可視文字、NFKCで形の変わる文字など)の変更があるときも、同じく飛ばす。
+2. 依存のファイル、検査が実行する側のファイル、静的検査が固定しない道具の設定をPRが変えていれば、作業木を作らず、静的検査を飛ばす。
+   作業木に安全に写せない名前(絶対パス、`..`、`.git`の要素、バックスラッシュ、不可視文字、NFKCで形の変わる文字など)の変更があるときも、同じく飛ばす。
+   作業木の直下で、gitがgitのディレクトリとして読む名前(`HEAD`、`config`、`objects`、`refs`など)の変更があるときも、同じく飛ばす。
 3. 比較の基準(`base_sha`)の木を、`git archive`で`/tmp`の下の`factory-static-check-`で始まるディレクトリ(作業木)に展開する。
-   `.git`は持ち込まないので、gitのフックと設定を読まない。
+   cloneの`.git`は持ち込まないので、cloneのフックと設定を読まない。
 4. PRの変更ファイルを、作業木に重ねる。
-5. 通常の検査と同じ枠の中で、`bun install --frozen-lockfile --ignore-scripts`を実行する。
+5. 作業木に新しい`.git`を作り、作業木のファイルを索引に入れる。
+   検査のスクリプトが`git ls-files`で対象を列挙するためである。
+   作り方は[静的検査の作業木](check-sandbox.md#静的検査の作業木)にある。
+6. 通常の検査と同じ枠の中で、`bun install --frozen-lockfile --ignore-scripts`を実行する。
    失敗したら、設定のコマンドを実行せず、静的検査を飛ばす。
    実行ファイルを起動できなかったときは、検査コマンドを起動できなかったときと同じに扱う。
-6. 設定のコマンドを順に実行する。
-7. 作業木を消す。
+7. 設定のコマンドを順に実行する。
+8. 作業木を消す。
    消せなかったときは警告だけを出し、次に作業木を作るときの掃除が片付ける。
 
 安全に写せない名前のパスだけを重ねずに検査すると、作業木がPRの版と食い違う。
@@ -392,12 +396,21 @@ worker imageにmiseは無いので、検査コマンドはworkerで直接動く�
 worktreeに無いファイルは、作業木からも消す。
 symlinkとディレクトリは重ねない。
 次のファイルは、PRの版を使わない。
-一覧は`STATIC_CHECK_NOT_OVERLAID`にあり、`tests/lib/static_check_workspace.test.ts`が固定する。
+一覧は3つの定数にある。
+`STATIC_CHECK_NOT_OVERLAID`、`STATIC_CHECK_UNCHECKED_CONFIG_PATTERNS`、`STATIC_CHECK_GITDIR_NAMES`である。
+`tests/lib/static_check_workspace.test.ts`が、3つを固定する。
+同じテストが、実装の保護パスのファイル名の規則(`IMPLEMENT_PROTECTED_BASENAME_PATTERNS`)ごとに、扱いを固定する。
+扱いは、静的検査を飛ばすか、mainの版を使うか、PRの版を重ねるかのどれかである。
+規則を足すと、扱いを決めるまでテストが落ちる。
+テスト、文書、`scripts/`(`lint-`で始まるものを除く)は、保護パスでも重ねる。
+静的検査が常に飛ぶと、保護パスを変えたラウンドで検査する意味が無くなるためである。
 
 | 種類 | 対象 | 当たったときの動き | 理由 |
 | --- | --- | --- | --- |
 | 依存のファイル | `package.json`、`bun.lock`、`console/`の同名のファイル | 静的検査を飛ばす | 作業木はmainの依存を入れるので、依存を変えたPRはmainの依存で検査できず、偽の失敗を出すため |
 | 検査が実行する側のファイル | `scripts/lint-`で始まるファイルと、検査のコマンドが起動するスクリプトから読み込まれるファイル | 静的検査を飛ばす | mainの版で検査すると、PRのほかのファイルとかみ合わず偽の失敗が出て、修正のラウンドでは直せないため |
+| 静的検査が固定しない道具の設定 | `*.config.js`などの設定モジュール、`.eslintrc`系、`.prettierrc`系、`.babelrc`系、`deno.json`、`Makefile`、`Taskfile.yml`、ほかの言語のマニフェストとlockfile、ランタイムの版の指定、`.gitmodules`、`.gitleaks.toml`など(`STATIC_CHECK_UNCHECKED_CONFIG_PATTERNS`) | 静的検査を飛ばす | 実装の保護パスのファイル名のうち、道具の設定や実行されるコードとして読まれるもの。PRの版を重ねると、一覧に無い道具を設定のコマンドに足したときに、その道具がPRの設定を読む。mainの版を使うと偽の失敗が出る |
+| gitのディレクトリの形 | 作業木の直下の`HEAD`、`config`、`objects`、`refs`、`packed-refs`、`commondir`、`gitdir`、`index`、`info`、`hooks`、`worktrees`、`modules`、`.git`の別名(`STATIC_CHECK_GITDIR_NAMES`) | 静的検査を飛ばす | 作業木の直下がbareのリポジトリの形になると、gitがその`config`を読み、書かれたコマンドを実行しうるため |
 | 道具の設定と環境を決めるファイル | Biome、tsconfig、markdownlint、textlint、lefthook、bunfig、miseの設定、`.tool-versions`、`wmill.yaml`、`.npmrc`、`.gitignore`などの無視と属性の設定、`.env`系 | mainの版を使う | PRが、検査の道具の設定や読み込む環境変数を差し替えられないようにするため |
 | 保護パスの禁止接頭辞 | `.github/`、`.claude/`、`mise/`など(`FORBIDDEN_PATH_PREFIXES`) | mainの版を使う | 静的検査が読む必要が無いため |
 | `node_modules/`の下 | どの深さでも | mainの版を使う | PRが入れた依存のコードで、mainの道具を差し替えさせないため |
@@ -845,6 +858,8 @@ workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く
 そのリポジトリを明示したエントリだけを使い、`allowed_check_commands`と`check_commands_by_repo`には落とさない。
 先頭の依存の導入(`bun install --frozen-lockfile --ignore-scripts`)は実装が足すので、書かない。
 PRのコードを実行するコマンド(`bun test`など)は、静的検査に書かない。
+書けるのは、Biome、tsc、`bun run scripts/...`のうち、importの閉包を`STATIC_CHECK_NOT_OVERLAID`の`executed`に載せて確かめたものだけである。
+どの一覧にも無い道具の設定ファイルは、PRの版のまま作業木に入る。
 設定のコマンドの例と有効にする手順は、[設計工程と実装フローの運用](../operations/stages.md#静的検査を設定する)にある。
 
 1つのIssueにかかる費用の上限は、`implement_max_rounds × implement_max_budget_usd_per_run`が目安である。
@@ -873,7 +888,7 @@ Claudeの不正な出力への再試行は、その実行の費用の上限を�
 | Claude 1回の実行 | `implement_timeout_sec`と期限までの残りの短い方 |
 | 検査コマンド1件 | `implement_check_timeout_sec`(期限では打ち切らない) |
 | 静的検査の依存の導入と、静的検査のコマンド1件 | `implement_check_timeout_sec`を等分した値([静的検査の時間](#静的検査の時間)) |
-| 静的検査の作業木を作る`git archive`と`tar` | それぞれ120秒 |
+| 静的検査の作業木を作る`git archive`、`tar`、`git init`、`git add` | それぞれ120秒 |
 | gitleaks | 300秒 |
 | フロー全体 | 準備の開始から`implement_flow_timeout_sec` |
 
@@ -893,8 +908,8 @@ implement_timeout_sec + 600
 15秒は、検査コマンド1件が打ち切りの後に停止と出力待ちで上乗せしうる時間である。
 既定値なら検査コマンドは7件まで収まる。
 
-静的検査のコマンドがあるリポジトリは、検査コマンド数を1件多く数え、作業木の作成の270秒を足す。
-修正ラウンドを始められる残り時間(`fixRoundWorstCaseSec`)にも、同じ1件と270秒を足す。
+静的検査のコマンドがあるリポジトリは、検査コマンド数を1件多く数え、作業木の作成の540秒を足す。
+修正ラウンドを始められる残り時間(`fixRoundWorstCaseSec`)にも、同じ1件と540秒を足す。
 既定値で静的検査があるなら、検査コマンドは5件まで収まる。
 
 確かめるのは準備のステップだけである。
@@ -917,8 +932,8 @@ floor((implement_check_timeout_sec + 15) / (設定のコマンド数 + 1)) - 15
 1件あたりが30秒に届かないときは、静的検査を飛ばす。
 30秒に延ばすと、合計が1件分を超えるためである。
 
-作業木を作る`git archive`と`tar`は、それぞれ120秒で打ち切る。
-この2件は1件分に含めず、停止の上乗せを含めた270秒を見積もりに足す。
+作業木を作る`git archive`、`tar`、`git init`、`git add`は、それぞれ120秒で打ち切る。
+この4件は1件分に含めず、停止の上乗せを含めた540秒を見積もりに足す。
 600秒の余裕は、gitleaksと、gitとDBの操作の分なので、作業木の作成を含めない。
 
 ### Windmillのtimeoutで打ち切られたとき

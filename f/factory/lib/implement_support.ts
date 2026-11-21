@@ -1062,7 +1062,7 @@ function estimatedCheckCommandCount(
   return checkCommandCount + (hasStaticChecks ? 1 : 0);
 }
 
-/** 静的検査があれば、その作業木の作成(`git archive`と`tar`)の最悪の所要時間(秒)を返す。無ければ0を返す。 */
+/** 静的検査があれば、その作業木の作成(`git archive`、`tar`、`git init`、`git add`)の最悪の所要時間(秒)を返す。無ければ0を返す。 */
 function staticWorkspaceSec(hasStaticChecks: boolean): number {
   return hasStaticChecks ? STATIC_CHECK_WORKSPACE_WORST_CASE_SEC : 0;
 }

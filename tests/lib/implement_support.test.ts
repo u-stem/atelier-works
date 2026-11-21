@@ -1692,11 +1692,11 @@ describe("fixRoundWorstCaseSec", () => {
   });
 
   test("adds one check command run and the workspace for the static checks", () => {
-    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 4, true)).toBe(9_045);
+    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 4, true)).toBe(9_315);
   });
 
   test("counts the static checks alone as one check command run and the workspace", () => {
-    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 0, true)).toBe(5_385);
+    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 0, true)).toBe(5_655);
   });
 });
 
@@ -1717,7 +1717,7 @@ describe("implementTimeoutMisfit", () => {
 
   test("rejects six check commands and the static checks with the defaults", () => {
     expect(implementTimeoutMisfit(TIME_SETTINGS, 6, true)).toBe(
-      "implement time settings do not fit the flow step timeout: implement_flow_timeout_sec 14400 + 600 + 7 check commands (6 + 1 for the static checks) x (implement_check_timeout_sec 900 + 15) + 270 for the static check workspace = 21675s exceeds 21600s",
+      "implement time settings do not fit the flow step timeout: implement_flow_timeout_sec 14400 + 600 + 7 check commands (6 + 1 for the static checks) x (implement_check_timeout_sec 900 + 15) + 540 for the static check workspace = 21945s exceeds 21600s",
     );
   });
 

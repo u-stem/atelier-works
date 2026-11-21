@@ -67,6 +67,75 @@ export const STATIC_CHECK_EXECUTED_SKIP_REASON =
 export const STATIC_CHECK_UNSAFE_PATH_SKIP_REASON =
   "the change has a path that cannot be copied into the workspace safely";
 
+/** 作業木の直下で、gitがgitのディレクトリとして読みうる名前のパスが変わったときの、作業木を作らない理由。 */
+export const STATIC_CHECK_GITDIR_SKIP_REASON =
+  "the change has a top-level path that git could read as a repository";
+
+/** 静的検査が基準の版に固定しない道具の設定が変わったときの、作業木を作らない理由。 */
+export const STATIC_CHECK_UNCHECKED_CONFIG_SKIP_REASON =
+  "the change updates a tool configuration the static checks do not pin to the base version";
+
+/**
+ * 作業木の直下(パスの先頭の要素)にあると、gitが作業木をgitのディレクトリとして読みうる名前。畳み込んだ(`foldPath`)形で持つ。
+ * `HEAD`、`config`、`objects/`、`refs/`がそろうと、gitはそのディレクトリをbareのリポジトリとして使い、
+ * その`config`に書かれたコマンド(`core.fsmonitor`など)を実行しうる。
+ * 残りは、gitがgitのディレクトリの中で読むファイルとディレクトリである。
+ * 1つでも変われば、作業木を作らない。検査の環境は`safe.bareRepository=explicit`でも止める(`checkEnv`)。
+ */
+export const STATIC_CHECK_GITDIR_NAMES: readonly string[] = [
+  "head",
+  "config",
+  "objects",
+  "refs",
+  "packed-refs",
+  "commondir",
+  "gitdir",
+  "index",
+  "info",
+  "hooks",
+  "worktrees",
+  "modules",
+];
+
+/** 作業木の直下の`.git`と、末尾に点や空白を付けた別名。畳み込んだ形に当てる。 */
+const DOT_GIT_NAME = /^\.git[. ]*$/;
+
+/**
+ * 変われば作業木を作らない、静的検査が基準の版に固定しない道具の設定のファイル名。どのディレクトリでも当てる。
+ * 実装フローの保護パスのファイル名の規則(`IMPLEMENT_PROTECTED_BASENAME_PATTERNS`)のうち、
+ * ファイル名だけで、道具の設定、道具が読み込んで実行するコード、依存の定義と決まり、
+ * `STATIC_CHECK_NOT_OVERLAID`で基準の版を使っていないものを選んだ。
+ * 静的検査の道具(Biome、tsc、`bun run scripts/...`)はこれらを読まないが、PRの版を重ねると、
+ * 一覧に無い道具を設定に足したときに、その道具がPRの設定やコードを読む。基準の版を使うと偽の失敗になるので、どちらもせずに飛ばす。
+ * `CODEOWNERS`は、道具が設定として読まないので選ばない。
+ * ディレクトリで決まる保護パス(`.husky/`など)、テスト、文書、`scripts/`(`lint-`で始まるものを除く)も選ばない。
+ * 静的検査がそれらを常に飛ばすと、保護パスを変えたラウンドで検査する意味が無くなるためである。
+ * 分類は`tests/lib/static_check_workspace.test.ts`が、実装の保護パスの規則ごとに固定する。
+ */
+export const STATIC_CHECK_UNCHECKED_CONFIG_PATTERNS: readonly RegExp[] = [
+  /^wmill\.yml$/i,
+  /^\.gitmodules$/i,
+  /^\.(node|bun|python)-version$/i,
+  /^\.nvmrc$/i,
+  /^rust-toolchain(\.toml)?$/i,
+  /^\.gitleaks(ignore|\.toml)$/i,
+  /^\.yarnrc(\.yml)?$/i,
+  /^\.pnpmfile\.cjs$/i,
+  /^(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock)$/i,
+  /^[\w.-]+\.config\.[cm]?[jt]s$/i,
+  /^\.(eslintrc|babelrc|prettierrc)(\..*)?$/i,
+  /^(makefile|justfile|taskfile\.ya?ml|turbo\.json|nx\.json|deno\.jsonc?|\.pre-commit-config\.yaml)$/i,
+  /^(uv|poetry)\.lock$/i,
+  /^pipfile(\.lock)?$/i,
+  /^pyproject\.toml$/i,
+  /^setup\.(py|cfg)$/i,
+  /^requirements.*\.txt$/i,
+  /^cargo\.(lock|toml)$/i,
+  /^go\.(sum|mod)$/i,
+  /^gemfile(\.lock)?$/i,
+  /^composer\.(lock|json)$/i,
+];
+
 /** 依存の導入が失敗したときの、静的検査を飛ばす理由。 */
 export const STATIC_CHECK_INSTALL_FAILED_REASON =
   "the base dependencies could not be installed";
@@ -85,7 +154,7 @@ export const STATIC_CHECK_MIN_COMMAND_TIMEOUT_MS = 30_000;
  * 各件が打ち切りまでかかり、それぞれに停止の上乗せが付いても、合計は`budgetMs + stopOverheadMs`を超えない。
  * 1件あたりが下限`STATIC_CHECK_MIN_COMMAND_TIMEOUT_MS`に届かなければnullを返し、呼び出し側は静的検査を飛ばす。
  * 下限で打ち切りを延ばすと、合計が見積もりの1件分を超えるためである。
- * 作業木を作る`git archive`と`tar`は、この1件分に含めず、`STATIC_CHECK_WORKSPACE_WORST_CASE_SEC`として見積もりに足す。
+ * 作業木を作るコマンド(`git archive`、`tar`、`git init`、`git add`)は、この1件分に含めず、`STATIC_CHECK_WORKSPACE_WORST_CASE_SEC`として見積もりに足す。
  */
 export function staticCheckCommandTimeoutMs(
   budgetMs: number,
@@ -172,22 +241,31 @@ export const STATIC_CHECK_TMP_ROOT = "/tmp";
  */
 export const STATIC_CHECK_DIR_PREFIX = "factory-static-check-";
 
-/** 基準の木のアーカイブを一時に置くディレクトリの名前の接頭辞。展開の後に消す。 */
-const ARCHIVE_DIR_PREFIX = `${STATIC_CHECK_DIR_PREFIX}archive-`;
+/**
+ * 作業木を作る間だけ使う一時のディレクトリの名前の接頭辞。基準の木のアーカイブと、gitを実行するときのHOMEを置く。
+ * 作業木を作り終えたら消す。
+ */
+const SCRATCH_DIR_PREFIX = `${STATIC_CHECK_DIR_PREFIX}scratch-`;
 
-/** `git archive`と`tar`の、1回のtimeoutの既定(ミリ秒)。どちらもローカルの読み書きだけで、ネットワークを使わない。 */
+/**
+ * 作業木を作るコマンド(`git archive`、`tar`、`git init`、`git add`)の、1回のtimeoutの既定(ミリ秒)。
+ * どれもローカルの読み書きだけで、ネットワークを使わない。
+ */
 export const STATIC_CHECK_COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 
-/** `git archive`と`tar`が、timeoutの後に上乗せしうる停止と出力待ちの時間(秒)。ランナーの最大13秒を切り上げた値。 */
+/** 作業木を作るコマンドの数。 */
+const WORKSPACE_COMMAND_COUNT = 4;
+
+/** 作業木を作るコマンドが、timeoutの後に上乗せしうる停止と出力待ちの時間(秒)。ランナーの最大13秒を切り上げた値。 */
 const WORKSPACE_COMMAND_STOP_OVERHEAD_SEC = 15;
 
 /**
- * 作業木の作成(`git archive`と`tar`)の最悪の所要時間(秒)。
+ * 作業木の作成(`git archive`、`tar`、`git init`、`git add`)の最悪の所要時間(秒)。
  * 時間の見積もりは、静的検査を1回実行するごとに、検査コマンド1件分にこの値を足す。
- * 既定のtimeoutの2回分と、それぞれの停止の上乗せである。
+ * 既定のtimeoutの4回分と、それぞれの停止の上乗せである。
  */
 export const STATIC_CHECK_WORKSPACE_WORST_CASE_SEC =
-  2 *
+  WORKSPACE_COMMAND_COUNT *
   (STATIC_CHECK_COMMAND_TIMEOUT_MS / 1000 +
     WORKSPACE_COMMAND_STOP_OVERHEAD_SEC);
 
@@ -225,6 +303,26 @@ export function isStaticCheckExecutedPath(path: string): boolean {
   );
 }
 
+/** 照合に使うファイル名。畳み込みで名前の切り出しが変わりうるので、畳み込んだパスの名前と元の名前の両方を返す。 */
+function basenameCandidates(path: string): string[] {
+  const folded = foldPath(path);
+  return [folded.split("/").pop() ?? folded, path.split("/").pop() ?? path];
+}
+
+/** `path`の先頭の要素が、gitがgitのディレクトリとして読みうる名前(`STATIC_CHECK_GITDIR_NAMES`か`.git`)かを返す。 */
+export function isStaticCheckGitdirPath(path: string): boolean {
+  const top = foldPath(path).split("/")[0] ?? "";
+  return STATIC_CHECK_GITDIR_NAMES.includes(top) || DOT_GIT_NAME.test(top);
+}
+
+/** `path`が、静的検査が基準の版に固定しない道具の設定(`STATIC_CHECK_UNCHECKED_CONFIG_PATTERNS`)かを返す。 */
+export function isStaticCheckUncheckedConfigPath(path: string): boolean {
+  const candidates = basenameCandidates(path);
+  return STATIC_CHECK_UNCHECKED_CONFIG_PATTERNS.some((pattern) =>
+    candidates.some((candidate) => pattern.test(candidate)),
+  );
+}
+
 /** `path`のPRの版を作業木に重ねるかを返す。`STATIC_CHECK_NOT_OVERLAID`のどれかに当たれば偽を返す。 */
 export function isStaticCheckOverlaidPath(path: string): boolean {
   const folded = foldPath(path);
@@ -234,8 +332,7 @@ export function isStaticCheckOverlaidPath(path: string): boolean {
   }
   if (isStaticCheckExecutedPath(path)) return false;
   if (matchesPrefix(folded, FOLDED_PREFIXES)) return false;
-  // 畳み込みで名前の切り出しが変わりうるので、畳み込んだ名前と元の名前の両方に当てる。
-  const candidates = [segments.at(-1) ?? folded, path.split("/").pop() ?? path];
+  const candidates = basenameCandidates(path);
   return !STATIC_CHECK_NOT_OVERLAID.basenamePatterns.some((pattern) =>
     candidates.some((candidate) => pattern.test(candidate)),
   );
@@ -252,10 +349,13 @@ export function isStaticCheckOverlaidPath(path: string): boolean {
  * NFKCで変わる文字など)のときも、何も作らずに`skipped`を返す。
  * そのパスだけを重ねずに検査すると、作業木がPRの版と食い違い、修正のラウンドで直せない偽の失敗か、
  * 検査していないファイルを含んだまま検査に通ったという結果を出すためである。
+ * 作業木の直下でgitがgitのディレクトリとして読みうる名前のパス(`isStaticCheckGitdirPath`)と、
+ * 基準の版に固定しない道具の設定(`isStaticCheckUncheckedConfigPath`)が変わったときも、何も作らずに`skipped`を返す。
  * 作る前に、`tmpRoot`に残った古い作業木を掃除する(`sweepStaleWorkspaces`)。掃除の失敗は`log`に出し、作成は続ける。
+ * 重ねた後、作業木に新しい`.git`を作り、作業木のファイルを索引に入れる(`indexTree`)。
+ * cloneの`.git`は持ち込まないので、検査はcloneのフックと設定を読まない。
  * 途中で失敗したら、作ったディレクトリを消して例外を投げる。
  * 返した`cleanup`は作業木を消す。消せなければ例外を投げる。
- * `.git`は持ち込まないので、検査はgitのフックと設定を読まない。
  */
 export async function createStaticCheckWorkspace(input: {
   readonly run: CommandRunner;
@@ -265,7 +365,7 @@ export async function createStaticCheckWorkspace(input: {
   /** PRの変更を読み出すworktree。 */
   readonly worktreeDir: string;
   readonly changes: readonly ChangedPath[];
-  /** `git archive`と`tar`の、1回のtimeout。既定は`STATIC_CHECK_COMMAND_TIMEOUT_MS`。 */
+  /** 作業木を作るコマンドの、1回のtimeout。既定は`STATIC_CHECK_COMMAND_TIMEOUT_MS`。 */
   readonly commandTimeoutMs?: number;
   /** 作業木を作る場所。既定は`STATIC_CHECK_TMP_ROOT`。テストで差し替える。 */
   readonly tmpRoot?: string;
@@ -274,34 +374,32 @@ export async function createStaticCheckWorkspace(input: {
   readonly log?: Logger;
 }): Promise<StaticCheckWorkspace> {
   assertSha(input.baseSha);
-  if (input.changes.some((change) => !isSafeRepoPath(change.path))) {
-    return { kind: "skipped", reason: STATIC_CHECK_UNSAFE_PATH_SKIP_REASON };
-  }
-  if (
-    input.changes.some((change) => isStaticCheckDependencyPath(change.path))
-  ) {
-    return { kind: "skipped", reason: STATIC_CHECK_DEPENDENCY_SKIP_REASON };
-  }
-  if (input.changes.some((change) => isStaticCheckExecutedPath(change.path))) {
-    return { kind: "skipped", reason: STATIC_CHECK_EXECUTED_SKIP_REASON };
-  }
+  const skipReason = skipReasonFor(input.changes);
+  if (skipReason !== null) return { kind: "skipped", reason: skipReason };
   const tmpRoot = input.tmpRoot ?? STATIC_CHECK_TMP_ROOT;
   await sweepStaleWorkspaces(
     tmpRoot,
     (input.now ?? Date.now)(),
     input.log ?? logger("static_check_workspace"),
   );
+  const timeoutMs = input.commandTimeoutMs ?? STATIC_CHECK_COMMAND_TIMEOUT_MS;
   const dir = await mkdtemp(join(tmpRoot, STATIC_CHECK_DIR_PREFIX));
   try {
-    await extractBaseTree({
-      run: input.run,
-      repoDir: input.repoDir,
-      baseSha: input.baseSha,
-      dir,
-      tmpRoot,
-      timeoutMs: input.commandTimeoutMs ?? STATIC_CHECK_COMMAND_TIMEOUT_MS,
-    });
-    await overlayChanges(input.worktreeDir, dir, input.changes);
+    const scratch = await mkdtemp(join(tmpRoot, SCRATCH_DIR_PREFIX));
+    try {
+      await extractBaseTree({
+        run: input.run,
+        repoDir: input.repoDir,
+        baseSha: input.baseSha,
+        dir,
+        tarPath: join(scratch, "base.tar"),
+        timeoutMs,
+      });
+      await overlayChanges(input.worktreeDir, dir, input.changes);
+      await indexTree({ run: input.run, dir, home: scratch, timeoutMs });
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
   } catch (error) {
     await removeAfterFailure(dir, error);
   }
@@ -310,6 +408,24 @@ export async function createStaticCheckWorkspace(input: {
     dir,
     cleanup: () => rm(dir, { recursive: true, force: true }),
   };
+}
+
+/** 変更の一覧から、作業木を作らない理由を返す。作ってよければnullを返す。 */
+function skipReasonFor(changes: readonly ChangedPath[]): string | null {
+  const any = (predicate: (path: string) => boolean): boolean =>
+    changes.some((change) => predicate(change.path));
+  if (any((path) => !isSafeRepoPath(path))) {
+    return STATIC_CHECK_UNSAFE_PATH_SKIP_REASON;
+  }
+  if (any(isStaticCheckGitdirPath)) return STATIC_CHECK_GITDIR_SKIP_REASON;
+  if (any(isStaticCheckDependencyPath)) {
+    return STATIC_CHECK_DEPENDENCY_SKIP_REASON;
+  }
+  if (any(isStaticCheckExecutedPath)) return STATIC_CHECK_EXECUTED_SKIP_REASON;
+  if (any(isStaticCheckUncheckedConfigPath)) {
+    return STATIC_CHECK_UNCHECKED_CONFIG_SKIP_REASON;
+  }
+  return null;
 }
 
 /** 作業木を消してから、元の例外を投げ直す。消せなければ、両方の理由を載せた例外を投げる。 */
@@ -349,7 +465,7 @@ function toolEnv(): Record<string, string> {
 
 /**
  * `tmpRoot`の直下で、名前が`STATIC_CHECK_DIR_PREFIX`で始まり、更新から`STATIC_CHECK_STALE_AFTER_MS`より古いディレクトリを消す。
- * 取り消しやタイムアウトで後片付けの前に止まった実行が残した、作業木とアーカイブの置き場である。
+ * 取り消しやタイムアウトで後片付けの前に止まった実行が残した、作業木と、アーカイブとHOMEの置き場である。
  * 対象は、symlinkでなく、このプロセスと同じuidが所有するディレクトリに限る。
  * `/tmp`は誰でも書けるので、検査用のuidが置いたものや、検査の枠に渡したままの使用中の作業木に触れないためである。
  * 所有者だけが名前を変えられる(`/tmp`のsticky bit)ので、確かめた後にsymlinkへ差し替えられることもない。
@@ -397,8 +513,8 @@ async function sweepStaleWorkspaces(
 }
 
 /**
- * `baseSha`の木を`dir`に展開する。シェルとパイプを使わず、アーカイブを一時のファイルに書いてから展開する。
- * アーカイブは`mkdtemp`で作る専用のディレクトリに置く。共有の`/tmp`で決まった名前を使うと、
+ * `baseSha`の木を`dir`に展開する。シェルとパイプを使わず、アーカイブを一時のファイル`tarPath`に書いてから展開する。
+ * `tarPath`は`mkdtemp`で作る専用のディレクトリに置く。共有の`/tmp`で決まった名前を使うと、
  * 検査用のuidが先に置いたsymlinkの先へ、rootが書き込みうるためである。
  * `tar.umask`で、グループと他人の書き込みの権限を落とす。
  * `git archive`と`tar`には、それぞれ`timeoutMs`を渡す。
@@ -408,44 +524,87 @@ async function extractBaseTree(opts: {
   readonly repoDir: string;
   readonly baseSha: string;
   readonly dir: string;
-  readonly tmpRoot: string;
+  readonly tarPath: string;
   readonly timeoutMs: number;
 }): Promise<void> {
-  const archiveDir = await mkdtemp(join(opts.tmpRoot, ARCHIVE_DIR_PREFIX));
-  try {
-    const tarPath = join(archiveDir, "base.tar");
+  assertSucceeded(
+    "git archive",
+    await opts.run(
+      buildGitArgv([
+        "-c",
+        "tar.umask=0022",
+        "archive",
+        "--format=tar",
+        `--output=${opts.tarPath}`,
+        opts.baseSha,
+      ]),
+      {
+        cwd: opts.repoDir,
+        env: localGitEnv(),
+        timeoutMs: opts.timeoutMs,
+        maxOutputBytes: OUTPUT_MAX_BYTES,
+      },
+    ),
+  );
+  assertSucceeded(
+    "tar -x",
+    await opts.run(
+      ["tar", "-x", "--no-same-owner", "-C", opts.dir, "-f", opts.tarPath],
+      {
+        env: toolEnv(),
+        timeoutMs: opts.timeoutMs,
+        maxOutputBytes: OUTPUT_MAX_BYTES,
+      },
+    ),
+  );
+}
+
+/**
+ * 作業木`dir`に新しい`.git`を作り、作業木のファイルをすべて索引に入れる。
+ * 検査のスクリプトは`git ls-files`で対象のファイルを列挙するので、`.git`の無い木では失敗するためである。
+ * rootが、作業木を検査用のuidに渡す前に実行する。
+ * gitは`GIT_DIR`と`GIT_WORK_TREE`で作業木の`.git`を名指しし、作業木の中のファイルをgitのディレクトリとして探させない。
+ * 読む設定は、`git init`が作る`.git/config`と、`buildGitArgv`と`-c`で固定する値だけである。
+ * グローバルとシステムの設定は読まない(`localGitEnv`)。HOMEは`home`(作業木を作る間だけの一時のディレクトリ)にする。
+ * `--template=`で、テンプレートのフックと`info/`を写さない。
+ * `git add`は、ファイルの中身と属性(`.gitattributes`)と無視の一覧(`.gitignore`)を読んで索引とオブジェクトを書くだけで、コードを実行しない。
+ * 中身を変換する`filter`と`core.fsmonitor`はコマンドを実行しうるが、`filter`の定義は読む設定のどこにも無く、`core.fsmonitor`は`false`に固定する。
+ * 作業木の`.gitattributes`と`.gitignore`は、PRの版を重ねない(`STATIC_CHECK_NOT_OVERLAID`)ので基準の版である。
+ * PRは`.git`の下にファイルを置けない(`isSafeRepoPath`が`.git`の要素を拒む)。
+ */
+async function indexTree(opts: {
+  readonly run: CommandRunner;
+  readonly dir: string;
+  readonly home: string;
+  readonly timeoutMs: number;
+}): Promise<void> {
+  const env = {
+    ...localGitEnv(opts.home),
+    GIT_DIR: join(opts.dir, ".git"),
+    GIT_WORK_TREE: opts.dir,
+  };
+  const fixed = [
+    "-c",
+    "core.autocrlf=false",
+    "-c",
+    "core.safecrlf=false",
+    "-c",
+    "init.defaultBranch=main",
+  ];
+  const steps: readonly (readonly [string, readonly string[]])[] = [
+    ["git init", ["init", "-q", "--template="]],
+    ["git add", ["add", "-A"]],
+  ];
+  for (const [context, args] of steps) {
     assertSucceeded(
-      "git archive",
-      await opts.run(
-        buildGitArgv([
-          "-c",
-          "tar.umask=0022",
-          "archive",
-          "--format=tar",
-          `--output=${tarPath}`,
-          opts.baseSha,
-        ]),
-        {
-          cwd: opts.repoDir,
-          env: localGitEnv(),
-          timeoutMs: opts.timeoutMs,
-          maxOutputBytes: OUTPUT_MAX_BYTES,
-        },
-      ),
+      context,
+      await opts.run(buildGitArgv([...fixed, ...args]), {
+        cwd: opts.dir,
+        env,
+        timeoutMs: opts.timeoutMs,
+        maxOutputBytes: OUTPUT_MAX_BYTES,
+      }),
     );
-    assertSucceeded(
-      "tar -x",
-      await opts.run(
-        ["tar", "-x", "--no-same-owner", "-C", opts.dir, "-f", tarPath],
-        {
-          env: toolEnv(),
-          timeoutMs: opts.timeoutMs,
-          maxOutputBytes: OUTPUT_MAX_BYTES,
-        },
-      ),
-    );
-  } finally {
-    await rm(archiveDir, { recursive: true, force: true });
   }
 }
 

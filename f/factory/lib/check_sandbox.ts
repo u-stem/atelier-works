@@ -389,6 +389,8 @@ export const CHECK_ENV_KEYS = [
   "GIT_CONFIG_COUNT",
   "GIT_CONFIG_KEY_0",
   "GIT_CONFIG_VALUE_0",
+  "GIT_CONFIG_KEY_1",
+  "GIT_CONFIG_VALUE_1",
 ] as const;
 
 /** 検査コマンドの一時ディレクトリ。HOMEの下に置き、他の枠から読めない共有の`/tmp`を既定にさせない。 */
@@ -400,6 +402,9 @@ export function checkTmpDir(home: string): string {
  * 検査コマンドの環境変数を、許可リストから組み立てる。workerの環境変数は読まない。
  * gitはworktreeの所有者が自分と違うと実行を拒むので、検査用のuidが読む`.git`が
  * rootのままでも動くよう、そのworktreeだけを`safe.directory`にする。
+ * `safe.bareRepository=explicit`で、`--git-dir`などで名指ししないbareのリポジトリを使わせない。
+ * 検査するファイルの中に、gitが暗黙にbareのリポジトリとして見つける形(`HEAD`、`config`、`objects/`、`refs/`)があっても、
+ * その`config`を読んで、そこに書かれたコマンドを実行しないためである。
  * コマンドラインと同じ階層の設定で、リポジトリの設定ファイルには書けない。
  */
 export function checkEnv(input: {
@@ -412,9 +417,11 @@ export function checkEnv(input: {
     HOME: input.home,
     TMPDIR: checkTmpDir(input.home),
     LANG: "C.UTF-8",
-    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_COUNT: "2",
     GIT_CONFIG_KEY_0: "safe.directory",
     GIT_CONFIG_VALUE_0: input.worktreeDir,
+    GIT_CONFIG_KEY_1: "safe.bareRepository",
+    GIT_CONFIG_VALUE_1: "explicit",
   };
 }
 
@@ -422,7 +429,7 @@ export function checkEnv(input: {
 export const CHECK_GITCONFIG_NAME = ".gitconfig";
 
 /**
- * 検査用のHOMEの`.gitconfig`の本文を返す。そのworktreeだけを`safe.directory`にする。
+ * 検査用のHOMEの`.gitconfig`の本文を返す。そのworktreeだけを`safe.directory`にし、`checkEnv`と同じく`safe.bareRepository=explicit`にする。
  * 検査コマンドの中のテストは、子のgitを起動するときに`GIT_`で始まる環境変数をすべて外すことがあり、
  * `checkEnv`の`GIT_CONFIG_*`だけでは、そのgitがrootの所有のmain cloneの`.git`を所有者の違いで拒む。
  * HOMEの設定は環境変数を外した子にも効く。
@@ -441,7 +448,7 @@ export function checkGitConfig(worktreeDir: string): string {
     throw new Error("check sandbox: refusing a worktree path for .gitconfig");
   }
   const quoted = worktreeDir.replace(/["\\]/g, (char) => `\\${char}`);
-  return `[safe]\n\tdirectory = "${quoted}"\n`;
+  return `[safe]\n\tdirectory = "${quoted}"\n\tbareRepository = explicit\n`;
 }
 
 /** 正規化された絶対パスで、最上位の1段ではないかを返す。 */
