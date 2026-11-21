@@ -8,6 +8,7 @@ import {
   EMPTY_CONFIG_HISTORY_EVIDENCE,
   isConfigHistoryReasonCode,
   isConfigItemKey,
+  isKnownConfigKey,
   isMissingConfigHistoryObjectError,
   projectConfigChange,
   projectConfigValue,
@@ -105,59 +106,119 @@ describe("projectConfigValue: values that do not match the kind of the item", ()
   });
 });
 
+/** 伏せた射影。生の値は持たず、生の値のハッシュだけを持つ。 */
+const REDACTED_WITH_HASH = {
+  redacted: true,
+  hash: expect.stringMatching(HEX16),
+};
+
 describe("projectConfigValue: strings that are replaced by a mark", () => {
   test("redacts a time item that is not an ISO timestamp", () => {
-    expect(projectConfigValue("design_enabled_since", "yesterday")).toEqual({
-      redacted: true,
-    });
+    expect(projectConfigValue("design_enabled_since", "yesterday")).toEqual(
+      REDACTED_WITH_HASH,
+    );
   });
 
   test("redacts an enum item that holds a variable reference", () => {
-    expect(projectConfigValue("model", "$var:f/factory/github_token")).toEqual({
-      redacted: true,
-    });
+    expect(projectConfigValue("model", "$var:f/factory/github_token")).toEqual(
+      REDACTED_WITH_HASH,
+    );
   });
 
   test("redacts an enum item that holds a resource reference", () => {
-    expect(projectConfigValue("model", "$res:f/factory/other")).toEqual({
-      redacted: true,
-    });
+    expect(projectConfigValue("model", "$res:f/factory/other")).toEqual(
+      REDACTED_WITH_HASH,
+    );
   });
 
   test("redacts an enum item that holds a secret word", () => {
-    expect(projectConfigValue("review_label", "my-api-token")).toEqual({
-      redacted: true,
-    });
+    expect(projectConfigValue("review_label", "my-api-token")).toEqual(
+      REDACTED_WITH_HASH,
+    );
   });
 
   test("redacts an enum item that has the shape of a known token", () => {
     expect(
       projectConfigValue("review_label", "ghp_abcdefghijklmnopqrstuvwxyz0123"),
-    ).toEqual({ redacted: true });
+    ).toEqual(REDACTED_WITH_HASH);
   });
 
   test("redacts an enum item that is longer than a short name", () => {
-    expect(projectConfigValue("model", "a".repeat(61))).toEqual({
-      redacted: true,
-    });
+    expect(projectConfigValue("model", "a".repeat(61))).toEqual(
+      REDACTED_WITH_HASH,
+    );
   });
 
   test("redacts an enum item that has a space", () => {
-    expect(projectConfigValue("model", "two words")).toEqual({
-      redacted: true,
-    });
+    expect(projectConfigValue("model", "two words")).toEqual(
+      REDACTED_WITH_HASH,
+    );
+  });
+});
+
+describe("projectConfigValue: the hash of a redacted value", () => {
+  test("gives different hashes to two different references of the same item", () => {
+    expect(projectConfigValue("model", "$var:f/factory/a")).not.toEqual(
+      projectConfigValue("model", "$var:f/factory/b"),
+    );
+  });
+
+  test("gives the same hash to the same reference every time", () => {
+    expect(projectConfigValue("model", "$var:f/factory/a")).toEqual(
+      projectConfigValue("model", "$var:f/factory/a"),
+    );
+  });
+
+  test("redacts a hashed item that holds a reference inside a free-text command", () => {
+    expect(
+      projectConfigValue("allowed_check_commands", ["echo $var:f/factory/a"]),
+    ).toEqual(REDACTED_WITH_HASH);
+  });
+
+  test("tells two reference-holding command lists apart", () => {
+    expect(
+      projectConfigValue("allowed_check_commands", ["echo $var:f/factory/a"]),
+    ).not.toEqual(
+      projectConfigValue("allowed_check_commands", ["echo $var:f/factory/b"]),
+    );
+  });
+
+  test("redacts a list item that holds a reference", () => {
+    expect(
+      projectConfigValue("repo_allowlist", ["octo-owner/$var:f/factory/a"]),
+    ).toEqual(REDACTED_WITH_HASH);
+  });
+
+  test("redacts an item of a name that is not known when it holds a reference", () => {
+    expect(projectConfigValue("brand_new_item", "$res:f/factory/a")).toEqual(
+      REDACTED_WITH_HASH,
+    );
+  });
+
+  test("never puts a reference or a secret-like string into the output", () => {
+    const output = JSON.stringify([
+      projectConfigValue("model", "$var:f/factory/private-name"),
+      projectConfigValue("review_label", "my-api-token-private-name"),
+      projectConfigValue("allowed_check_commands", [
+        "echo $var:f/factory/private-name",
+      ]),
+    ]);
+    expect(output).not.toContain("private-name");
   });
 });
 
 describe("projectConfigValue: lists", () => {
-  test("reduces a list of names to its count", () => {
+  test("reduces a list of names to its count and a hash", () => {
     expect(
       projectConfigValue("default_reviewers", ["octo-a", "octo-b"]),
-    ).toEqual({ count: 2 });
+    ).toEqual({ count: 2, hash: expect.stringMatching(HEX16) });
   });
 
-  test("reduces an empty list to a count of zero", () => {
-    expect(projectConfigValue("repo_allowlist", [])).toEqual({ count: 0 });
+  test("reduces an empty list to a count of zero and a hash", () => {
+    expect(projectConfigValue("repo_allowlist", [])).toEqual({
+      count: 0,
+      hash: expect.stringMatching(HEX16),
+    });
   });
 
   test("does not put any element of a list into the output", () => {
@@ -168,6 +229,56 @@ describe("projectConfigValue: lists", () => {
     );
     expect(output).not.toContain("private-repo");
   });
+
+  test.each(["repo_allowlist", "dependabot_other_repos", "default_reviewers"])(
+    "gives %s a different hash when an element is replaced and the count stays",
+    (key) => {
+      expect(projectConfigValue(key, ["a/one", "a/two"])).not.toEqual(
+        projectConfigValue(key, ["a/one", "a/three"]),
+      );
+    },
+  );
+
+  test("gives the same projection to a list in another order", () => {
+    expect(projectConfigValue("repo_allowlist", ["a/one", "a/two"])).toEqual(
+      projectConfigValue("repo_allowlist", ["a/two", "a/one"]),
+    );
+  });
+
+  test("gives a different projection to a list with a duplicated element", () => {
+    expect(
+      projectConfigValue("repo_allowlist", ["a/one", "a/one"]),
+    ).not.toEqual(projectConfigValue("repo_allowlist", ["a/one", "a/two"]));
+  });
+});
+
+describe("isKnownConfigKey", () => {
+  test("knows a key of the table", () => {
+    expect(isKnownConfigKey("daily_budget_usd")).toBe(true);
+  });
+
+  test("knows a real switch by its name", () => {
+    expect(isKnownConfigKey("pr_ci_fix_enabled")).toBe(true);
+  });
+
+  test("does not know a key that only matches the name rule of a switch", () => {
+    expect(isKnownConfigKey("junk_001_enabled")).toBe(false);
+  });
+
+  test("does not know a key that only starts like a labeler item", () => {
+    expect(isKnownConfigKey("allowed_labeler_junk")).toBe(false);
+  });
+
+  test("does not know a key that the table lacks", () => {
+    expect(isKnownConfigKey("brand_new_item")).toBe(false);
+  });
+
+  test.each(["constructor", "toString", "__proto__"])(
+    "does not know the name %s of an object property",
+    (key) => {
+      expect(isKnownConfigKey(key)).toBe(false);
+    },
+  );
 });
 
 describe("projectConfigValue: items that carry commands, URLs or identities", () => {
@@ -293,6 +404,36 @@ describe("projectConfigChange", () => {
     const change = projectConfigChange("max_fix_rounds", 3, 2);
     expect(JSON.stringify(change)).not.toContain("changed");
   });
+
+  test("keeps the redacted mark of a hashed item whose values hold references", () => {
+    const change = projectConfigChange(
+      "allowed_check_commands",
+      ["echo $var:f/factory/a"],
+      ["echo $var:f/factory/b"],
+    );
+    expect(change.after).toEqual(REDACTED_WITH_HASH);
+  });
+
+  test("keeps the count of a list item next to its hash", () => {
+    const change = projectConfigChange(
+      "repo_allowlist",
+      ["a/one"],
+      ["a/one", "a/two"],
+    );
+    expect(change.after).toEqual({
+      count: 2,
+      hash: expect.stringMatching(HEX16),
+    });
+  });
+
+  test("gives the before and the after of a replaced list element different hashes", () => {
+    const change = projectConfigChange(
+      "default_reviewers",
+      ["octo-a", "octo-b"],
+      ["octo-a", "octo-c"],
+    );
+    expect(change.before).not.toEqual(change.after);
+  });
 });
 
 describe("the reason codes and the sources", () => {
@@ -305,6 +446,7 @@ describe("the reason codes and the sources", () => {
       "out_of_band_change",
       "out_of_band_removed",
       "snapshot_baseline",
+      "out_of_band_added",
     ]);
   });
 
@@ -877,6 +1019,38 @@ describe("collectConfigHistoryEvidence", () => {
     });
     const evidence = await collectConfigHistoryEvidence(sql, START, END);
     expect(evidence.period_baseline).toBe(2);
+  });
+
+  test("leaves the marker row of the baseline out of every count of the period", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        {
+          item_key: "config_snapshot_baseline",
+          reason_code: "snapshot_baseline",
+          changes: 1,
+        },
+        { item_key: "a_enabled", reason_code: "snapshot_baseline", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect([
+      evidence.period_baseline,
+      evidence.period_by_reason,
+      evidence.period_by_item,
+    ]).toEqual([1, [{ reason_code: "snapshot_baseline", count: 1 }], []]);
+  });
+
+  test("counts an item added after the baseline as a change of its item", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        { item_key: "a_enabled", reason_code: "out_of_band_added", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect([evidence.period_changes, evidence.period_by_item]).toEqual([
+      1,
+      [{ item_key: "a_enabled", count: 1 }],
+    ]);
   });
 
   test("starts the empty value with no baseline row", () => {

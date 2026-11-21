@@ -5,19 +5,27 @@ import type {
   ConfigProjection,
   ConfigProjectionInput,
 } from "../../f/factory/lib/config_history.ts";
-import { projectConfigValue } from "../../f/factory/lib/config_history.ts";
 import {
+  isKnownConfigKey,
+  projectConfigValue,
+  SNAPSHOT_BASELINE_MARKER_KEY,
+} from "../../f/factory/lib/config_history.ts";
+import {
+  deferralProblem,
   diffSnapshot,
   loadLatestProjections,
+  orderChanges,
   parseStoredProjection,
   projectConfigSnapshot,
   REMOVED_PROJECTION,
   runConfigSnapshot,
   SNAPSHOT_ACTOR,
   SNAPSHOT_ROW_CAP,
+  SNAPSHOT_UNKNOWN_KEYS_LIMIT,
   type SnapshotLog,
   type SnapshotPorts,
   toAppendInput,
+  UNKNOWN_KEYS_ITEM_KEY,
 } from "../../f/factory/lib/config_snapshot.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 
@@ -36,6 +44,14 @@ function projectionMap(
 function latestMap(entries: Record<string, unknown>): Map<string, unknown> {
   return new Map(Object.entries(entries));
 }
+
+const HEX16 = /^[0-9a-f]{16}$/;
+
+/** 伏せた射影。生の値は持たず、生の値のハッシュだけを持つ。 */
+const REDACTED_WITH_HASH = {
+  redacted: true,
+  hash: expect.stringMatching(HEX16),
+};
 
 /** 設定の生の値に入れる、漏れてはならない文字列。 */
 const LEAKY = {
@@ -79,6 +95,12 @@ type Overrides = {
   readonly cap?: number;
   readonly now?: () => number;
   readonly deadlineMs?: number;
+  readonly unknownKeysLimit?: number;
+};
+
+/** 基準の段階が終わった履歴。印の行が最後の値として残る。 */
+const BASELINE_DONE: Record<string, unknown> = {
+  [SNAPSHOT_BASELINE_MARKER_KEY]: { kind: "marker" },
 };
 
 type Harness = {
@@ -119,6 +141,9 @@ function harness(
     ...(overrides.deadlineMs === undefined
       ? {}
       : { deadlineMs: overrides.deadlineMs }),
+    ...(overrides.unknownKeysLimit === undefined
+      ? {}
+      : { unknownKeysLimit: overrides.unknownKeysLimit }),
   };
   return { ports, history, logs };
 }
@@ -147,11 +172,22 @@ describe("projectConfigSnapshot: every top-level item is projected", () => {
     });
   });
 
-  test("projects a list to its length", () => {
+  test("projects a list to its length and a hash of its elements", () => {
     const projection = projectConfigSnapshot({
       repo_allowlist: ["a/b", "c/d"],
     });
-    expect(projection?.items.get("repo_allowlist")).toEqual({ count: 2 });
+    expect(projection?.items.get("repo_allowlist")).toEqual({
+      count: 2,
+      hash: expect.stringMatching(HEX16),
+    });
+  });
+
+  test("projects a list whose element was replaced to another value with the same count", () => {
+    const before = projectConfigSnapshot({ repo_allowlist: ["a/b", "c/d"] });
+    const after = projectConfigSnapshot({ repo_allowlist: ["a/b", "e/f"] });
+    expect(before?.items.get("repo_allowlist")).not.toEqual(
+      after?.items.get("repo_allowlist"),
+    );
   });
 
   test("projects a short name for an enum item as it is", () => {
@@ -180,9 +216,9 @@ describe("projectConfigSnapshot: every top-level item is projected", () => {
       windmill_public_url: "$var:f/factory/url",
     });
     expect(Object.fromEntries(projection?.items ?? [])).toEqual({
-      implement_enabled: { redacted: true },
-      daily_budget_usd: { redacted: true },
-      windmill_public_url: { redacted: true },
+      implement_enabled: REDACTED_WITH_HASH,
+      daily_budget_usd: REDACTED_WITH_HASH,
+      windmill_public_url: REDACTED_WITH_HASH,
     });
   });
 
@@ -190,9 +226,43 @@ describe("projectConfigSnapshot: every top-level item is projected", () => {
     const projection = projectConfigSnapshot({
       check_commands_by_repo: { "a/b": ["$var:f/factory/command"] },
     });
-    expect(projection?.items.get("check_commands_by_repo")).toEqual({
-      redacted: true,
+    expect(projection?.items.get("check_commands_by_repo")).toEqual(
+      REDACTED_WITH_HASH,
+    );
+  });
+
+  test("gives two different references held by the same item two different projections", () => {
+    const first = projectConfigSnapshot({
+      allowed_check_commands: ["echo $var:f/factory/a"],
     });
+    const second = projectConfigSnapshot({
+      allowed_check_commands: ["echo $var:f/factory/b"],
+    });
+    expect(first?.items.get("allowed_check_commands")).not.toEqual(
+      second?.items.get("allowed_check_commands"),
+    );
+  });
+
+  test("gives the same reference held by the same item the same projection", () => {
+    const first = projectConfigSnapshot({
+      allowed_check_commands: ["echo $var:f/factory/a"],
+    });
+    const second = projectConfigSnapshot({
+      allowed_check_commands: ["echo $var:f/factory/a"],
+    });
+    expect(first?.items.get("allowed_check_commands")).toEqual(
+      second?.items.get("allowed_check_commands"),
+    );
+  });
+
+  test("copies no reference name into the projection", () => {
+    const projection = projectConfigSnapshot({
+      allowed_check_commands: ["echo $var:f/factory/private-name"],
+      model: "$res:f/factory/private-name",
+    });
+    expect(JSON.stringify([...(projection?.items ?? [])])).not.toContain(
+      "private-name",
+    );
   });
 
   test("counts the items that hold a reference", () => {
@@ -259,6 +329,107 @@ describe("projectConfigSnapshot: every top-level item is projected", () => {
   });
 });
 
+/** 知らない項目を、名前の昇順に並ぶ連番の名前で作る。 */
+function junkKeys(count: number): Record<string, number> {
+  return Object.fromEntries(
+    Array.from({ length: count }, (_, index) => [
+      `junk_${String(index).padStart(3, "0")}`,
+      index,
+    ]),
+  );
+}
+
+describe("projectConfigSnapshot: the limit of the keys that are not known", () => {
+  test("projects every unknown key up to the limit", () => {
+    const projection = projectConfigSnapshot(
+      junkKeys(SNAPSHOT_UNKNOWN_KEYS_LIMIT),
+    );
+    expect(projection?.items.size).toBe(SNAPSHOT_UNKNOWN_KEYS_LIMIT);
+  });
+
+  test("adds no mark item at the limit", () => {
+    const projection = projectConfigSnapshot(
+      junkKeys(SNAPSHOT_UNKNOWN_KEYS_LIMIT),
+    );
+    expect(projection?.items.has(UNKNOWN_KEYS_ITEM_KEY)).toBe(false);
+  });
+
+  test("projects only the first unknown keys by name above the limit", () => {
+    const projection = projectConfigSnapshot(junkKeys(5), 3);
+    expect(
+      [...(projection?.items.keys() ?? [])].filter((key) =>
+        key.startsWith("junk_"),
+      ),
+    ).toEqual(["junk_000", "junk_001", "junk_002"]);
+  });
+
+  test("lists the unknown keys over the limit as excluded", () => {
+    const projection = projectConfigSnapshot(junkKeys(5), 3);
+    expect([...(projection?.excluded ?? [])]).toEqual(["junk_003", "junk_004"]);
+  });
+
+  test("puts the count of all unknown keys into one mark item above the limit", () => {
+    const projection = projectConfigSnapshot(junkKeys(5), 3);
+    expect(projection?.items.get(UNKNOWN_KEYS_ITEM_KEY)).toEqual({ count: 5 });
+  });
+
+  test("counts the unknown keys that the resource holds", () => {
+    const projection = projectConfigSnapshot(
+      { ...junkKeys(5), daily_budget_usd: 20 },
+      3,
+    );
+    expect(projection?.unknown_keys).toBe(5);
+  });
+
+  test("projects every known key however many unknown keys come before it by name", () => {
+    const projection = projectConfigSnapshot(
+      { ...junkKeys(5), pr_ci_fix_enabled: true, daily_budget_usd: 20 },
+      3,
+    );
+    expect([
+      projection?.items.get("pr_ci_fix_enabled"),
+      projection?.items.get("daily_budget_usd"),
+    ]).toEqual([true, 20]);
+  });
+
+  test("treats a key that only matches the name rule of a switch as unknown", () => {
+    const projection = projectConfigSnapshot(
+      { aaa_enabled: true, bbb_enabled: true, ccc_enabled: true },
+      2,
+    );
+    expect([...(projection?.excluded ?? [])]).toEqual(["ccc_enabled"]);
+  });
+
+  test("skips the reserved names and counts them with the names that the history cannot hold", () => {
+    const projection = projectConfigSnapshot({
+      [SNAPSHOT_BASELINE_MARKER_KEY]: 1,
+      [UNKNOWN_KEYS_ITEM_KEY]: 1,
+      daily_budget_usd: 5,
+    });
+    expect([
+      [...(projection?.items.keys() ?? [])],
+      projection?.unnamed_keys,
+    ]).toEqual([["daily_budget_usd"], 2]);
+  });
+});
+
+describe("the known keys cover every item of the config", () => {
+  test("knows every item that the config parser returns", () => {
+    const parsed = parseFactoryConfig({
+      owners: [{ name: "octo-owner", kind: "user" }],
+      factory_repo: "https://github.com/octo-owner/repo",
+      instance_name: "test",
+    });
+    // 設定の解析が導く値で、resourceの項目ではない。
+    const derived = new Set(["design_enabled_ignored"]);
+    expect(
+      Object.keys(parsed).filter(
+        (key) => !derived.has(key) && !isKnownConfigKey(key),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("the projection table covers every item of the config", () => {
   test("gives a kind to every item that the config parser returns", () => {
     const parsed = parseFactoryConfig({
@@ -293,6 +464,34 @@ describe("parseStoredProjection", () => {
 
   test("reads the mark of a removed item", () => {
     expect(parseStoredProjection({ removed: true })).toEqual({ removed: true });
+  });
+
+  test("reads a count with its hash", () => {
+    expect(
+      parseStoredProjection({ count: 2, hash: "0123456789abcdef" }),
+    ).toEqual({ count: 2, hash: "0123456789abcdef" });
+  });
+
+  test("reads a count without a hash, as the rows written before the hash have it", () => {
+    expect(parseStoredProjection({ count: 2 })).toEqual({ count: 2 });
+  });
+
+  test("reads a redacted mark with its hash", () => {
+    expect(
+      parseStoredProjection({ redacted: true, hash: "0123456789abcdef" }),
+    ).toEqual({ redacted: true, hash: "0123456789abcdef" });
+  });
+
+  test("reads a redacted mark without a hash, as the rows written before the hash have it", () => {
+    expect(parseStoredProjection({ redacted: true })).toEqual({
+      redacted: true,
+    });
+  });
+
+  test("reads the marker of the end of the baseline", () => {
+    expect(parseStoredProjection({ kind: "marker" })).toEqual({
+      kind: "marker",
+    });
   });
 
   test("reads null as null", () => {
@@ -502,6 +701,162 @@ describe("diffSnapshot", () => {
       ).map((change) => change.key),
     ).toEqual(["a_item", "b_item", "c_item"]);
   });
+
+  test("reports an item that has no history as added once the baseline is done", () => {
+    expect(
+      diffSnapshot(latestMap({}), projectionMap({ max_turns: 30 }), true),
+    ).toEqual([{ key: "max_turns", kind: "added", before: null, after: 30 }]);
+  });
+
+  test("still reports a changed item as changed once the baseline is done", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ max_turns: 30 }),
+        projectionMap({ max_turns: 40 }),
+        true,
+      ).map((change) => change.kind),
+    ).toEqual(["changed"]);
+  });
+});
+
+describe("diffSnapshot: lists and redacted values", () => {
+  const HASH_A = "0123456789abcdef";
+  const HASH_B = "fedcba9876543210";
+
+  test("reports a list whose hash differs although its count is the same", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ repo_allowlist: { count: 2, hash: HASH_A } }),
+        projectionMap({ repo_allowlist: { count: 2, hash: HASH_B } }),
+      ).map((change) => change.kind),
+    ).toEqual(["changed"]);
+  });
+
+  test("reports nothing for a list with the same count and hash", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ repo_allowlist: { count: 2, hash: HASH_A } }),
+        projectionMap({ repo_allowlist: { count: 2, hash: HASH_A } }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("reports a list stored without a hash once, as a change that keeps the count", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ repo_allowlist: { count: 2 } }),
+        projectionMap({ repo_allowlist: { count: 2, hash: HASH_A } }),
+      ),
+    ).toEqual([
+      {
+        key: "repo_allowlist",
+        kind: "changed",
+        before: { count: 2 },
+        after: { count: 2, hash: HASH_A },
+      },
+    ]);
+  });
+
+  test("reports nothing for a list stored with its hash after that one change", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ repo_allowlist: { count: 2, hash: HASH_A } }),
+        projectionMap({ repo_allowlist: { count: 2, hash: HASH_A } }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("keeps the count in the before of a list that changes", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ repo_allowlist: { count: 2, hash: HASH_A } }),
+        projectionMap({ repo_allowlist: { count: 3, hash: HASH_B } }),
+      )[0]?.before,
+    ).toEqual({ count: 2, hash: HASH_A });
+  });
+
+  test("reports a redacted item whose hash differs", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ model: { redacted: true, hash: HASH_A } }),
+        projectionMap({ model: { redacted: true, hash: HASH_B } }),
+      ).map((change) => change.kind),
+    ).toEqual(["changed"]);
+  });
+
+  test("reports nothing for a redacted item with the same hash", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ model: { redacted: true, hash: HASH_A } }),
+        projectionMap({ model: { redacted: true, hash: HASH_A } }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("reports a redacted item stored without a hash once", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ model: { redacted: true } }),
+        projectionMap({ model: { redacted: true, hash: HASH_A } }),
+      ).map((change) => change.kind),
+    ).toEqual(["changed"]);
+  });
+
+  test("reports an item that turns from a plain hash into a redacted one", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ owners: { hash: HASH_A } }),
+        projectionMap({ owners: { redacted: true, hash: HASH_A } }),
+      ).map((change) => change.kind),
+    ).toEqual(["changed"]);
+  });
+});
+
+describe("orderChanges", () => {
+  function change(
+    key: string,
+    kind: "baseline" | "added" | "changed" | "removed",
+  ) {
+    return { key, kind, before: null, after: 1 } as const;
+  }
+
+  test("puts the changes of known items before those of unknown items", () => {
+    expect(
+      orderChanges([
+        change("aaa_junk", "changed"),
+        change("model", "changed"),
+        change("daily_budget_usd", "removed"),
+      ]).map((entry) => entry.key),
+    ).toEqual(["daily_budget_usd", "model", "aaa_junk"]);
+  });
+
+  test("keeps the order of the names within the same group", () => {
+    expect(
+      orderChanges([
+        change("zzz_junk", "added"),
+        change("aaa_junk", "changed"),
+      ]).map((entry) => entry.key),
+    ).toEqual(["aaa_junk", "zzz_junk"]);
+  });
+
+  test("puts the baseline rows last, after the changes of unknown items", () => {
+    expect(
+      orderChanges([
+        change("daily_budget_usd", "baseline"),
+        change("zzz_junk", "changed"),
+        change("model", "changed"),
+      ]).map((entry) => entry.key),
+    ).toEqual(["model", "zzz_junk", "daily_budget_usd"]);
+  });
+
+  test("counts the item of the unknown keys as a known item", () => {
+    expect(
+      orderChanges([
+        change("aaa_junk", "changed"),
+        change(UNKNOWN_KEYS_ITEM_KEY, "changed"),
+      ]).map((entry) => entry.key),
+    ).toEqual([UNKNOWN_KEYS_ITEM_KEY, "aaa_junk"]);
+  });
 });
 
 describe("toAppendInput", () => {
@@ -527,6 +882,16 @@ describe("toAppendInput", () => {
       after: 40,
     });
     expect(input.reason).toBe("snapshot_baseline");
+  });
+
+  test("gives an addition its own reason code", () => {
+    const input = toAppendInput({
+      key: "max_turns",
+      kind: "added",
+      before: null,
+      after: 40,
+    });
+    expect(input.reason).toBe("out_of_band_added");
   });
 
   test("gives a removal its own reason code", () => {
@@ -605,7 +970,11 @@ describe("runConfigSnapshot: the first run", () => {
   test("writes a baseline for every item that has no history", async () => {
     const { ports, history } = harness(RAW);
     await runConfigSnapshot(ports);
-    expect(history.rows.map((row) => [row.key, row.reason])).toEqual([
+    expect(
+      history.rows
+        .filter((row) => row.key !== SNAPSHOT_BASELINE_MARKER_KEY)
+        .map((row) => [row.key, row.reason]),
+    ).toEqual([
       ["daily_budget_usd", "snapshot_baseline"],
       ["implement_enabled", "snapshot_baseline"],
     ]);
@@ -617,9 +986,186 @@ describe("runConfigSnapshot: the first run", () => {
       keys_checked: 2,
       baseline: 2,
       changed: 0,
+      added: 0,
       failed: 0,
       skipped_reason: null,
     });
+  });
+});
+
+describe("runConfigSnapshot: the end of the baseline", () => {
+  test("writes the marker as the last row of a complete baseline pass", async () => {
+    const { ports, history } = harness(RAW);
+    await runConfigSnapshot(ports);
+    expect(history.rows[history.rows.length - 1]).toEqual({
+      key: SNAPSHOT_BASELINE_MARKER_KEY,
+      before: null,
+      after: { kind: "marker" },
+      actor: SNAPSHOT_ACTOR,
+      source: "out_of_band",
+      reason: "snapshot_baseline",
+    });
+  });
+
+  test("counts the marker that it wrote", async () => {
+    const { ports } = harness(RAW);
+    expect((await runConfigSnapshot(ports)).marker_written).toBe(1);
+  });
+
+  test("writes the marker once and not again in the next run", async () => {
+    const { ports, history } = harness(RAW);
+    await runConfigSnapshot(ports);
+    await runConfigSnapshot(ports);
+    expect(
+      history.rows.filter((row) => row.key === SNAPSHOT_BASELINE_MARKER_KEY)
+        .length,
+    ).toBe(1);
+  });
+
+  test("writes the marker when every item already has a history row", async () => {
+    const { ports, history } = harness(RAW, {
+      daily_budget_usd: 20,
+      implement_enabled: false,
+    });
+    await runConfigSnapshot(ports);
+    expect(history.rows.map((row) => row.key)).toEqual([
+      SNAPSHOT_BASELINE_MARKER_KEY,
+    ]);
+  });
+
+  test("does not write the marker while a baseline row could not be written", async () => {
+    const { ports, history } = harness(
+      RAW,
+      {},
+      {
+        append: (input) => {
+          if (input.key === "daily_budget_usd") return Promise.resolve(FAILURE);
+          history.rows.push(input);
+          history.latest.set(input.key, input.after);
+          return Promise.resolve({ recorded: true, id: 1 });
+        },
+      },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows.map((row) => row.key)).toEqual(["implement_enabled"]);
+  });
+
+  test("does not write the marker when the deadline stopped the baseline", async () => {
+    let now = -1000;
+    const { ports, history } = harness(
+      RAW,
+      {},
+      {
+        now: () => {
+          now += 1000;
+          return now;
+        },
+        deadlineMs: 1500,
+      },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows.map((row) => row.key)).toEqual(["daily_budget_usd"]);
+  });
+
+  test("counts a marker that could not be written as a failure and writes it in the next run", async () => {
+    let failMarker = true;
+    const { ports, history } = harness(
+      RAW,
+      {},
+      {
+        append: (input) => {
+          if (input.key === SNAPSHOT_BASELINE_MARKER_KEY && failMarker) {
+            failMarker = false;
+            return Promise.resolve(FAILURE);
+          }
+          history.rows.push(input);
+          history.latest.set(input.key, input.after);
+          return Promise.resolve({ recorded: true, id: 1 });
+        },
+      },
+    );
+    const first = await runConfigSnapshot(ports);
+    await runConfigSnapshot(ports);
+    expect([
+      first.failed,
+      history.rows.filter((row) => row.key === SNAPSHOT_BASELINE_MARKER_KEY)
+        .length,
+    ]).toEqual([1, 1]);
+  });
+
+  test("continues the baseline in the next run when the first run did not finish it", async () => {
+    let now = -1000;
+    const { ports, history } = harness(
+      RAW,
+      {},
+      {
+        now: () => {
+          now += 1000;
+          return now;
+        },
+        deadlineMs: 1500,
+      },
+    );
+    await runConfigSnapshot(ports);
+    const next = harness(RAW, Object.fromEntries(history.latest));
+    await runConfigSnapshot(next.ports);
+    expect(
+      [...history.rows, ...next.history.rows].map((row) => [
+        row.key,
+        row.reason,
+      ]),
+    ).toEqual([
+      ["daily_budget_usd", "snapshot_baseline"],
+      ["implement_enabled", "snapshot_baseline"],
+      [SNAPSHOT_BASELINE_MARKER_KEY, "snapshot_baseline"],
+    ]);
+  });
+
+  test("does not treat the marker as an item that has gone from the config", async () => {
+    const { ports, history } = harness(RAW, {
+      ...BASELINE_DONE,
+      daily_budget_usd: 20,
+      implement_enabled: false,
+    });
+    await runConfigSnapshot(ports);
+    expect(history.rows).toEqual([]);
+  });
+
+  test("writes an item that appeared after the marker as an addition with a null before", async () => {
+    const { ports, history } = harness(
+      { ...RAW, max_turns: 30 },
+      { ...BASELINE_DONE, daily_budget_usd: 20, implement_enabled: false },
+    );
+    await runConfigSnapshot(ports);
+    expect(
+      history.rows.map((row) => [row.key, row.reason, row.before, row.after]),
+    ).toEqual([["max_turns", "out_of_band_added", null, 30]]);
+  });
+
+  test("counts an addition apart from a baseline row", async () => {
+    const { ports } = harness(
+      { ...RAW, max_turns: 30 },
+      { ...BASELINE_DONE, daily_budget_usd: 20, implement_enabled: false },
+    );
+    expect(await runConfigSnapshot(ports)).toMatchObject({
+      added: 1,
+      baseline: 0,
+      marker_written: 0,
+    });
+  });
+
+  test("writes an item that was added after the first run as an addition, not as a baseline row", async () => {
+    // 最初の実行で基準と印が書かれた後に足された項目は、基準の行にならず、足された項目になる。
+    const first = harness(RAW);
+    await runConfigSnapshot(first.ports);
+    const second = harness(
+      { ...RAW, max_turns: 30 },
+      Object.fromEntries(first.history.latest),
+    );
+    await runConfigSnapshot(second.ports);
+    expect(second.history.rows.map((row) => row.reason)).toEqual([
+      "out_of_band_added",
+    ]);
   });
 });
 
@@ -634,6 +1180,7 @@ describe("runConfigSnapshot: later runs", () => {
 
   test("writes one out_of_band row for the item that changed", async () => {
     const { ports, history } = harness(RAW, {
+      ...BASELINE_DONE,
       daily_budget_usd: 10,
       implement_enabled: false,
     });
@@ -648,7 +1195,7 @@ describe("runConfigSnapshot: later runs", () => {
   test("writes the removal of an item that has gone from the config", async () => {
     const { ports, history } = harness(
       { implement_enabled: false },
-      { daily_budget_usd: 10, implement_enabled: false },
+      { ...BASELINE_DONE, daily_budget_usd: 10, implement_enabled: false },
     );
     const result = await runConfigSnapshot(ports);
     expect([history.rows[0]?.reason, result.removed]).toEqual([
@@ -660,6 +1207,7 @@ describe("runConfigSnapshot: later runs", () => {
   test("writes nothing for a change that the Console path has already recorded", async () => {
     // Consoleの経路が書いた行は、変更後の値の射影を持つ。resourceの今の値と同じなら、二重に書かない。
     const { ports, history } = harness(RAW, {
+      ...BASELINE_DONE,
       daily_budget_usd: 20,
       implement_enabled: false,
     });
@@ -669,6 +1217,7 @@ describe("runConfigSnapshot: later runs", () => {
 
   test("writes a row for a Console row whose observed value differs from the live value", async () => {
     const { ports, history } = harness(RAW, {
+      ...BASELINE_DONE,
       daily_budget_usd: 15,
       implement_enabled: false,
     });
@@ -678,6 +1227,7 @@ describe("runConfigSnapshot: later runs", () => {
 
   test("records the last value of the history as the before of the row", async () => {
     const { ports, history } = harness(RAW, {
+      ...BASELINE_DONE,
       daily_budget_usd: 10,
       implement_enabled: false,
     });
@@ -685,19 +1235,77 @@ describe("runConfigSnapshot: later runs", () => {
     expect(history.rows[0]?.before).toBe(10);
   });
 
-  test("writes only the new item when a new item appears next to recorded ones", async () => {
+  test("writes a change of a list whose element was replaced and whose count stayed", async () => {
+    const stored = projectConfigValue("repo_allowlist", ["a/one", "a/two"]);
     const { ports, history } = harness(
-      { ...RAW, max_turns: 30 },
-      { daily_budget_usd: 20, implement_enabled: false },
+      { repo_allowlist: ["a/one", "a/three"] },
+      { ...BASELINE_DONE, repo_allowlist: stored },
     );
     await runConfigSnapshot(ports);
-    expect(history.rows.map((row) => [row.key, row.reason])).toEqual([
-      ["max_turns", "snapshot_baseline"],
+    expect(history.rows.map((row) => [row.reason, row.before])).toEqual([
+      ["out_of_band_change", stored],
     ]);
+  });
+
+  test("writes nothing for a list in another order", async () => {
+    const { ports, history } = harness(
+      { repo_allowlist: ["a/two", "a/one"] },
+      {
+        ...BASELINE_DONE,
+        repo_allowlist: projectConfigValue("repo_allowlist", [
+          "a/one",
+          "a/two",
+        ]),
+      },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows).toEqual([]);
+  });
+
+  test("writes a change from one reference-holding value to another", async () => {
+    const stored = projectConfigValue("allowed_check_commands", [
+      "echo $var:f/factory/a",
+    ]);
+    const { ports, history } = harness(
+      { allowed_check_commands: ["echo $var:f/factory/b"] },
+      { ...BASELINE_DONE, allowed_check_commands: stored },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows.map((row) => row.reason)).toEqual([
+      "out_of_band_change",
+    ]);
+  });
+
+  test("writes nothing for the same reference-holding value", async () => {
+    const { ports, history } = harness(
+      { allowed_check_commands: ["echo $var:f/factory/a"] },
+      {
+        ...BASELINE_DONE,
+        allowed_check_commands: projectConfigValue("allowed_check_commands", [
+          "echo $var:f/factory/a",
+        ]),
+      },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows).toEqual([]);
+  });
+
+  test("puts no reference name into the rows of reference-holding values", async () => {
+    const { ports, history } = harness(
+      { allowed_check_commands: ["echo $var:f/factory/private-name"] },
+      {
+        ...BASELINE_DONE,
+        allowed_check_commands: projectConfigValue("allowed_check_commands", [
+          "echo $var:f/factory/other-name",
+        ]),
+      },
+    );
+    await runConfigSnapshot(ports);
+    expect(JSON.stringify(history.rows)).not.toContain("private-name");
   });
 });
 
-describe("runConfigSnapshot: the cap", () => {
+describe("runConfigSnapshot: the order and the cap", () => {
   function manyItems(count: number): Record<string, number> {
     return Object.fromEntries(
       Array.from({ length: count }, (_, index) => [
@@ -707,25 +1315,27 @@ describe("runConfigSnapshot: the cap", () => {
     );
   }
 
-  test("writes at most the cap in one run", async () => {
-    const { ports, history } = harness(manyItems(130));
+  const MANY = { unknownKeysLimit: 1000 } as const;
+
+  test("writes at most the cap in one run once the baseline is done", async () => {
+    const { ports, history } = harness(manyItems(130), BASELINE_DONE, MANY);
     await runConfigSnapshot(ports);
     expect(history.rows.length).toBe(SNAPSHOT_ROW_CAP);
   });
 
   test("counts the differences that wait for the next run", async () => {
-    const { ports } = harness(manyItems(130));
+    const { ports } = harness(manyItems(130), BASELINE_DONE, MANY);
     expect((await runConfigSnapshot(ports)).deferred).toBe(30);
   });
 
   test("warns about the cap with counts only", async () => {
-    const { ports, logs } = harness(manyItems(130));
+    const { ports, logs } = harness(manyItems(130), BASELINE_DONE, MANY);
     await runConfigSnapshot(ports);
     expect(logs.some((line) => line.includes('"deferred":30'))).toBe(true);
   });
 
   test("writes the rest in the next run, in the order of the names", async () => {
-    const { ports, history } = harness(manyItems(130));
+    const { ports, history } = harness(manyItems(130), BASELINE_DONE, MANY);
     await runConfigSnapshot(ports);
     await runConfigSnapshot(ports);
     expect(history.rows.map((row) => row.key)).toEqual(
@@ -734,9 +1344,174 @@ describe("runConfigSnapshot: the cap", () => {
   });
 
   test("takes a smaller cap from the caller", async () => {
-    const { ports, history } = harness(manyItems(10), {}, { cap: 3 });
+    const { ports, history } = harness(manyItems(10), BASELINE_DONE, {
+      cap: 3,
+    });
     await runConfigSnapshot(ports);
     expect(history.rows.length).toBe(3);
+  });
+
+  test("does not hold a baseline row back by the cap", async () => {
+    const { ports, history } = harness(manyItems(130), {}, MANY);
+    await runConfigSnapshot(ports);
+    expect(
+      history.rows.filter((row) => row.reason === "snapshot_baseline").length,
+    ).toBe(131);
+  });
+
+  test("writes a targeted change of a known item first although many unknown keys changed too", async () => {
+    // 知らない項目の変更が多く、名前の順で先に並んでも、知っている項目の変更が先に書かれる。
+    const stored = Object.fromEntries(
+      Object.entries(manyItems(130)).map(([key, value]) => [key, value + 1000]),
+    );
+    const { ports, history } = harness(
+      { ...manyItems(130), max_turns: 40 },
+      { ...BASELINE_DONE, max_turns: 30, ...stored },
+      { ...MANY, cap: 3 },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows[0]?.key).toBe("max_turns");
+  });
+
+  test("writes the changes of known items before the additions of unknown keys under the cap", async () => {
+    const { ports, history } = harness(
+      { ...manyItems(5), max_turns: 40, daily_budget_usd: 9 },
+      { ...BASELINE_DONE, max_turns: 30, daily_budget_usd: 8 },
+      { ...MANY, cap: 3 },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows.map((row) => row.key)).toEqual([
+      "daily_budget_usd",
+      "max_turns",
+      "item_000",
+    ]);
+  });
+});
+
+describe("runConfigSnapshot: the keys that are not known", () => {
+  test("writes one row with the count of the unknown keys above the limit", async () => {
+    const { ports, history } = harness(junkKeys(7), BASELINE_DONE, {
+      unknownKeysLimit: 5,
+    });
+    await runConfigSnapshot(ports);
+    expect(
+      history.rows
+        .filter((row) => row.key === UNKNOWN_KEYS_ITEM_KEY)
+        .map((row) => [row.reason, row.before, row.after]),
+    ).toEqual([["out_of_band_added", null, { count: 7 }]]);
+  });
+
+  test("writes only the first unknown keys by name above the limit", async () => {
+    const { ports, history } = harness(junkKeys(7), BASELINE_DONE, {
+      unknownKeysLimit: 5,
+    });
+    await runConfigSnapshot(ports);
+    expect(
+      history.rows
+        .map((row) => row.key)
+        .filter((key) => key.startsWith("junk_")),
+    ).toEqual(["junk_000", "junk_001", "junk_002", "junk_003", "junk_004"]);
+  });
+
+  test("counts the unknown keys over the limit as deferred", async () => {
+    const { ports } = harness(junkKeys(7), BASELINE_DONE, {
+      unknownKeysLimit: 5,
+    });
+    expect((await runConfigSnapshot(ports)).deferred).toBe(2);
+  });
+
+  test("counts the unknown keys that the resource holds", async () => {
+    const { ports } = harness(junkKeys(7), BASELINE_DONE, {
+      unknownKeysLimit: 5,
+    });
+    expect((await runConfigSnapshot(ports)).unknown_keys).toBe(7);
+  });
+
+  test("writes the count row again only when the count changes", async () => {
+    const first = harness(junkKeys(7), BASELINE_DONE, { unknownKeysLimit: 5 });
+    await runConfigSnapshot(first.ports);
+    const second = harness(
+      junkKeys(7),
+      Object.fromEntries(first.history.latest),
+      { unknownKeysLimit: 5 },
+    );
+    await runConfigSnapshot(second.ports);
+    expect(second.history.rows).toEqual([]);
+  });
+
+  test("writes a change of the count when more unknown keys come", async () => {
+    const first = harness(junkKeys(7), BASELINE_DONE, { unknownKeysLimit: 5 });
+    await runConfigSnapshot(first.ports);
+    const second = harness(
+      junkKeys(9),
+      Object.fromEntries(first.history.latest),
+      { unknownKeysLimit: 5 },
+    );
+    await runConfigSnapshot(second.ports);
+    expect(
+      second.history.rows.map((row) => [row.key, row.reason, row.after]),
+    ).toEqual([[UNKNOWN_KEYS_ITEM_KEY, "out_of_band_change", { count: 9 }]]);
+  });
+
+  test("does not report an excluded key that has a history row as removed", async () => {
+    const { ports, history } = harness(
+      junkKeys(7),
+      { ...BASELINE_DONE, junk_006: 6 },
+      { unknownKeysLimit: 5 },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows.map((row) => row.reason)).not.toContain(
+      "out_of_band_removed",
+    );
+  });
+
+  test("does not let the unknown keys hold back the baseline of the known ones", async () => {
+    const { ports, history } = harness(
+      { ...junkKeys(7), daily_budget_usd: 20 },
+      {},
+      { unknownKeysLimit: 5 },
+    );
+    await runConfigSnapshot(ports);
+    expect(
+      history.rows
+        .filter((row) => row.key === "daily_budget_usd")
+        .map((row) => row.reason),
+    ).toEqual(["snapshot_baseline"]);
+  });
+});
+
+describe("deferralProblem", () => {
+  const COUNTS = {
+    keys_checked: 0,
+    baseline: 0,
+    added: 0,
+    changed: 0,
+    removed: 0,
+    failed: 0,
+    deferred: 0,
+    reference_keys: 0,
+    unnamed_keys: 0,
+    unknown_keys: 0,
+    marker_written: 0,
+    skipped_reason: null,
+  } as const;
+
+  test("returns null when nothing is deferred", () => {
+    expect(deferralProblem(COUNTS)).toBeNull();
+  });
+
+  test("returns a message with the count when changes are deferred", () => {
+    expect(deferralProblem({ ...COUNTS, deferred: 4 })).toContain("4");
+  });
+
+  test("returns null for a run that was skipped", () => {
+    expect(
+      deferralProblem({
+        ...COUNTS,
+        deferred: 4,
+        skipped_reason: "resource_unreadable",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -765,7 +1540,10 @@ describe("runConfigSnapshot: the order of the reads", () => {
     // 履歴を先に読むので、Consoleがその後で書いた変更(resourceと履歴の行)は、resourceの新しい値だけが見える。
     // 履歴の古い値との差は、正しい値の行(経路の記録だけが違う重複)になり、古い値へ戻す行にはならない。
     let resource: Record<string, unknown> = { daily_budget_usd: 20 };
-    const history = new Map<string, unknown>([["daily_budget_usd", 20]]);
+    const history = new Map<string, unknown>([
+      ["daily_budget_usd", 20],
+      [SNAPSHOT_BASELINE_MARKER_KEY, { kind: "marker" }],
+    ]);
     const written: ConfigProjectionInput[] = [];
     const { ports } = harness(
       resource,
@@ -843,11 +1621,11 @@ describe("runConfigSnapshot: the deadline of the whole run", () => {
   });
 
   test("adds the rows left by the deadline to the rows left by the cap", async () => {
-    const { ports } = harness(
-      manyItems(10),
-      {},
-      { cap: 5, now: steppingClock(), deadlineMs: 2500 },
-    );
+    const { ports } = harness(manyItems(10), BASELINE_DONE, {
+      cap: 5,
+      now: steppingClock(),
+      deadlineMs: 2500,
+    });
     expect((await runConfigSnapshot(ports)).deferred).toBe(8);
   });
 
@@ -875,17 +1653,38 @@ describe("runConfigSnapshot: the deadline of the whole run", () => {
     await runConfigSnapshot(next.ports);
     expect(
       [...history.rows, ...next.history.rows].map((row) => row.key),
-    ).toEqual(Object.keys(manyItems(10)));
+    ).toEqual([...Object.keys(manyItems(10)), SNAPSHOT_BASELINE_MARKER_KEY]);
   });
 
-  test("writes everything when the clock stays before the deadline", async () => {
+  test("writes everything and the marker when the clock stays before the deadline", async () => {
     const { ports, history } = harness(
       manyItems(10),
       {},
       { now: () => 0, deadlineMs: 3500 },
     );
     await runConfigSnapshot(ports);
-    expect(history.rows.length).toBe(10);
+    expect(history.rows.length).toBe(11);
+  });
+
+  test("leaves the marker for the next run when the deadline passed after the last baseline row", async () => {
+    // 基準の行をすべて書いた後に時間が尽きたら、印は次の実行が書く。印が無い間は、基準の段階が続くだけである。
+    let now = -1000;
+    const { ports, history } = harness(
+      RAW,
+      {},
+      {
+        now: () => {
+          now += 1000;
+          return now;
+        },
+        deadlineMs: 2500,
+      },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows.map((row) => row.key)).toEqual([
+      "daily_budget_usd",
+      "implement_enabled",
+    ]);
   });
 });
 
@@ -941,6 +1740,7 @@ describe("runConfigSnapshot: failures", () => {
     await runConfigSnapshot(ports);
     await runConfigSnapshot(ports);
     expect(history.rows.map((row) => row.key).sort()).toEqual([
+      SNAPSHOT_BASELINE_MARKER_KEY,
       "daily_budget_usd",
       "implement_enabled",
     ]);

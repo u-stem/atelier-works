@@ -25,7 +25,9 @@ import { holdsReference, redactText } from "./console_redact.ts";
  * - unspecified: 呼び出し側が理由を決められなかった。
  * - out_of_band_change: 定期の照合が、Consoleの外の経路(CLI、Windmillの画面)の変更を見つけた。
  * - out_of_band_removed: 定期の照合が、履歴にある項目が設定から無くなったのを見つけた。
- * - snapshot_baseline: 定期の照合が、履歴にまだ無い項目の、最初の値を残した。変更ではなく、比べる基準である。
+ * - snapshot_baseline: 定期の照合が、基準の段階(基準の印が書かれるまで)に、履歴にまだ無い項目の最初の値を残した。変更ではなく、比べる基準である。
+ *   基準の印の行(項目名は`SNAPSHOT_BASELINE_MARKER_KEY`)も、この理由コードで書く。
+ * - out_of_band_added: 定期の照合が、基準の印が書かれた後に、設定へ足された項目を見つけた。変更として数える。
  */
 export const CONFIG_HISTORY_REASON_CODES = [
   "console_update",
@@ -35,6 +37,7 @@ export const CONFIG_HISTORY_REASON_CODES = [
   "out_of_band_change",
   "out_of_band_removed",
   "snapshot_baseline",
+  "out_of_band_added",
 ] as const;
 
 export type ConfigHistoryReasonCode =
@@ -42,6 +45,13 @@ export type ConfigHistoryReasonCode =
 
 /** 変更ではなく、比べる基準として書く行の理由コード。期間の変更の件数には数えない。 */
 const BASELINE_REASON_CODE: ConfigHistoryReasonCode = "snapshot_baseline";
+
+/**
+ * 基準の段階が終わったことを示す印の行の項目名。設定の項目ではない。
+ * 照合が、基準の行をすべて書き終えた最後に1行だけ書く。この行がある間は、履歴にまだ無い項目は基準でなく、足された項目として扱う。
+ * 証跡パックの集計には数えない。
+ */
+export const SNAPSHOT_BASELINE_MARKER_KEY = "config_snapshot_baseline";
 
 /**
  * 変更を書いた経路。表の`source`の制約と同じ一覧である。
@@ -69,11 +79,16 @@ export function isConfigHistoryReasonCode(
 /**
  * 履歴の`before`と`after`に入れる値。生の値は入れず、次のどれかにする。
  * - 真偽、有限の数、短い列挙の文字列、時刻の文字列、null: そのまま。
- * - `{ count }`: 一覧の件数。
+ * - `{ count, hash }`: 一覧の件数と、要素の正規化したJSONのsha256の先頭16桁。要素の順は比べない(並べ替えてから数える)。
+ *   件数だけでは、要素を別の要素に差し替えた変更が見えないので、ハッシュを添える。`hash`の無い`{ count }`は、ハッシュを足す前に書いた行の形で、読むだけである。
  * - `{ hash }`: コマンド、URL、身元に関わる値の正規化したJSONのsha256の先頭16桁。値が変わったかを検知するための印で、値を隠すものではない。
  *   塩を付けないので、候補が少ない値は、辞書や総当たりで当てられる。`changed`は、変更後の側だけに付く。
- * - `{ redacted: true }`: 参照、秘密らしい語、秘密の形、形に合わない文字列の代わり。
+ * - `{ redacted: true, hash }`: 参照、秘密らしい語、秘密の形、形に合わない文字列の代わり。
+ *   `hash`は生の値の正規化したJSONのsha256の先頭16桁で、メモリの中で計算するだけで、生の値は残さない。伏せた値の後の変更を見えなくしないために添える。
+ *   参照の名前は秘密の値ではない。秘密らしい文字列は、塩を付けないハッシュなので、候補が少なければ当てられる。
+ *   `hash`の無い`{ redacted: true }`は、ハッシュを足す前に書いた行の形で、読むだけである。
  * - `{ kind: "unknown" }`: 項目が未知か、値の型が項目の種類に合わない。値は入れない。
+ * - `{ kind: "marker" }`: 基準の段階が終わったことを示す印の行の値。定期の照合だけが書く。
  * - `{ removed: true }`: 項目が設定から無くなった。定期の照合だけが、変更後の側に入れる。値が`null`の項目とは区別する。
  */
 export type ConfigProjection =
@@ -81,15 +96,57 @@ export type ConfigProjection =
   | number
   | string
   | null
-  | { readonly count: number }
+  | { readonly count: number; readonly hash?: string }
   | { readonly hash: string; readonly changed?: boolean }
-  | { readonly redacted: true }
-  | { readonly kind: "unknown" }
+  | { readonly redacted: true; readonly hash?: string }
+  | { readonly kind: "unknown" | "marker" }
   | { readonly removed: true };
+
+/** `{ hash }`だけの射影か。`{ count, hash }`と`{ redacted, hash }`は、`hash`を持っても、この形ではない。 */
+export function isPlainHashProjection(
+  projection: ConfigProjection,
+): projection is { readonly hash: string; readonly changed?: boolean } {
+  return (
+    projection !== null &&
+    typeof projection === "object" &&
+    "hash" in projection &&
+    !("count" in projection) &&
+    !("redacted" in projection)
+  );
+}
 
 type KeyClass = "flag" | "number" | "timestamp" | "enum" | "count" | "hash";
 
-/** 項目の種類を持つ項目。ここに無い項目は、値を問わず`{ kind: "unknown" }`になる。 */
+/** 設定の旗(`<語幹>_enabled`)の語幹。 */
+const FLAG_STEMS: readonly string[] = [
+  "dependabot",
+  "dependabot_group",
+  "dependabot_merge",
+  "design",
+  "gh_collect",
+  "gh_collect_detail",
+  "implement",
+  "investigate",
+  "pr_ci_fix",
+  "pr_ci_watch",
+  "pr_conflict_fix",
+  "pr_conflict_watch",
+];
+
+/** 設定の時刻(`<語幹>_enabled_since`)の語幹。 */
+const SINCE_STEMS: readonly string[] = [
+  "design",
+  "pr_ci_fix",
+  "pr_conflict_fix",
+];
+
+/**
+ * 項目の種類を持つ項目。ここに無い項目は、値を問わず`{ kind: "unknown" }`になる(名前の規則に合う項目を除く)。
+ * この表の名前が、このコードが知っている項目の一覧である(`isKnownConfigKey`)。
+ * 名前の規則(`*_enabled`など)に合うだけの名前は、一覧に入れない。一覧は、照合が変更を書く順(知っている項目を先)と、
+ * 知らない項目の数の上限に使うので、名前の規則だけで知っている項目に数えると、設定へ足した多数の項目が先の順を占められる。
+ * 設定に足す項目は、ここに足す。足し忘れは、設定の解析の出力を調べるテストが見つける。
+ */
 const KEY_CLASSES: ReadonlyMap<string, KeyClass> = new Map<string, KeyClass>([
   // 生の値を残さず、ハッシュだけを残す項目。コマンド、URL、リポジトリ、身元に関わる。
   ...[
@@ -99,12 +156,21 @@ const KEY_CLASSES: ReadonlyMap<string, KeyClass> = new Map<string, KeyClass>([
     "factory_repo_id",
     "windmill_public_url",
     "owners",
+    "allowed_labeler_associations",
+    "allowed_labeler_ids",
+    "allowed_labeler_logins",
   ].map((key): [string, KeyClass] => [key, "hash"]),
-  // 要素の形が名前かURLの一覧。件数だけを残す。
+  // 要素の形が名前かURLの一覧。件数と、要素のハッシュだけを残す。
   ...["repo_allowlist", "dependabot_other_repos", "default_reviewers"].map(
     (key): [string, KeyClass] => [key, "count"],
   ),
-  ...["pr_ci_watch_human_prs"].map((key): [string, KeyClass] => [key, "flag"]),
+  ["pr_ci_watch_human_prs", "flag"],
+  // 旗は、名前が`<語幹>_enabled`の形である。語幹で並べて、旗の名前をそろえる。
+  ...FLAG_STEMS.map((stem): [string, KeyClass] => [`${stem}_enabled`, "flag"]),
+  ...SINCE_STEMS.map((stem): [string, KeyClass] => [
+    `${stem}_enabled_since`,
+    "timestamp",
+  ]),
   ...[
     "backup_keep_generations",
     "claude_timeout_sec",
@@ -163,8 +229,12 @@ function classOf(key: string): KeyClass | undefined {
   return key.endsWith("_enabled_since") ? "timestamp" : undefined;
 }
 
+/** このコードが種類を知っている項目の名前か。名前の規則に合うだけの項目は、知らない項目として扱う。 */
+export function isKnownConfigKey(key: string): boolean {
+  return KEY_CLASSES.has(key);
+}
+
 const UNKNOWN: ConfigProjection = { kind: "unknown" };
-const REDACTED: ConfigProjection = { redacted: true };
 
 /** 列挙の項目に通す文字列の形。短い名前に限る。 */
 const ENUM_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,59}$/;
@@ -176,15 +246,14 @@ const ISO_TIMESTAMP_PATTERN =
 const SECRET_WORD =
   /TOKEN|SECRET|KEY|PASSWORD|WEBHOOK|CREDENTIAL|AUTHORIZATION/i;
 
-/** 文字列を、参照や秘密らしさで調べ、そのまま残してよいときだけ残す。 */
+/** 文字列を、秘密らしさで調べ、そのまま残してよいときだけ残す。参照は、呼び出しの前に`projectConfigValue`が伏せる。 */
 function projectString(
   value: string,
   fits: (text: string) => boolean,
 ): ConfigProjection {
-  if (holdsReference(value)) return REDACTED;
-  if (SECRET_WORD.test(value)) return REDACTED;
-  if (redactText(value).masked) return REDACTED;
-  return fits(value) ? value : REDACTED;
+  if (SECRET_WORD.test(value)) return redacted(value);
+  if (redactText(value).masked) return redacted(value);
+  return fits(value) ? value : redacted(value);
 }
 
 function isTimestampText(text: string): boolean {
@@ -231,14 +300,29 @@ function shortHash(value: unknown): string {
 }
 
 /**
+ * 値を伏せた射影にする。生の値は残さず、生の値のハッシュだけを持つ。
+ * ハッシュは、伏せた値が後で別の値に変わったことを見えなくしないために添える。メモリの中で計算するだけで、ログにも返り値にも出さない。
+ */
+function redacted(value: unknown): ConfigProjection {
+  return { redacted: true, hash: shortHash(value) };
+}
+
+/** 一覧の要素のハッシュ。要素の順は意味を持たないので、要素を正規化してから並べ替えて、ハッシュにする。 */
+function listHash(items: readonly unknown[]): string {
+  return shortHash(items.map((item) => canonicalJson(item)).sort());
+}
+
+/**
  * 設定の1項目の値を、履歴に入れる形にする。生の値は、項目の種類が真偽、数、時刻、短い列挙のときだけ残す。
  * 項目の種類は、このファイルの表と、`*_enabled`と`allowed_labeler_`の名前で決める。表に無い項目は、値を入れない。
  * 値の型が項目の種類に合わないときも、値を入れない。
+ * 値が参照(`$var:`、`$res:`)を含むときは、項目の種類によらず、参照の先を調べずに伏せる(`{ redacted: true, hash }`)。
  */
 export function projectConfigValue(
   key: string,
   value: unknown,
 ): ConfigProjection {
+  if (holdsReference(value)) return redacted(value);
   const kind = classOf(key);
   if (kind === undefined) return UNKNOWN;
   if (kind === "hash") return { hash: shortHash(value) };
@@ -251,7 +335,9 @@ export function projectConfigValue(
         ? value
         : UNKNOWN;
     case "count":
-      return Array.isArray(value) ? { count: value.length } : UNKNOWN;
+      return Array.isArray(value)
+        ? { count: value.length, hash: listHash(value) }
+        : UNKNOWN;
     case "timestamp":
       return typeof value === "string"
         ? projectString(value, isTimestampText)
@@ -286,12 +372,8 @@ export function projectConfigChange(
   const projectedAfter = projectSide(key, after);
   if (
     classOf(key) === "hash" &&
-    projectedBefore !== null &&
-    typeof projectedBefore === "object" &&
-    "hash" in projectedBefore &&
-    projectedAfter !== null &&
-    typeof projectedAfter === "object" &&
-    "hash" in projectedAfter
+    isPlainHashProjection(projectedBefore) &&
+    isPlainHashProjection(projectedAfter)
   ) {
     return {
       before: projectedBefore,
@@ -662,9 +744,11 @@ export async function collectConfigHistoryEvidence(
       start,
       end,
     );
+    // 基準の段階が終わった印の行は、設定の項目の行ではないので、どの件数にも数えない(連鎖の行の数には入る)。
     const counted = periodRows.flatMap((row) => {
       const count = toInt(row.changes);
       return typeof row.item_key === "string" &&
+        row.item_key !== SNAPSHOT_BASELINE_MARKER_KEY &&
         typeof row.reason_code === "string" &&
         count !== null
         ? [{ item_key: row.item_key, reason_code: row.reason_code, count }]

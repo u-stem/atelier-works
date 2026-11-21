@@ -4,7 +4,8 @@
 -- 足す理由コード:
 --   out_of_band_change: 照合が、履歴の最後の値と今の値が違う項目を見つけた。
 --   out_of_band_removed: 照合が、履歴にある項目が設定から無くなったのを見つけた。
---   snapshot_baseline: 照合が、履歴にまだ無い項目の最初の値を、比べる基準として残した。
+--   snapshot_baseline: 照合が、基準の段階に、履歴にまだ無い項目の最初の値を、比べる基準として残した。基準の段階が終わった印の行にも使う。
+--   out_of_band_added: 照合が、基準の印の後に、設定へ足された項目を見つけた。
 -- 理由コードの一覧(config_history_reason_codes)を、並びを保って置き換える。表のCHECKは、この関数を呼ぶので、表は変えない。
 -- 既存の行は、すべて元の4つの理由コードで、置き換え後も一覧に入る。
 -- 項目ごとの最後の行を読む照合のために、(item_key, seq DESC)の索引を足す。
@@ -24,7 +25,8 @@ AS $fn$
         'unspecified',
         'out_of_band_change',
         'out_of_band_removed',
-        'snapshot_baseline'
+        'snapshot_baseline',
+        'out_of_band_added'
     ]::text[]
 $fn$;
 

@@ -13,11 +13,14 @@ import {
   CONFIG_HISTORY_REASON_CODES,
   CONFIG_HISTORY_SOURCES,
   collectConfigHistoryEvidence,
+  projectConfigValue,
+  SNAPSHOT_BASELINE_MARKER_KEY,
   verifyConfigHistory,
 } from "../f/factory/lib/config_history.ts";
 import {
   loadLatestProjections,
   runConfigSnapshot,
+  UNKNOWN_KEYS_ITEM_KEY,
 } from "../f/factory/lib/config_snapshot.ts";
 import {
   recordAttempt,
@@ -15781,13 +15784,19 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
   }
 
   /** 固定のresourceの値で照合を1回走らせる。値は本物のresourceから読まない。 */
-  async function snapshotRun(raw: unknown, cap?: number) {
+  async function snapshotRun(
+    raw: unknown,
+    options: { cap?: number; unknownKeysLimit?: number } = {},
+  ) {
     return runConfigSnapshot({
       readRawConfig: () => Promise.resolve(raw),
       loadLatest: () => loadLatestProjections(sql),
       append: (input) => appendConfigProjection(sql, input),
       log: { info: () => {}, warn: () => {} },
-      ...(cap === undefined ? {} : { cap }),
+      ...(options.cap === undefined ? {} : { cap: options.cap }),
+      ...(options.unknownKeysLimit === undefined
+        ? {}
+        : { unknownKeysLimit: options.unknownKeysLimit }),
     });
   }
 
@@ -15802,13 +15811,14 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
 
   await wipeHistory();
 
-  // 最初の実行は、履歴にまだ無い項目すべての基準を書く。
+  // 最初の実行は、履歴にまだ無い項目すべての基準を書き、最後に基準の印の行を書く。
   const baselineRun = await snapshotRun(fixture);
   const baselineRows = await historyRows();
+  const markerRow = baselineRows[baselineRows.length - 1];
   check(
     "config snapshot: the first run writes a baseline row for each item",
     baselineRun.baseline === 4 &&
-      baselineRows.length === 4 &&
+      baselineRows.length === 5 &&
       baselineRows.every(
         (row) =>
           row.reason_code === "snapshot_baseline" &&
@@ -15817,6 +15827,14 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
           row.before_text === null,
       ),
     { baselineRun, baselineRows },
+  );
+  check(
+    "config snapshot: the marker of the baseline is the last row of the first run",
+    baselineRun.marker_written === 1 &&
+      markerRow?.item_key === SNAPSHOT_BASELINE_MARKER_KEY &&
+      JSON.stringify(JSON.parse(String(markerRow.after_text))) ===
+        '{"kind":"marker"}',
+    { baselineRun, markerRow },
   );
   check(
     "config snapshot: the rows of the first run keep the chain valid",
@@ -15858,17 +15876,18 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     "config snapshot: a second run without a change writes nothing",
     idleRun.baseline === 0 &&
       idleRun.changed === 0 &&
-      (await historyRows()).length === 4,
+      idleRun.marker_written === 0 &&
+      (await historyRows()).length === 5,
     idleRun,
   );
 
   // 値が変わった項目だけに、out_of_band_changeを書く。
   await snapshotRun({ ...fixture, daily_budget_usd: 35 });
   const afterChange = await historyRows();
-  const changeRow = afterChange[4];
+  const changeRow = afterChange[5];
   check(
     "config snapshot: a changed item gets one out_of_band_change row with the last value as its before",
-    afterChange.length === 5 &&
+    afterChange.length === 6 &&
       changeRow?.item_key === "daily_budget_usd" &&
       changeRow.reason_code === "out_of_band_change" &&
       changeRow.before_text === "20" &&
@@ -15975,10 +15994,12 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
   const latest = await loadLatestProjections(sql);
   check(
     "config snapshot: the latest value of each item comes from the row with the greatest seq",
-    latest.size === 4 &&
+    latest.size === 5 &&
       latest.get("daily_budget_usd") === 35 &&
       latest.get("implement_enabled") === true &&
-      JSON.stringify(latest.get("future_item")) === '{"removed":true}',
+      JSON.stringify(latest.get("future_item")) === '{"removed":true}' &&
+      JSON.stringify(latest.get(SNAPSHOT_BASELINE_MARKER_KEY)) ===
+        '{"kind":"marker"}',
     [...latest],
   );
   check(
@@ -15987,17 +16008,177 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     await verifyConfigHistory(sql),
   );
 
-  // 上限を超えた差は、次の実行で書く。
+  // 基準の印の後に足された項目は、基準でなく、足された項目として書く。変更の件数に数える。
+  const addedRun = await snapshotRun({ ...withoutFreeText, max_turns: 30 });
+  const addedRows = await historyRows();
+  const addedRow = addedRows[addedRows.length - 1];
+  check(
+    "config snapshot: an item added after the marker gets an out_of_band_added row with a null before",
+    addedRun.added === 1 &&
+      addedRun.baseline === 0 &&
+      addedRow?.item_key === "max_turns" &&
+      addedRow.reason_code === "out_of_band_added" &&
+      addedRow.before_text === null &&
+      addedRow.after_text === "30",
+    { addedRun, addedRow },
+  );
+  const addedEvidence = await collectConfigHistoryEvidence(
+    sql,
+    snapshotEvidenceStart,
+    snapshotEvidenceEnd,
+  );
+  check(
+    "config snapshot: the evidence counts an addition as a change of its item, and leaves the marker out",
+    addedEvidence.period_by_item.some(
+      (entry) => entry.item_key === "max_turns" && entry.count === 1,
+    ) &&
+      addedEvidence.period_baseline === 4 &&
+      addedEvidence.period_by_item.every(
+        (entry) => entry.item_key !== SNAPSHOT_BASELINE_MARKER_KEY,
+      ) &&
+      addedEvidence.period_by_reason.every(
+        (entry) =>
+          entry.reason_code !== "snapshot_baseline" || entry.count === 4,
+      ),
+    addedEvidence,
+  );
+
+  // 一覧は、件数が同じでも、要素の差し替えを変更として書く。並べ替えは書かない。
   await wipeHistory();
-  const capped = await snapshotRun(fixture, 3);
-  const cappedRest = await snapshotRun(fixture, 3);
+  const listBaselineRun = await snapshotRun({
+    repo_allowlist: ["octo-owner/one", "octo-owner/two"],
+  });
+  const listReorderRun = await snapshotRun({
+    repo_allowlist: ["octo-owner/two", "octo-owner/one"],
+  });
+  const listReplaceRun = await snapshotRun({
+    repo_allowlist: ["octo-owner/one", "octo-owner/three"],
+  });
+  const listRows = await historyRows();
+  const listText = JSON.stringify(listRows);
+  check(
+    "config snapshot: a replaced list element is a change although the count stays, and a reorder is not",
+    listBaselineRun.baseline === 1 &&
+      listReorderRun.changed === 0 &&
+      listReplaceRun.changed === 1 &&
+      listRows.filter((row) => row.reason_code === "out_of_band_change")
+        .length === 1 &&
+      !listText.includes("octo-owner"),
+    { listBaselineRun, listReorderRun, listReplaceRun, listRows },
+  );
+
+  // 伏せた項目は、生の値のハッシュを持つので、参照を別の参照に変えても、変更として書く。同じ値なら書かない。
+  await wipeHistory();
+  const redactedCommands = (name: string) => ({
+    allowed_check_commands: [`echo $var:f/factory/${name}`],
+  });
+  await snapshotRun(redactedCommands("redact-a"));
+  const redactedSameRun = await snapshotRun(redactedCommands("redact-a"));
+  const redactedOtherRun = await snapshotRun(redactedCommands("redact-b"));
+  const redactedText = JSON.stringify(await historyRows());
+  check(
+    "config snapshot: a reference-holding value changed to another is a change, the same value is not, and no reference name is stored",
+    redactedSameRun.changed === 0 &&
+      redactedOtherRun.changed === 1 &&
+      !redactedText.includes("redact-a") &&
+      !redactedText.includes("redact-b"),
+    { redactedSameRun, redactedOtherRun },
+  );
+
+  // 前の形(ハッシュを足す前)で書かれた一覧と伏せた項目は、1度だけ変更として書き、次の実行では書かない。
+  await wipeHistory();
+  await appendConfigProjection(sql, {
+    key: SNAPSHOT_BASELINE_MARKER_KEY,
+    before: null,
+    after: { kind: "marker" },
+    actor: "config_snapshot",
+    source: "out_of_band",
+    reason: "snapshot_baseline",
+  });
+  await appendConfigProjection(sql, {
+    key: "repo_allowlist",
+    before: null,
+    after: { count: 1 },
+    actor: "config_snapshot",
+    source: "out_of_band",
+    reason: "snapshot_baseline",
+  });
+  const legacyListRaw = { repo_allowlist: ["octo-owner/one"] };
+  const legacyFirst = await snapshotRun(legacyListRaw);
+  const legacySecond = await snapshotRun(legacyListRaw);
+  check(
+    "config snapshot: a list stored without a hash is written once as a change and then settles",
+    legacyFirst.changed === 1 &&
+      legacySecond.changed === 0 &&
+      // jsonbはキーの並びを変えて返すので、キーを指定して並べ直してから比べる。
+      JSON.stringify((await loadLatestProjections(sql)).get("repo_allowlist"), [
+        "count",
+        "hash",
+      ]) ===
+        JSON.stringify(
+          projectConfigValue("repo_allowlist", ["octo-owner/one"]),
+          ["count", "hash"],
+        ),
+    { legacyFirst, legacySecond },
+  );
+
+  // 上限を超えた差は、次の実行で書く。基準の行は上限に数えない。
+  await wipeHistory();
+  const baselineCapped = await snapshotRun(fixture, { cap: 1 });
+  check(
+    "config snapshot: the baseline rows are not held back by the cap",
+    baselineCapped.baseline === 4 &&
+      baselineCapped.deferred === 0 &&
+      (await historyRows()).length === 5,
+    baselineCapped,
+  );
+  const extraItems = {
+    ...fixture,
+    max_turns: 30,
+    max_fix_rounds: 2,
+    max_attempts: 3,
+  };
+  const capped = await snapshotRun(extraItems, { cap: 2 });
+  const cappedRest = await snapshotRun(extraItems, { cap: 2 });
   check(
     "config snapshot: the differences over the cap are written by the next run",
-    capped.baseline === 3 &&
+    capped.added === 2 &&
       capped.deferred === 1 &&
-      cappedRest.baseline === 1 &&
-      (await historyRows()).length === 4,
+      cappedRest.added === 1 &&
+      (await historyRows()).length === 8,
     { capped, cappedRest },
+  );
+
+  // 知っている項目の変更は、知らない項目が多くても、次の実行で書く。知らない項目は、名前の昇順で上限まで調べる。
+  await wipeHistory();
+  const junkFixture: Record<string, unknown> = { daily_budget_usd: 20 };
+  for (let index = 0; index < 8; index += 1) {
+    junkFixture[`aaa_junk_${String(index).padStart(2, "0")}`] = index;
+  }
+  await snapshotRun(junkFixture, { unknownKeysLimit: 5 });
+  const junkRows = await historyRows();
+  check(
+    "config snapshot: more unknown keys than the limit write one count row and check only the first by name",
+    junkRows.filter((row) => row.item_key === UNKNOWN_KEYS_ITEM_KEY).length ===
+      1 &&
+      junkRows.filter((row) => String(row.item_key).startsWith("aaa_junk_"))
+        .length === 5 &&
+      junkRows.every((row) => row.item_key !== "aaa_junk_07"),
+    junkRows,
+  );
+  const junkTargetRun = await snapshotRun(
+    { ...junkFixture, daily_budget_usd: 99 },
+    { cap: 1, unknownKeysLimit: 5 },
+  );
+  const junkTargetRows = await historyRows();
+  const junkTargetRow = junkTargetRows[junkTargetRows.length - 1];
+  check(
+    "config snapshot: the change of a known item is written in the next run, and the unknown keys over the limit stay deferred",
+    junkTargetRun.changed === 1 &&
+      junkTargetRun.deferred === 3 &&
+      junkTargetRow?.item_key === "daily_budget_usd" &&
+      junkTargetRow.after_text === "99",
+    { junkTargetRun, junkTargetRow },
   );
 
   // Consoleの経路は、読み直しで値が見つからなかった項目の`after`を`null`で書く。無い項目の`null`は、消失の行にしない。

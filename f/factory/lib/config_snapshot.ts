@@ -5,8 +5,17 @@
 //
 // 値は、`lib/config_history.ts`の許可リストで射影してから扱う。コマンド、URL、身元に関わる項目の生の値は、
 // 読んだ後すぐに射影に変え、ログにも履歴にも出さない。
-// 参照(`$var:`、`$res:`)を含む項目は、参照の先を解決せず、値を見ずに`{ redacted: true }`にする。
+// 参照(`$var:`、`$res:`)を含む項目は、参照の先を解決せず、値を見ずに`{ redacted: true, hash }`にする。
+// ハッシュは生の値をメモリの中でハッシュにしたもので、伏せた値の後の変更を見えなくしないために、比べるだけに使う。
 // resourceへは書かない。履歴を書けなくても、投げずに数える。
+//
+// 履歴にまだ無い項目の扱いは、基準の印の行(`SNAPSHOT_BASELINE_MARKER_KEY`)の有無で決める。
+// 印が無い間(基準の段階)は、履歴にまだ無い項目を基準(`snapshot_baseline`)として書く。基準の行は上限に数えない。
+// すべての基準の行を書き終えた最後に、印を1行書く。時間が尽きるなどで基準を書き終えない実行は、印を書かず、次の実行が続ける。
+// 印が書かれた後に、履歴にまだ無い項目が現れたら、足された項目(`out_of_band_added`)として、変更に数える。
+//
+// 行は、知っている項目の変更、知らない項目の変更、基準の行の順に書く。上限は、基準の行を除いて数える。
+// 知らない項目の数に上限を置き、超えた項目は調べずに次の実行へ回す。多数の項目を足して、狙った変更を後ろへ押しやる手を封じる。
 //
 // 保護パスの中の`lib/config_history.ts`と`lib/console_redact.ts`だけに頼る。入出力は呼び出し側が渡す。
 
@@ -15,8 +24,11 @@ import {
   type ConfigProjection,
   type ConfigProjectionInput,
   isConfigItemKey,
+  isKnownConfigKey,
   isMissingConfigHistoryObjectError,
+  isPlainHashProjection,
   projectConfigValue,
+  SNAPSHOT_BASELINE_MARKER_KEY,
 } from "./config_history.ts";
 import type { ActionSqlClient } from "./console_actions.ts";
 import { holdsReference, isRecord } from "./console_redact.ts";
@@ -24,8 +36,23 @@ import { holdsReference, isRecord } from "./console_redact.ts";
 /** 照合が履歴に書くときの`actor`。人ではなく、照合のscriptである。 */
 export const SNAPSHOT_ACTOR = "config_snapshot";
 
-/** 1回の実行で書く行の上限。超えた分は、次の実行で書く。 */
+/** 1回の実行で書く行の上限。基準の行を除く。超えた分は、次の実行で書く。 */
 export const SNAPSHOT_ROW_CAP = 100;
+
+/** 知らない項目を調べる数の上限。名前の昇順に、この数まで調べる。超えた項目は、調べずに次の実行へ回す。 */
+export const SNAPSHOT_UNKNOWN_KEYS_LIMIT = 50;
+
+/**
+ * 知らない項目の数が上限を超えたことを示す項目名。設定の項目ではない。
+ * 上限を超える間、知らない項目の総数(`{ count }`)を、この名前の項目として、ほかの項目と同じ規則で比べて書く。
+ */
+export const UNKNOWN_KEYS_ITEM_KEY = "config_snapshot_unknown_keys";
+
+/** 設定の項目として読まない名前。履歴の中で、照合が自分の行に使う。 */
+const RESERVED_KEYS: ReadonlySet<string> = new Set([
+  SNAPSHOT_BASELINE_MARKER_KEY,
+  UNKNOWN_KEYS_ITEM_KEY,
+]);
 
 /**
  * 実行全体で、行を書き始めてよい時間(ミリ秒)。ジョブのtimeout(60秒)より短くする。
@@ -34,8 +61,8 @@ export const SNAPSHOT_ROW_CAP = 100;
  */
 export const SNAPSHOT_DEADLINE_MS = 40_000;
 
-const REDACTED: ConfigProjection = { redacted: true };
 const UNKNOWN: ConfigProjection = { kind: "unknown" };
+const MARKER: ConfigProjection = { kind: "marker" };
 
 /** 項目が設定から無くなったことを示す射影。値が`null`の項目(`null`の射影)とは区別する。 */
 export const REMOVED_PROJECTION: ConfigProjection = { removed: true };
@@ -46,41 +73,62 @@ export const REMOVED_PROJECTION: ConfigProjection = { removed: true };
 
 /** resource全体の射影。 */
 export type ConfigSnapshotProjection = {
-  /** 項目名から射影への対応。履歴に書ける名前の項目だけを持つ。 */
+  /** 項目名から射影への対応。履歴に書ける名前の項目だけを持つ。調べなかった項目は入らない。 */
   readonly items: ReadonlyMap<string, ConfigProjection>;
-  /** 値が参照を含み、見ずに伏せた項目の数。 */
+  /** 調べた項目のうち、値が参照を含み、伏せた項目の数。 */
   readonly reference_keys: number;
-  /** 履歴の項目名の形に合わず、飛ばした項目の数。 */
+  /** 履歴の項目名の形に合わず、または照合の予約の名前で、飛ばした項目の数。 */
   readonly unnamed_keys: number;
+  /** 知らない項目の総数。調べなかった項目も数える。 */
+  readonly unknown_keys: number;
+  /** 知らない項目が上限を超えて、調べなかった項目の名前。名前はログにも結果にも出さない。 */
+  readonly excluded: ReadonlySet<string>;
 };
 
 /**
  * resourceの生の値の、すべての最上位の項目を射影する。
  * 項目の種類は`projectConfigValue`の許可リストで決め、表に無い項目は、値を入れずに`{ kind: "unknown" }`にする。
- * 値が参照を含む項目は、値を調べずに`{ redacted: true }`にする。
+ * 値が参照を含む項目は、値を調べずに`{ redacted: true, hash }`にする。
+ * 知らない項目(`isKnownConfigKey`が偽の項目)は、名前の昇順に`unknownKeysLimit`まで調べる。
+ * 超えたときは、超えた項目を調べず(`excluded`)、知らない項目の総数を`UNKNOWN_KEYS_ITEM_KEY`の項目に入れる。
  * resourceがオブジェクトでなければ`null`を返す。
  */
 export function projectConfigSnapshot(
   raw: unknown,
+  unknownKeysLimit: number = SNAPSHOT_UNKNOWN_KEYS_LIMIT,
 ): ConfigSnapshotProjection | null {
   if (!isRecord(raw)) return null;
   const items = new Map<string, ConfigProjection>();
+  const excluded = new Set<string>();
   let referenceKeys = 0;
   let unnamedKeys = 0;
+  let unknownKeys = 0;
   for (const key of Object.keys(raw).sort()) {
-    if (!isConfigItemKey(key)) {
+    if (!isConfigItemKey(key) || RESERVED_KEYS.has(key)) {
       unnamedKeys += 1;
       continue;
     }
-    const value = raw[key];
-    if (holdsReference(value)) {
-      referenceKeys += 1;
-      items.set(key, REDACTED);
-      continue;
+    if (!isKnownConfigKey(key)) {
+      unknownKeys += 1;
+      if (unknownKeys > unknownKeysLimit) {
+        excluded.add(key);
+        continue;
+      }
     }
+    const value = raw[key];
+    if (holdsReference(value)) referenceKeys += 1;
     items.set(key, projectConfigValue(key, value));
   }
-  return { items, reference_keys: referenceKeys, unnamed_keys: unnamedKeys };
+  if (unknownKeys > unknownKeysLimit) {
+    items.set(UNKNOWN_KEYS_ITEM_KEY, { count: unknownKeys });
+  }
+  return {
+    items,
+    reference_keys: referenceKeys,
+    unnamed_keys: unnamedKeys,
+    unknown_keys: unknownKeys,
+    excluded,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -104,70 +152,87 @@ export function parseStoredProjection(
   }
   if (!isRecord(value)) return undefined;
   if (typeof value.count === "number" && Number.isFinite(value.count)) {
-    return { count: value.count };
+    return typeof value.hash === "string"
+      ? { count: value.count, hash: value.hash }
+      : { count: value.count };
+  }
+  if (value.redacted === true) {
+    return typeof value.hash === "string"
+      ? { redacted: true, hash: value.hash }
+      : { redacted: true };
   }
   if (typeof value.hash === "string") {
     return value.changed === true || value.changed === false
       ? { hash: value.hash, changed: value.changed }
       : { hash: value.hash };
   }
-  if (value.redacted === true) return REDACTED;
   if (value.removed === true) return REMOVED_PROJECTION;
   if (value.kind === "unknown") return UNKNOWN;
+  if (value.kind === "marker") return MARKER;
   return undefined;
 }
 
 /**
  * 比べるための形にする。ハッシュの項目の`changed`は、変更の経路が前後の比較で付ける印なので、比べるときは外す。
  * 外さないと、Consoleが書いた行(`changed`が付く)と、今の値の射影(付かない)が、いつも違って見える。
+ * 一覧と伏せた項目は、ハッシュも比べる。ハッシュの無い行(ハッシュを足す前に書いた行)は、ハッシュのある射影と違う値として比べる。
  */
 function comparable(projection: ConfigProjection): string {
-  if (
-    projection !== null &&
-    typeof projection === "object" &&
-    "hash" in projection
-  ) {
-    return JSON.stringify({ hash: projection.hash });
+  if (projection !== null && typeof projection === "object") {
+    if ("redacted" in projection) {
+      return JSON.stringify({
+        redacted: true,
+        hash: projection.hash ?? null,
+      });
+    }
+    if ("count" in projection) {
+      return JSON.stringify({
+        count: projection.count,
+        hash: projection.hash ?? null,
+      });
+    }
+    if ("hash" in projection) {
+      return JSON.stringify({ hash: projection.hash });
+    }
   }
   return JSON.stringify(projection);
 }
 
 /** 履歴に書く`before`にする。`changed`は、変更後の側だけに付く印なので外す。 */
 function withoutChangedMark(projection: ConfigProjection): ConfigProjection {
-  if (
-    projection !== null &&
-    typeof projection === "object" &&
-    "hash" in projection
-  ) {
-    return { hash: projection.hash };
-  }
-  return projection;
+  return isPlainHashProjection(projection)
+    ? { hash: projection.hash }
+    : projection;
 }
 
 /**
  * 照合が見つけた、履歴に書く変更1つ。
- * - baseline: 履歴にまだ無い項目の最初の値。`before`は`null`である。
+ * - baseline: 基準の段階で、履歴にまだ無い項目の最初の値。`before`は`null`である。
+ * - added: 基準の印が書かれた後に、履歴にまだ無い項目が現れた。`before`は`null`、`after`は今の射影である。
  * - changed: 履歴の最後の`after`と、今の射影が違う。`before`は履歴の最後の`after`である。
  * - removed: 履歴にある項目が、今は無い。`after`は`{ removed: true }`である。
  */
 export type SnapshotChange = {
   readonly key: string;
-  readonly kind: "baseline" | "changed" | "removed";
+  readonly kind: "baseline" | "added" | "changed" | "removed";
   readonly before: ConfigProjection;
   readonly after: ConfigProjection;
 };
 
 /**
  * 項目ごとの履歴の最後の`after`(`latest`)と、今の射影(`current`)の差を、項目名の昇順で返す。
+ * 履歴にまだ無い項目は、`baselineDone`が偽(基準の印がまだ無い)なら`baseline`、真なら`added`にする。省くと偽である。
  * 履歴の最後の`after`が`{ removed: true }`で、項目がまだ無いときは、差とは見なさない。
  * 履歴の最後の`after`が`null`で、項目がまだ無いときも、差とは見なさない。
  * Consoleの経路は、読み直しで値が見つからなかった項目の`after`を`null`で書くためである。
  * 値が`null`の項目を消したときの`removed`は、この規則のために書かれない。
  * 履歴の値が射影として読めないときは、`{ kind: "unknown" }`として比べる。
+ * 基準の印の行は、呼び出し側が`latest`から除く。
  */
 export function diffSnapshot(
   latest: ReadonlyMap<string, unknown>,
   current: ReadonlyMap<string, ConfigProjection>,
+  baselineDone = false,
 ): SnapshotChange[] {
   const changes: SnapshotChange[] = [];
   const keys = [...new Set([...latest.keys(), ...current.keys()])].sort();
@@ -175,7 +240,12 @@ export function diffSnapshot(
     const now = current.get(key);
     if (!latest.has(key)) {
       if (now !== undefined) {
-        changes.push({ key, kind: "baseline", before: null, after: now });
+        changes.push({
+          key,
+          kind: baselineDone ? "added" : "baseline",
+          before: null,
+          after: now,
+        });
       }
       continue;
     }
@@ -208,8 +278,33 @@ export function diffSnapshot(
   return changes;
 }
 
+/** 書く順の群。知っている項目、知らない項目、基準の行の順である。 */
+function groupOf(change: SnapshotChange): 0 | 1 | 2 {
+  if (change.kind === "baseline") return 2;
+  return isKnownConfigKey(change.key) || change.key === UNKNOWN_KEYS_ITEM_KEY
+    ? 0
+    : 1;
+}
+
+/**
+ * 書く順に並べる。知っている項目の変更、知らない項目の変更、基準の行の順で、同じ群の中は項目名の昇順である。
+ * 知らない項目が名前の順で先に並び、上限を使い切っても、知っている項目の変更は先に書かれる。
+ * 知らない項目の総数の項目(`UNKNOWN_KEYS_ITEM_KEY`)は、知っている項目の群に入れる。
+ */
+export function orderChanges(
+  changes: readonly SnapshotChange[],
+): SnapshotChange[] {
+  return [...changes].sort((a, b) => {
+    const byGroup = groupOf(a) - groupOf(b);
+    if (byGroup !== 0) return byGroup;
+    if (a.key < b.key) return -1;
+    return a.key > b.key ? 1 : 0;
+  });
+}
+
 const REASON_OF_KIND = {
   baseline: "snapshot_baseline",
+  added: "out_of_band_added",
   changed: "out_of_band_change",
   removed: "out_of_band_removed",
 } as const;
@@ -280,20 +375,29 @@ function readJson(text: unknown): unknown {
 export type SnapshotResult = {
   /** 射影した項目の数。 */
   readonly keys_checked: number;
-  /** 基準として書いた行の数。 */
+  /** 基準として書いた行の数。基準の印の行は含まない。 */
   readonly baseline: number;
+  /** 基準の印が書かれた後に足された項目として書いた行の数。 */
+  readonly added: number;
   /** 値の変更として書いた行の数。 */
   readonly changed: number;
   /** 項目が無くなったとして書いた行の数。 */
   readonly removed: number;
   /** 書けなかった行の数。 */
   readonly failed: number;
-  /** 行の上限か実行全体の時間の区切りで書かず、次の実行に回した差の数。 */
+  /**
+   * 行の上限、実行全体の時間の区切り、知らない項目の数の上限のどれかで、書かずに次の実行に回した差の数。
+   * 知らない項目の数の上限を超えた項目は、上限を超える間、毎回数える。
+   */
   readonly deferred: number;
   /** 参照を含み、値を見ずに伏せた項目の数。 */
   readonly reference_keys: number;
-  /** 履歴の項目名の形に合わず、飛ばした項目の数。 */
+  /** 履歴の項目名の形に合わず、または照合の予約の名前で、飛ばした項目の数。 */
   readonly unnamed_keys: number;
+  /** 知らない項目の総数。 */
+  readonly unknown_keys: number;
+  /** 基準の印の行を書いたら1、書かなかったら0。 */
+  readonly marker_written: number;
   readonly skipped_reason:
     | null
     | "resource_unreadable"
@@ -316,8 +420,10 @@ export type SnapshotPorts = {
     input: ConfigProjectionInput,
   ) => Promise<ConfigHistoryAppendResult>;
   readonly log: SnapshotLog;
-  /** 1回に書く行の上限。省くと`SNAPSHOT_ROW_CAP`。 */
+  /** 基準の行を除いて、1回に書く行の上限。省くと`SNAPSHOT_ROW_CAP`。 */
   readonly cap?: number;
+  /** 知らない項目を調べる数の上限。省くと`SNAPSHOT_UNKNOWN_KEYS_LIMIT`。 */
+  readonly unknownKeysLimit?: number;
   /** 現在時刻(ミリ秒)を返す。省くと`Date.now`。実行全体の時間の区切りを数える。 */
   readonly now?: () => number;
   /** 実行の開始からこの時間を過ぎたら、残りの行を書かずに次の実行に回す。省くと`SNAPSHOT_DEADLINE_MS`。 */
@@ -327,12 +433,15 @@ export type SnapshotPorts = {
 const EMPTY_COUNTS = {
   keys_checked: 0,
   baseline: 0,
+  added: 0,
   changed: 0,
   removed: 0,
   failed: 0,
   deferred: 0,
   reference_keys: 0,
   unnamed_keys: 0,
+  unknown_keys: 0,
+  marker_written: 0,
 } as const;
 
 function skipped(
@@ -341,13 +450,23 @@ function skipped(
   return { ...EMPTY_COUNTS, skipped_reason: reason };
 }
 
+/**
+ * 書き残しがあるときの、ジョブを失敗させる文。書き残しが無い、または照合を終えられなかった実行では`null`を返す。
+ * 書き残しが続くと、ジョブの失敗が続き、scheduleの連続失敗の検知が要対応の通知にする。
+ * 文は件数だけで、項目名も値も入れない。
+ */
+export function deferralProblem(result: SnapshotResult): string | null {
+  if (result.skipped_reason !== null || result.deferred === 0) return null;
+  return `config_snapshot: ${result.deferred} change(s) were not written in this run and wait for the next run`;
+}
+
 /** 注入された書き込みが投げても、失敗の結果にして返す。例外の文には値が入りうるので、捨てる。 */
 async function appendWithoutThrowing(
   ports: SnapshotPorts,
-  change: SnapshotChange,
+  input: ConfigProjectionInput,
 ): Promise<ConfigHistoryAppendResult> {
   try {
-    return await ports.append(toAppendInput(change));
+    return await ports.append(input);
   } catch {
     return {
       recorded: false,
@@ -357,9 +476,21 @@ async function appendWithoutThrowing(
   }
 }
 
+/** 基準の段階が終わったことを示す、印の行の入力。 */
+const MARKER_INPUT: ConfigProjectionInput = {
+  key: SNAPSHOT_BASELINE_MARKER_KEY,
+  before: null,
+  after: MARKER,
+  actor: SNAPSHOT_ACTOR,
+  source: "out_of_band",
+  reason: "snapshot_baseline",
+};
+
 /**
  * 履歴の最後の値とresourceをこの順に読み、差を`out_of_band`として書く。投げない。
- * 差は項目名の昇順に、上限(`cap`)と実行全体の時間(`deadlineMs`)まで書く。残りは次の実行に回す。書かなければ差は残るので、2回続けて実行しても、2回目は何も書かない。
+ * 差は、知っている項目、知らない項目、基準の行の順に、実行全体の時間(`deadlineMs`)まで書く。
+ * 基準の行を除く行は、上限(`cap`)まで書く。残りは次の実行に回す。書かなければ差は残るので、2回続けて実行しても、2回目は何も書かない。
+ * 基準の段階(印が無い間)に、基準の行をすべて書き終えたら、最後に印の行を書く。書き終えなければ、印は書かず、次の実行が続ける。
  * 1行の書き込みが失敗しても、残りを続ける。失敗した項目は、次の実行でもう一度差として見つかる。
  * ログには、件数と失敗の種類だけを出し、項目名と値は出さない。
  */
@@ -369,6 +500,8 @@ export async function runConfigSnapshot(
   const cap = ports.cap ?? SNAPSHOT_ROW_CAP;
   const now = ports.now ?? Date.now;
   const deadlineMs = ports.deadlineMs ?? SNAPSHOT_DEADLINE_MS;
+  const unknownKeysLimit =
+    ports.unknownKeysLimit ?? SNAPSHOT_UNKNOWN_KEYS_LIMIT;
   const startedAt = now();
 
   // 履歴を先に読み、resourceを後で読む。
@@ -394,62 +527,117 @@ export async function runConfigSnapshot(
     ports.log.warn("config_snapshot: could not read the config resource");
     return skipped("resource_unreadable");
   }
-  const projection = projectConfigSnapshot(raw);
+  const projection = projectConfigSnapshot(raw, unknownKeysLimit);
   if (projection === null) {
     ports.log.warn("config_snapshot: the config resource is not an object");
     return skipped("resource_not_object");
   }
 
-  const changes = diffSnapshot(latest, projection.items);
-  const toWrite = changes.slice(0, cap);
-  let deferred = changes.length - toWrite.length;
-  if (deferred > 0) {
+  // 印の行は設定の項目ではないので、比べない。基準の段階が終わったかは、印の行の有無で決める。
+  // 調べなかった項目は、履歴に行があっても、今の射影に無いので、除かないと無くなった項目に見える。
+  const baselineDone = latest.has(SNAPSHOT_BASELINE_MARKER_KEY);
+  const compared = new Map(
+    [...latest].filter(
+      ([key]) =>
+        key !== SNAPSHOT_BASELINE_MARKER_KEY && !projection.excluded.has(key),
+    ),
+  );
+  const ordered = orderChanges(
+    diffSnapshot(compared, projection.items, baselineDone),
+  );
+  const baselineChanges = ordered.filter(
+    (change) => change.kind === "baseline",
+  );
+  const otherChanges = ordered.filter((change) => change.kind !== "baseline");
+  const cappedChanges = otherChanges.slice(0, cap);
+  const toWrite = [...cappedChanges, ...baselineChanges];
+
+  const capDeferred = otherChanges.length - cappedChanges.length;
+  let deferred = capDeferred + projection.excluded.size;
+  if (capDeferred > 0) {
     ports.log.warn(
       "config_snapshot: more changes than the cap, the rest wait for the next run",
+      { cap, deferred: capDeferred },
+    );
+  }
+  if (projection.excluded.size > 0) {
+    ports.log.warn(
+      "config_snapshot: more unknown keys than the limit, the rest are not checked",
       {
-        cap,
-        deferred,
+        limit: unknownKeysLimit,
+        unknown_keys: projection.unknown_keys,
+        excluded: projection.excluded.size,
       },
     );
   }
 
   let baseline = 0;
+  let added = 0;
   let changed = 0;
   let removed = 0;
   let failed = 0;
+  // 基準の行を1つでも書けなかった、または書かずに残したら、基準の段階は終わっていない。
+  let baselineLeft = false;
   for (const [index, change] of toWrite.entries()) {
     // 実行全体の時間が尽きたら、残りは書かずに、次の実行に回す。差は残るので、次の実行がもう一度見つける。
     if (now() - startedAt >= deadlineMs) {
-      const left = toWrite.length - index;
-      deferred += left;
+      const rest = toWrite.slice(index);
+      deferred += rest.length;
+      baselineLeft = baselineLeft || rest.some((c) => c.kind === "baseline");
       ports.log.warn(
         "config_snapshot: the deadline of the run passed, the rest wait for the next run",
-        { deadline_ms: deadlineMs, left },
+        { deadline_ms: deadlineMs, left: rest.length },
       );
       break;
     }
-    const result = await appendWithoutThrowing(ports, change);
+    const result = await appendWithoutThrowing(ports, toAppendInput(change));
     if (!result.recorded) {
       failed += 1;
+      if (change.kind === "baseline") baselineLeft = true;
       ports.log.warn("config_snapshot: could not write a row", {
         kind: result.kind,
       });
       continue;
     }
     if (change.kind === "baseline") baseline += 1;
+    else if (change.kind === "added") added += 1;
     else if (change.kind === "changed") changed += 1;
     else removed += 1;
+  }
+
+  // 基準の行をすべて書き終えた最後に、印を書く。時間が尽きていたら、次の実行が書く。
+  let markerWritten = 0;
+  if (!baselineDone && !baselineLeft) {
+    if (now() - startedAt >= deadlineMs) {
+      ports.log.warn(
+        "config_snapshot: the deadline of the run passed before the marker of the baseline",
+        { deadline_ms: deadlineMs },
+      );
+    } else {
+      const result = await appendWithoutThrowing(ports, MARKER_INPUT);
+      if (result.recorded) {
+        markerWritten = 1;
+      } else {
+        failed += 1;
+        ports.log.warn("config_snapshot: could not write the marker row", {
+          kind: result.kind,
+        });
+      }
+    }
   }
 
   return {
     keys_checked: projection.items.size,
     baseline,
+    added,
     changed,
     removed,
     failed,
     deferred,
     reference_keys: projection.reference_keys,
     unnamed_keys: projection.unnamed_keys,
+    unknown_keys: projection.unknown_keys,
+    marker_written: markerWritten,
     skipped_reason: null,
   };
 }
