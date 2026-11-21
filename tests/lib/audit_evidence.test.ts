@@ -3497,9 +3497,9 @@ const HISTORY_EVIDENCE: AuditEvidence = {
     period_chains: 8,
     period_events: 20,
     period_by_reason: [
+      { reason_code: "reconcile", count: 12 },
       { reason_code: "unspecified", count: 5 },
       { reason_code: "auto_retry", count: 3 },
-      { reason_code: "reconcile", count: 12 },
     ],
   },
 };
@@ -3610,9 +3610,9 @@ describe("the history integrity section", () => {
 
   test("lists the count of each reason code as droppable lines in the given order", () => {
     expect(sectionOf(HISTORY_EVIDENCE, HISTORY_SECTION)?.lines).toEqual([
+      "理由コード reconcile: 12件",
       "理由コード unspecified: 5件",
       "理由コード auto_retry: 3件",
-      "理由コード reconcile: 12件",
     ]);
   });
 
