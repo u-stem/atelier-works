@@ -405,15 +405,24 @@ export type CiFixFinalized =
 const CLAUDE_BLOCKED_PREFIX = `${REASON_PREFIX}: claude blocked: `;
 
 /**
+ * 抜粋でエラーの本文の行が残らなかった回に、止める理由の末尾へ付ける固定の文。
+ * Claudeの理由の文に頼らず、ログの内容を含めない。理由の区切りの「; 」を含まない。
+ */
+export const CI_EXCERPT_OMITTED_NOTE =
+  "(factory note: the CI log excerpt omitted lines and no error detail line remained in it)";
+
+/**
  * Claudeの出力の文字列(コミットの件名と本文、要約、停止の理由)をgitleaksで検査し、
  * 通ったものを`finished`で返す。
  * 検出があったときと、検査できなかったときは、`blocked`を返す。
  * ログの内容を写した文字列が、コミットや通知から外へ出るのを防ぐため。
  * `done`でないときは、コミットの件名と本文を返さない。
+ * `errorBodyOmitted`が真で、Claudeが止まった(`blocked`)ときは、止める理由の末尾に`CI_EXCERPT_OMITTED_NOTE`を付ける。
  */
 export async function finalizeCiFixOutput(
   output: CiFixOutput,
   scan: CiTextScanner,
+  errorBodyOmitted = false,
 ): Promise<CiFixFinalized> {
   if (!isCiFixOutputAllowed(output)) {
     return { kind: "blocked", reason: CI_ROUND_REPLIES_REASON };
@@ -435,13 +444,22 @@ export async function finalizeCiFixOutput(
   }
   const done = output.outcome === "done";
   const { fields } = guarded;
+  const claudeReason =
+    fields.blocked_reason === null
+      ? null
+      : `${CLAUDE_BLOCKED_PREFIX}${escapeReasonSeparator(fields.blocked_reason)}`;
+  const withNote = !done && errorBodyOmitted;
+  let reason = claudeReason;
+  if (withNote) {
+    reason =
+      claudeReason === null
+        ? `${REASON_PREFIX}: ${CI_EXCERPT_OMITTED_NOTE}`
+        : `${claudeReason} ${CI_EXCERPT_OMITTED_NOTE}`;
+  }
   return {
     kind: "finished",
     outcome: done ? "done" : "blocked",
-    reason:
-      fields.blocked_reason === null
-        ? null
-        : `${CLAUDE_BLOCKED_PREFIX}${escapeReasonSeparator(fields.blocked_reason)}`,
+    reason,
     summary: fields.summary,
     commit_subject: done ? fields.commit_subject : null,
     commit_body: done ? fields.commit_body : null,
@@ -490,6 +508,8 @@ export type CiGatherOutcome =
       readonly prChangedPaths: readonly string[];
       /** 失敗した実行のURL。実行の形に合わないときはnull。 */
       readonly runUrl: string | null;
+      /** 抜粋にエラーの件数の行があり、エラーの本文の行が無い。ログの内容は含まない。 */
+      readonly errorBodyOmitted: boolean;
     }
   | { readonly kind: "blocked"; readonly reason: string };
 
@@ -642,6 +662,7 @@ export async function gatherCiLogs(
   return {
     kind: "ready",
     excerpt: excerpt.excerpt,
+    errorBodyOmitted: excerpt.errorBodyOmitted,
     prChangedPaths: await deps.listPrFiles(),
     runUrl:
       first === undefined
@@ -806,7 +827,11 @@ export async function runCiFixApply(
   if (claude.kind === "failure") {
     return { kind: "claude_failure", reason: claude.reason };
   }
-  return finalizeCiFixOutput(claude.output, deps.scan);
+  return finalizeCiFixOutput(
+    claude.output,
+    deps.scan,
+    gathered.errorBodyOmitted,
+  );
 }
 
 // ---------------------------------------------------------------------------

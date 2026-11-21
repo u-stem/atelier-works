@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
 import {
+  CI_EXCERPT_OMITTED_NOTE,
   CI_FIX_SKILL_MARKER,
   CI_ROUND_MAX_RUNS,
   CI_ROUND_REASONS_WITHHELD,
@@ -1051,11 +1052,12 @@ describe("finalizeCiFixOutput", () => {
 // ---------------------------------------------------------------------------
 
 describe("runCiFixApply", () => {
-  const READY: CiGatherOutcome = {
+  const READY: Extract<CiGatherOutcome, { kind: "ready" }> = {
     kind: "ready",
     excerpt: VolatileCiExcerpt.fromSanitized([]),
     prChangedPaths: ["a.ts"],
     runUrl: null,
+    errorBodyOmitted: false,
   };
 
   function applyDeps(over: Partial<CiFixApplyDeps> = {}): {
@@ -1148,6 +1150,108 @@ describe("runCiFixApply", () => {
       scan: async () => ({ ok: false, output: "- x" }),
     });
     expect((await runCiFixApply(deps)).kind).toBe("blocked");
+  });
+
+  describe("when the excerpt omitted the error detail lines", () => {
+    const OMITTED: CiGatherOutcome = { ...READY, errorBodyOmitted: true };
+    const BLOCKED_OUTPUT = {
+      ...OUTPUT,
+      outcome: "blocked" as const,
+      blocked_reason: "原因が分かりません。",
+    };
+    const reasonOf = (result: Awaited<ReturnType<typeof runCiFixApply>>) =>
+      result.kind === "finished" ? result.reason : null;
+
+    test("adds the fixed note to the reason of Claude when it stops", async () => {
+      const { deps } = applyDeps({
+        gather: async () => OMITTED,
+        startClaude: async () => ({ kind: "success", output: BLOCKED_OUTPUT }),
+      });
+      const reason = reasonOf(await runCiFixApply(deps));
+      expect(reason).toBe(
+        `ci round: claude blocked: 原因が分かりません。 ${CI_EXCERPT_OMITTED_NOTE}`,
+      );
+    });
+
+    test("records the omission when the reason of Claude does not mention it", async () => {
+      const { deps } = applyDeps({
+        gather: async () => OMITTED,
+        startClaude: async () => ({ kind: "success", output: BLOCKED_OUTPUT }),
+      });
+      expect(reasonOf(await runCiFixApply(deps))).toContain(
+        "omitted lines and no error detail line",
+      );
+    });
+
+    test("uses the note alone when Claude gives no reason", async () => {
+      const { deps } = applyDeps({
+        gather: async () => OMITTED,
+        startClaude: async () => ({
+          kind: "success",
+          output: { ...BLOCKED_OUTPUT, blocked_reason: null },
+        }),
+      });
+      expect(reasonOf(await runCiFixApply(deps))).toBe(
+        `ci round: ${CI_EXCERPT_OMITTED_NOTE}`,
+      );
+    });
+
+    test("does not add the note when Claude finishes the fix", async () => {
+      const { deps } = applyDeps({ gather: async () => OMITTED });
+      expect(reasonOf(await runCiFixApply(deps))).toBeNull();
+    });
+
+    test("does not add the note when the excerpt kept the lines", async () => {
+      const { deps } = applyDeps({
+        startClaude: async () => ({ kind: "success", output: BLOCKED_OUTPUT }),
+      });
+      expect(reasonOf(await runCiFixApply(deps))).toBe(
+        "ci round: claude blocked: 原因が分かりません。",
+      );
+    });
+
+    test("does not add the note when the output matches the secret scan", async () => {
+      const { deps } = applyDeps({
+        gather: async () => OMITTED,
+        startClaude: async () => ({ kind: "success", output: BLOCKED_OUTPUT }),
+        scan: async () => ({ ok: false, output: "- x" }),
+      });
+      const result = await runCiFixApply(deps);
+      const reason = result.kind === "blocked" ? result.reason : null;
+      expect(reason).not.toContain("factory note");
+    });
+  });
+});
+
+describe("CI_EXCERPT_OMITTED_NOTE", () => {
+  test("does not contain the reason separator", () => {
+    expect(CI_EXCERPT_OMITTED_NOTE).not.toContain("; ");
+  });
+});
+
+describe("gatherCiFailureInput errorBodyOmitted", () => {
+  const warning = (i: number) =>
+    `/repo/src/w${String(i)}.ts:1:1  warning  unused var  no-unused`;
+  const WARNINGS = Array.from({ length: 400 }, (_, i) => warning(i));
+  const omittedOf = (outcome: CiGatherOutcome) =>
+    outcome.kind === "ready" ? outcome.errorBodyOmitted : null;
+
+  test("is true when only the count line of the errors remains", async () => {
+    const { deps } = gatherDeps();
+    const outcome = await gatherCiFailureInput(deps, TARGET, [
+      {
+        name: "local check: lint",
+        failedSteps: [],
+        log: [...WARNINGS, "Found 1 error."].join("\n"),
+      },
+    ]);
+    expect(omittedOf(outcome)).toBe(true);
+  });
+
+  test("is false when the excerpt has no count line of errors", async () => {
+    const { deps } = gatherDeps();
+    const outcome = await gatherCiFailureInput(deps, TARGET);
+    expect(omittedOf(outcome)).toBe(false);
   });
 });
 

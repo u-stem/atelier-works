@@ -5,11 +5,17 @@ import {
   CI_LOG_JOB_MAX_CHARS,
   CI_LOG_MAX_JOBS,
   CI_LOG_TOTAL_MAX_CHARS,
+  type CiExcerptOutcome,
+  type CiLogJobInput,
   type CiTextScanner,
   capRawLog,
   cleanLogText,
   condenseJobLog,
+  condenseJobLogWithReport,
   guardCiRoundText,
+  hasErrorCountWithoutBody,
+  isErrorBodyLine,
+  isErrorCountLine,
   revealControlChars,
   sanitizeExternalName,
   VolatileCiExcerpt,
@@ -566,6 +572,341 @@ describe("condenseJobLog", () => {
     const started = Date.now();
     condenseJobLog(cleanLogText(big), 3000);
     expect(Date.now() - started).toBeLessThan(5000);
+  });
+});
+
+describe("isErrorCountLine", () => {
+  test("is true for a tsc style count", () => {
+    expect(isErrorCountLine("Found 1 error.")).toBe(true);
+  });
+
+  test("is true for an eslint style summary", () => {
+    expect(isErrorCountLine("✖ 3 problems (1 error, 2 warnings)")).toBe(true);
+  });
+
+  test("is true for a plural count", () => {
+    expect(isErrorCountLine("Found 12 errors in 3 files.")).toBe(true);
+  });
+
+  test("is false for zero errors", () => {
+    expect(isErrorCountLine("Found 0 errors.")).toBe(false);
+  });
+
+  test("is true for a count that ends in zero", () => {
+    expect(isErrorCountLine("Found 10 errors.")).toBe(true);
+  });
+
+  test("is false for an error line that follows a column number", () => {
+    expect(
+      isErrorCountLine("  3:5  error  Unexpected any  no-explicit-any"),
+    ).toBe(false);
+  });
+
+  test("is false for a line without a count", () => {
+    expect(isErrorCountLine("src/a.ts:3:5 - error TS2322: bad")).toBe(false);
+  });
+
+  test("is case insensitive", () => {
+    expect(isErrorCountLine("2 ERRORS")).toBe(true);
+  });
+});
+
+describe("isErrorBodyLine", () => {
+  test("is true for a tsc style error line", () => {
+    expect(
+      isErrorBodyLine("src/a.ts:3:5 - error TS2322: Type 'x' is not y."),
+    ).toBe(true);
+  });
+
+  test("is true for an eslint style error line", () => {
+    expect(
+      isErrorBodyLine("  3:5  error  Unexpected any  no-explicit-any"),
+    ).toBe(true);
+  });
+
+  test("is false for a warning line", () => {
+    expect(
+      isErrorBodyLine("  3:5  warning  Unused variable  no-unused"),
+    ).toBe(false);
+  });
+
+  test("is false for an error line that also names a warning", () => {
+    expect(isErrorBodyLine("error: treated warning as error")).toBe(false);
+  });
+
+  test("is false for an annotation line", () => {
+    expect(
+      isErrorBodyLine("##[error]Process completed with exit code 1."),
+    ).toBe(false);
+  });
+
+  test("is false for a count line", () => {
+    expect(isErrorBodyLine("Found 1 error.")).toBe(false);
+  });
+
+  test("is false for a zero count", () => {
+    expect(isErrorBodyLine("Found 0 errors.")).toBe(false);
+  });
+
+  test("is false for a word that only contains error", () => {
+    expect(isErrorBodyLine("errorCount: terrors")).toBe(false);
+  });
+});
+
+describe("hasErrorCountWithoutBody", () => {
+  test("is true with a count line and no body line", () => {
+    expect(hasErrorCountWithoutBody(["a", "Found 1 error."])).toBe(true);
+  });
+
+  test("is false when a body line is also present", () => {
+    expect(
+      hasErrorCountWithoutBody(["src/a.ts:1:1 - error TS1: x", "1 error"]),
+    ).toBe(false);
+  });
+
+  test("is false without a count line", () => {
+    expect(hasErrorCountWithoutBody(["a", "b"])).toBe(false);
+  });
+});
+
+describe("condenseJobLogWithReport", () => {
+  const BODY = "src/a.ts:3:5 - error TS2322: Type 'string' is not 'number'.";
+  const warning = (i: number) =>
+    `/repo/src/w${String(i)}.ts:1:1  warning  Unused variable  no-unused-vars`;
+  const warnings = (count: number) =>
+    Array.from({ length: count }, (_, i) => warning(i));
+  const logWith = (body: string, count = "Found 1 error.") => [
+    ...warnings(150),
+    body,
+    ...warnings(150).map((line) => `${line} again`),
+    count,
+  ];
+
+  test("detects a count line without a body line in the first selection", () => {
+    const legacy = condenseJobLog(
+      logWith(BODY.replace("error", "fixme")).join("\n"),
+      3000,
+    );
+    expect(hasErrorCountWithoutBody(legacy.split("\n"))).toBe(true);
+  });
+
+  test("keeps the error body line from the middle of many warnings", () => {
+    const out = condenseJobLogWithReport(logWith(BODY).join("\n"), 3000);
+    expect(out.text).toContain(BODY);
+  });
+
+  test("keeps the count line as well", () => {
+    const out = condenseJobLogWithReport(logWith(BODY).join("\n"), 3000);
+    expect(out.text).toContain("Found 1 error.");
+  });
+
+  test("omits warning lines after the body line but keeps the body line", () => {
+    const out = condenseJobLogWithReport(logWith(BODY).join("\n"), 3000);
+    const lines = out.text.split("\n");
+    const afterBody = lines.slice(lines.indexOf(BODY) + 1);
+    expect(afterBody[0]).toMatch(/^\[\.\.\. \d+ lines omitted \.\.\.\]$/);
+  });
+
+  test("reports no omission once the body line is kept", () => {
+    const out = condenseJobLogWithReport(logWith(BODY).join("\n"), 3000);
+    expect(out.errorBodyOmitted).toBe(false);
+  });
+
+  test("keeps the excerpt within the character limit", () => {
+    const out = condenseJobLogWithReport(logWith(BODY).join("\n"), 3000);
+    expect(out.text.length).toBeLessThanOrEqual(3000);
+  });
+
+  test("keeps the excerpt within a smaller limit", () => {
+    const out = condenseJobLogWithReport(logWith(BODY).join("\n"), 1200);
+    expect(out.text.length).toBeLessThanOrEqual(1200);
+  });
+
+  test("keeps the body line within a smaller limit", () => {
+    const out = condenseJobLogWithReport(logWith(BODY).join("\n"), 1200);
+    expect(out.text).toContain(BODY);
+  });
+
+  test("puts the last annotation line before the body lines", () => {
+    const lines = logWith(BODY);
+    lines.splice(10, 0, "##[error]Process completed with exit code 1.");
+    const out = condenseJobLogWithReport(lines.join("\n"), 3000);
+    expect(out.text).toContain("##[error]Process completed with exit code 1.");
+  });
+
+  test("keeps the later body line first when they do not all fit", () => {
+    const first = `src/first.ts:1:1 - error TS1: ${"x".repeat(250)}`;
+    const last = `src/last.ts:1:1 - error TS2: ${"y".repeat(250)}`;
+    const filler = "z".repeat(250);
+    const mid = (i: number) =>
+      `src/m${String(i)}.ts:1:1 - error TS3: ${filler}`;
+    const middle = [0, 1, 2, 3, 4].map(mid);
+    const lines = [
+      ...warnings(100),
+      first,
+      ...middle,
+      last,
+      ...warnings(200).map((line) => `${line} again`),
+      "Found 8 errors.",
+    ];
+    const out = condenseJobLogWithReport(lines.join("\n"), 3000);
+    expect(out.text).toContain(last);
+  });
+
+  test("reports an omission when no body line exists in the log", () => {
+    const out = condenseJobLogWithReport(
+      [...warnings(400), "Found 1 error."].join("\n"),
+      3000,
+    );
+    expect(out.errorBodyOmitted).toBe(true);
+  });
+
+  test("keeps the excerpt as before when no body line exists in the log", () => {
+    const log = [...warnings(400), "Found 1 error."].join("\n");
+    const out = condenseJobLogWithReport(log, 3000);
+    expect(out.text).toBe(condenseJobLog(log, 3000));
+  });
+
+  test("reports an omission when no body line fits the budget", () => {
+    const wide = (i: number) =>
+      `src/f${String(i)}.ts - error ${"e".repeat(280)}`;
+    const lines = [
+      ...warnings(100),
+      wide(1),
+      ...warnings(300).map((line) => `${line} again`),
+      "Found 1 error.",
+    ];
+    const out = condenseJobLogWithReport(lines.join("\n"), 600);
+    expect(out.errorBodyOmitted).toBe(true);
+  });
+
+  test("does not report an omission for a log that fits", () => {
+    const out = condenseJobLogWithReport(`${BODY}\nFound 1 error.`, 3000);
+    expect(out).toEqual({
+      text: `${BODY}\nFound 1 error.`,
+      errorBodyOmitted: false,
+    });
+  });
+
+  test("does not change the excerpt of a log without a count line", () => {
+    const withBody = logWith(BODY, "done");
+    const withoutBody = logWith(BODY.replace("error", "fixme"), "done");
+    const out = condenseJobLogWithReport(withBody.join("\n"), 3000);
+    expect(out.text).toBe(condenseJobLog(withoutBody.join("\n"), 3000));
+  });
+
+  test("does not report an omission for a log without a count line", () => {
+    const log = logWith(BODY, "done").join("\n");
+    const out = condenseJobLogWithReport(log, 3000);
+    expect(out.errorBodyOmitted).toBe(false);
+  });
+
+  test("does not change the excerpt when the body line is already kept", () => {
+    const lines = [...warnings(300), BODY, "Found 1 error."];
+    const swapped = [
+      ...warnings(300),
+      BODY.replace("error", "fixme"),
+      "Found 1 error.",
+    ];
+    const out = condenseJobLogWithReport(lines.join("\n"), 3000);
+    expect(out.text).toBe(
+      condenseJobLog(swapped.join("\n"), 3000).replace("fixme", "error"),
+    );
+  });
+
+  test("does not report an omission when the body line is already kept", () => {
+    const out = condenseJobLogWithReport(
+      [...warnings(300), BODY, "Found 1 error."].join("\n"),
+      3000,
+    );
+    expect(out.errorBodyOmitted).toBe(false);
+  });
+
+  test("handles tens of thousands of lines quickly", () => {
+    const half = warnings(60_000);
+    const big = [...half, BODY, ...half, "Found 1 error."];
+    const started = Date.now();
+    condenseJobLogWithReport(big.join("\n"), 3000);
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+});
+
+describe("buildCiExcerpt with an omitted error body", () => {
+  const warn = (i: number) =>
+    `/repo/src/w${String(i)}.ts:1:1  warning  Unused variable  no-unused`;
+  const BODY = "src/a.ts:3:5 - error TS2322: Type 'string' is not 'number'.";
+  const manyWarnings = Array.from({ length: 150 }, (_, i) => warn(i));
+  const log = [
+    ...manyWarnings,
+    BODY,
+    ...manyWarnings.map((line) => `${line} again`),
+    "Found 1 error.",
+  ].join("\n");
+
+  const again = (line: string) => `${line} again`;
+  const noBodyLog = [
+    ...manyWarnings,
+    ...manyWarnings.map(again),
+    "Found 1 error.",
+  ].join("\n");
+  const job = (name: string, text: string): CiLogJobInput => ({
+    name,
+    failedSteps: [],
+    log: text,
+  });
+  const excerptOf = (...jobs: CiLogJobInput[]) =>
+    buildCiExcerpt(jobs, { scan: cleanScanner });
+  const textOf = (outcome: CiExcerptOutcome) =>
+    outcome.kind === "clean" ? outcome.excerpt.read()[0]?.text : undefined;
+  const omittedOf = (outcome: CiExcerptOutcome) =>
+    outcome.kind === "clean" ? outcome.errorBodyOmitted : null;
+
+  test("keeps the error body line in the excerpt", async () => {
+    const outcome = await excerptOf(job("lint", log));
+    expect(textOf(outcome)).toContain(BODY);
+  });
+
+  test("keeps each job within the job limit", async () => {
+    const outcome = await excerptOf(job("lint", log));
+    expect(textOf(outcome)?.length).toBeLessThanOrEqual(CI_LOG_JOB_MAX_CHARS);
+  });
+
+  test("reports no omission when the body line is kept", async () => {
+    const outcome = await excerptOf(job("lint", log));
+    expect(omittedOf(outcome)).toBe(false);
+  });
+
+  test("reports an omission when the log has no body line anywhere", async () => {
+    const outcome = await excerptOf(job("lint", noBodyLog));
+    expect(omittedOf(outcome)).toBe(true);
+  });
+
+  test("reports an omission when any one job omitted the body", async () => {
+    const outcome = await excerptOf(
+      job("ok", "plain failure"),
+      job("lint", noBodyLog),
+    );
+    expect(omittedOf(outcome)).toBe(true);
+  });
+
+  test("still scans the rebuilt excerpt for secrets", async () => {
+    const scanned: string[] = [];
+    await buildCiExcerpt([job("lint", log)], {
+      scan: async (text) => {
+        scanned.push(text);
+        return { ok: true, output: "" };
+      },
+    });
+    expect(scanned[scanned.length - 1]).toContain(BODY);
+  });
+
+  test("masks a secret inside the kept body line", async () => {
+    const secretLog = log.replace(
+      BODY,
+      `${BODY} token ghp_abcdefghijklmnopqrstuvwxyz0123456789`,
+    );
+    const outcome = await excerptOf(job("lint", secretLog));
+    expect(textOf(outcome)).not.toContain("ghp_");
   });
 });
 

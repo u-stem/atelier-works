@@ -261,17 +261,45 @@ function cutMiddle(text: string, maxChars: number): string {
 }
 
 /**
- * `cleanLogText`を通したログを、`maxChars`以内の抜粋にする。
- * 空行、`##[endgroup]`と`##[debug]`の行を捨て、長い行を300文字で切り、連続する同じ行を1行にまとめる。
- * まとめても収まらないときは、先頭の1割、`##[error]`の行(全体の3割まで。最後の1行を必ず含める)、
- * 残りを末尾の行に割り当て、間は省略した行数の注記でつなぐ。
- * 失敗の原因は`##[error]`の行と末尾に出るのが普通で、先頭は準備の出力が多いため、この割り当てにする。
+ * 1以上の数の直後に`error`か`errors`の語が続く、検査ツールのエラーの件数の行。
+ * `3:5  error  ...`のような、位置の列番号の直後にある`error`は件数にしないため、数の直前の`:`、`.`、`,`を除く。
  */
-export function condenseJobLog(cleaned: string, maxChars: number): string {
-  const lines = squeezeLines(cleaned);
-  const whole = lines.join("\n");
-  if (whole.length <= maxChars) return whole;
+const ERROR_COUNT_PATTERN = /(?<![\d:.,])[1-9]\d*\s+errors?\b/i;
+const ERROR_WORD_PATTERN = /\berror\b/i;
+const WARNING_WORD_PATTERN = /\bwarn(?:ing)?s?\b/i;
 
+/** 検査ツールが出す、エラーの件数の行か。`Found 1 error.`や`3 problems (1 error, 2 warnings)`は真、`0 errors`は偽。 */
+export function isErrorCountLine(line: string): boolean {
+  return ERROR_COUNT_PATTERN.test(line);
+}
+
+/**
+ * 検査ツールが自分の書式で出す、個々のエラーの本文の行と見なせるか。
+ * `error`の語を含み、件数の行でなく、警告の語を含まず、`##[`で始まらない行である。
+ */
+export function isErrorBodyLine(line: string): boolean {
+  return (
+    ERROR_WORD_PATTERN.test(line) &&
+    !line.startsWith("##[") &&
+    !WARNING_WORD_PATTERN.test(line) &&
+    !isErrorCountLine(line)
+  );
+}
+
+/** 行の中に、エラーの件数の行があり、エラーの本文の行が無いか。 */
+export function hasErrorCountWithoutBody(lines: readonly string[]): boolean {
+  return lines.some(isErrorCountLine) && !lines.some(isErrorBodyLine);
+}
+
+/**
+ * 行を選んで抜粋にする。先頭の1割を選んだ後、3割の枠に`errorPriority`の順で行を入れ、
+ * 残りを末尾から割り当てる。枠に収まらない行は飛ばす。
+ */
+function selectAndRender(
+  lines: readonly string[],
+  maxChars: number,
+  errorPriority: readonly number[],
+): string {
   const cost = (index: number) => (lines[index]?.length ?? 0) + 1;
   const chosen = new Set<number>();
   // 選んだ行の長さと、行の前後に入る省略の注記の予約の合計。
@@ -285,10 +313,6 @@ export function condenseJobLog(cleaned: string, maxChars: number): string {
   }
 
   const errorBudget = Math.floor(maxChars * ERROR_SHARE);
-  const errorIndexes = lines.flatMap((line, index) =>
-    line.startsWith(ERROR_LINE_PREFIX) ? [index] : [],
-  );
-  const lastError = errorIndexes[errorIndexes.length - 1];
   let errorUsed = 0;
   const addError = (index: number) => {
     if (chosen.has(index)) return;
@@ -298,8 +322,7 @@ export function condenseJobLog(cleaned: string, maxChars: number): string {
     errorUsed += price;
     committed += price;
   };
-  if (lastError !== undefined) addError(lastError);
-  for (const index of errorIndexes) addError(index);
+  for (const index of errorPriority) addError(index);
 
   // 末尾の前の注記と、末尾の後ろの注記の2つ分を空けた残りが、末尾の予算になる。
   let remaining = maxChars - committed - 2 * OMIT_MARKER_RESERVE;
@@ -325,6 +348,66 @@ export function condenseJobLog(cleaned: string, maxChars: number): string {
   }
   if (gap > 0) out.push(`[... ${String(gap)} lines omitted ...]`);
   return cutMiddle(out.join("\n"), maxChars);
+}
+
+/** `condenseJobLogWithReport`の結果。 */
+export type CondensedJobLog = {
+  readonly text: string;
+  /** 抜粋にエラーの件数の行があり、エラーの本文の行が無い。 */
+  readonly errorBodyOmitted: boolean;
+};
+
+/**
+ * `cleanLogText`を通したログを、`maxChars`以内の抜粋にする。
+ * 空行、`##[endgroup]`と`##[debug]`の行を捨て、長い行を300文字で切り、連続する同じ行を1行にまとめる。
+ * まとめても収まらないときは、先頭の1割、`##[error]`の行(全体の3割まで。最後の1行を必ず含める)、
+ * 残りを末尾の行に割り当て、間は省略した行数の注記でつなぐ。
+ * 失敗の原因は`##[error]`の行と末尾に出るのが普通で、先頭は準備の出力が多いため、この割り当てにする。
+ * 選んだ行にエラーの件数の行があり、本文の行が無く、ログのどこかに本文の行があるときは、
+ * 3割の枠に、最後の`##[error]`の行、本文の行(後ろのものから)、残りの`##[error]`の行の順に入れて選び直す。
+ * 結果の`errorBodyOmitted`は、最終の抜粋に件数の行があり、本文の行が無いかを示す。
+ */
+export function condenseJobLogWithReport(
+  cleaned: string,
+  maxChars: number,
+): CondensedJobLog {
+  const lines = squeezeLines(cleaned);
+  const whole = lines.join("\n");
+  if (whole.length <= maxChars) {
+    return { text: whole, errorBodyOmitted: false };
+  }
+
+  const errorIndexes = lines.flatMap((line, index) =>
+    line.startsWith(ERROR_LINE_PREFIX) ? [index] : [],
+  );
+  const lastError = errorIndexes[errorIndexes.length - 1];
+  const lastErrorFirst = lastError === undefined ? [] : [lastError];
+
+  let text = selectAndRender(lines, maxChars, [
+    ...lastErrorFirst,
+    ...errorIndexes,
+  ]);
+  if (hasErrorCountWithoutBody(text.split("\n"))) {
+    const bodyIndexes = lines.flatMap((line, index) =>
+      isErrorBodyLine(line) ? [index] : [],
+    );
+    if (bodyIndexes.length > 0) {
+      text = selectAndRender(lines, maxChars, [
+        ...lastErrorFirst,
+        ...bodyIndexes.reverse(),
+        ...errorIndexes,
+      ]);
+    }
+  }
+  return {
+    text,
+    errorBodyOmitted: hasErrorCountWithoutBody(text.split("\n")),
+  };
+}
+
+/** `condenseJobLogWithReport`の抜粋の文字列だけを返す。 */
+export function condenseJobLog(cleaned: string, maxChars: number): string {
+  return condenseJobLogWithReport(cleaned, maxChars).text;
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +557,12 @@ export type CiLogJobInput = {
 };
 
 export type CiExcerptOutcome =
-  | { readonly kind: "clean"; readonly excerpt: VolatileCiExcerpt }
+  | {
+      readonly kind: "clean";
+      readonly excerpt: VolatileCiExcerpt;
+      /** どれか1ジョブの抜粋に、エラーの件数の行があり、エラーの本文の行が無い。 */
+      readonly errorBodyOmitted: boolean;
+    }
   | { readonly kind: "empty" }
   | { readonly kind: "secret_detected"; readonly reason: CiSecretReason };
 
@@ -500,6 +588,7 @@ export async function buildCiExcerpt(
 ): Promise<CiExcerptOutcome> {
   const excerpts: CiFailureExcerpt[] = [];
   let remaining = CI_LOG_TOTAL_MAX_CHARS;
+  let errorBodyOmitted = false;
   for (const job of jobs.slice(0, CI_LOG_MAX_JOBS)) {
     const cleaned = cleanLogText(job.log);
     if (cleaned.trim() === "") continue;
@@ -508,11 +597,12 @@ export async function buildCiExcerpt(
     if (fullReason !== null) {
       return { kind: "secret_detected", reason: fullReason };
     }
-    const text = condenseJobLog(
+    const { text, errorBodyOmitted: omitted } = condenseJobLogWithReport(
       maskTokenFragments(cleaned),
       Math.min(CI_LOG_JOB_MAX_CHARS, remaining),
     );
     if (text === "") continue;
+    if (omitted) errorBodyOmitted = true;
     remaining -= text.length;
     excerpts.push({
       jobName: sanitizeExternalName(job.name),
@@ -536,6 +626,7 @@ export async function buildCiExcerpt(
 
   return {
     kind: "clean",
+    errorBodyOmitted,
     excerpt: VolatileCiExcerpt.fromSanitized(
       excerpts.map((e) => ({
         jobName: maskSecrets(e.jobName),
