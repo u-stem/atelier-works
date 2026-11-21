@@ -237,6 +237,12 @@ describe("pr_review flow.yaml", () => {
     );
   });
 
+  test("passes the too-large flag of the generate step to the post step", () => {
+    expect(moduleBlock(PR_REVIEW_FLOW, "pr_review_post")).toContain(
+      "          diff_too_large:\n            type: javascript\n            expr: results.pr_review_generate?.diff_too_large ?? false\n",
+    );
+  });
+
   test("passes the diff hunks of the generate step to the post step inside the sealed argument", () => {
     const hunks = [{ path: "a.ts", hunks: [{ start: 1, end: 2 }] }];
     const sealed = evaluateSealed("pr_review", "pr_review_post", {
@@ -270,6 +276,14 @@ describe("pr_review flow.yaml", () => {
     expect(schema).toContain(
       "    binary_unlisted_count:\n      type: number\n",
     );
+  });
+
+  test("declares diff_too_large in the schema of the post step", () => {
+    const schema = readFileSync(
+      join(import.meta.dir, "../../f/factory/steps/pr_review_post.script.yaml"),
+      "utf8",
+    );
+    expect(schema).toContain("    diff_too_large:\n      type: boolean\n");
   });
 
   test("puts no timeout on the failure module", () => {

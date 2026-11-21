@@ -1963,6 +1963,8 @@ describe("console release script names", () => {
     "console/src/api/windmill.ts",
     "console/src/api/writes.ts",
     "console/src/api/guards/writeResults.ts",
+    // 記録済みのresolved_byの値を表示名に引く辞書で、scriptを呼ぶ経路を持たない。
+    "console/src/lib/systemView.ts",
   ];
 
   test("only the allowlist and the typed writes name them", async () => {

@@ -44,11 +44,14 @@ import {
   getDefaultBranch,
   hasMarker,
   isOwnPost,
+  limitReviewDiff,
   PR_FILES_API_CAP,
   PR_FIX_MARKER_KIND,
   PR_REVIEW_ACK_MARKER_KIND,
   PR_REVIEW_ANSWER_MARKER_KIND,
   PR_REVIEW_OBJECTION_MARKER_KIND,
+  type PrDiff,
+  type PrDiffFetch,
   type PrReview,
   REVIEW_THREAD_COMMENTS_LIMIT,
   type ReviewThread,
@@ -407,11 +410,59 @@ export type PrDiffLike = {
  * `Read`で読むファイルは、差分と違って制御文字の置き換えを通らないので、
  * 見えない文字と制御文字を自分で探して指摘するよう、固定の文で促す。
  */
-export function buildReviewDiffText(prDiff: PrDiffLike): string {
-  if (!prDiff.truncated) {
-    return prDiff.diff;
+export function buildReviewDiffText(
+  prDiff: PrDiffLike,
+  diffTooLarge = false,
+): string {
+  const truncatedText = prDiff.truncated
+    ? `${prDiff.diff}\n\n[diff truncated: showing a prefix of ${prDiff.totalLines} total diff lines. See the changed files list below and use Read to inspect the rest. Files read with Read are not escaped, so look for invisible and control characters in them and report them.]`
+    : prDiff.diff;
+  if (!diffTooLarge) return truncatedText;
+  return `${truncatedText}\n\n[full diff unavailable: GitHub refused to provide the whole diff because it exceeds the line limit. Any PR-wide diff shown above is built from the per-file patches and omits files whose patch GitHub did not return. See the changed files list below and use Read to inspect the rest. Files read with Read are not escaped, so look for invisible and control characters in them and report them.]`;
+}
+
+/** `filename`や`previous_filename`を、差分の見出しの1行に収まる形にする。改行は空白にまとめる。 */
+function patchHeadingName(path: string): string {
+  return path.replace(/[\r\n]+/g, " ");
+}
+
+/**
+ * GitHubが差分全体の提供を拒んだとき、変更ファイルの一覧の`patch`をつないで差分の代わりにする。
+ * ファイルごとに`diff --git`の見出しの行を付け、`patch`の無いファイル(バイナリ、大きすぎる差分)は含めない。
+ * 置き換えと切り詰めは`limitReviewDiff`に任せる。
+ * 名前の変更は、見出しの`a/`の側に移動元のパスを使う。
+ */
+export function buildFilePatchDiff(
+  files: readonly {
+    readonly filename: string;
+    readonly previous_filename: string | null;
+    readonly patch: string | null;
+  }[],
+  maxLines: number,
+): PrDiff {
+  const sections: string[] = [];
+  for (const file of files) {
+    if (file.patch === null) continue;
+    const before = patchHeadingName(file.previous_filename ?? file.filename);
+    const after = patchHeadingName(file.filename);
+    sections.push(`diff --git a/${before} b/${after}\n${file.patch}`);
   }
-  return `${prDiff.diff}\n\n[diff truncated: showing a prefix of ${prDiff.totalLines} total diff lines. See the changed files list below and use Read to inspect the rest. Files read with Read are not escaped, so look for invisible and control characters in them and report them.]`;
+  return limitReviewDiff(sections.join("\n"), maxLines);
+}
+
+/**
+ * 差分の取得の結果から、プロンプトに使う差分を選ぶ。
+ * 取得できたときはその差分を、上限超過で拒まれたときは`patch`の差分を使い、`diffTooLarge`を真にする。
+ * 上限超過のときは、差分の本文からバイナリのパスを集められないので、`binaryFiles`を空にする。
+ */
+export function selectReviewDiff(
+  fetched: PrDiffFetch,
+  patchDiff: PrDiff,
+): { readonly prDiff: PrDiff; readonly diffTooLarge: boolean } {
+  if (fetched.kind === "ok") {
+    return { prDiff: fetched.diff, diffTooLarge: false };
+  }
+  return { prDiff: { ...patchDiff, binaryFiles: [] }, diffTooLarge: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -994,6 +1045,9 @@ export function decideReviewBodyMode(
  * ここの文字列はすべて、英数字と日本語の間に半角スペースを入れない規約に従う
  * (`docs/coding-guidelines.md`)。
  *
+ * `diffTooLarge`が真なら、モードによらず、差分が上限を超えて全体を読めていないことの固定の1文を足し、
+ * 指摘の無い2つの形式はLGTMの文を出さない。GitHubの応答の文言は載せない。
+ *
  * `movedFindings`は、行コメントにするはずだった指摘を、総評へ移したものである。
  * 行に紐づけられなかった指摘と同じ一覧に、位置(`path:line`)を添えて、先に並べる。
  */
@@ -1007,9 +1061,12 @@ export function renderReviewSummary(
   binaryUnlistedCount = 0,
   movedFindings: readonly ReviewFinding[] = [],
   heldFindingCount = 0,
+  diffTooLarge = false,
 ): string {
   const lines = [`${ROLE_TAGS.pr_review} @${authorLogin}`];
-  const hasBinary = binaryFiles.length + binaryUnlistedCount > 0;
+  // 差分を読めていないときも、バイナリのファイルがあるときと同じく、LGTMと読める文を出さない。
+  const hasBinary =
+    binaryFiles.length + binaryUnlistedCount > 0 || diffTooLarge;
   switch (mode) {
     case "findings":
       lines.push(
@@ -1041,6 +1098,7 @@ export function renderReviewSummary(
   }
   // どの形式も、2行目が結果の文である。投稿しなかった指摘の注記は、その直後に置く。
   lines.splice(2, 0, ...renderHeldFindingsLines(heldFindingCount));
+  lines.push(...renderDiffTooLargeLines(diffTooLarge));
   lines.push(...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount));
   lines.push(...renderUnanchoredFindingLines(droppedFindings, movedFindings));
   return lines.join("\n");
@@ -1055,6 +1113,20 @@ function renderHeldFindingsLines(heldFindingCount: number): string[] {
   return heldFindingCount > 0
     ? [
         `確信度が低く、投稿しなかった指摘が${String(heldFindingCount)}件あります。記録はConsoleで確認できます。`,
+      ]
+    : [];
+}
+
+/**
+ * GitHubが差分の提供を上限超過で拒んだことの固定の1文。偽なら空。
+ * 先頭に空行を置き、直前の行と続けて読まれないようにする。
+ * GitHubの応答の文言やPRの内容は載せない。
+ */
+function renderDiffTooLargeLines(diffTooLarge: boolean): string[] {
+  return diffTooLarge
+    ? [
+        "",
+        "差分がGitHubの上限を超えて全体を読めていないため、人が内容を確認してください。",
       ]
     : [];
 }
@@ -1163,6 +1235,7 @@ function renderUnanchoredFindingLines(
  * 「N件コメントしました」は、行コメントを1件も付けていないので書かない。
  * `binaryFiles`があれば、`renderReviewSummary`と同じ固定の一文とパスの一覧を足す。
  * `heldFindingCount`が1以上なら、`renderReviewSummary`と同じ、投稿しなかった指摘の件数の1行を足す。
+ * `diffTooLarge`が真なら、`renderReviewSummary`と同じ、差分が上限を超えたことの固定の文を足す。
  */
 export function renderUnresolvedLineSummary(
   authorLogin: string,
@@ -1171,12 +1244,14 @@ export function renderUnresolvedLineSummary(
   binaryFiles: readonly string[] = [],
   binaryUnlistedCount = 0,
   heldFindingCount = 0,
+  diffTooLarge = false,
 ): string {
   return [
     `${ROLE_TAGS.pr_review} @${authorLogin}`,
     "GitHubが行を解決できなかったため、行コメントにする指摘を総評に移しました。",
     "確認お願いします。",
     ...renderHeldFindingsLines(heldFindingCount),
+    ...renderDiffTooLargeLines(diffTooLarge),
     ...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount),
     ...renderUnanchoredFindingLines(droppedFindings, commentedFindings),
   ].join("\n");

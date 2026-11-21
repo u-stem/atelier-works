@@ -2842,7 +2842,8 @@ export async function listRecordedScheduleFailureJobIds(
  * 解決済みのnoticeは数えないので、解決した後に同じ状況が起きれば再び挿入する。
  * `message`が状態の値(版の組など)を含めば、値が変わったときは新しいnoticeになる。
  * 通知を作る経路は、この関数だけを使う。
- * 例外は作業領域のディスク使用量の通知で、`recordWorkspaceDiskUsageNotice`を使う。
+ * 例外は、作業領域のディスク使用量の通知(`recordWorkspaceDiskUsageNotice`)と、
+ * 作成の時点で解決済みにする通知(`addResolvedNotice`)である。
  *
  * 既存の未解決のnoticeは、「情報」の種類(`INFO_NOTICE_KINDS`)で`created_at`が1日より前なら、
  * 現在時刻に更新する。
@@ -2875,6 +2876,24 @@ export async function addNoticeUnlessUnresolved(
     return null;
   }
   return parseId(row.id, "id");
+}
+
+/**
+ * 解決済みの通知を1行挿入し、そのIDを返す。解決者と解決時刻は挿入と同時に記録する。
+ * 未解決の通知の部分一意索引に入らないので、同じ`kind`と`message`の未解決の通知があっても挿入できる。
+ * 運用者の対応が要らず、記録だけを残す通知に使う。
+ */
+export async function addResolvedNotice(
+  record: NoticeRecord,
+  resolvedBy: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    INSERT INTO factory.notices (kind, message, resolved, resolved_by, resolved_at)
+    VALUES (${record.kind}, ${record.message}, true, ${resolvedBy}, now())
+    RETURNING id
+  `.fetch();
+  return parseId(rows[0]?.id, "id");
 }
 
 /** ディスク使用量の通知を記録した作業領域の掃除が、余分な未解決の通知を解決したときの解決者。 */
