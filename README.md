@@ -176,6 +176,7 @@ atelier-works/
 | [凍結とdeployの保留の内部仕様](docs/internals/freezes.md) | 反映からスケジュールを外す凍結のデータ、除外、追従、運用手順、失敗時の回復、安全策 |
 | [保留の内部仕様](docs/internals/holds.md) | 対象を進めないことを期限つきで伝える保留の表、有効の条件、置く操作、読む処理、CLI、ローカルのセッションのフック、保留と凍結の書き込みの拒否、安全策 |
 | [遷移の履歴の内部仕様](docs/internals/history.md) | 作業項目の状態遷移を理由コードつきで追記専用に残す表、ハッシュの連鎖、検証、保持、限界 |
+| [設定の変更の履歴の内部仕様](docs/internals/config-history.md) | 設定の変更を理由コードつきで追記専用に残す表、値の射影、ハッシュの連鎖、検証、記録しない変更 |
 | [反映の承認の内部仕様](docs/internals/deploy-approvals.md) | 保護パスに触れた変更の反映を、HEADの版ごとに人の承認まで止める表、判定の流れ、通知、Console、安全策 |
 | [CIの失敗を直す部品の仕様](docs/internals/ci-fix.md) | CIのログの取得、整形、検査、変更するファイルの検査と、CI回の流れ、安全策 |
 | [PRのCI監視の仕様](docs/internals/pr-ci.md) | PRのCIの判定、通知、失敗を直す作業項目の起動 |

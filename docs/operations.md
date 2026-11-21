@@ -2123,6 +2123,9 @@ Claudeの実行の記録は、コスト分析(`v_agent_cost_daily`)の元デー�
 別のトランザクションが書いている最中の連鎖は、待たずに飛ばし、次の掃除が消す。
 仕様は[遷移の履歴の内部仕様](internals/history.md#保持)にある。
 
+設定の変更の履歴(`config_history`)は、保持日数の設定を持たず、消えない。
+仕様は[設定の変更の履歴の内部仕様](internals/config-history.md#保持)にある。
+
 作業項目を消すときは、その要件定義のディレクトリも消す。
 ディレクトリは`requirement_drafts.doc_dir`が指す場所である。
 workerの`/var/lib/factory/requirements/<owner>/<repo>/issue-<N>/wi-<id>/`以下にある。

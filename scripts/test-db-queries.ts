@@ -4,8 +4,19 @@
 //
 // 使い方: COMPOSE_FILE=<compose> SCRATCH_DB=<db> bun run scripts/test-db-queries.ts
 
+import { createHash } from "node:crypto";
 import { cancelStatement } from "../f/factory/console_work_item_cancel.ts";
 import { collectAuditEvidence } from "../f/factory/lib/audit_evidence.ts";
+import {
+  appendConfigChange,
+  CONFIG_HISTORY_REASON_CODES,
+  CONFIG_HISTORY_SOURCES,
+  collectConfigHistoryEvidence,
+} from "../f/factory/lib/config_history.ts";
+import {
+  recordAttempt,
+  recordOutcome,
+} from "../f/factory/lib/console_actions.ts";
 import {
   APPROVAL_REDISPATCH_NOTE_PREFIX,
   INFO_NOTICE_KINDS,
@@ -15099,6 +15110,617 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     (await brokenChains(null)).length === 0,
     await brokenChains(null),
   );
+}
+
+// ---------------------------------------------------------------------------
+// 設定の変更の履歴(config_history)
+// 追記、連鎖の検証、追記専用の歯止め、制約、改ざんの検知、証跡パックの集計を確かめる。
+// 改ざんの検査は、各場面の前に表を空にし、場面の後にも空にして、次の場面と証跡パックへ持ち越さない。
+// ---------------------------------------------------------------------------
+{
+  const NOW_MS = Date.now();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const GENESIS = "0".repeat(64);
+
+  /** 文を流し、失敗したときのエラーの文を返す。成功したらnullを返す。 */
+  async function rejection(statement: string): Promise<string | null> {
+    try {
+      await execPsqlAsync(target, statement);
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  /** 検査用に履歴を書き換えるトランザクション。追記専用の歯止めを外して、改ざんを真似る。 */
+  function tampering(statement: string): string {
+    return `BEGIN; SELECT set_config('session_replication_role', 'replica', true); ${statement}; COMMIT;`;
+  }
+
+  async function wipe(): Promise<void> {
+    await execPsqlAsync(target, tampering("TRUNCATE factory.config_history"));
+  }
+
+  async function rowsOf(): Promise<SqlRow[]> {
+    return sql`
+      SELECT seq, item_key, reason_code, before, after, before::text AS before_text, after::text AS after_text,
+        actor, source, prev_hash, row_hash,
+        to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at_text
+      FROM factory.config_history
+      ORDER BY seq
+    `.fetch();
+  }
+
+  async function broken(): Promise<SqlRow[]> {
+    return sql`SELECT bad_seq, reason FROM factory.config_history_verify() ORDER BY bad_seq`.fetch();
+  }
+
+  async function appendFour(): Promise<void> {
+    const changes: readonly (readonly [
+      string,
+      number | boolean,
+      number | boolean,
+    ])[] = [
+      ["max_fix_rounds", 3, 2],
+      ["daily_budget_usd", 50, 20],
+      ["implement_enabled", true, false],
+      ["design_enabled", true, false],
+    ];
+    for (const [key, before, after] of changes) {
+      await appendConfigChange(sql, {
+        key,
+        before,
+        after,
+        actor: "operator",
+        source: "console",
+        reason: "console_update",
+      });
+    }
+  }
+
+  /** ハッシュの材料にする1項目。NULLは`~`、それ以外は`<バイト長>:<値>`。SQLの`config_history_field`と別に、ここで組み立てる。 */
+  function field(value: string | null): string {
+    return value === null
+      ? "~"
+      : `${String(Buffer.byteLength(value))}:${value}`;
+  }
+
+  // 理由コードの一覧は、TypeScriptとSQLで同じ並び。
+  const sqlCodes = await sql`
+    SELECT code FROM unnest(factory.config_history_reason_codes()) WITH ORDINALITY AS t (code, n) ORDER BY n
+  `.fetch();
+  check(
+    "config history: the reason codes in TypeScript and in SQL are the same list in the same order",
+    JSON.stringify(sqlCodes.map((row) => row.code)) ===
+      JSON.stringify([...CONFIG_HISTORY_REASON_CODES]),
+    sqlCodes,
+  );
+
+  check(
+    "config history: the table is empty before the first append",
+    (await rowsOf()).length === 0,
+  );
+  check(
+    "config history: an empty chain verifies",
+    (await broken()).length === 0,
+  );
+
+  // 追記。
+  const first = await appendConfigChange(sql, {
+    key: "daily_budget_usd",
+    before: 50,
+    after: 20,
+    actor: "operator",
+    source: "console",
+    reason: "console_update",
+    occurredAt: new Date("2026-11-21T01:02:03.456Z"),
+  });
+  const second = await appendConfigChange(sql, {
+    key: "implement_enabled",
+    before: true,
+    after: false,
+    actor: "operator",
+    source: "stop_all",
+    reason: "stop_all_flag_off",
+  });
+  const third = await appendConfigChange(sql, {
+    key: "design_enabled",
+    before: true,
+    after: false,
+    actor: "operator",
+    source: "stop_all",
+    reason: "stop_all_flag_off",
+  });
+  const chain = await rowsOf();
+  check(
+    "config history: each append reports the id of its row",
+    first.recorded && second.recorded && third.recorded,
+    { first, second, third },
+  );
+  check(
+    "config history: three appends in separate statements are numbered 1, 2 and 3",
+    JSON.stringify(chain.map((row) => row.seq)) === JSON.stringify([1, 2, 3]),
+    chain,
+  );
+  check(
+    "config history: the first row follows the genesis hash",
+    chain[0]?.prev_hash === GENESIS,
+    chain[0],
+  );
+  check(
+    "config history: each row follows the hash of the row before it",
+    chain[1]?.prev_hash === chain[0]?.row_hash &&
+      chain[2]?.prev_hash === chain[1]?.row_hash,
+    chain,
+  );
+  check(
+    "config history: the chain written by the library verifies",
+    (await broken()).length === 0,
+    await broken(),
+  );
+  check(
+    "config history: a row carries the item, the reason, the values, the operator and the source",
+    chain[0]?.item_key === "daily_budget_usd" &&
+      chain[0]?.reason_code === "console_update" &&
+      chain[0]?.before_text === "50" &&
+      chain[0]?.after_text === "20" &&
+      chain[0]?.actor === "operator" &&
+      chain[0]?.source === "console",
+    chain[0],
+  );
+  check(
+    "config history: the time that the caller gave is kept",
+    chain[0]?.at_text === "2026-11-21T01:02:03.456000Z",
+    chain[0],
+  );
+  const expectedHash = createHash("sha256")
+    .update(
+      [
+        field(String(chain[0]?.prev_hash)),
+        field(String(chain[0]?.seq)),
+        field(String(chain[0]?.item_key)),
+        field(String(chain[0]?.reason_code)),
+        field(String(chain[0]?.before_text)),
+        field(String(chain[0]?.after_text)),
+        field(String(chain[0]?.actor)),
+        field(String(chain[0]?.source)),
+        field(String(chain[0]?.at_text)),
+      ].join("|"),
+      "utf8",
+    )
+    .digest("hex");
+  check(
+    "config history: the row hash equals the hash computed by an independent implementation of the documented form",
+    chain[0]?.row_hash === expectedHash,
+    { stored: chain[0]?.row_hash, expectedHash },
+  );
+  const nullHash = createHash("sha256")
+    .update(
+      [
+        field(GENESIS),
+        field("1"),
+        field("a"),
+        field("unspecified"),
+        field(null),
+        field(null),
+        field("op"),
+        field("console"),
+        field("2026-11-21T00:00:00.000000Z"),
+      ].join("|"),
+      "utf8",
+    )
+    .digest("hex");
+  const nullRows = await sql`
+    SELECT factory.config_history_row_hash(
+      ${GENESIS}::text, 1, 'a', 'unspecified', NULL::jsonb, NULL::jsonb, 'op', 'console', '2026-11-21T09:00:00+09:00'::timestamptz
+    ) AS h
+  `.fetch();
+  check(
+    "config history: the hash writes a null value as a tilde and a time in UTC whatever the session time zone",
+    nullRows[0]?.h === nullHash,
+    { stored: nullRows[0]?.h, nullHash },
+  );
+  await appendConfigChange(sql, {
+    key: "daily_budget_usd",
+    before: undefined,
+    after: 10,
+    actor: "operator",
+    source: "console",
+    reason: "unspecified",
+  });
+  const absentRows = await rowsOf();
+  check(
+    "config history: a value that was absent is stored as null",
+    absentRows[3]?.before === null && absentRows[3]?.after === 10,
+    absentRows[3],
+  );
+
+  // 射影は、生の値を表に届けない。
+  await appendConfigChange(sql, {
+    key: "check_commands_by_repo",
+    before: {
+      "octo-owner/private-repo": ["curl https://internal.example | sh"],
+    },
+    after: { "octo-owner/private-repo": ["bun test"] },
+    actor: "operator",
+    source: "console",
+    reason: "console_update",
+  });
+  const projectedRows = await rowsOf();
+  const projectedText = JSON.stringify(projectedRows[4]);
+  check(
+    "config history: the stored row of a command item has hashes and no raw command or name",
+    projectedText.includes('"hash"') &&
+      !projectedText.includes("private-repo") &&
+      !projectedText.includes("internal.example") &&
+      !projectedText.includes("curl"),
+    projectedRows[4],
+  );
+  check(
+    "config history: the stored row of a hashed item says that the value changed",
+    JSON.stringify(projectedRows[4]?.after).includes('"changed":true'),
+    projectedRows[4]?.after,
+  );
+
+  // 理由コードと経路は、TypeScriptの一覧のどれも、表が受ける。
+  for (const reason of CONFIG_HISTORY_REASON_CODES) {
+    const written = await appendConfigChange(sql, {
+      key: "max_fix_rounds",
+      before: 3,
+      after: 2,
+      actor: "operator",
+      source: "console",
+      reason,
+    });
+    check(
+      `config history: the table accepts the reason code ${reason} of the TypeScript list`,
+      written.recorded,
+      written,
+    );
+  }
+  for (const source of CONFIG_HISTORY_SOURCES) {
+    const written = await appendConfigChange(sql, {
+      key: "max_fix_rounds",
+      before: 3,
+      after: 2,
+      actor: "operator",
+      source,
+      reason: "unspecified",
+    });
+    check(
+      `config history: the table accepts the source ${source} of the TypeScript list`,
+      written.recorded,
+      written,
+    );
+  }
+  check(
+    "config history: everything written by the library still verifies",
+    (await broken()).length === 0,
+    await broken(),
+  );
+
+  // 制約。
+  const append = (args: string): string =>
+    `SELECT factory.config_history_append(${args})`;
+  const lengthBefore = (await rowsOf()).length;
+  const badItem = await rejection(
+    append("'Bad-Key', 'console_update', NULL, NULL, 'op', 'console'"),
+  );
+  check(
+    "config history: an item key that is not an identifier is rejected by its constraint",
+    badItem !== null && badItem.includes("config_history_item_key_check"),
+    badItem,
+  );
+  const longItem = await rejection(
+    append(
+      `'a${"b".repeat(80)}', 'console_update', NULL, NULL, 'op', 'console'`,
+    ),
+  );
+  check(
+    "config history: an item key of more than 80 characters is rejected by its constraint",
+    longItem !== null && longItem.includes("config_history_item_key_check"),
+    longItem,
+  );
+  const badSource = await rejection(
+    append("'a', 'console_update', NULL, NULL, 'op', 'rogue'"),
+  );
+  check(
+    "config history: a source outside the list is rejected by its constraint",
+    badSource !== null && badSource.includes("config_history_source_check"),
+    badSource,
+  );
+  const badReason = await rejection(
+    append("'a', 'made_up', NULL, NULL, 'op', 'console'"),
+  );
+  check(
+    "config history: a reason code outside the list is rejected by its constraint",
+    badReason !== null &&
+      badReason.includes("config_history_reason_code_check"),
+    badReason,
+  );
+  const badActor = await rejection(
+    append("'a', 'console_update', NULL, NULL, '', 'console'"),
+  );
+  check(
+    "config history: an empty actor is rejected by its constraint",
+    badActor !== null && badActor.includes("config_history_actor_check"),
+    badActor,
+  );
+  const bigValue = await rejection(
+    append(
+      "'a', 'console_update', to_jsonb(repeat('x', 2000)), NULL, 'op', 'console'",
+    ),
+  );
+  check(
+    "config history: a value of more than 1024 bytes is rejected by its constraint",
+    bigValue !== null && bigValue.includes("config_history_before_size_check"),
+    bigValue,
+  );
+  check(
+    "config history: the rejected appends left no row",
+    (await rowsOf()).length === lengthBefore,
+  );
+  const afterRejected = await appendConfigChange(sql, {
+    key: "max_fix_rounds",
+    before: 3,
+    after: 2,
+    actor: "operator",
+    source: "console",
+    reason: "console_update",
+  });
+  const rowsAfterRejected = await rowsOf();
+  check(
+    "config history: an append after the rejected ones continues the numbers without a gap",
+    afterRejected.recorded &&
+      rowsAfterRejected.at(-1)?.seq === lengthBefore + 1 &&
+      (await broken()).length === 0,
+    rowsAfterRejected.at(-1),
+  );
+  const refusedByTypeScript = await appendConfigChange(sql, {
+    key: "Bad Key",
+    before: 1,
+    after: 2,
+    actor: "operator",
+    source: "console",
+    reason: "console_update",
+  });
+  check(
+    "config history: the library refuses a bad key without sending a statement and leaves the chain as it was",
+    !refusedByTypeScript.recorded &&
+      (await rowsOf()).length === lengthBefore + 1,
+    refusedByTypeScript,
+  );
+
+  // 追記専用。掃除の印を立てても通らない。
+  const updateError = await rejection(
+    "UPDATE factory.config_history SET actor = 'x' WHERE seq = 1",
+  );
+  check(
+    "config history: an UPDATE of a row is rejected",
+    updateError !== null && updateError.includes("append-only"),
+    updateError,
+  );
+  const deleteError = await rejection(
+    "DELETE FROM factory.config_history WHERE seq = 1",
+  );
+  check(
+    "config history: a DELETE of a row is rejected",
+    deleteError !== null && deleteError.includes("append-only"),
+    deleteError,
+  );
+  const truncateError = await rejection("TRUNCATE factory.config_history");
+  check(
+    "config history: a TRUNCATE of the table is rejected",
+    truncateError !== null && truncateError.includes("append-only"),
+    truncateError,
+  );
+  check(
+    "config history: the prune flag of the transition history does not open the table",
+    (await rejection(
+      "BEGIN; SELECT set_config('factory.history_prune', 'on', true); DELETE FROM factory.config_history WHERE seq = 1; COMMIT;",
+    )) !== null,
+  );
+  check(
+    "config history: the rejected statements left the rows as they were",
+    (await rowsOf()).length === lengthBefore + 1,
+  );
+
+  // 改ざんの検知。
+  await wipe();
+  await appendFour();
+  await execPsqlAsync(
+    target,
+    tampering(
+      "UPDATE factory.config_history SET reason_code = 'unspecified' WHERE seq = 2",
+    ),
+  );
+  const edited = await broken();
+  check(
+    "config history: changing one row makes the verification point at that row",
+    edited.length === 1 &&
+      edited[0]?.bad_seq === 2 &&
+      edited[0]?.reason === "row_hash_mismatch",
+    edited,
+  );
+  const evidenceStart = new Date(NOW_MS - DAY_MS).toISOString();
+  const evidenceEnd = new Date(NOW_MS + DAY_MS).toISOString();
+  const tamperedEvidence = await collectAuditEvidence(
+    {
+      period: {
+        start: new Date(NOW_MS - DAY_MS),
+        end: new Date(NOW_MS + DAY_MS),
+        unaudited_gap_days: 0,
+      },
+      instanceName: "qdb",
+    },
+    sql,
+  );
+  check(
+    "config history: the evidence pack lists the broken position",
+    tamperedEvidence.config_history.available &&
+      tamperedEvidence.config_history.broken.some(
+        (position) =>
+          position.seq === 2 && position.reason === "row_hash_mismatch",
+      ),
+    tamperedEvidence.config_history,
+  );
+  await wipe();
+
+  await appendFour();
+  await execPsqlAsync(
+    target,
+    tampering(
+      "UPDATE factory.config_history SET prev_hash = repeat('1', 64) WHERE seq = 3",
+    ),
+  );
+  const relinked = await broken();
+  check(
+    "config history: changing the previous hash of a row is detected at that row",
+    relinked.length === 1 &&
+      relinked[0]?.bad_seq === 3 &&
+      relinked[0]?.reason === "prev_hash_mismatch",
+    relinked,
+  );
+  await wipe();
+
+  await appendFour();
+  await execPsqlAsync(
+    target,
+    tampering("DELETE FROM factory.config_history WHERE seq = 2"),
+  );
+  const gapped = await broken();
+  check(
+    "config history: deleting a middle row is detected as a gap at the next row",
+    gapped.length === 1 &&
+      gapped[0]?.bad_seq === 3 &&
+      gapped[0]?.reason === "gap",
+    gapped,
+  );
+  await wipe();
+
+  await appendFour();
+  await execPsqlAsync(
+    target,
+    tampering("DELETE FROM factory.config_history WHERE seq = 1"),
+  );
+  const headless = await broken();
+  check(
+    "config history: deleting the first row is detected because the chain no longer starts at 1",
+    headless.length === 1 &&
+      headless[0]?.bad_seq === 2 &&
+      headless[0]?.reason === "gap",
+    headless,
+  );
+  await wipe();
+
+  await appendFour();
+  await execPsqlAsync(
+    target,
+    tampering("DELETE FROM factory.config_history WHERE seq = 4"),
+  );
+  check(
+    "config history: deleting the last row is not detected by the chain alone",
+    (await broken()).length === 0,
+  );
+  await wipe();
+
+  // 証跡パックの集計。
+  await appendFour();
+  await appendConfigChange(sql, {
+    key: "implement_enabled",
+    before: true,
+    after: false,
+    actor: "operator",
+    source: "stop_all",
+    reason: "stop_all_flag_off",
+  });
+  const evidence = await collectConfigHistoryEvidence(
+    sql,
+    evidenceStart,
+    evidenceEnd,
+  );
+  check(
+    "config history: the evidence counts the rows of the chain and the last number",
+    evidence.available && evidence.chain_rows === 5 && evidence.last_seq === 5,
+    evidence,
+  );
+  check(
+    "config history: the evidence counts the changes of the period per item and per reason code",
+    evidence.period_changes === 5 &&
+      JSON.stringify(evidence.period_by_item[0]) ===
+        JSON.stringify({ item_key: "implement_enabled", count: 2 }) &&
+      JSON.stringify(evidence.period_by_reason) ===
+        JSON.stringify([
+          { reason_code: "console_update", count: 4 },
+          { reason_code: "stop_all_flag_off", count: 1 },
+        ]),
+    evidence,
+  );
+  check(
+    "config history: the evidence leaves out the changes outside the period",
+    (
+      await collectConfigHistoryEvidence(
+        sql,
+        new Date(NOW_MS - 3 * DAY_MS).toISOString(),
+        new Date(NOW_MS - 2 * DAY_MS).toISOString(),
+      )
+    ).period_changes === 0,
+  );
+  check(
+    "config history: the evidence of an intact chain has no broken position",
+    evidence.broken.length === 0,
+    evidence.broken,
+  );
+
+  // 履歴を書けなかった操作の数。操作の記録の印(`history_recorded`が`false`)を持つ行だけを、期間内で数える。
+  const probeTarget = "qa/config-history-unrecorded";
+  async function recordProbe(changes: Record<string, unknown>): Promise<void> {
+    const attempt = await recordAttempt(
+      {
+        actor: "qa-op",
+        action: "config_update",
+        target: probeTarget,
+        changes: { item: "daily_budget_usd" },
+      },
+      sql,
+    );
+    if (attempt.ok)
+      await recordOutcome(attempt.value, "succeeded", changes, sql);
+  }
+  await recordProbe({ verified: true });
+  await recordProbe({ verified: true, history_recorded: false });
+  await recordProbe({ verified: false, history_recorded: false });
+  await recordProbe({ verified: true, history_recorded: true });
+  const withMarks = await collectConfigHistoryEvidence(
+    sql,
+    evidenceStart,
+    evidenceEnd,
+  );
+  check(
+    "config history: the evidence counts only the operations marked as not recorded",
+    withMarks.unrecorded_operations === 2,
+    withMarks,
+  );
+  check(
+    "config history: the evidence leaves out the unrecorded operations outside the period",
+    (
+      await collectConfigHistoryEvidence(
+        sql,
+        new Date(NOW_MS - 3 * DAY_MS).toISOString(),
+        new Date(NOW_MS - 2 * DAY_MS).toISOString(),
+      )
+    ).unrecorded_operations === 0,
+  );
+  await execPsqlAsync(
+    target,
+    `DELETE FROM factory.console_actions WHERE target = '${probeTarget}'`,
+  );
+  check(
+    "config history: the evidence counts no unrecorded operation once the marked rows are gone",
+    (await collectConfigHistoryEvidence(sql, evidenceStart, evidenceEnd))
+      .unrecorded_operations === 0,
+  );
+  await wipe();
 }
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
