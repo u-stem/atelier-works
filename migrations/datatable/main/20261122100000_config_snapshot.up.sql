@@ -7,6 +7,7 @@
 --   snapshot_baseline: 照合が、履歴にまだ無い項目の最初の値を、比べる基準として残した。
 -- 理由コードの一覧(config_history_reason_codes)を、並びを保って置き換える。表のCHECKは、この関数を呼ぶので、表は変えない。
 -- 既存の行は、すべて元の4つの理由コードで、置き換え後も一覧に入る。
+-- 項目ごとの最後の行を読む照合のために、(item_key, seq DESC)の索引を足す。
 -- TypeScriptの`CONFIG_HISTORY_REASON_CODES`と同じ並びにする(実DBの検査が照合する)。
 
 BEGIN;
@@ -26,6 +27,12 @@ AS $fn$
         'snapshot_baseline'
     ]::text[]
 $fn$;
+
+-- 照合は、5分ごとに、項目ごとの最後の行を`DISTINCT ON (item_key) ... ORDER BY item_key, seq DESC`で読む。
+-- 追記専用の表は縮まないので、この並びの索引が無いと、読み取りが表全体の並べ替えになる。
+-- 表のCREATE INDEXは追記を短く待たせる。表は小さく、BEGINの直後のlock_timeoutが上限になる。
+CREATE INDEX IF NOT EXISTS config_history_item_key_seq_idx
+    ON factory.config_history (item_key, seq DESC);
 
 COMMENT ON COLUMN factory.config_history.source IS
     '書いた経路。console(Consoleの設定の更新)、stop_all(Consoleの全停止)、out_of_band(Consoleの外の変更。定期の照合が書く)。';

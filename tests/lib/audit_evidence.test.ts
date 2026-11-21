@@ -3883,6 +3883,7 @@ const CONFIG_HISTORY_EVIDENCE: AuditEvidence = {
     last_seq: 12,
     broken: [{ seq: 7, reason: "row_hash_mismatch" }],
     period_changes: 6,
+    period_baseline: 0,
     period_by_item: [
       { item_key: "implement_enabled", count: 3 },
       { item_key: "daily_budget_usd", count: 2 },
@@ -4050,6 +4051,42 @@ describe("the config history section", () => {
       "項目 daily_budget_usd: 2件",
       "項目 design_enabled: 1件",
     ]);
+  });
+
+  test("shows the baseline rows on their own droppable line, first, when there are some", () => {
+    const evidence: AuditEvidence = {
+      ...CONFIG_HISTORY_EVIDENCE,
+      config_history: {
+        ...CONFIG_HISTORY_EVIDENCE.config_history,
+        period_baseline: 3,
+      },
+    };
+    expect(sectionOf(evidence, CONFIG_SECTION)?.lines[0]).toBe(
+      "基準の記録: 3件(期間内の変更の件数に含めない)",
+    );
+  });
+
+  test("shows no line about the baseline rows when there are none", () => {
+    expect(
+      sectionOf(CONFIG_HISTORY_EVIDENCE, CONFIG_SECTION)?.lines.some((line) =>
+        line.startsWith("基準の記録"),
+      ),
+    ).toBe(false);
+  });
+
+  test("keeps the baseline line out of the fixed lines", () => {
+    const evidence: AuditEvidence = {
+      ...CONFIG_HISTORY_EVIDENCE,
+      config_history: {
+        ...CONFIG_HISTORY_EVIDENCE.config_history,
+        period_baseline: 3,
+      },
+    };
+    expect(
+      sectionOf(evidence, CONFIG_SECTION)?.fixed.some((line) =>
+        line.startsWith("基準の記録"),
+      ),
+    ).toBe(false);
   });
 
   test("sanitizes an item name and a reason code that came from the database", () => {

@@ -40,6 +40,9 @@ export const CONFIG_HISTORY_REASON_CODES = [
 export type ConfigHistoryReasonCode =
   (typeof CONFIG_HISTORY_REASON_CODES)[number];
 
+/** 変更ではなく、比べる基準として書く行の理由コード。期間の変更の件数には数えない。 */
+const BASELINE_REASON_CODE: ConfigHistoryReasonCode = "snapshot_baseline";
+
 /**
  * 変更を書いた経路。表の`source`の制約と同じ一覧である。
  * `out_of_band`は、Consoleの外の経路の変更を、定期の照合(`lib/config_snapshot.ts`)が見つけて書く。
@@ -523,10 +526,13 @@ export type ConfigHistoryEvidence = {
   /** 連鎖の最後の連番。行が無いときは0。 */
   readonly last_seq: number;
   readonly broken: readonly ConfigBrokenPosition[];
+  /** 期間内の変更の数。基準(`snapshot_baseline`)の行は、変更ではないので数えない。 */
   readonly period_changes: number;
-  /** 件数の降順、同数なら項目名の昇順。 */
+  /** 期間内の基準(`snapshot_baseline`)の行の数。照合が、履歴にまだ無い項目の最初の値として書く。 */
+  readonly period_baseline: number;
+  /** 基準の行を除いた件数の降順、同数なら項目名の昇順。 */
   readonly period_by_item: readonly ConfigItemCount[];
-  /** 件数の降順、同数なら理由コードの昇順。 */
+  /** 基準の行を含む件数の降順、同数なら理由コードの昇順。 */
   readonly period_by_reason: readonly ConfigReasonCount[];
   /**
    * 期間内の操作の記録(`factory.console_actions`)のうち、履歴を書けなかった印(`history_recorded`が`false`)を持つ行の数。
@@ -542,6 +548,7 @@ export const EMPTY_CONFIG_HISTORY_EVIDENCE: ConfigHistoryEvidence = {
   last_seq: 0,
   broken: [],
   period_changes: 0,
+  period_baseline: 0,
   period_by_item: [],
   period_by_reason: [],
   unrecorded_operations: 0,
@@ -663,14 +670,20 @@ export async function collectConfigHistoryEvidence(
         ? [{ item_key: row.item_key, reason_code: row.reason_code, count }]
         : [];
     });
+    const changes = counted.filter(
+      (row) => row.reason_code !== BASELINE_REASON_CODE,
+    );
     return {
       available: true,
       chain_rows: toInt(chainRows[0]?.chain_rows) ?? 0,
       last_seq: toInt(chainRows[0]?.last_seq) ?? 0,
       broken,
-      period_changes: counted.reduce((sum, row) => sum + row.count, 0),
+      period_changes: changes.reduce((sum, row) => sum + row.count, 0),
+      period_baseline: counted
+        .filter((row) => row.reason_code === BASELINE_REASON_CODE)
+        .reduce((sum, row) => sum + row.count, 0),
       period_by_item: tally(
-        counted.map((row) => ({ name: row.item_key, count: row.count })),
+        changes.map((row) => ({ name: row.item_key, count: row.count })),
       ).map(({ name, count }) => ({ item_key: name, count })),
       period_by_reason: tally(
         counted.map((row) => ({ name: row.reason_code, count: row.count })),

@@ -1207,7 +1207,8 @@ const CONFIG_BROKEN_LIST_MAX = 5;
  * 連鎖の行の数と最後の連番、壊れた位置(最大`CONFIG_BROKEN_LIST_MAX`件)、期間内の変更の数、記録の範囲は、固定の行にする。
  * 履歴を書けなかった操作が1件以上あるときは、その件数の固定の行を足す。連鎖が空でも載せる。
  * 壊れた位置の行は、全体の上限に収めるときも削らない。
- * 理由コードごと、項目ごとの件数は、件数の多い順に並べた、削れる行にする。理由コードを先に置き、項目を後に置く。
+ * 期間内の変更の数と項目ごとの件数は、基準(`snapshot_baseline`)の行を数えない。基準の行が1件以上あるときは、その件数を、削れる行の先頭に足す。
+ * 理由コードごと、項目ごとの件数は、件数の多い順に並べた、削れる行にする。理由コードを先に置き、項目を後に置く。理由コードごとの件数には、基準の行も入る。
  * 記録が無いことは、照合が動いていなければ、Consoleの外の変更が無かったことを示さない。
  */
 function configHistorySection(evidence: AuditEvidence): EvidenceSection {
@@ -1266,6 +1267,14 @@ function configHistorySection(evidence: AuditEvidence): EvidenceSection {
       sanitizeCell(CONFIG_HISTORY_SCOPE_LINE, SANITIZE_CELL_MAX),
     ],
     lines: [
+      ...(config.period_baseline > 0
+        ? [
+            sanitizeCell(
+              `基準の記録: ${config.period_baseline}件(期間内の変更の件数に含めない)`,
+              SANITIZE_CELL_MAX,
+            ),
+          ]
+        : []),
       ...config.period_by_reason.map((entry) =>
         sanitizeCell(
           `理由コード ${sanitizeCell(entry.reason_code, SANITIZE_CELL_MAX)}: ${entry.count}件`,

@@ -1,5 +1,5 @@
 -- down migration: config_snapshot
--- 理由コードの一覧を、元の4つに戻す。
+-- 理由コードの一覧を、元の4つに戻し、照合のために足した索引を消す。
 -- 追記専用の表の行は消せないので、足した理由コードの行が残る。残った行は、表のCHECKを再び評価されないので、そのまま読める。
 -- その状態で、元の4つの一覧では、同じ理由コードの行を新しく足せない。
 BEGIN;
@@ -16,6 +16,8 @@ AS $fn$
         'unspecified'
     ]::text[]
 $fn$;
+
+DROP INDEX IF EXISTS factory.config_history_item_key_seq_idx;
 
 COMMENT ON COLUMN factory.config_history.source IS
     '書いた経路。console(Consoleの設定の更新)、stop_all(Consoleの全停止)、out_of_band(Consoleの外の変更。定期の照合が書くために予約)。';

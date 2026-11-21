@@ -826,6 +826,63 @@ describe("collectConfigHistoryEvidence", () => {
     expect(EMPTY_CONFIG_HISTORY_EVIDENCE.unrecorded_operations).toBe(0);
   });
 
+  test("does not count the baseline rows as changes of the period", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        { item_key: "a_enabled", reason_code: "console_update", changes: 2 },
+        { item_key: "a_enabled", reason_code: "snapshot_baseline", changes: 1 },
+        { item_key: "b_enabled", reason_code: "snapshot_baseline", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect(evidence.period_changes).toBe(2);
+  });
+
+  test("leaves the baseline rows out of the count per item", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        { item_key: "a_enabled", reason_code: "console_update", changes: 2 },
+        { item_key: "a_enabled", reason_code: "snapshot_baseline", changes: 1 },
+        { item_key: "b_enabled", reason_code: "snapshot_baseline", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect(evidence.period_by_item).toEqual([
+      { item_key: "a_enabled", count: 2 },
+    ]);
+  });
+
+  test("keeps the baseline rows in the count per reason code", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        { item_key: "a_enabled", reason_code: "console_update", changes: 2 },
+        { item_key: "a_enabled", reason_code: "snapshot_baseline", changes: 1 },
+        { item_key: "b_enabled", reason_code: "snapshot_baseline", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect(evidence.period_by_reason).toEqual([
+      { reason_code: "console_update", count: 2 },
+      { reason_code: "snapshot_baseline", count: 2 },
+    ]);
+  });
+
+  test("counts the baseline rows of the period on their own", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        { item_key: "a_enabled", reason_code: "console_update", changes: 2 },
+        { item_key: "a_enabled", reason_code: "snapshot_baseline", changes: 1 },
+        { item_key: "b_enabled", reason_code: "snapshot_baseline", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect(evidence.period_baseline).toBe(2);
+  });
+
+  test("starts the empty value with no baseline row", () => {
+    expect(EMPTY_CONFIG_HISTORY_EVIDENCE.period_baseline).toBe(0);
+  });
+
   test("skips a row of the period that it cannot read", async () => {
     const { sql } = routedSql({
       "GROUP BY c.item_key": [

@@ -15829,6 +15829,29 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     baselineRows,
   );
 
+  // 証跡パックの集計は、基準の行を変更に数えない。理由コードごとの件数には載せる。
+  const snapshotNowMs = Date.now();
+  const snapshotEvidenceStart = new Date(
+    snapshotNowMs - 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const snapshotEvidenceEnd = new Date(
+    snapshotNowMs + 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const baselineEvidence = await collectConfigHistoryEvidence(
+    sql,
+    snapshotEvidenceStart,
+    snapshotEvidenceEnd,
+  );
+  check(
+    "config snapshot: the evidence counts the baseline rows apart from the changes of the period",
+    baselineEvidence.period_changes === 0 &&
+      baselineEvidence.period_baseline === 4 &&
+      baselineEvidence.period_by_item.length === 0 &&
+      JSON.stringify(baselineEvidence.period_by_reason) ===
+        JSON.stringify([{ reason_code: "snapshot_baseline", count: 4 }]),
+    baselineEvidence,
+  );
+
   // 変わらなければ、何も書かない。
   const idleRun = await snapshotRun(fixture);
   check(
@@ -15851,6 +15874,19 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
       changeRow.before_text === "20" &&
       changeRow.after_text === "35",
     afterChange,
+  );
+  const changeEvidence = await collectConfigHistoryEvidence(
+    sql,
+    snapshotEvidenceStart,
+    snapshotEvidenceEnd,
+  );
+  check(
+    "config snapshot: the evidence counts only the change row, and names its item",
+    changeEvidence.period_changes === 1 &&
+      changeEvidence.period_baseline === 4 &&
+      JSON.stringify(changeEvidence.period_by_item) ===
+        JSON.stringify([{ item_key: "daily_budget_usd", count: 1 }]),
+    changeEvidence,
   );
 
   // Consoleの経路が書いた行と同じ値なら、書かない。数値、真偽、ハッシュの項目(changedの印つき)で確かめる。
@@ -15962,6 +15998,39 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
       cappedRest.baseline === 1 &&
       (await historyRows()).length === 4,
     { capped, cappedRest },
+  );
+
+  // Consoleの経路は、読み直しで値が見つからなかった項目の`after`を`null`で書く。無い項目の`null`は、消失の行にしない。
+  await wipeHistory();
+  await appendConfigChange(sql, {
+    key: "daily_budget_usd",
+    before: 20,
+    after: null,
+    actor: "operator",
+    source: "console",
+    reason: "console_update_unverified",
+  });
+  const absentNullRun = await snapshotRun({ implement_enabled: false });
+  const absentNullRows = await historyRows();
+  check(
+    "config snapshot: an item that is absent from the resource and last stored as null gets no removed row",
+    absentNullRun.removed === 0 &&
+      absentNullRows.every((row) => row.reason_code !== "out_of_band_removed"),
+    { absentNullRun, absentNullRows },
+  );
+
+  // 履歴の最後の値の読み取りに使う索引がある。項目ごとの最後の行を、連番の降順で引ける並びである。
+  const latestIndexRows = await sql`
+    SELECT indexdef FROM pg_indexes
+    WHERE schemaname = 'factory'
+      AND tablename = 'config_history'
+      AND indexname = 'config_history_item_key_seq_idx'
+  `.fetch();
+  check(
+    "config snapshot: the history has an index on the item name and the sequence in descending order",
+    latestIndexRows.length === 1 &&
+      String(latestIndexRows[0]?.indexdef).includes("(item_key, seq DESC)"),
+    latestIndexRows,
   );
 
   await wipeHistory();
