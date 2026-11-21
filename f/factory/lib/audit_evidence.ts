@@ -1077,14 +1077,10 @@ export const HISTORY_UNAVAILABLE_LINE = "履歴の表が無い(migrationが当�
 /** 履歴の節に載せる、履歴の記録が1件も無いときの1行。 */
 export const NO_HISTORY_LINE = "履歴の記録はまだ無い";
 
-/** 割合を整数のパーセントにする。母数が0なら0を返す。 */
-function percentOf(part: number, whole: number): number {
-  return whole === 0 ? 0 : Math.round((part * 100) / whole);
-}
-
 /**
  * 遷移の履歴の整合の節。
- * 検証した連鎖の数、壊れた連鎖(最大`HISTORY_BROKEN_LIST_MAX`件)、期間内の連鎖と遷移の数、理由が未指定の割合は、固定の行にする。
+ * 検証した連鎖の数、壊れた連鎖(最大`HISTORY_BROKEN_LIST_MAX`件)、期間内の連鎖と遷移の数、理由が決まらない遷移の件数(注記があるものと無いものに分ける)は、固定の行にする。
+ * 注記の無い通常の遷移は、性質として理由が決まらない。理由を明示する呼び出しを探す目安は、注記があるのに決まらなかった件数である。
  * 壊れた連鎖の行は、全体の上限に収めるときも削らない。
  * 理由コードごとの件数は、件数の多い順に並べた、削れる行にする。
  */
@@ -1107,15 +1103,19 @@ function historySection(evidence: AuditEvidence): EvidenceSection {
       SANITIZE_CELL_MAX,
     );
   });
-  const unspecified =
-    history.period_by_reason.find(
-      (entry) => entry.reason_code === "unspecified",
-    )?.count ?? 0;
-  const share =
+  const unspecifiedLines =
     history.period_events > 0
       ? [
+          ...(history.period_with_note > 0
+            ? [
+                sanitizeCell(
+                  `理由が決まらない遷移のうち、注記があるもの: ${history.unspecified_with_note}件 / 注記のある遷移 ${history.period_with_note}件`,
+                  SANITIZE_CELL_MAX,
+                ),
+              ]
+            : []),
           sanitizeCell(
-            `理由が未指定(unspecified)の割合: ${percentOf(unspecified, history.period_events)}%(${unspecified}件 / ${history.period_events}件)。割合が高い呼び出し元から、理由を明示する`,
+            `理由が決まらない遷移のうち、注記が無いもの: ${history.unspecified_without_note}件(通常の遷移で、不具合ではない)`,
             SANITIZE_CELL_MAX,
           ),
         ]
@@ -1140,7 +1140,7 @@ function historySection(evidence: AuditEvidence): EvidenceSection {
         `期間内の連鎖: ${history.period_chains}件 / 遷移の記録: ${history.period_events}件`,
         SANITIZE_CELL_MAX,
       ),
-      ...share,
+      ...unspecifiedLines,
     ],
     lines: history.period_by_reason.map((entry) =>
       sanitizeCell(

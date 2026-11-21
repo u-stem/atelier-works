@@ -11,7 +11,8 @@ import { isNumber, isOneOf, isString } from "./types.ts";
  * 遷移の理由コード。SQLの`factory.history_reason_codes()`と同じ一覧で、並びも同じにする。
  * 一致は、実DBの検査(`scripts/test-db-queries.ts`)が確かめる。
  * 理由コードは注記の先頭から決める(`factory.history_reason_code`)ので、注記を書く側が明示した値ではない。
- * 決められない遷移は`unspecified`になり、その割合が、理由を明示する呼び出しを増やす目安になる。
+ * 決められない遷移は`unspecified`になる。
+ * 注記の無い通常の遷移は、性質として`unspecified`になるので、目安にするのは、注記があるのに決められなかった遷移の数である。
  */
 export const HISTORY_REASON_CODES = [
   "auto_retry",
@@ -150,6 +151,12 @@ export type HistoryEvidence = {
   readonly broken: readonly BrokenChain[];
   readonly period_chains: number;
   readonly period_events: number;
+  /** 期間内の遷移のうち、注記があるもの(理由コードは問わない)。 */
+  readonly period_with_note: number;
+  /** 理由が`unspecified`で、注記があるもの。注記の書き方が規則に当たらない呼び出しを探す目安になる。 */
+  readonly unspecified_with_note: number;
+  /** 理由が`unspecified`で、注記が無いもの。注記の無い通常の遷移なので、参考の数である。 */
+  readonly unspecified_without_note: number;
   /** 件数の降順、同数なら理由コードの昇順。 */
   readonly period_by_reason: readonly HistoryReasonCount[];
 };
@@ -161,6 +168,9 @@ export const EMPTY_HISTORY_EVIDENCE: HistoryEvidence = {
   broken: [],
   period_chains: 0,
   period_events: 0,
+  period_with_note: 0,
+  unspecified_with_note: 0,
+  unspecified_without_note: 0,
   period_by_reason: [],
 };
 
@@ -249,7 +259,14 @@ export async function collectHistoryEvidence(
       FROM factory.history_events h
     `.fetch();
     const periodRows = await sql`
-      SELECT count(DISTINCT h.work_item_id) AS period_chains, count(*) AS period_events
+      SELECT count(DISTINCT h.work_item_id) AS period_chains, count(*) AS period_events,
+        count(*) FILTER (WHERE coalesce((h.detail ->> 'note_chars')::int, 0) > 0) AS period_with_note,
+        count(*) FILTER (
+          WHERE h.reason_code = 'unspecified' AND coalesce((h.detail ->> 'note_chars')::int, 0) > 0
+        ) AS unspecified_with_note,
+        count(*) FILTER (
+          WHERE h.reason_code = 'unspecified' AND coalesce((h.detail ->> 'note_chars')::int, 0) = 0
+        ) AS unspecified_without_note
       FROM factory.history_events h
       LEFT JOIN factory.work_items wi ON wi.id = h.work_item_id
       WHERE h.occurred_at >= ${start}::timestamptz AND h.occurred_at < ${end}::timestamptz
@@ -269,6 +286,10 @@ export async function collectHistoryEvidence(
       broken,
       period_chains: toCount(periodRows[0]?.period_chains) ?? 0,
       period_events: toCount(periodRows[0]?.period_events) ?? 0,
+      period_with_note: toCount(periodRows[0]?.period_with_note) ?? 0,
+      unspecified_with_note: toCount(periodRows[0]?.unspecified_with_note) ?? 0,
+      unspecified_without_note:
+        toCount(periodRows[0]?.unspecified_without_note) ?? 0,
       period_by_reason: reasonRows
         .flatMap((row) => {
           const count = toCount(row.events);
