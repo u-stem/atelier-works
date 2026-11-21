@@ -1612,11 +1612,6 @@ function toHumanOutcome(row: SqlRow): HumanOutcome {
 }
 
 /**
- * キーごとの件数の行を解析する。
- * キーが無い(`null`か空文字)グループは`UNSET_LABEL`にまとめて件数を足す。
- * 並びは件数の降順、同数ならキーの昇順にして、出力を毎回同じにする。
- */
-/**
  * 必須checkが無い通知の本文から、リポジトリごとの件数を求める。
  * 先頭のリポジトリを読めない本文は、`未設定`にまとめる。
  */
@@ -1651,6 +1646,11 @@ export function toNoRequiredCheckStats(
   );
 }
 
+/**
+ * キーごとの件数の行を解析する。
+ * キーが無い(`null`か空文字)グループは`UNSET_LABEL`にまとめて件数を足す。
+ * 並びは件数の降順、同数ならキーの昇順にして、出力を毎回同じにする。
+ */
 function toCountsByKey(rows: readonly SqlRow[]): CountByKey[] {
   const totals = new Map<string, number>();
   for (const row of rows) {
