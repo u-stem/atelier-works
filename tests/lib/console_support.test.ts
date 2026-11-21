@@ -83,6 +83,10 @@ describe("noticeSeverity", () => {
     expect(noticeSeverity("main_ci_check_denied")).toBe("action");
   });
 
+  test("treats a GitHub outage as action", () => {
+    expect(noticeSeverity("github_unreachable")).toBe("action");
+  });
+
   test("treats a failed pull request CI as action", () => {
     expect(noticeSeverity("pr_ci_failed")).toBe("action");
   });

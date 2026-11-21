@@ -81,6 +81,7 @@ import {
   rereadWithRetries,
   resolveUndeterminedRemoval,
 } from "./lib/github.ts";
+import { createOutageRound, type OutageRound } from "./lib/github_outage.ts";
 import { errorMessage, type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   discoverPrs,
@@ -112,6 +113,7 @@ import {
 } from "./lib/pr_review_start.ts";
 import { collectTrackedPrCandidates } from "./lib/tracked_pr_candidates.ts";
 import {
+  type FactoryConfig,
   hasLabel,
   isRecord,
   type PrReviewTrigger,
@@ -134,18 +136,36 @@ const CHECKED_PRS_STATE_KEY = "team_checked_prs";
 /** チームへの依頼の確認で、前の周回に確かめた最後の候補の鍵を置く、Windmillのstateのキー。 */
 const CONFIRM_CURSOR_STATE_KEY = "team_confirm_cursor";
 
-async function recordFailureSafe(
+const FLOW_PATH = "f/factory/poll_prs";
+
+// 実行中の回。Windmillは1つのジョブを1つのプロセスで動かすので、回ごとに1つだけ持つ。
+let outageRound: OutageRound | null = null;
+
+function recordFailureSafe(
   step: string,
   err: unknown,
   log: Logger,
   workItemId: number | null = null,
+): Promise<void> {
+  const write = (s: string, e: unknown): Promise<void> =>
+    writeFailure(s, e, log, workItemId);
+  return outageRound === null
+    ? write(step, err)
+    : outageRound.failure(step, err, write);
+}
+
+async function writeFailure(
+  step: string,
+  err: unknown,
+  log: Logger,
+  workItemId: number | null,
 ): Promise<void> {
   const message = maskSecrets(err instanceof Error ? err.message : String(err));
   log.error(step, { error: message });
   try {
     await recordFailure({
       work_item_id: workItemId,
-      flow_path: "f/factory/poll_prs",
+      flow_path: FLOW_PATH,
       job_id: process.env.WM_JOB_ID ?? "unknown",
       step,
       error: message,
@@ -1407,7 +1427,7 @@ async function recordLabelerCheckLimitSafe(
   }
 }
 
-export async function main(): Promise<{
+type PollPrsResult = {
   reviewsStarted: number;
   fixesStarted: number;
   skipped: number;
@@ -1430,7 +1450,28 @@ export async function main(): Promise<{
   trackedClosedMarked: number;
   /** 追跡中のPRが上限を超え、古い側を読まなかったか。 */
   trackedOverLimit: boolean;
-}> {
+};
+
+const OUTAGE_SKIPPED_RESULT: PollPrsResult = {
+  reviewsStarted: 0,
+  fixesStarted: 0,
+  skipped: 0,
+  failed: 0,
+  collect_disabled: false,
+  skipped_stale: 0,
+  skipped_stale_reasons: {},
+  rest_lists: 0,
+  rest_reasons: {},
+  team_unresolved: 0,
+  team_capped: 0,
+  team_remembered: 0,
+  candidates: 0,
+  dropped: 0,
+  trackedClosedMarked: 0,
+  trackedOverLimit: false,
+};
+
+export async function main(): Promise<PollPrsResult> {
   const log = logger("poll_prs");
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
@@ -1439,6 +1480,29 @@ export async function main(): Promise<{
   const discordWebhookUrl = await wmill.getVariable(
     "f/factory/discord_webhook_url",
   );
+  const round = createOutageRound({
+    flowPath: FLOW_PATH,
+    instanceName: config.instance_name,
+    log,
+    webhookUrl: discordWebhookUrl,
+  });
+  outageRound = round;
+  try {
+    return await round.guard(
+      () => runPoll(config, ghToken, discordWebhookUrl, log),
+      OUTAGE_SKIPPED_RESULT,
+    );
+  } finally {
+    outageRound = null;
+  }
+}
+
+async function runPoll(
+  config: FactoryConfig,
+  ghToken: string,
+  discordWebhookUrl: string,
+  log: Logger,
+): Promise<PollPrsResult> {
   const client: GhClient = { ghToken };
 
   const viewer = await getViewer(client);

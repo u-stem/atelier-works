@@ -5,7 +5,6 @@ import { createHash } from "node:crypto";
 import type { FileRead } from "../../f/factory/lib/metadata_patch_imports.ts";
 import { parseWmillLock } from "../../f/factory/lib/metadata_patch_yaml.ts";
 import {
-  DEFAULT_MAX_TRACE_VISITS,
   type PlanLimits,
   type PlanResult,
   planMetadataRehash,
@@ -19,13 +18,13 @@ import { minimalPassingLimit } from "./metadata_trace_budget.ts";
  * 既定の上限(`DEFAULT_MAX_TRACE_VISITS`)は、悪意あるimportの暴走を止める安全策で、
  * 実際のリポジトリがそこへ近づくと、再計算が人の手に回る。
  * このテストの上限は、実リポジトリの伸びを、既定の上限よりずっと手前で知らせるために置く。
- * 実測(headとbaseの合計の最小値)は約20,200で、上限はその約2倍、既定の上限の5分の1にあたる。
+ * 実測(headとbaseの合計の最小値)は約36,100で、上限はその約2倍、既定の上限の0.35倍にあたる。
  * 訪問の数は、scriptの数と、各scriptの閉包の大きさの積で増える。
  * 共有のlibにimportを1本足すと、そのlibを閉包に含むscriptの数の2倍(headとbase)だけ増える。
  * 実測が上限の9割を超えたら、上限を上げる前に、閉包の大きい共有モジュールの辺を減らせないかを確かめる。
  * 上げるときは、実測の約2倍に保ち、`docs/internals/ci-fix.md`の上限の説明の値もそろえる。
  */
-const REPO_TRACE_VISIT_CEILING = DEFAULT_MAX_TRACE_VISITS / 5;
+const REPO_TRACE_VISIT_CEILING = 70_000;
 
 const BASE = "b".repeat(40);
 const HEAD = "a".repeat(40);

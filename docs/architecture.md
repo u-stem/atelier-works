@@ -617,6 +617,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/gh_collect_detail_round` | script | [LIB] GitHubの収集の詳細の周回 |
 | `f/factory/lib/gh_collect_freshness` | script | [LIB] GitHubの収集の鮮度の監視 |
 | `f/factory/lib/github_errors` | script | [LIB] GitHubの呼び出しの失敗の型 |
+| `f/factory/lib/github_outage` | script | [LIB] GitHubへの通信断の記録 |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
 | `f/factory/lib/poll_source` | script | [LIB] IssueとPRを見つける経路 |
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |

@@ -835,6 +835,8 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
   "f/factory/lib/factory_clone.ts":
     "Factory自身のcloneを用意する共有モジュール。ほかのフローが日常的に使う",
   "f/factory/lib/job_ids.ts": "WindmillのジョブIDの形の検査。依存が無く小さい",
+  "f/factory/lib/github_outage.ts":
+    "GitHubへの通信断を、失敗でなく1つの事象と見送りの記録にまとめる共有モジュール。定期ジョブの修正が日常的に触れ、起動の可否の判断は持たない",
   "f/factory/lib/prose_check.ts":
     "文書の文章の検査。文書の規則を直す変更が日常的に触れる",
   "f/factory/lib/console_support.ts":

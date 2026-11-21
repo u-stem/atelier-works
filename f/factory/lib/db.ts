@@ -2605,6 +2605,46 @@ export async function recordFailure(
   return parseId(row.id, "id");
 }
 
+/** `recordOutageSkip`に渡す、`factory.job_outage_skips`の1行。 */
+export type OutageSkipRecord = {
+  readonly flow_path: string;
+  readonly job_id: string;
+  readonly step: string | null;
+};
+
+/**
+ * `factory.job_outage_skips`に、通信断のために見送った定期ジョブの1回を記録し、そのIDを返す。
+ * 失敗(`recordFailure`)とは別の表に入れ、失敗の件数に通信断が混ざらないようにする。
+ */
+export async function recordOutageSkip(
+  record: OutageSkipRecord,
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<number> {
+  const row = await fetchOneRow(
+    sql`
+      INSERT INTO factory.job_outage_skips (flow_path, job_id, root_job_id, step)
+      VALUES (${record.flow_path}, ${record.job_id}, ${jobIds.root_job_id}::text, ${record.step}::text)
+      RETURNING id
+    `,
+    "recordOutageSkip",
+  );
+  return parseId(row.id, "id");
+}
+
+/** `occurred_at`が`olderThan`より前の`factory.job_outage_skips`の行を削除し、行数を返す。 */
+export async function deleteJobOutageSkipsBefore(
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    DELETE FROM factory.job_outage_skips
+    WHERE occurred_at <= ${olderThan.toISOString()}::timestamptz
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
 // ---------------------------------------------------------------------------
 // deployments
 // ---------------------------------------------------------------------------
@@ -3105,6 +3145,25 @@ export function isMissingReviewOutcomeTableError(err: unknown): boolean {
   const body: unknown = Reflect.get(err, "body");
   const messages = [err.message, typeof body === "string" ? body : ""];
   if (messages.some((m) => REVIEW_OUTCOME_TABLE_PATTERN.test(m))) return true;
+  if (messages.some((m) => /relation "[^"]+" does not exist/.test(m))) {
+    return false;
+  }
+  return Reflect.get(err, "code") === "42P01";
+}
+
+const OUTAGE_SKIP_TABLE_PATTERN =
+  /relation "(?:factory\.)?job_outage_skips" does not exist/;
+
+/**
+ * 例外が、通信断の見送りの表(`job_outage_skips`)が無いことによるものかを返す。
+ * migrationより先にコードが反映された間は、この表が無い。
+ * エラーコード42P01でも、文が別の表の名前を挙げているときはfalseにする。
+ */
+export function isMissingOutageSkipTableError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const body: unknown = Reflect.get(err, "body");
+  const messages = [err.message, typeof body === "string" ? body : ""];
+  if (messages.some((m) => OUTAGE_SKIP_TABLE_PATTERN.test(m))) return true;
   if (messages.some((m) => /relation "[^"]+" does not exist/.test(m))) {
     return false;
   }

@@ -63,6 +63,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   drawio_viewer_bump_held: "action",
   main_ci_failed: "action",
   main_ci_check_denied: "action",
+  github_unreachable: "action",
   pr_ci_failed: "action",
   pr_ci_check_denied: "action",
   config_misfit: "action",

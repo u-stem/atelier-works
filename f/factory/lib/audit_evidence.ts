@@ -25,6 +25,7 @@ import {
   defaultSqlClient,
   fetchDeploymentRows,
   isMissingAgentRunSkillsColumnError,
+  isMissingOutageSkipTableError,
   isMissingReviewAgentRunColumnError,
   isMissingReviewOutcomeTableError,
   type SqlClient,
@@ -491,6 +492,8 @@ export type AuditEvidence = {
   readonly pr_review_pr_count: number;
   /** 期間内のPRレビューの実行の、きっかけごとの件数。合計は実行統計の`pr_review`の件数と一致する。 */
   readonly pr_review_triggers: PrReviewTriggerCounts;
+  /** 期間内の、GitHubへの通信断で見送った定期ジョブの回の、flow別の件数。失敗の件数(`failures`)には含めない。 */
+  readonly outage_skips: CountByKey[];
 };
 
 const DATA_NOT_INSTRUCTIONS_BANNER =
@@ -705,6 +708,21 @@ function prReviewTriggersSection(evidence: AuditEvidence): EvidenceSection {
       sanitizeCell(`合計: ${triggerTotal(counts)}件`, SANITIZE_CELL_MAX),
     ],
     lines: [],
+  };
+}
+
+/**
+ * 通信断による見送りの節。見送りは失敗として記録しないので、失敗の節とは別に、件数を固定の行で示す。
+ * 件数が0でも、見送りが無かったことを読み取れるよう、固定の行を残す。
+ */
+function outageSkipsSection(evidence: AuditEvidence): EvidenceSection {
+  const total = sumBy(evidence.outage_skips, (skip) => skip.count);
+  return {
+    heading: "通信断による見送り(flow別)",
+    fixed: [`期間内の見送り: ${total}件(失敗の件数には含まない)`],
+    lines: evidence.outage_skips.map((skip) =>
+      sanitizeCell(`${skip.key}: ${skip.count}件`, SANITIZE_CELL_MAX),
+    ),
   };
 }
 
@@ -1407,6 +1425,7 @@ export function buildEvidenceSections(
     prReviewTopPrsSection(evidence),
     prReviewTriggersSection(evidence),
     { heading: "失敗(flow + step別)", fixed: [], lines: failureLines },
+    outageSkipsSection(evidence),
     { heading: "却下", fixed: [], lines: rejectionLines },
     { heading: "要人手・ブロック・期限切れ", fixed: [], lines: humanLines },
     { heading: "修正ラウンド", fixed: [], lines: fixLines },
@@ -2122,6 +2141,19 @@ export async function collectAuditEvidence(
     LIMIT 30
   `.fetch();
 
+  // 通信断による見送り。失敗とは別の表なので、失敗の件数には入らない。表を足すmigrationより先にコードが反映された間は、表が無いので空にする。
+  const outageSkipRows = await sql`
+    SELECT s.flow_path AS key, count(*) AS count
+    FROM factory.job_outage_skips s
+    WHERE s.occurred_at >= ${start}::timestamptz AND s.occurred_at < ${end}::timestamptz
+    GROUP BY s.flow_path
+  `
+    .fetch()
+    .catch((err: unknown) => {
+      if (!isMissingOutageSkipTableError(err)) throw err;
+      return [];
+    });
+
   const rejectionRows = await sql`
     SELECT ar.kind, coalesce(wi.title, '') AS title, coalesce(ar.reason, '') AS reason, ar.decided_at
     FROM factory.approval_requests ar
@@ -2469,6 +2501,7 @@ export async function collectAuditEvidence(
     pr_review_top_prs: prReviewTopPrRows.map(toPrReviewPrStat),
     pr_review_pr_count: parseNumeric(prReviewTopPrRows[0]?.pr_count),
     pr_review_triggers: toPrReviewTriggerCounts(prReviewTriggerRows),
+    outage_skips: toCountsByKey(outageSkipRows),
   };
 }
 
