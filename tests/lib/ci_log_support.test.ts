@@ -901,10 +901,7 @@ describe("buildCiExcerpt with an omitted error body", () => {
   });
 
   test("masks a secret inside the kept body line", async () => {
-    const secretLog = log.replace(
-      BODY,
-      `${BODY} token ghp_abcdefghijklmnopqrstuvwxyz0123456789`,
-    );
+    const secretLog = log.replace(BODY, `${BODY} token ghp_${"A".repeat(36)}`);
     const outcome = await excerptOf(job("lint", secretLog));
     expect(textOf(outcome)).not.toContain("ghp_");
   });
