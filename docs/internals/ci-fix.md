@@ -594,7 +594,7 @@ APIへの要求は、応答の無い通信断と5xxのときだけ、2秒待っ�
 最終の抜粋に件数の行があり、本文の行が無いときは、`condenseJobLogWithReport`が`errorBodyOmitted`を真にして返す。
 `buildCiExcerpt`は、どれか1ジョブで真なら真にする。
 `gatherCiLogs`が結果の`ready`に載せ、`runCiFixApply`が`finalizeCiFixOutput`に渡す。
-生のログが切られる前段で落ちた本文の行は、整形後のログに無いので、この真偽値は真になる。
+生のログが切られる前段で本文の行が落ちたときは、整形後のログに本文の行が無いので、件数の行が抜粋に残ればこの真偽値は真になる。
 
 上限は次のとおりである。
 
