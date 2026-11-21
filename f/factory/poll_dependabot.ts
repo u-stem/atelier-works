@@ -74,7 +74,8 @@ import {
   listActiveHolds,
 } from "./lib/holds.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
-import { errorMessage, logger } from "./lib/log.ts";
+import { createOutageRound, type OutageRound } from "./lib/github_outage.ts";
+import { errorMessage, type Logger, logger } from "./lib/log.ts";
 import { isCommitSha } from "./lib/main_ci_support.ts";
 import { listMainCiTargets } from "./lib/main_ci_watch.ts";
 import {
@@ -1412,22 +1413,62 @@ export function holdNoticeRecord(notice: HoldNotice): {
   };
 }
 
+const FLOW_PATH = "f/factory/poll_dependabot";
+
+const OUTAGE_SKIPPED_RESULT: PollDependabotResult = {
+  enabled: true,
+  paused: false,
+  started: 0,
+  escalated: 0,
+  waiting: 0,
+  skipped: 0,
+  failed: 0,
+  held: 0,
+  fallback_lists: 0,
+  fallback_reasons: {},
+};
+
 export async function main(): Promise<PollDependabotResult> {
   const log = logger("poll_dependabot");
+  const config = await loadConfig(() =>
+    wmill.getResource("f/factory/factory_config"),
+  );
+  if (!config.dependabot_enabled) {
+    return pollDependabotWith(config, log, null);
+  }
+  const discordWebhookUrl = await wmill.getVariable(
+    "f/factory/discord_webhook_url",
+  );
+  const round = createOutageRound({
+    flowPath: FLOW_PATH,
+    instanceName: config.instance_name,
+    log,
+    webhookUrl: discordWebhookUrl,
+  });
+  return round.guard(
+    () => pollDependabotWith(config, log, round),
+    OUTAGE_SKIPPED_RESULT,
+  );
+}
+
+function pollDependabotWith(
+  config: FactoryConfig,
+  log: Logger,
+  round: OutageRound | null,
+): Promise<PollDependabotResult> {
   return pollDependabot({
-    loadConfig: () =>
-      loadConfig(() => wmill.getResource("f/factory/factory_config")),
+    loadConfig: () => Promise.resolve(config),
     getState: () => wmill.getState(),
     setState: (state) => wmill.setState(state),
     now: () => Date.now(),
-    open: async (config) => {
+    open: async () => {
       const ghToken = await wmill.getVariable("f/factory/github_token");
       const discordWebhookUrl = await wmill.getVariable(
         "f/factory/discord_webhook_url",
       );
       const client: GhClient = { ghToken };
       const viewer = await getViewer(client);
-      const record = async (
+      const write = async (
         step: string,
         err: unknown,
         workItemId: number | null,
@@ -1437,7 +1478,7 @@ export async function main(): Promise<PollDependabotResult> {
         try {
           await recordFailure({
             work_item_id: workItemId,
-            flow_path: "f/factory/poll_dependabot",
+            flow_path: FLOW_PATH,
             job_id: process.env.WM_JOB_ID ?? "unknown",
             step,
             error: message,
@@ -1448,6 +1489,14 @@ export async function main(): Promise<PollDependabotResult> {
           });
         }
       };
+      const record = (
+        step: string,
+        err: unknown,
+        workItemId: number | null,
+      ): Promise<void> =>
+        round === null
+          ? write(step, err, workItemId)
+          : round.failure(step, err, (s, e) => write(s, e, workItemId));
       // 名前の付け替えで別のアカウントを読まないよう、`repo_allowlist`は照合を通ったオーナーのものだけを通す。
       const verified = await filterVerifiedOwners(config.owners, {
         getAccountId: (name) => getAccountId(client, name),

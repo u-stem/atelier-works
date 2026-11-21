@@ -18,6 +18,7 @@ import {
   decideIssueProposal,
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
+  deleteJobOutageSkipsBefore,
   deleteMainCiRunsBefore,
   deletePrCiChecksBefore,
   deleteResolvedNoticesBefore,
@@ -82,6 +83,7 @@ import {
   isMissingAgentRunSkillsColumnError,
   isMissingDeploymentErrorColumnError,
   isMissingDocHashColumnError,
+  isMissingOutageSkipTableError,
   isMissingPrClosedAtColumnError,
   isMissingReviewAgentRunColumnError,
   isMissingReviewOutcomeTableError,
@@ -141,6 +143,7 @@ import {
   recordFailure,
   recordFindingOutcomes,
   recordMainCiRun,
+  recordOutageSkip,
   recordPrCiCheck,
   recordTransientStall,
   recordWorkspaceDiskUsageNotice,
@@ -6380,6 +6383,77 @@ describe("deleteJobFailuresBefore", () => {
     expect(calls[0]?.text).toContain("DELETE FROM factory.job_failures");
     expect(calls[0]?.text).toContain("occurred_at <=");
     expect(count).toBe(2);
+  });
+});
+
+describe("recordOutageSkip", () => {
+  test("inserts into job_outage_skips, not job_failures", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    const id = await recordOutageSkip(
+      { flow_path: "f/factory/poll_issues", job_id: "job-1", step: "main" },
+      sql,
+      { job_id: "job-1", root_job_id: "root-1" },
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.job_outage_skips");
+    expect(calls[0]?.text).not.toContain("job_failures");
+    expect([id, calls[0]?.values]).toEqual([
+      5,
+      ["f/factory/poll_issues", "job-1", "root-1", "main"],
+    ]);
+  });
+
+  test("accepts a null step", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 6 }]]);
+    await recordOutageSkip(
+      { flow_path: "f/factory/poll_prs", job_id: "job-2", step: null },
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.values).toEqual([
+      "f/factory/poll_prs",
+      "job-2",
+      null,
+      null,
+    ]);
+  });
+});
+
+describe("deleteJobOutageSkipsBefore", () => {
+  test("deletes factory.job_outage_skips rows past occurred_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    const count = await deleteJobOutageSkipsBefore(NOW, sql);
+    expect(calls[0]?.text).toContain("DELETE FROM factory.job_outage_skips");
+    expect(calls[0]?.text).toContain("occurred_at <=");
+    expect(count).toBe(2);
+  });
+});
+
+describe("isMissingOutageSkipTableError", () => {
+  test("accepts the missing table message", () => {
+    expect(
+      isMissingOutageSkipTableError(
+        new Error('relation "factory.job_outage_skips" does not exist'),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts code 42P01 without a relation name", () => {
+    const err = Object.assign(new Error("undefined table"), { code: "42P01" });
+    expect(isMissingOutageSkipTableError(err)).toBe(true);
+  });
+
+  test("rejects another missing table", () => {
+    const err = Object.assign(
+      new Error('relation "factory.job_failures" does not exist'),
+      { code: "42P01" },
+    );
+    expect(isMissingOutageSkipTableError(err)).toBe(false);
+  });
+
+  test("rejects a non-error", () => {
+    expect(isMissingOutageSkipTableError("relation does not exist")).toBe(
+      false,
+    );
   });
 });
 

@@ -288,6 +288,44 @@ describe("buildEmbed console_worker_missing", () => {
   });
 });
 
+describe("buildEmbed github_unreachable", () => {
+  const event: NotifyEvent = {
+    kind: "github_unreachable",
+    instance_name: "local",
+    detected_at: "2026-11-21T03:00:00.000Z",
+    next_action: "GitHubの障害情報を確認する",
+  };
+
+  test("says the connection is lost in the title", () => {
+    expect(buildEmbed(event).title).toBe("GitHubへの通信が途切れています");
+  });
+
+  test("shows the first detected time in JST", () => {
+    const field = buildEmbed(event).fields.find(
+      (f) => f.name === "最初に判定した時刻",
+    );
+    expect(field?.value).toContain("12:00");
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "GitHubの障害情報を確認する",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+
+  test("has no link", () => {
+    expect(buildEmbed(event).url).toBeNull();
+  });
+});
+
 describe("buildEmbed periodic_worker_missing", () => {
   const event: NotifyEvent = {
     kind: "periodic_worker_missing",

@@ -16,6 +16,7 @@ import {
   getViewer,
   paginateGhApi,
 } from "../../f/factory/lib/github.ts";
+import { isGitHubUnreachable } from "../../f/factory/lib/github_errors.ts";
 import { GITHUB_RESPONSE_MAX_BYTES } from "../../f/factory/lib/github_http.ts";
 import { markTransientGitHubFailure } from "../../f/factory/lib/pr_review_retry.ts";
 import type { CommandResult } from "../../f/factory/lib/workspace.ts";
@@ -184,6 +185,56 @@ describe("escape sequences in a GET body", () => {
     await expect(
       getRepoFileText(client, "o", "r", "viewer/index.html", "main"),
     ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
+  });
+});
+
+describe("a GET that lost the response after the retry", () => {
+  const lost = async () => {
+    throw new TypeError("reset");
+  };
+  const options = { ghToken: "tok", sleep: async () => {} };
+
+  test("fails with an unreachable http error", async () => {
+    stubGlobalFetchWith(lost);
+    const error = await getViewer(options).catch((err: unknown) => err);
+    expect(isGitHubUnreachable(error)).toBe(true);
+  });
+
+  test("does not mark a response with a 502", async () => {
+    stubGlobalFetchWith(async () => new Response("", { status: 502 }));
+    const error = await getViewer(options).catch((err: unknown) => err);
+    expect(isGitHubUnreachable(error)).toBe(false);
+  });
+
+  test("does not mark an incomplete 2xx", () => {
+    let marked: boolean | null = null;
+    try {
+      ensureSuccess(
+        { status: 200, headers: new Map(), bodyText: "", incomplete: true },
+        "GET x",
+      );
+    } catch (err) {
+      marked = isGitHubUnreachable(err);
+    }
+    expect(marked).toBe(false);
+  });
+
+  test("ensureSuccess carries the marker of the response", () => {
+    let marked: boolean | null = null;
+    try {
+      ensureSuccess(
+        {
+          status: 0,
+          headers: new Map(),
+          bodyText: "",
+          unreachable: true,
+        },
+        "GET x",
+      );
+    } catch (err) {
+      marked = isGitHubUnreachable(err);
+    }
+    expect(marked).toBe(true);
   });
 });
 

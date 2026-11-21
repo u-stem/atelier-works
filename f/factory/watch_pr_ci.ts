@@ -99,6 +99,7 @@ import {
   listWorkflowRunJobs,
   parseGitHubRepoUrl,
 } from "./lib/github.ts";
+import { createOutageRound, type OutageRound } from "./lib/github_outage.ts";
 import { recordCheckEnvironmentNotice } from "./lib/host_action.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
@@ -291,7 +292,24 @@ export function buildClaimDeps(
   };
 }
 
-async function recordFailureSafe(
+const FLOW_PATH = "f/factory/watch_pr_ci";
+
+// 実行中の回。Windmillは1つのジョブを1つのプロセスで動かすので、回ごとに1つだけ持つ。
+let outageRound: OutageRound | null = null;
+
+function recordFailureSafe(
+  step: string,
+  err: unknown,
+  log: Logger,
+): Promise<void> {
+  const write = (s: string, e: unknown): Promise<void> =>
+    writeFailure(s, e, log);
+  return outageRound === null
+    ? write(step, err)
+    : outageRound.failure(step, err, write);
+}
+
+async function writeFailure(
   step: string,
   err: unknown,
   log: Logger,
@@ -301,7 +319,7 @@ async function recordFailureSafe(
   try {
     await recordFailure({
       work_item_id: null,
-      flow_path: "f/factory/watch_pr_ci",
+      flow_path: FLOW_PATH,
       job_id: process.env.WM_JOB_ID ?? "unknown",
       step,
       error: message,
@@ -376,6 +394,29 @@ export async function main(): Promise<PrCiWatchResult> {
   const discordWebhookUrl = await wmill.getVariable(
     "f/factory/discord_webhook_url",
   );
+  const round = createOutageRound({
+    flowPath: FLOW_PATH,
+    instanceName: config.instance_name,
+    log,
+    webhookUrl: discordWebhookUrl,
+  });
+  outageRound = round;
+  try {
+    return await round.guard(
+      () => runWatch(config, ghToken, discordWebhookUrl, log),
+      PR_CI_WATCH_IDLE_RESULT,
+    );
+  } finally {
+    outageRound = null;
+  }
+}
+
+async function runWatch(
+  config: FactoryConfig,
+  ghToken: string,
+  discordWebhookUrl: string,
+  log: Logger,
+): Promise<PrCiWatchResult> {
   const client: GhClient = { ghToken };
 
   // 名前の付け替えで別のアカウントを読まないよう、`repo_allowlist`は照合を通ったオーナーのものだけを通す。

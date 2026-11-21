@@ -33,6 +33,7 @@ import {
   getDefaultBranch,
   listWorkflowRuns,
 } from "./lib/github.ts";
+import { createOutageRound } from "./lib/github_outage.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   listMainCiTargets,
@@ -40,6 +41,20 @@ import {
   runMainCiWatch,
 } from "./lib/main_ci_watch.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
+import type { FactoryConfig } from "./lib/types.ts";
+
+const FLOW_PATH = "f/factory/watch_main_ci";
+
+const EMPTY_RESULT: MainCiWatchResult = {
+  repos: 0,
+  recorded: 0,
+  passed: 0,
+  failed: 0,
+  expired: 0,
+  no_ci: 0,
+  denied: 0,
+  errors: 0,
+};
 
 async function recordFailureSafe(
   step: string,
@@ -51,7 +66,7 @@ async function recordFailureSafe(
   try {
     await recordFailure({
       work_item_id: null,
-      flow_path: "f/factory/watch_main_ci",
+      flow_path: FLOW_PATH,
       job_id: process.env.WM_JOB_ID ?? "unknown",
       step,
       error: message,
@@ -73,11 +88,32 @@ export async function main(): Promise<MainCiWatchResult> {
     "f/factory/discord_webhook_url",
   );
   const client: GhClient = { ghToken };
+  const round = createOutageRound({
+    flowPath: FLOW_PATH,
+    instanceName: config.instance_name,
+    log,
+    webhookUrl: discordWebhookUrl,
+  });
+  const recordOrDefer = (step: string, err: unknown): Promise<void> =>
+    round.failure(step, err, (s, e) => recordFailureSafe(s, e, log));
 
+  return round.guard(
+    () => runRound(config, client, discordWebhookUrl, log, recordOrDefer),
+    EMPTY_RESULT,
+  );
+}
+
+async function runRound(
+  config: FactoryConfig,
+  client: GhClient,
+  discordWebhookUrl: string,
+  log: Logger,
+  recordOrDefer: (step: string, err: unknown) => Promise<void>,
+): Promise<MainCiWatchResult> {
   // 名前の付け替えで別のアカウントを読まないよう、`repo_allowlist`は照合を通ったオーナーのものだけを通す。
   const verified = await filterVerifiedOwners(config.owners, {
     getAccountId: (name) => getAccountId(client, name),
-    recordFailure: (step, err) => recordFailureSafe(step, err, log),
+    recordFailure: recordOrDefer,
     addNotice: (record) => addNoticeUnlessUnresolved(record),
   });
   const { targets, invalid } = listMainCiTargets({
@@ -118,7 +154,7 @@ export async function main(): Promise<MainCiWatchResult> {
     resolveNotices: (kind, messagePrefix, resolvedBy) =>
       resolveUnresolvedNoticesByPrefix(kind, messagePrefix, resolvedBy),
     notify: (event) => notifyBestEffort(discordWebhookUrl, event, log),
-    recordFailure: (step, err) => recordFailureSafe(step, err, log),
+    recordFailure: recordOrDefer,
   });
   log.info("main ci watch finished", { ...result });
   return result;

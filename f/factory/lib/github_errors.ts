@@ -94,14 +94,25 @@ export class GitHubHttpError extends Error {
   readonly status: number;
   /** 要求が締め切りで打ち切られたか。 */
   readonly timedOut: boolean;
+  /**
+   * 読み取りの要求が、再試行の後も応答の無い失敗に終わったか(通信断)。
+   * 締め切り、5xx、4xx、書き込みの要求では常に偽。
+   */
+  readonly unreachable: boolean;
   constructor(
     message: string,
     status: number,
-    detail: { readonly timedOut?: boolean } = {},
+    detail: { readonly timedOut?: boolean; readonly unreachable?: boolean } = {},
   ) {
     super(message);
     this.name = "GitHubHttpError";
     this.status = status;
     this.timedOut = detail.timedOut ?? false;
+    this.unreachable = detail.unreachable ?? false;
   }
+}
+
+/** 読み取りの要求の通信断による失敗か。 */
+export function isGitHubUnreachable(err: unknown): boolean {
+  return err instanceof GitHubHttpError && err.unreachable;
 }

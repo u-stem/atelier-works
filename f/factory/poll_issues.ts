@@ -73,6 +73,7 @@ import {
   LabelerCheckLimitError,
   listLabeledOpenIssues,
 } from "./lib/github.ts";
+import { createOutageRound, type OutageRound } from "./lib/github_outage.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { jobTmpEnv } from "./lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
@@ -193,18 +194,36 @@ export async function readRepoHeadSha(
 // 小さな補助関数
 // ---------------------------------------------------------------------------
 
-async function recordFailureSafe(
+const FLOW_PATH = "f/factory/poll_issues";
+
+// 実行中の回。Windmillは1つのジョブを1つのプロセスで動かすので、回ごとに1つだけ持つ。
+let outageRound: OutageRound | null = null;
+
+function recordFailureSafe(
   step: string,
   err: unknown,
   log: Logger,
   workItemId: number | null = null,
+): Promise<void> {
+  const write = (s: string, e: unknown): Promise<void> =>
+    writeFailure(s, e, log, workItemId);
+  return outageRound === null
+    ? write(step, err)
+    : outageRound.failure(step, err, write);
+}
+
+async function writeFailure(
+  step: string,
+  err: unknown,
+  log: Logger,
+  workItemId: number | null,
 ): Promise<void> {
   const message = maskSecrets(err instanceof Error ? err.message : String(err));
   log.error(step, { error: message });
   try {
     await recordFailure({
       work_item_id: workItemId,
-      flow_path: "f/factory/poll_issues",
+      flow_path: FLOW_PATH,
       job_id: process.env.WM_JOB_ID ?? "unknown",
       step,
       error: message,
@@ -1479,7 +1498,7 @@ async function sweepPendingApprovals(
 // main
 // ---------------------------------------------------------------------------
 
-export async function main(): Promise<{
+type PollIssuesResult = {
   claimed: number;
   skipped: number;
   reconciled: number;
@@ -1494,7 +1513,25 @@ export async function main(): Promise<{
   rest_reasons: Readonly<Record<string, number>>;
   candidates: number;
   dropped: number;
-}> {
+};
+
+const OUTAGE_SKIPPED_RESULT: PollIssuesResult = {
+  claimed: 0,
+  skipped: 0,
+  reconciled: 0,
+  actionable_cancelled: 0,
+  expired: 0,
+  failed: 0,
+  collect_disabled: false,
+  skipped_stale: 0,
+  skipped_stale_reasons: {},
+  rest_lists: 0,
+  rest_reasons: {},
+  candidates: 0,
+  dropped: 0,
+};
+
+export async function main(): Promise<PollIssuesResult> {
   const log = logger("poll_issues");
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
@@ -1503,6 +1540,29 @@ export async function main(): Promise<{
   const discordWebhookUrl = await wmill.getVariable(
     "f/factory/discord_webhook_url",
   );
+  const round = createOutageRound({
+    flowPath: FLOW_PATH,
+    instanceName: config.instance_name,
+    log,
+    webhookUrl: discordWebhookUrl,
+  });
+  outageRound = round;
+  try {
+    return await round.guard(
+      () => runPoll(config, ghToken, discordWebhookUrl, log),
+      OUTAGE_SKIPPED_RESULT,
+    );
+  } finally {
+    outageRound = null;
+  }
+}
+
+async function runPoll(
+  config: FactoryConfig,
+  ghToken: string,
+  discordWebhookUrl: string,
+  log: Logger,
+): Promise<PollIssuesResult> {
   const client: GhClient = { ghToken };
 
   // ヘルスチェック。PATが壊れている・期限切れのとき、下のIssueを

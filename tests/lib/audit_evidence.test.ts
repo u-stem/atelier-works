@@ -71,6 +71,7 @@ type QueryName =
   | "humanThreads"
   | "prReviewTopPrs"
   | "prReviewTriggers"
+  | "outageSkips"
   | "weeklyRuns"
   | "weeklyFindings"
   | "weeklyThreads"
@@ -100,6 +101,7 @@ const QUERY_NAMES: readonly QueryName[] = [
   "humanThreads",
   "prReviewTopPrs",
   "prReviewTriggers",
+  "outageSkips",
   "historyVerify",
   "historyChains",
   "historyPeriod",
@@ -128,6 +130,7 @@ const QUERY_FRAGMENTS: Record<QueryName, string> = {
   humanThreads: "FROM factory.review_human_threads",
   prReviewTopPrs: "count(*) OVER () AS pr_count",
   prReviewTriggers: "to_jsonb(r) ->> 'trigger'",
+  outageSkips: "FROM factory.job_outage_skips",
   weeklyRuns: "to_jsonb(r) -> 'skills'",
   weeklyFindings: "FROM factory.review_findings fd",
   weeklyThreads: "FROM factory.review_human_threads t",
@@ -198,6 +201,7 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   pr_review_top_prs: [],
   pr_review_pr_count: 0,
   pr_review_triggers: EMPTY_PR_REVIEW_TRIGGER_COUNTS,
+  outage_skips: [],
   review_outcomes: EMPTY_REVIEW_OUTCOME_EVIDENCE,
   review_quality: EMPTY_REVIEW_QUALITY_TREND,
   history: EMPTY_HISTORY_EVIDENCE,
@@ -2102,6 +2106,7 @@ describe("PR review sections in the evidence pack", () => {
       PR_SECTION,
       TRIGGER_SECTION,
       "失敗(flow + step別)",
+      "通信断による見送り(flow別)",
       "却下",
       "要人手・ブロック・期限切れ",
       "修正ラウンド",
@@ -2565,6 +2570,107 @@ describe("collecting the review outcomes before the migration", () => {
       collectAuditEvidence(
         { period: PERIOD, instanceName: "atelier-works" },
         sqlWithoutTables(new Error("connection reset")),
+      ),
+    ).rejects.toThrow("connection reset");
+  });
+});
+
+describe("the outage skip section", () => {
+  const OUTAGE_SECTION = "通信断による見送り(flow別)";
+
+  test("collects the skips by flow from the dedicated table", async () => {
+    const { evidence, calls } = await collectWith({
+      outageSkips: [
+        { key: "f/factory/poll_issues", count: 2 },
+        { key: "f/factory/watch_main_ci", count: 5 },
+      ],
+    });
+    expect(evidence.outage_skips).toEqual([
+      { key: "f/factory/watch_main_ci", count: 5 },
+      { key: "f/factory/poll_issues", count: 2 },
+    ]);
+    expect(findCall(calls, "outageSkips")?.text).toContain("GROUP BY");
+  });
+
+  test("shows the skip count on its own line, apart from the failures", () => {
+    const evidence: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      failures: [
+        {
+          flow_path: "f/factory/poll_prs",
+          step: "list",
+          count: 3,
+          sample_error: "boom",
+          first_sha: null,
+          last_sha: null,
+          unknown_version_count: 3,
+        },
+      ],
+      outage_skips: [
+        { key: "f/factory/poll_issues", count: 2 },
+        { key: "f/factory/watch_main_ci", count: 5 },
+      ],
+    };
+    const section = sectionOf(evidence, OUTAGE_SECTION);
+    expect(section?.fixed).toEqual([
+      "期間内の見送り: 7件(失敗の件数には含まない)",
+    ]);
+    expect(section?.lines).toEqual([
+      "f/factory/poll_issues: 2件",
+      "f/factory/watch_main_ci: 5件",
+    ]);
+    expect(sectionOf(evidence, "失敗(flow + step別)")?.lines).toHaveLength(1);
+  });
+
+  test("shows zero skips when the period has none", () => {
+    expect(sectionOf(EMPTY_EVIDENCE, OUTAGE_SECTION)?.fixed).toEqual([
+      "期間内の見送り: 0件(失敗の件数には含まない)",
+    ]);
+  });
+
+  test("does not count the skips in the metrics", () => {
+    const withSkips: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      outage_skips: [{ key: "f/factory/poll_issues", count: 4 }],
+    };
+    expect(metricsOf(withSkips)).toEqual(metricsOf(EMPTY_EVIDENCE));
+  });
+
+  test("collects the evidence before the migration that adds the table", async () => {
+    const sql: SqlClient = (strings) => {
+      const text = strings.join(" ? ").replace(/\s+/g, " ");
+      return {
+        fetch: () =>
+          text.includes("FROM factory.job_outage_skips")
+            ? Promise.reject(
+                new Error('relation "factory.job_outage_skips" does not exist'),
+              )
+            : Promise.resolve([]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.outage_skips).toEqual([]);
+  });
+
+  test("rethrows an error that is not a missing table", async () => {
+    const sql: SqlClient = (strings) => {
+      const text = strings.join(" ? ").replace(/\s+/g, " ");
+      return {
+        fetch: () =>
+          text.includes("FROM factory.job_outage_skips")
+            ? Promise.reject(new Error("connection reset"))
+            : Promise.resolve([]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    await expect(
+      collectAuditEvidence(
+        { period: PERIOD, instanceName: "atelier-works" },
+        sql,
       ),
     ).rejects.toThrow("connection reset");
   });

@@ -323,6 +323,10 @@ describe("resolverLabel", () => {
     expect(resolverLabel("watch_pr_conflicts")).toBe("PRの競合の監視(自動)");
   });
 
+  test("labels the GitHub outage recovery as automatic", () => {
+    expect(resolverLabel("github_outage")).toBe("GitHubへの通信の回復(自動)");
+  });
+
   test("shows a person's name as plain text", () => {
     expect(resolverLabel("operator")).toBe("operator");
   });

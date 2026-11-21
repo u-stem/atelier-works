@@ -449,6 +449,7 @@ export async function graphqlRequest(
         body: { query, variables },
         accept: "application/json",
         idempotent: true,
+        readOnly: true,
         timeoutMs: deps.timeoutMs ?? GRAPHQL_REQUEST_TIMEOUT_MS,
       },
     );

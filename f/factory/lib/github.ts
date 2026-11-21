@@ -131,6 +131,11 @@ export type GhApiCallOptions = {
    * 制御列の除去や置き換えは、呼び出し側が行う。
    */
   readonly allowEscapeSequences?: boolean;
+  /**
+   * GETでなくても読み取りだけの要求(GraphQLのquery)であることを表す。
+   * 再試行の後に応答が無いとき、通信断として判定する対象になる。
+   */
+  readonly readOnly?: boolean;
 };
 
 /**
@@ -177,6 +182,7 @@ export async function callGhApi(
       ...(options.allowEscapeSequences === true
         ? { allowEscapeSequences: true }
         : {}),
+      ...(options.readOnly === true ? { readOnly: true } : {}),
     },
     policy,
   );
@@ -277,7 +283,10 @@ export function ensureSuccess(response: GhApiResponse, context: string): void {
       `${context} failed with HTTP ${response.status}: ${response.bodyText.slice(0, 500)}`,
     ),
     response.status,
-    { timedOut: response.timedOut === true },
+    {
+      timedOut: response.timedOut === true,
+      unreachable: response.unreachable === true,
+    },
   );
 }
 
@@ -1003,7 +1012,10 @@ async function fetchIssueObject(
     throw new GitHubHttpError(
       `${context} failed with HTTP ${response.status}${detail}`,
       response.status,
-      { timedOut: response.timedOut === true },
+      {
+        timedOut: response.timedOut === true,
+        unreachable: response.unreachable === true,
+      },
     );
   }
   // 本文が切れた応答は、形の誤りではなく通信の失敗として、受け取ったステータスのまま投げる。
@@ -3778,6 +3790,7 @@ async function callGhGraphql(
     method: "POST",
     body: { query, variables },
     idempotent,
+    ...(idempotent ? { readOnly: true } : {}),
   });
   ensureSuccess(response, context);
   const parsed = parseJsonBody(response, context);
