@@ -316,6 +316,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 変数のパスを名指しできるファイルを限る配線のテスト(`tests/scripts/stop_all_wiring.test.ts`)も守る。
  * 書き換えられると、全停止が置かれても設定やscheduleが止まらなくなるか、Consoleの確認と記録を経ずに解除でき、凍結中のscheduleが動き出す。
  * 2つの`.script.lock`は、`windmill-client`を含むので守らない。
+ * 設定の変更の履歴の部品(`lib/config_history.ts`)と`.script.yaml`も守る。
+ * 設定の更新と全停止のscriptがimportでたどるので、境界の検査が、たどれるファイルをすべて保護パスに求めるためである。
+ * 値を許可リストで射影する規則を持つので、書き換えられると、コマンドやURL、秘密らしい値が、履歴に生の値のまま入る。
+ * 射影の規則の検査(`tests/lib/config_history.test.ts`)と、2つのscriptが履歴を書く配線の検査(`tests/scripts/config_history_hooks.test.ts`)も同じ理由で守る。
+ * `lib/config_history.script.lock`は、依存の無いlibのlockと同じ扱いで守らない。
  * 全停止のホストのCLI(`scripts/stop_all.ts`、`mise run stop`の入口)と、資格情報の期限の記録を組み立てる
  * `scripts/credential_expiry.ts`(`bootstrap.sh`が秘密値を環境に持たせて起動する)、その部品`lib/credential_expiry.ts`と`.script.yaml`も守る。
  * どれも、ホストのユーザーの権限と秘密値のある環境で動くため、書き換えられると任意の処理が秘密値の近くで動く。
@@ -561,6 +566,10 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/console_actions.script.yaml",
   "f/factory/lib/approver.ts",
   "f/factory/lib/approver.script.yaml",
+  "f/factory/lib/config_history.ts",
+  "f/factory/lib/config_history.script.yaml",
+  "tests/lib/config_history.test.ts",
+  "tests/scripts/config_history_hooks.test.ts",
   "f/factory/console_job_cancel.ts",
   "f/factory/console_job_cancel.script.yaml",
   "f/factory/console_job_rerun.ts",

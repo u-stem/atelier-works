@@ -23,10 +23,17 @@
 // 行を入れられなければ、何も変えずに断る。記録するのは理由の長さと結果の数だけで、理由の本文は入れない。
 // 操作者は、ジョブのWindmill実行文脈から導く(`deriveApprover`)。導けなければ断る。引数に操作者は取らない。
 //
+// 設定の変更の履歴(`factory.config_history`)には、設定を書けた後に、止めた`*_enabled`を1つにつき1行足す。
+// 履歴を書けなくても、止めた状態は保ち、操作の記録の結果に`history_recorded: false`を残す。
+//
 // Console用workerで動くので、どのsecret変数も読まない。SDKの呼び出しは、境界テストの許可表に収める。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { deriveApprover } from "./lib/approver.ts";
+import {
+  appendConfigChange,
+  type ConfigChangeInput,
+} from "./lib/config_history.ts";
 import {
   type ActionAudit,
   type ActionSqlClient,
@@ -125,6 +132,11 @@ export type StopAllPorts = {
     enabled: boolean,
   ) => Promise<void>;
   readonly sql: ActionSqlClient;
+  /**
+   * 設定の変更の履歴を1行足し、書けたかを返す。投げない。
+   * 省くと履歴を書かない。本番の`sdkPorts`は常に渡し、配線のテストが固定する。
+   */
+  readonly appendHistory?: (change: ConfigChangeInput) => Promise<boolean>;
 };
 
 /** 止める名前の決め方は`lib/stop_all.ts`にある。呼び出し側の読み込み先を変えないため、ここからも出す。 */
@@ -140,6 +152,8 @@ type ConfigStep = {
   readonly outcome: StopAllConfigOutcome;
   readonly flags: readonly string[];
   readonly record: RecordStep;
+  /** 止めた名前の履歴をすべて書けたか。履歴を書かなかった段では`undefined`。 */
+  readonly historyRecorded?: boolean;
 };
 
 /** 止める名前が無いときの記録の段の結果。 */
@@ -186,6 +200,7 @@ async function recordFlags(
 async function stopConfig(
   ports: StopAllPorts,
   replaceRecord: boolean,
+  actor: string,
 ): Promise<ConfigStep> {
   let current: unknown;
   try {
@@ -209,7 +224,20 @@ async function stopConfig(
   } catch {
     return { outcome: "failed", flags: [], record };
   }
-  return { outcome: "written", flags, record };
+  // 止めた名前を、1行ずつ設定の履歴に残す。書けない行があっても止めた状態は保ち、記録の結果に印を残す。
+  let historyRecorded = true;
+  for (const flag of flags) {
+    const written = await ports.appendHistory?.({
+      key: flag,
+      before: true,
+      after: false,
+      actor,
+      source: "stop_all",
+      reason: "stop_all_flag_off",
+    });
+    if (written === false) historyRecorded = false;
+  }
+  return { outcome: "written", flags, record, historyRecorded };
 }
 
 type ScheduleStep = {
@@ -277,7 +305,7 @@ export async function stopAllFromConsole(
         await ports.writeStopAll(serializeStopAll(built.state));
       }
       // 変数が空だったときだけ、記録を置き換える。壊れた値は前の全停止が残したものでありうるので、和集合にする。
-      const config = await stopConfig(ports, status.kind === "clear");
+      const config = await stopConfig(ports, status.kind === "clear", actor);
       const schedules = await stopSchedules(ports);
       const complete =
         (config.outcome === "written" || config.outcome === "unchanged") &&
@@ -294,6 +322,9 @@ export async function stopAllFromConsole(
           unrecorded: config.record.unrecorded.length,
           disabled: schedules.disabled.length,
           failed: schedules.failed.length,
+          ...(config.historyRecorded === false
+            ? { history_recorded: false }
+            : {}),
         },
         value: {
           placed: existing === null,
@@ -323,6 +354,7 @@ export async function stopAllFromConsole(
 
 function sdkPorts(): StopAllPorts {
   const workspace = wmillDefault.getWorkspace();
+  const sql = actionSqlClientFrom(() => wmill.datatable());
   return {
     now: () => new Date(),
     deriveActor: () =>
@@ -367,7 +399,9 @@ function sdkPorts(): StopAllPorts {
         requestBody: { enabled },
       });
     },
-    sql: actionSqlClientFrom(() => wmill.datatable()),
+    sql,
+    appendHistory: async (change) =>
+      (await appendConfigChange(sql, change)).recorded,
   };
 }
 

@@ -39,11 +39,18 @@
 // 行を入れられなければ、変更せずに断る。更新に失敗しても変更は戻さず、`action_audit`を`failed`にする。
 // 操作者は、ジョブのWindmill実行文脈から導く(`deriveApprover`)。導けなければ断る。引数に操作者は取らない。
 //
+// 設定の変更の履歴(`factory.config_history`)には、読み直しで確かめた変更を、1行足す。値は許可リストで射影した形で、生の値は入れない。
+// 履歴を書けなくても、設定は戻さず、操作の記録の結果に`history_recorded: false`を残す。
+//
 // Console用workerで動くので、どのsecret変数も読まない。SDKの呼び出しは、境界テストの許可表に収める。
 // 読み書きするパスはリテラルの`f/factory/factory_config`だけで、境界テストが固定する。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { deriveApprover } from "./lib/approver.ts";
+import {
+  appendConfigChange,
+  type ConfigChangeInput,
+} from "./lib/config_history.ts";
 import {
   type ActionAudit,
   type ActionSqlClient,
@@ -177,6 +184,11 @@ export type ConfigUpdatePorts = {
   readonly readConfig: () => Promise<unknown>;
   readonly writeConfig: (value: Record<string, unknown>) => Promise<void>;
   readonly sql: ActionSqlClient;
+  /**
+   * 変更の履歴を1行足し、書けたかを返す。投げない。
+   * 省くと履歴を書かない。本番の`sdkPorts`は常に渡し、配線のテストが固定する。
+   */
+  readonly appendHistory?: (change: ConfigChangeInput) => Promise<boolean>;
 };
 
 function ownRule(item: string): NumberRule | undefined {
@@ -650,9 +662,22 @@ export async function updateConfigFromConsole(
         written,
         prepared.matches,
       );
+      // 読み直しで確かめた変更は、設定の履歴に残す。書けなくても設定は戻さず、記録の結果に印を残す。
+      const historyFailed =
+        verified &&
+        (await ports.appendHistory?.({
+          key: item,
+          before: current[item],
+          after: prepared.value,
+          actor,
+          source: "console",
+          reason: "console_update",
+        })) === false;
       return {
         outcome: verified ? "succeeded" : "partial",
-        changes: { verified },
+        changes: historyFailed
+          ? { verified, history_recorded: false }
+          : { verified },
         value: { kind: "written", verified },
       };
     },
@@ -669,6 +694,7 @@ export async function updateConfigFromConsole(
 
 function sdkPorts(): ConfigUpdatePorts {
   const workspace = wmillDefault.getWorkspace();
+  const sql = actionSqlClientFrom(() => wmill.datatable());
   return {
     deriveActor: () =>
       deriveApprover({
@@ -687,7 +713,9 @@ function sdkPorts(): ConfigUpdatePorts {
         requestBody: { value },
       });
     },
-    sql: actionSqlClientFrom(() => wmill.datatable()),
+    sql,
+    appendHistory: async (change) =>
+      (await appendConfigChange(sql, change)).recorded,
   };
 }
 
