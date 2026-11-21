@@ -3,7 +3,8 @@
 // 判断する主体は人で、操作者はジョブのWindmill実行文脈から導く(`deriveApprover`)。導けないときは何も記録せずに断る。
 // 判断は承認の表の部品(`decideDeployApproval`)だけが書く。判断できるのは、最後に成功した反映より後の、最も新しい承認待ちの版だけである。
 // 操作の記録(`factory.console_actions`)は、判断の前に`attempted`の行を入れ、後で結果を更新する。行を入れられなければ、判断せずに断る。
-// 判断を書けたら、承認のときだけ、その版の承認を待つ通知を解決する。判断は情報の通知に残す。どちらに失敗しても判断は取り消さない。
+// 判断を書けたら、承認のときだけ、その版の承認を待つ通知を解決する。判断は、作成の時点で解決済みの情報の通知に残す。
+// 運用者の対応が要らないので、未解決の通知に残さない。どちらに失敗しても判断は取り消さない。
 // 承認した版は、次の`self_update`(2分ごと)が反映する。却下した版は、mainへ戻すPRがマージされるまで反映されない。
 // 却下では要対応の通知を残す。却下した版は承認待ちの一覧に出ず、版の食い違いの通知も抑止されるので、
 // 通知を解決すると、反映が止まったままなのに要対応が消える。戻すPRの反映(`deployed_sha`が進む)か、
@@ -18,7 +19,7 @@ import {
   runRecordedAs,
 } from "./lib/console_actions.ts";
 import {
-  addNoticeUnlessUnresolved,
+  addResolvedNotice,
   defaultSqlClient,
   resolveUnresolvedNoticesByPrefix,
 } from "./lib/db.ts";
@@ -80,6 +81,9 @@ const DECISION_BY_INPUT: ReadonlyMap<string, DeployApprovalDecision> = new Map([
   ["approve", "approved"],
   ["reject", "rejected"],
 ]);
+
+/** 判断の情報の通知を作成の時点で解決済みにしたときの解決者。 */
+export const DEPLOY_DECIDE_RESOLVER = "console_deploy_decide";
 
 /** 通知の本文とログに載せる操作者の文字数の上限。 */
 const OPERATOR_DISPLAY_MAX = 100;
@@ -203,7 +207,7 @@ export async function main(
           deployApprovalNoticePrefix(target),
           resolvedBy,
         ),
-      addNotice: (record) => addNoticeUnlessUnresolved(record),
+      addNotice: (record) => addResolvedNotice(record, DEPLOY_DECIDE_RESOLVER),
       warn: (message, fields) => {
         log.warn(message, fields);
       },

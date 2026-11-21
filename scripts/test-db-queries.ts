@@ -14,6 +14,7 @@ import {
 } from "../f/factory/lib/console_support.ts";
 import {
   addNoticeUnlessUnresolved,
+  addResolvedNotice,
   claimIssueCreation,
   claimPrCiCheckForFix,
   claimPrConflictForFix,
@@ -4733,6 +4734,76 @@ check(
 await execPsqlAsync(
   target,
   `DELETE FROM factory.notices WHERE kind = '${actionRecord.kind}'`,
+);
+
+// 作成の時点で解決済みの通知は、未解決の通知の索引にも、証跡パックの未解決の件数にも入らない。
+const decidedRecord = {
+  kind: "deploy_approval_decided",
+  message: "qdb decided same body",
+};
+const decidedOpenId = await addNoticeUnlessUnresolved(decidedRecord, sql);
+const resolvedNoticeId = await addResolvedNotice(
+  decidedRecord,
+  "console_deploy_decide",
+  sql,
+);
+check(
+  "resolved notice: it inserts although an open notice has the same body",
+  typeof resolvedNoticeId === "number" && resolvedNoticeId !== decidedOpenId,
+  resolvedNoticeId,
+);
+const resolvedNoticeRow = await getNoticeById(resolvedNoticeId, sql);
+check(
+  "resolved notice: the row is resolved with the resolver and the time",
+  resolvedNoticeRow?.resolved === true &&
+    resolvedNoticeRow.resolved_by === "console_deploy_decide" &&
+    resolvedNoticeRow.resolved_at !== null,
+  resolvedNoticeRow,
+);
+check(
+  "resolved notice: the open notice with the same body stays open",
+  decidedOpenId !== null &&
+    (await getNoticeById(decidedOpenId, sql))?.resolved === false,
+);
+await execPsqlAsync(
+  target,
+  `DELETE FROM factory.notices WHERE kind = '${decidedRecord.kind}'`,
+);
+const evidenceControl = await addNoticeUnlessUnresolved(
+  { kind: "qdb_dedup_action", message: "qdb evidence control" },
+  sql,
+);
+await addResolvedNotice(decidedRecord, "console_deploy_decide", sql);
+await addResolvedNotice(decidedRecord, "console_deploy_decide", sql);
+const decidedEvidence = await collectAuditEvidence(
+  {
+    period: {
+      start: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      end: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      unaudited_gap_days: 0,
+    },
+    instanceName: "qdb",
+  },
+  sql,
+);
+const decidedGroups = [
+  ...decidedEvidence.unresolved_notices_in_period,
+  ...decidedEvidence.unresolved_notices_before_period,
+];
+check(
+  "resolved notice: the audit evidence counts an open notice of another kind",
+  evidenceControl !== null &&
+    decidedGroups.some((group) => group.key === "qdb_dedup_action"),
+  decidedGroups,
+);
+check(
+  "resolved notice: the audit evidence does not count the decided notices",
+  !decidedGroups.some((group) => group.key === decidedRecord.kind),
+  decidedGroups,
+);
+await execPsqlAsync(
+  target,
+  `DELETE FROM factory.notices WHERE kind IN ('${decidedRecord.kind}', 'qdb_dedup_action')`,
 );
 
 // ---------------------------------------------------------------------------

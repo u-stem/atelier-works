@@ -237,6 +237,7 @@ const RESOLVER_LABELS: ReadonlyMap<string, string> = new Map([
   ["watch_main_ci", "mainのCIの監視(自動)"],
   ["watch_pr_ci", "PRのCIの監視(自動)"],
   ["watch_pr_conflicts", "PRの競合の監視(自動)"],
+  ["console_deploy_decide", "反映の判断(自動)"],
 ]);
 
 /**
