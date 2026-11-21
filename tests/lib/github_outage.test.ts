@@ -2,6 +2,7 @@
 // DBとDiscordは注入した偽物に置き換え、通信はしない。
 
 import { describe, expect, test } from "bun:test";
+import type { SqlClient } from "../../f/factory/lib/db.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import { GitHubHttpError } from "../../f/factory/lib/github_errors.ts";
 import {
@@ -374,5 +375,52 @@ describe("resolution (AC-007, AC-008, FR-007, FR-008)", () => {
     h.state.reads += 1;
     await expect(round.finish()).resolves.toBeUndefined();
     expect(h.warnings).toEqual(["failed to resolve github outage event"]);
+  });
+});
+
+describe("the default dependencies write through the given sql", () => {
+  type Call = { text: string; values: unknown[] };
+
+  function fakeSql(): { sql: SqlClient; calls: Call[] } {
+    const calls: Call[] = [];
+    const sql: SqlClient = (strings, ...values) => {
+      calls.push({ text: strings.join(" ? "), values });
+      return {
+        fetch: () => Promise.resolve([{ id: 1 }]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    return { sql, calls };
+  }
+
+  function roundWith(sql: SqlClient, deps: Partial<OutageDeps>) {
+    return createOutageRound({
+      flowPath: "f/factory/poll_issues",
+      instanceName: "factory-test",
+      log: { info() {}, warn() {}, error() {} },
+      sql,
+      deps: { notify: async () => {}, ...deps },
+    });
+  }
+
+  test("inserts the event and then the skip of an outage-only round", async () => {
+    const { sql, calls } = fakeSql();
+    const round = roundWith(sql, {});
+    await round.failure("a", unreachable(), async () => {});
+    await round.finish();
+    expect(calls.map((call) => call.text.includes("job_outage_skips"))).toEqual(
+      [false, true],
+    );
+  });
+
+  test("resolves the event with the time of the last successful read", async () => {
+    const { sql, calls } = fakeSql();
+    let reads = 0;
+    const round = roundWith(sql, {
+      readSuccessCount: () => reads++,
+      lastReadSuccessAt: () => RECOVERED_AT,
+    });
+    await round.finish();
+    expect(calls[0]?.values).toContain(RECOVERED_AT.toISOString());
   });
 });

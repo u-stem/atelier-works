@@ -115,7 +115,7 @@ locks:
   f/factory/lib/github: a5b3c10eccd51abff900a5eac3008b1554ab3264dd8424ebc2777f18d93fbb16
   f/factory/lib/github_errors: 7d0c3b35f8070d0e9df793cf0e2bd955c0e8c2d4989eb217b55c6e422b572f0a
   f/factory/lib/github_http: 62f34d30365df26f0d2a5c515c3d5150d3140d0520e500e82437822c9e11ab8c
-  f/factory/lib/github_outage: 27f38d635dc5834a6cea07d3a8759f72e2315c66dba6be0e6c8ccf84e09a5d4a
+  f/factory/lib/github_outage: 84d069e140c801aa1d6a0644c21ec7a5a3441cb67022450d38666d4ad9e60b7d
   f/factory/lib/heartbeat: 0780343b32026cd007ea35b095340c0b7cb640fb2bab46eb8d213c0a5204673e
   f/factory/lib/history: e03f352947a704e79dec90c7f28eae2af373030054b29dd71f34b6e7abe1b23b
   f/factory/lib/holds: 2377c9840d17e626331e3450f97978bfa8fafa583d01b243a9073169aaad728c

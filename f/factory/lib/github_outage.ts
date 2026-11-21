@@ -7,8 +7,10 @@
 
 import {
   addNoticeUnlessUnresolved,
+  defaultSqlClient,
   recordOutageSkip,
   resolveUnresolvedNoticesByMessage,
+  type SqlClient,
 } from "./db.ts";
 import { type NotifyEvent, notifyBestEffort } from "./discord.ts";
 import { isGitHubUnreachable } from "./github_errors.ts";
@@ -57,6 +59,8 @@ export type OutageRoundOptions = {
   log: Logger;
   /** 通知の宛先を取れない回でも、事象の記録と解決は続けるため、通知だけを外せる。 */
   webhookUrl?: string | null;
+  /** 既定の依存がDBへ書くときに使う。テストが偽物を渡す。 */
+  sql?: SqlClient;
   deps?: Partial<OutageDeps>;
 };
 
@@ -71,17 +75,18 @@ export type OutageRound = {
 };
 
 function defaultDeps(options: OutageRoundOptions): OutageDeps {
+  const sql = options.sql ?? defaultSqlClient;
   return {
-    addNotice: (record) => addNoticeUnlessUnresolved(record),
+    addNotice: (record) => addNoticeUnlessUnresolved(record, sql),
     resolveNotices: (kind, message, resolvedBy, createdBefore) =>
       resolveUnresolvedNoticesByMessage(
         kind,
         message,
         resolvedBy,
-        undefined,
+        sql,
         createdBefore,
       ),
-    recordSkip: (record) => recordOutageSkip(record),
+    recordSkip: (record) => recordOutageSkip(record, sql),
     notify: async (event) => {
       await notifyBestEffort(options.webhookUrl ?? "", event, options.log);
     },
