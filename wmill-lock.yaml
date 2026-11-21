@@ -16,7 +16,7 @@ locks:
   f/factory/collect_github: 53d593d0a7f1677876cf2c060421d4f566916ec0fcfe5ef482086a0284bd4579
   f/factory/console_config: 04cf6df01d9d389fbf27cbc114da7fc5f45711b8414d689d26462e6aa423bd19
   f/factory/console_config_update: 823eefa3a2c2416c93c38bfece2405cd477fecd3b5fb97e37d84742a329307fd
-  f/factory/console_deploy_decide: 337d860418a063a5324d3932ac7619af3cae02ac12459a15466dc0ee8db83466
+  f/factory/console_deploy_decide: 9149f6eb6ef6e94d260668670255633608fc010ce6b418d8acc6596a104ab26b
   f/factory/console_fetch_watch: bc9989c956e804ed6c7e42b789b08f92ee8800ea4937d524d1b5f99619eb8c82
   f/factory/console_hold_place: 258ef15bedfd133fc2ffe9876e4a661b1ff256f8854f1b64390eda624a0daea1
   f/factory/console_holds: 3e904bad33ff3d084089b62606d39a385dec9eaf53a31693204d8301c6cbeb05
@@ -78,7 +78,7 @@ locks:
   f/factory/lib/console_support: 0bf5550eaf29de2b68e5b07d5367af5d747a99a28eb91db94fe47a8786fee332
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
   f/factory/lib/credential_expiry: 6548ab169aa527c5708ba20d8de1bf43ae9535c19c03489aa8d9a0e2a0649683
-  f/factory/lib/db: 3e3481013fa89ff7bf7dd387124ac4136ede1dadd206c3b0cc638fa1d09723fd
+  f/factory/lib/db: b05a2d73546c478499d05c68730b7503bfa63a4293fb873995d13bf521dd778e
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905

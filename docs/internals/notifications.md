@@ -481,7 +481,9 @@ noticeの本文には日数と件数を載せない。
 
 ### 重複の抑止
 
-noticeは、作業領域のディスク使用量(`workspace_disk_usage`)と、作成の時点で解決済みにする反映の判断(`deploy_approval_decided`)を除き、すべて`addNoticeUnlessUnresolved`で作る。
+noticeは、次の2つを除き、すべて`addNoticeUnlessUnresolved`で作る。
+除くのは、作業領域のディスク使用量(`workspace_disk_usage`)と、反映の判断(`deploy_approval_decided`)である。
+反映の判断は、作成の時点で解決済みにする。
 同じ種類と本文の未解決のnoticeがあるあいだは、新しく追加しない。
 同じ状況が続く間、スケジュールや実行のたびに、見分けの付かないnoticeが積み上がるのを防ぐためである。
 本文が対象(作業項目、PR、版など)で決まるので、対象が違えば別のnoticeになる。

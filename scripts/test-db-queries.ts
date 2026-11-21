@@ -4742,17 +4742,18 @@ const decidedRecord = {
   message: "qdb decided same body",
 };
 const decidedOpenId = await addNoticeUnlessUnresolved(decidedRecord, sql);
-const resolvedNoticeId = await addResolvedNotice(
+const createdResolvedNoticeId = await addResolvedNotice(
   decidedRecord,
   "console_deploy_decide",
   sql,
 );
 check(
   "resolved notice: it inserts although an open notice has the same body",
-  typeof resolvedNoticeId === "number" && resolvedNoticeId !== decidedOpenId,
-  resolvedNoticeId,
+  typeof createdResolvedNoticeId === "number" &&
+    createdResolvedNoticeId !== decidedOpenId,
+  createdResolvedNoticeId,
 );
-const resolvedNoticeRow = await getNoticeById(resolvedNoticeId, sql);
+const resolvedNoticeRow = await getNoticeById(createdResolvedNoticeId, sql);
 check(
   "resolved notice: the row is resolved with the resolver and the time",
   resolvedNoticeRow?.resolved === true &&
