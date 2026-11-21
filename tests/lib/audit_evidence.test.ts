@@ -3485,7 +3485,11 @@ describe("the skill version comparison section", () => {
 
 const HISTORY_SECTION = "履歴の整合";
 
-/** 検証した連鎖が40件で、うち1件が壊れている期間。期間内の遷移は20件で、5件が理由を持たない。 */
+/**
+ * 検証した連鎖が40件で、うち1件が壊れている期間。
+ * 期間内の遷移は20件で、5件が理由を決められない。うち2件は注記があり、3件は注記が無い。
+ * 注記のある遷移は、理由を決められたものを含めて8件である。
+ */
 const HISTORY_EVIDENCE: AuditEvidence = {
   ...EMPTY_EVIDENCE,
   history: {
@@ -3496,6 +3500,9 @@ const HISTORY_EVIDENCE: AuditEvidence = {
     ],
     period_chains: 8,
     period_events: 20,
+    period_with_note: 8,
+    unspecified_with_note: 2,
+    unspecified_without_note: 3,
     period_by_reason: [
       { reason_code: "reconcile", count: 12 },
       { reason_code: "unspecified", count: 5 },
@@ -3585,25 +3592,58 @@ describe("the history integrity section", () => {
     );
   });
 
-  test("shows the share of unspecified with the numbers it divides", () => {
+  test("shows the unspecified transitions that had a note against the transitions that had a note", () => {
     expect(sectionOf(HISTORY_EVIDENCE, HISTORY_SECTION)?.fixed).toContain(
-      "理由が未指定(unspecified)の割合: 25%(5件 / 20件)。割合が高い呼び出し元から、理由を明示する",
+      "理由が決まらない遷移のうち、注記があるもの: 2件 / 注記のある遷移 8件",
     );
   });
 
-  test("leaves out the share of unspecified when the period has no transition", () => {
+  test("shows the unspecified transitions without a note as information", () => {
+    expect(sectionOf(HISTORY_EVIDENCE, HISTORY_SECTION)?.fixed).toContain(
+      "理由が決まらない遷移のうち、注記が無いもの: 3件(通常の遷移で、不具合ではない)",
+    );
+  });
+
+  test("does not divide the unspecified count by every transition of the period", () => {
+    expect(
+      sectionOf(HISTORY_EVIDENCE, HISTORY_SECTION)?.fixed.some((line) =>
+        line.includes("25%"),
+      ),
+    ).toBe(false);
+  });
+
+  test("leaves out the line of the transitions with a note when none had a note", () => {
+    const evidence: AuditEvidence = {
+      ...HISTORY_EVIDENCE,
+      history: {
+        ...HISTORY_EVIDENCE.history,
+        period_with_note: 0,
+        unspecified_with_note: 0,
+      },
+    };
+    expect(
+      sectionOf(evidence, HISTORY_SECTION)?.fixed.some((line) =>
+        line.startsWith("理由が決まらない遷移のうち、注記があるもの"),
+      ),
+    ).toBe(false);
+  });
+
+  test("leaves out the lines about unspecified transitions when the period has no transition", () => {
     const evidence: AuditEvidence = {
       ...HISTORY_EVIDENCE,
       history: {
         ...HISTORY_EVIDENCE.history,
         period_chains: 0,
         period_events: 0,
+        period_with_note: 0,
+        unspecified_with_note: 0,
+        unspecified_without_note: 0,
         period_by_reason: [],
       },
     };
     expect(
       sectionOf(evidence, HISTORY_SECTION)?.fixed.some((line) =>
-        line.includes("unspecified"),
+        line.startsWith("理由が決まらない遷移"),
       ),
     ).toBe(false);
   });

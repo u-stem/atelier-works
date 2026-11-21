@@ -190,6 +190,7 @@ import {
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
 import {
+  collectHistoryEvidence,
   HISTORY_NOTE_RULES,
   HISTORY_REASON_CODES,
   historyCutoff,
@@ -14802,6 +14803,62 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
         (entry) => entry.reason_code === "unspecified" && entry.count > 0,
       ),
     tamperedEvidence.history,
+  );
+
+  // 理由が決まらない遷移は、注記の有無で分けて数える。
+  const splitStart = new Date(NOW_MS - DAY_MS).toISOString();
+  const splitEnd = new Date(NOW_MS + DAY_MS).toISOString();
+  const splitBefore = await collectHistoryEvidence(sql, splitStart, splitEnd);
+  const noNoteItem = await issueWorkItem(
+    97031,
+    1,
+    "picked",
+    "qdb-history-split-none",
+  );
+  await updateStatus(noNoteItem, "failed", null, sql, NO_JOB_IDS);
+  const unmatchedNoteItem = await issueWorkItem(
+    97032,
+    1,
+    "picked",
+    "qdb-history-split-unmatched",
+  );
+  await updateStatus(
+    unmatchedNoteItem,
+    "failed",
+    "a free note that no rule matches",
+    sql,
+    NO_JOB_IDS,
+  );
+  const matchedNoteItem = await issueWorkItem(
+    97033,
+    1,
+    "picked",
+    "qdb-history-split-matched",
+  );
+  await updateStatus(
+    matchedNoteItem,
+    "failed",
+    "auto_retry: split check",
+    sql,
+    NO_JOB_IDS,
+  );
+  const splitAfter = await collectHistoryEvidence(sql, splitStart, splitEnd);
+  check(
+    "history: a transition without a note adds one to the unspecified count without a note",
+    splitAfter.unspecified_without_note -
+      splitBefore.unspecified_without_note ===
+      1,
+    { splitBefore, splitAfter },
+  );
+  check(
+    "history: a note that matches no rule adds one to the unspecified count with a note",
+    splitAfter.unspecified_with_note - splitBefore.unspecified_with_note === 1,
+    { splitBefore, splitAfter },
+  );
+  check(
+    "history: the transitions with a note count both the unmatched note and the matched note",
+    splitAfter.period_with_note - splitBefore.period_with_note === 2,
+    { splitBefore, splitAfter },
   );
 
   // 保持の掃除。作業項目が無く、連鎖の最後の記録が期限より古い連鎖だけを、丸ごと消す。

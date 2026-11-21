@@ -377,7 +377,15 @@ describe("collectHistoryEvidence", () => {
     const { sql } = routedSql({
       "history_verify(": [{ work_item_id: 9, first_bad_seq: 2, reason: "gap" }],
       "AS chains": [{ chains: "40" }],
-      "AS period_chains": [{ period_chains: "5", period_events: "17" }],
+      "AS period_chains": [
+        {
+          period_chains: "5",
+          period_events: "17",
+          period_with_note: "6",
+          unspecified_with_note: "2",
+          unspecified_without_note: "10",
+        },
+      ],
       "GROUP BY h.reason_code": [
         { reason_code: "unspecified", events: "12" },
         { reason_code: "auto_retry", events: "5" },
@@ -391,6 +399,9 @@ describe("collectHistoryEvidence", () => {
         broken: [{ work_item_id: 9, first_bad_seq: 2, reason: "gap" }],
         period_chains: 5,
         period_events: 17,
+        period_with_note: 6,
+        unspecified_with_note: 2,
+        unspecified_without_note: 10,
         period_by_reason: [
           { reason_code: "unspecified", count: 12 },
           { reason_code: "auto_retry", count: 5 },
@@ -428,6 +439,33 @@ describe("collectHistoryEvidence", () => {
       call.text.includes("AS period_chains"),
     );
     expect(periodCall?.values).toEqual([PERIOD.start, PERIOD.end]);
+  });
+
+  test("reads the note length of the period rows to split the unspecified transitions", async () => {
+    const { sql, calls } = routedSql({});
+
+    await collectHistoryEvidence(sql, PERIOD.start, PERIOD.end);
+
+    const periodCall = calls.find((call) =>
+      call.text.includes("AS period_chains"),
+    );
+    expect(periodCall?.text).toContain("note_chars");
+  });
+
+  test("counts zero for the note split when the period query returns no row", async () => {
+    const { sql } = routedSql({});
+
+    const evidence = await collectHistoryEvidence(
+      sql,
+      PERIOD.start,
+      PERIOD.end,
+    );
+
+    expect([
+      evidence.period_with_note,
+      evidence.unspecified_with_note,
+      evidence.unspecified_without_note,
+    ]).toEqual([0, 0, 0]);
   });
 
   test("leaves the audit work items out of the period counts", async () => {
