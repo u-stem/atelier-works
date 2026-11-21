@@ -151,6 +151,15 @@ export const REPO_SCHEDULES: readonly RepoSchedule[] = [
     no_flow_overlap: true,
   },
   {
+    path: "f/factory/config_snapshot",
+    script_path: "f/factory/config_snapshot",
+    is_flow: false,
+    schedule: "15 1-59/5 * * * *",
+    timezone: "Asia/Tokyo",
+    enabled: true,
+    no_flow_overlap: true,
+  },
+  {
     path: "f/factory/console_fetch_watch",
     script_path: "f/factory/console_fetch_watch",
     is_flow: false,

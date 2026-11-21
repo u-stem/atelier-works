@@ -597,6 +597,11 @@
       "flows": []
     },
     {
+      "name": "config_snapshot",
+      "summary": "設定のConsoleの外の変更を検知して履歴に記録",
+      "flows": []
+    },
+    {
       "name": "console_fetch_watch",
       "summary": "Consoleの取り込みを見張る",
       "flows": []

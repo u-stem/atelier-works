@@ -79,6 +79,8 @@ export const NOT_RERUNNABLE_SCHEDULES: Readonly<Record<string, string>> = {
   "f/factory/cleanup_db": "古い行を削除する。冪等性を確かめていない",
   "f/factory/cleanup_workspaces":
     "作業領域を削除する。実行中の作業と干渉しうる",
+  "f/factory/config_snapshot":
+    "設定のConsoleの外の変更の照合。履歴に記録を足すだけで、次の回が取り直すので、再実行の意味が無い",
   "f/factory/console_fetch_watch":
     "Consoleの取り込みの見張り。次の回が自動で取り直す",
   "f/factory/default_worker_watch": "workerの見張り。次の回が自動で取り直す",

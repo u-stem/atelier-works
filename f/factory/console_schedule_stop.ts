@@ -88,6 +88,8 @@ export const NOT_STOPPABLE_SCHEDULES: Readonly<Record<string, string>> = {
     "作業領域を掃除する。止めると、止まらないClaudeのプロセスが残る",
   "f/factory/collect_github":
     "GitHubの収集。止めると、poll_issuesの取り込みとpoll_dependabotが黙り、PRのCIとコンフリクトの判断が古い記録で動く",
+  "f/factory/config_snapshot":
+    "設定のConsoleの外の変更の照合。止めると、Consoleの外の設定の変更が履歴に残らない",
   "f/factory/console_fetch_watch":
     "Consoleの取り込みの見張り。止めると、取り込みの問題を知らせる者がいなくなる",
   "f/factory/default_worker_watch":
