@@ -1,5 +1,5 @@
 // 保護パスを変えたラウンドの静的検査のために、基準のcommitの木にPRの変更を重ねた一時の作業木を作る。
-// 検査の道具、設定、検査が実行するスクリプトは基準の版を使い、PRの版は重ねない。
+// 検査の道具と設定は基準の版を使い、PRの版は重ねない。検査が実行するファイルをPRが変えたときは、作業木を作らない。
 // PRのファイルを読ませるだけにして、PRのコードを検査に実行させないためである。
 
 import { constants } from "node:fs";
@@ -9,6 +9,7 @@ import {
   mkdir,
   mkdtemp,
   open,
+  readdir,
   realpath,
   rm,
   writeFile,
@@ -16,7 +17,7 @@ import {
 import { dirname, join } from "node:path";
 import { displayPath, isSafeRepoPath } from "./ci_fix_paths.ts";
 import { jobTmpEnv } from "./job_tmp.ts";
-import { errorMessage, maskSecrets } from "./log.ts";
+import { errorMessage, type Logger, logger, maskSecrets } from "./log.ts";
 import {
   type ChangedPath,
   FORBIDDEN_PATH_PREFIXES,
@@ -36,8 +37,8 @@ export type StaticCheckWorkspace =
 
 /**
  * 変わっていれば作業木を作らない、依存のマニフェストとlockfile。
- * 作業木は基準のlockfileで依存を入れるので、PRが依存を変えると、検査が偽の失敗を出すためである。
- * `.script.lock`はWindmillのscriptの依存で、作業木には入れないので含めない。
+ * 検査は基準のlockfileで依存を入れるので、PRが依存を変えると、検査が偽の失敗を出すためである。
+ * `.script.lock`はWindmillのscriptの依存で、検査は入れないので含めない。
  */
 export const STATIC_CHECK_DEPENDENCY_PATHS: readonly string[] = [
   "package.json",
@@ -50,35 +51,48 @@ export const STATIC_CHECK_DEPENDENCY_PATHS: readonly string[] = [
 export const STATIC_CHECK_DEPENDENCY_SKIP_REASON =
   "the change updates dependency files, so the base dependencies cannot check it";
 
+/** 検査が実行するファイルが変わったときの、作業木を作らない理由。 */
+export const STATIC_CHECK_EXECUTED_SKIP_REASON =
+  "the change updates files the static checks execute, so the base version cannot check it";
+
 /**
  * 重ねずに基準の版を使うパスの一覧。どれかに当たれば重ねない。
- * - `prefixes`: リポジトリのルートからの前方一致。保護パスの禁止接頭辞と、`scripts/lint-`(検査が実行するスクリプトとその許可リスト)。
- * - `exactPaths`: 検査のコマンドが`bun run`で起動するスクリプトから、相対importでたどれるファイル。`scripts/lint-`で始まるものは`prefixes`が持つ。
+ * - `prefixes`: リポジトリのルートからの前方一致。保護パスの禁止接頭辞である。
+ * - `executed`: 検査が実行するファイル。`prefixes`は前方一致(lintのスクリプトとその許可リスト)、
+ *   `exactPaths`は検査のコマンドが`bun run`で起動するスクリプトから相対importでたどれるファイルである。
+ *   これらをPRが変えたら、作業木を作らない。基準の版で検査すると、PRの他のファイルとかみ合わずに偽の失敗を出し、
+ *   修正のラウンドでは直せないためである。
  * - `basenamePatterns`: どのディレクトリでも、ファイル名で当てる。道具の設定、依存の解決と読み込む環境変数を変えるファイル、無視の一覧である。
  * - `segments`: どの深さでも、このディレクトリの下を重ねない。PRが入れた依存のコードで、基準の道具を差し替えさせないためである。
  * 照合は、大文字小文字とUnicodeの別名を区別しない(`foldPath`)。
- * `exactPaths`は、`tests/lib/static_check_workspace.test.ts`が、実際のimportをたどって漏れが無いことを確かめる。
+ * `executed`は、`tests/lib/static_check_workspace.test.ts`が、実際のimportをたどって漏れが無いことを確かめる。
  */
 export const STATIC_CHECK_NOT_OVERLAID: {
   readonly prefixes: readonly string[];
-  readonly exactPaths: readonly string[];
+  readonly executed: {
+    readonly prefixes: readonly string[];
+    readonly exactPaths: readonly string[];
+  };
   readonly basenamePatterns: readonly RegExp[];
   readonly segments: readonly string[];
 } = {
-  prefixes: [...FORBIDDEN_PATH_PREFIXES, "scripts/lint-"],
-  exactPaths: [
-    "scripts/check-script-locks.ts",
-    "scripts/docs-gen.ts",
-    "scripts/flow-graph.ts",
-    "scripts/launch-graph.ts",
-    "scripts/markdown-tree.ts",
-    "scripts/ts-tokenize.ts",
-    "f/factory/lib/approval_support.ts",
-    "f/factory/lib/log.ts",
-    "f/factory/lib/prose_check.ts",
-    "f/factory/lib/skill_registry.ts",
-    "f/factory/lib/types.ts",
-  ],
+  prefixes: [...FORBIDDEN_PATH_PREFIXES],
+  executed: {
+    prefixes: ["scripts/lint-"],
+    exactPaths: [
+      "scripts/check-script-locks.ts",
+      "scripts/docs-gen.ts",
+      "scripts/flow-graph.ts",
+      "scripts/launch-graph.ts",
+      "scripts/markdown-tree.ts",
+      "scripts/ts-tokenize.ts",
+      "f/factory/lib/approval_support.ts",
+      "f/factory/lib/log.ts",
+      "f/factory/lib/prose_check.ts",
+      "f/factory/lib/skill_registry.ts",
+      "f/factory/lib/types.ts",
+    ],
+  },
   basenamePatterns: [
     /^\.?biome\.jsonc?$/i,
     /^[jt]sconfig.*\.json$/i,
@@ -100,17 +114,32 @@ export const STATIC_CHECK_NOT_OVERLAID: {
 
 const FOLDED_DEPENDENCY_PATHS = STATIC_CHECK_DEPENDENCY_PATHS.map(foldPath);
 const FOLDED_PREFIXES = STATIC_CHECK_NOT_OVERLAID.prefixes.map(foldPath);
-const FOLDED_EXACT_PATHS = STATIC_CHECK_NOT_OVERLAID.exactPaths.map(foldPath);
+const FOLDED_EXECUTED_PREFIXES =
+  STATIC_CHECK_NOT_OVERLAID.executed.prefixes.map(foldPath);
+const FOLDED_EXECUTED_PATHS =
+  STATIC_CHECK_NOT_OVERLAID.executed.exactPaths.map(foldPath);
 const FOLDED_SEGMENTS = STATIC_CHECK_NOT_OVERLAID.segments.map(foldPath);
 
 /** 作業木を置く場所。検査用のuidがたどれるよう、誰でも入れる`/tmp`の直下に置く。 */
 export const STATIC_CHECK_TMP_ROOT = "/tmp";
 
-/** 作業木のディレクトリの名前の接頭辞。 */
+/**
+ * 作業木と、アーカイブの一時のディレクトリの名前の接頭辞。
+ * 古いものの掃除(`sweepStaleWorkspaces`)が、この接頭辞で両方を見つける。
+ */
 export const STATIC_CHECK_DIR_PREFIX = "factory-static-check-";
 
 /** 基準の木のアーカイブを一時に置くディレクトリの名前の接頭辞。展開の後に消す。 */
-const ARCHIVE_DIR_PREFIX = "factory-static-archive-";
+const ARCHIVE_DIR_PREFIX = `${STATIC_CHECK_DIR_PREFIX}archive-`;
+
+/** `git archive`と`tar`の、1回のtimeoutの既定(ミリ秒)。 */
+export const STATIC_CHECK_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * 掃除の対象にする、更新から経った時間(ミリ秒)。
+ * 作成から後片付けまでの1回の検査より十分に長くし、使っている作業木を消さないようにする。
+ */
+export const STATIC_CHECK_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 
 /** 作業木を作るコマンドの、出力を保持する上限(バイト)。失敗の理由に末尾を載せるだけなので小さくする。 */
 const OUTPUT_MAX_BYTES = 64 * 1024;
@@ -118,9 +147,26 @@ const OUTPUT_MAX_BYTES = 64 * 1024;
 /** 失敗の理由に載せる、標準エラーの末尾の字数。 */
 const STDERR_TAIL_CHARS = 1_000;
 
+/** 畳み込んだパスが、接頭辞のどれかで始まるか、ディレクトリの名前そのものかを返す。 */
+function matchesPrefix(folded: string, prefixes: readonly string[]): boolean {
+  return prefixes.some(
+    (prefix) =>
+      folded === prefix.replace(/\/$/, "") || folded.startsWith(prefix),
+  );
+}
+
 /** `path`が、変われば作業木を作らない依存のファイルかを返す。 */
 export function isStaticCheckDependencyPath(path: string): boolean {
   return FOLDED_DEPENDENCY_PATHS.includes(foldPath(path));
+}
+
+/** `path`が、検査が実行するファイル(`STATIC_CHECK_NOT_OVERLAID.executed`)かを返す。変われば作業木を作らない。 */
+export function isStaticCheckExecutedPath(path: string): boolean {
+  const folded = foldPath(path);
+  return (
+    FOLDED_EXECUTED_PATHS.includes(folded) ||
+    FOLDED_EXECUTED_PREFIXES.some((prefix) => folded.startsWith(prefix))
+  );
 }
 
 /** `path`のPRの版を作業木に重ねるかを返す。`STATIC_CHECK_NOT_OVERLAID`のどれかに当たれば偽を返す。 */
@@ -130,15 +176,8 @@ export function isStaticCheckOverlaidPath(path: string): boolean {
   if (segments.some((segment) => FOLDED_SEGMENTS.includes(segment))) {
     return false;
   }
-  if (FOLDED_EXACT_PATHS.includes(folded)) return false;
-  if (
-    FOLDED_PREFIXES.some(
-      (prefix) =>
-        folded === prefix.replace(/\/$/, "") || folded.startsWith(prefix),
-    )
-  ) {
-    return false;
-  }
+  if (isStaticCheckExecutedPath(path)) return false;
+  if (matchesPrefix(folded, FOLDED_PREFIXES)) return false;
   // 畳み込みで名前の切り出しが変わりうるので、畳み込んだ名前と元の名前の両方に当てる。
   const candidates = [segments.at(-1) ?? folded, path.split("/").pop() ?? path];
   return !STATIC_CHECK_NOT_OVERLAID.basenamePatterns.some((pattern) =>
@@ -147,11 +186,14 @@ export function isStaticCheckOverlaidPath(path: string): boolean {
 }
 
 /**
- * 基準のcommit(`baseSha`)の木を`tmpRoot`の下の新しいディレクトリに展開し、依存を入れ、PRの変更を重ねて返す。
- * 依存のファイル(`STATIC_CHECK_DEPENDENCY_PATHS`)が変わっていれば、何も作らずに`skipped`を返す。
+ * 基準のcommit(`baseSha`)の木を`tmpRoot`の下の新しいディレクトリに展開し、PRの変更を重ねて返す。
+ * 依存は入れない。検査のコマンドの先頭で、検査の枠の中(非特権のuid、新しいHOME)で入れる。
+ * 依存のファイル(`STATIC_CHECK_DEPENDENCY_PATHS`)か、検査が実行するファイル(`isStaticCheckExecutedPath`)が
+ * 変わっていれば、何も作らずに`skipped`を返す。
  * 重ねるのは、`isStaticCheckOverlaidPath`が真のパスのうち、worktreeで通常のファイルであるものだけである。
  * worktreeに無いパスは、作業木からも消す。symlink、ディレクトリ、途中にsymlinkを挟むパスは読み飛ばす。
  * 変更のパスが安全でない(絶対パス、`..`、NULなど)ときは、何も作らずに例外を投げる。
+ * 作る前に、`tmpRoot`に残った古い作業木を掃除する(`sweepStaleWorkspaces`)。掃除の失敗は`log`に出し、作成は続ける。
  * 途中で失敗したら、作ったディレクトリを消して例外を投げる。
  * 返した`cleanup`は作業木を消す。消せなければ例外を投げる。
  * `.git`は持ち込まないので、検査はgitのフックと設定を読まない。
@@ -164,9 +206,13 @@ export async function createStaticCheckWorkspace(input: {
   /** PRの変更を読み出すworktree。 */
   readonly worktreeDir: string;
   readonly changes: readonly ChangedPath[];
-  readonly installTimeoutMs: number;
+  /** `git archive`と`tar`の、1回のtimeout。既定は`STATIC_CHECK_COMMAND_TIMEOUT_MS`。 */
+  readonly commandTimeoutMs?: number;
   /** 作業木を作る場所。既定は`STATIC_CHECK_TMP_ROOT`。テストで差し替える。 */
   readonly tmpRoot?: string;
+  /** 掃除の判定に使う今(エポックからのミリ秒)。既定は`Date.now`。 */
+  readonly now?: () => number;
+  readonly log?: Logger;
 }): Promise<StaticCheckWorkspace> {
   assertSha(input.baseSha);
   const unsafe = input.changes.find((change) => !isSafeRepoPath(change.path));
@@ -180,17 +226,25 @@ export async function createStaticCheckWorkspace(input: {
   ) {
     return { kind: "skipped", reason: STATIC_CHECK_DEPENDENCY_SKIP_REASON };
   }
+  if (input.changes.some((change) => isStaticCheckExecutedPath(change.path))) {
+    return { kind: "skipped", reason: STATIC_CHECK_EXECUTED_SKIP_REASON };
+  }
   const tmpRoot = input.tmpRoot ?? STATIC_CHECK_TMP_ROOT;
+  await sweepStaleWorkspaces(
+    tmpRoot,
+    (input.now ?? Date.now)(),
+    input.log ?? logger("static_check_workspace"),
+  );
   const dir = await mkdtemp(join(tmpRoot, STATIC_CHECK_DIR_PREFIX));
   try {
-    await extractBaseTree(
-      input.run,
-      input.repoDir,
-      input.baseSha,
+    await extractBaseTree({
+      run: input.run,
+      repoDir: input.repoDir,
+      baseSha: input.baseSha,
       dir,
       tmpRoot,
-    );
-    await installDependencies(input.run, dir, input.installTimeoutMs);
+      timeoutMs: input.commandTimeoutMs ?? STATIC_CHECK_COMMAND_TIMEOUT_MS,
+    });
     await overlayChanges(input.worktreeDir, dir, input.changes);
   } catch (error) {
     await removeAfterFailure(dir, error);
@@ -230,12 +284,60 @@ function assertSucceeded(context: string, result: CommandResult): void {
   }
 }
 
-/** 渡す環境変数をPATHとHOMEとジョブのTMPDIRに限る。workerの秘密値を子プロセスに渡さないためである。 */
+/** 渡す環境変数をPATHとジョブのTMPDIRに限る。workerの秘密値と`TAR_OPTIONS`などを子プロセスに渡さないためである。 */
 function toolEnv(): Record<string, string> {
   const env: Record<string, string> = { ...jobTmpEnv() };
   if (process.env.PATH !== undefined) env.PATH = process.env.PATH;
-  if (process.env.HOME !== undefined) env.HOME = process.env.HOME;
   return env;
+}
+
+/**
+ * `tmpRoot`の直下で、名前が`STATIC_CHECK_DIR_PREFIX`で始まり、更新から`STATIC_CHECK_STALE_AFTER_MS`より古いディレクトリを消す。
+ * 取り消しやタイムアウトで後片付けの前に止まった実行が残した、作業木とアーカイブの置き場である。
+ * 対象は、symlinkでなく、このプロセスと同じuidが所有するディレクトリに限る。
+ * `/tmp`は誰でも書けるので、検査用のuidが置いたものや、検査の枠に渡したままの使用中の作業木に触れないためである。
+ * 所有者だけが名前を変えられる(`/tmp`のsticky bit)ので、確かめた後にsymlinkへ差し替えられることもない。
+ * 1つも例外にせず、一覧と削除の失敗は`log`の警告に出して先へ進む。消したものは`log`の情報に出す。
+ */
+async function sweepStaleWorkspaces(
+  tmpRoot: string,
+  nowMs: number,
+  log: Logger,
+): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(tmpRoot);
+  } catch (error) {
+    log.warn("stale static check workspaces could not be listed", {
+      dir: tmpRoot,
+      error: errorMessage(error),
+    });
+    return;
+  }
+  const uid = process.getuid?.();
+  const removed: string[] = [];
+  for (const name of names) {
+    if (!name.startsWith(STATIC_CHECK_DIR_PREFIX)) continue;
+    const path = join(tmpRoot, name);
+    try {
+      const stats = await lstat(path);
+      if (!stats.isDirectory()) continue;
+      if (uid !== undefined && stats.uid !== uid) continue;
+      if (nowMs - stats.mtimeMs <= STATIC_CHECK_STALE_AFTER_MS) continue;
+      await rm(path, { recursive: true, force: true });
+      removed.push(name);
+    } catch (error) {
+      // 同時に動く別の実行が先に消したものは、失敗に数えない。
+      if (hasErrorCode(error, MISSING_CODES)) continue;
+      log.warn("a stale static check workspace could not be removed", {
+        name,
+        error: errorMessage(error),
+      });
+    }
+  }
+  if (removed.length > 0) {
+    log.info("removed stale static check workspaces", { names: removed });
+  }
 }
 
 /**
@@ -243,61 +345,52 @@ function toolEnv(): Record<string, string> {
  * アーカイブは`mkdtemp`で作る専用のディレクトリに置く。共有の`/tmp`で決まった名前を使うと、
  * 検査用のuidが先に置いたsymlinkの先へ、rootが書き込みうるためである。
  * `tar.umask`で、グループと他人の書き込みの権限を落とす。
+ * `git archive`と`tar`には、それぞれ`timeoutMs`を渡す。
  */
-async function extractBaseTree(
-  run: CommandRunner,
-  repoDir: string,
-  baseSha: string,
-  dir: string,
-  tmpRoot: string,
-): Promise<void> {
-  const archiveDir = await mkdtemp(join(tmpRoot, ARCHIVE_DIR_PREFIX));
+async function extractBaseTree(opts: {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly baseSha: string;
+  readonly dir: string;
+  readonly tmpRoot: string;
+  readonly timeoutMs: number;
+}): Promise<void> {
+  const archiveDir = await mkdtemp(join(opts.tmpRoot, ARCHIVE_DIR_PREFIX));
   try {
     const tarPath = join(archiveDir, "base.tar");
     assertSucceeded(
       "git archive",
-      await run(
+      await opts.run(
         buildGitArgv([
           "-c",
           "tar.umask=0022",
           "archive",
           "--format=tar",
           `--output=${tarPath}`,
-          baseSha,
+          opts.baseSha,
         ]),
-        { cwd: repoDir, env: localGitEnv(), maxOutputBytes: OUTPUT_MAX_BYTES },
+        {
+          cwd: opts.repoDir,
+          env: localGitEnv(),
+          timeoutMs: opts.timeoutMs,
+          maxOutputBytes: OUTPUT_MAX_BYTES,
+        },
       ),
     );
     assertSucceeded(
       "tar -x",
-      await run(["tar", "-x", "--no-same-owner", "-C", dir, "-f", tarPath], {
-        env: toolEnv(),
-        maxOutputBytes: OUTPUT_MAX_BYTES,
-      }),
+      await opts.run(
+        ["tar", "-x", "--no-same-owner", "-C", opts.dir, "-f", tarPath],
+        {
+          env: toolEnv(),
+          timeoutMs: opts.timeoutMs,
+          maxOutputBytes: OUTPUT_MAX_BYTES,
+        },
+      ),
     );
   } finally {
     await rm(archiveDir, { recursive: true, force: true });
   }
-}
-
-/**
- * 基準のlockfileで依存を入れる。lockfileを書き換えず、install scriptを実行しない。
- * rootが実行するので、bunのキャッシュはworkerのHOMEのものを使う。
- */
-async function installDependencies(
-  run: CommandRunner,
-  dir: string,
-  timeoutMs: number,
-): Promise<void> {
-  assertSucceeded(
-    "bun install",
-    await run(["bun", "install", "--frozen-lockfile", "--ignore-scripts"], {
-      cwd: dir,
-      env: toolEnv(),
-      timeoutMs,
-      maxOutputBytes: OUTPUT_MAX_BYTES,
-    }),
-  );
 }
 
 type WorktreeSource =
