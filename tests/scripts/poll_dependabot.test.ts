@@ -4504,7 +4504,10 @@ describe("pollDependabot when the base branch has no required check", () => {
     const log = emptyLog();
 
     await pollDependabot(
-      round(log, { found: WIDGETS_PRS, collect: async () => NO_REQUIRED_CHECK }),
+      round(log, {
+        found: WIDGETS_PRS,
+        collect: async () => NO_REQUIRED_CHECK,
+      }),
     );
 
     expect(log.noRequiredCheckRecords).toEqual([
@@ -4516,7 +4519,10 @@ describe("pollDependabot when the base branch has no required check", () => {
     const log = emptyLog();
 
     await pollDependabot(
-      round(log, { found: WIDGETS_PRS, collect: async () => NO_REQUIRED_CHECK }),
+      round(log, {
+        found: WIDGETS_PRS,
+        collect: async () => NO_REQUIRED_CHECK,
+      }),
     );
 
     expect(log.notified).toEqual([
@@ -4552,7 +4558,10 @@ describe("pollDependabot when the base branch has no required check", () => {
     const log = emptyLog();
 
     await pollDependabot(
-      round(log, { found: WIDGETS_PRS, collect: async () => NO_REQUIRED_CHECK }),
+      round(log, {
+        found: WIDGETS_PRS,
+        collect: async () => NO_REQUIRED_CHECK,
+      }),
     );
 
     expect(log.collected).toBe(1);
