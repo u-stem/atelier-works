@@ -1,6 +1,6 @@
 # workerとスケジュールの監視の運用
 
-workerの検知と負荷の記録、スケジュールの失敗の検出、自己更新の打ち切りが働いていることを確かめる手順である。
+workerの検知と負荷の記録、スケジュールの失敗の検出、自己更新の打ち切り、設定の外部変更の照合が働いていることを確かめる手順である。
 Factoryを運用する人が読む。
 [運用](../operations.md)の手順のうち、監視の仕組みを確かめるものをこの文書に置く。
 
@@ -1212,3 +1212,36 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 起きていれば、`deployed_sha`がHEADと同じかを見て、同じなら反映は済んでいる。
 
 欠けた記録は監査の「デプロイ」に出ないので、必要なら人が補う。
+
+## 設定のConsoleの外の変更の照合を確かめる
+
+`config_snapshot`は、5分ごとに`factory_config`のresourceを読む。
+Consoleの外の経路で変わった項目は、設定の変更の履歴(`factory.config_history`)に`out_of_band`として書く。
+Consoleの外の経路は、`wmill resource push`、Windmillの画面での編集、ホストのCLI(`mise run stop`と`mise run stop:restore`)である。
+仕組みと限界は[設定の変更の履歴の内部仕様](../internals/config-history.md#consoleの外の変更の照合)にある。
+
+反映の後は、次の順で動いていることを確かめる。
+
+1. `wmill job list --script-path f/factory/config_snapshot`で、直近のジョブが5分おきに成功していることを見る。
+2. `wmill job result <id>`で、`skipped_reason`が`null`であることを見る。
+   最初の実行は、`baseline`が項目の数と同じになる。
+   2回目からは、変更が無ければ`baseline`、`changed`、`removed`がすべて0になる。
+3. 履歴の理由コードごとの件数を読む。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT reason_code, source, count(*) FROM factory.config_history GROUP BY reason_code, source ORDER BY reason_code, source"
+```
+
+結果の項目が示す状態と、次の操作は次のとおりである。
+
+| 結果 | 状態 | 次の操作 |
+| --- | --- | --- |
+| `skipped_reason`が`resource_unreadable` | resourceを読めなかった。次の回で読めれば、差は書かれる | 続くなら、`wmill job logs <id>`の警告を読み、Windmillのresourceの権限を確かめる |
+| `skipped_reason`が`history_missing` | 履歴の表か関数が無い | `mise run migrate`が済んでいるかを確かめる |
+| `skipped_reason`が`history_unreadable` | 履歴を読めなかった。何も書いていない | DBに届くかを確かめる |
+| `failed`が1以上 | 書けなかった行がある。次の回で、もう一度差として見つかる | 続くなら、DBのロックと接続を確かめる |
+| `deferred`が1以上 | 1回の上限(100行)を超えた。残りは次の回に書く | 次の回で0になることを見る |
+| `unnamed_keys`が1以上 | 項目名の形が履歴に合わず、飛ばした項目がある | resourceの項目名を、小文字、数字、下線の識別子にする |
+
+全停止の間は、このscheduleも止まる。
+再開した後の最初の実行が、止まっていた間の変更をまとめて書く。

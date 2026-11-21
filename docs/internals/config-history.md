@@ -5,8 +5,10 @@
 次のファイルの履歴に関わる部分を変更する人が読む。
 
 - `migrations/datatable/main/20261121100000_config_history.up.sql`と、対のdown
+- `migrations/datatable/main/20261122100000_config_snapshot.up.sql`と、対のdown(照合の理由コード)
 - `f/factory/lib/config_history.ts`(値の射影、追記、検証の呼び出し、証跡パックの集計)
 - `f/factory/console_config_update.ts`と`f/factory/console_stop_all.ts`(成功の後に履歴を書く呼び出し)
+- `f/factory/config_snapshot.ts`と`f/factory/lib/config_snapshot.ts`(Consoleの外の変更の照合)
 - `f/factory/lib/audit_evidence.ts`(証跡パックの節「設定の変更」)
 - `scripts/test-db-queries.ts`(実DBの検査)
 
@@ -32,8 +34,8 @@
 | `item_key` | 変更した設定の項目名。小文字、数字、下線の識別子に限る |
 | `reason_code` | 変更の理由コード([理由コード](#理由コード)) |
 | `before`、`after` | 変更の前後の値を射影したもの([値の射影](#値の射影))。値が無かった側は`null` |
-| `actor` | 変更した人。Consoleの操作の記録と同じく、ジョブの実行文脈から導いた値である |
-| `source` | 書いた経路。`console`(設定の更新)、`stop_all`(全停止)、`out_of_band`(Consoleの外の変更を見つける照合のために予約した値で、今は書き手が無い) |
+| `actor` | 変更した人。Consoleの操作の記録と同じく、ジョブの実行文脈から導いた値である。照合が書く行は、人ではなく、固定の`config_snapshot`になる |
+| `source` | 書いた経路。`console`(設定の更新)、`stop_all`(全停止)、`out_of_band`(Consoleの外の変更。照合が書く) |
 | `occurred_at` | 書いた時刻 |
 | `prev_hash`、`row_hash` | 連鎖のハッシュ([ハッシュの連鎖](#ハッシュの連鎖)) |
 
@@ -63,6 +65,7 @@
 | 要素が名前かURLの一覧(`repo_allowlist`、`dependabot_other_repos`、`default_reviewers`) | 件数だけ(`{count}`) |
 | コマンド、URL、リポジトリ、身元に関わる項目(`check_commands_by_repo`、`allowed_check_commands`、`factory_repo`、`factory_repo_id`、`windmill_public_url`、`owners`、`allowed_labeler_`で始まる項目) | 正規化したJSONのsha256の先頭16桁(`{hash}`)。変更後の側には、前後のハッシュが違うかを示す`changed`を付ける |
 | 表に無い項目 | 値を入れず、`{kind: "unknown"}`だけにする |
+| 項目が設定から無くなった(照合だけが書く) | 変更後の側に`{removed: true}`。値が`null`の項目とは区別する |
 
 項目の種類に合わない型の値(旗に文字列など)も、値を入れず`{kind: "unknown"}`にする。
 射影は、迷ったときに値を出力に写さない側へ倒してある。
@@ -83,6 +86,8 @@
 
 射影の表は、`config_history.ts`の中にあり、設定の項目を足しても自動では広がらない。
 足した項目は、表に加えるまで`{kind: "unknown"}`になる。
+`{kind: "unknown"}`の項目は、値が変わっても射影が同じなので、照合は変更を見つけられない。
+このため、`tests/lib/config_snapshot.test.ts`が、設定の解析が返す項目のすべてに、表の種類があることを確かめる。
 
 ## 書き込み
 
@@ -112,6 +117,8 @@ scriptは、操作の記録の結果(`changes`)に`history_recorded: false`を�
 書けなかった行は、履歴に穴として残る([R-CFGH-02](../security-risks.md#r-cfgh-02))。
 穴は、証跡パックが、期間内の操作の記録で`history_recorded: false`を持つ行の数として示す。
 数えられるのは、操作の記録が残る90日の範囲に限る。
+穴の変更は、resourceに残っているので、照合が最大5分後に、`out_of_band`の行として書く([Consoleの外の変更の照合](#consoleの外の変更の照合))。
+その行には、Consoleの操作者と理由コードは残らない。
 
 失敗の原因は、次の4つである。
 
@@ -138,6 +145,9 @@ scriptは、操作の記録の結果(`changes`)に`history_recorded: false`を�
 | `console_update_unverified` | Consoleの設定の更新で書き込みは成功したが、読み直しが期待と一致しなかった |
 | `stop_all_flag_off` | Consoleの全停止が、`*_enabled`を`false`にした |
 | `unspecified` | 呼び出し側が理由を決められなかった |
+| `out_of_band_change` | 照合が、履歴の最後の値と今の値が違う項目を見つけた |
+| `out_of_band_removed` | 照合が、履歴にある項目が設定から無くなったのを見つけた |
+| `snapshot_baseline` | 照合が、履歴にまだ無い項目の最初の値を、比べる基準として残した。変更ではない |
 
 コードを足すときは、新しいmigrationで`config_history_reason_codes`を置き換え、同じ変更で`CONFIG_HISTORY_REASON_CODES`に足す。
 すでに書いた行の理由コードは、`row_hash`に含まれるので書き換えない。
@@ -205,29 +215,120 @@ TypeScriptの呼び出しは`verifyConfigHistory`である。
 行は、設定の変更の数だけ増え、増え方は少ない。
 掃除の関数も、保持日数の設定も持たない。
 
-## 記録しない変更
+## Consoleの外の変更の照合
 
-履歴に残るのは、Consoleの設定の更新と、全停止による停止だけである。
-次の経路の変更は、記録しない([R-CFGH-01](../security-risks.md#r-cfgh-01))。
+Consoleの外の経路で変わった設定は、`config_snapshot`が5分ごとに見つけて、履歴に書く。
+経路は、ホストのCLI(`mise run stop`、`mise run stop:restore`)、`wmill resource push`、Windmillの画面でのresourceの編集である。
+旗を`true`に戻す復元も、この経路で見つかる。
 
-- 旗を`true`に戻す復元
-  - 全停止の解除、ホストの`mise run stop`の解除と復元、CLIによる復元が当たる。
-- ホストのCLI(`mise run stop`と`mise run stop:restore`)
-- `wmill resource push`
-- Windmillの画面での、resourceの編集
-- Consoleの外の、そのほかの書き込み
+### 手順
 
-履歴に記録が無いことは、設定が変わらなかったことを示さない。
-復元を記録しないので、ある旗の履歴が`false`で終わっていても、今の設定は`true`のことがある。
-履歴の最後の値を、今の設定として読まない。
-復元と、Consoleの外の変更を記録する仕組みは、まだ無い。
-`source`の`out_of_band`は、Consoleの外の変更を、resourceの値と最後の履歴の差から見つけて書くために予約した値である。
-その照合は、まだ無い。
+1. `f/factory/factory_config`のresourceを、補間しない生の値で読む(`ResourceService.getResourceValue`)。
+   補間する読み取りは、`$var:`を秘密の値に解決するので使わない。
+   読み取りには時間の上限を付け、読めなければ、その回は何も書かずに終える。
+2. 最上位のすべての項目を、[値の射影](#値の射影)の規則で射影する。
+   値が参照(`$var:`、`$res:`)を含む項目は、値を調べず、`{redacted: true}`にする。
+   項目名が履歴の項目名の形(小文字、数字、下線の識別子)に合わない項目は、書けないので飛ばして数える。
+3. 項目ごとの、履歴の最後の`after`を読む(`DISTINCT ON (item_key)`を`seq`の降順で選ぶ1文)。
+4. 今の射影と、最後の`after`を比べる。
+   ハッシュの項目は、変更の経路が付ける`changed`を外して比べる。
+5. 差があった項目を、項目名の昇順に、1項目1行で追記する。
+   `source`は`out_of_band`、`actor`は`config_snapshot`である。
+   `before`は履歴の最後の`after`、`after`は今の射影である。
+
+履歴の表か関数が無い間(migrationより先にコードが反映された間)は、何も書かずに終える。
+resourceへは書かない。
+
+### 見つける差と理由コード
+
+| 差 | 理由コード | `before`と`after` |
+| --- | --- | --- |
+| 履歴にまだ無い項目が、resourceにある | `snapshot_baseline` | `before`は`null`、`after`は今の射影 |
+| 履歴にある項目の射影が、今の射影と違う | `out_of_band_change` | 履歴の最後の`after`と、今の射影 |
+| 履歴にある項目が、resourceに無い | `out_of_band_removed` | 履歴の最後の`after`と、`{removed: true}` |
+
+項目が無くなった後で、同じ項目がまた現れたときは、`{removed: true}`との差として、`out_of_band_change`を書く。
+無くなった項目が、無いままのときは、書かない。
+
+最初の実行は、履歴にまだ無い項目のすべてに、基準を書く。
+基準は変更ではなく、以後の変更を比べるための値である。
+基準より前に、Consoleの外で起きた変更は、履歴に残らない。
+
+### Consoleの経路との重なり
+
+Consoleの経路は、変更の成功の後に、変更後の値の射影を自分で書く。
+照合は、その行の`after`を、今の射影と比べるので、値が同じなら何も書かない。
+同じ変更が二重に残らないのは、この比較による。
+
+Consoleの設定の更新で、読み直しが期待と一致しなかった行(`console_update_unverified`)は、`after`が読み直した値の射影である。
+今のresourceの値と違えば、差になり、照合が`out_of_band_change`を書く。
+
+Consoleが設定を書いてから、自分の行を書くまでの間に、照合が走ると、同じ変更の行が2つ残りうる。
+照合の行が先に付き、Consoleの行がその後に付く。
+2行は、`source`と`reason_code`で見分けられる。
+
+### 書き込みの上限と冪等
+
+1回の実行で書く行は、100行までにする。
+超えた差は、次の実行に回し、ログに件数だけを出す。
+差は、書くまで残るので、変更が無いまま2回続けて実行しても、2回目は何も書かない。
+1行の書き込みが失敗しても、残りを続け、失敗した項目は、次の実行でもう一度差として見つかる。
+
+追記は1行ずつ、別々のトランザクションで行う。
+追記の関数が連鎖の固定のadvisory lockで直列にするので、並行するConsoleの追記と、連鎖が崩れることはない。
+
+### 結果とログ
+
+scriptは、件数だけの結果を返す。
+項目名と値は、結果にも、ログにも出さない。
+
+| 項目 | 内容 |
+| --- | --- |
+| `keys_checked` | 射影した項目の数 |
+| `baseline`、`changed`、`removed` | 書いた行の数 |
+| `failed` | 書けなかった行の数 |
+| `deferred` | 上限を超えて次に回した差の数 |
+| `reference_keys` | 参照を含み、値を見ずに伏せた項目の数 |
+| `unnamed_keys` | 項目名の形に合わず、飛ばした項目の数 |
+| `skipped_reason` | 終えられなかった理由。`resource_unreadable`、`resource_not_object`、`history_missing`、`history_unreadable`のどれか。終えたときは`null` |
+
+scriptは投げない。
+読み取りの失敗は、`skipped_reason`に出し、次の実行を待つ。
+
+### 照合が見つけない変更
+
+次の変更は、履歴に残らない([R-CFGH-01](../security-risks.md#r-cfgh-01))。
+
+- 照合の間隔(5分)の中で、元の値へ戻された変更
+  - 照合は、各回の値だけを比べるので、間の値は見えない。
+- 基準を書く前の変更
+- 射影が`{kind: "unknown"}`の項目の値の変更
+  - 項目の有無だけが分かる。
+- 照合が動いていない間の変更
+  - 全停止はscheduleを止めるので、全停止の間は照合も動かない。
+  - 再開した後の最初の実行が、差をまとめて書く。
+
+次のことも、履歴からは分からない。
+
+- 変更した人
+  - `actor`は常に`config_snapshot`である。
+- 変更した時刻
+  - 行の`occurred_at`は、照合が見つけた時刻である。
+  - 変更の時刻より最大5分遅い。
+
+履歴に記録が無いことは、照合が動いていなければ、設定が変わらなかったことを示さない。
+復元は、照合が最大5分遅れて記録する。
+履歴の最後の値は、照合が動いている間は今の設定とみなせるが、最大5分の遅れがある。
+
+履歴と照合が信頼する前提は、履歴と設定のresourceに書けるのが、レビューを経てマージされたscriptだけであることである。
+侵害されたworkerは、resourceを書き換え、同じ射影の行を自分で追記して、照合を欺ける([R-CFGH-05](../security-risks.md#r-cfgh-05))。
 
 ## 証跡パックの節
 
 証跡パックの節「設定の変更」は、連鎖の検証の結果と、期間内の変更の項目別と理由コード別の件数を載せる。
-固定の行「記録の範囲」は、記録するのがConsoleの設定の更新と全停止による停止だけで、復元とConsoleの外の変更は記録しないことを示す。
+固定の行「記録の範囲」は、記録するものを示す。
+記録するのは、Consoleの設定の更新、全停止による停止、5分ごとの照合が見つけたConsoleの外の変更である。
+見えない変更として、間隔の中で戻された変更と、基準より前の変更も示す。
 履歴を書けなかった操作が期間内に1件以上あるときは、固定の行「記録できなかった操作」を足す。
 この件数は、操作の記録の範囲(90日)に限る。
 内容は[監査の仕様の「設定の変更」](audit.md#設定の変更)に書く。
