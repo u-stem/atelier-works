@@ -1,14 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import {
   appendConfigChange,
+  appendConfigProjection,
   CONFIG_HISTORY_REASON_CODES,
   CONFIG_HISTORY_SOURCES,
   collectConfigHistoryEvidence,
   EMPTY_CONFIG_HISTORY_EVIDENCE,
   isConfigHistoryReasonCode,
+  isConfigItemKey,
+  isKnownConfigKey,
   isMissingConfigHistoryObjectError,
+  isPlainHashProjection,
   projectConfigChange,
   projectConfigValue,
+  projectNonObjectResource,
   verifyConfigHistory,
 } from "../../f/factory/lib/config_history.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
@@ -71,91 +76,268 @@ describe("projectConfigValue: values that pass as they are", () => {
   });
 });
 
+/** 型に合わない値の射影。値は持たず、生の値のハッシュだけを持つ。 */
+const UNKNOWN_WITH_HASH = {
+  kind: "unknown",
+  hash: expect.stringMatching(HEX16),
+};
+
 describe("projectConfigValue: values that do not match the kind of the item", () => {
-  test("reduces a string for a switch to unknown", () => {
-    expect(projectConfigValue("implement_enabled", "true")).toEqual({
-      kind: "unknown",
-    });
+  test("reduces a string for a switch to unknown with a hash", () => {
+    expect(projectConfigValue("implement_enabled", "true")).toEqual(
+      UNKNOWN_WITH_HASH,
+    );
   });
 
-  test("reduces a string for a number item to unknown", () => {
-    expect(projectConfigValue("daily_budget_usd", "50")).toEqual({
-      kind: "unknown",
-    });
+  test("reduces a string for a number item to unknown with a hash", () => {
+    expect(projectConfigValue("daily_budget_usd", "50")).toEqual(
+      UNKNOWN_WITH_HASH,
+    );
   });
 
-  test("reduces NaN for a number item to unknown", () => {
-    expect(projectConfigValue("daily_budget_usd", Number.NaN)).toEqual({
-      kind: "unknown",
-    });
+  test("reduces NaN for a number item to unknown with a hash", () => {
+    expect(projectConfigValue("daily_budget_usd", Number.NaN)).toEqual(
+      UNKNOWN_WITH_HASH,
+    );
   });
 
-  test("reduces Infinity for a number item to unknown", () => {
+  test("reduces Infinity for a number item to unknown with a hash", () => {
     expect(
       projectConfigValue("daily_budget_usd", Number.POSITIVE_INFINITY),
-    ).toEqual({ kind: "unknown" });
+    ).toEqual(UNKNOWN_WITH_HASH);
   });
 
-  test("reduces a non-array for a list item to unknown", () => {
-    expect(projectConfigValue("repo_allowlist", "https://x")).toEqual({
-      kind: "unknown",
-    });
+  test("reduces a non-array for a list item to unknown with a hash", () => {
+    expect(projectConfigValue("repo_allowlist", "https://x")).toEqual(
+      UNKNOWN_WITH_HASH,
+    );
+  });
+
+  test("reduces a non-string for an enum item to unknown with a hash", () => {
+    expect(projectConfigValue("model", 5)).toEqual(UNKNOWN_WITH_HASH);
+  });
+
+  test("reduces a non-string for a time item to unknown with a hash", () => {
+    expect(projectConfigValue("design_enabled_since", 5)).toEqual(
+      UNKNOWN_WITH_HASH,
+    );
+  });
+
+  test("tells two different values of the wrong type apart", () => {
+    expect(projectConfigValue("implement_enabled", "yes")).not.toEqual(
+      projectConfigValue("implement_enabled", "no"),
+    );
+  });
+
+  test("gives the same value of the wrong type the same projection", () => {
+    expect(projectConfigValue("implement_enabled", "yes")).toEqual(
+      projectConfigValue("implement_enabled", "yes"),
+    );
+  });
+
+  test("never puts the value of the wrong type into the output", () => {
+    const output = JSON.stringify([
+      projectConfigValue("implement_enabled", "top-secret-text"),
+      projectConfigValue("repo_allowlist", { a: "top-secret-text" }),
+    ]);
+    expect(output).not.toContain("top-secret-text");
+  });
+
+  test("does not mistake the mark of the wrong type for a plain hash", () => {
+    expect(
+      isPlainHashProjection(projectConfigValue("implement_enabled", "yes")),
+    ).toBe(false);
   });
 });
 
+describe("projectConfigValue: json variable references", () => {
+  test.each([
+    ["a switch", "implement_enabled", "$jsonvar:f/factory/a"],
+    ["a number item", "daily_budget_usd", "$jsonvar:f/factory/a"],
+    ["a list item", "repo_allowlist", ["$jsonvar:f/factory/a"]],
+    ["an enum item", "model", "$jsonvar:f/factory/a"],
+    ["a hashed item", "allowed_check_commands", ["echo $jsonvar:f/factory/a"]],
+  ])("redacts %s that holds one", (_name, key, value) => {
+    expect(projectConfigValue(key, value)).toEqual(REDACTED_WITH_HASH);
+  });
+
+  test("redacts an item that is not known without a hash when it holds one", () => {
+    expect(
+      projectConfigValue("brand_new_item", "$jsonvar:f/factory/a"),
+    ).toEqual({ redacted: true });
+  });
+
+  test("tells two different json variable references apart", () => {
+    expect(
+      projectConfigValue("daily_budget_usd", "$jsonvar:f/factory/a"),
+    ).not.toEqual(
+      projectConfigValue("daily_budget_usd", "$jsonvar:f/factory/b"),
+    );
+  });
+
+  test("gives the same json variable reference the same projection", () => {
+    expect(
+      projectConfigValue("daily_budget_usd", "$jsonvar:f/factory/a"),
+    ).toEqual(projectConfigValue("daily_budget_usd", "$jsonvar:f/factory/a"));
+  });
+
+  test("never puts the reference name into the output", () => {
+    expect(
+      JSON.stringify(
+        projectConfigValue(
+          "daily_budget_usd",
+          "$jsonvar:f/factory/private-name",
+        ),
+      ),
+    ).not.toContain("private-name");
+  });
+});
+
+/** 伏せた射影。生の値は持たず、生の値のハッシュだけを持つ。 */
+const REDACTED_WITH_HASH = {
+  redacted: true,
+  hash: expect.stringMatching(HEX16),
+};
+
 describe("projectConfigValue: strings that are replaced by a mark", () => {
   test("redacts a time item that is not an ISO timestamp", () => {
-    expect(projectConfigValue("design_enabled_since", "yesterday")).toEqual({
-      redacted: true,
-    });
+    expect(projectConfigValue("design_enabled_since", "yesterday")).toEqual(
+      REDACTED_WITH_HASH,
+    );
   });
 
   test("redacts an enum item that holds a variable reference", () => {
-    expect(projectConfigValue("model", "$var:f/factory/github_token")).toEqual({
-      redacted: true,
-    });
+    expect(projectConfigValue("model", "$var:f/factory/github_token")).toEqual(
+      REDACTED_WITH_HASH,
+    );
   });
 
   test("redacts an enum item that holds a resource reference", () => {
-    expect(projectConfigValue("model", "$res:f/factory/other")).toEqual({
-      redacted: true,
-    });
+    expect(projectConfigValue("model", "$res:f/factory/other")).toEqual(
+      REDACTED_WITH_HASH,
+    );
   });
 
   test("redacts an enum item that holds a secret word", () => {
-    expect(projectConfigValue("review_label", "my-api-token")).toEqual({
-      redacted: true,
-    });
+    expect(projectConfigValue("review_label", "my-api-token")).toEqual(
+      REDACTED_WITH_HASH,
+    );
   });
 
   test("redacts an enum item that has the shape of a known token", () => {
     expect(
       projectConfigValue("review_label", "ghp_abcdefghijklmnopqrstuvwxyz0123"),
-    ).toEqual({ redacted: true });
+    ).toEqual(REDACTED_WITH_HASH);
   });
 
   test("redacts an enum item that is longer than a short name", () => {
-    expect(projectConfigValue("model", "a".repeat(61))).toEqual({
+    expect(projectConfigValue("model", "a".repeat(61))).toEqual(
+      REDACTED_WITH_HASH,
+    );
+  });
+
+  test("redacts an enum item that has a space", () => {
+    expect(projectConfigValue("model", "two words")).toEqual(
+      REDACTED_WITH_HASH,
+    );
+  });
+});
+
+describe("projectConfigValue: the hash of a redacted value", () => {
+  test("gives different hashes to two different references of the same item", () => {
+    expect(projectConfigValue("model", "$var:f/factory/a")).not.toEqual(
+      projectConfigValue("model", "$var:f/factory/b"),
+    );
+  });
+
+  test("gives the same hash to the same reference every time", () => {
+    expect(projectConfigValue("model", "$var:f/factory/a")).toEqual(
+      projectConfigValue("model", "$var:f/factory/a"),
+    );
+  });
+
+  test("redacts a hashed item that holds a reference inside a free-text command", () => {
+    expect(
+      projectConfigValue("allowed_check_commands", ["echo $var:f/factory/a"]),
+    ).toEqual(REDACTED_WITH_HASH);
+  });
+
+  test("tells two reference-holding command lists apart", () => {
+    expect(
+      projectConfigValue("allowed_check_commands", ["echo $var:f/factory/a"]),
+    ).not.toEqual(
+      projectConfigValue("allowed_check_commands", ["echo $var:f/factory/b"]),
+    );
+  });
+
+  test("redacts a list item that holds a reference", () => {
+    expect(
+      projectConfigValue("repo_allowlist", ["octo-owner/$var:f/factory/a"]),
+    ).toEqual(REDACTED_WITH_HASH);
+  });
+
+  test("redacts an item of a name that is not known without a hash when it holds a reference", () => {
+    expect(projectConfigValue("brand_new_item", "$res:f/factory/a")).toEqual({
       redacted: true,
     });
   });
 
-  test("redacts an enum item that has a space", () => {
-    expect(projectConfigValue("model", "two words")).toEqual({
-      redacted: true,
+  test("puts no hash property into the redacted mark of an item that is not known", () => {
+    expect(
+      Object.keys(
+        projectConfigValue("brand_new_item", "$res:f/factory/a") ?? {},
+      ),
+    ).toEqual(["redacted"]);
+  });
+
+  test("gives the same mark to two different references held by an item that is not known", () => {
+    expect(projectConfigValue("brand_new_item", "$res:f/factory/a")).toEqual(
+      projectConfigValue("brand_new_item", ["$var:f/factory/b"]),
+    );
+  });
+
+  test("keeps an item of a name that is not known as an unknown mark when it holds a plain value", () => {
+    expect(projectConfigValue("brand_new_item", "plain text")).toEqual({
+      kind: "unknown",
     });
+  });
+
+  test("keeps the redacted mark with a hash for a known item that holds a reference", () => {
+    expect(projectConfigValue("model", "$res:f/factory/a")).toEqual(
+      REDACTED_WITH_HASH,
+    );
+  });
+
+  test("redacts an item whose name is only matched by the switch rule when it holds a reference", () => {
+    expect(projectConfigValue("brand_new_enabled", "$res:f/factory/a")).toEqual(
+      REDACTED_WITH_HASH,
+    );
+  });
+
+  test("never puts a reference or a secret-like string into the output", () => {
+    const output = JSON.stringify([
+      projectConfigValue("model", "$var:f/factory/private-name"),
+      projectConfigValue("review_label", "my-api-token-private-name"),
+      projectConfigValue("allowed_check_commands", [
+        "echo $var:f/factory/private-name",
+      ]),
+    ]);
+    expect(output).not.toContain("private-name");
   });
 });
 
 describe("projectConfigValue: lists", () => {
-  test("reduces a list of names to its count", () => {
+  test("reduces a list of names to its count and a hash", () => {
     expect(
       projectConfigValue("default_reviewers", ["octo-a", "octo-b"]),
-    ).toEqual({ count: 2 });
+    ).toEqual({ count: 2, hash: expect.stringMatching(HEX16) });
   });
 
-  test("reduces an empty list to a count of zero", () => {
-    expect(projectConfigValue("repo_allowlist", [])).toEqual({ count: 0 });
+  test("reduces an empty list to a count of zero and a hash", () => {
+    expect(projectConfigValue("repo_allowlist", [])).toEqual({
+      count: 0,
+      hash: expect.stringMatching(HEX16),
+    });
   });
 
   test("does not put any element of a list into the output", () => {
@@ -166,6 +348,56 @@ describe("projectConfigValue: lists", () => {
     );
     expect(output).not.toContain("private-repo");
   });
+
+  test.each(["repo_allowlist", "dependabot_other_repos", "default_reviewers"])(
+    "gives %s a different hash when an element is replaced and the count stays",
+    (key) => {
+      expect(projectConfigValue(key, ["a/one", "a/two"])).not.toEqual(
+        projectConfigValue(key, ["a/one", "a/three"]),
+      );
+    },
+  );
+
+  test("gives the same projection to a list in another order", () => {
+    expect(projectConfigValue("repo_allowlist", ["a/one", "a/two"])).toEqual(
+      projectConfigValue("repo_allowlist", ["a/two", "a/one"]),
+    );
+  });
+
+  test("gives a different projection to a list with a duplicated element", () => {
+    expect(
+      projectConfigValue("repo_allowlist", ["a/one", "a/one"]),
+    ).not.toEqual(projectConfigValue("repo_allowlist", ["a/one", "a/two"]));
+  });
+});
+
+describe("isKnownConfigKey", () => {
+  test("knows a key of the table", () => {
+    expect(isKnownConfigKey("daily_budget_usd")).toBe(true);
+  });
+
+  test("knows a real switch by its name", () => {
+    expect(isKnownConfigKey("pr_ci_fix_enabled")).toBe(true);
+  });
+
+  test("does not know a key that only matches the name rule of a switch", () => {
+    expect(isKnownConfigKey("junk_001_enabled")).toBe(false);
+  });
+
+  test("does not know a key that only starts like a labeler item", () => {
+    expect(isKnownConfigKey("allowed_labeler_junk")).toBe(false);
+  });
+
+  test("does not know a key that the table lacks", () => {
+    expect(isKnownConfigKey("brand_new_item")).toBe(false);
+  });
+
+  test.each(["constructor", "toString", "__proto__"])(
+    "does not know the name %s of an object property",
+    (key) => {
+      expect(isKnownConfigKey(key)).toBe(false);
+    },
+  );
 });
 
 describe("projectConfigValue: items that carry commands, URLs or identities", () => {
@@ -271,6 +503,36 @@ describe("projectConfigValue: items that are not known", () => {
   );
 });
 
+describe("projectNonObjectResource", () => {
+  test("projects a value to a redacted mark with a hash", () => {
+    expect(projectNonObjectResource("$res:f/factory/a")).toEqual(
+      REDACTED_WITH_HASH,
+    );
+  });
+
+  test("tells two different values apart", () => {
+    expect(projectNonObjectResource("a")).not.toEqual(
+      projectNonObjectResource("b"),
+    );
+  });
+
+  test("gives the same value the same projection", () => {
+    expect(projectNonObjectResource(["a"])).toEqual(
+      projectNonObjectResource(["a"]),
+    );
+  });
+
+  test("never puts the value into the output", () => {
+    expect(
+      JSON.stringify(projectNonObjectResource("$res:f/factory/private-name")),
+    ).not.toContain("private-name");
+  });
+
+  test("projects undefined without throwing", () => {
+    expect(projectNonObjectResource(undefined)).toEqual(REDACTED_WITH_HASH);
+  });
+});
+
 describe("projectConfigChange", () => {
   test("projects the value before and the value after", () => {
     expect(projectConfigChange("daily_budget_usd", 50, 20)).toEqual({
@@ -305,6 +567,36 @@ describe("projectConfigChange", () => {
     const change = projectConfigChange("max_fix_rounds", 3, 2);
     expect(JSON.stringify(change)).not.toContain("changed");
   });
+
+  test("keeps the redacted mark of a hashed item whose values hold references", () => {
+    const change = projectConfigChange(
+      "allowed_check_commands",
+      ["echo $var:f/factory/a"],
+      ["echo $var:f/factory/b"],
+    );
+    expect(change.after).toEqual(REDACTED_WITH_HASH);
+  });
+
+  test("keeps the count of a list item next to its hash", () => {
+    const change = projectConfigChange(
+      "repo_allowlist",
+      ["a/one"],
+      ["a/one", "a/two"],
+    );
+    expect(change.after).toEqual({
+      count: 2,
+      hash: expect.stringMatching(HEX16),
+    });
+  });
+
+  test("gives the before and the after of a replaced list element different hashes", () => {
+    const change = projectConfigChange(
+      "default_reviewers",
+      ["octo-a", "octo-b"],
+      ["octo-a", "octo-c"],
+    );
+    expect(change.before).not.toEqual(change.after);
+  });
 });
 
 describe("the reason codes and the sources", () => {
@@ -314,6 +606,10 @@ describe("the reason codes and the sources", () => {
       "console_update_unverified",
       "stop_all_flag_off",
       "unspecified",
+      "out_of_band_change",
+      "out_of_band_removed",
+      "snapshot_baseline",
+      "out_of_band_added",
     ]);
   });
 
@@ -514,6 +810,87 @@ describe("appendConfigChange", () => {
     });
     const result = await appendConfigChange(sql, INPUT);
     expect(JSON.stringify(result)).not.toContain("sk-ant-abcdefghijklmnop");
+  });
+});
+
+describe("appendConfigProjection", () => {
+  const PROJECTION_INPUT = {
+    key: "daily_budget_usd",
+    before: 50,
+    after: 20,
+    actor: "config_snapshot",
+    source: "out_of_band",
+    reason: "out_of_band_change",
+  } as const;
+
+  test("binds the projections as they are, without projecting them again", async () => {
+    const { sql, calls } = routedSql({});
+    await appendConfigProjection(sql, {
+      ...PROJECTION_INPUT,
+      key: "factory_repo",
+      before: { hash: "0123456789abcdef" },
+      after: { hash: "fedcba9876543210" },
+    });
+    expect(calls[0]?.values.slice(2, 4)).toEqual([
+      '{"hash":"0123456789abcdef"}',
+      '{"hash":"fedcba9876543210"}',
+    ]);
+  });
+
+  test("binds null for a side that has no projection", async () => {
+    const { sql, calls } = routedSql({});
+    await appendConfigProjection(sql, { ...PROJECTION_INPUT, before: null });
+    expect(calls[0]?.values[2]).toBeNull();
+  });
+
+  test("binds the reason and the source that the caller names", async () => {
+    const { sql, calls } = routedSql({});
+    await appendConfigProjection(sql, PROJECTION_INPUT);
+    expect([calls[0]?.values[1], calls[0]?.values[5]]).toEqual([
+      "out_of_band_change",
+      "out_of_band",
+    ]);
+  });
+
+  test("reports the id of the new row", async () => {
+    const { sql } = routedSql({
+      "factory.config_history_append(": [{ id: 9 }],
+    });
+    expect(await appendConfigProjection(sql, PROJECTION_INPUT)).toEqual({
+      recorded: true,
+      id: 9,
+    });
+  });
+
+  test("refuses a key that is not an identifier and sends no statement", async () => {
+    const { sql, calls } = routedSql({});
+    const result = await appendConfigProjection(sql, {
+      ...PROJECTION_INPUT,
+      key: "Bad Key",
+    });
+    expect([result.recorded, calls.length]).toEqual([false, 0]);
+  });
+
+  test("returns a failure instead of throwing when the statement fails", async () => {
+    const { sql } = routedSql({
+      "factory.config_history_append(": new Error("db down"),
+    });
+    const result = await appendConfigProjection(sql, PROJECTION_INPUT);
+    expect(result).toMatchObject({ recorded: false, kind: "write_failed" });
+  });
+});
+
+describe("isConfigItemKey", () => {
+  test("accepts a lowercase identifier", () => {
+    expect(isConfigItemKey("daily_budget_usd")).toBe(true);
+  });
+
+  test("rejects a key with an uppercase letter", () => {
+    expect(isConfigItemKey("Daily")).toBe(false);
+  });
+
+  test("rejects a key longer than 80 characters", () => {
+    expect(isConfigItemKey(`a${"b".repeat(80)}`)).toBe(false);
   });
 });
 
@@ -752,6 +1129,112 @@ describe("collectConfigHistoryEvidence", () => {
 
   test("starts the empty value with no unrecorded operation", () => {
     expect(EMPTY_CONFIG_HISTORY_EVIDENCE.unrecorded_operations).toBe(0);
+  });
+
+  test("does not count the baseline rows as changes of the period", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        { item_key: "a_enabled", reason_code: "console_update", changes: 2 },
+        { item_key: "a_enabled", reason_code: "snapshot_baseline", changes: 1 },
+        { item_key: "b_enabled", reason_code: "snapshot_baseline", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect(evidence.period_changes).toBe(2);
+  });
+
+  test("leaves the baseline rows out of the count per item", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        { item_key: "a_enabled", reason_code: "console_update", changes: 2 },
+        { item_key: "a_enabled", reason_code: "snapshot_baseline", changes: 1 },
+        { item_key: "b_enabled", reason_code: "snapshot_baseline", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect(evidence.period_by_item).toEqual([
+      { item_key: "a_enabled", count: 2 },
+    ]);
+  });
+
+  test("keeps the baseline rows in the count per reason code", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        { item_key: "a_enabled", reason_code: "console_update", changes: 2 },
+        { item_key: "a_enabled", reason_code: "snapshot_baseline", changes: 1 },
+        { item_key: "b_enabled", reason_code: "snapshot_baseline", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect(evidence.period_by_reason).toEqual([
+      { reason_code: "console_update", count: 2 },
+      { reason_code: "snapshot_baseline", count: 2 },
+    ]);
+  });
+
+  test("counts the baseline rows of the period on their own", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        { item_key: "a_enabled", reason_code: "console_update", changes: 2 },
+        { item_key: "a_enabled", reason_code: "snapshot_baseline", changes: 1 },
+        { item_key: "b_enabled", reason_code: "snapshot_baseline", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect(evidence.period_baseline).toBe(2);
+  });
+
+  test("leaves the marker row of the baseline out of every count of the period", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        {
+          item_key: "config_snapshot_baseline",
+          reason_code: "snapshot_baseline",
+          changes: 1,
+        },
+        { item_key: "a_enabled", reason_code: "snapshot_baseline", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect([
+      evidence.period_baseline,
+      evidence.period_by_reason,
+      evidence.period_by_item,
+    ]).toEqual([1, [{ reason_code: "snapshot_baseline", count: 1 }], []]);
+  });
+
+  test("counts an item added after the baseline as a change of its item", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        { item_key: "a_enabled", reason_code: "out_of_band_added", changes: 1 },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect([evidence.period_changes, evidence.period_by_item]).toEqual([
+      1,
+      [{ item_key: "a_enabled", count: 1 }],
+    ]);
+  });
+
+  test("counts a row of the item of the resource as a change, unlike the marker of the baseline", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        {
+          item_key: "config_snapshot_resource",
+          reason_code: "out_of_band_change",
+          changes: 2,
+        },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect([evidence.period_changes, evidence.period_by_item]).toEqual([
+      2,
+      [{ item_key: "config_snapshot_resource", count: 2 }],
+    ]);
+  });
+
+  test("starts the empty value with no baseline row", () => {
+    expect(EMPTY_CONFIG_HISTORY_EVIDENCE.period_baseline).toBe(0);
   });
 
   test("skips a row of the period that it cannot read", async () => {

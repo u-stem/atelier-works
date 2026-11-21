@@ -1,0 +1,9 @@
+summary: '[LIB] 設定のConsoleの外の変更の照合'
+description: 内部ライブラリです。直接実行するものではありません。設定(factory_config)のresourceの全項目を許可リストで射影し、項目ごとの履歴の最後の値と比べて、Consoleの外の変更の差を求め、履歴へ書く部品を共有します。
+lock: '!inline f/factory/lib/config_snapshot.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -1,0 +1,12 @@
+summary: '[SYS-13] 設定のConsoleの外の変更を検知して履歴に記録'
+description: >-
+  5分ごとに実行します。設定(factory_config)のresourceを補間せずに読み、許可リストで射影した値を、項目ごとの履歴の最後の値と比べます。Consoleの外の経路(wmill resource push、Windmillの画面、ホストのCLI)で変わった項目だけを、out_of_bandとして設定の変更の履歴に追記します。履歴にまだ無い項目は、最初の実行で基準として書きます。resourceには書きません。5分の間に元へ戻された変更は見えません。
+args: {}
+cron_version: v2
+enabled: true
+is_flow: false
+no_flow_overlap: true
+schedule: 15 1-59/5 * * * *
+script_path: f/factory/config_snapshot
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

@@ -289,7 +289,7 @@ migrationは追加だけにし、列やテーブルの名前は変えない。
 | `work_items` | 作業項目1件の状態。`(owner, repo, issue_number, cycle)`で一意。`pr_review`の作業項目は、最後に起動したきっかけ(`review_trigger`)も持つ |
 | `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ。行を足すトリガーが、`history_events`にも1行を足す |
 | `history_events` | 状態遷移の、追記専用でハッシュの連鎖を持つ履歴。作業項目ごとに連番とハッシュでつなぎ、理由コード、遷移の前後の状態、元の遷移の行のIDを持つ。注記の本文は持たない。`work_item_events`のAFTER INSERTトリガーが書くので、状態を移す文は変えない。外部キーを持たず、作業項目を消しても残る。作業項目が無く、連鎖の最後の記録が保持期間(`retention_history_days`)より古くなると、DBの掃除が連鎖を丸ごと消す([遷移の履歴の内部仕様](internals/history.md)) |
-| `config_history` | 設定(`factory_config`)の変更の、追記専用でハッシュの連鎖を持つ履歴。全体で1本の連鎖で、項目名、理由コード、変更の前後の値の射影、操作者、書いた経路を持つ。コマンドとURLと身元に関わる値は、生の値でなくハッシュにする。Consoleの設定の更新と全停止が、変更の成功の後に書く。保持は無期限である([設定の変更の履歴の内部仕様](internals/config-history.md)) |
+| `config_history` | 設定(`factory_config`)の変更の、追記専用でハッシュの連鎖を持つ履歴。全体で1本の連鎖で、項目名、理由コード、変更の前後の値の射影、操作者、書いた経路を持つ。コマンドとURLと身元に関わる値は、生の値でなくハッシュにする。Consoleの設定の更新と全停止が、変更の成功の後に書く。Consoleの外の変更は、5分ごとの照合(`config_snapshot`)が見つけて書く。保持は無期限である([設定の変更の履歴の内部仕様](internals/config-history.md)) |
 | `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)、承認の後の書き換えを検出する基準値(`doc_hash`)を持つ |
 | `design_drafts` | 設計の下書き。要件定義の下書きに結び付き、本文、図の参照、未確定事項、ファイルの置き場所、読んだコミットを持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ。設計の承認依頼(`design`)は、設計工程が有効なときだけ作られる |
@@ -474,6 +474,7 @@ IssueやPRには何も書かず、ラベルにも触れない。
 | cleanup_db | `0 30 3 * * *` | `f/factory/cleanup_db` | 毎日3:30に実行します。終端状態(承認済み・却下・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル・PR作成済み・監査完了)になった作業項目を既定90日(`factory_config`の`retention_work_items_days`で変更可)で削除し、あわせて要件定義ドラフトや承認依頼などの関連データも削除します。失敗記録・デプロイ記録・解決済みのお知らせは既定30日(`retention_logs_days`)で個別に削除します。古い「情報」の未解決のお知らせは、削除せず同じ期間で解決済みにします。判定済みのmainのCIの記録も同じ期間(`retention_logs_days`)で削除し、判定を待つ記録と、各リポジトリの最新の記録は削除しません。PRのCIの記録も同じ期間で削除します。判定を待つ記録と失敗を直している記録は削除せず、各PRの最新の記録は保持期間の4倍まで残します。workerの負荷の記録も同じ期間で削除します。遷移の履歴は、作業項目が無く、連鎖の最後の記録が既定365日(`retention_history_days`)より古い連鎖だけを、丸ごと削除します。 |
 | cleanup_workspaces | `0 0 3 * * *` | `f/factory/cleanup_workspaces` | 毎日3:00に実行します。処理が終わった作業用ディレクトリや、動かなくなった処理の後始末を行い、保存領域の使用量を記録します。 |
 | collect_github | `0 1-59/5 * * * *` | `f/factory/collect_github` | 5分ごとに実行します。設定のownersの所有者ごとに、読み取り専用のトークンでリポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数を集めて、DBに書きます。設定のgh_collect_detail_enabledがtrueのときは、続けてPRとIssueの詳細も集めて書きます。設定のgh_collect_enabledがfalseの間は、トークンを読まず、何も書きません。毎日9時0分の日次サマリ通知と重ならないよう、毎時1分から5分おきに実行します。 |
+| config_snapshot | `15 1-59/5 * * * *` | `f/factory/config_snapshot` | 5分ごとに実行します。設定(factory_config)のresourceを補間せずに読み、許可リストで射影した値を、項目ごとの履歴の最後の値と比べます。Consoleの外の経路(wmill resource push、Windmillの画面、ホストのCLI)で変わった項目だけを、out_of_bandとして設定の変更の履歴に追記します。履歴にまだ無い項目は、最初の実行で基準として書きます。resourceには書きません。5分の間に元へ戻された変更は見えません。 |
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
 | default_worker_watch | `45 4-59/5 * * * *` | `f/factory/default_worker_watch` | 5分ごとに実行します。defaultのqueueに予定時刻から10分以上待つジョブがあり、defaultで動いているジョブが1つも無いときだけ、defaultのworkerが止まっているとして通知を残し、Discordにも知らせます。長いClaudeのジョブが枠を塞いでいるだけのときは知らせません。待ちが解けると通知を自動で解決します。 |
 | detect_schedule_failures | `20 3-59/5 * * * *` | `f/factory/detect_schedule_failures` | 5分ごとに実行します。scheduleが起こしたジョブの失敗をジョブ履歴から拾って記録し、連続した失敗の初回とエラー文が変わったときはDiscordに知らせ、直近3回の実行が続けて失敗していれば要対応の通知を残します。このWindmillではscheduleの失敗時の呼び出し(on_failure)が働かないため、失敗を拾う入口はこのscheduleだけです。止まると、defaultのworkerの停止を見張る確認が通知を残します。成功した回の最後に、全停止の変数(stop_all)を読んで要対応の通知を合わせ、置かれた直後はDiscordにも知らせます。成功した回の最後に、外部の死活監視のURL(heartbeat_url)を叩きます。 |
@@ -727,6 +728,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/doc_tree_hash` | script | [LIB] 要件定義のディレクトリのハッシュと基準値の照合 |
 | `f/factory/lib/requirements_doc` | script | [LIB] 要件定義ファイルの検査 |
 | `f/factory/lib/pipeline_lease` | script | [LIB] 要件定義フローのリース判定 |
+| `f/factory/lib/config_snapshot` | script | [LIB] 設定のConsoleの外の変更の照合 |
 | `f/factory/lib/config_history` | script | [LIB] 設定の変更の履歴 |
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |
 | `f/factory/lib/design_apply_support` | script | [LIB] 設計の承認の反映の判定 |
@@ -829,6 +831,7 @@ Consoleは工程0として扱う。
 | `f/factory/sample_worker_load` | script | [SYS-10] workerの負荷を記録 |
 | `f/factory/collect_github` | script | [SYS-11] GitHubのリポジトリの状態を集める |
 | `f/factory/backup` | script | [SYS-12] バックアップを取る |
+| `f/factory/config_snapshot` | script | [SYS-13] 設定のConsoleの外の変更を検知して履歴に記録 |
 | `f/factory/cleanup_workspaces` | script | [SYS-2] 作業領域を掃除 |
 | `f/factory/notify_daily_summary` | script | [SYS-3] 日次サマリ通知 |
 | `f/factory/on_error_flow` | script | [SYS-4] フロー失敗ハンドラ |

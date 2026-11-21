@@ -750,6 +750,14 @@ describe("holdsReference", () => {
     expect(holdsReference("see $res:f/factory/x")).toBe(true);
   });
 
+  test("finds a json variable reference in a string", () => {
+    expect(holdsReference("$jsonvar:f/factory/x")).toBe(true);
+  });
+
+  test("finds a json variable reference inside an array in an object", () => {
+    expect(holdsReference({ a: [{ b: "$jsonvar:f/x" }] })).toBe(true);
+  });
+
   test("finds a reference in an array inside an object", () => {
     expect(holdsReference({ a: [{ b: "$var:f/x" }] })).toBe(true);
   });

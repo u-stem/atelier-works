@@ -1,6 +1,7 @@
 // 設定(`factory_config`)の変更の履歴(`factory.config_history`)を扱う部品。
 // 設定の値を許可リストで射影する関数、追記の呼び出し、連鎖の検証の呼び出し、証跡パックに載せる集計を持つ。
 // 履歴の書き込みは、Consoleの設定の更新と全停止のscriptが、変更の成功の後に呼ぶ。
+// Consoleの外の経路の変更は、定期の照合(`config_snapshot`)が、射影した値をそのまま書く(`appendConfigProjection`)。
 // 履歴を書けなくても、設定の書き込みは戻さない。失敗は結果で返し、投げない。
 // 連鎖のハッシュはSQL(`factory.config_history_row_hash`)が計算するので、言語をまたぐ正規化は持たない。
 // 射影のハッシュ(コマンドとURLと身元に関わる値の、生の値の代わりに残す変化の検知の印)だけは、このファイルが計算する。
@@ -22,20 +23,39 @@ import { holdsReference, redactText } from "./console_redact.ts";
  *   `after`は、読み直せたときは読み直した値の射影、読み直せなかったときは書こうとした値の射影である。
  * - stop_all_flag_off: Consoleの全停止が、`*_enabled`を`false`にした。
  * - unspecified: 呼び出し側が理由を決められなかった。
+ * - out_of_band_change: 定期の照合が、Consoleの外の経路(CLI、Windmillの画面)の変更を見つけた。
+ * - out_of_band_removed: 定期の照合が、履歴にある項目が設定から無くなったのを見つけた。
+ * - snapshot_baseline: 定期の照合が、基準の段階(基準の印が書かれるまで)に、履歴にまだ無い項目の最初の値を残した。変更ではなく、比べる基準である。
+ *   基準の印の行(項目名は`SNAPSHOT_BASELINE_MARKER_KEY`)も、この理由コードで書く。
+ * - out_of_band_added: 定期の照合が、基準の印が書かれた後に、設定へ足された項目を見つけた。変更として数える。
  */
 export const CONFIG_HISTORY_REASON_CODES = [
   "console_update",
   "console_update_unverified",
   "stop_all_flag_off",
   "unspecified",
+  "out_of_band_change",
+  "out_of_band_removed",
+  "snapshot_baseline",
+  "out_of_band_added",
 ] as const;
 
 export type ConfigHistoryReasonCode =
   (typeof CONFIG_HISTORY_REASON_CODES)[number];
 
+/** 変更ではなく、比べる基準として書く行の理由コード。期間の変更の件数には数えない。 */
+const BASELINE_REASON_CODE: ConfigHistoryReasonCode = "snapshot_baseline";
+
+/**
+ * 基準の段階が終わったことを示す印の行の項目名。設定の項目ではない。
+ * 照合が、基準の行をすべて書き終えた最後に1行だけ書く。この行がある間は、履歴にまだ無い項目は基準でなく、足された項目として扱う。
+ * 証跡パックの集計には数えない。
+ */
+export const SNAPSHOT_BASELINE_MARKER_KEY = "config_snapshot_baseline";
+
 /**
  * 変更を書いた経路。表の`source`の制約と同じ一覧である。
- * `out_of_band`は、Consoleの外の経路の変更を照合で見つけて書くために予約している。今は書き手が無い。
+ * `out_of_band`は、Consoleの外の経路の変更を、定期の照合(`lib/config_snapshot.ts`)が見つけて書く。
  */
 export const CONFIG_HISTORY_SOURCES = [
   "console",
@@ -59,25 +79,80 @@ export function isConfigHistoryReasonCode(
 /**
  * 履歴の`before`と`after`に入れる値。生の値は入れず、次のどれかにする。
  * - 真偽、有限の数、短い列挙の文字列、時刻の文字列、null: そのまま。
- * - `{ count }`: 一覧の件数。
+ * - `{ count, hash }`: 一覧の件数と、要素の正規化したJSONのsha256の先頭16桁。要素の順は比べない(並べ替えてから数える)。
+ *   件数だけでは、要素を別の要素に差し替えた変更が見えないので、ハッシュを添える。`hash`の無い`{ count }`は、ハッシュを足す前に書いた行の形で、読むだけである。
  * - `{ hash }`: コマンド、URL、身元に関わる値の正規化したJSONのsha256の先頭16桁。値が変わったかを検知するための印で、値を隠すものではない。
  *   塩を付けないので、候補が少ない値は、辞書や総当たりで当てられる。`changed`は、変更後の側だけに付く。
- * - `{ redacted: true }`: 参照、秘密らしい語、秘密の形、形に合わない文字列の代わり。
- * - `{ kind: "unknown" }`: 項目が未知か、値の型が項目の種類に合わない。値は入れない。
+ * - `{ redacted: true, hash }`: 参照、秘密らしい語、秘密の形、形に合わない文字列の代わり。
+ *   `hash`は生の値の正規化したJSONのsha256の先頭16桁で、メモリの中で計算するだけで、生の値は残さない。伏せた値の後の変更を見えなくしないために添える。
+ *   参照の名前は秘密の値ではない。秘密らしい文字列は、塩を付けないハッシュなので、候補が少なければ当てられる。
+ *   `hash`の無い`{ redacted: true }`は、表に無い項目が参照を含むときの値でもある。ハッシュを足す前に書いた行の形でもある。
+ * - `{ kind: "unknown" }`: 項目が表に無い(種類を知らない)。値は入れず、値の変更も追わない。値が参照を含むときは、`{ redacted: true }`になる。
+ * - `{ kind: "unknown", hash }`: 項目の種類を知っているが、値の型が合わない。`hash`は生の値の正規化したJSONのsha256の先頭16桁で、
+ *   型に合わない値の差し替えを見えなくしないために添える。生の値は入れない。`hash`の無い形は、ハッシュを足す前に書いた行の形で、読むだけである。
+ * - `{ kind: "marker" }`: 基準の段階が終わったことを示す印の行の値。定期の照合だけが書く。
+ * - `{ kind: "object" }`: resource全体がオブジェクトに戻ったことを示す値。定期の照合だけが、予約の項目`config_snapshot_resource`に書く。
+ *   resource全体がオブジェクトでない間の値は、`{ redacted: true, hash }`である(`projectNonObjectResource`)。
+ * - `{ removed: true }`: 項目が設定から無くなった。定期の照合だけが、変更後の側に入れる。値が`null`の項目とは区別する。
  */
 export type ConfigProjection =
   | boolean
   | number
   | string
   | null
-  | { readonly count: number }
+  | { readonly count: number; readonly hash?: string }
   | { readonly hash: string; readonly changed?: boolean }
-  | { readonly redacted: true }
-  | { readonly kind: "unknown" };
+  | { readonly redacted: true; readonly hash?: string }
+  | { readonly kind: "unknown"; readonly hash?: string }
+  | { readonly kind: "marker" | "object" }
+  | { readonly removed: true };
+
+/** `{ hash }`だけの射影か。`{ count, hash }`、`{ redacted, hash }`、`{ kind: "unknown", hash }`は、`hash`を持っても、この形ではない。 */
+export function isPlainHashProjection(
+  projection: ConfigProjection,
+): projection is { readonly hash: string; readonly changed?: boolean } {
+  return (
+    projection !== null &&
+    typeof projection === "object" &&
+    "hash" in projection &&
+    !("count" in projection) &&
+    !("redacted" in projection) &&
+    !("kind" in projection)
+  );
+}
 
 type KeyClass = "flag" | "number" | "timestamp" | "enum" | "count" | "hash";
 
-/** 項目の種類を持つ項目。ここに無い項目は、値を問わず`{ kind: "unknown" }`になる。 */
+/** 設定の旗(`<語幹>_enabled`)の語幹。 */
+const FLAG_STEMS: readonly string[] = [
+  "dependabot",
+  "dependabot_group",
+  "dependabot_merge",
+  "design",
+  "gh_collect",
+  "gh_collect_detail",
+  "implement",
+  "investigate",
+  "pr_ci_fix",
+  "pr_ci_watch",
+  "pr_conflict_fix",
+  "pr_conflict_watch",
+];
+
+/** 設定の時刻(`<語幹>_enabled_since`)の語幹。 */
+const SINCE_STEMS: readonly string[] = [
+  "design",
+  "pr_ci_fix",
+  "pr_conflict_fix",
+];
+
+/**
+ * 項目の種類を持つ項目。ここに無い項目は、値を問わず`{ kind: "unknown" }`になる(名前の規則に合う項目を除く)。
+ * この表の名前が、このコードが知っている項目の一覧である(`isKnownConfigKey`)。
+ * 名前の規則(`*_enabled`など)に合うだけの名前は、一覧に入れない。一覧は、照合が変更を書く順(知っている項目を先)と、
+ * 知らない項目の数の上限に使うので、名前の規則だけで知っている項目に数えると、設定へ足した多数の項目が先の順を占められる。
+ * 設定に足す項目は、ここに足す。足し忘れは、設定の解析の出力を調べるテストが見つける。
+ */
 const KEY_CLASSES: ReadonlyMap<string, KeyClass> = new Map<string, KeyClass>([
   // 生の値を残さず、ハッシュだけを残す項目。コマンド、URL、リポジトリ、身元に関わる。
   ...[
@@ -88,12 +163,21 @@ const KEY_CLASSES: ReadonlyMap<string, KeyClass> = new Map<string, KeyClass>([
     "factory_repo_id",
     "windmill_public_url",
     "owners",
+    "allowed_labeler_associations",
+    "allowed_labeler_ids",
+    "allowed_labeler_logins",
   ].map((key): [string, KeyClass] => [key, "hash"]),
-  // 要素の形が名前かURLの一覧。件数だけを残す。
+  // 要素の形が名前かURLの一覧。件数と、要素のハッシュだけを残す。
   ...["repo_allowlist", "dependabot_other_repos", "default_reviewers"].map(
     (key): [string, KeyClass] => [key, "count"],
   ),
-  ...["pr_ci_watch_human_prs"].map((key): [string, KeyClass] => [key, "flag"]),
+  ["pr_ci_watch_human_prs", "flag"],
+  // 旗は、名前が`<語幹>_enabled`の形である。語幹で並べて、旗の名前をそろえる。
+  ...FLAG_STEMS.map((stem): [string, KeyClass] => [`${stem}_enabled`, "flag"]),
+  ...SINCE_STEMS.map((stem): [string, KeyClass] => [
+    `${stem}_enabled_since`,
+    "timestamp",
+  ]),
   ...[
     "backup_keep_generations",
     "claude_timeout_sec",
@@ -152,8 +236,15 @@ function classOf(key: string): KeyClass | undefined {
   return key.endsWith("_enabled_since") ? "timestamp" : undefined;
 }
 
+/** このコードが種類を知っている項目の名前か。名前の規則に合うだけの項目は、知らない項目として扱う。 */
+export function isKnownConfigKey(key: string): boolean {
+  return KEY_CLASSES.has(key);
+}
+
 const UNKNOWN: ConfigProjection = { kind: "unknown" };
-const REDACTED: ConfigProjection = { redacted: true };
+
+/** 表に無い項目が参照を含むときの射影。値もハッシュも持たない定数で、参照を持つようになったことだけを残す。 */
+const REDACTED_UNKNOWN: ConfigProjection = { redacted: true };
 
 /** 列挙の項目に通す文字列の形。短い名前に限る。 */
 const ENUM_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,59}$/;
@@ -165,15 +256,14 @@ const ISO_TIMESTAMP_PATTERN =
 const SECRET_WORD =
   /TOKEN|SECRET|KEY|PASSWORD|WEBHOOK|CREDENTIAL|AUTHORIZATION/i;
 
-/** 文字列を、参照や秘密らしさで調べ、そのまま残してよいときだけ残す。 */
+/** 文字列を、秘密らしさで調べ、そのまま残してよいときだけ残す。参照は、呼び出しの前に`projectConfigValue`が伏せる。 */
 function projectString(
   value: string,
   fits: (text: string) => boolean,
 ): ConfigProjection {
-  if (holdsReference(value)) return REDACTED;
-  if (SECRET_WORD.test(value)) return REDACTED;
-  if (redactText(value).masked) return REDACTED;
-  return fits(value) ? value : REDACTED;
+  if (SECRET_WORD.test(value)) return redacted(value);
+  if (redactText(value).masked) return redacted(value);
+  return fits(value) ? value : redacted(value);
 }
 
 function isTimestampText(text: string): boolean {
@@ -220,35 +310,74 @@ function shortHash(value: unknown): string {
 }
 
 /**
+ * 値を伏せた射影にする。生の値は残さず、生の値のハッシュだけを持つ。
+ * ハッシュは、伏せた値が後で別の値に変わったことを見えなくしないために添える。メモリの中で計算するだけで、ログにも返り値にも出さない。
+ */
+function redacted(value: unknown): ConfigProjection {
+  return { redacted: true, hash: shortHash(value) };
+}
+
+/**
+ * 項目の種類を知っているが、値の型が合わないときの射影。生の値は残さず、生の値のハッシュだけを持つ。
+ * 型に合わない値を、別の型に合わない値へ差し替えた変更を見えなくしないために、ハッシュを添える。
+ * 種類を知らない項目(表に無い項目)の値は、意図して追わないので、ハッシュを添えない。参照を含むときも、ハッシュの無い`{ redacted: true }`にする。
+ */
+function mismatched(value: unknown): ConfigProjection {
+  return { kind: "unknown", hash: shortHash(value) };
+}
+
+/**
+ * resource全体がオブジェクトでないときの、値の射影。`{ redacted: true, hash }`で、生の値は残さない。
+ * 参照だけの値(`"$res:<path>"`)は、補間する読み取りが参照先のオブジェクトに解決するので、ほかの読み取りは動き続ける。
+ * 補間しない読み取りだけが、文字列を見る。
+ */
+export function projectNonObjectResource(raw: unknown): ConfigProjection {
+  return redacted(raw);
+}
+
+/** 一覧の要素のハッシュ。要素の順は意味を持たないので、要素を正規化してから並べ替えて、ハッシュにする。 */
+function listHash(items: readonly unknown[]): string {
+  return shortHash(items.map((item) => canonicalJson(item)).sort());
+}
+
+/**
  * 設定の1項目の値を、履歴に入れる形にする。生の値は、項目の種類が真偽、数、時刻、短い列挙のときだけ残す。
- * 項目の種類は、このファイルの表と、`*_enabled`と`allowed_labeler_`の名前で決める。表に無い項目は、値を入れない。
- * 値の型が項目の種類に合わないときも、値を入れない。
+ * 項目の種類は、このファイルの表と、`*_enabled`と`allowed_labeler_`の名前で決める。表に無い項目は、値を入れず、ハッシュも添えない。
+ * 値の型が項目の種類に合わないときは、値を入れず、生の値のハッシュだけを添える(`{ kind: "unknown", hash }`)。
+ * 表にある項目の値が参照(`$var:`、`$res:`、`$jsonvar:`)を含むときは、項目の種類によらず、参照の先を調べずに伏せる(`{ redacted: true, hash }`)。
+ * 表に無い項目の値が参照を含むときは、ハッシュの無い`{ redacted: true }`にする。定数なので値は漏れず、
+ * 参照を持たない値(`{ kind: "unknown" }`)から参照へ変わったことが、履歴の変更として残る。参照を含まない値は、`{ kind: "unknown" }`のままにする。
  */
 export function projectConfigValue(
   key: string,
   value: unknown,
 ): ConfigProjection {
   const kind = classOf(key);
-  if (kind === undefined) return UNKNOWN;
+  if (kind === undefined) {
+    return holdsReference(value) ? REDACTED_UNKNOWN : UNKNOWN;
+  }
+  if (holdsReference(value)) return redacted(value);
   if (kind === "hash") return { hash: shortHash(value) };
   if (value === null) return null;
   switch (kind) {
     case "flag":
-      return typeof value === "boolean" ? value : UNKNOWN;
+      return typeof value === "boolean" ? value : mismatched(value);
     case "number":
       return typeof value === "number" && Number.isFinite(value)
         ? value
-        : UNKNOWN;
+        : mismatched(value);
     case "count":
-      return Array.isArray(value) ? { count: value.length } : UNKNOWN;
+      return Array.isArray(value)
+        ? { count: value.length, hash: listHash(value) }
+        : mismatched(value);
     case "timestamp":
       return typeof value === "string"
         ? projectString(value, isTimestampText)
-        : UNKNOWN;
+        : mismatched(value);
     case "enum":
       return typeof value === "string"
         ? projectString(value, (text) => ENUM_PATTERN.test(text))
-        : UNKNOWN;
+        : mismatched(value);
   }
 }
 
@@ -275,12 +404,8 @@ export function projectConfigChange(
   const projectedAfter = projectSide(key, after);
   if (
     classOf(key) === "hash" &&
-    projectedBefore !== null &&
-    typeof projectedBefore === "object" &&
-    "hash" in projectedBefore &&
-    projectedAfter !== null &&
-    typeof projectedAfter === "object" &&
-    "hash" in projectedAfter
+    isPlainHashProjection(projectedBefore) &&
+    isPlainHashProjection(projectedAfter)
   ) {
     return {
       before: projectedBefore,
@@ -330,6 +455,11 @@ export type ConfigHistoryAppendResult =
 
 const ITEM_KEY_PATTERN = /^[a-z][a-z0-9_]{0,79}$/;
 const ACTOR_MAX = 100;
+
+/** 履歴の表の項目名の形(識別子)に合うか。合わない名前の項目は、履歴に書けない。 */
+export function isConfigItemKey(key: string): boolean {
+  return ITEM_KEY_PATTERN.test(key);
+}
 const FAILURE_REASON_MAX = 200;
 
 const MISSING_OBJECT_PATTERN =
@@ -368,7 +498,10 @@ function failure(
   return { recorded: false, kind, reason };
 }
 
-function inputProblem(input: ConfigChangeInput): string | null {
+function inputProblem(input: {
+  readonly key: string;
+  readonly actor: string;
+}): string | null {
   if (!ITEM_KEY_PATTERN.test(input.key)) {
     return "key must be lowercase letters, digits and underscores";
   }
@@ -382,25 +515,36 @@ function jsonOrNull(value: ConfigProjection): string | null {
   return value === null ? null : JSON.stringify(value);
 }
 
+/** 射影済みの変更1つ。`before`と`after`は、`projectConfigValue`などで射影した値で、そのまま履歴に書く。 */
+export type ConfigProjectionInput = {
+  readonly key: string;
+  readonly before: ConfigProjection;
+  readonly after: ConfigProjection;
+  readonly actor: string;
+  readonly source: ConfigHistorySource;
+  readonly reason: ConfigHistoryReasonCode;
+  /** 変更の時刻。省くと、DBの呼び出しの時刻を使う。 */
+  readonly occurredAt?: Date;
+};
+
 /**
- * 設定の変更1つを、履歴に1行足す。値は射影してから、パラメータとして渡す。
- * 失敗しても投げず、結果で返す。履歴を書けなくても、設定の書き込みは戻さないためである。
- * 失敗の理由の文は、秘密をマスクして200字までにする。
+ * 設定の変更1つを、射影済みの値のまま、履歴に1行足す。値は再び射影せず、パラメータとして渡す。
+ * 生の値を持たない呼び出し側(定期の照合は、前の値の射影しか持たない)のために、`appendConfigChange`とは別に持つ。
+ * 失敗しても投げず、結果で返す。失敗の理由の文は、秘密をマスクして200字までにする。
  */
-export async function appendConfigChange(
+export async function appendConfigProjection(
   sql: ActionSqlClient,
-  input: ConfigChangeInput,
+  input: ConfigProjectionInput,
 ): Promise<ConfigHistoryAppendResult> {
   try {
     const problem = inputProblem(input);
     if (problem !== null) return failure("invalid", problem);
-    const projected = projectConfigChange(input.key, input.before, input.after);
     const rows = await sql`
       SELECT factory.config_history_append(
         ${input.key}::text,
         ${input.reason}::text,
-        ${jsonOrNull(projected.before)}::jsonb,
-        ${jsonOrNull(projected.after)}::jsonb,
+        ${jsonOrNull(input.before)}::jsonb,
+        ${jsonOrNull(input.after)}::jsonb,
         ${input.actor}::text,
         ${input.source}::text,
         ${input.occurredAt === undefined ? null : input.occurredAt.toISOString()}::timestamptz
@@ -430,6 +574,34 @@ export async function appendConfigChange(
       reason,
     );
   }
+}
+
+/**
+ * 設定の変更1つを、履歴に1行足す。値は射影してから、パラメータとして渡す。
+ * 失敗しても投げず、結果で返す。履歴を書けなくても、設定の書き込みは戻さないためである。
+ * 失敗の理由の文は、秘密をマスクして200字までにする。
+ */
+export async function appendConfigChange(
+  sql: ActionSqlClient,
+  input: ConfigChangeInput,
+): Promise<ConfigHistoryAppendResult> {
+  const problem = inputProblem(input);
+  if (problem !== null) return failure("invalid", problem);
+  let projected: ConfigChangeProjection;
+  try {
+    projected = projectConfigChange(input.key, input.before, input.after);
+  } catch {
+    return failure("invalid", "the value could not be projected");
+  }
+  return await appendConfigProjection(sql, {
+    key: input.key,
+    before: projected.before,
+    after: projected.after,
+    actor: input.actor,
+    source: input.source,
+    reason: input.reason,
+    ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -468,10 +640,13 @@ export type ConfigHistoryEvidence = {
   /** 連鎖の最後の連番。行が無いときは0。 */
   readonly last_seq: number;
   readonly broken: readonly ConfigBrokenPosition[];
+  /** 期間内の変更の数。基準(`snapshot_baseline`)の行は、変更ではないので数えない。 */
   readonly period_changes: number;
-  /** 件数の降順、同数なら項目名の昇順。 */
+  /** 期間内の基準(`snapshot_baseline`)の行の数。照合が、履歴にまだ無い項目の最初の値として書く。 */
+  readonly period_baseline: number;
+  /** 基準の行を除いた件数の降順、同数なら項目名の昇順。 */
   readonly period_by_item: readonly ConfigItemCount[];
-  /** 件数の降順、同数なら理由コードの昇順。 */
+  /** 基準の行を含む件数の降順、同数なら理由コードの昇順。 */
   readonly period_by_reason: readonly ConfigReasonCount[];
   /**
    * 期間内の操作の記録(`factory.console_actions`)のうち、履歴を書けなかった印(`history_recorded`が`false`)を持つ行の数。
@@ -487,6 +662,7 @@ export const EMPTY_CONFIG_HISTORY_EVIDENCE: ConfigHistoryEvidence = {
   last_seq: 0,
   broken: [],
   period_changes: 0,
+  period_baseline: 0,
   period_by_item: [],
   period_by_reason: [],
   unrecorded_operations: 0,
@@ -600,22 +776,30 @@ export async function collectConfigHistoryEvidence(
       start,
       end,
     );
+    // 基準の段階が終わった印の行は、設定の項目の行ではないので、どの件数にも数えない(連鎖の行の数には入る)。
     const counted = periodRows.flatMap((row) => {
       const count = toInt(row.changes);
       return typeof row.item_key === "string" &&
+        row.item_key !== SNAPSHOT_BASELINE_MARKER_KEY &&
         typeof row.reason_code === "string" &&
         count !== null
         ? [{ item_key: row.item_key, reason_code: row.reason_code, count }]
         : [];
     });
+    const changes = counted.filter(
+      (row) => row.reason_code !== BASELINE_REASON_CODE,
+    );
     return {
       available: true,
       chain_rows: toInt(chainRows[0]?.chain_rows) ?? 0,
       last_seq: toInt(chainRows[0]?.last_seq) ?? 0,
       broken,
-      period_changes: counted.reduce((sum, row) => sum + row.count, 0),
+      period_changes: changes.reduce((sum, row) => sum + row.count, 0),
+      period_baseline: counted
+        .filter((row) => row.reason_code === BASELINE_REASON_CODE)
+        .reduce((sum, row) => sum + row.count, 0),
       period_by_item: tally(
-        counted.map((row) => ({ name: row.item_key, count: row.count })),
+        changes.map((row) => ({ name: row.item_key, count: row.count })),
       ).map(({ name, count }) => ({ item_key: name, count })),
       period_by_reason: tally(
         counted.map((row) => ({ name: row.reason_code, count: row.count })),

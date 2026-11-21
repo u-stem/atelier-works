@@ -1,0 +1,12 @@
+summary: '[SYS-13] 設定のConsoleの外の変更を検知して履歴に記録'
+description: 5分ごとに実行し、設定(factory_config)のresourceを補間せずに読み、許可リストで射影した値を、項目ごとの履歴(config_history)の最後の値と比べます。Consoleの外の経路(wmill
+  resource
+  push、Windmillの画面、ホストのCLI)で変わった項目だけを、out_of_bandとして履歴に追記します。履歴にまだ無い項目は、最初の実行で基準として書きます。resourceには書きません。生の値はログにも履歴にも出さず、結果は件数だけです。履歴の表が無い間は何も書きません。
+lock: '!inline f/factory/config_snapshot.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
+timeout: 60
