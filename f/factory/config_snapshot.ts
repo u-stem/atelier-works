@@ -22,7 +22,11 @@ import { defaultSqlClient } from "./lib/db.ts";
 import { logger } from "./lib/log.ts";
 import { withCallTimeout } from "./lib/self_update_support.ts";
 
-/** resourceの読み取りと、履歴の読み書き1回に許す時間(ミリ秒)。ジョブ全体のtimeoutより短くする。 */
+/**
+ * resourceの読み取りと、履歴の読み書き1回に許す時間(ミリ秒)。
+ * 1回ごとの上限であり、読み取り2回と最大100行の書き込みを足すと、ジョブ全体のtimeout(60秒)を超えうる。
+ * 全体は、`runConfigSnapshot`の実行全体の時間の区切り(`SNAPSHOT_DEADLINE_MS`)が抑える。
+ */
 const CALL_TIMEOUT_MS = 15_000;
 
 export async function main(): Promise<SnapshotResult> {

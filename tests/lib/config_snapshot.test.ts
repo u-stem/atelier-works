@@ -77,6 +77,8 @@ type Overrides = {
   readonly loadLatest?: () => Promise<Map<string, unknown>>;
   readonly append?: SnapshotPorts["append"];
   readonly cap?: number;
+  readonly now?: () => number;
+  readonly deadlineMs?: number;
 };
 
 type Harness = {
@@ -113,6 +115,10 @@ function harness(
       }),
     log,
     ...(overrides.cap === undefined ? {} : { cap: overrides.cap }),
+    ...(overrides.now === undefined ? {} : { now: overrides.now }),
+    ...(overrides.deadlineMs === undefined
+      ? {}
+      : { deadlineMs: overrides.deadlineMs }),
   };
   return { ports, history, logs };
 }
@@ -371,13 +377,32 @@ describe("diffSnapshot", () => {
     ]);
   });
 
-  test("tells an item set to null from an item that is gone", () => {
+  test("reports nothing for an absent item whose last stored value is null", () => {
+    // Consoleの経路は、読み直しで値が見つからなかった項目の`after`を`null`で書く。無い項目の`null`は、差ではない。
     expect(
       diffSnapshot(
         latestMap({ pr_ci_fix_enabled_since: null }),
         projectionMap({}),
+      ),
+    ).toEqual([]);
+  });
+
+  test("reports an absent item whose last stored value is a real value as removed", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ pr_ci_fix_enabled_since: "2026-11-01T00:00:00Z" }),
+        projectionMap({}),
       ).map((change) => change.kind),
     ).toEqual(["removed"]);
+  });
+
+  test("reports a present item whose last stored value is null as a change", () => {
+    expect(
+      diffSnapshot(
+        latestMap({ max_turns: null }),
+        projectionMap({ max_turns: 30 }),
+      ),
+    ).toEqual([{ key: "max_turns", kind: "changed", before: null, after: 30 }]);
   });
 
   test("reports nothing for an item set to null that stays null", () => {
@@ -712,6 +737,155 @@ describe("runConfigSnapshot: the cap", () => {
     const { ports, history } = harness(manyItems(10), {}, { cap: 3 });
     await runConfigSnapshot(ports);
     expect(history.rows.length).toBe(3);
+  });
+});
+
+describe("runConfigSnapshot: the order of the reads", () => {
+  test("reads the history before the resource", async () => {
+    const calls: string[] = [];
+    const { ports } = harness(
+      RAW,
+      {},
+      {
+        raw: () => {
+          calls.push("resource");
+          return Promise.resolve(RAW);
+        },
+        loadLatest: () => {
+          calls.push("history");
+          return Promise.resolve(new Map());
+        },
+      },
+    );
+    await runConfigSnapshot(ports);
+    expect(calls).toEqual(["history", "resource"]);
+  });
+
+  test("writes a duplicate row with the live value, not a revert, when the Console writes between the reads", async () => {
+    // 履歴を先に読むので、Consoleがその後で書いた変更(resourceと履歴の行)は、resourceの新しい値だけが見える。
+    // 履歴の古い値との差は、正しい値の行(経路の記録だけが違う重複)になり、古い値へ戻す行にはならない。
+    let resource: Record<string, unknown> = { daily_budget_usd: 20 };
+    const history = new Map<string, unknown>([["daily_budget_usd", 20]]);
+    const written: ConfigProjectionInput[] = [];
+    const { ports } = harness(
+      resource,
+      {},
+      {
+        loadLatest: () => {
+          const read = new Map(history);
+          // 履歴を読んだ直後に、Consoleがresourceと履歴を書き換える。
+          resource = { daily_budget_usd: 35 };
+          history.set("daily_budget_usd", 35);
+          return Promise.resolve(read);
+        },
+        raw: () => Promise.resolve(resource),
+        append: (input) => {
+          written.push(input);
+          return Promise.resolve({ recorded: true, id: written.length });
+        },
+      },
+    );
+    await runConfigSnapshot(ports);
+    expect(written.map((row) => [row.before, row.after])).toEqual([[20, 35]]);
+  });
+
+  test("skips with the history reason when both reads would fail", async () => {
+    const { ports } = harness(
+      RAW,
+      {},
+      {
+        raw: () => Promise.reject(new Error("timed out")),
+        loadLatest: () => Promise.reject(new Error("connection refused")),
+      },
+    );
+    expect((await runConfigSnapshot(ports)).skipped_reason).toBe(
+      "history_unreadable",
+    );
+  });
+});
+
+describe("runConfigSnapshot: the deadline of the whole run", () => {
+  function manyItems(count: number): Record<string, number> {
+    return Object.fromEntries(
+      Array.from({ length: count }, (_, index) => [
+        `item_${String(index).padStart(3, "0")}`,
+        index,
+      ]),
+    );
+  }
+
+  /** 1回進むたびに1000ミリ秒進む時計。最初の呼び出しは0を返す。 */
+  function steppingClock(): () => number {
+    let now = -1000;
+    return () => {
+      now += 1000;
+      return now;
+    };
+  }
+
+  test("stops writing once the deadline has passed", async () => {
+    const { ports, history } = harness(
+      manyItems(10),
+      {},
+      { now: steppingClock(), deadlineMs: 3500 },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows.length).toBe(3);
+  });
+
+  test("counts the rows that it did not write as deferred", async () => {
+    const { ports } = harness(
+      manyItems(10),
+      {},
+      { now: steppingClock(), deadlineMs: 3500 },
+    );
+    expect((await runConfigSnapshot(ports)).deferred).toBe(7);
+  });
+
+  test("adds the rows left by the deadline to the rows left by the cap", async () => {
+    const { ports } = harness(
+      manyItems(10),
+      {},
+      { cap: 5, now: steppingClock(), deadlineMs: 2500 },
+    );
+    expect((await runConfigSnapshot(ports)).deferred).toBe(8);
+  });
+
+  test("returns normally and warns with counts only when the deadline passed", async () => {
+    const { ports, logs } = harness(
+      manyItems(10),
+      {},
+      { now: steppingClock(), deadlineMs: 3500 },
+    );
+    const result = await runConfigSnapshot(ports);
+    expect([
+      result.skipped_reason,
+      logs.some((line) => line.includes("deadline")),
+    ]).toEqual([null, true]);
+  });
+
+  test("writes the deferred rows in the next run", async () => {
+    const { ports, history } = harness(
+      manyItems(10),
+      {},
+      { now: steppingClock(), deadlineMs: 3500 },
+    );
+    await runConfigSnapshot(ports);
+    const next = harness(manyItems(10), Object.fromEntries(history.latest));
+    await runConfigSnapshot(next.ports);
+    expect(
+      [...history.rows, ...next.history.rows].map((row) => row.key),
+    ).toEqual(Object.keys(manyItems(10)));
+  });
+
+  test("writes everything when the clock stays before the deadline", async () => {
+    const { ports, history } = harness(
+      manyItems(10),
+      {},
+      { now: () => 0, deadlineMs: 3500 },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows.length).toBe(10);
   });
 });
 

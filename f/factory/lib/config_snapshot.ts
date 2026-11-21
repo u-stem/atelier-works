@@ -27,6 +27,13 @@ export const SNAPSHOT_ACTOR = "config_snapshot";
 /** 1回の実行で書く行の上限。超えた分は、次の実行で書く。 */
 export const SNAPSHOT_ROW_CAP = 100;
 
+/**
+ * 実行全体で、行を書き始めてよい時間(ミリ秒)。ジョブのtimeout(60秒)より短くする。
+ * 超えたら、残りは書かずに`deferred`に数える。最後の1回の書き込み(1回の上限は15秒)が、この時間を過ぎる前に始まっても、
+ * ジョブのtimeoutの前に終わるよう、差を残す。
+ */
+export const SNAPSHOT_DEADLINE_MS = 40_000;
+
 const REDACTED: ConfigProjection = { redacted: true };
 const UNKNOWN: ConfigProjection = { kind: "unknown" };
 
@@ -153,6 +160,9 @@ export type SnapshotChange = {
 /**
  * 項目ごとの履歴の最後の`after`(`latest`)と、今の射影(`current`)の差を、項目名の昇順で返す。
  * 履歴の最後の`after`が`{ removed: true }`で、項目がまだ無いときは、差とは見なさない。
+ * 履歴の最後の`after`が`null`で、項目がまだ無いときも、差とは見なさない。
+ * Consoleの経路は、読み直しで値が見つからなかった項目の`after`を`null`で書くためである。
+ * 値が`null`の項目を消したときの`removed`は、この規則のために書かれない。
  * 履歴の値が射影として読めないときは、`{ kind: "unknown" }`として比べる。
  */
 export function diffSnapshot(
@@ -173,7 +183,10 @@ export function diffSnapshot(
     const stored = parseStoredProjection(latest.get(key));
     const last = stored === undefined ? UNKNOWN : stored;
     if (now === undefined) {
-      if (comparable(last) !== comparable(REMOVED_PROJECTION)) {
+      if (
+        last !== null &&
+        comparable(last) !== comparable(REMOVED_PROJECTION)
+      ) {
         changes.push({
           key,
           kind: "removed",
@@ -275,7 +288,7 @@ export type SnapshotResult = {
   readonly removed: number;
   /** 書けなかった行の数。 */
   readonly failed: number;
-  /** 上限を超え、次の実行に回した差の数。 */
+  /** 行の上限か実行全体の時間の区切りで書かず、次の実行に回した差の数。 */
   readonly deferred: number;
   /** 参照を含み、値を見ずに伏せた項目の数。 */
   readonly reference_keys: number;
@@ -305,6 +318,10 @@ export type SnapshotPorts = {
   readonly log: SnapshotLog;
   /** 1回に書く行の上限。省くと`SNAPSHOT_ROW_CAP`。 */
   readonly cap?: number;
+  /** 現在時刻(ミリ秒)を返す。省くと`Date.now`。実行全体の時間の区切りを数える。 */
+  readonly now?: () => number;
+  /** 実行の開始からこの時間を過ぎたら、残りの行を書かずに次の実行に回す。省くと`SNAPSHOT_DEADLINE_MS`。 */
+  readonly deadlineMs?: number;
 };
 
 const EMPTY_COUNTS = {
@@ -341,8 +358,8 @@ async function appendWithoutThrowing(
 }
 
 /**
- * resourceを読み、履歴との差を`out_of_band`として書く。投げない。
- * 差は項目名の昇順に、上限(`cap`)まで書く。残りは次の実行に回す。書かなければ差は残るので、2回続けて実行しても、2回目は何も書かない。
+ * 履歴の最後の値とresourceをこの順に読み、差を`out_of_band`として書く。投げない。
+ * 差は項目名の昇順に、上限(`cap`)と実行全体の時間(`deadlineMs`)まで書く。残りは次の実行に回す。書かなければ差は残るので、2回続けて実行しても、2回目は何も書かない。
  * 1行の書き込みが失敗しても、残りを続ける。失敗した項目は、次の実行でもう一度差として見つかる。
  * ログには、件数と失敗の種類だけを出し、項目名と値は出さない。
  */
@@ -350,6 +367,26 @@ export async function runConfigSnapshot(
   ports: SnapshotPorts,
 ): Promise<SnapshotResult> {
   const cap = ports.cap ?? SNAPSHOT_ROW_CAP;
+  const now = ports.now ?? Date.now;
+  const deadlineMs = ports.deadlineMs ?? SNAPSHOT_DEADLINE_MS;
+  const startedAt = now();
+
+  // 履歴を先に読み、resourceを後で読む。
+  // Consoleが、resourceを書いた後に自分の行を書く間に、2つを読んでも、古い履歴と新しいresourceの組になる。
+  // その組では、正しい値で、経路の記録だけが違う重複の行が1つ増える。
+  // 順を逆にすると、新しい履歴と古いresourceの組になり、古い値へ戻した偽の行が2つ増える。
+  let latest: Map<string, unknown>;
+  try {
+    latest = await ports.loadLatest();
+  } catch (err) {
+    if (isMissingConfigHistoryObjectError(err)) {
+      ports.log.info("config_snapshot: the history table is not there yet");
+      return skipped("history_missing");
+    }
+    ports.log.warn("config_snapshot: could not read the history");
+    return skipped("history_unreadable");
+  }
+
   let raw: unknown;
   try {
     raw = await ports.readRawConfig();
@@ -363,21 +400,9 @@ export async function runConfigSnapshot(
     return skipped("resource_not_object");
   }
 
-  let latest: Map<string, unknown>;
-  try {
-    latest = await ports.loadLatest();
-  } catch (err) {
-    if (isMissingConfigHistoryObjectError(err)) {
-      ports.log.info("config_snapshot: the history table is not there yet");
-      return skipped("history_missing");
-    }
-    ports.log.warn("config_snapshot: could not read the history");
-    return skipped("history_unreadable");
-  }
-
   const changes = diffSnapshot(latest, projection.items);
   const toWrite = changes.slice(0, cap);
-  const deferred = changes.length - toWrite.length;
+  let deferred = changes.length - toWrite.length;
   if (deferred > 0) {
     ports.log.warn(
       "config_snapshot: more changes than the cap, the rest wait for the next run",
@@ -392,7 +417,17 @@ export async function runConfigSnapshot(
   let changed = 0;
   let removed = 0;
   let failed = 0;
-  for (const change of toWrite) {
+  for (const [index, change] of toWrite.entries()) {
+    // 実行全体の時間が尽きたら、残りは書かずに、次の実行に回す。差は残るので、次の実行がもう一度見つける。
+    if (now() - startedAt >= deadlineMs) {
+      const left = toWrite.length - index;
+      deferred += left;
+      ports.log.warn(
+        "config_snapshot: the deadline of the run passed, the rest wait for the next run",
+        { deadline_ms: deadlineMs, left },
+      );
+      break;
+    }
     const result = await appendWithoutThrowing(ports, change);
     if (!result.recorded) {
       failed += 1;
