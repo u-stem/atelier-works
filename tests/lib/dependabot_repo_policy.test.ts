@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_REQUIRED_CHECKS,
+  NO_REQUIRED_CHECK_REASON,
   REQUIRED_CHECKS,
   requiredChecksFromRules,
   resolveRepoPolicy,
@@ -128,6 +129,27 @@ describe("requiredChecksFromRules", () => {
 
   test("fails when there is no required status check", () => {
     expect(requiredChecksFromRules([{ type: "deletion" }]).ok).toBe(false);
+  });
+
+  test("gives the shared reason when there is no required status check", () => {
+    expect(requiredChecksFromRules([{ type: "deletion" }])).toEqual({
+      ok: false,
+      reason: NO_REQUIRED_CHECK_REASON,
+    });
+  });
+
+  test("does not give that reason when a check is bound to another app", () => {
+    const result = requiredChecksFromRules([
+      {
+        type: "required_status_checks",
+        parameters: {
+          required_status_checks: [{ context: "build", integration_id: 7 }],
+        },
+      },
+    ]);
+    expect(result.ok === false && result.reason).not.toBe(
+      NO_REQUIRED_CHECK_REASON,
+    );
   });
 
   test("fails when the rules are not an array", () => {

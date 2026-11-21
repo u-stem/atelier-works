@@ -31,6 +31,7 @@ import {
   type SqlClient,
   type SqlRow,
 } from "./db.ts";
+import { parseNoRequiredCheckMessage } from "./dependabot_repo_notice.ts";
 import {
   collectHistoryEvidence,
   HISTORY_BROKEN_LIST_MAX,
@@ -294,6 +295,16 @@ export type UnresolvedNoticeGroup = {
   count: number;
   oldest_created_at: string;
 };
+/**
+ * 対象ブランチに必須checkが無い通知の、リポジトリごとの集計。
+ * `affected_pr_count`は、期間内に作成した通知の本文にある影響を受けているPRの数のうち最大の値である。
+ * 同じPRが複数の通知に入りうるので、合計にはしない。本文から数を読めない通知は0として数える。
+ */
+export type NoRequiredCheckRepoStat = {
+  repository: string;
+  notice_count: number;
+  affected_pr_count: number;
+};
 export type PastProposal = {
   title: string;
   status: string;
@@ -465,6 +476,11 @@ export type AuditEvidence = {
   readonly unresolved_notices_in_period: UnresolvedNoticeGroup[];
   /** 期間の開始より前に作成され、集計時点で未解決の通知。種別ごと。 */
   readonly unresolved_notices_before_period: UnresolvedNoticeGroup[];
+  /**
+   * 期間内に作成した、対象ブランチに必須checkが無い通知の、リポジトリごとの件数。
+   * 期間の終わり以後に作った通知は数えない。通知の数の多い順、同数ならリポジトリの昇順。
+   */
+  readonly no_required_check_by_repo: NoRequiredCheckRepoStat[];
   readonly deployments: CountByKey[];
   readonly deployments_needing_host_action: number;
   /**
@@ -1447,6 +1463,16 @@ export function buildEvidenceSections(
     historySection(evidence),
     configHistorySection(evidence),
     { heading: "通知", fixed: noticeFixed, lines: noticeLines },
+    {
+      heading: "必須チェックが無いdependabotの通知(リポジトリ別)",
+      fixed: [],
+      lines: evidence.no_required_check_by_repo.map((stat) =>
+        sanitizeCell(
+          `${stat.repository}: 通知${stat.notice_count}件 / 影響を受けているPR最大${stat.affected_pr_count}件`,
+          SANITIZE_CELL_MAX,
+        ),
+      ),
+    },
     { heading: "デプロイ", fixed: deploymentFixed, lines: deploymentLines },
     { heading: "過去の提案(直近3回)", fixed: [], lines: proposalLines },
   ];
@@ -1594,6 +1620,41 @@ function toHumanOutcome(row: SqlRow): HumanOutcome {
     note: parseCellString(row.note),
     count: parseNumeric(row.count),
   };
+}
+
+/**
+ * 必須checkが無い通知の本文から、リポジトリごとの件数を求める。
+ * 先頭のリポジトリを読めない本文は、`未設定`にまとめる。
+ */
+export function toNoRequiredCheckStats(
+  rows: readonly SqlRow[],
+): NoRequiredCheckRepoStat[] {
+  const byRepository = new Map<string, NoRequiredCheckRepoStat>();
+  for (const row of rows) {
+    const message = isString(row.message) ? row.message : "";
+    const parsed = parseNoRequiredCheckMessage(message);
+    const repository = unsetIfBlank(
+      sanitizeCell(parsed?.repository ?? "", SANITIZE_CELL_MAX),
+    );
+    const known = byRepository.get(repository) ?? {
+      repository,
+      notice_count: 0,
+      affected_pr_count: 0,
+    };
+    byRepository.set(repository, {
+      repository,
+      notice_count: known.notice_count + 1,
+      affected_pr_count: Math.max(
+        known.affected_pr_count,
+        parsed?.prCount ?? 0,
+      ),
+    });
+  }
+  return [...byRepository.values()].sort(
+    (a, b) =>
+      b.notice_count - a.notice_count ||
+      (a.repository < b.repository ? -1 : a.repository > b.repository ? 1 : 0),
+  );
 }
 
 /**
@@ -2231,6 +2292,16 @@ export async function collectAuditEvidence(
     ORDER BY 2, count DESC, 1
   `.fetch();
 
+  // 期間の終わり以後に作った通知は数えない。監査を後から走らせても、数が増えないようにするため。
+  const noRequiredCheckRows = await sql`
+    SELECT message
+    FROM factory.notices
+    WHERE kind = 'dependabot_no_required_check'
+      AND created_at >= ${start}::timestamptz AND created_at < ${end}::timestamptz
+    ORDER BY created_at, id
+    LIMIT 1000
+  `.fetch();
+
   const deploymentRows = await sql`
     SELECT result AS key, count(*) AS count
     FROM factory.deployments
@@ -2501,6 +2572,7 @@ export async function collectAuditEvidence(
       unresolvedNoticeRows,
       "before_period",
     ),
+    no_required_check_by_repo: toNoRequiredCheckStats(noRequiredCheckRows),
     deployments: toCountsByKey(deploymentRows),
     deployments_needing_host_action: parseNumeric(
       deploymentsNeedingHostActionRows[0]?.count,

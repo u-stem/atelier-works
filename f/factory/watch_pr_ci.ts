@@ -46,7 +46,7 @@ import {
 } from "./lib/check_sandbox.ts";
 import { hasCiFixSkillMarker } from "./lib/ci_fix_round.ts";
 import { dailyBudgetStatus } from "./lib/claude.ts";
-import { loadConfig } from "./lib/config.ts";
+import { hasAnyStaticCheckCommands, loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
   claimPrCiCheckForFix,
@@ -200,12 +200,18 @@ export function buildClaimDeps(
   const lookups: ClaimDepsLookups = { ...DB_CLAIM_LOOKUPS, ...overrides };
   const cancelNote = async (id: number): Promise<string | null> =>
     (await lookups.latestStatusEvent(id, "cancelled"))?.note ?? null;
+  // 起動の前の保留は、リポジトリを決めずに設定全体で1つに決める。
+  // 静的検査はリポジトリごとの設定なので、どれかのリポジトリにあれば、あるものとして数える。
+  // 準備のステップはリポジトリごとに数えるので、ここで通した行を準備のステップが同じ理由で止めることはない。
+  const hasStaticChecks = hasAnyStaticCheckCommands(config);
   return {
     maxRounds: config.pr_ci_fix_max_rounds,
-    configMisfit: ciRoundTimeoutMisfit(config),
-    // 検査コマンドの無いリポジトリは、古いイメージでも止めない。準備のステップの関門と同じ条件である。
+    configMisfit: ciRoundTimeoutMisfit(config, hasStaticChecks),
+    // 検査コマンドも静的検査も無い設定では、古いイメージでも止めない。準備のステップの関門と同じ条件である。
     workerEnvProblem: async () => {
-      if (config.allowed_check_commands.length === 0) return null;
+      if (config.allowed_check_commands.length === 0 && !hasStaticChecks) {
+        return null;
+      }
       const error = checkEnvironmentError(await problems());
       if (error === null) return null;
       // 保留の通知は行ごとのPRのリンクを持つが、パスは載せない。パスは環境の通知に1件だけ残す。

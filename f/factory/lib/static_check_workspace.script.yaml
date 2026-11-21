@@ -1,0 +1,9 @@
+summary: '[LIB] 静的検査の作業木'
+description: 内部ライブラリです。直接実行するものではありません。静的検査(実装フローの保護パスを変えたラウンドと、PR修正フローの検証)のために、基準のcommitの木にPRの変更を重ねた一時の作業木を作ります。道具の設定は基準の版を使い、検査が実行するファイルや依存が変わったときは作りません。
+lock: '!inline f/factory/lib/static_check_workspace.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

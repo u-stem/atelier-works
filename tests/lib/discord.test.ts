@@ -255,6 +255,45 @@ describe("buildEmbed main_ci_failed", () => {
   });
 });
 
+describe("buildEmbed dependabot_repo_blocked", () => {
+  const event: Extract<NotifyEvent, { kind: "dependabot_repo_blocked" }> = {
+    kind: "dependabot_repo_blocked",
+    instance_name: "local",
+    owner: "acme",
+    repo: "widgets",
+    pr_count: 3,
+    next_action: "対象ブランチに必須のステータスチェックを設定してください。",
+  };
+
+  test("names the repository in the title", () => {
+    expect(buildEmbed(event).title).toBe(
+      "必須チェックが無いため、dependabotの更新PRが止まっています: acme/widgets",
+    );
+  });
+
+  test("states the number of affected pull requests", () => {
+    expect(buildEmbed(event).description).toContain("3件");
+  });
+
+  test("has no link", () => {
+    expect(buildEmbed(event).url).toBeNull();
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "対象ブランチに必須のステータスチェックを設定してください。",
+    });
+  });
+
+  test("includes the repository field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "リポジトリ",
+      value: "acme/widgets",
+    });
+  });
+});
+
 describe("buildEmbed console_worker_missing", () => {
   const event: NotifyEvent = {
     kind: "console_worker_missing",

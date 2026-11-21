@@ -275,7 +275,8 @@ noticeは、`owner_id_mismatch`である。
 cloneを開かない処理にも、この照合を効かせるためである。
 cloneを開く準備のステップでは、`openFactoryClone`も同じ照合をするので、取得が1回増える。
 通ったときだけ、cloneとcheckoutに進む。
-`check_commands_by_repo`のキーは名前だが、`id`を入れたオーナーのリポジトリでは、照合を通ったものにしか検査コマンドが走らない。
+`check_commands_by_repo`と`static_check_commands_by_repo`のキーは名前である。
+`id`を入れたオーナーのリポジトリでは、照合を通ったものにしか、検査コマンドと静的検査が走らない。
 
 止めたときは、Consoleの**要対応**にnoticeが残る。
 止めるのは、次のいずれかのときである。
@@ -1634,6 +1635,7 @@ Consoleの通知の詳細のリンクが、種類からこの名前を決めて�
 | <a id="notice-pr_conflict"></a>`pr_conflict` | Factoryが作ったPRが、ベースブランチとマージできない競合の状態である。本文は`<owner>/<repo>#<PR番号>:`で始まり、次の操作とPRのリンクが載る。Discordにも届く | 本文の「次の操作」に従う。PRのブランチにベースブランチをmergeして競合を解消し、pushする。競合が解けたとき、PRを閉じたときは、自動で解決される。競合が続く間は、PRのコミットが進んでも通知は重ならない |
 | <a id="notice-dependabot_merge_held"></a>`dependabot_merge_held` | リポジトリにマージの保留があるため、dependabotの更新PRが待っている。取得の1周ごとに1件にまとめ、本文に件数は載せない。件数は取得のログに残る。「情報」で、保留の`reason`と`holder`は載せない | 保留が意図したものなら、何もしない。解除してよければ、Consoleのシステムの画面の「保留と凍結」から解除するか、[保留を確かめる](operations/stop.md#保留を確かめる)の手順で解除する。解けると、次の取得で自動で再開する |
 | <a id="notice-dependabot_merge_hold_unreadable"></a>`dependabot_merge_hold_unreadable` | マージの保留の表を読めないため、dependabotの更新PRの自動マージを待たせている。本文に原因の種類(`missing_table`、`read_failed`、`corrupt`、`error`)が載る。PRの数は載せない | 原因の種類に従う。`missing_table`は、保留の表を作るmigrationが反映済みか、デプロイの記録で確かめる。`read_failed`は、DBが動いているか確かめる。`corrupt`は、`mise run hold:list`で壊れた行を確かめ、psqlでその行を解除か削除する。`error`は、workerのログで原因を確かめる。読めるようになると、次の取得で自動で再開し、この通知も自動で解決される。`corrupt`と`error`は、本文の先頭にリポジトリが載り、そのリポジトリを読めた周回で解決される。候補のPRが無い周回も読むので、PRが閉じても解決される |
+| <a id="notice-dependabot_no_required_check"></a>`dependabot_no_required_check` | 対象ブランチに必須のステータスチェックが無いため、そのリポジトリのdependabotの更新PRが止まっている。リポジトリごとに未解決の1件だけを残し、本文の先頭は`<owner>/<repo>:`で、影響を受けているPRの数が載る。PRごとの要人手の作業項目は作らない。通知を作った1回だけ、Discordにも届く | 対象ブランチの保護(ruleset)に、必須のステータスチェックを設定する。設定すると、次の取得で同じPRを通常のゲートで評価し直し、この通知も自動で解決される。リポジトリのPRがすべて閉じたときは、取得が必須チェックを読めないので、人が解決する。止めたPRは自動でマージしない |
 | <a id="notice-hold_released"></a>`hold_released` | 人が、保留、スケジュールの凍結、deployの保留を、Consoleのシステムの画面から解除した。本文に、解除した対象、操作者、時刻(JST、秒まで)が載る。「情報」で、保留の`reason`と`holder`は載せない。凍結の行は解除した主体を残さないので、この通知が操作者の記録になる。期限切れの行を片付けたときと、解除済みの行への呼び出しでは残さない。Discordには届かない | 心当たりのある解除なら、何もしない。心当たりが無いなら、操作者の名前を確かめ、止めていた対象を置き直すかを判断する |
 | <a id="notice-doc_hash_column_missing"></a>`doc_hash_column_missing` | 要件定義の下書きの基準値の列(`requirement_drafts.doc_hash`)が無いまま、基準値なしで下書きを保存した。列を足すmigrationより先に、コードが反映されたときに残る。この下書きは、承認の後の書き換えを検出できない。本文は固定で、未解決は1件にまとまる | 列を足すmigrationは、自己更新が自動で反映する。デプロイの記録で、反映が成功していることを確かめる。失敗しているときは、自己更新のジョブのログで原因を確かめる。書き換えから守りたい要件定義は作り直す。列が足されても、通知は自動では解決されない。基準値なしで保存された承認済みの要件定義が残ること自体が、書き換えからの守りの欠落であり、列が足されたことだけでは消えないためである。人が、その要件定義の扱いを確かめ終えてから解決する |
 | <a id="notice-design_enabled_ignored"></a>`design_enabled_ignored` | 設定の`design_enabled`が`true`だが、`design_enabled_since`が無いか日時として読めないため、`false`として読んでいる。設計工程は動かない。設定タブの**設計工程(実際の状態)**の行には、効いている値の「無効」が出る(設定が参照で書かれているときは「判定できない」)。自己更新が設定を読むたびに残し、本文は固定で、未解決は1件にまとまる | 設計工程を有効にするなら、[設計工程を有効にする](operations/stages.md#設計工程を有効にする)の確認を済ませてから、`factory_config`に`design_enabled_since`を書く。有効にしないなら、`design_enabled`を`false`に戻す。どちらでも、自己更新(2分ごと)がこの通知を自動で解決する。Consoleからは解決できない |

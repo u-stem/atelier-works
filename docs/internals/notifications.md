@@ -352,6 +352,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `stop_all_released` | `detect_schedule_failures` | 全停止の解除で機能が動き出していないことと、`mise run stop:restore`で戻す操作を述べる固定の文。Discordには通知しない |
 | `dependabot_merge_held` | `poll_dependabot` | 一覧と解除の操作。取得の1周ごとに1件にまとめ、PRの数は載せない |
 | `dependabot_merge_hold_unreadable` | `poll_dependabot` | 保留を読めない原因の種類と、最初に確かめること。PRの数は載せない。保留を読めた周回で自動で解決する。壊れた行と想定外の失敗は、本文の先頭にリポジトリを置き、そのリポジトリを読めた周回で解決する |
+| `dependabot_no_required_check` | `poll_dependabot`、`dependabot_prepare` | 本文の先頭にリポジトリ(`<owner>/<repo>:`、小文字)を置き、影響を受けているPRの数と、必須のステータスチェックを設定する操作を載せる。リポジトリごとに未解決の1件だけを残す(部分一意索引`notices_unresolved_no_required_check_key`)。取得は、数が変わったときだけ本文を更新し、作成時刻は更新しない。通知を新しく作った1回だけ、Discordに届く(`dependabot_repo_blocked`)。必須チェックを読めた周回で自動で解決する |
 | `hold_released` | `hold_release`、`freeze_release` | 解除した対象(種類、対象、id)、操作者、時刻(JST、秒まで)。保留の`reason`と`holder`は載せない。解除済みの行と、期限切れの行の片付けでは残さない。Discordには通知しない |
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。

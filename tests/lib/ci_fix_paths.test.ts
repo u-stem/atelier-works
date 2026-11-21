@@ -282,6 +282,8 @@ describe("protected paths", () => {
     "f/factory/lib/github.ts",
     "f/factory/lib/github.script.lock",
     "f/factory/lib/check_runner.ts",
+    "f/factory/lib/static_check_workspace.ts",
+    "f/factory/lib/static_check_workspace.script.yaml",
     "f/factory/watch_main_ci.ts",
     "f/factory/watch_main_ci.script.yaml",
     ".mcp.json",

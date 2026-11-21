@@ -50,7 +50,7 @@ describe("watch_pr_ci claim deps", () => {
         claude_timeout_sec: 3000,
       });
       expect(buildClaimDeps(config, CLIENT)?.configMisfit).toBe(
-        ciRoundTimeoutMisfit(config),
+        ciRoundTimeoutMisfit(config, false),
       );
     });
 
@@ -62,6 +62,21 @@ describe("watch_pr_ci claim deps", () => {
       });
       expect(buildClaimDeps(config, CLIENT)?.configMisfit).toMatch(
         /^ci round: time settings do not fit .*the verify step needs/,
+      );
+    });
+
+    // 起動の前の保留は設定全体で1つなので、どれかのリポジトリに静的検査があれば、その1回分を見積もりに足す。
+    test("counts the static checks when a repository has them", () => {
+      const config = parseFactoryConfig({
+        ...RAW_CONFIG,
+        claude_timeout_sec: 1800,
+        allowed_check_commands: ["a", "b", "c"],
+        static_check_commands_by_repo: {
+          "octo-owner/widgets": ["bunx --bun biome check ."],
+        },
+      });
+      expect(buildClaimDeps(config, CLIENT)?.configMisfit).toMatch(
+        /^ci round: time settings do not fit .*for 4 check commands/,
       );
     });
   });
@@ -286,6 +301,21 @@ describe("watch_pr_ci claim deps", () => {
       });
       await deps?.workerEnvProblem();
       expect(called).toBe(false);
+    });
+
+    // 静的検査も検査の枠で実行するので、通常の検査コマンドが空でも、静的検査があれば環境を確かめる。
+    test("returns the stale image reason when only static check commands are configured", async () => {
+      const config = parseFactoryConfig({
+        ...RAW_CONFIG,
+        allowed_check_commands: [],
+        static_check_commands_by_repo: {
+          "octo-owner/widgets": ["bunx --bun biome check ."],
+        },
+      });
+      const deps = buildClaimDeps(config, CLIENT, async () => STALE);
+      expect((await deps?.workerEnvProblem())?.reason).toBe(
+        "worker_image_stale",
+      );
     });
   });
 

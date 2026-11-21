@@ -66,7 +66,7 @@
 | 時刻の項目(`*_enabled_since`) | ISO 8601の時刻。形に合わなければ伏せた印 |
 | 列挙の項目(モデル名、ラベル名、ブランチ名、投稿の形式など。表にある項目) | 60字までの英数字と`.`、`_`、`:`、`/`、`-`の文字列。形に合わない、秘密らしい語か秘密の形を含む文字列は、伏せた印(`{redacted: true, hash}`) |
 | 要素が名前かURLの一覧(`repo_allowlist`、`dependabot_other_repos`、`default_reviewers`) | 件数と、要素のハッシュ(`{count, hash}`)。要素の順は比べない |
-| コマンド、URL、リポジトリ、身元に関わる項目(`check_commands_by_repo`、`allowed_check_commands`、`factory_repo`、`factory_repo_id`、`windmill_public_url`、`owners`、`allowed_labeler_`で始まる項目) | 正規化したJSONのsha256の先頭16桁(`{hash}`)。変更後の側には、前後のハッシュが違うかを示す`changed`を付ける |
+| コマンド、URL、リポジトリ、身元に関わる項目(`check_commands_by_repo`、`static_check_commands_by_repo`、`allowed_check_commands`、`factory_repo`、`factory_repo_id`、`windmill_public_url`、`owners`、`allowed_labeler_`で始まる項目) | 正規化したJSONのsha256の先頭16桁(`{hash}`)。変更後の側には、前後のハッシュが違うかを示す`changed`を付ける |
 | 表にある項目で、値が参照(`$var:`、`$res:`、`$jsonvar:`)を含む(項目の種類を問わない) | 参照の先を調べず、伏せた印(`{redacted: true, hash}`) |
 | 表にある項目で、値の型が項目の種類に合わない | 値を入れず、値のハッシュだけを添えた`{kind: "unknown", hash}` |
 | 表に無い項目 | 値を入れず、ハッシュも添えず、`{kind: "unknown"}`だけにする |

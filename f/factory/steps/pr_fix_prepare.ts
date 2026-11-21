@@ -9,7 +9,11 @@ import {
   checkImageProblemsFromEnv,
 } from "../lib/check_sandbox.ts";
 import { evaluateCiRoundPrepareGuard } from "../lib/ci_fix_round.ts";
-import { isRepoAllowed, loadConfig } from "../lib/config.ts";
+import {
+  isRepoAllowed,
+  loadConfig,
+  staticCheckCommandsFor,
+} from "../lib/config.ts";
 import {
   CONFLICT_ROUND_DETAILS,
   conflictRoundReason,
@@ -146,7 +150,7 @@ const NO_CONFLICT: ConflictPrepared = {
  * PRのブランチ名から引いた作業項目が、設計の段階から実装の間(`designing`、`awaiting_design_approval`、`approved`、`implementing`)なら`guard_blocked`を返す。
  * 競合回では、止めた理由の注記を、設計の段階か実装かで分ける。
  * worktreeを前の実行のプロセスがまだ使っていれば、何も止めずに保持者を理由に載せて`guard_blocked`を返す。
- * `allowed_check_commands`があり、workerが検査を実行できないときと、枠の記録が指すworktreeを同じ理由で取り戻せないときは、
+ * `allowed_check_commands`か、このリポジトリの静的検査のコマンドがあり、workerが検査を実行できないときと、枠の記録が指すworktreeを同じ理由で取り戻せないときは、
  * 要対応の通知を残して`guard_blocked`を返す。通知は、イメージが古ければ`host_action_required`、稼働中のworkerの問題なら`check_runtime_unsafe`である。
  * 作業項目が無い、またはPR番号が無いときは例外を投げる。
  * CIの失敗を直す回(`ci_check_id`が非NULL)は、次を変える。
@@ -239,13 +243,16 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     };
   }
 
+  // 検証のステップは、このリポジトリに静的検査のコマンドがあれば、通常の検査に加えて静的検査も実行する。
+  const hasStaticChecks =
+    staticCheckCommandsFor(config, workItem.owner, workItem.repo).length > 0;
   // 修正・検証ステップの最悪の所要時間がflow.yamlのtimeoutに収まらない設定では、
   // Windmillがアプリ側のtimeoutより先にステップを打ち切るため、worktreeに触れる前に止める。
   const timeoutMisfit = ciRound
-    ? ciRoundTimeoutMisfit(config)
+    ? ciRoundTimeoutMisfit(config, hasStaticChecks)
     : conflictRound
-      ? conflictRoundTimeoutMisfit(config)
-      : prFixTimeoutMisfit(config);
+      ? conflictRoundTimeoutMisfit(config, hasStaticChecks)
+      : prFixTimeoutMisfit(config, hasStaticChecks);
   if (timeoutMisfit !== null) {
     return {
       outcome: "guard_blocked",
@@ -256,6 +263,9 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
 
   // 前提を満たさないまま進むと、Claudeの修正を1回使ってから検証のステップで止まるので、Claudeより前に確かめる。
   // 関門と同じ`guard_blocked`で止め、修正のラウンドを記録しない。
+  // 静的検査も検証のステップで同じ枠を使って実行するので、静的検査だけがあるリポジトリも前提を確かめる。
+  const hasAnyCheckCommands =
+    config.allowed_check_commands.length > 0 || hasStaticChecks;
   const reportStaleImage = (error: CheckEnvironmentError): Promise<void> =>
     recordCheckEnvironmentNotice(
       {
@@ -265,10 +275,10 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
       },
       error,
     );
-  const staleImage = await checkImageGate(
-    config.allowed_check_commands.length > 0,
-    { problems: () => checkImageProblemsFromEnv(), report: reportStaleImage },
-  );
+  const staleImage = await checkImageGate(hasAnyCheckCommands, {
+    problems: () => checkImageProblemsFromEnv(),
+    report: reportStaleImage,
+  });
   if (staleImage !== null) {
     return {
       outcome: "guard_blocked",

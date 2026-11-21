@@ -73,7 +73,7 @@ const PLAIN: Readonly<Record<string, string>> = {
   "pr_fix/pr_fix_apply":
     "attempt,base_sha,ci_check_id,conflict_check_id,factory_clone_dir,head_sha,owner,parent_work_item_id,pr_number,repo,work_item_id,worktree_dir,worktree_git_pointer",
   "pr_fix/pr_fix_verify":
-    "apply_outcome,attempt,auto_tree_sha,base_sha,baseline_sha,ci_check_id,conflict_check_id,factory_clone_dir,head_sha,owner,parent_work_item_id,pr_number,repo,work_item_id,worktree_dir,worktree_git_pointer",
+    "apply_outcome,attempt,auto_tree_sha,base_sha,baseline_sha,ci_check_id,conflict_check_id,factory_clone_dir,head_sha,owner,parent_work_item_id,pr_number,repo,repo_dir,work_item_id,worktree_dir,worktree_git_pointer",
   "pr_fix/pr_fix_finish":
     "auto_tree_sha,base_sha,baseline_sha,ci_check_id,conflict_check_id,fix_round,head_sha,max_comment_id,max_review_comment_id,max_review_id,outcome,owner,parent_work_item_id,pr_number,repo,repo_dir,trigger_review_ids,verified_tree_sha,work_item_id,worktree_dir,worktree_git_pointer",
   "pr_fix/failure": "work_item_id",

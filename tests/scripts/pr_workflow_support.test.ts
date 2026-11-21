@@ -522,47 +522,76 @@ describe("pr_workflow_support conflict round", () => {
   describe("conflictRoundTimeoutMisfit", () => {
     test("accepts the default time settings without check commands", () => {
       expect(
-        conflictRoundTimeoutMisfit({
-          claude_timeout_sec: 1800,
-          allowed_check_commands: [],
-        }),
+        conflictRoundTimeoutMisfit(
+          {
+            claude_timeout_sec: 1800,
+            allowed_check_commands: [],
+          },
+          false,
+        ),
       ).toBeNull();
     });
 
     test("accepts the default time settings with two check commands", () => {
       expect(
-        conflictRoundTimeoutMisfit({
-          claude_timeout_sec: 1800,
-          allowed_check_commands: ["mise run a", "mise run b"],
-        }),
+        conflictRoundTimeoutMisfit(
+          {
+            claude_timeout_sec: 1800,
+            allowed_check_commands: ["mise run a", "mise run b"],
+          },
+          false,
+        ),
       ).toBeNull();
     });
 
     test("stops a Claude timeout that the fix step cannot hold", () => {
       expect(
-        conflictRoundTimeoutMisfit({
-          claude_timeout_sec: PR_FIX_APPLY_STEP_TIMEOUT_SEC,
-          allowed_check_commands: [],
-        }),
+        conflictRoundTimeoutMisfit(
+          {
+            claude_timeout_sec: PR_FIX_APPLY_STEP_TIMEOUT_SEC,
+            allowed_check_commands: [],
+          },
+          false,
+        ),
       ).toContain("pr_fix time settings do not fit the flow step timeout");
     });
 
     test("stops a verify step that cannot hold the check commands", () => {
-      const reason = conflictRoundTimeoutMisfit({
-        claude_timeout_sec: 60,
-        allowed_check_commands: Array.from({ length: 400 }, () => "mise run x"),
-      });
+      const reason = conflictRoundTimeoutMisfit(
+        {
+          claude_timeout_sec: 60,
+          allowed_check_commands: Array.from(
+            { length: 400 },
+            () => "mise run x",
+          ),
+        },
+        false,
+      );
       expect(reason).toContain(String(PR_FIX_VERIFY_STEP_TIMEOUT_SEC));
     });
 
     test("carries the conflict round prefix when only the conflict round work does not fit", () => {
-      const reason = conflictRoundTimeoutMisfit({
-        claude_timeout_sec: 3250,
-        allowed_check_commands: [],
-      });
+      const reason = conflictRoundTimeoutMisfit(
+        {
+          claude_timeout_sec: 3250,
+          allowed_check_commands: [],
+        },
+        false,
+      );
       expect(
         reason?.startsWith("conflict round: time settings do not fit"),
       ).toBe(true);
+    });
+
+    test("counts the static checks as one more check command in the verify step", () => {
+      const reason = conflictRoundTimeoutMisfit(
+        {
+          claude_timeout_sec: 1800,
+          allowed_check_commands: ["a", "b", "c", "d"],
+        },
+        true,
+      );
+      expect(reason).toContain("4 + 1 for the static checks");
     });
   });
 

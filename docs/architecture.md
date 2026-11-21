@@ -698,6 +698,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/repo_owner_gate` | script | [LIB] 対象リポジトリのオーナーIDの照合 |
 | `f/factory/lib/skill_registry` | script | [LIB] 工程ごとのスキルの登録簿 |
 | `f/factory/lib/model_policy` | script | [LIB] 工程ごとのモデルの選択 |
+| `f/factory/lib/dependabot_repo_notice` | script | [LIB] 必須チェックが無いdependabot要人手の集約通知 |
 | `f/factory/lib/manual_intake_support` | script | [LIB] 手動投入の検証とIssue本文 |
 | `f/factory/lib/supersede_support` | script | [LIB] 承認の取り消しのコメント |
 | `f/factory/lib/approval_support` | script | [LIB] 承認依頼の純粋ロジック |
@@ -751,6 +752,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/isolation_proof` | script | [LIB] 隔離の合格の証拠の型 |
 | `f/factory/lib/investigate_isolation_gate` | script | [LIB] 隔離の合格の関門 |
 | `f/factory/lib/investigate_isolation_observe` | script | [LIB] 隔離の観測でtranscriptから残す項目を取り出す |
+| `f/factory/lib/static_check_workspace` | script | [LIB] 静的検査の作業木 |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
 | `f/factory/console_holds` | script | [OP-0-2] 保留と凍結を取得 |
 | `f/factory/console_jobs` | script | [OP-0-3] ジョブの一覧と詳細を取得 |

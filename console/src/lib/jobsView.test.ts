@@ -1240,6 +1240,22 @@ describe("describeConfigValue", () => {
     });
   });
 
+  test("writes the static check commands of a repository as a list of its own", () => {
+    expect(
+      describeValue("static_check_commands_by_repo", {
+        "u-stem/app": ["bunx --bun tsc --noEmit"],
+      }),
+    ).toEqual({
+      kind: "entries",
+      entries: [
+        {
+          key: "u-stem/app",
+          value: { kind: "list", items: ["bunx --bun tsc --noEmit"] },
+        },
+      ],
+    });
+  });
+
   test("keeps an empty array inside an object as an empty list", () => {
     expect(
       describeValue("check_commands_by_repo", { "u-stem/app": [] }),

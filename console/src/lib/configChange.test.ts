@@ -1008,4 +1008,26 @@ describe("checkCommandsOf", () => {
       ]).byRepo,
     ).toEqual({ kind: "unknown" });
   });
+
+  test("does not count the repositories that have only static check commands", () => {
+    expect(
+      checkCommandsOf([
+        value("static_check_commands_by_repo", {
+          "u-stem/app": ["bunx --bun tsc --noEmit"],
+        }),
+      ]).byRepo,
+    ).toEqual(COUNT(0));
+  });
+
+  test("keeps counting per-repository commands next to static check commands", () => {
+    expect(
+      checkCommandsOf([
+        value("check_commands_by_repo", { "u-stem/app": ["bun test"] }),
+        value("static_check_commands_by_repo", {
+          "u-stem/lib": ["bunx --bun tsc --noEmit"],
+          "u-stem/web": ["bunx --bun tsc --noEmit"],
+        }),
+      ]).byRepo,
+    ).toEqual(COUNT(1));
+  });
 });

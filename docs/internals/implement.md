@@ -338,6 +338,7 @@ Claudeの1回の実行を1ラウンドとし、ラウンドごとに次の順で
 8. 変更があれば、gitleaksを実行する。
    検査したツリーと手順4で取ったツリーが違えば、検査コマンドを実行せずに止める。
    同じなら、続けて検査コマンドを実行する。
+   保護パスを変えたラウンドは、検査コマンドの代わりに静的検査を動かす([静的検査](#静的検査))。
 9. ループを終えるかを判定する。
 10. 修正ラウンドの前にリースと`.git`を確かめ、どちらかに通らなければ止める。
 
@@ -348,6 +349,7 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。
 
 検査コマンドは、そのリポジトリについて`check_commands_by_repo`に明示したものだけを実行する。
 保護パスを変えたラウンドと、エントリが無いリポジトリでは実行しない。
+保護パスを変えたラウンドでは、静的検査のコマンドがあれば、代わりに静的検査を動かす。
 gitleaksは設定に関わらず毎ラウンド実行する。
 
 検査コマンドを実行する直前に、毎回`git clean -fdX`で無視ファイル(`node_modules/`やビルドの成果物)を消す。
@@ -356,6 +358,75 @@ worker imageにmiseは無いので、検査コマンドはworkerで直接動く�
 
 各検査コマンドは`implement_check_timeout_sec`で打ち切り、期限では打ち切らない。
 検査に失敗したら、その出力をDATAとして修正のプロンプトに渡し、Claudeに直させる。
+
+### 静的検査
+
+静的検査は、保護パスを変えたラウンドに、検査コマンドの代わりに実行する検査である。
+コマンドは`static_check_commands_by_repo`に、リポジトリを明示したものだけを使う。
+`allowed_check_commands`と`check_commands_by_repo`には落とさない。
+静的検査は、mainの版の道具でPRのファイルを読むだけで、PRのコードを実行しない。
+保護パスを変えたラウンドでも実行してよいのは、このためである。
+実装は`f/factory/lib/static_check_workspace.ts`と、検証のループの`evaluateChecks`にある。
+
+静的検査は、次の順に進む。
+
+1. 依存の導入と設定のコマンドの、1件あたりの打ち切りを決める([静的検査の時間](#静的検査の時間))。
+   下限の30秒に届かなければ、作業木を作らず、静的検査を飛ばす。
+2. 依存のファイル、検査が実行する側のファイル、静的検査が固定しない道具の設定をPRが変えていれば、作業木を作らず、静的検査を飛ばす。
+   作業木に安全に写せない名前(絶対パス、`..`、`.git`の要素、バックスラッシュ、不可視文字、NFKCで形の変わる文字など)の変更があるときも、同じく飛ばす。
+   作業木の直下で、gitがgitのディレクトリとして読む名前(`HEAD`、`config`、`objects`、`refs`など)の変更があるときも、同じく飛ばす。
+3. 比較の基準(`base_sha`)の木を、`git archive`で`/tmp`の下の`factory-static-check-`で始まるディレクトリ(作業木)に展開する。
+   cloneの`.git`は持ち込まないので、cloneのフックと設定を読まない。
+4. PRの変更ファイルを、作業木に重ねる。
+5. 作業木に新しい`.git`を作り、作業木のファイルを索引に入れる。
+   検査のスクリプトが`git ls-files`で対象を列挙するためである。
+   作り方は[静的検査の作業木](check-sandbox.md#静的検査の作業木)にある。
+6. 通常の検査と同じ枠の中で、`bun install --frozen-lockfile --ignore-scripts`を実行する。
+   失敗したら、設定のコマンドを実行せず、静的検査を飛ばす。
+   実行ファイルを起動できなかったときは、検査コマンドを起動できなかったときと同じに扱う。
+7. 設定のコマンドを順に実行する。
+8. 作業木を消す。
+   消せなかったときは警告だけを出し、次に作業木を作るときの掃除が片付ける。
+
+安全に写せない名前のパスだけを重ねずに検査すると、作業木がPRの版と食い違う。
+そのファイルを読む検査が修正のラウンドで直せない偽の失敗を出すか、検査していないファイルを残したまま通るので、静的検査ごと飛ばす。
+依存の導入の失敗は、mainのlockfileで入れる依存の問題で、Claudeが直せる失敗ではないので、修正のラウンドに回さない。
+
+重ねるのは、PRが変えたファイルのうち、worktreeで通常のファイルであるものである。
+worktreeに無いファイルは、作業木からも消す。
+symlinkとディレクトリは重ねない。
+次のファイルは、PRの版を使わない。
+一覧は3つの定数にある。
+`STATIC_CHECK_NOT_OVERLAID`、`STATIC_CHECK_UNCHECKED_CONFIG_PATTERNS`、`STATIC_CHECK_GITDIR_NAMES`である。
+`tests/lib/static_check_workspace.test.ts`が、3つを固定する。
+同じテストが、実装の保護パスのファイル名の規則(`IMPLEMENT_PROTECTED_BASENAME_PATTERNS`)ごとに、扱いを固定する。
+扱いは、静的検査を飛ばすか、mainの版を使うか、PRの版を重ねるかのどれかである。
+規則を足すと、扱いを決めるまでテストが落ちる。
+テスト、文書、`scripts/`(`lint-`で始まるものを除く)は、保護パスでも重ねる。
+静的検査が常に飛ぶと、保護パスを変えたラウンドで検査する意味が無くなるためである。
+
+| 種類 | 対象 | 当たったときの動き | 理由 |
+| --- | --- | --- | --- |
+| 依存のファイル | `package.json`、`bun.lock`、`console/`の同名のファイル | 静的検査を飛ばす | 作業木はmainの依存を入れるので、依存を変えたPRはmainの依存で検査できず、偽の失敗を出すため |
+| 検査が実行する側のファイル | `scripts/lint-`で始まるファイルと、検査のコマンドが起動するスクリプトから読み込まれるファイル | 静的検査を飛ばす | mainの版で検査すると、PRのほかのファイルとかみ合わず偽の失敗が出て、修正のラウンドでは直せないため |
+| 静的検査が固定しない道具の設定 | `*.config.js`などの設定モジュール、`.eslintrc`系、`.prettierrc`系、`.babelrc`系、`deno.json`、`Makefile`、`Taskfile.yml`、ほかの言語のマニフェストとlockfile、ランタイムの版の指定、`.gitmodules`、`.gitleaks.toml`など(`STATIC_CHECK_UNCHECKED_CONFIG_PATTERNS`) | 静的検査を飛ばす | 実装の保護パスのファイル名のうち、道具の設定や実行されるコードとして読まれるもの。PRの版を重ねると、一覧に無い道具を設定のコマンドに足したときに、その道具がPRの設定を読む。mainの版を使うと偽の失敗が出る |
+| gitのディレクトリの形 | 作業木の直下の`HEAD`、`config`、`objects`、`refs`、`packed-refs`、`commondir`、`gitdir`、`index`、`info`、`hooks`、`worktrees`、`modules`、`.git`の別名(`STATIC_CHECK_GITDIR_NAMES`) | 静的検査を飛ばす | 作業木の直下がbareのリポジトリの形になると、gitがその`config`を読み、書かれたコマンドを実行しうるため |
+| 道具の設定と環境を決めるファイル | Biome、tsconfig、markdownlint、textlint、lefthook、bunfig、miseの設定、`.tool-versions`、`wmill.yaml`、`.npmrc`、`.gitignore`などの無視と属性の設定、`.env`系 | mainの版を使う | PRが、検査の道具の設定や読み込む環境変数を差し替えられないようにするため |
+| 保護パスの禁止接頭辞 | `.github/`、`.claude/`、`mise/`など(`FORBIDDEN_PATH_PREFIXES`) | mainの版を使う | 静的検査が読む必要が無いため |
+| `node_modules/`の下 | どの深さでも | mainの版を使う | PRが入れた依存のコードで、mainの道具を差し替えさせないため |
+
+結果の名前の先頭には`static:`で始まる名前になる。
+通ったラウンドの結果は、PR本文の「動作確認結果」と通知に、静的検査だけを実行したことが分かる名前で並ぶ。
+`bun test`、メタデータ、`test-db`、差分カバレッジは、保護パスを変えたラウンドでは実行せず、GitHub側のCIに任せる。
+静的検査が失敗したラウンドは、検査コマンドの失敗と同じく、出力を添えて修正のラウンドへ進む。
+
+静的検査を飛ばしたラウンドは、`checks_skipped`になる。
+理由は、保護パスを変えて静的検査も実行できなかったことと、飛ばした理由(作業木を作らなかった理由、依存の導入の失敗、時間の不足)である。
+workerが検査の前提を満たさないときの止め方は、検査コマンドと同じである。
+
+静的検査を動かす前に、検査コマンドと同じ本文の形で、コンテナの分離が無い実行の記録(`unsandboxed_check_commands`)を残す。
+依存の導入がnetworkに出ることと、残るリスクは[R-CHK-16](../security-risks.md#r-chk-16)にある。
+作業木の所有の受け渡しは[静的検査の作業木](check-sandbox.md#静的検査の作業木)にある。
 
 ### ループの終わり方
 
@@ -366,14 +437,14 @@ worker imageにmiseは無いので、検査コマンドはworkerで直接動く�
 | --- | --- | --- |
 | `requirements_gap` | Claudeが要件の不足を返した | `requirements_gap` |
 | `design_gap` | Claudeが設計の不足を返した(設計書が渡された実行だけ) | `design_gap` |
-| `checks_skipped` | 検査コマンドを実行しなかった | `checks_skipped` |
+| `checks_skipped` | 検査コマンドも静的検査も実行しなかった | `checks_skipped` |
 | `checks_passed` | 検査に通った | `done` |
 | `max_rounds` | ラウンドが`implement_max_rounds`に達した | `check_failed` |
 | `daily_budget` | 日次予算を超えた | `check_failed` |
 | `deadline` | 期限までの残りが修正ラウンドの最悪の所要時間に足りない | `check_failed` |
 | `stalled` | 差分か検査の出力が前のラウンドと同じ。ただし、この失敗で`heavy_model`に上がるときは除く | `stalled` |
 
-検査コマンドを動かさなかったラウンドは、GitHub側のCIに検査を任せる。
+検査コマンドと静的検査のどちらも動かさなかったラウンドは、GitHub側のCIに検査を任せる。
 停滞(`stalled`)で止めるのは、同じ状態でもう1回直させても予算を使うだけになるからである。
 ただし、そのラウンドの失敗でモデルが`model`から`heavy_model`に変わるときは、停滞で止めず、`heavy_model`で修正ラウンドを1回回す。
 同じ失敗でも、上位のモデルなら直せる場合があるためである。
@@ -763,6 +834,7 @@ PR修正が親を差し戻すときも同じである。
 | `implement_max_changed_files` | `60` | 分岐点から変えてよいファイル数の上限 |
 | `implement_max_diff_lines` | `3000` | 分岐点からの追加と削除の行数の上限 |
 | `check_commands_by_repo` | `{}` | リポジトリごとの検査コマンド |
+| `static_check_commands_by_repo` | `{}` | リポジトリごとの、保護パスを変えたラウンドの静的検査のコマンド。空の間は静的検査が動かない |
 | `daily_budget_usd` | `50` | 全フローで共有する1日の費用の上限(USD) |
 | `max_attempts` | `3` | 要件定義の試行回数の上限 |
 
@@ -781,6 +853,14 @@ workerで直接動く例は`bunx --no-install --bun tsc --noEmit`や`bunx --no-i
 `--no-install`は、lockfileから入れていない実行ファイルをレジストリから取得しないための指定で、理由は[設計工程と実装フローの運用](../operations/stages.md#検査コマンドを設定する)にある。
 workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く。
 実装フローは`allowed_check_commands`を使わない。
+
+`static_check_commands_by_repo`は、`check_commands_by_repo`と同じ形で書く。
+そのリポジトリを明示したエントリだけを使い、`allowed_check_commands`と`check_commands_by_repo`には落とさない。
+先頭の依存の導入(`bun install --frozen-lockfile --ignore-scripts`)は実装が足すので、書かない。
+PRのコードを実行するコマンド(`bun test`など)は、静的検査に書かない。
+書けるのは、Biome、tsc、`bun run scripts/...`のうち、importの閉包を`STATIC_CHECK_NOT_OVERLAID`の`executed`に載せて確かめたものだけである。
+どの一覧にも無い道具の設定ファイルは、PRの版のまま作業木に入る。
+設定のコマンドの例と有効にする手順は、[設計工程と実装フローの運用](../operations/stages.md#静的検査を設定する)にある。
 
 1つのIssueにかかる費用の上限は、`implement_max_rounds × implement_max_budget_usd_per_run`が目安である。
 Claudeの不正な出力への再試行は、その実行の費用の上限をもう1回使うので、最悪でその2倍になる。
@@ -807,6 +887,8 @@ Claudeの不正な出力への再試行は、その実行の費用の上限を�
 | --- | --- |
 | Claude 1回の実行 | `implement_timeout_sec`と期限までの残りの短い方 |
 | 検査コマンド1件 | `implement_check_timeout_sec`(期限では打ち切らない) |
+| 静的検査の依存の導入と、静的検査のコマンド1件 | `implement_check_timeout_sec`を等分した値([静的検査の時間](#静的検査の時間)) |
+| 静的検査の作業木を作る`git archive`、`tar`、`git init`、`git add` | それぞれ120秒 |
 | gitleaks | 300秒 |
 | フロー全体 | 準備の開始から`implement_flow_timeout_sec` |
 
@@ -826,8 +908,33 @@ implement_timeout_sec + 600
 15秒は、検査コマンド1件が打ち切りの後に停止と出力待ちで上乗せしうる時間である。
 既定値なら検査コマンドは7件まで収まる。
 
+静的検査のコマンドがあるリポジトリは、検査コマンド数を1件多く数え、作業木の作成の540秒を足す。
+修正ラウンドを始められる残り時間(`fixRoundWorstCaseSec`)にも、同じ1件と540秒を足す。
+既定値で静的検査があるなら、検査コマンドは5件まで収まる。
+
 確かめるのは準備のステップだけである。
 そのため、実装フローの実行中は時間設定を変えない。
+
+### 静的検査の時間
+
+静的検査は、時間の見積もりで検査コマンド1件分と数える。
+実際の最悪の所要時間も、その1件分(`implement_check_timeout_sec`と停止の上乗せ15秒)に収める。
+
+依存の導入と、設定のコマンドの1件ずつは、次の打ち切りで実行する。
+実装は`staticCheckCommandTimeoutMs`(`f/factory/lib/static_check_workspace.ts`)にある。
+
+```text
+floor((implement_check_timeout_sec + 15) / (設定のコマンド数 + 1)) - 15
+```
+
+全件が打ち切りまでかかり、それぞれに15秒の上乗せが付いても、合計は1件分を超えない。
+既定の900秒で設定のコマンドが6件なら、1件あたり約115秒である。
+1件あたりが30秒に届かないときは、静的検査を飛ばす。
+30秒に延ばすと、合計が1件分を超えるためである。
+
+作業木を作る`git archive`、`tar`、`git init`、`git add`は、それぞれ120秒で打ち切る。
+この4件は1件分に含めず、停止の上乗せを含めた540秒を見積もりに足す。
+600秒の余裕は、gitleaksと、gitとDBの操作の分なので、作業木の作成を含めない。
 
 ### Windmillのtimeoutで打ち切られたとき
 
@@ -1168,6 +1275,7 @@ main cloneの`.git`は書き換えられないので、検査コマンドの中�
 仕組みは[検査コマンドの実行と権限の内部仕様](check-sandbox.md#検査コマンドの権限)にある。
 
 lockfileは保護パスなので、Claudeが書き換えたラウンドでは検査コマンドを実行しない。
+静的検査も、依存のファイルを変えたラウンドは実行しない([静的検査](#静的検査))。
 
 ### 対象リポジトリのCI
 
@@ -1179,7 +1287,8 @@ CIは、人のレビューより前に、Claudeが書いたコードをそのリ
 ### 保護パスの記録
 
 保護パスの変更は、止めずにPR本文とDiscordに列挙する。
-保護パスを変えたラウンドでは検査コマンドを実行せず、検査はGitHub側のCIに任せる。
+保護パスを変えたラウンドでは検査コマンドを実行せず、静的検査があればそれだけを実行する。
+残りの検査はGitHub側のCIに任せる。
 Claudeが書き換えた`mise.toml`や`package.json`のscriptsをworkerで実行すると、Issue本文を経由してコードを実行させる経路になるためである。
 
 列挙するのは次の3種類である。
@@ -1541,6 +1650,8 @@ Consoleが表示する承認済みの文書は渡さない。
 検査コマンドは、Claudeが書いたコードをworkerの中で、非特権のユーザーとして、コンテナの分離なしに実行する([検査コマンドの権限](check-sandbox.md#検査コマンドの権限))。
 そのため、`check_commands_by_repo`にそのリポジトリのコマンドを明示したときだけ実行し、`allowed_check_commands`は使わない。
 networkとworkerの資源を共有するので、Issueを信頼できる人だけが起票するリポジトリにだけ設定する。
+保護パスを変えたラウンドの静的検査は、PRのコードを実行しないので、別の設定(`static_check_commands_by_repo`)で有効にする。
+静的検査も、`allowed_check_commands`と`check_commands_by_repo`には落とさない([静的検査](#静的検査))。
 
 ### 対象リポジトリのCIが動く
 
@@ -1553,8 +1664,10 @@ Claudeの書いたコードは、人のレビューより前に、そのリポ�
 
 保護パスの変更は止めずに、PR本文とDiscordの通知に列挙する。
 保護パスは、PR修正の一覧より広い`IMPLEMENT_PROTECTED_PATH_PREFIXES`などで定める。
-そのラウンドは検査コマンドを実行せず、検査はGitHubのCIに任せる。
+そのラウンドは検査コマンドを実行せず、静的検査があればそれだけを実行する。
+残りの検査はGitHubのCIに任せる。
 書き換えられた設定をworkerで実行すると、Issueの本文からコードを実行する経路になるためである。
+静的検査は、mainの版の道具でPRのファイルを読むだけで、道具の設定と実行されるスクリプトはPRの版を使わない([静的検査](#静的検査))。
 
 ### symlinkの変更を止める
 

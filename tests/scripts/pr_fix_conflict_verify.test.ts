@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import type { CheckCommandResult } from "../../f/factory/lib/check_runner.ts";
 import { CheckImageStaleError } from "../../f/factory/lib/check_sandbox.ts";
 import { CI_ROUND_REASONS_WITHHELD } from "../../f/factory/lib/ci_fix_round.ts";
+import type { StaticCheckOutcome } from "../../f/factory/lib/implement_loop.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
 import {
   type ConflictFixVerifyDeps,
@@ -45,11 +46,28 @@ function check(state: boolean | "unrunnable"): CheckCommandResult {
   };
 }
 
+const STATIC_SKIP_REASON =
+  "the change updates dependency files, so the base dependencies cannot check it";
+
+/** 静的検査の結果。`"skipped"`は作業木を作らなかった回、それ以外は作業木で実行した1件の結果を表す。 */
+function staticOutcome(
+  state: boolean | "unrunnable" | "skipped",
+): StaticCheckOutcome<CheckCommandResult> {
+  if (state === "skipped")
+    return { kind: "skipped", reason: STATIC_SKIP_REASON };
+  if (state === "unrunnable") return { kind: "ran", results: [check(state)] };
+  return {
+    kind: "ran",
+    results: [{ ...check(state), command: "bunx --bun tsc --noEmit" }],
+  };
+}
+
 const INPUT: ConflictFixVerifyInput = {
   worktreeGitPointer: POINTER,
   baselineSha: BASELINE,
   branch: "fix/x",
   hasCheckCommands: true,
+  hasStaticCheckCommands: false,
   apply: {
     summary: "apply summary",
     replies: [],
@@ -66,6 +84,9 @@ type Options = {
   readonly treeShas?: readonly string[];
   readonly checks?: readonly (boolean | "unrunnable")[];
   readonly checksError?: Error;
+  /** `runStaticChecks`の結果。無ければ成功を返す。 */
+  readonly staticCheck?: boolean | "unrunnable" | "skipped";
+  readonly staticChecksError?: Error;
   readonly scan?: ConflictFixVerifyDeps["scanText"];
 };
 
@@ -118,6 +139,13 @@ function harness(options: Options = {}): {
       const state = options.checks?.[checkIndex] ?? true;
       checkIndex += 1;
       return [check(state)];
+    },
+    runStaticChecks: async () => {
+      calls.push("runStaticChecks");
+      if (options.staticChecksError !== undefined) {
+        throw options.staticChecksError;
+      }
+      return staticOutcome(options.staticCheck ?? true);
     },
     scanText:
       options.scan ??
@@ -471,5 +499,95 @@ describe("runConflictFixVerify: the check commands", () => {
   test("lets another error of the checks through", async () => {
     const { deps } = harness({ checksError: new Error("boom") });
     await expect(runConflictFixVerify(deps, INPUT)).rejects.toThrow("boom");
+  });
+});
+
+describe("runConflictFixVerify: the static checks", () => {
+  const STATIC_INPUT: ConflictFixVerifyInput = {
+    ...INPUT,
+    hasStaticCheckCommands: true,
+  };
+  const STATIC_ONLY_INPUT: ConflictFixVerifyInput = {
+    ...STATIC_INPUT,
+    hasCheckCommands: false,
+  };
+
+  test("does not run the static checks when the repository has none", async () => {
+    const { deps, calls } = harness();
+    await runConflictFixVerify(deps, INPUT);
+    expect(calls).not.toContain("runStaticChecks");
+  });
+
+  test("runs the static checks when the repository has no check commands", async () => {
+    const { deps, calls } = harness();
+    await runConflictFixVerify(deps, STATIC_ONLY_INPUT);
+    expect(calls).toEqual([...INSPECTION, "runStaticChecks", ...INSPECTION]);
+  });
+
+  test("runs the static checks before it announces and runs the check commands", async () => {
+    const { deps, calls } = harness();
+    await runConflictFixVerify(deps, STATIC_INPUT);
+    expect(calls.slice(INSPECTION.length, INSPECTION.length + 3)).toEqual([
+      "runStaticChecks",
+      "announceChecks",
+      "runChecks",
+    ]);
+  });
+
+  test("is done with the verified tree when the static checks pass", async () => {
+    const { deps } = harness();
+    const result = await runConflictFixVerify(deps, STATIC_ONLY_INPUT);
+    expect([result.outcome, result.verified_tree_sha]).toEqual([
+      "done",
+      TREE_1,
+    ]);
+  });
+
+  test("stops at a static check that failed, with the fixed reason", async () => {
+    const { deps } = harness({ staticCheck: false });
+    const result = await runConflictFixVerify(deps, STATIC_INPUT);
+    expect([result.outcome, result.reason]).toEqual([
+      "blocked",
+      "conflict round: check failed",
+    ]);
+  });
+
+  test("logs the failed static check under its static name", async () => {
+    const { deps, warnings } = harness({ staticCheck: false });
+    await runConflictFixVerify(deps, STATIC_ONLY_INPUT);
+    expect(warnings).toEqual([
+      { commands: ["static: bunx --bun tsc --noEmit"] },
+    ]);
+  });
+
+  test("is done when the static checks were skipped", async () => {
+    const { deps } = harness({ staticCheck: "skipped" });
+    const result = await runConflictFixVerify(deps, STATIC_ONLY_INPUT);
+    expect(result.outcome).toBe("done");
+  });
+
+  test("records the reason in the result when the static checks were skipped", async () => {
+    const { deps } = harness({ staticCheck: "skipped" });
+    const result = await runConflictFixVerify(deps, STATIC_INPUT);
+    expect(result.static_checks_skipped_reason).toBe(STATIC_SKIP_REASON);
+  });
+
+  test("returns guard_blocked when a static check could not run", async () => {
+    const { deps } = harness({ staticCheck: "unrunnable" });
+    const result = await runConflictFixVerify(deps, STATIC_INPUT);
+    expect([result.outcome, result.reason]).toEqual([
+      "guard_blocked",
+      `check command could not run: bunx --bun tsc --noEmit: ${SETPRIV_MISSING}`,
+    ]);
+  });
+
+  test("returns guard_blocked when the worker cannot run the static checks", async () => {
+    const stale = new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
+    const { deps } = harness({ staticChecksError: stale });
+    const result = await runConflictFixVerify(deps, STATIC_INPUT);
+    expect([result.outcome, result.reason]).toEqual([
+      "guard_blocked",
+      stale.message,
+    ]);
   });
 });

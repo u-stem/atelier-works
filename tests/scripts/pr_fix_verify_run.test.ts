@@ -9,7 +9,9 @@ import {
   CheckRuntimeUnsafeError,
 } from "../../f/factory/lib/check_sandbox.ts";
 import { CI_ROUND_REASONS_WITHHELD } from "../../f/factory/lib/ci_fix_round.ts";
+import type { StaticCheckOutcome } from "../../f/factory/lib/implement_loop.ts";
 import type { CheckFailure } from "../../f/factory/lib/prompts.ts";
+import { STATIC_CHECK_INSTALL_FAILED_REASON } from "../../f/factory/lib/static_check_workspace.ts";
 import type { FixReply } from "../../f/factory/lib/types.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
 import {
@@ -101,11 +103,35 @@ const RETRY_OUTPUT: FixClaudeOutput = {
   commit_body: null,
 };
 
+/**
+ * 静的検査の1回分の結果。`"skipped"`は作業木を作らなかった回、それ以外は作業木で実行した1件の結果を表す。
+ * `"unrunnable"`は、`setpriv`が実行ファイルを起動できなかった結果である。
+ */
+type StaticState = "pass" | "fail" | "unrunnable" | "skipped";
+
+const STATIC_SKIP_REASON =
+  "the change updates dependency files, so the base dependencies cannot check it";
+
+function staticOutcome(
+  state: StaticState,
+): StaticCheckOutcome<CheckCommandResult> {
+  if (state === "skipped")
+    return { kind: "skipped", reason: STATIC_SKIP_REASON };
+  if (state === "unrunnable") return { kind: "ran", results: [check(state)] };
+  return {
+    kind: "ran",
+    results: [
+      { ...check(state === "pass"), command: "bunx --bun tsc --noEmit" },
+    ],
+  };
+}
+
 const INPUT: PrFixVerifyInput = {
   worktreeGitPointer: POINTER,
   headSha: HEAD_SHA,
   branch: "fix/x",
   hasCheckCommands: true,
+  hasStaticCheckCommands: false,
   apply: {
     summary: "apply summary",
     replies: [],
@@ -118,6 +144,10 @@ type Harness = {
   readonly deps: PrFixVerifyDeps;
   /** 呼ばれた依存の名前を順に記録する。 */
   readonly calls: string[];
+  /** `runRetry`に渡った失敗の一覧を、呼び出しごとに記録する。 */
+  readonly retryFailures: (readonly CheckFailure[])[];
+  /** `warn`に渡った文と項目を、順に記録する。 */
+  readonly warnings: { message: string; fields: Record<string, unknown> }[];
 };
 
 type HarnessOptions = {
@@ -133,14 +163,21 @@ type HarnessOptions = {
   readonly retry?: PrFixRetryResult;
   /** `runChecks`が、0始まりで`at`回目の呼び出しで投げる例外。 */
   readonly checksError?: { readonly at: number; readonly error: Error };
+  /** `runStaticChecks`の呼び出しごとの結果。尽きたら成功を返す。 */
+  readonly staticChecks?: readonly StaticState[];
+  /** `runStaticChecks`が投げる例外。 */
+  readonly staticChecksError?: Error;
 };
 
 function harness(options: HarnessOptions = {}): Harness {
   const calls: string[] = [];
+  const retryFailures: (readonly CheckFailure[])[] = [];
+  const warnings: { message: string; fields: Record<string, unknown> }[] = [];
   let pointerIndex = 0;
   let headIndex = 0;
   let inspectIndex = 0;
   let checkIndex = 0;
+  let staticIndex = 0;
   const deps: PrFixVerifyDeps = {
     announceChecks: async () => {
       calls.push("announceChecks");
@@ -173,6 +210,15 @@ function harness(options: HarnessOptions = {}): Harness {
       checkIndex += 1;
       return [check(state)];
     },
+    runStaticChecks: async () => {
+      calls.push("runStaticChecks");
+      if (options.staticChecksError !== undefined) {
+        throw options.staticChecksError;
+      }
+      const state = options.staticChecks?.[staticIndex] ?? "pass";
+      staticIndex += 1;
+      return staticOutcome(state);
+    },
     budgetStatus: async () => {
       calls.push("budgetStatus");
       return {
@@ -181,16 +227,19 @@ function harness(options: HarnessOptions = {}): Harness {
         limit_usd: 10,
       };
     },
-    runRetry: async () => {
+    runRetry: async (failures) => {
       calls.push("runRetry");
+      retryFailures.push(failures);
       return options.retry ?? { outcome: "success", output: RETRY_OUTPUT };
     },
-    warn: () => {},
+    warn: (message, fields) => {
+      warnings.push({ message, fields });
+    },
     reportCheckImageStale: async (error) => {
       calls.push(`reportCheckImageStale:${error.message}`);
     },
   };
-  return { deps, calls };
+  return { deps, calls, retryFailures, warnings };
 }
 
 /** 1回分の照合と検査の呼び出し。 */
@@ -882,6 +931,213 @@ describe("runPrFixVerify: a recomputed lock", () => {
     const { deps, calls } = withVerified(true);
     await runPrFixVerify(deps, INPUT);
     expect(calls).toContain("runChecks");
+  });
+
+  test("skips the static checks for a lock that the recomputation confirmed", async () => {
+    const { deps, calls } = withVerified(true);
+    await runPrFixVerify(deps, { ...CI_INPUT, hasStaticCheckCommands: true });
+    expect(calls).not.toContain("runStaticChecks");
+  });
+});
+
+describe("runPrFixVerify: static checks", () => {
+  const STATIC_INPUT: PrFixVerifyInput = {
+    ...INPUT,
+    hasStaticCheckCommands: true,
+  };
+  const STATIC_ONLY_INPUT: PrFixVerifyInput = {
+    ...STATIC_INPUT,
+    hasCheckCommands: false,
+  };
+
+  test("does not run the static checks when the repository has none", async () => {
+    const h = harness();
+    await runPrFixVerify(h.deps, INPUT);
+    expect(h.calls).not.toContain("runStaticChecks");
+  });
+
+  test("runs the static checks when the repository has no check commands", async () => {
+    const h = harness();
+    await runPrFixVerify(h.deps, STATIC_ONLY_INPUT);
+    expect(h.calls).toEqual([...INSPECTION, "runStaticChecks", ...INSPECTION]);
+  });
+
+  // 検査コマンドは対象リポジトリのコードでworktreeを書き換えうるので、静的検査はその前のファイルを読む。
+  test("runs the static checks before it announces and runs the check commands", async () => {
+    const h = harness();
+    await runPrFixVerify(h.deps, STATIC_INPUT);
+    expect(h.calls).toEqual([
+      ...INSPECTION,
+      "runStaticChecks",
+      "announceChecks",
+      "runChecks",
+      ...INSPECTION,
+    ]);
+  });
+
+  test("does not announce the check commands when only the static checks run", async () => {
+    const h = harness();
+    await runPrFixVerify(h.deps, STATIC_ONLY_INPUT);
+    expect(h.calls).not.toContain("announceChecks");
+  });
+
+  test("does not run the static checks when the first inspection blocks", async () => {
+    const h = harness({
+      inspections: [forbidden("forbidden path changed: mise.toml")],
+    });
+    await runPrFixVerify(h.deps, STATIC_INPUT);
+    expect(h.calls).not.toContain("runStaticChecks");
+  });
+
+  test("returns done when the static checks pass", async () => {
+    const h = harness();
+    const result = await runPrFixVerify(h.deps, STATIC_ONLY_INPUT);
+    expect([result.outcome, result.commit_subject]).toEqual([
+      "done",
+      "fix: 指摘を直す",
+    ]);
+  });
+
+  test("retries with Claude when a static check fails", async () => {
+    const h = harness({ staticChecks: ["fail"] });
+    await runPrFixVerify(h.deps, STATIC_ONLY_INPUT);
+    expect(h.calls).toContain("runRetry");
+  });
+
+  test("passes the failing static check to the retry under its static name", async () => {
+    const h = harness({ staticChecks: ["fail"] });
+    await runPrFixVerify(h.deps, STATIC_INPUT);
+    expect(h.retryFailures).toEqual([
+      [
+        {
+          command: "static: bunx --bun tsc --noEmit",
+          outputTail: "FAIL a.test.ts",
+        },
+      ],
+    ]);
+  });
+
+  test("runs the static checks again after the retry", async () => {
+    const h = harness({ staticChecks: ["fail", "pass"] });
+    await runPrFixVerify(h.deps, STATIC_INPUT);
+    expect(h.calls.filter((call) => call === "runStaticChecks")).toHaveLength(
+      2,
+    );
+  });
+
+  test("blocks when a static check still fails after the retry", async () => {
+    const h = harness({ staticChecks: ["fail", "fail"] });
+    const result = await runPrFixVerify(h.deps, STATIC_INPUT);
+    expect(result.reason).toBe(
+      "repository checks still failing after one automated fix retry",
+    );
+  });
+
+  test("returns done when the static checks were skipped", async () => {
+    const h = harness({ staticChecks: ["skipped"] });
+    const result = await runPrFixVerify(h.deps, STATIC_ONLY_INPUT);
+    expect(result.outcome).toBe("done");
+  });
+
+  test("records the reason in the result when the static checks were skipped", async () => {
+    const h = harness({ staticChecks: ["skipped"] });
+    const result = await runPrFixVerify(h.deps, STATIC_INPUT);
+    expect(result.static_checks_skipped_reason).toBe(STATIC_SKIP_REASON);
+  });
+
+  test("logs the reason when the static checks were skipped", async () => {
+    const h = harness({ staticChecks: ["skipped"] });
+    await runPrFixVerify(h.deps, STATIC_INPUT);
+    expect(h.warnings).toEqual([
+      {
+        message: "static checks were skipped",
+        fields: { reason: STATIC_SKIP_REASON },
+      },
+    ]);
+  });
+
+  // 依存の導入の失敗はClaudeが直せる失敗ではないので、再実行に回さず、理由を残して静的検査を飛ばす。
+  test("records the install failure as the skipped reason", async () => {
+    const h = harness();
+    const deps: PrFixVerifyDeps = {
+      ...h.deps,
+      runStaticChecks: async () => ({
+        kind: "skipped",
+        reason: STATIC_CHECK_INSTALL_FAILED_REASON,
+      }),
+    };
+    const result = await runPrFixVerify(deps, STATIC_INPUT);
+    expect([result.outcome, result.static_checks_skipped_reason]).toEqual([
+      "done",
+      STATIC_CHECK_INSTALL_FAILED_REASON,
+    ]);
+  });
+
+  test("does not retry with Claude for an install failure", async () => {
+    const h = harness();
+    const deps: PrFixVerifyDeps = {
+      ...h.deps,
+      runStaticChecks: async () => ({
+        kind: "skipped",
+        reason: STATIC_CHECK_INSTALL_FAILED_REASON,
+      }),
+    };
+    await runPrFixVerify(deps, STATIC_INPUT);
+    expect(h.calls).not.toContain("runRetry");
+  });
+
+  test("records no skipped reason when the last static checks ran", async () => {
+    const h = harness({
+      checks: [false, true],
+      staticChecks: ["skipped", "pass"],
+    });
+    const result = await runPrFixVerify(h.deps, STATIC_INPUT);
+    expect(result.static_checks_skipped_reason).toBeUndefined();
+  });
+
+  test("still runs the check commands when the static checks were skipped", async () => {
+    const h = harness({ staticChecks: ["skipped"] });
+    await runPrFixVerify(h.deps, STATIC_INPUT);
+    expect(h.calls).toContain("runChecks");
+  });
+
+  test("ends guard_blocked when a static check could not run", async () => {
+    const h = harness({ staticChecks: ["unrunnable"] });
+    expect((await runPrFixVerify(h.deps, STATIC_INPUT)).outcome).toBe(
+      "guard_blocked",
+    );
+  });
+
+  // 名前を付け替える前のコマンドで判定するので、理由には静的検査のコマンドがそのまま載る。
+  test("gives the command of the static check that could not run as the reason", async () => {
+    const h = harness({ staticChecks: ["unrunnable"] });
+    expect((await runPrFixVerify(h.deps, STATIC_INPUT)).reason).toBe(
+      `check command could not run: bunx --bun tsc --noEmit: ${SETPRIV_MISSING}`,
+    );
+  });
+
+  test("does not run the check commands after a static check that could not run", async () => {
+    const h = harness({ staticChecks: ["unrunnable"] });
+    await runPrFixVerify(h.deps, STATIC_INPUT);
+    expect(h.calls).not.toContain("runChecks");
+  });
+
+  test("ends guard_blocked when the worker cannot run the static checks", async () => {
+    const h = harness({
+      staticChecksError: new CheckImageStaleError([
+        "/usr/bin/getfacl is missing",
+      ]),
+    });
+    expect((await runPrFixVerify(h.deps, STATIC_INPUT)).outcome).toBe(
+      "guard_blocked",
+    );
+  });
+
+  test("reports a worker that cannot run the static checks", async () => {
+    const error = new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
+    const h = harness({ staticChecksError: error });
+    await runPrFixVerify(h.deps, STATIC_INPUT);
+    expect(h.calls).toContain(`reportCheckImageStale:${error.message}`);
   });
 });
 

@@ -112,6 +112,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * dependabotのセキュリティ更新PRを自動でマージするフローも守る。マージの判定(`lib/dependabot_support.ts`)、
  * 影響調査のプロンプト(`lib/dependabot_prompt.ts`)、npm registryの取得(`lib/dependabot_registry.ts`)、
  * ゲート入力の組み立て(`lib/dependabot_collect.ts`)、フローの支援関数(`lib/dependabot_flow_support.ts`)、
+ * 必須checkが無い通知の本文(`lib/dependabot_repo_notice.ts`)、
  * 取得(`poll_dependabot.ts`)とそのスケジュール、
  * 3つのステップ(`steps/dependabot_prepare.ts`、`dependabot_assess.ts`、`dependabot_finish.ts`)と、
  * それぞれのscript定義(`*.script.yaml`)である。フロー(`dependabot__flow/`)は、前方一致で守る。
@@ -424,6 +425,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/dependabot_collect.script.yaml",
   "f/factory/lib/dependabot_flow_support.ts",
   "f/factory/lib/dependabot_flow_support.script.yaml",
+  "f/factory/lib/dependabot_repo_notice.ts",
+  "f/factory/lib/dependabot_repo_notice.script.yaml",
   "f/factory/poll_dependabot.ts",
   "f/factory/poll_dependabot.script.yaml",
   "f/factory/poll_dependabot.schedule.yaml",

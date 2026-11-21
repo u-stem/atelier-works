@@ -482,6 +482,8 @@ describe("the calls of runAllowedCheckCommands", () => {
     );
     expect(args).toEqual([
       "f/factory/steps/implement_verify.ts: {workItemId:work_item_id}",
+      "f/factory/steps/implement_verify.ts: {workItemId:work_item_id}",
+      "f/factory/steps/pr_fix_verify.ts: {workItemId:work_item_id}",
       "f/factory/steps/pr_fix_verify.ts: {workItemId:work_item_id}",
       "f/factory/steps/pr_fix_verify.ts: {workItemId:work_item_id}",
     ]);

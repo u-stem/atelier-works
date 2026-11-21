@@ -160,7 +160,8 @@ const CI_DENIED_DIRECTORIES: readonly string[] = [
  * レビュー回に親の設計書を渡すかの判定(`pr_fix_design`)、
  * Factoryがブランチを引き継ぐ作業項目の状態の述語と照合(`branch_hold`)、
  * 競合の検知と競合を直す回の判断・プロンプト(`pr_conflict_`と`conflict_fix_`で始まる部品)、pr_fixフローの起動(`pr_fix_launch`)、
- * プロンプトの組み立て(`prompts`)、検査コマンドの実行(`check_runner`)、GitHubの読み書き(`github`)、
+ * プロンプトの組み立て(`prompts`)、検査コマンドの実行(`check_runner`)、
+ * 静的検査で重ねるファイルと実行させないファイルの判定(`static_check_workspace`)、GitHubの読み書き(`github`)、
  * メタデータのパッチの検査と`wmill-lock.yaml`のhashの再計算(`metadata_`で始まる部品)、
  * GitHubの収集(宛先を固定したGraphQLの通信の`gh_graphql`、照合と`gone`の判定の`gh_collect`で始まる部品、それを呼ぶ`collect_github`)、
  * 自動で再開してよい止まった理由の一覧(`auto_retry_reasons`)、
@@ -183,6 +184,7 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/workspace.",
   "f/factory/lib/check_sandbox.",
   "f/factory/lib/check_runner.",
+  "f/factory/lib/static_check_workspace.",
   "f/factory/lib/stop_check.",
   "f/factory/lib/stop_all.",
   "f/factory/lib/prompts.",
