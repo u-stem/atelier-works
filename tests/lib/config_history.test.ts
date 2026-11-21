@@ -161,10 +161,10 @@ describe("projectConfigValue: json variable references", () => {
     expect(projectConfigValue(key, value)).toEqual(REDACTED_WITH_HASH);
   });
 
-  test("keeps an item that is not known as an unknown mark without a hash", () => {
+  test("redacts an item that is not known without a hash when it holds one", () => {
     expect(
       projectConfigValue("brand_new_item", "$jsonvar:f/factory/a"),
-    ).toEqual({ kind: "unknown" });
+    ).toEqual({ redacted: true });
   });
 
   test("tells two different json variable references apart", () => {
@@ -276,10 +276,36 @@ describe("projectConfigValue: the hash of a redacted value", () => {
     ).toEqual(REDACTED_WITH_HASH);
   });
 
-  test("keeps an item of a name that is not known as an unknown mark when it holds a reference", () => {
+  test("redacts an item of a name that is not known without a hash when it holds a reference", () => {
     expect(projectConfigValue("brand_new_item", "$res:f/factory/a")).toEqual({
+      redacted: true,
+    });
+  });
+
+  test("puts no hash property into the redacted mark of an item that is not known", () => {
+    expect(
+      Object.keys(
+        projectConfigValue("brand_new_item", "$res:f/factory/a") ?? {},
+      ),
+    ).toEqual(["redacted"]);
+  });
+
+  test("gives the same mark to two different references held by an item that is not known", () => {
+    expect(projectConfigValue("brand_new_item", "$res:f/factory/a")).toEqual(
+      projectConfigValue("brand_new_item", ["$var:f/factory/b"]),
+    );
+  });
+
+  test("keeps an item of a name that is not known as an unknown mark when it holds a plain value", () => {
+    expect(projectConfigValue("brand_new_item", "plain text")).toEqual({
       kind: "unknown",
     });
+  });
+
+  test("keeps the redacted mark with a hash for a known item that holds a reference", () => {
+    expect(projectConfigValue("model", "$res:f/factory/a")).toEqual(
+      REDACTED_WITH_HASH,
+    );
   });
 
   test("redacts an item whose name is only matched by the switch rule when it holds a reference", () => {

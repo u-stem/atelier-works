@@ -6,7 +6,8 @@
 // 値は、`lib/config_history.ts`の許可リストで射影してから扱う。コマンド、URL、身元に関わる項目の生の値は、
 // 読んだ後すぐに射影に変え、ログにも履歴にも出さない。
 // 表にある項目が参照(`$var:`、`$res:`、`$jsonvar:`)を含むときは、参照の先を解決せず、値を見ずに`{ redacted: true, hash }`にする。
-// 表に無い項目は、参照を含んでいても`{ kind: "unknown" }`のままにし、参照の項目の数にも数えない。
+// 表に無い項目が参照を含むときは、ハッシュの無い`{ redacted: true }`にし、参照の項目の数に数える。
+// 参照を含まない表に無い項目は`{ kind: "unknown" }`のままで、参照に変わると、その切り替えが変更として残る。
 // ハッシュは生の値をメモリの中でハッシュにしたもので、伏せた値の後の変更を見えなくしないために、比べるだけに使う。
 // resourceへは書かない。履歴を書けなくても、投げずに数える。
 //
@@ -88,7 +89,7 @@ export const REMOVED_PROJECTION: ConfigProjection = { removed: true };
 // 射影
 // ---------------------------------------------------------------------------
 
-/** 伏せた印(`{ redacted: true }`)の射影か。 */
+/** 伏せた印(`{ redacted: true }`、ハッシュの有無を問わない)の射影か。 */
 function isRedactedMark(projection: ConfigProjection): boolean {
   return (
     typeof projection === "object" &&
@@ -101,7 +102,7 @@ function isRedactedMark(projection: ConfigProjection): boolean {
 export type ConfigSnapshotProjection = {
   /** 項目名から射影への対応。履歴に書ける名前の項目だけを持つ。調べなかった項目は入らない。 */
   readonly items: ReadonlyMap<string, ConfigProjection>;
-  /** 調べた項目のうち、表にある項目で、値が参照を含み、伏せた項目の数。表に無い項目は数えない。 */
+  /** 調べた項目のうち、値が参照を含み、伏せた項目の数。表に無い項目も数える。 */
   readonly reference_keys: number;
   /** 履歴の項目名の形に合わず、または照合の予約の名前で、飛ばした項目の数。 */
   readonly unnamed_keys: number;
@@ -114,6 +115,7 @@ export type ConfigSnapshotProjection = {
 /**
  * resourceの生の値の、すべての最上位の項目を射影する。
  * 項目の種類は`projectConfigValue`の許可リストで決め、表に無い項目は、値を入れずに`{ kind: "unknown" }`にする。
+ * 表に無い項目の値が参照を含むときは、ハッシュの無い`{ redacted: true }`にする。
  * 種類を知っている項目の、型に合わない値は、`{ kind: "unknown", hash }`にする。
  * 表にある項目の値が参照を含むときは、値を調べずに`{ redacted: true, hash }`にする。
  * 知らない項目(`isKnownConfigKey`が偽の項目)は、名前の昇順に`unknownKeysLimit`まで調べる。
@@ -144,7 +146,7 @@ export function projectConfigSnapshot(
     }
     const value = raw[key];
     const projection = projectConfigValue(key, value);
-    // 参照を含む項目のうち、表にある項目だけが伏せた印になる。表に無い項目は数えない。
+    // 参照を含む項目は、表にある項目も表に無い項目も、伏せた印になる。伏せた印になった項目を数える。
     if (isRedactedMark(projection) && holdsReference(value)) referenceKeys += 1;
     items.set(key, projection);
   }

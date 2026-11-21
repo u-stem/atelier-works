@@ -275,18 +275,45 @@ describe("projectConfigSnapshot: every top-level item is projected", () => {
     expect(projection?.reference_keys).toBe(1);
   });
 
-  test("keeps an item that this code does not know as an unknown mark even when it holds a reference", () => {
+  test("projects an item that this code does not know to a redacted mark without a hash when it holds a reference", () => {
     const projection = projectConfigSnapshot({
       future_item: "$var:f/factory/value",
     });
-    expect(projection?.items.get("future_item")).toEqual({ kind: "unknown" });
+    expect(projection?.items.get("future_item")).toEqual({ redacted: true });
   });
 
-  test("does not count an item that this code does not know as one that held a reference", () => {
+  test("counts an item that this code does not know as one that held a reference", () => {
     const projection = projectConfigSnapshot({
       future_item: "$var:f/factory/value",
     });
+    expect(projection?.reference_keys).toBe(1);
+  });
+
+  test("counts known and unknown items that hold a reference together", () => {
+    const projection = projectConfigSnapshot({
+      implement_enabled: "$var:f/factory/flag",
+      future_item: "$res:f/factory/value",
+      other_item: "plain",
+    });
+    expect(projection?.reference_keys).toBe(2);
+  });
+
+  test("does not count an item that this code does not know when it holds a plain value", () => {
+    const projection = projectConfigSnapshot({ future_item: "plain" });
     expect(projection?.reference_keys).toBe(0);
+  });
+
+  test("reports an item that this code does not know when it turns from a plain value into a reference", () => {
+    const before = projectConfigSnapshot({ future_item: "plain" });
+    const after = projectConfigSnapshot({
+      future_item: "$var:f/factory/value",
+    });
+    const changes = diffSnapshot(
+      new Map([["future_item", before?.items.get("future_item")]]),
+      after?.items ?? new Map(),
+      true,
+    );
+    expect(changes.map((change) => change.key)).toEqual(["future_item"]);
   });
 
   test("skips an item whose name the history cannot hold, and counts it", () => {

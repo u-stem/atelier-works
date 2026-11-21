@@ -86,8 +86,8 @@ export function isConfigHistoryReasonCode(
  * - `{ redacted: true, hash }`: 参照、秘密らしい語、秘密の形、形に合わない文字列の代わり。
  *   `hash`は生の値の正規化したJSONのsha256の先頭16桁で、メモリの中で計算するだけで、生の値は残さない。伏せた値の後の変更を見えなくしないために添える。
  *   参照の名前は秘密の値ではない。秘密らしい文字列は、塩を付けないハッシュなので、候補が少なければ当てられる。
- *   `hash`の無い`{ redacted: true }`は、ハッシュを足す前に書いた行の形で、読むだけである。
- * - `{ kind: "unknown" }`: 項目が表に無い(種類を知らない)。値は入れず、値の変更も追わない。
+ *   `hash`の無い`{ redacted: true }`は、表に無い項目が参照を含むときの値でもある。ハッシュを足す前に書いた行の形でもある。
+ * - `{ kind: "unknown" }`: 項目が表に無い(種類を知らない)。値は入れず、値の変更も追わない。値が参照を含むときは、`{ redacted: true }`になる。
  * - `{ kind: "unknown", hash }`: 項目の種類を知っているが、値の型が合わない。`hash`は生の値の正規化したJSONのsha256の先頭16桁で、
  *   型に合わない値の差し替えを見えなくしないために添える。生の値は入れない。`hash`の無い形は、ハッシュを足す前に書いた行の形で、読むだけである。
  * - `{ kind: "marker" }`: 基準の段階が終わったことを示す印の行の値。定期の照合だけが書く。
@@ -243,6 +243,9 @@ export function isKnownConfigKey(key: string): boolean {
 
 const UNKNOWN: ConfigProjection = { kind: "unknown" };
 
+/** 表に無い項目が参照を含むときの射影。値もハッシュも持たない定数で、参照を持つようになったことだけを残す。 */
+const REDACTED_UNKNOWN: ConfigProjection = { redacted: true };
+
 /** 列挙の項目に通す文字列の形。短い名前に限る。 */
 const ENUM_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,59}$/;
 
@@ -317,7 +320,7 @@ function redacted(value: unknown): ConfigProjection {
 /**
  * 項目の種類を知っているが、値の型が合わないときの射影。生の値は残さず、生の値のハッシュだけを持つ。
  * 型に合わない値を、別の型に合わない値へ差し替えた変更を見えなくしないために、ハッシュを添える。
- * 種類を知らない項目(表に無い項目)の値は、意図して追わないので、ハッシュを添えない。
+ * 種類を知らない項目(表に無い項目)の値は、意図して追わないので、ハッシュを添えない。参照を含むときも、ハッシュの無い`{ redacted: true }`にする。
  */
 function mismatched(value: unknown): ConfigProjection {
   return { kind: "unknown", hash: shortHash(value) };
@@ -342,14 +345,17 @@ function listHash(items: readonly unknown[]): string {
  * 項目の種類は、このファイルの表と、`*_enabled`と`allowed_labeler_`の名前で決める。表に無い項目は、値を入れず、ハッシュも添えない。
  * 値の型が項目の種類に合わないときは、値を入れず、生の値のハッシュだけを添える(`{ kind: "unknown", hash }`)。
  * 表にある項目の値が参照(`$var:`、`$res:`、`$jsonvar:`)を含むときは、項目の種類によらず、参照の先を調べずに伏せる(`{ redacted: true, hash }`)。
- * 表に無い項目は、参照を含んでいても`{ kind: "unknown" }`のままにする。設定の読み取りが捨てる項目なので、追わない。
+ * 表に無い項目の値が参照を含むときは、ハッシュの無い`{ redacted: true }`にする。定数なので値は漏れず、
+ * 参照を持たない値(`{ kind: "unknown" }`)から参照へ変わったことが、履歴の変更として残る。参照を含まない値は、`{ kind: "unknown" }`のままにする。
  */
 export function projectConfigValue(
   key: string,
   value: unknown,
 ): ConfigProjection {
   const kind = classOf(key);
-  if (kind === undefined) return UNKNOWN;
+  if (kind === undefined) {
+    return holdsReference(value) ? REDACTED_UNKNOWN : UNKNOWN;
+  }
   if (holdsReference(value)) return redacted(value);
   if (kind === "hash") return { hash: shortHash(value) };
   if (value === null) return null;
