@@ -23,10 +23,17 @@
 // 行を入れられなければ、何も変えずに断る。記録するのは理由の長さと結果の数だけで、理由の本文は入れない。
 // 操作者は、ジョブのWindmill実行文脈から導く(`deriveApprover`)。導けなければ断る。引数に操作者は取らない。
 //
+// 設定の変更の履歴(`factory.config_history`)には、設定を書けた後に、止めた`*_enabled`を1つにつき1行足す。
+// 履歴を書けなくても、止めた状態は保ち、操作の記録の結果に`history_recorded: false`を残す。
+//
 // Console用workerで動くので、どのsecret変数も読まない。SDKの呼び出しは、境界テストの許可表に収める。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { deriveApprover } from "./lib/approver.ts";
+import {
+  appendConfigChange,
+  type ConfigChangeInput,
+} from "./lib/config_history.ts";
 import {
   type ActionAudit,
   type ActionSqlClient,
@@ -125,6 +132,11 @@ export type StopAllPorts = {
     enabled: boolean,
   ) => Promise<void>;
   readonly sql: ActionSqlClient;
+  /**
+   * 設定の変更の履歴を1行足し、書けたかを返す。投げない。
+   * 省くと履歴を書かない。本番の`sdkPorts`は常に渡し、配線のテストが固定する。
+   */
+  readonly appendHistory?: (change: ConfigChangeInput) => Promise<boolean>;
 };
 
 /** 止める名前の決め方は`lib/stop_all.ts`にある。呼び出し側の読み込み先を変えないため、ここからも出す。 */
@@ -212,6 +224,31 @@ async function stopConfig(
   return { outcome: "written", flags, record };
 }
 
+/**
+ * 止めた名前を、1行ずつ設定の履歴に残す。止める働きがすべて済んだ後に呼ぶ。
+ * 履歴の追記がロックを待っても、scheduleの無効化を遅らせないためである。
+ * 書けない行があっても止めた状態は保ち、すべて書けたかを返す。
+ */
+async function appendStopHistory(
+  ports: StopAllPorts,
+  flags: readonly string[],
+  actor: string,
+): Promise<boolean> {
+  let recorded = true;
+  for (const flag of flags) {
+    const written = await ports.appendHistory?.({
+      key: flag,
+      before: true,
+      after: false,
+      actor,
+      source: "stop_all",
+      reason: "stop_all_flag_off",
+    });
+    if (written === false) recorded = false;
+  }
+  return recorded;
+}
+
 type ScheduleStep = {
   readonly disabled: readonly string[];
   readonly failed: readonly string[];
@@ -240,7 +277,7 @@ type StopStep = {
 
 /**
  * 全停止を置く。呼び出しの順序は、理由の検査、変数の読み取り、操作者の導出、記録(`attempted`)、
- * 変数の書き込み、止める名前の記録、設定の書き込み、scheduleの無効化、記録(結果)に固定する。
+ * 変数の書き込み、止める名前の記録、設定の書き込み、scheduleの無効化、止めた名前の履歴の追記、記録(結果)に固定する。
  * 変数の書き込みの失敗は、記録を`failed`にしてから投げる。
  */
 export async function stopAllFromConsole(
@@ -279,6 +316,11 @@ export async function stopAllFromConsole(
       // 変数が空だったときだけ、記録を置き換える。壊れた値は前の全停止が残したものでありうるので、和集合にする。
       const config = await stopConfig(ports, status.kind === "clear");
       const schedules = await stopSchedules(ports);
+      // 止める働きがすべて済んでから、止めた名前の履歴を書く。
+      const historyRecorded =
+        config.outcome === "written"
+          ? await appendStopHistory(ports, config.flags, actor)
+          : true;
       const complete =
         (config.outcome === "written" || config.outcome === "unchanged") &&
         config.record.outcome !== "failed" &&
@@ -294,6 +336,7 @@ export async function stopAllFromConsole(
           unrecorded: config.record.unrecorded.length,
           disabled: schedules.disabled.length,
           failed: schedules.failed.length,
+          ...(historyRecorded ? {} : { history_recorded: false }),
         },
         value: {
           placed: existing === null,
@@ -323,6 +366,7 @@ export async function stopAllFromConsole(
 
 function sdkPorts(): StopAllPorts {
   const workspace = wmillDefault.getWorkspace();
+  const sql = actionSqlClientFrom(() => wmill.datatable());
   return {
     now: () => new Date(),
     deriveActor: () =>
@@ -367,7 +411,9 @@ function sdkPorts(): StopAllPorts {
         requestBody: { enabled },
       });
     },
-    sql: actionSqlClientFrom(() => wmill.datatable()),
+    sql,
+    appendHistory: async (change) =>
+      (await appendConfigChange(sql, change)).recorded,
   };
 }
 

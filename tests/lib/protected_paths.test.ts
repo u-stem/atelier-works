@@ -2027,6 +2027,35 @@ describe("console job viewing files", () => {
   });
 });
 
+// 設定の変更の履歴の部品は、設定の更新と全停止のscriptがimportでたどるので、保護パスに入る。
+// 射影の規則が書き換えられると、コマンドやURL、秘密らしい値が、履歴に生の値のまま入る。
+describe("config history files", () => {
+  const PATHS = [
+    "f/factory/lib/config_history.ts",
+    "f/factory/lib/config_history.script.yaml",
+    "tests/lib/config_history.test.ts",
+    "tests/scripts/config_history_hooks.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test("matchesForbiddenPath does not match the lock of the library", () => {
+    expect(
+      matchesForbiddenPath("f/factory/lib/config_history.script.lock"),
+    ).toBe(false);
+  });
+});
+
 // 設計の承認画面が全文を描く部品と、止める判定、全コードポイントの契約テストは、
 // 書き換えられると、範囲を狭めたり、判定を緩めたりする変更が、人のレビューを経ずに入る。
 // 承認する人に見えない文字が、実装に渡ったまま承認されうる。

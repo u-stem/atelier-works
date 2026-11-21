@@ -1,0 +1,9 @@
+summary: '[LIB] 設定の変更の履歴'
+description: 内部ライブラリです。直接実行するものではありません。設定(factory_config)の変更の履歴(config_history)へ追記するときの値の射影、追記の呼び出し、連鎖の検証の呼び出し、証跡パックの集計を共有します。
+lock: '!inline f/factory/lib/config_history.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
