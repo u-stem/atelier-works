@@ -147,6 +147,9 @@ value:
           repo:
             type: javascript
             expr: results.pr_fix_prepare.repo
+          repo_dir:
+            type: javascript
+            expr: results.pr_fix_prepare.repo_dir ?? null
           untrusted:
             type: javascript
             expr: >-

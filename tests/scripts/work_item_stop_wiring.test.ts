@@ -485,6 +485,7 @@ describe("the calls of runAllowedCheckCommands", () => {
       "f/factory/steps/implement_verify.ts: {workItemId:work_item_id}",
       "f/factory/steps/pr_fix_verify.ts: {workItemId:work_item_id}",
       "f/factory/steps/pr_fix_verify.ts: {workItemId:work_item_id}",
+      "f/factory/steps/pr_fix_verify.ts: {workItemId:work_item_id}",
     ]);
   });
 

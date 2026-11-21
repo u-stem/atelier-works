@@ -976,11 +976,12 @@ export type LoopCheckResult = {
 };
 
 /**
- * 保護パスを変えたラウンドの静的検査の結果。
+ * 静的検査の結果。
  * `ran`は作業木で検査コマンドを実行した結果、`skipped`は作業木を作らなかった理由である。
+ * 結果の型`R`は、実装フローが`LoopCheckResult`、PR修正フローが検査コマンドの結果そのものである。
  */
-export type StaticCheckOutcome =
-  | { readonly kind: "ran"; readonly results: readonly LoopCheckResult[] }
+export type StaticCheckOutcome<R = LoopCheckResult> =
+  | { readonly kind: "ran"; readonly results: readonly R[] }
   | { readonly kind: "skipped"; readonly reason: string };
 
 /** 静的検査の結果の名前の接頭辞。PR本文とDiscordの要約で、静的検査だけを実行したことが分かるようにする。 */
@@ -992,13 +993,13 @@ export function staticCheckResultName(command: string): string {
 }
 
 /** `runStaticChecksInWorkspace`の入出力。verifyのstepが実物を渡す。 */
-export type StaticCheckRunDeps = {
+export type StaticCheckRunDeps<R = LoopCheckResult> = {
   /** 基準の版の木にPRの変更を重ねた作業木を作る(`createStaticCheckWorkspace`)。 */
   readonly createWorkspace: () => Promise<StaticCheckWorkspace>;
   /** 作業木ができた後、検査コマンドを実行する直前に1回呼ぶ。 */
   readonly beforeRun: () => Promise<void>;
   /** 作業木のディレクトリで、静的検査のコマンドを実行する。 */
-  readonly runCommands: (dir: string) => Promise<readonly LoopCheckResult[]>;
+  readonly runCommands: (dir: string) => Promise<readonly R[]>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
 };
 
@@ -1009,9 +1010,9 @@ export type StaticCheckRunDeps = {
  * 消せなかったときは警告を出すだけにし、検査の結果や検査コマンドの例外を隠さない。
  * 消し損ねた作業木は、次に作業木を作るときの掃除が片付ける。
  */
-export async function runStaticChecksInWorkspace(
-  deps: StaticCheckRunDeps,
-): Promise<StaticCheckOutcome> {
+export async function runStaticChecksInWorkspace<R>(
+  deps: StaticCheckRunDeps<R>,
+): Promise<StaticCheckOutcome<R>> {
   const workspace = await deps.createWorkspace();
   if (workspace.kind === "skipped") {
     return { kind: "skipped", reason: workspace.reason };

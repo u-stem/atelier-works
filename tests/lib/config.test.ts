@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   ConfigValidationError,
   checkCommandsFor,
+  hasAnyStaticCheckCommands,
   implementCheckCommandsFor,
   isRepoAllowed,
   loadConfig,
@@ -1925,6 +1926,33 @@ describe("staticCheckCommandsFor", () => {
       check_commands_by_repo: { "octo-owner/gadgets": ["bun test"] },
     };
     expect(staticCheckCommandsFor(config, "octo-owner", "gadgets")).toEqual([]);
+  });
+});
+
+describe("hasAnyStaticCheckCommands", () => {
+  test("is true when a repository has static check commands", () => {
+    expect(
+      hasAnyStaticCheckCommands({
+        static_check_commands_by_repo: {
+          "octo-owner/gadgets": [],
+          "octo-owner/atelier-works": ["bunx --bun biome check ."],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  test("is false when every entry is empty", () => {
+    expect(
+      hasAnyStaticCheckCommands({
+        static_check_commands_by_repo: { "octo-owner/gadgets": [] },
+      }),
+    ).toBe(false);
+  });
+
+  test("is false without entries", () => {
+    expect(
+      hasAnyStaticCheckCommands({ static_check_commands_by_repo: {} }),
+    ).toBe(false);
   });
 });
 

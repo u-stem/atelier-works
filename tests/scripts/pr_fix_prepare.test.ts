@@ -561,19 +561,25 @@ describe("prFixTimeoutMisfit", () => {
 
   test("accepts the defaults with four check commands", () => {
     expect(
-      prFixTimeoutMisfit({
-        claude_timeout_sec: 1800,
-        allowed_check_commands: FOUR_CHECKS,
-      }),
+      prFixTimeoutMisfit(
+        {
+          claude_timeout_sec: 1800,
+          allowed_check_commands: FOUR_CHECKS,
+        },
+        false,
+      ),
     ).toBeNull();
   });
 
   test("rejects five check commands with the defaults", () => {
     expect(
-      prFixTimeoutMisfit({
-        claude_timeout_sec: 1800,
-        allowed_check_commands: [...FOUR_CHECKS, "y"],
-      }),
+      prFixTimeoutMisfit(
+        {
+          claude_timeout_sec: 1800,
+          allowed_check_commands: [...FOUR_CHECKS, "y"],
+        },
+        false,
+      ),
     ).toBe(
       "pr_fix time settings do not fit the flow step timeout: (2 claude runs + 2 x 5 check commands) x (claude_timeout_sec 1800 + 15) + 600 = 22380s exceeds 21600s",
     );
@@ -581,19 +587,25 @@ describe("prFixTimeoutMisfit", () => {
 
   test("accepts the largest Claude timeout that fits four check commands in the verify step", () => {
     expect(
-      prFixTimeoutMisfit({
-        claude_timeout_sec: 2085,
-        allowed_check_commands: FOUR_CHECKS,
-      }),
+      prFixTimeoutMisfit(
+        {
+          claude_timeout_sec: 2085,
+          allowed_check_commands: FOUR_CHECKS,
+        },
+        false,
+      ),
     ).toBeNull();
   });
 
   test("rejects a Claude timeout one second over the verify step with four check commands", () => {
     expect(
-      prFixTimeoutMisfit({
-        claude_timeout_sec: 2086,
-        allowed_check_commands: FOUR_CHECKS,
-      }),
+      prFixTimeoutMisfit(
+        {
+          claude_timeout_sec: 2086,
+          allowed_check_commands: FOUR_CHECKS,
+        },
+        false,
+      ),
     ).toBe(
       "pr_fix time settings do not fit the flow step timeout: (2 claude runs + 2 x 4 check commands) x (claude_timeout_sec 2086 + 15) + 600 = 21610s exceeds 21600s",
     );
@@ -601,10 +613,13 @@ describe("prFixTimeoutMisfit", () => {
 
   test("rejects a Claude timeout that cannot fit in the apply step", () => {
     expect(
-      prFixTimeoutMisfit({
-        claude_timeout_sec: 3286,
-        allowed_check_commands: [],
-      }),
+      prFixTimeoutMisfit(
+        {
+          claude_timeout_sec: 3286,
+          allowed_check_commands: [],
+        },
+        false,
+      ),
     ).toBe(
       "pr_fix time settings do not fit the flow step timeout: 2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s",
     );
@@ -612,20 +627,52 @@ describe("prFixTimeoutMisfit", () => {
 
   test("accepts the largest Claude timeout that fits in the apply step", () => {
     expect(
-      prFixTimeoutMisfit({
-        claude_timeout_sec: 3285,
-        allowed_check_commands: [],
-      }),
+      prFixTimeoutMisfit(
+        {
+          claude_timeout_sec: 3285,
+          allowed_check_commands: [],
+        },
+        false,
+      ),
     ).toBeNull();
   });
 
   test("does not contain the separator describeReason splits on", () => {
     expect(
-      prFixTimeoutMisfit({
-        claude_timeout_sec: 1800,
-        allowed_check_commands: [...FOUR_CHECKS, "y"],
-      }),
+      prFixTimeoutMisfit(
+        {
+          claude_timeout_sec: 1800,
+          allowed_check_commands: [...FOUR_CHECKS, "y"],
+        },
+        false,
+      ),
     ).not.toContain("; ");
+  });
+
+  test("counts the static checks as one more check command", () => {
+    expect(
+      prFixTimeoutMisfit(
+        {
+          claude_timeout_sec: 1800,
+          allowed_check_commands: FOUR_CHECKS,
+        },
+        true,
+      ),
+    ).toBe(
+      "pr_fix time settings do not fit the flow step timeout: (2 claude runs + 2 x 5 check commands (4 + 1 for the static checks)) x (claude_timeout_sec 1800 + 15) + 600 = 22380s exceeds 21600s",
+    );
+  });
+
+  test("accepts three check commands with the static checks at the defaults", () => {
+    expect(
+      prFixTimeoutMisfit(
+        {
+          claude_timeout_sec: 1800,
+          allowed_check_commands: FOUR_CHECKS.slice(0, 3),
+        },
+        true,
+      ),
+    ).toBeNull();
   });
 });
 
@@ -1631,28 +1678,37 @@ describe("describeReason / nextActionFor (ownership the check sandbox could not 
 describe("ciRoundTimeoutMisfit", () => {
   test("returns null for the default time settings", () => {
     expect(
-      ciRoundTimeoutMisfit({
-        claude_timeout_sec: 1800,
-        allowed_check_commands: [],
-      }),
+      ciRoundTimeoutMisfit(
+        {
+          claude_timeout_sec: 1800,
+          allowed_check_commands: [],
+        },
+        false,
+      ),
     ).toBeNull();
   });
 
   test("returns null for four check commands at the default timeout", () => {
     expect(
-      ciRoundTimeoutMisfit({
-        claude_timeout_sec: 1800,
-        allowed_check_commands: ["a", "b", "c", "d"],
-      }),
+      ciRoundTimeoutMisfit(
+        {
+          claude_timeout_sec: 1800,
+          allowed_check_commands: ["a", "b", "c", "d"],
+        },
+        false,
+      ),
     ).toBeNull();
   });
 
   test("returns the apply step reason when only the CI round apply step does not fit", () => {
     expect(
-      ciRoundTimeoutMisfit({
-        claude_timeout_sec: 3000,
-        allowed_check_commands: [],
-      }),
+      ciRoundTimeoutMisfit(
+        {
+          claude_timeout_sec: 3000,
+          allowed_check_commands: [],
+        },
+        false,
+      ),
     ).toMatch(
       /^ci round: time settings do not fit .*2 claude runs and 5 secret scans/,
     );
@@ -1660,19 +1716,49 @@ describe("ciRoundTimeoutMisfit", () => {
 
   test("returns the verify step reason when only the CI round verify step does not fit", () => {
     expect(
-      ciRoundTimeoutMisfit({
-        claude_timeout_sec: 2000,
-        allowed_check_commands: ["a", "b", "c", "d"],
-      }),
+      ciRoundTimeoutMisfit(
+        {
+          claude_timeout_sec: 2000,
+          allowed_check_commands: ["a", "b", "c", "d"],
+        },
+        false,
+      ),
     ).toMatch(/^ci round: time settings do not fit .*the verify step needs/);
   });
 
   test("returns the pr_fix reason first when the pr_fix settings do not fit either", () => {
     expect(
-      ciRoundTimeoutMisfit({
-        claude_timeout_sec: 3300,
-        allowed_check_commands: [],
-      }),
+      ciRoundTimeoutMisfit(
+        {
+          claude_timeout_sec: 3300,
+          allowed_check_commands: [],
+        },
+        false,
+      ),
     ).toMatch(/^pr_fix time settings do not fit/);
+  });
+
+  test("returns null for three check commands at a timeout that fits them", () => {
+    expect(
+      ciRoundTimeoutMisfit(
+        {
+          claude_timeout_sec: 2000,
+          allowed_check_commands: ["a", "b", "c"],
+        },
+        false,
+      ),
+    ).toBeNull();
+  });
+
+  test("counts the static checks as one more check command in the CI round verify step", () => {
+    expect(
+      ciRoundTimeoutMisfit(
+        {
+          claude_timeout_sec: 2000,
+          allowed_check_commands: ["a", "b", "c"],
+        },
+        true,
+      ),
+    ).toMatch(/^ci round: time settings do not fit .*for 4 check commands/);
   });
 });

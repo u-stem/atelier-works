@@ -85,8 +85,7 @@ const GATES = [
   },
   {
     step: "pr_fix_prepare.ts",
-    hasCheckCommands:
-      /checkImageGate\(\s*config\.allowed_check_commands\.length > 0,/,
+    hasCheckCommands: /checkImageGate\(\s*hasAnyCheckCommands,/,
     worktree: "createGtrWorktree(",
     flow: "pr_fix__flow",
     claudeStep: "f/factory/steps/pr_fix_apply",
@@ -104,6 +103,26 @@ describe("check image gate wiring for the static checks", () => {
     expect(source("implement_prepare.ts")).toMatch(
       /implementTimeoutMisfit\(\s*config,\s*checkCommands\.length,\s*staticCheckCommands\.length > 0,?\s*\)/,
     );
+  });
+
+  test("pr_fix_prepare.ts gates when the repository has only static checks", () => {
+    expect(source("pr_fix_prepare.ts")).toMatch(
+      /const hasAnyCheckCommands =\s*config\.allowed_check_commands\.length > 0 \|\| hasStaticChecks;/,
+    );
+  });
+
+  test("pr_fix_prepare.ts reads the static checks of the repository of the work item", () => {
+    expect(source("pr_fix_prepare.ts")).toMatch(
+      /staticCheckCommandsFor\(config, workItem\.owner, workItem\.repo\)\.length > 0/,
+    );
+  });
+
+  test("pr_fix_prepare.ts counts the static checks in the timeout fit of every round", () => {
+    expect(
+      source("pr_fix_prepare.ts").match(
+        /(?:ciRound|conflictRound|prFix)TimeoutMisfit\(config, hasStaticChecks\)/g,
+      ),
+    ).toHaveLength(3);
   });
 });
 

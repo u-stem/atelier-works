@@ -1280,6 +1280,18 @@ export function staticCheckCommandsFor(
 }
 
 /**
+ * どれかのリポジトリに静的検査のコマンドがあるかを返す。
+ * リポジトリを決めずに設定全体で1つに決める判断(起動の前の保留)で、静的検査を数えるのに使う。
+ */
+export function hasAnyStaticCheckCommands(
+  config: Pick<FactoryConfig, "static_check_commands_by_repo">,
+): boolean {
+  return Object.values(config.static_check_commands_by_repo).some(
+    (commands) => commands.length > 0,
+  );
+}
+
+/**
  * `owner`/`repo`に対して実行する検査コマンドを返す。
  * `check_commands_by_repo`のうち、キーを`normalizeRepoUrl`で正規化すると
  * `owner/repo`に一致するエントリーを使い、無ければ`allowed_check_commands`を返す。

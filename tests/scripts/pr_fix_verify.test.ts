@@ -33,6 +33,7 @@ import {
   isEscapingSymlink,
   isNewShellScript,
   listChangedPaths,
+  listChangedPathsSinceBase,
   listSymlinkChanges,
   listSymlinkTargets,
   listUncommittedChangedPaths,
@@ -1705,6 +1706,81 @@ describe("changed path listing against a real git repository", () => {
     });
     expect(result.reasons).toEqual(["symlink_change: symlink changed: link"]);
   });
+
+  /** 基準の後に`a.ts`を足してコミットした一時リポジトリを作り、基準のshaを返す。 */
+  async function repoWithCommitAfterBase(): Promise<TempRepo> {
+    const repo = await initRepo();
+    writeFileSync(join(repo.dir, "a.ts"), "export const a = 1;\n");
+    await gitIn(repo, ["add", "-A"]);
+    await gitIn(repo, ["commit", "-q", "-m", "a"]);
+    return repo;
+  }
+
+  /** 一覧のパスだけを、並べ替えて返す。 */
+  function pathsOf(changes: readonly { readonly path: string }[]): string[] {
+    return changes.map((change) => change.path).sort();
+  }
+
+  test("listChangedPathsSinceBase lists a file that a commit after the base added", async () => {
+    const repo = await repoWithCommitAfterBase();
+    expect(
+      pathsOf(
+        await listChangedPathsSinceBase(repo.run, repo.dir, repo.baseSha),
+      ),
+    ).toEqual(["a.ts"]);
+  });
+
+  test("listChangedPathsSinceBase lists an untracked file", async () => {
+    const repo = await repoWithCommitAfterBase();
+    writeFileSync(join(repo.dir, "b.ts"), "export const b = 1;\n");
+    expect(
+      pathsOf(
+        await listChangedPathsSinceBase(repo.run, repo.dir, repo.baseSha),
+      ),
+    ).toEqual(["a.ts", "b.ts"]);
+  });
+
+  test("listChangedPathsSinceBase lists a file deleted without a commit", async () => {
+    const repo = await repoWithCommitAfterBase();
+    rmSync(join(repo.dir, "README.md"));
+    expect(
+      pathsOf(
+        await listChangedPathsSinceBase(repo.run, repo.dir, repo.baseSha),
+      ),
+    ).toEqual(["README.md", "a.ts"]);
+  });
+});
+
+describe("listChangedPathsSinceBase", () => {
+  const BASE = "b".repeat(40);
+
+  test("diffs the working tree against the base sha with -z --name-status", async () => {
+    const { run, calls } = createFakeCommandRunner([ok(""), ok(""), ok("")]);
+    await listChangedPathsSinceBase(run, "/wt", BASE);
+    expect(afterGitOptions(calls[0]?.argv ?? [])).toEqual([
+      "diff",
+      "-z",
+      "--name-status",
+      "--no-ext-diff",
+      "--ignore-submodules=none",
+      BASE,
+      "--",
+    ]);
+  });
+
+  test("throws when git diff fails", async () => {
+    const { run } = createFakeCommandRunner([fail("fatal: bad object")]);
+    await expect(listChangedPathsSinceBase(run, "/wt", BASE)).rejects.toThrow(
+      /--name-status/,
+    );
+  });
+
+  test("throws before running git when the base is not a sha", async () => {
+    const { run } = createFakeCommandRunner([]);
+    await expect(
+      listChangedPathsSinceBase(run, "/wt", "--output=/tmp/x"),
+    ).rejects.toThrow();
+  });
 });
 
 describe("parseRawSymlinkPaths", () => {
@@ -1946,5 +2022,77 @@ describe("the wiring of the design in the retry of pr_fix_verify", () => {
       (await stepSource("pr_fix_verify.ts")).split("loadParentDesignForFix(")
         .length - 1,
     ).toBe(1);
+  });
+});
+
+// 静的検査の結線も、`main`の中にあるのでソースの文面で固定する。
+describe("the wiring of the static checks in pr_fix_verify", () => {
+  test("reads only the static check commands given for the repository", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toContain(
+      "staticCheckCommandsFor(config, owner, repo)",
+    );
+  });
+
+  test("builds the check sandbox when only the static checks exist", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toContain(
+      "config.allowed_check_commands.length > 0 || staticCommands.length > 0",
+    );
+  });
+
+  test("builds the workspace from the clone that the prepare step recorded", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toMatch(
+      /createStaticCheckWorkspace\(\{ run: runCommand, repoDir, baseSha,/,
+    );
+  });
+
+  test("overlays every path changed since the base", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toContain(
+      "changes: await listChangedPathsSinceBase( runCommand, worktree_dir, baseSha, )",
+    );
+  });
+
+  test("installs the base dependencies before the static check commands", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toContain(
+      "[STATIC_CHECK_INSTALL_COMMAND, ...staticCommands]",
+    );
+  });
+
+  // 作業木の後片付けは`runStaticChecksInWorkspace`が、検査コマンドの例外のときも行う。
+  test("runs the static checks through the runner that removes the workspace", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toContain(
+      "return await runStaticChecksInWorkspace({ createWorkspace: async () =>",
+    );
+  });
+
+  test("skips the static checks when the base of the pull request cannot be resolved", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toContain(
+      'return { kind: "skipped", reason: STATIC_CHECK_BASE_UNRESOLVED_REASON, };',
+    );
+  });
+
+  test("adds the notice of the checks right before the static checks run", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toMatch(
+      /beforeRun: async \(\) => \{ await addNoticeUnlessUnresolved\(\{ kind: "unsandboxed_check_commands",/,
+    );
+  });
+
+  test("uses the merge base of the pull request as the base of a review or CI round", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toContain(
+      "(await resolvePrBaseOnce())?.mergeBase ?? null",
+    );
+  });
+
+  test("uses the merged base tip as the base of a conflict round", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toContain(
+      "runStaticChecks(base_sha, CONFLICT_MERGE_NOT_RECORDED_REASON)",
+    );
+  });
+
+  test("tells both verifications whether static check commands exist", async () => {
+    expect(
+      (await stepSource("pr_fix_verify.ts")).split(
+        "hasStaticCheckCommands: staticCommands.length > 0,",
+      ).length - 1,
+    ).toBe(2);
   });
 });
