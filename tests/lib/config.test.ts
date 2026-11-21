@@ -8,6 +8,7 @@ import {
   isRepoAllowed,
   loadConfig,
   parseFactoryConfig,
+  staticCheckCommandsFor,
 } from "../../f/factory/lib/config.ts";
 import { JOB_TMP_MAX_AGE_SEC } from "../../f/factory/lib/job_tmp.ts";
 
@@ -1820,6 +1821,110 @@ describe("implement settings (工程3)", () => {
     expect(config.check_commands_by_repo).toEqual({
       "octo-owner/atelier-works.git": ["bun test"],
     });
+  });
+});
+
+describe("static_check_commands_by_repo", () => {
+  test("defaults to an empty record when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.static_check_commands_by_repo).toEqual({});
+  });
+
+  test("passes through an explicit record", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      static_check_commands_by_repo: {
+        "octo-owner/atelier-works": ["bunx --bun biome check ."],
+      },
+    });
+    expect(config.static_check_commands_by_repo).toEqual({
+      "octo-owner/atelier-works": ["bunx --bun biome check ."],
+    });
+  });
+
+  test("allows a key with a trailing .git", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      static_check_commands_by_repo: {
+        "octo-owner/atelier-works.git": ["bunx --bun biome check ."],
+      },
+    });
+    expect(config.static_check_commands_by_repo).toEqual({
+      "octo-owner/atelier-works.git": ["bunx --bun biome check ."],
+    });
+  });
+
+  test("throws when a value is not an array of strings", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      static_check_commands_by_repo: {
+        "octo-owner/atelier-works": "bunx --bun biome check .",
+      },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when the record is an array instead of an object", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      static_check_commands_by_repo: ["bunx --bun biome check ."],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when a key is a full URL instead of owner/repo", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      static_check_commands_by_repo: {
+        "https://github.com/octo-owner/atelier-works": ["bunx --bun tsc"],
+      },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("names the static field in the error message", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      static_check_commands_by_repo: { "octo-owner/atelier-works": 1 },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(
+      /static_check_commands_by_repo/,
+    );
+  });
+
+  test("does not read check_commands_by_repo", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      check_commands_by_repo: { "octo-owner/atelier-works": ["bun test"] },
+    });
+    expect(config.static_check_commands_by_repo).toEqual({});
+  });
+});
+
+describe("staticCheckCommandsFor", () => {
+  const BASE = {
+    static_check_commands_by_repo: {
+      "Octo-Owner/Atelier-Works.git": ["bunx --bun biome check ."],
+    },
+  };
+
+  test("returns the repo's explicit entry (normalized key match)", () => {
+    expect(staticCheckCommandsFor(BASE, "octo-owner", "atelier-works")).toEqual(
+      ["bunx --bun biome check ."],
+    );
+  });
+
+  test("returns an empty list for a repo without an entry", () => {
+    expect(staticCheckCommandsFor(BASE, "octo-owner", "gadgets")).toEqual([]);
+  });
+
+  test("does not fall back to allowed_check_commands or check_commands_by_repo", () => {
+    const config = {
+      ...BASE,
+      allowed_check_commands: ["mise run check"],
+      check_commands_by_repo: { "octo-owner/gadgets": ["bun test"] },
+    };
+    expect(staticCheckCommandsFor(config, "octo-owner", "gadgets")).toEqual([]);
   });
 });
 

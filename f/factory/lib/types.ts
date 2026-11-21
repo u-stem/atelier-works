@@ -2173,6 +2173,13 @@ export type FactoryConfig = {
    * 一方、`checkCommandsFor`は`allowed_check_commands`にフォールバックする。
    */
   check_commands_by_repo: Record<string, string[]>;
+  /**
+   * リポジトリごとの静的検査のコマンド(`"<owner>/<repo>": string[]`)。
+   * 保護パスを変えたラウンドで、通常の検査コマンドの代わりに実行する(`config.ts`の
+   * `staticCheckCommandsFor`)。エントリの無いリポジトリでは静的検査を実行しない。
+   * `allowed_check_commands`と`check_commands_by_repo`にはフォールバックしない。
+   */
+  static_check_commands_by_repo: Record<string, string[]>;
 };
 
 /** 実装ブランチ名(`factory/issue-<N>-wi-<id>`)から作業項目のIDを返す。形が違えばnull。pr_fixが、親の行が無くても同じブランチの実装フローを見つけるのに使う。PRのCIの判定も、Factoryのブランチかの照合に使う。 */

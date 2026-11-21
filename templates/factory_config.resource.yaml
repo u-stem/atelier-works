@@ -87,6 +87,15 @@ description: >-
 #     起票するリポジトリに限る。検査の前に`git clean -fdX`で`node_modules/`などが
 #     消えるため、依存関係のあるリポジトリは先頭でインストールする。依存関係が
 #     無い(`package.json`が無い)リポジトリなら`bun test`だけでよい。
+#   static_check_commands_by_repo:
+#     <owner>/<repo>:
+#       - bunx --bun biome check .
+#       - bunx --bun tsc --noEmit
+#     キーは`<owner>/<repo>`、値は実行するコマンドの配列。保護パスを変えた
+#     ラウンドで、mainの版のツールでPRのファイルを読む静的検査だけを実行する。
+#     ここに書いたリポジトリだけで実行し、`allowed_check_commands`と
+#     `check_commands_by_repo`は使わない。PRのコードを実行するコマンド
+#     (`bun test`など)は書かない。
 #   implement_timeout_sec: 3600
 #     Claude Codeの1回の実行を打ち切るまでの制限時間(秒)。
 #   implement_check_timeout_sec: 900

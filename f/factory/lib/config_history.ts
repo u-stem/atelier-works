@@ -82,6 +82,7 @@ const KEY_CLASSES: ReadonlyMap<string, KeyClass> = new Map<string, KeyClass>([
   // 生の値を残さず、ハッシュだけを残す項目。コマンド、URL、リポジトリ、身元に関わる。
   ...[
     "check_commands_by_repo",
+    "static_check_commands_by_repo",
     "allowed_check_commands",
     "factory_repo",
     "factory_repo_id",

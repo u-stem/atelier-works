@@ -194,6 +194,12 @@ describe("groupLabelOfKey", () => {
     expect(groupLabelOfKey("daily_budget_usd")).toBe("モデルと予算");
   });
 
+  test("puts static_check_commands_by_repo in the group of check_commands_by_repo", () => {
+    expect(groupLabelOfKey("static_check_commands_by_repo")).toBe(
+      groupLabelOfKey("check_commands_by_repo"),
+    );
+  });
+
   test("gives その他 for a key that no group holds", () => {
     expect(groupLabelOfKey("brand_new_key")).toBe("その他");
   });
