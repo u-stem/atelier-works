@@ -152,8 +152,6 @@ type ConfigStep = {
   readonly outcome: StopAllConfigOutcome;
   readonly flags: readonly string[];
   readonly record: RecordStep;
-  /** 止めた名前の履歴をすべて書けたか。履歴を書かなかった段では`undefined`。 */
-  readonly historyRecorded?: boolean;
 };
 
 /** 止める名前が無いときの記録の段の結果。 */
@@ -200,7 +198,6 @@ async function recordFlags(
 async function stopConfig(
   ports: StopAllPorts,
   replaceRecord: boolean,
-  actor: string,
 ): Promise<ConfigStep> {
   let current: unknown;
   try {
@@ -224,8 +221,20 @@ async function stopConfig(
   } catch {
     return { outcome: "failed", flags: [], record };
   }
-  // 止めた名前を、1行ずつ設定の履歴に残す。書けない行があっても止めた状態は保ち、記録の結果に印を残す。
-  let historyRecorded = true;
+  return { outcome: "written", flags, record };
+}
+
+/**
+ * 止めた名前を、1行ずつ設定の履歴に残す。止める働きがすべて済んだ後に呼ぶ。
+ * 履歴の追記がロックを待っても、scheduleの無効化を遅らせないためである。
+ * 書けない行があっても止めた状態は保ち、すべて書けたかを返す。
+ */
+async function appendStopHistory(
+  ports: StopAllPorts,
+  flags: readonly string[],
+  actor: string,
+): Promise<boolean> {
+  let recorded = true;
   for (const flag of flags) {
     const written = await ports.appendHistory?.({
       key: flag,
@@ -235,9 +244,9 @@ async function stopConfig(
       source: "stop_all",
       reason: "stop_all_flag_off",
     });
-    if (written === false) historyRecorded = false;
+    if (written === false) recorded = false;
   }
-  return { outcome: "written", flags, record, historyRecorded };
+  return recorded;
 }
 
 type ScheduleStep = {
@@ -268,7 +277,7 @@ type StopStep = {
 
 /**
  * 全停止を置く。呼び出しの順序は、理由の検査、変数の読み取り、操作者の導出、記録(`attempted`)、
- * 変数の書き込み、止める名前の記録、設定の書き込み、scheduleの無効化、記録(結果)に固定する。
+ * 変数の書き込み、止める名前の記録、設定の書き込み、scheduleの無効化、止めた名前の履歴の追記、記録(結果)に固定する。
  * 変数の書き込みの失敗は、記録を`failed`にしてから投げる。
  */
 export async function stopAllFromConsole(
@@ -305,8 +314,13 @@ export async function stopAllFromConsole(
         await ports.writeStopAll(serializeStopAll(built.state));
       }
       // 変数が空だったときだけ、記録を置き換える。壊れた値は前の全停止が残したものでありうるので、和集合にする。
-      const config = await stopConfig(ports, status.kind === "clear", actor);
+      const config = await stopConfig(ports, status.kind === "clear");
       const schedules = await stopSchedules(ports);
+      // 止める働きがすべて済んでから、止めた名前の履歴を書く。
+      const historyRecorded =
+        config.outcome === "written"
+          ? await appendStopHistory(ports, config.flags, actor)
+          : true;
       const complete =
         (config.outcome === "written" || config.outcome === "unchanged") &&
         config.record.outcome !== "failed" &&
@@ -322,9 +336,7 @@ export async function stopAllFromConsole(
           unrecorded: config.record.unrecorded.length,
           disabled: schedules.disabled.length,
           failed: schedules.failed.length,
-          ...(config.historyRecorded === false
-            ? { history_recorded: false }
-            : {}),
+          ...(historyRecorded ? {} : { history_recorded: false }),
         },
         value: {
           placed: existing === null,
