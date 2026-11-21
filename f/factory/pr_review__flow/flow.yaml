@@ -70,6 +70,9 @@ value:
           binary_unlisted_count:
             type: javascript
             expr: results.pr_review_generate?.binary_unlisted_count ?? 0
+          diff_too_large:
+            type: javascript
+            expr: results.pr_review_generate?.diff_too_large ?? false
           owner:
             type: javascript
             expr: results.pr_review_prepare.owner

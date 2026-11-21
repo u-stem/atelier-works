@@ -53,6 +53,7 @@ import {
   runCommand,
 } from "../lib/workspace.ts";
 import {
+  buildFilePatchDiff,
   buildReviewDiffText,
   decideReviewScope,
   describeReason,
@@ -68,6 +69,7 @@ import {
   reviewOutputProseIssues,
   reviewThreadsForPrompt,
   selectListedBinaryFiles,
+  selectReviewDiff,
   settleReviewFindings,
   settleThreadResponses,
   splitChangedFiles,
@@ -90,6 +92,8 @@ export type PrReviewGenerateResult = {
   readonly binary_files: readonly string[];
   /** `binary_files`に載せなかった(パスを変更ファイルと照合できなかった)バイナリの件数。 */
   readonly binary_unlisted_count: number;
+  /** GitHubが差分全体の提供を上限超過で拒んだか。真なら、投稿の総評に固定の文を足し、LGTMの文を出さない。 */
+  readonly diff_too_large: boolean;
   /** このレビューを生成したClaudeの実行を記録した`agent_runs`の行のid。Claudeを起動しなかったときはnull。 */
   readonly agent_run_id: number | null;
 };
@@ -105,6 +109,7 @@ const SKIPPED_RESULT: PrReviewGenerateResult = {
   pr_file_hunks: [],
   binary_files: [],
   binary_unlisted_count: 0,
+  diff_too_large: false,
   agent_run_id: null,
 };
 
@@ -197,16 +202,31 @@ export async function main(
   // 読めないとき(1000件超、形の不一致など)に生成を止めると、再試行しても直らずレビューが投稿されない。
   // 空で続けても、未解決の`[MUST]`の誤判定は投稿ステップが一覧を読み直して防ぐ。
   // 変更ファイルの一覧は、`patch`の文字列を持たない形に分けて受ける。Claudeの実行のあいだ、大きな文字列を持たないためである。
+  // GitHubが差分全体の提供を拒んだとき(2万行超)は、`patch`をつないだ差分に切り替える。
+  // その差分は、拒まれたときだけ、`patch`の文字列を持ち続けないよう、一覧を読んだ場所で作る。
+  const diffRequest = getPrDiff(
+    client,
+    owner,
+    repo,
+    pr_number,
+    config.diff_max_lines,
+  );
   const [
     pr,
-    prDiff,
-    { entries: prFileEntries, hunks: prFileHunks },
+    fetchedDiff,
+    { entries: prFileEntries, hunks: prFileHunks, patchDiff },
     viewer,
     listedThreads,
   ] = await Promise.all([
     getPr(client, owner, repo, pr_number),
-    getPrDiff(client, owner, repo, pr_number, config.diff_max_lines),
-    getPrFiles(client, owner, repo, pr_number).then(splitChangedFiles),
+    diffRequest,
+    getPrFiles(client, owner, repo, pr_number).then(async (files) => ({
+      ...splitChangedFiles(files),
+      patchDiff:
+        (await diffRequest).kind === "ok"
+          ? null
+          : buildFilePatchDiff(files, config.diff_max_lines),
+    })),
     getViewer(client),
     listReviewThreadsBestEffort(
       () => listReviewThreads(client, owner, repo, pr_number),
@@ -218,6 +238,16 @@ export async function main(
       },
     ),
   ]);
+  const { prDiff, diffTooLarge } = selectReviewDiff(
+    fetchedDiff,
+    patchDiff ?? buildFilePatchDiff([], config.diff_max_lines),
+  );
+  if (diffTooLarge) {
+    log.warn("pr diff too large for GitHub, using per-file patches", {
+      work_item_id,
+      pr_number,
+    });
+  }
   const prFiles = prFileEntries.map((entry) => entry.filename);
   // 差分の行から取り出したパスは、APIの変更ファイルに載るものだけをClaudeに読ませる。
   // 載らないものは、件数だけを投稿に残す。
@@ -320,8 +350,11 @@ export async function main(
       : null;
   const diffText =
     scope.kind === "threads_only"
-      ? "(no new commits)"
-      : buildReviewDiffText(deltaDiff ?? prDiff);
+      ? buildReviewDiffText(
+          { diff: "(no new commits)", truncated: false, totalLines: 1 },
+          diffTooLarge,
+        )
+      : buildReviewDiffText(deltaDiff ?? prDiff, diffTooLarge);
 
   const promptText = reviewPrompt({
     pr: {
@@ -426,6 +459,7 @@ export async function main(
       pr_file_hunks: prFileHunks,
       binary_files: binaryFiles,
       binary_unlisted_count: binaryUnlistedCount,
+      diff_too_large: diffTooLarge,
       agent_run_id: agentRunId,
     };
   } finally {

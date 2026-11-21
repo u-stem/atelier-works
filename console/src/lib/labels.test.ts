@@ -164,6 +164,10 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("names the GitHub outage", () => {
+    expect(noticeKindLabel("github_unreachable")).toBe("GitHubへの通信断");
+  });
+
   test("names the failed pull request CI", () => {
     expect(noticeKindLabel("pr_ci_failed")).toBe("PRのCIの失敗");
   });

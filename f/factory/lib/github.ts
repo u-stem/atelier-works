@@ -131,6 +131,11 @@ export type GhApiCallOptions = {
    * 制御列の除去や置き換えは、呼び出し側が行う。
    */
   readonly allowEscapeSequences?: boolean;
+  /**
+   * GETでなくても読み取りだけの要求(GraphQLのquery)であることを表す。
+   * 再試行の後に応答が無いとき、通信断として判定する対象になる。
+   */
+  readonly readOnly?: boolean;
 };
 
 /**
@@ -177,6 +182,7 @@ export async function callGhApi(
       ...(options.allowEscapeSequences === true
         ? { allowEscapeSequences: true }
         : {}),
+      ...(options.readOnly === true ? { readOnly: true } : {}),
     },
     policy,
   );
@@ -277,7 +283,10 @@ export function ensureSuccess(response: GhApiResponse, context: string): void {
       `${context} failed with HTTP ${response.status}: ${response.bodyText.slice(0, 500)}`,
     ),
     response.status,
-    { timedOut: response.timedOut === true },
+    {
+      timedOut: response.timedOut === true,
+      unreachable: response.unreachable === true,
+    },
   );
 }
 
@@ -1003,7 +1012,10 @@ async function fetchIssueObject(
     throw new GitHubHttpError(
       `${context} failed with HTTP ${response.status}${detail}`,
       response.status,
-      { timedOut: response.timedOut === true },
+      {
+        timedOut: response.timedOut === true,
+        unreachable: response.unreachable === true,
+      },
     );
   }
   // 本文が切れた応答は、形の誤りではなく通信の失敗として、受け取ったステータスのまま投げる。
@@ -1252,6 +1264,7 @@ async function lastLabelEvent(
     LABEL_EVENTS_QUERY,
     { owner, repo, number },
     context,
+    true,
     true,
   );
   const payload = parseLabelEventsPayload(data);
@@ -2454,6 +2467,11 @@ export type PrDiff = {
   readonly binaryFiles: readonly string[];
 };
 
+/** `getPrDiff`の結果。`too_large`は、GitHubが差分の提供を上限超過で拒んだこと。 */
+export type PrDiffFetch =
+  | { readonly kind: "ok"; readonly diff: PrDiff }
+  | { readonly kind: "too_large" };
+
 /** gitがバイナリの差分に出す1行。差分の内容の行は先頭が`+`、`-`、空白なので、行頭のこの語とは混ざらない。 */
 const BINARY_FILES_LINE = /^Binary files (.+) differ$/;
 
@@ -2555,6 +2573,9 @@ function cutToChars(text: string, maxChars: number): string {
  * 2xxなのに本文が途中で切れたときは、1回だけ取り直し、
  * 取り直しても欠けたときは、差分が空のまま読まれないよう
  * `GitHubRawBodyIncompleteError`を投げる(`callGhApiRawBody`)。
+ * GitHubが差分の行数の上限(2万行)を超えて提供を拒んだ応答(406で、`errors`の要素の`code`が`too_large`)だけは、
+ * 例外にせず`{ kind: "too_large" }`で返す。判定は状態と`code`だけで行い、`message`は使わない。
+ * ほかの2xx以外の応答は、従来どおり`ensureSuccess`が例外にする。
  */
 export async function getPrDiff(
   client: GhClient,
@@ -2563,7 +2584,7 @@ export async function getPrDiff(
   number: number,
   maxLines: number,
   maxChars: number = PR_DIFF_MAX_CHARS,
-): Promise<PrDiff> {
+): Promise<PrDiffFetch> {
   validateOwnerRepo(owner, repo);
   const context = `GET pr diff ${owner}/${repo}#${number}`;
   const response = await callGhApiRawBody(
@@ -2575,8 +2596,27 @@ export async function getPrDiff(
     },
     context,
   );
+  if (isDiffTooLargeResponse(response)) return { kind: "too_large" };
   ensureSuccess(response, context);
-  return limitReviewDiff(response.bodyText, maxLines, maxChars);
+  return {
+    kind: "ok",
+    diff: limitReviewDiff(response.bodyText, maxLines, maxChars),
+  };
+}
+
+/** 差分の取得が上限超過で拒まれた応答か。406で、`errors`のどれかの`code`が`too_large`のときだけ真。 */
+function isDiffTooLargeResponse(response: GhApiResponse): boolean {
+  if (response.status !== 406) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(response.bodyText);
+  } catch {
+    return false;
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.errors)) return false;
+  return parsed.errors.some(
+    (error: unknown) => isRecord(error) && error.code === "too_large",
+  );
 }
 
 /**
@@ -3766,6 +3806,9 @@ function isGraphqlDataPayload(value: unknown): value is GraphqlDataPayload {
  * HTTPのステータスだけを確かめた呼び出し側がGraphQLの失敗を成功と取り違えないようにする。
  * `idempotent`は、読み取りのqueryなら`true`、mutationなら`false`にする。
  * `true`のときだけ、応答の無い通信断と5xxを再試行する(`github_http.ts`の`requestGitHub`を参照)。
+ * `readOnly`は、読み取りだけのquery(`true`)か、書き込みを含むmutation(`false`)かを表す。
+ * `true`のとき、再試行の後も応答が無ければ通信断として判定する。
+ * 冪等でも書き込みのmutationは`false`にする。応答が無くても書き込みが済んだかもしれず、見送りにできないため。
  */
 async function callGhGraphql(
   client: GhClient,
@@ -3773,11 +3816,13 @@ async function callGhGraphql(
   variables: Record<string, unknown>,
   context: string,
   idempotent: boolean,
+  readOnly: boolean,
 ): Promise<unknown> {
   const response = await callGhApi(client, "graphql", {
     method: "POST",
     body: { query, variables },
     idempotent,
+    ...(readOnly ? { readOnly: true } : {}),
   });
   ensureSuccess(response, context);
   const parsed = parseJsonBody(response, context);
@@ -4128,7 +4173,14 @@ export async function listReviewThreads(
       cursor === null
         ? { owner, repo, number }
         : { owner, repo, number, cursor };
-    const data = await callGhGraphql(client, query, variables, context, true);
+    const data = await callGhGraphql(
+      client,
+      query,
+      variables,
+      context,
+      true,
+      true,
+    );
     if (!isReviewThreadsGraphqlPayload(data)) {
       throw new Error(`${context}: unexpected response shape`);
     }
@@ -4171,6 +4223,7 @@ export async function resolveReviewThread(
     mutation,
     { id: threadId },
     `GraphQL resolveReviewThread ${threadId}`,
+    false,
     false,
   );
 }

@@ -47,6 +47,7 @@ Issueで承認が見えなくなった理由を、Issueに残す記録なので�
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
 | `deploy_approval_required` | 保護パスの変更の反映が承認を待っています | `self_update`(2分ごと) | 前回の反映からの変更に、Windmillへ反映する保護パスのファイルかmigrationがあり、HEADの版の承認の依頼を新しく作り、通知を新しく残した |
 | `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
+| `github_unreachable` | GitHubへの通信が途切れています | 定期ジョブ6つ(`poll_issues`、`poll_prs`、`watch_main_ci`、`watch_pr_ci`、`watch_pr_conflicts`、`poll_dependabot`) | GitHubを読む要求が再試行の後も応答なしで終わり、通知を新しく残した([通信断の扱い](#githubへの通信断の扱い)) |
 | `credential_expiring` | 資格情報の期限が近づいています | `notify_daily_summary`(毎日09:00) | 資格情報の期限が`credential_warn_days`日より近いことを検知し、通知を新しく残した |
 | `stop_all_active` | Factoryを全停止しています | `detect_schedule_failures`(5分ごと) | 全停止の変数が置かれたことを検知し、通知を新しく残した |
 | `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 集計の対象の日の、実行回数、コスト、失敗、要件定義の承認・却下の件数、DBの掃除の件数、workerの負荷、`gated`のときの投稿しなかったレビューの期間と件数 |
@@ -117,6 +118,7 @@ Issueで承認が見えなくなった理由を、Issueに残す記録なので�
 | `host_action_required` | なし | 説明に反映した版と変わったパス、「次の操作」 |
 | `deploy_approval_required` | Consoleの通知 | 説明に待っている版と保護パスのファイルの件数、「次の操作」 |
 | `main_ci_failed` | 失敗した実行 | 説明にコミットの先頭7文字、「次の操作」、リポジトリ |
+| `github_unreachable` | なし | 説明に、最初に判定した時刻(JST)、「次の操作」 |
 | `daily_summary` | なし | 説明に実行件数と費用、失敗、承認、却下、DB掃除、workerの負荷、`gated`のときだけ「レビューの投稿」 |
 | `audit_completed` | Consoleの監査のページ | 「次の操作」、`work_item_id` |
 | `pr_opened` | PR | 「次の操作」、Issue、「確認して欲しい点」、ラウンドと費用、差分 |
@@ -330,7 +332,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `design_enabled_ignored` | `self_update` | `design_enabled`が`true`でも、`design_enabled_since`が無いか日時として読めないため`false`として読んでいること、`design_enabled_since`を書くか`false`に戻す操作 |
 | `host_action_required` | `self_update`、`implement_verify`、`pr_fix_verify`、`watch_pr_ci` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパスかイメージに足りないもの、`mise run up`を実行する手順 |
 | `deploy_approval_required` | `self_update` | 待っている版(40桁)、保護パスのファイルの件数、Consoleで承認か却下をする手順 |
-| `deploy_approval_decided` | `console_deploy_decide` | 判断した版、判断、操作者 |
+| `deploy_approval_decided` | `console_deploy_decide`。`addResolvedNotice`で、作成の時点で解決済みにする(`resolved_by`は`console_deploy_decide`) | 判断した版、判断、操作者 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `backup_failed` | `backup` | 失敗した段階と、ジョブのログを見る案内。原因の本文は、秘密値を伏せてジョブのログにだけ残す |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
@@ -338,6 +340,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `workspace_disk_usage` | `cleanup_workspaces` | 作業領域のディスク使用量(MiB) |
 | `main_ci_failed` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、コミットの先頭7文字、失敗した実行のリンク、次の操作 |
 | `main_ci_check_denied` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
+| `github_unreachable` | `poll_issues`、`poll_prs`、`watch_main_ci`、`watch_pr_ci`、`watch_pr_conflicts`、`poll_dependabot` | リポジトリにも時刻にも依らない固定文と、次の操作。通信が戻った回で自動で解決する([通信断の扱い](#githubへの通信断の扱い)) |
 | `pr_ci_failed` | `watch_pr_ci` | `<owner>/<repo>#<PR番号>:`で始まる固定文、コミットの先頭7文字、理由コード、自動修正の保留の理由(あれば)、リンク、次の操作 |
 | `pr_ci_check_denied` | `watch_pr_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
 | `config_misfit` | `watch_pr_ci` | PRにも設定の値にも依らない固定文、見直す設定の項目(`claude_timeout_sec`と`allowed_check_commands`) |
@@ -482,7 +485,8 @@ noticeの本文には日数と件数を載せない。
 
 ### 重複の抑止
 
-noticeは、作業領域のディスク使用量(`workspace_disk_usage`)を除き、すべて`addNoticeUnlessUnresolved`で作る。
+noticeは、原則として`addNoticeUnlessUnresolved`で作る。
+例外は、作業領域のディスク使用量(`workspace_disk_usage`)と、作成の時点で解決済みにする反映の判断(`deploy_approval_decided`)である。
 同じ種類と本文の未解決のnoticeがあるあいだは、新しく追加しない。
 同じ状況が続く間、スケジュールや実行のたびに、見分けの付かないnoticeが積み上がるのを防ぐためである。
 本文が対象(作業項目、PR、版など)で決まるので、対象が違えば別のnoticeになる。
@@ -1031,3 +1035,71 @@ mutation(`resolveReviewThread`)は再試行しない。
   2xxのステータスの後で締め切りに本文を切られた応答も、取り直さない。
 - 再試行しても失敗したもの。
   通信断はHTTP 0の失敗で、サーバーエラーはその5xxの応答のままステップを失敗にする。
+  ただし、GETの通信断は、次の節のとおり定期ジョブの回の単位で通信断の事象にまとめる。
+
+## GitHubへの通信断の扱い
+
+GitHubへの通信が途切れると、定期ジョブがそろって失敗し、ジョブの失敗の通知が並ぶ。
+これを1つの事象にまとめるため、通信断だけで終わった定期ジョブの回は、失敗として記録せず、成功で終える。
+実装は`f/factory/lib/github_outage.ts`にある。
+
+### 種類と対象のジョブ
+
+事象の種類は`github_unreachable`で、重要度は要対応である。
+対象は、`poll_issues`、`poll_prs`、`watch_main_ci`、`watch_pr_ci`、`watch_pr_conflicts`、`poll_dependabot`の6つである。
+
+### 通信断と判定する条件
+
+通信層(`github_http.ts`)は、次のすべてを満たす失敗に、通信断の印(`unreachable`)を付ける。
+
+- GETか、読み取りのGraphQLの要求である。
+- 再試行の後の最後の送信が、応答なしで終わった。
+- 締め切りによる失敗ではない。
+
+書き込みの要求の応答なし、締め切り、サーバーエラー、4xx、本文が途中で切れた応答には、印を付けない。
+これらは、失敗として記録する。
+再試行の回数と待ち時間は変えない。
+
+### 記録の条件
+
+定期ジョブの回の終わりに、印の付いた失敗があれば、事象を記録する。
+同じ種類と本文の未解決の事象があるときは、新しく作らない(`addNoticeUnlessUnresolved`)。
+本文は固定の文で、時刻、ジョブの名前、リポジトリの名前を載せない。
+そのため、通信断が続く間の事象は1件にまとまる。
+未解決の期間が、同じ事象の時間帯である。
+固定の時間幅は設けない。
+
+通信断だけで終わった回は、`factory.job_outage_skips`に見送りを1行残し、ジョブを成功で終える。
+見送りの行は回ごとに1行で、最初の通信断のstepだけを持つ。
+2件目以降のstepと、作業項目に結び付いた失敗の作業項目IDは、見送りの行に残さない。
+stepと件数は、ログ(`github unreachable; skipping this round`)に残る。
+`job_failures`には残さないので、`detect_schedule_failures`は拾わず、ジョブ失敗の通知は出ない。
+通信断のほかに失敗が1件でもあった回は、失敗として終える。
+このとき、通信断の失敗も`job_failures`に残し、事象も記録する。
+
+### 通知の条件
+
+事象を新しく記録したときに限り、Discordに1回通知する。
+未解決の事象があるあいだに通信断が続いても、再通知しない。
+解決した後で再び通信断が起きると、新しい事象を記録し、再び通知する。
+通知には、その回で最初に通信断を預かった時刻(JST)と、運用する人の次の操作を載せる。
+通知の失敗は、記録とジョブの結果に影響させない。
+
+### 解決の条件
+
+通信断がなく、GitHubを読む要求が2xxで1件以上成功した定期ジョブの回の終わりに、未解決の事象を解決する。
+解決する主体は`github_outage`である。
+6つの定期ジョブのどれか1つの成功で解決する。
+GitHubを読む要求が1件も成功しなかった回では、解決しない。
+解決の根拠にするのは、事象を作った時刻より後に成功した読み取りだけである。
+このプロセスで最後に読み取りが成功した時刻を、事象の作成時刻と比べる。
+事象より前に読み取りを終えていた別のジョブの成功では、解決しない。
+事象の作成時刻はDBの時計で、成功した時刻はworkerの時計である。
+時計がずれているときと、事象の作成が回の終わりになるときは、解決が次の回へ遅れることがある。
+遅れるだけで、次の回の成功で解決する。
+
+### 証跡パック
+
+見送りの回数は、証跡パックに「通信断による見送り」として、失敗の件数とは別の行で載る。
+失敗の件数には含めない。
+見送りは`cleanup_db`が、ログと同じ保持期間で削除する。

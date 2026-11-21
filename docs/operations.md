@@ -1605,7 +1605,7 @@ Consoleの通知の詳細のリンクが、種類からこの名前を決めて�
 | <a id="notice-deployed_sha_mismatch"></a>`deployed_sha_mismatch` | 自己更新が反映した版(`f/factory/deployed_sha`)が、self cloneのHEADに30分を超えて追いついていない。mergeの直後に反映を待つ間は通知しない。本文に、直近の反映の記録から読んだ原因の候補が付く。Windmillのdefaultのworkerが埋まって自己更新が待たされたときや、自己更新の実行が長引いて次の回が飛ばされたときは、反映が遅れただけでも通知されうる | 自己更新のジョブのログを確かめる。自己更新が反映に成功すると、その記録より前に作られたnoticeを、`poll_issues`が自動で解決する。人が解決しても、反映が止まっている限り、次の`poll_issues`で再び残る。本文が名指しする版が今の`f/factory/deployed_sha`と違い、自己更新が成功しているときは、反映と判定が重なって残ったnoticeなので、人が解決してよい。人が`f/factory/deployed_sha`を今のHEADへ手で書き換えて版を一致させたときや、自己更新が変数を更新した後に失敗して成功の行が作られなかったときも、止まっていた版を名指しするnoticeは自動では解決されないので、人が解決してよい([通知](internals/notifications.md)) |
 | <a id="notice-host_action_required"></a>`host_action_required` | 自己更新が反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。本文に、反映した版と変わったパスが載る。ホストで作業するまで、新しい構成は動かない。実装、PR修正、作業領域の掃除、CIの失敗を直す回の監視が、workerのイメージが古くて検査コマンドを実行できないと分かったときにも残す。そのときは本文に、イメージの満たさない前提(足りない道具、枠のユーザー、ベースのイメージが開いたままのパス)が載る。検査コマンドのある作業項目は、その間進まない([f/とworkerのイメージを両方変えたとき](operations/deploy.md#fとworkerのイメージを両方変えたとき)) | ホスト側のcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。`mise run up`は、Caddyを再起動したうえで、そのcheckoutのHEADをworkerへ渡す。自己更新(2分ごと)が、通知の版がそのHEADと同じか祖先なら、または`infra/`と`mise.toml`の内容がそのHEADと同じなら、通知を自動で解決する。HEADを書けなかったとき(警告が出る)と、このスクリプトを持たない版から`mise run deploy`で取り込む最初の1回(`mise run deploy`はpullの前のタスク定義で動く)は、自動では解決されない。`mise run up`が済んでいれば人が解決してよい([ホスト側で反映するもの](operations/deploy.md#ホスト側で反映するもの))。イメージが古くて止まった作業項目は、通知が自動で解決されると自動で再開する。本文に反映した版が載らない通知は自動では解決されず再開もしないので、人が解決し、止まった作業項目を再実行する。作業項目がConsoleの**要対応**の失敗に出ているときは、そこで**再実行**を押す。出ていないときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行する |
 | <a id="notice-deploy_approval_required"></a>`deploy_approval_required` | 自己更新が、前回の反映からの変更に、Windmillへ反映する保護パスのファイルかmigrationを見つけ、人の承認まで反映を止めた。本文に、待っている版と、止めたファイルの件数が載る。`infra/`、`.github/`、`.claude/`、`scripts/`、lockfileの変更では出ない。保留は期限で解けない | [保護パスの変更の反映を承認する](operations/deploy.md#保護パスの変更の反映を承認する)に従い、Consoleのシステムの画面の「反映の承認待ち」で承認か却下をする。承認、新しい版への置き換え、反映の成功で自動で解決する。却下するとこの通知は残り、mainへ戻すPRの反映で解決される。Consoleから解決することはできない |
-| <a id="notice-deploy_approval_decided"></a>`deploy_approval_decided` | 保護パスの変更を含む反映を、人がConsoleで承認か却下した。本文に版と操作者が載る | なし。却下したときは、mainへ戻すPRをマージするまで反映は止まる |
+| <a id="notice-deploy_approval_decided"></a>`deploy_approval_decided` | 保護パスの変更を含む反映を、人がConsoleで承認か却下した。本文に版と操作者が載る。作成の時点で解決済みになるので、未解決の通知には残らず、解決済みの通知の一覧で確かめる | なし。却下したときは、mainへ戻すPRをマージするまで反映は止まる |
 | <a id="notice-cleanup_db_failed"></a>`cleanup_db_failed` | 保持期間を過ぎたレコードの削除に失敗した | 内容を確かめる。次の日の掃除でやり直す |
 | <a id="notice-backup_failed"></a>`backup_failed` | 夜間のバックアップ(毎日02:30)が失敗した。本文に失敗した段階が載り、原因はジョブのログに出る。その日の世代は作られない。ジョブの失敗は、scheduleの失敗としてDiscordにも届く | [バックアップ](#バックアップ)の段階ごとの表で原因を確かめて直し、Windmillの画面で`f/factory/backup`を実行して取り直す。自動では解決されないので、取り直しが成功したら人が解決する |
 | <a id="notice-cleanup_worktrees_skipped"></a>`cleanup_worktrees_skipped` | 動いているPRの修正のブランチを確かめられず、そのリポジトリの作業領域の掃除を見送った | 次の日の掃除を待つ |
@@ -1627,6 +1627,7 @@ Consoleの通知の詳細のリンクが、種類からこの名前を決めて�
 | <a id="notice-drawio_viewer_bump_held"></a>`drawio_viewer_bump_held` | draw.ioのビューアの固定を、自動では上げなかった。原因は3つある。ビューアの大きさが2割を超えて変わった。取得したファイルがGitHubの記録と一致しない。PRの無い既存のブランチの中身が作るはずの内容と違う。本文に版と理由が載る。上げる版に選んだ最新の版を保留している間は、古い版も上げない。メジャー版の更新は、このお知らせではなく、題名が[major]で始まるPRになる | 本文の「次の操作」に従う。大きさの変化が正当なら、Windmillで`f/factory/drawio_viewer_bump`を`approved_version`にその版を指定して実行する。既存のブランチが原因なら、ブランチを確かめ、不要なら削除する。原因が続けば、解決しても次の週に出直す([draw.ioのビューアの更新](internals/console/delivery.md#ビューアの更新)) |
 | <a id="notice-main_ci_failed"></a>`main_ci_failed` | 対象リポジトリの既定のブランチ(main)のコミットで、CI(GitHub Actionsのpushの実行)が失敗した。本文に、リポジトリ、コミットの先頭7文字、失敗した実行のリンクが載る。1つ前のコミットも失敗していたときは、本文にその旨が付く。Discordにも届く | リンク先の実行のログで原因を確かめ、直す修正を入れるか、原因のコミットを取り消す。同じリポジトリでより新しいコミットのCIが通ると、自動で解決される。同じコミットの実行をやり直して通っても、失敗は取り消されないので、次のコミットが通るまで残る |
 | <a id="notice-main_ci_check_denied"></a>`main_ci_check_denied` | 対象リポジトリの既定のブランチのCIの実行を、GitHubから読めなかった(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできない。読めない間は、そのリポジトリのmainのCIの失敗に気づけない。リポジトリごとに1件残る | GitHubのfine-grained PATで、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる。権限を足してもPATの値は変わらないので、Windmillの変数は更新しない。組織のリポジトリでは、組織の承認が再び要ることがある。読めるようになると、次の回に自動で解決される。権限を戻すと、最新の失敗は通知され、より新しい行がある古い失敗は通知されない([PATの権限](security.md#githubのpat)) |
+| <a id="notice-github_unreachable"></a>`github_unreachable` | 定期ジョブ(`poll_issues`、`poll_prs`、`watch_main_ci`、`watch_pr_ci`、`watch_pr_conflicts`、`poll_dependabot`)が、GitHubを読む要求(GETと、読み取りのGraphQL)の再試行の後も、応答なしで終わった。通信が戻るまで、その回を見送り、失敗として記録しない。本文は固定で、未解決の間は1件だけ残る。Discordにも1回届く | 通知の「次の操作」に従い、GitHubの障害情報と、このサーバーからGitHubへのネットワークを確かめる。通信が戻り、定期ジョブのどれかがGitHubを読めると、次の回に自動で解決される。書き込みの失敗、締め切り、サーバーエラー、4xxは、通信断にならず失敗になる([通信断の扱い](internals/notifications.md#githubへの通信断の扱い)) |
 | <a id="notice-pr_ci_failed"></a>`pr_ci_failed` | Factoryが作ったPRのheadのコミットで、CI(GitHub Actionsのpull_requestかpushの実行)が失敗した。本文は`<owner>/<repo>#<PR番号>:`で始まり、コミットの先頭7文字、理由、次の操作、リンクが載る。リンクは、失敗した実行か、PRのページである。自動で直す対象の失敗は、直せるかが決まってから残り、本文に自動修正の保留の理由が載る。Discordにも届く。ただし、直す作業が止まったときは、止めたフローがDiscordに通知する | 本文の「次の操作」に従う。保留の理由が無ければ、リンク先の実行のログで原因を確かめ、PRに修正を入れる。metadataジョブの失敗なら、`mise run metadata`を実行して差分をコミットする。取り消しやフレークなら、実行をやり直す。同じheadの実行をやり直して通ったとき、PRに新しいheadをpushして通ったとき、PRを閉じたときは、自動で解決される |
 | <a id="notice-pr_ci_check_denied"></a>`pr_ci_check_denied` | 対象リポジトリのPRかCIの実行を、GitHubから読めなかった(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできない。読めない間は、そのリポジトリのPRのCIの失敗に気づけない。リポジトリごとに1件残る | GitHubのfine-grained PATで、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる。権限を足してもPATの値は変わらないので、Windmillの変数は更新しない。組織のリポジトリでは、組織の承認が再び要ることがある。読めるようになると、次の回に自動で解決される([PATの権限](security.md#githubのpat)) |
 | <a id="notice-config_misfit"></a>`config_misfit` | 時間設定(`claude_timeout_sec`と検査コマンドの数)が、修正・検証ステップのtimeoutに収まらない。収まらない設定では自動修正を起動できないので、CIの失敗の自動修正を保留している。設定全体で1件だけ残り、失敗中のPRの数には依らない。本文に見直す項目が載る。Discordにも1回届く | `claude_timeout_sec`を小さくするか、`allowed_check_commands`の数を減らす。直すと、次の巡回で保留が外れて起動し直し、この通知も自動で解決される。自動修正だけを無効にした場合も、次の巡回で解決される。監視を無効にした場合は、修正中の行も通知を保留した行も無いと残るので、人が解決する |
@@ -2082,6 +2083,7 @@ DBの掃除のスケジュール(`cleanup_db`、毎日03:30)が、保持期間�
 | 終端の状態になった作業項目と、それに連なる記録 | 90日 | `retention_work_items_days` |
 | 監査の作業項目とレポート・提案 | 監査完了(`audited`)から90日 | `retention_work_items_days` |
 | 失敗の記録、デプロイの記録(最後に成功した反映の行は消さない)、解決済みの通知(解決の時刻から数える) | 30日 | `retention_logs_days` |
+| 通信断による見送りの記録(記録した時刻から数える) | 30日 | `retention_logs_days` |
 | 判定済みのmainのCIの記録(最後の更新から数える。判定を待つ記録と、各リポジトリの最新の記録は消さない) | 30日 | `retention_logs_days` |
 | 判定済みのPRのCIの記録(最後の更新から数える。判定を待つ記録と失敗を直している記録は消さない。各PRの最新の記録は、保持期間の4倍まで残す) | 30日(各PRの最新の記録は120日) | `retention_logs_days` |
 | workerの負荷の記録(測った時刻から数える) | 30日 | `retention_logs_days` |
@@ -2123,6 +2125,9 @@ Claudeの実行の記録は、コスト分析(`v_agent_cost_daily`)の元デー�
 掃除は、1回に1000連鎖までを消し、残りは次の掃除が消す。
 別のトランザクションが書いている最中の連鎖は、待たずに飛ばし、次の掃除が消す。
 仕様は[遷移の履歴の内部仕様](internals/history.md#保持)にある。
+
+設定の変更の履歴(`config_history`)は、保持日数の設定を持たず、消えない。
+仕様は[設定の変更の履歴の内部仕様](internals/config-history.md#保持)にある。
 
 作業項目を消すときは、その要件定義のディレクトリも消す。
 ディレクトリは`requirement_drafts.doc_dir`が指す場所である。

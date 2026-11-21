@@ -87,6 +87,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["drawio_viewer_bump_held", "draw.ioのビューアの更新の保留"],
   ["main_ci_failed", "mainのCIの失敗"],
   ["main_ci_check_denied", "mainのCIを読む権限の不足"],
+  ["github_unreachable", "GitHubへの通信断"],
   ["pr_ci_failed", "PRのCIの失敗"],
   ["pr_ci_check_denied", "PRのCIを読む権限の不足"],
   ["config_misfit", "時間設定の不整合"],

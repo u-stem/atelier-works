@@ -147,6 +147,11 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells where to check the GitHub outage and that it resolves itself", () => {
+    expect(noticeGuide("github_unreachable").action).toContain("ネットワーク");
+    expect(noticeGuide("github_unreachable").note).toContain("自動で解決");
+  });
+
   test("tells how to resolve the merge conflict of a pull request", () => {
     expect(noticeGuide("pr_conflict").action).toContain("mergeして");
   });

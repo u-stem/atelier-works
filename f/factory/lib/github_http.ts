@@ -104,6 +104,8 @@ export type GitHubRequest = {
   readonly maxBodyBytes?: number;
   /** 端末の制御列(ESC)を含む本文を受け取る。省略すると、ESCを含むJSONでない本文を、本文が欠けたもの(`incomplete`)にする。 */
   readonly allowEscapeSequences?: boolean;
+  /** GraphQLのqueryのように、GETでなくても読み取りだけの要求であることを表す。通信断の判定の対象になる。 */
+  readonly readOnly?: boolean;
 };
 
 /**
@@ -146,6 +148,12 @@ export type GitHubHttpResponseCore = {
   readonly capped?: true;
   /** 本文が`GITHUB_RESPONSE_MAX_BYTES`を超えて、読むのをやめたときだけ付く。`incomplete`も付く。 */
   readonly tooLarge?: true;
+  /**
+   * 読み取りの要求(GET、または`readOnly`の要求)の最後の送信が、応答の無い失敗に終わったときだけ付く。
+   * 締め切り、5xx、4xx、本文が途中で切れた応答、書き込みの要求には付けない。
+   * 再試行の回数と待ちには影響しない。
+   */
+  readonly unreachable?: true;
 };
 
 export type GitHubHttpResponse = GitHubHttpResponseCore & {
@@ -651,6 +659,27 @@ function requestHeaders(
   };
 }
 
+let githubReadSuccesses = 0;
+let lastReadSuccessAt: Date | null = null;
+
+/** このプロセスで、読み取りの要求が2xxで終わった回数。通信断の事象を解決する条件の判定に使う。 */
+export function githubReadSuccessCount(): number {
+  return githubReadSuccesses;
+}
+
+/**
+ * このプロセスで、読み取りの要求が最後に2xxで終わった時刻。まだ無ければ`null`。
+ * 通信断の事象の作成より後の成功だけを、解決の根拠にするために使う。
+ */
+export function githubLastReadSuccessAt(): Date | null {
+  return lastReadSuccessAt;
+}
+
+/** 通信断の判定と成功の数え上げの対象になる、読み取りの要求か。 */
+function isReadRequest(request: GitHubRequest): boolean {
+  return (request.method ?? "GET") === "GET" || request.readOnly === true;
+}
+
 /** 応答の無い結果。例外の文はURLを含みうるので、ステータス0と`timedOut`だけを残す。 */
 function noResponse(err: unknown): SendResult {
   const timedOut = isTimeout(err);
@@ -858,7 +887,12 @@ async function fetchAttempt(
     try {
       raw = await fetch(url, init);
     } catch (err) {
-      return noResponse(err);
+      const failed = noResponse(err);
+      if (!failed.noResponse || !isReadRequest(request)) return failed;
+      return {
+        response: { ...failed.response, unreachable: true as const },
+        noResponse: true,
+      };
     }
     const headers = new Map<string, string>();
     raw.headers.forEach((value, key) => {
@@ -887,6 +921,10 @@ async function fetchAttempt(
     if (next === null) {
       const refused = refusesEscapeSequences(request, body.text);
       const bodyText = refused ? "" : body.text;
+      if (isReadRequest(request) && raw.status >= 200 && raw.status < 300) {
+        githubReadSuccesses += 1;
+        lastReadSuccessAt = new Date();
+      }
       return {
         response: {
           status: raw.status,

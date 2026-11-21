@@ -1,0 +1,9 @@
+summary: '[LIB] GitHubへの通信断の記録'
+description: 内部ライブラリです。直接実行するものではありません。通信断で定期ジョブが失敗した回を、失敗ではなく1つの事象と見送りの記録にまとめます。
+lock: '!inline f/factory/lib/github_outage.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

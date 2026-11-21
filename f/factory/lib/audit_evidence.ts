@@ -18,9 +18,14 @@ import {
   formatAuditPeriodLabel,
 } from "./audit_support.ts";
 import {
+  type ConfigHistoryEvidence,
+  collectConfigHistoryEvidence,
+} from "./config_history.ts";
+import {
   defaultSqlClient,
   fetchDeploymentRows,
   isMissingAgentRunSkillsColumnError,
+  isMissingOutageSkipTableError,
   isMissingReviewAgentRunColumnError,
   isMissingReviewOutcomeTableError,
   type SqlClient,
@@ -458,6 +463,11 @@ export type AuditEvidence = {
    * 履歴の表を足すmigrationが当たる前は、`available`が偽の空の値である。
    */
   readonly history: HistoryEvidence;
+  /**
+   * 設定の変更の履歴。全体の連鎖の検証の結果と、期間内の変更の項目別、理由コード別の件数。
+   * 設定の履歴の表を足すmigrationが当たる前は、`available`が偽の空の値である。
+   */
+  readonly config_history: ConfigHistoryEvidence;
   readonly notices: CountByKey[];
   /**
    * 期間内に作成され、集計時点で未解決の通知。種別ごと。
@@ -498,6 +508,8 @@ export type AuditEvidence = {
   readonly pr_review_pr_count: number;
   /** 期間内のPRレビューの実行の、きっかけごとの件数。合計は実行統計の`pr_review`の件数と一致する。 */
   readonly pr_review_triggers: PrReviewTriggerCounts;
+  /** 期間内の、GitHubへの通信断で見送った定期ジョブの回の、flow別の件数。失敗の件数(`failures`)には含めない。 */
+  readonly outage_skips: CountByKey[];
 };
 
 const DATA_NOT_INSTRUCTIONS_BANNER =
@@ -712,6 +724,21 @@ function prReviewTriggersSection(evidence: AuditEvidence): EvidenceSection {
       sanitizeCell(`合計: ${triggerTotal(counts)}件`, SANITIZE_CELL_MAX),
     ],
     lines: [],
+  };
+}
+
+/**
+ * 通信断による見送りの節。見送りは失敗として記録しないので、失敗の節とは別に、件数を固定の行で示す。
+ * 件数が0でも、見送りが無かったことを読み取れるよう、固定の行を残す。
+ */
+function outageSkipsSection(evidence: AuditEvidence): EvidenceSection {
+  const total = sumBy(evidence.outage_skips, (skip) => skip.count);
+  return {
+    heading: "通信断による見送り(flow別)",
+    fixed: [`期間内の見送り: ${total}件(失敗の件数には含まない)`],
+    lines: evidence.outage_skips.map((skip) =>
+      sanitizeCell(`${skip.key}: ${skip.count}件`, SANITIZE_CELL_MAX),
+    ),
   };
 }
 
@@ -1167,6 +1194,109 @@ function historySection(evidence: AuditEvidence): EvidenceSection {
   };
 }
 
+/** 設定の変更の節に載せる、履歴の表がまだ無いときの1行。 */
+export const CONFIG_HISTORY_UNAVAILABLE_LINE =
+  "設定の履歴の表が無い(migrationが当たる前)";
+
+/** 設定の変更の節に載せる、記録が1件も無いときの1行。記録が無いことは、変更が無かったことを示さない。 */
+export const NO_CONFIG_HISTORY_LINE =
+  "設定の変更の記録はまだ無い(Consoleの外の経路の変更は記録しないので、記録が無くても変更が無かったとは言えない)";
+
+/**
+ * 設定の変更の節に載せる、記録の範囲の1行。
+ * 復元(全停止の解除、手順による復元、CLI)は記録しないので、旗の履歴が`false`で終わっていても、今の設定は`true`のことがある。
+ */
+const CONFIG_HISTORY_SCOPE_LINE =
+  "記録の範囲: Consoleの設定の更新と全停止による停止だけ(復元と、Consoleの外の経路の変更は記録しない。旗の履歴がfalseで終わっていても、今の設定はtrueのことがある)";
+
+/** 履歴を書けなかった操作があるときだけ、設定の変更の節に載せる1行。 */
+function unrecordedOperationsLine(count: number): string {
+  return `記録できなかった操作: ${count}件(Consoleの操作記録の範囲。操作記録は90日で消える)`;
+}
+
+/** 設定の変更の節に壊れた位置の行を載せる件数の上限。 */
+const CONFIG_BROKEN_LIST_MAX = 5;
+
+/**
+ * 設定の変更の節。
+ * 連鎖の行の数と最後の連番、壊れた位置(最大`CONFIG_BROKEN_LIST_MAX`件)、期間内の変更の数、記録の範囲は、固定の行にする。
+ * 履歴を書けなかった操作が1件以上あるときは、その件数の固定の行を足す。連鎖が空でも載せる。
+ * 壊れた位置の行は、全体の上限に収めるときも削らない。
+ * 理由コードごと、項目ごとの件数は、件数の多い順に並べた、削れる行にする。理由コードを先に置き、項目を後に置く。
+ * 記録が無いことは、Consoleの外の変更が無かったことを示さない。
+ */
+function configHistorySection(evidence: AuditEvidence): EvidenceSection {
+  const heading = "設定の変更";
+  const config = evidence.config_history;
+  if (!config.available) {
+    return { heading, fixed: [CONFIG_HISTORY_UNAVAILABLE_LINE], lines: [] };
+  }
+  const unrecordedLines =
+    config.unrecorded_operations > 0
+      ? [
+          sanitizeCell(
+            unrecordedOperationsLine(config.unrecorded_operations),
+            SANITIZE_CELL_MAX,
+          ),
+        ]
+      : [];
+  if (config.chain_rows === 0 && config.period_changes === 0) {
+    return {
+      heading,
+      fixed: [NO_CONFIG_HISTORY_LINE, ...unrecordedLines],
+      lines: [],
+    };
+  }
+  const listed = config.broken.slice(0, CONFIG_BROKEN_LIST_MAX);
+  const unlisted = config.broken.length - listed.length;
+  const brokenLines = listed.map((position) => {
+    // 理由は行全体の前に1つずつ無害化する。行全体だけに通すと、取り除いたタグの跡の空白が括弧の内側に残る。
+    const reason = sanitizeCell(position.reason, SANITIZE_CELL_MAX);
+    return sanitizeCell(
+      `壊れた位置: 第${position.seq}行(${reason})`,
+      SANITIZE_CELL_MAX,
+    );
+  });
+  return {
+    heading,
+    fixed: [
+      sanitizeCell(
+        `連鎖の行: ${config.chain_rows}件 / 最後の連番: ${config.last_seq} / 壊れた位置: ${config.broken.length}件`,
+        SANITIZE_CELL_MAX,
+      ),
+      ...brokenLines,
+      ...(unlisted > 0
+        ? [
+            sanitizeCell(
+              `壊れた位置: ほか${unlisted}件は載せない`,
+              SANITIZE_CELL_MAX,
+            ),
+          ]
+        : []),
+      sanitizeCell(
+        `期間内の変更: ${config.period_changes}件`,
+        SANITIZE_CELL_MAX,
+      ),
+      ...unrecordedLines,
+      sanitizeCell(CONFIG_HISTORY_SCOPE_LINE, SANITIZE_CELL_MAX),
+    ],
+    lines: [
+      ...config.period_by_reason.map((entry) =>
+        sanitizeCell(
+          `理由コード ${sanitizeCell(entry.reason_code, SANITIZE_CELL_MAX)}: ${entry.count}件`,
+          SANITIZE_CELL_MAX,
+        ),
+      ),
+      ...config.period_by_item.map((entry) =>
+        sanitizeCell(
+          `項目 ${sanitizeCell(entry.item_key, SANITIZE_CELL_MAX)}: ${entry.count}件`,
+          SANITIZE_CELL_MAX,
+        ),
+      ),
+    ],
+  };
+}
+
 export function buildEvidenceSections(
   evidence: AuditEvidence,
 ): EvidenceSection[] {
@@ -1311,6 +1441,7 @@ export function buildEvidenceSections(
     prReviewTopPrsSection(evidence),
     prReviewTriggersSection(evidence),
     { heading: "失敗(flow + step別)", fixed: [], lines: failureLines },
+    outageSkipsSection(evidence),
     { heading: "却下", fixed: [], lines: rejectionLines },
     { heading: "要人手・ブロック・期限切れ", fixed: [], lines: humanLines },
     { heading: "修正ラウンド", fixed: [], lines: fixLines },
@@ -1319,6 +1450,7 @@ export function buildEvidenceSections(
     reviewQualitySection(evidence),
     reviewVersionComparisonSection(evidence),
     historySection(evidence),
+    configHistorySection(evidence),
     { heading: "通知", fixed: noticeFixed, lines: noticeLines },
     {
       heading: "必須チェックが無いdependabotの通知(リポジトリ別)",
@@ -2070,6 +2202,19 @@ export async function collectAuditEvidence(
     LIMIT 30
   `.fetch();
 
+  // 通信断による見送り。失敗とは別の表なので、失敗の件数には入らない。表を足すmigrationより先にコードが反映された間は、表が無いので空にする。
+  const outageSkipRows = await sql`
+    SELECT s.flow_path AS key, count(*) AS count
+    FROM factory.job_outage_skips s
+    WHERE s.occurred_at >= ${start}::timestamptz AND s.occurred_at < ${end}::timestamptz
+    GROUP BY s.flow_path
+  `
+    .fetch()
+    .catch((err: unknown) => {
+      if (!isMissingOutageSkipTableError(err)) throw err;
+      return [];
+    });
+
   const rejectionRows = await sql`
     SELECT ar.kind, coalesce(wi.title, '') AS title, coalesce(ar.reason, '') AS reason, ar.decided_at
     FROM factory.approval_requests ar
@@ -2372,6 +2517,9 @@ export async function collectAuditEvidence(
     GROUP BY 1
   `.fetch();
 
+  // 設定の変更の履歴は、連鎖の検証と、期間内の項目別と理由コード別の件数を集める。表と関数が無い間は、空の値になる。
+  const configHistory = await collectConfigHistoryEvidence(sql, start, end);
+
   // 遷移の履歴は、全連鎖の検証と、期間内の理由コード別の件数を集める。表と関数が無い間は、空の値になる。
   const history = await collectHistoryEvidence(sql, start, end);
 
@@ -2403,6 +2551,7 @@ export async function collectAuditEvidence(
       human_threads: toReviewQualityThreads(reviewQualityThreadRows),
     },
     history,
+    config_history: configHistory,
     notices: toCountsByKey(noticeRows),
     unresolved_notices_in_period: toUnresolvedNoticeGroups(
       unresolvedNoticeRows,
@@ -2424,6 +2573,7 @@ export async function collectAuditEvidence(
     pr_review_top_prs: prReviewTopPrRows.map(toPrReviewPrStat),
     pr_review_pr_count: parseNumeric(prReviewTopPrRows[0]?.pr_count),
     pr_review_triggers: toPrReviewTriggerCounts(prReviewTriggerRows),
+    outage_skips: toCountsByKey(outageSkipRows),
   };
 }
 

@@ -5,6 +5,7 @@ import { buildNoRequiredCheckMessage } from "../../f/factory/lib/dependabot_repo
 import {
   acquireImplementLease,
   addNoticeUnlessUnresolved,
+  addResolvedNotice,
   bumpWatermarks,
   claimIssueCreation,
   claimPrCiCheckForFix,
@@ -19,6 +20,7 @@ import {
   decideIssueProposal,
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
+  deleteJobOutageSkipsBefore,
   deleteMainCiRunsBefore,
   deletePrCiChecksBefore,
   deleteResolvedNoticesBefore,
@@ -83,6 +85,7 @@ import {
   isMissingAgentRunSkillsColumnError,
   isMissingDeploymentErrorColumnError,
   isMissingDocHashColumnError,
+  isMissingOutageSkipTableError,
   isMissingPrClosedAtColumnError,
   isMissingReviewAgentRunColumnError,
   isMissingReviewOutcomeTableError,
@@ -142,6 +145,7 @@ import {
   recordFailure,
   recordFindingOutcomes,
   recordMainCiRun,
+  recordOutageSkip,
   recordPrCiCheck,
   recordTransientStall,
   recordNoRequiredCheckNotice,
@@ -3330,6 +3334,38 @@ describe("fetchDeploymentRows", () => {
   });
 });
 
+describe("addResolvedNotice", () => {
+  const record = {
+    kind: "deploy_approval_decided",
+    message: "decided qdb body",
+  };
+
+  test("returns the id of the inserted row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 31 }]]);
+    expect(await addResolvedNotice(record, "console_deploy_decide", sql)).toBe(
+      31,
+    );
+  });
+
+  test("inserts the row as resolved with the resolver and the time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 31 }]]);
+    await addResolvedNotice(record, "console_deploy_decide", sql);
+    expect(calls[0]?.text).toContain(
+      "(kind, message, resolved, resolved_by, resolved_at)",
+    );
+  });
+
+  test("passes the kind, the message and the resolver as values", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 31 }]]);
+    await addResolvedNotice(record, "console_deploy_decide", sql);
+    expect(calls[0]?.values).toEqual([
+      "deploy_approval_decided",
+      "decided qdb body",
+      "console_deploy_decide",
+    ]);
+  });
+});
+
 describe("addNoticeUnlessUnresolved", () => {
   const record = {
     kind: "deployed_sha_mismatch",
@@ -6488,6 +6524,77 @@ describe("deleteJobFailuresBefore", () => {
   });
 });
 
+describe("recordOutageSkip", () => {
+  test("inserts into job_outage_skips, not job_failures", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    const id = await recordOutageSkip(
+      { flow_path: "f/factory/poll_issues", job_id: "job-1", step: "main" },
+      sql,
+      { job_id: "job-1", root_job_id: "root-1" },
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.job_outage_skips");
+    expect(calls[0]?.text).not.toContain("job_failures");
+    expect([id, calls[0]?.values]).toEqual([
+      5,
+      ["f/factory/poll_issues", "job-1", "root-1", "main"],
+    ]);
+  });
+
+  test("accepts a null step", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 6 }]]);
+    await recordOutageSkip(
+      { flow_path: "f/factory/poll_prs", job_id: "job-2", step: null },
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.values).toEqual([
+      "f/factory/poll_prs",
+      "job-2",
+      null,
+      null,
+    ]);
+  });
+});
+
+describe("deleteJobOutageSkipsBefore", () => {
+  test("deletes factory.job_outage_skips rows past occurred_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    const count = await deleteJobOutageSkipsBefore(NOW, sql);
+    expect(calls[0]?.text).toContain("DELETE FROM factory.job_outage_skips");
+    expect(calls[0]?.text).toContain("occurred_at <=");
+    expect(count).toBe(2);
+  });
+});
+
+describe("isMissingOutageSkipTableError", () => {
+  test("accepts the missing table message", () => {
+    expect(
+      isMissingOutageSkipTableError(
+        new Error('relation "factory.job_outage_skips" does not exist'),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts code 42P01 without a relation name", () => {
+    const err = Object.assign(new Error("undefined table"), { code: "42P01" });
+    expect(isMissingOutageSkipTableError(err)).toBe(true);
+  });
+
+  test("rejects another missing table", () => {
+    const err = Object.assign(
+      new Error('relation "factory.job_failures" does not exist'),
+      { code: "42P01" },
+    );
+    expect(isMissingOutageSkipTableError(err)).toBe(false);
+  });
+
+  test("rejects a non-error", () => {
+    expect(isMissingOutageSkipTableError("relation does not exist")).toBe(
+      false,
+    );
+  });
+});
+
 describe("deleteDeploymentsBefore", () => {
   test("deletes factory.deployments rows past occurred_at", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
@@ -6733,7 +6840,7 @@ describe("resolveUnresolvedNoticesByMessage", () => {
   test("passes the kind, message and resolver", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
     await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
-    expect(calls[0]?.values).toEqual(["poll_prs", "k", MESSAGE]);
+    expect(calls[0]?.values.slice(0, 3)).toEqual(["poll_prs", "k", MESSAGE]);
   });
 
   test("returns the number of resolved rows", async () => {
@@ -6741,6 +6848,33 @@ describe("resolveUnresolvedNoticesByMessage", () => {
     expect(
       await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql),
     ).toBe(2);
+  });
+
+  test("passes no time limit when createdBefore is omitted", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.values.slice(3)).toEqual([null, null]);
+  });
+
+  test("limits the rows to those created before createdBefore", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage(
+      "k",
+      MESSAGE,
+      "poll_prs",
+      sql,
+      new Date("2026-11-21T03:05:00Z"),
+    );
+    expect(calls[0]?.values.slice(3)).toEqual([
+      "2026-11-21T03:05:00.000Z",
+      "2026-11-21T03:05:00.000Z",
+    ]);
+  });
+
+  test("compares created_at with the given time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.text).toContain("created_at <");
   });
 });
 

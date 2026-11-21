@@ -2,7 +2,7 @@
 // テストで実際のHTTP通信や待機をしないよう、`fetch`と`sleep`は注入できる。
 
 import { type CleanupCounts, summarizeCleanup } from "./cleanup_db_support.ts";
-import { formatJstDate, INVALID_JST_DATE } from "./jst.ts";
+import { formatJstDate, formatJstMinute, INVALID_JST_DATE } from "./jst.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import type { GatedReviewReport, ImplementDiffStat } from "./types.ts";
 import {
@@ -272,6 +272,15 @@ export type NotifyEvent =
       /** Console用のworkerがジョブを受けているかを、続けて確かめられていないこと。 */
       cause: string;
       /** 運用者がまず行う操作の1文。 */
+      next_action: string;
+    }
+  | {
+      /** GitHubを読む要求が再試行の後も応答なしで終わり、通信断の事象を新しく記録したこと。 */
+      kind: "github_unreachable";
+      instance_name: string;
+      /** 最初に通信断を判定した時刻(ISO 8601)。表示は日本時間にする。 */
+      detected_at: string;
+      /** 運用者がまず行う操作の1文。固定文を入れる。 */
       next_action: string;
     }
   | {
@@ -693,6 +702,23 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           instanceField(event.instance_name),
         ],
       };
+    case "github_unreachable": {
+      const detectedAt = formatJstMinute(Date.parse(event.detected_at));
+      return {
+        title: "GitHubへの通信が途切れています",
+        description:
+          "GitHubを読む要求が、再試行の後も応答なしで終わりました。通信が戻るまで、定期ジョブの回を見送ります。",
+        url: null,
+        fields: [
+          {
+            name: "最初に判定した時刻",
+            value: detectedAt === null ? "不明" : `${detectedAt}(JST)`,
+          },
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+        ],
+      };
+    }
     case "daily_summary":
       return {
         title: `日次サマリー: ${event.day}`,

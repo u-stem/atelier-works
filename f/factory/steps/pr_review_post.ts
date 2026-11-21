@@ -139,6 +139,8 @@ export type PrReviewPostInput = {
   readonly pr_file_hunks: FileDiffHunks[] | null;
   readonly binary_files: string[];
   readonly binary_unlisted_count: number;
+  /** GitHubが差分全体の提供を上限超過で拒んだか。真なら、総評に固定の文を足し、LGTMの文を出さない。 */
+  readonly diff_too_large: boolean;
   readonly worktree_dir: string;
   readonly repo_dir: string;
   /** このレビューを生成した`agent_runs`の行のid。生成を飛ばしたレビューと、記録できなかったレビューはnull。 */
@@ -271,6 +273,7 @@ export async function runSealedPrReviewPost(
       pr_file_hunks: generated.pr_file_hunks,
       binary_files: generated.binary_files,
       binary_unlisted_count: args.binary_unlisted_count,
+      diff_too_large: args.diff_too_large,
       worktree_dir: args.worktree_dir,
       repo_dir: args.repo_dir,
       agent_run_id: generated.agent_run_id ?? null,
@@ -293,6 +296,7 @@ export async function main(
   review_sha: string,
   untrusted: string,
   binary_unlisted_count: number,
+  diff_too_large: boolean,
   worktree_dir: string,
   repo_dir: string,
 ): Promise<PrReviewPostResult> {
@@ -306,6 +310,7 @@ export async function main(
       review_sha,
       untrusted,
       binary_unlisted_count,
+      diff_too_large,
       worktree_dir,
       repo_dir,
     },
@@ -543,6 +548,8 @@ export type PublishReviewInput = {
   readonly binaryFiles: readonly string[];
   /** `binaryFiles`に並べられなかった(パスを変更ファイルと照合できなかった)件数。 */
   readonly binaryUnlistedCount: number;
+  /** GitHubが差分全体の提供を上限超過で拒んだか。モードによらず、総評に固定の文を足す。 */
+  readonly diffTooLarge: boolean;
   /** 確信度が`low`で、投稿せず記録だけにした指摘の件数。総評に件数だけを書く。 */
   readonly heldFindingCount: number;
   /** このPRに、この作業項目より前のFactoryのレビューの記録があるか。 */
@@ -786,6 +793,7 @@ export async function publishReview(
     input.binaryUnlistedCount,
     [],
     input.heldFindingCount,
+    input.diffTooLarge,
   );
   // GitHubが行を解決できずに拒否したときは、行コメントの指摘もすべて総評に並べて投稿し直す。
   const fallbackBody = renderUnresolvedLineSummary(
@@ -795,6 +803,7 @@ export async function publishReview(
     input.binaryFiles,
     input.binaryUnlistedCount,
     input.heldFindingCount,
+    input.diffTooLarge,
   );
   // 拒否されたら、まず範囲が分からないファイルの指摘だけを総評へ移して、残りの行コメントで投稿し直す。
   // 移す指摘が無いか、行コメントがすべて移す指摘のときは、この段を飛ばす。
@@ -824,6 +833,7 @@ export async function publishReview(
             input.binaryUnlistedCount,
             unverifiedFindings,
             input.heldFindingCount,
+            input.diffTooLarge,
           ),
         }
       : undefined;
@@ -1188,6 +1198,7 @@ async function postReview(
       droppedFindings,
       binaryFiles,
       binaryUnlistedCount,
+      diffTooLarge: input.diff_too_large,
       heldFindingCount: held.length,
       priorReview,
       post,

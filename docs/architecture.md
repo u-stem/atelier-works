@@ -289,12 +289,14 @@ migrationは追加だけにし、列やテーブルの名前は変えない。
 | `work_items` | 作業項目1件の状態。`(owner, repo, issue_number, cycle)`で一意。`pr_review`の作業項目は、最後に起動したきっかけ(`review_trigger`)も持つ |
 | `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ。行を足すトリガーが、`history_events`にも1行を足す |
 | `history_events` | 状態遷移の、追記専用でハッシュの連鎖を持つ履歴。作業項目ごとに連番とハッシュでつなぎ、理由コード、遷移の前後の状態、元の遷移の行のIDを持つ。注記の本文は持たない。`work_item_events`のAFTER INSERTトリガーが書くので、状態を移す文は変えない。外部キーを持たず、作業項目を消しても残る。作業項目が無く、連鎖の最後の記録が保持期間(`retention_history_days`)より古くなると、DBの掃除が連鎖を丸ごと消す([遷移の履歴の内部仕様](internals/history.md)) |
+| `config_history` | 設定(`factory_config`)の変更の、追記専用でハッシュの連鎖を持つ履歴。全体で1本の連鎖で、項目名、理由コード、変更の前後の値の射影、操作者、書いた経路を持つ。コマンドとURLと身元に関わる値は、生の値でなくハッシュにする。Consoleの設定の更新と全停止が、変更の成功の後に書く。保持は無期限である([設定の変更の履歴の内部仕様](internals/config-history.md)) |
 | `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)、承認の後の書き換えを検出する基準値(`doc_hash`)を持つ |
 | `design_drafts` | 設計の下書き。要件定義の下書きに結び付き、本文、図の参照、未確定事項、ファイルの置き場所、読んだコミットを持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ。設計の承認依頼(`design`)は、設計工程が有効なときだけ作られる |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
 | `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード。実際に使われたモデルごとの内訳(`model_usage`)、失敗の種類(`failure_reason`)、PRレビューの起動のきっかけ(`trigger`)、注入したスキルの版(`skills`、`skill_clone_sha`)も持つ |
 | `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
+| `job_outage_skips` | GitHubへの通信断で見送った定期ジョブの回の記録。flowのパス、ジョブID、ルートジョブID、通信断で止まったstepを持つ。失敗(`job_failures`)とは別に数える。期限を過ぎた行はDBの掃除が消す([通信断の扱い](internals/notifications.md#githubへの通信断の扱い)) |
 | `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)、失敗の理由(`error`)も持つ。DBの掃除は、最後に成功した反映の行を、期限を過ぎても残す。反映の承認の判定が、その時刻を基準にするためである |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
 | `reviews` | pr_reviewの実行1回ごとの判定、修正必須の指摘の有無(`result`)、総評、指摘、投稿したレビューのID。レビューを生成したClaudeの実行(`agent_run_id`)も持つ |
@@ -616,6 +618,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/gh_collect_detail_round` | script | [LIB] GitHubの収集の詳細の周回 |
 | `f/factory/lib/gh_collect_freshness` | script | [LIB] GitHubの収集の鮮度の監視 |
 | `f/factory/lib/github_errors` | script | [LIB] GitHubの呼び出しの失敗の型 |
+| `f/factory/lib/github_outage` | script | [LIB] GitHubへの通信断の記録 |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
 | `f/factory/lib/poll_source` | script | [LIB] IssueとPRを見つける経路 |
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
@@ -723,6 +726,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/doc_tree_hash` | script | [LIB] 要件定義のディレクトリのハッシュと基準値の照合 |
 | `f/factory/lib/requirements_doc` | script | [LIB] 要件定義ファイルの検査 |
 | `f/factory/lib/pipeline_lease` | script | [LIB] 要件定義フローのリース判定 |
+| `f/factory/lib/config_history` | script | [LIB] 設定の変更の履歴 |
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |
 | `f/factory/lib/design_apply_support` | script | [LIB] 設計の承認の反映の判定 |
 | `f/factory/lib/design_launch_support` | script | [LIB] 設計フローの起動 |

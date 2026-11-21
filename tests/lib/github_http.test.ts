@@ -20,6 +20,8 @@ import {
   GITHUB_RESPONSE_MAX_BYTES,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   type GitHubHttpClient,
+  githubLastReadSuccessAt,
+  githubReadSuccessCount,
   graphqlErrorsRateLimited,
   graphqlRateLimit,
   requestGitHub,
@@ -1221,6 +1223,143 @@ describe("requestGitHub retries", () => {
   });
 });
 
+describe("unreachable marker and read success counter", () => {
+  test("marks a GET whose retry also lost the response", async () => {
+    const sleeps: number[] = [];
+    const f = fakeFetch([new TypeError("reset"), new TypeError("reset")]);
+    const response = await requestGitHub(client(sleeps), {
+      path: "repos/o/r",
+    });
+    expect([response.unreachable, f.sent.length, sleeps]).toEqual([
+      true,
+      2,
+      [GITHUB_TRANSIENT_RETRY_DELAY_MS],
+    ]);
+  });
+
+  test("marks a GET sent once with retry never", async () => {
+    const f = fakeFetch([new TypeError("reset")]);
+    const response = await requestGitHub(client(), {
+      path: "repos/o/r",
+      retry: "never",
+    });
+    expect([response.unreachable, f.sent.length]).toEqual([true, 1]);
+  });
+
+  test("marks a read-only GraphQL POST", async () => {
+    fakeFetch([new TypeError("reset"), new TypeError("reset")]);
+    const response = await requestGitHub(client(), {
+      path: "graphql",
+      method: "POST",
+      body: { query: "query { x }" },
+      idempotent: true,
+      readOnly: true,
+    });
+    expect(response.unreachable).toBe(true);
+  });
+
+  test("does not mark a GET that timed out", async () => {
+    fakeFetch([new DOMException("timed out", "TimeoutError")]);
+    const response = await requestGitHub(client(), { path: "repos/o/r" });
+    expect(response.unreachable).toBeUndefined();
+  });
+
+  test("does not mark a 5xx", async () => {
+    fakeFetch([
+      new Response("", { status: 502 }),
+      new Response("", { status: 503 }),
+    ]);
+    const response = await requestGitHub(client(), { path: "repos/o/r" });
+    expect(response.unreachable).toBeUndefined();
+  });
+
+  test("does not mark a 404", async () => {
+    fakeFetch([new Response("{}", { status: 404 })]);
+    const response = await requestGitHub(client(), { path: "repos/o/r" });
+    expect(response.unreachable).toBeUndefined();
+  });
+
+  test("does not mark a GET whose body was cut", async () => {
+    fakeFetch([
+      brokenBody(200, new TypeError("cut")),
+      brokenBody(200, new TypeError("cut")),
+    ]);
+    const response = await requestGitHub(client(), { path: "repos/o/r" });
+    expect(response.unreachable).toBeUndefined();
+  });
+
+  test("does not mark a POST write that lost the response", async () => {
+    fakeFetch([new TypeError("reset")]);
+    const response = await requestGitHub(client(), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: {},
+    });
+    expect(response.unreachable).toBeUndefined();
+  });
+
+  test("does not mark a GraphQL mutation that lost the response", async () => {
+    fakeFetch([new TypeError("reset")]);
+    const response = await requestGitHub(client(), {
+      path: "graphql",
+      method: "POST",
+      body: { query: "mutation { x }" },
+      idempotent: false,
+    });
+    expect(response.unreachable).toBeUndefined();
+  });
+
+  test("counts a GET that succeeded", async () => {
+    fakeFetch([new Response("{}", { status: 200 })]);
+    const before = githubReadSuccessCount();
+    await requestGitHub(client(), { path: "repos/o/r" });
+    expect(githubReadSuccessCount()).toBe(before + 1);
+  });
+
+  test("records the time of a GET that succeeded", async () => {
+    fakeFetch([new Response("{}", { status: 200 })]);
+    const before = Date.now();
+    await requestGitHub(client(), { path: "repos/o/r" });
+    expect(githubLastReadSuccessAt()?.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  test("counts a read-only POST that succeeded", async () => {
+    fakeFetch([new Response("{}", { status: 200 })]);
+    const before = githubReadSuccessCount();
+    await requestGitHub(client(), {
+      path: "graphql",
+      method: "POST",
+      body: { query: "query { x }" },
+      idempotent: true,
+      readOnly: true,
+    });
+    expect(githubReadSuccessCount()).toBe(before + 1);
+  });
+
+  test("does not count a POST write that succeeded", async () => {
+    fakeFetch([new Response("{}", { status: 201 })]);
+    const before = githubReadSuccessCount();
+    await requestGitHub(client(), {
+      path: "repos/o/r/issues",
+      method: "POST",
+      body: {},
+    });
+    expect(githubReadSuccessCount()).toBe(before);
+  });
+
+  test("does not count a 404 or a 5xx", async () => {
+    fakeFetch([
+      new Response("{}", { status: 404 }),
+      new Response("", { status: 500 }),
+      new Response("", { status: 500 }),
+    ]);
+    const before = githubReadSuccessCount();
+    await requestGitHub(client(), { path: "repos/o/r" });
+    await requestGitHub(client(), { path: "repos/o/r" });
+    expect(githubReadSuccessCount()).toBe(before);
+  });
+});
+
 describe("requestGitHub rate limits", () => {
   const secondary = (seconds: number) =>
     new Response("{}", {
@@ -1804,6 +1943,7 @@ const HTTP_VALUE_IMPORTERS: readonly string[] = [
   "lib/github.ts",
   "lib/gh_graphql.ts",
   "lib/metadata_patch_download.ts",
+  "lib/github_outage.ts",
 ];
 
 /** `Authorization`ヘッダーを組み立てる書き方。オブジェクトのキー、`Headers`への設定、組の配列。 */

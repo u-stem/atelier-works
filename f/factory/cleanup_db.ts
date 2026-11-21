@@ -12,6 +12,7 @@
 // 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
 // 手動投入の冪等キー`manual_intake_keys`は、`reserved_at`から作業項目と同じ保持期間(`retention_work_items_days`)を過ぎたものを削除する。件数はログだけに残す。
 // Consoleの操作の記録`console_actions`は、設定ではなく固定の保持日数(90日)で削除する。件数はログだけに残す。
+// 通信断による見送りの`job_outage_skips`も、`config.retention_logs_days`で削除する。件数はログだけに残す。
 // 遷移の履歴`history_events`は、作業項目がもう無く、`config.retention_history_days`を連鎖の最後の記録から数えて過ぎた連鎖だけを、丸ごと削除する。
 // 作業項目の削除では消えない(外部キーを持たない)。作業項目が残る連鎖は、古くても消さない。
 // 連鎖の一部だけを消すことはなく、件数(連鎖と行)はログだけに残す。
@@ -50,6 +51,7 @@ import {
   deleteDeploymentsBefore,
   deleteGhCollectRunsBefore,
   deleteJobFailuresBefore,
+  deleteJobOutageSkipsBefore,
   deleteMainCiRunsBefore,
   deleteManualIntakeKeysBefore,
   deletePrCiChecksBefore,
@@ -356,6 +358,29 @@ async function cleanupHistory(
   }
 }
 
+/**
+ * 通信断による見送りの記録を、記録した時刻から保持期間を過ぎたものだけ削除する。
+ * 件数は`cleanup_runs`に記録せず、ログに残す。
+ */
+async function cleanupJobOutageSkips(
+  cutoff: Date,
+  log: Logger,
+): Promise<number> {
+  try {
+    return await deleteJobOutageSkipsBefore(cutoff);
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to delete job_outage_skips", {
+      error: message,
+    });
+    await addNoticeUnlessUnresolved({
+      kind: "cleanup_db_failed",
+      message: `通信断による見送りの記録の削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
 /** 解決済みの通知を、解決の時刻から保持期間を過ぎたものだけ削除する。 */
 async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
   try {
@@ -428,6 +453,10 @@ export async function main(): Promise<CleanupCounts> {
   const workItems = await cleanupWorkItems(cutoffs.workItemsBefore, log);
   const docDirsDeleted = await cleanupDocDirs(workItems.deleted, log);
   const jobFailuresDeleted = await cleanupJobFailures(cutoffs.logsBefore, log);
+  const jobOutageSkipsDeleted = await cleanupJobOutageSkips(
+    cutoffs.logsBefore,
+    log,
+  );
   const deploymentsDeleted = await cleanupDeployments(cutoffs.logsBefore, log);
   const noticesDeleted = await cleanupNotices(cutoffs.logsBefore, log);
   const infoNoticesResolved = await cleanupInfoNotices(cutoffs.logsBefore, log);
@@ -482,6 +511,7 @@ export async function main(): Promise<CleanupCounts> {
   await recordRun(counts, log);
   log.info(summarizeCleanup(counts), {
     ...counts,
+    job_outage_skips_deleted: jobOutageSkipsDeleted,
     pr_conflict_checks_deleted: prConflictChecksDeleted,
     gh_collect_runs_deleted: ghCollectRunsDeleted,
     gh_detail_rows_deleted: ghDetailRowsDeleted,

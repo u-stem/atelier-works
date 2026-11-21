@@ -2607,6 +2607,46 @@ export async function recordFailure(
   return parseId(row.id, "id");
 }
 
+/** `recordOutageSkip`に渡す、`factory.job_outage_skips`の1行。 */
+export type OutageSkipRecord = {
+  readonly flow_path: string;
+  readonly job_id: string;
+  readonly step: string | null;
+};
+
+/**
+ * `factory.job_outage_skips`に、通信断のために見送った定期ジョブの1回を記録し、そのIDを返す。
+ * 失敗(`recordFailure`)とは別の表に入れ、失敗の件数に通信断が混ざらないようにする。
+ */
+export async function recordOutageSkip(
+  record: OutageSkipRecord,
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<number> {
+  const row = await fetchOneRow(
+    sql`
+      INSERT INTO factory.job_outage_skips (flow_path, job_id, root_job_id, step)
+      VALUES (${record.flow_path}, ${record.job_id}, ${jobIds.root_job_id}::text, ${record.step}::text)
+      RETURNING id
+    `,
+    "recordOutageSkip",
+  );
+  return parseId(row.id, "id");
+}
+
+/** `occurred_at`が`olderThan`より前の`factory.job_outage_skips`の行を削除し、行数を返す。 */
+export async function deleteJobOutageSkipsBefore(
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    DELETE FROM factory.job_outage_skips
+    WHERE occurred_at <= ${olderThan.toISOString()}::timestamptz
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
 // ---------------------------------------------------------------------------
 // deployments
 // ---------------------------------------------------------------------------
@@ -2804,7 +2844,8 @@ export async function listRecordedScheduleFailureJobIds(
  * 解決済みのnoticeは数えないので、解決した後に同じ状況が起きれば再び挿入する。
  * `message`が状態の値(版の組など)を含めば、値が変わったときは新しいnoticeになる。
  * 通知を作る経路は、この関数だけを使う。
- * 例外は作業領域のディスク使用量の通知で、`recordWorkspaceDiskUsageNotice`を使う。
+ * 例外は、作業領域のディスク使用量の通知(`recordWorkspaceDiskUsageNotice`)と、
+ * 作成の時点で解決済みにする通知(`addResolvedNotice`)である。
  *
  * 既存の未解決のnoticeは、「情報」の種類(`INFO_NOTICE_KINDS`)で`created_at`が1日より前なら、
  * 現在時刻に更新する。
@@ -2837,6 +2878,24 @@ export async function addNoticeUnlessUnresolved(
     return null;
   }
   return parseId(row.id, "id");
+}
+
+/**
+ * 解決済みの通知を1行挿入し、そのIDを返す。解決者と解決時刻は挿入と同時に記録する。
+ * 未解決の通知の部分一意索引に入らないので、同じ`kind`と`message`の未解決の通知があっても挿入できる。
+ * 運用者の対応が要らず、記録だけを残す通知に使う。
+ */
+export async function addResolvedNotice(
+  record: NoticeRecord,
+  resolvedBy: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    INSERT INTO factory.notices (kind, message, resolved, resolved_by, resolved_at)
+    VALUES (${record.kind}, ${record.message}, true, ${resolvedBy}, now())
+    RETURNING id
+  `.fetch();
+  return parseId(rows[0]?.id, "id");
 }
 
 /** ディスク使用量の通知を記録した作業領域の掃除が、余分な未解決の通知を解決したときの解決者。 */
@@ -3029,19 +3088,24 @@ export async function resolveNoticeIfUnresolved(
  * 解決者は`resolvedBy`、解決時刻は`now()`に記録し、解決した行数を返す。
  * 本文の一部が重なる別の対象(`review`と`review-fix`のようにラベル名が接頭辞になる場合など)に
  * 当たらないよう、前方一致ではなく完全一致で選ぶ。
+ * `createdBefore`を渡すと、その時刻より前に作ったnoticeだけを解決する。
+ * noticeの作成より後に起きた出来事を解決の根拠にするときに使う。
  */
 export async function resolveUnresolvedNoticesByMessage(
   kind: string,
   message: string,
   resolvedBy: string,
   sql: SqlClient = defaultSqlClient,
+  createdBefore: Date | null = null,
 ): Promise<number> {
+  const before = createdBefore === null ? null : createdBefore.toISOString();
   const rows = await sql`
     UPDATE factory.notices
     SET resolved = true, resolved_by = ${resolvedBy}, resolved_at = now()
     WHERE resolved = false
       AND kind = ${kind}
       AND message = ${message}
+      AND (${before}::timestamptz IS NULL OR created_at < ${before}::timestamptz)
     RETURNING id
   `.fetch();
   return rows.length;
@@ -3131,6 +3195,25 @@ export function isMissingReviewOutcomeTableError(err: unknown): boolean {
   const body: unknown = Reflect.get(err, "body");
   const messages = [err.message, typeof body === "string" ? body : ""];
   if (messages.some((m) => REVIEW_OUTCOME_TABLE_PATTERN.test(m))) return true;
+  if (messages.some((m) => /relation "[^"]+" does not exist/.test(m))) {
+    return false;
+  }
+  return Reflect.get(err, "code") === "42P01";
+}
+
+const OUTAGE_SKIP_TABLE_PATTERN =
+  /relation "(?:factory\.)?job_outage_skips" does not exist/;
+
+/**
+ * 例外が、通信断の見送りの表(`job_outage_skips`)が無いことによるものかを返す。
+ * migrationより先にコードが反映された間は、この表が無い。
+ * エラーコード42P01でも、文が別の表の名前を挙げているときはfalseにする。
+ */
+export function isMissingOutageSkipTableError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const body: unknown = Reflect.get(err, "body");
+  const messages = [err.message, typeof body === "string" ? body : ""];
+  if (messages.some((m) => OUTAGE_SKIP_TABLE_PATTERN.test(m))) return true;
   if (messages.some((m) => /relation "[^"]+" does not exist/.test(m))) {
     return false;
   }

@@ -500,6 +500,16 @@ const GUIDES_BY_KIND: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
   [
+    "github_unreachable",
+    guide(
+      "GitHubを読む要求が、再試行の後も応答なしで終わりました。通信が戻るまで、定期ジョブの回を見送っています。この間は、定期ジョブの失敗は1件ずつ通知されません。",
+      "GitHubの障害情報と、このサーバーからGitHubへのネットワークを確かめてください。",
+      {
+        note: "通信が戻り、定期ジョブのどれかがGitHubを読めると、次の回に自動で解決されます。解決した後に再び通信が途切れると、新しい通知が出ます。",
+      },
+    ),
+  ],
+  [
     "pr_ci_failed",
     guide(
       "Factoryが作ったPRのheadのコミットで、CI(GitHub Actionsのpull_requestかpushの実行)が失敗しました。本文に、PR、コミットの先頭7文字、理由、次の操作、リンクが載ります。自動修正が有効なときは、直せるかが決まってから出る通知で、本文に自動修正の保留の理由も載ります。",

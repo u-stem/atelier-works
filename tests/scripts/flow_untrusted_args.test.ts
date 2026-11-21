@@ -81,7 +81,7 @@ const PLAIN: Readonly<Record<string, string>> = {
   "pr_review/pr_review_generate":
     "attempt,factory_clone_dir,owner,parent_work_item_id,pr_number,repo,review_sha,skip,work_item_id,worktree_dir",
   "pr_review/pr_review_post":
-    "binary_unlisted_count,owner,pr_number,repo,repo_dir,review_sha,skip,work_item_id,worktree_dir",
+    "binary_unlisted_count,diff_too_large,owner,pr_number,repo,repo_dir,review_sha,skip,work_item_id,worktree_dir",
   "pr_review/failure": "work_item_id",
 };
 

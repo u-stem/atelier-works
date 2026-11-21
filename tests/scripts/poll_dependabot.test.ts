@@ -28,6 +28,11 @@ import {
   type OpenPullRequest,
   type PullRequestWithCreatedAt,
 } from "../../f/factory/lib/github.ts";
+import { GitHubHttpError } from "../../f/factory/lib/github_errors.ts";
+import {
+  createOutageRound,
+  type OutageRound,
+} from "../../f/factory/lib/github_outage.ts";
 import type { HoldReadOutcome, HoldRow } from "../../f/factory/lib/holds.ts";
 import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts";
 import type {
@@ -2293,6 +2298,70 @@ describe("pollDependabot", () => {
     );
 
     expect(log.failures).toEqual(["list_open_pull_requests:acme/widgets"]);
+  });
+
+  describe("when the list fails because GitHub is unreachable", () => {
+    /** 本物の組み込みと同じに、失敗の記録を回の通信断の扱いへ通す。 */
+    function throughOutageRound(
+      log: RoundLog,
+      skips: string[],
+    ): { io: PollDependabotIo; outage: OutageRound } {
+      const io = round(log, {
+        listOpenPrs: async () => {
+          throw new GitHubHttpError("GitHub GET pulls failed", 0, {
+            unreachable: true,
+          });
+        },
+      });
+      const outage = createOutageRound({
+        flowPath: "f/factory/poll_dependabot",
+        instanceName: "factory-test",
+        log: { info() {}, warn() {}, error() {} },
+        deps: {
+          addNotice: async () => 1,
+          notify: async () => {},
+          recordSkip: async (record) => {
+            skips.push(record.step ?? "");
+          },
+        },
+      });
+      return {
+        outage,
+        io: {
+          ...io,
+          open: async (config) => {
+            const session = await io.open(config);
+            return {
+              ...session,
+              deps: {
+                ...session.deps,
+                recordFailure: (step, err) =>
+                  outage.failure(step, err, async (s) => {
+                    log.failures.push(s);
+                  }),
+              },
+            };
+          },
+        },
+      };
+    }
+
+    test("records one skip for the round", async () => {
+      const log = emptyLog();
+      const skips: string[] = [];
+      const { io, outage } = throughOutageRound(log, skips);
+      await pollDependabot(io);
+      await outage.finish();
+      expect(skips).toEqual(["list_open_pull_requests:acme/widgets"]);
+    });
+
+    test("does not record a failure for the round", async () => {
+      const log = emptyLog();
+      const { io, outage } = throughOutageRound(log, []);
+      await pollDependabot(io);
+      await outage.finish();
+      expect(log.failures).toEqual([]);
+    });
   });
 
   test("saves the wait record of a publish wait", async () => {
