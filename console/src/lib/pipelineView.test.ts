@@ -14,6 +14,7 @@ import {
   outOfScopeMatchCount,
   PIPELINE_SCOPES,
   parsePipelineScope,
+  pipelineGroupCounts,
   pipelineReachedLimit,
   pipelineScopeNote,
   pipelineStatusLabel,
@@ -24,7 +25,6 @@ import {
   repoOptions,
   rowsInScope,
   scopeEmptyMessage,
-  scopeEmptyNote,
   selectPipelineStatus,
   showsRepository,
   showsRequirementsLink,
@@ -622,22 +622,35 @@ describe("showsRequirementsLink", () => {
 });
 
 describe("pipelineScopeNote", () => {
-  test("states the period and the limit when the list may be cut", () => {
-    expect(pipelineScopeNote(500, 500, 90)).toBe(
-      "直近90日に更新された作業項目を、新しい順に500件まで取得しています。",
+  const BASE =
+    "進行中は更新が古くても、PR待ちと完了などは直近90日に更新されたものを表示しています。";
+
+  test("names the group whose limit was reached", () => {
+    expect(
+      pipelineScopeNote({ active: 500, prOpen: 3, recent: 12 }, 500, 90),
+    ).toBe(
+      `${BASE}進行中は500件に達しているため、古い行を取得できていない場合があります。`,
+    );
+  });
+
+  test("names every group whose limit was reached", () => {
+    expect(
+      pipelineScopeNote({ active: 2, prOpen: 500, recent: 500 }, 500, 90),
+    ).toBe(
+      `${BASE}PR待ち、完了などは500件に達しているため、古い行を取得できていない場合があります。`,
     );
   });
 
   test("states only the period one below the limit", () => {
-    expect(pipelineScopeNote(499, 500, 90)).toBe(
-      "直近90日に更新された作業項目を表示しています。",
-    );
+    expect(
+      pipelineScopeNote({ active: 499, prOpen: 499, recent: 499 }, 500, 90),
+    ).toBe(BASE);
   });
 
   test("states only the period when the list is complete", () => {
-    expect(pipelineScopeNote(12, 500, 90)).toBe(
-      "直近90日に更新された作業項目を表示しています。",
-    );
+    expect(
+      pipelineScopeNote({ active: 4, prOpen: 15, recent: 12 }, 500, 90),
+    ).toBe(BASE);
   });
 });
 
@@ -852,25 +865,38 @@ describe("pipelineReachedLimit", () => {
   });
 });
 
-describe("scopeEmptyNote", () => {
-  test("warns that old active items may be missing at the limit", () => {
-    expect(scopeEmptyNote("active", true)).toBe(
-      "取得が上限に達しているため、古い進行中の作業項目が表に出ていない場合があります。",
-    );
+describe("pipelineGroupCounts", () => {
+  test("counts the active statuses, including approved and blocked", () => {
+    expect(
+      pipelineGroupCounts([
+        row({ work_item_id: 1, status: "implementing" }),
+        row({ work_item_id: 2, status: "approved" }),
+        row({ work_item_id: 3, status: "blocked" }),
+      ]).active,
+    ).toBe(3);
   });
 
-  test("warns that old items waiting for a merge may be missing at the limit", () => {
-    expect(scopeEmptyNote("pr_open", true)).toBe(
-      "取得が上限に達しているため、古いPR待ちの作業項目が表に出ていない場合があります。",
-    );
+  // backendは、知らない状態を進行中の組に入れる(終端の状態に挙げた以外はすべて進行中)。
+  test("counts a status that it does not know as active, like the backend", () => {
+    expect(
+      pipelineGroupCounts([row({ work_item_id: 1, status: "added_later" })])
+        .active,
+    ).toBe(1);
   });
 
-  test("says nothing below the limit", () => {
-    expect(scopeEmptyNote("active", false)).toBeNull();
+  test("counts the items waiting for a merge as their own group", () => {
+    expect(
+      pipelineGroupCounts([row({ work_item_id: 1, status: "pr_open" })]),
+    ).toEqual({ active: 0, prOpen: 1, recent: 0 });
   });
 
-  test("says nothing for the all scope", () => {
-    expect(scopeEmptyNote("all", true)).toBeNull();
+  test("counts the settled statuses that are read by recency", () => {
+    expect(
+      pipelineGroupCounts([
+        row({ work_item_id: 1, status: "reviewed" }),
+        row({ work_item_id: 2, status: "failed" }),
+      ]).recent,
+    ).toBe(2);
   });
 });
 

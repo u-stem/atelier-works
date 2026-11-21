@@ -333,10 +333,10 @@ describe("PipelineTable without an active work item", () => {
   });
 });
 
-describe("PipelineTable when the fetch reached its limit", () => {
+describe("PipelineTable with no active work item", () => {
   const settled = [row({ work_item_id: 2, status: "failed" })];
 
-  function renderLimited(limitReached: boolean): string {
+  function renderActive(): string {
     return renderToStaticMarkup(
       <MemoryRouter>
         <TooltipProvider>
@@ -345,21 +345,18 @@ describe("PipelineTable when the fetch reached its limit", () => {
             now={NOW}
             scope="active"
             onScopeChange={() => undefined}
-            limitReached={limitReached}
           />
         </TooltipProvider>
       </MemoryRouter>,
     );
   }
 
-  test("warns that old active work items may be missing", () => {
-    expect(renderLimited(true)).toContain(
-      "取得が上限に達しているため、古い進行中の作業項目が表に出ていない場合があります。",
-    );
+  test("says there is no active work item", () => {
+    expect(renderActive()).toContain("進行中の作業項目はありません");
   });
 
-  test("does not warn below the limit", () => {
-    expect(renderLimited(false)).not.toContain("取得が上限に達している");
+  test("offers the button to show every work item", () => {
+    expect(renderActive()).toContain("すべて(1件)を表示");
   });
 });
 

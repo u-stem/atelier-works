@@ -72,6 +72,7 @@ import {
   type ReviewFinding,
   type ReviewSeverity,
   sanitizePullRequestTitle,
+  TERMINAL_WORK_ITEM_STATUSES,
 } from "../lib/types.ts";
 import {
   DAILY_LAG_THRESHOLD_SECONDS,
@@ -2587,6 +2588,24 @@ export type ConsoleQueryRow =
   | DeploymentHistoryRow;
 
 /**
+ * 作業項目の一覧が、新しさ(期間と件数)だけで取る状態。
+ * 終端の状態のうち、画面の「進行中」(`blocked`と`approved`を含む)にも「PR待ち」(`pr_open`)にも入らないものである。
+ * これ以外の状態は、更新が古くても取る。画面の`TERMINAL_PIPELINE_STATUSES`と`isActiveStatus`に対する契約テストが、
+ * 進行中とPR待ちの状態がここに入らないことを確かめる。
+ */
+export const PIPELINE_RECENT_ONLY_STATUSES: readonly string[] =
+  TERMINAL_WORK_ITEM_STATUSES.filter(
+    (status) =>
+      status !== "blocked" && status !== "approved" && status !== "pr_open",
+  );
+
+/** 進行中の組に入らない状態。新しさだけで取る状態と、PR待ちの`pr_open`である。 */
+const PIPELINE_NON_ACTIVE_STATUSES: readonly string[] = [
+  ...PIPELINE_RECENT_ONLY_STATUSES,
+  "pr_open",
+];
+
+/**
  * `view`に対応する許可済みのクエリを`sql`(既定は実際のdatatableクライアント)で実行し、
  * 解析した行を返す。
  * `view`からSQL文への対応は固定のリテラルに対するswitchで、`view`をクエリに連結しない。
@@ -2642,15 +2661,47 @@ export async function runConsoleQuery(
       return rows.map(toInboxRow);
     }
     case "pipeline": {
+      // 進行中、PR待ち、終端の3つの組を、組ごとに`limit`件の上限で取る(最大で`limit`の3倍の行になる)。
+      // 進行中だけは、更新が古くても、期間で絞らずに新しい順に取る。
+      // PR待ちと終端は、直近の期間のものを新しい順に取る。
+      // 組ごとに上限を持たせるのは、ほかの組が上限を埋めても、古い進行中の作業項目が一覧から黙って消えないためである。
+      // マージ済みのPRは`pr_open`のまま残り続けるので、PR待ちは期間で絞り、進行中の枠を取り合わせない。
       const rows = await sql`
-        SELECT
-          work_item_id, cycle, source, owner, repo, issue_number, issue_url,
-          title, status, attempt, claimed_by, flow_job_id, created_at,
-          updated_at, kind, pr_number, fix_round, branch, pr_url
-        FROM factory.v_pipeline
-        WHERE updated_at >= ${since}::timestamptz
+        (
+          SELECT
+            work_item_id, cycle, source, owner, repo, issue_number, issue_url,
+            title, status, attempt, claimed_by, flow_job_id, created_at,
+            updated_at, kind, pr_number, fix_round, branch, pr_url
+          FROM factory.v_pipeline
+          WHERE status <> ALL(${[...PIPELINE_NON_ACTIVE_STATUSES]}::text[])
+          ORDER BY updated_at DESC
+          LIMIT ${limit}::integer
+        )
+        UNION ALL
+        (
+          SELECT
+            work_item_id, cycle, source, owner, repo, issue_number, issue_url,
+            title, status, attempt, claimed_by, flow_job_id, created_at,
+            updated_at, kind, pr_number, fix_round, branch, pr_url
+          FROM factory.v_pipeline
+          WHERE status = 'pr_open'
+            AND updated_at >= ${since}::timestamptz
+          ORDER BY updated_at DESC
+          LIMIT ${limit}::integer
+        )
+        UNION ALL
+        (
+          SELECT
+            work_item_id, cycle, source, owner, repo, issue_number, issue_url,
+            title, status, attempt, claimed_by, flow_job_id, created_at,
+            updated_at, kind, pr_number, fix_round, branch, pr_url
+          FROM factory.v_pipeline
+          WHERE status = ANY(${[...PIPELINE_RECENT_ONLY_STATUSES]}::text[])
+            AND updated_at >= ${since}::timestamptz
+          ORDER BY updated_at DESC
+          LIMIT ${limit}::integer
+        )
         ORDER BY updated_at DESC
-        LIMIT ${limit}::integer
       `.fetch();
       return rows.map(toPipelineRow);
     }

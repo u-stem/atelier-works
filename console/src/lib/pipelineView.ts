@@ -505,42 +505,57 @@ export function showsRequirementsLink(row: Pick<PipelineRow, "kind">): boolean {
   return row.kind === "issue";
 }
 
-/** 取得した件数が上限に達したか。達したときは、古い行を取得できていない場合がある。 */
+/** 取得した行の、取得の組ごとの数。backendは組ごとに上限を持つ(`PIPELINE_RECENT_ONLY_STATUSES`)。 */
+export type PipelineGroupCounts = {
+  /** 進行中の状態の行。更新が古くても取る。 */
+  readonly active: number;
+  /** PR待ちの状態の行。直近の期間のものを新しい順に取る。 */
+  readonly prOpen: number;
+  /** それ以外の終端の状態の行。直近の期間のものを新しい順に取る。 */
+  readonly recent: number;
+};
+
+/** 取得した行を、backendが取った組ごとに数える。 */
+export function pipelineGroupCounts(
+  rows: readonly PipelineRow[],
+): PipelineGroupCounts {
+  let active = 0;
+  let prOpen = 0;
+  let recent = 0;
+  for (const row of rows) {
+    if (row.status === "pr_open") {
+      prOpen += 1;
+    } else if (isActiveStatus(row.status)) {
+      active += 1;
+    } else {
+      recent += 1;
+    }
+  }
+  return { active, prOpen, recent };
+}
+
+/** 組の行の数が上限に達したか。達したときは、その組の古い行を取得できていない場合がある。 */
 export function pipelineReachedLimit(count: number, limit: number): boolean {
   return count >= limit;
 }
 
 /**
- * 範囲の中に行が無いときに、空の文へ添える注記。
- * 取得は新しい順に上限まで読み、範囲で絞るのはその後なので、上限に達していると、
- * 取得できなかった古い行に、範囲の中の行があるかもしれない。
- * 「すべて」の範囲は絞らないので、注記は無い。
- */
-export function scopeEmptyNote(
-  scope: PipelineScope,
-  limitReached: boolean,
-): string | null {
-  if (!limitReached) return null;
-  switch (scope) {
-    case "active":
-      return "取得が上限に達しているため、古い進行中の作業項目が表に出ていない場合があります。";
-    case "pr_open":
-      return "取得が上限に達しているため、古いPR待ちの作業項目が表に出ていない場合があります。";
-    case "all":
-      return null;
-  }
-}
-
-/**
  * 表が見ている範囲の注記。
- * 取得の上限に達したときは、古い行が漏れているかもしれないので、件数の上限も添える。
+ * 進行中は更新が古くても、PR待ちと完了などは直近の期間のものを取る。
+ * 組ごとの上限に達したときは、その組の古い行が漏れているかもしれないことを伝える。
  */
 export function pipelineScopeNote(
-  count: number,
+  counts: PipelineGroupCounts,
   limit: number,
   days: number,
 ): string {
-  return pipelineReachedLimit(count, limit)
-    ? `直近${days}日に更新された作業項目を、新しい順に${limit}件まで取得しています。`
-    : `直近${days}日に更新された作業項目を表示しています。`;
+  const cut = [
+    pipelineReachedLimit(counts.active, limit) ? "進行中" : null,
+    pipelineReachedLimit(counts.prOpen, limit) ? "PR待ち" : null,
+    pipelineReachedLimit(counts.recent, limit) ? "完了など" : null,
+  ].filter((name) => name !== null);
+  const base = `進行中は更新が古くても、PR待ちと完了などは直近${days}日に更新されたものを表示しています。`;
+  return cut.length === 0
+    ? base
+    : `${base}${cut.join("、")}は${limit}件に達しているため、古い行を取得できていない場合があります。`;
 }

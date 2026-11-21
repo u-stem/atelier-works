@@ -232,6 +232,7 @@ import {
   sdkWorkItemStopReadIo,
 } from "../f/factory/lib/work_item_stop.ts";
 import {
+  PIPELINE_RECENT_ONLY_STATUSES,
   runConsoleQuery,
   runConsoleSummary,
   runSystemStatus,
@@ -1742,6 +1743,119 @@ check(
 check(
   "prefix resolve: a notice of another kind is kept",
   (await getNoticeById(prefixOtherKind, sql))?.resolved === false,
+);
+
+// ---------------------------------------------------------------------------
+// 作業項目の一覧は、進行中を期間で切らず、組ごとの上限で取る
+// ---------------------------------------------------------------------------
+
+// 前の検査が途中で止まって残した行で、数が狂わないようにする。
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.work_items WHERE owner = 'qdb-pipe'",
+);
+
+const pipeOldApproved = await auditItem(
+  "pipe-old-approved",
+  "approved",
+  "manual",
+  "qdb-pipe",
+  "app",
+);
+const pipeOldPrOpen = await auditItem(
+  "pipe-old-pr-open",
+  "pr_open",
+  "manual",
+  "qdb-pipe",
+  "app",
+);
+const pipeOldReviewed = await auditItem(
+  "pipe-old-reviewed",
+  "reviewed",
+  "manual",
+  "qdb-pipe",
+  "app",
+);
+const pipeNewReviewed = await auditItem(
+  "pipe-new-reviewed",
+  "reviewed",
+  "manual",
+  "qdb-pipe",
+  "app",
+);
+await execPsqlAsync(
+  target,
+  `UPDATE factory.work_items SET updated_at = now() - interval '200 days' WHERE id IN (${String(pipeOldApproved)}, ${String(pipeOldPrOpen)}, ${String(pipeOldReviewed)})`,
+);
+// 上限は、他の検査が残した進行中の行で埋まらない大きさにする。
+const pipeIds = (await runConsoleQuery("pipeline", 1000, 90, sql)).map((row) =>
+  Reflect.get(row, "work_item_id"),
+);
+check(
+  "pipeline: an approved item older than the period stays in the list",
+  pipeIds.includes(pipeOldApproved),
+  pipeIds,
+);
+check(
+  "pipeline: a pr_open item older than the period is not in the list",
+  !pipeIds.includes(pipeOldPrOpen),
+  pipeIds,
+);
+// PR待ちの行が上限を超えて新しく積まれても、古い進行中の行は押し出されない。
+// 上限は、進行中の行の数に合わせる。ほかの検査が残した進行中の行で枠が決まっても、同じ数で確かめられる。
+const pipeActiveCount = (await runConsoleQuery("pipeline", 1000, 90, sql))
+  .map((row) => Reflect.get(row, "status"))
+  .filter(
+    (status) =>
+      typeof status === "string" &&
+      status !== "pr_open" &&
+      !PIPELINE_RECENT_ONLY_STATUSES.includes(status),
+  ).length;
+for (let i = 0; i < pipeActiveCount + 2; i += 1) {
+  await auditItem(
+    `pipe-flood-pr-open-${String(i)}`,
+    "pr_open",
+    "manual",
+    "qdb-pipe",
+    "app",
+  );
+}
+const pipeCrowdedRows = await runConsoleQuery(
+  "pipeline",
+  pipeActiveCount,
+  90,
+  sql,
+);
+const pipeCrowded = pipeCrowdedRows.map((row) =>
+  Reflect.get(row, "work_item_id"),
+);
+const pipeCrowdedStatuses = pipeCrowdedRows.map((row) =>
+  Reflect.get(row, "status"),
+);
+check(
+  "pipeline: newer pr_open rows beyond the limit do not push out an old approved item",
+  pipeCrowded.includes(pipeOldApproved),
+  { pipeActiveCount, pipeCrowded },
+);
+check(
+  "pipeline: the pr_open rows are cut by their own limit",
+  pipeCrowdedStatuses.filter((status) => status === "pr_open").length ===
+    pipeActiveCount,
+  { pipeActiveCount, pipeCrowdedStatuses },
+);
+check(
+  "pipeline: a settled item inside the period is in the list",
+  pipeIds.includes(pipeNewReviewed),
+  pipeIds,
+);
+check(
+  "pipeline: a settled item older than the period is not in the list",
+  !pipeIds.includes(pipeOldReviewed),
+  pipeIds,
+);
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.work_items WHERE owner = 'qdb-pipe'",
 );
 
 // ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
   type PipelineScope,
-  pipelineReachedLimit,
+  pipelineGroupCounts,
   pipelineScopeNote,
 } from "../../lib/pipelineView.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
@@ -111,7 +111,7 @@ export function PipelineSection({
         {pipeline.data === undefined
           ? "作業項目の状態、ブランチ、PRを一覧します。"
           : pipelineScopeNote(
-              pipeline.data.length,
+              pipelineGroupCounts(pipeline.data),
               PIPELINE_LIMIT,
               PIPELINE_DAYS,
             )}
@@ -140,10 +140,6 @@ export function PipelineSection({
               now={now}
               scope={scope}
               onScopeChange={onScopeChange}
-              limitReached={pipelineReachedLimit(
-                pipeline.data.length,
-                PIPELINE_LIMIT,
-              )}
             />
           </>
         )}
