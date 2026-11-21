@@ -643,7 +643,25 @@ describe("runConsoleQuery", () => {
     );
   });
 
-  test("pipeline: binds the settled statuses to both reads", async () => {
+  test("pipeline: reads the pr_open rows as their own group with their own limit", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+
+    await runConsoleQuery("pipeline", 50, 7, sql);
+
+    expect(calls[0]?.text).toMatch(
+      /WHERE status = 'pr_open'\s+ORDER BY updated_at DESC\s+LIMIT/,
+    );
+  });
+
+  test("pipeline: gives each of the three groups its own limit", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+
+    await runConsoleQuery("pipeline", 50, 7, sql);
+
+    expect(calls[0]?.values.filter((value) => value === 50)).toHaveLength(3);
+  });
+
+  test("pipeline: binds the statuses that the active group leaves out", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
 
     await runConsoleQuery("pipeline", 50, 7, sql);
@@ -651,10 +669,21 @@ describe("runConsoleQuery", () => {
     const statusLists = (calls[0]?.values ?? []).filter(
       (value): value is string[] => Array.isArray(value),
     );
-    expect(statusLists).toEqual([
-      [...PIPELINE_RECENT_ONLY_STATUSES],
-      [...PIPELINE_RECENT_ONLY_STATUSES],
+    expect(statusLists[0]).toEqual([
+      ...PIPELINE_RECENT_ONLY_STATUSES,
+      "pr_open",
     ]);
+  });
+
+  test("pipeline: binds the settled statuses to the recency read", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+
+    await runConsoleQuery("pipeline", 50, 7, sql);
+
+    const statusLists = (calls[0]?.values ?? []).filter(
+      (value): value is string[] => Array.isArray(value),
+    );
+    expect(statusLists[1]).toEqual([...PIPELINE_RECENT_ONLY_STATUSES]);
   });
 
   test("pipeline: selects branch and pr_url appended after fix_round (工程3 columns)", async () => {

@@ -2599,6 +2599,12 @@ export const PIPELINE_RECENT_ONLY_STATUSES: readonly string[] =
       status !== "blocked" && status !== "approved" && status !== "pr_open",
   );
 
+/** 進行中の組に入らない状態。新しさだけで取る状態と、PR待ちの`pr_open`である。 */
+const PIPELINE_NON_ACTIVE_STATUSES: readonly string[] = [
+  ...PIPELINE_RECENT_ONLY_STATUSES,
+  "pr_open",
+];
+
 /**
  * `view`に対応する許可済みのクエリを`sql`(既定は実際のdatatableクライアント)で実行し、
  * 解析した行を返す。
@@ -2655,9 +2661,11 @@ export async function runConsoleQuery(
       return rows.map(toInboxRow);
     }
     case "pipeline": {
-      // 進行中とPR待ちに入る状態は、更新が古くても、期間で絞らずにすべて取る(それぞれ`limit`件まで)。
+      // 進行中、PR待ち、終端の3つの組を、組ごとに`limit`件の上限で取る。
+      // 進行中とPR待ちは、更新が古くても、期間で絞らずに新しい順に取る。
       // 期間と件数で絞るのは、画面が新しさだけで見る終端の状態に限る。
-      // 終端の状態(`reviewed`など)が新しい順の上限を埋めると、古い進行中の作業項目が一覧から黙って消えるためである。
+      // 組ごとに上限を持たせるのは、ほかの組が上限を埋めても、古い進行中の作業項目が一覧から黙って消えないためである。
+      // マージ済みのPRは`pr_open`のまま残り続けるので、PR待ちの行は増え続ける。
       const rows = await sql`
         (
           SELECT
@@ -2665,7 +2673,18 @@ export async function runConsoleQuery(
             title, status, attempt, claimed_by, flow_job_id, created_at,
             updated_at, kind, pr_number, fix_round, branch, pr_url
           FROM factory.v_pipeline
-          WHERE status <> ALL(${[...PIPELINE_RECENT_ONLY_STATUSES]}::text[])
+          WHERE status <> ALL(${[...PIPELINE_NON_ACTIVE_STATUSES]}::text[])
+          ORDER BY updated_at DESC
+          LIMIT ${limit}::integer
+        )
+        UNION ALL
+        (
+          SELECT
+            work_item_id, cycle, source, owner, repo, issue_number, issue_url,
+            title, status, attempt, claimed_by, flow_job_id, created_at,
+            updated_at, kind, pr_number, fix_round, branch, pr_url
+          FROM factory.v_pipeline
+          WHERE status = 'pr_open'
           ORDER BY updated_at DESC
           LIMIT ${limit}::integer
         )

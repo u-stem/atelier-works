@@ -505,32 +505,57 @@ export function showsRequirementsLink(row: Pick<PipelineRow, "kind">): boolean {
   return row.kind === "issue";
 }
 
-/**
- * 新しさだけで取る行の数。進行中とPR待ちに入る状態の行は、更新が古くても取るので数えない。
- * backendが期間と件数で切るのは、この行だけである(`PIPELINE_RECENT_ONLY_STATUSES`)。
- */
-export function recentOnlyCount(rows: readonly PipelineRow[]): number {
-  return rows.filter(
-    (row) => !isActiveStatus(row.status) && row.status !== "pr_open",
-  ).length;
+/** 取得した行の、取得の組ごとの数。backendは組ごとに上限を持つ(`PIPELINE_RECENT_ONLY_STATUSES`)。 */
+export type PipelineGroupCounts = {
+  /** 進行中の状態の行。更新が古くても取る。 */
+  readonly active: number;
+  /** PR待ちの状態の行。更新が古くても取る。 */
+  readonly prOpen: number;
+  /** それ以外の終端の状態の行。直近の期間のものを新しい順に取る。 */
+  readonly recent: number;
+};
+
+/** 取得した行を、backendが取った組ごとに数える。 */
+export function pipelineGroupCounts(
+  rows: readonly PipelineRow[],
+): PipelineGroupCounts {
+  let active = 0;
+  let prOpen = 0;
+  let recent = 0;
+  for (const row of rows) {
+    if (row.status === "pr_open") {
+      prOpen += 1;
+    } else if (isActiveStatus(row.status)) {
+      active += 1;
+    } else {
+      recent += 1;
+    }
+  }
+  return { active, prOpen, recent };
 }
 
-/** 新しさだけで取る行の数が上限に達したか。達したときは、古い終端の行を取得できていない場合がある。 */
+/** 組の行の数が上限に達したか。達したときは、その組の古い行を取得できていない場合がある。 */
 export function pipelineReachedLimit(count: number, limit: number): boolean {
   return count >= limit;
 }
 
 /**
  * 表が見ている範囲の注記。
- * 進行中とPR待ちは、更新が古くてもすべて取る。終端の状態は、新しい順に上限まで取るので、
- * 上限に達したときは、古い終端の行が漏れているかもしれないことを伝える。
+ * 進行中とPR待ちは更新が古くても、完了などは直近の期間のものを取る。
+ * 組ごとの上限に達したときは、その組の古い行が漏れているかもしれないことを伝える。
  */
 export function pipelineScopeNote(
-  recentCount: number,
+  counts: PipelineGroupCounts,
   limit: number,
   days: number,
 ): string {
-  return pipelineReachedLimit(recentCount, limit)
-    ? `直近${days}日に更新された完了などの作業項目を、新しい順に${limit}件まで取得しています。進行中とPR待ちは、更新が古くてもすべて取得します。`
-    : `直近${days}日に更新された作業項目を表示しています。進行中とPR待ちは、更新が古くてもすべて表示します。`;
+  const cut = [
+    pipelineReachedLimit(counts.active, limit) ? "進行中" : null,
+    pipelineReachedLimit(counts.prOpen, limit) ? "PR待ち" : null,
+    pipelineReachedLimit(counts.recent, limit) ? "完了など" : null,
+  ].filter((name) => name !== null);
+  const base = `進行中とPR待ちは更新が古くても、完了などは直近${days}日に更新されたものを表示しています。`;
+  return cut.length === 0
+    ? base
+    : `${base}${cut.join("、")}は${limit}件に達しているため、古い行を取得できていない場合があります。`;
 }

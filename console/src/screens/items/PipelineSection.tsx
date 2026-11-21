@@ -15,8 +15,8 @@ import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
   type PipelineScope,
+  pipelineGroupCounts,
   pipelineScopeNote,
-  recentOnlyCount,
 } from "../../lib/pipelineView.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { PipelineTable } from "./PipelineTable.tsx";
@@ -111,7 +111,7 @@ export function PipelineSection({
         {pipeline.data === undefined
           ? "作業項目の状態、ブランチ、PRを一覧します。"
           : pipelineScopeNote(
-              recentOnlyCount(pipeline.data),
+              pipelineGroupCounts(pipeline.data),
               PIPELINE_LIMIT,
               PIPELINE_DAYS,
             )}

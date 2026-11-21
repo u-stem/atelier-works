@@ -14,12 +14,12 @@ import {
   outOfScopeMatchCount,
   PIPELINE_SCOPES,
   parsePipelineScope,
+  pipelineGroupCounts,
   pipelineReachedLimit,
   pipelineScopeNote,
   pipelineStatusLabel,
   pipelineStatusVariant,
   prLink,
-  recentOnlyCount,
   reconcilePipelineFilter,
   relatedLinks,
   repoOptions,
@@ -622,22 +622,35 @@ describe("showsRequirementsLink", () => {
 });
 
 describe("pipelineScopeNote", () => {
-  test("states the period and the limit when the settled items may be cut", () => {
-    expect(pipelineScopeNote(500, 500, 90)).toBe(
-      "直近90日に更新された完了などの作業項目を、新しい順に500件まで取得しています。進行中とPR待ちは、更新が古くてもすべて取得します。",
+  const BASE =
+    "進行中とPR待ちは更新が古くても、完了などは直近90日に更新されたものを表示しています。";
+
+  test("names the group whose limit was reached", () => {
+    expect(
+      pipelineScopeNote({ active: 500, prOpen: 3, recent: 12 }, 500, 90),
+    ).toBe(
+      `${BASE}進行中は500件に達しているため、古い行を取得できていない場合があります。`,
+    );
+  });
+
+  test("names every group whose limit was reached", () => {
+    expect(
+      pipelineScopeNote({ active: 2, prOpen: 500, recent: 500 }, 500, 90),
+    ).toBe(
+      `${BASE}PR待ち、完了などは500件に達しているため、古い行を取得できていない場合があります。`,
     );
   });
 
   test("states only the period one below the limit", () => {
-    expect(pipelineScopeNote(499, 500, 90)).toBe(
-      "直近90日に更新された作業項目を表示しています。進行中とPR待ちは、更新が古くてもすべて表示します。",
-    );
+    expect(
+      pipelineScopeNote({ active: 499, prOpen: 499, recent: 499 }, 500, 90),
+    ).toBe(BASE);
   });
 
   test("states only the period when the list is complete", () => {
-    expect(pipelineScopeNote(12, 500, 90)).toBe(
-      "直近90日に更新された作業項目を表示しています。進行中とPR待ちは、更新が古くてもすべて表示します。",
-    );
+    expect(
+      pipelineScopeNote({ active: 4, prOpen: 15, recent: 12 }, 500, 90),
+    ).toBe(BASE);
   });
 });
 
@@ -852,29 +865,29 @@ describe("pipelineReachedLimit", () => {
   });
 });
 
-describe("recentOnlyCount", () => {
-  test("does not count the active statuses, which are always fetched", () => {
+describe("pipelineGroupCounts", () => {
+  test("counts the active statuses, including approved and blocked", () => {
     expect(
-      recentOnlyCount([
+      pipelineGroupCounts([
         row({ work_item_id: 1, status: "implementing" }),
         row({ work_item_id: 2, status: "approved" }),
         row({ work_item_id: 3, status: "blocked" }),
-      ]),
-    ).toBe(0);
+      ]).active,
+    ).toBe(3);
   });
 
-  test("does not count the items waiting for a merge", () => {
-    expect(recentOnlyCount([row({ work_item_id: 1, status: "pr_open" })])).toBe(
-      0,
-    );
+  test("counts the items waiting for a merge as their own group", () => {
+    expect(
+      pipelineGroupCounts([row({ work_item_id: 1, status: "pr_open" })]),
+    ).toEqual({ active: 0, prOpen: 1, recent: 0 });
   });
 
   test("counts the settled statuses that are read by recency", () => {
     expect(
-      recentOnlyCount([
+      pipelineGroupCounts([
         row({ work_item_id: 1, status: "reviewed" }),
         row({ work_item_id: 2, status: "failed" }),
-      ]),
+      ]).recent,
     ).toBe(2);
   });
 });

@@ -232,6 +232,7 @@ import {
   sdkWorkItemStopReadIo,
 } from "../f/factory/lib/work_item_stop.ts";
 import {
+  PIPELINE_RECENT_ONLY_STATUSES,
   runConsoleQuery,
   runConsoleSummary,
   runSystemStatus,
@@ -1793,6 +1794,39 @@ check(
   "pipeline: a pr_open item older than the period stays in the list",
   pipeIds.includes(pipeOldPrOpen),
   pipeIds,
+);
+// PR待ちの行が上限を超えて新しく積まれても、古い進行中の行は押し出されない。
+// 上限は、進行中の行の数に合わせる。ほかの検査が残した進行中の行で枠が決まっても、同じ数で確かめられる。
+const pipeActiveCount = (await runConsoleQuery("pipeline", 1000, 90, sql))
+  .map((row) => Reflect.get(row, "status"))
+  .filter(
+    (status) =>
+      typeof status === "string" &&
+      status !== "pr_open" &&
+      !PIPELINE_RECENT_ONLY_STATUSES.includes(status),
+  ).length;
+for (let i = 0; i < pipeActiveCount + 2; i += 1) {
+  await auditItem(
+    `pipe-flood-pr-open-${String(i)}`,
+    "pr_open",
+    "manual",
+    "qdb-pipe",
+    "app",
+  );
+}
+const pipeCrowded = (
+  await runConsoleQuery("pipeline", pipeActiveCount, 90, sql)
+).map((row) => Reflect.get(row, "work_item_id"));
+check(
+  "pipeline: newer pr_open rows beyond the limit do not push out an old approved item",
+  pipeCrowded.includes(pipeOldApproved),
+  { pipeActiveCount, pipeCrowded },
+);
+check(
+  "pipeline: the pr_open rows are cut by their own limit",
+  (await runConsoleQuery("pipeline", pipeActiveCount, 90, sql)).filter(
+    (row) => Reflect.get(row, "status") === "pr_open",
+  ).length <= pipeActiveCount,
 );
 check(
   "pipeline: a settled item inside the period is in the list",
