@@ -16085,6 +16085,111 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     { redactedSameRun, redactedOtherRun },
   );
 
+  // resource全体が参照だけの文字列になると、補間しない読み取りは項目を読めない。
+  // 予約の項目に値のハッシュを1行書き、同じ値の間は書かない。別の値には、前の印を`before`にして書く。
+  // オブジェクトに戻ったら、戻った印を1行書く。生の値(参照の名前)は、履歴にもログにも残らない。
+  await wipeHistory();
+  await snapshotRun({ daily_budget_usd: 20 });
+  const wholeReference = "$res:f/factory/snapshot-fixture-private-name";
+  const notObjectFirst = await snapshotRun(wholeReference);
+  const notObjectSame = await snapshotRun(wholeReference);
+  const notObjectOther = await snapshotRun(
+    "$res:f/factory/snapshot-fixture-other-name",
+  );
+  const notObjectRows = (await historyRows()).filter(
+    (row) => row.item_key === "config_snapshot_resource",
+  );
+  const notObjectText = JSON.stringify(notObjectRows);
+  check(
+    "config snapshot: a resource that is not an object gets one row of a hash per value, and none for the same value",
+    notObjectFirst.skipped_reason === "resource_not_object" &&
+      notObjectFirst.changed === 1 &&
+      notObjectSame.changed === 0 &&
+      notObjectOther.changed === 1 &&
+      notObjectRows.length === 2 &&
+      notObjectRows.every(
+        (row) =>
+          row.reason_code === "out_of_band_change" &&
+          row.source === "out_of_band" &&
+          row.actor === "config_snapshot",
+      ) &&
+      notObjectRows[0]?.before_text === null &&
+      notObjectRows[1]?.before_text === notObjectRows[0]?.after_text &&
+      !notObjectText.includes("snapshot-fixture"),
+    { notObjectFirst, notObjectSame, notObjectOther, notObjectRows },
+  );
+  const objectAgainRun = await snapshotRun({ daily_budget_usd: 20 });
+  const objectAgainIdle = await snapshotRun({ daily_budget_usd: 20 });
+  const objectAgainRows = (await historyRows()).filter(
+    (row) => row.item_key === "config_snapshot_resource",
+  );
+  const objectAgainLast = objectAgainRows[objectAgainRows.length - 1];
+  check(
+    "config snapshot: a resource that is an object again gets one row of the object mark, and none after it",
+    objectAgainRun.skipped_reason === null &&
+      objectAgainRun.changed === 1 &&
+      objectAgainIdle.changed === 0 &&
+      objectAgainRows.length === 3 &&
+      JSON.stringify(JSON.parse(String(objectAgainLast?.after_text))) ===
+        '{"kind":"object"}' &&
+      objectAgainLast?.before_text === notObjectRows[1]?.after_text,
+    { objectAgainRun, objectAgainIdle, objectAgainRows },
+  );
+  const notObjectEvidence = await collectConfigHistoryEvidence(
+    sql,
+    snapshotEvidenceStart,
+    snapshotEvidenceEnd,
+  );
+  check(
+    "config snapshot: the evidence counts the rows of the resource as changes of their item",
+    notObjectEvidence.period_by_item.some(
+      (entry) =>
+        entry.item_key === "config_snapshot_resource" && entry.count === 3,
+    ) && notObjectEvidence.period_changes === 3,
+    notObjectEvidence,
+  );
+  check(
+    "config snapshot: the rows of the resource keep the chain valid",
+    (await verifyConfigHistory(sql)).length === 0,
+    await verifyConfigHistory(sql),
+  );
+
+  // 型に合わない値は、値のハッシュを持つ。別の型に合わない値への差し替えを、変更として書く。同じ値なら書かない。
+  await wipeHistory();
+  await snapshotRun({ daily_budget_usd: "ten" });
+  const mismatchSame = await snapshotRun({ daily_budget_usd: "ten" });
+  const mismatchSwap = await snapshotRun({
+    daily_budget_usd: "snapshot-fixture-twenty",
+  });
+  const mismatchText = JSON.stringify(await historyRows());
+  check(
+    "config snapshot: a swap between two values of the wrong type for a known item is a change, the same value is not, and no raw value is stored",
+    mismatchSame.changed === 0 &&
+      mismatchSwap.changed === 1 &&
+      !mismatchText.includes("snapshot-fixture-twenty") &&
+      !mismatchText.includes('"ten"'),
+    { mismatchSame, mismatchSwap },
+  );
+
+  // JSON変数への参照も、参照として伏せる。別の参照への差し替えは変更として書き、同じ参照なら書かない。
+  await wipeHistory();
+  await snapshotRun({ max_turns: "$jsonvar:f/factory/snapshot-fixture-a" });
+  const jsonvarSame = await snapshotRun({
+    max_turns: "$jsonvar:f/factory/snapshot-fixture-a",
+  });
+  const jsonvarOther = await snapshotRun({
+    max_turns: "$jsonvar:f/factory/snapshot-fixture-b",
+  });
+  const jsonvarText = JSON.stringify(await historyRows());
+  check(
+    "config snapshot: a json variable reference is redacted, swapping it is a change, and no reference name is stored",
+    jsonvarSame.changed === 0 &&
+      jsonvarSame.reference_keys === 1 &&
+      jsonvarOther.changed === 1 &&
+      !jsonvarText.includes("snapshot-fixture"),
+    { jsonvarSame, jsonvarOther },
+  );
+
   // 前の形(ハッシュを足す前)で書かれた一覧と伏せた項目は、1度だけ変更として書き、次の実行では書かない。
   await wipeHistory();
   await appendConfigProjection(sql, {

@@ -18,6 +18,8 @@ import {
   parseStoredProjection,
   projectConfigSnapshot,
   REMOVED_PROJECTION,
+  RESOURCE_ITEM_KEY,
+  resourceProblem,
   runConfigSnapshot,
   SNAPSHOT_ACTOR,
   SNAPSHOT_ROW_CAP,
@@ -313,7 +315,101 @@ describe("projectConfigSnapshot: every top-level item is projected", () => {
     const projection = projectConfigSnapshot({ daily_budget_usd: LEAKY.token });
     expect(projection?.items.get("daily_budget_usd")).toEqual({
       kind: "unknown",
+      hash: expect.stringMatching(HEX16),
     });
+  });
+
+  test("gives a known item with a value of the wrong type a hash of that value", () => {
+    const projection = projectConfigSnapshot({ implement_enabled: "yes" });
+    expect(projection?.items.get("implement_enabled")).toEqual({
+      kind: "unknown",
+      hash: expect.stringMatching(HEX16),
+    });
+  });
+
+  test("shows the swap of one wrongly typed value for another", () => {
+    const first = projectConfigSnapshot({ daily_budget_usd: "ten" });
+    const second = projectConfigSnapshot({ daily_budget_usd: "twenty" });
+    expect(first?.items.get("daily_budget_usd")).not.toEqual(
+      second?.items.get("daily_budget_usd"),
+    );
+  });
+
+  test("gives the same wrongly typed value the same projection", () => {
+    const first = projectConfigSnapshot({ daily_budget_usd: "ten" });
+    const second = projectConfigSnapshot({ daily_budget_usd: "ten" });
+    expect(first?.items.get("daily_budget_usd")).toEqual(
+      second?.items.get("daily_budget_usd"),
+    );
+  });
+
+  test("copies no raw text of a wrongly typed known value", () => {
+    const projection = projectConfigSnapshot({
+      daily_budget_usd: LEAKY.unknown,
+      repo_allowlist: LEAKY.unknown,
+    });
+    expect(JSON.stringify([...(projection?.items ?? [])])).not.toContain(
+      LEAKY.unknown,
+    );
+  });
+
+  test("gives a wrongly typed value of an item that is not in the table no hash, as its values are not tracked", () => {
+    const projection = projectConfigSnapshot({ future_item: { a: 1 } });
+    expect(projection?.items.get("future_item")).toEqual({ kind: "unknown" });
+  });
+
+  test("projects an item that holds a json variable reference to a mark, whatever its kind", () => {
+    const projection = projectConfigSnapshot({
+      implement_enabled: "$jsonvar:f/factory/flag",
+      daily_budget_usd: "$jsonvar:f/factory/number",
+      repo_allowlist: ["$jsonvar:f/factory/list"],
+    });
+    expect(Object.fromEntries(projection?.items ?? [])).toEqual({
+      implement_enabled: REDACTED_WITH_HASH,
+      daily_budget_usd: REDACTED_WITH_HASH,
+      repo_allowlist: REDACTED_WITH_HASH,
+    });
+  });
+
+  test("gives two different json variable references two different projections", () => {
+    const first = projectConfigSnapshot({
+      daily_budget_usd: "$jsonvar:f/factory/a",
+    });
+    const second = projectConfigSnapshot({
+      daily_budget_usd: "$jsonvar:f/factory/b",
+    });
+    expect(first?.items.get("daily_budget_usd")).not.toEqual(
+      second?.items.get("daily_budget_usd"),
+    );
+  });
+
+  test("gives the same json variable reference the same projection", () => {
+    const first = projectConfigSnapshot({
+      daily_budget_usd: "$jsonvar:f/factory/a",
+    });
+    const second = projectConfigSnapshot({
+      daily_budget_usd: "$jsonvar:f/factory/a",
+    });
+    expect(first?.items.get("daily_budget_usd")).toEqual(
+      second?.items.get("daily_budget_usd"),
+    );
+  });
+
+  test("counts the items that hold a json variable reference", () => {
+    const projection = projectConfigSnapshot({
+      implement_enabled: "$jsonvar:f/factory/flag",
+      daily_budget_usd: 5,
+    });
+    expect(projection?.reference_keys).toBe(1);
+  });
+
+  test("copies no json variable reference name into the projection", () => {
+    const projection = projectConfigSnapshot({
+      model: "$jsonvar:f/factory/private-name",
+    });
+    expect(JSON.stringify([...(projection?.items ?? [])])).not.toContain(
+      "private-name",
+    );
   });
 
   test("gives the same projection to the same object whatever the order of its keys", () => {
@@ -404,12 +500,13 @@ describe("projectConfigSnapshot: the limit of the keys that are not known", () =
     const projection = projectConfigSnapshot({
       [SNAPSHOT_BASELINE_MARKER_KEY]: 1,
       [UNKNOWN_KEYS_ITEM_KEY]: 1,
+      [RESOURCE_ITEM_KEY]: 1,
       daily_budget_usd: 5,
     });
     expect([
       [...(projection?.items.keys() ?? [])],
       projection?.unnamed_keys,
-    ]).toEqual([["daily_budget_usd"], 2]);
+    ]).toEqual([["daily_budget_usd"], 3]);
   });
 });
 
@@ -441,10 +538,10 @@ describe("the projection table covers every item of the config", () => {
     const derived = new Set(["design_enabled_ignored"]);
     const unknownItems = Object.entries(parsed)
       .filter(([key]) => !derived.has(key))
-      .filter(
-        ([key, value]) =>
-          JSON.stringify(projectConfigValue(key, value)) ===
-          JSON.stringify({ kind: "unknown" }),
+      .filter(([key, value]) =>
+        JSON.stringify(projectConfigValue(key, value)).startsWith(
+          '{"kind":"unknown"',
+        ),
       )
       .map(([key]) => key);
     expect(unknownItems).toEqual([]);
@@ -491,6 +588,24 @@ describe("parseStoredProjection", () => {
   test("reads the marker of the end of the baseline", () => {
     expect(parseStoredProjection({ kind: "marker" })).toEqual({
       kind: "marker",
+    });
+  });
+
+  test("reads the mark of an unknown value with its hash", () => {
+    expect(
+      parseStoredProjection({ kind: "unknown", hash: "0123456789abcdef" }),
+    ).toEqual({ kind: "unknown", hash: "0123456789abcdef" });
+  });
+
+  test("reads the mark of an unknown value without a hash, as the rows written before the hash have it", () => {
+    expect(parseStoredProjection({ kind: "unknown" })).toEqual({
+      kind: "unknown",
+    });
+  });
+
+  test("reads the mark of a resource that is an object", () => {
+    expect(parseStoredProjection({ kind: "object" })).toEqual({
+      kind: "object",
     });
   });
 
@@ -716,6 +831,50 @@ describe("diffSnapshot", () => {
         true,
       ).map((change) => change.kind),
     ).toEqual(["changed"]);
+  });
+});
+
+describe("diffSnapshot: values of the wrong type", () => {
+  test("reports the swap of one wrongly typed value for another as a change", () => {
+    const before = projectConfigValue("daily_budget_usd", "ten");
+    const after = projectConfigValue("daily_budget_usd", "twenty");
+    expect(
+      diffSnapshot(
+        latestMap({ daily_budget_usd: before }),
+        projectionMap({ daily_budget_usd: after }),
+      ).map((change) => change.kind),
+    ).toEqual(["changed"]);
+  });
+
+  test("reports nothing for the same wrongly typed value", () => {
+    const projection = projectConfigValue("daily_budget_usd", "ten");
+    expect(
+      diffSnapshot(
+        latestMap({ daily_budget_usd: projection }),
+        projectionMap({ daily_budget_usd: projection }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("reports a mark of an unknown value that was stored without a hash once", () => {
+    const after = projectConfigValue("daily_budget_usd", "ten");
+    expect(
+      diffSnapshot(
+        latestMap({ daily_budget_usd: { kind: "unknown" } }),
+        projectionMap({ daily_budget_usd: after }),
+      ).map((change) => change.kind),
+    ).toEqual(["changed"]);
+  });
+
+  test("keeps the hash of an unknown value in the before of a change", () => {
+    const before = projectConfigValue("daily_budget_usd", "ten");
+    const after = projectConfigValue("daily_budget_usd", "twenty");
+    expect(
+      diffSnapshot(
+        latestMap({ daily_budget_usd: before }),
+        projectionMap({ daily_budget_usd: after }),
+      )[0]?.before,
+    ).toEqual(before);
   });
 });
 
@@ -1863,5 +2022,287 @@ describe("runConfigSnapshot: secrets", () => {
   test("counts the items that held a reference without reading them", async () => {
     const { ports } = harness(leakyConfig());
     expect((await runConfigSnapshot(ports)).reference_keys).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resource全体が、オブジェクトでない値に変わったとき
+// ---------------------------------------------------------------------------
+
+/** 別のresourceへの参照だけの値。Windmillの補間する読み取りは、これを参照先のオブジェクトに解決する。 */
+const WHOLE_REFERENCE = "$res:f/factory/private-name";
+
+/** 基準の段階が終わり、設定の項目の履歴もある履歴。 */
+const SETTLED_HISTORY: Record<string, unknown> = {
+  ...BASELINE_DONE,
+  daily_budget_usd: 20,
+  implement_enabled: false,
+};
+
+describe("runConfigSnapshot: the resource is not an object", () => {
+  test("writes one row for the reserved item with the hash of the value", async () => {
+    const { ports, history } = harness(WHOLE_REFERENCE, SETTLED_HISTORY);
+    await runConfigSnapshot(ports);
+    expect(history.rows).toEqual([
+      {
+        key: RESOURCE_ITEM_KEY,
+        before: null,
+        after: REDACTED_WITH_HASH,
+        actor: SNAPSHOT_ACTOR,
+        source: "out_of_band",
+        reason: "out_of_band_change",
+      },
+    ]);
+  });
+
+  test("writes the row also before the baseline is done, and no baseline row", async () => {
+    const { ports, history } = harness(WHOLE_REFERENCE);
+    await runConfigSnapshot(ports);
+    expect(history.rows.map((row) => row.key)).toEqual([RESOURCE_ITEM_KEY]);
+  });
+
+  test("does not copy the reference name into the history", async () => {
+    const { ports, history } = harness(WHOLE_REFERENCE, SETTLED_HISTORY);
+    await runConfigSnapshot(ports);
+    expect(JSON.stringify(history.rows)).not.toContain("private-name");
+  });
+
+  test("logs no reference name", async () => {
+    const { ports, logs } = harness(WHOLE_REFERENCE, SETTLED_HISTORY);
+    await runConfigSnapshot(ports);
+    expect(logs.join("\n")).not.toContain("private-name");
+  });
+
+  test("reports the skip with the row that it wrote", async () => {
+    const { ports } = harness(WHOLE_REFERENCE, SETTLED_HISTORY);
+    expect(await runConfigSnapshot(ports)).toMatchObject({
+      skipped_reason: "resource_not_object",
+      changed: 1,
+      failed: 0,
+    });
+  });
+
+  test("writes nothing in the next run while the value stays the same", async () => {
+    const { ports, history } = harness(WHOLE_REFERENCE, SETTLED_HISTORY);
+    await runConfigSnapshot(ports);
+    await runConfigSnapshot(ports);
+    expect(history.rows.length).toBe(1);
+  });
+
+  test("reports no row for the run that writes nothing", async () => {
+    const { ports } = harness(WHOLE_REFERENCE, SETTLED_HISTORY);
+    await runConfigSnapshot(ports);
+    expect(await runConfigSnapshot(ports)).toMatchObject({
+      skipped_reason: "resource_not_object",
+      changed: 0,
+      failed: 0,
+    });
+  });
+
+  test("writes one more row when the value changes to another value that is not an object", async () => {
+    let current = WHOLE_REFERENCE;
+    const { ports, history } = harness(null, SETTLED_HISTORY, {
+      raw: () => Promise.resolve(current),
+    });
+    await runConfigSnapshot(ports);
+    current = "$res:f/factory/other-name";
+    await runConfigSnapshot(ports);
+    expect(history.rows.length).toBe(2);
+  });
+
+  test("keeps the mark of the last row as the before of the next row", async () => {
+    let current = WHOLE_REFERENCE;
+    const { ports, history } = harness(null, SETTLED_HISTORY, {
+      raw: () => Promise.resolve(current),
+    });
+    await runConfigSnapshot(ports);
+    current = "$res:f/factory/other-name";
+    await runConfigSnapshot(ports);
+    expect(history.rows[1]?.before).toEqual(history.rows[0]?.after);
+  });
+
+  test.each([
+    ["an array", ["a"]],
+    ["null", null],
+    ["a number", 3],
+    ["undefined", undefined],
+  ])("writes a row for %s", async (_name, value) => {
+    const { ports, history } = harness(value, SETTLED_HISTORY);
+    await runConfigSnapshot(ports);
+    expect(history.rows.map((row) => row.key)).toEqual([RESOURCE_ITEM_KEY]);
+  });
+
+  test("gives different values different hashes", async () => {
+    const first = harness("one", SETTLED_HISTORY);
+    const second = harness("two", SETTLED_HISTORY);
+    await runConfigSnapshot(first.ports);
+    await runConfigSnapshot(second.ports);
+    expect(first.history.rows[0]?.after).not.toEqual(
+      second.history.rows[0]?.after,
+    );
+  });
+
+  test("counts a row that it could not write as failed", async () => {
+    const { ports } = harness(WHOLE_REFERENCE, SETTLED_HISTORY, {
+      append: () => Promise.resolve(FAILURE),
+    });
+    expect(await runConfigSnapshot(ports)).toMatchObject({
+      skipped_reason: "resource_not_object",
+      changed: 0,
+      failed: 1,
+    });
+  });
+
+  test("writes the row again in the next run when the write failed", async () => {
+    let failNext = true;
+    const { ports, history } = harness(WHOLE_REFERENCE, SETTLED_HISTORY, {
+      append: (input) => {
+        if (failNext) {
+          failNext = false;
+          return Promise.resolve(FAILURE);
+        }
+        history.rows.push(input);
+        history.latest.set(input.key, input.after);
+        return Promise.resolve({ recorded: true, id: 1 });
+      },
+    });
+    await runConfigSnapshot(ports);
+    await runConfigSnapshot(ports);
+    expect(history.rows.length).toBe(1);
+  });
+
+  test("does not throw when the write throws", async () => {
+    const { ports } = harness(WHOLE_REFERENCE, SETTLED_HISTORY, {
+      append: () => Promise.reject(new Error(`boom ${WHOLE_REFERENCE}`)),
+    });
+    expect((await runConfigSnapshot(ports)).failed).toBe(1);
+  });
+});
+
+describe("runConfigSnapshot: the resource is an object again", () => {
+  const MARK = { redacted: true, hash: "0123456789abcdef" };
+
+  test("writes one row back with the mark of an object when the last row is the mark of a value that is not an object", async () => {
+    const { ports, history } = harness(RAW, {
+      ...SETTLED_HISTORY,
+      [RESOURCE_ITEM_KEY]: MARK,
+    });
+    await runConfigSnapshot(ports);
+    expect(history.rows).toEqual([
+      {
+        key: RESOURCE_ITEM_KEY,
+        before: MARK,
+        after: { kind: "object" },
+        actor: SNAPSHOT_ACTOR,
+        source: "out_of_band",
+        reason: "out_of_band_change",
+      },
+    ]);
+  });
+
+  test("counts the row that it wrote back as a change and does not skip", async () => {
+    const { ports } = harness(RAW, {
+      ...SETTLED_HISTORY,
+      [RESOURCE_ITEM_KEY]: MARK,
+    });
+    expect(await runConfigSnapshot(ports)).toMatchObject({
+      skipped_reason: null,
+      changed: 1,
+    });
+  });
+
+  test("writes the row back in front of the other rows, and does not count it in the cap", async () => {
+    const { ports, history } = harness(
+      { daily_budget_usd: 30, implement_enabled: true },
+      { ...SETTLED_HISTORY, [RESOURCE_ITEM_KEY]: MARK },
+      { cap: 1 },
+    );
+    await runConfigSnapshot(ports);
+    expect(history.rows.map((row) => row.key)).toEqual([
+      RESOURCE_ITEM_KEY,
+      "daily_budget_usd",
+    ]);
+  });
+
+  test("writes the row back only once", async () => {
+    const { ports, history } = harness(RAW, {
+      ...SETTLED_HISTORY,
+      [RESOURCE_ITEM_KEY]: MARK,
+    });
+    await runConfigSnapshot(ports);
+    await runConfigSnapshot(ports);
+    expect(history.rows.length).toBe(1);
+  });
+
+  test("writes nothing about the resource when the last row is already the mark of an object", async () => {
+    const { ports, history } = harness(RAW, {
+      ...SETTLED_HISTORY,
+      [RESOURCE_ITEM_KEY]: { kind: "object" },
+    });
+    await runConfigSnapshot(ports);
+    expect(history.rows).toEqual([]);
+  });
+
+  test("writes nothing about the resource when it was never a value that is not an object", async () => {
+    const { ports, history } = harness(RAW, SETTLED_HISTORY);
+    await runConfigSnapshot(ports);
+    expect(history.rows).toEqual([]);
+  });
+
+  test("does not treat the reserved item as an item that disappeared", async () => {
+    const { ports, history } = harness(RAW, {
+      ...SETTLED_HISTORY,
+      [RESOURCE_ITEM_KEY]: { kind: "object" },
+    });
+    await runConfigSnapshot(ports);
+    expect(
+      history.rows.some((row) => row.reason === "out_of_band_removed"),
+    ).toBe(false);
+  });
+
+  test("writes the row back when the last row has a shape that cannot be read", async () => {
+    const { ports, history } = harness(RAW, {
+      ...SETTLED_HISTORY,
+      [RESOURCE_ITEM_KEY]: { something: "else" },
+    });
+    await runConfigSnapshot(ports);
+    expect(history.rows.map((row) => row.after)).toEqual([{ kind: "object" }]);
+  });
+
+  test("skips the reserved name as an item of the resource and counts it as unnamed", async () => {
+    const { ports } = harness(
+      { daily_budget_usd: 20, [RESOURCE_ITEM_KEY]: "x" },
+      SETTLED_HISTORY,
+    );
+    expect((await runConfigSnapshot(ports)).unnamed_keys).toBe(1);
+  });
+});
+
+describe("resourceProblem", () => {
+  test("describes a resource that is not an object, with no value", async () => {
+    const { ports } = harness(WHOLE_REFERENCE, SETTLED_HISTORY);
+    const result = await runConfigSnapshot(ports);
+    expect(resourceProblem(result)).toBe(
+      "config_snapshot: the config resource is not an object, the job fails until it is an object again",
+    );
+  });
+
+  test("returns null for a run that finished", async () => {
+    const { ports } = harness(RAW, SETTLED_HISTORY);
+    expect(resourceProblem(await runConfigSnapshot(ports))).toBeNull();
+  });
+
+  test("returns null when the resource could not be read", async () => {
+    const { ports } = harness(RAW, SETTLED_HISTORY, {
+      raw: () => Promise.reject(new Error("timed out")),
+    });
+    expect(resourceProblem(await runConfigSnapshot(ports))).toBeNull();
+  });
+
+  test("returns null when the history could not be read", async () => {
+    const { ports } = harness(RAW, SETTLED_HISTORY, {
+      loadLatest: () => Promise.reject(new Error("connection refused")),
+    });
+    expect(resourceProblem(await runConfigSnapshot(ports))).toBeNull();
   });
 });

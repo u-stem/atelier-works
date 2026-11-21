@@ -10,8 +10,10 @@ import {
   isConfigItemKey,
   isKnownConfigKey,
   isMissingConfigHistoryObjectError,
+  isPlainHashProjection,
   projectConfigChange,
   projectConfigValue,
+  projectNonObjectResource,
   verifyConfigHistory,
 } from "../../f/factory/lib/config_history.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
@@ -74,35 +76,115 @@ describe("projectConfigValue: values that pass as they are", () => {
   });
 });
 
+/** 型に合わない値の射影。値は持たず、生の値のハッシュだけを持つ。 */
+const UNKNOWN_WITH_HASH = {
+  kind: "unknown",
+  hash: expect.stringMatching(HEX16),
+};
+
 describe("projectConfigValue: values that do not match the kind of the item", () => {
-  test("reduces a string for a switch to unknown", () => {
-    expect(projectConfigValue("implement_enabled", "true")).toEqual({
-      kind: "unknown",
-    });
+  test("reduces a string for a switch to unknown with a hash", () => {
+    expect(projectConfigValue("implement_enabled", "true")).toEqual(
+      UNKNOWN_WITH_HASH,
+    );
   });
 
-  test("reduces a string for a number item to unknown", () => {
-    expect(projectConfigValue("daily_budget_usd", "50")).toEqual({
-      kind: "unknown",
-    });
+  test("reduces a string for a number item to unknown with a hash", () => {
+    expect(projectConfigValue("daily_budget_usd", "50")).toEqual(
+      UNKNOWN_WITH_HASH,
+    );
   });
 
-  test("reduces NaN for a number item to unknown", () => {
-    expect(projectConfigValue("daily_budget_usd", Number.NaN)).toEqual({
-      kind: "unknown",
-    });
+  test("reduces NaN for a number item to unknown with a hash", () => {
+    expect(projectConfigValue("daily_budget_usd", Number.NaN)).toEqual(
+      UNKNOWN_WITH_HASH,
+    );
   });
 
-  test("reduces Infinity for a number item to unknown", () => {
+  test("reduces Infinity for a number item to unknown with a hash", () => {
     expect(
       projectConfigValue("daily_budget_usd", Number.POSITIVE_INFINITY),
-    ).toEqual({ kind: "unknown" });
+    ).toEqual(UNKNOWN_WITH_HASH);
   });
 
-  test("reduces a non-array for a list item to unknown", () => {
-    expect(projectConfigValue("repo_allowlist", "https://x")).toEqual({
-      kind: "unknown",
-    });
+  test("reduces a non-array for a list item to unknown with a hash", () => {
+    expect(projectConfigValue("repo_allowlist", "https://x")).toEqual(
+      UNKNOWN_WITH_HASH,
+    );
+  });
+
+  test("reduces a non-string for an enum item to unknown with a hash", () => {
+    expect(projectConfigValue("model", 5)).toEqual(UNKNOWN_WITH_HASH);
+  });
+
+  test("reduces a non-string for a time item to unknown with a hash", () => {
+    expect(projectConfigValue("design_enabled_since", 5)).toEqual(
+      UNKNOWN_WITH_HASH,
+    );
+  });
+
+  test("tells two different values of the wrong type apart", () => {
+    expect(projectConfigValue("implement_enabled", "yes")).not.toEqual(
+      projectConfigValue("implement_enabled", "no"),
+    );
+  });
+
+  test("gives the same value of the wrong type the same projection", () => {
+    expect(projectConfigValue("implement_enabled", "yes")).toEqual(
+      projectConfigValue("implement_enabled", "yes"),
+    );
+  });
+
+  test("never puts the value of the wrong type into the output", () => {
+    const output = JSON.stringify([
+      projectConfigValue("implement_enabled", "top-secret-text"),
+      projectConfigValue("repo_allowlist", { a: "top-secret-text" }),
+    ]);
+    expect(output).not.toContain("top-secret-text");
+  });
+
+  test("does not mistake the mark of the wrong type for a plain hash", () => {
+    expect(
+      isPlainHashProjection(projectConfigValue("implement_enabled", "yes")),
+    ).toBe(false);
+  });
+});
+
+describe("projectConfigValue: json variable references", () => {
+  test.each([
+    ["a switch", "implement_enabled", "$jsonvar:f/factory/a"],
+    ["a number item", "daily_budget_usd", "$jsonvar:f/factory/a"],
+    ["a list item", "repo_allowlist", ["$jsonvar:f/factory/a"]],
+    ["an enum item", "model", "$jsonvar:f/factory/a"],
+    ["a hashed item", "allowed_check_commands", ["echo $jsonvar:f/factory/a"]],
+    ["an item that is not known", "brand_new_item", "$jsonvar:f/factory/a"],
+  ])("redacts %s that holds one", (_name, key, value) => {
+    expect(projectConfigValue(key, value)).toEqual(REDACTED_WITH_HASH);
+  });
+
+  test("tells two different json variable references apart", () => {
+    expect(
+      projectConfigValue("daily_budget_usd", "$jsonvar:f/factory/a"),
+    ).not.toEqual(
+      projectConfigValue("daily_budget_usd", "$jsonvar:f/factory/b"),
+    );
+  });
+
+  test("gives the same json variable reference the same projection", () => {
+    expect(
+      projectConfigValue("daily_budget_usd", "$jsonvar:f/factory/a"),
+    ).toEqual(projectConfigValue("daily_budget_usd", "$jsonvar:f/factory/a"));
+  });
+
+  test("never puts the reference name into the output", () => {
+    expect(
+      JSON.stringify(
+        projectConfigValue(
+          "daily_budget_usd",
+          "$jsonvar:f/factory/private-name",
+        ),
+      ),
+    ).not.toContain("private-name");
   });
 });
 
@@ -368,6 +450,36 @@ describe("projectConfigValue: items that are not known", () => {
       expect(projectConfigValue(key, true)).toEqual({ kind: "unknown" });
     },
   );
+});
+
+describe("projectNonObjectResource", () => {
+  test("projects a value to a redacted mark with a hash", () => {
+    expect(projectNonObjectResource("$res:f/factory/a")).toEqual(
+      REDACTED_WITH_HASH,
+    );
+  });
+
+  test("tells two different values apart", () => {
+    expect(projectNonObjectResource("a")).not.toEqual(
+      projectNonObjectResource("b"),
+    );
+  });
+
+  test("gives the same value the same projection", () => {
+    expect(projectNonObjectResource(["a"])).toEqual(
+      projectNonObjectResource(["a"]),
+    );
+  });
+
+  test("never puts the value into the output", () => {
+    expect(
+      JSON.stringify(projectNonObjectResource("$res:f/factory/private-name")),
+    ).not.toContain("private-name");
+  });
+
+  test("projects undefined without throwing", () => {
+    expect(projectNonObjectResource(undefined)).toEqual(REDACTED_WITH_HASH);
+  });
 });
 
 describe("projectConfigChange", () => {
@@ -1050,6 +1162,23 @@ describe("collectConfigHistoryEvidence", () => {
     expect([evidence.period_changes, evidence.period_by_item]).toEqual([
       1,
       [{ item_key: "a_enabled", count: 1 }],
+    ]);
+  });
+
+  test("counts a row of the item of the resource as a change, unlike the marker of the baseline", async () => {
+    const { sql } = routedSql({
+      "GROUP BY c.item_key": [
+        {
+          item_key: "config_snapshot_resource",
+          reason_code: "out_of_band_change",
+          changes: 2,
+        },
+      ],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect([evidence.period_changes, evidence.period_by_item]).toEqual([
+      2,
+      [{ item_key: "config_snapshot_resource", count: 2 }],
     ]);
   });
 

@@ -87,8 +87,12 @@ export function isConfigHistoryReasonCode(
  *   `hash`は生の値の正規化したJSONのsha256の先頭16桁で、メモリの中で計算するだけで、生の値は残さない。伏せた値の後の変更を見えなくしないために添える。
  *   参照の名前は秘密の値ではない。秘密らしい文字列は、塩を付けないハッシュなので、候補が少なければ当てられる。
  *   `hash`の無い`{ redacted: true }`は、ハッシュを足す前に書いた行の形で、読むだけである。
- * - `{ kind: "unknown" }`: 項目が未知か、値の型が項目の種類に合わない。値は入れない。
+ * - `{ kind: "unknown" }`: 項目が表に無い(種類を知らない)。値は入れず、値の変更も追わない。
+ * - `{ kind: "unknown", hash }`: 項目の種類を知っているが、値の型が合わない。`hash`は生の値の正規化したJSONのsha256の先頭16桁で、
+ *   型に合わない値の差し替えを見えなくしないために添える。生の値は入れない。`hash`の無い形は、ハッシュを足す前に書いた行の形で、読むだけである。
  * - `{ kind: "marker" }`: 基準の段階が終わったことを示す印の行の値。定期の照合だけが書く。
+ * - `{ kind: "object" }`: resource全体がオブジェクトに戻ったことを示す値。定期の照合だけが、予約の項目`config_snapshot_resource`に書く。
+ *   resource全体がオブジェクトでない間の値は、`{ redacted: true, hash }`である(`projectNonObjectResource`)。
  * - `{ removed: true }`: 項目が設定から無くなった。定期の照合だけが、変更後の側に入れる。値が`null`の項目とは区別する。
  */
 export type ConfigProjection =
@@ -99,10 +103,11 @@ export type ConfigProjection =
   | { readonly count: number; readonly hash?: string }
   | { readonly hash: string; readonly changed?: boolean }
   | { readonly redacted: true; readonly hash?: string }
-  | { readonly kind: "unknown" | "marker" }
+  | { readonly kind: "unknown"; readonly hash?: string }
+  | { readonly kind: "marker" | "object" }
   | { readonly removed: true };
 
-/** `{ hash }`だけの射影か。`{ count, hash }`と`{ redacted, hash }`は、`hash`を持っても、この形ではない。 */
+/** `{ hash }`だけの射影か。`{ count, hash }`、`{ redacted, hash }`、`{ kind: "unknown", hash }`は、`hash`を持っても、この形ではない。 */
 export function isPlainHashProjection(
   projection: ConfigProjection,
 ): projection is { readonly hash: string; readonly changed?: boolean } {
@@ -111,7 +116,8 @@ export function isPlainHashProjection(
     typeof projection === "object" &&
     "hash" in projection &&
     !("count" in projection) &&
-    !("redacted" in projection)
+    !("redacted" in projection) &&
+    !("kind" in projection)
   );
 }
 
@@ -307,6 +313,24 @@ function redacted(value: unknown): ConfigProjection {
   return { redacted: true, hash: shortHash(value) };
 }
 
+/**
+ * 項目の種類を知っているが、値の型が合わないときの射影。生の値は残さず、生の値のハッシュだけを持つ。
+ * 型に合わない値を、別の型に合わない値へ差し替えた変更を見えなくしないために、ハッシュを添える。
+ * 種類を知らない項目(表に無い項目)の値は、意図して追わないので、ハッシュを添えない。
+ */
+function mismatched(value: unknown): ConfigProjection {
+  return { kind: "unknown", hash: shortHash(value) };
+}
+
+/**
+ * resource全体がオブジェクトでないときの、値の射影。`{ redacted: true, hash }`で、生の値は残さない。
+ * 参照だけの値(`"$res:<path>"`)は、補間する読み取りが参照先のオブジェクトに解決するので、ほかの読み取りは動き続ける。
+ * 補間しない読み取りだけが、文字列を見る。
+ */
+export function projectNonObjectResource(raw: unknown): ConfigProjection {
+  return redacted(raw);
+}
+
 /** 一覧の要素のハッシュ。要素の順は意味を持たないので、要素を正規化してから並べ替えて、ハッシュにする。 */
 function listHash(items: readonly unknown[]): string {
   return shortHash(items.map((item) => canonicalJson(item)).sort());
@@ -314,9 +338,9 @@ function listHash(items: readonly unknown[]): string {
 
 /**
  * 設定の1項目の値を、履歴に入れる形にする。生の値は、項目の種類が真偽、数、時刻、短い列挙のときだけ残す。
- * 項目の種類は、このファイルの表と、`*_enabled`と`allowed_labeler_`の名前で決める。表に無い項目は、値を入れない。
- * 値の型が項目の種類に合わないときも、値を入れない。
- * 値が参照(`$var:`、`$res:`)を含むときは、項目の種類によらず、参照の先を調べずに伏せる(`{ redacted: true, hash }`)。
+ * 項目の種類は、このファイルの表と、`*_enabled`と`allowed_labeler_`の名前で決める。表に無い項目は、値を入れず、ハッシュも添えない。
+ * 値の型が項目の種類に合わないときは、値を入れず、生の値のハッシュだけを添える(`{ kind: "unknown", hash }`)。
+ * 値が参照(`$var:`、`$res:`、`$jsonvar:`)を含むときは、項目の種類によらず、参照の先を調べずに伏せる(`{ redacted: true, hash }`)。
  */
 export function projectConfigValue(
   key: string,
@@ -329,23 +353,23 @@ export function projectConfigValue(
   if (value === null) return null;
   switch (kind) {
     case "flag":
-      return typeof value === "boolean" ? value : UNKNOWN;
+      return typeof value === "boolean" ? value : mismatched(value);
     case "number":
       return typeof value === "number" && Number.isFinite(value)
         ? value
-        : UNKNOWN;
+        : mismatched(value);
     case "count":
       return Array.isArray(value)
         ? { count: value.length, hash: listHash(value) }
-        : UNKNOWN;
+        : mismatched(value);
     case "timestamp":
       return typeof value === "string"
         ? projectString(value, isTimestampText)
-        : UNKNOWN;
+        : mismatched(value);
     case "enum":
       return typeof value === "string"
         ? projectString(value, (text) => ENUM_PATTERN.test(text))
-        : UNKNOWN;
+        : mismatched(value);
   }
 }
 

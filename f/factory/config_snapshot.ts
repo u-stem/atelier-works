@@ -5,7 +5,9 @@
 // 履歴にまだ無い項目は、基準の段階(基準の印の行が書かれるまで)に、基準(`snapshot_baseline`)として書く。
 // 印の行を書いた後に現れた項目は、足された項目(`out_of_band_added`)として、変更に数える。
 // 書き残しが出た実行(上限、時間の区切り、知らない項目の数の上限)は、行を書いた後にジョブを失敗させる。
-// 書き残しが続くと、scheduleの連続失敗の検知(`detect_schedule_failures`)が、要対応の通知にする。
+// resource全体がオブジェクトでない間(補間する読み取りだけが参照先を読み続ける状態)も、予約の項目に1行書いた後で、ジョブを失敗させる。
+// 失敗が続くと、scheduleの連続失敗の検知(`detect_schedule_failures`)が、要対応の通知にする。
+// resourceと履歴を読めなかった実行(`resource_unreadable`、`history_unreadable`)は、失敗にせず、結果の`skipped_reason`に出す。
 //
 // 補間しない生の値を読む(`ResourceService.getResourceValue`)。補間する`getResource`は、`$var:`を秘密の値に解決するので使わない。
 // resourceへは書かない。値は許可リストで射影してから扱い、ログにも履歴にも生の値を出さない。
@@ -19,6 +21,7 @@ import { appendConfigProjection } from "./lib/config_history.ts";
 import {
   deferralProblem,
   loadLatestProjections,
+  resourceProblem,
   runConfigSnapshot,
   type SnapshotResult,
 } from "./lib/config_snapshot.ts";
@@ -62,7 +65,7 @@ export async function main(): Promise<SnapshotResult> {
     log,
   });
   log.info("config_snapshot: done", { ...result });
-  const problem = deferralProblem(result);
+  const problem = resourceProblem(result) ?? deferralProblem(result);
   if (problem !== null) throw new Error(problem);
   return result;
 }

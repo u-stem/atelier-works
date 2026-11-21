@@ -14,7 +14,13 @@
 // すべての基準の行を書き終えた最後に、印を1行書く。時間が尽きるなどで基準を書き終えない実行は、印を書かず、次の実行が続ける。
 // 印が書かれた後に、履歴にまだ無い項目が現れたら、足された項目(`out_of_band_added`)として、変更に数える。
 //
+// resource全体がオブジェクトでない値(`"$res:<path>"`の文字列など)に変わると、補間して読むほかの読み取りは参照先のオブジェクトを読み続け、
+// 補間しないこの照合だけが文字列を見る。項目を読めないまま何も書かないと、参照先の変更が履歴に残らなくなる。
+// そのため、予約の項目`config_snapshot_resource`に、値のハッシュを1行書く。同じ値の間は書かない。オブジェクトに戻ったら、戻った印を1行書く。
+// オブジェクトでない間は、項目を比べられないので、結果を`resource_not_object`にして、呼び出し側がジョブを失敗させる。
+//
 // 行は、知っている項目の変更、知らない項目の変更、基準の行の順に書く。上限は、基準の行を除いて数える。
+// resource全体の行は、上限に数えず、ほかの行より先に書く。
 // 知らない項目の数に上限を置き、超えた項目は調べずに次の実行へ回す。多数の項目を足して、狙った変更を後ろへ押しやる手を封じる。
 //
 // 保護パスの中の`lib/config_history.ts`と`lib/console_redact.ts`だけに頼る。入出力は呼び出し側が渡す。
@@ -28,6 +34,7 @@ import {
   isMissingConfigHistoryObjectError,
   isPlainHashProjection,
   projectConfigValue,
+  projectNonObjectResource,
   SNAPSHOT_BASELINE_MARKER_KEY,
 } from "./config_history.ts";
 import type { ActionSqlClient } from "./console_actions.ts";
@@ -48,10 +55,18 @@ export const SNAPSHOT_UNKNOWN_KEYS_LIMIT = 50;
  */
 export const UNKNOWN_KEYS_ITEM_KEY = "config_snapshot_unknown_keys";
 
+/**
+ * resource全体の状態を示す項目名。設定の項目ではない。
+ * resourceがオブジェクトでない間は`{ redacted: true, hash }`(値のハッシュ)、オブジェクトに戻ったら`{ kind: "object" }`を、変更として書く。
+ * 証跡パックの集計は、基準の印の行と違い、この項目の行を変更に数える。
+ */
+export const RESOURCE_ITEM_KEY = "config_snapshot_resource";
+
 /** 設定の項目として読まない名前。履歴の中で、照合が自分の行に使う。 */
 const RESERVED_KEYS: ReadonlySet<string> = new Set([
   SNAPSHOT_BASELINE_MARKER_KEY,
   UNKNOWN_KEYS_ITEM_KEY,
+  RESOURCE_ITEM_KEY,
 ]);
 
 /**
@@ -63,6 +78,7 @@ export const SNAPSHOT_DEADLINE_MS = 40_000;
 
 const UNKNOWN: ConfigProjection = { kind: "unknown" };
 const MARKER: ConfigProjection = { kind: "marker" };
+const OBJECT_MARK: ConfigProjection = { kind: "object" };
 
 /** 項目が設定から無くなったことを示す射影。値が`null`の項目(`null`の射影)とは区別する。 */
 export const REMOVED_PROJECTION: ConfigProjection = { removed: true };
@@ -88,6 +104,7 @@ export type ConfigSnapshotProjection = {
 /**
  * resourceの生の値の、すべての最上位の項目を射影する。
  * 項目の種類は`projectConfigValue`の許可リストで決め、表に無い項目は、値を入れずに`{ kind: "unknown" }`にする。
+ * 種類を知っている項目の、型に合わない値は、`{ kind: "unknown", hash }`にする。
  * 値が参照を含む項目は、値を調べずに`{ redacted: true, hash }`にする。
  * 知らない項目(`isKnownConfigKey`が偽の項目)は、名前の昇順に`unknownKeysLimit`まで調べる。
  * 超えたときは、超えた項目を調べず(`excluded`)、知らない項目の総数を`UNKNOWN_KEYS_ITEM_KEY`の項目に入れる。
@@ -161,21 +178,27 @@ export function parseStoredProjection(
       ? { redacted: true, hash: value.hash }
       : { redacted: true };
   }
+  // `kind`を持つ形は、`hash`を持っても、`{ hash }`の形ではないので、先に読む。
+  if (value.kind === "unknown") {
+    return typeof value.hash === "string"
+      ? { kind: "unknown", hash: value.hash }
+      : UNKNOWN;
+  }
+  if (value.kind === "marker") return MARKER;
+  if (value.kind === "object") return OBJECT_MARK;
   if (typeof value.hash === "string") {
     return value.changed === true || value.changed === false
       ? { hash: value.hash, changed: value.changed }
       : { hash: value.hash };
   }
   if (value.removed === true) return REMOVED_PROJECTION;
-  if (value.kind === "unknown") return UNKNOWN;
-  if (value.kind === "marker") return MARKER;
   return undefined;
 }
 
 /**
  * 比べるための形にする。ハッシュの項目の`changed`は、変更の経路が前後の比較で付ける印なので、比べるときは外す。
  * 外さないと、Consoleが書いた行(`changed`が付く)と、今の値の射影(付かない)が、いつも違って見える。
- * 一覧と伏せた項目は、ハッシュも比べる。ハッシュの無い行(ハッシュを足す前に書いた行)は、ハッシュのある射影と違う値として比べる。
+ * 一覧、伏せた項目、型に合わない値の印は、ハッシュも比べる。ハッシュの無い行(ハッシュを足す前に書いた行)は、ハッシュのある射影と違う値として比べる。
  */
 function comparable(projection: ConfigProjection): string {
   if (projection !== null && typeof projection === "object") {
@@ -188,6 +211,12 @@ function comparable(projection: ConfigProjection): string {
     if ("count" in projection) {
       return JSON.stringify({
         count: projection.count,
+        hash: projection.hash ?? null,
+      });
+    }
+    if ("kind" in projection && projection.kind === "unknown") {
+      return JSON.stringify({
+        kind: "unknown",
         hash: projection.hash ?? null,
       });
     }
@@ -278,6 +307,35 @@ export function diffSnapshot(
   return changes;
 }
 
+/**
+ * resource全体の状態の変更を返す。履歴の最後の値と今の状態が同じなら`null`を返す。
+ * - オブジェクトでないとき: 今の状態は値のハッシュ(`{ redacted: true, hash }`)で、履歴の最後の値と違えば変更である。
+ * - オブジェクトのとき: 履歴にこの項目の行が無いか、最後の値が`{ kind: "object" }`なら変更ではない。
+ *   最後の値がそれ以外(オブジェクトでない値の印、読めない形)なら、オブジェクトに戻った印を書く。
+ * `before`は履歴の最後の値で、行が無ければ`null`である。
+ */
+export function resourceStateChange(
+  raw: unknown,
+  isObject: boolean,
+  latest: ReadonlyMap<string, unknown>,
+): SnapshotChange | null {
+  const now = isObject ? OBJECT_MARK : projectNonObjectResource(raw);
+  if (!latest.has(RESOURCE_ITEM_KEY)) {
+    return isObject
+      ? null
+      : { key: RESOURCE_ITEM_KEY, kind: "changed", before: null, after: now };
+  }
+  const stored = parseStoredProjection(latest.get(RESOURCE_ITEM_KEY));
+  const last = stored === undefined ? UNKNOWN : stored;
+  if (comparable(last) === comparable(now)) return null;
+  return {
+    key: RESOURCE_ITEM_KEY,
+    kind: "changed",
+    before: withoutChangedMark(last),
+    after: now,
+  };
+}
+
 /** 書く順の群。知っている項目、知らない項目、基準の行の順である。 */
 function groupOf(change: SnapshotChange): 0 | 1 | 2 {
   if (change.kind === "baseline") return 2;
@@ -366,9 +424,10 @@ function readJson(text: unknown): unknown {
 
 /**
  * 照合の結果。件数だけを持ち、項目名も値も入れない。
- * `skipped_reason`が`null`でないときは、照合を終えられなかったので、ほかの件数は0である。
+ * `skipped_reason`が`null`でないときは、照合を終えられなかったので、ほかの件数は0である(`resource_not_object`の`changed`と`failed`を除く)。
  * - resource_unreadable: resourceを読めなかった(時間切れを含む)。
- * - resource_not_object: resourceがオブジェクトでなかった。
+ * - resource_not_object: resourceがオブジェクトでなかった。この結果だけは、resource全体の行を書いた数を`changed`に、書けなかった数を`failed`に持つ。
+ *   呼び出し側は、この結果でジョブを失敗させる(`resourceProblem`)。
  * - history_missing: 履歴の表か関数が無い(migrationが未反映)。
  * - history_unreadable: 履歴の最後の値を読めなかった。
  */
@@ -460,6 +519,17 @@ export function deferralProblem(result: SnapshotResult): string | null {
   return `config_snapshot: ${result.deferred} change(s) were not written in this run and wait for the next run`;
 }
 
+/**
+ * resourceがオブジェクトでないときの、ジョブを失敗させる文。そうでなければ`null`を返す。
+ * オブジェクトでない間は、項目を1つも比べられないので、失敗を続けて、scheduleの連続失敗の検知が要対応の通知にする。
+ * resourceと履歴が読めなかった実行(`resource_unreadable`、`history_unreadable`)では`null`を返し、失敗にしない。
+ * 文は固定で、値も項目名も入れない。
+ */
+export function resourceProblem(result: SnapshotResult): string | null {
+  if (result.skipped_reason !== "resource_not_object") return null;
+  return "config_snapshot: the config resource is not an object, the job fails until it is an object again";
+}
+
 /** 注入された書き込みが投げても、失敗の結果にして返す。例外の文には値が入りうるので、捨てる。 */
 async function appendWithoutThrowing(
   ports: SnapshotPorts,
@@ -487,9 +557,34 @@ const MARKER_INPUT: ConfigProjectionInput = {
 };
 
 /**
+ * resourceがオブジェクトでないときの、終わりの処理。resource全体の行があれば1行書き、結果を返す。
+ * 書けなくても投げない。書けなかった行は、次の実行で、同じ差としてもう一度見つかる。
+ */
+async function finishNotObject(
+  ports: SnapshotPorts,
+  change: SnapshotChange | null,
+): Promise<SnapshotResult> {
+  if (change === null) return skipped("resource_not_object");
+  const result = await appendWithoutThrowing(ports, toAppendInput(change));
+  if (result.recorded) {
+    return {
+      ...EMPTY_COUNTS,
+      changed: 1,
+      skipped_reason: "resource_not_object",
+    };
+  }
+  ports.log.warn("config_snapshot: could not write the row of the resource", {
+    kind: result.kind,
+  });
+  return { ...EMPTY_COUNTS, failed: 1, skipped_reason: "resource_not_object" };
+}
+
+/**
  * 履歴の最後の値とresourceをこの順に読み、差を`out_of_band`として書く。投げない。
  * 差は、知っている項目、知らない項目、基準の行の順に、実行全体の時間(`deadlineMs`)まで書く。
  * 基準の行を除く行は、上限(`cap`)まで書く。残りは次の実行に回す。書かなければ差は残るので、2回続けて実行しても、2回目は何も書かない。
+ * resourceがオブジェクトでないときは、resource全体の行を1行だけ書き(同じ値の間は書かない)、項目は比べずに終える。
+ * オブジェクトに戻ったときは、戻った印の行を、ほかの行より先に書く。この行は、行の上限に数えない。
  * 基準の段階(印が無い間)に、基準の行をすべて書き終えたら、最後に印の行を書く。書き終えなければ、印は書かず、次の実行が続ける。
  * 1行の書き込みが失敗しても、残りを続ける。失敗した項目は、次の実行でもう一度差として見つかる。
  * ログには、件数と失敗の種類だけを出し、項目名と値は出さない。
@@ -528,9 +623,10 @@ export async function runConfigSnapshot(
     return skipped("resource_unreadable");
   }
   const projection = projectConfigSnapshot(raw, unknownKeysLimit);
+  const resourceChange = resourceStateChange(raw, projection !== null, latest);
   if (projection === null) {
     ports.log.warn("config_snapshot: the config resource is not an object");
-    return skipped("resource_not_object");
+    return await finishNotObject(ports, resourceChange);
   }
 
   // 印の行は設定の項目ではないので、比べない。基準の段階が終わったかは、印の行の有無で決める。
@@ -539,7 +635,9 @@ export async function runConfigSnapshot(
   const compared = new Map(
     [...latest].filter(
       ([key]) =>
-        key !== SNAPSHOT_BASELINE_MARKER_KEY && !projection.excluded.has(key),
+        key !== SNAPSHOT_BASELINE_MARKER_KEY &&
+        key !== RESOURCE_ITEM_KEY &&
+        !projection.excluded.has(key),
     ),
   );
   const ordered = orderChanges(
@@ -550,7 +648,11 @@ export async function runConfigSnapshot(
   );
   const otherChanges = ordered.filter((change) => change.kind !== "baseline");
   const cappedChanges = otherChanges.slice(0, cap);
-  const toWrite = [...cappedChanges, ...baselineChanges];
+  const toWrite = [
+    ...(resourceChange === null ? [] : [resourceChange]),
+    ...cappedChanges,
+    ...baselineChanges,
+  ];
 
   const capDeferred = otherChanges.length - cappedChanges.length;
   let deferred = capDeferred + projection.excluded.size;
