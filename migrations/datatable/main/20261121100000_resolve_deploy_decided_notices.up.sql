@@ -6,6 +6,8 @@
 -- 他の種類の通知は変えない。
 BEGIN;
 
+SET LOCAL lock_timeout = '30s';
+
 UPDATE factory.notices
 SET resolved = true, resolved_by = 'console_deploy_decide', resolved_at = now()
 WHERE kind = 'deploy_approval_decided'
