@@ -37,7 +37,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | HOLD | [保留](#保留) | [保留の内部仕様](internals/holds.md) | 32 |
 | FRZ | [凍結とdeployの保留](#凍結とdeployの保留) | [凍結とdeployの保留の内部仕様](internals/freezes.md) | 29 |
 | FIX | [PR修正の安全策](#pr修正の安全策) | [PRワークフローの安全策の内部仕様](internals/pr-workflow/security.md) | 28 |
-| CHK | [検査コマンドの権限](#検査コマンドの権限) | [検査コマンドの実行と権限の内部仕様](internals/check-sandbox.md) | 15 |
+| CHK | [検査コマンドの権限](#検査コマンドの権限) | [検査コマンドの実行と権限の内部仕様](internals/check-sandbox.md) | 16 |
 | DEP | [dependabotの更新の自動マージ](#dependabotの更新の自動マージ) | [dependabotの更新の内部仕様](internals/dependabot.md) | 15 |
 | DAP | [反映の承認](#反映の承認) | [反映の承認の内部仕様](internals/deploy-approvals.md) | 05 |
 | GHC | [RESTの検索の拒否](#restの検索の拒否) | [GitHubの収集の内部仕様](internals/github-collect.md) | 07 |
@@ -755,6 +755,7 @@ IDは`R-<領域>-<連番2桁>`の形で、領域の略号は次の表のとお�
 | <a id="r-chk-13"></a>R-CHK-13 | 所有権の受け渡しと取り戻しはディレクトリの数に比例して時間がかかり、1回の上限の300秒を超えると打ち切られて検査が失敗する。ディレクトリごとの受け渡しでは、1個あたり約0.6ミリ秒なので、約50万個で上限に達する。この数は余裕を含まない切れる点なので、負荷のあるworkerでは手前で切れうる。打ち切られると記録が残り、次にその枠を取る実行と、そのworktreeを次に使うステップの片付けも、同じ上限で失敗し続ける。 | [検査コマンドの権限](internals/check-sandbox.md#検査コマンドの権限) |
 | <a id="r-chk-14"></a>R-CHK-14 | 一括の受け渡しと戻しは、worktreeの下にマウントが無いことを前提とする。`chown -R`には`-xdev`に当たるものが無く、別のファイルシステムのマウントがあれば、そこへ入るためである。 | [検査コマンドの権限](internals/check-sandbox.md#検査コマンドの権限) |
 | <a id="r-chk-15"></a>R-CHK-15 | コンテナで共有するカーネルの脆弱性による脱出は防げない。 | [検査コマンドの権限](internals/check-sandbox.md#検査コマンドの権限) |
+| <a id="r-chk-16"></a>R-CHK-16 | 静的検査は、mainの版の道具がPRのファイルを読むだけでPRのコードを実行しないが、読み込みで動く道具の脆弱性(BiomeやTypeScriptがPRのファイルから任意のコードを実行する欠陥)は防げない。`bun install`がnetworkに出ることと、時間の見積もりが粗く、実際の所要時間が超えうることも残る。受け入れる理由は、道具をmainの版に固定し、依存のscriptを実行せず、検査用のユーザーの枠の中で動かすので、影響が検査コマンドと同じ範囲に収まるためである。 | [静的検査の作業木](internals/check-sandbox.md#静的検査の作業木) |
 
 ## dependabotの更新の自動マージ
 

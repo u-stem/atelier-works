@@ -1592,7 +1592,8 @@ Windmillの資産のうちnpmの依存を入れるのは、dependabotの更新�
 scriptの`.script.lock`は、ルートの`bun.lock`と同じ版・同じintegrityであることを`lint`が確かめるので、ルートの監査がworkerの依存も覆う([コーディング規約](coding-guidelines.md#脆弱性))。
 `windmill-client`の指摘は、受け入れの表に入れない。
 修正版の無いhighの指摘が出たときの残るリスクは[R-TB-38](security-risks.md#r-tb-38)である。
-ただし、このリポジトリを対象に`check_commands_by_repo`か`allowed_check_commands`を設定すると、検査がworkerのコンテナの中で走る。
+ただし、このリポジトリを対象に次のどれかを設定すると、検査がworkerのコンテナの中で走る。
+対象の設定は、`check_commands_by_repo`、`static_check_commands_by_repo`、`allowed_check_commands`である。
 そのとき`bun install`で入る依存は、workerのコンテナの中で動く。
 設定の詳細は[実装フローの仕様](internals/implement.md)と[PRワークフローの仕様](internals/pr-workflow.md)にある。
 
@@ -2583,6 +2584,8 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
 | ツールの制限 | [PRワークフローの安全策の内部仕様の「ツールの制限」](internals/pr-workflow/security.md#ツールの制限) |
 | 検査コマンドはフローが実行する | [検査コマンドの実行と権限の内部仕様の「検査コマンドはフローが実行する」](internals/check-sandbox.md#検査コマンドはフローが実行する) |
 | 検査コマンドの権限 | [検査コマンドの実行と権限の内部仕様の「検査コマンドの権限」](internals/check-sandbox.md#検査コマンドの権限) |
+| 静的検査の作業木 | [検査コマンドの実行と権限の内部仕様の「静的検査の作業木」](internals/check-sandbox.md#静的検査の作業木) |
+| 静的検査(PR修正の安全策) | [PRワークフローの安全策の内部仕様の「静的検査」](internals/pr-workflow/security.md#静的検査) |
 | 対象リポジトリの設定を信頼しない | [PRワークフローの安全策の内部仕様の「対象リポジトリの設定を信頼しない」](internals/pr-workflow/security.md#対象リポジトリの設定を信頼しない) |
 | 保護パスの変更を止める | [PRワークフローの安全策の内部仕様の「保護パスの変更を止める」](internals/pr-workflow/security.md#保護パスの変更を止める) |
 | symlinkと特殊なファイルを止める | [PRワークフローの安全策の内部仕様の「symlinkと特殊なファイルを止める」](internals/pr-workflow/security.md#symlinkと特殊なファイルを止める) |
@@ -2604,6 +2607,7 @@ publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIss
 | 検査コマンドを明示したリポジトリだけで実行する | [実装フローの仕様の「検査コマンドを明示したリポジトリだけで実行する」](internals/implement.md#検査コマンドを明示したリポジトリだけで実行する) |
 | 対象リポジトリのCIが動く | [実装フローの仕様の「対象リポジトリのCIが動く」](internals/implement.md#対象リポジトリのciが動く) |
 | 保護パスは止めずに明示する | [実装フローの仕様の「保護パスは止めずに明示する」](internals/implement.md#保護パスは止めずに明示する) |
+| 静的検査(実装の安全策) | [実装フローの仕様の「静的検査」](internals/implement.md#静的検査) |
 | symlinkの変更を止める | [実装フローの仕様の「symlinkの変更を止める」](internals/implement.md#symlinkの変更を止める) |
 | 差分の大きさの上限(実装の安全策) | [実装フローの仕様の「差分の大きさの上限(実装の安全策)」](internals/implement.md#差分の大きさの上限実装の安全策) |
 | 保護ブランチのガードは使わない | [実装フローの仕様の「保護ブランチのガードは使わない」](internals/implement.md#保護ブランチのガードは使わない) |

@@ -76,6 +76,10 @@ CI回は、準備のステップの後と、検査コマンドのたびにその
 `node_modules`のような依存の取得先も消えるので、取得を含まない検査コマンドは、毎回失敗する。
 実装フローも同じ前提である([実装フロー](implement.md))。
 
+静的検査のコマンド(`static_check_commands_by_repo`)は、依存の導入を実装が足すので、この前提に当たらない。
+CI回は、検査コマンドより前に静的検査を動かす([PRワークフローの静的検査](pr-workflow/security.md#静的検査))。
+静的検査の作業木は、無視されたファイルの掃除の対象外である。
+
 カバレッジの検査(`bun ./scripts/check-coverage.ts`)は、設定の雛形にも、`check_commands_by_repo`の例にも入っていない。
 ただし、検査コマンドに`mise run check`を設定すると、その中で差分の行カバレッジの検査も走る。
 差分の検査が走る検査コマンドを足すときは、検査を動かすcloneに、新しい`refs/remotes/origin/main`があることを先に確かめる。
@@ -752,7 +756,7 @@ gitは呼ばない。
 - カバレッジとテストの準備: `.nycrc*`、`.c8rc*`、`.coveragerc`、`vitest.setup.*`、`jest.setup.*`
 - Factoryの安全装置は、次の名前で始まるファイルである。
   - `f/factory/lib/`の`claude`、`protected_paths`、`log`、`workspace`、`check_sandbox`、`check_runner`、`prompts`、`github`
-  - `f/factory/lib/`の`types`、`job_tmp`、`repo_owner_gate`、`model_policy`、`config`
+  - `f/factory/lib/`の`types`、`job_tmp`、`repo_owner_gate`、`model_policy`、`config`、`static_check_workspace`
   - `f/factory/lib/`の`host_action`、`process_lock`、`factory_repo_gate`、`auto_retry_reasons`
   - `f/factory/lib/`の`ci_`、`pr_ci_`、`pr_conflict_`、`conflict_fix_`、`main_ci_`
   - `f/factory/lib/`の`pr_fix_launch`、`pr_fix_design`、`branch_hold`

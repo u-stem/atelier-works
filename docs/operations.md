@@ -275,7 +275,8 @@ noticeは、`owner_id_mismatch`である。
 cloneを開かない処理にも、この照合を効かせるためである。
 cloneを開く準備のステップでは、`openFactoryClone`も同じ照合をするので、取得が1回増える。
 通ったときだけ、cloneとcheckoutに進む。
-`check_commands_by_repo`のキーは名前だが、`id`を入れたオーナーのリポジトリでは、照合を通ったものにしか検査コマンドが走らない。
+`check_commands_by_repo`と`static_check_commands_by_repo`のキーは名前である。
+`id`を入れたオーナーのリポジトリでは、照合を通ったものにしか、検査コマンドと静的検査が走らない。
 
 止めたときは、Consoleの**要対応**にnoticeが残る。
 止めるのは、次のいずれかのときである。
