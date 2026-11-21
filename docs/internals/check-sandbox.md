@@ -43,7 +43,7 @@ workerの同時実行数(nativeでないworkerは1)に、片付けられず飛�
 | プロセス数 | `setpriv`の前に`prlimit`で、枠のuidが持てるプロセス(スレッドを含む)を256までにする。カーネルは実uidごとに数えるので、検査が上限まで使っても、workerのコンテナのpidsの上限(1024)の内に検査の外の分が残る([プロセス数の上限の決め方](#プロセス数の上限の決め方))。後始末の`kill`は上限を付けずに起動するので、上限に達した枠のプロセスも止められる |
 | 並行する検査 | 枠ごとにuidが違うので、並行して動く別の検査があっても、そのworktreeとHOMEに書き込めない。枠は`/var/lib/factory/check-slots`のロックファイル(`flock`)で取る。ロックを持つプロセスの標準入力のパイプが閉じると解放されるので、ジョブが殺されても枠は塞がったままにならない |
 | 枠の使い回し | 枠は、後の実行で別のリポジトリの検査に使う。枠を取るたびに、前の実行が残したプロセス、所有権、HOME、共有の一時ディレクトリのファイル、System VのIPCを消してから使う([枠の記録と片付け](#枠の記録と片付け)) |
-| 環境変数 | 許可リストの`PATH`、`HOME`、`TMPDIR`、`LANG`と、worktreeだけを`safe.directory`にし、`safe.bareRepository`を`explicit`にするgitの設定(`GIT_CONFIG_COUNT`など)だけを渡す。workerの環境変数は1つも引き継がない。`TMPDIR`は`HOME`の下の0700のディレクトリである |
+| 環境変数 | 許可リストの`PATH`、`HOME`、`TMPDIR`、`LANG`と、worktreeだけを`safe.directory`にするgitの設定(`GIT_CONFIG_COUNT`など)だけを渡す。workerの環境変数は1つも引き継がない。`TMPDIR`は`HOME`の下の0700のディレクトリである |
 | gitの所有者の確認 | main cloneの`.git`はrootの所有のままなので、gitは所有者の違いを理由に拒む。worktreeだけを`safe.directory`にする設定を、環境変数と`HOME`の`.gitconfig`の両方に書く。検査の中のテストは、子のgitを起動するときに`GIT_`で始まる環境変数を外すことがある。環境変数だけでは、その子のgitが`fatal: detected dubious ownership`で失敗するため、環境変数を外した子にも効く`HOME`の設定を足す。`.gitconfig`はrootが検査の前に0600で書き、実行の前の受け渡しで枠のuidの所有になる。パスは引用符つきの1つの値にする。絶対パスでないものと、改行などの制御文字や`*`を含むものは、書かずに拒む。改行は別の設定を注入でき、`*`は信頼するディレクトリを広げるためである。rootのgitはこの`HOME`を読まない。後始末は`find`、`chown`、`rm`などを呼ぶだけで、gitを動かさず、ほかのgitは`GIT_CONFIG_GLOBAL=/dev/null`でグローバルの設定を読まない。検査コマンドが`.gitconfig`を書き換えても、影響は枠のuidのgitに限られる。効くのは、子が`HOME`を引き継ぐときだけである。`HOME`を差し替えてgitを起動するテストは対象外で、そのgitの対象は、テストが自分で作った一時リポジトリに限られる |
 | workerの秘密 | 別のuidのプロセスは、rootのプロセスの`/proc/<pid>/environ`とfdを読めない。`DATABASE_URL`や`WM_TOKEN`などの環境変数と、0600のファイルに届かない。枠のロックファイルと記録のディレクトリは0700である |
 | worktreeのロック | worktreeのロックファイルは0600で、検査用のユーザーは開けない。flockは読み取りで開いたファイルにもかけられるので、開けるとロックを握ってworktreeを塞げるためである |
@@ -562,6 +562,7 @@ VM全体の上限は別にあり、測ったVMでは`kernel.threads-max`が64,27
   名前の一覧は`STATIC_CHECK_GITDIR_NAMES`にあり、`HEAD`、`config`、`objects`、`refs`、`hooks`などと、`.git`の別名である。
   大文字小文字とUnicodeの別名は区別しない。
   作業木の直下がbareのリポジトリの形になると、gitがその`config`を読み、`core.fsmonitor`などに書かれたコマンドを実行しうるためである。
+  `git ls-files`が何も列挙せずに成功し、検査が素通りすることもある。
 - PRのファイルを重ねるときは、書く前に、作業木とworktreeの両方で途中のパスにsymlinkが挟まっていないかを確かめる。
   最後の要素は`O_NOFOLLOW`で開く。
   worktreeの外のファイルを、作業木へ写さないためである。
@@ -575,8 +576,8 @@ VM全体の上限は別にあり、測ったVMでは`kernel.threads-max`が64,27
   中身を変換する`filter`はコマンドを実行しうるが、その定義を読む設定はどこにも無い。
   属性(`.gitattributes`)と無視の一覧(`.gitignore`)は、PRの版を重ねないので、基準の版である。
 
-検査の環境は、`safe.bareRepository=explicit`にする(`checkEnv`の環境変数と、`HOME`の`.gitconfig`)。
-gitは名指しされないbareのリポジトリを使わないので、検査するファイルの中にbareの形のディレクトリがあっても、その設定を読まない。
+検査のコマンドのgitは、作業木の直下で、作業木をbareのリポジトリと見る前に、作業木の`.git`を見つける。
+作業木の直下のgitのディレクトリの形は上で飛ばすので、作業木には入らない。
 作業木の`.git`は、作業木のほかのファイルと同じく、受け渡しと取り戻し、外向きのsymlinkの検出と消去の対象になる。
 検査用のユーザーは`.git`の設定を書き換えられるが、rootは作業木でgitを実行せず、検査の後は作業木を消すだけである。
 そのため、書き換えた設定はrootのgitに読まれない。

@@ -77,10 +77,11 @@ export const STATIC_CHECK_UNCHECKED_CONFIG_SKIP_REASON =
 
 /**
  * 作業木の直下(パスの先頭の要素)にあると、gitが作業木をgitのディレクトリとして読みうる名前。畳み込んだ(`foldPath`)形で持つ。
- * `HEAD`、`config`、`objects/`、`refs/`がそろうと、gitはそのディレクトリをbareのリポジトリとして使い、
- * その`config`に書かれたコマンド(`core.fsmonitor`など)を実行しうる。
+ * `HEAD`、`config`、`objects/`、`refs/`がそろうと、gitはそのディレクトリをbareのリポジトリとして使い、その`config`を読む。
+ * `config`に書かれたコマンド(`core.fsmonitor`など)を実行しうるほか、`git ls-files`が何も列挙せずに成功し、検査が素通りする。
  * 残りは、gitがgitのディレクトリの中で読むファイルとディレクトリである。
- * 1つでも変われば、作業木を作らない。検査の環境は`safe.bareRepository=explicit`でも止める(`checkEnv`)。
+ * 1つでも変われば、作業木を作らない。
+ * 作業木には`indexTree`が新しい`.git`を作るので、検査のgitは作業木をbareと見る前にその`.git`を見つける。
  */
 export const STATIC_CHECK_GITDIR_NAMES: readonly string[] = [
   "head",

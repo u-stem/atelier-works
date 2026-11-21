@@ -383,39 +383,7 @@ describe("checkEnv", () => {
       env.GIT_CONFIG_COUNT,
       env.GIT_CONFIG_KEY_0,
       env.GIT_CONFIG_VALUE_0,
-    ]).toEqual(["2", "safe.directory", "/workspaces/a/b/c"]);
-  });
-
-  test("makes git use a bare repository only when it is named explicitly", () => {
-    expect([env.GIT_CONFIG_KEY_1, env.GIT_CONFIG_VALUE_1]).toEqual([
-      "safe.bareRepository",
-      "explicit",
-    ]);
-  });
-
-  test("makes the real git refuse a repository it finds implicitly as bare", () => {
-    const root = mkdtempSync(join(tmpdir(), "check-env-bare-"));
-    try {
-      const bare = join(root, "bare");
-      makeBareLookingDir(bare);
-      const result = Bun.spawnSync(["git", "rev-parse", "--git-dir"], {
-        cwd: bare,
-        env: {
-          ...checkEnv({
-            path: process.env.PATH ?? "",
-            home: root,
-            worktreeDir: bare,
-          }),
-          GIT_CONFIG_GLOBAL: "/dev/null",
-          GIT_CONFIG_NOSYSTEM: "1",
-        },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      expect(result.exitCode).not.toBe(0);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    ]).toEqual(["1", "safe.directory", "/workspaces/a/b/c"]);
   });
 
   test("holds no key outside the allow list", () => {
@@ -465,81 +433,40 @@ function listGitConfig(body: string): string {
   }
 }
 
-/** `dir`に、gitが暗黙にbareのリポジトリとして見つける形のディレクトリを作る。 */
-function makeBareLookingDir(dir: string): void {
-  const result = Bun.spawnSync(
-    ["git", "init", "-q", "--bare", "--template=", dir],
-    {
-      env: {
-        PATH: process.env.PATH ?? "",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_CONFIG_NOSYSTEM: "1",
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  if (result.exitCode !== 0) {
-    throw new Error(`git init --bare failed: ${result.stderr.toString()}`);
-  }
-}
-
 describe("checkGitConfig", () => {
-  test("makes the real git refuse a repository it finds implicitly as bare, even without GIT_ variables", () => {
-    const root = mkdtempSync(join(tmpdir(), "check-gitconfig-bare-"));
-    try {
-      const bare = join(root, "bare");
-      makeBareLookingDir(bare);
-      writeFileSync(join(root, ".gitconfig"), checkGitConfig(bare));
-      const result = Bun.spawnSync(["git", "rev-parse", "--git-dir"], {
-        cwd: bare,
-        env: {
-          PATH: process.env.PATH ?? "",
-          HOME: root,
-          GIT_CONFIG_NOSYSTEM: "1",
-        },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      expect(result.exitCode).not.toBe(0);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   test("trusts only the worktree", () => {
     expect(listGitConfig(checkGitConfig("/workspaces/a/b/c"))).toBe(
-      "safe.directory=/workspaces/a/b/c\nsafe.barerepository=explicit\n",
+      "safe.directory=/workspaces/a/b/c\n",
     );
   });
 
   test("keeps a path with a closing bracket as one value", () => {
     expect(listGitConfig(checkGitConfig("/w/a]b"))).toBe(
-      "safe.directory=/w/a]b\nsafe.barerepository=explicit\n",
+      "safe.directory=/w/a]b\n",
     );
   });
 
   test("keeps a path with a quote as one value", () => {
     expect(listGitConfig(checkGitConfig('/w/a"b'))).toBe(
-      'safe.directory=/w/a"b\nsafe.barerepository=explicit\n',
+      'safe.directory=/w/a"b\n',
     );
   });
 
   test("keeps a path with a backslash as one value", () => {
     expect(listGitConfig(checkGitConfig("/w/a\\b"))).toBe(
-      "safe.directory=/w/a\\b\nsafe.barerepository=explicit\n",
+      "safe.directory=/w/a\\b\n",
     );
   });
 
   test("keeps a path with a comment mark as one value", () => {
     expect(listGitConfig(checkGitConfig("/w/a#b;c"))).toBe(
-      "safe.directory=/w/a#b;c\nsafe.barerepository=explicit\n",
+      "safe.directory=/w/a#b;c\n",
     );
   });
 
   test("keeps a path with a section header look-alike as one value", () => {
     expect(listGitConfig(checkGitConfig("/w/[core] x"))).toBe(
-      "safe.directory=/w/[core] x\nsafe.barerepository=explicit\n",
+      "safe.directory=/w/[core] x\n",
     );
   });
 

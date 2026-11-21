@@ -84,11 +84,13 @@ type Fixture = {
  * 起動したコマンドは名前とtimeoutを記録する。
  * `fake`が結果を返したコマンドは実行せず、その結果を返す。
  * `linkToOutside`を渡すと、そのパスに、リポジトリの外のディレクトリを指すsymlinkをmainのcommitに入れる。
+ * `extraMainFiles`は、mainのcommitに足すファイルである。
  */
 async function fixture(
   options: {
     readonly fake?: (argv: readonly string[]) => CommandResult | undefined;
     readonly linkToOutside?: string;
+    readonly extraMainFiles?: Readonly<Record<string, string>>;
   } = {},
 ): Promise<Fixture> {
   const root = realpathSync(
@@ -156,6 +158,8 @@ async function fixture(
   };
   await git(["init", "-q", "-b", "main"]);
   for (const [path, content] of Object.entries(MAIN_FILES))
+    write(path, content);
+  for (const [path, content] of Object.entries(options.extraMainFiles ?? {}))
     write(path, content);
   if (options.linkToOutside !== undefined) {
     symlinkSync(outside, join(repoDir, options.linkToOutside));
@@ -267,7 +271,60 @@ function lsFiles(dir: string): string[] {
     .filter((path) => path !== "");
 }
 
+/** 作業木の中で、検査のgitと同じく名指しせずに`git`を実行する。利用者とシステムのgitの設定は読ませない。 */
+function gitIn(dir: string, args: readonly string[]) {
+  return Bun.spawnSync(["git", ...args], {
+    cwd: dir,
+    env: {
+      PATH: process.env.PATH ?? "",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+/**
+ * mainの木の直下を、gitがbareのリポジトリと見る形にするファイル。
+ * `.git`の無い木では、`git ls-files`はこのディレクトリをリポジトリとして使い、何も列挙せずに成功する。
+ */
+const BARE_LOOKING_FILES: Readonly<Record<string, string>> = {
+  HEAD: "ref: refs/heads/main\n",
+  config: "[core]\n\tbare = true\n",
+  "objects/keep": "\n",
+  "refs/keep": "\n",
+};
+
 describe("createStaticCheckWorkspace", () => {
+  test("lets git in the workspace find the new git directory", async () => {
+    const fx = await fixture();
+
+    const dir = await createReady(fx, []);
+
+    expect(
+      gitIn(dir, ["rev-parse", "--absolute-git-dir"]).stdout.toString().trim(),
+    ).toBe(join(realpathSync(dir), ".git"));
+  });
+
+  test("lets git find the new git directory even when the base tree looks like a bare repository", async () => {
+    const fx = await fixture({ extraMainFiles: BARE_LOOKING_FILES });
+
+    const dir = await createReady(fx, []);
+
+    expect(
+      gitIn(dir, ["rev-parse", "--absolute-git-dir"]).stdout.toString().trim(),
+    ).toBe(join(realpathSync(dir), ".git"));
+  });
+
+  test("lists the workspace's files even when the base tree looks like a bare repository", async () => {
+    const fx = await fixture({ extraMainFiles: BARE_LOOKING_FILES });
+
+    const dir = await createReady(fx, []);
+
+    expect(lsFiles(dir)).toContain("src/a.ts");
+  });
+
   test("extracts the base tree into a directory under the temporary root", async () => {
     const fx = await fixture();
 

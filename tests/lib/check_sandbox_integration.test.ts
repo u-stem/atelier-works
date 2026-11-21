@@ -2310,7 +2310,7 @@ suite("git in a check that drops the GIT_ variables", () => {
     results = await runChecks(
       worktree,
       [
-        "/usr/bin/env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 -u GIT_CONFIG_KEY_1 -u GIT_CONFIG_VALUE_1 git ls-files",
+        "/usr/bin/env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 git ls-files",
       ],
       sandboxIn(lockDir, POOL),
     );
