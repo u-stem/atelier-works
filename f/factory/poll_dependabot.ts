@@ -1,6 +1,8 @@
 // 10分ごとに、dependabotが開いたPRを探し、自動でマージできるかをフローと同じ収集とゲートで評価する。
 // 通ったPRだけ作業項目を`picked`で作り、フロー`f/factory/dependabot`を起動する。
 // 待つ間は作業項目を作らない。人に回すと決めたPRは、作業項目を作ってすぐ`needs_human`で終え、1回だけ通知する。
+// 対象のブランチに必須checkが無いPRは、PRごとに人に回さない。作業項目を作らず、リポジトリごとに1件の通知(未解決は1件まで)にまとめる。
+// 必須checkを読めるようになった周回で、その通知を解決する。設定が直れば、止まっていたPRは通常のゲートで評価される。
 // リポジトリにマージの保留があるときと、保留を読めないときも、作業項目を作らずに待つ。影響調査(Claudeの実行)も走らせない。
 // 保留が解けるか読めるようになれば、次の取得で自動で再開する。待ったPRの数は、周回ごとに1件の通知にまとめる。
 // `dependabot_enabled`が偽なら、GitHubにもDBにも触れずに終える。
@@ -27,6 +29,7 @@ import {
   type NewDependabotWorkItem,
   readGhRepoOpenPullRequests,
   recordFailure,
+  recordNoRequiredCheckNotice,
   resolveUnresolvedNoticesByPrefix,
   setFlowJobId,
   updateStatusIfCurrent,
@@ -44,6 +47,11 @@ import {
   type MergeHoldFailure,
   sanitizeUntrustedProse,
 } from "./lib/dependabot_flow_support.ts";
+import {
+  NO_REQUIRED_CHECK_NEXT_ACTION,
+  NO_REQUIRED_CHECK_NOTICE_KIND,
+  noRequiredCheckPrefix,
+} from "./lib/dependabot_repo_notice.ts";
 import {
   evaluateGateGroup,
   type GateCommon,
@@ -320,6 +328,16 @@ export type DependabotPollOutcome =
       readonly kind: "held";
       readonly check: Exclude<MergeHoldCheck, { kind: "clear" }>;
     }
+  | {
+      /**
+       * 対象のブランチに必須checkが無いので、作業項目を作らずに止める。待ちの記録は変えない。
+       * 取得がリポジトリごとに数えて、1件の通知にまとめる。設定が直れば、次の取得が通常のゲートで評価する。
+       */
+      readonly kind: "blocked";
+      readonly owner: string;
+      readonly repo: string;
+      readonly reason: string;
+    }
   | { readonly kind: "skipped"; readonly reason: string };
 
 /** 処理済みの記録が保持期間で消えたかもしれないほど、PRが古いか。 */
@@ -409,6 +427,7 @@ function nextPublishCheckAtMs(
  * 6. 同じheadでフローが待ちで止まった回数が上限に達していれば人に回し、直後なら起動を見送る。
  * 7. フローの準備と同じ収集(`collectGateInput`)とゲート(`evaluateGateGroup`)で評価する。
  *    通ればフローを起動し、止まれば人に回し、待ちなら作業項目を作らない。
+ *    対象のブランチに必須checkが無いときは、人に回さず、作業項目も待ちの記録も作らずに`blocked`を返す。
  *    マージできない(競合)は、dependabotがrebaseで直しうるので待ちとして扱う。
  *    待ちの起点(PRを作った時刻と、そのheadで初めて待ちを見た時刻の遅い方)から上限を超えたら、人に回す。
  * 作業項目を作る前に、リポジトリのオーナーと`factory_repo_id`を照合する。落ちたら、その理由で人に回す。
@@ -598,6 +617,10 @@ export async function processDependabotPr(
   const result = await deps.collect(owner, repo, number);
   if (result.kind === "closed") {
     return skipped(DEPENDABOT_SKIP_REASON.notOpen);
+  }
+  if (result.kind === "no_required_check") {
+    // 設定の不備なので、作業項目も待ちの記録も作らない。取得がリポジトリごとの1件の通知にまとめる。
+    return { kind: "blocked", owner, repo, reason: result.reason };
   }
   if (result.kind === "needs_human") {
     return escalate(dependabotReason("collect", result.reason));
@@ -906,6 +929,21 @@ export type PollSession = {
   readonly resolveHoldUnreadableNotices: (
     messagePrefixes: readonly string[],
   ) => Promise<number>;
+  /**
+   * 必須checkが無いPRの通知を、リポジトリごとに1件に保って残す(`recordNoRequiredCheckNotice`)。
+   * 未解決の通知があれば、影響を受けているPRの数が変わったときだけ本文を更新する。
+   * 新しく作ったときだけ`true`を返す。
+   */
+  readonly recordNoRequiredCheckNotice: (
+    owner: string,
+    repo: string,
+    prCount: number,
+  ) => Promise<boolean>;
+  /** 必須checkを読めたリポジトリの、必須checkが無いPRの通知(未解決)を解決済みにする。 */
+  readonly resolveNoRequiredCheckNotice: (
+    owner: string,
+    repo: string,
+  ) => Promise<number>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
   readonly deps: PollDependabotDeps;
 };
@@ -930,6 +968,8 @@ export type PollDependabotResult = {
   readonly failed: number;
   /** マージの保留のために待ったPRの数。保留を読めずに待ったPRを含む。 */
   readonly held: number;
+  /** 対象のブランチに必須checkが無いために止めたPRの数。通知はリポジトリごとの1件にまとめる。 */
+  readonly blocked: number;
   /** 表の代わりにRESTの一覧で候補を列挙したリポジトリの数。 */
   readonly fallback_lists: number;
   /** 一覧に戻した理由ごとの、リポジトリの数。 */
@@ -970,6 +1010,7 @@ export async function pollDependabot(
     skipped: 0,
     failed: 0,
     held: 0,
+    blocked: 0,
   };
   const noFallback = { fallback_lists: 0, fallback_reasons: {} } as const;
   if (!config.dependabot_enabled) {
@@ -992,8 +1033,35 @@ export async function pollDependabot(
     okRepos: new Set<string>(),
     failedRepos: new Set<string>(),
   };
+  // 必須checkの読み取りを、周回で覚える。同じ周回の同じリポジトリの2件目以降は、収集を呼ばずに止める。
+  // GitHubの読み取りを、PRの数だけ増やさないためである。
+  const requiredChecks = {
+    okRepos: new Map<string, { owner: string; repo: string }>(),
+    blockedReasons: new Map<string, string>(),
+    blockedPrs: new Map<
+      string,
+      { owner: string; repo: string; prCount: number }
+    >(),
+  };
   const deps: PollDependabotDeps = {
     ...session.deps,
+    collect: async (owner, repo, number) => {
+      const repository = `${owner}/${repo}`.toLowerCase();
+      const knownReason = requiredChecks.blockedReasons.get(repository);
+      if (knownReason !== undefined) {
+        return { kind: "no_required_check", reason: knownReason };
+      }
+      const result = await session.deps.collect(owner, repo, number);
+      if (result.kind === "no_required_check") {
+        requiredChecks.blockedReasons.set(repository, result.reason);
+      } else if (
+        (result.kind === "ready" || result.kind === "needs_human") &&
+        result.requiredChecksRead === true
+      ) {
+        requiredChecks.okRepos.set(repository, { owner, repo });
+      }
+      return result;
+    },
     listMergeHolds: async (owner, repo) => {
       const repository = `${owner}/${repo}`.toLowerCase();
       try {
@@ -1194,6 +1262,17 @@ export async function pollDependabot(
       continue;
     }
     counts[outcome.kind] += 1;
+    if (outcome.kind === "blocked") {
+      // 待ちの記録は変えない。通知はリポジトリごとに、周回の最後に1回だけ残す。
+      const repository = `${outcome.owner}/${outcome.repo}`.toLowerCase();
+      const known = requiredChecks.blockedPrs.get(repository);
+      requiredChecks.blockedPrs.set(repository, {
+        owner: outcome.owner,
+        repo: outcome.repo,
+        prCount: (known?.prCount ?? 0) + 1,
+      });
+      continue;
+    }
     if (outcome.kind === "held") {
       // 待ちの記録は変えない。保留が解けた後の待ちの上限の起点を、前の記録から続ける。
       if (outcome.check.kind === "held") {
@@ -1216,6 +1295,49 @@ export async function pollDependabot(
     }
     unprocessed.delete(key);
     if (outcome.kind === "waiting") fresh.set(outcome.key, outcome.wait);
+  }
+
+  // 必須checkが無いPRは、PRごとではなくリポジトリごとに1件の通知にまとめる。
+  // 通知を送るのは、通知を新しく作ったときだけである。未解決の通知があれば、PRの数が変わらない限り何もしない。
+  // 通知の失敗で周回を止めない。
+  for (const { owner, repo, prCount } of requiredChecks.blockedPrs.values()) {
+    try {
+      const created = await session.recordNoRequiredCheckNotice(
+        owner,
+        repo,
+        prCount,
+      );
+      if (created) {
+        await deps.notify({
+          kind: "dependabot_repo_blocked",
+          instance_name: config.instance_name,
+          owner,
+          repo,
+          pr_count: prCount,
+          next_action: NO_REQUIRED_CHECK_NEXT_ACTION,
+        });
+      }
+    } catch (err) {
+      session.warn("failed to record the no required check notice", {
+        owner,
+        repo,
+        error: errorMessage(err),
+      });
+    }
+  }
+  // 必須checkを読めて、止めたPRが無いリポジトリは、未解決の通知を解決する。
+  // 設定が直った後の最初の周回で、通知が閉じる。
+  for (const [repository, { owner, repo }] of requiredChecks.okRepos) {
+    if (requiredChecks.blockedPrs.has(repository)) continue;
+    try {
+      await session.resolveNoRequiredCheckNotice(owner, repo);
+    } catch (err) {
+      session.warn("failed to resolve the no required check notice", {
+        owner,
+        repo,
+        error: errorMessage(err),
+      });
+    }
   }
 
   // 保留で待ったPRは、PRごとではなく周回ごとに、種類を分けて1件ずつ通知する。通知の失敗で周回を止めない。
@@ -1424,6 +1546,7 @@ const OUTAGE_SKIPPED_RESULT: PollDependabotResult = {
   skipped: 0,
   failed: 0,
   held: 0,
+  blocked: 0,
   fallback_lists: 0,
   fallback_reasons: {},
 };
@@ -1533,6 +1656,14 @@ function pollDependabotWith(
           }
           return resolved;
         },
+        recordNoRequiredCheckNotice: (owner, repo, prCount) =>
+          recordNoRequiredCheckNotice(owner, repo, prCount, true),
+        resolveNoRequiredCheckNotice: (owner, repo) =>
+          resolveUnresolvedNoticesByPrefix(
+            NO_REQUIRED_CHECK_NOTICE_KIND,
+            noRequiredCheckPrefix(owner, repo),
+            "poll_dependabot",
+          ),
         warn: (message, fields) => log.warn(message, fields),
         deps: {
           getPr: (owner, repo, number) =>

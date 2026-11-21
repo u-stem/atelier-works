@@ -697,6 +697,7 @@ Consoleは工程0として扱う。
 | `f/factory/lib/repo_owner_gate` | script | [LIB] 対象リポジトリのオーナーIDの照合 |
 | `f/factory/lib/skill_registry` | script | [LIB] 工程ごとのスキルの登録簿 |
 | `f/factory/lib/model_policy` | script | [LIB] 工程ごとのモデルの選択 |
+| `f/factory/lib/dependabot_repo_notice` | script | [LIB] 必須チェックが無いdependabot要人手の集約通知 |
 | `f/factory/lib/manual_intake_support` | script | [LIB] 手動投入の検証とIssue本文 |
 | `f/factory/lib/supersede_support` | script | [LIB] 承認の取り消しのコメント |
 | `f/factory/lib/approval_support` | script | [LIB] 承認依頼の純粋ロジック |

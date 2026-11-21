@@ -437,9 +437,15 @@ type Harness = {
   readonly changelogDirs: string[];
   readonly createdShas: string[];
   readonly ownerChecks: (readonly [string, string])[];
+  /** 必須checkが無い通知として残そうとしたリポジトリ。 */
+  readonly noticeRecords: (readonly [string, string])[];
 };
 
 type HarnessOptions = {
+  /** 必須checkが無い通知が未解決で残っているか。残っていれば、新しく作らない。 */
+  readonly noticeExists?: boolean;
+  /** 必須checkが無い通知を残す処理が投げる例外。 */
+  readonly noticeError?: Error;
   readonly collect?: () => Promise<CollectResult>;
   readonly pr?: PullRequest | null;
   readonly install?: () => Promise<readonly CheckCommandResult[]>;
@@ -482,6 +488,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const changelogDirs: string[] = [];
   const createdShas: string[] = [];
   const ownerChecks: (readonly [string, string])[] = [];
+  const noticeRecords: (readonly [string, string])[] = [];
   const worktree: PreparedWorktree = {
     repoDir: REPO_DIR,
     worktreeDir: WORKTREE_DIR,
@@ -562,6 +569,12 @@ function harness(options: HarnessOptions = {}): Harness {
       statusUpdates.push({ to, note });
       return options.statusMoved ?? true;
     },
+    recordNoRequiredCheckNotice: async (owner, repo) => {
+      calls.push("recordNoRequiredCheckNotice");
+      noticeRecords.push([owner, repo]);
+      if (options.noticeError !== undefined) throw options.noticeError;
+      return options.noticeExists !== true;
+    },
     notify: async (event) => {
       calls.push("notify");
       notifications.push(event);
@@ -578,6 +591,7 @@ function harness(options: HarnessOptions = {}): Harness {
     changelogDirs,
     createdShas,
     ownerChecks,
+    noticeRecords,
   };
 }
 
@@ -839,6 +853,90 @@ describe("runDependabotPrepare: collect", () => {
       }),
     });
     expect(h.notifications).toEqual([]);
+  });
+
+  test("cancels with no_required_check when the base branch has no required check", async () => {
+    const { h } = await prepare({
+      collect: async () => ({
+        kind: "no_required_check",
+        reason: "the base branch has no required status check",
+      }),
+    });
+    expect(onlyUpdate(h)).toEqual({
+      to: "cancelled",
+      note: DEPENDABOT_CANCEL_NOTE.noRequiredCheck,
+    });
+  });
+
+  test("does not move to needs_human when the base branch has no required check", async () => {
+    const { h } = await prepare({
+      collect: async () => ({
+        kind: "no_required_check",
+        reason: "the base branch has no required status check",
+      }),
+    });
+    expect(h.statusUpdates.map((update) => update.to)).not.toContain(
+      "needs_human",
+    );
+  });
+
+  test("records the notice of the repository when the base branch has no required check", async () => {
+    const { h } = await prepare({
+      collect: async () => ({
+        kind: "no_required_check",
+        reason: "the base branch has no required status check",
+      }),
+    });
+    expect(h.noticeRecords).toEqual([
+      [INPUT.workItem.owner, INPUT.workItem.repo],
+    ]);
+  });
+
+  test("notifies once for the repository when the notice was created", async () => {
+    const { h } = await prepare({
+      collect: async () => ({
+        kind: "no_required_check",
+        reason: "the base branch has no required status check",
+      }),
+    });
+    expect(h.notifications.map((event) => event.kind)).toEqual([
+      "dependabot_repo_blocked",
+    ]);
+  });
+
+  test("does not notify when the notice is already unresolved", async () => {
+    const { h } = await prepare({
+      noticeExists: true,
+      collect: async () => ({
+        kind: "no_required_check",
+        reason: "the base branch has no required status check",
+      }),
+    });
+    expect(h.notifications).toEqual([]);
+  });
+
+  test("still cancels when the notice cannot be recorded", async () => {
+    const { h } = await prepare({
+      noticeError: new Error("db down"),
+      collect: async () => ({
+        kind: "no_required_check",
+        reason: "the base branch has no required status check",
+      }),
+    });
+    expect([onlyUpdate(h)?.note, h.notifications]).toEqual([
+      DEPENDABOT_CANCEL_NOTE.noRequiredCheck,
+      [],
+    ]);
+  });
+
+  test("does not record a notice for another collect result", async () => {
+    const { h } = await prepare({
+      collect: async () => ({
+        kind: "needs_human",
+        reason: "more than one package changed",
+      }),
+    });
+    expect(h.noticeRecords).toEqual([]);
   });
 
   test("moves to needs_human with a collect reason when the collect needs a human", async () => {
