@@ -1225,7 +1225,7 @@ Consoleの外の経路は、`wmill resource push`、Windmillの画面での編�
 1. `wmill job list --script-path f/factory/config_snapshot`で、直近のジョブが5分おきに成功していることを見る。
 2. `wmill job result <id>`で、`skipped_reason`が`null`であることを見る。
    最初の実行は、`baseline`が項目の数と同じになる。
-   2回目からは、変更が無ければ`baseline`、`changed`、`removed`がすべて0になる。
+   2回目からは、変更が無ければ`baseline`、`added`、`changed`、`removed`がすべて0になる。
 3. 履歴の理由コードごとの件数を読む。
 
 ```bash
@@ -1240,8 +1240,9 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 | `skipped_reason`が`history_missing` | 履歴の表か関数が無い | `mise run migrate`が済んでいるかを確かめる |
 | `skipped_reason`が`history_unreadable` | 履歴を読めなかった。何も書いていない | DBに届くかを確かめる |
 | `failed`が1以上 | 書けなかった行がある。次の回で、もう一度差として見つかる | 続くなら、DBのロックと接続を確かめる |
-| `deferred`が1以上 | 1回の上限(100行)を超えた。残りは次の回に書く | 次の回で0になることを見る |
-| `unnamed_keys`が1以上 | 項目名の形が履歴に合わず、飛ばした項目がある | resourceの項目名を、小文字、数字、下線の識別子にする |
+| `skipped_reason`が`resource_not_object` | resource全体がオブジェクトでない値(参照だけの文字列など)になり、項目を比べていない。ジョブは失敗する | Windmillの画面でresourceの値を確かめ、オブジェクトに戻す |
+| `deferred`が1以上 | 1回の上限(100行)、実行全体の時間の区切り(40秒)、知らない項目の数の上限(50項目)のどれかで、書かずに次の回へ回した差がある。ジョブは失敗する | 次の回で0になることを見る。0にならず、`unknown_keys`が50を超えているなら、resourceの知らない項目を減らす |
+| `unnamed_keys`が1以上 | 項目名の形が履歴に合わないか、照合の予約の名前(`config_snapshot_`で始まる3つ)で、飛ばした項目がある | resourceの項目名を、小文字、数字、下線の識別子にする。予約の名前の項目は消す |
 
 全停止の間は、このscheduleも止まる。
 再開した後の最初の実行が、止まっていた間の変更をまとめて書く。

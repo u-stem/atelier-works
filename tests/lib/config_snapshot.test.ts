@@ -275,6 +275,20 @@ describe("projectConfigSnapshot: every top-level item is projected", () => {
     expect(projection?.reference_keys).toBe(1);
   });
 
+  test("keeps an item that this code does not know as an unknown mark even when it holds a reference", () => {
+    const projection = projectConfigSnapshot({
+      future_item: "$var:f/factory/value",
+    });
+    expect(projection?.items.get("future_item")).toEqual({ kind: "unknown" });
+  });
+
+  test("does not count an item that this code does not know as one that held a reference", () => {
+    const projection = projectConfigSnapshot({
+      future_item: "$var:f/factory/value",
+    });
+    expect(projection?.reference_keys).toBe(0);
+  });
+
   test("skips an item whose name the history cannot hold, and counts it", () => {
     const projection = projectConfigSnapshot({
       "Not An Identifier": 1,

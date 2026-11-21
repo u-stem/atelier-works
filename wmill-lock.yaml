@@ -67,8 +67,8 @@ locks:
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea
   f/factory/lib/cleanup_support: 919ff6929746e1bc3f9b838abe0ace6500700e8dd2e96e1ddeb669809d14dce3
   f/factory/lib/config: f5f253c68e47c3c91f513e1f176c697990850b8fecdd15da89803e680a61a9f3
-  f/factory/lib/config_history: b3ec757d2f0ae334f0c75acdc76496b0bda8884a6c0ea3a6813742a620c1e8df
-  f/factory/lib/config_snapshot: 552daed11e9a06c21947975cc39148a9efa1195f3ecacece9601a341394dd8eb
+  f/factory/lib/config_history: 3eb576594fd1360733fcc98e5d7f998dffa17504f8fa81c980543c7d14f4758e
+  f/factory/lib/config_snapshot: 2c7cbea634def48f83b19edb493dcf3001400db713d911d642a630bdee5e2bcf
   f/factory/lib/conflict_fix_apply: 73deb37f4bde7db94d3e03292daba0602cbc0bc72738f8352683add161e9a3bb
   f/factory/lib/conflict_fix_prompt: 5213e3c137bac55c2d77741241d8cc4193547984baf6af59d8ef1887c7aaa23f
   f/factory/lib/conflict_fix_round: f4c4e6c279a16c09ae0193ee19cd841ee05662d374898254787fc8f0fba1494f

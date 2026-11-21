@@ -157,9 +157,14 @@ describe("projectConfigValue: json variable references", () => {
     ["a list item", "repo_allowlist", ["$jsonvar:f/factory/a"]],
     ["an enum item", "model", "$jsonvar:f/factory/a"],
     ["a hashed item", "allowed_check_commands", ["echo $jsonvar:f/factory/a"]],
-    ["an item that is not known", "brand_new_item", "$jsonvar:f/factory/a"],
   ])("redacts %s that holds one", (_name, key, value) => {
     expect(projectConfigValue(key, value)).toEqual(REDACTED_WITH_HASH);
+  });
+
+  test("keeps an item that is not known as an unknown mark without a hash", () => {
+    expect(
+      projectConfigValue("brand_new_item", "$jsonvar:f/factory/a"),
+    ).toEqual({ kind: "unknown" });
   });
 
   test("tells two different json variable references apart", () => {
@@ -271,8 +276,14 @@ describe("projectConfigValue: the hash of a redacted value", () => {
     ).toEqual(REDACTED_WITH_HASH);
   });
 
-  test("redacts an item of a name that is not known when it holds a reference", () => {
-    expect(projectConfigValue("brand_new_item", "$res:f/factory/a")).toEqual(
+  test("keeps an item of a name that is not known as an unknown mark when it holds a reference", () => {
+    expect(projectConfigValue("brand_new_item", "$res:f/factory/a")).toEqual({
+      kind: "unknown",
+    });
+  });
+
+  test("redacts an item whose name is only matched by the switch rule when it holds a reference", () => {
+    expect(projectConfigValue("brand_new_enabled", "$res:f/factory/a")).toEqual(
       REDACTED_WITH_HASH,
     );
   });

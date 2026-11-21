@@ -340,15 +340,16 @@ function listHash(items: readonly unknown[]): string {
  * 設定の1項目の値を、履歴に入れる形にする。生の値は、項目の種類が真偽、数、時刻、短い列挙のときだけ残す。
  * 項目の種類は、このファイルの表と、`*_enabled`と`allowed_labeler_`の名前で決める。表に無い項目は、値を入れず、ハッシュも添えない。
  * 値の型が項目の種類に合わないときは、値を入れず、生の値のハッシュだけを添える(`{ kind: "unknown", hash }`)。
- * 値が参照(`$var:`、`$res:`、`$jsonvar:`)を含むときは、項目の種類によらず、参照の先を調べずに伏せる(`{ redacted: true, hash }`)。
+ * 表にある項目の値が参照(`$var:`、`$res:`、`$jsonvar:`)を含むときは、項目の種類によらず、参照の先を調べずに伏せる(`{ redacted: true, hash }`)。
+ * 表に無い項目は、参照を含んでいても`{ kind: "unknown" }`のままにする。設定の読み取りが捨てる項目なので、追わない。
  */
 export function projectConfigValue(
   key: string,
   value: unknown,
 ): ConfigProjection {
-  if (holdsReference(value)) return redacted(value);
   const kind = classOf(key);
   if (kind === undefined) return UNKNOWN;
+  if (holdsReference(value)) return redacted(value);
   if (kind === "hash") return { hash: shortHash(value) };
   if (value === null) return null;
   switch (kind) {

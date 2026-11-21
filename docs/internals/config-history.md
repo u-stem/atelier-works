@@ -67,7 +67,7 @@
 | 列挙の項目(モデル名、ラベル名、ブランチ名、投稿の形式など。表にある項目) | 60字までの英数字と`.`、`_`、`:`、`/`、`-`の文字列。形に合わない、秘密らしい語か秘密の形を含む文字列は、伏せた印(`{redacted: true, hash}`) |
 | 要素が名前かURLの一覧(`repo_allowlist`、`dependabot_other_repos`、`default_reviewers`) | 件数と、要素のハッシュ(`{count, hash}`)。要素の順は比べない |
 | コマンド、URL、リポジトリ、身元に関わる項目(`check_commands_by_repo`、`allowed_check_commands`、`factory_repo`、`factory_repo_id`、`windmill_public_url`、`owners`、`allowed_labeler_`で始まる項目) | 正規化したJSONのsha256の先頭16桁(`{hash}`)。変更後の側には、前後のハッシュが違うかを示す`changed`を付ける |
-| 値が参照(`$var:`、`$res:`、`$jsonvar:`)を含む項目(項目の種類を問わない) | 参照の先を調べず、伏せた印(`{redacted: true, hash}`) |
+| 表にある項目で、値が参照(`$var:`、`$res:`、`$jsonvar:`)を含む(項目の種類を問わない) | 参照の先を調べず、伏せた印(`{redacted: true, hash}`) |
 | 表にある項目で、値の型が項目の種類に合わない | 値を入れず、値のハッシュだけを添えた`{kind: "unknown", hash}` |
 | 表に無い項目 | 値を入れず、ハッシュも添えず、`{kind: "unknown"}`だけにする |
 | 項目が設定から無くなった(照合だけが書く) | 変更後の側に`{removed: true}`。値が`null`の項目とは区別する |
@@ -79,6 +79,7 @@
 ハッシュが無いと、どの値も同じ`{kind: "unknown"}`になり、差し替えが見えなくなる。
 ハッシュを足す前の行(`{kind: "unknown"}`だけ)は、今の射影と違う値として比べるので、その項目は1回だけ変更の行が書かれる。
 表に無い項目は、ハッシュも添えない。
+値が参照を含んでいても同じで、`{kind: "unknown"}`のままにする。
 表に無い項目の値は、意図して追わない。
 追わない値にハッシュを添えると、履歴を読む人に、値の変化を見せることになるためである。
 足した項目は、名前を表へ加えるまで、種類別の射影にならない。
@@ -267,7 +268,8 @@ Consoleの外の経路で変わった設定は、`config_snapshot`が5分ごと�
    読み取りには時間の上限を付け、読めなければ、その回は何も書かずに終える。
    値がオブジェクトでなければ、項目は読まず、resource全体の行を書いて、ジョブを失敗させる([resource全体がオブジェクトでないとき](#resource全体がオブジェクトでないとき))。
 3. 最上位のすべての項目を、[値の射影](#値の射影)の規則で射影する。
-   値が参照(`$var:`、`$res:`、`$jsonvar:`)を含む項目は、値を調べず、`{redacted: true, hash}`にする。
+   表にある項目の値が参照(`$var:`、`$res:`、`$jsonvar:`)を含むときは、値を調べず、`{redacted: true, hash}`にする。
+   表に無い項目は、参照を含んでいても`{kind: "unknown"}`のままにする。
    項目名が履歴の項目名の形(小文字、数字、下線の識別子)に合わない項目は、書けないので、飛ばして数える。
    照合が自分の行に使う名前の項目も、飛ばして数える。
    名前は`config_snapshot_baseline`、`config_snapshot_unknown_keys`、`config_snapshot_resource`である。
@@ -303,7 +305,7 @@ Consoleの経路は、読み直しで値が見つからなかった項目の`aft
 値が`null`の項目を消したときの`out_of_band_removed`は、この規則のために書かれない。
 履歴の最後の`after`が`null`で、項目がresourceにあるときは、値との差として、`out_of_band_change`を書く。
 
-参照(`$var:`、`$res:`、`$jsonvar:`)を含む項目は、照合とConsoleが、同じ`projectConfigValue`で`{redacted: true, hash}`にする。
+参照(`$var:`、`$res:`、`$jsonvar:`)を含む表にある項目は、照合とConsoleが、同じ`projectConfigValue`で`{redacted: true, hash}`にする。
 ハッシュは生の値から計算するので、参照を別の参照に変えた変更は、変更として書かれる。
 参照される先の値の変更は、書かれない([参照の先の変更](#参照の先の変更))。
 
@@ -465,7 +467,7 @@ scriptは、件数だけの結果を返す。
 | `marker_written` | 基準の印の行を書いたら1、書かなかったら0 |
 | `failed` | 書けなかった行の数。印の行を含む |
 | `deferred` | 行の上限、実行全体の時間の区切り、知らない項目の数の上限で、書かずに次に回した差と項目の数。0でないと、ジョブは失敗する |
-| `reference_keys` | 参照を含み、値を見ずに伏せた項目の数 |
+| `reference_keys` | 表にある項目のうち、参照を含み、値を見ずに伏せた項目の数。表に無い項目は数えない |
 | `unnamed_keys` | 項目名の形に合わない、または照合の予約の名前で、飛ばした項目の数 |
 | `unknown_keys` | 知らない項目の総数 |
 | `skipped_reason` | 終えられなかった理由。`resource_unreadable`、`resource_not_object`、`history_missing`、`history_unreadable`のどれか。終えたときは`null`。`resource_not_object`のときだけ、ジョブを失敗させる |
