@@ -152,6 +152,7 @@ import {
   recordFailure,
   recordFindingOutcomes,
   recordMainCiRun,
+  recordNoRequiredCheckNotice,
   recordPrCiCheck,
   recordPrConflict,
   recordTransientStall,
@@ -4846,6 +4847,101 @@ check(
 await execPsqlAsync(
   target,
   `DELETE FROM factory.notices WHERE kind IN ('${decidedRecord.kind}', 'qdb_dedup_action')`,
+);
+
+// ---------------------------------------------------------------------------
+// 必須checkが無いdependabotの通知は、リポジトリごとに未解決を1件に保つ
+// ---------------------------------------------------------------------------
+
+const NO_CHECK_KIND = "dependabot_no_required_check";
+const noCheckFirst = await recordNoRequiredCheckNotice(
+  "qdb-owner",
+  "qdb-app",
+  1,
+  true,
+  sql,
+);
+const noCheckSecond = await recordNoRequiredCheckNotice(
+  "qdb-owner",
+  "qdb-app",
+  1,
+  true,
+  sql,
+);
+check(
+  "no required check notice: the first record inserts and the second does not",
+  noCheckFirst === true && noCheckSecond === false,
+  { noCheckFirst, noCheckSecond },
+);
+const noCheckOpenBefore = await listUnresolvedNoticesByKind(NO_CHECK_KIND, sql);
+const noCheckRow = noCheckOpenBefore.find((row) =>
+  row.message.startsWith("qdb-owner/qdb-app: "),
+);
+const noCheckCreatedBefore =
+  noCheckRow === undefined
+    ? null
+    : (await getNoticeById(noCheckRow.id, sql))?.created_at.getTime();
+await recordNoRequiredCheckNotice("qdb-owner", "qdb-app", 3, true, sql);
+const noCheckOpenAfter = await listUnresolvedNoticesByKind(NO_CHECK_KIND, sql);
+const noCheckUpdated = noCheckOpenAfter.find((row) =>
+  row.message.startsWith("qdb-owner/qdb-app: "),
+);
+check(
+  "no required check notice: a changed count updates the body of the open notice",
+  noCheckRow !== undefined &&
+    noCheckUpdated?.id === noCheckRow.id &&
+    noCheckUpdated.message !== noCheckRow.message &&
+    noCheckOpenAfter.filter((row) =>
+      row.message.startsWith("qdb-owner/qdb-app: "),
+    ).length === 1,
+  noCheckOpenAfter,
+);
+const noCheckRowAfter =
+  noCheckRow === undefined ? null : await getNoticeById(noCheckRow.id, sql);
+check(
+  "no required check notice: a changed count keeps created_at",
+  noCheckRowAfter !== null &&
+    noCheckCreatedBefore !== undefined &&
+    noCheckRowAfter.created_at.getTime() === noCheckCreatedBefore &&
+    noCheckRowAfter.message === noCheckUpdated?.message,
+  noCheckRowAfter,
+);
+await recordNoRequiredCheckNotice("qdb-owner", "qdb-app", 9, false, sql);
+const noCheckAfterPrepare = (
+  await listUnresolvedNoticesByKind(NO_CHECK_KIND, sql)
+).find((row) => row.message.startsWith("qdb-owner/qdb-app: "));
+check(
+  "no required check notice: a record without overwrite leaves the body",
+  noCheckAfterPrepare?.message === noCheckUpdated?.message,
+  noCheckAfterPrepare,
+);
+check(
+  "no required check notice: another repository gets its own notice",
+  (await recordNoRequiredCheckNotice(
+    "qdb-owner",
+    "qdb-other",
+    1,
+    true,
+    sql,
+  )) === true,
+);
+if (noCheckUpdated !== undefined) {
+  await resolveNoticeIfUnresolved(
+    noCheckUpdated.id,
+    NO_CHECK_KIND,
+    "qdb",
+    [],
+    sql,
+  );
+}
+check(
+  "no required check notice: a record after the resolution inserts a new notice",
+  (await recordNoRequiredCheckNotice("qdb-owner", "qdb-app", 2, true, sql)) ===
+    true,
+);
+await execPsqlAsync(
+  target,
+  `DELETE FROM factory.notices WHERE kind = '${NO_CHECK_KIND}'`,
 );
 
 // ---------------------------------------------------------------------------

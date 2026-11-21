@@ -212,6 +212,18 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("limits the no required check action to the repository ruleset", () => {
+    expect(noticeGuide("dependabot_no_required_check").action).toContain(
+      "ルールセット",
+    );
+  });
+
+  test("tells that closing every pull request leaves the notice to a person", () => {
+    expect(noticeGuide("dependabot_no_required_check").note).toContain(
+      "Consoleで解決",
+    );
+  });
+
   test("tells that the no required check notice resolves by itself", () => {
     expect(noticeGuide("dependabot_no_required_check").note).toContain(
       "自動で解決",

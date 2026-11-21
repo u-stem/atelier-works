@@ -85,7 +85,7 @@ locks:
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905
   f/factory/lib/dependabot_prompt: 2042eb22197b09fcc327b84ca5a8f72f62847c3e9c27f21ceb3ae0af5656c92b
   f/factory/lib/dependabot_registry: 3bd1e2db9f439df63be90c0d5457a0eee2368b2bc3a69515370c52353f26f975
-  f/factory/lib/dependabot_repo_notice: 07fb0b94b0d29d3d937d33e99effeb1b6de06d40a123741cfb0af41553567226
+  f/factory/lib/dependabot_repo_notice: b7e7d0766d36c0c3a8b870f4f3ec118b6df0cef95f678b9ac0ebe08951d6a783
   f/factory/lib/dependabot_support: 8d5ec8b653f26670508dfcd0a5d6ee08c48d133661c4526b28411d6a2acc1494
   f/factory/lib/deploy_approvals: 0a43a94f08925a6b6039f1e95fbd12c06cdc3f46cf7a8c2c6f6e06168d5005ac
   f/factory/lib/deploy_gate: 879dab77c4e82ddacf506646c210de9b43464d91c4473626957403ed936bc791

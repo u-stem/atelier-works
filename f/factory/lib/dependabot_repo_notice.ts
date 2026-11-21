@@ -9,7 +9,7 @@ import { assertGitHubName } from "./types.ts";
 export const NO_REQUIRED_CHECK_NOTICE_KIND = "dependabot_no_required_check";
 
 export const NO_REQUIRED_CHECK_NEXT_ACTION =
-  "対象ブランチに必須のステータスチェックを設定してください。";
+  "対象ブランチのrulesetに、必須のステータスチェックを設定してください。";
 
 const AFFECTED_COUNT_PATTERN = /影響を受けているPR: (\d+)件/;
 const REPOSITORY_PATTERN = /^([^\s/:]+\/[^\s/:]+): /;
