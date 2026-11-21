@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { INFO_NOTICE_KINDS } from "../../f/factory/lib/console_support.ts";
-import { buildNoRequiredCheckMessage } from "../../f/factory/lib/dependabot_repo_notice.ts";
 import {
   acquireImplementLease,
   addNoticeUnlessUnresolved,
@@ -145,10 +144,10 @@ import {
   recordFailure,
   recordFindingOutcomes,
   recordMainCiRun,
+  recordNoRequiredCheckNotice,
   recordOutageSkip,
   recordPrCiCheck,
   recordTransientStall,
-  recordNoRequiredCheckNotice,
   recordWorkspaceDiskUsageNotice,
   releaseConfigMisfitHolds,
   releaseFixingPrCiCheck,
@@ -202,6 +201,7 @@ import {
   updateStatusToRequirementsIfLeaseHolder,
   upsertHumanThreads,
 } from "../../f/factory/lib/db.ts";
+import { buildNoRequiredCheckMessage } from "../../f/factory/lib/dependabot_repo_notice.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import type { ReviewFindingRow } from "../../f/factory/lib/review_outcomes.ts";
 import {
@@ -3575,16 +3575,16 @@ describe("recordNoRequiredCheckNotice", () => {
 
   test("returns true when the notice was inserted", async () => {
     const { sql } = createFakeSqlClient([[{ inserted: true }]]);
-    expect(await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql)).toBe(
-      true,
-    );
+    expect(
+      await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql),
+    ).toBe(true);
   });
 
   test("returns false when an open notice was updated", async () => {
     const { sql } = createFakeSqlClient([[{ inserted: false }]]);
-    expect(await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql)).toBe(
-      false,
-    );
+    expect(
+      await recordNoRequiredCheckNotice("u-stem", "app", 2, true, sql),
+    ).toBe(false);
   });
 
   test("returns false when an open notice was left as it is", async () => {

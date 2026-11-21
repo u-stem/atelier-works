@@ -49,7 +49,6 @@ import {
   POST_INSTALL_STATUS_ARGV,
   sanitizeUntrustedProse,
 } from "../lib/dependabot_flow_support.ts";
-import { NO_REQUIRED_CHECK_NEXT_ACTION } from "../lib/dependabot_repo_notice.ts";
 import {
   type DependabotPromptInput,
   type DependabotPromptPackage,
@@ -57,6 +56,7 @@ import {
   type UnverifiedInputName,
 } from "../lib/dependabot_prompt.ts";
 import { MAX_METADATA_CHARS } from "../lib/dependabot_registry.ts";
+import { NO_REQUIRED_CHECK_NEXT_ACTION } from "../lib/dependabot_repo_notice.ts";
 import {
   evaluateGateGroup,
   type GateInput,

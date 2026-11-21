@@ -48,17 +48,17 @@ import {
   sanitizeUntrustedProse,
 } from "./lib/dependabot_flow_support.ts";
 import {
+  NO_REQUIRED_CHECK_NEXT_ACTION,
+  NO_REQUIRED_CHECK_NOTICE_KIND,
+  noRequiredCheckPrefix,
+} from "./lib/dependabot_repo_notice.ts";
+import {
   evaluateGateGroup,
   type GateCommon,
   type GateTargetFacts,
   isPublishedLongEnough,
   resolveRepoPolicy,
 } from "./lib/dependabot_support.ts";
-import {
-  NO_REQUIRED_CHECK_NEXT_ACTION,
-  NO_REQUIRED_CHECK_NOTICE_KIND,
-  noRequiredCheckPrefix,
-} from "./lib/dependabot_repo_notice.ts";
 import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
 import {
   type GhRepoStaleReason,
@@ -1546,6 +1546,7 @@ const OUTAGE_SKIPPED_RESULT: PollDependabotResult = {
   skipped: 0,
   failed: 0,
   held: 0,
+  blocked: 0,
   fallback_lists: 0,
   fallback_reasons: {},
 };

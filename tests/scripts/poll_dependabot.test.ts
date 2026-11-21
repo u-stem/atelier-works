@@ -8,11 +8,11 @@ import { join } from "node:path";
 import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
 import type { NewDependabotWorkItem } from "../../f/factory/lib/db.ts";
 import type { CollectResult } from "../../f/factory/lib/dependabot_collect.ts";
-import { NO_REQUIRED_CHECK_NEXT_ACTION } from "../../f/factory/lib/dependabot_repo_notice.ts";
 import {
   DEPENDABOT_REASON_PREFIX,
   dependabotReason,
 } from "../../f/factory/lib/dependabot_flow_support.ts";
+import { NO_REQUIRED_CHECK_NEXT_ACTION } from "../../f/factory/lib/dependabot_repo_notice.ts";
 import {
   type GateCommon,
   type GateInput,
@@ -2558,6 +2558,7 @@ describe("pollDependabot read source", () => {
       skipped: 0,
       failed: 0,
       held: 0,
+      blocked: 0,
       fallback_lists: 0,
       fallback_reasons: {},
     });

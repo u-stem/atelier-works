@@ -986,7 +986,11 @@ describe("collectAuditEvidence: notices of a missing required check", () => {
   }
 
   test("counts notices and the most affected PRs per repository", async () => {
-    const { evidence } = await evidenceWith([MESSAGE_A, MESSAGE_B, MESSAGE_A_LATER]);
+    const { evidence } = await evidenceWith([
+      MESSAGE_A,
+      MESSAGE_B,
+      MESSAGE_A_LATER,
+    ]);
     expect(evidence.no_required_check_by_repo).toEqual([
       { repository: "u-stem/app", notice_count: 2, affected_pr_count: 5 },
       { repository: "u-stem/lib", notice_count: 1, affected_pr_count: 2 },
@@ -1021,9 +1025,7 @@ describe("collectAuditEvidence: notices of a missing required check", () => {
 
   test("does not filter by the resolved state", async () => {
     const { calls } = await evidenceWith([]);
-    expect(findCall(calls, "noRequiredCheck")?.text).not.toContain(
-      "resolved",
-    );
+    expect(findCall(calls, "noRequiredCheck")?.text).not.toContain("resolved");
   });
 
   test("renders the counts per repository", async () => {

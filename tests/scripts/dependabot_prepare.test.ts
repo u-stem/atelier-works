@@ -887,7 +887,9 @@ describe("runDependabotPrepare: collect", () => {
         reason: "the base branch has no required status check",
       }),
     });
-    expect(h.noticeRecords).toEqual([[INPUT.workItem.owner, INPUT.workItem.repo]]);
+    expect(h.noticeRecords).toEqual([
+      [INPUT.workItem.owner, INPUT.workItem.repo],
+    ]);
   });
 
   test("notifies once for the repository when the notice was created", async () => {

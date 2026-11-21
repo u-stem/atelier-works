@@ -551,11 +551,9 @@ type Gathered = {
   requiredChecksRead: boolean;
 };
 
-type GatherStop = {
-  kind: "needs_human" | "no_required_check";
-  reason: string;
-  requiredChecksRead: boolean;
-};
+type GatherStop =
+  | { kind: "needs_human"; reason: string; requiredChecksRead: boolean }
+  | { kind: "no_required_check"; reason: string; requiredChecksRead: boolean };
 
 /** パスの重複を除く。最初に現れた順を保つ。 */
 function unique(paths: readonly string[]): string[] {

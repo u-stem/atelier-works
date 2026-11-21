@@ -24,7 +24,9 @@ describe("noRequiredCheckPrefix", () => {
 describe("buildNoRequiredCheckMessage", () => {
   test("starts with the lowercased repository", () => {
     expect(
-      buildNoRequiredCheckMessage("U-Stem", "App", 2).startsWith("u-stem/app: "),
+      buildNoRequiredCheckMessage("U-Stem", "App", 2).startsWith(
+        "u-stem/app: ",
+      ),
     ).toBe(true);
   });
 
