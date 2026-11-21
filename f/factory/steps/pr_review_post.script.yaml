@@ -10,6 +10,10 @@ schema:
       type: number
       description: パスを変更ファイルと照合できず、一覧に載せなかったバイナリのファイルの件数。
       default: null
+    diff_too_large:
+      type: boolean
+      description: GitHubが差分全体の提供を上限超過で拒んだかどうか。真のとき、総評に差分を読めていない旨の固定の文を足します。
+      default: null
     owner:
       type: string
       description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
@@ -61,5 +65,6 @@ schema:
     - review_sha
     - untrusted
     - binary_unlisted_count
+    - diff_too_large
     - worktree_dir
     - repo_dir

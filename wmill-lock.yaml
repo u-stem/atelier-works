@@ -112,7 +112,7 @@ locks:
   f/factory/lib/gh_collect_read: 73c7075dc3f8dd186ea835bd9311d4719003170e374b065eee4b7f98ad7261b7
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: 5db774957fb829075ee5950a1cc351c2c08eecfd93a9fe0df082ae892dad165a
-  f/factory/lib/github: 42c005a67f2710c606524ede5d67edbc9b23f4a881eaa135c873cfb6a9a93638
+  f/factory/lib/github: 6db7f0128f054a048ba7070b540dab93cf786371124103de66058de1358132aa
   f/factory/lib/github_errors: 3a72995a7a9f940ea6d6e0ca94b76e9e37c2b64d5723e0e51385f9a3fd87d6ac
   f/factory/lib/github_http: 2ac990f277298849f4ea51dda35a92e75d115fb65be24dcd3a82a3425f511454
   f/factory/lib/heartbeat: 0780343b32026cd007ea35b095340c0b7cb640fb2bab46eb8d213c0a5204673e
@@ -249,11 +249,11 @@ locks:
   f/factory/steps/pr_fix_finish: f68be3c415d377d59909f4336644b71b82d4c2569598cdae2edf15f7043a0398
   f/factory/steps/pr_fix_prepare: 87fef29118ebce97aacdc640c015eecfd9b9d02afcf53139eb397183774a7fcf
   f/factory/steps/pr_fix_verify: 00785be9ab25ec582273e49c7d91e798984bd504e529c99fa9aa355aca0565e1
-  f/factory/steps/pr_review_generate: 129b234c8e873a73b1d2c68650491441009eb2e26edc0ce3c59533e601c51d9e
+  f/factory/steps/pr_review_generate: 98180f95651b6a15251be9d3262ec53712a4176cd7b8acea643d8f7dc7d935bc
   f/factory/steps/pr_review_intake_register: 144eb184b0a0b7124b2e90f398de97b85044bfb05a41e0d4359be645bef6b5b8
-  f/factory/steps/pr_review_post: 70f5a7970f3a726ac6e8d692244e7fd7244ea1adb87257af552a9740efd4bcc2
+  f/factory/steps/pr_review_post: c00638949e45b2adf8f07a22d237b0454d6ae38c24c1f4d770e704ef56fe02c8
   f/factory/steps/pr_review_prepare: 005bdcacfb003e9dca2eb75cf72b6ce65ff97bd9039ed4d0aca44d6b9def4040
-  f/factory/steps/pr_workflow_support: f18a802315883168e29aae8b7508c913733548e56cfa8d141ec0bd99be5546e7
+  f/factory/steps/pr_workflow_support: f786e578685f24535d5acd72c2e34966ce5ccd3b18b933174926f224e6fad85f
   f/factory/steps/requirements_apply: 6428dda8b7ef58c6bb5e0adcc628e43c7e954427fa392402957a15da4760f21a
   f/factory/watch_main_ci: 835d343d078eba333b2ab32b548ca518db19fcad2d5dfd58e179e79357cbef04
   f/factory/watch_pr_ci: bb1532a44116ea2c40738fe10fda8266a3e17a34e2673df493a89f454136ed4e
