@@ -1265,6 +1265,7 @@ async function lastLabelEvent(
     { owner, repo, number },
     context,
     true,
+    true,
   );
   const payload = parseLabelEventsPayload(data);
   if (payload === null) {
@@ -3805,6 +3806,9 @@ function isGraphqlDataPayload(value: unknown): value is GraphqlDataPayload {
  * HTTPのステータスだけを確かめた呼び出し側がGraphQLの失敗を成功と取り違えないようにする。
  * `idempotent`は、読み取りのqueryなら`true`、mutationなら`false`にする。
  * `true`のときだけ、応答の無い通信断と5xxを再試行する(`github_http.ts`の`requestGitHub`を参照)。
+ * `readOnly`は、読み取りだけのquery(`true`)か、書き込みを含むmutation(`false`)かを表す。
+ * `true`のとき、再試行の後も応答が無ければ通信断として判定する。
+ * 冪等でも書き込みのmutationは`false`にする。応答が無くても書き込みが済んだかもしれず、見送りにできないため。
  */
 async function callGhGraphql(
   client: GhClient,
@@ -3812,12 +3816,13 @@ async function callGhGraphql(
   variables: Record<string, unknown>,
   context: string,
   idempotent: boolean,
+  readOnly: boolean,
 ): Promise<unknown> {
   const response = await callGhApi(client, "graphql", {
     method: "POST",
     body: { query, variables },
     idempotent,
-    ...(idempotent ? { readOnly: true } : {}),
+    ...(readOnly ? { readOnly: true } : {}),
   });
   ensureSuccess(response, context);
   const parsed = parseJsonBody(response, context);
@@ -4168,7 +4173,14 @@ export async function listReviewThreads(
       cursor === null
         ? { owner, repo, number }
         : { owner, repo, number, cursor };
-    const data = await callGhGraphql(client, query, variables, context, true);
+    const data = await callGhGraphql(
+      client,
+      query,
+      variables,
+      context,
+      true,
+      true,
+    );
     if (!isReviewThreadsGraphqlPayload(data)) {
       throw new Error(`${context}: unexpected response shape`);
     }
@@ -4211,6 +4223,7 @@ export async function resolveReviewThread(
     mutation,
     { id: threadId },
     `GraphQL resolveReviewThread ${threadId}`,
+    false,
     false,
   );
 }

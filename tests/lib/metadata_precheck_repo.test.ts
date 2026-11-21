@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import type { FileRead } from "../../f/factory/lib/metadata_patch_imports.ts";
 import { parseWmillLock } from "../../f/factory/lib/metadata_patch_yaml.ts";
 import {
+  DEFAULT_MAX_TRACE_VISITS,
   type PlanLimits,
   type PlanResult,
   planMetadataRehash,
@@ -24,7 +25,7 @@ import { minimalPassingLimit } from "./metadata_trace_budget.ts";
  * 実測が上限の9割を超えたら、上限を上げる前に、閉包の大きい共有モジュールの辺を減らせないかを確かめる。
  * 上げるときは、実測の約2倍に保ち、`docs/internals/ci-fix.md`の上限の説明の値もそろえる。
  */
-const REPO_TRACE_VISIT_CEILING = 70_000;
+const REPO_TRACE_VISIT_CEILING = DEFAULT_MAX_TRACE_VISITS * 0.35;
 
 const BASE = "b".repeat(40);
 const HEAD = "a".repeat(40);

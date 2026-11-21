@@ -6735,7 +6735,7 @@ describe("resolveUnresolvedNoticesByMessage", () => {
   test("passes the kind, message and resolver", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
     await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
-    expect(calls[0]?.values).toEqual(["poll_prs", "k", MESSAGE]);
+    expect(calls[0]?.values.slice(0, 3)).toEqual(["poll_prs", "k", MESSAGE]);
   });
 
   test("returns the number of resolved rows", async () => {
@@ -6743,6 +6743,33 @@ describe("resolveUnresolvedNoticesByMessage", () => {
     expect(
       await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql),
     ).toBe(2);
+  });
+
+  test("passes no time limit when createdBefore is omitted", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.values.slice(3)).toEqual([null, null]);
+  });
+
+  test("limits the rows to those created before createdBefore", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage(
+      "k",
+      MESSAGE,
+      "poll_prs",
+      sql,
+      new Date("2026-11-21T03:05:00Z"),
+    );
+    expect(calls[0]?.values.slice(3)).toEqual([
+      "2026-11-21T03:05:00.000Z",
+      "2026-11-21T03:05:00.000Z",
+    ]);
+  });
+
+  test("compares created_at with the given time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.text).toContain("created_at <");
   });
 });
 

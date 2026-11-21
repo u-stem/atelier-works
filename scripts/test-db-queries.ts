@@ -1783,6 +1783,36 @@ check(
   (await getNoticeById(exactOtherKind, sql))?.resolved === false,
 );
 
+// 作成より前の時刻を渡すと解決せず、作成より後の時刻を渡すと解決する。
+const timedNotice = await addNotice(
+  { kind: "claim_race_lost", message: "qdb/app#1: timed" },
+  sql,
+);
+const resolvedBeforeCreation = await resolveUnresolvedNoticesByMessage(
+  "claim_race_lost",
+  "qdb/app#1: timed",
+  "poll_prs",
+  sql,
+  new Date(Date.now() - 3_600_000),
+);
+check(
+  "exact resolve: a time before the creation resolves nothing",
+  resolvedBeforeCreation === 0 &&
+    (await getNoticeById(timedNotice, sql))?.resolved === false,
+);
+const resolvedAfterCreation = await resolveUnresolvedNoticesByMessage(
+  "claim_race_lost",
+  "qdb/app#1: timed",
+  "poll_prs",
+  sql,
+  new Date(Date.now() + 3_600_000),
+);
+check(
+  "exact resolve: a time after the creation resolves the notice",
+  resolvedAfterCreation === 1 &&
+    (await getNoticeById(timedNotice, sql))?.resolved === true,
+);
+
 // ---------------------------------------------------------------------------
 // 通知の掃除
 // ---------------------------------------------------------------------------

@@ -660,10 +660,19 @@ function requestHeaders(
 }
 
 let githubReadSuccesses = 0;
+let lastReadSuccessAt: Date | null = null;
 
 /** このプロセスで、読み取りの要求が2xxで終わった回数。通信断の事象を解決する条件の判定に使う。 */
 export function githubReadSuccessCount(): number {
   return githubReadSuccesses;
+}
+
+/**
+ * このプロセスで、読み取りの要求が最後に2xxで終わった時刻。まだ無ければ`null`。
+ * 通信断の事象の作成より後の成功だけを、解決の根拠にするために使う。
+ */
+export function githubLastReadSuccessAt(): Date | null {
+  return lastReadSuccessAt;
 }
 
 /** 通信断の判定と成功の数え上げの対象になる、読み取りの要求か。 */
@@ -914,6 +923,7 @@ async function fetchAttempt(
       const bodyText = refused ? "" : body.text;
       if (isReadRequest(request) && raw.status >= 200 && raw.status < 300) {
         githubReadSuccesses += 1;
+        lastReadSuccessAt = new Date();
       }
       return {
         response: {

@@ -20,6 +20,7 @@ import {
   GITHUB_RESPONSE_MAX_BYTES,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   type GitHubHttpClient,
+  githubLastReadSuccessAt,
   githubReadSuccessCount,
   graphqlErrorsRateLimited,
   graphqlRateLimit,
@@ -1313,6 +1314,13 @@ describe("unreachable marker and read success counter", () => {
     const before = githubReadSuccessCount();
     await requestGitHub(client(), { path: "repos/o/r" });
     expect(githubReadSuccessCount()).toBe(before + 1);
+  });
+
+  test("records the time of a GET that succeeded", async () => {
+    fakeFetch([new Response("{}", { status: 200 })]);
+    const before = Date.now();
+    await requestGitHub(client(), { path: "repos/o/r" });
+    expect(githubLastReadSuccessAt()?.getTime()).toBeGreaterThanOrEqual(before);
   });
 
   test("counts a read-only POST that succeeded", async () => {

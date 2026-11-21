@@ -7,12 +7,17 @@
 
 import {
   addNoticeUnlessUnresolved,
+  defaultSqlClient,
   recordOutageSkip,
   resolveUnresolvedNoticesByMessage,
+  type SqlClient,
 } from "./db.ts";
 import { type NotifyEvent, notifyBestEffort } from "./discord.ts";
 import { isGitHubUnreachable } from "./github_errors.ts";
-import { githubReadSuccessCount } from "./github_http.ts";
+import {
+  githubLastReadSuccessAt,
+  githubReadSuccessCount,
+} from "./github_http.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import type { NoticeRecord } from "./types.ts";
 
@@ -34,6 +39,7 @@ export type OutageDeps = {
     kind: string,
     message: string,
     resolvedBy: string,
+    createdBefore: Date,
   ) => Promise<number>;
   recordSkip: (record: {
     flow_path: string;
@@ -42,6 +48,7 @@ export type OutageDeps = {
   }) => Promise<unknown>;
   notify: (event: NotifyEvent) => Promise<void>;
   readSuccessCount: () => number;
+  lastReadSuccessAt: () => Date | null;
   now: () => Date;
   jobId: () => string;
 };
@@ -52,6 +59,8 @@ export type OutageRoundOptions = {
   log: Logger;
   /** 通知の宛先を取れない回でも、事象の記録と解決は続けるため、通知だけを外せる。 */
   webhookUrl?: string | null;
+  /** 既定の依存がDBへ書くときに使う。テストが偽物を渡す。 */
+  sql?: SqlClient;
   deps?: Partial<OutageDeps>;
 };
 
@@ -66,15 +75,23 @@ export type OutageRound = {
 };
 
 function defaultDeps(options: OutageRoundOptions): OutageDeps {
+  const sql = options.sql ?? defaultSqlClient;
   return {
-    addNotice: (record) => addNoticeUnlessUnresolved(record),
-    resolveNotices: (kind, message, resolvedBy) =>
-      resolveUnresolvedNoticesByMessage(kind, message, resolvedBy),
-    recordSkip: (record) => recordOutageSkip(record),
+    addNotice: (record) => addNoticeUnlessUnresolved(record, sql),
+    resolveNotices: (kind, message, resolvedBy, createdBefore) =>
+      resolveUnresolvedNoticesByMessage(
+        kind,
+        message,
+        resolvedBy,
+        sql,
+        createdBefore,
+      ),
+    recordSkip: (record) => recordOutageSkip(record, sql),
     notify: async (event) => {
       await notifyBestEffort(options.webhookUrl ?? "", event, options.log);
     },
     readSuccessCount: () => githubReadSuccessCount(),
+    lastReadSuccessAt: () => githubLastReadSuccessAt(),
     now: () => new Date(),
     jobId: () => process.env.WM_JOB_ID ?? "unknown",
   };
@@ -87,6 +104,13 @@ export function createOutageRound(options: OutageRoundOptions): OutageRound {
   const deferred: Deferred[] = [];
   let otherFailure = false;
   let finished = false;
+  // 回の中で最初に通信断を預かった時刻。通知の検知時刻に使う。
+  let firstDetectedAt: Date | null = null;
+
+  function defer(item: Deferred): void {
+    firstDetectedAt ??= deps.now();
+    deferred.push(item);
+  }
 
   async function ensureEvent(): Promise<void> {
     try {
@@ -98,7 +122,7 @@ export function createOutageRound(options: OutageRoundOptions): OutageRound {
       await deps.notify({
         kind: "github_unreachable",
         instance_name: options.instanceName,
-        detected_at: deps.now().toISOString(),
+        detected_at: (firstDetectedAt ?? deps.now()).toISOString(),
         next_action: GITHUB_UNREACHABLE_NEXT_ACTION,
       });
     } catch (err) {
@@ -108,12 +132,13 @@ export function createOutageRound(options: OutageRoundOptions): OutageRound {
     }
   }
 
-  async function resolveEvent(): Promise<void> {
+  async function resolveEvent(succeededAt: Date): Promise<void> {
     try {
       await deps.resolveNotices(
         GITHUB_UNREACHABLE_KIND,
         GITHUB_UNREACHABLE_MESSAGE,
         GITHUB_OUTAGE_RESOLVER,
+        succeededAt,
       );
     } catch (err) {
       log.warn("failed to resolve github outage event", {
@@ -148,13 +173,20 @@ export function createOutageRound(options: OutageRoundOptions): OutageRound {
       }
       return;
     }
-    if (deps.readSuccessCount() > startedReadSuccesses) await resolveEvent();
+    // 事象の作成より後の成功だけを根拠にする。事象より前に読み取りを終えた別のジョブの成功では解決しない。
+    const succeededAt = deps.lastReadSuccessAt();
+    if (
+      deps.readSuccessCount() > startedReadSuccesses &&
+      succeededAt !== null
+    ) {
+      await resolveEvent(succeededAt);
+    }
   }
 
   return {
     async failure(step, err, record) {
       if (isGitHubUnreachable(err)) {
-        deferred.push({ step, err, record });
+        defer({ step, err, record });
         return;
       }
       otherFailure = true;
@@ -165,7 +197,7 @@ export function createOutageRound(options: OutageRoundOptions): OutageRound {
         return await body();
       } catch (err) {
         if (isGitHubUnreachable(err)) {
-          deferred.push({
+          defer({
             step: "main",
             err,
             record: async () => {
