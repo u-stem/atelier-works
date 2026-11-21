@@ -31,14 +31,14 @@ afterAll(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-const MAIN_FILES: Readonly<Record<string, string>> = {
+const MAIN_FILES = {
   "src/a.ts": "export const a = 1;\n",
   "docs/old.md": "# old\n",
   "biome.json": '{"main": true}\n',
   ".github/workflows/ci.yml": "name: main\n",
   "package.json": '{"name": "main"}\n',
   "scripts/lint-docs.ts": "// main lint\n",
-};
+} as const;
 
 type Fixture = {
   readonly repoDir: string;
@@ -55,15 +55,20 @@ type Fixture = {
  * mainの内容を1つのcommitにしたリポジトリを作る。
  * 作業ツリーはPRのworktreeの代わりに使い、テストが書き換える。
  * `bun`の起動は`bunResult`を返して記録するだけにし、それ以外は実際に実行する。
+ * `linkToOutside`を渡すと、そのパスに、リポジトリの外のディレクトリを指すsymlinkをmainのcommitに入れる。
  */
 async function fixture(
-  bunResult: CommandResult = {
+  options: {
+    readonly bunResult?: CommandResult;
+    readonly linkToOutside?: string;
+  } = {},
+): Promise<Fixture> {
+  const bunResult = options.bunResult ?? {
     stdout: "",
     stderr: "",
     exitCode: 0,
     timedOut: false,
-  },
-): Promise<Fixture> {
+  };
   const root = realpathSync(
     mkdtempSync(join(tmpdir(), "static-check-workspace-git-")),
   );
@@ -123,6 +128,9 @@ async function fixture(
   await git(["init", "-q", "-b", "main"]);
   for (const [path, content] of Object.entries(MAIN_FILES))
     write(path, content);
+  if (options.linkToOutside !== undefined) {
+    symlinkSync(outside, join(repoDir, options.linkToOutside));
+  }
   await git(["add", "-A"]);
   await git(["commit", "-q", "-m", "main"]);
   const baseSha = await git(["rev-parse", "HEAD"]);
@@ -281,6 +289,64 @@ describe("createStaticCheckWorkspace", () => {
     expect(existsSync(join(dir, "docs/old.md"))).toBe(false);
   });
 
+  test("removes a file whose whole directory the worktree deleted", async () => {
+    const fx = await fixture();
+    fx.remove("docs");
+
+    const dir = await createReady(fx, [
+      { path: "docs/old.md", status: "deleted" },
+    ]);
+
+    expect(existsSync(join(dir, "docs/old.md"))).toBe(false);
+  });
+
+  test("refuses to write through a symlinked directory of the base tree", async () => {
+    const fx = await fixture({ linkToOutside: "linked" });
+    fx.remove("linked");
+    fx.write("linked/planted.ts", "pr\n");
+
+    const promise = create(fx, [
+      { path: "linked/planted.ts", status: "added" },
+    ]);
+
+    await expect(promise).rejects.toThrow("non-directory");
+  });
+
+  test("does not write outside the tree through a symlinked directory of the base tree", async () => {
+    const fx = await fixture({ linkToOutside: "linked" });
+    fx.remove("linked");
+    fx.write("linked/planted.ts", "pr\n");
+
+    await create(fx, [{ path: "linked/planted.ts", status: "added" }]).catch(
+      () => undefined,
+    );
+
+    expect(existsSync(join(fx.outside, "planted.ts"))).toBe(false);
+  });
+
+  test("does not delete outside the tree through a symlinked directory of the base tree", async () => {
+    const fx = await fixture({ linkToOutside: "linked" });
+    fx.remove("linked");
+
+    await create(fx, [{ path: "linked/secret.txt", status: "deleted" }]).catch(
+      () => undefined,
+    );
+
+    expect(existsSync(join(fx.outside, "secret.txt"))).toBe(true);
+  });
+
+  test("skips a directory at a changed path in the worktree", async () => {
+    const fx = await fixture();
+    fx.remove("src/a.ts");
+    fx.write("src/a.ts/inner.ts", "pr\n");
+
+    const dir = await createReady(fx, [
+      { path: "src/a.ts", status: "modified" },
+    ]);
+
+    expect(readTree(dir, "src/a.ts")).toBe(MAIN_FILES["src/a.ts"]);
+  });
+
   test("keeps the base version of a not overlaid file the worktree deleted", async () => {
     const fx = await fixture();
     fx.remove("biome.json");
@@ -393,10 +459,12 @@ describe("createStaticCheckWorkspace", () => {
 
   test("throws when the dependency install fails", async () => {
     const fx = await fixture({
-      stdout: "",
-      stderr: "lockfile had changes",
-      exitCode: 1,
-      timedOut: false,
+      bunResult: {
+        stdout: "",
+        stderr: "lockfile had changes",
+        exitCode: 1,
+        timedOut: false,
+      },
     });
 
     const promise = create(fx, []);
@@ -406,10 +474,7 @@ describe("createStaticCheckWorkspace", () => {
 
   test("removes the tree when the dependency install times out", async () => {
     const fx = await fixture({
-      stdout: "",
-      stderr: "",
-      exitCode: 143,
-      timedOut: true,
+      bunResult: { stdout: "", stderr: "", exitCode: 143, timedOut: true },
     });
 
     await create(fx, []).catch(() => undefined);
