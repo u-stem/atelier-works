@@ -95,6 +95,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["review_gated_prolonged", "レビューを投稿しない状態の継続"],
   ["dependabot_merge_held", "マージの保留による待ち"],
   ["dependabot_merge_hold_unreadable", "マージの保留を読めない状態"],
+  ["dependabot_no_required_check", "対象ブランチの必須チェックの欠落"],
   ["hold_released", "保留の解除"],
   ["doc_hash_column_missing", "要件定義の基準値の列の欠落"],
   ["design_enabled_ignored", "設計工程の有効化の無視"],

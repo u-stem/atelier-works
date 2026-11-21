@@ -70,6 +70,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   worker_load_high: "action",
   review_gated_prolonged: "action",
   dependabot_merge_hold_unreadable: "action",
+  dependabot_no_required_check: "action",
   doc_hash_column_missing: "action",
   design_enabled_ignored: "action",
   claude_usage_limit: "action",

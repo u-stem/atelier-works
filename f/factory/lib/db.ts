@@ -21,6 +21,7 @@ import {
   ACTIONABLE_WORK_ITEM_STATUSES,
   INFO_NOTICE_KINDS,
 } from "./console_support.ts";
+import { buildNoRequiredCheckMessage } from "./dependabot_repo_notice.ts";
 import { type JobIds, jobIdsFromEnv } from "./job_ids.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import {
@@ -696,7 +697,7 @@ export async function insertDependabotWorkItemUnlessActive(
 
 /**
  * dependabotのフロー自身が作業項目を取り消すときの注記(`steps/dependabot_prepare.ts`の`DEPENDABOT_CANCEL_NOTE`)。
- * 無効化、PRが閉じた、headの移動、公開日数の待ちで、どれもそのheadをまだ判断していない。
+ * 無効化、PRが閉じた、headの移動、公開日数の待ち、対象ブランチの必須チェック無しで、どれもそのheadをまだ判断していない。
  * libはstepsを読み込まないので、値を写している(テストが一致を確かめる)。
  */
 export const DEPENDABOT_REPROCESSABLE_CANCEL_NOTES: readonly string[] = [
@@ -704,6 +705,7 @@ export const DEPENDABOT_REPROCESSABLE_CANCEL_NOTES: readonly string[] = [
   "pr_closed",
   "head_moved",
   "gate_waiting",
+  "no_required_check",
 ];
 
 /**
@@ -2879,6 +2881,49 @@ export async function recordWorkspaceDiskUsageNotice(
   `;
   const row = await fetchOneRow(statement, "recordWorkspaceDiskUsageNotice");
   return parseId(row.id, "id");
+}
+
+/**
+ * 対象ブランチに必須チェックが無いdependabotの通知を、リポジトリごとに1件に保って記録する。
+ * 新しく挿入したときだけ`true`を返す。通知の送信は、`true`のときだけ行う。
+ *
+ * `overwrite`が`true`(取得)のとき、未解決の通知があれば、影響を受けているPRの数が変わったときだけ本文を更新する。
+ * 作成時刻は更新しない。`false`(フローの準備)のときは、未解決の通知があれば何もしない。
+ * 準備は自分の1件の数しか知らないので、取得が数えた件数を上書きしないためである。
+ *
+ * 並行した記録との競合は、リポジトリごとの未解決の部分一意索引
+ * (`notices_unresolved_no_required_check_key`)で受ける。
+ * 索引の述語と照合するため、種類は値で渡さずSQLに直接書く。
+ * `xmax = 0`は、その行をこの文が挿入したときだけ成り立つ。
+ */
+export async function recordNoRequiredCheckNotice(
+  owner: string,
+  repo: string,
+  prCount: number,
+  overwrite: boolean,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const message = buildNoRequiredCheckMessage(owner, repo, prCount);
+  const rows = overwrite
+    ? await sql`
+        INSERT INTO factory.notices (kind, message)
+        VALUES ('dependabot_no_required_check', ${message})
+        ON CONFLICT ((lower(split_part(message, ': ', 1))))
+          WHERE resolved = false AND kind = 'dependabot_no_required_check'
+        DO UPDATE SET message = EXCLUDED.message
+        WHERE factory.notices.message <> EXCLUDED.message
+        RETURNING (xmax = 0) AS inserted
+      `.fetch()
+    : await sql`
+        INSERT INTO factory.notices (kind, message)
+        VALUES ('dependabot_no_required_check', ${message})
+        ON CONFLICT ((lower(split_part(message, ': ', 1))))
+          WHERE resolved = false AND kind = 'dependabot_no_required_check'
+        DO NOTHING
+        RETURNING (xmax = 0) AS inserted
+      `.fetch();
+  const row = rows[0];
+  return row !== undefined && parseBoolean(row.inserted, "inserted");
 }
 
 /** `factory.notices`の行をIDで1件取得する。無ければ`null`を返す。 */

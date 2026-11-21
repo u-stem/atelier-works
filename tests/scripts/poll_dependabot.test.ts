@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
 import type { NewDependabotWorkItem } from "../../f/factory/lib/db.ts";
 import type { CollectResult } from "../../f/factory/lib/dependabot_collect.ts";
+import { NO_REQUIRED_CHECK_NEXT_ACTION } from "../../f/factory/lib/dependabot_repo_notice.ts";
 import {
   DEPENDABOT_REASON_PREFIX,
   dependabotReason,
@@ -1766,9 +1767,23 @@ type RoundLog = {
   holdResolvePrefixes: string[];
   /** 保留を読んだリポジトリ(`owner/repo`)。 */
   holdReadRepos: string[];
+  /** 必須checkが無い通知として残そうとした、リポジトリと影響を受けているPRの数。 */
+  noRequiredCheckRecords: { repository: string; prCount: number }[];
+  /** 必須checkが無い通知を解決しようとしたリポジトリ(`owner/repo`)。 */
+  noRequiredCheckResolves: string[];
+  /** 通知した内容。 */
+  notified: NotifyEvent[];
 };
 
 type RoundOptions = {
+  /** 必須checkが無い通知が未解決で残っているリポジトリ(`owner/repo`の小文字)。 */
+  readonly existingNoRequiredCheckNotices?: readonly string[];
+  /** 必須checkが無い通知を残す処理が投げる例外。 */
+  readonly noRequiredCheckRecordError?: Error;
+  /** 必須checkが無い通知を解決する処理が投げる例外。 */
+  readonly noRequiredCheckResolveError?: Error;
+  /** 収集の結果をリポジトリごとに決める。`collect`より優先する。 */
+  readonly collectByRepo?: Readonly<Record<string, CollectResult>>;
   readonly config?: FactoryConfig;
   readonly state?: unknown;
   readonly nowMs?: number;
@@ -1817,6 +1832,9 @@ function emptyLog(): RoundLog {
     holdResolves: 0,
     holdResolvePrefixes: [],
     holdReadRepos: [],
+    noRequiredCheckRecords: [],
+    noRequiredCheckResolves: [],
+    notified: [],
   };
 }
 
@@ -1841,6 +1859,7 @@ function openPr(
 
 function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
   const config = options.config ?? CONFIG;
+  const existingNotices = new Set(options.existingNoRequiredCheckNotices ?? []);
   return {
     loadConfig: async () => config,
     getState: async () => options.state ?? null,
@@ -1913,11 +1932,33 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
             throw options.holdNoticeError;
           }
         },
+        recordNoRequiredCheckNotice: async (owner, repo, prCount) => {
+          const repository = `${owner}/${repo}`.toLowerCase();
+          log.noRequiredCheckRecords.push({ repository, prCount });
+          if (options.noRequiredCheckRecordError !== undefined) {
+            throw options.noRequiredCheckRecordError;
+          }
+          const known = existingNotices.has(repository);
+          existingNotices.add(repository);
+          return !known;
+        },
+        resolveNoRequiredCheckNotice: async (owner, repo) => {
+          const repository = `${owner}/${repo}`.toLowerCase();
+          log.noRequiredCheckResolves.push(repository);
+          if (options.noRequiredCheckResolveError !== undefined) {
+            throw options.noRequiredCheckResolveError;
+          }
+          return existingNotices.delete(repository) ? 1 : 0;
+        },
         warn: (message, fields) => {
           log.warnings.push({ message, fields });
         },
         deps: {
           ...h.deps,
+          notify: async (event) => {
+            log.notified.push(event);
+            await h.deps.notify(event);
+          },
           listMergeHolds: async (owner, repo) => {
             log.holdReadRepos.push(`${owner}/${repo}`);
             return h.deps.listMergeHolds(owner, repo);
@@ -1934,8 +1975,11 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
                 })
               : options.getPr(number);
           },
-          collect: async () => {
+          collect: async (owner, repo) => {
             log.collected += 1;
+            const byRepo =
+              options.collectByRepo?.[`${owner}/${repo}`.toLowerCase()];
+            if (byRepo !== undefined) return byRepo;
             return options.collect === undefined ? ready() : options.collect();
           },
           recordFailure: async (step) => {
@@ -4393,6 +4437,338 @@ describe("pollDependabot resolves a notice though no pull request is open", () =
 
     expect(log.warnings.map((w) => w.message)).toContain(
       "failed to list the hold notices",
+    );
+  });
+});
+
+// ---- 対象のブランチに必須checkが無い ----
+
+const NO_REQUIRED_CHECK: CollectResult = {
+  kind: "no_required_check",
+  reason: "the base branch has no required status check",
+};
+
+/** 必須checkを読めたリポジトリの、ゲートを通る収集結果。 */
+function readyAfterRead(): CollectResult {
+  const result = ready();
+  return result.kind === "ready"
+    ? { ...result, requiredChecksRead: true }
+    : result;
+}
+
+const WIDGETS_PRS: DependabotPrCandidate[] = [
+  FOUND,
+  { ...FOUND, number: 13 },
+  { ...FOUND, number: 14 },
+];
+
+describe("processDependabotPr when the base branch has no required check", () => {
+  test("returns blocked with the repository of the pull request", async () => {
+    const { outcome } = await run({ collect: NO_REQUIRED_CHECK });
+
+    expect(outcome).toEqual({
+      kind: "blocked",
+      owner: "acme",
+      repo: "widgets",
+      reason: "the base branch has no required status check",
+    });
+  });
+
+  test("creates no work item", async () => {
+    const { h } = await run({ collect: NO_REQUIRED_CHECK });
+
+    expect(h.inserted).toHaveLength(0);
+  });
+
+  test("starts no flow", async () => {
+    const { h } = await run({ collect: NO_REQUIRED_CHECK });
+
+    expect(h.started).toEqual([]);
+  });
+
+  test("sends no notification for the pull request", async () => {
+    const { h } = await run({ collect: NO_REQUIRED_CHECK });
+
+    expect(h.notified).toEqual([]);
+  });
+
+  test("does not take the pull request for a wait", async () => {
+    const { outcome } = await run({ collect: NO_REQUIRED_CHECK });
+
+    expect(waitOf(outcome)).toBeNull();
+  });
+});
+
+describe("pollDependabot when the base branch has no required check", () => {
+  test("records one notice for the repository with the number of blocked pull requests", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { found: WIDGETS_PRS, collect: async () => NO_REQUIRED_CHECK }),
+    );
+
+    expect(log.noRequiredCheckRecords).toEqual([
+      { repository: "acme/widgets", prCount: 3 },
+    ]);
+  });
+
+  test("sends one notification for the repository", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { found: WIDGETS_PRS, collect: async () => NO_REQUIRED_CHECK }),
+    );
+
+    expect(log.notified).toEqual([
+      {
+        kind: "dependabot_repo_blocked",
+        instance_name: "test",
+        owner: "acme",
+        repo: "widgets",
+        pr_count: 3,
+        next_action: NO_REQUIRED_CHECK_NEXT_ACTION,
+      },
+    ]);
+  });
+
+  test("counts the blocked pull requests and nothing else", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        found: WIDGETS_PRS,
+        collect: async () => NO_REQUIRED_CHECK,
+      }),
+    );
+
+    expect([
+      result.blocked,
+      result.escalated,
+      result.started,
+      result.waiting,
+      result.failed,
+    ]).toEqual([3, 0, 0, 0, 0]);
+  });
+
+  test("reads the required checks once for the repository", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { found: WIDGETS_PRS, collect: async () => NO_REQUIRED_CHECK }),
+    );
+
+    expect(log.collected).toBe(1);
+  });
+
+  test("keeps the unresolved notice and sends nothing while it is unresolved", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        found: WIDGETS_PRS,
+        collect: async () => NO_REQUIRED_CHECK,
+        existingNoRequiredCheckNotices: ["acme/widgets"],
+      }),
+    );
+
+    expect(log.notified).toEqual([]);
+  });
+
+  test("does not resolve the notice of a repository that is still blocked", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        collect: async () => NO_REQUIRED_CHECK,
+        existingNoRequiredCheckNotices: ["acme/widgets"],
+      }),
+    );
+
+    expect(log.noRequiredCheckResolves).toEqual([]);
+  });
+
+  test("starts no flow and creates no escalation for a blocked pull request", async () => {
+    const log = emptyLog();
+
+    const result = await pollDependabot(
+      round(log, { collect: async () => NO_REQUIRED_CHECK }),
+    );
+
+    expect([result.started, result.escalated, log.failures]).toEqual([
+      0,
+      0,
+      [],
+    ]);
+  });
+
+  test("evaluates the pull request again in the next round once the setting is fixed", async () => {
+    const log = emptyLog();
+
+    const result = await pollDependabot(
+      round(log, {
+        collect: async () => readyAfterRead(),
+        existingNoRequiredCheckNotices: ["acme/widgets"],
+      }),
+    );
+
+    expect(result.started).toBe(1);
+  });
+
+  test("resolves the notice when the required checks could be read", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        collect: async () => readyAfterRead(),
+        existingNoRequiredCheckNotices: ["acme/widgets"],
+      }),
+    );
+
+    expect(log.noRequiredCheckResolves).toEqual(["acme/widgets"]);
+  });
+
+  test("resolves the notice when the pull request is handed to a person after the read", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        collect: async () => ({
+          kind: "needs_human",
+          reason: "more than one package changed",
+          requiredChecksRead: true,
+        }),
+        existingNoRequiredCheckNotices: ["acme/widgets"],
+      }),
+    );
+
+    expect(log.noRequiredCheckResolves).toEqual(["acme/widgets"]);
+  });
+
+  test("does not resolve the notice when the required checks were not read", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        collect: async () => ({
+          kind: "needs_human",
+          reason: "head sha is not a full sha",
+        }),
+        existingNoRequiredCheckNotices: ["acme/widgets"],
+      }),
+    );
+
+    expect(log.noRequiredCheckResolves).toEqual([]);
+  });
+
+  test("does not resolve the notice when the collection waits", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        collect: async () => ({
+          kind: "wait",
+          reason: "GitHub is temporarily unavailable",
+        }),
+        existingNoRequiredCheckNotices: ["acme/widgets"],
+      }),
+    );
+
+    expect(log.noRequiredCheckResolves).toEqual([]);
+  });
+
+  test("notifies again when the required check is removed after the notice was resolved", async () => {
+    const fixed = emptyLog();
+    await pollDependabot(
+      round(fixed, {
+        collect: async () => readyAfterRead(),
+        existingNoRequiredCheckNotices: ["acme/widgets"],
+      }),
+    );
+    const removed = emptyLog();
+
+    await pollDependabot(
+      round(removed, { collect: async () => NO_REQUIRED_CHECK }),
+    );
+
+    expect([fixed.noRequiredCheckResolves, removed.notified.length]).toEqual([
+      ["acme/widgets"],
+      1,
+    ]);
+  });
+
+  test("records a notice for the blocked repository only", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: GADGETS_CONFIG,
+        found: [FOUND, GADGETS_PR],
+        getPr: pullRequestOfEitherRepo,
+        collectByRepo: { "acme/widgets": NO_REQUIRED_CHECK },
+      }),
+    );
+
+    expect(log.noRequiredCheckRecords).toEqual([
+      { repository: "acme/widgets", prCount: 1 },
+    ]);
+  });
+
+  test("resolves the notice of the repository that could be read only", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: GADGETS_CONFIG,
+        found: [FOUND, GADGETS_PR],
+        getPr: pullRequestOfEitherRepo,
+        collectByRepo: {
+          "acme/widgets": NO_REQUIRED_CHECK,
+          "acme/gadgets": readyAfterRead(),
+        },
+      }),
+    );
+
+    expect(log.noRequiredCheckResolves).toEqual(["acme/gadgets"]);
+  });
+
+  test("keeps going when the notice cannot be recorded", async () => {
+    const log = emptyLog();
+
+    const result = await pollDependabot(
+      round(log, {
+        collect: async () => NO_REQUIRED_CHECK,
+        noRequiredCheckRecordError: new Error("db down"),
+      }),
+    );
+
+    expect([result.blocked, log.notified]).toEqual([1, []]);
+  });
+
+  test("warns when the notice cannot be recorded", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        collect: async () => NO_REQUIRED_CHECK,
+        noRequiredCheckRecordError: new Error("db down"),
+      }),
+    );
+
+    expect(log.warnings.map((w) => w.message)).toContain(
+      "failed to record the no required check notice",
+    );
+  });
+
+  test("warns when the notice cannot be resolved", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        collect: async () => readyAfterRead(),
+        noRequiredCheckResolveError: new Error("db down"),
+      }),
+    );
+
+    expect(log.warnings.map((w) => w.message)).toContain(
+      "failed to resolve the no required check notice",
     );
   });
 });

@@ -21,6 +21,7 @@ import { loadConfig } from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
   getWorkItem,
+  recordNoRequiredCheckNotice,
   updateStatusIfCurrent,
 } from "../lib/db.ts";
 import {
@@ -48,6 +49,7 @@ import {
   POST_INSTALL_STATUS_ARGV,
   sanitizeUntrustedProse,
 } from "../lib/dependabot_flow_support.ts";
+import { NO_REQUIRED_CHECK_NEXT_ACTION } from "../lib/dependabot_repo_notice.ts";
 import {
   type DependabotPromptInput,
   type DependabotPromptPackage,
@@ -105,12 +107,15 @@ import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
  * - `prClosed`: PRが閉じたかマージされた。
  * - `headMoved`: 取得が作業項目を作った後に、PRのheadが動いた。新しいheadは取得が別の作業項目で拾う。
  * - `gateWaiting`: ゲートか収集が待ちを返した。待つのは取得の役目なので、フローは終える。
+ * - `noRequiredCheck`: 対象ブランチに必須checkが無い。PRごとには通知せず、リポジトリごとの1件の通知にまとめる。
+ *   設定が直れば、取得が同じheadを処理し直す。
  */
 export const DEPENDABOT_CANCEL_NOTE = {
   disabled: "dependabot_disabled",
   prClosed: "pr_closed",
   headMoved: "head_moved",
   gateWaiting: "gate_waiting",
+  noRequiredCheck: "no_required_check",
 } as const;
 
 // ---- 結果 ----
@@ -276,6 +281,14 @@ export type DependabotPrepareDeps = {
     from: "picked",
     to: "cancelled" | "needs_human",
     note: string,
+  ) => Promise<boolean>;
+  /**
+   * 必須checkが無いPRの通知を、未解決が無いときだけ、影響を受けているPR1件として残す。
+   * 新しく作ったときだけ`true`を返す。未解決の通知があれば、取得が数えた件数を上書きしない。
+   */
+  readonly recordNoRequiredCheckNotice: (
+    owner: string,
+    repo: string,
   ) => Promise<boolean>;
   readonly notify: (event: NotifyEvent) => Promise<void>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
@@ -709,6 +722,32 @@ export async function runDependabotPrepare(
   }
   if (result.kind === "wait") {
     return finish("cancelled", DEPENDABOT_CANCEL_NOTE.gateWaiting);
+  }
+  if (result.kind === "no_required_check") {
+    // PRごとの通知はしない。取得と同じリポジトリごとの1件の通知にまとめる。
+    // 記録に失敗しても取り消しは進める。次の取得が同じ状態を見つけて、通知を作り直す。
+    try {
+      if (
+        await deps.recordNoRequiredCheckNotice(workItem.owner, workItem.repo)
+      ) {
+        await deps.notify({
+          kind: "dependabot_repo_blocked",
+          instance_name: input.instanceName,
+          owner: workItem.owner,
+          repo: workItem.repo,
+          pr_count: 1,
+          next_action: NO_REQUIRED_CHECK_NEXT_ACTION,
+        });
+      }
+    } catch (error) {
+      deps.warn("failed to record the no required check notice", {
+        work_item_id: workItem.id,
+        error: maskSecrets(
+          error instanceof Error ? error.message : String(error),
+        ),
+      });
+    }
+    return finish("cancelled", DEPENDABOT_CANCEL_NOTE.noRequiredCheck);
   }
   if (result.kind === "needs_human") {
     return finish("needs_human", dependabotReason("collect", result.reason));
@@ -1219,6 +1258,8 @@ export async function main(
         readChangelogFrom(defaultInstalledFs, worktreeDir, packageDir),
       updateStatus: (id, from, to, note) =>
         updateStatusIfCurrent(id, from, to, note),
+      recordNoRequiredCheckNotice: (noticeOwner, noticeRepo) =>
+        recordNoRequiredCheckNotice(noticeOwner, noticeRepo, 1, false),
       notify: async (event) => {
         // 通知は状態を記録した後に送るので、webhookを読めなくてもステップを失敗させない。
         try {

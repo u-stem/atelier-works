@@ -99,6 +99,10 @@ function isCheckName(value: unknown): value is string {
   return true;
 }
 
+/** 必須checkが0件のときの理由。収集は、この理由を設定の不備として他の理由と分ける。 */
+export const NO_REQUIRED_CHECK_REASON =
+  "the base branch has no required status check";
+
 /**
  * ブランチに効くルール(`GET repos/{o}/{r}/rules/branches/{branch}`の応答)から、必須checkの名前を取り出す。
  * `required_status_checks`の規則だけを読み、複数の規則の名前を重複なく合わせる。
@@ -147,10 +151,7 @@ export function requiredChecksFromRules(rules: unknown): RequiredChecksResult {
     }
   }
   if (names.length === 0) {
-    return {
-      ok: false,
-      reason: "the base branch has no required status check",
-    };
+    return { ok: false, reason: NO_REQUIRED_CHECK_REASON };
   }
   if (names.length > MAX_REQUIRED_CHECKS) {
     return {

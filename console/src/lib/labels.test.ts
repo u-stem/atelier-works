@@ -198,6 +198,12 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("names the missing required check of the base branch", () => {
+    expect(noticeKindLabel("dependabot_no_required_check")).toBe(
+      "対象ブランチの必須チェックの欠落",
+    );
+  });
+
   test("names the worker load alert", () => {
     expect(noticeKindLabel("worker_load_high")).toBe("workerの負荷の超過");
   });

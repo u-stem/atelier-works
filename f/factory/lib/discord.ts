@@ -110,6 +110,17 @@ export type NotifyEvent =
       next_action: string;
     }
   | {
+      /** 対象ブランチに必須チェックが無いdependabotのPRを、リポジトリごとに1回だけ知らせる。 */
+      kind: "dependabot_repo_blocked";
+      instance_name: string;
+      owner: string;
+      repo: string;
+      /** 影響を受けているPRの数。 */
+      pr_count: number;
+      /** 運用者がまず行う操作の1文。固定文を入れる。 */
+      next_action: string;
+    }
+  | {
       kind: "main_ci_failed";
       instance_name: string;
       owner: string;
@@ -498,6 +509,17 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         ],
       };
     }
+    case "dependabot_repo_blocked":
+      return {
+        title: `必須チェックが無いため、dependabotの更新PRが止まっています: ${event.owner}/${event.repo}`,
+        description: `対象ブランチに必須のステータスチェックが無いため、dependabotの更新PRを自動で進められません。影響を受けているPRは${String(event.pr_count)}件です。`,
+        url: null,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+          repoField(event.owner, event.repo),
+        ],
+      };
     case "main_ci_failed":
       return {
         title: `mainのCIが失敗しました: ${event.owner}/${event.repo}@${event.sha7}`,

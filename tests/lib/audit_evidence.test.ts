@@ -62,6 +62,7 @@ type QueryName =
   | "fixReply"
   | "reviewFindings"
   | "unresolvedNotices"
+  | "noRequiredCheck"
   | "skillVersions"
   | "deploymentHistory"
   | "versionBounds"
@@ -91,6 +92,7 @@ const QUERY_NAMES: readonly QueryName[] = [
   "fixReply",
   "reviewFindings",
   "unresolvedNotices",
+  "noRequiredCheck",
   "skillVersions",
   "deploymentHistory",
   "versionBounds",
@@ -118,6 +120,7 @@ const QUERY_FRAGMENTS: Record<QueryName, string> = {
   fixReply: "jsonb_array_elements(fr.replies)",
   reviewFindings: "jsonb_array_elements(rv.findings)",
   unresolvedNotices: "resolved = false",
+  noRequiredCheck: "kind = 'dependabot_no_required_check'",
   skillVersions: "jsonb_to_recordset",
   deploymentHistory: "SELECT occurred_at, sha_from, sha_to, result",
   versionBounds: "AS start_sha",
@@ -188,6 +191,7 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   notices: [],
   unresolved_notices_in_period: [],
   unresolved_notices_before_period: [],
+  no_required_check_by_repo: [],
   deployments: [],
   deployments_needing_host_action: 0,
   deployment_history: [],
@@ -936,6 +940,76 @@ describe("unresolved notices split by period", () => {
     const { calls } = await evidenceWith([]);
     expect(findCall(calls, "unresolvedNotices")?.values).toContain(
       PERIOD.end.toISOString(),
+    );
+  });
+});
+
+describe("collectAuditEvidence: notices of a missing required check", () => {
+  const MESSAGE_A =
+    "u-stem/app: 対象ブランチに必須のステータスチェックが無いため、dependabotの更新PRが止まっています。影響を受けているPR: 3件。";
+  const MESSAGE_A_LATER =
+    "u-stem/app: 対象ブランチに必須のステータスチェックが無いため、dependabotの更新PRが止まっています。影響を受けているPR: 5件。";
+  const MESSAGE_B =
+    "u-stem/lib: 対象ブランチに必須のステータスチェックが無いため、dependabotの更新PRが止まっています。影響を受けているPR: 2件。";
+
+  async function evidenceWith(
+    messages: string[],
+  ): Promise<{ evidence: AuditEvidence; calls: FakeCall[] }> {
+    const { sql, calls } = createRoutedSqlClient({
+      noRequiredCheck: messages.map((message) => ({ message })),
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    return { evidence, calls };
+  }
+
+  test("counts notices and the most affected PRs per repository", async () => {
+    const { evidence } = await evidenceWith([MESSAGE_A, MESSAGE_B, MESSAGE_A_LATER]);
+    expect(evidence.no_required_check_by_repo).toEqual([
+      { repository: "u-stem/app", notice_count: 2, affected_pr_count: 5 },
+      { repository: "u-stem/lib", notice_count: 1, affected_pr_count: 2 },
+    ]);
+  });
+
+  test("is empty when no notice was created in the period", async () => {
+    const { evidence } = await evidenceWith([]);
+    expect(evidence.no_required_check_by_repo).toEqual([]);
+  });
+
+  test("groups a body without a readable repository under 未設定 with zero PRs", async () => {
+    const { evidence } = await evidenceWith(["本文の形式が違う"]);
+    expect(evidence.no_required_check_by_repo).toEqual([
+      { repository: "未設定", notice_count: 1, affected_pr_count: 0 },
+    ]);
+  });
+
+  test("counts zero PRs for a body whose count is unreadable", async () => {
+    const { evidence } = await evidenceWith(["u-stem/app: 件数なし"]);
+    expect(evidence.no_required_check_by_repo).toEqual([
+      { repository: "u-stem/app", notice_count: 1, affected_pr_count: 0 },
+    ]);
+  });
+
+  test("only counts notices created inside the period", async () => {
+    const { calls } = await evidenceWith([]);
+    const values = findCall(calls, "noRequiredCheck")?.values ?? [];
+    expect(values).toContain(PERIOD.start.toISOString());
+    expect(values).toContain(PERIOD.end.toISOString());
+  });
+
+  test("does not filter by the resolved state", async () => {
+    const { calls } = await evidenceWith([]);
+    expect(findCall(calls, "noRequiredCheck")?.text).not.toContain(
+      "resolved",
+    );
+  });
+
+  test("renders the counts per repository", async () => {
+    const { evidence } = await evidenceWith([MESSAGE_A, MESSAGE_A_LATER]);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "u-stem/app: 通知2件 / 影響を受けているPR最大5件",
     );
   });
 });

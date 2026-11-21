@@ -201,6 +201,18 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells to set a required check when the base branch has none", () => {
+    expect(noticeGuide("dependabot_no_required_check").action).toContain(
+      "必須のステータスチェックを設定",
+    );
+  });
+
+  test("tells that the no required check notice resolves by itself", () => {
+    expect(noticeGuide("dependabot_no_required_check").note).toContain(
+      "自動で解決",
+    );
+  });
+
   test("tells where to see the load behind the worker load alert", () => {
     expect(noticeGuide("worker_load_high").action).toContain("システム");
   });

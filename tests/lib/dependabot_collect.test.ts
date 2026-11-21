@@ -1893,7 +1893,7 @@ describe("collectGateInput repository policy", () => {
     expect(result.common.requiredChecks).toEqual(["build"]);
   });
 
-  test("hands another repository to a person when the rules require no check", async () => {
+  test("reports a missing required check of another repository as no_required_check", async () => {
     const result = await collectGateInput(
       setup({ policy: "other", rules: async () => [{ type: "deletion" }] })
         .deps,
@@ -1901,8 +1901,71 @@ describe("collectGateInput repository policy", () => {
     );
 
     expect(result).toEqual({
-      kind: "needs_human",
+      kind: "no_required_check",
       reason: "the base branch has no required status check",
+    });
+  });
+
+  test("reports no_required_check when the rules require an empty list of checks", async () => {
+    const result = await collectGateInput(
+      setup({
+        policy: "other",
+        rules: async () => [
+          {
+            type: "required_status_checks",
+            parameters: { required_status_checks: [] },
+          },
+        ],
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("no_required_check");
+  });
+
+  test("marks a ready result of another repository as having read the required checks", async () => {
+    const result = await readyResult({
+      policy: "other",
+      checks: [BUILD_CHECK],
+    });
+
+    expect(result.requiredChecksRead).toBe(true);
+  });
+
+  test("does not mark a ready result of the primary repository as having read the required checks", async () => {
+    const result = await readyResult({ policy: "primary" });
+
+    expect(result.requiredChecksRead).toBeUndefined();
+  });
+
+  test("marks a needs_human found after the required checks were read", async () => {
+    const result = await collectGateInput(
+      setup({
+        policy: "other",
+        contents: {
+          "package.json": { before: MANIFEST_BEFORE, after: MANIFEST_BEFORE },
+          "bun.lock": { before: LOCK_BEFORE, after: LOCK_BEFORE },
+        },
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result).toEqual({
+      kind: "needs_human",
+      reason: expect.any(String),
+      requiredChecksRead: true,
+    });
+  });
+
+  test("does not mark a needs_human found before the required checks were read", async () => {
+    const result = await collectGateInput(
+      setup({ policy: "off" }).deps,
+      PR_REF,
+    );
+
+    expect(result).toEqual({
+      kind: "needs_human",
+      reason: "dependabot is not enabled for this repository",
     });
   });
 

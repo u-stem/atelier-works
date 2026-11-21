@@ -26,6 +26,7 @@ import {
   lockfilePackages,
   MANIFEST_LOCKFILES,
   MAX_GROUP_TARGETS,
+  NO_REQUIRED_CHECK_REASON,
   REQUIRED_CHECKS,
   type RepoPolicy,
   requiredChecksFromRules,
@@ -337,9 +338,21 @@ export type CollectResult =
       baseSha: string;
       /** `files[].before`を読んだmerge-baseのsha。 */
       mergeBaseSha: string;
+      /** リポジトリのルールから必須checkを読めたとき`true`。省略は読んでいない。 */
+      requiredChecksRead?: true;
     }
   | { kind: "wait"; reason: string }
-  | { kind: "needs_human"; reason: string }
+  | {
+      kind: "needs_human";
+      reason: string;
+      /** リポジトリのルールから必須checkを読めたあとの停止のとき`true`。省略は読んでいない。 */
+      requiredChecksRead?: true;
+    }
+  /**
+   * 対象のブランチに必須checkが1件も無い。設定の不備で、PRごとの要人手にしない。
+   * 呼び出し側がリポジトリごとの1件の通知にまとめる。
+   */
+  | { kind: "no_required_check"; reason: string }
   /** PRが閉じたかmergeされた。人に通知する対象ではない。 */
   | { kind: "closed"; reason: string };
 
@@ -392,10 +405,13 @@ const BASE_NOT_EXPECTED = "base branch is not the expected one";
 
 /** 収集を打ち切って、待つか人に回すかを返すための内部の例外。 */
 class Stop extends Error {
-  readonly kind: "wait" | "needs_human";
+  readonly kind: "wait" | "needs_human" | "no_required_check";
   readonly reason: string;
 
-  constructor(kind: "wait" | "needs_human", reason: string) {
+  constructor(
+    kind: "wait" | "needs_human" | "no_required_check",
+    reason: string,
+  ) {
     super(reason);
     this.name = "Stop";
     this.kind = kind;
@@ -515,7 +531,14 @@ async function readRequiredChecks(
     throw error;
   }
   const derived = requiredChecksFromRules(rules);
-  if (!derived.ok) throw new Stop("needs_human", derived.reason);
+  if (!derived.ok) {
+    throw new Stop(
+      derived.reason === NO_REQUIRED_CHECK_REASON
+        ? "no_required_check"
+        : "needs_human",
+      derived.reason,
+    );
+  }
   return derived.checks;
 }
 
@@ -525,6 +548,13 @@ type Gathered = {
   targets: GateTargetFacts[];
   packages: CollectedPackage[];
   mergeBaseSha: string;
+  requiredChecksRead: boolean;
+};
+
+type GatherStop = {
+  kind: "needs_human" | "no_required_check";
+  reason: string;
+  requiredChecksRead: boolean;
 };
 
 /** パスの重複を除く。最初に現れた順を保つ。 */
@@ -541,8 +571,9 @@ async function gather(
   pr: { owner: string; repo: string; number: number },
   first: PullRequest,
   baseSha: string,
-): Promise<Gathered | { kind: "needs_human"; reason: string }> {
+): Promise<Gathered | GatherStop> {
   const headSha = first.headSha;
+  let requiredChecksRead = false;
   try {
     const policy = deps.repoPolicy(pr.owner, pr.repo);
     if (policy === "off") {
@@ -551,10 +582,11 @@ async function gather(
         "dependabot is not enabled for this repository",
       );
     }
-    const requiredChecks: readonly string[] =
-      policy === "primary"
-        ? REQUIRED_CHECKS
-        : await readRequiredChecks(deps, pr, first);
+    let requiredChecks: readonly string[] = REQUIRED_CHECKS;
+    if (policy !== "primary") {
+      requiredChecks = await readRequiredChecks(deps, pr, first);
+      requiredChecksRead = true;
+    }
     const comparison = await deps.compareCommits(
       pr.owner,
       pr.repo,
@@ -582,7 +614,13 @@ async function gather(
     }
 
     const derived = deriveTargets(files, deps.allowGroups);
-    if (derived.kind === "needs_human") return derived;
+    if (derived.kind === "needs_human") {
+      return {
+        kind: "needs_human",
+        reason: derived.reason,
+        requiredChecksRead,
+      };
+    }
 
     // 対象ごとに順に読む。同時に読むと、registryへの負荷が対象の数だけ重なる。
     const targets: GateTargetFacts[] = [];
@@ -619,6 +657,7 @@ async function gather(
       mergeBaseSha,
       targets,
       packages,
+      requiredChecksRead,
       common: {
         authorLogin: first.authorLogin,
         authorType: first.authorType ?? "",
@@ -640,7 +679,12 @@ async function gather(
   } catch (error) {
     const stop = toStop(error);
     if (stop === null || stop.kind === "wait") throw error;
-    return { kind: "needs_human", reason: stop.reason };
+    return {
+      kind: stop.kind,
+      reason: stop.reason,
+      requiredChecksRead:
+        requiredChecksRead || stop.kind === "no_required_check",
+    };
   }
 }
 
@@ -692,9 +736,23 @@ async function collect(
       reason: "base branch moved while the facts were collected",
     };
   }
-  if (gathered.kind === "needs_human") return gathered;
+  if (gathered.kind === "no_required_check") {
+    return { kind: "no_required_check", reason: gathered.reason };
+  }
+  if (gathered.kind === "needs_human") {
+    return gathered.requiredChecksRead
+      ? {
+          kind: "needs_human",
+          reason: gathered.reason,
+          requiredChecksRead: true,
+        }
+      : { kind: "needs_human", reason: gathered.reason };
+  }
   return {
     kind: "ready",
+    ...(gathered.requiredChecksRead
+      ? { requiredChecksRead: true as const }
+      : {}),
     // 計算が遅れることのある値なので、最後に読み直した値を使う。真偽に丸めない。
     common: { ...gathered.common, mergeable: last.mergeable },
     targets: gathered.targets,
@@ -712,6 +770,8 @@ async function collect(
  * チェックを読み、registryの事実を読み、PRとbaseのshaを読み直して動いていないことを確かめる。
  * PRが閉じているかmergeされている場合は、何も集めずに`closed`にする。
  * baseが期待したブランチでないときは、`needs_human`にする。
+ * 対象のブランチに必須checkが1件も無いときは、`no_required_check`にする(PRごとの`needs_human`にしない)。
+ * 必須checkをリポジトリのルールから読めたあとの結果は、`requiredChecksRead: true`を持つ。
  * 集めている間にheadかbaseのshaが動いたときは、`wait`にして次の周回でやり直す。
  * 一時的な失敗は`wait`、応答を読めない失敗とregistryが拒んだ失敗は`needs_human`にし、
  * 知らない失敗は握りつぶさずに投げる。
