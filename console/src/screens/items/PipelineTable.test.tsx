@@ -351,8 +351,12 @@ describe("PipelineTable with no active work item", () => {
     );
   }
 
-  test("does not say that old active work items may be missing, since they are always fetched", () => {
-    expect(renderActive()).not.toContain("取得が上限に達している");
+  test("says there is no active work item", () => {
+    expect(renderActive()).toContain("進行中の作業項目はありません");
+  });
+
+  test("offers the button to show every work item", () => {
+    expect(renderActive()).toContain("すべて(1件)を表示");
   });
 });
 

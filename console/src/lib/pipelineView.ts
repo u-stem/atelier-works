@@ -509,7 +509,7 @@ export function showsRequirementsLink(row: Pick<PipelineRow, "kind">): boolean {
 export type PipelineGroupCounts = {
   /** 進行中の状態の行。更新が古くても取る。 */
   readonly active: number;
-  /** PR待ちの状態の行。更新が古くても取る。 */
+  /** PR待ちの状態の行。直近の期間のものを新しい順に取る。 */
   readonly prOpen: number;
   /** それ以外の終端の状態の行。直近の期間のものを新しい順に取る。 */
   readonly recent: number;
@@ -541,7 +541,7 @@ export function pipelineReachedLimit(count: number, limit: number): boolean {
 
 /**
  * 表が見ている範囲の注記。
- * 進行中とPR待ちは更新が古くても、完了などは直近の期間のものを取る。
+ * 進行中は更新が古くても、PR待ちと完了などは直近の期間のものを取る。
  * 組ごとの上限に達したときは、その組の古い行が漏れているかもしれないことを伝える。
  */
 export function pipelineScopeNote(
@@ -554,7 +554,7 @@ export function pipelineScopeNote(
     pipelineReachedLimit(counts.prOpen, limit) ? "PR待ち" : null,
     pipelineReachedLimit(counts.recent, limit) ? "完了など" : null,
   ].filter((name) => name !== null);
-  const base = `進行中とPR待ちは更新が古くても、完了などは直近${days}日に更新されたものを表示しています。`;
+  const base = `進行中は更新が古くても、PR待ちと完了などは直近${days}日に更新されたものを表示しています。`;
   return cut.length === 0
     ? base
     : `${base}${cut.join("、")}は${limit}件に達しているため、古い行を取得できていない場合があります。`;

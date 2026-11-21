@@ -2661,11 +2661,11 @@ export async function runConsoleQuery(
       return rows.map(toInboxRow);
     }
     case "pipeline": {
-      // 進行中、PR待ち、終端の3つの組を、組ごとに`limit`件の上限で取る。
-      // 進行中とPR待ちは、更新が古くても、期間で絞らずに新しい順に取る。
-      // 期間と件数で絞るのは、画面が新しさだけで見る終端の状態に限る。
+      // 進行中、PR待ち、終端の3つの組を、組ごとに`limit`件の上限で取る(最大で`limit`の3倍の行になる)。
+      // 進行中だけは、更新が古くても、期間で絞らずに新しい順に取る。
+      // PR待ちと終端は、直近の期間のものを新しい順に取る。
       // 組ごとに上限を持たせるのは、ほかの組が上限を埋めても、古い進行中の作業項目が一覧から黙って消えないためである。
-      // マージ済みのPRは`pr_open`のまま残り続けるので、PR待ちの行は増え続ける。
+      // マージ済みのPRは`pr_open`のまま残り続けるので、PR待ちは期間で絞り、進行中の枠を取り合わせない。
       const rows = await sql`
         (
           SELECT
@@ -2685,6 +2685,7 @@ export async function runConsoleQuery(
             updated_at, kind, pr_number, fix_round, branch, pr_url
           FROM factory.v_pipeline
           WHERE status = 'pr_open'
+            AND updated_at >= ${since}::timestamptz
           ORDER BY updated_at DESC
           LIMIT ${limit}::integer
         )

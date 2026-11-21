@@ -1746,8 +1746,14 @@ check(
 );
 
 // ---------------------------------------------------------------------------
-// 作業項目の一覧は、進行中とPR待ちの状態を、期間と件数で切らずに取る
+// 作業項目の一覧は、進行中を期間で切らず、組ごとの上限で取る
 // ---------------------------------------------------------------------------
+
+// 前の検査が途中で止まって残した行で、数が狂わないようにする。
+await execPsqlAsync(
+  target,
+  "DELETE FROM factory.work_items WHERE owner = 'qdb-pipe'",
+);
 
 const pipeOldApproved = await auditItem(
   "pipe-old-approved",
@@ -1791,8 +1797,8 @@ check(
   pipeIds,
 );
 check(
-  "pipeline: a pr_open item older than the period stays in the list",
-  pipeIds.includes(pipeOldPrOpen),
+  "pipeline: a pr_open item older than the period is not in the list",
+  !pipeIds.includes(pipeOldPrOpen),
   pipeIds,
 );
 // PR待ちの行が上限を超えて新しく積まれても、古い進行中の行は押し出されない。
@@ -1814,9 +1820,18 @@ for (let i = 0; i < pipeActiveCount + 2; i += 1) {
     "app",
   );
 }
-const pipeCrowded = (
-  await runConsoleQuery("pipeline", pipeActiveCount, 90, sql)
-).map((row) => Reflect.get(row, "work_item_id"));
+const pipeCrowdedRows = await runConsoleQuery(
+  "pipeline",
+  pipeActiveCount,
+  90,
+  sql,
+);
+const pipeCrowded = pipeCrowdedRows.map((row) =>
+  Reflect.get(row, "work_item_id"),
+);
+const pipeCrowdedStatuses = pipeCrowdedRows.map((row) =>
+  Reflect.get(row, "status"),
+);
 check(
   "pipeline: newer pr_open rows beyond the limit do not push out an old approved item",
   pipeCrowded.includes(pipeOldApproved),
@@ -1824,9 +1839,9 @@ check(
 );
 check(
   "pipeline: the pr_open rows are cut by their own limit",
-  (await runConsoleQuery("pipeline", pipeActiveCount, 90, sql)).filter(
-    (row) => Reflect.get(row, "status") === "pr_open",
-  ).length <= pipeActiveCount,
+  pipeCrowdedStatuses.filter((status) => status === "pr_open").length ===
+    pipeActiveCount,
+  { pipeActiveCount, pipeCrowdedStatuses },
 );
 check(
   "pipeline: a settled item inside the period is in the list",

@@ -623,7 +623,7 @@ describe("showsRequirementsLink", () => {
 
 describe("pipelineScopeNote", () => {
   const BASE =
-    "進行中とPR待ちは更新が古くても、完了などは直近90日に更新されたものを表示しています。";
+    "進行中は更新が古くても、PR待ちと完了などは直近90日に更新されたものを表示しています。";
 
   test("names the group whose limit was reached", () => {
     expect(
@@ -874,6 +874,14 @@ describe("pipelineGroupCounts", () => {
         row({ work_item_id: 3, status: "blocked" }),
       ]).active,
     ).toBe(3);
+  });
+
+  // backendは、知らない状態を進行中の組に入れる(終端の状態に挙げた以外はすべて進行中)。
+  test("counts a status that it does not know as active, like the backend", () => {
+    expect(
+      pipelineGroupCounts([row({ work_item_id: 1, status: "added_later" })])
+        .active,
+    ).toBe(1);
   });
 
   test("counts the items waiting for a merge as their own group", () => {

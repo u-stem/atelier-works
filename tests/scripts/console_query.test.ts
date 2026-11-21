@@ -623,7 +623,7 @@ describe("runConsoleQuery", () => {
     expect(calls[0]?.values).toContain(50);
   });
 
-  test("pipeline: reads the rows of the active and pr_open statuses without the period", async () => {
+  test("pipeline: reads the active rows without the period", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
 
     await runConsoleQuery("pipeline", 50, 7, sql);
@@ -643,13 +643,13 @@ describe("runConsoleQuery", () => {
     );
   });
 
-  test("pipeline: reads the pr_open rows as their own group with their own limit", async () => {
+  test("pipeline: reads the pr_open rows as their own group, bounded by the period", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
 
     await runConsoleQuery("pipeline", 50, 7, sql);
 
     expect(calls[0]?.text).toMatch(
-      /WHERE status = 'pr_open'\s+ORDER BY updated_at DESC\s+LIMIT/,
+      /WHERE status = 'pr_open'\s+AND updated_at >=\s+\? ::timestamptz\s+ORDER BY updated_at DESC\s+LIMIT/,
     );
   });
 
