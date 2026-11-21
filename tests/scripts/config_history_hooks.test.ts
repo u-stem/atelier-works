@@ -54,6 +54,7 @@ describe("the config update script writes the config history", () => {
       afterWrite?: unknown;
       historyResult?: boolean;
       writeError?: Error;
+      readBackError?: Error;
     } = {},
   ): Harness {
     const appended: ConfigChangeInput[] = [];
@@ -67,7 +68,10 @@ describe("the config update script writes the config history", () => {
         events.push("read");
         reads += 1;
         if (reads === 1) return options.raw ?? RAW;
-        return options.afterWrite ?? written[written.length - 1];
+        if (options.readBackError !== undefined) throw options.readBackError;
+        return "afterWrite" in options
+          ? options.afterWrite
+          : written[written.length - 1];
       },
       writeConfig: async (value) => {
         events.push("write");
@@ -127,12 +131,97 @@ describe("the config update script writes the config history", () => {
     expect(appended).toEqual([]);
   });
 
-  test("does not append when the read back differs from what was written", async () => {
+  test("appends with the unverified reason when the read back differs from what was written", async () => {
     const { ports, appended } = harness({
+      afterWrite: { ...RAW, daily_budget_usd: 35 },
+    });
+    await updateConfigFromConsole("daily_budget_usd", 50, 20, ports);
+    expect(appended).toEqual([
+      {
+        key: "daily_budget_usd",
+        before: 50,
+        after: 35,
+        actor: "operator",
+        source: "console",
+        reason: "console_update_unverified",
+      },
+    ]);
+  });
+
+  test("appends the intended value when the read back could not be read", async () => {
+    const { ports, appended } = harness({ readBackError: new Error("down") });
+    await updateConfigFromConsole("daily_budget_usd", 50, 20, ports);
+    expect(appended).toMatchObject([
+      { after: 20, reason: "console_update_unverified" },
+    ]);
+  });
+
+  test("appends the intended value when the read back is not an object", async () => {
+    const { ports, appended } = harness({ afterWrite: "garbled" });
+    await updateConfigFromConsole("daily_budget_usd", 50, 20, ports);
+    expect(appended).toMatchObject([
+      { after: 20, reason: "console_update_unverified" },
+    ]);
+  });
+
+  test("appends the value read back when only another key differs", async () => {
+    const { ports, appended } = harness({
+      afterWrite: { ...RAW, daily_budget_usd: 20, implement_enabled: false },
+    });
+    await updateConfigFromConsole("daily_budget_usd", 50, 20, ports);
+    expect(appended).toMatchObject([
+      { after: 20, reason: "console_update_unverified" },
+    ]);
+  });
+
+  test("appends the value read back for a list item that differs", async () => {
+    const { ports, appended } = harness({
+      afterWrite: {
+        ...RAW,
+        repo_allowlist: ["https://github.com/octo-owner/a"],
+      },
+    });
+    await updateConfigFromConsole(
+      "repo_allowlist",
+      ["https://github.com/octo-owner/a"],
+      ["https://github.com/octo-owner/a", "https://github.com/octo-owner/b"],
+      ports,
+    );
+    expect(appended).toMatchObject([
+      {
+        before: ["https://github.com/octo-owner/a"],
+        after: ["https://github.com/octo-owner/a"],
+        reason: "console_update_unverified",
+      },
+    ]);
+  });
+
+  test("records a partial outcome and marks it when the unverified history could not be written", async () => {
+    const { ports, sqlCalls } = harness({
+      afterWrite: { ...RAW, daily_budget_usd: 50 },
+      historyResult: false,
+    });
+    await updateConfigFromConsole("daily_budget_usd", 50, 20, ports);
+    expect([
+      sqlCalls.find((call) => call.text.startsWith("UPDATE"))?.values[0],
+      outcomeChanges(sqlCalls),
+    ]).toEqual(["partial", '{"verified":false,"history_recorded":false}']);
+  });
+
+  test("leaves the action record without a mark when the unverified history is written", async () => {
+    const { ports, sqlCalls } = harness({
       afterWrite: { ...RAW, daily_budget_usd: 50 },
     });
     await updateConfigFromConsole("daily_budget_usd", 50, 20, ports);
-    expect(appended).toEqual([]);
+    expect(outcomeChanges(sqlCalls)).toBe('{"verified":false}');
+  });
+
+  test("keeps the written configuration when the unverified history is appended", async () => {
+    const { ports, written } = harness({
+      afterWrite: { ...RAW, daily_budget_usd: 50 },
+    });
+    await updateConfigFromConsole("daily_budget_usd", 50, 20, ports);
+    expect(written).toEqual([{ ...RAW, daily_budget_usd: 20 }]);
   });
 
   test("does not append when the write fails", async () => {

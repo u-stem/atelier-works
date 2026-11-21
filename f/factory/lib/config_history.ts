@@ -3,7 +3,9 @@
 // 履歴の書き込みは、Consoleの設定の更新と全停止のscriptが、変更の成功の後に呼ぶ。
 // 履歴を書けなくても、設定の書き込みは戻さない。失敗は結果で返し、投げない。
 // 連鎖のハッシュはSQL(`factory.config_history_row_hash`)が計算するので、言語をまたぐ正規化は持たない。
-// 射影のハッシュ(コマンドとURLと身元に関わる値を、生の値の代わりに残すもの)だけは、このファイルが計算する。
+// 射影のハッシュ(コマンドとURLと身元に関わる値の、生の値の代わりに残す変化の検知の印)だけは、このファイルが計算する。
+// ハッシュは塩を付けない。値の変化は検知できるが、値を隠すものではない。
+// 候補が少ない値は、辞書や総当たりで元の値を当てられる。
 //
 // Console用workerのscriptがimportでたどれるので、保護パスの中のファイルだけを読む。
 // 共通の部品(`lib/types.ts`、`lib/db.ts`、`lib/log.ts`)には頼らず、必要な型ガードをここに持つ。
@@ -15,12 +17,15 @@ import { holdsReference, redactText } from "./console_redact.ts";
  * 設定の変更の理由コード。SQLの`factory.config_history_reason_codes()`と同じ一覧で、並びも同じにする。
  * 一致は、実DBの検査(`scripts/test-db-queries.ts`)が確かめる。
  * 理由コードは呼び出し側が明示する。
- * - console_update: Consoleの設定の更新で、真偽、数値、一覧の項目が変わった。
+ * - console_update: Consoleの設定の更新で、真偽、数値、一覧の項目が変わり、書いた後の読み直しが期待と一致した。
+ * - console_update_unverified: Consoleの設定の更新で書き込みは成功したが、読み直しが期待と一致しなかった。
+ *   `after`は、読み直せたときは読み直した値の射影、読み直せなかったときは書こうとした値の射影である。
  * - stop_all_flag_off: Consoleの全停止が、`*_enabled`を`false`にした。
  * - unspecified: 呼び出し側が理由を決められなかった。
  */
 export const CONFIG_HISTORY_REASON_CODES = [
   "console_update",
+  "console_update_unverified",
   "stop_all_flag_off",
   "unspecified",
 ] as const;
@@ -55,7 +60,8 @@ export function isConfigHistoryReasonCode(
  * 履歴の`before`と`after`に入れる値。生の値は入れず、次のどれかにする。
  * - 真偽、有限の数、短い列挙の文字列、時刻の文字列、null: そのまま。
  * - `{ count }`: 一覧の件数。
- * - `{ hash }`: コマンド、URL、身元に関わる値の正規化したJSONのsha256の先頭16桁。`changed`は、変更後の側だけに付く。
+ * - `{ hash }`: コマンド、URL、身元に関わる値の正規化したJSONのsha256の先頭16桁。値が変わったかを検知するための印で、値を隠すものではない。
+ *   塩を付けないので、候補が少ない値は、辞書や総当たりで当てられる。`changed`は、変更後の側だけに付く。
  * - `{ redacted: true }`: 参照、秘密らしい語、秘密の形、形に合わない文字列の代わり。
  * - `{ kind: "unknown" }`: 項目が未知か、値の型が項目の種類に合わない。値は入れない。
  */
@@ -306,7 +312,7 @@ export type ConfigChangeInput = {
  * 追記の失敗の種類。
  * - invalid: 入力が表の形に合わなかった。文は流していない。
  * - missing_table: 表か関数が無い(migrationが未反映)。
- * - write_failed: DBに届かないなど、書けなかった。
+ * - write_failed: DBに届かない、返ったidが読めないなど、書けなかった。
  */
 export type ConfigHistoryFailureKind =
   | "invalid"
@@ -314,7 +320,7 @@ export type ConfigHistoryFailureKind =
   | "write_failed";
 
 export type ConfigHistoryAppendResult =
-  | { readonly recorded: true; readonly id: number | null }
+  | { readonly recorded: true; readonly id: number }
   | {
       readonly recorded: false;
       readonly kind: ConfigHistoryFailureKind;
@@ -399,9 +405,16 @@ export async function appendConfigChange(
         ${input.occurredAt === undefined ? null : input.occurredAt.toISOString()}::timestamptz
       ) AS id
     `.fetch();
-    const id = rows[0] === undefined ? undefined : toInt(rows[0].id);
-    if (id === undefined) {
+    const row = rows[0];
+    if (row === undefined) {
       return failure("write_failed", "the append returned no row");
+    }
+    const id = toInt(row.id);
+    if (id === null) {
+      return failure(
+        "write_failed",
+        "the append returned an id that cannot be read",
+      );
     }
     return { recorded: true, id };
   } catch (err) {
@@ -444,6 +457,7 @@ export type ConfigReasonCount = {
  * 証跡パックに載せる設定の履歴の集計。
  * `chain_rows`、`last_seq`、`broken`は、期間にかかわらず全体の連鎖の結果である。改ざんは、期間の外の行にも及びうるためである。
  * 期間の集計は、`start`を含み`end`を含まない。
+ * 履歴を書けなかった操作は、履歴の表には残らないので、操作の記録の印から数える。
  */
 export type ConfigHistoryEvidence = {
   /** 履歴の表と関数がある。migrationが当たる前は偽で、ほかの値は空である。 */
@@ -458,6 +472,11 @@ export type ConfigHistoryEvidence = {
   readonly period_by_item: readonly ConfigItemCount[];
   /** 件数の降順、同数なら理由コードの昇順。 */
   readonly period_by_reason: readonly ConfigReasonCount[];
+  /**
+   * 期間内の操作の記録(`factory.console_actions`)のうち、履歴を書けなかった印(`history_recorded`が`false`)を持つ行の数。
+   * 操作の記録は90日で消えるので、数えられるのはその範囲に限る。
+   */
+  readonly unrecorded_operations: number;
 };
 
 /** 履歴の表が無い間の値。 */
@@ -469,6 +488,7 @@ export const EMPTY_CONFIG_HISTORY_EVIDENCE: ConfigHistoryEvidence = {
   period_changes: 0,
   period_by_item: [],
   period_by_reason: [],
+  unrecorded_operations: 0,
 };
 
 function toBrokenPosition(row: Record<string, unknown>): ConfigBrokenPosition {
@@ -516,6 +536,42 @@ function tally(
     .sort(compareByCountThen);
 }
 
+const MISSING_ACTIONS_PATTERN =
+  /relation "(?:factory\.)?console_actions" does not exist/;
+
+/** 例外が、操作の記録の表が無いことによるものか。文が別の名前を挙げているときはfalseにする。 */
+function isMissingConsoleActionsError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const body: unknown = Reflect.get(err, "body");
+  const messages = [err.message, typeof body === "string" ? body : ""];
+  if (messages.some((m) => MISSING_ACTIONS_PATTERN.test(m))) return true;
+  if (messages.some((m) => ANY_MISSING_OBJECT_PATTERN.test(m))) return false;
+  return Reflect.get(err, "code") === "42P01";
+}
+
+/**
+ * 期間内の操作の記録のうち、履歴を書けなかった印を持つ行の数。
+ * 操作の記録の表が無いときは0を返す。ほかのエラーは投げる。
+ */
+async function countUnrecordedOperations(
+  sql: ActionSqlClient,
+  start: string,
+  end: string,
+): Promise<number> {
+  try {
+    const rows = await sql`
+      SELECT count(*) AS unrecorded
+      FROM factory.console_actions a
+      WHERE a.occurred_at >= ${start}::timestamptz AND a.occurred_at < ${end}::timestamptz
+        AND a.changes ->> 'history_recorded' = 'false'
+    `.fetch();
+    return toInt(rows[0]?.unrecorded) ?? 0;
+  } catch (err) {
+    if (!isMissingConsoleActionsError(err)) throw err;
+    return 0;
+  }
+}
+
 /**
  * 証跡パックに載せる設定の履歴の集計を集める。`start`と`end`は期間のISO文字列で、`start`を含み`end`を含まない。
  * 表か関数が無いとき(migrationより先にコードが反映された間)は、`EMPTY_CONFIG_HISTORY_EVIDENCE`を返す。
@@ -538,6 +594,11 @@ export async function collectConfigHistoryEvidence(
       WHERE c.occurred_at >= ${start}::timestamptz AND c.occurred_at < ${end}::timestamptz
       GROUP BY c.item_key, c.reason_code
     `.fetch();
+    const unrecordedOperations = await countUnrecordedOperations(
+      sql,
+      start,
+      end,
+    );
     const counted = periodRows.flatMap((row) => {
       const count = toInt(row.changes);
       return typeof row.item_key === "string" &&
@@ -558,6 +619,7 @@ export async function collectConfigHistoryEvidence(
       period_by_reason: tally(
         counted.map((row) => ({ name: row.reason_code, count: row.count })),
       ).map(({ name, count }) => ({ reason_code: name, count })),
+      unrecorded_operations: unrecordedOperations,
     };
   } catch (err) {
     if (!isMissingConfigHistoryObjectError(err)) throw err;

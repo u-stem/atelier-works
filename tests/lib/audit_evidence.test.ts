@@ -83,7 +83,8 @@ type QueryName =
   | "historyReasons"
   | "configHistoryVerify"
   | "configHistoryChain"
-  | "configHistoryPeriod";
+  | "configHistoryPeriod"
+  | "configHistoryUnrecorded";
 
 // 週別の3つの問い合わせは、採否の節の問い合わせと表の名前の一部が同じなので、先に見分ける。
 const QUERY_NAMES: readonly QueryName[] = [
@@ -113,6 +114,7 @@ const QUERY_NAMES: readonly QueryName[] = [
   "configHistoryVerify",
   "configHistoryChain",
   "configHistoryPeriod",
+  "configHistoryUnrecorded",
 ];
 
 /**
@@ -147,6 +149,7 @@ const QUERY_FRAGMENTS: Record<QueryName, string> = {
   configHistoryVerify: "factory.config_history_verify(",
   configHistoryChain: "AS chain_rows",
   configHistoryPeriod: "GROUP BY c.item_key",
+  configHistoryUnrecorded: "history_recorded",
 };
 
 /**
@@ -2146,9 +2149,9 @@ describe("PR review sections in the evidence pack", () => {
     expect(metricsOf(PR_REVIEW_EVIDENCE)).toEqual(metricsOf(without));
   });
 
-  test("issues the two new queries after the existing ones, before the three config history queries and the four history queries", async () => {
+  test("issues the two new queries after the existing ones, before the four config history queries and the four history queries", async () => {
     const { calls } = await collectWith({});
-    expect(calls.slice(-9, -7).map((call) => call.text)).toEqual([
+    expect(calls.slice(-10, -8).map((call) => call.text)).toEqual([
       findCall(calls, "prReviewTopPrs")?.text ?? "",
       findCall(calls, "prReviewTriggers")?.text ?? "",
     ]);
@@ -3783,6 +3786,7 @@ const CONFIG_HISTORY_EVIDENCE: AuditEvidence = {
       { reason_code: "console_update", count: 4 },
       { reason_code: "stop_all_flag_off", count: 2 },
     ],
+    unrecorded_operations: 0,
   },
 };
 
@@ -3871,6 +3875,64 @@ describe("the config history section", () => {
         line.includes("Consoleの外"),
       ),
     ).toBe(true);
+  });
+
+  test("fixes the text of the scope line, with the restores that are not recorded", () => {
+    expect(sectionOf(CONFIG_HISTORY_EVIDENCE, CONFIG_SECTION)?.fixed).toContain(
+      "記録の範囲: Consoleの設定の更新と全停止による停止だけ(復元と、Consoleの外の経路の変更は記録しない。旗の履歴がfalseで終わっていても、今の設定はtrueのことがある)",
+    );
+  });
+
+  test("shows no line about unrecorded operations when there are none", () => {
+    expect(
+      sectionOf(CONFIG_HISTORY_EVIDENCE, CONFIG_SECTION)?.fixed.some((line) =>
+        line.startsWith("記録できなかった操作"),
+      ),
+    ).toBe(false);
+  });
+
+  test("shows the count of operations whose history could not be written", () => {
+    const evidence: AuditEvidence = {
+      ...CONFIG_HISTORY_EVIDENCE,
+      config_history: {
+        ...CONFIG_HISTORY_EVIDENCE.config_history,
+        unrecorded_operations: 2,
+      },
+    };
+    expect(sectionOf(evidence, CONFIG_SECTION)?.fixed).toContain(
+      "記録できなかった操作: 2件(Consoleの操作記録の範囲。操作記録は90日で消える)",
+    );
+  });
+
+  test("keeps the line about unrecorded operations when the evidence is over the limit", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      config_history: {
+        ...CONFIG_HISTORY_EVIDENCE.config_history,
+        unrecorded_operations: 4,
+      },
+    };
+    const truncated = truncateEvidence(buildEvidenceSections(evidence), 3000);
+    const section = truncated.find(
+      (candidate) => candidate.heading === CONFIG_SECTION,
+    );
+    expect(section?.fixed).toContain(
+      "記録できなかった操作: 4件(Consoleの操作記録の範囲。操作記録は90日で消える)",
+    );
+  });
+
+  test("shows the line about unrecorded operations even when the chain is empty", () => {
+    const evidence: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      config_history: {
+        ...EMPTY_CONFIG_HISTORY_EVIDENCE,
+        available: true,
+        unrecorded_operations: 1,
+      },
+    };
+    expect(sectionOf(evidence, CONFIG_SECTION)?.fixed).toContain(
+      "記録できなかった操作: 1件(Consoleの操作記録の範囲。操作記録は90日で消える)",
+    );
   });
 
   test("lists the reason codes first and then the items, as droppable lines", () => {
@@ -3980,6 +4042,29 @@ describe("collecting the config history", () => {
       sql,
     );
     expect(findCall(calls, "configHistoryPeriod")?.values).toEqual([
+      PERIOD.start.toISOString(),
+      PERIOD.end.toISOString(),
+    ]);
+  });
+
+  test("reads the count of unrecorded operations from the console actions", async () => {
+    const { sql } = createRoutedSqlClient({
+      configHistoryUnrecorded: [{ unrecorded: "2" }],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.config_history.unrecorded_operations).toBe(2);
+  });
+
+  test("binds the period to the query of the unrecorded operations", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "configHistoryUnrecorded")?.values).toEqual([
       PERIOD.start.toISOString(),
       PERIOD.end.toISOString(),
     ]);

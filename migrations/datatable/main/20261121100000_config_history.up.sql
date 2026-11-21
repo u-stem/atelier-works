@@ -25,6 +25,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE
 AS $fn$
     SELECT ARRAY[
         'console_update',
+        'console_update_unverified',
         'stop_all_flag_off',
         'unspecified'
     ]::text[]

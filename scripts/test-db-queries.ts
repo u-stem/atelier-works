@@ -14,6 +14,10 @@ import {
   collectConfigHistoryEvidence,
 } from "../f/factory/lib/config_history.ts";
 import {
+  recordAttempt,
+  recordOutcome,
+} from "../f/factory/lib/console_actions.ts";
+import {
   APPROVAL_REDISPATCH_NOTE_PREFIX,
   INFO_NOTICE_KINDS,
   INTAKE_REFRESHED_NOTE_PREFIX,
@@ -15594,6 +15598,55 @@ await execPsqlAsync(target, "DROP TABLE public.qdb_session_probe");
     "config history: the evidence of an intact chain has no broken position",
     evidence.broken.length === 0,
     evidence.broken,
+  );
+
+  // 履歴を書けなかった操作の数。操作の記録の印(`history_recorded`が`false`)を持つ行だけを、期間内で数える。
+  const probeTarget = "qa/config-history-unrecorded";
+  async function recordProbe(changes: Record<string, unknown>): Promise<void> {
+    const attempt = await recordAttempt(
+      {
+        actor: "qa-op",
+        action: "config_update",
+        target: probeTarget,
+        changes: { item: "daily_budget_usd" },
+      },
+      sql,
+    );
+    if (attempt.ok)
+      await recordOutcome(attempt.value, "succeeded", changes, sql);
+  }
+  await recordProbe({ verified: true });
+  await recordProbe({ verified: true, history_recorded: false });
+  await recordProbe({ verified: false, history_recorded: false });
+  await recordProbe({ verified: true, history_recorded: true });
+  const withMarks = await collectConfigHistoryEvidence(
+    sql,
+    evidenceStart,
+    evidenceEnd,
+  );
+  check(
+    "config history: the evidence counts only the operations marked as not recorded",
+    withMarks.unrecorded_operations === 2,
+    withMarks,
+  );
+  check(
+    "config history: the evidence leaves out the unrecorded operations outside the period",
+    (
+      await collectConfigHistoryEvidence(
+        sql,
+        new Date(NOW_MS - 3 * DAY_MS).toISOString(),
+        new Date(NOW_MS - 2 * DAY_MS).toISOString(),
+      )
+    ).unrecorded_operations === 0,
+  );
+  await execPsqlAsync(
+    target,
+    `DELETE FROM factory.console_actions WHERE target = '${probeTarget}'`,
+  );
+  check(
+    "config history: the evidence counts no unrecorded operation once the marked rows are gone",
+    (await collectConfigHistoryEvidence(sql, evidenceStart, evidenceEnd))
+      .unrecorded_operations === 0,
   );
   await wipe();
 }

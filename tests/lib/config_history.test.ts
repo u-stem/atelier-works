@@ -297,6 +297,7 @@ describe("the reason codes and the sources", () => {
   test("lists the reason codes in the order of the SQL list", () => {
     expect([...CONFIG_HISTORY_REASON_CODES]).toEqual([
       "console_update",
+      "console_update_unverified",
       "stop_all_flag_off",
       "unspecified",
     ]);
@@ -461,6 +462,34 @@ describe("appendConfigChange", () => {
     const { sql } = routedSql({ "factory.config_history_append(": [] });
     const result = await appendConfigChange(sql, INPUT);
     expect(result).toMatchObject({ recorded: false, kind: "write_failed" });
+  });
+
+  test("returns a failure when the id cannot be read as an integer", async () => {
+    const { sql } = routedSql({
+      "factory.config_history_append(": [{ id: "not-a-number" }],
+    });
+    const result = await appendConfigChange(sql, INPUT);
+    expect(result).toMatchObject({ recorded: false, kind: "write_failed" });
+  });
+
+  test("returns a failure when the id is null", async () => {
+    const { sql } = routedSql({
+      "factory.config_history_append(": [{ id: null }],
+    });
+    const result = await appendConfigChange(sql, INPUT);
+    expect(result).toMatchObject({ recorded: false, kind: "write_failed" });
+  });
+
+  test("gives a reason for an id that cannot be read", async () => {
+    const { sql } = routedSql({
+      "factory.config_history_append(": [{ id: 1.5 }],
+    });
+    const result = await appendConfigChange(sql, INPUT);
+    expect(result).toEqual({
+      recorded: false,
+      kind: "write_failed",
+      reason: "the append returned an id that cannot be read",
+    });
   });
 
   test("masks a secret in the message of a failure", async () => {
@@ -653,6 +682,62 @@ describe("collectConfigHistoryEvidence", () => {
     const { sql } = routedSql({});
     const evidence = await collectConfigHistoryEvidence(sql, START, END);
     expect(evidence.available).toBe(true);
+  });
+
+  test("counts the operations whose history was not recorded", async () => {
+    const { sql } = routedSql({
+      history_recorded: [{ unrecorded: "3" }],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect(evidence.unrecorded_operations).toBe(3);
+  });
+
+  test("counts zero unrecorded operations when the query returns no row", async () => {
+    const { sql } = routedSql({});
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect(evidence.unrecorded_operations).toBe(0);
+  });
+
+  test("asks for the unrecorded operations with a single query bound to the period", async () => {
+    const { sql, calls } = routedSql({});
+    await collectConfigHistoryEvidence(sql, START, END);
+    const matching = calls.filter((c) => c.text.includes("history_recorded"));
+    expect(matching.map((c) => c.values)).toEqual([[START, END]]);
+  });
+
+  test("reads the unrecorded operations from the console actions table", async () => {
+    const { sql, calls } = routedSql({});
+    await collectConfigHistoryEvidence(sql, START, END);
+    const call = calls.find((c) => c.text.includes("history_recorded"));
+    expect(call?.text).toContain("FROM factory.console_actions");
+  });
+
+  test("counts zero when the console actions table is missing and keeps the rest", async () => {
+    const { sql } = routedSql({
+      history_recorded: new Error(
+        'relation "factory.console_actions" does not exist',
+      ),
+      "AS chain_rows": [{ chain_rows: "4", last_seq: "4" }],
+    });
+    const evidence = await collectConfigHistoryEvidence(sql, START, END);
+    expect([
+      evidence.available,
+      evidence.chain_rows,
+      evidence.unrecorded_operations,
+    ]).toEqual([true, 4, 0]);
+  });
+
+  test("throws when the query of the console actions fails for another reason", async () => {
+    const { sql } = routedSql({
+      history_recorded: new Error("connection reset"),
+    });
+    await expect(collectConfigHistoryEvidence(sql, START, END)).rejects.toThrow(
+      "connection reset",
+    );
+  });
+
+  test("starts the empty value with no unrecorded operation", () => {
+    expect(EMPTY_CONFIG_HISTORY_EVIDENCE.unrecorded_operations).toBe(0);
   });
 
   test("skips a row of the period that it cannot read", async () => {

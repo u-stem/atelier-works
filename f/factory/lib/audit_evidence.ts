@@ -1168,9 +1168,17 @@ export const CONFIG_HISTORY_UNAVAILABLE_LINE =
 export const NO_CONFIG_HISTORY_LINE =
   "設定の変更の記録はまだ無い(Consoleの外の経路の変更は記録しないので、記録が無くても変更が無かったとは言えない)";
 
-/** 設定の変更の節に載せる、記録の範囲の1行。 */
+/**
+ * 設定の変更の節に載せる、記録の範囲の1行。
+ * 復元(全停止の解除、手順による復元、CLI)は記録しないので、旗の履歴が`false`で終わっていても、今の設定は`true`のことがある。
+ */
 const CONFIG_HISTORY_SCOPE_LINE =
-  "記録するのはConsoleの設定の更新と全停止の変更だけ(CLIとWindmillの画面など、Consoleの外の経路の変更は記録しない)";
+  "記録の範囲: Consoleの設定の更新と全停止による停止だけ(復元と、Consoleの外の経路の変更は記録しない。旗の履歴がfalseで終わっていても、今の設定はtrueのことがある)";
+
+/** 履歴を書けなかった操作があるときだけ、設定の変更の節に載せる1行。 */
+function unrecordedOperationsLine(count: number): string {
+  return `記録できなかった操作: ${count}件(Consoleの操作記録の範囲。操作記録は90日で消える)`;
+}
 
 /** 設定の変更の節に壊れた位置の行を載せる件数の上限。 */
 const CONFIG_BROKEN_LIST_MAX = 5;
@@ -1178,6 +1186,7 @@ const CONFIG_BROKEN_LIST_MAX = 5;
 /**
  * 設定の変更の節。
  * 連鎖の行の数と最後の連番、壊れた位置(最大`CONFIG_BROKEN_LIST_MAX`件)、期間内の変更の数、記録の範囲は、固定の行にする。
+ * 履歴を書けなかった操作が1件以上あるときは、その件数の固定の行を足す。連鎖が空でも載せる。
  * 壊れた位置の行は、全体の上限に収めるときも削らない。
  * 理由コードごと、項目ごとの件数は、件数の多い順に並べた、削れる行にする。理由コードを先に置き、項目を後に置く。
  * 記録が無いことは、Consoleの外の変更が無かったことを示さない。
@@ -1188,8 +1197,21 @@ function configHistorySection(evidence: AuditEvidence): EvidenceSection {
   if (!config.available) {
     return { heading, fixed: [CONFIG_HISTORY_UNAVAILABLE_LINE], lines: [] };
   }
+  const unrecordedLines =
+    config.unrecorded_operations > 0
+      ? [
+          sanitizeCell(
+            unrecordedOperationsLine(config.unrecorded_operations),
+            SANITIZE_CELL_MAX,
+          ),
+        ]
+      : [];
   if (config.chain_rows === 0 && config.period_changes === 0) {
-    return { heading, fixed: [NO_CONFIG_HISTORY_LINE], lines: [] };
+    return {
+      heading,
+      fixed: [NO_CONFIG_HISTORY_LINE, ...unrecordedLines],
+      lines: [],
+    };
   }
   const listed = config.broken.slice(0, CONFIG_BROKEN_LIST_MAX);
   const unlisted = config.broken.length - listed.length;
@@ -1221,6 +1243,7 @@ function configHistorySection(evidence: AuditEvidence): EvidenceSection {
         `期間内の変更: ${config.period_changes}件`,
         SANITIZE_CELL_MAX,
       ),
+      ...unrecordedLines,
       sanitizeCell(CONFIG_HISTORY_SCOPE_LINE, SANITIZE_CELL_MAX),
     ],
     lines: [
