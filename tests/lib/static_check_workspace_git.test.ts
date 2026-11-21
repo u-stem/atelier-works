@@ -22,6 +22,8 @@ import type { ChangedPath } from "../../f/factory/lib/protected_paths.ts";
 import {
   createStaticCheckWorkspace,
   STATIC_CHECK_COMMAND_TIMEOUT_MS,
+  STATIC_CHECK_GITDIR_SKIP_REASON,
+  STATIC_CHECK_UNCHECKED_CONFIG_SKIP_REASON,
   STATIC_CHECK_UNSAFE_PATH_SKIP_REASON,
   type StaticCheckWorkspace,
 } from "../../f/factory/lib/static_check_workspace.ts";
@@ -51,6 +53,7 @@ const MAIN_FILES = {
   "package.json": '{"name": "main"}\n',
   "scripts/lint-docs.ts": "// main lint\n",
   "f/factory/lib/types.ts": "export type T = 1;\n",
+  ".gitattributes": "*.ts filter=evil\n",
 } as const;
 
 type Call = {
@@ -65,6 +68,8 @@ type Fixture = {
   readonly baseSha: string;
   readonly tmpRoot: string;
   readonly outside: string;
+  /** 実際に実行するコマンドの`HOME`。グローバルのgitの設定を置ける。 */
+  readonly home: string;
   readonly run: CommandRunner;
   readonly calls: Call[];
   readonly warnings: Warning[];
@@ -76,12 +81,13 @@ type Fixture = {
 /**
  * mainの内容を1つのcommitにしたリポジトリを作る。
  * 作業ツリーはPRのworktreeの代わりに使い、テストが書き換える。
- * 起動したコマンドは名前とtimeoutを記録する。`tarResult`を渡すと、`tar`は実行せずにその結果を返す。
+ * 起動したコマンドは名前とtimeoutを記録する。
+ * `fake`が結果を返したコマンドは実行せず、その結果を返す。
  * `linkToOutside`を渡すと、そのパスに、リポジトリの外のディレクトリを指すsymlinkをmainのcommitに入れる。
  */
 async function fixture(
   options: {
-    readonly tarResult?: CommandResult;
+    readonly fake?: (argv: readonly string[]) => CommandResult | undefined;
     readonly linkToOutside?: string;
   } = {},
 ): Promise<Fixture> {
@@ -111,10 +117,7 @@ async function fixture(
     });
   const run: CommandRunner = async (argv, runOptions) => {
     calls.push({ command: argv[0], timeoutMs: runOptions?.timeoutMs });
-    if (argv[0] === "tar" && options.tarResult !== undefined) {
-      return options.tarResult;
-    }
-    return await realRun(argv, runOptions);
+    return options.fake?.(argv) ?? (await realRun(argv, runOptions));
   };
   const warnings: Warning[] = [];
   const log: Logger = {
@@ -165,6 +168,7 @@ async function fixture(
     baseSha,
     tmpRoot,
     outside,
+    home,
     run,
     calls,
     warnings,
@@ -230,6 +234,39 @@ const TIMED_OUT: CommandResult = {
   timedOut: true,
 };
 
+/** `tar`だけを時間切れにする。 */
+function timeOutTar(argv: readonly string[]): CommandResult | undefined {
+  return argv[0] === "tar" ? TIMED_OUT : undefined;
+}
+
+/** `git add`だけを失敗させる。 */
+function failGitAdd(argv: readonly string[]): CommandResult | undefined {
+  return argv[0] === "git" && argv.includes("add")
+    ? { stdout: "", stderr: "add failed", exitCode: 128, timedOut: false }
+    : undefined;
+}
+
+/** 作業木の`git ls-files`の一覧を返す。利用者とシステムのgitの設定は読ませない。 */
+function lsFiles(dir: string): string[] {
+  const result = Bun.spawnSync(["git", "ls-files", "-z"], {
+    cwd: dir,
+    env: {
+      PATH: process.env.PATH ?? "",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`git ls-files failed: ${result.stderr.toString()}`);
+  }
+  return result.stdout
+    .toString()
+    .split("\0")
+    .filter((path) => path !== "");
+}
+
 describe("createStaticCheckWorkspace", () => {
   test("extracts the base tree into a directory under the temporary root", async () => {
     const fx = await fixture();
@@ -239,28 +276,105 @@ describe("createStaticCheckWorkspace", () => {
     expect(readTree(dir, "src/a.ts")).toBe(MAIN_FILES["src/a.ts"]);
   });
 
-  test("does not copy the git directory into the tree", async () => {
+  test("does not copy the clone's git directory into the tree", async () => {
     const fx = await fixture();
 
     const dir = await createReady(fx, []);
 
-    expect(existsSync(join(dir, ".git"))).toBe(false);
+    expect(existsSync(join(dir, ".git", "logs"))).toBe(false);
   });
 
-  test("runs only git archive and tar, without a package install", async () => {
+  test("indexes the overlaid tree in a new git directory", async () => {
+    const fx = await fixture();
+    fx.write("src/deep/b.ts", "export const b = 1;\n");
+
+    const dir = await createReady(fx, [
+      { path: "src/deep/b.ts", status: "added" },
+    ]);
+
+    expect(lsFiles(dir)).toEqual(
+      expect.arrayContaining(["src/a.ts", "src/deep/b.ts"]),
+    );
+  });
+
+  test("does not index a file the worktree deleted", async () => {
+    const fx = await fixture();
+    fx.remove("docs/old.md");
+
+    const dir = await createReady(fx, [
+      { path: "docs/old.md", status: "deleted" },
+    ]);
+
+    expect(lsFiles(dir)).not.toContain("docs/old.md");
+  });
+
+  test("creates the git directory without the template hooks", async () => {
+    const fx = await fixture();
+
+    const dir = await createReady(fx, []);
+
+    expect(existsSync(join(dir, ".git", "hooks"))).toBe(false);
+  });
+
+  test("does not read the global git config while indexing", async () => {
+    const fx = await fixture();
+    const marker = join(fx.outside, "filter-ran");
+    writeFileSync(
+      join(fx.home, ".gitconfig"),
+      `[filter "evil"]\n\tclean = touch ${marker}\n\trequired = true\n[core]\n\tfsmonitor = touch ${marker}\n`,
+    );
+
+    await createReady(fx, []);
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("keeps the base .gitattributes the index reads", async () => {
+    const fx = await fixture();
+    fx.write(".gitattributes", "*.ts filter=other\n");
+
+    const dir = await createReady(fx, [
+      { path: ".gitattributes", status: "modified" },
+    ]);
+
+    expect(readTree(dir, ".gitattributes")).toBe(MAIN_FILES[".gitattributes"]);
+  });
+
+  test.each([[".git/hooks/pre-commit"], ["sub/.git/config"], [".GIT/config"]])(
+    "does not let a change write into a git directory: %s",
+    async (path) => {
+      const fx = await fixture();
+
+      const workspace = await create(fx, [{ path, status: "added" }]);
+
+      expect(workspace).toEqual({
+        kind: "skipped",
+        reason: STATIC_CHECK_UNSAFE_PATH_SKIP_REASON,
+      });
+    },
+  );
+
+  test("runs git archive, tar, git init, and git add, without a package install", async () => {
     const fx = await fixture();
 
     await createReady(fx, []);
 
-    expect(fx.calls.map((call) => call.command)).toEqual(["git", "tar"]);
+    expect(fx.calls.map((call) => call.command)).toEqual([
+      "git",
+      "tar",
+      "git",
+      "git",
+    ]);
   });
 
-  test("passes the default timeout of two minutes to git archive and tar", async () => {
+  test("passes the default timeout of two minutes to every command", async () => {
     const fx = await fixture();
 
     await createReady(fx, []);
 
     expect(fx.calls.map((call) => call.timeoutMs)).toEqual([
+      2 * 60 * 1000,
+      2 * 60 * 1000,
       2 * 60 * 1000,
       2 * 60 * 1000,
     ]);
@@ -270,12 +384,30 @@ describe("createStaticCheckWorkspace", () => {
     expect(STATIC_CHECK_COMMAND_TIMEOUT_MS).toBe(2 * 60 * 1000);
   });
 
-  test("passes the given timeout to git archive and tar", async () => {
+  test("passes the given timeout to every command", async () => {
     const fx = await fixture();
 
     await create(fx, [], { commandTimeoutMs: 1_234 });
 
-    expect(fx.calls.map((call) => call.timeoutMs)).toEqual([1_234, 1_234]);
+    expect(fx.calls.map((call) => call.timeoutMs)).toEqual([
+      1_234, 1_234, 1_234, 1_234,
+    ]);
+  });
+
+  test("throws when git add fails", async () => {
+    const fx = await fixture({ fake: failGitAdd });
+
+    const promise = create(fx, []);
+
+    await expect(promise).rejects.toThrow("git add");
+  });
+
+  test("removes the temporary directories when git add fails", async () => {
+    const fx = await fixture({ fake: failGitAdd });
+
+    await create(fx, []).catch(() => undefined);
+
+    expect(readdirSync(fx.tmpRoot)).toEqual([]);
   });
 
   test("overlays a modified file from the worktree", async () => {
@@ -473,6 +605,32 @@ describe("createStaticCheckWorkspace", () => {
     expect(workspace.kind).toBe("skipped");
   });
 
+  test("returns skipped when the change adds a top-level HEAD", async () => {
+    const fx = await fixture();
+    fx.write("HEAD", "ref: refs/heads/main\n");
+
+    const workspace = await create(fx, [{ path: "HEAD", status: "added" }]);
+
+    expect(workspace).toEqual({
+      kind: "skipped",
+      reason: STATIC_CHECK_GITDIR_SKIP_REASON,
+    });
+  });
+
+  test("returns skipped when a tool configuration the checks do not pin changed", async () => {
+    const fx = await fixture();
+    fx.write("eslint.config.js", "export default [];\n");
+
+    const workspace = await create(fx, [
+      { path: "eslint.config.js", status: "added" },
+    ]);
+
+    expect(workspace).toEqual({
+      kind: "skipped",
+      reason: STATIC_CHECK_UNCHECKED_CONFIG_SKIP_REASON,
+    });
+  });
+
   test("does not create a directory when it skips", async () => {
     const fx = await fixture();
 
@@ -481,7 +639,12 @@ describe("createStaticCheckWorkspace", () => {
     expect(readdirSync(fx.tmpRoot)).toEqual([]);
   });
 
-  test.each([["bun.lock"], ["scripts/lint-docs.ts"]])(
+  test.each([
+    ["bun.lock"],
+    ["scripts/lint-docs.ts"],
+    ["config"],
+    ["eslint.config.js"],
+  ])(
     "gives a skip reason without the reason separator for %s",
     async (path) => {
       const fx = await fixture();
@@ -561,7 +724,7 @@ describe("createStaticCheckWorkspace", () => {
   });
 
   test("throws when tar times out", async () => {
-    const fx = await fixture({ tarResult: TIMED_OUT });
+    const fx = await fixture({ fake: timeOutTar });
 
     const promise = create(fx, []);
 
@@ -569,7 +732,7 @@ describe("createStaticCheckWorkspace", () => {
   });
 
   test("removes the temporary directories when tar times out", async () => {
-    const fx = await fixture({ tarResult: TIMED_OUT });
+    const fx = await fixture({ fake: timeOutTar });
 
     await create(fx, []).catch(() => undefined);
 

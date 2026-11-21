@@ -4,11 +4,17 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { FORBIDDEN_PATH_PREFIXES } from "../../f/factory/lib/protected_paths.ts";
+import {
+  FORBIDDEN_PATH_PREFIXES,
+  IMPLEMENT_PROTECTED_BASENAME_PATTERNS,
+  matchesImplementProtectedPath,
+} from "../../f/factory/lib/protected_paths.ts";
 import {
   isStaticCheckDependencyPath,
   isStaticCheckExecutedPath,
+  isStaticCheckGitdirPath,
   isStaticCheckOverlaidPath,
+  isStaticCheckUncheckedConfigPath,
   STATIC_CHECK_COMMAND_TIMEOUT_MS,
   STATIC_CHECK_DEPENDENCY_PATHS,
   STATIC_CHECK_MIN_COMMAND_TIMEOUT_MS,
@@ -256,9 +262,174 @@ describe("staticCheckCommandTimeoutMs", () => {
 });
 
 describe("STATIC_CHECK_WORKSPACE_WORST_CASE_SEC", () => {
-  test("covers git archive and tar at their timeout with the runner's stop overhead", () => {
+  test("covers git archive, tar, git init, and git add at their timeout with the runner's stop overhead", () => {
     expect(STATIC_CHECK_WORKSPACE_WORST_CASE_SEC * 1000).toBeGreaterThanOrEqual(
-      2 * (STATIC_CHECK_COMMAND_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS),
+      4 * (STATIC_CHECK_COMMAND_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS),
     );
+  });
+});
+
+describe("isStaticCheckGitdirPath", () => {
+  test.each([
+    ["HEAD"],
+    ["config"],
+    ["objects/ab/cdef"],
+    ["refs/heads/main"],
+    ["packed-refs"],
+    ["commondir"],
+    ["gitdir"],
+    ["index"],
+    ["info/exclude"],
+    ["hooks/pre-commit"],
+    ["worktrees/w/HEAD"],
+    ["modules/m/config"],
+    ["Config"],
+    ["OBJECTS/ab/cdef"],
+    [".GIT"],
+    [".git."],
+    [".git /config"],
+  ])("treats the top-level %s as shaping a git directory", (path) => {
+    expect(isStaticCheckGitdirPath(path)).toBe(true);
+  });
+
+  test.each([
+    ["src/config/a.ts"],
+    ["configs/a.ts"],
+    ["docs/HEAD.md"],
+    ["index.ts"],
+    ["information.md"],
+    [".gitignore"],
+    [".gitattributes"],
+    [".github/workflows/ci.yml"],
+    ["f/factory/lib/config.ts"],
+  ])("does not treat %s as shaping a git directory", (path) => {
+    expect(isStaticCheckGitdirPath(path)).toBe(false);
+  });
+});
+
+describe("isStaticCheckUncheckedConfigPath", () => {
+  test.each([
+    ["eslint.config.js"],
+    ["console/vite.config.ts"],
+    ["vitest.config.mts"],
+    [".eslintrc.json"],
+    [".babelrc"],
+    [".prettierrc.yaml"],
+    ["deno.jsonc"],
+    ["Makefile"],
+    ["Taskfile.yml"],
+    ["turbo.json"],
+    [".pre-commit-config.yaml"],
+    [".pnpmfile.cjs"],
+    [".yarnrc.yml"],
+    ["yarn.lock"],
+    ["pyproject.toml"],
+    [".gitmodules"],
+    ["wmill.yml"],
+    [".nvmrc"],
+    [".gitleaks.toml"],
+    ["sub/ESLint.Config.JS"],
+  ])("treats %s as a tool configuration the checks do not pin", (path) => {
+    expect(isStaticCheckUncheckedConfigPath(path)).toBe(true);
+  });
+
+  test.each([
+    ["biome.json"],
+    ["tsconfig.json"],
+    ["package.json"],
+    ["wmill.yaml"],
+    ["CODEOWNERS"],
+    ["f/factory/lib/config.ts"],
+    ["tests/lib/config.test.ts"],
+    ["docs/internals/implement.md"],
+    [".claude/skills/pr-body/SKILL.md"],
+  ])(
+    "does not treat %s as a tool configuration the checks do not pin",
+    (path) => {
+      expect(isStaticCheckUncheckedConfigPath(path)).toBe(false);
+    },
+  );
+});
+
+/** 静的検査がPRの版をどう扱うかを、判定の関数から求める。 */
+function staticCheckHandling(path: string): "skipped" | "base" | "overlaid" {
+  if (isStaticCheckUncheckedConfigPath(path)) return "skipped";
+  return isStaticCheckOverlaidPath(path) ? "overlaid" : "base";
+}
+
+/**
+ * 実装フローの保護パスのファイル名の規則ごとに、当たるファイル名の例と、静的検査での扱い。
+ * `skipped`は静的検査を飛ばす、`base`は基準の版を使う、`overlaid`はPRの版を重ねる(道具の設定として読まれないもの)。
+ */
+const IMPLEMENT_BASENAME_HANDLING: Readonly<
+  Record<string, readonly [string, "skipped" | "base" | "overlaid"]>
+> = {
+  "^wmill\\.ya?ml$": ["wmill.yml", "skipped"],
+  "^mise\\.toml$": ["mise.toml", "base"],
+  "^mise\\..*\\.toml$": ["mise.local.toml", "base"],
+  "^\\.mise\\.toml$": [".mise.toml", "base"],
+  "^lefthook\\.yml$": ["lefthook.yml", "base"],
+  "^lefthook-local\\.yml$": ["lefthook-local.yml", "base"],
+  "^lefthook\\.toml$": ["lefthook.toml", "base"],
+  "^lefthook\\.json$": ["lefthook.json", "base"],
+  "^bunfig\\.toml$": ["bunfig.toml", "base"],
+  "^\\.npmrc$": [".npmrc", "base"],
+  "^\\.gitattributes$": [".gitattributes", "base"],
+  "^\\.gitmodules$": [".gitmodules", "skipped"],
+  "^\\.markdownlint(-cli2)?\\.(jsonc?|ya?ml|[cm]?js)$": [
+    ".markdownlint.cjs",
+    "base",
+  ],
+  "^\\.textlintrc(\\..*)?$": [".textlintrc.js", "base"],
+  "^\\.tool-versions$": [".tool-versions", "base"],
+  "^\\.env(\\..*)?$": [".env.local", "base"],
+  "^\\.(node|bun)-version$": [".node-version", "skipped"],
+  "^\\.?biome\\.jsonc?$": ["biome.jsonc", "base"],
+  "^\\.gitignore$": [".gitignore", "base"],
+  "^\\.ignore$": [".ignore", "base"],
+  "^\\.gitleaks(ignore|\\.toml)$": [".gitleaksignore", "skipped"],
+  "^\\.python-version$": [".python-version", "skipped"],
+  "^\\.nvmrc$": [".nvmrc", "skipped"],
+  "^rust-toolchain(\\.toml)?$": ["rust-toolchain.toml", "skipped"],
+  "^\\.yarnrc(\\.yml)?$": [".yarnrc", "skipped"],
+  "^\\.pnpmfile\\.cjs$": [".pnpmfile.cjs", "skipped"],
+  "^(bun\\.lockb?|package-lock\\.json|npm-shrinkwrap\\.json|pnpm-lock\\.yaml|yarn\\.lock)$":
+    ["pnpm-lock.yaml", "skipped"],
+  "^[\\w.-]+\\.config\\.[cm]?[jt]s$": ["eslint.config.mjs", "skipped"],
+  "^\\.(eslintrc|babelrc|prettierrc)(\\..*)?$": [".prettierrc", "skipped"],
+  "^(Makefile|[Jj]ustfile|Taskfile\\.ya?ml|turbo\\.json|nx\\.json|deno\\.jsonc?|CODEOWNERS|\\.pre-commit-config\\.yaml)$":
+    ["justfile", "skipped"],
+  "^package\\.json$": ["package.json", "base"],
+  "^(uv|poetry)\\.lock$": ["uv.lock", "skipped"],
+  "^Pipfile(\\.lock)?$": ["Pipfile.lock", "skipped"],
+  "^pyproject\\.toml$": ["pyproject.toml", "skipped"],
+  "^setup\\.(py|cfg)$": ["setup.py", "skipped"],
+  "^requirements.*\\.txt$": ["requirements-dev.txt", "skipped"],
+  "^Cargo\\.(lock|toml)$": ["Cargo.toml", "skipped"],
+  "^go\\.(sum|mod)$": ["go.mod", "skipped"],
+  "^Gemfile(\\.lock)?$": ["Gemfile", "skipped"],
+  "^composer\\.(lock|json)$": ["composer.json", "skipped"],
+};
+
+describe("static check handling of the implement protected file names", () => {
+  test("decides the handling of every implement protected file name pattern", () => {
+    expect(
+      IMPLEMENT_PROTECTED_BASENAME_PATTERNS.map((pattern) => pattern.source),
+    ).toEqual(Object.keys(IMPLEMENT_BASENAME_HANDLING));
+  });
+
+  test.each(
+    Object.entries(IMPLEMENT_BASENAME_HANDLING).map(
+      ([source, [sample, handling]]) => [source, sample, handling] as const,
+    ),
+  )("handles a file matching %s (%s) as %s", (_source, sample, handling) => {
+    expect([
+      matchesImplementProtectedPath(sample),
+      staticCheckHandling(sample),
+    ]).toEqual([true, handling]);
+  });
+
+  test("overlays CODEOWNERS, which no tool reads as a configuration", () => {
+    expect(staticCheckHandling("CODEOWNERS")).toBe("overlaid");
   });
 });
